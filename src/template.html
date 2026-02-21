@@ -1,0 +1,172 @@
+<div class="help-overlay" id="helpOverlay">
+<div class="help-content">
+<button class="help-close-btn" onclick="$('#helpOverlay').classList.remove('visible')">&#x00d7;</button>
+<h2>command mode</h2>
+<div class="help-row"><span class="help-key">&#x2191; / k</span><span class="help-desc">select cell above</span></div>
+<div class="help-row"><span class="help-key">&#x2193; / j</span><span class="help-desc">select cell below</span></div>
+<div class="help-row"><span class="help-key">Enter</span><span class="help-desc">edit selected cell</span></div>
+<div class="help-row"><span class="help-key">a</span><span class="help-desc">insert cell above</span></div>
+<div class="help-row"><span class="help-key">b</span><span class="help-desc">insert cell below</span></div>
+<div class="help-row"><span class="help-key">d d</span><span class="help-desc">delete cell</span></div>
+<div class="help-row"><span class="help-key">z</span><span class="help-desc">undo delete</span></div>
+<div class="help-row"><span class="help-key">c</span><span class="help-desc">copy cell</span></div>
+<div class="help-row"><span class="help-key">v</span><span class="help-desc">paste cell below</span></div>
+<div class="help-row"><span class="help-key">x</span><span class="help-desc">cut cell</span></div>
+<div class="help-row"><span class="help-key">m</span><span class="help-desc">convert to markdown</span></div>
+<div class="help-row"><span class="help-key">y</span><span class="help-desc">convert to code</span></div>
+<div class="help-row"><span class="help-key">s</span><span class="help-desc">convert to css</span></div>
+<div class="help-row"><span class="help-key">t</span><span class="help-desc">convert to html template</span></div>
+<div class="help-row"><span class="help-key">h</span><span class="help-desc">collapse / expand cell</span></div>
+<div class="help-row"><span class="help-key">p</span><span class="help-desc">presentation mode</span></div>
+
+<h2>edit mode</h2>
+<div class="help-row"><span class="help-key">Esc</span><span class="help-desc">exit to command mode</span></div>
+<div class="help-row"><span class="help-key">Ctrl+Enter</span><span class="help-desc">run cell</span></div>
+<div class="help-row"><span class="help-key">Shift+Enter</span><span class="help-desc">run cell + advance</span></div>
+<div class="help-row"><span class="help-key">Ctrl+/</span><span class="help-desc">toggle comment</span></div>
+<div class="help-row"><span class="help-key">Tab</span><span class="help-desc">indent</span></div>
+<div class="help-row"><span class="help-key">Shift+Tab</span><span class="help-desc">unindent</span></div>
+
+<h2>global</h2>
+<div class="help-row"><span class="help-key">F1</span><span class="help-desc">toggle this help</span></div>
+<div class="help-row"><span class="help-key">Ctrl+S</span><span class="help-desc">save notebook</span></div>
+
+<h2>toolbar</h2>
+<div class="help-row"><span class="help-key">&#x23f5; step</span><span class="help-desc">run selected cell</span></div>
+<div class="help-row"><span class="help-key">&#x25b6;/&#x2016;</span><span class="help-desc">toggle reactive mode (autorun)</span></div>
+<div class="help-row"><span class="help-key">&#x25b6;&#x25b6; run all</span><span class="help-desc">run all cells</span></div>
+
+<h2>builtins</h2>
+<div class="help-row"><span class="help-key">display()</span><span class="help-desc">show text, objects, or DOM elements</span></div>
+<div class="help-row"><span class="help-key">canvas(w,h)</span><span class="help-desc">create a canvas element</span></div>
+<div class="help-row"><span class="help-key">table(data)</span><span class="help-desc">render array of objects as table</span></div>
+<div class="help-row"><span class="help-key">slider()</span><span class="help-desc">reactive range input</span></div>
+<div class="help-row"><span class="help-key">dropdown()</span><span class="help-desc">reactive select input</span></div>
+<div class="help-row"><span class="help-key">checkbox()</span><span class="help-desc">reactive boolean input</span></div>
+<div class="help-row"><span class="help-key">textInput()</span><span class="help-desc">reactive text input</span></div>
+<div class="help-row"><span class="help-key">load(url)</span><span class="help-desc">import ESM module (cached)</span></div>
+<div class="help-row"><span class="help-key">install(url)</span><span class="help-desc">import + embed in HTML on save</span></div>
+
+<h2>directives</h2>
+<div class="help-row"><span class="help-key">// %manual</span><span class="help-desc">skip cell on reactive updates</span></div>
+
+<div class="help-close">press F1 or Esc to close</div>
+</div>
+</div>
+
+<div class="settings-overlay" id="settingsOverlay" onclick="if(event.target===this)toggleSettings()"></div>
+<div class="settings-panel" id="settingsPanel">
+  <button class="settings-close" onclick="toggleSettings()">&#x00d7;</button>
+  <h2>theme</h2>
+  <div class="settings-row">
+    <label>color scheme</label>
+    <select id="setTheme" onchange="applyTheme(this.value)">
+      <option value="dark">dark</option>
+      <option value="light">light</option>
+    </select>
+  </div>
+
+  <h2>editor</h2>
+  <div class="settings-row">
+    <label>font size</label>
+    <input type="range" id="setFontSize" min="10" max="20" value="13" oninput="applyFontSize(this.value)">
+    <span class="settings-val" id="setFontSizeVal">13</span>
+  </div>
+
+  <h2>notebook</h2>
+  <div class="settings-row">
+    <label>max width</label>
+    <select id="setWidth" onchange="applyWidth(this.value)">
+      <option value="720">narrow</option>
+      <option value="860" selected>default</option>
+      <option value="1100">wide</option>
+      <option value="100%">full</option>
+    </select>
+  </div>
+  <div class="settings-row">
+    <label>cell header</label>
+    <select id="setHeader" onchange="applyHeader(this.value)">
+      <option value="auto" selected>auto</option>
+      <option value="always">always visible</option>
+      <option value="compact">compact</option>
+      <option value="hover">hover only</option>
+    </select>
+  </div>
+</div>
+
+<div class="toolbar">
+  <span class="toolbar-title">auditable</span>
+  <span class="toolbar-sep"></span>
+  <span class="toolbar-filename">
+    <input type="text" id="docTitle" value="untitled" spellcheck="false">
+  </span>
+  <span class="toolbar-status" id="toolbarStatus"></span>
+  <button class="toolbar-add" onclick="addCellWithUndo('code','',S.selectedId)">+ code</button>
+  <button class="toolbar-add" onclick="addCellWithUndo('md','',S.selectedId)">+ md</button>
+  <button class="toolbar-secondary" onclick="addCellWithUndo('css','',S.selectedId)">+ css</button>
+  <button class="toolbar-secondary" onclick="addCellWithUndo('html','',S.selectedId)">+ html</button>
+  <span class="toolbar-sep"></span>
+  <span class="transport">
+    <button onclick="runSelectedCell()" title="run cell + advance (Shift+Enter)">&#x23f5;</button>
+    <button id="autorunBtn" class="autorun-on" onclick="toggleAutorun()" title="reactive mode &#x2014; cells auto-run on edit">&#x25b6;</button>
+    <button onclick="runAll()" title="run all cells">&#x25b6;&#x25b6;</button>
+  </span>
+  <span class="toolbar-right">
+    <button class="accent" onclick="saveNotebook()">save</button>
+    <div class="toolbar-overflow">
+      <button onclick="toggleToolbarMenu()" title="more">&#x22ef;</button>
+      <div class="toolbar-overflow-tray">
+        <button onclick="newNotebook();toggleToolbarMenu()">new</button>
+        <button onclick="collapseAll();toggleToolbarMenu()">collapse all</button>
+        <button onclick="expandAll();toggleToolbarMenu()">expand all</button>
+        <button onclick="$('#helpOverlay').classList.toggle('visible');toggleToolbarMenu()">help (F1)</button>
+        <button onclick="toggleSettings();toggleToolbarMenu()">settings</button>
+        <button onclick="togglePresent();toggleToolbarMenu()">present</button>
+      </div>
+    </div>
+  </span>
+</div>
+
+<button class="present-exit" onclick="togglePresent()">&#x2715; exit</button>
+
+<div class="notebook" id="notebook">
+  <!-- cells go here -->
+</div>
+
+<div class="statusbar">
+  <span class="status-cells" id="statusCells">0 cells</span>
+  <span class="status-msg" id="statusMsg"></span>
+  <span class="status-attr">
+    <a href="https://endarthur.github.io" target="_blank">endarthur</a>
+    <span>&middot;</span>
+    <a href="https://gentropic.org" target="_blank">geoscientific chaos union</a>
+    <span>&middot;</span>
+    <a href="https://github.com/endarthur/auditable" target="_blank" title="source on GitHub"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+  </span>
+  <div class="action-bar">
+    <div>
+      <div class="action-add-tray">
+        <button onclick="insertAt(S.selectedId,'code');toggleAddTray()">+ code</button>
+        <button onclick="insertAt(S.selectedId,'md');toggleAddTray()">+ md</button>
+        <button onclick="insertAt(S.selectedId,'css');toggleAddTray()">+ css</button>
+        <button onclick="insertAt(S.selectedId,'html');toggleAddTray()">+ html</button>
+      </div>
+      <button class="action-add" onclick="toggleAddTray()">+</button>
+    </div>
+    <button onclick="runSelectedCell()" title="run cell + advance">&#x23f5;</button>
+    <button id="autorunBtnMobile" class="autorun-on" onclick="toggleAutorun()" title="autorun">&#x25b6;</button>
+    <button onclick="runAll()" title="run all">&#x25b6;&#x25b6;</button>
+    <div>
+      <div class="action-more-tray">
+        <button onclick="newNotebook();toggleMoreTray()">new</button>
+        <button onclick="saveNotebook();toggleMoreTray()">save</button>
+        <button onclick="collapseAll();toggleMoreTray()">collapse all</button>
+        <button onclick="expandAll();toggleMoreTray()">expand all</button>
+        <button onclick="$('#helpOverlay').classList.toggle('visible');toggleMoreTray()">help</button>
+        <button onclick="toggleSettings();toggleMoreTray()">settings</button>
+        <button onclick="togglePresent();toggleMoreTray()">present</button>
+      </div>
+      <button class="action-more" onclick="toggleMoreTray()">&#x22ef;</button>
+    </div>
+  </div>
+</div>
