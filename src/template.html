@@ -17,6 +17,7 @@
 <div class="help-row"><span class="help-key">s</span><span class="help-desc">convert to css</span></div>
 <div class="help-row"><span class="help-key">t</span><span class="help-desc">convert to html template</span></div>
 <div class="help-row"><span class="help-key">h</span><span class="help-desc">collapse / expand cell</span></div>
+<div class="help-row"><span class="help-key">l</span><span class="help-desc">toggle line numbers</span></div>
 <div class="help-row"><span class="help-key">p</span><span class="help-desc">presentation mode</span></div>
 
 <h2>edit mode</h2>
@@ -76,6 +77,13 @@
     <label>font size</label>
     <input type="range" id="setFontSize" min="10" max="20" value="13" oninput="applyFontSize(this.value)">
     <span class="settings-val" id="setFontSizeVal">13</span>
+  </div>
+  <div class="settings-row">
+    <label>line numbers</label>
+    <select id="setLineNumbers" onchange="applyLineNumbers(this.value)">
+      <option value="on" selected>on</option>
+      <option value="off">off</option>
+    </select>
   </div>
 
   <h2>notebook</h2>

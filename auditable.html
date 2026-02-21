@@ -362,10 +362,36 @@ button.accent:hover {
   position: relative;
 }
 
-.cell-code .editor-wrap {
+.editor-wrap {
+  --gutter: 36px;
   position: relative;
   overflow: hidden;
 }
+
+.line-numbers {
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  width: var(--gutter);
+  padding: 8px 4px 8px 0;
+  font-family: var(--mono);
+  font-size: var(--editor-font-size);
+  line-height: 1.5;
+  text-align: right;
+  color: var(--fg-dim);
+  background: var(--bg1);
+  border-right: 1px solid var(--border);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+  z-index: 3;
+  pointer-events: none;
+  white-space: pre;
+  box-sizing: border-box;
+}
+
+:root.hide-line-numbers .line-numbers { display: none; }
+:root.hide-line-numbers .editor-wrap { --gutter: 0px; }
 
 .cell-code textarea {
   display: block;
@@ -377,7 +403,7 @@ button.accent:hover {
   font-family: var(--mono);
   font-size: var(--editor-font-size);
   line-height: 1.5;
-  padding: 8px 10px;
+  padding: 8px 10px 8px calc(var(--gutter) + 10px);
   resize: vertical;
   min-height: 38px;
   outline: none;
@@ -393,13 +419,16 @@ button.accent:hover {
 .cell-code textarea:focus + .highlight-layer {
   border-color: var(--border-hi);
 }
+.cell-code textarea:focus ~ .line-numbers {
+  border-color: var(--border-hi);
+}
 
 .highlight-layer {
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
   background: var(--bg1);
   border: 1px solid var(--border);
-  padding: 8px 10px;
+  padding: 8px 10px 8px calc(var(--gutter) + 10px);
   font-family: var(--mono);
   font-size: var(--editor-font-size);
   line-height: 1.5;
@@ -492,11 +521,6 @@ button.accent:hover {
   content: '(empty stylesheet)';
 }
 
-.cell-css-edit .editor-wrap {
-  position: relative;
-  overflow: hidden;
-}
-
 .cell-css-edit textarea {
   display: block;
   width: 100%;
@@ -507,7 +531,7 @@ button.accent:hover {
   font-family: var(--mono);
   font-size: var(--editor-font-size);
   line-height: 1.5;
-  padding: 8px 10px;
+  padding: 8px 10px 8px calc(var(--gutter) + 10px);
   resize: vertical;
   min-height: 38px;
   outline: none;
@@ -521,6 +545,9 @@ button.accent:hover {
   background: rgba(200,155,60,0.25);
 }
 .cell-css-edit textarea:focus + .highlight-layer {
+  border-color: var(--border-hi);
+}
+.cell-css-edit textarea:focus ~ .line-numbers {
   border-color: var(--border-hi);
 }
 
@@ -1130,6 +1157,7 @@ body.presenting .present-exit {
 <div class="help-row"><span class="help-key">s</span><span class="help-desc">convert to css</span></div>
 <div class="help-row"><span class="help-key">t</span><span class="help-desc">convert to html template</span></div>
 <div class="help-row"><span class="help-key">h</span><span class="help-desc">collapse / expand cell</span></div>
+<div class="help-row"><span class="help-key">l</span><span class="help-desc">toggle line numbers</span></div>
 <div class="help-row"><span class="help-key">p</span><span class="help-desc">presentation mode</span></div>
 
 <h2>edit mode</h2>
@@ -1189,6 +1217,13 @@ body.presenting .present-exit {
     <label>font size</label>
     <input type="range" id="setFontSize" min="10" max="20" value="13" oninput="applyFontSize(this.value)">
     <span class="settings-val" id="setFontSizeVal">13</span>
+  </div>
+  <div class="settings-row">
+    <label>line numbers</label>
+    <select id="setLineNumbers" onchange="applyLineNumbers(this.value)">
+      <option value="on" selected>on</option>
+      <option value="off">off</option>
+    </select>
   </div>
 
   <h2>notebook</h2>
@@ -2263,6 +2298,7 @@ function createCellEl(type, id) {
       ${cellHeaderHTML('code', id)}
       <div class="cell-code">
         <div class="editor-wrap">
+          <div class="line-numbers" aria-hidden="true">1</div>
           <textarea rows="3" spellcheck="false" placeholder="// code"></textarea>
           <div class="highlight-layer" aria-hidden="true"></div>
         </div>
@@ -2274,8 +2310,9 @@ function createCellEl(type, id) {
     const ta = div.querySelector('textarea');
     const hl = div.querySelector('.highlight-layer');
     div.querySelector('.cell-type').addEventListener('click', () => div.classList.toggle('collapsed'));
+    const ln = div.querySelector('.line-numbers');
     ta.addEventListener('input', () => { highlightCode(ta, hl); onCodeEdit(id); });
-    ta.addEventListener('scroll', () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; });
+    ta.addEventListener('scroll', () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; ln.scrollTop = ta.scrollTop; });
     ta.addEventListener('keydown', handleTab);
     ta.addEventListener('input', autoResize);
   } else if (type === 'css') {
@@ -2284,6 +2321,7 @@ function createCellEl(type, id) {
       <div class="cell-css-view"></div>
       <div class="cell-css-edit" style="display:none">
         <div class="editor-wrap">
+          <div class="line-numbers" aria-hidden="true">1</div>
           <textarea rows="3" spellcheck="false" placeholder="/* css */"></textarea>
           <div class="highlight-layer" aria-hidden="true"></div>
         </div>
@@ -2313,8 +2351,9 @@ function createCellEl(type, id) {
       cssView.style.display = '';
     });
 
+    const ln = div.querySelector('.line-numbers');
     ta.addEventListener('input', () => { highlightCss(ta, hl); onCssEdit(id); });
-    ta.addEventListener('scroll', () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; });
+    ta.addEventListener('scroll', () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; ln.scrollTop = ta.scrollTop; });
     ta.addEventListener('input', autoResize);
     ta.addEventListener('keydown', handleTab);
   } else if (type === 'html') {
@@ -2457,6 +2496,17 @@ function toggleComment(ta) {
   ta.dispatchEvent(new Event('input'));
 }
 
+function updateLineNumbers(ta) {
+  const wrap = ta.closest('.editor-wrap');
+  if (!wrap) return;
+  const gutter = wrap.querySelector('.line-numbers');
+  if (!gutter) return;
+  const count = ta.value.split('\n').length;
+  const lines = [];
+  for (let i = 1; i <= count; i++) lines.push(i);
+  gutter.textContent = lines.join('\n');
+}
+
 function autoResize(e) {
   const ta = e.target || e;
   ta.style.height = 'auto';
@@ -2464,6 +2514,7 @@ function autoResize(e) {
   // sync highlight layer if present
   const hl = ta.parentElement && ta.parentElement.querySelector('.highlight-layer');
   if (hl) { hl.style.height = ta.style.height; }
+  updateLineNumbers(ta);
 }
 
 // -- cell-ops.js --
@@ -2714,6 +2765,13 @@ function applyWidth(w) {
   $('#setWidth').value = w;
 }
 
+function applyLineNumbers(show) {
+  const on = show === true || show === 'true' || show === 'on';
+  document.documentElement.classList.toggle('hide-line-numbers', !on);
+  const el = $('#setLineNumbers');
+  if (el) el.value = on ? 'on' : 'off';
+}
+
 function applyHeader(mode) {
   const root = document.documentElement;
   root.classList.remove('header-always', 'header-hover', 'header-compact');
@@ -2730,6 +2788,7 @@ function getSettings() {
     fontSize: parseInt($('#setFontSize').value),
     width: $('#setWidth').value,
     header: $('#setHeader').value,
+    lineNumbers: document.documentElement.classList.contains('hide-line-numbers') ? 'off' : 'on',
   };
 }
 
@@ -2739,6 +2798,7 @@ function applySettings(s) {
   if (s.fontSize) applyFontSize(s.fontSize);
   if (s.width) applyWidth(s.width);
   if (s.header) applyHeader(s.header);
+  if (s.lineNumbers) applyLineNumbers(s.lineNumbers);
 }
 
 function togglePresent() {
@@ -3323,6 +3383,13 @@ document.addEventListener('keydown', (e) => {
       e.preventDefault();
       const cell = S.cells.find(c => c.id === S.selectedId);
       if (cell) cell.el.classList.toggle('collapsed');
+      return;
+    }
+    if (e.key === 'l') {
+      e.preventDefault();
+      const on = getSettings().lineNumbers === 'on';
+      applyLineNumbers(!on);
+      setMsg(on ? 'line numbers off' : 'line numbers on', 'ok');
       return;
     }
     if (e.key === 'p') {

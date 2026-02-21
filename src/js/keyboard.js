@@ -2,7 +2,7 @@ import { S, $, $$ } from './state.js';
 import { addCell, deleteCell, convertCell } from './cell-ops.js';
 import { runDAG, runAll, renderHtmlCell } from './exec.js';
 import { toggleAutorun } from './editor.js';
-import { toggleSettings, togglePresent } from './settings.js';
+import { toggleSettings, togglePresent, applyLineNumbers, getSettings } from './settings.js';
 import { saveNotebook } from './save.js';
 import { setMsg } from './ui.js';
 import { toggleComment, autoResize, cssSummary } from './cell-dom.js';
@@ -390,6 +390,13 @@ document.addEventListener('keydown', (e) => {
       e.preventDefault();
       const cell = S.cells.find(c => c.id === S.selectedId);
       if (cell) cell.el.classList.toggle('collapsed');
+      return;
+    }
+    if (e.key === 'l') {
+      e.preventDefault();
+      const on = getSettings().lineNumbers === 'on';
+      applyLineNumbers(!on);
+      setMsg(on ? 'line numbers off' : 'line numbers on', 'ok');
       return;
     }
     if (e.key === 'p') {
