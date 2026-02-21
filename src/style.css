@@ -766,6 +766,7 @@ body.presenting .present-exit {
   letter-spacing: 1px;
   z-index: 100;
 }
+.statusbar .status-size { color: var(--fg-dim); }
 .statusbar .status-cells { color: var(--fg-dim); }
 .statusbar .status-msg { flex: 1; text-align: right; }
 .statusbar .status-msg.ok { color: var(--ok); }
@@ -957,6 +958,52 @@ body.presenting .present-exit {
   font-size: 11px;
 }
 
+/* ── MODULE LIST (settings panel) ── */
+.module-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  font-size: 11px;
+}
+.module-url {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}
+.module-info {
+  color: var(--fg-dim);
+  white-space: nowrap;
+  font-size: 10px;
+}
+.module-remove {
+  background: none;
+  border: none;
+  color: var(--fg-dim);
+  font-size: 14px;
+  padding: 0 2px;
+  cursor: pointer;
+  line-height: 1;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.module-remove:hover { color: var(--err); }
+.module-total {
+  padding: 4px 0;
+  font-size: 10px;
+  color: var(--fg-dim);
+  border-top: 1px solid var(--border);
+  text-align: right;
+}
+.module-empty {
+  color: var(--fg-dim);
+  font-size: 11px;
+  font-style: italic;
+  padding: 4px 0;
+}
+
 /* ── LIGHT THEME ── */
 :root.light {
   --bg: #f5f4f0;
@@ -1072,6 +1119,7 @@ body.presenting .present-exit {
     padding: 0;
     height: 48px;
   }
+  .statusbar .status-size,
   .statusbar .status-cells,
   .statusbar .status-msg,
   .statusbar .status-attr { display: none; }

@@ -10,4 +10,5 @@ import './settings.js';
 import './save.js';
 import './ui.js';
 import './keyboard.js';
+import './size-compare.js'; // @optional
 import './init.js';

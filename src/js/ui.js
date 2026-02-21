@@ -4,16 +4,40 @@ import { selectCell, editCell, addCellWithUndo } from './keyboard.js';
 
 // ── STATUS ──
 
+function estimateContentSize() {
+  let modules = 0;
+  for (const v of Object.values(window._installedModules || {})) {
+    modules += typeof v === 'string' ? v.length : (v.source?.length || 0);
+  }
+  const cells = JSON.stringify(S.cells.map(c => ({ type: c.type, code: c.code }))).length;
+  return modules + cells;
+}
+
+function estimateFileSize() {
+  const style = document.querySelector('style')?.textContent.length || 0;
+  const script = document.querySelector('script')?.textContent.length || 0;
+  return style + script + estimateContentSize() + 2000; // ~2KB HTML boilerplate
+}
+
 export function updateStatus() {
   const counts = { code: 0, md: 0, css: 0, html: 0 };
   for (const c of S.cells) if (counts[c.type] !== undefined) counts[c.type]++;
   const parts = [];
   for (const [t, n] of Object.entries(counts)) if (n > 0) parts.push(`${n} ${t}`);
   const statusText = parts.join(' \u00b7 ') || '0 cells';
+  const totalBytes = estimateFileSize();
+  const contentBytes = estimateContentSize();
+  const useContent = window._sizeCompareRef === 'content';
+  const displayBytes = useContent ? contentBytes : totalBytes;
+  const sizeKB = displayBytes >= 1024 ? Math.round(displayBytes / 1024) : 1;
+  const sizeText = '~' + sizeKB + ' KB' + (useContent ? ' content' : '');
   $('#statusCells').textContent = statusText;
+  const compare = typeof sizeCompare === 'function' ? sizeCompare(displayBytes) : '';
+  const sizeEl = document.getElementById('statusSize');
+  if (sizeEl) sizeEl.textContent = (compare ? sizeText + ' \u00b7 ' + compare : sizeText) + ' \u00b7 ';
   // mirror to toolbar for mobile
   const toolbarStatus = document.getElementById('toolbarStatus');
-  if (toolbarStatus) toolbarStatus.textContent = statusText;
+  if (toolbarStatus) toolbarStatus.textContent = (compare || sizeText) + ' \u00b7 ' + statusText;
   updateInsertBars();
 }
 

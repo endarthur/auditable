@@ -773,6 +773,7 @@ body.presenting .present-exit {
   letter-spacing: 1px;
   z-index: 100;
 }
+.statusbar .status-size { color: var(--fg-dim); }
 .statusbar .status-cells { color: var(--fg-dim); }
 .statusbar .status-msg { flex: 1; text-align: right; }
 .statusbar .status-msg.ok { color: var(--ok); }
@@ -964,6 +965,52 @@ body.presenting .present-exit {
   font-size: 11px;
 }
 
+/* ── MODULE LIST (settings panel) ── */
+.module-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  font-size: 11px;
+}
+.module-url {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}
+.module-info {
+  color: var(--fg-dim);
+  white-space: nowrap;
+  font-size: 10px;
+}
+.module-remove {
+  background: none;
+  border: none;
+  color: var(--fg-dim);
+  font-size: 14px;
+  padding: 0 2px;
+  cursor: pointer;
+  line-height: 1;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.module-remove:hover { color: var(--err); }
+.module-total {
+  padding: 4px 0;
+  font-size: 10px;
+  color: var(--fg-dim);
+  border-top: 1px solid var(--border);
+  text-align: right;
+}
+.module-empty {
+  color: var(--fg-dim);
+  font-size: 11px;
+  font-style: italic;
+  padding: 4px 0;
+}
+
 /* ── LIGHT THEME ── */
 :root.light {
   --bg: #f5f4f0;
@@ -1079,6 +1126,7 @@ body.presenting .present-exit {
     padding: 0;
     height: 48px;
   }
+  .statusbar .status-size,
   .statusbar .status-cells,
   .statusbar .status-msg,
   .statusbar .status-attr { display: none; }
@@ -1245,6 +1293,9 @@ body.presenting .present-exit {
       <option value="hover">hover only</option>
     </select>
   </div>
+
+  <h2>modules</h2>
+  <div id="moduleList"></div>
 </div>
 
 <div class="toolbar">
@@ -1287,6 +1338,7 @@ body.presenting .present-exit {
 </div>
 
 <div class="statusbar">
+  <span class="status-size" id="statusSize"></span>
   <span class="status-cells" id="statusCells">0 cells</span>
   <span class="status-msg" id="statusMsg"></span>
   <span class="status-attr">
@@ -2098,13 +2150,15 @@ async function execCell(cell) {
 
   // import cache — shared across all cells
   if (!window._importCache) window._importCache = {};
-  if (!window._installedModules) window._installedModules = {}; // url -> source text
+  if (!window._installedModules) window._installedModules = {}; // url -> { source, cellId }
 
   const load = async (url) => {
     if (window._importCache[url]) return window._importCache[url];
     // check installed (offline) modules first
     if (window._installedModules[url]) {
-      const blob = new Blob([window._installedModules[url]], { type: 'application/javascript' });
+      const entry = window._installedModules[url];
+      const src = typeof entry === 'string' ? entry : entry.source;
+      const blob = new Blob([src], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
       const mod = await import(blobUrl);
       window._importCache[url] = mod;
@@ -2125,8 +2179,8 @@ async function execCell(cell) {
     const resp = await fetch(bundleUrl);
     if (!resp.ok) throw new Error(`Failed to fetch ${bundleUrl}: ${resp.status}`);
     const source = await resp.text();
-    // store under original url
-    window._installedModules[url] = source;
+    // store under original url with cell reference
+    window._installedModules[url] = { source, cellId: cell.id };
     // also load it into cache
     const blob = new Blob([source], { type: 'application/javascript' });
     const blobUrl = URL.createObjectURL(blob);
@@ -2741,6 +2795,7 @@ function toggleSettings() {
   const open = !overlay.classList.contains('visible');
   overlay.classList.toggle('visible');
   panel.style.display = open ? 'block' : 'none';
+  if (open) refreshModuleList();
 }
 
 function applyTheme(theme) {
@@ -2783,13 +2838,16 @@ function applyHeader(mode) {
 }
 
 function getSettings() {
-  return {
+  const s = {
     theme: document.documentElement.classList.contains('light') ? 'light' : 'dark',
     fontSize: parseInt($('#setFontSize').value),
     width: $('#setWidth').value,
     header: $('#setHeader').value,
     lineNumbers: document.documentElement.classList.contains('hide-line-numbers') ? 'off' : 'on',
   };
+  if (window._sizeCompare) s.sizeCompare = true;
+  if (window._sizeCompareRef === 'content') s.sizeCompareRef = 'content';
+  return s;
 }
 
 function applySettings(s) {
@@ -2799,10 +2857,79 @@ function applySettings(s) {
   if (s.width) applyWidth(s.width);
   if (s.header) applyHeader(s.header);
   if (s.lineNumbers) applyLineNumbers(s.lineNumbers);
+  if (s.sizeCompare !== undefined && typeof applySizeCompare === 'function') applySizeCompare(s.sizeCompare);
+  if (s.sizeCompareRef !== undefined && typeof applySizeCompareRef === 'function') applySizeCompareRef(s.sizeCompareRef);
 }
 
 function togglePresent() {
   document.body.classList.toggle('presenting');
+}
+
+// ── MODULE MANAGEMENT ──
+
+function formatSize(bytes) {
+  return (bytes / 1024).toFixed(1) + ' KB';
+}
+
+function refreshModuleList() {
+  const list = $('#moduleList');
+  if (!list) return;
+  list.innerHTML = '';
+
+  const mods = window._installedModules || {};
+  const urls = Object.keys(mods);
+
+  if (urls.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'module-empty';
+    empty.textContent = 'no modules installed';
+    list.appendChild(empty);
+    return;
+  }
+
+  let totalSize = 0;
+  for (const url of urls) {
+    const entry = mods[url];
+    const src = typeof entry === 'string' ? entry : entry.source;
+    const cellId = typeof entry === 'string' ? null : entry.cellId;
+    const size = src ? src.length : 0;
+    totalSize += size;
+
+    const row = document.createElement('div');
+    row.className = 'module-row';
+
+    const urlSpan = document.createElement('span');
+    urlSpan.className = 'module-url';
+    urlSpan.textContent = url;
+    urlSpan.title = url;
+    row.appendChild(urlSpan);
+
+    const info = document.createElement('span');
+    info.className = 'module-info';
+    info.textContent = (cellId != null ? 'cell ' + cellId + '  ' : '') + formatSize(size);
+    row.appendChild(info);
+
+    const btn = document.createElement('button');
+    btn.className = 'module-remove';
+    btn.textContent = '\u00d7';
+    btn.title = 'remove module';
+    btn.onclick = () => removeModule(url);
+    row.appendChild(btn);
+
+    list.appendChild(row);
+  }
+
+  const total = document.createElement('div');
+  total.className = 'module-total';
+  total.textContent = 'total  ' + formatSize(totalSize);
+  list.appendChild(total);
+}
+
+function removeModule(url) {
+  if (window._installedModules) delete window._installedModules[url];
+  if (window._importCache) delete window._importCache[url];
+  refreshModuleList();
+  updateStatus();
 }
 
 // -- save.js --
@@ -2942,16 +3069,40 @@ function loadFromEmbed() {
 
 // ── STATUS ──
 
+function estimateContentSize() {
+  let modules = 0;
+  for (const v of Object.values(window._installedModules || {})) {
+    modules += typeof v === 'string' ? v.length : (v.source?.length || 0);
+  }
+  const cells = JSON.stringify(S.cells.map(c => ({ type: c.type, code: c.code }))).length;
+  return modules + cells;
+}
+
+function estimateFileSize() {
+  const style = document.querySelector('style')?.textContent.length || 0;
+  const script = document.querySelector('script')?.textContent.length || 0;
+  return style + script + estimateContentSize() + 2000; // ~2KB HTML boilerplate
+}
+
 function updateStatus() {
   const counts = { code: 0, md: 0, css: 0, html: 0 };
   for (const c of S.cells) if (counts[c.type] !== undefined) counts[c.type]++;
   const parts = [];
   for (const [t, n] of Object.entries(counts)) if (n > 0) parts.push(`${n} ${t}`);
   const statusText = parts.join(' \u00b7 ') || '0 cells';
+  const totalBytes = estimateFileSize();
+  const contentBytes = estimateContentSize();
+  const useContent = window._sizeCompareRef === 'content';
+  const displayBytes = useContent ? contentBytes : totalBytes;
+  const sizeKB = displayBytes >= 1024 ? Math.round(displayBytes / 1024) : 1;
+  const sizeText = '~' + sizeKB + ' KB' + (useContent ? ' content' : '');
   $('#statusCells').textContent = statusText;
+  const compare = typeof sizeCompare === 'function' ? sizeCompare(displayBytes) : '';
+  const sizeEl = document.getElementById('statusSize');
+  if (sizeEl) sizeEl.textContent = (compare ? sizeText + ' \u00b7 ' + compare : sizeText) + ' \u00b7 ';
   // mirror to toolbar for mobile
   const toolbarStatus = document.getElementById('toolbarStatus');
-  if (toolbarStatus) toolbarStatus.textContent = statusText;
+  if (toolbarStatus) toolbarStatus.textContent = (compare || sizeText) + ' \u00b7 ' + statusText;
   updateInsertBars();
 }
 
@@ -3492,6 +3643,73 @@ document.addEventListener('click', (e) => {
 });
 
 // late import to avoid circular dependency at module load time
+
+// -- size-compare.js --
+
+// ── SIZE COMPARISON ── @optional
+
+const SIZE_MEDIA = [
+  [4096, 'an Atari 2600 cartridge'],
+  [49152, 'a ZX Spectrum tape'],
+  [73728, 'Apollo AGC rope memory'],
+  [81920, 'an 8\u2033 floppy (SS/SD)'],
+  [262144, 'an NES cartridge'],
+  [368640, 'a 5.25\u2033 floppy (DS/DD)'],
+  [737280, 'a 3.5\u2033 floppy (DS/DD)'],
+  [1228800, 'a 5.25\u2033 floppy (DS/HD)'],
+  [1474560, 'a 3.5\u2033 floppy (DS/HD)'],
+];
+
+function sizeCompare(bytes) {
+  if (!window._sizeCompare) return '';
+  for (const [size, name] of SIZE_MEDIA) {
+    if (bytes <= size) return 'fits on ' + name;
+  }
+  const n = Math.ceil(bytes / 1474560);
+  return n + '\u00d7 3.5\u2033 floppies';
+}
+
+function applySizeCompare(val) {
+  const on = val === true || val === 'true' || val === 'on';
+  window._sizeCompare = on;
+  const el = $('#setSizeCompare');
+  if (el) el.value = on ? 'on' : 'off';
+  updateStatus();
+}
+
+function applySizeCompareRef(val) {
+  window._sizeCompareRef = val === 'content' ? 'content' : 'total';
+  const el = $('#setSizeCompareRef');
+  if (el) el.value = window._sizeCompareRef;
+  updateStatus();
+}
+
+// inject settings rows before modules section
+(function() {
+  const panel = $('#settingsPanel');
+  if (!panel) return;
+  const headings = panel.querySelectorAll('h2');
+  const modulesH2 = headings[headings.length - 1];
+  if (!modulesH2) return;
+
+  const refRow = document.createElement('div');
+  refRow.className = 'settings-row';
+  refRow.innerHTML = '<label>size reference</label>' +
+    '<select id="setSizeCompareRef" onchange="applySizeCompareRef(this.value)">' +
+    '<option value="total" selected>total file</option>' +
+    '<option value="content">content only</option></select>';
+  modulesH2.before(refRow);
+
+  const row = document.createElement('div');
+  row.className = 'settings-row';
+  row.innerHTML = '<label>size comparison</label>' +
+    '<select id="setSizeCompare" onchange="applySizeCompare(this.value)">' +
+    '<option value="off">off</option><option value="on" selected>on</option></select>';
+  modulesH2.before(row);
+
+  window._sizeCompare = true;
+  window._sizeCompareRef = 'total';
+})();
 
 // -- init.js --
 
