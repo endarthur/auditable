@@ -119,6 +119,154 @@ button.accent:hover {
   border-color: var(--accent);
 }
 
+/* ── TRANSPORT CONTROLS ── */
+.transport {
+  display: inline-flex;
+  border: 1px solid var(--border);
+}
+.transport button {
+  border: none;
+  border-right: 1px solid var(--border);
+  padding: 4px 8px;
+}
+.transport button:last-child { border-right: none; }
+.transport button.autorun-on {
+  background: #33aa77;
+  color: #111;
+}
+.transport button.autorun-off {
+  background: #dd4444;
+  color: #111;
+}
+
+.toolbar-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── TOOLBAR OVERFLOW MENU ── */
+.toolbar-overflow {
+  position: relative;
+  display: inline-block;
+}
+.toolbar-overflow-tray {
+  display: none;
+  position: absolute;
+  top: 100%;
+  right: 0;
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  z-index: 200;
+  flex-direction: column;
+  min-width: 140px;
+}
+.toolbar-overflow-tray button {
+  border: none;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  padding: 8px 12px;
+  background: var(--bg1);
+  white-space: nowrap;
+}
+.toolbar-overflow-tray button:last-child { border-bottom: none; }
+.toolbar-overflow-tray button:hover { background: var(--bg2); color: var(--fg-bright); }
+.toolbar-overflow.open .toolbar-overflow-tray { display: flex; }
+
+/* ── BOTTOM ACTION BAR ── */
+.action-bar { display: none; }
+
+/* ── ACTION BAR TRAYS ── */
+.action-add-tray,
+.action-more-tray {
+  display: none;
+  position: absolute;
+  bottom: 100%;
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  flex-direction: column;
+  z-index: 200;
+}
+.action-add-tray { left: 0; min-width: 120px; }
+.action-more-tray { right: 0; min-width: 120px; }
+.action-add-tray.open,
+.action-more-tray.open { display: flex; }
+.action-add-tray button,
+.action-more-tray button {
+  min-height: 48px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  padding: 8px 16px;
+  background: var(--bg1);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.action-add-tray button:last-child,
+.action-more-tray button:last-child { border-bottom: none; }
+.action-add-tray button:hover,
+.action-more-tray button:hover { background: var(--bg2); color: var(--fg-bright); }
+
+/* ── CELL INSERT / CONVERT BUTTONS (touch only) ── */
+.cell-insert { display: none; }
+.cell-convert { display: none; }
+
+/* ── CELL TYPE PICKER ── */
+.cell-type-picker {
+  display: none;
+  gap: 2px;
+  padding: 2px 8px 4px;
+}
+.cell-type-picker.open { display: flex; }
+.cell-type-picker button {
+  font-size: 9px;
+  padding: 2px 8px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-family: var(--mono);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.cell-type-picker button:hover {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+/* ── CELL INSERT PICKER ── */
+.cell-insert-picker {
+  display: none;
+  gap: 2px;
+  position: absolute;
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  padding: 4px;
+  z-index: 200;
+}
+.cell-insert-picker.open { display: flex; }
+.cell-insert-picker button {
+  font-size: 9px;
+  padding: 4px 8px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-family: var(--mono);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  min-height: 36px;
+}
+.cell-insert-picker button:hover {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+/* ── TOOLBAR STATUS (mobile cell count) ── */
+.toolbar-status { display: none; }
+
 /* ── NOTEBOOK ── */
 .notebook {
   max-width: 860px;
@@ -129,7 +277,7 @@ button.accent:hover {
 /* ── CELL ── */
 .cell {
   position: relative;
-  margin: 2px 0;
+  margin: 6px 0;
   border-left: 2px solid transparent;
   transition: border-color 0.15s;
 }
@@ -139,11 +287,11 @@ button.accent:hover {
 .cell.selected {
   border-left-color: var(--accent);
 }
-.cell.selected .cell-gutter {
+.cell.selected .cell-header {
   opacity: 1;
 }
 .cell.manual .cell-type::after {
-  content: ' · manual';
+  content: ' \00b7 manual';
   color: var(--accent-dim);
 }
 .cell.stale {
@@ -157,8 +305,8 @@ button.accent:hover {
   transition: border-color 0.5s;
 }
 
-/* cell gutter — type label + controls */
-.cell-gutter {
+/* cell header — type label + controls */
+.cell-header {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -167,30 +315,35 @@ button.accent:hover {
   transition: opacity 0.15s;
   user-select: none;
 }
-.cell:hover .cell-gutter,
-.cell:focus-within .cell-gutter {
+.cell:hover .cell-header,
+.cell:focus-within .cell-header {
   opacity: 1;
 }
 
 .cell.collapsed .cell-code,
-.cell.collapsed .cell-md-edit {
+.cell.collapsed .cell-md-edit,
+.cell.collapsed .cell-css-edit,
+.cell.collapsed .cell-html-edit {
   display: none !important;
 }
 .cell.collapsed .cell-type::before {
-  content: '▸ ';
+  content: '\25b8 ';
 }
 .cell:not(.collapsed) .cell-type::before {
-  content: '▾ ';
+  content: '\25be ';
 }
 .cell-type {
   cursor: pointer;
   user-select: none;
-}
   font-size: 9px;
   letter-spacing: 2px;
   text-transform: uppercase;
   color: var(--fg-dim);
 }
+.cell[data-type="code"] .cell-type { color: #7aabcf; }
+.cell[data-type="css"]  .cell-type { color: #d4955a; }
+.cell[data-type="html"] .cell-type { color: #6dbfb8; }
+.cell[data-type="md"]   .cell-type { color: var(--fg-dim); }
 
 .cell-btn {
   background: none;
@@ -269,6 +422,24 @@ button.accent:hover {
 .hl-op { color: #888; }
 .hl-punc { color: #666; }
 
+/* CSS syntax tokens */
+.hl-atrule { color: #7aabcf; }
+.hl-prop { color: #7aabcf; }
+.hl-sel { color: #d4955a; }
+.hl-color { color: var(--accent); }
+.hl-important { color: #d4555a; font-weight: bold; }
+
+.hl-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 1px solid var(--border-hi);
+  vertical-align: middle;
+  margin-right: 2px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
 .cell-output {
   padding: 4px 10px;
   min-height: 0;
@@ -299,7 +470,6 @@ button.accent:hover {
 .cell-output table td {
   border: 1px solid var(--border);
   padding: 2px 8px;
-  text-align: right;
 }
 .cell-output table th {
   color: var(--accent);
@@ -307,6 +477,79 @@ button.accent:hover {
   text-transform: uppercase;
   font-size: 9px;
   letter-spacing: 1px;
+}
+
+/* ── CSS CELL ── */
+.cell-css-view {
+  padding: 6px 10px;
+  color: var(--fg-dim);
+  cursor: text;
+  min-height: 24px;
+  font-size: 11px;
+  font-style: italic;
+}
+.cell-css-view:empty::before {
+  content: '(empty stylesheet)';
+}
+
+.cell-css-edit .editor-wrap {
+  position: relative;
+  overflow: hidden;
+}
+
+.cell-css-edit textarea {
+  display: block;
+  width: 100%;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg-bright);
+  caret-color: var(--fg-bright);
+  font-family: var(--mono);
+  font-size: var(--editor-font-size);
+  line-height: 1.5;
+  padding: 8px 10px;
+  resize: vertical;
+  min-height: 38px;
+  outline: none;
+  tab-size: 2;
+  position: relative;
+  z-index: 2;
+  -webkit-text-fill-color: transparent;
+}
+.cell-css-edit textarea::selection {
+  -webkit-text-fill-color: var(--fg-bright);
+  background: rgba(200,155,60,0.25);
+}
+.cell-css-edit textarea:focus + .highlight-layer {
+  border-color: var(--border-hi);
+}
+
+/* ── HTML CELL ── */
+.cell-html-view {
+  padding: 6px 10px;
+  color: var(--fg);
+  cursor: text;
+  min-height: 24px;
+}
+.cell-html-view:empty::before {
+  content: '(empty html template)';
+  color: var(--fg-dim);
+  font-style: italic;
+  font-size: 11px;
+}
+.cell-html-edit textarea {
+  display: block;
+  width: 100%;
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  color: var(--fg-bright);
+  font-family: var(--mono);
+  font-size: var(--editor-font-size);
+  line-height: 1.5;
+  padding: 8px 10px;
+  resize: vertical;
+  min-height: 38px;
+  outline: none;
 }
 
 /* ── MARKDOWN CELL ── */
@@ -357,9 +600,12 @@ button.accent:hover {
 
 /* ── PRESENTATION MODE ── */
 body.presenting .toolbar { display: none; }
-body.presenting .cell-gutter { display: none; }
+body.presenting .cell-header { display: none; }
 body.presenting .cell-code { display: none; }
 body.presenting .cell-md-edit { display: none !important; }
+body.presenting .cell-css-edit { display: none; }
+body.presenting .cell-css-view { display: none; }
+body.presenting .cell-html-edit { display: none !important; }
 body.presenting .cell { border-left: none; margin: 0; }
 body.presenting .cell:hover { border-left: none; }
 body.presenting .insert-bar { display: none; }
@@ -381,7 +627,7 @@ body.presenting .present-exit {
   display: flex;
   justify-content: center;
   align-items: center;
-  margin: -4px 0;
+  margin: -6px 0;
 }
 .insert-bar::before {
   content: '';
@@ -431,6 +677,55 @@ body.presenting .present-exit {
 }
 .add-bar:hover {
   opacity: 1 !important;
+}
+
+/* ── WIDGET CLASSES ── */
+.cell-widget {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+.cell-widget-label {
+  min-width: 80px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+.cell-widget input[type="range"] {
+  flex: 1;
+  accent-color: var(--accent);
+  max-width: 200px;
+}
+.cell-widget select {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  color: var(--fg-bright);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 2px 4px;
+}
+.cell-widget input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+.cell-widget input[type="text"] {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  color: var(--fg-bright);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 2px 6px;
+  flex: 1;
+  max-width: 200px;
+}
+.cell-widget-val {
+  min-width: 40px;
+  text-align: right;
+  color: var(--fg-bright);
+  font-size: 12px;
 }
 
 /* ── STATUS BAR ── */
@@ -492,6 +787,7 @@ body.presenting .present-exit {
 }
 .help-overlay.visible { display: flex; justify-content: center; }
 .help-content {
+  position: relative;
   max-width: 600px;
   width: 100%;
   color: var(--fg);
@@ -533,6 +829,28 @@ body.presenting .present-exit {
   margin-top: 24px;
   letter-spacing: 1px;
 }
+.help-close-btn {
+  position: absolute;
+  top: 0;
+  right: 0;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-size: 20px;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.help-close-btn:hover {
+  border-color: var(--err);
+  color: var(--err);
+}
 
 /* ── SETTINGS PANEL ── */
 .settings-overlay {
@@ -560,6 +878,29 @@ body.presenting .present-exit {
   font-size: 12px;
   color: var(--fg);
 }
+.settings-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-size: 18px;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.settings-close:hover {
+  border-color: var(--err);
+  color: var(--err);
+}
+
 .settings-panel h2 {
   color: var(--accent);
   font-size: 11px;
@@ -610,41 +951,171 @@ body.presenting .present-exit {
   --err: #c33;
   --ok: #287;
 }
+:root.light .cell[data-type="code"] .cell-type { color: #4a7a9e; }
+:root.light .cell[data-type="css"]  .cell-type { color: #a56e33; }
+:root.light .cell[data-type="html"] .cell-type { color: #3d8a83; }
 :root.light ::-webkit-scrollbar-track { background: var(--bg); }
 :root.light ::-webkit-scrollbar-thumb { background: var(--border-hi); }
 
+/* ── TOUCH / HEADER MODES ── */
+@media (hover: none) {
+  .insert-bar { display: none; }
+  .cell.selected .cell-insert { display: inline; }
+  .cell.selected .cell-convert { display: inline; }
+  .cell.selected .cell-header {
+    gap: 2px;
+  }
+  .cell.selected .cell-btn {
+    min-height: 36px;
+    min-width: 36px;
+    font-size: 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+}
+
+/* compact header: ellipsis indicator, full controls on select */
+@media (hover: none) {
+  :root:not(.header-always):not(.header-hover) .cell-header > * { display: none; }
+  :root:not(.header-always):not(.header-hover) .cell-header {
+    opacity: 1;
+    justify-content: center;
+    padding: 1px 8px;
+  }
+  :root:not(.header-always):not(.header-hover) .cell-header::before {
+    content: '\22ef';
+    color: var(--fg-dim);
+    font-size: 12px;
+    opacity: 0.4;
+  }
+  :root:not(.header-always):not(.header-hover) .cell.selected .cell-header > * { display: inline; }
+  :root:not(.header-always):not(.header-hover) .cell.selected .cell-header::before { display: none; }
+  :root:not(.header-always):not(.header-hover) .cell.selected .cell-header {
+    justify-content: flex-start;
+    padding: 2px 8px;
+  }
+}
+
+/* header-always: full header visible on all devices */
+:root.header-always .cell-header { opacity: 0.6; }
+:root.header-always .cell:hover .cell-header,
+:root.header-always .cell.selected .cell-header { opacity: 1; }
+
+/* header-compact: forced compact mode on all devices */
+:root.header-compact .cell-header > * { display: none; }
+:root.header-compact .cell-header {
+  opacity: 1 !important;
+  justify-content: center;
+  padding: 1px 8px;
+}
+:root.header-compact .cell-header::before {
+  content: '\22ef';
+  color: var(--fg-dim);
+  font-size: 12px;
+  opacity: 0.4;
+}
+:root.header-compact .cell.selected .cell-header > * { display: inline; }
+:root.header-compact .cell.selected .cell-header::before { display: none; }
+:root.header-compact .cell.selected .cell-header {
+  justify-content: flex-start;
+  padding: 2px 8px;
+}
+
 /* ── RESPONSIVE ── */
 @media (max-width: 640px) {
+  /* slim top toolbar: filename + cell count only */
   .toolbar {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 4px;
     padding: 6px 8px;
   }
-  .toolbar-title { font-size: 10px; letter-spacing: 2px; }
+  .toolbar-title { display: none; }
   .toolbar-sep { display: none; }
-  .toolbar-filename { order: 10; flex-basis: 100%; }
+  .toolbar .toolbar-add, .toolbar .toolbar-secondary { display: none; }
+  .transport { display: none; }
+  .toolbar-right { display: none; }
+  .toolbar-filename { flex: 1; }
   .toolbar-filename input { width: 100%; }
-  button { padding: 4px 7px; font-size: 9px; }
+  .toolbar-status {
+    display: inline;
+    font-size: 10px;
+    color: var(--fg-dim);
+    white-space: nowrap;
+    letter-spacing: 1px;
+  }
+
+  /* bottom action bar replaces statusbar */
+  .statusbar {
+    display: block;
+    padding: 0;
+    height: 48px;
+  }
+  .statusbar .status-cells,
+  .statusbar .status-msg,
+  .statusbar .status-attr { display: none; }
+  .action-bar {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    height: 48px;
+  }
+  /* wrapper divs for tray positioning must fill their grid cell */
+  .action-bar > div {
+    position: relative;
+    display: flex;
+  }
+  .action-bar > div > button {
+    flex: 1;
+  }
+  /* style only the 5 action buttons, not tray buttons */
+  .action-bar > button,
+  .action-bar > div > button {
+    min-height: 48px;
+    border: none;
+    border-right: 1px solid var(--border);
+    background: var(--bg);
+    font-family: var(--mono);
+    font-size: 16px;
+    color: var(--fg);
+    padding: 0;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  .action-bar > :last-child > button,
+  .action-bar > button:last-child { border-right: none; }
+  .action-bar > button:active,
+  .action-bar > div > button:active { background: var(--bg2); }
+  .action-bar > button.autorun-on,
+  .action-bar > div > button.autorun-on {
+    background: #33aa77;
+    color: #111;
+  }
+  .action-bar > button.autorun-off,
+  .action-bar > div > button.autorun-off {
+    background: #dd4444;
+    color: #111;
+  }
+
   .notebook { padding: 8px 6px 100px; }
-  .cell-gutter { padding: 2px 4px; }
-  .statusbar .status-attr a:not(:last-child) { display: none; }
-  .statusbar .status-attr span { display: none; }
+  .cell-header { padding: 2px 4px; }
+  .settings-close { width: 44px; height: 44px; font-size: 22px; }
+  .settings-row { padding: 10px 0; }
+  .settings-row select { min-height: 44px; font-size: 14px; padding: 4px 8px; }
+  .settings-row input[type="range"] { height: 44px; }
   .help-overlay { padding: 20px 12px; }
   .settings-panel { width: 260px; }
 }
-@media (max-width: 400px) {
-  .toolbar-title { display: none; }
-  .statusbar { font-size: 9px; gap: 6px; }
-}
+
 </style>
 </head>
 <body>
 
 <div class="help-overlay" id="helpOverlay">
 <div class="help-content">
+<button class="help-close-btn" onclick="$('#helpOverlay').classList.remove('visible')">&#x00d7;</button>
 <h2>command mode</h2>
-<div class="help-row"><span class="help-key">↑ / k</span><span class="help-desc">select cell above</span></div>
-<div class="help-row"><span class="help-key">↓ / j</span><span class="help-desc">select cell below</span></div>
+<div class="help-row"><span class="help-key">&#x2191; / k</span><span class="help-desc">select cell above</span></div>
+<div class="help-row"><span class="help-key">&#x2193; / j</span><span class="help-desc">select cell below</span></div>
 <div class="help-row"><span class="help-key">Enter</span><span class="help-desc">edit selected cell</span></div>
 <div class="help-row"><span class="help-key">a</span><span class="help-desc">insert cell above</span></div>
 <div class="help-row"><span class="help-key">b</span><span class="help-desc">insert cell below</span></div>
@@ -655,6 +1126,8 @@ body.presenting .present-exit {
 <div class="help-row"><span class="help-key">x</span><span class="help-desc">cut cell</span></div>
 <div class="help-row"><span class="help-key">m</span><span class="help-desc">convert to markdown</span></div>
 <div class="help-row"><span class="help-key">y</span><span class="help-desc">convert to code</span></div>
+<div class="help-row"><span class="help-key">s</span><span class="help-desc">convert to css</span></div>
+<div class="help-row"><span class="help-key">t</span><span class="help-desc">convert to html template</span></div>
 <div class="help-row"><span class="help-key">h</span><span class="help-desc">collapse / expand cell</span></div>
 <div class="help-row"><span class="help-key">p</span><span class="help-desc">presentation mode</span></div>
 
@@ -669,6 +1142,11 @@ body.presenting .present-exit {
 <h2>global</h2>
 <div class="help-row"><span class="help-key">F1</span><span class="help-desc">toggle this help</span></div>
 <div class="help-row"><span class="help-key">Ctrl+S</span><span class="help-desc">save notebook</span></div>
+
+<h2>toolbar</h2>
+<div class="help-row"><span class="help-key">&#x23f5; step</span><span class="help-desc">run selected cell</span></div>
+<div class="help-row"><span class="help-key">&#x25b6;/&#x2016;</span><span class="help-desc">toggle reactive mode (autorun)</span></div>
+<div class="help-row"><span class="help-key">&#x25b6;&#x25b6; run all</span><span class="help-desc">run all cells</span></div>
 
 <h2>builtins</h2>
 <div class="help-row"><span class="help-key">display()</span><span class="help-desc">show text, objects, or DOM elements</span></div>
@@ -690,6 +1168,7 @@ body.presenting .present-exit {
 
 <div class="settings-overlay" id="settingsOverlay" onclick="if(event.target===this)toggleSettings()"></div>
 <div class="settings-panel" id="settingsPanel">
+  <button class="settings-close" onclick="toggleSettings()">&#x00d7;</button>
   <h2>theme</h2>
   <div class="settings-row">
     <label>color scheme</label>
@@ -716,6 +1195,15 @@ body.presenting .present-exit {
       <option value="100%">full</option>
     </select>
   </div>
+  <div class="settings-row">
+    <label>cell header</label>
+    <select id="setHeader" onchange="applyHeader(this.value)">
+      <option value="auto" selected>auto</option>
+      <option value="always">always visible</option>
+      <option value="compact">compact</option>
+      <option value="hover">hover only</option>
+    </select>
+  </div>
 </div>
 
 <div class="toolbar">
@@ -724,18 +1212,34 @@ body.presenting .present-exit {
   <span class="toolbar-filename">
     <input type="text" id="docTitle" value="synth" spellcheck="false">
   </span>
-  <button onclick="addCell('code')">+ code</button>
-  <button onclick="addCell('md')">+ md</button>
+  <span class="toolbar-status" id="toolbarStatus"></span>
+  <button class="toolbar-add" onclick="addCellWithUndo('code','',S.selectedId)">+ code</button>
+  <button class="toolbar-add" onclick="addCellWithUndo('md','',S.selectedId)">+ md</button>
+  <button class="toolbar-secondary" onclick="addCellWithUndo('css','',S.selectedId)">+ css</button>
+  <button class="toolbar-secondary" onclick="addCellWithUndo('html','',S.selectedId)">+ html</button>
   <span class="toolbar-sep"></span>
-  <button onclick="runAll()">run all</button>
-  <button id="autorunBtn" onclick="toggleAutorun()" title="reactive mode — cells auto-run on edit">▶</button>
-  <button class="accent" onclick="saveNotebook()">save</button>
-  <button onclick="$('#helpOverlay').classList.toggle('visible')" title="keyboard shortcuts (F1)">?</button>
-  <button onclick="toggleSettings()" title="settings">⚙</button>
-  <button onclick="togglePresent()" title="presentation mode">⎚</button>
+  <span class="transport">
+    <button onclick="runSelectedCell()" title="run cell + advance (Shift+Enter)">&#x23f5;</button>
+    <button id="autorunBtn" class="autorun-on" onclick="toggleAutorun()" title="reactive mode &#x2014; cells auto-run on edit">&#x25b6;</button>
+    <button onclick="runAll()" title="run all cells">&#x25b6;&#x25b6;</button>
+  </span>
+  <span class="toolbar-right">
+    <button class="accent" onclick="saveNotebook()">save</button>
+    <div class="toolbar-overflow">
+      <button onclick="toggleToolbarMenu()" title="more">&#x22ef;</button>
+      <div class="toolbar-overflow-tray">
+        <button onclick="newNotebook();toggleToolbarMenu()">new</button>
+        <button onclick="collapseAll();toggleToolbarMenu()">collapse all</button>
+        <button onclick="expandAll();toggleToolbarMenu()">expand all</button>
+        <button onclick="$('#helpOverlay').classList.toggle('visible');toggleToolbarMenu()">help (F1)</button>
+        <button onclick="toggleSettings();toggleToolbarMenu()">settings</button>
+        <button onclick="togglePresent();toggleToolbarMenu()">present</button>
+      </div>
+    </div>
+  </span>
 </div>
 
-<button class="present-exit" onclick="togglePresent()">✕ exit</button>
+<button class="present-exit" onclick="togglePresent()">&#x2715; exit</button>
 
 <div class="notebook" id="notebook">
   <!-- cells go here -->
@@ -746,12 +1250,39 @@ body.presenting .present-exit {
   <span class="status-msg" id="statusMsg"></span>
   <span class="status-attr">
     <a href="https://endarthur.github.io" target="_blank">endarthur</a>
-    <span>·</span>
+    <span>&middot;</span>
     <a href="https://gentropic.org" target="_blank">geoscientific chaos union</a>
-    <span>·</span>
+    <span>&middot;</span>
     <a href="https://github.com/endarthur/auditable" target="_blank" title="source on GitHub"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
   </span>
+  <div class="action-bar">
+    <div>
+      <div class="action-add-tray">
+        <button onclick="insertAt(S.selectedId,'code');toggleAddTray()">+ code</button>
+        <button onclick="insertAt(S.selectedId,'md');toggleAddTray()">+ md</button>
+        <button onclick="insertAt(S.selectedId,'css');toggleAddTray()">+ css</button>
+        <button onclick="insertAt(S.selectedId,'html');toggleAddTray()">+ html</button>
+      </div>
+      <button class="action-add" onclick="toggleAddTray()">+</button>
+    </div>
+    <button onclick="runSelectedCell()" title="run cell + advance">&#x23f5;</button>
+    <button id="autorunBtnMobile" class="autorun-on" onclick="toggleAutorun()" title="autorun">&#x25b6;</button>
+    <button onclick="runAll()" title="run all">&#x25b6;&#x25b6;</button>
+    <div>
+      <div class="action-more-tray">
+        <button onclick="newNotebook();toggleMoreTray()">new</button>
+        <button onclick="saveNotebook();toggleMoreTray()">save</button>
+        <button onclick="collapseAll();toggleMoreTray()">collapse all</button>
+        <button onclick="expandAll();toggleMoreTray()">expand all</button>
+        <button onclick="$('#helpOverlay').classList.toggle('visible');toggleMoreTray()">help</button>
+        <button onclick="toggleSettings();toggleMoreTray()">settings</button>
+        <button onclick="togglePresent();toggleMoreTray()">present</button>
+      </div>
+      <button class="action-more" onclick="toggleMoreTray()">&#x22ef;</button>
+    </div>
+  </div>
 </div>
+
 
 <!--AUDITABLE-DATA
 [{"type":"md","code":"# browser synth\n\na simple synthesizer using the Web Audio API. all from vanilla JS in a single HTML file."},{"type":"code","code":"// %manual\n// audio context (needs user interaction to start)\nconst audioCtx = new (window.AudioContext || window.webkitAudioContext)();\n\nfunction playNote(freq, duration, type) {\n  const osc = audioCtx.createOscillator();\n  const gain = audioCtx.createGain();\n  osc.type = type;\n  osc.frequency.value = freq;\n  gain.gain.setValueAtTime(0.3, audioCtx.currentTime);\n  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);\n  osc.connect(gain);\n  gain.connect(audioCtx.destination);\n  osc.start();\n  osc.stop(audioCtx.currentTime + duration);\n}\n\ndisplay(\"audio engine ready\");"},{"type":"code","code":"const wave = dropdown(\"waveform\", [\"sine\", \"triangle\", \"sawtooth\", \"square\"]);\nconst octave = slider(\"octave\", 4, {min:2, max:6, step:1});\nconst decay = slider(\"decay\", 0.5, {min:0.1, max:2, step:0.1});"},{"type":"code","code":"// build keyboard\nconst notes = [\n  [\"C\", 0], [\"C#\", 1], [\"D\", 2], [\"D#\", 3],\n  [\"E\", 4], [\"F\", 5], [\"F#\", 6], [\"G\", 7],\n  [\"G#\", 8], [\"A\", 9], [\"A#\", 10], [\"B\", 11]\n];\n\nfunction noteFreq(semitone, oct) {\n  return 440 * Math.pow(2, (semitone - 9) / 12 + (oct - 4));\n}\n\nconst kb = document.createElement(\"div\");\nkb.style.cssText = \"display:flex;gap:2px;margin:12px 0;flex-wrap:wrap\";\n\nfor (const [name, semi] of notes) {\n  const btn = document.createElement(\"button\");\n  const isSharp = name.includes(\"#\");\n  btn.textContent = name;\n  btn.style.cssText = isSharp\n    ? \"background:#222;color:#c89b3c;border:1px solid #444;padding:20px 8px 40px;font-size:11px;min-width:30px;cursor:pointer;font-family:monospace\"\n    : \"background:#1a1a1a;color:#aaa;border:1px solid #333;padding:20px 12px 40px;font-size:11px;min-width:36px;cursor:pointer;font-family:monospace\";\n  btn.onmousedown = () => {\n    playNote(noteFreq(semi, octave), decay, wave);\n    btn.style.borderColor = \"#c89b3c\";\n  };\n  btn.onmouseup = () => {\n    btn.style.borderColor = isSharp ? \"#444\" : \"#333\";\n  };\n  btn.onmouseleave = () => {\n    btn.style.borderColor = isSharp ? \"#444\" : \"#333\";\n  };\n  kb.appendChild(btn);\n}\n\ndisplay(kb);\ndisplay(`octave ${octave} \\u00b7 ${wave} \\u00b7 decay ${decay}s`);"}]
@@ -759,7 +1290,10 @@ AUDITABLE-DATA-->
 <!--AUDITABLE-SETTINGS
 {"theme":"dark","fontSize":13,"width":"860"}
 AUDITABLE-SETTINGS-->
+
 <script>
+// -- state.js --
+
 // ═══════════════════════════════════════════════════
 // AUDITABLE — reactive notebook runtime
 // Geoscientific Chaos Union, 2025
@@ -769,11 +1303,18 @@ const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 
 // ── STATE ──
-let cells = [];  // { id, type, code, el, defines, uses, output, error }
-let scope = {};  // shared variable scope
-let cellId = 0;
-
-// ── SYNTAX HIGHLIGHTING ──
+const S = {
+  cells: [],        // { id, type, code, el, defines, uses, output, error }
+  scope: {},        // shared variable scope
+  cellId: 0,        // unique cell ID counter
+  editTimer: null,  // debounce timer for autorun
+  autorun: true,    // reactive mode flag
+  selectedId: null, // currently selected cell
+  pendingD: false,  // for "dd" double-tap delete
+  pendingDTimer: null,
+  clipboard: null,  // copied cell data
+  trash: [],        // undo stack for deleted cells
+};
 
 const JS_KEYWORDS = new Set([
   'const','let','var','function','return','if','else','for','while','do',
@@ -787,6 +1328,15 @@ const JS_BUILTINS = new Set([
   'Math','Array','Object','String','Number','Float64Array','Float32Array',
   'Int32Array','Uint8Array','Map','Set','Promise','console','JSON',
   'display','canvas','table','slider','dropdown','checkbox','textInput','load','install'
+]);
+
+// -- syntax.js --
+
+// ── SYNTAX HIGHLIGHTING ──
+
+const CSS_NAMED_COLORS = new Set([
+  'black','silver','gray','white','maroon','red','purple','fuchsia',
+  'green','lime','olive','yellow','navy','blue','teal','aqua','orange'
 ]);
 
 function tokenize(code) {
@@ -892,6 +1442,244 @@ function highlightCode(ta, hl) {
   // trailing newline so highlight layer matches textarea height
   hl.innerHTML = html + '\n';
 }
+
+// ── CSS SYNTAX HIGHLIGHTING ──
+
+function tokenizeCss(code) {
+  const tokens = [];
+  let i = 0;
+  const len = code.length;
+  let ctx = 'sel'; // 'sel' | 'prop' | 'val'
+  let depth = 0;
+
+  while (i < len) {
+    // block comment
+    if (code[i] === '/' && code[i+1] === '*') {
+      const start = i;
+      i += 2;
+      while (i < len && !(code[i-1] === '*' && code[i] === '/')) i++;
+      if (i < len) i++;
+      tokens.push({ type: 'cmt', text: code.slice(start, i) });
+      continue;
+    }
+    // strings
+    if (code[i] === '"' || code[i] === "'") {
+      const q = code[i];
+      const start = i;
+      i++;
+      while (i < len && code[i] !== q) {
+        if (code[i] === '\\') i++;
+        i++;
+      }
+      if (i < len) i++;
+      tokens.push({ type: 'str', text: code.slice(start, i) });
+      continue;
+    }
+    // punctuation with context transitions
+    if (code[i] === '{') {
+      tokens.push({ type: 'punc', text: '{' });
+      depth++;
+      ctx = 'prop';
+      i++;
+      continue;
+    }
+    if (code[i] === '}') {
+      tokens.push({ type: 'punc', text: '}' });
+      depth--;
+      ctx = depth > 0 ? 'prop' : 'sel';
+      i++;
+      continue;
+    }
+    if (code[i] === ':' && ctx === 'prop') {
+      tokens.push({ type: 'punc', text: ':' });
+      ctx = 'val';
+      i++;
+      continue;
+    }
+    if (code[i] === ';') {
+      tokens.push({ type: 'punc', text: ';' });
+      ctx = 'prop';
+      i++;
+      continue;
+    }
+    if ('(),'.includes(code[i])) {
+      tokens.push({ type: 'punc', text: code[i] });
+      i++;
+      continue;
+    }
+    // @-rules
+    if (code[i] === '@') {
+      const start = i;
+      i++;
+      while (i < len && /[a-zA-Z-]/.test(code[i])) i++;
+      tokens.push({ type: 'atrule', text: code.slice(start, i) });
+      continue;
+    }
+    // !important
+    if (code[i] === '!' && ctx === 'val') {
+      const start = i;
+      i++;
+      while (i < len && /[a-zA-Z]/.test(code[i])) i++;
+      tokens.push({ type: 'important', text: code.slice(start, i) });
+      continue;
+    }
+    // # — hex color in val, ID selector in sel
+    if (code[i] === '#') {
+      if (ctx === 'val') {
+        const start = i;
+        i++;
+        while (i < len && /[0-9a-fA-F]/.test(code[i])) i++;
+        tokens.push({ type: 'color', text: code.slice(start, i) });
+      } else {
+        // ID selector
+        const start = i;
+        i++;
+        while (i < len && /[\w-]/.test(code[i])) i++;
+        tokens.push({ type: 'sel', text: code.slice(start, i) });
+      }
+      continue;
+    }
+    // : in selector context = pseudo-class
+    if (code[i] === ':' && ctx === 'sel') {
+      const start = i;
+      i++;
+      if (i < len && code[i] === ':') i++; // ::
+      while (i < len && /[a-zA-Z-]/.test(code[i])) i++;
+      // handle pseudo with parens like :nth-child(...)
+      if (i < len && code[i] === '(') {
+        i++;
+        let pdepth = 1;
+        while (i < len && pdepth > 0) {
+          if (code[i] === '(') pdepth++;
+          else if (code[i] === ')') pdepth--;
+          if (pdepth > 0) i++;
+        }
+        if (i < len) i++;
+      }
+      tokens.push({ type: 'sel', text: code.slice(start, i) });
+      continue;
+    }
+    // . in selector context = class selector
+    if (code[i] === '.' && ctx === 'sel') {
+      const start = i;
+      i++;
+      while (i < len && /[\w-]/.test(code[i])) i++;
+      tokens.push({ type: 'sel', text: code.slice(start, i) });
+      continue;
+    }
+    // numbers (with units)
+    if (ctx === 'val' && (/\d/.test(code[i]) || (code[i] === '.' && i+1 < len && /\d/.test(code[i+1])))) {
+      const start = i;
+      while (i < len && /[0-9.]/.test(code[i])) i++;
+      // units
+      while (i < len && /[a-zA-Z%]/.test(code[i])) i++;
+      tokens.push({ type: 'num', text: code.slice(start, i) });
+      continue;
+    }
+    // identifiers
+    if (/[a-zA-Z_-]/.test(code[i])) {
+      const start = i;
+      while (i < len && /[\w-]/.test(code[i])) i++;
+      const word = code.slice(start, i);
+      // function call
+      if (i < len && code[i] === '(') {
+        tokens.push({ type: 'fn', text: word });
+        continue;
+      }
+      if (ctx === 'val' && CSS_NAMED_COLORS.has(word.toLowerCase())) {
+        tokens.push({ type: 'color', text: word });
+      } else if (ctx === 'prop') {
+        tokens.push({ type: 'prop', text: word });
+      } else if (ctx === 'sel') {
+        tokens.push({ type: 'sel', text: word });
+      } else {
+        tokens.push({ type: '', text: word });
+      }
+      continue;
+    }
+    // whitespace / other
+    tokens.push({ type: '', text: code[i] });
+    i++;
+  }
+
+  return tokens;
+}
+
+function resolveToHex(colorStr) {
+  const d = document.createElement('div');
+  d.style.color = colorStr;
+  document.body.appendChild(d);
+  const rgb = getComputedStyle(d).color;
+  d.remove();
+  const m = rgb.match(/(\d+)/g);
+  if (!m || m.length < 3) return colorStr;
+  return '#' + m.slice(0, 3).map(n => parseInt(n).toString(16).padStart(2, '0')).join('');
+}
+
+let _colorPicker = null;
+let _pickerTarget = null; // { ta, offset, len }
+
+function ensureColorPicker() {
+  if (_colorPicker) return _colorPicker;
+  _colorPicker = document.createElement('input');
+  _colorPicker.type = 'color';
+  _colorPicker.style.cssText = 'position:absolute;visibility:hidden;width:0;height:0;';
+  document.body.appendChild(_colorPicker);
+  _colorPicker.addEventListener('input', () => {
+    if (!_pickerTarget) return;
+    const { ta, offset, len } = _pickerTarget;
+    const val = ta.value;
+    const newColor = _colorPicker.value;
+    ta.value = val.slice(0, offset) + newColor + val.slice(offset + len);
+    ta.dispatchEvent(new Event('input'));
+    // update offset for new length
+    _pickerTarget.len = newColor.length;
+  });
+  return _colorPicker;
+}
+
+function highlightCss(ta, hl) {
+  const code = ta.value;
+  if (!code) { hl.innerHTML = '\n'; return; }
+
+  const tokens = tokenizeCss(code);
+  let html = '';
+  let offset = 0;
+  for (const t of tokens) {
+    const escaped = t.text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+    if (t.type === 'color') {
+      const hex = resolveToHex(t.text);
+      html += `<span class="hl-color"><span class="hl-swatch" style="background:${hex}" data-offset="${offset}" data-len="${t.text.length}"></span>${escaped}</span>`;
+    } else if (t.type && t.type !== 'id') {
+      html += `<span class="hl-${t.type}">${escaped}</span>`;
+    } else {
+      html += escaped;
+    }
+    offset += t.text.length;
+  }
+  hl.innerHTML = html + '\n';
+
+  // wire swatch clicks (only add once per highlight layer)
+  if (!hl._swatchWired) {
+    hl._swatchWired = true;
+    hl.addEventListener('click', (e) => {
+      const swatch = e.target.closest('.hl-swatch');
+      if (!swatch) return;
+      const off = parseInt(swatch.dataset.offset);
+      const len = parseInt(swatch.dataset.len);
+      const picker = ensureColorPicker();
+      _pickerTarget = { ta, offset: off, len };
+      const hex = resolveToHex(ta.value.slice(off, off + len));
+      picker.value = hex;
+      picker.click();
+    });
+  }
+}
+
+// -- dag.js --
 
 // ── REACTIVE DAG ──
 
@@ -1006,10 +1794,25 @@ function findUses(code, allDefined) {
   return uses;
 }
 
+function findHtmlUses(code, allDefined) {
+  const uses = new Set();
+  const re = /\$\{([^}]+)\}/g;
+  let m;
+  while ((m = re.exec(code))) {
+    const expr = m[1];
+    const idRe = /\b([a-zA-Z_$]\w*)\b/g;
+    let im;
+    while ((im = idRe.exec(expr))) {
+      if (allDefined.has(im[1])) uses.add(im[1]);
+    }
+  }
+  return uses;
+}
+
 function buildDAG() {
   // collect all defined names globally
-  const allDefined = new Map(); // name → cell id
-  for (const c of cells) {
+  const allDefined = new Map(); // name -> cell id
+  for (const c of S.cells) {
     if (c.type !== 'code') continue;
     const { defines } = parseNames(c.code);
     c.defines = defines;
@@ -1019,9 +1822,13 @@ function buildDAG() {
   }
 
   // find uses for each cell
-  for (const c of cells) {
-    if (c.type !== 'code') continue;
-    c.uses = findUses(c.code, new Set(allDefined.keys()));
+  const definedNames = new Set(allDefined.keys());
+  for (const c of S.cells) {
+    if (c.type === 'code') {
+      c.uses = findUses(c.code, definedNames);
+    } else if (c.type === 'html') {
+      c.uses = findHtmlUses(c.code, definedNames);
+    }
   }
 
   return allDefined;
@@ -1030,22 +1837,22 @@ function buildDAG() {
 function topoSort(dirtyIds) {
   // from dirty cells, find all downstream dependents
   const allDefined = new Map();
-  for (const c of cells) {
+  for (const c of S.cells) {
     if (c.type !== 'code') continue;
     for (const name of (c.defines || [])) {
       allDefined.set(name, c.id);
     }
   }
 
-  // build adjacency: cell A defines x, cell B uses x → A → B
+  // build adjacency: cell A defines x, cell B uses x -> A -> B
   const adj = new Map();
   const cellMap = new Map();
-  for (const c of cells) {
+  for (const c of S.cells) {
     cellMap.set(c.id, c);
-    if (c.type === 'code') adj.set(c.id, []);
+    if (c.type === 'code' || c.type === 'html') adj.set(c.id, []);
   }
-  for (const c of cells) {
-    if (c.type !== 'code') continue;
+  for (const c of S.cells) {
+    if (c.type !== 'code' && c.type !== 'html') continue;
     for (const name of (c.uses || [])) {
       const src = allDefined.get(name);
       if (src !== undefined && src !== c.id && adj.has(src)) {
@@ -1068,12 +1875,39 @@ function topoSort(dirtyIds) {
   }
 
   // topological order among affected, respecting document order
-  return cells
-    .filter(c => c.type === 'code' && affected.has(c.id))
+  return S.cells
+    .filter(c => (c.type === 'code' || c.type === 'html') && affected.has(c.id))
     .map(c => c.id);
 }
 
+// -- exec.js --
+
 // ── EXECUTION ──
+
+function renderHtmlCell(cell) {
+  const viewEl = cell.el.querySelector('.cell-html-view');
+  const outputEl = cell.el.querySelector('.cell-output');
+  if (!viewEl) return;
+  if (outputEl) { outputEl.textContent = ''; outputEl.className = 'cell-output'; }
+
+  const scopeKeys = Object.keys(S.scope);
+  const scopeVals = scopeKeys.map(k => S.scope[k]);
+
+  let rendered = cell.code.replace(/\$\{([^}]+)\}/g, (match, expr) => {
+    try {
+      const fn = new Function(...scopeKeys, '"use strict"; return (' + expr + ')');
+      const val = fn(...scopeVals);
+      return val === undefined ? '' : String(val);
+    } catch (e) {
+      return '[Error: ' + e.message + ']';
+    }
+  });
+
+  viewEl.innerHTML = rendered;
+  cell.el.classList.remove('stale', 'error');
+  cell.el.classList.add('fresh');
+  setTimeout(() => cell.el.classList.remove('fresh'), 800);
+}
 
 async function execCell(cell) {
   const outputEl = cell.el.querySelector('.cell-output');
@@ -1115,12 +1949,26 @@ async function execCell(cell) {
   const table = (data, columns) => {
     if (!data || !data.length) return;
     const cols = columns || Object.keys(data[0]);
+
+    // detect numeric columns by scanning first 10 rows
+    const isNumCol = {};
+    for (const c of cols) {
+      let allNum = true;
+      const scanRows = data.slice(0, 10);
+      for (const row of scanRows) {
+        const v = row[c];
+        if (v !== null && v !== undefined && typeof v !== 'number') { allNum = false; break; }
+      }
+      isNumCol[c] = allNum;
+    }
+
     const t = document.createElement('table');
     const thead = document.createElement('thead');
     const hr = document.createElement('tr');
     for (const c of cols) {
       const th = document.createElement('th');
       th.textContent = c;
+      th.style.textAlign = isNumCol[c] ? 'right' : 'left';
       hr.appendChild(th);
     }
     thead.appendChild(hr);
@@ -1132,6 +1980,7 @@ async function execCell(cell) {
         const td = document.createElement('td');
         const v = row[c];
         td.textContent = typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(4)) : String(v ?? '');
+        td.style.textAlign = isNumCol[c] ? 'right' : 'left';
         tr.appendChild(td);
       }
       tbody.appendChild(tr);
@@ -1162,11 +2011,11 @@ async function execCell(cell) {
     // create new widget
     const wrap = document.createElement('div');
     wrap.dataset.widgetKey = key;
-    wrap.style.cssText = 'display:flex;align-items:center;gap:8px;padding:2px 0;font-size:12px;color:#888;';
+    wrap.className = 'cell-widget';
 
     const lbl = document.createElement('span');
     lbl.textContent = label;
-    lbl.style.cssText = 'min-width:80px;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#666;';
+    lbl.className = 'cell-widget-label';
     wrap.appendChild(lbl);
 
     let input;
@@ -1177,10 +2026,9 @@ async function execCell(cell) {
       input.max = opts.max ?? 100;
       input.step = opts.step ?? 1;
       input.value = val;
-      input.style.cssText = 'flex:1;accent-color:var(--accent);max-width:200px;';
       const valSpan = document.createElement('span');
       valSpan.textContent = val;
-      valSpan.style.cssText = 'min-width:40px;text-align:right;color:var(--fg-bright);font-size:12px;';
+      valSpan.className = 'cell-widget-val';
       input.oninput = () => {
         const n = parseFloat(input.value);
         cell._inputs[key] = n;
@@ -1192,7 +2040,6 @@ async function execCell(cell) {
       wrap.appendChild(valSpan);
     } else if (type === 'dropdown') {
       input = document.createElement('select');
-      input.style.cssText = 'background:var(--bg2);border:1px solid var(--border);color:var(--fg-bright);font-family:var(--mono);font-size:12px;padding:2px 4px;';
       for (const o of (opts.options || [])) {
         const opt = document.createElement('option');
         opt.value = o;
@@ -1209,7 +2056,6 @@ async function execCell(cell) {
       input = document.createElement('input');
       input.type = 'checkbox';
       input.checked = !!val;
-      input.style.cssText = 'accent-color:var(--accent);';
       input.onchange = () => {
         cell._inputs[key] = input.checked;
         runDAG([cell.id], true);
@@ -1219,7 +2065,6 @@ async function execCell(cell) {
       input = document.createElement('input');
       input.type = 'text';
       input.value = val;
-      input.style.cssText = 'background:var(--bg2);border:1px solid var(--border);color:var(--fg-bright);font-family:var(--mono);font-size:12px;padding:2px 6px;flex:1;max-width:200px;';
       input.oninput = () => {
         cell._inputs[key] = input.value;
         clearTimeout(cell._inputTimer);
@@ -1241,8 +2086,8 @@ async function execCell(cell) {
   const textInput = (label, defaultVal = '') => mkInput(label, 'text', defaultVal);
 
   // execute with shared scope
-  const scopeKeys = Object.keys(scope);
-  const scopeVals = scopeKeys.map(k => scope[k]);
+  const scopeKeys = Object.keys(S.scope);
+  const scopeVals = scopeKeys.map(k => S.scope[k]);
 
   // import cache — shared across all cells
   if (!window._importCache) window._importCache = {};
@@ -1304,7 +2149,7 @@ async function execCell(cell) {
     if (result && typeof result === 'object') {
       cell._lastResult = result;
       for (const [k, v] of Object.entries(result)) {
-        if (v !== undefined) scope[k] = v;
+        if (v !== undefined) S.scope[k] = v;
       }
     }
 
@@ -1333,8 +2178,12 @@ async function runDAG(dirtyIds, force = false) {
   buildDAG();
 
   // rebuild scope from scratch in document order
-  scope = {};
-  for (const cell of cells) {
+  S.scope = {};
+  for (const cell of S.cells) {
+    if (cell.type === 'html') {
+      renderHtmlCell(cell);
+      continue;
+    }
     if (cell.type !== 'code') continue;
 
     // skip manual cells unless force (Run All) or explicitly triggered
@@ -1342,7 +2191,7 @@ async function runDAG(dirtyIds, force = false) {
       // keep existing scope contributions if previously run
       if (cell._lastResult) {
         for (const [k, v] of Object.entries(cell._lastResult)) {
-          if (v !== undefined) scope[k] = v;
+          if (v !== undefined) S.scope[k] = v;
         }
       }
       cell.el.classList.add('stale');
@@ -1356,13 +2205,56 @@ async function runDAG(dirtyIds, force = false) {
 }
 
 async function runAll() {
-  const ids = cells.filter(c => c.type === 'code').map(c => c.id);
+  const ids = S.cells.filter(c => c.type === 'code' || c.type === 'html').map(c => c.id);
   if (ids.length === 0) return;
   await runDAG(ids, true);
   setMsg('ran all cells', 'ok');
 }
 
+// late import to avoid circular dependency at module load time
+
+// -- markdown.js --
+
+// ── MARKDOWN RENDERING (minimal) ──
+
+function renderMd(src) {
+  let html = src
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  // headings
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+  // bold/italic
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+  // inline code
+  html = html.replace(/`(.+?)`/g, '<code>$1</code>');
+
+  // links
+  html = html.replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2">$1</a>');
+
+  // paragraphs
+  html = html.replace(/\n\n/g, '</p><p>');
+  if (!html.startsWith('<h') && !html.startsWith('<p')) html = '<p>' + html + '</p>';
+
+  return html;
+}
+
+// -- cell-dom.js --
+
 // ── CELL DOM ──
+
+function cssSummary(code) {
+  if (!code || !code.trim()) return '';
+  const rules = (code.match(/[^{}]+\{/g) || []).length;
+  const lines = code.split('\n').length;
+  return `${rules} rule${rules !== 1 ? 's' : ''} \u00b7 ${lines} line${lines !== 1 ? 's' : ''}`;
+}
 
 function createCellEl(type, id) {
   const div = document.createElement('div');
@@ -1372,11 +2264,20 @@ function createCellEl(type, id) {
 
   if (type === 'code') {
     div.innerHTML = `
-      <div class="cell-gutter">
+      <div class="cell-header">
         <span class="cell-type">code</span>
-        <button class="cell-btn" onclick="moveCell(${id},-1)" title="move up">↑</button>
-        <button class="cell-btn" onclick="moveCell(${id},1)" title="move down">↓</button>
-        <button class="cell-btn del" onclick="deleteCell(${id})" title="delete">×</button>
+        <button class="cell-btn cell-convert" onclick="toggleTypePicker(${id})" title="convert type">\u21c4</button>
+        <div class="cell-type-picker" data-cell-id="${id}">
+          <button onclick="convertCell(${id},'code')">code</button>
+          <button onclick="convertCell(${id},'md')">md</button>
+          <button onclick="convertCell(${id},'css')">css</button>
+          <button onclick="convertCell(${id},'html')">html</button>
+        </div>
+        <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'before')" title="insert above">+\u2191</button>
+        <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'after')" title="insert below">+\u2193</button>
+        <button class="cell-btn" onclick="moveCell(${id},-1)" title="move up">\u2191</button>
+        <button class="cell-btn" onclick="moveCell(${id},1)" title="move down">\u2193</button>
+        <button class="cell-btn del" onclick="deleteCell(${id})" title="delete">\u00d7</button>
       </div>
       <div class="cell-code">
         <div class="editor-wrap">
@@ -1395,13 +2296,123 @@ function createCellEl(type, id) {
     ta.addEventListener('scroll', () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; });
     ta.addEventListener('keydown', handleTab);
     ta.addEventListener('input', autoResize);
+  } else if (type === 'css') {
+    div.innerHTML = `
+      <div class="cell-header">
+        <span class="cell-type">css</span>
+        <button class="cell-btn cell-convert" onclick="toggleTypePicker(${id})" title="convert type">\u21c4</button>
+        <div class="cell-type-picker" data-cell-id="${id}">
+          <button onclick="convertCell(${id},'code')">code</button>
+          <button onclick="convertCell(${id},'md')">md</button>
+          <button onclick="convertCell(${id},'css')">css</button>
+          <button onclick="convertCell(${id},'html')">html</button>
+        </div>
+        <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'before')" title="insert above">+\u2191</button>
+        <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'after')" title="insert below">+\u2193</button>
+        <button class="cell-btn" onclick="moveCell(${id},-1)" title="move up">\u2191</button>
+        <button class="cell-btn" onclick="moveCell(${id},1)" title="move down">\u2193</button>
+        <button class="cell-btn del" onclick="deleteCell(${id})" title="delete">\u00d7</button>
+      </div>
+      <div class="cell-css-view"></div>
+      <div class="cell-css-edit" style="display:none">
+        <div class="editor-wrap">
+          <textarea rows="3" spellcheck="false" placeholder="/* css */"></textarea>
+          <div class="highlight-layer" aria-hidden="true"></div>
+        </div>
+      </div>
+    `;
+
+    const cssView = div.querySelector('.cell-css-view');
+    const cssEditWrap = div.querySelector('.cell-css-edit');
+    const ta = div.querySelector('textarea');
+    const hl = div.querySelector('.highlight-layer');
+    div.querySelector('.cell-type').addEventListener('click', () => div.classList.toggle('collapsed'));
+
+    cssView.addEventListener('click', () => {
+      cssEditWrap.style.display = '';
+      cssView.style.display = 'none';
+      ta.focus();
+      autoResize({ target: ta });
+    });
+
+    ta.addEventListener('blur', () => {
+      const cell = S.cells.find(c => c.id === id);
+      if (cell) {
+        cell.code = ta.value;
+        cssView.textContent = cssSummary(ta.value);
+      }
+      cssEditWrap.style.display = 'none';
+      cssView.style.display = '';
+    });
+
+    ta.addEventListener('input', () => { highlightCss(ta, hl); onCssEdit(id); });
+    ta.addEventListener('scroll', () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; });
+    ta.addEventListener('input', autoResize);
+    ta.addEventListener('keydown', handleTab);
+  } else if (type === 'html') {
+    div.innerHTML = `
+      <div class="cell-header">
+        <span class="cell-type">html</span>
+        <button class="cell-btn cell-convert" onclick="toggleTypePicker(${id})" title="convert type">\u21c4</button>
+        <div class="cell-type-picker" data-cell-id="${id}">
+          <button onclick="convertCell(${id},'code')">code</button>
+          <button onclick="convertCell(${id},'md')">md</button>
+          <button onclick="convertCell(${id},'css')">css</button>
+          <button onclick="convertCell(${id},'html')">html</button>
+        </div>
+        <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'before')" title="insert above">+\u2191</button>
+        <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'after')" title="insert below">+\u2193</button>
+        <button class="cell-btn" onclick="moveCell(${id},-1)" title="move up">\u2191</button>
+        <button class="cell-btn" onclick="moveCell(${id},1)" title="move down">\u2193</button>
+        <button class="cell-btn del" onclick="deleteCell(${id})" title="delete">\u00d7</button>
+      </div>
+      <div class="cell-html-view"></div>
+      <div class="cell-html-edit" style="display:none">
+        <textarea rows="2" spellcheck="false" placeholder="<html template>"></textarea>
+      </div>
+      <div class="cell-output"></div>
+    `;
+
+    const view = div.querySelector('.cell-html-view');
+    const editWrap = div.querySelector('.cell-html-edit');
+    const ta = div.querySelector('.cell-html-edit textarea');
+    div.querySelector('.cell-type').addEventListener('click', () => div.classList.toggle('collapsed'));
+
+    view.addEventListener('click', () => {
+      editWrap.style.display = '';
+      view.style.display = 'none';
+      ta.focus();
+      autoResize({ target: ta });
+    });
+
+    ta.addEventListener('blur', () => {
+      const cell = S.cells.find(c => c.id === id);
+      if (cell) {
+        cell.code = ta.value;
+        renderHtmlCell(cell);
+      }
+      editWrap.style.display = 'none';
+      view.style.display = '';
+    });
+
+    ta.addEventListener('input', autoResize);
+    ta.addEventListener('keydown', handleTab);
   } else {
     div.innerHTML = `
-      <div class="cell-gutter">
+      <div class="cell-header">
         <span class="cell-type">md</span>
-        <button class="cell-btn" onclick="moveCell(${id},-1)" title="move up">↑</button>
-        <button class="cell-btn" onclick="moveCell(${id},1)" title="move down">↓</button>
-        <button class="cell-btn del" onclick="deleteCell(${id})" title="delete">×</button>
+        <button class="cell-btn cell-convert" onclick="toggleTypePicker(${id})" title="convert type">\u21c4</button>
+        <div class="cell-type-picker" data-cell-id="${id}">
+          <button onclick="convertCell(${id},'code')">code</button>
+          <button onclick="convertCell(${id},'md')">md</button>
+          <button onclick="convertCell(${id},'css')">css</button>
+          <button onclick="convertCell(${id},'html')">html</button>
+        </div>
+        <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'before')" title="insert above">+\u2191</button>
+        <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'after')" title="insert below">+\u2193</button>
+        <button class="cell-btn" onclick="moveCell(${id},-1)" title="move up">\u2191</button>
+        <button class="cell-btn" onclick="moveCell(${id},1)" title="move down">\u2193</button>
+        <button class="cell-btn del" onclick="deleteCell(${id})" title="delete">\u00d7</button>
       </div>
       <div class="cell-md-view"></div>
       <div class="cell-md-edit" style="display:none">
@@ -1422,7 +2433,7 @@ function createCellEl(type, id) {
     });
 
     ta.addEventListener('blur', () => {
-      const cell = cells.find(c => c.id === id);
+      const cell = S.cells.find(c => c.id === id);
       if (cell) {
         cell.code = ta.value;
         view.innerHTML = renderMd(ta.value);
@@ -1515,10 +2526,12 @@ function autoResize(e) {
   if (hl) { hl.style.height = ta.style.height; }
 }
 
+// -- cell-ops.js --
+
 // ── CELL OPERATIONS ──
 
 function addCell(type, code = '', afterId = null, beforeId = null) {
-  const id = cellId++;
+  const id = S.cellId++;
   const cell = {
     id, type, code,
     defines: new Set(),
@@ -1529,29 +2542,29 @@ function addCell(type, code = '', afterId = null, beforeId = null) {
 
   const nb = $('#notebook');
   if (beforeId !== null) {
-    const idx = cells.findIndex(c => c.id === beforeId);
+    const idx = S.cells.findIndex(c => c.id === beforeId);
     if (idx >= 0) {
-      cells.splice(idx, 0, cell);
-      cells[idx + 1].el.before(cell.el);
+      S.cells.splice(idx, 0, cell);
+      S.cells[idx + 1].el.before(cell.el);
     } else {
-      cells.push(cell);
+      S.cells.push(cell);
       nb.appendChild(cell.el);
     }
   } else if (afterId !== null) {
-    const idx = cells.findIndex(c => c.id === afterId);
+    const idx = S.cells.findIndex(c => c.id === afterId);
     if (idx >= 0) {
-      cells.splice(idx + 1, 0, cell);
-      if (idx < cells.length - 2) {
-        cells[idx + 2].el.before(cell.el);
+      S.cells.splice(idx + 1, 0, cell);
+      if (idx < S.cells.length - 2) {
+        S.cells[idx + 2].el.before(cell.el);
       } else {
         nb.appendChild(cell.el);
       }
     } else {
-      cells.push(cell);
+      S.cells.push(cell);
       nb.appendChild(cell.el);
     }
   } else {
-    cells.push(cell);
+    S.cells.push(cell);
     nb.appendChild(cell.el);
   }
 
@@ -1570,27 +2583,54 @@ function addCell(type, code = '', afterId = null, beforeId = null) {
     }
   }
 
+  // CSS cell: create <style> element in <head>
+  if (type === 'css') {
+    const hl = cell.el.querySelector('.highlight-layer');
+    if (hl && code) highlightCss(ta, hl);
+    const cssView = cell.el.querySelector('.cell-css-view');
+    if (cssView && code) cssView.textContent = cssSummary(code);
+    const styleEl = document.createElement('style');
+    styleEl.dataset.cellId = id;
+    styleEl.textContent = code;
+    document.head.appendChild(styleEl);
+    cell._styleEl = styleEl;
+  }
+
+  // HTML cell: render template
+  if (type === 'html' && code) {
+    renderHtmlCell(cell);
+  }
+
   ta.focus();
   updateStatus();
   return cell;
 }
 
 function deleteCell(id) {
-  const idx = cells.findIndex(c => c.id === id);
+  const idx = S.cells.findIndex(c => c.id === id);
   if (idx < 0) return;
-  cells[idx].el.remove();
-  cells.splice(idx, 1);
+  if (S.cells[idx]._styleEl) {
+    S.cells[idx]._styleEl.remove();
+    S.cells[idx]._styleEl = null;
+  }
+  S.cells[idx].el.remove();
+  S.cells.splice(idx, 1);
   // re-run to clean scope
-  if (cells.some(c => c.type === 'code')) runAll();
+  if (S.cells.some(c => c.type === 'code' || c.type === 'html')) runAll();
   updateStatus();
 }
 
 function convertCell(id, newType) {
-  const cell = cells.find(c => c.id === id);
+  const cell = S.cells.find(c => c.id === id);
   if (!cell || cell.type === newType) return;
 
   const code = cell.code;
-  const idx = cells.findIndex(c => c.id === id);
+
+  // cleanup old type
+  if (cell._styleEl) {
+    cell._styleEl.remove();
+    cell._styleEl = null;
+  }
 
   // create new cell element
   const newEl = createCellEl(newType, id);
@@ -1611,40 +2651,96 @@ function convertCell(id, newType) {
   if (newType === 'md') {
     newEl.querySelector('.cell-md-view').innerHTML = renderMd(code);
   }
+  if (newType === 'css') {
+    const hl = newEl.querySelector('.highlight-layer');
+    if (hl) highlightCss(ta, hl);
+    const cssView = newEl.querySelector('.cell-css-view');
+    if (cssView && code) cssView.textContent = cssSummary(code);
+    const styleEl = document.createElement('style');
+    styleEl.dataset.cellId = id;
+    styleEl.textContent = code;
+    document.head.appendChild(styleEl);
+    cell._styleEl = styleEl;
+  }
+  if (newType === 'html') {
+    renderHtmlCell(cell);
+  }
 
   selectCell(id);
   updateStatus();
-  if (cells.some(c => c.type === 'code')) runAll();
+  if (S.cells.some(c => c.type === 'code' || c.type === 'html')) runAll();
 }
 
 function moveCell(id, dir) {
-  const idx = cells.findIndex(c => c.id === id);
+  const idx = S.cells.findIndex(c => c.id === id);
   const newIdx = idx + dir;
-  if (newIdx < 0 || newIdx >= cells.length) return;
+  if (newIdx < 0 || newIdx >= S.cells.length) return;
 
-  const [cell] = cells.splice(idx, 1);
-  cells.splice(newIdx, 0, cell);
+  const [cell] = S.cells.splice(idx, 1);
+  S.cells.splice(newIdx, 0, cell);
 
   // re-order DOM
   const nb = $('#notebook');
   nb.innerHTML = '';
-  for (const c of cells) nb.appendChild(c.el);
+  for (const c of S.cells) nb.appendChild(c.el);
 
-  if (cells.some(c => c.type === 'code')) runAll();
+  // re-order CSS <style> elements in <head> to match cell order
+  for (const c of S.cells) {
+    if (c._styleEl) document.head.appendChild(c._styleEl);
+  }
+
+  if (S.cells.some(c => c.type === 'code' || c.type === 'html')) runAll();
 }
+
+// -- editor.js --
 
 // ── EDITING ──
 
-let editTimer = null;
-let autorun = true;
-
 function toggleAutorun() {
-  autorun = !autorun;
+  S.autorun = !S.autorun;
   const btn = $('#autorunBtn');
-  btn.textContent = autorun ? '▶' : '⏸';
-  btn.title = autorun ? 'reactive mode — cells auto-run on edit' : 'manual mode — only Run All or Ctrl+Enter';
-  setMsg(autorun ? 'autorun on' : 'autorun off', 'ok');
+  const btnMobile = document.getElementById('autorunBtnMobile');
+  const cls = S.autorun ? 'autorun-on' : 'autorun-off';
+  const text = S.autorun ? '\u25b6' : '\u2016';
+  btn.textContent = text;
+  btn.title = S.autorun ? 'reactive mode \u2014 cells auto-run on edit' : 'manual mode \u2014 only Run All or Ctrl+Enter';
+  btn.className = cls;
+  if (btnMobile) {
+    btnMobile.textContent = text;
+    btnMobile.className = cls;
+  }
+  setMsg(S.autorun ? 'autorun on' : 'autorun off', 'ok');
 }
+
+function onCssEdit(id) {
+  const cell = S.cells.find(c => c.id === id);
+  if (!cell) return;
+  cell.code = cell.el.querySelector('textarea').value;
+  if (cell._styleEl) cell._styleEl.textContent = cell.code;
+}
+
+function onCodeEdit(id) {
+  const cell = S.cells.find(c => c.id === id);
+  if (!cell) return;
+  const ta = cell.el.querySelector('textarea');
+  cell.code = ta.value;
+
+  // update manual state
+  if (isManual(cell.code)) {
+    cell.el.classList.add('manual');
+  } else {
+    cell.el.classList.remove('manual');
+  }
+
+  cell.el.classList.add('stale');
+
+  if (S.autorun) {
+    clearTimeout(S.editTimer);
+    S.editTimer = setTimeout(() => runDAG([id], false), 400);
+  }
+}
+
+// -- settings.js --
 
 // ── SETTINGS ──
 
@@ -1678,11 +2774,22 @@ function applyWidth(w) {
   $('#setWidth').value = w;
 }
 
+function applyHeader(mode) {
+  const root = document.documentElement;
+  root.classList.remove('header-always', 'header-hover', 'header-compact');
+  if (mode === 'always') root.classList.add('header-always');
+  else if (mode === 'hover') root.classList.add('header-hover');
+  else if (mode === 'compact') root.classList.add('header-compact');
+  // 'auto' = no class, CSS media queries handle it
+  $('#setHeader').value = mode;
+}
+
 function getSettings() {
   return {
     theme: document.documentElement.classList.contains('light') ? 'light' : 'dark',
     fontSize: parseInt($('#setFontSize').value),
     width: $('#setWidth').value,
+    header: $('#setHeader').value,
   };
 }
 
@@ -1691,62 +2798,14 @@ function applySettings(s) {
   if (s.theme) applyTheme(s.theme);
   if (s.fontSize) applyFontSize(s.fontSize);
   if (s.width) applyWidth(s.width);
+  if (s.header) applyHeader(s.header);
 }
 
 function togglePresent() {
   document.body.classList.toggle('presenting');
 }
 
-function onCodeEdit(id) {
-  const cell = cells.find(c => c.id === id);
-  if (!cell) return;
-  const ta = cell.el.querySelector('textarea');
-  cell.code = ta.value;
-
-  // update manual state
-  if (isManual(cell.code)) {
-    cell.el.classList.add('manual');
-  } else {
-    cell.el.classList.remove('manual');
-  }
-
-  cell.el.classList.add('stale');
-
-  if (autorun) {
-    clearTimeout(editTimer);
-    editTimer = setTimeout(() => runDAG([id], false), 400);
-  }
-}
-
-// ── MARKDOWN RENDERING (minimal) ──
-
-function renderMd(src) {
-  let html = src
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-
-  // headings
-  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-
-  // bold/italic
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-
-  // inline code
-  html = html.replace(/`(.+?)`/g, '<code>$1</code>');
-
-  // links
-  html = html.replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2">$1</a>');
-
-  // paragraphs
-  html = html.replace(/\n\n/g, '</p><p>');
-  if (!html.startsWith('<h') && !html.startsWith('<p')) html = '<p>' + html + '</p>';
-
-  return html;
-}
+// -- save.js --
 
 // ── SAVE / LOAD ──
 
@@ -1755,7 +2814,7 @@ function saveNotebook() {
   const title = $('#docTitle').value || 'untitled';
 
   // collect cells as data
-  const cellData = cells.map(c => ({
+  const cellData = S.cells.map(c => ({
     type: c.type,
     code: c.code,
     collapsed: c.el.classList.contains('collapsed') || undefined
@@ -1774,6 +2833,7 @@ function saveNotebook() {
   const settingsOvHTML = $('#settingsOverlay').outerHTML;
   const settingsPanHTML = $('#settingsPanel').outerHTML.replace(/display:\s*block;?/, '');
   const statusAttr = document.querySelector('.status-attr').outerHTML;
+  const actionBar = document.querySelector('.action-bar').outerHTML;
 
   // build output HTML
   let html = `<!DOCTYPE html>
@@ -1781,7 +2841,7 @@ function saveNotebook() {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Auditable — ${esc(title)}</title>
+<title>Auditable \u2014 ${esc(title)}</title>
 <style>\n${styles}\n</style>
 </head>
 <body>
@@ -1797,18 +2857,34 @@ ${settingsPanHTML}
   <span class="toolbar-filename">
     <input type="text" id="docTitle" value="${esc(title)}" spellcheck="false">
   </span>
-  <button onclick="addCell('code')">+ code</button>
-  <button onclick="addCell('md')">+ md</button>
+  <span class="toolbar-status" id="toolbarStatus"></span>
+  <button class="toolbar-add" onclick="addCellWithUndo('code','',S.selectedId)">+ code</button>
+  <button class="toolbar-add" onclick="addCellWithUndo('md','',S.selectedId)">+ md</button>
+  <button class="toolbar-secondary" onclick="addCellWithUndo('css','',S.selectedId)">+ css</button>
+  <button class="toolbar-secondary" onclick="addCellWithUndo('html','',S.selectedId)">+ html</button>
   <span class="toolbar-sep"></span>
-  <button onclick="runAll()">run all</button>
-  <button id="autorunBtn" onclick="toggleAutorun()" title="reactive mode — cells auto-run on edit">▶</button>
-  <button class="accent" onclick="saveNotebook()">save</button>
-  <button onclick="$('#helpOverlay').classList.toggle('visible')" title="keyboard shortcuts (F1)">?</button>
-  <button onclick="toggleSettings()" title="settings">⚙</button>
-  <button onclick="togglePresent()" title="presentation mode">⎚</button>
+  <span class="transport">
+    <button onclick="runSelectedCell()" title="run cell + advance (Shift+Enter)">\u23f5</button>
+    <button id="autorunBtn" class="autorun-on" onclick="toggleAutorun()" title="reactive mode \u2014 cells auto-run on edit">\u25b6</button>
+    <button onclick="runAll()" title="run all cells">\u25b6\u25b6</button>
+  </span>
+  <span class="toolbar-right">
+    <button class="accent" onclick="saveNotebook()">save</button>
+    <div class="toolbar-overflow">
+      <button onclick="toggleToolbarMenu()" title="more">\u22ef</button>
+      <div class="toolbar-overflow-tray">
+        <button onclick="newNotebook();toggleToolbarMenu()">new</button>
+        <button onclick="collapseAll();toggleToolbarMenu()">collapse all</button>
+        <button onclick="expandAll();toggleToolbarMenu()">expand all</button>
+        <button onclick="$('#helpOverlay').classList.toggle('visible');toggleToolbarMenu()">help (F1)</button>
+        <button onclick="toggleSettings();toggleToolbarMenu()">settings</button>
+        <button onclick="togglePresent();toggleToolbarMenu()">present</button>
+      </div>
+    </div>
+  </span>
 </div>
 
-<button class="present-exit" onclick="togglePresent()">✕ exit</button>
+<button class="present-exit" onclick="togglePresent()">\u2715 exit</button>
 
 <div class="notebook" id="notebook">
 </div>
@@ -1817,6 +2893,7 @@ ${settingsPanHTML}
   <span class="status-cells" id="statusCells">0 cells</span>
   <span class="status-msg" id="statusMsg"></span>
   ${statusAttr}
+  ${actionBar}
 </div>
 
 ${'<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->'}
@@ -1875,7 +2952,7 @@ function loadFromEmbed() {
         if (c.collapsed) cell.el.classList.add('collapsed');
       }
       // run after load
-      if (cells.some(c => c.type === 'code')) {
+      if (S.cells.some(c => c.type === 'code')) {
         setTimeout(runAll, 50);
       }
       return true;
@@ -1886,47 +2963,128 @@ function loadFromEmbed() {
   return false;
 }
 
+// -- ui.js --
+
+// ── STATUS ──
+
+function updateStatus() {
+  const counts = { code: 0, md: 0, css: 0, html: 0 };
+  for (const c of S.cells) if (counts[c.type] !== undefined) counts[c.type]++;
+  const parts = [];
+  for (const [t, n] of Object.entries(counts)) if (n > 0) parts.push(`${n} ${t}`);
+  const statusText = parts.join(' \u00b7 ') || '0 cells';
+  $('#statusCells').textContent = statusText;
+  // mirror to toolbar for mobile
+  const toolbarStatus = document.getElementById('toolbarStatus');
+  if (toolbarStatus) toolbarStatus.textContent = statusText;
+  updateInsertBars();
+}
+
+function updateInsertBars() {
+  const nb = $('#notebook');
+  // remove existing insert bars
+  nb.querySelectorAll('.insert-bar').forEach(b => b.remove());
+
+  // add one before first cell and between each pair
+  for (let i = 0; i <= S.cells.length; i++) {
+    const bar = document.createElement('div');
+    bar.className = 'insert-bar';
+    const afterId = i > 0 ? S.cells[i - 1].id : null;
+    bar.innerHTML = `<div class="insert-btns">
+      <button onclick="insertAt(${afterId},'code')">+ code</button>
+      <button onclick="insertAt(${afterId},'md')">+ md</button>
+      <button onclick="insertAt(${afterId},'css')">+ css</button>
+      <button onclick="insertAt(${afterId},'html')">+ html</button>
+    </div>`;
+    if (i < S.cells.length) {
+      S.cells[i].el.before(bar);
+    } else {
+      nb.appendChild(bar);
+    }
+  }
+}
+
+function insertAt(afterId, type) {
+  let cell;
+  if (afterId === null && S.cells.length > 0) {
+    // insert before first cell
+    cell = addCellWithUndo(type, '', null, S.cells[0].id);
+  } else {
+    cell = addCellWithUndo(type, '', afterId);
+  }
+  selectCell(cell.id);
+  editCell(cell.id);
+}
+
+function setMsg(msg, cls = '') {
+  const el = $('#statusMsg');
+  el.textContent = msg;
+  el.className = 'status-msg' + (cls ? ' ' + cls : '');
+  if (cls) setTimeout(() => { el.textContent = ''; el.className = 'status-msg'; }, 3000);
+}
+
+// -- keyboard.js --
+
 // ── KEYBOARD / SELECTION ──
 
-let selectedId = null;
-let pendingD = false;
-let pendingDTimer = null;
-let clipboard = null;
-let trash = [];  // stack of { type, code, afterId }
+function addCellWithUndo(type, code, afterId, beforeId) {
+  const cell = addCell(type, code, afterId, beforeId);
+  S.trash.push({ action: 'add', id: cell.id });
+  return cell;
+}
 
 function deleteCellWithUndo(id) {
-  const idx = cells.findIndex(c => c.id === id);
+  const idx = S.cells.findIndex(c => c.id === id);
   if (idx < 0) return;
-  const cell = cells[idx];
-  const afterId = idx > 0 ? cells[idx - 1].id : null;
-  trash.push({ type: cell.type, code: cell.code, afterId });
+  const cell = S.cells[idx];
+  const afterId = idx > 0 ? S.cells[idx - 1].id : null;
+  S.trash.push({ action: 'delete', type: cell.type, code: cell.code, afterId });
+  if (cell._styleEl) {
+    cell._styleEl.remove();
+    cell._styleEl = null;
+  }
   cell.el.remove();
-  cells.splice(idx, 1);
-  if (cells.some(c => c.type === 'code')) runAll();
+  S.cells.splice(idx, 1);
+  if (S.cells.some(c => c.type === 'code')) runAll();
   updateStatus();
   setMsg('deleted cell (z to undo)', 'ok');
 }
 
-function undoDelete() {
-  if (!trash.length) { setMsg('nothing to undo', ''); return; }
-  const { type, code, afterId } = trash.pop();
-  // check if afterId still exists
-  const validAfter = afterId !== null && cells.find(c => c.id === afterId) ? afterId : null;
-  const newCell = addCell(type, code, validAfter);
-  selectCell(newCell.id);
-  if (type === 'code' && cells.some(c => c.type === 'code')) runAll();
-  setMsg('restored cell', 'ok');
+function undo() {
+  if (!S.trash.length) { setMsg('nothing to undo', ''); return; }
+  const entry = S.trash.pop();
+
+  if (entry.action === 'add') {
+    // undo add = delete the cell (without pushing to undo stack)
+    const idx = S.cells.findIndex(c => c.id === entry.id);
+    if (idx < 0) return;
+    const cell = S.cells[idx];
+    if (cell._styleEl) { cell._styleEl.remove(); cell._styleEl = null; }
+    cell.el.remove();
+    S.cells.splice(idx, 1);
+    if (S.cells.some(c => c.type === 'code' || c.type === 'html')) runAll();
+    updateStatus();
+    setMsg('undid add', 'ok');
+  } else {
+    // undo delete = restore the cell
+    const { type, code, afterId } = entry;
+    const validAfter = afterId !== null && S.cells.find(c => c.id === afterId) ? afterId : null;
+    const newCell = addCell(type, code, validAfter);
+    selectCell(newCell.id);
+    if ((type === 'code' || type === 'html') && S.cells.some(c => c.type === 'code' || c.type === 'html')) runAll();
+    setMsg('restored cell', 'ok');
+  }
 }
 
-function selectCell(id) {
+function selectCell(id, scroll) {
   // deselect previous
   $$('.cell.selected').forEach(el => el.classList.remove('selected'));
-  selectedId = id;
+  S.selectedId = id;
   if (id === null) return;
-  const cell = cells.find(c => c.id === id);
+  const cell = S.cells.find(c => c.id === id);
   if (cell) {
     cell.el.classList.add('selected');
-    cell.el.scrollIntoView({ block: 'nearest' });
+    if (scroll) cell.el.scrollIntoView({ block: 'nearest' });
   }
 }
 
@@ -1936,14 +3094,14 @@ function getEditingCell() {
     const cellEl = active.closest('.cell');
     if (cellEl) {
       const id = parseInt(cellEl.dataset.id);
-      return cells.find(c => c.id === id) || null;
+      return S.cells.find(c => c.id === id) || null;
     }
   }
   return null;
 }
 
 function editCell(id) {
-  const cell = cells.find(c => c.id === id);
+  const cell = S.cells.find(c => c.id === id);
   if (!cell) return;
   selectCell(id);
 
@@ -1952,6 +3110,26 @@ function editCell(id) {
     const view = cell.el.querySelector('.cell-md-view');
     const editWrap = cell.el.querySelector('.cell-md-edit');
     const ta = cell.el.querySelector('.cell-md-edit textarea');
+    editWrap.style.display = '';
+    view.style.display = 'none';
+    ta.value = cell.code;
+    ta.focus();
+    autoResize({ target: ta });
+  } else if (cell.type === 'css') {
+    // open css editor
+    const view = cell.el.querySelector('.cell-css-view');
+    const editWrap = cell.el.querySelector('.cell-css-edit');
+    const ta = cell.el.querySelector('.cell-css-edit textarea');
+    editWrap.style.display = '';
+    view.style.display = 'none';
+    ta.value = cell.code;
+    ta.focus();
+    autoResize({ target: ta });
+  } else if (cell.type === 'html') {
+    // open html editor
+    const view = cell.el.querySelector('.cell-html-view');
+    const editWrap = cell.el.querySelector('.cell-html-edit');
+    const ta = cell.el.querySelector('.cell-html-edit textarea');
     editWrap.style.display = '';
     view.style.display = 'none';
     ta.value = cell.code;
@@ -1970,39 +3148,133 @@ function exitEdit() {
 }
 
 function runSelected() {
-  if (selectedId === null && cells.length) selectCell(cells[0].id);
-  const cell = cells.find(c => c.id === selectedId);
+  if (S.selectedId === null && S.cells.length) selectCell(S.cells[0].id);
+  const cell = S.cells.find(c => c.id === S.selectedId);
   if (!cell) return;
   if (cell.type === 'code') {
     cell.code = cell.el.querySelector('.cell-code textarea').value;
     runDAG([cell.id]);
+  } else if (cell.type === 'html') {
+    renderHtmlCell(cell);
   }
 }
 
+window.runSelectedCell = runSelectedAndAdvance;
+
+// ── MOBILE TRAY TOGGLES ──
+
+function closeAllTrays() {
+  document.querySelectorAll('.action-add-tray.open, .action-more-tray.open, .cell-type-picker.open, .cell-insert-picker.open').forEach(el => el.classList.remove('open'));
+}
+
+window.toggleToolbarMenu = () => {
+  const menu = document.querySelector('.toolbar-overflow');
+  if (!menu) return;
+  menu.classList.toggle('open');
+};
+
+window.toggleAddTray = () => {
+  const tray = document.querySelector('.action-add-tray');
+  if (!tray) return;
+  const wasOpen = tray.classList.contains('open');
+  closeAllTrays();
+  if (!wasOpen) tray.classList.add('open');
+};
+
+window.toggleMoreTray = () => {
+  const tray = document.querySelector('.action-more-tray');
+  if (!tray) return;
+  const wasOpen = tray.classList.contains('open');
+  closeAllTrays();
+  if (!wasOpen) tray.classList.add('open');
+};
+
+window.showInsertPicker = (id, dir) => {
+  closeAllTrays();
+  const cell = S.cells.find(c => c.id === id);
+  if (!cell) return;
+  // remove existing picker
+  document.querySelectorAll('.cell-insert-picker').forEach(el => el.remove());
+  const picker = document.createElement('div');
+  picker.className = 'cell-insert-picker open';
+  // for "before": find cell before this one to get afterId, or use null for first
+  // for "after": afterId is this cell's id
+  let afterId;
+  if (dir === 'after') {
+    afterId = id;
+  } else {
+    const idx = S.cells.findIndex(c => c.id === id);
+    afterId = idx > 0 ? S.cells[idx - 1].id : null;
+  }
+  picker.innerHTML = ['code', 'md', 'css', 'html'].map(t =>
+    `<button onclick="insertAt(${afterId !== null ? afterId : 'null'},'${t}');this.closest('.cell-insert-picker').remove()">${t}</button>`
+  ).join('');
+  // place picker in the cell header
+  const header = cell.el.querySelector('.cell-header');
+  header.style.position = 'relative';
+  picker.style.top = '100%';
+  picker.style.left = dir === 'before' ? '0' : 'auto';
+  picker.style.right = dir === 'after' ? '0' : 'auto';
+  header.appendChild(picker);
+};
+
+window.toggleTypePicker = (id) => {
+  closeAllTrays();
+  const picker = document.querySelector(`.cell-type-picker[data-cell-id="${id}"]`);
+  if (picker) picker.classList.toggle('open');
+};
+
+window.collapseAll = () => {
+  S.cells.forEach(c => c.el.classList.add('collapsed'));
+  setMsg('collapsed all', 'ok');
+};
+
+window.expandAll = () => {
+  S.cells.forEach(c => c.el.classList.remove('collapsed'));
+  setMsg('expanded all', 'ok');
+};
+
+window.newNotebook = () => {
+  if (!confirm('Clear all cells?')) return;
+  while (S.cells.length) {
+    const cell = S.cells[0];
+    if (cell._styleEl) { cell._styleEl.remove(); cell._styleEl = null; }
+    cell.el.remove();
+    S.cells.shift();
+  }
+  S.scope = {};
+  S.selectedId = null;
+  S.clipboard = null;
+  S.trash = [];
+  $('#docTitle').value = 'untitled';
+  updateStatus();
+  setMsg('new notebook', 'ok');
+};
+
 function runSelectedAndAdvance() {
   runSelected();
-  if (selectedId === null) return;
-  const idx = cells.findIndex(c => c.id === selectedId);
-  if (idx < cells.length - 1) {
+  if (S.selectedId === null) return;
+  const idx = S.cells.findIndex(c => c.id === S.selectedId);
+  if (idx < S.cells.length - 1) {
     // move to next cell and edit it
-    editCell(cells[idx + 1].id);
+    editCell(S.cells[idx + 1].id);
   } else {
     // at end — create new code cell
-    const newCell = addCell('code', '', selectedId);
+    const newCell = addCellWithUndo('code', '', S.selectedId);
     selectCell(newCell.id);
   }
 }
 
 function navigateCell(dir) {
-  if (!cells.length) return;
-  if (selectedId === null) {
-    selectCell(cells[0].id);
+  if (!S.cells.length) return;
+  if (S.selectedId === null) {
+    selectCell(S.cells[0].id, true);
     return;
   }
-  const idx = cells.findIndex(c => c.id === selectedId);
+  const idx = S.cells.findIndex(c => c.id === S.selectedId);
   const newIdx = idx + dir;
-  if (newIdx >= 0 && newIdx < cells.length) {
-    selectCell(cells[newIdx].id);
+  if (newIdx >= 0 && newIdx < S.cells.length) {
+    selectCell(S.cells[newIdx].id, true);
   }
 }
 
@@ -2013,7 +3285,7 @@ document.addEventListener('keydown', (e) => {
     // ── EDIT MODE ──
     if (e.key === '/' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
-      toggleComment(active);
+      toggleComment(document.activeElement);
       return;
     }
     if (e.key === 'Escape') {
@@ -2033,11 +3305,11 @@ document.addEventListener('keydown', (e) => {
       editing.code = editing.el.querySelector('textarea').value;
       if (editing.type === 'code') runDAG([editing.id], true);
       // advance
-      const idx = cells.findIndex(c => c.id === editing.id);
-      if (idx < cells.length - 1) {
-        editCell(cells[idx + 1].id);
+      const idx = S.cells.findIndex(c => c.id === editing.id);
+      if (idx < S.cells.length - 1) {
+        editCell(S.cells[idx + 1].id);
       } else {
-        const newCell = addCell('code', '', editing.id);
+        const newCell = addCellWithUndo('code', '', editing.id);
         selectCell(newCell.id);
         editCell(newCell.id);
       }
@@ -2063,78 +3335,78 @@ document.addEventListener('keydown', (e) => {
     }
     if (e.key === 'Enter') {
       e.preventDefault();
-      if (selectedId !== null) editCell(selectedId);
+      if (S.selectedId !== null) editCell(S.selectedId);
       return;
     }
     if (e.key === 'a') {
       e.preventDefault();
-      const newCell = addCell('code', '', null, selectedId);
+      const newCell = addCellWithUndo('code', '', null, S.selectedId);
       selectCell(newCell.id);
       editCell(newCell.id);
       return;
     }
     if (e.key === 'b') {
       e.preventDefault();
-      const newCell = addCell('code', '', selectedId);
+      const newCell = addCellWithUndo('code', '', S.selectedId);
       selectCell(newCell.id);
       editCell(newCell.id);
       return;
     }
     if (e.key === 'd') {
       e.preventDefault();
-      if (pendingD) {
+      if (S.pendingD) {
         // dd — delete
-        clearTimeout(pendingDTimer);
-        pendingD = false;
-        if (selectedId !== null) {
-          const idx = cells.findIndex(c => c.id === selectedId);
-          const nextId = idx < cells.length - 1 ? cells[idx + 1].id
-                       : idx > 0 ? cells[idx - 1].id : null;
-          deleteCellWithUndo(selectedId);
+        clearTimeout(S.pendingDTimer);
+        S.pendingD = false;
+        if (S.selectedId !== null) {
+          const idx = S.cells.findIndex(c => c.id === S.selectedId);
+          const nextId = idx < S.cells.length - 1 ? S.cells[idx + 1].id
+                       : idx > 0 ? S.cells[idx - 1].id : null;
+          deleteCellWithUndo(S.selectedId);
           if (nextId !== null) selectCell(nextId);
         }
       } else {
-        pendingD = true;
-        pendingDTimer = setTimeout(() => { pendingD = false; }, 600);
+        S.pendingD = true;
+        S.pendingDTimer = setTimeout(() => { S.pendingD = false; }, 600);
       }
       return;
     }
-    if (e.key !== 'd' && pendingD) { pendingD = false; clearTimeout(pendingDTimer); }
+    if (e.key !== 'd' && S.pendingD) { S.pendingD = false; clearTimeout(S.pendingDTimer); }
     if (e.key === 'z') {
       e.preventDefault();
-      undoDelete();
+      undo();
       return;
     }
-    if (e.key === 'c' && selectedId !== null) {
+    if (e.key === 'c' && S.selectedId !== null) {
       e.preventDefault();
-      const cell = cells.find(c => c.id === selectedId);
-      if (cell) clipboard = { type: cell.type, code: cell.code };
+      const cell = S.cells.find(c => c.id === S.selectedId);
+      if (cell) S.clipboard = { type: cell.type, code: cell.code };
       setMsg('copied cell', 'ok');
       return;
     }
-    if (e.key === 'v' && clipboard) {
+    if (e.key === 'v' && S.clipboard) {
       e.preventDefault();
-      const newCell = addCell(clipboard.type, clipboard.code, selectedId);
+      const newCell = addCellWithUndo(S.clipboard.type, S.clipboard.code, S.selectedId);
       selectCell(newCell.id);
-      if (clipboard.type === 'code' && cells.some(c => c.type === 'code')) runAll();
+      if (S.clipboard.type === 'code' && S.cells.some(c => c.type === 'code')) runAll();
       return;
     }
-    if (e.key === 'x' && selectedId !== null) {
+    if (e.key === 'x' && S.selectedId !== null) {
       // cut = copy + delete
       e.preventDefault();
-      const cell = cells.find(c => c.id === selectedId);
-      if (cell) clipboard = { type: cell.type, code: cell.code };
-      const idx = cells.findIndex(c => c.id === selectedId);
-      const nextId = idx < cells.length - 1 ? cells[idx + 1].id
-                   : idx > 0 ? cells[idx - 1].id : null;
-      deleteCellWithUndo(selectedId);
+      const cell = S.cells.find(c => c.id === S.selectedId);
+      if (cell) S.clipboard = { type: cell.type, code: cell.code };
+      const idx = S.cells.findIndex(c => c.id === S.selectedId);
+      const nextId = idx < S.cells.length - 1 ? S.cells[idx + 1].id
+                   : idx > 0 ? S.cells[idx - 1].id : null;
+      deleteCellWithUndo(S.selectedId);
       if (nextId !== null) selectCell(nextId);
       setMsg('cut cell', 'ok');
       return;
     }
-    if (e.key === 'h' && selectedId !== null) {
+    if (e.key === 'h' && S.selectedId !== null) {
       e.preventDefault();
-      const cell = cells.find(c => c.id === selectedId);
+      const cell = S.cells.find(c => c.id === S.selectedId);
       if (cell) cell.el.classList.toggle('collapsed');
       return;
     }
@@ -2143,14 +3415,24 @@ document.addEventListener('keydown', (e) => {
       togglePresent();
       return;
     }
-    if (e.key === 'm' && selectedId !== null) {
+    if (e.key === 'm' && S.selectedId !== null) {
       e.preventDefault();
-      convertCell(selectedId, 'md');
+      convertCell(S.selectedId, 'md');
       return;
     }
-    if (e.key === 'y' && selectedId !== null) {
+    if (e.key === 'y' && S.selectedId !== null) {
       e.preventDefault();
-      convertCell(selectedId, 'code');
+      convertCell(S.selectedId, 'code');
+      return;
+    }
+    if (e.key === 's' && S.selectedId !== null) {
+      e.preventDefault();
+      convertCell(S.selectedId, 'css');
+      return;
+    }
+    if (e.key === 't' && S.selectedId !== null) {
+      e.preventDefault();
+      convertCell(S.selectedId, 'html');
       return;
     }
     if (e.key === 's' && (e.ctrlKey || e.metaKey)) {
@@ -2200,8 +3482,31 @@ $('#helpOverlay').addEventListener('click', (e) => {
   if (e.target === $('#helpOverlay')) $('#helpOverlay').classList.remove('visible');
 });
 
-// click to select
+// click to select + close trays
 document.addEventListener('click', (e) => {
+  // close action trays if clicking outside their wrapper (wrapper = parent div with tray + button)
+  const addTray = document.querySelector('.action-add-tray');
+  const moreTray = document.querySelector('.action-more-tray');
+  if (addTray && addTray.classList.contains('open') && !addTray.parentElement.contains(e.target)) {
+    addTray.classList.remove('open');
+  }
+  if (moreTray && moreTray.classList.contains('open') && !moreTray.parentElement.contains(e.target)) {
+    moreTray.classList.remove('open');
+  }
+  // close cell type pickers if clicking outside
+  if (!e.target.closest('.cell-type-picker') && !e.target.closest('.cell-type')) {
+    document.querySelectorAll('.cell-type-picker.open').forEach(el => el.classList.remove('open'));
+  }
+  // close cell insert pickers if clicking outside
+  if (!e.target.closest('.cell-insert-picker')) {
+    document.querySelectorAll('.cell-insert-picker').forEach(el => el.remove());
+  }
+  // close toolbar overflow menu if clicking outside
+  const tbOverflow = document.querySelector('.toolbar-overflow');
+  if (tbOverflow && tbOverflow.classList.contains('open') && !tbOverflow.contains(e.target)) {
+    tbOverflow.classList.remove('open');
+  }
+
   const cellEl = e.target.closest('.cell');
   if (cellEl) {
     const id = parseInt(cellEl.dataset.id);
@@ -2209,56 +3514,9 @@ document.addEventListener('click', (e) => {
   }
 });
 
-// ── STATUS ──
+// late import to avoid circular dependency at module load time
 
-function updateStatus() {
-  const n = cells.length;
-  const nc = cells.filter(c => c.type === 'code').length;
-  const nm = cells.filter(c => c.type === 'md').length;
-  $('#statusCells').textContent = `${nc} code · ${nm} md`;
-  updateInsertBars();
-}
-
-function updateInsertBars() {
-  const nb = $('#notebook');
-  // remove existing insert bars
-  nb.querySelectorAll('.insert-bar').forEach(b => b.remove());
-
-  // add one before first cell and between each pair
-  for (let i = 0; i <= cells.length; i++) {
-    const bar = document.createElement('div');
-    bar.className = 'insert-bar';
-    const afterId = i > 0 ? cells[i - 1].id : null;
-    bar.innerHTML = `<div class="insert-btns">
-      <button onclick="insertAt(${afterId},'code')">+ code</button>
-      <button onclick="insertAt(${afterId},'md')">+ md</button>
-    </div>`;
-    if (i < cells.length) {
-      cells[i].el.before(bar);
-    } else {
-      nb.appendChild(bar);
-    }
-  }
-}
-
-function insertAt(afterId, type) {
-  let cell;
-  if (afterId === null && cells.length > 0) {
-    // insert before first cell
-    cell = addCell(type, '', null, cells[0].id);
-  } else {
-    cell = addCell(type, '', afterId);
-  }
-  selectCell(cell.id);
-  editCell(cell.id);
-}
-
-function setMsg(msg, cls = '') {
-  const el = $('#statusMsg');
-  el.textContent = msg;
-  el.className = 'status-msg' + (cls ? ' ' + cls : '');
-  if (cls) setTimeout(() => { el.textContent = ''; el.className = 'status-msg'; }, 3000);
-}
+// -- init.js --
 
 // ── INIT ──
 
