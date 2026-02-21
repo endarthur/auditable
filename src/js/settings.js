@@ -32,6 +32,13 @@ export function applyWidth(w) {
   $('#setWidth').value = w;
 }
 
+export function applyLineNumbers(show) {
+  const on = show === true || show === 'true' || show === 'on';
+  document.documentElement.classList.toggle('hide-line-numbers', !on);
+  const el = $('#setLineNumbers');
+  if (el) el.value = on ? 'on' : 'off';
+}
+
 export function applyHeader(mode) {
   const root = document.documentElement;
   root.classList.remove('header-always', 'header-hover', 'header-compact');
@@ -48,6 +55,7 @@ export function getSettings() {
     fontSize: parseInt($('#setFontSize').value),
     width: $('#setWidth').value,
     header: $('#setHeader').value,
+    lineNumbers: document.documentElement.classList.contains('hide-line-numbers') ? 'off' : 'on',
   };
 }
 
@@ -57,6 +65,7 @@ export function applySettings(s) {
   if (s.fontSize) applyFontSize(s.fontSize);
   if (s.width) applyWidth(s.width);
   if (s.header) applyHeader(s.header);
+  if (s.lineNumbers) applyLineNumbers(s.lineNumbers);
 }
 
 export function togglePresent() {

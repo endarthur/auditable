@@ -43,6 +43,7 @@ export function createCellEl(type, id) {
       ${cellHeaderHTML('code', id)}
       <div class="cell-code">
         <div class="editor-wrap">
+          <div class="line-numbers" aria-hidden="true">1</div>
           <textarea rows="3" spellcheck="false" placeholder="// code"></textarea>
           <div class="highlight-layer" aria-hidden="true"></div>
         </div>
@@ -54,8 +55,9 @@ export function createCellEl(type, id) {
     const ta = div.querySelector('textarea');
     const hl = div.querySelector('.highlight-layer');
     div.querySelector('.cell-type').addEventListener('click', () => div.classList.toggle('collapsed'));
+    const ln = div.querySelector('.line-numbers');
     ta.addEventListener('input', () => { highlightCode(ta, hl); onCodeEdit(id); });
-    ta.addEventListener('scroll', () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; });
+    ta.addEventListener('scroll', () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; ln.scrollTop = ta.scrollTop; });
     ta.addEventListener('keydown', handleTab);
     ta.addEventListener('input', autoResize);
   } else if (type === 'css') {
@@ -64,6 +66,7 @@ export function createCellEl(type, id) {
       <div class="cell-css-view"></div>
       <div class="cell-css-edit" style="display:none">
         <div class="editor-wrap">
+          <div class="line-numbers" aria-hidden="true">1</div>
           <textarea rows="3" spellcheck="false" placeholder="/* css */"></textarea>
           <div class="highlight-layer" aria-hidden="true"></div>
         </div>
@@ -93,8 +96,9 @@ export function createCellEl(type, id) {
       cssView.style.display = '';
     });
 
+    const ln = div.querySelector('.line-numbers');
     ta.addEventListener('input', () => { highlightCss(ta, hl); onCssEdit(id); });
-    ta.addEventListener('scroll', () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; });
+    ta.addEventListener('scroll', () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; ln.scrollTop = ta.scrollTop; });
     ta.addEventListener('input', autoResize);
     ta.addEventListener('keydown', handleTab);
   } else if (type === 'html') {
@@ -237,6 +241,17 @@ export function toggleComment(ta) {
   ta.dispatchEvent(new Event('input'));
 }
 
+export function updateLineNumbers(ta) {
+  const wrap = ta.closest('.editor-wrap');
+  if (!wrap) return;
+  const gutter = wrap.querySelector('.line-numbers');
+  if (!gutter) return;
+  const count = ta.value.split('\n').length;
+  const lines = [];
+  for (let i = 1; i <= count; i++) lines.push(i);
+  gutter.textContent = lines.join('\n');
+}
+
 export function autoResize(e) {
   const ta = e.target || e;
   ta.style.height = 'auto';
@@ -244,4 +259,5 @@ export function autoResize(e) {
   // sync highlight layer if present
   const hl = ta.parentElement && ta.parentElement.querySelector('.highlight-layer');
   if (hl) { hl.style.height = ta.style.height; }
+  updateLineNumbers(ta);
 }

@@ -355,10 +355,36 @@ button.accent:hover {
   position: relative;
 }
 
-.cell-code .editor-wrap {
+.editor-wrap {
+  --gutter: 36px;
   position: relative;
   overflow: hidden;
 }
+
+.line-numbers {
+  position: absolute;
+  top: 0; left: 0; bottom: 0;
+  width: var(--gutter);
+  padding: 8px 4px 8px 0;
+  font-family: var(--mono);
+  font-size: var(--editor-font-size);
+  line-height: 1.5;
+  text-align: right;
+  color: var(--fg-dim);
+  background: var(--bg1);
+  border-right: 1px solid var(--border);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+  z-index: 3;
+  pointer-events: none;
+  white-space: pre;
+  box-sizing: border-box;
+}
+
+:root.hide-line-numbers .line-numbers { display: none; }
+:root.hide-line-numbers .editor-wrap { --gutter: 0px; }
 
 .cell-code textarea {
   display: block;
@@ -370,7 +396,7 @@ button.accent:hover {
   font-family: var(--mono);
   font-size: var(--editor-font-size);
   line-height: 1.5;
-  padding: 8px 10px;
+  padding: 8px 10px 8px calc(var(--gutter) + 10px);
   resize: vertical;
   min-height: 38px;
   outline: none;
@@ -386,13 +412,16 @@ button.accent:hover {
 .cell-code textarea:focus + .highlight-layer {
   border-color: var(--border-hi);
 }
+.cell-code textarea:focus ~ .line-numbers {
+  border-color: var(--border-hi);
+}
 
 .highlight-layer {
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
   background: var(--bg1);
   border: 1px solid var(--border);
-  padding: 8px 10px;
+  padding: 8px 10px 8px calc(var(--gutter) + 10px);
   font-family: var(--mono);
   font-size: var(--editor-font-size);
   line-height: 1.5;
@@ -485,11 +514,6 @@ button.accent:hover {
   content: '(empty stylesheet)';
 }
 
-.cell-css-edit .editor-wrap {
-  position: relative;
-  overflow: hidden;
-}
-
 .cell-css-edit textarea {
   display: block;
   width: 100%;
@@ -500,7 +524,7 @@ button.accent:hover {
   font-family: var(--mono);
   font-size: var(--editor-font-size);
   line-height: 1.5;
-  padding: 8px 10px;
+  padding: 8px 10px 8px calc(var(--gutter) + 10px);
   resize: vertical;
   min-height: 38px;
   outline: none;
@@ -514,6 +538,9 @@ button.accent:hover {
   background: rgba(200,155,60,0.25);
 }
 .cell-css-edit textarea:focus + .highlight-layer {
+  border-color: var(--border-hi);
+}
+.cell-css-edit textarea:focus ~ .line-numbers {
   border-color: var(--border-hi);
 }
 
