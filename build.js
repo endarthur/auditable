@@ -7,12 +7,14 @@ const path = require('path');
 
 const srcDir = path.join(__dirname, 'src');
 const jsDir = path.join(srcDir, 'js');
+const lean = process.argv.includes('--lean');
 
 // 1. Read main.js and extract import paths in order
 const mainSrc = fs.readFileSync(path.join(jsDir, 'main.js'), 'utf8');
 const importPaths = [];
 for (const line of mainSrc.split('\n')) {
-  const m = line.match(/^import\s+.*['"]\.\/(.+?)['"];?\s*$/);
+  if (lean && line.includes('@optional')) continue;
+  const m = line.match(/^import\s+.*['"]\.\/(.+?)['"];?\s*(?:\/\/.*)?$/);
   if (m) importPaths.push(m[1]);
 }
 

@@ -1,4 +1,5 @@
 import { $ } from './state.js';
+import { updateStatus } from './ui.js';
 
 // ── SETTINGS ──
 
@@ -8,6 +9,7 @@ export function toggleSettings() {
   const open = !overlay.classList.contains('visible');
   overlay.classList.toggle('visible');
   panel.style.display = open ? 'block' : 'none';
+  if (open) refreshModuleList();
 }
 
 export function applyTheme(theme) {
@@ -50,13 +52,16 @@ export function applyHeader(mode) {
 }
 
 export function getSettings() {
-  return {
+  const s = {
     theme: document.documentElement.classList.contains('light') ? 'light' : 'dark',
     fontSize: parseInt($('#setFontSize').value),
     width: $('#setWidth').value,
     header: $('#setHeader').value,
     lineNumbers: document.documentElement.classList.contains('hide-line-numbers') ? 'off' : 'on',
   };
+  if (window._sizeCompare) s.sizeCompare = true;
+  if (window._sizeCompareRef === 'content') s.sizeCompareRef = 'content';
+  return s;
 }
 
 export function applySettings(s) {
@@ -66,8 +71,77 @@ export function applySettings(s) {
   if (s.width) applyWidth(s.width);
   if (s.header) applyHeader(s.header);
   if (s.lineNumbers) applyLineNumbers(s.lineNumbers);
+  if (s.sizeCompare !== undefined && typeof applySizeCompare === 'function') applySizeCompare(s.sizeCompare);
+  if (s.sizeCompareRef !== undefined && typeof applySizeCompareRef === 'function') applySizeCompareRef(s.sizeCompareRef);
 }
 
 export function togglePresent() {
   document.body.classList.toggle('presenting');
+}
+
+// ── MODULE MANAGEMENT ──
+
+function formatSize(bytes) {
+  return (bytes / 1024).toFixed(1) + ' KB';
+}
+
+export function refreshModuleList() {
+  const list = $('#moduleList');
+  if (!list) return;
+  list.innerHTML = '';
+
+  const mods = window._installedModules || {};
+  const urls = Object.keys(mods);
+
+  if (urls.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'module-empty';
+    empty.textContent = 'no modules installed';
+    list.appendChild(empty);
+    return;
+  }
+
+  let totalSize = 0;
+  for (const url of urls) {
+    const entry = mods[url];
+    const src = typeof entry === 'string' ? entry : entry.source;
+    const cellId = typeof entry === 'string' ? null : entry.cellId;
+    const size = src ? src.length : 0;
+    totalSize += size;
+
+    const row = document.createElement('div');
+    row.className = 'module-row';
+
+    const urlSpan = document.createElement('span');
+    urlSpan.className = 'module-url';
+    urlSpan.textContent = url;
+    urlSpan.title = url;
+    row.appendChild(urlSpan);
+
+    const info = document.createElement('span');
+    info.className = 'module-info';
+    info.textContent = (cellId != null ? 'cell ' + cellId + '  ' : '') + formatSize(size);
+    row.appendChild(info);
+
+    const btn = document.createElement('button');
+    btn.className = 'module-remove';
+    btn.textContent = '\u00d7';
+    btn.title = 'remove module';
+    btn.onclick = () => removeModule(url);
+    row.appendChild(btn);
+
+    list.appendChild(row);
+  }
+
+  const total = document.createElement('div');
+  total.className = 'module-total';
+  total.textContent = 'total  ' + formatSize(totalSize);
+  list.appendChild(total);
+}
+
+export function removeModule(url) {
+  if (window._installedModules) delete window._installedModules[url];
+  if (window._importCache) delete window._importCache[url];
+  refreshModuleList();
+  updateStatus();
 }

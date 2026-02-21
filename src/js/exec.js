@@ -216,13 +216,15 @@ export async function execCell(cell) {
 
   // import cache — shared across all cells
   if (!window._importCache) window._importCache = {};
-  if (!window._installedModules) window._installedModules = {}; // url -> source text
+  if (!window._installedModules) window._installedModules = {}; // url -> { source, cellId }
 
   const load = async (url) => {
     if (window._importCache[url]) return window._importCache[url];
     // check installed (offline) modules first
     if (window._installedModules[url]) {
-      const blob = new Blob([window._installedModules[url]], { type: 'application/javascript' });
+      const entry = window._installedModules[url];
+      const src = typeof entry === 'string' ? entry : entry.source;
+      const blob = new Blob([src], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
       const mod = await import(blobUrl);
       window._importCache[url] = mod;
@@ -243,8 +245,8 @@ export async function execCell(cell) {
     const resp = await fetch(bundleUrl);
     if (!resp.ok) throw new Error(`Failed to fetch ${bundleUrl}: ${resp.status}`);
     const source = await resp.text();
-    // store under original url
-    window._installedModules[url] = source;
+    // store under original url with cell reference
+    window._installedModules[url] = { source, cellId: cell.id };
     // also load it into cache
     const blob = new Blob([source], { type: 'application/javascript' });
     const blobUrl = URL.createObjectURL(blob);
