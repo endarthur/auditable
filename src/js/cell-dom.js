@@ -14,6 +14,24 @@ export function cssSummary(code) {
   return `${rules} rule${rules !== 1 ? 's' : ''} \u00b7 ${lines} line${lines !== 1 ? 's' : ''}`;
 }
 
+function cellHeaderHTML(type, id) {
+  return `<div class="cell-header">
+    <span class="cell-type">${type}</span>
+    <button class="cell-btn cell-convert" onclick="toggleTypePicker(${id})" title="convert type">\u21c4</button>
+    <div class="cell-type-picker" data-cell-id="${id}">
+      <button onclick="convertCell(${id},'code')">code</button>
+      <button onclick="convertCell(${id},'md')">md</button>
+      <button onclick="convertCell(${id},'css')">css</button>
+      <button onclick="convertCell(${id},'html')">html</button>
+    </div>
+    <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'before')" title="insert above">+\u2191</button>
+    <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'after')" title="insert below">+\u2193</button>
+    <button class="cell-btn" onclick="moveCell(${id},-1)" title="move up">\u2191</button>
+    <button class="cell-btn" onclick="moveCell(${id},1)" title="move down">\u2193</button>
+    <button class="cell-btn del" onclick="deleteCell(${id})" title="delete">\u00d7</button>
+  </div>`;
+}
+
 export function createCellEl(type, id) {
   const div = document.createElement('div');
   div.className = 'cell';
@@ -22,21 +40,7 @@ export function createCellEl(type, id) {
 
   if (type === 'code') {
     div.innerHTML = `
-      <div class="cell-header">
-        <span class="cell-type">code</span>
-        <button class="cell-btn cell-convert" onclick="toggleTypePicker(${id})" title="convert type">\u21c4</button>
-        <div class="cell-type-picker" data-cell-id="${id}">
-          <button onclick="convertCell(${id},'code')">code</button>
-          <button onclick="convertCell(${id},'md')">md</button>
-          <button onclick="convertCell(${id},'css')">css</button>
-          <button onclick="convertCell(${id},'html')">html</button>
-        </div>
-        <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'before')" title="insert above">+\u2191</button>
-        <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'after')" title="insert below">+\u2193</button>
-        <button class="cell-btn" onclick="moveCell(${id},-1)" title="move up">\u2191</button>
-        <button class="cell-btn" onclick="moveCell(${id},1)" title="move down">\u2193</button>
-        <button class="cell-btn del" onclick="deleteCell(${id})" title="delete">\u00d7</button>
-      </div>
+      ${cellHeaderHTML('code', id)}
       <div class="cell-code">
         <div class="editor-wrap">
           <textarea rows="3" spellcheck="false" placeholder="// code"></textarea>
@@ -56,21 +60,7 @@ export function createCellEl(type, id) {
     ta.addEventListener('input', autoResize);
   } else if (type === 'css') {
     div.innerHTML = `
-      <div class="cell-header">
-        <span class="cell-type">css</span>
-        <button class="cell-btn cell-convert" onclick="toggleTypePicker(${id})" title="convert type">\u21c4</button>
-        <div class="cell-type-picker" data-cell-id="${id}">
-          <button onclick="convertCell(${id},'code')">code</button>
-          <button onclick="convertCell(${id},'md')">md</button>
-          <button onclick="convertCell(${id},'css')">css</button>
-          <button onclick="convertCell(${id},'html')">html</button>
-        </div>
-        <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'before')" title="insert above">+\u2191</button>
-        <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'after')" title="insert below">+\u2193</button>
-        <button class="cell-btn" onclick="moveCell(${id},-1)" title="move up">\u2191</button>
-        <button class="cell-btn" onclick="moveCell(${id},1)" title="move down">\u2193</button>
-        <button class="cell-btn del" onclick="deleteCell(${id})" title="delete">\u00d7</button>
-      </div>
+      ${cellHeaderHTML('css', id)}
       <div class="cell-css-view"></div>
       <div class="cell-css-edit" style="display:none">
         <div class="editor-wrap">
@@ -109,21 +99,7 @@ export function createCellEl(type, id) {
     ta.addEventListener('keydown', handleTab);
   } else if (type === 'html') {
     div.innerHTML = `
-      <div class="cell-header">
-        <span class="cell-type">html</span>
-        <button class="cell-btn cell-convert" onclick="toggleTypePicker(${id})" title="convert type">\u21c4</button>
-        <div class="cell-type-picker" data-cell-id="${id}">
-          <button onclick="convertCell(${id},'code')">code</button>
-          <button onclick="convertCell(${id},'md')">md</button>
-          <button onclick="convertCell(${id},'css')">css</button>
-          <button onclick="convertCell(${id},'html')">html</button>
-        </div>
-        <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'before')" title="insert above">+\u2191</button>
-        <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'after')" title="insert below">+\u2193</button>
-        <button class="cell-btn" onclick="moveCell(${id},-1)" title="move up">\u2191</button>
-        <button class="cell-btn" onclick="moveCell(${id},1)" title="move down">\u2193</button>
-        <button class="cell-btn del" onclick="deleteCell(${id})" title="delete">\u00d7</button>
-      </div>
+      ${cellHeaderHTML('html', id)}
       <div class="cell-html-view"></div>
       <div class="cell-html-edit" style="display:none">
         <textarea rows="2" spellcheck="false" placeholder="<html template>"></textarea>
@@ -157,21 +133,7 @@ export function createCellEl(type, id) {
     ta.addEventListener('keydown', handleTab);
   } else {
     div.innerHTML = `
-      <div class="cell-header">
-        <span class="cell-type">md</span>
-        <button class="cell-btn cell-convert" onclick="toggleTypePicker(${id})" title="convert type">\u21c4</button>
-        <div class="cell-type-picker" data-cell-id="${id}">
-          <button onclick="convertCell(${id},'code')">code</button>
-          <button onclick="convertCell(${id},'md')">md</button>
-          <button onclick="convertCell(${id},'css')">css</button>
-          <button onclick="convertCell(${id},'html')">html</button>
-        </div>
-        <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'before')" title="insert above">+\u2191</button>
-        <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'after')" title="insert below">+\u2193</button>
-        <button class="cell-btn" onclick="moveCell(${id},-1)" title="move up">\u2191</button>
-        <button class="cell-btn" onclick="moveCell(${id},1)" title="move down">\u2193</button>
-        <button class="cell-btn del" onclick="deleteCell(${id})" title="delete">\u00d7</button>
-      </div>
+      ${cellHeaderHTML('md', id)}
       <div class="cell-md-view"></div>
       <div class="cell-md-edit" style="display:none">
         <textarea rows="2" spellcheck="false" placeholder="markdown"></textarea>

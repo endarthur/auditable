@@ -29,8 +29,19 @@ export function saveNotebook() {
   const helpHTML = $('#helpOverlay').outerHTML;
   const settingsOvHTML = $('#settingsOverlay').outerHTML;
   const settingsPanHTML = $('#settingsPanel').outerHTML.replace(/display:\s*block;?/, '');
-  const statusAttr = document.querySelector('.status-attr').outerHTML;
-  const actionBar = document.querySelector('.action-bar').outerHTML;
+  const statusbarHTML = document.querySelector('.statusbar').outerHTML;
+
+  // read toolbar from live DOM and patch the title value
+  const toolbarEl = document.querySelector('.toolbar').cloneNode(true);
+  toolbarEl.querySelector('#docTitle').value = title;
+  toolbarEl.querySelector('#toolbarStatus').textContent = '';
+  // reset autorun button state
+  const autoBtn = toolbarEl.querySelector('#autorunBtn');
+  if (autoBtn) { autoBtn.className = 'autorun-on'; autoBtn.textContent = '\u25b6'; }
+  // close overflow if open
+  const overflow = toolbarEl.querySelector('.toolbar-overflow');
+  if (overflow) overflow.classList.remove('open');
+  const toolbarHTML = toolbarEl.outerHTML;
 
   // build output HTML
   let html = `<!DOCTYPE html>
@@ -48,50 +59,14 @@ ${helpHTML}
 ${settingsOvHTML}
 ${settingsPanHTML}
 
-<div class="toolbar">
-  <span class="toolbar-title">auditable</span>
-  <span class="toolbar-sep"></span>
-  <span class="toolbar-filename">
-    <input type="text" id="docTitle" value="${esc(title)}" spellcheck="false">
-  </span>
-  <span class="toolbar-status" id="toolbarStatus"></span>
-  <button class="toolbar-add" onclick="addCellWithUndo('code','',S.selectedId)">+ code</button>
-  <button class="toolbar-add" onclick="addCellWithUndo('md','',S.selectedId)">+ md</button>
-  <button class="toolbar-secondary" onclick="addCellWithUndo('css','',S.selectedId)">+ css</button>
-  <button class="toolbar-secondary" onclick="addCellWithUndo('html','',S.selectedId)">+ html</button>
-  <span class="toolbar-sep"></span>
-  <span class="transport">
-    <button onclick="runSelectedCell()" title="run cell + advance (Shift+Enter)">\u23f5</button>
-    <button id="autorunBtn" class="autorun-on" onclick="toggleAutorun()" title="reactive mode \u2014 cells auto-run on edit">\u25b6</button>
-    <button onclick="runAll()" title="run all cells">\u25b6\u25b6</button>
-  </span>
-  <span class="toolbar-right">
-    <button class="accent" onclick="saveNotebook()">save</button>
-    <div class="toolbar-overflow">
-      <button onclick="toggleToolbarMenu()" title="more">\u22ef</button>
-      <div class="toolbar-overflow-tray">
-        <button onclick="newNotebook();toggleToolbarMenu()">new</button>
-        <button onclick="collapseAll();toggleToolbarMenu()">collapse all</button>
-        <button onclick="expandAll();toggleToolbarMenu()">expand all</button>
-        <button onclick="$('#helpOverlay').classList.toggle('visible');toggleToolbarMenu()">help (F1)</button>
-        <button onclick="toggleSettings();toggleToolbarMenu()">settings</button>
-        <button onclick="togglePresent();toggleToolbarMenu()">present</button>
-      </div>
-    </div>
-  </span>
-</div>
+${toolbarHTML}
 
 <button class="present-exit" onclick="togglePresent()">\u2715 exit</button>
 
 <div class="notebook" id="notebook">
 </div>
 
-<div class="statusbar">
-  <span class="status-cells" id="statusCells">0 cells</span>
-  <span class="status-msg" id="statusMsg"></span>
-  ${statusAttr}
-  ${actionBar}
-</div>
+${statusbarHTML}
 
 ${'<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->'}
 ${Object.keys(window._installedModules || {}).length ? '<!--AUDITABLE-MODULES\n' + JSON.stringify(window._installedModules) + '\nAUDITABLE-MODULES-->' : ''}

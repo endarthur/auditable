@@ -1,5 +1,5 @@
 import { S } from './state.js';
-import { buildDAG, isManual } from './dag.js';
+import { buildDAG, isManual, isNorun, isHidden, parseCellName, parseOutputId, parseOutputClass } from './dag.js';
 import { setMsg } from './ui.js';
 
 // ── EXECUTION ──
@@ -34,6 +34,11 @@ export async function execCell(cell) {
   const widgetEl = cell.el.querySelector('.cell-widgets');
   outputEl.textContent = '';
   outputEl.className = 'cell-output';
+  const outClass = parseOutputClass(cell.code);
+  if (outClass) outputEl.classList.add(...outClass.split(/\s+/));
+  const outId = parseOutputId(cell.code);
+  outputEl.id = outId || '';
+  cell.el.classList.toggle('present-hidden', isHidden(cell.code));
   cell.error = null;
 
   // track which widgets are used this run
@@ -252,6 +257,8 @@ export async function execCell(cell) {
   const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
 
   try {
+    const cellName = parseCellName(cell.code);
+    const slug = cellName ? '-' + cellName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') : '';
     const fn = new AsyncFunction(
       ...scopeKeys,
       'display', 'canvas', 'table',
@@ -259,7 +266,7 @@ export async function execCell(cell) {
       'load', 'install',
       `"use strict";\n${cell.code}\n\n` +
       `return { ${[...cell.defines].join(', ')} };\n` +
-      `//# sourceURL=auditable://cell-${cell.id}.js`
+      `//# sourceURL=auditable://cell-${cell.id}${slug}.js`
     );
 
     const result = await fn(...scopeVals, display, canvas, table,
@@ -306,6 +313,9 @@ export async function runDAG(dirtyIds, force = false) {
       continue;
     }
     if (cell.type !== 'code') continue;
+
+    // skip norun cells always (unless explicitly triggered by clicking run on the cell)
+    if (isNorun(cell.code) && !dirtyIds.includes(cell.id)) continue;
 
     // skip manual cells unless force (Run All) or explicitly triggered
     if (!force && isManual(cell.code) && !dirtyIds.includes(cell.id)) {

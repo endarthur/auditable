@@ -3,7 +3,7 @@ globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseNames, findUses, findHtmlUses, isManual } from '../src/js/dag.js';
+import { parseNames, findUses, findHtmlUses, isManual, parseCellName, isHidden, isNorun, parseOutputId, parseOutputClass } from '../src/js/dag.js';
 
 // ── isManual ──
 
@@ -17,8 +17,90 @@ describe('isManual', () => {
   it('rejects without directive', () => {
     assert.ok(!isManual('const x = 1;'));
   });
-  it('rejects %manual in middle of code', () => {
-    assert.ok(!isManual('const x = 1;\n// %manual'));
+  it('detects %manual on any line', () => {
+    assert.ok(isManual('const x = 1;\n// %manual'));
+  });
+});
+
+// ── parseCellName ──
+
+describe('parseCellName', () => {
+  it('extracts name from // %cellName directive', () => {
+    assert.strictEqual(parseCellName('// %cellName filtering countries\nconst x = 1;'), 'filtering countries');
+  });
+  it('extracts name with leading whitespace', () => {
+    assert.strictEqual(parseCellName('  // %cellName setup data'), 'setup data');
+  });
+  it('returns null without directive', () => {
+    assert.strictEqual(parseCellName('const x = 1;'), null);
+  });
+  it('works with %manual on another line', () => {
+    assert.strictEqual(parseCellName('// %manual\n// %cellName my cell'), 'my cell');
+  });
+  it('extracts name from middle of code', () => {
+    assert.strictEqual(parseCellName('const x = 1;\n// %cellName mid cell\nconst y = 2;'), 'mid cell');
+  });
+  it('trims whitespace from name', () => {
+    assert.strictEqual(parseCellName('// %cellName   spaced name   '), 'spaced name');
+  });
+});
+
+// ── isHidden ──
+
+describe('isHidden', () => {
+  it('detects // %hide', () => {
+    assert.ok(isHidden('// %hide\nconst x = 1;'));
+  });
+  it('detects on any line', () => {
+    assert.ok(isHidden('const x = 1;\n// %hide'));
+  });
+  it('rejects without directive', () => {
+    assert.ok(!isHidden('const x = 1;'));
+  });
+});
+
+// ── isNorun ──
+
+describe('isNorun', () => {
+  it('detects // %norun', () => {
+    assert.ok(isNorun('// %norun\nconst x = 1;'));
+  });
+  it('detects on any line', () => {
+    assert.ok(isNorun('const x = 1;\n// %norun'));
+  });
+  it('rejects without directive', () => {
+    assert.ok(!isNorun('const x = 1;'));
+  });
+});
+
+// ── parseOutputId ──
+
+describe('parseOutputId', () => {
+  it('extracts id', () => {
+    assert.strictEqual(parseOutputId('// %outputId my-chart'), 'my-chart');
+  });
+  it('returns null without directive', () => {
+    assert.strictEqual(parseOutputId('const x = 1;'), null);
+  });
+  it('takes only first word', () => {
+    assert.strictEqual(parseOutputId('// %outputId foo bar'), 'foo');
+  });
+});
+
+// ── parseOutputClass ──
+
+describe('parseOutputClass', () => {
+  it('extracts single class', () => {
+    assert.strictEqual(parseOutputClass('// %outputClass dashboard'), 'dashboard');
+  });
+  it('extracts multiple classes', () => {
+    assert.strictEqual(parseOutputClass('// %outputClass wide dark'), 'wide dark');
+  });
+  it('returns null without directive', () => {
+    assert.strictEqual(parseOutputClass('const x = 1;'), null);
+  });
+  it('works on any line', () => {
+    assert.strictEqual(parseOutputClass('const x = 1;\n// %outputClass chart'), 'chart');
   });
 });
 

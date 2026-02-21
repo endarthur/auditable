@@ -27,7 +27,7 @@ export function deleteCellWithUndo(id) {
   }
   cell.el.remove();
   S.cells.splice(idx, 1);
-  if (S.cells.some(c => c.type === 'code')) runAll();
+  if (S.cells.some(c => c.type === 'code' || c.type === 'html')) runAll();
   updateStatus();
   setMsg('deleted cell (z to undo)', 'ok');
 }
@@ -415,11 +415,6 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 't' && S.selectedId !== null) {
       e.preventDefault();
       convertCell(S.selectedId, 'html');
-      return;
-    }
-    if (e.key === 's' && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      saveNotebook();
       return;
     }
   }
