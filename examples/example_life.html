@@ -1,0 +1,2273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Auditable — game of life</title>
+<style>
+:root {
+  --bg: #0a0a0a;
+  --bg1: #111;
+  --bg2: #1a1a1a;
+  --border: #222;
+  --border-hi: #333;
+  --fg: #aaa;
+  --fg-dim: #555;
+  --fg-bright: #ccc;
+  --accent: #c89b3c;
+  --accent-dim: #8a6c2a;
+  --err: #a33;
+  --ok: #3a7;
+  --mono: 'Courier New', Courier, monospace;
+  --editor-font-size: 13px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+/* scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 0; }
+::-webkit-scrollbar-thumb:hover { background: var(--fg-dim); }
+textarea::-webkit-scrollbar-thumb { background: var(--border); }
+@supports (scrollbar-color: auto) {
+  * { scrollbar-color: var(--border-hi) var(--bg); scrollbar-width: thin; }
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  min-height: 100vh;
+}
+
+/* ── TOOLBAR ── */
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.toolbar-title {
+  font-size: 11px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--accent);
+  opacity: 0.8;
+  user-select: none;
+}
+
+.toolbar-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+.toolbar-filename {
+  font-size: 12px;
+  color: var(--fg-dim);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolbar-filename input {
+  background: none;
+  border: none;
+  border-bottom: 1px solid transparent;
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 12px;
+  outline: none;
+  width: 200px;
+}
+.toolbar-filename input:focus {
+  border-bottom-color: var(--accent-dim);
+}
+
+button {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+button:hover {
+  border-color: var(--border-hi);
+  color: var(--fg);
+}
+button.accent {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+button.accent:hover {
+  border-color: var(--accent);
+}
+
+/* ── NOTEBOOK ── */
+.notebook {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 16px 12px 120px;
+}
+
+/* ── CELL ── */
+.cell {
+  position: relative;
+  margin: 2px 0;
+  border-left: 2px solid transparent;
+  transition: border-color 0.15s;
+}
+.cell:hover {
+  border-left-color: var(--border-hi);
+}
+.cell.selected {
+  border-left-color: var(--accent);
+}
+.cell.selected .cell-gutter {
+  opacity: 1;
+}
+.cell.manual .cell-type::after {
+  content: ' · manual';
+  color: var(--accent-dim);
+}
+.cell.stale {
+  border-left-color: var(--accent-dim);
+}
+.cell.error {
+  border-left-color: var(--err);
+}
+.cell.fresh {
+  border-left-color: var(--ok);
+  transition: border-color 0.5s;
+}
+
+/* cell gutter — type label + controls */
+.cell-gutter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  user-select: none;
+}
+.cell:hover .cell-gutter,
+.cell:focus-within .cell-gutter {
+  opacity: 1;
+}
+
+.cell.collapsed .cell-code,
+.cell.collapsed .cell-md-edit {
+  display: none !important;
+}
+.cell.collapsed .cell-type::before {
+  content: '▸ ';
+}
+.cell:not(.collapsed) .cell-type::before {
+  content: '▾ ';
+}
+.cell-type {
+  cursor: pointer;
+  user-select: none;
+}
+  font-size: 9px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+
+.cell-btn {
+  background: none;
+  border: none;
+  color: var(--fg-dim);
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 0 4px;
+  cursor: pointer;
+}
+.cell-btn:hover { color: var(--fg); }
+.cell-btn.del:hover { color: var(--err); }
+
+/* ── CODE CELL ── */
+.cell-code {
+  position: relative;
+}
+
+.cell-code .editor-wrap {
+  position: relative;
+  overflow: hidden;
+}
+
+.cell-code textarea {
+  display: block;
+  width: 100%;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg-bright);
+  caret-color: var(--fg-bright);
+  font-family: var(--mono);
+  font-size: var(--editor-font-size);
+  line-height: 1.5;
+  padding: 8px 10px;
+  resize: vertical;
+  min-height: 38px;
+  outline: none;
+  tab-size: 2;
+  position: relative;
+  z-index: 2;
+  -webkit-text-fill-color: transparent;
+}
+.cell-code textarea::selection {
+  -webkit-text-fill-color: var(--fg-bright);
+  background: rgba(200,155,60,0.25);
+}
+.cell-code textarea:focus + .highlight-layer {
+  border-color: var(--border-hi);
+}
+
+.highlight-layer {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+  font-family: var(--mono);
+  font-size: var(--editor-font-size);
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow: hidden;
+  z-index: 1;
+  pointer-events: none;
+  color: var(--fg-bright);
+}
+
+/* syntax tokens */
+.hl-kw { color: #7a9ec7; }
+.hl-str { color: var(--accent); }
+.hl-num { color: #8cb878; }
+.hl-cmt { color: #555; font-style: italic; }
+.hl-fn { color: #c4a6d0; }
+.hl-const { color: #d09870; }
+.hl-op { color: #888; }
+.hl-punc { color: #666; }
+
+.cell-output {
+  padding: 4px 10px;
+  min-height: 0;
+  font-size: 12px;
+  color: var(--fg);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.cell-output:empty {
+  display: none;
+}
+.cell-output.error {
+  color: var(--err);
+}
+
+.cell-output canvas {
+  max-width: 100%;
+  display: block;
+  margin: 4px 0;
+}
+
+.cell-output table {
+  border-collapse: collapse;
+  font-size: 11px;
+  margin: 4px 0;
+}
+.cell-output table th,
+.cell-output table td {
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+  text-align: right;
+}
+.cell-output table th {
+  color: var(--accent);
+  font-weight: normal;
+  text-transform: uppercase;
+  font-size: 9px;
+  letter-spacing: 1px;
+}
+
+/* ── MARKDOWN CELL ── */
+.cell-md-view {
+  padding: 6px 10px;
+  color: var(--fg);
+  cursor: text;
+  min-height: 24px;
+}
+.cell-md-view:empty::before {
+  content: '(empty markdown cell)';
+  color: var(--fg-dim);
+  font-style: italic;
+  font-size: 11px;
+}
+.cell-md-view h1, .cell-md-view h2, .cell-md-view h3 {
+  color: var(--fg-bright);
+  font-weight: normal;
+  margin: 4px 0;
+}
+.cell-md-view h1 { font-size: 18px; letter-spacing: 2px; }
+.cell-md-view h2 { font-size: 15px; letter-spacing: 1px; color: var(--accent); }
+.cell-md-view h3 { font-size: 13px; }
+.cell-md-view p { margin: 4px 0; }
+.cell-md-view code {
+  background: var(--bg2);
+  padding: 1px 4px;
+  font-size: 12px;
+}
+.cell-md-view strong { color: var(--fg-bright); }
+.cell-md-view em { font-style: italic; }
+.cell-md-view a { color: var(--accent); }
+
+.cell-md-edit textarea {
+  display: block;
+  width: 100%;
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  color: var(--fg-bright);
+  font-family: var(--mono);
+  font-size: var(--editor-font-size);
+  line-height: 1.5;
+  padding: 8px 10px;
+  resize: vertical;
+  min-height: 38px;
+  outline: none;
+}
+
+/* ── PRESENTATION MODE ── */
+body.presenting .toolbar { display: none; }
+body.presenting .cell-gutter { display: none; }
+body.presenting .cell-code { display: none; }
+body.presenting .cell-md-edit { display: none !important; }
+body.presenting .cell { border-left: none; margin: 0; }
+body.presenting .cell:hover { border-left: none; }
+body.presenting .insert-bar { display: none; }
+body.presenting .notebook { max-width: 900px; padding-top: 40px; }
+body.presenting .statusbar { display: none; }
+body.presenting .present-exit {
+  display: block;
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 200;
+}
+.present-exit { display: none; }
+
+/* ── INSERT BAR (between cells) ── */
+.insert-bar {
+  height: 16px;
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: -4px 0;
+}
+.insert-bar::before {
+  content: '';
+  position: absolute;
+  left: 20px;
+  right: 20px;
+  top: 50%;
+  height: 1px;
+  background: var(--border);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.insert-bar:hover::before { opacity: 1; }
+.insert-bar .insert-btns {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  position: relative;
+  z-index: 10;
+}
+.insert-bar:hover .insert-btns { opacity: 1; }
+.insert-bar .insert-btns button {
+  font-size: 9px;
+  padding: 1px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+}
+.insert-bar .insert-btns button:hover {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
+/* ── ADD CELL BAR ── */
+.add-bar {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  padding: 6px 0;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.notebook:hover .add-bar,
+.add-bar.visible {
+  opacity: 0.5;
+}
+.add-bar:hover {
+  opacity: 1 !important;
+}
+
+/* ── STATUS BAR ── */
+.statusbar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 12px;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  font-size: 10px;
+  color: var(--fg-dim);
+  letter-spacing: 1px;
+  z-index: 100;
+}
+.statusbar .status-cells { color: var(--fg-dim); }
+.statusbar .status-msg { flex: 1; text-align: right; }
+.statusbar .status-msg.ok { color: var(--ok); }
+.statusbar .status-msg.err { color: var(--err); }
+.statusbar .status-attr { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.statusbar .status-attr a {
+  color: var(--fg-dim);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+.statusbar .status-attr a:hover { color: var(--accent); }
+.statusbar .status-attr svg { vertical-align: middle; }
+
+/* ── EMPTY STATE ── */
+.empty-state {
+  text-align: center;
+  padding: 80px 20px;
+  color: var(--fg-dim);
+}
+.empty-state .logo {
+  font-size: 11px;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 16px;
+}
+.empty-state .tagline {
+  font-size: 11px;
+  margin-bottom: 24px;
+}
+
+.help-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.85);
+  z-index: 1000;
+  overflow-y: auto;
+  padding: 40px;
+}
+.help-overlay.visible { display: flex; justify-content: center; }
+.help-content {
+  max-width: 600px;
+  width: 100%;
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.8;
+}
+.help-content h2 {
+  color: var(--accent);
+  font-size: 14px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  margin: 24px 0 8px 0;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+.help-content h2:first-child { margin-top: 0; }
+.help-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+}
+.help-key {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 6px;
+  font-size: 11px;
+  color: var(--fg-bright);
+  min-width: 80px;
+  text-align: center;
+  display: inline-block;
+}
+.help-desc { color: var(--fg); }
+.help-close {
+  color: var(--accent-dim);
+  font-size: 11px;
+  text-align: center;
+  margin-top: 24px;
+  letter-spacing: 1px;
+}
+
+/* ── SETTINGS PANEL ── */
+.settings-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 1000;
+}
+.settings-overlay.visible { display: block; }
+.settings-panel {
+  display: none;
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 280px;
+  max-width: 90vw;
+  background: var(--bg1);
+  border-left: 1px solid var(--border);
+  padding: 20px;
+  overflow-y: auto;
+  z-index: 1001;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg);
+}
+.settings-panel h2 {
+  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  margin: 20px 0 10px 0;
+}
+.settings-panel h2:first-child { margin-top: 0; }
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+}
+.settings-row label { color: var(--fg-dim); font-size: 11px; }
+.settings-row select,
+.settings-row input[type="range"] {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  color: var(--fg-bright);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 2px 4px;
+}
+.settings-row input[type="range"] {
+  accent-color: var(--accent);
+  width: 100px;
+}
+.settings-val {
+  min-width: 30px;
+  text-align: right;
+  color: var(--fg-bright);
+  font-size: 11px;
+}
+
+/* ── LIGHT THEME ── */
+:root.light {
+  --bg: #f5f4f0;
+  --bg1: #eae8e3;
+  --bg2: #dedad3;
+  --border: #ccc8bf;
+  --border-hi: #b0ab9f;
+  --fg: #444;
+  --fg-dim: #888;
+  --fg-bright: #222;
+  --accent: #996b1f;
+  --accent-dim: #b8924a;
+  --err: #c33;
+  --ok: #287;
+}
+:root.light ::-webkit-scrollbar-track { background: var(--bg); }
+:root.light ::-webkit-scrollbar-thumb { background: var(--border-hi); }
+
+/* ── RESPONSIVE ── */
+@media (max-width: 640px) {
+  .toolbar {
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 6px 8px;
+  }
+  .toolbar-title { font-size: 10px; letter-spacing: 2px; }
+  .toolbar-sep { display: none; }
+  .toolbar-filename { order: 10; flex-basis: 100%; }
+  .toolbar-filename input { width: 100%; }
+  button { padding: 4px 7px; font-size: 9px; }
+  .notebook { padding: 8px 6px 100px; }
+  .cell-gutter { padding: 2px 4px; }
+  .statusbar .status-attr a:not(:last-child) { display: none; }
+  .statusbar .status-attr span { display: none; }
+  .help-overlay { padding: 20px 12px; }
+  .settings-panel { width: 260px; }
+}
+@media (max-width: 400px) {
+  .toolbar-title { display: none; }
+  .statusbar { font-size: 9px; gap: 6px; }
+}
+</style>
+</head>
+<body>
+
+<div class="help-overlay" id="helpOverlay">
+<div class="help-content">
+<h2>command mode</h2>
+<div class="help-row"><span class="help-key">↑ / k</span><span class="help-desc">select cell above</span></div>
+<div class="help-row"><span class="help-key">↓ / j</span><span class="help-desc">select cell below</span></div>
+<div class="help-row"><span class="help-key">Enter</span><span class="help-desc">edit selected cell</span></div>
+<div class="help-row"><span class="help-key">a</span><span class="help-desc">insert cell above</span></div>
+<div class="help-row"><span class="help-key">b</span><span class="help-desc">insert cell below</span></div>
+<div class="help-row"><span class="help-key">d d</span><span class="help-desc">delete cell</span></div>
+<div class="help-row"><span class="help-key">z</span><span class="help-desc">undo delete</span></div>
+<div class="help-row"><span class="help-key">c</span><span class="help-desc">copy cell</span></div>
+<div class="help-row"><span class="help-key">v</span><span class="help-desc">paste cell below</span></div>
+<div class="help-row"><span class="help-key">x</span><span class="help-desc">cut cell</span></div>
+<div class="help-row"><span class="help-key">m</span><span class="help-desc">convert to markdown</span></div>
+<div class="help-row"><span class="help-key">y</span><span class="help-desc">convert to code</span></div>
+<div class="help-row"><span class="help-key">h</span><span class="help-desc">collapse / expand cell</span></div>
+<div class="help-row"><span class="help-key">p</span><span class="help-desc">presentation mode</span></div>
+
+<h2>edit mode</h2>
+<div class="help-row"><span class="help-key">Esc</span><span class="help-desc">exit to command mode</span></div>
+<div class="help-row"><span class="help-key">Ctrl+Enter</span><span class="help-desc">run cell</span></div>
+<div class="help-row"><span class="help-key">Shift+Enter</span><span class="help-desc">run cell + advance</span></div>
+<div class="help-row"><span class="help-key">Ctrl+/</span><span class="help-desc">toggle comment</span></div>
+<div class="help-row"><span class="help-key">Tab</span><span class="help-desc">indent</span></div>
+<div class="help-row"><span class="help-key">Shift+Tab</span><span class="help-desc">unindent</span></div>
+
+<h2>global</h2>
+<div class="help-row"><span class="help-key">F1</span><span class="help-desc">toggle this help</span></div>
+<div class="help-row"><span class="help-key">Ctrl+S</span><span class="help-desc">save notebook</span></div>
+
+<h2>builtins</h2>
+<div class="help-row"><span class="help-key">display()</span><span class="help-desc">show text, objects, or DOM elements</span></div>
+<div class="help-row"><span class="help-key">canvas(w,h)</span><span class="help-desc">create a canvas element</span></div>
+<div class="help-row"><span class="help-key">table(data)</span><span class="help-desc">render array of objects as table</span></div>
+<div class="help-row"><span class="help-key">slider()</span><span class="help-desc">reactive range input</span></div>
+<div class="help-row"><span class="help-key">dropdown()</span><span class="help-desc">reactive select input</span></div>
+<div class="help-row"><span class="help-key">checkbox()</span><span class="help-desc">reactive boolean input</span></div>
+<div class="help-row"><span class="help-key">textInput()</span><span class="help-desc">reactive text input</span></div>
+<div class="help-row"><span class="help-key">load(url)</span><span class="help-desc">import ESM module (cached)</span></div>
+<div class="help-row"><span class="help-key">install(url)</span><span class="help-desc">import + embed in HTML on save</span></div>
+
+<h2>directives</h2>
+<div class="help-row"><span class="help-key">// %manual</span><span class="help-desc">skip cell on reactive updates</span></div>
+
+<div class="help-close">press F1 or Esc to close</div>
+</div>
+</div>
+
+<div class="settings-overlay" id="settingsOverlay" onclick="if(event.target===this)toggleSettings()"></div>
+<div class="settings-panel" id="settingsPanel">
+  <h2>theme</h2>
+  <div class="settings-row">
+    <label>color scheme</label>
+    <select id="setTheme" onchange="applyTheme(this.value)">
+      <option value="dark">dark</option>
+      <option value="light">light</option>
+    </select>
+  </div>
+
+  <h2>editor</h2>
+  <div class="settings-row">
+    <label>font size</label>
+    <input type="range" id="setFontSize" min="10" max="20" value="13" oninput="applyFontSize(this.value)">
+    <span class="settings-val" id="setFontSizeVal">13</span>
+  </div>
+
+  <h2>notebook</h2>
+  <div class="settings-row">
+    <label>max width</label>
+    <select id="setWidth" onchange="applyWidth(this.value)">
+      <option value="720">narrow</option>
+      <option value="860" selected>default</option>
+      <option value="1100">wide</option>
+      <option value="100%">full</option>
+    </select>
+  </div>
+</div>
+
+<div class="toolbar">
+  <span class="toolbar-title">auditable</span>
+  <span class="toolbar-sep"></span>
+  <span class="toolbar-filename">
+    <input type="text" id="docTitle" value="game of life" spellcheck="false">
+  </span>
+  <button onclick="addCell('code')">+ code</button>
+  <button onclick="addCell('md')">+ md</button>
+  <span class="toolbar-sep"></span>
+  <button onclick="runAll()">run all</button>
+  <button id="autorunBtn" onclick="toggleAutorun()" title="reactive mode — cells auto-run on edit">▶</button>
+  <button class="accent" onclick="saveNotebook()">save</button>
+  <button onclick="$('#helpOverlay').classList.toggle('visible')" title="keyboard shortcuts (F1)">?</button>
+  <button onclick="toggleSettings()" title="settings">⚙</button>
+  <button onclick="togglePresent()" title="presentation mode">⎚</button>
+</div>
+
+<button class="present-exit" onclick="togglePresent()">✕ exit</button>
+
+<div class="notebook" id="notebook">
+  <!-- cells go here -->
+</div>
+
+<div class="statusbar">
+  <span class="status-cells" id="statusCells">0 cells</span>
+  <span class="status-msg" id="statusMsg"></span>
+  <span class="status-attr">
+    <a href="https://endarthur.github.io" target="_blank">endarthur</a>
+    <span>·</span>
+    <a href="https://gentropic.org" target="_blank">geoscientific chaos union</a>
+    <span>·</span>
+    <a href="https://github.com/endarthur/auditable" target="_blank" title="source on GitHub"><svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg></a>
+  </span>
+</div>
+
+<!--AUDITABLE-DATA
+[{"type":"md","code":"# conway's game of life\n\na cellular automaton running on canvas. press **step** or toggle **play** to watch it evolve. this is a single `// %manual` cell using imperative callbacks — no reactive DAG needed."},{"type":"code","code":"// %manual\nconst W = 80, H = 60;\nlet grid = new Uint8Array(W * H);\nlet gen = 0;\n\nfunction seed(density) {\n  for (let i = 0; i < grid.length; i++)\n    grid[i] = Math.random() < density ? 1 : 0;\n  gen = 0;\n}\nseed(0.3);\n\nfunction step() {\n  const next = new Uint8Array(W * H);\n  for (let y = 0; y < H; y++) {\n    for (let x = 0; x < W; x++) {\n      let n = 0;\n      for (let dy = -1; dy <= 1; dy++) {\n        for (let dx = -1; dx <= 1; dx++) {\n          if (dx === 0 && dy === 0) continue;\n          n += grid[((y + dy + H) % H) * W + ((x + dx + W) % W)];\n        }\n      }\n      const alive = grid[y * W + x];\n      next[y * W + x] = (alive && (n === 2 || n === 3)) || (!alive && n === 3) ? 1 : 0;\n    }\n  }\n  grid = next;\n  gen++;\n}\n\n// renderer\nconst cellSize = Math.max(4, Math.min(8, Math.floor((window.innerWidth - 80) / W)));\nconst c = canvas(W * cellSize, H * cellSize);\nconst ctx = c.getContext(\"2d\");\n\nfunction draw() {\n  ctx.fillStyle = \"#0a0a0a\";\n  ctx.fillRect(0, 0, c.width, c.height);\n  ctx.fillStyle = \"#c89b3c\";\n  for (let y = 0; y < H; y++)\n    for (let x = 0; x < W; x++)\n      if (grid[y * W + x])\n        ctx.fillRect(x * cellSize, y * cellSize, cellSize - 1, cellSize - 1);\n}\ndraw();\n\n// controls\nlet playing = false, timer = null;\nconst genLabel = document.createElement(\"span\");\ngenLabel.textContent = \"generation: 0\";\n\nconst btnStep = document.createElement(\"button\");\nbtnStep.textContent = \"step\";\nbtnStep.onclick = () => { step(); draw(); genLabel.textContent = \"generation: \" + gen; };\n\nconst btnPlay = document.createElement(\"button\");\nbtnPlay.textContent = \"\\u25b6 play\";\nbtnPlay.onclick = () => {\n  playing = !playing;\n  btnPlay.textContent = playing ? \"\\u23f8 pause\" : \"\\u25b6 play\";\n  if (playing) {\n    timer = setInterval(() => {\n      step(); draw();\n      genLabel.textContent = \"generation: \" + gen;\n    }, 80);\n  } else clearInterval(timer);\n};\n\nconst btnReset = document.createElement(\"button\");\nbtnReset.textContent = \"reset\";\nbtnReset.onclick = () => {\n  playing = false; clearInterval(timer);\n  btnPlay.textContent = \"\\u25b6 play\";\n  seed(0.3); draw();\n  genLabel.textContent = \"generation: 0\";\n};\n\nconst bar = document.createElement(\"div\");\nbar.style.cssText = \"display:flex;gap:8px;margin:8px 0;align-items:center\";\nbar.append(btnStep, btnPlay, btnReset, genLabel);\ndisplay(bar);"}]
+AUDITABLE-DATA-->
+<!--AUDITABLE-SETTINGS
+{"theme":"dark","fontSize":13,"width":"860"}
+AUDITABLE-SETTINGS-->
+<script>
+// ═══════════════════════════════════════════════════
+// AUDITABLE — reactive notebook runtime
+// Geoscientific Chaos Union, 2025
+// ═══════════════════════════════════════════════════
+
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+
+// ── STATE ──
+let cells = [];  // { id, type, code, el, defines, uses, output, error }
+let scope = {};  // shared variable scope
+let cellId = 0;
+
+// ── SYNTAX HIGHLIGHTING ──
+
+const JS_KEYWORDS = new Set([
+  'const','let','var','function','return','if','else','for','while','do',
+  'switch','case','break','continue','new','this','class','extends','import',
+  'export','default','from','of','in','typeof','instanceof','void','delete',
+  'throw','try','catch','finally','async','await','yield','true','false',
+  'null','undefined','NaN','Infinity'
+]);
+
+const JS_BUILTINS = new Set([
+  'Math','Array','Object','String','Number','Float64Array','Float32Array',
+  'Int32Array','Uint8Array','Map','Set','Promise','console','JSON',
+  'display','canvas','table','slider','dropdown','checkbox','textInput','load','install'
+]);
+
+function tokenize(code) {
+  const tokens = [];
+  let i = 0;
+  const len = code.length;
+
+  while (i < len) {
+    // line comment
+    if (code[i] === '/' && code[i+1] === '/') {
+      const start = i;
+      while (i < len && code[i] !== '\n') i++;
+      tokens.push({ type: 'cmt', text: code.slice(start, i) });
+      continue;
+    }
+    // block comment
+    if (code[i] === '/' && code[i+1] === '*') {
+      const start = i;
+      i += 2;
+      while (i < len && !(code[i-1] === '*' && code[i] === '/')) i++;
+      if (i < len) i++;
+      tokens.push({ type: 'cmt', text: code.slice(start, i) });
+      continue;
+    }
+    // strings
+    if (code[i] === '"' || code[i] === "'" || code[i] === '`') {
+      const q = code[i];
+      const start = i;
+      i++;
+      while (i < len && code[i] !== q) {
+        if (code[i] === '\\') i++;
+        i++;
+      }
+      if (i < len) i++;
+      tokens.push({ type: 'str', text: code.slice(start, i) });
+      continue;
+    }
+    // numbers
+    if (/\d/.test(code[i]) || (code[i] === '.' && i+1 < len && /\d/.test(code[i+1]))) {
+      const start = i;
+      if (code[i] === '0' && (code[i+1] === 'x' || code[i+1] === 'X')) {
+        i += 2;
+        while (i < len && /[0-9a-fA-F_]/.test(code[i])) i++;
+      } else {
+        while (i < len && /[0-9._eE+-]/.test(code[i])) i++;
+      }
+      tokens.push({ type: 'num', text: code.slice(start, i) });
+      continue;
+    }
+    // identifiers / keywords
+    if (/[a-zA-Z_$]/.test(code[i])) {
+      const start = i;
+      while (i < len && /\w/.test(code[i])) i++;
+      const word = code.slice(start, i);
+      if (JS_KEYWORDS.has(word)) {
+        tokens.push({ type: 'kw', text: word });
+      } else if (JS_BUILTINS.has(word)) {
+        tokens.push({ type: 'const', text: word });
+      } else if (i < len && code[i] === '(') {
+        tokens.push({ type: 'fn', text: word });
+      } else {
+        tokens.push({ type: 'id', text: word });
+      }
+      continue;
+    }
+    // operators
+    if ('=+-*/<>!&|^~%?:'.includes(code[i])) {
+      tokens.push({ type: 'op', text: code[i] });
+      i++;
+      continue;
+    }
+    // punctuation
+    if ('(){}[];,.'.includes(code[i])) {
+      tokens.push({ type: 'punc', text: code[i] });
+      i++;
+      continue;
+    }
+    // whitespace / other — pass through
+    tokens.push({ type: '', text: code[i] });
+    i++;
+  }
+
+  return tokens;
+}
+
+function highlightCode(ta, hl) {
+  const code = ta.value;
+  if (!code) { hl.innerHTML = '\n'; return; }
+
+  const tokens = tokenize(code);
+  let html = '';
+  for (const t of tokens) {
+    const escaped = t.text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+    if (t.type && t.type !== 'id') {
+      html += `<span class="hl-${t.type}">${escaped}</span>`;
+    } else {
+      html += escaped;
+    }
+  }
+  // trailing newline so highlight layer matches textarea height
+  hl.innerHTML = html + '\n';
+}
+
+// ── REACTIVE DAG ──
+
+function isManual(code) {
+  return /^\s*\/\/\s*%manual\b/.test(code);
+}
+
+function parseNames(code) {
+  // extract ONLY top-level variable definitions (brace depth 0)
+  const defines = new Set();
+
+  // strip strings and comments first
+  const stripped = code
+    .replace(/\/\/.*$/gm, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/'(?:[^'\\]|\\.)*'/g, '""')
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+    .replace(/`(?:[^`\\]|\\.)*`/g, '""');
+
+  let depth = 0;
+  let parenDepth = 0;
+  let i = 0;
+  while (i < stripped.length) {
+    const ch = stripped[i];
+    if (ch === '{') { depth++; i++; continue; }
+    if (ch === '}') { depth--; i++; continue; }
+    if (ch === '(') { parenDepth++; i++; continue; }
+    if (ch === ')') { parenDepth--; i++; continue; }
+
+    if (depth === 0 && parenDepth === 0) {
+      // check for const/let/var
+      const rest = stripped.slice(i);
+      const dm = rest.match(/^(?:const|let|var)\s+(\w+)/);
+      if (dm) {
+        defines.add(dm[1]);
+        // scan forward for comma-separated declarations: const W = 80, H = 60
+        // skip initializer expressions tracking depth, grab identifiers after commas
+        let j = dm[0].length;
+        let d = 0, pd = 0, bd = 0;
+        while (j < rest.length) {
+          const ch = rest[j];
+          if (ch === '{') d++;
+          else if (ch === '}') d--;
+          else if (ch === '(') pd++;
+          else if (ch === ')') pd--;
+          else if (ch === '[') bd++;
+          else if (ch === ']') bd--;
+          else if (ch === ';' || ch === '\n') {
+            if (d === 0 && pd === 0 && bd === 0) break;
+          }
+          else if (ch === ',' && d === 0 && pd === 0 && bd === 0) {
+            // next identifier after comma
+            const after = rest.slice(j + 1).match(/^\s*(\w+)/);
+            if (after) defines.add(after[1]);
+          }
+          j++;
+        }
+        i += j;
+        continue;
+      }
+      // destructuring: const { a, b } = ... or const [ a, b ] = ...
+      const destruct = rest.match(/^(?:const|let|var)\s*[\{\[]/);
+      if (destruct) {
+        // find the closing } or ] then extract identifiers
+        const opener = rest[destruct[0].length - 1];
+        const closer = opener === '{' ? '}' : ']';
+        const closeIdx = rest.indexOf(closer, destruct[0].length);
+        if (closeIdx > 0) {
+          const inner = rest.slice(destruct[0].length, closeIdx);
+          // split on commas, take last word of each part (handles renaming)
+          inner.split(',').forEach(part => {
+            const parts = part.trim().split(/\s*:\s*/);
+            const name = (parts.length > 1 ? parts[1] : parts[0]).trim().match(/^\w+/);
+            if (name) defines.add(name[0]);
+          });
+          i += closeIdx + 1;
+          continue;
+        }
+      }
+      // check for function declarations
+      const fm = rest.match(/^function\s+(\w+)/);
+      if (fm) {
+        defines.add(fm[1]);
+        i += fm[0].length;
+        continue;
+      }
+    }
+    i++;
+  }
+
+  return { defines };
+}
+
+function findUses(code, allDefined) {
+  // find identifiers that reference other cells' definitions
+  const uses = new Set();
+  // strip strings and comments to avoid false matches
+  const stripped = code
+    .replace(/\/\/.*$/gm, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/'(?:[^'\\]|\\.)*'/g, '""')
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+    .replace(/`(?:[^`\\]|\\.)*`/g, '""');
+
+  const idRe = /\b([a-zA-Z_$]\w*)\b/g;
+  let m;
+  while ((m = idRe.exec(stripped))) {
+    if (allDefined.has(m[1]) && !parseNames(code).defines.has(m[1])) {
+      uses.add(m[1]);
+    }
+  }
+  return uses;
+}
+
+function buildDAG() {
+  // collect all defined names globally
+  const allDefined = new Map(); // name → cell id
+  for (const c of cells) {
+    if (c.type !== 'code') continue;
+    const { defines } = parseNames(c.code);
+    c.defines = defines;
+    for (const name of defines) {
+      allDefined.set(name, c.id);
+    }
+  }
+
+  // find uses for each cell
+  for (const c of cells) {
+    if (c.type !== 'code') continue;
+    c.uses = findUses(c.code, new Set(allDefined.keys()));
+  }
+
+  return allDefined;
+}
+
+function topoSort(dirtyIds) {
+  // from dirty cells, find all downstream dependents
+  const allDefined = new Map();
+  for (const c of cells) {
+    if (c.type !== 'code') continue;
+    for (const name of (c.defines || [])) {
+      allDefined.set(name, c.id);
+    }
+  }
+
+  // build adjacency: cell A defines x, cell B uses x → A → B
+  const adj = new Map();
+  const cellMap = new Map();
+  for (const c of cells) {
+    cellMap.set(c.id, c);
+    if (c.type === 'code') adj.set(c.id, []);
+  }
+  for (const c of cells) {
+    if (c.type !== 'code') continue;
+    for (const name of (c.uses || [])) {
+      const src = allDefined.get(name);
+      if (src !== undefined && src !== c.id && adj.has(src)) {
+        adj.get(src).push(c.id);
+      }
+    }
+  }
+
+  // BFS from dirty cells to find all affected
+  const affected = new Set(dirtyIds);
+  const queue = [...dirtyIds];
+  while (queue.length) {
+    const id = queue.shift();
+    for (const dep of (adj.get(id) || [])) {
+      if (!affected.has(dep)) {
+        affected.add(dep);
+        queue.push(dep);
+      }
+    }
+  }
+
+  // topological order among affected, respecting document order
+  return cells
+    .filter(c => c.type === 'code' && affected.has(c.id))
+    .map(c => c.id);
+}
+
+// ── EXECUTION ──
+
+async function execCell(cell) {
+  const outputEl = cell.el.querySelector('.cell-output');
+  const widgetEl = cell.el.querySelector('.cell-widgets');
+  outputEl.textContent = '';
+  outputEl.className = 'cell-output';
+  cell.error = null;
+
+  // track which widgets are used this run
+  const usedWidgets = new Set();
+
+  // build display function for this cell
+  const display = (...args) => {
+    for (const arg of args) {
+      if (arg instanceof Element) {
+        outputEl.appendChild(arg);
+      } else if (typeof arg === 'object' && arg !== null) {
+        const pre = document.createElement('span');
+        try { pre.textContent = JSON.stringify(arg, null, 2); }
+        catch { pre.textContent = String(arg); }
+        outputEl.appendChild(pre);
+        outputEl.appendChild(document.createTextNode('\n'));
+      } else {
+        outputEl.appendChild(document.createTextNode(String(arg) + '\n'));
+      }
+    }
+  };
+
+  // canvas helper
+  const canvas = (w = 400, h = 300) => {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    c.style.background = '#000';
+    outputEl.appendChild(c);
+    return c;
+  };
+
+  // table helper
+  const table = (data, columns) => {
+    if (!data || !data.length) return;
+    const cols = columns || Object.keys(data[0]);
+    const t = document.createElement('table');
+    const thead = document.createElement('thead');
+    const hr = document.createElement('tr');
+    for (const c of cols) {
+      const th = document.createElement('th');
+      th.textContent = c;
+      hr.appendChild(th);
+    }
+    thead.appendChild(hr);
+    t.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    for (const row of data) {
+      const tr = document.createElement('tr');
+      for (const c of cols) {
+        const td = document.createElement('td');
+        const v = row[c];
+        td.textContent = typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(4)) : String(v ?? '');
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    t.appendChild(tbody);
+    outputEl.appendChild(t);
+  };
+
+  // input widget helpers — persist state and DOM across re-runs
+  if (!cell._inputs) cell._inputs = {};
+
+  const mkInput = (label, type, defaultVal, opts = {}) => {
+    const key = label;
+    const prev = cell._inputs[key];
+    let val = prev !== undefined ? prev : defaultVal;
+    usedWidgets.add(key);
+
+    // check if widget DOM already exists
+    const existing = widgetEl.querySelector(`[data-widget-key="${CSS.escape(key)}"]`);
+    if (existing) {
+      // just return current value, DOM stays
+      cell._inputs[key] = type === 'slider' ? parseFloat(val)
+                         : type === 'checkbox' ? !!val
+                         : val;
+      return cell._inputs[key];
+    }
+
+    // create new widget
+    const wrap = document.createElement('div');
+    wrap.dataset.widgetKey = key;
+    wrap.style.cssText = 'display:flex;align-items:center;gap:8px;padding:2px 0;font-size:12px;color:#888;';
+
+    const lbl = document.createElement('span');
+    lbl.textContent = label;
+    lbl.style.cssText = 'min-width:80px;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:#666;';
+    wrap.appendChild(lbl);
+
+    let input;
+    if (type === 'slider') {
+      input = document.createElement('input');
+      input.type = 'range';
+      input.min = opts.min ?? 0;
+      input.max = opts.max ?? 100;
+      input.step = opts.step ?? 1;
+      input.value = val;
+      input.style.cssText = 'flex:1;accent-color:var(--accent);max-width:200px;';
+      const valSpan = document.createElement('span');
+      valSpan.textContent = val;
+      valSpan.style.cssText = 'min-width:40px;text-align:right;color:var(--fg-bright);font-size:12px;';
+      input.oninput = () => {
+        const n = parseFloat(input.value);
+        cell._inputs[key] = n;
+        valSpan.textContent = n;
+        clearTimeout(cell._inputTimer);
+        cell._inputTimer = setTimeout(() => runDAG([cell.id], true), 80);
+      };
+      wrap.appendChild(input);
+      wrap.appendChild(valSpan);
+    } else if (type === 'dropdown') {
+      input = document.createElement('select');
+      input.style.cssText = 'background:var(--bg2);border:1px solid var(--border);color:var(--fg-bright);font-family:var(--mono);font-size:12px;padding:2px 4px;';
+      for (const o of (opts.options || [])) {
+        const opt = document.createElement('option');
+        opt.value = o;
+        opt.textContent = o;
+        if (o === val) opt.selected = true;
+        input.appendChild(opt);
+      }
+      input.onchange = () => {
+        cell._inputs[key] = input.value;
+        runDAG([cell.id], true);
+      };
+      wrap.appendChild(input);
+    } else if (type === 'checkbox') {
+      input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = !!val;
+      input.style.cssText = 'accent-color:var(--accent);';
+      input.onchange = () => {
+        cell._inputs[key] = input.checked;
+        runDAG([cell.id], true);
+      };
+      wrap.appendChild(input);
+    } else if (type === 'text') {
+      input = document.createElement('input');
+      input.type = 'text';
+      input.value = val;
+      input.style.cssText = 'background:var(--bg2);border:1px solid var(--border);color:var(--fg-bright);font-family:var(--mono);font-size:12px;padding:2px 6px;flex:1;max-width:200px;';
+      input.oninput = () => {
+        cell._inputs[key] = input.value;
+        clearTimeout(cell._inputTimer);
+        cell._inputTimer = setTimeout(() => runDAG([cell.id], true), 300);
+      };
+      wrap.appendChild(input);
+    }
+
+    widgetEl.appendChild(wrap);
+    cell._inputs[key] = type === 'slider' ? parseFloat(val)
+                       : type === 'checkbox' ? !!val
+                       : val;
+    return cell._inputs[key];
+  };
+
+  const slider = (label, defaultVal = 50, opts = {}) => mkInput(label, 'slider', defaultVal, opts);
+  const dropdown = (label, options, defaultVal) => mkInput(label, 'dropdown', defaultVal || options[0], { options });
+  const checkbox = (label, defaultVal = false) => mkInput(label, 'checkbox', defaultVal);
+  const textInput = (label, defaultVal = '') => mkInput(label, 'text', defaultVal);
+
+  // execute with shared scope
+  const scopeKeys = Object.keys(scope);
+  const scopeVals = scopeKeys.map(k => scope[k]);
+
+  // import cache — shared across all cells
+  if (!window._importCache) window._importCache = {};
+  if (!window._installedModules) window._installedModules = {}; // url -> source text
+
+  const load = async (url) => {
+    if (window._importCache[url]) return window._importCache[url];
+    // check installed (offline) modules first
+    if (window._installedModules[url]) {
+      const blob = new Blob([window._installedModules[url]], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      const mod = await import(blobUrl);
+      window._importCache[url] = mod;
+      return mod;
+    }
+    const mod = await import(url);
+    window._importCache[url] = mod;
+    return mod;
+  };
+
+  const install = async (url) => {
+    // normalize: add ?bundle for esm.sh if not present
+    let bundleUrl = url;
+    if (bundleUrl.includes('esm.sh') && !bundleUrl.includes('?bundle') && !bundleUrl.includes('&bundle')) {
+      bundleUrl += (bundleUrl.includes('?') ? '&' : '?') + 'bundle';
+    }
+    // fetch source
+    const resp = await fetch(bundleUrl);
+    if (!resp.ok) throw new Error(`Failed to fetch ${bundleUrl}: ${resp.status}`);
+    const source = await resp.text();
+    // store under original url
+    window._installedModules[url] = source;
+    // also load it into cache
+    const blob = new Blob([source], { type: 'application/javascript' });
+    const blobUrl = URL.createObjectURL(blob);
+    const mod = await import(blobUrl);
+    window._importCache[url] = mod;
+    display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB)`);
+    return mod;
+  };
+
+  const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+
+  try {
+    const fn = new AsyncFunction(
+      ...scopeKeys,
+      'display', 'canvas', 'table',
+      'slider', 'dropdown', 'checkbox', 'textInput',
+      'load', 'install',
+      `"use strict";\n${cell.code}\n\n` +
+      `return { ${[...cell.defines].join(', ')} };`
+    );
+
+    const result = await fn(...scopeVals, display, canvas, table,
+                      slider, dropdown, checkbox, textInput,
+                      load, install);
+
+    // update scope with defined variables
+    if (result && typeof result === 'object') {
+      cell._lastResult = result;
+      for (const [k, v] of Object.entries(result)) {
+        if (v !== undefined) scope[k] = v;
+      }
+    }
+
+    cell.el.classList.remove('stale', 'error');
+    cell.el.classList.add('fresh');
+    setTimeout(() => cell.el.classList.remove('fresh'), 800);
+
+    // remove widgets no longer referenced by code
+    for (const w of widgetEl.querySelectorAll('[data-widget-key]')) {
+      if (!usedWidgets.has(w.dataset.widgetKey)) {
+        delete cell._inputs[w.dataset.widgetKey];
+        w.remove();
+      }
+    }
+
+  } catch (e) {
+    cell.error = e.message;
+    outputEl.textContent = e.message;
+    outputEl.className = 'cell-output error';
+    cell.el.classList.remove('stale', 'fresh');
+    cell.el.classList.add('error');
+  }
+}
+
+async function runDAG(dirtyIds, force = false) {
+  buildDAG();
+
+  // rebuild scope from scratch in document order
+  scope = {};
+  for (const cell of cells) {
+    if (cell.type !== 'code') continue;
+
+    // skip manual cells unless force (Run All) or explicitly triggered
+    if (!force && isManual(cell.code) && !dirtyIds.includes(cell.id)) {
+      // keep existing scope contributions if previously run
+      if (cell._lastResult) {
+        for (const [k, v] of Object.entries(cell._lastResult)) {
+          if (v !== undefined) scope[k] = v;
+        }
+      }
+      cell.el.classList.add('stale');
+      continue;
+    }
+
+    await execCell(cell);
+  }
+
+  updateStatus();
+}
+
+async function runAll() {
+  const ids = cells.filter(c => c.type === 'code').map(c => c.id);
+  if (ids.length === 0) return;
+  await runDAG(ids, true);
+  setMsg('ran all cells', 'ok');
+}
+
+// ── CELL DOM ──
+
+function createCellEl(type, id) {
+  const div = document.createElement('div');
+  div.className = 'cell';
+  div.dataset.id = id;
+  div.dataset.type = type;
+
+  if (type === 'code') {
+    div.innerHTML = `
+      <div class="cell-gutter">
+        <span class="cell-type">code</span>
+        <button class="cell-btn" onclick="moveCell(${id},-1)" title="move up">↑</button>
+        <button class="cell-btn" onclick="moveCell(${id},1)" title="move down">↓</button>
+        <button class="cell-btn del" onclick="deleteCell(${id})" title="delete">×</button>
+      </div>
+      <div class="cell-code">
+        <div class="editor-wrap">
+          <textarea rows="3" spellcheck="false" placeholder="// code"></textarea>
+          <div class="highlight-layer" aria-hidden="true"></div>
+        </div>
+      </div>
+      <div class="cell-widgets"></div>
+      <div class="cell-output"></div>
+    `;
+
+    const ta = div.querySelector('textarea');
+    const hl = div.querySelector('.highlight-layer');
+    div.querySelector('.cell-type').addEventListener('click', () => div.classList.toggle('collapsed'));
+    ta.addEventListener('input', () => { highlightCode(ta, hl); onCodeEdit(id); });
+    ta.addEventListener('scroll', () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; });
+    ta.addEventListener('keydown', handleTab);
+    ta.addEventListener('input', autoResize);
+  } else {
+    div.innerHTML = `
+      <div class="cell-gutter">
+        <span class="cell-type">md</span>
+        <button class="cell-btn" onclick="moveCell(${id},-1)" title="move up">↑</button>
+        <button class="cell-btn" onclick="moveCell(${id},1)" title="move down">↓</button>
+        <button class="cell-btn del" onclick="deleteCell(${id})" title="delete">×</button>
+      </div>
+      <div class="cell-md-view"></div>
+      <div class="cell-md-edit" style="display:none">
+        <textarea rows="2" spellcheck="false" placeholder="markdown"></textarea>
+      </div>
+    `;
+
+    const view = div.querySelector('.cell-md-view');
+    const editWrap = div.querySelector('.cell-md-edit');
+    const ta = div.querySelector('.cell-md-edit textarea');
+    div.querySelector('.cell-type').addEventListener('click', () => div.classList.toggle('collapsed'));
+
+    view.addEventListener('click', () => {
+      editWrap.style.display = '';
+      view.style.display = 'none';
+      ta.focus();
+      autoResize({ target: ta });
+    });
+
+    ta.addEventListener('blur', () => {
+      const cell = cells.find(c => c.id === id);
+      if (cell) {
+        cell.code = ta.value;
+        view.innerHTML = renderMd(ta.value);
+      }
+      editWrap.style.display = 'none';
+      view.style.display = '';
+    });
+
+    ta.addEventListener('input', autoResize);
+    ta.addEventListener('keydown', handleTab);
+  }
+
+  return div;
+}
+
+function handleTab(e) {
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    const ta = e.target;
+    const start = ta.selectionStart;
+    const end = ta.selectionEnd;
+
+    if (start === end) {
+      // no selection — insert 2 spaces
+      ta.value = ta.value.substring(0, start) + '  ' + ta.value.substring(end);
+      ta.selectionStart = ta.selectionEnd = start + 2;
+    } else {
+      // selection — indent/unindent lines
+      const val = ta.value;
+      const lineStart = val.lastIndexOf('\n', start - 1) + 1;
+      const lineEnd = val.indexOf('\n', end);
+      const block = val.slice(lineStart, lineEnd === -1 ? val.length : lineEnd);
+      let newBlock;
+      if (e.shiftKey) {
+        newBlock = block.replace(/^  /gm, '');
+      } else {
+        newBlock = block.replace(/^/gm, '  ');
+      }
+      ta.value = val.slice(0, lineStart) + newBlock + val.slice(lineEnd === -1 ? val.length : lineEnd);
+      ta.selectionStart = lineStart;
+      ta.selectionEnd = lineStart + newBlock.length;
+    }
+    ta.dispatchEvent(new Event('input'));
+  }
+}
+
+function toggleComment(ta) {
+  const val = ta.value;
+  const start = ta.selectionStart;
+  const end = ta.selectionEnd;
+
+  // find affected line range
+  const lineStart = val.lastIndexOf('\n', start - 1) + 1;
+  let lineEnd = val.indexOf('\n', end);
+  if (lineEnd === -1) lineEnd = val.length;
+
+  const block = val.slice(lineStart, lineEnd);
+  const lines = block.split('\n');
+
+  // check if all lines are commented
+  const allCommented = lines.every(l => /^\s*\/\//.test(l) || l.trim() === '');
+
+  let newLines;
+  if (allCommented) {
+    // uncomment: remove first // (and one trailing space if present)
+    newLines = lines.map(l => l.replace(/^(\s*)\/\/ ?/, '$1'));
+  } else {
+    // comment: add // at the minimum indent level
+    const indents = lines.filter(l => l.trim()).map(l => l.match(/^(\s*)/)[1].length);
+    const minIndent = indents.length ? Math.min(...indents) : 0;
+    newLines = lines.map(l => {
+      if (l.trim() === '') return l;
+      return l.slice(0, minIndent) + '// ' + l.slice(minIndent);
+    });
+  }
+
+  const newBlock = newLines.join('\n');
+  ta.value = val.slice(0, lineStart) + newBlock + val.slice(lineEnd);
+  ta.selectionStart = lineStart;
+  ta.selectionEnd = lineStart + newBlock.length;
+  ta.dispatchEvent(new Event('input'));
+}
+
+function autoResize(e) {
+  const ta = e.target || e;
+  ta.style.height = 'auto';
+  ta.style.height = ta.scrollHeight + 'px';
+  // sync highlight layer if present
+  const hl = ta.parentElement && ta.parentElement.querySelector('.highlight-layer');
+  if (hl) { hl.style.height = ta.style.height; }
+}
+
+// ── CELL OPERATIONS ──
+
+function addCell(type, code = '', afterId = null, beforeId = null) {
+  const id = cellId++;
+  const cell = {
+    id, type, code,
+    defines: new Set(),
+    uses: new Set(),
+    error: null,
+    el: createCellEl(type, id)
+  };
+
+  const nb = $('#notebook');
+  if (beforeId !== null) {
+    const idx = cells.findIndex(c => c.id === beforeId);
+    if (idx >= 0) {
+      cells.splice(idx, 0, cell);
+      cells[idx + 1].el.before(cell.el);
+    } else {
+      cells.push(cell);
+      nb.appendChild(cell.el);
+    }
+  } else if (afterId !== null) {
+    const idx = cells.findIndex(c => c.id === afterId);
+    if (idx >= 0) {
+      cells.splice(idx + 1, 0, cell);
+      if (idx < cells.length - 2) {
+        cells[idx + 2].el.before(cell.el);
+      } else {
+        nb.appendChild(cell.el);
+      }
+    } else {
+      cells.push(cell);
+      nb.appendChild(cell.el);
+    }
+  } else {
+    cells.push(cell);
+    nb.appendChild(cell.el);
+  }
+
+  // set code
+  const ta = cell.el.querySelector('textarea');
+  if (code) {
+    ta.value = code;
+    autoResize({ target: ta });
+    if (type === 'code') {
+      const hl = cell.el.querySelector('.highlight-layer');
+      if (hl) highlightCode(ta, hl);
+      if (isManual(code)) cell.el.classList.add('manual');
+    }
+    if (type === 'md') {
+      cell.el.querySelector('.cell-md-view').innerHTML = renderMd(code);
+    }
+  }
+
+  ta.focus();
+  updateStatus();
+  return cell;
+}
+
+function deleteCell(id) {
+  const idx = cells.findIndex(c => c.id === id);
+  if (idx < 0) return;
+  cells[idx].el.remove();
+  cells.splice(idx, 1);
+  // re-run to clean scope
+  if (cells.some(c => c.type === 'code')) runAll();
+  updateStatus();
+}
+
+function convertCell(id, newType) {
+  const cell = cells.find(c => c.id === id);
+  if (!cell || cell.type === newType) return;
+
+  const code = cell.code;
+  const idx = cells.findIndex(c => c.id === id);
+
+  // create new cell element
+  const newEl = createCellEl(newType, id);
+  cell.el.replaceWith(newEl);
+  cell.el = newEl;
+  cell.type = newType;
+
+  // set code
+  const ta = newEl.querySelector('textarea');
+  ta.value = code;
+  cell.code = code;
+  autoResize({ target: ta });
+
+  if (newType === 'code') {
+    const hl = newEl.querySelector('.highlight-layer');
+    if (hl) highlightCode(ta, hl);
+  }
+  if (newType === 'md') {
+    newEl.querySelector('.cell-md-view').innerHTML = renderMd(code);
+  }
+
+  selectCell(id);
+  updateStatus();
+  if (cells.some(c => c.type === 'code')) runAll();
+}
+
+function moveCell(id, dir) {
+  const idx = cells.findIndex(c => c.id === id);
+  const newIdx = idx + dir;
+  if (newIdx < 0 || newIdx >= cells.length) return;
+
+  const [cell] = cells.splice(idx, 1);
+  cells.splice(newIdx, 0, cell);
+
+  // re-order DOM
+  const nb = $('#notebook');
+  nb.innerHTML = '';
+  for (const c of cells) nb.appendChild(c.el);
+
+  if (cells.some(c => c.type === 'code')) runAll();
+}
+
+// ── EDITING ──
+
+let editTimer = null;
+let autorun = true;
+
+function toggleAutorun() {
+  autorun = !autorun;
+  const btn = $('#autorunBtn');
+  btn.textContent = autorun ? '▶' : '⏸';
+  btn.title = autorun ? 'reactive mode — cells auto-run on edit' : 'manual mode — only Run All or Ctrl+Enter';
+  setMsg(autorun ? 'autorun on' : 'autorun off', 'ok');
+}
+
+// ── SETTINGS ──
+
+function toggleSettings() {
+  const overlay = $('#settingsOverlay');
+  const panel = $('#settingsPanel');
+  const open = !overlay.classList.contains('visible');
+  overlay.classList.toggle('visible');
+  panel.style.display = open ? 'block' : 'none';
+}
+
+function applyTheme(theme) {
+  if (theme === 'light') {
+    document.documentElement.classList.add('light');
+  } else {
+    document.documentElement.classList.remove('light');
+  }
+  $('#setTheme').value = theme;
+}
+
+function applyFontSize(size) {
+  size = parseInt(size);
+  document.documentElement.style.setProperty('--editor-font-size', size + 'px');
+  $('#setFontSize').value = size;
+  $('#setFontSizeVal').textContent = size;
+}
+
+function applyWidth(w) {
+  const nb = $('#notebook');
+  nb.style.maxWidth = w;
+  $('#setWidth').value = w;
+}
+
+function getSettings() {
+  return {
+    theme: document.documentElement.classList.contains('light') ? 'light' : 'dark',
+    fontSize: parseInt($('#setFontSize').value),
+    width: $('#setWidth').value,
+  };
+}
+
+function applySettings(s) {
+  if (!s) return;
+  if (s.theme) applyTheme(s.theme);
+  if (s.fontSize) applyFontSize(s.fontSize);
+  if (s.width) applyWidth(s.width);
+}
+
+function togglePresent() {
+  document.body.classList.toggle('presenting');
+}
+
+function onCodeEdit(id) {
+  const cell = cells.find(c => c.id === id);
+  if (!cell) return;
+  const ta = cell.el.querySelector('textarea');
+  cell.code = ta.value;
+
+  // update manual state
+  if (isManual(cell.code)) {
+    cell.el.classList.add('manual');
+  } else {
+    cell.el.classList.remove('manual');
+  }
+
+  cell.el.classList.add('stale');
+
+  if (autorun) {
+    clearTimeout(editTimer);
+    editTimer = setTimeout(() => runDAG([id], false), 400);
+  }
+}
+
+// ── MARKDOWN RENDERING (minimal) ──
+
+function renderMd(src) {
+  let html = src
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  // headings
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+  // bold/italic
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+  // inline code
+  html = html.replace(/`(.+?)`/g, '<code>$1</code>');
+
+  // links
+  html = html.replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2">$1</a>');
+
+  // paragraphs
+  html = html.replace(/\n\n/g, '</p><p>');
+  if (!html.startsWith('<h') && !html.startsWith('<p')) html = '<p>' + html + '</p>';
+
+  return html;
+}
+
+// ── SAVE / LOAD ──
+
+function saveNotebook() {
+  // serialize current state back to a self-contained HTML file
+  const title = $('#docTitle').value || 'untitled';
+
+  // collect cells as data
+  const cellData = cells.map(c => ({
+    type: c.type,
+    code: c.code,
+    collapsed: c.el.classList.contains('collapsed') || undefined
+  }));
+
+  // get the runtime and styles from current document
+  const styleEl = document.querySelector('style');
+  const styles = styleEl.textContent;
+
+  // get the script
+  const scriptEl = document.querySelector('script');
+  const script = scriptEl.textContent;
+
+  // read static elements from live DOM
+  const helpHTML = $('#helpOverlay').outerHTML;
+  const settingsOvHTML = $('#settingsOverlay').outerHTML;
+  const settingsPanHTML = $('#settingsPanel').outerHTML.replace(/display:\s*block;?/, '');
+  const statusAttr = document.querySelector('.status-attr').outerHTML;
+
+  // build output HTML
+  let html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Auditable — ${esc(title)}</title>
+<style>\n${styles}\n</style>
+</head>
+<body>
+
+${helpHTML}
+
+${settingsOvHTML}
+${settingsPanHTML}
+
+<div class="toolbar">
+  <span class="toolbar-title">auditable</span>
+  <span class="toolbar-sep"></span>
+  <span class="toolbar-filename">
+    <input type="text" id="docTitle" value="${esc(title)}" spellcheck="false">
+  </span>
+  <button onclick="addCell('code')">+ code</button>
+  <button onclick="addCell('md')">+ md</button>
+  <span class="toolbar-sep"></span>
+  <button onclick="runAll()">run all</button>
+  <button id="autorunBtn" onclick="toggleAutorun()" title="reactive mode — cells auto-run on edit">▶</button>
+  <button class="accent" onclick="saveNotebook()">save</button>
+  <button onclick="$('#helpOverlay').classList.toggle('visible')" title="keyboard shortcuts (F1)">?</button>
+  <button onclick="toggleSettings()" title="settings">⚙</button>
+  <button onclick="togglePresent()" title="presentation mode">⎚</button>
+</div>
+
+<button class="present-exit" onclick="togglePresent()">✕ exit</button>
+
+<div class="notebook" id="notebook">
+</div>
+
+<div class="statusbar">
+  <span class="status-cells" id="statusCells">0 cells</span>
+  <span class="status-msg" id="statusMsg"></span>
+  ${statusAttr}
+</div>
+
+${'<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->'}
+${Object.keys(window._installedModules || {}).length ? '<!--AUDITABLE-MODULES\n' + JSON.stringify(window._installedModules) + '\nAUDITABLE-MODULES-->' : ''}
+${'<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->'}
+
+<script>\n${script}\n<\/script>
+</body>
+</html>`;
+
+  // download
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.html';
+  a.click();
+  URL.revokeObjectURL(url);
+  setMsg(`saved ${a.download}`, 'ok');
+}
+
+function esc(s) {
+  return s.replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function loadFromEmbed() {
+  // look for embedded cell data in HTML comments
+  const raw = document.body.innerHTML;
+
+  // restore installed modules first (before cells run)
+  const modMatch = raw.match(/<!--AUDITABLE-MODULES\n([\s\S]*?)\nAUDITABLE-MODULES-->/);
+  if (modMatch) {
+    try {
+      window._installedModules = JSON.parse(modMatch[1]);
+    } catch (e) {
+      console.error('Failed to parse installed modules:', e);
+    }
+  }
+
+  // restore settings
+  const setMatch = raw.match(/<!--AUDITABLE-SETTINGS\n([\s\S]*?)\nAUDITABLE-SETTINGS-->/);
+  if (setMatch) {
+    try {
+      applySettings(JSON.parse(setMatch[1]));
+    } catch (e) {
+      console.error('Failed to parse settings:', e);
+    }
+  }
+
+  const match = raw.match(/<!--AUDITABLE-DATA\n([\s\S]*?)\nAUDITABLE-DATA-->/);
+  if (match) {
+    try {
+      const data = JSON.parse(match[1]);
+      for (const c of data) {
+        const cell = addCell(c.type, c.code);
+        if (c.collapsed) cell.el.classList.add('collapsed');
+      }
+      // run after load
+      if (cells.some(c => c.type === 'code')) {
+        setTimeout(runAll, 50);
+      }
+      return true;
+    } catch (e) {
+      console.error('Failed to parse embedded data:', e);
+    }
+  }
+  return false;
+}
+
+// ── KEYBOARD / SELECTION ──
+
+let selectedId = null;
+let pendingD = false;
+let pendingDTimer = null;
+let clipboard = null;
+let trash = [];  // stack of { type, code, afterId }
+
+function deleteCellWithUndo(id) {
+  const idx = cells.findIndex(c => c.id === id);
+  if (idx < 0) return;
+  const cell = cells[idx];
+  const afterId = idx > 0 ? cells[idx - 1].id : null;
+  trash.push({ type: cell.type, code: cell.code, afterId });
+  cell.el.remove();
+  cells.splice(idx, 1);
+  if (cells.some(c => c.type === 'code')) runAll();
+  updateStatus();
+  setMsg('deleted cell (z to undo)', 'ok');
+}
+
+function undoDelete() {
+  if (!trash.length) { setMsg('nothing to undo', ''); return; }
+  const { type, code, afterId } = trash.pop();
+  // check if afterId still exists
+  const validAfter = afterId !== null && cells.find(c => c.id === afterId) ? afterId : null;
+  const newCell = addCell(type, code, validAfter);
+  selectCell(newCell.id);
+  if (type === 'code' && cells.some(c => c.type === 'code')) runAll();
+  setMsg('restored cell', 'ok');
+}
+
+function selectCell(id) {
+  // deselect previous
+  $$('.cell.selected').forEach(el => el.classList.remove('selected'));
+  selectedId = id;
+  if (id === null) return;
+  const cell = cells.find(c => c.id === id);
+  if (cell) {
+    cell.el.classList.add('selected');
+    cell.el.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function getEditingCell() {
+  const active = document.activeElement;
+  if (active && active.tagName === 'TEXTAREA') {
+    const cellEl = active.closest('.cell');
+    if (cellEl) {
+      const id = parseInt(cellEl.dataset.id);
+      return cells.find(c => c.id === id) || null;
+    }
+  }
+  return null;
+}
+
+function editCell(id) {
+  const cell = cells.find(c => c.id === id);
+  if (!cell) return;
+  selectCell(id);
+
+  if (cell.type === 'md') {
+    // open md editor
+    const view = cell.el.querySelector('.cell-md-view');
+    const editWrap = cell.el.querySelector('.cell-md-edit');
+    const ta = cell.el.querySelector('.cell-md-edit textarea');
+    editWrap.style.display = '';
+    view.style.display = 'none';
+    ta.value = cell.code;
+    ta.focus();
+    autoResize({ target: ta });
+  } else {
+    cell.el.querySelector('textarea').focus();
+  }
+}
+
+function exitEdit() {
+  const active = document.activeElement;
+  if (active && active.tagName === 'TEXTAREA') {
+    active.blur();
+  }
+}
+
+function runSelected() {
+  if (selectedId === null && cells.length) selectCell(cells[0].id);
+  const cell = cells.find(c => c.id === selectedId);
+  if (!cell) return;
+  if (cell.type === 'code') {
+    cell.code = cell.el.querySelector('.cell-code textarea').value;
+    runDAG([cell.id]);
+  }
+}
+
+function runSelectedAndAdvance() {
+  runSelected();
+  if (selectedId === null) return;
+  const idx = cells.findIndex(c => c.id === selectedId);
+  if (idx < cells.length - 1) {
+    // move to next cell and edit it
+    editCell(cells[idx + 1].id);
+  } else {
+    // at end — create new code cell
+    const newCell = addCell('code', '', selectedId);
+    selectCell(newCell.id);
+  }
+}
+
+function navigateCell(dir) {
+  if (!cells.length) return;
+  if (selectedId === null) {
+    selectCell(cells[0].id);
+    return;
+  }
+  const idx = cells.findIndex(c => c.id === selectedId);
+  const newIdx = idx + dir;
+  if (newIdx >= 0 && newIdx < cells.length) {
+    selectCell(cells[newIdx].id);
+  }
+}
+
+document.addEventListener('keydown', (e) => {
+  const editing = getEditingCell();
+
+  if (editing) {
+    // ── EDIT MODE ──
+    if (e.key === '/' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      toggleComment(active);
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      exitEdit();
+      selectCell(editing.id);
+      return;
+    }
+    if (e.key === 'Enter' && e.ctrlKey) {
+      e.preventDefault();
+      editing.code = editing.el.querySelector('textarea').value;
+      if (editing.type === 'code') runDAG([editing.id], true);
+      return;
+    }
+    if (e.key === 'Enter' && e.shiftKey) {
+      e.preventDefault();
+      editing.code = editing.el.querySelector('textarea').value;
+      if (editing.type === 'code') runDAG([editing.id], true);
+      // advance
+      const idx = cells.findIndex(c => c.id === editing.id);
+      if (idx < cells.length - 1) {
+        editCell(cells[idx + 1].id);
+      } else {
+        const newCell = addCell('code', '', editing.id);
+        selectCell(newCell.id);
+        editCell(newCell.id);
+      }
+      return;
+    }
+  } else {
+    // ── COMMAND MODE ──
+    // ignore if typing in the title input
+    if (document.activeElement && document.activeElement.id === 'docTitle') return;
+
+    // let browser shortcuts through (Ctrl+J downloads, etc.)
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+    if (e.key === 'ArrowUp' || e.key === 'k') {
+      e.preventDefault();
+      navigateCell(-1);
+      return;
+    }
+    if (e.key === 'ArrowDown' || e.key === 'j') {
+      e.preventDefault();
+      navigateCell(1);
+      return;
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (selectedId !== null) editCell(selectedId);
+      return;
+    }
+    if (e.key === 'a') {
+      e.preventDefault();
+      const newCell = addCell('code', '', null, selectedId);
+      selectCell(newCell.id);
+      editCell(newCell.id);
+      return;
+    }
+    if (e.key === 'b') {
+      e.preventDefault();
+      const newCell = addCell('code', '', selectedId);
+      selectCell(newCell.id);
+      editCell(newCell.id);
+      return;
+    }
+    if (e.key === 'd') {
+      e.preventDefault();
+      if (pendingD) {
+        // dd — delete
+        clearTimeout(pendingDTimer);
+        pendingD = false;
+        if (selectedId !== null) {
+          const idx = cells.findIndex(c => c.id === selectedId);
+          const nextId = idx < cells.length - 1 ? cells[idx + 1].id
+                       : idx > 0 ? cells[idx - 1].id : null;
+          deleteCellWithUndo(selectedId);
+          if (nextId !== null) selectCell(nextId);
+        }
+      } else {
+        pendingD = true;
+        pendingDTimer = setTimeout(() => { pendingD = false; }, 600);
+      }
+      return;
+    }
+    if (e.key !== 'd' && pendingD) { pendingD = false; clearTimeout(pendingDTimer); }
+    if (e.key === 'z') {
+      e.preventDefault();
+      undoDelete();
+      return;
+    }
+    if (e.key === 'c' && selectedId !== null) {
+      e.preventDefault();
+      const cell = cells.find(c => c.id === selectedId);
+      if (cell) clipboard = { type: cell.type, code: cell.code };
+      setMsg('copied cell', 'ok');
+      return;
+    }
+    if (e.key === 'v' && clipboard) {
+      e.preventDefault();
+      const newCell = addCell(clipboard.type, clipboard.code, selectedId);
+      selectCell(newCell.id);
+      if (clipboard.type === 'code' && cells.some(c => c.type === 'code')) runAll();
+      return;
+    }
+    if (e.key === 'x' && selectedId !== null) {
+      // cut = copy + delete
+      e.preventDefault();
+      const cell = cells.find(c => c.id === selectedId);
+      if (cell) clipboard = { type: cell.type, code: cell.code };
+      const idx = cells.findIndex(c => c.id === selectedId);
+      const nextId = idx < cells.length - 1 ? cells[idx + 1].id
+                   : idx > 0 ? cells[idx - 1].id : null;
+      deleteCellWithUndo(selectedId);
+      if (nextId !== null) selectCell(nextId);
+      setMsg('cut cell', 'ok');
+      return;
+    }
+    if (e.key === 'h' && selectedId !== null) {
+      e.preventDefault();
+      const cell = cells.find(c => c.id === selectedId);
+      if (cell) cell.el.classList.toggle('collapsed');
+      return;
+    }
+    if (e.key === 'p') {
+      e.preventDefault();
+      togglePresent();
+      return;
+    }
+    if (e.key === 'm' && selectedId !== null) {
+      e.preventDefault();
+      convertCell(selectedId, 'md');
+      return;
+    }
+    if (e.key === 'y' && selectedId !== null) {
+      e.preventDefault();
+      convertCell(selectedId, 'code');
+      return;
+    }
+    if (e.key === 's' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      saveNotebook();
+      return;
+    }
+  }
+
+  // global: F1 help overlay
+  if (e.key === 'F1') {
+    e.preventDefault();
+    $('#helpOverlay').classList.toggle('visible');
+    return;
+  }
+
+  // close presentation mode on Escape
+  if (e.key === 'Escape' && document.body.classList.contains('presenting')) {
+    togglePresent();
+    e.stopImmediatePropagation();
+    return;
+  }
+
+  // close settings on Escape if visible
+  if (e.key === 'Escape' && $('#settingsOverlay').classList.contains('visible')) {
+    toggleSettings();
+    e.stopImmediatePropagation();
+    return;
+  }
+
+  // close help on Escape if visible
+  if (e.key === 'Escape' && $('#helpOverlay').classList.contains('visible')) {
+    $('#helpOverlay').classList.remove('visible');
+    e.stopImmediatePropagation();
+    return;
+  }
+
+  // global: Ctrl+S / Cmd+S
+  if (e.key === 's' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    saveNotebook();
+  }
+});
+
+// click to dismiss help
+$('#helpOverlay').addEventListener('click', (e) => {
+  if (e.target === $('#helpOverlay')) $('#helpOverlay').classList.remove('visible');
+});
+
+// click to select
+document.addEventListener('click', (e) => {
+  const cellEl = e.target.closest('.cell');
+  if (cellEl) {
+    const id = parseInt(cellEl.dataset.id);
+    selectCell(id);
+  }
+});
+
+// ── STATUS ──
+
+function updateStatus() {
+  const n = cells.length;
+  const nc = cells.filter(c => c.type === 'code').length;
+  const nm = cells.filter(c => c.type === 'md').length;
+  $('#statusCells').textContent = `${nc} code · ${nm} md`;
+  updateInsertBars();
+}
+
+function updateInsertBars() {
+  const nb = $('#notebook');
+  // remove existing insert bars
+  nb.querySelectorAll('.insert-bar').forEach(b => b.remove());
+
+  // add one before first cell and between each pair
+  for (let i = 0; i <= cells.length; i++) {
+    const bar = document.createElement('div');
+    bar.className = 'insert-bar';
+    const afterId = i > 0 ? cells[i - 1].id : null;
+    bar.innerHTML = `<div class="insert-btns">
+      <button onclick="insertAt(${afterId},'code')">+ code</button>
+      <button onclick="insertAt(${afterId},'md')">+ md</button>
+    </div>`;
+    if (i < cells.length) {
+      cells[i].el.before(bar);
+    } else {
+      nb.appendChild(bar);
+    }
+  }
+}
+
+function insertAt(afterId, type) {
+  let cell;
+  if (afterId === null && cells.length > 0) {
+    // insert before first cell
+    cell = addCell(type, '', null, cells[0].id);
+  } else {
+    cell = addCell(type, '', afterId);
+  }
+  selectCell(cell.id);
+  editCell(cell.id);
+}
+
+function setMsg(msg, cls = '') {
+  const el = $('#statusMsg');
+  el.textContent = msg;
+  el.className = 'status-msg' + (cls ? ' ' + cls : '');
+  if (cls) setTimeout(() => { el.textContent = ''; el.className = 'status-msg'; }, 3000);
+}
+
+// ── INIT ──
+
+(function init() {
+  if (!loadFromEmbed()) {
+    addCell('md', '');
+    addCell('code', '');
+  }
+})();
+</script>
+</body>
+</html>
