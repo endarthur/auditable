@@ -258,7 +258,8 @@ export async function execCell(cell) {
       'slider', 'dropdown', 'checkbox', 'textInput',
       'load', 'install',
       `"use strict";\n${cell.code}\n\n` +
-      `return { ${[...cell.defines].join(', ')} };`
+      `return { ${[...cell.defines].join(', ')} };\n` +
+      `//# sourceURL=auditable://cell-${cell.id}.js`
     );
 
     const result = await fn(...scopeVals, display, canvas, table,
