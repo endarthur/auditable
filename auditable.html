@@ -611,6 +611,7 @@ body.presenting .cell:hover { border-left: none; }
 body.presenting .insert-bar { display: none; }
 body.presenting .notebook { max-width: 900px; padding-top: 40px; }
 body.presenting .statusbar { display: none; }
+body.presenting .present-hidden { display: none; }
 body.presenting .present-exit {
   display: block;
   position: fixed;
@@ -1161,6 +1162,11 @@ body.presenting .present-exit {
 
 <h2>directives</h2>
 <div class="help-row"><span class="help-key">// %manual</span><span class="help-desc">skip cell on reactive updates</span></div>
+<div class="help-row"><span class="help-key">// %norun</span><span class="help-desc">skip cell on Run All</span></div>
+<div class="help-row"><span class="help-key">// %hide</span><span class="help-desc">hide cell in present mode</span></div>
+<div class="help-row"><span class="help-key">// %cellName &lt;label&gt;</span><span class="help-desc">name cell in DevTools</span></div>
+<div class="help-row"><span class="help-key">// %outputId &lt;id&gt;</span><span class="help-desc">set id on output div</span></div>
+<div class="help-row"><span class="help-key">// %outputClass &lt;cls&gt;</span><span class="help-desc">add classes to output div</span></div>
 
 <div class="help-close">press F1 or Esc to close</div>
 </div>
@@ -1676,21 +1682,40 @@ function highlightCss(ta, hl) {
 
 // ── REACTIVE DAG ──
 
-function isManual(code) {
-  return /^\s*\/\/\s*%manual\b/.test(code);
+// ── directive helpers ──
+
+function hasDirective(code, name) {
+  return new RegExp(String.raw`^\s*\/\/\s*%${name}\b`, 'm').test(code);
+}
+
+function getDirective(code, name) {
+  const m = code.match(new RegExp(String.raw`^\s*\/\/\s*%${name}\s+(.+)`, 'm'));
+  return m ? m[1].trim() : null;
+}
+
+const isManual    = code => hasDirective(code, 'manual');
+const isHidden    = code => hasDirective(code, 'hide');
+const isNorun     = code => hasDirective(code, 'norun');
+const parseCellName    = code => getDirective(code, 'cellName');
+const parseOutputId    = code => { const v = getDirective(code, 'outputId'); return v ? v.split(/\s+/)[0] : null; };
+const parseOutputClass = code => getDirective(code, 'outputClass');
+
+// ── code analysis ──
+
+function stripCommentsAndStrings(code) {
+  return code
+    .replace(/\/\/.*$/gm, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/'(?:[^'\\]|\\.)*'/g, '""')
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+    .replace(/`(?:[^`\\]|\\.)*`/g, '""');
 }
 
 function parseNames(code) {
   // extract ONLY top-level variable definitions (brace depth 0)
   const defines = new Set();
 
-  // strip strings and comments first
-  const stripped = code
-    .replace(/\/\/.*$/gm, '')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/'(?:[^'\\]|\\.)*'/g, '""')
-    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
-    .replace(/`(?:[^`\\]|\\.)*`/g, '""');
+  const stripped = stripCommentsAndStrings(code);
 
   let depth = 0;
   let parenDepth = 0;
@@ -1769,18 +1794,13 @@ function parseNames(code) {
 function findUses(code, allDefined) {
   // find identifiers that reference other cells' definitions
   const uses = new Set();
-  // strip strings and comments to avoid false matches
-  const stripped = code
-    .replace(/\/\/.*$/gm, '')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/'(?:[^'\\]|\\.)*'/g, '""')
-    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
-    .replace(/`(?:[^`\\]|\\.)*`/g, '""');
+  const stripped = stripCommentsAndStrings(code);
+  const selfDefined = parseNames(code).defines;
 
   const idRe = /\b([a-zA-Z_$]\w*)\b/g;
   let m;
   while ((m = idRe.exec(stripped))) {
-    if (allDefined.has(m[1]) && !parseNames(code).defines.has(m[1])) {
+    if (allDefined.has(m[1]) && !selfDefined.has(m[1])) {
       uses.add(m[1]);
     }
   }
@@ -1827,52 +1847,6 @@ function buildDAG() {
   return allDefined;
 }
 
-function topoSort(dirtyIds) {
-  // from dirty cells, find all downstream dependents
-  const allDefined = new Map();
-  for (const c of S.cells) {
-    if (c.type !== 'code') continue;
-    for (const name of (c.defines || [])) {
-      allDefined.set(name, c.id);
-    }
-  }
-
-  // build adjacency: cell A defines x, cell B uses x -> A -> B
-  const adj = new Map();
-  const cellMap = new Map();
-  for (const c of S.cells) {
-    cellMap.set(c.id, c);
-    if (c.type === 'code' || c.type === 'html') adj.set(c.id, []);
-  }
-  for (const c of S.cells) {
-    if (c.type !== 'code' && c.type !== 'html') continue;
-    for (const name of (c.uses || [])) {
-      const src = allDefined.get(name);
-      if (src !== undefined && src !== c.id && adj.has(src)) {
-        adj.get(src).push(c.id);
-      }
-    }
-  }
-
-  // BFS from dirty cells to find all affected
-  const affected = new Set(dirtyIds);
-  const queue = [...dirtyIds];
-  while (queue.length) {
-    const id = queue.shift();
-    for (const dep of (adj.get(id) || [])) {
-      if (!affected.has(dep)) {
-        affected.add(dep);
-        queue.push(dep);
-      }
-    }
-  }
-
-  // topological order among affected, respecting document order
-  return S.cells
-    .filter(c => (c.type === 'code' || c.type === 'html') && affected.has(c.id))
-    .map(c => c.id);
-}
-
 // -- exec.js --
 
 // ── EXECUTION ──
@@ -1907,6 +1881,11 @@ async function execCell(cell) {
   const widgetEl = cell.el.querySelector('.cell-widgets');
   outputEl.textContent = '';
   outputEl.className = 'cell-output';
+  const outClass = parseOutputClass(cell.code);
+  if (outClass) outputEl.classList.add(...outClass.split(/\s+/));
+  const outId = parseOutputId(cell.code);
+  outputEl.id = outId || '';
+  cell.el.classList.toggle('present-hidden', isHidden(cell.code));
   cell.error = null;
 
   // track which widgets are used this run
@@ -2125,6 +2104,8 @@ async function execCell(cell) {
   const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
 
   try {
+    const cellName = parseCellName(cell.code);
+    const slug = cellName ? '-' + cellName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') : '';
     const fn = new AsyncFunction(
       ...scopeKeys,
       'display', 'canvas', 'table',
@@ -2132,7 +2113,7 @@ async function execCell(cell) {
       'load', 'install',
       `"use strict";\n${cell.code}\n\n` +
       `return { ${[...cell.defines].join(', ')} };\n` +
-      `//# sourceURL=auditable://cell-${cell.id}.js`
+      `//# sourceURL=auditable://cell-${cell.id}${slug}.js`
     );
 
     const result = await fn(...scopeVals, display, canvas, table,
@@ -2179,6 +2160,9 @@ async function runDAG(dirtyIds, force = false) {
       continue;
     }
     if (cell.type !== 'code') continue;
+
+    // skip norun cells always (unless explicitly triggered by clicking run on the cell)
+    if (isNorun(cell.code) && !dirtyIds.includes(cell.id)) continue;
 
     // skip manual cells unless force (Run All) or explicitly triggered
     if (!force && isManual(cell.code) && !dirtyIds.includes(cell.id)) {
@@ -2250,6 +2234,24 @@ function cssSummary(code) {
   return `${rules} rule${rules !== 1 ? 's' : ''} \u00b7 ${lines} line${lines !== 1 ? 's' : ''}`;
 }
 
+function cellHeaderHTML(type, id) {
+  return `<div class="cell-header">
+    <span class="cell-type">${type}</span>
+    <button class="cell-btn cell-convert" onclick="toggleTypePicker(${id})" title="convert type">\u21c4</button>
+    <div class="cell-type-picker" data-cell-id="${id}">
+      <button onclick="convertCell(${id},'code')">code</button>
+      <button onclick="convertCell(${id},'md')">md</button>
+      <button onclick="convertCell(${id},'css')">css</button>
+      <button onclick="convertCell(${id},'html')">html</button>
+    </div>
+    <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'before')" title="insert above">+\u2191</button>
+    <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'after')" title="insert below">+\u2193</button>
+    <button class="cell-btn" onclick="moveCell(${id},-1)" title="move up">\u2191</button>
+    <button class="cell-btn" onclick="moveCell(${id},1)" title="move down">\u2193</button>
+    <button class="cell-btn del" onclick="deleteCell(${id})" title="delete">\u00d7</button>
+  </div>`;
+}
+
 function createCellEl(type, id) {
   const div = document.createElement('div');
   div.className = 'cell';
@@ -2258,21 +2260,7 @@ function createCellEl(type, id) {
 
   if (type === 'code') {
     div.innerHTML = `
-      <div class="cell-header">
-        <span class="cell-type">code</span>
-        <button class="cell-btn cell-convert" onclick="toggleTypePicker(${id})" title="convert type">\u21c4</button>
-        <div class="cell-type-picker" data-cell-id="${id}">
-          <button onclick="convertCell(${id},'code')">code</button>
-          <button onclick="convertCell(${id},'md')">md</button>
-          <button onclick="convertCell(${id},'css')">css</button>
-          <button onclick="convertCell(${id},'html')">html</button>
-        </div>
-        <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'before')" title="insert above">+\u2191</button>
-        <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'after')" title="insert below">+\u2193</button>
-        <button class="cell-btn" onclick="moveCell(${id},-1)" title="move up">\u2191</button>
-        <button class="cell-btn" onclick="moveCell(${id},1)" title="move down">\u2193</button>
-        <button class="cell-btn del" onclick="deleteCell(${id})" title="delete">\u00d7</button>
-      </div>
+      ${cellHeaderHTML('code', id)}
       <div class="cell-code">
         <div class="editor-wrap">
           <textarea rows="3" spellcheck="false" placeholder="// code"></textarea>
@@ -2292,21 +2280,7 @@ function createCellEl(type, id) {
     ta.addEventListener('input', autoResize);
   } else if (type === 'css') {
     div.innerHTML = `
-      <div class="cell-header">
-        <span class="cell-type">css</span>
-        <button class="cell-btn cell-convert" onclick="toggleTypePicker(${id})" title="convert type">\u21c4</button>
-        <div class="cell-type-picker" data-cell-id="${id}">
-          <button onclick="convertCell(${id},'code')">code</button>
-          <button onclick="convertCell(${id},'md')">md</button>
-          <button onclick="convertCell(${id},'css')">css</button>
-          <button onclick="convertCell(${id},'html')">html</button>
-        </div>
-        <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'before')" title="insert above">+\u2191</button>
-        <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'after')" title="insert below">+\u2193</button>
-        <button class="cell-btn" onclick="moveCell(${id},-1)" title="move up">\u2191</button>
-        <button class="cell-btn" onclick="moveCell(${id},1)" title="move down">\u2193</button>
-        <button class="cell-btn del" onclick="deleteCell(${id})" title="delete">\u00d7</button>
-      </div>
+      ${cellHeaderHTML('css', id)}
       <div class="cell-css-view"></div>
       <div class="cell-css-edit" style="display:none">
         <div class="editor-wrap">
@@ -2345,21 +2319,7 @@ function createCellEl(type, id) {
     ta.addEventListener('keydown', handleTab);
   } else if (type === 'html') {
     div.innerHTML = `
-      <div class="cell-header">
-        <span class="cell-type">html</span>
-        <button class="cell-btn cell-convert" onclick="toggleTypePicker(${id})" title="convert type">\u21c4</button>
-        <div class="cell-type-picker" data-cell-id="${id}">
-          <button onclick="convertCell(${id},'code')">code</button>
-          <button onclick="convertCell(${id},'md')">md</button>
-          <button onclick="convertCell(${id},'css')">css</button>
-          <button onclick="convertCell(${id},'html')">html</button>
-        </div>
-        <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'before')" title="insert above">+\u2191</button>
-        <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'after')" title="insert below">+\u2193</button>
-        <button class="cell-btn" onclick="moveCell(${id},-1)" title="move up">\u2191</button>
-        <button class="cell-btn" onclick="moveCell(${id},1)" title="move down">\u2193</button>
-        <button class="cell-btn del" onclick="deleteCell(${id})" title="delete">\u00d7</button>
-      </div>
+      ${cellHeaderHTML('html', id)}
       <div class="cell-html-view"></div>
       <div class="cell-html-edit" style="display:none">
         <textarea rows="2" spellcheck="false" placeholder="<html template>"></textarea>
@@ -2393,21 +2353,7 @@ function createCellEl(type, id) {
     ta.addEventListener('keydown', handleTab);
   } else {
     div.innerHTML = `
-      <div class="cell-header">
-        <span class="cell-type">md</span>
-        <button class="cell-btn cell-convert" onclick="toggleTypePicker(${id})" title="convert type">\u21c4</button>
-        <div class="cell-type-picker" data-cell-id="${id}">
-          <button onclick="convertCell(${id},'code')">code</button>
-          <button onclick="convertCell(${id},'md')">md</button>
-          <button onclick="convertCell(${id},'css')">css</button>
-          <button onclick="convertCell(${id},'html')">html</button>
-        </div>
-        <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'before')" title="insert above">+\u2191</button>
-        <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'after')" title="insert below">+\u2193</button>
-        <button class="cell-btn" onclick="moveCell(${id},-1)" title="move up">\u2191</button>
-        <button class="cell-btn" onclick="moveCell(${id},1)" title="move down">\u2193</button>
-        <button class="cell-btn del" onclick="deleteCell(${id})" title="delete">\u00d7</button>
-      </div>
+      ${cellHeaderHTML('md', id)}
       <div class="cell-md-view"></div>
       <div class="cell-md-edit" style="display:none">
         <textarea rows="2" spellcheck="false" placeholder="markdown"></textarea>
@@ -2826,8 +2772,19 @@ function saveNotebook() {
   const helpHTML = $('#helpOverlay').outerHTML;
   const settingsOvHTML = $('#settingsOverlay').outerHTML;
   const settingsPanHTML = $('#settingsPanel').outerHTML.replace(/display:\s*block;?/, '');
-  const statusAttr = document.querySelector('.status-attr').outerHTML;
-  const actionBar = document.querySelector('.action-bar').outerHTML;
+  const statusbarHTML = document.querySelector('.statusbar').outerHTML;
+
+  // read toolbar from live DOM and patch the title value
+  const toolbarEl = document.querySelector('.toolbar').cloneNode(true);
+  toolbarEl.querySelector('#docTitle').value = title;
+  toolbarEl.querySelector('#toolbarStatus').textContent = '';
+  // reset autorun button state
+  const autoBtn = toolbarEl.querySelector('#autorunBtn');
+  if (autoBtn) { autoBtn.className = 'autorun-on'; autoBtn.textContent = '\u25b6'; }
+  // close overflow if open
+  const overflow = toolbarEl.querySelector('.toolbar-overflow');
+  if (overflow) overflow.classList.remove('open');
+  const toolbarHTML = toolbarEl.outerHTML;
 
   // build output HTML
   let html = `<!DOCTYPE html>
@@ -2845,50 +2802,14 @@ ${helpHTML}
 ${settingsOvHTML}
 ${settingsPanHTML}
 
-<div class="toolbar">
-  <span class="toolbar-title">auditable</span>
-  <span class="toolbar-sep"></span>
-  <span class="toolbar-filename">
-    <input type="text" id="docTitle" value="${esc(title)}" spellcheck="false">
-  </span>
-  <span class="toolbar-status" id="toolbarStatus"></span>
-  <button class="toolbar-add" onclick="addCellWithUndo('code','',S.selectedId)">+ code</button>
-  <button class="toolbar-add" onclick="addCellWithUndo('md','',S.selectedId)">+ md</button>
-  <button class="toolbar-secondary" onclick="addCellWithUndo('css','',S.selectedId)">+ css</button>
-  <button class="toolbar-secondary" onclick="addCellWithUndo('html','',S.selectedId)">+ html</button>
-  <span class="toolbar-sep"></span>
-  <span class="transport">
-    <button onclick="runSelectedCell()" title="run cell + advance (Shift+Enter)">\u23f5</button>
-    <button id="autorunBtn" class="autorun-on" onclick="toggleAutorun()" title="reactive mode \u2014 cells auto-run on edit">\u25b6</button>
-    <button onclick="runAll()" title="run all cells">\u25b6\u25b6</button>
-  </span>
-  <span class="toolbar-right">
-    <button class="accent" onclick="saveNotebook()">save</button>
-    <div class="toolbar-overflow">
-      <button onclick="toggleToolbarMenu()" title="more">\u22ef</button>
-      <div class="toolbar-overflow-tray">
-        <button onclick="newNotebook();toggleToolbarMenu()">new</button>
-        <button onclick="collapseAll();toggleToolbarMenu()">collapse all</button>
-        <button onclick="expandAll();toggleToolbarMenu()">expand all</button>
-        <button onclick="$('#helpOverlay').classList.toggle('visible');toggleToolbarMenu()">help (F1)</button>
-        <button onclick="toggleSettings();toggleToolbarMenu()">settings</button>
-        <button onclick="togglePresent();toggleToolbarMenu()">present</button>
-      </div>
-    </div>
-  </span>
-</div>
+${toolbarHTML}
 
 <button class="present-exit" onclick="togglePresent()">\u2715 exit</button>
 
 <div class="notebook" id="notebook">
 </div>
 
-<div class="statusbar">
-  <span class="status-cells" id="statusCells">0 cells</span>
-  <span class="status-msg" id="statusMsg"></span>
-  ${statusAttr}
-  ${actionBar}
-</div>
+${statusbarHTML}
 
 ${'<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->'}
 ${Object.keys(window._installedModules || {}).length ? '<!--AUDITABLE-MODULES\n' + JSON.stringify(window._installedModules) + '\nAUDITABLE-MODULES-->' : ''}
@@ -3039,7 +2960,7 @@ function deleteCellWithUndo(id) {
   }
   cell.el.remove();
   S.cells.splice(idx, 1);
-  if (S.cells.some(c => c.type === 'code')) runAll();
+  if (S.cells.some(c => c.type === 'code' || c.type === 'html')) runAll();
   updateStatus();
   setMsg('deleted cell (z to undo)', 'ok');
 }
@@ -3427,11 +3348,6 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 't' && S.selectedId !== null) {
       e.preventDefault();
       convertCell(S.selectedId, 'html');
-      return;
-    }
-    if (e.key === 's' && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      saveNotebook();
       return;
     }
   }

@@ -2,21 +2,40 @@ import { S } from './state.js';
 
 // ── REACTIVE DAG ──
 
-export function isManual(code) {
-  return /^\s*\/\/\s*%manual\b/.test(code);
+// ── directive helpers ──
+
+function hasDirective(code, name) {
+  return new RegExp(String.raw`^\s*\/\/\s*%${name}\b`, 'm').test(code);
+}
+
+function getDirective(code, name) {
+  const m = code.match(new RegExp(String.raw`^\s*\/\/\s*%${name}\s+(.+)`, 'm'));
+  return m ? m[1].trim() : null;
+}
+
+export const isManual    = code => hasDirective(code, 'manual');
+export const isHidden    = code => hasDirective(code, 'hide');
+export const isNorun     = code => hasDirective(code, 'norun');
+export const parseCellName    = code => getDirective(code, 'cellName');
+export const parseOutputId    = code => { const v = getDirective(code, 'outputId'); return v ? v.split(/\s+/)[0] : null; };
+export const parseOutputClass = code => getDirective(code, 'outputClass');
+
+// ── code analysis ──
+
+function stripCommentsAndStrings(code) {
+  return code
+    .replace(/\/\/.*$/gm, '')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/'(?:[^'\\]|\\.)*'/g, '""')
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+    .replace(/`(?:[^`\\]|\\.)*`/g, '""');
 }
 
 export function parseNames(code) {
   // extract ONLY top-level variable definitions (brace depth 0)
   const defines = new Set();
 
-  // strip strings and comments first
-  const stripped = code
-    .replace(/\/\/.*$/gm, '')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/'(?:[^'\\]|\\.)*'/g, '""')
-    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
-    .replace(/`(?:[^`\\]|\\.)*`/g, '""');
+  const stripped = stripCommentsAndStrings(code);
 
   let depth = 0;
   let parenDepth = 0;
@@ -95,18 +114,13 @@ export function parseNames(code) {
 export function findUses(code, allDefined) {
   // find identifiers that reference other cells' definitions
   const uses = new Set();
-  // strip strings and comments to avoid false matches
-  const stripped = code
-    .replace(/\/\/.*$/gm, '')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/'(?:[^'\\]|\\.)*'/g, '""')
-    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
-    .replace(/`(?:[^`\\]|\\.)*`/g, '""');
+  const stripped = stripCommentsAndStrings(code);
+  const selfDefined = parseNames(code).defines;
 
   const idRe = /\b([a-zA-Z_$]\w*)\b/g;
   let m;
   while ((m = idRe.exec(stripped))) {
-    if (allDefined.has(m[1]) && !parseNames(code).defines.has(m[1])) {
+    if (allDefined.has(m[1]) && !selfDefined.has(m[1])) {
       uses.add(m[1]);
     }
   }
@@ -151,50 +165,4 @@ export function buildDAG() {
   }
 
   return allDefined;
-}
-
-export function topoSort(dirtyIds) {
-  // from dirty cells, find all downstream dependents
-  const allDefined = new Map();
-  for (const c of S.cells) {
-    if (c.type !== 'code') continue;
-    for (const name of (c.defines || [])) {
-      allDefined.set(name, c.id);
-    }
-  }
-
-  // build adjacency: cell A defines x, cell B uses x -> A -> B
-  const adj = new Map();
-  const cellMap = new Map();
-  for (const c of S.cells) {
-    cellMap.set(c.id, c);
-    if (c.type === 'code' || c.type === 'html') adj.set(c.id, []);
-  }
-  for (const c of S.cells) {
-    if (c.type !== 'code' && c.type !== 'html') continue;
-    for (const name of (c.uses || [])) {
-      const src = allDefined.get(name);
-      if (src !== undefined && src !== c.id && adj.has(src)) {
-        adj.get(src).push(c.id);
-      }
-    }
-  }
-
-  // BFS from dirty cells to find all affected
-  const affected = new Set(dirtyIds);
-  const queue = [...dirtyIds];
-  while (queue.length) {
-    const id = queue.shift();
-    for (const dep of (adj.get(id) || [])) {
-      if (!affected.has(dep)) {
-        affected.add(dep);
-        queue.push(dep);
-      }
-    }
-  }
-
-  // topological order among affected, respecting document order
-  return S.cells
-    .filter(c => (c.type === 'code' || c.type === 'html') && affected.has(c.id))
-    .map(c => c.id);
 }

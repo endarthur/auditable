@@ -604,6 +604,7 @@ body.presenting .cell:hover { border-left: none; }
 body.presenting .insert-bar { display: none; }
 body.presenting .notebook { max-width: 900px; padding-top: 40px; }
 body.presenting .statusbar { display: none; }
+body.presenting .present-hidden { display: none; }
 body.presenting .present-exit {
   display: block;
   position: fixed;
