@@ -148,6 +148,7 @@ export function togglePresent() {
 // ── ABOUT ──
 
 const __AUDITABLE_VERSION__ = '0.0.0';
+const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_BUILD_DATE__ = 'dev';
 const __AUDITABLE_BASE_SIZE__ = 0;
 
@@ -156,7 +157,7 @@ const __AUDITABLE_BASE_SIZE__ = 0;
   const build = $('#aboutBuild');
   const rt = $('#aboutRuntime');
   if (ver) ver.textContent = 'auditable v' + __AUDITABLE_VERSION__;
-  if (build) build.textContent = 'built ' + __AUDITABLE_BUILD_DATE__;
+  if (build) build.textContent = (__AUDITABLE_RELEASE__ !== 'dev' ? __AUDITABLE_RELEASE__ + ' \u00b7 ' : '') + 'built ' + __AUDITABLE_BUILD_DATE__;
   if (rt && __AUDITABLE_BASE_SIZE__ > 0) rt.textContent = 'runtime ' + (__AUDITABLE_BASE_SIZE__ / 1024).toFixed(1) + ' KB';
 })();
 

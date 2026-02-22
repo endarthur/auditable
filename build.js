@@ -147,6 +147,11 @@ js = js.replace(
   "const __AUDITABLE_VERSION__ = '0.0.0';",
   `const __AUDITABLE_VERSION__ = '${pkg.version || '0.0.0'}';`
 );
+const release = process.env.AUDITABLE_RELEASE || 'dev';
+js = js.replace(
+  "const __AUDITABLE_RELEASE__ = 'dev';",
+  `const __AUDITABLE_RELEASE__ = '${release}';`
+);
 js = js.replace(
   "const __AUDITABLE_BUILD_DATE__ = 'dev';",
   `const __AUDITABLE_BUILD_DATE__ = '${buildDate}';`

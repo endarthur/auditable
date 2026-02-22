@@ -1,6 +1,17 @@
 import { S, $ } from './state.js';
 import { setMsg } from './ui.js';
 import { getSettings } from './settings.js';
+import { renderMd } from './markdown.js';
+
+// ── UPDATE PANEL ──
+
+export function toggleUpdate() {
+  const overlay = $('#updateOverlay');
+  const panel = $('#updatePanel');
+  const open = !overlay.classList.contains('visible');
+  overlay.classList.toggle('visible');
+  panel.style.display = open ? 'block' : 'none';
+}
 
 // ── SELF-UPDATE SYSTEM ──
 
@@ -159,16 +170,24 @@ async function checkForUpdate() {
     if (!vResp.ok) throw new Error('version check failed: ' + vResp.status);
     const vData = await vResp.json();
     const remoteVersion = vData.version || '';
-    const currentVersion = $('#updateCurrentVer')?.textContent || 'v0.0.0';
+    const currentRelease = $('#updateRelease')?.textContent || 'dev';
 
-    if (compareVersions(currentVersion, remoteVersion) >= 0) {
-      setUpdateStatus('up to date (' + currentVersion + ')', 'ok');
+    if (currentRelease === 'dev') {
+      // Dev builds always offer the latest release
+    } else if (compareVersions(currentRelease, remoteVersion) >= 0) {
+      setUpdateStatus('up to date (' + currentRelease + ')', 'ok');
       if (btn) btn.disabled = false;
       return;
     }
 
+    const notes = vData.notes || '';
+    const notesHtml = notes
+      ? '<div class="update-notes">' + renderMd(notes) + '</div>'
+      : '';
+
     setUpdateStatus(
       '<strong>' + remoteVersion + '</strong> available'
+      + notesHtml
       + '<button id="updateApplyBtn" onclick="applyOnlineUpdate()">update</button>',
       'available'
     );
@@ -404,19 +423,31 @@ async function verifySelf() {
 // ── INIT ──
 (function() {
   const ver = $('#updateCurrentVer');
-  if (ver) {
-    const versionEl = $('#aboutVersion');
-    if (versionEl) ver.textContent = versionEl.textContent.replace('auditable ', '');
+  if (ver) ver.textContent = 'v' + __AUDITABLE_VERSION__;
+  const rel = $('#updateRelease');
+  if (rel) {
+    rel.textContent = __AUDITABLE_RELEASE__;
+    if (__AUDITABLE_RELEASE__ === 'dev') rel.className = 'update-sig update-warn';
   }
   // Show public key status
   const keyEl = $('#updatePubKey');
   if (keyEl) {
     if (__AUDITABLE_PUBLIC_KEY__) {
       keyEl.textContent = __AUDITABLE_PUBLIC_KEY__.slice(0, 8) + '...';
-      keyEl.title = __AUDITABLE_PUBLIC_KEY__;
-      keyEl.className = 'update-sig';
+      keyEl.className = 'update-sig update-key-truncated';
+      keyEl.onclick = () => {
+        if (keyEl.classList.contains('update-key-expanded')) {
+          keyEl.textContent = __AUDITABLE_PUBLIC_KEY__.slice(0, 8) + '...';
+          keyEl.classList.remove('update-key-expanded');
+          keyEl.classList.add('update-key-truncated');
+        } else {
+          keyEl.textContent = __AUDITABLE_PUBLIC_KEY__;
+          keyEl.classList.remove('update-key-truncated');
+          keyEl.classList.add('update-key-expanded');
+        }
+      };
     } else {
-      keyEl.textContent = 'not configured (dev build)';
+      keyEl.textContent = 'not configured';
       keyEl.className = 'update-sig update-warn';
     }
   }
