@@ -369,9 +369,11 @@ function ensureColorPicker() {
   _colorPicker.addEventListener('input', () => {
     if (!_pickerTarget) return;
     const { ta, offset, len } = _pickerTarget;
-    const val = ta.value;
     const newColor = _colorPicker.value;
-    ta.value = val.slice(0, offset) + newColor + val.slice(offset + len);
+    ta.focus();
+    ta.selectionStart = offset;
+    ta.selectionEnd = offset + len;
+    document.execCommand('insertText', false, newColor);
     ta.dispatchEvent(new Event('input'));
     // update offset for new length
     _pickerTarget.len = newColor.length;

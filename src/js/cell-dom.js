@@ -186,6 +186,14 @@ export function createCellEl(type, id) {
   return div;
 }
 
+// undoable text replacement — uses execCommand so the browser records it in the undo stack
+function replaceRange(ta, from, to, text) {
+  ta.focus();
+  ta.selectionStart = from;
+  ta.selectionEnd = to;
+  document.execCommand('insertText', false, text);
+}
+
 export function handleTab(e) {
   const ta = e.target;
   const start = ta.selectionStart;
@@ -196,21 +204,21 @@ export function handleTab(e) {
 
     if (start === end) {
       // no selection — insert 2 spaces
-      ta.value = ta.value.substring(0, start) + '  ' + ta.value.substring(end);
-      ta.selectionStart = ta.selectionEnd = start + 2;
+      replaceRange(ta, start, end, '  ');
     } else {
       // selection — indent/unindent lines
       const val = ta.value;
       const lineStart = val.lastIndexOf('\n', start - 1) + 1;
       const lineEnd = val.indexOf('\n', end);
-      const block = val.slice(lineStart, lineEnd === -1 ? val.length : lineEnd);
+      const blockEnd = lineEnd === -1 ? val.length : lineEnd;
+      const block = val.slice(lineStart, blockEnd);
       let newBlock;
       if (e.shiftKey) {
         newBlock = block.replace(/^  /gm, '');
       } else {
         newBlock = block.replace(/^/gm, '  ');
       }
-      ta.value = val.slice(0, lineStart) + newBlock + val.slice(lineEnd === -1 ? val.length : lineEnd);
+      replaceRange(ta, lineStart, blockEnd, newBlock);
       ta.selectionStart = lineStart;
       ta.selectionEnd = lineStart + newBlock.length;
     }
@@ -241,11 +249,12 @@ export function handleTab(e) {
 
     if (needClose) {
       // cursor between brackets: add indented line + closing line
-      ta.value = before + '\n' + indent + extra + '\n' + indent + after;
+      const insert = '\n' + indent + extra + '\n' + indent;
+      replaceRange(ta, start, end, insert);
       ta.selectionStart = ta.selectionEnd = start + 1 + indent.length + extra.length;
     } else {
-      ta.value = before + '\n' + indent + extra + after;
-      ta.selectionStart = ta.selectionEnd = start + 1 + indent.length + extra.length;
+      const insert = '\n' + indent + extra;
+      replaceRange(ta, start, end, insert);
     }
     ta.dispatchEvent(new Event('input'));
     return;
@@ -264,8 +273,7 @@ export function handleTab(e) {
     navigator.clipboard.writeText(lineText);
 
     if (e.key === 'x') {
-      ta.value = val.slice(0, lineStart) + val.slice(lineEnd);
-      ta.selectionStart = ta.selectionEnd = lineStart;
+      replaceRange(ta, lineStart, lineEnd, '');
       ta.dispatchEvent(new Event('input'));
     }
     return;
@@ -303,7 +311,7 @@ export function toggleComment(ta) {
   }
 
   const newBlock = newLines.join('\n');
-  ta.value = val.slice(0, lineStart) + newBlock + val.slice(lineEnd);
+  replaceRange(ta, lineStart, lineEnd, newBlock);
   ta.selectionStart = lineStart;
   ta.selectionEnd = lineStart + newBlock.length;
   ta.dispatchEvent(new Event('input'));

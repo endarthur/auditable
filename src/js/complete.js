@@ -667,11 +667,10 @@ function acceptCompletion() {
   const item = items[selected];
   if (!item) return;
 
-  const before = ta.value.substring(0, cursorStart);
-  const after = ta.value.substring(cursorStart + prefix.length);
-  ta.value = before + item.text + after;
-  const newCursor = cursorStart + item.text.length;
-  ta.selectionStart = ta.selectionEnd = newCursor;
+  ta.focus();
+  ta.selectionStart = cursorStart;
+  ta.selectionEnd = cursorStart + prefix.length;
+  document.execCommand('insertText', false, item.text);
 
   dismissAutocomplete();
   ta.dispatchEvent(new Event('input'));
