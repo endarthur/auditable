@@ -1,0 +1,49 @@
+name: Build & Sign Release
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-sign:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build auditable.html
+        run: node build.js
+        env:
+          AUDITABLE_PUBLIC_KEY: ${{ vars.AUDITABLE_PUBLIC_KEY }}
+
+      - name: Build af.html
+        run: node build.js --target=af
+        env:
+          AUDITABLE_PUBLIC_KEY: ${{ vars.AUDITABLE_PUBLIC_KEY }}
+
+      - name: Sign auditable.html
+        if: env.ED25519_PRIVATE_KEY != ''
+        run: node sign.js auditable.html
+        env:
+          ED25519_PRIVATE_KEY: ${{ secrets.ED25519_PRIVATE_KEY }}
+
+      - name: Sign af.html
+        if: env.ED25519_PRIVATE_KEY != ''
+        run: node sign.js af.html
+        env:
+          ED25519_PRIVATE_KEY: ${{ secrets.ED25519_PRIVATE_KEY }}
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            auditable.html \
+            af.html \
+            --clobber

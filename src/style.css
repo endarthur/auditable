@@ -1038,6 +1038,33 @@ html.hide-run-toggle #autorunBtnMobile { display: none; }
   font-style: italic;
   padding: 4px 0;
 }
+/* ── UPDATE UI (settings panel) ── */
+.update-status {
+  font-size: 11px;
+  padding: 4px 0;
+  line-height: 1.5;
+}
+.update-status strong { color: var(--fg-bright); }
+.update-ok { color: var(--ok); }
+.update-err { color: var(--err); }
+.update-warn { color: var(--accent); }
+.update-available { color: var(--fg); }
+.update-notes {
+  color: var(--fg-dim);
+  font-size: 10px;
+  padding: 4px 0;
+  max-height: 80px;
+  overflow-y: auto;
+}
+.update-confirm {
+  display: flex;
+  gap: 8px;
+  padding: 6px 0;
+}
+.update-sig {
+  font-size: 11px;
+}
+
 .settings-about {
   margin-top: 24px;
   padding-top: 12px;

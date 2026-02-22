@@ -104,6 +104,27 @@ ${afJs}
 }
 
 // ══════════════════════════════════════════════════
+// TARGET: scan
+// ══════════════════════════════════════════════════
+
+if (target === 'scan') {
+  const scanDir = path.join(__dirname, 'scan');
+  const scanPath = path.join(scanDir, 'index.html');
+  let scanHtml = fs.readFileSync(scanPath, 'utf8');
+
+  const pubKey = process.env.AUDITABLE_PUBLIC_KEY || '';
+  scanHtml = scanHtml.replace(
+    "const __SCANNER_PUBLIC_KEY__ = '';",
+    `const __SCANNER_PUBLIC_KEY__ = '${pubKey}';`
+  );
+
+  fs.writeFileSync(scanPath, scanHtml);
+  const scanSize = fs.statSync(scanPath).size;
+  console.log(`Built scan/index.html (${(scanSize / 1024).toFixed(1)} KB)`);
+  process.exit(0);
+}
+
+// ══════════════════════════════════════════════════
 // TARGET: auditable (default)
 // ══════════════════════════════════════════════════
 
@@ -129,6 +150,16 @@ js = js.replace(
 js = js.replace(
   "const __AUDITABLE_BUILD_DATE__ = 'dev';",
   `const __AUDITABLE_BUILD_DATE__ = '${buildDate}';`
+);
+const pubKey = process.env.AUDITABLE_PUBLIC_KEY || '';
+const repo = process.env.AUDITABLE_REPO || 'endarthur/auditable';
+js = js.replace(
+  "const __AUDITABLE_PUBLIC_KEY__ = '';",
+  `const __AUDITABLE_PUBLIC_KEY__ = '${pubKey}';`
+);
+js = js.replace(
+  "const __AUDITABLE_REPO__ = 'endarthur/auditable';",
+  `const __AUDITABLE_REPO__ = '${repo}';`
 );
 if (execModeArg) {
   js = js.replace(

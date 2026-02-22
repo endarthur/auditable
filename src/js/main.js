@@ -7,6 +7,7 @@ import './cell-dom.js';
 import './cell-ops.js';
 import './editor.js';
 import './settings.js';
+import './update.js';
 import './save.js';
 import './ui.js';
 import './find.js';
