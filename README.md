@@ -196,6 +196,7 @@ node gen_examples.js
   - worker delegation (`AF.runWorker`) -- app hands compute to AF's origin context, gets results back. enables heavy streaming workloads (e.g. block model processing) with direct FSAA handle access, no postMessage copying for raw data
   - inter-tab messaging (`AF.broadcast`, `AF.onMessage`)
   - graceful no-op when running standalone
+- [ ] AF: packed boxes -- compressed box export using CompressionStream/DecompressionStream (gzip, zero dependencies). self-extracting, floppy-friendly
 - [ ] AF: service worker backend for proper origins (PWA)
 - [ ] AF: terminal / JS REPL panel
 - [ ] AF: cross-notebook search
