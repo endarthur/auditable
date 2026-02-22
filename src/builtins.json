@@ -1,35 +1,103 @@
 {
-  "display": {
-    "sig": "display(...values)",
+  "ui.display": {
+    "sig": "ui.display(...values)",
     "desc": "output values to cell"
   },
-  "canvas": {
-    "sig": "canvas(w?, h?)",
+  "ui.canvas": {
+    "sig": "ui.canvas(w?, h?)",
     "desc": "create/reuse canvas (default 400\u00d7300)"
   },
-  "table": {
-    "sig": "table(data, columns?)",
+  "ui.table": {
+    "sig": "ui.table(data, columns?)",
     "desc": "render array of objects as table"
   },
-  "slider": {
-    "sig": "slider(label, default?, {min,max,step}?)",
+  "ui.slider": {
+    "sig": "ui.slider(label, default?, {min,max,step}?)",
     "desc": "reactive range input"
   },
-  "dropdown": {
-    "sig": "dropdown(label, options, default?)",
+  "ui.dropdown": {
+    "sig": "ui.dropdown(label, options, default?)",
     "desc": "reactive select menu"
   },
-  "checkbox": {
-    "sig": "checkbox(label, default?)",
+  "ui.checkbox": {
+    "sig": "ui.checkbox(label, default?)",
     "desc": "reactive toggle"
   },
-  "textInput": {
-    "sig": "textInput(label, default?)",
+  "ui.textInput": {
+    "sig": "ui.textInput(label, default?)",
     "desc": "reactive text field"
+  },
+  "std.csv": {
+    "sig": "std.csv(text, {separator?, typed?}?)",
+    "desc": "parse CSV text to array of objects"
+  },
+  "std.fetchJSON": {
+    "sig": "std.fetchJSON(url)",
+    "desc": "fetch URL and parse JSON"
+  },
+  "std.sum": {
+    "sig": "std.sum(arr, fn?)",
+    "desc": "sum array values"
+  },
+  "std.mean": {
+    "sig": "std.mean(arr, fn?)",
+    "desc": "arithmetic mean"
+  },
+  "std.median": {
+    "sig": "std.median(arr, fn?)",
+    "desc": "median value"
+  },
+  "std.extent": {
+    "sig": "std.extent(arr, fn?)",
+    "desc": "returns [min, max]"
+  },
+  "std.bin": {
+    "sig": "std.bin(arr, n?, fn?)",
+    "desc": "histogram bins (default 10)"
+  },
+  "std.linspace": {
+    "sig": "std.linspace(start, stop, n)",
+    "desc": "evenly-spaced numbers"
+  },
+  "std.unique": {
+    "sig": "std.unique(arr, fn?)",
+    "desc": "unique values with optional key fn"
+  },
+  "std.zip": {
+    "sig": "std.zip(...arrays)",
+    "desc": "zip arrays together"
+  },
+  "std.cross": {
+    "sig": "std.cross(...arrays)",
+    "desc": "cartesian product"
+  },
+  "std.file": {
+    "sig": "std.file(accept?)",
+    "desc": "open file picker"
+  },
+  "std.download": {
+    "sig": "std.download(data, filename, mimeType?)",
+    "desc": "download data as file"
+  },
+  "std.el": {
+    "sig": "std.el(tag, attrs?, ...children)",
+    "desc": "create DOM element"
+  },
+  "std.copy": {
+    "sig": "std.copy(text)",
+    "desc": "copy text to clipboard"
+  },
+  "std.fmt": {
+    "sig": "std.fmt(number, {decimals?, prefix?, suffix?}?)",
+    "desc": "format number to string"
+  },
+  "print": {
+    "sig": "print(...values)",
+    "desc": "output values to cell (alias for ui.display)"
   },
   "load": {
     "sig": "load(url)",
-    "desc": "import ES module (cached)"
+    "desc": "import ES module (cached). @std, @python supported."
   },
   "install": {
     "sig": "install(url)",

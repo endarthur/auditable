@@ -3,6 +3,7 @@ import { loadFromEmbed, saveNotebook, setSaveMode } from './save.js';
 import { addCell } from './cell-ops.js';
 import { setMsg } from './ui.js';
 import { setBadge } from './update.js';
+import { registerProvider } from './stdlib.js';
 
 // ── INIT ──
 
@@ -29,6 +30,30 @@ import { setBadge } from './update.js';
 (function afBridge() {
   if (window.parent === window) return;
   window.__AF_BRIDGE__ = true;
+
+  // register AF-specific providers for file/download
+  registerProvider('file', (accept) => {
+    return new Promise((resolve) => {
+      const id = 'af_file_' + Date.now();
+      function handler(e) {
+        if (e.data?.type === 'af:fileResult' && e.data.payload?.id === id) {
+          window.removeEventListener('message', handler);
+          resolve(e.data.payload.file);
+        }
+      }
+      window.addEventListener('message', handler);
+      window.parent.postMessage({ type: 'af:fileRequest', payload: { id, accept } }, '*');
+    });
+  });
+
+  registerProvider('download', (data, filename, mimeType) => {
+    const str = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+    const mime = mimeType || (typeof data === 'string' ? 'text/plain' : 'application/json');
+    window.parent.postMessage({
+      type: 'af:download',
+      payload: { data: str, filename, mimeType: mime }
+    }, '*');
+  });
 
   const title = document.getElementById('docTitle')?.value || 'untitled';
   window.parent.postMessage({ type: 'af:ready', payload: { title } }, '*');

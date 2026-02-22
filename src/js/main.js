@@ -1,4 +1,6 @@
 import './state.js';
+import './stdlib.js';
+import './python.js';
 import './syntax.js';
 import './dag.js';
 import './exec.js';
