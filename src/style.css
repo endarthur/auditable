@@ -1038,31 +1038,113 @@ html.hide-run-toggle #autorunBtnMobile { display: none; }
   font-style: italic;
   padding: 4px 0;
 }
-/* ── UPDATE UI (settings panel) ── */
+/* ── UPDATE PANEL ── */
+.update-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 1000;
+}
+.update-overlay.visible { display: block; }
+.update-panel {
+  display: none;
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 280px;
+  max-width: 90vw;
+  background: var(--bg1);
+  border-left: 1px solid var(--border);
+  padding: 20px;
+  overflow-y: auto;
+  z-index: 1001;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg);
+}
+.update-panel h2 {
+  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  margin: 0 0 12px 0;
+}
+.update-panel .settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+}
+.update-panel .settings-row label { color: var(--fg-dim); font-size: 11px; }
+.update-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0;
+}
+.update-actions button {
+  width: 100%;
+  padding: 8px 10px;
+}
 .update-status {
   font-size: 11px;
-  padding: 4px 0;
+  padding: 8px 0;
   line-height: 1.5;
 }
 .update-status strong { color: var(--fg-bright); }
+.update-status button {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+.update-status button:hover {
+  border-color: var(--accent);
+}
 .update-ok { color: var(--ok); }
 .update-err { color: var(--err); }
 .update-warn { color: var(--accent); }
 .update-available { color: var(--fg); }
 .update-notes {
   color: var(--fg-dim);
-  font-size: 10px;
-  padding: 4px 0;
-  max-height: 80px;
+  font-size: 11px;
+  padding: 6px 0;
+  max-height: 120px;
   overflow-y: auto;
+  line-height: 1.4;
 }
+.update-notes p { margin: 0 0 4px; }
+.update-notes ul { margin: 2px 0; padding-left: 16px; }
+.update-notes li { margin: 1px 0; }
+.update-notes h1, .update-notes h2, .update-notes h3 { font-size: 11px; margin: 4px 0 2px; color: var(--fg); }
 .update-confirm {
   display: flex;
   gap: 8px;
   padding: 6px 0;
 }
+.update-confirm button { width: auto; }
 .update-sig {
   font-size: 11px;
+}
+.update-key-truncated {
+  cursor: pointer;
+}
+.update-key-truncated:hover {
+  color: var(--accent);
+}
+.update-key-expanded {
+  word-break: break-all;
+  user-select: all;
+  cursor: pointer;
+  color: var(--fg-bright);
+}
+/* ── UPDATE BUTTON IN OVERFLOW TRAY ── */
+.toolbar-update-btn {
+  color: var(--accent) !important;
 }
 
 .settings-about {

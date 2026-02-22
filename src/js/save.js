@@ -29,6 +29,13 @@ export function saveNotebook() {
   const helpHTML = $('#helpOverlay').outerHTML;
   const settingsOvHTML = $('#settingsOverlay').outerHTML;
   const settingsPanHTML = $('#settingsPanel').outerHTML.replace(/display:\s*block;?/, '');
+  const updateOvHTML = $('#updateOverlay').outerHTML.replace(/\bvisible\b/, '').replace(/class="\s*"/, 'class=""');
+  const updatePanEl = $('#updatePanel').cloneNode(true);
+  updatePanEl.style.display = '';
+  // reset update status and dynamic text
+  const uStatus = updatePanEl.querySelector('#updateStatus');
+  if (uStatus) { uStatus.innerHTML = ''; uStatus.className = 'update-status'; }
+  const updatePanHTML = updatePanEl.outerHTML.replace(/display:\s*block;?/, '');
   const statusbarHTML = document.querySelector('.statusbar').outerHTML;
 
   // read toolbar from live DOM and patch the title value
@@ -73,6 +80,9 @@ ${helpHTML}
 
 ${settingsOvHTML}
 ${settingsPanHTML}
+
+${updateOvHTML}
+${updatePanHTML}
 
 ${toolbarHTML}
 

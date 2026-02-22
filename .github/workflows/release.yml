@@ -22,11 +22,13 @@ jobs:
         run: node build.js
         env:
           AUDITABLE_PUBLIC_KEY: ${{ vars.AUDITABLE_PUBLIC_KEY }}
+          AUDITABLE_RELEASE: ${{ github.event.release.tag_name }}
 
       - name: Build af.html
         run: node build.js --target=af
         env:
           AUDITABLE_PUBLIC_KEY: ${{ vars.AUDITABLE_PUBLIC_KEY }}
+          AUDITABLE_RELEASE: ${{ github.event.release.tag_name }}
 
       - name: Sign auditable.html
         if: env.ED25519_PRIVATE_KEY != ''
@@ -61,8 +63,14 @@ jobs:
           cp scan/index.html _pages/scan/
           cp scan/manifest.json _pages/scan/
           cp scan/sw.js _pages/scan/
-          # Write version.json for lightweight update checks
-          echo "{\"version\":\"${{ github.event.release.tag_name }}\"}" > _pages/version.json
+          # Write version.json for lightweight update checks (with release notes)
+          node -e "
+            const fs = require('fs');
+            fs.writeFileSync('_pages/version.json', JSON.stringify({
+              version: process.env.RELEASE_TAG,
+              notes: process.env.RELEASE_BODY || ''
+            }));
+          "
           # Deploy
           cd _pages
           git init
@@ -75,3 +83,5 @@ jobs:
           git push -f origin gh-pages
         env:
           AUDITABLE_PUBLIC_KEY: ${{ vars.AUDITABLE_PUBLIC_KEY }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_BODY: ${{ github.event.release.body }}

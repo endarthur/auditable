@@ -156,10 +156,25 @@
   <h2>modules</h2>
   <div id="moduleList"></div>
 
+  <div class="settings-about">
+    <span id="aboutVersion"></span>
+    <span id="aboutBuild"></span>
+    <span id="aboutRuntime"></span>
+    <a href="https://github.com/endarthur/auditable" target="_blank">github.com/endarthur/auditable</a>
+  </div>
+</div>
+
+<div class="update-overlay" id="updateOverlay" onclick="if(event.target===this)toggleUpdate()"></div>
+<div class="update-panel" id="updatePanel">
+  <button class="settings-close" onclick="toggleUpdate()">&#x00d7;</button>
   <h2>update</h2>
   <div class="settings-row">
-    <label>current version</label>
+    <label>version</label>
     <span id="updateCurrentVer">v0.0.0</span>
+  </div>
+  <div class="settings-row">
+    <label>release</label>
+    <span id="updateRelease">dev</span>
   </div>
   <div class="settings-row">
     <label>signature</label>
@@ -170,18 +185,9 @@
     <span id="updatePubKey" class="update-sig">-</span>
   </div>
   <div id="updateStatus" class="update-status"></div>
-  <div class="settings-row">
+  <div class="update-actions">
     <button id="updateCheckBtn" onclick="checkForUpdate()">check for updates</button>
-  </div>
-  <div class="settings-row">
     <button onclick="updateFromFile()">update from file</button>
-  </div>
-
-  <div class="settings-about">
-    <span id="aboutVersion"></span>
-    <span id="aboutBuild"></span>
-    <span id="aboutRuntime"></span>
-    <a href="https://github.com/endarthur/auditable" target="_blank">github.com/endarthur/auditable</a>
   </div>
 </div>
 
@@ -212,6 +218,7 @@
         <button onclick="expandAll();toggleToolbarMenu()">expand all</button>
         <button onclick="$('#helpOverlay').classList.toggle('visible');toggleToolbarMenu()">help (F1)</button>
         <button onclick="toggleSettings();toggleToolbarMenu()">settings</button>
+        <button class="toolbar-update-btn" onclick="toggleUpdate();toggleToolbarMenu()">update</button>
         <button onclick="togglePresent();toggleToolbarMenu()">present</button>
         <button onclick="openFind(false);toggleToolbarMenu()">find (Ctrl+F)</button>
       </div>
@@ -274,6 +281,7 @@
         <button onclick="expandAll();toggleMoreTray()">expand all</button>
         <button onclick="$('#helpOverlay').classList.toggle('visible');toggleMoreTray()">help</button>
         <button onclick="toggleSettings();toggleMoreTray()">settings</button>
+        <button class="toolbar-update-btn" onclick="toggleUpdate();toggleMoreTray()">update</button>
         <button onclick="togglePresent();toggleMoreTray()">present</button>
         <button onclick="openFind(false);toggleMoreTray()">find</button>
       </div>
