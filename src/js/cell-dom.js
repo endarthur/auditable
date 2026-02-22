@@ -187,11 +187,12 @@ export function createCellEl(type, id) {
 }
 
 export function handleTab(e) {
+  const ta = e.target;
+  const start = ta.selectionStart;
+  const end = ta.selectionEnd;
+
   if (e.key === 'Tab') {
     e.preventDefault();
-    const ta = e.target;
-    const start = ta.selectionStart;
-    const end = ta.selectionEnd;
 
     if (start === end) {
       // no selection — insert 2 spaces
@@ -214,6 +215,60 @@ export function handleTab(e) {
       ta.selectionEnd = lineStart + newBlock.length;
     }
     ta.dispatchEvent(new Event('input'));
+    return;
+  }
+
+  // Enter — auto-indent
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const val = ta.value;
+    const before = val.slice(0, start);
+    const after = val.slice(end);
+
+    // find current line's leading whitespace
+    const lineStart = before.lastIndexOf('\n') + 1;
+    const line = before.slice(lineStart);
+    const indent = line.match(/^(\s*)/)[1];
+
+    // check if the character before cursor is an opener
+    const charBefore = before.trimEnd().slice(-1);
+    const extra = '{(['.includes(charBefore) ? '  ' : '';
+
+    // check if the character after cursor is a matching closer
+    const charAfter = after.trimStart()[0];
+    const pairs = { '{': '}', '(': ')', '[': ']' };
+    const needClose = extra && charAfter === pairs[charBefore];
+
+    if (needClose) {
+      // cursor between brackets: add indented line + closing line
+      ta.value = before + '\n' + indent + extra + '\n' + indent + after;
+      ta.selectionStart = ta.selectionEnd = start + 1 + indent.length + extra.length;
+    } else {
+      ta.value = before + '\n' + indent + extra + after;
+      ta.selectionStart = ta.selectionEnd = start + 1 + indent.length + extra.length;
+    }
+    ta.dispatchEvent(new Event('input'));
+    return;
+  }
+
+  // Ctrl+X / Ctrl+C with no selection — whole-line cut/copy
+  if ((e.key === 'x' || e.key === 'c') && (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && start === end) {
+    e.preventDefault();
+    const val = ta.value;
+    const lineStart = val.lastIndexOf('\n', start - 1) + 1;
+    let lineEnd = val.indexOf('\n', start);
+    if (lineEnd === -1) lineEnd = val.length;
+    else lineEnd++; // include the newline
+
+    const lineText = val.slice(lineStart, lineEnd);
+    navigator.clipboard.writeText(lineText);
+
+    if (e.key === 'x') {
+      ta.value = val.slice(0, lineStart) + val.slice(lineEnd);
+      ta.selectionStart = ta.selectionEnd = lineStart;
+      ta.dispatchEvent(new Event('input'));
+    }
+    return;
   }
 }
 
