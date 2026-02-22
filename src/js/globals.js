@@ -12,7 +12,7 @@ import { saveNotebook, savePackedNotebook, setSaveMode, toggleSaveTray } from '.
 import { insertAt } from './ui.js';
 import { openFind, closeFind } from './find.js';
 import { runAll } from './exec.js';
-import { addCellWithUndo, runSelectedCell, toggleToolbarMenu, toggleAddTray, toggleMoreTray, showInsertPicker, toggleTypePicker, collapseAll, expandAll, newNotebook } from './keyboard.js';
+import { addCellWithUndo, deleteCellWithUndo, runSelectedCell, toggleToolbarMenu, toggleAddTray, toggleMoreTray, showInsertPicker, toggleTypePicker, collapseAll, expandAll, newNotebook } from './keyboard.js';
 
 // state
 window.$ = $;
@@ -64,6 +64,7 @@ window.__auditable_registerProvider = registerProvider;
 
 // keyboard / toolbar
 window.addCellWithUndo = addCellWithUndo;
+window.deleteCellWithUndo = deleteCellWithUndo;
 window.runSelectedCell = runSelectedCell;
 window.toggleToolbarMenu = toggleToolbarMenu;
 window.toggleAddTray = toggleAddTray;
