@@ -1,5 +1,6 @@
 import { AFS, $ } from './state.js';
 import { readEntry, dbGet, dbPut, openDB } from './fs.js';
+import { isLightweight, hydrate } from './notebook.js';
 import { renderTree } from './tree.js';
 
 // ── TABS ──
@@ -61,6 +62,11 @@ async function loadTabContent(tab) {
     if (html === null) {
       console.error('file not found:', tab.path);
       return;
+    }
+
+    // hydrate lightweight notebooks from Box storage
+    if (isLightweight(html)) {
+      html = await hydrate(html);
     }
 
     // inject localStorage shim for blob URL iframes

@@ -4,7 +4,7 @@
 // ── IndexedDB helpers ──
 
 const DB_NAME = 'auditable-files';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 function openDB() {
   if (AFS.db) return Promise.resolve(AFS.db);
@@ -20,6 +20,9 @@ function openDB() {
       }
       if (!db.objectStoreNames.contains('storage')) {
         db.createObjectStore('storage');
+      }
+      if (!db.objectStoreNames.contains('blobs')) {
+        db.createObjectStore('blobs', { keyPath: 'hash' });
       }
     };
     req.onsuccess = () => { AFS.db = req.result; resolve(req.result); };
@@ -61,6 +64,17 @@ function dbGetAll(store) {
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
+}
+
+// ── Blob store (content-addressed) ──
+
+async function blobPut(hash, source) {
+  await dbPut('blobs', { hash, source });
+}
+
+async function blobGet(hash) {
+  const entry = await dbGet('blobs', hash);
+  return entry ? entry.source : null;
 }
 
 // ── FSAA backend ──
@@ -247,7 +261,21 @@ async function boxDeleteBox(boxId) {
 async function boxExport(boxId) {
   const box = await boxGet(boxId);
   if (!box) return null;
-  const data = { name: box.name, files: box.files };
+  // hydrate lightweight notebooks back to full HTML for export
+  const files = {};
+  for (const [path, content] of Object.entries(box.files)) {
+    if (isLightweight(content)) {
+      try {
+        files[path] = await hydrate(content);
+      } catch (e) {
+        console.warn('boxExport: hydrate failed for', path, e);
+        files[path] = content;
+      }
+    } else {
+      files[path] = content;
+    }
+  }
+  const data = { name: box.name, files };
   const json = JSON.stringify(data);
   // read the current af.html shell as base — use our own document
   const shellHtml = '<!DOCTYPE html>\n<html><head><meta charset="UTF-8"><title>AF Box \u2014 ' +
@@ -269,7 +297,19 @@ async function boxImport(html) {
   if (!data) return null;
   const box = await boxCreate(data.name || 'imported');
   const saved = await boxGet(box.id);
-  saved.files = data.files || {};
+  const files = data.files || {};
+  // dehydrate any full HTML notebooks on import
+  for (const [path, content] of Object.entries(files)) {
+    if (typeof content === 'string' && /<!--AUDITABLE-DATA\n/.test(content)) {
+      try {
+        const lightweight = await dehydrate(content);
+        if (lightweight) { files[path] = lightweight; continue; }
+      } catch (e) {
+        console.warn('boxImport: dehydrate failed for', path, e);
+      }
+    }
+  }
+  saved.files = files;
   await boxSave(saved);
   return saved;
 }

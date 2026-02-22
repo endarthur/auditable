@@ -196,7 +196,21 @@ async function promptNewNotebook(rootIndex, parentPath) {
   const name = prompt('notebook name:', 'untitled.html');
   if (!name) return;
   const finalName = name.endsWith('.html') ? name : name + '.html';
-  await createEntry(rootIndex, parentPath, finalName, __AUDITABLE_RUNTIME__);
+  const root = AFS.roots[rootIndex];
+  let content;
+  if (root && root.type === 'box') {
+    // lightweight format for Box storage
+    content = JSON.stringify({
+      format: 'auditable-notebook',
+      v: 1,
+      title: finalName.replace(/\.html$/, ''),
+      cells: [],
+      settings: { theme: 'dark', fontSize: 13, width: '860' },
+    });
+  } else {
+    content = __AUDITABLE_RUNTIME__;
+  }
+  await createEntry(rootIndex, parentPath, finalName, content);
   await renderTree();
   openTab(rootIndex, parentPath ? parentPath + '/' + finalName : finalName, finalName, { permanent: true });
 }
