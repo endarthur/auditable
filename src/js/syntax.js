@@ -59,6 +59,79 @@ export function tokenize(code) {
       const start = i;
       while (i < len && /\w/.test(code[i])) i++;
       const word = code.slice(start, i);
+
+      // tagged template literal — delegate to registered language tokenizer
+      if (i < len && code[i] === '`' && typeof window !== 'undefined'
+          && window._taggedLanguages && window._taggedLanguages[word]) {
+        const lang = window._taggedLanguages[word];
+        tokens.push({ type: 'fn', text: word });
+        tokens.push({ type: 'punc', text: '`' });
+        i++; // skip opening backtick
+        // tokenize template content: string parts via lang.tokenize, ${} via JS tokenize
+        let strBuf = '';
+        while (i < len && code[i] !== '`') {
+          if (code[i] === '\\') {
+            strBuf += code[i] + (i + 1 < len ? code[i + 1] : '');
+            i += 2;
+            continue;
+          }
+          if (code[i] === '$' && i + 1 < len && code[i + 1] === '{') {
+            // flush string buffer through language tokenizer
+            if (strBuf) {
+              const langTokens = lang.tokenize(strBuf);
+              tokens.push(...langTokens);
+              strBuf = '';
+            }
+            tokens.push({ type: 'punc', text: '${' });
+            i += 2;
+            // collect JS expression inside ${...}
+            let depth = 1;
+            let exprStart = i;
+            while (i < len && depth > 0) {
+              if (code[i] === '{') depth++;
+              else if (code[i] === '}') { depth--; if (depth === 0) break; }
+              else if (code[i] === '`') {
+                // skip nested template literals
+                i++;
+                while (i < len && code[i] !== '`') {
+                  if (code[i] === '\\') i++;
+                  i++;
+                }
+              } else if (code[i] === '"' || code[i] === "'") {
+                const q = code[i]; i++;
+                while (i < len && code[i] !== q) {
+                  if (code[i] === '\\') i++;
+                  i++;
+                }
+              }
+              i++;
+            }
+            const expr = code.slice(exprStart, i);
+            if (expr) {
+              const jsTokens = tokenize(expr);
+              tokens.push(...jsTokens);
+            }
+            if (i < len && code[i] === '}') {
+              tokens.push({ type: 'punc', text: '}' });
+              i++;
+            }
+            continue;
+          }
+          strBuf += code[i];
+          i++;
+        }
+        // flush remaining string buffer
+        if (strBuf) {
+          const langTokens = lang.tokenize(strBuf);
+          tokens.push(...langTokens);
+        }
+        if (i < len && code[i] === '`') {
+          tokens.push({ type: 'punc', text: '`' });
+          i++;
+        }
+        continue;
+      }
+
       if (JS_KEYWORDS.has(word)) {
         tokens.push({ type: 'kw', text: word });
       } else if (JS_BUILTINS.has(word)) {

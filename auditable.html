@@ -2339,6 +2339,79 @@ function tokenize(code) {
       const start = i;
       while (i < len && /\w/.test(code[i])) i++;
       const word = code.slice(start, i);
+
+      // tagged template literal — delegate to registered language tokenizer
+      if (i < len && code[i] === '`' && typeof window !== 'undefined'
+          && window._taggedLanguages && window._taggedLanguages[word]) {
+        const lang = window._taggedLanguages[word];
+        tokens.push({ type: 'fn', text: word });
+        tokens.push({ type: 'punc', text: '`' });
+        i++; // skip opening backtick
+        // tokenize template content: string parts via lang.tokenize, ${} via JS tokenize
+        let strBuf = '';
+        while (i < len && code[i] !== '`') {
+          if (code[i] === '\\') {
+            strBuf += code[i] + (i + 1 < len ? code[i + 1] : '');
+            i += 2;
+            continue;
+          }
+          if (code[i] === '$' && i + 1 < len && code[i + 1] === '{') {
+            // flush string buffer through language tokenizer
+            if (strBuf) {
+              const langTokens = lang.tokenize(strBuf);
+              tokens.push(...langTokens);
+              strBuf = '';
+            }
+            tokens.push({ type: 'punc', text: '${' });
+            i += 2;
+            // collect JS expression inside ${...}
+            let depth = 1;
+            let exprStart = i;
+            while (i < len && depth > 0) {
+              if (code[i] === '{') depth++;
+              else if (code[i] === '}') { depth--; if (depth === 0) break; }
+              else if (code[i] === '`') {
+                // skip nested template literals
+                i++;
+                while (i < len && code[i] !== '`') {
+                  if (code[i] === '\\') i++;
+                  i++;
+                }
+              } else if (code[i] === '"' || code[i] === "'") {
+                const q = code[i]; i++;
+                while (i < len && code[i] !== q) {
+                  if (code[i] === '\\') i++;
+                  i++;
+                }
+              }
+              i++;
+            }
+            const expr = code.slice(exprStart, i);
+            if (expr) {
+              const jsTokens = tokenize(expr);
+              tokens.push(...jsTokens);
+            }
+            if (i < len && code[i] === '}') {
+              tokens.push({ type: 'punc', text: '}' });
+              i++;
+            }
+            continue;
+          }
+          strBuf += code[i];
+          i++;
+        }
+        // flush remaining string buffer
+        if (strBuf) {
+          const langTokens = lang.tokenize(strBuf);
+          tokens.push(...langTokens);
+        }
+        if (i < len && code[i] === '`') {
+          tokens.push({ type: 'punc', text: '`' });
+          i++;
+        }
+        continue;
+      }
+
       if (JS_KEYWORDS.has(word)) {
         tokens.push({ type: 'kw', text: word });
       } else if (JS_BUILTINS.has(word)) {
@@ -3256,6 +3329,10 @@ async function execCell(cell) {
     if (url === '@python') return python;
     if (url === '@python/this') { display(zenOfPython()); return python; }
     if (window._importCache[url]) return window._importCache[url];
+
+    const langsBefore = window._taggedLanguages ? Object.keys(window._taggedLanguages).length : 0;
+
+    let mod;
     // check installed (offline) modules first
     if (window._installedModules[url]) {
       const entry = window._installedModules[url];
@@ -3264,12 +3341,23 @@ async function execCell(cell) {
       try { src = resolveModulePaths(src, url); } catch {}
       const blob = new Blob([src], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
-      const mod = await import(blobUrl);
-      window._importCache[url] = mod;
-      return mod;
+      mod = await import(blobUrl);
+    } else {
+      mod = await import(url);
     }
-    const mod = await import(url);
     window._importCache[url] = mod;
+
+    // if the module registered new tagged languages, re-highlight all code cells
+    const langsAfter = window._taggedLanguages ? Object.keys(window._taggedLanguages).length : 0;
+    if (langsAfter > langsBefore) {
+      for (const c of S.cells) {
+        if (c.type !== 'code') continue;
+        const ta = c.el.querySelector('textarea');
+        const hl = c.el.querySelector('.highlight-layer');
+        if (ta && hl) highlightCode(ta, hl);
+      }
+    }
+
     return mod;
   };
 
@@ -4185,7 +4273,7 @@ function togglePresent() {
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_BUILD_DATE__ = '2026-02-22';
-const __AUDITABLE_BASE_SIZE__ = 221116;
+const __AUDITABLE_BASE_SIZE__ = 225687;
 
 (function() {
   const ver = $('#aboutVersion');
@@ -5738,8 +5826,23 @@ function cursorContext(code, cursor) {
       }
       continue;
     }
-    // template literal
+    // template literal (possibly tagged)
     if (ch === '`') {
+      // look back for a tag name: identifier immediately before the backtick
+      let tagName = null;
+      if (i > 0) {
+        let te = i;
+        let ts = te;
+        while (ts > 0 && /\w/.test(code[ts - 1])) ts--;
+        if (ts < te) {
+          const candidate = code.slice(ts, te);
+          if (typeof window !== 'undefined' && window._taggedLanguages
+              && window._taggedLanguages[candidate]) {
+            tagName = candidate;
+          }
+        }
+      }
+
       i++;
       let depth = 0;
       while (i < code.length) {
@@ -5760,7 +5863,7 @@ function cursorContext(code, cursor) {
           continue;
         }
         if (code[i] === '`') { i++; break; }
-        if (i >= cursor) return 'string';
+        if (i >= cursor) return tagName ? { type: 'tagged', lang: tagName } : 'string';
         i++;
       }
       continue;
@@ -5811,6 +5914,27 @@ function getPropsForValue(val) {
 
 function getCompletions(code, cursor, cellId) {
   const ctx = cursorContext(code, cursor);
+
+  // tagged template literal — delegate to extension completions
+  if (ctx && typeof ctx === 'object' && ctx.type === 'tagged') {
+    const lang = typeof window !== 'undefined' && window._taggedLanguages
+      && window._taggedLanguages[ctx.lang];
+    if (lang && lang.completions) {
+      const { prefix, start } = extractPrefix(code, cursor);
+      if (!prefix) return { prefix: '', items: [] };
+      const extItems = lang.completions(prefix);
+      // score and annotate items
+      const items = [];
+      for (const it of extItems) {
+        const m = fuzzyMatch(prefix, it.text);
+        if (m) items.push({ text: it.text, kind: it.kind || 'var', score: m.score, indices: m.indices });
+      }
+      items.sort((a, b) => b.score - a.score || a.text.localeCompare(b.text));
+      return { prefix, items: items.slice(0, 30) };
+    }
+    return { prefix: '', items: [] };
+  }
+
   if (ctx !== 'code') return { prefix: '', items: [] };
 
   // check for dot completion

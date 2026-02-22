@@ -5,6 +5,7 @@
 // To add a new example: append an entry to the `examples` array below,
 // then run `node gen_examples.js`.
 
+const fs = require('fs');
 const path = require('path');
 const makeExample = require('./make_example');
 
@@ -114,16 +115,34 @@ const examples = [
       { type: 'code', code: "// range for quick sequences\nprint(\"range(5):         \" + range(5))\nprint(\"range(2, 8):      \" + range(2, 8))\nprint(\"range(0, 20, 3):  \" + range(0, 20, 3))\nprint(\"range(10, 0, -2): \" + range(10, 0, -2))" },
       { type: 'code', code: "// the easter egg\nawait load(\"@python/this\")" }
     ]
+  },
+  {
+    file: 'example_shader.html',
+    title: 'shader playground',
+    // modules injected at build time — see generate loop below
+    _buildModule: { url: './ext/shader/index.js', path: 'ext/shader/index.js' },
+    cells: [
+      { type: 'md', code: "# shader playground\n\na Shadertoy-compatible WebGL 2 shader running in a single cell. the `@auditable/shader` extension injects `iTime`, `iResolution`, `iMouse` and other builtins automatically \u2014 just write `mainImage`. the `glsl` tag provides syntax highlighting and completions inside the template literal.\n\nthe sliders use `onInput` callbacks to update custom uniforms in real time, with zero DAG overhead." },
+      { type: 'code', code: "// %manual\nconst { shader, glsl } = await load(\"./ext/shader/index.js\");\n\nconst c = ui.canvas(600, 400);\nconst col = [0.78, 0.61, 0.24];\n\nconst s = shader(c, glsl`\n  void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n    vec2 uv = fragCoord / iResolution.xy;\n    float t = iTime * speed;\n\n    // layered sine waves\n    float r = 0.5 + 0.5 * sin(uv.x * 6.0 + t);\n    float g = 0.5 + 0.5 * sin(uv.y * 6.0 + t * 1.3 + 2.0);\n    float b = 0.5 + 0.5 * sin((uv.x + uv.y) * 4.0 + t * 0.7 + 4.0);\n\n    // mix with custom color\n    vec3 base = vec3(r, g, b);\n    fragColor = vec4(mix(base, color, 0.4), 1.0);\n  }\n`, {\n  uniforms: { speed: 1.0, color: col }\n});\n\nui.slider(\"speed\", 1.0, {min: 0.1, max: 5.0, step: 0.1, onInput: v => s.set(\"speed\", v)});\nui.slider(\"red\",   0.78, {min: 0, max: 1, step: 0.01, onInput: v => { col[0] = v; s.set(\"color\", col); }});\nui.slider(\"green\", 0.61, {min: 0, max: 1, step: 0.01, onInput: v => { col[1] = v; s.set(\"color\", col); }});\nui.slider(\"blue\",  0.24, {min: 0, max: 1, step: 0.01, onInput: v => { col[2] = v; s.set(\"color\", col); }});\n\ninvalidation.then(() => s.destroy());" }
+    ]
   }
 ];
 
 // ── Generate ──
 console.log('Generating examples from auditable.html:');
 for (const ex of examples) {
+  // build modules map if _buildModule is specified
+  let modules = ex.modules || undefined;
+  if (ex._buildModule) {
+    const modPath = path.join(__dirname, ex._buildModule.path);
+    const source = fs.readFileSync(modPath, 'utf8');
+    modules = { [ex._buildModule.url]: { source, cellId: null } };
+  }
   makeExample({
     title: ex.title,
     cells: ex.cells,
     settings: ex.settings || { theme: 'dark', fontSize: 13, width: '860' },
+    modules,
     outPath: path.join(outDir, ex.file)
   });
 }
