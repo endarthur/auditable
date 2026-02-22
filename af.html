@@ -571,6 +571,67 @@ button.accent:hover {
   border-color: var(--accent);
 }
 
+/* ── TOOLBAR BADGES ── */
+.toolbar-badges {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 6px;
+  align-items: center;
+}
+.toolbar-badge {
+  font-size: 9px;
+  letter-spacing: 0.5px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  user-select: none;
+  opacity: 0.85;
+}
+.toolbar-badge-signed {
+  color: var(--ok);
+  border: 1px solid color-mix(in srgb, var(--ok) 40%, transparent);
+}
+.toolbar-badge-packed {
+  color: var(--fg-dim);
+  border: 1px solid var(--border);
+}
+
+/* ── SPLIT SAVE BUTTON ── */
+.save-split {
+  display: inline-flex;
+  position: relative;
+}
+.save-split button:first-child {
+  border-right: none;
+  border-radius: 3px 0 0 3px;
+}
+.save-caret {
+  border-radius: 0 3px 3px 0 !important;
+  padding: 4px 4px !important;
+  font-size: 10px;
+}
+.save-tray {
+  display: none;
+  position: absolute;
+  right: 0;
+  top: 100%;
+  margin-top: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  z-index: 100;
+  min-width: 120px;
+}
+.save-tray.open { display: flex; flex-direction: column; }
+.save-tray button {
+  border: none;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  padding: 6px 10px;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.save-tray button:last-child { border-bottom: none; }
+.save-tray button:hover { background: var(--bg-hi); }
+
 /* ── TRANSPORT CONTROLS ── */
 .transport {
   display: inline-flex;
@@ -662,6 +723,7 @@ button.accent:hover {
 .action-more-tray button:last-child { border-bottom: none; }
 .action-add-tray button:hover,
 .action-more-tray button:hover { background: var(--bg2); color: var(--fg-bright); }
+.action-more-tray button.active-mode { color: var(--accent); }
 
 /* ── CELL INSERT / CONVERT BUTTONS (touch only) ── */
 .cell-insert { display: none; }
@@ -1497,6 +1559,115 @@ html.hide-run-toggle #autorunBtnMobile { display: none; }
   font-style: italic;
   padding: 4px 0;
 }
+/* ── UPDATE PANEL ── */
+.update-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 1000;
+}
+.update-overlay.visible { display: block; }
+.update-panel {
+  display: none;
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 280px;
+  max-width: 90vw;
+  background: var(--bg1);
+  border-left: 1px solid var(--border);
+  padding: 20px;
+  overflow-y: auto;
+  z-index: 1001;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg);
+}
+.update-panel h2 {
+  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  margin: 0 0 12px 0;
+}
+.update-panel .settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+}
+.update-panel .settings-row label { color: var(--fg-dim); font-size: 11px; }
+.update-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0;
+}
+.update-actions button {
+  width: 100%;
+  padding: 8px 10px;
+}
+.update-status {
+  font-size: 11px;
+  padding: 8px 0;
+  line-height: 1.5;
+}
+.update-status strong { color: var(--fg-bright); }
+.update-status button {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+.update-status button:hover {
+  border-color: var(--accent);
+}
+.update-ok { color: var(--ok); }
+.update-err { color: var(--err); }
+.update-warn { color: var(--accent); }
+.update-available { color: var(--fg); }
+.update-notes {
+  color: var(--fg-dim);
+  font-size: 11px;
+  padding: 6px 0;
+  max-height: 120px;
+  overflow-y: auto;
+  line-height: 1.4;
+}
+.update-notes p { margin: 0 0 4px; }
+.update-notes ul { margin: 2px 0; padding-left: 16px; }
+.update-notes li { margin: 1px 0; }
+.update-notes h1, .update-notes h2, .update-notes h3 { font-size: 11px; margin: 4px 0 2px; color: var(--fg); }
+.update-confirm {
+  display: flex;
+  gap: 8px;
+  padding: 6px 0;
+}
+.update-confirm button { width: auto; }
+.update-sig {
+  font-size: 11px;
+}
+.update-key-truncated {
+  cursor: pointer;
+}
+.update-key-truncated:hover {
+  color: var(--accent);
+}
+.update-key-expanded {
+  word-break: break-all;
+  user-select: all;
+  cursor: pointer;
+  color: var(--fg-bright);
+}
+/* ── UPDATE BUTTON IN OVERFLOW TRAY ── */
+.toolbar-update-btn {
+  color: var(--accent) !important;
+}
+
 .settings-about {
   margin-top: 24px;
   padding-top: 12px;
@@ -1603,6 +1774,87 @@ body.presenting .find-bar { display: none !important; }
 .search-match-current {
   background: rgba(200,155,60,0.5);
   outline: 1px solid var(--accent);
+}
+
+/* ── AUTOCOMPLETE MENU ── */
+.ac-menu {
+  position: absolute;
+  z-index: 10;
+  background: #1e1e1e;
+  border: 1px solid #444;
+  border-radius: 3px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  max-height: 200px;
+  overflow-y: auto;
+  font-family: var(--mono);
+  font-size: var(--editor-font-size);
+  min-width: 120px;
+}
+.ac-item {
+  padding: 2px 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.ac-item.active,
+.ac-item:hover {
+  background: rgba(200,155,60,0.2);
+}
+.ac-kind {
+  width: 16px;
+  height: 16px;
+  border-radius: 2px;
+  font-size: 10px;
+  text-align: center;
+  line-height: 16px;
+  flex-shrink: 0;
+}
+.ac-kind-var, .ac-kind-def { color: #5ca7e4; }
+.ac-kind-fn { color: #c89b3c; }
+.ac-kind-kw { color: #cc7832; }
+.ac-kind-const { color: #9876aa; }
+.ac-kind-prop { color: #6a8759; }
+.ac-text { color: var(--fg-bright); }
+.ac-detail {
+  margin-left: auto;
+  padding-left: 12px;
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+.ac-match { font-weight: bold; }
+.ac-sig-hint {
+  position: absolute;
+  z-index: 10;
+  background: #1e1e1e;
+  border: 1px solid #444;
+  border-radius: 3px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  padding: 3px 8px;
+  font-family: var(--mono);
+  font-size: var(--editor-font-size);
+  white-space: nowrap;
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+.ac-sig-fn { color: var(--fg-bright); }
+.ac-sig-active { color: var(--accent); font-weight: bold; text-decoration: underline; }
+.ac-sig-desc { color: var(--fg-dim); font-size: 11px; }
+:root.light .ac-sig-hint {
+  background: #eae8e3;
+  border-color: #b0ab9f;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+:root.light .ac-menu {
+  background: #eae8e3;
+  border-color: #b0ab9f;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+:root.light .ac-item.active,
+:root.light .ac-item:hover {
+  background: rgba(153,107,31,0.15);
 }
 
 /* ── LIGHT THEME ── */
@@ -1947,8 +2199,36 @@ body.presenting .find-bar { display: none !important; }
   </div>
 </div>
 
+<div class="update-overlay" id="updateOverlay" onclick="if(event.target===this)toggleUpdate()"></div>
+<div class="update-panel" id="updatePanel">
+  <button class="settings-close" onclick="toggleUpdate()">&#x00d7;</button>
+  <h2>update</h2>
+  <div class="settings-row">
+    <label>version</label>
+    <span id="updateCurrentVer">v0.0.0</span>
+  </div>
+  <div class="settings-row">
+    <label>release</label>
+    <span id="updateRelease">dev</span>
+  </div>
+  <div class="settings-row">
+    <label>signature</label>
+    <span id="updateSigStatus" class="update-sig">checking...</span>
+  </div>
+  <div class="settings-row">
+    <label>public key</label>
+    <span id="updatePubKey" class="update-sig">-</span>
+  </div>
+  <div id="updateStatus" class="update-status"></div>
+  <div class="update-actions">
+    <button id="updateCheckBtn" onclick="checkForUpdate()">check for updates</button>
+    <button onclick="updateFromFile()">update from file</button>
+  </div>
+</div>
+
 <div class="toolbar">
   <span class="toolbar-title">auditable</span>
+  <span class="toolbar-badges" id="toolbarBadges"></span>
   <span class="toolbar-sep"></span>
   <span class="toolbar-filename">
     <input type="text" id="docTitle" value="untitled" spellcheck="false">
@@ -1965,7 +2245,13 @@ body.presenting .find-bar { display: none !important; }
     <button onclick="runAll()" title="run all cells">&#x25b6;&#x25b6;</button>
   </span>
   <span class="toolbar-right">
-    <button class="accent" onclick="saveNotebook()">save</button>
+    <span class="save-split">
+      <button class="accent" onclick="saveNotebook()"><span id="saveLabel">save</span></button><button class="accent save-caret" onclick="toggleSaveTray()">&#x25be;</button>
+      <div class="save-tray" id="saveTray">
+        <button onclick="setSaveMode('normal');saveNotebook()">save</button>
+        <button onclick="setSaveMode('packed');saveNotebook()">save packed</button>
+      </div>
+    </span>
     <div class="toolbar-overflow">
       <button onclick="toggleToolbarMenu()" title="more">&#x22ef;</button>
       <div class="toolbar-overflow-tray">
@@ -1974,6 +2260,7 @@ body.presenting .find-bar { display: none !important; }
         <button onclick="expandAll();toggleToolbarMenu()">expand all</button>
         <button onclick="$('#helpOverlay').classList.toggle('visible');toggleToolbarMenu()">help (F1)</button>
         <button onclick="toggleSettings();toggleToolbarMenu()">settings</button>
+        <button class="toolbar-update-btn" onclick="toggleUpdate();toggleToolbarMenu()">update</button>
         <button onclick="togglePresent();toggleToolbarMenu()">present</button>
         <button onclick="openFind(false);toggleToolbarMenu()">find (Ctrl+F)</button>
       </div>
@@ -2031,11 +2318,13 @@ body.presenting .find-bar { display: none !important; }
     <div>
       <div class="action-more-tray">
         <button onclick="newNotebook();toggleMoreTray()">new</button>
-        <button onclick="saveNotebook();toggleMoreTray()">save</button>
+        <button id="mobileSaveBtn" class="active-mode" onclick="setSaveMode('normal');saveNotebook();toggleMoreTray()">save</button>
+        <button id="mobilePackBtn" onclick="setSaveMode('packed');saveNotebook();toggleMoreTray()">save packed</button>
         <button onclick="collapseAll();toggleMoreTray()">collapse all</button>
         <button onclick="expandAll();toggleMoreTray()">expand all</button>
         <button onclick="$('#helpOverlay').classList.toggle('visible');toggleMoreTray()">help</button>
         <button onclick="toggleSettings();toggleMoreTray()">settings</button>
+        <button class="toolbar-update-btn" onclick="toggleUpdate();toggleMoreTray()">update</button>
         <button onclick="togglePresent();toggleMoreTray()">present</button>
         <button onclick="openFind(false);toggleMoreTray()">find</button>
       </div>
@@ -2090,6 +2379,7 @@ const JS_BUILTINS = new Set([
   'Int32Array','Uint8Array','Map','Set','Promise','console','JSON',
   'display','canvas','table','slider','dropdown','checkbox','textInput','load','install'
 ]);
+
 
 // -- syntax.js --
 
@@ -3367,6 +3657,7 @@ function createCellEl(type, id) {
     const ln = div.querySelector('.line-numbers');
     ta.addEventListener('input', () => { highlightCode(ta, hl); onCodeEdit(id); });
     ta.addEventListener('scroll', () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; ln.scrollTop = ta.scrollTop; });
+    attachAutocomplete(ta, id);
     ta.addEventListener('keydown', handleTab);
     ta.addEventListener('input', autoResize);
   } else if (type === 'css') {
@@ -3959,6 +4250,7 @@ function applySettings(s) {
   if (s.execMode) applyExecMode(s.execMode);
   if (s.runOnLoad) applyRunOnLoad(s.runOnLoad);
   if (s.showToggle) applyShowToggle(s.showToggle);
+  // optional: size-compare.js (typeof guards for --lean builds without it)
   if (s.sizeCompare !== undefined && typeof applySizeCompare === 'function') applySizeCompare(s.sizeCompare);
   if (s.sizeCompareRef !== undefined && typeof applySizeCompareRef === 'function') applySizeCompareRef(s.sizeCompareRef);
 }
@@ -3969,16 +4261,17 @@ function togglePresent() {
 
 // ── ABOUT ──
 
-const __AUDITABLE_VERSION__ = '0.1.0';
+const __AUDITABLE_VERSION__ = '0.3.0';
+const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_BUILD_DATE__ = '2026-02-22';
-const __AUDITABLE_BASE_SIZE__ = 154159;
+const __AUDITABLE_BASE_SIZE__ = 205926;
 
 (function() {
   const ver = $('#aboutVersion');
   const build = $('#aboutBuild');
   const rt = $('#aboutRuntime');
   if (ver) ver.textContent = 'auditable v' + __AUDITABLE_VERSION__;
-  if (build) build.textContent = 'built ' + __AUDITABLE_BUILD_DATE__;
+  if (build) build.textContent = (__AUDITABLE_RELEASE__ !== 'dev' ? __AUDITABLE_RELEASE__ + ' \\u00b7 ' : '') + 'built ' + __AUDITABLE_BUILD_DATE__;
   if (rt && __AUDITABLE_BASE_SIZE__ > 0) rt.textContent = 'runtime ' + (__AUDITABLE_BASE_SIZE__ / 1024).toFixed(1) + ' KB';
 })();
 
@@ -4060,11 +4353,510 @@ function removeModule(url) {
   updateStatus();
 }
 
+// -- update.js --
+
+// ── UPDATE PANEL ──
+
+function toggleUpdate() {
+  const overlay = $('#updateOverlay');
+  const panel = $('#updatePanel');
+  const open = !overlay.classList.contains('visible');
+  overlay.classList.toggle('visible');
+  panel.style.display = open ? 'block' : 'none';
+}
+
+// ── SELF-UPDATE SYSTEM ──
+
+const __AUDITABLE_PUBLIC_KEY__ = '';
+const __AUDITABLE_REPO__ = 'endarthur/auditable';
+const __AUDITABLE_PAGES_URL__ = 'https://endarthur.github.io/auditable';
+
+// ── SIGNATURE EXTRACTION ──
+
+function extractSignature(html) {
+  const m = html.match(/<!--AUDITABLE-SIGNATURE\\n([\\s\\S]*?)\\nAUDITABLE-SIGNATURE-->/);
+  if (!m) return null;
+  try { return JSON.parse(m[1]); } catch { return null; }
+}
+
+// ── RUNTIME EXTRACTION ──
+
+function extractRuntime(html) {
+  const style = html.match(/<style>([\\s\\S]*?)<\\/style>/);
+  const script = html.match(/<script>([\\s\\S]*?)<\\/script>/);
+  if (!style || !script) return null;
+  return { style: style[1], script: script[1] };
+}
+
+// ── DATA EXTRACTION ──
+
+function extractData(html) {
+  const data = html.match(/<!--AUDITABLE-DATA\\n([\\s\\S]*?)\\nAUDITABLE-DATA-->/);
+  const settings = html.match(/<!--AUDITABLE-SETTINGS\\n([\\s\\S]*?)\\nAUDITABLE-SETTINGS-->/);
+  const modules = html.match(/<!--AUDITABLE-MODULES\\n([\\s\\S]*?)\\nAUDITABLE-MODULES-->/);
+  const title = html.match(/<title>([^<]*)<\\/title>/);
+  return {
+    data: data ? data[0] : null,
+    settings: settings ? settings[0] : null,
+    modules: modules ? modules[0] : null,
+    title: title ? title[1].replace(/^Auditable\\s*\\u2014\\s*/, '') : 'untitled',
+  };
+}
+
+// ── SIGNED CONTENT CONSTRUCTION ──
+
+function buildSignedContent(style, script) {
+  return 'AUDITABLE-SIGNED-CONTENT\\n'
+    + style + '\\n'
+    + 'AUDITABLE-STYLE-SCRIPT-BOUNDARY\\n'
+    + script;
+}
+
+// ── SIGNATURE VERIFICATION (Web Crypto) ──
+
+async function verifySignature(html) {
+  const sig = extractSignature(html);
+  if (!sig) return { status: 'unsigned' };
+
+  const pubKeyB64 = __AUDITABLE_PUBLIC_KEY__;
+  if (!pubKeyB64) return { status: 'no-key', sig };
+
+  // Check if the signature's public key matches ours
+  if (sig.pub !== pubKeyB64) return { status: 'wrong-key', sig };
+
+  const runtime = extractRuntime(html);
+  if (!runtime) return { status: 'error', message: 'could not extract runtime' };
+
+  const content = buildSignedContent(runtime.style, runtime.script);
+
+  try {
+    const pubBytes = Uint8Array.from(atob(pubKeyB64), c => c.charCodeAt(0));
+    const key = await crypto.subtle.importKey(
+      'raw', pubBytes, { name: 'Ed25519' }, false, ['verify']
+    );
+    const sigBytes = Uint8Array.from(atob(sig.sig), c => c.charCodeAt(0));
+    const msgBytes = new TextEncoder().encode(content);
+    const valid = await crypto.subtle.verify('Ed25519', key, sigBytes, msgBytes);
+    return { status: valid ? 'valid' : 'invalid', sig };
+  } catch (e) {
+    if (e.name === 'NotSupportedError') {
+      return { status: 'unsupported', message: 'browser does not support Ed25519 verification' };
+    }
+    return { status: 'error', message: e.message };
+  }
+}
+
+// ── REASSEMBLE ──
+
+function reassemble(newHtml, oldData) {
+  let html = newHtml;
+
+  // Remove any existing data/settings/modules comments from the new template
+  html = html.replace(/<!--AUDITABLE-DATA\\n[\\s\\S]*?\\nAUDITABLE-DATA-->\\n?/g, '');
+  html = html.replace(/<!--AUDITABLE-SETTINGS\\n[\\s\\S]*?\\nAUDITABLE-SETTINGS-->\\n?/g, '');
+  html = html.replace(/<!--AUDITABLE-MODULES\\n[\\s\\S]*?\\nAUDITABLE-MODULES-->\\n?/g, '');
+
+  // Build data block to inject
+  const parts = [];
+  if (oldData.data) parts.push(oldData.data);
+  if (oldData.modules) parts.push(oldData.modules);
+  if (oldData.settings) parts.push(oldData.settings);
+  const dataBlock = parts.length ? '\\n' + parts.join('\\n') + '\\n' : '';
+
+  // Inject before the signature comment or before <script>
+  const sigIdx = html.indexOf('<!--AUDITABLE-SIGNATURE');
+  const scriptIdx = html.indexOf('<script>');
+  const insertIdx = sigIdx >= 0 ? sigIdx : scriptIdx;
+  if (insertIdx >= 0) {
+    html = html.slice(0, insertIdx) + dataBlock + html.slice(insertIdx);
+  }
+
+  // Update title
+  if (oldData.title && oldData.title !== 'untitled') {
+    html = html.replace(/<title>[^<]*<\\/title>/, '<title>Auditable \\u2014 ' + escHtml(oldData.title) + '</title>');
+    // Also update the docTitle input value
+    html = html.replace(/(<input[^>]*id="docTitle"[^>]*value=")[^"]*"/, '$1' + escHtml(oldData.title) + '"');
+  }
+
+  return html;
+}
+
+function escHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ── VERSION COMPARISON ──
+
+function compareVersions(a, b) {
+  // compare semver strings like "0.1.0" vs "0.2.0"
+  const pa = a.replace(/^v/, '').split('.').map(Number);
+  const pb = b.replace(/^v/, '').split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const na = pa[i] || 0, nb = pb[i] || 0;
+    if (na < nb) return -1;
+    if (na > nb) return 1;
+  }
+  return 0;
+}
+
+// ── TOOLBAR BADGES ──
+
+function setBadge(id, label, cls) {
+  const container = $('#toolbarBadges');
+  if (!container) return;
+  let el = container.querySelector('[data-badge="' + id + '"]');
+  if (!label) {
+    if (el) el.remove();
+    return;
+  }
+  if (!el) {
+    el = document.createElement('span');
+    el.className = 'toolbar-badge toolbar-badge-' + id;
+    el.setAttribute('data-badge', id);
+    container.appendChild(el);
+  }
+  el.textContent = label;
+  if (cls) el.className = 'toolbar-badge ' + cls;
+}
+
+// ── UPDATE STATUS UI ──
+
+function setUpdateStatus(html, cls) {
+  const el = $('#updateStatus');
+  if (el) {
+    el.innerHTML = html;
+    el.className = 'update-status' + (cls ? ' update-' + cls : '');
+  }
+}
+
+// ── CHECK FOR UPDATE (GitHub API) ──
+
+async function checkForUpdate() {
+  const btn = $('#updateCheckBtn');
+  if (btn) btn.disabled = true;
+  setUpdateStatus('checking...', '');
+
+  try {
+    // Fetch version.json from GitHub Pages (CORS-friendly)
+    const vResp = await fetch(__AUDITABLE_PAGES_URL__ + '/version.json');
+    if (!vResp.ok) throw new Error('version check failed: ' + vResp.status);
+    const vData = await vResp.json();
+    const remoteVersion = vData.version || '';
+    const currentRelease = $('#updateRelease')?.textContent || 'dev';
+
+    if (currentRelease === 'dev') {
+      // Dev builds always offer the latest release
+    } else if (compareVersions(currentRelease, remoteVersion) >= 0) {
+      setUpdateStatus('up to date (' + currentRelease + ')', 'ok');
+      if (btn) btn.disabled = false;
+      return;
+    }
+
+    const notes = vData.notes || '';
+    const notesHtml = notes
+      ? '<div class="update-notes">' + renderMd(notes) + '</div>'
+      : '';
+
+    setUpdateStatus(
+      '<strong>' + remoteVersion + '</strong> available'
+      + notesHtml
+      + '<button id="updateApplyBtn" onclick="applyOnlineUpdate()">update</button>',
+      'available'
+    );
+
+    window._updateVersion = remoteVersion;
+  } catch (e) {
+    setUpdateStatus('error: ' + escHtml(e.message), 'err');
+  }
+  if (btn) btn.disabled = false;
+}
+
+// ── APPLY ONLINE UPDATE ──
+
+async function applyOnlineUpdate() {
+  setUpdateStatus('downloading...', '');
+
+  try {
+    // Download signed build from GitHub Pages (CORS-friendly)
+    const resp = await fetch(__AUDITABLE_PAGES_URL__ + '/auditable.html');
+    if (!resp.ok) throw new Error('download failed: ' + resp.status);
+    const newHtml = await resp.text();
+    await applyUpdate(newHtml, window._updateVersion);
+  } catch (e) {
+    setUpdateStatus('error: ' + escHtml(e.message), 'err');
+  }
+}
+
+// ── APPLY UPDATE (verify + reassemble + download) ──
+
+async function applyUpdate(newHtml, version) {
+  setUpdateStatus('verifying signature...', '');
+
+  const result = await verifySignature(newHtml);
+
+  if (result.status === 'invalid') {
+    setUpdateStatus('signature verification FAILED \\u2014 update rejected', 'err');
+    return;
+  }
+
+  const warnMessages = {
+    'unsigned': 'this file is not signed',
+    'no-key': 'no public key configured \\u2014 cannot verify signature',
+    'wrong-key': 'signed with an unknown key',
+  };
+  if (warnMessages[result.status]) {
+    setUpdateStatus(
+      'warning: ' + warnMessages[result.status]
+      + '<div class="update-confirm">'
+      + '<button onclick="proceedUpdate()">proceed anyway</button>'
+      + '<button onclick="cancelUpdate()">cancel</button>'
+      + '</div>',
+      'warn'
+    );
+    window._pendingUpdateHtml = newHtml;
+    window._pendingUpdateVersion = version;
+    return;
+  }
+
+  if (result.status === 'unsupported') {
+    setUpdateStatus(
+      result.message
+      + '<div class="update-confirm">'
+      + '<button onclick="proceedUpdate()">proceed without verification</button>'
+      + '<button onclick="cancelUpdate()">cancel</button>'
+      + '</div>',
+      'warn'
+    );
+    window._pendingUpdateHtml = newHtml;
+    window._pendingUpdateVersion = version;
+    return;
+  }
+
+  if (result.status === 'error') {
+    setUpdateStatus('verification error: ' + escHtml(result.message), 'err');
+    return;
+  }
+
+  // Valid signature — proceed
+  finishUpdate(newHtml, version);
+}
+
+function proceedUpdate() {
+  if (window._pendingUpdateHtml) {
+    finishUpdate(window._pendingUpdateHtml, window._pendingUpdateVersion);
+    delete window._pendingUpdateHtml;
+    delete window._pendingUpdateVersion;
+  }
+}
+
+function cancelUpdate() {
+  delete window._pendingUpdateHtml;
+  delete window._pendingUpdateVersion;
+  setUpdateStatus('update cancelled', '');
+}
+
+function finishUpdate(newHtml, version) {
+  setUpdateStatus('reassembling...', '');
+
+  // Extract current document as HTML to get data comments
+  const currentHtml = document.documentElement.outerHTML;
+  // But the data comments are in the body innerHTML at load time; grab from live source
+  const bodyHtml = document.body.innerHTML;
+  const fullHtml = '<!DOCTYPE html>\\n<html>' + document.head.outerHTML + '<body>' + bodyHtml + '</body></html>';
+
+  const oldData = extractData(fullHtml);
+  // Override title from live doc
+  const titleInput = $('#docTitle');
+  if (titleInput) oldData.title = titleInput.value || 'untitled';
+
+  // Build fresh data comments from live state (more reliable than regex from DOM)
+  if (S.cells.length) {
+    const cellData = S.cells.map(c => ({
+      type: c.type,
+      code: c.code,
+      collapsed: c.el?.classList.contains('collapsed') || undefined
+    }));
+    oldData.data = '<!--AUDITABLE-DATA\\n' + JSON.stringify(cellData) + '\\nAUDITABLE-DATA-->';
+  }
+  if (window._installedModules && Object.keys(window._installedModules).length) {
+    oldData.modules = '<!--AUDITABLE-MODULES\\n' + JSON.stringify(window._installedModules) + '\\nAUDITABLE-MODULES-->';
+  }
+  oldData.settings = '<!--AUDITABLE-SETTINGS\\n' + JSON.stringify(getSettings()) + '\\nAUDITABLE-SETTINGS-->';
+
+  const result = reassemble(newHtml, oldData);
+
+  // Offer as download
+  const title = (titleInput ? titleInput.value : 'untitled') || 'untitled';
+  const blob = new Blob([result], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.html';
+  a.click();
+  URL.revokeObjectURL(url);
+
+  const vLabel = version ? ' to ' + version : '';
+  setUpdateStatus('updated' + vLabel + ' \\u2014 saved as ' + a.download, 'ok');
+  setMsg('updated' + vLabel, 'ok');
+}
+
+// ── UPDATE FROM FILE ──
+
+function updateFromFile() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.html';
+  input.onchange = async () => {
+    const file = input.files[0];
+    if (!file) return;
+    setUpdateStatus('reading file...', '');
+    const text = await file.text();
+
+    // Try to extract version from the file
+    const vMatch = text.match(/__AUDITABLE_VERSION__\\s*=\\s*'([^']+)'/);
+    const version = vMatch ? 'v' + vMatch[1] : null;
+
+    await applyUpdate(text, version);
+  };
+  input.click();
+}
+
+// ── VERIFY CURRENT DOCUMENT ──
+
+async function verifySelf() {
+  const el = $('#updateSigStatus');
+  if (!el) return;
+
+  // Reconstruct from live DOM
+  const styleEl = document.querySelector('style');
+  const scriptEl = document.querySelector('script');
+  if (!styleEl || !scriptEl) {
+    el.textContent = 'error: no style/script';
+    el.className = 'update-sig update-err';
+    return;
+  }
+
+  const raw = document.body.innerHTML;
+  const sigMatch = raw.match(/<!--AUDITABLE-SIGNATURE\\n([\\s\\S]*?)\\nAUDITABLE-SIGNATURE-->/);
+  if (!sigMatch) {
+    el.textContent = 'unsigned';
+    el.className = 'update-sig update-warn';
+    return;
+  }
+
+  let sig;
+  try { sig = JSON.parse(sigMatch[1]); } catch {
+    el.textContent = 'invalid signature format';
+    el.className = 'update-sig update-err';
+    return;
+  }
+
+  const pubKeyB64 = __AUDITABLE_PUBLIC_KEY__;
+  if (!pubKeyB64) {
+    el.textContent = 'no public key configured';
+    el.className = 'update-sig update-warn';
+    return;
+  }
+
+  if (sig.pub !== pubKeyB64) {
+    el.textContent = 'signed with unknown key';
+    el.className = 'update-sig update-warn';
+    return;
+  }
+
+  const content = buildSignedContent(styleEl.textContent, scriptEl.textContent);
+
+  try {
+    const pubBytes = Uint8Array.from(atob(pubKeyB64), c => c.charCodeAt(0));
+    const key = await crypto.subtle.importKey(
+      'raw', pubBytes, { name: 'Ed25519' }, false, ['verify']
+    );
+    const sigBytes = Uint8Array.from(atob(sig.sig), c => c.charCodeAt(0));
+    const msgBytes = new TextEncoder().encode(content);
+    const valid = await crypto.subtle.verify('Ed25519', key, sigBytes, msgBytes);
+    if (valid) {
+      el.textContent = 'signed \\u2713';
+      el.className = 'update-sig update-ok';
+      setBadge('signed', 'signed', 'toolbar-badge toolbar-badge-signed');
+    } else {
+      el.textContent = 'signature invalid';
+      el.className = 'update-sig update-err';
+    }
+  } catch (e) {
+    if (e.name === 'NotSupportedError') {
+      el.textContent = 'Ed25519 not supported';
+      el.className = 'update-sig update-warn';
+    } else {
+      el.textContent = 'error: ' + e.message;
+      el.className = 'update-sig update-err';
+    }
+  }
+}
+
+// ── INIT ──
+(function() {
+  const ver = $('#updateCurrentVer');
+  if (ver) ver.textContent = 'v' + __AUDITABLE_VERSION__;
+  const rel = $('#updateRelease');
+  if (rel) {
+    rel.textContent = __AUDITABLE_RELEASE__;
+    if (__AUDITABLE_RELEASE__ === 'dev') rel.className = 'update-sig update-warn';
+  }
+  // Show public key status
+  const keyEl = $('#updatePubKey');
+  if (keyEl) {
+    if (__AUDITABLE_PUBLIC_KEY__) {
+      keyEl.textContent = __AUDITABLE_PUBLIC_KEY__.slice(0, 8) + '...';
+      keyEl.className = 'update-sig update-key-truncated';
+      keyEl.onclick = () => {
+        if (keyEl.classList.contains('update-key-expanded')) {
+          keyEl.textContent = __AUDITABLE_PUBLIC_KEY__.slice(0, 8) + '...';
+          keyEl.classList.remove('update-key-expanded');
+          keyEl.classList.add('update-key-truncated');
+        } else {
+          keyEl.textContent = __AUDITABLE_PUBLIC_KEY__;
+          keyEl.classList.remove('update-key-truncated');
+          keyEl.classList.add('update-key-expanded');
+        }
+      };
+    } else {
+      keyEl.textContent = 'not configured';
+      keyEl.className = 'update-sig update-warn';
+    }
+  }
+  // Run self-verification on load
+  verifySelf();
+})();
+
 // -- save.js --
 
 // ── SAVE / LOAD ──
 
-function saveNotebook() {
+// save mode: 'normal' or 'packed'
+let _saveMode = 'normal';
+
+function getSaveMode() { return _saveMode; }
+
+function toggleSaveTray() {
+  const tray = $('#saveTray');
+  if (tray) tray.classList.toggle('open');
+}
+
+function setSaveMode(mode) {
+  _saveMode = mode;
+  // update UI
+  const label = $('#saveLabel');
+  if (label) label.textContent = mode === 'packed' ? 'pack' : 'save';
+  const tray = $('#saveTray');
+  if (tray) tray.classList.remove('open');
+  // update mobile buttons
+  const mobSave = $('#mobileSaveBtn');
+  const mobPack = $('#mobilePackBtn');
+  if (mobSave) mobSave.classList.toggle('active-mode', mode === 'normal');
+  if (mobPack) mobPack.classList.toggle('active-mode', mode === 'packed');
+}
+
+function buildNotebookHtml() {
   // serialize current state back to a self-contained HTML file
   const title = $('#docTitle').value || 'untitled';
 
@@ -4087,6 +4879,13 @@ function saveNotebook() {
   const helpHTML = $('#helpOverlay').outerHTML;
   const settingsOvHTML = $('#settingsOverlay').outerHTML;
   const settingsPanHTML = $('#settingsPanel').outerHTML.replace(/display:\\s*block;?/, '');
+  const updateOvHTML = $('#updateOverlay').outerHTML.replace(/\\bvisible\\b/, '').replace(/class="\\s*"/, 'class=""');
+  const updatePanEl = $('#updatePanel').cloneNode(true);
+  updatePanEl.style.display = '';
+  // reset update status and dynamic text
+  const uStatus = updatePanEl.querySelector('#updateStatus');
+  if (uStatus) { uStatus.innerHTML = ''; uStatus.className = 'update-status'; }
+  const updatePanHTML = updatePanEl.outerHTML.replace(/display:\\s*block;?/, '');
   const statusbarHTML = document.querySelector('.statusbar').outerHTML;
 
   // read toolbar from live DOM and patch the title value
@@ -4100,9 +4899,17 @@ function saveNotebook() {
     autoBtn.className = savedMode === 'reactive' ? 'autorun-on' : 'autorun-off';
     autoBtn.textContent = savedMode === 'reactive' ? '\\u25b6' : '\\u2016';
   }
-  // close overflow if open
+  // close overflow and save tray if open
   const overflow = toolbarEl.querySelector('.toolbar-overflow');
   if (overflow) overflow.classList.remove('open');
+  const saveTray = toolbarEl.querySelector('#saveTray');
+  if (saveTray) saveTray.classList.remove('open');
+  // reset save label to default
+  const saveLabel = toolbarEl.querySelector('#saveLabel');
+  if (saveLabel) saveLabel.textContent = 'save';
+  // clear badges (they get set dynamically on load)
+  const badges = toolbarEl.querySelector('.toolbar-badges');
+  if (badges) badges.innerHTML = '';
   const toolbarHTML = toolbarEl.outerHTML;
 
   // capture find bar and reset to default state
@@ -4117,7 +4924,7 @@ function saveNotebook() {
   const findBarHTML = findBarEl.outerHTML;
 
   // build output HTML
-  let html = \`<!DOCTYPE html>
+  return \`<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -4131,6 +4938,9 @@ function saveNotebook() {
 
 \${settingsOvHTML}
 \${settingsPanHTML}
+
+\${updateOvHTML}
+\${updatePanHTML}
 
 \${toolbarHTML}
 
@@ -4150,6 +4960,26 @@ function saveNotebook() {
 <script>\\n\${script}\\n<\\/script>
 </body>
 </html>\`;
+}
+
+function downloadHtml(html, title) {
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.html';
+  a.click();
+  URL.revokeObjectURL(url);
+  return a.download;
+}
+
+function saveNotebook() {
+  if (_saveMode === 'packed') {
+    savePackedNotebook();
+    return;
+  }
+  const title = $('#docTitle').value || 'untitled';
+  const html = buildNotebookHtml();
 
   // AF bridge: send serialized HTML to parent shell instead of downloading
   if (window.__AF_BRIDGE__) {
@@ -4158,15 +4988,47 @@ function saveNotebook() {
     return;
   }
 
-  // download
-  const blob = new Blob([html], { type: 'text/html' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.html';
-  a.click();
-  URL.revokeObjectURL(url);
-  setMsg(\`saved \${a.download}\`, 'ok');
+  const fn = downloadHtml(html, title);
+  setMsg('saved ' + fn, 'ok');
+}
+
+async function savePackedNotebook() {
+  const title = $('#docTitle').value || 'untitled';
+  const html = buildNotebookHtml();
+
+  try {
+    // compress via CompressionStream
+    const blob = new Blob([html]);
+    const cs = new CompressionStream('gzip');
+    const stream = blob.stream().pipeThrough(cs);
+    const compressed = await new Response(stream).arrayBuffer();
+    const b64 = btoa(String.fromCharCode(...new Uint8Array(compressed)));
+
+    const loader = '<!DOCTYPE html>\\n'
+      + '<html lang="en"><head><meta charset="UTF-8">'
+      + '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
+      + '<title>Auditable \\u2014 ' + esc(title) + '</title>'
+      + '<style>html{background:#1a1a1a}'
+      + 'body{color:#999;font:14px/1.5 monospace;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}'
+      + '</style></head><body>'
+      + '<div id="_l">unpacking\\u2026</div>'
+      + '<script>'
+      + "(async()=>{"
+      + "var b='" + b64 + "';"
+      + "var r=new Response(new Blob([Uint8Array.from(atob(b),c=>c.charCodeAt(0))]));"
+      + "var s=r.body.pipeThrough(new DecompressionStream('gzip'));"
+      + "var h=await new Response(s).text();"
+      + "h=h.replace('<head>','<head><meta name=\\"auditable-packed\\">');"
+      + "document.open();document.write(h);document.close();"
+      + "})().catch(function(e){document.getElementById('_l').textContent='error: '+e.message});"
+      + '<\\/script></body></html>';
+
+    const fn = downloadHtml(loader, title);
+    const kb = (loader.length / 1024).toFixed(0);
+    setMsg('packed ' + fn + ' (' + kb + ' KB)', 'ok');
+  } catch (e) {
+    setMsg('pack failed: ' + e.message, 'err');
+  }
 }
 
 function esc(s) {
@@ -4681,8 +5543,743 @@ function escHtml(s) {
   });
 })();
 
-window.openFind = openFind;
-window.closeFind = closeFind;
+// -- complete.js --
+
+// ── AUTOCOMPLETE ENGINE ──
+
+// well-known property lists for dot completion on builtins
+const KNOWN_PROPS = {
+  Math: ['abs','acos','asin','atan','atan2','ceil','cos','exp','floor','hypot',
+         'log','log2','log10','max','min','pow','random','round','sign','sin',
+         'sqrt','tan','trunc','PI','E','LN2','LN10'],
+  Array: ['from','isArray','of'],
+  Object: ['keys','values','entries','assign','freeze','create','defineProperty','fromEntries','hasOwn'],
+  JSON: ['parse','stringify'],
+  console: ['log','warn','error','info','table','time','timeEnd','clear'],
+  Promise: ['all','allSettled','any','race','resolve','reject'],
+  Number: ['isFinite','isInteger','isNaN','parseFloat','parseInt','MAX_SAFE_INTEGER','MIN_SAFE_INTEGER','EPSILON'],
+  String: ['fromCharCode','fromCodePoint','raw'],
+};
+
+// common prototype methods by type
+const PROTO_PROPS = {
+  array: ['push','pop','shift','unshift','splice','slice','concat','join','reverse',
+          'sort','map','filter','reduce','reduceRight','find','findIndex','indexOf',
+          'includes','every','some','flat','flatMap','fill','forEach','at','length'],
+  string: ['charAt','charCodeAt','codePointAt','concat','endsWith','includes',
+           'indexOf','lastIndexOf','match','matchAll','padEnd','padStart','repeat',
+           'replace','replaceAll','search','slice','split','startsWith','substring',
+           'toLowerCase','toUpperCase','trim','trimEnd','trimStart','at','length'],
+  number: ['toFixed','toPrecision','toString','valueOf'],
+};
+
+// ── BUILTIN HELP (injected by build.js from src/builtins.json) ──
+
+const BUILTIN_HELP = {
+  "display": {
+    "sig": "display(...values)",
+    "desc": "output values to cell"
+  },
+  "canvas": {
+    "sig": "canvas(w?, h?)",
+    "desc": "create/reuse canvas (default 400\\u00d7300)"
+  },
+  "table": {
+    "sig": "table(data, columns?)",
+    "desc": "render array of objects as table"
+  },
+  "slider": {
+    "sig": "slider(label, default?, {min,max,step}?)",
+    "desc": "reactive range input"
+  },
+  "dropdown": {
+    "sig": "dropdown(label, options, default?)",
+    "desc": "reactive select menu"
+  },
+  "checkbox": {
+    "sig": "checkbox(label, default?)",
+    "desc": "reactive toggle"
+  },
+  "textInput": {
+    "sig": "textInput(label, default?)",
+    "desc": "reactive text field"
+  },
+  "load": {
+    "sig": "load(url)",
+    "desc": "import ES module (cached)"
+  },
+  "install": {
+    "sig": "install(url)",
+    "desc": "fetch & embed module for offline"
+  },
+  "invalidation": {
+    "sig": "invalidation",
+    "desc": "promise \\u2014 resolves when cell re-runs"
+  }
+};
+
+// ── FUZZY MATCHING ──
+
+// returns { score, indices } or null if no match
+// indices = positions in \`text\` that matched characters from \`query\`
+function fuzzyMatch(query, text) {
+  const qLen = query.length;
+  const tLen = text.length;
+  if (qLen === 0) return { score: 0, indices: [] };
+  if (qLen > tLen) return null;
+
+  const qLower = query.toLowerCase();
+  const tLower = text.toLowerCase();
+
+  // fast check: all query chars exist in text in order
+  let qi = 0;
+  for (let ti = 0; ti < tLen && qi < qLen; ti++) {
+    if (qLower[qi] === tLower[ti]) qi++;
+  }
+  if (qi < qLen) return null;
+
+  // find best match using a greedy approach that prefers word boundaries
+  // word boundaries: start of string, after _ or $, camelCase transitions
+  const indices = [];
+  qi = 0;
+
+  // first pass: try to match at word boundaries
+  const boundaryIndices = [];
+  let bqi = 0;
+  for (let ti = 0; ti < tLen && bqi < qLen; ti++) {
+    if (qLower[bqi] !== tLower[ti]) continue;
+    const isBoundary = ti === 0
+      || text[ti - 1] === '_' || text[ti - 1] === '$'
+      || (text[ti] >= 'A' && text[ti] <= 'Z' && (ti === 0 || text[ti - 1] < 'A' || text[ti - 1] > 'Z'));
+    if (isBoundary) {
+      boundaryIndices.push(ti);
+      bqi++;
+    }
+  }
+
+  if (bqi === qLen) {
+    // all chars matched at boundaries — use those indices
+    indices.push(...boundaryIndices);
+  } else {
+    // fallback: greedy left-to-right match, prefer consecutive runs
+    qi = 0;
+    for (let ti = 0; ti < tLen && qi < qLen; ti++) {
+      if (qLower[qi] === tLower[ti]) {
+        indices.push(ti);
+        qi++;
+      }
+    }
+  }
+
+  // score the match
+  let score = 0;
+
+  // bonus for matching at start of string
+  if (indices[0] === 0) score += 10;
+
+  // bonus for consecutive characters
+  for (let i = 1; i < indices.length; i++) {
+    if (indices[i] === indices[i - 1] + 1) score += 5;
+  }
+
+  // bonus for word boundary matches
+  for (const idx of indices) {
+    if (idx === 0) { score += 3; continue; }
+    const prev = text[idx - 1];
+    if (prev === '_' || prev === '$') { score += 3; continue; }
+    if (text[idx] >= 'A' && text[idx] <= 'Z' && (prev < 'A' || prev > 'Z')) score += 3;
+  }
+
+  // bonus for exact case match
+  for (let i = 0; i < indices.length; i++) {
+    if (query[i] === text[indices[i]]) score += 1;
+  }
+
+  // penalty for spread-out matches (large gaps between indices)
+  const span = indices[indices.length - 1] - indices[0];
+  score -= span * 0.5;
+
+  // slight penalty for longer names (prefer shorter completions)
+  score -= tLen * 0.1;
+
+  return { score, indices };
+}
+
+// determine cursor context: is it inside a string or comment?
+function cursorContext(code, cursor) {
+  let i = 0;
+  while (i < cursor) {
+    const ch = code[i];
+    // single-line comment
+    if (ch === '/' && code[i + 1] === '/') {
+      const nl = code.indexOf('\\n', i);
+      if (nl === -1 || nl >= cursor) return 'comment';
+      i = nl + 1;
+      continue;
+    }
+    // block comment
+    if (ch === '/' && code[i + 1] === '*') {
+      const end = code.indexOf('*/', i + 2);
+      if (end === -1 || end + 2 > cursor) return 'comment';
+      i = end + 2;
+      continue;
+    }
+    // single-quoted string
+    if (ch === "'") {
+      i++;
+      while (i < code.length) {
+        if (code[i] === '\\\\') { i += 2; continue; }
+        if (code[i] === "'") { i++; break; }
+        if (i >= cursor) return 'string';
+        i++;
+      }
+      continue;
+    }
+    // double-quoted string
+    if (ch === '"') {
+      i++;
+      while (i < code.length) {
+        if (code[i] === '\\\\') { i += 2; continue; }
+        if (code[i] === '"') { i++; break; }
+        if (i >= cursor) return 'string';
+        i++;
+      }
+      continue;
+    }
+    // template literal
+    if (ch === '\`') {
+      i++;
+      let depth = 0;
+      while (i < code.length) {
+        if (code[i] === '\\\\') { i += 2; continue; }
+        if (code[i] === '$' && code[i + 1] === '{') {
+          depth++;
+          i += 2;
+          // inside \${...} — this is code context
+          let braces = 1;
+          while (i < code.length && braces > 0) {
+            if (code[i] === '{') braces++;
+            else if (code[i] === '}') { braces--; if (braces === 0) break; }
+            if (i >= cursor) return 'code'; // inside template expression = code
+            i++;
+          }
+          if (i >= cursor) return 'code';
+          i++; // skip closing }
+          continue;
+        }
+        if (code[i] === '\`') { i++; break; }
+        if (i >= cursor) return 'string';
+        i++;
+      }
+      continue;
+    }
+    i++;
+  }
+  return 'code';
+}
+
+// extract the word being typed at cursor position
+function extractPrefix(code, cursor) {
+  let end = cursor;
+  let start = cursor;
+  while (start > 0 && /[a-zA-Z0-9_$]/.test(code[start - 1])) start--;
+  return { prefix: code.slice(start, end), start };
+}
+
+// detect dot access: returns the expression before the dot, or null
+function detectDot(code, cursor) {
+  // cursor is right after a dot or after dot + partial word
+  const before = code.slice(0, cursor);
+  // match patterns like "identifier." or "identifier.par" at end
+  const m = before.match(/([a-zA-Z_$][\\w$]*)\\.\\s*([a-zA-Z_$][\\w$]*)?$/);
+  if (m) return { obj: m[1], prefix: m[2] || '' };
+  return null;
+}
+
+function getPropsForValue(val) {
+  if (val == null) return [];
+  const props = new Set();
+  // own properties
+  const own = Object.getOwnPropertyNames(val);
+  for (const p of own) {
+    if (/^[a-zA-Z_$]/.test(p)) props.add(p);
+  }
+  // prototype chain (1 level)
+  const proto = Object.getPrototypeOf(val);
+  if (proto && proto !== Object.prototype) {
+    try {
+      const pNames = Object.getOwnPropertyNames(proto);
+      for (const p of pNames) {
+        if (p !== 'constructor' && /^[a-zA-Z_$]/.test(p)) props.add(p);
+      }
+    } catch {}
+  }
+  return [...props];
+}
+
+function getCompletions(code, cursor, cellId) {
+  const ctx = cursorContext(code, cursor);
+  if (ctx !== 'code') return { prefix: '', items: [] };
+
+  // check for dot completion
+  const dot = detectDot(code, cursor);
+  if (dot) {
+    const items = [];
+    const prefix = dot.prefix;
+    let propList = [];
+
+    // check known builtins
+    if (KNOWN_PROPS[dot.obj]) {
+      propList = KNOWN_PROPS[dot.obj];
+    } else if (dot.obj in S.scope) {
+      // live value inspection
+      const val = S.scope[dot.obj];
+      if (val != null) {
+        propList = getPropsForValue(val);
+        // also add type-based suggestions
+        if (Array.isArray(val)) propList = [...new Set([...propList, ...PROTO_PROPS.array])];
+        else if (typeof val === 'string') propList = [...new Set([...propList, ...PROTO_PROPS.string])];
+        else if (typeof val === 'number') propList = [...new Set([...propList, ...PROTO_PROPS.number])];
+      }
+    }
+
+    for (const p of propList) {
+      if (!prefix) {
+        items.push({ text: p, kind: 'prop', score: 0, indices: [] });
+        continue;
+      }
+      const m = fuzzyMatch(prefix, p);
+      if (m) items.push({ text: p, kind: 'prop', score: m.score, indices: m.indices });
+    }
+
+    items.sort((a, b) => b.score - a.score || a.text.localeCompare(b.text));
+    return { prefix, items: items.slice(0, 30) };
+  }
+
+  // word prefix completion
+  const { prefix, start } = extractPrefix(code, cursor);
+  if (!prefix) return { prefix: '', items: [] };
+
+  const items = [];
+  const seen = new Set();
+
+  // collect candidates from all sources with their kind
+  const candidates = [];
+
+  // 1. scope variables
+  for (const name of Object.keys(S.scope)) {
+    if (!seen.has(name)) { seen.add(name); candidates.push({ text: name, kind: 'var' }); }
+  }
+
+  // 2. own cell defines
+  const cell = S.cells.find(c => c.id === cellId);
+  if (cell && cell.defines) {
+    for (const name of cell.defines) {
+      if (!seen.has(name)) { seen.add(name); candidates.push({ text: name, kind: 'def' }); }
+    }
+  }
+
+  // 3. builtin functions (with help detail)
+  for (const name of Object.keys(BUILTIN_HELP)) {
+    if (!seen.has(name)) {
+      seen.add(name);
+      const h = BUILTIN_HELP[name];
+      candidates.push({ text: name, kind: 'fn', detail: h.sig });
+    }
+  }
+
+  // 4. JS builtins
+  for (const name of JS_BUILTINS) {
+    if (!seen.has(name)) { seen.add(name); candidates.push({ text: name, kind: 'const' }); }
+  }
+
+  // 5. JS keywords (min 2 chars to avoid noise)
+  if (prefix.length >= 2) {
+    for (const name of JS_KEYWORDS) {
+      if (!seen.has(name)) { seen.add(name); candidates.push({ text: name, kind: 'kw' }); }
+    }
+  }
+
+  // fuzzy match all candidates
+  for (const c of candidates) {
+    if (c.text === prefix) continue; // skip exact match (already typed)
+    const m = fuzzyMatch(prefix, c.text);
+    if (m) {
+      const item = { text: c.text, kind: c.kind, score: m.score, indices: m.indices };
+      if (c.detail) item.detail = c.detail;
+      items.push(item);
+    }
+  }
+
+  // sort by score descending, then alphabetical
+  items.sort((a, b) => b.score - a.score || a.text.localeCompare(b.text));
+
+  return { prefix, items: items.slice(0, 30) };
+}
+
+// ── TEXTAREA ADAPTER ──
+
+const KIND_LABELS = { var: 'v', fn: 'f', kw: 'k', const: 'c', prop: 'p', def: 'd' };
+
+let activeMenu = null;
+let activeState = null;
+let activeSigHint = null;
+
+function dismissAutocomplete() {
+  if (activeMenu) {
+    activeMenu.remove();
+    activeMenu = null;
+    activeState = null;
+  }
+}
+
+function dismissSigHint() {
+  if (activeSigHint) {
+    activeSigHint.remove();
+    activeSigHint = null;
+  }
+}
+
+// detect if cursor is inside a function call's arguments for a known builtin
+function detectCallContext(code, cursor) {
+  // scan backwards from cursor to find an unmatched (
+  let depth = 0;
+  let i = cursor - 1;
+  while (i >= 0) {
+    const ch = code[i];
+    if (ch === ')') depth++;
+    else if (ch === '(') {
+      if (depth === 0) {
+        // found the opening paren — extract the function name before it
+        let end = i;
+        let start = end - 1;
+        while (start >= 0 && /[a-zA-Z0-9_$]/.test(code[start])) start--;
+        start++;
+        const fnName = code.slice(start, end);
+        if (BUILTIN_HELP[fnName]) {
+          // figure out which parameter we're on by counting commas at depth 0
+          let paramIdx = 0;
+          let d = 0;
+          for (let j = i + 1; j < cursor; j++) {
+            if (code[j] === '(' || code[j] === '[' || code[j] === '{') d++;
+            else if (code[j] === ')' || code[j] === ']' || code[j] === '}') d--;
+            else if (code[j] === ',' && d === 0) paramIdx++;
+          }
+          return { fnName, parenPos: i, paramIdx };
+        }
+        return null;
+      }
+      depth--;
+    }
+    i--;
+  }
+  return null;
+}
+
+function showSigHint(ta) {
+  const code = ta.value;
+  const cursor = ta.selectionStart;
+  if (ta.selectionStart !== ta.selectionEnd) { dismissSigHint(); return; }
+
+  const ctx = cursorContext(code, cursor);
+  if (ctx !== 'code') { dismissSigHint(); return; }
+
+  const call = detectCallContext(code, cursor);
+  if (!call) { dismissSigHint(); return; }
+
+  const wrap = ta.closest('.editor-wrap');
+  if (!wrap) { dismissSigHint(); return; }
+
+  const help = BUILTIN_HELP[call.fnName];
+  const pos = measureCursorPos(ta, call.parenPos);
+
+  if (!activeSigHint) {
+    activeSigHint = document.createElement('div');
+    activeSigHint.className = 'ac-sig-hint';
+    wrap.appendChild(activeSigHint);
+  } else if (activeSigHint.parentElement !== wrap) {
+    activeSigHint.remove();
+    wrap.appendChild(activeSigHint);
+  }
+
+  // highlight current parameter in the signature
+  const sigHtml = highlightParam(help.sig, call.paramIdx);
+  activeSigHint.innerHTML = \`<span class="ac-sig-fn">\${sigHtml}</span><span class="ac-sig-desc">\${esc(help.desc)}</span>\`;
+
+  const cs = getComputedStyle(ta);
+  const padLeft = parseFloat(cs.paddingLeft) || 0;
+  const padTop = parseFloat(cs.paddingTop) || 0;
+  const lineHeight = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.5;
+
+  const left = pos.x + padLeft - ta.scrollLeft;
+  const top = pos.y + padTop - ta.scrollTop - lineHeight;
+
+  activeSigHint.style.left = left + 'px';
+  activeSigHint.style.top = top + 'px';
+
+  // if it goes above viewport, show below instead
+  const rect = activeSigHint.getBoundingClientRect();
+  if (rect.top < 0) {
+    activeSigHint.style.top = (top + lineHeight * 2) + 'px';
+  }
+}
+
+function highlightParam(sig, paramIdx) {
+  // find the params inside parens
+  const openParen = sig.indexOf('(');
+  if (openParen === -1) return esc(sig);
+  const closeParen = sig.lastIndexOf(')');
+  if (closeParen === -1) return esc(sig);
+
+  const before = sig.slice(0, openParen + 1);
+  const params = sig.slice(openParen + 1, closeParen);
+  const after = sig.slice(closeParen);
+
+  // split on commas (respecting nested braces)
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < params.length; i++) {
+    if (params[i] === '{' || params[i] === '(' || params[i] === '[') depth++;
+    else if (params[i] === '}' || params[i] === ')' || params[i] === ']') depth--;
+    else if (params[i] === ',' && depth === 0) {
+      parts.push(params.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(params.slice(start));
+
+  let html = esc(before);
+  for (let i = 0; i < parts.length; i++) {
+    if (i > 0) html += esc(',');
+    if (i === paramIdx) {
+      html += '<span class="ac-sig-active">' + esc(parts[i]) + '</span>';
+    } else {
+      html += esc(parts[i]);
+    }
+  }
+  html += esc(after);
+  return html;
+}
+
+function measureCursorPos(ta, cursor) {
+  const text = ta.value.substring(0, cursor);
+  const lines = text.split('\\n');
+  const lineNum = lines.length - 1;
+  const colText = lines[lineNum];
+
+  // measure column offset using a hidden span
+  let measurer = ta._acMeasurer;
+  if (!measurer) {
+    measurer = document.createElement('span');
+    measurer.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;pointer-events:none;';
+    document.body.appendChild(measurer);
+    ta._acMeasurer = measurer;
+  }
+  const cs = getComputedStyle(ta);
+  measurer.style.font = cs.font;
+  measurer.style.fontSize = cs.fontSize;
+  measurer.style.fontFamily = cs.fontFamily;
+  measurer.style.letterSpacing = cs.letterSpacing;
+  measurer.style.tabSize = cs.tabSize;
+  measurer.textContent = colText;
+
+  const lineHeight = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.5;
+  const x = measurer.offsetWidth;
+  const y = (lineNum + 1) * lineHeight;
+
+  return { x, y, lineHeight };
+}
+
+function highlightMatches(text, indices) {
+  if (!indices || !indices.length) return esc(text);
+  const set = new Set(indices);
+  let html = '';
+  let inMatch = false;
+  for (let i = 0; i < text.length; i++) {
+    if (set.has(i)) {
+      if (!inMatch) { html += '<span class="ac-match">'; inMatch = true; }
+      html += esc(text[i]);
+    } else {
+      if (inMatch) { html += '</span>'; inMatch = false; }
+      html += esc(text[i]);
+    }
+  }
+  if (inMatch) html += '</span>';
+  return html;
+}
+
+function renderMenu(items, prefix, selectedIdx) {
+  let html = '';
+  const max = Math.min(items.length, 30);
+  for (let i = 0; i < max; i++) {
+    const it = items[i];
+    const cls = i === selectedIdx ? 'ac-item active' : 'ac-item';
+    const kindCls = 'ac-kind ac-kind-' + it.kind;
+    const label = KIND_LABELS[it.kind] || '?';
+    const textHtml = highlightMatches(it.text, it.indices);
+    const detailHtml = it.detail ? \`<span class="ac-detail">\${esc(it.detail)}</span>\` : '';
+    html += \`<div class="\${cls}" data-index="\${i}"><span class="\${kindCls}">\${label}</span><span class="ac-text">\${textHtml}</span>\${detailHtml}</div>\`;
+  }
+  return html;
+}
+
+function esc(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function showMenu(ta, cellId) {
+  const code = ta.value;
+  const cursor = ta.selectionStart;
+  if (ta.selectionStart !== ta.selectionEnd) { dismissAutocomplete(); return; }
+
+  const result = getCompletions(code, cursor, cellId);
+  if (!result.items.length) { dismissAutocomplete(); return; }
+
+  const wrap = ta.closest('.editor-wrap');
+  if (!wrap) { dismissAutocomplete(); return; }
+
+  const pos = measureCursorPos(ta, cursor);
+
+  if (!activeMenu) {
+    activeMenu = document.createElement('div');
+    activeMenu.className = 'ac-menu';
+    wrap.appendChild(activeMenu);
+  } else if (activeMenu.parentElement !== wrap) {
+    activeMenu.remove();
+    wrap.appendChild(activeMenu);
+  }
+
+  activeState = {
+    items: result.items,
+    prefix: result.prefix,
+    selected: 0,
+    ta,
+    cellId,
+    cursorStart: cursor - result.prefix.length
+  };
+
+  activeMenu.innerHTML = renderMenu(result.items, result.prefix, 0);
+
+  // position: account for padding and scroll
+  const cs = getComputedStyle(ta);
+  const padLeft = parseFloat(cs.paddingLeft) || 0;
+  const padTop = parseFloat(cs.paddingTop) || 0;
+
+  const left = pos.x + padLeft - ta.scrollLeft;
+  const top = pos.y + padTop - ta.scrollTop;
+
+  activeMenu.style.left = left + 'px';
+  activeMenu.style.top = top + 'px';
+
+  // flip above if it would overflow viewport
+  const menuRect = activeMenu.getBoundingClientRect();
+  if (menuRect.bottom > window.innerHeight - 20) {
+    activeMenu.style.top = (top - pos.lineHeight - activeMenu.offsetHeight) + 'px';
+  }
+
+  // mouse interaction
+  activeMenu.onmousedown = (e) => {
+    e.preventDefault(); // don't blur textarea
+    const item = e.target.closest('.ac-item');
+    if (item) {
+      activeState.selected = parseInt(item.dataset.index);
+      acceptCompletion();
+    }
+  };
+}
+
+function updateSelection(idx) {
+  if (!activeMenu || !activeState) return;
+  activeState.selected = idx;
+  const items = activeMenu.querySelectorAll('.ac-item');
+  items.forEach((el, i) => el.classList.toggle('active', i === idx));
+  // scroll into view
+  if (items[idx]) items[idx].scrollIntoView({ block: 'nearest' });
+}
+
+function acceptCompletion() {
+  if (!activeState) return;
+  const { items, selected, ta, prefix, cursorStart } = activeState;
+  const item = items[selected];
+  if (!item) return;
+
+  const before = ta.value.substring(0, cursorStart);
+  const after = ta.value.substring(cursorStart + prefix.length);
+  ta.value = before + item.text + after;
+  const newCursor = cursorStart + item.text.length;
+  ta.selectionStart = ta.selectionEnd = newCursor;
+
+  dismissAutocomplete();
+  ta.dispatchEvent(new Event('input'));
+}
+
+function attachAutocomplete(textarea, cellId) {
+  // keydown handler — must be added BEFORE handleTab so stopImmediatePropagation works
+  textarea.addEventListener('keydown', (e) => {
+    // Ctrl+Shift+Space — manual signature hint trigger
+    if (e.key === ' ' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      dismissAutocomplete();
+      showSigHint(textarea);
+      return;
+    }
+
+    if (!activeMenu || !activeState) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const next = (activeState.selected + 1) % activeState.items.length;
+      updateSelection(next);
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      const prev = (activeState.selected - 1 + activeState.items.length) % activeState.items.length;
+      updateSelection(prev);
+      return;
+    }
+    if (e.key === 'Tab' || e.key === 'Enter') {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      acceptCompletion();
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      dismissAutocomplete();
+      dismissSigHint();
+      return;
+    }
+  });
+
+  // input handler — show/update completions + signature hints
+  textarea.addEventListener('input', () => {
+    // use a microtask so the value is settled
+    Promise.resolve().then(() => {
+      showMenu(textarea, cellId);
+      // show sig hint only when autocomplete menu is not visible
+      if (!activeMenu) showSigHint(textarea);
+      else dismissSigHint();
+    });
+  });
+
+  // dismiss on blur
+  textarea.addEventListener('blur', () => {
+    // delay so mousedown on menu can fire first
+    setTimeout(() => { dismissAutocomplete(); dismissSigHint(); }, 150);
+  });
+
+  // dismiss on scroll (position goes stale)
+  textarea.addEventListener('scroll', () => {
+    dismissAutocomplete();
+    dismissSigHint();
+  });
+}
 
 // -- keyboard.js --
 
@@ -4820,46 +6417,41 @@ function runSelected() {
   }
 }
 
-window.runSelectedCell = runSelectedAndAdvance;
-
 // ── MOBILE TRAY TOGGLES ──
 
 function closeAllTrays() {
   document.querySelectorAll('.action-add-tray.open, .action-more-tray.open, .cell-type-picker.open, .cell-insert-picker.open').forEach(el => el.classList.remove('open'));
 }
 
-window.toggleToolbarMenu = () => {
+function toggleToolbarMenu() {
   const menu = document.querySelector('.toolbar-overflow');
   if (!menu) return;
   menu.classList.toggle('open');
-};
+}
 
-window.toggleAddTray = () => {
+function toggleAddTray() {
   const tray = document.querySelector('.action-add-tray');
   if (!tray) return;
   const wasOpen = tray.classList.contains('open');
   closeAllTrays();
   if (!wasOpen) tray.classList.add('open');
-};
+}
 
-window.toggleMoreTray = () => {
+function toggleMoreTray() {
   const tray = document.querySelector('.action-more-tray');
   if (!tray) return;
   const wasOpen = tray.classList.contains('open');
   closeAllTrays();
   if (!wasOpen) tray.classList.add('open');
-};
+}
 
-window.showInsertPicker = (id, dir) => {
+function showInsertPicker(id, dir) {
   closeAllTrays();
   const cell = S.cells.find(c => c.id === id);
   if (!cell) return;
-  // remove existing picker
   document.querySelectorAll('.cell-insert-picker').forEach(el => el.remove());
   const picker = document.createElement('div');
   picker.className = 'cell-insert-picker open';
-  // for "before": find cell before this one to get afterId, or use null for first
-  // for "after": afterId is this cell's id
   let afterId;
   if (dir === 'after') {
     afterId = id;
@@ -4870,32 +6462,31 @@ window.showInsertPicker = (id, dir) => {
   picker.innerHTML = ['code', 'md', 'css', 'html'].map(t =>
     \`<button onclick="insertAt(\${afterId !== null ? afterId : 'null'},'\${t}');this.closest('.cell-insert-picker').remove()">\${t}</button>\`
   ).join('');
-  // place picker in the cell header
   const header = cell.el.querySelector('.cell-header');
   header.style.position = 'relative';
   picker.style.top = '100%';
   picker.style.left = dir === 'before' ? '0' : 'auto';
   picker.style.right = dir === 'after' ? '0' : 'auto';
   header.appendChild(picker);
-};
+}
 
-window.toggleTypePicker = (id) => {
+function toggleTypePicker(id) {
   closeAllTrays();
   const picker = document.querySelector(\`.cell-type-picker[data-cell-id="\${id}"]\`);
   if (picker) picker.classList.toggle('open');
-};
+}
 
-window.collapseAll = () => {
+function collapseAll() {
   S.cells.forEach(c => c.el.classList.add('collapsed'));
   setMsg('collapsed all', 'ok');
-};
+}
 
-window.expandAll = () => {
+function expandAll() {
   S.cells.forEach(c => c.el.classList.remove('collapsed'));
   setMsg('expanded all', 'ok');
-};
+}
 
-window.newNotebook = () => {
+function newNotebook() {
   if (!confirm('Clear all cells?')) return;
   while (S.cells.length) {
     const cell = S.cells[0];
@@ -4910,7 +6501,9 @@ window.newNotebook = () => {
   $('#docTitle').value = 'untitled';
   updateStatus();
   setMsg('new notebook', 'ok');
-};
+}
+
+function runSelectedCell() { runSelectedAndAdvance(); }
 
 function runSelectedAndAdvance() {
   runSelected();
@@ -4998,8 +6591,8 @@ document.addEventListener('keydown', (e) => {
     }
   } else {
     // ── COMMAND MODE ──
-    // ignore if typing in the title input
-    if (document.activeElement && document.activeElement.id === 'docTitle') return;
+    // ignore if typing in any input field (title, find bar, etc.)
+    if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.id === 'docTitle')) return;
 
     // let browser shortcuts through (Ctrl+J downloads, etc.)
     if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -5189,6 +6782,11 @@ document.addEventListener('click', (e) => {
   if (tbOverflow && tbOverflow.classList.contains('open') && !tbOverflow.contains(e.target)) {
     tbOverflow.classList.remove('open');
   }
+  // close save tray if clicking outside
+  const saveTray = document.getElementById('saveTray');
+  if (saveTray && saveTray.classList.contains('open') && !saveTray.parentElement.contains(e.target)) {
+    saveTray.classList.remove('open');
+  }
 
   const cellEl = e.target.closest('.cell');
   if (cellEl) {
@@ -5332,11 +6930,92 @@ function applySizeCompareRef(val) {
   window._sizeCompareRef = 'total';
 })();
 
+// -- globals.js --
+
+// ── GLOBAL BINDINGS ──
+// This module wires exported functions to window.* for use by onclick/onchange
+// handlers in template HTML and dynamically generated markup.
+// Modules stay pure (no side effects, no window assignments).
+
+
+
+
+
+
+
+
+
+
+// state
+window.$ = $;
+window.S = S;
+
+// editor
+window.toggleAutorun = toggleAutorun;
+
+// settings
+window.toggleSettings = toggleSettings;
+window.togglePresent = togglePresent;
+window.applyTheme = applyTheme;
+window.applyFontSize = applyFontSize;
+window.applyWidth = applyWidth;
+window.applyLineNumbers = applyLineNumbers;
+window.applyHeader = applyHeader;
+window.applyExecMode = applyExecMode;
+window.applyRunOnLoad = applyRunOnLoad;
+window.applyShowToggle = applyShowToggle;
+window.applyGlobalExecMode = applyGlobalExecMode;
+window.applyGlobalRunOnLoad = applyGlobalRunOnLoad;
+
+// update
+window.toggleUpdate = toggleUpdate;
+window.checkForUpdate = checkForUpdate;
+window.applyOnlineUpdate = applyOnlineUpdate;
+window.proceedUpdate = proceedUpdate;
+window.cancelUpdate = cancelUpdate;
+window.updateFromFile = updateFromFile;
+
+// save
+window.saveNotebook = saveNotebook;
+window.savePackedNotebook = savePackedNotebook;
+window.setSaveMode = setSaveMode;
+window.toggleSaveTray = toggleSaveTray;
+
+// exec
+window.runAll = runAll;
+
+// ui
+window.insertAt = insertAt;
+
+// find
+window.openFind = openFind;
+window.closeFind = closeFind;
+
+// keyboard / toolbar
+window.addCellWithUndo = addCellWithUndo;
+window.runSelectedCell = runSelectedCell;
+window.toggleToolbarMenu = toggleToolbarMenu;
+window.toggleAddTray = toggleAddTray;
+window.toggleMoreTray = toggleMoreTray;
+window.showInsertPicker = showInsertPicker;
+window.toggleTypePicker = toggleTypePicker;
+window.collapseAll = collapseAll;
+window.expandAll = expandAll;
+window.newNotebook = newNotebook;
+
 // -- init.js --
 
 // ── INIT ──
 
 (function init() {
+  // detect packed format (meta tag injected by loader)
+  const packedMeta = document.querySelector('meta[name="auditable-packed"]');
+  if (packedMeta) {
+    packedMeta.remove();
+    setBadge('packed', 'packed', 'toolbar-badge toolbar-badge-packed');
+    setSaveMode('packed');
+  }
+
   if (!loadFromEmbed()) {
     addCell('md', '');
     addCell('code', '');
