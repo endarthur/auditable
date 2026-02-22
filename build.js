@@ -117,6 +117,9 @@ const css = fs.readFileSync(path.join(srcDir, 'style.css'), 'utf8');
 const template = fs.readFileSync(path.join(srcDir, 'template.html'), 'utf8');
 
 // 4. Inject build-time constants
+const builtins = fs.readFileSync(path.join(srcDir, 'builtins.json'), 'utf8');
+js = js.replace("'__AUDITABLE_BUILTINS__'", builtins.trim());
+
 const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
 const buildDate = new Date().toISOString().slice(0, 10);
 js = js.replace(

@@ -10,6 +10,7 @@ import './settings.js';
 import './save.js';
 import './ui.js';
 import './find.js';
+import './complete.js';
 import './keyboard.js';
 import './goto.js'; // @optional
 import './size-compare.js'; // @optional

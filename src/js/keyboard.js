@@ -320,8 +320,8 @@ document.addEventListener('keydown', (e) => {
     }
   } else {
     // ── COMMAND MODE ──
-    // ignore if typing in the title input
-    if (document.activeElement && document.activeElement.id === 'docTitle') return;
+    // ignore if typing in any input field (title, find bar, etc.)
+    if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.id === 'docTitle')) return;
 
     // let browser shortcuts through (Ctrl+J downloads, etc.)
     if (e.ctrlKey || e.metaKey || e.altKey) return;
