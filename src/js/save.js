@@ -1,6 +1,6 @@
 import { S, $ } from './state.js';
 import { addCell } from './cell-ops.js';
-import { getSettings, applySettings } from './settings.js';
+import { getSettings, applySettings, resolveExecMode, resolveRunOnLoad } from './settings.js';
 import { runAll } from './exec.js';
 import { setMsg } from './ui.js';
 
@@ -35,13 +35,28 @@ export function saveNotebook() {
   const toolbarEl = document.querySelector('.toolbar').cloneNode(true);
   toolbarEl.querySelector('#docTitle').value = title;
   toolbarEl.querySelector('#toolbarStatus').textContent = '';
-  // reset autorun button state
+  // reset autorun button state to match saved mode
   const autoBtn = toolbarEl.querySelector('#autorunBtn');
-  if (autoBtn) { autoBtn.className = 'autorun-on'; autoBtn.textContent = '\u25b6'; }
+  const savedMode = S.autorun ? 'reactive' : 'manual';
+  if (autoBtn) {
+    autoBtn.className = savedMode === 'reactive' ? 'autorun-on' : 'autorun-off';
+    autoBtn.textContent = savedMode === 'reactive' ? '\u25b6' : '\u2016';
+  }
   // close overflow if open
   const overflow = toolbarEl.querySelector('.toolbar-overflow');
   if (overflow) overflow.classList.remove('open');
   const toolbarHTML = toolbarEl.outerHTML;
+
+  // capture find bar and reset to default state
+  const findBarEl = $('#findBar').cloneNode(true);
+  findBarEl.style.display = '';
+  findBarEl.classList.remove('show-replace');
+  findBarEl.querySelector('#findInput').value = '';
+  findBarEl.querySelector('#replaceInput').value = '';
+  findBarEl.querySelector('#findCount').textContent = '';
+  findBarEl.querySelector('#findCaseBtn').classList.remove('active');
+  findBarEl.querySelector('#findRegexBtn').classList.remove('active');
+  const findBarHTML = findBarEl.outerHTML;
 
   // build output HTML
   let html = `<!DOCTYPE html>
@@ -60,6 +75,8 @@ ${settingsOvHTML}
 ${settingsPanHTML}
 
 ${toolbarHTML}
+
+${findBarHTML}
 
 <button class="present-exit" onclick="togglePresent()">\u2715 exit</button>
 
@@ -115,6 +132,19 @@ export function loadFromEmbed() {
     }
   }
 
+  // apply execution mode priority chain (localStorage > notebook > build default)
+  const effectiveMode = resolveExecMode();
+  const effectiveRun = resolveRunOnLoad();
+  if (effectiveMode === 'manual') {
+    S.autorun = false;
+    const btn = document.getElementById('autorunBtn');
+    const btnMobile = document.getElementById('autorunBtnMobile');
+    if (btn) { btn.className = 'autorun-off'; btn.textContent = '\u2016'; btn.title = 'manual mode \u2014 only Run All or Ctrl+Enter'; }
+    if (btnMobile) { btnMobile.className = 'autorun-off'; btnMobile.textContent = '\u2016'; }
+    const sel = document.getElementById('setExecMode');
+    if (sel) sel.value = 'manual';
+  }
+
   const match = raw.match(/<!--AUDITABLE-DATA\n([\s\S]*?)\nAUDITABLE-DATA-->/);
   if (match) {
     try {
@@ -123,8 +153,8 @@ export function loadFromEmbed() {
         const cell = addCell(c.type, c.code);
         if (c.collapsed) cell.el.classList.add('collapsed');
       }
-      // run after load
-      if (S.cells.some(c => c.type === 'code')) {
+      // run after load (gated on resolved runOnLoad)
+      if (effectiveRun === 'yes' && S.cells.some(c => c.type === 'code')) {
         setTimeout(runAll, 50);
       }
       return true;

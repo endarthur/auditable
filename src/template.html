@@ -31,6 +31,8 @@
 <h2>global</h2>
 <div class="help-row"><span class="help-key">F1</span><span class="help-desc">toggle this help</span></div>
 <div class="help-row"><span class="help-key">Ctrl+S</span><span class="help-desc">save notebook</span></div>
+<div class="help-row"><span class="help-key">Ctrl+F</span><span class="help-desc">find in notebook</span></div>
+<div class="help-row"><span class="help-key">Ctrl+H</span><span class="help-desc">find and replace</span></div>
 
 <h2>toolbar</h2>
 <div class="help-row"><span class="help-key">&#x23f5; step</span><span class="help-desc">run selected cell</span></div>
@@ -47,6 +49,7 @@
 <div class="help-row"><span class="help-key">textInput()</span><span class="help-desc">reactive text input</span></div>
 <div class="help-row"><span class="help-key">load(url)</span><span class="help-desc">import ESM module (cached)</span></div>
 <div class="help-row"><span class="help-key">install(url)</span><span class="help-desc">import + embed in HTML on save</span></div>
+<div class="help-row"><span class="help-key">invalidation</span><span class="help-desc">promise that resolves before cell re-runs</span></div>
 
 <h2>directives</h2>
 <div class="help-row"><span class="help-key">// %manual</span><span class="help-desc">skip cell on reactive updates</span></div>
@@ -55,6 +58,7 @@
 <div class="help-row"><span class="help-key">// %cellName &lt;label&gt;</span><span class="help-desc">name cell in DevTools</span></div>
 <div class="help-row"><span class="help-key">// %outputId &lt;id&gt;</span><span class="help-desc">set id on output div</span></div>
 <div class="help-row"><span class="help-key">// %outputClass &lt;cls&gt;</span><span class="help-desc">add classes to output div</span></div>
+<div class="help-row"><span class="help-key">// %goto &lt;label&gt;</span><span class="help-desc">jump to named cell after execution</span></div>
 
 <div class="help-close">press F1 or Esc to close</div>
 </div>
@@ -106,8 +110,58 @@
     </select>
   </div>
 
+  <h2>execution</h2>
+  <div class="settings-row">
+    <label>mode</label>
+    <select id="setExecMode" onchange="applyExecMode(this.value)">
+      <option value="reactive">reactive</option>
+      <option value="manual">manual</option>
+    </select>
+  </div>
+  <div class="settings-row">
+    <label>run on load</label>
+    <select id="setRunOnLoad" onchange="applyRunOnLoad(this.value)">
+      <option value="yes">yes</option>
+      <option value="no">no</option>
+    </select>
+  </div>
+  <div class="settings-row">
+    <label>show run toggle</label>
+    <select id="setShowToggle" onchange="applyShowToggle(this.value)">
+      <option value="yes">yes</option>
+      <option value="no">no</option>
+    </select>
+  </div>
+  <div class="settings-desc">
+    <strong>reactive</strong>: cells auto-run on edit, changes propagate.<br>
+    <strong>manual</strong>: only Ctrl+Enter, Shift+Enter, or Run All.
+  </div>
+  <div class="settings-row">
+    <label>global override</label>
+    <select id="setGlobalExecMode" onchange="applyGlobalExecMode(this.value)">
+      <option value="">(notebook default)</option>
+      <option value="reactive">always reactive</option>
+      <option value="manual">always manual</option>
+    </select>
+  </div>
+  <div class="settings-row">
+    <label>global run on load</label>
+    <select id="setGlobalRunOnLoad" onchange="applyGlobalRunOnLoad(this.value)">
+      <option value="">(notebook default)</option>
+      <option value="yes">always run</option>
+      <option value="no">never run</option>
+    </select>
+  </div>
+
   <h2>modules</h2>
   <div id="moduleList"></div>
+
+  <div class="settings-about">
+    <span id="aboutVersion"></span>
+    <span id="aboutBuild"></span>
+    <span id="aboutRuntime"></span>
+    <a href="https://github.com/endarthur/auditable" target="_blank">github.com/endarthur/auditable</a>
+  </div>
 </div>
 
 <div class="toolbar">
@@ -138,9 +192,27 @@
         <button onclick="$('#helpOverlay').classList.toggle('visible');toggleToolbarMenu()">help (F1)</button>
         <button onclick="toggleSettings();toggleToolbarMenu()">settings</button>
         <button onclick="togglePresent();toggleToolbarMenu()">present</button>
+        <button onclick="openFind(false);toggleToolbarMenu()">find (Ctrl+F)</button>
       </div>
     </div>
   </span>
+</div>
+
+<div class="find-bar" id="findBar">
+  <div class="find-row">
+    <input type="text" id="findInput" placeholder="find" spellcheck="false" autocomplete="off">
+    <span class="find-count" id="findCount"></span>
+    <button id="findRegexBtn" title="use regex">.*</button>
+    <button id="findCaseBtn" title="match case">Aa</button>
+    <button id="findPrevBtn" title="previous (Shift+Enter)">&#x2191;</button>
+    <button id="findNextBtn" title="next (Enter)">&#x2193;</button>
+    <button id="findCloseBtn" title="close (Esc)">&#x00d7;</button>
+  </div>
+  <div class="find-replace-row" id="findReplaceRow">
+    <input type="text" id="replaceInput" placeholder="replace" spellcheck="false" autocomplete="off">
+    <button id="findReplaceBtn">replace</button>
+    <button id="findReplaceAllBtn">all</button>
+  </div>
 </div>
 
 <button class="present-exit" onclick="togglePresent()">&#x2715; exit</button>
@@ -182,6 +254,7 @@
         <button onclick="$('#helpOverlay').classList.toggle('visible');toggleMoreTray()">help</button>
         <button onclick="toggleSettings();toggleMoreTray()">settings</button>
         <button onclick="togglePresent();toggleMoreTray()">present</button>
+        <button onclick="openFind(false);toggleMoreTray()">find</button>
       </div>
       <button class="action-more" onclick="toggleMoreTray()">&#x22ef;</button>
     </div>

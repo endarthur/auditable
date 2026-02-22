@@ -111,11 +111,11 @@ export function parseNames(code) {
   return { defines };
 }
 
-export function findUses(code, allDefined) {
+export function findUses(code, allDefined, selfDefined) {
   // find identifiers that reference other cells' definitions
   const uses = new Set();
   const stripped = stripCommentsAndStrings(code);
-  const selfDefined = parseNames(code).defines;
+  if (!selfDefined) selfDefined = parseNames(code).defines;
 
   const idRe = /\b([a-zA-Z_$]\w*)\b/g;
   let m;
@@ -143,26 +143,71 @@ export function findHtmlUses(code, allDefined) {
 }
 
 export function buildDAG() {
-  // collect all defined names globally
+  // collect all defined names globally (only re-parse changed cells)
   const allDefined = new Map(); // name -> cell id
   for (const c of S.cells) {
     if (c.type !== 'code') continue;
-    const { defines } = parseNames(c.code);
-    c.defines = defines;
-    for (const name of defines) {
+    if (c.code !== c._parsedCode) {
+      const { defines } = parseNames(c.code);
+      c.defines = defines;
+      c._parsedCode = c.code;
+    }
+    for (const name of c.defines) {
       allDefined.set(name, c.id);
     }
   }
 
-  // find uses for each cell
+  // find uses for each cell (invalidate if code changed or global names changed)
   const definedNames = new Set(allDefined.keys());
+  const definedKey = [...definedNames].sort().join(',');
   for (const c of S.cells) {
     if (c.type === 'code') {
-      c.uses = findUses(c.code, definedNames);
+      if (c.code !== c._usesCode || c._definedKey !== definedKey) {
+        c.uses = findUses(c.code, definedNames, c.defines);
+        c._usesCode = c.code;
+        c._definedKey = definedKey;
+      }
     } else if (c.type === 'html') {
-      c.uses = findHtmlUses(c.code, definedNames);
+      if (c.code !== c._usesCode || c._definedKey !== definedKey) {
+        c.uses = findHtmlUses(c.code, definedNames);
+        c._usesCode = c.code;
+        c._definedKey = definedKey;
+      }
     }
   }
 
   return allDefined;
+}
+
+export function topoSort(dirtyIds) {
+  // BFS from dirty cells to find all downstream dependents
+  const dependents = new Map(); // varName -> Set<cellId>
+  for (const c of S.cells) {
+    if (!c.uses) continue;
+    for (const name of c.uses) {
+      if (!dependents.has(name)) dependents.set(name, new Set());
+      dependents.get(name).add(c.id);
+    }
+  }
+
+  const needsRun = new Set(dirtyIds);
+  const queue = [...dirtyIds];
+  while (queue.length) {
+    const id = queue.shift();
+    const cell = S.cells.find(c => c.id === id);
+    if (!cell || !cell.defines) continue;
+    for (const name of cell.defines) {
+      const deps = dependents.get(name);
+      if (!deps) continue;
+      for (const depId of deps) {
+        if (!needsRun.has(depId)) {
+          needsRun.add(depId);
+          queue.push(depId);
+        }
+      }
+    }
+  }
+
+  // return in document order
+  return S.cells.filter(c => needsRun.has(c.id)).map(c => c.id);
 }

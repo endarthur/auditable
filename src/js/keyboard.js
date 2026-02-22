@@ -6,6 +6,7 @@ import { toggleSettings, togglePresent, applyLineNumbers, getSettings } from './
 import { saveNotebook } from './save.js';
 import { setMsg } from './ui.js';
 import { toggleComment, autoResize, cssSummary } from './cell-dom.js';
+import { openFind, closeFind } from './find.js';
 
 // ── KEYBOARD / SELECTION ──
 
@@ -236,14 +237,18 @@ window.newNotebook = () => {
 function runSelectedAndAdvance() {
   runSelected();
   if (S.selectedId === null) return;
-  const idx = S.cells.findIndex(c => c.id === S.selectedId);
-  if (idx < S.cells.length - 1) {
-    // move to next cell and edit it
-    editCell(S.cells[idx + 1].id);
+  // respect goto target if set
+  const gotoIdx = window._lastGotoTarget;
+  if (gotoIdx != null && gotoIdx >= 0 && gotoIdx < S.cells.length) {
+    editCell(S.cells[gotoIdx].id);
   } else {
-    // at end — create new code cell
-    const newCell = addCellWithUndo('code', '', S.selectedId);
-    selectCell(newCell.id);
+    const idx = S.cells.findIndex(c => c.id === S.selectedId);
+    if (idx < S.cells.length - 1) {
+      editCell(S.cells[idx + 1].id);
+    } else {
+      const newCell = addCellWithUndo('code', '', S.selectedId);
+      selectCell(newCell.id);
+    }
   }
 }
 
@@ -261,6 +266,17 @@ function navigateCell(dir) {
 }
 
 document.addEventListener('keydown', (e) => {
+  // find bar shortcuts (must be before edit/command branches)
+  if ((e.key === 'f') && (e.ctrlKey || e.metaKey) && !e.altKey) {
+    e.preventDefault(); openFind(false); return;
+  }
+  if ((e.key === 'h') && (e.ctrlKey || e.metaKey) && !e.altKey) {
+    e.preventDefault(); openFind(true); return;
+  }
+  if (e.key === 'Escape' && S.findActive) {
+    e.preventDefault(); closeFind(); return;
+  }
+
   const editing = getEditingCell();
 
   if (editing) {
@@ -286,14 +302,19 @@ document.addEventListener('keydown', (e) => {
       e.preventDefault();
       editing.code = editing.el.querySelector('textarea').value;
       if (editing.type === 'code') runDAG([editing.id], true);
-      // advance
-      const idx = S.cells.findIndex(c => c.id === editing.id);
-      if (idx < S.cells.length - 1) {
-        editCell(S.cells[idx + 1].id);
+      // advance — respect goto target if set
+      const gotoIdx = window._lastGotoTarget;
+      if (gotoIdx != null && gotoIdx >= 0 && gotoIdx < S.cells.length) {
+        editCell(S.cells[gotoIdx].id);
       } else {
-        const newCell = addCellWithUndo('code', '', editing.id);
-        selectCell(newCell.id);
-        editCell(newCell.id);
+        const idx = S.cells.findIndex(c => c.id === editing.id);
+        if (idx < S.cells.length - 1) {
+          editCell(S.cells[idx + 1].id);
+        } else {
+          const newCell = addCellWithUndo('code', '', editing.id);
+          selectCell(newCell.id);
+          editCell(newCell.id);
+        }
       }
       return;
     }

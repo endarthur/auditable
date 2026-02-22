@@ -1,4 +1,4 @@
-import { $ } from './state.js';
+import { S, $ } from './state.js';
 import { updateStatus } from './ui.js';
 
 // ── SETTINGS ──
@@ -51,6 +51,61 @@ export function applyHeader(mode) {
   $('#setHeader').value = mode;
 }
 
+// ── EXECUTION MODE ──
+
+const __AUDITABLE_DEFAULT_EXEC_MODE__ = 'reactive';
+const __AUDITABLE_DEFAULT_RUN_ON_LOAD__ = 'yes';
+
+let _runOnLoad = 'yes';
+let _showToggle = 'yes';
+
+export function applyExecMode(mode) {
+  S.autorun = (mode === 'reactive');
+  const btn = $('#autorunBtn');
+  const btnMobile = document.getElementById('autorunBtnMobile');
+  const cls = S.autorun ? 'autorun-on' : 'autorun-off';
+  const text = S.autorun ? '\u25b6' : '\u2016';
+  if (btn) { btn.textContent = text; btn.className = cls; btn.title = S.autorun ? 'reactive mode \u2014 cells auto-run on edit' : 'manual mode \u2014 only Run All or Ctrl+Enter'; }
+  if (btnMobile) { btnMobile.textContent = text; btnMobile.className = cls; }
+  const sel = $('#setExecMode');
+  if (sel) sel.value = mode;
+}
+
+export function applyRunOnLoad(val) {
+  _runOnLoad = val;
+  const sel = $('#setRunOnLoad');
+  if (sel) sel.value = val;
+}
+
+export function applyShowToggle(val) {
+  _showToggle = val;
+  document.documentElement.classList.toggle('hide-run-toggle', val === 'no');
+  const sel = $('#setShowToggle');
+  if (sel) sel.value = val;
+}
+
+export function applyGlobalExecMode(val) {
+  if (val) localStorage.setItem('auditable-exec-mode', val);
+  else localStorage.removeItem('auditable-exec-mode');
+}
+
+export function applyGlobalRunOnLoad(val) {
+  if (val) localStorage.setItem('auditable-run-on-load', val);
+  else localStorage.removeItem('auditable-run-on-load');
+}
+
+export function resolveExecMode() {
+  return localStorage.getItem('auditable-exec-mode')
+    || $('#setExecMode')?.value
+    || __AUDITABLE_DEFAULT_EXEC_MODE__;
+}
+
+export function resolveRunOnLoad() {
+  return localStorage.getItem('auditable-run-on-load')
+    || _runOnLoad
+    || __AUDITABLE_DEFAULT_RUN_ON_LOAD__;
+}
+
 export function getSettings() {
   const s = {
     theme: document.documentElement.classList.contains('light') ? 'light' : 'dark',
@@ -58,6 +113,9 @@ export function getSettings() {
     width: $('#setWidth').value,
     header: $('#setHeader').value,
     lineNumbers: document.documentElement.classList.contains('hide-line-numbers') ? 'off' : 'on',
+    execMode: S.autorun ? 'reactive' : 'manual',
+    runOnLoad: _runOnLoad,
+    showToggle: _showToggle,
   };
   if (window._sizeCompare) s.sizeCompare = true;
   if (window._sizeCompareRef === 'content') s.sizeCompareRef = 'content';
@@ -71,6 +129,9 @@ export function applySettings(s) {
   if (s.width) applyWidth(s.width);
   if (s.header) applyHeader(s.header);
   if (s.lineNumbers) applyLineNumbers(s.lineNumbers);
+  if (s.execMode) applyExecMode(s.execMode);
+  if (s.runOnLoad) applyRunOnLoad(s.runOnLoad);
+  if (s.showToggle) applyShowToggle(s.showToggle);
   if (s.sizeCompare !== undefined && typeof applySizeCompare === 'function') applySizeCompare(s.sizeCompare);
   if (s.sizeCompareRef !== undefined && typeof applySizeCompareRef === 'function') applySizeCompareRef(s.sizeCompareRef);
 }
@@ -78,6 +139,32 @@ export function applySettings(s) {
 export function togglePresent() {
   document.body.classList.toggle('presenting');
 }
+
+// ── ABOUT ──
+
+const __AUDITABLE_VERSION__ = '0.0.0';
+const __AUDITABLE_BUILD_DATE__ = 'dev';
+const __AUDITABLE_BASE_SIZE__ = 0;
+
+(function() {
+  const ver = $('#aboutVersion');
+  const build = $('#aboutBuild');
+  const rt = $('#aboutRuntime');
+  if (ver) ver.textContent = 'auditable v' + __AUDITABLE_VERSION__;
+  if (build) build.textContent = 'built ' + __AUDITABLE_BUILD_DATE__;
+  if (rt && __AUDITABLE_BASE_SIZE__ > 0) rt.textContent = 'runtime ' + (__AUDITABLE_BASE_SIZE__ / 1024).toFixed(1) + ' KB';
+})();
+
+// ── EXECUTION SETTINGS INIT ──
+
+(function() {
+  const gm = localStorage.getItem('auditable-exec-mode') || '';
+  const gr = localStorage.getItem('auditable-run-on-load') || '';
+  const selGm = $('#setGlobalExecMode');
+  const selGr = $('#setGlobalRunOnLoad');
+  if (selGm) selGm.value = gm;
+  if (selGr) selGr.value = gr;
+})();
 
 // ── MODULE MANAGEMENT ──
 

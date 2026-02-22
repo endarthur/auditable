@@ -1,8 +1,8 @@
 import { S } from './state.js';
-import { highlightCode, highlightCss } from './syntax.js';
+import { highlightCode, highlightCss, highlightHtml } from './syntax.js';
 import { isManual } from './dag.js';
 import { renderMd } from './markdown.js';
-import { onCodeEdit, onCssEdit } from './editor.js';
+import { onCodeEdit, onCssEdit, onHtmlEdit } from './editor.js';
 import { renderHtmlCell } from './exec.js';
 
 // ── CELL DOM ──
@@ -87,6 +87,7 @@ export function createCellEl(type, id) {
     });
 
     ta.addEventListener('blur', () => {
+      if (S.findActive) return;
       const cell = S.cells.find(c => c.id === id);
       if (cell) {
         cell.code = ta.value;
@@ -106,7 +107,11 @@ export function createCellEl(type, id) {
       ${cellHeaderHTML('html', id)}
       <div class="cell-html-view"></div>
       <div class="cell-html-edit" style="display:none">
-        <textarea rows="2" spellcheck="false" placeholder="<html template>"></textarea>
+        <div class="editor-wrap">
+          <div class="line-numbers" aria-hidden="true">1</div>
+          <textarea rows="2" spellcheck="false" placeholder="<html template>"></textarea>
+          <div class="highlight-layer" aria-hidden="true"></div>
+        </div>
       </div>
       <div class="cell-output"></div>
     `;
@@ -114,6 +119,7 @@ export function createCellEl(type, id) {
     const view = div.querySelector('.cell-html-view');
     const editWrap = div.querySelector('.cell-html-edit');
     const ta = div.querySelector('.cell-html-edit textarea');
+    const hl = div.querySelector('.highlight-layer');
     div.querySelector('.cell-type').addEventListener('click', () => div.classList.toggle('collapsed'));
 
     view.addEventListener('click', () => {
@@ -124,6 +130,7 @@ export function createCellEl(type, id) {
     });
 
     ta.addEventListener('blur', () => {
+      if (S.findActive) return;
       const cell = S.cells.find(c => c.id === id);
       if (cell) {
         cell.code = ta.value;
@@ -133,6 +140,9 @@ export function createCellEl(type, id) {
       view.style.display = '';
     });
 
+    const ln = div.querySelector('.line-numbers');
+    ta.addEventListener('input', () => { highlightHtml(ta, hl); onHtmlEdit(id); });
+    ta.addEventListener('scroll', () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; ln.scrollTop = ta.scrollTop; });
     ta.addEventListener('input', autoResize);
     ta.addEventListener('keydown', handleTab);
   } else {
@@ -157,6 +167,7 @@ export function createCellEl(type, id) {
     });
 
     ta.addEventListener('blur', () => {
+      if (S.findActive) return;
       const cell = S.cells.find(c => c.id === id);
       if (cell) {
         cell.code = ta.value;

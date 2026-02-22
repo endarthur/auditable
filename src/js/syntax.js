@@ -346,3 +346,115 @@ export function highlightCss(ta, hl) {
     });
   }
 }
+
+// ── HTML SYNTAX HIGHLIGHTING ──
+
+export function tokenizeHtml(code) {
+  const tokens = [];
+  let i = 0;
+  const len = code.length;
+
+  while (i < len) {
+    // template expression ${...}
+    if (code[i] === '$' && i + 1 < len && code[i + 1] === '{') {
+      const start = i;
+      i += 2;
+      let depth = 1;
+      while (i < len && depth > 0) {
+        if (code[i] === '{') depth++;
+        else if (code[i] === '}') depth--;
+        if (depth > 0) i++;
+      }
+      if (i < len) i++;
+      tokens.push({ type: 'expr', text: code.slice(start, i) });
+      continue;
+    }
+    // comment <!-- ... -->
+    if (code[i] === '<' && code[i + 1] === '!' && code[i + 2] === '-' && code[i + 3] === '-') {
+      const start = i;
+      i += 4;
+      while (i < len) {
+        if (code[i] === '-' && code[i + 1] === '-' && code[i + 2] === '>') { i += 3; break; }
+        i++;
+      }
+      tokens.push({ type: 'cmt', text: code.slice(start, i) });
+      continue;
+    }
+    // tag
+    if (code[i] === '<') {
+      tokens.push({ type: 'tag', text: '<' });
+      i++;
+      // closing slash
+      if (i < len && code[i] === '/') { tokens.push({ type: 'tag', text: '/' }); i++; }
+      // tag name
+      const ns = i;
+      while (i < len && /[a-zA-Z0-9-]/.test(code[i])) i++;
+      if (i > ns) tokens.push({ type: 'tag', text: code.slice(ns, i) });
+      // attributes until >
+      while (i < len && code[i] !== '>') {
+        // template expression inside tag
+        if (code[i] === '$' && i + 1 < len && code[i + 1] === '{') {
+          const start = i;
+          i += 2;
+          let depth = 1;
+          while (i < len && depth > 0) {
+            if (code[i] === '{') depth++;
+            else if (code[i] === '}') depth--;
+            if (depth > 0) i++;
+          }
+          if (i < len) i++;
+          tokens.push({ type: 'expr', text: code.slice(start, i) });
+          continue;
+        }
+        if (/\s/.test(code[i])) { tokens.push({ type: '', text: code[i] }); i++; continue; }
+        if (code[i] === '/') { tokens.push({ type: 'tag', text: '/' }); i++; continue; }
+        if (code[i] === '=') { tokens.push({ type: 'punc', text: '=' }); i++; continue; }
+        // quoted attribute value
+        if (code[i] === '"' || code[i] === "'") {
+          const q = code[i];
+          const start = i;
+          i++;
+          while (i < len && code[i] !== q) { if (code[i] === '\\') i++; i++; }
+          if (i < len) i++;
+          tokens.push({ type: 'str', text: code.slice(start, i) });
+          continue;
+        }
+        // attribute name or unquoted value
+        const as = i;
+        while (i < len && !/[\s=>/"']/.test(code[i])) i++;
+        if (i > as) {
+          let j = i;
+          while (j < len && /\s/.test(code[j])) j++;
+          tokens.push({ type: (j < len && code[j] === '=') ? 'attr' : 'attr', text: code.slice(as, i) });
+        }
+      }
+      if (i < len && code[i] === '>') { tokens.push({ type: 'tag', text: '>' }); i++; }
+      continue;
+    }
+    // plain text
+    tokens.push({ type: '', text: code[i] });
+    i++;
+  }
+
+  return tokens;
+}
+
+export function highlightHtml(ta, hl) {
+  const code = ta.value;
+  if (!code) { hl.innerHTML = '\n'; return; }
+
+  const tokens = tokenizeHtml(code);
+  let html = '';
+  for (const t of tokens) {
+    const escaped = t.text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+    if (t.type) {
+      html += `<span class="hl-${t.type}">${escaped}</span>`;
+    } else {
+      html += escaped;
+    }
+  }
+  hl.innerHTML = html + '\n';
+}

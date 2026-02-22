@@ -18,6 +18,8 @@ export function toggleAutorun() {
     btnMobile.textContent = text;
     btnMobile.className = cls;
   }
+  const sel = $('#setExecMode');
+  if (sel) sel.value = S.autorun ? 'reactive' : 'manual';
   setMsg(S.autorun ? 'autorun on' : 'autorun off', 'ok');
 }
 
@@ -26,6 +28,18 @@ export function onCssEdit(id) {
   if (!cell) return;
   cell.code = cell.el.querySelector('textarea').value;
   if (cell._styleEl) cell._styleEl.textContent = cell.code;
+}
+
+export function onHtmlEdit(id) {
+  const cell = S.cells.find(c => c.id === id);
+  if (!cell) return;
+  cell.code = cell.el.querySelector('textarea').value;
+  cell.el.classList.add('stale');
+
+  if (S.autorun) {
+    clearTimeout(S.editTimer);
+    S.editTimer = setTimeout(() => runDAG([id], false), 400);
+  }
 }
 
 export function onCodeEdit(id) {

@@ -458,6 +458,11 @@ button.accent:hover {
 .hl-color { color: var(--accent); }
 .hl-important { color: #d4555a; font-weight: bold; }
 
+/* HTML syntax tokens */
+.hl-tag { color: #6dbfb8; }
+.hl-attr { color: #7aabcf; }
+.hl-expr { color: var(--accent); }
+
 .hl-swatch {
   display: inline-block;
   width: 10px;
@@ -567,16 +572,31 @@ button.accent:hover {
 .cell-html-edit textarea {
   display: block;
   width: 100%;
-  background: var(--bg1);
+  background: transparent;
   border: 1px solid var(--border);
   color: var(--fg-bright);
+  caret-color: var(--fg-bright);
   font-family: var(--mono);
   font-size: var(--editor-font-size);
   line-height: 1.5;
-  padding: 8px 10px;
+  padding: 8px 10px 8px calc(var(--gutter) + 10px);
   resize: vertical;
   min-height: 38px;
   outline: none;
+  tab-size: 2;
+  position: relative;
+  z-index: 2;
+  -webkit-text-fill-color: transparent;
+}
+.cell-html-edit textarea::selection {
+  -webkit-text-fill-color: var(--fg-bright);
+  background: rgba(200,155,60,0.25);
+}
+.cell-html-edit textarea:focus + .highlight-layer {
+  border-color: var(--border-hi);
+}
+.cell-html-edit textarea:focus ~ .line-numbers {
+  border-color: var(--border-hi);
 }
 
 /* ── MARKDOWN CELL ── */
@@ -965,6 +985,21 @@ body.presenting .present-exit {
   font-size: 11px;
 }
 
+/* ── SETTINGS DESCRIPTIONS ── */
+.settings-desc {
+  color: var(--fg-dim);
+  font-size: 10px;
+  line-height: 1.5;
+  padding: 4px 0 8px;
+}
+.settings-desc strong {
+  color: var(--fg);
+}
+
+/* ── HIDE RUN TOGGLE ── */
+html.hide-run-toggle #autorunBtn,
+html.hide-run-toggle #autorunBtnMobile { display: none; }
+
 /* ── MODULE LIST (settings panel) ── */
 .module-row {
   display: flex;
@@ -1009,6 +1044,113 @@ body.presenting .present-exit {
   font-size: 11px;
   font-style: italic;
   padding: 4px 0;
+}
+.settings-about {
+  margin-top: 24px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--fg-dim);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-about a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.settings-about a:hover { text-decoration: underline; }
+
+/* ── FIND BAR ── */
+.find-bar {
+  display: none;
+  flex-direction: column;
+  position: sticky;
+  top: 33px;
+  z-index: 99;
+  float: right;
+  max-width: 400px;
+  width: 100%;
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-top: none;
+  padding: 6px 8px;
+  gap: 4px;
+}
+.find-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.find-replace-row {
+  display: none;
+  align-items: center;
+  gap: 4px;
+}
+.find-bar.show-replace .find-replace-row { display: flex; }
+.find-bar input[type="text"] {
+  flex: 1;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  color: var(--fg-bright);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 4px 8px;
+  outline: none;
+  min-width: 0;
+}
+.find-bar input[type="text"]:focus {
+  border-color: var(--border-hi);
+}
+.find-count {
+  font-size: 10px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+  min-width: 50px;
+  text-align: center;
+  letter-spacing: 1px;
+}
+.find-bar button {
+  padding: 3px 8px;
+  font-size: 10px;
+  min-width: 28px;
+}
+.find-bar button.active {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+}
+body.presenting .find-bar { display: none !important; }
+
+/* ── SEARCH OVERLAY ── */
+.search-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  padding: 8px 10px 8px calc(var(--gutter) + 10px);
+  font-family: var(--mono);
+  font-size: var(--editor-font-size);
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow: hidden;
+  z-index: 1;
+  pointer-events: none;
+  color: transparent;
+  border: 1px solid transparent;
+}
+.search-overlay-md {
+  padding: 8px 10px;
+}
+.md-search-wrap {
+  position: relative;
+}
+.search-match {
+  background: rgba(200,155,60,0.25);
+  color: transparent;
+}
+.search-match-current {
+  background: rgba(200,155,60,0.5);
+  outline: 1px solid var(--accent);
 }
 
 /* ── LIGHT THEME ── */
@@ -1172,6 +1314,7 @@ body.presenting .present-exit {
     color: #111;
   }
 
+  .find-bar { max-width: 100%; float: none; }
   .notebook { padding: 8px 6px 100px; }
   .cell-header { padding: 2px 4px; }
   .settings-close { width: 44px; height: 44px; font-size: 22px; }
@@ -1219,6 +1362,8 @@ body.presenting .present-exit {
 <h2>global</h2>
 <div class="help-row"><span class="help-key">F1</span><span class="help-desc">toggle this help</span></div>
 <div class="help-row"><span class="help-key">Ctrl+S</span><span class="help-desc">save notebook</span></div>
+<div class="help-row"><span class="help-key">Ctrl+F</span><span class="help-desc">find in notebook</span></div>
+<div class="help-row"><span class="help-key">Ctrl+H</span><span class="help-desc">find and replace</span></div>
 
 <h2>toolbar</h2>
 <div class="help-row"><span class="help-key">&#x23f5; step</span><span class="help-desc">run selected cell</span></div>
@@ -1235,6 +1380,7 @@ body.presenting .present-exit {
 <div class="help-row"><span class="help-key">textInput()</span><span class="help-desc">reactive text input</span></div>
 <div class="help-row"><span class="help-key">load(url)</span><span class="help-desc">import ESM module (cached)</span></div>
 <div class="help-row"><span class="help-key">install(url)</span><span class="help-desc">import + embed in HTML on save</span></div>
+<div class="help-row"><span class="help-key">invalidation</span><span class="help-desc">promise that resolves before cell re-runs</span></div>
 
 <h2>directives</h2>
 <div class="help-row"><span class="help-key">// %manual</span><span class="help-desc">skip cell on reactive updates</span></div>
@@ -1243,6 +1389,7 @@ body.presenting .present-exit {
 <div class="help-row"><span class="help-key">// %cellName &lt;label&gt;</span><span class="help-desc">name cell in DevTools</span></div>
 <div class="help-row"><span class="help-key">// %outputId &lt;id&gt;</span><span class="help-desc">set id on output div</span></div>
 <div class="help-row"><span class="help-key">// %outputClass &lt;cls&gt;</span><span class="help-desc">add classes to output div</span></div>
+<div class="help-row"><span class="help-key">// %goto &lt;label&gt;</span><span class="help-desc">jump to named cell after execution</span></div>
 
 <div class="help-close">press F1 or Esc to close</div>
 </div>
@@ -1294,8 +1441,58 @@ body.presenting .present-exit {
     </select>
   </div>
 
+  <h2>execution</h2>
+  <div class="settings-row">
+    <label>mode</label>
+    <select id="setExecMode" onchange="applyExecMode(this.value)">
+      <option value="reactive">reactive</option>
+      <option value="manual">manual</option>
+    </select>
+  </div>
+  <div class="settings-row">
+    <label>run on load</label>
+    <select id="setRunOnLoad" onchange="applyRunOnLoad(this.value)">
+      <option value="yes">yes</option>
+      <option value="no">no</option>
+    </select>
+  </div>
+  <div class="settings-row">
+    <label>show run toggle</label>
+    <select id="setShowToggle" onchange="applyShowToggle(this.value)">
+      <option value="yes">yes</option>
+      <option value="no">no</option>
+    </select>
+  </div>
+  <div class="settings-desc">
+    <strong>reactive</strong>: cells auto-run on edit, changes propagate.<br>
+    <strong>manual</strong>: only Ctrl+Enter, Shift+Enter, or Run All.
+  </div>
+  <div class="settings-row">
+    <label>global override</label>
+    <select id="setGlobalExecMode" onchange="applyGlobalExecMode(this.value)">
+      <option value="">(notebook default)</option>
+      <option value="reactive">always reactive</option>
+      <option value="manual">always manual</option>
+    </select>
+  </div>
+  <div class="settings-row">
+    <label>global run on load</label>
+    <select id="setGlobalRunOnLoad" onchange="applyGlobalRunOnLoad(this.value)">
+      <option value="">(notebook default)</option>
+      <option value="yes">always run</option>
+      <option value="no">never run</option>
+    </select>
+  </div>
+
   <h2>modules</h2>
   <div id="moduleList"></div>
+
+  <div class="settings-about">
+    <span id="aboutVersion"></span>
+    <span id="aboutBuild"></span>
+    <span id="aboutRuntime"></span>
+    <a href="https://github.com/endarthur/auditable" target="_blank">github.com/endarthur/auditable</a>
+  </div>
 </div>
 
 <div class="toolbar">
@@ -1326,9 +1523,27 @@ body.presenting .present-exit {
         <button onclick="$('#helpOverlay').classList.toggle('visible');toggleToolbarMenu()">help (F1)</button>
         <button onclick="toggleSettings();toggleToolbarMenu()">settings</button>
         <button onclick="togglePresent();toggleToolbarMenu()">present</button>
+        <button onclick="openFind(false);toggleToolbarMenu()">find (Ctrl+F)</button>
       </div>
     </div>
   </span>
+</div>
+
+<div class="find-bar" id="findBar">
+  <div class="find-row">
+    <input type="text" id="findInput" placeholder="find" spellcheck="false" autocomplete="off">
+    <span class="find-count" id="findCount"></span>
+    <button id="findRegexBtn" title="use regex">.*</button>
+    <button id="findCaseBtn" title="match case">Aa</button>
+    <button id="findPrevBtn" title="previous (Shift+Enter)">&#x2191;</button>
+    <button id="findNextBtn" title="next (Enter)">&#x2193;</button>
+    <button id="findCloseBtn" title="close (Esc)">&#x00d7;</button>
+  </div>
+  <div class="find-replace-row" id="findReplaceRow">
+    <input type="text" id="replaceInput" placeholder="replace" spellcheck="false" autocomplete="off">
+    <button id="findReplaceBtn">replace</button>
+    <button id="findReplaceAllBtn">all</button>
+  </div>
 </div>
 
 <button class="present-exit" onclick="togglePresent()">&#x2715; exit</button>
@@ -1370,6 +1585,7 @@ body.presenting .present-exit {
         <button onclick="$('#helpOverlay').classList.toggle('visible');toggleMoreTray()">help</button>
         <button onclick="toggleSettings();toggleMoreTray()">settings</button>
         <button onclick="togglePresent();toggleMoreTray()">present</button>
+        <button onclick="openFind(false);toggleMoreTray()">find</button>
       </div>
       <button class="action-more" onclick="toggleMoreTray()">&#x22ef;</button>
     </div>
@@ -1400,6 +1616,12 @@ const S = {
   pendingDTimer: null,
   clipboard: null,  // copied cell data
   trash: [],        // undo stack for deleted cells
+  findActive: false,
+  findQuery: '',
+  findCase: false,
+  findRegex: false,
+  findMatches: [],   // { cellId, index, length }
+  findCurrent: -1,
 };
 
 const JS_KEYWORDS = new Set([
@@ -1765,6 +1987,118 @@ function highlightCss(ta, hl) {
   }
 }
 
+// ── HTML SYNTAX HIGHLIGHTING ──
+
+function tokenizeHtml(code) {
+  const tokens = [];
+  let i = 0;
+  const len = code.length;
+
+  while (i < len) {
+    // template expression ${...}
+    if (code[i] === '$' && i + 1 < len && code[i + 1] === '{') {
+      const start = i;
+      i += 2;
+      let depth = 1;
+      while (i < len && depth > 0) {
+        if (code[i] === '{') depth++;
+        else if (code[i] === '}') depth--;
+        if (depth > 0) i++;
+      }
+      if (i < len) i++;
+      tokens.push({ type: 'expr', text: code.slice(start, i) });
+      continue;
+    }
+    // comment <!-- ... -->
+    if (code[i] === '<' && code[i + 1] === '!' && code[i + 2] === '-' && code[i + 3] === '-') {
+      const start = i;
+      i += 4;
+      while (i < len) {
+        if (code[i] === '-' && code[i + 1] === '-' && code[i + 2] === '>') { i += 3; break; }
+        i++;
+      }
+      tokens.push({ type: 'cmt', text: code.slice(start, i) });
+      continue;
+    }
+    // tag
+    if (code[i] === '<') {
+      tokens.push({ type: 'tag', text: '<' });
+      i++;
+      // closing slash
+      if (i < len && code[i] === '/') { tokens.push({ type: 'tag', text: '/' }); i++; }
+      // tag name
+      const ns = i;
+      while (i < len && /[a-zA-Z0-9-]/.test(code[i])) i++;
+      if (i > ns) tokens.push({ type: 'tag', text: code.slice(ns, i) });
+      // attributes until >
+      while (i < len && code[i] !== '>') {
+        // template expression inside tag
+        if (code[i] === '$' && i + 1 < len && code[i + 1] === '{') {
+          const start = i;
+          i += 2;
+          let depth = 1;
+          while (i < len && depth > 0) {
+            if (code[i] === '{') depth++;
+            else if (code[i] === '}') depth--;
+            if (depth > 0) i++;
+          }
+          if (i < len) i++;
+          tokens.push({ type: 'expr', text: code.slice(start, i) });
+          continue;
+        }
+        if (/\s/.test(code[i])) { tokens.push({ type: '', text: code[i] }); i++; continue; }
+        if (code[i] === '/') { tokens.push({ type: 'tag', text: '/' }); i++; continue; }
+        if (code[i] === '=') { tokens.push({ type: 'punc', text: '=' }); i++; continue; }
+        // quoted attribute value
+        if (code[i] === '"' || code[i] === "'") {
+          const q = code[i];
+          const start = i;
+          i++;
+          while (i < len && code[i] !== q) { if (code[i] === '\\') i++; i++; }
+          if (i < len) i++;
+          tokens.push({ type: 'str', text: code.slice(start, i) });
+          continue;
+        }
+        // attribute name or unquoted value
+        const as = i;
+        while (i < len && !/[\s=>/"']/.test(code[i])) i++;
+        if (i > as) {
+          let j = i;
+          while (j < len && /\s/.test(code[j])) j++;
+          tokens.push({ type: (j < len && code[j] === '=') ? 'attr' : 'attr', text: code.slice(as, i) });
+        }
+      }
+      if (i < len && code[i] === '>') { tokens.push({ type: 'tag', text: '>' }); i++; }
+      continue;
+    }
+    // plain text
+    tokens.push({ type: '', text: code[i] });
+    i++;
+  }
+
+  return tokens;
+}
+
+function highlightHtml(ta, hl) {
+  const code = ta.value;
+  if (!code) { hl.innerHTML = '\n'; return; }
+
+  const tokens = tokenizeHtml(code);
+  let html = '';
+  for (const t of tokens) {
+    const escaped = t.text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+    if (t.type) {
+      html += `<span class="hl-${t.type}">${escaped}</span>`;
+    } else {
+      html += escaped;
+    }
+  }
+  hl.innerHTML = html + '\n';
+}
+
 // -- dag.js --
 
 // ── REACTIVE DAG ──
@@ -1878,11 +2212,11 @@ function parseNames(code) {
   return { defines };
 }
 
-function findUses(code, allDefined) {
+function findUses(code, allDefined, selfDefined) {
   // find identifiers that reference other cells' definitions
   const uses = new Set();
   const stripped = stripCommentsAndStrings(code);
-  const selfDefined = parseNames(code).defines;
+  if (!selfDefined) selfDefined = parseNames(code).defines;
 
   const idRe = /\b([a-zA-Z_$]\w*)\b/g;
   let m;
@@ -1910,28 +2244,73 @@ function findHtmlUses(code, allDefined) {
 }
 
 function buildDAG() {
-  // collect all defined names globally
+  // collect all defined names globally (only re-parse changed cells)
   const allDefined = new Map(); // name -> cell id
   for (const c of S.cells) {
     if (c.type !== 'code') continue;
-    const { defines } = parseNames(c.code);
-    c.defines = defines;
-    for (const name of defines) {
+    if (c.code !== c._parsedCode) {
+      const { defines } = parseNames(c.code);
+      c.defines = defines;
+      c._parsedCode = c.code;
+    }
+    for (const name of c.defines) {
       allDefined.set(name, c.id);
     }
   }
 
-  // find uses for each cell
+  // find uses for each cell (invalidate if code changed or global names changed)
   const definedNames = new Set(allDefined.keys());
+  const definedKey = [...definedNames].sort().join(',');
   for (const c of S.cells) {
     if (c.type === 'code') {
-      c.uses = findUses(c.code, definedNames);
+      if (c.code !== c._usesCode || c._definedKey !== definedKey) {
+        c.uses = findUses(c.code, definedNames, c.defines);
+        c._usesCode = c.code;
+        c._definedKey = definedKey;
+      }
     } else if (c.type === 'html') {
-      c.uses = findHtmlUses(c.code, definedNames);
+      if (c.code !== c._usesCode || c._definedKey !== definedKey) {
+        c.uses = findHtmlUses(c.code, definedNames);
+        c._usesCode = c.code;
+        c._definedKey = definedKey;
+      }
     }
   }
 
   return allDefined;
+}
+
+function topoSort(dirtyIds) {
+  // BFS from dirty cells to find all downstream dependents
+  const dependents = new Map(); // varName -> Set<cellId>
+  for (const c of S.cells) {
+    if (!c.uses) continue;
+    for (const name of c.uses) {
+      if (!dependents.has(name)) dependents.set(name, new Set());
+      dependents.get(name).add(c.id);
+    }
+  }
+
+  const needsRun = new Set(dirtyIds);
+  const queue = [...dirtyIds];
+  while (queue.length) {
+    const id = queue.shift();
+    const cell = S.cells.find(c => c.id === id);
+    if (!cell || !cell.defines) continue;
+    for (const name of cell.defines) {
+      const deps = dependents.get(name);
+      if (!deps) continue;
+      for (const depId of deps) {
+        if (!needsRun.has(depId)) {
+          needsRun.add(depId);
+          queue.push(depId);
+        }
+      }
+    }
+  }
+
+  // return in document order
+  return S.cells.filter(c => needsRun.has(c.id)).map(c => c.id);
 }
 
 // -- exec.js --
@@ -1944,12 +2323,25 @@ function renderHtmlCell(cell) {
   if (!viewEl) return;
   if (outputEl) { outputEl.textContent = ''; outputEl.className = 'cell-output'; }
 
-  const scopeKeys = Object.keys(S.scope);
+  // use only variables this cell references for stable function signatures
+  const scopeKeys = cell.uses ? [...cell.uses].sort() : [];
   const scopeVals = scopeKeys.map(k => S.scope[k]);
+
+  // cache compiled template functions per expression
+  if (!cell._tplCache) cell._tplCache = {};
+  const scopeSig = scopeKeys.join(',');
+  if (cell._tplScopeSig !== scopeSig) {
+    cell._tplCache = {};  // scope signature changed, invalidate all
+    cell._tplScopeSig = scopeSig;
+  }
 
   let rendered = cell.code.replace(/\$\{([^}]+)\}/g, (match, expr) => {
     try {
-      const fn = new Function(...scopeKeys, '"use strict"; return (' + expr + ')');
+      let fn = cell._tplCache[expr];
+      if (!fn) {
+        fn = new Function(...scopeKeys, '"use strict"; return (' + expr + ')');
+        cell._tplCache[expr] = fn;
+      }
       const val = fn(...scopeVals);
       return val === undefined ? '' : String(val);
     } catch (e) {
@@ -1964,8 +2356,14 @@ function renderHtmlCell(cell) {
 }
 
 async function execCell(cell) {
+  // fire invalidation promise from previous run (cleanup resources)
+  if (cell._invalidate) { cell._invalidate(); cell._invalidate = null; }
+
   const outputEl = cell.el.querySelector('.cell-output');
   const widgetEl = cell.el.querySelector('.cell-widgets');
+
+  // preserve canvases before clearing output
+  const prevCanvases = [...outputEl.querySelectorAll('canvas')];
   outputEl.textContent = '';
   outputEl.className = 'cell-output';
   const outClass = parseOutputClass(cell.code);
@@ -1975,8 +2373,14 @@ async function execCell(cell) {
   cell.el.classList.toggle('present-hidden', isHidden(cell.code));
   cell.error = null;
 
+  // create invalidation promise for this run
+  let invalidationResolve;
+  const invalidation = new Promise(r => { invalidationResolve = r; });
+  cell._invalidate = invalidationResolve;
+
   // track which widgets are used this run
   const usedWidgets = new Set();
+  let canvasIdx = 0;
 
   // build display function for this cell
   const display = (...args) => {
@@ -1995,8 +2399,13 @@ async function execCell(cell) {
     }
   };
 
-  // canvas helper
+  // canvas helper — reuses existing canvas if dimensions match
   const canvas = (w = 400, h = 300) => {
+    const prev = prevCanvases[canvasIdx++];
+    if (prev && prev.width === w && prev.height === h) {
+      outputEl.appendChild(prev);
+      return prev;
+    }
     const c = document.createElement('canvas');
     c.width = w; c.height = h;
     c.style.background = '#000';
@@ -2144,9 +2553,9 @@ async function execCell(cell) {
   const checkbox = (label, defaultVal = false) => mkInput(label, 'checkbox', defaultVal);
   const textInput = (label, defaultVal = '') => mkInput(label, 'text', defaultVal);
 
-  // execute with shared scope
-  const scopeKeys = Object.keys(S.scope);
-  const scopeVals = scopeKeys.map(k => S.scope[k]);
+  // execute with scoped parameters (only what this cell uses, for stable V8 JIT)
+  const scopeKeys = cell.uses ? [...cell.uses].sort() : [];
+  const defNames = cell.defines ? [...cell.defines].sort().join(', ') : '';
 
   // import cache — shared across all cells
   if (!window._importCache) window._importCache = {};
@@ -2190,24 +2599,34 @@ async function execCell(cell) {
     return mod;
   };
 
-  const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+  // function caching — reuse compiled function if code/uses/defines unchanged
+  const cacheKey = scopeKeys.join(',') + '|' + defNames + '|' + cell.code;
 
   try {
-    const cellName = parseCellName(cell.code);
-    const slug = cellName ? '-' + cellName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') : '';
-    const fn = new AsyncFunction(
-      ...scopeKeys,
-      'display', 'canvas', 'table',
-      'slider', 'dropdown', 'checkbox', 'textInput',
-      'load', 'install',
-      `"use strict";\n${cell.code}\n\n` +
-      `return { ${[...cell.defines].join(', ')} };\n` +
-      `//# sourceURL=auditable://cell-${cell.id}${slug}.js`
-    );
+    let fn;
+    if (cell._cacheKey === cacheKey && cell._cachedFn) {
+      fn = cell._cachedFn;
+    } else {
+      const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+      const cellName = parseCellName(cell.code);
+      const slug = cellName ? '-' + cellName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') : '';
+      fn = new AsyncFunction(
+        ...scopeKeys,
+        'display', 'canvas', 'table',
+        'slider', 'dropdown', 'checkbox', 'textInput',
+        'load', 'install', 'invalidation',
+        `"use strict";\n${cell.code}\n\n` +
+        `return { ${defNames} };\n` +
+        `//# sourceURL=auditable://cell-${cell.id}${slug}.js`
+      );
+      cell._cachedFn = fn;
+      cell._cacheKey = cacheKey;
+    }
 
+    const scopeVals = scopeKeys.map(k => S.scope[k]);
     const result = await fn(...scopeVals, display, canvas, table,
                       slider, dropdown, checkbox, textInput,
-                      load, install);
+                      load, install, invalidation);
 
     // update scope with defined variables
     if (result && typeof result === 'object') {
@@ -2240,22 +2659,45 @@ async function execCell(cell) {
 
 async function runDAG(dirtyIds, force = false) {
   buildDAG();
+  const isAutorun = S.autorun && !force;
 
-  // rebuild scope from scratch in document order
+  // determine which cells need execution via topo sort
+  const runSet = new Set(topoSort(dirtyIds));
+
+  if (window._dagStart) window._dagStart();
+
+  // rebuild scope in document order, only executing cells in runSet
   S.scope = {};
-  for (const cell of S.cells) {
+  const poisoned = new Set(); // variable names defined by errored cells
+  for (let i = 0; i < S.cells.length; i++) {
+    const cell = S.cells[i];
+
     if (cell.type === 'html') {
-      renderHtmlCell(cell);
+      if (runSet.has(cell.id)) {
+        // check if any used variable is poisoned
+        if (cell.uses && [...cell.uses].some(n => poisoned.has(n))) {
+          cell.el.classList.remove('fresh');
+          cell.el.classList.add('stale');
+        } else {
+          renderHtmlCell(cell);
+        }
+      }
       continue;
     }
     if (cell.type !== 'code') continue;
 
-    // skip norun cells always (unless explicitly triggered by clicking run on the cell)
-    if (isNorun(cell.code) && !dirtyIds.includes(cell.id)) continue;
+    // skip norun cells (unless explicitly triggered)
+    if (isNorun(cell.code) && !dirtyIds.includes(cell.id)) {
+      if (cell._lastResult) {
+        for (const [k, v] of Object.entries(cell._lastResult)) {
+          if (v !== undefined) S.scope[k] = v;
+        }
+      }
+      continue;
+    }
 
-    // skip manual cells unless force (Run All) or explicitly triggered
+    // skip manual cells unless force or explicitly triggered
     if (!force && isManual(cell.code) && !dirtyIds.includes(cell.id)) {
-      // keep existing scope contributions if previously run
       if (cell._lastResult) {
         for (const [k, v] of Object.entries(cell._lastResult)) {
           if (v !== undefined) S.scope[k] = v;
@@ -2265,7 +2707,70 @@ async function runDAG(dirtyIds, force = false) {
       continue;
     }
 
+    // not in run set — restore cached results, skip execution
+    if (!runSet.has(cell.id)) {
+      if (cell._lastResult) {
+        for (const [k, v] of Object.entries(cell._lastResult)) {
+          if (v !== undefined) S.scope[k] = v;
+        }
+      }
+      continue;
+    }
+
+    // error isolation: if any upstream dependency is poisoned, skip this cell
+    if (cell.uses && cell.uses.size > 0) {
+      let blocked = false;
+      for (const name of cell.uses) {
+        if (poisoned.has(name)) { blocked = true; break; }
+      }
+      if (blocked) {
+        const outputEl = cell.el.querySelector('.cell-output');
+        if (outputEl && !cell.error) {
+          outputEl.textContent = 'blocked by upstream error';
+          outputEl.className = 'cell-output error';
+        }
+        cell.el.classList.remove('stale', 'fresh');
+        cell.el.classList.add('error');
+        // poison our own defines so downstream also blocks
+        if (cell.defines) for (const name of cell.defines) poisoned.add(name);
+        continue;
+      }
+    }
+
+    // value-equality gating: if this cell is a downstream dependent (not directly
+    // dirty) and all its input values are unchanged, skip re-execution entirely
+    if (!dirtyIds.includes(cell.id) && cell._lastResult && cell.uses && cell.uses.size > 0) {
+      let inputsChanged = false;
+      for (const name of cell.uses) {
+        if (S.scope[name] !== cell._prevInputs?.[name]) { inputsChanged = true; break; }
+      }
+      if (!inputsChanged) {
+        // inputs identical — restore previous results, skip execution
+        for (const [k, v] of Object.entries(cell._lastResult)) {
+          if (v !== undefined) S.scope[k] = v;
+        }
+        continue;
+      }
+    }
+
+    if (window._beforeExec) window._beforeExec(cell);
     await execCell(cell);
+
+    // if the cell errored, poison its defines
+    if (cell.error) {
+      if (cell.defines) for (const name of cell.defines) poisoned.add(name);
+    }
+
+    // snapshot input values for future equality checks
+    if (cell.uses) {
+      cell._prevInputs = {};
+      for (const name of cell.uses) cell._prevInputs[name] = S.scope[name];
+    }
+
+    if (window._afterExec && !isAutorun) {
+      const jump = window._afterExec(cell, i);
+      if (jump >= 0) { i = jump - 1; continue; }
+    }
   }
 
   updateStatus();
@@ -2396,6 +2901,7 @@ function createCellEl(type, id) {
     });
 
     ta.addEventListener('blur', () => {
+      if (S.findActive) return;
       const cell = S.cells.find(c => c.id === id);
       if (cell) {
         cell.code = ta.value;
@@ -2415,7 +2921,11 @@ function createCellEl(type, id) {
       ${cellHeaderHTML('html', id)}
       <div class="cell-html-view"></div>
       <div class="cell-html-edit" style="display:none">
-        <textarea rows="2" spellcheck="false" placeholder="<html template>"></textarea>
+        <div class="editor-wrap">
+          <div class="line-numbers" aria-hidden="true">1</div>
+          <textarea rows="2" spellcheck="false" placeholder="<html template>"></textarea>
+          <div class="highlight-layer" aria-hidden="true"></div>
+        </div>
       </div>
       <div class="cell-output"></div>
     `;
@@ -2423,6 +2933,7 @@ function createCellEl(type, id) {
     const view = div.querySelector('.cell-html-view');
     const editWrap = div.querySelector('.cell-html-edit');
     const ta = div.querySelector('.cell-html-edit textarea');
+    const hl = div.querySelector('.highlight-layer');
     div.querySelector('.cell-type').addEventListener('click', () => div.classList.toggle('collapsed'));
 
     view.addEventListener('click', () => {
@@ -2433,6 +2944,7 @@ function createCellEl(type, id) {
     });
 
     ta.addEventListener('blur', () => {
+      if (S.findActive) return;
       const cell = S.cells.find(c => c.id === id);
       if (cell) {
         cell.code = ta.value;
@@ -2442,6 +2954,9 @@ function createCellEl(type, id) {
       view.style.display = '';
     });
 
+    const ln = div.querySelector('.line-numbers');
+    ta.addEventListener('input', () => { highlightHtml(ta, hl); onHtmlEdit(id); });
+    ta.addEventListener('scroll', () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; ln.scrollTop = ta.scrollTop; });
     ta.addEventListener('input', autoResize);
     ta.addEventListener('keydown', handleTab);
   } else {
@@ -2466,6 +2981,7 @@ function createCellEl(type, id) {
     });
 
     ta.addEventListener('blur', () => {
+      if (S.findActive) return;
       const cell = S.cells.find(c => c.id === id);
       if (cell) {
         cell.code = ta.value;
@@ -2754,6 +3270,8 @@ function toggleAutorun() {
     btnMobile.textContent = text;
     btnMobile.className = cls;
   }
+  const sel = $('#setExecMode');
+  if (sel) sel.value = S.autorun ? 'reactive' : 'manual';
   setMsg(S.autorun ? 'autorun on' : 'autorun off', 'ok');
 }
 
@@ -2762,6 +3280,18 @@ function onCssEdit(id) {
   if (!cell) return;
   cell.code = cell.el.querySelector('textarea').value;
   if (cell._styleEl) cell._styleEl.textContent = cell.code;
+}
+
+function onHtmlEdit(id) {
+  const cell = S.cells.find(c => c.id === id);
+  if (!cell) return;
+  cell.code = cell.el.querySelector('textarea').value;
+  cell.el.classList.add('stale');
+
+  if (S.autorun) {
+    clearTimeout(S.editTimer);
+    S.editTimer = setTimeout(() => runDAG([id], false), 400);
+  }
 }
 
 function onCodeEdit(id) {
@@ -2837,6 +3367,61 @@ function applyHeader(mode) {
   $('#setHeader').value = mode;
 }
 
+// ── EXECUTION MODE ──
+
+const __AUDITABLE_DEFAULT_EXEC_MODE__ = 'reactive';
+const __AUDITABLE_DEFAULT_RUN_ON_LOAD__ = 'yes';
+
+let _runOnLoad = 'yes';
+let _showToggle = 'yes';
+
+function applyExecMode(mode) {
+  S.autorun = (mode === 'reactive');
+  const btn = $('#autorunBtn');
+  const btnMobile = document.getElementById('autorunBtnMobile');
+  const cls = S.autorun ? 'autorun-on' : 'autorun-off';
+  const text = S.autorun ? '\u25b6' : '\u2016';
+  if (btn) { btn.textContent = text; btn.className = cls; btn.title = S.autorun ? 'reactive mode \u2014 cells auto-run on edit' : 'manual mode \u2014 only Run All or Ctrl+Enter'; }
+  if (btnMobile) { btnMobile.textContent = text; btnMobile.className = cls; }
+  const sel = $('#setExecMode');
+  if (sel) sel.value = mode;
+}
+
+function applyRunOnLoad(val) {
+  _runOnLoad = val;
+  const sel = $('#setRunOnLoad');
+  if (sel) sel.value = val;
+}
+
+function applyShowToggle(val) {
+  _showToggle = val;
+  document.documentElement.classList.toggle('hide-run-toggle', val === 'no');
+  const sel = $('#setShowToggle');
+  if (sel) sel.value = val;
+}
+
+function applyGlobalExecMode(val) {
+  if (val) localStorage.setItem('auditable-exec-mode', val);
+  else localStorage.removeItem('auditable-exec-mode');
+}
+
+function applyGlobalRunOnLoad(val) {
+  if (val) localStorage.setItem('auditable-run-on-load', val);
+  else localStorage.removeItem('auditable-run-on-load');
+}
+
+function resolveExecMode() {
+  return localStorage.getItem('auditable-exec-mode')
+    || $('#setExecMode')?.value
+    || __AUDITABLE_DEFAULT_EXEC_MODE__;
+}
+
+function resolveRunOnLoad() {
+  return localStorage.getItem('auditable-run-on-load')
+    || _runOnLoad
+    || __AUDITABLE_DEFAULT_RUN_ON_LOAD__;
+}
+
 function getSettings() {
   const s = {
     theme: document.documentElement.classList.contains('light') ? 'light' : 'dark',
@@ -2844,6 +3429,9 @@ function getSettings() {
     width: $('#setWidth').value,
     header: $('#setHeader').value,
     lineNumbers: document.documentElement.classList.contains('hide-line-numbers') ? 'off' : 'on',
+    execMode: S.autorun ? 'reactive' : 'manual',
+    runOnLoad: _runOnLoad,
+    showToggle: _showToggle,
   };
   if (window._sizeCompare) s.sizeCompare = true;
   if (window._sizeCompareRef === 'content') s.sizeCompareRef = 'content';
@@ -2857,6 +3445,9 @@ function applySettings(s) {
   if (s.width) applyWidth(s.width);
   if (s.header) applyHeader(s.header);
   if (s.lineNumbers) applyLineNumbers(s.lineNumbers);
+  if (s.execMode) applyExecMode(s.execMode);
+  if (s.runOnLoad) applyRunOnLoad(s.runOnLoad);
+  if (s.showToggle) applyShowToggle(s.showToggle);
   if (s.sizeCompare !== undefined && typeof applySizeCompare === 'function') applySizeCompare(s.sizeCompare);
   if (s.sizeCompareRef !== undefined && typeof applySizeCompareRef === 'function') applySizeCompareRef(s.sizeCompareRef);
 }
@@ -2864,6 +3455,32 @@ function applySettings(s) {
 function togglePresent() {
   document.body.classList.toggle('presenting');
 }
+
+// ── ABOUT ──
+
+const __AUDITABLE_VERSION__ = '0.1.0';
+const __AUDITABLE_BUILD_DATE__ = '2026-02-22';
+const __AUDITABLE_BASE_SIZE__ = 149617;
+
+(function() {
+  const ver = $('#aboutVersion');
+  const build = $('#aboutBuild');
+  const rt = $('#aboutRuntime');
+  if (ver) ver.textContent = 'auditable v' + __AUDITABLE_VERSION__;
+  if (build) build.textContent = 'built ' + __AUDITABLE_BUILD_DATE__;
+  if (rt && __AUDITABLE_BASE_SIZE__ > 0) rt.textContent = 'runtime ' + (__AUDITABLE_BASE_SIZE__ / 1024).toFixed(1) + ' KB';
+})();
+
+// ── EXECUTION SETTINGS INIT ──
+
+(function() {
+  const gm = localStorage.getItem('auditable-exec-mode') || '';
+  const gr = localStorage.getItem('auditable-run-on-load') || '';
+  const selGm = $('#setGlobalExecMode');
+  const selGr = $('#setGlobalRunOnLoad');
+  if (selGm) selGm.value = gm;
+  if (selGr) selGr.value = gr;
+})();
 
 // ── MODULE MANAGEMENT ──
 
@@ -2965,13 +3582,28 @@ function saveNotebook() {
   const toolbarEl = document.querySelector('.toolbar').cloneNode(true);
   toolbarEl.querySelector('#docTitle').value = title;
   toolbarEl.querySelector('#toolbarStatus').textContent = '';
-  // reset autorun button state
+  // reset autorun button state to match saved mode
   const autoBtn = toolbarEl.querySelector('#autorunBtn');
-  if (autoBtn) { autoBtn.className = 'autorun-on'; autoBtn.textContent = '\u25b6'; }
+  const savedMode = S.autorun ? 'reactive' : 'manual';
+  if (autoBtn) {
+    autoBtn.className = savedMode === 'reactive' ? 'autorun-on' : 'autorun-off';
+    autoBtn.textContent = savedMode === 'reactive' ? '\u25b6' : '\u2016';
+  }
   // close overflow if open
   const overflow = toolbarEl.querySelector('.toolbar-overflow');
   if (overflow) overflow.classList.remove('open');
   const toolbarHTML = toolbarEl.outerHTML;
+
+  // capture find bar and reset to default state
+  const findBarEl = $('#findBar').cloneNode(true);
+  findBarEl.style.display = '';
+  findBarEl.classList.remove('show-replace');
+  findBarEl.querySelector('#findInput').value = '';
+  findBarEl.querySelector('#replaceInput').value = '';
+  findBarEl.querySelector('#findCount').textContent = '';
+  findBarEl.querySelector('#findCaseBtn').classList.remove('active');
+  findBarEl.querySelector('#findRegexBtn').classList.remove('active');
+  const findBarHTML = findBarEl.outerHTML;
 
   // build output HTML
   let html = `<!DOCTYPE html>
@@ -2990,6 +3622,8 @@ ${settingsOvHTML}
 ${settingsPanHTML}
 
 ${toolbarHTML}
+
+${findBarHTML}
 
 <button class="present-exit" onclick="togglePresent()">\u2715 exit</button>
 
@@ -3045,6 +3679,19 @@ function loadFromEmbed() {
     }
   }
 
+  // apply execution mode priority chain (localStorage > notebook > build default)
+  const effectiveMode = resolveExecMode();
+  const effectiveRun = resolveRunOnLoad();
+  if (effectiveMode === 'manual') {
+    S.autorun = false;
+    const btn = document.getElementById('autorunBtn');
+    const btnMobile = document.getElementById('autorunBtnMobile');
+    if (btn) { btn.className = 'autorun-off'; btn.textContent = '\u2016'; btn.title = 'manual mode \u2014 only Run All or Ctrl+Enter'; }
+    if (btnMobile) { btnMobile.className = 'autorun-off'; btnMobile.textContent = '\u2016'; }
+    const sel = document.getElementById('setExecMode');
+    if (sel) sel.value = 'manual';
+  }
+
   const match = raw.match(/<!--AUDITABLE-DATA\n([\s\S]*?)\nAUDITABLE-DATA-->/);
   if (match) {
     try {
@@ -3053,8 +3700,8 @@ function loadFromEmbed() {
         const cell = addCell(c.type, c.code);
         if (c.collapsed) cell.el.classList.add('collapsed');
       }
-      // run after load
-      if (S.cells.some(c => c.type === 'code')) {
+      // run after load (gated on resolved runOnLoad)
+      if (effectiveRun === 'yes' && S.cells.some(c => c.type === 'code')) {
         setTimeout(runAll, 50);
       }
       return true;
@@ -3148,6 +3795,376 @@ function setMsg(msg, cls = '') {
   el.className = 'status-msg' + (cls ? ' ' + cls : '');
   if (cls) setTimeout(() => { el.textContent = ''; el.className = 'status-msg'; }, 3000);
 }
+
+// -- find.js --
+
+// ── FIND / REPLACE ──
+
+function openFind(showReplace) {
+  const bar = $('#findBar');
+  bar.style.display = 'flex';
+  S.findActive = true;
+  if (showReplace) bar.classList.add('show-replace');
+  else bar.classList.remove('show-replace');
+  const inp = $('#findInput');
+  // pre-fill from textarea selection
+  const active = document.activeElement;
+  if (active && active.tagName === 'TEXTAREA') {
+    const sel = active.value.substring(active.selectionStart, active.selectionEnd);
+    if (sel && sel.indexOf('\n') === -1) inp.value = sel;
+  }
+  inp.focus();
+  inp.select();
+  if (inp.value) findComputeMatches();
+}
+
+function closeFind() {
+  const bar = $('#findBar');
+  bar.style.display = '';
+  bar.classList.remove('show-replace');
+  S.findActive = false;
+  S.findQuery = '';
+  S.findMatches = [];
+  S.findCurrent = -1;
+  $('#findCount').textContent = '';
+  // remove all overlays
+  document.querySelectorAll('.search-overlay').forEach(el => el.remove());
+  document.querySelectorAll('.md-search-wrap').forEach(wrap => {
+    const ta = wrap.querySelector('textarea');
+    if (ta) wrap.parentNode.insertBefore(ta, wrap);
+    wrap.remove();
+  });
+}
+
+function escapeRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function findComputeMatches() {
+  const query = $('#findInput').value;
+  S.findQuery = query;
+  S.findMatches = [];
+  if (!query) {
+    S.findCurrent = -1;
+    findUpdateCount();
+    document.querySelectorAll('.search-overlay').forEach(el => el.remove());
+    document.querySelectorAll('.md-search-wrap').forEach(wrap => {
+      const ta = wrap.querySelector('textarea');
+      if (ta) wrap.parentNode.insertBefore(ta, wrap);
+      wrap.remove();
+    });
+    return;
+  }
+  const flags = S.findCase ? 'g' : 'gi';
+  const pattern = S.findRegex ? query : escapeRegex(query);
+  let re;
+  try { re = new RegExp(pattern, flags); }
+  catch (e) {
+    S.findCurrent = -1;
+    $('#findCount').textContent = 'bad regex';
+    return;
+  }
+
+  for (const cell of S.cells) {
+    let m;
+    re.lastIndex = 0;
+    while ((m = re.exec(cell.code)) !== null) {
+      S.findMatches.push({ cellId: cell.id, index: m.index, length: m[0].length });
+      if (m[0].length === 0) re.lastIndex++;  // prevent infinite loop on zero-length match
+    }
+  }
+  // keep findCurrent in range
+  if (S.findMatches.length === 0) S.findCurrent = -1;
+  else if (S.findCurrent < 0 || S.findCurrent >= S.findMatches.length) S.findCurrent = 0;
+  findUpdateOverlays();
+  findUpdateCount();
+}
+
+function findNext() {
+  if (!S.findMatches.length) return;
+  S.findCurrent = (S.findCurrent + 1) % S.findMatches.length;
+  findUpdateOverlays();
+  findUpdateCount();
+  findScrollToMatch();
+}
+
+function findPrev() {
+  if (!S.findMatches.length) return;
+  S.findCurrent = (S.findCurrent - 1 + S.findMatches.length) % S.findMatches.length;
+  findUpdateOverlays();
+  findUpdateCount();
+  findScrollToMatch();
+}
+
+function findReplace() {
+  if (S.findCurrent < 0 || S.findCurrent >= S.findMatches.length) return;
+  const match = S.findMatches[S.findCurrent];
+  const cell = S.cells.find(c => c.id === match.cellId);
+  if (!cell) return;
+  const replaceVal = $('#replaceInput').value;
+  if (S.findRegex) {
+    const flags = S.findCase ? '' : 'i';
+    try {
+      const re = new RegExp(S.findQuery, flags);
+      const matched = cell.code.substring(match.index, match.index + match.length);
+      const replaced = matched.replace(re, replaceVal);
+      cell.code = cell.code.substring(0, match.index) + replaced + cell.code.substring(match.index + match.length);
+    } catch (e) { return; }
+  } else {
+    cell.code = cell.code.substring(0, match.index) + replaceVal + cell.code.substring(match.index + match.length);
+  }
+  // update textarea
+  const ta = cell.el.querySelector('textarea');
+  if (ta) {
+    ta.value = cell.code;
+    ta.dispatchEvent(new Event('input'));
+  }
+  findComputeMatches();
+}
+
+function findReplaceAll() {
+  const query = S.findQuery;
+  if (!query) return;
+  const replaceVal = $('#replaceInput').value;
+  const flags = S.findCase ? 'g' : 'gi';
+  const pattern = S.findRegex ? query : escapeRegex(query);
+  let re;
+  try { re = new RegExp(pattern, flags); }
+  catch (e) { return; }
+  let count = 0;
+  for (const cell of S.cells) {
+    const before = cell.code;
+    if (S.findRegex) {
+      cell.code = cell.code.replace(re, (...args) => { count++; return replaceVal.replace(/\$(\d+)/g, (_, n) => args[+n] != null ? args[+n] : ''); });
+    } else {
+      cell.code = cell.code.replace(re, () => { count++; return replaceVal; });
+    }
+    if (cell.code !== before) {
+      const ta = cell.el.querySelector('textarea');
+      if (ta) {
+        ta.value = cell.code;
+        ta.dispatchEvent(new Event('input'));
+      }
+    }
+  }
+  findComputeMatches();
+}
+
+function findUpdateOverlays() {
+  // remove existing overlays
+  document.querySelectorAll('.search-overlay').forEach(el => el.remove());
+  // unwrap md-search-wraps
+  document.querySelectorAll('.md-search-wrap').forEach(wrap => {
+    const ta = wrap.querySelector('textarea');
+    if (ta) wrap.parentNode.insertBefore(ta, wrap);
+    wrap.remove();
+  });
+
+  if (!S.findQuery || !S.findMatches.length) return;
+
+  // group matches by cellId
+  const byCell = {};
+  S.findMatches.forEach((m, i) => {
+    if (!byCell[m.cellId]) byCell[m.cellId] = [];
+    byCell[m.cellId].push({ ...m, globalIdx: i });
+  });
+
+  for (const cellId of Object.keys(byCell)) {
+    const cell = S.cells.find(c => c.id === parseInt(cellId));
+    if (!cell) continue;
+    const matches = byCell[cellId];
+    const code = cell.code;
+
+    // build overlay content
+    let html = '';
+    let pos = 0;
+    for (const m of matches) {
+      // text before match
+      html += escHtml(code.substring(pos, m.index));
+      const cls = m.globalIdx === S.findCurrent ? 'search-match search-match-current' : 'search-match';
+      html += `<mark class="${cls}">${escHtml(code.substring(m.index, m.index + m.length))}</mark>`;
+      pos = m.index + m.length;
+    }
+    html += escHtml(code.substring(pos));
+
+    const overlay = document.createElement('div');
+
+    if (cell.type === 'md') {
+      // markdown cells: wrap textarea in md-search-wrap
+      overlay.className = 'search-overlay search-overlay-md';
+      overlay.innerHTML = html;
+      const editWrap = cell.el.querySelector('.cell-md-edit');
+      const ta = editWrap.querySelector('textarea');
+      let wrap = editWrap.querySelector('.md-search-wrap');
+      if (!wrap) {
+        wrap = document.createElement('div');
+        wrap.className = 'md-search-wrap';
+        ta.parentNode.insertBefore(wrap, ta);
+        wrap.appendChild(ta);
+      }
+      wrap.appendChild(overlay);
+      wireScrollSync(ta, overlay);
+    } else {
+      // code, css, html cells: insert in editor-wrap
+      overlay.className = 'search-overlay';
+      overlay.innerHTML = html;
+      let editorWrap;
+      if (cell.type === 'code') editorWrap = cell.el.querySelector('.cell-code .editor-wrap');
+      else if (cell.type === 'css') editorWrap = cell.el.querySelector('.cell-css-edit .editor-wrap');
+      else if (cell.type === 'html') editorWrap = cell.el.querySelector('.cell-html-edit .editor-wrap');
+      if (editorWrap) {
+        editorWrap.appendChild(overlay);
+        const ta = editorWrap.querySelector('textarea');
+        if (ta) wireScrollSync(ta, overlay);
+      }
+    }
+  }
+}
+
+function wireScrollSync(ta, overlay) {
+  if (ta._searchScrollWired) return;
+  ta._searchScrollWired = true;
+  ta.addEventListener('scroll', () => {
+    const ov = ta.closest('.editor-wrap, .md-search-wrap');
+    if (!ov) return;
+    const so = ov.querySelector('.search-overlay');
+    if (so) {
+      so.scrollTop = ta.scrollTop;
+      so.scrollLeft = ta.scrollLeft;
+    }
+  });
+}
+
+function findUpdateCount() {
+  const el = $('#findCount');
+  if (!S.findQuery) { el.textContent = ''; return; }
+  if (S.findMatches.length === 0) { el.textContent = 'no results'; return; }
+  el.textContent = `${S.findCurrent + 1}/${S.findMatches.length}`;
+}
+
+function findScrollToMatch() {
+  if (S.findCurrent < 0) return;
+  const match = S.findMatches[S.findCurrent];
+  if (!match) return;
+  const cell = S.cells.find(c => c.id === match.cellId);
+  if (!cell) return;
+
+  // open editor for non-code cells if needed
+  if (cell.type === 'css') {
+    const editWrap = cell.el.querySelector('.cell-css-edit');
+    const view = cell.el.querySelector('.cell-css-view');
+    if (editWrap.style.display === 'none') {
+      const ta = editWrap.querySelector('textarea');
+      editWrap.style.display = '';
+      view.style.display = 'none';
+      ta.value = cell.code;
+      autoResize({ target: ta });
+    }
+  } else if (cell.type === 'html') {
+    const editWrap = cell.el.querySelector('.cell-html-edit');
+    const view = cell.el.querySelector('.cell-html-view');
+    if (editWrap.style.display === 'none') {
+      const ta = editWrap.querySelector('textarea');
+      editWrap.style.display = '';
+      view.style.display = 'none';
+      ta.value = cell.code;
+      autoResize({ target: ta });
+    }
+  } else if (cell.type === 'md') {
+    const editWrap = cell.el.querySelector('.cell-md-edit');
+    const view = cell.el.querySelector('.cell-md-view');
+    if (editWrap.style.display === 'none') {
+      const ta = editWrap.querySelector('textarea');
+      editWrap.style.display = '';
+      view.style.display = 'none';
+      ta.value = cell.code;
+      autoResize({ target: ta });
+    }
+  }
+
+  // uncollapse if collapsed
+  cell.el.classList.remove('collapsed');
+
+  // scroll cell into view
+  cell.el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+
+  // scroll textarea to match line
+  const ta = cell.type === 'md'
+    ? cell.el.querySelector('.cell-md-edit textarea')
+    : cell.type === 'css'
+    ? cell.el.querySelector('.cell-css-edit textarea')
+    : cell.type === 'html'
+    ? cell.el.querySelector('.cell-html-edit textarea')
+    : cell.el.querySelector('textarea');
+  if (ta) {
+    const textBefore = cell.code.substring(0, match.index);
+    const lineNum = textBefore.split('\n').length - 1;
+    const lineHeight = parseFloat(getComputedStyle(ta).lineHeight) || 20;
+    ta.scrollTop = Math.max(0, lineNum * lineHeight - ta.clientHeight / 2);
+  }
+}
+
+function escHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ── EVENT WIRING ──
+(function () {
+  const findInput = $('#findInput');
+  const replaceInput = $('#replaceInput');
+  if (!findInput) return;
+
+  findInput.addEventListener('input', () => findComputeMatches());
+
+  findInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.shiftKey) { e.preventDefault(); findPrev(); }
+    else if (e.key === 'Enter') { e.preventDefault(); findNext(); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeFind(); }
+  });
+
+  if (replaceInput) {
+    replaceInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); findReplace(); }
+      else if (e.key === 'Escape') { e.preventDefault(); closeFind(); }
+    });
+  }
+
+  const nextBtn = $('#findNextBtn');
+  const prevBtn = $('#findPrevBtn');
+  const replBtn = $('#findReplaceBtn');
+  const replAllBtn = $('#findReplaceAllBtn');
+  const caseBtn = $('#findCaseBtn');
+  const regexBtn = $('#findRegexBtn');
+  const closeBtn = $('#findCloseBtn');
+
+  if (nextBtn) nextBtn.addEventListener('click', findNext);
+  if (prevBtn) prevBtn.addEventListener('click', findPrev);
+  if (replBtn) replBtn.addEventListener('click', findReplace);
+  if (replAllBtn) replAllBtn.addEventListener('click', findReplaceAll);
+  if (closeBtn) closeBtn.addEventListener('click', closeFind);
+  if (caseBtn) caseBtn.addEventListener('click', () => {
+    S.findCase = !S.findCase;
+    caseBtn.classList.toggle('active', S.findCase);
+    findComputeMatches();
+  });
+  if (regexBtn) regexBtn.addEventListener('click', () => {
+    S.findRegex = !S.findRegex;
+    regexBtn.classList.toggle('active', S.findRegex);
+    findComputeMatches();
+  });
+
+  // live recompute on edit — delegation
+  let recomputeTimer = null;
+  document.getElementById('notebook').addEventListener('input', (e) => {
+    if (!S.findActive) return;
+    if (e.target.tagName !== 'TEXTAREA') return;
+    clearTimeout(recomputeTimer);
+    recomputeTimer = setTimeout(findComputeMatches, 150);
+  });
+})();
+
+window.openFind = openFind;
+window.closeFind = closeFind;
 
 // -- keyboard.js --
 
@@ -3380,14 +4397,18 @@ window.newNotebook = () => {
 function runSelectedAndAdvance() {
   runSelected();
   if (S.selectedId === null) return;
-  const idx = S.cells.findIndex(c => c.id === S.selectedId);
-  if (idx < S.cells.length - 1) {
-    // move to next cell and edit it
-    editCell(S.cells[idx + 1].id);
+  // respect goto target if set
+  const gotoIdx = window._lastGotoTarget;
+  if (gotoIdx != null && gotoIdx >= 0 && gotoIdx < S.cells.length) {
+    editCell(S.cells[gotoIdx].id);
   } else {
-    // at end — create new code cell
-    const newCell = addCellWithUndo('code', '', S.selectedId);
-    selectCell(newCell.id);
+    const idx = S.cells.findIndex(c => c.id === S.selectedId);
+    if (idx < S.cells.length - 1) {
+      editCell(S.cells[idx + 1].id);
+    } else {
+      const newCell = addCellWithUndo('code', '', S.selectedId);
+      selectCell(newCell.id);
+    }
   }
 }
 
@@ -3405,6 +4426,17 @@ function navigateCell(dir) {
 }
 
 document.addEventListener('keydown', (e) => {
+  // find bar shortcuts (must be before edit/command branches)
+  if ((e.key === 'f') && (e.ctrlKey || e.metaKey) && !e.altKey) {
+    e.preventDefault(); openFind(false); return;
+  }
+  if ((e.key === 'h') && (e.ctrlKey || e.metaKey) && !e.altKey) {
+    e.preventDefault(); openFind(true); return;
+  }
+  if (e.key === 'Escape' && S.findActive) {
+    e.preventDefault(); closeFind(); return;
+  }
+
   const editing = getEditingCell();
 
   if (editing) {
@@ -3430,14 +4462,19 @@ document.addEventListener('keydown', (e) => {
       e.preventDefault();
       editing.code = editing.el.querySelector('textarea').value;
       if (editing.type === 'code') runDAG([editing.id], true);
-      // advance
-      const idx = S.cells.findIndex(c => c.id === editing.id);
-      if (idx < S.cells.length - 1) {
-        editCell(S.cells[idx + 1].id);
+      // advance — respect goto target if set
+      const gotoIdx = window._lastGotoTarget;
+      if (gotoIdx != null && gotoIdx >= 0 && gotoIdx < S.cells.length) {
+        editCell(S.cells[gotoIdx].id);
       } else {
-        const newCell = addCellWithUndo('code', '', editing.id);
-        selectCell(newCell.id);
-        editCell(newCell.id);
+        const idx = S.cells.findIndex(c => c.id === editing.id);
+        if (idx < S.cells.length - 1) {
+          editCell(S.cells[idx + 1].id);
+        } else {
+          const newCell = addCellWithUndo('code', '', editing.id);
+          selectCell(newCell.id);
+          editCell(newCell.id);
+        }
       }
       return;
     }
@@ -3644,6 +4681,68 @@ document.addEventListener('click', (e) => {
 
 // late import to avoid circular dependency at module load time
 
+// -- goto.js --
+
+// ── GOTO ── @optional
+
+function parseGoto(code) {
+  const m = code.match(/^\s*\/\/\s*%goto\b\s*(.*)/m);
+  if (!m) return null;
+  return m[1].trim() || '';
+}
+
+const MAX_VISITS = 1000;
+let visits = {};
+
+window._dagStart = function() {
+  visits = {};
+  window._lastGotoTarget = null;
+};
+
+window._beforeExec = function(cell) {
+  const target = parseGoto(cell.code);
+  if (target !== null) {
+    S.scope.__goto = target;
+    cell.defines.add('__goto');
+  } else {
+    delete S.scope.__goto;
+  }
+};
+
+window._afterExec = function(cell, index) {
+  const gotoTarget = S.scope.__goto;
+  delete S.scope.__goto;
+  window._lastGotoTarget = null;
+
+  if (!gotoTarget) return -1;
+
+  // resolve by cellName
+  const targetIdx = S.cells.findIndex(c => parseCellName(c.code) === gotoTarget);
+  if (targetIdx < 0) {
+    const out = cell.el.querySelector('.cell-output');
+    if (out) {
+      out.appendChild(document.createTextNode('\ngoto: cell \u201c' + gotoTarget + '\u201d not found'));
+      out.classList.add('error');
+    }
+    return -1;
+  }
+
+  // loop protection
+  const key = index + ':' + targetIdx;
+  visits[key] = (visits[key] || 0) + 1;
+  if (visits[key] > MAX_VISITS) {
+    const out = cell.el.querySelector('.cell-output');
+    if (out) {
+      out.appendChild(document.createTextNode('\ngoto: loop limit reached (' + MAX_VISITS + ' iterations)'));
+      out.classList.add('error');
+    }
+    return -1;
+  }
+
+  window._lastGotoTarget = targetIdx;
+  return targetIdx;
+};
+
 // -- size-compare.js --
 
 // ── SIZE COMPARISON ── @optional
@@ -3691,6 +4790,10 @@ function applySizeCompareRef(val) {
   const headings = panel.querySelectorAll('h2');
   const modulesH2 = headings[headings.length - 1];
   if (!modulesH2) return;
+
+  const h2 = document.createElement('h2');
+  h2.textContent = 'status bar';
+  modulesH2.before(h2);
 
   const refRow = document.createElement('div');
   refRow.className = 'settings-row';
