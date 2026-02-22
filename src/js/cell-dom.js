@@ -29,7 +29,7 @@ function cellHeaderHTML(type, id) {
     <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'after')" title="insert below">+\u2193</button>
     <button class="cell-btn" onclick="moveCell(${id},-1)" title="move up">\u2191</button>
     <button class="cell-btn" onclick="moveCell(${id},1)" title="move down">\u2193</button>
-    <button class="cell-btn del" onclick="deleteCell(${id})" title="delete">\u00d7</button>
+    <button class="cell-btn del" onclick="deleteCellWithUndo(${id})" title="delete">\u00d7</button>
   </div>`;
 }
 
@@ -45,7 +45,7 @@ export function createCellEl(type, id) {
       <div class="cell-code">
         <div class="editor-wrap">
           <div class="line-numbers" aria-hidden="true">1</div>
-          <textarea rows="3" spellcheck="false" placeholder="// code"></textarea>
+          <textarea rows="3" spellcheck="false" wrap="off" placeholder="// code"></textarea>
           <div class="highlight-layer" aria-hidden="true"></div>
         </div>
       </div>
@@ -69,7 +69,7 @@ export function createCellEl(type, id) {
       <div class="cell-css-edit" style="display:none">
         <div class="editor-wrap">
           <div class="line-numbers" aria-hidden="true">1</div>
-          <textarea rows="3" spellcheck="false" placeholder="/* css */"></textarea>
+          <textarea rows="3" spellcheck="false" wrap="off" placeholder="/* css */"></textarea>
           <div class="highlight-layer" aria-hidden="true"></div>
         </div>
       </div>
@@ -111,7 +111,7 @@ export function createCellEl(type, id) {
       <div class="cell-html-edit" style="display:none">
         <div class="editor-wrap">
           <div class="line-numbers" aria-hidden="true">1</div>
-          <textarea rows="2" spellcheck="false" placeholder="<html template>"></textarea>
+          <textarea rows="2" spellcheck="false" wrap="off" placeholder="<html template>"></textarea>
           <div class="highlight-layer" aria-hidden="true"></div>
         </div>
       </div>

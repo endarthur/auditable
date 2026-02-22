@@ -4,6 +4,8 @@ import { setMsg } from './ui.js';
 import { highlightCode } from './syntax.js';
 import { std } from './stdlib.js';
 import { python, zenOfPython } from './python.js';
+import { addCell } from './cell-ops.js';
+import { renderMd } from './markdown.js';
 
 // ── EXECUTION ENGINE ──
 //
@@ -35,6 +37,21 @@ async function decodeBinary(entry) {
     return URL.createObjectURL(new Blob([decompressed], { type }));
   }
   return URL.createObjectURL(new Blob([bytes], { type }));
+}
+
+// ── TAGGED CONTENT ──
+
+class TaggedContent {
+  constructor(type, content) { this.type = type; this.content = content; }
+  toString() { return this.content; }
+}
+
+function taggedTemplate(type) {
+  return (strings, ...values) => {
+    let result = strings[0];
+    for (let i = 0; i < values.length; i++) result += String(values[i]) + strings[i + 1];
+    return new TaggedContent(type, result);
+  };
 }
 
 // ── EXECUTION ──
@@ -295,7 +312,7 @@ export async function execCell(cell) {
 
   // execute with scoped parameters (only what this cell uses, for stable V8 JIT)
   // filter out injected names — they're per-cell params, not scope-propagated
-  const _injected = ['ui', 'std', 'load', 'install', 'installBinary', 'invalidation', 'print'];
+  const _injected = ['ui', 'std', 'load', 'install', 'installBinary', 'invalidation', 'print', 'md', 'html', 'css', 'workshop', 'notebook'];
   const scopeKeys = cell.uses ? [...cell.uses].filter(k => !_injected.includes(k)).sort() : [];
   const defNames = cell.defines ? [...cell.defines].sort().join(', ') : '';
 
@@ -410,6 +427,209 @@ export async function execCell(cell) {
   // ui object — constructed per-cell (closes over cell context)
   const ui = { display, print: display, canvas, table, slider, dropdown, checkbox, textInput };
 
+  // tagged template builtins
+  const md = taggedTemplate('md');
+  const html = taggedTemplate('html');
+  const css = taggedTemplate('css');
+
+  // workshop builtin — slide-out side panel with navigable pages
+  const workshop = (pages, opts) => {
+    const key = '__workshop__';
+    usedWidgets.add(key);
+    const useOverlay = !!(opts && opts.overlay);
+
+    // persist page index across re-runs
+    if (cell._inputs[key] === undefined) cell._inputs[key] = 0;
+    let currentPage = cell._inputs[key];
+
+    // get or create panel DOM
+    let panel = document.getElementById('workshopPanel');
+    let overlay = document.getElementById('workshopOverlay');
+    if (!panel) {
+      overlay = document.createElement('div');
+      overlay.id = 'workshopOverlay';
+      overlay.className = 'workshop-overlay';
+      overlay.onclick = () => toggleWorkshop(false);
+      document.body.appendChild(overlay);
+
+      panel = document.createElement('div');
+      panel.id = 'workshopPanel';
+      panel.className = 'workshop-panel';
+      document.body.appendChild(panel);
+    }
+
+    // side tab attached to the panel edge
+    let toggleBtn = document.getElementById('workshopToggle');
+    if (!toggleBtn) {
+      toggleBtn = document.createElement('button');
+      toggleBtn.id = 'workshopToggle';
+      toggleBtn.className = 'workshop-tab';
+      toggleBtn.title = 'toggle workshop panel';
+      toggleBtn.textContent = 'workshop';
+      document.body.appendChild(toggleBtn);
+      toggleBtn.onclick = () => toggleWorkshop();
+    }
+
+    function toggleWorkshop(show) {
+      const isOpen = panel.classList.contains('open');
+      const shouldOpen = show !== undefined ? show : !isOpen;
+      panel.classList.toggle('open', shouldOpen);
+      if (useOverlay) overlay.classList.toggle('visible', shouldOpen);
+    }
+
+    function renderPage(idx) {
+      idx = Math.max(0, Math.min(idx, pages.length - 1));
+      currentPage = idx;
+      cell._inputs[key] = idx;
+      const page = pages[idx];
+
+      panel.innerHTML = '';
+
+      // header with close button
+      const header = document.createElement('div');
+      header.className = 'workshop-header';
+      const title = document.createElement('span');
+      title.className = 'workshop-title';
+      title.textContent = page.title || `Page ${idx + 1}`;
+      header.appendChild(title);
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'workshop-close';
+      closeBtn.textContent = '\u00d7';
+      closeBtn.onclick = () => toggleWorkshop(false);
+      header.appendChild(closeBtn);
+      panel.appendChild(header);
+
+      // content
+      const body = document.createElement('div');
+      body.className = 'workshop-body';
+      if (page.content instanceof Element) {
+        body.appendChild(page.content);
+      } else if (page.content instanceof TaggedContent) {
+        if (page.content.type === 'md') {
+          body.innerHTML = renderMd(page.content.content);
+        } else if (page.content.type === 'css') {
+          const pre = document.createElement('pre');
+          pre.textContent = page.content.content;
+          body.appendChild(pre);
+        } else {
+          body.innerHTML = page.content.content;
+        }
+      } else {
+        body.textContent = String(page.content ?? '');
+      }
+      panel.appendChild(body);
+
+      // progress pips
+      const pips = document.createElement('div');
+      pips.className = 'workshop-pips';
+      for (let i = 0; i < pages.length; i++) {
+        const pip = document.createElement('span');
+        pip.className = 'workshop-pip' + (i === idx ? ' active' : '') + (i < idx ? ' done' : '');
+        pip.onclick = () => navigate(i);
+        pips.appendChild(pip);
+      }
+      panel.appendChild(pips);
+
+      // nav buttons
+      const nav = document.createElement('div');
+      nav.className = 'workshop-nav';
+      if (idx > 0) {
+        const prev = document.createElement('button');
+        prev.textContent = '\u2190 prev';
+        prev.onclick = () => navigate(idx - 1);
+        nav.appendChild(prev);
+      }
+      const spacer = document.createElement('span');
+      spacer.style.flex = '1';
+      nav.appendChild(spacer);
+      const counter = document.createElement('span');
+      counter.className = 'workshop-counter';
+      counter.textContent = `${idx + 1} / ${pages.length}`;
+      nav.appendChild(counter);
+      if (idx < pages.length - 1) {
+        const next = document.createElement('button');
+        next.className = 'workshop-next';
+        next.textContent = 'next \u2192';
+        if (page.canAdvance && !page.canAdvance()) {
+          next.disabled = true;
+          next.title = 'complete the task to continue';
+        }
+        next.onclick = () => navigate(idx + 1);
+        nav.appendChild(next);
+      }
+      panel.appendChild(nav);
+
+      // fire onEnter
+      if (page.onEnter) page.onEnter();
+    }
+
+    function navigate(idx) {
+      const prevPage = pages[currentPage];
+      if (prevPage?.onLeave) prevPage.onLeave();
+      renderPage(idx);
+    }
+
+    // store re-check function for canAdvance gating
+    cell._workshopRecheck = () => {
+      const page = pages[currentPage];
+      if (!page?.canAdvance) return;
+      const nextBtn = panel.querySelector('.workshop-next');
+      if (nextBtn) {
+        nextBtn.disabled = !page.canAdvance();
+      }
+    };
+
+    renderPage(currentPage);
+
+    // auto-open on first creation
+    if (!panel.classList.contains('open') && !cell._workshopShown) {
+      toggleWorkshop(true);
+      cell._workshopShown = true;
+    }
+
+    // store cleanup so deleteCell can tear down workshop DOM
+    cell._workshopCleanup = () => {
+      panel.remove();
+      overlay.remove();
+      toggleBtn.remove();
+      cell._workshopRecheck = null;
+    };
+    // on re-run, just clear the recheck — DOM is reused by ID
+    invalidation.then(() => {
+      cell._workshopRecheck = null;
+    });
+
+    return { goto: navigate, toggle: toggleWorkshop, recheck: cell._workshopRecheck };
+  };
+
+  // notebook API — programmatic notebook control
+  const notebook = {
+    get cells() { return S.cells.map(c => ({ id: c.id, type: c.type, code: c.code })); },
+    get scope() { return { ...S.scope }; },
+    addCell: (type, code, afterId) => addCell(type, code, afterId),
+    scrollTo: (id) => {
+      const c = S.cells.find(c => c.id === id);
+      if (c?.el) c.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    },
+    focus: (id) => {
+      const c = S.cells.find(c => c.id === id);
+      if (c?.el) {
+        c.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const ta = c.el.querySelector('textarea');
+        if (ta) ta.focus();
+      }
+    },
+    collapse: (id) => {
+      const c = S.cells.find(c => c.id === id);
+      if (c?.el) c.el.classList.add('collapsed');
+    },
+    expand: (id) => {
+      const c = S.cells.find(c => c.id === id);
+      if (c?.el) c.el.classList.remove('collapsed');
+    },
+    run: (ids) => runDAG(Array.isArray(ids) ? ids : [ids], true),
+  };
+
   // function caching — reuse compiled function if code/uses/defines unchanged
   const cacheKey = scopeKeys.join(',') + '|' + defNames + '|' + cell.code;
 
@@ -424,6 +644,7 @@ export async function execCell(cell) {
       fn = new AsyncFunction(
         ...scopeKeys,
         'ui', 'std', 'load', 'install', 'installBinary', 'invalidation', 'print',
+        'md', 'html', 'css', 'workshop', 'notebook',
         `"use strict";\n${cell.code}\n\n` +
         `return { ${defNames} };\n` +
         `//# sourceURL=auditable://cell-${cell.id}${slug}.js`
@@ -433,7 +654,8 @@ export async function execCell(cell) {
     }
 
     const scopeVals = scopeKeys.map(k => S.scope[k]);
-    const result = await fn(...scopeVals, ui, std, load, install, installBinary, invalidation, display);
+    const result = await fn(...scopeVals, ui, std, load, install, installBinary, invalidation, display,
+      md, html, css, workshop, notebook);
 
     // update scope with defined variables
     if (result && typeof result === 'object') {
@@ -582,6 +804,11 @@ export async function runDAG(dirtyIds, force = false) {
   }
 
   updateStatus();
+
+  // recheck workshop canAdvance gates after scope changes
+  for (const c of S.cells) {
+    if (c._workshopRecheck) c._workshopRecheck();
+  }
 }
 
 export async function runAll() {

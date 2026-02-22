@@ -472,6 +472,8 @@ button.accent:hover {
   min-height: 38px;
   outline: none;
   tab-size: 2;
+  white-space: pre;
+  overflow-x: auto;
   position: relative;
   z-index: 2;
   -webkit-text-fill-color: transparent;
@@ -497,8 +499,7 @@ button.accent:hover {
   font-size: var(--editor-font-size);
   line-height: 1.5;
   tab-size: 2;
-  white-space: pre-wrap;
-  word-break: break-all;
+  white-space: pre;
   overflow: hidden;
   z-index: 1;
   pointer-events: none;
@@ -605,6 +606,8 @@ button.accent:hover {
   min-height: 38px;
   outline: none;
   tab-size: 2;
+  white-space: pre;
+  overflow-x: auto;
   position: relative;
   z-index: 2;
   -webkit-text-fill-color: transparent;
@@ -648,6 +651,8 @@ button.accent:hover {
   min-height: 38px;
   outline: none;
   tab-size: 2;
+  white-space: pre;
+  overflow-x: auto;
   position: relative;
   z-index: 2;
   -webkit-text-fill-color: transparent;
@@ -1304,8 +1309,7 @@ body.presenting .find-bar { display: none !important; }
   font-size: var(--editor-font-size);
   line-height: 1.5;
   tab-size: 2;
-  white-space: pre-wrap;
-  word-break: break-all;
+  white-space: pre;
   overflow: hidden;
   z-index: 1;
   pointer-events: none;
@@ -1407,6 +1411,134 @@ body.presenting .find-bar { display: none !important; }
 :root.light .ac-item:hover {
   background: rgba(153,107,31,0.15);
 }
+
+/* ── WORKSHOP PANEL ── */
+.workshop-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.3);
+  z-index: 900;
+}
+.workshop-overlay.visible { display: block; }
+.workshop-panel {
+  position: fixed;
+  top: 0;
+  right: -380px;
+  bottom: 0;
+  width: 360px;
+  max-width: 90vw;
+  background: var(--bg1);
+  border-left: 1px solid var(--border);
+  z-index: 901;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--fg);
+  transition: right 0.25s ease;
+  overflow: hidden;
+}
+.workshop-panel.open { right: 0; }
+.workshop-tab {
+  position: fixed;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%) rotate(180deg);
+  writing-mode: vertical-rl;
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-right: none;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  padding: 10px 5px;
+  cursor: pointer;
+  z-index: 902;
+  transition: right 0.25s ease;
+}
+.workshop-tab:hover { background: var(--bg2); }
+.workshop-panel.open ~ .workshop-tab { right: min(360px, 90vw); }
+.workshop-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.workshop-title {
+  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+.workshop-close {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-size: 18px;
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0; cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.workshop-close:hover { border-color: var(--err); color: var(--err); }
+.workshop-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  line-height: 1.6;
+}
+.workshop-body h1, .workshop-body h2, .workshop-body h3 {
+  color: var(--fg-bright);
+  margin: 1em 0 0.5em;
+}
+.workshop-body h1:first-child, .workshop-body h2:first-child, .workshop-body h3:first-child {
+  margin-top: 0;
+}
+.workshop-body code {
+  background: var(--bg2);
+  padding: 1px 4px;
+  font-size: 0.9em;
+}
+.workshop-body strong { color: var(--accent); }
+.workshop-pips {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 16px;
+}
+.workshop-pip {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+  cursor: pointer;
+}
+.workshop-pip.done { background: var(--fg-dim); }
+.workshop-pip.active { background: var(--accent); }
+.workshop-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+.workshop-nav button {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+.workshop-nav button:hover { border-color: var(--accent); color: var(--accent); }
+.workshop-nav button:disabled { opacity: 0.3; cursor: default; }
+.workshop-nav button:disabled:hover { border-color: var(--border); color: var(--fg); }
+.workshop-counter { color: var(--fg-dim); font-size: 11px; }
 
 /* ── LIGHT THEME ── */
 :root.light {
@@ -1637,6 +1769,11 @@ body.presenting .find-bar { display: none !important; }
 <div class="help-row"><span class="help-key">install(url)</span><span class="help-desc">import + embed in HTML on save</span></div>
 <div class="help-row"><span class="help-key">installBinary(url)</span><span class="help-desc">fetch binary asset + embed gzipped</span></div>
 <div class="help-row"><span class="help-key">invalidation</span><span class="help-desc">promise that resolves before cell re-runs</span></div>
+<div class="help-row"><span class="help-key">md``</span><span class="help-desc">markdown tagged template</span></div>
+<div class="help-row"><span class="help-key">html``</span><span class="help-desc">HTML tagged template</span></div>
+<div class="help-row"><span class="help-key">css``</span><span class="help-desc">CSS tagged template</span></div>
+<div class="help-row"><span class="help-key">workshop(pages)</span><span class="help-desc">interactive side panel with pages</span></div>
+<div class="help-row"><span class="help-key">notebook</span><span class="help-desc">API for cells, scope, scrollTo, focus</span></div>
 
 <h2>directives</h2>
 <div class="help-row"><span class="help-key">// %manual</span><span class="help-desc">skip cell on reactive updates</span></div>
@@ -1646,6 +1783,7 @@ body.presenting .find-bar { display: none !important; }
 <div class="help-row"><span class="help-key">// %outputId &lt;id&gt;</span><span class="help-desc">set id on output div</span></div>
 <div class="help-row"><span class="help-key">// %outputClass &lt;cls&gt;</span><span class="help-desc">add classes to output div</span></div>
 <div class="help-row"><span class="help-key">// %goto &lt;label&gt;</span><span class="help-desc">jump to named cell after execution</span></div>
+<div class="help-row"><span class="help-key">// %collapsed</span><span class="help-desc">start cell collapsed</span></div>
 
 <div class="help-close">press F1 or Esc to close</div>
 </div>
@@ -1890,7 +2028,7 @@ body.presenting .find-bar { display: none !important; }
 
 <!-- cell data: JSON array of {type, code, collapsed?} -->
 <!--AUDITABLE-DATA
-[{"type":"md","code":"# SQL notebook\n\nSQLite running entirely in the browser via **sql.js** (WebAssembly). the `sql` language tag from `@auditable/sql` provides syntax highlighting and completions inside template literals.\n\n`installBinary()` embeds the WASM binary (gzip-compressed) — after saving, the 1+ MB asset loads instantly with no network fetch.\n\ncreate tables, insert data, and query it — all reactive. change the filter and downstream cells re-run."},{"type":"code","code":"const { sql } = await load(\"./ext/sql/index.js\");\nconst wasmUrl = await installBinary(\"https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/sql-wasm.wasm\");\nconst wasmBinary = new Uint8Array(await fetch(wasmUrl).then(r => r.arrayBuffer()));\nconst initSqlJs = await load(\"https://esm.sh/sql.js@1.12.0\");\nconst SQL = await initSqlJs.default({ wasmBinary });\nconst db = new SQL.Database();"},{"type":"code","code":"db.run(sql`\n  CREATE TABLE IF NOT EXISTS cities (\n    name    TEXT PRIMARY KEY,\n    country TEXT NOT NULL,\n    pop     REAL,\n    lat     REAL,\n    lon     REAL\n  )\n`);\n\ndb.run(sql`DELETE FROM cities`);\n\nconst data = [\n  ['Tokyo',        'Japan',      37.4,  35.68,  139.69],\n  ['Delhi',        'India',      32.9,  28.61,   77.23],\n  ['Shanghai',     'China',      29.2,  31.23,  121.47],\n  ['S\\u00e3o Paulo',    'Brazil',     22.6, -23.55,  -46.63],\n  ['Mexico City',  'Mexico',     22.1,  19.43,  -99.13],\n  ['Cairo',        'Egypt',      21.8,  30.04,   31.24],\n  ['Mumbai',       'India',      21.7,  19.08,   72.88],\n  ['Beijing',      'China',      21.5,  39.90,  116.41],\n  ['Osaka',        'Japan',      19.1,  34.69,  135.50],\n  ['New York',     'USA',        18.8,  40.71,  -74.01],\n  ['Buenos Aires', 'Argentina',  15.4, -34.60,  -58.38],\n  ['Lagos',        'Nigeria',    15.3,   6.52,    3.38],\n  ['Istanbul',     'Turkey',     15.6,  41.01,   28.98],\n  ['Manila',       'Philippines', 14.4, 14.60,  120.98],\n  ['Guangzhou',    'China',      13.9,  23.13,  113.26],\n];\n\nconst stmt = db.prepare(sql`INSERT INTO cities VALUES (?, ?, ?, ?, ?)`);\nfor (const row of data) { stmt.run(row); }\nstmt.free();\n\nui.display(`loaded ${data.length} cities`);"},{"type":"code","code":"const minPop = ui.slider(\"min population (M)\", 15, {min: 5, max: 35, step: 0.5});\nconst sortBy = ui.dropdown(\"sort by\", [\"pop DESC\", \"name ASC\", \"lat DESC\", \"lon ASC\"]);"},{"type":"code","code":"const results = db.exec(sql`\n  SELECT name, country, pop, lat, lon\n  FROM cities\n  WHERE pop >= ${minPop}\n  ORDER BY ` + sortBy);\n\nconst rows = results[0] ? results[0].values.map(r => ({\n  city: r[0], country: r[1], pop: r[2], lat: r[3], lon: r[4]\n})) : [];\n\nui.table(rows);\nui.display(`${rows.length} cities with pop \\u2265 ${minPop}M`);"},{"type":"code","code":"// aggregate query\nconst stats = db.exec(sql`\n  SELECT\n    country,\n    COUNT(*)       AS n,\n    ROUND(SUM(pop), 1) AS total_pop,\n    ROUND(AVG(pop), 1) AS avg_pop\n  FROM cities\n  WHERE pop >= ${minPop}\n  GROUP BY country\n  ORDER BY total_pop DESC\n`);\n\nconst agg = stats[0] ? stats[0].values.map(r => ({\n  country: r[0], cities: r[1], total_pop: r[2], avg_pop: r[3]\n})) : [];\n\nui.table(agg);"}]
+[{"type":"code","collapsed":true,"code":"// %collapsed\nworkshop([\n  {\n    title: 'SQL notebook',\n    content: md`This is a guided **workshop** for this notebook.\nUse the **prev** and **next** buttons below to navigate\nbetween pages, or click the progress dots to jump directly.\n\nClose this panel with the **\\u00d7** button. Reopen it\nanytime with the **workshop** tab on the right edge\nof the screen.`\n  },\n  {\n    title: 'installBinary()',\n    content: md`\\`installBinary(url)\\` fetches a binary\nasset (here, the SQLite WASM file), gzip-compresses\nit, and stores it as base64 in the notebook HTML.\n\nOn subsequent loads, the binary is decoded from the\nembedded data \\u2014 no network fetch needed. This is\nhow a 1+ MB WASM file loads instantly from a saved\nnotebook. The returned blob URL has the correct MIME\ntype for \\`fetch()\\`.`\n  },\n  {\n    title: 'Tagged language extensions',\n    content: md`The \\`sql\\` tag from \\`@auditable/sql\\`\nprovides **syntax highlighting** and **completions**\ninside template literals. When you type\n\\`sql\\`\\`SELECT ...\\`\\`, the editor highlights SQL\nkeywords, types, and functions.\n\nLanguage extensions register via\n\\`window._taggedLanguages\\`. Each provides\n\\`tokenize(code)\\` for highlighting and\n\\`completions()\\` for autocomplete. The \\`glsl\\` tag\nfrom \\`@auditable/shader\\` works the same way.`\n  },\n  {\n    title: 'Reactive queries',\n    content: md`The slider and dropdown define\n\\`minPop\\` and \\`sortBy\\`. The query cells use these\nvalues via template interpolation:\n\\`sql\\`WHERE pop >= \\${minPop}\\`\\`.\n\nChange a filter \\u2192 the query cell re-runs \\u2192\nresults update \\u2192 the table re-renders. The database\nitself (\\`db\\`) is defined upstream and persists\nacross re-executions. Only the queries re-run, not\nthe table creation.`\n  },\n])"},{"type":"md","code":"# SQL notebook\n\nSQLite running entirely in the browser via **sql.js** (WebAssembly). the `sql` language tag from `@auditable/sql` provides syntax highlighting and completions inside template literals.\n\n`installBinary()` embeds the WASM binary (gzip-compressed) — after saving, the 1+ MB asset loads instantly with no network fetch.\n\ncreate tables, insert data, and query it — all reactive. change the filter and downstream cells re-run."},{"type":"code","code":"const { sql } = await load(\"./ext/sql/index.js\");\nconst wasmUrl = await installBinary(\"https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/sql-wasm.wasm\");\nconst wasmBinary = new Uint8Array(await fetch(wasmUrl).then(r => r.arrayBuffer()));\nconst initSqlJs = await load(\"https://esm.sh/sql.js@1.12.0\");\nconst SQL = await initSqlJs.default({ wasmBinary });\nconst db = new SQL.Database();"},{"type":"code","code":"db.run(sql`\n  CREATE TABLE IF NOT EXISTS cities (\n    name    TEXT PRIMARY KEY,\n    country TEXT NOT NULL,\n    pop     REAL,\n    lat     REAL,\n    lon     REAL\n  )\n`);\n\ndb.run(sql`DELETE FROM cities`);\n\nconst data = [\n  ['Tokyo',        'Japan',      37.4,  35.68,  139.69],\n  ['Delhi',        'India',      32.9,  28.61,   77.23],\n  ['Shanghai',     'China',      29.2,  31.23,  121.47],\n  ['S\\u00e3o Paulo',    'Brazil',     22.6, -23.55,  -46.63],\n  ['Mexico City',  'Mexico',     22.1,  19.43,  -99.13],\n  ['Cairo',        'Egypt',      21.8,  30.04,   31.24],\n  ['Mumbai',       'India',      21.7,  19.08,   72.88],\n  ['Beijing',      'China',      21.5,  39.90,  116.41],\n  ['Osaka',        'Japan',      19.1,  34.69,  135.50],\n  ['New York',     'USA',        18.8,  40.71,  -74.01],\n  ['Buenos Aires', 'Argentina',  15.4, -34.60,  -58.38],\n  ['Lagos',        'Nigeria',    15.3,   6.52,    3.38],\n  ['Istanbul',     'Turkey',     15.6,  41.01,   28.98],\n  ['Manila',       'Philippines', 14.4, 14.60,  120.98],\n  ['Guangzhou',    'China',      13.9,  23.13,  113.26],\n];\n\nconst stmt = db.prepare(sql`INSERT INTO cities VALUES (?, ?, ?, ?, ?)`);\nfor (const row of data) { stmt.run(row); }\nstmt.free();\n\nui.display(`loaded ${data.length} cities`);"},{"type":"code","code":"const minPop = ui.slider(\"min population (M)\", 15, {min: 5, max: 35, step: 0.5});\nconst sortBy = ui.dropdown(\"sort by\", [\"pop DESC\", \"name ASC\", \"lat DESC\", \"lon ASC\"]);"},{"type":"code","code":"const results = db.exec(sql`\n  SELECT name, country, pop, lat, lon\n  FROM cities\n  WHERE pop >= ${minPop}\n  ORDER BY ` + sortBy);\n\nconst rows = results[0] ? results[0].values.map(r => ({\n  city: r[0], country: r[1], pop: r[2], lat: r[3], lon: r[4]\n})) : [];\n\nui.table(rows);\nui.display(`${rows.length} cities with pop \\u2265 ${minPop}M`);"},{"type":"code","code":"// aggregate query\nconst stats = db.exec(sql`\n  SELECT\n    country,\n    COUNT(*)       AS n,\n    ROUND(SUM(pop), 1) AS total_pop,\n    ROUND(AVG(pop), 1) AS avg_pop\n  FROM cities\n  WHERE pop >= ${minPop}\n  GROUP BY country\n  ORDER BY total_pop DESC\n`);\n\nconst agg = stats[0] ? stats[0].values.map(r => ({\n  country: r[0], cities: r[1], total_pop: r[2], avg_pop: r[3]\n})) : [];\n\nui.table(agg);"}]
 AUDITABLE-DATA-->
 <!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId} -->
 <!--AUDITABLE-MODULES
@@ -2060,7 +2198,8 @@ const JS_KEYWORDS = new Set([
 const JS_BUILTINS = new Set([
   'Math','Array','Object','String','Number','Float64Array','Float32Array',
   'Int32Array','Uint8Array','Map','Set','Promise','console','JSON',
-  'ui','std','load','install','print'
+  'ui','std','load','install','print',
+  'workshop','notebook','md','html','css'
 ]);
 
 
@@ -2967,6 +3106,7 @@ function getDirective(code, name) {
 const isManual    = code => hasDirective(code, 'manual');
 const isHidden    = code => hasDirective(code, 'hide');
 const isNorun     = code => hasDirective(code, 'norun');
+const isCollapsed = code => hasDirective(code, 'collapsed');
 const parseCellName    = code => getDirective(code, 'cellName');
 const parseOutputId    = code => { const v = getDirective(code, 'outputId'); return v ? v.split(/\s+/)[0] : null; };
 const parseOutputClass = code => getDirective(code, 'outputClass');
@@ -3250,6 +3390,21 @@ async function decodeBinary(entry) {
   return URL.createObjectURL(new Blob([bytes], { type }));
 }
 
+// ── TAGGED CONTENT ──
+
+class TaggedContent {
+  constructor(type, content) { this.type = type; this.content = content; }
+  toString() { return this.content; }
+}
+
+function taggedTemplate(type) {
+  return (strings, ...values) => {
+    let result = strings[0];
+    for (let i = 0; i < values.length; i++) result += String(values[i]) + strings[i + 1];
+    return new TaggedContent(type, result);
+  };
+}
+
 // ── EXECUTION ──
 
 function renderHtmlCell(cell) {
@@ -3508,7 +3663,7 @@ async function execCell(cell) {
 
   // execute with scoped parameters (only what this cell uses, for stable V8 JIT)
   // filter out injected names — they're per-cell params, not scope-propagated
-  const _injected = ['ui', 'std', 'load', 'install', 'installBinary', 'invalidation', 'print'];
+  const _injected = ['ui', 'std', 'load', 'install', 'installBinary', 'invalidation', 'print', 'md', 'html', 'css', 'workshop', 'notebook'];
   const scopeKeys = cell.uses ? [...cell.uses].filter(k => !_injected.includes(k)).sort() : [];
   const defNames = cell.defines ? [...cell.defines].sort().join(', ') : '';
 
@@ -3623,6 +3778,209 @@ async function execCell(cell) {
   // ui object — constructed per-cell (closes over cell context)
   const ui = { display, print: display, canvas, table, slider, dropdown, checkbox, textInput };
 
+  // tagged template builtins
+  const md = taggedTemplate('md');
+  const html = taggedTemplate('html');
+  const css = taggedTemplate('css');
+
+  // workshop builtin — slide-out side panel with navigable pages
+  const workshop = (pages, opts) => {
+    const key = '__workshop__';
+    usedWidgets.add(key);
+    const useOverlay = !!(opts && opts.overlay);
+
+    // persist page index across re-runs
+    if (cell._inputs[key] === undefined) cell._inputs[key] = 0;
+    let currentPage = cell._inputs[key];
+
+    // get or create panel DOM
+    let panel = document.getElementById('workshopPanel');
+    let overlay = document.getElementById('workshopOverlay');
+    if (!panel) {
+      overlay = document.createElement('div');
+      overlay.id = 'workshopOverlay';
+      overlay.className = 'workshop-overlay';
+      overlay.onclick = () => toggleWorkshop(false);
+      document.body.appendChild(overlay);
+
+      panel = document.createElement('div');
+      panel.id = 'workshopPanel';
+      panel.className = 'workshop-panel';
+      document.body.appendChild(panel);
+    }
+
+    // side tab attached to the panel edge
+    let toggleBtn = document.getElementById('workshopToggle');
+    if (!toggleBtn) {
+      toggleBtn = document.createElement('button');
+      toggleBtn.id = 'workshopToggle';
+      toggleBtn.className = 'workshop-tab';
+      toggleBtn.title = 'toggle workshop panel';
+      toggleBtn.textContent = 'workshop';
+      document.body.appendChild(toggleBtn);
+      toggleBtn.onclick = () => toggleWorkshop();
+    }
+
+    function toggleWorkshop(show) {
+      const isOpen = panel.classList.contains('open');
+      const shouldOpen = show !== undefined ? show : !isOpen;
+      panel.classList.toggle('open', shouldOpen);
+      if (useOverlay) overlay.classList.toggle('visible', shouldOpen);
+    }
+
+    function renderPage(idx) {
+      idx = Math.max(0, Math.min(idx, pages.length - 1));
+      currentPage = idx;
+      cell._inputs[key] = idx;
+      const page = pages[idx];
+
+      panel.innerHTML = '';
+
+      // header with close button
+      const header = document.createElement('div');
+      header.className = 'workshop-header';
+      const title = document.createElement('span');
+      title.className = 'workshop-title';
+      title.textContent = page.title || `Page ${idx + 1}`;
+      header.appendChild(title);
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'workshop-close';
+      closeBtn.textContent = '\u00d7';
+      closeBtn.onclick = () => toggleWorkshop(false);
+      header.appendChild(closeBtn);
+      panel.appendChild(header);
+
+      // content
+      const body = document.createElement('div');
+      body.className = 'workshop-body';
+      if (page.content instanceof Element) {
+        body.appendChild(page.content);
+      } else if (page.content instanceof TaggedContent) {
+        if (page.content.type === 'md') {
+          body.innerHTML = renderMd(page.content.content);
+        } else if (page.content.type === 'css') {
+          const pre = document.createElement('pre');
+          pre.textContent = page.content.content;
+          body.appendChild(pre);
+        } else {
+          body.innerHTML = page.content.content;
+        }
+      } else {
+        body.textContent = String(page.content ?? '');
+      }
+      panel.appendChild(body);
+
+      // progress pips
+      const pips = document.createElement('div');
+      pips.className = 'workshop-pips';
+      for (let i = 0; i < pages.length; i++) {
+        const pip = document.createElement('span');
+        pip.className = 'workshop-pip' + (i === idx ? ' active' : '') + (i < idx ? ' done' : '');
+        pip.onclick = () => navigate(i);
+        pips.appendChild(pip);
+      }
+      panel.appendChild(pips);
+
+      // nav buttons
+      const nav = document.createElement('div');
+      nav.className = 'workshop-nav';
+      if (idx > 0) {
+        const prev = document.createElement('button');
+        prev.textContent = '\u2190 prev';
+        prev.onclick = () => navigate(idx - 1);
+        nav.appendChild(prev);
+      }
+      const spacer = document.createElement('span');
+      spacer.style.flex = '1';
+      nav.appendChild(spacer);
+      const counter = document.createElement('span');
+      counter.className = 'workshop-counter';
+      counter.textContent = `${idx + 1} / ${pages.length}`;
+      nav.appendChild(counter);
+      if (idx < pages.length - 1) {
+        const next = document.createElement('button');
+        next.className = 'workshop-next';
+        next.textContent = 'next \u2192';
+        if (page.canAdvance && !page.canAdvance()) {
+          next.disabled = true;
+          next.title = 'complete the task to continue';
+        }
+        next.onclick = () => navigate(idx + 1);
+        nav.appendChild(next);
+      }
+      panel.appendChild(nav);
+
+      // fire onEnter
+      if (page.onEnter) page.onEnter();
+    }
+
+    function navigate(idx) {
+      const prevPage = pages[currentPage];
+      if (prevPage?.onLeave) prevPage.onLeave();
+      renderPage(idx);
+    }
+
+    // store re-check function for canAdvance gating
+    cell._workshopRecheck = () => {
+      const page = pages[currentPage];
+      if (!page?.canAdvance) return;
+      const nextBtn = panel.querySelector('.workshop-next');
+      if (nextBtn) {
+        nextBtn.disabled = !page.canAdvance();
+      }
+    };
+
+    renderPage(currentPage);
+
+    // auto-open on first creation
+    if (!panel.classList.contains('open') && !cell._workshopShown) {
+      toggleWorkshop(true);
+      cell._workshopShown = true;
+    }
+
+    // store cleanup so deleteCell can tear down workshop DOM
+    cell._workshopCleanup = () => {
+      panel.remove();
+      overlay.remove();
+      toggleBtn.remove();
+      cell._workshopRecheck = null;
+    };
+    // on re-run, just clear the recheck — DOM is reused by ID
+    invalidation.then(() => {
+      cell._workshopRecheck = null;
+    });
+
+    return { goto: navigate, toggle: toggleWorkshop, recheck: cell._workshopRecheck };
+  };
+
+  // notebook API — programmatic notebook control
+  const notebook = {
+    get cells() { return S.cells.map(c => ({ id: c.id, type: c.type, code: c.code })); },
+    get scope() { return { ...S.scope }; },
+    addCell: (type, code, afterId) => addCell(type, code, afterId),
+    scrollTo: (id) => {
+      const c = S.cells.find(c => c.id === id);
+      if (c?.el) c.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    },
+    focus: (id) => {
+      const c = S.cells.find(c => c.id === id);
+      if (c?.el) {
+        c.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const ta = c.el.querySelector('textarea');
+        if (ta) ta.focus();
+      }
+    },
+    collapse: (id) => {
+      const c = S.cells.find(c => c.id === id);
+      if (c?.el) c.el.classList.add('collapsed');
+    },
+    expand: (id) => {
+      const c = S.cells.find(c => c.id === id);
+      if (c?.el) c.el.classList.remove('collapsed');
+    },
+    run: (ids) => runDAG(Array.isArray(ids) ? ids : [ids], true),
+  };
+
   // function caching — reuse compiled function if code/uses/defines unchanged
   const cacheKey = scopeKeys.join(',') + '|' + defNames + '|' + cell.code;
 
@@ -3637,6 +3995,7 @@ async function execCell(cell) {
       fn = new AsyncFunction(
         ...scopeKeys,
         'ui', 'std', 'load', 'install', 'installBinary', 'invalidation', 'print',
+        'md', 'html', 'css', 'workshop', 'notebook',
         `"use strict";\n${cell.code}\n\n` +
         `return { ${defNames} };\n` +
         `//# sourceURL=auditable://cell-${cell.id}${slug}.js`
@@ -3646,7 +4005,8 @@ async function execCell(cell) {
     }
 
     const scopeVals = scopeKeys.map(k => S.scope[k]);
-    const result = await fn(...scopeVals, ui, std, load, install, installBinary, invalidation, display);
+    const result = await fn(...scopeVals, ui, std, load, install, installBinary, invalidation, display,
+      md, html, css, workshop, notebook);
 
     // update scope with defined variables
     if (result && typeof result === 'object') {
@@ -3795,6 +4155,11 @@ async function runDAG(dirtyIds, force = false) {
   }
 
   updateStatus();
+
+  // recheck workshop canAdvance gates after scope changes
+  for (const c of S.cells) {
+    if (c._workshopRecheck) c._workshopRecheck();
+  }
 }
 
 async function runAll() {
@@ -3863,7 +4228,7 @@ function cellHeaderHTML(type, id) {
     <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'after')" title="insert below">+\u2193</button>
     <button class="cell-btn" onclick="moveCell(${id},-1)" title="move up">\u2191</button>
     <button class="cell-btn" onclick="moveCell(${id},1)" title="move down">\u2193</button>
-    <button class="cell-btn del" onclick="deleteCell(${id})" title="delete">\u00d7</button>
+    <button class="cell-btn del" onclick="deleteCellWithUndo(${id})" title="delete">\u00d7</button>
   </div>`;
 }
 
@@ -3879,7 +4244,7 @@ function createCellEl(type, id) {
       <div class="cell-code">
         <div class="editor-wrap">
           <div class="line-numbers" aria-hidden="true">1</div>
-          <textarea rows="3" spellcheck="false" placeholder="// code"></textarea>
+          <textarea rows="3" spellcheck="false" wrap="off" placeholder="// code"></textarea>
           <div class="highlight-layer" aria-hidden="true"></div>
         </div>
       </div>
@@ -3903,7 +4268,7 @@ function createCellEl(type, id) {
       <div class="cell-css-edit" style="display:none">
         <div class="editor-wrap">
           <div class="line-numbers" aria-hidden="true">1</div>
-          <textarea rows="3" spellcheck="false" placeholder="/* css */"></textarea>
+          <textarea rows="3" spellcheck="false" wrap="off" placeholder="/* css */"></textarea>
           <div class="highlight-layer" aria-hidden="true"></div>
         </div>
       </div>
@@ -3945,7 +4310,7 @@ function createCellEl(type, id) {
       <div class="cell-html-edit" style="display:none">
         <div class="editor-wrap">
           <div class="line-numbers" aria-hidden="true">1</div>
-          <textarea rows="2" spellcheck="false" placeholder="<html template>"></textarea>
+          <textarea rows="2" spellcheck="false" wrap="off" placeholder="<html template>"></textarea>
           <div class="highlight-layer" aria-hidden="true"></div>
         </div>
       </div>
@@ -4256,6 +4621,10 @@ function addCell(type, code = '', afterId = null, beforeId = null) {
 function deleteCell(id) {
   const idx = S.cells.findIndex(c => c.id === id);
   if (idx < 0) return;
+  // fire invalidation so cell resources (timers, etc.) clean up
+  if (S.cells[idx]._invalidate) { S.cells[idx]._invalidate(); S.cells[idx]._invalidate = null; }
+  // tear down workshop DOM if this cell had one
+  if (S.cells[idx]._workshopCleanup) { S.cells[idx]._workshopCleanup(); S.cells[idx]._workshopCleanup = null; }
   if (S.cells[idx]._styleEl) {
     S.cells[idx]._styleEl.remove();
     S.cells[idx]._styleEl = null;
@@ -4563,7 +4932,7 @@ function togglePresent() {
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_BUILD_DATE__ = '2026-02-22';
-const __AUDITABLE_BASE_SIZE__ = 235208;
+const __AUDITABLE_BASE_SIZE__ = 247262;
 
 (function() {
   const ver = $('#aboutVersion');
@@ -5449,7 +5818,7 @@ function loadFromEmbed() {
       const data = JSON.parse(match[1]);
       for (const c of data) {
         const cell = addCell(c.type, c.code);
-        if (c.collapsed) cell.el.classList.add('collapsed');
+        if (c.collapsed || isCollapsed(c.code)) cell.el.classList.add('collapsed');
       }
       // run after load (gated on resolved runOnLoad)
       if (effectiveRun === 'yes' && S.cells.some(c => c.type === 'code')) {
@@ -6783,15 +7152,9 @@ function deleteCellWithUndo(id) {
   if (idx < 0) return;
   const cell = S.cells[idx];
   const afterId = idx > 0 ? S.cells[idx - 1].id : null;
-  S.trash.push({ action: 'delete', type: cell.type, code: cell.code, afterId });
-  if (cell._styleEl) {
-    cell._styleEl.remove();
-    cell._styleEl = null;
-  }
-  cell.el.remove();
-  S.cells.splice(idx, 1);
-  if (S.cells.some(c => c.type === 'code' || c.type === 'html')) runAll();
-  updateStatus();
+  const beforeId = afterId === null && idx < S.cells.length - 1 ? S.cells[idx + 1].id : null;
+  S.trash.push({ action: 'delete', type: cell.type, code: cell.code, afterId, beforeId, collapsed: !!cell.el.classList.contains('collapsed') });
+  deleteCell(id);
   setMsg('deleted cell (z to undo)', 'ok');
 }
 
@@ -6801,20 +7164,15 @@ function undo() {
 
   if (entry.action === 'add') {
     // undo add = delete the cell (without pushing to undo stack)
-    const idx = S.cells.findIndex(c => c.id === entry.id);
-    if (idx < 0) return;
-    const cell = S.cells[idx];
-    if (cell._styleEl) { cell._styleEl.remove(); cell._styleEl = null; }
-    cell.el.remove();
-    S.cells.splice(idx, 1);
-    if (S.cells.some(c => c.type === 'code' || c.type === 'html')) runAll();
-    updateStatus();
+    deleteCell(entry.id);
     setMsg('undid add', 'ok');
   } else {
     // undo delete = restore the cell
-    const { type, code, afterId } = entry;
+    const { type, code, afterId, beforeId, collapsed } = entry;
     const validAfter = afterId !== null && S.cells.find(c => c.id === afterId) ? afterId : null;
-    const newCell = addCell(type, code, validAfter);
+    const validBefore = beforeId !== null && S.cells.find(c => c.id === beforeId) ? beforeId : null;
+    const newCell = addCell(type, code, validAfter, validBefore);
+    if (collapsed) newCell.el.classList.add('collapsed');
     selectCell(newCell.id);
     if ((type === 'code' || type === 'html') && S.cells.some(c => c.type === 'code' || c.type === 'html')) runAll();
     setMsg('restored cell', 'ok');
@@ -7484,6 +7842,7 @@ window.__auditable_registerProvider = registerProvider;
 
 // keyboard / toolbar
 window.addCellWithUndo = addCellWithUndo;
+window.deleteCellWithUndo = deleteCellWithUndo;
 window.runSelectedCell = runSelectedCell;
 window.toggleToolbarMenu = toggleToolbarMenu;
 window.toggleAddTray = toggleAddTray;
@@ -7589,4 +7948,5 @@ window.newNotebook = newNotebook;
 })();
 </script>
 </body>
+<!-- good luck out there -->
 </html>

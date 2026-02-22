@@ -90,6 +90,10 @@ export function addCell(type, code = '', afterId = null, beforeId = null) {
 export function deleteCell(id) {
   const idx = S.cells.findIndex(c => c.id === id);
   if (idx < 0) return;
+  // fire invalidation so cell resources (timers, etc.) clean up
+  if (S.cells[idx]._invalidate) { S.cells[idx]._invalidate(); S.cells[idx]._invalidate = null; }
+  // tear down workshop DOM if this cell had one
+  if (S.cells[idx]._workshopCleanup) { S.cells[idx]._workshopCleanup(); S.cells[idx]._workshopCleanup = null; }
   if (S.cells[idx]._styleEl) {
     S.cells[idx]._styleEl.remove();
     S.cells[idx]._styleEl = null;

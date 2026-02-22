@@ -1,5 +1,6 @@
 import { S, $ } from './state.js';
 import { addCell } from './cell-ops.js';
+import { isCollapsed } from './dag.js';
 import { getSettings, applySettings, resolveExecMode, resolveRunOnLoad } from './settings.js';
 import { runAll } from './exec.js';
 import { setMsg } from './ui.js';
@@ -299,7 +300,7 @@ export function loadFromEmbed() {
       const data = JSON.parse(match[1]);
       for (const c of data) {
         const cell = addCell(c.type, c.code);
-        if (c.collapsed) cell.el.classList.add('collapsed');
+        if (c.collapsed || isCollapsed(c.code)) cell.el.classList.add('collapsed');
       }
       // run after load (gated on resolved runOnLoad)
       if (effectiveRun === 'yes' && S.cells.some(c => c.type === 'code')) {

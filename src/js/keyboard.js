@@ -21,15 +21,9 @@ export function deleteCellWithUndo(id) {
   if (idx < 0) return;
   const cell = S.cells[idx];
   const afterId = idx > 0 ? S.cells[idx - 1].id : null;
-  S.trash.push({ action: 'delete', type: cell.type, code: cell.code, afterId });
-  if (cell._styleEl) {
-    cell._styleEl.remove();
-    cell._styleEl = null;
-  }
-  cell.el.remove();
-  S.cells.splice(idx, 1);
-  if (S.cells.some(c => c.type === 'code' || c.type === 'html')) runAll();
-  updateStatus();
+  const beforeId = afterId === null && idx < S.cells.length - 1 ? S.cells[idx + 1].id : null;
+  S.trash.push({ action: 'delete', type: cell.type, code: cell.code, afterId, beforeId, collapsed: !!cell.el.classList.contains('collapsed') });
+  deleteCell(id);
   setMsg('deleted cell (z to undo)', 'ok');
 }
 
@@ -39,20 +33,15 @@ export function undo() {
 
   if (entry.action === 'add') {
     // undo add = delete the cell (without pushing to undo stack)
-    const idx = S.cells.findIndex(c => c.id === entry.id);
-    if (idx < 0) return;
-    const cell = S.cells[idx];
-    if (cell._styleEl) { cell._styleEl.remove(); cell._styleEl = null; }
-    cell.el.remove();
-    S.cells.splice(idx, 1);
-    if (S.cells.some(c => c.type === 'code' || c.type === 'html')) runAll();
-    updateStatus();
+    deleteCell(entry.id);
     setMsg('undid add', 'ok');
   } else {
     // undo delete = restore the cell
-    const { type, code, afterId } = entry;
+    const { type, code, afterId, beforeId, collapsed } = entry;
     const validAfter = afterId !== null && S.cells.find(c => c.id === afterId) ? afterId : null;
-    const newCell = addCell(type, code, validAfter);
+    const validBefore = beforeId !== null && S.cells.find(c => c.id === beforeId) ? beforeId : null;
+    const newCell = addCell(type, code, validAfter, validBefore);
+    if (collapsed) newCell.el.classList.add('collapsed');
     selectCell(newCell.id);
     if ((type === 'code' || type === 'html') && S.cells.some(c => c.type === 'code' || c.type === 'html')) runAll();
     setMsg('restored cell', 'ok');

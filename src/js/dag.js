@@ -16,6 +16,7 @@ function getDirective(code, name) {
 export const isManual    = code => hasDirective(code, 'manual');
 export const isHidden    = code => hasDirective(code, 'hide');
 export const isNorun     = code => hasDirective(code, 'norun');
+export const isCollapsed = code => hasDirective(code, 'collapsed');
 export const parseCellName    = code => getDirective(code, 'cellName');
 export const parseOutputId    = code => { const v = getDirective(code, 'outputId'); return v ? v.split(/\s+/)[0] : null; };
 export const parseOutputClass = code => getDirective(code, 'outputClass');
