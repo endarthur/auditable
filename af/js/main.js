@@ -1,5 +1,6 @@
 import './state.js';
 import './fs.js';
+import './notebook.js';
 import './tree.js';
 import './tabs.js';
 import './bridge.js';

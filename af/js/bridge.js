@@ -1,5 +1,6 @@
 import { AFS, $ } from './state.js';
 import { writeEntry } from './fs.js';
+import { dehydrate } from './notebook.js';
 import { findTabBySource, markDirty, markClean, renderTabBar, setStatus, updateStatusBar, handleStorageMessage } from './tabs.js';
 
 // ── postMessage BRIDGE ──
@@ -86,7 +87,15 @@ async function saveActiveTab() {
       return;
     }
 
-    await writeEntry(tab.rootIndex, tab.path, html);
+    // dehydrate for Box roots, store full HTML for FSAA
+    const root = AFS.roots[tab.rootIndex];
+    let content = html;
+    if (root && root.type === 'box') {
+      const lightweight = await dehydrate(html);
+      if (lightweight) content = lightweight;
+    }
+
+    await writeEntry(tab.rootIndex, tab.path, content);
     tab.iframe.contentWindow.postMessage({ type: 'af:saved' }, '*');
     markClean(tab.id);
     setStatus('saved ' + tab.title);
@@ -102,7 +111,14 @@ async function saveAllTabs() {
     try {
       const html = await requestSerialize(tab.id);
       if (html) {
-        await writeEntry(tab.rootIndex, tab.path, html);
+        // dehydrate for Box roots
+        const root = AFS.roots[tab.rootIndex];
+        let content = html;
+        if (root && root.type === 'box') {
+          const lightweight = await dehydrate(html);
+          if (lightweight) content = lightweight;
+        }
+        await writeEntry(tab.rootIndex, tab.path, content);
         tab.iframe.contentWindow.postMessage({ type: 'af:saved' }, '*');
         markClean(tab.id);
       }
