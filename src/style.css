@@ -852,6 +852,7 @@ body.presenting .present-exit {
 .statusbar .status-cells { color: var(--fg-dim); }
 .statusbar .status-msg { flex: 1; text-align: right; }
 .statusbar .status-msg.ok { color: var(--ok); }
+.statusbar .status-msg.warn { color: var(--accent); }
 .statusbar .status-msg.err { color: var(--err); }
 .statusbar .status-attr { margin-left: auto; display: flex; align-items: center; gap: 6px; }
 .statusbar .status-attr a {

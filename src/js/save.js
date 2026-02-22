@@ -128,7 +128,7 @@ ${findBarHTML}
 ${statusbarHTML}
 
 ${'<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->'}
-${Object.keys(window._installedModules || {}).length ? '<!--AUDITABLE-MODULES\n' + JSON.stringify(window._installedModules) + '\nAUDITABLE-MODULES-->' : ''}
+${Object.keys(window._installedModules || {}).length ? '<!--AUDITABLE-MODULES\n' + JSON.stringify(window._installedModules).replace(/--/g, '\\u002d\\u002d') + '\nAUDITABLE-MODULES-->' : ''}
 ${'<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->'}
 
 <script>\n${script}\n<\/script>

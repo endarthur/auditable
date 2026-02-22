@@ -327,7 +327,7 @@ function finishUpdate(newHtml, version) {
     oldData.data = '<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->';
   }
   if (window._installedModules && Object.keys(window._installedModules).length) {
-    oldData.modules = '<!--AUDITABLE-MODULES\n' + JSON.stringify(window._installedModules) + '\nAUDITABLE-MODULES-->';
+    oldData.modules = '<!--AUDITABLE-MODULES\n' + JSON.stringify(window._installedModules).replace(/--/g, '\\u002d\\u002d') + '\nAUDITABLE-MODULES-->';
   }
   oldData.settings = '<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->';
 

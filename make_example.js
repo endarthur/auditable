@@ -6,7 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 
-function makeExample({ title, cells, settings, outPath }) {
+function makeExample({ title, cells, settings, modules, outPath }) {
   const basePath = path.join(__dirname, 'auditable.html');
   if (!fs.existsSync(basePath)) {
     throw new Error('auditable.html not found — run `node build.js` first');
@@ -27,13 +27,13 @@ function makeExample({ title, cells, settings, outPath }) {
 
   // 3. Build data comments
   const dataComment = '<!--AUDITABLE-DATA\n' + JSON.stringify(cells) + '\nAUDITABLE-DATA-->';
+  const modulesComment = modules ? '<!--AUDITABLE-MODULES\n' + JSON.stringify(modules).replace(/--/g, '\\u002d\\u002d') + '\nAUDITABLE-MODULES-->' : '';
   const settingsComment = '<!--AUDITABLE-SETTINGS\n' + JSON.stringify(settings || { theme: 'dark', fontSize: 13, width: '860' }) + '\nAUDITABLE-SETTINGS-->';
 
   // 4. Insert before <script>
-  html = html.replace(
-    '\n<script>',
-    '\n' + dataComment + '\n' + settingsComment + '\n\n<script>'
-  );
+  // Use a replacer function to avoid $' $` $& special patterns in module source
+  const insertion = '\n' + dataComment + '\n' + (modulesComment ? modulesComment + '\n' : '') + settingsComment + '\n\n<script>';
+  html = html.replace('\n<script>', () => insertion);
 
   // 5. Write output
   fs.writeFileSync(outPath, html);
