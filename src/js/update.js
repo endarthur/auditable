@@ -208,9 +208,14 @@ async function applyUpdate(newHtml, version) {
     return;
   }
 
-  if (result.status === 'unsigned' || result.status === 'no-key' || result.status === 'wrong-key') {
+  const warnMessages = {
+    'unsigned': 'this file is not signed',
+    'no-key': 'no public key configured \u2014 cannot verify signature',
+    'wrong-key': 'signed with an unknown key',
+  };
+  if (warnMessages[result.status]) {
     setUpdateStatus(
-      'warning: this file is ' + result.status.replace('-', ' ')
+      'warning: ' + warnMessages[result.status]
       + '<div class="update-confirm">'
       + '<button onclick="proceedUpdate()">proceed anyway</button>'
       + '<button onclick="cancelUpdate()">cancel</button>'
@@ -396,12 +401,24 @@ async function verifySelf() {
   }
 }
 
-// ── INIT: verify on settings open ──
+// ── INIT ──
 (function() {
   const ver = $('#updateCurrentVer');
   if (ver) {
     const versionEl = $('#aboutVersion');
     if (versionEl) ver.textContent = versionEl.textContent.replace('auditable ', '');
+  }
+  // Show public key status
+  const keyEl = $('#updatePubKey');
+  if (keyEl) {
+    if (__AUDITABLE_PUBLIC_KEY__) {
+      keyEl.textContent = __AUDITABLE_PUBLIC_KEY__.slice(0, 8) + '...';
+      keyEl.title = __AUDITABLE_PUBLIC_KEY__;
+      keyEl.className = 'update-sig';
+    } else {
+      keyEl.textContent = 'not configured (dev build)';
+      keyEl.className = 'update-sig update-warn';
+    }
   }
   // Run self-verification on load
   verifySelf();
