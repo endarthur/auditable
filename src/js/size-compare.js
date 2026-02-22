@@ -47,6 +47,10 @@ function applySizeCompareRef(val) {
   const modulesH2 = headings[headings.length - 1];
   if (!modulesH2) return;
 
+  const h2 = document.createElement('h2');
+  h2.textContent = 'status bar';
+  modulesH2.before(h2);
+
   const refRow = document.createElement('div');
   refRow.className = 'settings-row';
   refRow.innerHTML = '<label>size reference</label>' +

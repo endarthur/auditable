@@ -18,6 +18,12 @@ export const S = {
   pendingDTimer: null,
   clipboard: null,  // copied cell data
   trash: [],        // undo stack for deleted cells
+  findActive: false,
+  findQuery: '',
+  findCase: false,
+  findRegex: false,
+  findMatches: [],   // { cellId, index, length }
+  findCurrent: -1,
 };
 
 export const JS_KEYWORDS = new Set([

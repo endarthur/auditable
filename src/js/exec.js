@@ -1,5 +1,5 @@
 import { S } from './state.js';
-import { buildDAG, isManual, isNorun, isHidden, parseCellName, parseOutputId, parseOutputClass } from './dag.js';
+import { buildDAG, topoSort, isManual, isNorun, isHidden, parseCellName, parseOutputId, parseOutputClass } from './dag.js';
 import { setMsg } from './ui.js';
 
 // ── EXECUTION ──
@@ -10,12 +10,25 @@ export function renderHtmlCell(cell) {
   if (!viewEl) return;
   if (outputEl) { outputEl.textContent = ''; outputEl.className = 'cell-output'; }
 
-  const scopeKeys = Object.keys(S.scope);
+  // use only variables this cell references for stable function signatures
+  const scopeKeys = cell.uses ? [...cell.uses].sort() : [];
   const scopeVals = scopeKeys.map(k => S.scope[k]);
+
+  // cache compiled template functions per expression
+  if (!cell._tplCache) cell._tplCache = {};
+  const scopeSig = scopeKeys.join(',');
+  if (cell._tplScopeSig !== scopeSig) {
+    cell._tplCache = {};  // scope signature changed, invalidate all
+    cell._tplScopeSig = scopeSig;
+  }
 
   let rendered = cell.code.replace(/\$\{([^}]+)\}/g, (match, expr) => {
     try {
-      const fn = new Function(...scopeKeys, '"use strict"; return (' + expr + ')');
+      let fn = cell._tplCache[expr];
+      if (!fn) {
+        fn = new Function(...scopeKeys, '"use strict"; return (' + expr + ')');
+        cell._tplCache[expr] = fn;
+      }
       const val = fn(...scopeVals);
       return val === undefined ? '' : String(val);
     } catch (e) {
@@ -30,8 +43,14 @@ export function renderHtmlCell(cell) {
 }
 
 export async function execCell(cell) {
+  // fire invalidation promise from previous run (cleanup resources)
+  if (cell._invalidate) { cell._invalidate(); cell._invalidate = null; }
+
   const outputEl = cell.el.querySelector('.cell-output');
   const widgetEl = cell.el.querySelector('.cell-widgets');
+
+  // preserve canvases before clearing output
+  const prevCanvases = [...outputEl.querySelectorAll('canvas')];
   outputEl.textContent = '';
   outputEl.className = 'cell-output';
   const outClass = parseOutputClass(cell.code);
@@ -41,8 +60,14 @@ export async function execCell(cell) {
   cell.el.classList.toggle('present-hidden', isHidden(cell.code));
   cell.error = null;
 
+  // create invalidation promise for this run
+  let invalidationResolve;
+  const invalidation = new Promise(r => { invalidationResolve = r; });
+  cell._invalidate = invalidationResolve;
+
   // track which widgets are used this run
   const usedWidgets = new Set();
+  let canvasIdx = 0;
 
   // build display function for this cell
   const display = (...args) => {
@@ -61,8 +86,13 @@ export async function execCell(cell) {
     }
   };
 
-  // canvas helper
+  // canvas helper — reuses existing canvas if dimensions match
   const canvas = (w = 400, h = 300) => {
+    const prev = prevCanvases[canvasIdx++];
+    if (prev && prev.width === w && prev.height === h) {
+      outputEl.appendChild(prev);
+      return prev;
+    }
     const c = document.createElement('canvas');
     c.width = w; c.height = h;
     c.style.background = '#000';
@@ -210,9 +240,9 @@ export async function execCell(cell) {
   const checkbox = (label, defaultVal = false) => mkInput(label, 'checkbox', defaultVal);
   const textInput = (label, defaultVal = '') => mkInput(label, 'text', defaultVal);
 
-  // execute with shared scope
-  const scopeKeys = Object.keys(S.scope);
-  const scopeVals = scopeKeys.map(k => S.scope[k]);
+  // execute with scoped parameters (only what this cell uses, for stable V8 JIT)
+  const scopeKeys = cell.uses ? [...cell.uses].sort() : [];
+  const defNames = cell.defines ? [...cell.defines].sort().join(', ') : '';
 
   // import cache — shared across all cells
   if (!window._importCache) window._importCache = {};
@@ -256,24 +286,34 @@ export async function execCell(cell) {
     return mod;
   };
 
-  const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+  // function caching — reuse compiled function if code/uses/defines unchanged
+  const cacheKey = scopeKeys.join(',') + '|' + defNames + '|' + cell.code;
 
   try {
-    const cellName = parseCellName(cell.code);
-    const slug = cellName ? '-' + cellName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') : '';
-    const fn = new AsyncFunction(
-      ...scopeKeys,
-      'display', 'canvas', 'table',
-      'slider', 'dropdown', 'checkbox', 'textInput',
-      'load', 'install',
-      `"use strict";\n${cell.code}\n\n` +
-      `return { ${[...cell.defines].join(', ')} };\n` +
-      `//# sourceURL=auditable://cell-${cell.id}${slug}.js`
-    );
+    let fn;
+    if (cell._cacheKey === cacheKey && cell._cachedFn) {
+      fn = cell._cachedFn;
+    } else {
+      const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+      const cellName = parseCellName(cell.code);
+      const slug = cellName ? '-' + cellName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') : '';
+      fn = new AsyncFunction(
+        ...scopeKeys,
+        'display', 'canvas', 'table',
+        'slider', 'dropdown', 'checkbox', 'textInput',
+        'load', 'install', 'invalidation',
+        `"use strict";\n${cell.code}\n\n` +
+        `return { ${defNames} };\n` +
+        `//# sourceURL=auditable://cell-${cell.id}${slug}.js`
+      );
+      cell._cachedFn = fn;
+      cell._cacheKey = cacheKey;
+    }
 
+    const scopeVals = scopeKeys.map(k => S.scope[k]);
     const result = await fn(...scopeVals, display, canvas, table,
                       slider, dropdown, checkbox, textInput,
-                      load, install);
+                      load, install, invalidation);
 
     // update scope with defined variables
     if (result && typeof result === 'object') {
@@ -306,22 +346,45 @@ export async function execCell(cell) {
 
 export async function runDAG(dirtyIds, force = false) {
   buildDAG();
+  const isAutorun = S.autorun && !force;
 
-  // rebuild scope from scratch in document order
+  // determine which cells need execution via topo sort
+  const runSet = new Set(topoSort(dirtyIds));
+
+  if (window._dagStart) window._dagStart();
+
+  // rebuild scope in document order, only executing cells in runSet
   S.scope = {};
-  for (const cell of S.cells) {
+  const poisoned = new Set(); // variable names defined by errored cells
+  for (let i = 0; i < S.cells.length; i++) {
+    const cell = S.cells[i];
+
     if (cell.type === 'html') {
-      renderHtmlCell(cell);
+      if (runSet.has(cell.id)) {
+        // check if any used variable is poisoned
+        if (cell.uses && [...cell.uses].some(n => poisoned.has(n))) {
+          cell.el.classList.remove('fresh');
+          cell.el.classList.add('stale');
+        } else {
+          renderHtmlCell(cell);
+        }
+      }
       continue;
     }
     if (cell.type !== 'code') continue;
 
-    // skip norun cells always (unless explicitly triggered by clicking run on the cell)
-    if (isNorun(cell.code) && !dirtyIds.includes(cell.id)) continue;
+    // skip norun cells (unless explicitly triggered)
+    if (isNorun(cell.code) && !dirtyIds.includes(cell.id)) {
+      if (cell._lastResult) {
+        for (const [k, v] of Object.entries(cell._lastResult)) {
+          if (v !== undefined) S.scope[k] = v;
+        }
+      }
+      continue;
+    }
 
-    // skip manual cells unless force (Run All) or explicitly triggered
+    // skip manual cells unless force or explicitly triggered
     if (!force && isManual(cell.code) && !dirtyIds.includes(cell.id)) {
-      // keep existing scope contributions if previously run
       if (cell._lastResult) {
         for (const [k, v] of Object.entries(cell._lastResult)) {
           if (v !== undefined) S.scope[k] = v;
@@ -331,7 +394,70 @@ export async function runDAG(dirtyIds, force = false) {
       continue;
     }
 
+    // not in run set — restore cached results, skip execution
+    if (!runSet.has(cell.id)) {
+      if (cell._lastResult) {
+        for (const [k, v] of Object.entries(cell._lastResult)) {
+          if (v !== undefined) S.scope[k] = v;
+        }
+      }
+      continue;
+    }
+
+    // error isolation: if any upstream dependency is poisoned, skip this cell
+    if (cell.uses && cell.uses.size > 0) {
+      let blocked = false;
+      for (const name of cell.uses) {
+        if (poisoned.has(name)) { blocked = true; break; }
+      }
+      if (blocked) {
+        const outputEl = cell.el.querySelector('.cell-output');
+        if (outputEl && !cell.error) {
+          outputEl.textContent = 'blocked by upstream error';
+          outputEl.className = 'cell-output error';
+        }
+        cell.el.classList.remove('stale', 'fresh');
+        cell.el.classList.add('error');
+        // poison our own defines so downstream also blocks
+        if (cell.defines) for (const name of cell.defines) poisoned.add(name);
+        continue;
+      }
+    }
+
+    // value-equality gating: if this cell is a downstream dependent (not directly
+    // dirty) and all its input values are unchanged, skip re-execution entirely
+    if (!dirtyIds.includes(cell.id) && cell._lastResult && cell.uses && cell.uses.size > 0) {
+      let inputsChanged = false;
+      for (const name of cell.uses) {
+        if (S.scope[name] !== cell._prevInputs?.[name]) { inputsChanged = true; break; }
+      }
+      if (!inputsChanged) {
+        // inputs identical — restore previous results, skip execution
+        for (const [k, v] of Object.entries(cell._lastResult)) {
+          if (v !== undefined) S.scope[k] = v;
+        }
+        continue;
+      }
+    }
+
+    if (window._beforeExec) window._beforeExec(cell);
     await execCell(cell);
+
+    // if the cell errored, poison its defines
+    if (cell.error) {
+      if (cell.defines) for (const name of cell.defines) poisoned.add(name);
+    }
+
+    // snapshot input values for future equality checks
+    if (cell.uses) {
+      cell._prevInputs = {};
+      for (const name of cell.uses) cell._prevInputs[name] = S.scope[name];
+    }
+
+    if (window._afterExec && !isAutorun) {
+      const jump = window._afterExec(cell, i);
+      if (jump >= 0) { i = jump - 1; continue; }
+    }
   }
 
   updateStatus();

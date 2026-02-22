@@ -451,6 +451,11 @@ button.accent:hover {
 .hl-color { color: var(--accent); }
 .hl-important { color: #d4555a; font-weight: bold; }
 
+/* HTML syntax tokens */
+.hl-tag { color: #6dbfb8; }
+.hl-attr { color: #7aabcf; }
+.hl-expr { color: var(--accent); }
+
 .hl-swatch {
   display: inline-block;
   width: 10px;
@@ -560,16 +565,31 @@ button.accent:hover {
 .cell-html-edit textarea {
   display: block;
   width: 100%;
-  background: var(--bg1);
+  background: transparent;
   border: 1px solid var(--border);
   color: var(--fg-bright);
+  caret-color: var(--fg-bright);
   font-family: var(--mono);
   font-size: var(--editor-font-size);
   line-height: 1.5;
-  padding: 8px 10px;
+  padding: 8px 10px 8px calc(var(--gutter) + 10px);
   resize: vertical;
   min-height: 38px;
   outline: none;
+  tab-size: 2;
+  position: relative;
+  z-index: 2;
+  -webkit-text-fill-color: transparent;
+}
+.cell-html-edit textarea::selection {
+  -webkit-text-fill-color: var(--fg-bright);
+  background: rgba(200,155,60,0.25);
+}
+.cell-html-edit textarea:focus + .highlight-layer {
+  border-color: var(--border-hi);
+}
+.cell-html-edit textarea:focus ~ .line-numbers {
+  border-color: var(--border-hi);
 }
 
 /* ── MARKDOWN CELL ── */
@@ -958,6 +978,21 @@ body.presenting .present-exit {
   font-size: 11px;
 }
 
+/* ── SETTINGS DESCRIPTIONS ── */
+.settings-desc {
+  color: var(--fg-dim);
+  font-size: 10px;
+  line-height: 1.5;
+  padding: 4px 0 8px;
+}
+.settings-desc strong {
+  color: var(--fg);
+}
+
+/* ── HIDE RUN TOGGLE ── */
+html.hide-run-toggle #autorunBtn,
+html.hide-run-toggle #autorunBtnMobile { display: none; }
+
 /* ── MODULE LIST (settings panel) ── */
 .module-row {
   display: flex;
@@ -1002,6 +1037,113 @@ body.presenting .present-exit {
   font-size: 11px;
   font-style: italic;
   padding: 4px 0;
+}
+.settings-about {
+  margin-top: 24px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--fg-dim);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-about a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.settings-about a:hover { text-decoration: underline; }
+
+/* ── FIND BAR ── */
+.find-bar {
+  display: none;
+  flex-direction: column;
+  position: sticky;
+  top: 33px;
+  z-index: 99;
+  float: right;
+  max-width: 400px;
+  width: 100%;
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-top: none;
+  padding: 6px 8px;
+  gap: 4px;
+}
+.find-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.find-replace-row {
+  display: none;
+  align-items: center;
+  gap: 4px;
+}
+.find-bar.show-replace .find-replace-row { display: flex; }
+.find-bar input[type="text"] {
+  flex: 1;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  color: var(--fg-bright);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 4px 8px;
+  outline: none;
+  min-width: 0;
+}
+.find-bar input[type="text"]:focus {
+  border-color: var(--border-hi);
+}
+.find-count {
+  font-size: 10px;
+  color: var(--fg-dim);
+  white-space: nowrap;
+  min-width: 50px;
+  text-align: center;
+  letter-spacing: 1px;
+}
+.find-bar button {
+  padding: 3px 8px;
+  font-size: 10px;
+  min-width: 28px;
+}
+.find-bar button.active {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+}
+body.presenting .find-bar { display: none !important; }
+
+/* ── SEARCH OVERLAY ── */
+.search-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  padding: 8px 10px 8px calc(var(--gutter) + 10px);
+  font-family: var(--mono);
+  font-size: var(--editor-font-size);
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow: hidden;
+  z-index: 1;
+  pointer-events: none;
+  color: transparent;
+  border: 1px solid transparent;
+}
+.search-overlay-md {
+  padding: 8px 10px;
+}
+.md-search-wrap {
+  position: relative;
+}
+.search-match {
+  background: rgba(200,155,60,0.25);
+  color: transparent;
+}
+.search-match-current {
+  background: rgba(200,155,60,0.5);
+  outline: 1px solid var(--accent);
 }
 
 /* ── LIGHT THEME ── */
@@ -1165,6 +1307,7 @@ body.presenting .present-exit {
     color: #111;
   }
 
+  .find-bar { max-width: 100%; float: none; }
   .notebook { padding: 8px 6px 100px; }
   .cell-header { padding: 2px 4px; }
   .settings-close { width: 44px; height: 44px; font-size: 22px; }
