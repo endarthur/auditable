@@ -1,0 +1,42 @@
+{
+  "display": {
+    "sig": "display(...values)",
+    "desc": "output values to cell"
+  },
+  "canvas": {
+    "sig": "canvas(w?, h?)",
+    "desc": "create/reuse canvas (default 400\u00d7300)"
+  },
+  "table": {
+    "sig": "table(data, columns?)",
+    "desc": "render array of objects as table"
+  },
+  "slider": {
+    "sig": "slider(label, default?, {min,max,step}?)",
+    "desc": "reactive range input"
+  },
+  "dropdown": {
+    "sig": "dropdown(label, options, default?)",
+    "desc": "reactive select menu"
+  },
+  "checkbox": {
+    "sig": "checkbox(label, default?)",
+    "desc": "reactive toggle"
+  },
+  "textInput": {
+    "sig": "textInput(label, default?)",
+    "desc": "reactive text field"
+  },
+  "load": {
+    "sig": "load(url)",
+    "desc": "import ES module (cached)"
+  },
+  "install": {
+    "sig": "install(url)",
+    "desc": "fetch & embed module for offline"
+  },
+  "invalidation": {
+    "sig": "invalidation",
+    "desc": "promise \u2014 resolves when cell re-runs"
+  }
+}

@@ -4,6 +4,7 @@ import { isManual } from './dag.js';
 import { renderMd } from './markdown.js';
 import { onCodeEdit, onCssEdit, onHtmlEdit } from './editor.js';
 import { renderHtmlCell } from './exec.js';
+import { attachAutocomplete } from './complete.js';
 
 // ── CELL DOM ──
 
@@ -58,6 +59,7 @@ export function createCellEl(type, id) {
     const ln = div.querySelector('.line-numbers');
     ta.addEventListener('input', () => { highlightCode(ta, hl); onCodeEdit(id); });
     ta.addEventListener('scroll', () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; ln.scrollTop = ta.scrollTop; });
+    attachAutocomplete(ta, id);
     ta.addEventListener('keydown', handleTab);
     ta.addEventListener('input', autoResize);
   } else if (type === 'css') {
