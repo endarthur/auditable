@@ -137,6 +137,7 @@ export function applySettings(s) {
   if (s.execMode) applyExecMode(s.execMode);
   if (s.runOnLoad) applyRunOnLoad(s.runOnLoad);
   if (s.showToggle) applyShowToggle(s.showToggle);
+  // optional: size-compare.js (typeof guards for --lean builds without it)
   if (s.sizeCompare !== undefined && typeof applySizeCompare === 'function') applySizeCompare(s.sizeCompare);
   if (s.sizeCompareRef !== undefined && typeof applySizeCompareRef === 'function') applySizeCompareRef(s.sizeCompareRef);
 }

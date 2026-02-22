@@ -6,7 +6,31 @@ import { setMsg } from './ui.js';
 
 // ── SAVE / LOAD ──
 
-export function saveNotebook() {
+// save mode: 'normal' or 'packed'
+let _saveMode = 'normal';
+
+export function getSaveMode() { return _saveMode; }
+
+export function toggleSaveTray() {
+  const tray = $('#saveTray');
+  if (tray) tray.classList.toggle('open');
+}
+
+export function setSaveMode(mode) {
+  _saveMode = mode;
+  // update UI
+  const label = $('#saveLabel');
+  if (label) label.textContent = mode === 'packed' ? 'pack' : 'save';
+  const tray = $('#saveTray');
+  if (tray) tray.classList.remove('open');
+  // update mobile buttons
+  const mobSave = $('#mobileSaveBtn');
+  const mobPack = $('#mobilePackBtn');
+  if (mobSave) mobSave.classList.toggle('active-mode', mode === 'normal');
+  if (mobPack) mobPack.classList.toggle('active-mode', mode === 'packed');
+}
+
+function buildNotebookHtml() {
   // serialize current state back to a self-contained HTML file
   const title = $('#docTitle').value || 'untitled';
 
@@ -49,9 +73,17 @@ export function saveNotebook() {
     autoBtn.className = savedMode === 'reactive' ? 'autorun-on' : 'autorun-off';
     autoBtn.textContent = savedMode === 'reactive' ? '\u25b6' : '\u2016';
   }
-  // close overflow if open
+  // close overflow and save tray if open
   const overflow = toolbarEl.querySelector('.toolbar-overflow');
   if (overflow) overflow.classList.remove('open');
+  const saveTray = toolbarEl.querySelector('#saveTray');
+  if (saveTray) saveTray.classList.remove('open');
+  // reset save label to default
+  const saveLabel = toolbarEl.querySelector('#saveLabel');
+  if (saveLabel) saveLabel.textContent = 'save';
+  // clear badges (they get set dynamically on load)
+  const badges = toolbarEl.querySelector('.toolbar-badges');
+  if (badges) badges.innerHTML = '';
   const toolbarHTML = toolbarEl.outerHTML;
 
   // capture find bar and reset to default state
@@ -66,7 +98,7 @@ export function saveNotebook() {
   const findBarHTML = findBarEl.outerHTML;
 
   // build output HTML
-  let html = `<!DOCTYPE html>
+  return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -102,6 +134,26 @@ ${'<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETT
 <script>\n${script}\n<\/script>
 </body>
 </html>`;
+}
+
+function downloadHtml(html, title) {
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.html';
+  a.click();
+  URL.revokeObjectURL(url);
+  return a.download;
+}
+
+export function saveNotebook() {
+  if (_saveMode === 'packed') {
+    savePackedNotebook();
+    return;
+  }
+  const title = $('#docTitle').value || 'untitled';
+  const html = buildNotebookHtml();
 
   // AF bridge: send serialized HTML to parent shell instead of downloading
   if (window.__AF_BRIDGE__) {
@@ -110,15 +162,47 @@ ${'<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETT
     return;
   }
 
-  // download
-  const blob = new Blob([html], { type: 'text/html' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.html';
-  a.click();
-  URL.revokeObjectURL(url);
-  setMsg(`saved ${a.download}`, 'ok');
+  const fn = downloadHtml(html, title);
+  setMsg('saved ' + fn, 'ok');
+}
+
+export async function savePackedNotebook() {
+  const title = $('#docTitle').value || 'untitled';
+  const html = buildNotebookHtml();
+
+  try {
+    // compress via CompressionStream
+    const blob = new Blob([html]);
+    const cs = new CompressionStream('gzip');
+    const stream = blob.stream().pipeThrough(cs);
+    const compressed = await new Response(stream).arrayBuffer();
+    const b64 = btoa(String.fromCharCode(...new Uint8Array(compressed)));
+
+    const loader = '<!DOCTYPE html>\n'
+      + '<html lang="en"><head><meta charset="UTF-8">'
+      + '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
+      + '<title>Auditable \u2014 ' + esc(title) + '</title>'
+      + '<style>html{background:#1a1a1a}'
+      + 'body{color:#999;font:14px/1.5 monospace;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}'
+      + '</style></head><body>'
+      + '<div id="_l">unpacking\u2026</div>'
+      + '<script>'
+      + "(async()=>{"
+      + "var b='" + b64 + "';"
+      + "var r=new Response(new Blob([Uint8Array.from(atob(b),c=>c.charCodeAt(0))]));"
+      + "var s=r.body.pipeThrough(new DecompressionStream('gzip'));"
+      + "var h=await new Response(s).text();"
+      + "h=h.replace('<head>','<head><meta name=\"auditable-packed\">');"
+      + "document.open();document.write(h);document.close();"
+      + "})().catch(function(e){document.getElementById('_l').textContent='error: '+e.message});"
+      + '<\/script></body></html>';
+
+    const fn = downloadHtml(loader, title);
+    const kb = (loader.length / 1024).toFixed(0);
+    setMsg('packed ' + fn + ' (' + kb + ' KB)', 'ok');
+  } catch (e) {
+    setMsg('pack failed: ' + e.message, 'err');
+  }
 }
 
 export function esc(s) {

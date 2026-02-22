@@ -1,10 +1,20 @@
-import { loadFromEmbed, saveNotebook } from './save.js';
+import { S } from './state.js';
+import { loadFromEmbed, saveNotebook, setSaveMode } from './save.js';
 import { addCell } from './cell-ops.js';
 import { setMsg } from './ui.js';
+import { setBadge } from './update.js';
 
 // ── INIT ──
 
 (function init() {
+  // detect packed format (meta tag injected by loader)
+  const packedMeta = document.querySelector('meta[name="auditable-packed"]');
+  if (packedMeta) {
+    packedMeta.remove();
+    setBadge('packed', 'packed', 'toolbar-badge toolbar-badge-packed');
+    setSaveMode('packed');
+  }
+
   if (!loadFromEmbed()) {
     addCell('md', '');
     addCell('code', '');

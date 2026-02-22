@@ -7,6 +7,7 @@ const path = require('path');
 
 const target = (process.argv.find(a => a.startsWith('--target=')) || '').split('=')[1] || '';
 const lean = process.argv.includes('--lean');
+const compress = process.argv.includes('--compress');
 const execModeArg = (process.argv.find(a => a.startsWith('--exec-mode=')) || '').split('=')[1] || '';
 const runOnLoadArg = (process.argv.find(a => a.startsWith('--run-on-load=')) || '').split('=')[1] || '';
 
@@ -217,7 +218,37 @@ js = js.replace(
 const html = assemble(js);
 
 // 6. Write output
-const outPath = path.join(__dirname, 'auditable.html');
-fs.writeFileSync(outPath, html);
-const size = fs.statSync(outPath).size;
-console.log(`Built auditable.html (${(size / 1024).toFixed(1)} KB)`);
+if (compress) {
+  const zlib = require('zlib');
+  const gz = zlib.gzipSync(html, { level: 9 });
+  const b64 = gz.toString('base64');
+  const title = 'Auditable';
+  const packed = '<!DOCTYPE html>\n'
+    + '<html lang="en"><head><meta charset="UTF-8">'
+    + '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
+    + '<title>' + title + '</title>'
+    + '<style>html{background:#1a1a1a}'
+    + 'body{color:#999;font:14px/1.5 monospace;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}'
+    + '</style></head><body>'
+    + '<div id="_l">unpacking\u2026</div>'
+    + '<script>'
+    + "(async()=>{"
+    + "var b='" + b64 + "';"
+    + "var r=new Response(new Blob([Uint8Array.from(atob(b),c=>c.charCodeAt(0))]));"
+    + "var s=r.body.pipeThrough(new DecompressionStream('gzip'));"
+    + "var h=await new Response(s).text();"
+    + "h=h.replace('<head>','<head><meta name=\"auditable-packed\">');"
+    + "document.open();document.write(h);document.close();"
+    + "})().catch(function(e){document.getElementById('_l').textContent='error: '+e.message});"
+    + '<\/script></body></html>';
+  const outPath = path.join(__dirname, 'auditable.html');
+  fs.writeFileSync(outPath, packed);
+  const size = fs.statSync(outPath).size;
+  const unpackedKb = (Buffer.byteLength(html) / 1024).toFixed(1);
+  console.log(`Built auditable.html packed (${(size / 1024).toFixed(1)} KB, unpacked ${unpackedKb} KB)`);
+} else {
+  const outPath = path.join(__dirname, 'auditable.html');
+  fs.writeFileSync(outPath, html);
+  const size = fs.statSync(outPath).size;
+  console.log(`Built auditable.html (${(size / 1024).toFixed(1)} KB)`);
+}

@@ -15,7 +15,7 @@ const SIZE_MEDIA = [
   [1474560, 'a 3.5\u2033 floppy (DS/HD)'],
 ];
 
-function sizeCompare(bytes) {
+export function sizeCompare(bytes) {
   if (!window._sizeCompare) return '';
   for (const [size, name] of SIZE_MEDIA) {
     if (bytes <= size) return 'fits on ' + name;
@@ -24,7 +24,7 @@ function sizeCompare(bytes) {
   return n + '\u00d7 3.5\u2033 floppies';
 }
 
-function applySizeCompare(val) {
+export function applySizeCompare(val) {
   const on = val === true || val === 'true' || val === 'on';
   window._sizeCompare = on;
   const el = $('#setSizeCompare');
@@ -32,7 +32,7 @@ function applySizeCompare(val) {
   updateStatus();
 }
 
-function applySizeCompareRef(val) {
+export function applySizeCompareRef(val) {
   window._sizeCompareRef = val === 'content' ? 'content' : 'total';
   const el = $('#setSizeCompareRef');
   if (el) el.value = window._sizeCompareRef;
