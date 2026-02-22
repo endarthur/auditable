@@ -5,29 +5,13 @@
 
 import { $, S } from './state.js';
 import { toggleAutorun } from './editor.js';
-import {
-  toggleSettings, togglePresent,
-  applyTheme, applyFontSize, applyWidth, applyLineNumbers, applyHeader,
-  applyExecMode, applyRunOnLoad, applyShowToggle,
-  applyGlobalExecMode, applyGlobalRunOnLoad,
-} from './settings.js';
-import {
-  toggleUpdate, checkForUpdate, applyOnlineUpdate,
-  proceedUpdate, cancelUpdate, updateFromFile,
-} from './update.js';
-import {
-  saveNotebook, savePackedNotebook,
-  setSaveMode, toggleSaveTray,
-} from './save.js';
+import { toggleSettings, togglePresent, applyTheme, applyFontSize, applyWidth, applyLineNumbers, applyHeader, applyExecMode, applyRunOnLoad, applyShowToggle, applyGlobalExecMode, applyGlobalRunOnLoad } from './settings.js';
+import { toggleUpdate, checkForUpdate, applyOnlineUpdate, proceedUpdate, cancelUpdate, updateFromFile } from './update.js';
+import { saveNotebook, savePackedNotebook, setSaveMode, toggleSaveTray } from './save.js';
 import { insertAt } from './ui.js';
 import { openFind, closeFind } from './find.js';
 import { runAll } from './exec.js';
-import {
-  addCellWithUndo,
-  runSelectedCell, toggleToolbarMenu, toggleAddTray, toggleMoreTray,
-  showInsertPicker, toggleTypePicker,
-  collapseAll, expandAll, newNotebook,
-} from './keyboard.js';
+import { addCellWithUndo, runSelectedCell, toggleToolbarMenu, toggleAddTray, toggleMoreTray, showInsertPicker, toggleTypePicker, collapseAll, expandAll, newNotebook } from './keyboard.js';
 
 // state
 window.$ = $;
