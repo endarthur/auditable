@@ -23,20 +23,32 @@ export const parseOutputClass = code => getDirective(code, 'outputClass');
 // ── code analysis ──
 
 function stripCommentsAndStrings(code) {
-  code = code
-    .replace(/\/\/.*$/gm, '')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/'(?:[^'\\]|\\.)*'/g, '""')
-    .replace(/"(?:[^"\\]|\\.)*"/g, '""');
-  // template literals: replace string parts with spaces but keep ${expr} content
+  // single-pass: strings take precedence over comments (// inside "..." is not a comment)
   let out = '', i = 0;
   while (i < code.length) {
+    // single-quoted string
+    if (code[i] === "'") {
+      out += '""';
+      i++;
+      while (i < code.length && code[i] !== "'") { if (code[i] === '\\') i++; i++; }
+      i++; // skip closing quote
+      continue;
+    }
+    // double-quoted string
+    if (code[i] === '"') {
+      out += '""';
+      i++;
+      while (i < code.length && code[i] !== '"') { if (code[i] === '\\') i++; i++; }
+      i++; // skip closing quote
+      continue;
+    }
+    // template literal: replace string parts with spaces but keep ${expr} content
     if (code[i] === '`') {
-      i++; // skip opening backtick
+      i++;
       while (i < code.length && code[i] !== '`') {
         if (code[i] === '\\') { i += 2; continue; }
         if (code[i] === '$' && code[i + 1] === '{') {
-          i += 2; // skip ${
+          i += 2;
           let depth = 1;
           out += ' ';
           while (i < code.length && depth > 0) {
@@ -52,10 +64,22 @@ function stripCommentsAndStrings(code) {
         i++;
       }
       i++; // skip closing backtick
-    } else {
-      out += code[i];
-      i++;
+      continue;
     }
+    // line comment
+    if (code[i] === '/' && code[i + 1] === '/') {
+      while (i < code.length && code[i] !== '\n') i++;
+      continue;
+    }
+    // block comment
+    if (code[i] === '/' && code[i + 1] === '*') {
+      i += 2;
+      while (i < code.length && !(code[i - 1] === '*' && code[i] === '/')) i++;
+      i++;
+      continue;
+    }
+    out += code[i];
+    i++;
   }
   return out;
 }

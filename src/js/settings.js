@@ -1,5 +1,5 @@
 import { S, $ } from './state.js';
-import { updateStatus } from './ui.js';
+import { updateStatus, setMsg } from './ui.js';
 
 // ── SETTINGS ──
 
@@ -179,63 +179,88 @@ function formatSize(bytes) {
   return (bytes / 1024).toFixed(1) + ' KB';
 }
 
-export function refreshModuleList() {
-  const list = $('#moduleList');
-  if (!list) return;
+function renderEntryRow(url, entry) {
+  const src = typeof entry === 'string' ? entry : entry.source;
+  const cellId = typeof entry === 'string' ? null : entry.cellId;
+  const isBinary = typeof entry === 'object' && entry.binary;
+  const size = src ? src.length : 0;
+  const displaySize = isBinary ? Math.floor(size * 3 / 4) : size;
+
+  const row = document.createElement('div');
+  row.className = 'module-row';
+
+  const urlSpan = document.createElement('span');
+  urlSpan.className = 'module-url';
+  urlSpan.textContent = url;
+  urlSpan.title = url;
+  row.appendChild(urlSpan);
+
+  const info = document.createElement('span');
+  info.className = 'module-info';
+  info.textContent = (cellId != null ? 'cell ' + cellId + '  ' : '')
+    + (isBinary && entry.compressed ? 'gzipped  ' : '')
+    + formatSize(displaySize);
+  row.appendChild(info);
+
+  const btn = document.createElement('button');
+  btn.className = 'module-remove';
+  btn.textContent = '\u00d7';
+  btn.title = isBinary ? 'remove binary' : 'remove module';
+  btn.onclick = () => removeModule(url);
+  row.appendChild(btn);
+
+  return { row, size };
+}
+
+function renderSection(list, urls, mods, emptyText) {
   list.innerHTML = '';
-
-  const mods = window._installedModules || {};
-  const urls = Object.keys(mods);
-
   if (urls.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'module-empty';
-    empty.textContent = 'no modules installed';
+    empty.textContent = emptyText;
     list.appendChild(empty);
-    return;
+    return 0;
   }
-
   let totalSize = 0;
   for (const url of urls) {
-    const entry = mods[url];
-    const src = typeof entry === 'string' ? entry : entry.source;
-    const cellId = typeof entry === 'string' ? null : entry.cellId;
-    const size = src ? src.length : 0;
-    totalSize += size;
-
-    const row = document.createElement('div');
-    row.className = 'module-row';
-
-    const urlSpan = document.createElement('span');
-    urlSpan.className = 'module-url';
-    urlSpan.textContent = url;
-    urlSpan.title = url;
-    row.appendChild(urlSpan);
-
-    const info = document.createElement('span');
-    info.className = 'module-info';
-    info.textContent = (cellId != null ? 'cell ' + cellId + '  ' : '') + formatSize(size);
-    row.appendChild(info);
-
-    const btn = document.createElement('button');
-    btn.className = 'module-remove';
-    btn.textContent = '\u00d7';
-    btn.title = 'remove module';
-    btn.onclick = () => removeModule(url);
-    row.appendChild(btn);
-
+    const { row, size } = renderEntryRow(url, mods[url]);
     list.appendChild(row);
+    totalSize += size;
   }
-
   const total = document.createElement('div');
   total.className = 'module-total';
   total.textContent = 'total  ' + formatSize(totalSize);
   list.appendChild(total);
+  return totalSize;
+}
+
+export function refreshModuleList() {
+  const modList = $('#moduleList');
+  const binList = $('#binaryList');
+  if (!modList) return;
+
+  const mods = window._installedModules || {};
+  const modUrls = [];
+  const binUrls = [];
+  for (const url of Object.keys(mods)) {
+    const entry = mods[url];
+    if (typeof entry === 'object' && entry.binary) binUrls.push(url);
+    else modUrls.push(url);
+  }
+
+  renderSection(modList, modUrls, mods, 'no modules installed');
+  if (binList) renderSection(binList, binUrls, mods, 'no binaries installed');
 }
 
 export function removeModule(url) {
+  const entry = window._installedModules?.[url];
+  const cellId = entry && typeof entry === 'object' ? entry.cellId : null;
+  const kind = entry?.binary ? 'binary' : 'module';
   if (window._installedModules) delete window._installedModules[url];
   if (window._importCache) delete window._importCache[url];
   refreshModuleList();
   updateStatus();
+  if (cellId != null) {
+    setMsg(`removed ${kind} \u2014 cell ${cellId} will re-install it on next run`, 'warn');
+  }
 }

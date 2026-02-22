@@ -5,6 +5,26 @@ import { highlightCode } from './syntax.js';
 import { std } from './stdlib.js';
 import { python, zenOfPython } from './python.js';
 
+// ── BINARY HELPERS ──
+
+function uint8ToBase64(bytes) {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+async function decodeBinary(entry) {
+  const type = entry.type || 'application/octet-stream';
+  const bytes = Uint8Array.from(atob(entry.source), c => c.charCodeAt(0));
+  if (entry.compressed) {
+    const ds = new DecompressionStream('gzip');
+    const stream = new Blob([bytes]).stream().pipeThrough(ds);
+    const decompressed = new Uint8Array(await new Response(stream).arrayBuffer());
+    return URL.createObjectURL(new Blob([decompressed], { type }));
+  }
+  return URL.createObjectURL(new Blob([bytes], { type }));
+}
+
 // ── EXECUTION ──
 
 export function renderHtmlCell(cell) {
@@ -263,7 +283,7 @@ export async function execCell(cell) {
 
   // execute with scoped parameters (only what this cell uses, for stable V8 JIT)
   // filter out injected names — they're per-cell params, not scope-propagated
-  const _injected = ['ui', 'std', 'load', 'install', 'invalidation', 'print'];
+  const _injected = ['ui', 'std', 'load', 'install', 'installBinary', 'invalidation', 'print'];
   const scopeKeys = cell.uses ? [...cell.uses].filter(k => !_injected.includes(k)).sort() : [];
   const defNames = cell.defines ? [...cell.defines].sort().join(', ') : '';
 
@@ -277,6 +297,13 @@ export async function execCell(cell) {
     if (url === '@python') return python;
     if (url === '@python/this') { display(zenOfPython()); return python; }
     if (window._importCache[url]) return window._importCache[url];
+
+    // binary assets — return blob URL
+    if (window._installedModules[url]?.binary) {
+      const blobUrl = await decodeBinary(window._installedModules[url]);
+      window._importCache[url] = blobUrl;
+      return blobUrl;
+    }
 
     const langsBefore = window._taggedLanguages ? Object.keys(window._taggedLanguages).length : 0;
 
@@ -341,6 +368,33 @@ export async function execCell(cell) {
     return mod;
   };
 
+  const installBinary = async (url, opts = {}) => {
+    const compress = opts.compress !== false;
+    // if already installed, decode and return blob URL
+    if (window._installedModules[url]?.binary) {
+      return decodeBinary(window._installedModules[url]);
+    }
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(`Failed to fetch ${url}: ${resp.status}`);
+    const contentType = resp.headers.get('content-type')?.split(';')[0] || 'application/octet-stream';
+    const buf = await resp.arrayBuffer();
+    const raw = new Uint8Array(buf);
+    let stored, isCompressed = false;
+    if (compress) {
+      const cs = new CompressionStream('gzip');
+      const stream = new Blob([raw]).stream().pipeThrough(cs);
+      const compressed = new Uint8Array(await new Response(stream).arrayBuffer());
+      stored = uint8ToBase64(compressed);
+      isCompressed = true;
+    } else {
+      stored = uint8ToBase64(raw);
+    }
+    window._installedModules[url] = { source: stored, cellId: cell.id, binary: true, compressed: isCompressed, type: contentType };
+    const ratio = isCompressed ? ` \u2192 ${(stored.length / 1024).toFixed(1)} KB compressed` : '';
+    display(`installed binary ${url} (${(buf.byteLength / 1024).toFixed(1)} KB${ratio})`);
+    return URL.createObjectURL(new Blob([raw], { type: contentType }));
+  };
+
   // ui object — constructed per-cell (closes over cell context)
   const ui = { display, print: display, canvas, table, slider, dropdown, checkbox, textInput };
 
@@ -357,7 +411,7 @@ export async function execCell(cell) {
       const slug = cellName ? '-' + cellName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') : '';
       fn = new AsyncFunction(
         ...scopeKeys,
-        'ui', 'std', 'load', 'install', 'invalidation', 'print',
+        'ui', 'std', 'load', 'install', 'installBinary', 'invalidation', 'print',
         `"use strict";\n${cell.code}\n\n` +
         `return { ${defNames} };\n` +
         `//# sourceURL=auditable://cell-${cell.id}${slug}.js`
@@ -367,7 +421,7 @@ export async function execCell(cell) {
     }
 
     const scopeVals = scopeKeys.map(k => S.scope[k]);
-    const result = await fn(...scopeVals, ui, std, load, install, invalidation, display);
+    const result = await fn(...scopeVals, ui, std, load, install, installBinary, invalidation, display);
 
     // update scope with defined variables
     if (result && typeof result === 'object') {
