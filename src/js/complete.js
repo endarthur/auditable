@@ -14,6 +14,9 @@ const KNOWN_PROPS = {
   Promise: ['all','allSettled','any','race','resolve','reject'],
   Number: ['isFinite','isInteger','isNaN','parseFloat','parseInt','MAX_SAFE_INTEGER','MIN_SAFE_INTEGER','EPSILON'],
   String: ['fromCharCode','fromCodePoint','raw'],
+  ui: ['display','print','canvas','table','slider','dropdown','checkbox','textInput'],
+  std: ['csv','fetchJSON','sum','mean','median','extent','bin','linspace',
+        'unique','zip','cross','file','download','el','copy','fmt'],
 };
 
 // common prototype methods by type
@@ -364,10 +367,10 @@ function detectCallContext(code, cursor) {
     if (ch === ')') depth++;
     else if (ch === '(') {
       if (depth === 0) {
-        // found the opening paren — extract the function name before it
+        // found the opening paren — extract the function name before it (including dot for ui.slider etc.)
         let end = i;
         let start = end - 1;
-        while (start >= 0 && /[a-zA-Z0-9_$]/.test(code[start])) start--;
+        while (start >= 0 && /[a-zA-Z0-9_$.]/.test(code[start])) start--;
         start++;
         const fnName = code.slice(start, end);
         if (BUILTIN_HELP[fnName]) {
@@ -426,16 +429,26 @@ function showSigHint(ta) {
   const lineHeight = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.5;
 
   const left = pos.x + padLeft - ta.scrollLeft;
-  const top = pos.y + padTop - ta.scrollTop - lineHeight;
 
+  // place above the current line; pos.y is bottom of the line
+  // so subtract lineHeight (to get top of line) then the hint's own height
   activeSigHint.style.left = left + 'px';
-  activeSigHint.style.top = top + 'px';
+  activeSigHint.style.top = '0px'; // render off-screen first to measure
+  activeSigHint.style.visibility = 'hidden';
+  const hintH = activeSigHint.offsetHeight || lineHeight;
+  activeSigHint.style.visibility = '';
 
-  // if it goes above viewport, show below instead
-  const rect = activeSigHint.getBoundingClientRect();
-  if (rect.top < 0) {
-    activeSigHint.style.top = (top + lineHeight * 2) + 'px';
+  let top = pos.y + padTop - ta.scrollTop - lineHeight - hintH;
+
+  // if it would go above the editor, show below the current line instead
+  const wrapRect = wrap.getBoundingClientRect();
+  const taRect = ta.getBoundingClientRect();
+  const absTop = taRect.top + top;
+  if (absTop < wrapRect.top) {
+    top = pos.y + padTop - ta.scrollTop;
   }
+
+  activeSigHint.style.top = top + 'px';
 }
 
 function highlightParam(sig, paramIdx) {

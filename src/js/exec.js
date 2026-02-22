@@ -1,6 +1,8 @@
 import { S } from './state.js';
 import { buildDAG, topoSort, isManual, isNorun, isHidden, parseCellName, parseOutputId, parseOutputClass } from './dag.js';
 import { setMsg } from './ui.js';
+import { std } from './stdlib.js';
+import { python, zenOfPython } from './python.js';
 
 // ── EXECUTION ──
 
@@ -241,7 +243,9 @@ export async function execCell(cell) {
   const textInput = (label, defaultVal = '') => mkInput(label, 'text', defaultVal);
 
   // execute with scoped parameters (only what this cell uses, for stable V8 JIT)
-  const scopeKeys = cell.uses ? [...cell.uses].sort() : [];
+  // filter out injected names — they're per-cell params, not scope-propagated
+  const _injected = ['ui', 'std', 'load', 'install', 'invalidation', 'print'];
+  const scopeKeys = cell.uses ? [...cell.uses].filter(k => !_injected.includes(k)).sort() : [];
   const defNames = cell.defines ? [...cell.defines].sort().join(', ') : '';
 
   // import cache — shared across all cells
@@ -249,6 +253,10 @@ export async function execCell(cell) {
   if (!window._installedModules) window._installedModules = {}; // url -> { source, cellId }
 
   const load = async (url) => {
+    // virtual modules
+    if (url === '@std') return std;
+    if (url === '@python') return python;
+    if (url === '@python/this') { display(zenOfPython()); return python; }
     if (window._importCache[url]) return window._importCache[url];
     // check installed (offline) modules first
     if (window._installedModules[url]) {
@@ -299,6 +307,9 @@ export async function execCell(cell) {
     return mod;
   };
 
+  // ui object — constructed per-cell (closes over cell context)
+  const ui = { display, print: display, canvas, table, slider, dropdown, checkbox, textInput };
+
   // function caching — reuse compiled function if code/uses/defines unchanged
   const cacheKey = scopeKeys.join(',') + '|' + defNames + '|' + cell.code;
 
@@ -312,9 +323,7 @@ export async function execCell(cell) {
       const slug = cellName ? '-' + cellName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') : '';
       fn = new AsyncFunction(
         ...scopeKeys,
-        'display', 'canvas', 'table',
-        'slider', 'dropdown', 'checkbox', 'textInput',
-        'load', 'install', 'invalidation',
+        'ui', 'std', 'load', 'install', 'invalidation', 'print',
         `"use strict";\n${cell.code}\n\n` +
         `return { ${defNames} };\n` +
         `//# sourceURL=auditable://cell-${cell.id}${slug}.js`
@@ -324,9 +333,7 @@ export async function execCell(cell) {
     }
 
     const scopeVals = scopeKeys.map(k => S.scope[k]);
-    const result = await fn(...scopeVals, display, canvas, table,
-                      slider, dropdown, checkbox, textInput,
-                      load, install, invalidation);
+    const result = await fn(...scopeVals, ui, std, load, install, invalidation, display);
 
     // update scope with defined variables
     if (result && typeof result === 'object') {

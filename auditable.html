@@ -1925,9 +1925,358 @@ const JS_KEYWORDS = new Set([
 const JS_BUILTINS = new Set([
   'Math','Array','Object','String','Number','Float64Array','Float32Array',
   'Int32Array','Uint8Array','Map','Set','Promise','console','JSON',
-  'display','canvas','table','slider','dropdown','checkbox','textInput','load','install'
+  'ui','std','load','install','print'
 ]);
 
+
+// -- stdlib.js --
+
+// ── STDLIB ──
+// Bundled standard library for notebook work.
+// Module-level — no per-cell state needed.
+
+// ── Provider Registry ──
+
+const _providers = { file: null, download: null };
+
+function registerProvider(name, fn) {
+  if (name in _providers) _providers[name] = fn;
+}
+
+// ── Data ──
+
+function csv(text, opts = {}) {
+  const sep = opts.separator || ',';
+  const typed = !!opts.typed;
+  const lines = [];
+  let i = 0;
+  const len = text.length;
+
+  while (i < len) {
+    const row = [];
+    while (i < len) {
+      if (text[i] === '"') {
+        // quoted field
+        i++;
+        let field = '';
+        while (i < len) {
+          if (text[i] === '"') {
+            if (text[i + 1] === '"') { field += '"'; i += 2; }
+            else { i++; break; }
+          } else { field += text[i]; i++; }
+        }
+        row.push(field);
+        if (text[i] === sep) i++;
+        else if (text[i] === '\r') { i++; if (text[i] === '\n') i++; break; }
+        else if (text[i] === '\n') { i++; break; }
+        else if (i >= len) break;
+      } else {
+        // unquoted field
+        let field = '';
+        while (i < len && text[i] !== sep && text[i] !== '\n' && text[i] !== '\r') {
+          field += text[i]; i++;
+        }
+        row.push(field);
+        if (text[i] === sep) i++;
+        else if (text[i] === '\r') { i++; if (text[i] === '\n') i++; break; }
+        else if (text[i] === '\n') { i++; break; }
+        else break;
+      }
+    }
+    if (row.length > 0 && !(row.length === 1 && row[0] === '')) lines.push(row);
+  }
+
+  if (lines.length < 2) return [];
+  const headers = lines[0];
+  const result = [];
+  for (let r = 1; r < lines.length; r++) {
+    const obj = {};
+    for (let c = 0; c < headers.length; c++) {
+      let val = lines[r][c] !== undefined ? lines[r][c] : '';
+      if (typed) {
+        const num = Number(val);
+        if (val !== '' && !isNaN(num)) val = num;
+        else if (val === 'true') val = true;
+        else if (val === 'false') val = false;
+        else if (val === '') val = null;
+      }
+      obj[headers[c]] = val;
+    }
+    result.push(obj);
+  }
+  return result;
+}
+
+async function fetchJSON(url) {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`fetchJSON: ${resp.status} ${resp.statusText}`);
+  return resp.json();
+}
+
+// ── Math / Stats ──
+
+function _acc(arr, fn) {
+  return fn ? arr.map(fn) : arr;
+}
+
+function sum(arr, fn) {
+  const vals = _acc(arr, fn);
+  let s = 0;
+  for (let i = 0; i < vals.length; i++) s += vals[i];
+  return s;
+}
+
+function mean(arr, fn) {
+  if (!arr.length) return NaN;
+  return sum(arr, fn) / arr.length;
+}
+
+function median(arr, fn) {
+  const vals = _acc(arr, fn).slice().sort((a, b) => a - b);
+  const n = vals.length;
+  if (n === 0) return NaN;
+  if (n % 2 === 1) return vals[(n - 1) / 2];
+  return (vals[n / 2 - 1] + vals[n / 2]) / 2;
+}
+
+function extent(arr, fn) {
+  const vals = _acc(arr, fn);
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < vals.length; i++) {
+    if (vals[i] < lo) lo = vals[i];
+    if (vals[i] > hi) hi = vals[i];
+  }
+  return [lo, hi];
+}
+
+function bin(arr, n = 10, fn) {
+  const vals = _acc(arr, fn);
+  const [lo, hi] = extent(vals);
+  const range = hi - lo || 1;
+  const step = range / n;
+  const bins = [];
+  for (let i = 0; i < n; i++) {
+    bins.push({ x0: lo + i * step, x1: lo + (i + 1) * step, values: [] });
+  }
+  for (const v of vals) {
+    let idx = Math.floor((v - lo) / step);
+    if (idx >= n) idx = n - 1;
+    if (idx < 0) idx = 0;
+    bins[idx].values.push(v);
+  }
+  return bins;
+}
+
+function linspace(start, stop, n) {
+  if (n < 2) return n === 1 ? [start] : [];
+  const result = new Array(n);
+  const step = (stop - start) / (n - 1);
+  for (let i = 0; i < n; i++) result[i] = start + i * step;
+  result[n - 1] = stop; // exact endpoint
+  return result;
+}
+
+// ── Array ──
+
+function unique(arr, fn) {
+  if (!fn) return [...new Set(arr)];
+  const seen = new Set();
+  const result = [];
+  for (const item of arr) {
+    const key = fn(item);
+    if (!seen.has(key)) { seen.add(key); result.push(item); }
+  }
+  return result;
+}
+
+function zip(...arrays) {
+  const len = Math.min(...arrays.map(a => a.length));
+  const result = new Array(len);
+  for (let i = 0; i < len; i++) {
+    result[i] = arrays.map(a => a[i]);
+  }
+  return result;
+}
+
+function cross(...arrays) {
+  if (arrays.length === 0) return [[]];
+  const [first, ...rest] = arrays;
+  const sub = cross(...rest);
+  const result = [];
+  for (const item of first) {
+    for (const tail of sub) {
+      result.push([item, ...tail]);
+    }
+  }
+  return result;
+}
+
+// ── DOM / IO ──
+
+async function file(accept) {
+  if (_providers.file) return _providers.file(accept);
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    if (accept) input.accept = accept;
+    input.onchange = async () => {
+      const f = input.files[0];
+      if (!f) { reject(new Error('no file selected')); return; }
+      const text = await f.text();
+      resolve({ name: f.name, text, size: f.size });
+    };
+    input.click();
+  });
+}
+
+function download(data, filename, mimeType) {
+  if (_providers.download) return _providers.download(data, filename, mimeType);
+  const str = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+  const mime = mimeType || (typeof data === 'string' ? 'text/plain' : 'application/json');
+  const blob = new Blob([str], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename || 'download';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function el(tag, attrs, ...children) {
+  const elem = document.createElement(tag);
+  if (attrs && typeof attrs === 'object' && !(attrs instanceof Node)) {
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === 'style' && typeof v === 'object') {
+        Object.assign(elem.style, v);
+      } else if (k.startsWith('on') && typeof v === 'function') {
+        elem.addEventListener(k.slice(2), v);
+      } else {
+        elem.setAttribute(k, v);
+      }
+    }
+  } else if (attrs != null) {
+    // attrs is actually a child
+    children.unshift(attrs);
+  }
+  for (const child of children) {
+    if (child instanceof Node) elem.appendChild(child);
+    else if (child != null) elem.appendChild(document.createTextNode(String(child)));
+  }
+  return elem;
+}
+
+async function copy(text) {
+  await navigator.clipboard.writeText(text);
+}
+
+function fmt(number, opts = {}) {
+  const { decimals, prefix, suffix } = opts;
+  let s = decimals != null ? number.toFixed(decimals)
+    : new Intl.NumberFormat(undefined, { maximumFractionDigits: 6 }).format(number);
+  if (prefix) s = prefix + s;
+  if (suffix) s = s + suffix;
+  return s;
+}
+
+// ── Export ──
+
+const std = {
+  csv, fetchJSON,
+  sum, mean, median, extent, bin, linspace,
+  unique, zip, cross,
+  file, download, el, copy, fmt,
+};
+
+// -- python.js --
+
+// ── @python COMPAT HELPERS ──
+// Python-familiar functions for users transitioning from Python.
+// Each has a .help property showing the idiomatic JS equivalent.
+
+function range(a, b, step) {
+  let start, stop, s;
+  if (b === undefined) { start = 0; stop = a; s = 1; }
+  else { start = a; stop = b; s = step || 1; }
+  const result = [];
+  if (s > 0) { for (let i = start; i < stop; i += s) result.push(i); }
+  else if (s < 0) { for (let i = start; i > stop; i += s) result.push(i); }
+  return result;
+}
+range.help = 'JS: Array.from({length: n}, (_, i) => start + i * step)';
+
+function enumerate(arr) {
+  return arr.map((v, i) => [i, v]);
+}
+enumerate.help = 'JS: arr.map((v, i) => [i, v]) or arr.entries()';
+
+function len(x) {
+  if (x == null) throw new TypeError('len() of unsized object');
+  if (x.size !== undefined) return x.size;
+  return x.length;
+}
+len.help = 'JS: x.length or x.size';
+
+function sorted(arr, key, reverse) {
+  const copy = [...arr];
+  if (key) copy.sort((a, b) => {
+    const ka = key(a), kb = key(b);
+    return ka < kb ? -1 : ka > kb ? 1 : 0;
+  });
+  else copy.sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+  if (reverse) copy.reverse();
+  return copy;
+}
+sorted.help = 'JS: arr.toSorted((a, b) => ...)';
+
+function reversed(arr) {
+  return [...arr].reverse();
+}
+reversed.help = 'JS: arr.toReversed()';
+
+function isinstance(obj, cls) {
+  return obj instanceof cls;
+}
+isinstance.help = 'JS: obj instanceof cls';
+
+function type(x) {
+  if (x === null) return 'null';
+  if (Array.isArray(x)) return 'array';
+  return typeof x;
+}
+type.help = 'JS: typeof x';
+
+const python = {
+  range, enumerate, len, sorted, reversed,
+  isinstance, type,
+};
+
+function zenOfPython() {
+  return [
+    'The Zen of Python, by Tim Peters',
+    '',
+    'Beautiful is better than ugly.',
+    'Explicit is better than implicit.',
+    'Simple is better than complex.',
+    'Complex is better than complicated.',
+    'Flat is better than nested.',
+    'Sparse is better than dense.',
+    'Readability counts.',
+    "Special cases aren't special enough to break the rules.",
+    'Although practicality beats purity.',
+    'Errors should never pass silently.',
+    'Unless explicitly silenced.',
+    'In the face of ambiguity, refuse the temptation to guess.',
+    'There should be one-- and preferably only one --obvious way to do it.',
+    "Although that way may not be obvious at first unless you're Dutch.",
+    'Now is better than never.',
+    'Although never is often better than *right* now.',
+    "If the implementation is hard to explain, it's a bad idea.",
+    'If the implementation is easy to explain, it may be a good idea.',
+    "Namespaces are one honking great idea -- let's do more of those!",
+  ].join('\n');
+}
 
 // -- syntax.js --
 
@@ -2874,7 +3223,9 @@ async function execCell(cell) {
   const textInput = (label, defaultVal = '') => mkInput(label, 'text', defaultVal);
 
   // execute with scoped parameters (only what this cell uses, for stable V8 JIT)
-  const scopeKeys = cell.uses ? [...cell.uses].sort() : [];
+  // filter out injected names — they're per-cell params, not scope-propagated
+  const _injected = ['ui', 'std', 'load', 'install', 'invalidation', 'print'];
+  const scopeKeys = cell.uses ? [...cell.uses].filter(k => !_injected.includes(k)).sort() : [];
   const defNames = cell.defines ? [...cell.defines].sort().join(', ') : '';
 
   // import cache — shared across all cells
@@ -2882,6 +3233,10 @@ async function execCell(cell) {
   if (!window._installedModules) window._installedModules = {}; // url -> { source, cellId }
 
   const load = async (url) => {
+    // virtual modules
+    if (url === '@std') return std;
+    if (url === '@python') return python;
+    if (url === '@python/this') { display(zenOfPython()); return python; }
     if (window._importCache[url]) return window._importCache[url];
     // check installed (offline) modules first
     if (window._installedModules[url]) {
@@ -2932,6 +3287,9 @@ async function execCell(cell) {
     return mod;
   };
 
+  // ui object — constructed per-cell (closes over cell context)
+  const ui = { display, print: display, canvas, table, slider, dropdown, checkbox, textInput };
+
   // function caching — reuse compiled function if code/uses/defines unchanged
   const cacheKey = scopeKeys.join(',') + '|' + defNames + '|' + cell.code;
 
@@ -2945,9 +3303,7 @@ async function execCell(cell) {
       const slug = cellName ? '-' + cellName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') : '';
       fn = new AsyncFunction(
         ...scopeKeys,
-        'display', 'canvas', 'table',
-        'slider', 'dropdown', 'checkbox', 'textInput',
-        'load', 'install', 'invalidation',
+        'ui', 'std', 'load', 'install', 'invalidation', 'print',
         `"use strict";\n${cell.code}\n\n` +
         `return { ${defNames} };\n` +
         `//# sourceURL=auditable://cell-${cell.id}${slug}.js`
@@ -2957,9 +3313,7 @@ async function execCell(cell) {
     }
 
     const scopeVals = scopeKeys.map(k => S.scope[k]);
-    const result = await fn(...scopeVals, display, canvas, table,
-                      slider, dropdown, checkbox, textInput,
-                      load, install, invalidation);
+    const result = await fn(...scopeVals, ui, std, load, install, invalidation, display);
 
     // update scope with defined variables
     if (result && typeof result === 'object') {
@@ -3812,7 +4166,7 @@ function togglePresent() {
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_BUILD_DATE__ = '2026-02-22';
-const __AUDITABLE_BASE_SIZE__ = 205926;
+const __AUDITABLE_BASE_SIZE__ = 219511;
 
 (function() {
   const ver = $('#aboutVersion');
@@ -5107,6 +5461,9 @@ const KNOWN_PROPS = {
   Promise: ['all','allSettled','any','race','resolve','reject'],
   Number: ['isFinite','isInteger','isNaN','parseFloat','parseInt','MAX_SAFE_INTEGER','MIN_SAFE_INTEGER','EPSILON'],
   String: ['fromCharCode','fromCodePoint','raw'],
+  ui: ['display','print','canvas','table','slider','dropdown','checkbox','textInput'],
+  std: ['csv','fetchJSON','sum','mean','median','extent','bin','linspace',
+        'unique','zip','cross','file','download','el','copy','fmt'],
 };
 
 // common prototype methods by type
@@ -5124,37 +5481,105 @@ const PROTO_PROPS = {
 // ── BUILTIN HELP (injected by build.js from src/builtins.json) ──
 
 const BUILTIN_HELP = {
-  "display": {
-    "sig": "display(...values)",
+  "ui.display": {
+    "sig": "ui.display(...values)",
     "desc": "output values to cell"
   },
-  "canvas": {
-    "sig": "canvas(w?, h?)",
+  "ui.canvas": {
+    "sig": "ui.canvas(w?, h?)",
     "desc": "create/reuse canvas (default 400\u00d7300)"
   },
-  "table": {
-    "sig": "table(data, columns?)",
+  "ui.table": {
+    "sig": "ui.table(data, columns?)",
     "desc": "render array of objects as table"
   },
-  "slider": {
-    "sig": "slider(label, default?, {min,max,step}?)",
+  "ui.slider": {
+    "sig": "ui.slider(label, default?, {min,max,step}?)",
     "desc": "reactive range input"
   },
-  "dropdown": {
-    "sig": "dropdown(label, options, default?)",
+  "ui.dropdown": {
+    "sig": "ui.dropdown(label, options, default?)",
     "desc": "reactive select menu"
   },
-  "checkbox": {
-    "sig": "checkbox(label, default?)",
+  "ui.checkbox": {
+    "sig": "ui.checkbox(label, default?)",
     "desc": "reactive toggle"
   },
-  "textInput": {
-    "sig": "textInput(label, default?)",
+  "ui.textInput": {
+    "sig": "ui.textInput(label, default?)",
     "desc": "reactive text field"
+  },
+  "std.csv": {
+    "sig": "std.csv(text, {separator?, typed?}?)",
+    "desc": "parse CSV text to array of objects"
+  },
+  "std.fetchJSON": {
+    "sig": "std.fetchJSON(url)",
+    "desc": "fetch URL and parse JSON"
+  },
+  "std.sum": {
+    "sig": "std.sum(arr, fn?)",
+    "desc": "sum array values"
+  },
+  "std.mean": {
+    "sig": "std.mean(arr, fn?)",
+    "desc": "arithmetic mean"
+  },
+  "std.median": {
+    "sig": "std.median(arr, fn?)",
+    "desc": "median value"
+  },
+  "std.extent": {
+    "sig": "std.extent(arr, fn?)",
+    "desc": "returns [min, max]"
+  },
+  "std.bin": {
+    "sig": "std.bin(arr, n?, fn?)",
+    "desc": "histogram bins (default 10)"
+  },
+  "std.linspace": {
+    "sig": "std.linspace(start, stop, n)",
+    "desc": "evenly-spaced numbers"
+  },
+  "std.unique": {
+    "sig": "std.unique(arr, fn?)",
+    "desc": "unique values with optional key fn"
+  },
+  "std.zip": {
+    "sig": "std.zip(...arrays)",
+    "desc": "zip arrays together"
+  },
+  "std.cross": {
+    "sig": "std.cross(...arrays)",
+    "desc": "cartesian product"
+  },
+  "std.file": {
+    "sig": "std.file(accept?)",
+    "desc": "open file picker"
+  },
+  "std.download": {
+    "sig": "std.download(data, filename, mimeType?)",
+    "desc": "download data as file"
+  },
+  "std.el": {
+    "sig": "std.el(tag, attrs?, ...children)",
+    "desc": "create DOM element"
+  },
+  "std.copy": {
+    "sig": "std.copy(text)",
+    "desc": "copy text to clipboard"
+  },
+  "std.fmt": {
+    "sig": "std.fmt(number, {decimals?, prefix?, suffix?}?)",
+    "desc": "format number to string"
+  },
+  "print": {
+    "sig": "print(...values)",
+    "desc": "output values to cell (alias for ui.display)"
   },
   "load": {
     "sig": "load(url)",
-    "desc": "import ES module (cached)"
+    "desc": "import ES module (cached). @std, @python supported."
   },
   "install": {
     "sig": "install(url)",
@@ -5498,10 +5923,10 @@ function detectCallContext(code, cursor) {
     if (ch === ')') depth++;
     else if (ch === '(') {
       if (depth === 0) {
-        // found the opening paren — extract the function name before it
+        // found the opening paren — extract the function name before it (including dot for ui.slider etc.)
         let end = i;
         let start = end - 1;
-        while (start >= 0 && /[a-zA-Z0-9_$]/.test(code[start])) start--;
+        while (start >= 0 && /[a-zA-Z0-9_$.]/.test(code[start])) start--;
         start++;
         const fnName = code.slice(start, end);
         if (BUILTIN_HELP[fnName]) {
@@ -5560,16 +5985,26 @@ function showSigHint(ta) {
   const lineHeight = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.5;
 
   const left = pos.x + padLeft - ta.scrollLeft;
-  const top = pos.y + padTop - ta.scrollTop - lineHeight;
 
+  // place above the current line; pos.y is bottom of the line
+  // so subtract lineHeight (to get top of line) then the hint's own height
   activeSigHint.style.left = left + 'px';
-  activeSigHint.style.top = top + 'px';
+  activeSigHint.style.top = '0px'; // render off-screen first to measure
+  activeSigHint.style.visibility = 'hidden';
+  const hintH = activeSigHint.offsetHeight || lineHeight;
+  activeSigHint.style.visibility = '';
 
-  // if it goes above viewport, show below instead
-  const rect = activeSigHint.getBoundingClientRect();
-  if (rect.top < 0) {
-    activeSigHint.style.top = (top + lineHeight * 2) + 'px';
+  let top = pos.y + padTop - ta.scrollTop - lineHeight - hintH;
+
+  // if it would go above the editor, show below the current line instead
+  const wrapRect = wrap.getBoundingClientRect();
+  const taRect = ta.getBoundingClientRect();
+  const absTop = taRect.top + top;
+  if (absTop < wrapRect.top) {
+    top = pos.y + padTop - ta.scrollTop;
   }
+
+  activeSigHint.style.top = top + 'px';
 }
 
 function highlightParam(sig, paramIdx) {
@@ -6494,6 +6929,7 @@ function applySizeCompareRef(val) {
 
 
 
+
 // state
 window.$ = $;
 window.S = S;
@@ -6539,6 +6975,9 @@ window.insertAt = insertAt;
 window.openFind = openFind;
 window.closeFind = closeFind;
 
+// stdlib
+window.__auditable_registerProvider = registerProvider;
+
 // keyboard / toolbar
 window.addCellWithUndo = addCellWithUndo;
 window.runSelectedCell = runSelectedCell;
@@ -6578,6 +7017,30 @@ window.newNotebook = newNotebook;
 (function afBridge() {
   if (window.parent === window) return;
   window.__AF_BRIDGE__ = true;
+
+  // register AF-specific providers for file/download
+  registerProvider('file', (accept) => {
+    return new Promise((resolve) => {
+      const id = 'af_file_' + Date.now();
+      function handler(e) {
+        if (e.data?.type === 'af:fileResult' && e.data.payload?.id === id) {
+          window.removeEventListener('message', handler);
+          resolve(e.data.payload.file);
+        }
+      }
+      window.addEventListener('message', handler);
+      window.parent.postMessage({ type: 'af:fileRequest', payload: { id, accept } }, '*');
+    });
+  });
+
+  registerProvider('download', (data, filename, mimeType) => {
+    const str = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+    const mime = mimeType || (typeof data === 'string' ? 'text/plain' : 'application/json');
+    window.parent.postMessage({
+      type: 'af:download',
+      payload: { data: str, filename, mimeType: mime }
+    }, '*');
+  });
 
   const title = document.getElementById('docTitle')?.value || 'untitled';
   window.parent.postMessage({ type: 'af:ready', payload: { title } }, '*');

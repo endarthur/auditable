@@ -4,6 +4,7 @@
 // Modules stay pure (no side effects, no window assignments).
 
 import { $, S } from './state.js';
+import { registerProvider } from './stdlib.js';
 import { toggleAutorun } from './editor.js';
 import { toggleSettings, togglePresent, applyTheme, applyFontSize, applyWidth, applyLineNumbers, applyHeader, applyExecMode, applyRunOnLoad, applyShowToggle, applyGlobalExecMode, applyGlobalRunOnLoad } from './settings.js';
 import { toggleUpdate, checkForUpdate, applyOnlineUpdate, proceedUpdate, cancelUpdate, updateFromFile } from './update.js';
@@ -57,6 +58,9 @@ window.insertAt = insertAt;
 // find
 window.openFind = openFind;
 window.closeFind = closeFind;
+
+// stdlib
+window.__auditable_registerProvider = registerProvider;
 
 // keyboard / toolbar
 window.addCellWithUndo = addCellWithUndo;
