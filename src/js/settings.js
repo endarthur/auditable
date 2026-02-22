@@ -3,6 +3,11 @@ import { updateStatus } from './ui.js';
 
 // ── SETTINGS ──
 
+// Safe localStorage access — blob URL iframes have opaque origins where localStorage throws
+function lsGet(key) { try { return localStorage.getItem(key); } catch { return null; } }
+function lsSet(key, val) { try { localStorage.setItem(key, val); } catch {} }
+function lsRemove(key) { try { localStorage.removeItem(key); } catch {} }
+
 export function toggleSettings() {
   const overlay = $('#settingsOverlay');
   const panel = $('#settingsPanel');
@@ -85,23 +90,23 @@ export function applyShowToggle(val) {
 }
 
 export function applyGlobalExecMode(val) {
-  if (val) localStorage.setItem('auditable-exec-mode', val);
-  else localStorage.removeItem('auditable-exec-mode');
+  if (val) lsSet('auditable-exec-mode', val);
+  else lsRemove('auditable-exec-mode');
 }
 
 export function applyGlobalRunOnLoad(val) {
-  if (val) localStorage.setItem('auditable-run-on-load', val);
-  else localStorage.removeItem('auditable-run-on-load');
+  if (val) lsSet('auditable-run-on-load', val);
+  else lsRemove('auditable-run-on-load');
 }
 
 export function resolveExecMode() {
-  return localStorage.getItem('auditable-exec-mode')
+  return lsGet('auditable-exec-mode')
     || $('#setExecMode')?.value
     || __AUDITABLE_DEFAULT_EXEC_MODE__;
 }
 
 export function resolveRunOnLoad() {
-  return localStorage.getItem('auditable-run-on-load')
+  return lsGet('auditable-run-on-load')
     || _runOnLoad
     || __AUDITABLE_DEFAULT_RUN_ON_LOAD__;
 }
@@ -158,8 +163,8 @@ const __AUDITABLE_BASE_SIZE__ = 0;
 // ── EXECUTION SETTINGS INIT ──
 
 (function() {
-  const gm = localStorage.getItem('auditable-exec-mode') || '';
-  const gr = localStorage.getItem('auditable-run-on-load') || '';
+  const gm = lsGet('auditable-exec-mode') || '';
+  const gr = lsGet('auditable-run-on-load') || '';
   const selGm = $('#setGlobalExecMode');
   const selGr = $('#setGlobalRunOnLoad');
   if (selGm) selGm.value = gm;

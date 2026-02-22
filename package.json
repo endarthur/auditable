@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "build": "node build.js",
+    "build:af": "node build.js && node build.js --target=af",
     "test": "node --no-warnings --test"
   }
 }

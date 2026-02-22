@@ -23,12 +23,41 @@ export const parseOutputClass = code => getDirective(code, 'outputClass');
 // ── code analysis ──
 
 function stripCommentsAndStrings(code) {
-  return code
+  code = code
     .replace(/\/\/.*$/gm, '')
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/'(?:[^'\\]|\\.)*'/g, '""')
-    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
-    .replace(/`(?:[^`\\]|\\.)*`/g, '""');
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""');
+  // template literals: replace string parts with spaces but keep ${expr} content
+  let out = '', i = 0;
+  while (i < code.length) {
+    if (code[i] === '`') {
+      i++; // skip opening backtick
+      while (i < code.length && code[i] !== '`') {
+        if (code[i] === '\\') { i += 2; continue; }
+        if (code[i] === '$' && code[i + 1] === '{') {
+          i += 2; // skip ${
+          let depth = 1;
+          out += ' ';
+          while (i < code.length && depth > 0) {
+            if (code[i] === '{') depth++;
+            else if (code[i] === '}') { depth--; if (depth === 0) break; }
+            out += code[i];
+            i++;
+          }
+          out += ' ';
+          i++; // skip closing }
+          continue;
+        }
+        i++;
+      }
+      i++; // skip closing backtick
+    } else {
+      out += code[i];
+      i++;
+    }
+  }
+  return out;
 }
 
 export function parseNames(code) {
