@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Auditable Scanner</title>
+<link rel="manifest" href="manifest.json">
+<style>
+:root {
+  --bg: #0a0a0a;
+  --bg1: #111;
+  --bg2: #1a1a1a;
+  --border: #222;
+  --border-hi: #333;
+  --fg: #aaa;
+  --fg-dim: #555;
+  --fg-bright: #ccc;
+  --accent: #c89b3c;
+  --accent-dim: #8a6c2a;
+  --err: #a33;
+  --ok: #3a7;
+  --mono: 'Courier New', Courier, monospace;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  min-height: 100vh;
+}
+.header {
+  padding: 20px 24px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.header-title {
+  font-size: 11px;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.header-sub {
+  font-size: 11px;
+  color: var(--fg-dim);
+  margin-top: 4px;
+}
+.container {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 24px;
+}
+.drop-zone {
+  border: 2px dashed var(--border-hi);
+  padding: 48px 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+  margin-bottom: 24px;
+}
+.drop-zone:hover, .drop-zone.dragover {
+  border-color: var(--accent);
+  background: rgba(200,155,60,0.05);
+}
+.drop-zone-text {
+  font-size: 12px;
+  color: var(--fg-dim);
+  letter-spacing: 1px;
+}
+.drop-zone-text strong {
+  color: var(--fg);
+}
+.drop-zone input { display: none; }
+.report { display: none; }
+.report.visible { display: block; }
+.section {
+  margin-bottom: 20px;
+  border: 1px solid var(--border);
+}
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg1);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+}
+.section-header:hover { background: var(--bg2); }
+.section-title {
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.section-toggle {
+  color: var(--fg-dim);
+  font-size: 10px;
+}
+.section-body {
+  padding: 12px;
+}
+.section.collapsed .section-body { display: none; }
+.section.collapsed .section-toggle::before { content: '\25b8 '; }
+.section:not(.collapsed) .section-toggle::before { content: '\25be '; }
+.row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 3px 0;
+  font-size: 12px;
+}
+.row-label { color: var(--fg-dim); }
+.row-value { color: var(--fg-bright); text-align: right; }
+.badge {
+  display: inline-block;
+  padding: 1px 8px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  border: 1px solid;
+}
+.badge-valid { color: var(--ok); border-color: var(--ok); }
+.badge-invalid { color: var(--err); border-color: var(--err); }
+.badge-unsigned { color: var(--accent); border-color: var(--accent); }
+.badge-warn { color: var(--accent); border-color: var(--accent); }
+.cell-list {
+  font-size: 11px;
+}
+.cell-list-row {
+  display: flex;
+  gap: 8px;
+  padding: 2px 0;
+}
+.cell-list-type {
+  min-width: 40px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.cell-list-type-code { color: #7aabcf; }
+.cell-list-type-md { color: var(--fg-dim); }
+.cell-list-type-css { color: #d4955a; }
+.cell-list-type-html { color: #6dbfb8; }
+.cell-list-preview {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-dim);
+}
+.module-list {
+  font-size: 11px;
+}
+.module-list-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+}
+.module-list-url {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}
+.module-list-size {
+  color: var(--fg-dim);
+  white-space: nowrap;
+  margin-left: 12px;
+}
+.breakdown-bar {
+  display: flex;
+  height: 8px;
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.breakdown-bar div { height: 100%; }
+.breakdown-runtime { background: var(--accent-dim); }
+.breakdown-data { background: #7aabcf; }
+.breakdown-modules { background: #d4955a; }
+.breakdown-other { background: var(--border-hi); }
+.breakdown-legend {
+  display: flex;
+  gap: 16px;
+  font-size: 10px;
+  color: var(--fg-dim);
+}
+.breakdown-legend span::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+.legend-runtime::before { background: var(--accent-dim); }
+.legend-data::before { background: #7aabcf; }
+.legend-modules::before { background: #d4955a; }
+.legend-other::before { background: var(--border-hi); }
+.sig-key {
+  font-size: 10px;
+  color: var(--fg-dim);
+  word-break: break-all;
+  padding: 4px 0;
+}
+.footer {
+  padding: 24px;
+  text-align: center;
+  font-size: 10px;
+  color: var(--fg-dim);
+  letter-spacing: 1px;
+}
+.footer a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.footer a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-title">auditable scanner</div>
+  <div class="header-sub">inspect and verify auditable notebook files</div>
+</div>
+
+<div class="container">
+  <div class="drop-zone" id="dropZone">
+    <div class="drop-zone-text">
+      <strong>drop an auditable notebook</strong> to inspect<br>
+      or click to select a file
+    </div>
+    <input type="file" id="fileInput" accept=".html">
+  </div>
+
+  <div class="report" id="report">
+    <!-- Identity & Signature -->
+    <div class="section" id="secIdentity">
+      <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+        <span class="section-toggle"></span>
+        <span class="section-title">identity &amp; signature</span>
+        <span id="sigBadge"></span>
+      </div>
+      <div class="section-body">
+        <div class="row"><span class="row-label">filename</span><span class="row-value" id="rFilename">-</span></div>
+        <div class="row"><span class="row-label">version</span><span class="row-value" id="rVersion">-</span></div>
+        <div class="row"><span class="row-label">build date</span><span class="row-value" id="rBuildDate">-</span></div>
+        <div class="row"><span class="row-label">signature</span><span class="row-value" id="rSigStatus">-</span></div>
+        <div id="rSigDetail"></div>
+      </div>
+    </div>
+
+    <!-- Runtime Analysis -->
+    <div class="section" id="secRuntime">
+      <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+        <span class="section-toggle"></span>
+        <span class="section-title">runtime analysis</span>
+      </div>
+      <div class="section-body">
+        <div class="row"><span class="row-label">style size</span><span class="row-value" id="rStyleSize">-</span></div>
+        <div class="row"><span class="row-label">script size</span><span class="row-value" id="rScriptSize">-</span></div>
+        <div class="row"><span class="row-label">runtime total</span><span class="row-value" id="rRuntimeSize">-</span></div>
+      </div>
+    </div>
+
+    <!-- Size Breakdown -->
+    <div class="section" id="secSize">
+      <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+        <span class="section-toggle"></span>
+        <span class="section-title">size breakdown</span>
+      </div>
+      <div class="section-body">
+        <div class="row"><span class="row-label">total file size</span><span class="row-value" id="rTotalSize">-</span></div>
+        <div class="breakdown-bar" id="breakdownBar"></div>
+        <div class="breakdown-legend">
+          <span class="legend-runtime">runtime</span>
+          <span class="legend-data">cells</span>
+          <span class="legend-modules">modules</span>
+          <span class="legend-other">other</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Content Inspection -->
+    <div class="section" id="secContent">
+      <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+        <span class="section-toggle"></span>
+        <span class="section-title">content</span>
+      </div>
+      <div class="section-body">
+        <div class="row"><span class="row-label">title</span><span class="row-value" id="rTitle">-</span></div>
+        <div class="row"><span class="row-label">cells</span><span class="row-value" id="rCellCount">-</span></div>
+        <div id="rCellList" class="cell-list"></div>
+      </div>
+    </div>
+
+    <!-- Settings -->
+    <div class="section collapsed" id="secSettings">
+      <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+        <span class="section-toggle"></span>
+        <span class="section-title">settings</span>
+      </div>
+      <div class="section-body" id="rSettings"></div>
+    </div>
+
+    <!-- Modules -->
+    <div class="section collapsed" id="secModules">
+      <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+        <span class="section-toggle"></span>
+        <span class="section-title">installed modules</span>
+      </div>
+      <div class="section-body">
+        <div id="rModuleList" class="module-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="footer">
+  <a href="https://github.com/endarthur/auditable" target="_blank">auditable</a>
+  &middot;
+  <a href="https://gentropic.org" target="_blank">geoscientific chaos union</a>
+</div>
+
+<script>
+const __SCANNER_PUBLIC_KEY__ = 'oQ0ngAnnrMQVZepAmUYdbhk906TA8rhHTZBEL0bA0vw=';
+
+// ── FILE HANDLING ──
+
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('dragover');
+  const file = e.dataTransfer.files[0];
+  if (file) scanFile(file);
+});
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) scanFile(fileInput.files[0]);
+});
+
+// ── HELPERS ──
+
+function formatSize(bytes) {
+  if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  if (bytes >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return bytes + ' B';
+}
+
+function escHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// ── SIGNATURE VERIFICATION ──
+
+function extractSignature(html) {
+  const m = html.match(/<!--AUDITABLE-SIGNATURE\n([\s\S]*?)\nAUDITABLE-SIGNATURE-->/);
+  if (!m) return null;
+  try { return JSON.parse(m[1]); } catch { return null; }
+}
+
+function buildSignedContent(style, script) {
+  return 'AUDITABLE-SIGNED-CONTENT\n'
+    + style + '\n'
+    + 'AUDITABLE-STYLE-SCRIPT-BOUNDARY\n'
+    + script;
+}
+
+async function verifySignature(html, styleContent, scriptContent) {
+  const sig = extractSignature(html);
+  if (!sig) return { status: 'unsigned' };
+
+  const pubKeyB64 = __SCANNER_PUBLIC_KEY__ || sig.pub;
+  const knownKey = !!__SCANNER_PUBLIC_KEY__;
+  const keyMatch = knownKey && sig.pub === __SCANNER_PUBLIC_KEY__;
+
+  const content = buildSignedContent(styleContent, scriptContent);
+
+  try {
+    const pubBytes = Uint8Array.from(atob(sig.pub), c => c.charCodeAt(0));
+    const key = await crypto.subtle.importKey(
+      'raw', pubBytes, { name: 'Ed25519' }, false, ['verify']
+    );
+    const sigBytes = Uint8Array.from(atob(sig.sig), c => c.charCodeAt(0));
+    const msgBytes = new TextEncoder().encode(content);
+    const valid = await crypto.subtle.verify('Ed25519', key, sigBytes, msgBytes);
+    return {
+      status: valid ? (knownKey && keyMatch ? 'valid' : 'valid-unknown-key') : 'invalid',
+      sig,
+      knownKey,
+      keyMatch,
+    };
+  } catch (e) {
+    if (e.name === 'NotSupportedError') {
+      return { status: 'unsupported', sig, message: 'Ed25519 not supported in this browser' };
+    }
+    return { status: 'error', sig, message: e.message };
+  }
+}
+
+// ── SCAN ──
+
+async function scanFile(file) {
+  const html = await file.text();
+  const report = document.getElementById('report');
+  report.classList.add('visible');
+
+  // ── EXTRACT COMPONENTS ──
+  const styleMatch = html.match(/<style>([\s\S]*?)<\/style>/);
+  const scriptMatch = html.match(/<script>([\s\S]*?)<\/script>/);
+  const styleContent = styleMatch ? styleMatch[1] : '';
+  const scriptContent = scriptMatch ? scriptMatch[1] : '';
+
+  // Version & build date
+  const versionMatch = scriptContent.match(/__AUDITABLE_VERSION__\s*=\s*'([^']+)'/);
+  const buildMatch = scriptContent.match(/__AUDITABLE_BUILD_DATE__\s*=\s*'([^']+)'/);
+  const version = versionMatch ? 'v' + versionMatch[1] : 'unknown';
+  const buildDate = buildMatch ? buildMatch[1] : 'unknown';
+
+  // Title
+  const titleMatch = html.match(/<title>([^<]*)<\/title>/);
+  const title = titleMatch ? titleMatch[1] : 'unknown';
+
+  // Cell data
+  const dataMatch = html.match(/<!--AUDITABLE-DATA\n([\s\S]*?)\nAUDITABLE-DATA-->/);
+  let cells = [];
+  if (dataMatch) {
+    try { cells = JSON.parse(dataMatch[1]); } catch {}
+  }
+
+  // Settings
+  const settingsMatch = html.match(/<!--AUDITABLE-SETTINGS\n([\s\S]*?)\nAUDITABLE-SETTINGS-->/);
+  let settings = null;
+  if (settingsMatch) {
+    try { settings = JSON.parse(settingsMatch[1]); } catch {}
+  }
+
+  // Modules
+  const modulesMatch = html.match(/<!--AUDITABLE-MODULES\n([\s\S]*?)\nAUDITABLE-MODULES-->/);
+  let modules = {};
+  if (modulesMatch) {
+    try { modules = JSON.parse(modulesMatch[1]); } catch {}
+  }
+
+  // ── SIGNATURE ──
+  const sigResult = await verifySignature(html, styleContent, scriptContent);
+
+  // Identity section
+  document.getElementById('rFilename').textContent = file.name;
+  document.getElementById('rVersion').textContent = version;
+  document.getElementById('rBuildDate').textContent = buildDate;
+
+  const sigBadge = document.getElementById('sigBadge');
+  const rSigStatus = document.getElementById('rSigStatus');
+  const rSigDetail = document.getElementById('rSigDetail');
+
+  if (sigResult.status === 'valid') {
+    sigBadge.innerHTML = '<span class="badge badge-valid">valid</span>';
+    rSigStatus.textContent = 'valid \u2713';
+    rSigStatus.style.color = 'var(--ok)';
+    rSigDetail.innerHTML = '<div class="sig-key">public key: ' + escHtml(sigResult.sig.pub) + '</div>';
+  } else if (sigResult.status === 'valid-unknown-key') {
+    sigBadge.innerHTML = '<span class="badge badge-warn">signed (unknown key)</span>';
+    rSigStatus.textContent = 'valid signature, unknown key';
+    rSigStatus.style.color = 'var(--accent)';
+    rSigDetail.innerHTML = '<div class="sig-key">signed with: ' + escHtml(sigResult.sig.pub) + '</div>'
+      + (__SCANNER_PUBLIC_KEY__ ? '<div class="sig-key">expected: ' + escHtml(__SCANNER_PUBLIC_KEY__) + '</div>' : '');
+  } else if (sigResult.status === 'invalid') {
+    sigBadge.innerHTML = '<span class="badge badge-invalid">invalid</span>';
+    rSigStatus.textContent = 'INVALID \u2014 signature does not match content';
+    rSigStatus.style.color = 'var(--err)';
+    rSigDetail.innerHTML = '<div class="sig-key">public key: ' + escHtml(sigResult.sig.pub) + '</div>';
+  } else if (sigResult.status === 'unsigned') {
+    sigBadge.innerHTML = '<span class="badge badge-unsigned">unsigned</span>';
+    rSigStatus.textContent = 'no signature found';
+    rSigStatus.style.color = 'var(--accent)';
+    rSigDetail.innerHTML = '';
+  } else if (sigResult.status === 'unsupported') {
+    sigBadge.innerHTML = '<span class="badge badge-warn">unverifiable</span>';
+    rSigStatus.textContent = sigResult.message;
+    rSigStatus.style.color = 'var(--accent)';
+    rSigDetail.innerHTML = '';
+  } else {
+    sigBadge.innerHTML = '<span class="badge badge-invalid">error</span>';
+    rSigStatus.textContent = 'error: ' + (sigResult.message || 'unknown');
+    rSigStatus.style.color = 'var(--err)';
+    rSigDetail.innerHTML = '';
+  }
+
+  // ── RUNTIME ──
+  const styleSize = new TextEncoder().encode(styleContent).length;
+  const scriptSize = new TextEncoder().encode(scriptContent).length;
+  document.getElementById('rStyleSize').textContent = formatSize(styleSize);
+  document.getElementById('rScriptSize').textContent = formatSize(scriptSize);
+  document.getElementById('rRuntimeSize').textContent = formatSize(styleSize + scriptSize);
+
+  // ── SIZE BREAKDOWN ──
+  const totalSize = new TextEncoder().encode(html).length;
+  const dataSize = dataMatch ? new TextEncoder().encode(dataMatch[0]).length : 0;
+  let moduleSize = 0;
+  for (const v of Object.values(modules)) {
+    const src = typeof v === 'string' ? v : (v.source || '');
+    moduleSize += new TextEncoder().encode(src).length;
+  }
+  const runtimeSize = styleSize + scriptSize;
+  const otherSize = Math.max(0, totalSize - runtimeSize - dataSize - moduleSize);
+
+  document.getElementById('rTotalSize').textContent = formatSize(totalSize);
+
+  const bar = document.getElementById('breakdownBar');
+  bar.innerHTML = '';
+  const pcts = [
+    { cls: 'breakdown-runtime', val: runtimeSize },
+    { cls: 'breakdown-data', val: dataSize },
+    { cls: 'breakdown-modules', val: moduleSize },
+    { cls: 'breakdown-other', val: otherSize },
+  ];
+  for (const p of pcts) {
+    const div = document.createElement('div');
+    div.className = p.cls;
+    div.style.width = ((p.val / totalSize) * 100).toFixed(1) + '%';
+    div.title = formatSize(p.val);
+    bar.appendChild(div);
+  }
+
+  // ── CONTENT ──
+  document.getElementById('rTitle').textContent = title;
+  const counts = { code: 0, md: 0, css: 0, html: 0 };
+  for (const c of cells) if (counts[c.type] !== undefined) counts[c.type]++;
+  const countParts = [];
+  for (const [t, n] of Object.entries(counts)) if (n > 0) countParts.push(n + ' ' + t);
+  document.getElementById('rCellCount').textContent = cells.length + ' (' + (countParts.join(', ') || 'none') + ')';
+
+  const cellList = document.getElementById('rCellList');
+  cellList.innerHTML = '';
+  for (let i = 0; i < cells.length && i < 50; i++) {
+    const c = cells[i];
+    const row = document.createElement('div');
+    row.className = 'cell-list-row';
+    const typeSpan = document.createElement('span');
+    typeSpan.className = 'cell-list-type cell-list-type-' + c.type;
+    typeSpan.textContent = c.type;
+    const preview = document.createElement('span');
+    preview.className = 'cell-list-preview';
+    preview.textContent = (c.code || '').slice(0, 80).replace(/\n/g, ' ');
+    row.appendChild(typeSpan);
+    row.appendChild(preview);
+    cellList.appendChild(row);
+  }
+  if (cells.length > 50) {
+    const more = document.createElement('div');
+    more.style.cssText = 'color: var(--fg-dim); font-size: 10px; padding: 4px 0;';
+    more.textContent = '... and ' + (cells.length - 50) + ' more';
+    cellList.appendChild(more);
+  }
+
+  // ── SETTINGS ──
+  const settingsBody = document.getElementById('rSettings');
+  settingsBody.innerHTML = '';
+  if (settings) {
+    for (const [key, val] of Object.entries(settings)) {
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.innerHTML = '<span class="row-label">' + escHtml(key) + '</span><span class="row-value">' + escHtml(String(val)) + '</span>';
+      settingsBody.appendChild(row);
+    }
+  } else {
+    settingsBody.innerHTML = '<div style="color:var(--fg-dim);font-size:11px;font-style:italic">no settings found</div>';
+  }
+
+  // ── MODULES ──
+  const moduleList = document.getElementById('rModuleList');
+  moduleList.innerHTML = '';
+  const moduleUrls = Object.keys(modules);
+  if (moduleUrls.length === 0) {
+    moduleList.innerHTML = '<div style="color:var(--fg-dim);font-size:11px;font-style:italic">no modules installed</div>';
+  } else {
+    for (const url of moduleUrls) {
+      const entry = modules[url];
+      const src = typeof entry === 'string' ? entry : (entry.source || '');
+      const row = document.createElement('div');
+      row.className = 'module-list-row';
+      row.innerHTML = '<span class="module-list-url" title="' + escHtml(url) + '">' + escHtml(url) + '</span>'
+        + '<span class="module-list-size">' + formatSize(src.length) + '</span>';
+      moduleList.appendChild(row);
+    }
+  }
+
+  // Scroll to report
+  report.scrollIntoView({ behavior: 'smooth' });
+}
+
+// ── PWA ──
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>
