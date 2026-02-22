@@ -4,6 +4,22 @@ import { getSettings, applySettings, resolveExecMode, resolveRunOnLoad } from '.
 import { runAll } from './exec.js';
 import { setMsg } from './ui.js';
 
+// ── MODULES ENCODING ──
+// base64-encode modules JSON to avoid HTML comment / String.replace issues
+// (source code can contain --, $', etc.)
+
+export function encodeModules(obj) {
+  const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(obj))));
+  return b64.replace(/.{1,76}/g, '$&\n').trimEnd();
+}
+
+export function decodeModules(raw) {
+  const b64 = raw.replace(/\s/g, '');
+  // detect legacy format: starts with { means raw JSON (not base64)
+  if (b64.startsWith('{') || b64.startsWith('%7B')) return JSON.parse(raw);
+  return JSON.parse(decodeURIComponent(escape(atob(b64))));
+}
+
 // ── SAVE / LOAD ──
 
 // save mode: 'normal' or 'packed'
@@ -127,9 +143,9 @@ ${findBarHTML}
 
 ${statusbarHTML}
 
-${'<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->'}
-${Object.keys(window._installedModules || {}).length ? '<!--AUDITABLE-MODULES\n' + JSON.stringify(window._installedModules).replace(/--/g, '\\u002d\\u002d') + '\nAUDITABLE-MODULES-->' : ''}
-${'<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->'}
+${'<!-- cell data: JSON array of {type, code, collapsed?} -->\n<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->'}
+${Object.keys(window._installedModules || {}).length ? '<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId} -->\n<!--AUDITABLE-MODULES\n' + encodeModules(window._installedModules) + '\nAUDITABLE-MODULES-->' : ''}
+${'<!-- notebook settings: JSON {theme, fontSize, width, ...} -->\n<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->'}
 
 <script>\n${script}\n<\/script>
 </body>
@@ -177,25 +193,56 @@ export async function savePackedNotebook() {
     const stream = blob.stream().pipeThrough(cs);
     const compressed = await new Response(stream).arrayBuffer();
     const b64 = btoa(String.fromCharCode(...new Uint8Array(compressed)));
+    const b64Lines = b64.replace(/.{1,76}/g, '$&\n');
 
-    const loader = '<!DOCTYPE html>\n'
-      + '<html lang="en"><head><meta charset="UTF-8">'
-      + '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
-      + '<title>Auditable \u2014 ' + esc(title) + '</title>'
-      + '<style>html{background:#1a1a1a}'
-      + 'body{color:#999;font:14px/1.5 monospace;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}'
-      + '</style></head><body>'
-      + '<div id="_l">unpacking\u2026</div>'
-      + '<script>'
-      + "(async()=>{"
-      + "var b='" + b64 + "';"
-      + "var r=new Response(new Blob([Uint8Array.from(atob(b),c=>c.charCodeAt(0))]));"
-      + "var s=r.body.pipeThrough(new DecompressionStream('gzip'));"
-      + "var h=await new Response(s).text();"
-      + "h=h.replace('<head>','<head><meta name=\"auditable-packed\">');"
-      + "document.open();document.write(h);document.close();"
-      + "})().catch(function(e){document.getElementById('_l').textContent='error: '+e.message});"
-      + '<\/script></body></html>';
+    const loader = `<!DOCTYPE html>
+<!-- packed auditable notebook -->
+<!-- the full notebook is gzip-compressed and base64-encoded in the <pre> block below. -->
+<!-- on load, the script decodes and decompresses it, then replaces the page contents. -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Auditable \u2014 ${esc(title)}</title>
+  <style>
+    html { background: #1a1a1a }
+    body { color: #999; font: 14px/1.5 monospace; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0 }
+    #_d { display: none }
+  </style>
+</head>
+<body>
+<div id="_l">unpacking\u2026</div>
+
+<!-- base64-encoded gzip payload (76-char lines) -->
+<pre id="_d">
+${b64Lines}</pre>
+
+<script>
+(async () => {
+  // 1. read base64 from the hidden <pre>, strip whitespace from line wrapping
+  var b64 = document.getElementById('_d').textContent.replace(/\\s/g, '');
+
+  // 2. decode base64 to binary
+  var bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+
+  // 3. decompress gzip via DecompressionStream
+  var stream = new Response(new Blob([bytes])).body.pipeThrough(new DecompressionStream('gzip'));
+  var html = await new Response(stream).text();
+
+  // 4. mark as packed (so the notebook knows it was loaded from a packed save)
+  html = html.replace('<head>', '<head><meta name="auditable-packed">');
+
+  // 5. replace the current page with the full notebook
+  document.open();
+  document.write(html);
+  document.close();
+})().catch(function(e) {
+  document.getElementById('_l').textContent = 'error: ' + e.message;
+});
+<\/script>
+</body>
+</html>`;
+
 
     const fn = downloadHtml(loader, title);
     const kb = (loader.length / 1024).toFixed(0);
@@ -217,7 +264,7 @@ export function loadFromEmbed() {
   const modMatch = raw.match(/<!--AUDITABLE-MODULES\n([\s\S]*?)\nAUDITABLE-MODULES-->/);
   if (modMatch) {
     try {
-      window._installedModules = JSON.parse(modMatch[1]);
+      window._installedModules = decodeModules(modMatch[1]);
     } catch (e) {
       console.error('Failed to parse installed modules:', e);
     }

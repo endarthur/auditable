@@ -6,6 +6,11 @@
 const fs = require('fs');
 const path = require('path');
 
+function encodeModules(obj) {
+  const b64 = Buffer.from(JSON.stringify(obj), 'utf8').toString('base64');
+  return b64.replace(/.{1,76}/g, '$&\n').trimEnd();
+}
+
 function makeExample({ title, cells, settings, modules, outPath }) {
   const basePath = path.join(__dirname, 'auditable.html');
   if (!fs.existsSync(basePath)) {
@@ -26,12 +31,11 @@ function makeExample({ title, cells, settings, modules, outPath }) {
   );
 
   // 3. Build data comments
-  const dataComment = '<!--AUDITABLE-DATA\n' + JSON.stringify(cells) + '\nAUDITABLE-DATA-->';
-  const modulesComment = modules ? '<!--AUDITABLE-MODULES\n' + JSON.stringify(modules).replace(/--/g, '\\u002d\\u002d') + '\nAUDITABLE-MODULES-->' : '';
-  const settingsComment = '<!--AUDITABLE-SETTINGS\n' + JSON.stringify(settings || { theme: 'dark', fontSize: 13, width: '860' }) + '\nAUDITABLE-SETTINGS-->';
+  const dataComment = '<!-- cell data: JSON array of {type, code, collapsed?} -->\n<!--AUDITABLE-DATA\n' + JSON.stringify(cells) + '\nAUDITABLE-DATA-->';
+  const modulesComment = modules ? '<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId} -->\n<!--AUDITABLE-MODULES\n' + encodeModules(modules) + '\nAUDITABLE-MODULES-->' : '';
+  const settingsComment = '<!-- notebook settings: JSON {theme, fontSize, width, ...} -->\n<!--AUDITABLE-SETTINGS\n' + JSON.stringify(settings || { theme: 'dark', fontSize: 13, width: '860' }) + '\nAUDITABLE-SETTINGS-->';
 
   // 4. Insert before <script>
-  // Use a replacer function to avoid $' $` $& special patterns in module source
   const insertion = '\n' + dataComment + '\n' + (modulesComment ? modulesComment + '\n' : '') + settingsComment + '\n\n<script>';
   html = html.replace('\n<script>', () => insertion);
 

@@ -1,4 +1,6 @@
 <!DOCTYPE html>
+<!-- Auditable Scanner — verifies Ed25519 signatures on saved notebooks -->
+<!-- standalone PWA: drop an auditable HTML file to verify its runtime integrity -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -442,11 +444,15 @@ async function scanFile(file) {
     try { settings = JSON.parse(settingsMatch[1]); } catch {}
   }
 
-  // Modules
+  // Modules (base64-encoded, with legacy raw JSON fallback)
   const modulesMatch = html.match(/<!--AUDITABLE-MODULES\n([\s\S]*?)\nAUDITABLE-MODULES-->/);
   let modules = {};
   if (modulesMatch) {
-    try { modules = JSON.parse(modulesMatch[1]); } catch {}
+    try {
+      const raw = modulesMatch[1].replace(/\s/g, '');
+      if (raw.startsWith('{')) modules = JSON.parse(modulesMatch[1]);
+      else modules = JSON.parse(decodeURIComponent(escape(atob(raw))));
+    } catch {}
   }
 
   // ── SIGNATURE ──

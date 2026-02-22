@@ -54,9 +54,9 @@ function extractData(html) {
 
 function reassemble(newHtml, oldData) {
   let html = newHtml;
-  html = html.replace(/<!--AUDITABLE-DATA\n[\s\S]*?\nAUDITABLE-DATA-->\n?/g, '');
-  html = html.replace(/<!--AUDITABLE-SETTINGS\n[\s\S]*?\nAUDITABLE-SETTINGS-->\n?/g, '');
-  html = html.replace(/<!--AUDITABLE-MODULES\n[\s\S]*?\nAUDITABLE-MODULES-->\n?/g, '');
+  html = html.replace(/(?:<!-- [^\n]*-->\n)?<!--AUDITABLE-DATA\n[\s\S]*?\nAUDITABLE-DATA-->\n?/g, '');
+  html = html.replace(/(?:<!-- [^\n]*-->\n)?<!--AUDITABLE-SETTINGS\n[\s\S]*?\nAUDITABLE-SETTINGS-->\n?/g, '');
+  html = html.replace(/(?:<!-- [^\n]*-->\n)?<!--AUDITABLE-MODULES\n[\s\S]*?\nAUDITABLE-MODULES-->\n?/g, '');
 
   const parts = [];
   if (oldData.data) parts.push(oldData.data);
@@ -212,7 +212,7 @@ describe('data extraction and reassembly', () => {
 [{"type":"code","code":"x = 1"}]
 AUDITABLE-DATA-->
 <!--AUDITABLE-MODULES
-{"https://cdn.example.com/lib.js":"source code"}
+eyJodHRwczovL2Nkbi5leGFtcGxlLmNvbS9saWIuanMiOiJzb3VyY2UgY29kZSJ9
 AUDITABLE-MODULES-->
 <!--AUDITABLE-SETTINGS
 {"theme":"dark","fontSize":13}
@@ -225,7 +225,7 @@ AUDITABLE-SETTINGS-->
     assert.ok(data.modules);
     assert.ok(data.settings);
     assert.match(data.data, /AUDITABLE-DATA/);
-    assert.match(data.modules, /cdn\.example\.com/);
+    assert.match(data.modules, /AUDITABLE-MODULES/);
     assert.match(data.settings, /fontSize/);
     assert.equal(data.title, 'Auditable \u2014 mynotebook');
   });
