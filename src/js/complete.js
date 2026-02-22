@@ -163,8 +163,23 @@ function cursorContext(code, cursor) {
       }
       continue;
     }
-    // template literal
+    // template literal (possibly tagged)
     if (ch === '`') {
+      // look back for a tag name: identifier immediately before the backtick
+      let tagName = null;
+      if (i > 0) {
+        let te = i;
+        let ts = te;
+        while (ts > 0 && /\w/.test(code[ts - 1])) ts--;
+        if (ts < te) {
+          const candidate = code.slice(ts, te);
+          if (typeof window !== 'undefined' && window._taggedLanguages
+              && window._taggedLanguages[candidate]) {
+            tagName = candidate;
+          }
+        }
+      }
+
       i++;
       let depth = 0;
       while (i < code.length) {
@@ -185,7 +200,7 @@ function cursorContext(code, cursor) {
           continue;
         }
         if (code[i] === '`') { i++; break; }
-        if (i >= cursor) return 'string';
+        if (i >= cursor) return tagName ? { type: 'tagged', lang: tagName } : 'string';
         i++;
       }
       continue;
@@ -236,6 +251,27 @@ function getPropsForValue(val) {
 
 export function getCompletions(code, cursor, cellId) {
   const ctx = cursorContext(code, cursor);
+
+  // tagged template literal — delegate to extension completions
+  if (ctx && typeof ctx === 'object' && ctx.type === 'tagged') {
+    const lang = typeof window !== 'undefined' && window._taggedLanguages
+      && window._taggedLanguages[ctx.lang];
+    if (lang && lang.completions) {
+      const { prefix, start } = extractPrefix(code, cursor);
+      if (!prefix) return { prefix: '', items: [] };
+      const extItems = lang.completions(prefix);
+      // score and annotate items
+      const items = [];
+      for (const it of extItems) {
+        const m = fuzzyMatch(prefix, it.text);
+        if (m) items.push({ text: it.text, kind: it.kind || 'var', score: m.score, indices: m.indices });
+      }
+      items.sort((a, b) => b.score - a.score || a.text.localeCompare(b.text));
+      return { prefix, items: items.slice(0, 30) };
+    }
+    return { prefix: '', items: [] };
+  }
+
   if (ctx !== 'code') return { prefix: '', items: [] };
 
   // check for dot completion

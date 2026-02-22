@@ -1,6 +1,7 @@
 import { S } from './state.js';
 import { buildDAG, topoSort, isManual, isNorun, isHidden, parseCellName, parseOutputId, parseOutputClass } from './dag.js';
 import { setMsg } from './ui.js';
+import { highlightCode } from './syntax.js';
 import { std } from './stdlib.js';
 import { python, zenOfPython } from './python.js';
 
@@ -276,6 +277,10 @@ export async function execCell(cell) {
     if (url === '@python') return python;
     if (url === '@python/this') { display(zenOfPython()); return python; }
     if (window._importCache[url]) return window._importCache[url];
+
+    const langsBefore = window._taggedLanguages ? Object.keys(window._taggedLanguages).length : 0;
+
+    let mod;
     // check installed (offline) modules first
     if (window._installedModules[url]) {
       const entry = window._installedModules[url];
@@ -284,12 +289,23 @@ export async function execCell(cell) {
       try { src = resolveModulePaths(src, url); } catch {}
       const blob = new Blob([src], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
-      const mod = await import(blobUrl);
-      window._importCache[url] = mod;
-      return mod;
+      mod = await import(blobUrl);
+    } else {
+      mod = await import(url);
     }
-    const mod = await import(url);
     window._importCache[url] = mod;
+
+    // if the module registered new tagged languages, re-highlight all code cells
+    const langsAfter = window._taggedLanguages ? Object.keys(window._taggedLanguages).length : 0;
+    if (langsAfter > langsBefore) {
+      for (const c of S.cells) {
+        if (c.type !== 'code') continue;
+        const ta = c.el.querySelector('textarea');
+        const hl = c.el.querySelector('.highlight-layer');
+        if (ta && hl) highlightCode(ta, hl);
+      }
+    }
+
     return mod;
   };
 
