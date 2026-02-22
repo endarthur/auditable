@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: write
+  pages: write
 
 jobs:
   build-and-sign:
@@ -47,3 +48,30 @@ jobs:
             auditable.html \
             af.html \
             --clobber
+
+      - name: Deploy to GitHub Pages
+        run: |
+          # Build scanner with public key
+          node build.js --target=scan
+          # Prepare gh-pages content
+          mkdir -p _pages/scan
+          cp auditable.html _pages/
+          cp af.html _pages/
+          cp af.html _pages/index.html
+          cp scan/index.html _pages/scan/
+          cp scan/manifest.json _pages/scan/
+          cp scan/sw.js _pages/scan/
+          # Write version.json for lightweight update checks
+          echo "{\"version\":\"${{ github.event.release.tag_name }}\"}" > _pages/version.json
+          # Deploy
+          cd _pages
+          git init
+          git checkout -b gh-pages
+          git add -A
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "Deploy ${{ github.event.release.tag_name }}"
+          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          git push -f origin gh-pages
+        env:
+          AUDITABLE_PUBLIC_KEY: ${{ vars.AUDITABLE_PUBLIC_KEY }}

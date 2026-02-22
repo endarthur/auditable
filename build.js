@@ -161,6 +161,11 @@ js = js.replace(
   "const __AUDITABLE_REPO__ = 'endarthur/auditable';",
   `const __AUDITABLE_REPO__ = '${repo}';`
 );
+const pagesUrl = process.env.AUDITABLE_PAGES_URL || 'https://endarthur.github.io/auditable';
+js = js.replace(
+  "const __AUDITABLE_PAGES_URL__ = 'https://endarthur.github.io/auditable';",
+  `const __AUDITABLE_PAGES_URL__ = '${pagesUrl}';`
+);
 if (execModeArg) {
   js = js.replace(
     "const __AUDITABLE_DEFAULT_EXEC_MODE__ = 'reactive';",
