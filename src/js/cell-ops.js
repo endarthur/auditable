@@ -6,6 +6,7 @@ import { runAll, renderHtmlCell } from './exec.js';
 import { renderMd } from './markdown.js';
 import { updateStatus } from './ui.js';
 import { selectCell } from './keyboard.js';
+import { notifyDirty } from './editor.js';
 
 // ── CELL OPERATIONS ──
 

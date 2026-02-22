@@ -119,6 +119,67 @@ button.accent:hover {
   border-color: var(--accent);
 }
 
+/* ── TOOLBAR BADGES ── */
+.toolbar-badges {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 6px;
+  align-items: center;
+}
+.toolbar-badge {
+  font-size: 9px;
+  letter-spacing: 0.5px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  user-select: none;
+  opacity: 0.85;
+}
+.toolbar-badge-signed {
+  color: var(--ok);
+  border: 1px solid color-mix(in srgb, var(--ok) 40%, transparent);
+}
+.toolbar-badge-packed {
+  color: var(--fg-dim);
+  border: 1px solid var(--border);
+}
+
+/* ── SPLIT SAVE BUTTON ── */
+.save-split {
+  display: inline-flex;
+  position: relative;
+}
+.save-split button:first-child {
+  border-right: none;
+  border-radius: 3px 0 0 3px;
+}
+.save-caret {
+  border-radius: 0 3px 3px 0 !important;
+  padding: 4px 4px !important;
+  font-size: 10px;
+}
+.save-tray {
+  display: none;
+  position: absolute;
+  right: 0;
+  top: 100%;
+  margin-top: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  z-index: 100;
+  min-width: 120px;
+}
+.save-tray.open { display: flex; flex-direction: column; }
+.save-tray button {
+  border: none;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  padding: 6px 10px;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.save-tray button:last-child { border-bottom: none; }
+.save-tray button:hover { background: var(--bg-hi); }
+
 /* ── TRANSPORT CONTROLS ── */
 .transport {
   display: inline-flex;
@@ -210,6 +271,7 @@ button.accent:hover {
 .action-more-tray button:last-child { border-bottom: none; }
 .action-add-tray button:hover,
 .action-more-tray button:hover { background: var(--bg2); color: var(--fg-bright); }
+.action-more-tray button.active-mode { color: var(--accent); }
 
 /* ── CELL INSERT / CONVERT BUTTONS (touch only) ── */
 .cell-insert { display: none; }
@@ -1714,6 +1776,7 @@ body.presenting .find-bar { display: none !important; }
 
 <div class="toolbar">
   <span class="toolbar-title">auditable</span>
+  <span class="toolbar-badges" id="toolbarBadges"></span>
   <span class="toolbar-sep"></span>
   <span class="toolbar-filename">
     <input type="text" id="docTitle" value="synth" spellcheck="false">
@@ -1730,7 +1793,13 @@ body.presenting .find-bar { display: none !important; }
     <button onclick="runAll()" title="run all cells">&#x25b6;&#x25b6;</button>
   </span>
   <span class="toolbar-right">
-    <button class="accent" onclick="saveNotebook()">save</button>
+    <span class="save-split">
+      <button class="accent" onclick="saveNotebook()"><span id="saveLabel">save</span></button><button class="accent save-caret" onclick="toggleSaveTray()">&#x25be;</button>
+      <div class="save-tray" id="saveTray">
+        <button onclick="setSaveMode('normal');saveNotebook()">save</button>
+        <button onclick="setSaveMode('packed');saveNotebook()">save packed</button>
+      </div>
+    </span>
     <div class="toolbar-overflow">
       <button onclick="toggleToolbarMenu()" title="more">&#x22ef;</button>
       <div class="toolbar-overflow-tray">
@@ -1797,7 +1866,8 @@ body.presenting .find-bar { display: none !important; }
     <div>
       <div class="action-more-tray">
         <button onclick="newNotebook();toggleMoreTray()">new</button>
-        <button onclick="saveNotebook();toggleMoreTray()">save</button>
+        <button id="mobileSaveBtn" class="active-mode" onclick="setSaveMode('normal');saveNotebook();toggleMoreTray()">save</button>
+        <button id="mobilePackBtn" onclick="setSaveMode('packed');saveNotebook();toggleMoreTray()">save packed</button>
         <button onclick="collapseAll();toggleMoreTray()">collapse all</button>
         <button onclick="expandAll();toggleMoreTray()">expand all</button>
         <button onclick="$('#helpOverlay').classList.toggle('visible');toggleMoreTray()">help</button>
@@ -1864,6 +1934,7 @@ const JS_BUILTINS = new Set([
   'Int32Array','Uint8Array','Map','Set','Promise','console','JSON',
   'display','canvas','table','slider','dropdown','checkbox','textInput','load','install'
 ]);
+
 
 // -- syntax.js --
 
@@ -3734,6 +3805,7 @@ function applySettings(s) {
   if (s.execMode) applyExecMode(s.execMode);
   if (s.runOnLoad) applyRunOnLoad(s.runOnLoad);
   if (s.showToggle) applyShowToggle(s.showToggle);
+  // optional: size-compare.js (typeof guards for --lean builds without it)
   if (s.sizeCompare !== undefined && typeof applySizeCompare === 'function') applySizeCompare(s.sizeCompare);
   if (s.sizeCompareRef !== undefined && typeof applySizeCompareRef === 'function') applySizeCompareRef(s.sizeCompareRef);
 }
@@ -3747,7 +3819,7 @@ function togglePresent() {
 const __AUDITABLE_VERSION__ = '0.1.0';
 const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_BUILD_DATE__ = '2026-02-22';
-const __AUDITABLE_BASE_SIZE__ = 198047;
+const __AUDITABLE_BASE_SIZE__ = 206579;
 
 (function() {
   const ver = $('#aboutVersion');
@@ -3980,6 +4052,26 @@ function compareVersions(a, b) {
     if (na > nb) return 1;
   }
   return 0;
+}
+
+// ── TOOLBAR BADGES ──
+
+function setBadge(id, label, cls) {
+  const container = $('#toolbarBadges');
+  if (!container) return;
+  let el = container.querySelector('[data-badge="' + id + '"]');
+  if (!label) {
+    if (el) el.remove();
+    return;
+  }
+  if (!el) {
+    el = document.createElement('span');
+    el.className = 'toolbar-badge toolbar-badge-' + id;
+    el.setAttribute('data-badge', id);
+    container.appendChild(el);
+  }
+  el.textContent = label;
+  if (cls) el.className = 'toolbar-badge ' + cls;
 }
 
 // ── UPDATE STATUS UI ──
@@ -4240,6 +4332,7 @@ async function verifySelf() {
     if (valid) {
       el.textContent = 'signed \u2713';
       el.className = 'update-sig update-ok';
+      setBadge('signed', 'signed', 'toolbar-badge toolbar-badge-signed');
     } else {
       el.textContent = 'signature invalid';
       el.className = 'update-sig update-err';
@@ -4294,7 +4387,31 @@ async function verifySelf() {
 
 // ── SAVE / LOAD ──
 
-function saveNotebook() {
+// save mode: 'normal' or 'packed'
+let _saveMode = 'normal';
+
+function getSaveMode() { return _saveMode; }
+
+function toggleSaveTray() {
+  const tray = $('#saveTray');
+  if (tray) tray.classList.toggle('open');
+}
+
+function setSaveMode(mode) {
+  _saveMode = mode;
+  // update UI
+  const label = $('#saveLabel');
+  if (label) label.textContent = mode === 'packed' ? 'pack' : 'save';
+  const tray = $('#saveTray');
+  if (tray) tray.classList.remove('open');
+  // update mobile buttons
+  const mobSave = $('#mobileSaveBtn');
+  const mobPack = $('#mobilePackBtn');
+  if (mobSave) mobSave.classList.toggle('active-mode', mode === 'normal');
+  if (mobPack) mobPack.classList.toggle('active-mode', mode === 'packed');
+}
+
+function buildNotebookHtml() {
   // serialize current state back to a self-contained HTML file
   const title = $('#docTitle').value || 'untitled';
 
@@ -4337,9 +4454,17 @@ function saveNotebook() {
     autoBtn.className = savedMode === 'reactive' ? 'autorun-on' : 'autorun-off';
     autoBtn.textContent = savedMode === 'reactive' ? '\u25b6' : '\u2016';
   }
-  // close overflow if open
+  // close overflow and save tray if open
   const overflow = toolbarEl.querySelector('.toolbar-overflow');
   if (overflow) overflow.classList.remove('open');
+  const saveTray = toolbarEl.querySelector('#saveTray');
+  if (saveTray) saveTray.classList.remove('open');
+  // reset save label to default
+  const saveLabel = toolbarEl.querySelector('#saveLabel');
+  if (saveLabel) saveLabel.textContent = 'save';
+  // clear badges (they get set dynamically on load)
+  const badges = toolbarEl.querySelector('.toolbar-badges');
+  if (badges) badges.innerHTML = '';
   const toolbarHTML = toolbarEl.outerHTML;
 
   // capture find bar and reset to default state
@@ -4354,7 +4479,7 @@ function saveNotebook() {
   const findBarHTML = findBarEl.outerHTML;
 
   // build output HTML
-  let html = `<!DOCTYPE html>
+  return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -4390,6 +4515,26 @@ ${'<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETT
 <script>\n${script}\n<\/script>
 </body>
 </html>`;
+}
+
+function downloadHtml(html, title) {
+  const blob = new Blob([html], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.html';
+  a.click();
+  URL.revokeObjectURL(url);
+  return a.download;
+}
+
+function saveNotebook() {
+  if (_saveMode === 'packed') {
+    savePackedNotebook();
+    return;
+  }
+  const title = $('#docTitle').value || 'untitled';
+  const html = buildNotebookHtml();
 
   // AF bridge: send serialized HTML to parent shell instead of downloading
   if (window.__AF_BRIDGE__) {
@@ -4398,15 +4543,47 @@ ${'<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETT
     return;
   }
 
-  // download
-  const blob = new Blob([html], { type: 'text/html' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.html';
-  a.click();
-  URL.revokeObjectURL(url);
-  setMsg(`saved ${a.download}`, 'ok');
+  const fn = downloadHtml(html, title);
+  setMsg('saved ' + fn, 'ok');
+}
+
+async function savePackedNotebook() {
+  const title = $('#docTitle').value || 'untitled';
+  const html = buildNotebookHtml();
+
+  try {
+    // compress via CompressionStream
+    const blob = new Blob([html]);
+    const cs = new CompressionStream('gzip');
+    const stream = blob.stream().pipeThrough(cs);
+    const compressed = await new Response(stream).arrayBuffer();
+    const b64 = btoa(String.fromCharCode(...new Uint8Array(compressed)));
+
+    const loader = '<!DOCTYPE html>\n'
+      + '<html lang="en"><head><meta charset="UTF-8">'
+      + '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
+      + '<title>Auditable \u2014 ' + esc(title) + '</title>'
+      + '<style>html{background:#1a1a1a}'
+      + 'body{color:#999;font:14px/1.5 monospace;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}'
+      + '</style></head><body>'
+      + '<div id="_l">unpacking\u2026</div>'
+      + '<script>'
+      + "(async()=>{"
+      + "var b='" + b64 + "';"
+      + "var r=new Response(new Blob([Uint8Array.from(atob(b),c=>c.charCodeAt(0))]));"
+      + "var s=r.body.pipeThrough(new DecompressionStream('gzip'));"
+      + "var h=await new Response(s).text();"
+      + "h=h.replace('<head>','<head><meta name=\"auditable-packed\">');"
+      + "document.open();document.write(h);document.close();"
+      + "})().catch(function(e){document.getElementById('_l').textContent='error: '+e.message});"
+      + '<\/script></body></html>';
+
+    const fn = downloadHtml(loader, title);
+    const kb = (loader.length / 1024).toFixed(0);
+    setMsg('packed ' + fn + ' (' + kb + ' KB)', 'ok');
+  } catch (e) {
+    setMsg('pack failed: ' + e.message, 'err');
+  }
 }
 
 function esc(s) {
@@ -4920,9 +5097,6 @@ function escHtml(s) {
     recomputeTimer = setTimeout(findComputeMatches, 150);
   });
 })();
-
-window.openFind = openFind;
-window.closeFind = closeFind;
 
 // -- complete.js --
 
@@ -5798,46 +5972,41 @@ function runSelected() {
   }
 }
 
-window.runSelectedCell = runSelectedAndAdvance;
-
 // ── MOBILE TRAY TOGGLES ──
 
 function closeAllTrays() {
   document.querySelectorAll('.action-add-tray.open, .action-more-tray.open, .cell-type-picker.open, .cell-insert-picker.open').forEach(el => el.classList.remove('open'));
 }
 
-window.toggleToolbarMenu = () => {
+function toggleToolbarMenu() {
   const menu = document.querySelector('.toolbar-overflow');
   if (!menu) return;
   menu.classList.toggle('open');
-};
+}
 
-window.toggleAddTray = () => {
+function toggleAddTray() {
   const tray = document.querySelector('.action-add-tray');
   if (!tray) return;
   const wasOpen = tray.classList.contains('open');
   closeAllTrays();
   if (!wasOpen) tray.classList.add('open');
-};
+}
 
-window.toggleMoreTray = () => {
+function toggleMoreTray() {
   const tray = document.querySelector('.action-more-tray');
   if (!tray) return;
   const wasOpen = tray.classList.contains('open');
   closeAllTrays();
   if (!wasOpen) tray.classList.add('open');
-};
+}
 
-window.showInsertPicker = (id, dir) => {
+function showInsertPicker(id, dir) {
   closeAllTrays();
   const cell = S.cells.find(c => c.id === id);
   if (!cell) return;
-  // remove existing picker
   document.querySelectorAll('.cell-insert-picker').forEach(el => el.remove());
   const picker = document.createElement('div');
   picker.className = 'cell-insert-picker open';
-  // for "before": find cell before this one to get afterId, or use null for first
-  // for "after": afterId is this cell's id
   let afterId;
   if (dir === 'after') {
     afterId = id;
@@ -5848,32 +6017,31 @@ window.showInsertPicker = (id, dir) => {
   picker.innerHTML = ['code', 'md', 'css', 'html'].map(t =>
     `<button onclick="insertAt(${afterId !== null ? afterId : 'null'},'${t}');this.closest('.cell-insert-picker').remove()">${t}</button>`
   ).join('');
-  // place picker in the cell header
   const header = cell.el.querySelector('.cell-header');
   header.style.position = 'relative';
   picker.style.top = '100%';
   picker.style.left = dir === 'before' ? '0' : 'auto';
   picker.style.right = dir === 'after' ? '0' : 'auto';
   header.appendChild(picker);
-};
+}
 
-window.toggleTypePicker = (id) => {
+function toggleTypePicker(id) {
   closeAllTrays();
   const picker = document.querySelector(`.cell-type-picker[data-cell-id="${id}"]`);
   if (picker) picker.classList.toggle('open');
-};
+}
 
-window.collapseAll = () => {
+function collapseAll() {
   S.cells.forEach(c => c.el.classList.add('collapsed'));
   setMsg('collapsed all', 'ok');
-};
+}
 
-window.expandAll = () => {
+function expandAll() {
   S.cells.forEach(c => c.el.classList.remove('collapsed'));
   setMsg('expanded all', 'ok');
-};
+}
 
-window.newNotebook = () => {
+function newNotebook() {
   if (!confirm('Clear all cells?')) return;
   while (S.cells.length) {
     const cell = S.cells[0];
@@ -5888,7 +6056,9 @@ window.newNotebook = () => {
   $('#docTitle').value = 'untitled';
   updateStatus();
   setMsg('new notebook', 'ok');
-};
+}
+
+function runSelectedCell() { runSelectedAndAdvance(); }
 
 function runSelectedAndAdvance() {
   runSelected();
@@ -6167,6 +6337,11 @@ document.addEventListener('click', (e) => {
   if (tbOverflow && tbOverflow.classList.contains('open') && !tbOverflow.contains(e.target)) {
     tbOverflow.classList.remove('open');
   }
+  // close save tray if clicking outside
+  const saveTray = document.getElementById('saveTray');
+  if (saveTray && saveTray.classList.contains('open') && !saveTray.parentElement.contains(e.target)) {
+    saveTray.classList.remove('open');
+  }
 
   const cellEl = e.target.closest('.cell');
   if (cellEl) {
@@ -6310,11 +6485,109 @@ function applySizeCompareRef(val) {
   window._sizeCompareRef = 'total';
 })();
 
+// -- globals.js --
+
+// ── GLOBAL BINDINGS ──
+// This module wires exported functions to window.* for use by onclick/onchange
+// handlers in template HTML and dynamically generated markup.
+// Modules stay pure (no side effects, no window assignments).
+
+
+
+import {
+  toggleSettings, togglePresent,
+  applyTheme, applyFontSize, applyWidth, applyLineNumbers, applyHeader,
+  applyExecMode, applyRunOnLoad, applyShowToggle,
+  applyGlobalExecMode, applyGlobalRunOnLoad,
+} from './settings.js';
+import {
+  toggleUpdate, checkForUpdate, applyOnlineUpdate,
+  proceedUpdate, cancelUpdate, updateFromFile,
+} from './update.js';
+import {
+  saveNotebook, savePackedNotebook,
+  setSaveMode, toggleSaveTray,
+} from './save.js';
+
+
+
+import {
+  addCellWithUndo,
+  runSelectedCell, toggleToolbarMenu, toggleAddTray, toggleMoreTray,
+  showInsertPicker, toggleTypePicker,
+  collapseAll, expandAll, newNotebook,
+} from './keyboard.js';
+
+// state
+window.$ = $;
+window.S = S;
+
+// editor
+window.toggleAutorun = toggleAutorun;
+
+// settings
+window.toggleSettings = toggleSettings;
+window.togglePresent = togglePresent;
+window.applyTheme = applyTheme;
+window.applyFontSize = applyFontSize;
+window.applyWidth = applyWidth;
+window.applyLineNumbers = applyLineNumbers;
+window.applyHeader = applyHeader;
+window.applyExecMode = applyExecMode;
+window.applyRunOnLoad = applyRunOnLoad;
+window.applyShowToggle = applyShowToggle;
+window.applyGlobalExecMode = applyGlobalExecMode;
+window.applyGlobalRunOnLoad = applyGlobalRunOnLoad;
+
+// update
+window.toggleUpdate = toggleUpdate;
+window.checkForUpdate = checkForUpdate;
+window.applyOnlineUpdate = applyOnlineUpdate;
+window.proceedUpdate = proceedUpdate;
+window.cancelUpdate = cancelUpdate;
+window.updateFromFile = updateFromFile;
+
+// save
+window.saveNotebook = saveNotebook;
+window.savePackedNotebook = savePackedNotebook;
+window.setSaveMode = setSaveMode;
+window.toggleSaveTray = toggleSaveTray;
+
+// exec
+window.runAll = runAll;
+
+// ui
+window.insertAt = insertAt;
+
+// find
+window.openFind = openFind;
+window.closeFind = closeFind;
+
+// keyboard / toolbar
+window.addCellWithUndo = addCellWithUndo;
+window.runSelectedCell = runSelectedCell;
+window.toggleToolbarMenu = toggleToolbarMenu;
+window.toggleAddTray = toggleAddTray;
+window.toggleMoreTray = toggleMoreTray;
+window.showInsertPicker = showInsertPicker;
+window.toggleTypePicker = toggleTypePicker;
+window.collapseAll = collapseAll;
+window.expandAll = expandAll;
+window.newNotebook = newNotebook;
+
 // -- init.js --
 
 // ── INIT ──
 
 (function init() {
+  // detect packed format (meta tag injected by loader)
+  const packedMeta = document.querySelector('meta[name="auditable-packed"]');
+  if (packedMeta) {
+    packedMeta.remove();
+    setBadge('packed', 'packed', 'toolbar-badge toolbar-badge-packed');
+    setSaveMode('packed');
+  }
+
   if (!loadFromEmbed()) {
     addCell('md', '');
     addCell('code', '');

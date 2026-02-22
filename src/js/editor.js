@@ -5,7 +5,7 @@ import { setMsg } from './ui.js';
 
 // ── EDITING ──
 
-function notifyDirty() {
+export function notifyDirty() {
   if (S.initialized && window.__AF_BRIDGE__) window.parent.postMessage({ type: 'af:dirty' }, '*');
 }
 

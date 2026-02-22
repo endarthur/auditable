@@ -112,6 +112,67 @@ button.accent:hover {
   border-color: var(--accent);
 }
 
+/* ── TOOLBAR BADGES ── */
+.toolbar-badges {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 6px;
+  align-items: center;
+}
+.toolbar-badge {
+  font-size: 9px;
+  letter-spacing: 0.5px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  user-select: none;
+  opacity: 0.85;
+}
+.toolbar-badge-signed {
+  color: var(--ok);
+  border: 1px solid color-mix(in srgb, var(--ok) 40%, transparent);
+}
+.toolbar-badge-packed {
+  color: var(--fg-dim);
+  border: 1px solid var(--border);
+}
+
+/* ── SPLIT SAVE BUTTON ── */
+.save-split {
+  display: inline-flex;
+  position: relative;
+}
+.save-split button:first-child {
+  border-right: none;
+  border-radius: 3px 0 0 3px;
+}
+.save-caret {
+  border-radius: 0 3px 3px 0 !important;
+  padding: 4px 4px !important;
+  font-size: 10px;
+}
+.save-tray {
+  display: none;
+  position: absolute;
+  right: 0;
+  top: 100%;
+  margin-top: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  z-index: 100;
+  min-width: 120px;
+}
+.save-tray.open { display: flex; flex-direction: column; }
+.save-tray button {
+  border: none;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  padding: 6px 10px;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.save-tray button:last-child { border-bottom: none; }
+.save-tray button:hover { background: var(--bg-hi); }
+
 /* ── TRANSPORT CONTROLS ── */
 .transport {
   display: inline-flex;
@@ -203,6 +264,7 @@ button.accent:hover {
 .action-more-tray button:last-child { border-bottom: none; }
 .action-add-tray button:hover,
 .action-more-tray button:hover { background: var(--bg2); color: var(--fg-bright); }
+.action-more-tray button.active-mode { color: var(--accent); }
 
 /* ── CELL INSERT / CONVERT BUTTONS (touch only) ── */
 .cell-insert { display: none; }

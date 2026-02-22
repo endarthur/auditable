@@ -147,6 +147,26 @@ function compareVersions(a, b) {
   return 0;
 }
 
+// ── TOOLBAR BADGES ──
+
+export function setBadge(id, label, cls) {
+  const container = $('#toolbarBadges');
+  if (!container) return;
+  let el = container.querySelector('[data-badge="' + id + '"]');
+  if (!label) {
+    if (el) el.remove();
+    return;
+  }
+  if (!el) {
+    el = document.createElement('span');
+    el.className = 'toolbar-badge toolbar-badge-' + id;
+    el.setAttribute('data-badge', id);
+    container.appendChild(el);
+  }
+  el.textContent = label;
+  if (cls) el.className = 'toolbar-badge ' + cls;
+}
+
 // ── UPDATE STATUS UI ──
 
 function setUpdateStatus(html, cls) {
@@ -159,7 +179,7 @@ function setUpdateStatus(html, cls) {
 
 // ── CHECK FOR UPDATE (GitHub API) ──
 
-async function checkForUpdate() {
+export async function checkForUpdate() {
   const btn = $('#updateCheckBtn');
   if (btn) btn.disabled = true;
   setUpdateStatus('checking...', '');
@@ -201,7 +221,7 @@ async function checkForUpdate() {
 
 // ── APPLY ONLINE UPDATE ──
 
-async function applyOnlineUpdate() {
+export async function applyOnlineUpdate() {
   setUpdateStatus('downloading...', '');
 
   try {
@@ -269,7 +289,7 @@ async function applyUpdate(newHtml, version) {
   finishUpdate(newHtml, version);
 }
 
-function proceedUpdate() {
+export function proceedUpdate() {
   if (window._pendingUpdateHtml) {
     finishUpdate(window._pendingUpdateHtml, window._pendingUpdateVersion);
     delete window._pendingUpdateHtml;
@@ -277,7 +297,7 @@ function proceedUpdate() {
   }
 }
 
-function cancelUpdate() {
+export function cancelUpdate() {
   delete window._pendingUpdateHtml;
   delete window._pendingUpdateVersion;
   setUpdateStatus('update cancelled', '');
@@ -330,7 +350,7 @@ function finishUpdate(newHtml, version) {
 
 // ── UPDATE FROM FILE ──
 
-function updateFromFile() {
+export function updateFromFile() {
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = '.html';
@@ -405,6 +425,7 @@ async function verifySelf() {
     if (valid) {
       el.textContent = 'signed \u2713';
       el.className = 'update-sig update-ok';
+      setBadge('signed', 'signed', 'toolbar-badge toolbar-badge-signed');
     } else {
       el.textContent = 'signature invalid';
       el.className = 'update-sig update-err';

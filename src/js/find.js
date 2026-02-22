@@ -368,5 +368,3 @@ function escHtml(s) {
   });
 })();
 
-window.openFind = openFind;
-window.closeFind = closeFind;

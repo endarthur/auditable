@@ -40,3 +40,4 @@ export const JS_BUILTINS = new Set([
   'Int32Array','Uint8Array','Map','Set','Promise','console','JSON',
   'display','canvas','table','slider','dropdown','checkbox','textInput','load','install'
 ]);
+

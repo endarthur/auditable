@@ -193,6 +193,7 @@
 
 <div class="toolbar">
   <span class="toolbar-title">auditable</span>
+  <span class="toolbar-badges" id="toolbarBadges"></span>
   <span class="toolbar-sep"></span>
   <span class="toolbar-filename">
     <input type="text" id="docTitle" value="untitled" spellcheck="false">
@@ -209,7 +210,13 @@
     <button onclick="runAll()" title="run all cells">&#x25b6;&#x25b6;</button>
   </span>
   <span class="toolbar-right">
-    <button class="accent" onclick="saveNotebook()">save</button>
+    <span class="save-split">
+      <button class="accent" onclick="saveNotebook()"><span id="saveLabel">save</span></button><button class="accent save-caret" onclick="toggleSaveTray()">&#x25be;</button>
+      <div class="save-tray" id="saveTray">
+        <button onclick="setSaveMode('normal');saveNotebook()">save</button>
+        <button onclick="setSaveMode('packed');saveNotebook()">save packed</button>
+      </div>
+    </span>
     <div class="toolbar-overflow">
       <button onclick="toggleToolbarMenu()" title="more">&#x22ef;</button>
       <div class="toolbar-overflow-tray">
@@ -276,7 +283,8 @@
     <div>
       <div class="action-more-tray">
         <button onclick="newNotebook();toggleMoreTray()">new</button>
-        <button onclick="saveNotebook();toggleMoreTray()">save</button>
+        <button id="mobileSaveBtn" class="active-mode" onclick="setSaveMode('normal');saveNotebook();toggleMoreTray()">save</button>
+        <button id="mobilePackBtn" onclick="setSaveMode('packed');saveNotebook();toggleMoreTray()">save packed</button>
         <button onclick="collapseAll();toggleMoreTray()">collapse all</button>
         <button onclick="expandAll();toggleMoreTray()">expand all</button>
         <button onclick="$('#helpOverlay').classList.toggle('visible');toggleMoreTray()">help</button>

@@ -15,4 +15,5 @@ import './complete.js';
 import './keyboard.js';
 import './goto.js'; // @optional
 import './size-compare.js'; // @optional
+import './globals.js';
 import './init.js';

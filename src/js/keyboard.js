@@ -3,7 +3,7 @@ import { addCell, deleteCell, convertCell } from './cell-ops.js';
 import { runDAG, runAll, renderHtmlCell } from './exec.js';
 import { toggleAutorun } from './editor.js';
 import { toggleSettings, togglePresent, applyLineNumbers, getSettings } from './settings.js';
-import { saveNotebook } from './save.js';
+import { saveNotebook, savePackedNotebook, setSaveMode, toggleSaveTray } from './save.js';
 import { setMsg } from './ui.js';
 import { toggleComment, autoResize, cssSummary } from './cell-dom.js';
 import { openFind, closeFind } from './find.js';
@@ -142,46 +142,41 @@ function runSelected() {
   }
 }
 
-window.runSelectedCell = runSelectedAndAdvance;
-
 // ── MOBILE TRAY TOGGLES ──
 
 function closeAllTrays() {
   document.querySelectorAll('.action-add-tray.open, .action-more-tray.open, .cell-type-picker.open, .cell-insert-picker.open').forEach(el => el.classList.remove('open'));
 }
 
-window.toggleToolbarMenu = () => {
+export function toggleToolbarMenu() {
   const menu = document.querySelector('.toolbar-overflow');
   if (!menu) return;
   menu.classList.toggle('open');
-};
+}
 
-window.toggleAddTray = () => {
+export function toggleAddTray() {
   const tray = document.querySelector('.action-add-tray');
   if (!tray) return;
   const wasOpen = tray.classList.contains('open');
   closeAllTrays();
   if (!wasOpen) tray.classList.add('open');
-};
+}
 
-window.toggleMoreTray = () => {
+export function toggleMoreTray() {
   const tray = document.querySelector('.action-more-tray');
   if (!tray) return;
   const wasOpen = tray.classList.contains('open');
   closeAllTrays();
   if (!wasOpen) tray.classList.add('open');
-};
+}
 
-window.showInsertPicker = (id, dir) => {
+export function showInsertPicker(id, dir) {
   closeAllTrays();
   const cell = S.cells.find(c => c.id === id);
   if (!cell) return;
-  // remove existing picker
   document.querySelectorAll('.cell-insert-picker').forEach(el => el.remove());
   const picker = document.createElement('div');
   picker.className = 'cell-insert-picker open';
-  // for "before": find cell before this one to get afterId, or use null for first
-  // for "after": afterId is this cell's id
   let afterId;
   if (dir === 'after') {
     afterId = id;
@@ -192,32 +187,31 @@ window.showInsertPicker = (id, dir) => {
   picker.innerHTML = ['code', 'md', 'css', 'html'].map(t =>
     `<button onclick="insertAt(${afterId !== null ? afterId : 'null'},'${t}');this.closest('.cell-insert-picker').remove()">${t}</button>`
   ).join('');
-  // place picker in the cell header
   const header = cell.el.querySelector('.cell-header');
   header.style.position = 'relative';
   picker.style.top = '100%';
   picker.style.left = dir === 'before' ? '0' : 'auto';
   picker.style.right = dir === 'after' ? '0' : 'auto';
   header.appendChild(picker);
-};
+}
 
-window.toggleTypePicker = (id) => {
+export function toggleTypePicker(id) {
   closeAllTrays();
   const picker = document.querySelector(`.cell-type-picker[data-cell-id="${id}"]`);
   if (picker) picker.classList.toggle('open');
-};
+}
 
-window.collapseAll = () => {
+export function collapseAll() {
   S.cells.forEach(c => c.el.classList.add('collapsed'));
   setMsg('collapsed all', 'ok');
-};
+}
 
-window.expandAll = () => {
+export function expandAll() {
   S.cells.forEach(c => c.el.classList.remove('collapsed'));
   setMsg('expanded all', 'ok');
-};
+}
 
-window.newNotebook = () => {
+export function newNotebook() {
   if (!confirm('Clear all cells?')) return;
   while (S.cells.length) {
     const cell = S.cells[0];
@@ -232,7 +226,9 @@ window.newNotebook = () => {
   $('#docTitle').value = 'untitled';
   updateStatus();
   setMsg('new notebook', 'ok');
-};
+}
+
+export function runSelectedCell() { runSelectedAndAdvance(); }
 
 function runSelectedAndAdvance() {
   runSelected();
@@ -510,6 +506,11 @@ document.addEventListener('click', (e) => {
   const tbOverflow = document.querySelector('.toolbar-overflow');
   if (tbOverflow && tbOverflow.classList.contains('open') && !tbOverflow.contains(e.target)) {
     tbOverflow.classList.remove('open');
+  }
+  // close save tray if clicking outside
+  const saveTray = document.getElementById('saveTray');
+  if (saveTray && saveTray.classList.contains('open') && !saveTray.parentElement.contains(e.target)) {
+    saveTray.classList.remove('open');
   }
 
   const cellEl = e.target.closest('.cell');
