@@ -156,6 +156,23 @@
   <h2>modules</h2>
   <div id="moduleList"></div>
 
+  <h2>update</h2>
+  <div class="settings-row">
+    <label>current version</label>
+    <span id="updateCurrentVer">v0.0.0</span>
+  </div>
+  <div class="settings-row">
+    <label>signature</label>
+    <span id="updateSigStatus" class="update-sig">checking...</span>
+  </div>
+  <div id="updateStatus" class="update-status"></div>
+  <div class="settings-row">
+    <button id="updateCheckBtn" onclick="checkForUpdate()">check for updates</button>
+  </div>
+  <div class="settings-row">
+    <button onclick="updateFromFile()">update from file</button>
+  </div>
+
   <div class="settings-about">
     <span id="aboutVersion"></span>
     <span id="aboutBuild"></span>
