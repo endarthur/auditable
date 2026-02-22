@@ -3135,17 +3135,19 @@ async function execCell(cell) {
 
   // input widget helpers — persist state and DOM across re-runs
   if (!cell._inputs) cell._inputs = {};
+  if (!cell._callbacks) cell._callbacks = {};
 
   const mkInput = (label, type, defaultVal, opts = {}) => {
     const key = label;
     const prev = cell._inputs[key];
     let val = prev !== undefined ? prev : defaultVal;
     usedWidgets.add(key);
+    cell._callbacks[key] = { onInput: opts.onInput, onChange: opts.onChange };
 
     // check if widget DOM already exists
     const existing = widgetEl.querySelector(`[data-widget-key="${CSS.escape(key)}"]`);
     if (existing) {
-      // just return current value, DOM stays
+      // just return current value, DOM stays — callbacks already updated above
       cell._inputs[key] = type === 'slider' ? parseFloat(val)
                          : type === 'checkbox' ? !!val
                          : val;
@@ -3177,9 +3179,11 @@ async function execCell(cell) {
         const n = parseFloat(input.value);
         cell._inputs[key] = n;
         valSpan.textContent = n;
-        clearTimeout(cell._inputTimer);
-        cell._inputTimer = setTimeout(() => runDAG([cell.id], true), 80);
+        const cb = cell._callbacks[key];
+        if (cb.onInput) { cb.onInput(n); }
+        else if (!cb.onChange) { clearTimeout(cell._inputTimer); cell._inputTimer = setTimeout(() => runDAG([cell.id], true), 80); }
       };
+      input.onchange = () => { const cb = cell._callbacks[key]; if (cb.onChange) cb.onChange(parseFloat(input.value)); };
       wrap.appendChild(input);
       wrap.appendChild(valSpan);
     } else if (type === 'dropdown') {
@@ -3193,7 +3197,11 @@ async function execCell(cell) {
       }
       input.onchange = () => {
         cell._inputs[key] = input.value;
-        runDAG([cell.id], true);
+        const cb = cell._callbacks[key];
+        if (cb.onInput || cb.onChange) {
+          if (cb.onInput) cb.onInput(input.value);
+          if (cb.onChange) cb.onChange(input.value);
+        } else { runDAG([cell.id], true); }
       };
       wrap.appendChild(input);
     } else if (type === 'checkbox') {
@@ -3202,7 +3210,11 @@ async function execCell(cell) {
       input.checked = !!val;
       input.onchange = () => {
         cell._inputs[key] = input.checked;
-        runDAG([cell.id], true);
+        const cb = cell._callbacks[key];
+        if (cb.onInput || cb.onChange) {
+          if (cb.onInput) cb.onInput(input.checked);
+          if (cb.onChange) cb.onChange(input.checked);
+        } else { runDAG([cell.id], true); }
       };
       wrap.appendChild(input);
     } else if (type === 'text') {
@@ -3211,9 +3223,11 @@ async function execCell(cell) {
       input.value = val;
       input.oninput = () => {
         cell._inputs[key] = input.value;
-        clearTimeout(cell._inputTimer);
-        cell._inputTimer = setTimeout(() => runDAG([cell.id], true), 300);
+        const cb = cell._callbacks[key];
+        if (cb.onInput) { cb.onInput(input.value); }
+        else if (!cb.onChange) { clearTimeout(cell._inputTimer); cell._inputTimer = setTimeout(() => runDAG([cell.id], true), 300); }
       };
+      input.onchange = () => { const cb = cell._callbacks[key]; if (cb.onChange) cb.onChange(input.value); };
       wrap.appendChild(input);
     }
 
@@ -3225,9 +3239,9 @@ async function execCell(cell) {
   };
 
   const slider = (label, defaultVal = 50, opts = {}) => mkInput(label, 'slider', defaultVal, opts);
-  const dropdown = (label, options, defaultVal) => mkInput(label, 'dropdown', defaultVal || options[0], { options });
-  const checkbox = (label, defaultVal = false) => mkInput(label, 'checkbox', defaultVal);
-  const textInput = (label, defaultVal = '') => mkInput(label, 'text', defaultVal);
+  const dropdown = (label, options, defaultVal, opts = {}) => mkInput(label, 'dropdown', defaultVal || options[0], { ...opts, options });
+  const checkbox = (label, defaultVal = false, opts = {}) => mkInput(label, 'checkbox', defaultVal, opts);
+  const textInput = (label, defaultVal = '', opts = {}) => mkInput(label, 'text', defaultVal, opts);
 
   // execute with scoped parameters (only what this cell uses, for stable V8 JIT)
   // filter out injected names — they're per-cell params, not scope-propagated
@@ -3338,6 +3352,7 @@ async function execCell(cell) {
     for (const w of widgetEl.querySelectorAll('[data-widget-key]')) {
       if (!usedWidgets.has(w.dataset.widgetKey)) {
         delete cell._inputs[w.dataset.widgetKey];
+        delete cell._callbacks[w.dataset.widgetKey];
         w.remove();
       }
     }
@@ -4173,7 +4188,7 @@ function togglePresent() {
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_BUILD_DATE__ = '2026-02-22';
-const __AUDITABLE_BASE_SIZE__ = 219511;
+const __AUDITABLE_BASE_SIZE__ = 220869;
 
 (function() {
   const ver = $('#aboutVersion');
@@ -5501,20 +5516,20 @@ const BUILTIN_HELP = {
     "desc": "render array of objects as table"
   },
   "ui.slider": {
-    "sig": "ui.slider(label, default?, {min,max,step}?)",
-    "desc": "reactive range input"
+    "sig": "ui.slider(label, default?, {min,max,step,onInput,onChange}?)",
+    "desc": "range input \u2014 reactive, or callback via onInput/onChange"
   },
   "ui.dropdown": {
-    "sig": "ui.dropdown(label, options, default?)",
-    "desc": "reactive select menu"
+    "sig": "ui.dropdown(label, options, default?, {onInput,onChange}?)",
+    "desc": "select menu \u2014 reactive, or callback via onInput/onChange"
   },
   "ui.checkbox": {
-    "sig": "ui.checkbox(label, default?)",
-    "desc": "reactive toggle"
+    "sig": "ui.checkbox(label, default?, {onInput,onChange}?)",
+    "desc": "toggle \u2014 reactive, or callback via onInput/onChange"
   },
   "ui.textInput": {
-    "sig": "ui.textInput(label, default?)",
-    "desc": "reactive text field"
+    "sig": "ui.textInput(label, default?, {onInput,onChange}?)",
+    "desc": "text field \u2014 reactive, or callback via onInput/onChange"
   },
   "std.csv": {
     "sig": "std.csv(text, {separator?, typed?}?)",

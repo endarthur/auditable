@@ -12,20 +12,20 @@
     "desc": "render array of objects as table"
   },
   "ui.slider": {
-    "sig": "ui.slider(label, default?, {min,max,step}?)",
-    "desc": "reactive range input"
+    "sig": "ui.slider(label, default?, {min,max,step,onInput,onChange}?)",
+    "desc": "range input \u2014 reactive, or callback via onInput/onChange"
   },
   "ui.dropdown": {
-    "sig": "ui.dropdown(label, options, default?)",
-    "desc": "reactive select menu"
+    "sig": "ui.dropdown(label, options, default?, {onInput,onChange}?)",
+    "desc": "select menu \u2014 reactive, or callback via onInput/onChange"
   },
   "ui.checkbox": {
-    "sig": "ui.checkbox(label, default?)",
-    "desc": "reactive toggle"
+    "sig": "ui.checkbox(label, default?, {onInput,onChange}?)",
+    "desc": "toggle \u2014 reactive, or callback via onInput/onChange"
   },
   "ui.textInput": {
-    "sig": "ui.textInput(label, default?)",
-    "desc": "reactive text field"
+    "sig": "ui.textInput(label, default?, {onInput,onChange}?)",
+    "desc": "text field \u2014 reactive, or callback via onInput/onChange"
   },
   "std.csv": {
     "sig": "std.csv(text, {separator?, typed?}?)",

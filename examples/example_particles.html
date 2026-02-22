@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Auditable</title>
+<title>Auditable — particle sandbox</title>
 <style>
 :root {
   --bg: #0a0a0a;
@@ -1779,7 +1779,7 @@ body.presenting .find-bar { display: none !important; }
   <span class="toolbar-badges" id="toolbarBadges"></span>
   <span class="toolbar-sep"></span>
   <span class="toolbar-filename">
-    <input type="text" id="docTitle" value="untitled" spellcheck="false">
+    <input type="text" id="docTitle" value="particle sandbox" spellcheck="false">
   </span>
   <span class="toolbar-status" id="toolbarStatus"></span>
   <button class="toolbar-add" onclick="addCellWithUndo('code','',S.selectedId)">+ code</button>
@@ -1881,6 +1881,13 @@ body.presenting .find-bar { display: none !important; }
   </div>
 </div>
 
+
+<!--AUDITABLE-DATA
+[{"type":"md","code":"# particle sandbox\n\na real-time canvas particle system driven by **callback widgets**. reactive widgets control structural parameters (particle count), while `onInput` callbacks give instant control over speed, size, color, and physics — no DAG overhead, just the browser event loop."},{"type":"code","code":"// %manual\nconst W = Math.min(600, window.innerWidth - 80), H = 400;\nconst c = ui.canvas(W, H);\nconst ctx = c.getContext(\"2d\");\n\n// mutable state — callbacks write directly here\nlet speed = 1, size = 3, hue = 30, gravity = false, trails = true;\n\n// reactive widget — changing count re-runs this cell to resize the array\nconst count = ui.slider(\"count\", 200, {min: 10, max: 1000, step: 10});\n\n// callback widgets — real-time, zero DAG overhead\nui.slider(\"speed\", 1, {min: 0.1, max: 5, step: 0.1, onInput: v => speed = v});\nui.slider(\"size\", 3, {min: 1, max: 10, step: 0.5, onInput: v => size = v});\nui.slider(\"hue\", 30, {min: 0, max: 360, step: 5, onInput: v => hue = v});\nui.checkbox(\"gravity\", false, {onInput: v => gravity = v});\nui.checkbox(\"trails\", true, {onInput: v => trails = v});\n\n// init particles\nconst particles = [];\nfor (let i = 0; i < count; i++) {\n  particles.push({\n    x: Math.random() * W,\n    y: Math.random() * H,\n    vx: (Math.random() - 0.5) * 4,\n    vy: (Math.random() - 0.5) * 4\n  });\n}\n\n// animation loop\nlet raf;\nfunction frame() {\n  if (trails) {\n    ctx.fillStyle = \"rgba(10, 10, 10, 0.15)\";\n    ctx.fillRect(0, 0, W, H);\n  } else {\n    ctx.fillStyle = \"#0a0a0a\";\n    ctx.fillRect(0, 0, W, H);\n  }\n\n  for (const p of particles) {\n    if (gravity) p.vy += 0.1 * speed;\n    p.x += p.vx * speed;\n    p.y += p.vy * speed;\n\n    // bounce off walls\n    if (p.x < 0)     { p.x = 0;     p.vx = Math.abs(p.vx); }\n    if (p.x > W)     { p.x = W;     p.vx = -Math.abs(p.vx); }\n    if (p.y < 0)     { p.y = 0;     p.vy = Math.abs(p.vy); }\n    if (p.y > H)     { p.y = H;     p.vy = -Math.abs(p.vy); }\n\n    const t = (p.x / W + p.y / H) / 2;\n    ctx.fillStyle = `hsl(${hue + t * 60}, 80%, 55%)`;\n    ctx.beginPath();\n    ctx.arc(p.x, p.y, size, 0, Math.PI * 2);\n    ctx.fill();\n  }\n\n  raf = requestAnimationFrame(frame);\n}\nframe();\n\ninvalidation.then(() => cancelAnimationFrame(raf));"}]
+AUDITABLE-DATA-->
+<!--AUDITABLE-SETTINGS
+{"theme":"dark","fontSize":13,"width":"860"}
+AUDITABLE-SETTINGS-->
 
 <script>
 // -- state.js --
@@ -3140,9 +3147,6 @@ async function execCell(cell) {
     // check if widget DOM already exists
     const existing = widgetEl.querySelector(`[data-widget-key="${CSS.escape(key)}"]`);
     if (existing) {
-      // update id/class in case they changed on re-run
-      existing.id = opts.id || '';
-      existing.className = 'cell-widget' + (opts.class ? ' ' + opts.class : '');
       // just return current value, DOM stays — callbacks already updated above
       cell._inputs[key] = type === 'slider' ? parseFloat(val)
                          : type === 'checkbox' ? !!val
@@ -3153,8 +3157,7 @@ async function execCell(cell) {
     // create new widget
     const wrap = document.createElement('div');
     wrap.dataset.widgetKey = key;
-    wrap.className = 'cell-widget' + (opts.class ? ' ' + opts.class : '');
-    if (opts.id) wrap.id = opts.id;
+    wrap.className = 'cell-widget';
 
     const lbl = document.createElement('span');
     lbl.textContent = label;
@@ -4185,7 +4188,7 @@ function togglePresent() {
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_BUILD_DATE__ = '2026-02-22';
-const __AUDITABLE_BASE_SIZE__ = 221116;
+const __AUDITABLE_BASE_SIZE__ = 220869;
 
 (function() {
   const ver = $('#aboutVersion');
