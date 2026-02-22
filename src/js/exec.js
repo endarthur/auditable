@@ -253,7 +253,9 @@ export async function execCell(cell) {
     // check installed (offline) modules first
     if (window._installedModules[url]) {
       const entry = window._installedModules[url];
-      const src = typeof entry === 'string' ? entry : entry.source;
+      let src = typeof entry === 'string' ? entry : entry.source;
+      // resolve root-relative paths for legacy saved modules
+      try { src = resolveModulePaths(src, url); } catch {}
       const blob = new Blob([src], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
       const mod = await import(blobUrl);
@@ -265,6 +267,15 @@ export async function execCell(cell) {
     return mod;
   };
 
+  // resolve root-relative paths in module source so blob URLs work
+  const resolveModulePaths = (source, responseUrl) => {
+    const origin = new URL(responseUrl).origin;
+    return source.replace(/(from\s+["'])(\/[^"']+)(["'])/g, '$1' + origin + '$2$3')
+                 .replace(/(import\s*\(["'])(\/[^"']+)(["']\))/g, '$1' + origin + '$2$3')
+                 .replace(/(export\s+\*\s+from\s+["'])(\/[^"']+)(["'])/g, '$1' + origin + '$2$3')
+                 .replace(/(export\s*\{[^}]*\}\s*from\s+["'])(\/[^"']+)(["'])/g, '$1' + origin + '$2$3');
+  };
+
   const install = async (url) => {
     // normalize: add ?bundle for esm.sh if not present
     let bundleUrl = url;
@@ -274,7 +285,9 @@ export async function execCell(cell) {
     // fetch source
     const resp = await fetch(bundleUrl);
     if (!resp.ok) throw new Error(`Failed to fetch ${bundleUrl}: ${resp.status}`);
-    const source = await resp.text();
+    let source = await resp.text();
+    // resolve root-relative paths to absolute so blob URLs work
+    source = resolveModulePaths(source, resp.url);
     // store under original url with cell reference
     window._installedModules[url] = { source, cellId: cell.id };
     // also load it into cache

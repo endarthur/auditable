@@ -82,6 +82,7 @@ export function addCell(type, code = '', afterId = null, beforeId = null) {
 
   ta.focus();
   updateStatus();
+  notifyDirty();
   return cell;
 }
 
@@ -97,6 +98,7 @@ export function deleteCell(id) {
   // re-run to clean scope
   if (S.cells.some(c => c.type === 'code' || c.type === 'html')) runAll();
   updateStatus();
+  notifyDirty();
 }
 
 export function convertCell(id, newType) {
@@ -147,6 +149,7 @@ export function convertCell(id, newType) {
 
   selectCell(id);
   updateStatus();
+  notifyDirty();
   if (S.cells.some(c => c.type === 'code' || c.type === 'html')) runAll();
 }
 
@@ -168,5 +171,6 @@ export function moveCell(id, dir) {
     if (c._styleEl) document.head.appendChild(c._styleEl);
   }
 
+  notifyDirty();
   if (S.cells.some(c => c.type === 'code' || c.type === 'html')) runAll();
 }

@@ -1622,6 +1622,7 @@ const S = {
   findRegex: false,
   findMatches: [],   // { cellId, index, length }
   findCurrent: -1,
+  initialized: false, // set after loadFromEmbed/init completes
 };
 
 const JS_KEYWORDS = new Set([
@@ -2124,12 +2125,41 @@ const parseOutputClass = code => getDirective(code, 'outputClass');
 // ── code analysis ──
 
 function stripCommentsAndStrings(code) {
-  return code
+  code = code
     .replace(/\/\/.*$/gm, '')
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/'(?:[^'\\]|\\.)*'/g, '""')
-    .replace(/"(?:[^"\\]|\\.)*"/g, '""')
-    .replace(/`(?:[^`\\]|\\.)*`/g, '""');
+    .replace(/"(?:[^"\\]|\\.)*"/g, '""');
+  // template literals: replace string parts with spaces but keep ${expr} content
+  let out = '', i = 0;
+  while (i < code.length) {
+    if (code[i] === '`') {
+      i++; // skip opening backtick
+      while (i < code.length && code[i] !== '`') {
+        if (code[i] === '\\') { i += 2; continue; }
+        if (code[i] === '$' && code[i + 1] === '{') {
+          i += 2; // skip ${
+          let depth = 1;
+          out += ' ';
+          while (i < code.length && depth > 0) {
+            if (code[i] === '{') depth++;
+            else if (code[i] === '}') { depth--; if (depth === 0) break; }
+            out += code[i];
+            i++;
+          }
+          out += ' ';
+          i++; // skip closing }
+          continue;
+        }
+        i++;
+      }
+      i++; // skip closing backtick
+    } else {
+      out += code[i];
+      i++;
+    }
+  }
+  return out;
 }
 
 function parseNames(code) {
@@ -2566,7 +2596,9 @@ async function execCell(cell) {
     // check installed (offline) modules first
     if (window._installedModules[url]) {
       const entry = window._installedModules[url];
-      const src = typeof entry === 'string' ? entry : entry.source;
+      let src = typeof entry === 'string' ? entry : entry.source;
+      // resolve root-relative paths for legacy saved modules
+      try { src = resolveModulePaths(src, url); } catch {}
       const blob = new Blob([src], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
       const mod = await import(blobUrl);
@@ -2578,6 +2610,15 @@ async function execCell(cell) {
     return mod;
   };
 
+  // resolve root-relative paths in module source so blob URLs work
+  const resolveModulePaths = (source, responseUrl) => {
+    const origin = new URL(responseUrl).origin;
+    return source.replace(/(from\s+["'])(\/[^"']+)(["'])/g, '$1' + origin + '$2$3')
+                 .replace(/(import\s*\(["'])(\/[^"']+)(["']\))/g, '$1' + origin + '$2$3')
+                 .replace(/(export\s+\*\s+from\s+["'])(\/[^"']+)(["'])/g, '$1' + origin + '$2$3')
+                 .replace(/(export\s*\{[^}]*\}\s*from\s+["'])(\/[^"']+)(["'])/g, '$1' + origin + '$2$3');
+  };
+
   const install = async (url) => {
     // normalize: add ?bundle for esm.sh if not present
     let bundleUrl = url;
@@ -2587,7 +2628,9 @@ async function execCell(cell) {
     // fetch source
     const resp = await fetch(bundleUrl);
     if (!resp.ok) throw new Error(`Failed to fetch ${bundleUrl}: ${resp.status}`);
-    const source = await resp.text();
+    let source = await resp.text();
+    // resolve root-relative paths to absolute so blob URLs work
+    source = resolveModulePaths(source, resp.url);
     // store under original url with cell reference
     window._installedModules[url] = { source, cellId: cell.id };
     // also load it into cache
@@ -3164,6 +3207,7 @@ function addCell(type, code = '', afterId = null, beforeId = null) {
 
   ta.focus();
   updateStatus();
+  notifyDirty();
   return cell;
 }
 
@@ -3179,6 +3223,7 @@ function deleteCell(id) {
   // re-run to clean scope
   if (S.cells.some(c => c.type === 'code' || c.type === 'html')) runAll();
   updateStatus();
+  notifyDirty();
 }
 
 function convertCell(id, newType) {
@@ -3229,6 +3274,7 @@ function convertCell(id, newType) {
 
   selectCell(id);
   updateStatus();
+  notifyDirty();
   if (S.cells.some(c => c.type === 'code' || c.type === 'html')) runAll();
 }
 
@@ -3250,12 +3296,17 @@ function moveCell(id, dir) {
     if (c._styleEl) document.head.appendChild(c._styleEl);
   }
 
+  notifyDirty();
   if (S.cells.some(c => c.type === 'code' || c.type === 'html')) runAll();
 }
 
 // -- editor.js --
 
 // ── EDITING ──
+
+function notifyDirty() {
+  if (S.initialized && window.__AF_BRIDGE__) window.parent.postMessage({ type: 'af:dirty' }, '*');
+}
 
 function toggleAutorun() {
   S.autorun = !S.autorun;
@@ -3280,6 +3331,7 @@ function onCssEdit(id) {
   if (!cell) return;
   cell.code = cell.el.querySelector('textarea').value;
   if (cell._styleEl) cell._styleEl.textContent = cell.code;
+  notifyDirty();
 }
 
 function onHtmlEdit(id) {
@@ -3287,6 +3339,7 @@ function onHtmlEdit(id) {
   if (!cell) return;
   cell.code = cell.el.querySelector('textarea').value;
   cell.el.classList.add('stale');
+  notifyDirty();
 
   if (S.autorun) {
     clearTimeout(S.editTimer);
@@ -3308,6 +3361,7 @@ function onCodeEdit(id) {
   }
 
   cell.el.classList.add('stale');
+  notifyDirty();
 
   if (S.autorun) {
     clearTimeout(S.editTimer);
@@ -3318,6 +3372,11 @@ function onCodeEdit(id) {
 // -- settings.js --
 
 // ── SETTINGS ──
+
+// Safe localStorage access — blob URL iframes have opaque origins where localStorage throws
+function lsGet(key) { try { return localStorage.getItem(key); } catch { return null; } }
+function lsSet(key, val) { try { localStorage.setItem(key, val); } catch {} }
+function lsRemove(key) { try { localStorage.removeItem(key); } catch {} }
 
 function toggleSettings() {
   const overlay = $('#settingsOverlay');
@@ -3401,23 +3460,23 @@ function applyShowToggle(val) {
 }
 
 function applyGlobalExecMode(val) {
-  if (val) localStorage.setItem('auditable-exec-mode', val);
-  else localStorage.removeItem('auditable-exec-mode');
+  if (val) lsSet('auditable-exec-mode', val);
+  else lsRemove('auditable-exec-mode');
 }
 
 function applyGlobalRunOnLoad(val) {
-  if (val) localStorage.setItem('auditable-run-on-load', val);
-  else localStorage.removeItem('auditable-run-on-load');
+  if (val) lsSet('auditable-run-on-load', val);
+  else lsRemove('auditable-run-on-load');
 }
 
 function resolveExecMode() {
-  return localStorage.getItem('auditable-exec-mode')
+  return lsGet('auditable-exec-mode')
     || $('#setExecMode')?.value
     || __AUDITABLE_DEFAULT_EXEC_MODE__;
 }
 
 function resolveRunOnLoad() {
-  return localStorage.getItem('auditable-run-on-load')
+  return lsGet('auditable-run-on-load')
     || _runOnLoad
     || __AUDITABLE_DEFAULT_RUN_ON_LOAD__;
 }
@@ -3460,7 +3519,7 @@ function togglePresent() {
 
 const __AUDITABLE_VERSION__ = '0.1.0';
 const __AUDITABLE_BUILD_DATE__ = '2026-02-22';
-const __AUDITABLE_BASE_SIZE__ = 149617;
+const __AUDITABLE_BASE_SIZE__ = 154159;
 
 (function() {
   const ver = $('#aboutVersion');
@@ -3474,8 +3533,8 @@ const __AUDITABLE_BASE_SIZE__ = 149617;
 // ── EXECUTION SETTINGS INIT ──
 
 (function() {
-  const gm = localStorage.getItem('auditable-exec-mode') || '';
-  const gr = localStorage.getItem('auditable-run-on-load') || '';
+  const gm = lsGet('auditable-exec-mode') || '';
+  const gr = lsGet('auditable-run-on-load') || '';
   const selGm = $('#setGlobalExecMode');
   const selGr = $('#setGlobalRunOnLoad');
   if (selGm) selGm.value = gm;
@@ -3639,6 +3698,13 @@ ${'<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETT
 <script>\n${script}\n<\/script>
 </body>
 </html>`;
+
+  // AF bridge: send serialized HTML to parent shell instead of downloading
+  if (window.__AF_BRIDGE__) {
+    window.parent.postMessage({ type: 'af:serialized', payload: { html } }, '*');
+    setMsg('saved', 'ok');
+    return;
+  }
 
   // download
   const blob = new Blob([html], { type: 'text/html' });
@@ -4823,6 +4889,45 @@ function applySizeCompareRef(val) {
     addCell('md', '');
     addCell('code', '');
   }
+  S.initialized = true;
+})();
+
+// ── AF BRIDGE ──
+// When running inside AF shell (iframe), establish postMessage communication.
+// No-op when running standalone (window.parent === window).
+
+(function afBridge() {
+  if (window.parent === window) return;
+  window.__AF_BRIDGE__ = true;
+
+  const title = document.getElementById('docTitle')?.value || 'untitled';
+  window.parent.postMessage({ type: 'af:ready', payload: { title } }, '*');
+
+  window.addEventListener('message', (e) => {
+    const msg = e.data;
+    if (!msg?.type) return;
+    if (msg.type === 'af:serialize') saveNotebook();
+    else if (msg.type === 'af:saved') setMsg('saved', 'ok');
+    else if (msg.type === 'af:setTitle') {
+      const input = document.getElementById('docTitle');
+      if (input && msg.payload?.title) input.value = msg.payload.title;
+    } else if (msg.type === 'af:resize') {
+      // recalculate textarea heights after becoming visible
+      document.querySelectorAll('textarea').forEach(ta => {
+        ta.style.height = 'auto';
+        ta.style.height = ta.scrollHeight + 'px';
+        const hl = ta.parentElement?.querySelector('.highlight-layer');
+        if (hl) hl.style.height = ta.style.height;
+      });
+    }
+  });
+
+  document.getElementById('docTitle')?.addEventListener('input', () => {
+    window.parent.postMessage({
+      type: 'af:titleChanged',
+      payload: { title: document.getElementById('docTitle').value }
+    }, '*');
+  });
 })();
 </script>
 </body>

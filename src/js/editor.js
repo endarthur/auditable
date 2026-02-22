@@ -5,6 +5,10 @@ import { setMsg } from './ui.js';
 
 // ── EDITING ──
 
+function notifyDirty() {
+  if (S.initialized && window.__AF_BRIDGE__) window.parent.postMessage({ type: 'af:dirty' }, '*');
+}
+
 export function toggleAutorun() {
   S.autorun = !S.autorun;
   const btn = $('#autorunBtn');
@@ -28,6 +32,7 @@ export function onCssEdit(id) {
   if (!cell) return;
   cell.code = cell.el.querySelector('textarea').value;
   if (cell._styleEl) cell._styleEl.textContent = cell.code;
+  notifyDirty();
 }
 
 export function onHtmlEdit(id) {
@@ -35,6 +40,7 @@ export function onHtmlEdit(id) {
   if (!cell) return;
   cell.code = cell.el.querySelector('textarea').value;
   cell.el.classList.add('stale');
+  notifyDirty();
 
   if (S.autorun) {
     clearTimeout(S.editTimer);
@@ -56,6 +62,7 @@ export function onCodeEdit(id) {
   }
 
   cell.el.classList.add('stale');
+  notifyDirty();
 
   if (S.autorun) {
     clearTimeout(S.editTimer);

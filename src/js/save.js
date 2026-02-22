@@ -93,6 +93,13 @@ ${'<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETT
 </body>
 </html>`;
 
+  // AF bridge: send serialized HTML to parent shell instead of downloading
+  if (window.__AF_BRIDGE__) {
+    window.parent.postMessage({ type: 'af:serialized', payload: { html } }, '*');
+    setMsg('saved', 'ok');
+    return;
+  }
+
   // download
   const blob = new Blob([html], { type: 'text/html' });
   const url = URL.createObjectURL(blob);

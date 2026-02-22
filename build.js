@@ -5,48 +5,112 @@
 const fs = require('fs');
 const path = require('path');
 
-const srcDir = path.join(__dirname, 'src');
-const jsDir = path.join(srcDir, 'js');
+const target = (process.argv.find(a => a.startsWith('--target=')) || '').split('=')[1] || '';
 const lean = process.argv.includes('--lean');
 const execModeArg = (process.argv.find(a => a.startsWith('--exec-mode=')) || '').split('=')[1] || '';
 const runOnLoadArg = (process.argv.find(a => a.startsWith('--run-on-load=')) || '').split('=')[1] || '';
 
-// 1. Read main.js and extract import paths in order
-const mainSrc = fs.readFileSync(path.join(jsDir, 'main.js'), 'utf8');
-const importPaths = [];
-for (const line of mainSrc.split('\n')) {
-  if (lean && line.includes('@optional')) continue;
-  const m = line.match(/^import\s+.*['"]\.\/(.+?)['"];?\s*(?:\/\/.*)?$/);
-  if (m) importPaths.push(m[1]);
+// ── Shared: process modules from a main.js ──
+
+function processModules(mainPath, moduleDir, opts = {}) {
+  const mainSrc = fs.readFileSync(mainPath, 'utf8');
+  const importPaths = [];
+  for (const line of mainSrc.split('\n')) {
+    if (opts.lean && line.includes('@optional')) continue;
+    const m = line.match(/^import\s+.*['"]\.\/(.+?)['"];?\s*(?:\/\/.*)?$/);
+    if (m) importPaths.push(m[1]);
+  }
+
+  const chunks = [];
+  for (const relPath of importPaths) {
+    const filePath = path.join(moduleDir, relPath);
+    let src = fs.readFileSync(filePath, 'utf8');
+    const basename = path.basename(relPath);
+
+    // Strip import lines
+    src = src.replace(/^import\s+.*['"].*['"];?\s*$/gm, '');
+
+    // Replace export function -> function, export const -> const, etc.
+    src = src.replace(/^export function /gm, 'function ');
+    src = src.replace(/^export async function /gm, 'async function ');
+    src = src.replace(/^export const /gm, 'const ');
+    src = src.replace(/^export let /gm, 'let ');
+
+    // Strip export { ... } and export default lines
+    src = src.replace(/^export\s*\{[^}]*\};?\s*$/gm, '');
+    src = src.replace(/^export\s+default\s+.*$/gm, '');
+
+    // Trim leading/trailing blank lines
+    src = src.replace(/^\n+/, '').replace(/\n+$/, '');
+
+    chunks.push(`// -- ${basename} --\n\n${src}`);
+  }
+
+  return chunks.join('\n\n');
 }
 
-// 2. Process each module file
-const jsChunks = [];
-for (const relPath of importPaths) {
-  const filePath = path.join(jsDir, relPath);
-  let src = fs.readFileSync(filePath, 'utf8');
-  const basename = path.basename(relPath);
+// ══════════════════════════════════════════════════
+// TARGET: af
+// ══════════════════════════════════════════════════
 
-  // Strip import lines
-  src = src.replace(/^import\s+.*['"].*['"];?\s*$/gm, '');
+if (target === 'af') {
+  const afDir = path.join(__dirname, 'af');
+  const afJsDir = path.join(afDir, 'js');
 
-  // Replace export function -> function, export const -> const, etc.
-  src = src.replace(/^export function /gm, 'function ');
-  src = src.replace(/^export async function /gm, 'async function ');
-  src = src.replace(/^export const /gm, 'const ');
-  src = src.replace(/^export let /gm, 'let ');
+  // 1. Process AF modules
+  let afJs = processModules(path.join(afJsDir, 'main.js'), afJsDir);
 
-  // Strip export { ... } and export default lines
-  src = src.replace(/^export\s*\{[^}]*\};?\s*$/gm, '');
-  src = src.replace(/^export\s+default\s+.*$/gm, '');
+  // 2. Read the already-built auditable.html and embed as template literal
+  const auditablePath = path.join(__dirname, 'auditable.html');
+  if (!fs.existsSync(auditablePath)) {
+    console.error('Error: auditable.html not found. Run `node build.js` first.');
+    process.exit(1);
+  }
+  const auditableHtml = fs.readFileSync(auditablePath, 'utf8');
+  const escaped = auditableHtml.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${').replace(/<\/script>/gi, '<\\/script>');
+  afJs = `const __AUDITABLE_RUNTIME__ = \`${escaped}\`;\n\n` + afJs;
 
-  // Trim leading/trailing blank lines
-  src = src.replace(/^\n+/, '').replace(/\n+$/, '');
+  // 3. Read AF CSS and template
+  const afCss = fs.readFileSync(path.join(afDir, 'style.css'), 'utf8');
+  const afTemplate = fs.readFileSync(path.join(afDir, 'template.html'), 'utf8');
 
-  jsChunks.push(`// -- ${basename} --\n\n${src}`);
+  // 4. Assemble af.html
+  const afHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Auditable Files</title>
+<style>
+${afCss}
+</style>
+</head>
+<body>
+
+${afTemplate}
+
+<script>
+${afJs}
+</script>
+</body>
+</html>
+`;
+
+  const afOutPath = path.join(__dirname, 'af.html');
+  fs.writeFileSync(afOutPath, afHtml);
+  const afSize = fs.statSync(afOutPath).size;
+  console.log(`Built af.html (${(afSize / 1024).toFixed(1)} KB)`);
+  process.exit(0);
 }
 
-let js = jsChunks.join('\n\n');
+// ══════════════════════════════════════════════════
+// TARGET: auditable (default)
+// ══════════════════════════════════════════════════
+
+const srcDir = path.join(__dirname, 'src');
+const jsDir = path.join(srcDir, 'js');
+
+let js = processModules(path.join(jsDir, 'main.js'), jsDir, { lean });
 
 // 3. Read CSS and HTML template
 const css = fs.readFileSync(path.join(srcDir, 'style.css'), 'utf8');

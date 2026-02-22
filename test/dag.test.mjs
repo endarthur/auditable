@@ -236,6 +236,22 @@ describe('findUses', () => {
     const uses = findUses('const z = 1;', allDefined);
     assert.strictEqual(uses.size, 0);
   });
+
+  it('finds variables inside template literal expressions', () => {
+    const allDefined = new Set(['steps', 'sigma', 'rho', 'beta']);
+    const uses = findUses('display(`${steps} steps · σ=${sigma} ρ=${rho} β=${beta}`);', allDefined);
+    assert.ok(uses.has('steps'));
+    assert.ok(uses.has('sigma'));
+    assert.ok(uses.has('rho'));
+    assert.ok(uses.has('beta'));
+  });
+
+  it('ignores template literal string parts', () => {
+    const allDefined = new Set(['x', 'hello']);
+    const uses = findUses('const msg = `hello ${x}`;', allDefined);
+    assert.ok(uses.has('x'));
+    assert.ok(!uses.has('hello'));
+  });
 });
 
 // ── findHtmlUses ──

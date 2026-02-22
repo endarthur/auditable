@@ -24,6 +24,7 @@ export const S = {
   findRegex: false,
   findMatches: [],   // { cellId, index, length }
   findCurrent: -1,
+  initialized: false, // set after loadFromEmbed/init completes
 };
 
 export const JS_KEYWORDS = new Set([
