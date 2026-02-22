@@ -6,6 +6,7 @@ import { getSettings } from './settings.js';
 
 const __AUDITABLE_PUBLIC_KEY__ = '';
 const __AUDITABLE_REPO__ = 'endarthur/auditable';
+const __AUDITABLE_PAGES_URL__ = 'https://endarthur.github.io/auditable';
 
 // ── SIGNATURE EXTRACTION ──
 
@@ -153,10 +154,11 @@ async function checkForUpdate() {
   setUpdateStatus('checking...', '');
 
   try {
-    const resp = await fetch('https://api.github.com/repos/' + __AUDITABLE_REPO__ + '/releases/latest');
-    if (!resp.ok) throw new Error('GitHub API returned ' + resp.status);
-    const release = await resp.json();
-    const remoteVersion = release.tag_name || '';
+    // Fetch version.json from GitHub Pages (CORS-friendly)
+    const vResp = await fetch(__AUDITABLE_PAGES_URL__ + '/version.json');
+    if (!vResp.ok) throw new Error('version check failed: ' + vResp.status);
+    const vData = await vResp.json();
+    const remoteVersion = vData.version || '';
     const currentVersion = $('#updateCurrentVer')?.textContent || 'v0.0.0';
 
     if (compareVersions(currentVersion, remoteVersion) >= 0) {
@@ -165,24 +167,12 @@ async function checkForUpdate() {
       return;
     }
 
-    // Newer version available
-    const notes = (release.body || '').slice(0, 200);
-    const asset = (release.assets || []).find(a => a.name === 'auditable.html');
-    if (!asset) {
-      setUpdateStatus('new version ' + remoteVersion + ' found, but no auditable.html asset', 'warn');
-      if (btn) btn.disabled = false;
-      return;
-    }
-
     setUpdateStatus(
       '<strong>' + remoteVersion + '</strong> available'
-      + (notes ? '<div class="update-notes">' + escHtml(notes) + '</div>' : '')
       + '<button id="updateApplyBtn" onclick="applyOnlineUpdate()">update</button>',
       'available'
     );
 
-    // Store asset URL for the apply step
-    window._updateAssetUrl = asset.browser_download_url;
     window._updateVersion = remoteVersion;
   } catch (e) {
     setUpdateStatus('error: ' + escHtml(e.message), 'err');
@@ -193,12 +183,11 @@ async function checkForUpdate() {
 // ── APPLY ONLINE UPDATE ──
 
 async function applyOnlineUpdate() {
-  const url = window._updateAssetUrl;
-  if (!url) return;
   setUpdateStatus('downloading...', '');
 
   try {
-    const resp = await fetch(url);
+    // Download signed build from GitHub Pages (CORS-friendly)
+    const resp = await fetch(__AUDITABLE_PAGES_URL__ + '/auditable.html');
     if (!resp.ok) throw new Error('download failed: ' + resp.status);
     const newHtml = await resp.text();
     await applyUpdate(newHtml, window._updateVersion);
