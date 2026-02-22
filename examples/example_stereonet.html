@@ -1,4 +1,6 @@
 <!DOCTYPE html>
+<!-- auditable — a reactive computational notebook in a single HTML file -->
+<!-- https://github.com/endarthur/auditable — MIT license -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -1886,9 +1888,11 @@ body.presenting .find-bar { display: none !important; }
 </div>
 
 
+<!-- cell data: JSON array of {type, code, collapsed?} -->
 <!--AUDITABLE-DATA
 [{"type":"md","code":"# interactive stereonet\n\nusing `@gcu/bearing` to plot structural geology data on an equal-area stereonet. try changing the measurements or rotating the view."},{"type":"code","code":"const { Stereonet } = await load(\"https://esm.sh/@gcu/bearing\");"},{"type":"code","code":"// bedding planes — strike/dip (right-hand rule)\nconst planes = [\n  [120, 35], [125, 40], [118, 32],\n  [130, 38], [115, 30], [122, 42],\n  [128, 36], [117, 33], [135, 45],\n];\n\n// a fault\nconst fault = [210, 65];"},{"type":"code","code":"const trend = ui.slider(\"view trend\", 0, {min:0, max:360, step:5});\nconst plunge = ui.slider(\"view plunge\", 90, {min:0, max:90, step:5});\nconst showPlanes = ui.checkbox(\"great circles\", true);\nconst showPoles = ui.checkbox(\"poles\", true);"},{"type":"code","code":"const s = new Stereonet({ size: 500, projection: 'equal-area' });\n\nif (trend !== 0 || plunge !== 90) {\n  s.setCenter(trend, plunge);\n}\n\nif (showPlanes) {\n  for (const [strike, dip] of planes) {\n    s.plane(strike, dip);\n  }\n  s.plane(fault[0], fault[1], { color: '#c33', width: 2 });\n}\n\nif (showPoles) {\n  for (const [strike, dip] of planes) {\n    s.pole(strike, dip);\n  }\n  s.pole(fault[0], fault[1], { color: '#c33', radius: 5 });\n}\n\ns.render();\nui.display(s.element());\nui.display(`${planes.length} bedding planes + 1 fault \\u00b7 view: ${trend}/${plunge}`);"}]
 AUDITABLE-DATA-->
+<!-- notebook settings: JSON {theme, fontSize, width, ...} -->
 <!--AUDITABLE-SETTINGS
 {"theme":"dark","fontSize":13,"width":"860"}
 AUDITABLE-SETTINGS-->
@@ -3093,6 +3097,18 @@ function topoSort(dirtyIds) {
 }
 
 // -- exec.js --
+
+// ── EXECUTION ENGINE ──
+//
+// Scope model: each cell runs inside an AsyncFunction where upstream variables
+// are passed as parameters. This is pass-by-value for primitives — reassigning
+// a variable in cell A (e.g. `grid = next`) does NOT propagate to cell B.
+// Mutable state that needs to survive across callbacks belongs in %manual cells
+// using DOM elements, objects, or closures.
+//
+// Cell builtins (display, canvas, slider, load, install, installBinary, etc.)
+// are injected as additional parameters — listed in _injected, not in scope.
+// They are NOT propagated to downstream cells.
 
 // ── BINARY HELPERS ──
 
@@ -4427,7 +4443,7 @@ function togglePresent() {
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_BUILD_DATE__ = '2026-02-22';
-const __AUDITABLE_BASE_SIZE__ = 231970;
+const __AUDITABLE_BASE_SIZE__ = 235208;
 
 (function() {
   const ver = $('#aboutVersion');
@@ -4639,10 +4655,10 @@ async function verifySignature(html) {
 function reassemble(newHtml, oldData) {
   let html = newHtml;
 
-  // Remove any existing data/settings/modules comments from the new template
-  html = html.replace(/<!--AUDITABLE-DATA\n[\s\S]*?\nAUDITABLE-DATA-->\n?/g, '');
-  html = html.replace(/<!--AUDITABLE-SETTINGS\n[\s\S]*?\nAUDITABLE-SETTINGS-->\n?/g, '');
-  html = html.replace(/<!--AUDITABLE-MODULES\n[\s\S]*?\nAUDITABLE-MODULES-->\n?/g, '');
+  // Remove any existing data/settings/modules comments (and their description comments) from the new template
+  html = html.replace(/(?:<!-- [^\n]*-->\n)?<!--AUDITABLE-DATA\n[\s\S]*?\nAUDITABLE-DATA-->\n?/g, '');
+  html = html.replace(/(?:<!-- [^\n]*-->\n)?<!--AUDITABLE-SETTINGS\n[\s\S]*?\nAUDITABLE-SETTINGS-->\n?/g, '');
+  html = html.replace(/(?:<!-- [^\n]*-->\n)?<!--AUDITABLE-MODULES\n[\s\S]*?\nAUDITABLE-MODULES-->\n?/g, '');
 
   // Build data block to inject
   const parts = [];
@@ -4864,12 +4880,12 @@ function finishUpdate(newHtml, version) {
       code: c.code,
       collapsed: c.el?.classList.contains('collapsed') || undefined
     }));
-    oldData.data = '<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->';
+    oldData.data = '<!-- cell data: JSON array of {type, code, collapsed?} -->\n<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->';
   }
   if (window._installedModules && Object.keys(window._installedModules).length) {
-    oldData.modules = '<!--AUDITABLE-MODULES\n' + JSON.stringify(window._installedModules).replace(/--/g, '\\u002d\\u002d') + '\nAUDITABLE-MODULES-->';
+    oldData.modules = '<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId} -->\n<!--AUDITABLE-MODULES\n' + encodeModules(window._installedModules) + '\nAUDITABLE-MODULES-->';
   }
-  oldData.settings = '<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->';
+  oldData.settings = '<!-- notebook settings: JSON {theme, fontSize, width, ...} -->\n<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->';
 
   const result = reassemble(newHtml, oldData);
 
@@ -5018,6 +5034,22 @@ async function verifySelf() {
 
 // -- save.js --
 
+// ── MODULES ENCODING ──
+// base64-encode modules JSON to avoid HTML comment / String.replace issues
+// (source code can contain --, $', etc.)
+
+function encodeModules(obj) {
+  const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(obj))));
+  return b64.replace(/.{1,76}/g, '$&\n').trimEnd();
+}
+
+function decodeModules(raw) {
+  const b64 = raw.replace(/\s/g, '');
+  // detect legacy format: starts with { means raw JSON (not base64)
+  if (b64.startsWith('{') || b64.startsWith('%7B')) return JSON.parse(raw);
+  return JSON.parse(decodeURIComponent(escape(atob(b64))));
+}
+
 // ── SAVE / LOAD ──
 
 // save mode: 'normal' or 'packed'
@@ -5141,9 +5173,9 @@ ${findBarHTML}
 
 ${statusbarHTML}
 
-${'<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->'}
-${Object.keys(window._installedModules || {}).length ? '<!--AUDITABLE-MODULES\n' + JSON.stringify(window._installedModules).replace(/--/g, '\\u002d\\u002d') + '\nAUDITABLE-MODULES-->' : ''}
-${'<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->'}
+${'<!-- cell data: JSON array of {type, code, collapsed?} -->\n<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->'}
+${Object.keys(window._installedModules || {}).length ? '<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId} -->\n<!--AUDITABLE-MODULES\n' + encodeModules(window._installedModules) + '\nAUDITABLE-MODULES-->' : ''}
+${'<!-- notebook settings: JSON {theme, fontSize, width, ...} -->\n<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->'}
 
 <script>\n${script}\n<\/script>
 </body>
@@ -5191,25 +5223,56 @@ async function savePackedNotebook() {
     const stream = blob.stream().pipeThrough(cs);
     const compressed = await new Response(stream).arrayBuffer();
     const b64 = btoa(String.fromCharCode(...new Uint8Array(compressed)));
+    const b64Lines = b64.replace(/.{1,76}/g, '$&\n');
 
-    const loader = '<!DOCTYPE html>\n'
-      + '<html lang="en"><head><meta charset="UTF-8">'
-      + '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
-      + '<title>Auditable \u2014 ' + esc(title) + '</title>'
-      + '<style>html{background:#1a1a1a}'
-      + 'body{color:#999;font:14px/1.5 monospace;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}'
-      + '</style></head><body>'
-      + '<div id="_l">unpacking\u2026</div>'
-      + '<script>'
-      + "(async()=>{"
-      + "var b='" + b64 + "';"
-      + "var r=new Response(new Blob([Uint8Array.from(atob(b),c=>c.charCodeAt(0))]));"
-      + "var s=r.body.pipeThrough(new DecompressionStream('gzip'));"
-      + "var h=await new Response(s).text();"
-      + "h=h.replace('<head>','<head><meta name=\"auditable-packed\">');"
-      + "document.open();document.write(h);document.close();"
-      + "})().catch(function(e){document.getElementById('_l').textContent='error: '+e.message});"
-      + '<\/script></body></html>';
+    const loader = `<!DOCTYPE html>
+<!-- packed auditable notebook -->
+<!-- the full notebook is gzip-compressed and base64-encoded in the <pre> block below. -->
+<!-- on load, the script decodes and decompresses it, then replaces the page contents. -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Auditable \u2014 ${esc(title)}</title>
+  <style>
+    html { background: #1a1a1a }
+    body { color: #999; font: 14px/1.5 monospace; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0 }
+    #_d { display: none }
+  </style>
+</head>
+<body>
+<div id="_l">unpacking\u2026</div>
+
+<!-- base64-encoded gzip payload (76-char lines) -->
+<pre id="_d">
+${b64Lines}</pre>
+
+<script>
+(async () => {
+  // 1. read base64 from the hidden <pre>, strip whitespace from line wrapping
+  var b64 = document.getElementById('_d').textContent.replace(/\\s/g, '');
+
+  // 2. decode base64 to binary
+  var bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+
+  // 3. decompress gzip via DecompressionStream
+  var stream = new Response(new Blob([bytes])).body.pipeThrough(new DecompressionStream('gzip'));
+  var html = await new Response(stream).text();
+
+  // 4. mark as packed (so the notebook knows it was loaded from a packed save)
+  html = html.replace('<head>', '<head><meta name="auditable-packed">');
+
+  // 5. replace the current page with the full notebook
+  document.open();
+  document.write(html);
+  document.close();
+})().catch(function(e) {
+  document.getElementById('_l').textContent = 'error: ' + e.message;
+});
+<\/script>
+</body>
+</html>`;
+
 
     const fn = downloadHtml(loader, title);
     const kb = (loader.length / 1024).toFixed(0);
@@ -5231,7 +5294,7 @@ function loadFromEmbed() {
   const modMatch = raw.match(/<!--AUDITABLE-MODULES\n([\s\S]*?)\nAUDITABLE-MODULES-->/);
   if (modMatch) {
     try {
-      window._installedModules = JSON.parse(modMatch[1]);
+      window._installedModules = decodeModules(modMatch[1]);
     } catch (e) {
       console.error('Failed to parse installed modules:', e);
     }
@@ -7334,6 +7397,18 @@ window.newNotebook = newNotebook;
 // ── AF BRIDGE ──
 // When running inside AF shell (iframe), establish postMessage communication.
 // No-op when running standalone (window.parent === window).
+//
+// Message protocol (notebook ↔ AF shell):
+//   af:ready          → sent on init with { title }
+//   af:serialize      ← received to trigger saveNotebook()
+//   af:saved          ← received after save (shows "saved" status)
+//   af:setTitle       ← received to update docTitle input
+//   af:resize         ← received when iframe becomes visible (recalc textareas)
+//   af:titleChanged   → sent when user edits the title
+//   af:fileRequest    → sent to request file picker { id, accept }
+//   af:fileResult     ← received with picked file { id, file }
+//   af:download       → sent to request download { data, filename, mimeType }
+//   af:dirty          → sent when notebook has unsaved changes
 
 (function afBridge() {
   if (window.parent === window) return;

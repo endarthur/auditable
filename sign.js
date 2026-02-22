@@ -43,7 +43,7 @@ const pubB64 = pubRaw.toString('base64');
 let html = fs.readFileSync(file, 'utf8');
 
 // Remove any existing signature comment
-html = html.replace(/<!--AUDITABLE-SIGNATURE\n[\s\S]*?\nAUDITABLE-SIGNATURE-->\n?/g, '');
+html = html.replace(/(?:<!-- [^\n]*-->\n)?<!--AUDITABLE-SIGNATURE\n[\s\S]*?\nAUDITABLE-SIGNATURE-->\n?/g, '');
 
 // Extract style and script content
 const styleMatch = html.match(/<style>([\s\S]*?)<\/style>/);
@@ -53,7 +53,13 @@ if (!styleMatch || !scriptMatch) {
   process.exit(1);
 }
 
-// Construct deterministic signed content
+// Construct deterministic signed content.
+// The signed payload is a canonical concatenation of the runtime:
+//   "AUDITABLE-SIGNED-CONTENT\n" + <style content> + "\n"
+//   + "AUDITABLE-STYLE-SCRIPT-BOUNDARY\n" + <script content>
+// This is independent of cell data, settings, and modules — only the
+// runtime (CSS + JS) is signed. User content can change without invalidating
+// the signature. Verification uses the same construction in update.js and scan/.
 const signedContent = 'AUDITABLE-SIGNED-CONTENT\n'
   + styleMatch[1] + '\n'
   + 'AUDITABLE-STYLE-SCRIPT-BOUNDARY\n'
@@ -69,7 +75,7 @@ const sigObj = {
   alg: 'Ed25519'
 };
 
-const sigComment = '<!--AUDITABLE-SIGNATURE\n' + JSON.stringify(sigObj) + '\nAUDITABLE-SIGNATURE-->';
+const sigComment = '<!-- Ed25519 signature: verify style+script content against pub key -->\n<!--AUDITABLE-SIGNATURE\n' + JSON.stringify(sigObj) + '\nAUDITABLE-SIGNATURE-->';
 
 // Inject before <script> tag
 html = html.replace(/<script>/, sigComment + '\n<script>');

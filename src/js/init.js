@@ -26,6 +26,18 @@ import { registerProvider } from './stdlib.js';
 // ── AF BRIDGE ──
 // When running inside AF shell (iframe), establish postMessage communication.
 // No-op when running standalone (window.parent === window).
+//
+// Message protocol (notebook ↔ AF shell):
+//   af:ready          → sent on init with { title }
+//   af:serialize      ← received to trigger saveNotebook()
+//   af:saved          ← received after save (shows "saved" status)
+//   af:setTitle       ← received to update docTitle input
+//   af:resize         ← received when iframe becomes visible (recalc textareas)
+//   af:titleChanged   → sent when user edits the title
+//   af:fileRequest    → sent to request file picker { id, accept }
+//   af:fileResult     ← received with picked file { id, file }
+//   af:download       → sent to request download { data, filename, mimeType }
+//   af:dirty          → sent when notebook has unsaved changes
 
 (function afBridge() {
   if (window.parent === window) return;

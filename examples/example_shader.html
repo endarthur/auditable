@@ -1,4 +1,6 @@
 <!DOCTYPE html>
+<!-- auditable — a reactive computational notebook in a single HTML file -->
+<!-- https://github.com/endarthur/auditable — MIT license -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -1886,12 +1888,281 @@ body.presenting .find-bar { display: none !important; }
 </div>
 
 
+<!-- cell data: JSON array of {type, code, collapsed?} -->
 <!--AUDITABLE-DATA
 [{"type":"md","code":"# shader playground\n\na Shadertoy-compatible WebGL 2 shader running in a single cell. the `@auditable/shader` extension injects `iTime`, `iResolution`, `iMouse` and other builtins automatically — just write `mainImage`. the `glsl` tag provides syntax highlighting and completions inside the template literal.\n\nthe sliders use `onInput` callbacks to update custom uniforms in real time, with zero DAG overhead."},{"type":"code","code":"// %manual\nconst { shader, glsl } = await load(\"./ext/shader/index.js\");\n\nconst c = ui.canvas(600, 400);\nconst col = [0.78, 0.61, 0.24];\n\nconst s = shader(c, glsl`\n  void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n    vec2 uv = fragCoord / iResolution.xy;\n    float t = iTime * speed;\n\n    // layered sine waves\n    float r = 0.5 + 0.5 * sin(uv.x * 6.0 + t);\n    float g = 0.5 + 0.5 * sin(uv.y * 6.0 + t * 1.3 + 2.0);\n    float b = 0.5 + 0.5 * sin((uv.x + uv.y) * 4.0 + t * 0.7 + 4.0);\n\n    // mix with custom color\n    vec3 base = vec3(r, g, b);\n    fragColor = vec4(mix(base, color, 0.4), 1.0);\n  }\n`, {\n  uniforms: { speed: 1.0, color: col }\n});\n\nui.slider(\"speed\", 1.0, {min: 0.1, max: 5.0, step: 0.1, onInput: v => s.set(\"speed\", v)});\nui.slider(\"red\",   0.78, {min: 0, max: 1, step: 0.01, onInput: v => { col[0] = v; s.set(\"color\", col); }});\nui.slider(\"green\", 0.61, {min: 0, max: 1, step: 0.01, onInput: v => { col[1] = v; s.set(\"color\", col); }});\nui.slider(\"blue\",  0.24, {min: 0, max: 1, step: 0.01, onInput: v => { col[2] = v; s.set(\"color\", col); }});\n\ninvalidation.then(() => s.destroy());"}]
 AUDITABLE-DATA-->
+<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId} -->
 <!--AUDITABLE-MODULES
-{"./ext/shader/index.js":{"source":"// @auditable/shader — Shadertoy-compatible WebGL 2 shader helper\n// Zero dependencies, pure WebGL 2.\n\n// ── glsl tagged template literal ──\n\nexport function glsl(strings, ...values) {\n  let result = strings[0];\n  for (let i = 0; i < values.length; i++) result += values[i] + strings[i + 1];\n  return result;\n}\n\n// ── GLSL tokenizer (for syntax highlighting) ──\n\nconst GLSL_KEYWORDS = new Set([\n  'void','return','if','else','for','while','do','switch','case','default',\n  'break','continue','discard','struct','in','out','inout','uniform',\n  'varying','attribute','const','flat','smooth','centroid','layout',\n  'highp','mediump','lowp','precision','invariant','true','false',\n]);\n\nconst GLSL_TYPES = new Set([\n  'float','int','uint','bool','double',\n  'vec2','vec3','vec4','ivec2','ivec3','ivec4','uvec2','uvec3','uvec4',\n  'bvec2','bvec3','bvec4','dvec2','dvec3','dvec4',\n  'mat2','mat3','mat4','mat2x2','mat2x3','mat2x4',\n  'mat3x2','mat3x3','mat3x4','mat4x2','mat4x3','mat4x4',\n  'sampler2D','sampler3D','samplerCube','sampler2DShadow',\n  'sampler2DArray','isampler2D','isampler3D','usampler2D','usampler3D',\n]);\n\nconst GLSL_BUILTINS = new Set([\n  'radians','degrees','sin','cos','tan','asin','acos','atan',\n  'sinh','cosh','tanh','asinh','acosh','atanh',\n  'pow','exp','log','exp2','log2','sqrt','inversesqrt',\n  'abs','sign','floor','ceil','fract','mod','modf',\n  'min','max','clamp','mix','step','smoothstep',\n  'length','distance','dot','cross','normalize','faceforward',\n  'reflect','refract','matrixCompMult','outerProduct','transpose',\n  'determinant','inverse','lessThan','lessThanEqual',\n  'greaterThan','greaterThanEqual','equal','notEqual','any','all','not',\n  'texture','textureLod','textureProj','textureGrad','texelFetch',\n  'dFdx','dFdy','fwidth',\n  'mainImage',\n]);\n\nconst SHADERTOY_UNIFORMS = [\n  'iResolution','iTime','iTimeDelta','iFrame','iMouse',\n  'iChannel0','iChannel1','iChannel2','iChannel3',\n  'iChannelResolution','iChannelTime','iDate','iSampleRate',\n  'fragColor','fragCoord',\n];\n\nfunction tokenizeGlsl(code) {\n  const tokens = [];\n  let i = 0;\n  const len = code.length;\n\n  while (i < len) {\n    // line comment\n    if (code[i] === '/' && code[i + 1] === '/') {\n      const start = i;\n      while (i < len && code[i] !== '\\n') i++;\n      tokens.push({ type: 'cmt', text: code.slice(start, i) });\n      continue;\n    }\n    // block comment\n    if (code[i] === '/' && code[i + 1] === '*') {\n      const start = i;\n      i += 2;\n      while (i < len && !(code[i - 1] === '*' && code[i] === '/')) i++;\n      if (i < len) i++;\n      tokens.push({ type: 'cmt', text: code.slice(start, i) });\n      continue;\n    }\n    // preprocessor\n    if (code[i] === '#') {\n      const start = i;\n      while (i < len && code[i] !== '\\n') i++;\n      tokens.push({ type: 'atrule', text: code.slice(start, i) });\n      continue;\n    }\n    // numbers\n    if (/\\d/.test(code[i]) || (code[i] === '.' && i + 1 < len && /\\d/.test(code[i + 1]))) {\n      const start = i;\n      if (code[i] === '0' && (code[i + 1] === 'x' || code[i + 1] === 'X')) {\n        i += 2;\n        while (i < len && /[0-9a-fA-F]/.test(code[i])) i++;\n      } else {\n        while (i < len && /[0-9.eE+-]/.test(code[i])) i++;\n      }\n      // skip type suffix (u, f)\n      if (i < len && /[uUfF]/.test(code[i])) i++;\n      tokens.push({ type: 'num', text: code.slice(start, i) });\n      continue;\n    }\n    // identifiers / keywords\n    if (/[a-zA-Z_]/.test(code[i])) {\n      const start = i;\n      while (i < len && /\\w/.test(code[i])) i++;\n      const word = code.slice(start, i);\n      if (GLSL_KEYWORDS.has(word)) {\n        tokens.push({ type: 'kw', text: word });\n      } else if (GLSL_TYPES.has(word)) {\n        tokens.push({ type: 'const', text: word });\n      } else if (GLSL_BUILTINS.has(word)) {\n        tokens.push({ type: 'fn', text: word });\n      } else if (i < len && code[i] === '(') {\n        tokens.push({ type: 'fn', text: word });\n      } else {\n        tokens.push({ type: 'id', text: word });\n      }\n      continue;\n    }\n    // operators\n    if ('=+-*/<>!&|^~%?:'.includes(code[i])) {\n      tokens.push({ type: 'op', text: code[i] });\n      i++;\n      continue;\n    }\n    // punctuation\n    if ('(){}[];,.'.includes(code[i])) {\n      tokens.push({ type: 'punc', text: code[i] });\n      i++;\n      continue;\n    }\n    // whitespace / other\n    tokens.push({ type: '', text: code[i] });\n    i++;\n  }\n\n  return tokens;\n}\n\n// ── GLSL completions ──\n\nfunction glslCompletions() {\n  const items = [];\n  for (const w of GLSL_KEYWORDS)      items.push({ text: w, kind: 'kw' });\n  for (const w of GLSL_TYPES)         items.push({ text: w, kind: 'const' });\n  for (const w of GLSL_BUILTINS)      items.push({ text: w, kind: 'fn' });\n  for (const w of SHADERTOY_UNIFORMS) items.push({ text: w, kind: 'var' });\n  return items;\n}\n\n// ── Self-registration ──\n\nif (typeof window !== 'undefined') {\n  if (!window._taggedLanguages) window._taggedLanguages = {};\n  window._taggedLanguages.glsl = { tokenize: tokenizeGlsl, completions: glslCompletions };\n}\n\n// ── GLSL constants ──\n\nconst FULLSCREEN_VS = `#version 300 es\nout vec2 vUV;\nvoid main() {\n  // fullscreen triangle from gl_VertexID — no VBO needed\n  vUV = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);\n  gl_Position = vec4(vUV * 2.0 - 1.0, 0.0, 1.0);\n}`;\n\nconst FRAG_PREAMBLE = `#version 300 es\nprecision highp float;\nin vec2 vUV;\nout vec4 fragColor_out;\n\nuniform vec3  iResolution;\nuniform float iTime;\nuniform float iTimeDelta;\nuniform int   iFrame;\nuniform vec4  iMouse;\n`;\n\nconst SHADERTOY_MAIN = `\nvoid main() {\n  mainImage(fragColor_out, vUV * iResolution.xy);\n}`;\n\n// ── ShaderError — adjusts line numbers to user code ──\n\nclass ShaderError extends Error {\n  constructor(log, preambleLines) {\n    // try to adjust line numbers: \"ERROR: 0:LINE:\" → subtract preamble\n    const adjusted = log.replace(/ERROR:\\s*(\\d+):(\\d+):/g, (m, col, line) => {\n      const userLine = parseInt(line) - preambleLines;\n      return userLine > 0 ? `ERROR: ${col}:${userLine}:` : m;\n    });\n    super(adjusted);\n    this.name = 'ShaderError';\n    this.rawLog = log;\n  }\n}\n\n// ── Helpers ──\n\nfunction detectMode(code) {\n  // strip single-line and multi-line comments\n  const stripped = code.replace(/\\/\\/.*$/gm, '').replace(/\\/\\*[\\s\\S]*?\\*\\//g, '');\n  if (/\\bvoid\\s+main\\s*\\(/.test(stripped)) return 'raw';\n  return 'shadertoy';\n}\n\nfunction inferType(value) {\n  if (typeof value === 'boolean') return 'bool';\n  if (typeof value === 'number') return 'float';\n  if (Array.isArray(value)) {\n    if (value.length === 2) return 'vec2';\n    if (value.length === 3) return 'vec3';\n    if (value.length === 4) return 'vec4';\n  }\n  return null;\n}\n\nfunction glslType(type) {\n  if (type === 'bool') return 'int'; // pass booleans as int\n  return type;\n}\n\nfunction assembleFragment(code, mode, customDecls) {\n  let src = FRAG_PREAMBLE;\n  if (customDecls) src += customDecls + '\\n';\n  src += '\\n' + code + '\\n';\n  if (mode === 'shadertoy') src += SHADERTOY_MAIN;\n  return src;\n}\n\nfunction countPreambleLines(customDecls) {\n  let n = FRAG_PREAMBLE.split('\\n').length;\n  if (customDecls) n += customDecls.split('\\n').length;\n  return n + 1; // +1 for the blank line before user code\n}\n\n// ── GL compile/link ──\n\nfunction compileShader(gl, type, source) {\n  const s = gl.createShader(type);\n  gl.shaderSource(s, source);\n  gl.compileShader(s);\n  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {\n    const log = gl.getShaderInfoLog(s);\n    gl.deleteShader(s);\n    throw new ShaderError(log, 0);\n  }\n  return s;\n}\n\nfunction linkProgram(gl, vs, fs) {\n  const p = gl.createProgram();\n  gl.attachShader(p, vs);\n  gl.attachShader(p, fs);\n  gl.linkProgram(p);\n  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {\n    const log = gl.getProgramInfoLog(p);\n    gl.deleteProgram(p);\n    throw new Error('Link error: ' + log);\n  }\n  return p;\n}\n\n// ── Mouse tracking (Shadertoy convention) ──\n\nfunction setupMouse(canvas) {\n  const mouse = { x: 0, y: 0, z: 0, w: 0 };\n  let down = false;\n\n  const rect = () => canvas.getBoundingClientRect();\n\n  const onMove = (e) => {\n    if (!down) return;\n    const r = rect();\n    mouse.x = e.clientX - r.left;\n    mouse.y = r.height - (e.clientY - r.top); // flip Y\n  };\n\n  const onDown = (e) => {\n    down = true;\n    const r = rect();\n    mouse.x = e.clientX - r.left;\n    mouse.y = r.height - (e.clientY - r.top);\n    mouse.z = mouse.x;\n    mouse.w = mouse.y;\n  };\n\n  const onUp = () => {\n    down = false;\n    mouse.z = -Math.abs(mouse.z);\n    mouse.w = -Math.abs(mouse.w);\n  };\n\n  canvas.addEventListener('mousemove', onMove);\n  canvas.addEventListener('mousedown', onDown);\n  canvas.addEventListener('mouseup', onUp);\n\n  const destroy = () => {\n    canvas.removeEventListener('mousemove', onMove);\n    canvas.removeEventListener('mousedown', onDown);\n    canvas.removeEventListener('mouseup', onUp);\n  };\n\n  return { mouse, destroy };\n}\n\n// ── Uniform setters ──\n\nfunction makeSetter(gl, loc, type) {\n  switch (type) {\n    case 'float': return (v) => gl.uniform1f(loc, v);\n    case 'vec2':  return (v) => gl.uniform2fv(loc, v);\n    case 'vec3':  return (v) => gl.uniform3fv(loc, v);\n    case 'vec4':  return (v) => gl.uniform4fv(loc, v);\n    case 'bool':  return (v) => gl.uniform1i(loc, v ? 1 : 0);\n    case 'int':   return (v) => gl.uniform1i(loc, v);\n    default:      return (v) => gl.uniform1f(loc, v);\n  }\n}\n\n// ── Main entry point ──\n\nexport function shader(canvas, code, opts = {}) {\n  const gl = canvas.getContext('webgl2');\n  if (!gl) throw new Error('WebGL 2 not supported');\n\n  const customUniforms = opts.uniforms || {};\n\n  // build custom uniform declarations\n  const customTypes = {};\n  let customDecls = '';\n  for (const [name, value] of Object.entries(customUniforms)) {\n    const type = inferType(value);\n    if (!type) throw new Error(`Cannot infer GLSL type for uniform \"${name}\": ${JSON.stringify(value)}`);\n    customTypes[name] = type;\n    customDecls += `uniform ${glslType(type)} ${name};\\n`;\n  }\n  customDecls = customDecls.trimEnd();\n\n  const mode = detectMode(code);\n  const preambleLines = countPreambleLines(customDecls || null);\n\n  // compile vertex shader (shared, never changes)\n  const vs = compileShader(gl, gl.VERTEX_SHADER, FULLSCREEN_VS);\n\n  // compile initial fragment shader\n  let fragSource = assembleFragment(code, mode, customDecls || null);\n  let fs, program;\n  try {\n    fs = compileShader(gl, gl.FRAGMENT_SHADER, fragSource);\n  } catch (e) {\n    if (e instanceof ShaderError) {\n      throw new ShaderError(e.rawLog, preambleLines);\n    }\n    throw e;\n  }\n  program = linkProgram(gl, vs, fs);\n\n  // empty VAO (WebGL 2 requirement for vertexless drawing)\n  const vao = gl.createVertexArray();\n\n  // look up builtin uniform locations\n  function getLocations(prog) {\n    return {\n      iResolution: gl.getUniformLocation(prog, 'iResolution'),\n      iTime:       gl.getUniformLocation(prog, 'iTime'),\n      iTimeDelta:  gl.getUniformLocation(prog, 'iTimeDelta'),\n      iFrame:      gl.getUniformLocation(prog, 'iFrame'),\n      iMouse:      gl.getUniformLocation(prog, 'iMouse'),\n    };\n  }\n\n  // look up custom uniform locations + build setters\n  function getCustomSetters(prog) {\n    const setters = {};\n    for (const [name, type] of Object.entries(customTypes)) {\n      const loc = gl.getUniformLocation(prog, name);\n      setters[name] = makeSetter(gl, loc, type);\n    }\n    return setters;\n  }\n\n  let locs = getLocations(program);\n  let customSetters = getCustomSetters(program);\n\n  // current custom uniform values (mutable via set())\n  const customValues = {};\n  for (const [name, value] of Object.entries(customUniforms)) {\n    customValues[name] = value;\n  }\n\n  // mouse tracking\n  const { mouse, destroy: destroyMouse } = setupMouse(canvas);\n\n  // animation state\n  let startTime = performance.now() / 1000;\n  let lastTime = startTime;\n  let frame = 0;\n  let rafId = null;\n  let running = false;\n\n  function render(now) {\n    now /= 1000;\n    const time = now - startTime;\n    const delta = now - lastTime;\n    lastTime = now;\n\n    // resize if canvas dimensions changed\n    if (canvas.width !== canvas.clientWidth || canvas.height !== canvas.clientHeight) {\n      canvas.width = canvas.clientWidth;\n      canvas.height = canvas.clientHeight;\n    }\n    gl.viewport(0, 0, canvas.width, canvas.height);\n\n    gl.useProgram(program);\n    gl.bindVertexArray(vao);\n\n    // set builtin uniforms\n    if (locs.iResolution) gl.uniform3f(locs.iResolution, canvas.width, canvas.height, 1.0);\n    if (locs.iTime) gl.uniform1f(locs.iTime, time);\n    if (locs.iTimeDelta) gl.uniform1f(locs.iTimeDelta, delta);\n    if (locs.iFrame) gl.uniform1i(locs.iFrame, frame);\n    if (locs.iMouse) gl.uniform4f(locs.iMouse, mouse.x, mouse.y, mouse.z, mouse.w);\n\n    // set custom uniforms\n    for (const [name, setter] of Object.entries(customSetters)) {\n      setter(customValues[name]);\n    }\n\n    gl.drawArrays(gl.TRIANGLES, 0, 3);\n    frame++;\n    rafId = requestAnimationFrame(render);\n  }\n\n  function start() {\n    if (running) return;\n    running = true;\n    rafId = requestAnimationFrame(render);\n  }\n\n  function stop() {\n    if (!running) return;\n    running = false;\n    if (rafId !== null) {\n      cancelAnimationFrame(rafId);\n      rafId = null;\n    }\n  }\n\n  // controller object\n  const controller = {\n    gl,\n    canvas,\n\n    set(name, value) {\n      if (!(name in customValues)) {\n        const available = Object.keys(customValues).join(', ');\n        throw new Error(`Unknown uniform \"${name}\". Available: ${available || '(none)'}`);\n      }\n      customValues[name] = value;\n    },\n\n    stop,\n    start,\n\n    compile(newCode) {\n      const newMode = detectMode(newCode);\n      const newSource = assembleFragment(newCode, newMode, customDecls || null);\n      let newFs;\n      try {\n        newFs = compileShader(gl, gl.FRAGMENT_SHADER, newSource);\n      } catch (e) {\n        // preserve old shader on failure\n        if (e instanceof ShaderError) {\n          throw new ShaderError(e.rawLog, preambleLines);\n        }\n        throw e;\n      }\n      const newProgram = linkProgram(gl, vs, newFs);\n      // swap\n      gl.deleteShader(fs);\n      gl.deleteProgram(program);\n      fs = newFs;\n      program = newProgram;\n      locs = getLocations(program);\n      customSetters = getCustomSetters(program);\n    },\n\n    destroy() {\n      stop();\n      destroyMouse();\n      gl.deleteShader(vs);\n      gl.deleteShader(fs);\n      gl.deleteProgram(program);\n      gl.deleteVertexArray(vao);\n    },\n  };\n\n  // start the loop\n  start();\n  return controller;\n}\n","cellId":null}}
+eyIuL2V4dC9zaGFkZXIvaW5kZXguanMiOnsic291cmNlIjoiLy8gQGF1ZGl0YWJsZS9zaGFkZXIg
+4oCUIFNoYWRlcnRveS1jb21wYXRpYmxlIFdlYkdMIDIgc2hhZGVyIGhlbHBlclxuLy8gWmVybyBk
+ZXBlbmRlbmNpZXMsIHB1cmUgV2ViR0wgMi5cblxuLy8g4pSA4pSAIGdsc2wgdGFnZ2VkIHRlbXBs
+YXRlIGxpdGVyYWwg4pSA4pSAXG5cbmV4cG9ydCBmdW5jdGlvbiBnbHNsKHN0cmluZ3MsIC4uLnZh
+bHVlcykge1xuICBsZXQgcmVzdWx0ID0gc3RyaW5nc1swXTtcbiAgZm9yIChsZXQgaSA9IDA7IGkg
+PCB2YWx1ZXMubGVuZ3RoOyBpKyspIHJlc3VsdCArPSB2YWx1ZXNbaV0gKyBzdHJpbmdzW2kgKyAx
+XTtcbiAgcmV0dXJuIHJlc3VsdDtcbn1cblxuLy8g4pSA4pSAIEdMU0wgdG9rZW5pemVyIChmb3Ig
+c3ludGF4IGhpZ2hsaWdodGluZykg4pSA4pSAXG5cbmNvbnN0IEdMU0xfS0VZV09SRFMgPSBuZXcg
+U2V0KFtcbiAgJ3ZvaWQnLCdyZXR1cm4nLCdpZicsJ2Vsc2UnLCdmb3InLCd3aGlsZScsJ2RvJywn
+c3dpdGNoJywnY2FzZScsJ2RlZmF1bHQnLFxuICAnYnJlYWsnLCdjb250aW51ZScsJ2Rpc2NhcmQn
+LCdzdHJ1Y3QnLCdpbicsJ291dCcsJ2lub3V0JywndW5pZm9ybScsXG4gICd2YXJ5aW5nJywnYXR0
+cmlidXRlJywnY29uc3QnLCdmbGF0Jywnc21vb3RoJywnY2VudHJvaWQnLCdsYXlvdXQnLFxuICAn
+aGlnaHAnLCdtZWRpdW1wJywnbG93cCcsJ3ByZWNpc2lvbicsJ2ludmFyaWFudCcsJ3RydWUnLCdm
+YWxzZScsXG5dKTtcblxuY29uc3QgR0xTTF9UWVBFUyA9IG5ldyBTZXQoW1xuICAnZmxvYXQnLCdp
+bnQnLCd1aW50JywnYm9vbCcsJ2RvdWJsZScsXG4gICd2ZWMyJywndmVjMycsJ3ZlYzQnLCdpdmVj
+MicsJ2l2ZWMzJywnaXZlYzQnLCd1dmVjMicsJ3V2ZWMzJywndXZlYzQnLFxuICAnYnZlYzInLCdi
+dmVjMycsJ2J2ZWM0JywnZHZlYzInLCdkdmVjMycsJ2R2ZWM0JyxcbiAgJ21hdDInLCdtYXQzJywn
+bWF0NCcsJ21hdDJ4MicsJ21hdDJ4MycsJ21hdDJ4NCcsXG4gICdtYXQzeDInLCdtYXQzeDMnLCdt
+YXQzeDQnLCdtYXQ0eDInLCdtYXQ0eDMnLCdtYXQ0eDQnLFxuICAnc2FtcGxlcjJEJywnc2FtcGxl
+cjNEJywnc2FtcGxlckN1YmUnLCdzYW1wbGVyMkRTaGFkb3cnLFxuICAnc2FtcGxlcjJEQXJyYXkn
+LCdpc2FtcGxlcjJEJywnaXNhbXBsZXIzRCcsJ3VzYW1wbGVyMkQnLCd1c2FtcGxlcjNEJyxcbl0p
+O1xuXG5jb25zdCBHTFNMX0JVSUxUSU5TID0gbmV3IFNldChbXG4gICdyYWRpYW5zJywnZGVncmVl
+cycsJ3NpbicsJ2NvcycsJ3RhbicsJ2FzaW4nLCdhY29zJywnYXRhbicsXG4gICdzaW5oJywnY29z
+aCcsJ3RhbmgnLCdhc2luaCcsJ2Fjb3NoJywnYXRhbmgnLFxuICAncG93JywnZXhwJywnbG9nJywn
+ZXhwMicsJ2xvZzInLCdzcXJ0JywnaW52ZXJzZXNxcnQnLFxuICAnYWJzJywnc2lnbicsJ2Zsb29y
+JywnY2VpbCcsJ2ZyYWN0JywnbW9kJywnbW9kZicsXG4gICdtaW4nLCdtYXgnLCdjbGFtcCcsJ21p
+eCcsJ3N0ZXAnLCdzbW9vdGhzdGVwJyxcbiAgJ2xlbmd0aCcsJ2Rpc3RhbmNlJywnZG90JywnY3Jv
+c3MnLCdub3JtYWxpemUnLCdmYWNlZm9yd2FyZCcsXG4gICdyZWZsZWN0JywncmVmcmFjdCcsJ21h
+dHJpeENvbXBNdWx0Jywnb3V0ZXJQcm9kdWN0JywndHJhbnNwb3NlJyxcbiAgJ2RldGVybWluYW50
+JywnaW52ZXJzZScsJ2xlc3NUaGFuJywnbGVzc1RoYW5FcXVhbCcsXG4gICdncmVhdGVyVGhhbics
+J2dyZWF0ZXJUaGFuRXF1YWwnLCdlcXVhbCcsJ25vdEVxdWFsJywnYW55JywnYWxsJywnbm90Jyxc
+biAgJ3RleHR1cmUnLCd0ZXh0dXJlTG9kJywndGV4dHVyZVByb2onLCd0ZXh0dXJlR3JhZCcsJ3Rl
+eGVsRmV0Y2gnLFxuICAnZEZkeCcsJ2RGZHknLCdmd2lkdGgnLFxuICAnbWFpbkltYWdlJyxcbl0p
+O1xuXG5jb25zdCBTSEFERVJUT1lfVU5JRk9STVMgPSBbXG4gICdpUmVzb2x1dGlvbicsJ2lUaW1l
+JywnaVRpbWVEZWx0YScsJ2lGcmFtZScsJ2lNb3VzZScsXG4gICdpQ2hhbm5lbDAnLCdpQ2hhbm5l
+bDEnLCdpQ2hhbm5lbDInLCdpQ2hhbm5lbDMnLFxuICAnaUNoYW5uZWxSZXNvbHV0aW9uJywnaUNo
+YW5uZWxUaW1lJywnaURhdGUnLCdpU2FtcGxlUmF0ZScsXG4gICdmcmFnQ29sb3InLCdmcmFnQ29v
+cmQnLFxuXTtcblxuZnVuY3Rpb24gdG9rZW5pemVHbHNsKGNvZGUpIHtcbiAgY29uc3QgdG9rZW5z
+ID0gW107XG4gIGxldCBpID0gMDtcbiAgY29uc3QgbGVuID0gY29kZS5sZW5ndGg7XG5cbiAgd2hp
+bGUgKGkgPCBsZW4pIHtcbiAgICAvLyBsaW5lIGNvbW1lbnRcbiAgICBpZiAoY29kZVtpXSA9PT0g
+Jy8nICYmIGNvZGVbaSArIDFdID09PSAnLycpIHtcbiAgICAgIGNvbnN0IHN0YXJ0ID0gaTtcbiAg
+ICAgIHdoaWxlIChpIDwgbGVuICYmIGNvZGVbaV0gIT09ICdcXG4nKSBpKys7XG4gICAgICB0b2tl
+bnMucHVzaCh7IHR5cGU6ICdjbXQnLCB0ZXh0OiBjb2RlLnNsaWNlKHN0YXJ0LCBpKSB9KTtcbiAg
+ICAgIGNvbnRpbnVlO1xuICAgIH1cbiAgICAvLyBibG9jayBjb21tZW50XG4gICAgaWYgKGNvZGVb
+aV0gPT09ICcvJyAmJiBjb2RlW2kgKyAxXSA9PT0gJyonKSB7XG4gICAgICBjb25zdCBzdGFydCA9
+IGk7XG4gICAgICBpICs9IDI7XG4gICAgICB3aGlsZSAoaSA8IGxlbiAmJiAhKGNvZGVbaSAtIDFd
+ID09PSAnKicgJiYgY29kZVtpXSA9PT0gJy8nKSkgaSsrO1xuICAgICAgaWYgKGkgPCBsZW4pIGkr
+KztcbiAgICAgIHRva2Vucy5wdXNoKHsgdHlwZTogJ2NtdCcsIHRleHQ6IGNvZGUuc2xpY2Uoc3Rh
+cnQsIGkpIH0pO1xuICAgICAgY29udGludWU7XG4gICAgfVxuICAgIC8vIHByZXByb2Nlc3Nvclxu
+ICAgIGlmIChjb2RlW2ldID09PSAnIycpIHtcbiAgICAgIGNvbnN0IHN0YXJ0ID0gaTtcbiAgICAg
+IHdoaWxlIChpIDwgbGVuICYmIGNvZGVbaV0gIT09ICdcXG4nKSBpKys7XG4gICAgICB0b2tlbnMu
+cHVzaCh7IHR5cGU6ICdhdHJ1bGUnLCB0ZXh0OiBjb2RlLnNsaWNlKHN0YXJ0LCBpKSB9KTtcbiAg
+ICAgIGNvbnRpbnVlO1xuICAgIH1cbiAgICAvLyBudW1iZXJzXG4gICAgaWYgKC9cXGQvLnRlc3Qo
+Y29kZVtpXSkgfHwgKGNvZGVbaV0gPT09ICcuJyAmJiBpICsgMSA8IGxlbiAmJiAvXFxkLy50ZXN0
+KGNvZGVbaSArIDFdKSkpIHtcbiAgICAgIGNvbnN0IHN0YXJ0ID0gaTtcbiAgICAgIGlmIChjb2Rl
+W2ldID09PSAnMCcgJiYgKGNvZGVbaSArIDFdID09PSAneCcgfHwgY29kZVtpICsgMV0gPT09ICdY
+JykpIHtcbiAgICAgICAgaSArPSAyO1xuICAgICAgICB3aGlsZSAoaSA8IGxlbiAmJiAvWzAtOWEt
+ZkEtRl0vLnRlc3QoY29kZVtpXSkpIGkrKztcbiAgICAgIH0gZWxzZSB7XG4gICAgICAgIHdoaWxl
+IChpIDwgbGVuICYmIC9bMC05LmVFKy1dLy50ZXN0KGNvZGVbaV0pKSBpKys7XG4gICAgICB9XG4g
+ICAgICAvLyBza2lwIHR5cGUgc3VmZml4ICh1LCBmKVxuICAgICAgaWYgKGkgPCBsZW4gJiYgL1t1
+VWZGXS8udGVzdChjb2RlW2ldKSkgaSsrO1xuICAgICAgdG9rZW5zLnB1c2goeyB0eXBlOiAnbnVt
+JywgdGV4dDogY29kZS5zbGljZShzdGFydCwgaSkgfSk7XG4gICAgICBjb250aW51ZTtcbiAgICB9
+XG4gICAgLy8gaWRlbnRpZmllcnMgLyBrZXl3b3Jkc1xuICAgIGlmICgvW2EtekEtWl9dLy50ZXN0
+KGNvZGVbaV0pKSB7XG4gICAgICBjb25zdCBzdGFydCA9IGk7XG4gICAgICB3aGlsZSAoaSA8IGxl
+biAmJiAvXFx3Ly50ZXN0KGNvZGVbaV0pKSBpKys7XG4gICAgICBjb25zdCB3b3JkID0gY29kZS5z
+bGljZShzdGFydCwgaSk7XG4gICAgICBpZiAoR0xTTF9LRVlXT1JEUy5oYXMod29yZCkpIHtcbiAg
+ICAgICAgdG9rZW5zLnB1c2goeyB0eXBlOiAna3cnLCB0ZXh0OiB3b3JkIH0pO1xuICAgICAgfSBl
+bHNlIGlmIChHTFNMX1RZUEVTLmhhcyh3b3JkKSkge1xuICAgICAgICB0b2tlbnMucHVzaCh7IHR5
+cGU6ICdjb25zdCcsIHRleHQ6IHdvcmQgfSk7XG4gICAgICB9IGVsc2UgaWYgKEdMU0xfQlVJTFRJ
+TlMuaGFzKHdvcmQpKSB7XG4gICAgICAgIHRva2Vucy5wdXNoKHsgdHlwZTogJ2ZuJywgdGV4dDog
+d29yZCB9KTtcbiAgICAgIH0gZWxzZSBpZiAoaSA8IGxlbiAmJiBjb2RlW2ldID09PSAnKCcpIHtc
+biAgICAgICAgdG9rZW5zLnB1c2goeyB0eXBlOiAnZm4nLCB0ZXh0OiB3b3JkIH0pO1xuICAgICAg
+fSBlbHNlIHtcbiAgICAgICAgdG9rZW5zLnB1c2goeyB0eXBlOiAnaWQnLCB0ZXh0OiB3b3JkIH0p
+O1xuICAgICAgfVxuICAgICAgY29udGludWU7XG4gICAgfVxuICAgIC8vIG9wZXJhdG9yc1xuICAg
+IGlmICgnPSstKi88PiEmfF5+JT86Jy5pbmNsdWRlcyhjb2RlW2ldKSkge1xuICAgICAgdG9rZW5z
+LnB1c2goeyB0eXBlOiAnb3AnLCB0ZXh0OiBjb2RlW2ldIH0pO1xuICAgICAgaSsrO1xuICAgICAg
+Y29udGludWU7XG4gICAgfVxuICAgIC8vIHB1bmN0dWF0aW9uXG4gICAgaWYgKCcoKXt9W107LC4n
+LmluY2x1ZGVzKGNvZGVbaV0pKSB7XG4gICAgICB0b2tlbnMucHVzaCh7IHR5cGU6ICdwdW5jJywg
+dGV4dDogY29kZVtpXSB9KTtcbiAgICAgIGkrKztcbiAgICAgIGNvbnRpbnVlO1xuICAgIH1cbiAg
+ICAvLyB3aGl0ZXNwYWNlIC8gb3RoZXJcbiAgICB0b2tlbnMucHVzaCh7IHR5cGU6ICcnLCB0ZXh0
+OiBjb2RlW2ldIH0pO1xuICAgIGkrKztcbiAgfVxuXG4gIHJldHVybiB0b2tlbnM7XG59XG5cbi8v
+IOKUgOKUgCBHTFNMIGNvbXBsZXRpb25zIOKUgOKUgFxuXG5mdW5jdGlvbiBnbHNsQ29tcGxldGlv
+bnMoKSB7XG4gIGNvbnN0IGl0ZW1zID0gW107XG4gIGZvciAoY29uc3QgdyBvZiBHTFNMX0tFWVdP
+UkRTKSAgICAgIGl0ZW1zLnB1c2goeyB0ZXh0OiB3LCBraW5kOiAna3cnIH0pO1xuICBmb3IgKGNv
+bnN0IHcgb2YgR0xTTF9UWVBFUykgICAgICAgICBpdGVtcy5wdXNoKHsgdGV4dDogdywga2luZDog
+J2NvbnN0JyB9KTtcbiAgZm9yIChjb25zdCB3IG9mIEdMU0xfQlVJTFRJTlMpICAgICAgaXRlbXMu
+cHVzaCh7IHRleHQ6IHcsIGtpbmQ6ICdmbicgfSk7XG4gIGZvciAoY29uc3QgdyBvZiBTSEFERVJU
+T1lfVU5JRk9STVMpIGl0ZW1zLnB1c2goeyB0ZXh0OiB3LCBraW5kOiAndmFyJyB9KTtcbiAgcmV0
+dXJuIGl0ZW1zO1xufVxuXG4vLyDilIDilIAgU2VsZi1yZWdpc3RyYXRpb24g4pSA4pSAXG5cbmlm
+ICh0eXBlb2Ygd2luZG93ICE9PSAndW5kZWZpbmVkJykge1xuICBpZiAoIXdpbmRvdy5fdGFnZ2Vk
+TGFuZ3VhZ2VzKSB3aW5kb3cuX3RhZ2dlZExhbmd1YWdlcyA9IHt9O1xuICB3aW5kb3cuX3RhZ2dl
+ZExhbmd1YWdlcy5nbHNsID0geyB0b2tlbml6ZTogdG9rZW5pemVHbHNsLCBjb21wbGV0aW9uczog
+Z2xzbENvbXBsZXRpb25zIH07XG59XG5cbi8vIOKUgOKUgCBHTFNMIGNvbnN0YW50cyDilIDilIBc
+blxuY29uc3QgRlVMTFNDUkVFTl9WUyA9IGAjdmVyc2lvbiAzMDAgZXNcbm91dCB2ZWMyIHZVVjtc
+bnZvaWQgbWFpbigpIHtcbiAgLy8gZnVsbHNjcmVlbiB0cmlhbmdsZSBmcm9tIGdsX1ZlcnRleElE
+IOKAlCBubyBWQk8gbmVlZGVkXG4gIHZVViA9IHZlYzIoKGdsX1ZlcnRleElEIDw8IDEpICYgMiwg
+Z2xfVmVydGV4SUQgJiAyKTtcbiAgZ2xfUG9zaXRpb24gPSB2ZWM0KHZVViAqIDIuMCAtIDEuMCwg
+MC4wLCAxLjApO1xufWA7XG5cbmNvbnN0IEZSQUdfUFJFQU1CTEUgPSBgI3ZlcnNpb24gMzAwIGVz
+XG5wcmVjaXNpb24gaGlnaHAgZmxvYXQ7XG5pbiB2ZWMyIHZVVjtcbm91dCB2ZWM0IGZyYWdDb2xv
+cl9vdXQ7XG5cbnVuaWZvcm0gdmVjMyAgaVJlc29sdXRpb247XG51bmlmb3JtIGZsb2F0IGlUaW1l
+O1xudW5pZm9ybSBmbG9hdCBpVGltZURlbHRhO1xudW5pZm9ybSBpbnQgICBpRnJhbWU7XG51bmlm
+b3JtIHZlYzQgIGlNb3VzZTtcbmA7XG5cbmNvbnN0IFNIQURFUlRPWV9NQUlOID0gYFxudm9pZCBt
+YWluKCkge1xuICBtYWluSW1hZ2UoZnJhZ0NvbG9yX291dCwgdlVWICogaVJlc29sdXRpb24ueHkp
+O1xufWA7XG5cbi8vIOKUgOKUgCBTaGFkZXJFcnJvciDigJQgYWRqdXN0cyBsaW5lIG51bWJlcnMg
+dG8gdXNlciBjb2RlIOKUgOKUgFxuXG5jbGFzcyBTaGFkZXJFcnJvciBleHRlbmRzIEVycm9yIHtc
+biAgY29uc3RydWN0b3IobG9nLCBwcmVhbWJsZUxpbmVzKSB7XG4gICAgLy8gdHJ5IHRvIGFkanVz
+dCBsaW5lIG51bWJlcnM6IFwiRVJST1I6IDA6TElORTpcIiDihpIgc3VidHJhY3QgcHJlYW1ibGVc
+biAgICBjb25zdCBhZGp1c3RlZCA9IGxvZy5yZXBsYWNlKC9FUlJPUjpcXHMqKFxcZCspOihcXGQr
+KTovZywgKG0sIGNvbCwgbGluZSkgPT4ge1xuICAgICAgY29uc3QgdXNlckxpbmUgPSBwYXJzZUlu
+dChsaW5lKSAtIHByZWFtYmxlTGluZXM7XG4gICAgICByZXR1cm4gdXNlckxpbmUgPiAwID8gYEVS
+Uk9SOiAke2NvbH06JHt1c2VyTGluZX06YCA6IG07XG4gICAgfSk7XG4gICAgc3VwZXIoYWRqdXN0
+ZWQpO1xuICAgIHRoaXMubmFtZSA9ICdTaGFkZXJFcnJvcic7XG4gICAgdGhpcy5yYXdMb2cgPSBs
+b2c7XG4gIH1cbn1cblxuLy8g4pSA4pSAIEhlbHBlcnMg4pSA4pSAXG5cbmZ1bmN0aW9uIGRldGVj
+dE1vZGUoY29kZSkge1xuICAvLyBzdHJpcCBzaW5nbGUtbGluZSBhbmQgbXVsdGktbGluZSBjb21t
+ZW50c1xuICBjb25zdCBzdHJpcHBlZCA9IGNvZGUucmVwbGFjZSgvXFwvXFwvLiokL2dtLCAnJyku
+cmVwbGFjZSgvXFwvXFwqW1xcc1xcU10qP1xcKlxcLy9nLCAnJyk7XG4gIGlmICgvXFxidm9pZFxc
+cyttYWluXFxzKlxcKC8udGVzdChzdHJpcHBlZCkpIHJldHVybiAncmF3JztcbiAgcmV0dXJuICdz
+aGFkZXJ0b3knO1xufVxuXG5mdW5jdGlvbiBpbmZlclR5cGUodmFsdWUpIHtcbiAgaWYgKHR5cGVv
+ZiB2YWx1ZSA9PT0gJ2Jvb2xlYW4nKSByZXR1cm4gJ2Jvb2wnO1xuICBpZiAodHlwZW9mIHZhbHVl
+ID09PSAnbnVtYmVyJykgcmV0dXJuICdmbG9hdCc7XG4gIGlmIChBcnJheS5pc0FycmF5KHZhbHVl
+KSkge1xuICAgIGlmICh2YWx1ZS5sZW5ndGggPT09IDIpIHJldHVybiAndmVjMic7XG4gICAgaWYg
+KHZhbHVlLmxlbmd0aCA9PT0gMykgcmV0dXJuICd2ZWMzJztcbiAgICBpZiAodmFsdWUubGVuZ3Ro
+ID09PSA0KSByZXR1cm4gJ3ZlYzQnO1xuICB9XG4gIHJldHVybiBudWxsO1xufVxuXG5mdW5jdGlv
+biBnbHNsVHlwZSh0eXBlKSB7XG4gIGlmICh0eXBlID09PSAnYm9vbCcpIHJldHVybiAnaW50Jzsg
+Ly8gcGFzcyBib29sZWFucyBhcyBpbnRcbiAgcmV0dXJuIHR5cGU7XG59XG5cbmZ1bmN0aW9uIGFz
+c2VtYmxlRnJhZ21lbnQoY29kZSwgbW9kZSwgY3VzdG9tRGVjbHMpIHtcbiAgbGV0IHNyYyA9IEZS
+QUdfUFJFQU1CTEU7XG4gIGlmIChjdXN0b21EZWNscykgc3JjICs9IGN1c3RvbURlY2xzICsgJ1xc
+bic7XG4gIHNyYyArPSAnXFxuJyArIGNvZGUgKyAnXFxuJztcbiAgaWYgKG1vZGUgPT09ICdzaGFk
+ZXJ0b3knKSBzcmMgKz0gU0hBREVSVE9ZX01BSU47XG4gIHJldHVybiBzcmM7XG59XG5cbmZ1bmN0
+aW9uIGNvdW50UHJlYW1ibGVMaW5lcyhjdXN0b21EZWNscykge1xuICBsZXQgbiA9IEZSQUdfUFJF
+QU1CTEUuc3BsaXQoJ1xcbicpLmxlbmd0aDtcbiAgaWYgKGN1c3RvbURlY2xzKSBuICs9IGN1c3Rv
+bURlY2xzLnNwbGl0KCdcXG4nKS5sZW5ndGg7XG4gIHJldHVybiBuICsgMTsgLy8gKzEgZm9yIHRo
+ZSBibGFuayBsaW5lIGJlZm9yZSB1c2VyIGNvZGVcbn1cblxuLy8g4pSA4pSAIEdMIGNvbXBpbGUv
+bGluayDilIDilIBcblxuZnVuY3Rpb24gY29tcGlsZVNoYWRlcihnbCwgdHlwZSwgc291cmNlKSB7
+XG4gIGNvbnN0IHMgPSBnbC5jcmVhdGVTaGFkZXIodHlwZSk7XG4gIGdsLnNoYWRlclNvdXJjZShz
+LCBzb3VyY2UpO1xuICBnbC5jb21waWxlU2hhZGVyKHMpO1xuICBpZiAoIWdsLmdldFNoYWRlclBh
+cmFtZXRlcihzLCBnbC5DT01QSUxFX1NUQVRVUykpIHtcbiAgICBjb25zdCBsb2cgPSBnbC5nZXRT
+aGFkZXJJbmZvTG9nKHMpO1xuICAgIGdsLmRlbGV0ZVNoYWRlcihzKTtcbiAgICB0aHJvdyBuZXcg
+U2hhZGVyRXJyb3IobG9nLCAwKTtcbiAgfVxuICByZXR1cm4gcztcbn1cblxuZnVuY3Rpb24gbGlu
+a1Byb2dyYW0oZ2wsIHZzLCBmcykge1xuICBjb25zdCBwID0gZ2wuY3JlYXRlUHJvZ3JhbSgpO1xu
+ICBnbC5hdHRhY2hTaGFkZXIocCwgdnMpO1xuICBnbC5hdHRhY2hTaGFkZXIocCwgZnMpO1xuICBn
+bC5saW5rUHJvZ3JhbShwKTtcbiAgaWYgKCFnbC5nZXRQcm9ncmFtUGFyYW1ldGVyKHAsIGdsLkxJ
+TktfU1RBVFVTKSkge1xuICAgIGNvbnN0IGxvZyA9IGdsLmdldFByb2dyYW1JbmZvTG9nKHApO1xu
+ICAgIGdsLmRlbGV0ZVByb2dyYW0ocCk7XG4gICAgdGhyb3cgbmV3IEVycm9yKCdMaW5rIGVycm9y
+OiAnICsgbG9nKTtcbiAgfVxuICByZXR1cm4gcDtcbn1cblxuLy8g4pSA4pSAIE1vdXNlIHRyYWNr
+aW5nIChTaGFkZXJ0b3kgY29udmVudGlvbikg4pSA4pSAXG5cbmZ1bmN0aW9uIHNldHVwTW91c2Uo
+Y2FudmFzKSB7XG4gIGNvbnN0IG1vdXNlID0geyB4OiAwLCB5OiAwLCB6OiAwLCB3OiAwIH07XG4g
+IGxldCBkb3duID0gZmFsc2U7XG5cbiAgY29uc3QgcmVjdCA9ICgpID0+IGNhbnZhcy5nZXRCb3Vu
+ZGluZ0NsaWVudFJlY3QoKTtcblxuICBjb25zdCBvbk1vdmUgPSAoZSkgPT4ge1xuICAgIGlmICgh
+ZG93bikgcmV0dXJuO1xuICAgIGNvbnN0IHIgPSByZWN0KCk7XG4gICAgbW91c2UueCA9IGUuY2xp
+ZW50WCAtIHIubGVmdDtcbiAgICBtb3VzZS55ID0gci5oZWlnaHQgLSAoZS5jbGllbnRZIC0gci50
+b3ApOyAvLyBmbGlwIFlcbiAgfTtcblxuICBjb25zdCBvbkRvd24gPSAoZSkgPT4ge1xuICAgIGRv
+d24gPSB0cnVlO1xuICAgIGNvbnN0IHIgPSByZWN0KCk7XG4gICAgbW91c2UueCA9IGUuY2xpZW50
+WCAtIHIubGVmdDtcbiAgICBtb3VzZS55ID0gci5oZWlnaHQgLSAoZS5jbGllbnRZIC0gci50b3Ap
+O1xuICAgIG1vdXNlLnogPSBtb3VzZS54O1xuICAgIG1vdXNlLncgPSBtb3VzZS55O1xuICB9O1xu
+XG4gIGNvbnN0IG9uVXAgPSAoKSA9PiB7XG4gICAgZG93biA9IGZhbHNlO1xuICAgIG1vdXNlLnog
+PSAtTWF0aC5hYnMobW91c2Uueik7XG4gICAgbW91c2UudyA9IC1NYXRoLmFicyhtb3VzZS53KTtc
+biAgfTtcblxuICBjYW52YXMuYWRkRXZlbnRMaXN0ZW5lcignbW91c2Vtb3ZlJywgb25Nb3ZlKTtc
+biAgY2FudmFzLmFkZEV2ZW50TGlzdGVuZXIoJ21vdXNlZG93bicsIG9uRG93bik7XG4gIGNhbnZh
+cy5hZGRFdmVudExpc3RlbmVyKCdtb3VzZXVwJywgb25VcCk7XG5cbiAgY29uc3QgZGVzdHJveSA9
+ICgpID0+IHtcbiAgICBjYW52YXMucmVtb3ZlRXZlbnRMaXN0ZW5lcignbW91c2Vtb3ZlJywgb25N
+b3ZlKTtcbiAgICBjYW52YXMucmVtb3ZlRXZlbnRMaXN0ZW5lcignbW91c2Vkb3duJywgb25Eb3du
+KTtcbiAgICBjYW52YXMucmVtb3ZlRXZlbnRMaXN0ZW5lcignbW91c2V1cCcsIG9uVXApO1xuICB9
+O1xuXG4gIHJldHVybiB7IG1vdXNlLCBkZXN0cm95IH07XG59XG5cbi8vIOKUgOKUgCBVbmlmb3Jt
+IHNldHRlcnMg4pSA4pSAXG5cbmZ1bmN0aW9uIG1ha2VTZXR0ZXIoZ2wsIGxvYywgdHlwZSkge1xu
+ICBzd2l0Y2ggKHR5cGUpIHtcbiAgICBjYXNlICdmbG9hdCc6IHJldHVybiAodikgPT4gZ2wudW5p
+Zm9ybTFmKGxvYywgdik7XG4gICAgY2FzZSAndmVjMic6ICByZXR1cm4gKHYpID0+IGdsLnVuaWZv
+cm0yZnYobG9jLCB2KTtcbiAgICBjYXNlICd2ZWMzJzogIHJldHVybiAodikgPT4gZ2wudW5pZm9y
+bTNmdihsb2MsIHYpO1xuICAgIGNhc2UgJ3ZlYzQnOiAgcmV0dXJuICh2KSA9PiBnbC51bmlmb3Jt
+NGZ2KGxvYywgdik7XG4gICAgY2FzZSAnYm9vbCc6ICByZXR1cm4gKHYpID0+IGdsLnVuaWZvcm0x
+aShsb2MsIHYgPyAxIDogMCk7XG4gICAgY2FzZSAnaW50JzogICByZXR1cm4gKHYpID0+IGdsLnVu
+aWZvcm0xaShsb2MsIHYpO1xuICAgIGRlZmF1bHQ6ICAgICAgcmV0dXJuICh2KSA9PiBnbC51bmlm
+b3JtMWYobG9jLCB2KTtcbiAgfVxufVxuXG4vLyDilIDilIAgTWFpbiBlbnRyeSBwb2ludCDilIDi
+lIBcblxuZXhwb3J0IGZ1bmN0aW9uIHNoYWRlcihjYW52YXMsIGNvZGUsIG9wdHMgPSB7fSkge1xu
+ICBjb25zdCBnbCA9IGNhbnZhcy5nZXRDb250ZXh0KCd3ZWJnbDInKTtcbiAgaWYgKCFnbCkgdGhy
+b3cgbmV3IEVycm9yKCdXZWJHTCAyIG5vdCBzdXBwb3J0ZWQnKTtcblxuICBjb25zdCBjdXN0b21V
+bmlmb3JtcyA9IG9wdHMudW5pZm9ybXMgfHwge307XG5cbiAgLy8gYnVpbGQgY3VzdG9tIHVuaWZv
+cm0gZGVjbGFyYXRpb25zXG4gIGNvbnN0IGN1c3RvbVR5cGVzID0ge307XG4gIGxldCBjdXN0b21E
+ZWNscyA9ICcnO1xuICBmb3IgKGNvbnN0IFtuYW1lLCB2YWx1ZV0gb2YgT2JqZWN0LmVudHJpZXMo
+Y3VzdG9tVW5pZm9ybXMpKSB7XG4gICAgY29uc3QgdHlwZSA9IGluZmVyVHlwZSh2YWx1ZSk7XG4g
+ICAgaWYgKCF0eXBlKSB0aHJvdyBuZXcgRXJyb3IoYENhbm5vdCBpbmZlciBHTFNMIHR5cGUgZm9y
+IHVuaWZvcm0gXCIke25hbWV9XCI6ICR7SlNPTi5zdHJpbmdpZnkodmFsdWUpfWApO1xuICAgIGN1
+c3RvbVR5cGVzW25hbWVdID0gdHlwZTtcbiAgICBjdXN0b21EZWNscyArPSBgdW5pZm9ybSAke2ds
+c2xUeXBlKHR5cGUpfSAke25hbWV9O1xcbmA7XG4gIH1cbiAgY3VzdG9tRGVjbHMgPSBjdXN0b21E
+ZWNscy50cmltRW5kKCk7XG5cbiAgY29uc3QgbW9kZSA9IGRldGVjdE1vZGUoY29kZSk7XG4gIGNv
+bnN0IHByZWFtYmxlTGluZXMgPSBjb3VudFByZWFtYmxlTGluZXMoY3VzdG9tRGVjbHMgfHwgbnVs
+bCk7XG5cbiAgLy8gY29tcGlsZSB2ZXJ0ZXggc2hhZGVyIChzaGFyZWQsIG5ldmVyIGNoYW5nZXMp
+XG4gIGNvbnN0IHZzID0gY29tcGlsZVNoYWRlcihnbCwgZ2wuVkVSVEVYX1NIQURFUiwgRlVMTFND
+UkVFTl9WUyk7XG5cbiAgLy8gY29tcGlsZSBpbml0aWFsIGZyYWdtZW50IHNoYWRlclxuICBsZXQg
+ZnJhZ1NvdXJjZSA9IGFzc2VtYmxlRnJhZ21lbnQoY29kZSwgbW9kZSwgY3VzdG9tRGVjbHMgfHwg
+bnVsbCk7XG4gIGxldCBmcywgcHJvZ3JhbTtcbiAgdHJ5IHtcbiAgICBmcyA9IGNvbXBpbGVTaGFk
+ZXIoZ2wsIGdsLkZSQUdNRU5UX1NIQURFUiwgZnJhZ1NvdXJjZSk7XG4gIH0gY2F0Y2ggKGUpIHtc
+biAgICBpZiAoZSBpbnN0YW5jZW9mIFNoYWRlckVycm9yKSB7XG4gICAgICB0aHJvdyBuZXcgU2hh
+ZGVyRXJyb3IoZS5yYXdMb2csIHByZWFtYmxlTGluZXMpO1xuICAgIH1cbiAgICB0aHJvdyBlO1xu
+ICB9XG4gIHByb2dyYW0gPSBsaW5rUHJvZ3JhbShnbCwgdnMsIGZzKTtcblxuICAvLyBlbXB0eSBW
+QU8gKFdlYkdMIDIgcmVxdWlyZW1lbnQgZm9yIHZlcnRleGxlc3MgZHJhd2luZylcbiAgY29uc3Qg
+dmFvID0gZ2wuY3JlYXRlVmVydGV4QXJyYXkoKTtcblxuICAvLyBsb29rIHVwIGJ1aWx0aW4gdW5p
+Zm9ybSBsb2NhdGlvbnNcbiAgZnVuY3Rpb24gZ2V0TG9jYXRpb25zKHByb2cpIHtcbiAgICByZXR1
+cm4ge1xuICAgICAgaVJlc29sdXRpb246IGdsLmdldFVuaWZvcm1Mb2NhdGlvbihwcm9nLCAnaVJl
+c29sdXRpb24nKSxcbiAgICAgIGlUaW1lOiAgICAgICBnbC5nZXRVbmlmb3JtTG9jYXRpb24ocHJv
+ZywgJ2lUaW1lJyksXG4gICAgICBpVGltZURlbHRhOiAgZ2wuZ2V0VW5pZm9ybUxvY2F0aW9uKHBy
+b2csICdpVGltZURlbHRhJyksXG4gICAgICBpRnJhbWU6ICAgICAgZ2wuZ2V0VW5pZm9ybUxvY2F0
+aW9uKHByb2csICdpRnJhbWUnKSxcbiAgICAgIGlNb3VzZTogICAgICBnbC5nZXRVbmlmb3JtTG9j
+YXRpb24ocHJvZywgJ2lNb3VzZScpLFxuICAgIH07XG4gIH1cblxuICAvLyBsb29rIHVwIGN1c3Rv
+bSB1bmlmb3JtIGxvY2F0aW9ucyArIGJ1aWxkIHNldHRlcnNcbiAgZnVuY3Rpb24gZ2V0Q3VzdG9t
+U2V0dGVycyhwcm9nKSB7XG4gICAgY29uc3Qgc2V0dGVycyA9IHt9O1xuICAgIGZvciAoY29uc3Qg
+W25hbWUsIHR5cGVdIG9mIE9iamVjdC5lbnRyaWVzKGN1c3RvbVR5cGVzKSkge1xuICAgICAgY29u
+c3QgbG9jID0gZ2wuZ2V0VW5pZm9ybUxvY2F0aW9uKHByb2csIG5hbWUpO1xuICAgICAgc2V0dGVy
+c1tuYW1lXSA9IG1ha2VTZXR0ZXIoZ2wsIGxvYywgdHlwZSk7XG4gICAgfVxuICAgIHJldHVybiBz
+ZXR0ZXJzO1xuICB9XG5cbiAgbGV0IGxvY3MgPSBnZXRMb2NhdGlvbnMocHJvZ3JhbSk7XG4gIGxl
+dCBjdXN0b21TZXR0ZXJzID0gZ2V0Q3VzdG9tU2V0dGVycyhwcm9ncmFtKTtcblxuICAvLyBjdXJy
+ZW50IGN1c3RvbSB1bmlmb3JtIHZhbHVlcyAobXV0YWJsZSB2aWEgc2V0KCkpXG4gIGNvbnN0IGN1
+c3RvbVZhbHVlcyA9IHt9O1xuICBmb3IgKGNvbnN0IFtuYW1lLCB2YWx1ZV0gb2YgT2JqZWN0LmVu
+dHJpZXMoY3VzdG9tVW5pZm9ybXMpKSB7XG4gICAgY3VzdG9tVmFsdWVzW25hbWVdID0gdmFsdWU7
+XG4gIH1cblxuICAvLyBtb3VzZSB0cmFja2luZ1xuICBjb25zdCB7IG1vdXNlLCBkZXN0cm95OiBk
+ZXN0cm95TW91c2UgfSA9IHNldHVwTW91c2UoY2FudmFzKTtcblxuICAvLyBhbmltYXRpb24gc3Rh
+dGVcbiAgbGV0IHN0YXJ0VGltZSA9IHBlcmZvcm1hbmNlLm5vdygpIC8gMTAwMDtcbiAgbGV0IGxh
+c3RUaW1lID0gc3RhcnRUaW1lO1xuICBsZXQgZnJhbWUgPSAwO1xuICBsZXQgcmFmSWQgPSBudWxs
+O1xuICBsZXQgcnVubmluZyA9IGZhbHNlO1xuXG4gIGZ1bmN0aW9uIHJlbmRlcihub3cpIHtcbiAg
+ICBub3cgLz0gMTAwMDtcbiAgICBjb25zdCB0aW1lID0gbm93IC0gc3RhcnRUaW1lO1xuICAgIGNv
+bnN0IGRlbHRhID0gbm93IC0gbGFzdFRpbWU7XG4gICAgbGFzdFRpbWUgPSBub3c7XG5cbiAgICAv
+LyByZXNpemUgaWYgY2FudmFzIGRpbWVuc2lvbnMgY2hhbmdlZFxuICAgIGlmIChjYW52YXMud2lk
+dGggIT09IGNhbnZhcy5jbGllbnRXaWR0aCB8fCBjYW52YXMuaGVpZ2h0ICE9PSBjYW52YXMuY2xp
+ZW50SGVpZ2h0KSB7XG4gICAgICBjYW52YXMud2lkdGggPSBjYW52YXMuY2xpZW50V2lkdGg7XG4g
+ICAgICBjYW52YXMuaGVpZ2h0ID0gY2FudmFzLmNsaWVudEhlaWdodDtcbiAgICB9XG4gICAgZ2wu
+dmlld3BvcnQoMCwgMCwgY2FudmFzLndpZHRoLCBjYW52YXMuaGVpZ2h0KTtcblxuICAgIGdsLnVz
+ZVByb2dyYW0ocHJvZ3JhbSk7XG4gICAgZ2wuYmluZFZlcnRleEFycmF5KHZhbyk7XG5cbiAgICAv
+LyBzZXQgYnVpbHRpbiB1bmlmb3Jtc1xuICAgIGlmIChsb2NzLmlSZXNvbHV0aW9uKSBnbC51bmlm
+b3JtM2YobG9jcy5pUmVzb2x1dGlvbiwgY2FudmFzLndpZHRoLCBjYW52YXMuaGVpZ2h0LCAxLjAp
+O1xuICAgIGlmIChsb2NzLmlUaW1lKSBnbC51bmlmb3JtMWYobG9jcy5pVGltZSwgdGltZSk7XG4g
+ICAgaWYgKGxvY3MuaVRpbWVEZWx0YSkgZ2wudW5pZm9ybTFmKGxvY3MuaVRpbWVEZWx0YSwgZGVs
+dGEpO1xuICAgIGlmIChsb2NzLmlGcmFtZSkgZ2wudW5pZm9ybTFpKGxvY3MuaUZyYW1lLCBmcmFt
+ZSk7XG4gICAgaWYgKGxvY3MuaU1vdXNlKSBnbC51bmlmb3JtNGYobG9jcy5pTW91c2UsIG1vdXNl
+LngsIG1vdXNlLnksIG1vdXNlLnosIG1vdXNlLncpO1xuXG4gICAgLy8gc2V0IGN1c3RvbSB1bmlm
+b3Jtc1xuICAgIGZvciAoY29uc3QgW25hbWUsIHNldHRlcl0gb2YgT2JqZWN0LmVudHJpZXMoY3Vz
+dG9tU2V0dGVycykpIHtcbiAgICAgIHNldHRlcihjdXN0b21WYWx1ZXNbbmFtZV0pO1xuICAgIH1c
+blxuICAgIGdsLmRyYXdBcnJheXMoZ2wuVFJJQU5HTEVTLCAwLCAzKTtcbiAgICBmcmFtZSsrO1xu
+ICAgIHJhZklkID0gcmVxdWVzdEFuaW1hdGlvbkZyYW1lKHJlbmRlcik7XG4gIH1cblxuICBmdW5j
+dGlvbiBzdGFydCgpIHtcbiAgICBpZiAocnVubmluZykgcmV0dXJuO1xuICAgIHJ1bm5pbmcgPSB0
+cnVlO1xuICAgIHJhZklkID0gcmVxdWVzdEFuaW1hdGlvbkZyYW1lKHJlbmRlcik7XG4gIH1cblxu
+ICBmdW5jdGlvbiBzdG9wKCkge1xuICAgIGlmICghcnVubmluZykgcmV0dXJuO1xuICAgIHJ1bm5p
+bmcgPSBmYWxzZTtcbiAgICBpZiAocmFmSWQgIT09IG51bGwpIHtcbiAgICAgIGNhbmNlbEFuaW1h
+dGlvbkZyYW1lKHJhZklkKTtcbiAgICAgIHJhZklkID0gbnVsbDtcbiAgICB9XG4gIH1cblxuICAv
+LyBjb250cm9sbGVyIG9iamVjdFxuICBjb25zdCBjb250cm9sbGVyID0ge1xuICAgIGdsLFxuICAg
+IGNhbnZhcyxcblxuICAgIHNldChuYW1lLCB2YWx1ZSkge1xuICAgICAgaWYgKCEobmFtZSBpbiBj
+dXN0b21WYWx1ZXMpKSB7XG4gICAgICAgIGNvbnN0IGF2YWlsYWJsZSA9IE9iamVjdC5rZXlzKGN1
+c3RvbVZhbHVlcykuam9pbignLCAnKTtcbiAgICAgICAgdGhyb3cgbmV3IEVycm9yKGBVbmtub3du
+IHVuaWZvcm0gXCIke25hbWV9XCIuIEF2YWlsYWJsZTogJHthdmFpbGFibGUgfHwgJyhub25lKSd9
+YCk7XG4gICAgICB9XG4gICAgICBjdXN0b21WYWx1ZXNbbmFtZV0gPSB2YWx1ZTtcbiAgICB9LFxu
+XG4gICAgc3RvcCxcbiAgICBzdGFydCxcblxuICAgIGNvbXBpbGUobmV3Q29kZSkge1xuICAgICAg
+Y29uc3QgbmV3TW9kZSA9IGRldGVjdE1vZGUobmV3Q29kZSk7XG4gICAgICBjb25zdCBuZXdTb3Vy
+Y2UgPSBhc3NlbWJsZUZyYWdtZW50KG5ld0NvZGUsIG5ld01vZGUsIGN1c3RvbURlY2xzIHx8IG51
+bGwpO1xuICAgICAgbGV0IG5ld0ZzO1xuICAgICAgdHJ5IHtcbiAgICAgICAgbmV3RnMgPSBjb21w
+aWxlU2hhZGVyKGdsLCBnbC5GUkFHTUVOVF9TSEFERVIsIG5ld1NvdXJjZSk7XG4gICAgICB9IGNh
+dGNoIChlKSB7XG4gICAgICAgIC8vIHByZXNlcnZlIG9sZCBzaGFkZXIgb24gZmFpbHVyZVxuICAg
+ICAgICBpZiAoZSBpbnN0YW5jZW9mIFNoYWRlckVycm9yKSB7XG4gICAgICAgICAgdGhyb3cgbmV3
+IFNoYWRlckVycm9yKGUucmF3TG9nLCBwcmVhbWJsZUxpbmVzKTtcbiAgICAgICAgfVxuICAgICAg
+ICB0aHJvdyBlO1xuICAgICAgfVxuICAgICAgY29uc3QgbmV3UHJvZ3JhbSA9IGxpbmtQcm9ncmFt
+KGdsLCB2cywgbmV3RnMpO1xuICAgICAgLy8gc3dhcFxuICAgICAgZ2wuZGVsZXRlU2hhZGVyKGZz
+KTtcbiAgICAgIGdsLmRlbGV0ZVByb2dyYW0ocHJvZ3JhbSk7XG4gICAgICBmcyA9IG5ld0ZzO1xu
+ICAgICAgcHJvZ3JhbSA9IG5ld1Byb2dyYW07XG4gICAgICBsb2NzID0gZ2V0TG9jYXRpb25zKHBy
+b2dyYW0pO1xuICAgICAgY3VzdG9tU2V0dGVycyA9IGdldEN1c3RvbVNldHRlcnMocHJvZ3JhbSk7
+XG4gICAgfSxcblxuICAgIGRlc3Ryb3koKSB7XG4gICAgICBzdG9wKCk7XG4gICAgICBkZXN0cm95
+TW91c2UoKTtcbiAgICAgIGdsLmRlbGV0ZVNoYWRlcih2cyk7XG4gICAgICBnbC5kZWxldGVTaGFk
+ZXIoZnMpO1xuICAgICAgZ2wuZGVsZXRlUHJvZ3JhbShwcm9ncmFtKTtcbiAgICAgIGdsLmRlbGV0
+ZVZlcnRleEFycmF5KHZhbyk7XG4gICAgfSxcbiAgfTtcblxuICAvLyBzdGFydCB0aGUgbG9vcFxu
+ICBzdGFydCgpO1xuICByZXR1cm4gY29udHJvbGxlcjtcbn1cbiIsImNlbGxJZCI6bnVsbH19
 AUDITABLE-MODULES-->
+<!-- notebook settings: JSON {theme, fontSize, width, ...} -->
 <!--AUDITABLE-SETTINGS
 {"theme":"dark","fontSize":13,"width":"860"}
 AUDITABLE-SETTINGS-->
@@ -3096,6 +3367,18 @@ function topoSort(dirtyIds) {
 }
 
 // -- exec.js --
+
+// ── EXECUTION ENGINE ──
+//
+// Scope model: each cell runs inside an AsyncFunction where upstream variables
+// are passed as parameters. This is pass-by-value for primitives — reassigning
+// a variable in cell A (e.g. `grid = next`) does NOT propagate to cell B.
+// Mutable state that needs to survive across callbacks belongs in %manual cells
+// using DOM elements, objects, or closures.
+//
+// Cell builtins (display, canvas, slider, load, install, installBinary, etc.)
+// are injected as additional parameters — listed in _injected, not in scope.
+// They are NOT propagated to downstream cells.
 
 // ── BINARY HELPERS ──
 
@@ -4430,7 +4713,7 @@ function togglePresent() {
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_BUILD_DATE__ = '2026-02-22';
-const __AUDITABLE_BASE_SIZE__ = 231970;
+const __AUDITABLE_BASE_SIZE__ = 235208;
 
 (function() {
   const ver = $('#aboutVersion');
@@ -4642,10 +4925,10 @@ async function verifySignature(html) {
 function reassemble(newHtml, oldData) {
   let html = newHtml;
 
-  // Remove any existing data/settings/modules comments from the new template
-  html = html.replace(/<!--AUDITABLE-DATA\n[\s\S]*?\nAUDITABLE-DATA-->\n?/g, '');
-  html = html.replace(/<!--AUDITABLE-SETTINGS\n[\s\S]*?\nAUDITABLE-SETTINGS-->\n?/g, '');
-  html = html.replace(/<!--AUDITABLE-MODULES\n[\s\S]*?\nAUDITABLE-MODULES-->\n?/g, '');
+  // Remove any existing data/settings/modules comments (and their description comments) from the new template
+  html = html.replace(/(?:<!-- [^\n]*-->\n)?<!--AUDITABLE-DATA\n[\s\S]*?\nAUDITABLE-DATA-->\n?/g, '');
+  html = html.replace(/(?:<!-- [^\n]*-->\n)?<!--AUDITABLE-SETTINGS\n[\s\S]*?\nAUDITABLE-SETTINGS-->\n?/g, '');
+  html = html.replace(/(?:<!-- [^\n]*-->\n)?<!--AUDITABLE-MODULES\n[\s\S]*?\nAUDITABLE-MODULES-->\n?/g, '');
 
   // Build data block to inject
   const parts = [];
@@ -4867,12 +5150,12 @@ function finishUpdate(newHtml, version) {
       code: c.code,
       collapsed: c.el?.classList.contains('collapsed') || undefined
     }));
-    oldData.data = '<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->';
+    oldData.data = '<!-- cell data: JSON array of {type, code, collapsed?} -->\n<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->';
   }
   if (window._installedModules && Object.keys(window._installedModules).length) {
-    oldData.modules = '<!--AUDITABLE-MODULES\n' + JSON.stringify(window._installedModules).replace(/--/g, '\\u002d\\u002d') + '\nAUDITABLE-MODULES-->';
+    oldData.modules = '<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId} -->\n<!--AUDITABLE-MODULES\n' + encodeModules(window._installedModules) + '\nAUDITABLE-MODULES-->';
   }
-  oldData.settings = '<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->';
+  oldData.settings = '<!-- notebook settings: JSON {theme, fontSize, width, ...} -->\n<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->';
 
   const result = reassemble(newHtml, oldData);
 
@@ -5021,6 +5304,22 @@ async function verifySelf() {
 
 // -- save.js --
 
+// ── MODULES ENCODING ──
+// base64-encode modules JSON to avoid HTML comment / String.replace issues
+// (source code can contain --, $', etc.)
+
+function encodeModules(obj) {
+  const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(obj))));
+  return b64.replace(/.{1,76}/g, '$&\n').trimEnd();
+}
+
+function decodeModules(raw) {
+  const b64 = raw.replace(/\s/g, '');
+  // detect legacy format: starts with { means raw JSON (not base64)
+  if (b64.startsWith('{') || b64.startsWith('%7B')) return JSON.parse(raw);
+  return JSON.parse(decodeURIComponent(escape(atob(b64))));
+}
+
 // ── SAVE / LOAD ──
 
 // save mode: 'normal' or 'packed'
@@ -5144,9 +5443,9 @@ ${findBarHTML}
 
 ${statusbarHTML}
 
-${'<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->'}
-${Object.keys(window._installedModules || {}).length ? '<!--AUDITABLE-MODULES\n' + JSON.stringify(window._installedModules).replace(/--/g, '\\u002d\\u002d') + '\nAUDITABLE-MODULES-->' : ''}
-${'<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->'}
+${'<!-- cell data: JSON array of {type, code, collapsed?} -->\n<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->'}
+${Object.keys(window._installedModules || {}).length ? '<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId} -->\n<!--AUDITABLE-MODULES\n' + encodeModules(window._installedModules) + '\nAUDITABLE-MODULES-->' : ''}
+${'<!-- notebook settings: JSON {theme, fontSize, width, ...} -->\n<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->'}
 
 <script>\n${script}\n<\/script>
 </body>
@@ -5194,25 +5493,56 @@ async function savePackedNotebook() {
     const stream = blob.stream().pipeThrough(cs);
     const compressed = await new Response(stream).arrayBuffer();
     const b64 = btoa(String.fromCharCode(...new Uint8Array(compressed)));
+    const b64Lines = b64.replace(/.{1,76}/g, '$&\n');
 
-    const loader = '<!DOCTYPE html>\n'
-      + '<html lang="en"><head><meta charset="UTF-8">'
-      + '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
-      + '<title>Auditable \u2014 ' + esc(title) + '</title>'
-      + '<style>html{background:#1a1a1a}'
-      + 'body{color:#999;font:14px/1.5 monospace;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}'
-      + '</style></head><body>'
-      + '<div id="_l">unpacking\u2026</div>'
-      + '<script>'
-      + "(async()=>{"
-      + "var b='" + b64 + "';"
-      + "var r=new Response(new Blob([Uint8Array.from(atob(b),c=>c.charCodeAt(0))]));"
-      + "var s=r.body.pipeThrough(new DecompressionStream('gzip'));"
-      + "var h=await new Response(s).text();"
-      + "h=h.replace('<head>','<head><meta name=\"auditable-packed\">');"
-      + "document.open();document.write(h);document.close();"
-      + "})().catch(function(e){document.getElementById('_l').textContent='error: '+e.message});"
-      + '<\/script></body></html>';
+    const loader = `<!DOCTYPE html>
+<!-- packed auditable notebook -->
+<!-- the full notebook is gzip-compressed and base64-encoded in the <pre> block below. -->
+<!-- on load, the script decodes and decompresses it, then replaces the page contents. -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Auditable \u2014 ${esc(title)}</title>
+  <style>
+    html { background: #1a1a1a }
+    body { color: #999; font: 14px/1.5 monospace; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0 }
+    #_d { display: none }
+  </style>
+</head>
+<body>
+<div id="_l">unpacking\u2026</div>
+
+<!-- base64-encoded gzip payload (76-char lines) -->
+<pre id="_d">
+${b64Lines}</pre>
+
+<script>
+(async () => {
+  // 1. read base64 from the hidden <pre>, strip whitespace from line wrapping
+  var b64 = document.getElementById('_d').textContent.replace(/\\s/g, '');
+
+  // 2. decode base64 to binary
+  var bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+
+  // 3. decompress gzip via DecompressionStream
+  var stream = new Response(new Blob([bytes])).body.pipeThrough(new DecompressionStream('gzip'));
+  var html = await new Response(stream).text();
+
+  // 4. mark as packed (so the notebook knows it was loaded from a packed save)
+  html = html.replace('<head>', '<head><meta name="auditable-packed">');
+
+  // 5. replace the current page with the full notebook
+  document.open();
+  document.write(html);
+  document.close();
+})().catch(function(e) {
+  document.getElementById('_l').textContent = 'error: ' + e.message;
+});
+<\/script>
+</body>
+</html>`;
+
 
     const fn = downloadHtml(loader, title);
     const kb = (loader.length / 1024).toFixed(0);
@@ -5234,7 +5564,7 @@ function loadFromEmbed() {
   const modMatch = raw.match(/<!--AUDITABLE-MODULES\n([\s\S]*?)\nAUDITABLE-MODULES-->/);
   if (modMatch) {
     try {
-      window._installedModules = JSON.parse(modMatch[1]);
+      window._installedModules = decodeModules(modMatch[1]);
     } catch (e) {
       console.error('Failed to parse installed modules:', e);
     }
@@ -7337,6 +7667,18 @@ window.newNotebook = newNotebook;
 // ── AF BRIDGE ──
 // When running inside AF shell (iframe), establish postMessage communication.
 // No-op when running standalone (window.parent === window).
+//
+// Message protocol (notebook ↔ AF shell):
+//   af:ready          → sent on init with { title }
+//   af:serialize      ← received to trigger saveNotebook()
+//   af:saved          ← received after save (shows "saved" status)
+//   af:setTitle       ← received to update docTitle input
+//   af:resize         ← received when iframe becomes visible (recalc textareas)
+//   af:titleChanged   → sent when user edits the title
+//   af:fileRequest    → sent to request file picker { id, accept }
+//   af:fileResult     ← received with picked file { id, file }
+//   af:download       → sent to request download { data, filename, mimeType }
+//   af:dirty          → sent when notebook has unsaved changes
 
 (function afBridge() {
   if (window.parent === window) return;

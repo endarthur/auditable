@@ -5,6 +5,18 @@ import { highlightCode } from './syntax.js';
 import { std } from './stdlib.js';
 import { python, zenOfPython } from './python.js';
 
+// ── EXECUTION ENGINE ──
+//
+// Scope model: each cell runs inside an AsyncFunction where upstream variables
+// are passed as parameters. This is pass-by-value for primitives — reassigning
+// a variable in cell A (e.g. `grid = next`) does NOT propagate to cell B.
+// Mutable state that needs to survive across callbacks belongs in %manual cells
+// using DOM elements, objects, or closures.
+//
+// Cell builtins (display, canvas, slider, load, install, installBinary, etc.)
+// are injected as additional parameters — listed in _injected, not in scope.
+// They are NOT propagated to downstream cells.
+
 // ── BINARY HELPERS ──
 
 function uint8ToBase64(bytes) {

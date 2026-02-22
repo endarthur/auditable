@@ -2,6 +2,7 @@ import { S, $ } from './state.js';
 import { setMsg } from './ui.js';
 import { getSettings } from './settings.js';
 import { renderMd } from './markdown.js';
+import { encodeModules } from './save.js';
 
 // ── UPDATE PANEL ──
 
@@ -99,10 +100,10 @@ async function verifySignature(html) {
 function reassemble(newHtml, oldData) {
   let html = newHtml;
 
-  // Remove any existing data/settings/modules comments from the new template
-  html = html.replace(/<!--AUDITABLE-DATA\n[\s\S]*?\nAUDITABLE-DATA-->\n?/g, '');
-  html = html.replace(/<!--AUDITABLE-SETTINGS\n[\s\S]*?\nAUDITABLE-SETTINGS-->\n?/g, '');
-  html = html.replace(/<!--AUDITABLE-MODULES\n[\s\S]*?\nAUDITABLE-MODULES-->\n?/g, '');
+  // Remove any existing data/settings/modules comments (and their description comments) from the new template
+  html = html.replace(/(?:<!-- [^\n]*-->\n)?<!--AUDITABLE-DATA\n[\s\S]*?\nAUDITABLE-DATA-->\n?/g, '');
+  html = html.replace(/(?:<!-- [^\n]*-->\n)?<!--AUDITABLE-SETTINGS\n[\s\S]*?\nAUDITABLE-SETTINGS-->\n?/g, '');
+  html = html.replace(/(?:<!-- [^\n]*-->\n)?<!--AUDITABLE-MODULES\n[\s\S]*?\nAUDITABLE-MODULES-->\n?/g, '');
 
   // Build data block to inject
   const parts = [];
@@ -324,12 +325,12 @@ function finishUpdate(newHtml, version) {
       code: c.code,
       collapsed: c.el?.classList.contains('collapsed') || undefined
     }));
-    oldData.data = '<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->';
+    oldData.data = '<!-- cell data: JSON array of {type, code, collapsed?} -->\n<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->';
   }
   if (window._installedModules && Object.keys(window._installedModules).length) {
-    oldData.modules = '<!--AUDITABLE-MODULES\n' + JSON.stringify(window._installedModules).replace(/--/g, '\\u002d\\u002d') + '\nAUDITABLE-MODULES-->';
+    oldData.modules = '<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId} -->\n<!--AUDITABLE-MODULES\n' + encodeModules(window._installedModules) + '\nAUDITABLE-MODULES-->';
   }
-  oldData.settings = '<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->';
+  oldData.settings = '<!-- notebook settings: JSON {theme, fontSize, width, ...} -->\n<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->';
 
   const result = reassemble(newHtml, oldData);
 

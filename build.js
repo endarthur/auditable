@@ -77,6 +77,8 @@ if (target === 'af') {
 
   // 4. Assemble af.html
   const afHtml = `<!DOCTYPE html>
+<!-- AF (Auditable Files) — multi-tab workspace shell for managing auditable notebooks -->
+<!-- hosts notebooks as iframes, communicates via postMessage bridge protocol -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -139,6 +141,17 @@ const css = fs.readFileSync(path.join(srcDir, 'style.css'), 'utf8');
 const template = fs.readFileSync(path.join(srcDir, 'template.html'), 'utf8');
 
 // 4. Inject build-time constants
+// These placeholders in the source get replaced with environment or computed values:
+//   __AUDITABLE_BUILTINS__           — JSON from src/builtins.json (help text for cell builtins)
+//   __AUDITABLE_VERSION__            — version from package.json
+//   __AUDITABLE_RELEASE__            — env AUDITABLE_RELEASE (default: 'dev')
+//   __AUDITABLE_BUILD_DATE__         — ISO date string (YYYY-MM-DD)
+//   __AUDITABLE_PUBLIC_KEY__         — env AUDITABLE_PUBLIC_KEY (Ed25519 pub for signature verification)
+//   __AUDITABLE_REPO__               — env AUDITABLE_REPO (default: 'endarthur/auditable')
+//   __AUDITABLE_PAGES_URL__          — env AUDITABLE_PAGES_URL (update check URL)
+//   __AUDITABLE_DEFAULT_EXEC_MODE__  — --exec-mode flag (default: 'reactive')
+//   __AUDITABLE_DEFAULT_RUN_ON_LOAD__— --run-on-load flag (default: 'yes')
+//   __AUDITABLE_BASE_SIZE__          — computed after first assembly pass (runtime size in bytes)
 const builtins = fs.readFileSync(path.join(srcDir, 'builtins.json'), 'utf8');
 js = js.replace("'__AUDITABLE_BUILTINS__'", builtins.trim());
 
@@ -188,6 +201,8 @@ if (runOnLoadArg) {
 // 5. Assemble final HTML (first pass — placeholder size)
 function assemble(jsCode) {
   return `<!DOCTYPE html>
+<!-- auditable — a reactive computational notebook in a single HTML file -->
+<!-- https://github.com/endarthur/auditable — MIT license -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -205,6 +220,7 @@ ${template}
 ${jsCode}
 </script>
 </body>
+<!-- good luck out there -->
 </html>
 `;
 }

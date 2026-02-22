@@ -1,4 +1,6 @@
 <!DOCTYPE html>
+<!-- auditable — a reactive computational notebook in a single HTML file -->
+<!-- https://github.com/endarthur/auditable — MIT license -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -1886,12 +1888,131 @@ body.presenting .find-bar { display: none !important; }
 </div>
 
 
+<!-- cell data: JSON array of {type, code, collapsed?} -->
 <!--AUDITABLE-DATA
 [{"type":"md","code":"# SQL notebook\n\nSQLite running entirely in the browser via **sql.js** (WebAssembly). the `sql` language tag from `@auditable/sql` provides syntax highlighting and completions inside template literals.\n\n`installBinary()` embeds the WASM binary (gzip-compressed) — after saving, the 1+ MB asset loads instantly with no network fetch.\n\ncreate tables, insert data, and query it — all reactive. change the filter and downstream cells re-run."},{"type":"code","code":"const { sql } = await load(\"./ext/sql/index.js\");\nconst wasmUrl = await installBinary(\"https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/sql-wasm.wasm\");\nconst wasmBinary = new Uint8Array(await fetch(wasmUrl).then(r => r.arrayBuffer()));\nconst initSqlJs = await load(\"https://esm.sh/sql.js@1.12.0\");\nconst SQL = await initSqlJs.default({ wasmBinary });\nconst db = new SQL.Database();"},{"type":"code","code":"db.run(sql`\n  CREATE TABLE IF NOT EXISTS cities (\n    name    TEXT PRIMARY KEY,\n    country TEXT NOT NULL,\n    pop     REAL,\n    lat     REAL,\n    lon     REAL\n  )\n`);\n\ndb.run(sql`DELETE FROM cities`);\n\nconst data = [\n  ['Tokyo',        'Japan',      37.4,  35.68,  139.69],\n  ['Delhi',        'India',      32.9,  28.61,   77.23],\n  ['Shanghai',     'China',      29.2,  31.23,  121.47],\n  ['S\\u00e3o Paulo',    'Brazil',     22.6, -23.55,  -46.63],\n  ['Mexico City',  'Mexico',     22.1,  19.43,  -99.13],\n  ['Cairo',        'Egypt',      21.8,  30.04,   31.24],\n  ['Mumbai',       'India',      21.7,  19.08,   72.88],\n  ['Beijing',      'China',      21.5,  39.90,  116.41],\n  ['Osaka',        'Japan',      19.1,  34.69,  135.50],\n  ['New York',     'USA',        18.8,  40.71,  -74.01],\n  ['Buenos Aires', 'Argentina',  15.4, -34.60,  -58.38],\n  ['Lagos',        'Nigeria',    15.3,   6.52,    3.38],\n  ['Istanbul',     'Turkey',     15.6,  41.01,   28.98],\n  ['Manila',       'Philippines', 14.4, 14.60,  120.98],\n  ['Guangzhou',    'China',      13.9,  23.13,  113.26],\n];\n\nconst stmt = db.prepare(sql`INSERT INTO cities VALUES (?, ?, ?, ?, ?)`);\nfor (const row of data) { stmt.run(row); }\nstmt.free();\n\nui.display(`loaded ${data.length} cities`);"},{"type":"code","code":"const minPop = ui.slider(\"min population (M)\", 15, {min: 5, max: 35, step: 0.5});\nconst sortBy = ui.dropdown(\"sort by\", [\"pop DESC\", \"name ASC\", \"lat DESC\", \"lon ASC\"]);"},{"type":"code","code":"const results = db.exec(sql`\n  SELECT name, country, pop, lat, lon\n  FROM cities\n  WHERE pop >= ${minPop}\n  ORDER BY ` + sortBy);\n\nconst rows = results[0] ? results[0].values.map(r => ({\n  city: r[0], country: r[1], pop: r[2], lat: r[3], lon: r[4]\n})) : [];\n\nui.table(rows);\nui.display(`${rows.length} cities with pop \\u2265 ${minPop}M`);"},{"type":"code","code":"// aggregate query\nconst stats = db.exec(sql`\n  SELECT\n    country,\n    COUNT(*)       AS n,\n    ROUND(SUM(pop), 1) AS total_pop,\n    ROUND(AVG(pop), 1) AS avg_pop\n  FROM cities\n  WHERE pop >= ${minPop}\n  GROUP BY country\n  ORDER BY total_pop DESC\n`);\n\nconst agg = stats[0] ? stats[0].values.map(r => ({\n  country: r[0], cities: r[1], total_pop: r[2], avg_pop: r[3]\n})) : [];\n\nui.table(agg);"}]
 AUDITABLE-DATA-->
+<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId} -->
 <!--AUDITABLE-MODULES
-{"./ext/sql/index.js":{"source":"// @auditable/sql — SQL language tag with syntax highlighting and completions\n// Provides the sql tagged template literal. The actual database engine\n// (sql.js, etc.) is loaded separately by the user.\n\n// ── sql tagged template literal ──\n\nexport function sql(strings, ...values) {\n  let result = strings[0];\n  for (let i = 0; i < values.length; i++) result += values[i] + strings[i + 1];\n  return result;\n}\n\n// ── SQL tokenizer (for syntax highlighting) ──\n\nconst SQL_KEYWORDS = new Set([\n  'select','from','where','insert','update','delete','create','drop','alter',\n  'table','index','view','into','values','set','join','left','right','inner',\n  'outer','cross','natural','on','as','and','or','not','in','is','null',\n  'like','glob','between','exists','having','group','by','order','asc','desc',\n  'limit','offset','union','all','distinct','case','when','then','else','end',\n  'primary','key','foreign','references','unique','check','default','constraint',\n  'if','begin','commit','rollback','transaction','trigger','autoincrement',\n  'cascade','restrict','replace','abort','fail','ignore','conflict','temporary',\n  'temp','explain','query','plan','attach','detach','database','pragma','vacuum',\n  'reindex','analyze','rename','column','add','with','recursive','returning',\n  'true','false','except','intersect','collate','nocase','rowid',\n]);\n\nconst SQL_TYPES = new Set([\n  'integer','real','text','blob','numeric','int','float','double','varchar',\n  'char','boolean','date','datetime','timestamp','bigint','smallint','tinyint',\n  'decimal','clob','nvarchar','nchar','none','any',\n]);\n\nconst SQL_FUNCTIONS = new Set([\n  'count','sum','avg','min','max','total','group_concat',\n  'abs','round','random','typeof','coalesce','ifnull','nullif','iif',\n  'length','substr','substring','replace','trim','ltrim','rtrim',\n  'upper','lower','instr','hex','quote','unicode','zeroblob','printf',\n  'char','likelihood','likely','unlikely',\n  'date','time','julianday','strftime','unixepoch','timediff',\n  'json','json_array','json_extract','json_insert','json_object',\n  'json_remove','json_replace','json_type','json_valid','json_group_array',\n  'json_group_object','json_each','json_tree',\n  'last_insert_rowid','changes','total_changes',\n  'load_extension','sqlite_version',\n  'cast','exists',\n]);\n\nfunction tokenizeSql(code) {\n  const tokens = [];\n  let i = 0;\n  const len = code.length;\n\n  while (i < len) {\n    // line comment \u002d\u002d\n    if (code[i] === '-' && code[i + 1] === '-') {\n      const start = i;\n      while (i < len && code[i] !== '\\n') i++;\n      tokens.push({ type: 'cmt', text: code.slice(start, i) });\n      continue;\n    }\n    // block comment /* */\n    if (code[i] === '/' && code[i + 1] === '*') {\n      const start = i;\n      i += 2;\n      while (i < len && !(code[i - 1] === '*' && code[i] === '/')) i++;\n      if (i < len) i++;\n      tokens.push({ type: 'cmt', text: code.slice(start, i) });\n      continue;\n    }\n    // single-quoted string\n    if (code[i] === \"'\") {\n      const start = i;\n      i++;\n      while (i < len) {\n        if (code[i] === \"'\" && code[i + 1] === \"'\") { i += 2; continue; } // escaped quote\n        if (code[i] === \"'\") { i++; break; }\n        i++;\n      }\n      tokens.push({ type: 'str', text: code.slice(start, i) });\n      continue;\n    }\n    // double-quoted identifier\n    if (code[i] === '\"') {\n      const start = i;\n      i++;\n      while (i < len && code[i] !== '\"') i++;\n      if (i < len) i++;\n      tokens.push({ type: 'id', text: code.slice(start, i) });\n      continue;\n    }\n    // backtick-quoted identifier (MySQL-style, SQLite supports it)\n    if (code[i] === '`') {\n      const start = i;\n      i++;\n      while (i < len && code[i] !== '`') i++;\n      if (i < len) i++;\n      tokens.push({ type: 'id', text: code.slice(start, i) });\n      continue;\n    }\n    // numbers\n    if (/\\d/.test(code[i]) || (code[i] === '.' && i + 1 < len && /\\d/.test(code[i + 1]))) {\n      const start = i;\n      if (code[i] === '0' && (code[i + 1] === 'x' || code[i + 1] === 'X')) {\n        i += 2;\n        while (i < len && /[0-9a-fA-F]/.test(code[i])) i++;\n      } else {\n        while (i < len && /[0-9.eE+-]/.test(code[i])) i++;\n      }\n      tokens.push({ type: 'num', text: code.slice(start, i) });\n      continue;\n    }\n    // parameter placeholders: ?, :name, @name, $name\n    if (code[i] === '?' || ((code[i] === ':' || code[i] === '@' || code[i] === '$') && i + 1 < len && /[a-zA-Z_]/.test(code[i + 1]))) {\n      const start = i;\n      i++;\n      while (i < len && /\\w/.test(code[i])) i++;\n      tokens.push({ type: 'const', text: code.slice(start, i) });\n      continue;\n    }\n    // identifiers / keywords\n    if (/[a-zA-Z_]/.test(code[i])) {\n      const start = i;\n      while (i < len && /\\w/.test(code[i])) i++;\n      const word = code.slice(start, i);\n      const lower = word.toLowerCase();\n      if (SQL_KEYWORDS.has(lower)) {\n        tokens.push({ type: 'kw', text: word });\n      } else if (SQL_TYPES.has(lower)) {\n        tokens.push({ type: 'const', text: word });\n      } else if (SQL_FUNCTIONS.has(lower) || (i < len && code[i] === '(')) {\n        tokens.push({ type: 'fn', text: word });\n      } else {\n        tokens.push({ type: 'id', text: word });\n      }\n      continue;\n    }\n    // operators\n    if ('=<>!|+-*/%'.includes(code[i])) {\n      // multi-char operators: <=, >=, <>, !=, ||\n      const start = i;\n      i++;\n      if (i < len && '=<>|'.includes(code[i])) i++;\n      tokens.push({ type: 'op', text: code.slice(start, i) });\n      continue;\n    }\n    // punctuation\n    if ('()[];,.'.includes(code[i])) {\n      tokens.push({ type: 'punc', text: code[i] });\n      i++;\n      continue;\n    }\n    // whitespace / other\n    tokens.push({ type: '', text: code[i] });\n    i++;\n  }\n\n  return tokens;\n}\n\n// ── SQL completions ──\n\nfunction sqlCompletions() {\n  const items = [];\n  for (const w of SQL_KEYWORDS)  items.push({ text: w.toUpperCase(), kind: 'kw' });\n  for (const w of SQL_TYPES)     items.push({ text: w.toUpperCase(), kind: 'const' });\n  for (const w of SQL_FUNCTIONS) items.push({ text: w.toLowerCase(), kind: 'fn' });\n  return items;\n}\n\n// ── Self-registration ──\n\nif (typeof window !== 'undefined') {\n  if (!window._taggedLanguages) window._taggedLanguages = {};\n  window._taggedLanguages.sql = { tokenize: tokenizeSql, completions: sqlCompletions };\n}\n","cellId":null}}
+eyIuL2V4dC9zcWwvaW5kZXguanMiOnsic291cmNlIjoiLy8gQGF1ZGl0YWJsZS9zcWwg4oCUIFNR
+TCBsYW5ndWFnZSB0YWcgd2l0aCBzeW50YXggaGlnaGxpZ2h0aW5nIGFuZCBjb21wbGV0aW9uc1xu
+Ly8gUHJvdmlkZXMgdGhlIHNxbCB0YWdnZWQgdGVtcGxhdGUgbGl0ZXJhbC4gVGhlIGFjdHVhbCBk
+YXRhYmFzZSBlbmdpbmVcbi8vIChzcWwuanMsIGV0Yy4pIGlzIGxvYWRlZCBzZXBhcmF0ZWx5IGJ5
+IHRoZSB1c2VyLlxuXG4vLyDilIDilIAgc3FsIHRhZ2dlZCB0ZW1wbGF0ZSBsaXRlcmFsIOKUgOKU
+gFxuXG5leHBvcnQgZnVuY3Rpb24gc3FsKHN0cmluZ3MsIC4uLnZhbHVlcykge1xuICBsZXQgcmVz
+dWx0ID0gc3RyaW5nc1swXTtcbiAgZm9yIChsZXQgaSA9IDA7IGkgPCB2YWx1ZXMubGVuZ3RoOyBp
+KyspIHJlc3VsdCArPSB2YWx1ZXNbaV0gKyBzdHJpbmdzW2kgKyAxXTtcbiAgcmV0dXJuIHJlc3Vs
+dDtcbn1cblxuLy8g4pSA4pSAIFNRTCB0b2tlbml6ZXIgKGZvciBzeW50YXggaGlnaGxpZ2h0aW5n
+KSDilIDilIBcblxuY29uc3QgU1FMX0tFWVdPUkRTID0gbmV3IFNldChbXG4gICdzZWxlY3QnLCdm
+cm9tJywnd2hlcmUnLCdpbnNlcnQnLCd1cGRhdGUnLCdkZWxldGUnLCdjcmVhdGUnLCdkcm9wJywn
+YWx0ZXInLFxuICAndGFibGUnLCdpbmRleCcsJ3ZpZXcnLCdpbnRvJywndmFsdWVzJywnc2V0Jywn
+am9pbicsJ2xlZnQnLCdyaWdodCcsJ2lubmVyJyxcbiAgJ291dGVyJywnY3Jvc3MnLCduYXR1cmFs
+Jywnb24nLCdhcycsJ2FuZCcsJ29yJywnbm90JywnaW4nLCdpcycsJ251bGwnLFxuICAnbGlrZScs
+J2dsb2InLCdiZXR3ZWVuJywnZXhpc3RzJywnaGF2aW5nJywnZ3JvdXAnLCdieScsJ29yZGVyJywn
+YXNjJywnZGVzYycsXG4gICdsaW1pdCcsJ29mZnNldCcsJ3VuaW9uJywnYWxsJywnZGlzdGluY3Qn
+LCdjYXNlJywnd2hlbicsJ3RoZW4nLCdlbHNlJywnZW5kJyxcbiAgJ3ByaW1hcnknLCdrZXknLCdm
+b3JlaWduJywncmVmZXJlbmNlcycsJ3VuaXF1ZScsJ2NoZWNrJywnZGVmYXVsdCcsJ2NvbnN0cmFp
+bnQnLFxuICAnaWYnLCdiZWdpbicsJ2NvbW1pdCcsJ3JvbGxiYWNrJywndHJhbnNhY3Rpb24nLCd0
+cmlnZ2VyJywnYXV0b2luY3JlbWVudCcsXG4gICdjYXNjYWRlJywncmVzdHJpY3QnLCdyZXBsYWNl
+JywnYWJvcnQnLCdmYWlsJywnaWdub3JlJywnY29uZmxpY3QnLCd0ZW1wb3JhcnknLFxuICAndGVt
+cCcsJ2V4cGxhaW4nLCdxdWVyeScsJ3BsYW4nLCdhdHRhY2gnLCdkZXRhY2gnLCdkYXRhYmFzZScs
+J3ByYWdtYScsJ3ZhY3V1bScsXG4gICdyZWluZGV4JywnYW5hbHl6ZScsJ3JlbmFtZScsJ2NvbHVt
+bicsJ2FkZCcsJ3dpdGgnLCdyZWN1cnNpdmUnLCdyZXR1cm5pbmcnLFxuICAndHJ1ZScsJ2ZhbHNl
+JywnZXhjZXB0JywnaW50ZXJzZWN0JywnY29sbGF0ZScsJ25vY2FzZScsJ3Jvd2lkJyxcbl0pO1xu
+XG5jb25zdCBTUUxfVFlQRVMgPSBuZXcgU2V0KFtcbiAgJ2ludGVnZXInLCdyZWFsJywndGV4dCcs
+J2Jsb2InLCdudW1lcmljJywnaW50JywnZmxvYXQnLCdkb3VibGUnLCd2YXJjaGFyJyxcbiAgJ2No
+YXInLCdib29sZWFuJywnZGF0ZScsJ2RhdGV0aW1lJywndGltZXN0YW1wJywnYmlnaW50Jywnc21h
+bGxpbnQnLCd0aW55aW50JyxcbiAgJ2RlY2ltYWwnLCdjbG9iJywnbnZhcmNoYXInLCduY2hhcics
+J25vbmUnLCdhbnknLFxuXSk7XG5cbmNvbnN0IFNRTF9GVU5DVElPTlMgPSBuZXcgU2V0KFtcbiAg
+J2NvdW50Jywnc3VtJywnYXZnJywnbWluJywnbWF4JywndG90YWwnLCdncm91cF9jb25jYXQnLFxu
+ICAnYWJzJywncm91bmQnLCdyYW5kb20nLCd0eXBlb2YnLCdjb2FsZXNjZScsJ2lmbnVsbCcsJ251
+bGxpZicsJ2lpZicsXG4gICdsZW5ndGgnLCdzdWJzdHInLCdzdWJzdHJpbmcnLCdyZXBsYWNlJywn
+dHJpbScsJ2x0cmltJywncnRyaW0nLFxuICAndXBwZXInLCdsb3dlcicsJ2luc3RyJywnaGV4Jywn
+cXVvdGUnLCd1bmljb2RlJywnemVyb2Jsb2InLCdwcmludGYnLFxuICAnY2hhcicsJ2xpa2VsaWhv
+b2QnLCdsaWtlbHknLCd1bmxpa2VseScsXG4gICdkYXRlJywndGltZScsJ2p1bGlhbmRheScsJ3N0
+cmZ0aW1lJywndW5peGVwb2NoJywndGltZWRpZmYnLFxuICAnanNvbicsJ2pzb25fYXJyYXknLCdq
+c29uX2V4dHJhY3QnLCdqc29uX2luc2VydCcsJ2pzb25fb2JqZWN0JyxcbiAgJ2pzb25fcmVtb3Zl
+JywnanNvbl9yZXBsYWNlJywnanNvbl90eXBlJywnanNvbl92YWxpZCcsJ2pzb25fZ3JvdXBfYXJy
+YXknLFxuICAnanNvbl9ncm91cF9vYmplY3QnLCdqc29uX2VhY2gnLCdqc29uX3RyZWUnLFxuICAn
+bGFzdF9pbnNlcnRfcm93aWQnLCdjaGFuZ2VzJywndG90YWxfY2hhbmdlcycsXG4gICdsb2FkX2V4
+dGVuc2lvbicsJ3NxbGl0ZV92ZXJzaW9uJyxcbiAgJ2Nhc3QnLCdleGlzdHMnLFxuXSk7XG5cbmZ1
+bmN0aW9uIHRva2VuaXplU3FsKGNvZGUpIHtcbiAgY29uc3QgdG9rZW5zID0gW107XG4gIGxldCBp
+ID0gMDtcbiAgY29uc3QgbGVuID0gY29kZS5sZW5ndGg7XG5cbiAgd2hpbGUgKGkgPCBsZW4pIHtc
+biAgICAvLyBsaW5lIGNvbW1lbnQgLS1cbiAgICBpZiAoY29kZVtpXSA9PT0gJy0nICYmIGNvZGVb
+aSArIDFdID09PSAnLScpIHtcbiAgICAgIGNvbnN0IHN0YXJ0ID0gaTtcbiAgICAgIHdoaWxlIChp
+IDwgbGVuICYmIGNvZGVbaV0gIT09ICdcXG4nKSBpKys7XG4gICAgICB0b2tlbnMucHVzaCh7IHR5
+cGU6ICdjbXQnLCB0ZXh0OiBjb2RlLnNsaWNlKHN0YXJ0LCBpKSB9KTtcbiAgICAgIGNvbnRpbnVl
+O1xuICAgIH1cbiAgICAvLyBibG9jayBjb21tZW50IC8qICovXG4gICAgaWYgKGNvZGVbaV0gPT09
+ICcvJyAmJiBjb2RlW2kgKyAxXSA9PT0gJyonKSB7XG4gICAgICBjb25zdCBzdGFydCA9IGk7XG4g
+ICAgICBpICs9IDI7XG4gICAgICB3aGlsZSAoaSA8IGxlbiAmJiAhKGNvZGVbaSAtIDFdID09PSAn
+KicgJiYgY29kZVtpXSA9PT0gJy8nKSkgaSsrO1xuICAgICAgaWYgKGkgPCBsZW4pIGkrKztcbiAg
+ICAgIHRva2Vucy5wdXNoKHsgdHlwZTogJ2NtdCcsIHRleHQ6IGNvZGUuc2xpY2Uoc3RhcnQsIGkp
+IH0pO1xuICAgICAgY29udGludWU7XG4gICAgfVxuICAgIC8vIHNpbmdsZS1xdW90ZWQgc3RyaW5n
+XG4gICAgaWYgKGNvZGVbaV0gPT09IFwiJ1wiKSB7XG4gICAgICBjb25zdCBzdGFydCA9IGk7XG4g
+ICAgICBpKys7XG4gICAgICB3aGlsZSAoaSA8IGxlbikge1xuICAgICAgICBpZiAoY29kZVtpXSA9
+PT0gXCInXCIgJiYgY29kZVtpICsgMV0gPT09IFwiJ1wiKSB7IGkgKz0gMjsgY29udGludWU7IH0g
+Ly8gZXNjYXBlZCBxdW90ZVxuICAgICAgICBpZiAoY29kZVtpXSA9PT0gXCInXCIpIHsgaSsrOyBi
+cmVhazsgfVxuICAgICAgICBpKys7XG4gICAgICB9XG4gICAgICB0b2tlbnMucHVzaCh7IHR5cGU6
+ICdzdHInLCB0ZXh0OiBjb2RlLnNsaWNlKHN0YXJ0LCBpKSB9KTtcbiAgICAgIGNvbnRpbnVlO1xu
+ICAgIH1cbiAgICAvLyBkb3VibGUtcXVvdGVkIGlkZW50aWZpZXJcbiAgICBpZiAoY29kZVtpXSA9
+PT0gJ1wiJykge1xuICAgICAgY29uc3Qgc3RhcnQgPSBpO1xuICAgICAgaSsrO1xuICAgICAgd2hp
+bGUgKGkgPCBsZW4gJiYgY29kZVtpXSAhPT0gJ1wiJykgaSsrO1xuICAgICAgaWYgKGkgPCBsZW4p
+IGkrKztcbiAgICAgIHRva2Vucy5wdXNoKHsgdHlwZTogJ2lkJywgdGV4dDogY29kZS5zbGljZShz
+dGFydCwgaSkgfSk7XG4gICAgICBjb250aW51ZTtcbiAgICB9XG4gICAgLy8gYmFja3RpY2stcXVv
+dGVkIGlkZW50aWZpZXIgKE15U1FMLXN0eWxlLCBTUUxpdGUgc3VwcG9ydHMgaXQpXG4gICAgaWYg
+KGNvZGVbaV0gPT09ICdgJykge1xuICAgICAgY29uc3Qgc3RhcnQgPSBpO1xuICAgICAgaSsrO1xu
+ICAgICAgd2hpbGUgKGkgPCBsZW4gJiYgY29kZVtpXSAhPT0gJ2AnKSBpKys7XG4gICAgICBpZiAo
+aSA8IGxlbikgaSsrO1xuICAgICAgdG9rZW5zLnB1c2goeyB0eXBlOiAnaWQnLCB0ZXh0OiBjb2Rl
+LnNsaWNlKHN0YXJ0LCBpKSB9KTtcbiAgICAgIGNvbnRpbnVlO1xuICAgIH1cbiAgICAvLyBudW1i
+ZXJzXG4gICAgaWYgKC9cXGQvLnRlc3QoY29kZVtpXSkgfHwgKGNvZGVbaV0gPT09ICcuJyAmJiBp
+ICsgMSA8IGxlbiAmJiAvXFxkLy50ZXN0KGNvZGVbaSArIDFdKSkpIHtcbiAgICAgIGNvbnN0IHN0
+YXJ0ID0gaTtcbiAgICAgIGlmIChjb2RlW2ldID09PSAnMCcgJiYgKGNvZGVbaSArIDFdID09PSAn
+eCcgfHwgY29kZVtpICsgMV0gPT09ICdYJykpIHtcbiAgICAgICAgaSArPSAyO1xuICAgICAgICB3
+aGlsZSAoaSA8IGxlbiAmJiAvWzAtOWEtZkEtRl0vLnRlc3QoY29kZVtpXSkpIGkrKztcbiAgICAg
+IH0gZWxzZSB7XG4gICAgICAgIHdoaWxlIChpIDwgbGVuICYmIC9bMC05LmVFKy1dLy50ZXN0KGNv
+ZGVbaV0pKSBpKys7XG4gICAgICB9XG4gICAgICB0b2tlbnMucHVzaCh7IHR5cGU6ICdudW0nLCB0
+ZXh0OiBjb2RlLnNsaWNlKHN0YXJ0LCBpKSB9KTtcbiAgICAgIGNvbnRpbnVlO1xuICAgIH1cbiAg
+ICAvLyBwYXJhbWV0ZXIgcGxhY2Vob2xkZXJzOiA/LCA6bmFtZSwgQG5hbWUsICRuYW1lXG4gICAg
+aWYgKGNvZGVbaV0gPT09ICc/JyB8fCAoKGNvZGVbaV0gPT09ICc6JyB8fCBjb2RlW2ldID09PSAn
+QCcgfHwgY29kZVtpXSA9PT0gJyQnKSAmJiBpICsgMSA8IGxlbiAmJiAvW2EtekEtWl9dLy50ZXN0
+KGNvZGVbaSArIDFdKSkpIHtcbiAgICAgIGNvbnN0IHN0YXJ0ID0gaTtcbiAgICAgIGkrKztcbiAg
+ICAgIHdoaWxlIChpIDwgbGVuICYmIC9cXHcvLnRlc3QoY29kZVtpXSkpIGkrKztcbiAgICAgIHRv
+a2Vucy5wdXNoKHsgdHlwZTogJ2NvbnN0JywgdGV4dDogY29kZS5zbGljZShzdGFydCwgaSkgfSk7
+XG4gICAgICBjb250aW51ZTtcbiAgICB9XG4gICAgLy8gaWRlbnRpZmllcnMgLyBrZXl3b3Jkc1xu
+ICAgIGlmICgvW2EtekEtWl9dLy50ZXN0KGNvZGVbaV0pKSB7XG4gICAgICBjb25zdCBzdGFydCA9
+IGk7XG4gICAgICB3aGlsZSAoaSA8IGxlbiAmJiAvXFx3Ly50ZXN0KGNvZGVbaV0pKSBpKys7XG4g
+ICAgICBjb25zdCB3b3JkID0gY29kZS5zbGljZShzdGFydCwgaSk7XG4gICAgICBjb25zdCBsb3dl
+ciA9IHdvcmQudG9Mb3dlckNhc2UoKTtcbiAgICAgIGlmIChTUUxfS0VZV09SRFMuaGFzKGxvd2Vy
+KSkge1xuICAgICAgICB0b2tlbnMucHVzaCh7IHR5cGU6ICdrdycsIHRleHQ6IHdvcmQgfSk7XG4g
+ICAgICB9IGVsc2UgaWYgKFNRTF9UWVBFUy5oYXMobG93ZXIpKSB7XG4gICAgICAgIHRva2Vucy5w
+dXNoKHsgdHlwZTogJ2NvbnN0JywgdGV4dDogd29yZCB9KTtcbiAgICAgIH0gZWxzZSBpZiAoU1FM
+X0ZVTkNUSU9OUy5oYXMobG93ZXIpIHx8IChpIDwgbGVuICYmIGNvZGVbaV0gPT09ICcoJykpIHtc
+biAgICAgICAgdG9rZW5zLnB1c2goeyB0eXBlOiAnZm4nLCB0ZXh0OiB3b3JkIH0pO1xuICAgICAg
+fSBlbHNlIHtcbiAgICAgICAgdG9rZW5zLnB1c2goeyB0eXBlOiAnaWQnLCB0ZXh0OiB3b3JkIH0p
+O1xuICAgICAgfVxuICAgICAgY29udGludWU7XG4gICAgfVxuICAgIC8vIG9wZXJhdG9yc1xuICAg
+IGlmICgnPTw+IXwrLSovJScuaW5jbHVkZXMoY29kZVtpXSkpIHtcbiAgICAgIC8vIG11bHRpLWNo
+YXIgb3BlcmF0b3JzOiA8PSwgPj0sIDw+LCAhPSwgfHxcbiAgICAgIGNvbnN0IHN0YXJ0ID0gaTtc
+biAgICAgIGkrKztcbiAgICAgIGlmIChpIDwgbGVuICYmICc9PD58Jy5pbmNsdWRlcyhjb2RlW2ld
+KSkgaSsrO1xuICAgICAgdG9rZW5zLnB1c2goeyB0eXBlOiAnb3AnLCB0ZXh0OiBjb2RlLnNsaWNl
+KHN0YXJ0LCBpKSB9KTtcbiAgICAgIGNvbnRpbnVlO1xuICAgIH1cbiAgICAvLyBwdW5jdHVhdGlv
+blxuICAgIGlmICgnKClbXTssLicuaW5jbHVkZXMoY29kZVtpXSkpIHtcbiAgICAgIHRva2Vucy5w
+dXNoKHsgdHlwZTogJ3B1bmMnLCB0ZXh0OiBjb2RlW2ldIH0pO1xuICAgICAgaSsrO1xuICAgICAg
+Y29udGludWU7XG4gICAgfVxuICAgIC8vIHdoaXRlc3BhY2UgLyBvdGhlclxuICAgIHRva2Vucy5w
+dXNoKHsgdHlwZTogJycsIHRleHQ6IGNvZGVbaV0gfSk7XG4gICAgaSsrO1xuICB9XG5cbiAgcmV0
+dXJuIHRva2Vucztcbn1cblxuLy8g4pSA4pSAIFNRTCBjb21wbGV0aW9ucyDilIDilIBcblxuZnVu
+Y3Rpb24gc3FsQ29tcGxldGlvbnMoKSB7XG4gIGNvbnN0IGl0ZW1zID0gW107XG4gIGZvciAoY29u
+c3QgdyBvZiBTUUxfS0VZV09SRFMpICBpdGVtcy5wdXNoKHsgdGV4dDogdy50b1VwcGVyQ2FzZSgp
+LCBraW5kOiAna3cnIH0pO1xuICBmb3IgKGNvbnN0IHcgb2YgU1FMX1RZUEVTKSAgICAgaXRlbXMu
+cHVzaCh7IHRleHQ6IHcudG9VcHBlckNhc2UoKSwga2luZDogJ2NvbnN0JyB9KTtcbiAgZm9yIChj
+b25zdCB3IG9mIFNRTF9GVU5DVElPTlMpIGl0ZW1zLnB1c2goeyB0ZXh0OiB3LnRvTG93ZXJDYXNl
+KCksIGtpbmQ6ICdmbicgfSk7XG4gIHJldHVybiBpdGVtcztcbn1cblxuLy8g4pSA4pSAIFNlbGYt
+cmVnaXN0cmF0aW9uIOKUgOKUgFxuXG5pZiAodHlwZW9mIHdpbmRvdyAhPT0gJ3VuZGVmaW5lZCcp
+IHtcbiAgaWYgKCF3aW5kb3cuX3RhZ2dlZExhbmd1YWdlcykgd2luZG93Ll90YWdnZWRMYW5ndWFn
+ZXMgPSB7fTtcbiAgd2luZG93Ll90YWdnZWRMYW5ndWFnZXMuc3FsID0geyB0b2tlbml6ZTogdG9r
+ZW5pemVTcWwsIGNvbXBsZXRpb25zOiBzcWxDb21wbGV0aW9ucyB9O1xufVxuIiwiY2VsbElkIjpu
+dWxsfX0=
 AUDITABLE-MODULES-->
+<!-- notebook settings: JSON {theme, fontSize, width, ...} -->
 <!--AUDITABLE-SETTINGS
 {"theme":"dark","fontSize":13,"width":"860"}
 AUDITABLE-SETTINGS-->
@@ -3096,6 +3217,18 @@ function topoSort(dirtyIds) {
 }
 
 // -- exec.js --
+
+// ── EXECUTION ENGINE ──
+//
+// Scope model: each cell runs inside an AsyncFunction where upstream variables
+// are passed as parameters. This is pass-by-value for primitives — reassigning
+// a variable in cell A (e.g. `grid = next`) does NOT propagate to cell B.
+// Mutable state that needs to survive across callbacks belongs in %manual cells
+// using DOM elements, objects, or closures.
+//
+// Cell builtins (display, canvas, slider, load, install, installBinary, etc.)
+// are injected as additional parameters — listed in _injected, not in scope.
+// They are NOT propagated to downstream cells.
 
 // ── BINARY HELPERS ──
 
@@ -4430,7 +4563,7 @@ function togglePresent() {
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_BUILD_DATE__ = '2026-02-22';
-const __AUDITABLE_BASE_SIZE__ = 231970;
+const __AUDITABLE_BASE_SIZE__ = 235208;
 
 (function() {
   const ver = $('#aboutVersion');
@@ -4642,10 +4775,10 @@ async function verifySignature(html) {
 function reassemble(newHtml, oldData) {
   let html = newHtml;
 
-  // Remove any existing data/settings/modules comments from the new template
-  html = html.replace(/<!--AUDITABLE-DATA\n[\s\S]*?\nAUDITABLE-DATA-->\n?/g, '');
-  html = html.replace(/<!--AUDITABLE-SETTINGS\n[\s\S]*?\nAUDITABLE-SETTINGS-->\n?/g, '');
-  html = html.replace(/<!--AUDITABLE-MODULES\n[\s\S]*?\nAUDITABLE-MODULES-->\n?/g, '');
+  // Remove any existing data/settings/modules comments (and their description comments) from the new template
+  html = html.replace(/(?:<!-- [^\n]*-->\n)?<!--AUDITABLE-DATA\n[\s\S]*?\nAUDITABLE-DATA-->\n?/g, '');
+  html = html.replace(/(?:<!-- [^\n]*-->\n)?<!--AUDITABLE-SETTINGS\n[\s\S]*?\nAUDITABLE-SETTINGS-->\n?/g, '');
+  html = html.replace(/(?:<!-- [^\n]*-->\n)?<!--AUDITABLE-MODULES\n[\s\S]*?\nAUDITABLE-MODULES-->\n?/g, '');
 
   // Build data block to inject
   const parts = [];
@@ -4867,12 +5000,12 @@ function finishUpdate(newHtml, version) {
       code: c.code,
       collapsed: c.el?.classList.contains('collapsed') || undefined
     }));
-    oldData.data = '<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->';
+    oldData.data = '<!-- cell data: JSON array of {type, code, collapsed?} -->\n<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->';
   }
   if (window._installedModules && Object.keys(window._installedModules).length) {
-    oldData.modules = '<!--AUDITABLE-MODULES\n' + JSON.stringify(window._installedModules).replace(/--/g, '\\u002d\\u002d') + '\nAUDITABLE-MODULES-->';
+    oldData.modules = '<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId} -->\n<!--AUDITABLE-MODULES\n' + encodeModules(window._installedModules) + '\nAUDITABLE-MODULES-->';
   }
-  oldData.settings = '<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->';
+  oldData.settings = '<!-- notebook settings: JSON {theme, fontSize, width, ...} -->\n<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->';
 
   const result = reassemble(newHtml, oldData);
 
@@ -5021,6 +5154,22 @@ async function verifySelf() {
 
 // -- save.js --
 
+// ── MODULES ENCODING ──
+// base64-encode modules JSON to avoid HTML comment / String.replace issues
+// (source code can contain --, $', etc.)
+
+function encodeModules(obj) {
+  const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(obj))));
+  return b64.replace(/.{1,76}/g, '$&\n').trimEnd();
+}
+
+function decodeModules(raw) {
+  const b64 = raw.replace(/\s/g, '');
+  // detect legacy format: starts with { means raw JSON (not base64)
+  if (b64.startsWith('{') || b64.startsWith('%7B')) return JSON.parse(raw);
+  return JSON.parse(decodeURIComponent(escape(atob(b64))));
+}
+
 // ── SAVE / LOAD ──
 
 // save mode: 'normal' or 'packed'
@@ -5144,9 +5293,9 @@ ${findBarHTML}
 
 ${statusbarHTML}
 
-${'<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->'}
-${Object.keys(window._installedModules || {}).length ? '<!--AUDITABLE-MODULES\n' + JSON.stringify(window._installedModules).replace(/--/g, '\\u002d\\u002d') + '\nAUDITABLE-MODULES-->' : ''}
-${'<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->'}
+${'<!-- cell data: JSON array of {type, code, collapsed?} -->\n<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->'}
+${Object.keys(window._installedModules || {}).length ? '<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId} -->\n<!--AUDITABLE-MODULES\n' + encodeModules(window._installedModules) + '\nAUDITABLE-MODULES-->' : ''}
+${'<!-- notebook settings: JSON {theme, fontSize, width, ...} -->\n<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->'}
 
 <script>\n${script}\n<\/script>
 </body>
@@ -5194,25 +5343,56 @@ async function savePackedNotebook() {
     const stream = blob.stream().pipeThrough(cs);
     const compressed = await new Response(stream).arrayBuffer();
     const b64 = btoa(String.fromCharCode(...new Uint8Array(compressed)));
+    const b64Lines = b64.replace(/.{1,76}/g, '$&\n');
 
-    const loader = '<!DOCTYPE html>\n'
-      + '<html lang="en"><head><meta charset="UTF-8">'
-      + '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
-      + '<title>Auditable \u2014 ' + esc(title) + '</title>'
-      + '<style>html{background:#1a1a1a}'
-      + 'body{color:#999;font:14px/1.5 monospace;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}'
-      + '</style></head><body>'
-      + '<div id="_l">unpacking\u2026</div>'
-      + '<script>'
-      + "(async()=>{"
-      + "var b='" + b64 + "';"
-      + "var r=new Response(new Blob([Uint8Array.from(atob(b),c=>c.charCodeAt(0))]));"
-      + "var s=r.body.pipeThrough(new DecompressionStream('gzip'));"
-      + "var h=await new Response(s).text();"
-      + "h=h.replace('<head>','<head><meta name=\"auditable-packed\">');"
-      + "document.open();document.write(h);document.close();"
-      + "})().catch(function(e){document.getElementById('_l').textContent='error: '+e.message});"
-      + '<\/script></body></html>';
+    const loader = `<!DOCTYPE html>
+<!-- packed auditable notebook -->
+<!-- the full notebook is gzip-compressed and base64-encoded in the <pre> block below. -->
+<!-- on load, the script decodes and decompresses it, then replaces the page contents. -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Auditable \u2014 ${esc(title)}</title>
+  <style>
+    html { background: #1a1a1a }
+    body { color: #999; font: 14px/1.5 monospace; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0 }
+    #_d { display: none }
+  </style>
+</head>
+<body>
+<div id="_l">unpacking\u2026</div>
+
+<!-- base64-encoded gzip payload (76-char lines) -->
+<pre id="_d">
+${b64Lines}</pre>
+
+<script>
+(async () => {
+  // 1. read base64 from the hidden <pre>, strip whitespace from line wrapping
+  var b64 = document.getElementById('_d').textContent.replace(/\\s/g, '');
+
+  // 2. decode base64 to binary
+  var bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+
+  // 3. decompress gzip via DecompressionStream
+  var stream = new Response(new Blob([bytes])).body.pipeThrough(new DecompressionStream('gzip'));
+  var html = await new Response(stream).text();
+
+  // 4. mark as packed (so the notebook knows it was loaded from a packed save)
+  html = html.replace('<head>', '<head><meta name="auditable-packed">');
+
+  // 5. replace the current page with the full notebook
+  document.open();
+  document.write(html);
+  document.close();
+})().catch(function(e) {
+  document.getElementById('_l').textContent = 'error: ' + e.message;
+});
+<\/script>
+</body>
+</html>`;
+
 
     const fn = downloadHtml(loader, title);
     const kb = (loader.length / 1024).toFixed(0);
@@ -5234,7 +5414,7 @@ function loadFromEmbed() {
   const modMatch = raw.match(/<!--AUDITABLE-MODULES\n([\s\S]*?)\nAUDITABLE-MODULES-->/);
   if (modMatch) {
     try {
-      window._installedModules = JSON.parse(modMatch[1]);
+      window._installedModules = decodeModules(modMatch[1]);
     } catch (e) {
       console.error('Failed to parse installed modules:', e);
     }
@@ -7337,6 +7517,18 @@ window.newNotebook = newNotebook;
 // ── AF BRIDGE ──
 // When running inside AF shell (iframe), establish postMessage communication.
 // No-op when running standalone (window.parent === window).
+//
+// Message protocol (notebook ↔ AF shell):
+//   af:ready          → sent on init with { title }
+//   af:serialize      ← received to trigger saveNotebook()
+//   af:saved          ← received after save (shows "saved" status)
+//   af:setTitle       ← received to update docTitle input
+//   af:resize         ← received when iframe becomes visible (recalc textareas)
+//   af:titleChanged   → sent when user edits the title
+//   af:fileRequest    → sent to request file picker { id, accept }
+//   af:fileResult     ← received with picked file { id, file }
+//   af:download       → sent to request download { data, filename, mimeType }
+//   af:dirty          → sent when notebook has unsaved changes
 
 (function afBridge() {
   if (window.parent === window) return;

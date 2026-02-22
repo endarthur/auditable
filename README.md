@@ -5,16 +5,21 @@ a reactive computational notebook that fits in a single HTML file.
 no build step. no server. no dependencies. open the file, write code, save. the HTML *is* the document, the runtime, and the lockfile.
 
 ```
-auditable.html  ~150KB
+auditable.html  ~228KB
 ```
 
 ## what it does
 
 - **reactive DAG** -- cells track dependencies and re-execute when upstream values change
 - **four cell types** -- code, markdown, CSS, and HTML cells with live reactivity
-- **interactive widgets** -- `slider()`, `dropdown()`, `checkbox()`, `textInput()` with live reactivity
+- **interactive widgets** -- `slider()`, `dropdown()`, `checkbox()`, `textInput()` with callback support for real-time interaction
 - **module system** -- `await load("https://esm.sh/d3")` for dynamic ESM imports; `install()` embeds the source in the HTML so it works offline
+- **binary assets** -- `installBinary()` embeds binary files (WASM, images, etc.) with gzip compression
+- **language extensions** -- tagged template literals for GLSL shaders and SQL with syntax highlighting and completions
 - **self-contained save** -- Ctrl+S produces a new HTML file with all code, state, settings, and installed modules baked in
+- **packed save** -- gzip-compressed save format (~60% smaller) with readable, self-documenting bootstrap loader
+- **Ed25519 signatures** -- sign notebooks for integrity verification
+- **self-documenting format** -- every data block in saved HTML has a descriptive comment explaining what it is
 - **find/replace** -- Ctrl+F to search across cells, with regex and case-sensitive modes
 - **presentation mode** -- hide the editor, show the outputs. widgets still work. press `p`
 - **cell directives** -- `// %manual`, `// %hide`, `// %norun`, `// %cellName`, `// %goto`, `// %outputId`, `// %outputClass`
@@ -54,13 +59,16 @@ press **F1** inside the notebook for the full reference. highlights:
 display(value)          // render text, objects, or DOM elements
 canvas(w, h)            // create a canvas element in the output
 table(data, columns?)   // render array of objects as a table
-slider(label, default, {min, max, step})
-dropdown(label, options)
-checkbox(label, default)
-textInput(label, default)
+slider(label, default, {min, max, step, onInput, onChange})
+dropdown(label, options, {onInput, onChange})
+checkbox(label, default, {onInput, onChange})
+textInput(label, default, {onInput, onChange})
 load(url)               // dynamic ESM import (cached)
 install(url)            // import + embed source in HTML on save
+installBinary(url)      // embed binary asset (gzip + base64), returns blob URL
 ```
+
+widgets accept `onInput` / `onChange` callbacks for real-time interaction without triggering DAG re-execution. ideal for animations, audio, and responsive visualizations.
 
 ## directives
 
@@ -95,9 +103,27 @@ const { Stereonet } = await load("https://esm.sh/@gcu/bearing");
 // install() fetches the source and embeds it in the HTML
 // the notebook works offline after that
 await install("https://esm.sh/peerjs");
+
+// installBinary() for WASM, images, and other binary assets
+// gzip-compressed by default (~60% smaller), returns a blob URL
+const wasmUrl = await installBinary("https://example.com/module.wasm");
 ```
 
-installed modules are managed in the settings panel -- view sizes, remove individual modules.
+installed modules and binaries are managed in the settings panel -- view sizes, remove individual entries.
+
+## language extensions
+
+tagged template literals that register syntax highlighting and completions:
+
+```js
+// GLSL shaders -- Shadertoy-compatible with live hot-compile
+await install("./ext/shader/index.js");
+glsl`void mainImage(out vec4 O, in vec2 U) { O = vec4(U/iResolution.xy, 0, 1); }`
+
+// SQL -- syntax highlighting + keyword completions (bring your own database engine)
+await install("./ext/sql/index.js");
+const result = sql`SELECT * FROM users WHERE age > 21`;
+```
 
 ## settings
 
@@ -125,11 +151,45 @@ the `examples/` directory contains:
 | `example_mandelbrot.html` | mandelbrot set explorer with zoom, pan, and color shift |
 | `example_stereonet.html` | structural geology stereonet using `@gcu/bearing` |
 | `example_synth.html` | web audio synthesizer with keyboard UI |
+| `example_particles.html` | particle system with gravity and collision |
 | `example_idw.html` | inverse distance weighting interpolation with viridis colormap |
 | `example_dashboard.html` | multi-panel dashboard layout with CSS cells |
 | `example_modules.html` | `install()` and `load()` with esm.sh modules |
+| `example_python.html` | Python builtins (`range`, `enumerate`, `sorted`, etc.) in JS |
+| `example_sql.html` | SQL queries with sql.js -- `installBinary()` for WASM, `@auditable/sql` for syntax |
+| `example_shader.html` | GLSL fragment shaders with Shadertoy-compatible uniforms |
 
 each is a self-contained HTML file. no server required.
+
+## saved file format
+
+saved notebooks are self-documenting. every data block has a descriptive HTML comment:
+
+```html
+<!-- cell data: JSON array of {type, code, collapsed?} -->
+<!--AUDITABLE-DATA
+[{"type":"code","code":"const x = 1"}, ...]
+AUDITABLE-DATA-->
+
+<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId} -->
+<!--AUDITABLE-MODULES
+eyJodHRwczovL2VzbS5zaC9kMyI6...
+AUDITABLE-MODULES-->
+
+<!-- notebook settings: JSON {theme, fontSize, width, ...} -->
+<!--AUDITABLE-SETTINGS
+{"theme":"dark","fontSize":13,"width":"860"}
+AUDITABLE-SETTINGS-->
+
+<!-- Ed25519 signature: verify style+script content against pub key -->
+<!--AUDITABLE-SIGNATURE
+{"v":1,"sig":"...","pub":"...","alg":"Ed25519"}
+AUDITABLE-SIGNATURE-->
+```
+
+modules are base64-encoded to avoid HTML comment parsing issues. old notebooks with raw JSON still load (backward compatible).
+
+packed saves use gzip compression with a readable bootstrap loader that explains every step.
 
 ## auditable files (AF) -- experimental
 
@@ -187,9 +247,8 @@ node gen_examples.js
 
 - [ ] web component widgets (`<audit-slider>`, etc.)
 - [ ] export as app (strip editor, emit standalone page)
-- [ ] callback widgets for real-time interaction (animation, audio)
 - [ ] worker builtins for offloading computation
-- [ ] embed system for binary data
+- [ ] documentation site
 - [ ] AF: af-bridge.js -- lightweight support library for AF-aware apps
   - save bridge (`AF.onSerialize`, `AF.markDirty`, `AF.setTitle`)
   - file access (`AF.readFile`, `AF.writeFile`, `AF.listFiles`)
