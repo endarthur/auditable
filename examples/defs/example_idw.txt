@@ -1,0 +1,158 @@
+/// title: IDW interpolation
+
+/// code collapsed
+// %collapsed
+workshop([
+  {
+    title: 'IDW interpolation',
+    content: md`This is a guided **workshop** for this notebook.
+Use the **prev** and **next** buttons below to navigate
+between pages, or click the progress dots to jump directly.
+
+Close this panel with the **\u00d7** button. Reopen it
+anytime with the **workshop** tab on the right edge
+of the screen.`
+  },
+  {
+    title: 'Multi-cell pipeline',
+    content: md`This notebook splits the work into four cells:
+**parameters \u2192 samples \u2192 interpolation \u2192 rendering**.
+Each cell defines \`const\` values consumed by the next.
+
+The DAG engine traces these dependencies automatically.
+Change the \`power\` slider \u2192 parameter cell re-runs
+\u2192 interpolation re-runs \u2192 render re-runs. The sample
+generation cell is skipped because \`power\` isn\u2019t
+in its dependency set.`
+  },
+  {
+    title: 'Seeded RNG',
+    content: md`The sample cell uses a **seeded** pseudo-random
+number generator (Mulberry32) instead of
+\`Math.random()\`. This ensures the same samples
+appear every time the cell runs with the same
+\`nSamples\` value.
+
+Without a seeded RNG, changing the \`power\` slider
+would regenerate random samples (because the samples
+cell would re-run), making it impossible to compare
+interpolation results.`
+  },
+  {
+    title: 'Canvas rendering',
+    content: md`The render cell iterates over a grid and fills
+rectangles with a colormap. \`ui.canvas(size, size)\`
+creates the canvas, then standard Canvas 2D API calls
+do the drawing.
+
+The \`showPts\` checkbox conditionally overlays sample
+points. Since it\u2019s a reactive widget (no \`onInput\`),
+toggling it re-runs only the render cell \u2014 the
+expensive interpolation is skipped because its inputs
+didn\u2019t change.`
+  },
+])
+
+/// md
+# inverse distance weighting
+
+an interactive IDW interpolation demo. drag the sliders to see the effect of **power** and **sample count** on the estimated surface.
+
+/// code
+// parameters
+const nSamples = ui.slider("samples", 20, {min:5, max:80, step:1});
+const power = ui.slider("power", 2, {min:0.5, max:6, step:0.25});
+const gridRes = ui.slider("grid size", 100, {min:30, max:200, step:10});
+const showPts = ui.checkbox("show samples", true);
+
+/// code
+// seeded RNG + spatially structured samples
+function mulberry32(a) {
+  return function() {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const rng = mulberry32(42);
+
+const samples = Array.from({length: nSamples}, () => {
+  const x = rng(), y = rng();
+  const trend = 0.5 * Math.sin(x * 3.5) * Math.cos(y * 2.8) + 0.5;
+  return { x, y, v: 0.4 * rng() + 0.6 * trend };
+});
+
+/// code
+// IDW interpolation
+function idw(px, py, pts, p) {
+  let wsum = 0, vsum = 0;
+  for (const s of pts) {
+    const dx = px - s.x, dy = py - s.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < 1e-12) return s.v;
+    const w = 1 / Math.pow(Math.sqrt(d2), p);
+    wsum += w;
+    vsum += w * s.v;
+  }
+  return vsum / wsum;
+}
+
+const grid = new Float64Array(gridRes * gridRes);
+for (let iy = 0; iy < gridRes; iy++) {
+  for (let ix = 0; ix < gridRes; ix++) {
+    grid[iy * gridRes + ix] = idw(
+      (ix + 0.5) / gridRes,
+      (iy + 0.5) / gridRes,
+      samples, power
+    );
+  }
+}
+
+/// code
+// render
+const size = Math.min(500, window.innerWidth - 80);
+const c = ui.canvas(size, size);
+const ctx = c.getContext("2d");
+
+// viridis-ish colormap
+function viridis(t) {
+  t = Math.max(0, Math.min(1, t));
+  const r = Math.round(255 * Math.max(0, Math.min(1,
+    0.267 + t * (0.004 + t * (5.294 + t * (-14.05 + t * 8.5))))));
+  const g = Math.round(255 * Math.max(0, Math.min(1,
+    0.004 + t * (1.384 + t * (0.098 + t * (-2.74 + t * 2.23))))));
+  const b = Math.round(255 * Math.max(0, Math.min(1,
+    0.329 + t * (1.44 + t * (-5.11 + t * (6.87 + t * -3.57))))));
+  return `rgb(${r},${g},${b})`;
+}
+
+let vmin = Infinity, vmax = -Infinity;
+for (let i = 0; i < grid.length; i++) {
+  if (grid[i] < vmin) vmin = grid[i];
+  if (grid[i] > vmax) vmax = grid[i];
+}
+const vrange = vmax - vmin || 1;
+
+const cellW = size / gridRes;
+for (let iy = 0; iy < gridRes; iy++) {
+  for (let ix = 0; ix < gridRes; ix++) {
+    const t = (grid[iy * gridRes + ix] - vmin) / vrange;
+    ctx.fillStyle = viridis(t);
+    ctx.fillRect(ix * cellW, iy * cellW, cellW + 0.5, cellW + 0.5);
+  }
+}
+
+if (showPts) {
+  for (const s of samples) {
+    ctx.beginPath();
+    ctx.arc(s.x * size, s.y * size, 4, 0, Math.PI * 2);
+    ctx.fillStyle = "#fff";
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = "#000";
+    ctx.stroke();
+  }
+}
+
+ui.display(`${gridRes}\u00d7${gridRes} grid \u00b7 ${nSamples} samples \u00b7 p=${power} \u00b7 range [${vmin.toFixed(3)}, ${vmax.toFixed(3)}]`);

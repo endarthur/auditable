@@ -1,0 +1,101 @@
+/// title: stereonet
+
+/// code collapsed
+// %collapsed
+workshop([
+  {
+    title: 'Stereonet',
+    content: md`This is a guided **workshop** for this notebook.
+Use the **prev** and **next** buttons below to navigate
+between pages, or click the progress dots to jump directly.
+
+Close this panel with the **\u00d7** button. Reopen it
+anytime with the **workshop** tab on the right edge
+of the screen.`
+  },
+  {
+    title: 'Loading external modules',
+    content: md`\`load(url)\` imports an ES module at runtime
+and caches it for the session. Here it fetches
+\`@gcu/bearing\` from esm.sh.
+
+Unlike \`install()\`, \`load()\` doesn\u2019t embed the
+source in the HTML \u2014 it requires network access
+each session. Use \`load()\` for libraries you don\u2019t
+need offline, or during development before committing
+to \`install()\`.`
+  },
+  {
+    title: 'Reactive checkboxes & sliders',
+    content: md`\`ui.checkbox(label, default)\` and
+\`ui.slider(label, default, opts)\` are **reactive
+widgets** \u2014 no \`onInput\` callback, so changing them
+re-runs the cell and all dependents.
+
+The render cell reads \`showPlanes\`, \`showPoles\`,
+\`trend\`, and \`plunge\`. Toggle a checkbox \u2192 the
+render cell re-runs \u2192 the stereonet updates.
+The DAG handles the propagation.`
+  },
+  {
+    title: 'Multi-cell structure',
+    content: md`The data (\`planes\`, \`fault\`) lives in
+its own cell, separate from controls and rendering.
+This is a common auditable pattern:
+**data \u2192 controls \u2192 computation \u2192 display**.
+
+Each cell defines \`const\` values that downstream
+cells consume. Editing the planes array and pressing
+Ctrl+Enter re-runs only the cells that depend on it.`
+  },
+])
+
+/// md
+# interactive stereonet
+
+using `@gcu/bearing` to plot structural geology data on an equal-area stereonet. try changing the measurements or rotating the view.
+
+/// code
+const { Stereonet } = await load("https://esm.sh/@gcu/bearing");
+
+/// code
+// bedding planes — strike/dip (right-hand rule)
+const planes = [
+  [120, 35], [125, 40], [118, 32],
+  [130, 38], [115, 30], [122, 42],
+  [128, 36], [117, 33], [135, 45],
+];
+
+// a fault
+const fault = [210, 65];
+
+/// code
+const trend = ui.slider("view trend", 0, {min:0, max:360, step:5});
+const plunge = ui.slider("view plunge", 90, {min:0, max:90, step:5});
+const showPlanes = ui.checkbox("great circles", true);
+const showPoles = ui.checkbox("poles", true);
+
+/// code
+const s = new Stereonet({ size: 500, projection: 'equal-area' });
+
+if (trend !== 0 || plunge !== 90) {
+  s.setCenter(trend, plunge);
+}
+
+if (showPlanes) {
+  for (const [strike, dip] of planes) {
+    s.plane(strike, dip);
+  }
+  s.plane(fault[0], fault[1], { color: '#c33', width: 2 });
+}
+
+if (showPoles) {
+  for (const [strike, dip] of planes) {
+    s.pole(strike, dip);
+  }
+  s.pole(fault[0], fault[1], { color: '#c33', radius: 5 });
+}
+
+s.render();
+ui.display(s.element());
+ui.display(`${planes.length} bedding planes + 1 fault \u00b7 view: ${trend}/${plunge}`);

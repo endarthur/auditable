@@ -1,0 +1,134 @@
+/// title: synth
+
+/// code collapsed
+// %collapsed
+workshop([
+  {
+    title: 'Browser synth',
+    content: md`This is a guided **workshop** for this notebook.
+Use the **prev** and **next** buttons below to navigate
+between pages, or click the progress dots to jump directly.
+
+Close this panel with the **\u00d7** button. Reopen it
+anytime with the **workshop** tab on the right edge
+of the screen.`
+  },
+  {
+    title: 'Callbacks vs reactive',
+    content: md`This synth uses **callback widgets**
+exclusively. Each \`ui.slider\` and \`ui.dropdown\`
+has an \`onInput\` callback that fires on every
+input event.
+
+With callbacks, dragging a slider calls your function
+directly \u2014 no cell re-run, no DAG traversal, no
+scope rebuild. This is essential for real-time audio
+where even a few milliseconds of latency matters.`
+  },
+  {
+    title: 'Manual cells & mutable state',
+    content: md`The \`// %manual\` directive means this
+cell only runs on Ctrl+Enter or Run All \u2014 never
+automatically.
+
+Manual cells can use \`let\` for mutable state
+(\`currentWave\`, \`currentOctave\`). Callbacks write
+to these variables directly. In a reactive cell,
+scope is passed by value so cross-cell mutation
+doesn\u2019t work \u2014 but within a single manual cell,
+it\u2019s fine.`
+  },
+  {
+    title: 'Web Audio & invalidation',
+    content: md`The cell creates an \`AudioContext\` and
+oscillator that persist across interactions. The
+\`invalidation\` promise handles cleanup:
+
+\`invalidation.then(() => { osc.stop(); audioCtx.close(); })\`
+
+This runs just before the cell re-executes, preventing
+resource leaks. Every long-lived resource (intervals,
+audio contexts, WebSocket connections) should be
+cleaned up via \`invalidation\`.`
+  },
+])
+
+/// md
+# browser synth
+
+a synthesizer using the Web Audio API with **callback widgets** for real-time parameter control. the sliders wire directly to audio nodes — no DAG re-execution, just the browser event loop.
+
+uses `onInput` callbacks on `ui.slider` and `ui.dropdown` so dragging a knob instantly updates the sound without re-running any cells.
+
+/// code
+// %manual
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+// persistent oscillator + gain for continuous tone
+const osc = audioCtx.createOscillator();
+const gainNode = audioCtx.createGain();
+osc.connect(gainNode);
+gainNode.connect(audioCtx.destination);
+osc.frequency.value = 440;
+gainNode.gain.value = 0;
+osc.start();
+
+// mutable state that callbacks update directly
+let currentWave = "sine";
+let currentOctave = 4;
+let currentDecay = 0.5;
+
+// callback widgets — real-time, zero DAG overhead
+ui.slider("frequency", 440, {min: 20, max: 2000, step: 1, onInput: v => osc.frequency.value = v});
+ui.slider("volume", 0.3, {min: 0, max: 1, step: 0.01, onInput: v => gainNode.gain.value = v});
+ui.dropdown("waveform", ["sine", "triangle", "sawtooth", "square"], "sine", {onInput: v => { osc.type = v; currentWave = v; }});
+ui.slider("octave", 4, {min: 2, max: 6, step: 1, onInput: v => currentOctave = v});
+ui.slider("decay", 0.5, {min: 0.1, max: 2, step: 0.1, onInput: v => currentDecay = v});
+
+// keyboard for playing notes
+function playNote(freq) {
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = currentWave;
+  o.frequency.value = freq;
+  g.gain.setValueAtTime(0.3, audioCtx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + currentDecay);
+  o.connect(g);
+  g.connect(audioCtx.destination);
+  o.start();
+  o.stop(audioCtx.currentTime + currentDecay);
+}
+
+function noteFreq(semitone, oct) {
+  return 440 * Math.pow(2, (semitone - 9) / 12 + (oct - 4));
+}
+
+const notes = [
+  ["C", 0], ["C#", 1], ["D", 2], ["D#", 3],
+  ["E", 4], ["F", 5], ["F#", 6], ["G", 7],
+  ["G#", 8], ["A", 9], ["A#", 10], ["B", 11]
+];
+
+const kb = document.createElement("div");
+kb.style.cssText = "display:flex;gap:2px;margin:12px 0;flex-wrap:wrap";
+
+for (const [name, semi] of notes) {
+  const btn = document.createElement("button");
+  const isSharp = name.includes("#");
+  btn.textContent = name;
+  btn.style.cssText = isSharp
+    ? "background:#222;color:#c89b3c;border:1px solid #444;padding:20px 8px 40px;font-size:11px;min-width:30px;cursor:pointer;font-family:monospace"
+    : "background:#1a1a1a;color:#aaa;border:1px solid #333;padding:20px 12px 40px;font-size:11px;min-width:36px;cursor:pointer;font-family:monospace";
+  btn.onmousedown = () => {
+    playNote(noteFreq(semi, currentOctave));
+    btn.style.borderColor = "#c89b3c";
+  };
+  btn.onmouseup = () => btn.style.borderColor = isSharp ? "#444" : "#333";
+  btn.onmouseleave = () => btn.style.borderColor = isSharp ? "#444" : "#333";
+  kb.appendChild(btn);
+}
+
+ui.display(kb);
+
+// cleanup on cell invalidation
+invalidation.then(() => { osc.stop(); audioCtx.close(); });

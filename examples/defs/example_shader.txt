@@ -1,0 +1,93 @@
+/// title: shader playground
+/// module: ./ext/shader/index.js ext/shader/index.js
+
+/// code collapsed
+// %collapsed
+workshop([
+  {
+    title: 'Shader playground',
+    content: md`This is a guided **workshop** for this notebook.
+Use the **prev** and **next** buttons below to navigate
+between pages, or click the progress dots to jump directly.
+
+Close this panel with the **\u00d7** button. Reopen it
+anytime with the **workshop** tab on the right edge
+of the screen.`
+  },
+  {
+    title: 'Manual cells & glsl tag',
+    content: md`This cell is \`// %manual\` because the
+shader runs a continuous animation loop. Re-running
+on every slider drag would destroy and recreate the
+WebGL context.
+
+The \`glsl\` tag from \`@auditable/shader\` provides
+**syntax highlighting** and **completions** for GLSL
+code inside the template literal. It\u2019s a tagged
+language extension, like \`sql\`.`
+  },
+  {
+    title: 'Real-time uniforms',
+    content: md`The sliders use \`onInput\` callbacks to
+call \`s.set(name, value)\` directly. This updates
+the shader uniform **on the GPU** without recompiling
+the shader or re-running the cell.
+
+This is the fastest feedback path: slider event
+\u2192 callback \u2192 \`gl.uniform*()\` \u2192 next frame
+renders with new value. No DAG, no scope rebuild,
+no JavaScript re-execution.`
+  },
+  {
+    title: 'Cleanup with invalidation',
+    content: md`\`invalidation.then(() => s.destroy())\`
+ensures the WebGL context and animation loop are
+cleaned up before any re-run.
+
+The \`shader()\` helper manages Shadertoy-compatible
+builtins (\`iTime\`, \`iResolution\`, \`iMouse\`) and
+the render loop. \`s.destroy()\` stops the
+\`requestAnimationFrame\` loop and releases GPU
+resources. Always pair long-lived resources with
+\`invalidation\`.`
+  },
+])
+
+/// md
+# shader playground
+
+a Shadertoy-compatible WebGL 2 shader running in a single cell. the `@auditable/shader` extension injects `iTime`, `iResolution`, `iMouse` and other builtins automatically — just write `mainImage`. the `glsl` tag provides syntax highlighting and completions inside the template literal.
+
+the sliders use `onInput` callbacks to update custom uniforms in real time, with zero DAG overhead.
+
+/// code
+// %manual
+const { shader, glsl } = await load("./ext/shader/index.js");
+
+const c = ui.canvas(600, 400);
+const col = [0.78, 0.61, 0.24];
+
+const s = shader(c, glsl`
+  void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    float t = iTime * speed;
+
+    // layered sine waves
+    float r = 0.5 + 0.5 * sin(uv.x * 6.0 + t);
+    float g = 0.5 + 0.5 * sin(uv.y * 6.0 + t * 1.3 + 2.0);
+    float b = 0.5 + 0.5 * sin((uv.x + uv.y) * 4.0 + t * 0.7 + 4.0);
+
+    // mix with custom color
+    vec3 base = vec3(r, g, b);
+    fragColor = vec4(mix(base, color, 0.4), 1.0);
+  }
+`, {
+  uniforms: { speed: 1.0, color: col }
+});
+
+ui.slider("speed", 1.0, {min: 0.1, max: 5.0, step: 0.1, onInput: v => s.set("speed", v)});
+ui.slider("red",   0.78, {min: 0, max: 1, step: 0.01, onInput: v => { col[0] = v; s.set("color", col); }});
+ui.slider("green", 0.61, {min: 0, max: 1, step: 0.01, onInput: v => { col[1] = v; s.set("color", col); }});
+ui.slider("blue",  0.24, {min: 0, max: 1, step: 0.01, onInput: v => { col[2] = v; s.set("color", col); }});
+
+invalidation.then(() => s.destroy());
