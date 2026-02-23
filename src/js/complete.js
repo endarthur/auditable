@@ -165,17 +165,33 @@ function cursorContext(code, cursor) {
     }
     // template literal (possibly tagged)
     if (ch === '`') {
-      // look back for a tag name: identifier immediately before the backtick
+      // look back for a tag name: identifier immediately before the backtick,
+      // or curried form: identifier(...) before the backtick
       let tagName = null;
-      if (i > 0) {
+      if (i > 0 && typeof window !== 'undefined' && window._taggedLanguages) {
         let te = i;
         let ts = te;
+        // direct form: ident`
         while (ts > 0 && /\w/.test(code[ts - 1])) ts--;
         if (ts < te) {
           const candidate = code.slice(ts, te);
-          if (typeof window !== 'undefined' && window._taggedLanguages
-              && window._taggedLanguages[candidate]) {
-            tagName = candidate;
+          if (window._taggedLanguages[candidate]) tagName = candidate;
+        }
+        // curried form: ident(...)`
+        if (!tagName && code[i - 1] === ')') {
+          let p = i - 2, depth = 1;
+          while (p >= 0 && depth > 0) {
+            if (code[p] === ')') depth++;
+            else if (code[p] === '(') depth--;
+            p--;
+          }
+          // p now points one before the (
+          let ne = p + 1;
+          let ns = ne;
+          while (ns > 0 && /\w/.test(code[ns - 1])) ns--;
+          if (ns < ne) {
+            const candidate = code.slice(ns, ne);
+            if (window._taggedLanguages[candidate]) tagName = candidate;
           }
         }
       }

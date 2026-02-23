@@ -27,6 +27,7 @@ const defs = [
   'example_python.txt',
   'example_sql.txt',
   'example_shader.txt',
+  'example_atra.txt',
 ];
 
 // ── Parser ──
