@@ -11,13 +11,16 @@ const ATRA_KEYWORDS = new Set([
   'call','array','true','false','from',
 ]);
 
-const ATRA_TYPES = new Set(['i32','i64','f32','f64']);
+const ATRA_TYPES = new Set(['i32','i64','f32','f64','f64x2','f32x4','i32x4','i64x2']);
 
 const ATRA_BUILTINS = new Set([
   'sin','cos','sqrt','abs','floor','ceil','ln','exp','pow',
   'min','max','trunc','nearest','copysign','select',
   'clz','ctz','popcnt','rotl','rotr','memory_size','memory_grow',
+  'memory_copy','memory_fill',
 ]);
+
+const ATRA_VECTOR_TYPES = new Set(['f64x2','f32x4','i32x4','i64x2']);
 
 function tokenizeAtra(code) {
   const tokens = [];
@@ -64,7 +67,8 @@ function tokenizeAtra(code) {
         } else {
           tokens.push({ type: 'const', text: word });
         }
-      } else if (ATRA_BUILTINS.has(lower) || lower.startsWith('wasm.')) {
+      } else if (ATRA_BUILTINS.has(lower) || lower.startsWith('wasm.') ||
+                 lower.startsWith('v128.') || (ATRA_VECTOR_TYPES.has(lower.split('.')[0]) && lower.includes('.'))) {
         tokens.push({ type: 'fn', text: word });
       } else if (i < len && code[i] === '(') {
         tokens.push({ type: 'fn', text: word });
@@ -159,15 +163,12 @@ function lex(source) {
       tokens.push({ type: TOK.NUM, value: raw, isFloat, typeSuffix, line: tl, col: tc });
       continue;
     }
-    // identifier (including wasm.xxx)
+    // identifier (dots allowed — namespaces by convention)
     if (/[a-zA-Z_]/.test(source[i])) {
       const start = i;
-      while (i < len && /\w/.test(source[i])) adv();
-      // handle wasm.xxx
-      if (source.slice(start, i) === 'wasm' && peek() === '.') {
-        adv(); // skip .
-        while (i < len && /[\w]/.test(source[i])) adv();
-      }
+      while (i < len && /[\w.]/.test(source[i])) adv();
+      // trim trailing dot (e.g. "name." at end of input)
+      while (i > start + 1 && source[i - 1] === '.') { i--; col--; }
       let val = source.slice(start, i);
       // interpolation markers: __INTERP_N__
       if (/^__INTERP_\d+__$/.test(val)) {
@@ -245,6 +246,17 @@ function parse(tokens) {
 
   function isLocalContext() { return false; } // globals only at top level
 
+  // Parse function type signature: function(x: f64, y: f64): f64
+  function parseFuncTypeSig() {
+    eat(TOK.KW, 'function');
+    eat(TOK.PUNC, '(');
+    const params = at(TOK.PUNC, ')') ? [] : parseParamEntries();
+    eat(TOK.PUNC, ')');
+    let retType = null;
+    if (maybe(TOK.PUNC, ':')) retType = eat(TOK.KW).value;
+    return { params, retType };
+  }
+
   function parseGlobalConst() {
     eat(TOK.KW, 'const');
     const name = eat(TOK.ID).value;
@@ -259,6 +271,12 @@ function parse(tokens) {
     eat(TOK.KW, 'var');
     const name = eat(TOK.ID).value;
     eat(TOK.PUNC, ':');
+    if (at(TOK.KW, 'function')) {
+      const funcSig = parseFuncTypeSig();
+      let init = null;
+      if (maybe(TOK.OP, '=')) init = parseExpr(0);
+      return { type: 'VarDecl', name, vtype: 'i32', funcSig, init };
+    }
     const vtype = eat(TOK.KW).value;
     let init = null;
     if (maybe(TOK.OP, '=')) init = parseExpr(0);
@@ -307,8 +325,13 @@ function parse(tokens) {
         const lnames = [eat(TOK.ID).value];
         while (maybe(TOK.PUNC, ',')) lnames.push(eat(TOK.ID).value);
         eat(TOK.PUNC, ':');
-        const lt = eat(TOK.KW).value;
-        for (const ln of lnames) locals.push({ type: 'Local', name: ln, vtype: lt });
+        if (at(TOK.KW, 'function')) {
+          const funcSig = parseFuncTypeSig();
+          for (const ln of lnames) locals.push({ type: 'Local', name: ln, vtype: 'i32', funcSig });
+        } else {
+          const lt = eat(TOK.KW).value;
+          for (const ln of lnames) locals.push({ type: 'Local', name: ln, vtype: lt });
+        }
       }
     }
     eat(TOK.KW, 'begin');
@@ -330,8 +353,13 @@ function parse(tokens) {
         const lnames = [eat(TOK.ID).value];
         while (maybe(TOK.PUNC, ',')) lnames.push(eat(TOK.ID).value);
         eat(TOK.PUNC, ':');
-        const lt = eat(TOK.KW).value;
-        for (const ln of lnames) locals.push({ type: 'Local', name: ln, vtype: lt });
+        if (at(TOK.KW, 'function')) {
+          const funcSig = parseFuncTypeSig();
+          for (const ln of lnames) locals.push({ type: 'Local', name: ln, vtype: 'i32', funcSig });
+        } else {
+          const lt = eat(TOK.KW).value;
+          for (const ln of lnames) locals.push({ type: 'Local', name: ln, vtype: lt });
+        }
       }
     }
     eat(TOK.KW, 'begin');
@@ -351,6 +379,13 @@ function parse(tokens) {
         names.push(eat(TOK.ID).value);
       }
       eat(TOK.PUNC, ':');
+      // function type: callback: function(x: f64): f64
+      if (at(TOK.KW, 'function')) {
+        const funcSig = parseFuncTypeSig();
+        for (const n of names) params.push({ type: 'Param', name: n, vtype: 'i32', isArray: false, arrayDims: null, funcSig });
+        maybe(TOK.PUNC, ','); // consume comma between param groups
+        continue;
+      }
       let isArray = false, arrayDims = null;
       if (at(TOK.KW, 'array')) {
         pos++;
@@ -365,6 +400,7 @@ function parse(tokens) {
       }
       const vtype = eat(TOK.KW).value;
       for (const n of names) params.push({ type: 'Param', name: n, vtype, isArray, arrayDims });
+      maybe(TOK.PUNC, ','); // consume comma between param groups
     }
     return params;
   }
@@ -383,6 +419,7 @@ function parse(tokens) {
       eat(TOK.PUNC, ':');
       const vtype = eat(TOK.KW).value;
       for (const n of names) params.push({ type: 'Param', name: n, vtype, isArray: false, arrayDims: null });
+      maybe(TOK.PUNC, ','); // consume comma between param groups
     }
     eat(TOK.PUNC, ')');
     return params;
@@ -667,13 +704,13 @@ function parse(tokens) {
       }
       return { type: 'Ident', name };
     }
-    // type conversion: i32(...), f64(...)  — types are keywords
+    // type conversion / vector constructor: i32(...), f64(...), f64x2(a, b), etc.
     if (t.type === TOK.KW && ATRA_TYPES.has(t.value) && tokens[pos + 1] && tokens[pos + 1].value === '(') {
       pos++; // skip type keyword
       pos++; // skip (
-      const arg = parseExpr(0);
+      const args = parseArgs();
       eat(TOK.PUNC, ')');
-      return { type: 'FuncCall', name: t.value, args: [arg] };
+      return { type: 'FuncCall', name: t.value, args };
     }
     throw new SyntaxError(`Unexpected token "${t.value}" at ${t.line}:${t.col}`);
   }
@@ -688,7 +725,7 @@ function parse(tokens) {
 // Wasm opcodes
 const OP_UNREACHABLE = 0x00, OP_NOP = 0x01, OP_BLOCK = 0x02, OP_LOOP = 0x03,
   OP_IF = 0x04, OP_ELSE = 0x05, OP_END = 0x0b, OP_BR = 0x0c, OP_BR_IF = 0x0d,
-  OP_RETURN = 0x0f, OP_CALL = 0x10, OP_SELECT = 0x1b,
+  OP_RETURN = 0x0f, OP_CALL = 0x10, OP_CALL_INDIRECT = 0x11, OP_SELECT = 0x1b,
   OP_LOCAL_GET = 0x20, OP_LOCAL_SET = 0x21, OP_LOCAL_TEE = 0x22,
   OP_GLOBAL_GET = 0x23, OP_GLOBAL_SET = 0x24,
   OP_I32_LOAD = 0x28, OP_I64_LOAD = 0x29, OP_F32_LOAD = 0x2a, OP_F64_LOAD = 0x2b,
@@ -745,24 +782,80 @@ const OP_I32_TRUNC_SAT_F32_S = 0, OP_I32_TRUNC_SAT_F32_U = 1,
 
 // Wasm type codes
 const WASM_I32 = 0x7f, WASM_I64 = 0x7e, WASM_F32 = 0x7d, WASM_F64 = 0x7c;
+const WASM_V128 = 0x7b;
 const WASM_VOID = 0x40;
+
+// SIMD prefix
+const OP_SIMD_PREFIX = 0xfd;
+
+// SIMD opcode table
+const SIMD_OPS = {
+  // splat
+  'i32x4.splat': 0x11, 'i64x2.splat': 0x12, 'f32x4.splat': 0x13, 'f64x2.splat': 0x14,
+  // extract_lane
+  'i32x4.extract_lane': 0x1b, 'i64x2.extract_lane': 0x1d, 'f32x4.extract_lane': 0x1f, 'f64x2.extract_lane': 0x21,
+  // replace_lane
+  'i32x4.replace_lane': 0x1c, 'i64x2.replace_lane': 0x1e, 'f32x4.replace_lane': 0x20, 'f64x2.replace_lane': 0x22,
+  // add
+  'i32x4.add': 0xae, 'i64x2.add': 0xce, 'f32x4.add': 0xe4, 'f64x2.add': 0xf0,
+  // sub
+  'i32x4.sub': 0xb1, 'i64x2.sub': 0xd1, 'f32x4.sub': 0xe5, 'f64x2.sub': 0xf1,
+  // mul
+  'i32x4.mul': 0xb5, 'i64x2.mul': 0xd5, 'f32x4.mul': 0xe6, 'f64x2.mul': 0xf2,
+  // div (float only)
+  'f32x4.div': 0xe7, 'f64x2.div': 0xf3,
+  // neg
+  'i32x4.neg': 0xa1, 'i64x2.neg': 0xc1, 'f32x4.neg': 0xe1, 'f64x2.neg': 0xed,
+  // abs (float only)
+  'f32x4.abs': 0xe0, 'f64x2.abs': 0xec,
+  // sqrt (float only)
+  'f32x4.sqrt': 0xe3, 'f64x2.sqrt': 0xef,
+  // min/max (float only)
+  'f32x4.min': 0xe8, 'f64x2.min': 0xf4, 'f32x4.max': 0xe9, 'f64x2.max': 0xf5,
+  // comparison — eq
+  'i32x4.eq': 0x37, 'i64x2.eq': 0xd6, 'f32x4.eq': 0x41, 'f64x2.eq': 0x47,
+  // ne
+  'i32x4.ne': 0x38, 'f32x4.ne': 0x42, 'f64x2.ne': 0x48,
+  // lt
+  'i32x4.lt_s': 0x39, 'i64x2.lt_s': 0xd7, 'f32x4.lt': 0x43, 'f64x2.lt': 0x49,
+  // gt
+  'i32x4.gt_s': 0x3b, 'i64x2.gt_s': 0xd9, 'f32x4.gt': 0x44, 'f64x2.gt': 0x4a,
+  // le
+  'i32x4.le_s': 0x3d, 'i64x2.le_s': 0xdb, 'f32x4.le': 0x45, 'f64x2.le': 0x4b,
+  // ge
+  'i32x4.ge_s': 0x3f, 'i64x2.ge_s': 0xdd, 'f32x4.ge': 0x46, 'f64x2.ge': 0x4c,
+  // v128 bitwise
+  'v128.not': 0x4d, 'v128.and': 0x4e, 'v128.or': 0x50, 'v128.xor': 0x51,
+  // v128 memory
+  'v128.load': 0x00, 'v128.store': 0x0b, 'v128.const': 0x0c,
+};
 
 function wasmType(t) {
   if (t === 'i32') return WASM_I32;
   if (t === 'i64') return WASM_I64;
   if (t === 'f32') return WASM_F32;
   if (t === 'f64') return WASM_F64;
+  if (isVector(t)) return WASM_V128;
   throw new Error('Unknown type: ' + t);
 }
 
 function typeSize(t) {
   if (t === 'i32' || t === 'f32') return 4;
   if (t === 'i64' || t === 'f64') return 8;
+  if (isVector(t)) return 16;
   throw new Error('Unknown type: ' + t);
 }
 
 function isFloat(t) { return t === 'f32' || t === 'f64'; }
 function isInt(t) { return t === 'i32' || t === 'i64'; }
+function isVector(t) { return t === 'f64x2' || t === 'f32x4' || t === 'i32x4' || t === 'i64x2'; }
+function vectorScalarType(t) {
+  if (t === 'f64x2') return 'f64';
+  if (t === 'f32x4') return 'f32';
+  if (t === 'i32x4') return 'i32';
+  if (t === 'i64x2') return 'i64';
+  return null;
+}
 
 // ── ByteWriter ──
 
@@ -814,7 +907,11 @@ function codegen(ast, interpValues, userImports) {
 
   for (const node of ast.body) {
     if (node.type === 'ConstDecl') globals.push({ name: node.name, vtype: node.vtype, mutable: false, init: node.init });
-    else if (node.type === 'VarDecl') globals.push({ name: node.name, vtype: node.vtype, mutable: true, init: node.init });
+    else if (node.type === 'VarDecl') {
+      const g = { name: node.name, vtype: node.vtype, mutable: true, init: node.init };
+      if (node.funcSig) g.funcSig = node.funcSig;
+      globals.push(g);
+    }
     else if (node.type === 'Function' || node.type === 'Subroutine') { functions.push(node); localFuncNames.add(node.name); }
     else if (node.type === 'ImportDecl') imports.push(node);
   }
@@ -826,8 +923,9 @@ function codegen(ast, interpValues, userImports) {
     'sqrt','abs','floor','ceil','trunc','nearest','copysign',
     'min','max','select',
     'clz','ctz','popcnt','rotl','rotr',
-    'memory_size','memory_grow',
+    'memory_size','memory_grow','memory_copy','memory_fill',
     'i32','i64','f32','f64', // type conversions
+    'f64x2','f32x4','i32x4','i64x2', // vector constructors
   ]);
 
   // Scan all function bodies for unresolved calls
@@ -866,12 +964,14 @@ function codegen(ast, interpValues, userImports) {
   }
 
   // Auto-import from userImports or globalThis
+  const flatImports = userImports ? flattenImports(userImports) : {};
   const hostImports = [];
   for (const name of usedCalls) {
     if (localFuncNames.has(name) || NATIVE_BUILTINS.has(name) || name.startsWith('wasm.') ||
+        name.startsWith('v128.') || ATRA_VECTOR_TYPES.has(name.split('.')[0]) ||
         MATH_BUILTINS[name] !== undefined || imports.find(im => im.name === name)) continue;
-    // check userImports then globalThis
-    let fn = userImports && userImports[name];
+    // check flattened userImports then globalThis
+    let fn = flatImports[name];
     if (!fn && typeof globalThis !== 'undefined') fn = globalThis[name];
     if (typeof fn === 'function') {
       const nParams = fn.length;
@@ -889,9 +989,66 @@ function codegen(ast, interpValues, userImports) {
   for (const im of allImports) { funcIndex[im.name] = idx++; }
   for (const fn of functions) { funcIndex[fn.name] = idx++; }
 
-  // Global index table
+  // Global index table (+ track funcSig for function-typed globals)
   const globalIndex = {};
-  for (let gi = 0; gi < globals.length; gi++) globalIndex[globals[gi].name] = gi;
+  const globalFuncSig = {}; // name → funcSig for function-typed globals
+  for (let gi = 0; gi < globals.length; gi++) {
+    globalIndex[globals[gi].name] = gi;
+    if (globals[gi].funcSig) globalFuncSig[globals[gi].name] = globals[gi].funcSig;
+  }
+
+  // ── Scan for function references (bare function names used as values) ──
+  const referencedFuncs = new Set();
+  function scanFuncRefs(stmts, localNames) {
+    for (const s of stmts) scanNodeRefs(s, localNames);
+  }
+  function scanNodeRefs(node, localNames) {
+    if (!node || typeof node !== 'object') return;
+    if (node.type === 'Ident' && funcIndex[node.name] !== undefined && !localNames.has(node.name) && globalIndex[node.name] === undefined) {
+      referencedFuncs.add(node.name);
+    }
+    for (const k of Object.keys(node)) {
+      const v = node[k];
+      if (Array.isArray(v)) v.forEach(c => scanNodeRefs(c, localNames));
+      else if (v && typeof v === 'object' && v.type) scanNodeRefs(v, localNames);
+    }
+  }
+  for (const fn of functions) {
+    const localNames = new Set();
+    for (const p of fn.params) localNames.add(p.name);
+    for (const l of fn.locals) localNames.add(l.name);
+    if (fn.type === 'Function') localNames.add(fn.name); // return var
+    scanFuncRefs(fn.body, localNames);
+  }
+
+  // Detect if call_indirect is needed (function-typed params/locals/globals exist)
+  let hasIndirectCalls = Object.keys(globalFuncSig).length > 0;
+  if (!hasIndirectCalls) {
+    for (const fn of functions) {
+      if (fn.params.some(p => p.funcSig) || fn.locals.some(l => l.funcSig)) { hasIndirectCalls = true; break; }
+    }
+  }
+
+  // Build table: explicitly referenced funcs always; if call_indirect used, also explicit imports + local functions.
+  // Auto-imports only enter the table if explicitly referenced by bare name.
+  const autoImportNames = new Set([...mathImports.map(m => m.name), ...hostImports.map(m => m.name)]);
+  let tableFuncSet;
+  if (hasIndirectCalls) {
+    tableFuncSet = new Set([
+      ...imports.map(im => im.name),
+      ...functions.map(fn => fn.name),
+      ...referencedFuncs,
+    ]);
+    // Exclude auto-imports that aren't explicitly referenced by bare name
+    for (const name of autoImportNames) {
+      if (!referencedFuncs.has(name)) tableFuncSet.delete(name);
+    }
+  } else {
+    tableFuncSet = new Set(referencedFuncs);
+  }
+  const tableFuncs = [...tableFuncSet].sort((a, b) => funcIndex[a] - funcIndex[b]);
+  const tableSlot = {}; // funcName → table index
+  for (let ti = 0; ti < tableFuncs.length; ti++) tableSlot[tableFuncs[ti]] = ti;
 
   // ── Build type signatures ──
   function paramWasmType(p) { return p.isArray ? 'i32' : p.vtype; }
@@ -964,6 +1121,16 @@ function codegen(ast, interpValues, userImports) {
     for (const sigId of funcSigIds) s.u32(sigId);
   });
 
+  // Table section (4) — only if call_indirect is used
+  if (tableFuncs.length > 0) {
+    w.section(4, s => {
+      s.u32(1); // one table
+      s.byte(0x70); // funcref
+      s.byte(0x00); // no max
+      s.u32(tableFuncs.length); // initial size = number of referenced functions
+    });
+  }
+
   // Memory section (5) — only if arrays used and no imported memory
   if (hasMemory && !importMemory) {
     w.section(5, s => {
@@ -1004,6 +1171,18 @@ function codegen(ast, interpValues, userImports) {
     }
   });
 
+  // Element section (9) — populate the table with function references
+  if (tableFuncs.length > 0) {
+    w.section(9, s => {
+      s.u32(1); // one element segment
+      s.u32(0); // table index 0
+      // offset expression: i32.const 0
+      s.byte(OP_I32_CONST); s.s32(0); s.byte(OP_END);
+      s.u32(tableFuncs.length);
+      for (const fname of tableFuncs) s.u32(funcIndex[fname]);
+    });
+  }
+
   // Code section (10)
   w.section(10, s => {
     s.u32(functions.length);
@@ -1015,7 +1194,9 @@ function codegen(ast, interpValues, userImports) {
     }
   });
 
-  return w.toUint8Array();
+  const bytes = w.toUint8Array();
+  const table = tableFuncs.length > 0 ? { ...tableSlot } : null;
+  return { bytes, table };
 
   // ── Helper: emit constant init expression ──
   function emitConstExpr(s, node, vtype) {
@@ -1025,6 +1206,11 @@ function codegen(ast, interpValues, userImports) {
       else if (vtype === 'i64') { s.byte(OP_I64_CONST); s.s64(0n); }
       else if (vtype === 'f32') { s.byte(OP_F32_CONST); s.f32(0); }
       else if (vtype === 'f64') { s.byte(OP_F64_CONST); s.f64(0); }
+      else if (isVector(vtype)) {
+        // v128.const with 16 zero bytes
+        s.byte(OP_SIMD_PREFIX); s.u32(SIMD_OPS['v128.const']);
+        for (let vi = 0; vi < 16; vi++) s.byte(0);
+      }
       return;
     }
     if (node.type === 'NumberLit') {
@@ -1062,13 +1248,15 @@ function codegen(ast, interpValues, userImports) {
     const localMap = {}; // name → { idx, vtype }
     let localIdx = 0;
     for (const p of fn.params) {
-      localMap[p.name] = {
+      const entry = {
         idx: localIdx++,
         vtype: p.isArray ? 'i32' : p.vtype, // Wasm type: arrays are i32 pointers
         isArray: p.isArray,
         arrayDims: p.arrayDims,
         elemType: p.isArray ? p.vtype : null  // element type for load/store
       };
+      if (p.funcSig) entry.funcSig = p.funcSig;
+      localMap[p.name] = entry;
     }
     // Additional locals declared
     const declaredLocals = [...fn.locals];
@@ -1077,7 +1265,9 @@ function codegen(ast, interpValues, userImports) {
       declaredLocals.push({ name: '$_return', vtype: retType });
     }
     for (const loc of declaredLocals) {
-      localMap[loc.name] = { idx: localIdx++, vtype: loc.vtype };
+      const entry = { idx: localIdx++, vtype: loc.vtype };
+      if (loc.funcSig) entry.funcSig = loc.funcSig;
+      localMap[loc.name] = entry;
     }
 
     // Emit local declarations (only the non-param ones)
@@ -1093,6 +1283,9 @@ function codegen(ast, interpValues, userImports) {
       bw.u32(run.count);
       bw.byte(wasmType(run.type));
     }
+
+    // SIMD helper
+    function emitSimd(op) { bw.byte(OP_SIMD_PREFIX); bw.u32(op); }
 
     // Emit body statements
     let depth = 0; // current block nesting depth
@@ -1231,6 +1424,28 @@ function codegen(ast, interpValues, userImports) {
           break;
         }
         case 'Call': {
+          // SIMD namespaced builtins used as statements (e.g. call v128.store(...))
+          const callDotIdx = stmt.name.indexOf('.');
+          if (callDotIdx !== -1) {
+            const callPrefix = stmt.name.slice(0, callDotIdx);
+            const callMethod = stmt.name.slice(callDotIdx + 1);
+            if (isVector(callPrefix) || callPrefix === 'v128') {
+              emitSimdBuiltin(callPrefix, callMethod, stmt, null);
+              break;
+            }
+          }
+          // Native builtins used as statements (e.g. call memory_copy(...))
+          if (NATIVE_BUILTINS.has(stmt.name)) {
+            emitFuncCall(stmt, null);
+            break;
+          }
+          // Indirect call via function-typed variable used as statement
+          const callLocalInfo = localMap[stmt.name];
+          const callGSig = globalFuncSig[stmt.name];
+          if ((callLocalInfo && callLocalInfo.funcSig) || callGSig) {
+            emitFuncCall(stmt, null);
+            break;
+          }
           // subroutine call or function call (result discarded)
           const fIdx = funcIndex[stmt.name];
           if (fIdx === undefined) throw new Error(`Undefined function: ${stmt.name}`);
@@ -1271,12 +1486,34 @@ function codegen(ast, interpValues, userImports) {
           if (expr.isFloat || expr.value.includes('.') || expr.value.includes('e') || expr.value.includes('E')) return 'f64';
           return 'i32';
         }
-        case 'Ident': return resolveType(expr.name) || 'f64';
+        case 'Ident': return resolveType(expr.name) || (tableSlot[expr.name] !== undefined ? 'i32' : null) || 'f64';
         case 'BinOp': return inferExprType(expr.left);
         case 'UnaryOp': return inferExprType(expr.operand);
         case 'FuncCall': {
-          // type conversions
+          // type conversions / vector constructors
           if (ATRA_TYPES.has(expr.name)) return expr.name;
+          // SIMD namespaced builtins
+          const dotIdx = expr.name.indexOf('.');
+          if (dotIdx !== -1) {
+            const prefix = expr.name.slice(0, dotIdx);
+            const method = expr.name.slice(dotIdx + 1);
+            if (isVector(prefix)) {
+              // extract_lane returns the scalar type
+              if (method === 'extract_lane') return vectorScalarType(prefix);
+              // splat, replace_lane, add, sub, mul, div, neg, abs, sqrt, eq, etc. return the vector type
+              return prefix;
+            }
+            if (prefix === 'v128') {
+              // v128.and/or/xor/not/load return v128 — infer from first arg
+              if (method === 'load') return inferExprType(expr.args[0]) || 'f64x2'; // default to f64x2
+              if (['and','or','xor','not'].includes(method)) return inferExprType(expr.args[0]);
+              if (method === 'store') return 'i32'; // store is a statement, but type doesn't matter much
+            }
+          }
+          // Indirect call via function-typed variable
+          const callInfo = localMap[expr.name];
+          if (callInfo && callInfo.funcSig && callInfo.funcSig.retType) return callInfo.funcSig.retType;
+          if (globalFuncSig[expr.name] && globalFuncSig[expr.name].retType) return globalFuncSig[expr.name].retType;
           // known return types
           const fn = functions.find(f => f.name === expr.name);
           if (fn && fn.retType) return fn.retType;
@@ -1308,6 +1545,10 @@ function codegen(ast, interpValues, userImports) {
           const name = expr.name;
           if (localMap[name]) { bw.byte(OP_LOCAL_GET); bw.u32(localMap[name].idx); }
           else if (globalIndex[name] !== undefined) { bw.byte(OP_GLOBAL_GET); bw.u32(globalIndex[name]); }
+          else if (tableSlot[name] !== undefined) {
+            // Bare function name → table index (for call_indirect)
+            bw.byte(OP_I32_CONST); bw.s32(tableSlot[name]);
+          }
           else throw new Error(`Undefined variable: ${name}`);
           break;
         }
@@ -1323,6 +1564,7 @@ function codegen(ast, interpValues, userImports) {
             else if (t === 'f32') { emitExpr(expr.operand, t); bw.byte(OP_F32_NEG); }
             else if (t === 'i32') { bw.byte(OP_I32_CONST); bw.s32(0); emitExpr(expr.operand, t); bw.byte(OP_I32_SUB); }
             else if (t === 'i64') { bw.byte(OP_I64_CONST); bw.s64(0n); emitExpr(expr.operand, t); bw.byte(OP_I64_SUB); }
+            else if (isVector(t)) { emitExpr(expr.operand, t); emitSimd(SIMD_OPS[t + '.neg']); }
           } else if (expr.op === 'not') {
             emitExpr(expr.operand, 'i32');
             bw.byte(OP_I32_EQZ);
@@ -1435,7 +1677,13 @@ function codegen(ast, interpValues, userImports) {
     function emitFuncCall(expr, expectedType) {
       const name = expr.name;
 
-      // Type conversions: i32(x), f64(x), etc.
+      // Vector constructors: f64x2(a, b), f32x4(a, b, c, d), etc.
+      if (isVector(name)) {
+        emitVectorConstructor(name, expr.args);
+        return;
+      }
+
+      // Scalar type conversions: i32(x), f64(x), etc.
       if (ATRA_TYPES.has(name)) {
         const fromType = inferExprType(expr.args[0]);
         const toType = name;
@@ -1444,15 +1692,50 @@ function codegen(ast, interpValues, userImports) {
         return;
       }
 
-      // Native builtins
-      if (name === 'sqrt') { emitExpr(expr.args[0], expectedType); if (expectedType === 'f32') bw.byte(OP_F32_SQRT); else bw.byte(OP_F64_SQRT); return; }
-      if (name === 'abs') { emitExpr(expr.args[0], expectedType); if (expectedType === 'f32') bw.byte(OP_F32_ABS); else bw.byte(OP_F64_ABS); return; }
+      // SIMD namespaced builtins: f64x2.splat, v128.and, etc.
+      const dotIdx = name.indexOf('.');
+      if (dotIdx !== -1) {
+        const prefix = name.slice(0, dotIdx);
+        const method = name.slice(dotIdx + 1);
+        if (isVector(prefix) || prefix === 'v128') {
+          emitSimdBuiltin(prefix, method, expr, expectedType);
+          return;
+        }
+      }
+
+      // Native builtins — with vector type support
+      if (name === 'sqrt') {
+        emitExpr(expr.args[0], expectedType);
+        if (isVector(expectedType)) { const op = SIMD_OPS[expectedType + '.sqrt']; if (op === undefined) throw new Error('sqrt not supported for ' + expectedType); emitSimd(op); }
+        else if (expectedType === 'f32') bw.byte(OP_F32_SQRT);
+        else bw.byte(OP_F64_SQRT);
+        return;
+      }
+      if (name === 'abs') {
+        emitExpr(expr.args[0], expectedType);
+        if (isVector(expectedType)) { const op = SIMD_OPS[expectedType + '.abs']; if (op === undefined) throw new Error('abs not supported for ' + expectedType); emitSimd(op); }
+        else if (expectedType === 'f32') bw.byte(OP_F32_ABS);
+        else bw.byte(OP_F64_ABS);
+        return;
+      }
       if (name === 'floor') { emitExpr(expr.args[0], expectedType); if (expectedType === 'f32') bw.byte(OP_F32_FLOOR); else bw.byte(OP_F64_FLOOR); return; }
       if (name === 'ceil') { emitExpr(expr.args[0], expectedType); if (expectedType === 'f32') bw.byte(OP_F32_CEIL); else bw.byte(OP_F64_CEIL); return; }
       if (name === 'trunc') { emitExpr(expr.args[0], expectedType); if (expectedType === 'f32') bw.byte(OP_F32_TRUNC); else bw.byte(OP_F64_TRUNC); return; }
       if (name === 'nearest') { emitExpr(expr.args[0], expectedType); if (expectedType === 'f32') bw.byte(OP_F32_NEAREST); else bw.byte(OP_F64_NEAREST); return; }
-      if (name === 'min') { emitExpr(expr.args[0], expectedType); emitExpr(expr.args[1], expectedType); if (expectedType === 'f32') bw.byte(OP_F32_MIN); else bw.byte(OP_F64_MIN); return; }
-      if (name === 'max') { emitExpr(expr.args[0], expectedType); emitExpr(expr.args[1], expectedType); if (expectedType === 'f32') bw.byte(OP_F32_MAX); else bw.byte(OP_F64_MAX); return; }
+      if (name === 'min') {
+        emitExpr(expr.args[0], expectedType); emitExpr(expr.args[1], expectedType);
+        if (isVector(expectedType)) { const op = SIMD_OPS[expectedType + '.min']; if (op === undefined) throw new Error('min not supported for ' + expectedType); emitSimd(op); }
+        else if (expectedType === 'f32') bw.byte(OP_F32_MIN);
+        else bw.byte(OP_F64_MIN);
+        return;
+      }
+      if (name === 'max') {
+        emitExpr(expr.args[0], expectedType); emitExpr(expr.args[1], expectedType);
+        if (isVector(expectedType)) { const op = SIMD_OPS[expectedType + '.max']; if (op === undefined) throw new Error('max not supported for ' + expectedType); emitSimd(op); }
+        else if (expectedType === 'f32') bw.byte(OP_F32_MAX);
+        else bw.byte(OP_F64_MAX);
+        return;
+      }
       if (name === 'copysign') { emitExpr(expr.args[0], expectedType); emitExpr(expr.args[1], expectedType); if (expectedType === 'f32') bw.byte(OP_F32_COPYSIGN); else bw.byte(OP_F64_COPYSIGN); return; }
       if (name === 'select') {
         // select(a, b, cond) — Wasm select picks a if cond!=0, b otherwise
@@ -1470,10 +1753,41 @@ function codegen(ast, interpValues, userImports) {
       if (name === 'rotr') { emitExpr(expr.args[0], expectedType); emitExpr(expr.args[1], expectedType); if (expectedType === 'i64') bw.byte(OP_I64_ROTR); else bw.byte(OP_I32_ROTR); return; }
       if (name === 'memory_size') { bw.byte(OP_MEMORY_SIZE); bw.u32(0); return; }
       if (name === 'memory_grow') { emitExpr(expr.args[0], 'i32'); bw.byte(OP_MEMORY_GROW); bw.u32(0); return; }
+      if (name === 'memory_copy') {
+        emitExpr(expr.args[0], 'i32'); emitExpr(expr.args[1], 'i32'); emitExpr(expr.args[2], 'i32');
+        bw.byte(OP_FC_PREFIX); bw.u32(10); bw.u32(0); bw.u32(0); // memory.copy, dst_mem=0, src_mem=0
+        return;
+      }
+      if (name === 'memory_fill') {
+        emitExpr(expr.args[0], 'i32'); emitExpr(expr.args[1], 'i32'); emitExpr(expr.args[2], 'i32');
+        bw.byte(OP_FC_PREFIX); bw.u32(11); bw.u32(0); // memory.fill, mem=0
+        return;
+      }
 
       // wasm.* escape hatch
       if (name.startsWith('wasm.')) {
         emitWasmBuiltin(name.slice(5), expr, expectedType);
+        return;
+      }
+
+      // Indirect call via function-typed variable
+      const localInfo = localMap[name];
+      const gSig = globalFuncSig[name];
+      if ((localInfo && localInfo.funcSig) || gSig) {
+        const sig = (localInfo && localInfo.funcSig) || gSig;
+        // Emit arguments using funcSig param types
+        for (let ai = 0; ai < expr.args.length; ai++) {
+          const pt = sig.params[ai] ? (sig.params[ai].isArray ? 'i32' : sig.params[ai].vtype) : 'f64';
+          emitExpr(expr.args[ai], pt);
+        }
+        // Push the table index (the variable value)
+        if (localInfo) { bw.byte(OP_LOCAL_GET); bw.u32(localInfo.idx); }
+        else { bw.byte(OP_GLOBAL_GET); bw.u32(globalIndex[name]); }
+        // call_indirect type_index table_index
+        const indirectSigId = getOrAddSig(sig.params, sig.retType);
+        bw.byte(OP_CALL_INDIRECT);
+        bw.u32(indirectSigId);
+        bw.u32(0); // table index 0
         return;
       }
 
@@ -1524,6 +1838,159 @@ function codegen(ast, interpValues, userImports) {
         return;
       }
       throw new Error(`Unknown wasm builtin: wasm.${op}`);
+    }
+
+    function emitVectorConstructor(vecType, args) {
+      const scalar = vectorScalarType(vecType);
+      const laneCount = vecType === 'f32x4' || vecType === 'i32x4' ? 4 : 2;
+
+      if (args.length !== laneCount) throw new Error(`${vecType} constructor expects ${laneCount} args, got ${args.length}`);
+
+      // Check if all args are constant (NumberLit or negative NumberLit)
+      const allConst = args.every(a =>
+        a.type === 'NumberLit' ||
+        (a.type === 'UnaryOp' && a.op === '-' && a.operand.type === 'NumberLit'));
+
+      if (allConst) {
+        // Emit v128.const with inline bytes
+        emitSimd(SIMD_OPS['v128.const']);
+        const abuf = new ArrayBuffer(16);
+        const view = new DataView(abuf);
+        for (let li = 0; li < laneCount; li++) {
+          const a = args[li];
+          const raw = a.type === 'NumberLit' ? a.value : a.operand.value;
+          const val = a.type === 'UnaryOp' ? -parseFloat(raw) : parseFloat(raw);
+          if (scalar === 'f64') view.setFloat64(li * 8, val, true);
+          else if (scalar === 'f32') view.setFloat32(li * 4, val, true);
+          else if (scalar === 'i32') view.setInt32(li * 4, val | 0, true);
+          else if (scalar === 'i64') {
+            // BigInt64 as two i32s, little-endian
+            const bv = BigInt(Math.trunc(val));
+            view.setInt32(li * 8, Number(bv & 0xffffffffn), true);
+            view.setInt32(li * 8 + 4, Number((bv >> 32n) & 0xffffffffn), true);
+          }
+        }
+        bw.bytes(new Uint8Array(abuf));
+      } else {
+        // Splat first arg, then replace_lane for the rest
+        emitExpr(args[0], scalar);
+        emitSimd(SIMD_OPS[vecType + '.splat']);
+        for (let li = 1; li < laneCount; li++) {
+          emitExpr(args[li], scalar);
+          emitSimd(SIMD_OPS[vecType + '.replace_lane']);
+          bw.byte(li);
+        }
+      }
+    }
+
+    function emitSimdBuiltin(prefix, method, expr, expectedType) {
+      // f64x2.splat(x), i32x4.splat(x), etc.
+      if (method === 'splat') {
+        const scalar = vectorScalarType(prefix);
+        emitExpr(expr.args[0], scalar);
+        emitSimd(SIMD_OPS[prefix + '.splat']);
+        return;
+      }
+
+      // f64x2.extract_lane(v, lane)
+      if (method === 'extract_lane') {
+        emitExpr(expr.args[0], prefix);
+        emitSimd(SIMD_OPS[prefix + '.extract_lane']);
+        // lane must be a constant
+        if (expr.args[1].type !== 'NumberLit') throw new Error('extract_lane requires constant lane index');
+        bw.byte(parseInt(expr.args[1].value, 10));
+        return;
+      }
+
+      // f64x2.replace_lane(v, lane, x)
+      if (method === 'replace_lane') {
+        const scalar = vectorScalarType(prefix);
+        emitExpr(expr.args[0], prefix); // v128 value
+        emitExpr(expr.args[2], scalar); // replacement scalar
+        emitSimd(SIMD_OPS[prefix + '.replace_lane']);
+        if (expr.args[1].type !== 'NumberLit') throw new Error('replace_lane requires constant lane index');
+        bw.byte(parseInt(expr.args[1].value, 10));
+        return;
+      }
+
+      // f64x2.eq, f64x2.ne, f64x2.lt, f64x2.gt, f64x2.le, f64x2.ge
+      if (['eq','ne','lt','gt','le','ge','lt_s','gt_s','le_s','ge_s'].includes(method)) {
+        emitExpr(expr.args[0], prefix);
+        emitExpr(expr.args[1], prefix);
+        const key = prefix + '.' + method;
+        const op = SIMD_OPS[key];
+        if (op === undefined) throw new Error(`Unknown SIMD op: ${key}`);
+        emitSimd(op);
+        return;
+      }
+
+      // f64x2.neg, f64x2.abs, f64x2.sqrt (unary)
+      if (['neg','abs','sqrt'].includes(method)) {
+        emitExpr(expr.args[0], prefix);
+        const key = prefix + '.' + method;
+        const op = SIMD_OPS[key];
+        if (op === undefined) throw new Error(`Unknown SIMD op: ${key}`);
+        emitSimd(op);
+        return;
+      }
+
+      // f64x2.add, f64x2.sub, f64x2.mul, f64x2.div, f64x2.min, f64x2.max (binary)
+      if (['add','sub','mul','div','min','max'].includes(method)) {
+        emitExpr(expr.args[0], prefix);
+        emitExpr(expr.args[1], prefix);
+        const key = prefix + '.' + method;
+        const op = SIMD_OPS[key];
+        if (op === undefined) throw new Error(`Unknown SIMD op: ${key}`);
+        emitSimd(op);
+        return;
+      }
+
+      // v128.and, v128.or, v128.xor (binary bitwise)
+      if (prefix === 'v128' && ['and','or','xor'].includes(method)) {
+        // Infer operand type from first arg
+        const vt = inferExprType(expr.args[0]);
+        emitExpr(expr.args[0], vt);
+        emitExpr(expr.args[1], vt);
+        emitSimd(SIMD_OPS['v128.' + method]);
+        return;
+      }
+
+      // v128.not (unary bitwise)
+      if (prefix === 'v128' && method === 'not') {
+        const vt = inferExprType(expr.args[0]);
+        emitExpr(expr.args[0], vt);
+        emitSimd(SIMD_OPS['v128.not']);
+        return;
+      }
+
+      // v128.load(arr, i) — load 16 bytes from memory at arr + i * 16
+      if (prefix === 'v128' && method === 'load') {
+        // Compute address: arr + i * 16
+        emitExpr(expr.args[0], 'i32'); // base pointer
+        emitExpr(expr.args[1], 'i32'); // index
+        bw.byte(OP_I32_CONST); bw.s32(16);
+        bw.byte(OP_I32_MUL);
+        bw.byte(OP_I32_ADD);
+        emitSimd(SIMD_OPS['v128.load']); bw.u32(4); bw.u32(0); // align=16
+        return;
+      }
+
+      // v128.store(arr, i, v) — store 16 bytes to memory at arr + i * 16
+      if (prefix === 'v128' && method === 'store') {
+        // Compute address
+        emitExpr(expr.args[0], 'i32');
+        emitExpr(expr.args[1], 'i32');
+        bw.byte(OP_I32_CONST); bw.s32(16);
+        bw.byte(OP_I32_MUL);
+        bw.byte(OP_I32_ADD);
+        // Emit value
+        const vt = inferExprType(expr.args[2]);
+        emitExpr(expr.args[2], vt);
+        emitSimd(SIMD_OPS['v128.store']); bw.u32(4); bw.u32(0);
+        return;
+      }
+
+      throw new Error(`Unknown SIMD builtin: ${prefix}.${method}`);
     }
 
     function emitConversion(from, to) {
@@ -1586,6 +2053,7 @@ function codegen(ast, interpValues, userImports) {
       else if (t === 'i64') { bw.byte(OP_I64_LOAD); bw.u32(3); bw.u32(0); }
       else if (t === 'f32') { bw.byte(OP_F32_LOAD); bw.u32(2); bw.u32(0); }
       else if (t === 'f64') { bw.byte(OP_F64_LOAD); bw.u32(3); bw.u32(0); }
+      else if (isVector(t)) { emitSimd(SIMD_OPS['v128.load']); bw.u32(4); bw.u32(0); } // align=16
     }
 
     function emitStore(t) {
@@ -1593,6 +2061,7 @@ function codegen(ast, interpValues, userImports) {
       else if (t === 'i64') { bw.byte(OP_I64_STORE); bw.u32(3); bw.u32(0); }
       else if (t === 'f32') { bw.byte(OP_F32_STORE); bw.u32(2); bw.u32(0); }
       else if (t === 'f64') { bw.byte(OP_F64_STORE); bw.u32(3); bw.u32(0); }
+      else if (isVector(t)) { emitSimd(SIMD_OPS['v128.store']); bw.u32(4); bw.u32(0); } // align=16
     }
 
     function emitCmp(op, t) {
@@ -1624,6 +2093,20 @@ function codegen(ast, interpValues, userImports) {
         else if (op === '>') bw.byte(OP_I64_GT_S);
         else if (op === '<=') bw.byte(OP_I64_LE_S);
         else if (op === '>=') bw.byte(OP_I64_GE_S);
+      } else if (isVector(t)) {
+        // Vector comparisons — map atra ops to SIMD opcode keys
+        const isIntVec = (t === 'i32x4' || t === 'i64x2');
+        const suffix = isIntVec ? '_s' : '';
+        let key;
+        if (op === '==') key = t + '.eq';
+        else if (op === '/=') key = t + '.ne';
+        else if (op === '<') key = t + (isIntVec ? '.lt_s' : '.lt');
+        else if (op === '>') key = t + (isIntVec ? '.gt_s' : '.gt');
+        else if (op === '<=') key = t + (isIntVec ? '.le_s' : '.le');
+        else if (op === '>=') key = t + (isIntVec ? '.ge_s' : '.ge');
+        const opcode = SIMD_OPS[key];
+        if (opcode === undefined) throw new Error(`Comparison ${op} not supported for ${t}`);
+        emitSimd(opcode);
       }
     }
 
@@ -1632,6 +2115,7 @@ function codegen(ast, interpValues, userImports) {
       else if (t === 'f32') bw.byte(OP_F32_ADD);
       else if (t === 'i32') bw.byte(OP_I32_ADD);
       else if (t === 'i64') bw.byte(OP_I64_ADD);
+      else if (isVector(t)) emitSimd(SIMD_OPS[t + '.add']);
     }
 
     function emitSub(t) {
@@ -1639,6 +2123,7 @@ function codegen(ast, interpValues, userImports) {
       else if (t === 'f32') bw.byte(OP_F32_SUB);
       else if (t === 'i32') bw.byte(OP_I32_SUB);
       else if (t === 'i64') bw.byte(OP_I64_SUB);
+      else if (isVector(t)) emitSimd(SIMD_OPS[t + '.sub']);
     }
 
     function emitMul(t) {
@@ -1646,6 +2131,7 @@ function codegen(ast, interpValues, userImports) {
       else if (t === 'f32') bw.byte(OP_F32_MUL);
       else if (t === 'i32') bw.byte(OP_I32_MUL);
       else if (t === 'i64') bw.byte(OP_I64_MUL);
+      else if (isVector(t)) emitSimd(SIMD_OPS[t + '.mul']);
     }
 
     function emitDiv(t) {
@@ -1653,6 +2139,11 @@ function codegen(ast, interpValues, userImports) {
       else if (t === 'f32') bw.byte(OP_F32_DIV);
       else if (t === 'i32') bw.byte(OP_I32_DIV_S);
       else if (t === 'i64') bw.byte(OP_I64_DIV_S);
+      else if (isVector(t)) {
+        const op = SIMD_OPS[t + '.div'];
+        if (!op) throw new Error('Division not supported for ' + t);
+        emitSimd(op);
+      }
     }
 
     // ── Emit function body statements ──
@@ -1677,6 +2168,19 @@ function compileSource(source, interpValues, userImports) {
   return codegen(ast, interpValues, userImports);
 }
 
+// Flatten nested objects to dotted keys: { a: { b: fn } } → { 'a.b': fn }
+// Enables atra output (nested exports) to feed directly as atra input (imports).
+function flattenImports(obj, prefix) {
+  const flat = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (!prefix && (k === '__memory' || k === 'memory' || k === '__table')) continue;
+    const key = prefix ? prefix + '.' + k : k;
+    if (typeof v === 'function') flat[key] = v;
+    else if (v && typeof v === 'object' && !ArrayBuffer.isView(v)) Object.assign(flat, flattenImports(v, key));
+  }
+  return flat;
+}
+
 function instantiate(bytes, userImports, interpValues) {
   const importObj = { math: {} };
 
@@ -1691,10 +2195,8 @@ function instantiate(bytes, userImports, interpValues) {
   // Host imports (from userImports or globalThis)
   importObj.host = {};
   if (userImports) {
-    for (const [k, v] of Object.entries(userImports)) {
-      if (k === '__memory' || k === 'memory') continue;
-      if (typeof v === 'function') importObj.host[k] = v;
-    }
+    const flat = flattenImports(userImports);
+    for (const [k, v] of Object.entries(flat)) importObj.host[k] = v;
   }
 
   // Interpolated imports
@@ -1730,11 +2232,33 @@ export function atra(stringsOrOpts, ...values) {
   return compileAndInstantiate(stringsOrOpts, values, null);
 }
 
-function compileAndInstantiate(strings, values, userImports) {
-  // Normalize: user passes { memory } but internal code uses __memory
-  if (userImports && userImports.memory && !userImports.__memory) {
-    userImports = Object.assign({}, userImports, { __memory: userImports.memory });
+function wrapExports(instance, table) {
+  const exports = Object.create(instance.exports);
+  if (table) exports.__table = table;
+  // Nest dotted export names: "physics.gravity" → exports.physics.gravity
+  for (const key of Object.keys(instance.exports)) {
+    if (key.includes('.')) {
+      const parts = key.split('.');
+      let obj = exports;
+      for (let i = 0; i < parts.length - 1; i++) {
+        if (!obj[parts[i]] || typeof obj[parts[i]] !== 'object') obj[parts[i]] = {};
+        obj = obj[parts[i]];
+      }
+      obj[parts[parts.length - 1]] = instance.exports[key];
+    }
   }
+  return exports;
+}
+
+function normalizeMemoryImport(userImports) {
+  if (userImports && userImports.memory && !userImports.__memory) {
+    return Object.assign({}, userImports, { __memory: userImports.memory });
+  }
+  return userImports;
+}
+
+function compileAndInstantiate(strings, values, userImports) {
+  userImports = normalizeMemoryImport(userImports);
   // Join template strings with interpolation markers
   let source = strings[0];
   for (let i = 0; i < values.length; i++) {
@@ -1747,14 +2271,14 @@ function compileAndInstantiate(strings, values, userImports) {
     source += strings[i + 1];
   }
 
-  const bytes = compileSource(source, values, userImports);
+  const { bytes, table } = compileSource(source, values, userImports);
   const instance = instantiate(bytes, userImports, values);
-  return instance.exports;
+  return wrapExports(instance, table);
 }
 
 // Direct compiler access
 atra.compile = function(source) {
-  return compileSource(source, null, null);
+  return compileSource(source, null, null).bytes;
 };
 
 atra.parse = function(source) {
@@ -1763,8 +2287,15 @@ atra.parse = function(source) {
 };
 
 atra.dump = function(source) {
-  const bytes = compileSource(source, null, null);
+  const { bytes } = compileSource(source, null, null);
   return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join(' ');
+};
+
+atra.run = function(source, userImports) {
+  userImports = normalizeMemoryImport(userImports);
+  const { bytes, table } = compileSource(source, null, userImports);
+  const instance = instantiate(bytes, userImports, null);
+  return wrapExports(instance, table);
 };
 
 // ── Self-registration ──

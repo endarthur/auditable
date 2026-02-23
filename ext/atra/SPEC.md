@@ -180,6 +180,8 @@ Additional native builtins (single Wasm instructions, zero import cost):
 | `rotr(x, n)` | Rotate right (i32/i64) |
 | `memory_size()` | Current memory size in pages |
 | `memory_grow(n)` | Grow memory by n pages |
+| `memory_copy(dest, src, n)` | Copy n bytes from src to dest (all i32) |
+| `memory_fill(dest, val, n)` | Fill n bytes at dest with val (all i32) |
 
 Type conversions use type names as functions: `f64(i)`, `i32(x)`, `f32(x)`, `i64(x)`. No implicit coercion.
 
@@ -216,7 +218,7 @@ const { estimate } = atra`
 `;
 ```
 
-For ES modules (where top-level declarations are not on `globalThis`), pass an imports object:
+For ES modules (where top-level declarations are not on `globalThis`), pass an imports object. Nested objects are flattened to dotted names (see [dotted names](#dotted-names-namespaces-by-convention)):
 
 ```js
 const { estimate } = atra({ myWeight, myTransform })`
@@ -252,6 +254,163 @@ Functions are exported by default when used via the tagged template. Explicit ex
 ```
 export function spherical(h, range, sill, nugget: f64): f64
   ...
+end
+```
+
+### Dotted names (namespaces by convention)
+
+Identifiers can contain dots. The compiler treats `physics.gravity` as a single name — no namespace machinery, just a naming convention:
+
+```
+function model.spherical(h, a, c1, c0: f64): f64
+begin
+  if (h <= 0.0) then
+    model.spherical := 0.0
+  else if (h >= a) then
+    model.spherical := c0 + c1
+  else
+    model.spherical := c0 + c1 * (1.5 * h / a - 0.5 * (h / a) ** 3)
+  end if
+end
+
+function model.gaussian(h, a, c1, c0: f64): f64
+begin
+  if (h <= 0.0) then
+    model.gaussian := 0.0
+  else
+    model.gaussian := c0 + c1 * (1.0 - exp(-3.0 * (h / a) ** 2))
+  end if
+end
+```
+
+On the JS side, dotted exports are nested into objects:
+
+```js
+wasm.model.spherical(0.5, 1.0, 1.0, 0.1)  // nested access
+wasm['model.spherical'](0.5, 1.0, 1.0, 0.1) // flat access also works
+```
+
+Multi-level nesting works: `a.b.c` becomes `wasm.a.b.c`. Local variables can also use dots (`var cfg.scale: f64`). Names starting with `wasm.`, `v128.`, or a SIMD type prefix (`f64x2.`, etc.) are reserved for builtins.
+
+#### Imports and composability
+
+Nested JS objects passed as imports are flattened to dotted names. The JS object structure mirrors the atra namespace:
+
+```js
+// nested object → atra sees math.lerp
+const wasm = atra({ math: { lerp: (a, b, t) => a + (b - a) * t } })`
+  function smooth(a, b, t: f64): f64
+  begin
+    smooth := math.lerp(a, b, t)
+  end
+`;
+```
+
+This makes atra modules composable — the output of one compilation feeds directly as input to another:
+
+```js
+// compile a library with namespaced functions
+const linalg = atra`
+  function linalg.dot(a, b: f64): f64
+  begin
+    linalg.dot := a * b
+  end
+
+  function linalg.scale(x, s: f64): f64
+  begin
+    linalg.scale := x * s
+  end
+`;
+
+// linalg.linalg.dot() works on the JS side (nested exports)
+// pass the whole thing as imports to another atra compilation
+const app = atra({ ...linalg })`
+  function compute(a, b, s: f64): f64
+  begin
+    compute := linalg.scale(linalg.dot(a, b), s)
+  end
+`;
+
+app.compute(3.0, 4.0, 2.0)  // → 24.0
+```
+
+The convention is symmetric: atra outputs nested objects (`wasm.linalg.dot`), and atra accepts nested objects (`{ linalg: { dot: fn } }`). Flat dotted keys also work as imports (`{ 'linalg.dot': fn }`).
+
+### Function references and indirect calls
+
+Functions can be passed by reference and called indirectly via `call_indirect`. A bare function name (without parentheses) evaluates to its table index:
+
+```
+function spherical(h, range, sill, nugget: f64): f64
+begin
+  if (h == 0.0) then
+    spherical := 0.0
+  else if (h >= range) then
+    spherical := nugget + sill
+  else
+    spherical := nugget + sill * (1.5 * h / range - 0.5 * (h / range)**3)
+  end if
+end
+
+function gaussian(h, range, sill, nugget: f64): f64
+begin
+  gaussian := nugget + sill * (1.0 - exp(-3.0 * (h / range)**2))
+end
+
+function exponential(h, range, sill, nugget: f64): f64
+begin
+  if (h == 0.0) then
+    exponential := 0.0
+  else
+    exponential := nugget + sill * (1.0 - exp(-3.0 * h / range))
+  end if
+end
+
+function eval_model(model: function(h, range, sill, nugget: f64): f64,
+                    h, range, sill, nugget: f64): f64
+begin
+  eval_model := model(h, range, sill, nugget)
+end
+```
+
+The `function(params): retType` syntax declares a function-typed parameter. At the Wasm level, these are `i32` table indices. Calling a function-typed variable emits `call_indirect`.
+
+```js
+const { eval_model } = atra`...`;
+eval_model(0, 25.0, 80.0, 1.0, 0.1);  // spherical
+eval_model(1, 25.0, 80.0, 1.0, 0.1);  // gaussian
+eval_model(2, 25.0, 80.0, 1.0, 0.1);  // exponential
+```
+
+Table indices are assigned in declaration order (imports first, then local functions, sorted by their position in the source).
+
+Function-typed variables also work as locals:
+
+```
+function fit(model_id: i32, h, range, sill, nugget: f64): f64
+var model: function(h, range, sill, nugget: f64): f64
+begin
+  if (model_id == 0) then
+    model := spherical
+  else if (model_id == 1) then
+    model := gaussian
+  else
+    model := exponential
+  end if
+  fit := model(h, range, sill, nugget)
+end
+```
+
+Indirect calls as statements use `call`:
+
+```
+subroutine apply_model(model: function(h, range, sill, nugget: f64): f64,
+                       gamma, dist: array f64; n: i32,
+                       range, sill, nugget: f64)
+begin
+  for i := 0, n
+    gamma[i] := model(dist[i], range, sill, nugget)
+  end for
 end
 ```
 
@@ -727,3 +886,142 @@ Students see the algorithm in a readable syntax, see the generated Wasm bytecode
 - **Not a Fortran compiler.** It won't compile existing Fortran source. Transcription is manual but mechanical.
 - **Not a replacement for WebGPU.** For massively parallel numerical work, GPU compute shaders are the right tool. Atra is for sequential numerical kernels.
 - **Not trying to be clever.** It's a formula translator. Arithmetic in, bytecode out.
+
+---
+
+## SIMD (v128)
+
+WebAssembly SIMD processes multiple values per instruction using 128-bit vectors. Atra exposes this directly with four vector types:
+
+| Type    | Lanes      | Scalar | Bytes |
+|---------|------------|--------|-------|
+| `f64x2` | 2 x f64   | `f64`  | 16    |
+| `f32x4` | 4 x f32   | `f32`  | 16    |
+| `i32x4` | 4 x i32   | `i32`  | 16    |
+| `i64x2` | 2 x i64   | `i64`  | 16    |
+
+All four map to Wasm's single `v128` type (0x7b). Atra tracks the semantic type at compile time and emits the correct SIMD opcodes.
+
+### Arithmetic operators
+
+Standard arithmetic operators work on vector types. Both operands must be the same vector type:
+
+```
+var a, b, c: f64x2
+
+c := a + b    ! f64x2.add
+c := a - b    ! f64x2.sub
+c := a * b    ! f64x2.mul
+c := a / b    ! f64x2.div (float vectors only)
+c := -a       ! f64x2.neg
+```
+
+Division is supported for `f64x2` and `f32x4` only (no integer vector division in Wasm SIMD).
+
+### Constructors
+
+Build vectors from scalar values:
+
+```
+var v: f64x2
+v := f64x2(3.14, 2.71)     ! v128.const when both args are constants
+v := f64x2(x, y)           ! splat(x) + replace_lane(1, y) for runtime values
+
+var w: f32x4
+w := f32x4(1.0, 2.0, 3.0, 4.0)
+
+var u: i32x4
+u := i32x4(10, 20, 30, 40)
+```
+
+Constant constructors emit `v128.const` (16 inline bytes). Non-constant constructors use `splat` + `replace_lane`.
+
+### Lane access
+
+```
+! Splat: broadcast scalar to all lanes
+v := f64x2.splat(x)          ! [x, x]
+
+! Extract a single lane as scalar
+x := f64x2.extract_lane(v, 0)
+
+! Replace one lane, keep others
+v := f64x2.replace_lane(v, 1, y)
+```
+
+Lane indices must be compile-time constants. Valid ranges: 0-1 for `f64x2`/`i64x2`, 0-3 for `f32x4`/`i32x4`.
+
+### Unary operations
+
+```
+v := sqrt(a)    ! f64x2.sqrt (float vectors only)
+v := abs(a)     ! f64x2.abs  (float vectors only)
+v := -a         ! f64x2.neg  (all vector types)
+```
+
+Also available as namespaced calls: `f64x2.sqrt(a)`, `f64x2.abs(a)`, `f64x2.neg(a)`.
+
+### Min / Max
+
+```
+v := min(a, b)    ! f64x2.min (float vectors only)
+v := max(a, b)    ! f64x2.max (float vectors only)
+```
+
+### Comparisons
+
+Vector comparisons return a v128 bitmask — each lane is all-1s (true) or all-0s (false). They do not return i32:
+
+```
+mask := f64x2.eq(a, b)     ! per-lane equality → v128 bitmask
+mask := f64x2.lt(a, b)     ! per-lane less-than
+```
+
+Operators also work: `a == b`, `a < b`, etc. on vector operands emit SIMD compares.
+
+Available comparisons: `eq`, `ne`, `lt`, `gt`, `le`, `ge`. Integer variants use signed comparison (`lt_s`, `gt_s`, etc.).
+
+### Bitwise operations on v128
+
+Combine comparison masks or manipulate vector bits:
+
+```
+result := v128.and(a, mask)
+result := v128.or(mask1, mask2)
+result := v128.xor(a, b)
+result := v128.not(mask)
+```
+
+### Memory operations
+
+Load/store 16 bytes at once. Address = `base + index * 16`:
+
+```
+v := v128.load(arr, i)        ! load 16 bytes from arr + i*16
+call v128.store(arr, i, v)    ! store 16 bytes to arr + i*16
+```
+
+Array subscript syntax (`arr[i]`) also works with vector-typed arrays — the element size is 16 bytes.
+
+### Example: vectorized array sum
+
+```js
+const memory = new WebAssembly.Memory({ initial: 1 });
+const { vsum } = atra({ memory })`
+  function vsum(arr: array f64; n: i32): f64
+  var
+    i, n2: i32
+    acc, v: f64x2
+  begin
+    acc := f64x2(0.0, 0.0)
+    n2 := n / 2
+    for i := 0, n2
+      v := v128.load(arr, i)
+      acc := acc + v
+    end for
+    vsum := f64x2.extract_lane(acc, 0) + f64x2.extract_lane(acc, 1)
+  end
+`;
+```
+
+No auto-vectorization. Users explicitly declare vector-typed variables and write vector code. The compiler maps it 1:1 to Wasm SIMD instructions.
