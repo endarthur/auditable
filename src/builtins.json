@@ -106,5 +106,9 @@
   "invalidation": {
     "sig": "invalidation",
     "desc": "promise \u2014 resolves when cell re-runs"
+  },
+  "atra": {
+    "sig": "atra`...` or atra({imports})`...`",
+    "desc": "compile Fortran/Pascal to Wasm (load ext/atra/index.js)"
   }
 }

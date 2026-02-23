@@ -7,6 +7,87 @@ const CSS_NAMED_COLORS = new Set([
   'green','lime','olive','yellow','navy','blue','teal','aqua','orange'
 ]);
 
+// detect curried tagged template: scan back through tokens for lang({...})`
+function detectCurriedTag(tokens) {
+  // last non-whitespace token must be )
+  let j = tokens.length - 1;
+  while (j >= 0 && tokens[j].type === '') j--;
+  if (j < 0 || tokens[j].text !== ')') return null;
+  // scan back to matching (
+  let depth = 1;
+  j--;
+  while (j >= 0 && depth > 0) {
+    if (tokens[j].text === ')') depth++;
+    else if (tokens[j].text === '(') depth--;
+    j--;
+  }
+  // token before ( should be the language name
+  while (j >= 0 && tokens[j].type === '') j--;
+  if (j < 0) return null;
+  const name = tokens[j].text;
+  if (window._taggedLanguages && window._taggedLanguages[name]) {
+    return window._taggedLanguages[name];
+  }
+  return null;
+}
+
+// tokenize a tagged template literal starting at the opening backtick
+function tokenizeTaggedTemplate(code, i, len, lang, tokens) {
+  tokens.push({ type: 'punc', text: '`' });
+  i++; // skip opening backtick
+  let strBuf = '';
+  while (i < len && code[i] !== '`') {
+    if (code[i] === '\\') {
+      strBuf += code[i] + (i + 1 < len ? code[i + 1] : '');
+      i += 2;
+      continue;
+    }
+    if (code[i] === '$' && i + 1 < len && code[i + 1] === '{') {
+      if (strBuf) {
+        tokens.push(...lang.tokenize(strBuf));
+        strBuf = '';
+      }
+      tokens.push({ type: 'punc', text: '${' });
+      i += 2;
+      let depth = 1;
+      let exprStart = i;
+      while (i < len && depth > 0) {
+        if (code[i] === '{') depth++;
+        else if (code[i] === '}') { depth--; if (depth === 0) break; }
+        else if (code[i] === '`') {
+          i++;
+          while (i < len && code[i] !== '`') {
+            if (code[i] === '\\') i++;
+            i++;
+          }
+        } else if (code[i] === '"' || code[i] === "'") {
+          const q = code[i]; i++;
+          while (i < len && code[i] !== q) {
+            if (code[i] === '\\') i++;
+            i++;
+          }
+        }
+        i++;
+      }
+      const expr = code.slice(exprStart, i);
+      if (expr) tokens.push(...tokenize(expr));
+      if (i < len && code[i] === '}') {
+        tokens.push({ type: 'punc', text: '}' });
+        i++;
+      }
+      continue;
+    }
+    strBuf += code[i];
+    i++;
+  }
+  if (strBuf) tokens.push(...lang.tokenize(strBuf));
+  if (i < len && code[i] === '`') {
+    tokens.push({ type: 'punc', text: '`' });
+    i++;
+  }
+  return i;
+}
+
 export function tokenize(code) {
   const tokens = [];
   let i = 0;
@@ -31,6 +112,14 @@ export function tokenize(code) {
     }
     // strings
     if (code[i] === '"' || code[i] === "'" || code[i] === '`') {
+      // curried tagged template: lang({...})`...` — detect before treating as plain string
+      if (code[i] === '`' && typeof window !== 'undefined' && window._taggedLanguages) {
+        const lang = detectCurriedTag(tokens);
+        if (lang) {
+          i = tokenizeTaggedTemplate(code, i, len, lang, tokens);
+          continue;
+        }
+      }
       const q = code[i];
       const start = i;
       i++;
@@ -63,72 +152,8 @@ export function tokenize(code) {
       // tagged template literal — delegate to registered language tokenizer
       if (i < len && code[i] === '`' && typeof window !== 'undefined'
           && window._taggedLanguages && window._taggedLanguages[word]) {
-        const lang = window._taggedLanguages[word];
         tokens.push({ type: 'fn', text: word });
-        tokens.push({ type: 'punc', text: '`' });
-        i++; // skip opening backtick
-        // tokenize template content: string parts via lang.tokenize, ${} via JS tokenize
-        let strBuf = '';
-        while (i < len && code[i] !== '`') {
-          if (code[i] === '\\') {
-            strBuf += code[i] + (i + 1 < len ? code[i + 1] : '');
-            i += 2;
-            continue;
-          }
-          if (code[i] === '$' && i + 1 < len && code[i + 1] === '{') {
-            // flush string buffer through language tokenizer
-            if (strBuf) {
-              const langTokens = lang.tokenize(strBuf);
-              tokens.push(...langTokens);
-              strBuf = '';
-            }
-            tokens.push({ type: 'punc', text: '${' });
-            i += 2;
-            // collect JS expression inside ${...}
-            let depth = 1;
-            let exprStart = i;
-            while (i < len && depth > 0) {
-              if (code[i] === '{') depth++;
-              else if (code[i] === '}') { depth--; if (depth === 0) break; }
-              else if (code[i] === '`') {
-                // skip nested template literals
-                i++;
-                while (i < len && code[i] !== '`') {
-                  if (code[i] === '\\') i++;
-                  i++;
-                }
-              } else if (code[i] === '"' || code[i] === "'") {
-                const q = code[i]; i++;
-                while (i < len && code[i] !== q) {
-                  if (code[i] === '\\') i++;
-                  i++;
-                }
-              }
-              i++;
-            }
-            const expr = code.slice(exprStart, i);
-            if (expr) {
-              const jsTokens = tokenize(expr);
-              tokens.push(...jsTokens);
-            }
-            if (i < len && code[i] === '}') {
-              tokens.push({ type: 'punc', text: '}' });
-              i++;
-            }
-            continue;
-          }
-          strBuf += code[i];
-          i++;
-        }
-        // flush remaining string buffer
-        if (strBuf) {
-          const langTokens = lang.tokenize(strBuf);
-          tokens.push(...langTokens);
-        }
-        if (i < len && code[i] === '`') {
-          tokens.push({ type: 'punc', text: '`' });
-          i++;
-        }
+        i = tokenizeTaggedTemplate(code, i, len, window._taggedLanguages[word], tokens);
         continue;
       }
 
