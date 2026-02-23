@@ -1,3 +1,4 @@
+/// auditable
 /// title: SQL notebook
 /// module: ./ext/sql/index.js ext/sql/index.js
 

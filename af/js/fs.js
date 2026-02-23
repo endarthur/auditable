@@ -261,7 +261,7 @@ async function boxDeleteBox(boxId) {
 async function boxExport(boxId) {
   const box = await boxGet(boxId);
   if (!box) return null;
-  // hydrate lightweight notebooks back to full HTML for export
+  // hydrate lightweight/txt notebooks back to full HTML for export
   const files = {};
   for (const [path, content] of Object.entries(box.files)) {
     if (isLightweight(content)) {
@@ -269,6 +269,15 @@ async function boxExport(boxId) {
         files[path] = await hydrate(content);
       } catch (e) {
         console.warn('boxExport: hydrate failed for', path, e);
+        files[path] = content;
+      }
+    } else if (isAuditableTxt(content)) {
+      try {
+        const notebook = parseTxt(content);
+        const htmlPath = path.replace(/\.txt$/, '.html');
+        files[htmlPath] = await hydrateNotebook(notebook);
+      } catch (e) {
+        console.warn('boxExport: txt hydrate failed for', path, e);
         files[path] = content;
       }
     } else {

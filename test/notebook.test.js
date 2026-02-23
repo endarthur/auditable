@@ -711,6 +711,376 @@ AUDITABLE-SETTINGS-->
   });
 });
 
+// ── Replicate txt format functions for Node.js testing ──
+
+function isAuditableTxt(content) {
+  if (typeof content !== 'string') return false;
+  return content.startsWith('/// auditable\n') || content.startsWith('/// auditable\r\n');
+}
+
+function parseTxt(content) {
+  const lines = content.split('\n');
+  let title = 'untitled';
+  let settings = { theme: 'dark', fontSize: 13, width: '860' };
+  const modules = {};
+  const cells = [];
+  let currentCell = null;
+
+  for (const line of lines) {
+    const l = line.endsWith('\r') ? line.slice(0, -1) : line;
+    if (l.startsWith('/// ')) {
+      if (currentCell) {
+        currentCell.code = trimCellTxt(currentCell.code);
+        cells.push(currentCell);
+        currentCell = null;
+      }
+      const directive = l.slice(4);
+      if (directive === 'auditable') {
+        continue;
+      } else if (directive.startsWith('title: ')) {
+        title = directive.slice(7);
+      } else if (directive.startsWith('settings: ')) {
+        try { settings = JSON.parse(directive.slice(10)); } catch {}
+      } else if (directive.startsWith('module: ')) {
+        const parts = directive.slice(8).split(' ');
+        const url = parts[0];
+        const ref = parts.length > 1 ? parts.slice(1).join(' ') : null;
+        modules[url] = { ref };
+      } else {
+        const parts = directive.split(' ');
+        const type = parts[0];
+        const collapsed = parts.includes('collapsed');
+        currentCell = { type };
+        if (collapsed) currentCell.collapsed = true;
+        currentCell.code = '';
+      }
+    } else if (currentCell) {
+      currentCell.code += (currentCell.code ? '\n' : '') + l;
+    }
+  }
+  if (currentCell) {
+    currentCell.code = trimCellTxt(currentCell.code);
+    cells.push(currentCell);
+  }
+  const notebook = { title, cells, settings };
+  if (Object.keys(modules).length > 0) {
+    notebook.modules = {};
+    for (const [url, entry] of Object.entries(modules)) {
+      notebook.modules[url] = { ref: entry.ref };
+    }
+  }
+  return notebook;
+}
+
+function trimCellTxt(code) {
+  return code.replace(/^\n/, '').replace(/\n$/, '');
+}
+
+function toTxt(notebook) {
+  const lines = ['/// auditable'];
+  if (notebook.title && notebook.title !== 'untitled') {
+    lines.push('/// title: ' + notebook.title);
+  }
+  const defaultSettings = { theme: 'dark', fontSize: 13, width: '860' };
+  if (notebook.settings && JSON.stringify(notebook.settings) !== JSON.stringify(defaultSettings)) {
+    lines.push('/// settings: ' + JSON.stringify(notebook.settings));
+  }
+  if (notebook.modules) {
+    for (const [url, entry] of Object.entries(notebook.modules)) {
+      if (entry.ref) {
+        lines.push('/// module: ' + url + ' ' + entry.ref);
+      } else {
+        lines.push('/// module: ' + url);
+      }
+    }
+  }
+  for (const cell of (notebook.cells || [])) {
+    lines.push('');
+    const flags = cell.collapsed ? ' collapsed' : '';
+    lines.push('/// ' + cell.type + flags);
+    lines.push(cell.code || '');
+  }
+  return lines.join('\n') + '\n';
+}
+
+function extractNotebook(html) {
+  if (/<meta\s+name="auditable-packed"/i.test(html)) return null;
+  const titleMatch = html.match(/id="docTitle"\s+value="([^"]*)"/);
+  const title = titleMatch ? titleMatch[1].replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&') : 'untitled';
+  const dataMatch = html.match(/<!--AUDITABLE-DATA\n([\s\S]*?)\nAUDITABLE-DATA-->/);
+  let cells = [];
+  if (dataMatch) { try { cells = JSON.parse(dataMatch[1]); } catch {} }
+  const setMatch = html.match(/<!--AUDITABLE-SETTINGS\n([\s\S]*?)\nAUDITABLE-SETTINGS-->/);
+  let settings = {};
+  if (setMatch) { try { settings = JSON.parse(setMatch[1]); } catch {} }
+  const modMatch = html.match(/<!--AUDITABLE-MODULES\n([\s\S]*?)\nAUDITABLE-MODULES-->/);
+  let modules = null;
+  if (modMatch) {
+    try {
+      const decoded = decodeModulesB64(modMatch[1]);
+      modules = {};
+      for (const [url, entry] of Object.entries(decoded)) {
+        modules[url] = { ...entry };
+      }
+    } catch {}
+  }
+  const notebook = { title, cells, settings };
+  if (modules && Object.keys(modules).length > 0) notebook.modules = modules;
+  return notebook;
+}
+
+// ── Txt format tests ──
+
+describe('isAuditableTxt', () => {
+  it('detects valid txt format with LF', () => {
+    assert.ok(isAuditableTxt('/// auditable\n/// title: test\n'));
+  });
+
+  it('detects valid txt format with CRLF', () => {
+    assert.ok(isAuditableTxt('/// auditable\r\n/// title: test\r\n'));
+  });
+
+  it('rejects non-string input', () => {
+    assert.ok(!isAuditableTxt(null));
+    assert.ok(!isAuditableTxt(42));
+    assert.ok(!isAuditableTxt(undefined));
+  });
+
+  it('rejects HTML content', () => {
+    assert.ok(!isAuditableTxt('<!DOCTYPE html>'));
+  });
+
+  it('rejects JSON content', () => {
+    assert.ok(!isAuditableTxt('{"format":"auditable-notebook"}'));
+  });
+
+  it('rejects plain text without magic line', () => {
+    assert.ok(!isAuditableTxt('/// title: test\n'));
+  });
+
+  it('rejects partial match', () => {
+    assert.ok(!isAuditableTxt('/// auditablefoo\n'));
+  });
+});
+
+describe('parseTxt', () => {
+  it('parses minimal txt with only magic line', () => {
+    const nb = parseTxt('/// auditable\n');
+    assert.equal(nb.title, 'untitled');
+    assert.deepEqual(nb.cells, []);
+  });
+
+  it('parses title and cells', () => {
+    const txt = '/// auditable\n/// title: my notebook\n\n/// code\nconst x = 1;\n\n/// md\n# Hello\n';
+    const nb = parseTxt(txt);
+    assert.equal(nb.title, 'my notebook');
+    assert.equal(nb.cells.length, 2);
+    assert.equal(nb.cells[0].type, 'code');
+    assert.equal(nb.cells[0].code, 'const x = 1;');
+    assert.equal(nb.cells[1].type, 'md');
+    assert.equal(nb.cells[1].code, '# Hello');
+  });
+
+  it('parses settings', () => {
+    const txt = '/// auditable\n/// settings: {"theme":"light","fontSize":15}\n';
+    const nb = parseTxt(txt);
+    assert.equal(nb.settings.theme, 'light');
+    assert.equal(nb.settings.fontSize, 15);
+  });
+
+  it('parses modules with hash ref', () => {
+    const txt = '/// auditable\n/// module: https://esm.sh/lib abc123\n';
+    const nb = parseTxt(txt);
+    assert.ok(nb.modules);
+    assert.equal(nb.modules['https://esm.sh/lib'].ref, 'abc123');
+  });
+
+  it('parses modules without hash ref', () => {
+    const txt = '/// auditable\n/// module: https://esm.sh/lib\n';
+    const nb = parseTxt(txt);
+    assert.ok(nb.modules);
+    assert.equal(nb.modules['https://esm.sh/lib'].ref, null);
+  });
+
+  it('parses collapsed cells', () => {
+    const txt = '/// auditable\n\n/// code collapsed\nconst x = 1;\n';
+    const nb = parseTxt(txt);
+    assert.equal(nb.cells[0].collapsed, true);
+  });
+
+  it('handles CRLF line endings', () => {
+    const txt = '/// auditable\r\n/// title: crlf test\r\n\r\n/// code\r\nconst x = 1;\r\n';
+    const nb = parseTxt(txt);
+    assert.equal(nb.title, 'crlf test');
+    assert.equal(nb.cells[0].code, 'const x = 1;');
+  });
+
+  it('handles all cell types', () => {
+    const txt = '/// auditable\n\n/// code\nconst x = 1;\n\n/// md\n# Hi\n\n/// css\nbody{}\n\n/// html\n<div></div>\n';
+    const nb = parseTxt(txt);
+    assert.equal(nb.cells.length, 4);
+    assert.equal(nb.cells[0].type, 'code');
+    assert.equal(nb.cells[1].type, 'md');
+    assert.equal(nb.cells[2].type, 'css');
+    assert.equal(nb.cells[3].type, 'html');
+  });
+
+  it('preserves multiline cell content', () => {
+    const txt = '/// auditable\n\n/// code\nconst x = 1;\nconst y = 2;\nconst z = x + y;\n';
+    const nb = parseTxt(txt);
+    assert.equal(nb.cells[0].code, 'const x = 1;\nconst y = 2;\nconst z = x + y;');
+  });
+});
+
+describe('toTxt', () => {
+  it('produces valid txt with magic line', () => {
+    const nb = { title: 'test', cells: [], settings: { theme: 'dark', fontSize: 13, width: '860' } };
+    const txt = toTxt(nb);
+    assert.ok(txt.startsWith('/// auditable\n'));
+    assert.ok(isAuditableTxt(txt));
+  });
+
+  it('includes title', () => {
+    const nb = { title: 'my notebook', cells: [], settings: { theme: 'dark', fontSize: 13, width: '860' } };
+    const txt = toTxt(nb);
+    assert.ok(txt.includes('/// title: my notebook'));
+  });
+
+  it('omits default settings', () => {
+    const nb = { title: 'test', cells: [], settings: { theme: 'dark', fontSize: 13, width: '860' } };
+    const txt = toTxt(nb);
+    assert.ok(!txt.includes('/// settings:'));
+  });
+
+  it('includes non-default settings', () => {
+    const nb = { title: 'test', cells: [], settings: { theme: 'light', fontSize: 15 } };
+    const txt = toTxt(nb);
+    assert.ok(txt.includes('/// settings:'));
+    assert.ok(txt.includes('"light"'));
+  });
+
+  it('includes cells', () => {
+    const nb = { title: 'test', cells: [{ type: 'code', code: 'const x = 1;' }, { type: 'md', code: '# Hello' }], settings: {} };
+    const txt = toTxt(nb);
+    assert.ok(txt.includes('/// code\nconst x = 1;'));
+    assert.ok(txt.includes('/// md\n# Hello'));
+  });
+
+  it('includes collapsed flag', () => {
+    const nb = { title: 'test', cells: [{ type: 'code', code: 'x', collapsed: true }], settings: {} };
+    const txt = toTxt(nb);
+    assert.ok(txt.includes('/// code collapsed'));
+  });
+
+  it('includes modules with refs', () => {
+    const nb = { title: 'test', cells: [], settings: {}, modules: { 'https://esm.sh/lib': { ref: 'abc123' } } };
+    const txt = toTxt(nb);
+    assert.ok(txt.includes('/// module: https://esm.sh/lib abc123'));
+  });
+
+  it('includes modules without refs', () => {
+    const nb = { title: 'test', cells: [], settings: {}, modules: { 'https://esm.sh/lib': { ref: null } } };
+    const txt = toTxt(nb);
+    assert.ok(txt.includes('/// module: https://esm.sh/lib\n'));
+  });
+});
+
+describe('parseTxt → toTxt round-trip', () => {
+  it('preserves notebook through round-trip', () => {
+    const original = '/// auditable\n/// title: round trip\n/// settings: {"theme":"light","fontSize":15}\n/// module: https://esm.sh/lib abc123\n\n/// code\nconst x = 1;\n\n/// md\n# Hello\n\n/// css\nbody { color: red; }\n\n/// html\n<div>${x}</div>\n';
+    const nb = parseTxt(original);
+    assert.equal(nb.title, 'round trip');
+    assert.equal(nb.cells.length, 4);
+
+    const roundTripped = toTxt(nb);
+    const nb2 = parseTxt(roundTripped);
+    assert.equal(nb2.title, nb.title);
+    assert.equal(nb2.cells.length, nb.cells.length);
+    for (let i = 0; i < nb.cells.length; i++) {
+      assert.equal(nb2.cells[i].type, nb.cells[i].type);
+      assert.equal(nb2.cells[i].code, nb.cells[i].code);
+    }
+    assert.deepEqual(nb2.settings, nb.settings);
+    assert.deepEqual(nb2.modules, nb.modules);
+  });
+});
+
+describe('extractNotebook', () => {
+  it('extracts notebook from HTML', () => {
+    const html = `<!DOCTYPE html>
+<html><head><title>Auditable</title></head>
+<body>
+<input id="docTitle" value="extracted">
+<!--AUDITABLE-DATA
+[{"type":"code","code":"const x = 1"},{"type":"md","code":"# Hi"}]
+AUDITABLE-DATA-->
+<!--AUDITABLE-SETTINGS
+{"theme":"dark","fontSize":13}
+AUDITABLE-SETTINGS-->
+<script>/*rt*/</script>
+</body></html>`;
+
+    const nb = extractNotebook(html);
+    assert.equal(nb.title, 'extracted');
+    assert.equal(nb.cells.length, 2);
+    assert.equal(nb.cells[0].type, 'code');
+    assert.equal(nb.cells[0].code, 'const x = 1');
+    assert.deepEqual(nb.settings, { theme: 'dark', fontSize: 13 });
+    assert.equal(nb.modules, undefined);
+  });
+
+  it('returns null for packed notebooks', () => {
+    const html = `<!DOCTYPE html><html><head><meta name="auditable-packed"></head><body></body></html>`;
+    assert.equal(extractNotebook(html), null);
+  });
+
+  it('extracts modules with sources', () => {
+    const modules = { 'lib.js': { source: 'code', cellId: 1 } };
+    const encoded = encodeModulesB64(modules);
+    const html = `<!DOCTYPE html><html><head></head><body>
+<input id="docTitle" value="test">
+<!--AUDITABLE-DATA
+[]
+AUDITABLE-DATA-->
+<!--AUDITABLE-MODULES
+${encoded}
+AUDITABLE-MODULES-->
+<!--AUDITABLE-SETTINGS
+{}
+AUDITABLE-SETTINGS-->
+<script></script></body></html>`;
+
+    const nb = extractNotebook(html);
+    assert.ok(nb.modules);
+    assert.equal(nb.modules['lib.js'].source, 'code');
+    assert.equal(nb.modules['lib.js'].cellId, 1);
+  });
+});
+
+describe('extractNotebook → toTxt', () => {
+  it('converts HTML to txt format', () => {
+    const html = `<!DOCTYPE html>
+<html><head><title>Auditable</title></head>
+<body>
+<input id="docTitle" value="from html">
+<!--AUDITABLE-DATA
+[{"type":"code","code":"const x = 1"},{"type":"md","code":"# Title"}]
+AUDITABLE-DATA-->
+<!--AUDITABLE-SETTINGS
+{"theme":"dark","fontSize":13,"width":"860"}
+AUDITABLE-SETTINGS-->
+<script>/*rt*/</script>
+</body></html>`;
+
+    const nb = extractNotebook(html);
+    const txt = toTxt(nb);
+    assert.ok(isAuditableTxt(txt));
+    assert.ok(txt.includes('/// title: from html'));
+    assert.ok(txt.includes('/// code\nconst x = 1'));
+    assert.ok(txt.includes('/// md\n# Title'));
+  });
+});
+
 describe('lightweight format for new notebooks', () => {
   it('creates valid lightweight JSON', () => {
     const content = JSON.stringify({

@@ -2,6 +2,14 @@
 
 plain-text files with `///` comment delimiters. no escaping, no parsing libraries — just `string.split()` and `string.startsWith()`.
 
+## magic first line
+
+```
+/// auditable
+```
+
+required first line. identifies the file as an auditable notebook. AF uses this to distinguish notebook `.txt` files from arbitrary text files. `gen_examples.js` tolerates it (skips if present).
+
 ## header directives
 
 ```
@@ -12,7 +20,7 @@ plain-text files with `///` comment delimiters. no escaping, no parsing librarie
 
 - **title** (required) — notebook title
 - **settings** — JSON settings object. omit for defaults (`dark`, `13`, `860`)
-- **module** — `<url> <file-path>`. file path is resolved relative to project root at build time. repeatable for multiple modules
+- **module** — `<url> <file-path-or-blob-hash>`. for `gen_examples.js`, the second part is a file path resolved relative to project root at build time. for AF, it's a content-hash ref into the blob store. repeatable for multiple modules
 
 ## cells
 
@@ -43,6 +51,7 @@ workshop([...])
 ## example
 
 ```
+/// auditable
 /// title: my demo
 /// module: ./ext/sql/index.js ext/sql/index.js
 

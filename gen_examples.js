@@ -50,7 +50,10 @@ function parseDef(text) {
 
       const directive = line.slice(4);
 
-      if (directive.startsWith('title: ')) {
+      if (directive === 'auditable') {
+        // magic first line, skip
+        continue;
+      } else if (directive.startsWith('title: ')) {
         title = directive.slice(7);
       } else if (directive.startsWith('settings: ')) {
         settings = JSON.parse(directive.slice(10));

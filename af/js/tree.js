@@ -1,7 +1,8 @@
 import { AFS, $ } from './state.js';
-import { walkRoot } from './fs.js';
-import { openTab } from './tabs.js';
+import { walkRoot, readEntry } from './fs.js';
+import { openTab, setStatus } from './tabs.js';
 import { saveWorkspaceState } from './persist.js';
+import { extractNotebook, toTxt, parseTxt, hydrateNotebook } from './notebook.js';
 
 // ── FILE TREE ──
 
@@ -69,19 +70,21 @@ function renderEntries(parent, entries, rootIndex) {
       renderEntries(details, entry.children, rootIndex);
       parent.appendChild(details);
     } else {
+      const isNotebook = entry.name.endsWith('.html') || entry.name.endsWith('.txt');
       const div = document.createElement('div');
       div.className = 'tree-file';
       if (entry.name.endsWith('.html')) div.classList.add('tree-file-html');
+      if (entry.name.endsWith('.txt')) div.classList.add('tree-file-txt');
       div.textContent = entry.name;
       div.dataset.path = entry.path;
       div.dataset.rootIndex = rootIndex;
       div.addEventListener('click', () => {
-        if (entry.name.endsWith('.html')) {
+        if (isNotebook) {
           openTab(rootIndex, entry.path, entry.name, { preview: true });
         }
       });
       div.addEventListener('dblclick', () => {
-        if (entry.name.endsWith('.html')) {
+        if (isNotebook) {
           openTab(rootIndex, entry.path, entry.name, { permanent: true });
         }
       });
@@ -170,10 +173,26 @@ function showEntryContextMenu(e, rootIndex, entry, isDir) {
     });
   }
 
-  if (!isDir && entry.name.endsWith('.html')) {
+  const isNotebook = !isDir && (entry.name.endsWith('.html') || entry.name.endsWith('.txt'));
+
+  if (isNotebook) {
     items.push({
       label: 'open',
       action: () => openTab(rootIndex, entry.path, entry.name, { permanent: true }),
+    });
+  }
+
+  if (!isDir && entry.name.endsWith('.html')) {
+    items.push({
+      label: 'export as .txt',
+      action: () => exportEntryAsTxt(rootIndex, entry),
+    });
+  }
+
+  if (!isDir && entry.name.endsWith('.txt')) {
+    items.push({
+      label: 'export as .html',
+      action: () => exportEntryAsHtml(rootIndex, entry),
     });
   }
 
@@ -195,10 +214,12 @@ function showEntryContextMenu(e, rootIndex, entry, isDir) {
 async function promptNewNotebook(rootIndex, parentPath) {
   const name = prompt('notebook name:', 'untitled.html');
   if (!name) return;
-  const finalName = name.endsWith('.html') ? name : name + '.html';
+  const finalName = (name.endsWith('.html') || name.endsWith('.txt')) ? name : name + '.html';
   const root = AFS.roots[rootIndex];
   let content;
-  if (root && root.type === 'box') {
+  if (finalName.endsWith('.txt')) {
+    content = '/// auditable\n/// title: ' + finalName.replace(/\.txt$/, '') + '\n';
+  } else if (root && root.type === 'box') {
     // lightweight format for Box storage
     content = JSON.stringify({
       format: 'auditable-notebook',
@@ -291,6 +312,47 @@ async function exportBox(rootIndex) {
   a.click();
   URL.revokeObjectURL(url);
   setStatus('exported ' + root.name);
+}
+
+async function exportEntryAsTxt(rootIndex, entry) {
+  try {
+    const content = await readEntry(rootIndex, entry.path);
+    if (!content) return;
+    const notebook = extractNotebook(content);
+    if (!notebook) { setStatus('cannot export packed notebook'); return; }
+    const txt = toTxt(notebook);
+    const blob = new Blob([txt], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = entry.name.replace(/\.html$/, '.txt');
+    a.click();
+    URL.revokeObjectURL(url);
+    setStatus('exported ' + a.download);
+  } catch (err) {
+    console.error('export as .txt failed:', err);
+    setStatus('export failed: ' + err.message);
+  }
+}
+
+async function exportEntryAsHtml(rootIndex, entry) {
+  try {
+    const content = await readEntry(rootIndex, entry.path);
+    if (!content) return;
+    const notebook = parseTxt(content);
+    const html = await hydrateNotebook(notebook);
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = entry.name.replace(/\.txt$/, '.html');
+    a.click();
+    URL.revokeObjectURL(url);
+    setStatus('exported ' + a.download);
+  } catch (err) {
+    console.error('export as .html failed:', err);
+    setStatus('export failed: ' + err.message);
+  }
 }
 
 function removeRoot(rootIndex) {

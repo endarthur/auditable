@@ -1942,6 +1942,7 @@ body.presenting .find-bar { display: none !important; }
       <div class="save-tray" id="saveTray">
         <button onclick="setSaveMode('normal');saveNotebook()">save</button>
         <button onclick="setSaveMode('packed');saveNotebook()">save packed</button>
+        <button onclick="exportAsTxt();toggleSaveTray()">export .txt</button>
       </div>
     </span>
     <div class="toolbar-overflow">
@@ -4803,7 +4804,7 @@ function togglePresent() {
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_BUILD_DATE__ = '2026-02-23';
-const __AUDITABLE_BASE_SIZE__ = 247262;
+const __AUDITABLE_BASE_SIZE__ = 249483;
 
 (function() {
   const ver = $('#aboutVersion');
@@ -5644,6 +5645,68 @@ ${b64Lines}</pre>
 
 function esc(s) {
   return s.replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function exportAsTxt() {
+  const title = $('#docTitle').value || 'untitled';
+  const html = buildNotebookHtml();
+
+  // extract notebook data from HTML
+  const dataMatch = html.match(/<!--AUDITABLE-DATA\n([\s\S]*?)\nAUDITABLE-DATA-->/);
+  let cells = [];
+  if (dataMatch) {
+    try { cells = JSON.parse(dataMatch[1]); } catch {}
+  }
+
+  const setMatch = html.match(/<!--AUDITABLE-SETTINGS\n([\s\S]*?)\nAUDITABLE-SETTINGS-->/);
+  let settings = {};
+  if (setMatch) {
+    try { settings = JSON.parse(setMatch[1]); } catch {}
+  }
+
+  // extract module URLs (without sources — standalone export just records URLs)
+  const modMatch = html.match(/<!--AUDITABLE-MODULES\n([\s\S]*?)\nAUDITABLE-MODULES-->/);
+  let moduleUrls = [];
+  if (modMatch) {
+    try {
+      const decoded = decodeModules(modMatch[1]);
+      moduleUrls = Object.keys(decoded);
+    } catch {}
+  }
+
+  // build /// formatted text
+  const lines = ['/// auditable'];
+  if (title && title !== 'untitled') {
+    lines.push('/// title: ' + title);
+  }
+  const defaultSettings = { theme: 'dark', fontSize: 13, width: '860' };
+  if (JSON.stringify(settings) !== JSON.stringify(defaultSettings)) {
+    lines.push('/// settings: ' + JSON.stringify(settings));
+  }
+  for (const url of moduleUrls) {
+    lines.push('/// module: ' + url);
+  }
+  for (const cell of cells) {
+    lines.push('');
+    const flags = cell.collapsed ? ' collapsed' : '';
+    lines.push('/// ' + cell.type + flags);
+    lines.push(cell.code || '');
+  }
+  const txt = lines.join('\n') + '\n';
+
+  // download
+  if (window.__AF_BRIDGE__) {
+    window.parent.postMessage({ type: 'af:download', payload: { data: txt, filename: title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.txt', mime: 'text/plain' } }, '*');
+  } else {
+    const blob = new Blob([txt], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.txt';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+  setMsg('exported .txt', 'ok');
 }
 
 function loadFromEmbed() {
@@ -7697,6 +7760,7 @@ window.saveNotebook = saveNotebook;
 window.savePackedNotebook = savePackedNotebook;
 window.setSaveMode = setSaveMode;
 window.toggleSaveTray = toggleSaveTray;
+window.exportAsTxt = exportAsTxt;
 
 // exec
 window.runAll = runAll;

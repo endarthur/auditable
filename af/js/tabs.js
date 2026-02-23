@@ -1,6 +1,6 @@
 import { AFS, $ } from './state.js';
 import { readEntry, dbGet, dbPut, openDB } from './fs.js';
-import { isLightweight, hydrate } from './notebook.js';
+import { isLightweight, hydrate, isAuditableTxt, parseTxt, hydrateNotebook } from './notebook.js';
 import { renderTree } from './tree.js';
 
 // ── TABS ──
@@ -67,6 +67,9 @@ async function loadTabContent(tab) {
     // hydrate lightweight notebooks from Box storage
     if (isLightweight(html)) {
       html = await hydrate(html);
+    } else if (isAuditableTxt(html)) {
+      const notebook = parseTxt(html);
+      html = await hydrateNotebook(notebook);
     }
 
     // inject localStorage shim for blob URL iframes

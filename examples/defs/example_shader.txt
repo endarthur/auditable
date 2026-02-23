@@ -1,3 +1,4 @@
+/// auditable
 /// title: shader playground
 /// module: ./ext/shader/index.js ext/shader/index.js
 
