@@ -1,3 +1,4 @@
+/// auditable
 /// title: workshop workshop
 
 /// code collapsed

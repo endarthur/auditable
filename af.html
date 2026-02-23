@@ -2396,6 +2396,7 @@ body.presenting .find-bar { display: none !important; }
       <div class="save-tray" id="saveTray">
         <button onclick="setSaveMode('normal');saveNotebook()">save</button>
         <button onclick="setSaveMode('packed');saveNotebook()">save packed</button>
+        <button onclick="exportAsTxt();toggleSaveTray()">export .txt</button>
       </div>
     </span>
     <div class="toolbar-overflow">
@@ -5256,8 +5257,8 @@ function togglePresent() {
 
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
-const __AUDITABLE_BUILD_DATE__ = '2026-02-22';
-const __AUDITABLE_BASE_SIZE__ = 247262;
+const __AUDITABLE_BUILD_DATE__ = '2026-02-23';
+const __AUDITABLE_BASE_SIZE__ = 249483;
 
 (function() {
   const ver = $('#aboutVersion');
@@ -6098,6 +6099,68 @@ async function savePackedNotebook() {
 
 function esc(s) {
   return s.replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function exportAsTxt() {
+  const title = $('#docTitle').value || 'untitled';
+  const html = buildNotebookHtml();
+
+  // extract notebook data from HTML
+  const dataMatch = html.match(/<!--AUDITABLE-DATA\\n([\\s\\S]*?)\\nAUDITABLE-DATA-->/);
+  let cells = [];
+  if (dataMatch) {
+    try { cells = JSON.parse(dataMatch[1]); } catch {}
+  }
+
+  const setMatch = html.match(/<!--AUDITABLE-SETTINGS\\n([\\s\\S]*?)\\nAUDITABLE-SETTINGS-->/);
+  let settings = {};
+  if (setMatch) {
+    try { settings = JSON.parse(setMatch[1]); } catch {}
+  }
+
+  // extract module URLs (without sources — standalone export just records URLs)
+  const modMatch = html.match(/<!--AUDITABLE-MODULES\\n([\\s\\S]*?)\\nAUDITABLE-MODULES-->/);
+  let moduleUrls = [];
+  if (modMatch) {
+    try {
+      const decoded = decodeModules(modMatch[1]);
+      moduleUrls = Object.keys(decoded);
+    } catch {}
+  }
+
+  // build /// formatted text
+  const lines = ['/// auditable'];
+  if (title && title !== 'untitled') {
+    lines.push('/// title: ' + title);
+  }
+  const defaultSettings = { theme: 'dark', fontSize: 13, width: '860' };
+  if (JSON.stringify(settings) !== JSON.stringify(defaultSettings)) {
+    lines.push('/// settings: ' + JSON.stringify(settings));
+  }
+  for (const url of moduleUrls) {
+    lines.push('/// module: ' + url);
+  }
+  for (const cell of cells) {
+    lines.push('');
+    const flags = cell.collapsed ? ' collapsed' : '';
+    lines.push('/// ' + cell.type + flags);
+    lines.push(cell.code || '');
+  }
+  const txt = lines.join('\\n') + '\\n';
+
+  // download
+  if (window.__AF_BRIDGE__) {
+    window.parent.postMessage({ type: 'af:download', payload: { data: txt, filename: title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.txt', mime: 'text/plain' } }, '*');
+  } else {
+    const blob = new Blob([txt], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.txt';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+  setMsg('exported .txt', 'ok');
 }
 
 function loadFromEmbed() {
@@ -8151,6 +8214,7 @@ window.saveNotebook = saveNotebook;
 window.savePackedNotebook = savePackedNotebook;
 window.setSaveMode = setSaveMode;
 window.toggleSaveTray = toggleSaveTray;
+window.exportAsTxt = exportAsTxt;
 
 // exec
 window.runAll = runAll;
@@ -8565,7 +8629,7 @@ async function boxDeleteBox(boxId) {
 async function boxExport(boxId) {
   const box = await boxGet(boxId);
   if (!box) return null;
-  // hydrate lightweight notebooks back to full HTML for export
+  // hydrate lightweight/txt notebooks back to full HTML for export
   const files = {};
   for (const [path, content] of Object.entries(box.files)) {
     if (isLightweight(content)) {
@@ -8573,6 +8637,15 @@ async function boxExport(boxId) {
         files[path] = await hydrate(content);
       } catch (e) {
         console.warn('boxExport: hydrate failed for', path, e);
+        files[path] = content;
+      }
+    } else if (isAuditableTxt(content)) {
+      try {
+        const notebook = parseTxt(content);
+        const htmlPath = path.replace(/\.txt$/, '.html');
+        files[htmlPath] = await hydrateNotebook(notebook);
+      } catch (e) {
+        console.warn('boxExport: txt hydrate failed for', path, e);
         files[path] = content;
       }
     } else {
@@ -8679,6 +8752,7 @@ async function walkRoot(rootIndex) {
 // ── LIGHTWEIGHT NOTEBOOK FORMAT ──
 // Dehydrate: full HTML → compact JSON + content-addressed blob store
 // Hydrate: compact JSON + blob store → full HTML for iframe loading
+// Txt: plain-text /// format for human/LLM-friendly notebook files
 
 
 // ── Helpers ──
@@ -8720,10 +8794,15 @@ function isLightweight(content) {
   }
 }
 
-// ── Dehydrate: full HTML → lightweight JSON ──
+function isAuditableTxt(content) {
+  if (typeof content !== 'string') return false;
+  return content.startsWith('/// auditable\n') || content.startsWith('/// auditable\r\n');
+}
 
-async function dehydrate(html) {
-  // guard: packed notebooks cannot be dehydrated
+// ── Extract notebook from HTML (pure, no blob-store side effects) ──
+
+function extractNotebook(html) {
+  // guard: packed notebooks cannot be extracted
   if (/<meta\s+name="auditable-packed"/i.test(html)) return null;
 
   // extract title from docTitle input
@@ -8744,7 +8823,7 @@ async function dehydrate(html) {
     try { settings = JSON.parse(setMatch[1]); } catch {}
   }
 
-  // extract and process AUDITABLE-MODULES
+  // extract AUDITABLE-MODULES (with full source)
   const modMatch = html.match(/<!--AUDITABLE-MODULES\n([\s\S]*?)\nAUDITABLE-MODULES-->/);
   let modules = null;
   if (modMatch) {
@@ -8752,40 +8831,64 @@ async function dehydrate(html) {
       const decoded = decodeModulesB64(modMatch[1]);
       modules = {};
       for (const [url, entry] of Object.entries(decoded)) {
-        const source = entry.source;
-        const hash = await sha256hex(source);
-        await blobPut(hash, source);
-        const ref = { ref: hash };
-        if (entry.cellId != null) ref.cellId = entry.cellId;
-        if (entry.binary) ref.binary = true;
-        if (entry.compressed) ref.compressed = true;
-        if (entry.type) ref.type = entry.type;
-        modules[url] = ref;
+        modules[url] = { ...entry };
       }
     } catch (e) {
-      console.warn('dehydrate: failed to process modules', e);
+      console.warn('extractNotebook: failed to process modules', e);
     }
   }
 
-  const notebook = {
-    format: 'auditable-notebook',
-    v: 1,
-    title,
-    cells,
-    settings,
-  };
+  const notebook = { title, cells, settings };
   if (modules && Object.keys(modules).length > 0) {
     notebook.modules = modules;
   }
-
-  return JSON.stringify(notebook);
+  return notebook;
 }
 
-// ── Hydrate: lightweight JSON → full HTML ──
+// ── Store module blobs (hash source, blobPut, replace with refs) ──
 
-async function hydrate(jsonStr) {
-  const notebook = JSON.parse(jsonStr);
+async function storeModuleBlobs(notebook) {
+  if (!notebook.modules) return;
+  for (const [url, entry] of Object.entries(notebook.modules)) {
+    if (entry.ref && !entry.source) continue; // already a ref
+    const source = entry.source;
+    if (!source) continue;
+    const hash = await sha256hex(source);
+    await blobPut(hash, source);
+    const ref = { ref: hash };
+    if (entry.cellId != null) ref.cellId = entry.cellId;
+    if (entry.binary) ref.binary = true;
+    if (entry.compressed) ref.compressed = true;
+    if (entry.type) ref.type = entry.type;
+    notebook.modules[url] = ref;
+  }
+}
 
+// ── Dehydrate: full HTML → lightweight JSON ──
+
+async function dehydrate(html) {
+  const notebook = extractNotebook(html);
+  if (!notebook) return null;
+
+  await storeModuleBlobs(notebook);
+
+  const lightweight = {
+    format: 'auditable-notebook',
+    v: 1,
+    title: notebook.title,
+    cells: notebook.cells,
+    settings: notebook.settings,
+  };
+  if (notebook.modules && Object.keys(notebook.modules).length > 0) {
+    lightweight.modules = notebook.modules;
+  }
+
+  return JSON.stringify(lightweight);
+}
+
+// ── Hydrate: notebook object → full HTML ──
+
+async function hydrateNotebook(notebook) {
   // start with runtime template
   let html = __AUDITABLE_RUNTIME__;
 
@@ -8809,9 +8912,13 @@ async function hydrate(jsonStr) {
   if (notebook.modules && Object.keys(notebook.modules).length > 0) {
     const resolved = {};
     for (const [url, entry] of Object.entries(notebook.modules)) {
+      if (!entry.ref) {
+        console.warn('hydrateNotebook: module without ref, skipping', url);
+        continue;
+      }
       const source = await blobGet(entry.ref);
       if (source === null) {
-        console.warn('hydrate: missing blob for', url, 'hash:', entry.ref);
+        console.warn('hydrateNotebook: missing blob for', url, 'hash:', entry.ref);
         continue;
       }
       const mod = { source };
@@ -8833,6 +8940,117 @@ async function hydrate(jsonStr) {
   html = html.replace('\n<script>', () => insertion);
 
   return html;
+}
+
+// ── Hydrate: lightweight JSON string → full HTML (existing API) ──
+
+async function hydrate(jsonStr) {
+  return hydrateNotebook(JSON.parse(jsonStr));
+}
+
+// ── Txt format: parse /// delimited plain-text ──
+
+function parseTxt(content) {
+  const lines = content.split('\n');
+  let title = 'untitled';
+  let settings = { theme: 'dark', fontSize: 13, width: '860' };
+  const modules = {};
+  const cells = [];
+  let currentCell = null;
+
+  for (const line of lines) {
+    // strip trailing \r for CRLF files
+    const l = line.endsWith('\r') ? line.slice(0, -1) : line;
+
+    if (l.startsWith('/// ')) {
+      // flush previous cell
+      if (currentCell) {
+        currentCell.code = trimCell(currentCell.code);
+        cells.push(currentCell);
+        currentCell = null;
+      }
+
+      const directive = l.slice(4);
+
+      if (directive === 'auditable') {
+        // magic first line, skip
+        continue;
+      } else if (directive.startsWith('title: ')) {
+        title = directive.slice(7);
+      } else if (directive.startsWith('settings: ')) {
+        try { settings = JSON.parse(directive.slice(10)); } catch {}
+      } else if (directive.startsWith('module: ')) {
+        const parts = directive.slice(8).split(' ');
+        const url = parts[0];
+        const ref = parts.length > 1 ? parts.slice(1).join(' ') : null;
+        modules[url] = { ref };
+      } else {
+        // cell type line: "code", "code collapsed", "md", "css", "html"
+        const parts = directive.split(' ');
+        const type = parts[0];
+        const collapsed = parts.includes('collapsed');
+        currentCell = { type };
+        if (collapsed) currentCell.collapsed = true;
+        currentCell.code = '';
+      }
+    } else if (currentCell) {
+      currentCell.code += (currentCell.code ? '\n' : '') + l;
+    }
+    // lines before any cell directive are ignored
+  }
+
+  // flush last cell
+  if (currentCell) {
+    currentCell.code = trimCell(currentCell.code);
+    cells.push(currentCell);
+  }
+
+  const notebook = { title, cells, settings };
+  if (Object.keys(modules).length > 0) {
+    notebook.modules = {};
+    for (const [url, entry] of Object.entries(modules)) {
+      notebook.modules[url] = { ref: entry.ref };
+    }
+  }
+  return notebook;
+}
+
+function trimCell(code) {
+  return code.replace(/^\n/, '').replace(/\n$/, '');
+}
+
+// ── Txt format: serialize notebook object → /// text ──
+
+function toTxt(notebook) {
+  const lines = ['/// auditable'];
+
+  if (notebook.title && notebook.title !== 'untitled') {
+    lines.push('/// title: ' + notebook.title);
+  }
+
+  const defaultSettings = { theme: 'dark', fontSize: 13, width: '860' };
+  if (notebook.settings && JSON.stringify(notebook.settings) !== JSON.stringify(defaultSettings)) {
+    lines.push('/// settings: ' + JSON.stringify(notebook.settings));
+  }
+
+  if (notebook.modules) {
+    for (const [url, entry] of Object.entries(notebook.modules)) {
+      if (entry.ref) {
+        lines.push('/// module: ' + url + ' ' + entry.ref);
+      } else {
+        lines.push('/// module: ' + url);
+      }
+    }
+  }
+
+  for (const cell of (notebook.cells || [])) {
+    lines.push('');
+    const flags = cell.collapsed ? ' collapsed' : '';
+    lines.push('/// ' + cell.type + flags);
+    lines.push(cell.code || '');
+  }
+
+  return lines.join('\n') + '\n';
 }
 
 // -- tree.js --
@@ -8903,19 +9121,21 @@ function renderEntries(parent, entries, rootIndex) {
       renderEntries(details, entry.children, rootIndex);
       parent.appendChild(details);
     } else {
+      const isNotebook = entry.name.endsWith('.html') || entry.name.endsWith('.txt');
       const div = document.createElement('div');
       div.className = 'tree-file';
       if (entry.name.endsWith('.html')) div.classList.add('tree-file-html');
+      if (entry.name.endsWith('.txt')) div.classList.add('tree-file-txt');
       div.textContent = entry.name;
       div.dataset.path = entry.path;
       div.dataset.rootIndex = rootIndex;
       div.addEventListener('click', () => {
-        if (entry.name.endsWith('.html')) {
+        if (isNotebook) {
           openTab(rootIndex, entry.path, entry.name, { preview: true });
         }
       });
       div.addEventListener('dblclick', () => {
-        if (entry.name.endsWith('.html')) {
+        if (isNotebook) {
           openTab(rootIndex, entry.path, entry.name, { permanent: true });
         }
       });
@@ -9004,10 +9224,26 @@ function showEntryContextMenu(e, rootIndex, entry, isDir) {
     });
   }
 
-  if (!isDir && entry.name.endsWith('.html')) {
+  const isNotebook = !isDir && (entry.name.endsWith('.html') || entry.name.endsWith('.txt'));
+
+  if (isNotebook) {
     items.push({
       label: 'open',
       action: () => openTab(rootIndex, entry.path, entry.name, { permanent: true }),
+    });
+  }
+
+  if (!isDir && entry.name.endsWith('.html')) {
+    items.push({
+      label: 'export as .txt',
+      action: () => exportEntryAsTxt(rootIndex, entry),
+    });
+  }
+
+  if (!isDir && entry.name.endsWith('.txt')) {
+    items.push({
+      label: 'export as .html',
+      action: () => exportEntryAsHtml(rootIndex, entry),
     });
   }
 
@@ -9029,10 +9265,12 @@ function showEntryContextMenu(e, rootIndex, entry, isDir) {
 async function promptNewNotebook(rootIndex, parentPath) {
   const name = prompt('notebook name:', 'untitled.html');
   if (!name) return;
-  const finalName = name.endsWith('.html') ? name : name + '.html';
+  const finalName = (name.endsWith('.html') || name.endsWith('.txt')) ? name : name + '.html';
   const root = AFS.roots[rootIndex];
   let content;
-  if (root && root.type === 'box') {
+  if (finalName.endsWith('.txt')) {
+    content = '/// auditable\n/// title: ' + finalName.replace(/\.txt$/, '') + '\n';
+  } else if (root && root.type === 'box') {
     // lightweight format for Box storage
     content = JSON.stringify({
       format: 'auditable-notebook',
@@ -9127,6 +9365,47 @@ async function exportBox(rootIndex) {
   setStatus('exported ' + root.name);
 }
 
+async function exportEntryAsTxt(rootIndex, entry) {
+  try {
+    const content = await readEntry(rootIndex, entry.path);
+    if (!content) return;
+    const notebook = extractNotebook(content);
+    if (!notebook) { setStatus('cannot export packed notebook'); return; }
+    const txt = toTxt(notebook);
+    const blob = new Blob([txt], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = entry.name.replace(/\.html$/, '.txt');
+    a.click();
+    URL.revokeObjectURL(url);
+    setStatus('exported ' + a.download);
+  } catch (err) {
+    console.error('export as .txt failed:', err);
+    setStatus('export failed: ' + err.message);
+  }
+}
+
+async function exportEntryAsHtml(rootIndex, entry) {
+  try {
+    const content = await readEntry(rootIndex, entry.path);
+    if (!content) return;
+    const notebook = parseTxt(content);
+    const html = await hydrateNotebook(notebook);
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = entry.name.replace(/\.txt$/, '.html');
+    a.click();
+    URL.revokeObjectURL(url);
+    setStatus('exported ' + a.download);
+  } catch (err) {
+    console.error('export as .html failed:', err);
+    setStatus('export failed: ' + err.message);
+  }
+}
+
 function removeRoot(rootIndex) {
   // close tabs belonging to this root
   const tabsToClose = AFS.tabs.filter(t => t.rootIndex === rootIndex);
@@ -9209,6 +9488,9 @@ async function loadTabContent(tab) {
     // hydrate lightweight notebooks from Box storage
     if (isLightweight(html)) {
       html = await hydrate(html);
+    } else if (isAuditableTxt(html)) {
+      const notebook = parseTxt(html);
+      html = await hydrateNotebook(notebook);
     }
 
     // inject localStorage shim for blob URL iframes
@@ -9552,10 +9834,16 @@ async function saveActiveTab() {
       return;
     }
 
-    // dehydrate for Box roots, store full HTML for FSAA
+    // choose format based on path extension and storage backend
     const root = AFS.roots[tab.rootIndex];
     let content = html;
-    if (root && root.type === 'box') {
+    if (tab.path.endsWith('.txt')) {
+      const notebook = extractNotebook(html);
+      if (notebook) {
+        await storeModuleBlobs(notebook);
+        content = toTxt(notebook);
+      }
+    } else if (root && root.type === 'box') {
       const lightweight = await dehydrate(html);
       if (lightweight) content = lightweight;
     }
@@ -9576,10 +9864,16 @@ async function saveAllTabs() {
     try {
       const html = await requestSerialize(tab.id);
       if (html) {
-        // dehydrate for Box roots
+        // choose format based on path extension and storage backend
         const root = AFS.roots[tab.rootIndex];
         let content = html;
-        if (root && root.type === 'box') {
+        if (tab.path.endsWith('.txt')) {
+          const notebook = extractNotebook(html);
+          if (notebook) {
+            await storeModuleBlobs(notebook);
+            content = toTxt(notebook);
+          }
+        } else if (root && root.type === 'box') {
           const lightweight = await dehydrate(html);
           if (lightweight) content = lightweight;
         }

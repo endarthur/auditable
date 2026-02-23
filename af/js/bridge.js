@@ -1,6 +1,6 @@
 import { AFS, $ } from './state.js';
 import { writeEntry } from './fs.js';
-import { dehydrate } from './notebook.js';
+import { dehydrate, extractNotebook, storeModuleBlobs, toTxt } from './notebook.js';
 import { findTabBySource, markDirty, markClean, renderTabBar, setStatus, updateStatusBar, handleStorageMessage } from './tabs.js';
 
 // ── postMessage BRIDGE ──
@@ -87,10 +87,16 @@ async function saveActiveTab() {
       return;
     }
 
-    // dehydrate for Box roots, store full HTML for FSAA
+    // choose format based on path extension and storage backend
     const root = AFS.roots[tab.rootIndex];
     let content = html;
-    if (root && root.type === 'box') {
+    if (tab.path.endsWith('.txt')) {
+      const notebook = extractNotebook(html);
+      if (notebook) {
+        await storeModuleBlobs(notebook);
+        content = toTxt(notebook);
+      }
+    } else if (root && root.type === 'box') {
       const lightweight = await dehydrate(html);
       if (lightweight) content = lightweight;
     }
@@ -111,10 +117,16 @@ async function saveAllTabs() {
     try {
       const html = await requestSerialize(tab.id);
       if (html) {
-        // dehydrate for Box roots
+        // choose format based on path extension and storage backend
         const root = AFS.roots[tab.rootIndex];
         let content = html;
-        if (root && root.type === 'box') {
+        if (tab.path.endsWith('.txt')) {
+          const notebook = extractNotebook(html);
+          if (notebook) {
+            await storeModuleBlobs(notebook);
+            content = toTxt(notebook);
+          }
+        } else if (root && root.type === 'box') {
           const lightweight = await dehydrate(html);
           if (lightweight) content = lightweight;
         }
