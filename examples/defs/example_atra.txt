@@ -7,15 +7,16 @@
 
 [atra](ext/atra/SPEC.md) is a Fortran/Pascal hybrid that compiles to WebAssembly bytecode via tagged template literals. no toolchain, no build step — one JS file turns formulas into bytecode.
 
-this notebook computes a **spherical variogram model** and uses it to evaluate an **IDW-like weighted interpolation** over a grid, with the heavy loop running entirely in Wasm.
+this notebook computes three **variogram models** (spherical, gaussian, exponential) and uses `call_indirect` to pass the selected model as a function reference to a grid evaluator — the hot loop runs entirely in Wasm, calling the chosen model through a function pointer.
 
 /// code
 const { atra } = await load("./ext/atra/index.js");
 
 /// code
-// spherical variogram model + grid evaluator
-// compiled to WebAssembly — all loops run as native Wasm
+// three variogram models + indirect-call grid evaluator
+// compiled to WebAssembly — model selection via call_indirect
 
+const modelName = ui.dropdown("model", ["spherical","gaussian","exponential"]);
 const range0 = ui.slider("range", 60, {min:10, max:200, step:1});
 const sill0 = ui.slider("sill", 1.0, {min:0.1, max:3.0, step:0.1});
 const nugget0 = ui.slider("nugget", 0.1, {min:0.0, max:1.0, step:0.05});
@@ -27,9 +28,10 @@ const gridN = ui.slider("grid", 120, {min:40, max:250, step:10});
 const mem = new WebAssembly.Memory({ initial: 4 }); // 256 KB
 
 const wasm = atra({ memory: mem })`
-  const PI: f64 = 3.141592653589793
+  ! ── variogram models ──
+  ! all share the same signature: (h, a, c1, c0: f64): f64
 
-  ! spherical variogram model: γ(h) = c0 + c1 * (1.5h/a - 0.5(h/a)^3)
+  ! spherical: γ(h) = c0 + c1 * (1.5h/a - 0.5(h/a)^3)
   function spherical(h, a, c1, c0: f64): f64
   begin
     if (h <= 0.0) then
@@ -41,10 +43,31 @@ const wasm = atra({ memory: mem })`
     end if
   end
 
-  ! weighted interpolation over a grid using variogram-based weights
-  ! samples: [x0, y0, v0, x1, y1, v1, ...] (f64 triples)
-  ! grid: row-major f64 output, gridN * gridN entries
+  ! gaussian: γ(h) = c0 + c1 * (1 - exp(-3(h/a)²))
+  function gaussian(h, a, c1, c0: f64): f64
+  begin
+    if (h <= 0.0) then
+      gaussian := 0.0
+    else
+      gaussian := c0 + c1 * (1.0 - exp(-3.0 * (h / a) ** 2))
+    end if
+  end
+
+  ! exponential: γ(h) = c0 + c1 * (1 - exp(-3h/a))
+  function exponential(h, a, c1, c0: f64): f64
+  begin
+    if (h <= 0.0) then
+      exponential := 0.0
+    else
+      exponential := c0 + c1 * (1.0 - exp(-3.0 * h / a))
+    end if
+  end
+
+  ! ── grid evaluator with indirect call ──
+  ! the model parameter is a function reference (table index)
+  ! call_indirect dispatches to whichever model was passed
   subroutine eval_grid(
+    model: function(h, a, c1, c0: f64): f64,
     samples: array f64; nSamples: i32;
     grid: array f64; gridN: i32;
     a, c1, c0: f64
@@ -68,7 +91,7 @@ const wasm = atra({ memory: mem })`
             vsum := samples[k * 3 + 2]
             break
           end if
-          gamma := spherical(dist, a, c1, c0)
+          gamma := model(dist, a, c1, c0)
           if (gamma > 0.0) then
             w := 1.0 / gamma
           else
@@ -81,7 +104,29 @@ const wasm = atra({ memory: mem })`
       end for
     end for
   end
+
+  ! ── dispatch: select model by id, pass as function reference ──
+  subroutine run_model(
+    model_id: i32,
+    samples: array f64; nSamples: i32;
+    grid: array f64; gridN: i32;
+    a, c1, c0: f64
+  )
+  var model: function(h, a, c1, c0: f64): f64
+  begin
+    if (model_id == 0) then
+      model := spherical
+    else if (model_id == 1) then
+      model := gaussian
+    else
+      model := exponential
+    end if
+    call eval_grid(model, samples, nSamples, grid, gridN, a, c1, c0)
+  end
 `;
+
+// wasm.__table maps function names to their call_indirect table indices
+// { spherical: 0, gaussian: 1, exponential: 2, eval_grid: 3, run_model: 4 }
 
 /// code
 // generate seeded samples + run Wasm kernel
@@ -109,7 +154,7 @@ for (let i = 0; i < nPts; i++) {
 const gridPtr = nPts * 3 * 8; // after sample data
 
 const t0 = performance.now();
-wasm.eval_grid(samplesPtr, nPts, gridPtr, gridN, range0 / 200, sill0, nugget0);
+wasm.run_model(wasm.__table[modelName], samplesPtr, nPts, gridPtr, gridN, range0 / 200, sill0, nugget0);
 const elapsed = (performance.now() - t0).toFixed(2);
 
 // read grid back
@@ -160,7 +205,7 @@ for (let i = 0; i < nPts; i++) {
   ctx.stroke();
 }
 
-ui.display(`${gridN}\u00d7${gridN} grid \u00b7 ${nPts} samples \u00b7 Wasm kernel: ${elapsed} ms`);
+ui.display(`${modelName} \u00b7 ${gridN}\u00d7${gridN} grid \u00b7 ${nPts} samples \u00b7 Wasm kernel: ${elapsed} ms`);
 
 /// code
 // variogram curve plot
@@ -184,7 +229,8 @@ cx.font = "11px monospace";
 cx.fillText("h", w - 20, h - pad + 4);
 cx.fillText("\u03b3(h)", pad - 4, 14);
 
-// plot spherical model curve
+// plot selected model curve
+const evalModel = wasm[modelName]; // spherical, gaussian, or exponential
 const maxH = 1.2;
 const maxG = nugget0 + sill0 * 1.15;
 cx.strokeStyle = "#c89b3c";
@@ -192,7 +238,7 @@ cx.lineWidth = 2;
 cx.beginPath();
 for (let i = 0; i <= 200; i++) {
   const hv = (i / 200) * maxH;
-  const gv = wasm.spherical(hv, range0 / 200, sill0, nugget0);
+  const gv = evalModel(hv, range0 / 200, sill0, nugget0);
   const px = pad + (hv / maxH) * (w - pad - 10);
   const py = (h - pad) - (gv / maxG) * (h - pad - 20);
   if (i === 0) cx.moveTo(px, py); else cx.lineTo(px, py);
@@ -213,4 +259,4 @@ for (let i = 0; i <= 3; i++) {
 }
 
 /// md
-**how it works:** the `atra` tagged template compiles a spherical variogram model and a grid evaluator to WebAssembly bytecode — no toolchain, just `atra\`...\``. sample data is packed into Wasm linear memory as `f64` triples, and the nested loop runs as native Wasm instructions. the resulting grid is rendered with a viridis colormap.
+**how it works:** the `atra` tagged template compiles three variogram models and a grid evaluator to WebAssembly bytecode — no toolchain, just `atra\`...\``. the grid evaluator takes a **function reference** as its first parameter (`model: function(...)`), so the same Wasm subroutine handles all three models via `call_indirect`. sample data is packed into Wasm linear memory as `f64` triples, and the nested loop runs as native Wasm instructions. the resulting grid is rendered with a viridis colormap.
