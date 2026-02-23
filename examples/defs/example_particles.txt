@@ -1,0 +1,122 @@
+/// title: particle sandbox
+
+/// code collapsed
+// %collapsed
+workshop([
+  {
+    title: 'Particle sandbox',
+    content: md`This is a guided **workshop** for this notebook.
+Use the **prev** and **next** buttons below to navigate
+between pages, or click the progress dots to jump directly.
+
+Close this panel with the **\u00d7** button. Reopen it
+anytime with the **workshop** tab on the right edge
+of the screen.`
+  },
+  {
+    title: 'Mixed widget patterns',
+    content: md`This example uses **both** reactive and
+callback widgets in the same cell. The \`count\` slider
+is reactive \u2014 changing it re-runs the cell to resize
+the particle array.
+
+The other sliders (speed, size, hue) use \`onInput\`
+callbacks that write to \`let\` variables directly.
+The animation loop reads these variables each frame,
+giving instant visual feedback with zero DAG overhead.`
+  },
+  {
+    title: 'Manual cells & animation',
+    content: md`\`// %manual\` prevents re-execution on
+upstream changes. The cell creates a
+\`requestAnimationFrame\` loop that runs continuously.
+
+\`invalidation.then(() => cancelAnimationFrame(raf))\`
+ensures the animation stops before any re-run.
+Without this, re-running the cell would create
+duplicate animation loops, each fighting for
+the canvas.`
+  },
+  {
+    title: 'Reactive re-initialization',
+    content: md`The \`count\` slider has no \`onInput\`
+callback, so changing it re-runs the entire cell.
+This rebuilds the particle array with the new count,
+resets the canvas, and restarts the animation loop.
+
+This is the key pattern: use **callbacks** for
+parameters that change continuously (speed, color)
+and **reactive widgets** for structural changes that
+require re-initialization (particle count).`
+  },
+])
+
+/// md
+# particle sandbox
+
+a real-time canvas particle system driven by **callback widgets**. reactive widgets control structural parameters (particle count), while `onInput` callbacks give instant control over speed, size, color, and physics — no DAG overhead, just the browser event loop.
+
+/// code
+// %manual
+const W = Math.min(600, window.innerWidth - 80), H = 400;
+const c = ui.canvas(W, H);
+const ctx = c.getContext("2d");
+
+// mutable state — callbacks write directly here
+let speed = 1, size = 3, hue = 30, gravity = false, trails = true;
+
+// reactive widget — changing count re-runs this cell to resize the array
+const count = ui.slider("count", 200, {min: 10, max: 1000, step: 10});
+
+// callback widgets — real-time, zero DAG overhead
+ui.slider("speed", 1, {min: 0.1, max: 5, step: 0.1, onInput: v => speed = v});
+ui.slider("size", 3, {min: 1, max: 10, step: 0.5, onInput: v => size = v});
+ui.slider("hue", 30, {min: 0, max: 360, step: 5, onInput: v => hue = v});
+ui.checkbox("gravity", false, {onInput: v => gravity = v});
+ui.checkbox("trails", true, {onInput: v => trails = v});
+
+// init particles
+const particles = [];
+for (let i = 0; i < count; i++) {
+  particles.push({
+    x: Math.random() * W,
+    y: Math.random() * H,
+    vx: (Math.random() - 0.5) * 4,
+    vy: (Math.random() - 0.5) * 4
+  });
+}
+
+// animation loop
+let raf;
+function frame() {
+  if (trails) {
+    ctx.fillStyle = "rgba(10, 10, 10, 0.15)";
+    ctx.fillRect(0, 0, W, H);
+  } else {
+    ctx.fillStyle = "#0a0a0a";
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  for (const p of particles) {
+    if (gravity) p.vy += 0.1 * speed;
+    p.x += p.vx * speed;
+    p.y += p.vy * speed;
+
+    // bounce off walls
+    if (p.x < 0)     { p.x = 0;     p.vx = Math.abs(p.vx); }
+    if (p.x > W)     { p.x = W;     p.vx = -Math.abs(p.vx); }
+    if (p.y < 0)     { p.y = 0;     p.vy = Math.abs(p.vy); }
+    if (p.y > H)     { p.y = H;     p.vy = -Math.abs(p.vy); }
+
+    const t = (p.x / W + p.y / H) / 2;
+    ctx.fillStyle = `hsl(${hue + t * 60}, 80%, 55%)`;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  raf = requestAnimationFrame(frame);
+}
+frame();
+
+invalidation.then(() => cancelAnimationFrame(raf));
