@@ -27,6 +27,7 @@ function openDB() {
     };
     req.onsuccess = () => { AFS.db = req.result; resolve(req.result); };
     req.onerror = () => reject(req.error);
+    req.onblocked = () => reject(new Error('IndexedDB blocked \u2014 close other AF tabs and reload'));
   });
 }
 
