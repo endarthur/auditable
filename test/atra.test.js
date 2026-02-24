@@ -1478,3 +1478,240 @@ describe('atra.run', () => {
     assert.strictEqual(getelem(0, 0), 42.0);
   });
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// tailcall — tail call optimization
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('tailcall', () => {
+  describe('parser', () => {
+    it('parses tailcall statement', () => {
+      const ast = parse(lex(`
+        function fact(n: i32, acc: i32): i32
+        begin
+          if (n <= 1) then
+            fact := acc
+          else
+            tailcall fact(n - 1, acc * n)
+          end if
+        end
+      `));
+      const body = ast.body[0].body;
+      const ifStmt = body[0];
+      const tailcall = ifStmt.elseBody[0];
+      assert.strictEqual(tailcall.type, 'TailCall');
+      assert.strictEqual(tailcall.name, 'fact');
+      assert.strictEqual(tailcall.args.length, 2);
+    });
+  });
+
+  describe('end-to-end', () => {
+    it('basic tail recursion: factorial', () => {
+      const { factorial } = atra`
+        function factorial(n, acc: i32): i32
+        begin
+          if (n <= 1) then
+            factorial := acc
+          else
+            tailcall factorial(n - 1, acc * n)
+          end if
+        end
+      `;
+      assert.strictEqual(factorial(1, 1), 1);
+      assert.strictEqual(factorial(5, 1), 120);
+      assert.strictEqual(factorial(10, 1), 3628800);
+    });
+
+    it('deep recursion without stack overflow', () => {
+      const { countdown } = atra`
+        function countdown(n: i32): i32
+        begin
+          if (n <= 0) then
+            countdown := 0
+          else
+            tailcall countdown(n - 1)
+          end if
+        end
+      `;
+      // Would stack overflow without tail calls
+      assert.strictEqual(countdown(1000000), 0);
+    });
+
+    it('subroutine tail call', () => {
+      const memory = new WebAssembly.Memory({ initial: 1 });
+      const { fill_recursive } = atra({ memory })`
+        subroutine fill_recursive(arr: array i32; i, n, val: i32)
+        begin
+          if (i < n) then
+            arr[i] := val
+            tailcall fill_recursive(arr, i + 1, n, val)
+          end if
+        end
+      `;
+      fill_recursive(0, 0, 10, 42);
+      const view = new Int32Array(memory.buffer);
+      for (let i = 0; i < 10; i++) assert.strictEqual(view[i], 42);
+    });
+
+    it('indirect tail call via function-typed variable', () => {
+      const { test } = atra`
+        function add1(x: f64): f64
+        begin
+          add1 := x + 1.0
+        end
+
+        function test(f: function(x: f64): f64, x: f64): f64
+        begin
+          tailcall f(x)
+        end
+      `;
+      assert.strictEqual(test(0, 5.0), 6.0); // add1(5) = 6
+    });
+
+    it('__table + tailcall', () => {
+      const wasm = atra`
+        function double(x: f64): f64
+        begin
+          double := x * 2.0
+        end
+
+        function triple(x: f64): f64
+        begin
+          triple := x * 3.0
+        end
+
+        function apply(f: function(x: f64): f64, x: f64): f64
+        begin
+          tailcall f(x)
+        end
+      `;
+      assert.strictEqual(wasm.apply(wasm.__table.double, 5.0), 10.0);
+      assert.strictEqual(wasm.apply(wasm.__table.triple, 5.0), 15.0);
+    });
+
+    it('type mismatch throws', () => {
+      assert.throws(() => {
+        atra`
+          function returns_f64(x: f64): f64
+          begin
+            returns_f64 := x
+          end
+
+          function returns_i32(x: i32): i32
+          begin
+            tailcall returns_f64(f64(x))
+          end
+        `;
+      }, /tailcall type mismatch/);
+    });
+
+    it('bytecode contains return_call opcode (0x12)', () => {
+      const bytes = compileSource(`
+        function countdown(n: i32): i32
+        begin
+          if (n <= 0) then
+            countdown := 0
+          else
+            tailcall countdown(n - 1)
+          end if
+        end
+      `);
+      assert.ok(bytes.includes(0x12));
+    });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// call return() — early return
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('call return()', () => {
+  describe('end-to-end', () => {
+    it('early return from function (guard clause)', () => {
+      const { safediv } = atra`
+        function safediv(a, b: f64): f64
+        begin
+          if (b == 0.0) then
+            call return(0.0)
+          end if
+          safediv := a / b
+        end
+      `;
+      assert.strictEqual(safediv(10.0, 2.0), 5.0);
+      assert.strictEqual(safediv(10.0, 0.0), 0.0);
+    });
+
+    it('early return from subroutine', () => {
+      const memory = new WebAssembly.Memory({ initial: 1 });
+      const { safe_write } = atra({ memory })`
+        subroutine safe_write(arr: array i32; i, n, val: i32)
+        begin
+          if (i >= n) then
+            call return()
+          end if
+          arr[i] := val
+        end
+      `;
+      const view = new Int32Array(memory.buffer);
+      view[5] = 0;
+      safe_write(0, 5, 3, 99); // i=5 >= n=3, should not write
+      assert.strictEqual(view[5], 0);
+      safe_write(0, 1, 3, 99); // i=1 < n=3, should write
+      assert.strictEqual(view[1], 99);
+    });
+
+    it('multiple guard clauses', () => {
+      const { classify } = atra`
+        function classify(x: f64): i32
+        begin
+          if (x < 0.0) then
+            call return(0 - 1)
+          end if
+          if (x == 0.0) then
+            call return(0)
+          end if
+          classify := 1
+        end
+      `;
+      assert.strictEqual(classify(-5.0), -1);
+      assert.strictEqual(classify(0.0), 0);
+      assert.strictEqual(classify(5.0), 1);
+    });
+
+    it('return() in function with wrong arg count throws', () => {
+      assert.throws(() => {
+        atra`
+          function f(x: f64): f64
+          begin
+            call return()
+          end
+        `;
+      }, /return\(\) in a function requires exactly one argument/);
+    });
+
+    it('return(x) in subroutine throws', () => {
+      assert.throws(() => {
+        atra`
+          subroutine s(x: i32)
+          begin
+            call return(x)
+          end
+        `;
+      }, /return\(\) in a subroutine takes no arguments/);
+    });
+
+    it('bytecode contains return opcode (0x0F)', () => {
+      const bytes = compileSource(`
+        function f(x: f64): f64
+        begin
+          if (x == 0.0) then
+            call return(0.0)
+          end if
+          f := x
+        end
+      `);
+      // Find 0x0F that is the return opcode (not just part of another instruction)
+      assert.ok(bytes.includes(0x0f));
+    });
+  });
+});

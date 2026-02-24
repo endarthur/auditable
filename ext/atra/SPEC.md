@@ -497,6 +497,73 @@ while (true)
 end while
 ```
 
+### Early return
+
+`call return(expr)` exits the current function immediately, returning `expr`. In subroutines, use `call return()` with no arguments. Compiles to Wasm `return` (0x0F).
+
+```
+function safediv(a, b: f64): f64
+begin
+  if (b == 0.0) then
+    call return(0.0)
+  end if
+  safediv := a / b
+end
+```
+
+Guard clause pattern — flat instead of nested:
+
+```
+function classify(x: f64): i32
+begin
+  if (x < 0.0) then
+    call return(0 - 1)
+  end if
+  if (x == 0.0) then
+    call return(0)
+  end if
+  classify := 1
+end
+```
+
+Subroutine early return:
+
+```
+subroutine safe_write(arr: array i32; i, n, val: i32)
+begin
+  if (i >= n) then
+    call return()
+  end if
+  arr[i] := val
+end
+```
+
+### Tail calls
+
+`tailcall f(args)` reuses the current stack frame instead of pushing a new one. Enables unbounded recursion in constant stack space. Compiles to Wasm `return_call` (0x12) / `return_call_indirect` (0x13).
+
+```
+function factorial(n, acc: i32): i32
+begin
+  if (n <= 1) then
+    factorial := acc
+  else
+    tailcall factorial(n - 1, acc * n)
+  end if
+end
+```
+
+The callee's return type must match the current function's return type. Subroutines can only tailcall other subroutines. Functions returning `f64` can only tailcall functions returning `f64`, etc.
+
+Works with indirect calls via function-typed variables:
+
+```
+function apply(f: function(x: f64): f64, x: f64): f64
+begin
+  tailcall f(x)
+end
+```
+
 ---
 
 ## Operators
@@ -803,6 +870,8 @@ No parser generators. No LLVM. No external dependencies. Fully auditable.
 | `while`                    | `block { loop { br_if ... br } }`       |
 | `do...while`               | `loop { ... br_if }`                    |
 | `break`                    | `br` to enclosing block                 |
+| `call return(expr)`        | `return`                                |
+| `tailcall f(args)`         | `return_call` / `return_call_indirect`  |
 | `a[i]` (array access)      | `f64.load / f64.store` with offset math |
 | `**`                       | repeated multiplication or `pow` import |
 | `+`, `-`, `*`, `/`         | `f64.add`, `f64.sub`, `f64.mul`, `f64.div` |
