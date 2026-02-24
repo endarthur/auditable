@@ -92,10 +92,10 @@ const _math = {
 
 export function instantiate(imports = {}) {
   const importObj = { math: _math, host: {} };
+  let mem = null;
   for (const [k, v] of Object.entries(imports)) {
     if (k === 'memory' || k === '__memory') {
-      if (!importObj.env) importObj.env = {};
-      importObj.env.memory = v;
+      mem = v;
     } else if (typeof v === 'function') {
       importObj.host[k] = v;
     } else if (v && typeof v === 'object') {
@@ -104,6 +104,8 @@ export function instantiate(imports = {}) {
       }
     }
   }
+  if (!mem) mem = new WebAssembly.Memory({ initial: 1 });
+  importObj.env = { memory: mem };
   const mod = new WebAssembly.Module(_bytes);
   const inst = new WebAssembly.Instance(mod, importObj);
   const exports = {};
@@ -128,7 +130,7 @@ export function instantiate(imports = {}) {
  * @returns {string} — JS module source
  */
 export function bundle(source, opts = {}) {
-  const bytes = atra.compile(source);
+  const bytes = atra.compile(source, { __memory: true });
   const arr = Array.from(bytes);
   const name = opts.name || 'atra module';
   return `// ${name} — compiled by atrac\n`

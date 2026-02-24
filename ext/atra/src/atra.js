@@ -106,8 +106,8 @@ export function atra(stringsOrOpts, ...values) {
 }
 
 // Direct compiler access
-atra.compile = function(source) {
-  return compileSource(source, null, null).bytes;
+atra.compile = function(source, userImports) {
+  return compileSource(source, null, userImports || null).bytes;
 };
 
 atra.parse = function(source) {

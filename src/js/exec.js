@@ -325,6 +325,21 @@ export async function execCell(cell) {
     if (url === '@std') return std;
     if (url === '@python') return python;
     if (url === '@python/this') { display(zenOfPython()); return python; }
+
+    // @atra/<name> — atra library binary distributions
+    // if pre-installed (via /// module: directive or install()), the existing
+    // _installedModules[url] check below handles it. this fallback covers
+    // development mode where the file is available at a relative path.
+    if (url.startsWith('@atra/')) {
+      if (!window._importCache[url] && !window._installedModules[url]) {
+        const name = url.slice(6);
+        const mod = await import('./ext/atra/lib/' + name + '.js');
+        window._importCache[url] = mod;
+        return mod;
+      }
+      // fall through to normal _importCache / _installedModules handling below
+    }
+
     if (window._importCache[url]) return window._importCache[url];
 
     // binary assets — return blob URL
@@ -375,6 +390,21 @@ export async function execCell(cell) {
   };
 
   const install = async (url) => {
+    // @atra/<name> — resolve to CDN URL, store under virtual key
+    if (url.startsWith('@atra/')) {
+      const name = url.slice(6);
+      const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/atra/lib/' + name + '.js';
+      const resp = await fetch(realUrl);
+      if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
+      const source = await resp.text();
+      window._installedModules[url] = { source, cellId: cell.id };
+      const blob = new Blob([source], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      const mod = await import(blobUrl);
+      window._importCache[url] = mod;
+      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB)`);
+      return mod;
+    }
     // normalize: add ?bundle for esm.sh if not present
     let bundleUrl = url;
     if (bundleUrl.includes('esm.sh') && !bundleUrl.includes('?bundle') && !bundleUrl.includes('&bundle')) {
