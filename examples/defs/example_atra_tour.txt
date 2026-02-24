@@ -1,0 +1,204 @@
+/// auditable
+/// title: atra — language tour
+/// module: ./ext/atra/index.js ext/atra/index.js
+
+/// md
+# atra language tour — Newton fractal
+
+a [Newton fractal](https://en.wikipedia.org/wiki/Newton%27s_method) colors each pixel by which root of z\u00b3 \u2212 1 = 0 the Newton-Raphson method converges to. three roots in the complex plane, three colors. the algorithm exercises many atra features: **SIMD** (f64x2 for complex numbers), **dotted names**, **tailcall**, **call return()**, **if-expression**, **type conversions**, **arrays**, and **for loops**.
+
+/// code
+const { atra } = await load("./ext/atra/index.js");
+const maxIter = ui.slider("max iterations", 40, {min: 5, max: 120, step: 1});
+const res = ui.slider("resolution", 200, {min: 50, max: 500, step: 10});
+
+/// code collapsed
+// compile atra kernel — complex math via f64x2 SIMD, Newton iterator via tailcall
+const mem = new WebAssembly.Memory({ initial: 4 });
+
+const wasm = atra({ memory: mem })`
+  ! ── complex arithmetic via f64x2 SIMD ──
+  ! complex number = f64x2 where lane 0 = real, lane 1 = imag
+
+  ! complex multiply: (a+bi)(c+di) = (ac-bd) + (ad+bc)i
+  function cx.mul(a, b: f64x2): f64x2
+  var
+    ar, ai, br, bi: f64
+    re, im: f64
+  begin
+    ar := f64x2.extract_lane(a, 0)
+    ai := f64x2.extract_lane(a, 1)
+    br := f64x2.extract_lane(b, 0)
+    bi := f64x2.extract_lane(b, 1)
+    re := ar * br - ai * bi
+    im := ar * bi + ai * br
+    cx.mul := f64x2(re, im)
+  end
+
+  ! |z|^2 = re^2 + im^2
+  function cx.abs2(z: f64x2): f64
+  var
+    sq: f64x2
+  begin
+    sq := z * z
+    cx.abs2 := f64x2.extract_lane(sq, 0) + f64x2.extract_lane(sq, 1)
+  end
+
+  ! f(z) = z^3 - 1
+  function cx.f(z: f64x2): f64x2
+  var
+    z2, z3: f64x2
+  begin
+    z2 := cx.mul(z, z)
+    z3 := cx.mul(z2, z)
+    z3 := z3 - f64x2(1.0, 0.0)
+    cx.f := z3
+  end
+
+  ! f'(z) = 3z^2
+  function cx.df(z: f64x2): f64x2
+  var
+    z2: f64x2
+    three: f64x2
+  begin
+    z2 := cx.mul(z, z)
+    three := f64x2.splat(3.0)
+    cx.df := z2 * three
+  end
+
+  ! complex divide: a/b = a*conj(b) / |b|^2
+  function cx.div(a, b: f64x2): f64x2
+  var
+    conj_b, num: f64x2
+    denom: f64
+    dv: f64x2
+  begin
+    conj_b := f64x2(f64x2.extract_lane(b, 0), 0.0 - f64x2.extract_lane(b, 1))
+    num := cx.mul(a, conj_b)
+    denom := cx.abs2(b)
+    dv := f64x2.splat(denom)
+    cx.div := num / dv
+  end
+
+  ! ── Newton iterator with tail recursion ──
+  ! returns root id (0, 1, 2) or -1 if no convergence
+  ! takes scalar f64 parts (not f64x2) because tailcall passes via stack
+  function newton.step(zr, zi: f64, iter, maxIter: i32): i32
+  var
+    z, fz, dfz, ratio, znew: f64x2
+    nr, ni, d: f64
+    tol: f64
+  begin
+    ! guard: no convergence
+    if (iter >= maxIter) then
+      call return(0 - 1)
+    end if
+
+    z := f64x2(zr, zi)
+
+    ! Newton step: z_new = z - f(z)/f'(z)
+    fz := cx.f(z)
+    dfz := cx.df(z)
+    ratio := cx.div(fz, dfz)
+    znew := z - ratio
+
+    ! convergence check
+    tol := 1e-6
+    d := cx.abs2(znew - z)
+    if (d < tol) then
+      ! classify which root we converged to
+      ! roots of z^3-1: (1,0), (-0.5, sqrt(3)/2), (-0.5, -sqrt(3)/2)
+      nr := f64x2.extract_lane(znew, 0)
+      ni := f64x2.extract_lane(znew, 1)
+      if (nr > 0.0) then
+        call return(0)
+      else if (ni > 0.0) then
+        call return(1)
+      else
+        call return(2)
+      end if
+    end if
+
+    ! not converged — tail-recurse with updated z
+    tailcall newton.step(
+      f64x2.extract_lane(znew, 0),
+      f64x2.extract_lane(znew, 1),
+      iter + 1, maxIter
+    )
+  end
+
+  ! ── grid evaluator: for each pixel, run newton.step ──
+  subroutine newton.grid(out: array i32; w, h, maxIter: i32)
+  var
+    ix, iy: i32
+    x, y: f64
+    xmin, xmax, ymin, ymax: f64
+  begin
+    xmin := -1.5
+    xmax := 1.5
+    ymin := -1.5
+    ymax := 1.5
+    for iy := 0, h
+      for ix := 0, w
+        x := xmin + (xmax - xmin) * f64(ix) / f64(w)
+        y := ymin + (ymax - ymin) * f64(iy) / f64(h)
+        out[iy * w + ix] := newton.step(x, y, 0, maxIter)
+      end for
+    end for
+  end
+`;
+
+/// code
+// run Wasm kernel and render to canvas
+const t0 = performance.now();
+wasm.newton.grid(0, res, res, maxIter);
+const elapsed = (performance.now() - t0).toFixed(2);
+
+const grid = new Int32Array(mem.buffer, 0, res * res);
+
+const size = Math.min(500, window.innerWidth - 80);
+const c = ui.canvas(size, size);
+const ctx = c.getContext("2d");
+const img = ctx.createImageData(res, res);
+
+// 3-color palette for 3 roots + black for non-convergence
+const palette = [
+  [200, 155, 60],   // root 0 — amber
+  [60, 140, 200],   // root 1 — blue
+  [80, 190, 110],   // root 2 — green
+  [30, 30, 30],     // -1 — didn't converge
+];
+
+for (let i = 0; i < res * res; i++) {
+  const rootId = grid[i];
+  const col = rootId < 0 ? palette[3] : palette[rootId];
+  img.data[i * 4 + 0] = col[0];
+  img.data[i * 4 + 1] = col[1];
+  img.data[i * 4 + 2] = col[2];
+  img.data[i * 4 + 3] = 255;
+}
+
+// scale up to canvas size
+const tmp = new OffscreenCanvas(res, res);
+const tctx = tmp.getContext("2d");
+tctx.putImageData(img, 0, 0);
+ctx.imageSmoothingEnabled = false;
+ctx.drawImage(tmp, 0, 0, size, size);
+
+ui.display(`${res}\u00d7${res} \u00b7 max ${maxIter} iterations \u00b7 Wasm kernel: ${elapsed} ms`);
+
+/// md
+**features used:**
+
+| feature | where |
+|---------|-------|
+| **f64x2 SIMD** | complex numbers packed as f64x2 \u2014 `cx.mul`, `cx.div`, `cx.abs2`, `cx.f`, `cx.df` |
+| **dotted names** | `cx.*` and `newton.*` namespaces |
+| **tailcall** | `newton.step` tail-recurses until convergence or max iterations |
+| **call return()** | guard clause (max iter), early return on convergence with root id |
+| **if-expression style** | chained `if/else if/else` for root classification |
+| **type conversions** | `f64(ix)`, `f64(w)` \u2014 pixel coords to floating point |
+| **arrays** | output grid of i32 root ids in linear memory |
+| **for loops** | nested pixel grid traversal in `newton.grid` |
+| **compound assignment** | `iter + 1` passed through tailcall |
+| **builtins** | `f64x2.extract_lane`, `f64x2.splat`, `f64x2()` constructor |

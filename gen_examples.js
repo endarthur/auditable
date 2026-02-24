@@ -28,6 +28,8 @@ const defs = [
   'example_sql.txt',
   'example_shader.txt',
   'example_atra.txt',
+  'example_atra_tour.txt',
+  'example_atra_v_julia.txt',
 ];
 
 // ── Parser ──
