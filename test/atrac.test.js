@@ -192,6 +192,49 @@ end
 });
 
 // ═════════════════════════════════════════════════════════════════════
+// build output: alpack.js
+// ═════════════════════════════════════════════════════════════════════
+
+describe('build output: alpack.js', () => {
+  const alpackJsPath = new URL('../ext/atra/lib/alpack.js', import.meta.url).pathname
+    .replace(/^\/([A-Z]:)/, '$1');
+
+  it('exists after ext/atra/build.js', () => {
+    assert.ok(existsSync(alpackJsPath));
+  });
+
+  it('contains instantiate export and embedded Wasm', () => {
+    const content = readFileSync(alpackJsPath, 'utf8');
+    assert.ok(content.includes('export function instantiate('));
+    assert.ok(content.includes('const _bytes = new Uint8Array(['));
+    assert.ok(content.includes('// alpack — compiled by atrac'));
+  });
+
+  it('instantiates and exposes alpack routines', async () => {
+    const mod = await import('file://' + alpackJsPath.replace(/\\/g, '/'));
+    const memory = new WebAssembly.Memory({ initial: 4 });
+    const exports = mod.instantiate({ memory });
+    // check nested namespaces
+    assert.ok(exports.alas, 'should have alas namespace');
+    assert.ok(exports.alpack, 'should have alpack namespace');
+    assert.ok(typeof exports.alas.ddot === 'function', 'alas.ddot should be a function');
+    assert.ok(typeof exports.alpack.dgesv === 'function', 'alpack.dgesv should be a function');
+  });
+
+  it('shares memory with caller (bundle imports env.memory)', async () => {
+    const mod = await import('file://' + alpackJsPath.replace(/\\/g, '/'));
+    const memory = new WebAssembly.Memory({ initial: 4 });
+    const f64 = new Float64Array(memory.buffer);
+    const lib = mod.instantiate({ memory });
+    // write data to shared memory and verify Wasm reads it
+    f64[0] = 3.0; f64[1] = 4.0; // x = [3, 4]
+    f64[2] = 3.0; f64[3] = 4.0; // y = [3, 4]
+    const dot = lib.alas.ddot(0, 16, 2); // byte offsets: 0, 16
+    assert.equal(dot, 25); // 3*3 + 4*4 = 25
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
 // CLI (via child process)
 // ═════════════════════════════════════════════════════════════════════
 

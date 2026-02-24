@@ -57,7 +57,7 @@ console.log(`Built ext/atra/index.js (${(size / 1024).toFixed(1)} KB)`);
 
 // ── Build lib/alpack.src.js from lib/alpack.atra ──
 
-import { buildSrc, formatSrcJs } from './atrac.js';
+import { buildSrc, formatSrcJs, bundle } from './atrac.js';
 
 const libDir = path.join(__dirname, 'lib');
 const atraPath = path.join(libDir, 'alpack.atra');
@@ -68,4 +68,11 @@ if (fs.existsSync(atraPath)) {
   fs.writeFileSync(libOutPath, libOut);
   const libSize = fs.statSync(libOutPath).size;
   console.log(`Built ext/atra/lib/alpack.src.js (${(libSize / 1024).toFixed(1)} KB)`);
+
+  // Binary distribution — standalone JS with embedded Wasm
+  const bundleOut = bundle(atraSrc, { name: 'alpack' });
+  const bundlePath = path.join(libDir, 'alpack.js');
+  fs.writeFileSync(bundlePath, bundleOut);
+  const bundleSize = fs.statSync(bundlePath).size;
+  console.log(`Built ext/atra/lib/alpack.js (${(bundleSize / 1024).toFixed(1)} KB)`);
 }
