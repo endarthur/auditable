@@ -1,0 +1,116 @@
+/// auditable
+/// title: atra vs Julia
+/// module: ./ext/atra/index.js ext/atra/index.js
+
+/// md
+# atra vs Julia
+
+a [Julia set](https://en.wikipedia.org/wiki/Julia_set) rendered in WebAssembly, animated in real time. the constant c orbits a circle in the complex plane, morphing the fractal through dendrites, spirals, dust, and islands. the Wasm kernel recomputes every frame.
+
+/// code
+const { atra } = await load("./ext/atra/index.js");
+const maxIter = ui.slider("max iterations", 80, {min: 10, max: 300, step: 5});
+const res = ui.slider("resolution", 250, {min: 50, max: 500, step: 10});
+const radius = ui.slider("orbit radius", 0.7885, {min: 0.1, max: 1.5, step: 0.001});
+const speed = ui.slider("speed", 0.5, {min: 0, max: 2, step: 0.01});
+
+/// code collapsed
+// compile Julia set kernel to WebAssembly
+const mem = new WebAssembly.Memory({ initial: 64 });
+
+const wasm = atra({ memory: mem })`
+  ! Julia set: z <- z^2 + c
+  ! returns smooth iteration count, or -1.0 if bounded (in the set)
+
+  function julia.eval(x0, y0, cr, ci: f64, maxIter: i32): f64
+  var
+    zr, zi, zr2, zi2, t: f64
+    i: i32
+  begin
+    zr := x0
+    zi := y0
+    for i := 0, maxIter
+      zr2 := zr * zr
+      zi2 := zi * zi
+      if (zr2 + zi2 > 4.0) then
+        ! smooth coloring: i + 1 - log2(log(|z|))
+        t := sqrt(zr2 + zi2)
+        call return(f64(i) + 1.0 - ln(ln(t)) / ln(2.0))
+      end if
+      zi := 2.0 * zr * zi + ci
+      zr := zr2 - zi2 + cr
+    end for
+    julia.eval := -1.0
+  end
+
+  ! evaluate Julia set over a pixel grid [-1.5, 1.5]^2
+  subroutine julia.grid(out: array f64; w, h, maxIter: i32, cr, ci: f64)
+  var
+    ix, iy: i32
+    x, y: f64
+  begin
+    for iy := 0, h
+      for ix := 0, w
+        x := -1.5 + 3.0 * f64(ix) / f64(w)
+        y := -1.5 + 3.0 * f64(iy) / f64(h)
+        out[iy * w + ix] := julia.eval(x, y, cr, ci, maxIter)
+      end for
+    end for
+  end
+`;
+
+/// code
+// animate: c orbits a circle in the complex plane
+const size = Math.min(500, window.innerWidth - 80);
+const canvas = ui.canvas(size, size);
+const ctx = canvas.getContext("2d");
+const info = document.createElement("div");
+info.style.cssText = "font: 11px monospace; color: #888; margin-top: 4px;";
+canvas.after(info);
+
+const tmp = new OffscreenCanvas(res, res);
+const tctx = tmp.getContext("2d");
+const img = tctx.createImageData(res, res);
+const TAU = 6.283185307;
+const n = res * res;
+
+let angle = 0, running = true;
+invalidation.then(() => { running = false; });
+
+function frame() {
+  if (!running) return;
+  const t0 = performance.now();
+
+  const cr = radius * Math.cos(angle);
+  const ci = radius * Math.sin(angle);
+  wasm.julia.grid(0, res, res, maxIter, cr, ci);
+  const grid = new Float64Array(mem.buffer, 0, n);
+
+  const d = img.data;
+  for (let i = 0, j = 0; i < n; i++, j += 4) {
+    const v = grid[i];
+    if (v < 0) {
+      d[j] = 0; d[j+1] = 0; d[j+2] = 0;
+    } else {
+      const t = v * 0.04;
+      d[j]   = 255 * (0.5 + 0.5 * Math.cos(TAU * (t + 0.0))) | 0;
+      d[j+1] = 255 * (0.5 + 0.5 * Math.cos(TAU * (t + 0.1))) | 0;
+      d[j+2] = 255 * (0.5 + 0.5 * Math.cos(TAU * (t + 0.2))) | 0;
+    }
+    d[j+3] = 255;
+  }
+
+  tctx.putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(tmp, 0, 0, size, size);
+
+  const ms = (performance.now() - t0).toFixed(1);
+  info.textContent = `c = ${cr.toFixed(3)} + ${ci.toFixed(3)}i \u00b7 ${ms} ms/frame \u00b7 ${res}\u00d7${res}`;
+
+  angle += speed * 0.02;
+  requestAnimationFrame(frame);
+}
+frame();
+
+/// md
+*named after [Gaston Julia](https://en.wikipedia.org/wiki/Gaston_Julia) (1893-1978). any resemblance to programming languages, living or dead, is purely coincidental.*

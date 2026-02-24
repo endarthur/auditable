@@ -52,4 +52,25 @@ describe('renderMd', () => {
     const result = renderMd('');
     assert.strictEqual(typeof result, 'string');
   });
+
+  it('renders a simple table', () => {
+    const md = '| a | b |\n|---|---|\n| 1 | 2 |';
+    const result = renderMd(md);
+    assert.ok(result.includes('<table>'));
+    assert.ok(result.includes('<th>a</th>'));
+    assert.ok(result.includes('<td>1</td>'));
+    assert.ok(result.includes('<td>2</td>'));
+  });
+
+  it('renders table with bold in cells', () => {
+    const md = '| feature | where |\n|---------|-------|\n| **SIMD** | cx.mul |';
+    const result = renderMd(md);
+    assert.ok(result.includes('<strong>SIMD</strong>'));
+    assert.ok(result.includes('<td>cx.mul</td>'));
+  });
+
+  it('does not treat non-table pipes as table', () => {
+    const result = renderMd('a | b');
+    assert.ok(!result.includes('<table>'));
+  });
 });

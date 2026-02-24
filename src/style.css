@@ -689,6 +689,23 @@ button.accent:hover {
 .cell-md-view strong { color: var(--fg-bright); }
 .cell-md-view em { font-style: italic; }
 .cell-md-view a { color: var(--accent); }
+.cell-md-view table {
+  border-collapse: collapse;
+  font-size: 11px;
+  margin: 4px 0;
+}
+.cell-md-view table th,
+.cell-md-view table td {
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+}
+.cell-md-view table th {
+  color: var(--accent);
+  font-weight: normal;
+  text-transform: uppercase;
+  font-size: 9px;
+  letter-spacing: 1px;
+}
 
 .cell-md-edit textarea {
   display: block;
