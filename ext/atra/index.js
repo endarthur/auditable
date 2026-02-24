@@ -4,6 +4,9 @@
 // -- highlight.js --
 
 // Syntax highlighting — tokenizer + completions for auditable editor integration
+//
+// These keyword/type/builtin sets define the language's vocabulary. They're shared
+// between this module (editor highlighting + completions) and lex.js (compiler tokenizer).
 
 const ATRA_KEYWORDS = new Set([
   'function','subroutine','begin','end','var','const','if','then','else',
@@ -118,6 +121,10 @@ function atraCompletions() {
 // -- lex.js --
 
 // Lexer — tokenizer for the parser
+//
+// Atra's lexical design borrows from Fortran: ! for line comments, /= for not-equal,
+// semicolons as whitespace (optional statement separators). Identifiers can contain dots
+// for namespace-style access (e.g. physics.gravity), treated as a single token.
 
 
 const TOK = {
@@ -162,10 +169,12 @@ function lex(source) {
     if (/[a-zA-Z_]/.test(source[i])) {
       const start = i;
       while (i < len && /[\w.]/.test(source[i])) adv();
-      // trim trailing dot (e.g. "name." at end of input)
+      // Trim trailing dot: partial namespace at EOF (e.g. "name.") shouldn't
+      // swallow the dot. This lets the editor recover gracefully mid-typing.
       while (i > start + 1 && source[i - 1] === '.') { i--; col--; }
       let val = source.slice(start, i);
-      // interpolation markers: __INTERP_N__
+      // Tagged template interpolations become __INTERP_N__ markers in the source text.
+      // The parser treats them as identifiers; codegen resolves them to imports.
       if (/^__INTERP_\d+__$/.test(val)) {
         tokens.push({ type: TOK.ID, value: val, interp: true, line: tl, col: tc });
       } else if (ATRA_KEYWORDS.has(val) || ATRA_TYPES.has(val)) {
@@ -211,6 +220,20 @@ function lex(source) {
 // -- parse.js --
 
 // Parser — recursive descent + Pratt expressions → AST
+//
+// Grammar sketch:
+//   program    = { constDecl | varDecl | function | subroutine | import | export function }
+//   function   = 'function' ID '(' params ')' ':' TYPE [var locals] 'begin' stmts 'end'
+//   subroutine = 'subroutine' ID '(' params ')' [var locals] 'begin' stmts 'end'
+//   params     = name {',' name} ':' TYPE {',' params}    — comma-separated names share a type
+//   stmt       = if | for | while | do-while | break | tailcall | call | assign | arrayStore
+//   assign     = ID ':=' expr  |  ID '+=' expr  |  ID '/=' expr  (etc.)
+//   if         = 'if' '(' expr ')' 'then' stmts ['else' stmts | 'else' if] 'end' 'if'
+//   for        = 'for' ID ':=' expr ',' expr [',' step] stmts 'end' 'for'
+//   expr       = Pratt expression (see lbp for precedence tower)
+//   atom       = number | ID | ID '(' args ')' | ID '[' indices ']' | '(' expr ')'
+//              | TYPE '(' args ')'  — type conversion / vector constructor
+//              | 'if' '(' expr ')' 'then' expr 'else' expr  — ternary
 
 
 
@@ -365,10 +388,11 @@ function parse(tokens) {
     return { type: 'Subroutine', name, params, locals, body };
   }
 
+  // Param grouping: "x, y: f64" shares a type across comma-separated names.
+  // The lookahead (pos+2 is ',' or ':') distinguishes grouped names from the next param group.
   function parseParamEntries() {
     const params = [];
     while (cur().type === TOK.ID) {
-      // Collect comma-separated names that share a type
       const names = [eat(TOK.ID).value];
       while (at(TOK.PUNC, ',') && tokens[pos + 1] && tokens[pos + 1].type === TOK.ID &&
              tokens[pos + 2] && (tokens[pos + 2].value === ',' || tokens[pos + 2].value === ':')) {
@@ -501,6 +525,9 @@ function parse(tokens) {
     throw new SyntaxError(`Unexpected expression statement at ${cur().line}:${cur().col}`);
   }
 
+  // The isElseIf flag controls 'end if' consumption: inner if in an else-if chain
+  // lets the outermost if consume the single 'end if'. Without this, each level
+  // would eat one 'end' and the nesting would break.
   function parseIf(isElseIf) {
     eat(TOK.KW, 'if');
     eat(TOK.PUNC, '(');
@@ -581,7 +608,9 @@ function parse(tokens) {
 
   // ── Pratt expression parser ──
 
-  // Binding powers (higher = tighter)
+  // Binding powers (higher = tighter):
+  //   or(2) < and(4) < ==/=/< />/<=/>=(6) < |(8) < ^(10) < &(12)
+  //   < <</>> (14) < +/-(16) < */÷/mod(18) < **(22, right-assoc)
   function lbp(tok) {
     if (tok.type === TOK.KW) {
       if (tok.value === 'or') return 2;
@@ -597,7 +626,7 @@ function parse(tokens) {
       if (v === '<<' || v === '>>') return 14;
       if (v === '+' || v === '-') return 16;
       if (v === '*' || v === '/') return 18;
-      if (v === '**') return 22; // right-assoc handled by using rbp = 22 - 1
+      if (v === '**') return 22; // right-assoc: parseExpr(bp) not parseExpr(bp+1)
     }
     return 0;
   }
@@ -619,7 +648,8 @@ function parse(tokens) {
       if (t.type === TOK.OP) {
         if (t.value === '**') {
           pos++;
-          // right-associative: use bp instead of bp+1
+          // Right-associativity trick: parseExpr(bp) instead of parseExpr(bp+1)
+          // lets 2**3**4 parse as 2**(3**4).
           left = { type: 'BinOp', op: '**', left, right: parseExpr(bp) };
           continue;
         }
@@ -719,18 +749,32 @@ function parse(tokens) {
 // -- opcodes.js --
 
 // Opcodes — Wasm opcode constants, type codes, and SIMD ops
+//
+// The Wasm opcode space is organized by category: control flow at 0x00, variable access
+// at 0x20, memory at 0x28, constants at 0x41. Within the arithmetic region (0x45–0xa6),
+// opcodes form a type×operation grid: each operation has four variants (i32/i64/f32/f64)
+// laid out in contiguous blocks. Two-byte opcodes (0xFC/0xFD prefix) extend the space
+// for saturating truncation and SIMD.
 
-// Wasm opcodes
+// ── Control flow (0x00–0x1b) ──
 const OP_UNREACHABLE = 0x00, OP_NOP = 0x01, OP_BLOCK = 0x02, OP_LOOP = 0x03,
   OP_IF = 0x04, OP_ELSE = 0x05, OP_END = 0x0b, OP_BR = 0x0c, OP_BR_IF = 0x0d,
   OP_RETURN = 0x0f, OP_CALL = 0x10, OP_CALL_INDIRECT = 0x11,
   OP_RETURN_CALL = 0x12, OP_RETURN_CALL_INDIRECT = 0x13, OP_SELECT = 0x1b,
+
+// ── Variable access (0x20–0x24) ──
   OP_LOCAL_GET = 0x20, OP_LOCAL_SET = 0x21, OP_LOCAL_TEE = 0x22,
   OP_GLOBAL_GET = 0x23, OP_GLOBAL_SET = 0x24,
+
+// ── Memory (0x28–0x40) ──
   OP_I32_LOAD = 0x28, OP_I64_LOAD = 0x29, OP_F32_LOAD = 0x2a, OP_F64_LOAD = 0x2b,
   OP_I32_STORE = 0x36, OP_I64_STORE = 0x37, OP_F32_STORE = 0x38, OP_F64_STORE = 0x39,
   OP_MEMORY_SIZE = 0x3f, OP_MEMORY_GROW = 0x40,
+
+// ── Constants (0x41–0x44) ──
   OP_I32_CONST = 0x41, OP_I64_CONST = 0x42, OP_F32_CONST = 0x43, OP_F64_CONST = 0x44,
+
+// ── Comparison (0x45–0x66) — type×operation grid: eqz/eq/ne/lt/gt/le/ge per type ──
   OP_I32_EQZ = 0x45, OP_I32_EQ = 0x46, OP_I32_NE = 0x47,
   OP_I32_LT_S = 0x48, OP_I32_LT_U = 0x49, OP_I32_GT_S = 0x4a, OP_I32_GT_U = 0x4b,
   OP_I32_LE_S = 0x4c, OP_I32_LE_U = 0x4d, OP_I32_GE_S = 0x4e, OP_I32_GE_U = 0x4f,
@@ -739,26 +783,36 @@ const OP_UNREACHABLE = 0x00, OP_NOP = 0x01, OP_BLOCK = 0x02, OP_LOOP = 0x03,
   OP_I64_LE_S = 0x57, OP_I64_LE_U = 0x58, OP_I64_GE_S = 0x59, OP_I64_GE_U = 0x5a,
   OP_F32_EQ = 0x5b, OP_F32_NE = 0x5c, OP_F32_LT = 0x5d, OP_F32_GT = 0x5e, OP_F32_LE = 0x5f, OP_F32_GE = 0x60,
   OP_F64_EQ = 0x61, OP_F64_NE = 0x62, OP_F64_LT = 0x63, OP_F64_GT = 0x64, OP_F64_LE = 0x65, OP_F64_GE = 0x66,
+
+// ── i32 arithmetic (0x67–0x78) ──
   OP_I32_CLZ = 0x67, OP_I32_CTZ = 0x68, OP_I32_POPCNT = 0x69,
   OP_I32_ADD = 0x6a, OP_I32_SUB = 0x6b, OP_I32_MUL = 0x6c,
   OP_I32_DIV_S = 0x6d, OP_I32_DIV_U = 0x6e, OP_I32_REM_S = 0x6f, OP_I32_REM_U = 0x70,
   OP_I32_AND = 0x71, OP_I32_OR = 0x72, OP_I32_XOR = 0x73,
   OP_I32_SHL = 0x74, OP_I32_SHR_S = 0x75, OP_I32_SHR_U = 0x76,
   OP_I32_ROTL = 0x77, OP_I32_ROTR = 0x78,
+
+// ── i64 arithmetic (0x79–0x8a) ──
   OP_I64_CLZ = 0x79, OP_I64_CTZ = 0x7a, OP_I64_POPCNT = 0x7b,
   OP_I64_ADD = 0x7c, OP_I64_SUB = 0x7d, OP_I64_MUL = 0x7e,
   OP_I64_DIV_S = 0x7f, OP_I64_DIV_U = 0x80, OP_I64_REM_S = 0x81, OP_I64_REM_U = 0x82,
   OP_I64_AND = 0x83, OP_I64_OR = 0x84, OP_I64_XOR = 0x85,
   OP_I64_SHL = 0x86, OP_I64_SHR_S = 0x87, OP_I64_SHR_U = 0x88,
   OP_I64_ROTL = 0x89, OP_I64_ROTR = 0x8a,
+
+// ── f32 unary + binary (0x8b–0x98) ──
   OP_F32_ABS = 0x8b, OP_F32_NEG = 0x8c, OP_F32_CEIL = 0x8d, OP_F32_FLOOR = 0x8e,
   OP_F32_TRUNC = 0x8f, OP_F32_NEAREST = 0x90, OP_F32_SQRT = 0x91,
   OP_F32_ADD = 0x92, OP_F32_SUB = 0x93, OP_F32_MUL = 0x94, OP_F32_DIV = 0x95,
   OP_F32_MIN = 0x96, OP_F32_MAX = 0x97, OP_F32_COPYSIGN = 0x98,
+
+// ── f64 unary + binary (0x99–0xa6) ──
   OP_F64_ABS = 0x99, OP_F64_NEG = 0x9a, OP_F64_CEIL = 0x9b, OP_F64_FLOOR = 0x9c,
   OP_F64_TRUNC = 0x9d, OP_F64_NEAREST = 0x9e, OP_F64_SQRT = 0x9f,
   OP_F64_ADD = 0xa0, OP_F64_SUB = 0xa1, OP_F64_MUL = 0xa2, OP_F64_DIV = 0xa3,
   OP_F64_MIN = 0xa4, OP_F64_MAX = 0xa5, OP_F64_COPYSIGN = 0xa6,
+
+// ── Conversions (0xa7–0xc4) ──
   OP_I32_WRAP_I64 = 0xa7,
   OP_I32_TRUNC_F32_S = 0xa8, OP_I32_TRUNC_F64_S = 0xaa,
   OP_I64_EXTEND_I32_S = 0xac, OP_I64_EXTEND_I32_U = 0xad,
@@ -772,22 +826,24 @@ const OP_UNREACHABLE = 0x00, OP_NOP = 0x01, OP_BLOCK = 0x02, OP_LOOP = 0x03,
   OP_I32_EXTEND8_S = 0xc0, OP_I32_EXTEND16_S = 0xc1,
   OP_I64_EXTEND8_S = 0xc2, OP_I64_EXTEND16_S = 0xc3, OP_I64_EXTEND32_S = 0xc4;
 
-// Wasm FC prefix opcodes (0xFC prefix)
+// ── FC prefix (0xFC + u32) — saturating truncation ──
 const OP_FC_PREFIX = 0xfc;
 const OP_I32_TRUNC_SAT_F32_S = 0, OP_I32_TRUNC_SAT_F32_U = 1,
   OP_I32_TRUNC_SAT_F64_S = 2, OP_I32_TRUNC_SAT_F64_U = 3,
   OP_I64_TRUNC_SAT_F32_S = 4, OP_I64_TRUNC_SAT_F32_U = 5,
   OP_I64_TRUNC_SAT_F64_S = 6, OP_I64_TRUNC_SAT_F64_U = 7;
 
-// Wasm type codes
+// ── Type codes ──
+// Descending from 0x7f: i32, i64, f32, f64, v128. These are negative values in
+// signed LEB128, which is how they appear in function signatures and local declarations.
 const WASM_I32 = 0x7f, WASM_I64 = 0x7e, WASM_F32 = 0x7d, WASM_F64 = 0x7c;
 const WASM_V128 = 0x7b;
 const WASM_VOID = 0x40;
 
-// SIMD prefix
+// ── SIMD prefix (0xFD + u32) ──
 const OP_SIMD_PREFIX = 0xfd;
 
-// SIMD opcode table
+// SIMD opcode table — keyed by "type.operation" for easy lookup from codegen
 const SIMD_OPS = {
   // splat
   'i32x4.splat': 0x11, 'i64x2.splat': 0x12, 'f32x4.splat': 0x13, 'f64x2.splat': 0x14,
@@ -857,6 +913,10 @@ function vectorScalarType(t) {
 // -- bytewriter.js --
 
 // ByteWriter — binary builder for Wasm output
+//
+// Wasm uses LEB128 (Little-Endian Base 128) for all integers — a variable-length
+// encoding where each byte uses 7 data bits + 1 continuation bit. This keeps
+// small values compact (1 byte for 0–127) while still supporting the full range.
 
 class ByteWriter {
   constructor() { this.buf = []; }
@@ -885,6 +945,8 @@ class ByteWriter {
   f32(v) { const buf = new ArrayBuffer(4); new DataView(buf).setFloat32(0, v, true); this.bytes(new Uint8Array(buf)); }
   f64(v) { const buf = new ArrayBuffer(8); new DataView(buf).setFloat64(0, v, true); this.bytes(new Uint8Array(buf)); }
   str(s) { const enc = new TextEncoder().encode(s); this.u32(enc.length); this.bytes(enc); }
+  // Wasm sections are length-prefixed, but the length isn't known until the content
+  // is written. Solution: write into a temporary buffer, measure, then emit id + size + content.
   section(id, contentFn) {
     const inner = new ByteWriter();
     contentFn(inner);
@@ -898,10 +960,22 @@ class ByteWriter {
 // -- codegen.js --
 
 // Codegen — AST → Wasm binary
+//
+// Single-pass compiler: AST in, Wasm bytes out. No optimization, no intermediate
+// representation. Closure-based architecture: emitFunctionBody captures index tables
+// (funcIndex, globalIndex, localMap) from the outer codegen scope.
+//
+// Output follows Wasm binary section ordering: Type(1), Import(2), Function(3),
+// Table(4), Memory(5), Global(6), Export(7), Element(9), Code(10).
+//
+// Most emitters branch on type (f64/f32/i32/i64/vector) because Wasm's instruction
+// set is fully typed — there's no polymorphic add, only i32.add, f64.add, etc.
 
 
 
 
+// Nested JS objects → flat "a.b.c" keys. Wasm imports use a two-level namespace
+// (module + name), so nested user imports like {physics: {gravity: fn}} need flattening.
 function flattenImports(obj, prefix) {
   const flat = {};
   for (const [k, v] of Object.entries(obj)) {
@@ -933,9 +1007,9 @@ function codegen(ast, interpValues, userImports) {
     else if (node.type === 'ImportDecl') imports.push(node);
   }
 
-  // Math builtins that need importing
+  // Math builtins: imported from JS Math object. Value = param count.
   const MATH_BUILTINS = { sin: 1, cos: 1, ln: 1, exp: 1, pow: 2, atan2: 2 };
-  // Native builtins (no import needed) — resolved per-type in emitFuncCall
+  // Native builtins: map directly to Wasm opcodes, no import needed
   const NATIVE_BUILTINS = new Set([
     'sqrt','abs','floor','ceil','trunc','nearest','copysign',
     'min','max','select',
@@ -980,7 +1054,8 @@ function codegen(ast, interpValues, userImports) {
     }
   }
 
-  // Auto-import from userImports or globalThis
+  // Auto-import: scan AST for unresolved calls, check userImports then globalThis.
+  // Param types default to f64 — inferred from the JS function's .length.
   const flatImports = userImports ? flattenImports(userImports) : {};
   const hostImports = [];
   for (const name of usedCalls) {
@@ -1067,7 +1142,7 @@ function codegen(ast, interpValues, userImports) {
   const tableSlot = {}; // funcName → table index
   for (let ti = 0; ti < tableFuncs.length; ti++) tableSlot[tableFuncs[ti]] = ti;
 
-  // ── Build type signatures ──
+  // ── Build type signatures ── every unique function signature, deduped by sigKey
   function paramWasmType(p) { return p.isArray ? 'i32' : p.vtype; }
   function sigKey(params, retType) {
     return params.map(p => paramWasmType(p)).join(',') + ':' + (retType || '');
@@ -1099,7 +1174,7 @@ function codegen(ast, interpValues, userImports) {
   w.bytes([0x00, 0x61, 0x73, 0x6d]); // \0asm
   w.bytes([0x01, 0x00, 0x00, 0x00]); // version 1
 
-  // Type section (1)
+  // Type section (1) — every unique (params → retType) signature
   w.section(1, s => {
     s.u32(sigList.length);
     for (const sig of sigList) {
@@ -1111,7 +1186,7 @@ function codegen(ast, interpValues, userImports) {
     }
   });
 
-  // Import section (2)
+  // Import section (2) — math builtins (auto-detected), explicit imports, host functions
   if (allImports.length > 0 || importMemory) {
     w.section(2, s => {
       s.u32(allImports.length + (importMemory ? 1 : 0));
@@ -1138,7 +1213,7 @@ function codegen(ast, interpValues, userImports) {
     for (const sigId of funcSigIds) s.u32(sigId);
   });
 
-  // Table section (4) — only if call_indirect is used
+  // Table section (4) — funcref table for call_indirect (function pointers)
   if (tableFuncs.length > 0) {
     w.section(4, s => {
       s.u32(1); // one table
@@ -1188,7 +1263,7 @@ function codegen(ast, interpValues, userImports) {
     }
   });
 
-  // Element section (9) — populate the table with function references
+  // Element section (9) — populate table with function references at offset 0
   if (tableFuncs.length > 0) {
     w.section(9, s => {
       s.u32(1); // one element segment
@@ -1200,7 +1275,7 @@ function codegen(ast, interpValues, userImports) {
     });
   }
 
-  // Code section (10)
+  // Code section (10) — one body per local function, each with compressed locals + bytecode
   w.section(10, s => {
     s.u32(functions.length);
     for (const fn of functions) {
@@ -1261,13 +1336,13 @@ function codegen(ast, interpValues, userImports) {
     const isFunc = fn.type === 'Function';
     const retType = isFunc ? fn.retType : null;
 
-    // Build local map: params + locals + return var
+    // ── Local layout ── params, declared locals, hidden return variable
     const localMap = {}; // name → { idx, vtype }
     let localIdx = 0;
     for (const p of fn.params) {
       const entry = {
         idx: localIdx++,
-        vtype: p.isArray ? 'i32' : p.vtype, // Wasm type: arrays are i32 pointers
+        vtype: p.isArray ? 'i32' : p.vtype, // Wasm has no array type; arrays are i32 memory pointers
         isArray: p.isArray,
         arrayDims: p.arrayDims,
         elemType: p.isArray ? p.vtype : null  // element type for load/store
@@ -1275,10 +1350,10 @@ function codegen(ast, interpValues, userImports) {
       if (p.funcSig) entry.funcSig = p.funcSig;
       localMap[p.name] = entry;
     }
-    // Additional locals declared
     const declaredLocals = [...fn.locals];
     if (isFunc) {
-      // hidden return local (uses function name)
+      // $_return: Fortran convention — assigning to the function name sets the return value.
+      // Mapped to a hidden local; the function epilogue reads it with local.get.
       declaredLocals.push({ name: '$_return', vtype: retType });
     }
     for (const loc of declaredLocals) {
@@ -1304,7 +1379,7 @@ function codegen(ast, interpValues, userImports) {
     // SIMD helper
     function emitSimd(op) { bw.byte(OP_SIMD_PREFIX); bw.u32(op); }
 
-    // Emit body statements
+    // ── Statement emission ──
     let depth = 0; // current block nesting depth
     const breakTargets = []; // stack of {depth} for each enclosing loop's break block
 
@@ -1548,6 +1623,7 @@ function codegen(ast, interpValues, userImports) {
       return null;
     }
 
+    // Type inference fallback: when expectedType is null, guess from AST shape. Default is f64.
     function inferExprType(expr) {
       switch (expr.type) {
         case 'NumberLit': {
@@ -1597,6 +1673,7 @@ function codegen(ast, interpValues, userImports) {
       }
     }
 
+    // ── Expression emission ──
     function emitExpr(expr, expectedType) {
       const actualType = expectedType || inferExprType(expr);
 
@@ -1674,6 +1751,7 @@ function codegen(ast, interpValues, userImports) {
       }
     }
 
+    // ── Binary operators ──
     function emitBinOp(expr, t) {
       const op = expr.op;
 
@@ -1743,6 +1821,9 @@ function codegen(ast, interpValues, userImports) {
       if (t === 'f32') bw.byte(OP_F32_DEMOTE_F64);
     }
 
+    // ── Function call dispatch ──
+    // Priority: vector constructors > type conversions > SIMD builtins > native builtins
+    //         > wasm.* escape hatch > indirect calls (call_indirect) > regular calls
     function emitFuncCall(expr, expectedType) {
       const name = expr.name;
 
@@ -1952,6 +2033,7 @@ function codegen(ast, interpValues, userImports) {
       }
     }
 
+    // ── SIMD builtins ──
     function emitSimdBuiltin(prefix, method, expr, expectedType) {
       // f64x2.splat(x), i32x4.splat(x), etc.
       if (method === 'splat') {
@@ -2062,6 +2144,7 @@ function codegen(ast, interpValues, userImports) {
       throw new Error(`Unknown SIMD builtin: ${prefix}.${method}`);
     }
 
+    // ── Type conversion ──
     function emitConversion(from, to) {
       if (from === to) return;
       if (from === 'i32' && to === 'f64') bw.byte(OP_F64_CONVERT_I32_S);
@@ -2079,6 +2162,7 @@ function codegen(ast, interpValues, userImports) {
       else throw new Error(`Cannot convert ${from} to ${to}`);
     }
 
+    // ── Memory access ── array addressing: base + index * sizeof(elemType)
     function emitArrayAddr(name, indices, info, elemType) {
       // Base pointer
       bw.byte(OP_LOCAL_GET);
@@ -2133,6 +2217,7 @@ function codegen(ast, interpValues, userImports) {
       else if (isVector(t)) { emitSimd(SIMD_OPS['v128.store']); bw.u32(4); bw.u32(0); } // align=16
     }
 
+    // ── Comparison + arithmetic helpers ──
     function emitCmp(op, t) {
       if (t === 'f64') {
         if (op === '==') bw.byte(OP_F64_EQ);
@@ -2230,6 +2315,8 @@ function codegen(ast, interpValues, userImports) {
 // -- atra.js --
 
 // Public API — tagged template, .compile, .parse, .dump, .run, self-registration
+//
+// Pipeline: source → lex → parse → codegen → bytes → WebAssembly.Module → exports
 
 
 
@@ -2302,7 +2389,8 @@ function compileAndInstantiate(strings, values, userImports) {
   // Join template strings with interpolation markers
   let source = strings[0];
   for (let i = 0; i < values.length; i++) {
-    // For numeric values, inline them directly
+    // Numeric values inline directly into source text (no import overhead).
+    // Functions become __INTERP_N__ markers, resolved as host imports by codegen.
     if (typeof values[i] === 'number') {
       source += String(values[i]);
     } else {
@@ -2317,7 +2405,8 @@ function compileAndInstantiate(strings, values, userImports) {
 }
 
 function atra(stringsOrOpts, ...values) {
-  // Curried form: atra({imports})`...`
+  // Curried form detection: atra({imports})`...` vs atra`...`
+  // Tagged templates pass a strings array with a .raw property; a plain object won't have it.
   if (stringsOrOpts && !Array.isArray(stringsOrOpts) && typeof stringsOrOpts === 'object' && !stringsOrOpts.raw) {
     const opts = stringsOrOpts;
     return function(strings, ...vals) {

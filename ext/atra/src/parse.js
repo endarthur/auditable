@@ -1,4 +1,18 @@
 // Parser — recursive descent + Pratt expressions → AST
+//
+// Grammar sketch:
+//   program    = { constDecl | varDecl | function | subroutine | import | export function }
+//   function   = 'function' ID '(' params ')' ':' TYPE [var locals] 'begin' stmts 'end'
+//   subroutine = 'subroutine' ID '(' params ')' [var locals] 'begin' stmts 'end'
+//   params     = name {',' name} ':' TYPE {',' params}    — comma-separated names share a type
+//   stmt       = if | for | while | do-while | break | tailcall | call | assign | arrayStore
+//   assign     = ID ':=' expr  |  ID '+=' expr  |  ID '/=' expr  (etc.)
+//   if         = 'if' '(' expr ')' 'then' stmts ['else' stmts | 'else' if] 'end' 'if'
+//   for        = 'for' ID ':=' expr ',' expr [',' step] stmts 'end' 'for'
+//   expr       = Pratt expression (see lbp for precedence tower)
+//   atom       = number | ID | ID '(' args ')' | ID '[' indices ']' | '(' expr ')'
+//              | TYPE '(' args ')'  — type conversion / vector constructor
+//              | 'if' '(' expr ')' 'then' expr 'else' expr  — ternary
 
 import { TOK } from './lex.js';
 import { ATRA_TYPES } from './highlight.js';
@@ -154,10 +168,11 @@ export function parse(tokens) {
     return { type: 'Subroutine', name, params, locals, body };
   }
 
+  // Param grouping: "x, y: f64" shares a type across comma-separated names.
+  // The lookahead (pos+2 is ',' or ':') distinguishes grouped names from the next param group.
   function parseParamEntries() {
     const params = [];
     while (cur().type === TOK.ID) {
-      // Collect comma-separated names that share a type
       const names = [eat(TOK.ID).value];
       while (at(TOK.PUNC, ',') && tokens[pos + 1] && tokens[pos + 1].type === TOK.ID &&
              tokens[pos + 2] && (tokens[pos + 2].value === ',' || tokens[pos + 2].value === ':')) {
@@ -290,6 +305,9 @@ export function parse(tokens) {
     throw new SyntaxError(`Unexpected expression statement at ${cur().line}:${cur().col}`);
   }
 
+  // The isElseIf flag controls 'end if' consumption: inner if in an else-if chain
+  // lets the outermost if consume the single 'end if'. Without this, each level
+  // would eat one 'end' and the nesting would break.
   function parseIf(isElseIf) {
     eat(TOK.KW, 'if');
     eat(TOK.PUNC, '(');
@@ -370,7 +388,9 @@ export function parse(tokens) {
 
   // ── Pratt expression parser ──
 
-  // Binding powers (higher = tighter)
+  // Binding powers (higher = tighter):
+  //   or(2) < and(4) < ==/=/< />/<=/>=(6) < |(8) < ^(10) < &(12)
+  //   < <</>> (14) < +/-(16) < */÷/mod(18) < **(22, right-assoc)
   function lbp(tok) {
     if (tok.type === TOK.KW) {
       if (tok.value === 'or') return 2;
@@ -386,7 +406,7 @@ export function parse(tokens) {
       if (v === '<<' || v === '>>') return 14;
       if (v === '+' || v === '-') return 16;
       if (v === '*' || v === '/') return 18;
-      if (v === '**') return 22; // right-assoc handled by using rbp = 22 - 1
+      if (v === '**') return 22; // right-assoc: parseExpr(bp) not parseExpr(bp+1)
     }
     return 0;
   }
@@ -408,7 +428,8 @@ export function parse(tokens) {
       if (t.type === TOK.OP) {
         if (t.value === '**') {
           pos++;
-          // right-associative: use bp instead of bp+1
+          // Right-associativity trick: parseExpr(bp) instead of parseExpr(bp+1)
+          // lets 2**3**4 parse as 2**(3**4).
           left = { type: 'BinOp', op: '**', left, right: parseExpr(bp) };
           continue;
         }

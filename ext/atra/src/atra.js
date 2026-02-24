@@ -1,4 +1,6 @@
 // Public API — tagged template, .compile, .parse, .dump, .run, self-registration
+//
+// Pipeline: source → lex → parse → codegen → bytes → WebAssembly.Module → exports
 
 import { lex } from './lex.js';
 import { parse } from './parse.js';
@@ -72,7 +74,8 @@ function compileAndInstantiate(strings, values, userImports) {
   // Join template strings with interpolation markers
   let source = strings[0];
   for (let i = 0; i < values.length; i++) {
-    // For numeric values, inline them directly
+    // Numeric values inline directly into source text (no import overhead).
+    // Functions become __INTERP_N__ markers, resolved as host imports by codegen.
     if (typeof values[i] === 'number') {
       source += String(values[i]);
     } else {
@@ -87,7 +90,8 @@ function compileAndInstantiate(strings, values, userImports) {
 }
 
 export function atra(stringsOrOpts, ...values) {
-  // Curried form: atra({imports})`...`
+  // Curried form detection: atra({imports})`...` vs atra`...`
+  // Tagged templates pass a strings array with a .raw property; a plain object won't have it.
   if (stringsOrOpts && !Array.isArray(stringsOrOpts) && typeof stringsOrOpts === 'object' && !stringsOrOpts.raw) {
     const opts = stringsOrOpts;
     return function(strings, ...vals) {
