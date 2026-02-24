@@ -1,6 +1,9 @@
 {
   "version": "0.3.0",
   "private": true,
+  "bin": {
+    "atrac": "./ext/atra/atrac.js"
+  },
   "scripts": {
     "build": "node build.js",
     "build:af": "node build.js && node build.js --target=af",
