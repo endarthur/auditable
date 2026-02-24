@@ -2472,6 +2472,40 @@ function fmt(number, opts = {}) {
   return s;
 }
 
+// ── Source inclusion with dependency resolution ──
+
+function include(libs, ...names) {
+  // accept single library or array of libraries
+  const list = Array.isArray(libs) && libs[0] && libs[0].sources ? libs : [libs];
+  // merge all libraries into unified sources + deps
+  const sources = {}, deps = {};
+  for (const lib of list) {
+    if (!lib || !lib.sources || !lib.deps)
+      throw new Error('include: expected library with sources and deps');
+    Object.assign(sources, lib.sources);
+    Object.assign(deps, lib.deps);
+  }
+  const needed = new Set();
+  function walk(name) {
+    if (needed.has(name)) return;
+    if (!sources[name]) throw new Error(`include: unknown routine '${name}'`);
+    needed.add(name);
+    for (const dep of deps[name] || []) walk(dep);
+  }
+  names.forEach(walk);
+  // topological sort: deps before dependents
+  const sorted = [];
+  const visited = new Set();
+  function visit(name) {
+    if (visited.has(name)) return;
+    visited.add(name);
+    for (const dep of deps[name] || []) visit(dep);
+    sorted.push(name);
+  }
+  needed.forEach(visit);
+  return sorted.map(n => sources[n]).join('\n\n');
+}
+
 // ── Export ──
 
 const std = {
@@ -2479,6 +2513,7 @@ const std = {
   sum, mean, median, extent, bin, linspace,
   unique, zip, cross,
   file, download, el, copy, fmt,
+  include,
 };
 
 // -- python.js --
@@ -4679,7 +4714,7 @@ function addCell(type, code = '', afterId = null, beforeId = null) {
     renderHtmlCell(cell);
   }
 
-  ta.focus();
+  if (S.initialized) ta.focus();
   updateStatus();
   notifyDirty();
   return cell;
@@ -4999,7 +5034,7 @@ function togglePresent() {
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_BUILD_DATE__ = '2026-02-24';
-const __AUDITABLE_BASE_SIZE__ = 251968;
+const __AUDITABLE_BASE_SIZE__ = 253139;
 
 (function() {
   const ver = $('#aboutVersion');

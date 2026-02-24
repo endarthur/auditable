@@ -54,3 +54,66 @@ const outPath = path.join(__dirname, 'index.js');
 fs.writeFileSync(outPath, output);
 const size = fs.statSync(outPath).size;
 console.log(`Built ext/atra/index.js (${(size / 1024).toFixed(1)} KB)`);
+
+// ── Build lib/alpack.src.js from lib/alpack.atra ──
+// Exports each subroutine/function as a named string constant,
+// plus `all` for the full source.
+
+const libDir = path.join(__dirname, 'lib');
+const atraPath = path.join(libDir, 'alpack.atra');
+if (fs.existsSync(atraPath)) {
+  const atraSrc = fs.readFileSync(atraPath, 'utf8');
+  const lines = atraSrc.split('\n');
+  const routines = {};
+  let current = null, name = null;
+
+  for (const line of lines) {
+    const m = line.match(/^\s*(?:subroutine|function)\s+([\w.]+)\s*\(/);
+    if (m) {
+      name = m[1];
+      current = [line];
+    } else if (current) {
+      current.push(line);
+      if (/^\s*end\s*$/.test(line)) {
+        routines[name] = current.join('\n');
+        current = null;
+        name = null;
+      }
+    }
+  }
+
+  // Build dependency map: for each routine, find calls to other routines
+  const routineNames = Object.keys(routines);
+  const deps = {};
+  for (const [rname, src] of Object.entries(routines)) {
+    deps[rname] = routineNames.filter(other =>
+      other !== rname && new RegExp(`\\b${other.replace(/\./g, '\\.')}\\s*\\(`).test(src)
+    );
+  }
+
+  let libOut = '// Generated from alpack.atra — do not edit\n\n';
+  libOut += `export const all = ${JSON.stringify(atraSrc)};\n\n`;
+
+  // Individual routine exports (flat names: alas.ddot → alas_ddot)
+  for (const [rname, src] of Object.entries(routines)) {
+    const jsName = rname.replace(/\./g, '_');
+    libOut += `export const ${jsName} = ${JSON.stringify(src)};\n\n`;
+  }
+
+  // Library object for std.include(): { sources, deps }
+  libOut += `export const sources = {\n`;
+  for (const rname of routineNames) {
+    libOut += `  ${JSON.stringify(rname)}: ${JSON.stringify(routines[rname])},\n`;
+  }
+  libOut += `};\n\n`;
+  libOut += `export const deps = {\n`;
+  for (const rname of routineNames) {
+    libOut += `  ${JSON.stringify(rname)}: ${JSON.stringify(deps[rname])},\n`;
+  }
+  libOut += `};\n`;
+
+  const libOutPath = path.join(libDir, 'alpack.src.js');
+  fs.writeFileSync(libOutPath, libOut);
+  const libSize = fs.statSync(libOutPath).size;
+  console.log(`Built ext/atra/lib/alpack.src.js (${(libSize / 1024).toFixed(1)} KB)`);
+}

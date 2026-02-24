@@ -5,7 +5,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { std } from '../src/js/stdlib.js';
 
-const { csv, sum, mean, median, extent, bin, linspace, unique, zip, cross, fmt } = std;
+const { csv, sum, mean, median, extent, bin, linspace, unique, zip, cross, fmt, include } = std;
 
 // ── csv ──
 
@@ -241,5 +241,85 @@ describe('fmt', () => {
     const result = fmt(1234);
     assert.ok(typeof result === 'string');
     assert.ok(result.includes('1'));
+  });
+});
+
+// ── include ──
+
+describe('include', () => {
+  const lib = {
+    sources: {
+      'a': 'function a',
+      'b': 'function b',
+      'c': 'function c',
+      'd': 'function d',
+    },
+    deps: {
+      'a': [],
+      'b': ['a'],
+      'c': ['a', 'b'],
+      'd': [],
+    },
+  };
+
+  it('includes a single routine with no deps', () => {
+    assert.strictEqual(include(lib, 'a'), 'function a');
+  });
+
+  it('resolves direct dependency', () => {
+    const result = include(lib, 'b');
+    assert.ok(result.includes('function a'));
+    assert.ok(result.includes('function b'));
+    // a must come before b
+    assert.ok(result.indexOf('function a') < result.indexOf('function b'));
+  });
+
+  it('resolves transitive dependencies', () => {
+    const result = include(lib, 'c');
+    assert.ok(result.includes('function a'));
+    assert.ok(result.includes('function b'));
+    assert.ok(result.includes('function c'));
+    assert.ok(result.indexOf('function a') < result.indexOf('function b'));
+    assert.ok(result.indexOf('function b') < result.indexOf('function c'));
+  });
+
+  it('deduplicates when multiple names share deps', () => {
+    const result = include(lib, 'b', 'c');
+    // 'a' should appear only once
+    const count = result.split('function a').length - 1;
+    assert.strictEqual(count, 1);
+  });
+
+  it('includes unrelated routines', () => {
+    const result = include(lib, 'a', 'd');
+    assert.ok(result.includes('function a'));
+    assert.ok(result.includes('function d'));
+  });
+
+  it('throws on unknown routine', () => {
+    assert.throws(() => include(lib, 'z'), /unknown routine 'z'/);
+  });
+
+  it('throws on invalid library object', () => {
+    assert.throws(() => include({}, 'a'), /expected library with sources and deps/);
+  });
+
+  it('resolves across multiple libraries', () => {
+    const libA = {
+      sources: { 'a.dot': 'function a.dot' },
+      deps: { 'a.dot': [] },
+    };
+    const libB = {
+      sources: { 'b.solve': 'function b.solve' },
+      deps: { 'b.solve': ['a.dot'] },
+    };
+    const result = include([libA, libB], 'b.solve');
+    assert.ok(result.includes('function a.dot'));
+    assert.ok(result.includes('function b.solve'));
+    assert.ok(result.indexOf('function a.dot') < result.indexOf('function b.solve'));
+  });
+
+  it('single lib still works (backward compat)', () => {
+    assert.strictEqual(include(lib, 'd'), 'function d');
   });
 });

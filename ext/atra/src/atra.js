@@ -74,10 +74,13 @@ function compileAndInstantiate(strings, values, userImports) {
   // Join template strings with interpolation markers
   let source = strings[0];
   for (let i = 0; i < values.length; i++) {
-    // Numeric values inline directly into source text (no import overhead).
+    // Numbers and strings inline directly into source text.
+    // Strings act as source inclusion (like #include).
     // Functions become __INTERP_N__ markers, resolved as host imports by codegen.
     if (typeof values[i] === 'number') {
       source += String(values[i]);
+    } else if (typeof values[i] === 'string') {
+      source += values[i];
     } else {
       source += '__INTERP_' + i + '__';
     }

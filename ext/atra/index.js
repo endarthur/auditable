@@ -92,7 +92,7 @@ function tokenizeAtra(code) {
       }
     }
     // single-char operators
-    if ('+-*/<>=&|^~'.includes(code[i])) {
+    if ('+-*/<>=&|^~@'.includes(code[i])) {
       tokens.push({ type: 'op', text: code[i] });
       i++;
       continue;
@@ -199,7 +199,7 @@ function lex(source) {
       continue;
     }
     // single-char operators
-    if ('+-*/<>=&|^~'.includes(source[i])) {
+    if ('+-*/<>=&|^~@'.includes(source[i])) {
       tokens.push({ type: TOK.OP, value: source[i], line: tl, col: tc });
       adv();
       continue;
@@ -701,6 +701,21 @@ function parse(tokens) {
       pos++;
       return { type: 'UnaryOp', op: '~', operand: parseExpr(21) };
     }
+    // function reference: @funcname → table index
+    if (t.type === TOK.OP && t.value === '@') {
+      pos++;
+      const name = cur();
+      if (name.type !== TOK.ID) throw new SyntaxError(`Expected function name after @ at ${name.line}:${name.col}`);
+      pos++;
+      // consume dotted parts: @ns.func
+      let fullName = name.value;
+      while (cur().type === TOK.OP && cur().value === '.' && tokens[pos + 1] && tokens[pos + 1].type === TOK.ID) {
+        pos++; // skip dot
+        fullName += '.' + cur().value;
+        pos++; // skip id
+      }
+      return { type: 'FuncRef', name: fullName };
+    }
     // number literal
     if (t.type === TOK.NUM) {
       pos++;
@@ -1096,7 +1111,7 @@ function codegen(ast, interpValues, userImports) {
   }
   function scanNodeRefs(node, localNames) {
     if (!node || typeof node !== 'object') return;
-    if (node.type === 'Ident' && funcIndex[node.name] !== undefined && !localNames.has(node.name) && globalIndex[node.name] === undefined) {
+    if (node.type === 'FuncRef' && funcIndex[node.name] !== undefined) {
       referencedFuncs.add(node.name);
     }
     for (const k of Object.keys(node)) {
@@ -1631,7 +1646,8 @@ function codegen(ast, interpValues, userImports) {
           if (expr.isFloat || expr.value.includes('.') || expr.value.includes('e') || expr.value.includes('E')) return 'f64';
           return 'i32';
         }
-        case 'Ident': return resolveType(expr.name) || (tableSlot[expr.name] !== undefined ? 'i32' : null) || 'f64';
+        case 'FuncRef': return 'i32';
+        case 'Ident': return resolveType(expr.name) || 'f64';
         case 'BinOp': return inferExprType(expr.left);
         case 'UnaryOp': return inferExprType(expr.operand);
         case 'FuncCall': {
@@ -1687,14 +1703,20 @@ function codegen(ast, interpValues, userImports) {
           else { bw.byte(OP_F64_CONST); bw.f64(parseFloat(raw)); }
           break;
         }
+        case 'FuncRef': {
+          const name = expr.name;
+          if (tableSlot[name] === undefined) throw new Error(`Unknown function: ${name}`);
+          bw.byte(OP_I32_CONST); bw.s32(tableSlot[name]);
+          break;
+        }
         case 'Ident': {
           const name = expr.name;
-          if (localMap[name]) { bw.byte(OP_LOCAL_GET); bw.u32(localMap[name].idx); }
-          else if (globalIndex[name] !== undefined) { bw.byte(OP_GLOBAL_GET); bw.u32(globalIndex[name]); }
-          else if (tableSlot[name] !== undefined) {
-            // Bare function name → table index (for call_indirect)
-            bw.byte(OP_I32_CONST); bw.s32(tableSlot[name]);
+          if (isFunc && name === fn.name) {
+            // Fortran convention: bare function name reads the return accumulator
+            bw.byte(OP_LOCAL_GET); bw.u32(localMap['$_return'].idx);
           }
+          else if (localMap[name]) { bw.byte(OP_LOCAL_GET); bw.u32(localMap[name].idx); }
+          else if (globalIndex[name] !== undefined) { bw.byte(OP_GLOBAL_GET); bw.u32(globalIndex[name]); }
           else throw new Error(`Undefined variable: ${name}`);
           break;
         }
@@ -2389,10 +2411,13 @@ function compileAndInstantiate(strings, values, userImports) {
   // Join template strings with interpolation markers
   let source = strings[0];
   for (let i = 0; i < values.length; i++) {
-    // Numeric values inline directly into source text (no import overhead).
+    // Numbers and strings inline directly into source text.
+    // Strings act as source inclusion (like #include).
     // Functions become __INTERP_N__ markers, resolved as host imports by codegen.
     if (typeof values[i] === 'number') {
       source += String(values[i]);
+    } else if (typeof values[i] === 'string') {
+      source += values[i];
     } else {
       source += '__INTERP_' + i + '__';
     }

@@ -81,7 +81,7 @@ export function addCell(type, code = '', afterId = null, beforeId = null) {
     renderHtmlCell(cell);
   }
 
-  ta.focus();
+  if (S.initialized) ta.focus();
   updateStatus();
   notifyDirty();
   return cell;

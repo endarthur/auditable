@@ -413,6 +413,23 @@ describe('end-to-end', () => {
     assert.strictEqual(getsize(), 100.0);
   });
 
+  it('compiles interpolated string as source inclusion', () => {
+    const libSrc = `
+      function helper(x: f64): f64
+      begin
+        helper := x * 2.0
+      end
+    `;
+    const { main } = atra`
+      ${libSrc}
+      function main(x: f64): f64
+      begin
+        main := helper(x) + 1.0
+      end
+    `;
+    assert.strictEqual(main(5.0), 11.0);
+  });
+
   it('compiles globals', () => {
     const { getval, setval } = atra`
       var counter: i32
@@ -1017,7 +1034,7 @@ describe('call_indirect', () => {
       assert.strictEqual(apply(1, 5.0), 15.0); // triple(5) = 15
     });
 
-    it('bare function name emits table index', () => {
+    it('@funcname emits table index', () => {
       const { get_double_idx, get_triple_idx } = atra`
         function double(x: f64): f64
         begin
@@ -1031,17 +1048,29 @@ describe('call_indirect', () => {
 
         function get_double_idx(): i32
         begin
-          get_double_idx := double
+          get_double_idx := @double
         end
 
         function get_triple_idx(): i32
         begin
-          get_triple_idx := triple
+          get_triple_idx := @triple
         end
       `;
       // Table indices are 0-based in declaration order
       assert.strictEqual(get_double_idx(), 0);
       assert.strictEqual(get_triple_idx(), 1);
+    });
+
+    it('bare function name reads return accumulator (Fortran convention)', () => {
+      const { accum } = atra`
+        function accum(a, b, c: f64): f64
+        begin
+          accum := a
+          accum := accum + b
+          accum := accum + c
+        end
+      `;
+      assert.strictEqual(accum(1.0, 2.0, 3.0), 6.0);
     });
 
     it('assigns function reference to local variable then calls', () => {
@@ -1060,9 +1089,9 @@ describe('call_indirect', () => {
         var op: function(v: f64): f64
         begin
           if (pick == 0) then
-            op := add1
+            op := @add1
           else
-            op := mul2
+            op := @mul2
           end if
           test := op(x)
         end

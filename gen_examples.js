@@ -30,9 +30,38 @@ const defs = [
   'example_atra.txt',
   'example_atra_tour.txt',
   'example_atra_v_julia.txt',
+  'example_alpack.txt',
+  'example_alpack_atra.txt',
 ];
 
 // ── Parser ──
+
+// Extract named subroutines/functions from atra source.
+// Each routine starts with `subroutine name(` or `function name(` and ends
+// with a standalone `end` line (not `end if`, `end for`, etc.).
+function extractRoutines(source, names) {
+  const lines = source.split('\n');
+  const results = [];
+  for (const name of names) {
+    const pattern = new RegExp(`^\\s*(?:subroutine|function)\\s+${name.replace('.', '\\.')}\\b`);
+    let inside = false;
+    let routine = [];
+    for (const line of lines) {
+      if (!inside && pattern.test(line)) {
+        inside = true;
+        routine = [line];
+      } else if (inside) {
+        routine.push(line);
+        if (/^\s*end\s*$/.test(line)) {
+          results.push(routine.join('\n'));
+          inside = false;
+          break;
+        }
+      }
+    }
+  }
+  return results.join('\n\n');
+}
 
 function parseDef(text) {
   const lines = text.split('\n');
@@ -44,14 +73,25 @@ function parseDef(text) {
 
   for (const line of lines) {
     if (line.startsWith('/// ')) {
+      const directive = line.slice(4);
+
+      // include directive: insert file contents into current cell (no flush)
+      if (directive.startsWith('include: ') && currentCell) {
+        const parts = directive.slice(9).trim().split(/\s+/);
+        const filePath = parts[0];
+        const names = parts.slice(1);
+        const content = fs.readFileSync(path.join(__dirname, filePath), 'utf8');
+        const included = names.length > 0 ? extractRoutines(content, names) : content;
+        currentCell.code += (currentCell.code ? '\n' : '') + included;
+        continue;
+      }
+
       // flush previous cell
       if (currentCell) {
         currentCell.code = trimCell(currentCell.code);
         cells.push(currentCell);
         currentCell = null;
       }
-
-      const directive = line.slice(4);
 
       if (directive === 'auditable') {
         // magic first line, skip

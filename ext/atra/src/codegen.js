@@ -193,7 +193,7 @@ export function codegen(ast, interpValues, userImports) {
   }
   function scanNodeRefs(node, localNames) {
     if (!node || typeof node !== 'object') return;
-    if (node.type === 'Ident' && funcIndex[node.name] !== undefined && !localNames.has(node.name) && globalIndex[node.name] === undefined) {
+    if (node.type === 'FuncRef' && funcIndex[node.name] !== undefined) {
       referencedFuncs.add(node.name);
     }
     for (const k of Object.keys(node)) {
@@ -728,7 +728,8 @@ export function codegen(ast, interpValues, userImports) {
           if (expr.isFloat || expr.value.includes('.') || expr.value.includes('e') || expr.value.includes('E')) return 'f64';
           return 'i32';
         }
-        case 'Ident': return resolveType(expr.name) || (tableSlot[expr.name] !== undefined ? 'i32' : null) || 'f64';
+        case 'FuncRef': return 'i32';
+        case 'Ident': return resolveType(expr.name) || 'f64';
         case 'BinOp': return inferExprType(expr.left);
         case 'UnaryOp': return inferExprType(expr.operand);
         case 'FuncCall': {
@@ -784,14 +785,20 @@ export function codegen(ast, interpValues, userImports) {
           else { bw.byte(OP_F64_CONST); bw.f64(parseFloat(raw)); }
           break;
         }
+        case 'FuncRef': {
+          const name = expr.name;
+          if (tableSlot[name] === undefined) throw new Error(`Unknown function: ${name}`);
+          bw.byte(OP_I32_CONST); bw.s32(tableSlot[name]);
+          break;
+        }
         case 'Ident': {
           const name = expr.name;
-          if (localMap[name]) { bw.byte(OP_LOCAL_GET); bw.u32(localMap[name].idx); }
-          else if (globalIndex[name] !== undefined) { bw.byte(OP_GLOBAL_GET); bw.u32(globalIndex[name]); }
-          else if (tableSlot[name] !== undefined) {
-            // Bare function name → table index (for call_indirect)
-            bw.byte(OP_I32_CONST); bw.s32(tableSlot[name]);
+          if (isFunc && name === fn.name) {
+            // Fortran convention: bare function name reads the return accumulator
+            bw.byte(OP_LOCAL_GET); bw.u32(localMap['$_return'].idx);
           }
+          else if (localMap[name]) { bw.byte(OP_LOCAL_GET); bw.u32(localMap[name].idx); }
+          else if (globalIndex[name] !== undefined) { bw.byte(OP_GLOBAL_GET); bw.u32(globalIndex[name]); }
           else throw new Error(`Undefined variable: ${name}`);
           break;
         }

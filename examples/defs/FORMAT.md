@@ -48,6 +48,23 @@ workshop([...])
 - everything between `///` lines is cell content (raw, unescaped)
 - leading/trailing blank lines in cell content are trimmed
 
+## include directive
+
+```
+/// code
+const wasm = atra({ memory: mem })`
+/// include: ext/atra/lib/alpack.atra alpack.dgetrf alpack.dgetrs
+  function rbf.kernel(r2, eps: f64): f64
+  ...
+`;
+```
+
+- `/// include: <filepath>` — inserts entire file contents into the current cell
+- `/// include: <filepath> <name1> <name2> ...` — extracts named subroutines/functions from the file (matches `subroutine <name>(` or `function <name>(` through the closing standalone `end`)
+- only valid inside a cell (between cell type line and next `///` directive)
+- file path is relative to project root
+- does not flush the cell — content is appended inline
+
 ## example
 
 ```
