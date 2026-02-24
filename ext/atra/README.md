@@ -352,6 +352,66 @@ Array parameters are `i32` byte offsets at the Wasm level. 2D indexing uses row-
 
 ---
 
+## Ahead-of-time compilation (`atrac`)
+
+The runtime API (`atra`, `atra.run`, `atra.compile`) compiles source to Wasm at runtime in the browser. `atrac` is the ahead-of-time counterpart — a Node.js CLI and library that produces standalone artifacts with no runtime dependency on the atra compiler.
+
+### CLI
+
+```
+atrac lib.atra                    # → lib.js    (JS module with embedded Wasm)
+atrac lib.atra -o lib.wasm        # → raw Wasm binary
+atrac --src lib.atra              # → lib.src.js (source distribution)
+atrac a.atra b.atra               # → concatenate, compile as one unit
+atrac -o out.js a.atra b.atra     # → explicit output name
+```
+
+Install globally via `npm link` from the repo root (the `bin` entry in `package.json` registers it), or run directly with `node ext/atra/atrac.js`.
+
+### JS bundle output
+
+`atrac lib.atra` produces a standalone ES module with Wasm bytes inlined as a `Uint8Array`. The only export is `instantiate()`:
+
+```js
+import { instantiate } from './lib.js';
+
+const memory = new WebAssembly.Memory({ initial: 4 });
+const lib = instantiate({ memory });
+lib.alpack.dgesv(aPtr, bPtr, n, nrhs, ipivPtr, infoPtr);
+```
+
+The bundle handles Math.* imports, memory linking, and dotted-name nesting automatically. No atra compiler needed at runtime.
+
+### Source distribution
+
+`atrac --src lib.atra` produces a JS module exporting routine strings for `${}` interpolation:
+
+```js
+import { sources, deps, all } from './lib.src.js';
+import { alpack_dgetrf } from './lib.src.js';  // individual routines
+
+// Use with std.include() for dependency resolution
+const src = std.include({ sources, deps }, 'alpack.dgesv');
+const { alpack } = atra({ memory })`${src}`;
+```
+
+### Library API
+
+`atrac.js` is also importable:
+
+```js
+import { compile, bundle, buildSrc, formatSrcJs } from './ext/atra/atrac.js';
+
+compile(source)            // → Uint8Array (raw Wasm bytes)
+bundle(source, { name })   // → string (standalone JS module)
+buildSrc(source)           // → { sources, deps, all }
+formatSrcJs(lib)           // → string (.src.js file content)
+```
+
+`buildSrc()` extracts routines, scans call graphs for dependencies, and returns the structured library object. `formatSrcJs()` serializes it as a JS module. These are the same functions used by `ext/atra/build.js` to generate `alpack.src.js`.
+
+---
+
 ## Language reference
 
 See **[SPEC.md](SPEC.md)** for the full language specification — types, operators, control flow, arrays, SIMD, function references, the `wasm.*` escape hatch, and everything else.
