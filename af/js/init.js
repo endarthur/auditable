@@ -8,14 +8,9 @@ import { saveWorkspaceState, loadWorkspaceState, restoreRoots } from './persist.
 // ── INIT ──
 
 (async function init() {
-  await openDB();
+  // wire UI first — before any async work, so buttons respond even if DB fails (e.g. file://)
   initBridge();
 
-  // check for embedded box data (import flow)
-  const raw = document.body.innerHTML;
-  const embeddedBox = extractBoxData(raw);
-
-  // wire toolbar buttons
   const addFolderBtn = $('#af-add-folder');
   const addBoxBtn = $('#af-add-box');
   const saveBtn = $('#af-save');
@@ -33,7 +28,6 @@ import { saveWorkspaceState, loadWorkspaceState, restoreRoots } from './persist.
   if (saveBtn) saveBtn.addEventListener('click', () => saveActiveTab());
   if (importBtn) importBtn.addEventListener('click', importBoxFromFile);
 
-  // keyboard shortcuts
   document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
       e.preventDefault();
@@ -41,13 +35,24 @@ import { saveWorkspaceState, loadWorkspaceState, restoreRoots } from './persist.
     }
   });
 
-  // close context menus on escape
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') closeContextMenu();
   });
 
-  // sidebar resize
   initResize();
+
+  // async DB + state restoration — may fail on file:// protocol
+  try {
+    await openDB();
+  } catch (err) {
+    console.warn('IndexedDB unavailable:', err.message || err);
+    showEmptyState();
+    return;
+  }
+
+  // check for embedded box data (import flow)
+  const raw = document.body.innerHTML;
+  const embeddedBox = extractBoxData(raw);
 
   // restore saved state or handle embedded box
   if (embeddedBox) {
