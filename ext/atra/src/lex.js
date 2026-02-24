@@ -1,4 +1,8 @@
 // Lexer — tokenizer for the parser
+//
+// Atra's lexical design borrows from Fortran: ! for line comments, /= for not-equal,
+// semicolons as whitespace (optional statement separators). Identifiers can contain dots
+// for namespace-style access (e.g. physics.gravity), treated as a single token.
 
 import { ATRA_KEYWORDS, ATRA_TYPES } from './highlight.js';
 
@@ -44,10 +48,12 @@ export function lex(source) {
     if (/[a-zA-Z_]/.test(source[i])) {
       const start = i;
       while (i < len && /[\w.]/.test(source[i])) adv();
-      // trim trailing dot (e.g. "name." at end of input)
+      // Trim trailing dot: partial namespace at EOF (e.g. "name.") shouldn't
+      // swallow the dot. This lets the editor recover gracefully mid-typing.
       while (i > start + 1 && source[i - 1] === '.') { i--; col--; }
       let val = source.slice(start, i);
-      // interpolation markers: __INTERP_N__
+      // Tagged template interpolations become __INTERP_N__ markers in the source text.
+      // The parser treats them as identifiers; codegen resolves them to imports.
       if (/^__INTERP_\d+__$/.test(val)) {
         tokens.push({ type: TOK.ID, value: val, interp: true, line: tl, col: tc });
       } else if (ATRA_KEYWORDS.has(val) || ATRA_TYPES.has(val)) {

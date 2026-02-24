@@ -1,4 +1,14 @@
 // Codegen — AST → Wasm binary
+//
+// Single-pass compiler: AST in, Wasm bytes out. No optimization, no intermediate
+// representation. Closure-based architecture: emitFunctionBody captures index tables
+// (funcIndex, globalIndex, localMap) from the outer codegen scope.
+//
+// Output follows Wasm binary section ordering: Type(1), Import(2), Function(3),
+// Table(4), Memory(5), Global(6), Export(7), Element(9), Code(10).
+//
+// Most emitters branch on type (f64/f32/i32/i64/vector) because Wasm's instruction
+// set is fully typed — there's no polymorphic add, only i32.add, f64.add, etc.
 
 import { ATRA_TYPES, ATRA_VECTOR_TYPES } from './highlight.js';
 import { ByteWriter } from './bytewriter.js';
@@ -61,6 +71,8 @@ import {
   wasmType, typeSize, isVector, vectorScalarType,
 } from './opcodes.js';
 
+// Nested JS objects → flat "a.b.c" keys. Wasm imports use a two-level namespace
+// (module + name), so nested user imports like {physics: {gravity: fn}} need flattening.
 export function flattenImports(obj, prefix) {
   const flat = {};
   for (const [k, v] of Object.entries(obj)) {
@@ -92,9 +104,9 @@ export function codegen(ast, interpValues, userImports) {
     else if (node.type === 'ImportDecl') imports.push(node);
   }
 
-  // Math builtins that need importing
+  // Math builtins: imported from JS Math object. Value = param count.
   const MATH_BUILTINS = { sin: 1, cos: 1, ln: 1, exp: 1, pow: 2, atan2: 2 };
-  // Native builtins (no import needed) — resolved per-type in emitFuncCall
+  // Native builtins: map directly to Wasm opcodes, no import needed
   const NATIVE_BUILTINS = new Set([
     'sqrt','abs','floor','ceil','trunc','nearest','copysign',
     'min','max','select',
@@ -139,7 +151,8 @@ export function codegen(ast, interpValues, userImports) {
     }
   }
 
-  // Auto-import from userImports or globalThis
+  // Auto-import: scan AST for unresolved calls, check userImports then globalThis.
+  // Param types default to f64 — inferred from the JS function's .length.
   const flatImports = userImports ? flattenImports(userImports) : {};
   const hostImports = [];
   for (const name of usedCalls) {
@@ -226,7 +239,7 @@ export function codegen(ast, interpValues, userImports) {
   const tableSlot = {}; // funcName → table index
   for (let ti = 0; ti < tableFuncs.length; ti++) tableSlot[tableFuncs[ti]] = ti;
 
-  // ── Build type signatures ──
+  // ── Build type signatures ── every unique function signature, deduped by sigKey
   function paramWasmType(p) { return p.isArray ? 'i32' : p.vtype; }
   function sigKey(params, retType) {
     return params.map(p => paramWasmType(p)).join(',') + ':' + (retType || '');
@@ -258,7 +271,7 @@ export function codegen(ast, interpValues, userImports) {
   w.bytes([0x00, 0x61, 0x73, 0x6d]); // \0asm
   w.bytes([0x01, 0x00, 0x00, 0x00]); // version 1
 
-  // Type section (1)
+  // Type section (1) — every unique (params → retType) signature
   w.section(1, s => {
     s.u32(sigList.length);
     for (const sig of sigList) {
@@ -270,7 +283,7 @@ export function codegen(ast, interpValues, userImports) {
     }
   });
 
-  // Import section (2)
+  // Import section (2) — math builtins (auto-detected), explicit imports, host functions
   if (allImports.length > 0 || importMemory) {
     w.section(2, s => {
       s.u32(allImports.length + (importMemory ? 1 : 0));
@@ -297,7 +310,7 @@ export function codegen(ast, interpValues, userImports) {
     for (const sigId of funcSigIds) s.u32(sigId);
   });
 
-  // Table section (4) — only if call_indirect is used
+  // Table section (4) — funcref table for call_indirect (function pointers)
   if (tableFuncs.length > 0) {
     w.section(4, s => {
       s.u32(1); // one table
@@ -347,7 +360,7 @@ export function codegen(ast, interpValues, userImports) {
     }
   });
 
-  // Element section (9) — populate the table with function references
+  // Element section (9) — populate table with function references at offset 0
   if (tableFuncs.length > 0) {
     w.section(9, s => {
       s.u32(1); // one element segment
@@ -359,7 +372,7 @@ export function codegen(ast, interpValues, userImports) {
     });
   }
 
-  // Code section (10)
+  // Code section (10) — one body per local function, each with compressed locals + bytecode
   w.section(10, s => {
     s.u32(functions.length);
     for (const fn of functions) {
@@ -420,13 +433,13 @@ export function codegen(ast, interpValues, userImports) {
     const isFunc = fn.type === 'Function';
     const retType = isFunc ? fn.retType : null;
 
-    // Build local map: params + locals + return var
+    // ── Local layout ── params, declared locals, hidden return variable
     const localMap = {}; // name → { idx, vtype }
     let localIdx = 0;
     for (const p of fn.params) {
       const entry = {
         idx: localIdx++,
-        vtype: p.isArray ? 'i32' : p.vtype, // Wasm type: arrays are i32 pointers
+        vtype: p.isArray ? 'i32' : p.vtype, // Wasm has no array type; arrays are i32 memory pointers
         isArray: p.isArray,
         arrayDims: p.arrayDims,
         elemType: p.isArray ? p.vtype : null  // element type for load/store
@@ -434,10 +447,10 @@ export function codegen(ast, interpValues, userImports) {
       if (p.funcSig) entry.funcSig = p.funcSig;
       localMap[p.name] = entry;
     }
-    // Additional locals declared
     const declaredLocals = [...fn.locals];
     if (isFunc) {
-      // hidden return local (uses function name)
+      // $_return: Fortran convention — assigning to the function name sets the return value.
+      // Mapped to a hidden local; the function epilogue reads it with local.get.
       declaredLocals.push({ name: '$_return', vtype: retType });
     }
     for (const loc of declaredLocals) {
@@ -463,7 +476,7 @@ export function codegen(ast, interpValues, userImports) {
     // SIMD helper
     function emitSimd(op) { bw.byte(OP_SIMD_PREFIX); bw.u32(op); }
 
-    // Emit body statements
+    // ── Statement emission ──
     let depth = 0; // current block nesting depth
     const breakTargets = []; // stack of {depth} for each enclosing loop's break block
 
@@ -707,6 +720,7 @@ export function codegen(ast, interpValues, userImports) {
       return null;
     }
 
+    // Type inference fallback: when expectedType is null, guess from AST shape. Default is f64.
     function inferExprType(expr) {
       switch (expr.type) {
         case 'NumberLit': {
@@ -756,6 +770,7 @@ export function codegen(ast, interpValues, userImports) {
       }
     }
 
+    // ── Expression emission ──
     function emitExpr(expr, expectedType) {
       const actualType = expectedType || inferExprType(expr);
 
@@ -833,6 +848,7 @@ export function codegen(ast, interpValues, userImports) {
       }
     }
 
+    // ── Binary operators ──
     function emitBinOp(expr, t) {
       const op = expr.op;
 
@@ -902,6 +918,9 @@ export function codegen(ast, interpValues, userImports) {
       if (t === 'f32') bw.byte(OP_F32_DEMOTE_F64);
     }
 
+    // ── Function call dispatch ──
+    // Priority: vector constructors > type conversions > SIMD builtins > native builtins
+    //         > wasm.* escape hatch > indirect calls (call_indirect) > regular calls
     function emitFuncCall(expr, expectedType) {
       const name = expr.name;
 
@@ -1111,6 +1130,7 @@ export function codegen(ast, interpValues, userImports) {
       }
     }
 
+    // ── SIMD builtins ──
     function emitSimdBuiltin(prefix, method, expr, expectedType) {
       // f64x2.splat(x), i32x4.splat(x), etc.
       if (method === 'splat') {
@@ -1221,6 +1241,7 @@ export function codegen(ast, interpValues, userImports) {
       throw new Error(`Unknown SIMD builtin: ${prefix}.${method}`);
     }
 
+    // ── Type conversion ──
     function emitConversion(from, to) {
       if (from === to) return;
       if (from === 'i32' && to === 'f64') bw.byte(OP_F64_CONVERT_I32_S);
@@ -1238,6 +1259,7 @@ export function codegen(ast, interpValues, userImports) {
       else throw new Error(`Cannot convert ${from} to ${to}`);
     }
 
+    // ── Memory access ── array addressing: base + index * sizeof(elemType)
     function emitArrayAddr(name, indices, info, elemType) {
       // Base pointer
       bw.byte(OP_LOCAL_GET);
@@ -1292,6 +1314,7 @@ export function codegen(ast, interpValues, userImports) {
       else if (isVector(t)) { emitSimd(SIMD_OPS['v128.store']); bw.u32(4); bw.u32(0); } // align=16
     }
 
+    // ── Comparison + arithmetic helpers ──
     function emitCmp(op, t) {
       if (t === 'f64') {
         if (op === '==') bw.byte(OP_F64_EQ);

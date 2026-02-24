@@ -1,4 +1,8 @@
 // ByteWriter — binary builder for Wasm output
+//
+// Wasm uses LEB128 (Little-Endian Base 128) for all integers — a variable-length
+// encoding where each byte uses 7 data bits + 1 continuation bit. This keeps
+// small values compact (1 byte for 0–127) while still supporting the full range.
 
 export class ByteWriter {
   constructor() { this.buf = []; }
@@ -27,6 +31,8 @@ export class ByteWriter {
   f32(v) { const buf = new ArrayBuffer(4); new DataView(buf).setFloat32(0, v, true); this.bytes(new Uint8Array(buf)); }
   f64(v) { const buf = new ArrayBuffer(8); new DataView(buf).setFloat64(0, v, true); this.bytes(new Uint8Array(buf)); }
   str(s) { const enc = new TextEncoder().encode(s); this.u32(enc.length); this.bytes(enc); }
+  // Wasm sections are length-prefixed, but the length isn't known until the content
+  // is written. Solution: write into a temporary buffer, measure, then emit id + size + content.
   section(id, contentFn) {
     const inner = new ByteWriter();
     contentFn(inner);

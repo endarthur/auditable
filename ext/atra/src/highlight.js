@@ -1,4 +1,7 @@
 // Syntax highlighting — tokenizer + completions for auditable editor integration
+//
+// These keyword/type/builtin sets define the language's vocabulary. They're shared
+// between this module (editor highlighting + completions) and lex.js (compiler tokenizer).
 
 export const ATRA_KEYWORDS = new Set([
   'function','subroutine','begin','end','var','const','if','then','else',
