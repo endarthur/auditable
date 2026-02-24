@@ -87,7 +87,7 @@ export function tokenizeAtra(code) {
       }
     }
     // single-char operators
-    if ('+-*/<>=&|^~'.includes(code[i])) {
+    if ('+-*/<>=&|^~@'.includes(code[i])) {
       tokens.push({ type: 'op', text: code[i] });
       i++;
       continue;

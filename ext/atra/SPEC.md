@@ -338,7 +338,7 @@ The convention is symmetric: atra outputs nested objects (`wasm.linalg.dot`), an
 
 ### Function references and indirect calls
 
-Functions can be passed by reference and called indirectly via `call_indirect`. A bare function name (without parentheses) evaluates to its table index:
+Functions can be passed by reference and called indirectly via `call_indirect`. The `@` operator returns a function's table index:
 
 ```
 function spherical(h, range, sill, nugget: f64): f64
@@ -391,15 +391,17 @@ function fit(model_id: i32, h, range, sill, nugget: f64): f64
 var model: function(h, range, sill, nugget: f64): f64
 begin
   if (model_id == 0) then
-    model := spherical
+    model := @spherical
   else if (model_id == 1) then
-    model := gaussian
+    model := @gaussian
   else
-    model := exponential
+    model := @exponential
   end if
   fit := model(h, range, sill, nugget)
 end
 ```
+
+Bare function names inside a function body refer to the return accumulator (Fortran convention), so `@` is needed to get the table index. Outside a function body or for names that aren't the current function, bare names resolve normally through locals/globals.
 
 Indirect calls as statements use `call`:
 
@@ -816,7 +818,25 @@ const { estimate } = atra`
 `;
 ```
 
-Functions can also be interpolated as imports with optional type annotation:
+**Strings** are spliced directly into the source — this is atra's source inclusion mechanism:
+
+```js
+const alpack = await load('./ext/atra/lib/alpack.src.js');
+
+const { solve } = atra({ memory: mem })`
+  ${std.include(alpack, 'alpack.dgetrf', 'alpack.dgetrs')}
+
+  subroutine solve(A: array f64; n: i32; ...)
+  begin
+    call alpack.dgetrf(A, n, ipiv, info)
+    call alpack.dgetrs(A, ipiv, b, n, 1)
+  end
+`;
+```
+
+`std.include(lib, ...names)` resolves transitive dependencies from the library's `deps` map and returns the concatenated source. Library modules export `{ sources, deps }` for this purpose. Individual routines are also available as named exports for manual inclusion: `${alpack.alpack_dgetrf}`.
+
+**Functions** can also be interpolated as imports with optional type annotation:
 
 ```js
 const { process } = atra`

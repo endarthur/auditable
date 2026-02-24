@@ -1,0 +1,193 @@
+/// auditable
+/// title: atra + ALPACK — all-Wasm interpolation
+/// module: ./ext/atra/index.js ext/atra/index.js
+/// module: ./ext/atra/lib/alpack.src.js ext/atra/lib/alpack.src.js
+
+/// md
+# atra + ALPACK — library routines in atra
+
+atra functions call each other with zero overhead — they compile to Wasm `call` instructions. this notebook does **radial basis function (RBF) interpolation** entirely in WebAssembly: matrix assembly, LU factorization, backsolve, and grid evaluation all happen in atra. JS only generates samples and renders the result.
+
+the key pattern: `rbf.solve` calls `alpack.dgetrf` and `alpack.dgetrs`. library routines are just regular functions in the same compilation unit — no FFI, no glue code, no overhead. `std.include()` resolves dependencies and `${}` splices the source in at compile time.
+
+/// code
+const { atra } = await load("./ext/atra/index.js");
+const alpack = await load("./ext/atra/lib/alpack.src.js");
+
+const nPts = ui.slider("samples", 25, {min: 5, max: 60, step: 1});
+const gridN = ui.slider("grid", 100, {min: 40, max: 200, step: 10});
+const eps0 = ui.slider("\u03b5 (shape)", 20.0, {min: 1, max: 100, step: 1});
+
+/// code
+// all-atra RBF interpolation — ALPACK solver + application kernel
+const mem = new WebAssembly.Memory({ initial: 4 });
+
+const wasm = atra({ memory: mem })`
+  ! ══ ALPACK: LU factorization (library) ══
+  ! std.include() resolves dependencies and splices source from alpack.atra.
+  ${std.include(alpack, 'alpack.dgetrf', 'alpack.dgetrs')}
+
+  ! ══ RBF interpolation (application) ══
+
+  ! Gaussian RBF kernel: φ(r) = exp(−ε r²)
+  function rbf.kernel(r2, eps: f64): f64
+  begin
+    rbf.kernel := exp(-eps * r2)
+  end
+
+  ! build n×n RBF interpolation matrix
+  ! samples stored as (x, y, value) triples
+  subroutine rbf.build_matrix(
+    samples: array f64; n: i32;
+    A: array f64; eps: f64
+  )
+  var i, j: i32; dx, dy: f64
+  begin
+    for i := 0, n
+      for j := 0, n
+        dx := samples[i * 3] - samples[j * 3]
+        dy := samples[i * 3 + 1] - samples[j * 3 + 1]
+        A[i, n, j] := rbf.kernel(dx * dx + dy * dy, eps)
+      end for
+    end for
+  end
+
+  ! copy sample values into weight vector (= RHS before solve)
+  subroutine rbf.init_weights(
+    samples: array f64; n: i32;
+    w: array f64
+  )
+  var i: i32
+  begin
+    for i := 0, n
+      w[i] := samples[i * 3 + 2]
+    end for
+  end
+
+  ! factorize + solve: A * w = values
+  ! w is overwritten: input = sample values, output = RBF weights
+  ! this is where atra calls ALPACK library routines
+  subroutine rbf.solve(
+    A: array f64; w: array f64; n: i32;
+    ipiv: array i32; info: array i32
+  )
+  begin
+    call alpack.dgetrf(A, n, ipiv, info)
+    call alpack.dgetrs(A, ipiv, w, n, 1)
+  end
+
+  ! evaluate RBF interpolant on a gridN × gridN grid
+  subroutine rbf.eval_grid(
+    samples: array f64; w: array f64; n: i32;
+    grid: array f64; gridN: i32; eps: f64
+  )
+  var
+    ix, iy, k: i32
+    gx, gy, dx, dy, val: f64
+  begin
+    for iy := 0, gridN
+      for ix := 0, gridN
+        gx := f64(ix) / f64(gridN)
+        gy := f64(iy) / f64(gridN)
+        val := 0.0
+        for k := 0, n
+          dx := gx - samples[k * 3]
+          dy := gy - samples[k * 3 + 1]
+          val := val + w[k] * rbf.kernel(dx * dx + dy * dy, eps)
+        end for
+        grid[iy * gridN + ix] := val
+      end for
+    end for
+  end
+`;
+
+/// code
+// generate samples + run all-Wasm pipeline
+function mulberry32(a) {
+  return function() {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const rng = mulberry32(42);
+
+const f64 = new Float64Array(mem.buffer);
+
+// memory layout (byte offsets)
+const sampPtr = 0;
+const matPtr = sampPtr + nPts * 3 * 8;
+const wPtr = matPtr + nPts * nPts * 8;
+const gridPtr = wPtr + nPts * 8;
+const ipivPtr = gridPtr + gridN * gridN * 8;
+const infoPtr = ipivPtr + nPts * 4;
+
+// generate samples in [0,1]x[0,1]
+for (let i = 0; i < nPts; i++) {
+  const x = rng(), y = rng();
+  const v = 0.5 * Math.sin(x * 4) * Math.cos(y * 3) + 0.5 + 0.2 * rng();
+  f64[i * 3] = x;
+  f64[i * 3 + 1] = y;
+  f64[i * 3 + 2] = v;
+}
+
+// entire pipeline in Wasm
+const t0 = performance.now();
+wasm.rbf.build_matrix(sampPtr, nPts, matPtr, eps0);
+wasm.rbf.init_weights(sampPtr, nPts, wPtr);
+wasm.rbf.solve(matPtr, wPtr, nPts, ipivPtr, infoPtr);
+wasm.rbf.eval_grid(sampPtr, wPtr, nPts, gridPtr, gridN, eps0);
+const elapsed = (performance.now() - t0).toFixed(2);
+
+const grid = new Float64Array(mem.buffer, gridPtr, gridN * gridN);
+
+/// code
+// render
+const size = Math.min(480, window.innerWidth - 80);
+const c = ui.canvas(size, size);
+const ctx = c.getContext("2d");
+
+function viridis(t) {
+  t = Math.max(0, Math.min(1, t));
+  const r = Math.round(255 * Math.max(0, Math.min(1,
+    0.267 + t * (0.004 + t * (5.294 + t * (-14.05 + t * 8.5))))));
+  const g = Math.round(255 * Math.max(0, Math.min(1,
+    0.004 + t * (1.384 + t * (0.098 + t * (-2.74 + t * 2.23))))));
+  const b = Math.round(255 * Math.max(0, Math.min(1,
+    0.329 + t * (1.44 + t * (-5.11 + t * (6.87 + t * -3.57))))));
+  return `rgb(${r},${g},${b})`;
+}
+
+let vmin = Infinity, vmax = -Infinity;
+for (let i = 0; i < grid.length; i++) {
+  if (grid[i] < vmin) vmin = grid[i];
+  if (grid[i] > vmax) vmax = grid[i];
+}
+const vrange = vmax - vmin || 1;
+
+const cellW = size / gridN;
+for (let iy = 0; iy < gridN; iy++) {
+  for (let ix = 0; ix < gridN; ix++) {
+    const t = (grid[iy * gridN + ix] - vmin) / vrange;
+    ctx.fillStyle = viridis(t);
+    ctx.fillRect(ix * cellW, iy * cellW, cellW + 0.5, cellW + 0.5);
+  }
+}
+
+// overlay sample points
+for (let i = 0; i < nPts; i++) {
+  const x = f64[i * 3] * size, y = f64[i * 3 + 1] * size;
+  ctx.beginPath();
+  ctx.arc(x, y, 4, 0, Math.PI * 2);
+  ctx.fillStyle = "#fff";
+  ctx.fill();
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = "#000";
+  ctx.stroke();
+}
+
+ui.display(`RBF interpolation \u00b7 ${gridN}\u00d7${gridN} grid \u00b7 ${nPts} samples \u00b7 \u03b5=${eps0} \u00b7 all-Wasm: ${elapsed} ms`);
+
+/// md
+**how it works:** `alpack.src.js` exports each ALPACK routine as a source string, plus a dependency map. `std.include(alpack, 'alpack.dgetrf', 'alpack.dgetrs')` resolves transitive dependencies and returns the needed source. `${}` splices it into the tagged template — atra treats string interpolations as source inclusion. the result is a single Wasm module where `rbf.solve` calls `alpack.dgetrf` and `alpack.dgetrs` with plain `call` instructions. the entire pipeline runs in Wasm; JS only writes sample coordinates into shared linear memory and reads the grid back for rendering.

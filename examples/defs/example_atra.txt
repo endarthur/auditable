@@ -115,11 +115,11 @@ const wasm = atra({ memory: mem })`
   var model: function(h, a, c1, c0: f64): f64
   begin
     if (model_id == 0) then
-      model := spherical
+      model := @spherical
     else if (model_id == 1) then
-      model := gaussian
+      model := @gaussian
     else
-      model := exponential
+      model := @exponential
     end if
     call eval_grid(model, samples, nSamples, grid, gridN, a, c1, c0)
   end

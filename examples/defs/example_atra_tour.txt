@@ -5,7 +5,7 @@
 /// md
 # atra language tour — Newton fractal
 
-a [Newton fractal](https://en.wikipedia.org/wiki/Newton%27s_method) colors each pixel by which root of z\u00b3 \u2212 1 = 0 the Newton-Raphson method converges to. three roots in the complex plane, three colors. the algorithm exercises many atra features: **SIMD** (f64x2 for complex numbers), **dotted names**, **tailcall**, **call return()**, **if-expression**, **type conversions**, **arrays**, and **for loops**.
+a [Newton fractal](https://en.wikipedia.org/wiki/Newton%27s_method) colors each pixel by which root of z³ − 1 = 0 the Newton-Raphson method converges to. three roots in the complex plane, three colors. the algorithm exercises many atra features: **SIMD** (f64x2 for complex numbers), **dotted names**, **tailcall**, **call return()**, **if-expression**, **type conversions**, **arrays**, and **for loops**.
 
 /// code
 const { atra } = await load("./ext/atra/index.js");
@@ -192,12 +192,12 @@ ui.display(`${res}\u00d7${res} \u00b7 max ${maxIter} iterations \u00b7 Wasm kern
 
 | feature | where |
 |---------|-------|
-| **f64x2 SIMD** | complex numbers packed as f64x2 \u2014 `cx.mul`, `cx.div`, `cx.abs2`, `cx.f`, `cx.df` |
+| **f64x2 SIMD** | complex numbers packed as f64x2 — `cx.mul`, `cx.div`, `cx.abs2`, `cx.f`, `cx.df` |
 | **dotted names** | `cx.*` and `newton.*` namespaces |
 | **tailcall** | `newton.step` tail-recurses until convergence or max iterations |
 | **call return()** | guard clause (max iter), early return on convergence with root id |
 | **if-expression style** | chained `if/else if/else` for root classification |
-| **type conversions** | `f64(ix)`, `f64(w)` \u2014 pixel coords to floating point |
+| **type conversions** | `f64(ix)`, `f64(w)` — pixel coords to floating point |
 | **arrays** | output grid of i32 root ids in linear memory |
 | **for loops** | nested pixel grid traversal in `newton.grid` |
 | **compound assignment** | `iter + 1` passed through tailcall |

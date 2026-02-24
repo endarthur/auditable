@@ -1,0 +1,609 @@
+/// auditable
+/// title: ALPACK — dense linear algebra in Wasm
+/// module: ./ext/atra/index.js ext/atra/index.js
+
+/// md
+# ALPACK — dense linear algebra in WebAssembly
+
+**ALAS** (Auditable Linear Algebra Subprograms) + **ALPACK** (Auditable Linear Algebra PACKage) — ~21 routines for vector operations, matrix factorization, linear solvers, and eigendecomposition, compiled from [atra](ext/atra/SPEC.md) to WebAssembly.
+
+designed for the sizes geoscientists encounter (3–200): covariance matrices, orientation tensors, spatial interpolation.
+
+/// code collapsed
+// compile ALPACK source to WebAssembly
+const { atra } = await load("./ext/atra/index.js");
+const mem = new WebAssembly.Memory({ initial: 16 }); // 1 MB
+const f64 = new Float64Array(mem.buffer);
+const i32 = new Int32Array(mem.buffer);
+const F = i => i * 8; // f64 byte offset
+const I = i => i * 4; // i32 byte offset
+
+const src = `
+! \u2550\u2550 ALAS Level 1: vector-vector \u2550\u2550
+
+subroutine alas.dscal(x: array f64; n: i32; alpha: f64)
+var i: i32
+begin
+  for i := 0, n
+    x[i] := alpha * x[i]
+  end for
+end
+
+subroutine alas.dcopy(x: array f64; y: array f64; n: i32)
+var i: i32
+begin
+  for i := 0, n
+    y[i] := x[i]
+  end for
+end
+
+subroutine alas.daxpy(x: array f64; y: array f64; n: i32; alpha: f64)
+var
+  i, n2: i32
+  va, vx, vy: f64x2
+begin
+  va := f64x2.splat(alpha)
+  n2 := n / 2
+  for i := 0, n2
+    vx := v128.load(x, i)
+    vy := v128.load(y, i)
+    vy := va * vx + vy
+    call v128.store(y, i, vy)
+  end for
+  if (n2 * 2 < n) then
+    i := n2 * 2
+    y[i] := alpha * x[i] + y[i]
+  end if
+end
+
+function alas.ddot(x: array f64; y: array f64; n: i32): f64
+var
+  i, n2: i32
+  acc: f64
+  vx, vy, vs: f64x2
+begin
+  vs := f64x2.splat(0.0)
+  n2 := n / 2
+  for i := 0, n2
+    vx := v128.load(x, i)
+    vy := v128.load(y, i)
+    vs := vs + vx * vy
+  end for
+  acc := f64x2.extract_lane(vs, 0) + f64x2.extract_lane(vs, 1)
+  if (n2 * 2 < n) then
+    i := n2 * 2
+    acc := acc + x[i] * y[i]
+  end if
+  alas.ddot := acc
+end
+
+function alas.dnrm2(x: array f64; n: i32): f64
+var
+  i, n2: i32
+  acc: f64
+  vx, vs: f64x2
+begin
+  vs := f64x2.splat(0.0)
+  n2 := n / 2
+  for i := 0, n2
+    vx := v128.load(x, i)
+    vs := vs + vx * vx
+  end for
+  acc := f64x2.extract_lane(vs, 0) + f64x2.extract_lane(vs, 1)
+  if (n2 * 2 < n) then
+    i := n2 * 2
+    acc := acc + x[i] * x[i]
+  end if
+  alas.dnrm2 := sqrt(acc)
+end
+
+! \u2550\u2550 ALAS Level 2: matrix-vector \u2550\u2550
+
+subroutine alas.dgemv(
+  a: array f64; x: array f64; y: array f64;
+  m, n: i32; alpha, beta: f64
+)
+var i, j: i32; s: f64
+begin
+  for i := 0, m
+    s := 0.0
+    for j := 0, n
+      s := s + a[i, n, j] * x[j]
+    end for
+    y[i] := alpha * s + beta * y[i]
+  end for
+end
+
+subroutine alas.dtrsv(
+  a: array f64; x: array f64;
+  n, uplo, trans: i32
+)
+var i, j: i32; s: f64
+begin
+  if (uplo == 0 and trans == 0) then
+    for i := 0, n
+      s := x[i]
+      for j := 0, i
+        s := s - a[i, n, j] * x[j]
+      end for
+      x[i] := s / a[i, n, i]
+    end for
+  else if (uplo == 0 and trans == 1) then
+    for i := n - 1, -1, -1
+      s := x[i]
+      for j := i + 1, n
+        s := s - a[j, n, i] * x[j]
+      end for
+      x[i] := s / a[i, n, i]
+    end for
+  else if (uplo == 1 and trans == 0) then
+    for i := n - 1, -1, -1
+      s := x[i]
+      for j := i + 1, n
+        s := s - a[i, n, j] * x[j]
+      end for
+      x[i] := s / a[i, n, i]
+    end for
+  else
+    for i := 0, n
+      s := x[i]
+      for j := 0, i
+        s := s - a[j, n, i] * x[j]
+      end for
+      x[i] := s / a[i, n, i]
+    end for
+  end if
+end
+
+subroutine alas.dger(
+  a: array f64; x: array f64; y: array f64;
+  m, n: i32; alpha: f64
+)
+var i, j: i32; t: f64
+begin
+  for i := 0, m
+    t := alpha * x[i]
+    for j := 0, n
+      a[i, n, j] := a[i, n, j] + t * y[j]
+    end for
+  end for
+end
+
+! \u2550\u2550 ALAS Level 3: matrix-matrix \u2550\u2550
+
+subroutine alas.dgemm(
+  a: array f64; b: array f64; c: array f64;
+  m, n, k: i32; alpha, beta: f64
+)
+var i, j, p: i32; s: f64
+begin
+  for i := 0, m
+    for j := 0, n
+      s := 0.0
+      for p := 0, k
+        s := s + a[i, k, p] * b[p, n, j]
+      end for
+      c[i, n, j] := alpha * s + beta * c[i, n, j]
+    end for
+  end for
+end
+
+! \u2550\u2550 ALPACK: Cholesky \u2550\u2550
+
+subroutine alpack.dpotrf(a: array f64; n: i32; info: array i32)
+var i, j, k: i32; s: f64
+begin
+  info[0] := 0
+  for j := 0, n
+    s := a[j, n, j]
+    for k := 0, j
+      s := s - a[j, n, k] * a[j, n, k]
+    end for
+    if (s <= 0.0) then
+      info[0] := j + 1
+      call return()
+    end if
+    a[j, n, j] := sqrt(s)
+    for i := j + 1, n
+      s := a[i, n, j]
+      for k := 0, j
+        s := s - a[i, n, k] * a[j, n, k]
+      end for
+      a[i, n, j] := s / a[j, n, j]
+    end for
+  end for
+end
+
+subroutine alpack.dpotrs(
+  l: array f64; b: array f64;
+  n, nrhs: i32
+)
+var rhs, i, j: i32; s: f64
+begin
+  for rhs := 0, nrhs
+    for i := 0, n
+      s := b[i, nrhs, rhs]
+      for j := 0, i
+        s := s - l[i, n, j] * b[j, nrhs, rhs]
+      end for
+      b[i, nrhs, rhs] := s / l[i, n, i]
+    end for
+    for i := n - 1, -1, -1
+      s := b[i, nrhs, rhs]
+      for j := i + 1, n
+        s := s - l[j, n, i] * b[j, nrhs, rhs]
+      end for
+      b[i, nrhs, rhs] := s / l[i, n, i]
+    end for
+  end for
+end
+
+! \u2550\u2550 ALPACK: LU \u2550\u2550
+
+subroutine alpack.dgetrf(
+  a: array f64; n: i32;
+  ipiv: array i32; info: array i32
+)
+var i, j, k, pivot: i32; t, inv: f64
+begin
+  info[0] := 0
+  for k := 0, n
+    pivot := k
+    t := abs(a[k, n, k])
+    for i := k + 1, n
+      if (abs(a[i, n, k]) > t) then
+        pivot := i
+        t := abs(a[i, n, k])
+      end if
+    end for
+    ipiv[k] := pivot
+    if (pivot /= k) then
+      for j := 0, n
+        t := a[k, n, j]
+        a[k, n, j] := a[pivot, n, j]
+        a[pivot, n, j] := t
+      end for
+    end if
+    if (a[k, n, k] == 0.0) then
+      info[0] := k + 1
+      call return()
+    end if
+    inv := 1.0 / a[k, n, k]
+    for i := k + 1, n
+      a[i, n, k] := a[i, n, k] * inv
+      for j := k + 1, n
+        a[i, n, j] := a[i, n, j] - a[i, n, k] * a[k, n, j]
+      end for
+    end for
+  end for
+end
+
+subroutine alpack.dgetrs(
+  lu: array f64; ipiv: array i32;
+  b: array f64; n, nrhs: i32
+)
+var rhs, i, j, p: i32; s, t: f64
+begin
+  for rhs := 0, nrhs
+    for i := 0, n
+      p := ipiv[i]
+      if (p /= i) then
+        t := b[i, nrhs, rhs]
+        b[i, nrhs, rhs] := b[p, nrhs, rhs]
+        b[p, nrhs, rhs] := t
+      end if
+    end for
+    for i := 1, n
+      s := b[i, nrhs, rhs]
+      for j := 0, i
+        s := s - lu[i, n, j] * b[j, nrhs, rhs]
+      end for
+      b[i, nrhs, rhs] := s
+    end for
+    for i := n - 1, -1, -1
+      s := b[i, nrhs, rhs]
+      for j := i + 1, n
+        s := s - lu[i, n, j] * b[j, nrhs, rhs]
+      end for
+      b[i, nrhs, rhs] := s / lu[i, n, i]
+    end for
+  end for
+end
+
+! \u2550\u2550 ALPACK: Eigendecomposition \u2550\u2550
+
+subroutine alpack.dsyev3(a: array f64; w: array f64)
+var
+  a00, a01, a02, a11, a12, a22: f64
+  p1, q, p2, p, b00, b11, b22, det_b, half_det: f64
+  phi, r, e1, e2, e3, m, pi: f64
+begin
+  pi := 3.14159265358979323846
+  a00 := a[0, 3, 0]
+  a01 := a[0, 3, 1]
+  a02 := a[0, 3, 2]
+  a11 := a[1, 3, 1]
+  a12 := a[1, 3, 2]
+  a22 := a[2, 3, 2]
+  m := (a00 + a11 + a22) / 3.0
+  p1 := a01 * a01 + a02 * a02 + a12 * a12
+  if (p1 <= 1e-30) then
+    e1 := a00
+    e2 := a11
+    e3 := a22
+    if (e2 > e1) then
+      r := e1
+      e1 := e2
+      e2 := r
+    end if
+    if (e3 > e2) then
+      r := e2
+      e2 := e3
+      e3 := r
+    end if
+    if (e2 > e1) then
+      r := e1
+      e1 := e2
+      e2 := r
+    end if
+    w[0] := e1
+    w[1] := e2
+    w[2] := e3
+    call return()
+  end if
+  q := m
+  p2 := (a00 - q) * (a00 - q) + (a11 - q) * (a11 - q) + (a22 - q) * (a22 - q) + 2.0 * p1
+  p := sqrt(p2 / 6.0)
+  b00 := (a00 - q) / p
+  b11 := (a11 - q) / p
+  b22 := (a22 - q) / p
+  det_b := b00 * (b11 * b22 - (a12 / p) * (a12 / p))
+         - (a01 / p) * ((a01 / p) * b22 - (a12 / p) * (a02 / p))
+         + (a02 / p) * ((a01 / p) * (a12 / p) - b11 * (a02 / p))
+  half_det := det_b / 2.0
+  if (half_det <= -1.0) then
+    phi := pi / 3.0
+  else if (half_det >= 1.0) then
+    phi := 0.0
+  else
+    phi := atan2(sqrt(1.0 - half_det * half_det), half_det) / 3.0
+  end if
+  e1 := q + 2.0 * p * cos(phi)
+  e3 := q + 2.0 * p * cos(phi + 2.0 * pi / 3.0)
+  e2 := 3.0 * q - e1 - e3
+  w[0] := e1
+  w[1] := e2
+  w[2] := e3
+end
+`;
+
+const lib = atra.run(src, { memory: mem });
+
+/// md
+## Level 1 — vector operations
+
+ALAS Level 1: SIMD-accelerated `daxpy` (y := αx + y) and `ddot` (dot product). the `f64x2` SIMD instructions process two doubles per cycle; the scalar tail handles odd-length vectors.
+
+/// code
+// Level 1 demo: daxpy and ddot
+const n1 = ui.slider("vector length", 8, {min: 2, max: 64, step: 1});
+const alpha = ui.slider("\u03b1 (scale)", 2.0, {min: -5.0, max: 5.0, step: 0.1});
+
+// set up vectors at known offsets
+const xOff = 0, yOff = 100, zOff = 200;
+for (let i = 0; i < n1; i++) {
+  f64[xOff + i] = i + 1;           // x = [1, 2, 3, ...]
+  f64[yOff + i] = (i + 1) * 10;    // y = [10, 20, 30, ...]
+  f64[zOff + i] = f64[yOff + i];   // z = copy of y (for daxpy)
+}
+
+const dot = lib.alas.ddot(F(xOff), F(yOff), n1);
+const nrm = lib.alas.dnrm2(F(xOff), n1);
+
+lib.alas.daxpy(F(xOff), F(zOff), n1, alpha);
+const z = Array.from(f64.subarray(zOff, zOff + n1));
+
+const tbl = [];
+for (let i = 0; i < n1; i++) {
+  tbl.push({ i, x: f64[xOff + i], y: f64[yOff + i], [`\u03b1x+y`]: z[i] });
+}
+ui.table(tbl);
+ui.display(`dot(x, y) = ${dot.toFixed(2)} \u00b7 ||x|| = ${nrm.toFixed(4)}`);
+
+/// md
+## Kriging — spatial interpolation via Cholesky solve
+
+ordinary kriging builds a covariance matrix from sample point distances, factorizes it with `alpack.dpotrf` (Cholesky), and solves for weights with `alpack.dpotrs`. the weights interpolate values across a grid.
+
+/// code
+// kriging demo: generate samples, build covariance, solve, interpolate
+const nPts = ui.slider("samples", 15, {min: 5, max: 40, step: 1});
+const range0 = ui.slider("range", 0.4, {min: 0.1, max: 1.0, step: 0.05});
+const gridN = ui.slider("grid", 80, {min: 30, max: 150, step: 10});
+
+function mulberry32(a) {
+  return function() {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const rng = mulberry32(42);
+
+// sample points: (x, y, value)
+const samples = [];
+for (let i = 0; i < nPts; i++) {
+  const sx = rng(), sy = rng();
+  const v = 0.5 * Math.sin(sx * 4) * Math.cos(sy * 3) + 0.5 + 0.2 * rng();
+  samples.push({ x: sx, y: sy, v });
+}
+
+// exponential covariance: C(h) = exp(-3h/a)
+function cov(d) { return Math.exp(-3 * d / range0); }
+
+// build (nPts+1) x (nPts+1) kriging system (ordinary kriging with Lagrange multiplier)
+const N = nPts + 1;
+const aOff = 0;  // covariance matrix: N*N f64
+const bOff = N * N;  // RHS vectors
+
+// fill covariance matrix
+for (let i = 0; i < nPts; i++) {
+  for (let j = 0; j < nPts; j++) {
+    const dx = samples[i].x - samples[j].x;
+    const dy = samples[i].y - samples[j].y;
+    f64[aOff + i * N + j] = cov(Math.sqrt(dx * dx + dy * dy));
+  }
+  // Lagrange row/col
+  f64[aOff + i * N + nPts] = 1;
+  f64[aOff + nPts * N + i] = 1;
+}
+f64[aOff + nPts * N + nPts] = 0;
+
+// LU factorize (ordinary kriging matrix is indefinite — Cholesky won't work)
+const infoOff = 50000; // i32 index, far from f64 data
+const ipivOff = 50010; // i32 pivot array
+lib.alpack.dgetrf(F(aOff), N, I(ipivOff), I(infoOff));
+
+const t0 = performance.now();
+
+// interpolate grid
+const gridData = new Float64Array(gridN * gridN);
+for (let gy = 0; gy < gridN; gy++) {
+  for (let gx = 0; gx < gridN; gx++) {
+    const px = gx / gridN, py = gy / gridN;
+    // build RHS: covariance from grid point to each sample
+    for (let i = 0; i < nPts; i++) {
+      const dx = px - samples[i].x, dy = py - samples[i].y;
+      f64[bOff + i] = cov(Math.sqrt(dx * dx + dy * dy));
+    }
+    f64[bOff + nPts] = 1; // Lagrange constraint
+
+    // solve using pre-factored LU
+    lib.alpack.dgetrs(F(aOff), I(ipivOff), F(bOff), N, 1);
+
+    // weighted sum of sample values
+    let val = 0;
+    for (let i = 0; i < nPts; i++) val += f64[bOff + i] * samples[i].v;
+    gridData[gy * gridN + gx] = val;
+  }
+}
+
+const elapsed = (performance.now() - t0).toFixed(2);
+
+/// code
+// render kriging result
+const size = Math.min(480, window.innerWidth - 80);
+const c = ui.canvas(size, size);
+const ctx = c.getContext("2d");
+
+function viridis(t) {
+  t = Math.max(0, Math.min(1, t));
+  const r = Math.round(255 * Math.max(0, Math.min(1,
+    0.267 + t * (0.004 + t * (5.294 + t * (-14.05 + t * 8.5))))));
+  const g = Math.round(255 * Math.max(0, Math.min(1,
+    0.004 + t * (1.384 + t * (0.098 + t * (-2.74 + t * 2.23))))));
+  const b = Math.round(255 * Math.max(0, Math.min(1,
+    0.329 + t * (1.44 + t * (-5.11 + t * (6.87 + t * -3.57))))));
+  return `rgb(${r},${g},${b})`;
+}
+
+let vmin = Infinity, vmax = -Infinity;
+for (let i = 0; i < gridData.length; i++) {
+  if (gridData[i] < vmin) vmin = gridData[i];
+  if (gridData[i] > vmax) vmax = gridData[i];
+}
+const vrange = vmax - vmin || 1;
+
+const cellW = size / gridN;
+for (let iy = 0; iy < gridN; iy++) {
+  for (let ix = 0; ix < gridN; ix++) {
+    const t = (gridData[iy * gridN + ix] - vmin) / vrange;
+    ctx.fillStyle = viridis(t);
+    ctx.fillRect(ix * cellW, iy * cellW, cellW + 0.5, cellW + 0.5);
+  }
+}
+
+// overlay sample points
+for (const s of samples) {
+  const x = s.x * size, y = s.y * size;
+  ctx.beginPath();
+  ctx.arc(x, y, 4, 0, Math.PI * 2);
+  ctx.fillStyle = "#fff";
+  ctx.fill();
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = "#000";
+  ctx.stroke();
+}
+
+ui.display(`ordinary kriging \u00b7 ${gridN}\u00d7${gridN} grid \u00b7 ${nPts} samples \u00b7 ${elapsed} ms`);
+
+/// md
+## Eigendecomposition — orientation tensor analysis
+
+structural geologists characterize fabric shape using the eigenvalues of a 3×3 orientation tensor. `alpack.dsyev3` computes eigenvalues analytically via Cardano's method. the ratios classify the fabric as **cluster** (prolate), **girdle** (oblate), or **isotropic**.
+
+/// code
+// orientation tensor eigendecomposition
+// normalized eigenvalues: S1 >= S2 >= S3, S1+S2+S3 = 1
+// Woodcock parameters: K = ln(S1/S2) / ln(S2/S3), C = ln(S1/S3)
+
+const s1w = ui.slider("S\u2081 weight", 0.7, {min: 0.01, max: 0.98, step: 0.01});
+const s2w = ui.slider("S\u2082 weight", 0.2, {min: 0.01, max: 0.98, step: 0.01});
+
+// build symmetric orientation tensor with desired eigenvalue ratios
+const s3w = Math.max(0.01, 1 - s1w - s2w);
+const total = s1w + s2w + s3w;
+const S = [s1w / total, s2w / total, s3w / total].sort((a, b) => b - a);
+
+// reconstruct tensor T = R * diag(S) * R^T with arbitrary rotation
+const angle = 0.7;
+const ca = Math.cos(angle), sa = Math.sin(angle);
+// simple rotation in xy-plane
+const R = [
+  [ca, -sa, 0],
+  [sa,  ca, 0],
+  [0,   0,  1]
+];
+const tOff = 0; // 3x3 tensor
+for (let i = 0; i < 3; i++) {
+  for (let j = 0; j < 3; j++) {
+    let v = 0;
+    for (let k = 0; k < 3; k++) v += R[i][k] * S[k] * R[j][k];
+    f64[tOff + i * 3 + j] = v;
+  }
+}
+
+// eigendecomposition
+const wOff = 20;
+lib.alpack.dsyev3(F(tOff), F(wOff));
+const eigs = [f64[wOff], f64[wOff + 1], f64[wOff + 2]].sort((a, b) => b - a);
+const eigSum = eigs[0] + eigs[1] + eigs[2];
+const e = eigs.map(v => v / eigSum);
+
+const K = (e[1] > e[2] && e[2] > 0)
+  ? Math.log(e[0] / e[1]) / Math.log(e[1] / e[2])
+  : Infinity;
+const C = (e[2] > 0) ? Math.log(e[0] / e[2]) : Infinity;
+
+let fabric = "isotropic";
+if (C > 1.5) fabric = K > 1 ? "cluster (prolate)" : "girdle (oblate)";
+else if (C > 0.5) fabric = K > 1 ? "weak cluster" : "weak girdle";
+
+ui.display(`eigenvalues: [${e.map(v => v.toFixed(4)).join(", ")}]`);
+ui.display(`K = ${K.toFixed(3)}, C = ${C.toFixed(3)} \u2192 **${fabric}**`);
+ui.display(`trace check: ${eigSum.toFixed(6)} (should \u2248 1.0)`);
+
+/// md
+**routines used:**
+
+| routine | section | what it does |
+|---------|---------|-------------|
+| `alas.daxpy` | Level 1 | SIMD y := αx + y |
+| `alas.ddot` | Level 1 | SIMD dot product |
+| `alas.dnrm2` | Level 1 | SIMD Euclidean norm |
+| `alpack.dgetrf` | Kriging | LU factorization of kriging system |
+| `alpack.dgetrs` | Kriging | triangular solve for kriging weights |
+| `alpack.dsyev3` | Eigendecomposition | analytical 3×3 eigenvalues (Cardano) |
+
+all computation runs in WebAssembly via shared linear memory. JS orchestrates allocation and rendering; atra handles the numerics.

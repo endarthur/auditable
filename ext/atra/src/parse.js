@@ -481,6 +481,21 @@ export function parse(tokens) {
       pos++;
       return { type: 'UnaryOp', op: '~', operand: parseExpr(21) };
     }
+    // function reference: @funcname → table index
+    if (t.type === TOK.OP && t.value === '@') {
+      pos++;
+      const name = cur();
+      if (name.type !== TOK.ID) throw new SyntaxError(`Expected function name after @ at ${name.line}:${name.col}`);
+      pos++;
+      // consume dotted parts: @ns.func
+      let fullName = name.value;
+      while (cur().type === TOK.OP && cur().value === '.' && tokens[pos + 1] && tokens[pos + 1].type === TOK.ID) {
+        pos++; // skip dot
+        fullName += '.' + cur().value;
+        pos++; // skip id
+      }
+      return { type: 'FuncRef', name: fullName };
+    }
     // number literal
     if (t.type === TOK.NUM) {
       pos++;

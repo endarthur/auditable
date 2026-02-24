@@ -78,7 +78,7 @@ export function lex(source) {
       continue;
     }
     // single-char operators
-    if ('+-*/<>=&|^~'.includes(source[i])) {
+    if ('+-*/<>=&|^~@'.includes(source[i])) {
       tokens.push({ type: TOK.OP, value: source[i], line: tl, col: tc });
       adv();
       continue;
