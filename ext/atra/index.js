@@ -8,7 +8,7 @@
 const ATRA_KEYWORDS = new Set([
   'function','subroutine','begin','end','var','const','if','then','else',
   'for','while','do','break','and','or','not','mod','import','export',
-  'call','array','true','false','from',
+  'call','array','true','false','from','tailcall','return',
 ]);
 
 const ATRA_TYPES = new Set(['i32','i64','f32','f64','f64x2','f32x4','i32x4','i64x2']);
@@ -441,7 +441,8 @@ function parse(tokens) {
     if (at(TOK.KW, 'while')) return parseWhile();
     if (at(TOK.KW, 'do')) return parseDoWhile();
     if (at(TOK.KW, 'break')) { pos++; return { type: 'Break' }; }
-    if (at(TOK.KW, 'call')) { pos++; const name = eat(TOK.ID).value; eat(TOK.PUNC, '('); const args = parseArgs(); eat(TOK.PUNC, ')'); return { type: 'Call', name, args }; }
+    if (at(TOK.KW, 'tailcall')) { pos++; const name = eat(TOK.ID).value; eat(TOK.PUNC, '('); const args = parseArgs(); eat(TOK.PUNC, ')'); return { type: 'TailCall', name, args }; }
+    if (at(TOK.KW, 'call')) { pos++; const name = at(TOK.KW, 'return') ? (pos++, 'return') : eat(TOK.ID).value; eat(TOK.PUNC, '('); const args = parseArgs(); eat(TOK.PUNC, ')'); return { type: 'Call', name, args }; }
 
     // assignment or expression statement
     // look ahead: id := / id[...] := / id += etc.
@@ -725,7 +726,8 @@ function parse(tokens) {
 // Wasm opcodes
 const OP_UNREACHABLE = 0x00, OP_NOP = 0x01, OP_BLOCK = 0x02, OP_LOOP = 0x03,
   OP_IF = 0x04, OP_ELSE = 0x05, OP_END = 0x0b, OP_BR = 0x0c, OP_BR_IF = 0x0d,
-  OP_RETURN = 0x0f, OP_CALL = 0x10, OP_CALL_INDIRECT = 0x11, OP_SELECT = 0x1b,
+  OP_RETURN = 0x0f, OP_CALL = 0x10, OP_CALL_INDIRECT = 0x11,
+  OP_RETURN_CALL = 0x12, OP_RETURN_CALL_INDIRECT = 0x13, OP_SELECT = 0x1b,
   OP_LOCAL_GET = 0x20, OP_LOCAL_SET = 0x21, OP_LOCAL_TEE = 0x22,
   OP_GLOBAL_GET = 0x23, OP_GLOBAL_SET = 0x24,
   OP_I32_LOAD = 0x28, OP_I64_LOAD = 0x29, OP_F32_LOAD = 0x2a, OP_F64_LOAD = 0x2b,
@@ -1424,6 +1426,17 @@ function codegen(ast, interpValues, userImports) {
           break;
         }
         case 'Call': {
+          // Early return: call return(expr) or call return()
+          if (stmt.name === 'return') {
+            if (isFunc) {
+              if (stmt.args.length !== 1) throw new Error('return() in a function requires exactly one argument');
+              emitExpr(stmt.args[0], retType);
+            } else {
+              if (stmt.args.length !== 0) throw new Error('return() in a subroutine takes no arguments');
+            }
+            bw.byte(OP_RETURN);
+            break;
+          }
           // SIMD namespaced builtins used as statements (e.g. call v128.store(...))
           const callDotIdx = stmt.name.indexOf('.');
           if (callDotIdx !== -1) {
@@ -1456,6 +1469,47 @@ function codegen(ast, interpValues, userImports) {
           }
           bw.byte(OP_CALL);
           bw.u32(fIdx);
+          break;
+        }
+        case 'TailCall': {
+          const tcName = stmt.name;
+
+          // Indirect tail call via function-typed variable
+          const tcLocalInfo = localMap[tcName];
+          const tcGSig = globalFuncSig[tcName];
+          if ((tcLocalInfo && tcLocalInfo.funcSig) || tcGSig) {
+            const sig = (tcLocalInfo && tcLocalInfo.funcSig) || tcGSig;
+            const calleeRet = sig.retType || null;
+            if (calleeRet !== retType)
+              throw new Error(`tailcall type mismatch: ${tcName} returns ${calleeRet || 'void'}, current function returns ${retType || 'void'}`);
+            for (let ai = 0; ai < stmt.args.length; ai++) {
+              const pt = sig.params[ai] ? (sig.params[ai].isArray ? 'i32' : sig.params[ai].vtype) : 'f64';
+              emitExpr(stmt.args[ai], pt);
+            }
+            if (tcLocalInfo) { bw.byte(OP_LOCAL_GET); bw.u32(tcLocalInfo.idx); }
+            else { bw.byte(OP_GLOBAL_GET); bw.u32(globalIndex[tcName]); }
+            const indirectSigId = getOrAddSig(sig.params, sig.retType);
+            bw.byte(OP_RETURN_CALL_INDIRECT);
+            bw.u32(indirectSigId);
+            bw.u32(0);
+            break;
+          }
+
+          // Direct tail call — type validation
+          const calleeFn = functions.find(f => f.name === tcName);
+          const calleeIm = !calleeFn && allImports.find(i => i.name === tcName);
+          const calleeRet = calleeFn ? (calleeFn.type === 'Subroutine' ? null : calleeFn.retType)
+                          : calleeIm ? calleeIm.retType : null;
+          if (calleeRet !== retType)
+            throw new Error(`tailcall type mismatch: ${tcName} returns ${calleeRet || 'void'}, current function returns ${retType || 'void'}`);
+
+          const tcFIdx = funcIndex[tcName];
+          if (tcFIdx === undefined) throw new Error(`Undefined function: ${tcName}`);
+          for (let ai = 0; ai < stmt.args.length; ai++) {
+            emitExpr(stmt.args[ai], getParamType(tcName, ai));
+          }
+          bw.byte(OP_RETURN_CALL);
+          bw.u32(tcFIdx);
           break;
         }
         default:

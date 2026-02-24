@@ -116,6 +116,14 @@ end while
 do
   count += 1
 while (count < limit)
+
+! early return (guard clause)
+if (b == 0.0) then
+  call return(0.0)
+end if
+
+! tail call (constant stack space recursion)
+tailcall factorial(n - 1, acc * n)
 ```
 
 ### Builtins
