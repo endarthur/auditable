@@ -898,6 +898,9 @@ const SIMD_OPS = {
   'v128.not': 0x4d, 'v128.and': 0x4e, 'v128.or': 0x50, 'v128.xor': 0x51,
   // v128 memory
   'v128.load': 0x00, 'v128.store': 0x0b, 'v128.const': 0x0c,
+  // relaxed SIMD (0xFD prefix, opcodes > 0x100)
+  'f32x4.relaxed_madd': 0x105, 'f32x4.relaxed_nmadd': 0x106,
+  'f64x2.relaxed_madd': 0x107, 'f64x2.relaxed_nmadd': 0x108,
 };
 
 function wasmType(t) {
@@ -2111,6 +2114,18 @@ function codegen(ast, interpValues, userImports) {
       if (['add','sub','mul','div','min','max'].includes(method)) {
         emitExpr(expr.args[0], prefix);
         emitExpr(expr.args[1], prefix);
+        const key = prefix + '.' + method;
+        const op = SIMD_OPS[key];
+        if (op === undefined) throw new Error(`Unknown SIMD op: ${key}`);
+        emitSimd(op);
+        return;
+      }
+
+      // f64x2.relaxed_madd(a, b, c), f64x2.relaxed_nmadd(a, b, c) (ternary: a*b+c / -(a*b)+c)
+      if (['relaxed_madd','relaxed_nmadd'].includes(method)) {
+        emitExpr(expr.args[0], prefix);
+        emitExpr(expr.args[1], prefix);
+        emitExpr(expr.args[2], prefix);
         const key = prefix + '.' + method;
         const op = SIMD_OPS[key];
         if (op === undefined) throw new Error(`Unknown SIMD op: ${key}`);

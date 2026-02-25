@@ -133,6 +133,9 @@ export const SIMD_OPS = {
   'v128.not': 0x4d, 'v128.and': 0x4e, 'v128.or': 0x50, 'v128.xor': 0x51,
   // v128 memory
   'v128.load': 0x00, 'v128.store': 0x0b, 'v128.const': 0x0c,
+  // relaxed SIMD (0xFD prefix, opcodes > 0x100)
+  'f32x4.relaxed_madd': 0x105, 'f32x4.relaxed_nmadd': 0x106,
+  'f64x2.relaxed_madd': 0x107, 'f64x2.relaxed_nmadd': 0x108,
 };
 
 export function wasmType(t) {
