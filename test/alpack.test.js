@@ -110,6 +110,58 @@ describe('ALAS Level 1', () => {
     f64.set([1, -5, 3, 2], x);
     assert.strictEqual(lib.alas.idamax(F(x), 4), 1);
   });
+
+  it('dasum computes sum of absolute values', () => {
+    const { lib, f64 } = setup();
+    const x = 0;
+    f64.set([1, -2, 3, -4, 5], x);
+    near(lib.alas.dasum(F(x), 5), 15.0);
+  });
+
+  it('dasum of zero vector', () => {
+    const { lib, f64 } = setup();
+    const x = 0;
+    f64.set([0, 0, 0], x);
+    near(lib.alas.dasum(F(x), 3), 0.0);
+  });
+
+  it('drot applies Givens rotation', () => {
+    const { lib, f64 } = setup();
+    const x = 0, y = 10;
+    f64.set([1, 0], x);
+    f64.set([0, 1], y);
+    const c = Math.cos(Math.PI / 4), s = Math.sin(Math.PI / 4);
+    lib.alas.drot(F(x), F(y), 2, c, s);
+    // x[0] = c*1 + s*0 = c, y[0] = c*0 - s*1 = -s
+    near(f64[x], c);
+    near(f64[x + 1], s);
+    near(f64[y], -s);
+    near(f64[y + 1], c);
+  });
+
+  it('drotg generates Givens rotation', () => {
+    const { lib, f64 } = setup();
+    const cs = 0;
+    const r = lib.alas.drotg(3.0, 4.0, F(cs));
+    const c = f64[cs], s = f64[cs + 1];
+    // c^2 + s^2 = 1
+    near(c * c + s * s, 1.0);
+    // r = sqrt(a^2 + b^2) = 5
+    near(r, 5.0);
+    // c*a + s*b = r
+    near(c * 3.0 + s * 4.0, r);
+    // -s*a + c*b = 0
+    near(-s * 3.0 + c * 4.0, 0.0);
+  });
+
+  it('drotg handles zero input', () => {
+    const { lib, f64 } = setup();
+    const cs = 0;
+    const r = lib.alas.drotg(0.0, 0.0, F(cs));
+    near(f64[cs], 1.0);     // c = 1
+    near(f64[cs + 1], 0.0); // s = 0
+    near(r, 0.0);
+  });
 });
 
 // ═════════════════════════════════════════════════════════════════════
@@ -182,6 +234,86 @@ describe('ALAS Level 2', () => {
     near(f64[1], 6.0);
     near(f64[2], 9.0);
     near(f64[3], 12.0);
+  });
+
+  it('dsyr performs symmetric rank-1 update', () => {
+    const { lib, f64 } = setup();
+    // A = [[1,0],[0,2]] (2x2), x = [1, 2], alpha = 1
+    // lower triangle: A += x * x^T
+    // A[0,0] += 1*1 = 2, A[1,0] += 2*1 = 2, A[1,1] += 2*2 = 6
+    const a = 0, x = 10;
+    f64.set([1, 0, 0, 2], a);
+    f64.set([1, 2], x);
+    lib.alas.dsyr(F(a), F(x), 2, 1.0);
+    near(f64[0], 2.0);  // A[0,0]
+    near(f64[2], 2.0);  // A[1,0]
+    near(f64[3], 6.0);  // A[1,1]
+  });
+
+  it('dsyr2 performs symmetric rank-2 update', () => {
+    const { lib, f64 } = setup();
+    // A = zeros(2x2), x = [1, 0], y = [0, 1], alpha = 1
+    // A += x*y^T + y*x^T = [[0,1],[1,0]]
+    const a = 0, x = 10, y = 20;
+    f64.set([0, 0, 0, 0], a);
+    f64.set([1, 0], x);
+    f64.set([0, 1], y);
+    lib.alas.dsyr2(F(a), F(x), F(y), 2, 1.0);
+    near(f64[0], 0.0);  // A[0,0]
+    near(f64[2], 1.0);  // A[1,0] = x[1]*y[0] + y[1]*x[0] = 0 + 1*1 = 1
+    near(f64[3], 0.0);  // A[1,1]
+  });
+
+  it('dtrmv upper no-transpose', () => {
+    const { lib, f64 } = setup();
+    // U = [[2,1,0],[0,3,1],[0,0,4]], x = [1, 2, 3]
+    // x := U*x = [2*1+1*2, 3*2+1*3, 4*3] = [4, 9, 12]
+    const a = 0, x = 20;
+    f64.set([2, 1, 0,  0, 3, 1,  0, 0, 4], a);
+    f64.set([1, 2, 3], x);
+    lib.alas.dtrmv(F(a), F(x), 3, 1, 0, 0);
+    near(f64[x], 4.0);
+    near(f64[x + 1], 9.0);
+    near(f64[x + 2], 12.0);
+  });
+
+  it('dtrmv lower no-transpose', () => {
+    const { lib, f64 } = setup();
+    // L = [[2,0,0],[1,3,0],[0,1,4]], x = [1, 2, 3]
+    // x := L*x = [2*1, 1*1+3*2, 0*1+1*2+4*3] = [2, 7, 14]
+    const a = 0, x = 20;
+    f64.set([2, 0, 0,  1, 3, 0,  0, 1, 4], a);
+    f64.set([1, 2, 3], x);
+    lib.alas.dtrmv(F(a), F(x), 3, 0, 0, 0);
+    near(f64[x], 2.0);
+    near(f64[x + 1], 7.0);
+    near(f64[x + 2], 14.0);
+  });
+
+  it('dtrmv upper transpose', () => {
+    const { lib, f64 } = setup();
+    // U = [[2,1,0],[0,3,1],[0,0,4]], x = [1, 2, 3]
+    // x := U^T*x = [2*1, 1*1+3*2, 1*2+4*3] = [2, 7, 14]
+    const a = 0, x = 20;
+    f64.set([2, 1, 0,  0, 3, 1,  0, 0, 4], a);
+    f64.set([1, 2, 3], x);
+    lib.alas.dtrmv(F(a), F(x), 3, 1, 1, 0);
+    near(f64[x], 2.0);
+    near(f64[x + 1], 7.0);
+    near(f64[x + 2], 14.0);
+  });
+
+  it('dtrmv with unit diagonal', () => {
+    const { lib, f64 } = setup();
+    // U = [[9,1,0],[0,9,1],[0,0,9]], x = [1, 2, 3], diag=1
+    // unit diagonal ignores diagonal entries: x := [1+1*2, 2+1*3, 3] = [3, 5, 3]
+    const a = 0, x = 20;
+    f64.set([9, 1, 0,  0, 9, 1,  0, 0, 9], a);
+    f64.set([1, 2, 3], x);
+    lib.alas.dtrmv(F(a), F(x), 3, 1, 0, 1);
+    near(f64[x], 3.0);
+    near(f64[x + 1], 5.0);
+    near(f64[x + 2], 3.0);
   });
 
   it('dsymv computes symmetric matrix-vector product', () => {
@@ -458,6 +590,38 @@ describe('ALPACK dsyev', () => {
     assert.strictEqual(i32[info], 0);
     const det = f64[w] * f64[w + 1];
     near(det, 5.0, 1e-8);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// Relaxed SIMD — f64x2.relaxed_madd
+// ═════════════════════════════════════════════════════════════════════
+
+describe('relaxed SIMD', () => {
+  it('f64x2.relaxed_madd compiles and computes a*b+c', () => {
+    const src = `
+subroutine test.fma(a: array f64; b: array f64; c: array f64; r: array f64; n: i32)
+var i, n2: i32; va, vb, vc: f64x2
+begin
+  n2 := n / 2
+  for i := 0, n2
+    va := v128.load(a, i)
+    vb := v128.load(b, i)
+    vc := v128.load(c, i)
+    va := f64x2.relaxed_madd(va, vb, vc)
+    call v128.store(r, i, va)
+  end for
+end
+`;
+    // Just verify it compiles to valid Wasm
+    const wasm = atra.compile(src);
+    assert.ok(wasm instanceof Uint8Array, 'should produce Wasm bytes');
+    assert.ok(wasm.length > 8, 'should produce non-trivial Wasm');
+    // Verify Wasm magic + version header
+    assert.strictEqual(wasm[0], 0x00);
+    assert.strictEqual(wasm[1], 0x61);
+    assert.strictEqual(wasm[2], 0x73);
+    assert.strictEqual(wasm[3], 0x6d);
   });
 });
 

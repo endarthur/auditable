@@ -1200,6 +1200,18 @@ export function codegen(ast, interpValues, userImports) {
         return;
       }
 
+      // f64x2.relaxed_madd(a, b, c), f64x2.relaxed_nmadd(a, b, c) (ternary: a*b+c / -(a*b)+c)
+      if (['relaxed_madd','relaxed_nmadd'].includes(method)) {
+        emitExpr(expr.args[0], prefix);
+        emitExpr(expr.args[1], prefix);
+        emitExpr(expr.args[2], prefix);
+        const key = prefix + '.' + method;
+        const op = SIMD_OPS[key];
+        if (op === undefined) throw new Error(`Unknown SIMD op: ${key}`);
+        emitSimd(op);
+        return;
+      }
+
       // v128.and, v128.or, v128.xor (binary bitwise)
       if (prefix === 'v128' && ['and','or','xor'].includes(method)) {
         // Infer operand type from first arg
