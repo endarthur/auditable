@@ -1076,6 +1076,142 @@ begin
   end for
 end
 
+! ── ktsol — kriging system solver (full matrix, partial pivoting) ──
+!
+! Gaussian elimination with partial pivoting. Full n×n matrix
+! (column-major), single RHS, single variable.
+!
+! simplified from Fortran ktsol(n, ns, nv, ...) with ns=1, nv=1.
+!
+! a[0..n*n-1]   = LHS matrix (column-major, modified in place)
+! b[0..n-1]     = RHS vector (modified — holds solution after back-sub)
+! s[0..n-1]     = solution output (copy of b after back-sub)
+! result[0]     = 0=ok, -1 if n<=1, k if pivot k is near-zero
+!
+! use ktsol (not ksol) when the system may have drift terms or be
+! poorly conditioned — partial pivoting avoids breakdowns.
+!
+! Fortran ref: gslib/ktsol.for
+! NOTE: Fortran uses column-major a((k-1)*n + i) for element (row i, col k).
+! We preserve column-major here: element (row i, col j) = a[j*n + i], 0-indexed.
+
+subroutine gslib.ktsol(n: i32; a, b, s, result: array f64)
+var
+  nm1, k, kp1, i, j: i32
+  kdiag, npiv, ipiv, i1, j1, j2, i2: i32
+  t, tol: f64
+begin
+  tol := 1.0e-10
+
+  if (n <= 1) then
+    result[0] := -1.0
+    call return()
+  end if
+
+  result[0] := 0.0
+  nm1 := n - 1
+
+  ! Gaussian elimination with partial pivoting
+  for k := 0, nm1
+    kp1 := k + 1
+    ! column-major diagonal: element (k, k) = a[k*n + k]
+    kdiag := k * n + k
+
+    ! find the pivot — max |a(i, k)| for i = k..n-1
+    npiv := kdiag
+    ipiv := k
+    i1 := kdiag
+    for i := kp1, n
+      i1 := i1 + 1
+      if (abs(a[i1]) > abs(a[npiv])) then
+        npiv := i1
+        ipiv := i
+      end if
+    end for
+
+    ! swap pivot and diagonal
+    t := a[npiv]
+    a[npiv] := a[kdiag]
+    a[kdiag] := t
+
+    ! test for singularity
+    if (abs(a[kdiag]) < tol) then
+      result[0] := f64(k + 1)
+      call return()
+    end if
+
+    ! compute multipliers (store in sub-diagonal of column k)
+    i1 := kdiag
+    for i := kp1, n
+      i1 := i1 + 1
+      a[i1] := 0.0 - a[i1] / a[kdiag]
+    end for
+
+    ! interchange and eliminate column by column
+    j1 := kdiag
+    j2 := npiv
+    for j := kp1, n
+      j1 := j1 + n
+      j2 := j2 + n
+      t := a[j2]
+      a[j2] := a[j1]
+      a[j1] := t
+      i1 := j1
+      i2 := kdiag
+      for i := kp1, n
+        i1 := i1 + 1
+        i2 := i2 + 1
+        a[i1] := a[i1] + a[i2] * a[j1]
+      end for
+    end for
+
+    ! interchange and modify the RHS
+    t := b[ipiv]
+    b[ipiv] := b[k]
+    b[k] := t
+    j1 := k
+    j2 := kdiag
+    for j := kp1, n
+      j1 := j1 + 1
+      j2 := j2 + 1
+      b[j1] := b[j1] + b[k] * a[j2]
+    end for
+  end for
+
+  ! test last pivot
+  kdiag := n * n - 1
+  if (abs(a[kdiag]) < tol) then
+    result[0] := f64(n)
+    call return()
+  end if
+
+  ! back substitution
+  ! Fortran: kdiag starts at nva = n*n (1-indexed diagonal of last row),
+  ! kb starts at nvb2 = n (1-indexed last element of b).
+  ! k=1..nm1 handles rows n down to 2, then row 1 after the loop.
+  ! In 0-indexed column-major: diag of row i = a[i*n + i].
+
+  for k := 1, n
+    ! row index (0-indexed): n - k
+    i := n - k
+    kdiag := i * n + i
+    b[i] := b[i] / a[kdiag]
+    t := 0.0 - b[i]
+    ! update rows 0..i-1 using column i
+    i1 := i * n
+    for j := 0, i
+      b[j] := b[j] + a[i1 + j] * t
+    end for
+  end for
+  ! row 0
+  b[0] := b[0] / a[0]
+
+  ! copy solution to s
+  for i := 0, n
+    s[i] := b[i]
+  end for
+end
+
 ! ── kb2d — 2D ordinary/simple kriging ──────────────────────────────
 !
 ! estimates point or block values on a 2D grid by ordinary or simple
@@ -1224,7 +1360,7 @@ begin
           n1 := na - 1
           for k := 0, n1
             if (h2 < dist[k]) then
-              for jk := 0, n1 - k - 1
+              for jk := 0, n1 - k
                 j := n1 - 1 - jk
                 dist[j + 1] := dist[j]
                 nums[j + 1] := nums[j]
@@ -1358,5 +1494,554 @@ begin
         end if
       end if
     end for
+  end for
+end
+
+! ── kt3d — 3D kriging (SK, OK, KT/UK) ──────────────────────────────
+!
+! kriging of a 3D rectangular grid. supports:
+!   ktype=0 — simple kriging (SK)
+!   ktype=1 — ordinary kriging (OK)
+!   ktype=2 — SK with locally varying mean (external variable as local mean)
+!   ktype=3 — KT/UK: kriging with trend (up to 9 polynomial drift terms)
+!             plus optional external drift
+!
+! uses ktsol (Gaussian elimination with partial pivoting) for the
+! kriging system — handles drift terms and ill-conditioned systems.
+! uses super block search (setsupr/picksup/srchsupr, called by JS)
+! for efficient neighbor lookup.
+!
+! data coordinates are shifted to be relative to block corner for drift:
+!   xa = x(ind) - xloc + 0.5*xsiz  (same as Fortran kt3d)
+!
+! parameters:
+!   nx, ny, nz      grid dimensions
+!   xmn, ymn, zmn   grid origin (center of first cell)
+!   xsiz, ysiz, zsiz  cell sizes
+!   nxdis, nydis, nzdis  block discretization
+!   nd              number of data
+!   x, y, z, vr, ve  data (coordinates, values, external drift variable)
+!   ndmin, ndmax     min/max neighbors
+!   radius           search radius (isotropic; anisotropy in rotmat)
+!   sang1..sanis2   search ellipsoid angles and anisotropy ratios
+!   ktype            kriging type (0=SK, 1=OK, 2=SK+ext mean, 3=KT/UK)
+!   skmean           simple kriging mean (ktype=0)
+!   idrif[0..8]     drift term flags: x,y,z,x²,y²,z²,xy,xz,yz
+!   nst, c0          variogram: number of structures, nugget
+!   it, cc, aa       variogram: types, sills, ranges per structure
+!   irot, rotmat     base rotation index and rotation matrices
+!   nsbtosr, ixsbtosr, iysbtosr, izsbtosr, nisb, supout
+!                    super block search arrays (from setsupr/picksup)
+!   est, estv        output estimates and variances (f64[nx*ny*nz])
+!   xa..getindxres   scratch arrays (see interface)
+!
+! NOTE: koption (jackknife), iktype (IK distribution), and itrend
+! (estimate trend itself) are omitted — always grid estimation mode.
+!
+! Fortran ref: kt3d.for (subroutine kt3d)
+
+subroutine gslib.kt3d(
+  nx, ny, nz: i32; xmn, ymn, zmn, xsiz, ysiz, zsiz: f64;
+  nxdis, nydis, nzdis: i32;
+  nd: i32; x, y, z, vr, ve: array f64;
+  ndmin, ndmax: i32; radius: f64;
+  sang1, sang2, sang3, sanis1, sanis2: f64;
+  ktype: i32; skmean: f64;
+  idrif: array i32;
+  nst: i32; c0: f64; it: array i32; cc, aa: array f64;
+  irot: i32; rotmat: array f64;
+  nsbtosr: i32; ixsbtosr, iysbtosr, izsbtosr, nisb: array i32;
+  supout: array f64;
+  est, estv: array f64;
+  xa, ya, za, vra, vea: array f64;
+  r, rr, s, a: array f64;
+  xdb, ydb, zdb: array f64;
+  close: array f64;
+  covres: array f64;
+  inoct: array i32;
+  getindxres: array i32;
+  lt, ut: array i32)
+var
+  ix, iy, iz, index, gi: i32
+  xloc, yloc, zloc: f64
+  ndb, na, neq, mdt, nclose: i32
+  cbb, cov, cb, cb1, unbias: f64
+  covmax, resc, radsqd: f64
+  isrot, ind, i, j, k, im: i32
+  dx, dy, dz: f64
+  xdis, ydis, zdis: f64
+  nxsup, nysup, nzsup: i32
+  xmnsup, ymnsup, zmnsup: f64
+  xsizsup, ysizsup, zsizsup: f64
+  nxy: i32
+  sumw, wt: f64
+  ising: f64
+  resce, extest: f64
+  skmean_loc: f64
+  infoct: f64
+  skip: i32
+begin
+  ! ── compute covmax and rescaling factor ──
+  radsqd := radius * radius
+  covmax := c0
+  for i := 0, nst
+    if (it[i] == 4) then
+      covmax := covmax + 999.0
+    else
+      covmax := covmax + cc[i]
+    end if
+  end for
+
+  if (radsqd < 1.0) then
+    resc := 2.0 * radius / max(covmax, 0.0001)
+  else
+    resc := (4.0 * radsqd) / max(covmax, 0.0001)
+  end if
+  resc := 1.0 / resc
+
+  ! search rotation index is nst (irot + nst = last structure + 1)
+  isrot := irot + nst
+
+  ! ── compute number of drift terms ──
+  mdt := 1
+  for i := 0, 9
+    mdt := mdt + idrif[i]
+  end for
+  if (ktype == 3) then
+    mdt := mdt + 1
+  end if
+  if (ktype == 0 or ktype == 2) then
+    mdt := 0
+  end if
+
+  ! ── set up discretization points ──
+  ndb := nxdis * nydis * nzdis
+  xdis := xsiz / max(f64(nxdis), 1.0)
+  ydis := ysiz / max(f64(nydis), 1.0)
+  zdis := zsiz / max(f64(nzdis), 1.0)
+  i := 0
+  xloc := -0.5 * (xsiz + xdis)
+  for ix := 0, nxdis
+    xloc := xloc + xdis
+    yloc := -0.5 * (ysiz + ydis)
+    for iy := 0, nydis
+      yloc := yloc + ydis
+      zloc := -0.5 * (zsiz + zdis)
+      for iz := 0, nzdis
+        zloc := zloc + zdis
+        ! Fortran: xdb(i) = xloc + 0.5*xsiz (relative to lower-left corner)
+        xdb[i] := xloc + 0.5 * xsiz
+        ydb[i] := yloc + 0.5 * ysiz
+        zdb[i] := zloc + 0.5 * zsiz
+        i := i + 1
+      end for
+    end for
+  end for
+
+  ! ── block covariance ──
+  call gslib.cova3(xdb[0], ydb[0], zdb[0], xdb[0], ydb[0], zdb[0],
+    nst, c0, it, cc, aa, irot, rotmat, covres)
+  unbias := covres[0]
+  cbb := covres[0]
+
+  if (ndb > 1) then
+    cbb := 0.0
+    for i := 0, ndb
+      for j := 0, ndb
+        call gslib.cova3(xdb[i], ydb[i], zdb[i], xdb[j], ydb[j], zdb[j],
+          nst, c0, it, cc, aa, irot, rotmat, covres)
+        cov := covres[1]
+        if (i == j) then
+          cov := cov - c0
+        end if
+        cbb := cbb + cov
+      end for
+    end for
+    cbb := cbb / f64(ndb * ndb)
+  end if
+
+  ! ── mean values of drift functions over discretization points ──
+  ! bv stored in covres scratch? no, use first 9 entries of rr as scratch.
+  ! Actually, we need bv[0..8] persistent. Let's use the first 9 entries of
+  ! the rr array which is neq_max long (ndmax + mdt_max). We'll overwrite
+  ! before each kriging system build anyway.
+  ! Better: store in xdb/ydb/zdb past ndb, or use a separate approach.
+  ! Simplest: compute bv on the fly in the drift section.
+  ! Actually the Fortran precomputes bv[1..9] = mean of drift functions * resc.
+  ! We need these at multiple grid nodes. Store them in the 9 entries of
+  ! the 'a' array before index 0 (no, can't). Let's use rr[0..8] as bv
+  ! storage — rr gets overwritten per grid node anyway. But rr needs to be
+  ! neq long per node...
+  !
+  ! Solution: caller provides enough space in rr for max(neq_max, 9).
+  ! We precompute bv into rr[0..8] now, then read from rr before each
+  ! grid node overwrites rr.
+  ! Actually that won't work because rr is overwritten during the kriging loop.
+  !
+  ! Real solution: store bv in supout[9..17] — supout has at least 13 entries.
+  ! The plan says supout is the super block output array. Let's use entries
+  ! [9..17] which are safe (setsupr only uses [0..8], and [9..12] are temp).
+  !
+  ! Actually, simplest: just compute bv into supout[9..17].
+
+  for i := 0, 9
+    supout[9 + i] := 0.0
+  end for
+  for i := 0, ndb
+    supout[9] := supout[9] + xdb[i]
+    supout[10] := supout[10] + ydb[i]
+    supout[11] := supout[11] + zdb[i]
+    supout[12] := supout[12] + xdb[i] * xdb[i]
+    supout[13] := supout[13] + ydb[i] * ydb[i]
+    supout[14] := supout[14] + zdb[i] * zdb[i]
+    supout[15] := supout[15] + xdb[i] * ydb[i]
+    supout[16] := supout[16] + xdb[i] * zdb[i]
+    supout[17] := supout[17] + ydb[i] * zdb[i]
+  end for
+  for i := 0, 9
+    supout[9 + i] := (supout[9 + i] / max(f64(ndb), 1.0)) * resc
+  end for
+
+  ! ── read super block parameters ──
+  nxsup := i32(supout[0])
+  nysup := i32(supout[1])
+  nzsup := i32(supout[2])
+  xmnsup := supout[3]
+  ymnsup := supout[4]
+  zmnsup := supout[5]
+  xsizsup := supout[6]
+  ysizsup := supout[7]
+  zsizsup := supout[8]
+
+  nxy := nx * ny
+
+  ! ══════════════════════════════════════════════════════════════════
+  ! MAIN LOOP OVER ALL GRID NODES
+  ! ══════════════════════════════════════════════════════════════════
+
+  for index := 0, nx * ny * nz
+    ! decompose linear index to ix, iy, iz (0-indexed)
+    iz := index / nxy
+    iy := (index - iz * nxy) / nx
+    ix := index - iz * nxy - iy * nx
+    xloc := xmn + f64(ix) * xsiz
+    yloc := ymn + f64(iy) * ysiz
+    zloc := zmn + f64(iz) * zsiz
+    gi := index
+
+    ! default: unestimated
+    skip := 0
+
+    ! ── search for nearby data ──
+    ! xa used as tmp (distances) for srchsupr — overwritten later with data coords
+    call gslib.srchsupr(xloc, yloc, zloc, radsqd,
+      isrot, rotmat,
+      nsbtosr, ixsbtosr, iysbtosr, izsbtosr,
+      0, nd,
+      x, y, z, xa, close,
+      nisb,
+      nxsup, xmnsup, xsizsup,
+      nysup, ymnsup, ysizsup,
+      nzsup, zmnsup, zsizsup,
+      covres,
+      getindxres, inoct, lt, ut)
+
+    nclose := i32(covres[0])
+
+    ! ── load nearby data into xa, ya, za, vra, vea ──
+    na := 0
+    for i := 0, nclose
+      ind := i32(close[i] + 0.5)
+      if (na < ndmax) then
+        ! shift coordinates relative to block corner (as Fortran does)
+        xa[na] := x[ind] - xloc + 0.5 * xsiz
+        ya[na] := y[ind] - yloc + 0.5 * ysiz
+        za[na] := z[ind] - zloc + 0.5 * zsiz
+        vra[na] := vr[ind]
+        vea[na] := ve[ind]
+        na := na + 1
+      end if
+    end for
+
+    ! ── test number of samples ──
+    if (na < ndmin) then
+      est[gi] := -999.0
+      estv[gi] := -999.0
+      skip := 1
+    end if
+
+    ! test if enough samples for drift terms
+    if (skip == 0 and na >= 1 and na <= mdt) then
+      est[gi] := -999.0
+      estv[gi] := -999.0
+      skip := 1
+    end if
+
+    ! ── handle single sample case ──
+    if (skip == 0 and na <= 1) then
+      call gslib.cova3(xa[0], ya[0], za[0], xa[0], ya[0], za[0],
+        nst, c0, it, cc, aa, irot, rotmat, covres)
+      cb1 := covres[0]
+
+      if (ndb <= 1) then
+        call gslib.cova3(xa[0], ya[0], za[0], xdb[0], ydb[0], zdb[0],
+          nst, c0, it, cc, aa, irot, rotmat, covres)
+        cb := covres[1]
+      else
+        cb := 0.0
+        for i := 0, ndb
+          call gslib.cova3(xa[0], ya[0], za[0], xdb[i], ydb[i], zdb[i],
+            nst, c0, it, cc, aa, irot, rotmat, covres)
+          cb := cb + covres[1]
+          dx := xa[0] - xdb[i]
+          dy := ya[0] - ydb[i]
+          dz := za[0] - zdb[i]
+          if (dx * dx + dy * dy + dz * dz < 1.0e-6) then
+            cb := cb - c0
+          end if
+        end for
+        cb := cb / f64(ndb)
+      end if
+
+      skmean_loc := skmean
+      if (ktype == 2) then
+        skmean_loc := vea[0]
+      end if
+      if (ktype == 0 or ktype == 2) then
+        wt := cb / cb1
+        est[gi] := wt * vra[0] + (1.0 - wt) * skmean_loc
+        estv[gi] := cbb - wt * cb
+      else
+        est[gi] := vra[0]
+        estv[gi] := cbb - 2.0 * cb + cb1
+      end if
+      skip := 1
+    end if
+
+    ! ── multiple samples: build and solve kriging system ──
+    if (skip == 0) then
+      neq := mdt + na
+
+      ! initialize kriging matrix (full, column-major for ktsol)
+      for i := 0, neq * neq
+        a[i] := 0.0
+      end for
+
+      ! fill covariance part of LHS matrix
+      for i := 0, na
+        for j := i, na
+          call gslib.cova3(xa[i], ya[i], za[i], xa[j], ya[j], za[j],
+            nst, c0, it, cc, aa, irot, rotmat, covres)
+          cov := covres[1]
+          ! column-major: a[col*neq + row]
+          a[j * neq + i] := cov
+          a[i * neq + j] := cov
+        end for
+      end for
+
+      ! OK unbiasedness constraint (if neq > na, first drift row/col is na)
+      if (neq > na) then
+        for i := 0, na
+          a[na * neq + i] := unbias
+          a[i * neq + na] := unbias
+        end for
+      end if
+
+      ! build RHS vector
+      for i := 0, na
+        if (ndb <= 1) then
+          call gslib.cova3(xa[i], ya[i], za[i], xdb[0], ydb[0], zdb[0],
+            nst, c0, it, cc, aa, irot, rotmat, covres)
+          cb := covres[1]
+        else
+          cb := 0.0
+          for j := 0, ndb
+            call gslib.cova3(xa[i], ya[i], za[i], xdb[j], ydb[j], zdb[j],
+              nst, c0, it, cc, aa, irot, rotmat, covres)
+            cb := cb + covres[1]
+            dx := xa[i] - xdb[j]
+            dy := ya[i] - ydb[j]
+            dz := za[i] - zdb[j]
+            if (dx * dx + dy * dy + dz * dz < 1.0e-6) then
+              cb := cb - c0
+            end if
+          end for
+          cb := cb / f64(ndb)
+        end if
+        r[i] := cb
+        rr[i] := cb
+      end for
+
+      ! RHS for OK constraint
+      if (neq > na) then
+        r[na] := unbias
+        rr[na] := unbias
+      end if
+
+      ! ── add drift term constraints ──
+      im := na
+
+      ! drift 1: linear x
+      if (idrif[0] == 1) then
+        im := im + 1
+        for k := 0, na
+          a[im * neq + k] := xa[k] * resc
+          a[k * neq + im] := xa[k] * resc
+        end for
+        r[im] := supout[9]
+        rr[im] := supout[9]
+      end if
+
+      ! drift 2: linear y
+      if (idrif[1] == 1) then
+        im := im + 1
+        for k := 0, na
+          a[im * neq + k] := ya[k] * resc
+          a[k * neq + im] := ya[k] * resc
+        end for
+        r[im] := supout[10]
+        rr[im] := supout[10]
+      end if
+
+      ! drift 3: linear z
+      if (idrif[2] == 1) then
+        im := im + 1
+        for k := 0, na
+          a[im * neq + k] := za[k] * resc
+          a[k * neq + im] := za[k] * resc
+        end for
+        r[im] := supout[11]
+        rr[im] := supout[11]
+      end if
+
+      ! drift 4: quadratic x²
+      if (idrif[3] == 1) then
+        im := im + 1
+        for k := 0, na
+          a[im * neq + k] := xa[k] * xa[k] * resc
+          a[k * neq + im] := xa[k] * xa[k] * resc
+        end for
+        r[im] := supout[12]
+        rr[im] := supout[12]
+      end if
+
+      ! drift 5: quadratic y²
+      if (idrif[4] == 1) then
+        im := im + 1
+        for k := 0, na
+          a[im * neq + k] := ya[k] * ya[k] * resc
+          a[k * neq + im] := ya[k] * ya[k] * resc
+        end for
+        r[im] := supout[13]
+        rr[im] := supout[13]
+      end if
+
+      ! drift 6: quadratic z²
+      if (idrif[5] == 1) then
+        im := im + 1
+        for k := 0, na
+          a[im * neq + k] := za[k] * za[k] * resc
+          a[k * neq + im] := za[k] * za[k] * resc
+        end for
+        r[im] := supout[14]
+        rr[im] := supout[14]
+      end if
+
+      ! drift 7: xy
+      if (idrif[6] == 1) then
+        im := im + 1
+        for k := 0, na
+          a[im * neq + k] := xa[k] * ya[k] * resc
+          a[k * neq + im] := xa[k] * ya[k] * resc
+        end for
+        r[im] := supout[15]
+        rr[im] := supout[15]
+      end if
+
+      ! drift 8: xz
+      if (idrif[7] == 1) then
+        im := im + 1
+        for k := 0, na
+          a[im * neq + k] := xa[k] * za[k] * resc
+          a[k * neq + im] := xa[k] * za[k] * resc
+        end for
+        r[im] := supout[16]
+        rr[im] := supout[16]
+      end if
+
+      ! drift 9: yz
+      if (idrif[8] == 1) then
+        im := im + 1
+        for k := 0, na
+          a[im * neq + k] := ya[k] * za[k] * resc
+          a[k * neq + im] := ya[k] * za[k] * resc
+        end for
+        r[im] := supout[17]
+        rr[im] := supout[17]
+      end if
+
+      ! external drift (ktype=3)
+      if (ktype == 3) then
+        im := im + 1
+        ! extest is the external drift variable at this grid node
+        ! For grid estimation, we need to pass it somehow. The Fortran
+        ! reads from an external file. Here we pass ve[0] of the
+        ! estimation point? Actually, in the Fortran, extest is read
+        ! from a separate grid file at each grid node. For our interface,
+        ! the caller would need to provide this per node.
+        !
+        ! For now, external drift at grid nodes is NOT supported in this
+        ! subroutine — ktype=3 only uses the data's ve values in the
+        ! drift columns. The grid node's external drift (extest, resce)
+        ! would need to be passed per node. We'll handle this by having
+        ! the caller set a flag or by adding extest as a grid array.
+        !
+        ! Simplification: pass extest array indexed by grid node via est
+        ! overwrite? No, that's the output. Instead, require that for
+        ! ktype=3, the ve array has nd + nx*ny*nz entries: first nd are
+        ! data external drift, remaining are grid node external drift.
+        ! Grid node i's extest = ve[nd + i].
+        extest := ve[nd + gi]
+        resce := covmax / max(abs(extest), 0.0001)
+        for k := 0, na
+          a[im * neq + k] := vea[k] * resce
+          a[k * neq + im] := vea[k] * resce
+        end for
+        r[im] := extest * resce
+        rr[im] := extest * resce
+      end if
+
+      ! ── solve the kriging system ──
+      call gslib.ktsol(neq, a, r, s, covres)
+      ising := covres[0]
+
+      if (ising /= 0.0) then
+        est[gi] := -999.0
+        estv[gi] := -999.0
+      else
+        ! compute estimate and variance
+        est[gi] := 0.0
+        estv[gi] := cbb
+        skmean_loc := skmean
+        if (ktype == 2) then
+          skmean_loc := extest
+        end if
+        for j := 0, neq
+          estv[gi] := estv[gi] - s[j] * rr[j]
+          if (j < na) then
+            if (ktype == 0) then
+              est[gi] := est[gi] + s[j] * (vra[j] - skmean_loc)
+            else if (ktype == 2) then
+              est[gi] := est[gi] + s[j] * (vra[j] - vea[j])
+            else
+              est[gi] := est[gi] + s[j] * vra[j]
+            end if
+          end if
+        end for
+        if (ktype == 0 or ktype == 2) then
+          est[gi] := est[gi] + skmean_loc
+        end if
+      end if
+    end if
   end for
 end
