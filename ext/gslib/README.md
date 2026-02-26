@@ -33,6 +33,10 @@ Faithful transcription of Stanford's [GSLIB](http://www.gslib.com/) (Deutsch & J
 | `gslib.kb2d` | subroutine | 2D ordinary/simple kriging | kb2d.for |
 | `gslib.ktsol` | subroutine | Kriging system solver (full matrix, partial pivoting) | ktsol.for |
 | `gslib.kt3d` | subroutine | 3D kriging (SK/OK/KT/UK, super block search) | kt3d.for |
+| `gslib.ctable` | subroutine | Covariance lookup table and spiral search order | sgsim.for |
+| `gslib.srchnd` | subroutine | Search previously simulated grid nodes | sgsim.for |
+| `gslib.krige` | subroutine | Kriging system for simulation (SK/OK/LVM/ED/CoK) | sgsim.for |
+| `gslib.sgsim` | subroutine | Sequential Gaussian simulation (one realization) | sgsim.for |
 
 ## Implementation order
 
@@ -45,10 +49,10 @@ Following the dependency chain from primitives to programs:
 5. **Sorting** — sortem
 6. **Data transform** — nscore, backtr
 7. **Search** — setsupr, picksup, srchsupr
-8. Kriging — kt3d/kb2d core loops
-9. Simulation — sgsim/sisim core loops
+8. **Kriging** — ksol, ktsol, kb2d, kt3d
+9. **Simulation** — ctable, srchnd, krige, sgsim
 
-Items 1-8 are implemented. Item 9 is future work.
+Items 1-9 are implemented. Future: sisim (sequential indicator simulation).
 
 ## Rotation matrix storage
 
@@ -83,6 +87,32 @@ Output grid parameters are returned via `out[0..8]` (nxsup, nysup, nzsup, xmnsup
 `kt3d` is the full 3D kriging program. Super block search (setsupr/picksup/srchsupr), block discretization (nxdis x nydis x nzdis), and multiple kriging types: ktype=0 (SK), ktype=1 (OK), ktype=2 (SK with locally varying mean from external variable), ktype=3 (KT/UK with up to 9 polynomial drift terms + optional external drift). Uses `ktsol` for the kriging system. Single-sample case handled separately. Data coordinates shifted relative to block corner for drift term computation. Drift function means (bv) precomputed and stored in `supout[9..17]`. Rescaling factor `resc = 1/(4*radsqd/covmax)` for numerical stability with drift. Skipped from the Fortran program: koption (jackknife cross-validation, always 0), iktype (indicator kriging distribution, always 0), itrend (estimate trend itself, always 0).
 
 All scratch arrays are caller-provided — atra has no local arrays.
+
+## Simulation
+
+`sgsim` implements Sequential Gaussian Simulation — one realization per call. The caller handles normal score transform (`nscore`) and back-transform (`backtr`) externally. All data must be in normal score space.
+
+**Setup chain** (caller must run before sgsim):
+1. `setrot` — rotation matrices for variogram structures + search ellipse
+2. `setsupr` + `picksup` — super block search network
+3. `ctable` — covariance lookup table and spiral search order
+
+**Internal subroutines** (called by sgsim):
+- `ctable` — precomputes covariance at all grid-node offsets within the search radius. Builds a spiral search order sorted by variogram distance (closest first). Uses `cova3` for covariance, `sqdist` for anisotropic distance, `sortem` for ordering.
+- `srchnd` — spirals out from the current node using ctable's lookup order, collecting previously simulated nodes. Supports octant search (noct > 0). `ixnode`/`iynode`/`iznode` are 1-indexed table positions (matching Fortran).
+- `krige` — builds kriging matrix from original data + simulated nodes, solves via `ksol` (packed upper triangular). Data-data and data-simnode covariance via `cova3`; simnode-simnode via covtab lookup when indices are in range. Supports 5 kriging types: 0=SK, 1=OK, 2=LVM, 3=external drift, 4=collocated cosimulation. Singular system fallback: cmean=gmean, cstdev=1.
+
+**sgsim algorithm:**
+1. Random path: fill sim with acorni random values, sort to get random visit order
+2. Initialize grid to UNEST (-99)
+3. Assign conditioning data to nearest grid nodes (flag with 10*UNEST if exact match)
+4. Replace flags with actual data values
+5. Main loop: for each unvisited node, search for nearby data (srchsupr) and simulated nodes (srchnd), krige conditional mean/stdev, draw random Gaussian value
+6. Reassign data to grid nodes (ensure conditioning is honored)
+
+**Skipped features** (vs. Fortran): multiple grid search (`mults`), internal normal score transform (`itrans`), variance reduction (`varred`), octant-only search without super blocks (`sstrat=1`).
+
+**UNEST sentinel:** -99.0 (not -999.0 as in kt3d). Data flags use 10*UNEST = -990.0. A node is unsimulated if `sim[ind] <= UNEST + eps` and `sim[ind] >= 2*UNEST`.
 
 ## RNG
 

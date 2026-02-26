@@ -2045,3 +2045,727 @@ begin
     end if
   end for
 end
+
+! ── ctable — covariance lookup table and spiral search ──────────────
+!
+! precomputes covariance values at all grid-node offsets within the
+! search radius. also builds a spiral search order sorted by variogram
+! distance (closest first), used by srchnd.
+!
+! covtab: (2*nctx+1)*(2*ncty+1)*(2*nctz+1) f64 — covariance lookup
+! tmp, order: nlooku scratch for sorting
+! ixnode, iynode, iznode: nlooku output — spiral search offsets (1-indexed like Fortran)
+! lt, ut: 64 i32 each — sortem scratch
+! result[0] = nlooku, result[1] = cbb
+!
+! Fortran ref: sgsim.for ctable subroutine
+! NOTE: ixnode/iynode/iznode store 1-indexed grid-table positions
+! (matching Fortran), not 0-indexed offsets. srchnd converts.
+
+subroutine gslib.ctable(
+  nst: i32; c0: f64; it: array i32; cc, aa: array f64;
+  irot, isrot: i32; rotmat: array f64;
+  radsqd: f64;
+  nx, ny, nz: i32; xsiz, ysiz, zsiz: f64;
+  nctx, ncty, nctz: i32;
+  covtab: array f64;
+  covres: array f64;
+  tmp, order: array f64;
+  ixnode, iynode, iznode: array i32;
+  lt, ut: array i32;
+  result: array f64)
+var
+  i, j, k, ic, jc, kc: i32
+  xx, yy, zz, hsqd, cov: f64
+  nlooku, loc, MAXCTX_, MAXCTY_: i32
+  il: i32
+begin
+  MAXCTX_ := 2 * nctx + 1
+  MAXCTY_ := 2 * ncty + 1
+
+  ! compute cbb = C(0,0,0; 0,0,0)
+  call gslib.cova3(0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    nst, c0, it, cc, aa, irot, rotmat, covres)
+  result[1] := covres[0]
+
+  ! fill covariance table and collect spiral search entries
+  nlooku := 0
+  for i := 0 - nctx, nctx + 1
+    xx := f64(i) * xsiz
+    ic := nctx + i
+    for j := 0 - ncty, ncty + 1
+      yy := f64(j) * ysiz
+      jc := ncty + j
+      for k := 0 - nctz, nctz + 1
+        zz := f64(k) * zsiz
+        kc := nctz + k
+
+        call gslib.cova3(0.0, 0.0, 0.0, xx, yy, zz,
+          nst, c0, it, cc, aa, irot, rotmat, covres)
+        cov := covres[1]
+
+        ! flat index: kc*(2*ncty+1)*(2*nctx+1) + jc*(2*nctx+1) + ic
+        covtab[kc * MAXCTY_ * MAXCTX_ + jc * MAXCTX_ + ic] := cov
+
+        ! check if within search radius (anisotropic distance)
+        hsqd := gslib.sqdist(0.0, 0.0, 0.0, xx, yy, zz, isrot, rotmat)
+        if (hsqd <= radsqd) then
+          ! sort key: negative covariance + tiny*distance (closest first)
+          tmp[nlooku] := 0.0 - (cov - 1.0e-10 * hsqd)
+          ! encode 1-indexed linear position for decoding later
+          order[nlooku] := f64(kc * MAXCTY_ * MAXCTX_ + jc * MAXCTX_ + ic + 1)
+          nlooku := nlooku + 1
+        end if
+      end for
+    end for
+  end for
+
+  ! sort spiral list by variogram distance (closest first)
+  if (nlooku > 1) then
+    call gslib.sortem(0, nlooku, tmp, order, order, 1, lt, ut)
+  end if
+
+  ! decode linear indices back to ixnode/iynode/iznode (1-indexed)
+  for il := 0, nlooku
+    loc := i32(order[il] + 0.5) - 1
+    kc := loc / (MAXCTY_ * MAXCTX_)
+    jc := (loc - kc * MAXCTY_ * MAXCTX_) / MAXCTX_
+    ic := loc - kc * MAXCTY_ * MAXCTX_ - jc * MAXCTX_
+    ! store as 1-indexed (matching Fortran ixnode/iynode/iznode)
+    ixnode[il] := ic + 1
+    iynode[il] := jc + 1
+    iznode[il] := kc + 1
+  end for
+
+  result[0] := f64(nlooku)
+end
+
+! ── srchnd — search previously simulated nodes ──────────────────────
+!
+! spirals out from the current node using the ctable lookup order,
+! collecting previously simulated nodes.
+!
+! ix, iy, iz: current grid node (0-indexed)
+! sim: simulation grid, UNEST = -99
+! ixnode/iynode/iznode: spiral lookup from ctable (1-indexed table positions)
+! icnode: output lookup table indices (0-indexed into ixnode/iynode/iznode)
+! cnodex/y/z/v: output coordinates and values
+! inoct: 8 i32 scratch for octant counts
+! result[0] = ncnode
+!
+! Fortran ref: sgsim.for srchnd subroutine
+
+subroutine gslib.srchnd(
+  ix, iy, iz: i32;
+  sim: array f64;
+  nx, ny, nz: i32;
+  xmn, ymn, zmn, xsiz, ysiz, zsiz: f64;
+  nlooku: i32;
+  ixnode, iynode, iznode: array i32;
+  nctx, ncty, nctz: i32;
+  nodmax, noct: i32;
+  icnode: array i32;
+  cnodex, cnodey, cnodez, cnodev: array f64;
+  inoct: array i32;
+  result: array f64)
+var
+  ncnode, il, i, j, k, ind, nxy: i32
+  idx, idy, idz, iq: i32
+  UNEST: f64
+begin
+  UNEST := -99.0
+  nxy := nx * ny
+  ncnode := 0
+
+  if (noct > 0) then
+    for i := 0, 8
+      inoct[i] := 0
+    end for
+  end if
+
+  ! skip il=0 (origin), start from il=1
+  for il := 1, nlooku
+    if (ncnode >= nodmax) then
+      il := nlooku
+    else
+      ! compute grid position from offset
+      ! ixnode/iynode/iznode are 1-indexed table positions
+      ! offset from center: ixnode[il] - nctx - 1 (in Fortran 1-indexed grid)
+      ! but our grid is 0-indexed, so:
+      i := ix + (ixnode[il] - nctx - 1)
+      j := iy + (iynode[il] - ncty - 1)
+      k := iz + (iznode[il] - nctz - 1)
+
+      if (i >= 0 and j >= 0 and k >= 0 and i < nx and j < ny and k < nz) then
+        ind := i + j * nx + k * nxy
+
+        if (sim[ind] > UNEST) then
+          ! octant check
+          if (noct > 0) then
+            idx := ix - i
+            idy := iy - j
+            idz := iz - k
+            if (idz > 0) then
+              iq := 3
+              if (idx <= 0 and idy > 0) then
+                iq := 0
+              end if
+              if (idx > 0 and idy >= 0) then
+                iq := 1
+              end if
+              if (idx < 0 and idy <= 0) then
+                iq := 2
+              end if
+            else
+              iq := 7
+              if (idx <= 0 and idy > 0) then
+                iq := 4
+              end if
+              if (idx > 0 and idy >= 0) then
+                iq := 5
+              end if
+              if (idx < 0 and idy <= 0) then
+                iq := 6
+              end if
+            end if
+            if (inoct[iq] < noct) then
+              inoct[iq] := inoct[iq] + 1
+              icnode[ncnode] := il
+              cnodex[ncnode] := xmn + f64(i) * xsiz
+              cnodey[ncnode] := ymn + f64(j) * ysiz
+              cnodez[ncnode] := zmn + f64(k) * zsiz
+              cnodev[ncnode] := sim[ind]
+              ncnode := ncnode + 1
+            end if
+          else
+            icnode[ncnode] := il
+            cnodex[ncnode] := xmn + f64(i) * xsiz
+            cnodey[ncnode] := ymn + f64(j) * ysiz
+            cnodez[ncnode] := zmn + f64(k) * zsiz
+            cnodev[ncnode] := sim[ind]
+            ncnode := ncnode + 1
+          end if
+        end if
+      end if
+    end if
+  end for
+
+  result[0] := f64(ncnode)
+end
+
+! ── krige — kriging system for simulation ───────────────────────────
+!
+! builds kriging matrix from original data + simulated nodes, solves
+! via ksol (packed upper triangular), returns conditional mean and stdev.
+!
+! ktype: 0=SK, 1=OK, 2=LVM(locally varying mean), 3=ED(external drift),
+!        4=CoK(collocated cosimulation)
+!
+! result[0] = cmean, result[1] = cstdev
+!
+! Fortran ref: sgsim.for krige subroutine
+
+subroutine gslib.krige(
+  ix, iy, iz: i32; xx, yy, zz: f64;
+  lktype: i32; gmean: f64;
+  nclose: i32; close: array f64;
+  nd: i32; x, y, z, vr, sec: array f64;
+  ncnode: i32; icnode: array i32;
+  cnodex, cnodey, cnodez, cnodev: array f64;
+  nctx, ncty, nctz: i32; covtab: array f64;
+  ixnode, iynode, iznode: array i32;
+  nst: i32; c0: f64; it: array i32; cc, aa: array f64;
+  irot: i32; rotmat: array f64;
+  cbb: f64;
+  nx, ny, nz: i32;
+  lvm: array f64; colocorr: f64;
+  a, r, rr, s_: array f64;
+  vra, vrea: array f64;
+  covres: array f64;
+  result: array f64)
+var
+  na, neq, i, j, ind_: i32
+  in_: i32
+  index, ix1, iy1, iz1, ix2, iy2, iz2: i32
+  x1, y1, z1, x2, y2, z2, cov: f64
+  ii, jj, kk, MAXCTX_, MAXCTY_, MAXCTZ_: i32
+  nxy: i32
+  ising: i32
+  cmean, cstdev, sumwts: f64
+  edmin, edmax, sfmin, sfmax: f64
+  lkt: i32
+begin
+  MAXCTX_ := 2 * nctx + 1
+  MAXCTY_ := 2 * ncty + 1
+  MAXCTZ_ := 2 * nctz + 1
+  nxy := nx * ny
+
+  na := nclose + ncnode
+  lkt := lktype
+
+  ! determine system size
+  if (lkt == 0) then
+    neq := na
+  end if
+  if (lkt == 1) then
+    neq := na + 1
+  end if
+  if (lkt == 2) then
+    neq := na
+  end if
+  if (lkt == 3) then
+    neq := na + 2
+  end if
+  if (lkt == 4) then
+    neq := na + 1
+  end if
+
+  ! check lvm bounds for ktype >= 3
+  if (lkt >= 3) then
+    ind_ := ix + iy * nx + iz * nxy
+    if (lvm[ind_] <= -6.0 or lvm[ind_] >= 6.0) then
+      lkt := 0
+      neq := na
+    end if
+  end if
+
+  ! ── build kriging matrices (packed upper triangular for ksol) ──
+  ! packed storage: element (i,j) with j>=i at position i + j*(j-1)/2 (1-indexed)
+  ! = (i-1) + (j-1)*j/2 (0-indexed): pos = (i-1) + (j-1)*j/2
+
+  in_ := 0
+
+  for j := 0, na
+    ! resolve location of point j
+    if (j < nclose) then
+      index := i32(close[j] + 0.5)
+      x1 := x[index]
+      y1 := y[index]
+      z1 := z[index]
+      vra[j] := vr[index]
+      vrea[j] := sec[index]
+      if (lkt == 2) then
+        vra[j] := vra[j] - vrea[j]
+      end if
+    else
+      ! previously simulated node
+      index := j - nclose
+      x1 := cnodex[index]
+      y1 := cnodey[index]
+      z1 := cnodez[index]
+      vra[j] := cnodev[index]
+      ind_ := icnode[index]
+      ix1 := ix + (ixnode[ind_] - nctx - 1)
+      iy1 := iy + (iynode[ind_] - ncty - 1)
+      iz1 := iz + (iznode[ind_] - nctz - 1)
+      index := ix1 + iy1 * nx + iz1 * nxy
+      vrea[j] := lvm[index]
+      if (lkt == 2) then
+        vra[j] := vra[j] - vrea[j]
+      end if
+    end if
+
+    ! fill LHS row: covariance between point j and points 0..j
+    for i := 0, j + 1
+      if (i < nclose) then
+        index := i32(close[i] + 0.5)
+        x2 := x[index]
+        y2 := y[index]
+        z2 := z[index]
+      else
+        index := i - nclose
+        x2 := cnodex[index]
+        y2 := cnodey[index]
+        z2 := cnodez[index]
+        ind_ := icnode[index]
+        ix2 := ix + (ixnode[ind_] - nctx - 1)
+        iy2 := iy + (iynode[ind_] - ncty - 1)
+        iz2 := iz + (iznode[ind_] - nctz - 1)
+      end if
+
+      ! get covariance: use lookup table if both are simulated nodes
+      if (j < nclose or i < nclose) then
+        call gslib.cova3(x1, y1, z1, x2, y2, z2,
+          nst, c0, it, cc, aa, irot, rotmat, covres)
+        a[in_] := covres[1]
+      else
+        ! both simulated: try covtab lookup
+        ii := nctx + (ix1 - ix2)
+        jj := ncty + (iy1 - iy2)
+        kk := nctz + (iz1 - iz2)
+        if (ii < 0 or ii >= MAXCTX_ or jj < 0 or jj >= MAXCTY_ or kk < 0 or kk >= MAXCTZ_) then
+          call gslib.cova3(x1, y1, z1, x2, y2, z2,
+            nst, c0, it, cc, aa, irot, rotmat, covres)
+          a[in_] := covres[1]
+        else
+          a[in_] := covtab[kk * MAXCTY_ * MAXCTX_ + jj * MAXCTX_ + ii]
+        end if
+      end if
+      in_ := in_ + 1
+    end for
+
+    ! ── RHS: covariance between estimation point and point j ──
+    if (j < nclose) then
+      call gslib.cova3(xx, yy, zz, x1, y1, z1,
+        nst, c0, it, cc, aa, irot, rotmat, covres)
+      r[j] := covres[1]
+    else
+      ! try covtab lookup
+      ii := nctx + (ix - ix1)
+      jj := ncty + (iy - iy1)
+      kk := nctz + (iz - iz1)
+      if (ii < 0 or ii >= MAXCTX_ or jj < 0 or jj >= MAXCTY_ or kk < 0 or kk >= MAXCTZ_) then
+        call gslib.cova3(xx, yy, zz, x1, y1, z1,
+          nst, c0, it, cc, aa, irot, rotmat, covres)
+        r[j] := covres[1]
+      else
+        r[j] := covtab[kk * MAXCTY_ * MAXCTX_ + jj * MAXCTX_ + ii]
+      end if
+    end if
+    rr[j] := r[j]
+  end for
+
+  ! ── OK constraint ──
+  if (lkt == 1 or lkt == 3) then
+    for i := 0, na
+      in_ := in_ + 1
+      a[in_] := 1.0
+    end for
+    in_ := in_ + 1
+    a[in_] := 0.0
+    r[na] := 1.0
+    rr[na] := 1.0
+  end if
+
+  ! ── external drift constraint (ktype=3) ──
+  if (lkt == 3) then
+    edmin := 999999.0
+    edmax := -999999.0
+    for i := 0, na
+      in_ := in_ + 1
+      a[in_] := vrea[i]
+      if (a[in_] < edmin) then
+        edmin := a[in_]
+      end if
+      if (a[in_] > edmax) then
+        edmax := a[in_]
+      end if
+    end for
+    in_ := in_ + 1
+    a[in_] := 0.0
+    in_ := in_ + 1
+    a[in_] := 0.0
+    ind_ := ix + iy * nx + iz * nxy
+    r[na + 1] := lvm[ind_]
+    rr[na + 1] := r[na + 1]
+    if ((edmax - edmin) < 1.0e-10) then
+      neq := neq - 1
+    end if
+  end if
+
+  ! ── collocated cosimulation constraint (ktype=4) ──
+  if (lkt == 4) then
+    sfmin := 1.0e21
+    sfmax := -1.0e21
+    for i := 0, na
+      in_ := in_ + 1
+      a[in_] := colocorr * r[i]
+      if (a[in_] < sfmin) then
+        sfmin := a[in_]
+      end if
+      if (a[in_] > sfmax) then
+        sfmax := a[in_]
+      end if
+    end for
+    in_ := in_ + 1
+    a[in_] := 1.0
+    r[na] := colocorr
+    rr[na] := colocorr
+  end if
+
+  ! ── solve the kriging system ──
+  if (neq == 1 and lkt /= 3) then
+    s_[0] := r[0] / a[0]
+    ising := 0
+  else
+    call gslib.ksol(neq, a, r, s_, covres)
+    ising := i32(covres[0])
+  end if
+
+  ! singular: fallback
+  if (ising /= 0) then
+    result[0] := gmean
+    result[1] := 1.0
+    call return()
+  end if
+
+  ! ── compute conditional mean and variance ──
+  cmean := 0.0
+  cstdev := cbb
+  sumwts := 0.0
+  for i := 0, na
+    cmean := cmean + s_[i] * vra[i]
+    cstdev := cstdev - s_[i] * rr[i]
+    sumwts := sumwts + s_[i]
+  end for
+
+  if (lkt == 1) then
+    cstdev := cstdev - s_[na]
+  end if
+
+  if (lkt == 2) then
+    cmean := cmean + gmean
+  end if
+
+  if (lkt == 4) then
+    ind_ := ix + iy * nx + iz * nxy
+    cmean := cmean + s_[na] * lvm[ind_]
+    cstdev := cstdev - s_[na] * rr[na]
+  end if
+
+  ! clamp negative variance
+  if (cstdev < 0.0) then
+    cstdev := 0.0
+  end if
+  cstdev := sqrt(cstdev)
+
+  result[0] := cmean
+  result[1] := cstdev
+end
+
+! ── sgsim — sequential Gaussian simulation ──────────────────────────
+!
+! one realization per call. caller handles nscore/backtr externally.
+! all data should already be in normal score space.
+!
+! the caller must set up:
+!   - rotation matrices (setrot for variogram + search)
+!   - super block search (setsupr + picksup)
+!   - covariance table (ctable)
+!
+! sim: nx*ny*nz f64 — output simulation grid
+! order: nx*ny*nz f64 — scratch for random path
+! close: ndmax f64 — scratch for nearby data indices
+! a: neq_max*(neq_max+1)/2 f64 — kriging matrix scratch (packed)
+! r, rr, s_: neq_max f64 each — kriging RHS/solution scratch
+! vra, vrea: neq_max f64 each — data values scratch
+! tmp: nlooku f64 — scratch for srchsupr (distances)
+!
+! Fortran ref: sgsim.for sgsim subroutine
+! NOTE: UNEST = -99 (not -999)
+
+subroutine gslib.sgsim(
+  nx, ny, nz: i32; xmn, ymn, zmn, xsiz, ysiz, zsiz: f64;
+  nd: i32; x, y, z, vr: array f64;
+  sec: array f64; lvm: array f64; colocorr: f64;
+  ndmin, ndmax: i32; radius: f64;
+  sang1, sang2, sang3, sanis1, sanis2: f64;
+  noct, nodmax, ktype: i32;
+  nst: i32; c0: f64; it: array i32; cc, aa: array f64;
+  irot: i32; rotmat: array f64;
+  radsqd: f64;
+  isrot: i32;
+  nsbtosr: i32; ixsbtosr, iysbtosr, izsbtosr, nisb: array i32;
+  supout: array f64;
+  nctx, ncty, nctz, nlooku: i32;
+  covtab: array f64; ixnode, iynode, iznode: array i32;
+  cbb: f64;
+  ixv: array i32;
+  sim, order, close: array f64;
+  icnode: array i32;
+  cnodex, cnodey, cnodez, cnodev: array f64;
+  a, r, rr, s_: array f64;
+  vra, vrea: array f64;
+  covres: array f64; getindxres: array i32;
+  inoct: array i32; lt, ut: array i32;
+  tmp: array f64)
+var
+  nxyz, nxy, ind, id: i32
+  ix_g, iy_g, iz_g, index: i32
+  xx_g, yy_g, zz_g, test: f64
+  UNEST, EPSLON, TINY: f64
+  nclose, ncnode, lktype: i32
+  gmean, cmean, cstdev, p: f64
+  xp_arr: f64
+  nxsup, nysup, nzsup: i32
+  xmnsup, ymnsup, zmnsup, xsizsup, ysizsup, zsizsup: f64
+  in_: i32
+begin
+  UNEST := -99.0
+  EPSLON := 1.0e-10
+  TINY := 0.0001
+  nxyz := nx * ny * nz
+  nxy := nx * ny
+
+  ! ── 1. random path ──
+  for ind := 0, nxyz
+    sim[ind] := gslib.acorni(ixv)
+    order[ind] := f64(ind)
+  end for
+  call gslib.sortem(0, nxyz, sim, order, order, 1, lt, ut)
+
+  ! ── 2. initialize simulation grid ──
+  for ind := 0, nxyz
+    sim[ind] := UNEST
+  end for
+
+  ! ── 3. assign conditioning data to nearest grid nodes ──
+  for id := 0, nd
+    call gslib.getindx(nx, xmn, xsiz, x[id], getindxres)
+    ix_g := getindxres[0]
+    call gslib.getindx(ny, ymn, ysiz, y[id], getindxres)
+    iy_g := getindxres[0]
+    call gslib.getindx(nz, zmn, zsiz, z[id], getindxres)
+    iz_g := getindxres[0]
+    ind := ix_g + iy_g * nx + iz_g * nxy
+    xx_g := xmn + f64(ix_g) * xsiz
+    yy_g := ymn + f64(iy_g) * ysiz
+    zz_g := zmn + f64(iz_g) * zsiz
+    test := abs(xx_g - x[id]) + abs(yy_g - y[id]) + abs(zz_g - z[id])
+
+    ! flag close data with 10*UNEST, store data index as positive value
+    if (test <= TINY) then
+      sim[ind] := 10.0 * UNEST
+    end if
+  end for
+
+  ! ── 4. replace flags with data values ──
+  ! re-assign: for each datum, if grid node was flagged, store the actual value
+  for id := 0, nd
+    call gslib.getindx(nx, xmn, xsiz, x[id], getindxres)
+    ix_g := getindxres[0]
+    call gslib.getindx(ny, ymn, ysiz, y[id], getindxres)
+    iy_g := getindxres[0]
+    call gslib.getindx(nz, zmn, zsiz, z[id], getindxres)
+    iz_g := getindxres[0]
+    ind := ix_g + iy_g * nx + iz_g * nxy
+    xx_g := xmn + f64(ix_g) * xsiz
+    yy_g := ymn + f64(iy_g) * ysiz
+    zz_g := zmn + f64(iz_g) * zsiz
+    test := abs(xx_g - x[id]) + abs(yy_g - y[id]) + abs(zz_g - z[id])
+    if (test <= TINY) then
+      sim[ind] := vr[id]
+    end if
+  end for
+
+  ! read super block parameters
+  nxsup := i32(supout[0])
+  nysup := i32(supout[1])
+  nzsup := i32(supout[2])
+  xmnsup := supout[3]
+  ymnsup := supout[4]
+  zmnsup := supout[5]
+  xsizsup := supout[6]
+  ysizsup := supout[7]
+  zsizsup := supout[8]
+
+  ! ── 5. main loop over all nodes ──
+  for in_ := 0, nxyz
+    index := i32(order[in_] + 0.5)
+
+    ! skip if already simulated (data node) or flagged
+    if (sim[index] <= UNEST + EPSLON and sim[index] >= 2.0 * UNEST) then
+      ! decompose linear index to ix, iy, iz (0-indexed)
+      iz_g := index / nxy
+      iy_g := (index - iz_g * nxy) / nx
+      ix_g := index - iz_g * nxy - iy_g * nx
+      xx_g := xmn + f64(ix_g) * xsiz
+      yy_g := ymn + f64(iy_g) * ysiz
+      zz_g := zmn + f64(iz_g) * zsiz
+
+      ! search for nearby original data
+      call gslib.srchsupr(xx_g, yy_g, zz_g, radsqd,
+        isrot, rotmat,
+        nsbtosr, ixsbtosr, iysbtosr, izsbtosr,
+        noct, nd,
+        x, y, z, tmp, close,
+        nisb,
+        nxsup, xmnsup, xsizsup,
+        nysup, ymnsup, ysizsup,
+        nzsup, zmnsup, zsizsup,
+        covres,
+        getindxres, inoct, lt, ut)
+      nclose := i32(covres[0])
+
+      if (nclose >= ndmin) then
+        if (nclose > ndmax) then
+          nclose := ndmax
+        end if
+
+        ! search for nearby simulated nodes
+        call gslib.srchnd(ix_g, iy_g, iz_g,
+          sim, nx, ny, nz,
+          xmn, ymn, zmn, xsiz, ysiz, zsiz,
+          nlooku, ixnode, iynode, iznode,
+          nctx, ncty, nctz,
+          nodmax, noct,
+          icnode, cnodex, cnodey, cnodez, cnodev,
+          inoct, covres)
+        ncnode := i32(covres[0])
+
+        ! determine global mean
+        if (ktype == 2) then
+          gmean := lvm[index]
+        else
+          gmean := 0.0
+        end if
+
+        if ((nclose + ncnode) < 1) then
+          cmean := gmean
+          cstdev := 1.0
+        else
+          ! downgrade OK to SK if too few data
+          lktype := ktype
+          if (ktype == 1 and (nclose + ncnode) < 4) then
+            lktype := 0
+          end if
+
+          call gslib.krige(ix_g, iy_g, iz_g, xx_g, yy_g, zz_g,
+            lktype, gmean,
+            nclose, close,
+            nd, x, y, z, vr, sec,
+            ncnode, icnode,
+            cnodex, cnodey, cnodez, cnodev,
+            nctx, ncty, nctz, covtab,
+            ixnode, iynode, iznode,
+            nst, c0, it, cc, aa,
+            irot, rotmat,
+            cbb,
+            nx, ny, nz,
+            lvm, colocorr,
+            a, r, rr, s_,
+            vra, vrea,
+            covres,
+            covres)
+          cmean := covres[0]
+          cstdev := covres[1]
+        end if
+
+        ! draw random value
+        p := gslib.acorni(ixv)
+        ! gauinv uses array output: reuse vra[0] as scratch
+        call gslib.gauinv(p, vra, getindxres)
+        xp_arr := vra[0]
+        sim[index] := xp_arr * cstdev + cmean
+      end if
+    end if
+  end for
+
+  ! ── 6. reassign data to grid nodes ──
+  for id := 0, nd
+    call gslib.getindx(nx, xmn, xsiz, x[id], getindxres)
+    ix_g := getindxres[0]
+    call gslib.getindx(ny, ymn, ysiz, y[id], getindxres)
+    iy_g := getindxres[0]
+    call gslib.getindx(nz, zmn, zsiz, z[id], getindxres)
+    iz_g := getindxres[0]
+    xx_g := xmn + f64(ix_g) * xsiz
+    yy_g := ymn + f64(iy_g) * ysiz
+    zz_g := zmn + f64(iz_g) * zsiz
+    ind := ix_g + iy_g * nx + iz_g * nxy
+    test := abs(xx_g - x[id]) + abs(yy_g - y[id]) + abs(zz_g - z[id])
+    if (test <= TINY) then
+      sim[ind] := vr[id]
+    end if
+  end for
+end
