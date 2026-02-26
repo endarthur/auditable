@@ -1651,7 +1651,11 @@ function codegen(ast, interpValues, userImports) {
         }
         case 'FuncRef': return 'i32';
         case 'Ident': return resolveType(expr.name) || 'f64';
-        case 'BinOp': return inferExprType(expr.left);
+        case 'BinOp': {
+          const op = expr.op;
+          if (op === '==' || op === '/=' || op === '<' || op === '>' || op === '<=' || op === '>=' || op === 'and' || op === 'or') return 'i32';
+          return inferExprType(expr.left);
+        }
         case 'UnaryOp': return inferExprType(expr.operand);
         case 'FuncCall': {
           // type conversions / vector constructors

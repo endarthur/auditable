@@ -1,0 +1,577 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { bundle } from '../ext/atra/atrac.js';
+
+const gslibSource = readFileSync(
+  new URL('../ext/gslib/gslib.atra', import.meta.url), 'utf8'
+);
+
+// ── helpers ──────────────────────────────────────────────────────────
+
+/** Bundle gslib.atra, write to temp file, import, instantiate with shared memory. */
+let _cached = null;
+async function getGslib() {
+  if (_cached) return _cached;
+  const js = bundle(gslibSource, { name: 'gslib' });
+  const tmpPath = join(tmpdir(), `gslib_test_${Date.now()}.js`);
+  writeFileSync(tmpPath, js);
+  try {
+    const mod = await import('file://' + tmpPath.replace(/\\/g, '/'));
+    const memory = new WebAssembly.Memory({ initial: 4 });
+    const lib = mod.instantiate({ memory });
+    _cached = { lib, memory };
+    return _cached;
+  } finally {
+    try { unlinkSync(tmpPath); } catch {}
+  }
+}
+
+/** Write f64 array into memory at byte offset. */
+function writeF64(memory, byteOffset, values) {
+  const f64 = new Float64Array(memory.buffer);
+  const idx = byteOffset / 8;
+  for (let i = 0; i < values.length; i++) f64[idx + i] = values[i];
+}
+
+/** Read f64 array from memory at byte offset. */
+function readF64(memory, byteOffset, count) {
+  const f64 = new Float64Array(memory.buffer);
+  const idx = byteOffset / 8;
+  return Array.from(f64.slice(idx, idx + count));
+}
+
+/** Write i32 array into memory at byte offset. */
+function writeI32(memory, byteOffset, values) {
+  const i32 = new Int32Array(memory.buffer);
+  const idx = byteOffset / 4;
+  for (let i = 0; i < values.length; i++) i32[idx + i] = values[i];
+}
+
+/** Read i32 array from memory at byte offset. */
+function readI32(memory, byteOffset, count) {
+  const i32 = new Int32Array(memory.buffer);
+  const idx = byteOffset / 4;
+  return Array.from(i32.slice(idx, idx + count));
+}
+
+const approx = (actual, expected, tol = 1e-6) =>
+  assert.ok(Math.abs(actual - expected) < tol,
+    `expected ~${expected}, got ${actual} (diff ${Math.abs(actual - expected)})`);
+
+// ═════════════════════════════════════════════════════════════════════
+// acorni
+// ═════════════════════════════════════════════════════════════════════
+
+describe('gslib.acorni', () => {
+  it('produces values in [0, 1)', async () => {
+    const { lib, memory } = await getGslib();
+    // ixv: 13 i32 values at byte 0. ixv[0] = seed, ixv[1..12] = 0
+    const ixvOffset = 0; // bytes
+    writeI32(memory, ixvOffset, [69069, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    for (let i = 0; i < 20; i++) {
+      const r = lib.gslib.acorni(ixvOffset);
+      assert.ok(r >= 0.0 && r < 1.0, `acorni result ${r} not in [0,1)`);
+    }
+  });
+
+  it('produces deterministic sequence from seed 69069', async () => {
+    const { lib, memory } = await getGslib();
+    const ixvOffset = 0;
+    writeI32(memory, ixvOffset, [69069, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+
+    // First call: each ixv[i+1] += ixv[i], cascading from ixv[0]=69069
+    // After first call: ixv = [69069, 69069, 69069, ..., 69069]
+    // result = 69069 / 1073741824
+    const r1 = lib.gslib.acorni(ixvOffset);
+    approx(r1, 69069 / 1073741824, 1e-12);
+
+    // Verify state after first call
+    const state = readI32(memory, ixvOffset, 13);
+    for (let i = 0; i < 13; i++) {
+      assert.equal(state[i], 69069, `ixv[${i}] should be 69069 after first call`);
+    }
+
+    // Second call: ixv[1] += ixv[0] = 138138, ixv[2] += ixv[1] = 207207, etc.
+    // ixv[i+1] = 69069 * (i+2) after second call
+    const r2 = lib.gslib.acorni(ixvOffset);
+    approx(r2, (69069 * 13) / 1073741824, 1e-12);
+  });
+
+  it('different seeds produce different sequences', async () => {
+    const { lib, memory } = await getGslib();
+    const ixvA = 0;
+    const ixvB = 13 * 4; // 52 bytes offset
+
+    writeI32(memory, ixvA, [69069, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    writeI32(memory, ixvB, [12345, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+
+    const a = lib.gslib.acorni(ixvA);
+    const b = lib.gslib.acorni(ixvB);
+    assert.notEqual(a, b);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// gauinv
+// ═════════════════════════════════════════════════════════════════════
+
+describe('gslib.gauinv', () => {
+  // Layout: xp at byte 0 (1 f64 = 8 bytes), ierr at byte 8 (1 i32 = 4 bytes)
+  const XP = 0;
+  const IERR = 8;
+
+  it('gauinv(0.5) = 0.0', async () => {
+    const { lib, memory } = await getGslib();
+    writeF64(memory, XP, [0]);
+    writeI32(memory, IERR, [0]);
+    lib.gslib.gauinv(0.5, XP, IERR);
+    const [xp] = readF64(memory, XP, 1);
+    const [ierr] = readI32(memory, IERR, 1);
+    assert.equal(ierr, 0);
+    approx(xp, 0.0, 1e-10);
+  });
+
+  it('gauinv(0.975) ~ 1.96', async () => {
+    const { lib, memory } = await getGslib();
+    writeF64(memory, XP, [0]);
+    writeI32(memory, IERR, [0]);
+    lib.gslib.gauinv(0.975, XP, IERR);
+    const [xp] = readF64(memory, XP, 1);
+    const [ierr] = readI32(memory, IERR, 1);
+    assert.equal(ierr, 0);
+    approx(xp, 1.96, 0.005); // rational approximation, not exact
+  });
+
+  it('gauinv(0.025) ~ -1.96', async () => {
+    const { lib, memory } = await getGslib();
+    writeF64(memory, XP, [0]);
+    writeI32(memory, IERR, [0]);
+    lib.gslib.gauinv(0.025, XP, IERR);
+    const [xp] = readF64(memory, XP, 1);
+    const [ierr] = readI32(memory, IERR, 1);
+    assert.equal(ierr, 0);
+    approx(xp, -1.96, 0.005);
+  });
+
+  it('out-of-range p returns ierr=1', async () => {
+    const { lib, memory } = await getGslib();
+
+    // p too small
+    writeF64(memory, XP, [0]);
+    writeI32(memory, IERR, [0]);
+    lib.gslib.gauinv(0.0, XP, IERR);
+    assert.equal(readI32(memory, IERR, 1)[0], 1);
+    assert.equal(readF64(memory, XP, 1)[0], -1e10);
+
+    // p too large
+    writeF64(memory, XP, [0]);
+    writeI32(memory, IERR, [0]);
+    lib.gslib.gauinv(1.0, XP, IERR);
+    assert.equal(readI32(memory, IERR, 1)[0], 1);
+    assert.equal(readF64(memory, XP, 1)[0], 1e10);
+  });
+
+  it('symmetry: gauinv(p) = -gauinv(1-p)', async () => {
+    const { lib, memory } = await getGslib();
+    for (const p of [0.1, 0.25, 0.4]) {
+      writeF64(memory, XP, [0]);
+      writeI32(memory, IERR, [0]);
+      lib.gslib.gauinv(p, XP, IERR);
+      const low = readF64(memory, XP, 1)[0];
+
+      writeF64(memory, XP, [0]);
+      writeI32(memory, IERR, [0]);
+      lib.gslib.gauinv(1.0 - p, XP, IERR);
+      const high = readF64(memory, XP, 1)[0];
+
+      approx(low + high, 0.0, 1e-6);
+    }
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// gcum
+// ═════════════════════════════════════════════════════════════════════
+
+describe('gslib.gcum', () => {
+  it('gcum(0) = 0.5', async () => {
+    const { lib } = await getGslib();
+    approx(lib.gslib.gcum(0.0), 0.5, 1e-6);
+  });
+
+  it('gcum(-6.1) ~ 0', async () => {
+    const { lib } = await getGslib();
+    approx(lib.gslib.gcum(-6.1), 0.0, 1e-6);
+  });
+
+  it('gcum(6.1) ~ 1', async () => {
+    const { lib } = await getGslib();
+    approx(lib.gslib.gcum(6.1), 1.0, 1e-6);
+  });
+
+  it('symmetry: gcum(x) + gcum(-x) ~ 1', async () => {
+    const { lib } = await getGslib();
+    for (const x of [0.5, 1.0, 1.96, 2.5, 3.0]) {
+      approx(lib.gslib.gcum(x) + lib.gslib.gcum(-x), 1.0, 1e-5);
+    }
+  });
+
+  it('known values', async () => {
+    const { lib } = await getGslib();
+    approx(lib.gslib.gcum(1.0), 0.8413, 0.001);
+    approx(lib.gslib.gcum(-1.0), 0.1587, 0.001);
+    approx(lib.gslib.gcum(1.96), 0.975, 0.001);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// powint
+// ═════════════════════════════════════════════════════════════════════
+
+describe('gslib.powint', () => {
+  it('linear interpolation (pow=1)', async () => {
+    const { lib } = await getGslib();
+    approx(lib.gslib.powint(0, 10, 0, 100, 5, 1), 50, 1e-10);
+    approx(lib.gslib.powint(0, 10, 0, 100, 0, 1), 0, 1e-10);
+    approx(lib.gslib.powint(0, 10, 0, 100, 10, 1), 100, 1e-10);
+  });
+
+  it('power interpolation (pow=2)', async () => {
+    const { lib } = await getGslib();
+    // At midpoint: ((5-0)/(10-0))^2 = 0.25
+    approx(lib.gslib.powint(0, 10, 0, 100, 5, 2), 25, 1e-10);
+  });
+
+  it('degenerate interval returns average', async () => {
+    const { lib } = await getGslib();
+    approx(lib.gslib.powint(5, 5, 10, 20, 5, 1), 15, 1e-10);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// locate
+// ═════════════════════════════════════════════════════════════════════
+
+describe('gslib.locate', () => {
+  // sorted array: [1, 3, 5, 7, 9]  (5 elements)
+  // NOTE: locate uses 1-indexed Fortran convention (is, ie are 1-indexed)
+  // xx array at byte 0 (5 f64 = 40 bytes), j result at byte 40
+
+  it('finds correct interval in ascending array', async () => {
+    const { lib, memory } = await getGslib();
+    const xxOffset = 0;
+    const jOffset = 40;
+    writeF64(memory, xxOffset, [1, 3, 5, 7, 9]);
+
+    // x=4 should be between xx[2]=3 and xx[3]=5, so j=2 (1-indexed)
+    writeI32(memory, jOffset, [0]);
+    lib.gslib.locate(xxOffset, 5, 1, 5, 4.0, jOffset);
+    assert.equal(readI32(memory, jOffset, 1)[0], 2);
+  });
+
+  it('x beyond upper bound returns ie', async () => {
+    const { lib, memory } = await getGslib();
+    const xxOffset = 0;
+    const jOffset = 40;
+    writeF64(memory, xxOffset, [1, 3, 5, 7, 9]);
+
+    writeI32(memory, jOffset, [0]);
+    lib.gslib.locate(xxOffset, 5, 1, 5, 10.0, jOffset);
+    assert.equal(readI32(memory, jOffset, 1)[0], 5);
+  });
+
+  it('x below lower bound returns is-1', async () => {
+    const { lib, memory } = await getGslib();
+    const xxOffset = 0;
+    const jOffset = 40;
+    writeF64(memory, xxOffset, [1, 3, 5, 7, 9]);
+
+    writeI32(memory, jOffset, [0]);
+    lib.gslib.locate(xxOffset, 5, 1, 5, 0.0, jOffset);
+    assert.equal(readI32(memory, jOffset, 1)[0], 0);
+  });
+
+  it('x at exact array value', async () => {
+    const { lib, memory } = await getGslib();
+    const xxOffset = 0;
+    const jOffset = 40;
+    writeF64(memory, xxOffset, [1, 3, 5, 7, 9]);
+
+    writeI32(memory, jOffset, [0]);
+    lib.gslib.locate(xxOffset, 5, 1, 5, 5.0, jOffset);
+    const j = readI32(memory, jOffset, 1)[0];
+    // x=5 equals xx[3], should return j=3 (between xx[3] and xx[4])
+    assert.ok(j >= 2 && j <= 3, `j=${j} for x=5`);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// getindx
+// ═════════════════════════════════════════════════════════════════════
+
+describe('gslib.getindx', () => {
+  // idx[0]=index, idx[1]=inflag at some byte offset
+  const IDX = 0;
+
+  it('in-grid location', async () => {
+    const { lib, memory } = await getGslib();
+    // 10 cells, origin at 0.5, cell size 1.0, query at 3.5 → index 3
+    writeI32(memory, IDX, [0, 0]);
+    lib.gslib.getindx(10, 0.5, 1.0, 3.5, IDX);
+    const [index, inflag] = readI32(memory, IDX, 2);
+    assert.equal(index, 3);
+    assert.equal(inflag, 1);
+  });
+
+  it('at first cell center', async () => {
+    const { lib, memory } = await getGslib();
+    writeI32(memory, IDX, [0, 0]);
+    lib.gslib.getindx(10, 0.5, 1.0, 0.5, IDX);
+    const [index, inflag] = readI32(memory, IDX, 2);
+    assert.equal(index, 0);
+    assert.equal(inflag, 1);
+  });
+
+  it('below grid clamps to 0 with inflag=0', async () => {
+    const { lib, memory } = await getGslib();
+    writeI32(memory, IDX, [0, 0]);
+    lib.gslib.getindx(10, 0.5, 1.0, -5.0, IDX);
+    const [index, inflag] = readI32(memory, IDX, 2);
+    assert.equal(index, 0);
+    assert.equal(inflag, 0);
+  });
+
+  it('above grid clamps to n-1 with inflag=0', async () => {
+    const { lib, memory } = await getGslib();
+    writeI32(memory, IDX, [0, 0]);
+    lib.gslib.getindx(10, 0.5, 1.0, 50.0, IDX);
+    const [index, inflag] = readI32(memory, IDX, 2);
+    assert.equal(index, 9);
+    assert.equal(inflag, 0);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// setrot
+// ═════════════════════════════════════════════════════════════════════
+
+describe('gslib.setrot', () => {
+  // rotmat: 9 f64 values per matrix, at byte offset ind*9*8
+  const ROTMAT = 0;
+
+  it('identity-like matrix for angles (0,0,0) and anis (1,1)', async () => {
+    const { lib, memory } = await getGslib();
+    writeF64(memory, ROTMAT, new Array(9).fill(0));
+    lib.gslib.setrot(0, 0, 0, 1, 1, 0, ROTMAT);
+    const m = readF64(memory, ROTMAT, 9);
+
+    // ang1=0 (north), ang2=0, ang3=0, isotropic
+    // alpha = 90° → cosa≈0, sina=1
+    // beta = 0 → cosb=1, sinb=0
+    // theta = 0 → cost=1, sint=0
+    // Row 0: [cosb*cosa, cosb*sina, -sinb] ≈ [0, 1, 0]
+    // Row 1: [-cost*sina + sint*sinb*cosa, cost*cosa + sint*sinb*sina, sint*cosb] ≈ [-1, 0, 0]
+    // Row 2: [sint*sina + cost*sinb*cosa, -sint*cosa + cost*sinb*sina, cost*cosb] ≈ [0, 0, 1]
+    approx(m[0], 0, 1e-9);
+    approx(m[1], 1, 1e-9);
+    approx(m[2], 0, 1e-9);
+    approx(m[3], -1, 1e-9);
+    approx(m[4], 0, 1e-9);
+    approx(m[5], 0, 1e-9);
+    approx(m[6], 0, 1e-9);
+    approx(m[7], 0, 1e-9);
+    approx(m[8], 1, 1e-9);
+  });
+
+  it('orthogonality: R^T R ~ I (isotropic case)', async () => {
+    const { lib, memory } = await getGslib();
+    writeF64(memory, ROTMAT, new Array(9).fill(0));
+    lib.gslib.setrot(45, 30, 15, 1, 1, 0, ROTMAT);
+    const m = readF64(memory, ROTMAT, 9);
+
+    // R^T R should be identity for isotropic case
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 3; j++) {
+        let dot = 0;
+        for (let k = 0; k < 3; k++) dot += m[k * 3 + i] * m[k * 3 + j];
+        approx(dot, i === j ? 1 : 0, 1e-10);
+      }
+    }
+  });
+
+  it('anisotropy scales rows 2 and 3', async () => {
+    const { lib, memory } = await getGslib();
+    writeF64(memory, ROTMAT, new Array(9).fill(0));
+    // anis1=0.5 → afac1=2, anis2=0.25 → afac2=4
+    lib.gslib.setrot(0, 0, 0, 0.5, 0.25, 0, ROTMAT);
+    const m = readF64(memory, ROTMAT, 9);
+
+    // Row 0 unchanged: [0, 1, 0]
+    approx(m[0], 0, 1e-9);
+    approx(m[1], 1, 1e-9);
+    // Row 1 scaled by 2: [-2, 0, 0]
+    approx(m[3], -2, 1e-9);
+    approx(m[4], 0, 1e-9);
+    // Row 2 scaled by 4: [0, 0, 4]
+    approx(m[8], 4, 1e-9);
+  });
+
+  it('stores at correct index offset', async () => {
+    const { lib, memory } = await getGslib();
+    // Write matrix at index 2 (byte offset 2*9*8 = 144)
+    writeF64(memory, 0, new Array(27).fill(0));
+    lib.gslib.setrot(0, 0, 0, 1, 1, 2, ROTMAT);
+
+    // Index 0 should still be zeros
+    const m0 = readF64(memory, 0, 9);
+    for (const v of m0) assert.equal(v, 0);
+
+    // Index 2 should have the rotation matrix
+    const m2 = readF64(memory, 144, 9);
+    approx(m2[1], 1, 1e-10); // cosb*sina = 1 for azimuth 0
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// sqdist
+// ═════════════════════════════════════════════════════════════════════
+
+describe('gslib.sqdist', () => {
+  it('isotropic case = Euclidean distance squared', async () => {
+    const { lib, memory } = await getGslib();
+    // Set up identity rotation matrix at index 0
+    const ROTMAT = 0;
+    writeF64(memory, ROTMAT, [1, 0, 0, 0, 1, 0, 0, 0, 1]);
+
+    const d = lib.gslib.sqdist(1, 2, 3, 4, 5, 6, 0, ROTMAT);
+    // (4-1)^2 + (5-2)^2 + (6-3)^2 = 9 + 9 + 9 = 27
+    approx(d, 27, 1e-10);
+  });
+
+  it('zero distance', async () => {
+    const { lib, memory } = await getGslib();
+    const ROTMAT = 0;
+    writeF64(memory, ROTMAT, [1, 0, 0, 0, 1, 0, 0, 0, 1]);
+    approx(lib.gslib.sqdist(5, 5, 5, 5, 5, 5, 0, ROTMAT), 0, 1e-20);
+  });
+
+  it('anisotropic case with known ratio', async () => {
+    const { lib, memory } = await getGslib();
+    // Use setrot to build a rotation matrix with anisotropy
+    const ROTMAT = 0;
+    writeF64(memory, ROTMAT, new Array(9).fill(0));
+    // No rotation, anis1=0.5 (afac1=2), anis2=1
+    lib.gslib.setrot(0, 0, 0, 0.5, 1, 0, ROTMAT);
+
+    // Points differ only along x-axis (but in GSLIB, azimuth 0 = north = y-axis)
+    // With azimuth 0: row0=[0,1,0], row1=[-2,0,0], row2=[0,0,1]
+    // dx=1, dy=0, dz=0 → cont0 = 0*1=0, cont1 = -2*1=-2, cont2 = 0
+    // sqdist = 0 + 4 + 0 = 4
+    const d = lib.gslib.sqdist(1, 0, 0, 0, 0, 0, 0, ROTMAT);
+    approx(d, 4, 1e-10);
+
+    // Points differ only along y-axis
+    // dx=0, dy=1, dz=0 → cont0 = 1*1=1, cont1 = 0, cont2 = 0
+    // sqdist = 1
+    const d2 = lib.gslib.sqdist(0, 1, 0, 0, 0, 0, 0, ROTMAT);
+    approx(d2, 1, 1e-10);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// cova3
+// ═════════════════════════════════════════════════════════════════════
+
+describe('gslib.cova3', () => {
+  // Memory layout for cova3 tests:
+  // rotmat at byte 0       (9 f64 = 72 bytes)
+  // it at byte 128         (4 i32 = 16 bytes)
+  // cc at byte 160         (4 f64 = 32 bytes)
+  // aa at byte 192         (4 f64 = 32 bytes)
+  // result at byte 224     (2 f64 = 16 bytes)
+  const ROTMAT = 0;
+  const IT = 128;
+  const CC = 160;
+  const AA = 192;
+  const RESULT = 224;
+
+  /** Set up identity rotation matrix and model parameters */
+  async function setupCova(opts) {
+    const { lib, memory } = await getGslib();
+    // Identity rotation at index 0
+    writeF64(memory, ROTMAT, [1, 0, 0, 0, 1, 0, 0, 0, 1]);
+    writeI32(memory, IT, opts.it || [1]);
+    writeF64(memory, CC, opts.cc || [1.0]);
+    writeF64(memory, AA, opts.aa || [10.0]);
+    writeF64(memory, RESULT, [0, 0]);
+    return { lib, memory };
+  }
+
+  it('zero distance returns cmax', async () => {
+    const { lib, memory } = await setupCova({ it: [1], cc: [1.0], aa: [10.0] });
+    // nugget=0.5, spherical sill=1.0 → cmax = 1.5
+    lib.gslib.cova3(0, 0, 0, 0, 0, 0, 1, 0.5, IT, CC, AA, 0, ROTMAT, RESULT);
+    const [cmax, cova] = readF64(memory, RESULT, 2);
+    approx(cmax, 1.5, 1e-10);
+    approx(cova, 1.5, 1e-10);
+  });
+
+  it('spherical model at known lag', async () => {
+    const { lib, memory } = await setupCova({ it: [1], cc: [1.0], aa: [10.0] });
+    // c0=0, spherical, cc=1, aa=10
+    // At h=5: hr=0.5, cov = 1*(1 - 0.5*(1.5 - 0.5*0.125)) = 1*(1-0.5*1.4375) = 1-0.71875 = 0.28125
+    lib.gslib.cova3(0, 0, 0, 5, 0, 0, 1, 0.0, IT, CC, AA, 0, ROTMAT, RESULT);
+    const [cmax, cova] = readF64(memory, RESULT, 2);
+    approx(cmax, 1.0, 1e-10);
+    const hr = 0.5;
+    const expected = 1.0 * (1.0 - hr * (1.5 - 0.5 * hr * hr));
+    approx(cova, expected, 1e-6);
+  });
+
+  it('spherical model beyond range returns 0', async () => {
+    const { lib, memory } = await setupCova({ it: [1], cc: [1.0], aa: [10.0] });
+    // h=15 > aa=10 → spherical contributes 0
+    lib.gslib.cova3(0, 0, 0, 15, 0, 0, 1, 0.0, IT, CC, AA, 0, ROTMAT, RESULT);
+    const [, cova] = readF64(memory, RESULT, 2);
+    approx(cova, 0.0, 1e-10);
+  });
+
+  it('exponential model', async () => {
+    const { lib, memory } = await setupCova({ it: [2], cc: [1.0], aa: [10.0] });
+    // c0=0, exponential, cc=1, aa=10
+    // At h=5: cov = exp(-3*5/10) = exp(-1.5)
+    lib.gslib.cova3(0, 0, 0, 5, 0, 0, 1, 0.0, IT, CC, AA, 0, ROTMAT, RESULT);
+    const [, cova] = readF64(memory, RESULT, 2);
+    approx(cova, Math.exp(-1.5), 1e-6);
+  });
+
+  it('Gaussian model', async () => {
+    const { lib, memory } = await setupCova({ it: [3], cc: [1.0], aa: [10.0] });
+    // c0=0, Gaussian, cc=1, aa=10
+    // At h=5: cov = exp(-3*(5/10)^2) = exp(-0.75)
+    lib.gslib.cova3(0, 0, 0, 5, 0, 0, 1, 0.0, IT, CC, AA, 0, ROTMAT, RESULT);
+    const [, cova] = readF64(memory, RESULT, 2);
+    approx(cova, Math.exp(-0.75), 1e-6);
+  });
+
+  it('nugget-only model', async () => {
+    const { lib, memory } = await getGslib();
+    // 0 nested structures, nugget c0=5
+    writeF64(memory, ROTMAT, [1, 0, 0, 0, 1, 0, 0, 0, 1]);
+    writeF64(memory, RESULT, [0, 0]);
+    // Zero distance → cmax
+    lib.gslib.cova3(0, 0, 0, 0, 0, 0, 0, 5.0, IT, CC, AA, 0, ROTMAT, RESULT);
+    const [cmax, cova] = readF64(memory, RESULT, 2);
+    approx(cmax, 5.0, 1e-10);
+    approx(cova, 5.0, 1e-10);
+
+    // Non-zero distance → nugget only = 0 (discontinuous at origin)
+    lib.gslib.cova3(0, 0, 0, 1, 0, 0, 0, 5.0, IT, CC, AA, 0, ROTMAT, RESULT);
+    const [cmax2, cova2] = readF64(memory, RESULT, 2);
+    approx(cmax2, 5.0, 1e-10);
+    approx(cova2, 0.0, 1e-10);
+  });
+});
