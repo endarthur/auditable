@@ -2052,3 +2052,664 @@ describe('gslib.kt3d', () => {
     }
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════
+// ctable
+// ═════════════════════════════════════════════════════════════════════
+
+describe('gslib.ctable', () => {
+  // Memory layout — page 16+ (131072+) to avoid all previous test regions
+  const BASE = 131072;
+  const align8 = (x) => (x + 7) & ~7;
+  const NCTX = 5, NCTY = 5, NCTZ = 0;
+  const MAXCTX = 2 * NCTX + 1;
+  const MAXCTY = 2 * NCTY + 1;
+  const MAXCTZ = 2 * NCTZ + 1;
+  const COVTAB_SIZE = MAXCTX * MAXCTY * MAXCTZ;
+  const MAX_LOOKU = COVTAB_SIZE;
+
+  // Variogram
+  const IT     = BASE;                          // 4 i32 = 16
+  const CC     = BASE + 16;                     // 4 f64 = 32
+  const AA     = BASE + 48;                     // 4 f64 = 32
+  const ROTMAT = BASE + 80;                     // 18 f64 = 144 (2 rotmats)
+  // covtab
+  const COVTAB = BASE + 224;                    // COVTAB_SIZE f64
+  const COVRES = COVTAB + COVTAB_SIZE * 8;      // 2 f64 = 16
+  // Spiral arrays
+  const TMP    = COVRES + 16;
+  const ORDER  = TMP + MAX_LOOKU * 8;
+  const IXNODE = ORDER + MAX_LOOKU * 8;         // i32
+  const IYNODE = align8(IXNODE + MAX_LOOKU * 4);
+  const IZNODE = align8(IYNODE + MAX_LOOKU * 4);
+  // sortem scratch
+  const LT     = align8(IZNODE + MAX_LOOKU * 4); // 64 i32
+  const UT     = LT + 256;
+  const RESULT = UT + 256;
+
+  it('cbb equals C(0,0,0)', async () => {
+    const { lib, memory } = await getGslib();
+    writeI32(memory, IT, [1]);           // spherical
+    writeF64(memory, CC, [1.0]);
+    writeF64(memory, AA, [10.0]);
+    lib.gslib.setrot(0, 0, 0, 1, 1, 0, ROTMAT);
+    lib.gslib.setrot(0, 0, 0, 1, 1, 1, ROTMAT);
+
+    const radsqd = 100.0; // radius=10
+    lib.gslib.ctable(
+      1, 0.0, IT, CC, AA,
+      0, 1, ROTMAT,
+      radsqd,
+      11, 11, 1, 1.0, 1.0, 1.0,
+      NCTX, NCTY, NCTZ,
+      COVTAB, COVRES,
+      TMP, ORDER,
+      IXNODE, IYNODE, IZNODE,
+      LT, UT, RESULT
+    );
+
+    const res = readF64(memory, RESULT, 2);
+    const nlooku = res[0];
+    const cbb = res[1];
+
+    // cbb should be sill = c0 + cc = 0 + 1 = 1
+    approx(cbb, 1.0, 1e-6);
+    assert.ok(nlooku > 0, `nlooku should be > 0, got ${nlooku}`);
+  });
+
+  it('covtab symmetry: covtab[+dx] = covtab[-dx]', async () => {
+    const { lib, memory } = await getGslib();
+    writeI32(memory, IT, [1]);
+    writeF64(memory, CC, [1.0]);
+    writeF64(memory, AA, [10.0]);
+    lib.gslib.setrot(0, 0, 0, 1, 1, 0, ROTMAT);
+    lib.gslib.setrot(0, 0, 0, 1, 1, 1, ROTMAT);
+
+    lib.gslib.ctable(
+      1, 0.0, IT, CC, AA,
+      0, 1, ROTMAT,
+      100.0,
+      11, 11, 1, 1.0, 1.0, 1.0,
+      NCTX, NCTY, NCTZ,
+      COVTAB, COVRES,
+      TMP, ORDER,
+      IXNODE, IYNODE, IZNODE,
+      LT, UT, RESULT
+    );
+
+    const covtab = readF64(memory, COVTAB, COVTAB_SIZE);
+    // check covtab[nctx+dx, ncty, nctz] == covtab[nctx-dx, ncty, nctz]
+    for (let dx = 1; dx <= NCTX; dx++) {
+      const pos = NCTZ * MAXCTY * MAXCTX + NCTY * MAXCTX + (NCTX + dx);
+      const neg = NCTZ * MAXCTY * MAXCTX + NCTY * MAXCTX + (NCTX - dx);
+      approx(covtab[pos], covtab[neg], 1e-10);
+    }
+  });
+
+  it('spiral order: first entry is origin (highest covariance)', async () => {
+    const { lib, memory } = await getGslib();
+    writeI32(memory, IT, [1]);
+    writeF64(memory, CC, [1.0]);
+    writeF64(memory, AA, [10.0]);
+    lib.gslib.setrot(0, 0, 0, 1, 1, 0, ROTMAT);
+    lib.gslib.setrot(0, 0, 0, 1, 1, 1, ROTMAT);
+
+    lib.gslib.ctable(
+      1, 0.0, IT, CC, AA,
+      0, 1, ROTMAT,
+      100.0,
+      11, 11, 1, 1.0, 1.0, 1.0,
+      NCTX, NCTY, NCTZ,
+      COVTAB, COVRES,
+      TMP, ORDER,
+      IXNODE, IYNODE, IZNODE,
+      LT, UT, RESULT
+    );
+
+    const nlooku = readF64(memory, RESULT, 1)[0];
+    assert.ok(nlooku >= 1);
+
+    // First entry should be the center (nctx+1, ncty+1, nctz+1)
+    const ix0 = readI32(memory, IXNODE, 1)[0];
+    const iy0 = readI32(memory, IYNODE, 1)[0];
+    const iz0 = readI32(memory, IZNODE, 1)[0];
+    assert.equal(ix0, NCTX + 1, `first ix should be center (${NCTX + 1}), got ${ix0}`);
+    assert.equal(iy0, NCTY + 1, `first iy should be center (${NCTY + 1}), got ${iy0}`);
+    assert.equal(iz0, NCTZ + 1, `first iz should be center (${NCTZ + 1}), got ${iz0}`);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// srchnd
+// ═════════════════════════════════════════════════════════════════════
+
+describe('gslib.srchnd', () => {
+  // Memory layout — page 20+ (163840+)
+  const BASE = 163840;
+  const NX = 5, NY = 5, NZ = 1;
+  const NXYZ = NX * NY * NZ;
+  const NCTX = 2, NCTY = 2, NCTZ = 0;
+  const MAX_LOOKU = 100;
+
+  const SIM    = BASE;                          // 25 f64 = 200
+  const IXNODE = BASE + 200;                    // 100 i32 = 400
+  const IYNODE = IXNODE + 400;
+  const IZNODE = IYNODE + 400;
+  const ICNODE = IZNODE + 400;                  // 20 i32
+  const CNODEX = ICNODE + 80;                   // 20 f64
+  const CNODEY = CNODEX + 160;
+  const CNODEZ = CNODEY + 160;
+  const CNODEV = CNODEZ + 160;
+  const INOCT  = CNODEV + 160;                  // 8 i32
+  const RESULT = INOCT + 32;                    // 2 f64
+
+  it('empty grid returns ncnode=0', async () => {
+    const { lib, memory } = await getGslib();
+    const UNEST = -99.0;
+
+    // Fill sim with UNEST
+    const simArr = new Array(NXYZ).fill(UNEST);
+    writeF64(memory, SIM, simArr);
+
+    // Dummy spiral: just need a few entries around center
+    // ixnode/iynode/iznode: 1-indexed table positions
+    // entry 0 = origin (nctx+1, ncty+1, nctz+1)
+    // entry 1 = (nctx+2, ncty+1, nctz+1) = offset (+1, 0, 0)
+    writeI32(memory, IXNODE, [NCTX + 1, NCTX + 2, NCTX, NCTX + 1, NCTX + 1]);
+    writeI32(memory, IYNODE, [NCTY + 1, NCTY + 1, NCTY + 1, NCTY + 2, NCTY]);
+    writeI32(memory, IZNODE, [NCTZ + 1, NCTZ + 1, NCTZ + 1, NCTZ + 1, NCTZ + 1]);
+
+    lib.gslib.srchnd(
+      2, 2, 0,
+      SIM, NX, NY, NZ,
+      0.5, 0.5, 0.5, 1.0, 1.0, 1.0,
+      5, IXNODE, IYNODE, IZNODE,
+      NCTX, NCTY, NCTZ,
+      10, 0,
+      ICNODE, CNODEX, CNODEY, CNODEZ, CNODEV,
+      INOCT, RESULT
+    );
+
+    const ncnode = readF64(memory, RESULT, 1)[0];
+    assert.equal(ncnode, 0, 'empty grid should have 0 simulated neighbors');
+  });
+
+  it('finds simulated neighbor with correct coords/value', async () => {
+    const { lib, memory } = await getGslib();
+    const UNEST = -99.0;
+
+    // Place one simulated value at node (3, 2, 0)
+    const simArr = new Array(NXYZ).fill(UNEST);
+    simArr[3 + 2 * NX] = 1.5;  // node (3, 2, 0)
+    writeF64(memory, SIM, simArr);
+
+    // Spiral entries (1-indexed): origin + 4 neighbors
+    writeI32(memory, IXNODE, [NCTX + 1, NCTX + 2, NCTX, NCTX + 1, NCTX + 1]);
+    writeI32(memory, IYNODE, [NCTY + 1, NCTY + 1, NCTY + 1, NCTY + 2, NCTY]);
+    writeI32(memory, IZNODE, [NCTZ + 1, NCTZ + 1, NCTZ + 1, NCTZ + 1, NCTZ + 1]);
+
+    // Search from node (2, 2, 0) — node (3,2,0) is at offset (+1,0,0)
+    lib.gslib.srchnd(
+      2, 2, 0,
+      SIM, NX, NY, NZ,
+      0.5, 0.5, 0.5, 1.0, 1.0, 1.0,
+      5, IXNODE, IYNODE, IZNODE,
+      NCTX, NCTY, NCTZ,
+      10, 0,
+      ICNODE, CNODEX, CNODEY, CNODEZ, CNODEV,
+      INOCT, RESULT
+    );
+
+    const ncnode = readF64(memory, RESULT, 1)[0];
+    assert.equal(ncnode, 1, 'should find 1 simulated neighbor');
+
+    const cv = readF64(memory, CNODEV, 1)[0];
+    approx(cv, 1.5, 1e-10);
+
+    const cx = readF64(memory, CNODEX, 1)[0];
+    approx(cx, 0.5 + 3 * 1.0, 1e-10);
+  });
+
+  it('respects nodmax', async () => {
+    const { lib, memory } = await getGslib();
+    const UNEST = -99.0;
+
+    // Fill all nodes except center with simulated values
+    const simArr = new Array(NXYZ).fill(2.0);
+    simArr[2 + 2 * NX] = UNEST;  // center unsimulated
+    writeF64(memory, SIM, simArr);
+
+    // 4 spiral entries (neighbors)
+    writeI32(memory, IXNODE, [NCTX + 1, NCTX + 2, NCTX, NCTX + 1, NCTX + 1]);
+    writeI32(memory, IYNODE, [NCTY + 1, NCTY + 1, NCTY + 1, NCTY + 2, NCTY]);
+    writeI32(memory, IZNODE, [NCTZ + 1, NCTZ + 1, NCTZ + 1, NCTZ + 1, NCTZ + 1]);
+
+    // nodmax=2: should find at most 2
+    lib.gslib.srchnd(
+      2, 2, 0,
+      SIM, NX, NY, NZ,
+      0.5, 0.5, 0.5, 1.0, 1.0, 1.0,
+      5, IXNODE, IYNODE, IZNODE,
+      NCTX, NCTY, NCTZ,
+      2, 0,
+      ICNODE, CNODEX, CNODEY, CNODEZ, CNODEV,
+      INOCT, RESULT
+    );
+
+    const ncnode = readF64(memory, RESULT, 1)[0];
+    assert.equal(ncnode, 2, 'should respect nodmax=2');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// krige (sgsim variant)
+// ═════════════════════════════════════════════════════════════════════
+
+describe('gslib.krige (sgsim)', () => {
+  // Memory layout — page 24+ (196608+), all offsets 8-byte aligned
+  const BASE = 196608;
+  const NDMAX = 10;
+  const NEQ_MAX = NDMAX + 2; // na + OK + ED at most
+  const align8 = (x) => (x + 7) & ~7;
+
+  // Data arrays
+  const X     = BASE;                          // 20 f64 = 160
+  const Y     = BASE + 160;
+  const Z     = BASE + 320;
+  const VR    = BASE + 480;
+  const SEC   = BASE + 640;
+  // Variogram
+  const IT    = BASE + 800;                    // 4 i32 = 16
+  const CC    = BASE + 816;                    // 4 f64 = 32
+  const AA    = BASE + 848;                    // 4 f64 = 32
+  const ROTMAT = BASE + 880;                   // 18 f64 = 144
+  // covtab (11*11*1 = 121 f64 = 968)
+  const NCTX = 5, NCTY = 5, NCTZ = 0;
+  const COVTAB = BASE + 1024;                  // 121 f64 = 968
+  // Search spiral (121 i32 = 484, round up to 488 for alignment)
+  const IXNODE = COVTAB + 968;
+  const IYNODE = align8(IXNODE + 484);
+  const IZNODE = align8(IYNODE + 484);
+  // Simulated node arrays
+  const ICNODE = align8(IZNODE + 484);          // 20 i32 = 80
+  const CNODEX = align8(ICNODE + 80);           // 20 f64 = 160
+  const CNODEY = CNODEX + 160;
+  const CNODEZ = CNODEY + 160;
+  const CNODEV = CNODEZ + 160;
+  // LVM
+  const LVM   = CNODEV + 160;                 // 100 f64 = 800
+  // Scratch
+  const A     = LVM + 800;
+  const aBytes = align8(NEQ_MAX * (NEQ_MAX + 1) / 2 * 8);
+  const R     = A + aBytes;
+  const RR    = R + NEQ_MAX * 8;
+  const S_    = RR + NEQ_MAX * 8;
+  const VRA   = S_ + NEQ_MAX * 8;
+  const VREA  = VRA + NEQ_MAX * 8;
+  const COVRES = VREA + NEQ_MAX * 8;           // 2 f64
+  const RESULT = COVRES + 16;                  // 2 f64
+  // Close array
+  const CLOSE = RESULT + 16;                   // 20 f64
+
+  it('SK with 1 datum: verifies cmean and cstdev', async () => {
+    const { lib, memory } = await getGslib();
+
+    // 1 data point at (5, 5, 0.5), value=2.0
+    writeF64(memory, X, [5.0]);
+    writeF64(memory, Y, [5.0]);
+    writeF64(memory, Z, [0.5]);
+    writeF64(memory, VR, [2.0]);
+    writeF64(memory, SEC, [0.0]);
+    writeF64(memory, CLOSE, [0.0]); // index 0
+
+    writeI32(memory, IT, [1]);
+    writeF64(memory, CC, [1.0]);
+    writeF64(memory, AA, [10.0]);
+    lib.gslib.setrot(0, 0, 0, 1, 1, 0, ROTMAT);
+
+    // Initialize LVM to 0
+    writeF64(memory, LVM, new Array(25).fill(0.0));
+
+    // SK (ktype=0), gmean=0
+    lib.gslib.krige(
+      0, 0, 0,  0.5, 0.5, 0.5,
+      0, 0.0,
+      1, CLOSE,
+      1, X, Y, Z, VR, SEC,
+      0, ICNODE,
+      CNODEX, CNODEY, CNODEZ, CNODEV,
+      NCTX, NCTY, NCTZ, COVTAB,
+      IXNODE, IYNODE, IZNODE,
+      1, 0.0, IT, CC, AA,
+      0, ROTMAT,
+      1.0,
+      5, 5, 1,
+      LVM, 0.0,
+      A, R, RR, S_,
+      VRA, VREA,
+      COVRES,
+      RESULT
+    );
+
+    const res = readF64(memory, RESULT, 2);
+    const cmean = res[0];
+    const cstdev = res[1];
+
+    // SK with 1 datum: cmean = w * vr + (1-w)*gmean
+    // At datum location: weight should be high, cmean close to 2.0
+    // cstdev should be < 1.0 (less than unconditional)
+    assert.ok(Math.abs(cmean) <= 5.0, `cmean=${cmean} should be reasonable`);
+    assert.ok(cstdev >= 0 && cstdev <= 1.0, `cstdev=${cstdev} should be in [0,1]`);
+  });
+
+  it('singular fallback: cmean=gmean, cstdev=1', async () => {
+    const { lib, memory } = await getGslib();
+
+    // Set up a scenario that produces singular matrix
+    // 2 coincident data points
+    writeF64(memory, X, [5.0, 5.0]);
+    writeF64(memory, Y, [5.0, 5.0]);
+    writeF64(memory, Z, [0.5, 0.5]);
+    writeF64(memory, VR, [2.0, 3.0]);
+    writeF64(memory, SEC, [0.0, 0.0]);
+    writeF64(memory, CLOSE, [0.0, 1.0]);
+
+    writeI32(memory, IT, [1]);
+    writeF64(memory, CC, [1.0]);
+    writeF64(memory, AA, [10.0]);
+    lib.gslib.setrot(0, 0, 0, 1, 1, 0, ROTMAT);
+    writeF64(memory, LVM, new Array(25).fill(0.0));
+
+    // OK (ktype=1), gmean=5.0
+    lib.gslib.krige(
+      2, 2, 0,  2.5, 2.5, 0.5,
+      1, 5.0,
+      2, CLOSE,
+      2, X, Y, Z, VR, SEC,
+      0, ICNODE,
+      CNODEX, CNODEY, CNODEZ, CNODEV,
+      NCTX, NCTY, NCTZ, COVTAB,
+      IXNODE, IYNODE, IZNODE,
+      1, 0.0, IT, CC, AA,
+      0, ROTMAT,
+      1.0,
+      5, 5, 1,
+      LVM, 0.0,
+      A, R, RR, S_,
+      VRA, VREA,
+      COVRES,
+      RESULT
+    );
+
+    const res = readF64(memory, RESULT, 2);
+    const cmean = res[0];
+    const cstdev = res[1];
+
+    // Singular → fallback: cmean=gmean=5.0, cstdev=1.0
+    approx(cmean, 5.0, 1e-6);
+    approx(cstdev, 1.0, 1e-6);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// sgsim
+// ═════════════════════════════════════════════════════════════════════
+
+describe('gslib.sgsim', () => {
+  // Memory layout — page 32+ (262144+) to isolate from all other tests
+  const BASE = 262144;
+
+  // Grid params
+  const NX = 10, NY = 10, NZ = 1;
+  const NXYZ = NX * NY * NZ;
+  const XSIZ = 1.0, YSIZ = 1.0, ZSIZ = 1.0;
+  const XMN = 0.5, YMN = 0.5, ZMN = 0.5;
+  const NDMAX = 10, NODMAX = 12;
+  const NEQ_MAX = NDMAX + NODMAX + 2;
+  const NCTX = 9, NCTY = 9, NCTZ = 0;
+  const MAXCTX = 2 * NCTX + 1;
+  const MAXCTY = 2 * NCTY + 1;
+  const MAXCTZ = 2 * NCTZ + 1;
+  const COVTAB_SIZE = MAXCTX * MAXCTY * MAXCTZ;
+  const MAX_LOOKU = COVTAB_SIZE;
+
+  // Offsets (sequential layout, 8-byte aligned)
+  let off = BASE;
+  const alloc = (nf64 = 0, ni32 = 0) => {
+    const o = off;
+    off += nf64 * 8 + ni32 * 4;
+    off = (off + 7) & ~7; // align to 8
+    return o;
+  };
+
+  // Data (max 20 points)
+  const X = alloc(20), Y = alloc(20), Z = alloc(20);
+  const VR = alloc(20), SEC = alloc(20);
+  const LVM = alloc(NXYZ);
+  // Variogram
+  const IT = alloc(0, 4), CC = alloc(4), AA = alloc(4);
+  const ROTMAT = alloc(18);   // 2 rotmats
+  // Super block
+  const NISB = alloc(0, 300), SUPOUT = alloc(20);
+  const IXSBTOSR = alloc(0, 300), IYSBTOSR = alloc(0, 300), IZSBTOSR = alloc(0, 300);
+  // Covtab + spiral
+  const COVTAB = alloc(COVTAB_SIZE);
+  const IXNODE = alloc(0, MAX_LOOKU), IYNODE = alloc(0, MAX_LOOKU), IZNODE = alloc(0, MAX_LOOKU);
+  // ACORN state
+  const IXV = alloc(0, 13);
+  // Simulation arrays
+  const SIM = alloc(NXYZ), ORDER = alloc(NXYZ), CLOSE = alloc(NDMAX);
+  const ICNODE = alloc(0, NODMAX);
+  const CNODEX = alloc(NODMAX), CNODEY = alloc(NODMAX), CNODEZ = alloc(NODMAX), CNODEV = alloc(NODMAX);
+  // Kriging scratch
+  const A = alloc(NEQ_MAX * (NEQ_MAX + 1) / 2);
+  const R = alloc(NEQ_MAX), RR = alloc(NEQ_MAX), S_ = alloc(NEQ_MAX);
+  const VRA = alloc(NEQ_MAX), VREA = alloc(NEQ_MAX);
+  const COVRES = alloc(2);
+  const GETIDXRES = alloc(0, 2);
+  const INOCT = alloc(0, 8);
+  const LT = alloc(0, 64), UT = alloc(0, 64);
+  const TMP = alloc(MAX_LOOKU);
+  // ctable scratch
+  const CT_TMP = alloc(MAX_LOOKU), CT_ORDER = alloc(MAX_LOOKU);
+  const CT_RESULT = alloc(2);
+  // setsupr scratch + temp data copy (allocated once, reused)
+  const SU_IDX2 = alloc(0, 2), SU_IXARR = alloc(0, 20);
+  const NSBTOSR_BUF = alloc(0, 1);
+  const tmpX = alloc(20), tmpY = alloc(20), tmpZ = alloc(20), tmpVR = alloc(20);
+
+  /**
+   * Run one sgsim realization on an NX x NY x NZ grid.
+   * Returns the sim array.
+   */
+  async function runSgsim(data, opts = {}) {
+    const {
+      seed = 69069,
+      ndmin = 0, ndmax = NDMAX,
+      radius = 20.0,
+      noct = 0, nodmax = NODMAX,
+      ktype = 0,   // SK by default
+      nst = 1, c0 = 0.0,
+      it = [1], cc = [1.0], aa = [10.0]
+    } = opts;
+
+    const { lib, memory } = await getGslib();
+    const nd = data.length;
+
+    // Grow memory if needed
+    const neededPages = Math.ceil(off / 65536);
+    if (memory.buffer.byteLength < off) {
+      memory.grow(neededPages - memory.buffer.byteLength / 65536 + 1);
+    }
+
+    writeF64(memory, X, data.map(d => d[0]));
+    writeF64(memory, Y, data.map(d => d[1]));
+    writeF64(memory, Z, data.map(d => d[2]));
+    writeF64(memory, VR, data.map(d => d[3]));
+    writeF64(memory, SEC, new Array(nd).fill(0.0));
+    writeF64(memory, LVM, new Array(NXYZ).fill(0.0));
+
+    writeI32(memory, IT, it);
+    writeF64(memory, CC, cc);
+    writeF64(memory, AA, aa);
+
+    // Rotation matrices: variogram at slot 0, search at slot 1
+    lib.gslib.setrot(0, 0, 0, 1, 1, 0, ROTMAT);
+    lib.gslib.setrot(0, 0, 0, 1, 1, 1, ROTMAT);
+
+    // Super block search
+    // Use pre-allocated temporary buffers for setsupr (it reorders)
+    writeF64(memory, tmpX, data.map(d => d[0]));
+    writeF64(memory, tmpY, data.map(d => d[1]));
+    writeF64(memory, tmpZ, data.map(d => d[2]));
+    writeF64(memory, tmpVR, data.map(d => d[3]));
+
+    lib.gslib.setsupr(
+      NX, XMN, XSIZ, NY, YMN, YSIZ, NZ, ZMN, ZSIZ,
+      nd, tmpX, tmpY, tmpZ, tmpVR, TMP,
+      NISB, SU_IDX2, SU_IXARR, LT, UT,
+      NX, NY, NZ,
+      SUPOUT
+    );
+
+    const supout = readF64(memory, SUPOUT, 9);
+    lib.gslib.picksup(
+      supout[0], supout[6],
+      supout[1], supout[7],
+      supout[2], supout[8],
+      1, ROTMAT,       // isrot=1 (search rotation)
+      radius * radius,
+      NSBTOSR_BUF,
+      IXSBTOSR, IYSBTOSR, IZSBTOSR
+    );
+    const nsbtosr = readI32(memory, NSBTOSR_BUF, 1)[0];
+
+    // setsupr reordered data — write original data to x/y/z/vr for sgsim
+    // (sgsim uses its own getindx + srchsupr which needs properly sorted data)
+    // Actually, sgsim needs the setsupr-sorted data (nisb etc. depend on it).
+    // Copy sorted data from tmp buffers to actual buffers.
+    const sortedX = readF64(memory, tmpX, nd);
+    const sortedY = readF64(memory, tmpY, nd);
+    const sortedZ = readF64(memory, tmpZ, nd);
+    const sortedVR = readF64(memory, tmpVR, nd);
+    writeF64(memory, X, sortedX);
+    writeF64(memory, Y, sortedY);
+    writeF64(memory, Z, sortedZ);
+    writeF64(memory, VR, sortedVR);
+
+    // Covariance lookup table
+    lib.gslib.ctable(
+      nst, c0, IT, CC, AA,
+      0, 1, ROTMAT,        // irot=0, isrot=1
+      radius * radius,
+      NX, NY, NZ, XSIZ, YSIZ, ZSIZ,
+      NCTX, NCTY, NCTZ,
+      COVTAB, COVRES,
+      CT_TMP, CT_ORDER,
+      IXNODE, IYNODE, IZNODE,
+      LT, UT, CT_RESULT
+    );
+
+    const ctres = readF64(memory, CT_RESULT, 2);
+    const nlooku = ctres[0];
+    const cbb = ctres[1];
+
+    // ACORN state
+    writeI32(memory, IXV, [seed, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+
+    // Run sgsim
+    lib.gslib.sgsim(
+      NX, NY, NZ, XMN, YMN, ZMN, XSIZ, YSIZ, ZSIZ,
+      nd, X, Y, Z, VR,
+      SEC, LVM, 0.0,
+      ndmin, ndmax, radius,
+      0, 0, 0, 1, 1,   // sang1..sanis2 (isotropic search)
+      noct, nodmax, ktype,
+      nst, c0, IT, CC, AA,
+      0, ROTMAT,        // irot=0
+      radius * radius,
+      1,                // isrot=1
+      nsbtosr, IXSBTOSR, IYSBTOSR, IZSBTOSR, NISB,
+      SUPOUT,
+      NCTX, NCTY, NCTZ, nlooku,
+      COVTAB, IXNODE, IYNODE, IZNODE,
+      cbb,
+      IXV,
+      SIM, ORDER, CLOSE,
+      ICNODE,
+      CNODEX, CNODEY, CNODEZ, CNODEV,
+      A, R, RR, S_,
+      VRA, VREA,
+      COVRES, GETIDXRES,
+      INOCT, LT, UT,
+      TMP
+    );
+
+    return {
+      lib, memory,
+      sim: readF64(memory, SIM, NXYZ)
+    };
+  }
+
+  it('unconditional: mean ~ 0, variance ~ 1', async () => {
+    // No data — unconditional simulation in normal score space
+    const { sim } = await runSgsim([], { ndmin: 0, radius: 20.0 });
+
+    // Compute mean and variance
+    let sum = 0, sum2 = 0, n = 0;
+    for (const v of sim) {
+      if (v > -98.0) { // not UNEST
+        sum += v;
+        sum2 += v * v;
+        n++;
+      }
+    }
+    const mean = sum / n;
+    const variance = sum2 / n - mean * mean;
+
+    // Unconditional sgsim should produce near-Gaussian(0,1)
+    // Tolerances are loose for small grid (100 nodes)
+    assert.ok(Math.abs(mean) < 1.0,
+      `mean ${mean.toFixed(3)} should be near 0`);
+    assert.ok(variance > 0.1 && variance < 5.0,
+      `variance ${variance.toFixed(3)} should be near 1`);
+    assert.equal(n, NXYZ, 'all nodes should be simulated');
+  });
+
+  it('data conditioning: sim at data node = data value', async () => {
+    // Data at grid nodes (exact match)
+    const data = [
+      [0.5, 0.5, 0.5, 1.23],
+      [5.5, 5.5, 0.5, -0.87],
+    ];
+    const { sim } = await runSgsim(data, { ndmin: 0, radius: 20.0 });
+
+    // Data at node (0,0,0) = index 0
+    approx(sim[0], 1.23, 1e-6);
+    // Data at node (5,5,0) = index 5 + 5*10 = 55
+    approx(sim[55], -0.87, 1e-6);
+  });
+
+  it('reproducibility: same seed → same output', async () => {
+    const data = [[0.5, 0.5, 0.5, 1.0]];
+    const { sim: sim1 } = await runSgsim(data, { seed: 42069, radius: 20.0 });
+    const { sim: sim2 } = await runSgsim(data, { seed: 42069, radius: 20.0 });
+
+    for (let i = 0; i < NXYZ; i++) {
+      assert.equal(sim1[i], sim2[i], `mismatch at node ${i}`);
+    }
+  });
+
+  it('different seeds → different realizations', async () => {
+    const data = [[0.5, 0.5, 0.5, 1.0]];
+    const { sim: sim1 } = await runSgsim(data, { seed: 69069, radius: 20.0 });
+    const { sim: sim2 } = await runSgsim(data, { seed: 12345, radius: 20.0 });
+
+    let diffs = 0;
+    for (let i = 0; i < NXYZ; i++) {
+      if (Math.abs(sim1[i] - sim2[i]) > 1e-10) diffs++;
+    }
+    assert.ok(diffs > NXYZ / 2,
+      `should have many differences, got ${diffs}/${NXYZ}`);
+  });
+});
