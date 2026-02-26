@@ -575,3 +575,270 @@ describe('gslib.cova3', () => {
     approx(cova2, 0.0, 1e-10);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════
+// sortem
+// ═════════════════════════════════════════════════════════════════════
+
+describe('gslib.sortem', () => {
+  // Memory layout for sortem tests:
+  // a: 0       (up to 20 f64 = 160 bytes)
+  // b: 160     (up to 20 f64 = 160 bytes)
+  // c: 320     (up to 20 f64 = 160 bytes)
+  // lt: 480    (64 i32 = 256 bytes)
+  // ut: 736    (64 i32 = 256 bytes)
+  const A = 0, B = 160, C = 320, LT = 480, UT = 736;
+
+  it('sorts array in ascending order', async () => {
+    const { lib, memory } = await getGslib();
+    writeF64(memory, A, [5, 3, 8, 1, 9, 2, 7, 4, 6, 0]);
+    lib.gslib.sortem(0, 10, A, B, C, 0, LT, UT);
+    const sorted = readF64(memory, A, 10);
+    assert.deepStrictEqual(sorted, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  });
+
+  it('sorts already-sorted array', async () => {
+    const { lib, memory } = await getGslib();
+    writeF64(memory, A, [1, 2, 3, 4, 5]);
+    lib.gslib.sortem(0, 5, A, B, C, 0, LT, UT);
+    assert.deepStrictEqual(readF64(memory, A, 5), [1, 2, 3, 4, 5]);
+  });
+
+  it('sorts reverse-sorted array', async () => {
+    const { lib, memory } = await getGslib();
+    writeF64(memory, A, [5, 4, 3, 2, 1]);
+    lib.gslib.sortem(0, 5, A, B, C, 0, LT, UT);
+    assert.deepStrictEqual(readF64(memory, A, 5), [1, 2, 3, 4, 5]);
+  });
+
+  it('sorts with duplicates', async () => {
+    const { lib, memory } = await getGslib();
+    writeF64(memory, A, [3, 1, 3, 2, 1]);
+    lib.gslib.sortem(0, 5, A, B, C, 0, LT, UT);
+    assert.deepStrictEqual(readF64(memory, A, 5), [1, 1, 2, 3, 3]);
+  });
+
+  it('handles single element', async () => {
+    const { lib, memory } = await getGslib();
+    writeF64(memory, A, [42]);
+    lib.gslib.sortem(0, 1, A, B, C, 0, LT, UT);
+    assert.deepStrictEqual(readF64(memory, A, 1), [42]);
+  });
+
+  it('handles two elements', async () => {
+    const { lib, memory } = await getGslib();
+    writeF64(memory, A, [7, 3]);
+    lib.gslib.sortem(0, 2, A, B, C, 0, LT, UT);
+    assert.deepStrictEqual(readF64(memory, A, 2), [3, 7]);
+  });
+
+  it('permutes one companion array (nperm=1)', async () => {
+    const { lib, memory } = await getGslib();
+    writeF64(memory, A, [30, 10, 20]);
+    writeF64(memory, B, [300, 100, 200]);
+    lib.gslib.sortem(0, 3, A, B, C, 1, LT, UT);
+    assert.deepStrictEqual(readF64(memory, A, 3), [10, 20, 30]);
+    assert.deepStrictEqual(readF64(memory, B, 3), [100, 200, 300]);
+  });
+
+  it('permutes two companion arrays (nperm=2)', async () => {
+    const { lib, memory } = await getGslib();
+    writeF64(memory, A, [30, 10, 20]);
+    writeF64(memory, B, [300, 100, 200]);
+    writeF64(memory, C, [3000, 1000, 2000]);
+    lib.gslib.sortem(0, 3, A, B, C, 2, LT, UT);
+    assert.deepStrictEqual(readF64(memory, A, 3), [10, 20, 30]);
+    assert.deepStrictEqual(readF64(memory, B, 3), [100, 200, 300]);
+    assert.deepStrictEqual(readF64(memory, C, 3), [1000, 2000, 3000]);
+  });
+
+  it('sorts sub-range (ib=2, ie=5)', async () => {
+    const { lib, memory } = await getGslib();
+    writeF64(memory, A, [99, 88, 5, 3, 1, 77, 66]);
+    lib.gslib.sortem(2, 5, A, B, C, 0, LT, UT);
+    const result = readF64(memory, A, 7);
+    // Only indices 2-4 should be sorted
+    assert.equal(result[0], 99);
+    assert.equal(result[1], 88);
+    assert.deepStrictEqual(result.slice(2, 5), [1, 3, 5]);
+    assert.equal(result[5], 77);
+    assert.equal(result[6], 66);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// nscore
+// ═════════════════════════════════════════════════════════════════════
+
+describe('gslib.nscore', () => {
+  // Memory layout (generous spacing):
+  // a:      0       (20 f64 = 160 bytes)
+  // wt:     160     (20 f64)
+  // tmp:    320     (20 f64)
+  // vrg:    480     (20 f64)
+  // xp:     640     (1 f64 = 8 bytes)
+  // ierr:   648     (1 i32 = 4 bytes)
+  // result: 652     (1 i32 = 4 bytes)
+  // lt:     656     (64 i32 = 256 bytes)
+  // ut:     912     (64 i32 = 256 bytes)
+  const NA = 0, WT = 160, TMP = 320, VRG = 480, XP = 640;
+  const IERR = 648, RESULT = 652, LT = 656, UT = 912;
+
+  it('transforms uniform data to approximately normal scores', async () => {
+    const { lib, memory } = await getGslib();
+    const nd = 10;
+    const data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+    writeF64(memory, NA, data);
+    writeF64(memory, WT, new Array(nd).fill(1.0));
+    writeI32(memory, RESULT, [0]);
+
+    lib.gslib.nscore(nd, NA, WT, TMP, VRG, XP, IERR, RESULT, LT, UT,
+      0.0, 11.0, 0);
+
+    assert.equal(readI32(memory, RESULT, 1)[0], 0); // no error
+    const scores = readF64(memory, VRG, nd);
+
+    // Scores should be roughly symmetric around 0
+    const mean = scores.reduce((s, v) => s + v, 0) / nd;
+    approx(mean, 0.0, 0.1);
+
+    // Scores should be monotonically increasing (data was 1..10)
+    for (let i = 1; i < nd; i++) {
+      assert.ok(scores[i] > scores[i - 1],
+        `scores[${i}]=${scores[i]} should be > scores[${i-1}]=${scores[i-1]}`);
+    }
+  });
+
+  it('preserves original data order', async () => {
+    const { lib, memory } = await getGslib();
+    const nd = 5;
+    const data = [50, 10, 30, 20, 40];
+    writeF64(memory, NA, data);
+    writeF64(memory, WT, new Array(nd).fill(1.0));
+    writeI32(memory, RESULT, [0]);
+
+    lib.gslib.nscore(nd, NA, WT, TMP, VRG, XP, IERR, RESULT, LT, UT,
+      0.0, 100.0, 0);
+
+    // Data should be back in original order
+    const restored = readF64(memory, NA, nd);
+    assert.deepStrictEqual(restored, data);
+  });
+
+  it('returns error for empty data', async () => {
+    const { lib, memory } = await getGslib();
+    writeI32(memory, RESULT, [0]);
+    lib.gslib.nscore(0, NA, WT, TMP, VRG, XP, IERR, RESULT, LT, UT,
+      0.0, 100.0, 0);
+    assert.equal(readI32(memory, RESULT, 1)[0], 1);
+  });
+
+  it('respects trimming limits', async () => {
+    const { lib, memory } = await getGslib();
+    const nd = 5;
+    // values outside [tmin, tmax) contribute 0 weight
+    writeF64(memory, NA, [1, 2, 3, 4, 5]);
+    writeF64(memory, WT, new Array(nd).fill(1.0));
+    writeI32(memory, RESULT, [0]);
+
+    // tmin=0, tmax=6 — all in range
+    lib.gslib.nscore(nd, NA, WT, TMP, VRG, XP, IERR, RESULT, LT, UT,
+      0.0, 6.0, 0);
+    assert.equal(readI32(memory, RESULT, 1)[0], 0);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// backtr
+// ═════════════════════════════════════════════════════════════════════
+
+describe('gslib.backtr', () => {
+  // Transform table: 5 entries
+  // vr (original values, sorted):   [10, 20, 30, 40, 50]
+  // vrg (normal scores, sorted):    [-1.5, -0.5, 0.0, 0.5, 1.5]
+  // Memory layout:
+  // vr:  0       (5 f64 = 40 bytes)
+  // vrg: 40      (5 f64 = 40 bytes)
+  // j:   80      (1 i32 = 4 bytes)
+  const VR = 0, VRG = 40, J = 80;
+
+  async function setupBacktr() {
+    const { lib, memory } = await getGslib();
+    writeF64(memory, VR, [10, 20, 30, 40, 50]);
+    writeF64(memory, VRG, [-1.5, -0.5, 0.0, 0.5, 1.5]);
+    writeI32(memory, J, [0]);
+    return { lib, memory };
+  }
+
+  it('interpolates within table', async () => {
+    const { lib } = await setupBacktr();
+    // vrgs=0.25 is between vrg[2]=0.0 and vrg[3]=0.5
+    // linear interp: 30 + (40-30) * (0.25-0.0)/(0.5-0.0) = 30 + 5 = 35
+    const result = lib.gslib.backtr(0.25, 5, VR, VRG, 0, 100, 1, 1.0, 1, 1.0, J);
+    approx(result, 35.0, 0.1);
+  });
+
+  it('returns table endpoint at exact boundary', async () => {
+    const { lib } = await setupBacktr();
+    // vrgs=0.0 exactly matches vrg[2] → should return vr[2]=30
+    const result = lib.gslib.backtr(0.0, 5, VR, VRG, 0, 100, 1, 1.0, 1, 1.0, J);
+    approx(result, 30.0, 0.5);
+  });
+
+  it('lower tail linear extrapolation', async () => {
+    const { lib } = await setupBacktr();
+    // vrgs = -2.0, below vrg[0] = -1.5
+    // ltail=1 (linear), zmin=0
+    const result = lib.gslib.backtr(-2.0, 5, VR, VRG, 0, 100, 1, 1.0, 1, 1.0, J);
+    assert.ok(result < 10, `lower tail result ${result} should be < 10`);
+    assert.ok(result >= 0, `lower tail result ${result} should be >= zmin=0`);
+  });
+
+  it('upper tail linear extrapolation', async () => {
+    const { lib } = await setupBacktr();
+    // vrgs = 2.0, above vrg[4] = 1.5
+    // utail=1 (linear), zmax=100
+    const result = lib.gslib.backtr(2.0, 5, VR, VRG, 0, 100, 1, 1.0, 1, 1.0, J);
+    assert.ok(result > 50, `upper tail result ${result} should be > 50`);
+    assert.ok(result <= 100, `upper tail result ${result} should be <= zmax=100`);
+  });
+
+  it('round-trip with nscore: backtr(nscore(x)) ~ x', async () => {
+    const { lib, memory } = await getGslib();
+    const nd = 10;
+    const data = [15, 25, 35, 45, 55, 65, 75, 85, 95, 105];
+
+    // nscore layout (far from backtr's VR/VRG/J)
+    const NA = 1024, WT = 1184, TMP = 1344, NVRG = 1504, XP = 1664;
+    const IERR = 1672, RESULT = 1676, LT = 1680, UT = 1936;
+
+    writeF64(memory, NA, data);
+    writeF64(memory, WT, new Array(nd).fill(1.0));
+    writeI32(memory, RESULT, [0]);
+
+    lib.gslib.nscore(nd, NA, WT, TMP, NVRG, XP, IERR, RESULT, LT, UT,
+      0.0, 200.0, 0);
+    assert.equal(readI32(memory, RESULT, 1)[0], 0);
+
+    const scores = readF64(memory, NVRG, nd);
+    const restored = readF64(memory, NA, nd);
+
+    // Build transform table from sorted data and scores
+    // Sort restored data and corresponding scores together for the table
+    const pairs = restored.map((v, i) => [v, scores[i]]).sort((a, b) => a[0] - b[0]);
+    const sortedVr = pairs.map(p => p[0]);
+    const sortedVrg = pairs.map(p => p[1]);
+
+    const TVR = 2200, TVRG = 2280, TJ = 2360;
+    writeF64(memory, TVR, sortedVr);
+    writeF64(memory, TVRG, sortedVrg);
+    writeI32(memory, TJ, [0]);
+
+    // Back-transform each score and check it's close to original
+    for (let i = 0; i < nd; i++) {
+      const bt = lib.gslib.backtr(scores[i], nd, TVR, TVRG,
+        0, 200, 1, 1.0, 1, 1.0, TJ);
+      approx(bt, data[i], 1.0); // within 1.0 of original
+    }
+  });
+});

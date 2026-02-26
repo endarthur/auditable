@@ -261,6 +261,271 @@ begin
   end for
 end
 
+! ── sortem — quickersort with companion arrays ────────────────────────
+!
+! sorts a[ib..ie-1] in ascending order (0-indexed).
+! simultaneously permutes companion arrays b and c.
+! nperm = 0: sort a only
+! nperm = 1: permute b with a
+! nperm = 2: permute b and c with a
+!
+! Quickersort algorithm (Scowen, ACM 271). explicit stack, no recursion.
+! stack depth 64 handles up to 2^64 elements.
+!
+! Fortran ref: gslib/sortem.for, gslib/dsortem.for
+
+subroutine gslib.sortem(ib, ie: i32; a, b, c: array f64; nperm: i32;
+  lt, ut: array i32)
+var
+  i, j, k, m, p, q: i32
+  ta, xa, tb, xb, tc, xc: f64
+begin
+  ! Quickersort (Scowen, ACM 271). 0-indexed: sorts a[ib..ie-1].
+  ! lt/ut are scratch arrays of at least 64 i32 each (stack depth).
+  j := ie - 1
+  m := 1
+  i := ib
+  lt[0] := i
+  ut[0] := j
+
+  while (m > 0)
+    m := m - 1
+    i := lt[m]
+    j := ut[m]
+
+    ! keep splitting until segment is small
+    while (j - i > 1)
+      ! segment has 3+ elements — partition
+      p := (j + i) / 2
+      ta := a[p]
+      a[p] := a[i]
+      if (nperm >= 1) then
+        tb := b[p]
+        b[p] := b[i]
+      end if
+      if (nperm >= 2) then
+        tc := c[p]
+        c[p] := c[i]
+      end if
+
+      ! Hoare partition: scan from both ends
+      q := j
+      k := i + 1
+
+      ! scan forward for a[k] > ta, backward for a[q] < ta, swap
+      while (k <= q)
+        ! forward scan
+        while (k <= q and a[k] <= ta)
+          k := k + 1
+        end while
+        if (k > q) then
+          break
+        end if
+        ! backward scan
+        while (q >= k and a[q] >= ta)
+          q := q - 1
+        end while
+        if (q < k) then
+          break
+        end if
+        ! swap a[k] and a[q]
+        xa := a[k]
+        a[k] := a[q]
+        a[q] := xa
+        if (nperm >= 1) then
+          xb := b[k]
+          b[k] := b[q]
+          b[q] := xb
+        end if
+        if (nperm >= 2) then
+          xc := c[k]
+          c[k] := c[q]
+          c[q] := xc
+        end if
+        k := k + 1
+        q := q - 1
+      end while
+
+      ! place pivot: q = k - 1 is the partition point
+      q := k - 1
+      a[i] := a[q]
+      a[q] := ta
+      if (nperm >= 1) then
+        b[i] := b[q]
+        b[q] := tb
+      end if
+      if (nperm >= 2) then
+        c[i] := c[q]
+        c[q] := tc
+      end if
+
+      ! push larger segment, continue with smaller
+      if (q - i > j - q) then
+        lt[m] := i
+        ut[m] := q - 1
+        i := q + 1
+      else
+        lt[m] := q + 1
+        ut[m] := j
+        j := q - 1
+      end if
+      m := m + 1
+    end while
+
+    ! segment has 0 or 1 or 2 elements
+    if (j > i) then
+      if (a[i] > a[j]) then
+        xa := a[i]
+        a[i] := a[j]
+        a[j] := xa
+        if (nperm >= 1) then
+          xb := b[i]
+          b[i] := b[j]
+          b[j] := xb
+        end if
+        if (nperm >= 2) then
+          xc := c[i]
+          c[i] := c[j]
+          c[j] := xc
+        end if
+      end if
+    end if
+  end while
+end
+
+! ── nscore — normal score transform ───────────────────────────────────
+!
+! transforms nd data values to standard normal scores N(0,1).
+! uses sortem internally.
+!
+! a[0..nd-1]     = data values (modified: sorted then restored)
+! wt[0..nd-1]    = weights (iwt=1) or unused (iwt=0). modified.
+! tmp[0..nd-1]   = scratch (stores original indices)
+! vrg[0..nd-1]   = output normal scores
+! xp[0]          = scratch for gauinv output
+! ierr[0]        = scratch for gauinv error flag
+! result[0]      = 0 on success, 1 on error
+!
+! Fortran ref: gslib/nscore.for
+
+subroutine gslib.nscore(nd: i32; a, wt, tmp, vrg, xp: array f64;
+  ierr, result, lt, ut: array i32; tmin, tmax: f64; iwt: i32)
+var
+  i: i32
+  twt, oldcp, cp: f64
+begin
+  result[0] := 0
+  twt := 0.0
+
+  ! store original indices and compute total weight
+  for i := 0, nd
+    tmp[i] := f64(i)
+    if (a[i] >= tmin and a[i] < tmax) then
+      if (iwt == 0) then
+        twt := twt + 1.0
+      else
+        twt := twt + wt[i]
+      end if
+    end if
+  end for
+
+  if (nd < 1 or twt < 1.0e-20) then
+    result[0] := 1
+    call return()
+  end if
+
+  ! sort data ascending, permuting wt and tmp
+  call gslib.sortem(0, nd, a, wt, tmp, 2, lt, ut)
+
+  ! compute cumulative probabilities and normal scores
+  oldcp := 0.0
+  cp := 0.0
+  for i := 0, nd
+    if (iwt == 0) then
+      cp := cp + 1.0 / twt
+    else
+      cp := cp + wt[i] / twt
+    end if
+    wt[i] := (cp + oldcp) / 2.0
+    oldcp := cp
+    call gslib.gauinv(wt[i], xp, ierr)
+    vrg[i] := xp[0]
+  end for
+
+  ! restore original order: sort by tmp (original indices), carrying a and vrg.
+  ! Fortran uses iperm=3 (tmp, wt, vr, vrg) but we only need a and vrg back.
+  ! wt is consumed — not needed after this point.
+  call gslib.sortem(0, nd, tmp, a, vrg, 2, lt, ut)
+end
+
+! ── backtr — back-transform from normal scores ────────────────────────
+!
+! back-transforms a standard normal deviate using a transform table
+! (vr, vrg) and tail options.
+!
+! vrgs           = normal score to back-transform
+! nt             = number of entries in transform table
+! vr[0..nt-1]   = original data values (sorted ascending)
+! vrg[0..nt-1]  = corresponding normal scores (sorted ascending)
+! zmin, zmax     = limits for tail extrapolation
+! ltail          = lower tail option (1=linear, 2=power)
+! ltpar          = lower tail parameter
+! utail          = upper tail option (1=linear, 2=power, 4=hyperbolic)
+! utpar          = upper tail parameter
+! j[0]           = scratch for locate output
+!
+! Fortran ref: gslib/backtr.for
+
+function gslib.backtr(vrgs: f64; nt: i32; vr, vrg: array f64;
+  zmin, zmax: f64; ltail: i32; ltpar: f64;
+  utail: i32; utpar: f64; j: array i32): f64
+var
+  cdflo, cdfhi, cdfbt, cpow, lambda: f64
+  jj: i32
+begin
+  ! value in the lower tail?
+  if (vrgs <= vrg[0]) then
+    gslib.backtr := vr[0]
+    cdflo := gslib.gcum(vrg[0])
+    cdfbt := gslib.gcum(vrgs)
+    if (ltail == 1) then
+      gslib.backtr := gslib.powint(0.0, cdflo, zmin, vr[0], cdfbt, 1.0)
+    else if (ltail == 2) then
+      cpow := 1.0 / ltpar
+      gslib.backtr := gslib.powint(0.0, cdflo, zmin, vr[0], cdfbt, cpow)
+    end if
+
+  ! value in the upper tail?
+  else if (vrgs >= vrg[nt - 1]) then
+    gslib.backtr := vr[nt - 1]
+    cdfhi := gslib.gcum(vrg[nt - 1])
+    cdfbt := gslib.gcum(vrgs)
+    if (utail == 1) then
+      gslib.backtr := gslib.powint(cdfhi, 1.0, vr[nt - 1], zmax, cdfbt, 1.0)
+    else if (utail == 2) then
+      cpow := 1.0 / utpar
+      gslib.backtr := gslib.powint(cdfhi, 1.0, vr[nt - 1], zmax, cdfbt, cpow)
+    else if (utail == 4) then
+      lambda := (vr[nt - 1] ** utpar) * (1.0 - gslib.gcum(vrg[nt - 1]))
+      gslib.backtr := (lambda / (1.0 - gslib.gcum(vrgs))) ** (1.0 / utpar)
+    end if
+
+  ! value within the transformation table
+  else
+    call gslib.locate(vrg, nt, 1, nt, vrgs, j)
+    jj := j[0]
+    if (jj < 1) then
+      jj := 1
+    end if
+    if (jj > nt - 1) then
+      jj := nt - 1
+    end if
+    ! locate returns 1-indexed j; vrg/vr are 0-indexed
+    gslib.backtr := gslib.powint(vrg[jj - 1], vrg[jj], vr[jj - 1], vr[jj],
+      vrgs, 1.0)
+  end if
+end
+
 ! ── cova3 — nested covariance model evaluation ────────────────────────
 !
 ! 5 model types: 1=spherical, 2=exponential, 3=Gaussian,

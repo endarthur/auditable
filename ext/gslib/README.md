@@ -23,6 +23,9 @@ Faithful transcription of Stanford's [GSLIB](http://www.gslib.com/) (Deutsch & J
 | `gslib.setrot` | subroutine | Anisotropic rotation matrix setup | setrot.for |
 | `gslib.sqdist` | function | Squared anisotropic distance | sqdist.for |
 | `gslib.cova3` | subroutine | Nested covariance model evaluation (5 types) | cova3.for |
+| `gslib.sortem` | subroutine | Quickersort with up to 2 companion arrays | sortem.for |
+| `gslib.nscore` | subroutine | Normal score transform | nscore.for |
+| `gslib.backtr` | function | Back-transform from normal scores | backtr.for |
 
 ## Implementation order
 
@@ -32,13 +35,13 @@ Following the dependency chain from primitives to programs:
 2. **Probability** — gauinv, gcum
 3. **Geometry** — powint, locate, getindx, setrot, sqdist
 4. **Covariance** — cova3
-5. Sorting — sortem, dsortem
-6. Data transform — nscore, backtr
+5. **Sorting** — sortem
+6. **Data transform** — nscore, backtr
 7. Search — setsupr, srchsupr, picksupr
 8. Kriging — kt3d/kb2d core loops
 9. Simulation — sgsim/sisim core loops
 
-Items 1-4 are implemented. Items 5+ are future work.
+Items 1-6 are implemented. Items 7+ are future work.
 
 ## Rotation matrix storage
 
@@ -47,6 +50,12 @@ Fortran stores `rotmat(MAXROT, 3, 3)` with `rotmat(ind, i, j)`.
 Atra uses a flat f64 array: matrix `ind` occupies `rotmat[ind*9 .. ind*9+8]`, with element `(i, j)` at `rotmat[ind*9 + i*3 + j]` (0-indexed, row-major per block).
 
 `setrot` and `sqdist` both take `rotmat: array f64; ind: i32`. `cova3` takes base `irot` and computes `irot + is` for each nested structure.
+
+## Sorting
+
+Fortran's `sortem`/`dsortem` accept up to 7 companion arrays via an `iperm` parameter and use computed GOTOs for dispatch. Atra's `gslib.sortem` simplifies to 2 companion arrays (`b`, `c`) with `nperm` (0, 1, or 2). This covers the common cases (nscore uses nperm=2). For more companions, sort an index array and permute manually.
+
+The sort requires two scratch i32 arrays (`lt`, `ut`) of at least 64 elements each (stack depth for quicksort partitioning). Callers provide these explicitly — atra has no local arrays (all memory is linear/heap).
 
 ## RNG
 
