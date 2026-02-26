@@ -26,6 +26,9 @@ Faithful transcription of Stanford's [GSLIB](http://www.gslib.com/) (Deutsch & J
 | `gslib.sortem` | subroutine | Quickersort with up to 2 companion arrays | sortem.for |
 | `gslib.nscore` | subroutine | Normal score transform | nscore.for |
 | `gslib.backtr` | function | Back-transform from normal scores | backtr.for |
+| `gslib.setsupr` | subroutine | Build super block network and sort data | setsupr.for |
+| `gslib.picksup` | subroutine | Determine which super blocks to search | picksupr.for |
+| `gslib.srchsupr` | subroutine | Search within super blocks for nearby data | srchsupr.for |
 
 ## Implementation order
 
@@ -37,11 +40,11 @@ Following the dependency chain from primitives to programs:
 4. **Covariance** — cova3
 5. **Sorting** — sortem
 6. **Data transform** — nscore, backtr
-7. Search — setsupr, srchsupr, picksupr
+7. **Search** — setsupr, picksup, srchsupr
 8. Kriging — kt3d/kb2d core loops
 9. Simulation — sgsim/sisim core loops
 
-Items 1-6 are implemented. Items 7+ are future work.
+Items 1-7 are implemented. Items 8+ are future work.
 
 ## Rotation matrix storage
 
@@ -56,6 +59,14 @@ Atra uses a flat f64 array: matrix `ind` occupies `rotmat[ind*9 .. ind*9+8]`, wi
 Fortran's `sortem`/`dsortem` accept up to 7 companion arrays via an `iperm` parameter and use computed GOTOs for dispatch. Atra's `gslib.sortem` simplifies to 2 companion arrays (`b`, `c`) with `nperm` (0, 1, or 2). This covers the common cases (nscore uses nperm=2). For more companions, sort an index array and permute manually.
 
 The sort requires two scratch i32 arrays (`lt`, `ut`) of at least 64 elements each (stack depth for quicksort partitioning). Callers provide these explicitly — atra has no local arrays (all memory is linear/heap).
+
+## Super block search
+
+Fortran's `setsupr` sorts data into super blocks using `sortem` with 4+ companion arrays. Since atra's `sortem` supports only 2 companions, `gslib.setsupr` uses a counting-sort approach instead: compute a source permutation via exclusive prefix sum, then apply it in-place via cycle-following. This avoids sortem entirely and runs in O(n).
+
+Output grid parameters are returned via `out[0..8]` (nxsup, nysup, nzsup, xmnsup, ymnsup, zmnsup, xsizsup, ysizsup, zsizsup). Callers pass these to `picksup` and `srchsupr`.
+
+`srchsupr` supports optional octant search (noct > 0) which limits the number of samples per spatial octant. The octant counts are stored in a caller-provided `inoct` i32[8] array (atra has no local arrays).
 
 ## RNG
 
