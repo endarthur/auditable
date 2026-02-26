@@ -629,6 +629,25 @@ describe('end-to-end', () => {
     assert.strictEqual(eqv(1, 2, 4, 3), 0); // false vs true
   });
 
+  it('compiles min/max with i32 operands', () => {
+    const { imin, imax } = atra`
+      function imin(a, b: i32): i32
+      begin
+        imin := min(a, b)
+      end
+      function imax(a, b: i32): i32
+      begin
+        imax := max(a, b)
+      end
+    `;
+    assert.strictEqual(imin(3, 7), 3);
+    assert.strictEqual(imin(7, 3), 3);
+    assert.strictEqual(imin(-5, 2), -5);
+    assert.strictEqual(imax(3, 7), 7);
+    assert.strictEqual(imax(7, 3), 7);
+    assert.strictEqual(imax(-5, 2), 2);
+  });
+
   it('compiles unary negation', () => {
     const { neg } = atra`
       function neg(x: f64): f64

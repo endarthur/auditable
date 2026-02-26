@@ -1904,6 +1904,7 @@ function codegen(ast, interpValues, userImports) {
       if (name === 'min') {
         emitExpr(expr.args[0], expectedType); emitExpr(expr.args[1], expectedType);
         if (isVector(expectedType)) { const op = SIMD_OPS[expectedType + '.min']; if (op === undefined) throw new Error('min not supported for ' + expectedType); emitSimd(op); }
+        else if (expectedType === 'i32') { emitExpr(expr.args[0], 'i32'); emitExpr(expr.args[1], 'i32'); bw.byte(OP_I32_LT_S); bw.byte(OP_SELECT); }
         else if (expectedType === 'f32') bw.byte(OP_F32_MIN);
         else bw.byte(OP_F64_MIN);
         return;
@@ -1911,6 +1912,7 @@ function codegen(ast, interpValues, userImports) {
       if (name === 'max') {
         emitExpr(expr.args[0], expectedType); emitExpr(expr.args[1], expectedType);
         if (isVector(expectedType)) { const op = SIMD_OPS[expectedType + '.max']; if (op === undefined) throw new Error('max not supported for ' + expectedType); emitSimd(op); }
+        else if (expectedType === 'i32') { emitExpr(expr.args[0], 'i32'); emitExpr(expr.args[1], 'i32'); bw.byte(OP_I32_GT_S); bw.byte(OP_SELECT); }
         else if (expectedType === 'f32') bw.byte(OP_F32_MAX);
         else bw.byte(OP_F64_MAX);
         return;

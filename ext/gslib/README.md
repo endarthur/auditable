@@ -62,7 +62,7 @@ The sort requires two scratch i32 arrays (`lt`, `ut`) of at least 64 elements ea
 
 ## Super block search
 
-Fortran's `setsupr` sorts data into super blocks using `sortem` with 4+ companion arrays. Since atra's `sortem` supports only 2 companions, `gslib.setsupr` uses a counting-sort approach instead: compute a source permutation via exclusive prefix sum, then apply it in-place via cycle-following. This avoids sortem entirely and runs in O(n).
+Fortran's `setsupr` sorts data into super blocks using `sortem` with 4+ companion arrays. Since atra's `sortem` supports only 2 companions (Wasm has no variadic functions), `gslib.setsupr` uses a counting-sort approach instead: compute a source permutation via exclusive prefix sum, then apply it in-place via cycle-following. This avoids sortem entirely, runs in O(n), and is stable (preserves original data order within the same super block).
 
 Output grid parameters are returned via `out[0..8]` (nxsup, nysup, nzsup, xmnsup, ymnsup, zmnsup, xsizsup, ysizsup, zsizsup). Callers pass these to `picksup` and `srchsupr`.
 
