@@ -613,6 +613,22 @@ describe('end-to-end', () => {
     assert.strictEqual(logic(0, 1), 0);
   });
 
+  it('compiles boolean equality (comparison == comparison)', () => {
+    const { eqv } = atra`
+      function eqv(a, b, c, d: f64): i32
+      begin
+        eqv := 0
+        if ((a > b) == (c > d)) then
+          eqv := 1
+        end if
+      end
+    `;
+    assert.strictEqual(eqv(2, 1, 4, 3), 1); // both true
+    assert.strictEqual(eqv(1, 2, 3, 4), 1); // both false
+    assert.strictEqual(eqv(2, 1, 3, 4), 0); // true vs false
+    assert.strictEqual(eqv(1, 2, 4, 3), 0); // false vs true
+  });
+
   it('compiles unary negation', () => {
     const { neg } = atra`
       function neg(x: f64): f64
