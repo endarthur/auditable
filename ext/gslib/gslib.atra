@@ -976,3 +976,387 @@ begin
   end for
   result[0] := f64(nc)
 end
+
+! ── ksol — kriging system solver (upper triangular) ─────────────────
+!
+! solves a system of linear equations stored as an upper triangular
+! packed matrix (columnwise). pivots on the diagonal, no pivot search.
+!
+! for ordinary/simple kriging only — NOT for universal kriging.
+! use ktsol (Gaussian elimination with pivoting) for UK.
+!
+! a[0..nn-1]    = upper triangular packed LHS matrix (modified)
+!                 nn = neq*(neq+1)/2
+! r[0..neq-1]   = right hand side vector (modified)
+! s[0..neq-1]   = solution vector (output)
+! result[0]      = ising: 0=ok, -1=neq<=1, k=null pivot at iteration k
+!
+! Fortran ref: gslib/ksol.for
+! NOTE: simplified to nright=1, nsb=1 (the kb2d case).
+
+subroutine gslib.ksol(neq: i32; a, r, s, result: array f64)
+var
+  m1, k, i, j: i32
+  kk, ii, ij, ll, lp: i32
+  ak, piv, ap: f64
+  tol: f64
+begin
+  ! Translated from Fortran ksol.for. Uses 1-indexed internal arithmetic
+  ! (k, i, j, kk, ii, ij, ll are 1-based positions into packed array).
+  ! a[], r[], s[] are 0-indexed — we subtract 1 when accessing them.
+  !
+  ! Packed upper triangular columnwise (1-indexed):
+  !   element (i,j), j>=i, is at position i + j*(j-1)/2
+
+  tol := 1.0e-7
+
+  if (neq <= 1) then
+    result[0] := -1.0
+    call return()
+  end if
+
+  result[0] := 0.0
+  m1 := neq - 1
+  kk := 0
+
+  ! forward elimination (triangulation)
+  ! Note: all loop variables (k, i, j, kk, ii, ij, ll) use 1-based indexing
+  ! to match Fortran ksol.for exactly. Array accesses subtract 1.
+  ! atra for loops are half-open [start, end), so Fortran "do k=1,m1"
+  ! becomes "for k := 1, m1+1".
+  for k := 1, m1 + 1
+    kk := kk + k
+    ak := a[kk - 1]
+    if (abs(ak) < tol) then
+      result[0] := f64(k)
+      call return()
+    end if
+    piv := 1.0 / ak
+    lp := 0
+    ii := kk
+    for i := k, m1 + 1
+      ll := ii
+      ii := ii + i
+      ap := a[ii - 1] * piv
+      lp := lp + 1
+      ij := ii - k + 1
+      for j := i, m1 + 1
+        ij := ij + j
+        ll := ll + j
+        a[ij - 1] := a[ij - 1] - ap * a[ll - 1]
+      end for
+      ! modify RHS
+      r[k + lp - 1] := r[k + lp - 1] - ap * r[k - 1]
+    end for
+  end for
+
+  ! check last pivot (nn = neq*(neq+1)/2, 1-indexed)
+  ij := neq * (neq + 1) / 2
+  if (abs(a[ij - 1]) < tol) then
+    result[0] := f64(neq)
+    call return()
+  end if
+
+  ! back substitution
+  piv := 1.0 / a[ij - 1]
+  s[neq - 1] := r[neq - 1] * piv
+  i := neq
+  kk := ij
+  for ii := 1, m1 + 1
+    kk := kk - i
+    piv := 1.0 / a[kk - 1]
+    i := i - 1
+    ap := r[i - 1]
+    ij := kk
+    for j := i, m1 + 1
+      ij := ij + j
+      ap := ap - a[ij - 1] * s[j]
+    end for
+    s[i - 1] := ap * piv
+  end for
+end
+
+! ── kb2d — 2D ordinary/simple kriging ──────────────────────────────
+!
+! estimates point or block values on a 2D grid by ordinary or simple
+! kriging. uses cova3/setrot for covariance evaluation and ksol for
+! the kriging system. brute-force neighbor search (all data scanned).
+!
+! parameters:
+!   nx, ny           grid dimensions
+!   xmn, ymn         grid origin (center of first cell)
+!   xsiz, ysiz       cell sizes
+!   nxdis, nydis      block discretization (1x1 = point kriging)
+!   nd               number of data
+!   x, y, vr         data coordinates and values
+!   ndmin, ndmax      min/max neighbors
+!   radius            search radius
+!   ktype             0=simple, 1=ordinary kriging
+!   skmean            simple kriging mean
+!   nst               number of nested structures
+!   c0                nugget
+!   it                model types (i32[nst])
+!   cc, aa            sill/range arrays (f64[nst])
+!   irot              base rotation index (setrot already called)
+!   rotmat            rotation matrices (9*f64 per structure)
+!   est               output estimates (f64[nx*ny])
+!   estv              output variances (f64[nx*ny])
+!
+! scratch arrays:
+!   xa, ya, vra      neighbor coords/values (f64[ndmax+1])
+!   dist             neighbor distances (f64[ndmax+1])
+!   nums             neighbor indices (f64[ndmax+1]) — f64 for sortem compat
+!   r, rr, s         kriging vectors (f64[ndmax+2])
+!   a                kriging matrix packed (f64[(ndmax+2)*(ndmax+3)/2])
+!   xdb, ydb         discretization offsets (f64[nxdis*nydis])
+!   covres           scratch for cova3 result (f64[2])
+!   ksolres          scratch for ksol result (f64[1])
+!
+! NOTE: unlike Fortran kb2d which uses cova2 (2D, inline rotation),
+! this uses our existing cova3 + setrot (3D, z=0). the rotation
+! matrices must be set up before calling kb2d.
+!
+! Fortran ref: gslib/kb2d.for
+
+subroutine gslib.kb2d(
+  nx, ny: i32; xmn, ymn, xsiz, ysiz: f64;
+  nxdis, nydis: i32;
+  nd: i32; x, y, vr: array f64;
+  ndmin, ndmax: i32; radius: f64;
+  ktype: i32; skmean: f64;
+  nst: i32; c0: f64;
+  it: array i32; cc, aa: array f64;
+  irot: i32; rotmat: array f64;
+  est, estv: array f64;
+  xa, ya, vra, dist, nums: array f64;
+  r, rr, s, a: array f64;
+  xdb, ydb, covres, ksolres: array f64)
+var
+  ix, iy, id, ia, isam: i32
+  xloc, yloc, dx, dy, h2, rad2: f64
+  ndb, na, neq, nn: i32
+  cbb, cov, cb, unbias, cb1: f64
+  xx, yy, sumw: f64
+  xdis, ydis: f64
+  i, j, k, n1, jk, j1, jj: i32
+  in, gi: i32
+  ising: f64
+begin
+  ! set up discretization offsets
+  ndb := nxdis * nydis
+  xdis := xsiz / max(f64(nxdis), 1.0)
+  ydis := ysiz / max(f64(nydis), 1.0)
+  xloc := -0.5 * (xsiz + xdis)
+  i := 0
+  for ix := 0, nxdis
+    xloc := xloc + xdis
+    yloc := -0.5 * (ysiz + ydis)
+    for iy := 0, nydis
+      yloc := yloc + ydis
+      xdb[i] := xloc
+      ydb[i] := yloc
+      i := i + 1
+    end for
+  end for
+
+  rad2 := radius * radius
+
+  ! compute block covariance
+  call gslib.cova3(xdb[0], ydb[0], 0.0, xdb[0], ydb[0], 0.0,
+    nst, c0, it, cc, aa, irot, rotmat, covres)
+  unbias := covres[0]
+
+  if (ndb <= 1) then
+    cbb := covres[0]
+  else
+    cbb := 0.0
+    for i := 0, ndb
+      for j := 0, ndb
+        call gslib.cova3(xdb[i], ydb[i], 0.0, xdb[j], ydb[j], 0.0,
+          nst, c0, it, cc, aa, irot, rotmat, covres)
+        cov := covres[1]
+        if (i == j) then
+          cov := cov - c0
+        end if
+        cbb := cbb + cov
+      end for
+    end for
+    cbb := cbb / f64(ndb * ndb)
+  end if
+
+  ! main loop over grid
+  for iy := 0, ny
+    yloc := ymn + f64(iy) * ysiz
+    for ix := 0, nx
+      xloc := xmn + f64(ix) * xsiz
+      gi := ix + iy * nx
+
+      ! scan all data for nearby samples (brute-force, insertion sort by distance)
+      na := 0
+      for isam := 0, ndmax
+        dist[isam] := 1.0e20
+        nums[isam] := 0.0
+      end for
+
+      for id := 0, nd
+        dx := x[id] - xloc
+        dy := y[id] - yloc
+        h2 := dx * dx + dy * dy
+        ! skip if outside search radius
+        k := 0
+        if (h2 > rad2) then
+          k := 1
+        end if
+        ! skip if already have enough closer samples
+        if (k == 0 and na == ndmax) then
+          if (h2 > dist[na - 1]) then
+            k := 1
+          end if
+        end if
+        if (k == 0) then
+          ! accept this sample
+          if (na < ndmax) then
+            na := na + 1
+          end if
+          nums[na - 1] := f64(id)
+          dist[na - 1] := h2
+          ! insertion sort: shift larger distances right
+          n1 := na - 1
+          for k := 0, n1
+            if (h2 < dist[k]) then
+              for jk := 0, n1 - k - 1
+                j := n1 - 1 - jk
+                dist[j + 1] := dist[j]
+                nums[j + 1] := nums[j]
+              end for
+              dist[k] := h2
+              nums[k] := f64(id)
+              break
+            end if
+          end for
+        end if
+      end for
+
+      ! not enough samples?
+      if (na < ndmin) then
+        est[gi] := -999.0
+        estv[gi] := -999.0
+      ! single sample
+      else if (na == 1) then
+        jj := i32(nums[0])
+        call gslib.cova3(xa[0], ya[0], 0.0, xa[0], ya[0], 0.0,
+          nst, c0, it, cc, aa, irot, rotmat, covres)
+        cb1 := covres[0]
+        xx := x[jj] - xloc
+        yy := y[jj] - yloc
+        if (ndb <= 1) then
+          call gslib.cova3(xx, yy, 0.0, xdb[0], ydb[0], 0.0,
+            nst, c0, it, cc, aa, irot, rotmat, covres)
+          cb := covres[1]
+        else
+          cb := 0.0
+          for i := 0, ndb
+            call gslib.cova3(xx, yy, 0.0, xdb[i], ydb[i], 0.0,
+              nst, c0, it, cc, aa, irot, rotmat, covres)
+            cb := cb + covres[1]
+            dx := xx - xdb[i]
+            dy := yy - ydb[i]
+            if (dx * dx + dy * dy < 1.0e-10) then
+              cb := cb - c0
+            end if
+          end for
+          cb := cb / f64(ndb)
+        end if
+        if (ktype == 0) then
+          s[0] := cb / cbb
+          est[gi] := s[0] * vr[jj] + (1.0 - s[0]) * skmean
+          estv[gi] := cbb - s[0] * cb
+        else
+          est[gi] := vr[jj]
+          estv[gi] := cbb - 2.0 * cb + cb1
+        end if
+      ! multiple samples — solve kriging system
+      else
+        ! copy neighbor data
+        for ia := 0, na
+          jj := i32(nums[ia])
+          xa[ia] := x[jj]
+          ya[ia] := y[jj]
+          vra[ia] := vr[jj]
+        end for
+
+        neq := na + ktype
+        nn := (neq + 1) * neq / 2
+
+        ! build LHS matrix (upper triangular, packed columnwise)
+        in := 0
+        for j := 0, na
+          for i := 0, j + 1
+            call gslib.cova3(xa[i], ya[i], 0.0, xa[j], ya[j], 0.0,
+              nst, c0, it, cc, aa, irot, rotmat, covres)
+            a[in] := covres[1]
+            in := in + 1
+          end for
+          ! build RHS vector
+          xx := xa[j] - xloc
+          yy := ya[j] - yloc
+          if (ndb <= 1) then
+            call gslib.cova3(xx, yy, 0.0, xdb[0], ydb[0], 0.0,
+              nst, c0, it, cc, aa, irot, rotmat, covres)
+            cb := covres[1]
+          else
+            cb := 0.0
+            for i := 0, ndb
+              call gslib.cova3(xx, yy, 0.0, xdb[i], ydb[i], 0.0,
+                nst, c0, it, cc, aa, irot, rotmat, covres)
+              cb := cb + covres[1]
+              dx := xx - xdb[i]
+              dy := yy - ydb[i]
+              if (dx * dx + dy * dy < 1.0e-10) then
+                cb := cb - c0
+              end if
+            end for
+            cb := cb / f64(ndb)
+          end if
+          r[j] := cb
+          rr[j] := cb
+        end for
+
+        ! unbiasedness constraint for ordinary kriging
+        if (ktype == 1) then
+          for i := 0, na
+            a[in] := unbias
+            in := in + 1
+          end for
+          a[in] := 0.0
+          r[neq - 1] := unbias
+          rr[neq - 1] := unbias
+        end if
+
+        ! solve
+        call gslib.ksol(neq, a, r, s, ksolres)
+        ising := ksolres[0]
+        if (ising /= 0.0) then
+          est[gi] := -999.0
+          estv[gi] := -999.0
+        else
+          ! compute estimate and variance
+          sumw := 0.0
+          est[gi] := 0.0
+          estv[gi] := cbb
+          if (ktype == 1) then
+            estv[gi] := estv[gi] - s[na] * unbias
+          end if
+          for i := 0, na
+            sumw := sumw + s[i]
+            est[gi] := est[gi] + s[i] * vra[i]
+            estv[gi] := estv[gi] - s[i] * rr[i]
+          end for
+          if (ktype == 0) then
+            est[gi] := est[gi] + (1.0 - sumw) * skmean
+          end if
+        end if
+      end if
+    end for
+  end for
+end

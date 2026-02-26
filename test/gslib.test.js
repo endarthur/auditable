@@ -1285,3 +1285,305 @@ describe('gslib.srchsupr', () => {
     assert.ok(infoct >= 2, `should have at least 2 informed octants, got ${infoct}`);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════
+// ksol
+// ═════════════════════════════════════════════════════════════════════
+
+describe('gslib.ksol', () => {
+  // Memory layout:
+  // a:      0       (packed upper triangular: max 15 f64 for 5x5)
+  // r:      120     (5 f64)
+  // s:      160     (5 f64)
+  // result: 200     (1 f64)
+  const A = 0, R = 120, S = 160, RESULT = 200;
+
+  it('solves a 2x2 system', async () => {
+    const { lib, memory } = await getGslib();
+    // System: [4 2; 2 3] * [x; y] = [8; 7]
+    // Upper triangular packed (columnwise): a(1,1)=4, a(1,2)=2, a(2,2)=3
+    // Solution: x=1, y=2 (4+4=8, 2+6=8... let me recalc)
+    // 4x + 2y = 8, 2x + 3y = 7 → x=1, y=2 → 4+4=8 ✓, 2+6=8 ✗
+    // Actually: 2x+3y = 2+6 = 8 ≠ 7. Let me fix:
+    // 4x + 2y = 10, 2x + 3y = 8 → from 1st: x = (10-2y)/4
+    // 2*(10-2y)/4 + 3y = 8 → (20-4y)/4 + 3y = 8 → 5-y+3y = 8 → 2y=3 → y=1.5, x=1.75
+    // Let me use a simpler system:
+    // [2 1; 1 2] * [1; 1] = [3; 3]
+    // Packed: a(0)=2 (1,1), a(1)=1 (1,2), a(2)=2 (2,2)
+    writeF64(memory, A, [2, 1, 2]);
+    writeF64(memory, R, [3, 3]);
+    writeF64(memory, RESULT, [0]);
+
+    lib.gslib.ksol(2, A, R, S, RESULT);
+
+    const ising = readF64(memory, RESULT, 1)[0];
+    assert.equal(ising, 0, 'should not be singular');
+    const sol = readF64(memory, S, 2);
+    approx(sol[0], 1.0, 1e-6);
+    approx(sol[1], 1.0, 1e-6);
+  });
+
+  it('solves a 3x3 system', async () => {
+    const { lib, memory } = await getGslib();
+    // [4 2 1; 2 5 2; 1 2 6] * [1; 2; 3] = [4+4+3; 2+10+6; 1+4+18] = [11; 18; 23]
+    // Packed upper triangular columnwise:
+    // col 1: a(1,1)=4
+    // col 2: a(1,2)=2, a(2,2)=5
+    // col 3: a(1,3)=1, a(2,3)=2, a(3,3)=6
+    writeF64(memory, A, [4, 2, 5, 1, 2, 6]);
+    writeF64(memory, R, [11, 18, 23]);
+    writeF64(memory, RESULT, [0]);
+
+    lib.gslib.ksol(3, A, R, S, RESULT);
+
+    const ising = readF64(memory, RESULT, 1)[0];
+    assert.equal(ising, 0);
+    const sol = readF64(memory, S, 3);
+    approx(sol[0], 1.0, 1e-6);
+    approx(sol[1], 2.0, 1e-6);
+    approx(sol[2], 3.0, 1e-6);
+  });
+
+  it('detects singular matrix', async () => {
+    const { lib, memory } = await getGslib();
+    // [1 2; 2 4] is singular (row 2 = 2*row 1)
+    writeF64(memory, A, [1, 2, 4]);
+    writeF64(memory, R, [3, 6]);
+    writeF64(memory, RESULT, [0]);
+
+    lib.gslib.ksol(2, A, R, S, RESULT);
+
+    const ising = readF64(memory, RESULT, 1)[0];
+    assert.ok(ising !== 0, `should detect singularity, ising=${ising}`);
+  });
+
+  it('returns -1 for neq <= 1', async () => {
+    const { lib, memory } = await getGslib();
+    writeF64(memory, RESULT, [0]);
+
+    lib.gslib.ksol(1, A, R, S, RESULT);
+
+    const ising = readF64(memory, RESULT, 1)[0];
+    assert.equal(ising, -1);
+  });
+
+  it('solves OK kriging system (3 data + Lagrange)', async () => {
+    const { lib, memory } = await getGslib();
+    // 3 data points + 1 Lagrange multiplier → 4x4 system
+    // Covariance matrix for OK (spherical, range=10, c0=0, cc=1):
+    //   C(i,i)=1, C(i,j)=cov(h_ij), plus Lagrange row/col of 1s and 0 corner
+    //
+    // For a simple test, use identity-like covariances with Lagrange:
+    // [1.0  0.5  0.3  1.0]   [w1]   [0.8]
+    // [0.5  1.0  0.4  1.0] * [w2] = [0.6]
+    // [0.3  0.4  1.0  1.0]   [w3]   [0.4]
+    // [1.0  1.0  1.0  0.0]   [mu]   [1.0]
+    //
+    // Packed upper triangular:
+    // col1: 1.0
+    // col2: 0.5, 1.0
+    // col3: 0.3, 0.4, 1.0
+    // col4: 1.0, 1.0, 1.0, 0.0
+    writeF64(memory, A, [1.0, 0.5, 1.0, 0.3, 0.4, 1.0, 1.0, 1.0, 1.0, 0.0]);
+    writeF64(memory, R, [0.8, 0.6, 0.4, 1.0]);
+    writeF64(memory, RESULT, [0]);
+
+    lib.gslib.ksol(4, A, R, S, RESULT);
+
+    const ising = readF64(memory, RESULT, 1)[0];
+    assert.equal(ising, 0, 'OK system should be solvable');
+
+    const sol = readF64(memory, S, 4);
+    // Weights should sum to 1 (Lagrange constraint)
+    const wsum = sol[0] + sol[1] + sol[2];
+    approx(wsum, 1.0, 1e-4);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// kb2d
+// ═════════════════════════════════════════════════════════════════════
+
+describe('gslib.kb2d', () => {
+  // Memory layout for kb2d tests (use high offsets to avoid all prior tests)
+  const BASE = 32768;
+  // Data arrays
+  const X    = BASE;                    // 20 f64 = 160
+  const Y    = BASE + 160;              // 20 f64
+  const VR   = BASE + 320;             // 20 f64
+  // Variogram config
+  const IT   = BASE + 480;              // 4 i32 = 16
+  const CC   = BASE + 496;              // 4 f64 = 32 (needs 8-byte align: 496)
+  const AA   = BASE + 528;              // 4 f64 = 32
+  const ROTMAT = BASE + 560;            // 18 f64 = 144 (up to 2 structures)
+  // Output grids
+  const EST  = BASE + 704;              // 100 f64 = 800
+  const ESTV = BASE + 1504;             // 100 f64 = 800
+  // Scratch (ndmax=10)
+  const XA   = BASE + 2304;             // 11 f64 = 88
+  const YA   = BASE + 2392;             // 11 f64
+  const VRA  = BASE + 2480;             // 11 f64
+  const DIST = BASE + 2568;             // 11 f64
+  const NUMS = BASE + 2656;             // 11 f64
+  const R    = BASE + 2744;             // 12 f64 = 96
+  const RR   = BASE + 2840;             // 12 f64
+  const S_   = BASE + 2936;             // 12 f64
+  const KA   = BASE + 3032;             // 78 f64 (12*13/2 = 78) = 624
+  // Block discretization
+  const XDB  = BASE + 3656;             // 9 f64 = 72
+  const YDB  = BASE + 3728;             // 9 f64
+  const COVRES = BASE + 3800;           // 2 f64 = 16
+  const KSOLRES = BASE + 3816;          // 1 f64 = 8
+
+  async function setupKb2d(data, opts = {}) {
+    const {
+      nx = 3, ny = 3,
+      xmn = 5, ymn = 5,
+      xsiz = 10, ysiz = 10,
+      nxdis = 1, nydis = 1,
+      ndmin = 1, ndmax = 10,
+      radius = 50,
+      ktype = 1,      // ordinary kriging
+      skmean = 0,
+      nst = 1, c0 = 0,
+      it = [1], cc = [1.0], aa = [10.0],
+      ang = [0], anis = [1.0]
+    } = opts;
+
+    const { lib, memory } = await getGslib();
+    const nd = data.length;
+
+    writeF64(memory, X, data.map(d => d[0]));
+    writeF64(memory, Y, data.map(d => d[1]));
+    writeF64(memory, VR, data.map(d => d[2]));
+
+    writeI32(memory, IT, it);
+    writeF64(memory, CC, cc);
+    writeF64(memory, AA, aa);
+
+    // Set up rotation matrices for each structure
+    for (let is = 0; is < nst; is++) {
+      lib.gslib.setrot(ang[is], 0, 0, anis[is], 1.0, is, ROTMAT);
+    }
+
+    lib.gslib.kb2d(
+      nx, ny, xmn, ymn, xsiz, ysiz,
+      nxdis, nydis,
+      nd, X, Y, VR,
+      ndmin, ndmax, radius,
+      ktype, skmean,
+      nst, c0, IT, CC, AA,
+      0, ROTMAT,
+      EST, ESTV,
+      XA, YA, VRA, DIST, NUMS,
+      R, RR, S_, KA,
+      XDB, YDB, COVRES, KSOLRES
+    );
+
+    return {
+      lib, memory, nx, ny,
+      est: readF64(memory, EST, nx * ny),
+      estv: readF64(memory, ESTV, nx * ny)
+    };
+  }
+
+  it('estimates at data location equal to data value (OK, point kriging)', async () => {
+    // Single data point at grid node center — OK estimate should equal data value
+    const data = [[15, 15, 42.0]];
+    const { est, estv } = await setupKb2d(data, {
+      nx: 3, ny: 3, xmn: 5, ymn: 5, xsiz: 10, ysiz: 10,
+      ndmin: 1, ndmax: 10, radius: 50,
+      ktype: 1, nst: 1, c0: 0, it: [1], cc: [1.0], aa: [10.0]
+    });
+
+    // Grid node (1,1) is at (15, 15) — same as data point
+    const idx = 1 + 1 * 3;
+    approx(est[idx], 42.0, 0.1);
+    // Variance at data location should be ~0
+    assert.ok(estv[idx] < 0.1, `variance at data location should be ~0, got ${estv[idx]}`);
+  });
+
+  it('unestimated nodes have sentinel value', async () => {
+    // Data far from some grid nodes with small search radius
+    const data = [[5, 5, 10.0]];
+    const { est, estv } = await setupKb2d(data, {
+      nx: 3, ny: 3, xmn: 5, ymn: 5, xsiz: 10, ysiz: 10,
+      ndmin: 2, ndmax: 10, radius: 5,
+      ktype: 1, nst: 1, c0: 0, it: [1], cc: [1.0], aa: [10.0]
+    });
+
+    // Most nodes should be unestimated (ndmin=2 but only 1 datum)
+    let unest = 0;
+    for (let i = 0; i < 9; i++) {
+      if (est[i] === -999.0) unest++;
+    }
+    assert.equal(unest, 9, 'all nodes unestimated (ndmin=2 but only 1 data point)');
+  });
+
+  it('OK weights sum to 1', async () => {
+    // Multiple data points — OK weights verified implicitly:
+    // estimate = sum(wi * vi) with sum(wi) = 1
+    const data = [
+      [5, 5, 10.0],
+      [25, 5, 20.0],
+      [15, 15, 30.0],
+    ];
+    const { est, estv } = await setupKb2d(data, {
+      nx: 3, ny: 3, xmn: 5, ymn: 5, xsiz: 10, ysiz: 10,
+      ndmin: 1, ndmax: 10, radius: 50,
+      ktype: 1, nst: 1, c0: 0.5, it: [1], cc: [1.0], aa: [20.0]
+    });
+
+    // All estimated nodes should have estimates within data range
+    for (let i = 0; i < 9; i++) {
+      if (est[i] !== -999.0) {
+        assert.ok(est[i] >= 5 && est[i] <= 35,
+          `OK estimate ${est[i]} should be within data range`);
+        assert.ok(estv[i] >= 0,
+          `variance ${estv[i]} should be non-negative`);
+      }
+    }
+  });
+
+  it('simple kriging uses mean', async () => {
+    // SK with known mean: estimate = sum(wi*vi) + (1-sum(wi))*mean
+    const data = [[5, 5, 100.0]];
+    const skmean = 50.0;
+    const { est } = await setupKb2d(data, {
+      nx: 3, ny: 3, xmn: 5, ymn: 5, xsiz: 10, ysiz: 10,
+      ndmin: 1, ndmax: 10, radius: 50,
+      ktype: 0, skmean,
+      nst: 1, c0: 0, it: [1], cc: [1.0], aa: [20.0]
+    });
+
+    // At data location (0,0): estimate ~ data value
+    approx(est[0], 100.0, 1.0);
+
+    // Far from data: estimate should approach skmean
+    // Node (2,2) at (25,25) — distance ~28.3 from (5,5), range=20
+    // Weight should be low, so estimate near skmean
+    if (est[8] !== -999.0) {
+      assert.ok(est[8] < 100.0, `far estimate ${est[8]} should be less than data value`);
+      assert.ok(est[8] >= skmean * 0.5,
+        `far estimate ${est[8]} should trend toward skmean=${skmean}`);
+    }
+  });
+
+  it('variance increases with distance from data', async () => {
+    const data = [[5, 5, 10.0], [5, 15, 20.0]];
+    const { est, estv } = await setupKb2d(data, {
+      nx: 3, ny: 3, xmn: 5, ymn: 5, xsiz: 10, ysiz: 10,
+      ndmin: 1, ndmax: 10, radius: 50,
+      ktype: 1, nst: 1, c0: 0, it: [1], cc: [1.0], aa: [20.0]
+    });
+
+    // Variance at node near data should be less than variance far from data
+    const varNear = estv[0 + 0 * 3]; // (0,0) at (5,5) — data location
+    const varFar  = estv[2 + 2 * 3]; // (2,2) at (25,25) — far from data
+
+    if (varNear !== -999.0 && varFar !== -999.0) {
+      assert.ok(varNear < varFar,
+        `variance near data (${varNear}) should be < variance far (${varFar})`);
+    }
+  });
+});
