@@ -32,6 +32,8 @@ const defs = [
   'example_atra_v_julia.txt',
   'example_alpack.txt',
   'example_alpack_atra.txt',
+  'example_gslib_kb2d.txt',
+  'example_gslib_sgsim.txt',
 ];
 
 // ── Parser ──

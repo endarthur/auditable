@@ -730,7 +730,12 @@ export function codegen(ast, interpValues, userImports) {
         }
         case 'FuncRef': return 'i32';
         case 'Ident': return resolveType(expr.name) || 'f64';
-        case 'BinOp': return inferExprType(expr.left);
+        case 'BinOp': {
+          const op = expr.op;
+          if (op === '==' || op === '/=' || op === '<' || op === '>' || op === '<=' || op === '>='
+            || op === 'and' || op === 'or') return 'i32';
+          return inferExprType(expr.left);
+        }
         case 'UnaryOp': return inferExprType(expr.operand);
         case 'FuncCall': {
           // type conversions / vector constructors
@@ -977,17 +982,41 @@ export function codegen(ast, interpValues, userImports) {
       if (name === 'trunc') { emitExpr(expr.args[0], expectedType); if (expectedType === 'f32') bw.byte(OP_F32_TRUNC); else bw.byte(OP_F64_TRUNC); return; }
       if (name === 'nearest') { emitExpr(expr.args[0], expectedType); if (expectedType === 'f32') bw.byte(OP_F32_NEAREST); else bw.byte(OP_F64_NEAREST); return; }
       if (name === 'min') {
-        emitExpr(expr.args[0], expectedType); emitExpr(expr.args[1], expectedType);
-        if (isVector(expectedType)) { const op = SIMD_OPS[expectedType + '.min']; if (op === undefined) throw new Error('min not supported for ' + expectedType); emitSimd(op); }
-        else if (expectedType === 'f32') bw.byte(OP_F32_MIN);
-        else bw.byte(OP_F64_MIN);
+        if (isVector(expectedType)) {
+          emitExpr(expr.args[0], expectedType); emitExpr(expr.args[1], expectedType);
+          const op = SIMD_OPS[expectedType + '.min']; if (op === undefined) throw new Error('min not supported for ' + expectedType); emitSimd(op);
+        } else if (expectedType === 'i32' || expectedType === 'i64') {
+          // Wasm has no i32.min/i64.min — emit: a b a b lt_s select
+          emitExpr(expr.args[0], expectedType);
+          emitExpr(expr.args[1], expectedType);
+          emitExpr(expr.args[0], expectedType);
+          emitExpr(expr.args[1], expectedType);
+          bw.byte(expectedType === 'i32' ? OP_I32_LT_S : OP_I64_LT_S);
+          bw.byte(OP_SELECT);
+        } else {
+          emitExpr(expr.args[0], expectedType); emitExpr(expr.args[1], expectedType);
+          if (expectedType === 'f32') bw.byte(OP_F32_MIN);
+          else bw.byte(OP_F64_MIN);
+        }
         return;
       }
       if (name === 'max') {
-        emitExpr(expr.args[0], expectedType); emitExpr(expr.args[1], expectedType);
-        if (isVector(expectedType)) { const op = SIMD_OPS[expectedType + '.max']; if (op === undefined) throw new Error('max not supported for ' + expectedType); emitSimd(op); }
-        else if (expectedType === 'f32') bw.byte(OP_F32_MAX);
-        else bw.byte(OP_F64_MAX);
+        if (isVector(expectedType)) {
+          emitExpr(expr.args[0], expectedType); emitExpr(expr.args[1], expectedType);
+          const op = SIMD_OPS[expectedType + '.max']; if (op === undefined) throw new Error('max not supported for ' + expectedType); emitSimd(op);
+        } else if (expectedType === 'i32' || expectedType === 'i64') {
+          // Wasm has no i32.max/i64.max — emit: a b a b gt_s select
+          emitExpr(expr.args[0], expectedType);
+          emitExpr(expr.args[1], expectedType);
+          emitExpr(expr.args[0], expectedType);
+          emitExpr(expr.args[1], expectedType);
+          bw.byte(expectedType === 'i32' ? OP_I32_GT_S : OP_I64_GT_S);
+          bw.byte(OP_SELECT);
+        } else {
+          emitExpr(expr.args[0], expectedType); emitExpr(expr.args[1], expectedType);
+          if (expectedType === 'f32') bw.byte(OP_F32_MAX);
+          else bw.byte(OP_F64_MAX);
+        }
         return;
       }
       if (name === 'copysign') { emitExpr(expr.args[0], expectedType); emitExpr(expr.args[1], expectedType); if (expectedType === 'f32') bw.byte(OP_F32_COPYSIGN); else bw.byte(OP_F64_COPYSIGN); return; }

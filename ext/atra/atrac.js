@@ -121,6 +121,43 @@ export function instantiate(imports = {}) {
   }
   return exports;
 }
+
+// ── Memory helpers ──
+// Bump allocator and typed read/write for Wasm linear memory.
+// Caller manages offset via state = { off: 0 }.
+
+export function alloc(state, nf64 = 0, ni32 = 0) {
+  const o = state.off;
+  state.off += nf64 * 8 + ni32 * 4;
+  state.off = (state.off + 7) & ~7;  // align to 8 bytes (f64 boundary)
+  return o;
+}
+
+export function writeF64(mem, off, vals) {
+  const f = new Float64Array(mem.buffer);
+  for (let i = 0; i < vals.length; i++) f[off / 8 + i] = vals[i];
+}
+
+export function writeI32(mem, off, vals) {
+  const v = new Int32Array(mem.buffer);
+  for (let i = 0; i < vals.length; i++) v[off / 4 + i] = vals[i];
+}
+
+// read* return copies (.slice), safe across memory.grow
+export function readF64(mem, off, n) {
+  return new Float64Array(mem.buffer.slice(off, off + n * 8));
+}
+
+export function readI32(mem, off, n) {
+  return new Int32Array(mem.buffer.slice(off, off + n * 4));
+}
+
+// Grow memory if allocator offset exceeds current size (64KB pages)
+export function growMemory(mem, off) {
+  const needed = Math.ceil(off / 65536);
+  const current = mem.buffer.byteLength / 65536;
+  if (current < needed) mem.grow(needed - current + 1);
+}
 `;
 
 /**
