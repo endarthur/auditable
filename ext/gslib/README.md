@@ -29,6 +29,8 @@ Faithful transcription of Stanford's [GSLIB](http://www.gslib.com/) (Deutsch & J
 | `gslib.setsupr` | subroutine | Build super block network and sort data | setsupr.for |
 | `gslib.picksup` | subroutine | Determine which super blocks to search | picksupr.for |
 | `gslib.srchsupr` | subroutine | Search within super blocks for nearby data | srchsupr.for |
+| `gslib.ksol` | subroutine | Kriging system solver (upper triangular, no pivoting) | ksol.for |
+| `gslib.kb2d` | subroutine | 2D ordinary/simple kriging | kb2d.for |
 
 ## Implementation order
 
@@ -44,7 +46,7 @@ Following the dependency chain from primitives to programs:
 8. Kriging — kt3d/kb2d core loops
 9. Simulation — sgsim/sisim core loops
 
-Items 1-7 are implemented. Items 8+ are future work.
+Items 1-8 are implemented. Item 9 is future work.
 
 ## Rotation matrix storage
 
@@ -67,6 +69,14 @@ Fortran's `setsupr` sorts data into super blocks using `sortem` with 4+ companio
 Output grid parameters are returned via `out[0..8]` (nxsup, nysup, nzsup, xmnsup, ymnsup, zmnsup, xsizsup, ysizsup, zsizsup). Callers pass these to `picksup` and `srchsupr`.
 
 `srchsupr` supports optional octant search (noct > 0) which limits the number of samples per spatial octant. The octant counts are stored in a caller-provided `inoct` i32[8] array (atra has no local arrays).
+
+## Kriging
+
+`ksol` is the kriging system solver — upper triangular Gauss elimination without pivoting, for OK/SK systems. Uses packed columnwise storage where element (i,j) with j>=i is at position `i + j*(j-1)/2` (1-indexed). Returns 0 on success, k>0 if pivot k is near-zero, -1 if neq<=1.
+
+`kb2d` is the full 2D ordinary/simple kriging program. Brute-force neighbor search with insertion sort by distance (no super block search — matching Fortran kb2d). Uses `cova3` + `setrot` for covariance evaluation instead of Fortran's inline `cova2`. Block discretization via nxdis x nydis internal points. ktype=0 for simple kriging, ktype=1 for ordinary kriging. Output: `est[nx*ny]` estimates, `estv[nx*ny]` variances, sentinel -999.0 for unestimated nodes.
+
+All scratch arrays (xa, ya, vra, dist, nums, r, rr, s, a, xdb, ydb, covres, ksolres) are caller-provided — atra has no local arrays.
 
 ## RNG
 
