@@ -608,3 +608,373 @@ begin
   result[0] := cmax
   result[1] := cova
 end
+
+! ── setsupr — establish super block search limits and sort data ──────
+!
+! builds a 3D "super block" network and orders data by super block index.
+! super block grid spans the kriging/simulation grid.
+! data outside the grid are clamped to the nearest edge block.
+!
+! nd         = number of data points
+! x, y, z   = data coordinates (reordered by super block)
+! vr         = data values (reordered with coordinates)
+! tmp        = scratch array (stores super block index per datum)
+! nisb       = cumulative data count per super block (i32 array)
+! idx        = scratch i32[2] for getindx
+! ixarr      = scratch i32[nd] for index permutation
+! lt, ut     = scratch i32[64] each for sortem
+!
+! outputs:
+!   out[0..5] = nxsup, nysup, nzsup, xmnsup, ymnsup, zmnsup
+!   out[6..8] = xsizsup, ysizsup, zsizsup  (stored as f64)
+!   data arrays x, y, z, vr are reordered by super block.
+!   nisb[i] = cumulative number of data up to super block i.
+!
+! NOTE: Fortran's sortem handles nsort=4+ companions. We use an index-
+! based permutation: sort super block index with original indices,
+! then permute x, y, z, vr via a copy pass.
+!
+! Fortran ref: gslib/setsupr.for
+
+subroutine gslib.setsupr(nx: i32; xmn, xsiz: f64; ny: i32; ymn, ysiz: f64;
+  nz: i32; zmn, zsiz: f64;
+  nd: i32; x, y, z, vr, tmp: array f64;
+  nisb, idx, ixarr, lt, ut: array i32;
+  maxsbx, maxsby, maxsbz: i32;
+  out: array f64)
+var
+  nxsup, nysup, nzsup: i32
+  xsizsup, ysizsup, zsizsup, xmnsup, ymnsup, zmnsup: f64
+  i, ii, ix, iy, iz: i32
+  nstot: i32
+  oi, src: i32
+begin
+  ! establish number and size of super blocks
+  ! NOTE: atra's min/max emit f64.min/f64.max — not valid for i32.
+  ! use conditionals instead.
+  nxsup := select(nx, maxsbx, nx < maxsbx)
+  nysup := select(ny, maxsby, ny < maxsby)
+  nzsup := select(nz, maxsbz, nz < maxsbz)
+  xsizsup := f64(nx) * xsiz / f64(nxsup)
+  ysizsup := f64(ny) * ysiz / f64(nysup)
+  zsizsup := f64(nz) * zsiz / f64(nzsup)
+  xmnsup := (xmn - 0.5 * xsiz) + 0.5 * xsizsup
+  ymnsup := (ymn - 0.5 * ysiz) + 0.5 * ysizsup
+  zmnsup := (zmn - 0.5 * zsiz) + 0.5 * zsizsup
+
+  ! initialize super block counts to zero
+  nstot := nxsup * nysup * nzsup
+  for i := 0, nstot
+    nisb[i] := 0
+  end for
+
+  ! assign each datum to a super block and count
+  for i := 0, nd
+    call gslib.getindx(nxsup, xmnsup, xsizsup, x[i], idx)
+    ix := idx[0]
+    call gslib.getindx(nysup, ymnsup, ysizsup, y[i], idx)
+    iy := idx[0]
+    call gslib.getindx(nzsup, zmnsup, zsizsup, z[i], idx)
+    iz := idx[0]
+    ! 0-indexed super block linear index
+    ii := ix + iy * nxsup + iz * nxsup * nysup
+    tmp[i] := f64(ii)
+    nisb[ii] := nisb[ii] + 1
+  end for
+
+  ! Build source permutation: ixarr[j] = which original element goes to position j.
+  ! Uses counting sort (O(n)) instead of Fortran's sortem with 4+ companions.
+
+  ! Exclusive prefix sum: nisb[i] = start position for block i
+  ii := 0
+  for i := 0, nstot
+    ix := nisb[i]
+    nisb[i] := ii
+    ii := ii + ix
+  end for
+
+  ! Compute source permutation
+  for i := 0, nd
+    ii := i32(tmp[i])
+    ixarr[nisb[ii]] := i
+    nisb[ii] := nisb[ii] + 1
+  end for
+
+  ! Now nisb[i] = cumulative count up to and including block i (what Fortran returns)
+
+  ! Apply source permutation via cycle-following.
+  ! ixarr[j] = source index for position j.
+  ! Mark visited by setting ixarr[j] = -1 after processing.
+  for i := 0, nd
+    if (ixarr[i] /= i and ixarr[i] >= 0) then
+      ! start of a cycle: save element at position i
+      out[9] := x[i]
+      out[10] := y[i]
+      out[11] := z[i]
+      out[12] := vr[i]
+
+      oi := i
+      src := ixarr[i]
+      while (src /= i)
+        x[oi] := x[src]
+        y[oi] := y[src]
+        z[oi] := z[src]
+        vr[oi] := vr[src]
+        ixarr[oi] := -1
+        oi := src
+        src := ixarr[oi]
+      end while
+
+      ! close cycle: place saved element at the last position
+      x[oi] := out[9]
+      y[oi] := out[10]
+      z[oi] := out[11]
+      vr[oi] := out[12]
+      ixarr[oi] := -1
+    end if
+  end for
+
+  ! store output grid parameters
+  out[0] := f64(nxsup)
+  out[1] := f64(nysup)
+  out[2] := f64(nzsup)
+  out[3] := xmnsup
+  out[4] := ymnsup
+  out[5] := zmnsup
+  out[6] := xsizsup
+  out[7] := ysizsup
+  out[8] := zsizsup
+end
+
+! ── picksup — determine which super blocks to search ─────────────────
+!
+! given a search radius and rotation matrix, determines which super
+! blocks could contain data within the search ellipsoid.
+!
+! tests all super block offset combinations (i,j,k), checks if the
+! closest corner-to-corner distance is within the search radius.
+!
+! outputs:
+!   nsbtosr[0]          = number of super blocks to search
+!   ixsbtosr, iysbtosr, izsbtosr = offset arrays
+!
+! Fortran ref: gslib/picksupr.for (picksup)
+
+subroutine gslib.picksup(nxsup: i32; xsizsup: f64;
+  nysup: i32; ysizsup: f64;
+  nzsup: i32; zsizsup: f64;
+  irot: i32; rotmat: array f64; radsqd: f64;
+  nsbtosr: array i32;
+  ixsbtosr, iysbtosr, izsbtosr: array i32)
+var
+  i, j, k, i1, j1, k1, i2, j2, k2: i32
+  xo, yo, zo, xdis, ydis, zdis: f64
+  shortest, hsqd: f64
+  ns: i32
+begin
+  ns := 0
+
+  for i := -(nxsup - 1), nxsup
+    for j := -(nysup - 1), nysup
+      for k := -(nzsup - 1), nzsup
+        xo := f64(i) * xsizsup
+        yo := f64(j) * ysizsup
+        zo := f64(k) * zsizsup
+
+        ! find closest distance between corners of the two super blocks
+        shortest := 1.0e21
+        for i1 := -1, 2
+          for j1 := -1, 2
+            for k1 := -1, 2
+              for i2 := -1, 2
+                for j2 := -1, 2
+                  for k2 := -1, 2
+                    if (i1 /= 0 and j1 /= 0 and k1 /= 0
+                        and i2 /= 0 and j2 /= 0 and k2 /= 0) then
+                      xdis := f64(i1 - i2) * 0.5 * xsizsup + xo
+                      ydis := f64(j1 - j2) * 0.5 * ysizsup + yo
+                      zdis := f64(k1 - k2) * 0.5 * zsizsup + zo
+                      hsqd := gslib.sqdist(0.0, 0.0, 0.0,
+                        xdis, ydis, zdis, irot, rotmat)
+                      if (hsqd < shortest) then
+                        shortest := hsqd
+                      end if
+                    end if
+                  end for
+                end for
+              end for
+            end for
+          end for
+        end for
+
+        ! keep this super block if close enough
+        if (shortest <= radsqd) then
+          ixsbtosr[ns] := i
+          iysbtosr[ns] := j
+          izsbtosr[ns] := k
+          ns := ns + 1
+        end if
+      end for
+    end for
+  end for
+
+  nsbtosr[0] := ns
+end
+
+! ── srchsupr — search within super blocks for nearby data ────────────
+!
+! searches data sorted by setsupr for points within the search radius.
+! returns indices of close data sorted by distance.
+! optional octant search (noct > 0) limits data per octant.
+!
+! close[0..nclose-1]   = indices (f64) of nearby data, sorted by distance
+! tmp[0..nclose-1]     = squared distances (reused from setsupr's tmp)
+! result[0]            = nclose
+! result[1]            = infoct (number of informed octants)
+! idx                  = scratch i32[2] for getindx
+! inoct                = scratch i32[8] for octant counts
+! lt, ut               = scratch i32[64] each for sortem
+!
+! Fortran ref: gslib/srchsupr.for
+
+subroutine gslib.srchsupr(xloc, yloc, zloc, radsqd: f64;
+  irot: i32; rotmat: array f64;
+  nsbtosr: i32; ixsbtosr, iysbtosr, izsbtosr: array i32;
+  noct, nd: i32;
+  x, y, z, tmp, close: array f64;
+  nisb: array i32;
+  nxsup: i32; xmnsup, xsizsup: f64;
+  nysup: i32; ymnsup, ysizsup: f64;
+  nzsup: i32; zmnsup, zsizsup: f64;
+  result: array f64;
+  idx, inoct, lt, ut: array i32)
+var
+  ix, iy, iz: i32
+  isup, ixsup, iysup, izsup: i32
+  ii, nums, nc, i, j: i32
+  hsqd: f64
+  na, nt, iq: i32
+  dx, dy, dz, h: f64
+  ci: i32
+begin
+  ! determine super block of estimation point
+  call gslib.getindx(nxsup, xmnsup, xsizsup, xloc, idx)
+  ix := idx[0]
+  call gslib.getindx(nysup, ymnsup, ysizsup, yloc, idx)
+  iy := idx[0]
+  call gslib.getindx(nzsup, zmnsup, zsizsup, zloc, idx)
+  iz := idx[0]
+
+  nc := 0
+
+  ! loop over super blocks to search
+  for isup := 0, nsbtosr
+    ixsup := ix + ixsbtosr[isup]
+    iysup := iy + iysbtosr[isup]
+    izsup := iz + izsbtosr[isup]
+
+    ! skip if outside grid (0-indexed: valid range [0, n-1])
+    if (ixsup < 0 or ixsup >= nxsup
+        or iysup < 0 or iysup >= nysup
+        or izsup < 0 or izsup >= nzsup) then
+      ! continue to next isup (use else-if to skip rest)
+    else
+      ! linear index of super block (0-indexed)
+      ii := ixsup + iysup * nxsup + izsup * nxsup * nysup
+
+      ! figure out data range in this super block
+      if (ii == 0) then
+        nums := nisb[0]
+        i := 0
+      else
+        nums := nisb[ii] - nisb[ii - 1]
+        i := nisb[ii - 1]
+      end if
+
+      ! check each datum in this super block
+      for j := 0, nums
+        hsqd := gslib.sqdist(xloc, yloc, zloc,
+          x[i], y[i], z[i], irot, rotmat)
+        if (hsqd <= radsqd) then
+          close[nc] := f64(i)
+          tmp[nc] := hsqd
+          nc := nc + 1
+        end if
+        i := i + 1
+      end for
+    end if
+  end for
+
+  ! sort nearby samples by distance
+  if (nc > 1) then
+    call gslib.sortem(0, nc, tmp, close, close, 1, lt, ut)
+  end if
+
+  ! if not doing octant search, return
+  if (noct <= 0) then
+    result[0] := f64(nc)
+    result[1] := 0.0
+    call return()
+  end if
+
+  ! octant search: partition data into octants
+  for i := 0, 8
+    inoct[i] := 0
+  end for
+
+  nt := 8 * noct
+  na := 0
+  for j := 0, nc
+    ci := i32(close[j])
+    h := tmp[j]
+    dx := x[ci] - xloc
+    dy := y[ci] - yloc
+    dz := z[ci] - zloc
+
+    ! determine octant (0-indexed: 0-7)
+    if (dz >= 0.0) then
+      iq := 3
+      if (dx <= 0.0 and dy > 0.0) then
+        iq := 0
+      end if
+      if (dx > 0.0 and dy >= 0.0) then
+        iq := 1
+      end if
+      if (dx < 0.0 and dy <= 0.0) then
+        iq := 2
+      end if
+    else
+      iq := 7
+      if (dx <= 0.0 and dy > 0.0) then
+        iq := 4
+      end if
+      if (dx > 0.0 and dy >= 0.0) then
+        iq := 5
+      end if
+      if (dx < 0.0 and dy <= 0.0) then
+        iq := 6
+      end if
+    end if
+
+    inoct[iq] := inoct[iq] + 1
+
+    ! keep if octant not yet full
+    if (inoct[iq] <= noct) then
+      close[na] := f64(ci)
+      tmp[na] := h
+      na := na + 1
+      if (na == nt) then
+        break
+      end if
+    end if
+  end for
+
+  nc := na
+  result[1] := 0.0
+  for i := 0, 8
+    if (inoct[i] > 0) then
+      result[1] := result[1] + 1.0
+    end if
+  end for
+  result[0] := f64(nc)
+end

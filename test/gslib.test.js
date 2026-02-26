@@ -842,3 +842,446 @@ describe('gslib.backtr', () => {
     }
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════
+// setsupr
+// ═════════════════════════════════════════════════════════════════════
+
+describe('gslib.setsupr', () => {
+  // Memory layout for setsupr tests (generous spacing):
+  // Using page 2+ (offset 4096+) to avoid conflicts
+  const BASE = 4096;
+  // nd max = 20
+  const X   = BASE;                  // 20 f64 = 160 bytes
+  const Y   = BASE + 160;            // 20 f64
+  const Z   = BASE + 320;            // 20 f64
+  const VR  = BASE + 480;            // 20 f64
+  const TMP = BASE + 640;            // 20 f64
+  const NISB = BASE + 800;           // 100 i32 = 400 bytes
+  const IDX  = BASE + 1200;          // 2 i32 = 8 bytes
+  const IXARR = BASE + 1208;         // 20 i32 = 80 bytes
+  const LT   = BASE + 1288;          // 64 i32 = 256 bytes
+  const UT   = BASE + 1544;          // 64 i32 = 256 bytes
+  const OUT  = BASE + 1800;          // 13 f64 = 104 bytes
+
+  it('assigns data to correct super blocks', async () => {
+    const { lib, memory } = await getGslib();
+
+    // 2D grid (nz=1): 4x4 cells, cell size 10
+    // xmn=5, ymn=5 (cell centers at 5,15,25,35)
+    const nd = 4;
+    // Place 4 data points in different quadrants
+    writeF64(memory, X, [5, 25, 5, 25]);    // x
+    writeF64(memory, Y, [5, 5, 25, 25]);    // y
+    writeF64(memory, Z, [0, 0, 0, 0]);      // z (2D)
+    writeF64(memory, VR, [10, 20, 30, 40]); // values
+
+    lib.gslib.setsupr(
+      4, 5, 10,       // nx, xmn, xsiz
+      4, 5, 10,       // ny, ymn, ysiz
+      1, 0.5, 1,      // nz, zmn, zsiz
+      nd, X, Y, Z, VR, TMP,
+      NISB, IDX, IXARR, LT, UT,
+      2, 2, 1,         // maxsbx, maxsby, maxsbz
+      OUT
+    );
+
+    const out = readF64(memory, OUT, 9);
+    const nxsup = out[0], nysup = out[1], nzsup = out[2];
+    assert.equal(nxsup, 2);
+    assert.equal(nysup, 2);
+    assert.equal(nzsup, 1);
+
+    // All 4 data should still be present
+    const xs = readF64(memory, X, nd);
+    const vs = readF64(memory, VR, nd);
+
+    // Check all original values are present (may be reordered)
+    const sortedV = [...vs].sort((a, b) => a - b);
+    assert.deepStrictEqual(sortedV, [10, 20, 30, 40]);
+  });
+
+  it('cumulative nisb sums to nd', async () => {
+    const { lib, memory } = await getGslib();
+
+    const nd = 6;
+    // Scatter data across a 3x3 grid
+    writeF64(memory, X, [1, 5, 9, 1, 5, 9]);
+    writeF64(memory, Y, [1, 1, 1, 5, 5, 5]);
+    writeF64(memory, Z, [0, 0, 0, 0, 0, 0]);
+    writeF64(memory, VR, [1, 2, 3, 4, 5, 6]);
+
+    lib.gslib.setsupr(
+      3, 5, 10,       // nx, xmn, xsiz
+      3, 5, 10,       // ny, ymn, ysiz
+      1, 0.5, 1,      // nz, zmn, zsiz
+      nd, X, Y, Z, VR, TMP,
+      NISB, IDX, IXARR, LT, UT,
+      3, 3, 1,
+      OUT
+    );
+
+    const out = readF64(memory, OUT, 9);
+    const nxsup = out[0], nysup = out[1], nzsup = out[2];
+    const nstot = nxsup * nysup * nzsup;
+    const nisb = readI32(memory, NISB, nstot);
+
+    // Last element of nisb should equal nd
+    assert.equal(nisb[nstot - 1], nd);
+  });
+
+  it('data sorted by super block order', async () => {
+    const { lib, memory } = await getGslib();
+
+    const nd = 4;
+    // Points deliberately out of super block order
+    writeF64(memory, X, [35, 5, 35, 5]);     // far-x, near-x, far-x, near-x
+    writeF64(memory, Y, [35, 5, 5, 35]);     // far-y, near-y, near-y, far-y
+    writeF64(memory, Z, [0, 0, 0, 0]);
+    writeF64(memory, VR, [1, 2, 3, 4]);
+
+    lib.gslib.setsupr(
+      4, 5, 10, 4, 5, 10, 1, 0.5, 1,
+      nd, X, Y, Z, VR, TMP,
+      NISB, IDX, IXARR, LT, UT,
+      2, 2, 1,
+      OUT
+    );
+
+    // After setsupr, data should be grouped by super block
+    // Super block (0,0): x<20, y<20 → point at (5,5)=vr2
+    // Super block (1,0): x>=20, y<20 → point at (35,5)=vr3
+    // Super block (0,1): x<20, y>=20 → point at (5,35)=vr4
+    // Super block (1,1): x>=20, y>=20 → point at (35,35)=vr1
+    const xs = readF64(memory, X, nd);
+    const ys = readF64(memory, Y, nd);
+
+    // First datum should be in super block 0 (lowest x, lowest y)
+    assert.ok(xs[0] < 20 && ys[0] < 20,
+      `first point (${xs[0]},${ys[0]}) should be in super block (0,0)`);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// picksup
+// ═════════════════════════════════════════════════════════════════════
+
+describe('gslib.picksup', () => {
+  // Memory layout
+  const BASE = 8192;
+  const ROTMAT = BASE;               // 9 f64 = 72 bytes
+  const NSBTOSR = BASE + 72;         // 1 i32 = 4 bytes
+  const IXSB = BASE + 76;            // 200 i32 = 800 bytes
+  const IYSB = BASE + 876;           // 200 i32
+  const IZSB = BASE + 1676;          // 200 i32
+
+  it('isotropic search: includes origin block', async () => {
+    const { lib, memory } = await getGslib();
+
+    // Identity rotation matrix at index 0
+    writeF64(memory, ROTMAT, [1, 0, 0, 0, 1, 0, 0, 0, 1]);
+
+    const radsqd = 100.0; // search radius = 10
+
+    lib.gslib.picksup(
+      2, 10.0,       // nxsup, xsizsup
+      2, 10.0,       // nysup, ysizsup
+      1, 1.0,        // nzsup, zsizsup
+      0, ROTMAT,     // irot, rotmat
+      radsqd,
+      NSBTOSR,
+      IXSB, IYSB, IZSB
+    );
+
+    const nsbtosr = readI32(memory, NSBTOSR, 1)[0];
+    assert.ok(nsbtosr > 0, 'should find at least one super block');
+
+    // Check that (0,0,0) offset is included (the block containing the point)
+    const ixsb = readI32(memory, IXSB, nsbtosr);
+    const iysb = readI32(memory, IYSB, nsbtosr);
+    const izsb = readI32(memory, IZSB, nsbtosr);
+
+    let hasOrigin = false;
+    for (let i = 0; i < nsbtosr; i++) {
+      if (ixsb[i] === 0 && iysb[i] === 0 && izsb[i] === 0) hasOrigin = true;
+    }
+    assert.ok(hasOrigin, 'should include the origin super block');
+  });
+
+  it('medium radius excludes far blocks', async () => {
+    const { lib, memory } = await getGslib();
+
+    writeF64(memory, ROTMAT, [1, 0, 0, 0, 1, 0, 0, 0, 1]);
+
+    // Radius = 15, radsqd = 225. Block size = 10.
+    // Blocks at offset 2+ have minimum corner distance = 10 (squared=100) → included.
+    // Blocks at offset 3+ have minimum corner distance = 20 (squared=400) → excluded.
+    const radsqd = 225.0;
+
+    lib.gslib.picksup(
+      5, 10.0,
+      5, 10.0,
+      1, 1.0,
+      0, ROTMAT,
+      radsqd,
+      NSBTOSR,
+      IXSB, IYSB, IZSB
+    );
+
+    const nsbtosr = readI32(memory, NSBTOSR, 1)[0];
+    // Should exclude the farthest blocks but include nearby ones
+    // Total possible = 9*9*1 = 81, should be less
+    assert.ok(nsbtosr < 81, `medium radius should exclude some blocks, got ${nsbtosr}`);
+    assert.ok(nsbtosr > 1, `should still include multiple blocks, got ${nsbtosr}`);
+  });
+
+  it('large radius includes all blocks', async () => {
+    const { lib, memory } = await getGslib();
+
+    writeF64(memory, ROTMAT, [1, 0, 0, 0, 1, 0, 0, 0, 1]);
+
+    // Very large search radius: all blocks should qualify
+    const radsqd = 1e10;
+
+    lib.gslib.picksup(
+      3, 10.0,
+      3, 10.0,
+      1, 1.0,
+      0, ROTMAT,
+      radsqd,
+      NSBTOSR,
+      IXSB, IYSB, IZSB
+    );
+
+    const nsbtosr = readI32(memory, NSBTOSR, 1)[0];
+    // 3*3*1 grid: offsets range from -2..2 in x, -2..2 in y = 5*5*1 = 25
+    assert.equal(nsbtosr, 25, 'large radius should include all offset combinations');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// srchsupr — integrated search tests
+// ═════════════════════════════════════════════════════════════════════
+
+describe('gslib.srchsupr', () => {
+  // Memory layout for integrated search tests
+  const BASE = 16384;
+  // Data arrays (max 20 points)
+  const X    = BASE;                  // 20 f64
+  const Y    = BASE + 160;            // 20 f64
+  const Z    = BASE + 320;            // 20 f64
+  const VR   = BASE + 480;            // 20 f64
+  const TMP  = BASE + 640;            // 20 f64
+  const CLOSE = BASE + 800;           // 20 f64
+  // Super block arrays
+  const NISB   = BASE + 960;          // 100 i32
+  const IDX    = BASE + 1360;         // 2 i32
+  const IXARR  = BASE + 1368;        // 20 i32
+  const LT     = BASE + 1448;         // 64 i32
+  const UT     = BASE + 1704;         // 64 i32
+  const OUT    = BASE + 1960;         // 13 f64
+  // Rotation matrix
+  const ROTMAT = BASE + 2064;         // 9 f64
+  // picksup output
+  const NSBTOSR = BASE + 2136;        // 1 i32
+  const IXSB   = BASE + 2140;         // 200 i32
+  const IYSB   = BASE + 2940;         // 200 i32
+  const IZSB   = BASE + 3740;         // 200 i32 → ends at 4540
+  // srchsupr output (f64 needs 8-byte alignment: 4544)
+  const RESULT = BASE + 4544;         // 2 f64
+  const INOCT  = BASE + 4560;         // 8 i32
+
+  async function setupSearch(points, { nx = 4, xmn = 5, xsiz = 10,
+    ny = 4, ymn = 5, ysiz = 10, radsqd = 10000 } = {}) {
+    const { lib, memory } = await getGslib();
+    const nd = points.length;
+
+    writeF64(memory, X, points.map(p => p[0]));
+    writeF64(memory, Y, points.map(p => p[1]));
+    writeF64(memory, Z, points.map(p => p[2] || 0));
+    writeF64(memory, VR, points.map(p => p[3] || 0));
+
+    // Identity rotation matrix
+    writeF64(memory, ROTMAT, [1, 0, 0, 0, 1, 0, 0, 0, 1]);
+
+    // setsupr: sort data into super blocks
+    lib.gslib.setsupr(
+      nx, xmn, xsiz, ny, ymn, ysiz, 1, 0.5, 1,
+      nd, X, Y, Z, VR, TMP,
+      NISB, IDX, IXARR, LT, UT,
+      nx, ny, 1,
+      OUT
+    );
+
+    const out = readF64(memory, OUT, 9);
+    const nxsup = out[0], nysup = out[1], nzsup = out[2];
+    const xmnsup = out[3], ymnsup = out[4], zmnsup = out[5];
+    const xsizsup = out[6], ysizsup = out[7], zsizsup = out[8];
+
+    // picksup: determine which super blocks to search
+    lib.gslib.picksup(
+      nxsup, xsizsup,
+      nysup, ysizsup,
+      nzsup, zsizsup,
+      0, ROTMAT,
+      radsqd,
+      NSBTOSR,
+      IXSB, IYSB, IZSB
+    );
+
+    const nsbtosr = readI32(memory, NSBTOSR, 1)[0];
+
+    return {
+      lib, memory, nd, nsbtosr,
+      nxsup, xmnsup, xsizsup,
+      nysup, ymnsup, ysizsup,
+      nzsup: nzsup, zmnsup: zmnsup, zsizsup: zsizsup
+    };
+  }
+
+  it('finds all points within large search radius', async () => {
+    const points = [
+      [5, 5, 0, 10],
+      [15, 5, 0, 20],
+      [25, 15, 0, 30],
+      [35, 25, 0, 40],
+    ];
+    const { lib, memory, nsbtosr, nxsup, xmnsup, xsizsup,
+            nysup, ymnsup, ysizsup, nzsup, zmnsup, zsizsup } =
+      await setupSearch(points, { radsqd: 1e6 });
+
+    // Search from center of grid (20, 15, 0) with huge radius
+    lib.gslib.srchsupr(
+      20, 15, 0,      // xloc, yloc, zloc
+      1e6,            // radsqd
+      0, ROTMAT,      // irot, rotmat
+      nsbtosr, IXSB, IYSB, IZSB,
+      0,              // noct (no octant search)
+      4,              // nd
+      X, Y, Z, TMP, CLOSE,
+      NISB,
+      nxsup, xmnsup, xsizsup,
+      nysup, ymnsup, ysizsup,
+      nzsup, zmnsup, zsizsup,
+      RESULT,
+      IDX, INOCT, LT, UT
+    );
+
+    const result = readF64(memory, RESULT, 2);
+    const nclose = result[0];
+    assert.equal(nclose, 4, 'should find all 4 points');
+  });
+
+  it('returns points sorted by distance', async () => {
+    const points = [
+      [10, 10, 0, 1],
+      [30, 30, 0, 2],
+      [20, 10, 0, 3],  // closest to (20, 10)
+      [5, 25, 0, 4],
+    ];
+    const { lib, memory, nsbtosr, nxsup, xmnsup, xsizsup,
+            nysup, ymnsup, ysizsup, nzsup, zmnsup, zsizsup } =
+      await setupSearch(points, { radsqd: 1e6 });
+
+    // Search from (20, 10, 0)
+    lib.gslib.srchsupr(
+      20, 10, 0,
+      1e6,
+      0, ROTMAT,
+      nsbtosr, IXSB, IYSB, IZSB,
+      0, 4,
+      X, Y, Z, TMP, CLOSE,
+      NISB,
+      nxsup, xmnsup, xsizsup,
+      nysup, ymnsup, ysizsup,
+      nzsup, zmnsup, zsizsup,
+      RESULT,
+      IDX, INOCT, LT, UT
+    );
+
+    const nclose = readF64(memory, RESULT, 1)[0];
+    assert.equal(nclose, 4);
+
+    // Distances should be monotonically non-decreasing
+    const dists = readF64(memory, TMP, nclose);
+    for (let i = 1; i < nclose; i++) {
+      assert.ok(dists[i] >= dists[i - 1],
+        `dist[${i}]=${dists[i]} should be >= dist[${i-1}]=${dists[i-1]}`);
+    }
+  });
+
+  it('small radius excludes distant points', async () => {
+    const points = [
+      [10, 10, 0, 1],   // close to search point
+      [11, 10, 0, 2],   // close
+      [35, 35, 0, 3],   // far away
+    ];
+    const { lib, memory, nsbtosr, nxsup, xmnsup, xsizsup,
+            nysup, ymnsup, ysizsup, nzsup, zmnsup, zsizsup } =
+      await setupSearch(points, { radsqd: 100 }); // radius = 10
+
+    // Search from (10, 10) with radius 10
+    lib.gslib.srchsupr(
+      10, 10, 0,
+      100,              // radsqd = 10^2
+      0, ROTMAT,
+      nsbtosr, IXSB, IYSB, IZSB,
+      0, 3,
+      X, Y, Z, TMP, CLOSE,
+      NISB,
+      nxsup, xmnsup, xsizsup,
+      nysup, ymnsup, ysizsup,
+      nzsup, zmnsup, zsizsup,
+      RESULT,
+      IDX, INOCT, LT, UT
+    );
+
+    const nclose = readF64(memory, RESULT, 1)[0];
+    // Should find the 2 close points, not the distant one
+    assert.ok(nclose >= 2, `should find at least 2 close points, got ${nclose}`);
+    assert.ok(nclose <= 3, `should not find more than 3 points`);
+  });
+
+  it('octant search limits samples per octant', async () => {
+    // 8 points, 2 per quadrant (in 2D, so 4 effective octants)
+    const points = [
+      [22, 12, 0, 1],  // octant 1 (+x, +y-ish, +z)
+      [24, 14, 0, 2],  // octant 1
+      [18, 12, 0, 3],  // octant 0 (-x, +y, +z)
+      [16, 14, 0, 4],  // octant 0
+      [18, 8, 0, 5],   // octant 2 (-x, -y, +z)
+      [16, 6, 0, 6],   // octant 2
+      [22, 8, 0, 7],   // octant 3 (+x, -y, +z)
+      [24, 6, 0, 8],   // octant 3
+    ];
+    const { lib, memory, nsbtosr, nxsup, xmnsup, xsizsup,
+            nysup, ymnsup, ysizsup, nzsup, zmnsup, zsizsup } =
+      await setupSearch(points, { radsqd: 1e6 });
+
+    // Search from (20, 10, 0) with octant search, noct=1 (max 1 per octant)
+    lib.gslib.srchsupr(
+      20, 10, 0,
+      1e6,
+      0, ROTMAT,
+      nsbtosr, IXSB, IYSB, IZSB,
+      1,                // noct=1: at most 1 sample per octant
+      8,
+      X, Y, Z, TMP, CLOSE,
+      NISB,
+      nxsup, xmnsup, xsizsup,
+      nysup, ymnsup, ysizsup,
+      nzsup, zmnsup, zsizsup,
+      RESULT,
+      IDX, INOCT, LT, UT
+    );
+
+    const nclose = readF64(memory, RESULT, 1)[0];
+    const infoct = readF64(memory, RESULT + 8, 1)[0];
+
+    // With noct=1, should get at most 8 samples (1 per octant), but in 2D
+    // with z=0 we only have 4 octants populated (all z>=0)
+    assert.ok(nclose <= 8, `octant search should limit results, got ${nclose}`);
+    assert.ok(nclose >= 4, `should find at least 4 samples (one per quadrant), got ${nclose}`);
+    assert.ok(infoct >= 2, `should have at least 2 informed octants, got ${infoct}`);
+  });
+});
