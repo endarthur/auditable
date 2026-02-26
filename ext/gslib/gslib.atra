@@ -650,11 +650,9 @@ var
   oi, src: i32
 begin
   ! establish number and size of super blocks
-  ! NOTE: atra's min/max emit f64.min/f64.max — not valid for i32.
-  ! use conditionals instead.
-  nxsup := select(nx, maxsbx, nx < maxsbx)
-  nysup := select(ny, maxsby, ny < maxsby)
-  nzsup := select(nz, maxsbz, nz < maxsbz)
+  nxsup := min(nx, maxsbx)
+  nysup := min(ny, maxsby)
+  nzsup := min(nz, maxsbz)
   xsizsup := f64(nx) * xsiz / f64(nxsup)
   ysizsup := f64(ny) * ysiz / f64(nysup)
   zsizsup := f64(nz) * zsiz / f64(nzsup)
