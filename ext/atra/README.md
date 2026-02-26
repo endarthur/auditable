@@ -370,7 +370,7 @@ Install globally via `npm link` from the repo root (the `bin` entry in `package.
 
 ### JS bundle output
 
-`atrac lib.atra` produces a standalone ES module with Wasm bytes inlined as a `Uint8Array`. The only export is `instantiate()`:
+`atrac lib.atra` produces a standalone ES module with Wasm bytes inlined as a `Uint8Array`. Exports include `instantiate()` and memory helpers:
 
 ```js
 import { instantiate } from './lib.js';
@@ -381,6 +381,33 @@ lib.alpack.dgesv(aPtr, bPtr, n, nrhs, ipivPtr, infoPtr);
 ```
 
 The bundle handles Math.* imports, memory linking, and dotted-name nesting automatically. No atra compiler needed at runtime.
+
+#### Memory helpers
+
+Every bundle also exports general-purpose Wasm memory utilities:
+
+```js
+import { instantiate, alloc, writeF64, writeI32, readF64, readI32, growMemory } from './lib.js';
+
+const mem = new WebAssembly.Memory({ initial: 4 });
+const lib = instantiate({ memory: mem });
+const st = { off: 0 };  // allocator state — caller manages offset
+
+const pX = alloc(st, 10);       // reserve 10 f64s (80 bytes), 8-byte aligned
+const pN = alloc(st, 0, 5);     // reserve 5 i32s (20 bytes), 8-byte aligned
+growMemory(mem, st.off);         // grow memory if allocator exceeds current size
+
+writeF64(mem, pX, [1.0, 2.0, 3.0]);
+writeI32(mem, pN, [10, 20]);
+const vals = readF64(mem, pX, 3);   // Float64Array copy (safe across grow)
+const ints = readI32(mem, pN, 2);   // Int32Array copy
+```
+
+- `alloc(state, nf64, ni32)` — bump allocator; takes `{ off }` state object, returns byte offset
+- `readF64` / `readI32` — return copies (`.slice`), safe across `grow` operations
+- `growMemory(mem, off)` — grows memory only if `off` exceeds current buffer size
+
+Future: a higher-level `WasmMem` manager class that wraps state + memory into a single object.
 
 ### Source distribution
 

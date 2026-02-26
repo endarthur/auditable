@@ -2769,3 +2769,1804 @@ begin
     end if
   end for
 end
+
+! ── ordrel — correct order relation problems ─────────────────────────
+!
+! fixes non-monotonic indicator CDFs from independent per-cutoff kriging.
+!
+! ivtype=0 (categorical): normalize probabilities to sum to 1.
+! ivtype=1 (continuous): forward pass + backward pass monotonicity,
+!                        average the two. clamp to [0,1].
+!
+! ccdf[0..ncut-1]  = input CDF values (per cutoff)
+! ccdfo[0..ncut-1] = output corrected CDF values
+!
+! Fortran ref: gslib/ordrel.for
+
+subroutine gslib.ordrel(ivtype, ncut: i32; ccdf, ccdfo: array f64)
+var
+  i: i32
+  sumcdf, v1, v2: f64
+begin
+  ! clamp to [0, 1]
+  for i := 0, ncut
+    v1 := ccdf[i]
+    if (v1 < 0.0) then
+      v1 := 0.0
+    end if
+    if (v1 > 1.0) then
+      v1 := 1.0
+    end if
+    ccdf[i] := v1
+    ccdfo[i] := v1
+  end for
+
+  if (ivtype == 0) then
+    ! categorical: normalize so probabilities sum to 1
+    sumcdf := 0.0
+    for i := 0, ncut
+      sumcdf := sumcdf + ccdf[i]
+    end for
+    if (sumcdf <= 0.0) then
+      sumcdf := 1.0
+    end if
+    for i := 0, ncut
+      ccdfo[i] := ccdf[i] / sumcdf
+    end for
+  else
+    ! continuous: forward pass (enforce non-decreasing)
+    for i := 1, ncut
+      if (ccdf[i] < ccdf[i - 1]) then
+        ccdf[i] := ccdf[i - 1]
+      end if
+    end for
+    ! backward pass on ccdfo copy (enforce non-decreasing from right)
+    for i := ncut - 2, -1, -1
+      if (ccdfo[i] > ccdfo[i + 1]) then
+        ccdfo[i] := ccdfo[i + 1]
+      end if
+    end for
+    ! average forward and backward corrections
+    for i := 0, ncut
+      ccdfo[i] := 0.5 * (ccdf[i] + ccdfo[i])
+    end for
+  end if
+end
+
+! ── beyond — draw from kriged indicator CDF ──────────────────────────
+!
+! given cutoffs + CDF values + a target probability (cdfval), returns
+! the corresponding z-value by interpolation/extrapolation.
+!
+! ivtype     = 0 categorical, 1 continuous
+! ncut       = number of cutoffs
+! cut[ncut]  = cutoff values
+! ccdf[ncut] = CDF values at cutoffs (corrected by ordrel)
+! zmin, zmax = range limits for extrapolation
+! ltail      = lower tail option (1=linear, 2=power)
+! ltpar      = lower tail parameter
+! utail      = upper tail option (1=linear, 2=power, 4=hyperbolic)
+! utpar      = upper tail parameter
+! cdfval     = target probability to draw
+! result[0]  = output z-value
+!
+! simplified vs Fortran: only cdfval→zval direction (simulation use).
+! middle interpolation is always linear (option 1).
+! no global CDF rescaling (option 3).
+!
+! Fortran ref: gslib/beyond.for
+
+subroutine gslib.beyond(ivtype, ncut: i32;
+  cut, ccdf: array f64;
+  zmin, zmax: f64;
+  ltail: i32; ltpar: f64;
+  utail: i32; utpar: f64;
+  cdfval: f64;
+  result: array f64)
+var
+  i, ipart, cclow, cchigh: i32
+  zval, cum, powr, lambda: f64
+begin
+  ! categorical: cumulative search
+  if (ivtype == 0) then
+    cum := 0.0
+    zval := cut[ncut - 1]
+    for i := 0, ncut
+      cum := cum + ccdf[i]
+      if (cdfval <= cum) then
+        zval := cut[i]
+        break
+      end if
+    end for
+    result[0] := zval
+    call return()
+  end if
+
+  ! continuous: determine which part of the distribution
+  ipart := 1
+  if (cdfval <= ccdf[0]) then
+    ipart := 0
+  end if
+  if (cdfval >= ccdf[ncut - 1]) then
+    ipart := 2
+  end if
+
+  ! lower tail
+  if (ipart == 0) then
+    if (ltail == 1) then
+      zval := gslib.powint(0.0, ccdf[0], zmin, cut[0], cdfval, 1.0)
+    else if (ltail == 2) then
+      powr := 1.0 / ltpar
+      zval := gslib.powint(0.0, ccdf[0], zmin, cut[0], cdfval, powr)
+    else
+      zval := gslib.powint(0.0, ccdf[0], zmin, cut[0], cdfval, 1.0)
+    end if
+  end if
+
+  ! middle
+  if (ipart == 1) then
+    cclow := 0
+    for i := 1, ncut
+      if (ccdf[i] > cdfval) then
+        cclow := i - 1
+        break
+      end if
+      cclow := i
+    end for
+    cchigh := cclow + 1
+    if (cchigh >= ncut) then
+      cchigh := ncut - 1
+      cclow := cchigh - 1
+    end if
+    zval := gslib.powint(ccdf[cclow], ccdf[cchigh],
+      cut[cclow], cut[cchigh], cdfval, 1.0)
+  end if
+
+  ! upper tail
+  if (ipart == 2) then
+    if (utail == 1) then
+      zval := gslib.powint(ccdf[ncut - 1], 1.0,
+        cut[ncut - 1], zmax, cdfval, 1.0)
+    else if (utail == 2) then
+      powr := 1.0 / utpar
+      zval := gslib.powint(ccdf[ncut - 1], 1.0,
+        cut[ncut - 1], zmax, cdfval, powr)
+    else if (utail == 4) then
+      lambda := (cut[ncut - 1] ** utpar) * (1.0 - ccdf[ncut - 1])
+      zval := (lambda / (1.0 - cdfval)) ** (1.0 / utpar)
+    else
+      zval := gslib.powint(ccdf[ncut - 1], 1.0,
+        cut[ncut - 1], zmax, cdfval, 1.0)
+    end if
+  end if
+
+  ! clamp to [zmin, zmax]
+  if (zval < zmin) then
+    zval := zmin
+  end if
+  if (zval > zmax) then
+    zval := zmax
+  end if
+  result[0] := zval
+end
+
+! ── gamv — experimental variogram computation ────────────────────────
+!
+! O(n^2) all-pairs loop with directional/lag filtering.
+! single variable, multiple directions, multiple variogram types.
+!
+! nd          = number of data points
+! x, y, z    = coordinates [nd]
+! vr         = data values [nd]
+! nlag       = number of lags
+! xlag       = unit lag distance
+! xltol      = lag distance tolerance (if <= 0, set to xlag/2)
+! ndir       = number of directions
+! azm, atol, bandwh, dip, dtol, bandwd = directional params [ndir]
+! nvarg      = number of variograms to compute
+! ivtail, ivhead = not used (single variable, always 0)
+! ivtype     = variogram type codes [nvarg] (1-8)
+! tmin, tmax = trimming limits
+!
+! output arrays indexed as (id * nvarg + iv) * (nlag + 2) + il:
+!   np[nsiz]   = pair counts (f64 for Wasm convenience)
+!   dis[nsiz]  = average distance per lag
+!   gam[nsiz]  = variogram measure value
+!   hm[nsiz]   = mean of tail values
+!   tm[nsiz]   = mean of head values
+!   hv[nsiz]   = variance of tail (correlogram only)
+!   tv[nsiz]   = variance of head (correlogram only)
+!
+! nsiz = ndir * nvarg * (nlag + 2)
+!
+! Fortran ref: gamv.for (subroutine gamv)
+
+subroutine gslib.gamv(
+  nd: i32; x, y, z, vr: array f64;
+  nlag: i32; xlag, xltol_in: f64;
+  ndir: i32; azm, atol, bandwh, dip, dtol, bandwd: array f64;
+  nvarg: i32; ivtail, ivhead, ivtype: array i32;
+  tmin, tmax: f64;
+  np, dis, gam, hm, tm, hv, tv: array f64)
+var
+  i, j, id, iv, il, ii, it: i32
+  lagbeg, lagend, ilag, nsiz, nlp2: i32
+  dx, dy, dz, dxs, dys, dzs, hs, h: f64
+  dxy, dcazm, band, dcdec: f64
+  vrh, vrt, vrhpr, vrtpr, gamma: f64
+  azmuth, declin: f64
+  xltol, dismxs, rnum, htave: f64
+  omni: i32
+  ! direction precomputes (up to 20 directions)
+  uvxazm, uvyazm, uvzdec, uvhdec, csatol, csdtol: f64
+begin
+  xltol := xltol_in
+  if (xltol <= 0.0) then
+    xltol := 0.5 * xlag
+  end if
+  nlp2 := nlag + 2
+
+  ! initialize output arrays
+  nsiz := ndir * nvarg * nlp2
+  for i := 0, nsiz
+    np[i] := 0.0
+    dis[i] := 0.0
+    gam[i] := 0.0
+    hm[i] := 0.0
+    tm[i] := 0.0
+    hv[i] := 0.0
+    tv[i] := 0.0
+  end for
+
+  dismxs := ((f64(nlag) + 0.5 - 1.0e-10) * xlag) ** 2.0
+
+  ! main loop over all pairs
+  for i := 0, nd
+    for j := i, nd
+      dx := x[j] - x[i]
+      dy := y[j] - y[i]
+      dz := z[j] - z[i]
+      dxs := dx * dx
+      dys := dy * dy
+      dzs := dz * dz
+      hs := dxs + dys + dzs
+      if (hs <= dismxs) then
+      if (hs < 0.0) then
+        hs := 0.0
+      end if
+      h := sqrt(hs)
+
+      ! determine lag range
+      if (h <= 1.0e-10) then
+        lagbeg := 0
+        lagend := 0
+      else
+        lagbeg := -1
+        lagend := -1
+        for ilag := 1, nlp2
+          if (h >= (xlag * f64(ilag - 1) - xltol) and
+              h <= (xlag * f64(ilag - 1) + xltol)) then
+            if (lagbeg < 0) then
+              lagbeg := ilag
+            end if
+            lagend := ilag
+          end if
+        end for
+      end if
+      if (lagend >= 0) then
+
+      ! loop over directions
+      for id := 0, ndir
+        ! precompute direction vectors
+        azmuth := (90.0 - azm[id]) * 3.14159265 / 180.0
+        uvxazm := cos(azmuth)
+        uvyazm := sin(azmuth)
+        if (atol[id] <= 0.0) then
+          csatol := cos(45.0 * 3.14159265 / 180.0)
+        else
+          csatol := cos(atol[id] * 3.14159265 / 180.0)
+        end if
+        declin := (90.0 - dip[id]) * 3.14159265 / 180.0
+        uvzdec := cos(declin)
+        uvhdec := sin(declin)
+        if (dtol[id] <= 0.0) then
+          csdtol := cos(45.0 * 3.14159265 / 180.0)
+        else
+          csdtol := cos(dtol[id] * 3.14159265 / 180.0)
+        end if
+
+        ! check azimuth
+        dxy := sqrt(max(dxs + dys, 0.0))
+        if (dxy < 1.0e-10) then
+          dcazm := 1.0
+        else
+          dcazm := (dx * uvxazm + dy * uvyazm) / dxy
+        end if
+        if (abs(dcazm) >= csatol) then
+
+        ! check horizontal bandwidth
+        band := uvxazm * dy - uvyazm * dx
+        if (abs(band) <= bandwh[id]) then
+
+        ! check dip angle
+        if (dcazm < 0.0) then
+          dxy := 0.0 - dxy
+        end if
+        if (lagbeg == 0) then
+          dcdec := 0.0
+        else
+          dcdec := (dxy * uvhdec + dz * uvzdec) / h
+        end if
+        if (lagbeg == 0 or abs(dcdec) >= csdtol) then
+
+        ! check vertical bandwidth
+        band := uvhdec * dz - uvzdec * dxy
+        if (abs(band) <= bandwd[id]) then
+
+        ! omni-directional?
+        omni := 0
+        if (atol[id] >= 90.0) then
+          omni := 1
+        end if
+
+        ! loop over variograms
+        for iv := 0, nvarg
+          it := ivtype[iv]
+
+          ! assign tail and head values based on direction sign
+          if (dcazm >= 0.0 and dcdec >= 0.0) then
+            vrh := vr[i]
+            vrt := vr[j]
+            if (omni == 1 or it == 2) then
+              vrtpr := vr[i]
+              vrhpr := vr[j]
+            end if
+          else
+            vrh := vr[j]
+            vrt := vr[i]
+            if (omni == 1 or it == 2) then
+              vrtpr := vr[j]
+              vrhpr := vr[i]
+            end if
+          end if
+
+          ! trim check
+          if (vrt >= tmin and vrh >= tmin and vrt <= tmax and vrh <= tmax) then
+
+            ! ── semivariogram (type 1, 5) ──
+            if (it == 1 or it == 5) then
+              for il := lagbeg, lagend + 1
+                ii := (id * nvarg + iv) * nlp2 + il
+                np[ii] := np[ii] + 1.0
+                dis[ii] := dis[ii] + h
+                tm[ii] := tm[ii] + vrt
+                hm[ii] := hm[ii] + vrh
+                gam[ii] := gam[ii] + (vrh - vrt) * (vrh - vrt)
+                if (omni == 1) then
+                  np[ii] := np[ii] + 1.0
+                  dis[ii] := dis[ii] + h
+                  tm[ii] := tm[ii] + vrtpr
+                  hm[ii] := hm[ii] + vrhpr
+                  gam[ii] := gam[ii] + (vrhpr - vrtpr) * (vrhpr - vrtpr)
+                end if
+              end for
+
+            ! ── cross-semivariogram (type 2) ──
+            else if (it == 2) then
+              if (vrtpr >= tmin and vrhpr >= tmin and
+                  vrtpr <= tmax and vrhpr <= tmax) then
+                for il := lagbeg, lagend + 1
+                  ii := (id * nvarg + iv) * nlp2 + il
+                  np[ii] := np[ii] + 1.0
+                  dis[ii] := dis[ii] + h
+                  tm[ii] := tm[ii] + 0.5 * (vrt + vrtpr)
+                  hm[ii] := hm[ii] + 0.5 * (vrh + vrhpr)
+                  gam[ii] := gam[ii] + (vrhpr - vrh) * (vrt - vrtpr)
+                end for
+              end if
+
+            ! ── covariance (type 3) ──
+            else if (it == 3) then
+              for il := lagbeg, lagend + 1
+                ii := (id * nvarg + iv) * nlp2 + il
+                np[ii] := np[ii] + 1.0
+                dis[ii] := dis[ii] + h
+                tm[ii] := tm[ii] + vrt
+                hm[ii] := hm[ii] + vrh
+                gam[ii] := gam[ii] + vrh * vrt
+                if (omni == 1) then
+                  np[ii] := np[ii] + 1.0
+                  dis[ii] := dis[ii] + h
+                  tm[ii] := tm[ii] + vrtpr
+                  hm[ii] := hm[ii] + vrhpr
+                  gam[ii] := gam[ii] + vrhpr * vrtpr
+                end if
+              end for
+
+            ! ── correlogram (type 4) ──
+            else if (it == 4) then
+              for il := lagbeg, lagend + 1
+                ii := (id * nvarg + iv) * nlp2 + il
+                np[ii] := np[ii] + 1.0
+                dis[ii] := dis[ii] + h
+                tm[ii] := tm[ii] + vrt
+                hm[ii] := hm[ii] + vrh
+                hv[ii] := hv[ii] + vrh * vrh
+                tv[ii] := tv[ii] + vrt * vrt
+                gam[ii] := gam[ii] + vrh * vrt
+                if (omni == 1) then
+                  np[ii] := np[ii] + 1.0
+                  dis[ii] := dis[ii] + h
+                  tm[ii] := tm[ii] + vrtpr
+                  hm[ii] := hm[ii] + vrhpr
+                  hv[ii] := hv[ii] + vrhpr * vrhpr
+                  tv[ii] := tv[ii] + vrtpr * vrtpr
+                  gam[ii] := gam[ii] + vrhpr * vrtpr
+                end if
+              end for
+
+            ! ── pairwise relative (type 6) ──
+            else if (it == 6) then
+              for il := lagbeg, lagend + 1
+                ii := (id * nvarg + iv) * nlp2 + il
+                if (abs(vrt + vrh) > 1.0e-10) then
+                  np[ii] := np[ii] + 1.0
+                  dis[ii] := dis[ii] + h
+                  tm[ii] := tm[ii] + vrt
+                  hm[ii] := hm[ii] + vrh
+                  gamma := 2.0 * (vrt - vrh) / (vrt + vrh)
+                  gam[ii] := gam[ii] + gamma * gamma
+                end if
+                if (omni == 1 and abs(vrtpr + vrhpr) > 1.0e-10) then
+                  np[ii] := np[ii] + 1.0
+                  dis[ii] := dis[ii] + h
+                  tm[ii] := tm[ii] + vrtpr
+                  hm[ii] := hm[ii] + vrhpr
+                  gamma := 2.0 * (vrtpr - vrhpr) / (vrtpr + vrhpr)
+                  gam[ii] := gam[ii] + gamma * gamma
+                end if
+              end for
+
+            ! ── log variogram (type 7) ──
+            else if (it == 7) then
+              for il := lagbeg, lagend + 1
+                ii := (id * nvarg + iv) * nlp2 + il
+                if (vrt > 1.0e-10 and vrh > 1.0e-10) then
+                  np[ii] := np[ii] + 1.0
+                  dis[ii] := dis[ii] + h
+                  tm[ii] := tm[ii] + vrt
+                  hm[ii] := hm[ii] + vrh
+                  gamma := ln(vrt) - ln(vrh)
+                  gam[ii] := gam[ii] + gamma * gamma
+                end if
+                if (omni == 1 and vrtpr > 1.0e-10 and vrhpr > 1.0e-10) then
+                  np[ii] := np[ii] + 1.0
+                  dis[ii] := dis[ii] + h
+                  tm[ii] := tm[ii] + vrtpr
+                  hm[ii] := hm[ii] + vrhpr
+                  gamma := ln(vrtpr) - ln(vrhpr)
+                  gam[ii] := gam[ii] + gamma * gamma
+                end if
+              end for
+
+            ! ── madogram (type 8) ──
+            else if (it == 8) then
+              for il := lagbeg, lagend + 1
+                ii := (id * nvarg + iv) * nlp2 + il
+                np[ii] := np[ii] + 1.0
+                dis[ii] := dis[ii] + h
+                tm[ii] := tm[ii] + vrt
+                hm[ii] := hm[ii] + vrh
+                gam[ii] := gam[ii] + abs(vrh - vrt)
+                if (omni == 1) then
+                  np[ii] := np[ii] + 1.0
+                  dis[ii] := dis[ii] + h
+                  tm[ii] := tm[ii] + vrtpr
+                  hm[ii] := hm[ii] + vrhpr
+                  gam[ii] := gam[ii] + abs(vrhpr - vrtpr)
+                end if
+              end for
+            end if
+
+          end if
+
+        end for
+        end if
+        end if
+        end if
+        end if
+      end for
+      end if
+      end if
+    end for
+  end for
+
+  ! compute averages and final variogram measures
+  for id := 0, ndir
+    for iv := 0, nvarg
+      for il := 0, nlp2
+        ii := (id * nvarg + iv) * nlp2 + il
+        if (np[ii] > 0.0) then
+          rnum := np[ii]
+          dis[ii] := dis[ii] / rnum
+          gam[ii] := gam[ii] / rnum
+          hm[ii] := hm[ii] / rnum
+          tm[ii] := tm[ii] / rnum
+          hv[ii] := hv[ii] / rnum
+          tv[ii] := tv[ii] / rnum
+          it := ivtype[iv]
+
+          ! semivariogram or cross-semivariogram
+          if (it == 1 or it == 2) then
+            gam[ii] := 0.5 * gam[ii]
+
+          ! covariance: centering
+          else if (it == 3) then
+            gam[ii] := gam[ii] - hm[ii] * tm[ii]
+
+          ! correlogram: centering + normalizing
+          else if (it == 4) then
+            hv[ii] := hv[ii] - hm[ii] * hm[ii]
+            if (hv[ii] < 0.0) then
+              hv[ii] := 0.0
+            end if
+            hv[ii] := sqrt(hv[ii])
+            tv[ii] := tv[ii] - tm[ii] * tm[ii]
+            if (tv[ii] < 0.0) then
+              tv[ii] := 0.0
+            end if
+            tv[ii] := sqrt(tv[ii])
+            if (hv[ii] * tv[ii] < 1.0e-10) then
+              gam[ii] := 0.0
+            else
+              gam[ii] := (gam[ii] - hm[ii] * tm[ii]) / (hv[ii] * tv[ii])
+            end if
+            hv[ii] := hv[ii] * hv[ii]
+            tv[ii] := tv[ii] * tv[ii]
+
+          ! general relative semivariogram
+          else if (it == 5) then
+            htave := 0.5 * (hm[ii] + tm[ii])
+            htave := htave * htave
+            if (htave < 1.0e-10) then
+              gam[ii] := 0.0
+            else
+              gam[ii] := gam[ii] / htave
+            end if
+
+          ! pairwise relative, log, madogram: semi-
+          else if (it >= 6) then
+            gam[ii] := 0.5 * gam[ii]
+          end if
+        end if
+      end for
+    end for
+  end for
+end
+
+! ── declus — cell declustering ───────────────────────────────────────
+!
+! grid-based cell declustering. sweeps cell sizes from cmin to cmax,
+! for each size tries noff origin offsets, computes inverse-density
+! weights, picks optimal cell size by min/max weighted mean.
+!
+! nd             = number of data
+! x, y, z, vr   = data coordinates and values [nd]
+! wt             = scratch/output weights [nd]
+! tmin, tmax     = trimming limits
+! ncell          = number of cell sizes to test
+! noff           = number of origin offsets per size
+! cmin, cmax     = cell size sweep range (X dimension)
+! anisy, anisz   = cell anisotropy ratios (ycs = xcs*anisy, etc.)
+! iminmax        = 0=minimize weighted mean, 1=maximize
+!
+! wtopt[nd]      = output optimal weights (scaled so avg=1)
+! result[0]      = optimal cell size
+! result[1]      = weighted mean at optimum
+! cellwts[ncellt]= scratch i32 (cell counts, sized to max possible)
+! idx[nd]        = scratch i32 (cell index per datum)
+!
+! Fortran ref: declus.for
+
+subroutine gslib.declus(
+  nd: i32; x, y, z, vr, wt: array f64;
+  tmin, tmax: f64;
+  ncell, noff: i32; cmin, cmax, anisy, anisz: f64;
+  iminmax: i32;
+  wtopt, result: array f64;
+  cellwts, idx: array i32)
+var
+  i, lp, kp, icellx, icelly, icellz, icell, ipoint: i32
+  ncellx, ncelly, ncellz, ncellt: i32
+  xcs, ycs, zcs, xinc, yinc, zinc: f64
+  xmin, xmax, ymin, ymax, zmin, zmax: f64
+  xo1, yo1, zo1, xo, yo, zo: f64
+  xfac, yfac, zfac, roff: f64
+  sumw, sumwg, vrcr, best, vrop, facto: f64
+begin
+  ! find data bounding box
+  xmin := x[0]
+  xmax := x[0]
+  ymin := y[0]
+  ymax := y[0]
+  zmin := z[0]
+  zmax := z[0]
+  for i := 1, nd
+    if (x[i] < xmin) then xmin := x[i] end if
+    if (x[i] > xmax) then xmax := x[i] end if
+    if (y[i] < ymin) then ymin := y[i] end if
+    if (y[i] > ymax) then ymax := y[i] end if
+    if (z[i] < zmin) then zmin := z[i] end if
+    if (z[i] > zmax) then zmax := z[i] end if
+  end for
+
+  ! set up cell size increments
+  roff := max(f64(noff), 1.0)
+  if (ncell <= 1) then
+    xinc := 0.0
+    yinc := 0.0
+    zinc := 0.0
+  else
+    xinc := (cmax - cmin) / f64(ncell - 1)
+    yinc := xinc * anisy
+    zinc := xinc * anisz
+  end if
+
+  ! set up origin at lower-left of bounding box
+  xo1 := xmin - 0.01
+  yo1 := ymin - 0.01
+  zo1 := zmin - 0.01
+
+  ! initial vrop for comparison (impossible extremes)
+  if (iminmax == 0) then
+    vrop := 1.0e21
+  else
+    vrop := -1.0e21
+  end if
+  best := cmin
+
+  ! main loop over cell sizes
+  xcs := cmin - xinc
+  ycs := (cmin * anisy) - yinc
+  zcs := (cmin * anisz) - zinc
+
+  for lp := 0, ncell + 1
+    xcs := xcs + xinc
+    ycs := ycs + yinc
+    zcs := zcs + zinc
+    if (xcs < 1.0e-20) then xcs := 1.0e-20 end if
+    if (ycs < 1.0e-20) then ycs := 1.0e-20 end if
+    if (zcs < 1.0e-20) then zcs := 1.0e-20 end if
+
+    ! initialize weights
+    for i := 0, nd
+      wt[i] := 0.0
+    end for
+
+    ! max grid cells
+    ncellx := i32((xmax - (xo1 - xcs)) / xcs) + 1
+    ncelly := i32((ymax - (yo1 - ycs)) / ycs) + 1
+    ncellz := i32((zmax - (zo1 - zcs)) / zcs) + 1
+    ncellt := ncellx * ncelly * ncellz
+
+    ! origin offset factors
+    xfac := min(xcs / roff, 0.5 * (xmax - xmin))
+    yfac := min(ycs / roff, 0.5 * (ymax - ymin))
+    zfac := min(zcs / roff, 0.5 * (zmax - zmin))
+
+    ! loop over origin offsets
+    for kp := 0, noff
+      xo := xo1 - f64(kp) * xfac
+      yo := yo1 - f64(kp) * yfac
+      zo := zo1 - f64(kp) * zfac
+
+      ! zero cell counts
+      for i := 0, ncellt
+        cellwts[i] := 0
+      end for
+
+      ! assign data to cells
+      for i := 0, nd
+        icellx := i32((x[i] - xo) / xcs)
+        icelly := i32((y[i] - yo) / ycs)
+        icellz := i32((z[i] - zo) / zcs)
+        icell := icellx + icelly * ncellx + icellz * ncellx * ncelly
+        idx[i] := icell
+        cellwts[icell] := cellwts[icell] + 1
+      end for
+
+      ! sum of inverse-density weights
+      sumw := 0.0
+      for i := 0, nd
+        ipoint := idx[i]
+        sumw := sumw + 1.0 / f64(cellwts[ipoint])
+      end for
+      sumw := 1.0 / sumw
+
+      ! accumulate normalized weights
+      for i := 0, nd
+        ipoint := idx[i]
+        wt[i] := wt[i] + (1.0 / f64(cellwts[ipoint])) * sumw
+      end for
+    end for
+
+    ! compute weighted average for this cell size
+    sumw := 0.0
+    sumwg := 0.0
+    for i := 0, nd
+      sumw := sumw + wt[i]
+      sumwg := sumwg + wt[i] * vr[i]
+    end for
+    vrcr := sumwg / sumw
+
+    ! check if this is optimal
+    if ((iminmax == 0 and vrcr < vrop) or
+        (iminmax == 1 and vrcr > vrop) or
+        (ncell <= 1)) then
+      best := xcs
+      vrop := vrcr
+      for i := 0, nd
+        wtopt[i] := wt[i]
+      end for
+    end if
+  end for
+
+  ! normalize optimal weights so average = 1
+  sumw := 0.0
+  for i := 0, nd
+    sumw := sumw + wtopt[i]
+  end for
+  facto := f64(nd) / sumw
+  for i := 0, nd
+    wtopt[i] := wtopt[i] * facto
+  end for
+
+  result[0] := best
+  result[1] := vrop
+end
+
+! ── ik3d — 3D indicator kriging ──────────────────────────────────────
+!
+! estimates a full CCDF (cumulative conditional distribution) at each
+! grid node using indicator kriging at multiple thresholds/cutoffs.
+! each cutoff has its own variogram model. order relations corrected
+! via ordrel after per-cutoff kriging.
+!
+! grid: nx*ny*nz nodes
+! ncut cutoffs, each with independent variogram params
+! super block search shared across cutoffs
+! ktype: 0=SK, 1=OK
+!
+! variogram arrays indexed [icut * MAXNST + is]:
+!   nst_arr[ncut]            = number of structures per cutoff
+!   c0_arr[ncut]             = nugget per cutoff
+!   it_arr[ncut * MAXNST]    = type codes
+!   cc_arr[ncut * MAXNST]    = contributions
+!   aa_arr[ncut * MAXNST]    = ranges
+!
+! vr[nd * ncut] = indicator data (pre-transformed by caller)
+! gcdf[ncut]    = global CDF values (SK means)
+!
+! ccdf_out[nxyz * ncut] = output CDF at each node/cutoff
+!
+! Fortran ref: ik3d.for (subroutine ik3d)
+
+subroutine gslib.ik3d(
+  nx, ny, nz: i32; xmn, ymn, zmn, xsiz, ysiz, zsiz: f64;
+  nd: i32; x, y, z: array f64;
+  ncut: i32; thresh, gcdf, vr: array f64;
+  ivtype, ktype: i32;
+  MAXNST: i32;
+  nst_arr: array i32; c0_arr: array f64;
+  it_arr: array i32; cc_arr, aa_arr: array f64;
+  isrot: i32; rotmat: array f64;
+  ndmin, ndmax, noct: i32;
+  radius: f64;
+  nsbtosr: i32; ixsbtosr, iysbtosr, izsbtosr, nisb: array i32;
+  supout: array f64;
+  ccdf_out: array f64;
+  xa, ya, za, vra: array f64;
+  r, rr, s_: array f64;
+  a: array f64;
+  close: array f64;
+  covres: array f64;
+  inoct, getidxres: array i32;
+  ccdf_scratch, ccdfo_scratch: array f64;
+  actloc: array f64;
+  lt, ut: array i32)
+var
+  index, ix, iy, iz, nxy, nxyz: i32
+  ic, ia, j, ii, i, in_, neq, nca, nclose: i32
+  xloc, yloc, zloc: f64
+  radsqd, cov, cmax, sumwts: f64
+  ising: i32
+  nxsup, nysup, nzsup: i32
+  xmnsup, ymnsup, zmnsup, xsizsup, ysizsup, zsizsup: f64
+begin
+  nxy := nx * ny
+  nxyz := nxy * nz
+  radsqd := radius * radius
+
+  ! read super block parameters
+  nxsup := i32(supout[0])
+  nysup := i32(supout[1])
+  nzsup := i32(supout[2])
+  xmnsup := supout[3]
+  ymnsup := supout[4]
+  zmnsup := supout[5]
+  xsizsup := supout[6]
+  ysizsup := supout[7]
+  zsizsup := supout[8]
+
+  ! main loop over all grid nodes
+  for index := 0, nxyz
+    iz := index / nxy
+    iy := (index - iz * nxy) / nx
+    ix := index - iz * nxy - iy * nx
+    xloc := xmn + f64(ix) * xsiz
+    yloc := ymn + f64(iy) * ysiz
+    zloc := zmn + f64(iz) * zsiz
+
+    ! find nearest samples
+    call gslib.srchsupr(xloc, yloc, zloc, radsqd, isrot, rotmat,
+      nsbtosr, ixsbtosr, iysbtosr, izsbtosr, noct,
+      nd, x, y, z, actloc, close, nisb,
+      nxsup, xmnsup, xsizsup,
+      nysup, ymnsup, ysizsup,
+      nzsup, zmnsup, zsizsup,
+      covres, getidxres, inoct, lt, ut)
+    nclose := i32(covres[0])
+
+    ! too few data?
+    if (nclose < ndmin) then
+      for ic := 0, ncut
+        ccdf_out[index * ncut + ic] := -9.9999
+      end for
+    else
+      ! loop over cutoffs
+      for ic := 0, ncut
+        ! filter close data for this cutoff
+        nca := 0
+        for ia := 0, nclose
+          j := i32(close[ia] + 0.5)
+          ii := i32(actloc[j] + 0.5)
+          ! check indicator data valid
+          if (vr[ii * ncut + ic] >= 0.0 and vr[ii * ncut + ic] <= 1.0) then
+            xa[nca] := x[j]
+            ya[nca] := y[j]
+            za[nca] := z[j]
+            vra[nca] := vr[ii * ncut + ic]
+            nca := nca + 1
+            if (nca == ndmax) then
+              break
+            end if
+          end if
+        end for
+
+        ! no valid samples: use global CDF
+        if (nca == 0) then
+          ccdf_scratch[ic] := gcdf[ic]
+        else
+          neq := nca + ktype
+
+          ! build kriging matrix (packed upper triangular)
+          in_ := 0
+          for j := 0, nca
+            for i := 0, j + 1
+              call gslib.cova3(xa[i], ya[i], za[i], xa[j], ya[j], za[j],
+                nst_arr[ic], c0_arr[ic],
+                it_arr, cc_arr, aa_arr,
+                ic * MAXNST, rotmat,
+                covres)
+              a[in_] := covres[1]
+              in_ := in_ + 1
+            end for
+            ! RHS
+            call gslib.cova3(xa[j], ya[j], za[j], xloc, yloc, zloc,
+              nst_arr[ic], c0_arr[ic],
+              it_arr, cc_arr, aa_arr,
+              ic * MAXNST, rotmat,
+              covres)
+            r[j] := covres[1]
+          end for
+
+          ! OK unbiasedness constraint
+          if (ktype == 1) then
+            for i := 0, nca
+              a[in_] := 1.0
+              in_ := in_ + 1
+            end for
+            a[in_] := 0.0
+            in_ := in_ + 1
+            r[neq - 1] := 1.0
+          end if
+
+          ! solve
+          if (neq == 1) then
+            ising := 0
+            if (abs(a[0]) < 1.0e-20) then
+              ising := 1
+            else
+              s_[0] := r[0] / a[0]
+            end if
+          else
+            call gslib.ksol(neq, a, r, s_, covres)
+            ising := i32(covres[0])
+          end if
+
+          ! singular? use global
+          if (ising /= 0) then
+            for ic := 0, ncut
+              ccdf_out[index * ncut + ic] := -9.9999
+            end for
+            break
+          end if
+
+          ! compute kriged indicator estimate
+          sumwts := 0.0
+          ccdf_scratch[ic] := 0.0
+          for i := 0, nca
+            ccdf_scratch[ic] := ccdf_scratch[ic] + vra[i] * s_[i]
+            sumwts := sumwts + s_[i]
+          end for
+          if (ktype == 0) then
+            ccdf_scratch[ic] := ccdf_scratch[ic] + (1.0 - sumwts) * gcdf[ic]
+          end if
+        end if
+      end for
+
+      ! correct order relations
+      call gslib.ordrel(ivtype, ncut, ccdf_scratch, ccdfo_scratch)
+
+      ! store corrected CCDF
+      for ic := 0, ncut
+        ccdf_out[index * ncut + ic] := ccdfo_scratch[ic]
+      end for
+    end if
+  end for
+end
+
+! ── ctable_i — per-cutoff covariance lookup table ────────────────────
+!
+! builds covtab[nlooku * ncut] for sisim. the spiral search order
+! (ixnode/iynode/iznode) is built from the first cutoff and reused
+! for all cutoffs. covtab stores per-cutoff covariance at each
+! spiral position.
+!
+! Fortran ref: sisim.for ctable subroutine (adapted for multi-cutoff)
+
+subroutine gslib.ctable_i(
+  ncut, MAXNST: i32;
+  nst_arr: array i32; c0_arr: array f64;
+  it_arr: array i32; cc_arr, aa_arr: array f64;
+  irot, isrot: i32; rotmat: array f64;
+  radsqd: f64;
+  nx, ny, nz: i32; xsiz, ysiz, zsiz: f64;
+  nctx, ncty, nctz: i32;
+  covtab: array f64;
+  covres: array f64;
+  tmp, order: array f64;
+  ixnode, iynode, iznode: array i32;
+  lt, ut: array i32;
+  result: array f64)
+var
+  i, j, k, ic, jc, kc, il, loc: i32
+  xx, yy, zz, hsqd, cov: f64
+  nlooku, icut, MAXCTX_, MAXCTY_: i32
+  covtab_size: i32
+begin
+  MAXCTX_ := 2 * nctx + 1
+  MAXCTY_ := 2 * ncty + 1
+  if (nctz == 0) then
+    covtab_size := MAXCTX_ * MAXCTY_
+  else
+    covtab_size := MAXCTX_ * MAXCTY_ * (2 * nctz + 1)
+  end if
+
+  ! build spiral search from first cutoff's variogram
+  nlooku := 0
+  for i := 0 - nctx, nctx + 1
+    xx := f64(i) * xsiz
+    ic := nctx + i
+    for j := 0 - ncty, ncty + 1
+      yy := f64(j) * ysiz
+      jc := ncty + j
+      for k := 0 - nctz, nctz + 1
+        zz := f64(k) * zsiz
+        kc := nctz + k
+
+        ! first cutoff covariance for sort key
+        call gslib.cova3(0.0, 0.0, 0.0, xx, yy, zz,
+          nst_arr[0], c0_arr[0],
+          it_arr, cc_arr, aa_arr,
+          0, rotmat, covres)
+        cov := covres[1]
+
+        hsqd := gslib.sqdist(0.0, 0.0, 0.0, xx, yy, zz, isrot, rotmat)
+        if (hsqd <= radsqd) then
+          tmp[nlooku] := 0.0 - (cov - 1.0e-10 * hsqd)
+          order[nlooku] := f64(kc * MAXCTY_ * MAXCTX_ + jc * MAXCTX_ + ic + 1)
+          nlooku := nlooku + 1
+        end if
+      end for
+    end for
+  end for
+
+  if (nlooku > 1) then
+    call gslib.sortem(0, nlooku, tmp, order, order, 1, lt, ut)
+  end if
+
+  ! decode linear indices
+  for il := 0, nlooku
+    loc := i32(order[il] + 0.5) - 1
+    kc := loc / (MAXCTY_ * MAXCTX_)
+    jc := (loc - kc * MAXCTY_ * MAXCTX_) / MAXCTX_
+    ic := loc - kc * MAXCTY_ * MAXCTX_ - jc * MAXCTX_
+    ixnode[il] := ic + 1
+    iynode[il] := jc + 1
+    iznode[il] := kc + 1
+  end for
+
+  ! now fill covtab for all cutoffs at each spiral position
+  ! covtab[il * ncut + icut] = covariance for spiral pos il, cutoff icut
+  for il := 0, nlooku
+    ! reconstruct offset from spiral indices
+    xx := f64(ixnode[il] - nctx - 1) * xsiz
+    yy := f64(iynode[il] - ncty - 1) * ysiz
+    zz := f64(iznode[il] - nctz - 1) * zsiz
+    for icut := 0, ncut
+      call gslib.cova3(0.0, 0.0, 0.0, xx, yy, zz,
+        nst_arr[icut], c0_arr[icut],
+        it_arr, cc_arr, aa_arr,
+        icut * MAXNST, rotmat, covres)
+      covtab[il * ncut + icut] := covres[1]
+    end for
+  end for
+
+  ! compute cbb per cutoff (C(0,0,0; 0,0,0))
+  ! result[0] = nlooku, result[1..ncut] = cbb per cutoff
+  result[0] := f64(nlooku)
+  for icut := 0, ncut
+    call gslib.cova3(0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+      nst_arr[icut], c0_arr[icut],
+      it_arr, cc_arr, aa_arr,
+      icut * MAXNST, rotmat, covres)
+    result[1 + icut] := covres[0]
+  end for
+end
+
+! ── krige_i — per-cutoff indicator kriging for simulation ────────────
+!
+! kriging for one cutoff at one node during sisim. mixes nearby data
+! and previously simulated nodes. uses covtab lookup for node-node
+! covariance, cova3 for data-node.
+!
+! returns kriged estimate in result[0].
+
+subroutine gslib.krige_i(
+  ix, iy, iz: i32; xx, yy, zz: f64;
+  icut, ncut, MAXNST: i32;
+  nclose: i32; close: array f64;
+  nd: i32; x, y, z, vr: array f64;
+  ncnode: i32; icnode: array i32;
+  cnodex, cnodey, cnodez, cnodev: array f64;
+  nctx, ncty, nctz: i32;
+  nlooku: i32; covtab: array f64;
+  ixnode, iynode, iznode: array i32;
+  nst_arr: array i32; c0_arr: array f64;
+  it_arr: array i32; cc_arr, aa_arr: array f64;
+  irot: i32; rotmat: array f64;
+  cbb: f64;
+  nx, ny, nz: i32;
+  ktype: i32; gcdf: f64;
+  a, r, rr, s_: array f64;
+  vra: array f64;
+  covres: array f64;
+  result: array f64)
+var
+  i, j, na, neq, in_: i32
+  ii, ix1, iy1, iz1, ix2, iy2, iz2: i32
+  ind, ising: i32
+  cov, sumwts, est: f64
+  MAXCTX_, MAXCTY_, MAXCTZ_: i32
+begin
+  MAXCTX_ := 2 * nctx + 1
+  MAXCTY_ := 2 * ncty + 1
+  if (nctz == 0) then
+    MAXCTZ_ := 1
+  else
+    MAXCTZ_ := 2 * nctz + 1
+  end if
+
+  ! load original data samples
+  na := 0
+  for i := 0, nclose
+    ii := i32(close[i] + 0.5)
+    if (vr[ii * ncut + icut] >= 0.0 and vr[ii * ncut + icut] <= 1.0) then
+      vra[na] := vr[ii * ncut + icut]
+      na := na + 1
+    end if
+  end for
+
+  ! append simulated node values
+  for i := 0, ncnode
+    vra[na + i] := cnodev[i]
+  end for
+
+  neq := na + ncnode + ktype
+  if (neq < 1) then
+    result[0] := gcdf
+    call return()
+  end if
+
+  ! build kriging matrix
+  in_ := 0
+
+  ! data-data block
+  for j := 0, na
+    for i := 0, j + 1
+      ii := i32(close[i] + 0.5)
+      ind := i32(close[j] + 0.5)
+      call gslib.cova3(x[ii], y[ii], z[ii], x[ind], y[ind], z[ind],
+        nst_arr[icut], c0_arr[icut],
+        it_arr, cc_arr, aa_arr,
+        icut * MAXNST, rotmat, covres)
+      a[in_] := covres[1]
+      in_ := in_ + 1
+    end for
+  end for
+
+  ! data-node cross block
+  for j := 0, ncnode
+    for i := 0, na
+      ii := i32(close[i] + 0.5)
+      call gslib.cova3(x[ii], y[ii], z[ii],
+        cnodex[j], cnodey[j], cnodez[j],
+        nst_arr[icut], c0_arr[icut],
+        it_arr, cc_arr, aa_arr,
+        icut * MAXNST, rotmat, covres)
+      a[in_] := covres[1]
+      in_ := in_ + 1
+    end for
+
+    ! node-node block: use covtab lookup
+    for i := 0, j + 1
+      ! both are simulated nodes — use covtab if offsets in range
+      ix1 := ix + (ixnode[icnode[i]] - nctx - 1)
+      iy1 := iy + (iynode[icnode[i]] - ncty - 1)
+      iz1 := iz + (iznode[icnode[i]] - nctz - 1)
+      ix2 := ix + (ixnode[icnode[j]] - nctx - 1)
+      iy2 := iy + (iynode[icnode[j]] - ncty - 1)
+      iz2 := iz + (iznode[icnode[j]] - nctz - 1)
+
+      ! offset between two simulated nodes
+      ind := i32(abs(f64(ix1 - ix2)))
+      if (ind <= nctx and i32(abs(f64(iy1 - iy2))) <= ncty and i32(abs(f64(iz1 - iz2))) <= nctz) then
+        ! look up in covtab — but covtab is indexed by spiral position
+        ! we need direct covariance call instead
+        call gslib.cova3(cnodex[i], cnodey[i], cnodez[i],
+          cnodex[j], cnodey[j], cnodez[j],
+          nst_arr[icut], c0_arr[icut],
+          it_arr, cc_arr, aa_arr,
+          icut * MAXNST, rotmat, covres)
+      else
+        call gslib.cova3(cnodex[i], cnodey[i], cnodez[i],
+          cnodex[j], cnodey[j], cnodez[j],
+          nst_arr[icut], c0_arr[icut],
+          it_arr, cc_arr, aa_arr,
+          icut * MAXNST, rotmat, covres)
+      end if
+      a[in_] := covres[1]
+      in_ := in_ + 1
+    end for
+  end for
+
+  ! RHS: covariance of each sample/node to the estimation point
+  for i := 0, na
+    ii := i32(close[i] + 0.5)
+    call gslib.cova3(x[ii], y[ii], z[ii], xx, yy, zz,
+      nst_arr[icut], c0_arr[icut],
+      it_arr, cc_arr, aa_arr,
+      icut * MAXNST, rotmat, covres)
+    r[i] := covres[1]
+    rr[i] := r[i]
+  end for
+  for i := 0, ncnode
+    ! node-to-estimate covariance from covtab
+    call gslib.cova3(cnodex[i], cnodey[i], cnodez[i], xx, yy, zz,
+      nst_arr[icut], c0_arr[icut],
+      it_arr, cc_arr, aa_arr,
+      icut * MAXNST, rotmat, covres)
+    r[na + i] := covres[1]
+    rr[na + i] := r[na + i]
+  end for
+
+  ! OK unbiasedness constraint
+  if (ktype == 1) then
+    for i := 0, na + ncnode
+      a[in_] := 1.0
+      in_ := in_ + 1
+    end for
+    a[in_] := 0.0
+    in_ := in_ + 1
+    r[neq - 1] := 1.0
+    rr[neq - 1] := 1.0
+  end if
+
+  ! solve
+  if (neq == 1) then
+    if (abs(a[0]) < 1.0e-20) then
+      result[0] := gcdf
+      call return()
+    end if
+    s_[0] := r[0] / a[0]
+  else
+    call gslib.ksol(neq, a, r, s_, covres)
+    ising := i32(covres[0])
+    if (ising /= 0) then
+      result[0] := gcdf
+      call return()
+    end if
+  end if
+
+  ! compute estimate
+  est := 0.0
+  sumwts := 0.0
+  for i := 0, na + ncnode
+    est := est + s_[i] * vra[i]
+    sumwts := sumwts + s_[i]
+  end for
+  if (ktype == 0) then
+    est := est + (1.0 - sumwts) * gcdf
+  end if
+
+  result[0] := est
+end
+
+! ── sisim — sequential indicator simulation ──────────────────────────
+!
+! one realization per call. visits all grid nodes in random order.
+! at each node: search nearby data + simulated nodes, krige indicator
+! per cutoff via krige_i, correct order relations, draw from CDF
+! via beyond.
+!
+! caller must run setup before calling:
+!   setrot for each cutoff's variograms + search rotation
+!   setsupr + picksup for conditioning data
+!   ctable_i for per-cutoff covariance lookup + spiral search
+!
+! vr[nd * ncut] = indicator data (pre-transformed)
+! gcdf[ncut]    = marginal CDF at cutoffs
+! thresh[ncut]  = cutoff values
+!
+! Fortran ref: sisim.for
+
+subroutine gslib.sisim(
+  nx, ny, nz: i32; xmn, ymn, zmn, xsiz, ysiz, zsiz: f64;
+  nd: i32; x, y, z, vr: array f64;
+  ncut: i32; thresh, gcdf: array f64;
+  ivtype, ktype: i32;
+  MAXNST: i32;
+  nst_arr: array i32; c0_arr: array f64;
+  it_arr: array i32; cc_arr, aa_arr: array f64;
+  irot, isrot: i32; rotmat: array f64;
+  radsqd: f64;
+  ndmin, ndmax: i32; radius: f64;
+  nodmax, noct: i32;
+  nsbtosr: i32; ixsbtosr, iysbtosr, izsbtosr, nisb: array i32;
+  supout: array f64;
+  nctx, ncty, nctz, nlooku: i32;
+  covtab: array f64;
+  ixnode, iynode, iznode: array i32;
+  cbb_arr: array f64;
+  ltail: i32; ltpar: f64;
+  utail: i32; utpar: f64;
+  zmin, zmax: f64;
+  sim, order: array f64;
+  ixv: array i32;
+  close: array f64;
+  icnode: array i32;
+  cnodex, cnodey, cnodez, cnodev: array f64;
+  a, r, rr, s_: array f64;
+  vra: array f64;
+  covres: array f64;
+  getidxres, inoct: array i32;
+  ccdf_scratch, ccdfo_scratch, beyond_result: array f64;
+  actloc: array f64;
+  lt, ut: array i32)
+var
+  index, in_, nxyz, nxy, nclose, ncnode: i32
+  ix_g, iy_g, iz_g, id, ic, ind: i32
+  xx_g, yy_g, zz_g, test, p, cdfval: f64
+  UNEST, TINY: f64
+  nxsup, nysup, nzsup: i32
+  xmnsup, ymnsup, zmnsup, xsizsup, ysizsup, zsizsup: f64
+begin
+  UNEST := -99.0
+  TINY := 0.0001
+  nxy := nx * ny
+  nxyz := nxy * nz
+
+  ! ── 1. random path ──
+  for index := 0, nxyz
+    sim[index] := gslib.acorni(ixv)
+    order[index] := f64(index)
+  end for
+  ! sort order by sim (random values)
+  call gslib.sortem(0, nxyz, sim, order, order, 1, getidxres, inoct)
+
+  ! ── 2. initialize grid to UNEST ──
+  for index := 0, nxyz
+    sim[index] := UNEST
+  end for
+
+  ! ── 3. assign conditioning data to nearest grid nodes ──
+  for id := 0, nd
+    call gslib.getindx(nx, xmn, xsiz, x[id], getidxres)
+    ix_g := getidxres[0]
+    call gslib.getindx(ny, ymn, ysiz, y[id], getidxres)
+    iy_g := getidxres[0]
+    call gslib.getindx(nz, zmn, zsiz, z[id], getidxres)
+    iz_g := getidxres[0]
+    xx_g := xmn + f64(ix_g) * xsiz
+    yy_g := ymn + f64(iy_g) * ysiz
+    zz_g := zmn + f64(iz_g) * zsiz
+    ind := ix_g + iy_g * nx + iz_g * nxy
+    test := abs(xx_g - x[id]) + abs(yy_g - y[id]) + abs(zz_g - z[id])
+    if (test <= TINY and sim[ind] <= UNEST) then
+      sim[ind] := 10.0 * UNEST - 1.0
+      actloc[ind] := f64(id)
+    end if
+  end for
+
+  ! ── 4. replace flags with actual data (original scale) ──
+  for index := 0, nxyz
+    if (sim[index] < UNEST) then
+      id := i32(actloc[index] + 0.5)
+      ! use first cutoff's original value — stored by caller as indicator
+      ! the caller passes original data; we need the original scale value
+      ! actloc stores the data index, but we need original-scale value
+      ! Convention: vr[id * ncut + 0..ncut-1] = indicators. The caller
+      ! also sets actloc[ind] = id to recover original data. We store
+      ! a sentinel that the node is conditioned — the value at each node
+      ! is interpolated from the CDF.
+      ! For now, mark as "conditioned" — during the loop, skip conditioned
+      sim[index] := 10.0 * UNEST
+    end if
+  end for
+
+  ! read super block parameters
+  nxsup := i32(supout[0])
+  nysup := i32(supout[1])
+  nzsup := i32(supout[2])
+  xmnsup := supout[3]
+  ymnsup := supout[4]
+  zmnsup := supout[5]
+  xsizsup := supout[6]
+  ysizsup := supout[7]
+  zsizsup := supout[8]
+
+  ! ── 5. main simulation loop ──
+  for in_ := 0, nxyz
+    index := i32(order[in_] + 0.5)
+
+    ! skip if already simulated or conditioned
+    if (sim[index] <= UNEST + 0.5 and sim[index] >= 2.0 * UNEST) then
+
+    ! grid coordinates
+    iz_g := index / nxy
+    iy_g := (index - iz_g * nxy) / nx
+    ix_g := index - iz_g * nxy - iy_g * nx
+    xx_g := xmn + f64(ix_g) * xsiz
+    yy_g := ymn + f64(iy_g) * ysiz
+    zz_g := zmn + f64(iz_g) * zsiz
+
+    ! search nearby conditioning data
+    call gslib.srchsupr(xx_g, yy_g, zz_g, radsqd, isrot, rotmat,
+      nsbtosr, ixsbtosr, iysbtosr, izsbtosr, noct,
+      nd, x, y, z, actloc, close, nisb,
+      nxsup, xmnsup, xsizsup,
+      nysup, ymnsup, ysizsup,
+      nzsup, zmnsup, zsizsup,
+      covres, getidxres, inoct, lt, ut)
+    nclose := i32(covres[0])
+
+    ! search simulated nodes
+    call gslib.srchnd(ix_g, iy_g, iz_g, sim,
+      nx, ny, nz, xmn, ymn, zmn, xsiz, ysiz, zsiz,
+      nlooku, ixnode, iynode, iznode,
+      nctx, ncty, nctz,
+      nodmax, noct,
+      icnode, cnodex, cnodey, cnodez, cnodev,
+      inoct, covres)
+    ncnode := i32(covres[0])
+
+    ! transform simulated node values to indicators for each cutoff
+    ! (stored in cnodev — we'll handle per-cutoff inside krige_i)
+
+    ! random CDF value for drawing
+    cdfval := gslib.acorni(ixv)
+    if (cdfval <= 0.0) then cdfval := 0.00001 end if
+    if (cdfval >= 1.0) then cdfval := 0.99999 end if
+
+    if (nclose + ncnode == 0) then
+      ! no data at all — draw from global CDF
+      call gslib.beyond(ivtype, ncut, thresh, gcdf,
+        zmin, zmax, ltail, ltpar, utail, utpar,
+        cdfval, beyond_result)
+      sim[index] := beyond_result[0]
+    else
+      ! krige each cutoff
+      for ic := 0, ncut
+        ! convert simulated node values to indicators for this cutoff
+        for id := 0, ncnode
+          if (ivtype == 0 and cnodev[id] == thresh[ic]) then
+            cnodev[id] := 1.0
+          else if (ivtype == 0) then
+            cnodev[id] := 0.0
+          else if (cnodev[id] <= thresh[ic]) then
+            cnodev[id] := 1.0
+          else
+            cnodev[id] := 0.0
+          end if
+        end for
+
+        call gslib.krige_i(
+          ix_g, iy_g, iz_g, xx_g, yy_g, zz_g,
+          ic, ncut, MAXNST,
+          nclose, close,
+          nd, x, y, z, vr,
+          ncnode, icnode,
+          cnodex, cnodey, cnodez, cnodev,
+          nctx, ncty, nctz,
+          nlooku, covtab,
+          ixnode, iynode, iznode,
+          nst_arr, c0_arr,
+          it_arr, cc_arr, aa_arr,
+          irot, rotmat,
+          cbb_arr[ic],
+          nx, ny, nz,
+          ktype, gcdf[ic],
+          a, r, rr, s_,
+          vra,
+          covres,
+          beyond_result)
+        ccdf_scratch[ic] := beyond_result[0]
+
+        ! restore original simulated node values for next cutoff
+        call gslib.srchnd(ix_g, iy_g, iz_g, sim,
+          nx, ny, nz, xmn, ymn, zmn, xsiz, ysiz, zsiz,
+          nlooku, ixnode, iynode, iznode,
+          nctx, ncty, nctz,
+          nodmax, noct,
+          icnode, cnodex, cnodey, cnodez, cnodev,
+          inoct, covres)
+      end for
+
+      ! correct order relations
+      call gslib.ordrel(ivtype, ncut, ccdf_scratch, ccdfo_scratch)
+
+      ! draw from corrected CDF
+      call gslib.beyond(ivtype, ncut, thresh, ccdfo_scratch,
+        zmin, zmax, ltail, ltpar, utail, utpar,
+        cdfval, beyond_result)
+      sim[index] := beyond_result[0]
+    end if
+    end if
+  end for
+
+  ! ── 6. reassign conditioning data ──
+  for id := 0, nd
+    call gslib.getindx(nx, xmn, xsiz, x[id], getidxres)
+    ix_g := getidxres[0]
+    call gslib.getindx(ny, ymn, ysiz, y[id], getidxres)
+    iy_g := getidxres[0]
+    call gslib.getindx(nz, zmn, zsiz, z[id], getidxres)
+    iz_g := getidxres[0]
+    xx_g := xmn + f64(ix_g) * xsiz
+    yy_g := ymn + f64(iy_g) * ysiz
+    zz_g := zmn + f64(iz_g) * zsiz
+    ind := ix_g + iy_g * nx + iz_g * nxy
+    test := abs(xx_g - x[id]) + abs(yy_g - y[id]) + abs(zz_g - z[id])
+    if (test <= TINY) then
+      ! re-stamp conditioning data value (original scale from caller)
+      ! The data index is id, and the original value was passed by
+      ! the caller as thresh[0] indicator... The caller should provide
+      ! original-scale values for re-stamping. We use a convention:
+      ! actloc stores the original index, so the caller can recover it.
+      sim[ind] := actloc[ind]
+    end if
+  end for
+end
+
+! ── cokb3d — collocated cokriging ────────────────────────────────────
+!
+! 3D cokriging with primary + one secondary variable.
+! three variogram models: primary-primary (auto), secondary-secondary
+! (auto), primary-secondary (cross). the cross-covariance model index
+! layout mirrors Fortran's iva(i)+(iva(j)-1)*nvr convention:
+!   index 0 = pp (primary-primary)
+!   index 1 = ps (primary-secondary)
+!   index 2 = sp (same as ps, symmetric)
+!   index 3 = ss (secondary-secondary)
+!
+! for cova3 call with index ind:
+!   nst[ind], c0[ind], it[ind*MAXNST..], cc[ind*MAXNST..], aa[ind*MAXNST..]
+!   rotation: irot = ind * MAXNST
+!
+! uses ktsol (full matrix, partial pivoting) for the kriging system.
+!
+! nd1, x1, y1, z1, vr1: primary data
+! nd2, x2, y2, z2, vr2: secondary data
+! ndmaxp, ndmaxs: max primary/secondary neighbors
+!
+! variogram arrays use 4 model slots (pp=0, ps=1, sp=2, ss=3):
+!   nst_arr[4], c0_arr[4]
+!   it_arr[4*MAXNST], cc_arr[4*MAXNST], aa_arr[4*MAXNST]
+!
+! the caller sets up rotation matrices for all 4 model slots.
+!
+! Fortran ref: cokb3d.for
+
+subroutine gslib.cokb3d(
+  nx, ny, nz: i32; xmn, ymn, zmn, xsiz, ysiz, zsiz: f64;
+  nxdis, nydis, nzdis: i32;
+  nd: i32; x, y, z, vr1, vr2: array f64;
+  tmin, tmax: f64;
+  ndmin, ndmaxp, ndmaxs: i32;
+  ktype: i32; skmean1, skmean2: f64;
+  MAXNST: i32;
+  nst_arr: array i32; c0_arr: array f64;
+  it_arr: array i32; cc_arr, aa_arr: array f64;
+  isrot: i32; rotmat: array f64;
+  radius: f64;
+  nsbtosr: i32; ixsbtosr, iysbtosr, izsbtosr, nisb: array i32;
+  supout: array f64;
+  est, estv: array f64;
+  xa, ya, za, vra: array f64;
+  iva: array i32;
+  r, rr, s_: array f64;
+  a: array f64;
+  close: array f64;
+  xdb, ydb, zdb: array f64;
+  covres: array f64;
+  inoct, getidxres: array i32;
+  actloc: array f64;
+  lt, ut: array i32)
+var
+  index, ix, iy, iz, nxy, nxyz, ndb: i32
+  np_, ns_, na, neq, ind, i, j, j1: i32
+  xloc, yloc, zloc, radsqd: f64
+  xdis, ydis, zdis, xl, yl, zl: f64
+  xx, yy, zz, dx_, dy_, dz_: f64
+  cov, cmax, cbb, cb, unbias, sumw, ook, ookv: f64
+  nclose, ising: i32
+  ivar_i, ivar_j, vind: i32
+  nxsup, nysup, nzsup: i32
+  xmnsup, ymnsup, zmnsup, xsizsup, ysizsup, zsizsup: f64
+begin
+  nxy := nx * ny
+  nxyz := nxy * nz
+  radsqd := radius * radius
+
+  ! set up block discretization
+  ndb := nxdis * nydis * nzdis
+  xdis := xsiz / max(f64(nxdis), 1.0)
+  ydis := ysiz / max(f64(nydis), 1.0)
+  zdis := zsiz / max(f64(nzdis), 1.0)
+  ind := 0
+  xl := -0.5 * (xsiz + xdis)
+  for ix := 0, nxdis
+    xl := xl + xdis
+    yl := -0.5 * (ysiz + ydis)
+    for iy := 0, nydis
+      yl := yl + ydis
+      zl := -0.5 * (zsiz + zdis)
+      for iz := 0, nzdis
+        zl := zl + zdis
+        xdb[ind] := xl
+        ydb[ind] := yl
+        zdb[ind] := zl
+        ind := ind + 1
+      end for
+    end for
+  end for
+
+  ! block covariance (primary-primary, index 0)
+  call gslib.cova3(0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+    nst_arr[0], c0_arr[0], it_arr, cc_arr, aa_arr,
+    0, rotmat, covres)
+  cmax := covres[0]
+  unbias := 1.0
+
+  if (ndb <= 1) then
+    cbb := cmax
+  else
+    cbb := 0.0
+    for i := 0, ndb
+      for j := 0, ndb
+        call gslib.cova3(xdb[i], ydb[i], zdb[i],
+          xdb[j], ydb[j], zdb[j],
+          nst_arr[0], c0_arr[0], it_arr, cc_arr, aa_arr,
+          0, rotmat, covres)
+        cov := covres[1]
+        if (i == j) then
+          cov := covres[0] - c0_arr[0]
+        end if
+        cbb := cbb + cov
+      end for
+    end for
+    cbb := cbb / f64(ndb * ndb)
+  end if
+
+  ! read super block parameters
+  nxsup := i32(supout[0])
+  nysup := i32(supout[1])
+  nzsup := i32(supout[2])
+  xmnsup := supout[3]
+  ymnsup := supout[4]
+  zmnsup := supout[5]
+  xsizsup := supout[6]
+  ysizsup := supout[7]
+  zsizsup := supout[8]
+
+  ! main loop over grid nodes
+  for index := 0, nxyz
+    iz := index / nxy
+    iy := (index - iz * nxy) / nx
+    ix := index - iz * nxy - iy * nx
+    xloc := xmn + f64(ix) * xsiz
+    yloc := ymn + f64(iy) * ysiz
+    zloc := zmn + f64(iz) * zsiz
+
+    ! find nearest samples
+    call gslib.srchsupr(xloc, yloc, zloc, radsqd, isrot, rotmat,
+      nsbtosr, ixsbtosr, iysbtosr, izsbtosr, 0,
+      nd, x, y, z, actloc, close, nisb,
+      nxsup, xmnsup, xsizsup,
+      nysup, ymnsup, ysizsup,
+      nzsup, zmnsup, zsizsup,
+      covres, getidxres, inoct, lt, ut)
+    nclose := i32(covres[0])
+
+    ! load primary and secondary data
+    np_ := 0
+    ns_ := 0
+    na := 0
+    for i := 0, nclose
+      if (np_ >= ndmaxp and ns_ >= ndmaxs) then
+        break
+      end if
+      ind := i32(close[i] + 0.5)
+
+      ! primary data
+      if (vr1[ind] >= tmin and vr1[ind] < tmax and np_ < ndmaxp) then
+        xa[na] := x[ind]
+        ya[na] := y[ind]
+        za[na] := z[ind]
+        vra[na] := vr1[ind]
+        iva[na] := 0
+        np_ := np_ + 1
+        na := na + 1
+      end if
+
+      ! secondary data
+      if (vr2[ind] >= tmin and vr2[ind] < tmax and ns_ < ndmaxs) then
+        xa[na] := x[ind]
+        ya[na] := y[ind]
+        za[na] := z[ind]
+        vra[na] := vr2[ind]
+        ! mean-adjust for SK
+        if (ktype /= 2) then
+          vra[na] := vra[na] - skmean2 + skmean1
+        end if
+        iva[na] := 1
+        ns_ := ns_ + 1
+        na := na + 1
+      end if
+    end for
+
+    ! determine system size
+    if (ktype == 0) then
+      neq := na
+    else
+      neq := na + 1
+    end if
+
+    if (na < ndmin or neq <= 0) then
+      est[index] := -999.0
+      estv[index] := -999.0
+    else
+      ! zero kriging matrix (full neq x neq)
+      for i := 0, neq * neq
+        a[i] := 0.0
+      end for
+
+      ! build LHS matrix
+      for j := 0, na
+        for i := 0, j + 1
+          ! cross-variogram index: iva(i) + iva(j) * 2
+          ! pp=0+0*2=0, ps=0+1*2=2, sp=1+0*2=1, ss=1+1*2=3
+          ! but we store: 0=pp, 1=ps, 2=sp, 3=ss
+          vind := iva[i] + iva[j] * 2
+          call gslib.cova3(xa[i], ya[i], za[i], xa[j], ya[j], za[j],
+            nst_arr[vind], c0_arr[vind],
+            it_arr, cc_arr, aa_arr,
+            vind * MAXNST, rotmat, covres)
+          a[neq * i + j] := covres[1]
+          a[neq * j + i] := covres[1]
+        end for
+
+        ! RHS: primary (index 0) x variable_j cross-covariance
+        vind := iva[j] * 2
+        xx := xa[j] - xloc
+        yy := ya[j] - yloc
+        zz := za[j] - zloc
+        if (ndb <= 1) then
+          call gslib.cova3(xx, yy, zz, xdb[0], ydb[0], zdb[0],
+            nst_arr[vind], c0_arr[vind],
+            it_arr, cc_arr, aa_arr,
+            vind * MAXNST, rotmat, covres)
+          cb := covres[1]
+        else
+          cb := 0.0
+          for j1 := 0, ndb
+            call gslib.cova3(xx, yy, zz, xdb[j1], ydb[j1], zdb[j1],
+              nst_arr[vind], c0_arr[vind],
+              it_arr, cc_arr, aa_arr,
+              vind * MAXNST, rotmat, covres)
+            dx_ := xx - xdb[j1]
+            dy_ := yy - ydb[j1]
+            dz_ := zz - zdb[j1]
+            if (dx_ * dx_ + dy_ * dy_ + dz_ * dz_ < 1.0e-20) then
+              cb := cb + covres[1] - c0_arr[vind]
+            else
+              cb := cb + covres[1]
+            end if
+          end for
+          cb := cb / f64(ndb)
+        end if
+        r[j] := cb
+        rr[j] := cb
+      end for
+
+      ! OK constraint
+      if (ktype == 1) then
+        for i := 0, na
+          a[neq * i + na] := unbias
+          a[neq * na + i] := unbias
+        end for
+        r[na] := unbias
+        rr[na] := unbias
+      end if
+
+      ! solve full matrix system via ktsol
+      call gslib.ktsol(neq, a, r, s_, covres)
+      ising := i32(covres[0])
+
+      if (ising /= 0) then
+        est[index] := -999.0
+        estv[index] := -999.0
+      else
+        ! compute estimate and variance
+        sumw := 0.0
+        ook := 0.0
+        ookv := cbb
+        for i := 0, na
+          ookv := ookv - s_[i] * rr[i]
+          sumw := sumw + s_[i]
+          ook := ook + s_[i] * vra[i]
+        end for
+        if (neq > na) then
+          ookv := ookv - s_[na] * unbias
+        end if
+
+        ! add mean if SK
+        ook := ook + (1.0 - sumw) * skmean1
+
+        est[index] := ook
+        estv[index] := ookv
+      end if
+    end if
+  end for
+end

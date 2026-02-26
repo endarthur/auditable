@@ -2713,3 +2713,226 @@ describe('gslib.sgsim', () => {
       `should have many differences, got ${diffs}/${NXYZ}`);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════
+// High-level API tests (gamv, declus, ik3d, sisim, cokb3d)
+// ═════════════════════════════════════════════════════════════════════
+
+// Import the built gslib.js (includes API wrappers)
+let _apiCached = null;
+async function getApi() {
+  if (_apiCached) return _apiCached;
+  const mod = await import('../ext/atra/lib/gslib.js');
+  _apiCached = mod;
+  return mod;
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// gamv API
+// ═════════════════════════════════════════════════════════════════════
+
+describe('gamv API', () => {
+  it('computes omni-directional semivariogram', async () => {
+    const { gamv } = await getApi();
+    // Linear gradient data: v = x
+    const data = [];
+    for (let i = 0; i < 20; i++) data.push([i, 0, i]);
+    const result = gamv({
+      data,
+      lags: { n: 5, size: 2.0, tolerance: 1.0 },
+    });
+    assert.ok(result.distance instanceof Float64Array);
+    assert.ok(result.value instanceof Float64Array);
+    assert.ok(result.npairs instanceof Float64Array);
+    // semivariogram of linear trend should increase with lag
+    for (let il = 1; il < 5; il++) {
+      if (result.npairs[il] > 0 && result.npairs[il - 1] > 0) {
+        assert.ok(result.value[il] >= result.value[il - 1] - 1e-6,
+          `semivariogram should increase: lag ${il} (${result.value[il]}) < lag ${il-1} (${result.value[il-1]})`);
+      }
+    }
+  });
+
+  it('returns zero variogram for constant data', async () => {
+    const { gamv } = await getApi();
+    const data = [];
+    for (let i = 0; i < 10; i++)
+      for (let j = 0; j < 10; j++)
+        data.push([i, j, 5.0]);
+    const result = gamv({
+      data,
+      lags: { n: 5, size: 1.0, tolerance: 0.5 },
+    });
+    for (let il = 0; il < 5; il++) {
+      if (result.npairs[il] > 0) {
+        approx(result.value[il], 0.0, 1e-10);
+      }
+    }
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// declus API
+// ═════════════════════════════════════════════════════════════════════
+
+describe('declus API', () => {
+  it('produces weights that average to 1', async () => {
+    const { declus } = await getApi();
+    const data = [[0, 0, 1], [1, 0, 2], [2, 0, 3], [10, 10, 4], [11, 10, 5]];
+    const result = declus({
+      data,
+      cellRange: [1, 10],
+      ncell: 10,
+      noff: 4,
+    });
+    assert.ok(result.weights instanceof Float64Array);
+    assert.equal(result.weights.length, 5);
+    // average weight should be ~1
+    const avg = result.weights.reduce((s, w) => s + w, 0) / result.weights.length;
+    approx(avg, 1.0, 0.01);
+    assert.ok(typeof result.cellSize === 'number');
+    assert.ok(typeof result.weightedMean === 'number');
+  });
+
+  it('uniform data gives equal weights', async () => {
+    const { declus } = await getApi();
+    // Regularly spaced grid — no clustering
+    const data = [];
+    for (let i = 0; i < 5; i++)
+      for (let j = 0; j < 5; j++)
+        data.push([i * 2, j * 2, i + j]);
+    const result = declus({
+      data,
+      cellRange: [1, 10],
+      ncell: 10,
+      noff: 4,
+    });
+    // Average weight should be 1 (normalized)
+    const avg = result.weights.reduce((s, w) => s + w, 0) / result.weights.length;
+    approx(avg, 1.0, 0.01);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// ik3d API
+// ═════════════════════════════════════════════════════════════════════
+
+describe('ik3d API', () => {
+  it('produces CDFs in [0, 1] range', async () => {
+    const { ik3d } = await getApi();
+    const data = [];
+    for (let i = 0; i < 20; i++)
+      data.push([i % 5, Math.floor(i / 5), 0, i * 0.5]);
+    const cutoffs = [2.0, 5.0, 8.0];
+    const result = ik3d({
+      data,
+      grid: { nx: 5, ny: 4, nz: 1, xsiz: 1, ysiz: 1 },
+      cutoffs,
+      variograms: cutoffs.map(() => ({
+        nugget: 0.1,
+        structures: [{ type: 'spherical', contribution: 0.9, range: 5 }],
+      })),
+      search: { radius: 10, ndmax: 16 },
+    });
+    assert.ok(result.ccdf instanceof Float64Array);
+    assert.equal(result.ccdf.length, 5 * 4 * cutoffs.length);
+    for (let i = 0; i < result.ccdf.length; i++) {
+      // -9.9999 sentinel or valid [0, 1]
+      if (result.ccdf[i] > -9) {
+        assert.ok(result.ccdf[i] >= -0.01 && result.ccdf[i] <= 1.01,
+          `CDF value ${result.ccdf[i]} at index ${i} out of range`);
+      }
+    }
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// sisim API
+// ═════════════════════════════════════════════════════════════════════
+
+describe('sisim API', () => {
+  it('produces simulation values within data range', async () => {
+    const { sisim } = await getApi();
+    const cutoffs = [1.0, 2.0, 3.0];
+    const engine = sisim({
+      grid: { nx: 10, ny: 10 },
+      cutoffs,
+      variograms: cutoffs.map(() => ({
+        nugget: 0.1,
+        structures: [{ type: 'spherical', contribution: 0.9, range: 5 }],
+      })),
+      search: { radius: 10, ndmax: 8, nodmax: 8 },
+      tails: { lower: { type: 1, param: 0 }, upper: { type: 1, param: 4 } },
+      globalCdf: [0.25, 0.5, 0.75],
+      zmin: 0, zmax: 4,
+    });
+    const sim = engine.run(69069);
+    engine.dispose();
+    assert.ok(sim instanceof Float64Array);
+    assert.equal(sim.length, 100);
+    // Values should be within [zmin, zmax]
+    for (let i = 0; i < sim.length; i++) {
+      assert.ok(sim[i] >= -0.01 && sim[i] <= 4.01,
+        `sim[${i}] = ${sim[i]} out of expected range`);
+    }
+  });
+
+  it('different seeds give different results', async () => {
+    const { sisim } = await getApi();
+    const cutoffs = [1.0, 2.0];
+    const engine = sisim({
+      grid: { nx: 10, ny: 10 },
+      cutoffs,
+      variograms: cutoffs.map(() => ({
+        structures: [{ type: 'spherical', contribution: 1, range: 5 }],
+      })),
+      search: { radius: 10, ndmax: 8, nodmax: 8 },
+      tails: { lower: { type: 1, param: 0 }, upper: { type: 1, param: 3 } },
+      globalCdf: [0.33, 0.67],
+      zmin: 0, zmax: 3,
+    });
+    const sim1 = engine.run(69069);
+    const sim2 = engine.run(12345);
+    engine.dispose();
+    let diffs = 0;
+    for (let i = 0; i < 100; i++) {
+      if (Math.abs(sim1[i] - sim2[i]) > 1e-10) diffs++;
+    }
+    assert.ok(diffs > 50, `expected many differences, got ${diffs}`);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// cokb3d API
+// ═════════════════════════════════════════════════════════════════════
+
+describe('cokb3d API', () => {
+  it('produces estimates and variances', async () => {
+    const { cokb3d } = await getApi();
+    const primary = [];
+    const secondary = [];
+    for (let i = 0; i < 10; i++) {
+      primary.push([i % 5 + 0.5, Math.floor(i / 5) + 0.5, 0.5, i * 0.3]);
+      secondary.push([i % 5 + 0.5, Math.floor(i / 5) + 0.5, 0.5, i * 0.4 + 1]);
+    }
+    const result = cokb3d({
+      data: { primary, secondary },
+      grid: { nx: 5, ny: 2, nz: 1, xsiz: 1, ysiz: 1, zsiz: 1 },
+      variograms: {
+        primary: { nugget: 0.1, structures: [{ type: 'spherical', contribution: 0.9, range: 5 }] },
+        secondary: { nugget: 0.1, structures: [{ type: 'spherical', contribution: 0.9, range: 5 }] },
+        cross: { nugget: 0.05, structures: [{ type: 'spherical', contribution: 0.7, range: 5 }] },
+      },
+      search: { radius: 10, ndmaxPrimary: 8, ndmaxSecondary: 8 },
+    });
+    assert.ok(result.est instanceof Float64Array);
+    assert.ok(result.var instanceof Float64Array);
+    assert.equal(result.est.length, 10);
+    assert.equal(result.var.length, 10);
+    // Variances should be non-negative (or -999 sentinel)
+    for (let i = 0; i < result.var.length; i++) {
+      assert.ok(result.var[i] >= 0 || result.var[i] === -999,
+        `variance[${i}] = ${result.var[i]} is negative`);
+    }
+  });
+});

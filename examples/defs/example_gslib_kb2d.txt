@@ -1,0 +1,122 @@
+/// auditable
+/// title: KB2D — 2D kriging
+/// module: @atra/gslib ext/atra/lib/gslib.js
+
+/// md
+# KB2D — 2D kriging in WebAssembly
+
+ordinary kriging on a 2D grid, using the [GSLIB](https://geostatisticslessons.com/lessons/gslib) `kb2d` program compiled from [atra](ext/atra/SPEC.md) to WebAssembly. adjust the variogram model, range, sill, and nugget to see how they shape the interpolated surface. compare with the [IDW example](example_idw.html) or the [SGSIM example](example_gslib_sgsim.html) — kriging accounts for spatial correlation structure, IDW does not.
+
+/// code
+// parameters
+const modelNames = ["spherical", "exponential", "gaussian"];
+const modelIdx = ui.dropdown("variogram model", modelNames);
+
+const range0 = ui.slider("range", 0.35, {min: 0.05, max: 1.0, step: 0.01});
+const sill = ui.slider("sill (cc)", 0.8, {min: 0.1, max: 2.0, step: 0.05});
+const nugget = ui.slider("nugget (c\u2080)", 0.1, {min: 0.0, max: 0.5, step: 0.01});
+const nPts = ui.slider("samples", 20, {min: 5, max: 60, step: 1});
+const gridN = ui.slider("grid", 60, {min: 20, max: 120, step: 5});
+const showPts = ui.checkbox("show samples", true);
+const showVar = ui.checkbox("show variance", false);
+
+/// code
+// generate seeded sample data
+function mulberry32(a) {
+  return function() {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const rng = mulberry32(42);
+
+const samples = [];
+for (let i = 0; i < nPts; i++) {
+  const x = rng(), y = rng();
+  const trend = 0.5 * Math.sin(x * 4) * Math.cos(y * 3) + 0.5;
+  samples.push([x, y, 0.3 * rng() + 0.7 * trend]);
+}
+
+/// code
+// run kb2d
+const { kb2d } = await load("@atra/gslib");
+const t0 = performance.now();
+const result = kb2d({
+  data: samples,
+  grid: { nx: gridN, ny: gridN, xsiz: 1/gridN, ysiz: 1/gridN },
+  variogram: { nugget, structures: [{ type: modelIdx, contribution: sill, range: range0 }] },
+  search: { radius: 2.0, ndmax: Math.min(nPts, 20) },
+});
+const elapsed = (performance.now() - t0).toFixed(2);
+const est = result.est, estv = result.var;
+
+/// code
+// render
+function viridis(t) {
+  t = Math.max(0, Math.min(1, t));
+  const r = Math.round(255 * Math.max(0, Math.min(1,
+    0.267 + t * (0.004 + t * (5.294 + t * (-14.05 + t * 8.5))))));
+  const g = Math.round(255 * Math.max(0, Math.min(1,
+    0.004 + t * (1.384 + t * (0.098 + t * (-2.74 + t * 2.23))))));
+  const b = Math.round(255 * Math.max(0, Math.min(1,
+    0.329 + t * (1.44 + t * (-5.11 + t * (6.87 + t * -3.57))))));
+  return `rgb(${r},${g},${b})`;
+}
+
+function magma(t) {
+  t = Math.max(0, Math.min(1, t));
+  const r = Math.round(255 * Math.max(0, Math.min(1,
+    -0.002 + t * (0.804 + t * (6.37 + t * (-15.96 + t * 9.78))))));
+  const g = Math.round(255 * Math.max(0, Math.min(1,
+    0.0 + t * (-0.398 + t * (4.23 + t * (-7.76 + t * 4.95))))));
+  const b = Math.round(255 * Math.max(0, Math.min(1,
+    0.015 + t * (2.68 + t * (-9.39 + t * (14.23 + t * -6.53))))));
+  return `rgb(${r},${g},${b})`;
+}
+
+const data = showVar ? estv : est;
+const cmap = showVar ? magma : viridis;
+
+let vmin = Infinity, vmax = -Infinity;
+for (let i = 0; i < data.length; i++) {
+  if (data[i] < -900) continue; // skip UNEST
+  if (data[i] < vmin) vmin = data[i];
+  if (data[i] > vmax) vmax = data[i];
+}
+const vrange = vmax - vmin || 1;
+
+const size = Math.min(500, window.innerWidth - 80);
+const c = ui.canvas(size, size);
+const ctx = c.getContext("2d");
+
+const cellW = size / gridN;
+for (let iy = 0; iy < gridN; iy++) {
+  for (let ix = 0; ix < gridN; ix++) {
+    const v = data[iy * gridN + ix];
+    if (v < -900) { ctx.fillStyle = "#222"; }
+    else { ctx.fillStyle = cmap((v - vmin) / vrange); }
+    ctx.fillRect(ix * cellW, iy * cellW, cellW + 0.5, cellW + 0.5);
+  }
+}
+
+if (showPts) {
+  for (const [sx, sy, sv] of samples) {
+    ctx.beginPath();
+    ctx.arc(sx * size, sy * size, 4, 0, Math.PI * 2);
+    ctx.fillStyle = "#fff";
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = "#000";
+    ctx.stroke();
+  }
+}
+
+const label = showVar ? "kriging variance" : "kriging estimate";
+ui.display(`${label} \u00b7 ${modelIdx} \u00b7 ${gridN}\u00d7${gridN} grid \u00b7 ${nPts} samples \u00b7 ${elapsed} ms`);
+
+/// md
+**how it works:** `kb2d` solves the kriging system for each grid node — a linear system whose coefficients come from the variogram model evaluated at inter-sample distances. the **nugget** adds a discontinuity at the origin (measurement noise), the **sill** is the maximum variance, and the **range** controls how far spatial correlation extends. toggle **show variance** to see the kriging variance — it's lowest near sample points and highest where data is sparse, regardless of the actual values.
+
+the full GSLIB `kb2d` program (with `setrot`, `cova3`, `ksol`) runs as pre-compiled WebAssembly via `load("@atra/gslib")`. the same binary includes all 23 GSLIB routines — `sgsim`, `kt3d`, `nscore`, and more.

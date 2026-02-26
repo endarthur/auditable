@@ -60,19 +60,38 @@ console.log(`Built ext/atra/index.js (${(size / 1024).toFixed(1)} KB)`);
 import { buildSrc, formatSrcJs, bundle } from './atrac.js';
 
 const libDir = path.join(__dirname, 'lib');
-const atraPath = path.join(libDir, 'alpack.atra');
-if (fs.existsSync(atraPath)) {
-  const atraSrc = fs.readFileSync(atraPath, 'utf8');
+
+// ── alpack ──
+
+const alpackPath = path.join(libDir, 'alpack.atra');
+if (fs.existsSync(alpackPath)) {
+  const atraSrc = fs.readFileSync(alpackPath, 'utf8');
   const libOut = formatSrcJs(buildSrc(atraSrc));
   const libOutPath = path.join(libDir, 'alpack.src.js');
   fs.writeFileSync(libOutPath, libOut);
   const libSize = fs.statSync(libOutPath).size;
   console.log(`Built ext/atra/lib/alpack.src.js (${(libSize / 1024).toFixed(1)} KB)`);
 
-  // Binary distribution — standalone JS with embedded Wasm
   const bundleOut = bundle(atraSrc, { name: 'alpack' });
   const bundlePath = path.join(libDir, 'alpack.js');
   fs.writeFileSync(bundlePath, bundleOut);
   const bundleSize = fs.statSync(bundlePath).size;
   console.log(`Built ext/atra/lib/alpack.js (${(bundleSize / 1024).toFixed(1)} KB)`);
+}
+
+// ── gslib ──
+
+const gslibAtraPath = path.join(__dirname, '..', 'gslib', 'gslib.atra');
+if (fs.existsSync(gslibAtraPath)) {
+  const gslibSrc = fs.readFileSync(gslibAtraPath, 'utf8');
+
+  let gslibBundleOut = bundle(gslibSrc, { name: 'gslib' });
+  const gslibApiPath = path.join(__dirname, '..', 'gslib', 'api.js');
+  if (fs.existsSync(gslibApiPath)) {
+    gslibBundleOut += '\n' + fs.readFileSync(gslibApiPath, 'utf8');
+  }
+  const gslibBundlePath = path.join(libDir, 'gslib.js');
+  fs.writeFileSync(gslibBundlePath, gslibBundleOut);
+  const gslibBundleSize = fs.statSync(gslibBundlePath).size;
+  console.log(`Built ext/atra/lib/gslib.js (${(gslibBundleSize / 1024).toFixed(1)} KB)`);
 }

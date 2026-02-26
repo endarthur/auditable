@@ -37,6 +37,15 @@ Faithful transcription of Stanford's [GSLIB](http://www.gslib.com/) (Deutsch & J
 | `gslib.srchnd` | subroutine | Search previously simulated grid nodes | sgsim.for |
 | `gslib.krige` | subroutine | Kriging system for simulation (SK/OK/LVM/ED/CoK) | sgsim.for |
 | `gslib.sgsim` | subroutine | Sequential Gaussian simulation (one realization) | sgsim.for |
+| `gslib.ordrel` | subroutine | Order relation correction for indicator CDFs | ordrel.for |
+| `gslib.beyond` | subroutine | CDF interpolation and tail extrapolation | beyond.for |
+| `gslib.gamv` | subroutine | Experimental variogram computation (all-pairs) | gamv.for |
+| `gslib.declus` | subroutine | Cell declustering for sampling bias correction | declus.for |
+| `gslib.ik3d` | subroutine | 3D indicator kriging at multiple thresholds | ik3d.for |
+| `gslib.ctable_i` | subroutine | Per-cutoff covariance lookup table | sisim.for |
+| `gslib.krige_i` | subroutine | Per-cutoff indicator kriging for simulation | sisim.for |
+| `gslib.sisim` | subroutine | Sequential indicator simulation (one realization) | sisim.for |
+| `gslib.cokb3d` | subroutine | 3D collocated cokriging (primary + secondary) | cokb3d.for |
 
 ## Implementation order
 
@@ -51,8 +60,12 @@ Following the dependency chain from primitives to programs:
 7. **Search** — setsupr, picksup, srchsupr
 8. **Kriging** — ksol, ktsol, kb2d, kt3d
 9. **Simulation** — ctable, srchnd, krige, sgsim
-
-Items 1-9 are implemented. Future: sisim (sequential indicator simulation).
+10. **Indicator utilities** — ordrel, beyond
+11. **Variography** — gamv
+12. **Declustering** — declus
+13. **Indicator kriging** — ik3d
+14. **Indicator simulation** — ctable_i, krige_i, sisim
+15. **Cokriging** — cokb3d
 
 ## Rotation matrix storage
 
@@ -114,9 +127,220 @@ All scratch arrays are caller-provided — atra has no local arrays.
 
 **UNEST sentinel:** -99.0 (not -999.0 as in kt3d). Data flags use 10*UNEST = -990.0. A node is unsimulated if `sim[ind] <= UNEST + eps` and `sim[ind] >= 2*UNEST`.
 
+## Indicator utilities
+
+`ordrel` corrects order relation violations in indicator kriging CDFs. For continuous variables (ivtype=1): forward and backward monotonicity passes, averaged. For categorical (ivtype=0): normalize probabilities to sum to 1. All values clamped to [0, 1].
+
+`beyond` interpolates/extrapolates a value from a kriged indicator CDF. Given cutoffs, CDF values, and a target probability (cdfval), returns the corresponding z-value. Middle interpolation is linear between cutoff bounds. Tail options: 1=linear, 2=power, 4=hyperbolic (upper only).
+
+## Variography
+
+`gamv` computes experimental variograms via O(n^2) all-pairs loop with directional/lag filtering. Supports multiple directions and variogram types: 1=semivariogram, 2=cross-semivariogram, 3=covariance, 4=correlogram, 5=general relative, 6=pairwise relative, 7=log semivariogram, 8=madogram. Output arrays indexed as `(id * nvarg + iv) * (nlag + 2) + il`.
+
+## Declustering
+
+`declus` implements cell declustering for correcting sampling bias. Sweeps cell sizes from cmin to cmax, computes inverse-density weights at multiple origin offsets per cell size, and selects the optimal cell size by min or max weighted mean. Final weights are normalized so their average equals 1.
+
+## Indicator kriging
+
+`ik3d` performs 3D indicator kriging with super block search. For each grid node, kriging is performed independently at each cutoff using that cutoff's variogram model. Per-cutoff variogram arrays are indexed `[icut * MAXNST + is]`. Order relations are corrected via `ordrel`. Output: nxyz * ncut CDF values.
+
+## Indicator simulation
+
+`sisim` implements Sequential Indicator Simulation — one realization per call. Same random-path structure as sgsim, but at each node: search nearby data (`srchsupr`) and simulated nodes (`srchnd`), krige indicator at each cutoff via `krige_i`, correct order relations via `ordrel`, draw from CDF via `beyond`.
+
+**Internal subroutines:**
+- `ctable_i` — builds spiral search order from first cutoff's variogram, fills covtab for all cutoffs. Returns nlooku and cbb per cutoff.
+- `krige_i` — per-cutoff indicator kriging mixing original data + simulated nodes. Uses packed upper-triangular matrix solved via `ksol`.
+
+## Cokriging
+
+`cokb3d` performs 3D collocated cokriging with primary + one secondary variable. Three variogram models: primary-primary (auto), secondary-secondary (auto), primary-secondary (cross). Each can have independent nested structures. The full cokriging matrix is `(na+k) x (na+k)` where na = primary + secondary neighbors and k = Lagrange multipliers. Solved via `ktsol` (partial pivoting).
+
 ## RNG
 
 `acorni` implements the ACORN generator (Wikramaratna, 1990) of order 12 with modulus 2^30. State is a 13-element i32 array: `ixv[0]` = seed, `ixv[1..12]` = 0 initially. Each call advances the state and returns a uniform value in [0, 1). The caller owns the state array, enabling multiple independent streams.
+
+## High-level API
+
+The binary distribution (`ext/atra/lib/gslib.js`) includes a high-level wrapper that hides all Wasm memory management. Import via `load("@atra/gslib")`.
+
+### kb2d
+
+2D ordinary/simple kriging. Brute-force neighbor search — good for small grids or when all data are relevant.
+
+```js
+const { kb2d } = await load("@atra/gslib");
+const result = kb2d({
+  data: [[x, y, v], ...],
+  grid: { nx: 50, ny: 50, xsiz: 1, ysiz: 1 },
+  variogram: {
+    nugget: 0.1,
+    structures: [{ type: "spherical", contribution: 0.9, range: 10 }],
+  },
+  search: { radius: 20, ndmax: 16 },
+});
+// result.est — Float64Array[nx*ny], kriging estimates (-999 = unestimated)
+// result.var — Float64Array[nx*ny], kriging variances
+```
+
+Options: `grid.xmn`/`ymn` (cell-center origin, default `xsiz/2`), `discretization: { nx, ny }` (block kriging points, default 1x1 = point), `ktype: "OK"|"SK"` (default "OK"), `skmean` (SK global mean, default 0).
+
+Variogram structure types: `spherical`, `exponential`, `gaussian`, `power`, `hole`. Each structure takes `contribution`, `range`, and optionally `angle` (rotation), `rangeMinor` (anisotropy ratio, default = range).
+
+### kt3d
+
+3D kriging with super block search. Handles large datasets efficiently.
+
+```js
+const { kt3d } = await load("@atra/gslib");
+const result = kt3d({
+  data: [[x, y, z, v], ...],
+  grid: { nx: 20, ny: 20, nz: 5, xsiz: 1, ysiz: 1, zsiz: 1 },
+  variogram: {
+    nugget: 0.1,
+    structures: [{ type: "spherical", contribution: 0.9, range: 15 }],
+  },
+  search: { radius: 20, ndmax: 32 },
+});
+```
+
+Additional search options: `ndmin` (minimum neighbors, default 1), `angle`/`angle2`/`angle3` (search ellipse rotation), `radiusMinor`/`radiusVert` (anisotropic search, default = radius). Variogram structures also accept `angle2`, `angle3`, `rangeVert`.
+
+Supports `ktype: "OK"|"SK"` (default "OK"). KT/UK drift terms are not exposed — use the low-level `instantiate()` interface for those.
+
+### sgsim
+
+Sequential Gaussian simulation. Two-phase: setup allocates all buffers once, `run(seed)` generates realizations. Data must already be in normal score space.
+
+```js
+const { sgsim } = await load("@atra/gslib");
+const engine = sgsim({
+  grid: { nx: 50, ny: 50 },
+  variogram: {
+    structures: [{ type: "spherical", contribution: 1.0, range: 10 }],
+  },
+  search: { radius: 20, ndmax: 12, nodmax: 12 },
+});
+
+const sim1 = engine.run(69069);   // Float64Array[nx*ny*nz]
+const sim2 = engine.run(12345);   // different seed, different realization
+engine.dispose();                 // release memory
+```
+
+Search options: `nodmax` (max previously simulated nodes, default 12), `noct` (octant search limit, 0 = disabled). Conditioning data: `data: [[x, y, z, v], ...]` (normal scores). Grid defaults: `nz: 1`, `xsiz/ysiz/zsiz: 1`, origins at `siz/2`.
+
+### gamv
+
+Experimental variogram computation. All-pairs O(n^2) with directional/lag filtering.
+
+```js
+const { gamv } = await load("@atra/gslib");
+const result = gamv({
+  data: [[x, y, v], ...],           // or [[x, y, z, v], ...]
+  lags: { n: 10, size: 1.0, tolerance: 0.5 },
+  directions: [
+    { azimuth: 0, tolerance: 90, bandwidthH: Infinity },
+  ],
+  trim: { min: -1e21, max: 1e21 },
+});
+// result.distance — Float64Array[ndir * (nlag+2)]
+// result.value    — Float64Array[ndir * (nlag+2)], semivariogram values
+// result.npairs   — Float64Array[ndir * (nlag+2)]
+// result.hm, result.tm — head/tail mean arrays
+```
+
+Default: omni-directional (azimuth=0, tolerance=90). For 3D data, directions also accept `dip`, `dipTolerance`, `bandwidthV`.
+
+### declus
+
+Cell declustering for sampling bias correction.
+
+```js
+const { declus } = await load("@atra/gslib");
+const result = declus({
+  data: [[x, y, v], ...],           // or [[x, y, z, v], ...]
+  cellRange: [1, 20],               // min/max cell size to sweep
+  ncell: 25,                        // number of cell sizes to test
+  noff: 8,                          // origin offsets per cell size
+  anisotropy: { y: 1, z: 1 },      // cell shape ratios
+  criterion: "min",                 // optimize weighted mean: "min" or "max"
+});
+// result.weights      — Float64Array[nd], average = 1
+// result.cellSize     — optimal cell size
+// result.weightedMean — weighted mean at optimum
+```
+
+### ik3d
+
+3D indicator kriging at multiple thresholds. The wrapper handles indicator transform internally.
+
+```js
+const { ik3d } = await load("@atra/gslib");
+const result = ik3d({
+  data: [[x, y, z, v], ...],
+  grid: { nx: 20, ny: 20, nz: 1 },
+  cutoffs: [0.5, 1.0, 1.5],
+  variograms: [                      // one per cutoff
+    { nugget: 0, structures: [{ type: "spherical", contribution: 1, range: 10 }] },
+    { nugget: 0, structures: [{ type: "spherical", contribution: 1, range: 12 }] },
+    { nugget: 0, structures: [{ type: "spherical", contribution: 1, range: 14 }] },
+  ],
+  search: { radius: 20, ndmax: 16 },
+  ktype: "OK",                       // "OK" or "SK"
+  categorical: false,
+});
+// result.ccdf — Float64Array[nxyz * ncut], CDF values at each cutoff per node
+```
+
+### sisim
+
+Sequential Indicator Simulation. Two-phase like sgsim: setup allocates buffers, `run(seed)` generates realizations.
+
+```js
+const { sisim } = await load("@atra/gslib");
+const engine = sisim({
+  grid: { nx: 50, ny: 50 },
+  cutoffs: [0.5, 1.0, 1.5],
+  variograms: [                      // one per cutoff
+    { nugget: 0, structures: [{ type: "spherical", contribution: 1, range: 8 }] },
+    { nugget: 0, structures: [{ type: "spherical", contribution: 1, range: 10 }] },
+    { nugget: 0, structures: [{ type: "spherical", contribution: 1, range: 12 }] },
+  ],
+  search: { radius: 20, ndmax: 12, nodmax: 12 },
+  data: [[x, y, z, v], ...],        // conditioning data (original scale)
+  globalCdf: [0.25, 0.50, 0.75],    // marginal CDF at cutoffs (for SK)
+  tails: { lower: { type: 1, param: 0 }, upper: { type: 1, param: 5 } },
+  categorical: false,
+});
+const sim = engine.run(69069);       // Float64Array[nxyz], original scale
+engine.dispose();
+```
+
+### cokb3d
+
+3D collocated cokriging with primary + secondary variable.
+
+```js
+const { cokb3d } = await load("@atra/gslib");
+const result = cokb3d({
+  data: {
+    primary: [[x, y, z, v], ...],
+    secondary: [[x, y, z, v], ...],
+  },
+  grid: { nx: 20, ny: 20, nz: 5 },
+  variograms: {
+    primary: { nugget: 0, structures: [{ type: "spherical", contribution: 1, range: 10 }] },
+    secondary: { nugget: 0, structures: [{ type: "spherical", contribution: 1, range: 15 }] },
+    cross: { nugget: 0, structures: [{ type: "spherical", contribution: 0.8, range: 12 }] },
+  },
+  search: { radius: 20, ndmaxPrimary: 16, ndmaxSecondary: 16 },
+  ktype: "OK",
+  skmean: { primary: 0, secondary: 0 },
+});
+// result.est — Float64Array[nxyz], cokriging estimates
+// result.var — Float64Array[nxyz], cokriging variances
+```
 
 ## Testing
 
@@ -125,3 +349,5 @@ npm test
 ```
 
 Tests compile gslib.atra to Wasm via `bundle()`, instantiate with shared memory, and verify each routine against known values and Fortran behavior.
+
+`test/gslib-validate.js` runs validation against Fortran Gslib90 reference executables for kb2d (4 configs), kt3d (8 configs), and sgsim (20 realizations). The new programs (gamv, declus, ik3d, sisim, cokb3d) are tested via unit tests in `test/gslib.test.js`.
