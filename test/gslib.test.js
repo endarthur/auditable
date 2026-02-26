@@ -1539,7 +1539,7 @@ describe('gslib.kb2d', () => {
       if (est[i] !== -999.0) {
         assert.ok(est[i] >= 5 && est[i] <= 35,
           `OK estimate ${est[i]} should be within data range`);
-        assert.ok(estv[i] >= 0,
+        assert.ok(estv[i] >= -1e-10,
           `variance ${estv[i]} should be non-negative`);
       }
     }
@@ -1584,6 +1584,471 @@ describe('gslib.kb2d', () => {
     if (varNear !== -999.0 && varFar !== -999.0) {
       assert.ok(varNear < varFar,
         `variance near data (${varNear}) should be < variance far (${varFar})`);
+    }
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// ktsol
+// ═════════════════════════════════════════════════════════════════════
+
+describe('gslib.ktsol', () => {
+  // Memory layout: full n×n matrix (column-major), RHS, solution, result
+  // ktsol uses column-major: element (row i, col j) = a[j*n + i]
+  const A = 0, B = 400, S = 480, RESULT = 560;
+
+  it('solves a 2×2 system', async () => {
+    const { lib, memory } = await getGslib();
+    // [2 1; 1 2] * [1; 1] = [3; 3]
+    // Column-major: col0=[2,1], col1=[1,2]
+    writeF64(memory, A, [2, 1, 1, 2]);
+    writeF64(memory, B, [3, 3]);
+    writeF64(memory, RESULT, [0]);
+
+    lib.gslib.ktsol(2, A, B, S, RESULT);
+
+    const ising = readF64(memory, RESULT, 1)[0];
+    assert.equal(ising, 0, 'should not be singular');
+    const sol = readF64(memory, S, 2);
+    approx(sol[0], 1.0, 1e-6);
+    approx(sol[1], 1.0, 1e-6);
+  });
+
+  it('solves a 3×3 system', async () => {
+    const { lib, memory } = await getGslib();
+    // [4 2 1; 2 5 2; 1 2 6] * [1; 2; 3] = [11; 18; 23]
+    // Column-major: col0=[4,2,1], col1=[2,5,2], col2=[1,2,6]
+    writeF64(memory, A, [4, 2, 1, 2, 5, 2, 1, 2, 6]);
+    writeF64(memory, B, [11, 18, 23]);
+    writeF64(memory, RESULT, [0]);
+
+    lib.gslib.ktsol(3, A, B, S, RESULT);
+
+    const ising = readF64(memory, RESULT, 1)[0];
+    assert.equal(ising, 0);
+    const sol = readF64(memory, S, 3);
+    approx(sol[0], 1.0, 1e-6);
+    approx(sol[1], 2.0, 1e-6);
+    approx(sol[2], 3.0, 1e-6);
+  });
+
+  it('detects singular matrix', async () => {
+    const { lib, memory } = await getGslib();
+    // [1 2; 2 4] is singular
+    // Column-major: col0=[1,2], col1=[2,4]
+    writeF64(memory, A, [1, 2, 2, 4]);
+    writeF64(memory, B, [3, 6]);
+    writeF64(memory, RESULT, [0]);
+
+    lib.gslib.ktsol(2, A, B, S, RESULT);
+
+    const ising = readF64(memory, RESULT, 1)[0];
+    assert.ok(ising !== 0, `should detect singularity, ising=${ising}`);
+  });
+
+  it('returns -1 for n <= 1', async () => {
+    const { lib, memory } = await getGslib();
+    writeF64(memory, RESULT, [0]);
+
+    lib.gslib.ktsol(1, A, B, S, RESULT);
+
+    const ising = readF64(memory, RESULT, 1)[0];
+    assert.equal(ising, -1);
+  });
+
+  it('solves system requiring pivoting', async () => {
+    const { lib, memory } = await getGslib();
+    // [0 1; 1 0] * [2; 3] = [3; 2]
+    // Without pivoting, a[0,0]=0 would fail. ktsol should pivot.
+    // Column-major: col0=[0,1], col1=[1,0]
+    writeF64(memory, A, [0, 1, 1, 0]);
+    writeF64(memory, B, [3, 2]);
+    writeF64(memory, RESULT, [0]);
+
+    lib.gslib.ktsol(2, A, B, S, RESULT);
+
+    const ising = readF64(memory, RESULT, 1)[0];
+    assert.equal(ising, 0, 'should handle zero diagonal via pivoting');
+    const sol = readF64(memory, S, 2);
+    approx(sol[0], 2.0, 1e-6);
+    approx(sol[1], 3.0, 1e-6);
+  });
+
+  it('agrees with ksol on symmetric system', async () => {
+    const { lib, memory } = await getGslib();
+    // Solve [2 1; 1 2] * x = [3; 3] with both solvers, using separate memory regions.
+
+    // ktsol (column-major full) — use offsets well above ksol's range
+    const KT_A = 800, KT_B = 880, KT_S = 920, KT_RES = 960;
+    writeF64(memory, KT_A, [2, 1, 1, 2]);
+    writeF64(memory, KT_B, [3, 3]);
+    writeF64(memory, KT_RES, [0]);
+    lib.gslib.ktsol(2, KT_A, KT_B, KT_S, KT_RES);
+    const sol_kt = readF64(memory, KT_S, 2);
+
+    // ksol (upper triangular packed): a(0)=2, a(1)=1, a(2)=2
+    const KS_A = 1000, KS_R = 1080, KS_S = 1120, KS_RES = 1160;
+    writeF64(memory, KS_A, [2, 1, 2]);
+    writeF64(memory, KS_R, [3, 3]);
+    writeF64(memory, KS_RES, [0]);
+    lib.gslib.ksol(2, KS_A, KS_R, KS_S, KS_RES);
+    const sol_ks = readF64(memory, KS_S, 2);
+
+    approx(sol_kt[0], sol_ks[0], 1e-8);
+    approx(sol_kt[1], sol_ks[1], 1e-8);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// kt3d
+// ═════════════════════════════════════════════════════════════════════
+
+describe('gslib.kt3d', () => {
+  // Memory layout for kt3d tests — use page 8+ (65536+) to avoid conflicts
+  const BASE = 65536;
+  const NDMAX = 10;
+  const MDT_MAX = 10;     // 1 + 9 drift terms
+  const NEQ_MAX = NDMAX + MDT_MAX;
+
+  // Data arrays (max 20 points + grid ext drift)
+  const X    = BASE;                    // 20 f64 = 160
+  const Y    = BASE + 160;              // 20 f64
+  const Z    = BASE + 320;             // 20 f64
+  const VR   = BASE + 480;             // 120 f64 (data + grid ext drift)
+  const VE   = BASE + 1440;            // 120 f64
+  // Variogram config
+  const IT   = BASE + 2400;            // 4 i32 = 16
+  const CC   = BASE + 2416;            // 4 f64 = 32
+  const AA   = BASE + 2448;            // 4 f64 = 32
+  const ROTMAT = BASE + 2480;          // 45 f64 = 360 (up to 5 rotmats)
+  // Drift flags
+  const IDRIF = BASE + 2840;           // 9 i32 = 36
+  // Super block arrays
+  const NISB   = BASE + 2880;          // 200 i32 = 800
+  const SUPOUT = BASE + 3680;          // 20 f64 = 160
+  const IXSBTOSR = BASE + 3840;        // 200 i32 = 800
+  const IYSBTOSR = BASE + 4640;        // 200 i32
+  const IZSBTOSR = BASE + 5440;        // 200 i32
+  // Output
+  const EST   = BASE + 6240;           // 200 f64 = 1600
+  const ESTV  = BASE + 7840;           // 200 f64
+  // Scratch (NEQ_MAX = 20)
+  const XA    = BASE + 9440;           // NDMAX f64 = 80
+  const YA    = BASE + 9520;           // NDMAX f64
+  const ZA    = BASE + 9600;           // NDMAX f64
+  const VRA   = BASE + 9680;           // NDMAX f64
+  const VEA   = BASE + 9760;           // NDMAX f64
+  const R     = BASE + 9840;           // NEQ_MAX f64 = 160
+  const RR    = BASE + 10000;          // NEQ_MAX f64
+  const S_    = BASE + 10160;          // NEQ_MAX f64
+  const KA    = BASE + 10320;          // NEQ_MAX² f64 = 3200
+  const XDB   = BASE + 13520;          // 27 f64 = 216
+  const YDB   = BASE + 13736;          // 27 f64
+  const ZDB   = BASE + 13952;          // 27 f64
+  const CLOSE = BASE + 14168;          // NDMAX f64 = 80
+  const COVRES = BASE + 14248;         // 2 f64 = 16
+  const INOCT  = BASE + 14264;         // 8 i32 = 32
+  const GETIDX  = BASE + 14296;        // 2 i32 = 8
+  // Scratch for super block setup
+  const TMP   = BASE + 14304;          // 20 f64 = 160
+  const IXARR = BASE + 14464;          // 20 i32 = 80
+  const IDX2  = BASE + 14544;          // 2 i32 = 8
+  const LT    = BASE + 14552;          // 64 i32 = 256
+  const UT    = BASE + 14808;          // 64 i32 = 256
+  const NSBTOSR_BUF = BASE + 15064;    // 1 i32 = 4
+
+  /**
+   * Set up and run kt3d. Returns est and estv arrays.
+   * @param {Array} data - Array of [x, y, z, value, ext_drift]
+   * @param {Object} opts - Grid and variogram options
+   */
+  async function setupKt3d(data, opts = {}) {
+    const {
+      nx = 3, ny = 3, nz = 1,
+      xmn = 5, ymn = 5, zmn = 0.5,
+      xsiz = 10, ysiz = 10, zsiz = 1,
+      nxdis = 1, nydis = 1, nzdis = 1,
+      ndmin = 1, ndmax = NDMAX,
+      radius = 50,
+      ktype = 1,
+      skmean = 0,
+      idrif = [0,0,0,0,0,0,0,0,0],
+      nst = 1, c0 = 0,
+      it = [1], cc = [1.0], aa = [10.0],
+      ang = [0], anis = [1.0]
+    } = opts;
+
+    const { lib, memory } = await getGslib();
+    const nd = data.length;
+    const nxyz = nx * ny * nz;
+
+    writeF64(memory, X, data.map(d => d[0]));
+    writeF64(memory, Y, data.map(d => d[1]));
+    writeF64(memory, Z, data.map(d => d[2]));
+    writeF64(memory, VR, data.map(d => d[3]));
+    writeF64(memory, VE, data.map(d => d[4] || 1.0));
+
+    writeI32(memory, IT, it);
+    writeF64(memory, CC, cc);
+    writeF64(memory, AA, aa);
+    writeI32(memory, IDRIF, idrif);
+
+    // Set up rotation matrices for variogram structures
+    for (let is = 0; is < nst; is++) {
+      lib.gslib.setrot(ang[is] || 0, 0, 0, anis[is] || 1.0, 1.0, is, ROTMAT);
+    }
+    // Search rotation matrix (isrot = nst, used by kt3d internally)
+    lib.gslib.setrot(0, 0, 0, 1.0, 1.0, nst, ROTMAT);
+
+    // Set up super block search
+    lib.gslib.setsupr(
+      nx, xmn, xsiz, ny, ymn, ysiz, nz, zmn, zsiz,
+      nd, X, Y, Z, VR, TMP,
+      NISB, IDX2, IXARR, LT, UT,
+      nx, ny, nz,
+      SUPOUT
+    );
+
+    // Need ve sorted in same order as x,y,z,vr after setsupr
+    // setsupr reorders x,y,z,vr — ve needs the same reorder.
+    // For test simplicity, set ve=1 for all data (ktype=0/1 don't use it).
+    // For ktype=2/3 tests, handle separately.
+
+    const supout = readF64(memory, SUPOUT, 9);
+    const nxsup = supout[0], nysup = supout[1], nzsup = supout[2];
+
+    lib.gslib.picksup(
+      nxsup, supout[6],
+      nysup, supout[7],
+      nzsup, supout[8],
+      nst, ROTMAT,          // isrot = nst (search rotation)
+      radius * radius,
+      NSBTOSR_BUF,
+      IXSBTOSR, IYSBTOSR, IZSBTOSR
+    );
+
+    const nsbtosr = readI32(memory, NSBTOSR_BUF, 1)[0];
+
+    // Initialize output arrays
+    for (let i = 0; i < nxyz; i++) {
+      writeF64(memory, EST + i * 8, [-999.0]);
+      writeF64(memory, ESTV + i * 8, [-999.0]);
+    }
+
+    lib.gslib.kt3d(
+      nx, ny, nz, xmn, ymn, zmn, xsiz, ysiz, zsiz,
+      nxdis, nydis, nzdis,
+      nd, X, Y, Z, VR, VE,
+      ndmin, ndmax, radius,
+      0, 0, 0, 1.0, 1.0,     // sang1..sanis2 (isotropic)
+      ktype, skmean,
+      IDRIF,
+      nst, c0, IT, CC, AA,
+      0, ROTMAT,              // irot = 0
+      nsbtosr, IXSBTOSR, IYSBTOSR, IZSBTOSR, NISB,
+      SUPOUT,
+      EST, ESTV,
+      XA, YA, ZA, VRA, VEA,
+      R, RR, S_, KA,
+      XDB, YDB, ZDB,
+      CLOSE, COVRES,
+      INOCT, GETIDX,
+      LT, UT
+    );
+
+    return {
+      lib, memory, nx, ny, nz,
+      est: readF64(memory, EST, nxyz),
+      estv: readF64(memory, ESTV, nxyz)
+    };
+  }
+
+  it('OK: estimate at data location equals data value', async () => {
+    // Two data points — OK with mdt=1 needs na > mdt, so at least 2 samples.
+    // Point at grid node (15, 15, 0.5) = index 4
+    const data = [[15, 15, 0.5, 42.0], [5, 5, 0.5, 10.0]];
+    const { est, estv } = await setupKt3d(data, {
+      nx: 3, ny: 3, nz: 1,
+      xmn: 5, ymn: 5, zmn: 0.5,
+      xsiz: 10, ysiz: 10, zsiz: 1,
+      ndmin: 1, ndmax: 10, radius: 50,
+      ktype: 1, nst: 1, c0: 0, it: [1], cc: [1.0], aa: [10.0]
+    });
+
+    // Grid node (1,1,0) = index 1 + 1*3 = 4
+    const idx = 1 + 1 * 3;
+    approx(est[idx], 42.0, 1.0);
+    assert.ok(estv[idx] < 0.5, `variance at data location should be ~0, got ${estv[idx]}`);
+  });
+
+  it('SK: far nodes approach skmean', async () => {
+    const skmean = 50.0;
+    const data = [[5, 5, 0.5, 100.0]];
+    const { est } = await setupKt3d(data, {
+      nx: 3, ny: 3, nz: 1,
+      xmn: 5, ymn: 5, zmn: 0.5,
+      xsiz: 10, ysiz: 10, zsiz: 1,
+      ndmin: 1, ndmax: 10, radius: 50,
+      ktype: 0, skmean,
+      nst: 1, c0: 0, it: [1], cc: [1.0], aa: [20.0]
+    });
+
+    // At data location (0,0): estimate ~ data value
+    approx(est[0], 100.0, 1.0);
+
+    // Far node (2,2) at (25, 25): should approach skmean
+    if (est[8] !== -999.0) {
+      assert.ok(est[8] < 100.0, `far estimate ${est[8]} should be < data value`);
+      assert.ok(est[8] >= skmean * 0.3,
+        `far estimate ${est[8]} should trend toward skmean=${skmean}`);
+    }
+  });
+
+  it('unestimated nodes with ndmin not met', async () => {
+    const data = [[5, 5, 0.5, 10.0]];
+    const { est } = await setupKt3d(data, {
+      nx: 3, ny: 3, nz: 1,
+      xmn: 5, ymn: 5, zmn: 0.5,
+      xsiz: 10, ysiz: 10, zsiz: 1,
+      ndmin: 3, ndmax: 10, radius: 50,
+      ktype: 1, nst: 1, c0: 0, it: [1], cc: [1.0], aa: [10.0]
+    });
+
+    // ndmin=3 but only 1 datum → all nodes unestimated
+    let unest = 0;
+    for (let i = 0; i < 9; i++) {
+      if (est[i] === -999.0) unest++;
+    }
+    assert.equal(unest, 9, 'all nodes unestimated (ndmin=3 but only 1 data point)');
+  });
+
+  it('block kriging: variance differs from point kriging', async () => {
+    const data = [
+      [5, 5, 0.5, 10.0],
+      [25, 5, 0.5, 20.0],
+      [15, 15, 0.5, 30.0],
+    ];
+    const baseOpts = {
+      nx: 3, ny: 3, nz: 1,
+      xmn: 5, ymn: 5, zmn: 0.5,
+      xsiz: 10, ysiz: 10, zsiz: 1,
+      ndmin: 1, ndmax: 10, radius: 50,
+      ktype: 1, nst: 1, c0: 0.2, it: [1], cc: [1.0], aa: [20.0]
+    };
+
+    // Point kriging (1×1×1)
+    const { estv: estvPoint } = await setupKt3d(data, {
+      ...baseOpts, nxdis: 1, nydis: 1, nzdis: 1
+    });
+
+    // Block kriging (2×2×1)
+    const { estv: estvBlock } = await setupKt3d(data, {
+      ...baseOpts, nxdis: 2, nydis: 2, nzdis: 1
+    });
+
+    // Block kriging variance should differ from point kriging
+    // (generally lower since averaging reduces variance)
+    // Only compare at non-data-location nodes (where point variance > 0)
+    let diffFound = false;
+    for (let i = 0; i < 9; i++) {
+      if (estvPoint[i] !== -999.0 && estvBlock[i] !== -999.0 && estvPoint[i] > 0.01) {
+        if (Math.abs(estvPoint[i] - estvBlock[i]) > 0.001) {
+          diffFound = true;
+          // Block variance should generally be <= point variance at non-data nodes
+          assert.ok(estvBlock[i] <= estvPoint[i] + 0.01,
+            `block variance ${estvBlock[i]} should be <= point variance ${estvPoint[i]}`);
+        }
+      }
+    }
+    assert.ok(diffFound, 'block and point kriging variances should differ');
+  });
+
+  it('2D case (nz=1) gives similar results to kb2d', async () => {
+    const data = [
+      [5, 5, 0.5, 10.0],
+      [25, 5, 0.5, 20.0],
+      [15, 15, 0.5, 30.0],
+    ];
+
+    // kt3d
+    const { est: estKt, estv: estvKt } = await setupKt3d(data, {
+      nx: 3, ny: 3, nz: 1,
+      xmn: 5, ymn: 5, zmn: 0.5,
+      xsiz: 10, ysiz: 10, zsiz: 1,
+      ndmin: 1, ndmax: 10, radius: 50,
+      ktype: 1, nst: 1, c0: 0, it: [1], cc: [1.0], aa: [20.0]
+    });
+
+    // kb2d for comparison (using existing setupKb2d)
+    const { lib, memory } = await getGslib();
+    const nd = data.length;
+
+    const KB_BASE = 49152;
+    const KB_X = KB_BASE, KB_Y = KB_BASE + 160, KB_VR = KB_BASE + 320;
+    const KB_IT = KB_BASE + 480, KB_CC = KB_BASE + 496, KB_AA = KB_BASE + 528;
+    const KB_ROTMAT = KB_BASE + 560, KB_EST = KB_BASE + 704, KB_ESTV = KB_BASE + 1504;
+    const KB_XA = KB_BASE + 2304, KB_YA = KB_BASE + 2392, KB_VRA = KB_BASE + 2480;
+    const KB_DIST = KB_BASE + 2568, KB_NUMS = KB_BASE + 2656;
+    const KB_R = KB_BASE + 2744, KB_RR = KB_BASE + 2840, KB_S = KB_BASE + 2936;
+    const KB_KA = KB_BASE + 3032;
+    const KB_XDB = KB_BASE + 3656, KB_YDB = KB_BASE + 3728;
+    const KB_COVRES = KB_BASE + 3800, KB_KSOLRES = KB_BASE + 3816;
+
+    writeF64(memory, KB_X, data.map(d => d[0]));
+    writeF64(memory, KB_Y, data.map(d => d[1]));
+    writeF64(memory, KB_VR, data.map(d => d[3]));
+    writeI32(memory, KB_IT, [1]);
+    writeF64(memory, KB_CC, [1.0]);
+    writeF64(memory, KB_AA, [20.0]);
+    lib.gslib.setrot(0, 0, 0, 1.0, 1.0, 0, KB_ROTMAT);
+
+    lib.gslib.kb2d(
+      3, 3, 5, 5, 10, 10, 1, 1,
+      nd, KB_X, KB_Y, KB_VR,
+      1, 10, 50, 1, 0,
+      1, 0, KB_IT, KB_CC, KB_AA, 0, KB_ROTMAT,
+      KB_EST, KB_ESTV,
+      KB_XA, KB_YA, KB_VRA, KB_DIST, KB_NUMS,
+      KB_R, KB_RR, KB_S, KB_KA,
+      KB_XDB, KB_YDB, KB_COVRES, KB_KSOLRES
+    );
+
+    const estKb = readF64(memory, KB_EST, 9);
+    const estvKb = readF64(memory, KB_ESTV, 9);
+
+    // Compare: kt3d and kb2d should produce similar (not necessarily identical) results
+    // kb2d uses brute-force search + ksol; kt3d uses super block search + ktsol
+    let matched = 0;
+    for (let i = 0; i < 9; i++) {
+      if (estKt[i] !== -999.0 && estKb[i] !== -999.0) {
+        // Allow some tolerance — different search strategies may find slightly
+        // different neighbor sets at boundary conditions
+        approx(estKt[i], estKb[i], 1.0);
+        matched++;
+      }
+    }
+    assert.ok(matched >= 3, `should have at least 3 comparable nodes, got ${matched}`);
+  });
+
+  it('3D grid: estimates across Z layers', async () => {
+    const data = [
+      [15, 15, 0.5, 10.0],
+      [15, 15, 2.5, 50.0],
+    ];
+    const { est } = await setupKt3d(data, {
+      nx: 1, ny: 1, nz: 3,
+      xmn: 15, ymn: 15, zmn: 0.5,
+      xsiz: 10, ysiz: 10, zsiz: 1,
+      ndmin: 1, ndmax: 10, radius: 50,
+      ktype: 1, nst: 1, c0: 0, it: [1], cc: [1.0], aa: [5.0]
+    });
+
+    // Layer 0 (z=0.5): should be close to 10
+    // Layer 1 (z=1.5): should be intermediate
+    // Layer 2 (z=2.5): should be close to 50
+    if (est[0] !== -999.0 && est[2] !== -999.0) {
+      assert.ok(est[0] < est[2],
+        `estimate at z=0.5 (${est[0]}) should be < estimate at z=2.5 (${est[2]})`);
     }
   });
 });

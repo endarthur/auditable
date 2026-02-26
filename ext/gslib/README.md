@@ -31,6 +31,8 @@ Faithful transcription of Stanford's [GSLIB](http://www.gslib.com/) (Deutsch & J
 | `gslib.srchsupr` | subroutine | Search within super blocks for nearby data | srchsupr.for |
 | `gslib.ksol` | subroutine | Kriging system solver (upper triangular, no pivoting) | ksol.for |
 | `gslib.kb2d` | subroutine | 2D ordinary/simple kriging | kb2d.for |
+| `gslib.ktsol` | subroutine | Kriging system solver (full matrix, partial pivoting) | ktsol.for |
+| `gslib.kt3d` | subroutine | 3D kriging (SK/OK/KT/UK, super block search) | kt3d.for |
 
 ## Implementation order
 
@@ -74,9 +76,13 @@ Output grid parameters are returned via `out[0..8]` (nxsup, nysup, nzsup, xmnsup
 
 `ksol` is the kriging system solver — upper triangular Gauss elimination without pivoting, for OK/SK systems. Uses packed columnwise storage where element (i,j) with j>=i is at position `i + j*(j-1)/2` (1-indexed). Returns 0 on success, k>0 if pivot k is near-zero, -1 if neq<=1.
 
+`ktsol` is the full-matrix kriging system solver — Gaussian elimination with partial pivoting. Column-major n x n matrix, single RHS. Handles ill-conditioned systems that arise with drift terms (KT/UK). Interface: `ktsol(n, a, b, s, result)` where `a[n*n]` is the LHS (modified in place), `b[n]` the RHS (modified), `s[n]` the solution, and `result[0]` returns 0 on success, -1 if n<=1, or k if pivot k is near-zero.
+
 `kb2d` is the full 2D ordinary/simple kriging program. Brute-force neighbor search with insertion sort by distance (no super block search — matching Fortran kb2d). Uses `cova3` + `setrot` for covariance evaluation instead of Fortran's inline `cova2`. Block discretization via nxdis x nydis internal points. ktype=0 for simple kriging, ktype=1 for ordinary kriging. Output: `est[nx*ny]` estimates, `estv[nx*ny]` variances, sentinel -999.0 for unestimated nodes.
 
-All scratch arrays (xa, ya, vra, dist, nums, r, rr, s, a, xdb, ydb, covres, ksolres) are caller-provided — atra has no local arrays.
+`kt3d` is the full 3D kriging program. Super block search (setsupr/picksup/srchsupr), block discretization (nxdis x nydis x nzdis), and multiple kriging types: ktype=0 (SK), ktype=1 (OK), ktype=2 (SK with locally varying mean from external variable), ktype=3 (KT/UK with up to 9 polynomial drift terms + optional external drift). Uses `ktsol` for the kriging system. Single-sample case handled separately. Data coordinates shifted relative to block corner for drift term computation. Drift function means (bv) precomputed and stored in `supout[9..17]`. Rescaling factor `resc = 1/(4*radsqd/covmax)` for numerical stability with drift.
+
+All scratch arrays are caller-provided — atra has no local arrays.
 
 ## RNG
 
