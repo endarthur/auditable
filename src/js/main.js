@@ -1,7 +1,7 @@
 import './state.js';
+import './cm6.js';
 import './stdlib.js';
 import './python.js';
-import './syntax.js';
 import './dag.js';
 import './exec.js';
 import './markdown.js';

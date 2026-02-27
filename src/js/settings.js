@@ -1,5 +1,6 @@
 import { S, $ } from './state.js';
 import { updateStatus, setMsg } from './ui.js';
+import { updateAllEditorThemes, updateAllEditorLineNumbers, updateAllEditorReadOnly } from './cm6.js';
 
 // ── SETTINGS ──
 
@@ -24,6 +25,7 @@ export function applyTheme(theme) {
     document.documentElement.classList.remove('light');
   }
   $('#setTheme').value = theme;
+  updateAllEditorThemes(theme !== 'light');
 }
 
 export function applyFontSize(size) {
@@ -44,6 +46,7 @@ export function applyLineNumbers(show) {
   document.documentElement.classList.toggle('hide-line-numbers', !on);
   const el = $('#setLineNumbers');
   if (el) el.value = on ? 'on' : 'off';
+  updateAllEditorLineNumbers(on);
 }
 
 export function applyHeader(mode) {
@@ -144,6 +147,7 @@ export function applySettings(s) {
 
 export function togglePresent() {
   document.body.classList.toggle('presenting');
+  updateAllEditorReadOnly(document.body.classList.contains('presenting'));
 }
 
 // ── ABOUT ──

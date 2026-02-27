@@ -1,10 +1,9 @@
 import { S } from './state.js';
-import { highlightCode, highlightCss, highlightHtml } from './syntax.js';
 import { isManual } from './dag.js';
 import { renderMd } from './markdown.js';
 import { onCodeEdit, onCssEdit, onHtmlEdit } from './editor.js';
 import { renderHtmlCell } from './exec.js';
-import { attachAutocomplete } from './complete.js';
+import { createEditor, getEditor } from './cm6.js';
 
 // ── CELL DOM ──
 
@@ -43,111 +42,104 @@ export function createCellEl(type, id) {
     div.innerHTML = `
       ${cellHeaderHTML('code', id)}
       <div class="cell-code">
-        <div class="editor-wrap">
-          <div class="line-numbers" aria-hidden="true">1</div>
-          <textarea rows="3" spellcheck="false" wrap="off" placeholder="// code"></textarea>
-          <div class="highlight-layer" aria-hidden="true"></div>
-        </div>
+        <div class="editor-wrap"></div>
       </div>
       <div class="cell-widgets"></div>
       <div class="cell-output"></div>
     `;
 
-    const ta = div.querySelector('textarea');
-    const hl = div.querySelector('.highlight-layer');
     div.querySelector('.cell-type').addEventListener('click', () => div.classList.toggle('collapsed'));
-    const ln = div.querySelector('.line-numbers');
-    ta.addEventListener('input', () => { highlightCode(ta, hl); onCodeEdit(id); });
-    ta.addEventListener('scroll', () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; ln.scrollTop = ta.scrollTop; });
-    attachAutocomplete(ta, id);
-    ta.addEventListener('keydown', handleTab);
-    ta.addEventListener('input', autoResize);
+    const editorWrap = div.querySelector('.editor-wrap');
+    const editor = createEditor(editorWrap, id, '', 'code', (code) => {
+      const cell = S.cells.find(c => c.id === id);
+      if (cell) cell.code = code;
+      onCodeEdit(id);
+    });
+    // store reference for external access
+    div._editor = editor;
   } else if (type === 'css') {
     div.innerHTML = `
       ${cellHeaderHTML('css', id)}
       <div class="cell-css-view"></div>
       <div class="cell-css-edit" style="display:none">
-        <div class="editor-wrap">
-          <div class="line-numbers" aria-hidden="true">1</div>
-          <textarea rows="3" spellcheck="false" wrap="off" placeholder="/* css */"></textarea>
-          <div class="highlight-layer" aria-hidden="true"></div>
-        </div>
+        <div class="editor-wrap"></div>
       </div>
     `;
 
     const cssView = div.querySelector('.cell-css-view');
     const cssEditWrap = div.querySelector('.cell-css-edit');
-    const ta = div.querySelector('textarea');
-    const hl = div.querySelector('.highlight-layer');
+    const editorWrap = div.querySelector('.editor-wrap');
     div.querySelector('.cell-type').addEventListener('click', () => div.classList.toggle('collapsed'));
+
+    const editor = createEditor(editorWrap, id, '', 'css', (code) => {
+      const cell = S.cells.find(c => c.id === id);
+      if (cell) cell.code = code;
+      onCssEdit(id);
+    });
+    div._editor = editor;
 
     cssView.addEventListener('click', () => {
       cssEditWrap.style.display = '';
       cssView.style.display = 'none';
-      ta.focus();
-      autoResize({ target: ta });
+      editor.view.requestMeasure();
+      editor.focus();
     });
 
-    ta.addEventListener('blur', () => {
+    // blur handling: use CM6 focuschange
+    editor.view.dom.addEventListener('focusout', (e) => {
+      // don't close if focus moved within the same editor or to find bar
+      if (editor.view.dom.contains(e.relatedTarget)) return;
+      if (e.relatedTarget && e.relatedTarget.closest('#findBar')) return;
       if (S.findActive) return;
       const cell = S.cells.find(c => c.id === id);
       if (cell) {
-        cell.code = ta.value;
-        cssView.textContent = cssSummary(ta.value);
+        cssView.textContent = cssSummary(cell.code);
       }
       cssEditWrap.style.display = 'none';
       cssView.style.display = '';
     });
-
-    const ln = div.querySelector('.line-numbers');
-    ta.addEventListener('input', () => { highlightCss(ta, hl); onCssEdit(id); });
-    ta.addEventListener('scroll', () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; ln.scrollTop = ta.scrollTop; });
-    ta.addEventListener('input', autoResize);
-    ta.addEventListener('keydown', handleTab);
   } else if (type === 'html') {
     div.innerHTML = `
       ${cellHeaderHTML('html', id)}
       <div class="cell-html-view"></div>
       <div class="cell-html-edit" style="display:none">
-        <div class="editor-wrap">
-          <div class="line-numbers" aria-hidden="true">1</div>
-          <textarea rows="2" spellcheck="false" wrap="off" placeholder="<html template>"></textarea>
-          <div class="highlight-layer" aria-hidden="true"></div>
-        </div>
+        <div class="editor-wrap"></div>
       </div>
       <div class="cell-output"></div>
     `;
 
     const view = div.querySelector('.cell-html-view');
     const editWrap = div.querySelector('.cell-html-edit');
-    const ta = div.querySelector('.cell-html-edit textarea');
-    const hl = div.querySelector('.highlight-layer');
+    const editorWrap = div.querySelector('.editor-wrap');
     div.querySelector('.cell-type').addEventListener('click', () => div.classList.toggle('collapsed'));
+
+    const editor = createEditor(editorWrap, id, '', 'html', (code) => {
+      const cell = S.cells.find(c => c.id === id);
+      if (cell) cell.code = code;
+      onHtmlEdit(id);
+    });
+    div._editor = editor;
 
     view.addEventListener('click', () => {
       editWrap.style.display = '';
       view.style.display = 'none';
-      ta.focus();
-      autoResize({ target: ta });
+      editor.view.requestMeasure();
+      editor.focus();
     });
 
-    ta.addEventListener('blur', () => {
+    editor.view.dom.addEventListener('focusout', (e) => {
+      if (editor.view.dom.contains(e.relatedTarget)) return;
+      if (e.relatedTarget && e.relatedTarget.closest('#findBar')) return;
       if (S.findActive) return;
       const cell = S.cells.find(c => c.id === id);
       if (cell) {
-        cell.code = ta.value;
         renderHtmlCell(cell);
       }
       editWrap.style.display = 'none';
       view.style.display = '';
     });
-
-    const ln = div.querySelector('.line-numbers');
-    ta.addEventListener('input', () => { highlightHtml(ta, hl); onHtmlEdit(id); });
-    ta.addEventListener('scroll', () => { hl.scrollTop = ta.scrollTop; hl.scrollLeft = ta.scrollLeft; ln.scrollTop = ta.scrollTop; });
-    ta.addEventListener('input', autoResize);
-    ta.addEventListener('keydown', handleTab);
   } else {
+    // markdown — stays as textarea
     div.innerHTML = `
       ${cellHeaderHTML('md', id)}
       <div class="cell-md-view"></div>
@@ -280,7 +272,7 @@ export function handleTab(e) {
   }
 }
 
-export function toggleComment(ta) {
+export function toggleMdComment(ta) {
   const val = ta.value;
   const start = ta.selectionStart;
   const end = ta.selectionEnd;
@@ -317,23 +309,8 @@ export function toggleComment(ta) {
   ta.dispatchEvent(new Event('input'));
 }
 
-export function updateLineNumbers(ta) {
-  const wrap = ta.closest('.editor-wrap');
-  if (!wrap) return;
-  const gutter = wrap.querySelector('.line-numbers');
-  if (!gutter) return;
-  const count = ta.value.split('\n').length;
-  const lines = [];
-  for (let i = 1; i <= count; i++) lines.push(i);
-  gutter.textContent = lines.join('\n');
-}
-
 export function autoResize(e) {
   const ta = e.target || e;
   ta.style.height = 'auto';
   ta.style.height = ta.scrollHeight + 'px';
-  // sync highlight layer if present
-  const hl = ta.parentElement && ta.parentElement.querySelector('.highlight-layer');
-  if (hl) { hl.style.height = ta.style.height; }
-  updateLineNumbers(ta);
 }

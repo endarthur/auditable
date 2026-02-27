@@ -1,12 +1,12 @@
 import { S, $ } from './state.js';
 import { createCellEl, autoResize, cssSummary } from './cell-dom.js';
-import { highlightCode, highlightCss } from './syntax.js';
 import { isManual } from './dag.js';
 import { runAll, renderHtmlCell } from './exec.js';
 import { renderMd } from './markdown.js';
 import { updateStatus } from './ui.js';
 import { selectCell } from './keyboard.js';
 import { notifyDirty } from './editor.js';
+import { getEditor } from './cm6.js';
 
 // ── CELL OPERATIONS ──
 
@@ -49,24 +49,22 @@ export function addCell(type, code = '', afterId = null, beforeId = null) {
   }
 
   // set code
-  const ta = cell.el.querySelector('textarea');
   if (code) {
-    ta.value = code;
-    autoResize({ target: ta });
-    if (type === 'code') {
-      const hl = cell.el.querySelector('.highlight-layer');
-      if (hl) highlightCode(ta, hl);
-      if (isManual(code)) cell.el.classList.add('manual');
-    }
     if (type === 'md') {
+      const ta = cell.el.querySelector('textarea');
+      ta.value = code;
+      autoResize({ target: ta });
       cell.el.querySelector('.cell-md-view').innerHTML = renderMd(code);
+    } else {
+      // code, css, html — use CM6 editor
+      const editor = getEditor(id);
+      if (editor) editor.setCode(code);
+      if (type === 'code' && isManual(code)) cell.el.classList.add('manual');
     }
   }
 
   // CSS cell: create <style> element in <head>
   if (type === 'css') {
-    const hl = cell.el.querySelector('.highlight-layer');
-    if (hl && code) highlightCss(ta, hl);
     const cssView = cell.el.querySelector('.cell-css-view');
     if (cssView && code) cssView.textContent = cssSummary(code);
     const styleEl = document.createElement('style');
@@ -81,7 +79,15 @@ export function addCell(type, code = '', afterId = null, beforeId = null) {
     renderHtmlCell(cell);
   }
 
-  if (S.initialized) ta.focus();
+  if (S.initialized) {
+    if (type === 'md') {
+      const ta = cell.el.querySelector('textarea');
+      if (ta) ta.focus();
+    } else {
+      const editor = getEditor(id);
+      if (editor) editor.focus();
+    }
+  }
   updateStatus();
   notifyDirty();
   return cell;
@@ -98,6 +104,9 @@ export function deleteCell(id) {
     S.cells[idx]._styleEl.remove();
     S.cells[idx]._styleEl = null;
   }
+  // destroy CM6 editor
+  const editor = getEditor(id);
+  if (editor) editor.destroy();
   S.cells[idx].el.remove();
   S.cells.splice(idx, 1);
   // re-run to clean scope
@@ -117,29 +126,29 @@ export function convertCell(id, newType) {
     cell._styleEl.remove();
     cell._styleEl = null;
   }
+  // destroy old CM6 editor
+  const oldEditor = getEditor(id);
+  if (oldEditor) oldEditor.destroy();
 
   // create new cell element
   const newEl = createCellEl(newType, id);
   cell.el.replaceWith(newEl);
   cell.el = newEl;
   cell.type = newType;
+  cell.code = code;
 
   // set code
-  const ta = newEl.querySelector('textarea');
-  ta.value = code;
-  cell.code = code;
-  autoResize({ target: ta });
-
-  if (newType === 'code') {
-    const hl = newEl.querySelector('.highlight-layer');
-    if (hl) highlightCode(ta, hl);
-  }
   if (newType === 'md') {
+    const ta = newEl.querySelector('textarea');
+    ta.value = code;
+    autoResize({ target: ta });
     newEl.querySelector('.cell-md-view').innerHTML = renderMd(code);
+  } else {
+    const editor = getEditor(id);
+    if (editor) editor.setCode(code);
   }
+
   if (newType === 'css') {
-    const hl = newEl.querySelector('.highlight-layer');
-    if (hl) highlightCss(ta, hl);
     const cssView = newEl.querySelector('.cell-css-view');
     if (cssView && code) cssView.textContent = cssSummary(code);
     const styleEl = document.createElement('style');

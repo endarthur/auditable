@@ -4,6 +4,7 @@ import { addCell } from './cell-ops.js';
 import { setMsg } from './ui.js';
 import { setBadge } from './update.js';
 import { registerProvider } from './stdlib.js';
+import { configureAllAutocomplete } from './complete.js';
 
 // ── INIT ──
 
@@ -20,6 +21,8 @@ import { registerProvider } from './stdlib.js';
     addCell('md', '');
     addCell('code', '');
   }
+  // configure CM6 autocomplete for all code cells
+  configureAllAutocomplete();
   S.initialized = true;
 })();
 
@@ -79,12 +82,15 @@ import { registerProvider } from './stdlib.js';
       const input = document.getElementById('docTitle');
       if (input && msg.payload?.title) input.value = msg.payload.title;
     } else if (msg.type === 'af:resize') {
-      // recalculate textarea heights after becoming visible
-      document.querySelectorAll('textarea').forEach(ta => {
+      // recalculate editor sizes after becoming visible
+      document.querySelectorAll('.cm-editor').forEach(el => {
+        const view = el.cmView?.view;
+        if (view) view.requestMeasure();
+      });
+      // md textareas
+      document.querySelectorAll('.cell-md-edit textarea').forEach(ta => {
         ta.style.height = 'auto';
         ta.style.height = ta.scrollHeight + 'px';
-        const hl = ta.parentElement?.querySelector('.highlight-layer');
-        if (hl) hl.style.height = ta.style.height;
       });
     }
   });

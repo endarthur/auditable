@@ -1,7 +1,7 @@
 import { S } from './state.js';
 import { buildDAG, topoSort, isManual, isNorun, isHidden, parseCellName, parseOutputId, parseOutputClass } from './dag.js';
 import { setMsg } from './ui.js';
-import { highlightCode } from './syntax.js';
+import { refreshTaggedLanguages, getEditor } from './cm6.js';
 import { std } from './stdlib.js';
 import { python, zenOfPython } from './python.js';
 import { addCell } from './cell-ops.js';
@@ -312,7 +312,7 @@ export async function execCell(cell) {
 
   // execute with scoped parameters (only what this cell uses, for stable V8 JIT)
   // filter out injected names — they're per-cell params, not scope-propagated
-  const _injected = ['ui', 'std', 'load', 'install', 'installBinary', 'invalidation', 'print', 'md', 'html', 'css', 'workshop', 'notebook'];
+  const _injected = ['ui', 'std', 'load', 'install', 'installBinary', 'invalidation', 'print', 'display', 'md', 'html', 'css', 'workshop', 'notebook'];
   const scopeKeys = cell.uses ? [...cell.uses].filter(k => !_injected.includes(k)).sort() : [];
   const defNames = cell.defines ? [...cell.defines].sort().join(', ') : '';
 
@@ -369,12 +369,7 @@ export async function execCell(cell) {
     // if the module registered new tagged languages, re-highlight all code cells
     const langsAfter = window._taggedLanguages ? Object.keys(window._taggedLanguages).length : 0;
     if (langsAfter > langsBefore) {
-      for (const c of S.cells) {
-        if (c.type !== 'code') continue;
-        const ta = c.el.querySelector('textarea');
-        const hl = c.el.querySelector('.highlight-layer');
-        if (ta && hl) highlightCode(ta, hl);
-      }
+      refreshTaggedLanguages();
     }
 
     return mod;
@@ -645,8 +640,9 @@ export async function execCell(cell) {
       const c = S.cells.find(c => c.id === id);
       if (c?.el) {
         c.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        const ta = c.el.querySelector('textarea');
-        if (ta) ta.focus();
+        const editor = getEditor(id);
+        if (editor) editor.focus();
+        else { const ta = c.el.querySelector('textarea'); if (ta) ta.focus(); }
       }
     },
     collapse: (id) => {
@@ -673,7 +669,7 @@ export async function execCell(cell) {
       const slug = cellName ? '-' + cellName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') : '';
       fn = new AsyncFunction(
         ...scopeKeys,
-        'ui', 'std', 'load', 'install', 'installBinary', 'invalidation', 'print',
+        'ui', 'std', 'load', 'install', 'installBinary', 'invalidation', 'print', 'display',
         'md', 'html', 'css', 'workshop', 'notebook',
         `"use strict";\n${cell.code}\n\n` +
         `return { ${defNames} };\n` +
@@ -684,7 +680,7 @@ export async function execCell(cell) {
     }
 
     const scopeVals = scopeKeys.map(k => S.scope[k]);
-    const result = await fn(...scopeVals, ui, std, load, install, installBinary, invalidation, display,
+    const result = await fn(...scopeVals, ui, std, load, install, installBinary, invalidation, display, display,
       md, html, css, workshop, notebook);
 
     // update scope with defined variables

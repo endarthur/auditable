@@ -418,83 +418,16 @@ button.accent:hover {
 }
 
 .editor-wrap {
-  --gutter: 36px;
   position: relative;
-  overflow: hidden;
 }
 
-.line-numbers {
-  position: absolute;
-  top: 0; left: 0; bottom: 0;
-  width: var(--gutter);
-  padding: 8px 4px 8px 0;
-  font-family: var(--mono);
-  font-size: var(--editor-font-size);
-  line-height: 1.5;
-  text-align: right;
-  color: var(--fg-dim);
-  background: var(--bg1);
-  border-right: 1px solid var(--border);
-  border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  border-left: 1px solid var(--border);
-  overflow: hidden;
-  z-index: 3;
-  pointer-events: none;
-  white-space: pre;
-  box-sizing: border-box;
-}
-
-:root.hide-line-numbers .line-numbers { display: none; }
-:root.hide-line-numbers .editor-wrap { --gutter: 0px; }
-
-.cell-code textarea {
-  display: block;
-  width: 100%;
-  background: transparent;
+/* CM6 editor integration */
+.editor-wrap .cm-editor {
   border: 1px solid var(--border);
-  color: var(--fg-bright);
-  caret-color: var(--fg-bright);
-  font-family: var(--mono);
-  font-size: var(--editor-font-size);
-  line-height: 1.5;
-  padding: 8px 10px 8px calc(var(--gutter) + 10px);
-  resize: vertical;
   min-height: 38px;
-  outline: none;
-  tab-size: 2;
-  white-space: pre;
-  overflow-x: auto;
-  position: relative;
-  z-index: 2;
-  -webkit-text-fill-color: transparent;
 }
-.cell-code textarea::selection {
-  -webkit-text-fill-color: var(--fg-bright);
-  background: rgba(200,155,60,0.25);
-}
-.cell-code textarea:focus + .highlight-layer {
+.editor-wrap .cm-editor.cm-focused {
   border-color: var(--border-hi);
-}
-.cell-code textarea:focus ~ .line-numbers {
-  border-color: var(--border-hi);
-}
-
-.highlight-layer {
-  position: absolute;
-  top: 0; left: 0; right: 0; bottom: 0;
-  background: var(--bg1);
-  border: 1px solid var(--border);
-  padding: 8px 10px 8px calc(var(--gutter) + 10px);
-  font-family: var(--mono);
-  font-size: var(--editor-font-size);
-  line-height: 1.5;
-  tab-size: 2;
-  white-space: pre;
-  overflow: hidden;
-  z-index: 1;
-  pointer-events: none;
-  color: var(--fg-bright);
 }
 
 /* syntax tokens */
@@ -582,38 +515,6 @@ button.accent:hover {
   content: '(empty stylesheet)';
 }
 
-.cell-css-edit textarea {
-  display: block;
-  width: 100%;
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--fg-bright);
-  caret-color: var(--fg-bright);
-  font-family: var(--mono);
-  font-size: var(--editor-font-size);
-  line-height: 1.5;
-  padding: 8px 10px 8px calc(var(--gutter) + 10px);
-  resize: vertical;
-  min-height: 38px;
-  outline: none;
-  tab-size: 2;
-  white-space: pre;
-  overflow-x: auto;
-  position: relative;
-  z-index: 2;
-  -webkit-text-fill-color: transparent;
-}
-.cell-css-edit textarea::selection {
-  -webkit-text-fill-color: var(--fg-bright);
-  background: rgba(200,155,60,0.25);
-}
-.cell-css-edit textarea:focus + .highlight-layer {
-  border-color: var(--border-hi);
-}
-.cell-css-edit textarea:focus ~ .line-numbers {
-  border-color: var(--border-hi);
-}
-
 /* ── HTML CELL ── */
 .cell-html-view {
   padding: 6px 10px;
@@ -627,38 +528,6 @@ button.accent:hover {
   font-style: italic;
   font-size: 11px;
 }
-.cell-html-edit textarea {
-  display: block;
-  width: 100%;
-  background: transparent;
-  border: 1px solid var(--border);
-  color: var(--fg-bright);
-  caret-color: var(--fg-bright);
-  font-family: var(--mono);
-  font-size: var(--editor-font-size);
-  line-height: 1.5;
-  padding: 8px 10px 8px calc(var(--gutter) + 10px);
-  resize: vertical;
-  min-height: 38px;
-  outline: none;
-  tab-size: 2;
-  white-space: pre;
-  overflow-x: auto;
-  position: relative;
-  z-index: 2;
-  -webkit-text-fill-color: transparent;
-}
-.cell-html-edit textarea::selection {
-  -webkit-text-fill-color: var(--fg-bright);
-  background: rgba(200,155,60,0.25);
-}
-.cell-html-edit textarea:focus + .highlight-layer {
-  border-color: var(--border-hi);
-}
-.cell-html-edit textarea:focus ~ .line-numbers {
-  border-color: var(--border-hi);
-}
-
 /* ── MARKDOWN CELL ── */
 .cell-md-view {
   padding: 6px 10px;
@@ -1332,6 +1201,9 @@ body.presenting .find-bar { display: none !important; }
 }
 .search-match {
   background: rgba(200,155,60,0.25);
+}
+/* search overlay (md cells): hide text color, show only marks */
+.search-overlay .search-match {
   color: transparent;
 }
 .search-match-current {
@@ -1339,54 +1211,7 @@ body.presenting .find-bar { display: none !important; }
   outline: 1px solid var(--accent);
 }
 
-/* ── AUTOCOMPLETE MENU ── */
-.ac-menu {
-  position: absolute;
-  z-index: 10;
-  background: #1e1e1e;
-  border: 1px solid #444;
-  border-radius: 3px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.4);
-  max-height: 200px;
-  overflow-y: auto;
-  font-family: var(--mono);
-  font-size: var(--editor-font-size);
-  min-width: 120px;
-}
-.ac-item {
-  padding: 2px 8px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-}
-.ac-item.active,
-.ac-item:hover {
-  background: rgba(200,155,60,0.2);
-}
-.ac-kind {
-  width: 16px;
-  height: 16px;
-  border-radius: 2px;
-  font-size: 10px;
-  text-align: center;
-  line-height: 16px;
-  flex-shrink: 0;
-}
-.ac-kind-var, .ac-kind-def { color: #5ca7e4; }
-.ac-kind-fn { color: #c89b3c; }
-.ac-kind-kw { color: #cc7832; }
-.ac-kind-const { color: #9876aa; }
-.ac-kind-prop { color: #6a8759; }
-.ac-text { color: var(--fg-bright); }
-.ac-detail {
-  margin-left: auto;
-  padding-left: 12px;
-  color: var(--fg-dim);
-  font-size: 11px;
-}
-.ac-match { font-weight: bold; }
+/* ── SIGNATURE HINT ── */
 .ac-sig-hint {
   position: absolute;
   z-index: 10;
@@ -1409,15 +1234,6 @@ body.presenting .find-bar { display: none !important; }
   background: #eae8e3;
   border-color: #b0ab9f;
   box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-}
-:root.light .ac-menu {
-  background: #eae8e3;
-  border-color: #b0ab9f;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-}
-:root.light .ac-item.active,
-:root.light .ac-item:hover {
-  background: rgba(153,107,31,0.15);
 }
 
 /* ── WORKSHOP PANEL ── */
