@@ -2491,11 +2491,15 @@ function createEditor(container, cellId, initialCode, cellType, onChange) {
     parent: container,
   });
 
-  // clicks on the wrapper (border/padding) should focus the editor
+  // clicks on the wrapper or gutter should focus the editor
   container.addEventListener('mousedown', (e) => {
     if (e.target === container) {
       e.preventDefault();
       view.focus();
+    } else if (!view.hasFocus) {
+      // gutter clicks don't always activate CM6's input handling —
+      // schedule focus after CM6's own mousedown runs
+      setTimeout(() => { if (!view.hasFocus) view.focus(); }, 0);
     }
   });
 
@@ -4888,7 +4892,7 @@ function togglePresent() {
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_BUILD_DATE__ = '2026-02-27';
-const __AUDITABLE_BASE_SIZE__ = 763738;
+const __AUDITABLE_BASE_SIZE__ = 763959;
 
 (function() {
   const ver = $('#aboutVersion');
