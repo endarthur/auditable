@@ -30,15 +30,22 @@ export function toggleAutorun() {
 export function onCssEdit(id) {
   const cell = S.cells.find(c => c.id === id);
   if (!cell) return;
-  cell.code = cell.el.querySelector('textarea').value;
+  // cell.code is already updated by CM6 onChange callback
   if (cell._styleEl) cell._styleEl.textContent = cell.code;
   notifyDirty();
+  // live recompute find matches
+  if (S.findActive) {
+    clearTimeout(S._findRecomputeTimer);
+    S._findRecomputeTimer = setTimeout(() => {
+      if (typeof findComputeMatches === 'function') findComputeMatches();
+    }, 150);
+  }
 }
 
 export function onHtmlEdit(id) {
   const cell = S.cells.find(c => c.id === id);
   if (!cell) return;
-  cell.code = cell.el.querySelector('textarea').value;
+  // cell.code is already updated by CM6 onChange callback
   cell.el.classList.add('stale');
   notifyDirty();
 
@@ -46,13 +53,19 @@ export function onHtmlEdit(id) {
     clearTimeout(S.editTimer);
     S.editTimer = setTimeout(() => runDAG([id], false), 400);
   }
+  // live recompute find matches
+  if (S.findActive) {
+    clearTimeout(S._findRecomputeTimer);
+    S._findRecomputeTimer = setTimeout(() => {
+      if (typeof findComputeMatches === 'function') findComputeMatches();
+    }, 150);
+  }
 }
 
 export function onCodeEdit(id) {
   const cell = S.cells.find(c => c.id === id);
   if (!cell) return;
-  const ta = cell.el.querySelector('textarea');
-  cell.code = ta.value;
+  // cell.code is already updated by CM6 onChange callback
 
   // update manual state
   if (isManual(cell.code)) {
@@ -67,5 +80,12 @@ export function onCodeEdit(id) {
   if (S.autorun) {
     clearTimeout(S.editTimer);
     S.editTimer = setTimeout(() => runDAG([id], false), 400);
+  }
+  // live recompute find matches
+  if (S.findActive) {
+    clearTimeout(S._findRecomputeTimer);
+    S._findRecomputeTimer = setTimeout(() => {
+      if (typeof findComputeMatches === 'function') findComputeMatches();
+    }, 150);
   }
 }

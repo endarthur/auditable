@@ -5,8 +5,9 @@ import { toggleAutorun } from './editor.js';
 import { toggleSettings, togglePresent, applyLineNumbers, getSettings } from './settings.js';
 import { saveNotebook, savePackedNotebook, setSaveMode, toggleSaveTray } from './save.js';
 import { setMsg } from './ui.js';
-import { toggleComment, autoResize, cssSummary } from './cell-dom.js';
+import { toggleMdComment, autoResize, cssSummary } from './cell-dom.js';
 import { openFind, closeFind } from './find.js';
+import { getEditor, setCm6Callbacks } from './cm6.js';
 
 // ── KEYBOARD / SELECTION ──
 
@@ -62,7 +63,16 @@ export function selectCell(id, scroll) {
 
 function getEditingCell() {
   const active = document.activeElement;
+  // textarea (md cells)
   if (active && active.tagName === 'TEXTAREA') {
+    const cellEl = active.closest('.cell');
+    if (cellEl) {
+      const id = parseInt(cellEl.dataset.id);
+      return S.cells.find(c => c.id === id) || null;
+    }
+  }
+  // CM6 editor (code/css/html cells)
+  if (active && active.closest('.cm-editor')) {
     const cellEl = active.closest('.cell');
     if (cellEl) {
       const id = parseInt(cellEl.dataset.id);
@@ -91,31 +101,41 @@ export function editCell(id) {
     // open css editor
     const view = cell.el.querySelector('.cell-css-view');
     const editWrap = cell.el.querySelector('.cell-css-edit');
-    const ta = cell.el.querySelector('.cell-css-edit textarea');
     editWrap.style.display = '';
     view.style.display = 'none';
-    ta.value = cell.code;
-    ta.focus();
-    autoResize({ target: ta });
+    const editor = getEditor(id);
+    if (editor) {
+      editor.setCode(cell.code);
+      editor.view.requestMeasure();
+      editor.focus();
+    }
   } else if (cell.type === 'html') {
     // open html editor
     const view = cell.el.querySelector('.cell-html-view');
     const editWrap = cell.el.querySelector('.cell-html-edit');
-    const ta = cell.el.querySelector('.cell-html-edit textarea');
     editWrap.style.display = '';
     view.style.display = 'none';
-    ta.value = cell.code;
-    ta.focus();
-    autoResize({ target: ta });
+    const editor = getEditor(id);
+    if (editor) {
+      editor.setCode(cell.code);
+      editor.view.requestMeasure();
+      editor.focus();
+    }
   } else {
-    cell.el.querySelector('textarea').focus();
+    // code cell — always visible
+    const editor = getEditor(id);
+    if (editor) editor.focus();
   }
 }
 
-function exitEdit() {
+function exitEdit(view) {
   const active = document.activeElement;
-  if (active && active.tagName === 'TEXTAREA') {
-    active.blur();
+  if (active) active.blur();
+  // select the cell we just left
+  const cellEl = (view?.dom || active)?.closest?.('.cell');
+  if (cellEl) {
+    const id = parseInt(cellEl.dataset.id);
+    selectCell(id);
   }
 }
 
@@ -124,12 +144,42 @@ function runSelected() {
   const cell = S.cells.find(c => c.id === S.selectedId);
   if (!cell) return;
   if (cell.type === 'code') {
-    cell.code = cell.el.querySelector('.cell-code textarea').value;
     runDAG([cell.id]);
   } else if (cell.type === 'html') {
     renderHtmlCell(cell);
   }
 }
+
+// CM6 callback: run cell by id
+function cm6RunCell(cellId) {
+  const cell = S.cells.find(c => c.id === cellId);
+  if (!cell) return;
+  if (cell.type === 'code') runDAG([cellId], true);
+}
+
+// CM6 callback: run cell and advance
+function cm6RunAndAdvance(cellId) {
+  const cell = S.cells.find(c => c.id === cellId);
+  if (!cell) return;
+  if (cell.type === 'code') runDAG([cellId], true);
+  // advance — respect goto target if set
+  const gotoIdx = window._lastGotoTarget;
+  if (gotoIdx != null && gotoIdx >= 0 && gotoIdx < S.cells.length) {
+    editCell(S.cells[gotoIdx].id);
+  } else {
+    const idx = S.cells.findIndex(c => c.id === cellId);
+    if (idx < S.cells.length - 1) {
+      editCell(S.cells[idx + 1].id);
+    } else {
+      const newCell = addCellWithUndo('code', '', cellId);
+      selectCell(newCell.id);
+      editCell(newCell.id);
+    }
+  }
+}
+
+// wire up CM6 callbacks (avoids circular dependency)
+setCm6Callbacks(exitEdit, cm6RunCell, cm6RunAndAdvance);
 
 // ── MOBILE TRAY TOGGLES ──
 
@@ -205,6 +255,8 @@ export function newNotebook() {
   while (S.cells.length) {
     const cell = S.cells[0];
     if (cell._styleEl) { cell._styleEl.remove(); cell._styleEl = null; }
+    const editor = getEditor(cell.id);
+    if (editor) editor.destroy();
     cell.el.remove();
     S.cells.shift();
   }
@@ -266,43 +318,40 @@ document.addEventListener('keydown', (e) => {
 
   if (editing) {
     // ── EDIT MODE ──
-    if (e.key === '/' && (e.ctrlKey || e.metaKey)) {
+    // Ctrl+/ for md textarea cells (CM6 handles its own toggle comment)
+    if (e.key === '/' && (e.ctrlKey || e.metaKey) && editing.type === 'md') {
       e.preventDefault();
-      toggleComment(document.activeElement);
+      toggleMdComment(document.activeElement);
       return;
     }
-    if (e.key === 'Escape') {
+    // Escape for md textarea cells (CM6 handles via keymap)
+    if (e.key === 'Escape' && editing.type === 'md') {
       e.preventDefault();
       exitEdit();
       selectCell(editing.id);
       return;
     }
-    if (e.key === 'Enter' && e.ctrlKey) {
+    // Ctrl+Enter for md cells
+    if (e.key === 'Enter' && e.ctrlKey && editing.type === 'md') {
       e.preventDefault();
       editing.code = editing.el.querySelector('textarea').value;
-      if (editing.type === 'code') runDAG([editing.id], true);
       return;
     }
-    if (e.key === 'Enter' && e.shiftKey) {
+    // Shift+Enter for md cells
+    if (e.key === 'Enter' && e.shiftKey && editing.type === 'md') {
       e.preventDefault();
       editing.code = editing.el.querySelector('textarea').value;
-      if (editing.type === 'code') runDAG([editing.id], true);
-      // advance — respect goto target if set
-      const gotoIdx = window._lastGotoTarget;
-      if (gotoIdx != null && gotoIdx >= 0 && gotoIdx < S.cells.length) {
-        editCell(S.cells[gotoIdx].id);
+      const idx = S.cells.findIndex(c => c.id === editing.id);
+      if (idx < S.cells.length - 1) {
+        editCell(S.cells[idx + 1].id);
       } else {
-        const idx = S.cells.findIndex(c => c.id === editing.id);
-        if (idx < S.cells.length - 1) {
-          editCell(S.cells[idx + 1].id);
-        } else {
-          const newCell = addCellWithUndo('code', '', editing.id);
-          selectCell(newCell.id);
-          editCell(newCell.id);
-        }
+        const newCell = addCellWithUndo('code', '', editing.id);
+        selectCell(newCell.id);
+        editCell(newCell.id);
       }
       return;
     }
+    // CM6 cells handle Escape, Ctrl+Enter, Shift+Enter, Ctrl+/ via keymap — no action needed here
   } else {
     // ── COMMAND MODE ──
     // ignore if typing in any input field (title, find bar, etc.)

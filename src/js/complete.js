@@ -1,4 +1,5 @@
 import { S, JS_KEYWORDS, JS_BUILTINS } from './state.js';
+import { autocompletion, CompletionContext, setEditorAutocomplete, setOnEditorCreated } from './cm6.js';
 
 // ── AUTOCOMPLETE ENGINE ──
 
@@ -197,11 +198,9 @@ function cursorContext(code, cursor) {
       }
 
       i++;
-      let depth = 0;
       while (i < code.length) {
         if (code[i] === '\\') { i += 2; continue; }
         if (code[i] === '$' && code[i + 1] === '{') {
-          depth++;
           i += 2;
           // inside ${...} — this is code context
           let braces = 1;
@@ -228,10 +227,9 @@ function cursorContext(code, cursor) {
 
 // extract the word being typed at cursor position
 function extractPrefix(code, cursor) {
-  let end = cursor;
   let start = cursor;
   while (start > 0 && /[a-zA-Z0-9_$]/.test(code[start - 1])) start--;
-  return { prefix: code.slice(start, end), start };
+  return { prefix: code.slice(start, cursor), start };
 }
 
 // detect dot access: returns the expression before the dot, or null
@@ -273,7 +271,7 @@ export function getCompletions(code, cursor, cellId) {
     const lang = typeof window !== 'undefined' && window._taggedLanguages
       && window._taggedLanguages[ctx.lang];
     if (lang && lang.completions) {
-      const { prefix, start } = extractPrefix(code, cursor);
+      const { prefix } = extractPrefix(code, cursor);
       if (!prefix) return { prefix: '', items: [] };
       const extItems = lang.completions(prefix);
       // score and annotate items
@@ -326,7 +324,7 @@ export function getCompletions(code, cursor, cellId) {
   }
 
   // word prefix completion
-  const { prefix, start } = extractPrefix(code, cursor);
+  const { prefix } = extractPrefix(code, cursor);
   if (!prefix) return { prefix: '', items: [] };
 
   const items = [];
@@ -386,28 +384,41 @@ export function getCompletions(code, cursor, cellId) {
   return { prefix, items: items.slice(0, 30) };
 }
 
-// ── TEXTAREA ADAPTER ──
+// ── CM6 COMPLETION SOURCE ADAPTER ──
 
-const KIND_LABELS = { var: 'v', fn: 'f', kw: 'k', const: 'c', prop: 'p', def: 'd' };
+const KIND_MAP = { var: 'variable', fn: 'function', kw: 'keyword', const: 'constant', prop: 'property', def: 'variable' };
 
-let activeMenu = null;
-let activeState = null;
-let activeSigHint = null;
+function audCompletionSource(context) {
+  const code = context.state.doc.toString();
+  const cursor = context.pos;
 
-export function dismissAutocomplete() {
-  if (activeMenu) {
-    activeMenu.remove();
-    activeMenu = null;
-    activeState = null;
+  // For implicit (typing) activation, require at least 1 identifier char before cursor.
+  // Use matchBefore to tell CM6 this source is applicable — without this, CM6 may
+  // skip calling us inside template literals or other non-code syntax tree nodes.
+  if (!context.explicit) {
+    const word = context.matchBefore(/[a-zA-Z_$]\w*/);
+    if (!word) return null;
   }
+
+  // extract cellId from editor container
+  const cmEl = context.view.dom.closest('[data-cm-cell-id]');
+  const cellId = cmEl ? parseInt(cmEl.dataset.cmCellId) : null;
+
+  const result = getCompletions(code, cursor, cellId);
+  if (!result || !result.items.length) return null;
+
+  return {
+    from: cursor - result.prefix.length,
+    options: result.items.map(item => ({
+      label: item.text,
+      type: KIND_MAP[item.kind] || 'text',
+      boost: item.score,
+      detail: item.detail || undefined,
+    })),
+  };
 }
 
-function dismissSigHint() {
-  if (activeSigHint) {
-    activeSigHint.remove();
-    activeSigHint = null;
-  }
-}
+// ── SIGNATURE HINTS via CM6 TOOLTIP ──
 
 // detect if cursor is inside a function call's arguments for a known builtin
 function detectCallContext(code, cursor) {
@@ -445,64 +456,6 @@ function detectCallContext(code, cursor) {
   return null;
 }
 
-function showSigHint(ta) {
-  const code = ta.value;
-  const cursor = ta.selectionStart;
-  if (ta.selectionStart !== ta.selectionEnd) { dismissSigHint(); return; }
-
-  const ctx = cursorContext(code, cursor);
-  if (ctx !== 'code') { dismissSigHint(); return; }
-
-  const call = detectCallContext(code, cursor);
-  if (!call) { dismissSigHint(); return; }
-
-  const wrap = ta.closest('.editor-wrap');
-  if (!wrap) { dismissSigHint(); return; }
-
-  const help = BUILTIN_HELP[call.fnName];
-  const pos = measureCursorPos(ta, call.parenPos);
-
-  if (!activeSigHint) {
-    activeSigHint = document.createElement('div');
-    activeSigHint.className = 'ac-sig-hint';
-    wrap.appendChild(activeSigHint);
-  } else if (activeSigHint.parentElement !== wrap) {
-    activeSigHint.remove();
-    wrap.appendChild(activeSigHint);
-  }
-
-  // highlight current parameter in the signature
-  const sigHtml = highlightParam(help.sig, call.paramIdx);
-  activeSigHint.innerHTML = `<span class="ac-sig-fn">${sigHtml}</span><span class="ac-sig-desc">${esc(help.desc)}</span>`;
-
-  const cs = getComputedStyle(ta);
-  const padLeft = parseFloat(cs.paddingLeft) || 0;
-  const padTop = parseFloat(cs.paddingTop) || 0;
-  const lineHeight = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.5;
-
-  const left = pos.x + padLeft - ta.scrollLeft;
-
-  // place above the current line; pos.y is bottom of the line
-  // so subtract lineHeight (to get top of line) then the hint's own height
-  activeSigHint.style.left = left + 'px';
-  activeSigHint.style.top = '0px'; // render off-screen first to measure
-  activeSigHint.style.visibility = 'hidden';
-  const hintH = activeSigHint.offsetHeight || lineHeight;
-  activeSigHint.style.visibility = '';
-
-  let top = pos.y + padTop - ta.scrollTop - lineHeight - hintH;
-
-  // if it would go above the editor, show below the current line instead
-  const wrapRect = wrap.getBoundingClientRect();
-  const taRect = ta.getBoundingClientRect();
-  const absTop = taRect.top + top;
-  if (absTop < wrapRect.top) {
-    top = pos.y + padTop - ta.scrollTop;
-  }
-
-  activeSigHint.style.top = top + 'px';
-}
-
 function highlightParam(sig, paramIdx) {
   // find the params inside parens
   const openParen = sig.indexOf('(');
@@ -516,12 +469,12 @@ function highlightParam(sig, paramIdx) {
 
   // split on commas (respecting nested braces)
   const parts = [];
-  let depth = 0;
+  let pdepth = 0;
   let start = 0;
   for (let i = 0; i < params.length; i++) {
-    if (params[i] === '{' || params[i] === '(' || params[i] === '[') depth++;
-    else if (params[i] === '}' || params[i] === ')' || params[i] === ']') depth--;
-    else if (params[i] === ',' && depth === 0) {
+    if (params[i] === '{' || params[i] === '(' || params[i] === '[') pdepth++;
+    else if (params[i] === '}' || params[i] === ')' || params[i] === ']') pdepth--;
+    else if (params[i] === ',' && pdepth === 0) {
       parts.push(params.slice(start, i));
       start = i + 1;
     }
@@ -541,220 +494,94 @@ function highlightParam(sig, paramIdx) {
   return html;
 }
 
-function measureCursorPos(ta, cursor) {
-  const text = ta.value.substring(0, cursor);
-  const lines = text.split('\n');
-  const lineNum = lines.length - 1;
-  const colText = lines[lineNum];
-
-  // measure column offset using a hidden span
-  let measurer = ta._acMeasurer;
-  if (!measurer) {
-    measurer = document.createElement('span');
-    measurer.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;pointer-events:none;';
-    document.body.appendChild(measurer);
-    ta._acMeasurer = measurer;
-  }
-  const cs = getComputedStyle(ta);
-  measurer.style.font = cs.font;
-  measurer.style.fontSize = cs.fontSize;
-  measurer.style.fontFamily = cs.fontFamily;
-  measurer.style.letterSpacing = cs.letterSpacing;
-  measurer.style.tabSize = cs.tabSize;
-  measurer.textContent = colText;
-
-  const lineHeight = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.5;
-  const x = measurer.offsetWidth;
-  const y = (lineNum + 1) * lineHeight;
-
-  return { x, y, lineHeight };
-}
-
-function highlightMatches(text, indices) {
-  if (!indices || !indices.length) return esc(text);
-  const set = new Set(indices);
-  let html = '';
-  let inMatch = false;
-  for (let i = 0; i < text.length; i++) {
-    if (set.has(i)) {
-      if (!inMatch) { html += '<span class="ac-match">'; inMatch = true; }
-      html += esc(text[i]);
-    } else {
-      if (inMatch) { html += '</span>'; inMatch = false; }
-      html += esc(text[i]);
-    }
-  }
-  if (inMatch) html += '</span>';
-  return html;
-}
-
-function renderMenu(items, prefix, selectedIdx) {
-  let html = '';
-  const max = Math.min(items.length, 30);
-  for (let i = 0; i < max; i++) {
-    const it = items[i];
-    const cls = i === selectedIdx ? 'ac-item active' : 'ac-item';
-    const kindCls = 'ac-kind ac-kind-' + it.kind;
-    const label = KIND_LABELS[it.kind] || '?';
-    const textHtml = highlightMatches(it.text, it.indices);
-    const detailHtml = it.detail ? `<span class="ac-detail">${esc(it.detail)}</span>` : '';
-    html += `<div class="${cls}" data-index="${i}"><span class="${kindCls}">${label}</span><span class="ac-text">${textHtml}</span>${detailHtml}</div>`;
-  }
-  return html;
-}
-
 function esc(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function showMenu(ta, cellId) {
-  const code = ta.value;
-  const cursor = ta.selectionStart;
-  if (ta.selectionStart !== ta.selectionEnd) { dismissAutocomplete(); return; }
+// signature hint — simple positioned div approach
+let _sigHint = null;
 
-  const result = getCompletions(code, cursor, cellId);
-  if (!result.items.length) { dismissAutocomplete(); return; }
+function updateSigHint(view) {
+  const code = view.state.doc.toString();
+  const sel = view.state.selection.main;
+  if (!sel.empty) { dismissSigHint(); return; }
 
-  const wrap = ta.closest('.editor-wrap');
-  if (!wrap) { dismissAutocomplete(); return; }
+  const ctx = cursorContext(code, sel.head);
+  if (ctx !== 'code') { dismissSigHint(); return; }
 
-  const pos = measureCursorPos(ta, cursor);
+  const call = detectCallContext(code, sel.head);
+  if (!call) { dismissSigHint(); return; }
 
-  if (!activeMenu) {
-    activeMenu = document.createElement('div');
-    activeMenu.className = 'ac-menu';
-    wrap.appendChild(activeMenu);
-  } else if (activeMenu.parentElement !== wrap) {
-    activeMenu.remove();
-    wrap.appendChild(activeMenu);
+  const help = BUILTIN_HELP[call.fnName];
+  if (!help) { dismissSigHint(); return; }
+
+  const coords = view.coordsAtPos(call.parenPos);
+  if (!coords) { dismissSigHint(); return; }
+
+  if (!_sigHint) {
+    _sigHint = document.createElement('div');
+    _sigHint.className = 'ac-sig-hint';
+    document.body.appendChild(_sigHint);
   }
 
-  activeState = {
-    items: result.items,
-    prefix: result.prefix,
-    selected: 0,
-    ta,
-    cellId,
-    cursorStart: cursor - result.prefix.length
-  };
+  const sigHtml = highlightParam(help.sig, call.paramIdx);
+  _sigHint.innerHTML = `<span class="ac-sig-fn">${sigHtml}</span><span class="ac-sig-desc">${esc(help.desc)}</span>`;
+  _sigHint.style.display = '';
 
-  activeMenu.innerHTML = renderMenu(result.items, result.prefix, 0);
+  // position above the paren
+  const hintH = _sigHint.offsetHeight || 20;
+  _sigHint.style.position = 'fixed';
+  _sigHint.style.left = coords.left + 'px';
+  _sigHint.style.top = (coords.top - hintH - 4) + 'px';
 
-  // position: account for padding and scroll
-  const cs = getComputedStyle(ta);
-  const padLeft = parseFloat(cs.paddingLeft) || 0;
-  const padTop = parseFloat(cs.paddingTop) || 0;
-
-  const left = pos.x + padLeft - ta.scrollLeft;
-  const top = pos.y + padTop - ta.scrollTop;
-
-  activeMenu.style.left = left + 'px';
-  activeMenu.style.top = top + 'px';
-
-  // flip above if it would overflow viewport
-  const menuRect = activeMenu.getBoundingClientRect();
-  if (menuRect.bottom > window.innerHeight - 20) {
-    activeMenu.style.top = (top - pos.lineHeight - activeMenu.offsetHeight) + 'px';
+  // flip below if it would go above viewport
+  if (coords.top - hintH - 4 < 0) {
+    _sigHint.style.top = coords.bottom + 4 + 'px';
   }
-
-  // mouse interaction
-  activeMenu.onmousedown = (e) => {
-    e.preventDefault(); // don't blur textarea
-    const item = e.target.closest('.ac-item');
-    if (item) {
-      activeState.selected = parseInt(item.dataset.index);
-      acceptCompletion();
-    }
-  };
 }
 
-function updateSelection(idx) {
-  if (!activeMenu || !activeState) return;
-  activeState.selected = idx;
-  const items = activeMenu.querySelectorAll('.ac-item');
-  items.forEach((el, i) => el.classList.toggle('active', i === idx));
-  // scroll into view
-  if (items[idx]) items[idx].scrollIntoView({ block: 'nearest' });
+function dismissSigHint() {
+  if (_sigHint) { _sigHint.style.display = 'none'; }
 }
 
-function acceptCompletion() {
-  if (!activeState) return;
-  const { items, selected, ta, prefix, cursorStart } = activeState;
-  const item = items[selected];
-  if (!item) return;
+const sigHintPlugin = window.CM6.ViewPlugin.define(() => ({
+  update(update) {
+    if (update.selectionSet || update.docChanged) {
+      // delay slightly to let autocomplete menu show first
+      Promise.resolve().then(() => {
+        // only show sig hint when autocomplete tooltip is not visible
+        const hasTooltip = update.view.dom.querySelector('.cm-tooltip-autocomplete');
+        if (hasTooltip) dismissSigHint();
+        else updateSigHint(update.view);
+      });
+    }
+  },
+  destroy() { dismissSigHint(); },
+}));
 
-  ta.focus();
-  ta.selectionStart = cursorStart;
-  ta.selectionEnd = cursorStart + prefix.length;
-  document.execCommand('insertText', false, item.text);
+// ── CONFIGURE AUTOCOMPLETE FOR A CELL ──
 
-  dismissAutocomplete();
-  ta.dispatchEvent(new Event('input'));
+export function configureAutocomplete(cellId) {
+  setEditorAutocomplete(cellId, [
+    autocompletion({
+      override: [audCompletionSource],
+      icons: false,
+      activateOnTyping: true,
+      maxRenderedOptions: 30,
+    }),
+    sigHintPlugin,
+  ]);
 }
 
-export function attachAutocomplete(textarea, cellId) {
-  // keydown handler — must be added BEFORE handleTab so stopImmediatePropagation works
-  textarea.addEventListener('keydown', (e) => {
-    // Ctrl+Shift+Space — manual signature hint trigger
-    if (e.key === ' ' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      dismissAutocomplete();
-      showSigHint(textarea);
-      return;
+// configure autocomplete for all existing cells on init
+export function configureAllAutocomplete() {
+  for (const cell of S.cells) {
+    if (cell.type === 'code') {
+      configureAutocomplete(cell.id);
     }
-
-    if (!activeMenu || !activeState) return;
-
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      const next = (activeState.selected + 1) % activeState.items.length;
-      updateSelection(next);
-      return;
-    }
-    if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      const prev = (activeState.selected - 1 + activeState.items.length) % activeState.items.length;
-      updateSelection(prev);
-      return;
-    }
-    if (e.key === 'Tab' || e.key === 'Enter') {
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      acceptCompletion();
-      return;
-    }
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      dismissAutocomplete();
-      dismissSigHint();
-      return;
-    }
-  });
-
-  // input handler — show/update completions + signature hints
-  textarea.addEventListener('input', () => {
-    // use a microtask so the value is settled
-    Promise.resolve().then(() => {
-      showMenu(textarea, cellId);
-      // show sig hint only when autocomplete menu is not visible
-      if (!activeMenu) showSigHint(textarea);
-      else dismissSigHint();
-    });
-  });
-
-  // dismiss on blur
-  textarea.addEventListener('blur', () => {
-    // delay so mousedown on menu can fire first
-    setTimeout(() => { dismissAutocomplete(); dismissSigHint(); }, 150);
-  });
-
-  // dismiss on scroll (position goes stale)
-  textarea.addEventListener('scroll', () => {
-    dismissAutocomplete();
-    dismissSigHint();
+  }
+  // register callback so new code cells get autocomplete
+  setOnEditorCreated((cellId, cellType) => {
+    if (cellType === 'code') configureAutocomplete(cellId);
   });
 }

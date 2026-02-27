@@ -136,6 +136,13 @@ const jsDir = path.join(srcDir, 'js');
 
 let js = processModules(path.join(jsDir, 'main.js'), jsDir, { lean });
 
+// 2b. Prepend CM6 bundle (if built)
+const cm6Path = path.join(__dirname, 'ext/cm6/cm6.min.js');
+if (fs.existsSync(cm6Path)) {
+  const cm6 = fs.readFileSync(cm6Path, 'utf8');
+  js = cm6 + '\n\n' + js;
+}
+
 // 3. Read CSS and HTML template
 const css = fs.readFileSync(path.join(srcDir, 'style.css'), 'utf8');
 const template = fs.readFileSync(path.join(srcDir, 'template.html'), 'utf8');
