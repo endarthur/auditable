@@ -5,7 +5,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { std } from '../src/js/stdlib.js';
 
-const { csv, sum, mean, median, extent, bin, linspace, unique, zip, cross, fmt, include } = std;
+const { csv, sum, mean, median, extent, bin, linspace, unique, zip, cross, fmt, include,
+        color, colorScale, viridis, magma, inferno, plasma, turbo, palette10 } = std;
 
 // ── csv ──
 
@@ -321,5 +322,326 @@ describe('include', () => {
 
   it('single lib still works (backward compat)', () => {
     assert.strictEqual(include(lib, 'd'), 'function d');
+  });
+});
+
+// ── colormaps ──
+
+describe('colormaps', () => {
+  for (const [name, fn] of [['viridis', viridis], ['magma', magma], ['inferno', inferno], ['plasma', plasma], ['turbo', turbo]]) {
+    it(`${name} returns rgb() string`, () => {
+      const result = fn(0.5);
+      assert.match(result, /^rgb\(\d+,\d+,\d+\)$/);
+    });
+
+    it(`${name} clamps below 0`, () => {
+      assert.strictEqual(fn(-1), fn(0));
+    });
+
+    it(`${name} clamps above 1`, () => {
+      assert.strictEqual(fn(2), fn(1));
+    });
+
+    it(`${name} endpoints are valid`, () => {
+      assert.match(fn(0), /^rgb\(\d+,\d+,\d+\)$/);
+      assert.match(fn(1), /^rgb\(\d+,\d+,\d+\)$/);
+    });
+  }
+
+  it('viridis(0) is dark purple-ish', () => {
+    // viridis starts at approximately rgb(68,1,84)
+    const m = viridis(0).match(/rgb\((\d+),(\d+),(\d+)\)/);
+    assert.ok(+m[1] < 100); // R low
+    assert.ok(+m[3] > 50);  // B moderate
+  });
+
+  it('viridis(1) is bright green-yellow', () => {
+    const m = viridis(1).match(/rgb\((\d+),(\d+),(\d+)\)/);
+    assert.ok(+m[2] > 200); // G high
+    assert.ok(+m[3] < 50);  // B low
+  });
+});
+
+// ── color parsing ──
+
+describe('color parsing', () => {
+  it('parses #rgb', () => {
+    const c = color('#f00');
+    assert.strictEqual(c.r, 255);
+    assert.strictEqual(c.g, 0);
+    assert.strictEqual(c.b, 0);
+    assert.strictEqual(c.a, 1);
+  });
+
+  it('parses #rrggbb', () => {
+    const c = color('#ff8000');
+    assert.strictEqual(c.r, 255);
+    assert.strictEqual(c.g, 128);
+    assert.strictEqual(c.b, 0);
+  });
+
+  it('parses #rrggbbaa', () => {
+    const c = color('#ff000080');
+    assert.strictEqual(c.r, 255);
+    assert.ok(Math.abs(c.a - 128/255) < 0.01);
+  });
+
+  it('parses #rgba', () => {
+    const c = color('#f008');
+    assert.strictEqual(c.r, 255);
+    assert.strictEqual(c.g, 0);
+    assert.strictEqual(c.b, 0);
+    assert.ok(Math.abs(c.a - 0x88/255) < 0.01);
+  });
+
+  it('parses rgb()', () => {
+    const c = color('rgb(10,20,30)');
+    assert.strictEqual(c.r, 10);
+    assert.strictEqual(c.g, 20);
+    assert.strictEqual(c.b, 30);
+  });
+
+  it('parses rgba()', () => {
+    const c = color('rgba(10,20,30,0.5)');
+    assert.strictEqual(c.a, 0.5);
+  });
+
+  it('parses hsl()', () => {
+    const c = color('hsl(0,100%,50%)');
+    assert.strictEqual(c.r, 255);
+    assert.strictEqual(c.g, 0);
+    assert.strictEqual(c.b, 0);
+  });
+
+  it('parses hsla()', () => {
+    const c = color('hsla(120,100%,50%,0.7)');
+    assert.strictEqual(c.g, 255);
+    assert.strictEqual(c.a, 0.7);
+  });
+
+  it('parses array', () => {
+    const c = color([100, 150, 200]);
+    assert.strictEqual(c.r, 100);
+    assert.strictEqual(c.g, 150);
+    assert.strictEqual(c.b, 200);
+    assert.strictEqual(c.a, 1);
+  });
+
+  it('clones color object', () => {
+    const c1 = color('#ff0000');
+    const c2 = color(c1);
+    assert.strictEqual(c2.r, 255);
+    assert.strictEqual(c2.g, 0);
+    assert.strictEqual(c2.b, 0);
+  });
+
+  it('throws on invalid input', () => {
+    assert.throws(() => color('not-a-color'));
+    assert.throws(() => color(42));
+  });
+});
+
+// ── color output ──
+
+describe('color output', () => {
+  it('.css() returns rgb()', () => {
+    assert.strictEqual(color('#ff0000').css(), 'rgb(255,0,0)');
+  });
+
+  it('.css() returns rgba() when alpha < 1', () => {
+    assert.strictEqual(color('rgba(255,0,0,0.5)').css(), 'rgba(255,0,0,0.5)');
+  });
+
+  it('.hex() returns #rrggbb', () => {
+    assert.strictEqual(color('rgb(255,128,0)').hex(), '#ff8000');
+  });
+
+  it('.toString() same as .css()', () => {
+    const c = color('#00ff00');
+    assert.strictEqual(c.toString(), c.css());
+  });
+});
+
+// ── color conversions ──
+
+describe('color conversions', () => {
+  it('.hsl() red -> h:0, s:100, l:50', () => {
+    const h = color('#ff0000').hsl();
+    assert.strictEqual(h.h, 0);
+    assert.strictEqual(h.s, 100);
+    assert.strictEqual(h.l, 50);
+  });
+
+  it('.hsl() green -> h:120', () => {
+    const h = color('#00ff00').hsl();
+    assert.strictEqual(h.h, 120);
+  });
+
+  it('.oklab() white -> L close to 1, a,b close to 0', () => {
+    const lab = color('#ffffff').oklab();
+    assert.ok(Math.abs(lab.L - 1) < 0.01);
+    assert.ok(Math.abs(lab.a) < 0.01);
+    assert.ok(Math.abs(lab.b) < 0.01);
+  });
+
+  it('.oklab() black -> L close to 0', () => {
+    const lab = color('#000000').oklab();
+    assert.ok(Math.abs(lab.L) < 0.01);
+  });
+
+  it('.oklch() returns L, C, h', () => {
+    const lch = color('#ff0000').oklch();
+    assert.ok('L' in lch);
+    assert.ok('C' in lch);
+    assert.ok('h' in lch);
+    assert.ok(lch.C > 0); // red is chromatic
+  });
+
+  it('.linear() returns 0-1 range', () => {
+    const lin = color('#ffffff').linear();
+    assert.ok(Math.abs(lin.r - 1) < 0.01);
+    assert.ok(Math.abs(lin.g - 1) < 0.01);
+    assert.ok(Math.abs(lin.b - 1) < 0.01);
+  });
+
+  it('.linear() black is 0', () => {
+    const lin = color('#000000').linear();
+    assert.ok(Math.abs(lin.r) < 0.001);
+  });
+});
+
+// ── color manipulation ──
+
+describe('color manipulation', () => {
+  it('.lighten() increases L', () => {
+    const c = color('#808080');
+    const lighter = c.lighten(0.1);
+    assert.ok(lighter.oklab().L > c.oklab().L);
+  });
+
+  it('.darken() decreases L', () => {
+    const c = color('#808080');
+    const darker = c.darken(0.1);
+    assert.ok(darker.oklab().L < c.oklab().L);
+  });
+
+  it('.mix() midpoint', () => {
+    const c = color('#000000').mix('#ffffff', 0.5);
+    // midpoint in OKLAB should be roughly medium gray
+    assert.ok(c.r > 50 && c.r < 200);
+  });
+
+  it('.mix() accepts color string', () => {
+    const c = color('#ff0000').mix('#0000ff');
+    assert.ok(c.r > 0 || c.b > 0);
+  });
+
+  it('.rotate() shifts hue', () => {
+    const c = color('#ff0000');
+    const rotated = c.rotate(120);
+    // rotating red 120 degrees should move toward green
+    assert.ok(rotated.g > rotated.r || rotated.b > rotated.r);
+  });
+
+  it('.alpha() sets alpha', () => {
+    const c = color('#ff0000').alpha(0.5);
+    assert.strictEqual(c.a, 0.5);
+    assert.strictEqual(c.r, 255);
+  });
+
+  it('.saturate() increases chroma', () => {
+    const c = color('#996666');
+    const sat = c.saturate(0.05);
+    assert.ok(sat.oklch().C > c.oklch().C - 0.001);
+  });
+
+  it('.desaturate() decreases chroma', () => {
+    const c = color('#ff0000');
+    const desat = c.desaturate(0.05);
+    assert.ok(desat.oklch().C < c.oklch().C + 0.001);
+  });
+
+  it('manipulation returns new object', () => {
+    const c = color('#ff0000');
+    const c2 = c.lighten(0.1);
+    assert.notStrictEqual(c, c2);
+    assert.strictEqual(c.r, 255); // original unchanged
+  });
+});
+
+// ── color immutability ──
+
+describe('color immutability', () => {
+  it('is frozen', () => {
+    const c = color('#ff0000');
+    assert.ok(Object.isFrozen(c));
+  });
+
+  it('assignment does not change value', () => {
+    const c = color('#ff0000');
+    try { c.r = 0; } catch {}
+    assert.strictEqual(c.r, 255);
+  });
+});
+
+// ── colorScale ──
+
+describe('colorScale', () => {
+  it('endpoints map correctly', () => {
+    const scale = colorScale([0, 1], ['#000000', '#ffffff']);
+    assert.match(scale(0), /^rgb/);
+    assert.match(scale(1), /^rgb/);
+  });
+
+  it('midpoint interpolates', () => {
+    const scale = colorScale([0, 1], ['#000000', '#ffffff']);
+    const mid = scale(0.5);
+    const m = mid.match(/\d+/g).map(Number);
+    // should be roughly gray
+    assert.ok(m[0] > 50 && m[0] < 200);
+  });
+
+  it('diverging with 3 stops', () => {
+    const scale = colorScale([0, 0.5, 1], ['#0000ff', '#ffffff', '#ff0000']);
+    // at midpoint should be close to white
+    const mid = scale(0.5);
+    const m = mid.match(/\d+/g).map(Number);
+    assert.ok(m[0] > 200); // R high at white
+    assert.ok(m[1] > 200); // G high at white
+  });
+
+  it('colormap function passthrough', () => {
+    const scale = colorScale([0, 100], viridis);
+    assert.strictEqual(scale(0), viridis(0));
+    assert.strictEqual(scale(100), viridis(1));
+    assert.strictEqual(scale(50), viridis(0.5));
+  });
+
+  it('clamps out-of-range values', () => {
+    const scale = colorScale([0, 1], ['#000000', '#ffffff']);
+    assert.strictEqual(scale(-1), scale(0));
+    assert.strictEqual(scale(2), scale(1));
+  });
+
+  it('throws on mismatched lengths', () => {
+    assert.throws(() => colorScale([0, 1], ['#000', '#fff', '#f00']));
+  });
+});
+
+// ── palette10 ──
+
+describe('palette10', () => {
+  it('has 10 entries', () => {
+    assert.strictEqual(palette10.length, 10);
+  });
+
+  it('all valid hex', () => {
+    for (const c of palette10) {
+      assert.match(c, /^#[0-9a-f]{6}$/);
+    }
+  });
+
+  it('all unique', () => {
+    assert.strictEqual(new Set(palette10).size, 10);
   });
 });

@@ -17,7 +17,8 @@ const KNOWN_PROPS = {
   String: ['fromCharCode','fromCodePoint','raw'],
   ui: ['display','print','canvas','table','slider','dropdown','checkbox','textInput'],
   std: ['csv','fetchJSON','sum','mean','median','extent','bin','linspace',
-        'unique','zip','cross','file','download','el','copy','fmt'],
+        'unique','zip','cross','file','download','el','copy','fmt','include',
+        'color','colorScale','viridis','magma','inferno','plasma','turbo','palette10'],
 };
 
 // common prototype methods by type

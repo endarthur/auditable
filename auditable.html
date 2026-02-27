@@ -2953,6 +2953,295 @@ function include(libs, ...names) {
   return sorted.map(n => sources[n]).join('\n\n');
 }
 
+// ── Color Science ──
+
+// sRGB gamma transfer
+function _srgbToLinear(x) {
+  x /= 255;
+  return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+}
+function _linearToSrgb(x) {
+  x = x <= 0.0031308 ? x * 12.92 : 1.055 * Math.pow(x, 1 / 2.4) - 0.055;
+  return Math.round(Math.max(0, Math.min(255, x * 255)));
+}
+
+// RGB ↔ linear RGB
+function _rgbToLinear(r, g, b) {
+  return [_srgbToLinear(r), _srgbToLinear(g), _srgbToLinear(b)];
+}
+function _linearToRgb(lr, lg, lb) {
+  return [_linearToSrgb(lr), _linearToSrgb(lg), _linearToSrgb(lb)];
+}
+
+// linear RGB ↔ OKLAB (via LMS)
+function _linearToOklab(lr, lg, lb) {
+  const l = Math.cbrt(0.4122214708 * lr + 0.5363325363 * lg + 0.0514459929 * lb);
+  const m = Math.cbrt(0.2119034982 * lr + 0.6806995451 * lg + 0.1073969566 * lb);
+  const s = Math.cbrt(0.0883024619 * lr + 0.2817188376 * lg + 0.6299787005 * lb);
+  return [
+    0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+    1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+    0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s,
+  ];
+}
+function _oklabToLinear(L, a, b) {
+  const l_ = L + 0.3963377774 * a + 0.2158037573 * b;
+  const m_ = L - 0.1055613458 * a - 0.0638541728 * b;
+  const s_ = L - 0.0894841775 * a - 1.2914855480 * b;
+  const l = l_ * l_ * l_;
+  const m = m_ * m_ * m_;
+  const s = s_ * s_ * s_;
+  return [
+    +4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s,
+  ];
+}
+
+// OKLAB ↔ OKLCH (polar)
+function _oklabToOklch(L, a, b) {
+  return [L, Math.sqrt(a * a + b * b), Math.atan2(b, a) * 180 / Math.PI];
+}
+function _oklchToOklab(L, C, h) {
+  const hRad = h * Math.PI / 180;
+  return [L, C * Math.cos(hRad), C * Math.sin(hRad)];
+}
+
+// composite conversions
+function _rgbToOklab(r, g, b) {
+  const [lr, lg, lb] = _rgbToLinear(r, g, b);
+  return _linearToOklab(lr, lg, lb);
+}
+function _rgbToOklch(r, g, b) {
+  const [L, a, bb] = _rgbToOklab(r, g, b);
+  return _oklabToOklch(L, a, bb);
+}
+function _oklabToRgb(L, a, b) {
+  const [lr, lg, lb] = _oklabToLinear(L, a, b);
+  return _linearToRgb(lr, lg, lb);
+}
+
+// RGB ↔ HSL
+function _rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return [0, 0, l * 100];
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h;
+  if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+  else if (max === g) h = ((b - r) / d + 2) / 6;
+  else h = ((r - g) / d + 4) / 6;
+  return [h * 360, s * 100, l * 100];
+}
+function _hslToRgb(h, s, l) {
+  h /= 360; s /= 100; l /= 100;
+  if (s === 0) { const v = Math.round(l * 255); return [v, v, v]; }
+  const hue2rgb = (p, q, t) => {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1/6) return p + (q - p) * 6 * t;
+    if (t < 1/2) return q;
+    if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+    return p;
+  };
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  return [
+    Math.round(hue2rgb(p, q, h + 1/3) * 255),
+    Math.round(hue2rgb(p, q, h) * 255),
+    Math.round(hue2rgb(p, q, h - 1/3) * 255),
+  ];
+}
+
+// build frozen color object (no parsing)
+function _makeColor(r, g, b, a) {
+  r = Math.round(Math.max(0, Math.min(255, r)));
+  g = Math.round(Math.max(0, Math.min(255, g)));
+  b = Math.round(Math.max(0, Math.min(255, b)));
+  a = Math.max(0, Math.min(1, a));
+  return Object.freeze({
+    r, g, b, a,
+    hsl() { const [h, s, l] = _rgbToHsl(r, g, b); return { h, s, l }; },
+    oklab() { const [L, oa, ob] = _rgbToOklab(r, g, b); return { L, a: oa, b: ob }; },
+    oklch() { const [L, C, oh] = _rgbToOklch(r, g, b); return { L, C, h: oh }; },
+    linear() { const [lr, lg, lb] = _rgbToLinear(r, g, b); return { r: lr, g: lg, b: lb }; },
+    lighten(amt) {
+      const [L, ca, cb] = _rgbToOklab(r, g, b);
+      const [nr, ng, nb] = _oklabToRgb(Math.min(1, L + amt), ca, cb);
+      return _makeColor(nr, ng, nb, a);
+    },
+    darken(amt) {
+      const [L, ca, cb] = _rgbToOklab(r, g, b);
+      const [nr, ng, nb] = _oklabToRgb(Math.max(0, L - amt), ca, cb);
+      return _makeColor(nr, ng, nb, a);
+    },
+    saturate(amt) {
+      const [L, C, h] = _rgbToOklch(r, g, b);
+      const [ca, cb] = _oklchToOklab(L, Math.max(0, C + amt), h).slice(1);
+      const [nr, ng, nb] = _oklabToRgb(L, ca, cb);
+      return _makeColor(nr, ng, nb, a);
+    },
+    desaturate(amt) {
+      const [L, C, h] = _rgbToOklch(r, g, b);
+      const [ca, cb] = _oklchToOklab(L, Math.max(0, C - amt), h).slice(1);
+      const [nr, ng, nb] = _oklabToRgb(L, ca, cb);
+      return _makeColor(nr, ng, nb, a);
+    },
+    rotate(deg) {
+      const [L, C, h] = _rgbToOklch(r, g, b);
+      const [_, ca, cb] = _oklchToOklab(L, C, h + deg);
+      const [nr, ng, nb] = _oklabToRgb(L, ca, cb);
+      return _makeColor(nr, ng, nb, a);
+    },
+    mix(other, t = 0.5) {
+      const c2 = other.r !== undefined ? other : color(other);
+      const [L1, a1, b1] = _rgbToOklab(r, g, b);
+      const [L2, a2, b2] = _rgbToOklab(c2.r, c2.g, c2.b);
+      const [nr, ng, nb] = _oklabToRgb(
+        L1 + (L2 - L1) * t, a1 + (a2 - a1) * t, b1 + (b2 - b1) * t
+      );
+      return _makeColor(nr, ng, nb, a + (c2.a - a) * t);
+    },
+    alpha(na) { return _makeColor(r, g, b, na); },
+    css() { return a < 1 ? `rgba(${r},${g},${b},${a})` : `rgb(${r},${g},${b})`; },
+    hex() {
+      return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+    },
+    toString() { return a < 1 ? `rgba(${r},${g},${b},${a})` : `rgb(${r},${g},${b})`; },
+  });
+}
+
+// public color factory with parsing
+function color(input) {
+  if (input && typeof input === 'object' && input.r !== undefined) {
+    return _makeColor(input.r, input.g, input.b, input.a !== undefined ? input.a : 1);
+  }
+  if (Array.isArray(input)) {
+    return _makeColor(input[0], input[1], input[2], input[3] !== undefined ? input[3] : 1);
+  }
+  if (typeof input !== 'string') throw new Error('color: invalid input');
+  const s = input.trim();
+  // hex
+  if (s[0] === '#') {
+    const h = s.slice(1);
+    if (h.length === 3) {
+      return _makeColor(
+        parseInt(h[0] + h[0], 16), parseInt(h[1] + h[1], 16), parseInt(h[2] + h[2], 16), 1
+      );
+    }
+    if (h.length === 4) {
+      return _makeColor(
+        parseInt(h[0] + h[0], 16), parseInt(h[1] + h[1], 16),
+        parseInt(h[2] + h[2], 16), parseInt(h[3] + h[3], 16) / 255
+      );
+    }
+    if (h.length === 6) {
+      return _makeColor(parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16), 1);
+    }
+    if (h.length === 8) {
+      return _makeColor(
+        parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16),
+        parseInt(h.slice(4, 6), 16), parseInt(h.slice(6, 8), 16) / 255
+      );
+    }
+    throw new Error('color: invalid hex');
+  }
+  // rgb()/rgba()
+  let m = s.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)$/);
+  if (m) return _makeColor(+m[1], +m[2], +m[3], m[4] !== undefined ? +m[4] : 1);
+  // hsl()/hsla()
+  m = s.match(/^hsla?\(\s*([\d.]+)\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%\s*(?:,\s*([\d.]+)\s*)?\)$/);
+  if (m) {
+    const [r, g, b] = _hslToRgb(+m[1], +m[2], +m[3]);
+    return _makeColor(r, g, b, m[4] !== undefined ? +m[4] : 1);
+  }
+  throw new Error('color: unrecognized format');
+}
+
+// ── Colormaps ──
+
+function _poly(coeffs, t) {
+  let r = coeffs[coeffs.length - 1];
+  for (let i = coeffs.length - 2; i >= 0; i--) r = r * t + coeffs[i];
+  return r;
+}
+
+function _cmap(rC, gC, bC) {
+  return (t) => {
+    t = Math.max(0, Math.min(1, t));
+    return `rgb(${Math.round(Math.max(0, Math.min(255, _poly(rC, t) * 255)))},${
+      Math.round(Math.max(0, Math.min(255, _poly(gC, t) * 255)))},${
+      Math.round(Math.max(0, Math.min(255, _poly(bC, t) * 255)))})`;
+  };
+}
+
+const viridis = _cmap(
+  [0.267, 0.004, 5.294, -14.05, 8.5],
+  [0.004, 1.384, 0.098, -2.74, 2.23],
+  [0.329, 1.44, -5.11, 6.87, -3.57]
+);
+
+const magma = _cmap(
+  [-0.002, 0.804, 6.37, -15.96, 9.78],
+  [0.0, -0.398, 4.23, -7.76, 4.95],
+  [0.015, 2.68, -9.39, 14.23, -6.53]
+);
+
+const inferno = _cmap(
+  [0.0, 0.12, 10.82, -25.58, 15.63],
+  [0.0, 0.06, 2.35, -3.98, 2.56],
+  [0.015, 2.26, -8.72, 13.6, -6.14]
+);
+
+const plasma = _cmap(
+  [0.05, 2.63, -3.47, 2.65, -0.88],
+  [0.03, -0.69, 4.07, -6.25, 3.83],
+  [0.53, 1.74, -5.35, 7.55, -3.49]
+);
+
+const turbo = _cmap(
+  [0.19, 3.08, -3.92, 1.66],
+  [0.08, 3.54, -8.42, 5.79],
+  [0.58, -2.58, 7.52, -11.42, 6.88]
+);
+
+// ── Color Scale ──
+
+function colorScale(domain, colors) {
+  if (typeof colors === 'function') {
+    // colormap function: linear mapping from domain to [0,1]
+    const lo = domain[0], hi = domain[domain.length - 1];
+    const range = hi - lo || 1;
+    return (v) => colors(Math.max(0, Math.min(1, (v - lo) / range)));
+  }
+  if (domain.length !== colors.length)
+    throw new Error('colorScale: domain and colors must have same length');
+  // parse colors once
+  const parsed = colors.map(c => typeof c === 'string' ? color(c) : c);
+  const lo = domain[0], hi = domain[domain.length - 1];
+  return (v) => {
+    v = Math.max(lo, Math.min(hi, v));
+    // find segment
+    for (let i = 0; i < domain.length - 1; i++) {
+      if (v <= domain[i + 1] || i === domain.length - 2) {
+        const segRange = domain[i + 1] - domain[i] || 1;
+        const t = (v - domain[i]) / segRange;
+        return parsed[i].mix(parsed[i + 1], t).css();
+      }
+    }
+    return parsed[0].css();
+  };
+}
+
+// ── Palette ──
+
+const palette10 = [
+  '#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f',
+  '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ac',
+];
+
 // ── Export ──
 
 const std = {
@@ -2961,6 +3250,9 @@ const std = {
   unique, zip, cross,
   file, download, el, copy, fmt,
   include,
+  color, colorScale,
+  viridis, magma, inferno, plasma, turbo,
+  palette10,
 };
 
 // -- python.js --
@@ -5031,7 +5323,7 @@ function togglePresent() {
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_BUILD_DATE__ = '2026-02-27';
-const __AUDITABLE_BASE_SIZE__ = 792087;
+const __AUDITABLE_BASE_SIZE__ = 803086;
 
 (function() {
   const ver = $('#aboutVersion');
@@ -7194,7 +7486,8 @@ const KNOWN_PROPS = {
   String: ['fromCharCode','fromCodePoint','raw'],
   ui: ['display','print','canvas','table','slider','dropdown','checkbox','textInput'],
   std: ['csv','fetchJSON','sum','mean','median','extent','bin','linspace',
-        'unique','zip','cross','file','download','el','copy','fmt'],
+        'unique','zip','cross','file','download','el','copy','fmt','include',
+        'color','colorScale','viridis','magma','inferno','plasma','turbo','palette10'],
 };
 
 // common prototype methods by type
@@ -7303,6 +7596,42 @@ const BUILTIN_HELP = {
   "std.fmt": {
     "sig": "std.fmt(number, {decimals?, prefix?, suffix?}?)",
     "desc": "format number to string"
+  },
+  "std.include": {
+    "sig": "std.include(libs, ...names)",
+    "desc": "resolve dependencies and return source for atra routines"
+  },
+  "std.color": {
+    "sig": "std.color(input)",
+    "desc": "create color from hex/rgb/hsl/array \u2014 .lighten/.darken/.mix/.rotate/.css/.hex"
+  },
+  "std.colorScale": {
+    "sig": "std.colorScale(domain, colors)",
+    "desc": "map values to colors (OKLAB interpolation or colormap fn)"
+  },
+  "std.viridis": {
+    "sig": "std.viridis(t)",
+    "desc": "viridis colormap, t \u2208 [0,1] \u2192 rgb() string"
+  },
+  "std.magma": {
+    "sig": "std.magma(t)",
+    "desc": "magma colormap, t \u2208 [0,1] \u2192 rgb() string"
+  },
+  "std.inferno": {
+    "sig": "std.inferno(t)",
+    "desc": "inferno colormap, t \u2208 [0,1] \u2192 rgb() string"
+  },
+  "std.plasma": {
+    "sig": "std.plasma(t)",
+    "desc": "plasma colormap, t \u2208 [0,1] \u2192 rgb() string"
+  },
+  "std.turbo": {
+    "sig": "std.turbo(t)",
+    "desc": "turbo colormap, t \u2208 [0,1] \u2192 rgb() string"
+  },
+  "std.palette10": {
+    "sig": "std.palette10",
+    "desc": "array of 10 categorical colors (Tableau 10)"
   },
   "print": {
     "sig": "print(...values)",
