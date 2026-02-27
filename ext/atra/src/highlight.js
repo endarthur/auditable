@@ -7,6 +7,7 @@ export const ATRA_KEYWORDS = new Set([
   'function','subroutine','begin','end','var','const','if','then','else',
   'for','while','do','break','and','or','not','mod','import','export',
   'call','array','true','false','from','tailcall','return',
+  'layout','packed',
 ]);
 
 export const ATRA_TYPES = new Set(['i32','i64','f32','f64','f64x2','f32x4','i32x4','i64x2']);

@@ -87,9 +87,11 @@ function compileAndInstantiate(strings, values, userImports) {
     source += strings[i + 1];
   }
 
-  const { bytes, table } = compileSource(source, values, userImports);
+  const { bytes, table, layouts } = compileSource(source, values, userImports);
   const instance = instantiate(bytes, userImports, values);
-  return wrapExports(instance, table);
+  const exports = wrapExports(instance, table);
+  if (layouts) exports.__layouts = layouts;
+  return exports;
 }
 
 export function atra(stringsOrOpts, ...values) {
@@ -112,8 +114,53 @@ atra.compile = function(source, userImports) {
 
 atra.parse = function(source) {
   const tokens = lex(source);
-  return parse(tokens);
+  const ast = parse(tokens);
+  // Compute layout metadata from LayoutDecl nodes
+  ast.layouts = computeLayouts(ast);
+  return ast;
 };
+
+function computeLayouts(ast) {
+  const result = {};
+  const layouts = {};
+  for (const node of ast.body) {
+    if (node.type !== 'LayoutDecl') continue;
+    const layout = { fields: {}, __align: 1, packed: node.packed };
+    let offset = 0;
+    for (const f of node.fields) {
+      let size, align, fieldLayout;
+      if (layouts[f.ftype]) {
+        fieldLayout = f.ftype;
+        size = layouts[f.ftype].__size;
+        align = node.packed ? 1 : layouts[f.ftype].__align;
+      } else {
+        size = typeSizeForLayout(f.ftype);
+        align = node.packed ? 1 : size;
+      }
+      if (!node.packed) offset = (offset + align - 1) & ~(align - 1);
+      layout.fields[f.name] = { offset, type: f.ftype, size };
+      if (fieldLayout) layout.fields[f.name].layout = fieldLayout;
+      offset += size;
+      if (align > layout.__align) layout.__align = align;
+    }
+    if (!node.packed) offset = (offset + layout.__align - 1) & ~(layout.__align - 1);
+    layout.__size = offset;
+    layouts[node.name] = layout;
+    // Serialize for JS
+    const obj = {};
+    for (const [fname, field] of Object.entries(layout.fields)) obj[fname] = field.offset;
+    obj.__size = layout.__size;
+    obj.__align = layout.__align;
+    result[node.name] = obj;
+  }
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+function typeSizeForLayout(t) {
+  if (t === 'i32' || t === 'f32') return 4;
+  if (t === 'i64' || t === 'f64') return 8;
+  throw new Error('Unknown type in layout: ' + t);
+}
 
 atra.dump = function(source) {
   const { bytes } = compileSource(source, null, null);
@@ -122,9 +169,11 @@ atra.dump = function(source) {
 
 atra.run = function(source, userImports) {
   userImports = normalizeMemoryImport(userImports);
-  const { bytes, table } = compileSource(source, null, userImports);
+  const { bytes, table, layouts } = compileSource(source, null, userImports);
   const instance = instantiate(bytes, userImports, null);
-  return wrapExports(instance, table);
+  const exports = wrapExports(instance, table);
+  if (layouts) exports.__layouts = layouts;
+  return exports;
 };
 
 // ── Self-registration ──
