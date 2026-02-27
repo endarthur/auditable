@@ -1,8 +1,8 @@
 import { S } from './state.js';
 import { isManual } from './dag.js';
 import { renderMd } from './markdown.js';
-import { onCodeEdit, onCssEdit, onHtmlEdit } from './editor.js';
-import { renderHtmlCell } from './exec.js';
+import { onCodeEdit, onCssEdit, onHtmlEdit, onMdEdit } from './editor.js';
+import { renderHtmlCell, renderMdCell } from './exec.js';
 import { createEditor, getEditor } from './cm6.js';
 
 // ── CELL DOM ──
@@ -165,13 +165,18 @@ export function createCellEl(type, id, initialCode) {
       const cell = S.cells.find(c => c.id === id);
       if (cell) {
         cell.code = ta.value;
-        view.innerHTML = renderMd(ta.value);
+        renderMdCell(cell);
       }
       editWrap.style.display = 'none';
       view.style.display = '';
     });
 
-    ta.addEventListener('input', autoResize);
+    ta.addEventListener('input', (e) => {
+      autoResize(e);
+      const cell = S.cells.find(c => c.id === id);
+      if (cell) cell.code = ta.value;
+      onMdEdit(id);
+    });
     ta.addEventListener('keydown', handleTab);
   }
 

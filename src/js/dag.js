@@ -221,7 +221,7 @@ export function buildDAG() {
         c._usesCode = c.code;
         c._definedKey = definedKey;
       }
-    } else if (c.type === 'html') {
+    } else if (c.type === 'html' || c.type === 'md') {
       if (c.code !== c._usesCode || c._definedKey !== definedKey) {
         c.uses = findHtmlUses(c.code, definedNames);
         c._usesCode = c.code;

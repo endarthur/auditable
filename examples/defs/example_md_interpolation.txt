@@ -1,0 +1,25 @@
+/// auditable
+/// title: markdown interpolation
+
+/// md
+# markdown interpolation
+
+markdown cells support `${expr}` — expressions are evaluated against the notebook scope and update reactively when upstream values change.
+
+/// code
+const name = "world";
+const count = 42;
+const items = ["alpha", "beta", "gamma"];
+
+/// md
+Hello **${name}**! There are ${count} things and ${items.length} items: ${items.join(", ")}.
+
+/// code
+const radius = ui.slider("radius", 5, {min: 1, max: 20});
+const area = Math.PI * radius * radius;
+
+/// md
+A circle with radius **${radius}** has area **${area.toFixed(2)}**.
+
+/// md
+This markdown cell has no expressions — it renders as plain markdown with no DAG participation, same as before.

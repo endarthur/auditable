@@ -6,12 +6,13 @@
 import { $, S } from './state.js';
 import { registerProvider } from './stdlib.js';
 import { toggleAutorun } from './editor.js';
-import { toggleSettings, togglePresent, applyTheme, applyFontSize, applyWidth, applyLineNumbers, applyHeader, applyExecMode, applyRunOnLoad, applyShowToggle, applyGlobalExecMode, applyGlobalRunOnLoad } from './settings.js';
+import { toggleSettings, togglePresent, applyTheme, applyFontSize, applyWidth, applyLineNumbers, applyHeader, applyExecMode, applyRunOnLoad, applyShowToggle, applyGlobalExecMode, applyGlobalRunOnLoad, applyEditorView } from './settings.js';
 import { toggleUpdate, checkForUpdate, applyOnlineUpdate, proceedUpdate, cancelUpdate, updateFromFile } from './update.js';
 import { saveNotebook, savePackedNotebook, setSaveMode, toggleSaveTray, exportAsTxt } from './save.js';
 import { insertAt } from './ui.js';
 import { openFind, closeFind } from './find.js';
 import { runAll } from './exec.js';
+import { toggleSplitView } from './split.js';
 import { addCellWithUndo, deleteCellWithUndo, runSelectedCell, toggleToolbarMenu, toggleAddTray, toggleMoreTray, showInsertPicker, toggleTypePicker, collapseAll, expandAll, newNotebook } from './keyboard.js';
 
 // state
@@ -34,6 +35,7 @@ window.applyRunOnLoad = applyRunOnLoad;
 window.applyShowToggle = applyShowToggle;
 window.applyGlobalExecMode = applyGlobalExecMode;
 window.applyGlobalRunOnLoad = applyGlobalRunOnLoad;
+window.applyEditorView = applyEditorView;
 
 // update
 window.toggleUpdate = toggleUpdate;
@@ -75,3 +77,6 @@ window.toggleTypePicker = toggleTypePicker;
 window.collapseAll = collapseAll;
 window.expandAll = expandAll;
 window.newNotebook = newNotebook;
+
+// split view
+window.toggleSplitView = toggleSplitView;

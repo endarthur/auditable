@@ -8,6 +8,7 @@ import { setMsg } from './ui.js';
 import { toggleMdComment, autoResize, cssSummary } from './cell-dom.js';
 import { openFind, closeFind } from './find.js';
 import { getEditor, setCm6Callbacks } from './cm6.js';
+import { toggleSplitView } from './split.js';
 
 // ── KEYBOARD / SELECTION ──
 
@@ -356,6 +357,8 @@ document.addEventListener('keydown', (e) => {
     // ── COMMAND MODE ──
     // ignore if typing in any input field (title, find bar, etc.)
     if (document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.id === 'docTitle')) return;
+    // ignore if focus is inside the split view editor
+    if (document.activeElement && document.activeElement.closest('.split-left')) return;
 
     // let browser shortcuts through (Ctrl+J downloads, etc.)
     if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -459,6 +462,11 @@ document.addEventListener('keydown', (e) => {
       togglePresent();
       return;
     }
+    if (e.key === 'e') {
+      e.preventDefault();
+      toggleSplitView();
+      return;
+    }
     if (e.key === 'm' && S.selectedId !== null) {
       e.preventDefault();
       convertCell(S.selectedId, 'md');
@@ -485,6 +493,13 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'F1') {
     e.preventDefault();
     $('#helpOverlay').classList.toggle('visible');
+    return;
+  }
+
+  // close split view on Escape (only if not focused in the split editor)
+  if (e.key === 'Escape' && S.splitView && !(document.activeElement && document.activeElement.closest('.split-left'))) {
+    toggleSplitView();
+    e.stopImmediatePropagation();
     return;
   }
 

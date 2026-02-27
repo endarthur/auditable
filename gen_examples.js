@@ -34,6 +34,7 @@ const defs = [
   'example_alpack_atra.txt',
   'example_gslib_kb2d.txt',
   'example_gslib_sgsim.txt',
+  'example_md_interpolation.txt',
 ];
 
 // ── Parser ──

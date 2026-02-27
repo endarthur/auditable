@@ -5,6 +5,8 @@ import { setMsg } from './ui.js';
 import { setBadge } from './update.js';
 import { registerProvider } from './stdlib.js';
 import { configureAllAutocomplete } from './complete.js';
+import { getEditorViewSetting } from './settings.js';
+import { toggleSplitView } from './split.js';
 
 // ── INIT ──
 
@@ -24,6 +26,11 @@ import { configureAllAutocomplete } from './complete.js';
   // configure CM6 autocomplete for all code cells
   configureAllAutocomplete();
   S.initialized = true;
+
+  // enter editor view if notebook setting requests it
+  if (getEditorViewSetting() === 'yes') {
+    setTimeout(toggleSplitView, 60);
+  }
 })();
 
 // ── AF BRIDGE ──

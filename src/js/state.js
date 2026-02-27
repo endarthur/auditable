@@ -25,6 +25,8 @@ export const S = {
   findMatches: [],   // { cellId, index, length }
   findCurrent: -1,
   initialized: false, // set after loadFromEmbed/init completes
+  splitView: false,   // split view mode active
+  splitEditor: null,  // CM6 EditorView for split view (or null)
 };
 
 export const JS_KEYWORDS = new Set([

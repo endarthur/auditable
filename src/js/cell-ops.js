@@ -1,8 +1,7 @@
 import { S, $ } from './state.js';
 import { createCellEl, autoResize, cssSummary } from './cell-dom.js';
 import { isManual } from './dag.js';
-import { runAll, renderHtmlCell } from './exec.js';
-import { renderMd } from './markdown.js';
+import { runAll, renderHtmlCell, renderMdCell } from './exec.js';
 import { updateStatus } from './ui.js';
 import { selectCell } from './keyboard.js';
 import { notifyDirty } from './editor.js';
@@ -54,7 +53,7 @@ export function addCell(type, code = '', afterId = null, beforeId = null) {
       const ta = cell.el.querySelector('textarea');
       ta.value = code;
       autoResize({ target: ta });
-      cell.el.querySelector('.cell-md-view').innerHTML = renderMd(code);
+      renderMdCell(cell);
     } else {
       if (type === 'code' && isManual(code)) cell.el.classList.add('manual');
     }
@@ -107,7 +106,7 @@ export function deleteCell(id) {
   S.cells[idx].el.remove();
   S.cells.splice(idx, 1);
   // re-run to clean scope
-  if (S.cells.some(c => c.type === 'code' || c.type === 'html')) runAll();
+  if (S.cells.some(c => c.type === 'code' || c.type === 'html' || c.type === 'md')) runAll();
   updateStatus();
   notifyDirty();
 }
@@ -139,7 +138,7 @@ export function convertCell(id, newType) {
     const ta = newEl.querySelector('textarea');
     ta.value = code;
     autoResize({ target: ta });
-    newEl.querySelector('.cell-md-view').innerHTML = renderMd(code);
+    renderMdCell(cell);
   }
 
   if (newType === 'css') {
@@ -158,7 +157,7 @@ export function convertCell(id, newType) {
   selectCell(id);
   updateStatus();
   notifyDirty();
-  if (S.cells.some(c => c.type === 'code' || c.type === 'html')) runAll();
+  if (S.cells.some(c => c.type === 'code' || c.type === 'html' || c.type === 'md')) runAll();
 }
 
 export function moveCell(id, dir) {
@@ -180,5 +179,5 @@ export function moveCell(id, dir) {
   }
 
   notifyDirty();
-  if (S.cells.some(c => c.type === 'code' || c.type === 'html')) runAll();
+  if (S.cells.some(c => c.type === 'code' || c.type === 'html' || c.type === 'md')) runAll();
 }

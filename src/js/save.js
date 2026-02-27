@@ -55,7 +55,7 @@ function buildNotebookHtml() {
   const cellData = S.cells.map(c => ({
     type: c.type,
     code: c.code,
-    collapsed: c.el.classList.contains('collapsed') || undefined
+    collapsed: (c._splitOrigEl || c.el).classList.contains('collapsed') || undefined
   }));
 
   // get the runtime and styles from current document
