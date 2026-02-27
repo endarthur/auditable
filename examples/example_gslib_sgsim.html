@@ -5812,25 +5812,25 @@ function include(libs, ...names) {
 // ── Color Science ──
 
 // sRGB gamma transfer
-function _srgbToLinear(x) {
+function srgbToLinear(x) {
   x /= 255;
   return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
 }
-function _linearToSrgb(x) {
+function linearToSrgb(x) {
   x = x <= 0.0031308 ? x * 12.92 : 1.055 * Math.pow(x, 1 / 2.4) - 0.055;
   return Math.round(Math.max(0, Math.min(255, x * 255)));
 }
 
 // RGB ↔ linear RGB
-function _rgbToLinear(r, g, b) {
-  return [_srgbToLinear(r), _srgbToLinear(g), _srgbToLinear(b)];
+function rgbToLinear(r, g, b) {
+  return [srgbToLinear(r), srgbToLinear(g), srgbToLinear(b)];
 }
-function _linearToRgb(lr, lg, lb) {
-  return [_linearToSrgb(lr), _linearToSrgb(lg), _linearToSrgb(lb)];
+function linearToRgb(lr, lg, lb) {
+  return [linearToSrgb(lr), linearToSrgb(lg), linearToSrgb(lb)];
 }
 
 // linear RGB ↔ OKLAB (via LMS)
-function _linearToOklab(lr, lg, lb) {
+function linearToOklab(lr, lg, lb) {
   const l = Math.cbrt(0.4122214708 * lr + 0.5363325363 * lg + 0.0514459929 * lb);
   const m = Math.cbrt(0.2119034982 * lr + 0.6806995451 * lg + 0.1073969566 * lb);
   const s = Math.cbrt(0.0883024619 * lr + 0.2817188376 * lg + 0.6299787005 * lb);
@@ -5840,7 +5840,7 @@ function _linearToOklab(lr, lg, lb) {
     0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s,
   ];
 }
-function _oklabToLinear(L, a, b) {
+function oklabToLinear(L, a, b) {
   const l_ = L + 0.3963377774 * a + 0.2158037573 * b;
   const m_ = L - 0.1055613458 * a - 0.0638541728 * b;
   const s_ = L - 0.0894841775 * a - 1.2914855480 * b;
@@ -5855,30 +5855,30 @@ function _oklabToLinear(L, a, b) {
 }
 
 // OKLAB ↔ OKLCH (polar)
-function _oklabToOklch(L, a, b) {
+function oklabToOklch(L, a, b) {
   return [L, Math.sqrt(a * a + b * b), Math.atan2(b, a) * 180 / Math.PI];
 }
-function _oklchToOklab(L, C, h) {
+function oklchToOklab(L, C, h) {
   const hRad = h * Math.PI / 180;
   return [L, C * Math.cos(hRad), C * Math.sin(hRad)];
 }
 
 // composite conversions
-function _rgbToOklab(r, g, b) {
-  const [lr, lg, lb] = _rgbToLinear(r, g, b);
-  return _linearToOklab(lr, lg, lb);
+function rgbToOklab(r, g, b) {
+  const [lr, lg, lb] = rgbToLinear(r, g, b);
+  return linearToOklab(lr, lg, lb);
 }
-function _rgbToOklch(r, g, b) {
-  const [L, a, bb] = _rgbToOklab(r, g, b);
-  return _oklabToOklch(L, a, bb);
+function rgbToOklch(r, g, b) {
+  const [L, a, bb] = rgbToOklab(r, g, b);
+  return oklabToOklch(L, a, bb);
 }
-function _oklabToRgb(L, a, b) {
-  const [lr, lg, lb] = _oklabToLinear(L, a, b);
-  return _linearToRgb(lr, lg, lb);
+function oklabToRgb(L, a, b) {
+  const [lr, lg, lb] = oklabToLinear(L, a, b);
+  return linearToRgb(lr, lg, lb);
 }
 
 // RGB ↔ HSL
-function _rgbToHsl(r, g, b) {
+function rgbToHsl(r, g, b) {
   r /= 255; g /= 255; b /= 255;
   const max = Math.max(r, g, b), min = Math.min(r, g, b);
   const l = (max + min) / 2;
@@ -5891,7 +5891,7 @@ function _rgbToHsl(r, g, b) {
   else h = ((r - g) / d + 4) / 6;
   return [h * 360, s * 100, l * 100];
 }
-function _hslToRgb(h, s, l) {
+function hslToRgb(h, s, l) {
   h /= 360; s /= 100; l /= 100;
   if (s === 0) { const v = Math.round(l * 255); return [v, v, v]; }
   const hue2rgb = (p, q, t) => {
@@ -5919,43 +5919,43 @@ function _makeColor(r, g, b, a) {
   a = Math.max(0, Math.min(1, a));
   return Object.freeze({
     r, g, b, a,
-    hsl() { const [h, s, l] = _rgbToHsl(r, g, b); return { h, s, l }; },
-    oklab() { const [L, oa, ob] = _rgbToOklab(r, g, b); return { L, a: oa, b: ob }; },
-    oklch() { const [L, C, oh] = _rgbToOklch(r, g, b); return { L, C, h: oh }; },
-    linear() { const [lr, lg, lb] = _rgbToLinear(r, g, b); return { r: lr, g: lg, b: lb }; },
+    hsl() { const [h, s, l] = rgbToHsl(r, g, b); return { h, s, l }; },
+    oklab() { const [L, oa, ob] = rgbToOklab(r, g, b); return { L, a: oa, b: ob }; },
+    oklch() { const [L, C, oh] = rgbToOklch(r, g, b); return { L, C, h: oh }; },
+    linear() { const [lr, lg, lb] = rgbToLinear(r, g, b); return { r: lr, g: lg, b: lb }; },
     lighten(amt) {
-      const [L, ca, cb] = _rgbToOklab(r, g, b);
-      const [nr, ng, nb] = _oklabToRgb(Math.min(1, L + amt), ca, cb);
+      const [L, ca, cb] = rgbToOklab(r, g, b);
+      const [nr, ng, nb] = oklabToRgb(Math.min(1, L + amt), ca, cb);
       return _makeColor(nr, ng, nb, a);
     },
     darken(amt) {
-      const [L, ca, cb] = _rgbToOklab(r, g, b);
-      const [nr, ng, nb] = _oklabToRgb(Math.max(0, L - amt), ca, cb);
+      const [L, ca, cb] = rgbToOklab(r, g, b);
+      const [nr, ng, nb] = oklabToRgb(Math.max(0, L - amt), ca, cb);
       return _makeColor(nr, ng, nb, a);
     },
     saturate(amt) {
-      const [L, C, h] = _rgbToOklch(r, g, b);
-      const [ca, cb] = _oklchToOklab(L, Math.max(0, C + amt), h).slice(1);
-      const [nr, ng, nb] = _oklabToRgb(L, ca, cb);
+      const [L, C, h] = rgbToOklch(r, g, b);
+      const [ca, cb] = oklchToOklab(L, Math.max(0, C + amt), h).slice(1);
+      const [nr, ng, nb] = oklabToRgb(L, ca, cb);
       return _makeColor(nr, ng, nb, a);
     },
     desaturate(amt) {
-      const [L, C, h] = _rgbToOklch(r, g, b);
-      const [ca, cb] = _oklchToOklab(L, Math.max(0, C - amt), h).slice(1);
-      const [nr, ng, nb] = _oklabToRgb(L, ca, cb);
+      const [L, C, h] = rgbToOklch(r, g, b);
+      const [ca, cb] = oklchToOklab(L, Math.max(0, C - amt), h).slice(1);
+      const [nr, ng, nb] = oklabToRgb(L, ca, cb);
       return _makeColor(nr, ng, nb, a);
     },
     rotate(deg) {
-      const [L, C, h] = _rgbToOklch(r, g, b);
-      const [_, ca, cb] = _oklchToOklab(L, C, h + deg);
-      const [nr, ng, nb] = _oklabToRgb(L, ca, cb);
+      const [L, C, h] = rgbToOklch(r, g, b);
+      const [_, ca, cb] = oklchToOklab(L, C, h + deg);
+      const [nr, ng, nb] = oklabToRgb(L, ca, cb);
       return _makeColor(nr, ng, nb, a);
     },
     mix(other, t = 0.5) {
       const c2 = other.r !== undefined ? other : color(other);
-      const [L1, a1, b1] = _rgbToOklab(r, g, b);
-      const [L2, a2, b2] = _rgbToOklab(c2.r, c2.g, c2.b);
-      const [nr, ng, nb] = _oklabToRgb(
+      const [L1, a1, b1] = rgbToOklab(r, g, b);
+      const [L2, a2, b2] = rgbToOklab(c2.r, c2.g, c2.b);
+      const [nr, ng, nb] = oklabToRgb(
         L1 + (L2 - L1) * t, a1 + (a2 - a1) * t, b1 + (b2 - b1) * t
       );
       return _makeColor(nr, ng, nb, a + (c2.a - a) * t);
@@ -6010,11 +6010,21 @@ function color(input) {
   // hsl()/hsla()
   m = s.match(/^hsla?\(\s*([\d.]+)\s*,\s*([\d.]+)%\s*,\s*([\d.]+)%\s*(?:,\s*([\d.]+)\s*)?\)$/);
   if (m) {
-    const [r, g, b] = _hslToRgb(+m[1], +m[2], +m[3]);
+    const [r, g, b] = hslToRgb(+m[1], +m[2], +m[3]);
     return _makeColor(r, g, b, m[4] !== undefined ? +m[4] : 1);
   }
   throw new Error('color: unrecognized format');
 }
+
+// expose conversion helpers on color function
+Object.assign(color, {
+  srgbToLinear, linearToSrgb,
+  rgbToLinear, linearToRgb,
+  linearToOklab, oklabToLinear,
+  oklabToOklch, oklchToOklab,
+  rgbToOklab, rgbToOklch, oklabToRgb,
+  rgbToHsl, hslToRgb,
+});
 
 // ── Colormaps ──
 
@@ -8179,7 +8189,7 @@ function togglePresent() {
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_BUILD_DATE__ = '2026-02-27';
-const __AUDITABLE_BASE_SIZE__ = 803086;
+const __AUDITABLE_BASE_SIZE__ = 803295;
 
 (function() {
   const ver = $('#aboutVersion');

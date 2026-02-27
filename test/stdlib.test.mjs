@@ -584,6 +584,41 @@ describe('color immutability', () => {
   });
 });
 
+// ── color conversion helpers on color function ──
+
+describe('color conversion helpers', () => {
+  it('exposes srgbToLinear/linearToSrgb', () => {
+    assert.strictEqual(typeof color.srgbToLinear, 'function');
+    assert.strictEqual(typeof color.linearToSrgb, 'function');
+  });
+
+  it('srgbToLinear roundtrips with linearToSrgb', () => {
+    const lin = color.srgbToLinear(128);
+    const back = color.linearToSrgb(lin);
+    assert.strictEqual(back, 128);
+  });
+
+  it('exposes oklab conversions', () => {
+    assert.strictEqual(typeof color.rgbToOklab, 'function');
+    assert.strictEqual(typeof color.oklabToRgb, 'function');
+  });
+
+  it('rgbToOklab → oklabToRgb roundtrip', () => {
+    const [L, a, b] = color.rgbToOklab(100, 150, 200);
+    const [r, g, bb] = color.oklabToRgb(L, a, b);
+    assert.ok(Math.abs(r - 100) <= 1);
+    assert.ok(Math.abs(g - 150) <= 1);
+    assert.ok(Math.abs(bb - 200) <= 1);
+  });
+
+  it('exposes hsl conversions', () => {
+    const [r, g, b] = color.hslToRgb(0, 100, 50);
+    assert.strictEqual(r, 255);
+    assert.strictEqual(g, 0);
+    assert.strictEqual(b, 0);
+  });
+});
+
 // ── colorScale ──
 
 describe('colorScale', () => {
