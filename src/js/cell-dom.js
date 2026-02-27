@@ -32,7 +32,7 @@ function cellHeaderHTML(type, id) {
   </div>`;
 }
 
-export function createCellEl(type, id) {
+export function createCellEl(type, id, initialCode) {
   const div = document.createElement('div');
   div.className = 'cell';
   div.dataset.id = id;
@@ -50,7 +50,7 @@ export function createCellEl(type, id) {
 
     div.querySelector('.cell-type').addEventListener('click', () => div.classList.toggle('collapsed'));
     const editorWrap = div.querySelector('.editor-wrap');
-    const editor = createEditor(editorWrap, id, '', 'code', (code) => {
+    const editor = createEditor(editorWrap, id, initialCode || '', 'code', (code) => {
       const cell = S.cells.find(c => c.id === id);
       if (cell) cell.code = code;
       onCodeEdit(id);
@@ -71,7 +71,7 @@ export function createCellEl(type, id) {
     const editorWrap = div.querySelector('.editor-wrap');
     div.querySelector('.cell-type').addEventListener('click', () => div.classList.toggle('collapsed'));
 
-    const editor = createEditor(editorWrap, id, '', 'css', (code) => {
+    const editor = createEditor(editorWrap, id, initialCode || '', 'css', (code) => {
       const cell = S.cells.find(c => c.id === id);
       if (cell) cell.code = code;
       onCssEdit(id);
@@ -113,7 +113,7 @@ export function createCellEl(type, id) {
     const editorWrap = div.querySelector('.editor-wrap');
     div.querySelector('.cell-type').addEventListener('click', () => div.classList.toggle('collapsed'));
 
-    const editor = createEditor(editorWrap, id, '', 'html', (code) => {
+    const editor = createEditor(editorWrap, id, initialCode || '', 'html', (code) => {
       const cell = S.cells.find(c => c.id === id);
       if (cell) cell.code = code;
       onHtmlEdit(id);

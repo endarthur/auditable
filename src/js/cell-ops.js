@@ -17,7 +17,7 @@ export function addCell(type, code = '', afterId = null, beforeId = null) {
     defines: new Set(),
     uses: new Set(),
     error: null,
-    el: createCellEl(type, id)
+    el: createCellEl(type, id, code)
   };
 
   const nb = $('#notebook');
@@ -48,7 +48,7 @@ export function addCell(type, code = '', afterId = null, beforeId = null) {
     nb.appendChild(cell.el);
   }
 
-  // set code
+  // set code (CM6 editors receive initialCode via createCellEl; only md needs post-init setup)
   if (code) {
     if (type === 'md') {
       const ta = cell.el.querySelector('textarea');
@@ -56,9 +56,6 @@ export function addCell(type, code = '', afterId = null, beforeId = null) {
       autoResize({ target: ta });
       cell.el.querySelector('.cell-md-view').innerHTML = renderMd(code);
     } else {
-      // code, css, html — use CM6 editor
-      const editor = getEditor(id);
-      if (editor) editor.setCode(code);
       if (type === 'code' && isManual(code)) cell.el.classList.add('manual');
     }
   }
@@ -130,22 +127,19 @@ export function convertCell(id, newType) {
   const oldEditor = getEditor(id);
   if (oldEditor) oldEditor.destroy();
 
-  // create new cell element
-  const newEl = createCellEl(newType, id);
+  // create new cell element (CM6 editors receive code via initialCode)
+  const newEl = createCellEl(newType, id, code);
   cell.el.replaceWith(newEl);
   cell.el = newEl;
   cell.type = newType;
   cell.code = code;
 
-  // set code
+  // set code (only md needs post-init setup; CM6 editors already have the code)
   if (newType === 'md') {
     const ta = newEl.querySelector('textarea');
     ta.value = code;
     autoResize({ target: ta });
     newEl.querySelector('.cell-md-view').innerHTML = renderMd(code);
-  } else {
-    const editor = getEditor(id);
-    if (editor) editor.setCode(code);
   }
 
   if (newType === 'css') {
