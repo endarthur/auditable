@@ -39,12 +39,39 @@ export function parse(tokens) {
       else if (at(TOK.KW, 'subroutine')) body.push(parseSubroutine());
       else if (at(TOK.KW, 'import')) body.push(parseImport());
       else if (at(TOK.KW, 'export')) { pos++; body.push(parseFunction(true)); }
+      else if (at(TOK.KW, 'layout')) body.push(parseLayout());
       else throw new SyntaxError(`Unexpected "${cur().value}" at ${cur().line}:${cur().col}`);
     }
     return { type: 'Program', body };
   }
 
   function isLocalContext() { return false; } // globals only at top level
+
+  function parseLayout() {
+    eat(TOK.KW, 'layout');
+    const packed = maybe(TOK.KW, 'packed');
+    const name = eat(TOK.ID).value;
+    const fields = [];
+    while (!at(TOK.KW, 'end') && !at(TOK.EOF)) {
+      const fnames = [eat(TOK.ID).value];
+      while (at(TOK.PUNC, ',') && tokens[pos + 1] && tokens[pos + 1].type === TOK.ID &&
+             tokens[pos + 2] && (tokens[pos + 2].value === ',' || tokens[pos + 2].value === ':')) {
+        pos++; // skip comma
+        fnames.push(eat(TOK.ID).value);
+      }
+      eat(TOK.PUNC, ':');
+      // Accept KW (primitive types) or ID (layout names) in type position
+      const ftok = cur();
+      let ftype;
+      if (ftok.type === TOK.KW) { ftype = eat(TOK.KW).value; }
+      else if (ftok.type === TOK.ID) { ftype = eat(TOK.ID).value; }
+      else throw new SyntaxError(`Expected type after ':' but got "${ftok.value}" at ${ftok.line}:${ftok.col}`);
+      for (const fn of fnames) fields.push({ name: fn, ftype });
+    }
+    eat(TOK.KW, 'end');
+    maybe(TOK.KW, 'layout'); // optional trailing "layout" after "end"
+    return { type: 'LayoutDecl', name, packed: !!packed, fields };
+  }
 
   // Parse function type signature: function(x: f64, y: f64): f64
   function parseFuncTypeSig() {
@@ -123,15 +150,24 @@ export function parse(tokens) {
       pos++;
       while (!at(TOK.KW, 'begin')) {
         const lnames = [eat(TOK.ID).value];
-        while (maybe(TOK.PUNC, ',')) lnames.push(eat(TOK.ID).value);
+        while (at(TOK.PUNC, ',') && tokens[pos + 1] && tokens[pos + 1].type === TOK.ID &&
+               tokens[pos + 2] && (tokens[pos + 2].value === ',' || tokens[pos + 2].value === ':')) {
+          pos++; // skip ,
+          lnames.push(eat(TOK.ID).value);
+        }
         eat(TOK.PUNC, ':');
         if (at(TOK.KW, 'function')) {
           const funcSig = parseFuncTypeSig();
           for (const ln of lnames) locals.push({ type: 'Local', name: ln, vtype: 'i32', funcSig });
+        } else if (at(TOK.KW, 'layout')) {
+          pos++; // skip 'layout'
+          const layoutName = eat(TOK.ID).value;
+          for (const ln of lnames) locals.push({ type: 'Local', name: ln, vtype: 'i32', layoutType: layoutName });
         } else {
           const lt = eat(TOK.KW).value;
           for (const ln of lnames) locals.push({ type: 'Local', name: ln, vtype: lt });
         }
+        maybe(TOK.PUNC, ','); // consume comma between local groups
       }
     }
     eat(TOK.KW, 'begin');
@@ -151,15 +187,24 @@ export function parse(tokens) {
       pos++;
       while (!at(TOK.KW, 'begin')) {
         const lnames = [eat(TOK.ID).value];
-        while (maybe(TOK.PUNC, ',')) lnames.push(eat(TOK.ID).value);
+        while (at(TOK.PUNC, ',') && tokens[pos + 1] && tokens[pos + 1].type === TOK.ID &&
+               tokens[pos + 2] && (tokens[pos + 2].value === ',' || tokens[pos + 2].value === ':')) {
+          pos++; // skip ,
+          lnames.push(eat(TOK.ID).value);
+        }
         eat(TOK.PUNC, ':');
         if (at(TOK.KW, 'function')) {
           const funcSig = parseFuncTypeSig();
           for (const ln of lnames) locals.push({ type: 'Local', name: ln, vtype: 'i32', funcSig });
+        } else if (at(TOK.KW, 'layout')) {
+          pos++; // skip 'layout'
+          const layoutName = eat(TOK.ID).value;
+          for (const ln of lnames) locals.push({ type: 'Local', name: ln, vtype: 'i32', layoutType: layoutName });
         } else {
           const lt = eat(TOK.KW).value;
           for (const ln of lnames) locals.push({ type: 'Local', name: ln, vtype: lt });
         }
+        maybe(TOK.PUNC, ','); // consume comma between local groups
       }
     }
     eat(TOK.KW, 'begin');
@@ -184,6 +229,14 @@ export function parse(tokens) {
       if (at(TOK.KW, 'function')) {
         const funcSig = parseFuncTypeSig();
         for (const n of names) params.push({ type: 'Param', name: n, vtype: 'i32', isArray: false, arrayDims: null, funcSig });
+        maybe(TOK.PUNC, ','); // consume comma between param groups
+        continue;
+      }
+      // layout type: ptr: layout Sphere
+      if (at(TOK.KW, 'layout')) {
+        pos++; // skip 'layout'
+        const layoutName = eat(TOK.ID).value;
+        for (const n of names) params.push({ type: 'Param', name: n, vtype: 'i32', isArray: false, arrayDims: null, layoutType: layoutName });
         maybe(TOK.PUNC, ','); // consume comma between param groups
         continue;
       }

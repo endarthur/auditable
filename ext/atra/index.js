@@ -12,6 +12,7 @@ const ATRA_KEYWORDS = new Set([
   'function','subroutine','begin','end','var','const','if','then','else',
   'for','while','do','break','and','or','not','mod','import','export',
   'call','array','true','false','from','tailcall','return',
+  'layout','packed',
 ]);
 
 const ATRA_TYPES = new Set(['i32','i64','f32','f64','f64x2','f32x4','i32x4','i64x2']);
@@ -467,12 +468,39 @@ function parse(tokens) {
       else if (at(TOK.KW, 'subroutine')) body.push(parseSubroutine());
       else if (at(TOK.KW, 'import')) body.push(parseImport());
       else if (at(TOK.KW, 'export')) { pos++; body.push(parseFunction(true)); }
+      else if (at(TOK.KW, 'layout')) body.push(parseLayout());
       else throw new SyntaxError(`Unexpected "${cur().value}" at ${cur().line}:${cur().col}`);
     }
     return { type: 'Program', body };
   }
 
   function isLocalContext() { return false; } // globals only at top level
+
+  function parseLayout() {
+    eat(TOK.KW, 'layout');
+    const packed = maybe(TOK.KW, 'packed');
+    const name = eat(TOK.ID).value;
+    const fields = [];
+    while (!at(TOK.KW, 'end') && !at(TOK.EOF)) {
+      const fnames = [eat(TOK.ID).value];
+      while (at(TOK.PUNC, ',') && tokens[pos + 1] && tokens[pos + 1].type === TOK.ID &&
+             tokens[pos + 2] && (tokens[pos + 2].value === ',' || tokens[pos + 2].value === ':')) {
+        pos++; // skip comma
+        fnames.push(eat(TOK.ID).value);
+      }
+      eat(TOK.PUNC, ':');
+      // Accept KW (primitive types) or ID (layout names) in type position
+      const ftok = cur();
+      let ftype;
+      if (ftok.type === TOK.KW) { ftype = eat(TOK.KW).value; }
+      else if (ftok.type === TOK.ID) { ftype = eat(TOK.ID).value; }
+      else throw new SyntaxError(`Expected type after ':' but got "${ftok.value}" at ${ftok.line}:${ftok.col}`);
+      for (const fn of fnames) fields.push({ name: fn, ftype });
+    }
+    eat(TOK.KW, 'end');
+    maybe(TOK.KW, 'layout'); // optional trailing "layout" after "end"
+    return { type: 'LayoutDecl', name, packed: !!packed, fields };
+  }
 
   // Parse function type signature: function(x: f64, y: f64): f64
   function parseFuncTypeSig() {
@@ -551,15 +579,24 @@ function parse(tokens) {
       pos++;
       while (!at(TOK.KW, 'begin')) {
         const lnames = [eat(TOK.ID).value];
-        while (maybe(TOK.PUNC, ',')) lnames.push(eat(TOK.ID).value);
+        while (at(TOK.PUNC, ',') && tokens[pos + 1] && tokens[pos + 1].type === TOK.ID &&
+               tokens[pos + 2] && (tokens[pos + 2].value === ',' || tokens[pos + 2].value === ':')) {
+          pos++; // skip ,
+          lnames.push(eat(TOK.ID).value);
+        }
         eat(TOK.PUNC, ':');
         if (at(TOK.KW, 'function')) {
           const funcSig = parseFuncTypeSig();
           for (const ln of lnames) locals.push({ type: 'Local', name: ln, vtype: 'i32', funcSig });
+        } else if (at(TOK.KW, 'layout')) {
+          pos++; // skip 'layout'
+          const layoutName = eat(TOK.ID).value;
+          for (const ln of lnames) locals.push({ type: 'Local', name: ln, vtype: 'i32', layoutType: layoutName });
         } else {
           const lt = eat(TOK.KW).value;
           for (const ln of lnames) locals.push({ type: 'Local', name: ln, vtype: lt });
         }
+        maybe(TOK.PUNC, ','); // consume comma between local groups
       }
     }
     eat(TOK.KW, 'begin');
@@ -579,15 +616,24 @@ function parse(tokens) {
       pos++;
       while (!at(TOK.KW, 'begin')) {
         const lnames = [eat(TOK.ID).value];
-        while (maybe(TOK.PUNC, ',')) lnames.push(eat(TOK.ID).value);
+        while (at(TOK.PUNC, ',') && tokens[pos + 1] && tokens[pos + 1].type === TOK.ID &&
+               tokens[pos + 2] && (tokens[pos + 2].value === ',' || tokens[pos + 2].value === ':')) {
+          pos++; // skip ,
+          lnames.push(eat(TOK.ID).value);
+        }
         eat(TOK.PUNC, ':');
         if (at(TOK.KW, 'function')) {
           const funcSig = parseFuncTypeSig();
           for (const ln of lnames) locals.push({ type: 'Local', name: ln, vtype: 'i32', funcSig });
+        } else if (at(TOK.KW, 'layout')) {
+          pos++; // skip 'layout'
+          const layoutName = eat(TOK.ID).value;
+          for (const ln of lnames) locals.push({ type: 'Local', name: ln, vtype: 'i32', layoutType: layoutName });
         } else {
           const lt = eat(TOK.KW).value;
           for (const ln of lnames) locals.push({ type: 'Local', name: ln, vtype: lt });
         }
+        maybe(TOK.PUNC, ','); // consume comma between local groups
       }
     }
     eat(TOK.KW, 'begin');
@@ -612,6 +658,14 @@ function parse(tokens) {
       if (at(TOK.KW, 'function')) {
         const funcSig = parseFuncTypeSig();
         for (const n of names) params.push({ type: 'Param', name: n, vtype: 'i32', isArray: false, arrayDims: null, funcSig });
+        maybe(TOK.PUNC, ','); // consume comma between param groups
+        continue;
+      }
+      // layout type: ptr: layout Sphere
+      if (at(TOK.KW, 'layout')) {
+        pos++; // skip 'layout'
+        const layoutName = eat(TOK.ID).value;
+        for (const n of names) params.push({ type: 'Param', name: n, vtype: 'i32', isArray: false, arrayDims: null, layoutType: layoutName });
         maybe(TOK.PUNC, ','); // consume comma between param groups
         continue;
       }
@@ -1231,6 +1285,71 @@ function codegen(ast, interpValues, userImports) {
     }
     else if (node.type === 'Function' || node.type === 'Subroutine') { functions.push(node); localFuncNames.add(node.name); }
     else if (node.type === 'ImportDecl') imports.push(node);
+    // LayoutDecl handled below
+  }
+
+  // ── Build layout table ──
+  const layouts = {};
+  for (const node of ast.body) {
+    if (node.type !== 'LayoutDecl') continue;
+    const layout = { fields: {}, __align: 1, packed: node.packed };
+    let offset = 0;
+    for (const f of node.fields) {
+      let size, align, fieldLayout;
+      if (layouts[f.ftype]) {
+        fieldLayout = f.ftype;
+        size = layouts[f.ftype].__size;
+        align = node.packed ? 1 : layouts[f.ftype].__align;
+      } else {
+        size = typeSize(f.ftype);
+        align = node.packed ? 1 : size;
+      }
+      if (!node.packed) offset = (offset + align - 1) & ~(align - 1);
+      layout.fields[f.name] = { offset, type: f.ftype, size };
+      if (fieldLayout) layout.fields[f.name].layout = fieldLayout;
+      offset += size;
+      if (align > layout.__align) layout.__align = align;
+    }
+    if (!node.packed) offset = (offset + layout.__align - 1) & ~(layout.__align - 1);
+    layout.__size = offset;
+    layouts[node.name] = layout;
+  }
+
+  function resolveLayoutChain(layoutName, fieldParts) {
+    let layout = layouts[layoutName];
+    let offset = 0;
+    let lastType = null;
+    let lastLayout = null;
+
+    for (let i = 0; i < fieldParts.length; i++) {
+      const fname = fieldParts[i];
+      if (fname === '__size') return { offset: layout.__size, type: 'i32', layout: null };
+      if (fname === '__align') return { offset: layout.__align, type: 'i32', layout: null };
+      const field = layout.fields[fname];
+      if (!field) throw new Error(`Layout ${layoutName} has no field '${fname}'`);
+      offset += field.offset;
+      lastType = field.type;
+      lastLayout = field.layout || null;
+      if (lastLayout && i < fieldParts.length - 1) {
+        layout = layouts[lastLayout];
+        layoutName = lastLayout;
+      }
+    }
+    return { offset, type: lastType, layout: lastLayout };
+  }
+
+  function serializeLayouts() {
+    const result = {};
+    for (const [name, layout] of Object.entries(layouts)) {
+      const obj = {};
+      for (const [fname, field] of Object.entries(layout.fields)) {
+        obj[fname] = field.offset;
+      }
+      obj.__size = layout.__size;
+      obj.__align = layout.__align;
+      result[name] = obj;
+    }
+    return result;
   }
 
   // Math builtins: imported from JS Math object. Value = param count.
@@ -1514,7 +1633,8 @@ function codegen(ast, interpValues, userImports) {
 
   const bytes = w.toUint8Array();
   const table = tableFuncs.length > 0 ? { ...tableSlot } : null;
-  return { bytes, table };
+  const layoutsMeta = Object.keys(layouts).length > 0 ? serializeLayouts() : null;
+  return { bytes, table, layouts: layoutsMeta };
 
   // ── Helper: emit constant init expression ──
   function emitConstExpr(s, node, vtype) {
@@ -1574,6 +1694,7 @@ function codegen(ast, interpValues, userImports) {
         elemType: p.isArray ? p.vtype : null  // element type for load/store
       };
       if (p.funcSig) entry.funcSig = p.funcSig;
+      if (p.layoutType) entry.layoutType = p.layoutType;
       localMap[p.name] = entry;
     }
     const declaredLocals = [...fn.locals];
@@ -1585,6 +1706,7 @@ function codegen(ast, interpValues, userImports) {
     for (const loc of declaredLocals) {
       const entry = { idx: localIdx++, vtype: loc.vtype };
       if (loc.funcSig) entry.funcSig = loc.funcSig;
+      if (loc.layoutType) entry.layoutType = loc.layoutType;
       localMap[loc.name] = entry;
     }
 
@@ -1615,6 +1737,29 @@ function codegen(ast, interpValues, userImports) {
       switch (stmt.type) {
         case 'Assign': {
           const target = stmt.name;
+
+          // Layout field store: s.radius := ..., rec.point.x := ...
+          if (target.includes('.')) {
+            const parts = target.split('.');
+            const first = parts[0];
+            const info = localMap[first] || (globalIndex[first] !== undefined ? { layoutType: globals[globalIndex[first]].layoutType } : null);
+            if (info && info.layoutType) {
+              const resolved = resolveLayoutChain(info.layoutType, parts.slice(1));
+              // emit address: get base pointer + offset
+              if (localMap[first]) { bw.byte(OP_LOCAL_GET); bw.u32(localMap[first].idx); }
+              else { bw.byte(OP_GLOBAL_GET); bw.u32(globalIndex[first]); }
+              if (resolved.offset > 0) {
+                bw.byte(OP_I32_CONST); bw.s32(resolved.offset);
+                bw.byte(OP_I32_ADD);
+              }
+              // emit value
+              emitExpr(stmt.value, resolved.layout ? 'i32' : resolved.type);
+              // emit store
+              emitStore(resolved.layout ? 'i32' : resolved.type);
+              break;
+            }
+          }
+
           // Assignment to function name = set return variable
           if (isFunc && target === fn.name) {
             emitExpr(stmt.value, retType);
@@ -1858,7 +2003,26 @@ function codegen(ast, interpValues, userImports) {
           return 'i32';
         }
         case 'FuncRef': return 'i32';
-        case 'Ident': return resolveType(expr.name) || 'f64';
+        case 'Ident': {
+          const name = expr.name;
+          if (name.includes('.')) {
+            const parts = name.split('.');
+            const first = parts[0];
+            // Layout constant: Sphere.__size, Sphere.radius
+            if (layouts[first]) {
+              if (parts[1] === '__size' || parts[1] === '__align') return 'i32';
+              const resolved = resolveLayoutChain(first, parts.slice(1));
+              return resolved.layout ? 'i32' : resolved.type;
+            }
+            // Layout-typed variable: v.x, v.center.x
+            const info = localMap[first];
+            if (info && info.layoutType) {
+              const resolved = resolveLayoutChain(info.layoutType, parts.slice(1));
+              return resolved.layout ? 'i32' : resolved.type;
+            }
+          }
+          return resolveType(name) || 'f64';
+        }
         case 'BinOp': {
           const op = expr.op;
           if (op === '==' || op === '/=' || op === '<' || op === '>' || op === '<=' || op === '>='
@@ -1927,6 +2091,46 @@ function codegen(ast, interpValues, userImports) {
         }
         case 'Ident': {
           const name = expr.name;
+
+          // Dotted layout access: v.x, v.center.x, Sphere.__size, Sphere.radius
+          if (name.includes('.')) {
+            const parts = name.split('.');
+            const first = parts[0];
+
+            // Case 1: Layout constant — Layout.__size, Layout.__align, Layout.field offset
+            if (layouts[first]) {
+              if (parts[1] === '__size') {
+                bw.byte(OP_I32_CONST); bw.s32(layouts[first].__size);
+                break;
+              }
+              if (parts[1] === '__align') {
+                bw.byte(OP_I32_CONST); bw.s32(layouts[first].__align);
+                break;
+              }
+              const resolved = resolveLayoutChain(first, parts.slice(1));
+              bw.byte(OP_I32_CONST); bw.s32(resolved.offset);
+              break;
+            }
+
+            // Case 2: Layout-typed variable field access — v.x, v.center.x
+            const info = localMap[first] || (globalIndex[first] !== undefined ? { layoutType: globals[globalIndex[first]].layoutType, globalIdx: globalIndex[first] } : null);
+            if (info && info.layoutType) {
+              const resolved = resolveLayoutChain(info.layoutType, parts.slice(1));
+              // emit base pointer
+              if (localMap[first]) { bw.byte(OP_LOCAL_GET); bw.u32(localMap[first].idx); }
+              else { bw.byte(OP_GLOBAL_GET); bw.u32(info.globalIdx); }
+              // add offset
+              if (resolved.offset > 0) {
+                bw.byte(OP_I32_CONST); bw.s32(resolved.offset);
+                bw.byte(OP_I32_ADD);
+              }
+              // If final field is a nested layout, leave pointer on stack
+              if (resolved.layout) break;
+              emitLoad(resolved.type);
+              break;
+            }
+          }
+
           if (isFunc && name === fn.name) {
             // Fortran convention: bare function name reads the return accumulator
             bw.byte(OP_LOCAL_GET); bw.u32(localMap['$_return'].idx);
@@ -2676,9 +2880,11 @@ function compileAndInstantiate(strings, values, userImports) {
     source += strings[i + 1];
   }
 
-  const { bytes, table } = compileSource(source, values, userImports);
+  const { bytes, table, layouts } = compileSource(source, values, userImports);
   const instance = instantiate(bytes, userImports, values);
-  return wrapExports(instance, table);
+  const exports = wrapExports(instance, table);
+  if (layouts) exports.__layouts = layouts;
+  return exports;
 }
 
 function atra(stringsOrOpts, ...values) {
@@ -2701,8 +2907,53 @@ atra.compile = function(source, userImports) {
 
 atra.parse = function(source) {
   const tokens = lex(source);
-  return parse(tokens);
+  const ast = parse(tokens);
+  // Compute layout metadata from LayoutDecl nodes
+  ast.layouts = computeLayouts(ast);
+  return ast;
 };
+
+function computeLayouts(ast) {
+  const result = {};
+  const layouts = {};
+  for (const node of ast.body) {
+    if (node.type !== 'LayoutDecl') continue;
+    const layout = { fields: {}, __align: 1, packed: node.packed };
+    let offset = 0;
+    for (const f of node.fields) {
+      let size, align, fieldLayout;
+      if (layouts[f.ftype]) {
+        fieldLayout = f.ftype;
+        size = layouts[f.ftype].__size;
+        align = node.packed ? 1 : layouts[f.ftype].__align;
+      } else {
+        size = typeSizeForLayout(f.ftype);
+        align = node.packed ? 1 : size;
+      }
+      if (!node.packed) offset = (offset + align - 1) & ~(align - 1);
+      layout.fields[f.name] = { offset, type: f.ftype, size };
+      if (fieldLayout) layout.fields[f.name].layout = fieldLayout;
+      offset += size;
+      if (align > layout.__align) layout.__align = align;
+    }
+    if (!node.packed) offset = (offset + layout.__align - 1) & ~(layout.__align - 1);
+    layout.__size = offset;
+    layouts[node.name] = layout;
+    // Serialize for JS
+    const obj = {};
+    for (const [fname, field] of Object.entries(layout.fields)) obj[fname] = field.offset;
+    obj.__size = layout.__size;
+    obj.__align = layout.__align;
+    result[node.name] = obj;
+  }
+  return Object.keys(result).length > 0 ? result : null;
+}
+
+function typeSizeForLayout(t) {
+  if (t === 'i32' || t === 'f32') return 4;
+  if (t === 'i64' || t === 'f64') return 8;
+  throw new Error('Unknown type in layout: ' + t);
+}
 
 atra.dump = function(source) {
   const { bytes } = compileSource(source, null, null);
@@ -2711,9 +2962,11 @@ atra.dump = function(source) {
 
 atra.run = function(source, userImports) {
   userImports = normalizeMemoryImport(userImports);
-  const { bytes, table } = compileSource(source, null, userImports);
+  const { bytes, table, layouts } = compileSource(source, null, userImports);
   const instance = instantiate(bytes, userImports, null);
-  return wrapExports(instance, table);
+  const exports = wrapExports(instance, table);
+  if (layouts) exports.__layouts = layouts;
+  return exports;
 };
 
 // ── Self-registration ──

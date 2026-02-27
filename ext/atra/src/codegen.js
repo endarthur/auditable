@@ -102,6 +102,71 @@ export function codegen(ast, interpValues, userImports) {
     }
     else if (node.type === 'Function' || node.type === 'Subroutine') { functions.push(node); localFuncNames.add(node.name); }
     else if (node.type === 'ImportDecl') imports.push(node);
+    // LayoutDecl handled below
+  }
+
+  // ── Build layout table ──
+  const layouts = {};
+  for (const node of ast.body) {
+    if (node.type !== 'LayoutDecl') continue;
+    const layout = { fields: {}, __align: 1, packed: node.packed };
+    let offset = 0;
+    for (const f of node.fields) {
+      let size, align, fieldLayout;
+      if (layouts[f.ftype]) {
+        fieldLayout = f.ftype;
+        size = layouts[f.ftype].__size;
+        align = node.packed ? 1 : layouts[f.ftype].__align;
+      } else {
+        size = typeSize(f.ftype);
+        align = node.packed ? 1 : size;
+      }
+      if (!node.packed) offset = (offset + align - 1) & ~(align - 1);
+      layout.fields[f.name] = { offset, type: f.ftype, size };
+      if (fieldLayout) layout.fields[f.name].layout = fieldLayout;
+      offset += size;
+      if (align > layout.__align) layout.__align = align;
+    }
+    if (!node.packed) offset = (offset + layout.__align - 1) & ~(layout.__align - 1);
+    layout.__size = offset;
+    layouts[node.name] = layout;
+  }
+
+  function resolveLayoutChain(layoutName, fieldParts) {
+    let layout = layouts[layoutName];
+    let offset = 0;
+    let lastType = null;
+    let lastLayout = null;
+
+    for (let i = 0; i < fieldParts.length; i++) {
+      const fname = fieldParts[i];
+      if (fname === '__size') return { offset: layout.__size, type: 'i32', layout: null };
+      if (fname === '__align') return { offset: layout.__align, type: 'i32', layout: null };
+      const field = layout.fields[fname];
+      if (!field) throw new Error(`Layout ${layoutName} has no field '${fname}'`);
+      offset += field.offset;
+      lastType = field.type;
+      lastLayout = field.layout || null;
+      if (lastLayout && i < fieldParts.length - 1) {
+        layout = layouts[lastLayout];
+        layoutName = lastLayout;
+      }
+    }
+    return { offset, type: lastType, layout: lastLayout };
+  }
+
+  function serializeLayouts() {
+    const result = {};
+    for (const [name, layout] of Object.entries(layouts)) {
+      const obj = {};
+      for (const [fname, field] of Object.entries(layout.fields)) {
+        obj[fname] = field.offset;
+      }
+      obj.__size = layout.__size;
+      obj.__align = layout.__align;
+      result[name] = obj;
+    }
+    return result;
   }
 
   // Math builtins: imported from JS Math object. Value = param count.
@@ -385,7 +450,8 @@ export function codegen(ast, interpValues, userImports) {
 
   const bytes = w.toUint8Array();
   const table = tableFuncs.length > 0 ? { ...tableSlot } : null;
-  return { bytes, table };
+  const layoutsMeta = Object.keys(layouts).length > 0 ? serializeLayouts() : null;
+  return { bytes, table, layouts: layoutsMeta };
 
   // ── Helper: emit constant init expression ──
   function emitConstExpr(s, node, vtype) {
@@ -445,6 +511,7 @@ export function codegen(ast, interpValues, userImports) {
         elemType: p.isArray ? p.vtype : null  // element type for load/store
       };
       if (p.funcSig) entry.funcSig = p.funcSig;
+      if (p.layoutType) entry.layoutType = p.layoutType;
       localMap[p.name] = entry;
     }
     const declaredLocals = [...fn.locals];
@@ -456,6 +523,7 @@ export function codegen(ast, interpValues, userImports) {
     for (const loc of declaredLocals) {
       const entry = { idx: localIdx++, vtype: loc.vtype };
       if (loc.funcSig) entry.funcSig = loc.funcSig;
+      if (loc.layoutType) entry.layoutType = loc.layoutType;
       localMap[loc.name] = entry;
     }
 
@@ -486,6 +554,29 @@ export function codegen(ast, interpValues, userImports) {
       switch (stmt.type) {
         case 'Assign': {
           const target = stmt.name;
+
+          // Layout field store: s.radius := ..., rec.point.x := ...
+          if (target.includes('.')) {
+            const parts = target.split('.');
+            const first = parts[0];
+            const info = localMap[first] || (globalIndex[first] !== undefined ? { layoutType: globals[globalIndex[first]].layoutType } : null);
+            if (info && info.layoutType) {
+              const resolved = resolveLayoutChain(info.layoutType, parts.slice(1));
+              // emit address: get base pointer + offset
+              if (localMap[first]) { bw.byte(OP_LOCAL_GET); bw.u32(localMap[first].idx); }
+              else { bw.byte(OP_GLOBAL_GET); bw.u32(globalIndex[first]); }
+              if (resolved.offset > 0) {
+                bw.byte(OP_I32_CONST); bw.s32(resolved.offset);
+                bw.byte(OP_I32_ADD);
+              }
+              // emit value
+              emitExpr(stmt.value, resolved.layout ? 'i32' : resolved.type);
+              // emit store
+              emitStore(resolved.layout ? 'i32' : resolved.type);
+              break;
+            }
+          }
+
           // Assignment to function name = set return variable
           if (isFunc && target === fn.name) {
             emitExpr(stmt.value, retType);
@@ -729,7 +820,26 @@ export function codegen(ast, interpValues, userImports) {
           return 'i32';
         }
         case 'FuncRef': return 'i32';
-        case 'Ident': return resolveType(expr.name) || 'f64';
+        case 'Ident': {
+          const name = expr.name;
+          if (name.includes('.')) {
+            const parts = name.split('.');
+            const first = parts[0];
+            // Layout constant: Sphere.__size, Sphere.radius
+            if (layouts[first]) {
+              if (parts[1] === '__size' || parts[1] === '__align') return 'i32';
+              const resolved = resolveLayoutChain(first, parts.slice(1));
+              return resolved.layout ? 'i32' : resolved.type;
+            }
+            // Layout-typed variable: v.x, v.center.x
+            const info = localMap[first];
+            if (info && info.layoutType) {
+              const resolved = resolveLayoutChain(info.layoutType, parts.slice(1));
+              return resolved.layout ? 'i32' : resolved.type;
+            }
+          }
+          return resolveType(name) || 'f64';
+        }
         case 'BinOp': {
           const op = expr.op;
           if (op === '==' || op === '/=' || op === '<' || op === '>' || op === '<=' || op === '>='
@@ -798,6 +908,46 @@ export function codegen(ast, interpValues, userImports) {
         }
         case 'Ident': {
           const name = expr.name;
+
+          // Dotted layout access: v.x, v.center.x, Sphere.__size, Sphere.radius
+          if (name.includes('.')) {
+            const parts = name.split('.');
+            const first = parts[0];
+
+            // Case 1: Layout constant — Layout.__size, Layout.__align, Layout.field offset
+            if (layouts[first]) {
+              if (parts[1] === '__size') {
+                bw.byte(OP_I32_CONST); bw.s32(layouts[first].__size);
+                break;
+              }
+              if (parts[1] === '__align') {
+                bw.byte(OP_I32_CONST); bw.s32(layouts[first].__align);
+                break;
+              }
+              const resolved = resolveLayoutChain(first, parts.slice(1));
+              bw.byte(OP_I32_CONST); bw.s32(resolved.offset);
+              break;
+            }
+
+            // Case 2: Layout-typed variable field access — v.x, v.center.x
+            const info = localMap[first] || (globalIndex[first] !== undefined ? { layoutType: globals[globalIndex[first]].layoutType, globalIdx: globalIndex[first] } : null);
+            if (info && info.layoutType) {
+              const resolved = resolveLayoutChain(info.layoutType, parts.slice(1));
+              // emit base pointer
+              if (localMap[first]) { bw.byte(OP_LOCAL_GET); bw.u32(localMap[first].idx); }
+              else { bw.byte(OP_GLOBAL_GET); bw.u32(info.globalIdx); }
+              // add offset
+              if (resolved.offset > 0) {
+                bw.byte(OP_I32_CONST); bw.s32(resolved.offset);
+                bw.byte(OP_I32_ADD);
+              }
+              // If final field is a nested layout, leave pointer on stack
+              if (resolved.layout) break;
+              emitLoad(resolved.type);
+              break;
+            }
+          }
+
           if (isFunc && name === fn.name) {
             // Fortran convention: bare function name reads the return accumulator
             bw.byte(OP_LOCAL_GET); bw.u32(localMap['$_return'].idx);
