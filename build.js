@@ -215,7 +215,7 @@ function assemble(jsCode) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Auditable</title>
-<style>
+<style id="auditable-css">
 ${css}
 </style>
 </head>
