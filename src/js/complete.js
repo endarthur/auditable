@@ -198,6 +198,7 @@ function cursorContext(code, cursor) {
       }
 
       i++;
+      const contentStart = i; // position right after opening backtick
       while (i < code.length) {
         if (code[i] === '\\') { i += 2; continue; }
         if (code[i] === '$' && code[i + 1] === '{') {
@@ -215,7 +216,7 @@ function cursorContext(code, cursor) {
           continue;
         }
         if (code[i] === '`') { i++; break; }
-        if (i >= cursor) return tagName ? { type: 'tagged', lang: tagName } : 'string';
+        if (i >= cursor) return tagName ? { type: 'tagged', lang: tagName, start: contentStart } : 'string';
         i++;
       }
       continue;
@@ -273,7 +274,9 @@ export function getCompletions(code, cursor, cellId) {
     if (lang && lang.completions) {
       const { prefix } = extractPrefix(code, cursor);
       if (!prefix) return { prefix: '', items: [] };
-      const extItems = lang.completions(prefix);
+      const tagCode = code.slice(ctx.start);
+      const tagCursor = cursor - ctx.start;
+      const extItems = lang.completions(tagCode, tagCursor, prefix);
       // score and annotate items
       const items = [];
       for (const it of extItems) {
@@ -409,6 +412,7 @@ function audCompletionSource(context) {
 
   return {
     from: cursor - result.prefix.length,
+    filter: false, // we do our own fuzzy matching — don't let CM6 re-filter
     options: result.items.map(item => ({
       label: item.text,
       type: KIND_MAP[item.kind] || 'text',
@@ -501,21 +505,8 @@ function esc(s) {
 // signature hint — simple positioned div approach
 let _sigHint = null;
 
-function updateSigHint(view) {
-  const code = view.state.doc.toString();
-  const sel = view.state.selection.main;
-  if (!sel.empty) { dismissSigHint(); return; }
-
-  const ctx = cursorContext(code, sel.head);
-  if (ctx !== 'code') { dismissSigHint(); return; }
-
-  const call = detectCallContext(code, sel.head);
-  if (!call) { dismissSigHint(); return; }
-
-  const help = BUILTIN_HELP[call.fnName];
-  if (!help) { dismissSigHint(); return; }
-
-  const coords = view.coordsAtPos(call.parenPos);
+function showSigHintAt(view, parenPos, sig, desc, paramIdx) {
+  const coords = view.coordsAtPos(parenPos);
   if (!coords) { dismissSigHint(); return; }
 
   if (!_sigHint) {
@@ -524,20 +515,54 @@ function updateSigHint(view) {
     document.body.appendChild(_sigHint);
   }
 
-  const sigHtml = highlightParam(help.sig, call.paramIdx);
-  _sigHint.innerHTML = `<span class="ac-sig-fn">${sigHtml}</span><span class="ac-sig-desc">${esc(help.desc)}</span>`;
+  const sigHtml = highlightParam(sig, paramIdx);
+  _sigHint.innerHTML = `<span class="ac-sig-fn">${sigHtml}</span><span class="ac-sig-desc">${esc(desc)}</span>`;
   _sigHint.style.display = '';
 
-  // position above the paren
   const hintH = _sigHint.offsetHeight || 20;
   _sigHint.style.position = 'fixed';
   _sigHint.style.left = coords.left + 'px';
   _sigHint.style.top = (coords.top - hintH - 4) + 'px';
 
-  // flip below if it would go above viewport
   if (coords.top - hintH - 4 < 0) {
     _sigHint.style.top = coords.bottom + 4 + 'px';
   }
+}
+
+function updateSigHint(view) {
+  const code = view.state.doc.toString();
+  const sel = view.state.selection.main;
+  if (!sel.empty) { dismissSigHint(); return; }
+
+  const ctx = cursorContext(code, sel.head);
+
+  // tagged template — delegate to extension sig hint
+  if (ctx && typeof ctx === 'object' && ctx.type === 'tagged') {
+    const lang = window._taggedLanguages?.[ctx.lang];
+    if (lang?.sigHint) {
+      const tagCode = code.slice(ctx.start);
+      const tagCursor = sel.head - ctx.start;
+      const hint = lang.sigHint(tagCode, tagCursor);
+      if (hint) {
+        showSigHintAt(view, hint.parenPos + ctx.start, hint.sig, hint.desc || '', hint.paramIdx);
+      } else {
+        dismissSigHint();
+      }
+    } else {
+      dismissSigHint();
+    }
+    return;
+  }
+
+  if (ctx !== 'code') { dismissSigHint(); return; }
+
+  const call = detectCallContext(code, sel.head);
+  if (!call) { dismissSigHint(); return; }
+
+  const help = BUILTIN_HELP[call.fnName];
+  if (!help) { dismissSigHint(); return; }
+
+  showSigHintAt(view, call.parenPos, help.sig, help.desc, call.paramIdx);
 }
 
 function dismissSigHint() {

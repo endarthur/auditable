@@ -422,9 +422,11 @@ button.accent:hover {
 }
 
 /* CM6 editor integration */
+.editor-wrap { outline: none; }
 .editor-wrap .cm-editor {
   border: 1px solid var(--border);
   min-height: 38px;
+  outline: none;
 }
 .editor-wrap .cm-editor.cm-focused {
   border-color: var(--border-hi);
