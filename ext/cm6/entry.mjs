@@ -39,6 +39,7 @@ export {
 
 export {
   indentWithTab,
+  insertNewlineAndIndent,
   toggleComment,
   history,
   undo,
@@ -51,10 +52,18 @@ export {
   syntaxHighlighting,
   HighlightStyle,
   indentOnInput,
+  StreamLanguage,
+  LanguageSupport,
+  indentService,
 } from '@codemirror/language';
 
 export {
+  parseMixed,
+} from '@lezer/common';
+
+export {
   closeBrackets,
+  acceptCompletion,
 } from '@codemirror/autocomplete';
 
 export {

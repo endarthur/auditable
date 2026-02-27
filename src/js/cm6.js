@@ -7,10 +7,11 @@ const {
   keymap, lineNumbers, highlightActiveLine, highlightSpecialChars,
   ViewPlugin, Decoration, WidgetType, drawSelection,
   minimalSetup, javascript, css, html,
-  indentWithTab, toggleComment, history, undo: cm6Undo, redo: cm6Redo,
-  bracketMatching, syntaxHighlighting, HighlightStyle, syntaxTree, indentOnInput,
-  autocompletion, CompletionContext, closeBrackets,
+  indentWithTab, insertNewlineAndIndent, toggleComment, history, undo: cm6Undo, redo: cm6Redo,
+  bracketMatching, syntaxHighlighting, HighlightStyle, syntaxTree, indentOnInput, indentService,
+  autocompletion, CompletionContext, closeBrackets, acceptCompletion,
   tags,
+  StreamLanguage, LanguageSupport, parseMixed,
 } = window.CM6;
 
 // ── GCU THEME ──
@@ -217,83 +218,152 @@ const searchField = StateField.define({
   provide: f => EditorView.decorations.from(f),
 });
 
-// ── TAGGED TEMPLATE HIGHLIGHTER ──
+// ── TAGGED TEMPLATE NESTED LANGUAGE SUPPORT ──
 
-const rehighlightEffect = StateEffect.define();
+// Map our tokenizer types to @lezer/highlight tags
+const _tokenTable = {
+  kw:    tags.keyword,
+  num:   tags.number,
+  cmt:   tags.comment,
+  fn:    tags.function(tags.variableName),
+  const: tags.typeName,
+  op:    tags.operator,
+  punc:  tags.punctuation,
+  str:   tags.string,
+  id:    tags.variableName,
+};
 
-const taggedTemplatePlugin = ViewPlugin.define(view => {
-  return {
-    decorations: buildTaggedDecorations(view),
-    update(update) {
-      if (update.docChanged || update.viewportChanged
-        || update.transactions.some(tr => tr.effects.some(e => e.is(rehighlightEffect)))) {
-        this.decorations = buildTaggedDecorations(update.view);
+// Convert an auditable tokenizer to a CM6 StreamLanguage
+function makeStreamLang(lang) {
+  if (lang._streamLang) return lang._streamLang;
+  const tokenize = lang.tokenize;
+  lang._streamLang = StreamLanguage.define({
+    token(stream) {
+      if (stream.sol()) {
+        stream.lineTokens = tokenize(stream.string);
+        stream.lineTokenIdx = 0;
       }
+      const toks = stream.lineTokens;
+      if (!toks || stream.lineTokenIdx >= toks.length) {
+        stream.skipToEnd();
+        return null;
+      }
+      const tok = toks[stream.lineTokenIdx];
+      stream.lineTokenIdx++;
+      const len = tok.text.length;
+      if (len > 0) {
+        stream.pos += len;
+      } else {
+        stream.pos++;
+      }
+      const type = tok.type;
+      return (type && type in _tokenTable) ? type : null;
     },
-  };
-}, {
-  decorations: v => v.decorations,
-});
+    tokenTable: _tokenTable,
+    indent(state, textAfter, cx) {
+      // preserve previous line's indentation
+      return cx.lineIndent(cx.pos, -1);
+    },
+    startState() { return {}; },
+    copyState(s) { return {}; },
+  });
+  return lang._streamLang;
+}
 
-function buildTaggedDecorations(view) {
-  if (!window._taggedLanguages) return Decoration.none;
-  const builder = [];
-  const tree = syntaxTree(view.state);
-  const doc = view.state.doc.toString();
+// parseMixed nest function for tagged templates
+function nestTaggedTemplates(node, input) {
+  if (node.name !== 'TemplateString') return null;
+  // Must be inside a TaggedTemplateExpression
+  const parent = node.node.parent;
+  if (!parent || parent.name !== 'TaggedTemplateExpression') return null;
 
-  // Walk the syntax tree looking for TaggedTemplateExpression
-  tree.iterate({
-    enter(node) {
-      if (node.name !== 'TaggedTemplateExpression') return;
-      // Get the tag (first child before the template)
-      const tagNode = node.node.firstChild;
-      if (!tagNode) return;
+  // Read tag name from the first child of the parent
+  const tagNode = parent.firstChild;
+  if (!tagNode) return null;
 
-      let tagName = null;
-      if (tagNode.name === 'VariableName') {
-        tagName = doc.slice(tagNode.from, tagNode.to);
-      } else if (tagNode.name === 'CallExpression') {
-        // curried: lang({...})`...`
-        const callee = tagNode.firstChild;
-        if (callee && callee.name === 'VariableName') {
-          tagName = doc.slice(callee.from, callee.to);
-        }
-      }
+  let tagName = null;
+  if (tagNode.name === 'VariableName') {
+    tagName = input.read(tagNode.from, tagNode.to);
+  } else if (tagNode.name === 'CallExpression') {
+    // curried: lang({...})`...`
+    const callee = tagNode.firstChild;
+    if (callee && callee.name === 'VariableName') {
+      tagName = input.read(callee.from, callee.to);
+    }
+  }
 
-      if (!tagName || !window._taggedLanguages[tagName]) return;
-      const lang = window._taggedLanguages[tagName];
-      if (!lang.tokenize) return;
+  if (!tagName || !window._taggedLanguages || !window._taggedLanguages[tagName]) return null;
+  const lang = window._taggedLanguages[tagName];
+  if (!lang.tokenize) return null;
 
-      // Find the template literal (TemplateLiteral node)
-      let tmpl = tagNode.nextSibling;
-      while (tmpl && tmpl.name !== 'TemplateLiteral') tmpl = tmpl.nextSibling;
-      if (!tmpl) return;
+  const streamLang = makeStreamLang(lang);
 
-      // Tokenize string parts of the template literal
-      let child = tmpl.firstChild;
-      while (child) {
-        // String content between interpolations
-        if (child.name === 'TemplateString' || child.name === 'String') {
-          const text = doc.slice(child.from, child.to);
-          const tokens = lang.tokenize(text);
-          let pos = child.from;
-          for (const tok of tokens) {
-            const tokLen = tok.text.length;
-            if (tok.type && tok.type !== 'id' && tokLen > 0) {
-              builder.push(Decoration.mark({ class: 'hl-' + tok.type }).range(pos, pos + tokLen));
-            }
-            pos += tokLen;
+  // Compute overlay ranges: text between backtick/interpolations
+  const contentFrom = node.from + 1; // skip opening backtick
+  const contentTo = node.to - 1;     // skip closing backtick
+  if (contentFrom >= contentTo) return null;
+
+  const overlay = [];
+  let segStart = contentFrom;
+  let child = node.node.firstChild;
+  while (child) {
+    if (child.name === 'Interpolation') {
+      if (segStart < child.from) overlay.push({ from: segStart, to: child.from });
+      segStart = child.to;
+    }
+    child = child.nextSibling;
+  }
+  if (segStart < contentTo) overlay.push({ from: segStart, to: contentTo });
+
+  if (overlay.length === 0) return null;
+  return { parser: streamLang.parser, overlay };
+}
+
+// Base JS language (cached)
+const _baseJs = javascript();
+
+function mixedJavascript() {
+  const wrapped = _baseJs.language.configure({
+    wrap: parseMixed(nestTaggedTemplates),
+  });
+  return new LanguageSupport(wrapped, _baseJs.support);
+}
+
+// indentService for tagged templates — overlay mode doesn't delegate
+// indentation to the nested language, so handle it at the editor level
+const taggedTemplateIndent = indentService.of((cx, pos) => {
+  const tree = syntaxTree(cx.state);
+  // resolve() stays in the outer JS tree; resolveInner() enters overlays
+  // where the parent chain won't reach TemplateString
+  let node = tree.resolve(pos, -1);
+  while (node) {
+    if (node.name === 'TemplateString') {
+      const parent = node.parent;
+      if (parent && parent.name === 'TaggedTemplateExpression') {
+        const tagNode = parent.firstChild;
+        let tagName = null;
+        if (tagNode && tagNode.name === 'VariableName') {
+          tagName = cx.state.doc.sliceString(tagNode.from, tagNode.to);
+        } else if (tagNode && tagNode.name === 'CallExpression') {
+          const callee = tagNode.firstChild;
+          if (callee && callee.name === 'VariableName') {
+            tagName = cx.state.doc.sliceString(callee.from, callee.to);
           }
         }
-        child = child.nextSibling;
+        if (tagName && window._taggedLanguages && window._taggedLanguages[tagName]) {
+          // insertNewlineAndIndent uses simulateBreak — the newline isn't
+          // inserted yet, so lineAt(pos) is the CURRENT line being split.
+          // We want its indentation, not the previous line's.
+          const line = cx.state.doc.lineAt(pos);
+          const m = /^\s*/.exec(line.text);
+          return m ? m[0].length : 0;
+        }
       }
-    },
-  });
-
-  // Sort by from position (required by RangeSetBuilder)
-  builder.sort((a, b) => a.from - b.from || a.value.startSide - b.value.startSide);
-  return Decoration.set(builder);
-}
+    }
+    node = node.parent;
+  }
+  return undefined; // let language indentation handle it
+});
 
 // ── CSS COLOR SWATCH ──
 
@@ -441,7 +511,7 @@ let _onEditorCreated = null; // callback: (cellId, cellType) => void
 export function setOnEditorCreated(fn) { _onEditorCreated = fn; }
 
 function getLangExtension(cellType) {
-  if (cellType === 'code') return javascript();
+  if (cellType === 'code') return mixedJavascript();
   if (cellType === 'css') return css();
   if (cellType === 'html') return html();
   return [];
@@ -476,15 +546,16 @@ export function createEditor(container, cellId, initialCode, cellType, onChange)
     EditorView.lineWrapping,
     // keymaps
     notebookKeymap,
-    keymap.of([indentWithTab]),
+    keymap.of([{ key: 'Enter', run: insertNewlineAndIndent }]),
+    keymap.of([{ key: 'Tab', run: acceptCompletion }, indentWithTab]),
     keymap.of([{ key: 'Mod-/', run: toggleComment }]),
     keymap.of([{ key: 'Mod-z', run: cm6Undo }, { key: 'Mod-Shift-z', run: cm6Redo }]),
+    // tagged template indentation (code cells only)
+    ...(cellType === 'code' ? [taggedTemplateIndent] : []),
     // autocomplete compartment (configured externally)
     autocompleteComp.of([]),
     // search decorations
     searchField,
-    // tagged template highlighting (code cells only)
-    ...(cellType === 'code' ? [taggedTemplatePlugin] : []),
     // color swatch (CSS cells only)
     ...(cellType === 'css' ? [colorSwatchPlugin] : []),
     // update listener
@@ -503,6 +574,14 @@ export function createEditor(container, cellId, initialCode, cellType, onChange)
   const view = new EditorView({
     state,
     parent: container,
+  });
+
+  // clicks on the wrapper (border/padding) should focus the editor
+  container.addEventListener('mousedown', (e) => {
+    if (e.target === container) {
+      e.preventDefault();
+      view.focus();
+    }
   });
 
   const editor = {
@@ -570,7 +649,9 @@ export function refreshTaggedLanguages() {
   for (const [cellId, editor] of _editors) {
     const cell = S.cells.find(c => c.id === cellId);
     if (cell && cell.type === 'code') {
-      editor.view.dispatch({ effects: rehighlightEffect.of(null) });
+      editor.view.dispatch({
+        effects: langComp.reconfigure(mixedJavascript()),
+      });
     }
   }
 }
