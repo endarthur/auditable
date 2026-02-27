@@ -91,6 +91,42 @@
     "sig": "std.fmt(number, {decimals?, prefix?, suffix?}?)",
     "desc": "format number to string"
   },
+  "std.include": {
+    "sig": "std.include(libs, ...names)",
+    "desc": "resolve dependencies and return source for atra routines"
+  },
+  "std.color": {
+    "sig": "std.color(input)",
+    "desc": "create color from hex/rgb/hsl/array \u2014 .lighten/.darken/.mix/.rotate/.css/.hex"
+  },
+  "std.colorScale": {
+    "sig": "std.colorScale(domain, colors)",
+    "desc": "map values to colors (OKLAB interpolation or colormap fn)"
+  },
+  "std.viridis": {
+    "sig": "std.viridis(t)",
+    "desc": "viridis colormap, t \u2208 [0,1] \u2192 rgb() string"
+  },
+  "std.magma": {
+    "sig": "std.magma(t)",
+    "desc": "magma colormap, t \u2208 [0,1] \u2192 rgb() string"
+  },
+  "std.inferno": {
+    "sig": "std.inferno(t)",
+    "desc": "inferno colormap, t \u2208 [0,1] \u2192 rgb() string"
+  },
+  "std.plasma": {
+    "sig": "std.plasma(t)",
+    "desc": "plasma colormap, t \u2208 [0,1] \u2192 rgb() string"
+  },
+  "std.turbo": {
+    "sig": "std.turbo(t)",
+    "desc": "turbo colormap, t \u2208 [0,1] \u2192 rgb() string"
+  },
+  "std.palette10": {
+    "sig": "std.palette10",
+    "desc": "array of 10 categorical colors (Tableau 10)"
+  },
   "print": {
     "sig": "print(...values)",
     "desc": "output values to cell (alias for ui.display)"
