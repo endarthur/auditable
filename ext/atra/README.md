@@ -47,7 +47,7 @@ The tagged template compiles source to Wasm bytecode, instantiates the module, a
 
 ## The language
 
-Four numeric types matching Wasm's value types: `i32`, `i64`, `f32`, `f64`. No strings, no booleans (use `i32`, 0 = false), no structs, no pointers. This is a numerical kernel language — it does arithmetic and nothing else.
+Four numeric types matching Wasm's value types: `i32`, `i64`, `f32`, `f64`. No strings, no booleans (use `i32`, 0 = false), no pointers, no heap. Structs are available via `layout` declarations (see below) — they describe memory layouts but don't introduce new types.
 
 ### Functions and subroutines
 
@@ -183,6 +183,71 @@ wasm.apply(wasm.__table.triple, 5.0)  // 15
 ```
 
 When any function is used as a reference, the exports include a `__table` mapping function names to their table indices.
+
+### Layouts
+
+Layouts describe struct-like memory regions — named fields at known offsets, with automatic size and alignment computation. Variables typed as `layout` are `i32` pointers into linear memory.
+
+```
+layout Vec3
+  x, y, z: f64
+end layout
+
+layout Sphere
+  center: Vec3
+  radius: f64
+end layout
+
+function getRadius(s: layout Sphere): f64
+begin
+  getRadius := s.radius
+end
+```
+
+Field access (`s.radius`, `s.center.x`) compiles to `i32.load`/`f64.load` at the computed offset. Fields follow C-style alignment: `f64` fields align to 8 bytes, `i32` to 4 bytes.
+
+**Packed layouts** skip alignment padding:
+
+```
+layout packed Rec
+  id: i32
+  value: f64
+end layout
+```
+
+Here `value` is at offset 4 (not 8), and `__size` is 12 (not 16).
+
+**Array fields** embed fixed-count arrays of primitives or layouts:
+
+```
+layout Particle
+  pos: f64[3]      ! 3 consecutive f64s (24 bytes)
+  mass: f64
+end layout
+
+layout Mesh
+  vertices: Vec3[4]  ! 4 embedded Vec3s (96 bytes)
+  count: i32
+end layout
+```
+
+Access array elements with `p.pos[i]`. For layout arrays, `mesh.vertices[i]` returns a pointer — assign it to a layout-typed local to access fields:
+
+```
+var v: layout Vec3
+v := mesh.vertices[i]
+x := v.x
+```
+
+**Layout constants** are available at compile time: `Vec3.__size` (24), `Vec3.__align` (8), `Vec3.y` (offset 8). These emit `i32.const` — zero runtime cost.
+
+**`__layouts` metadata** is attached to the JS exports object. For scalar fields, the value is the byte offset; for array fields, it's `{ offset, count, elemSize }`:
+
+```js
+const m = atra({ memory })`...`;
+m.__layouts.Vec3       // { x: 0, y: 8, z: 16, __size: 24, __align: 8 }
+m.__layouts.Particle   // { pos: { offset: 0, count: 3, elemSize: 8 }, mass: 24, ... }
+```
 
 ### SIMD
 
@@ -430,12 +495,12 @@ const { alpack } = atra({ memory })`${src}`;
 import { compile, bundle, buildSrc, formatSrcJs } from './ext/atra/atrac.js';
 
 compile(source)            // → Uint8Array (raw Wasm bytes)
-bundle(source, { name })   // → string (standalone JS module)
-buildSrc(source)           // → { sources, deps, all }
-formatSrcJs(lib)           // → string (.src.js file content)
+bundle(source, { name })   // → string (standalone JS module, with __layouts if applicable)
+buildSrc(source)           // → { sources, deps, all, layouts? }
+formatSrcJs(lib)           // → string (.src.js file content, with layouts export if applicable)
 ```
 
-`buildSrc()` extracts routines, scans call graphs for dependencies, and returns the structured library object. `formatSrcJs()` serializes it as a JS module. These are the same functions used by `ext/atra/build.js` to generate `alpack.src.js`.
+`buildSrc()` extracts routines and layout blocks, scans call graphs for dependencies, and returns the structured library object. If the source contains layouts, the result includes a `layouts` property mapping layout names to their source text. `formatSrcJs()` serializes routines, dependencies, and layouts as a JS module. `bundle()` embeds layout metadata (from `atra.parse()`) alongside the Wasm bytes — the `instantiate()` export attaches `__layouts` to the returned exports object. These are the same functions used by `ext/atra/build.js` to generate `alpack.src.js` and `alpack.js`.
 
 ---
 

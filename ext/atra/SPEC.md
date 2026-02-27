@@ -55,7 +55,7 @@ Four numeric types, matching WebAssembly's value types:
 | `f32` | 32-bit float             | 4     |
 | `f64` | 64-bit double precision  | 8     |
 
-No strings. No booleans (use `i32`, where 0 = false, nonzero = true). No structs. No pointers. This is a numerical kernel language.
+No strings. No booleans (use `i32`, where 0 = false, nonzero = true). No pointers. No heap. Structs are available via `layout` declarations — they describe memory layouts but don't introduce new Wasm types. This is a numerical kernel language.
 
 ---
 
@@ -695,6 +695,158 @@ end
 ```
 
 Where `array(n, n)` tells the compiler the shape, and `a[i, j]` desugars to `f64.load(a + (i * n + j) * 8)` automatically. The dimensions are parameters used only for offset calculation.
+
+---
+
+## Layouts
+
+Layouts describe struct-like memory regions with named fields at computed offsets. They don't introduce new Wasm types — layout-typed variables are `i32` pointers into linear memory, and field access compiles to `load`/`store` at the resolved offset.
+
+### Declaration
+
+```
+layout Vec3
+  x, y, z: f64
+end layout
+```
+
+Fields are laid out sequentially with C-style alignment: each field is padded to its natural alignment boundary. `Vec3` has `x` at offset 0, `y` at 8, `z` at 16, with `__size` = 24 and `__align` = 8.
+
+Multiple fields can share a type: `x, y, z: f64`. Fields can be primitives (`i32`, `i64`, `f32`, `f64`) or other layout names (nested layouts).
+
+The `end` keyword optionally takes `layout`: both `end` and `end layout` are valid.
+
+### Nested layouts
+
+```
+layout Sphere
+  center: Vec3
+  radius: f64
+end layout
+```
+
+`center` embeds a `Vec3` inline (24 bytes), followed by `radius` at offset 24. `Sphere.__size` = 32.
+
+### Packed layouts
+
+```
+layout packed Rec
+  id: i32
+  value: f64
+end layout
+```
+
+The `packed` keyword disables alignment padding. `value` is at offset 4 (immediately after the 4-byte `i32`), not 8. `Rec.__size` = 12, `Rec.__align` = 1.
+
+### Array fields
+
+Fixed-count arrays of primitives or layouts:
+
+```
+layout Particle
+  pos: f64[3]        ! 3 consecutive f64s (24 bytes)
+  vel: f64[3]
+  mass: f64
+end layout
+
+layout Mesh
+  vertices: Vec3[4]  ! 4 embedded Vec3 layouts (96 bytes)
+  count: i32
+end layout
+```
+
+Array field size = element size x count. Alignment is determined by the element type.
+
+### Layout-typed parameters and locals
+
+Declare with `layout` before the layout name in the type position:
+
+```
+function getX(v: layout Vec3): f64
+begin
+  getX := v.x
+end
+
+function sumX(arr: i32, n: i32): f64
+var s: layout Vec3, total: f64, i: i32
+begin
+  total := 0.0
+  for i := 0, n
+    s := arr + i * Vec3.__size
+    total := total + s.x
+  end for
+  sumX := total
+end
+```
+
+Layout-typed variables are `i32` at the Wasm level. Assigning to them sets the base pointer. Field access (`s.x`) compiles to a memory load at `base + field_offset`.
+
+### Field access
+
+Dotted names resolve through the layout chain:
+
+- `s.radius` — load `f64` at `s + 24`
+- `s.center.x` — load `f64` at `s + 0`
+- `s.center` — pointer to the nested `Vec3` (no load, leaves `i32` on stack)
+
+### Array field access
+
+```
+p.pos[i]         ! load element: base + field_offset + i * elemSize
+p.pos[i] := val  ! store element
+```
+
+For layout array fields, `mesh.vertices[i]` returns a pointer (no load). Assign it to a layout-typed local to access fields:
+
+```
+var v: layout Vec3
+v := mesh.vertices[i]
+x := v.x
+```
+
+### Layout constants
+
+Layout names used as identifiers resolve to compile-time constants:
+
+- `Vec3.__size` — total size in bytes (24)
+- `Vec3.__align` — alignment requirement (8)
+- `Vec3.y` — byte offset of field `y` (8)
+
+These emit `i32.const` instructions — zero runtime overhead.
+
+### Field stores
+
+Assignment through dotted names compiles to memory stores:
+
+```
+subroutine setVec(v: layout Vec3, a, b, c: f64)
+begin
+  v.x := a
+  v.y := b
+  v.z := c
+end
+```
+
+Nested field stores work: `s.center.x := 1.0`.
+
+### `__layouts` metadata
+
+When layouts are defined, the JS exports object includes `__layouts` — a mapping of layout names to their field offsets:
+
+```js
+const m = atra({ memory })`...`;
+m.__layouts.Vec3
+// { x: 0, y: 8, z: 16, __size: 24, __align: 8 }
+```
+
+Array fields are represented as objects instead of plain offsets:
+
+```js
+m.__layouts.Particle.pos
+// { offset: 0, count: 3, elemSize: 8 }
+```
+
+This metadata enables JS code to read/write layout-structured memory without hardcoding offsets.
 
 ---
 
