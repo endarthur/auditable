@@ -276,6 +276,56 @@ function atraSigHint(code, cursor) {
   return { sig, desc, paramIdx, parenPos: offsets[parenIdx] };
 }
 
+// ── Layout name/field extraction for completions ──
+
+function extractLayoutNames(code) {
+  const tokens = tokenizeAtra(code);
+  const names = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i].type === 'kw' && tokens[i].text.toLowerCase() === 'layout') {
+      let j = i + 1;
+      while (j < tokens.length && tokens[j].type === '') j++;
+      // skip optional 'packed'
+      if (j < tokens.length && tokens[j].type === 'kw' && tokens[j].text.toLowerCase() === 'packed') {
+        j++;
+        while (j < tokens.length && tokens[j].type === '') j++;
+      }
+      if (j < tokens.length && tokens[j].type === 'id') {
+        names.push(tokens[j].text);
+      }
+    }
+  }
+  return names;
+}
+
+function extractLayoutFields(code, layoutName) {
+  const tokens = tokenizeAtra(code);
+  const fields = [];
+  let inLayout = false;
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i].type === 'kw' && tokens[i].text.toLowerCase() === 'layout') {
+      let j = i + 1;
+      while (j < tokens.length && tokens[j].type === '') j++;
+      if (j < tokens.length && tokens[j].type === 'kw' && tokens[j].text.toLowerCase() === 'packed') {
+        j++;
+        while (j < tokens.length && tokens[j].type === '') j++;
+      }
+      if (j < tokens.length && tokens[j].text === layoutName) {
+        inLayout = true;
+        i = j;
+        continue;
+      }
+    }
+    if (inLayout) {
+      if (tokens[i].type === 'kw' && tokens[i].text.toLowerCase() === 'end') {
+        break;
+      }
+      if (tokens[i].type === 'id') fields.push(tokens[i].text);
+    }
+  }
+  return fields;
+}
+
 // ── Context-aware completions ──
 
 function atraCompletions(code, cursor, prefix) {
@@ -307,7 +357,28 @@ function atraCompletions(code, cursor, prefix) {
   }
 
   if (context === 'naming') return [];
-  if (context === 'type') return Array.from(ATRA_TYPES).map(w => ({ text: w, kind: 'const' }));
+  if (context === 'type') {
+    const items = Array.from(ATRA_TYPES).map(w => ({ text: w, kind: 'const' }));
+    items.push({ text: 'layout', kind: 'kw' });
+    const layoutNames = extractLayoutNames(code);
+    for (const n of layoutNames) items.push({ text: n, kind: 'const' });
+    return items;
+  }
+
+  // Layout field completions: prefix is "LayoutName." → offer field names + __size, __align
+  if (prefix.includes('.')) {
+    const dotIdx = prefix.lastIndexOf('.');
+    const base = prefix.slice(0, dotIdx);
+    const layoutNames = extractLayoutNames(code);
+    if (layoutNames.includes(base)) {
+      const fields = extractLayoutFields(code, base);
+      return [
+        ...fields.map(f => ({ text: base + '.' + f, kind: 'var' })),
+        { text: base + '.__size', kind: 'const' },
+        { text: base + '.__align', kind: 'const' },
+      ];
+    }
+  }
 
   const items = [];
   const { functions, variables } = extractAtraNames(code);
@@ -323,6 +394,10 @@ function atraCompletions(code, cursor, prefix) {
   for (const w of ATRA_BUILTINS) items.push({ text: w, kind: 'fn' });
   for (const f of functions) items.push({ text: f.name, kind: 'fn' });
   for (const v of variables) items.push({ text: v.name, kind: 'var' });
+
+  // Add layout names to expression/statement completions
+  const layoutNames = extractLayoutNames(code);
+  for (const n of layoutNames) items.push({ text: n, kind: 'const' });
 
   return items;
 }
@@ -495,7 +570,14 @@ function parse(tokens) {
       if (ftok.type === TOK.KW) { ftype = eat(TOK.KW).value; }
       else if (ftok.type === TOK.ID) { ftype = eat(TOK.ID).value; }
       else throw new SyntaxError(`Expected type after ':' but got "${ftok.value}" at ${ftok.line}:${ftok.col}`);
-      for (const fn of fnames) fields.push({ name: fn, ftype });
+      // Optional array count: type[N]
+      let arrayCount = null;
+      if (at(TOK.PUNC, '[')) {
+        pos++; // skip [
+        arrayCount = parseInt(eat(TOK.NUM).value, 10);
+        eat(TOK.PUNC, ']');
+      }
+      for (const fn of fnames) fields.push({ name: fn, ftype, arrayCount });
     }
     eat(TOK.KW, 'end');
     maybe(TOK.KW, 'layout'); // optional trailing "layout" after "end"
@@ -1305,8 +1387,11 @@ function codegen(ast, interpValues, userImports) {
         align = node.packed ? 1 : size;
       }
       if (!node.packed) offset = (offset + align - 1) & ~(align - 1);
-      layout.fields[f.name] = { offset, type: f.ftype, size };
+      let elemSize = size;
+      if (f.arrayCount) size = elemSize * f.arrayCount;
+      layout.fields[f.name] = { offset, type: f.ftype, size, elemSize };
       if (fieldLayout) layout.fields[f.name].layout = fieldLayout;
+      if (f.arrayCount) layout.fields[f.name].arrayCount = f.arrayCount;
       offset += size;
       if (align > layout.__align) layout.__align = align;
     }
@@ -1330,6 +1415,11 @@ function codegen(ast, interpValues, userImports) {
       offset += field.offset;
       lastType = field.type;
       lastLayout = field.layout || null;
+      // Array field at terminal position — return array info (pointer, not load)
+      if (field.arrayCount && i === fieldParts.length - 1) {
+        return { offset, type: field.type, layout: lastLayout,
+                 arrayCount: field.arrayCount, elemSize: field.elemSize };
+      }
       if (lastLayout && i < fieldParts.length - 1) {
         layout = layouts[lastLayout];
         layoutName = lastLayout;
@@ -1343,7 +1433,11 @@ function codegen(ast, interpValues, userImports) {
     for (const [name, layout] of Object.entries(layouts)) {
       const obj = {};
       for (const [fname, field] of Object.entries(layout.fields)) {
-        obj[fname] = field.offset;
+        if (field.arrayCount) {
+          obj[fname] = { offset: field.offset, count: field.arrayCount, elemSize: field.elemSize };
+        } else {
+          obj[fname] = field.offset;
+        }
       }
       obj.__size = layout.__size;
       obj.__align = layout.__align;
@@ -1779,6 +1873,33 @@ function codegen(ast, interpValues, userImports) {
           break;
         }
         case 'ArrayStore': {
+          // Layout array field store: p.pos[i] := val
+          if (stmt.name.includes('.')) {
+            const parts = stmt.name.split('.');
+            const first = parts[0];
+            const varInfo = localMap[first] || (globalIndex[first] !== undefined ? { layoutType: globals[globalIndex[first]].layoutType, globalIdx: globalIndex[first] } : null);
+            if (varInfo && varInfo.layoutType) {
+              const resolved = resolveLayoutChain(varInfo.layoutType, parts.slice(1));
+              if (resolved.arrayCount) {
+                // Emit address: base_ptr + field_offset + index * elemSize
+                if (localMap[first]) { bw.byte(OP_LOCAL_GET); bw.u32(localMap[first].idx); }
+                else { bw.byte(OP_GLOBAL_GET); bw.u32(varInfo.globalIdx); }
+                if (resolved.offset > 0) {
+                  bw.byte(OP_I32_CONST); bw.s32(resolved.offset);
+                  bw.byte(OP_I32_ADD);
+                }
+                emitExpr(stmt.indices[0], 'i32');
+                bw.byte(OP_I32_CONST); bw.s32(resolved.elemSize);
+                bw.byte(OP_I32_MUL);
+                bw.byte(OP_I32_ADD);
+                // Emit value
+                const storeType = resolved.layout ? 'i32' : resolved.type;
+                emitExpr(stmt.value, storeType);
+                emitStore(storeType);
+                break;
+              }
+            }
+          }
           const info = localMap[stmt.name];
           if (!info) throw new Error(`Undefined array: ${stmt.name}`);
           const elemType = info.elemType || info.vtype;
@@ -2061,6 +2182,16 @@ function codegen(ast, interpValues, userImports) {
           return 'f64';
         }
         case 'ArrayAccess': {
+          // Layout array field: p.pos[i] → element type
+          if (expr.name.includes('.')) {
+            const parts = expr.name.split('.');
+            const first = parts[0];
+            const varInfo = localMap[first] || (globalIndex[first] !== undefined ? { layoutType: globals[globalIndex[first]].layoutType } : null);
+            if (varInfo && varInfo.layoutType) {
+              const resolved = resolveLayoutChain(varInfo.layoutType, parts.slice(1));
+              if (resolved.arrayCount) return resolved.layout ? 'i32' : resolved.type;
+            }
+          }
           const info = localMap[expr.name];
           return info ? (info.elemType || info.vtype) : 'f64';
         }
@@ -2124,8 +2255,8 @@ function codegen(ast, interpValues, userImports) {
                 bw.byte(OP_I32_CONST); bw.s32(resolved.offset);
                 bw.byte(OP_I32_ADD);
               }
-              // If final field is a nested layout, leave pointer on stack
-              if (resolved.layout) break;
+              // If final field is a nested layout or array, leave pointer on stack
+              if (resolved.layout || resolved.arrayCount) break;
               emitLoad(resolved.type);
               break;
             }
@@ -2170,6 +2301,33 @@ function codegen(ast, interpValues, userImports) {
           break;
         }
         case 'ArrayAccess': {
+          // Layout array field access: p.pos[i], p.vertices[i]
+          if (expr.name.includes('.')) {
+            const parts = expr.name.split('.');
+            const first = parts[0];
+            const varInfo = localMap[first] || (globalIndex[first] !== undefined ? { layoutType: globals[globalIndex[first]].layoutType, globalIdx: globalIndex[first] } : null);
+            if (varInfo && varInfo.layoutType) {
+              const resolved = resolveLayoutChain(varInfo.layoutType, parts.slice(1));
+              if (resolved.arrayCount) {
+                // Emit: base_ptr + field_offset + index * elemSize
+                if (localMap[first]) { bw.byte(OP_LOCAL_GET); bw.u32(localMap[first].idx); }
+                else { bw.byte(OP_GLOBAL_GET); bw.u32(varInfo.globalIdx); }
+                if (resolved.offset > 0) {
+                  bw.byte(OP_I32_CONST); bw.s32(resolved.offset);
+                  bw.byte(OP_I32_ADD);
+                }
+                // + index * elemSize
+                emitExpr(expr.indices[0], 'i32');
+                bw.byte(OP_I32_CONST); bw.s32(resolved.elemSize);
+                bw.byte(OP_I32_MUL);
+                bw.byte(OP_I32_ADD);
+                // If element is a layout, leave pointer on stack; otherwise load
+                if (resolved.layout) break;
+                emitLoad(resolved.type);
+                break;
+              }
+            }
+          }
           const info = localMap[expr.name];
           if (!info) throw new Error(`Undefined array: ${expr.name}`);
           const elemType = info.elemType || info.vtype;
@@ -2931,8 +3089,11 @@ function computeLayouts(ast) {
         align = node.packed ? 1 : size;
       }
       if (!node.packed) offset = (offset + align - 1) & ~(align - 1);
-      layout.fields[f.name] = { offset, type: f.ftype, size };
+      let elemSize = size;
+      if (f.arrayCount) size = elemSize * f.arrayCount;
+      layout.fields[f.name] = { offset, type: f.ftype, size, elemSize };
       if (fieldLayout) layout.fields[f.name].layout = fieldLayout;
+      if (f.arrayCount) layout.fields[f.name].arrayCount = f.arrayCount;
       offset += size;
       if (align > layout.__align) layout.__align = align;
     }
@@ -2941,7 +3102,13 @@ function computeLayouts(ast) {
     layouts[node.name] = layout;
     // Serialize for JS
     const obj = {};
-    for (const [fname, field] of Object.entries(layout.fields)) obj[fname] = field.offset;
+    for (const [fname, field] of Object.entries(layout.fields)) {
+      if (field.arrayCount) {
+        obj[fname] = { offset: field.offset, count: field.arrayCount, elemSize: field.elemSize };
+      } else {
+        obj[fname] = field.offset;
+      }
+    }
     obj.__size = layout.__size;
     obj.__align = layout.__align;
     result[node.name] = obj;

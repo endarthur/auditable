@@ -122,8 +122,11 @@ export function codegen(ast, interpValues, userImports) {
         align = node.packed ? 1 : size;
       }
       if (!node.packed) offset = (offset + align - 1) & ~(align - 1);
-      layout.fields[f.name] = { offset, type: f.ftype, size };
+      let elemSize = size;
+      if (f.arrayCount) size = elemSize * f.arrayCount;
+      layout.fields[f.name] = { offset, type: f.ftype, size, elemSize };
       if (fieldLayout) layout.fields[f.name].layout = fieldLayout;
+      if (f.arrayCount) layout.fields[f.name].arrayCount = f.arrayCount;
       offset += size;
       if (align > layout.__align) layout.__align = align;
     }
@@ -147,6 +150,11 @@ export function codegen(ast, interpValues, userImports) {
       offset += field.offset;
       lastType = field.type;
       lastLayout = field.layout || null;
+      // Array field at terminal position — return array info (pointer, not load)
+      if (field.arrayCount && i === fieldParts.length - 1) {
+        return { offset, type: field.type, layout: lastLayout,
+                 arrayCount: field.arrayCount, elemSize: field.elemSize };
+      }
       if (lastLayout && i < fieldParts.length - 1) {
         layout = layouts[lastLayout];
         layoutName = lastLayout;
@@ -160,7 +168,11 @@ export function codegen(ast, interpValues, userImports) {
     for (const [name, layout] of Object.entries(layouts)) {
       const obj = {};
       for (const [fname, field] of Object.entries(layout.fields)) {
-        obj[fname] = field.offset;
+        if (field.arrayCount) {
+          obj[fname] = { offset: field.offset, count: field.arrayCount, elemSize: field.elemSize };
+        } else {
+          obj[fname] = field.offset;
+        }
       }
       obj.__size = layout.__size;
       obj.__align = layout.__align;
@@ -596,6 +608,33 @@ export function codegen(ast, interpValues, userImports) {
           break;
         }
         case 'ArrayStore': {
+          // Layout array field store: p.pos[i] := val
+          if (stmt.name.includes('.')) {
+            const parts = stmt.name.split('.');
+            const first = parts[0];
+            const varInfo = localMap[first] || (globalIndex[first] !== undefined ? { layoutType: globals[globalIndex[first]].layoutType, globalIdx: globalIndex[first] } : null);
+            if (varInfo && varInfo.layoutType) {
+              const resolved = resolveLayoutChain(varInfo.layoutType, parts.slice(1));
+              if (resolved.arrayCount) {
+                // Emit address: base_ptr + field_offset + index * elemSize
+                if (localMap[first]) { bw.byte(OP_LOCAL_GET); bw.u32(localMap[first].idx); }
+                else { bw.byte(OP_GLOBAL_GET); bw.u32(varInfo.globalIdx); }
+                if (resolved.offset > 0) {
+                  bw.byte(OP_I32_CONST); bw.s32(resolved.offset);
+                  bw.byte(OP_I32_ADD);
+                }
+                emitExpr(stmt.indices[0], 'i32');
+                bw.byte(OP_I32_CONST); bw.s32(resolved.elemSize);
+                bw.byte(OP_I32_MUL);
+                bw.byte(OP_I32_ADD);
+                // Emit value
+                const storeType = resolved.layout ? 'i32' : resolved.type;
+                emitExpr(stmt.value, storeType);
+                emitStore(storeType);
+                break;
+              }
+            }
+          }
           const info = localMap[stmt.name];
           if (!info) throw new Error(`Undefined array: ${stmt.name}`);
           const elemType = info.elemType || info.vtype;
@@ -878,6 +917,16 @@ export function codegen(ast, interpValues, userImports) {
           return 'f64';
         }
         case 'ArrayAccess': {
+          // Layout array field: p.pos[i] → element type
+          if (expr.name.includes('.')) {
+            const parts = expr.name.split('.');
+            const first = parts[0];
+            const varInfo = localMap[first] || (globalIndex[first] !== undefined ? { layoutType: globals[globalIndex[first]].layoutType } : null);
+            if (varInfo && varInfo.layoutType) {
+              const resolved = resolveLayoutChain(varInfo.layoutType, parts.slice(1));
+              if (resolved.arrayCount) return resolved.layout ? 'i32' : resolved.type;
+            }
+          }
           const info = localMap[expr.name];
           return info ? (info.elemType || info.vtype) : 'f64';
         }
@@ -941,8 +990,8 @@ export function codegen(ast, interpValues, userImports) {
                 bw.byte(OP_I32_CONST); bw.s32(resolved.offset);
                 bw.byte(OP_I32_ADD);
               }
-              // If final field is a nested layout, leave pointer on stack
-              if (resolved.layout) break;
+              // If final field is a nested layout or array, leave pointer on stack
+              if (resolved.layout || resolved.arrayCount) break;
               emitLoad(resolved.type);
               break;
             }
@@ -987,6 +1036,33 @@ export function codegen(ast, interpValues, userImports) {
           break;
         }
         case 'ArrayAccess': {
+          // Layout array field access: p.pos[i], p.vertices[i]
+          if (expr.name.includes('.')) {
+            const parts = expr.name.split('.');
+            const first = parts[0];
+            const varInfo = localMap[first] || (globalIndex[first] !== undefined ? { layoutType: globals[globalIndex[first]].layoutType, globalIdx: globalIndex[first] } : null);
+            if (varInfo && varInfo.layoutType) {
+              const resolved = resolveLayoutChain(varInfo.layoutType, parts.slice(1));
+              if (resolved.arrayCount) {
+                // Emit: base_ptr + field_offset + index * elemSize
+                if (localMap[first]) { bw.byte(OP_LOCAL_GET); bw.u32(localMap[first].idx); }
+                else { bw.byte(OP_GLOBAL_GET); bw.u32(varInfo.globalIdx); }
+                if (resolved.offset > 0) {
+                  bw.byte(OP_I32_CONST); bw.s32(resolved.offset);
+                  bw.byte(OP_I32_ADD);
+                }
+                // + index * elemSize
+                emitExpr(expr.indices[0], 'i32');
+                bw.byte(OP_I32_CONST); bw.s32(resolved.elemSize);
+                bw.byte(OP_I32_MUL);
+                bw.byte(OP_I32_ADD);
+                // If element is a layout, leave pointer on stack; otherwise load
+                if (resolved.layout) break;
+                emitLoad(resolved.type);
+                break;
+              }
+            }
+          }
           const info = localMap[expr.name];
           if (!info) throw new Error(`Undefined array: ${expr.name}`);
           const elemType = info.elemType || info.vtype;

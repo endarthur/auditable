@@ -66,7 +66,14 @@ export function parse(tokens) {
       if (ftok.type === TOK.KW) { ftype = eat(TOK.KW).value; }
       else if (ftok.type === TOK.ID) { ftype = eat(TOK.ID).value; }
       else throw new SyntaxError(`Expected type after ':' but got "${ftok.value}" at ${ftok.line}:${ftok.col}`);
-      for (const fn of fnames) fields.push({ name: fn, ftype });
+      // Optional array count: type[N]
+      let arrayCount = null;
+      if (at(TOK.PUNC, '[')) {
+        pos++; // skip [
+        arrayCount = parseInt(eat(TOK.NUM).value, 10);
+        eat(TOK.PUNC, ']');
+      }
+      for (const fn of fnames) fields.push({ name: fn, ftype, arrayCount });
     }
     eat(TOK.KW, 'end');
     maybe(TOK.KW, 'layout'); // optional trailing "layout" after "end"
