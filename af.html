@@ -4636,7 +4636,7 @@ function cellHeaderHTML(type, id) {
   </div>\`;
 }
 
-function createCellEl(type, id) {
+function createCellEl(type, id, initialCode) {
   const div = document.createElement('div');
   div.className = 'cell';
   div.dataset.id = id;
@@ -4654,7 +4654,7 @@ function createCellEl(type, id) {
 
     div.querySelector('.cell-type').addEventListener('click', () => div.classList.toggle('collapsed'));
     const editorWrap = div.querySelector('.editor-wrap');
-    const editor = createEditor(editorWrap, id, '', 'code', (code) => {
+    const editor = createEditor(editorWrap, id, initialCode || '', 'code', (code) => {
       const cell = S.cells.find(c => c.id === id);
       if (cell) cell.code = code;
       onCodeEdit(id);
@@ -4675,7 +4675,7 @@ function createCellEl(type, id) {
     const editorWrap = div.querySelector('.editor-wrap');
     div.querySelector('.cell-type').addEventListener('click', () => div.classList.toggle('collapsed'));
 
-    const editor = createEditor(editorWrap, id, '', 'css', (code) => {
+    const editor = createEditor(editorWrap, id, initialCode || '', 'css', (code) => {
       const cell = S.cells.find(c => c.id === id);
       if (cell) cell.code = code;
       onCssEdit(id);
@@ -4717,7 +4717,7 @@ function createCellEl(type, id) {
     const editorWrap = div.querySelector('.editor-wrap');
     div.querySelector('.cell-type').addEventListener('click', () => div.classList.toggle('collapsed'));
 
-    const editor = createEditor(editorWrap, id, '', 'html', (code) => {
+    const editor = createEditor(editorWrap, id, initialCode || '', 'html', (code) => {
       const cell = S.cells.find(c => c.id === id);
       if (cell) cell.code = code;
       onHtmlEdit(id);
@@ -4930,7 +4930,7 @@ function addCell(type, code = '', afterId = null, beforeId = null) {
     defines: new Set(),
     uses: new Set(),
     error: null,
-    el: createCellEl(type, id)
+    el: createCellEl(type, id, code)
   };
 
   const nb = $('#notebook');
@@ -4961,7 +4961,7 @@ function addCell(type, code = '', afterId = null, beforeId = null) {
     nb.appendChild(cell.el);
   }
 
-  // set code
+  // set code (CM6 editors receive initialCode via createCellEl; only md needs post-init setup)
   if (code) {
     if (type === 'md') {
       const ta = cell.el.querySelector('textarea');
@@ -4969,9 +4969,6 @@ function addCell(type, code = '', afterId = null, beforeId = null) {
       autoResize({ target: ta });
       cell.el.querySelector('.cell-md-view').innerHTML = renderMd(code);
     } else {
-      // code, css, html — use CM6 editor
-      const editor = getEditor(id);
-      if (editor) editor.setCode(code);
       if (type === 'code' && isManual(code)) cell.el.classList.add('manual');
     }
   }
@@ -5043,22 +5040,19 @@ function convertCell(id, newType) {
   const oldEditor = getEditor(id);
   if (oldEditor) oldEditor.destroy();
 
-  // create new cell element
-  const newEl = createCellEl(newType, id);
+  // create new cell element (CM6 editors receive code via initialCode)
+  const newEl = createCellEl(newType, id, code);
   cell.el.replaceWith(newEl);
   cell.el = newEl;
   cell.type = newType;
   cell.code = code;
 
-  // set code
+  // set code (only md needs post-init setup; CM6 editors already have the code)
   if (newType === 'md') {
     const ta = newEl.querySelector('textarea');
     ta.value = code;
     autoResize({ target: ta });
     newEl.querySelector('.cell-md-view').innerHTML = renderMd(code);
-  } else {
-    const editor = getEditor(id);
-    if (editor) editor.setCode(code);
   }
 
   if (newType === 'css') {
@@ -5346,7 +5340,7 @@ function togglePresent() {
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_BUILD_DATE__ = '2026-02-27';
-const __AUDITABLE_BASE_SIZE__ = 763959;
+const __AUDITABLE_BASE_SIZE__ = 764012;
 
 (function() {
   const ver = $('#aboutVersion');
