@@ -5,7 +5,7 @@
 import { lex } from './lex.js';
 import { parse } from './parse.js';
 import { codegen, flattenImports } from './codegen.js';
-import { tokenizeAtra, atraCompletions } from './highlight.js';
+import { tokenizeAtra, atraCompletions, atraSigHint } from './highlight.js';
 
 function compileSource(source, interpValues, userImports) {
   const tokens = lex(source);
@@ -131,7 +131,7 @@ atra.run = function(source, userImports) {
 
 if (typeof window !== 'undefined') {
   if (!window._taggedLanguages) window._taggedLanguages = {};
-  window._taggedLanguages.atra = { tokenize: tokenizeAtra, completions: atraCompletions };
+  window._taggedLanguages.atra = { tokenize: tokenizeAtra, completions: atraCompletions, sigHint: atraSigHint };
 }
 
 // Attach internals for testing / advanced use
