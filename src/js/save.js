@@ -193,7 +193,10 @@ export async function savePackedNotebook() {
     const cs = new CompressionStream('gzip');
     const stream = blob.stream().pipeThrough(cs);
     const compressed = await new Response(stream).arrayBuffer();
-    const b64 = btoa(String.fromCharCode(...new Uint8Array(compressed)));
+    const bytes = new Uint8Array(compressed);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    const b64 = btoa(binary);
     const b64Lines = b64.replace(/.{1,76}/g, '$&\n');
 
     const loader = `<!DOCTYPE html>
