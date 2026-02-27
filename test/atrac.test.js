@@ -235,6 +235,98 @@ describe('build output: alpack.js', () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════
+// Layout extraction in buildSrc / formatSrcJs / bundle
+// ═════════════════════════════════════════════════════════════════════
+
+const layoutSource = `
+layout Vec3
+  x, y, z: f64
+end layout
+
+layout packed Rec
+  id: i32
+  value: f64
+end layout
+
+function dot(a: layout Vec3, b: layout Vec3): f64
+begin
+  dot := a.x * b.x + a.y * b.y + a.z * b.z
+end
+`;
+
+describe('buildSrc() with layouts', () => {
+  it('extracts layout blocks from source', () => {
+    const lib = buildSrc(layoutSource);
+    assert.ok(lib.layouts);
+    assert.ok('Vec3' in lib.layouts);
+    assert.ok('Rec' in lib.layouts);
+  });
+
+  it('layout blocks contain correct source text', () => {
+    const lib = buildSrc(layoutSource);
+    assert.ok(lib.layouts.Vec3.includes('x, y, z: f64'));
+    assert.ok(lib.layouts.Rec.includes('layout packed Rec'));
+    assert.ok(lib.layouts.Rec.includes('id: i32'));
+  });
+
+  it('routines are still extracted alongside layouts', () => {
+    const lib = buildSrc(layoutSource);
+    assert.ok('dot' in lib.sources);
+  });
+
+  it('no layouts property when source has no layouts', () => {
+    const lib = buildSrc(trivialSource);
+    assert.equal(lib.layouts, undefined);
+  });
+});
+
+describe('formatSrcJs() with layouts', () => {
+  it('includes layout export when layouts present', () => {
+    const lib = buildSrc(layoutSource);
+    const js = formatSrcJs(lib);
+    assert.ok(js.includes('export const layouts ='));
+    assert.ok(js.includes('"Vec3"'));
+    assert.ok(js.includes('"Rec"'));
+  });
+
+  it('does not include layout export when no layouts', () => {
+    const lib = buildSrc(trivialSource);
+    const js = formatSrcJs(lib);
+    assert.ok(!js.includes('export const layouts ='));
+  });
+});
+
+describe('bundle() with layouts', () => {
+  it('embeds layout metadata when layouts are present', () => {
+    const js = bundle(layoutSource, { name: 'layout-test' });
+    assert.ok(js.includes('const _layouts ='));
+    assert.ok(js.includes('__layouts'));
+  });
+
+  it('no layout metadata when no layouts', () => {
+    const js = bundle(trivialSource, { name: 'no-layout' });
+    assert.ok(!js.includes('const _layouts ='));
+  });
+
+  it('bundle with layouts instantiates and exposes __layouts', async () => {
+    const js = bundle(layoutSource, { name: 'layout-bundle' });
+    const tmpPath = join(tmpdir(), `atrac_layout_${Date.now()}.js`);
+    try {
+      writeFileSync(tmpPath, js);
+      const mod = await import('file://' + tmpPath.replace(/\\/g, '/'));
+      const memory = new WebAssembly.Memory({ initial: 1 });
+      const exports = mod.instantiate({ memory });
+      assert.ok(exports.__layouts);
+      assert.ok(exports.__layouts.Vec3);
+      assert.equal(exports.__layouts.Vec3.__size, 24);
+      assert.equal(exports.__layouts.Rec.__size, 12);
+    } finally {
+      try { unlinkSync(tmpPath); } catch {}
+    }
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
 // CLI (via child process)
 // ═════════════════════════════════════════════════════════════════════
 

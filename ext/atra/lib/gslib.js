@@ -35,6 +35,7 @@ export function instantiate(imports = {}) {
     }
     obj[parts[parts.length - 1]] = val;
   }
+  if (typeof _layouts !== 'undefined') exports.__layouts = _layouts;
   return exports;
 }
 

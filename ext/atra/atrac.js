@@ -25,19 +25,35 @@ export function compile(source) {
 export function buildSrc(source) {
   const lines = source.split('\n');
   const routines = {};
-  let current = null, name = null;
+  const layoutBlocks = {};
+  let current = null, name = null, kind = null;
 
   for (const line of lines) {
+    const lm = line.match(/^\s*layout\s+(?:packed\s+)?(\w+)\s*$/);
+    if (lm && !current) {
+      name = lm[1];
+      current = [line];
+      kind = 'layout';
+      continue;
+    }
     const m = line.match(/^\s*(?:subroutine|function)\s+([\w.]+)\s*\(/);
-    if (m) {
+    if (m && !current) {
       name = m[1];
       current = [line];
-    } else if (current) {
+      kind = 'routine';
+      continue;
+    }
+    if (current) {
       current.push(line);
-      if (/^\s*end\s*$/.test(line)) {
-        routines[name] = current.join('\n');
+      const isEnd = kind === 'layout'
+        ? /^\s*end\s*(?:layout)?\s*$/.test(line)
+        : /^\s*end\s*$/.test(line);
+      if (isEnd) {
+        if (kind === 'layout') layoutBlocks[name] = current.join('\n');
+        else routines[name] = current.join('\n');
         current = null;
         name = null;
+        kind = null;
       }
     }
   }
@@ -51,7 +67,9 @@ export function buildSrc(source) {
     );
   }
 
-  return { sources: routines, deps, all: source };
+  const result = { sources: routines, deps, all: source };
+  if (Object.keys(layoutBlocks).length > 0) result.layouts = layoutBlocks;
+  return result;
 }
 
 /**
@@ -81,6 +99,15 @@ export function formatSrcJs(lib) {
     out += `  ${JSON.stringify(rname)}: ${JSON.stringify(lib.deps[rname])},\n`;
   }
   out += `};\n`;
+
+  if (lib.layouts && Object.keys(lib.layouts).length > 0) {
+    out += `\nexport const layouts = {\n`;
+    for (const [lname, lsrc] of Object.entries(lib.layouts)) {
+      out += `  ${JSON.stringify(lname)}: ${JSON.stringify(lsrc)},\n`;
+    }
+    out += `};\n`;
+  }
+
   return out;
 }
 
@@ -119,6 +146,7 @@ export function instantiate(imports = {}) {
     }
     obj[parts[parts.length - 1]] = val;
   }
+  if (typeof _layouts !== 'undefined') exports.__layouts = _layouts;
   return exports;
 }
 
@@ -170,9 +198,21 @@ export function bundle(source, opts = {}) {
   const bytes = atra.compile(source, { __memory: true });
   const arr = Array.from(bytes);
   const name = opts.name || 'atra module';
-  return `// ${name} — compiled by atrac\n`
-    + `const _bytes = new Uint8Array([${arr.join(',')}]);\n`
-    + RUNTIME_TEMPLATE;
+
+  // Extract layout metadata via atra.parse()
+  const ast = atra.parse(source);
+  const layoutsMeta = ast.layouts;
+
+  let result = `// ${name} — compiled by atrac\n`
+    + `const _bytes = new Uint8Array([${arr.join(',')}]);\n`;
+
+  if (layoutsMeta) {
+    result += `const _layouts = ${JSON.stringify(layoutsMeta)};\n`;
+  }
+
+  result += RUNTIME_TEMPLATE;
+
+  return result;
 }
 
 // ── CLI ─────────────────────────────────────────────────────────────

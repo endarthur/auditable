@@ -271,6 +271,56 @@ export function atraSigHint(code, cursor) {
   return { sig, desc, paramIdx, parenPos: offsets[parenIdx] };
 }
 
+// ── Layout name/field extraction for completions ──
+
+function extractLayoutNames(code) {
+  const tokens = tokenizeAtra(code);
+  const names = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i].type === 'kw' && tokens[i].text.toLowerCase() === 'layout') {
+      let j = i + 1;
+      while (j < tokens.length && tokens[j].type === '') j++;
+      // skip optional 'packed'
+      if (j < tokens.length && tokens[j].type === 'kw' && tokens[j].text.toLowerCase() === 'packed') {
+        j++;
+        while (j < tokens.length && tokens[j].type === '') j++;
+      }
+      if (j < tokens.length && tokens[j].type === 'id') {
+        names.push(tokens[j].text);
+      }
+    }
+  }
+  return names;
+}
+
+function extractLayoutFields(code, layoutName) {
+  const tokens = tokenizeAtra(code);
+  const fields = [];
+  let inLayout = false;
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i].type === 'kw' && tokens[i].text.toLowerCase() === 'layout') {
+      let j = i + 1;
+      while (j < tokens.length && tokens[j].type === '') j++;
+      if (j < tokens.length && tokens[j].type === 'kw' && tokens[j].text.toLowerCase() === 'packed') {
+        j++;
+        while (j < tokens.length && tokens[j].type === '') j++;
+      }
+      if (j < tokens.length && tokens[j].text === layoutName) {
+        inLayout = true;
+        i = j;
+        continue;
+      }
+    }
+    if (inLayout) {
+      if (tokens[i].type === 'kw' && tokens[i].text.toLowerCase() === 'end') {
+        break;
+      }
+      if (tokens[i].type === 'id') fields.push(tokens[i].text);
+    }
+  }
+  return fields;
+}
+
 // ── Context-aware completions ──
 
 export function atraCompletions(code, cursor, prefix) {
@@ -302,7 +352,28 @@ export function atraCompletions(code, cursor, prefix) {
   }
 
   if (context === 'naming') return [];
-  if (context === 'type') return Array.from(ATRA_TYPES).map(w => ({ text: w, kind: 'const' }));
+  if (context === 'type') {
+    const items = Array.from(ATRA_TYPES).map(w => ({ text: w, kind: 'const' }));
+    items.push({ text: 'layout', kind: 'kw' });
+    const layoutNames = extractLayoutNames(code);
+    for (const n of layoutNames) items.push({ text: n, kind: 'const' });
+    return items;
+  }
+
+  // Layout field completions: prefix is "LayoutName." → offer field names + __size, __align
+  if (prefix.includes('.')) {
+    const dotIdx = prefix.lastIndexOf('.');
+    const base = prefix.slice(0, dotIdx);
+    const layoutNames = extractLayoutNames(code);
+    if (layoutNames.includes(base)) {
+      const fields = extractLayoutFields(code, base);
+      return [
+        ...fields.map(f => ({ text: base + '.' + f, kind: 'var' })),
+        { text: base + '.__size', kind: 'const' },
+        { text: base + '.__align', kind: 'const' },
+      ];
+    }
+  }
 
   const items = [];
   const { functions, variables } = extractAtraNames(code);
@@ -318,6 +389,10 @@ export function atraCompletions(code, cursor, prefix) {
   for (const w of ATRA_BUILTINS) items.push({ text: w, kind: 'fn' });
   for (const f of functions) items.push({ text: f.name, kind: 'fn' });
   for (const v of variables) items.push({ text: v.name, kind: 'var' });
+
+  // Add layout names to expression/statement completions
+  const layoutNames = extractLayoutNames(code);
+  for (const n of layoutNames) items.push({ text: n, kind: 'const' });
 
   return items;
 }

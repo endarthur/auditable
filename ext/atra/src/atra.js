@@ -138,8 +138,11 @@ function computeLayouts(ast) {
         align = node.packed ? 1 : size;
       }
       if (!node.packed) offset = (offset + align - 1) & ~(align - 1);
-      layout.fields[f.name] = { offset, type: f.ftype, size };
+      let elemSize = size;
+      if (f.arrayCount) size = elemSize * f.arrayCount;
+      layout.fields[f.name] = { offset, type: f.ftype, size, elemSize };
       if (fieldLayout) layout.fields[f.name].layout = fieldLayout;
+      if (f.arrayCount) layout.fields[f.name].arrayCount = f.arrayCount;
       offset += size;
       if (align > layout.__align) layout.__align = align;
     }
@@ -148,7 +151,13 @@ function computeLayouts(ast) {
     layouts[node.name] = layout;
     // Serialize for JS
     const obj = {};
-    for (const [fname, field] of Object.entries(layout.fields)) obj[fname] = field.offset;
+    for (const [fname, field] of Object.entries(layout.fields)) {
+      if (field.arrayCount) {
+        obj[fname] = { offset: field.offset, count: field.arrayCount, elemSize: field.elemSize };
+      } else {
+        obj[fname] = field.offset;
+      }
+    }
     obj.__size = layout.__size;
     obj.__align = layout.__align;
     result[node.name] = obj;
