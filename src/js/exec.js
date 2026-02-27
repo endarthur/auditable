@@ -56,6 +56,49 @@ function taggedTemplate(type) {
 
 // ── EXECUTION ──
 
+export function renderMdCell(cell) {
+  const viewEl = cell.el.querySelector('.cell-md-view');
+  if (!viewEl) return;
+
+  // if no ${expr}, just render plain markdown
+  if (!/\$\{[^}]+\}/.test(cell.code)) {
+    viewEl.innerHTML = renderMd(cell.code);
+    cell.el.classList.remove('stale', 'error');
+    return;
+  }
+
+  // use only variables this cell references for stable function signatures
+  const scopeKeys = cell.uses ? [...cell.uses].sort() : [];
+  const scopeVals = scopeKeys.map(k => S.scope[k]);
+
+  // cache compiled template functions per expression
+  if (!cell._tplCache) cell._tplCache = {};
+  const scopeSig = scopeKeys.join(',');
+  if (cell._tplScopeSig !== scopeSig) {
+    cell._tplCache = {};
+    cell._tplScopeSig = scopeSig;
+  }
+
+  let interpolated = cell.code.replace(/\$\{([^}]+)\}/g, (match, expr) => {
+    try {
+      let fn = cell._tplCache[expr];
+      if (!fn) {
+        fn = new Function(...scopeKeys, '"use strict"; return (' + expr + ')');
+        cell._tplCache[expr] = fn;
+      }
+      const val = fn(...scopeVals);
+      return val === undefined ? '' : String(val);
+    } catch (e) {
+      return '[Error: ' + e.message + ']';
+    }
+  });
+
+  viewEl.innerHTML = renderMd(interpolated);
+  cell.el.classList.remove('stale', 'error');
+  cell.el.classList.add('fresh');
+  setTimeout(() => cell.el.classList.remove('fresh'), 800);
+}
+
 export function renderHtmlCell(cell) {
   const viewEl = cell.el.querySelector('.cell-html-view');
   const outputEl = cell.el.querySelector('.cell-output');
@@ -740,6 +783,16 @@ export async function runDAG(dirtyIds, force = false) {
       }
       continue;
     }
+    if (cell.type === 'md') {
+      if (runSet.has(cell.id)) {
+        if (cell.uses && [...cell.uses].some(n => poisoned.has(n))) {
+          cell.el.classList.add('stale');
+        } else {
+          renderMdCell(cell);
+        }
+      }
+      continue;
+    }
     if (cell.type !== 'code') continue;
 
     // skip norun cells (unless explicitly triggered)
@@ -838,7 +891,7 @@ export async function runDAG(dirtyIds, force = false) {
 }
 
 export async function runAll() {
-  const ids = S.cells.filter(c => c.type === 'code' || c.type === 'html').map(c => c.id);
+  const ids = S.cells.filter(c => c.type === 'code' || c.type === 'html' || c.type === 'md').map(c => c.id);
   if (ids.length === 0) return;
   await runDAG(ids, true);
   setMsg('ran all cells', 'ok');

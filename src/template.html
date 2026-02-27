@@ -19,6 +19,7 @@
 <div class="help-row"><span class="help-key">h</span><span class="help-desc">collapse / expand cell</span></div>
 <div class="help-row"><span class="help-key">l</span><span class="help-desc">toggle line numbers</span></div>
 <div class="help-row"><span class="help-key">p</span><span class="help-desc">presentation mode</span></div>
+<div class="help-row"><span class="help-key">e</span><span class="help-desc">editor view (split)</span></div>
 
 <h2>edit mode</h2>
 <div class="help-row"><span class="help-key">Esc</span><span class="help-desc">exit to command mode</span></div>
@@ -114,6 +115,14 @@
       <option value="always">always visible</option>
       <option value="compact">compact</option>
       <option value="hover">hover only</option>
+    </select>
+  </div>
+
+  <div class="settings-row">
+    <label>default view</label>
+    <select id="setEditorView" onchange="applyEditorView(this.value)">
+      <option value="no">notebook</option>
+      <option value="yes">editor (split)</option>
     </select>
   </div>
 
@@ -237,6 +246,7 @@
         <button onclick="toggleSettings();toggleToolbarMenu()">settings</button>
         <button class="toolbar-update-btn" onclick="toggleUpdate();toggleToolbarMenu()">update</button>
         <button onclick="togglePresent();toggleToolbarMenu()">present</button>
+        <button onclick="toggleSplitView();toggleToolbarMenu()">editor view</button>
         <button onclick="openFind(false);toggleToolbarMenu()">find (Ctrl+F)</button>
       </div>
     </div>
@@ -301,6 +311,7 @@
         <button onclick="toggleSettings();toggleMoreTray()">settings</button>
         <button class="toolbar-update-btn" onclick="toggleUpdate();toggleMoreTray()">update</button>
         <button onclick="togglePresent();toggleMoreTray()">present</button>
+        <button onclick="toggleSplitView();toggleMoreTray()">editor view</button>
         <button onclick="openFind(false);toggleMoreTray()">find</button>
       </div>
       <button class="action-more" onclick="toggleMoreTray()">&#x22ef;</button>

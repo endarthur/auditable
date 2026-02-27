@@ -62,6 +62,18 @@ export function onHtmlEdit(id) {
   }
 }
 
+export function onMdEdit(id) {
+  const cell = S.cells.find(c => c.id === id);
+  if (!cell) return;
+  cell.el.classList.add('stale');
+  notifyDirty();
+
+  if (S.autorun) {
+    clearTimeout(S.editTimer);
+    S.editTimer = setTimeout(() => runDAG([id], false), 400);
+  }
+}
+
 export function onCodeEdit(id) {
   const cell = S.cells.find(c => c.id === id);
   if (!cell) return;

@@ -13,6 +13,7 @@ import './update.js';
 import './save.js';
 import './ui.js';
 import './find.js';
+import './split.js';
 import './complete.js';
 import './keyboard.js';
 import './goto.js'; // @optional

@@ -66,6 +66,7 @@ const __AUDITABLE_DEFAULT_RUN_ON_LOAD__ = 'yes';
 
 let _runOnLoad = 'yes';
 let _showToggle = 'yes';
+let _editorView = 'no';
 
 export function applyExecMode(mode) {
   S.autorun = (mode === 'reactive');
@@ -114,6 +115,14 @@ export function resolveRunOnLoad() {
     || __AUDITABLE_DEFAULT_RUN_ON_LOAD__;
 }
 
+export function applyEditorView(val) {
+  _editorView = val;
+  const sel = $('#setEditorView');
+  if (sel) sel.value = val;
+}
+
+export function getEditorViewSetting() { return _editorView; }
+
 export function getSettings() {
   const s = {
     theme: document.documentElement.classList.contains('light') ? 'light' : 'dark',
@@ -124,6 +133,7 @@ export function getSettings() {
     execMode: S.autorun ? 'reactive' : 'manual',
     runOnLoad: _runOnLoad,
     showToggle: _showToggle,
+    editorView: _editorView,
   };
   if (window._sizeCompare) s.sizeCompare = true;
   if (window._sizeCompareRef === 'content') s.sizeCompareRef = 'content';
@@ -140,6 +150,7 @@ export function applySettings(s) {
   if (s.execMode) applyExecMode(s.execMode);
   if (s.runOnLoad) applyRunOnLoad(s.runOnLoad);
   if (s.showToggle) applyShowToggle(s.showToggle);
+  if (s.editorView) applyEditorView(s.editorView);
   // optional: size-compare.js (typeof guards for --lean builds without it)
   if (s.sizeCompare !== undefined && typeof applySizeCompare === 'function') applySizeCompare(s.sizeCompare);
   if (s.sizeCompareRef !== undefined && typeof applySizeCompareRef === 'function') applySizeCompareRef(s.sizeCompareRef);
