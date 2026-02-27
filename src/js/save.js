@@ -59,7 +59,7 @@ function buildNotebookHtml() {
   }));
 
   // get the runtime and styles from current document
-  const styleEl = document.querySelector('style');
+  const styleEl = document.querySelector('#auditable-css') || document.querySelector('style');
   const styles = styleEl.textContent;
 
   // get the script
@@ -121,7 +121,7 @@ function buildNotebookHtml() {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Auditable \u2014 ${esc(title)}</title>
-<style>\n${styles}\n</style>
+<style id="auditable-css">\n${styles}\n</style>
 </head>
 <body>
 

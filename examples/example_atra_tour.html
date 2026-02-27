@@ -6,7 +6,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Auditable — atra — language tour</title>
-<style>
+<style id="auditable-css">
 :root {
   --bg: #0a0a0a;
   --bg1: #111;
@@ -6855,7 +6855,7 @@ function togglePresent() {
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_BUILD_DATE__ = '2026-02-27';
-const __AUDITABLE_BASE_SIZE__ = 764122;
+const __AUDITABLE_BASE_SIZE__ = 764209;
 
 (function() {
   const ver = $('#aboutVersion');
@@ -6998,7 +6998,7 @@ function extractSignature(html) {
 // ── RUNTIME EXTRACTION ──
 
 function extractRuntime(html) {
-  const style = html.match(/<style>([\s\S]*?)<\/style>/);
+  const style = html.match(/<style[^>]*>([\s\S]*?)<\/style>/);
   const script = html.match(/<script>([\s\S]*?)<\/script>/);
   if (!style || !script) return null;
   return { style: style[1], script: script[1] };
@@ -7500,7 +7500,7 @@ function buildNotebookHtml() {
   }));
 
   // get the runtime and styles from current document
-  const styleEl = document.querySelector('style');
+  const styleEl = document.querySelector('#auditable-css') || document.querySelector('style');
   const styles = styleEl.textContent;
 
   // get the script
@@ -7562,7 +7562,7 @@ function buildNotebookHtml() {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Auditable \u2014 ${esc(title)}</title>
-<style>\n${styles}\n</style>
+<style id="auditable-css">\n${styles}\n</style>
 </head>
 <body>
 

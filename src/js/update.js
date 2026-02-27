@@ -31,7 +31,7 @@ function extractSignature(html) {
 // ── RUNTIME EXTRACTION ──
 
 function extractRuntime(html) {
-  const style = html.match(/<style>([\s\S]*?)<\/style>/);
+  const style = html.match(/<style[^>]*>([\s\S]*?)<\/style>/);
   const script = html.match(/<script>([\s\S]*?)<\/script>/);
   if (!style || !script) return null;
   return { style: style[1], script: script[1] };
