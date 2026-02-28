@@ -1,0 +1,324 @@
+/// auditable
+/// title: natra — ndarray for the browser
+/// module: ./ext/atra/index.js ext/atra/index.js
+/// module: ./ext/atra/lib/alpack.src.js ext/atra/lib/alpack.src.js
+/// module: ./ext/natra/index.js ext/natra/index.js
+
+/// md
+# natra — ndarray for the browser
+
+bump-allocated f64 arrays over shared WebAssembly.Memory. atra compiles numerical kernels to Wasm at context creation; all elementwise ops and reductions run in compiled code. JS manages shape metadata and a scope/arena memory model.
+
+/// code collapsed
+const { natra } = await load("./ext/natra/index.js");
+const ctx = await natra({ pages: 16 });
+
+/// md
+## array creation and data access
+
+`ctx.array()` infers shape from nested JS arrays. `zeros`, `ones`, `full`, `eye`, `linspace`, `arange` work like NumPy.
+
+/// code
+const A = ctx.array([[1, 2, 3], [4, 5, 6]]);
+ui.display(`shape: [${A.shape}], strides: [${A.strides}], dtype: ${A.dtype}`);
+ui.display(`ndim: ${A.ndim}, length: ${A.length}, nbytes: ${A.nbytes}`);
+
+const I = ctx.eye(4);
+ui.display("eye(4):");
+ui.table(ctx.toArray(I).map((row, i) => {
+  const obj = {};
+  row.forEach((v, j) => obj[`col ${j}`] = v);
+  return obj;
+}));
+
+/// md
+## scope/arena memory model
+
+all computation happens inside `ctx.scope()`. temporaries are allocated on scratch memory and automatically reclaimed when the scope exits. only the returned array is promoted to permanent storage.
+
+/// code
+const X = ctx.linspace(0, 1, 5);
+const Y = ctx.array([10, 20, 30, 40, 50]);
+
+const result = ctx.scope(s => {
+  const scaled = s.mul(X, 100);    // scratch
+  const shifted = s.add(scaled, Y); // scratch
+  return s.div(shifted, 2);         // promoted
+});
+
+ui.display("X = " + JSON.stringify(ctx.toArray(X)));
+ui.display("Y = " + JSON.stringify(ctx.toArray(Y)));
+ui.display("(X*100 + Y) / 2 = " + JSON.stringify(ctx.toArray(result)));
+
+/// md
+## heat equation — Wasm-accelerated diffusion
+
+a 1D diffusion simulation using natra scopes. each timestep computes the Laplacian via shifted arrays and adds scaled diffusion, all through Wasm kernels.
+
+/// code
+// %manual
+const N = ui.slider("grid points", 200, {min: 50, max: 500, step: 10});
+const diffCoeff = ui.slider("diffusion \u00d7 1000", 500, {min: 10, max: 2000, step: 10});
+const steps = ui.slider("steps per frame", 20, {min: 1, max: 100, step: 1});
+const D = diffCoeff / 1000;
+const dx = 1.0 / N;
+const dt = 0.4 * dx * dx / D;
+
+// initial condition: Gaussian pulse
+const init = new Array(N);
+for (let i = 0; i < N; i++) {
+  const x = i / N - 0.5;
+  init[i] = Math.exp(-x * x / 0.005);
+}
+
+let U = ctx.array(init);
+
+// animation loop
+const size = Math.min(600, window.innerWidth - 80);
+const c = ui.canvas(size, 200);
+const cctx = c.getContext("2d");
+
+let running = true;
+invalidation.then(() => { running = false; });
+
+function draw() {
+  if (!running) return;
+
+  // diffusion steps
+  for (let s = 0; s < steps; s++) {
+    U = ctx.scope(sc => {
+      const u = ctx.toTypedArray(U);
+      // shifted arrays for finite difference: U[i-1], U[i+1]
+      const left = new Array(N);
+      const right = new Array(N);
+      for (let i = 0; i < N; i++) {
+        left[i] = u[i === 0 ? N - 1 : i - 1];
+        right[i] = u[i === N - 1 ? 0 : i + 1];
+      }
+      const L = ctx.array(left);
+      const R = ctx.array(right);
+
+      // Laplacian: (L - 2U + R) / dx^2
+      const sum_lr = sc.add(L, R);
+      const two_u = sc.mul(U, 2);
+      const laplacian = sc.sub(sum_lr, two_u);
+
+      // U_new = U + dt * D * laplacian / dx^2
+      const diffusion = sc.mul(laplacian, dt * D / (dx * dx));
+      return sc.add(U, diffusion);
+    });
+  }
+
+  // render
+  cctx.fillStyle = "#1a1a2e";
+  cctx.fillRect(0, 0, size, 200);
+
+  const data = ctx.toArray(U);
+  cctx.strokeStyle = std.viridis(0.7);
+  cctx.lineWidth = 2;
+  cctx.beginPath();
+  for (let i = 0; i < N; i++) {
+    const x = (i / N) * size;
+    const y = 200 - data[i] * 180;
+    i === 0 ? cctx.moveTo(x, y) : cctx.lineTo(x, y);
+  }
+  cctx.stroke();
+
+  // stats bar
+  const stats = ctx.scope(s => ({
+    sum: s.sum(U).toFixed(4),
+    min: s.min(U).toFixed(4),
+    max: s.max(U).toFixed(4),
+  }));
+  cctx.fillStyle = "#888";
+  cctx.font = "12px monospace";
+  cctx.fillText(`sum=${stats.sum}  min=${stats.min}  max=${stats.max}  dt=${dt.toExponential(2)}`, 8, 16);
+
+  requestAnimationFrame(draw);
+}
+draw();
+
+/// md
+## views — zero-copy transpose, reshape, slice, diag
+
+views create new ndarray descriptors over the same memory. no data is copied — only shape and strides change. `.T` reverses axes, `.reshape()` reinterprets layout, `.slice()` selects sub-regions, `.diag()` extracts the diagonal.
+
+/// code
+const M = ctx.array([[1, 2, 3], [4, 5, 6]]);
+ui.display("M (2\u00d73):");
+ui.table(ctx.toArray(M).map((row, i) => ({ row: i, ...Object.fromEntries(row.map((v, j) => [`c${j}`, v])) })));
+
+const MT = M.T;
+ui.display("M.T (3\u00d72) \u2014 same ptr, reversed strides:");
+ui.table(ctx.toArray(MT).map((row, i) => ({ row: i, ...Object.fromEntries(row.map((v, j) => [`c${j}`, v])) })));
+
+ui.display(`M.ptr = ${M.ptr}, M.T.ptr = ${MT.ptr} (same memory)`);
+
+/// code
+// reshape: reinterpret as different shape (must be contiguous)
+const flat = ctx.arange(1, 13);
+const grid = flat.reshape([3, 4]);
+ui.display("arange(1,13).reshape([3,4]):");
+ui.table(ctx.toArray(grid).map((row, i) => ({ row: i, ...Object.fromEntries(row.map((v, j) => [`c${j}`, v])) })));
+
+// slice: select sub-region
+const col01 = grid.slice(null, [0, 2]);
+ui.display("grid[:, 0:2] \u2014 first two columns:");
+ui.table(ctx.toArray(col01).map((row, i) => ({ row: i, ...Object.fromEntries(row.map((v, j) => [`c${j}`, v])) })));
+
+// slice with step
+const everyOther = flat.slice([0, 12, 2]);
+ui.display("flat[::2] = " + JSON.stringify(ctx.toArray(everyOther)));
+
+// diag: diagonal of a square matrix
+const sq = ctx.array([[10, 20, 30], [40, 50, 60], [70, 80, 90]]);
+ui.display("diag of 3\u00d73 matrix = " + JSON.stringify(ctx.toArray(sq.diag())));
+
+/// md
+## broadcasting
+
+operations on arrays with different but compatible shapes. dimensions are right-aligned; size-1 dimensions stretch to match. works like NumPy broadcasting.
+
+/// code
+// row broadcast: [2,3] + [3] adds the vector to each row
+const mat = ctx.array([[1, 2, 3], [4, 5, 6]]);
+const row = ctx.array([10, 20, 30]);
+const added = ctx.scope(s => s.add(mat, row));
+ui.display("[2,3] + [3] row broadcast:");
+ui.table(ctx.toArray(added).map((r, i) => ({ row: i, ...Object.fromEntries(r.map((v, j) => [`c${j}`, v])) })));
+
+// outer product via broadcasting: [3,1] * [1,4]
+const col = ctx.array([[1], [2], [3]]);
+const r2 = ctx.array([[10, 20, 30, 40]]);
+const outer = ctx.scope(s => s.mul(col, r2));
+ui.display("[3,1] \u00d7 [1,4] outer product:");
+ui.table(ctx.toArray(outer).map((r, i) => ({ row: i, ...Object.fromEntries(r.map((v, j) => [`c${j}`, v])) })));
+
+/// md
+## non-contiguous operations
+
+views like transpose and strided slices produce non-contiguous arrays. all elementwise ops and reductions work on them — the runtime falls back to a strided JS loop when the Wasm contiguous fast path doesn't apply.
+
+/// code
+const P = ctx.array([[1, 2], [3, 4]]);
+const Q = ctx.array([[10, 20], [30, 40]]);
+
+// transpose then add
+const sumT = ctx.scope(s => s.add(P.T, Q.T));
+ui.display("P.T + Q.T:");
+ui.table(ctx.toArray(sumT).map((r, i) => ({ row: i, ...Object.fromEntries(r.map((v, j) => [`c${j}`, v])) })));
+
+// reduction on a strided view
+const R = ctx.array([[5, 1, 9], [3, 8, 2], [7, 4, 6]]);
+ui.display("R.T sum = " + ctx.scope(s => s.sum(R.T)));
+ui.display("R.diag() sum = " + ctx.scope(s => s.sum(R.diag())));
+
+// slice with step, then operate
+const vals = ctx.arange(0, 10);
+const odds = vals.slice([1, 10, 2]); // [1, 3, 5, 7, 9]
+const doubled = ctx.scope(s => s.mul(odds, 2));
+ui.display("odds = " + JSON.stringify(ctx.toArray(odds)));
+ui.display("odds * 2 = " + JSON.stringify(ctx.toArray(doubled)));
+
+/// md
+## reductions
+
+`sum`, `mean`, `min`, `max`, `prod` — all run as Wasm kernels over the full array.
+
+/// code
+const data = ctx.array([3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5]);
+const stats = ctx.scope(s => ({
+  sum:  s.sum(data),
+  mean: s.mean(data),
+  min:  s.min(data),
+  max:  s.max(data),
+  prod: s.prod(data),
+}));
+
+ui.table([stats]);
+
+/// md
+## axis reductions
+
+pass an `axis` argument to reduce along a single dimension instead of flattening. `s.sum(a, 0)` sums down columns, `s.sum(a, 1)` sums across rows. works with `mean`, `min`, `max`, `prod`, and all `nan*` variants.
+
+/// code
+const G = ctx.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]]);
+ui.display("G (3\u00d73):");
+ui.table(ctx.toArray(G).map((r, i) => ({ row: i, c0: r[0], c1: r[1], c2: r[2] })));
+
+const colSums = ctx.scope(s => s.sum(G, 0));
+ui.display("sum(G, 0) \u2014 column sums: " + JSON.stringify(ctx.toArray(colSums)));
+
+const rowSums = ctx.scope(s => s.sum(G, 1));
+ui.display("sum(G, 1) \u2014 row sums: " + JSON.stringify(ctx.toArray(rowSums)));
+
+const colMeans = ctx.scope(s => s.mean(G, 0));
+ui.display("mean(G, 0) \u2014 column means: " + JSON.stringify(ctx.toArray(colMeans)));
+
+const rowMin = ctx.scope(s => s.min(G, 1));
+ui.display("min(G, 1) \u2014 row minimums: " + JSON.stringify(ctx.toArray(rowMin)));
+
+const colMax = ctx.scope(s => s.max(G, 0));
+ui.display("max(G, 0) \u2014 column maximums: " + JSON.stringify(ctx.toArray(colMax)));
+
+/// code
+// nan-safe axis reductions
+const H = ctx.array([[1, NaN, 3], [NaN, 5, 6], [7, 8, NaN]]);
+ui.display("H (with NaN):");
+ui.table(ctx.toArray(H).map((r, i) => ({ row: i, c0: r[0], c1: isNaN(r[1]) ? "NaN" : r[1], c2: isNaN(r[2]) ? "NaN" : r[2] })));
+
+const nanColSum = ctx.scope(s => s.nansum(H, 0));
+ui.display("nansum(H, 0): " + JSON.stringify(ctx.toArray(nanColSum)));
+
+const nanRowMean = ctx.scope(s => s.nanmean(H, 1));
+ui.display("nanmean(H, 1): " + JSON.stringify(ctx.toArray(nanRowMean)));
+
+/// md
+## linear algebra
+
+`matmul`, `solve`, `inv`, `det`, `cholesky`, `eigh`, `dot`, `norm` \u2014 backed by alas/alpack Wasm kernels compiled into the same instance as the elementwise ops. all inputs are automatically copied to contiguous scratch when needed (e.g. transposed views).
+
+/// code
+// matrix multiplication
+const L = ctx.array([[1, 2], [3, 4]]);
+const N2 = ctx.array([[5, 6], [7, 8]]);
+const prod2 = ctx.scope(s => s.matmul(L, N2));
+ui.display("L \u00d7 N:");
+ui.table(ctx.toArray(prod2).map((r, i) => ({ row: i, c0: r[0], c1: r[1] })));
+
+// solve A*x = b
+const Asys = ctx.array([[2, 1, -1], [-3, -1, 2], [-2, 1, 2]]);
+const bsys = ctx.array([8, -11, -3]);
+const xsol = ctx.scope(s => s.solve(Asys, bsys));
+ui.display("solve Ax = b:");
+ui.display("  A = " + JSON.stringify(ctx.toArray(Asys)));
+ui.display("  b = " + JSON.stringify(ctx.toArray(bsys)));
+ui.display("  x = " + JSON.stringify(ctx.toArray(xsol).map(v => +v.toFixed(10))));
+
+// verify: A*x should equal b
+const check = ctx.scope(s => s.matmul(Asys, xsol));
+ui.display("  A*x = " + JSON.stringify(ctx.toArray(check).map(v => +v.toFixed(10))));
+
+/// code
+// eigendecomposition of a symmetric matrix
+const Sym = ctx.array([[4, 1, 0], [1, 3, 1], [0, 1, 2]]);
+const [eigenvalues, eigenvectors] = ctx.scope(s => s.eigh(Sym));
+ui.display("symmetric eigendecomposition:");
+ui.display("  eigenvalues: " + JSON.stringify(ctx.toArray(eigenvalues).map(v => +v.toFixed(6))));
+ui.display("  eigenvectors (columns):");
+const V2 = ctx.toArray(eigenvectors);
+ui.table(V2.map((r, i) => ({ row: i, ...Object.fromEntries(r.map((v, j) => [`v${j}`, +v.toFixed(6)])) })));
+
+// determinant and inverse
+const D2 = ctx.array([[1, 2], [3, 4]]);
+ui.display("\ndet([[1,2],[3,4]]) = " + ctx.scope(s => s.det(D2)));
+const D2inv = ctx.scope(s => s.inv(D2));
+ui.display("inv([[1,2],[3,4]]):");
+ui.table(ctx.toArray(D2inv).map((r, i) => ({ row: i, c0: +r[0].toFixed(4), c1: +r[1].toFixed(4) })));
+
+// Cholesky: A = L*L^T for SPD matrix
+const SPD = ctx.array([[4, 2], [2, 3]]);
+const Lchol = ctx.scope(s => s.cholesky(SPD));
+ui.display("\ncholesky([[4,2],[2,3]]):");
+ui.table(ctx.toArray(Lchol).map((r, i) => ({ row: i, c0: +r[0].toFixed(6), c1: +r[1].toFixed(6) })));
