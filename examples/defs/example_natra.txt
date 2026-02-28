@@ -277,7 +277,7 @@ ui.display("nanmean(H, 1): " + JSON.stringify(ctx.toArray(nanRowMean)));
 /// md
 ## linear algebra
 
-`matmul`, `solve`, `inv`, `det`, `cholesky`, `eigh`, `dot`, `norm` \u2014 backed by alas/alpack Wasm kernels compiled into the same instance as the elementwise ops. all inputs are automatically copied to contiguous scratch when needed (e.g. transposed views).
+`matmul`, `solve`, `inv`, `det`, `cholesky`, `eigh`, `dot`, `norm` — backed by alas/alpack Wasm kernels compiled into the same instance as the elementwise ops. all inputs are automatically copied to contiguous scratch when needed (e.g. transposed views).
 
 /// code
 // matrix multiplication
@@ -322,3 +322,82 @@ const SPD = ctx.array([[4, 2], [2, 3]]);
 const Lchol = ctx.scope(s => s.cholesky(SPD));
 ui.display("\ncholesky([[4,2],[2,3]]):");
 ui.table(ctx.toArray(Lchol).map((r, i) => ({ row: i, c0: +r[0].toFixed(6), c1: +r[1].toFixed(6) })));
+
+/// md
+## comparison & indexing
+
+comparison ops return f64 masks (1.0 = true, 0.0 = false). `where` selects elements conditionally. `argsort` + `take` sort data, `compress` filters by mask, `searchsorted` does binary search.
+
+/// code
+const vals2 = ctx.array([3, 1, 4, 1, 5, 9, 2, 6]);
+
+// comparison: which values are > 3?
+const mask2 = ctx.scope(s => s.gt(vals2, 3));
+ui.display("vals:   " + JSON.stringify(ctx.toArray(vals2)));
+ui.display("gt(3):  " + JSON.stringify(ctx.toArray(mask2)));
+
+// where: replace small values with 0
+const clamped = ctx.scope(s => s.where(s.ge(vals2, 3), vals2, 0));
+ui.display("where(ge(3), vals, 0): " + JSON.stringify(ctx.toArray(clamped)));
+
+// compress: extract only the values > 3
+const big = ctx.scope(s => s.compress(vals2, s.gt(vals2, 3)));
+ui.display("compress(gt(3)): " + JSON.stringify(ctx.toArray(big)));
+
+/// code
+// argsort + take: sort an array
+const unsorted = ctx.array([30, 10, 50, 20, 40]);
+const sorted = ctx.scope(s => {
+  const order = s.argsort(unsorted);
+  return s.take(unsorted, order);
+});
+ui.display("unsorted: " + JSON.stringify(ctx.toArray(unsorted)));
+ui.display("sorted:   " + JSON.stringify(ctx.toArray(sorted)));
+
+// searchsorted: find insertion points
+const bins = ctx.array([10, 20, 30, 40, 50]);
+const queries = ctx.array([5, 15, 30, 45, 55]);
+const positions = ctx.scope(s => s.searchsorted(bins, queries));
+ui.display("\nbins:    " + JSON.stringify(ctx.toArray(bins)));
+ui.display("queries: " + JSON.stringify(ctx.toArray(queries)));
+ui.display("indices: " + JSON.stringify(ctx.toArray(positions)));
+
+/// md
+## RNG — xoshiro256**
+
+seeded pseudorandom number generation. `ctx.random(shape)` fills with uniform [0, 1), `ctx.randn(shape)` fills with standard normal (Box-Muller). `ctx.seed(n)` sets the state for reproducibility.
+
+/// code
+ctx.seed(42);
+const U = ctx.random([8]);
+ui.display("uniform [0,1): " + JSON.stringify(ctx.toArray(U).map(v => +v.toFixed(6))));
+
+const Z = ctx.randn([8]);
+ui.display("normal N(0,1): " + JSON.stringify(ctx.toArray(Z).map(v => +v.toFixed(6))));
+
+// Monte Carlo \u03c0 estimate
+ctx.seed(0);
+const N3 = 50000;
+const xs = ctx.random([N3]);
+const ys = ctx.random([N3]);
+const inside = ctx.scope(s => {
+  const r2 = s.add(s.mul(xs, xs), s.mul(ys, ys));
+  return s.sum(s.le(r2, 1));
+});
+const piEst = 4 * inside / N3;
+ui.display(`\nMonte Carlo \u03c0 (${N3} points): ${piEst.toFixed(6)} (error: ${Math.abs(piEst - Math.PI).toExponential(2)})`);
+
+/// md
+## display — toString and trace
+
+ndarrays have a built-in `toString()` so they work in template literals (`${arr}`) and `String(arr)`. 1D prints inline, 2D prints multi-line with right-aligned columns. `ctx.trace(arr)` adds shape, strides, and contiguity metadata.
+
+/// code
+const v1d = ctx.array([1, 2, 3, 4, 5]);
+ui.display("1D: " + v1d);
+
+const m2d = ctx.array([[1, 200, 3], [4000, 5, 60]]);
+ui.display("2D:\n" + m2d);
+
+ui.display("\ntrace:");
+ui.display(ctx.trace(m2d));

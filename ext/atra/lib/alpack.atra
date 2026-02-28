@@ -672,6 +672,161 @@ begin
   w[2] := e3
 end
 
+! ── Eigendecomposition: 3x3 analytical with eigenvectors ─────────────
+
+! eigenvalues + eigenvectors of a 3x3 symmetric matrix
+! a is 3x3 symmetric (9 f64), w receives 3 eigenvalues (sorted descending),
+! v receives 3x3 eigenvector matrix (columns are eigenvectors, row-major)
+! uses Cardano eigenvalues + cross-product null-space for eigenvectors
+subroutine alpack.dsyev3v(a: array f64; w: array f64; v: array f64)
+var
+  a00, a01, a02, a11, a12, a22: f64
+  p1, q, p2, p, b00, b11, b22, det_b, half_det: f64
+  phi, r, e1, e2, e3: f64
+  m: f64
+  pi: f64
+  ! eigenvector computation
+  k, best: i32
+  r0x, r0y, r0z, r1x, r1y, r1z, r2x, r2y, r2z: f64
+  cx, cy, cz: f64
+  n01, n12, n02, nmax, nrm: f64
+begin
+  pi := 3.14159265358979323846
+
+  a00 := a[0, 3, 0]
+  a01 := a[0, 3, 1]
+  a02 := a[0, 3, 2]
+  a11 := a[1, 3, 1]
+  a12 := a[1, 3, 2]
+  a22 := a[2, 3, 2]
+
+  ! ── compute eigenvalues (same as dsyev3) ──
+  m := (a00 + a11 + a22) / 3.0
+  p1 := a01 * a01 + a02 * a02 + a12 * a12
+
+  if (p1 <= 1e-30) then
+    ! diagonal matrix
+    e1 := a00
+    e2 := a11
+    e3 := a22
+    if (e2 > e1) then
+      r := e1
+      e1 := e2
+      e2 := r
+    end if
+    if (e3 > e2) then
+      r := e2
+      e2 := e3
+      e3 := r
+    end if
+    if (e2 > e1) then
+      r := e1
+      e1 := e2
+      e2 := r
+    end if
+    w[0] := e1
+    w[1] := e2
+    w[2] := e3
+    ! eigenvectors for diagonal: identity (re-ordered to match eigenvalue order)
+    ! Find which diagonal entry maps to which eigenvalue
+    ! For simplicity with the sorted eigenvalues, compute eigenvectors below
+  else
+    q := m
+    p2 := (a00 - q) * (a00 - q) + (a11 - q) * (a11 - q) + (a22 - q) * (a22 - q) + 2.0 * p1
+    p := sqrt(p2 / 6.0)
+
+    b00 := (a00 - q) / p
+    b11 := (a11 - q) / p
+    b22 := (a22 - q) / p
+    det_b := b00 * (b11 * b22 - (a12 / p) * (a12 / p))
+           - (a01 / p) * ((a01 / p) * b22 - (a12 / p) * (a02 / p))
+           + (a02 / p) * ((a01 / p) * (a12 / p) - b11 * (a02 / p))
+    half_det := det_b / 2.0
+
+    if (half_det <= -1.0) then
+      phi := pi / 3.0
+    else if (half_det >= 1.0) then
+      phi := 0.0
+    else
+      phi := atan2(sqrt(1.0 - half_det * half_det), half_det) / 3.0
+    end if
+
+    e1 := q + 2.0 * p * cos(phi)
+    e3 := q + 2.0 * p * cos(phi + 2.0 * pi / 3.0)
+    e2 := 3.0 * q - e1 - e3
+
+    w[0] := e1
+    w[1] := e2
+    w[2] := e3
+  end if
+
+  ! ── compute eigenvectors via cross-product null-space ──
+  ! For each eigenvalue w[k], form B = A - w[k]*I, take cross product
+  ! of two rows with largest cross-product norm
+  for k := 0, 3
+    r0x := a00 - w[k]
+    r0y := a01
+    r0z := a02
+    r1x := a01
+    r1y := a11 - w[k]
+    r1z := a12
+    r2x := a02
+    r2y := a12
+    r2z := a22 - w[k]
+
+    ! cross products of row pairs
+    ! r0 x r1
+    cx := r0y * r1z - r0z * r1y
+    cy := r0z * r1x - r0x * r1z
+    cz := r0x * r1y - r0y * r1x
+    n01 := cx * cx + cy * cy + cz * cz
+
+    nmax := n01
+    ! store best cross product
+    v[0, 3, k] := cx
+    v[1, 3, k] := cy
+    v[2, 3, k] := cz
+
+    ! r1 x r2
+    cx := r1y * r2z - r1z * r2y
+    cy := r1z * r2x - r1x * r2z
+    cz := r1x * r2y - r1y * r2x
+    n12 := cx * cx + cy * cy + cz * cz
+    if (n12 > nmax) then
+      nmax := n12
+      v[0, 3, k] := cx
+      v[1, 3, k] := cy
+      v[2, 3, k] := cz
+    end if
+
+    ! r0 x r2
+    cx := r0y * r2z - r0z * r2y
+    cy := r0z * r2x - r0x * r2z
+    cz := r0x * r2y - r0y * r2x
+    n02 := cx * cx + cy * cy + cz * cz
+    if (n02 > nmax) then
+      nmax := n02
+      v[0, 3, k] := cx
+      v[1, 3, k] := cy
+      v[2, 3, k] := cz
+    end if
+
+    ! normalize
+    nrm := sqrt(nmax)
+    if (nrm > 1e-30) then
+      v[0, 3, k] := v[0, 3, k] / nrm
+      v[1, 3, k] := v[1, 3, k] / nrm
+      v[2, 3, k] := v[2, 3, k] / nrm
+    else
+      ! degenerate: use canonical basis vector
+      v[0, 3, k] := 0.0
+      v[1, 3, k] := 0.0
+      v[2, 3, k] := 0.0
+      v[k, 3, k] := 1.0
+    end if
+  end for
+end
+
 ! ── Eigendecomposition: general symmetric (Jacobi) ──────────────────
 
 ! eigenvalues of an n x n symmetric matrix via cyclic Jacobi rotations
@@ -747,6 +902,105 @@ begin
             tmp := a[p, n, i]
             a[p, n, i] := c * tmp - s * a[q, n, i]
             a[q, n, i] := s * tmp + c * a[q, n, i]
+          end for
+        end if
+      end for
+    end for
+  end for
+  info[0] := 1
+end
+
+! ── Eigendecomposition: general symmetric (Jacobi) with eigenvectors ──
+
+! eigenvalues + eigenvectors of an n x n symmetric matrix via cyclic Jacobi
+! a is overwritten (destroyed). w receives n eigenvalues (unsorted).
+! v receives n x n eigenvector matrix (columns are eigenvectors, row-major).
+! info[0] = 0 on success, 1 if not converged
+subroutine alpack.dsyevv(
+  a: array f64; w: array f64; v: array f64;
+  n: i32; info: array i32
+)
+var
+  i, j, p, q, iter, maxIter: i32
+  off, thresh, app, aqq, apq: f64
+  tau, t, c, s, tmp: f64
+begin
+  info[0] := 0
+  maxIter := 100
+
+  ! initialize V = I
+  for i := 0, n
+    for j := 0, n
+      if (i == j) then
+        v[i, n, j] := 1.0
+      else
+        v[i, n, j] := 0.0
+      end if
+    end for
+  end for
+
+  ! initialize w to diagonal of a
+  for i := 0, n
+    w[i] := a[i, n, i]
+  end for
+
+  for iter := 0, maxIter
+    ! compute off-diagonal norm
+    off := 0.0
+    for p := 0, n
+      for q := p + 1, n
+        off := off + a[p, n, q] * a[p, n, q]
+      end for
+    end for
+    if (off < 1e-28) then
+      call return()
+    end if
+
+    thresh := if (iter < 4) then 0.2 * off / f64(n * n) else 0.0
+
+    for p := 0, n
+      for q := p + 1, n
+        apq := a[p, n, q]
+        if (abs(apq) <= thresh) then
+          ! skip small elements in early sweeps
+        else
+          app := w[p]
+          aqq := w[q]
+          tau := (aqq - app) / (2.0 * apq)
+          if (tau >= 0.0) then
+            t := 1.0 / (tau + sqrt(1.0 + tau * tau))
+          else
+            t := 0.0 - 1.0 / (0.0 - tau + sqrt(1.0 + tau * tau))
+          end if
+          c := 1.0 / sqrt(1.0 + t * t)
+          s := t * c
+
+          w[p] := app - t * apq
+          w[q] := aqq + t * apq
+          a[p, n, q] := 0.0
+
+          ! rotate rows/columns p and q
+          for i := 0, p
+            tmp := a[i, n, p]
+            a[i, n, p] := c * tmp - s * a[i, n, q]
+            a[i, n, q] := s * tmp + c * a[i, n, q]
+          end for
+          for i := p + 1, q
+            tmp := a[p, n, i]
+            a[p, n, i] := c * tmp - s * a[i, n, q]
+            a[i, n, q] := s * tmp + c * a[i, n, q]
+          end for
+          for i := q + 1, n
+            tmp := a[p, n, i]
+            a[p, n, i] := c * tmp - s * a[q, n, i]
+            a[q, n, i] := s * tmp + c * a[q, n, i]
+          end for
+
+          ! accumulate into eigenvector matrix V
+          for i := 0, n
+            tmp := v[i, n, p]
+            v[i, n, p] := c * tmp - s * v[i, n, q]
+            v[i, n, q] := s * tmp + c * v[i, n, q]
           end for
         end if
       end for

@@ -64,6 +64,120 @@ async function getAlpackAll() {
   return _alpackAll;
 }
 
+// ── Strided kernel generation helpers ────────────────────────────────
+
+function genStridedEwise(name, op, ranks) {
+  let src = '';
+  for (const r of ranks) {
+    const params = [];
+    const vars = [];
+    const loopVars = 'ijklmn'.slice(0, r).split('');
+    params.push('a: array f64');
+    for (let d = 0; d < r; d++) params.push(`sa${d}: i32`);
+    params.push('b: array f64');
+    for (let d = 0; d < r; d++) params.push(`sb${d}: i32`);
+    params.push('out: array f64');
+    for (let d = 0; d < r; d++) params.push(`so${d}: i32`);
+    for (let d = 0; d < r; d++) params.push(`n${d}: i32`);
+    vars.push(...loopVars.map(v => `${v}: i32`));
+    const aIdx = loopVars.map((v, d) => `${v} * sa${d}`).join(' + ');
+    const bIdx = loopVars.map((v, d) => `${v} * sb${d}`).join(' + ');
+    const oIdx = loopVars.map((v, d) => `${v} * so${d}`).join(' + ');
+    let body = `out[${oIdx}] := a[${aIdx}] ${op} b[${bIdx}]`;
+    let loops = body;
+    for (let d = r - 1; d >= 0; d--) {
+      loops = `for ${loopVars[d]} := 0, n${d}\n    ${'  '.repeat(r - 1 - d)}${loops}\n  ${'  '.repeat(r - 1 - d)}end for`;
+    }
+    src += `\nsubroutine ewise.${name}.s${r}.f64(${params.join('; ')})\nvar ${vars.join(', ')}\nbegin\n  ${loops}\nend\n`;
+  }
+  return src;
+}
+
+function genStridedNeg(ranks) {
+  let src = '';
+  for (const r of ranks) {
+    const params = [];
+    const vars = [];
+    const loopVars = 'ijklmn'.slice(0, r).split('');
+    params.push('a: array f64');
+    for (let d = 0; d < r; d++) params.push(`sa${d}: i32`);
+    params.push('out: array f64');
+    for (let d = 0; d < r; d++) params.push(`so${d}: i32`);
+    for (let d = 0; d < r; d++) params.push(`n${d}: i32`);
+    vars.push(...loopVars.map(v => `${v}: i32`));
+    const aIdx = loopVars.map((v, d) => `${v} * sa${d}`).join(' + ');
+    const oIdx = loopVars.map((v, d) => `${v} * so${d}`).join(' + ');
+    let body = `out[${oIdx}] := -a[${aIdx}]`;
+    let loops = body;
+    for (let d = r - 1; d >= 0; d--) {
+      loops = `for ${loopVars[d]} := 0, n${d}\n    ${'  '.repeat(r - 1 - d)}${loops}\n  ${'  '.repeat(r - 1 - d)}end for`;
+    }
+    src += `\nsubroutine ewise.neg.s${r}.f64(${params.join('; ')})\nvar ${vars.join(', ')}\nbegin\n  ${loops}\nend\n`;
+  }
+  return src;
+}
+
+function genStridedScalar(name, op, ranks) {
+  let src = '';
+  for (const r of ranks) {
+    const params = [];
+    const vars = [];
+    const loopVars = 'ijklmn'.slice(0, r).split('');
+    params.push('a: array f64');
+    for (let d = 0; d < r; d++) params.push(`sa${d}: i32`);
+    params.push('out: array f64');
+    for (let d = 0; d < r; d++) params.push(`so${d}: i32`);
+    for (let d = 0; d < r; d++) params.push(`n${d}: i32`);
+    params.push('s: f64');
+    vars.push(...loopVars.map(v => `${v}: i32`));
+    const aIdx = loopVars.map((v, d) => `${v} * sa${d}`).join(' + ');
+    const oIdx = loopVars.map((v, d) => `${v} * so${d}`).join(' + ');
+    let body = `out[${oIdx}] := a[${aIdx}] ${op} s`;
+    let loops = body;
+    for (let d = r - 1; d >= 0; d--) {
+      loops = `for ${loopVars[d]} := 0, n${d}\n    ${'  '.repeat(r - 1 - d)}${loops}\n  ${'  '.repeat(r - 1 - d)}end for`;
+    }
+    src += `\nsubroutine ewise.${name}.s${r}.f64(${params.join('; ')})\nvar ${vars.join(', ')}\nbegin\n  ${loops}\nend\n`;
+  }
+  return src;
+}
+
+function genStridedReduce(name, accumExpr, initExpr, ranks) {
+  let src = '';
+  for (const r of ranks) {
+    const params = [];
+    const vars = [];
+    const loopVars = 'ijklmn'.slice(0, r).split('');
+    params.push('a: array f64');
+    for (let d = 0; d < r; d++) params.push(`sa${d}: i32`);
+    for (let d = 0; d < r; d++) params.push(`n${d}: i32`);
+    vars.push(...loopVars.map(v => `${v}: i32`));
+    vars.push('acc: f64', 'v: f64');
+    const aIdx = loopVars.map((v, d) => `${v} * sa${d}`).join(' + ');
+    let body = `v := a[${aIdx}]\n      ${'  '.repeat(r - 1)}${accumExpr}`;
+    let loops = body;
+    for (let d = r - 1; d >= 0; d--) {
+      loops = `for ${loopVars[d]} := 0, n${d}\n    ${'  '.repeat(r - 1 - d)}${loops}\n  ${'  '.repeat(r - 1 - d)}end for`;
+    }
+    src += `\nfunction reduce.${name}.s${r}.f64(${params.join('; ')}): f64\nvar ${vars.join('; ')}\nbegin\n  acc := ${initExpr}\n  ${loops}\n  reduce.${name}.s${r}.f64 := acc\nend\n`;
+  }
+  return src;
+}
+
+const STRIDED_KERNELS = [
+  genStridedEwise('add', '+', [1,2,3]),
+  genStridedEwise('sub', '-', [1,2,3]),
+  genStridedEwise('mul', '*', [1,2,3]),
+  genStridedEwise('div', '/', [1,2,3]),
+  genStridedNeg([1,2,3]),
+  genStridedScalar('adds', '+', [1,2,3]),
+  genStridedScalar('muls', '*', [1,2,3]),
+  genStridedReduce('sum', 'acc := acc + v', '0.0', [1,2,3]),
+  genStridedReduce('min', 'if (v < acc) then\n        acc := v\n      end if', 'a[0]', [1,2,3]),
+  genStridedReduce('max', 'if (v > acc) then\n        acc := v\n      end if', 'a[0]', [1,2,3]),
+  genStridedReduce('prod', 'acc := acc * v', '1.0', [1,2,3]),
+].join('\n');
+
 // ── Kernel source (atra) ─────────────────────────────────────────────
 
 const KERNEL_SRC = `
@@ -245,6 +359,94 @@ begin
   reduce.nancount.f64 := c
 end
 
+! ── comparison (f64: 1.0 = true, 0.0 = false) ────────────────
+
+subroutine cmp.eq.f64(a: array f64; b: array f64; out: array f64; n: i32)
+var i: i32
+begin
+  for i := 0, n
+    if (a[i] == b[i]) then
+      out[i] := 1.0
+    else
+      out[i] := 0.0
+    end if
+  end for
+end
+
+subroutine cmp.ne.f64(a: array f64; b: array f64; out: array f64; n: i32)
+var i: i32
+begin
+  for i := 0, n
+    if (a[i] == b[i]) then
+      out[i] := 0.0
+    else
+      out[i] := 1.0
+    end if
+  end for
+end
+
+subroutine cmp.lt.f64(a: array f64; b: array f64; out: array f64; n: i32)
+var i: i32
+begin
+  for i := 0, n
+    if (a[i] < b[i]) then
+      out[i] := 1.0
+    else
+      out[i] := 0.0
+    end if
+  end for
+end
+
+subroutine cmp.le.f64(a: array f64; b: array f64; out: array f64; n: i32)
+var i: i32
+begin
+  for i := 0, n
+    if (a[i] <= b[i]) then
+      out[i] := 1.0
+    else
+      out[i] := 0.0
+    end if
+  end for
+end
+
+subroutine cmp.gt.f64(a: array f64; b: array f64; out: array f64; n: i32)
+var i: i32
+begin
+  for i := 0, n
+    if (a[i] > b[i]) then
+      out[i] := 1.0
+    else
+      out[i] := 0.0
+    end if
+  end for
+end
+
+subroutine cmp.ge.f64(a: array f64; b: array f64; out: array f64; n: i32)
+var i: i32
+begin
+  for i := 0, n
+    if (a[i] >= b[i]) then
+      out[i] := 1.0
+    else
+      out[i] := 0.0
+    end if
+  end for
+end
+
+! ── conditional select ───────────────────────────────────────
+
+subroutine where.f64(cond: array f64; a: array f64; b: array f64; out: array f64; n: i32)
+var i: i32
+begin
+  for i := 0, n
+    if (cond[i] /= 0.0) then
+      out[i] := a[i]
+    else
+      out[i] := b[i]
+    end if
+  end for
+end
+
 ! ── fill ──────────────────────────────────────────────────────
 
 subroutine fill.f64(a: array f64; n: i32; val: f64)
@@ -263,6 +465,8 @@ begin
     a[i] := 0
   end for
 end
+
+${STRIDED_KERNELS}
 `;
 
 // ── Constants ────────────────────────────────────────────────────────
@@ -271,16 +475,30 @@ const ALIGN = 16; // 16-byte alignment for SIMD compat
 const ITEMSIZE_F64 = 8;
 const PAGE_SIZE = 65536; // WebAssembly page = 64KB
 
+// ── Dead-array detection ──────────────────────────────────────────────
+
+const _deadArrays = new WeakSet();
+
+function checkLive(arr) {
+  if (_deadArrays.has(arr))
+    throw new Error('Array access after scope exit: this array was not returned from its scope and its memory has been reclaimed');
+}
+
 // ── Allocator ────────────────────────────────────────────────────────
 
 function alignUp(n, a) {
   return (n + a - 1) & ~(a - 1);
 }
 
-function ensureMemory(memory, needed) {
+function ensureMemory(memory, needed, maxPages) {
   const have = memory.buffer.byteLength;
   if (needed > have) {
     const pages = Math.ceil((needed - have) / PAGE_SIZE);
+    if (maxPages !== undefined) {
+      const totalPages = have / PAGE_SIZE + pages;
+      if (totalPages > maxPages)
+        throw new Error(`Memory limit exceeded: need ${totalPages} pages, max is ${maxPages} (${(maxPages * 64 / 1024).toFixed(0)} MB)`);
+    }
     memory.grow(pages);
   }
 }
@@ -294,6 +512,130 @@ function isContiguous(arr) {
     stride *= arr.shape[i];
   }
   return true;
+}
+
+// ── Display / formatting ─────────────────────────────────────────────
+
+function _fmtVal(v) {
+  if (Number.isNaN(v)) return 'nan';
+  if (v === Infinity) return 'inf';
+  if (v === -Infinity) return '-inf';
+  if (Number.isInteger(v) && Math.abs(v) < 1e16) return String(v);
+  const a = Math.abs(v);
+  if (a >= 1e8 || (a !== 0 && a < 1e-4)) return v.toExponential(4);
+  return v.toFixed(4).replace(/\.?0+$/, '');
+}
+
+function _formatNdarray(arr) {
+  const f64 = new Float64Array(arr.memory.buffer);
+  const ndim = arr.ndim;
+  const total = arr.length;
+
+  // 3D+ → compact single-line summary
+  if (ndim > 2) {
+    const LIMIT = 6;
+    const vals = [];
+    const indices = new Array(ndim).fill(0);
+    const show = total <= LIMIT;
+    for (let i = 0; i < total; i++) {
+      if (!show && i === 3 && total > LIMIT) {
+        vals.push('...');
+        // skip to last 3
+        i = total - 4;
+        // advance indices to match
+        let rem = total - 3;
+        for (let d = 0; d < ndim; d++) {
+          const below = arr.shape.slice(d + 1).reduce((a, b) => a * b, 1);
+          indices[d] = Math.floor(rem / below);
+          rem %= below;
+        }
+        continue;
+      }
+      let off = arr.ptr;
+      for (let d = 0; d < ndim; d++) off += indices[d] * arr.strides[d];
+      vals.push(_fmtVal(f64[off >> 3]));
+
+      for (let d = ndim - 1; d >= 0; d--) {
+        if (++indices[d] < arr.shape[d]) break;
+        indices[d] = 0;
+      }
+    }
+    return `array([${vals.join(', ')}], shape=[${arr.shape}], dtype=${arr.dtype})`;
+  }
+
+  // helper: read one element by multi-index
+  function readEl(...idx) {
+    let off = arr.ptr;
+    for (let d = 0; d < ndim; d++) off += idx[d] * arr.strides[d];
+    return f64[off >> 3];
+  }
+
+  // 1D
+  if (ndim <= 1) {
+    const n = arr.shape[0] || 0;
+    const vals = [];
+    if (n <= 6) {
+      for (let i = 0; i < n; i++) vals.push(_fmtVal(readEl(i)));
+    } else {
+      for (let i = 0; i < 3; i++) vals.push(_fmtVal(readEl(i)));
+      vals.push('...');
+      for (let i = n - 3; i < n; i++) vals.push(_fmtVal(readEl(i)));
+    }
+    return `array([${vals.join(', ')}])`;
+  }
+
+  // 2D — multi-line, right-aligned columns
+  const [rows, cols] = arr.shape;
+  const truncRows = rows > 6;
+  const truncCols = cols > 6;
+
+  // determine which row/col indices to display
+  const rowIdx = truncRows
+    ? [0, 1, 2, -1, rows - 3, rows - 2, rows - 1]
+    : Array.from({ length: rows }, (_, i) => i);
+  const colIdx = truncCols
+    ? [0, 1, 2, -1, cols - 3, cols - 2, cols - 1]
+    : Array.from({ length: cols }, (_, i) => i);
+
+  // format all visible cells and find column widths
+  const grid = [];
+  const colWidths = new Array(colIdx.length).fill(0);
+  for (const ri of rowIdx) {
+    if (ri === -1) { grid.push(null); continue; }
+    const row = [];
+    for (let ci = 0; ci < colIdx.length; ci++) {
+      if (colIdx[ci] === -1) { row.push('...'); }
+      else { row.push(_fmtVal(readEl(ri, colIdx[ci]))); }
+      if (row[ci].length > colWidths[ci]) colWidths[ci] = row[ci].length;
+    }
+    grid.push(row);
+  }
+
+  // prefix: "array([" for first row, spaces for rest
+  const prefix = 'array(';
+  const indent = ' '.repeat(prefix.length);
+
+  const lines = [];
+  for (let gi = 0; gi < grid.length; gi++) {
+    const row = grid[gi];
+    const isFirst = gi === 0;
+    const isLast = gi === grid.length - 1;
+    const pre = isFirst ? prefix : indent;
+
+    if (row === null) {
+      // ellipsis row
+      lines.push(indent + '       ...');
+      continue;
+    }
+
+    const padded = row.map((v, ci) => v.padStart(colWidths[ci]));
+    const inner = padded.join(', ');
+    const open = '[';
+    const close = isLast ? ']])' : '],';
+    lines.push(pre + open + inner + close);
+  }
+
+  return lines.join('\n');
 }
 
 // ── Broadcasting ────────────────────────────────────────────────────
@@ -394,6 +736,29 @@ function stridedReduce(memory, aPtr, aStrides, shape, init, jsOp) {
   return acc;
 }
 
+function stridedTernaryOp(memory, cPtr, cStrides, aPtr, aStrides, bPtr, bStrides, outPtr, outStrides, outShape, jsOp) {
+  const ndim = outShape.length;
+  const total = outShape.reduce((a, b) => a * b, 1);
+  const f64 = new Float64Array(memory.buffer);
+  const indices = new Array(ndim).fill(0);
+
+  for (let flat = 0; flat < total; flat++) {
+    let cOff = cPtr, aOff = aPtr, bOff = bPtr, oOff = outPtr;
+    for (let d = 0; d < ndim; d++) {
+      cOff += indices[d] * cStrides[d];
+      aOff += indices[d] * aStrides[d];
+      bOff += indices[d] * bStrides[d];
+      oOff += indices[d] * outStrides[d];
+    }
+    f64[oOff >> 3] = jsOp(f64[cOff >> 3], f64[aOff >> 3], f64[bOff >> 3]);
+
+    for (let d = ndim - 1; d >= 0; d--) {
+      if (++indices[d] < outShape[d]) break;
+      indices[d] = 0;
+    }
+  }
+}
+
 function stridedScalarOp(memory, aPtr, aStrides, outPtr, outStrides, outShape, scalar, jsOp) {
   const ndim = outShape.length;
   const total = outShape.reduce((a, b) => a * b, 1);
@@ -490,6 +855,8 @@ function makeArray(ptr, dtype, shape, strides, memory, arena) {
       const diagStride = frozenStrides[0] + frozenStrides[1];
       return makeArray(ptr, dtype, [n], [diagStride], memory, null);
     },
+
+    toString() { return _formatNdarray(arr); },
   };
 
   Object.freeze(arr);
@@ -531,11 +898,13 @@ function flattenData(data, out, offset) {
 // ── Data access ──────────────────────────────────────────────────────
 
 function toTypedArray(arr) {
+  checkLive(arr);
   if (!isContiguous(arr)) throw new Error('Cannot create typed array view of non-contiguous array');
   return new Float64Array(arr.memory.buffer, arr.ptr, arr.length);
 }
 
 function toArray(arr) {
+  checkLive(arr);
   if (isContiguous(arr)) {
     // Fast path: contiguous layout
     const f64 = new Float64Array(arr.memory.buffer, arr.ptr, arr.length);
@@ -580,26 +949,37 @@ function _unflattenRec(flat, shape, dim, offset) {
 
 function getElement(arr, ...indices) {
   if (indices.length !== arr.ndim) throw new Error(`Expected ${arr.ndim} indices, got ${indices.length}`);
+  checkLive(arr);
   let byteOffset = arr.ptr;
   for (let i = 0; i < indices.length; i++) {
-    byteOffset += indices[i] * arr.strides[i];
+    let idx = indices[i];
+    if (idx < 0) idx += arr.shape[i];
+    if (idx < 0 || idx >= arr.shape[i])
+      throw new RangeError(`Index ${indices[i]} out of bounds for axis ${i} with size ${arr.shape[i]}`);
+    byteOffset += idx * arr.strides[i];
   }
   return new Float64Array(arr.memory.buffer, byteOffset, 1)[0];
 }
 
 function setElement(arr, value, ...indices) {
   if (indices.length !== arr.ndim) throw new Error(`Expected ${arr.ndim} indices, got ${indices.length}`);
+  checkLive(arr);
   let byteOffset = arr.ptr;
   for (let i = 0; i < indices.length; i++) {
-    byteOffset += indices[i] * arr.strides[i];
+    let idx = indices[i];
+    if (idx < 0) idx += arr.shape[i];
+    if (idx < 0 || idx >= arr.shape[i])
+      throw new RangeError(`Index ${indices[i]} out of bounds for axis ${i} with size ${arr.shape[i]}`);
+    byteOffset += idx * arr.strides[i];
   }
   new Float64Array(arr.memory.buffer, byteOffset, 1)[0] = value;
 }
 
-function copyArray(arr, memory, permPtr) {
+function copyArray(arr, memory, permPtr, maxPages) {
+  checkLive(arr);
   const length = arr.shape.reduce((a, b) => a * b, 1);
   const nbytes = length * arr.itemsize;
-  const ptr = allocPerm(memory, permPtr, nbytes);
+  const ptr = allocPerm(memory, permPtr, nbytes, maxPages);
   if (isContiguous(arr) && arr.memory === memory) {
     const src = new Uint8Array(arr.memory.buffer, arr.ptr, nbytes);
     new Uint8Array(memory.buffer, ptr, nbytes).set(src);
@@ -623,33 +1003,34 @@ function copyArray(arr, memory, permPtr) {
   return makeArray(ptr, arr.dtype, arr.shape, strides, memory, null);
 }
 
-function allocPerm(memory, permPtr, nbytes) {
+function allocPerm(memory, permPtr, nbytes, maxPages) {
   const ptr = alignUp(permPtr.value, ALIGN);
   permPtr.value = ptr + nbytes;
-  ensureMemory(memory, permPtr.value);
+  ensureMemory(memory, permPtr.value, maxPages);
   return ptr;
 }
 
-function allocScratch(memory, heapPtr, nbytes) {
+function allocScratch(memory, heapPtr, nbytes, maxPages) {
   const ptr = alignUp(heapPtr.value, ALIGN);
   heapPtr.value = ptr + nbytes;
-  ensureMemory(memory, heapPtr.value);
+  ensureMemory(memory, heapPtr.value, maxPages);
   return ptr;
 }
 
 // ── Scope / Arena ────────────────────────────────────────────────────
 
 class Arena {
-  constructor(memory, heapPtr, parentArena) {
+  constructor(memory, heapPtr, parentArena, maxPages) {
     this.memory = memory;
     this.heapPtr = heapPtr;
     this.watermark = heapPtr.value;
     this.parent = parentArena;
     this.arrays = []; // track allocations for promotion
+    this.maxPages = maxPages;
   }
 
   alloc(nbytes) {
-    const ptr = allocScratch(this.memory, this.heapPtr, nbytes);
+    const ptr = allocScratch(this.memory, this.heapPtr, nbytes, this.maxPages);
     return ptr;
   }
 
@@ -663,6 +1044,7 @@ class Arena {
 async function natra(opts = {}) {
   const pages = opts.pages || 256;
   const memory = opts.memory || new WebAssembly.Memory({ initial: pages });
+  const maxPages = opts.maxPages !== undefined ? opts.maxPages : 16384; // default 1GB
 
   // Compile kernels (natra elementwise/reduce + alpack linalg in one Wasm instance)
   const atra = await getAtra();
@@ -680,7 +1062,7 @@ async function natra(opts = {}) {
       const ptr = arena.alloc(nbytes);
       return ptr;
     }
-    return allocPerm(memory, permPtr, nbytes);
+    return allocPerm(memory, permPtr, nbytes, maxPages);
   }
 
   function _makeNd(ptr, shape, arena) {
@@ -703,7 +1085,7 @@ async function natra(opts = {}) {
     const shape = (opts && opts.shape) ? opts.shape : inferShape(data);
     const length = shape.reduce((a, b) => a * b, 1);
     const nbytes = length * ITEMSIZE_F64;
-    const ptr = allocPerm(memory, permPtr, nbytes);
+    const ptr = allocPerm(memory, permPtr, nbytes, maxPages);
     const f64 = new Float64Array(memory.buffer, ptr, length);
     if (Array.isArray(data)) {
       if (Array.isArray(data[0]) || (opts && opts.shape)) {
@@ -781,11 +1163,89 @@ async function natra(opts = {}) {
     return arr;
   }
 
+  // ── RNG (xoshiro256**) ──────────────────────────────────────────
+
+  const MASK64 = (1n << 64n) - 1n;
+
+  function rotl64(x, k) {
+    const kb = BigInt(k);
+    return ((x << kb) | (x >> (64n - kb))) & MASK64;
+  }
+
+  // SplitMix64 for seed initialization
+  function splitmix64Step(state) {
+    state = (state + 0x9e3779b97f4a7c15n) & MASK64;
+    let z = state;
+    z = ((z ^ (z >> 30n)) * 0xbf58476d1ce4e5b9n) & MASK64;
+    z = ((z ^ (z >> 27n)) * 0x94d049bb133111ebn) & MASK64;
+    return [(z ^ (z >> 31n)) & MASK64, state];
+  }
+
+  let rng0 = 0n, rng1 = 0n, rng2 = 0n, rng3 = 0n;
+
+  function seed(n) {
+    let st = BigInt(n) & MASK64;
+    [rng0, st] = splitmix64Step(st);
+    [rng1, st] = splitmix64Step(st);
+    [rng2, st] = splitmix64Step(st);
+    [rng3, st] = splitmix64Step(st);
+  }
+
+  seed(42); // default seed
+
+  function nextU64() {
+    const result = (rotl64((rng1 * 5n) & MASK64, 7) * 9n) & MASK64;
+    const t = (rng1 << 17n) & MASK64;
+    rng2 = (rng2 ^ rng0) & MASK64;
+    rng3 = (rng3 ^ rng1) & MASK64;
+    rng1 = (rng1 ^ rng2) & MASK64;
+    rng0 = (rng0 ^ rng3) & MASK64;
+    rng2 = (rng2 ^ t) & MASK64;
+    rng3 = rotl64(rng3, 45);
+    return result;
+  }
+
+  function nextF64() {
+    return Number(nextU64() >> 11n) / 9007199254740992; // 2^53
+  }
+
+  function random(shape) {
+    const arr = _allocArray(shape, null);
+    const f64 = new Float64Array(memory.buffer, arr.ptr, arr.length);
+    for (let i = 0; i < arr.length; i++) f64[i] = nextF64();
+    if (heapPtr.value < permPtr.value) heapPtr.value = permPtr.value;
+    return arr;
+  }
+
+  function randn(shape) {
+    const arr = _allocArray(shape, null);
+    const f64 = new Float64Array(memory.buffer, arr.ptr, arr.length);
+    const len = arr.length;
+    let i = 0;
+    while (i + 1 < len) {
+      let u1;
+      do { u1 = nextF64(); } while (u1 === 0);
+      const u2 = nextF64();
+      const r = Math.sqrt(-2 * Math.log(u1));
+      const theta = 2 * Math.PI * u2;
+      f64[i++] = r * Math.cos(theta);
+      f64[i++] = r * Math.sin(theta);
+    }
+    if (i < len) {
+      let u1;
+      do { u1 = nextF64(); } while (u1 === 0);
+      const u2 = nextF64();
+      f64[i] = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+    }
+    if (heapPtr.value < permPtr.value) heapPtr.value = permPtr.value;
+    return arr;
+  }
+
   // ── Scope ────────────────────────────────────────────────────────
 
   function scope(fn) {
     // Save watermark
-    const arena = new Arena(memory, heapPtr, null);
+    const arena = new Arena(memory, heapPtr, null, maxPages);
 
     // Build scope object with ops
     const s = makeScopeOps(arena);
@@ -801,7 +1261,8 @@ async function natra(opts = {}) {
     const watermark = arena.watermark;
 
     if (result === undefined || result === null || typeof result === 'number') {
-      // Scalar or nothing — just reclaim scratch
+      // Scalar or nothing — just reclaim scratch, mark all arena arrays as dead
+      for (const arr of arena.arrays) _deadArrays.add(arr);
       heapPtr.value = watermark;
       if (permPtr.value < heapPtr.value) permPtr.value = heapPtr.value;
       return result;
@@ -818,7 +1279,8 @@ async function natra(opts = {}) {
     }
 
     if (toPromote.length === 0) {
-      // Nothing to promote, reclaim all scratch
+      // Nothing to promote, reclaim all scratch — mark all arena arrays as dead
+      for (const arr of arena.arrays) _deadArrays.add(arr);
       heapPtr.value = watermark;
       if (permPtr.value < heapPtr.value) permPtr.value = heapPtr.value;
       return result;
@@ -845,6 +1307,12 @@ async function natra(opts = {}) {
     // Update pointers
     heapPtr.value = dest;
     permPtr.value = dest;
+
+    // Mark unreturned arena arrays as dead
+    const promotedSet = new Set(toPromote);
+    for (const arr of arena.arrays) {
+      if (!promotedSet.has(arr)) _deadArrays.add(arr);
+    }
 
     // Return in same shape as input
     if (Array.isArray(result)) {
@@ -877,9 +1345,34 @@ async function natra(opts = {}) {
     const JS_MUL = (a, b) => a * b;
     const JS_DIV = (a, b) => a / b;
     const JS_NEG = a => -a;
+    const JS_EQ = (a, b) => a === b ? 1.0 : 0.0;
+    const JS_NE = (a, b) => a !== b ? 1.0 : 0.0;
+    const JS_LT = (a, b) => a < b   ? 1.0 : 0.0;
+    const JS_LE = (a, b) => a <= b  ? 1.0 : 0.0;
+    const JS_GT = (a, b) => a > b   ? 1.0 : 0.0;
+    const JS_GE = (a, b) => a >= b  ? 1.0 : 0.0;
+    const JS_WHERE = (c, a, b) => c !== 0.0 ? a : b;
 
     // ── Axis reduction helper ───────────────────────────────────────
     function axisReduce(a, axis, init, jsOp, finalize) {
+      // Multi-axis: reduce sequentially (highest axis first to preserve indices)
+      if (Array.isArray(axis)) {
+        const axes = [...axis].sort((a, b) => b - a); // descending
+        let result = a;
+        for (const ax of axes) result = axisReduce(result, ax, init, jsOp, null);
+        if (finalize) {
+          // Apply finalize with total count across all reduced axes
+          const totalLen = axis.reduce((acc, ax) => acc * a.shape[ax < 0 ? ax + a.ndim : ax], 1);
+          const f64 = new Float64Array(memory.buffer);
+          const fin = allocScoped(result.shape);
+          for (let i = 0; i < result.length; i++) {
+            f64[(fin.ptr >> 3) + i] = finalize(f64[(result.ptr >> 3) + i], totalLen);
+          }
+          return fin;
+        }
+        return result;
+      }
+
       if (axis < 0) axis += a.ndim;
       if (axis < 0 || axis >= a.ndim) throw new Error(`axis ${axis} out of range for ndim ${a.ndim}`);
 
@@ -930,23 +1423,112 @@ async function natra(opts = {}) {
       return true;
     }
 
+    // Helper: convert byte strides to element strides (i32) for Wasm kernels
+    const toElem = s => (s / ITEMSIZE_F64) | 0;
+
+    // Call strided Wasm binary kernel if available for this rank
+    function callStridedAA(kern, a, aStrides, b, bStrides, out, outStrides, outShape) {
+      const ndim = outShape.length;
+      if (ndim === 1) {
+        kern[1](a.ptr, toElem(aStrides[0]), b.ptr, toElem(bStrides[0]),
+          out.ptr, toElem(outStrides[0]), outShape[0]);
+      } else if (ndim === 2) {
+        kern[2](a.ptr, toElem(aStrides[0]), toElem(aStrides[1]),
+          b.ptr, toElem(bStrides[0]), toElem(bStrides[1]),
+          out.ptr, toElem(outStrides[0]), toElem(outStrides[1]),
+          outShape[0], outShape[1]);
+      } else {
+        kern[3](a.ptr, toElem(aStrides[0]), toElem(aStrides[1]), toElem(aStrides[2]),
+          b.ptr, toElem(bStrides[0]), toElem(bStrides[1]), toElem(bStrides[2]),
+          out.ptr, toElem(outStrides[0]), toElem(outStrides[1]), toElem(outStrides[2]),
+          outShape[0], outShape[1], outShape[2]);
+      }
+    }
+
+    function callStridedScalar(kern, a, aStrides, out, outStrides, outShape, scalar) {
+      const ndim = outShape.length;
+      if (ndim === 1) {
+        kern[1](a.ptr, toElem(aStrides[0]), out.ptr, toElem(outStrides[0]), outShape[0], scalar);
+      } else if (ndim === 2) {
+        kern[2](a.ptr, toElem(aStrides[0]), toElem(aStrides[1]),
+          out.ptr, toElem(outStrides[0]), toElem(outStrides[1]),
+          outShape[0], outShape[1], scalar);
+      } else {
+        kern[3](a.ptr, toElem(aStrides[0]), toElem(aStrides[1]), toElem(aStrides[2]),
+          out.ptr, toElem(outStrides[0]), toElem(outStrides[1]), toElem(outStrides[2]),
+          outShape[0], outShape[1], outShape[2], scalar);
+      }
+    }
+
+    function callStridedNeg(kern, a, aStrides, out, outStrides, outShape) {
+      const ndim = outShape.length;
+      if (ndim === 1) {
+        kern[1](a.ptr, toElem(aStrides[0]), out.ptr, toElem(outStrides[0]), outShape[0]);
+      } else if (ndim === 2) {
+        kern[2](a.ptr, toElem(aStrides[0]), toElem(aStrides[1]),
+          out.ptr, toElem(outStrides[0]), toElem(outStrides[1]),
+          outShape[0], outShape[1]);
+      } else {
+        kern[3](a.ptr, toElem(aStrides[0]), toElem(aStrides[1]), toElem(aStrides[2]),
+          out.ptr, toElem(outStrides[0]), toElem(outStrides[1]), toElem(outStrides[2]),
+          outShape[0], outShape[1], outShape[2]);
+      }
+    }
+
+    function callStridedReduce(kern, a, aStrides, shape) {
+      const ndim = shape.length;
+      if (ndim === 1) {
+        return kern[1](a.ptr, toElem(aStrides[0]), shape[0]);
+      } else if (ndim === 2) {
+        return kern[2](a.ptr, toElem(aStrides[0]), toElem(aStrides[1]), shape[0], shape[1]);
+      } else {
+        return kern[3](a.ptr, toElem(aStrides[0]), toElem(aStrides[1]), toElem(aStrides[2]),
+          shape[0], shape[1], shape[2]);
+      }
+    }
+
+    // Strided kernel maps (rank → Wasm kernel)
+    const stridedAA = {
+      add: { 1: K.ewise.add.s1.f64, 2: K.ewise.add.s2.f64, 3: K.ewise.add.s3.f64 },
+      sub: { 1: K.ewise.sub.s1.f64, 2: K.ewise.sub.s2.f64, 3: K.ewise.sub.s3.f64 },
+      mul: { 1: K.ewise.mul.s1.f64, 2: K.ewise.mul.s2.f64, 3: K.ewise.mul.s3.f64 },
+      div: { 1: K.ewise.div.s1.f64, 2: K.ewise.div.s2.f64, 3: K.ewise.div.s3.f64 },
+    };
+    const stridedNegK = { 1: K.ewise.neg.s1.f64, 2: K.ewise.neg.s2.f64, 3: K.ewise.neg.s3.f64 };
+    const stridedScalarK = {
+      adds: { 1: K.ewise.adds.s1.f64, 2: K.ewise.adds.s2.f64, 3: K.ewise.adds.s3.f64 },
+      muls: { 1: K.ewise.muls.s1.f64, 2: K.ewise.muls.s2.f64, 3: K.ewise.muls.s3.f64 },
+    };
+    const stridedReduceK = {
+      sum: { 1: K.reduce.sum.s1.f64, 2: K.reduce.sum.s2.f64, 3: K.reduce.sum.s3.f64 },
+      min: { 1: K.reduce.min.s1.f64, 2: K.reduce.min.s2.f64, 3: K.reduce.min.s3.f64 },
+      max: { 1: K.reduce.max.s1.f64, 2: K.reduce.max.s2.f64, 3: K.reduce.max.s3.f64 },
+      prod: { 1: K.reduce.prod.s1.f64, 2: K.reduce.prod.s2.f64, 3: K.reduce.prod.s3.f64 },
+    };
+
     // Binary elementwise with scalar support and broadcasting
-    function binaryOp(a, b, kernelAA, kernelAS, scalarMode, jsOp) {
+    function binaryOp(a, b, kernelAA, kernelAS, scalarMode, jsOp, stridedKern, stridedScalar) {
       const aIsScalar = typeof a === 'number';
       const bIsScalar = typeof b === 'number';
 
       if (aIsScalar && bIsScalar) return jsOp(a, b);
 
       if (bIsScalar) {
-        const s = scalarMode === 'negate' ? -b : scalarMode === 'reciprocal' ? 1 / b : b;
+        const sv = scalarMode === 'negate' ? -b : scalarMode === 'reciprocal' ? 1 / b : b;
         if (isContiguous(a)) {
           const out = allocScoped(a.shape);
-          kernelAS(a.ptr, out.ptr, a.length, s);
+          kernelAS(a.ptr, out.ptr, a.length, sv);
           return out;
         }
-        // Non-contiguous array + scalar
+        // Non-contiguous array + scalar — try strided Wasm kernel
+        const ndim = a.ndim;
+        if (ndim <= 3 && stridedScalar) {
+          const out = allocScoped(a.shape);
+          callStridedScalar(stridedScalar, a, a.strides, out, out.strides, a.shape, sv);
+          return out;
+        }
         const out = allocScoped(a.shape);
-        stridedScalarOp(memory, a.ptr, a.strides, out.ptr, out.strides, a.shape, s,
+        stridedScalarOp(memory, a.ptr, a.strides, out.ptr, out.strides, a.shape, sv,
           scalarMode === 'negate' ? JS_ADD : scalarMode === 'reciprocal' ? JS_MUL : jsOp === JS_ADD ? JS_ADD : JS_MUL);
         return out;
       }
@@ -1000,14 +1582,23 @@ async function natra(opts = {}) {
         bStrides = broadcastStrides(b.shape, b.strides, outShape);
       }
 
+      // Strided Wasm path for 1D/2D/3D
+      const ndim = outShape.length;
+      if (ndim <= 3 && stridedKern) {
+        const out = allocScoped(outShape);
+        callStridedAA(stridedKern, a, aStrides, b, bStrides, out, out.strides, outShape);
+        return out;
+      }
+
       const out = allocScoped(outShape);
       stridedBinaryOp(memory, a.ptr, aStrides, b.ptr, bStrides, out.ptr, out.strides, outShape, jsOp);
       return out;
     }
 
-    // Reduction helper: contiguous → Wasm, strided → JS
-    function reduceOp(a, wasmKernel, init, jsOp) {
+    // Reduction helper: contiguous → Wasm, strided → Wasm (1D/2D/3D) or JS fallback
+    function reduceOp(a, wasmKernel, init, jsOp, stridedK) {
       if (isContiguous(a)) return wasmKernel(a.ptr, a.length);
+      if (stridedK && a.ndim <= 3) return callStridedReduce(stridedK, a, a.strides, a.shape);
       return stridedReduce(memory, a.ptr, a.strides, a.shape, init, jsOp);
     }
 
@@ -1046,16 +1637,67 @@ async function natra(opts = {}) {
       return out;
     }
 
+    // Comparison op: same structure as binaryOp but simpler — no scalar kernel variants
+    function cmpOp(a, b, wasmKernel, jsOp) {
+      const aIsScalar = typeof a === 'number';
+      const bIsScalar = typeof b === 'number';
+
+      if (aIsScalar && bIsScalar) return jsOp(a, b);
+
+      if (bIsScalar) {
+        const out = allocScoped(a.shape);
+        stridedScalarOp(memory, a.ptr, a.strides, out.ptr, out.strides, a.shape, b, jsOp);
+        return out;
+      }
+
+      if (aIsScalar) {
+        const out = allocScoped(b.shape);
+        stridedScalarOp(memory, b.ptr, b.strides, out.ptr, out.strides, b.shape, a, (elem, s) => jsOp(s, elem));
+        return out;
+      }
+
+      // Both arrays
+      const sameShape = shapesEqual(a.shape, b.shape);
+      if (sameShape && isContiguous(a) && isContiguous(b)) {
+        const out = allocScoped(a.shape);
+        wasmKernel(a.ptr, b.ptr, out.ptr, a.length);
+        return out;
+      }
+
+      // Broadcast or non-contiguous
+      let outShape, aStrides, bStrides;
+      if (sameShape) {
+        outShape = [...a.shape];
+        aStrides = [...a.strides];
+        bStrides = [...b.strides];
+      } else {
+        outShape = broadcastShapes(a.shape, b.shape);
+        aStrides = broadcastStrides(a.shape, a.strides, outShape);
+        bStrides = broadcastStrides(b.shape, b.strides, outShape);
+      }
+
+      const out = allocScoped(outShape);
+      stridedBinaryOp(memory, a.ptr, aStrides, b.ptr, bStrides, out.ptr, out.strides, outShape, jsOp);
+      return out;
+    }
+
     const s = {
-      add(a, b) { return binaryOp(a, b, K.ewise.add.f64, K.ewise.adds.f64, false, JS_ADD); },
-      sub(a, b) { return binaryOp(a, b, K.ewise.sub.f64, K.ewise.adds.f64, 'negate', JS_SUB); },
-      mul(a, b) { return binaryOp(a, b, K.ewise.mul.f64, K.ewise.muls.f64, false, JS_MUL); },
-      div(a, b) { return binaryOp(a, b, K.ewise.div.f64, K.ewise.muls.f64, 'reciprocal', JS_DIV); },
+      add(a, b) { return binaryOp(a, b, K.ewise.add.f64, K.ewise.adds.f64, false, JS_ADD, stridedAA.add, stridedScalarK.adds); },
+      sub(a, b) { return binaryOp(a, b, K.ewise.sub.f64, K.ewise.adds.f64, 'negate', JS_SUB, stridedAA.sub, stridedScalarK.adds); },
+      mul(a, b) { return binaryOp(a, b, K.ewise.mul.f64, K.ewise.muls.f64, false, JS_MUL, stridedAA.mul, stridedScalarK.muls); },
+      div(a, b) { return binaryOp(a, b, K.ewise.div.f64, K.ewise.muls.f64, 'reciprocal', JS_DIV, stridedAA.div, stridedScalarK.muls); },
 
       neg(a) {
         if (isContiguous(a)) {
           const out = allocScoped(a.shape);
           K.ewise.neg.f64(a.ptr, out.ptr, a.length);
+          return out;
+        }
+        // Strided Wasm path for 1D/2D/3D
+        const ndim = a.ndim;
+        if (ndim <= 3) {
+          const out = allocScoped(a.shape);
+          callStridedNeg(stridedNegK, a, a.strides, out, out.strides, a.shape);
           return out;
         }
         const out = allocScoped(a.shape);
@@ -1065,29 +1707,23 @@ async function natra(opts = {}) {
 
       // Reductions — return scalar (no axis) or array (with axis)
       sum(a, axis) {
-        if (axis === undefined) return reduceOp(a, K.reduce.sum.f64, 0, JS_ADD);
+        if (axis === undefined) return reduceOp(a, K.reduce.sum.f64, 0, JS_ADD, stridedReduceK.sum);
         return axisReduce(a, axis, 0, JS_ADD);
       },
       mean(a, axis) {
-        if (axis === undefined) return reduceOp(a, K.reduce.sum.f64, 0, JS_ADD) / a.length;
+        if (axis === undefined) return reduceOp(a, K.reduce.sum.f64, 0, JS_ADD, stridedReduceK.sum) / a.length;
         return axisReduce(a, axis, 0, JS_ADD, (acc, n) => acc / n);
       },
       min(a, axis) {
-        if (axis === undefined) {
-          if (isContiguous(a)) return K.reduce.min.f64(a.ptr, a.length);
-          return stridedReduce(memory, a.ptr, a.strides, a.shape, Infinity, (acc, v) => v < acc ? v : acc);
-        }
+        if (axis === undefined) return reduceOp(a, K.reduce.min.f64, Infinity, (acc, v) => v < acc ? v : acc, stridedReduceK.min);
         return axisReduce(a, axis, Infinity, (acc, v) => v < acc ? v : acc);
       },
       max(a, axis) {
-        if (axis === undefined) {
-          if (isContiguous(a)) return K.reduce.max.f64(a.ptr, a.length);
-          return stridedReduce(memory, a.ptr, a.strides, a.shape, -Infinity, (acc, v) => v > acc ? v : acc);
-        }
+        if (axis === undefined) return reduceOp(a, K.reduce.max.f64, -Infinity, (acc, v) => v > acc ? v : acc, stridedReduceK.max);
         return axisReduce(a, axis, -Infinity, (acc, v) => v > acc ? v : acc);
       },
       prod(a, axis) {
-        if (axis === undefined) return reduceOp(a, K.reduce.prod.f64, 1, JS_MUL);
+        if (axis === undefined) return reduceOp(a, K.reduce.prod.f64, 1, JS_MUL, stridedReduceK.prod);
         return axisReduce(a, axis, 1, JS_MUL);
       },
 
@@ -1312,83 +1948,20 @@ async function natra(opts = {}) {
       eigh(a) {
         if (a.ndim !== 2 || a.shape[0] !== a.shape[1]) throw new Error('eigh: a must be 2D square');
         const n = a.shape[0];
-
-        // Copy a to scratch — dsyev destroys it (converges to diagonal)
         const ac = copyToScoped(a);
-
-        // Allocate eigenvector matrix V = I, accumulate Jacobi rotations
-        const vc = allocScoped([n, n]);
-        K.fill.zero(vc.ptr, vc.nbytes);
-        const f64 = new Float64Array(memory.buffer);
-        for (let i = 0; i < n; i++) f64[(vc.ptr >> 3) + i * n + i] = 1;
-
-        // JS Jacobi with eigenvector accumulation
-        const maxIter = 100;
-        const w = new Float64Array(n);
-        for (let i = 0; i < n; i++) w[i] = f64[(ac.ptr >> 3) + i * n + i];
-
-        for (let iter = 0; iter < maxIter; iter++) {
-          let off = 0;
-          for (let p = 0; p < n; p++)
-            for (let q = p + 1; q < n; q++)
-              off += f64[(ac.ptr >> 3) + p * n + q] ** 2;
-          if (off < 1e-28) break;
-
-          const thresh = iter < 4 ? 0.2 * off / (n * n) : 0;
-
-          for (let p = 0; p < n; p++) {
-            for (let q = p + 1; q < n; q++) {
-              const apq = f64[(ac.ptr >> 3) + p * n + q];
-              if (Math.abs(apq) <= thresh) continue;
-
-              const app = w[p], aqq = w[q];
-              const tau = (aqq - app) / (2 * apq);
-              const t = tau >= 0
-                ? 1 / (tau + Math.sqrt(1 + tau * tau))
-                : -1 / (-tau + Math.sqrt(1 + tau * tau));
-              const c = 1 / Math.sqrt(1 + t * t);
-              const sn = t * c;
-
-              w[p] = app - t * apq;
-              w[q] = aqq + t * apq;
-              f64[(ac.ptr >> 3) + p * n + q] = 0;
-
-              // Rotate rows/columns of A
-              for (let i = 0; i < p; i++) {
-                const aip = f64[(ac.ptr >> 3) + i * n + p];
-                const aiq = f64[(ac.ptr >> 3) + i * n + q];
-                f64[(ac.ptr >> 3) + i * n + p] = c * aip - sn * aiq;
-                f64[(ac.ptr >> 3) + i * n + q] = sn * aip + c * aiq;
-              }
-              for (let i = p + 1; i < q; i++) {
-                const api = f64[(ac.ptr >> 3) + p * n + i];
-                const aiq = f64[(ac.ptr >> 3) + i * n + q];
-                f64[(ac.ptr >> 3) + p * n + i] = c * api - sn * aiq;
-                f64[(ac.ptr >> 3) + i * n + q] = sn * api + c * aiq;
-              }
-              for (let i = q + 1; i < n; i++) {
-                const api = f64[(ac.ptr >> 3) + p * n + i];
-                const aqi = f64[(ac.ptr >> 3) + q * n + i];
-                f64[(ac.ptr >> 3) + p * n + i] = c * api - sn * aqi;
-                f64[(ac.ptr >> 3) + q * n + i] = sn * api + c * aqi;
-              }
-
-              // Accumulate eigenvectors: V := V * G(p,q)
-              for (let i = 0; i < n; i++) {
-                const vip = f64[(vc.ptr >> 3) + i * n + p];
-                const viq = f64[(vc.ptr >> 3) + i * n + q];
-                f64[(vc.ptr >> 3) + i * n + p] = c * vip - sn * viq;
-                f64[(vc.ptr >> 3) + i * n + q] = sn * vip + c * viq;
-              }
-            }
-          }
-        }
-
-        // Write eigenvalues to scoped array
         const wArr = allocScoped([n]);
-        const wf64 = new Float64Array(memory.buffer, wArr.ptr, n);
-        wf64.set(w);
+        const vc = allocScoped([n, n]);
 
+        if (n === 3) {
+          // Analytical 3×3 — no iteration, no info check needed
+          K.alpack.dsyev3v(ac.ptr, wArr.ptr, vc.ptr);
+        } else {
+          // General Jacobi with eigenvector accumulation
+          const infoPtr = allocI32(1);
+          K.alpack.dsyevv(ac.ptr, wArr.ptr, vc.ptr, n, infoPtr);
+          const info = new Int32Array(memory.buffer, infoPtr, 1)[0];
+          if (info !== 0) throw new Error('eigh: failed to converge');
+        }
         return [wArr, vc];
       },
 
@@ -1408,6 +1981,198 @@ async function natra(opts = {}) {
         }
         throw new Error('norm: array must be 1D or 2D');
       },
+
+      // ── Comparison (f64 masks: 1.0 = true, 0.0 = false) ──────────
+
+      eq(a, b) { return cmpOp(a, b, K.cmp.eq.f64, JS_EQ); },
+      ne(a, b) { return cmpOp(a, b, K.cmp.ne.f64, JS_NE); },
+      lt(a, b) { return cmpOp(a, b, K.cmp.lt.f64, JS_LT); },
+      le(a, b) { return cmpOp(a, b, K.cmp.le.f64, JS_LE); },
+      gt(a, b) { return cmpOp(a, b, K.cmp.gt.f64, JS_GT); },
+      ge(a, b) { return cmpOp(a, b, K.cmp.ge.f64, JS_GE); },
+
+      // ── Conditional select ────────────────────────────────────────
+
+      where(cond, a, b) {
+        const condIsScalar = typeof cond === 'number';
+        const aIsScalar = typeof a === 'number';
+        const bIsScalar = typeof b === 'number';
+
+        if (condIsScalar && aIsScalar && bIsScalar) return cond !== 0 ? a : b;
+
+        // Determine output shape from all non-scalar operands
+        let outShape = null;
+        for (const op of [cond, a, b]) {
+          if (typeof op !== 'number') {
+            outShape = outShape ? broadcastShapes(outShape, op.shape) : [...op.shape];
+          }
+        }
+
+        // Fast path: all arrays, same shape, all contiguous
+        if (!condIsScalar && !aIsScalar && !bIsScalar &&
+            shapesEqual(cond.shape, a.shape) && shapesEqual(a.shape, b.shape) &&
+            isContiguous(cond) && isContiguous(a) && isContiguous(b)) {
+          const out = allocScoped(cond.shape);
+          K.where.f64(cond.ptr, a.ptr, b.ptr, out.ptr, cond.length);
+          return out;
+        }
+
+        // General path: broadcast + scalars via stridedTernaryOp with scalar temporaries
+        // For each scalar operand, create a temp filled array
+        let condArr = cond, aArr = a, bArr = b;
+        const totalLen = outShape.reduce((x, y) => x * y, 1);
+
+        if (condIsScalar) {
+          condArr = allocScoped(outShape);
+          K.fill.f64(condArr.ptr, totalLen, cond);
+        }
+        if (aIsScalar) {
+          aArr = allocScoped(outShape);
+          K.fill.f64(aArr.ptr, totalLen, a);
+        }
+        if (bIsScalar) {
+          bArr = allocScoped(outShape);
+          K.fill.f64(bArr.ptr, totalLen, b);
+        }
+
+        const cStrides = broadcastStrides(condArr.shape, condArr.strides, outShape);
+        const aStrides = broadcastStrides(aArr.shape, aArr.strides, outShape);
+        const bStrides = broadcastStrides(bArr.shape, bArr.strides, outShape);
+
+        const out = allocScoped(outShape);
+        stridedTernaryOp(memory, condArr.ptr, cStrides, aArr.ptr, aStrides, bArr.ptr, bStrides,
+          out.ptr, out.strides, outShape, JS_WHERE);
+        return out;
+      },
+
+      // ── Fancy indexing ────────────────────────────────────────────
+
+      take(a, indices) {
+        if (a.ndim !== 1) throw new Error('take: a must be 1D');
+        if (indices.ndim !== 1) throw new Error('take: indices must be 1D');
+        const f64 = new Float64Array(memory.buffer);
+        const out = allocScoped([indices.length]);
+        const n = indices.length;
+        for (let i = 0; i < n; i++) {
+          let idxOff = indices.ptr;
+          for (let d = 0; d < indices.ndim; d++) idxOff += (d === 0 ? i : 0) * indices.strides[d];
+          const idx = Math.trunc(f64[idxOff >> 3]);
+          let aOff = a.ptr + idx * a.strides[0];
+          f64[(out.ptr >> 3) + i] = f64[aOff >> 3];
+        }
+        return out;
+      },
+
+      compress(a, mask) {
+        const aLen = a.length;
+        const mLen = mask.length;
+        if (aLen !== mLen) throw new Error(`compress: length mismatch: a=${aLen} vs mask=${mLen}`);
+        const f64 = new Float64Array(memory.buffer);
+
+        // Pass 1: count nonzero
+        let count = 0;
+        const aNdim = a.ndim, mNdim = mask.ndim;
+        const aIndices = new Array(aNdim).fill(0);
+        const mIndices = new Array(mNdim).fill(0);
+
+        for (let flat = 0; flat < aLen; flat++) {
+          let mOff = mask.ptr;
+          for (let d = 0; d < mNdim; d++) mOff += mIndices[d] * mask.strides[d];
+          if (f64[mOff >> 3] !== 0) count++;
+          for (let d = mNdim - 1; d >= 0; d--) {
+            if (++mIndices[d] < mask.shape[d]) break;
+            mIndices[d] = 0;
+          }
+        }
+
+        // Pass 2: gather
+        const out = allocScoped([count]);
+        mIndices.fill(0);
+        const aInd2 = new Array(aNdim).fill(0);
+        let outIdx = 0;
+        for (let flat = 0; flat < aLen; flat++) {
+          let mOff = mask.ptr;
+          for (let d = 0; d < mNdim; d++) mOff += mIndices[d] * mask.strides[d];
+          if (f64[mOff >> 3] !== 0) {
+            let aOff = a.ptr;
+            for (let d = 0; d < aNdim; d++) aOff += aInd2[d] * a.strides[d];
+            f64[(out.ptr >> 3) + outIdx++] = f64[aOff >> 3];
+          }
+          for (let d = mNdim - 1; d >= 0; d--) {
+            if (++mIndices[d] < mask.shape[d]) break;
+            mIndices[d] = 0;
+          }
+          for (let d = aNdim - 1; d >= 0; d--) {
+            if (++aInd2[d] < a.shape[d]) break;
+            aInd2[d] = 0;
+          }
+        }
+        return out;
+      },
+
+      argsort(a) {
+        if (a.ndim !== 1) throw new Error('argsort: a must be 1D');
+        const f64 = new Float64Array(memory.buffer);
+        const n = a.length;
+
+        // Read values (handles strides)
+        const vals = new Array(n);
+        for (let i = 0; i < n; i++) {
+          vals[i] = f64[(a.ptr + i * a.strides[0]) >> 3];
+        }
+
+        // Build index array and sort
+        const idx = new Array(n);
+        for (let i = 0; i < n; i++) idx[i] = i;
+        idx.sort((i, j) => vals[i] - vals[j]);
+
+        // Write sorted indices
+        const out = allocScoped([n]);
+        const outF64 = new Float64Array(memory.buffer, out.ptr, n);
+        for (let i = 0; i < n; i++) outF64[i] = idx[i];
+        return out;
+      },
+
+      searchsorted(a, v) {
+        if (a.ndim !== 1) throw new Error('searchsorted: a must be 1D');
+        const f64 = new Float64Array(memory.buffer);
+        const n = a.length;
+
+        // Read a into JS array for binary search (handles strides)
+        const aVals = new Array(n);
+        for (let i = 0; i < n; i++) {
+          aVals[i] = f64[(a.ptr + i * a.strides[0]) >> 3];
+        }
+
+        function bisectRight(val) {
+          let lo = 0, hi = n;
+          while (lo < hi) {
+            const mid = (lo + hi) >>> 1;
+            if (aVals[mid] <= val) lo = mid + 1;
+            else hi = mid;
+          }
+          return lo;
+        }
+
+        if (typeof v === 'number') return bisectRight(v);
+
+        // v is an ndarray
+        const out = allocScoped(v.shape);
+        const vLen = v.length;
+        const vNdim = v.ndim;
+        const vIndices = new Array(vNdim).fill(0);
+        for (let flat = 0; flat < vLen; flat++) {
+          let vOff = v.ptr;
+          for (let d = 0; d < vNdim; d++) vOff += vIndices[d] * v.strides[d];
+          const val = f64[vOff >> 3];
+          f64[(out.ptr >> 3) + flat] = bisectRight(val);
+          for (let d = vNdim - 1; d >= 0; d--) {
+            if (++vIndices[d] < v.shape[d]) break;
+            vIndices[d] = 0;
+          }
+        }
+        return out;
+      },
     };
 
     return s;
@@ -1425,6 +2190,7 @@ async function natra(opts = {}) {
   return {
     memory,
     array, zeros, ones, full, eye, linspace, arange,
+    random, randn, seed,
     scope, reset,
 
     // data access as methods (also available as module functions)
@@ -1433,9 +2199,23 @@ async function natra(opts = {}) {
     get(arr, ...indices) { return getElement(arr, ...indices); },
     set(arr, value, ...indices) { return setElement(arr, value, ...indices); },
     copy(arr) {
-      const result = copyArray(arr, memory, permPtr);
+      const result = copyArray(arr, memory, permPtr, maxPages);
       if (heapPtr.value < permPtr.value) heapPtr.value = permPtr.value;
       return result;
+    },
+
+    trace(arr) {
+      const lines = [
+        `shape:      [${arr.shape}]`,
+        `dtype:      ${arr.dtype}`,
+        `strides:    [${arr.strides}]`,
+        `length:     ${arr.length}`,
+        `nbytes:     ${arr.nbytes}`,
+        `ptr:        ${arr.ptr}`,
+        `contiguous: ${isContiguous(arr)}`,
+        _formatNdarray(arr),
+      ];
+      return lines.join('\n');
     },
   };
 }
