@@ -1337,3 +1337,896 @@ describe('non-contiguous ops', () => {
     assert.equal(ctx.scope(s => s.sum(d)), 15); // 1+5+9
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════
+// Comparison
+// ═════════════════════════════════════════════════════════════════════
+
+describe('comparison', () => {
+  it('eq: array vs array', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([1, 2, 3, 4]);
+    const b = ctx.array([1, 0, 3, 5]);
+    const r = ctx.scope(s => s.eq(a, b));
+    assert.deepStrictEqual(ctx.toArray(r), [1, 0, 1, 0]);
+  });
+
+  it('eq: array vs scalar', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([1, 2, 3, 2]);
+    const r = ctx.scope(s => s.eq(a, 2));
+    assert.deepStrictEqual(ctx.toArray(r), [0, 1, 0, 1]);
+  });
+
+  it('eq: scalar vs array', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([1, 2, 3]);
+    const r = ctx.scope(s => s.eq(3, a));
+    assert.deepStrictEqual(ctx.toArray(r), [0, 0, 1]);
+  });
+
+  it('eq: scalar vs scalar', async () => {
+    const ctx = await natra({ pages: 1 });
+    assert.equal(ctx.scope(s => s.eq(5, 5)), 1);
+    assert.equal(ctx.scope(s => s.eq(5, 3)), 0);
+  });
+
+  it('eq: broadcasting [2,3] vs [3]', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([[1, 2, 3], [4, 2, 6]]);
+    const b = ctx.array([1, 2, 3]);
+    const r = ctx.scope(s => s.eq(a, b));
+    assert.deepStrictEqual(ctx.toArray(r), [[1, 1, 1], [0, 1, 0]]);
+  });
+
+  it('ne: simple case', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([1, 2, 3]);
+    const b = ctx.array([1, 0, 3]);
+    const r = ctx.scope(s => s.ne(a, b));
+    assert.deepStrictEqual(ctx.toArray(r), [0, 1, 0]);
+  });
+
+  it('ne: NaN !== NaN is true in JS', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([NaN, 1, NaN]);
+    const b = ctx.array([NaN, 1, 0]);
+    const r = ctx.scope(s => s.ne(a, b));
+    // NaN !== NaN → 1.0 in JS path; Wasm path: NaN == NaN is false → ne returns 1.0
+    assert.deepStrictEqual(ctx.toArray(r), [1, 0, 1]);
+  });
+
+  it('lt and le: boundary cases', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([1, 2, 3]);
+    const b = ctx.array([2, 2, 2]);
+    const lt = ctx.scope(s => s.lt(a, b));
+    assert.deepStrictEqual(ctx.toArray(lt), [1, 0, 0]);
+    const le = ctx.scope(s => s.le(a, b));
+    assert.deepStrictEqual(ctx.toArray(le), [1, 1, 0]);
+  });
+
+  it('gt and ge: boundary cases', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([1, 2, 3]);
+    const b = ctx.array([2, 2, 2]);
+    const gt = ctx.scope(s => s.gt(a, b));
+    assert.deepStrictEqual(ctx.toArray(gt), [0, 0, 1]);
+    const ge = ctx.scope(s => s.ge(a, b));
+    assert.deepStrictEqual(ctx.toArray(ge), [0, 1, 1]);
+  });
+
+  it('comparison on transposed (non-contiguous) input', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([[1, 2], [3, 4]]);
+    const b = ctx.array([[1, 3], [2, 4]]);
+    // a.T = [[1,3],[2,4]], b.T = [[1,2],[3,4]]
+    const r = ctx.scope(s => s.eq(a.T, b.T));
+    assert.deepStrictEqual(ctx.toArray(r), [[1, 0], [0, 1]]);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// Where
+// ═════════════════════════════════════════════════════════════════════
+
+describe('where', () => {
+  it('basic array select', async () => {
+    const ctx = await natra({ pages: 1 });
+    const cond = ctx.array([1, 0, 1, 0]);
+    const a = ctx.array([10, 20, 30, 40]);
+    const b = ctx.array([50, 60, 70, 80]);
+    const r = ctx.scope(s => s.where(cond, a, b));
+    assert.deepStrictEqual(ctx.toArray(r), [10, 60, 30, 80]);
+  });
+
+  it('where with scalar a', async () => {
+    const ctx = await natra({ pages: 1 });
+    const cond = ctx.array([1, 0, 1]);
+    const b = ctx.array([5, 6, 7]);
+    const r = ctx.scope(s => s.where(cond, 99, b));
+    assert.deepStrictEqual(ctx.toArray(r), [99, 6, 99]);
+  });
+
+  it('where with scalar b', async () => {
+    const ctx = await natra({ pages: 1 });
+    const cond = ctx.array([0, 1, 0]);
+    const a = ctx.array([10, 20, 30]);
+    const r = ctx.scope(s => s.where(cond, a, -1));
+    assert.deepStrictEqual(ctx.toArray(r), [-1, 20, -1]);
+  });
+
+  it('where with broadcasting', async () => {
+    const ctx = await natra({ pages: 1 });
+    const cond = ctx.array([[1, 0], [0, 1]]);
+    const a = ctx.array([10, 20]); // [2] broadcasts to [2,2]
+    const b = ctx.array([[-1, -2], [-3, -4]]);
+    const r = ctx.scope(s => s.where(cond, a, b));
+    assert.deepStrictEqual(ctx.toArray(r), [[10, -2], [-3, 20]]);
+  });
+
+  it('where on non-contiguous input', async () => {
+    const ctx = await natra({ pages: 1 });
+    const cond = ctx.array([[1, 0], [0, 1]]);
+    const a = ctx.array([[10, 20], [30, 40]]);
+    const b = ctx.array([[50, 60], [70, 80]]);
+    const r = ctx.scope(s => s.where(cond.T, a.T, b.T));
+    // cond.T = [[1,0],[0,1]], a.T = [[10,30],[20,40]], b.T = [[50,70],[60,80]]
+    assert.deepStrictEqual(ctx.toArray(r), [[10, 70], [60, 40]]);
+  });
+
+  it('where all scalars', async () => {
+    const ctx = await natra({ pages: 1 });
+    assert.equal(ctx.scope(s => s.where(1, 10, 20)), 10);
+    assert.equal(ctx.scope(s => s.where(0, 10, 20)), 20);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// Take
+// ═════════════════════════════════════════════════════════════════════
+
+describe('take', () => {
+  it('basic 1D gather', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([10, 20, 30, 40, 50]);
+    const idx = ctx.array([0, 2, 4]);
+    const r = ctx.scope(s => s.take(a, idx));
+    assert.deepStrictEqual(ctx.toArray(r), [10, 30, 50]);
+  });
+
+  it('duplicate indices', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([10, 20, 30]);
+    const idx = ctx.array([1, 1, 1, 0]);
+    const r = ctx.scope(s => s.take(a, idx));
+    assert.deepStrictEqual(ctx.toArray(r), [20, 20, 20, 10]);
+  });
+
+  it('out-of-order indices', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([10, 20, 30, 40]);
+    const idx = ctx.array([3, 1, 0, 2]);
+    const r = ctx.scope(s => s.take(a, idx));
+    assert.deepStrictEqual(ctx.toArray(r), [40, 20, 10, 30]);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// Compress
+// ═════════════════════════════════════════════════════════════════════
+
+describe('compress', () => {
+  it('basic boolean select', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([10, 20, 30, 40, 50]);
+    const mask = ctx.array([1, 0, 1, 0, 1]);
+    const r = ctx.scope(s => s.compress(a, mask));
+    assert.deepStrictEqual(ctx.toArray(r), [10, 30, 50]);
+  });
+
+  it('empty result (all zeros mask)', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([1, 2, 3]);
+    const mask = ctx.array([0, 0, 0]);
+    const r = ctx.scope(s => s.compress(a, mask));
+    assert.deepStrictEqual(ctx.toArray(r), []);
+    assert.deepStrictEqual(r.shape, [0]);
+  });
+
+  it('full result (all ones mask)', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([1, 2, 3]);
+    const mask = ctx.array([1, 1, 1]);
+    const r = ctx.scope(s => s.compress(a, mask));
+    assert.deepStrictEqual(ctx.toArray(r), [1, 2, 3]);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// Argsort
+// ═════════════════════════════════════════════════════════════════════
+
+describe('argsort', () => {
+  it('ascending sort of unsorted array', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([30, 10, 20]);
+    const r = ctx.scope(s => s.argsort(a));
+    assert.deepStrictEqual(ctx.toArray(r), [1, 2, 0]);
+  });
+
+  it('already sorted → identity indices', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([1, 2, 3, 4]);
+    const r = ctx.scope(s => s.argsort(a));
+    assert.deepStrictEqual(ctx.toArray(r), [0, 1, 2, 3]);
+  });
+
+  it('ties produce valid sort', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([3, 1, 3, 1]);
+    const r = ctx.scope(s => s.argsort(a));
+    const idx = ctx.toArray(r);
+    // Verify the sort is valid: values at indices should be non-decreasing
+    const vals = ctx.toArray(a);
+    for (let i = 1; i < idx.length; i++) {
+      assert.ok(vals[idx[i]] >= vals[idx[i - 1]], `value at index ${i} should be >= previous`);
+    }
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// Searchsorted
+// ═════════════════════════════════════════════════════════════════════
+
+describe('searchsorted', () => {
+  it('scalar query → scalar result', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([10, 20, 30, 40, 50]);
+    assert.equal(ctx.scope(s => s.searchsorted(a, 25)), 2); // between 20 and 30
+  });
+
+  it('array query → array of indices', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([10, 20, 30, 40, 50]);
+    const v = ctx.array([5, 25, 50, 55]);
+    const r = ctx.scope(s => s.searchsorted(a, v));
+    assert.deepStrictEqual(ctx.toArray(r), [0, 2, 5, 5]);
+  });
+
+  it('value below all → 0', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([10, 20, 30]);
+    assert.equal(ctx.scope(s => s.searchsorted(a, 0)), 0);
+  });
+
+  it('value above all → n', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([10, 20, 30]);
+    assert.equal(ctx.scope(s => s.searchsorted(a, 100)), 3);
+  });
+
+  it('exact match → right insertion point', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([10, 20, 30]);
+    // bisect right: 20 → index 2 (after the 20)
+    assert.equal(ctx.scope(s => s.searchsorted(a, 20)), 2);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// RNG — xoshiro256**
+// ═════════════════════════════════════════════════════════════════════
+
+describe('random', () => {
+  it('random 1D: correct shape, values in [0, 1)', async () => {
+    const ctx = await natra({ pages: 1 });
+    ctx.seed(123);
+    const r = ctx.random([100]);
+    assert.deepStrictEqual(r.shape, [100]);
+    const vals = ctx.toArray(r);
+    for (const v of vals) {
+      assert.ok(v >= 0, `value ${v} should be >= 0`);
+      assert.ok(v < 1, `value ${v} should be < 1`);
+    }
+  });
+
+  it('random 2D: correct shape', async () => {
+    const ctx = await natra({ pages: 1 });
+    ctx.seed(42);
+    const r = ctx.random([5, 3]);
+    assert.deepStrictEqual(r.shape, [5, 3]);
+    assert.equal(r.length, 15);
+    const vals = ctx.toArray(r).flat();
+    for (const v of vals) {
+      assert.ok(v >= 0 && v < 1);
+    }
+  });
+
+  it('same seed produces same sequence', async () => {
+    const ctx = await natra({ pages: 1 });
+    ctx.seed(99);
+    const a = ctx.toArray(ctx.random([10]));
+    ctx.seed(99);
+    const b = ctx.toArray(ctx.random([10]));
+    assert.deepStrictEqual(a, b);
+  });
+
+  it('different seeds produce different sequences', async () => {
+    const ctx = await natra({ pages: 1 });
+    ctx.seed(1);
+    const a = ctx.toArray(ctx.random([10]));
+    ctx.seed(2);
+    const b = ctx.toArray(ctx.random([10]));
+    // At least one value should differ
+    let allSame = true;
+    for (let i = 0; i < 10; i++) {
+      if (a[i] !== b[i]) { allSame = false; break; }
+    }
+    assert.ok(!allSame, 'different seeds should produce different values');
+  });
+});
+
+describe('randn', () => {
+  it('randn 1D: correct shape', async () => {
+    const ctx = await natra({ pages: 1 });
+    ctx.seed(42);
+    const r = ctx.randn([50]);
+    assert.deepStrictEqual(r.shape, [50]);
+    assert.equal(r.length, 50);
+  });
+
+  it('randn 2D: correct shape', async () => {
+    const ctx = await natra({ pages: 1 });
+    ctx.seed(42);
+    const r = ctx.randn([4, 5]);
+    assert.deepStrictEqual(r.shape, [4, 5]);
+    assert.equal(r.length, 20);
+  });
+
+  it('randn odd length works', async () => {
+    const ctx = await natra({ pages: 1 });
+    ctx.seed(42);
+    const r = ctx.randn([7]);
+    assert.equal(r.length, 7);
+    const vals = ctx.toArray(r);
+    // All values should be finite (not NaN, not Infinity)
+    for (const v of vals) {
+      assert.ok(Number.isFinite(v), `value ${v} should be finite`);
+    }
+  });
+
+  it('randn mean and std approximately correct for large n', async () => {
+    const ctx = await natra({ pages: 2 });
+    ctx.seed(42);
+    const r = ctx.randn([10000]);
+    const vals = ctx.toArray(r);
+    const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+    const variance = vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length;
+    const std = Math.sqrt(variance);
+    // mean should be close to 0, std close to 1
+    assert.ok(Math.abs(mean) < 0.05, `mean ${mean} should be close to 0`);
+    assert.ok(Math.abs(std - 1) < 0.05, `std ${std} should be close to 1`);
+  });
+
+  it('randn same seed reproducible', async () => {
+    const ctx = await natra({ pages: 1 });
+    ctx.seed(77);
+    const a = ctx.toArray(ctx.randn([20]));
+    ctx.seed(77);
+    const b = ctx.toArray(ctx.randn([20]));
+    assert.deepStrictEqual(a, b);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// Display / toString / trace
+// ═════════════════════════════════════════════════════════════════════
+
+describe('toString', () => {
+  it('1D array', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([1, 2, 3]);
+    assert.equal(a.toString(), 'array([1, 2, 3])');
+  });
+
+  it('2D array multi-line', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([[1, 2, 3], [4, 5, 6]]);
+    const s = a.toString();
+    assert.ok(s.startsWith('array('));
+    assert.ok(s.includes('1'));
+    assert.ok(s.includes('6'));
+    // should have newlines for 2D
+    assert.ok(s.includes('\n'));
+  });
+
+  it('2D column alignment', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([[1, 200], [3000, 4]]);
+    const s = a.toString();
+    // columns should be right-aligned: "   1" padded to match "3000"
+    assert.ok(s.includes('   1'), 'first col should be right-padded');
+    assert.ok(s.includes('3000'));
+    assert.ok(s.includes('200'));
+    assert.ok(s.includes('  4'), 'second col should be right-padded');
+  });
+
+  it('large 1D truncated', async () => {
+    const ctx = await natra({ pages: 64 });
+    const data = new Array(2000).fill(0).map((_, i) => i);
+    const a = ctx.array(data);
+    const s = a.toString();
+    assert.ok(s.includes('...'), 'should truncate with ...');
+    assert.ok(s.includes('0'));
+    assert.ok(s.includes('1999'));
+  });
+
+  it('NaN and Inf formatting', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([NaN, Infinity, -Infinity, 0]);
+    const s = a.toString();
+    assert.ok(s.includes('nan'));
+    assert.ok(s.includes('inf'));
+    assert.ok(s.includes('-inf'));
+  });
+
+  it('non-contiguous (transposed)', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([[1, 2], [3, 4]]);
+    const t = a.T;
+    const s = t.toString();
+    // transposed: [[1,3],[2,4]]
+    assert.ok(s.includes('1'));
+    assert.ok(s.includes('4'));
+  });
+
+  it('template literal works', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([10, 20, 30]);
+    const s = `result: ${a}`;
+    assert.ok(s.startsWith('result: array('));
+  });
+
+  it('empty-like 1D', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([42]);
+    assert.equal(a.toString(), 'array([42])');
+  });
+
+  it('3D compact format', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([[[1, 2], [3, 4]], [[5, 6], [7, 8]]]);
+    const s = a.toString();
+    assert.ok(s.includes('shape=[2,2,2]'));
+    assert.ok(s.includes('dtype=f64'));
+  });
+
+  it('large 2D truncated rows and cols', async () => {
+    const ctx = await natra({ pages: 64 });
+    const data = [];
+    for (let i = 0; i < 10; i++) {
+      const row = [];
+      for (let j = 0; j < 10; j++) row.push(i * 10 + j);
+      data.push(row);
+    }
+    const a = ctx.array(data);
+    const s = a.toString();
+    assert.ok(s.includes('...'), 'should have ellipsis');
+    // first element and last element present
+    assert.ok(s.includes('0'));
+    assert.ok(s.includes('99'));
+  });
+
+  it('fractional values strip trailing zeros', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([1.5, 2.25, 3.1]);
+    const s = a.toString();
+    // should not have trailing zeros like "1.5000"
+    assert.ok(s.includes('1.5'));
+    assert.ok(!s.includes('1.5000'));
+  });
+});
+
+describe('trace', () => {
+  it('contains metadata and data', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([[1, 2, 3], [4, 5, 6]]);
+    const t = ctx.trace(a);
+    assert.ok(t.includes('shape:      [2,3]'));
+    assert.ok(t.includes('dtype:      f64'));
+    assert.ok(t.includes('strides:'));
+    assert.ok(t.includes('contiguous: true'));
+    assert.ok(t.includes('array('));
+  });
+
+  it('non-contiguous shows false', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([[1, 2], [3, 4]]);
+    const t = ctx.trace(a.T);
+    assert.ok(t.includes('contiguous: false'));
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// Bounds checking
+// ═════════════════════════════════════════════════════════════════════
+
+describe('bounds checking', () => {
+  it('get out of bounds throws RangeError', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([10, 20, 30]);
+    assert.throws(() => ctx.get(a, 999), /out of bounds/);
+    assert.throws(() => ctx.get(a, 3), /out of bounds/);
+  });
+
+  it('get negative index wraps', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([10, 20, 30]);
+    assert.equal(ctx.get(a, -1), 30);
+    assert.equal(ctx.get(a, -2), 20);
+    assert.equal(ctx.get(a, -3), 10);
+  });
+
+  it('get negative index too low throws', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([10, 20, 30]);
+    assert.throws(() => ctx.get(a, -4), /out of bounds/);
+  });
+
+  it('set out of bounds throws RangeError', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([10, 20, 30]);
+    assert.throws(() => ctx.set(a, 99, 3), /out of bounds/);
+  });
+
+  it('set negative index wraps', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([10, 20, 30]);
+    ctx.set(a, 99, -1);
+    assert.equal(ctx.get(a, 2), 99);
+  });
+
+  it('2D out of bounds on second axis', async () => {
+    const ctx = await natra({ pages: 1 });
+    const a = ctx.array([[1, 2, 3], [4, 5, 6]]);
+    assert.throws(() => ctx.get(a, 0, 5), /out of bounds.*axis 1/);
+    assert.throws(() => ctx.get(a, 2, 0), /out of bounds.*axis 0/);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// Dead-array detection
+// ═════════════════════════════════════════════════════════════════════
+
+describe('dead-array detection', () => {
+  it('unreturned array throws on access', async () => {
+    const ctx = await natra({ pages: 1 });
+    const A = ctx.array([1, 2, 3]);
+    const B = ctx.array([4, 5, 6]);
+    let dead;
+    ctx.scope(s => {
+      dead = s.add(A, B); // scratch, not returned
+      return s.sum(A); // return scalar
+    });
+    assert.throws(() => ctx.get(dead, 0), /scope exit/);
+    assert.throws(() => ctx.toArray(dead), /scope exit/);
+  });
+
+  it('returned array is still accessible', async () => {
+    const ctx = await natra({ pages: 1 });
+    const A = ctx.array([1, 2, 3]);
+    const result = ctx.scope(s => s.add(A, A));
+    assert.deepStrictEqual(ctx.toArray(result), [2, 4, 6]);
+  });
+
+  it('one of two arrays not returned throws', async () => {
+    const ctx = await natra({ pages: 1 });
+    const A = ctx.array([1, 2, 3]);
+    let dead;
+    const kept = ctx.scope(s => {
+      dead = s.mul(A, A);
+      return s.add(A, A);
+    });
+    assert.deepStrictEqual(ctx.toArray(kept), [2, 4, 6]);
+    assert.throws(() => ctx.toArray(dead), /scope exit/);
+  });
+
+  it('permanent array passed into scope stays accessible', async () => {
+    const ctx = await natra({ pages: 1 });
+    const A = ctx.array([1, 2, 3]);
+    ctx.scope(s => s.sum(A));
+    // A is permanent, not arena-allocated — should still be alive
+    assert.deepStrictEqual(ctx.toArray(A), [1, 2, 3]);
+  });
+
+  it('copy of dead array throws', async () => {
+    const ctx = await natra({ pages: 1 });
+    const A = ctx.array([1, 2, 3]);
+    const B = ctx.array([4, 5, 6]);
+    let dead;
+    ctx.scope(s => {
+      dead = s.add(A, B);
+      return s.sum(A); // return scalar, dead is not promoted
+    });
+    assert.throws(() => ctx.copy(dead), /scope exit/);
+  });
+
+  it('toTypedArray of dead array throws', async () => {
+    const ctx = await natra({ pages: 1 });
+    const A = ctx.array([1, 2, 3]);
+    const B = ctx.array([4, 5, 6]);
+    let dead;
+    ctx.scope(s => {
+      dead = s.add(A, B);
+      return s.sum(A); // return scalar
+    });
+    assert.throws(() => ctx.toTypedArray(dead), /scope exit/);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// Memory limit
+// ═════════════════════════════════════════════════════════════════════
+
+describe('memory limit', () => {
+  it('exceeding maxPages throws', async () => {
+    const ctx = await natra({ pages: 1, maxPages: 2 });
+    // 1 page = 64KB. 2 pages = 128KB. Try to allocate 3 pages worth = 192KB
+    // 192KB / 8 = 24000 f64 elements
+    assert.throws(() => {
+      ctx.array(new Array(24000).fill(0));
+    }, /Memory limit exceeded/);
+  });
+
+  it('default maxPages allows large allocation', async () => {
+    const ctx = await natra({ pages: 1 });
+    // Allocate moderately (should succeed with default 16384 pages)
+    const a = ctx.array(new Array(1000).fill(1));
+    assert.equal(a.length, 1000);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// Strided Wasm kernels
+// ═════════════════════════════════════════════════════════════════════
+
+describe('strided Wasm kernels', () => {
+  it('transpose + add hits strided kernel', async () => {
+    const ctx = await natra({ pages: 1 });
+    const A = ctx.array([[1, 2], [3, 4]]);
+    const B = ctx.array([[10, 20], [30, 40]]);
+    // A.T + B.T — both non-contiguous, same shape
+    const C = ctx.scope(s => s.add(A.T, B.T));
+    assert.deepStrictEqual(ctx.toArray(C), [[11, 33], [22, 44]]);
+  });
+
+  it('broadcast [n,1] + [1,m] via strided kernel', async () => {
+    const ctx = await natra({ pages: 1 });
+    const A = ctx.array([[1], [2], [3]]);
+    const B = ctx.array([[10, 20, 30]]);
+    const C = ctx.scope(s => s.add(A, B));
+    assert.deepStrictEqual(ctx.toArray(C), [[11, 21, 31], [12, 22, 32], [13, 23, 33]]);
+  });
+
+  it('3D broadcast via strided kernel', async () => {
+    const ctx = await natra({ pages: 1 });
+    const A = ctx.array([[[1, 2], [3, 4]], [[5, 6], [7, 8]]]);
+    const B = ctx.array([10, 20]);
+    const C = ctx.scope(s => s.add(A, B));
+    assert.deepStrictEqual(ctx.toArray(C), [[[11, 22], [13, 24]], [[15, 26], [17, 28]]]);
+  });
+
+  it('slice then mul via strided kernel', async () => {
+    const ctx = await natra({ pages: 1 });
+    const A = ctx.array([1, 2, 3, 4, 5, 6]);
+    const B = ctx.array([10, 20, 30]);
+    const sliced = A.slice([0, 6, 2]); // [1, 3, 5]
+    const C = ctx.scope(s => s.mul(sliced, B));
+    assert.deepStrictEqual(ctx.toArray(C), [10, 60, 150]);
+  });
+
+  it('strided neg on 2D', async () => {
+    const ctx = await natra({ pages: 1 });
+    const A = ctx.array([[1, 2], [3, 4]]);
+    const C = ctx.scope(s => s.neg(A.T));
+    assert.deepStrictEqual(ctx.toArray(C), [[-1, -3], [-2, -4]]);
+  });
+
+  it('strided scalar add', async () => {
+    const ctx = await natra({ pages: 1 });
+    const A = ctx.array([[1, 2], [3, 4]]);
+    const C = ctx.scope(s => s.add(A.T, 10));
+    assert.deepStrictEqual(ctx.toArray(C), [[11, 13], [12, 14]]);
+  });
+
+  it('strided sum reduction', async () => {
+    const ctx = await natra({ pages: 1 });
+    const A = ctx.array([[1, 2], [3, 4]]);
+    assert.equal(ctx.scope(s => s.sum(A.T)), 10);
+  });
+
+  it('strided min reduction', async () => {
+    const ctx = await natra({ pages: 1 });
+    const A = ctx.array([[5, 1], [3, 8]]);
+    assert.equal(ctx.scope(s => s.min(A.T)), 1);
+  });
+
+  it('strided max reduction', async () => {
+    const ctx = await natra({ pages: 1 });
+    const A = ctx.array([[5, 1], [3, 8]]);
+    assert.equal(ctx.scope(s => s.max(A.T)), 8);
+  });
+
+  it('strided prod reduction', async () => {
+    const ctx = await natra({ pages: 1 });
+    const A = ctx.array([2, 0, 3, 0, 4]);
+    const s = A.slice([0, 5, 2]); // [2, 3, 4]
+    assert.equal(ctx.scope(sc => sc.prod(s)), 24);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// Multi-axis reductions
+// ═════════════════════════════════════════════════════════════════════
+
+describe('multi-axis reductions', () => {
+  it('sum([0, 1]) on [2,3,4] → [4]', async () => {
+    const ctx = await natra({ pages: 1 });
+    // shape [2,3,4]: total 24 elements
+    const data = [];
+    for (let i = 0; i < 2; i++) {
+      const plane = [];
+      for (let j = 0; j < 3; j++) {
+        const row = [];
+        for (let k = 0; k < 4; k++) row.push(i * 12 + j * 4 + k + 1);
+        plane.push(row);
+      }
+      data.push(plane);
+    }
+    const A = ctx.array(data);
+    const C = ctx.scope(s => s.sum(A, [0, 1]));
+    assert.deepStrictEqual(C.shape, [4]);
+    // sum over axes 0 and 1: for each k, sum over i,j
+    const expected = [0, 0, 0, 0];
+    for (let i = 0; i < 2; i++)
+      for (let j = 0; j < 3; j++)
+        for (let k = 0; k < 4; k++)
+          expected[k] += data[i][j][k];
+    assert.deepStrictEqual(ctx.toArray(C), expected);
+  });
+
+  it('mean([0, 1]) on [2,3] → scalar-like [1]', async () => {
+    const ctx = await natra({ pages: 1 });
+    const A = ctx.array([[1, 2, 3], [4, 5, 6]]);
+    const C = ctx.scope(s => s.mean(A, [0, 1]));
+    assert.deepStrictEqual(C.shape, [1]);
+    // mean of all 6 elements = 21/6 = 3.5
+    assertClose(ctx.toArray(C)[0], 3.5, 'mean([0,1])');
+  });
+
+  it('sum([0]) equals sum(0) — backward compatible', async () => {
+    const ctx = await natra({ pages: 1 });
+    const A = ctx.array([[1, 2, 3], [4, 5, 6]]);
+    const C1 = ctx.scope(s => s.sum(A, [0]));
+    const C2 = ctx.scope(s => s.sum(A, 0));
+    assert.deepStrictEqual(ctx.toArray(C1), ctx.toArray(C2));
+  });
+
+  it('sum([1, 2]) on [2,3,4] → [2]', async () => {
+    const ctx = await natra({ pages: 1 });
+    const data = [];
+    for (let i = 0; i < 2; i++) {
+      const plane = [];
+      for (let j = 0; j < 3; j++) {
+        const row = [];
+        for (let k = 0; k < 4; k++) row.push(i * 12 + j * 4 + k + 1);
+        plane.push(row);
+      }
+      data.push(plane);
+    }
+    const A = ctx.array(data);
+    const C = ctx.scope(s => s.sum(A, [1, 2]));
+    assert.deepStrictEqual(C.shape, [2]);
+    // For i=0: sum of 1..12 = 78, for i=1: sum of 13..24 = 222
+    assert.deepStrictEqual(ctx.toArray(C), [78, 222]);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// Wasm eigh
+// ═════════════════════════════════════════════════════════════════════
+
+describe('Wasm eigh', () => {
+  it('3x3 analytical: eigenvalues match dsyev3', async () => {
+    const ctx = await natra({ pages: 4 });
+    const A = ctx.array([[4, 1, 0], [1, 3, 1], [0, 1, 2]]);
+    const [vals, vecs] = ctx.scope(s => s.eigh(A));
+    assert.deepStrictEqual(vals.shape, [3]);
+    assert.deepStrictEqual(vecs.shape, [3, 3]);
+    const w = ctx.toArray(vals);
+    // Verify A*v ≈ λ*v for each eigenpair
+    const V = ctx.toArray(vecs);
+    const Amat = [[4,1,0],[1,3,1],[0,1,2]];
+    for (let k = 0; k < 3; k++) {
+      const lambda = w[k];
+      const v = [V[0][k], V[1][k], V[2][k]];
+      for (let i = 0; i < 3; i++) {
+        const Av_i = Amat[i][0]*v[0] + Amat[i][1]*v[1] + Amat[i][2]*v[2];
+        assertClose(Av_i, lambda * v[i], `3x3 Av[${i}] = lambda*v[${i}] for k=${k}`);
+      }
+    }
+  });
+
+  it('3x3 eigenvectors orthonormal: V^T * V ≈ I', async () => {
+    const ctx = await natra({ pages: 4 });
+    const A = ctx.array([[4, 1, 0], [1, 3, 1], [0, 1, 2]]);
+    const [, vecs] = ctx.scope(s => s.eigh(A));
+    const V = ctx.toArray(vecs);
+    // Check V^T * V ≈ I
+    for (let i = 0; i < 3; i++) {
+      for (let j = 0; j < 3; j++) {
+        let dot = 0;
+        for (let k = 0; k < 3; k++) dot += V[k][i] * V[k][j];
+        const expected = i === j ? 1 : 0;
+        assertClose(dot, expected, `V^T*V[${i},${j}]`);
+      }
+    }
+  });
+
+  it('large matrix (10x10) converges via general Jacobi', async () => {
+    const ctx = await natra({ pages: 4 });
+    // Build a symmetric 10x10 matrix
+    const n = 10;
+    const data = [];
+    for (let i = 0; i < n; i++) {
+      const row = [];
+      for (let j = 0; j < n; j++) {
+        row.push(i === j ? (i + 1) * 2 : 1.0 / (1 + Math.abs(i - j)));
+      }
+      data.push(row);
+    }
+    // Make symmetric
+    for (let i = 0; i < n; i++)
+      for (let j = i + 1; j < n; j++)
+        data[j][i] = data[i][j];
+
+    const A = ctx.array(data);
+    const [vals, vecs] = ctx.scope(s => s.eigh(A));
+    assert.deepStrictEqual(vals.shape, [n]);
+    assert.deepStrictEqual(vecs.shape, [n, n]);
+
+    const w = ctx.toArray(vals);
+    const V = ctx.toArray(vecs);
+    // Verify A*v ≈ λ*v for each eigenpair
+    for (let k = 0; k < n; k++) {
+      const lambda = w[k];
+      const v = [];
+      for (let i = 0; i < n; i++) v.push(V[i][k]);
+      for (let i = 0; i < n; i++) {
+        let Av_i = 0;
+        for (let j = 0; j < n; j++) Av_i += data[i][j] * v[j];
+        assertClose(Av_i, lambda * v[i], `10x10 Av[${i}] for k=${k}`);
+      }
+    }
+  });
+
+  it('diagonal matrix (trivial case)', async () => {
+    const ctx = await natra({ pages: 4 });
+    const A = ctx.array([[5, 0, 0], [0, 3, 0], [0, 0, 1]]);
+    const [vals, vecs] = ctx.scope(s => s.eigh(A));
+    const w = ctx.toArray(vals).sort((a, b) => a - b);
+    assertClose(w[0], 1, 'eigenvalue 1');
+    assertClose(w[1], 3, 'eigenvalue 2');
+    assertClose(w[2], 5, 'eigenvalue 3');
+  });
+
+  it('2x2 works via general Jacobi path', async () => {
+    const ctx = await natra({ pages: 4 });
+    const A = ctx.array([[2, 1], [1, 2]]);
+    const [vals, vecs] = ctx.scope(s => s.eigh(A));
+    const w = ctx.toArray(vals).sort((a, b) => a - b);
+    assertClose(w[0], 1, 'eigenvalue 1');
+    assertClose(w[1], 3, 'eigenvalue 2');
+  });
+});
