@@ -36,6 +36,7 @@ const defs = [
   'example_gslib_sgsim.txt',
   'example_md_interpolation.txt',
   'example_atra_layouts.txt',
+  'example_natra.txt',
 ];
 
 // ── Parser ──
