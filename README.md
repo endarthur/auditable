@@ -5,23 +5,30 @@ a reactive computational notebook that fits in a single HTML file.
 no build step. no server. no dependencies. open the file, write code, save. the HTML *is* the document, the runtime, and the lockfile.
 
 ```
-auditable.html  ~228KB
+auditable.html  ~802KB
 ```
 
 ## what it does
 
 - **reactive DAG** -- cells track dependencies and re-execute when upstream values change
 - **four cell types** -- code, markdown, CSS, and HTML cells with live reactivity
-- **interactive widgets** -- `slider()`, `dropdown()`, `checkbox()`, `textInput()` with callback support for real-time interaction
+- **interactive widgets** -- `slider()`, `dropdown()`, `checkbox()`, `textInput()` in code cells; `<audit-slider name="x">` in HTML cells defines reactive scope variables
+- **markdown interpolation** -- `${expr}` in markdown and HTML cells, live-patched without destroying DOM
+- **split view** -- side-by-side source + output editing (`e` in command mode)
+- **autocomplete** -- fuzzy completion for JS globals, builtins, scope variables, and tagged language keywords
 - **module system** -- `await load("https://esm.sh/d3")` for dynamic ESM imports; `install()` embeds the source in the HTML so it works offline
 - **binary assets** -- `installBinary()` embeds binary files (WASM, images, etc.) with gzip compression
+- **atra** -- embedded language for compiling typed array kernels to WebAssembly, with split-view editor, syntax highlighting, and completions
 - **language extensions** -- tagged template literals for GLSL shaders and SQL with syntax highlighting and completions
+- **colormaps & color utilities** -- `std.viridis/magma/inferno/plasma/turbo`, `std.color()` with OKLAB/OKLCH, `std.colorScale()`
+- **stdlib** -- `std.csv`, `std.sum`, `std.mean`, `std.linspace`, `std.bin`, `std.fmt`, and more
 - **self-contained save** -- Ctrl+S produces a new HTML file with all code, state, settings, and installed modules baked in
 - **packed save** -- gzip-compressed save format (~60% smaller) with readable, self-documenting bootstrap loader
 - **Ed25519 signatures** -- sign notebooks for integrity verification
 - **self-documenting format** -- every data block in saved HTML has a descriptive comment explaining what it is
 - **find/replace** -- Ctrl+F to search across cells, with regex and case-sensitive modes
 - **presentation mode** -- hide the editor, show the outputs. widgets still work. press `p`
+- **copy/paste/cut cells** -- `c`/`v`/`x` in command mode
 - **cell directives** -- `// %manual`, `// %hide`, `// %norun`, `// %cellName`, `// %goto`, `// %outputId`, `// %outputClass`
 - **line numbers** -- toggleable in settings
 
@@ -47,6 +54,9 @@ press **F1** inside the notebook for the full reference. highlights:
 | command | `z` | undo delete |
 | command | `m` / `y` / `s` / `t` | convert to md / code / css / html |
 | command | `h` | collapse cell |
+| command | `e` | toggle split view |
+| command | `c` / `v` / `x` | copy / paste / cut cell |
+| command | `l` | toggle line numbers |
 | command | `p` | presentation mode |
 | edit | `Ctrl+Enter` | run cell |
 | edit | `Shift+Enter` | run cell + advance |
@@ -89,11 +99,11 @@ widgets accept `onInput` / `onChange` callbacks for real-time interaction withou
 | cell | type | DAG role | defines | uses | key | label |
 |------|------|----------|---------|------|-----|-------|
 | code | code | reactive r/w | yes | yes | `y` | code |
-| markdown | md | none | no | no | `m` | md |
+| markdown | md | reactive read-only | no | yes | `m` | md |
 | CSS | css | static side effect | no | no | `s` | css |
-| HTML | html | reactive read-only | no | yes | `t` | html |
+| HTML | html | reactive r/w | yes (widgets) | yes | `t` | html |
 
-HTML cells support `${variable}` interpolation from upstream code cells.
+markdown cells support `${expr}` interpolation from upstream scope. HTML cells support the same interpolation plus `<audit-*>` widgets with `name` attributes that define reactive scope variables.
 
 ## modules
 
@@ -133,6 +143,7 @@ click the gear icon in the toolbar:
 
 - **theme** -- dark (default) or light
 - **editor font size** -- 10-20px
+- **editor view** -- split (side-by-side source + output) or standard
 - **notebook width** -- narrow / default / wide / full
 - **cell header** -- auto / always / hover / compact
 - **line numbers** -- on / off
@@ -151,15 +162,27 @@ the `examples/` directory contains:
 | `example_life.html` | conway's game of life -- imperative callbacks in a `// %manual` cell |
 | `example_lorenz.html` | lorenz attractor with adjustable parameters and 3D rotation |
 | `example_mandelbrot.html` | mandelbrot set explorer with zoom, pan, and color shift |
-| `example_stereonet.html` | structural geology stereonet using `@gcu/bearing` |
-| `example_synth.html` | web audio synthesizer with keyboard UI |
 | `example_particles.html` | particle system with gravity and collision |
-| `example_idw.html` | inverse distance weighting interpolation with viridis colormap |
 | `example_dashboard.html` | multi-panel dashboard layout with CSS cells |
+| `example_idw.html` | inverse distance weighting interpolation with viridis colormap |
 | `example_modules.html` | `install()` and `load()` with esm.sh modules |
 | `example_python.html` | Python builtins (`range`, `enumerate`, `sorted`, etc.) in JS |
 | `example_sql.html` | SQL queries with sql.js -- `installBinary()` for WASM, `@auditable/sql` for syntax |
 | `example_shader.html` | GLSL fragment shaders with Shadertoy-compatible uniforms |
+| `example_stereonet.html` | structural geology stereonet using `@gcu/bearing` |
+| `example_synth.html` | web audio synthesizer with keyboard UI |
+| `example_widgets.html` | `<audit-*>` widget components in HTML cells |
+| `example_md_interpolation.html` | `${expr}` interpolation in markdown cells |
+| `example_atra.html` | atra -- compile typed array kernels to WebAssembly |
+| `example_atra_tour.html` | atra language tour -- syntax and features |
+| `example_atra_v_julia.html` | atra vs Julia -- side-by-side comparison |
+| `example_atra_layouts.html` | atra layouts -- N-body gravity simulation |
+| `example_alpack.html` | ALPACK -- dense linear algebra in Wasm |
+| `example_alpack_atra.html` | atra + ALPACK -- all-Wasm interpolation pipeline |
+| `example_gslib_kb2d.html` | KB2D -- 2D kriging from GSLIB |
+| `example_gslib_sgsim.html` | SGSIM -- sequential Gaussian simulation from GSLIB |
+| `example_natra.html` | natra -- ndarray for the browser with Wasm kernels |
+| `example_workshop.html` | workshop template for guided tutorials |
 
 each is a self-contained HTML file. no server required.
 
@@ -218,6 +241,8 @@ AF embeds the full auditable runtime, so new notebooks created inside AF are ful
 
 cells declare variables with `const`, `let`, or `function`. the parser (`parseNames`) extracts top-level definitions -- including destructuring and comma-separated declarations -- and builds a dependency graph. when a cell changes, all downstream cells re-execute in topological order.
 
+HTML cells define scope variables via `<audit-*>` widgets with `name` attributes. markdown and HTML cells support `${expr}` interpolation -- bound expressions are live-patched without destroying the DOM, so widgets and interactive elements survive upstream changes.
+
 the scope is passed by value between cells via `AsyncFunction` constructors. mutable state that needs to survive across callbacks belongs in `// %manual` cells.
 
 widgets are keyed by label. when a slider's value changes, the cell that created it re-executes, which triggers its dependents. the DAG handles the rest.
@@ -247,20 +272,7 @@ node gen_examples.js
 
 ## roadmap
 
-- [x] web component widgets (`<audit-slider>`, etc.)
-- [ ] export as app (strip editor, emit standalone page)
-- [ ] worker builtins for offloading computation
-- [ ] documentation site
-- [ ] AF: af-bridge.js -- lightweight support library for AF-aware apps
-  - save bridge (`AF.onSerialize`, `AF.markDirty`, `AF.setTitle`)
-  - file access (`AF.readFile`, `AF.writeFile`, `AF.listFiles`)
-  - worker delegation (`AF.runWorker`) -- app hands compute to AF's origin context, gets results back. enables heavy streaming workloads (e.g. block model processing) with direct FSAA handle access, no postMessage copying for raw data
-  - inter-tab messaging (`AF.broadcast`, `AF.onMessage`)
-  - graceful no-op when running standalone
-- [ ] AF: packed boxes -- compressed box export using CompressionStream/DecompressionStream (gzip, zero dependencies). self-extracting, floppy-friendly
-- [ ] AF: service worker backend for proper origins (PWA)
-- [ ] AF: terminal / JS REPL panel
-- [ ] AF: cross-notebook search
+see `ROADMAP.md` for planned features and AF development.
 
 ## license
 
