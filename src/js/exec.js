@@ -138,6 +138,13 @@ export function renderHtmlCell(cell) {
 
   const hasExprs = /\$\{[^}]+\}/.test(cell.code);
 
+  // invalidate bindings if viewEl changed (e.g. split view swap)
+  if (cell._bindViewEl !== viewEl) {
+    cell._bindCode = null;
+    cell._textMarkers = null;
+    cell._bindViewEl = viewEl;
+  }
+
   // first render or code change — full innerHTML with binding setup
   if (cell._bindCode !== cell.code || !cell._textMarkers) {
     if (!hasExprs) {
