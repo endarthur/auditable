@@ -2,7 +2,7 @@ import { S } from './state.js';
 import { isManual } from './dag.js';
 import { renderMd } from './markdown.js';
 import { onCodeEdit, onCssEdit, onHtmlEdit, onMdEdit } from './editor.js';
-import { renderHtmlCell, renderMdCell } from './exec.js';
+import { renderMdCell } from './exec.js';
 import { createEditor, getEditor } from './cm6.js';
 
 // ── CELL DOM ──
@@ -101,15 +101,13 @@ export function createCellEl(type, id, initialCode) {
   } else if (type === 'html') {
     div.innerHTML = `
       ${cellHeaderHTML('html', id)}
-      <div class="cell-html-view"></div>
-      <div class="cell-html-edit" style="display:none">
+      <div class="cell-html-edit">
         <div class="editor-wrap"></div>
       </div>
+      <div class="cell-html-view"></div>
       <div class="cell-output"></div>
     `;
 
-    const view = div.querySelector('.cell-html-view');
-    const editWrap = div.querySelector('.cell-html-edit');
     const editorWrap = div.querySelector('.editor-wrap');
     div.querySelector('.cell-type').addEventListener('click', () => div.classList.toggle('collapsed'));
 
@@ -119,25 +117,6 @@ export function createCellEl(type, id, initialCode) {
       onHtmlEdit(id);
     });
     div._editor = editor;
-
-    view.addEventListener('click', () => {
-      editWrap.style.display = '';
-      view.style.display = 'none';
-      editor.view.requestMeasure();
-      editor.focus();
-    });
-
-    editor.view.dom.addEventListener('focusout', (e) => {
-      if (editor.view.dom.contains(e.relatedTarget)) return;
-      if (e.relatedTarget && e.relatedTarget.closest('#findBar')) return;
-      if (S.findActive) return;
-      const cell = S.cells.find(c => c.id === id);
-      if (cell) {
-        renderHtmlCell(cell);
-      }
-      editWrap.style.display = 'none';
-      view.style.display = '';
-    });
   } else {
     // markdown — stays as textarea
     div.innerHTML = `

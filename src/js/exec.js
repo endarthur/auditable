@@ -105,36 +105,192 @@ export function renderHtmlCell(cell) {
   if (!viewEl) return;
   if (outputEl) { outputEl.textContent = ''; outputEl.className = 'cell-output'; }
 
-  // use only variables this cell references for stable function signatures
+  // pre-populate scope with widget values (for self-reference)
+  if (cell._inputs) {
+    for (const [k, v] of Object.entries(cell._inputs)) {
+      if (v !== undefined) S.scope[k] = v;
+    }
+  }
+
   const scopeKeys = cell.uses ? [...cell.uses].sort() : [];
   const scopeVals = scopeKeys.map(k => S.scope[k]);
 
-  // cache compiled template functions per expression
   if (!cell._tplCache) cell._tplCache = {};
   const scopeSig = scopeKeys.join(',');
   if (cell._tplScopeSig !== scopeSig) {
-    cell._tplCache = {};  // scope signature changed, invalidate all
+    cell._tplCache = {};
     cell._tplScopeSig = scopeSig;
   }
 
-  let rendered = cell.code.replace(/\$\{([^}]+)\}/g, (match, expr) => {
+  const evalExpr = (expr) => {
     try {
       let fn = cell._tplCache[expr];
       if (!fn) {
         fn = new Function(...scopeKeys, '"use strict"; return (' + expr + ')');
         cell._tplCache[expr] = fn;
       }
-      const val = fn(...scopeVals);
-      return val === undefined ? '' : String(val);
+      const r = fn(...scopeVals);
+      return r === undefined ? '' : String(r);
     } catch (e) {
       return '[Error: ' + e.message + ']';
     }
-  });
+  };
 
-  viewEl.innerHTML = rendered;
+  const hasExprs = /\$\{[^}]+\}/.test(cell.code);
+
+  // first render or code change — full innerHTML with binding setup
+  if (cell._bindCode !== cell.code || !cell._textMarkers) {
+    if (!hasExprs) {
+      viewEl.innerHTML = cell.code;
+    } else {
+      // split on tags to classify ${expr} as text-content vs attribute-context
+      const parts = cell.code.split(/(<[^>]+>)/g);
+      const textExprs = [];
+      const attrBindings = []; // per-element: [{ attr, template }]
+      let textIdx = 0;
+      let html = '';
+
+      for (let p = 0; p < parts.length; p++) {
+        const part = parts[p];
+        if (p % 2 === 0) {
+          // text content — wrap ${expr} with comment markers
+          html += part.replace(/\$\{([^}]+)\}/g, (m, expr) => {
+            textExprs.push(expr);
+            return `<!--audit-bind:${textIdx++}-->${evalExpr(expr)}<!--/audit-bind-->`;
+          });
+        } else if (/\$\{/.test(part)) {
+          // tag with ${expr} in attributes — evaluate inline, track templates
+          const elemBinds = [];
+          let tagHtml = part.replace(
+            /([\w-]+)="([^"]*\$\{[^}]+\}[^"]*)"/g,
+            (m, attrName, attrVal) => {
+              elemBinds.push({ attr: attrName, template: attrVal });
+              const evaluated = attrVal.replace(/\$\{([^}]+)\}/g, (m2, expr) => evalExpr(expr));
+              return `${attrName}="${evaluated}"`;
+            }
+          );
+          if (elemBinds.length > 0) {
+            const idx = attrBindings.length;
+            attrBindings.push(elemBinds);
+            tagHtml = tagHtml.replace(/^(<[\w][\w-]*)/, `$1 data-audit-abind="${idx}"`);
+          }
+          html += tagHtml;
+        } else {
+          html += part;
+        }
+      }
+
+      viewEl.innerHTML = html;
+
+      // walk DOM to find comment marker pairs for text bindings
+      const markers = [];
+      const walker = document.createTreeWalker(viewEl, NodeFilter.SHOW_COMMENT);
+      const starts = [];
+      while (walker.nextNode()) {
+        const c = walker.currentNode;
+        const m = c.data.match(/^audit-bind:(\d+)$/);
+        if (m) starts[parseInt(m[1])] = c;
+        if (c.data === '/audit-bind') {
+          for (let j = starts.length - 1; j >= 0; j--) {
+            if (starts[j] && !markers[j]) {
+              markers[j] = { start: starts[j], end: c };
+              break;
+            }
+          }
+        }
+      }
+
+      // resolve attribute binding element references
+      for (let a = 0; a < attrBindings.length; a++) {
+        const el = viewEl.querySelector(`[data-audit-abind="${a}"]`);
+        if (el) for (const bind of attrBindings[a]) bind.el = el;
+      }
+
+      cell._textMarkers = markers;
+      cell._textExprs = textExprs;
+      cell._attrBindings = attrBindings;
+    }
+
+    cell._bindCode = cell.code;
+    wireWidgets(cell, viewEl);
+
+  } else if (hasExprs) {
+    // re-render: same code, scope changed — patch bindings without touching DOM
+
+    // patch text bindings via comment markers
+    if (cell._textMarkers) {
+      for (let i = 0; i < cell._textExprs.length; i++) {
+        const marker = cell._textMarkers[i];
+        if (!marker) continue;
+        const val = evalExpr(cell._textExprs[i]);
+        while (marker.start.nextSibling && marker.start.nextSibling !== marker.end) {
+          marker.start.nextSibling.remove();
+        }
+        if (/<[a-z][\s\S]*>/i.test(val)) {
+          const tpl = document.createElement('template');
+          tpl.innerHTML = val;
+          marker.start.parentNode.insertBefore(tpl.content, marker.end);
+        } else {
+          marker.start.parentNode.insertBefore(document.createTextNode(val), marker.end);
+        }
+      }
+    }
+
+    // patch attribute bindings
+    if (cell._attrBindings) {
+      for (const elemBinds of cell._attrBindings) {
+        for (const bind of elemBinds) {
+          if (!bind.el) continue;
+          const val = bind.template.replace(/\$\{([^}]+)\}/g, (m, expr) => evalExpr(expr));
+          bind.el.setAttribute(bind.attr, val);
+        }
+      }
+    }
+  }
+
   cell.el.classList.remove('stale', 'error');
   cell.el.classList.add('fresh');
   setTimeout(() => cell.el.classList.remove('fresh'), 800);
+}
+
+function wireWidgets(cell, viewEl) {
+  if (!cell._inputs) cell._inputs = {};
+  const widgets = viewEl.querySelectorAll(
+    'audit-slider, audit-dropdown, audit-checkbox, audit-text-input'
+  );
+  // clean up previous listeners
+  if (cell._widgetCleanups) {
+    for (const cleanup of cell._widgetCleanups) cleanup();
+  }
+  cell._widgetCleanups = [];
+
+  for (const w of widgets) {
+    const name = w.name;
+    if (!name) continue;
+    // skip code-cell widgets (they have data-widget-key)
+    if (w.dataset.widgetKey) continue;
+
+    // restore persisted value or read default
+    if (cell._inputs[name] !== undefined) {
+      w.value = cell._inputs[name];
+    } else {
+      cell._inputs[name] = w.value;
+    }
+
+    const handler = () => {
+      cell._inputs[name] = w.value;
+      S.scope[name] = w.value;
+      if (w.tagName === 'AUDIT-SLIDER' || w.tagName === 'AUDIT-TEXT-INPUT') {
+        clearTimeout(cell._inputTimer);
+        const delay = w.tagName === 'AUDIT-TEXT-INPUT' ? 300 : 80;
+        cell._inputTimer = setTimeout(() => runDAG([cell.id], true), delay);
+      } else {
+        runDAG([cell.id], true);
+      }
+    };
+    w.addEventListener('input', handler);
+    cell._widgetCleanups.push(() => w.removeEventListener('input', handler));
+  }
 }
 
 export async function execCell(cell) {
@@ -243,6 +399,9 @@ export async function execCell(cell) {
   if (!cell._inputs) cell._inputs = {};
   if (!cell._callbacks) cell._callbacks = {};
 
+  const _tagMap = { slider: 'audit-slider', dropdown: 'audit-dropdown',
+                    checkbox: 'audit-checkbox', text: 'audit-text-input' };
+
   const mkInput = (label, type, defaultVal, opts = {}) => {
     const key = label;
     const prev = cell._inputs[key];
@@ -250,101 +409,67 @@ export async function execCell(cell) {
     usedWidgets.add(key);
     cell._callbacks[key] = { onInput: opts.onInput, onChange: opts.onChange };
 
+    const tag = _tagMap[type];
+
     // check if widget DOM already exists
     const existing = widgetEl.querySelector(`[data-widget-key="${CSS.escape(key)}"]`);
     if (existing) {
-      // update id/class in case they changed on re-run
+      // update attributes that may have changed on re-run
       existing.id = opts.id || '';
-      existing.className = 'cell-widget' + (opts.class ? ' ' + opts.class : '');
-      // just return current value, DOM stays — callbacks already updated above
-      cell._inputs[key] = type === 'slider' ? parseFloat(val)
-                         : type === 'checkbox' ? !!val
-                         : val;
+      if (opts.class) existing.className = opts.class; else existing.removeAttribute('class');
+      if (type === 'slider') {
+        if (opts.min != null) existing.setAttribute('min', opts.min);
+        if (opts.max != null) existing.setAttribute('max', opts.max);
+        if (opts.step != null) existing.setAttribute('step', opts.step);
+      } else if (type === 'dropdown') {
+        const newOpts = (opts.options || []).join(',');
+        if (existing.getAttribute('options') !== newOpts) existing.setAttribute('options', newOpts);
+      }
+      cell._inputs[key] = existing.value;
       return cell._inputs[key];
     }
 
-    // create new widget
-    const wrap = document.createElement('div');
-    wrap.dataset.widgetKey = key;
-    wrap.className = 'cell-widget' + (opts.class ? ' ' + opts.class : '');
-    if (opts.id) wrap.id = opts.id;
+    // create new custom element
+    const el = document.createElement(tag);
+    el.dataset.widgetKey = key;
+    el.setAttribute('label', label);
+    el.setAttribute('name', label);
+    if (opts.id) el.id = opts.id;
+    if (opts.class) el.className = opts.class;
 
-    const lbl = document.createElement('span');
-    lbl.textContent = label;
-    lbl.className = 'cell-widget-label';
-    wrap.appendChild(lbl);
-
-    let input;
     if (type === 'slider') {
-      input = document.createElement('input');
-      input.type = 'range';
-      input.min = opts.min ?? 0;
-      input.max = opts.max ?? 100;
-      input.step = opts.step ?? 1;
-      input.value = val;
-      const valSpan = document.createElement('span');
-      valSpan.textContent = val;
-      valSpan.className = 'cell-widget-val';
-      input.oninput = () => {
-        const n = parseFloat(input.value);
-        cell._inputs[key] = n;
-        valSpan.textContent = n;
-        const cb = cell._callbacks[key];
-        if (cb.onInput) { cb.onInput(n); }
-        else if (!cb.onChange) { clearTimeout(cell._inputTimer); cell._inputTimer = setTimeout(() => runDAG([cell.id], true), 80); }
-      };
-      input.onchange = () => { const cb = cell._callbacks[key]; if (cb.onChange) cb.onChange(parseFloat(input.value)); };
-      wrap.appendChild(input);
-      wrap.appendChild(valSpan);
+      el.setAttribute('min', opts.min ?? 0);
+      el.setAttribute('max', opts.max ?? 100);
+      el.setAttribute('step', opts.step ?? 1);
+      el.setAttribute('value', val);
     } else if (type === 'dropdown') {
-      input = document.createElement('select');
-      for (const o of (opts.options || [])) {
-        const opt = document.createElement('option');
-        opt.value = o;
-        opt.textContent = o;
-        if (o === val) opt.selected = true;
-        input.appendChild(opt);
-      }
-      input.onchange = () => {
-        cell._inputs[key] = input.value;
-        const cb = cell._callbacks[key];
-        if (cb.onInput || cb.onChange) {
-          if (cb.onInput) cb.onInput(input.value);
-          if (cb.onChange) cb.onChange(input.value);
-        } else { runDAG([cell.id], true); }
-      };
-      wrap.appendChild(input);
+      el.setAttribute('options', (opts.options || []).join(','));
+      el.setAttribute('value', val);
     } else if (type === 'checkbox') {
-      input = document.createElement('input');
-      input.type = 'checkbox';
-      input.checked = !!val;
-      input.onchange = () => {
-        cell._inputs[key] = input.checked;
-        const cb = cell._callbacks[key];
-        if (cb.onInput || cb.onChange) {
-          if (cb.onInput) cb.onInput(input.checked);
-          if (cb.onChange) cb.onChange(input.checked);
-        } else { runDAG([cell.id], true); }
-      };
-      wrap.appendChild(input);
+      if (val) el.setAttribute('checked', '');
     } else if (type === 'text') {
-      input = document.createElement('input');
-      input.type = 'text';
-      input.value = val;
-      input.oninput = () => {
-        cell._inputs[key] = input.value;
-        const cb = cell._callbacks[key];
-        if (cb.onInput) { cb.onInput(input.value); }
-        else if (!cb.onChange) { clearTimeout(cell._inputTimer); cell._inputTimer = setTimeout(() => runDAG([cell.id], true), 300); }
-      };
-      input.onchange = () => { const cb = cell._callbacks[key]; if (cb.onChange) cb.onChange(input.value); };
-      wrap.appendChild(input);
+      el.setAttribute('value', val);
     }
 
-    widgetEl.appendChild(wrap);
-    cell._inputs[key] = type === 'slider' ? parseFloat(val)
-                       : type === 'checkbox' ? !!val
-                       : val;
+    // event handling: reactive vs callback
+    el.addEventListener('input', () => {
+      cell._inputs[key] = el.value;
+      const cb = cell._callbacks[key];
+      if (cb.onInput) { cb.onInput(el.value); }
+      else if (!cb.onChange) {
+        clearTimeout(cell._inputTimer);
+        const delay = type === 'text' ? 300 : type === 'slider' ? 80 : 0;
+        if (delay) cell._inputTimer = setTimeout(() => runDAG([cell.id], true), delay);
+        else runDAG([cell.id], true);
+      }
+    });
+    el.addEventListener('change', () => {
+      const cb = cell._callbacks[key];
+      if (cb.onChange) cb.onChange(el.value);
+    });
+
+    widgetEl.appendChild(el);
+    cell._inputs[key] = el.value;
     return cell._inputs[key];
   };
 
@@ -779,6 +904,14 @@ export async function runDAG(dirtyIds, force = false) {
           cell.el.classList.add('stale');
         } else {
           renderHtmlCell(cell);
+        }
+      }
+      // inject widget-defined variables into scope for downstream cells
+      if (cell.defines && cell.defines.size > 0) {
+        for (const name of cell.defines) {
+          if (cell._inputs && cell._inputs[name] !== undefined) {
+            S.scope[name] = cell._inputs[name];
+          }
         }
       }
       continue;

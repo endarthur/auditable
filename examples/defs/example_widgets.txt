@@ -1,0 +1,125 @@
+/// auditable
+/// title: widget components
+
+/// md
+# widget components
+
+`<audit-*>` custom elements work in both **code cells** (via `ui.slider()`) and **HTML cells** (via markup). HTML cell widgets define variables in scope — downstream cells react to changes.
+
+/// css
+.widget-demo {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  margin: 8px 0;
+}
+.widget-panel {
+  flex: 1;
+  min-width: 240px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  background: var(--bg2);
+}
+.widget-panel h3 {
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+.color-swatch {
+  width: 100%;
+  height: 60px;
+  border: 1px solid var(--border);
+  margin: 8px 0;
+  transition: background 0.15s;
+}
+.readout {
+  font-size: 11px;
+  color: var(--fg-dim);
+  padding: 4px 0;
+}
+
+/// md
+## HTML cell widgets
+
+these `<audit-slider>` elements are defined directly in HTML markup. their `name` attributes define variables in scope — downstream code cells react to changes automatically.
+
+/// html
+<div class="widget-demo">
+  <div class="widget-panel">
+    <h3>color mixer</h3>
+    <audit-slider name="red" label="red" min="0" max="255" step="1" value="200"></audit-slider>
+    <audit-slider name="green" label="green" min="0" max="255" step="1" value="155"></audit-slider>
+    <audit-slider name="blue" label="blue" min="0" max="255" step="1" value="60"></audit-slider>
+    <div class="color-swatch" style="background: rgb(${red}, ${green}, ${blue})"></div>
+    <div class="readout">rgb(${red}, ${green}, ${blue})</div>
+  </div>
+  <div class="widget-panel">
+    <h3>controls</h3>
+    <audit-dropdown name="shape" label="shape" options="circle,square,triangle" value="circle"></audit-dropdown>
+    <audit-checkbox name="filled" label="filled" checked></audit-checkbox>
+    <audit-text-input name="label" label="label" value="hello"></audit-text-input>
+  </div>
+</div>
+
+/// code
+// downstream code cell — reacts to HTML cell widget changes
+const c = ui.canvas(300, 200);
+const ctx = c.getContext('2d');
+ctx.clearRect(0, 0, c.width, c.height);
+
+const color = `rgb(${red}, ${green}, ${blue})`;
+ctx.fillStyle = filled ? color : 'transparent';
+ctx.strokeStyle = color;
+ctx.lineWidth = 2;
+
+const cx = 150, cy = 80, r = 50;
+if (shape === 'circle') {
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  filled ? ctx.fill() : ctx.stroke();
+} else if (shape === 'square') {
+  filled ? ctx.fillRect(cx - r, cy - r, r * 2, r * 2) : ctx.strokeRect(cx - r, cy - r, r * 2, r * 2);
+} else {
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - r);
+  ctx.lineTo(cx + r, cy + r);
+  ctx.lineTo(cx - r, cy + r);
+  ctx.closePath();
+  filled ? ctx.fill() : ctx.stroke();
+}
+
+ctx.fillStyle = 'var(--fg)' === color ? '#aaa' : '#aaa';
+ctx.font = '14px monospace';
+ctx.textAlign = 'center';
+ctx.fillText(label, cx, cy + r + 30);
+
+/// md
+## code cell widgets
+
+the same elements power `ui.slider()` / `ui.dropdown()` / `ui.checkbox()` / `ui.textInput()` — they create `<audit-*>` elements internally.
+
+/// code
+const amplitude = ui.slider("amplitude", 1.0, { min: 0.1, max: 3.0, step: 0.1 });
+const frequency = ui.slider("frequency", 2, { min: 1, max: 10 });
+const waveform = ui.dropdown("waveform", ["sine", "sawtooth", "square"]);
+
+/// code
+const wave = ui.canvas(400, 150);
+const wctx = wave.getContext('2d');
+wctx.clearRect(0, 0, wave.width, wave.height);
+wctx.strokeStyle = '#c89b3c';
+wctx.lineWidth = 1.5;
+wctx.beginPath();
+for (let px = 0; px < 400; px++) {
+  const t = px / 400 * Math.PI * 2 * frequency;
+  let y;
+  if (waveform === 'sine') y = Math.sin(t);
+  else if (waveform === 'sawtooth') y = 2 * ((t / (2 * Math.PI)) % 1) - 1;
+  else y = Math.sin(t) >= 0 ? 1 : -1;
+  y *= amplitude;
+  const py = 75 - y * 40;
+  px === 0 ? wctx.moveTo(px, py) : wctx.lineTo(px, py);
+}
+wctx.stroke();

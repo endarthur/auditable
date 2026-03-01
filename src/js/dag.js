@@ -196,6 +196,14 @@ export function findHtmlUses(code, allDefined) {
   return uses;
 }
 
+export function parseHtmlDefines(html) {
+  const defines = new Set();
+  const re = /<audit-(?:slider|dropdown|checkbox|text-input)\b[^>]*\bname="([^"]+)"/g;
+  let m;
+  while (m = re.exec(html)) defines.add(m[1]);
+  return defines;
+}
+
 export function buildDAG() {
   // collect all defined names globally (only re-parse changed cells)
   const allDefined = new Map(); // name -> cell id
@@ -204,6 +212,18 @@ export function buildDAG() {
     if (c.code !== c._parsedCode) {
       const { defines } = parseNames(c.code);
       c.defines = defines;
+      c._parsedCode = c.code;
+    }
+    for (const name of c.defines) {
+      allDefined.set(name, c.id);
+    }
+  }
+
+  // collect defines from HTML cells (audit-* widget name attributes)
+  for (const c of S.cells) {
+    if (c.type !== 'html') continue;
+    if (c.code !== c._parsedCode) {
+      c.defines = parseHtmlDefines(c.code);
       c._parsedCode = c.code;
     }
     for (const name of c.defines) {

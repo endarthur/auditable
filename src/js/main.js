@@ -3,6 +3,7 @@ import './cm6.js';
 import './stdlib.js';
 import './python.js';
 import './dag.js';
+import './widgets.js';
 import './exec.js';
 import './markdown.js';
 import './cell-dom.js';
