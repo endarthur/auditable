@@ -37,6 +37,7 @@ const defs = [
   'example_md_interpolation.txt',
   'example_atra_layouts.txt',
   'example_natra.txt',
+  'example_widgets.txt',
 ];
 
 // ── Parser ──

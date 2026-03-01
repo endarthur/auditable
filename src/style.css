@@ -521,7 +521,6 @@ button.accent:hover {
 .cell-html-view {
   padding: 6px 10px;
   color: var(--fg);
-  cursor: text;
   min-height: 24px;
 }
 .cell-html-view:empty::before {
@@ -727,7 +726,7 @@ body.split-view .present-exit { display: none; }
 }
 
 /* ── WIDGET CLASSES ── */
-.cell-widget {
+audit-slider, audit-dropdown, audit-checkbox, audit-text-input {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -735,19 +734,19 @@ body.split-view .present-exit { display: none; }
   font-size: 12px;
   color: var(--fg-dim);
 }
-.cell-widget-label {
+.audit-widget-label {
   min-width: 80px;
   font-size: 10px;
   letter-spacing: 1px;
   text-transform: uppercase;
   color: var(--fg-dim);
 }
-.cell-widget input[type="range"] {
+audit-slider input[type="range"] {
   flex: 1;
   accent-color: var(--accent);
   max-width: 200px;
 }
-.cell-widget select {
+audit-dropdown select {
   background: var(--bg2);
   border: 1px solid var(--border);
   color: var(--fg-bright);
@@ -755,10 +754,10 @@ body.split-view .present-exit { display: none; }
   font-size: 12px;
   padding: 2px 4px;
 }
-.cell-widget input[type="checkbox"] {
+audit-checkbox input[type="checkbox"] {
   accent-color: var(--accent);
 }
-.cell-widget input[type="text"] {
+audit-text-input input[type="text"] {
   background: var(--bg2);
   border: 1px solid var(--border);
   color: var(--fg-bright);
@@ -768,7 +767,7 @@ body.split-view .present-exit { display: none; }
   flex: 1;
   max-width: 200px;
 }
-.cell-widget-val {
+.audit-widget-val {
   min-width: 40px;
   text-align: right;
   color: var(--fg-bright);
