@@ -8,7 +8,7 @@ import { registerProvider } from './stdlib.js';
 import { toggleAutorun } from './editor.js';
 import { toggleSettings, togglePresent, applyTheme, applyFontSize, applyWidth, applyLineNumbers, applyHeader, applyExecMode, applyRunOnLoad, applyShowToggle, applyGlobalExecMode, applyGlobalRunOnLoad, applyEditorView } from './settings.js';
 import { toggleUpdate, checkForUpdate, applyOnlineUpdate, proceedUpdate, cancelUpdate, updateFromFile } from './update.js';
-import { saveNotebook, savePackedNotebook, setSaveMode, toggleSaveTray, exportAsTxt } from './save.js';
+import { saveNotebook, savePackedNotebook, setSaveMode, toggleSaveTray, exportAsTxt, showExportDialog, doExportApp, closeExportDialog } from './save.js';
 import { insertAt } from './ui.js';
 import { openFind, closeFind } from './find.js';
 import { runAll } from './exec.js';
@@ -51,6 +51,9 @@ window.savePackedNotebook = savePackedNotebook;
 window.setSaveMode = setSaveMode;
 window.toggleSaveTray = toggleSaveTray;
 window.exportAsTxt = exportAsTxt;
+window.showExportDialog = showExportDialog;
+window.doExportApp = doExportApp;
+window.closeExportDialog = closeExportDialog;
 
 // exec
 window.runAll = runAll;

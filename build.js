@@ -18,7 +18,7 @@ function processModules(mainPath, moduleDir, opts = {}) {
   const importPaths = [];
   for (const line of mainSrc.split('\n')) {
     if (opts.lean && line.includes('@optional')) continue;
-    const m = line.match(/^import\s+.*['"]\.\/(.+?)['"];?\s*(?:\/\/.*)?$/);
+    const m = line.match(/^import\s+.*['"](\.\.?\/.+?)['"];?\s*(?:\/\/.*)?$/);
     if (m) importPaths.push(m[1]);
   }
 
@@ -133,6 +133,23 @@ if (target === 'scan') {
 
 const srcDir = path.join(__dirname, 'src');
 const jsDir = path.join(srcDir, 'js');
+const appDir = path.join(srcDir, 'app');
+
+// ── Build app runtime (minimal JS without CM6/editor) ──
+function buildAppRuntime() {
+  let appJs = processModules(path.join(appDir, 'main.js'), appDir);
+  // inject build-time constants into app runtime
+  const pagesUrlVal = process.env.AUDITABLE_PAGES_URL || 'https://endarthur.github.io/auditable';
+  appJs = appJs.replace(
+    "const __AUDITABLE_PAGES_URL__ = 'https://endarthur.github.io/auditable';",
+    `const __AUDITABLE_PAGES_URL__ = '${pagesUrlVal}';`
+  );
+  return appJs;
+}
+
+const appRuntime = buildAppRuntime();
+const appRuntimeSize = (Buffer.byteLength(appRuntime, 'utf8') / 1024).toFixed(1);
+console.log(`App runtime: ${appRuntimeSize} KB`);
 
 let js = processModules(path.join(jsDir, 'main.js'), jsDir, { lean });
 
@@ -144,8 +161,16 @@ if (fs.existsSync(cm6Path)) {
 }
 
 // 3. Read CSS and HTML template
-const css = fs.readFileSync(path.join(srcDir, 'style.css'), 'utf8');
+const cssRaw = fs.readFileSync(path.join(srcDir, 'style.css'), 'utf8');
 const template = fs.readFileSync(path.join(srcDir, 'template.html'), 'utf8');
+
+// 3b. Split CSS on marker into app and editor sections
+const cssMarker = '/* \u2550\u2550 APP CSS ABOVE \u2550\u2550\u2550 EDITOR CSS BELOW \u2550\u2550 */';
+const cssParts = cssRaw.split(cssMarker);
+const appCss = cssParts[0].trimEnd();
+const editorCss = cssParts.length > 1 ? cssParts[1].trimStart() : '';
+// combined for the full build (both style tags)
+const css = cssRaw;
 
 // 4. Inject build-time constants
 // These placeholders in the source get replaced with environment or computed values:
@@ -205,6 +230,13 @@ if (runOnLoadArg) {
   );
 }
 
+// 4b. Inject app runtime as escaped string constant
+const appRuntimeEscaped = appRuntime.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${').replace(/<\/script>/gi, '<\\/script>');
+js = js.replace(
+  "const __APP_RUNTIME__ = '';",
+  () => 'const __APP_RUNTIME__ = `' + appRuntimeEscaped + '`;'
+);
+
 // 5. Assemble final HTML (first pass — placeholder size)
 function assemble(jsCode) {
   return `<!DOCTYPE html>
@@ -215,8 +247,11 @@ function assemble(jsCode) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Auditable</title>
-<style id="auditable-css">
-${css}
+<style id="auditable-app-css">
+${appCss}
+</style>
+<style id="auditable-editor-css">
+${editorCss}
 </style>
 </head>
 <body>

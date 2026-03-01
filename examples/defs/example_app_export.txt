@@ -1,0 +1,199 @@
+/// auditable
+/// title: export as app
+/// settings: {"theme":"dark","fontSize":13,"width":"860","editorView":"yes"}
+
+/// md
+# export as app
+
+build **standalone reactive apps** from notebooks. use the save tray → **export app** to produce a self-contained HTML file with no editor, no toolbar — just your reactive cells running.
+
+this example uses `// %bare` and defines its own visual style — a light theme with teal accents, scoped under a `.app` wrapper so it doesn't interfere with the editor during development.
+
+/// code
+// %bare
+
+/// css
+.app {
+  --bg: #f4f1eb;
+  --bg2: #fff;
+  --fg: #2a2a2a;
+  --fg-dim: #8a8580;
+  --accent: #1a8a7d;
+  --accent2: #e05540;
+  --border: #d5d0c8;
+  color: var(--fg);
+  font: 13px/1.6 'Inter', 'Segoe UI', system-ui, sans-serif;
+}
+.app *, .app *::before, .app *::after { box-sizing: border-box; }
+.app h1, .app h2, .app h3 {
+  color: var(--accent); font-weight: 600; margin: 0;
+}
+.app h1 { font-size: 22px; margin-bottom: 4px; }
+.app h3 { font-size: 13px; }
+.app hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+.app code {
+  background: rgba(26,138,125,0.08); padding: 1px 5px; border-radius: 3px;
+  font-family: 'JetBrains Mono', monospace; font-size: 12px;
+}
+.app strong { color: var(--accent); }
+.app ol { padding-left: 20px; }
+.app ol li { margin: 2px 0; }
+.app audit-slider, .app audit-dropdown, .app audit-checkbox, .app audit-text-input {
+  display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 13px;
+}
+.app .audit-widget-label {
+  min-width: 90px; font-size: 11px; font-weight: 500;
+  letter-spacing: 0.5px; color: var(--fg-dim);
+}
+.app .audit-widget-val {
+  min-width: 36px; text-align: right; font-size: 12px;
+  font-family: 'JetBrains Mono', monospace; color: var(--accent);
+}
+.app audit-slider input[type="range"] { flex: 1; accent-color: var(--accent); }
+.app audit-dropdown select, .app audit-text-input input {
+  background: var(--bg2); color: var(--fg); border: 1px solid var(--border);
+  padding: 4px 8px; font: inherit; border-radius: 4px;
+}
+.app .app-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin: 12px 0;
+}
+.app .app-panel {
+  padding: 20px;
+  border: 1px solid var(--border);
+  background: var(--bg2);
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+}
+.app .app-panel h3 {
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  margin-bottom: 12px;
+  font-weight: 500;
+}
+.app .metric {
+  font-size: 32px;
+  color: var(--accent);
+  font-weight: 700;
+  letter-spacing: -0.5px;
+}
+.app .metric-label {
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+  font-weight: 500;
+}
+.app .range-text {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  font-family: 'JetBrains Mono', monospace;
+}
+@media (max-width: 600px) {
+  .app .app-layout { grid-template-columns: 1fr; }
+}
+
+/// html
+<div class="app">
+<div class="app-panel" style="border-left: 3px solid var(--accent)">
+  <h3>parameters</h3>
+  <audit-slider name="samples" label="samples" min="10" max="200" step="10" value="100"></audit-slider>
+  <audit-slider name="spread" label="spread" min="1" max="50" step="1" value="10"></audit-slider>
+  <audit-dropdown name="distribution" label="distribution" options="normal,uniform,exponential" value="normal"></audit-dropdown>
+  <audit-checkbox name="showMean" label="show mean line" checked></audit-checkbox>
+</div>
+</div>
+
+/// code
+// generate data from selected distribution
+function generate(n, dist, sigma) {
+  const data = [];
+  for (let i = 0; i < n; i++) {
+    if (dist === 'normal') {
+      const u1 = Math.random(), u2 = Math.random();
+      data.push(Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2) * sigma);
+    } else if (dist === 'uniform') {
+      data.push((Math.random() - 0.5) * 2 * sigma);
+    } else {
+      data.push(-Math.log(1 - Math.random()) * sigma);
+    }
+  }
+  return data;
+}
+const data = generate(samples, distribution, spread);
+const mean = data.reduce((s, v) => s + v, 0) / data.length;
+const variance = data.reduce((s, v) => s + (v - mean) ** 2, 0) / data.length;
+const stddev = Math.sqrt(variance);
+const min = Math.min(...data);
+const max = Math.max(...data);
+
+/// html
+<div class="app">
+<div class="app-layout">
+  <div class="app-panel">
+    <h3>statistics</h3>
+    <div class="metric">${mean.toFixed(2)}</div>
+    <div class="metric-label">mean</div>
+    <div style="margin-top:12px">
+      <div class="metric">${stddev.toFixed(2)}</div>
+      <div class="metric-label">std deviation</div>
+    </div>
+    <div class="range-text">
+      range: ${min.toFixed(1)} to ${max.toFixed(1)}
+    </div>
+  </div>
+  <div class="app-panel">
+    <h3>distribution — ${distribution}</h3>
+    <div id="hist-container"></div>
+  </div>
+</div>
+</div>
+
+/// code
+// %outputId hist-container
+const nBins = 20;
+const lo = min, hi = max;
+const binWidth = (hi - lo) / nBins || 1;
+const bins = new Array(nBins).fill(0);
+for (const v of data) {
+  const idx = Math.min(Math.floor((v - lo) / binWidth), nBins - 1);
+  bins[idx]++;
+}
+const maxBin = Math.max(...bins);
+
+const c = ui.canvas(360, 120);
+const ctx = c.getContext('2d');
+ctx.clearRect(0, 0, c.width, c.height);
+const barW = c.width / nBins;
+ctx.fillStyle = '#1a8a7d';
+for (let i = 0; i < nBins; i++) {
+  const h = maxBin > 0 ? (bins[i] / maxBin) * (c.height - 10) : 0;
+  ctx.fillRect(i * barW + 1, c.height - h, barW - 2, h);
+}
+if (showMean) {
+  const mx = ((mean - lo) / (hi - lo)) * c.width;
+  ctx.strokeStyle = '#e05540';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath();
+  ctx.moveTo(mx, 0);
+  ctx.lineTo(mx, c.height);
+  ctx.stroke();
+}
+
+/// md
+---
+
+### how to export
+
+1. open the **save tray** in the toolbar
+2. click **export app**
+3. this notebook uses `// %bare` — the checkbox starts unchecked (no base styles)
+4. the exported file is fully self-contained: your CSS, widgets, and reactive code
+
+styles are scoped under `.app` so they don't affect the editor during development. when exported bare, the app wrapper provides all the styling.

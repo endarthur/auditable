@@ -460,7 +460,11 @@ const __AUDITABLE_RUNTIME__ = `<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Auditable</title>
-<style id="auditable-css">
+<style id="auditable-app-css">
+/* ═══════════════════════════════════════════════
+   APP CSS — included in both editor and exported apps
+   ═══════════════════════════════════════════════ */
+
 :root {
   --bg: #0a0a0a;
   --bg1: #111;
@@ -499,6 +503,428 @@ html, body {
   min-height: 100vh;
 }
 
+button {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+button:hover {
+  border-color: var(--border-hi);
+  color: var(--fg);
+}
+button.accent {
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+button.accent:hover {
+  border-color: var(--accent);
+}
+
+/* ── NOTEBOOK ── */
+.notebook {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 16px 12px 120px;
+}
+
+/* ── CELL ── */
+.cell {
+  position: relative;
+  margin: 6px 0;
+  border-left: 2px solid transparent;
+  transition: border-color 0.15s;
+}
+.cell.stale {
+  border-left-color: var(--accent-dim);
+}
+.cell.error {
+  border-left-color: var(--err);
+}
+.cell.fresh {
+  border-left-color: var(--ok);
+  transition: border-color 0.5s;
+}
+
+/* ── CELL OUTPUT ── */
+.cell-output {
+  padding: 4px 10px;
+  min-height: 0;
+  font-size: 12px;
+  color: var(--fg);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.cell-output:empty {
+  display: none;
+}
+.cell-output.error {
+  color: var(--err);
+}
+
+.cell-output canvas {
+  max-width: 100%;
+  display: block;
+  margin: 4px 0;
+}
+
+.cell-output table {
+  border-collapse: collapse;
+  font-size: 11px;
+  margin: 4px 0;
+}
+.cell-output table th,
+.cell-output table td {
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+}
+.cell-output table th {
+  color: var(--accent);
+  font-weight: normal;
+  text-transform: uppercase;
+  font-size: 9px;
+  letter-spacing: 1px;
+}
+
+/* ── CSS CELL ── */
+.cell-css-view {
+  padding: 6px 10px;
+  color: var(--fg-dim);
+  cursor: text;
+  min-height: 24px;
+  font-size: 11px;
+  font-style: italic;
+}
+.cell-css-view:empty::before {
+  content: '(empty stylesheet)';
+}
+
+/* ── HTML CELL ── */
+.cell-html-view {
+  padding: 6px 10px;
+  color: var(--fg);
+  min-height: 24px;
+}
+.cell-html-view:empty::before {
+  content: '(empty html template)';
+  color: var(--fg-dim);
+  font-style: italic;
+  font-size: 11px;
+}
+/* ── MARKDOWN CELL ── */
+.cell-md-view {
+  padding: 6px 10px;
+  color: var(--fg);
+  cursor: text;
+  min-height: 24px;
+}
+.cell-md-view:empty::before {
+  content: '(empty markdown cell)';
+  color: var(--fg-dim);
+  font-style: italic;
+  font-size: 11px;
+}
+.cell-md-view h1, .cell-md-view h2, .cell-md-view h3 {
+  color: var(--fg-bright);
+  font-weight: normal;
+  margin: 4px 0;
+}
+.cell-md-view h1 { font-size: 18px; letter-spacing: 2px; }
+.cell-md-view h2 { font-size: 15px; letter-spacing: 1px; color: var(--accent); }
+.cell-md-view h3 { font-size: 13px; }
+.cell-md-view p { margin: 4px 0; }
+.cell-md-view code {
+  background: var(--bg2);
+  padding: 1px 4px;
+  font-size: 12px;
+}
+.cell-md-view strong { color: var(--fg-bright); }
+.cell-md-view em { font-style: italic; }
+.cell-md-view a { color: var(--accent); }
+.cell-md-view table {
+  border-collapse: collapse;
+  font-size: 11px;
+  margin: 4px 0;
+}
+.cell-md-view table th,
+.cell-md-view table td {
+  border: 1px solid var(--border);
+  padding: 2px 8px;
+}
+.cell-md-view table th {
+  color: var(--accent);
+  font-weight: normal;
+  text-transform: uppercase;
+  font-size: 9px;
+  letter-spacing: 1px;
+}
+
+/* ── WIDGET CLASSES ── */
+audit-slider, audit-dropdown, audit-checkbox, audit-text-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+.audit-widget-label {
+  min-width: 80px;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--fg-dim);
+}
+audit-slider input[type="range"] {
+  flex: 1;
+  accent-color: var(--accent);
+  max-width: 200px;
+}
+audit-dropdown select {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  color: var(--fg-bright);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 2px 4px;
+}
+audit-checkbox input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+audit-text-input input[type="text"] {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  color: var(--fg-bright);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 2px 6px;
+  flex: 1;
+  max-width: 200px;
+}
+.audit-widget-val {
+  min-width: 40px;
+  text-align: right;
+  color: var(--fg-bright);
+  font-size: 12px;
+}
+
+/* ── WORKSHOP PANEL ── */
+.workshop-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.3);
+  z-index: 900;
+}
+.workshop-overlay.visible { display: block; }
+.workshop-panel {
+  position: fixed;
+  top: 0;
+  right: -380px;
+  bottom: 0;
+  width: 360px;
+  max-width: 90vw;
+  background: var(--bg1);
+  border-left: 1px solid var(--border);
+  z-index: 901;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--fg);
+  transition: right 0.25s ease;
+  overflow: hidden;
+}
+.workshop-panel.open { right: 0; }
+.workshop-tab {
+  position: fixed;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%) rotate(180deg);
+  writing-mode: vertical-rl;
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-right: none;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  padding: 10px 5px;
+  cursor: pointer;
+  z-index: 902;
+  transition: right 0.25s ease;
+}
+.workshop-tab:hover { background: var(--bg2); }
+.workshop-panel.open ~ .workshop-tab { right: min(360px, 90vw); }
+.workshop-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 16px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.workshop-title {
+  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+.workshop-close {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-size: 18px;
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0; cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.workshop-close:hover { border-color: var(--err); color: var(--err); }
+.workshop-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  line-height: 1.6;
+}
+.workshop-body h1, .workshop-body h2, .workshop-body h3 {
+  color: var(--fg-bright);
+  margin: 1em 0 0.5em;
+}
+.workshop-body h1:first-child, .workshop-body h2:first-child, .workshop-body h3:first-child {
+  margin-top: 0;
+}
+.workshop-body code {
+  background: var(--bg2);
+  padding: 1px 4px;
+  font-size: 0.9em;
+}
+.workshop-body strong { color: var(--accent); }
+.workshop-pips {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 16px;
+}
+.workshop-pip {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--border);
+  cursor: pointer;
+}
+.workshop-pip.done { background: var(--fg-dim); }
+.workshop-pip.active { background: var(--accent); }
+.workshop-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+.workshop-nav button {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+.workshop-nav button:hover { border-color: var(--accent); color: var(--accent); }
+.workshop-nav button:disabled { opacity: 0.3; cursor: default; }
+.workshop-nav button:disabled:hover { border-color: var(--border); color: var(--fg); }
+.workshop-counter { color: var(--fg-dim); font-size: 11px; }
+
+/* ── LIGHT THEME ── */
+:root.light {
+  --bg: #f5f4f0;
+  --bg1: #eae8e3;
+  --bg2: #dedad3;
+  --border: #ccc8bf;
+  --border-hi: #b0ab9f;
+  --fg: #444;
+  --fg-dim: #888;
+  --fg-bright: #222;
+  --accent: #996b1f;
+  --accent-dim: #b8924a;
+  --err: #c33;
+  --ok: #287;
+}
+:root.light .cell[data-type="code"] .cell-type { color: #4a7a9e; }
+:root.light .cell[data-type="css"]  .cell-type { color: #a56e33; }
+:root.light .cell[data-type="html"] .cell-type { color: #3d8a83; }
+:root.light ::-webkit-scrollbar-track { background: var(--bg); }
+:root.light ::-webkit-scrollbar-thumb { background: var(--border-hi); }
+
+/* ── EXPORT DIALOG ── */
+.export-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.export-panel {
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  padding: 20px;
+  min-width: 280px;
+  max-width: 90vw;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg);
+}
+.export-panel h3 {
+  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  margin: 0 0 12px 0;
+  font-weight: normal;
+}
+.export-panel label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+.export-panel input[type="text"] {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  color: var(--fg-bright);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 4px 8px;
+  outline: none;
+  flex: 1;
+}
+.export-panel input[type="text"]:focus {
+  border-color: var(--border-hi);
+}
+.export-panel input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+.export-actions {
+  display: flex;
+  gap: 8px;
+  padding: 12px 0 0;
+}
+.export-actions button {
+  padding: 6px 16px;
+}
+</style>
+<style id="auditable-editor-css">
 /* ── TOOLBAR ── */
 .toolbar {
   position: sticky;
@@ -549,30 +975,6 @@ html, body {
 }
 .toolbar-filename input:focus {
   border-bottom-color: var(--accent-dim);
-}
-
-button {
-  background: var(--bg2);
-  border: 1px solid var(--border);
-  color: var(--fg-dim);
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  padding: 4px 10px;
-  cursor: pointer;
-  transition: border-color 0.15s, color 0.15s;
-}
-button:hover {
-  border-color: var(--border-hi);
-  color: var(--fg);
-}
-button.accent {
-  border-color: var(--accent-dim);
-  color: var(--accent);
-}
-button.accent:hover {
-  border-color: var(--accent);
 }
 
 /* ── TOOLBAR BADGES ── */
@@ -785,20 +1187,7 @@ button.accent:hover {
 /* ── TOOLBAR STATUS (mobile cell count) ── */
 .toolbar-status { display: none; }
 
-/* ── NOTEBOOK ── */
-.notebook {
-  max-width: 860px;
-  margin: 0 auto;
-  padding: 16px 12px 120px;
-}
-
-/* ── CELL ── */
-.cell {
-  position: relative;
-  margin: 6px 0;
-  border-left: 2px solid transparent;
-  transition: border-color 0.15s;
-}
+/* ── CELL (editor-specific) ── */
 .cell:hover {
   border-left-color: var(--border-hi);
 }
@@ -811,16 +1200,6 @@ button.accent:hover {
 .cell.manual .cell-type::after {
   content: ' \\00b7 manual';
   color: var(--accent-dim);
-}
-.cell.stale {
-  border-left-color: var(--accent-dim);
-}
-.cell.error {
-  border-left-color: var(--err);
-}
-.cell.fresh {
-  border-left-color: var(--ok);
-  transition: border-color 0.5s;
 }
 
 /* cell header — type label + controls */
@@ -928,118 +1307,7 @@ button.accent:hover {
   pointer-events: auto;
 }
 
-.cell-output {
-  padding: 4px 10px;
-  min-height: 0;
-  font-size: 12px;
-  color: var(--fg);
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-.cell-output:empty {
-  display: none;
-}
-.cell-output.error {
-  color: var(--err);
-}
-
-.cell-output canvas {
-  max-width: 100%;
-  display: block;
-  margin: 4px 0;
-}
-
-.cell-output table {
-  border-collapse: collapse;
-  font-size: 11px;
-  margin: 4px 0;
-}
-.cell-output table th,
-.cell-output table td {
-  border: 1px solid var(--border);
-  padding: 2px 8px;
-}
-.cell-output table th {
-  color: var(--accent);
-  font-weight: normal;
-  text-transform: uppercase;
-  font-size: 9px;
-  letter-spacing: 1px;
-}
-
-/* ── CSS CELL ── */
-.cell-css-view {
-  padding: 6px 10px;
-  color: var(--fg-dim);
-  cursor: text;
-  min-height: 24px;
-  font-size: 11px;
-  font-style: italic;
-}
-.cell-css-view:empty::before {
-  content: '(empty stylesheet)';
-}
-
-/* ── HTML CELL ── */
-.cell-html-view {
-  padding: 6px 10px;
-  color: var(--fg);
-  min-height: 24px;
-}
-.cell-html-view:empty::before {
-  content: '(empty html template)';
-  color: var(--fg-dim);
-  font-style: italic;
-  font-size: 11px;
-}
-/* ── MARKDOWN CELL ── */
-.cell-md-view {
-  padding: 6px 10px;
-  color: var(--fg);
-  cursor: text;
-  min-height: 24px;
-}
-.cell-md-view:empty::before {
-  content: '(empty markdown cell)';
-  color: var(--fg-dim);
-  font-style: italic;
-  font-size: 11px;
-}
-.cell-md-view h1, .cell-md-view h2, .cell-md-view h3 {
-  color: var(--fg-bright);
-  font-weight: normal;
-  margin: 4px 0;
-}
-.cell-md-view h1 { font-size: 18px; letter-spacing: 2px; }
-.cell-md-view h2 { font-size: 15px; letter-spacing: 1px; color: var(--accent); }
-.cell-md-view h3 { font-size: 13px; }
-.cell-md-view p { margin: 4px 0; }
-.cell-md-view code {
-  background: var(--bg2);
-  padding: 1px 4px;
-  font-size: 12px;
-}
-.cell-md-view strong { color: var(--fg-bright); }
-.cell-md-view em { font-style: italic; }
-.cell-md-view a { color: var(--accent); }
-.cell-md-view table {
-  border-collapse: collapse;
-  font-size: 11px;
-  margin: 4px 0;
-}
-.cell-md-view table th,
-.cell-md-view table td {
-  border: 1px solid var(--border);
-  padding: 2px 8px;
-}
-.cell-md-view table th {
-  color: var(--accent);
-  font-weight: normal;
-  text-transform: uppercase;
-  font-size: 9px;
-  letter-spacing: 1px;
-}
-
+/* ── MARKDOWN EDIT ── */
 .cell-md-edit textarea {
   display: block;
   width: 100%;
@@ -1182,55 +1450,6 @@ body.split-view .present-exit { display: none; }
 }
 .add-bar:hover {
   opacity: 1 !important;
-}
-
-/* ── WIDGET CLASSES ── */
-audit-slider, audit-dropdown, audit-checkbox, audit-text-input {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 2px 0;
-  font-size: 12px;
-  color: var(--fg-dim);
-}
-.audit-widget-label {
-  min-width: 80px;
-  font-size: 10px;
-  letter-spacing: 1px;
-  text-transform: uppercase;
-  color: var(--fg-dim);
-}
-audit-slider input[type="range"] {
-  flex: 1;
-  accent-color: var(--accent);
-  max-width: 200px;
-}
-audit-dropdown select {
-  background: var(--bg2);
-  border: 1px solid var(--border);
-  color: var(--fg-bright);
-  font-family: var(--mono);
-  font-size: 12px;
-  padding: 2px 4px;
-}
-audit-checkbox input[type="checkbox"] {
-  accent-color: var(--accent);
-}
-audit-text-input input[type="text"] {
-  background: var(--bg2);
-  border: 1px solid var(--border);
-  color: var(--fg-bright);
-  font-family: var(--mono);
-  font-size: 12px;
-  padding: 2px 6px;
-  flex: 1;
-  max-width: 200px;
-}
-.audit-widget-val {
-  min-width: 40px;
-  text-align: right;
-  color: var(--fg-bright);
-  font-size: 12px;
 }
 
 /* ── STATUS BAR ── */
@@ -1747,155 +1966,6 @@ body.presenting .find-bar { display: none !important; }
   box-shadow: 0 2px 8px rgba(0,0,0,0.15);
 }
 
-/* ── WORKSHOP PANEL ── */
-.workshop-overlay {
-  display: none;
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.3);
-  z-index: 900;
-}
-.workshop-overlay.visible { display: block; }
-.workshop-panel {
-  position: fixed;
-  top: 0;
-  right: -380px;
-  bottom: 0;
-  width: 360px;
-  max-width: 90vw;
-  background: var(--bg1);
-  border-left: 1px solid var(--border);
-  z-index: 901;
-  display: flex;
-  flex-direction: column;
-  font-family: var(--mono);
-  font-size: 13px;
-  color: var(--fg);
-  transition: right 0.25s ease;
-  overflow: hidden;
-}
-.workshop-panel.open { right: 0; }
-.workshop-tab {
-  position: fixed;
-  right: 0;
-  top: 50%;
-  transform: translateY(-50%) rotate(180deg);
-  writing-mode: vertical-rl;
-  background: var(--bg1);
-  border: 1px solid var(--border);
-  border-right: none;
-  color: var(--accent);
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  padding: 10px 5px;
-  cursor: pointer;
-  z-index: 902;
-  transition: right 0.25s ease;
-}
-.workshop-tab:hover { background: var(--bg2); }
-.workshop-panel.open ~ .workshop-tab { right: min(360px, 90vw); }
-.workshop-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 16px 12px;
-  border-bottom: 1px solid var(--border);
-}
-.workshop-title {
-  color: var(--accent);
-  font-size: 11px;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-}
-.workshop-close {
-  background: none;
-  border: 1px solid var(--border);
-  color: var(--fg-dim);
-  font-size: 18px;
-  width: 28px; height: 28px;
-  display: flex; align-items: center; justify-content: center;
-  padding: 0; cursor: pointer;
-  text-transform: none;
-  letter-spacing: 0;
-}
-.workshop-close:hover { border-color: var(--err); color: var(--err); }
-.workshop-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px;
-  line-height: 1.6;
-}
-.workshop-body h1, .workshop-body h2, .workshop-body h3 {
-  color: var(--fg-bright);
-  margin: 1em 0 0.5em;
-}
-.workshop-body h1:first-child, .workshop-body h2:first-child, .workshop-body h3:first-child {
-  margin-top: 0;
-}
-.workshop-body code {
-  background: var(--bg2);
-  padding: 1px 4px;
-  font-size: 0.9em;
-}
-.workshop-body strong { color: var(--accent); }
-.workshop-pips {
-  display: flex;
-  justify-content: center;
-  gap: 6px;
-  padding: 8px 16px;
-}
-.workshop-pip {
-  width: 8px; height: 8px;
-  border-radius: 50%;
-  background: var(--border);
-  cursor: pointer;
-}
-.workshop-pip.done { background: var(--fg-dim); }
-.workshop-pip.active { background: var(--accent); }
-.workshop-nav {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 16px;
-  border-top: 1px solid var(--border);
-}
-.workshop-nav button {
-  background: var(--bg2);
-  border: 1px solid var(--border);
-  color: var(--fg);
-  font-family: var(--mono);
-  font-size: 11px;
-  padding: 4px 12px;
-  cursor: pointer;
-}
-.workshop-nav button:hover { border-color: var(--accent); color: var(--accent); }
-.workshop-nav button:disabled { opacity: 0.3; cursor: default; }
-.workshop-nav button:disabled:hover { border-color: var(--border); color: var(--fg); }
-.workshop-counter { color: var(--fg-dim); font-size: 11px; }
-
-/* ── LIGHT THEME ── */
-:root.light {
-  --bg: #f5f4f0;
-  --bg1: #eae8e3;
-  --bg2: #dedad3;
-  --border: #ccc8bf;
-  --border-hi: #b0ab9f;
-  --fg: #444;
-  --fg-dim: #888;
-  --fg-bright: #222;
-  --accent: #996b1f;
-  --accent-dim: #b8924a;
-  --err: #c33;
-  --ok: #287;
-}
-:root.light .cell[data-type="code"] .cell-type { color: #4a7a9e; }
-:root.light .cell[data-type="css"]  .cell-type { color: #a56e33; }
-:root.light .cell[data-type="html"] .cell-type { color: #3d8a83; }
-:root.light ::-webkit-scrollbar-track { background: var(--bg); }
-:root.light ::-webkit-scrollbar-thumb { background: var(--border-hi); }
-
 /* ── TOUCH / HEADER MODES ── */
 @media (hover: none) {
   .insert-bar { display: none; }
@@ -2120,6 +2190,7 @@ body.presenting .find-bar { display: none !important; }
 <div class="help-row"><span class="help-key">// %outputClass &lt;cls&gt;</span><span class="help-desc">add classes to output div</span></div>
 <div class="help-row"><span class="help-key">// %goto &lt;label&gt;</span><span class="help-desc">jump to named cell after execution</span></div>
 <div class="help-row"><span class="help-key">// %collapsed</span><span class="help-desc">start cell collapsed</span></div>
+<div class="help-row"><span class="help-key">// %bare</span><span class="help-desc">export app without base styles</span></div>
 
 <div class="help-close">press F1 or Esc to close</div>
 </div>
@@ -2262,6 +2333,18 @@ body.presenting .find-bar { display: none !important; }
   </div>
 </div>
 
+<div class="export-overlay" id="exportOverlay" style="display:none">
+  <div class="export-panel">
+    <h3>export as app</h3>
+    <label>title <input id="exportTitle" type="text" spellcheck="false"></label>
+    <label><input id="exportBaseStyles" type="checkbox" checked> include base styles</label>
+    <div class="export-actions">
+      <button class="accent" onclick="doExportApp()">export</button>
+      <button onclick="closeExportDialog()">cancel</button>
+    </div>
+  </div>
+</div>
+
 <div class="toolbar">
   <span class="toolbar-title">auditable</span>
   <span class="toolbar-badges" id="toolbarBadges"></span>
@@ -2287,6 +2370,7 @@ body.presenting .find-bar { display: none !important; }
         <button onclick="setSaveMode('normal');saveNotebook()">save</button>
         <button onclick="setSaveMode('packed');saveNotebook()">save packed</button>
         <button onclick="exportAsTxt();toggleSaveTray()">export .txt</button>
+        <button onclick="showExportDialog();toggleSaveTray()">export app</button>
       </div>
     </span>
     <div class="toolbar-overflow">
@@ -3824,6 +3908,7 @@ const isManual    = code => hasDirective(code, 'manual');
 const isHidden    = code => hasDirective(code, 'hide');
 const isNorun     = code => hasDirective(code, 'norun');
 const isCollapsed = code => hasDirective(code, 'collapsed');
+const isBare      = code => hasDirective(code, 'bare');
 const parseCellName    = code => getDirective(code, 'cellName');
 const parseOutputId    = code => { const v = getDirective(code, 'outputId'); return v ? v.split(/\\s+/)[0] : null; };
 const parseOutputClass = code => getDirective(code, 'outputClass');
@@ -4872,6 +4957,7 @@ async function execCell(cell) {
       if (!resp.ok) throw new Error(\`Failed to fetch \${realUrl}: \${resp.status}\`);
       const source = await resp.text();
       window._installedModules[url] = { source, cellId: cell.id };
+      syncModules();
       const blob = new Blob([source], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
       const mod = await import(blobUrl);
@@ -4892,6 +4978,7 @@ async function execCell(cell) {
     source = resolveModulePaths(source, resp.url);
     // store under original url with cell reference
     window._installedModules[url] = { source, cellId: cell.id };
+    syncModules();
     // also load it into cache
     const blob = new Blob([source], { type: 'application/javascript' });
     const blobUrl = URL.createObjectURL(blob);
@@ -4923,6 +5010,7 @@ async function execCell(cell) {
       stored = uint8ToBase64(raw);
     }
     window._installedModules[url] = { source: stored, cellId: cell.id, binary: true, compressed: isCompressed, type: contentType };
+    syncModules();
     const ratio = isCompressed ? \` \\u2192 \${(stored.length / 1024).toFixed(1)} KB compressed\` : '';
     display(\`installed binary \${url} (\${(buf.byteLength / 1024).toFixed(1)} KB\${ratio})\`);
     return URL.createObjectURL(new Blob([raw], { type: contentType }));
@@ -5878,6 +5966,7 @@ function moveCell(id, dir) {
 
 function notifyDirty() {
   if (S.initialized && window.__AF_BRIDGE__) window.parent.postMessage({ type: 'af:dirty' }, '*');
+  syncDataDebounced();
 }
 
 function toggleAutorun() {
@@ -5895,6 +5984,7 @@ function toggleAutorun() {
   }
   const sel = $('#setExecMode');
   if (sel) sel.value = S.autorun ? 'reactive' : 'manual';
+  syncSettings();
   setMsg(S.autorun ? 'autorun on' : 'autorun off', 'ok');
 }
 
@@ -5999,6 +6089,7 @@ function applyTheme(theme) {
   }
   $('#setTheme').value = theme;
   updateAllEditorThemes(theme !== 'light');
+  syncSettings();
 }
 
 function applyFontSize(size) {
@@ -6006,12 +6097,14 @@ function applyFontSize(size) {
   document.documentElement.style.setProperty('--editor-font-size', size + 'px');
   $('#setFontSize').value = size;
   $('#setFontSizeVal').textContent = size;
+  syncSettings();
 }
 
 function applyWidth(w) {
   const nb = $('#notebook');
   nb.style.maxWidth = w;
   $('#setWidth').value = w;
+  syncSettings();
 }
 
 function applyLineNumbers(show) {
@@ -6020,6 +6113,7 @@ function applyLineNumbers(show) {
   const el = $('#setLineNumbers');
   if (el) el.value = on ? 'on' : 'off';
   updateAllEditorLineNumbers(on);
+  syncSettings();
 }
 
 function applyHeader(mode) {
@@ -6030,6 +6124,7 @@ function applyHeader(mode) {
   else if (mode === 'compact') root.classList.add('header-compact');
   // 'auto' = no class, CSS media queries handle it
   $('#setHeader').value = mode;
+  syncSettings();
 }
 
 // ── EXECUTION MODE ──
@@ -6051,12 +6146,14 @@ function applyExecMode(mode) {
   if (btnMobile) { btnMobile.textContent = text; btnMobile.className = cls; }
   const sel = $('#setExecMode');
   if (sel) sel.value = mode;
+  syncSettings();
 }
 
 function applyRunOnLoad(val) {
   _runOnLoad = val;
   const sel = $('#setRunOnLoad');
   if (sel) sel.value = val;
+  syncSettings();
 }
 
 function applyShowToggle(val) {
@@ -6064,6 +6161,7 @@ function applyShowToggle(val) {
   document.documentElement.classList.toggle('hide-run-toggle', val === 'no');
   const sel = $('#setShowToggle');
   if (sel) sel.value = val;
+  syncSettings();
 }
 
 function applyGlobalExecMode(val) {
@@ -6092,6 +6190,7 @@ function applyEditorView(val) {
   _editorView = val;
   const sel = $('#setEditorView');
   if (sel) sel.value = val;
+  syncSettings();
 }
 
 function getEditorViewSetting() { return _editorView; }
@@ -6139,7 +6238,7 @@ function togglePresent() {
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_BUILD_DATE__ = '2026-03-01';
-const __AUDITABLE_BASE_SIZE__ = 817551;
+const __AUDITABLE_BASE_SIZE__ = 913840;
 
 (function() {
   const ver = $('#aboutVersion');
@@ -6246,6 +6345,7 @@ function removeModule(url) {
   const kind = entry?.binary ? 'binary' : 'module';
   if (window._installedModules) delete window._installedModules[url];
   if (window._importCache) delete window._importCache[url];
+  syncModules();
   refreshModuleList();
   updateStatus();
   if (cellId != null) {
@@ -6730,6 +6830,2693 @@ async function verifySelf() {
 
 // -- save.js --
 
+// ── APP RUNTIME ──
+// Injected at build time — contains the minimal JS bundle for exported apps.
+const __APP_RUNTIME__ = \`// -- state.js --
+
+// ═══════════════════════════════════════════════════
+// AUDITABLE — reactive notebook runtime
+// Geoscientific Chaos Union, 2025
+// ═══════════════════════════════════════════════════
+
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+
+// ── STATE ──
+const S = {
+  cells: [],        // { id, type, code, el, defines, uses, output, error }
+  scope: {},        // shared variable scope
+  cellId: 0,        // unique cell ID counter
+  editTimer: null,  // debounce timer for autorun
+  autorun: true,    // reactive mode flag
+  selectedId: null, // currently selected cell
+  pendingD: false,  // for "dd" double-tap delete
+  pendingDTimer: null,
+  clipboard: null,  // copied cell data
+  trash: [],        // undo stack for deleted cells
+  findActive: false,
+  findQuery: '',
+  findCase: false,
+  findRegex: false,
+  findMatches: [],   // { cellId, index, length }
+  findCurrent: -1,
+  initialized: false, // set after loadFromEmbed/init completes
+  splitView: false,   // split view mode active
+  splitEditor: null,  // CM6 EditorView for split view (or null)
+};
+
+const JS_KEYWORDS = new Set([
+  'const','let','var','function','return','if','else','for','while','do',
+  'switch','case','break','continue','new','this','class','extends','import',
+  'export','default','from','of','in','typeof','instanceof','void','delete',
+  'throw','try','catch','finally','async','await','yield','true','false',
+  'null','undefined','NaN','Infinity'
+]);
+
+const JS_BUILTINS = new Set([
+  'Math','Array','Object','String','Number','Float64Array','Float32Array',
+  'Int32Array','Uint8Array','Map','Set','Promise','console','JSON',
+  'ui','std','load','install','print',
+  'workshop','notebook','md','html','css'
+]);
+
+
+// -- stubs.js --
+
+// ── CM6 / EDITOR STUBS ──
+// No-op replacements for CM6 and editor functions that the app runtime doesn't need.
+
+function refreshTaggedLanguages() {}
+function getEditor() { return null; }
+function createEditor() { return null; }
+function setEditorAutocomplete() {}
+function setEditorSearchDecorations() {}
+function clearEditorSearchDecorations() {}
+function clearAllSearchDecorations() {}
+
+const __AUDITABLE_PAGES_URL__ = 'https://endarthur.github.io/auditable';
+
+// -- stdlib.js --
+
+// ── STDLIB ──
+// Bundled standard library for notebook work.
+// Module-level — no per-cell state needed.
+
+// ── Provider Registry ──
+
+const _providers = { file: null, download: null };
+
+function registerProvider(name, fn) {
+  if (name in _providers) _providers[name] = fn;
+}
+
+// ── Data ──
+
+function csv(text, opts = {}) {
+  const sep = opts.separator || ',';
+  const typed = !!opts.typed;
+  const lines = [];
+  let i = 0;
+  const len = text.length;
+
+  while (i < len) {
+    const row = [];
+    while (i < len) {
+      if (text[i] === '"') {
+        // quoted field
+        i++;
+        let field = '';
+        while (i < len) {
+          if (text[i] === '"') {
+            if (text[i + 1] === '"') { field += '"'; i += 2; }
+            else { i++; break; }
+          } else { field += text[i]; i++; }
+        }
+        row.push(field);
+        if (text[i] === sep) i++;
+        else if (text[i] === '\\\\r') { i++; if (text[i] === '\\\\n') i++; break; }
+        else if (text[i] === '\\\\n') { i++; break; }
+        else if (i >= len) break;
+      } else {
+        // unquoted field
+        let field = '';
+        while (i < len && text[i] !== sep && text[i] !== '\\\\n' && text[i] !== '\\\\r') {
+          field += text[i]; i++;
+        }
+        row.push(field);
+        if (text[i] === sep) i++;
+        else if (text[i] === '\\\\r') { i++; if (text[i] === '\\\\n') i++; break; }
+        else if (text[i] === '\\\\n') { i++; break; }
+        else break;
+      }
+    }
+    if (row.length > 0 && !(row.length === 1 && row[0] === '')) lines.push(row);
+  }
+
+  if (lines.length < 2) return [];
+  const headers = lines[0];
+  const result = [];
+  for (let r = 1; r < lines.length; r++) {
+    const obj = {};
+    for (let c = 0; c < headers.length; c++) {
+      let val = lines[r][c] !== undefined ? lines[r][c] : '';
+      if (typed) {
+        const num = Number(val);
+        if (val !== '' && !isNaN(num)) val = num;
+        else if (val === 'true') val = true;
+        else if (val === 'false') val = false;
+        else if (val === '') val = null;
+      }
+      obj[headers[c]] = val;
+    }
+    result.push(obj);
+  }
+  return result;
+}
+
+async function fetchJSON(url) {
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(\\\`fetchJSON: \\\${resp.status} \\\${resp.statusText}\\\`);
+  return resp.json();
+}
+
+// ── Math / Stats ──
+
+function _acc(arr, fn) {
+  return fn ? arr.map(fn) : arr;
+}
+
+function sum(arr, fn) {
+  const vals = _acc(arr, fn);
+  let s = 0;
+  for (let i = 0; i < vals.length; i++) s += vals[i];
+  return s;
+}
+
+function mean(arr, fn) {
+  if (!arr.length) return NaN;
+  return sum(arr, fn) / arr.length;
+}
+
+function median(arr, fn) {
+  const vals = _acc(arr, fn).slice().sort((a, b) => a - b);
+  const n = vals.length;
+  if (n === 0) return NaN;
+  if (n % 2 === 1) return vals[(n - 1) / 2];
+  return (vals[n / 2 - 1] + vals[n / 2]) / 2;
+}
+
+function extent(arr, fn) {
+  const vals = _acc(arr, fn);
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < vals.length; i++) {
+    if (vals[i] < lo) lo = vals[i];
+    if (vals[i] > hi) hi = vals[i];
+  }
+  return [lo, hi];
+}
+
+function bin(arr, n = 10, fn) {
+  const vals = _acc(arr, fn);
+  const [lo, hi] = extent(vals);
+  const range = hi - lo || 1;
+  const step = range / n;
+  const bins = [];
+  for (let i = 0; i < n; i++) {
+    bins.push({ x0: lo + i * step, x1: lo + (i + 1) * step, values: [] });
+  }
+  for (const v of vals) {
+    let idx = Math.floor((v - lo) / step);
+    if (idx >= n) idx = n - 1;
+    if (idx < 0) idx = 0;
+    bins[idx].values.push(v);
+  }
+  return bins;
+}
+
+function linspace(start, stop, n) {
+  if (n < 2) return n === 1 ? [start] : [];
+  const result = new Array(n);
+  const step = (stop - start) / (n - 1);
+  for (let i = 0; i < n; i++) result[i] = start + i * step;
+  result[n - 1] = stop; // exact endpoint
+  return result;
+}
+
+// ── Array ──
+
+function unique(arr, fn) {
+  if (!fn) return [...new Set(arr)];
+  const seen = new Set();
+  const result = [];
+  for (const item of arr) {
+    const key = fn(item);
+    if (!seen.has(key)) { seen.add(key); result.push(item); }
+  }
+  return result;
+}
+
+function zip(...arrays) {
+  const len = Math.min(...arrays.map(a => a.length));
+  const result = new Array(len);
+  for (let i = 0; i < len; i++) {
+    result[i] = arrays.map(a => a[i]);
+  }
+  return result;
+}
+
+function cross(...arrays) {
+  if (arrays.length === 0) return [[]];
+  const [first, ...rest] = arrays;
+  const sub = cross(...rest);
+  const result = [];
+  for (const item of first) {
+    for (const tail of sub) {
+      result.push([item, ...tail]);
+    }
+  }
+  return result;
+}
+
+// ── DOM / IO ──
+
+async function file(accept) {
+  if (_providers.file) return _providers.file(accept);
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    if (accept) input.accept = accept;
+    input.onchange = async () => {
+      const f = input.files[0];
+      if (!f) { reject(new Error('no file selected')); return; }
+      const text = await f.text();
+      resolve({ name: f.name, text, size: f.size });
+    };
+    input.click();
+  });
+}
+
+function download(data, filename, mimeType) {
+  if (_providers.download) return _providers.download(data, filename, mimeType);
+  const str = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+  const mime = mimeType || (typeof data === 'string' ? 'text/plain' : 'application/json');
+  const blob = new Blob([str], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename || 'download';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function el(tag, attrs, ...children) {
+  const elem = document.createElement(tag);
+  if (attrs && typeof attrs === 'object' && !(attrs instanceof Node)) {
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === 'style' && typeof v === 'object') {
+        Object.assign(elem.style, v);
+      } else if (k.startsWith('on') && typeof v === 'function') {
+        elem.addEventListener(k.slice(2), v);
+      } else {
+        elem.setAttribute(k, v);
+      }
+    }
+  } else if (attrs != null) {
+    // attrs is actually a child
+    children.unshift(attrs);
+  }
+  for (const child of children) {
+    if (child instanceof Node) elem.appendChild(child);
+    else if (child != null) elem.appendChild(document.createTextNode(String(child)));
+  }
+  return elem;
+}
+
+async function copy(text) {
+  await navigator.clipboard.writeText(text);
+}
+
+function fmt(number, opts = {}) {
+  const { decimals, prefix, suffix } = opts;
+  let s = decimals != null ? number.toFixed(decimals)
+    : new Intl.NumberFormat(undefined, { maximumFractionDigits: 6 }).format(number);
+  if (prefix) s = prefix + s;
+  if (suffix) s = s + suffix;
+  return s;
+}
+
+// ── Source inclusion with dependency resolution ──
+
+function include(libs, ...names) {
+  // accept single library or array of libraries
+  const list = Array.isArray(libs) && libs[0] && libs[0].sources ? libs : [libs];
+  // merge all libraries into unified sources + deps
+  const sources = {}, deps = {};
+  for (const lib of list) {
+    if (!lib || !lib.sources || !lib.deps)
+      throw new Error('include: expected library with sources and deps');
+    Object.assign(sources, lib.sources);
+    Object.assign(deps, lib.deps);
+  }
+  const needed = new Set();
+  function walk(name) {
+    if (needed.has(name)) return;
+    if (!sources[name]) throw new Error(\\\`include: unknown routine '\\\${name}'\\\`);
+    needed.add(name);
+    for (const dep of deps[name] || []) walk(dep);
+  }
+  names.forEach(walk);
+  // topological sort: deps before dependents
+  const sorted = [];
+  const visited = new Set();
+  function visit(name) {
+    if (visited.has(name)) return;
+    visited.add(name);
+    for (const dep of deps[name] || []) visit(dep);
+    sorted.push(name);
+  }
+  needed.forEach(visit);
+  return sorted.map(n => sources[n]).join('\\\\n\\\\n');
+}
+
+// ── Color Science ──
+
+// sRGB gamma transfer
+function srgbToLinear(x) {
+  x /= 255;
+  return x <= 0.04045 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+}
+function linearToSrgb(x) {
+  x = x <= 0.0031308 ? x * 12.92 : 1.055 * Math.pow(x, 1 / 2.4) - 0.055;
+  return Math.round(Math.max(0, Math.min(255, x * 255)));
+}
+
+// RGB ↔ linear RGB
+function rgbToLinear(r, g, b) {
+  return [srgbToLinear(r), srgbToLinear(g), srgbToLinear(b)];
+}
+function linearToRgb(lr, lg, lb) {
+  return [linearToSrgb(lr), linearToSrgb(lg), linearToSrgb(lb)];
+}
+
+// linear RGB ↔ OKLAB (via LMS)
+function linearToOklab(lr, lg, lb) {
+  const l = Math.cbrt(0.4122214708 * lr + 0.5363325363 * lg + 0.0514459929 * lb);
+  const m = Math.cbrt(0.2119034982 * lr + 0.6806995451 * lg + 0.1073969566 * lb);
+  const s = Math.cbrt(0.0883024619 * lr + 0.2817188376 * lg + 0.6299787005 * lb);
+  return [
+    0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+    1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+    0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s,
+  ];
+}
+function oklabToLinear(L, a, b) {
+  const l_ = L + 0.3963377774 * a + 0.2158037573 * b;
+  const m_ = L - 0.1055613458 * a - 0.0638541728 * b;
+  const s_ = L - 0.0894841775 * a - 1.2914855480 * b;
+  const l = l_ * l_ * l_;
+  const m = m_ * m_ * m_;
+  const s = s_ * s_ * s_;
+  return [
+    +4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s,
+  ];
+}
+
+// OKLAB ↔ OKLCH (polar)
+function oklabToOklch(L, a, b) {
+  return [L, Math.sqrt(a * a + b * b), Math.atan2(b, a) * 180 / Math.PI];
+}
+function oklchToOklab(L, C, h) {
+  const hRad = h * Math.PI / 180;
+  return [L, C * Math.cos(hRad), C * Math.sin(hRad)];
+}
+
+// composite conversions
+function rgbToOklab(r, g, b) {
+  const [lr, lg, lb] = rgbToLinear(r, g, b);
+  return linearToOklab(lr, lg, lb);
+}
+function rgbToOklch(r, g, b) {
+  const [L, a, bb] = rgbToOklab(r, g, b);
+  return oklabToOklch(L, a, bb);
+}
+function oklabToRgb(L, a, b) {
+  const [lr, lg, lb] = oklabToLinear(L, a, b);
+  return linearToRgb(lr, lg, lb);
+}
+
+// RGB ↔ HSL
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return [0, 0, l * 100];
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h;
+  if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+  else if (max === g) h = ((b - r) / d + 2) / 6;
+  else h = ((r - g) / d + 4) / 6;
+  return [h * 360, s * 100, l * 100];
+}
+function hslToRgb(h, s, l) {
+  h /= 360; s /= 100; l /= 100;
+  if (s === 0) { const v = Math.round(l * 255); return [v, v, v]; }
+  const hue2rgb = (p, q, t) => {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1/6) return p + (q - p) * 6 * t;
+    if (t < 1/2) return q;
+    if (t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+    return p;
+  };
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  return [
+    Math.round(hue2rgb(p, q, h + 1/3) * 255),
+    Math.round(hue2rgb(p, q, h) * 255),
+    Math.round(hue2rgb(p, q, h - 1/3) * 255),
+  ];
+}
+
+// build frozen color object (no parsing)
+function _makeColor(r, g, b, a) {
+  r = Math.round(Math.max(0, Math.min(255, r)));
+  g = Math.round(Math.max(0, Math.min(255, g)));
+  b = Math.round(Math.max(0, Math.min(255, b)));
+  a = Math.max(0, Math.min(1, a));
+  return Object.freeze({
+    r, g, b, a,
+    hsl() { const [h, s, l] = rgbToHsl(r, g, b); return { h, s, l }; },
+    oklab() { const [L, oa, ob] = rgbToOklab(r, g, b); return { L, a: oa, b: ob }; },
+    oklch() { const [L, C, oh] = rgbToOklch(r, g, b); return { L, C, h: oh }; },
+    linear() { const [lr, lg, lb] = rgbToLinear(r, g, b); return { r: lr, g: lg, b: lb }; },
+    lighten(amt) {
+      const [L, ca, cb] = rgbToOklab(r, g, b);
+      const [nr, ng, nb] = oklabToRgb(Math.min(1, L + amt), ca, cb);
+      return _makeColor(nr, ng, nb, a);
+    },
+    darken(amt) {
+      const [L, ca, cb] = rgbToOklab(r, g, b);
+      const [nr, ng, nb] = oklabToRgb(Math.max(0, L - amt), ca, cb);
+      return _makeColor(nr, ng, nb, a);
+    },
+    saturate(amt) {
+      const [L, C, h] = rgbToOklch(r, g, b);
+      const [ca, cb] = oklchToOklab(L, Math.max(0, C + amt), h).slice(1);
+      const [nr, ng, nb] = oklabToRgb(L, ca, cb);
+      return _makeColor(nr, ng, nb, a);
+    },
+    desaturate(amt) {
+      const [L, C, h] = rgbToOklch(r, g, b);
+      const [ca, cb] = oklchToOklab(L, Math.max(0, C - amt), h).slice(1);
+      const [nr, ng, nb] = oklabToRgb(L, ca, cb);
+      return _makeColor(nr, ng, nb, a);
+    },
+    rotate(deg) {
+      const [L, C, h] = rgbToOklch(r, g, b);
+      const [_, ca, cb] = oklchToOklab(L, C, h + deg);
+      const [nr, ng, nb] = oklabToRgb(L, ca, cb);
+      return _makeColor(nr, ng, nb, a);
+    },
+    mix(other, t = 0.5) {
+      const c2 = other.r !== undefined ? other : color(other);
+      const [L1, a1, b1] = rgbToOklab(r, g, b);
+      const [L2, a2, b2] = rgbToOklab(c2.r, c2.g, c2.b);
+      const [nr, ng, nb] = oklabToRgb(
+        L1 + (L2 - L1) * t, a1 + (a2 - a1) * t, b1 + (b2 - b1) * t
+      );
+      return _makeColor(nr, ng, nb, a + (c2.a - a) * t);
+    },
+    alpha(na) { return _makeColor(r, g, b, na); },
+    css() { return a < 1 ? \\\`rgba(\\\${r},\\\${g},\\\${b},\\\${a})\\\` : \\\`rgb(\\\${r},\\\${g},\\\${b})\\\`; },
+    hex() {
+      return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+    },
+    toString() { return a < 1 ? \\\`rgba(\\\${r},\\\${g},\\\${b},\\\${a})\\\` : \\\`rgb(\\\${r},\\\${g},\\\${b})\\\`; },
+  });
+}
+
+// public color factory with parsing
+function color(input) {
+  if (input && typeof input === 'object' && input.r !== undefined) {
+    return _makeColor(input.r, input.g, input.b, input.a !== undefined ? input.a : 1);
+  }
+  if (Array.isArray(input)) {
+    return _makeColor(input[0], input[1], input[2], input[3] !== undefined ? input[3] : 1);
+  }
+  if (typeof input !== 'string') throw new Error('color: invalid input');
+  const s = input.trim();
+  // hex
+  if (s[0] === '#') {
+    const h = s.slice(1);
+    if (h.length === 3) {
+      return _makeColor(
+        parseInt(h[0] + h[0], 16), parseInt(h[1] + h[1], 16), parseInt(h[2] + h[2], 16), 1
+      );
+    }
+    if (h.length === 4) {
+      return _makeColor(
+        parseInt(h[0] + h[0], 16), parseInt(h[1] + h[1], 16),
+        parseInt(h[2] + h[2], 16), parseInt(h[3] + h[3], 16) / 255
+      );
+    }
+    if (h.length === 6) {
+      return _makeColor(parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16), 1);
+    }
+    if (h.length === 8) {
+      return _makeColor(
+        parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16),
+        parseInt(h.slice(4, 6), 16), parseInt(h.slice(6, 8), 16) / 255
+      );
+    }
+    throw new Error('color: invalid hex');
+  }
+  // rgb()/rgba()
+  let m = s.match(/^rgba?\\\\(\\\\s*(\\\\d+)\\\\s*,\\\\s*(\\\\d+)\\\\s*,\\\\s*(\\\\d+)\\\\s*(?:,\\\\s*([\\\\d.]+)\\\\s*)?\\\\)$/);
+  if (m) return _makeColor(+m[1], +m[2], +m[3], m[4] !== undefined ? +m[4] : 1);
+  // hsl()/hsla()
+  m = s.match(/^hsla?\\\\(\\\\s*([\\\\d.]+)\\\\s*,\\\\s*([\\\\d.]+)%\\\\s*,\\\\s*([\\\\d.]+)%\\\\s*(?:,\\\\s*([\\\\d.]+)\\\\s*)?\\\\)$/);
+  if (m) {
+    const [r, g, b] = hslToRgb(+m[1], +m[2], +m[3]);
+    return _makeColor(r, g, b, m[4] !== undefined ? +m[4] : 1);
+  }
+  throw new Error('color: unrecognized format');
+}
+
+// expose conversion helpers on color function
+Object.assign(color, {
+  srgbToLinear, linearToSrgb,
+  rgbToLinear, linearToRgb,
+  linearToOklab, oklabToLinear,
+  oklabToOklch, oklchToOklab,
+  rgbToOklab, rgbToOklch, oklabToRgb,
+  rgbToHsl, hslToRgb,
+});
+
+// ── Colormaps ──
+
+function _poly(coeffs, t) {
+  let r = coeffs[coeffs.length - 1];
+  for (let i = coeffs.length - 2; i >= 0; i--) r = r * t + coeffs[i];
+  return r;
+}
+
+function _cmap(rC, gC, bC) {
+  return (t) => {
+    t = Math.max(0, Math.min(1, t));
+    return \\\`rgb(\\\${Math.round(Math.max(0, Math.min(255, _poly(rC, t) * 255)))},\\\${
+      Math.round(Math.max(0, Math.min(255, _poly(gC, t) * 255)))},\\\${
+      Math.round(Math.max(0, Math.min(255, _poly(bC, t) * 255)))})\\\`;
+  };
+}
+
+const viridis = _cmap(
+  [0.267, 0.004, 5.294, -14.05, 8.5],
+  [0.004, 1.384, 0.098, -2.74, 2.23],
+  [0.329, 1.44, -5.11, 6.87, -3.57]
+);
+
+const magma = _cmap(
+  [-0.002, 0.804, 6.37, -15.96, 9.78],
+  [0.0, -0.398, 4.23, -7.76, 4.95],
+  [0.015, 2.68, -9.39, 14.23, -6.53]
+);
+
+const inferno = _cmap(
+  [0.0, 0.12, 10.82, -25.58, 15.63],
+  [0.0, 0.06, 2.35, -3.98, 2.56],
+  [0.015, 2.26, -8.72, 13.6, -6.14]
+);
+
+const plasma = _cmap(
+  [0.05, 2.63, -3.47, 2.65, -0.88],
+  [0.03, -0.69, 4.07, -6.25, 3.83],
+  [0.53, 1.74, -5.35, 7.55, -3.49]
+);
+
+const turbo = _cmap(
+  [0.19, 3.08, -3.92, 1.66],
+  [0.08, 3.54, -8.42, 5.79],
+  [0.58, -2.58, 7.52, -11.42, 6.88]
+);
+
+// ── Color Scale ──
+
+function colorScale(domain, colors) {
+  if (typeof colors === 'function') {
+    // colormap function: linear mapping from domain to [0,1]
+    const lo = domain[0], hi = domain[domain.length - 1];
+    const range = hi - lo || 1;
+    return (v) => colors(Math.max(0, Math.min(1, (v - lo) / range)));
+  }
+  if (domain.length !== colors.length)
+    throw new Error('colorScale: domain and colors must have same length');
+  // parse colors once
+  const parsed = colors.map(c => typeof c === 'string' ? color(c) : c);
+  const lo = domain[0], hi = domain[domain.length - 1];
+  return (v) => {
+    v = Math.max(lo, Math.min(hi, v));
+    // find segment
+    for (let i = 0; i < domain.length - 1; i++) {
+      if (v <= domain[i + 1] || i === domain.length - 2) {
+        const segRange = domain[i + 1] - domain[i] || 1;
+        const t = (v - domain[i]) / segRange;
+        return parsed[i].mix(parsed[i + 1], t).css();
+      }
+    }
+    return parsed[0].css();
+  };
+}
+
+// ── Palette ──
+
+const palette10 = [
+  '#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f',
+  '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ac',
+];
+
+// ── Export ──
+
+const std = {
+  csv, fetchJSON,
+  sum, mean, median, extent, bin, linspace,
+  unique, zip, cross,
+  file, download, el, copy, fmt,
+  include,
+  color, colorScale,
+  viridis, magma, inferno, plasma, turbo,
+  palette10,
+};
+
+// -- python.js --
+
+// ── @python COMPAT HELPERS ──
+// Python-familiar functions for users transitioning from Python.
+// Each has a .help property showing the idiomatic JS equivalent.
+
+function range(a, b, step) {
+  let start, stop, s;
+  if (b === undefined) { start = 0; stop = a; s = 1; }
+  else { start = a; stop = b; s = step || 1; }
+  const result = [];
+  if (s > 0) { for (let i = start; i < stop; i += s) result.push(i); }
+  else if (s < 0) { for (let i = start; i > stop; i += s) result.push(i); }
+  return result;
+}
+range.help = 'JS: Array.from({length: n}, (_, i) => start + i * step)';
+
+function enumerate(arr) {
+  return arr.map((v, i) => [i, v]);
+}
+enumerate.help = 'JS: arr.map((v, i) => [i, v]) or arr.entries()';
+
+function len(x) {
+  if (x == null) throw new TypeError('len() of unsized object');
+  if (x.size !== undefined) return x.size;
+  return x.length;
+}
+len.help = 'JS: x.length or x.size';
+
+function sorted(arr, key, reverse) {
+  const copy = [...arr];
+  if (key) copy.sort((a, b) => {
+    const ka = key(a), kb = key(b);
+    return ka < kb ? -1 : ka > kb ? 1 : 0;
+  });
+  else copy.sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
+  if (reverse) copy.reverse();
+  return copy;
+}
+sorted.help = 'JS: arr.toSorted((a, b) => ...)';
+
+function reversed(arr) {
+  return [...arr].reverse();
+}
+reversed.help = 'JS: arr.toReversed()';
+
+function isinstance(obj, cls) {
+  return obj instanceof cls;
+}
+isinstance.help = 'JS: obj instanceof cls';
+
+function type(x) {
+  if (x === null) return 'null';
+  if (Array.isArray(x)) return 'array';
+  return typeof x;
+}
+type.help = 'JS: typeof x';
+
+const python = {
+  range, enumerate, len, sorted, reversed,
+  isinstance, type,
+};
+
+function zenOfPython() {
+  return [
+    'The Zen of Python, by Tim Peters',
+    '',
+    'Beautiful is better than ugly.',
+    'Explicit is better than implicit.',
+    'Simple is better than complex.',
+    'Complex is better than complicated.',
+    'Flat is better than nested.',
+    'Sparse is better than dense.',
+    'Readability counts.',
+    "Special cases aren't special enough to break the rules.",
+    'Although practicality beats purity.',
+    'Errors should never pass silently.',
+    'Unless explicitly silenced.',
+    'In the face of ambiguity, refuse the temptation to guess.',
+    'There should be one-- and preferably only one --obvious way to do it.',
+    "Although that way may not be obvious at first unless you're Dutch.",
+    'Now is better than never.',
+    'Although never is often better than *right* now.',
+    "If the implementation is hard to explain, it's a bad idea.",
+    'If the implementation is easy to explain, it may be a good idea.',
+    "Namespaces are one honking great idea -- let's do more of those!",
+  ].join('\\\\n');
+}
+
+// -- dag.js --
+
+// ── REACTIVE DAG ──
+
+// ── directive helpers ──
+
+function hasDirective(code, name) {
+  return new RegExp(String.raw\\\`^\\\\s*\\\\/\\\\/\\\\s*%\\\${name}\\\\b\\\`, 'm').test(code);
+}
+
+function getDirective(code, name) {
+  const m = code.match(new RegExp(String.raw\\\`^\\\\s*\\\\/\\\\/\\\\s*%\\\${name}\\\\s+(.+)\\\`, 'm'));
+  return m ? m[1].trim() : null;
+}
+
+const isManual    = code => hasDirective(code, 'manual');
+const isHidden    = code => hasDirective(code, 'hide');
+const isNorun     = code => hasDirective(code, 'norun');
+const isCollapsed = code => hasDirective(code, 'collapsed');
+const isBare      = code => hasDirective(code, 'bare');
+const parseCellName    = code => getDirective(code, 'cellName');
+const parseOutputId    = code => { const v = getDirective(code, 'outputId'); return v ? v.split(/\\\\s+/)[0] : null; };
+const parseOutputClass = code => getDirective(code, 'outputClass');
+
+// ── code analysis ──
+
+function stripCommentsAndStrings(code) {
+  // single-pass: strings take precedence over comments (// inside "..." is not a comment)
+  let out = '', i = 0;
+  while (i < code.length) {
+    // single-quoted string
+    if (code[i] === "'") {
+      out += '""';
+      i++;
+      while (i < code.length && code[i] !== "'") { if (code[i] === '\\\\\\\\') i++; i++; }
+      i++; // skip closing quote
+      continue;
+    }
+    // double-quoted string
+    if (code[i] === '"') {
+      out += '""';
+      i++;
+      while (i < code.length && code[i] !== '"') { if (code[i] === '\\\\\\\\') i++; i++; }
+      i++; // skip closing quote
+      continue;
+    }
+    // template literal: replace string parts with spaces but keep \\\${expr} content
+    if (code[i] === '\\\`') {
+      i++;
+      while (i < code.length && code[i] !== '\\\`') {
+        if (code[i] === '\\\\\\\\') { i += 2; continue; }
+        if (code[i] === '$' && code[i + 1] === '{') {
+          i += 2;
+          let depth = 1;
+          out += ' ';
+          while (i < code.length && depth > 0) {
+            if (code[i] === '{') depth++;
+            else if (code[i] === '}') { depth--; if (depth === 0) break; }
+            out += code[i];
+            i++;
+          }
+          out += ' ';
+          i++; // skip closing }
+          continue;
+        }
+        i++;
+      }
+      i++; // skip closing backtick
+      continue;
+    }
+    // line comment
+    if (code[i] === '/' && code[i + 1] === '/') {
+      while (i < code.length && code[i] !== '\\\\n') i++;
+      continue;
+    }
+    // block comment
+    if (code[i] === '/' && code[i + 1] === '*') {
+      i += 2;
+      while (i < code.length && !(code[i - 1] === '*' && code[i] === '/')) i++;
+      i++;
+      continue;
+    }
+    out += code[i];
+    i++;
+  }
+  return out;
+}
+
+function parseNames(code) {
+  // extract ONLY top-level variable definitions (brace depth 0)
+  const defines = new Set();
+
+  const stripped = stripCommentsAndStrings(code);
+
+  let depth = 0;
+  let parenDepth = 0;
+  let i = 0;
+  while (i < stripped.length) {
+    const ch = stripped[i];
+    if (ch === '{') { depth++; i++; continue; }
+    if (ch === '}') { depth--; i++; continue; }
+    if (ch === '(') { parenDepth++; i++; continue; }
+    if (ch === ')') { parenDepth--; i++; continue; }
+
+    if (depth === 0 && parenDepth === 0) {
+      // check for const/let/var
+      const rest = stripped.slice(i);
+      const dm = rest.match(/^(?:const|let|var)\\\\s+(\\\\w+)/);
+      if (dm) {
+        defines.add(dm[1]);
+        // scan forward for comma-separated declarations: const W = 80, H = 60
+        // skip initializer expressions tracking depth, grab identifiers after commas
+        let j = dm[0].length;
+        let d = 0, pd = 0, bd = 0;
+        while (j < rest.length) {
+          const ch = rest[j];
+          if (ch === '{') d++;
+          else if (ch === '}') d--;
+          else if (ch === '(') pd++;
+          else if (ch === ')') pd--;
+          else if (ch === '[') bd++;
+          else if (ch === ']') bd--;
+          else if (ch === ';' || ch === '\\\\n') {
+            if (d === 0 && pd === 0 && bd === 0) break;
+          }
+          else if (ch === ',' && d === 0 && pd === 0 && bd === 0) {
+            // next identifier after comma
+            const after = rest.slice(j + 1).match(/^\\\\s*(\\\\w+)/);
+            if (after) defines.add(after[1]);
+          }
+          j++;
+        }
+        i += j;
+        continue;
+      }
+      // destructuring: const { a, b } = ... or const [ a, b ] = ...
+      const destruct = rest.match(/^(?:const|let|var)\\\\s*[\\\\{\\\\[]/);
+      if (destruct) {
+        // find the closing } or ] then extract identifiers
+        const opener = rest[destruct[0].length - 1];
+        const closer = opener === '{' ? '}' : ']';
+        const closeIdx = rest.indexOf(closer, destruct[0].length);
+        if (closeIdx > 0) {
+          const inner = rest.slice(destruct[0].length, closeIdx);
+          // split on commas, take last word of each part (handles renaming)
+          inner.split(',').forEach(part => {
+            const parts = part.trim().split(/\\\\s*:\\\\s*/);
+            const name = (parts.length > 1 ? parts[1] : parts[0]).trim().match(/^\\\\w+/);
+            if (name) defines.add(name[0]);
+          });
+          i += closeIdx + 1;
+          continue;
+        }
+      }
+      // check for function declarations
+      const fm = rest.match(/^function\\\\s+(\\\\w+)/);
+      if (fm) {
+        defines.add(fm[1]);
+        i += fm[0].length;
+        continue;
+      }
+    }
+    i++;
+  }
+
+  return { defines };
+}
+
+function findUses(code, allDefined, selfDefined) {
+  // find identifiers that reference other cells' definitions
+  const uses = new Set();
+  const stripped = stripCommentsAndStrings(code);
+  if (!selfDefined) selfDefined = parseNames(code).defines;
+
+  const idRe = /\\\\b([a-zA-Z_$]\\\\w*)\\\\b/g;
+  let m;
+  while ((m = idRe.exec(stripped))) {
+    if (allDefined.has(m[1]) && !selfDefined.has(m[1])) {
+      uses.add(m[1]);
+    }
+  }
+  return uses;
+}
+
+function findHtmlUses(code, allDefined) {
+  const uses = new Set();
+  const re = /\\\\$\\\\{([^}]+)\\\\}/g;
+  let m;
+  while ((m = re.exec(code))) {
+    const expr = m[1];
+    const idRe = /\\\\b([a-zA-Z_$]\\\\w*)\\\\b/g;
+    let im;
+    while ((im = idRe.exec(expr))) {
+      if (allDefined.has(im[1])) uses.add(im[1]);
+    }
+  }
+  return uses;
+}
+
+function parseHtmlDefines(html) {
+  const defines = new Set();
+  const re = /<audit-(?:slider|dropdown|checkbox|text-input)\\\\b[^>]*\\\\bname="([^"]+)"/g;
+  let m;
+  while (m = re.exec(html)) defines.add(m[1]);
+  return defines;
+}
+
+function buildDAG() {
+  // collect all defined names globally (only re-parse changed cells)
+  const allDefined = new Map(); // name -> cell id
+  for (const c of S.cells) {
+    if (c.type !== 'code') continue;
+    if (c.code !== c._parsedCode) {
+      const { defines } = parseNames(c.code);
+      c.defines = defines;
+      c._parsedCode = c.code;
+    }
+    for (const name of c.defines) {
+      allDefined.set(name, c.id);
+    }
+  }
+
+  // collect defines from HTML cells (audit-* widget name attributes)
+  for (const c of S.cells) {
+    if (c.type !== 'html') continue;
+    if (c.code !== c._parsedCode) {
+      c.defines = parseHtmlDefines(c.code);
+      c._parsedCode = c.code;
+    }
+    for (const name of c.defines) {
+      allDefined.set(name, c.id);
+    }
+  }
+
+  // find uses for each cell (invalidate if code changed or global names changed)
+  const definedNames = new Set(allDefined.keys());
+  const definedKey = [...definedNames].sort().join(',');
+  for (const c of S.cells) {
+    if (c.type === 'code') {
+      if (c.code !== c._usesCode || c._definedKey !== definedKey) {
+        c.uses = findUses(c.code, definedNames, c.defines);
+        c._usesCode = c.code;
+        c._definedKey = definedKey;
+      }
+    } else if (c.type === 'html' || c.type === 'md') {
+      if (c.code !== c._usesCode || c._definedKey !== definedKey) {
+        c.uses = findHtmlUses(c.code, definedNames);
+        c._usesCode = c.code;
+        c._definedKey = definedKey;
+      }
+    }
+  }
+
+  return allDefined;
+}
+
+function topoSort(dirtyIds) {
+  // BFS from dirty cells to find all downstream dependents
+  const dependents = new Map(); // varName -> Set<cellId>
+  for (const c of S.cells) {
+    if (!c.uses) continue;
+    for (const name of c.uses) {
+      if (!dependents.has(name)) dependents.set(name, new Set());
+      dependents.get(name).add(c.id);
+    }
+  }
+
+  const needsRun = new Set(dirtyIds);
+  const queue = [...dirtyIds];
+  while (queue.length) {
+    const id = queue.shift();
+    const cell = S.cells.find(c => c.id === id);
+    if (!cell || !cell.defines) continue;
+    for (const name of cell.defines) {
+      const deps = dependents.get(name);
+      if (!deps) continue;
+      for (const depId of deps) {
+        if (!needsRun.has(depId)) {
+          needsRun.add(depId);
+          queue.push(depId);
+        }
+      }
+    }
+  }
+
+  // return in document order
+  return S.cells.filter(c => needsRun.has(c.id)).map(c => c.id);
+}
+
+// -- widgets.js --
+
+// ── CUSTOM ELEMENT WIDGETS ──
+//
+// Light DOM custom elements for interactive controls. Each element:
+// - renders internal DOM in connectedCallback (once)
+// - exposes .value getter/setter
+// - dispatches standard 'input' and 'change' events
+// - works in both code cells (via ui.slider()) and HTML cells (via markup)
+
+class AuditWidget extends HTMLElement {
+  connectedCallback() {
+    if (!this._built) { this._render(); this._built = true; }
+  }
+  get name() { return this.getAttribute('name'); }
+  get label() { return this.getAttribute('label'); }
+  _mkLabel() {
+    const l = this.getAttribute('label');
+    if (!l) return null;
+    const span = document.createElement('span');
+    span.className = 'audit-widget-label';
+    span.textContent = l;
+    return span;
+  }
+  _dispatch(type) {
+    this.dispatchEvent(new Event(type, { bubbles: true }));
+  }
+}
+
+class AuditSlider extends AuditWidget {
+  static observedAttributes = ['min', 'max', 'step', 'value', 'label'];
+
+  _render() {
+    const lbl = this._mkLabel();
+    if (lbl) this.appendChild(lbl);
+
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min = this.getAttribute('min') ?? 0;
+    input.max = this.getAttribute('max') ?? 100;
+    input.step = this.getAttribute('step') ?? 1;
+    input.value = this.getAttribute('value') ?? 50;
+    this._input = input;
+
+    const val = document.createElement('span');
+    val.className = 'audit-widget-val';
+    val.textContent = input.value;
+    this._valSpan = val;
+
+    input.oninput = () => {
+      val.textContent = input.value;
+      this._dispatch('input');
+    };
+    input.onchange = () => this._dispatch('change');
+
+    this.appendChild(input);
+    this.appendChild(val);
+  }
+
+  attributeChangedCallback(name, old, val) {
+    if (!this._built) return;
+    if (name === 'label') {
+      const lbl = this.querySelector('.audit-widget-label');
+      if (lbl) lbl.textContent = val;
+    } else if (this._input) {
+      this._input[name] = val;
+      if (name === 'value') this._valSpan.textContent = val;
+    }
+  }
+
+  get value() { return this._input ? parseFloat(this._input.value) : parseFloat(this.getAttribute('value') ?? 50); }
+  set value(v) {
+    if (this._input) {
+      this._input.value = v;
+      this._valSpan.textContent = v;
+    } else {
+      this.setAttribute('value', v);
+    }
+  }
+}
+
+class AuditDropdown extends AuditWidget {
+  static observedAttributes = ['options', 'value', 'label'];
+
+  _render() {
+    const lbl = this._mkLabel();
+    if (lbl) this.appendChild(lbl);
+
+    const select = document.createElement('select');
+    this._select = select;
+    this._buildOptions();
+
+    const v = this.getAttribute('value');
+    if (v) select.value = v;
+
+    select.onchange = () => {
+      this._dispatch('input');
+      this._dispatch('change');
+    };
+
+    this.appendChild(select);
+  }
+
+  _buildOptions() {
+    const s = this._select;
+    s.innerHTML = '';
+    const opts = (this.getAttribute('options') || '').split(',').filter(Boolean);
+    for (const o of opts) {
+      const opt = document.createElement('option');
+      opt.value = o.trim();
+      opt.textContent = o.trim();
+      s.appendChild(opt);
+    }
+  }
+
+  attributeChangedCallback(name, old, val) {
+    if (!this._built) return;
+    if (name === 'label') {
+      const lbl = this.querySelector('.audit-widget-label');
+      if (lbl) lbl.textContent = val;
+    } else if (name === 'options') {
+      const prev = this._select.value;
+      this._buildOptions();
+      this._select.value = prev;
+    } else if (name === 'value') {
+      this._select.value = val;
+    }
+  }
+
+  get value() { return this._select ? this._select.value : (this.getAttribute('value') || ''); }
+  set value(v) {
+    if (this._select) this._select.value = v;
+    else this.setAttribute('value', v);
+  }
+}
+
+class AuditCheckbox extends AuditWidget {
+  static observedAttributes = ['checked', 'label'];
+
+  _render() {
+    const lbl = this._mkLabel();
+    if (lbl) this.appendChild(lbl);
+
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = this.hasAttribute('checked');
+    this._input = input;
+
+    input.onchange = () => {
+      this._dispatch('input');
+      this._dispatch('change');
+    };
+
+    this.appendChild(input);
+  }
+
+  attributeChangedCallback(name, old, val) {
+    if (!this._built) return;
+    if (name === 'label') {
+      const lbl = this.querySelector('.audit-widget-label');
+      if (lbl) lbl.textContent = val;
+    } else if (name === 'checked') {
+      if (this._input) this._input.checked = val !== null;
+    }
+  }
+
+  get value() { return this._input ? this._input.checked : this.hasAttribute('checked'); }
+  set value(v) {
+    if (this._input) this._input.checked = !!v;
+    else if (v) this.setAttribute('checked', '');
+    else this.removeAttribute('checked');
+  }
+}
+
+class AuditTextInput extends AuditWidget {
+  static observedAttributes = ['value', 'placeholder', 'label'];
+
+  _render() {
+    const lbl = this._mkLabel();
+    if (lbl) this.appendChild(lbl);
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = this.getAttribute('value') || '';
+    input.placeholder = this.getAttribute('placeholder') || '';
+    this._input = input;
+
+    input.oninput = () => this._dispatch('input');
+    input.onchange = () => this._dispatch('change');
+
+    this.appendChild(input);
+  }
+
+  attributeChangedCallback(name, old, val) {
+    if (!this._built) return;
+    if (name === 'label') {
+      const lbl = this.querySelector('.audit-widget-label');
+      if (lbl) lbl.textContent = val;
+    } else if (this._input) {
+      if (name === 'value') this._input.value = val || '';
+      else if (name === 'placeholder') this._input.placeholder = val || '';
+    }
+  }
+
+  get value() { return this._input ? this._input.value : (this.getAttribute('value') || ''); }
+  set value(v) {
+    if (this._input) this._input.value = v;
+    else this.setAttribute('value', v);
+  }
+}
+
+customElements.define('audit-slider', AuditSlider);
+customElements.define('audit-dropdown', AuditDropdown);
+customElements.define('audit-checkbox', AuditCheckbox);
+customElements.define('audit-text-input', AuditTextInput);
+
+// -- ui-app.js --
+
+// ── UI STUBS (app runtime) ──
+
+function setMsg(msg, cls) {
+  if (cls === 'err') console.error('[auditable]', msg);
+}
+
+function updateStatus() {}
+function updateInsertBars() {}
+function insertAt() {}
+
+// -- save-app.js --
+
+// ── MODULES ENCODING ──
+
+function encodeModules(obj) {
+  const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(obj))));
+  return b64.replace(/.{1,76}/g, '$&\\\\n').trimEnd();
+}
+
+function decodeModules(raw) {
+  const b64 = raw.replace(/\\\\s/g, '');
+  if (b64.startsWith('{') || b64.startsWith('%7B')) return JSON.parse(raw);
+  return JSON.parse(decodeURIComponent(escape(atob(b64))));
+}
+
+// ── STUBS ──
+
+function syncModules() {}
+function syncData() {}
+function syncDataDebounced() {}
+function syncSettings() {}
+function initLiveSync() {}
+
+// ── LOAD ──
+
+function loadFromEmbed() {
+  const raw = document.body.innerHTML;
+
+  // restore installed modules first (before cells run)
+  const modMatch = raw.match(/<!--AUDITABLE-MODULES\\\\n([\\\\s\\\\S]*?)\\\\nAUDITABLE-MODULES-->/);
+  if (modMatch) {
+    try {
+      window._installedModules = decodeModules(modMatch[1]);
+    } catch (e) {
+      console.error('Failed to parse installed modules:', e);
+    }
+  }
+
+  // restore settings
+  const setMatch = raw.match(/<!--AUDITABLE-SETTINGS\\\\n([\\\\s\\\\S]*?)\\\\nAUDITABLE-SETTINGS-->/);
+  if (setMatch) {
+    try {
+      applySettings(JSON.parse(setMatch[1]));
+    } catch (e) {
+      console.error('Failed to parse settings:', e);
+    }
+  }
+
+  // apply execution mode
+  const effectiveMode = resolveExecMode();
+  const effectiveRun = resolveRunOnLoad();
+  if (effectiveMode === 'manual') {
+    S.autorun = false;
+  }
+
+  const match = raw.match(/<!--AUDITABLE-DATA\\\\n([\\\\s\\\\S]*?)\\\\nAUDITABLE-DATA-->/);
+  if (match) {
+    try {
+      const data = JSON.parse(match[1]);
+
+      const nb = document.getElementById('notebook');
+      if (nb) nb.innerHTML = '';
+      document.querySelectorAll('style[data-cell-id]').forEach(el => el.remove());
+
+      for (const c of data) {
+        const cell = addCell(c.type, c.code);
+        if (c.collapsed || isCollapsed(c.code)) cell.el.classList.add('collapsed');
+      }
+      // run after load
+      if (effectiveRun === 'yes' && S.cells.some(c => c.type === 'code')) {
+        setTimeout(runAll, 50);
+      }
+      return true;
+    } catch (e) {
+      console.error('Failed to parse embedded data:', e);
+    }
+  }
+  return false;
+}
+
+// -- cell-dom-app.js --
+
+// ── CELL DOM (app runtime — no editors, no headers) ──
+
+function createCellEl(type, id) {
+  const div = document.createElement('div');
+  div.className = 'cell';
+  div.dataset.id = id;
+  div.dataset.type = type;
+
+  if (type === 'code') {
+    div.innerHTML = '<div class="cell-widgets"></div><div class="cell-output"></div>';
+  } else if (type === 'html') {
+    div.innerHTML = '<div class="cell-html-view"></div><div class="cell-output"></div>';
+  } else if (type === 'md') {
+    div.innerHTML = '<div class="cell-md-view"></div>';
+  } else if (type === 'css') {
+    // css cells are invisible in app mode
+  }
+
+  return div;
+}
+
+function cssSummary() { return ''; }
+function autoResize() {}
+function handleTab() {}
+
+// -- cell-ops-app.js --
+
+// ── CELL OPERATIONS (app runtime) ──
+
+function addCell(type, code = '', afterId = null, beforeId = null) {
+  const id = S.cellId++;
+  const cell = {
+    id, type, code,
+    defines: new Set(),
+    uses: new Set(),
+    error: null,
+    el: createCellEl(type, id, code)
+  };
+
+  const nb = $('#notebook');
+  if (beforeId !== null) {
+    const idx = S.cells.findIndex(c => c.id === beforeId);
+    if (idx >= 0) {
+      S.cells.splice(idx, 0, cell);
+      S.cells[idx + 1].el.before(cell.el);
+    } else {
+      S.cells.push(cell);
+      nb.appendChild(cell.el);
+    }
+  } else if (afterId !== null) {
+    const idx = S.cells.findIndex(c => c.id === afterId);
+    if (idx >= 0) {
+      S.cells.splice(idx + 1, 0, cell);
+      if (idx < S.cells.length - 2) {
+        S.cells[idx + 2].el.before(cell.el);
+      } else {
+        nb.appendChild(cell.el);
+      }
+    } else {
+      S.cells.push(cell);
+      nb.appendChild(cell.el);
+    }
+  } else {
+    S.cells.push(cell);
+    nb.appendChild(cell.el);
+  }
+
+  // markdown: render content
+  if (type === 'md' && code) {
+    renderMdCell(cell);
+  }
+
+  // CSS cell: create <style> element in <head>
+  if (type === 'css') {
+    const styleEl = document.createElement('style');
+    styleEl.dataset.cellId = id;
+    styleEl.textContent = code;
+    document.head.appendChild(styleEl);
+    cell._styleEl = styleEl;
+  }
+
+  // HTML cell: render template
+  if (type === 'html' && code) {
+    renderHtmlCell(cell);
+  }
+
+  return cell;
+}
+
+function deleteCell(id) {
+  const idx = S.cells.findIndex(c => c.id === id);
+  if (idx < 0) return;
+  if (S.cells[idx]._invalidate) { S.cells[idx]._invalidate(); S.cells[idx]._invalidate = null; }
+  if (S.cells[idx]._styleEl) {
+    S.cells[idx]._styleEl.remove();
+    S.cells[idx]._styleEl = null;
+  }
+  S.cells[idx].el.remove();
+  S.cells.splice(idx, 1);
+}
+
+function convertCell() {}
+function moveCell() {}
+
+// -- exec.js --
+
+// ── EXECUTION ENGINE ──
+//
+// Scope model: each cell runs inside an AsyncFunction where upstream variables
+// are passed as parameters. This is pass-by-value for primitives — reassigning
+// a variable in cell A (e.g. \\\`grid = next\\\`) does NOT propagate to cell B.
+// Mutable state that needs to survive across callbacks belongs in %manual cells
+// using DOM elements, objects, or closures.
+//
+// Cell builtins (display, canvas, slider, load, install, installBinary, etc.)
+// are injected as additional parameters — listed in _injected, not in scope.
+// They are NOT propagated to downstream cells.
+
+// ── BINARY HELPERS ──
+
+function uint8ToBase64(bytes) {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+async function decodeBinary(entry) {
+  const type = entry.type || 'application/octet-stream';
+  const bytes = Uint8Array.from(atob(entry.source), c => c.charCodeAt(0));
+  if (entry.compressed) {
+    const ds = new DecompressionStream('gzip');
+    const stream = new Blob([bytes]).stream().pipeThrough(ds);
+    const decompressed = new Uint8Array(await new Response(stream).arrayBuffer());
+    return URL.createObjectURL(new Blob([decompressed], { type }));
+  }
+  return URL.createObjectURL(new Blob([bytes], { type }));
+}
+
+// ── TAGGED CONTENT ──
+
+class TaggedContent {
+  constructor(type, content) { this.type = type; this.content = content; }
+  toString() { return this.content; }
+}
+
+function taggedTemplate(type) {
+  return (strings, ...values) => {
+    let result = strings[0];
+    for (let i = 0; i < values.length; i++) result += String(values[i]) + strings[i + 1];
+    return new TaggedContent(type, result);
+  };
+}
+
+// ── EXECUTION ──
+
+function renderMdCell(cell) {
+  const viewEl = cell.el.querySelector('.cell-md-view');
+  if (!viewEl) return;
+
+  // if no \\\${expr}, just render plain markdown
+  if (!/\\\\$\\\\{[^}]+\\\\}/.test(cell.code)) {
+    viewEl.innerHTML = renderMd(cell.code);
+    cell.el.classList.remove('stale', 'error');
+    return;
+  }
+
+  // use only variables this cell references for stable function signatures
+  const scopeKeys = cell.uses ? [...cell.uses].sort() : [];
+  const scopeVals = scopeKeys.map(k => S.scope[k]);
+
+  // cache compiled template functions per expression
+  if (!cell._tplCache) cell._tplCache = {};
+  const scopeSig = scopeKeys.join(',');
+  if (cell._tplScopeSig !== scopeSig) {
+    cell._tplCache = {};
+    cell._tplScopeSig = scopeSig;
+  }
+
+  let interpolated = cell.code.replace(/\\\\$\\\\{([^}]+)\\\\}/g, (match, expr) => {
+    try {
+      let fn = cell._tplCache[expr];
+      if (!fn) {
+        fn = new Function(...scopeKeys, '"use strict"; return (' + expr + ')');
+        cell._tplCache[expr] = fn;
+      }
+      const val = fn(...scopeVals);
+      return val === undefined ? '' : String(val);
+    } catch (e) {
+      return '[Error: ' + e.message + ']';
+    }
+  });
+
+  viewEl.innerHTML = renderMd(interpolated);
+  cell.el.classList.remove('stale', 'error');
+  cell.el.classList.add('fresh');
+  setTimeout(() => cell.el.classList.remove('fresh'), 800);
+}
+
+function renderHtmlCell(cell) {
+  const viewEl = cell.el.querySelector('.cell-html-view');
+  const outputEl = cell.el.querySelector('.cell-output');
+  if (!viewEl) return;
+  if (outputEl) { outputEl.textContent = ''; outputEl.className = 'cell-output'; }
+
+  // pre-populate scope with widget values (for self-reference)
+  if (cell._inputs) {
+    for (const [k, v] of Object.entries(cell._inputs)) {
+      if (v !== undefined) S.scope[k] = v;
+    }
+  }
+
+  const scopeKeys = cell.uses ? [...cell.uses].sort() : [];
+  const scopeVals = scopeKeys.map(k => S.scope[k]);
+
+  if (!cell._tplCache) cell._tplCache = {};
+  const scopeSig = scopeKeys.join(',');
+  if (cell._tplScopeSig !== scopeSig) {
+    cell._tplCache = {};
+    cell._tplScopeSig = scopeSig;
+  }
+
+  const evalExpr = (expr) => {
+    try {
+      let fn = cell._tplCache[expr];
+      if (!fn) {
+        fn = new Function(...scopeKeys, '"use strict"; return (' + expr + ')');
+        cell._tplCache[expr] = fn;
+      }
+      const r = fn(...scopeVals);
+      return r === undefined ? '' : String(r);
+    } catch (e) {
+      return '[Error: ' + e.message + ']';
+    }
+  };
+
+  const hasExprs = /\\\\$\\\\{[^}]+\\\\}/.test(cell.code);
+
+  // invalidate bindings if viewEl changed (e.g. split view swap)
+  if (cell._bindViewEl !== viewEl) {
+    cell._bindCode = null;
+    cell._textMarkers = null;
+    cell._bindViewEl = viewEl;
+  }
+
+  // first render or code change — full innerHTML with binding setup
+  if (cell._bindCode !== cell.code || !cell._textMarkers) {
+    if (!hasExprs) {
+      viewEl.innerHTML = cell.code;
+    } else {
+      // split on tags to classify \\\${expr} as text-content vs attribute-context
+      const parts = cell.code.split(/(<[^>]+>)/g);
+      const textExprs = [];
+      const attrBindings = []; // per-element: [{ attr, template }]
+      let textIdx = 0;
+      let html = '';
+
+      for (let p = 0; p < parts.length; p++) {
+        const part = parts[p];
+        if (p % 2 === 0) {
+          // text content — wrap \\\${expr} with comment markers
+          html += part.replace(/\\\\$\\\\{([^}]+)\\\\}/g, (m, expr) => {
+            textExprs.push(expr);
+            return \\\`<!--audit-bind:\\\${textIdx++}-->\\\${evalExpr(expr)}<!--/audit-bind-->\\\`;
+          });
+        } else if (/\\\\$\\\\{/.test(part)) {
+          // tag with \\\${expr} in attributes — evaluate inline, track templates
+          const elemBinds = [];
+          let tagHtml = part.replace(
+            /([\\\\w-]+)="([^"]*\\\\$\\\\{[^}]+\\\\}[^"]*)"/g,
+            (m, attrName, attrVal) => {
+              elemBinds.push({ attr: attrName, template: attrVal });
+              const evaluated = attrVal.replace(/\\\\$\\\\{([^}]+)\\\\}/g, (m2, expr) => evalExpr(expr));
+              return \\\`\\\${attrName}="\\\${evaluated}"\\\`;
+            }
+          );
+          if (elemBinds.length > 0) {
+            const idx = attrBindings.length;
+            attrBindings.push(elemBinds);
+            tagHtml = tagHtml.replace(/^(<[\\\\w][\\\\w-]*)/, \\\`$1 data-audit-abind="\\\${idx}"\\\`);
+          }
+          html += tagHtml;
+        } else {
+          html += part;
+        }
+      }
+
+      viewEl.innerHTML = html;
+
+      // walk DOM to find comment marker pairs for text bindings
+      const markers = [];
+      const walker = document.createTreeWalker(viewEl, NodeFilter.SHOW_COMMENT);
+      const starts = [];
+      while (walker.nextNode()) {
+        const c = walker.currentNode;
+        const m = c.data.match(/^audit-bind:(\\\\d+)$/);
+        if (m) starts[parseInt(m[1])] = c;
+        if (c.data === '/audit-bind') {
+          for (let j = starts.length - 1; j >= 0; j--) {
+            if (starts[j] && !markers[j]) {
+              markers[j] = { start: starts[j], end: c };
+              break;
+            }
+          }
+        }
+      }
+
+      // resolve attribute binding element references
+      for (let a = 0; a < attrBindings.length; a++) {
+        const el = viewEl.querySelector(\\\`[data-audit-abind="\\\${a}"]\\\`);
+        if (el) for (const bind of attrBindings[a]) bind.el = el;
+      }
+
+      cell._textMarkers = markers;
+      cell._textExprs = textExprs;
+      cell._attrBindings = attrBindings;
+    }
+
+    cell._bindCode = cell.code;
+    wireWidgets(cell, viewEl);
+
+  } else if (hasExprs) {
+    // re-render: same code, scope changed — patch bindings without touching DOM
+
+    // patch text bindings via comment markers
+    if (cell._textMarkers) {
+      for (let i = 0; i < cell._textExprs.length; i++) {
+        const marker = cell._textMarkers[i];
+        if (!marker) continue;
+        const val = evalExpr(cell._textExprs[i]);
+        while (marker.start.nextSibling && marker.start.nextSibling !== marker.end) {
+          marker.start.nextSibling.remove();
+        }
+        if (/<[a-z][\\\\s\\\\S]*>/i.test(val)) {
+          const tpl = document.createElement('template');
+          tpl.innerHTML = val;
+          marker.start.parentNode.insertBefore(tpl.content, marker.end);
+        } else {
+          marker.start.parentNode.insertBefore(document.createTextNode(val), marker.end);
+        }
+      }
+    }
+
+    // patch attribute bindings
+    if (cell._attrBindings) {
+      for (const elemBinds of cell._attrBindings) {
+        for (const bind of elemBinds) {
+          if (!bind.el) continue;
+          const val = bind.template.replace(/\\\\$\\\\{([^}]+)\\\\}/g, (m, expr) => evalExpr(expr));
+          bind.el.setAttribute(bind.attr, val);
+        }
+      }
+    }
+  }
+
+  cell.el.classList.remove('stale', 'error');
+  cell.el.classList.add('fresh');
+  setTimeout(() => cell.el.classList.remove('fresh'), 800);
+}
+
+function wireWidgets(cell, viewEl) {
+  if (!cell._inputs) cell._inputs = {};
+  const widgets = viewEl.querySelectorAll(
+    'audit-slider, audit-dropdown, audit-checkbox, audit-text-input'
+  );
+  // clean up previous listeners
+  if (cell._widgetCleanups) {
+    for (const cleanup of cell._widgetCleanups) cleanup();
+  }
+  cell._widgetCleanups = [];
+
+  for (const w of widgets) {
+    const name = w.name;
+    if (!name) continue;
+    // skip code-cell widgets (they have data-widget-key)
+    if (w.dataset.widgetKey) continue;
+
+    // restore persisted value or read default
+    if (cell._inputs[name] !== undefined) {
+      w.value = cell._inputs[name];
+    } else {
+      cell._inputs[name] = w.value;
+    }
+
+    const handler = () => {
+      cell._inputs[name] = w.value;
+      S.scope[name] = w.value;
+      if (w.tagName === 'AUDIT-SLIDER' || w.tagName === 'AUDIT-TEXT-INPUT') {
+        clearTimeout(cell._inputTimer);
+        const delay = w.tagName === 'AUDIT-TEXT-INPUT' ? 300 : 80;
+        cell._inputTimer = setTimeout(() => runDAG([cell.id], true), delay);
+      } else {
+        runDAG([cell.id], true);
+      }
+    };
+    w.addEventListener('input', handler);
+    cell._widgetCleanups.push(() => w.removeEventListener('input', handler));
+  }
+}
+
+async function execCell(cell) {
+  // fire invalidation promise from previous run (cleanup resources)
+  if (cell._invalidate) { cell._invalidate(); cell._invalidate = null; }
+
+  const outputEl = cell.el.querySelector('.cell-output');
+  const widgetEl = cell.el.querySelector('.cell-widgets');
+
+  // preserve canvases before clearing output
+  const prevCanvases = [...outputEl.querySelectorAll('canvas')];
+  outputEl.textContent = '';
+  outputEl.className = 'cell-output';
+  const outClass = parseOutputClass(cell.code);
+  if (outClass) outputEl.classList.add(...outClass.split(/\\\\s+/));
+  const outId = parseOutputId(cell.code);
+  outputEl.id = outId || '';
+  cell.el.classList.toggle('present-hidden', isHidden(cell.code));
+  cell.error = null;
+
+  // create invalidation promise for this run
+  let invalidationResolve;
+  const invalidation = new Promise(r => { invalidationResolve = r; });
+  cell._invalidate = invalidationResolve;
+
+  // track which widgets are used this run
+  const usedWidgets = new Set();
+  let canvasIdx = 0;
+
+  // build display function for this cell
+  const display = (...args) => {
+    for (const arg of args) {
+      if (arg instanceof Element) {
+        outputEl.appendChild(arg);
+      } else if (typeof arg === 'object' && arg !== null) {
+        const pre = document.createElement('span');
+        try { pre.textContent = JSON.stringify(arg, null, 2); }
+        catch { pre.textContent = String(arg); }
+        outputEl.appendChild(pre);
+        outputEl.appendChild(document.createTextNode('\\\\n'));
+      } else {
+        outputEl.appendChild(document.createTextNode(String(arg) + '\\\\n'));
+      }
+    }
+  };
+
+  // canvas helper — reuses existing canvas if dimensions match
+  const canvas = (w = 400, h = 300) => {
+    const prev = prevCanvases[canvasIdx++];
+    if (prev && prev.width === w && prev.height === h) {
+      outputEl.appendChild(prev);
+      return prev;
+    }
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    c.style.background = '#000';
+    outputEl.appendChild(c);
+    return c;
+  };
+
+  // table helper
+  const table = (data, columns) => {
+    if (!data || !data.length) return;
+    const cols = columns || Object.keys(data[0]);
+
+    // detect numeric columns by scanning first 10 rows
+    const isNumCol = {};
+    for (const c of cols) {
+      let allNum = true;
+      const scanRows = data.slice(0, 10);
+      for (const row of scanRows) {
+        const v = row[c];
+        if (v !== null && v !== undefined && typeof v !== 'number') { allNum = false; break; }
+      }
+      isNumCol[c] = allNum;
+    }
+
+    const t = document.createElement('table');
+    const thead = document.createElement('thead');
+    const hr = document.createElement('tr');
+    for (const c of cols) {
+      const th = document.createElement('th');
+      th.textContent = c;
+      th.style.textAlign = isNumCol[c] ? 'right' : 'left';
+      hr.appendChild(th);
+    }
+    thead.appendChild(hr);
+    t.appendChild(thead);
+    const tbody = document.createElement('tbody');
+    for (const row of data) {
+      const tr = document.createElement('tr');
+      for (const c of cols) {
+        const td = document.createElement('td');
+        const v = row[c];
+        td.textContent = typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(4)) : String(v ?? '');
+        td.style.textAlign = isNumCol[c] ? 'right' : 'left';
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    t.appendChild(tbody);
+    outputEl.appendChild(t);
+  };
+
+  // input widget helpers — persist state and DOM across re-runs
+  if (!cell._inputs) cell._inputs = {};
+  if (!cell._callbacks) cell._callbacks = {};
+
+  const _tagMap = { slider: 'audit-slider', dropdown: 'audit-dropdown',
+                    checkbox: 'audit-checkbox', text: 'audit-text-input' };
+
+  const mkInput = (label, type, defaultVal, opts = {}) => {
+    const key = label;
+    const prev = cell._inputs[key];
+    let val = prev !== undefined ? prev : defaultVal;
+    usedWidgets.add(key);
+    cell._callbacks[key] = { onInput: opts.onInput, onChange: opts.onChange };
+
+    const tag = _tagMap[type];
+
+    // check if widget DOM already exists
+    const existing = widgetEl.querySelector(\\\`[data-widget-key="\\\${CSS.escape(key)}"]\\\`);
+    if (existing) {
+      // update attributes that may have changed on re-run
+      existing.id = opts.id || '';
+      if (opts.class) existing.className = opts.class; else existing.removeAttribute('class');
+      if (type === 'slider') {
+        if (opts.min != null) existing.setAttribute('min', opts.min);
+        if (opts.max != null) existing.setAttribute('max', opts.max);
+        if (opts.step != null) existing.setAttribute('step', opts.step);
+      } else if (type === 'dropdown') {
+        const newOpts = (opts.options || []).join(',');
+        if (existing.getAttribute('options') !== newOpts) existing.setAttribute('options', newOpts);
+      }
+      cell._inputs[key] = existing.value;
+      return cell._inputs[key];
+    }
+
+    // create new custom element
+    const el = document.createElement(tag);
+    el.dataset.widgetKey = key;
+    el.setAttribute('label', label);
+    el.setAttribute('name', label);
+    if (opts.id) el.id = opts.id;
+    if (opts.class) el.className = opts.class;
+
+    if (type === 'slider') {
+      el.setAttribute('min', opts.min ?? 0);
+      el.setAttribute('max', opts.max ?? 100);
+      el.setAttribute('step', opts.step ?? 1);
+      el.setAttribute('value', val);
+    } else if (type === 'dropdown') {
+      el.setAttribute('options', (opts.options || []).join(','));
+      el.setAttribute('value', val);
+    } else if (type === 'checkbox') {
+      if (val) el.setAttribute('checked', '');
+    } else if (type === 'text') {
+      el.setAttribute('value', val);
+    }
+
+    // event handling: reactive vs callback
+    el.addEventListener('input', () => {
+      cell._inputs[key] = el.value;
+      const cb = cell._callbacks[key];
+      if (cb.onInput) { cb.onInput(el.value); }
+      else if (!cb.onChange) {
+        clearTimeout(cell._inputTimer);
+        const delay = type === 'text' ? 300 : type === 'slider' ? 80 : 0;
+        if (delay) cell._inputTimer = setTimeout(() => runDAG([cell.id], true), delay);
+        else runDAG([cell.id], true);
+      }
+    });
+    el.addEventListener('change', () => {
+      const cb = cell._callbacks[key];
+      if (cb.onChange) cb.onChange(el.value);
+    });
+
+    widgetEl.appendChild(el);
+    cell._inputs[key] = el.value;
+    return cell._inputs[key];
+  };
+
+  const slider = (label, defaultVal = 50, opts = {}) => mkInput(label, 'slider', defaultVal, opts);
+  const dropdown = (label, options, defaultVal, opts = {}) => mkInput(label, 'dropdown', defaultVal || options[0], { ...opts, options });
+  const checkbox = (label, defaultVal = false, opts = {}) => mkInput(label, 'checkbox', defaultVal, opts);
+  const textInput = (label, defaultVal = '', opts = {}) => mkInput(label, 'text', defaultVal, opts);
+
+  // execute with scoped parameters (only what this cell uses, for stable V8 JIT)
+  // filter out injected names — they're per-cell params, not scope-propagated
+  const _injected = ['ui', 'std', 'load', 'install', 'installBinary', 'invalidation', 'print', 'display', 'md', 'html', 'css', 'workshop', 'notebook'];
+  const scopeKeys = cell.uses ? [...cell.uses].filter(k => !_injected.includes(k)).sort() : [];
+  const defNames = cell.defines ? [...cell.defines].sort().join(', ') : '';
+
+  // import cache — shared across all cells
+  if (!window._importCache) window._importCache = {};
+  if (!window._installedModules) window._installedModules = {}; // url -> { source, cellId }
+
+  const load = async (url) => {
+    // virtual modules
+    if (url === '@std') return std;
+    if (url === '@python') return python;
+    if (url === '@python/this') { display(zenOfPython()); return python; }
+
+    // @atra/<name> — atra library binary distributions
+    // if pre-installed (via /// module: directive or install()), the existing
+    // _installedModules[url] check below handles it. this fallback covers
+    // development mode where the file is available at a relative path.
+    if (url.startsWith('@atra/')) {
+      if (!window._importCache[url] && !window._installedModules[url]) {
+        const name = url.slice(6);
+        const mod = await import('./ext/atra/lib/' + name + '.js');
+        window._importCache[url] = mod;
+        return mod;
+      }
+      // fall through to normal _importCache / _installedModules handling below
+    }
+
+    if (window._importCache[url]) return window._importCache[url];
+
+    // binary assets — return blob URL
+    if (window._installedModules[url]?.binary) {
+      const blobUrl = await decodeBinary(window._installedModules[url]);
+      window._importCache[url] = blobUrl;
+      return blobUrl;
+    }
+
+    const langsBefore = window._taggedLanguages ? Object.keys(window._taggedLanguages).length : 0;
+
+    let mod;
+    // check installed (offline) modules first
+    if (window._installedModules[url]) {
+      const entry = window._installedModules[url];
+      let src = typeof entry === 'string' ? entry : entry.source;
+      // resolve root-relative paths for legacy saved modules
+      try { src = resolveModulePaths(src, url); } catch {}
+      const blob = new Blob([src], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      mod = await import(blobUrl);
+    } else {
+      mod = await import(url);
+    }
+    window._importCache[url] = mod;
+
+    // if the module registered new tagged languages, re-highlight all code cells
+    const langsAfter = window._taggedLanguages ? Object.keys(window._taggedLanguages).length : 0;
+    if (langsAfter > langsBefore) {
+      refreshTaggedLanguages();
+    }
+
+    return mod;
+  };
+
+  // resolve root-relative paths in module source so blob URLs work
+  const resolveModulePaths = (source, responseUrl) => {
+    const origin = new URL(responseUrl).origin;
+    return source.replace(/(from\\\\s+["'])(\\\\/[^"']+)(["'])/g, '$1' + origin + '$2$3')
+                 .replace(/(import\\\\s*\\\\(["'])(\\\\/[^"']+)(["']\\\\))/g, '$1' + origin + '$2$3')
+                 .replace(/(export\\\\s+\\\\*\\\\s+from\\\\s+["'])(\\\\/[^"']+)(["'])/g, '$1' + origin + '$2$3')
+                 .replace(/(export\\\\s*\\\\{[^}]*\\\\}\\\\s*from\\\\s+["'])(\\\\/[^"']+)(["'])/g, '$1' + origin + '$2$3');
+  };
+
+  const install = async (url) => {
+    // @atra/<name> — resolve to CDN URL, store under virtual key
+    if (url.startsWith('@atra/')) {
+      const name = url.slice(6);
+      const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/atra/lib/' + name + '.js';
+      const resp = await fetch(realUrl);
+      if (!resp.ok) throw new Error(\\\`Failed to fetch \\\${realUrl}: \\\${resp.status}\\\`);
+      const source = await resp.text();
+      window._installedModules[url] = { source, cellId: cell.id };
+      syncModules();
+      const blob = new Blob([source], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      const mod = await import(blobUrl);
+      window._importCache[url] = mod;
+      display(\\\`installed \\\${url} (\\\${(source.length / 1024).toFixed(1)} KB)\\\`);
+      return mod;
+    }
+    // normalize: add ?bundle for esm.sh if not present
+    let bundleUrl = url;
+    if (bundleUrl.includes('esm.sh') && !bundleUrl.includes('?bundle') && !bundleUrl.includes('&bundle')) {
+      bundleUrl += (bundleUrl.includes('?') ? '&' : '?') + 'bundle';
+    }
+    // fetch source
+    const resp = await fetch(bundleUrl);
+    if (!resp.ok) throw new Error(\\\`Failed to fetch \\\${bundleUrl}: \\\${resp.status}\\\`);
+    let source = await resp.text();
+    // resolve root-relative paths to absolute so blob URLs work
+    source = resolveModulePaths(source, resp.url);
+    // store under original url with cell reference
+    window._installedModules[url] = { source, cellId: cell.id };
+    syncModules();
+    // also load it into cache
+    const blob = new Blob([source], { type: 'application/javascript' });
+    const blobUrl = URL.createObjectURL(blob);
+    const mod = await import(blobUrl);
+    window._importCache[url] = mod;
+    display(\\\`installed \\\${url} (\\\${(source.length / 1024).toFixed(1)} KB)\\\`);
+    return mod;
+  };
+
+  const installBinary = async (url, opts = {}) => {
+    const compress = opts.compress !== false;
+    // if already installed, decode and return blob URL
+    if (window._installedModules[url]?.binary) {
+      return decodeBinary(window._installedModules[url]);
+    }
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error(\\\`Failed to fetch \\\${url}: \\\${resp.status}\\\`);
+    const contentType = resp.headers.get('content-type')?.split(';')[0] || 'application/octet-stream';
+    const buf = await resp.arrayBuffer();
+    const raw = new Uint8Array(buf);
+    let stored, isCompressed = false;
+    if (compress) {
+      const cs = new CompressionStream('gzip');
+      const stream = new Blob([raw]).stream().pipeThrough(cs);
+      const compressed = new Uint8Array(await new Response(stream).arrayBuffer());
+      stored = uint8ToBase64(compressed);
+      isCompressed = true;
+    } else {
+      stored = uint8ToBase64(raw);
+    }
+    window._installedModules[url] = { source: stored, cellId: cell.id, binary: true, compressed: isCompressed, type: contentType };
+    syncModules();
+    const ratio = isCompressed ? \\\` \\\\u2192 \\\${(stored.length / 1024).toFixed(1)} KB compressed\\\` : '';
+    display(\\\`installed binary \\\${url} (\\\${(buf.byteLength / 1024).toFixed(1)} KB\\\${ratio})\\\`);
+    return URL.createObjectURL(new Blob([raw], { type: contentType }));
+  };
+
+  // ui object — constructed per-cell (closes over cell context)
+  const ui = { display, print: display, canvas, table, slider, dropdown, checkbox, textInput };
+
+  // tagged template builtins
+  const md = taggedTemplate('md');
+  const html = taggedTemplate('html');
+  const css = taggedTemplate('css');
+
+  // workshop builtin — slide-out side panel with navigable pages
+  const workshop = (pages, opts) => {
+    const key = '__workshop__';
+    usedWidgets.add(key);
+    const useOverlay = !!(opts && opts.overlay);
+
+    // persist page index across re-runs
+    if (cell._inputs[key] === undefined) cell._inputs[key] = 0;
+    let currentPage = cell._inputs[key];
+
+    // get or create panel DOM
+    let panel = document.getElementById('workshopPanel');
+    let overlay = document.getElementById('workshopOverlay');
+    if (!panel) {
+      overlay = document.createElement('div');
+      overlay.id = 'workshopOverlay';
+      overlay.className = 'workshop-overlay';
+      overlay.onclick = () => toggleWorkshop(false);
+      document.body.appendChild(overlay);
+
+      panel = document.createElement('div');
+      panel.id = 'workshopPanel';
+      panel.className = 'workshop-panel';
+      document.body.appendChild(panel);
+    }
+
+    // side tab attached to the panel edge
+    let toggleBtn = document.getElementById('workshopToggle');
+    if (!toggleBtn) {
+      toggleBtn = document.createElement('button');
+      toggleBtn.id = 'workshopToggle';
+      toggleBtn.className = 'workshop-tab';
+      toggleBtn.title = 'toggle workshop panel';
+      toggleBtn.textContent = 'workshop';
+      document.body.appendChild(toggleBtn);
+      toggleBtn.onclick = () => toggleWorkshop();
+    }
+
+    function toggleWorkshop(show) {
+      const isOpen = panel.classList.contains('open');
+      const shouldOpen = show !== undefined ? show : !isOpen;
+      panel.classList.toggle('open', shouldOpen);
+      if (useOverlay) overlay.classList.toggle('visible', shouldOpen);
+    }
+
+    function renderPage(idx) {
+      idx = Math.max(0, Math.min(idx, pages.length - 1));
+      currentPage = idx;
+      cell._inputs[key] = idx;
+      const page = pages[idx];
+
+      panel.innerHTML = '';
+
+      // header with close button
+      const header = document.createElement('div');
+      header.className = 'workshop-header';
+      const title = document.createElement('span');
+      title.className = 'workshop-title';
+      title.textContent = page.title || \\\`Page \\\${idx + 1}\\\`;
+      header.appendChild(title);
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'workshop-close';
+      closeBtn.textContent = '\\\\u00d7';
+      closeBtn.onclick = () => toggleWorkshop(false);
+      header.appendChild(closeBtn);
+      panel.appendChild(header);
+
+      // content
+      const body = document.createElement('div');
+      body.className = 'workshop-body';
+      if (page.content instanceof Element) {
+        body.appendChild(page.content);
+      } else if (page.content instanceof TaggedContent) {
+        if (page.content.type === 'md') {
+          body.innerHTML = renderMd(page.content.content);
+        } else if (page.content.type === 'css') {
+          const pre = document.createElement('pre');
+          pre.textContent = page.content.content;
+          body.appendChild(pre);
+        } else {
+          body.innerHTML = page.content.content;
+        }
+      } else {
+        body.textContent = String(page.content ?? '');
+      }
+      panel.appendChild(body);
+
+      // progress pips
+      const pips = document.createElement('div');
+      pips.className = 'workshop-pips';
+      for (let i = 0; i < pages.length; i++) {
+        const pip = document.createElement('span');
+        pip.className = 'workshop-pip' + (i === idx ? ' active' : '') + (i < idx ? ' done' : '');
+        pip.onclick = () => navigate(i);
+        pips.appendChild(pip);
+      }
+      panel.appendChild(pips);
+
+      // nav buttons
+      const nav = document.createElement('div');
+      nav.className = 'workshop-nav';
+      if (idx > 0) {
+        const prev = document.createElement('button');
+        prev.textContent = '\\\\u2190 prev';
+        prev.onclick = () => navigate(idx - 1);
+        nav.appendChild(prev);
+      }
+      const spacer = document.createElement('span');
+      spacer.style.flex = '1';
+      nav.appendChild(spacer);
+      const counter = document.createElement('span');
+      counter.className = 'workshop-counter';
+      counter.textContent = \\\`\\\${idx + 1} / \\\${pages.length}\\\`;
+      nav.appendChild(counter);
+      if (idx < pages.length - 1) {
+        const next = document.createElement('button');
+        next.className = 'workshop-next';
+        next.textContent = 'next \\\\u2192';
+        if (page.canAdvance && !page.canAdvance()) {
+          next.disabled = true;
+          next.title = 'complete the task to continue';
+        }
+        next.onclick = () => navigate(idx + 1);
+        nav.appendChild(next);
+      }
+      panel.appendChild(nav);
+
+      // fire onEnter
+      if (page.onEnter) page.onEnter();
+    }
+
+    function navigate(idx) {
+      const prevPage = pages[currentPage];
+      if (prevPage?.onLeave) prevPage.onLeave();
+      renderPage(idx);
+    }
+
+    // store re-check function for canAdvance gating
+    cell._workshopRecheck = () => {
+      const page = pages[currentPage];
+      if (!page?.canAdvance) return;
+      const nextBtn = panel.querySelector('.workshop-next');
+      if (nextBtn) {
+        nextBtn.disabled = !page.canAdvance();
+      }
+    };
+
+    renderPage(currentPage);
+
+    // auto-open on first creation
+    if (!panel.classList.contains('open') && !cell._workshopShown) {
+      toggleWorkshop(true);
+      cell._workshopShown = true;
+    }
+
+    // store cleanup so deleteCell can tear down workshop DOM
+    cell._workshopCleanup = () => {
+      panel.remove();
+      overlay.remove();
+      toggleBtn.remove();
+      cell._workshopRecheck = null;
+    };
+    // on re-run, just clear the recheck — DOM is reused by ID
+    invalidation.then(() => {
+      cell._workshopRecheck = null;
+    });
+
+    return { goto: navigate, toggle: toggleWorkshop, recheck: cell._workshopRecheck };
+  };
+
+  // notebook API — programmatic notebook control
+  const notebook = {
+    get cells() { return S.cells.map(c => ({ id: c.id, type: c.type, code: c.code })); },
+    get scope() { return { ...S.scope }; },
+    addCell: (type, code, afterId) => addCell(type, code, afterId),
+    scrollTo: (id) => {
+      const c = S.cells.find(c => c.id === id);
+      if (c?.el) c.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    },
+    focus: (id) => {
+      const c = S.cells.find(c => c.id === id);
+      if (c?.el) {
+        c.el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const editor = getEditor(id);
+        if (editor) editor.focus();
+        else { const ta = c.el.querySelector('textarea'); if (ta) ta.focus(); }
+      }
+    },
+    collapse: (id) => {
+      const c = S.cells.find(c => c.id === id);
+      if (c?.el) c.el.classList.add('collapsed');
+    },
+    expand: (id) => {
+      const c = S.cells.find(c => c.id === id);
+      if (c?.el) c.el.classList.remove('collapsed');
+    },
+    run: (ids) => runDAG(Array.isArray(ids) ? ids : [ids], true),
+  };
+
+  // function caching — reuse compiled function if code/uses/defines unchanged
+  const cacheKey = scopeKeys.join(',') + '|' + defNames + '|' + cell.code;
+
+  try {
+    let fn;
+    if (cell._cacheKey === cacheKey && cell._cachedFn) {
+      fn = cell._cachedFn;
+    } else {
+      const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+      const cellName = parseCellName(cell.code);
+      const slug = cellName ? '-' + cellName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') : '';
+      fn = new AsyncFunction(
+        ...scopeKeys,
+        'ui', 'std', 'load', 'install', 'installBinary', 'invalidation', 'print', 'display',
+        'md', 'html', 'css', 'workshop', 'notebook',
+        \\\`"use strict";\\\\n\\\${cell.code}\\\\n\\\\n\\\` +
+        \\\`return { \\\${defNames} };\\\\n\\\` +
+        \\\`//# sourceURL=auditable://cell-\\\${cell.id}\\\${slug}.js\\\`
+      );
+      cell._cachedFn = fn;
+      cell._cacheKey = cacheKey;
+    }
+
+    const scopeVals = scopeKeys.map(k => S.scope[k]);
+    const result = await fn(...scopeVals, ui, std, load, install, installBinary, invalidation, display, display,
+      md, html, css, workshop, notebook);
+
+    // update scope with defined variables
+    if (result && typeof result === 'object') {
+      cell._lastResult = result;
+      for (const [k, v] of Object.entries(result)) {
+        if (v !== undefined) S.scope[k] = v;
+      }
+    }
+
+    cell.el.classList.remove('stale', 'error');
+    cell.el.classList.add('fresh');
+    setTimeout(() => cell.el.classList.remove('fresh'), 800);
+
+    // remove widgets no longer referenced by code
+    for (const w of widgetEl.querySelectorAll('[data-widget-key]')) {
+      if (!usedWidgets.has(w.dataset.widgetKey)) {
+        delete cell._inputs[w.dataset.widgetKey];
+        delete cell._callbacks[w.dataset.widgetKey];
+        w.remove();
+      }
+    }
+
+  } catch (e) {
+    cell.error = e.message;
+    outputEl.textContent = e.message;
+    outputEl.className = 'cell-output error';
+    cell.el.classList.remove('stale', 'fresh');
+    cell.el.classList.add('error');
+  }
+}
+
+async function runDAG(dirtyIds, force = false) {
+  buildDAG();
+  const isAutorun = S.autorun && !force;
+
+  // determine which cells need execution via topo sort
+  const runSet = new Set(topoSort(dirtyIds));
+
+  if (window._dagStart) window._dagStart();
+
+  // rebuild scope in document order, only executing cells in runSet
+  S.scope = {};
+  const poisoned = new Set(); // variable names defined by errored cells
+  for (let i = 0; i < S.cells.length; i++) {
+    const cell = S.cells[i];
+
+    if (cell.type === 'html') {
+      if (runSet.has(cell.id)) {
+        // check if any used variable is poisoned
+        if (cell.uses && [...cell.uses].some(n => poisoned.has(n))) {
+          cell.el.classList.remove('fresh');
+          cell.el.classList.add('stale');
+        } else {
+          renderHtmlCell(cell);
+        }
+      }
+      // inject widget-defined variables into scope for downstream cells
+      if (cell.defines && cell.defines.size > 0) {
+        for (const name of cell.defines) {
+          if (cell._inputs && cell._inputs[name] !== undefined) {
+            S.scope[name] = cell._inputs[name];
+          }
+        }
+      }
+      continue;
+    }
+    if (cell.type === 'md') {
+      if (runSet.has(cell.id)) {
+        if (cell.uses && [...cell.uses].some(n => poisoned.has(n))) {
+          cell.el.classList.add('stale');
+        } else {
+          renderMdCell(cell);
+        }
+      }
+      continue;
+    }
+    if (cell.type !== 'code') continue;
+
+    // skip norun cells (unless explicitly triggered)
+    if (isNorun(cell.code) && !dirtyIds.includes(cell.id)) {
+      if (cell._lastResult) {
+        for (const [k, v] of Object.entries(cell._lastResult)) {
+          if (v !== undefined) S.scope[k] = v;
+        }
+      }
+      continue;
+    }
+
+    // skip manual cells unless force or explicitly triggered
+    if (!force && isManual(cell.code) && !dirtyIds.includes(cell.id)) {
+      if (cell._lastResult) {
+        for (const [k, v] of Object.entries(cell._lastResult)) {
+          if (v !== undefined) S.scope[k] = v;
+        }
+      }
+      cell.el.classList.add('stale');
+      continue;
+    }
+
+    // not in run set — restore cached results, skip execution
+    if (!runSet.has(cell.id)) {
+      if (cell._lastResult) {
+        for (const [k, v] of Object.entries(cell._lastResult)) {
+          if (v !== undefined) S.scope[k] = v;
+        }
+      }
+      continue;
+    }
+
+    // error isolation: if any upstream dependency is poisoned, skip this cell
+    if (cell.uses && cell.uses.size > 0) {
+      let blocked = false;
+      for (const name of cell.uses) {
+        if (poisoned.has(name)) { blocked = true; break; }
+      }
+      if (blocked) {
+        const outputEl = cell.el.querySelector('.cell-output');
+        if (outputEl && !cell.error) {
+          outputEl.textContent = 'blocked by upstream error';
+          outputEl.className = 'cell-output error';
+        }
+        cell.el.classList.remove('stale', 'fresh');
+        cell.el.classList.add('error');
+        // poison our own defines so downstream also blocks
+        if (cell.defines) for (const name of cell.defines) poisoned.add(name);
+        continue;
+      }
+    }
+
+    // value-equality gating: if this cell is a downstream dependent (not directly
+    // dirty) and all its input values are unchanged, skip re-execution entirely
+    if (!dirtyIds.includes(cell.id) && cell._lastResult && cell.uses && cell.uses.size > 0) {
+      let inputsChanged = false;
+      for (const name of cell.uses) {
+        if (S.scope[name] !== cell._prevInputs?.[name]) { inputsChanged = true; break; }
+      }
+      if (!inputsChanged) {
+        // inputs identical — restore previous results, skip execution
+        for (const [k, v] of Object.entries(cell._lastResult)) {
+          if (v !== undefined) S.scope[k] = v;
+        }
+        continue;
+      }
+    }
+
+    if (window._beforeExec) window._beforeExec(cell);
+    await execCell(cell);
+
+    // if the cell errored, poison its defines
+    if (cell.error) {
+      if (cell.defines) for (const name of cell.defines) poisoned.add(name);
+    }
+
+    // snapshot input values for future equality checks
+    if (cell.uses) {
+      cell._prevInputs = {};
+      for (const name of cell.uses) cell._prevInputs[name] = S.scope[name];
+    }
+
+    if (window._afterExec && !isAutorun) {
+      const jump = window._afterExec(cell, i);
+      if (jump >= 0) { i = jump - 1; continue; }
+    }
+  }
+
+  updateStatus();
+
+  // recheck workshop canAdvance gates after scope changes
+  for (const c of S.cells) {
+    if (c._workshopRecheck) c._workshopRecheck();
+  }
+}
+
+async function runAll() {
+  const ids = S.cells.filter(c => c.type === 'code' || c.type === 'html' || c.type === 'md').map(c => c.id);
+  if (ids.length === 0) return;
+  await runDAG(ids, true);
+  setMsg('ran all cells', 'ok');
+}
+
+// late import to avoid circular dependency at module load time
+
+// -- markdown.js --
+
+// ── MARKDOWN RENDERING (minimal) ──
+
+function renderMd(src) {
+  let html = src
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+  // headings
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+  // bold/italic
+  html = html.replace(/\\\\*\\\\*(.+?)\\\\*\\\\*/g, '<strong>$1</strong>');
+  html = html.replace(/\\\\*(.+?)\\\\*/g, '<em>$1</em>');
+
+  // inline code
+  html = html.replace(/\\\`(.+?)\\\`/g, '<code>$1</code>');
+
+  // links
+  html = html.replace(/\\\\[(.+?)\\\\]\\\\((.+?)\\\\)/g, '<a href="$2">$1</a>');
+
+  // tables — detect pipe-delimited blocks before paragraph wrapping
+  html = html.replace(
+    /((?:^\\\\|.+\\\\|[ \\\\t]*$\\\\n?)+)/gm,
+    (block) => {
+      const rows = block.trim().split('\\\\n').map(r =>
+        r.trim().replace(/^\\\\|/, '').replace(/\\\\|$/, '').split('|').map(c => c.trim())
+      );
+      if (rows.length < 2) return block;
+      // check for separator row (--- or :--- etc)
+      const sep = rows[1];
+      if (!sep.every(c => /^:?-{1,}:?$/.test(c))) return block;
+      const hdr = rows[0];
+      const body = rows.slice(2);
+      let t = '<table><thead><tr>' +
+        hdr.map(c => \\\`<th>\\\${c}</th>\\\`).join('') +
+        '</tr></thead><tbody>';
+      for (const row of body) {
+        t += '<tr>' + row.map(c => \\\`<td>\\\${c}</td>\\\`).join('') + '</tr>';
+      }
+      t += '</tbody></table>';
+      return t;
+    }
+  );
+
+  // paragraphs
+  html = html.replace(/\\\\n\\\\n/g, '</p><p>');
+  if (!html.startsWith('<h') && !html.startsWith('<p') && !html.startsWith('<table')) html = '<p>' + html + '</p>';
+
+  return html;
+}
+
+// -- settings-app.js --
+
+// ── SETTINGS (app runtime — minimal) ──
+
+const __AUDITABLE_DEFAULT_EXEC_MODE__ = 'reactive';
+const __AUDITABLE_DEFAULT_RUN_ON_LOAD__ = 'yes';
+
+let _runOnLoad = 'yes';
+
+function lsGet(key) { try { return localStorage.getItem(key); } catch { return null; } }
+
+function applyTheme(theme) {
+  if (theme === 'light') {
+    document.documentElement.classList.add('light');
+  } else {
+    document.documentElement.classList.remove('light');
+  }
+}
+
+function applyFontSize(size) {
+  size = parseInt(size);
+  document.documentElement.style.setProperty('--editor-font-size', size + 'px');
+}
+
+function applyWidth(w) {
+  const nb = $('#notebook');
+  if (nb) nb.style.maxWidth = w;
+}
+
+function applyExecMode(mode) {
+  S.autorun = (mode === 'reactive');
+}
+
+function applyRunOnLoad(val) {
+  _runOnLoad = val;
+}
+
+function applySettings(s) {
+  if (!s) return;
+  if (s.theme) applyTheme(s.theme);
+  if (s.fontSize) applyFontSize(s.fontSize);
+  if (s.width) applyWidth(s.width);
+  if (s.execMode) applyExecMode(s.execMode);
+  if (s.runOnLoad) applyRunOnLoad(s.runOnLoad);
+}
+
+function resolveExecMode() {
+  return lsGet('auditable-exec-mode') || __AUDITABLE_DEFAULT_EXEC_MODE__;
+}
+
+function resolveRunOnLoad() {
+  return lsGet('auditable-run-on-load') || _runOnLoad || __AUDITABLE_DEFAULT_RUN_ON_LOAD__;
+}
+
+// stubs for symbols referenced elsewhere
+function getSettings() { return {}; }
+function getEditorViewSetting() { return 'no'; }
+function togglePresent() {}
+function syncSettings() {}
+
+// -- globals-app.js --
+
+// ── GLOBAL BINDINGS (app runtime) ──
+
+window.$ = $;
+window.S = S;
+window.runAll = runAll;
+
+// -- goto.js --
+
+// ── GOTO ── @optional
+
+function parseGoto(code) {
+  const m = code.match(/^\\\\s*\\\\/\\\\/\\\\s*%goto\\\\b\\\\s*(.*)/m);
+  if (!m) return null;
+  return m[1].trim() || '';
+}
+
+const MAX_VISITS = 1000;
+let visits = {};
+
+window._dagStart = function() {
+  visits = {};
+  window._lastGotoTarget = null;
+};
+
+window._beforeExec = function(cell) {
+  const target = parseGoto(cell.code);
+  if (target !== null) {
+    S.scope.__goto = target;
+    cell.defines.add('__goto');
+  } else {
+    delete S.scope.__goto;
+  }
+};
+
+window._afterExec = function(cell, index) {
+  const gotoTarget = S.scope.__goto;
+  delete S.scope.__goto;
+  window._lastGotoTarget = null;
+
+  if (!gotoTarget) return -1;
+
+  // resolve by cellName
+  const targetIdx = S.cells.findIndex(c => parseCellName(c.code) === gotoTarget);
+  if (targetIdx < 0) {
+    const out = cell.el.querySelector('.cell-output');
+    if (out) {
+      out.appendChild(document.createTextNode('\\\\ngoto: cell \\\\u201c' + gotoTarget + '\\\\u201d not found'));
+      out.classList.add('error');
+    }
+    return -1;
+  }
+
+  // loop protection
+  const key = index + ':' + targetIdx;
+  visits[key] = (visits[key] || 0) + 1;
+  if (visits[key] > MAX_VISITS) {
+    const out = cell.el.querySelector('.cell-output');
+    if (out) {
+      out.appendChild(document.createTextNode('\\\\ngoto: loop limit reached (' + MAX_VISITS + ' iterations)'));
+      out.classList.add('error');
+    }
+    return -1;
+  }
+
+  window._lastGotoTarget = targetIdx;
+  return targetIdx;
+};
+
+// -- init-app.js --
+
+// ── INIT (app runtime) ──
+
+(function init() {
+  loadFromEmbed();
+  S.initialized = true;
+})();\`;
+
 // ── MODULES ENCODING ──
 // base64-encode modules JSON to avoid HTML comment / String.replace issues
 // (source code can contain --, $', etc.)
@@ -6744,6 +9531,78 @@ function decodeModules(raw) {
   // detect legacy format: starts with { means raw JSON (not base64)
   if (b64.startsWith('{') || b64.startsWith('%7B')) return JSON.parse(raw);
   return JSON.parse(decodeURIComponent(escape(atob(b64))));
+}
+
+// ── LIVE COMMENT SYNC ──
+// keep AUDITABLE-DATA/SETTINGS/MODULES comment nodes up-to-date in the live DOM
+// so that a native browser Ctrl+S (which dumps the DOM) produces a loadable file.
+
+let _dataNode = null, _settingsNode = null, _modulesNode = null;
+let _liveSyncTimer = null;
+
+function findCommentNode(tag) {
+  const iter = document.createNodeIterator(document.body, NodeFilter.SHOW_COMMENT);
+  let node;
+  while ((node = iter.nextNode())) {
+    if (node.nodeValue.startsWith(tag + '\\n')) return node;
+  }
+  return null;
+}
+
+function ensureCommentNode(tag, descComment) {
+  let node = findCommentNode(tag);
+  if (!node) {
+    // create the description comment + data comment pair
+    if (descComment) document.body.appendChild(document.createComment(' ' + descComment + ' '));
+    node = document.createComment(tag + '\\n\\n' + tag);
+    document.body.appendChild(node);
+  }
+  return node;
+}
+
+function initLiveSync() {
+  _dataNode = ensureCommentNode('AUDITABLE-DATA', 'cell data: JSON array of {type, code, collapsed?}');
+  _settingsNode = ensureCommentNode('AUDITABLE-SETTINGS', 'notebook settings: JSON {theme, fontSize, width, ...}');
+  // modules node is created on demand when modules exist
+  _modulesNode = findCommentNode('AUDITABLE-MODULES');
+}
+
+function syncData() {
+  if (!_dataNode) return;
+  const cellData = S.cells.map(c => ({
+    type: c.type,
+    code: c.code,
+    collapsed: (c._splitOrigEl || c.el).classList.contains('collapsed') || undefined
+  }));
+  _dataNode.nodeValue = 'AUDITABLE-DATA\\n' + JSON.stringify(cellData) + '\\nAUDITABLE-DATA';
+}
+
+function syncDataDebounced() {
+  clearTimeout(_liveSyncTimer);
+  _liveSyncTimer = setTimeout(syncData, 500);
+}
+
+function syncSettings() {
+  if (!_settingsNode) return;
+  _settingsNode.nodeValue = 'AUDITABLE-SETTINGS\\n' + JSON.stringify(getSettings()) + '\\nAUDITABLE-SETTINGS';
+}
+
+function syncModules() {
+  const mods = window._installedModules;
+  if (!mods || !Object.keys(mods).length) {
+    // remove node if no modules
+    if (_modulesNode) {
+      // also remove description comment before it
+      if (_modulesNode.previousSibling?.nodeType === 8) _modulesNode.previousSibling.remove();
+      _modulesNode.remove();
+      _modulesNode = null;
+    }
+    return;
+  }
+  if (!_modulesNode) {
+    _modulesNode = ensureCommentNode('AUDITABLE-MODULES', 'installed modules: base64-encoded JSON mapping URLs to {source, cellId}');
+  }
+  _modulesNode.nodeValue = 'AUDITABLE-MODULES\\n' + encodeModules(mods) + '\\nAUDITABLE-MODULES';
 }
 
 // ── SAVE / LOAD ──
@@ -6783,9 +9642,14 @@ function buildNotebookHtml() {
     collapsed: (c._splitOrigEl || c.el).classList.contains('collapsed') || undefined
   }));
 
-  // get the runtime and styles from current document
-  const styleEl = document.querySelector('#auditable-css') || document.querySelector('style');
-  const styles = styleEl.textContent;
+  // get the runtime and styles from current document (two style tags since CSS split)
+  const appStyleEl = document.querySelector('#auditable-app-css');
+  const editorStyleEl = document.querySelector('#auditable-editor-css');
+  const appStyles = appStyleEl ? appStyleEl.textContent : '';
+  const editorStyles = editorStyleEl ? editorStyleEl.textContent : '';
+  // fallback: single #auditable-css for older builds
+  const fallbackStyleEl = document.querySelector('#auditable-css');
+  const styles = fallbackStyleEl ? fallbackStyleEl.textContent : (appStyles + '\\n' + editorStyles);
 
   // get the script
   const scriptEl = document.querySelector('script');
@@ -6840,13 +9704,17 @@ function buildNotebookHtml() {
   const findBarHTML = findBarEl.outerHTML;
 
   // build output HTML
+  const styleBlock = appStyleEl
+    ? \`<style id="auditable-app-css">\\n\${appStyles}\\n</style>\\n<style id="auditable-editor-css">\\n\${editorStyles}\\n</style>\`
+    : \`<style id="auditable-css">\\n\${styles}\\n</style>\`;
+
   return \`<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Auditable \\u2014 \${esc(title)}</title>
-<style id="auditable-css">\\n\${styles}\\n</style>
+\${styleBlock}
 </head>
 <body>
 
@@ -7088,6 +9956,13 @@ function loadFromEmbed() {
   if (match) {
     try {
       const data = JSON.parse(match[1]);
+
+      // clean dirty DOM (native browser save leaves stale cell elements)
+      const nb = document.getElementById('notebook');
+      if (nb) nb.innerHTML = '';
+      // remove stale CSS cell <style> elements from <head>
+      document.querySelectorAll('style[data-cell-id]').forEach(el => el.remove());
+
       for (const c of data) {
         const cell = addCell(c.type, c.code);
         if (c.collapsed || isCollapsed(c.code)) cell.el.classList.add('collapsed');
@@ -7102,6 +9977,99 @@ function loadFromEmbed() {
     }
   }
   return false;
+}
+
+// ── EXPORT AS APP ──
+
+function exportAsApp(opts = {}) {
+  const title = opts.title || $('#docTitle').value || 'untitled';
+  const includeBase = opts.includeBaseStyles !== false;
+
+  // collect cells as data
+  const cellData = S.cells.map(c => ({
+    type: c.type,
+    code: c.code,
+    collapsed: (c._splitOrigEl || c.el).classList.contains('collapsed') || undefined
+  }));
+
+  const settings = getSettings();
+
+  // build CSS for the app
+  let appStyles;
+  if (includeBase) {
+    const appStyleEl = document.querySelector('#auditable-app-css');
+    appStyles = appStyleEl ? appStyleEl.textContent : '';
+  } else {
+    // minimal reset + widget defaults only
+    appStyles = \`* { margin: 0; padding: 0; box-sizing: border-box; }
+audit-slider, audit-dropdown, audit-checkbox, audit-text-input {
+  display: flex; align-items: center; gap: 8px; padding: 2px 0; font-size: 12px;
+}
+.audit-widget-label { min-width: 80px; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; }
+.audit-widget-val { min-width: 40px; text-align: right; font-size: 12px; }\`;
+  }
+
+  // data blocks
+  const dataBlock = '<!--AUDITABLE-DATA\\n' + JSON.stringify(cellData) + '\\nAUDITABLE-DATA-->';
+  const settingsBlock = '<!--AUDITABLE-SETTINGS\\n' + JSON.stringify(settings) + '\\nAUDITABLE-SETTINGS-->';
+  const modulesBlock = Object.keys(window._installedModules || {}).length
+    ? '<!--AUDITABLE-MODULES\\n' + encodeModules(window._installedModules) + '\\nAUDITABLE-MODULES-->'
+    : '';
+
+  const html = \`<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>\${esc(title)}</title>
+<style>
+\${appStyles}
+</style>
+</head>
+<body>
+<div class="notebook" id="notebook"></div>
+\${dataBlock}
+\${modulesBlock}
+\${settingsBlock}
+<script>
+\${__APP_RUNTIME__}
+<\\/script>
+</body>
+</html>\`;
+
+  if (window.__AF_BRIDGE__) {
+    window.parent.postMessage({ type: 'af:download', payload: { data: html, filename: title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.html', mime: 'text/html' } }, '*');
+  } else {
+    downloadHtml(html, title);
+  }
+
+  const kb = (html.length / 1024).toFixed(0);
+  setMsg('exported app (' + kb + ' KB)', 'ok');
+}
+
+function showExportDialog() {
+  // check if any cell has %bare directive
+  const hasBare = S.cells.some(c => isBare(c.code));
+
+  const overlay = document.getElementById('exportOverlay');
+  const titleInput = document.getElementById('exportTitle');
+  const baseCheck = document.getElementById('exportBaseStyles');
+
+  if (titleInput) titleInput.value = $('#docTitle').value || 'untitled';
+  if (baseCheck) baseCheck.checked = !hasBare;
+  if (overlay) overlay.style.display = '';
+}
+
+function doExportApp() {
+  const title = document.getElementById('exportTitle').value;
+  const includeBase = document.getElementById('exportBaseStyles').checked;
+  closeExportDialog();
+  exportAsApp({ title, includeBaseStyles: includeBase });
+}
+
+function closeExportDialog() {
+  const overlay = document.getElementById('exportOverlay');
+  if (overlay) overlay.style.display = 'none';
 }
 
 // -- ui.js --
@@ -8308,6 +11276,7 @@ function onResizeStart(e) {
 
 function enterSplitView() {
   S.splitView = true;
+  applyEditorView('yes');
   document.body.classList.add('split-view');
 
   // serialize current cells to txt
@@ -8370,6 +11339,7 @@ function exitSplitView() {
   if (container) container.remove();
 
   S.splitView = false;
+  applyEditorView('no');
   document.body.classList.remove('split-view');
 
   // sync cell editors with current code
@@ -9910,6 +12880,9 @@ window.savePackedNotebook = savePackedNotebook;
 window.setSaveMode = setSaveMode;
 window.toggleSaveTray = toggleSaveTray;
 window.exportAsTxt = exportAsTxt;
+window.showExportDialog = showExportDialog;
+window.doExportApp = doExportApp;
+window.closeExportDialog = closeExportDialog;
 
 // exec
 window.runAll = runAll;
@@ -9960,6 +12933,12 @@ window.toggleSplitView = toggleSplitView;
   // configure CM6 autocomplete for all code cells
   configureAllAutocomplete();
   S.initialized = true;
+
+  // initialize live comment sync (keeps DOM comments up-to-date for native Ctrl+S)
+  initLiveSync();
+  syncData();
+  syncSettings();
+  if (window._installedModules && Object.keys(window._installedModules).length) syncModules();
 
   // enter editor view if notebook setting requests it
   if (getEditorViewSetting() === 'yes') {

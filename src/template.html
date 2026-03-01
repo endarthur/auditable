@@ -67,6 +67,7 @@
 <div class="help-row"><span class="help-key">// %outputClass &lt;cls&gt;</span><span class="help-desc">add classes to output div</span></div>
 <div class="help-row"><span class="help-key">// %goto &lt;label&gt;</span><span class="help-desc">jump to named cell after execution</span></div>
 <div class="help-row"><span class="help-key">// %collapsed</span><span class="help-desc">start cell collapsed</span></div>
+<div class="help-row"><span class="help-key">// %bare</span><span class="help-desc">export app without base styles</span></div>
 
 <div class="help-close">press F1 or Esc to close</div>
 </div>
@@ -209,6 +210,18 @@
   </div>
 </div>
 
+<div class="export-overlay" id="exportOverlay" style="display:none">
+  <div class="export-panel">
+    <h3>export as app</h3>
+    <label>title <input id="exportTitle" type="text" spellcheck="false"></label>
+    <label><input id="exportBaseStyles" type="checkbox" checked> include base styles</label>
+    <div class="export-actions">
+      <button class="accent" onclick="doExportApp()">export</button>
+      <button onclick="closeExportDialog()">cancel</button>
+    </div>
+  </div>
+</div>
+
 <div class="toolbar">
   <span class="toolbar-title">auditable</span>
   <span class="toolbar-badges" id="toolbarBadges"></span>
@@ -234,6 +247,7 @@
         <button onclick="setSaveMode('normal');saveNotebook()">save</button>
         <button onclick="setSaveMode('packed');saveNotebook()">save packed</button>
         <button onclick="exportAsTxt();toggleSaveTray()">export .txt</button>
+        <button onclick="showExportDialog();toggleSaveTray()">export app</button>
       </div>
     </span>
     <div class="toolbar-overflow">

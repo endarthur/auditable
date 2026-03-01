@@ -1,9 +1,13 @@
 import { S, $ } from './state.js';
 import { addCell } from './cell-ops.js';
-import { isCollapsed } from './dag.js';
+import { isCollapsed, isBare } from './dag.js';
 import { getSettings, applySettings, resolveExecMode, resolveRunOnLoad } from './settings.js';
 import { runAll } from './exec.js';
 import { setMsg } from './ui.js';
+
+// ── APP RUNTIME ──
+// Injected at build time — contains the minimal JS bundle for exported apps.
+const __APP_RUNTIME__ = '';
 
 // ── MODULES ENCODING ──
 // base64-encode modules JSON to avoid HTML comment / String.replace issues
@@ -130,9 +134,14 @@ function buildNotebookHtml() {
     collapsed: (c._splitOrigEl || c.el).classList.contains('collapsed') || undefined
   }));
 
-  // get the runtime and styles from current document
-  const styleEl = document.querySelector('#auditable-css') || document.querySelector('style');
-  const styles = styleEl.textContent;
+  // get the runtime and styles from current document (two style tags since CSS split)
+  const appStyleEl = document.querySelector('#auditable-app-css');
+  const editorStyleEl = document.querySelector('#auditable-editor-css');
+  const appStyles = appStyleEl ? appStyleEl.textContent : '';
+  const editorStyles = editorStyleEl ? editorStyleEl.textContent : '';
+  // fallback: single #auditable-css for older builds
+  const fallbackStyleEl = document.querySelector('#auditable-css');
+  const styles = fallbackStyleEl ? fallbackStyleEl.textContent : (appStyles + '\n' + editorStyles);
 
   // get the script
   const scriptEl = document.querySelector('script');
@@ -187,13 +196,17 @@ function buildNotebookHtml() {
   const findBarHTML = findBarEl.outerHTML;
 
   // build output HTML
+  const styleBlock = appStyleEl
+    ? `<style id="auditable-app-css">\n${appStyles}\n</style>\n<style id="auditable-editor-css">\n${editorStyles}\n</style>`
+    : `<style id="auditable-css">\n${styles}\n</style>`;
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Auditable \u2014 ${esc(title)}</title>
-<style id="auditable-css">\n${styles}\n</style>
+${styleBlock}
 </head>
 <body>
 
@@ -456,4 +469,97 @@ export function loadFromEmbed() {
     }
   }
   return false;
+}
+
+// ── EXPORT AS APP ──
+
+export function exportAsApp(opts = {}) {
+  const title = opts.title || $('#docTitle').value || 'untitled';
+  const includeBase = opts.includeBaseStyles !== false;
+
+  // collect cells as data
+  const cellData = S.cells.map(c => ({
+    type: c.type,
+    code: c.code,
+    collapsed: (c._splitOrigEl || c.el).classList.contains('collapsed') || undefined
+  }));
+
+  const settings = getSettings();
+
+  // build CSS for the app
+  let appStyles;
+  if (includeBase) {
+    const appStyleEl = document.querySelector('#auditable-app-css');
+    appStyles = appStyleEl ? appStyleEl.textContent : '';
+  } else {
+    // minimal reset + widget defaults only
+    appStyles = `* { margin: 0; padding: 0; box-sizing: border-box; }
+audit-slider, audit-dropdown, audit-checkbox, audit-text-input {
+  display: flex; align-items: center; gap: 8px; padding: 2px 0; font-size: 12px;
+}
+.audit-widget-label { min-width: 80px; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; }
+.audit-widget-val { min-width: 40px; text-align: right; font-size: 12px; }`;
+  }
+
+  // data blocks
+  const dataBlock = '<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->';
+  const settingsBlock = '<!--AUDITABLE-SETTINGS\n' + JSON.stringify(settings) + '\nAUDITABLE-SETTINGS-->';
+  const modulesBlock = Object.keys(window._installedModules || {}).length
+    ? '<!--AUDITABLE-MODULES\n' + encodeModules(window._installedModules) + '\nAUDITABLE-MODULES-->'
+    : '';
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${esc(title)}</title>
+<style>
+${appStyles}
+</style>
+</head>
+<body>
+<div class="notebook" id="notebook"></div>
+${dataBlock}
+${modulesBlock}
+${settingsBlock}
+<script>
+${__APP_RUNTIME__}
+<\/script>
+</body>
+</html>`;
+
+  if (window.__AF_BRIDGE__) {
+    window.parent.postMessage({ type: 'af:download', payload: { data: html, filename: title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.html', mime: 'text/html' } }, '*');
+  } else {
+    downloadHtml(html, title);
+  }
+
+  const kb = (html.length / 1024).toFixed(0);
+  setMsg('exported app (' + kb + ' KB)', 'ok');
+}
+
+export function showExportDialog() {
+  // check if any cell has %bare directive
+  const hasBare = S.cells.some(c => isBare(c.code));
+
+  const overlay = document.getElementById('exportOverlay');
+  const titleInput = document.getElementById('exportTitle');
+  const baseCheck = document.getElementById('exportBaseStyles');
+
+  if (titleInput) titleInput.value = $('#docTitle').value || 'untitled';
+  if (baseCheck) baseCheck.checked = !hasBare;
+  if (overlay) overlay.style.display = '';
+}
+
+export function doExportApp() {
+  const title = document.getElementById('exportTitle').value;
+  const includeBase = document.getElementById('exportBaseStyles').checked;
+  closeExportDialog();
+  exportAsApp({ title, includeBaseStyles: includeBase });
+}
+
+export function closeExportDialog() {
+  const overlay = document.getElementById('exportOverlay');
+  if (overlay) overlay.style.display = 'none';
 }
