@@ -54,11 +54,14 @@ export {
   indentOnInput,
   StreamLanguage,
   LanguageSupport,
+  Language,
+  defineLanguageFacet,
   indentService,
 } from '@codemirror/language';
 
 export {
   parseMixed,
+  Parser, NodeType, NodeSet, NodeProp, Tree,
 } from '@lezer/common';
 
 export {
@@ -73,4 +76,5 @@ export {
 
 export {
   tags,
+  styleTags,
 } from '@lezer/highlight';

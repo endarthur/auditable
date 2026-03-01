@@ -659,12 +659,8 @@ body.split-view .present-exit { display: none; }
 .split-output .cell-output { white-space: pre-wrap; word-break: break-word; }
 .split-output .cell-output.error { color: var(--err); }
 
-/* split view: cell-type-aware highlighting overrides */
-.cm-directive-line { color: var(--fg-dim) !important; font-style: italic; }
-.cm-directive-line span { color: inherit !important; font-style: inherit !important; }
-.cm-plain-text-line span { color: inherit !important; font-style: normal !important; }
+/* split view: markdown heading decoration */
 .cm-md-heading-line { color: var(--fg-bright) !important; font-weight: bold; }
-.cm-md-heading-line span { color: inherit !important; font-style: normal !important; }
 
 /* ── INSERT BAR (between cells) ── */
 .insert-bar {
