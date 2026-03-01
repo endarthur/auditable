@@ -85,16 +85,106 @@ export function toTxt() {
 // ── SPLIT VIEW ──
 // CM6 symbols (EditorView, EditorState, keymap, javascript, etc.) are already
 // declared by cm6.js which is concatenated earlier in the IIFE build.
-// ── CELL-TYPE DECORATIONS ──
-// Neutralize JS syntax highlighting in non-code cells (md, css, html) and
-// style /// directive lines distinctly. Uses line decorations so that CSS
-// can override the generated syntax highlight classes on child spans.
 
-const directiveLineDeco = Decoration.line({ class: 'cm-directive-line' });
-const plainTextLineDeco = Decoration.line({ class: 'cm-plain-text-line' });
+// ── AUDITABLE FORMAT PARSER ──
+// Custom Parser subclass for the /// notebook format. Segments the document
+// into Directive / CodeCell / CssCell / HtmlCell / MdCell nodes. parseMixed
+// delegates each cell region to the appropriate sub-parser (JS, CSS, HTML).
+
+const _auditableNodeTypes = [
+  NodeType.define({ id: 0, name: 'Document', top: true }),
+  NodeType.define({ id: 1, name: 'Directive' }),
+  NodeType.define({ id: 2, name: 'CodeCell' }),
+  NodeType.define({ id: 3, name: 'CssCell' }),
+  NodeType.define({ id: 4, name: 'HtmlCell' }),
+  NodeType.define({ id: 5, name: 'MdCell' }),
+];
+
+const _auditableNodeSet = new NodeSet(_auditableNodeTypes).extend(
+  styleTags({ Directive: tags.comment })
+);
+
+const _jsParser = mixedJavascript().language.parser;
+const _cssParser = css().language.parser;
+const _htmlParser = html().language.parser;
+
+const _nestLanguages = parseMixed(node => {
+  if (node.name === 'CodeCell') return { parser: _jsParser };
+  if (node.name === 'CssCell') return { parser: _cssParser };
+  if (node.name === 'HtmlCell') return { parser: _htmlParser };
+  return null;
+});
+
+class AuditableParser extends Parser {
+  createParse(input, fragments, ranges) {
+    // Full reparse on every edit — ranges parameter is ignored.
+    // Incremental parsing could use fragments to reuse unchanged cell
+    // subtrees, but notebooks are small enough that this is fine.
+    const baseParse = {
+      parsedPos: 0,
+      stopAt() {},
+      stoppedAt: null,
+      advance() {
+        const text = input.read(0, input.length);
+        const children = [];
+        const positions = [];
+        const lines = text.split('\n');
+        let pos = 0;
+        let cellType = null;
+        let cellStart = -1;
+
+        const flushCell = (end) => {
+          if (cellType && cellStart >= 0 && end > cellStart) {
+            const typeMap = { code: 2, css: 3, html: 4, md: 5 };
+            const typeId = typeMap[cellType] || 5;
+            children.push(new Tree(_auditableNodeSet.types[typeId], [], [], end - cellStart));
+            positions.push(cellStart);
+          }
+          cellType = null;
+          cellStart = -1;
+        };
+
+        for (let i = 0; i < lines.length; i++) {
+          const lineStart = pos;
+          const lineLen = lines[i].length;
+
+          if (lines[i].startsWith('/// ')) {
+            flushCell(lineStart);
+            children.push(new Tree(_auditableNodeSet.types[1], [], [], lineLen));
+            positions.push(lineStart);
+            const t = lines[i].slice(4).split(' ')[0];
+            if (['code', 'css', 'html', 'md'].includes(t)) {
+              cellType = t;
+              cellStart = Math.min(lineStart + lineLen + 1, text.length);
+            }
+          }
+
+          pos += lineLen + 1;
+        }
+
+        flushCell(text.length);
+
+        return new Tree(
+          _auditableNodeSet.types[0],
+          children,
+          positions,
+          text.length
+        );
+      }
+    };
+    return _nestLanguages(baseParse, input, fragments, ranges);
+  }
+}
+
+const _auditableParser = new AuditableParser();
+const auditableLang = new Language(defineLanguageFacet(), _auditableParser, [], 'auditable');
+
+// ── MARKDOWN HEADING DECORATION ──
+// Bold decoration for markdown headings (visual, not syntax highlighting)
+
 const mdHeadingLineDeco = Decoration.line({ class: 'cm-md-heading-line' });
 
-const cellTypePlugin = ViewPlugin.fromClass(class {
+const mdHeadingPlugin = ViewPlugin.fromClass(class {
   constructor(view) {
     this.decorations = this.buildDecorations(view);
   }
@@ -114,21 +204,13 @@ const cellTypePlugin = ViewPlugin.fromClass(class {
       const line = doc.line(i);
 
       if (line.text.startsWith('/// ')) {
-        decorations.push(directiveLineDeco.range(line.from));
         const type = line.text.slice(4).split(' ')[0];
-        if (['code', 'md', 'css', 'html'].includes(type)) {
-          cellType = type;
-        }
+        if (['code', 'md', 'css', 'html'].includes(type)) cellType = type;
         continue;
       }
 
-      // neutralize JS highlighting in non-code cells
-      if (cellType !== 'code' && line.text.length > 0) {
-        decorations.push(plainTextLineDeco.range(line.from));
-        // basic markdown heading detection
-        if (cellType === 'md' && /^#{1,6}\s/.test(line.text)) {
-          decorations.push(mdHeadingLineDeco.range(line.from));
-        }
+      if (cellType === 'md' && /^#{1,6}\s/.test(line.text)) {
+        decorations.push(mdHeadingLineDeco.range(line.from));
       }
     }
 
@@ -221,8 +303,22 @@ const splitHighlightDark = HighlightStyle.define([
   { tag: tags.constant(tags.variableName), color: '#d09870' },
   { tag: tags.operator, color: '#888' },
   { tag: tags.punctuation, color: '#666' },
+  { tag: tags.separator, color: '#666' },
+  { tag: tags.paren, color: '#666' },
+  { tag: tags.brace, color: '#666' },
+  { tag: tags.squareBracket, color: '#666' },
   { tag: tags.propertyName, color: '#7aabcf' },
   { tag: tags.variableName, color: 'var(--fg-bright)' },
+  { tag: tags.typeName, color: '#6dbfb8' },
+  { tag: tags.className, color: '#6dbfb8' },
+  { tag: tags.tagName, color: '#6dbfb8' },
+  { tag: tags.attributeName, color: '#7aabcf' },
+  { tag: tags.attributeValue, color: 'var(--accent)' },
+  { tag: tags.angleBracket, color: '#6dbfb8' },
+  { tag: tags.color, color: 'var(--accent)' },
+  { tag: tags.special(tags.string), color: 'var(--accent)' },
+  { tag: tags.self, color: '#d09870' },
+  { tag: tags.regexp, color: '#d09870' },
 ]);
 
 const splitHighlightLight = HighlightStyle.define([
@@ -238,8 +334,22 @@ const splitHighlightLight = HighlightStyle.define([
   { tag: tags.constant(tags.variableName), color: '#b07840' },
   { tag: tags.operator, color: '#666' },
   { tag: tags.punctuation, color: '#888' },
+  { tag: tags.separator, color: '#888' },
+  { tag: tags.paren, color: '#888' },
+  { tag: tags.brace, color: '#888' },
+  { tag: tags.squareBracket, color: '#888' },
   { tag: tags.propertyName, color: '#4a7a9e' },
   { tag: tags.variableName, color: 'var(--fg-bright)' },
+  { tag: tags.typeName, color: '#3d8a83' },
+  { tag: tags.className, color: '#3d8a83' },
+  { tag: tags.tagName, color: '#3d8a83' },
+  { tag: tags.attributeName, color: '#4a7a9e' },
+  { tag: tags.attributeValue, color: 'var(--accent)' },
+  { tag: tags.angleBracket, color: '#3d8a83' },
+  { tag: tags.color, color: 'var(--accent)' },
+  { tag: tags.special(tags.string), color: 'var(--accent)' },
+  { tag: tags.self, color: '#b07840' },
+  { tag: tags.regexp, color: '#b07840' },
 ]);
 
 let _syncTimer = null;
@@ -420,8 +530,8 @@ function createSplitEditor(container, initialCode) {
   const extensions = [
     isDark ? splitThemeDark : splitThemeLight,
     syntaxHighlighting(isDark ? splitHighlightDark : splitHighlightLight),
-    javascript(),
-    cellTypePlugin,
+    auditableLang,
+    mdHeadingPlugin,
     lineNumbers(),
     history(),
     bracketMatching(),

@@ -11,7 +11,9 @@ const {
   bracketMatching, syntaxHighlighting, HighlightStyle, syntaxTree, indentOnInput, indentService,
   autocompletion, CompletionContext, closeBrackets, acceptCompletion,
   tags,
-  StreamLanguage, LanguageSupport, parseMixed,
+  StreamLanguage, LanguageSupport, Language, defineLanguageFacet, parseMixed,
+  Parser, NodeType, NodeSet, NodeProp, Tree,
+  styleTags,
 } = window.CM6;
 
 // ── GCU THEME ──
