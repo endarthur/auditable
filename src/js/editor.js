@@ -2,11 +2,13 @@ import { S, $ } from './state.js';
 import { isManual } from './dag.js';
 import { runDAG } from './exec.js';
 import { setMsg } from './ui.js';
+import { syncDataDebounced, syncSettings } from './save.js';
 
 // ── EDITING ──
 
 export function notifyDirty() {
   if (S.initialized && window.__AF_BRIDGE__) window.parent.postMessage({ type: 'af:dirty' }, '*');
+  syncDataDebounced();
 }
 
 export function toggleAutorun() {
@@ -24,6 +26,7 @@ export function toggleAutorun() {
   }
   const sel = $('#setExecMode');
   if (sel) sel.value = S.autorun ? 'reactive' : 'manual';
+  syncSettings();
   setMsg(S.autorun ? 'autorun on' : 'autorun off', 'ok');
 }
 

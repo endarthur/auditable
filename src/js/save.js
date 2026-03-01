@@ -21,6 +21,78 @@ export function decodeModules(raw) {
   return JSON.parse(decodeURIComponent(escape(atob(b64))));
 }
 
+// ── LIVE COMMENT SYNC ──
+// keep AUDITABLE-DATA/SETTINGS/MODULES comment nodes up-to-date in the live DOM
+// so that a native browser Ctrl+S (which dumps the DOM) produces a loadable file.
+
+let _dataNode = null, _settingsNode = null, _modulesNode = null;
+let _liveSyncTimer = null;
+
+function findCommentNode(tag) {
+  const iter = document.createNodeIterator(document.body, NodeFilter.SHOW_COMMENT);
+  let node;
+  while ((node = iter.nextNode())) {
+    if (node.nodeValue.startsWith(tag + '\n')) return node;
+  }
+  return null;
+}
+
+function ensureCommentNode(tag, descComment) {
+  let node = findCommentNode(tag);
+  if (!node) {
+    // create the description comment + data comment pair
+    if (descComment) document.body.appendChild(document.createComment(' ' + descComment + ' '));
+    node = document.createComment(tag + '\n\n' + tag);
+    document.body.appendChild(node);
+  }
+  return node;
+}
+
+export function initLiveSync() {
+  _dataNode = ensureCommentNode('AUDITABLE-DATA', 'cell data: JSON array of {type, code, collapsed?}');
+  _settingsNode = ensureCommentNode('AUDITABLE-SETTINGS', 'notebook settings: JSON {theme, fontSize, width, ...}');
+  // modules node is created on demand when modules exist
+  _modulesNode = findCommentNode('AUDITABLE-MODULES');
+}
+
+export function syncData() {
+  if (!_dataNode) return;
+  const cellData = S.cells.map(c => ({
+    type: c.type,
+    code: c.code,
+    collapsed: (c._splitOrigEl || c.el).classList.contains('collapsed') || undefined
+  }));
+  _dataNode.nodeValue = 'AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA';
+}
+
+export function syncDataDebounced() {
+  clearTimeout(_liveSyncTimer);
+  _liveSyncTimer = setTimeout(syncData, 500);
+}
+
+export function syncSettings() {
+  if (!_settingsNode) return;
+  _settingsNode.nodeValue = 'AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS';
+}
+
+export function syncModules() {
+  const mods = window._installedModules;
+  if (!mods || !Object.keys(mods).length) {
+    // remove node if no modules
+    if (_modulesNode) {
+      // also remove description comment before it
+      if (_modulesNode.previousSibling?.nodeType === 8) _modulesNode.previousSibling.remove();
+      _modulesNode.remove();
+      _modulesNode = null;
+    }
+    return;
+  }
+  if (!_modulesNode) {
+    _modulesNode = ensureCommentNode('AUDITABLE-MODULES', 'installed modules: base64-encoded JSON mapping URLs to {source, cellId}');
+  }
+  _modulesNode.nodeValue = 'AUDITABLE-MODULES\n' + encodeModules(mods) + '\nAUDITABLE-MODULES';
+}
+
 // ── SAVE / LOAD ──
 
 // save mode: 'normal' or 'packed'
@@ -363,6 +435,13 @@ export function loadFromEmbed() {
   if (match) {
     try {
       const data = JSON.parse(match[1]);
+
+      // clean dirty DOM (native browser save leaves stale cell elements)
+      const nb = document.getElementById('notebook');
+      if (nb) nb.innerHTML = '';
+      // remove stale CSS cell <style> elements from <head>
+      document.querySelectorAll('style[data-cell-id]').forEach(el => el.remove());
+
       for (const c of data) {
         const cell = addCell(c.type, c.code);
         if (c.collapsed || isCollapsed(c.code)) cell.el.classList.add('collapsed');

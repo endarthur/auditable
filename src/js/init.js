@@ -1,5 +1,5 @@
 import { S } from './state.js';
-import { loadFromEmbed, saveNotebook, setSaveMode } from './save.js';
+import { loadFromEmbed, saveNotebook, setSaveMode, initLiveSync, syncData, syncSettings, syncModules } from './save.js';
 import { addCell } from './cell-ops.js';
 import { setMsg } from './ui.js';
 import { setBadge } from './update.js';
@@ -26,6 +26,12 @@ import { toggleSplitView } from './split.js';
   // configure CM6 autocomplete for all code cells
   configureAllAutocomplete();
   S.initialized = true;
+
+  // initialize live comment sync (keeps DOM comments up-to-date for native Ctrl+S)
+  initLiveSync();
+  syncData();
+  syncSettings();
+  if (window._installedModules && Object.keys(window._installedModules).length) syncModules();
 
   // enter editor view if notebook setting requests it
   if (getEditorViewSetting() === 'yes') {

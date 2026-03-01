@@ -4,6 +4,7 @@ import { isCollapsed } from './dag.js';
 import { addCell } from './cell-ops.js';
 import { getEditor } from './cm6.js';
 import { cssSummary } from './cell-dom.js';
+import { applyEditorView } from './settings.js';
 
 // ── TXT FORMAT ──
 
@@ -726,6 +727,7 @@ function onResizeStart(e) {
 
 function enterSplitView() {
   S.splitView = true;
+  applyEditorView('yes');
   document.body.classList.add('split-view');
 
   // serialize current cells to txt
@@ -788,6 +790,7 @@ function exitSplitView() {
   if (container) container.remove();
 
   S.splitView = false;
+  applyEditorView('no');
   document.body.classList.remove('split-view');
 
   // sync cell editors with current code

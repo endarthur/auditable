@@ -6,6 +6,7 @@ import { std } from './stdlib.js';
 import { python, zenOfPython } from './python.js';
 import { addCell } from './cell-ops.js';
 import { renderMd } from './markdown.js';
+import { syncModules } from './save.js';
 
 // ── EXECUTION ENGINE ──
 //
@@ -568,6 +569,7 @@ export async function execCell(cell) {
       if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
       const source = await resp.text();
       window._installedModules[url] = { source, cellId: cell.id };
+      syncModules();
       const blob = new Blob([source], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
       const mod = await import(blobUrl);
@@ -588,6 +590,7 @@ export async function execCell(cell) {
     source = resolveModulePaths(source, resp.url);
     // store under original url with cell reference
     window._installedModules[url] = { source, cellId: cell.id };
+    syncModules();
     // also load it into cache
     const blob = new Blob([source], { type: 'application/javascript' });
     const blobUrl = URL.createObjectURL(blob);
@@ -619,6 +622,7 @@ export async function execCell(cell) {
       stored = uint8ToBase64(raw);
     }
     window._installedModules[url] = { source: stored, cellId: cell.id, binary: true, compressed: isCompressed, type: contentType };
+    syncModules();
     const ratio = isCompressed ? ` \u2192 ${(stored.length / 1024).toFixed(1)} KB compressed` : '';
     display(`installed binary ${url} (${(buf.byteLength / 1024).toFixed(1)} KB${ratio})`);
     return URL.createObjectURL(new Blob([raw], { type: contentType }));

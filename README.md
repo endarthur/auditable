@@ -33,6 +33,8 @@ auditable.html  ~228KB
 
 that's it. email the file to someone. they open it. it runs.
 
+**note:** Ctrl+S triggers auditable's own save (downloads a self-contained HTML file). on `file://`, some browsers intercept Ctrl+S before the page can handle it — use the **SAVE** button in the toolbar instead. when served over `http://`/`https://` (or inside AF), Ctrl+S works as expected.
+
 ## keyboard shortcuts
 
 press **F1** inside the notebook for the full reference. highlights:
@@ -245,7 +247,7 @@ node gen_examples.js
 
 ## roadmap
 
-- [ ] web component widgets (`<audit-slider>`, etc.)
+- [x] web component widgets (`<audit-slider>`, etc.)
 - [ ] export as app (strip editor, emit standalone page)
 - [ ] worker builtins for offloading computation
 - [ ] documentation site
