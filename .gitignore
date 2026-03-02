@@ -147,3 +147,6 @@ vite.config.ts.timestamp-*
 .claude/
 CLAUDE.md
 ROADMAP.md
+
+# Specs to be ingested
+spec_inbox/

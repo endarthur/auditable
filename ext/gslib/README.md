@@ -342,6 +342,370 @@ const result = cokb3d({
 // result.var — Float64Array[nxyz], cokriging variances
 ```
 
+## Configuration reference
+
+Full specification of all config objects accepted by the high-level API. Extracted from `api.js`.
+
+### Shared types
+
+#### grid
+
+Regular grid definition. 2D functions (kb2d) ignore z-axis fields.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `nx` | number | yes | — | Number of cells in X |
+| `ny` | number | yes | — | Number of cells in Y |
+| `nz` | number | 3D only | 1 | Number of cells in Z |
+| `xsiz` | number | no | 1 | Cell size in X |
+| `ysiz` | number | no | 1 | Cell size in Y |
+| `zsiz` | number | 3D only | 1 | Cell size in Z |
+| `xmn` | number | no | xsiz/2 | X origin (cell center) |
+| `ymn` | number | no | ysiz/2 | Y origin (cell center) |
+| `zmn` | number | 3D only | zsiz/2 | Z origin (cell center) |
+
+GSLIB convention: origins are cell-centered, so `xmn = xsiz/2` places the first cell at `[0, xsiz]`.
+
+#### variogram
+
+Nested variogram model with nugget effect.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `nugget` | number | no | 0 | Nugget effect (C0) |
+| `structures` | array | yes | — | Array of nested structures |
+
+Each **structure** object:
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `type` | string\|number | yes | — | Model type (see below) |
+| `contribution` | number | yes | — | Sill contribution (CC) |
+| `range` | number | yes | — | Major axis range (AA) |
+| `angle` | number | no | 0 | Primary rotation angle (degrees) |
+| `angle2` | number | no | 0 | Secondary rotation angle |
+| `angle3` | number | no | 0 | Tertiary rotation angle |
+| `rangeMinor` | number | no | range | Minor axis range |
+| `rangeVert` | number | no | range | Vertical axis range |
+
+Variogram type names: `spherical` (or `sph`, `1`), `exponential` (`exp`, `2`), `gaussian` (`gau`, `3`), `power` (`pow`, `4`), `hole` (`5`).
+
+#### search (common fields)
+
+Fields shared by most search objects. Function-specific fields documented per function.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `radius` | number | yes | — | Search radius (major axis) |
+| `ndmax` | number | no | varies | Max data neighbors |
+| `ndmin` | number | no | varies | Min data neighbors |
+| `angle` | number | no | 0 | Search ellipse rotation (3D functions) |
+| `angle2` | number | no | 0 | Secondary rotation |
+| `angle3` | number | no | 0 | Tertiary rotation |
+| `radiusMinor` | number | no | radius | Minor axis search radius |
+| `radiusVert` | number | no | radius | Vertical search radius |
+
+---
+
+### kb2d(opts)
+
+2D ordinary/simple kriging. Returns `{ est, var }` as Float64Array[nx*ny].
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `data` | array | yes | — | `[[x, y, v], ...]` |
+| `grid` | object | yes | — | 2D grid (nx, ny) |
+| `variogram` | object | yes | — | Variogram model |
+| `search` | object | yes | — | See below |
+| `discretization` | object | no | `{}` | Block kriging discretization |
+| `ktype` | string | no | "OK" | "OK" or "SK" |
+| `skmean` | number | no | 0 | Simple kriging mean |
+
+**search:**
+
+| Field | Type | Default |
+|-------|------|---------|
+| `radius` | number | required |
+| `ndmax` | number | min(nd, 20) |
+| `ndmin` | number | 1 |
+
+**discretization:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `nx` | number | 1 | Points in X (1 = point kriging) |
+| `ny` | number | 1 | Points in Y |
+
+---
+
+### kt3d(opts)
+
+3D kriging with super block search. Returns `{ est, var }` as Float64Array[nx*ny*nz].
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `data` | array | yes | — | `[[x, y, z, v], ...]` |
+| `grid` | object | yes | — | 3D grid |
+| `variogram` | object | yes | — | Variogram model |
+| `search` | object | yes | — | See below |
+| `discretization` | object | no | `{}` | Block kriging discretization |
+| `ktype` | string | no | "OK" | "OK" or "SK" |
+| `skmean` | number | no | 0 | Simple kriging mean |
+
+**search:**
+
+| Field | Type | Default |
+|-------|------|---------|
+| `radius` | number | required |
+| `ndmax` | number | min(nd, 20) |
+| `ndmin` | number | 1 |
+| `angle` | number | 0 |
+| `angle2` | number | 0 |
+| `angle3` | number | 0 |
+| `radiusMinor` | number | radius |
+| `radiusVert` | number | radius |
+
+**discretization:**
+
+| Field | Type | Default |
+|-------|------|---------|
+| `nx` | number | 1 |
+| `ny` | number | 1 |
+| `nz` | number | 1 |
+
+---
+
+### sgsim(opts)
+
+Sequential Gaussian simulation. Returns `{ run(seed), dispose() }`. Data must be in normal score space.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `grid` | object | yes | — | 3D grid |
+| `variogram` | object | yes | — | Variogram model |
+| `search` | object | yes | — | See below |
+| `data` | array | no | `[]` | `[[x, y, z, v], ...]` conditioning data (normal scores) |
+
+**search:**
+
+| Field | Type | Default |
+|-------|------|---------|
+| `radius` | number | required |
+| `ndmax` | number | 10 |
+| `ndmin` | number | 0 |
+| `nodmax` | number | 12 |
+| `angle` | number | 0 |
+| `angle2` | number | 0 |
+| `angle3` | number | 0 |
+| `radiusMinor` | number | radius |
+| `radiusVert` | number | radius |
+
+`nodmax` controls the max previously simulated nodes to use as neighbors.
+
+---
+
+### gamv(opts)
+
+Experimental variogram computation. Returns `{ distance, value, npairs, hm, tm }` as Float64Array[ndir * (nlag+2)].
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `data` | array | yes | — | `[[x, y, v], ...]` or `[[x, y, z, v], ...]` |
+| `lags` | object | yes | — | Lag specification |
+| `directions` | array | no | `[{ azimuth: 0, tolerance: 90 }]` | Directional filters |
+| `trim` | object | no | `{}` | Data trimming limits |
+
+**lags:**
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `n` | number | yes | — | Number of lags |
+| `size` | number | yes | — | Lag distance |
+| `tolerance` | number | no | size/2 | Lag tolerance |
+
+**directions[]:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `azimuth` | number | 0 | Azimuth angle (degrees) |
+| `tolerance` | number | 90 | Angular tolerance |
+| `bandwidthH` | number | 1e21 | Horizontal bandwidth |
+| `dip` | number | 0 | Dip angle (3D) |
+| `dipTolerance` | number | 90 | Dip angular tolerance |
+| `bandwidthV` | number | 1e21 | Vertical bandwidth |
+
+**trim:**
+
+| Field | Type | Default |
+|-------|------|---------|
+| `min` | number | -1e21 |
+| `max` | number | 1e21 |
+
+---
+
+### declus(opts)
+
+Cell declustering. Returns `{ weights, cellSize, weightedMean }`.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `data` | array | yes | — | `[[x, y, v], ...]` or `[[x, y, z, v], ...]` |
+| `cellRange` | [number, number] | yes | — | [min, max] cell sizes to sweep |
+| `ncell` | number | no | 25 | Number of cell sizes to test |
+| `noff` | number | no | 8 | Origin offsets per cell size |
+| `anisotropy` | object | no | `{}` | Cell shape ratios |
+| `criterion` | string | no | "min" | Optimize weighted mean: "min" or "max" |
+| `trim` | object | no | `{}` | Data trimming limits |
+
+**anisotropy:**
+
+| Field | Type | Default |
+|-------|------|---------|
+| `y` | number | 1 |
+| `z` | number | 1 |
+
+**trim:** same as gamv.
+
+---
+
+### ik3d(opts)
+
+3D indicator kriging. Returns `{ ccdf }` as Float64Array[nxyz * ncut].
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `data` | array | yes | — | `[[x, y, z, v], ...]` |
+| `grid` | object | yes | — | 3D grid |
+| `cutoffs` | number[] | yes | — | Threshold values |
+| `variograms` | object[] | yes | — | One variogram per cutoff |
+| `search` | object | yes | — | See below |
+| `ktype` | string | no | "OK" | "OK" or "SK" |
+| `categorical` | boolean | no | false | Categorical (true) or continuous (false) indicators |
+
+**search:**
+
+| Field | Type | Default |
+|-------|------|---------|
+| `radius` | number | required |
+| `ndmax` | number | min(nd, 20) |
+| `ndmin` | number | 1 |
+| `noct` | number | 0 |
+| `angle` | number | 0 |
+| `angle2` | number | 0 |
+| `angle3` | number | 0 |
+| `radiusMinor` | number | radius |
+| `radiusVert` | number | radius |
+
+`noct` limits samples per octant (0 = disabled).
+
+---
+
+### sisim(opts)
+
+Sequential indicator simulation. Returns `{ run(seed), dispose() }`.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `grid` | object | yes | — | 3D grid |
+| `cutoffs` | number[] | yes | — | Threshold values |
+| `variograms` | object[] | yes | — | One variogram per cutoff |
+| `search` | object | yes | — | See below |
+| `data` | array | no | `[]` | `[[x, y, z, v], ...]` conditioning data (original scale) |
+| `globalCdf` | number[] | no | computed | Marginal CDF at cutoffs |
+| `ktype` | string | no | "OK" | "OK" or "SK" |
+| `categorical` | boolean | no | false | Categorical or continuous indicators |
+| `tails` | object | no | `{}` | CDF tail extrapolation |
+| `zmin` | number | no | auto | Minimum possible value |
+| `zmax` | number | no | auto | Maximum possible value |
+
+If `globalCdf` is omitted, it's computed from conditioning data. If no data, uniform quantiles are used.
+
+`zmin` defaults to `cutoffs[0] - cutRange`, `zmax` defaults to `cutoffs[ncut-1] + cutRange`, where `cutRange = cutoffs[ncut-1] - cutoffs[0]`.
+
+**search:**
+
+| Field | Type | Default |
+|-------|------|---------|
+| `radius` | number | required |
+| `ndmax` | number | 10 |
+| `ndmin` | number | 0 |
+| `nodmax` | number | 12 |
+| `noct` | number | 0 |
+| `angle` | number | 0 |
+| `angle2` | number | 0 |
+| `angle3` | number | 0 |
+| `radiusMinor` | number | radius |
+| `radiusVert` | number | radius |
+
+**tails:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `lower.type` | number | 1 | 1=linear, 2=power |
+| `lower.param` | number | 0 | Lower tail parameter |
+| `upper.type` | number | 1 | 1=linear, 2=power, 4=hyperbolic |
+| `upper.param` | number | 5 | Upper tail parameter |
+
+---
+
+### cokb3d(opts)
+
+3D collocated cokriging. Returns `{ est, var }` as Float64Array[nxyz].
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `data` | object | yes | — | Primary + secondary data |
+| `grid` | object | yes | — | 3D grid |
+| `variograms` | object | yes | — | Three variogram models |
+| `search` | object | yes | — | See below |
+| `discretization` | object | no | `{}` | Block kriging discretization |
+| `ktype` | string | no | "OK" | "OK" or "SK" |
+| `skmean` | object | no | `{}` | SK means for both variables |
+
+**data:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `primary` | array | yes | `[[x, y, z, v], ...]` |
+| `secondary` | array | yes | `[[x, y, z, v], ...]` (collocated, same coordinates) |
+
+**variograms:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `primary` | object | yes | Primary auto-variogram |
+| `secondary` | object | yes | Secondary auto-variogram |
+| `cross` | object | yes | Cross-variogram |
+
+**search:**
+
+| Field | Type | Default |
+|-------|------|---------|
+| `radius` | number | required |
+| `ndmaxPrimary` | number | min(nd, 16) |
+| `ndmaxSecondary` | number | min(nd, 16) |
+| `ndmin` | number | 1 |
+| `angle` | number | 0 |
+| `angle2` | number | 0 |
+| `angle3` | number | 0 |
+| `radiusMinor` | number | radius |
+| `radiusVert` | number | radius |
+
+**discretization:**
+
+| Field | Type | Default |
+|-------|------|---------|
+| `nx` | number | 1 |
+| `ny` | number | 1 |
+| `nz` | number | 1 |
+
+**skmean:**
+
+| Field | Type | Default |
+|-------|------|---------|
+| `primary` | number | 0 |
+| `secondary` | number | 0 |
+
 ## Testing
 
 ```
