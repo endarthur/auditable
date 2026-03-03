@@ -553,6 +553,18 @@ describe('evaluate', () => {
     assert.deepEqual(r.bindings.y, ['a', 'b', 'c']);
   });
 
+  it('template string scalar', () => {
+    const src = 'name = "Alice"\nmsg = \x60hello \x24{name}\x60';
+    const r = run(src);
+    assert.equal(r.bindings.msg, 'hello Alice');
+  });
+
+  it('template string with column', () => {
+    const src = 'names = ["Alice", "Bob"]\nmsg = \x60hi \x24{names}\x60';
+    const r = run(src);
+    assert.deepEqual(r.bindings.msg, ['hi Alice', 'hi Bob']);
+  });
+
   it('spec example: Sales + Summary', () => {
     const r = run(`
       Sales {
@@ -891,6 +903,15 @@ describe('codegen', () => {
     const tCol = sheet(workbook, 'Sales').columns.t;
     assert.ok(tCol.formulas);
     assert.equal(tCol.formulas[0], '=tax(A2,0.15)');
+  });
+
+  it('template string \u2192 concatenation formula', () => {
+    const src = 'Sales {\n  name = ["Alice", "Bob"]\n  revenue = [100, 200]\n  msg = \x60\x24{name} earned \x24{revenue:$#,##0.00}\x60\n}';
+    const { workbook } = compile(src);
+    const msgCol = sheet(workbook, 'Sales').columns.msg;
+    assert.ok(msgCol.formulas);
+    assert.equal(msgCol.formulas[0], '=A2&" earned "&TEXT(B2,"$#,##0.00")');
+    assert.equal(msgCol.formulas[1], '=A3&" earned "&TEXT(B3,"$#,##0.00")');
   });
 
   it('scan → SCAN(init, range, LAMBDA) spilled', () => {

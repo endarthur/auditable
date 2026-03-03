@@ -1761,21 +1761,10 @@ function evalExpr(node, scope, parentScope) {
         if (typeof part === 'string') {
           evaluated.push(part);
         } else {
-          // Parse and evaluate the expression
-          const tokens = lex(part.expr);
-          const exprAST = parse(tokens);
-          // The parsed result is a Program; we want the first binding's expr or the first expression
-          let val;
-          if (exprAST.body.length === 1 && exprAST.body[0].type === 'Binding') {
-            val = evalExpr(exprAST.body[0].expr, scope, parentScope);
-          } else {
-            // Try evaluating as expression — wrap in a binding for simplicity
-            // Actually, a bare expression at top level would fail our parser.
-            // Template expressions are simple, so re-parse as expression via a binding.
-            const wrappedTokens = lex('_tmp = ' + part.expr);
-            const wrappedAST = parse(wrappedTokens);
-            val = evalExpr(wrappedAST.body[0].expr, scope, parentScope);
-          }
+          // Wrap as binding since bare expressions fail the parser
+          const wrappedTokens = lex('_tmp = ' + part.expr);
+          const wrappedAST = parse(wrappedTokens);
+          let val = evalExpr(wrappedAST.body[0].expr, scope, parentScope);
           if (part.format) {
             val = stdlib.text(val, part.format);
           }
