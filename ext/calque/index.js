@@ -1905,31 +1905,42 @@ const FUNC_MAP = {
   day: 'DAY', today: 'TODAY', iferror: 'IFERROR', ifna: 'IFNA',
   round: 'ROUND', abs: 'ABS', floor: 'FLOOR', ceil: 'CEILING',
   sqrt: 'SQRT', log: 'LOG', exp: 'EXP', mod: 'MOD',
+  scan: 'SCAN', sort: 'SORT', unique: 'UNIQUE', lookup: 'XLOOKUP',
 };
 
 // Reductions: their column args emit as ranges
 const REDUCTIONS = new Set(['sum', 'mean', 'count', 'min', 'max']);
 
+// Spilled: single formula produces dynamic array (only first cell gets formula)
+const SPILLED = new Set(['scan', 'sort', 'unique']);
+
+// Pointwise functions safe inside reductions (emit as range-applied)
+const POINTWISE = new Set(['abs', 'round', 'floor', 'ceil', 'sqrt', 'log', 'exp', 'mod',
+  'left', 'right', 'mid', 'len', 'trim', 'text', 'str', 'iferror', 'ifna']);
+
 // Operator mapping calque → xlsx
 const OP_MAP = { '==': '=', '/=': '<>', '!=': '<>' };
+
+// ── Spilled formula detection ──
+
+function isSpilledNode(node) {
+  if (node.type === 'Subscript') return true;
+  if (node.type === 'FuncCall' && SPILLED.has(node.name)) return true;
+  return false;
+}
 
 // ── Baked pattern detection ──
 
 function shouldBake(node, ctx) {
   if (node.type === 'ArrayLit') return 'array literal (data entry)';
   if (node.type === 'Range') return 'range expression (no xlsx equivalent)';
-  if (node.type === 'Subscript') return 'subscript/filter (no xlsx equivalent)';
   if (node.type === 'FuncCall') {
     if (node.name === 'rolling') return 'rolling() (no clean formula)';
-    if (node.name === 'scan') return 'scan() (modern-only)';
-    if (node.name === 'sort') return 'sort() (modern-only)';
-    if (node.name === 'unique') return 'unique() (modern-only)';
-    if (node.name === 'lookup') return 'lookup() (complex semantics)';
-    // Nested reduction: sum(abs(col)) — would need CSE
+    // Nested reduction: allow if inner is a known pointwise function, otherwise bake
     if (REDUCTIONS.has(node.name) && node.args.length > 0) {
       const arg = node.args[0];
-      if (arg.type !== 'Ident' && arg.type !== 'MemberAccess') {
-        return `nested reduction ${node.name}() (would need array formula)`;
+      if (arg.type === 'FuncCall' && !POINTWISE.has(arg.name) && !REDUCTIONS.has(arg.name)) {
+        return `nested reduction ${node.name}(${arg.name}()) (no formula pattern)`;
       }
     }
   }
@@ -2087,6 +2098,51 @@ function emitFormula(node, ctx) {
         return `${xlsxName}(${args.join(',')})`;
       }
 
+      // SCAN(init, range, LAMBDA) — spilled
+      if (node.name === 'scan') {
+        if (node.args.length < 3) return null;
+        const rangeCtx = { ...ctx, inReduction: true };
+        const col = emitFormula(node.args[0], rangeCtx);
+        const init = emitFormula(node.args[1], ctx);
+        const lambda = emitInlineLambda(node.args[2], ctx);
+        if (!col || init === null || !lambda) return null;
+        return `SCAN(${init},${col},${lambda})`;
+      }
+
+      // SORT(range) — spilled
+      if (node.name === 'sort') {
+        if (node.args.length < 1) return null;
+        const rangeCtx = { ...ctx, inReduction: true };
+        const col = emitFormula(node.args[0], rangeCtx);
+        if (!col) return null;
+        return `SORT(${col})`;
+      }
+
+      // UNIQUE(range) — spilled
+      if (node.name === 'unique') {
+        if (node.args.length < 1) return null;
+        const rangeCtx = { ...ctx, inReduction: true };
+        const col = emitFormula(node.args[0], rangeCtx);
+        if (!col) return null;
+        return `UNIQUE(${col})`;
+      }
+
+      // XLOOKUP(needle, keys, vals [, , match_mode]) — scalar or spilled
+      if (node.name === 'lookup') {
+        if (node.args.length < 3) return null;
+        const needle = emitFormula(node.args[0], ctx);
+        const rangeCtx = { ...ctx, inReduction: true };
+        const keys = emitFormula(node.args[1], rangeCtx);
+        const vals = emitFormula(node.args[2], rangeCtx);
+        if (!needle || !keys || !vals) return null;
+        // Check for nearest: "below" kwarg
+        const nearestKw = node.kwargs && node.kwargs.find(k => k.name === 'nearest');
+        if (nearestKw) {
+          return `XLOOKUP(${needle},${keys},${vals},,-1)`;
+        }
+        return `XLOOKUP(${needle},${keys},${vals})`;
+      }
+
       // Regular functions — pointwise
       const args = node.args.map(a => emitFormula(a, ctx));
       if (args.some(a => a === null)) return null;
@@ -2128,14 +2184,23 @@ function emitFormula(node, ctx) {
       return parts.join('&');
     }
 
+    // Subscript → FILTER(range, condition)
+    case 'Subscript': {
+      const rangeCtx = { ...ctx, inReduction: true };
+      const col = emitFormula(node.object, rangeCtx);
+      const cond = emitFormula(node.index, rangeCtx);
+      if (!col || !cond) return null;
+      return `FILTER(${col},${cond})`;
+    }
+
     // Baked patterns
     case 'ArrayLit':
     case 'Range':
-    case 'Subscript':
       return null;
 
-    case 'Lambda':
-      return null;
+    case 'Lambda': {
+      return emitInlineLambda(node, ctx);
+    }
 
     default:
       return null;
@@ -2163,6 +2228,18 @@ function emitTemplateExpr(part, ctx) {
     return `TEXT(${formula},${escapeExcelString(part.format)})`;
   }
   return formula;
+}
+
+// ── Inline LAMBDA (for scan, etc.) ──
+
+function emitInlineLambda(node, ctx) {
+  if (node.type !== 'Lambda') return null;
+  const lambdaParams = new Set(node.params);
+  const lambdaCtx = { ...ctx, row: 0, lambdaParams };
+  const bodyFormula = emitFormula(node.body, lambdaCtx);
+  if (!bodyFormula) return null;
+  const params = node.params.join(',');
+  return `LAMBDA(${params},${bodyFormula})`;
 }
 
 // ── UDF → definedNames LAMBDA ──
@@ -2228,19 +2305,29 @@ function codegen(ast, layoutResult, evalResult, opts) {
         bakeReason = shouldBake(astNode, ctx);
 
         if (!bakeReason) {
-          // Try emitting per-row formulas
           const numRows = info.isColumn ? info.rows : 1;
-          const formulaArr = [];
-          let allOk = true;
+          const spilled = isSpilledNode(astNode);
 
-          for (let r = 0; r < numRows; r++) {
-            const rowCtx = { ...ctx, row: r };
-            const f = emitFormula(astNode, rowCtx);
-            if (f === null) { allOk = false; break; }
-            formulaArr.push('=' + f);
+          if (spilled) {
+            // Spilled formula: single formula at row 0, null for rest
+            const f = emitFormula(astNode, { ...ctx, row: 0 });
+            if (f !== null) {
+              const formulaArr = ['=' + f];
+              for (let r = 1; r < numRows; r++) formulaArr.push(null);
+              formulas = formulaArr;
+            }
+          } else {
+            // Per-row formulas
+            const formulaArr = [];
+            let allOk = true;
+            for (let r = 0; r < numRows; r++) {
+              const rowCtx = { ...ctx, row: r };
+              const f = emitFormula(astNode, rowCtx);
+              if (f === null) { allOk = false; break; }
+              formulaArr.push('=' + f);
+            }
+            if (allOk) formulas = formulaArr;
           }
-
-          if (allOk) formulas = formulaArr;
         }
       }
 

@@ -604,6 +604,16 @@ describe('calque API', () => {
     const r = calque('x = 10\ny = x * 2');
     assert.equal(r.bindings.y, 20);
   });
+
+  it('result.compile() returns workbook', () => {
+    const r = calque.run('Sales {\n  revenue = [100, 200, 300]\n  tax = revenue * 0.15\n}');
+    assert.ok(r.bindings.Sales);
+    const { workbook, warnings } = r.compile();
+    assert.ok(workbook.sheets.length > 0);
+    const sales = workbook.sheets.find(s => s.name === 'Sales');
+    assert.ok(sales.columns.tax.formulas);
+    assert.equal(sales.columns.tax.formulas[0], '=A2*0.15');
+  });
 });
 
 // ═════════════════════════════════════════════════════════════════════
@@ -863,11 +873,11 @@ describe('codegen', () => {
     assert.equal(yCol.formulas[0], '=ROUND(A2,2)');
   });
 
-  it('nested reduction sum(abs(col)) → baked', () => {
-    const { workbook, warnings } = compile('Sales {\n  x = [1, -2, 3]\n  y = sum(abs(x))\n}');
+  it('nested reduction sum(abs(col)) → SUM(ABS(range))', () => {
+    const { workbook } = compile('Sales {\n  x = [1, -2, 3]\n  y = sum(abs(x))\n}');
     const yCol = sheet(workbook, 'Sales').columns.y;
-    assert.ok(!yCol.formulas);
-    assert.ok(warnings.some(w => w.includes('nested reduction')));
+    assert.ok(yCol.formulas);
+    assert.equal(yCol.formulas[0], '=SUM(ABS(A$2:A$4))');
   });
 
   it('baked values are correct arrays', () => {
@@ -881,6 +891,54 @@ describe('codegen', () => {
     const tCol = sheet(workbook, 'Sales').columns.t;
     assert.ok(tCol.formulas);
     assert.equal(tCol.formulas[0], '=tax(A2,0.15)');
+  });
+
+  it('scan → SCAN(init, range, LAMBDA) spilled', () => {
+    const { workbook } = compile('Sales {\n  x = [10, 20, 30]\n  y = scan(x, 0, (acc, v) -> acc + v)\n}');
+    const yCol = sheet(workbook, 'Sales').columns.y;
+    assert.ok(yCol.formulas);
+    assert.equal(yCol.formulas[0], '=SCAN(0,A$2:A$4,LAMBDA(acc,v,acc+v))');
+    // spilled: only first cell has formula
+    assert.equal(yCol.formulas[1], null);
+    assert.equal(yCol.formulas[2], null);
+  });
+
+  it('sort → SORT(range) spilled', () => {
+    const { workbook } = compile('Sales {\n  x = [30, 10, 20]\n  y = sort(x)\n}');
+    const yCol = sheet(workbook, 'Sales').columns.y;
+    assert.ok(yCol.formulas);
+    assert.equal(yCol.formulas[0], '=SORT(A$2:A$4)');
+    assert.equal(yCol.formulas[1], null);
+  });
+
+  it('unique → UNIQUE(range) spilled', () => {
+    const { workbook } = compile('Sales {\n  x = ["a", "b", "a"]\n  y = unique(x)\n}');
+    const yCol = sheet(workbook, 'Sales').columns.y;
+    assert.ok(yCol.formulas);
+    assert.equal(yCol.formulas[0], '=UNIQUE(A$2:A$4)');
+  });
+
+  it('filter col[col > 0] → FILTER(range, range>0) spilled', () => {
+    const { workbook } = compile('Sales {\n  x = [1, -2, 3, -4, 5]\n  y = x[x > 0]\n}');
+    const yCol = sheet(workbook, 'Sales').columns.y;
+    assert.ok(yCol.formulas);
+    assert.equal(yCol.formulas[0], '=FILTER(A$2:A$6,A$2:A$6>0)');
+    // spilled: only first cell has formula
+    assert.equal(yCol.formulas[1], null);
+  });
+
+  it('lookup → XLOOKUP', () => {
+    const { workbook } = compile('Sales {\n  keys = ["a", "b", "c"]\n  vals = [10, 20, 30]\n  result = lookup("b", keys, vals)\n}');
+    const rCol = sheet(workbook, 'Sales').columns.result;
+    assert.ok(rCol.formulas);
+    assert.equal(rCol.formulas[0], '=XLOOKUP("b",A$2:A$4,B$2:B$4)');
+  });
+
+  it('lookup with nearest: "below" → XLOOKUP with match_mode', () => {
+    const { workbook } = compile('Sales {\n  keys = [10, 20, 30]\n  vals = ["a", "b", "c"]\n  result = lookup(25, keys, vals, nearest: "below")\n}');
+    const rCol = sheet(workbook, 'Sales').columns.result;
+    assert.ok(rCol.formulas);
+    assert.equal(rCol.formulas[0], '=XLOOKUP(25,A$2:A$4,B$2:B$4,,-1)');
   });
 });
 
