@@ -1,0 +1,170 @@
+/// auditable
+/// title: atra — character literals & data segments
+/// module: ./ext/atra/index.js ext/atra/index.js
+
+/// md
+# atra — character literals & data segments
+
+atra supports **character literals** (`'A'`, `'\n'`) and **data segments** (`data ptr, len = "text"`). character literals desugar to i32 constants at the lexer level. data segments place UTF-8 bytes into linear memory at compile time and bind two compile-time constants (pointer and length).
+
+/// code
+const { atra } = await load("./ext/atra/index.js");
+
+/// code
+const mem = new WebAssembly.Memory({ initial: 1 });
+
+const wasm = atra({ memory: mem })`
+  ! ── data segments: strings baked into linear memory ──
+  data hello_ptr, hello_len = "Hello, WebAssembly!"
+  data digits_ptr, digits_len = "0123456789ABCDEF"
+
+  ! return data segment pointer and length
+  function get_hello(): i32
+  begin get_hello := hello_ptr end
+
+  function get_hello_len(): i32
+  begin get_hello_len := hello_len end
+
+  ! ── character classification using char literals ──
+
+  function is_lower(ch: i32): i32
+  begin
+    is_lower := if (ch >= 'a' and ch <= 'z') then 1 else 0
+  end
+
+  function is_upper(ch: i32): i32
+  begin
+    is_upper := if (ch >= 'A' and ch <= 'Z') then 1 else 0
+  end
+
+  function is_digit(ch: i32): i32
+  begin
+    is_digit := if (ch >= '0' and ch <= '9') then 1 else 0
+  end
+
+  function is_alpha(ch: i32): i32
+  begin
+    is_alpha := if (is_lower(ch) == 1 or is_upper(ch) == 1) then 1 else 0
+  end
+
+  function to_upper(ch: i32): i32
+  begin
+    to_upper := if (is_lower(ch) == 1) then ch - 'a' + 'A' else ch
+  end
+
+  function to_lower(ch: i32): i32
+  begin
+    to_lower := if (is_upper(ch) == 1) then ch - 'A' + 'a' else ch
+  end
+
+  ! ── ROT13 cipher: rotate letters by 13 positions ──
+
+  function rot13_char(ch: i32): i32
+  var base, shifted: i32
+  begin
+    if (is_upper(ch) == 1) then
+      base := 'A'
+      shifted := (ch - base + 13) - (if ((ch - base + 13) >= 26) then 26 else 0)
+      rot13_char := base + shifted
+    else if (is_lower(ch) == 1) then
+      base := 'a'
+      shifted := (ch - base + 13) - (if ((ch - base + 13) >= 26) then 26 else 0)
+      rot13_char := base + shifted
+    else
+      rot13_char := ch
+    end if
+  end
+
+  ! ── Caesar cipher with arbitrary shift ──
+
+  function caesar_char(ch, shift: i32): i32
+  var base, offset: i32
+  begin
+    if (is_upper(ch) == 1) then
+      base := 'A'
+      offset := (ch - base + shift) - (if ((ch - base + shift) >= 26) then 26 else 0)
+      caesar_char := base + offset
+    else if (is_lower(ch) == 1) then
+      base := 'a'
+      offset := (ch - base + shift) - (if ((ch - base + shift) >= 26) then 26 else 0)
+      caesar_char := base + offset
+    else
+      caesar_char := ch
+    end if
+  end
+
+  ! ── digit value extraction ──
+
+  function digit_value(ch: i32): i32
+  begin
+    if (is_digit(ch) == 1) then
+      digit_value := ch - '0'
+    else if (ch >= 'A' and ch <= 'F') then
+      digit_value := ch - 'A' + 10
+    else if (ch >= 'a' and ch <= 'f') then
+      digit_value := ch - 'a' + 10
+    else
+      digit_value := -1
+    end if
+  end
+`;
+
+/// code
+// read the hello data segment from Wasm memory
+const u8 = new Uint8Array(mem.buffer);
+const dec = new TextDecoder();
+
+const helloPtr = wasm.get_hello();
+const helloLen = wasm.get_hello_len();
+const hello = dec.decode(u8.slice(helloPtr, helloPtr + helloLen));
+
+ui.display(`**data segment** \u2014 baked into Wasm linear memory at compile time:`);
+ui.display(`\`data hello_ptr, hello_len = "Hello, WebAssembly!"\``);
+ui.display(`ptr=${helloPtr}, len=${helloLen} \u2192 "${hello}"`);
+
+/// code
+// character classification with char literal comparisons
+ui.display("**character classification** \u2014 char literals compile to i32 constants:");
+
+const tests = [65, 122, 53, 33, 32, 48, 70, 97];
+const rows = tests.map(code => ({
+  char: JSON.stringify(String.fromCharCode(code)),
+  code,
+  is_lower: wasm.is_lower(code) ? "\u2714" : "",
+  is_upper: wasm.is_upper(code) ? "\u2714" : "",
+  is_digit: wasm.is_digit(code) ? "\u2714" : "",
+  to_upper: String.fromCharCode(wasm.to_upper(code)),
+  to_lower: String.fromCharCode(wasm.to_lower(code))
+}));
+ui.table(rows);
+
+/// code
+// ROT13 and Caesar cipher
+const input = ui.textInput("message", "Hello World");
+const shift = ui.slider("caesar shift", 3, {min: 1, max: 25, step: 1});
+
+function applyCharFn(str, fn) {
+  return [...str].map(ch => String.fromCharCode(fn(ch.charCodeAt(0)))).join('');
+}
+
+const rot13 = applyCharFn(input, ch => wasm.rot13_char(ch));
+const caesar = applyCharFn(input, ch => wasm.caesar_char(ch, shift));
+const caesar_back = applyCharFn(caesar, ch => wasm.caesar_char(ch, 26 - shift));
+
+ui.display(`**ROT13:** "${input}" \u2192 "${rot13}" \u2192 "${applyCharFn(rot13, ch => wasm.rot13_char(ch))}"`);
+ui.display(`**Caesar(${shift}):** "${input}" \u2192 "${caesar}" \u2192 "${caesar_back}"`);
+
+/// code
+// hex digit parsing
+ui.display("**digit_value** \u2014 parse decimal and hex digit characters:");
+
+const hexTests = "0123456789ABCDEFabcdef!".split('');
+const hexRows = hexTests.map(ch => ({
+  char: ch,
+  code: ch.charCodeAt(0),
+  value: wasm.digit_value(ch.charCodeAt(0))
+}));
+ui.table(hexRows);
+
+/// md
+**how it works:** `data ptr, len = "text"` places UTF-8 bytes into Wasm linear memory at compile time and binds two i32 compile-time constants \u2014 no globals, no runtime overhead. character literals like `'A'` and `'\n'` desugar to `i32.const` at the lexer level, so the parser and codegen need zero changes. together they enable idiomatic character-level logic: classification (`is_lower`, `is_digit`), case conversion (`to_upper`), and ciphers (`rot13`, `caesar`) all expressed naturally with char comparisons like `ch >= 'a' and ch <= 'z'`.

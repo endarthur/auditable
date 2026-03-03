@@ -40,6 +40,7 @@ const defs = [
   'example_widgets.txt',
   'example_app_export.txt',
   'example_atra_multi_memory.txt',
+  'example_atra_strings.txt',
 ];
 
 // ── Parser ──

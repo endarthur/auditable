@@ -51,13 +51,35 @@ export function tokenizeAtra(code) {
       tokens.push({ type: 'num', text: code.slice(start, i) });
       continue;
     }
+    // character literal: 'A', '\n'
+    if (code[i] === "'") {
+      const start = i;
+      i++; // skip opening quote
+      if (i < len && code[i] === '\\') { i++; if (i < len) i++; }
+      else if (i < len) i++;
+      if (i < len && code[i] === "'") i++; // skip closing quote
+      tokens.push({ type: 'num', text: code.slice(start, i) });
+      continue;
+    }
+    // string literal: "hello"
+    if (code[i] === '"') {
+      const start = i;
+      i++; // skip opening quote
+      while (i < len && code[i] !== '"') {
+        if (code[i] === '\\') { i++; if (i < len) i++; }
+        else i++;
+      }
+      if (i < len) i++; // skip closing quote
+      tokens.push({ type: 'str', text: code.slice(start, i) });
+      continue;
+    }
     // identifiers / keywords
     if (/[a-zA-Z_]/.test(code[i])) {
       const start = i;
       while (i < len && /[\w.]/.test(code[i])) i++;
       const word = code.slice(start, i);
       const lower = word.toLowerCase();
-      if (ATRA_KEYWORDS.has(lower)) {
+      if (ATRA_KEYWORDS.has(lower) || lower === 'data') {
         tokens.push({ type: 'kw', text: word });
       } else if (ATRA_TYPES.has(lower)) {
         // type names as builtins when followed by (

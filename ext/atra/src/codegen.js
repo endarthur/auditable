@@ -198,6 +198,22 @@ export function codegen(ast, interpValues, userImports) {
   const importedMemories = memories.filter(m => m.imported);
   const localMemories = memories.filter(m => !m.imported);
 
+  // ── Collect data segments ──
+  const dataSegments = [];  // { memIndex, offset, bytes }
+  let dataOffset = 0;
+  const dataConsts = {};    // name → i32 value (compile-time constants)
+  for (const node of ast.body) {
+    if (node.type === 'DataDecl') {
+      const memIdx = node.bank ? memoryIndex[node.bank] : 0;
+      dataConsts[node.ptrName] = dataOffset;
+      dataConsts[node.lenName] = node.bytes.length;
+      dataSegments.push({ memIndex: memIdx, offset: dataOffset, bytes: node.bytes });
+      dataOffset += node.bytes.length;
+      // Align to 4 bytes for next segment
+      dataOffset = (dataOffset + 3) & ~3;
+    }
+  }
+
   // Math builtins: imported from JS Math object. Value = param count.
   const MATH_BUILTINS = { sin: 1, cos: 1, ln: 1, exp: 1, pow: 2, atan2: 2 };
   // Native builtins: map directly to Wasm opcodes, no import needed
@@ -361,13 +377,14 @@ export function codegen(ast, interpValues, userImports) {
   const hasArrays = functions.some(fn =>
     fn.params.some(p => p.isArray || p.layoutType) ||
     fn.locals.some(l => l.layoutType));
-  const hasMemory = memories.length > 0 || hasArrays;
+  const hasDataSegments = dataSegments.length > 0;
+  const hasMemory = memories.length > 0 || hasArrays || hasDataSegments;
   // Legacy single-memory mode: no explicit memory declarations
   const legacyMode = memories.length === 0;
   // Import memory if user explicitly provides it (backward compat — even without arrays)
   const legacyImportMemory = legacyMode && userImports && (userImports.__memory || userImports.__memories);
   // Declare local memory if arrays/layouts used but no import provided
-  const legacyLocalMemory = legacyMode && hasArrays && !legacyImportMemory;
+  const legacyLocalMemory = legacyMode && (hasArrays || hasDataSegments) && !legacyImportMemory;
 
   // ── Emit Wasm binary ──
   // Magic + version
@@ -522,6 +539,28 @@ export function codegen(ast, interpValues, userImports) {
     }
   });
 
+  // Data section (11) — string data placed in linear memory
+  if (dataSegments.length > 0) {
+    w.section(11, s => {
+      s.u32(dataSegments.length);
+      for (const seg of dataSegments) {
+        if (memories.length > 1) {
+          s.u32(0x02);           // flags: active, explicit memory index
+          s.u32(seg.memIndex);   // memory index
+        } else {
+          s.u32(0x00);           // flags: active, memory 0
+        }
+        // offset expression: i32.const <offset>
+        s.byte(OP_I32_CONST);
+        s.s32(seg.offset);
+        s.byte(OP_END);
+        // data bytes
+        s.u32(seg.bytes.length);
+        s.bytes(seg.bytes);
+      }
+    });
+  }
+
   const bytes = w.toUint8Array();
   const table = tableFuncs.length > 0 ? { ...tableSlot } : null;
   const layoutsMeta = Object.keys(layouts).length > 0 ? serializeLayouts() : null;
@@ -540,6 +579,10 @@ export function codegen(ast, interpValues, userImports) {
         s.byte(OP_SIMD_PREFIX); s.u32(SIMD_OPS['v128.const']);
         for (let vi = 0; vi < 16; vi++) s.byte(0);
       }
+      return;
+    }
+    if (node.type === 'Ident' && dataConsts[node.name] !== undefined) {
+      s.byte(OP_I32_CONST); s.s32(dataConsts[node.name]);
       return;
     }
     if (node.type === 'NumberLit') {
@@ -930,6 +973,8 @@ export function codegen(ast, interpValues, userImports) {
         case 'FuncRef': return 'i32';
         case 'Ident': {
           const name = expr.name;
+          // Data segment constants are always i32
+          if (dataConsts[name] !== undefined) return 'i32';
           if (name.includes('.')) {
             const parts = name.split('.');
             const first = parts[0];
@@ -1026,6 +1071,12 @@ export function codegen(ast, interpValues, userImports) {
         }
         case 'Ident': {
           const name = expr.name;
+
+          // Data segment constants (ptr, len)
+          if (dataConsts[name] !== undefined) {
+            bw.byte(OP_I32_CONST); bw.s32(dataConsts[name]);
+            break;
+          }
 
           // Dotted layout access: v.x, v.center.x, Sphere.__size, Sphere.radius
           if (name.includes('.')) {

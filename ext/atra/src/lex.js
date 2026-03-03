@@ -7,7 +7,7 @@
 import { ATRA_KEYWORDS, ATRA_TYPES } from './highlight.js';
 
 export const TOK = {
-  NUM: 'num', ID: 'id', KW: 'kw', OP: 'op', PUNC: 'punc', EOF: 'eof',
+  NUM: 'num', STR: 'str', ID: 'id', KW: 'kw', OP: 'op', PUNC: 'punc', EOF: 'eof',
 };
 
 export function lex(source) {
@@ -42,6 +42,49 @@ export function lex(source) {
       }
       const raw = source.slice(start, i);
       tokens.push({ type: TOK.NUM, value: raw, isFloat, typeSuffix, line: tl, col: tc });
+      continue;
+    }
+    // character literal: 'A', '\n', '\0', etc.
+    if (source[i] === "'") {
+      adv(); // skip opening quote
+      let ch;
+      if (source[i] === '\\') {
+        adv(); // skip backslash
+        const esc = source[i];
+        adv(); // skip escape char
+        const escMap = { n: 10, r: 13, t: 9, '0': 0, '\\': 92, "'": 39 };
+        if (escMap[esc] === undefined) throw new SyntaxError(`Unknown escape \\${esc} at ${tl}:${tc}`);
+        ch = escMap[esc];
+      } else {
+        ch = source[i].codePointAt(0);
+        adv();
+      }
+      if (source[i] !== "'") throw new SyntaxError(`Unterminated char literal at ${tl}:${tc}`);
+      adv(); // skip closing quote
+      tokens.push({ type: TOK.NUM, value: String(ch), isFloat: false, typeSuffix: 'i32', line: tl, col: tc });
+      continue;
+    }
+    // string literal: "hello", "line\n"
+    if (source[i] === '"') {
+      adv(); // skip opening quote
+      const chars = [];
+      while (i < len && source[i] !== '"') {
+        if (source[i] === '\\') {
+          adv();
+          const esc = source[i];
+          const escMap = { n: 10, r: 13, t: 9, '0': 0, '\\': 92, '"': 34 };
+          if (escMap[esc] === undefined) throw new SyntaxError(`Unknown escape \\${esc} at ${line}:${col}`);
+          chars.push(escMap[esc]);
+          adv();
+        } else {
+          const encoded = new TextEncoder().encode(source[i]);
+          for (const b of encoded) chars.push(b);
+          adv();
+        }
+      }
+      if (i >= len) throw new SyntaxError(`Unterminated string literal at ${tl}:${tc}`);
+      adv(); // skip closing quote
+      tokens.push({ type: TOK.STR, value: chars, line: tl, col: tc });
       continue;
     }
     // identifier (dots allowed — namespaces by convention)

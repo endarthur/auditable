@@ -543,3 +543,162 @@ describe('multi-memory', () => {
     assert.equal(get_scratch_size(), 2);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════
+// Character literals
+// ═════════════════════════════════════════════════════════════════════
+
+describe('character literals', () => {
+  it('basic character literal', () => {
+    const { charA } = atra`
+      function charA(): i32
+      begin
+        charA := 'A'
+      end
+    `;
+    assert.strictEqual(charA(), 65);
+  });
+
+  it('escape sequences', () => {
+    const m = atra`
+      function newline(): i32
+      begin
+        newline := '\\n'
+      end
+      function null_char(): i32
+      begin
+        null_char := '\\0'
+      end
+      function backslash(): i32
+      begin
+        backslash := '\\\\'
+      end
+      function single_quote(): i32
+      begin
+        single_quote := '\\''
+      end
+    `;
+    assert.strictEqual(m.newline(), 10);
+    assert.strictEqual(m.null_char(), 0);
+    assert.strictEqual(m.backslash(), 92);
+    assert.strictEqual(m.single_quote(), 39);
+  });
+
+  it('character literal in expression', () => {
+    const { is_newline } = atra`
+      function is_newline(ch: i32): i32
+      begin
+        is_newline := if (ch == '\\n') then 1 else 0
+      end
+    `;
+    assert.strictEqual(is_newline(10), 1);
+    assert.strictEqual(is_newline(65), 0);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// Data segments
+// ═════════════════════════════════════════════════════════════════════
+
+describe('data segments', () => {
+  it('basic data segment', () => {
+    const m = atra`
+      data greeting_ptr, greeting_len = "hello"
+      function ptr(): i32
+      begin
+        ptr := greeting_ptr
+      end
+      function len(): i32
+      begin
+        len := greeting_len
+      end
+    `;
+    assert.strictEqual(m.len(), 5);
+    const mem = new Uint8Array(m.memory.buffer);
+    const ptr = m.ptr();
+    const text = new TextDecoder().decode(mem.slice(ptr, ptr + 5));
+    assert.strictEqual(text, 'hello');
+  });
+
+  it('data segment escape sequences', () => {
+    const m = atra`
+      data msg_ptr, msg_len = "hi\\n"
+      function ptr(): i32
+      begin
+        ptr := msg_ptr
+      end
+      function len(): i32
+      begin
+        len := msg_len
+      end
+    `;
+    assert.strictEqual(m.len(), 3);
+    const mem = new Uint8Array(m.memory.buffer);
+    const ptr = m.ptr();
+    assert.strictEqual(mem[ptr], 104);     // 'h'
+    assert.strictEqual(mem[ptr + 1], 105); // 'i'
+    assert.strictEqual(mem[ptr + 2], 10);  // '\n'
+  });
+
+  it('multiple data segments', () => {
+    const m = atra`
+      data a_ptr, a_len = "abc"
+      data b_ptr, b_len = "xyz"
+      function a_p(): i32
+      begin a_p := a_ptr end
+      function a_l(): i32
+      begin a_l := a_len end
+      function b_p(): i32
+      begin b_p := b_ptr end
+      function b_l(): i32
+      begin b_l := b_len end
+    `;
+    assert.strictEqual(m.a_l(), 3);
+    assert.strictEqual(m.b_l(), 3);
+    // b_ptr should be after a_ptr (aligned to 4 bytes)
+    assert.ok(m.b_p() >= m.a_p() + 3);
+    assert.strictEqual(m.b_p(), 4); // 3 bytes rounded up to 4
+    const mem = new Uint8Array(m.memory.buffer);
+    assert.strictEqual(String.fromCharCode(...mem.slice(m.a_p(), m.a_p() + 3)), 'abc');
+    assert.strictEqual(String.fromCharCode(...mem.slice(m.b_p(), m.b_p() + 3)), 'xyz');
+  });
+
+  it('data segment with bank qualifier', () => {
+    if (!atra.hasMultiMemory) return;
+    const io = new WebAssembly.Memory({ initial: 1 });
+    const m = atra({ memory: { io } })`
+      memory io
+      data msg_ptr, msg_len = io "text"
+      function ptr(): i32
+      begin
+        ptr := msg_ptr
+      end
+      function len(): i32
+      begin
+        len := msg_len
+      end
+    `;
+    assert.strictEqual(m.len(), 4);
+    assert.strictEqual(m.ptr(), 0);
+    const mem = new Uint8Array(io.buffer);
+    assert.strictEqual(String.fromCharCode(...mem.slice(0, 4)), 'text');
+  });
+
+  it('data segment with function using the data', () => {
+    const m = atra`
+      data hello_ptr, hello_len = "Hello"
+      function first_byte(): i32
+      var p: i32
+      begin
+        p := hello_ptr
+        first_byte := p
+      end
+      function length(): i32
+      begin
+        length := hello_len
+      end
+    `;
+    assert.strictEqual(m.length(), 5);
+    assert.strictEqual(m.first_byte(), 0);
+  });
+});

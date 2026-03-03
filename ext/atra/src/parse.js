@@ -41,6 +41,7 @@ export function parse(tokens) {
       else if (at(TOK.KW, 'export')) { pos++; body.push(parseFunction(true)); }
       else if (at(TOK.KW, 'layout')) body.push(parseLayout());
       else if (at(TOK.KW, 'memory')) body.push(parseMemoryDecl());
+      else if (at(TOK.ID, 'data')) body.push(parseDataDecl());
       else throw new SyntaxError(`Unexpected "${cur().value}" at ${cur().line}:${cur().col}`);
     }
     return { type: 'Program', body };
@@ -92,6 +93,21 @@ export function parse(tokens) {
       }
     }
     return { type: 'MemoryDecl', name, pages, maxPages };
+  }
+
+  function parseDataDecl() {
+    eat(TOK.ID, 'data');
+    const ptrName = eat(TOK.ID).value;
+    eat(TOK.PUNC, ',');
+    const lenName = eat(TOK.ID).value;
+    eat(TOK.OP, '=');
+    // optional memory bank qualifier: data p, n = io "text"
+    let bank = null;
+    if (at(TOK.ID) && tokens[pos + 1] && tokens[pos + 1].type === TOK.STR) {
+      bank = eat(TOK.ID).value;
+    }
+    const strTok = eat(TOK.STR);
+    return { type: 'DataDecl', ptrName, lenName, bank, bytes: strTok.value };
   }
 
   // Parse function type signature: function(x: f64, y: f64): f64
