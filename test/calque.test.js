@@ -734,9 +734,13 @@ describe('codegen', () => {
     return codegen(ast, l, result);
   }
 
+  function sheet(workbook, name) {
+    return workbook.sheets.find(s => s.name === name);
+  }
+
   it('revenue * 0.15 → per-cell formulas', () => {
     const { workbook } = compile('Sales {\n  revenue = [100, 200, 300]\n  tax = revenue * 0.15\n}');
-    const taxCol = workbook.sheets.Sales.find(c => c.name === 'tax');
+    const taxCol = sheet(workbook, 'Sales').columns.tax;
     assert.ok(taxCol.formulas);
     assert.equal(taxCol.formulas.length, 3);
     assert.equal(taxCol.formulas[0], '=A2*0.15');
@@ -746,42 +750,42 @@ describe('codegen', () => {
 
   it('revenue - tax → two column refs', () => {
     const { workbook } = compile('Sales {\n  revenue = [100, 200, 300]\n  tax = [10, 20, 30]\n  net = revenue - tax\n}');
-    const netCol = workbook.sheets.Sales.find(c => c.name === 'net');
+    const netCol = sheet(workbook, 'Sales').columns.net;
     assert.ok(netCol.formulas);
     assert.equal(netCol.formulas[0], '=A2-B2');
   });
 
   it('sum(revenue) → SUM with range', () => {
     const { workbook } = compile('Sales {\n  revenue = [100, 200, 300]\n  total = sum(revenue)\n}');
-    const totalCol = workbook.sheets.Sales.find(c => c.name === 'total');
+    const totalCol = sheet(workbook, 'Sales').columns.total;
     assert.ok(totalCol.formulas);
     assert.equal(totalCol.formulas[0], '=SUM(A$2:A$4)');
   });
 
   it('sum(Sales.revenue) → cross-sheet SUM', () => {
     const { workbook } = compile('Sales {\n  revenue = [100, 200, 300]\n}\nSummary {\n  total = sum(Sales.revenue)\n}');
-    const totalCol = workbook.sheets.Summary.find(c => c.name === 'total');
+    const totalCol = sheet(workbook, 'Summary').columns.total;
     assert.ok(totalCol.formulas);
     assert.equal(totalCol.formulas[0], '=SUM(Sales!A$2:A$4)');
   });
 
   it('string & concatenation', () => {
     const { workbook } = compile('Sales {\n  a = ["x","y"]\n  b = ["1","2"]\n  c = a & b\n}');
-    const cCol = workbook.sheets.Sales.find(c => c.name === 'c');
+    const cCol = sheet(workbook, 'Sales').columns.c;
     assert.ok(cCol.formulas);
     assert.equal(cCol.formulas[0], '=A2&B2');
   });
 
   it('if x > 0 then "big" else "small" → IF()', () => {
     const { workbook } = compile('Sales {\n  x = [10, -5]\n  y = if x > 0 then "big" else "small"\n}');
-    const yCol = workbook.sheets.Sales.find(c => c.name === 'y');
+    const yCol = sheet(workbook, 'Sales').columns.y;
     assert.ok(yCol.formulas);
     assert.equal(yCol.formulas[0], '=IF(A2>0,"big","small")');
   });
 
   it('== maps to = in formula', () => {
     const { workbook } = compile('Sales {\n  x = [1, 2]\n  y = [1, 3]\n  z = if x == y then 1 else 0\n}');
-    const zCol = workbook.sheets.Sales.find(c => c.name === 'z');
+    const zCol = sheet(workbook, 'Sales').columns.z;
     assert.ok(zCol.formulas);
     assert.ok(zCol.formulas[0].includes('='));
     assert.equal(zCol.formulas[0], '=IF(A2=B2,1,0)');
@@ -789,17 +793,17 @@ describe('codegen', () => {
 
   it('/= maps to <> in formula', () => {
     const { workbook } = compile('Sales {\n  x = [1, 2]\n  y = [1, 3]\n  z = if x /= y then 1 else 0\n}');
-    const zCol = workbook.sheets.Sales.find(c => c.name === 'z');
+    const zCol = sheet(workbook, 'Sales').columns.z;
     assert.ok(zCol.formulas);
     assert.equal(zCol.formulas[0], '=IF(A2<>B2,1,0)');
   });
 
   it('a and b → AND(), not a → NOT()', () => {
     const { workbook } = compile('Sales {\n  a = [true, false]\n  b = [true, true]\n  c = a and b\n  d = not a\n}');
-    const cCol = workbook.sheets.Sales.find(c => c.name === 'c');
+    const cCol = sheet(workbook, 'Sales').columns.c;
     assert.ok(cCol.formulas);
     assert.equal(cCol.formulas[0], '=AND(A2,B2)');
-    const dCol = workbook.sheets.Sales.find(c => c.name === 'd');
+    const dCol = sheet(workbook, 'Sales').columns.d;
     assert.ok(dCol.formulas);
     assert.equal(dCol.formulas[0], '=NOT(A2)');
   });
@@ -814,21 +818,21 @@ describe('codegen', () => {
 
   it('array literal → baked (no formula)', () => {
     const { workbook, warnings } = compile('Sales {\n  data = [1, 2, 3]\n}');
-    const dataCol = workbook.sheets.Sales.find(c => c.name === 'data');
+    const dataCol = sheet(workbook, 'Sales').columns.data;
     assert.ok(!dataCol.formulas);
     assert.ok(warnings.some(w => w.includes('array literal')));
   });
 
   it('range → baked + warning', () => {
     const { workbook, warnings } = compile('Sales {\n  nums = 1..10\n}');
-    const numsCol = workbook.sheets.Sales.find(c => c.name === 'nums');
+    const numsCol = sheet(workbook, 'Sales').columns.nums;
     assert.ok(!numsCol.formulas);
     assert.ok(warnings.some(w => w.includes('range')));
   });
 
   it('scalar ref → absolute $D$2', () => {
     const { workbook } = compile('Sales {\n  revenue = [100, 200, 300]\n  rate = 0.15\n  tax = revenue * rate\n}');
-    const taxCol = workbook.sheets.Sales.find(c => c.name === 'tax');
+    const taxCol = sheet(workbook, 'Sales').columns.tax;
     assert.ok(taxCol.formulas);
     // rate is col B (index 1), scalar → $B$2
     assert.equal(taxCol.formulas[0], '=A2*$B$2');
@@ -837,7 +841,7 @@ describe('codegen', () => {
 
   it('column ref → relative B2, B3', () => {
     const { workbook } = compile('Sales {\n  a = [1, 2, 3]\n  b = a + 1\n}');
-    const bCol = workbook.sheets.Sales.find(c => c.name === 'b');
+    const bCol = sheet(workbook, 'Sales').columns.b;
     assert.ok(bCol.formulas);
     assert.equal(bCol.formulas[0], '=A2+1');
     assert.equal(bCol.formulas[1], '=A3+1');
@@ -846,7 +850,7 @@ describe('codegen', () => {
 
   it('abs() is pointwise, not reduction', () => {
     const { workbook } = compile('Sales {\n  x = [-1, -2, 3]\n  y = abs(x)\n}');
-    const yCol = workbook.sheets.Sales.find(c => c.name === 'y');
+    const yCol = sheet(workbook, 'Sales').columns.y;
     assert.ok(yCol.formulas);
     assert.equal(yCol.formulas[0], '=ABS(A2)');
     assert.equal(yCol.formulas[1], '=ABS(A3)');
@@ -854,28 +858,27 @@ describe('codegen', () => {
 
   it('round(x, 2) → ROUND(A2,2)', () => {
     const { workbook } = compile('Sales {\n  x = [3.14159, 2.71828]\n  y = round(x, 2)\n}');
-    const yCol = workbook.sheets.Sales.find(c => c.name === 'y');
+    const yCol = sheet(workbook, 'Sales').columns.y;
     assert.ok(yCol.formulas);
     assert.equal(yCol.formulas[0], '=ROUND(A2,2)');
   });
 
   it('nested reduction sum(abs(col)) → baked', () => {
     const { workbook, warnings } = compile('Sales {\n  x = [1, -2, 3]\n  y = sum(abs(x))\n}');
-    const yCol = workbook.sheets.Sales.find(c => c.name === 'y');
+    const yCol = sheet(workbook, 'Sales').columns.y;
     assert.ok(!yCol.formulas);
     assert.ok(warnings.some(w => w.includes('nested reduction')));
   });
 
   it('baked values are correct arrays', () => {
     const { workbook } = compile('Sales {\n  data = [10, 20, 30]\n}');
-    const dataCol = workbook.sheets.Sales.find(c => c.name === 'data');
-    assert.ok(dataCol.values);
-    assert.deepEqual(Array.from(dataCol.values), [10, 20, 30]);
+    const dataCol = sheet(workbook, 'Sales').columns.data;
+    assert.deepEqual(Array.from(dataCol), [10, 20, 30]);
   });
 
   it('UDF call in formula', () => {
     const { workbook } = compile('tax(a, r) = a * r\nSales {\n  rev = [100, 200]\n  t = tax(rev, 0.15)\n}');
-    const tCol = workbook.sheets.Sales.find(c => c.name === 't');
+    const tCol = sheet(workbook, 'Sales').columns.t;
     assert.ok(tCol.formulas);
     assert.equal(tCol.formulas[0], '=tax(A2,0.15)');
   });
@@ -886,6 +889,10 @@ describe('codegen', () => {
 // ═════════════════════════════════════════════════════════════════════
 
 describe('calque.compile', () => {
+  function sheet(workbook, name) {
+    return workbook.sheets.find(s => s.name === name);
+  }
+
   it('returns workbook structure', () => {
     const { workbook, warnings, result } = calque.compile(`
       Sales {
@@ -895,7 +902,7 @@ describe('calque.compile', () => {
         net = revenue - tax
       }
     `);
-    assert.ok(workbook.sheets.Sales);
+    assert.ok(sheet(workbook, 'Sales'));
     assert.ok(result.bindings.Sales);
     assert.ok(Array.isArray(warnings));
   });
@@ -907,10 +914,11 @@ describe('calque.compile', () => {
         revenue = [100, 200]
       }
     `);
-    assert.ok(workbook.sheets.Sales);
-    assert.equal(workbook.sheets.Sales.length, 2);
-    assert.equal(workbook.sheets.Sales[0].name, 'name');
-    assert.equal(workbook.sheets.Sales[1].name, 'revenue');
+    const sales = sheet(workbook, 'Sales');
+    assert.ok(sales);
+    assert.equal(Object.keys(sales.columns).length, 2);
+    assert.ok('name' in sales.columns);
+    assert.ok('revenue' in sales.columns);
   });
 
   it('formula columns have .formulas arrays', () => {
@@ -920,7 +928,7 @@ describe('calque.compile', () => {
         tax = revenue * 0.15
       }
     `);
-    const taxCol = workbook.sheets.Sales.find(c => c.name === 'tax');
+    const taxCol = sheet(workbook, 'Sales').columns.tax;
     assert.ok(Array.isArray(taxCol.formulas));
     assert.equal(taxCol.formulas.length, 3);
   });
@@ -931,9 +939,10 @@ describe('calque.compile', () => {
         data = [10, 20, 30]
       }
     `);
-    const dataCol = workbook.sheets.Sales.find(c => c.name === 'data');
-    assert.ok(dataCol.values);
+    const dataCol = sheet(workbook, 'Sales').columns.data;
+    assert.ok(dataCol);
     assert.ok(!dataCol.formulas);
+    assert.deepEqual(Array.from(dataCol), [10, 20, 30]);
   });
 
   it('definedNames populated for FuncDefs', () => {

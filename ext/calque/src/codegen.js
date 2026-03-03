@@ -308,7 +308,7 @@ function emitLambda(funcDef, ctx) {
 
 export function codegen(ast, layoutResult, evalResult, opts) {
   const warnings = [];
-  const workbook = { sheets: {}, definedNames: [] };
+  const workbook = { sheets: [], definedNames: [] };
 
   // Process UDFs → definedNames
   for (const func of layoutResult.functions) {
@@ -325,7 +325,7 @@ export function codegen(ast, layoutResult, evalResult, opts) {
   for (const [sheetName, sheetLayout] of Object.entries(layoutResult.sheets)) {
     const sheetData = evalResult.sheets[sheetName] || null;
     const globalBindings = evalResult.bindings;
-    const columns = [];
+    const columns = {};
 
     for (const [bindingName, info] of Object.entries(sheetLayout.bindings)) {
       // Get evaluated value
@@ -373,7 +373,7 @@ export function codegen(ast, layoutResult, evalResult, opts) {
       if (formulas) {
         // Formulaic column
         const values = bakeValues(val, info);
-        columns.push({ name: bindingName, values, formulas });
+        columns[bindingName] = { values, formulas };
       } else {
         // Baked column
         if (bakeReason) {
@@ -381,12 +381,11 @@ export function codegen(ast, layoutResult, evalResult, opts) {
         } else if (astNode) {
           warnings.push(`${sheetName}.${bindingName}: baked — could not emit formula`);
         }
-        const values = bakeValues(val, info);
-        columns.push({ name: bindingName, values });
+        columns[bindingName] = bakeValues(val, info);
       }
     }
 
-    workbook.sheets[sheetName] = columns;
+    workbook.sheets.push({ name: sheetName, columns });
   }
 
   return { workbook, warnings };

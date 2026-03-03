@@ -2182,7 +2182,7 @@ function emitLambda(funcDef, ctx) {
 
 function codegen(ast, layoutResult, evalResult, opts) {
   const warnings = [];
-  const workbook = { sheets: {}, definedNames: [] };
+  const workbook = { sheets: [], definedNames: [] };
 
   // Process UDFs → definedNames
   for (const func of layoutResult.functions) {
@@ -2199,7 +2199,7 @@ function codegen(ast, layoutResult, evalResult, opts) {
   for (const [sheetName, sheetLayout] of Object.entries(layoutResult.sheets)) {
     const sheetData = evalResult.sheets[sheetName] || null;
     const globalBindings = evalResult.bindings;
-    const columns = [];
+    const columns = {};
 
     for (const [bindingName, info] of Object.entries(sheetLayout.bindings)) {
       // Get evaluated value
@@ -2247,7 +2247,7 @@ function codegen(ast, layoutResult, evalResult, opts) {
       if (formulas) {
         // Formulaic column
         const values = bakeValues(val, info);
-        columns.push({ name: bindingName, values, formulas });
+        columns[bindingName] = { values, formulas };
       } else {
         // Baked column
         if (bakeReason) {
@@ -2255,12 +2255,11 @@ function codegen(ast, layoutResult, evalResult, opts) {
         } else if (astNode) {
           warnings.push(`${sheetName}.${bindingName}: baked — could not emit formula`);
         }
-        const values = bakeValues(val, info);
-        columns.push({ name: bindingName, values });
+        columns[bindingName] = bakeValues(val, info);
       }
     }
 
-    workbook.sheets[sheetName] = columns;
+    workbook.sheets.push({ name: sheetName, columns });
   }
 
   return { workbook, warnings };
@@ -2287,6 +2286,170 @@ function findBindingAST(ast, sheetName, bindingName) {
   return null;
 }
 
+// -- grid.js --
+
+// Grid renderer — calque result → DOM table display
+//
+// Takes a calque.run() result, renders each sheet as a <table>.
+// Multiple sheets get tab buttons to switch between them.
+
+function grid(result) {
+  const root = document.createElement('div');
+
+  // Collect sheet tables
+  const sections = [];
+  for (const [name, data] of Object.entries(result.sheets)) {
+    sections.push({ name, table: data.table });
+  }
+
+  // Bare bindings (not in any sheet block)
+  const bareKeys = [];
+  for (const [k, v] of Object.entries(result.bindings)) {
+    if (v && v.__table) continue; // sheet table reference
+    if (typeof v === 'function') continue;
+    bareKeys.push(k);
+  }
+  if (bareKeys.length > 0) {
+    sections.push({ name: 'Bindings', bare: bareKeys, bindings: result.bindings });
+  }
+
+  if (sections.length === 0) {
+    root.textContent = '(no data)';
+    return root;
+  }
+
+  // Render each section's DOM
+  const panels = sections.map(s => s.bare ? renderBare(s) : renderTable(s.table));
+
+  if (sections.length === 1) {
+    root.appendChild(panels[0]);
+    return root;
+  }
+
+  // Tab bar for multiple sections
+  const tabBar = document.createElement('div');
+  tabBar.style.cssText = 'display:flex;gap:0;margin-bottom:4px;';
+  const btns = [];
+
+  for (let i = 0; i < sections.length; i++) {
+    const btn = document.createElement('button');
+    btn.textContent = sections[i].name;
+    btn.style.cssText = 'padding:3px 10px;border:1px solid #555;background:#1a1a1a;color:#aaa;cursor:pointer;font:inherit;font-size:0.85em;';
+    if (i === 0) btn.style.borderRadius = '3px 0 0 3px';
+    else if (i === sections.length - 1) btn.style.borderRadius = '0 3px 3px 0';
+    else btn.style.borderRadius = '0';
+    btn.onclick = () => show(i);
+    tabBar.appendChild(btn);
+    btns.push(btn);
+  }
+
+  const content = document.createElement('div');
+  root.appendChild(tabBar);
+  root.appendChild(content);
+
+  function show(idx) {
+    content.replaceChildren(panels[idx]);
+    for (let i = 0; i < btns.length; i++) {
+      btns[i].style.background = i === idx ? '#2a2a2a' : '#1a1a1a';
+      btns[i].style.color = i === idx ? '#c89b3c' : '#aaa';
+      btns[i].style.borderBottomColor = i === idx ? '#2a2a2a' : '#555';
+    }
+  }
+  show(0);
+
+  return root;
+}
+
+function fmtCell(v) {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'number') return Number.isInteger(v) ? String(v) : v.toFixed(2);
+  if (typeof v === 'boolean') return v ? 'true' : 'false';
+  return String(v);
+}
+
+function isNum(v) {
+  return typeof v === 'number';
+}
+
+function renderTable(table) {
+  const t = document.createElement('table');
+  t.style.cssText = 'border-collapse:collapse;font-size:0.9em;';
+
+  // Header
+  const thead = document.createElement('thead');
+  const hr = document.createElement('tr');
+  for (const h of table.headers) {
+    const th = document.createElement('th');
+    th.textContent = h;
+    th.style.cssText = 'padding:3px 8px;border-bottom:1px solid #555;font-weight:600;text-align:left;';
+    hr.appendChild(th);
+  }
+  thead.appendChild(hr);
+  t.appendChild(thead);
+
+  // Body — render at least 1 row for scalar-only sheets
+  const tbody = document.createElement('tbody');
+  const rowCount = table.rows || (table.headers.length > 0 ? 1 : 0);
+  for (let r = 0; r < rowCount; r++) {
+    const tr = document.createElement('tr');
+    for (const h of table.headers) {
+      const td = document.createElement('td');
+      const col = table.columns[h];
+      const v = (Array.isArray(col) || ArrayBuffer.isView(col)) ? col[r] : col;
+      td.textContent = fmtCell(v);
+      td.style.cssText = 'padding:2px 8px;border-bottom:1px solid #333;';
+      if (isNum(v)) td.style.textAlign = 'right';
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  t.appendChild(tbody);
+
+  return t;
+}
+
+function renderBare(section) {
+  const t = document.createElement('table');
+  t.style.cssText = 'border-collapse:collapse;font-size:0.9em;';
+
+  const thead = document.createElement('thead');
+  const hr = document.createElement('tr');
+  for (const h of ['name', 'value']) {
+    const th = document.createElement('th');
+    th.textContent = h;
+    th.style.cssText = 'padding:3px 8px;border-bottom:1px solid #555;font-weight:600;text-align:left;';
+    hr.appendChild(th);
+  }
+  thead.appendChild(hr);
+  t.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  for (const k of section.bare) {
+    const v = section.bindings[k];
+    const tr = document.createElement('tr');
+
+    const tdName = document.createElement('td');
+    tdName.textContent = k;
+    tdName.style.cssText = 'padding:2px 8px;border-bottom:1px solid #333;';
+    tr.appendChild(tdName);
+
+    const tdVal = document.createElement('td');
+    if (Array.isArray(v) || ArrayBuffer.isView(v)) {
+      tdVal.textContent = Array.from(v).map(fmtCell).join(', ');
+    } else {
+      tdVal.textContent = fmtCell(v);
+    }
+    tdVal.style.cssText = 'padding:2px 8px;border-bottom:1px solid #333;';
+    if (isNum(v)) tdVal.style.textAlign = 'right';
+    tr.appendChild(tdVal);
+
+    tbody.appendChild(tr);
+  }
+  t.appendChild(tbody);
+
+  return t;
+}
+
 // -- api.js --
 
 // Public API — tagged template, .run, .parse, .lex, self-registration
@@ -2300,27 +2463,36 @@ function findBindingAST(ast, sheetName, bindingName) {
 
 
 
-function calque(stringsOrSource, ...values) {
-  // Tagged template: calque`source`
+
+function toSource(stringsOrSource, values) {
   if (Array.isArray(stringsOrSource) || (stringsOrSource && stringsOrSource.raw)) {
     let source = stringsOrSource[0];
     for (let i = 0; i < values.length; i++) {
       source += String(values[i]);
       source += stringsOrSource[i + 1];
     }
-    return calque.run(source);
+    return source;
   }
-  // Direct call: calque(source)
-  if (typeof stringsOrSource === 'string') {
-    return calque.run(stringsOrSource);
-  }
+  if (typeof stringsOrSource === 'string') return stringsOrSource;
+  return null;
+}
+
+function calque(stringsOrSource, ...values) {
+  const source = toSource(stringsOrSource, values);
+  if (source !== null) return calque.run(source);
   throw new Error('calque: expected string or tagged template');
 }
 
 calque.run = function(source) {
   const tokens = lex(source);
   const ast = parse(tokens);
-  return evaluate(ast);
+  const result = evaluate(ast);
+  result.compile = function() {
+    const layoutResult = layout(ast, result);
+    const { workbook, warnings } = codegen(ast, layoutResult, result);
+    return { workbook, warnings };
+  };
+  return result;
 };
 
 calque.parse = function(source) {
@@ -2332,13 +2504,16 @@ calque.lex = function(source) {
   return lex(source);
 };
 
-calque.compile = function(source, opts) {
-  const tokens = lex(source);
-  const ast = parse(tokens);
-  const result = evaluate(ast);
-  const layoutResult = layout(ast, result);
-  const { workbook, warnings } = codegen(ast, layoutResult, result, opts);
+calque.compile = function(stringsOrSource, ...values) {
+  const source = toSource(stringsOrSource, values);
+  if (source === null) throw new Error('calque.compile: expected string or tagged template');
+  const result = calque.run(source);
+  const { workbook, warnings } = result.compile();
   return { workbook, warnings, result };
+};
+
+calque.grid = function(result) {
+  return grid(result);
 };
 
 // Internals for testing
@@ -2347,6 +2522,7 @@ calque._parse = parse;
 calque._evaluate = evaluate;
 calque._layout = layout;
 calque._codegen = codegen;
+calque._grid = grid;
 calque._tokenize = tokenizeCalque;
 calque._stdlib = stdlib;
 

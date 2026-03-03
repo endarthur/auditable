@@ -6,4 +6,5 @@ import './stdlib.js';
 import './eval.js';
 import './layout.js';
 import './codegen.js';
+import './grid.js';
 export { calque } from './api.js';

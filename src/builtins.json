@@ -27,6 +27,18 @@
     "sig": "ui.textInput(label, default?, {onInput,onChange}?)",
     "desc": "text field \u2014 reactive, or callback via onInput/onChange"
   },
+  "ui.download": {
+    "sig": "ui.download(label, data, filename, {type}?)",
+    "desc": "download button \u2014 data: Blob/ArrayBuffer/Uint8Array/string/object"
+  },
+  "ui.upload": {
+    "sig": "ui.upload(label, {accept, as, onChange}?)",
+    "desc": "file picker \u2014 returns {name, data, size, type} or null"
+  },
+  "ui.drop": {
+    "sig": "ui.drop(label, {accept, as, onChange}?)",
+    "desc": "drop zone + file picker \u2014 returns {name, data, size, type} or null"
+  },
   "std.csv": {
     "sig": "std.csv(text, {separator?, typed?}?)",
     "desc": "parse CSV text to array of objects"

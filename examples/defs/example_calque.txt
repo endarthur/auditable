@@ -1,39 +1,21 @@
 /// auditable
 /// title: calque — spreadsheet language
 /// module: ./ext/calque/index.js ext/calque/index.js
+/// module: ./ext/sheet/index.js ext/sheet/index.js
 
 /// md
 # calque — spreadsheet language
 
-a minimal, array-oriented language for spreadsheet computations. calque is a structural translation — human-readable expressions that will compile 1:1 to xlsx formulas. this example shows the **Phase 1 evaluator**: parsing and computing typed arrays in the browser.
+a minimal, array-oriented language for spreadsheet computations. calque expressions compile 1:1 to xlsx formulas. this example shows the full pipeline: evaluate, display with `calque.grid()`, and export to xlsx via `sheet.write()`.
 
 /// code
 const { calque } = await load("./ext/calque/index.js");
-
-/// md
-## basic expressions
-
-bindings, arrays, broadcasting, and reductions.
-
-/// code
-const basics = calque`
-  x = [1, 2, 3, 4, 5]
-  doubled = x * 2
-  total = sum(x)
-  avg = mean(x)
-`;
-
-ui.table([
-  { name: "x", value: Array.from(basics.bindings.x).join(", ") },
-  { name: "doubled", value: Array.from(basics.bindings.doubled).join(", ") },
-  { name: "total", value: basics.bindings.total },
-  { name: "avg", value: basics.bindings.avg },
-]);
+const { sheet } = await load("./ext/sheet/index.js");
 
 /// md
 ## sheet blocks and cross-references
 
-sheet blocks group related bindings. cross-sheet references use dot notation — `Sales.revenue` in the `Summary` block. in Phase 2, each sheet block becomes a separate xlsx sheet.
+sheet blocks group related columns. cross-sheet references use dot notation — `Sales.revenue` in the `Summary` block. each sheet block becomes a separate xlsx sheet.
 
 /// code
 const report = calque`
@@ -52,21 +34,59 @@ const report = calque`
   }
 `;
 
-// display Sales table
-const sales = report.bindings.Sales;
-const salesRows = [];
-for (let i = 0; i < sales.rows; i++) {
-  const row = {};
-  for (const h of sales.headers) {
-    const v = sales.columns[h][i];
-    row[h] = typeof v === "number" ? (Number.isInteger(v) ? v : +v.toFixed(2)) : v;
-  }
-  salesRows.push(row);
-}
-ui.table(salesRows);
+ui.display(calque.grid(report));
 
-const s = report.bindings.Summary;
-ui.display(`grand total: ${s.columns.grand} | avg: ${s.columns.avg} | headcount: ${s.columns.headcount} | top: ${s.columns.top}`);
+/// md
+## download as xlsx
+
+`result.compile()` produces a workbook structure that plugs directly into `sheet.write()` — evaluate once, compile from the same result.
+
+/// code
+const { workbook, warnings } = report.compile();
+if (warnings.length) ui.display("warnings: " + warnings.join(", "));
+
+const bytes = await sheet.write(workbook);
+ui.download("\u2b07 download report.xlsx", bytes, "report.xlsx");
+
+/// md
+## reactive computation
+
+calque integrates with auditable's DAG. move the slider to adjust the tax rate — the table re-renders automatically.
+
+/// code
+const rate = ui.slider("tax rate", 15, { min: 0, max: 50 }) / 100;
+
+/// code
+const reactive = calque`
+  Sales {
+    name = ["Alice", "Bob", "Carol", "Dave"]
+    revenue = [42000, 38000, 55000, 29000]
+    tax = revenue * ${rate}
+    net = revenue - tax
+    label = if net > 40000 then "high" else "normal"
+  }
+  Summary {
+    total_tax = sum(Sales.tax)
+    total_net = sum(Sales.net)
+  }
+`;
+
+ui.display(calque.grid(reactive));
+
+/// md
+## basic expressions
+
+bindings, arrays, broadcasting, and reductions.
+
+/// code
+const basics = calque`
+  x = [1, 2, 3, 4, 5]
+  doubled = x * 2
+  total = sum(x)
+  avg = mean(x)
+`;
+
+ui.display(calque.grid(basics));
 
 /// md
 ## ranges, functions, and lambdas
@@ -79,31 +99,21 @@ const math = calque`
   idx = 1..n
   squared = idx * idx
   cubed = idx ^ 3
-
-  tax(amount, rate) = amount * rate
-  prices = [100, 250, 75, 400, 180]
-  vat = tax(prices, 0.2)
-
-  cumsum = scan(prices, 0, (acc, x) -> acc + x)
 `;
 
-const idx = math.bindings.idx;
-const sq = math.bindings.squared;
-const cu = math.bindings.cubed;
-const rangeRows = [];
-for (let i = 0; i < idx.length; i++) {
-  rangeRows.push({ n: idx[i], "n\u00b2": sq[i], "n\u00b3": cu[i] });
-}
-ui.table(rangeRows);
+ui.display(calque.grid(math));
 
-const prices = math.bindings.prices;
-const vat = math.bindings.vat;
-const cum = math.bindings.cumsum;
-const priceRows = [];
-for (let i = 0; i < prices.length; i++) {
-  priceRows.push({ price: prices[i], vat: vat[i], cumulative: cum[i] });
-}
-ui.table(priceRows);
+/// code
+const funcs = calque`
+  tax(amount, rate) = amount * rate
+  Pricing {
+    price = [100, 250, 75, 400, 180]
+    vat = tax(price, 0.2)
+    cumsum = scan(price, 0, (acc, x) -> acc + x)
+  }
+`;
+
+ui.display(calque.grid(funcs));
 
 /// md
 ## conditionals and filtering
@@ -112,19 +122,21 @@ pointwise `if` broadcasts over columns. subscript with a boolean column filters.
 
 /// code
 const cond = calque`
+  Weather {
+    temp = [35, 22, 18, 41, 29, 15, 38]
+    label = if temp > 30 then "hot" else if temp < 20 then "cold" else "mild"
+  }
+`;
+
+ui.display(calque.grid(cond));
+
+/// code
+const filtered = calque`
   temps = [35, 22, 18, 41, 29, 15, 38]
-  label = if temps > 30 then "hot" else if temps < 20 then "cold" else "mild"
   hot_temps = temps[temps > 30]
 `;
 
-const temps = cond.bindings.temps;
-const labels = cond.bindings.label;
-const tempRows = [];
-for (let i = 0; i < temps.length; i++) {
-  tempRows.push({ temp: temps[i], label: labels[i] });
-}
-ui.table(tempRows);
-ui.display(`hot temps (>30): ${Array.from(cond.bindings.hot_temps).join(", ")}`);
+ui.display(calque.grid(filtered));
 
 /// md
 ## string operations
@@ -133,47 +145,13 @@ string concat (`&`), formatting functions, and broadcasting over columns.
 
 /// code
 const strings = calque`
-  names = ["Alice", "Bob", "Carol"]
-  scores = [95.7, 82.3, 91.1]
-  labels = names & ": " & str(round(scores, 0))
-  initials = left(names, 1)
-  lengths = len(names)
+  Text {
+    name = ["Alice", "Bob", "Carol"]
+    score = [95.7, 82.3, 91.1]
+    label = name & ": " & str(round(score, 0))
+    initial = left(name, 1)
+    length = len(name)
+  }
 `;
 
-const nameArr = strings.bindings.names;
-const strRows = [];
-for (let i = 0; i < nameArr.length; i++) {
-  strRows.push({
-    name: nameArr[i],
-    label: strings.bindings.labels[i],
-    initial: strings.bindings.initials[i],
-    len: strings.bindings.lengths[i],
-  });
-}
-ui.table(strRows);
-
-/// md
-## cumulative scan and rolling
-
-`scan` walks a column with an accumulator. `rolling` computes windowed statistics.
-
-/// code
-const timeseries = calque`
-  revenue = [120, 95, 140, 110, 155, 130, 170, 145, 180, 160]
-  cumulative = scan(revenue, 0, (acc, x) -> acc + x)
-  moving_avg = rolling(revenue, 3, mean)
-`;
-
-const rev = timeseries.bindings.revenue;
-const cum = timeseries.bindings.cumulative;
-const ma = timeseries.bindings.moving_avg;
-const tsRows = [];
-for (let i = 0; i < rev.length; i++) {
-  tsRows.push({
-    month: i + 1,
-    revenue: rev[i],
-    cumulative: cum[i],
-    "3m avg": +ma[i].toFixed(1),
-  });
-}
-ui.table(tsRows);
+ui.display(calque.grid(strings));
