@@ -1,0 +1,223 @@
+/// auditable
+/// title: calque — advanced features
+/// module: ./ext/calque/index.js ext/calque/index.js
+/// module: ./ext/sheet/index.js ext/sheet/index.js
+
+/// md
+# calque — advanced features
+
+sort, unique, rolling windows, lookup, import, template strings, nested reductions, and date/math functions.
+
+/// code
+const { calque } = await load("./ext/calque/index.js");
+const { sheet } = await load("./ext/sheet/index.js");
+
+/// md
+## import
+
+`calque({ imports: {...} })` passes external data. the `import` expression loads it as a table — array-of-objects becomes columns automatically.
+
+/// code
+const readings = [
+  { station: "north", temp: 22.4, humidity: 65 },
+  { station: "south", temp: 31.2, humidity: 42 },
+  { station: "east",  temp: 18.7, humidity: 78 },
+  { station: "west",  temp: 27.9, humidity: 55 },
+  { station: "north", temp: 24.1, humidity: 61 },
+  { station: "south", temp: 29.8, humidity: 45 },
+  { station: "east",  temp: 16.3, humidity: 82 },
+  { station: "west",  temp: 26.5, humidity: 58 },
+];
+
+const imported = calque({ imports: { readings } })`
+  Weather = import "readings"
+  Stats {
+    avg_temp = mean(Weather.temp)
+    max_temp = max(Weather.temp)
+    min_temp = min(Weather.temp)
+    spread = max_temp - min_temp
+  }
+`;
+
+ui.display(calque.grid(imported));
+
+/// md
+## table literals
+
+`{ Col: [...], Col2: [...] }` defines an inline table — an alternative to sheet blocks when you want a table as a value rather than a named sheet.
+
+/// code
+const tbl = calque`
+  rates = { bracket: [0, 50000, 100000], rate: [0.10, 0.20, 0.35] }
+  Payroll {
+    salary = [35000, 72000, 120000]
+    tier = lookup(salary, rates.bracket, rates.rate, nearest: "below")
+    tax = salary * tier
+  }
+`;
+
+ui.display(calque.grid(tbl));
+
+/// md
+## sort and unique
+
+`sort(col)` produces a spilled dynamic array (single formula, `SORT` in xlsx). `unique(col)` deduplicates (`UNIQUE` in xlsx).
+
+/// code
+const su = calque`
+  Ordered {
+    values = [42, 17, 85, 23, 91, 56, 31]
+    ranked = sort(values)
+    names = ["banana", "apple", "cherry", "apple", "banana", "cherry", "apple"]
+    distinct = unique(names)
+  }
+`;
+
+ui.display(calque.grid(su));
+
+/// md
+## rolling windows
+
+`rolling(col, window, "op")` computes sliding-window aggregates. string ops (`"mean"`, `"sum"`, `"min"`, `"max"`) emit per-row formulas in xlsx.
+
+/// code
+const roll = calque`
+  Sensors {
+    day = 1..10
+    value = [23, 25, 22, 28, 31, 27, 24, 29, 33, 30]
+    avg3 = rolling(value, 3, "mean")
+    sum3 = rolling(value, 3, "sum")
+    peak3 = rolling(value, 3, "max")
+  }
+`;
+
+ui.display(calque.grid(roll));
+
+/// md
+## lookup
+
+`lookup(needle, keys, values)` does exact match (XLOOKUP). `nearest: "below"` finds the largest key \u2264 needle.
+
+/// code
+const lkp = calque`
+  Thresholds {
+    limit = [0, 20, 30, 40]
+    label = ["cold", "mild", "warm", "hot"]
+  }
+  Readings {
+    temp = [18, 25, 33, 41, 22, 37, 15, 28]
+    category = lookup(temp, Thresholds.limit, Thresholds.label, nearest: "below")
+  }
+`;
+
+ui.display(calque.grid(lkp));
+
+/// md
+## template strings
+
+backtick strings interpolate expressions. add a format code after `:` for number formatting. emits `TEXT(ref, fmt)&...` concatenation in xlsx.
+
+/// code
+const tmpl = calque`
+  Report {
+    name = ["Alice", "Bob", "Carol"]
+    sales = [42150.5, 38920.75, 55300.25]
+    label = \x60\x24{name} sold \x24{sales:$#,##0.00}\x60
+  }
+`;
+
+ui.display(calque.grid(tmpl));
+
+/// md
+## nested reductions and math
+
+pointwise functions inside reductions emit cleanly \u2014 `sum(abs(col))` becomes `SUM(ABS(range))`.
+
+/// code
+const math = calque`
+  Analysis {
+    x = [10, -3, 7, -15, 22, -8]
+    magnitude = abs(x)
+    total_abs = sum(abs(x))
+    root = sqrt(abs(x))
+    residual = x - mean(x)
+    mad = mean(abs(residual))
+  }
+`;
+
+ui.display(calque.grid(math));
+
+/// md
+## date functions
+
+`date(y, m, d)` returns Excel serial numbers. `year`, `month`, `day` extract components. `today()` gives the current date.
+
+/// code
+const dates = calque`
+  Timeline {
+    start = date(2025, 1, 15)
+    mid = date(2025, 6, 30)
+    span = mid - start
+    now = today()
+  }
+`;
+
+ui.display(calque.grid(dates));
+
+/// md
+## error handling
+
+`iferror` replaces errors with fallback values. combined with `if`/`then`/`else` and boolean operators for validation.
+
+/// code
+const errs = calque`
+  Safety {
+    value = [100, 0, 50, 0, 75]
+    ratio = iferror(1000 / value, 0)
+    safe = if ratio > 0 and ratio < 50 then "ok" else "check"
+  }
+`;
+
+ui.display(calque.grid(errs));
+
+/// md
+## scan with lambda
+
+`scan(col, init, (acc, x) -> expr)` produces a running accumulation. emits `SCAN(init, range, LAMBDA(...))` in xlsx.
+
+/// code
+const scanned = calque`
+  Cumulative {
+    revenue = [1200, 800, 1500, 950, 1100]
+    running = scan(revenue, 0, (acc, x) -> acc + x)
+    running_max = scan(revenue, 0, (acc, x) -> if x > acc then x else acc)
+  }
+`;
+
+ui.display(calque.grid(scanned));
+
+/// md
+## filtering (subscript)
+
+boolean subscripts filter columns. emits `FILTER(range, condition)` as a spilled formula.
+
+/// code
+const filt = calque`
+  scores = [88, 42, 95, 67, 73, 91, 55, 84]
+  passing = scores[scores >= 70]
+  top = scores[scores >= 90]
+`;
+
+ui.display(calque.grid(filt));
+
+/// md
+## compile and download
+
+evaluate once, compile from the same result, download as xlsx.
+
+/// code
+const { workbook, warnings } = roll.compile();
+if (warnings.length) ui.display("warnings: " + warnings.join(", "));
+
+const bytes = await sheet.write(workbook);
+ui.download("\u2b07 download sensors.xlsx", bytes, "sensors.xlsx");

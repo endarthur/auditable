@@ -43,6 +43,7 @@ const defs = [
   'example_atra_strings.txt',
   'example_sheet.txt',
   'example_calque.txt',
+  'example_calque_advanced.txt',
 ];
 
 // ── Parser ──
