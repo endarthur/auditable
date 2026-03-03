@@ -6,6 +6,8 @@ import { lex } from './lex.js';
 import { parse } from './parse.js';
 import { evaluate } from './eval.js';
 import { stdlib } from './stdlib.js';
+import { layout } from './layout.js';
+import { codegen } from './codegen.js';
 import { tokenizeCalque, calqueCompletions, calqueSigHint } from './highlight.js';
 
 export function calque(stringsOrSource, ...values) {
@@ -40,10 +42,21 @@ calque.lex = function(source) {
   return lex(source);
 };
 
+calque.compile = function(source, opts) {
+  const tokens = lex(source);
+  const ast = parse(tokens);
+  const result = evaluate(ast);
+  const layoutResult = layout(ast, result);
+  const { workbook, warnings } = codegen(ast, layoutResult, result, opts);
+  return { workbook, warnings, result };
+};
+
 // Internals for testing
 calque._lex = lex;
 calque._parse = parse;
 calque._evaluate = evaluate;
+calque._layout = layout;
+calque._codegen = codegen;
 calque._tokenize = tokenizeCalque;
 calque._stdlib = stdlib;
 
