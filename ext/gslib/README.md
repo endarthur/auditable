@@ -342,6 +342,74 @@ const result = cokb3d({
 // result.var — Float64Array[nxyz], cokriging variances
 ```
 
+### nscore
+
+Normal score transform. Maps any continuous distribution to standard normal.
+
+```js
+const { nscore } = await load("@atra/gslib");
+const result = nscore({
+  data: [3.2, 1.1, 5.7, 2.4, ...],
+  weights: [1, 1, 2, 1, ...],        // optional, equal weights if omitted
+  trim: { min: 0, max: 100 },        // optional
+});
+// result.scores — Float64Array[nd], normal scores in original data order
+// result.table  — { values, scores }, sorted transform table for backtr
+```
+
+The returned `table` contains the data values and their normal scores sorted in ascending order by value. Pass this directly to `backtr()` for back-transformation.
+
+### backtr
+
+Back-transform from normal scores to original data scale. Typically used after simulation in normal score space (sgsim).
+
+```js
+const { nscore, backtr, sgsim } = await load("@atra/gslib");
+
+// 1. Transform data to normal scores
+const ns = nscore({ data: rawValues });
+
+// 2. Simulate in normal score space
+const engine = sgsim({ grid, variogram, search, data: conditioningData });
+const simScores = engine.run(69069);
+
+// 3. Back-transform to original scale
+const simValues = backtr({
+  scores: simScores,
+  table: ns.table,
+  tails: {
+    lower: { type: 1, param: 0, min: 0 },
+    upper: { type: 1, param: 5, max: 100 },
+  },
+});
+```
+
+Tail options: `type` 1 = linear interpolation, 2 = power model (param = power), 4 = hyperbolic (upper tail only, param = omega exponent). `min`/`max` set extrapolation limits (default: table extremes).
+
+### vmodel
+
+Theoretical variogram model evaluation at regular lag distances. Useful for plotting model curves against experimental variograms from `gamv`.
+
+```js
+const { vmodel } = await load("@atra/gslib");
+const result = vmodel({
+  variogram: {
+    nugget: 0.1,
+    structures: [{ type: "spherical", contribution: 0.9, range: 10 }],
+  },
+  lags: { n: 20, size: 1.0 },
+  directions: [
+    { azimuth: 0, dip: 0 },
+    { azimuth: 90, dip: 0 },
+  ],
+});
+// result.distance    — Float64Array[ndir * nlag], lag distances
+// result.value       — Float64Array[ndir * nlag], gamma(h) values
+// result.correlation — Float64Array[ndir * nlag], rho(h) = C(h)/C(0)
+```
+
+Directions specify the orientation along which to evaluate the model. For isotropic variograms, a single direction suffices. For anisotropic models (structures with `rangeMinor` or `rangeVert`), multiple directions reveal the anisotropy.
+
 ## Configuration reference
 
 Full specification of all config objects accepted by the high-level API. Extracted from `api.js`.
@@ -706,6 +774,97 @@ If `globalCdf` is omitted, it's computed from conditioning data. If no data, uni
 | `primary` | number | 0 |
 | `secondary` | number | 0 |
 
+---
+
+### nscore(opts)
+
+Normal score transform. Returns `{ scores, table }`.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `data` | number[] | yes | — | Raw data values (1D array) |
+| `weights` | number[] | no | equal | Declustering or sampling weights |
+| `trim` | object | no | `{}` | Data trimming limits |
+
+**trim:**
+
+| Field | Type | Default |
+|-------|------|---------|
+| `min` | number | -1e21 |
+| `max` | number | 1e21 |
+
+**Returns:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `scores` | Float64Array[nd] | Normal scores in original data order |
+| `table.values` | Float64Array[nd] | Sorted original values |
+| `table.scores` | Float64Array[nd] | Corresponding normal scores (sorted by value) |
+
+---
+
+### backtr(opts)
+
+Back-transform from normal scores. Returns `Float64Array[n]`.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `scores` | Float64Array\|number[] | yes | — | Normal scores to back-transform |
+| `table` | object | yes | — | Transform table from `nscore().table` |
+| `tails` | object | no | `{}` | Tail extrapolation options |
+
+**table:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `values` | Float64Array | yes | Sorted original data values |
+| `scores` | Float64Array | yes | Corresponding normal scores (sorted) |
+
+**tails:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `lower.type` | number | 1 | 1=linear, 2=power |
+| `lower.param` | number | 0 | Lower tail parameter (power exponent) |
+| `lower.min` | number | table min | Minimum extrapolation limit |
+| `upper.type` | number | 1 | 1=linear, 2=power, 4=hyperbolic |
+| `upper.param` | number | 0 | Upper tail parameter |
+| `upper.max` | number | table max | Maximum extrapolation limit |
+
+---
+
+### vmodel(opts)
+
+Variogram model evaluation. Returns `{ distance, value, correlation }` as Float64Array[ndir * nlag].
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `variogram` | object | yes | — | Variogram model (same as kb2d/kt3d) |
+| `lags` | object | yes | — | Lag specification |
+| `directions` | array | no | `[{ azimuth: 0, dip: 0 }]` | Evaluation directions |
+
+**lags:**
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `n` | number | yes | — | Number of lags |
+| `size` | number | yes | — | Lag spacing |
+
+**directions[]:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `azimuth` | number | 0 | Azimuth angle (degrees, from N) |
+| `dip` | number | 0 | Dip angle (degrees, from horizontal) |
+
+**Returns:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `distance` | Float64Array[ndir * nlag] | Lag distances |
+| `value` | Float64Array[ndir * nlag] | Semivariogram gamma(h) |
+| `correlation` | Float64Array[ndir * nlag] | Correlogram C(h)/C(0) |
+
 ## Testing
 
 ```
@@ -715,3 +874,75 @@ npm test
 Tests compile gslib.atra to Wasm via `bundle()`, instantiate with shared memory, and verify each routine against known values and Fortran behavior.
 
 `test/gslib-validate.js` runs validation against Fortran Gslib90 reference executables for kb2d (4 configs), kt3d (8 configs), and sgsim (20 realizations). The new programs (gamv, declus, ik3d, sisim, cokb3d) are tested via unit tests in `test/gslib.test.js`.
+
+## GSLIB parity roadmap
+
+### Feature gaps in existing routines
+
+Implemented routines that are missing features compared to the original Fortran.
+
+#### atra code gaps (not implemented in Wasm)
+
+| Routine | Missing feature | Impact |
+|---------|----------------|--------|
+| **sgsim** | `itrans` — internal nscore/backtr | Back-transforming 100k+ nodes requires 100k JS→Wasm calls. Array-level `backtr` in atra or internal transform would eliminate crossing overhead. |
+| **sgsim** | `mults` — multiple grid search | No multi-grid acceleration for very large grids. Single-grid search only. |
+| **sgsim** | `varred` — variance reduction factor | Cannot scale kriging variance (used in some post-processing workflows). |
+| **kt3d** | `koption` — jackknife cross-validation | Cannot do leave-one-out validation within kt3d. Must be done externally in JS. |
+| **kt3d** | `itrend` — estimate trend surface itself | Cannot output the drift/trend component separately from the residual. |
+| **beyond** | Power interpolation in middle range | Middle CDF interpolation is always linear (option 1 only). Fortran supports power (option 2). |
+| **beyond** | Global CDF rescaling (option 3) | Cannot rescale indicator CDF to match a target global distribution. |
+| **beyond** | zval→cdfval direction | Only draws values from CDF (cdfval→zval). Cannot compute CDF probability for a given value. |
+| **precision** | f32 truncation in gauinv/gcum | All f64 vs Fortran's mixed precision. Normal scores differ slightly from Fortran output. May matter for bit-reproducibility validation. |
+
+#### API wrapper gaps (atra supports it, api.js doesn't expose it)
+
+| Wrapper | Missing feature | What atra supports |
+|---------|----------------|-------------------|
+| **kt3d** | ktype 2 — SK with locally varying mean | atra accepts `ktype=2` + `ve` array as local mean per data point |
+| **kt3d** | ktype 3 — KT/UK with polynomial drift | atra accepts `ktype=3` + `idrif[9]` flags + optional external drift via `ve` |
+| **sgsim** | ktype 1–4 in internal krige | atra's `krige` supports OK (1), LVM (2), external drift (3), collocated cosim (4). API hardcodes SK (0). |
+| **sgsim** | `sec`, `lvm`, `colocorr` | Secondary variable, locally varying mean grid, collocated correlation — atra accepts them, API zeros them. |
+| **sgsim** | `noct` — octant search | atra supports it, API hardcodes 0. |
+
+### Missing programs
+
+Non-graphical programs from GSLIB 2nd edition (Deutsch & Journel, 1998) not yet implemented. Excludes PostScript plotting programs (histplt, scatplt, pixelplt, probplt, qpplt, locmap, bivplt, vargplt, plotem) and variant SISIM implementations (sisim_gs, sisim_lm).
+
+#### Tier 1 — High priority
+
+| Program | Description | Approach |
+|---------|-------------|----------|
+| **postsim** | Post-process simulation realizations: E-type mean, probability maps, percentiles | New atra subroutine + api.js wrapper |
+| **postik** | Post-process indicator kriging CCDFs: E-type, probability above threshold | Similar to postsim, uses `beyond` |
+| **trans** | Univariate distribution transform (match target CDF) | New atra subroutine, uses sortem/locate/powint |
+
+#### Tier 2 — Medium priority
+
+| Program | Description | Approach |
+|---------|-------------|----------|
+| **lusim** | LU decomposition simulation (full covariance matrix) | Needs Cholesky factorization, O(n^3), small grids only |
+| **gam** | Grid variogram (exploits regular spacing) | Much faster than gamv for gridded data |
+| **varmap** | Variogram map/volume in lag space | 2D/3D anisotropy detection |
+| **scatsmth** | Bivariate scatterplot smoothing | Conditional probabilities for soft kriging calibration |
+
+#### Tier 3 — Lower priority
+
+| Program | Description | Approach |
+|---------|-------------|----------|
+| **histsmth** | Histogram smoothing via simulated annealing | Smooth CDF honoring data statistics |
+| **pfsim** | Probability field simulation | Pre-kriged CDFs + probability field |
+| **gtsim** | Gaussian truncated simulation | Categorical via truncated Gaussian |
+| **sasim** | Simulated annealing simulation | Multiple objective functions |
+| **ellipsim** | Boolean/ellipsoidal object simulation | Object-based, not pixel-based |
+| **bicalib** | Markov/Bayes calibration | Soft indicator calibration from secondary info |
+| **bigaus** | Indicator variograms from biGaussian model | Checking biGaussian assumptions |
+
+#### Skipped
+
+| Program | Reason |
+|---------|--------|
+| **addcoord** | File format utility — JS constructs grid coordinates directly |
+| **rotcoord** | Trivial 2D coordinate rotation |
+| **draw** | Monte Carlo CDF sampling — trivial in JS |
+| **anneal** | Post-process categorical realizations — very specialized |

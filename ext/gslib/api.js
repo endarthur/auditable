@@ -6,6 +6,9 @@
 //   kb2d({ data, grid, variogram, search, discretization?, ktype?, skmean? })
 //   kt3d({ data, grid, variogram, search, discretization?, ktype?, skmean? })
 //   sgsim({ grid, variogram, search, data? }) → { run(seed), dispose() }
+//   nscore({ data, weights?, trim? }) → { scores, table }
+//   backtr({ scores, table, tails }) → Float64Array
+//   vmodel({ variogram, lags, directions? }) → { distance, value, correlation }
 //
 // See ext/gslib/README.md for routine docs, CLAUDE.md for architecture.
 
@@ -1126,4 +1129,152 @@ export function cokb3d(opts) {
     est: readF64(mem, pEST, g.nxyz),
     var: readF64(mem, pESTV, g.nxyz),
   };
+}
+
+// Normal score transform. Returns { scores, table }.
+export function nscore(opts) {
+  const data = opts.data;
+  const nd = data.length;
+  const weights = opts.weights || null;
+  const trim = opts.trim || {};
+  const tmin = trim.min != null ? trim.min : -1e21;
+  const tmax = trim.max != null ? trim.max : 1e21;
+  const iwt = weights ? 1 : 0;
+
+  const mem = new WebAssembly.Memory({ initial: 4 });
+  const lib = instantiate({ memory: mem });
+  const st = { off: 0 };
+
+  const pA = alloc(st, nd), pWT = alloc(st, nd), pTMP = alloc(st, nd);
+  const pVRG = alloc(st, nd);
+  const pXP = alloc(st, 1);
+  const pIERR = alloc(st, 0, 1), pRESULT = alloc(st, 0, 1);
+  const pLT = alloc(st, 0, 64), pUT = alloc(st, 0, 64);
+
+  growMemory(mem, st.off);
+
+  writeF64(mem, pA, data);
+  writeF64(mem, pWT, weights || new Array(nd).fill(0));
+
+  lib.gslib.nscore(nd, pA, pWT, pTMP, pVRG, pXP, pIERR, pRESULT, pLT, pUT, tmin, tmax, iwt);
+
+  if (readI32(mem, pRESULT, 1)[0] !== 0) {
+    throw new Error("nscore failed: no valid data after trimming");
+  }
+
+  const scores = readF64(mem, pVRG, nd);
+  const values = readF64(mem, pA, nd);
+
+  // Build sorted transform table for backtr
+  const idx = new Array(nd);
+  for (let i = 0; i < nd; i++) idx[i] = i;
+  idx.sort((a, b) => values[a] - values[b]);
+
+  const tblValues = new Float64Array(nd);
+  const tblScores = new Float64Array(nd);
+  for (let i = 0; i < nd; i++) {
+    tblValues[i] = values[idx[i]];
+    tblScores[i] = scores[idx[i]];
+  }
+
+  return {
+    scores: new Float64Array(scores),
+    table: { values: tblValues, scores: tblScores },
+  };
+}
+
+// Back-transform from normal scores. Returns Float64Array.
+export function backtr(opts) {
+  const scores = opts.scores;
+  const n = scores.length;
+  const table = opts.table;
+  const nt = table.values.length;
+  const tails = opts.tails || {};
+  const ltail = tails.lower ? (tails.lower.type || 1) : 1;
+  const ltpar = tails.lower ? (tails.lower.param || 0) : 0;
+  const utail = tails.upper ? (tails.upper.type || 1) : 1;
+  const utpar = tails.upper ? (tails.upper.param || 0) : 0;
+  const zmin = tails.lower ? (tails.lower.min != null ? tails.lower.min : table.values[0]) : table.values[0];
+  const zmax = tails.upper ? (tails.upper.max != null ? tails.upper.max : table.values[nt - 1]) : table.values[nt - 1];
+
+  const mem = new WebAssembly.Memory({ initial: 4 });
+  const lib = instantiate({ memory: mem });
+  const st = { off: 0 };
+
+  const pVR = alloc(st, nt), pVRG = alloc(st, nt);
+  const pJ = alloc(st, 0, 1);
+
+  growMemory(mem, st.off);
+
+  writeF64(mem, pVR, table.values);
+  writeF64(mem, pVRG, table.scores);
+
+  const result = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    result[i] = lib.gslib.backtr(scores[i], nt, pVR, pVRG, zmin, zmax, ltail, ltpar, utail, utpar, pJ);
+  }
+
+  return result;
+}
+
+// Variogram model evaluation. Returns { distance, value, correlation }.
+export function vmodel(opts) {
+  const v = _parseVario(opts.variogram);
+  const lags = opts.lags;
+  const nlag = lags.n;
+  const lagsize = lags.size;
+  const dirs = opts.directions || [{ azimuth: 0, dip: 0 }];
+  const ndir = dirs.length;
+  const DEG2RAD = Math.PI / 180;
+
+  const mem = new WebAssembly.Memory({ initial: 4 });
+  const lib = instantiate({ memory: mem });
+  const st = { off: 0 };
+
+  const pIT = alloc(st, 0, v.nst + 4), pCC = alloc(st, v.nst + 4), pAA = alloc(st, v.nst + 4);
+  const pROT = alloc(st, 9 * v.nst);
+  const pCOVRES = alloc(st, 2);
+
+  growMemory(mem, st.off);
+
+  writeI32(mem, pIT, v.its);
+  writeF64(mem, pCC, v.ccs);
+  writeF64(mem, pAA, v.ranges);
+
+  for (let is = 0; is < v.nst; is++) {
+    const anis1 = v.rangeMinors[is] / v.ranges[is];
+    const anis2 = v.rangeVerts[is] / v.ranges[is];
+    lib.gslib.setrot(v.angs[is], v.ang2s[is], v.ang3s[is], anis1, anis2, is, pROT);
+  }
+
+  // compute C(0) = cmax
+  lib.gslib.cova3(0, 0, 0, 0, 0, 0, v.nst, v.c0, pIT, pCC, pAA, 0, pROT, pCOVRES);
+  const cmax = readF64(mem, pCOVRES, 2)[0];
+
+  const total = ndir * nlag;
+  const distance = new Float64Array(total);
+  const value = new Float64Array(total);
+  const correlation = new Float64Array(total);
+
+  for (let id = 0; id < ndir; id++) {
+    const azm = (dirs[id].azimuth || 0) * DEG2RAD;
+    const dip = (dirs[id].dip || 0) * DEG2RAD;
+    // direction unit vector (GSLIB convention: azimuth from N, dip from horizontal)
+    const dx = Math.sin(azm) * Math.cos(dip);
+    const dy = Math.cos(azm) * Math.cos(dip);
+    const dz = -Math.sin(dip);
+
+    for (let k = 0; k < nlag; k++) {
+      const h = (k + 1) * lagsize;
+      const x2 = h * dx, y2 = h * dy, z2 = h * dz;
+      lib.gslib.cova3(0, 0, 0, x2, y2, z2, v.nst, v.c0, pIT, pCC, pAA, 0, pROT, pCOVRES);
+      const cova = readF64(mem, pCOVRES, 2)[1];
+      const idx = id * nlag + k;
+      distance[idx] = h;
+      value[idx] = cmax - cova;
+      correlation[idx] = cmax > 0 ? cova / cmax : 0;
+    }
+  }
+
+  return { distance, value, correlation };
 }
