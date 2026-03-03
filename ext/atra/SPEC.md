@@ -178,10 +178,14 @@ Additional native builtins (single Wasm instructions, zero import cost):
 | `popcnt(x)` | Population count (i32/i64) |
 | `rotl(x, n)` | Rotate left (i32/i64) |
 | `rotr(x, n)` | Rotate right (i32/i64) |
-| `memory_size()` | Current memory size in pages |
-| `memory_grow(n)` | Grow memory by n pages |
-| `memory_copy(dest, src, n)` | Copy n bytes from src to dest (all i32) |
-| `memory_fill(dest, val, n)` | Fill n bytes at dest with val (all i32) |
+| `memory_size()` | Current memory size in pages (memory 0) |
+| `memory_size(bank)` | Memory size of named bank in pages |
+| `memory_grow(n)` | Grow memory 0 by n pages |
+| `memory_grow(bank, n)` | Grow named bank by n pages |
+| `memory_copy(dest, src, n)` | Copy n bytes within memory 0 (all i32) |
+| `memory_copy(dst_bank, src_bank, dest, src, n)` | Copy between named banks |
+| `memory_fill(dest, val, n)` | Fill n bytes at dest in memory 0 (all i32) |
+| `memory_fill(bank, dest, val, n)` | Fill in named bank |
 
 Type conversions use type names as functions: `f64(i)`, `i32(x)`, `f32(x)`, `i64(x)`. No implicit coercion.
 
@@ -854,7 +858,7 @@ This metadata enables JS code to read/write layout-structured memory without har
 
 Wasm linear memory is a flat `ArrayBuffer` shared between JS and atra. Both sides see the same bytes.
 
-### JS host allocates and orchestrates
+### Single memory (default)
 
 ```js
 const memory = new WebAssembly.Memory({ initial: 256 }); // 16MB
@@ -873,6 +877,89 @@ const output = new Float64Array(memory.buffer, 16000, 500);
 ```
 
 No copying. JS writes in, atra computes, JS reads out. Same bytes.
+
+### Multi-memory
+
+The multi-memory proposal (Chrome 120+, Firefox 125+, Edge 120+) provides multiple independent memory banks, each with its own 4 GB i32 address space. Declare named banks with the `memory` keyword:
+
+```
+memory spatial
+memory grades
+memory scratch: 100
+```
+
+- No page count → **imported** memory (JS provides the `WebAssembly.Memory`)
+- With page count → **locally declared** memory (module creates it)
+- With page count + max → locally declared with maximum: `memory big: 100, 1000`
+
+Memory-qualified parameters bind arrays to specific banks:
+
+```
+function get_grade(g: grades array f64; i: i32): f64
+begin
+  get_grade := g[i]
+end
+
+subroutine set_coord(arr: spatial array f64; i: i32; v: f64)
+begin
+  arr[i] := v
+end
+```
+
+The qualifier (`grades`, `spatial`) goes before `array` or `layout` in the type position. The compiler emits load/store instructions with the correct memory index. Parameters without a qualifier target memory 0 (backward compatible).
+
+Layout-typed parameters also accept memory qualifiers:
+
+```
+function getX(v: spatial layout Vec3): f64
+begin
+  getX := v.x
+end
+```
+
+**JS API — named memory imports:**
+
+```js
+const spatial = new WebAssembly.Memory({ initial: 4 });
+const grades  = new WebAssembly.Memory({ initial: 4 });
+
+const wasm = atra({ memory: { spatial, grades } })`
+  memory spatial
+  memory grades
+
+  function get_grade(g: grades array f64; i: i32): f64
+  begin
+    get_grade := g[i]
+  end
+`;
+```
+
+Pass `memory` as an object of named `WebAssembly.Memory` instances. The keys must match the `memory` declaration names in the atra source. Single `WebAssembly.Memory` still works for legacy single-memory mode: `atra({ memory: mem })`.
+
+**Feature detection:**
+
+```js
+atra.hasMultiMemory  // boolean — true if the runtime supports multi-memory
+```
+
+If the source declares >1 memory bank but the Wasm engine doesn't support multi-memory, compilation throws:
+
+```
+Error: Multi-memory not supported in this environment — requires Chrome 120+, Firefox 125+, or Edge 120+
+```
+
+Single memory declarations (or no declarations) work everywhere.
+
+**Memory builtins with bank arguments:**
+
+```
+memory_size(grades)              ! pages in the grades bank
+memory_grow(scratch, 10)         ! grow scratch by 10 pages
+memory_copy(dst, src, d, s, n)   ! copy between banks
+memory_fill(scratch, 0, 0, 1024) ! fill 1024 bytes in scratch
+```
+
+Without bank arguments, all builtins default to memory 0.
 
 ### Memory layout convention
 
@@ -908,7 +995,7 @@ No `free`. JS resets `heap_ptr` between invocations. Arena-style allocation — 
 
 ### Limits
 
-Wasm memory is addressed by `i32`: maximum 4GB. Browsers cap it at ~2-4GB in practice. For numerical kernels (variogram evaluation, kriging solves, single simulation realizations) this is more than enough. Multi-realization workflows use Web Workers, each with their own memory.
+Wasm memory is addressed by `i32`: maximum 4GB per bank. Browsers cap it at ~2-4GB in practice. For single-memory workflows this is more than enough. Multi-memory extends the total addressable space — e.g. 1.2 GB for coordinates, 3 GB for grades, and scratch as needed — all within i32 addressing, no Memory64 required.
 
 ---
 

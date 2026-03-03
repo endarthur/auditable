@@ -177,6 +177,7 @@ the `examples/` directory contains:
 | `example_atra_tour.html` | atra language tour -- syntax and features |
 | `example_atra_v_julia.html` | atra vs Julia -- side-by-side comparison |
 | `example_atra_layouts.html` | atra layouts -- N-body gravity simulation |
+| `example_atra_multi_memory.html` | atra multi-memory -- columnar block model with separate memory banks |
 | `example_alpack.html` | ALPACK -- dense linear algebra in Wasm |
 | `example_alpack_atra.html` | atra + ALPACK -- all-Wasm interpolation pipeline |
 | `example_gslib_kb2d.html` | KB2D -- 2D kriging from GSLIB |

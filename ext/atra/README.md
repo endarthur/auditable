@@ -386,7 +386,9 @@ const app = atra.run(appSource, { ...lib });
 
 ---
 
-## Shared memory
+## Memory
+
+### Single memory
 
 Pass a `WebAssembly.Memory` to enable array parameters. Arrays are typed views into linear memory — `array f64` is a base pointer into a `Float64Array`:
 
@@ -414,6 +416,45 @@ dotProduct(0, 800, 3)       // → 32 (1*4 + 2*5 + 3*6)
 ```
 
 Array parameters are `i32` byte offsets at the Wasm level. 2D indexing uses row-major layout: `arr[i, cols, j]` computes `arr[i * cols + j]`.
+
+### Multi-memory
+
+Multiple independent memory banks (Chrome 120+, Firefox 125+, Edge 120+). Each bank has its own 4 GB address space. Declare named banks with `memory`, then qualify array parameters with the bank name:
+
+```js
+const spatial = new WebAssembly.Memory({ initial: 4 });
+const grades  = new WebAssembly.Memory({ initial: 4 });
+
+const wasm = atra({ memory: { spatial, grades } })`
+  memory spatial
+  memory grades
+
+  subroutine set_grade(g: grades array f64; i: i32; v: f64)
+  begin
+    g[i] := v
+  end
+
+  function get_grade(g: grades array f64; i: i32): f64
+  begin
+    get_grade := g[i]
+  end
+`;
+```
+
+Locally declared memories (with page counts) are created by the module itself:
+
+```js
+const wasm = atra`
+  memory scratch: 100
+
+  subroutine write(arr: scratch array f64; i: i32; v: f64)
+  begin
+    arr[i] := v
+  end
+`;
+```
+
+Feature detection: `atra.hasMultiMemory` is `true` if the runtime supports multi-memory. If >1 bank is declared but the runtime doesn't support it, compilation throws an error.
 
 ---
 
