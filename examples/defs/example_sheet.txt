@@ -1,0 +1,73 @@
+/// auditable
+/// title: spreadsheet IO
+/// module: ./ext/sheet/index.js ext/sheet/index.js
+
+/// md
+# spreadsheet IO
+
+read and write **xlsx** files directly in the browser — no server, no dependencies. `@auditable/sheet` handles the ZIP container, XML parsing, typed columns, formulas, and shared strings.
+
+write a workbook with values and formulas, read it back to verify, and download the result. open the downloaded file in Excel or Google Sheets to see live formulas.
+
+/// code
+const { sheet } = await load("./ext/sheet/index.js");
+
+/// code
+// build a dataset with computed columns
+const names = ["Mercury", "Venus", "Earth", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune"];
+const radius = [2440, 6052, 6371, 3390, 69911, 58232, 25362, 24622]; // km
+const mass   = [0.055, 0.815, 1.0, 0.107, 317.8, 95.16, 14.54, 17.15]; // Earth masses
+const moons  = [0, 0, 1, 2, 95, 146, 28, 16];
+const rings  = [false, false, false, false, true, true, true, true];
+
+// relative density: mass / (radius/earthRadius)^3
+const density = mass.map((m, i) => m / Math.pow(radius[i] / 6371, 3));
+
+const wb = {
+  sheets: [{
+    name: "Planets",
+    columns: {
+      Name: names,
+      Radius: radius,
+      Mass: mass,
+      Density: {
+        values: density,
+        formulas: names.map((_, i) => `=C${i+2}/(B${i+2}/6371)^3`),
+        format: "0.000",
+      },
+      Moons: moons,
+      Rings: rings,
+    },
+  }],
+};
+
+const xlsxBytes = await sheet.write(wb);
+ui.display(`wrote ${(xlsxBytes.length / 1024).toFixed(1)} KB xlsx \u2014 ${names.length} rows, 6 columns (1 with live formulas)`);
+
+/// code
+// round-trip: read the xlsx back into typed columns
+const result = await sheet.read(xlsxBytes);
+const s = result.sheets[0];
+
+// convert columnar data to row-oriented for ui.table()
+const rows = [];
+for (let i = 0; i < s.rows; i++) {
+  const row = {};
+  for (const h of s.headers) {
+    const v = s.columns[h][i];
+    row[h] = typeof v === "number" ? (Number.isInteger(v) ? v : +v.toFixed(4)) : v;
+  }
+  rows.push(row);
+}
+ui.table(rows);
+ui.display(`read back: ${s.headers.length} columns \u2014 types: ${s.headers.map(h => s.columns[h].constructor.name).join(", ")}`);
+
+/// code
+// download
+const blob = new Blob([xlsxBytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+const a = document.createElement("a");
+a.href = URL.createObjectURL(blob);
+a.download = "planets.xlsx";
+a.textContent = "\u2b07 download planets.xlsx";
+a.style.cssText = "color:var(--accent);cursor:pointer";
+ui.display(a);
