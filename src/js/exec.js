@@ -525,6 +525,15 @@ export async function execCell(cell) {
       }
     }
 
+    // @calque — spreadsheet language (dev-mode fallback)
+    if (url === '@calque') {
+      if (!window._importCache[url] && !window._installedModules[url]) {
+        const mod = await import('./ext/calque/index.js');
+        window._importCache[url] = mod;
+        return mod;
+      }
+    }
+
     if (window._importCache[url]) return window._importCache[url];
 
     // binary assets — return blob URL
@@ -589,6 +598,21 @@ export async function execCell(cell) {
     // @sheet — xlsx IO library
     if (url === '@sheet') {
       const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/sheet/index.js';
+      const resp = await fetch(realUrl);
+      if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
+      const source = await resp.text();
+      window._installedModules[url] = { source, cellId: cell.id };
+      syncModules();
+      const blob = new Blob([source], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      const mod = await import(blobUrl);
+      window._importCache[url] = mod;
+      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB)`);
+      return mod;
+    }
+    // @calque — spreadsheet language
+    if (url === '@calque') {
+      const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/calque/index.js';
       const resp = await fetch(realUrl);
       if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
       const source = await resp.text();

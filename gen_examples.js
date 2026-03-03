@@ -42,6 +42,7 @@ const defs = [
   'example_atra_multi_memory.txt',
   'example_atra_strings.txt',
   'example_sheet.txt',
+  'example_calque.txt',
 ];
 
 // ── Parser ──
