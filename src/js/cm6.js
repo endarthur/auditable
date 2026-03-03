@@ -233,6 +233,7 @@ const _tokenTable = {
   punc:  tags.punctuation,
   str:   tags.string,
   id:    tags.variableName,
+  dir:   tags.keyword,
 };
 
 // Convert an auditable tokenizer to a CM6 StreamLanguage

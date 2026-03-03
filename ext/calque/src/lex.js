@@ -9,6 +9,7 @@ import { CALQUE_KEYWORDS, CALQUE_BUILTINS } from './highlight.js';
 export const TOK = {
   NUM: 'num', STR: 'str', TMPL: 'tmpl', ID: 'id', KW: 'kw',
   OP: 'op', RANGE: 'range', PUNC: 'punc', NL: 'nl', EOF: 'eof',
+  DIR: 'dir',
 };
 
 // Tokens that can end a statement (NL emitted after these)
@@ -232,6 +233,17 @@ export function lex(source) {
     if (source[i] === '.') {
       tokens.push({ type: TOK.PUNC, value: '.', line: tl, col: tc });
       adv();
+      continue;
+    }
+
+    // directive: @name
+    if (source[i] === '@') {
+      adv();
+      const ws = i;
+      while (i < len && /[\w]/.test(source[i])) adv();
+      if (i > ws) {
+        tokens.push({ type: TOK.DIR, value: source.slice(ws, i), line: tl, col: tc });
+      }
       continue;
     }
 

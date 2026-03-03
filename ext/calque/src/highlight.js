@@ -96,6 +96,14 @@ export function tokenizeCalque(code) {
       tokens.push({ type: 'str', text: code.slice(start, i) });
       continue;
     }
+    // directive: @name
+    if (code[i] === '@') {
+      const start = i;
+      i++;
+      while (i < len && /[\w]/.test(code[i])) i++;
+      tokens.push({ type: 'dir', text: code.slice(start, i) });
+      continue;
+    }
     // identifiers / keywords
     if (/[a-zA-Z_]/.test(code[i])) {
       const start = i;
@@ -300,11 +308,14 @@ export function calqueSigHint(code, cursor) {
 
 // ── Completions ──
 
+const CALQUE_DIRECTIVES = ['@below', '@right', '@anchor'];
+
 export function calqueCompletions(code, cursor, prefix) {
   if (cursor === undefined) {
     const items = [];
     for (const w of CALQUE_KEYWORDS) items.push({ text: w, kind: 'kw' });
     for (const w of CALQUE_BUILTINS) items.push({ text: w, kind: 'fn' });
+    for (const w of CALQUE_DIRECTIVES) items.push({ text: w, kind: 'dir' });
     return items;
   }
 
@@ -313,6 +324,7 @@ export function calqueCompletions(code, cursor, prefix) {
 
   for (const w of CALQUE_KEYWORDS) items.push({ text: w, kind: 'kw' });
   for (const w of CALQUE_BUILTINS) items.push({ text: w, kind: 'fn' });
+  for (const w of CALQUE_DIRECTIVES) items.push({ text: w, kind: 'dir' });
   for (const f of functions) items.push({ text: f.name, kind: 'fn' });
   for (const v of variables) items.push({ text: v.name, kind: 'var' });
 

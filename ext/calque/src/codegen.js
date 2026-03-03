@@ -25,11 +25,11 @@ function escapeExcelString(s) {
 // ── Function mapping ──
 
 const FUNC_MAP = {
-  sum: 'SUM', mean: 'AVERAGE', count: 'COUNT', min: 'MIN', max: 'MAX',
+  sum: 'SUM', mean: 'AVERAGE', count: 'COUNTA', min: 'MIN', max: 'MAX',
   left: 'LEFT', right: 'RIGHT', mid: 'MID', len: 'LEN', trim: 'TRIM',
   text: 'TEXT', str: 'TEXT', date: 'DATE', year: 'YEAR', month: 'MONTH',
   day: 'DAY', today: 'TODAY', iferror: 'IFERROR', ifna: 'IFNA',
-  round: 'ROUND', abs: 'ABS', floor: 'FLOOR', ceil: 'CEILING',
+  round: 'ROUND', abs: 'ABS', floor: 'FLOOR.MATH', ceil: 'CEILING.MATH',
   sqrt: 'SQRT', log: 'LOG', exp: 'EXP', mod: 'MOD',
   scan: 'SCAN', sort: 'SORT', unique: 'UNIQUE', lookup: 'XLOOKUP',
 };
@@ -501,10 +501,16 @@ export function codegen(ast, layoutResult, evalResult, opts) {
         }
       }
 
+      // Check if this binding has non-default positioning
+      const hasPosition = info.row !== 1;
+
       if (formulas) {
         // Formulaic column
         const values = bakeValues(val, info);
-        columns[bindingName] = { values, formulas };
+        const colObj = { values, formulas };
+        if (hasPosition) { colObj.col = info.col; colObj.row = info.row; }
+        if (info.label !== undefined && info.label !== 'above') colObj.label = info.label;
+        columns[bindingName] = colObj;
       } else {
         // Baked column
         if (bakeReason) {
@@ -512,7 +518,14 @@ export function codegen(ast, layoutResult, evalResult, opts) {
         } else if (astNode) {
           warnings.push(`${sheetName}.${bindingName}: baked — could not emit formula`);
         }
-        columns[bindingName] = bakeValues(val, info);
+        if (hasPosition) {
+          const values = bakeValues(val, info);
+          const colObj = { values, col: info.col, row: info.row };
+          if (info.label !== undefined && info.label !== 'above') colObj.label = info.label;
+          columns[bindingName] = colObj;
+        } else {
+          columns[bindingName] = bakeValues(val, info);
+        }
       }
     }
 

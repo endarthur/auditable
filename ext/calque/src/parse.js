@@ -64,7 +64,28 @@ export function parse(tokens) {
     return { type: 'Program', body };
   }
 
+  function parseDirective() {
+    const name = eat(TOK.DIR).value;
+    let args = [], kwargs = [];
+    if (at(TOK.PUNC, '(')) {
+      pos++; skipNL();
+      if (!at(TOK.PUNC, ')')) {
+        parseArg(args, kwargs);
+        while (tryEat(TOK.PUNC, ',')) { skipNL(); parseArg(args, kwargs); }
+      }
+      skipNL(); eat(TOK.PUNC, ')');
+    }
+    return { name, args, kwargs };
+  }
+
   function parseTopLevel() {
+    // collect directives before binding
+    const directives = [];
+    while (at(TOK.DIR)) {
+      directives.push(parseDirective());
+      skipNL();
+    }
+
     // import binding: name = import "path"
     // sheet block: Name { ... }
     // funcDef: name(params) = expr
@@ -100,7 +121,9 @@ export function parse(tokens) {
     skipNL();
     const expr = parseExpr(0);
     const exported = !name.startsWith('_');
-    return { type: 'Binding', name, expr, exported, line: nameTok.line, col: nameTok.col };
+    const binding = { type: 'Binding', name, expr, exported, line: nameTok.line, col: nameTok.col };
+    if (directives.length) binding.directives = directives;
+    return binding;
   }
 
   function parseSheetBlock(name) {
@@ -108,6 +131,13 @@ export function parse(tokens) {
     skipNL();
     const body = [];
     while (!at(TOK.PUNC, '}') && !at(TOK.EOF)) {
+      // collect directives before binding
+      const directives = [];
+      while (at(TOK.DIR)) {
+        directives.push(parseDirective());
+        skipNL();
+      }
+
       if (!at(TOK.ID)) {
         throw new SyntaxError(`Expected identifier in sheet block, got ${cur().type} '${cur().value}' at ${cur().line}:${cur().col}`);
       }
@@ -126,7 +156,9 @@ export function parse(tokens) {
       skipNL();
       const expr = parseExpr(0);
       const exported = !bindName.startsWith('_');
-      body.push({ type: 'Binding', name: bindName, expr, exported, line: bindTok.line, col: bindTok.col });
+      const binding = { type: 'Binding', name: bindName, expr, exported, line: bindTok.line, col: bindTok.col };
+      if (directives.length) binding.directives = directives;
+      body.push(binding);
       skipNL();
     }
     eat(TOK.PUNC, '}');

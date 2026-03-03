@@ -71,6 +71,26 @@ describe('lex', () => {
     assert.ok(tokens.some(t => t.type === 'nl'));
   });
 
+  it('directive token @below', () => {
+    const tokens = lex('@below');
+    const dirs = tokens.filter(t => t.type === 'dir');
+    assert.equal(dirs.length, 1);
+    assert.equal(dirs[0].value, 'below');
+  });
+
+  it('directive token @anchor with args', () => {
+    const tokens = lex('@anchor(3, 0)');
+    const dirs = tokens.filter(t => t.type === 'dir');
+    assert.equal(dirs.length, 1);
+    assert.equal(dirs[0].value, 'anchor');
+  });
+
+  it('standalone @ skipped', () => {
+    const tokens = lex('@ x');
+    const dirs = tokens.filter(t => t.type === 'dir');
+    assert.equal(dirs.length, 0);
+  });
+
   it('newlines suppressed inside brackets', () => {
     const tokens = lex('[\n1,\n2,\n3\n]');
     // Only a trailing NL after ] is allowed (statement ender); no NL inside brackets
@@ -254,6 +274,50 @@ describe('parse', () => {
   it('null literal', () => {
     const ast = parseStr('x = null');
     assert.equal(ast.body[0].expr.type, 'NullLit');
+  });
+
+  it('directive on binding', () => {
+    const ast = parseStr('@below(revenue)\ntotal = sum(revenue)');
+    assert.equal(ast.body[0].type, 'Binding');
+    assert.equal(ast.body[0].name, 'total');
+    assert.ok(ast.body[0].directives);
+    assert.equal(ast.body[0].directives.length, 1);
+    assert.equal(ast.body[0].directives[0].name, 'below');
+    assert.equal(ast.body[0].directives[0].args[0].name, 'revenue');
+  });
+
+  it('directive with kwargs', () => {
+    const ast = parseStr('@below(revenue, gap: 2)\ntotal = sum(revenue)');
+    const d = ast.body[0].directives[0];
+    assert.equal(d.kwargs.length, 1);
+    assert.equal(d.kwargs[0].name, 'gap');
+    assert.equal(d.kwargs[0].value.value, 2);
+  });
+
+  it('multiple directives on binding', () => {
+    const ast = parseStr('@below(a)\n@right(b)\nx = 1');
+    assert.equal(ast.body[0].directives.length, 2);
+  });
+
+  it('directive inside sheet block', () => {
+    const ast = parseStr('S {\n  a = [1,2]\n  @below(a)\n  total = sum(a)\n}');
+    assert.equal(ast.body[0].type, 'SheetBlock');
+    const total = ast.body[0].body.find(b => b.name === 'total');
+    assert.ok(total.directives);
+    assert.equal(total.directives[0].name, 'below');
+  });
+
+  it('@anchor with numeric args', () => {
+    const ast = parseStr('@anchor(3, 0)\nnotes = "see appendix"');
+    const d = ast.body[0].directives[0];
+    assert.equal(d.name, 'anchor');
+    assert.equal(d.args[0].value, 3);
+    assert.equal(d.args[1].value, 0);
+  });
+
+  it('binding without directives has no directives property', () => {
+    const ast = parseStr('x = 42');
+    assert.equal(ast.body[0].directives, undefined);
   });
 
   it('and/or/not operators', () => {
@@ -683,6 +747,11 @@ describe('tokenizeCalque (highlight)', () => {
     assert.ok(tokens.some(t => t.type === 'cmt'));
   });
 
+  it('tokenizes directives', () => {
+    const tokens = tokenize('@below(revenue)');
+    assert.ok(tokens.some(t => t.type === 'dir' && t.text === '@below'));
+  });
+
   it('tokenizes operators', () => {
     const tokens = tokenize('.. -> == /= !=');
     const ops = tokens.filter(t => t.type === 'op');
@@ -768,11 +837,95 @@ describe('layout', () => {
     assert.equal(l.sheets.Sales.bindings.rev.rows, 3);
   });
 
+  it('@below positions binding below ref', () => {
+    const l = lay('Sales {\n  name = ["Alice", "Bob", "Carol"]\n  revenue = [100, 200, 300]\n  @below(revenue)\n  total = sum(revenue)\n}');
+    const s = l.sheets.Sales.bindings;
+    assert.equal(s.name.col, 0);
+    assert.equal(s.revenue.col, 1);
+    // total is scalar — default label: "left", no header row consumed
+    assert.equal(s.total.col, s.revenue.col);
+    assert.equal(s.total.row, s.revenue.row + s.revenue.rows);
+    assert.equal(s.total.label, 'left');
+  });
+
+  it('@right positions binding right of ref', () => {
+    const l = lay('Sales {\n  a = [1,2,3]\n  @right(a)\n  b = [4,5,6]\n}');
+    const s = l.sheets.Sales.bindings;
+    assert.equal(s.a.col, 0);
+    assert.equal(s.b.col, 1);
+    assert.equal(s.b.row, s.a.row);
+  });
+
+  it('@anchor positions binding at absolute coords', () => {
+    const l = lay('Sales {\n  a = [1,2]\n  @anchor(3, 0)\n  notes = "appendix"\n}');
+    const s = l.sheets.Sales.bindings;
+    assert.equal(s.notes.col, 3);
+    assert.equal(s.notes.row, 1); // anchor row 0 + 1 for data
+  });
+
+  it('@below with gap', () => {
+    const l = lay('Sales {\n  x = [1,2,3]\n  @below(x, gap: 2)\n  total = sum(x)\n}');
+    const s = l.sheets.Sales.bindings;
+    // total is scalar, default label: "left" — no +1 header row
+    // x: row=1, rows=3 → total row = 1 + 3 + 2 = 6
+    assert.equal(s.total.col, s.x.col);
+    assert.equal(s.total.row, s.x.row + s.x.rows + 2);
+  });
+
+  it('@below error on unknown ref', () => {
+    assert.throws(() => lay('Sales {\n  @below(missing)\n  x = 1\n}'), /unknown binding/);
+  });
+
+  it('@below for bare bindings', () => {
+    const l = lay('data = [10, 20, 30]\n@below(data)\ntotal = sum(data)');
+    const s = l.sheets.Sheet1.bindings;
+    // total is scalar → default label: "left", no +1
+    assert.equal(s.total.col, s.data.col);
+    assert.equal(s.total.row, s.data.row + s.data.rows);
+  });
+
   it('FuncDef inside sheet excluded from bindings', () => {
     const l = lay('Sales {\n  helper(x) = x * 2\n  val = [1,2]\n}');
     const s = l.sheets.Sales.bindings;
     assert.ok(!('helper' in s));
     assert.ok('val' in s);
+  });
+
+  it('@below scalar defaults to label: "left"', () => {
+    const l = lay('Sales {\n  revenue = [100, 200, 300]\n  @below(revenue)\n  total = sum(revenue)\n}');
+    const s = l.sheets.Sales.bindings;
+    assert.equal(s.total.label, 'left');
+  });
+
+  it('@below column defaults to label: "above"', () => {
+    const l = lay('Sales {\n  a = [1, 2, 3]\n  @below(a)\n  b = a * 2\n}');
+    const s = l.sheets.Sales.bindings;
+    assert.equal(s.b.label, 'above');
+    // "above" means +1 header row consumed
+    assert.equal(s.b.row, s.a.row + s.a.rows + 1);
+  });
+
+  it('@below with label: false stores false and no header offset', () => {
+    const l = lay('Sales {\n  x = [1, 2, 3]\n  @below(x, label: false)\n  total = sum(x)\n}');
+    const s = l.sheets.Sales.bindings;
+    assert.equal(s.total.label, false);
+    // No header row consumed
+    assert.equal(s.total.row, s.x.row + s.x.rows);
+  });
+
+  it('@below with label: "above" adds header row offset', () => {
+    const l = lay('Sales {\n  x = [1, 2, 3]\n  @below(x, label: "above")\n  total = sum(x)\n}');
+    const s = l.sheets.Sales.bindings;
+    assert.equal(s.total.label, 'above');
+    // Header row consumed (+1)
+    assert.equal(s.total.row, s.x.row + s.x.rows + 1);
+  });
+
+  it('@below scalar with label: "left" no header offset', () => {
+    const l = lay('Sales {\n  data = [10, 20, 30]\n  @below(data, label: "left")\n  total = sum(data)\n}');
+    const s = l.sheets.Sales.bindings;
+    assert.equal(s.total.label, 'left');
+    assert.equal(s.total.row, s.data.row + s.data.rows);
   });
 });
 
@@ -1025,6 +1178,52 @@ describe('codegen', () => {
     assert.ok(!yCol.formulas);
     assert.ok(warnings.some(w => w.includes('rolling')));
   });
+
+  it('floor → FLOOR.MATH (single arg)', () => {
+    const { workbook } = compile('S {\n  x = [3.7, 2.1]\n  y = floor(x)\n}');
+    const yCol = sheet(workbook, 'S').columns.y;
+    assert.ok(yCol.formulas);
+    assert.equal(yCol.formulas[0], '=FLOOR.MATH(A2)');
+  });
+
+  it('ceil → CEILING.MATH (single arg)', () => {
+    const { workbook } = compile('S {\n  x = [3.2, 7.8]\n  y = ceil(x)\n}');
+    const yCol = sheet(workbook, 'S').columns.y;
+    assert.ok(yCol.formulas);
+    assert.equal(yCol.formulas[0], '=CEILING.MATH(A2)');
+  });
+
+  it('@below: formula references correct cells', () => {
+    const { workbook } = compile('Sales {\n  revenue = [100, 200, 300]\n  @below(revenue)\n  total = sum(revenue)\n}');
+    const totalCol = sheet(workbook, 'Sales').columns.total;
+    assert.ok(totalCol.formulas);
+    // sum(revenue) should reference the revenue range
+    assert.equal(totalCol.formulas[0], '=SUM(A$2:A$4)');
+  });
+
+  it('@below: workbook column has col/row metadata', () => {
+    const { workbook } = compile('Sales {\n  revenue = [100, 200, 300]\n  @below(revenue)\n  total = sum(revenue)\n}');
+    const totalCol = sheet(workbook, 'Sales').columns.total;
+    assert.ok(totalCol.col !== undefined);
+    assert.ok(totalCol.row !== undefined);
+    // total should be at same col as revenue (col 0), below its data
+    assert.equal(totalCol.col, 0);
+    assert.ok(totalCol.row > 1);
+  });
+
+  it('@below: baked column gets position metadata', () => {
+    const { workbook } = compile('Sales {\n  data = [10, 20, 30]\n  @below(data)\n  extra = [99]\n}');
+    const extraCol = sheet(workbook, 'Sales').columns.extra;
+    assert.ok(extraCol.col !== undefined);
+    assert.ok(extraCol.row !== undefined);
+  });
+
+  it('count → COUNTA (counts non-null, not just numbers)', () => {
+    const { workbook } = compile('S {\n  name = ["Alice", "Bob", "Carol"]\n  n = count(name)\n}');
+    const nCol = sheet(workbook, 'S').columns.n;
+    assert.ok(nCol.formulas);
+    assert.equal(nCol.formulas[0], '=COUNTA(A$2:A$4)');
+  });
 });
 
 // ═════════════════════════════════════════════════════════════════════
@@ -1086,6 +1285,23 @@ describe('calque.compile', () => {
     assert.ok(dataCol);
     assert.ok(!dataCol.formulas);
     assert.deepEqual(Array.from(dataCol), [10, 20, 30]);
+  });
+
+  it('@below produces positioned workbook columns', () => {
+    const { workbook } = calque.compile(`
+      Report {
+        name = ["Alice", "Bob", "Carol"]
+        revenue = [42000, 38000, 55000]
+        @below(revenue)
+        total_rev = sum(revenue)
+      }
+    `);
+    const report = sheet(workbook, 'Report');
+    assert.ok(report);
+    const totalCol = report.columns.total_rev;
+    // Should have position metadata
+    assert.ok(totalCol.col !== undefined || totalCol.row !== undefined);
+    assert.ok(totalCol.formulas);
   });
 
   it('definedNames populated for FuncDefs', () => {

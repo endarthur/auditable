@@ -43,6 +43,7 @@ calque.run = function(source, opts) {
   const tokens = lex(source);
   const ast = parse(tokens);
   const result = evaluate(ast, opts);
+  result._ast = ast;
   result.compile = function() {
     const layoutResult = layout(ast, result);
     const { workbook, warnings } = codegen(ast, layoutResult, result);

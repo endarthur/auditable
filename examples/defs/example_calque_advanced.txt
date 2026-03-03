@@ -211,6 +211,35 @@ const filt = calque`
 ui.display(calque.grid(filt));
 
 /// md
+## layout directives
+
+`@below(ref)` places a binding in the same column as `ref`, below its data. `@right(ref)` places it to the right. `@anchor(col, row)` sets absolute position. optional `gap: N` adds blank rows/columns.
+
+/// code
+const laid = calque`
+  Report {
+    name = ["Alice", "Bob", "Carol"]
+    revenue = [42000, 38000, 55000]
+    cost = [31000, 29000, 38000]
+    profit = revenue - cost
+
+    @below(revenue)
+    total_rev = sum(revenue)
+
+    @below(profit)
+    total_profit = sum(profit)
+  }
+`;
+
+ui.display(calque.grid(laid));
+
+const { workbook: laidWb, warnings: laidWarn } = laid.compile();
+if (laidWarn.length) ui.display("warnings: " + laidWarn.join(", "));
+
+const laidBytes = await sheet.write(laidWb);
+ui.download("\u2b07 download report.xlsx", laidBytes, "report.xlsx");
+
+/// md
 ## compile and download
 
 evaluate once, compile from the same result, download as xlsx.

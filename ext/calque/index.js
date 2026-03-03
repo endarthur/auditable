@@ -101,6 +101,14 @@ function tokenizeCalque(code) {
       tokens.push({ type: 'str', text: code.slice(start, i) });
       continue;
     }
+    // directive: @name
+    if (code[i] === '@') {
+      const start = i;
+      i++;
+      while (i < len && /[\w]/.test(code[i])) i++;
+      tokens.push({ type: 'dir', text: code.slice(start, i) });
+      continue;
+    }
     // identifiers / keywords
     if (/[a-zA-Z_]/.test(code[i])) {
       const start = i;
@@ -305,11 +313,14 @@ function calqueSigHint(code, cursor) {
 
 // ── Completions ──
 
+const CALQUE_DIRECTIVES = ['@below', '@right', '@anchor'];
+
 function calqueCompletions(code, cursor, prefix) {
   if (cursor === undefined) {
     const items = [];
     for (const w of CALQUE_KEYWORDS) items.push({ text: w, kind: 'kw' });
     for (const w of CALQUE_BUILTINS) items.push({ text: w, kind: 'fn' });
+    for (const w of CALQUE_DIRECTIVES) items.push({ text: w, kind: 'dir' });
     return items;
   }
 
@@ -318,6 +329,7 @@ function calqueCompletions(code, cursor, prefix) {
 
   for (const w of CALQUE_KEYWORDS) items.push({ text: w, kind: 'kw' });
   for (const w of CALQUE_BUILTINS) items.push({ text: w, kind: 'fn' });
+  for (const w of CALQUE_DIRECTIVES) items.push({ text: w, kind: 'dir' });
   for (const f of functions) items.push({ text: f.name, kind: 'fn' });
   for (const v of variables) items.push({ text: v.name, kind: 'var' });
 
@@ -336,6 +348,7 @@ function calqueCompletions(code, cursor, prefix) {
 const TOK = {
   NUM: 'num', STR: 'str', TMPL: 'tmpl', ID: 'id', KW: 'kw',
   OP: 'op', RANGE: 'range', PUNC: 'punc', NL: 'nl', EOF: 'eof',
+  DIR: 'dir',
 };
 
 // Tokens that can end a statement (NL emitted after these)
@@ -562,6 +575,17 @@ function lex(source) {
       continue;
     }
 
+    // directive: @name
+    if (source[i] === '@') {
+      adv();
+      const ws = i;
+      while (i < len && /[\w]/.test(source[i])) adv();
+      if (i > ws) {
+        tokens.push({ type: TOK.DIR, value: source.slice(ws, i), line: tl, col: tc });
+      }
+      continue;
+    }
+
     // skip unknown
     adv();
   }
@@ -639,7 +663,28 @@ function parse(tokens) {
     return { type: 'Program', body };
   }
 
+  function parseDirective() {
+    const name = eat(TOK.DIR).value;
+    let args = [], kwargs = [];
+    if (at(TOK.PUNC, '(')) {
+      pos++; skipNL();
+      if (!at(TOK.PUNC, ')')) {
+        parseArg(args, kwargs);
+        while (tryEat(TOK.PUNC, ',')) { skipNL(); parseArg(args, kwargs); }
+      }
+      skipNL(); eat(TOK.PUNC, ')');
+    }
+    return { name, args, kwargs };
+  }
+
   function parseTopLevel() {
+    // collect directives before binding
+    const directives = [];
+    while (at(TOK.DIR)) {
+      directives.push(parseDirective());
+      skipNL();
+    }
+
     // import binding: name = import "path"
     // sheet block: Name { ... }
     // funcDef: name(params) = expr
@@ -675,7 +720,9 @@ function parse(tokens) {
     skipNL();
     const expr = parseExpr(0);
     const exported = !name.startsWith('_');
-    return { type: 'Binding', name, expr, exported, line: nameTok.line, col: nameTok.col };
+    const binding = { type: 'Binding', name, expr, exported, line: nameTok.line, col: nameTok.col };
+    if (directives.length) binding.directives = directives;
+    return binding;
   }
 
   function parseSheetBlock(name) {
@@ -683,6 +730,13 @@ function parse(tokens) {
     skipNL();
     const body = [];
     while (!at(TOK.PUNC, '}') && !at(TOK.EOF)) {
+      // collect directives before binding
+      const directives = [];
+      while (at(TOK.DIR)) {
+        directives.push(parseDirective());
+        skipNL();
+      }
+
       if (!at(TOK.ID)) {
         throw new SyntaxError(`Expected identifier in sheet block, got ${cur().type} '${cur().value}' at ${cur().line}:${cur().col}`);
       }
@@ -701,7 +755,9 @@ function parse(tokens) {
       skipNL();
       const expr = parseExpr(0);
       const exported = !bindName.startsWith('_');
-      body.push({ type: 'Binding', name: bindName, expr, exported, line: bindTok.line, col: bindTok.col });
+      const binding = { type: 'Binding', name: bindName, expr, exported, line: bindTok.line, col: bindTok.col };
+      if (directives.length) binding.directives = directives;
+      body.push(binding);
       skipNL();
     }
     eat(TOK.PUNC, '}');
@@ -1840,11 +1896,17 @@ function evalExpr(node, scope, parentScope) {
 //
 // Input: AST + evalResult (from evaluate())
 // Output: layout map — binding name → { col, row, rows, isColumn }
+//
+// Supports layout directives: @below(ref), @right(ref), @anchor(col, row)
+// with optional gap: N kwarg on @below/@right.
 
 
 function layout(ast, evalResult) {
   const sheets = {};
   const functions = [];
+
+  // Collect bare bindings for Sheet1
+  const bareBindings = [];
 
   for (const node of ast.body) {
     if (node.type === 'SheetBlock') {
@@ -1852,43 +1914,139 @@ function layout(ast, evalResult) {
     } else if (node.type === 'FuncDef') {
       functions.push({ name: node.name, params: node.params, body: node.body });
     } else if (node.type === 'Binding') {
-      // Bare bindings go into default sheet
-      if (!sheets['Sheet1']) sheets['Sheet1'] = { bindings: {}, maxRows: 0 };
-      const sheet = sheets['Sheet1'];
-      if (node.name.startsWith('_')) continue;
-      const col = Object.keys(sheet.bindings).length;
-      const val = evalResult.bindings[node.name];
-      const isCol = isColumn(val);
-      const rows = isCol ? val.length : 1;
-      sheet.bindings[node.name] = { col, row: 1, rows, isColumn: isCol };
-      if (rows > sheet.maxRows) sheet.maxRows = rows;
+      bareBindings.push(node);
     }
+  }
+
+  if (bareBindings.length > 0) {
+    sheets['Sheet1'] = layoutBindings(bareBindings, (name) => evalResult.bindings[name]);
   }
 
   return { sheets, functions };
 }
 
 function layoutSheet(body, sheetData) {
+  const nodes = body.filter(n => n.type === 'Binding');
+  return layoutBindings(nodes, (name) => sheetData ? sheetData.scope.get(name) : undefined);
+}
+
+function layoutBindings(nodes, getVal) {
   const bindings = {};
-  let col = 0;
   let maxRows = 0;
+  let nextCol = 0;
 
-  for (const node of body) {
-    if (node.type === 'FuncDef') continue;
-    if (node.type === 'Binding' && node.name.startsWith('_')) continue;
-    if (node.type !== 'Binding') continue;
+  // Separate auto-placed and directive-placed bindings
+  const autoNodes = [];
+  const dirNodes = [];
 
-    const val = sheetData ? sheetData.scope.get(node.name) : undefined;
+  for (const node of nodes) {
+    if (node.name.startsWith('_')) continue;
+    const val = getVal(node.name);
     if (val !== undefined && isFunc(val)) continue;
 
+    if (node.directives && node.directives.length > 0) {
+      dirNodes.push(node);
+    } else {
+      autoNodes.push(node);
+    }
+  }
+
+  // Pass 1: auto-place non-directive bindings sequentially
+  for (const node of autoNodes) {
+    const val = getVal(node.name);
     const isCol = val !== undefined && isColumn(val);
     const rows = isCol ? val.length : 1;
-    bindings[node.name] = { col, row: 1, rows, isColumn: isCol };
+    bindings[node.name] = { col: nextCol, row: 1, rows, isColumn: isCol };
     if (rows > maxRows) maxRows = rows;
-    col++;
+    nextCol++;
+  }
+
+  // Pass 2: resolve directive bindings
+  for (const node of dirNodes) {
+    const val = getVal(node.name);
+    const isCol = val !== undefined && isColumn(val);
+    const rows = isCol ? val.length : 1;
+
+    const pos = resolveDirectives(node.directives, bindings, nextCol, node.name, isCol);
+    const info = { col: pos.col, row: pos.row, rows, isColumn: isCol };
+    if (pos.label !== undefined) info.label = pos.label;
+    bindings[node.name] = info;
+    if (pos.row + rows > maxRows + 1) maxRows = pos.row + rows - 1;
+    // Don't increment nextCol — directive bindings use explicit positions
   }
 
   return { bindings, maxRows };
+}
+
+function resolveDirectives(directives, bindings, nextCol, name, isCol) {
+  // Use the last positioning directive
+  for (let i = directives.length - 1; i >= 0; i--) {
+    const d = directives[i];
+    const gap = getGap(d);
+    const label = getLabel(d, isCol);
+
+    if (d.name === 'below') {
+      if (d.args.length < 1 || d.args[0].type !== 'Ident') {
+        throw new Error(`@below requires a binding reference in '${name}'`);
+      }
+      const refName = d.args[0].name;
+      const ref = bindings[refName];
+      if (!ref) throw new Error(`@below(${refName}): unknown binding '${refName}' in '${name}'`);
+      // label "above" adds +1 for header row; "left"/false do not
+      const headerOffset = label === 'above' ? 1 : 0;
+      return { col: ref.col, row: ref.row + ref.rows + gap + headerOffset, label };
+    }
+
+    if (d.name === 'right') {
+      if (d.args.length < 1 || d.args[0].type !== 'Ident') {
+        throw new Error(`@right requires a binding reference in '${name}'`);
+      }
+      const refName = d.args[0].name;
+      const ref = bindings[refName];
+      if (!ref) throw new Error(`@right(${refName}): unknown binding '${refName}' in '${name}'`);
+      return { col: ref.col + 1 + gap, row: ref.row };
+    }
+
+    if (d.name === 'anchor') {
+      if (d.args.length < 2) {
+        throw new Error(`@anchor requires (col, row) in '${name}'`);
+      }
+      const col = d.args[0].type === 'NumberLit' ? d.args[0].value : null;
+      const row = d.args[1].type === 'NumberLit' ? d.args[1].value : null;
+      if (col === null || row === null) {
+        throw new Error(`@anchor requires numeric col and row in '${name}'`);
+      }
+      // anchor specifies header position; data starts at row + 1
+      return { col, row: row + 1 };
+    }
+
+    throw new Error(`Unknown directive @${d.name} in '${name}'`);
+  }
+
+  // No positioning directive found — auto-place
+  return { col: nextCol, row: 1 };
+}
+
+function getGap(directive) {
+  if (!directive.kwargs) return 0;
+  const gapKw = directive.kwargs.find(k => k.name === 'gap');
+  if (!gapKw) return 0;
+  if (gapKw.value.type === 'NumberLit') return gapKw.value.value;
+  return 0;
+}
+
+function getLabel(directive, isCol) {
+  if (!directive.kwargs) {
+    // Default: @below + scalar → "left", else "above"
+    return directive.name === 'below' && !isCol ? 'left' : 'above';
+  }
+  const labelKw = directive.kwargs.find(k => k.name === 'label');
+  if (!labelKw) {
+    return directive.name === 'below' && !isCol ? 'left' : 'above';
+  }
+  if (labelKw.value.type === 'BoolLit' && labelKw.value.value === false) return false;
+  if (labelKw.value.type === 'StringLit') return labelKw.value.value;
+  return 'above';
 }
 
 // -- codegen.js --
@@ -1919,11 +2077,11 @@ function escapeExcelString(s) {
 // ── Function mapping ──
 
 const FUNC_MAP = {
-  sum: 'SUM', mean: 'AVERAGE', count: 'COUNT', min: 'MIN', max: 'MAX',
+  sum: 'SUM', mean: 'AVERAGE', count: 'COUNTA', min: 'MIN', max: 'MAX',
   left: 'LEFT', right: 'RIGHT', mid: 'MID', len: 'LEN', trim: 'TRIM',
   text: 'TEXT', str: 'TEXT', date: 'DATE', year: 'YEAR', month: 'MONTH',
   day: 'DAY', today: 'TODAY', iferror: 'IFERROR', ifna: 'IFNA',
-  round: 'ROUND', abs: 'ABS', floor: 'FLOOR', ceil: 'CEILING',
+  round: 'ROUND', abs: 'ABS', floor: 'FLOOR.MATH', ceil: 'CEILING.MATH',
   sqrt: 'SQRT', log: 'LOG', exp: 'EXP', mod: 'MOD',
   scan: 'SCAN', sort: 'SORT', unique: 'UNIQUE', lookup: 'XLOOKUP',
 };
@@ -2395,10 +2553,16 @@ function codegen(ast, layoutResult, evalResult, opts) {
         }
       }
 
+      // Check if this binding has non-default positioning
+      const hasPosition = info.row !== 1;
+
       if (formulas) {
         // Formulaic column
         const values = bakeValues(val, info);
-        columns[bindingName] = { values, formulas };
+        const colObj = { values, formulas };
+        if (hasPosition) { colObj.col = info.col; colObj.row = info.row; }
+        if (info.label !== undefined && info.label !== 'above') colObj.label = info.label;
+        columns[bindingName] = colObj;
       } else {
         // Baked column
         if (bakeReason) {
@@ -2406,7 +2570,14 @@ function codegen(ast, layoutResult, evalResult, opts) {
         } else if (astNode) {
           warnings.push(`${sheetName}.${bindingName}: baked — could not emit formula`);
         }
-        columns[bindingName] = bakeValues(val, info);
+        if (hasPosition) {
+          const values = bakeValues(val, info);
+          const colObj = { values, col: info.col, row: info.row };
+          if (info.label !== undefined && info.label !== 'above') colObj.label = info.label;
+          columns[bindingName] = colObj;
+        } else {
+          columns[bindingName] = bakeValues(val, info);
+        }
       }
     }
 
@@ -2443,14 +2614,22 @@ function findBindingAST(ast, sheetName, bindingName) {
 //
 // Takes a calque.run() result, renders each sheet as a <table>.
 // Multiple sheets get tab buttons to switch between them.
+// When layout directives (@below, @right, @anchor) are used,
+// renders a spreadsheet-style positioned grid.
+
+
 
 function grid(result) {
   const root = document.createElement('div');
 
+  // Compute layout if AST is available
+  const layoutResult = result._ast ? layout(result._ast, result) : null;
+
   // Collect sheet tables
   const sections = [];
   for (const [name, data] of Object.entries(result.sheets)) {
-    sections.push({ name, table: data.table });
+    const hasDirectives = layoutResult && hasPositionedBindings(layoutResult.sheets[name]);
+    sections.push({ name, table: data.table, sheetLayout: hasDirectives ? layoutResult.sheets[name] : null, sheetData: data });
   }
 
   // Bare bindings (not in any sheet block)
@@ -2461,7 +2640,11 @@ function grid(result) {
     bareKeys.push(k);
   }
   if (bareKeys.length > 0) {
-    sections.push({ name: 'Bindings', bare: bareKeys, bindings: result.bindings });
+    const hasDirectives = layoutResult && layoutResult.sheets['Sheet1'] && hasPositionedBindings(layoutResult.sheets['Sheet1']);
+    sections.push({
+      name: 'Bindings', bare: bareKeys, bindings: result.bindings,
+      sheetLayout: hasDirectives ? layoutResult.sheets['Sheet1'] : null,
+    });
   }
 
   if (sections.length === 0) {
@@ -2470,7 +2653,11 @@ function grid(result) {
   }
 
   // Render each section's DOM
-  const panels = sections.map(s => s.bare ? renderBare(s) : renderTable(s.table));
+  const panels = sections.map(s => {
+    if (s.sheetLayout) return renderPositioned(s);
+    if (s.bare) return renderBare(s);
+    return renderTable(s.table);
+  });
 
   if (sections.length === 1) {
     root.appendChild(panels[0]);
@@ -2509,6 +2696,14 @@ function grid(result) {
   show(0);
 
   return root;
+}
+
+function hasPositionedBindings(sheetLayout) {
+  if (!sheetLayout) return false;
+  for (const info of Object.values(sheetLayout.bindings)) {
+    if (info.row !== 1) return true;
+  }
+  return false;
 }
 
 function fmtCell(v) {
@@ -2556,6 +2751,85 @@ function renderTable(table) {
   }
   t.appendChild(tbody);
 
+  return t;
+}
+
+// ── Positioned grid renderer ──
+
+function renderPositioned(section) {
+  const sheetLayout = section.sheetLayout;
+  const bindings = sheetLayout.bindings;
+
+  // Get values from sheet data or bare bindings
+  const getVal = (name) => {
+    if (section.sheetData) return section.sheetData.scope.get(name);
+    if (section.bindings) return section.bindings[name];
+    return undefined;
+  };
+
+  // Build sparse cell map: { row → { col → { text, isHeader, isNum } } }
+  const cellMap = new Map();
+  let maxCol = 0;
+  let maxRow = 0;
+
+  const setCell = (r, c, text, isHeader, numeric) => {
+    if (!cellMap.has(r)) cellMap.set(r, new Map());
+    cellMap.get(r).set(c, { text, isHeader, isNum: numeric });
+    if (c > maxCol) maxCol = c;
+    if (r > maxRow) maxRow = r;
+  };
+
+  for (const [name, info] of Object.entries(bindings)) {
+    const label = info.label;
+    if (label === 'left') {
+      // Header in cell to the left of data (same row), if col > 0
+      if (info.col > 0) setCell(info.row, info.col - 1, name, true, false);
+    } else if (label !== false) {
+      // "above" or undefined: header in row above data (default)
+      const headerRow = info.row - 1; // 0-indexed header row
+      setCell(headerRow, info.col, name, true, false);
+    }
+    // label === false: no header cell
+
+    const val = getVal(name);
+    if (isColumn(val)) {
+      for (let i = 0; i < val.length; i++) {
+        setCell(info.row + i, info.col, fmtCell(val[i]), false, isNum(val[i]));
+      }
+    } else {
+      setCell(info.row, info.col, fmtCell(val), false, isNum(val));
+    }
+  }
+
+  // Render table
+  const t = document.createElement('table');
+  t.style.cssText = 'border-collapse:collapse;font-size:0.9em;';
+  const tbody = document.createElement('tbody');
+
+  for (let r = 0; r <= maxRow; r++) {
+    const tr = document.createElement('tr');
+    const rowData = cellMap.get(r);
+
+    for (let c = 0; c <= maxCol; c++) {
+      const cell = rowData && rowData.get(c);
+      if (cell && cell.isHeader) {
+        const th = document.createElement('th');
+        th.textContent = cell.text;
+        th.style.cssText = 'padding:3px 8px;border-bottom:1px solid #555;font-weight:600;text-align:left;';
+        tr.appendChild(th);
+      } else {
+        const td = document.createElement('td');
+        td.textContent = cell ? cell.text : '';
+        td.style.cssText = 'padding:2px 8px;border-bottom:1px solid #333;';
+        if (cell && cell.isNum) td.style.textAlign = 'right';
+        tr.appendChild(td);
+      }
+    }
+
+    tbody.appendChild(tr);
+  }
+
+  t.appendChild(tbody);
   return t;
 }
 
@@ -2647,6 +2921,7 @@ calque.run = function(source, opts) {
   const tokens = lex(source);
   const ast = parse(tokens);
   const result = evaluate(ast, opts);
+  result._ast = ast;
   result.compile = function() {
     const layoutResult = layout(ast, result);
     const { workbook, warnings } = codegen(ast, layoutResult, result);
