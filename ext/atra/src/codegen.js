@@ -76,7 +76,7 @@ import {
 export function flattenImports(obj, prefix) {
   const flat = {};
   for (const [k, v] of Object.entries(obj)) {
-    if (!prefix && (k === '__memory' || k === 'memory' || k === '__table')) continue;
+    if (!prefix && (k === '__memory' || k === '__memories' || k === 'memory' || k === '__table')) continue;
     const key = prefix ? prefix + '.' + k : k;
     if (typeof v === 'function') flat[key] = v;
     else if (v && typeof v === 'object' && !ArrayBuffer.isView(v)) Object.assign(flat, flattenImports(v, key));
@@ -102,7 +102,7 @@ export function codegen(ast, interpValues, userImports) {
     }
     else if (node.type === 'Function' || node.type === 'Subroutine') { functions.push(node); localFuncNames.add(node.name); }
     else if (node.type === 'ImportDecl') imports.push(node);
-    // LayoutDecl handled below
+    // LayoutDecl and MemoryDecl handled below
   }
 
   // ── Build layout table ──
@@ -180,6 +180,23 @@ export function codegen(ast, interpValues, userImports) {
     }
     return result;
   }
+
+  // ── Collect memory declarations ──
+  const memories = [];  // { name, pages, maxPages, imported }
+  for (const node of ast.body) {
+    if (node.type === 'MemoryDecl') {
+      memories.push({
+        name: node.name,
+        pages: node.pages,
+        maxPages: node.maxPages,
+        imported: node.pages === null,
+      });
+    }
+  }
+  const memoryIndex = {};  // name → memory index
+  for (let mi = 0; mi < memories.length; mi++) memoryIndex[memories[mi].name] = mi;
+  const importedMemories = memories.filter(m => m.imported);
+  const localMemories = memories.filter(m => !m.imported);
 
   // Math builtins: imported from JS Math object. Value = param count.
   const MATH_BUILTINS = { sin: 1, cos: 1, ln: 1, exp: 1, pow: 2, atan2: 2 };
@@ -340,8 +357,17 @@ export function codegen(ast, interpValues, userImports) {
   });
 
   // ── Determine memory ──
-  const hasMemory = functions.some(fn => fn.params.some(p => p.isArray));
-  const importMemory = userImports && userImports.__memory;
+  // Memory is needed when any function uses arrays or layout-typed params (both are i32 pointers)
+  const hasArrays = functions.some(fn =>
+    fn.params.some(p => p.isArray || p.layoutType) ||
+    fn.locals.some(l => l.layoutType));
+  const hasMemory = memories.length > 0 || hasArrays;
+  // Legacy single-memory mode: no explicit memory declarations
+  const legacyMode = memories.length === 0;
+  // Import memory if user explicitly provides it (backward compat — even without arrays)
+  const legacyImportMemory = legacyMode && userImports && (userImports.__memory || userImports.__memories);
+  // Declare local memory if arrays/layouts used but no import provided
+  const legacyLocalMemory = legacyMode && hasArrays && !legacyImportMemory;
 
   // ── Emit Wasm binary ──
   // Magic + version
@@ -360,10 +386,11 @@ export function codegen(ast, interpValues, userImports) {
     }
   });
 
-  // Import section (2) — math builtins (auto-detected), explicit imports, host functions
-  if (allImports.length > 0 || importMemory) {
+  // Import section (2) — math builtins (auto-detected), explicit imports, host functions, memories
+  const memImportCount = importedMemories.length + (legacyImportMemory ? 1 : 0);
+  if (allImports.length > 0 || memImportCount > 0) {
     w.section(2, s => {
-      s.u32(allImports.length + (importMemory ? 1 : 0));
+      s.u32(allImports.length + memImportCount);
       for (let ii = 0; ii < allImports.length; ii++) {
         const im = allImports[ii];
         s.str(im.moduleName);
@@ -371,12 +398,21 @@ export function codegen(ast, interpValues, userImports) {
         s.byte(0x00); // func import
         s.u32(importSigIds[ii]);
       }
-      if (importMemory) {
+      if (legacyImportMemory) {
+        // Legacy: single unnamed memory
         s.str('env');
         s.str('memory');
         s.byte(0x02); // memory import
         s.byte(0x00); // no max
         s.u32(1); // initial 1 page
+      }
+      // Multi-memory: imported banks
+      for (const mem of importedMemories) {
+        s.str('env');
+        s.str(mem.name);
+        s.byte(0x02); // memory import
+        s.byte(0x00); // no max
+        s.u32(1);     // initial 1 page
       }
     });
   }
@@ -397,12 +433,28 @@ export function codegen(ast, interpValues, userImports) {
     });
   }
 
-  // Memory section (5) — only if arrays used and no imported memory
-  if (hasMemory && !importMemory) {
+  // Memory section (5) — local memories
+  if (legacyLocalMemory) {
+    // Legacy: single local memory
     w.section(5, s => {
       s.u32(1);
       s.byte(0x00); // no max
       s.u32(1); // initial: 1 page (64KB)
+    });
+  }
+  if (localMemories.length > 0) {
+    w.section(5, s => {
+      s.u32(localMemories.length);
+      for (const mem of localMemories) {
+        if (mem.maxPages !== null) {
+          s.byte(0x01); // has max
+          s.u32(mem.pages);
+          s.u32(mem.maxPages);
+        } else {
+          s.byte(0x00); // no max
+          s.u32(mem.pages);
+        }
+      }
     });
   }
 
@@ -422,18 +474,28 @@ export function codegen(ast, interpValues, userImports) {
 
   // Export section (7)
   w.section(7, s => {
-    const exports = functions.map((fn, i) => ({ name: fn.name, idx: allImports.length + i }));
-    const memExport = (hasMemory && !importMemory) ? 1 : 0;
-    s.u32(exports.length + memExport);
-    for (const e of exports) {
+    const funcExports = functions.map((fn, i) => ({ name: fn.name, idx: allImports.length + i }));
+    const legacyMemExport = legacyLocalMemory ? 1 : 0;
+    // Multi-memory: export locally declared memories by name
+    const memExports = localMemories.map((mem, i) => ({
+      name: mem.name,
+      idx: importedMemories.length + i,
+    }));
+    s.u32(funcExports.length + legacyMemExport + memExports.length);
+    for (const e of funcExports) {
       s.str(e.name);
       s.byte(0x00); // func export
       s.u32(e.idx);
     }
-    if (memExport) {
+    if (legacyMemExport) {
       s.str('memory');
       s.byte(0x02); // memory export
       s.u32(0);
+    }
+    for (const me of memExports) {
+      s.str(me.name);
+      s.byte(0x02); // memory export
+      s.u32(me.idx);
     }
   });
 
@@ -463,7 +525,7 @@ export function codegen(ast, interpValues, userImports) {
   const bytes = w.toUint8Array();
   const table = tableFuncs.length > 0 ? { ...tableSlot } : null;
   const layoutsMeta = Object.keys(layouts).length > 0 ? serializeLayouts() : null;
-  return { bytes, table, layouts: layoutsMeta };
+  return { bytes, table, layouts: layoutsMeta, multiMemory: memories.length > 1 };
 
   // ── Helper: emit constant init expression ──
   function emitConstExpr(s, node, vtype) {
@@ -520,7 +582,8 @@ export function codegen(ast, interpValues, userImports) {
         vtype: p.isArray ? 'i32' : p.vtype, // Wasm has no array type; arrays are i32 memory pointers
         isArray: p.isArray,
         arrayDims: p.arrayDims,
-        elemType: p.isArray ? p.vtype : null  // element type for load/store
+        elemType: p.isArray ? p.vtype : null,  // element type for load/store
+        memIdx: p.memBank ? (memoryIndex[p.memBank] ?? 0) : 0,
       };
       if (p.funcSig) entry.funcSig = p.funcSig;
       if (p.layoutType) entry.layoutType = p.layoutType;
@@ -556,6 +619,12 @@ export function codegen(ast, interpValues, userImports) {
     // SIMD helper
     function emitSimd(op) { bw.byte(OP_SIMD_PREFIX); bw.u32(op); }
 
+    // Resolve memory bank argument — Ident node referencing a MemoryDecl
+    function resolveMemArg(arg) {
+      if (arg.type === 'Ident' && memoryIndex[arg.name] !== undefined) return memoryIndex[arg.name];
+      throw new Error(`Expected memory bank name, got ${arg.type}: ${arg.name || '?'}`);
+    }
+
     // ── Statement emission ──
     let depth = 0; // current block nesting depth
     const breakTargets = []; // stack of {depth} for each enclosing loop's break block
@@ -584,7 +653,7 @@ export function codegen(ast, interpValues, userImports) {
               // emit value
               emitExpr(stmt.value, resolved.layout ? 'i32' : resolved.type);
               // emit store
-              emitStore(resolved.layout ? 'i32' : resolved.type);
+              emitStore(resolved.layout ? 'i32' : resolved.type, info.memIdx || 0);
               break;
             }
           }
@@ -630,7 +699,7 @@ export function codegen(ast, interpValues, userImports) {
                 // Emit value
                 const storeType = resolved.layout ? 'i32' : resolved.type;
                 emitExpr(stmt.value, storeType);
-                emitStore(storeType);
+                emitStore(storeType, varInfo.memIdx || 0);
                 break;
               }
             }
@@ -643,7 +712,7 @@ export function codegen(ast, interpValues, userImports) {
           // compute value
           emitExpr(stmt.value, elemType);
           // store
-          emitStore(elemType);
+          emitStore(elemType, info.memIdx || 0);
           break;
         }
         case 'If': {
@@ -992,7 +1061,7 @@ export function codegen(ast, interpValues, userImports) {
               }
               // If final field is a nested layout or array, leave pointer on stack
               if (resolved.layout || resolved.arrayCount) break;
-              emitLoad(resolved.type);
+              emitLoad(resolved.type, info.memIdx || 0);
               break;
             }
           }
@@ -1058,7 +1127,7 @@ export function codegen(ast, interpValues, userImports) {
                 bw.byte(OP_I32_ADD);
                 // If element is a layout, leave pointer on stack; otherwise load
                 if (resolved.layout) break;
-                emitLoad(resolved.type);
+                emitLoad(resolved.type, varInfo.memIdx || 0);
                 break;
               }
             }
@@ -1067,7 +1136,7 @@ export function codegen(ast, interpValues, userImports) {
           if (!info) throw new Error(`Undefined array: ${expr.name}`);
           const elemType = info.elemType || info.vtype;
           emitArrayAddr(expr.name, expr.indices, info, elemType);
-          emitLoad(elemType);
+          emitLoad(elemType, info.memIdx || 0);
           break;
         }
         case 'IfExpr': {
@@ -1260,16 +1329,53 @@ export function codegen(ast, interpValues, userImports) {
       if (name === 'popcnt') { emitExpr(expr.args[0], expectedType); if (expectedType === 'i64') bw.byte(OP_I64_POPCNT); else bw.byte(OP_I32_POPCNT); return; }
       if (name === 'rotl') { emitExpr(expr.args[0], expectedType); emitExpr(expr.args[1], expectedType); if (expectedType === 'i64') bw.byte(OP_I64_ROTL); else bw.byte(OP_I32_ROTL); return; }
       if (name === 'rotr') { emitExpr(expr.args[0], expectedType); emitExpr(expr.args[1], expectedType); if (expectedType === 'i64') bw.byte(OP_I64_ROTR); else bw.byte(OP_I32_ROTR); return; }
-      if (name === 'memory_size') { bw.byte(OP_MEMORY_SIZE); bw.u32(0); return; }
-      if (name === 'memory_grow') { emitExpr(expr.args[0], 'i32'); bw.byte(OP_MEMORY_GROW); bw.u32(0); return; }
+      if (name === 'memory_size') {
+        // memory_size() → mem 0; memory_size(bank) → mem by name
+        const mIdx = expr.args.length > 0 ? resolveMemArg(expr.args[0]) : 0;
+        bw.byte(OP_MEMORY_SIZE); bw.u32(mIdx);
+        return;
+      }
+      if (name === 'memory_grow') {
+        // memory_grow(n) → mem 0; memory_grow(bank, n) → mem by name
+        if (expr.args.length === 2) {
+          const mIdx = resolveMemArg(expr.args[0]);
+          emitExpr(expr.args[1], 'i32');
+          bw.byte(OP_MEMORY_GROW); bw.u32(mIdx);
+        } else {
+          emitExpr(expr.args[0], 'i32');
+          bw.byte(OP_MEMORY_GROW); bw.u32(0);
+        }
+        return;
+      }
       if (name === 'memory_copy') {
-        emitExpr(expr.args[0], 'i32'); emitExpr(expr.args[1], 'i32'); emitExpr(expr.args[2], 'i32');
-        bw.byte(OP_FC_PREFIX); bw.u32(10); bw.u32(0); bw.u32(0); // memory.copy, dst_mem=0, src_mem=0
+        if (expr.args.length === 5) {
+          // memory_copy(dst_bank, src_bank, dest, src, nbytes)
+          const dstIdx = resolveMemArg(expr.args[0]);
+          const srcIdx = resolveMemArg(expr.args[1]);
+          emitExpr(expr.args[2], 'i32');
+          emitExpr(expr.args[3], 'i32');
+          emitExpr(expr.args[4], 'i32');
+          bw.byte(OP_FC_PREFIX); bw.u32(10); bw.u32(dstIdx); bw.u32(srcIdx);
+        } else {
+          // memory_copy(dest, src, nbytes) — within mem 0
+          emitExpr(expr.args[0], 'i32'); emitExpr(expr.args[1], 'i32'); emitExpr(expr.args[2], 'i32');
+          bw.byte(OP_FC_PREFIX); bw.u32(10); bw.u32(0); bw.u32(0);
+        }
         return;
       }
       if (name === 'memory_fill') {
-        emitExpr(expr.args[0], 'i32'); emitExpr(expr.args[1], 'i32'); emitExpr(expr.args[2], 'i32');
-        bw.byte(OP_FC_PREFIX); bw.u32(11); bw.u32(0); // memory.fill, mem=0
+        if (expr.args.length === 4) {
+          // memory_fill(bank, dest, val, nbytes)
+          const mIdx = resolveMemArg(expr.args[0]);
+          emitExpr(expr.args[1], 'i32');
+          emitExpr(expr.args[2], 'i32');
+          emitExpr(expr.args[3], 'i32');
+          bw.byte(OP_FC_PREFIX); bw.u32(11); bw.u32(mIdx);
+        } else {
+          // memory_fill(dest, val, nbytes) — mem 0
+          emitExpr(expr.args[0], 'i32'); emitExpr(expr.args[1], 'i32'); emitExpr(expr.args[2], 'i32');
+          bw.byte(OP_FC_PREFIX); bw.u32(11); bw.u32(0);
+        }
         return;
       }
 
@@ -1572,20 +1678,28 @@ export function codegen(ast, interpValues, userImports) {
       }
     }
 
-    function emitLoad(t) {
-      if (t === 'i32') { bw.byte(OP_I32_LOAD); bw.u32(2); bw.u32(0); } // align=4
-      else if (t === 'i64') { bw.byte(OP_I64_LOAD); bw.u32(3); bw.u32(0); }
-      else if (t === 'f32') { bw.byte(OP_F32_LOAD); bw.u32(2); bw.u32(0); }
-      else if (t === 'f64') { bw.byte(OP_F64_LOAD); bw.u32(3); bw.u32(0); }
-      else if (isVector(t)) { emitSimd(SIMD_OPS['v128.load']); bw.u32(4); bw.u32(0); } // align=16
+    // Multi-memory memarg encoding: when bit 6 (0x40) of the alignment byte is set,
+    // a memory index (LEB128) follows before the offset. When clear, memory 0 is implicit.
+    function emitLoad(t, memIdx = 0) {
+      const a2 = memIdx > 0 ? (2 | 0x40) : 2;  // align=4 + multi-mem flag
+      const a3 = memIdx > 0 ? (3 | 0x40) : 3;  // align=8 + multi-mem flag
+      const a4 = memIdx > 0 ? (4 | 0x40) : 4;  // align=16 + multi-mem flag
+      if (t === 'i32') { bw.byte(OP_I32_LOAD); bw.u32(a2); if (memIdx > 0) bw.u32(memIdx); bw.u32(0); }
+      else if (t === 'i64') { bw.byte(OP_I64_LOAD); bw.u32(a3); if (memIdx > 0) bw.u32(memIdx); bw.u32(0); }
+      else if (t === 'f32') { bw.byte(OP_F32_LOAD); bw.u32(a2); if (memIdx > 0) bw.u32(memIdx); bw.u32(0); }
+      else if (t === 'f64') { bw.byte(OP_F64_LOAD); bw.u32(a3); if (memIdx > 0) bw.u32(memIdx); bw.u32(0); }
+      else if (isVector(t)) { emitSimd(SIMD_OPS['v128.load']); bw.u32(a4); if (memIdx > 0) bw.u32(memIdx); bw.u32(0); }
     }
 
-    function emitStore(t) {
-      if (t === 'i32') { bw.byte(OP_I32_STORE); bw.u32(2); bw.u32(0); }
-      else if (t === 'i64') { bw.byte(OP_I64_STORE); bw.u32(3); bw.u32(0); }
-      else if (t === 'f32') { bw.byte(OP_F32_STORE); bw.u32(2); bw.u32(0); }
-      else if (t === 'f64') { bw.byte(OP_F64_STORE); bw.u32(3); bw.u32(0); }
-      else if (isVector(t)) { emitSimd(SIMD_OPS['v128.store']); bw.u32(4); bw.u32(0); } // align=16
+    function emitStore(t, memIdx = 0) {
+      const a2 = memIdx > 0 ? (2 | 0x40) : 2;
+      const a3 = memIdx > 0 ? (3 | 0x40) : 3;
+      const a4 = memIdx > 0 ? (4 | 0x40) : 4;
+      if (t === 'i32') { bw.byte(OP_I32_STORE); bw.u32(a2); if (memIdx > 0) bw.u32(memIdx); bw.u32(0); }
+      else if (t === 'i64') { bw.byte(OP_I64_STORE); bw.u32(a3); if (memIdx > 0) bw.u32(memIdx); bw.u32(0); }
+      else if (t === 'f32') { bw.byte(OP_F32_STORE); bw.u32(a2); if (memIdx > 0) bw.u32(memIdx); bw.u32(0); }
+      else if (t === 'f64') { bw.byte(OP_F64_STORE); bw.u32(a3); if (memIdx > 0) bw.u32(memIdx); bw.u32(0); }
+      else if (isVector(t)) { emitSimd(SIMD_OPS['v128.store']); bw.u32(a4); if (memIdx > 0) bw.u32(memIdx); bw.u32(0); }
     }
 
     // ── Comparison + arithmetic helpers ──

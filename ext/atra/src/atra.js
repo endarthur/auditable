@@ -34,7 +34,14 @@ function instantiate(bytes, userImports, interpValues) {
   }
 
   // Memory
-  if (userImports && userImports.__memory) {
+  if (userImports && userImports.__memories) {
+    // Multi-memory: each named bank → env.bankname
+    if (!importObj.env) importObj.env = {};
+    for (const [name, mem] of Object.entries(userImports.__memories)) {
+      importObj.env[name] = mem;
+    }
+  } else if (userImports && userImports.__memory) {
+    // Legacy single memory
     if (!importObj.env) importObj.env = {};
     importObj.env.memory = userImports.__memory;
   }
@@ -63,8 +70,18 @@ function wrapExports(instance, table) {
 }
 
 function normalizeMemoryImport(userImports) {
-  if (userImports && userImports.memory && !userImports.__memory) {
-    return Object.assign({}, userImports, { __memory: userImports.memory });
+  if (!userImports || !userImports.memory) return userImports;
+  const mem = userImports.memory;
+  if (mem instanceof WebAssembly.Memory) {
+    // Single memory (legacy) — keep __memory for backward compat
+    if (!userImports.__memory) {
+      return Object.assign({}, userImports, { __memory: mem });
+    }
+    return userImports;
+  }
+  if (typeof mem === 'object') {
+    // Multi-memory: { name: WebAssembly.Memory, ... }
+    return Object.assign({}, userImports, { __memories: mem });
   }
   return userImports;
 }
@@ -87,7 +104,10 @@ function compileAndInstantiate(strings, values, userImports) {
     source += strings[i + 1];
   }
 
-  const { bytes, table, layouts } = compileSource(source, values, userImports);
+  const { bytes, table, layouts, multiMemory } = compileSource(source, values, userImports);
+  if (multiMemory && !atra.hasMultiMemory) {
+    throw new Error('Multi-memory not supported in this environment — requires Chrome 120+, Firefox 125+, or Edge 120+');
+  }
   const instance = instantiate(bytes, userImports, values);
   const exports = wrapExports(instance, table);
   if (layouts) exports.__layouts = layouts;
@@ -178,7 +198,10 @@ atra.dump = function(source) {
 
 atra.run = function(source, userImports) {
   userImports = normalizeMemoryImport(userImports);
-  const { bytes, table, layouts } = compileSource(source, null, userImports);
+  const { bytes, table, layouts, multiMemory } = compileSource(source, null, userImports);
+  if (multiMemory && !atra.hasMultiMemory) {
+    throw new Error('Multi-memory not supported in this environment — requires Chrome 120+, Firefox 125+, or Edge 120+');
+  }
   const instance = instantiate(bytes, userImports, null);
   const exports = wrapExports(instance, table);
   if (layouts) exports.__layouts = layouts;
@@ -191,6 +214,20 @@ if (typeof window !== 'undefined') {
   if (!window._taggedLanguages) window._taggedLanguages = {};
   window._taggedLanguages.atra = { tokenize: tokenizeAtra, completions: atraCompletions, sigHint: atraSigHint };
 }
+
+// ── Feature detection ──
+
+// Probe: can this environment compile a Wasm module with 2 memories?
+// Cached boolean — safe to check programmatically: if (!atra.hasMultiMemory) ...
+atra.hasMultiMemory = typeof WebAssembly !== 'undefined' && (() => {
+  try {
+    new WebAssembly.Module(new Uint8Array([
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+      0x05, 0x05, 0x02, 0x00, 0x01, 0x00, 0x01  // memory section: 2 memories, 1 page each
+    ]));
+    return true;
+  } catch { return false; }
+})();
 
 // Attach internals for testing / advanced use
 atra._lex = lex;

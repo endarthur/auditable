@@ -39,6 +39,7 @@ const defs = [
   'example_natra.txt',
   'example_widgets.txt',
   'example_app_export.txt',
+  'example_atra_multi_memory.txt',
 ];
 
 // ── Parser ──

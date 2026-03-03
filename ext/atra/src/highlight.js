@@ -7,7 +7,7 @@ export const ATRA_KEYWORDS = new Set([
   'function','subroutine','begin','end','var','const','if','then','else',
   'for','while','do','break','and','or','not','mod','import','export',
   'call','array','true','false','from','tailcall','return',
-  'layout','packed',
+  'layout','packed','memory',
 ]);
 
 export const ATRA_TYPES = new Set(['i32','i64','f32','f64','f64x2','f32x4','i32x4','i64x2']);
@@ -129,10 +129,10 @@ const ATRA_BUILTIN_SIGS = {
   popcnt:   { sig: 'popcnt(x: i32): i32', desc: 'population count' },
   rotl:     { sig: 'rotl(x: i32, y: i32): i32', desc: 'rotate left' },
   rotr:     { sig: 'rotr(x: i32, y: i32): i32', desc: 'rotate right' },
-  memory_size: { sig: 'memory_size(): i32', desc: 'current memory size in pages' },
-  memory_grow: { sig: 'memory_grow(pages: i32): i32', desc: 'grow memory' },
-  memory_copy: { sig: 'memory_copy(dst: i32, src: i32, len: i32)', desc: 'copy memory' },
-  memory_fill: { sig: 'memory_fill(dst: i32, val: i32, len: i32)', desc: 'fill memory' },
+  memory_size: { sig: 'memory_size([bank]): i32', desc: 'current memory size in pages' },
+  memory_grow: { sig: 'memory_grow([bank,] pages: i32): i32', desc: 'grow memory' },
+  memory_copy: { sig: 'memory_copy([dst_bank, src_bank,] dst: i32, src: i32, len: i32)', desc: 'copy memory' },
+  memory_fill: { sig: 'memory_fill([bank,] dst: i32, val: i32, len: i32)', desc: 'fill memory' },
 };
 
 // ── User-defined name extraction ──

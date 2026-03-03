@@ -40,6 +40,7 @@ export function parse(tokens) {
       else if (at(TOK.KW, 'import')) body.push(parseImport());
       else if (at(TOK.KW, 'export')) { pos++; body.push(parseFunction(true)); }
       else if (at(TOK.KW, 'layout')) body.push(parseLayout());
+      else if (at(TOK.KW, 'memory')) body.push(parseMemoryDecl());
       else throw new SyntaxError(`Unexpected "${cur().value}" at ${cur().line}:${cur().col}`);
     }
     return { type: 'Program', body };
@@ -78,6 +79,19 @@ export function parse(tokens) {
     eat(TOK.KW, 'end');
     maybe(TOK.KW, 'layout'); // optional trailing "layout" after "end"
     return { type: 'LayoutDecl', name, packed: !!packed, fields };
+  }
+
+  function parseMemoryDecl() {
+    eat(TOK.KW, 'memory');
+    const name = eat(TOK.ID).value;
+    let pages = null, maxPages = null;
+    if (maybe(TOK.PUNC, ':')) {
+      pages = parseInt(eat(TOK.NUM).value, 10);
+      if (maybe(TOK.PUNC, ',')) {
+        maxPages = parseInt(eat(TOK.NUM).value, 10);
+      }
+    }
+    return { type: 'MemoryDecl', name, pages, maxPages };
   }
 
   // Parse function type signature: function(x: f64, y: f64): f64
@@ -239,11 +253,18 @@ export function parse(tokens) {
         maybe(TOK.PUNC, ','); // consume comma between param groups
         continue;
       }
-      // layout type: ptr: layout Sphere
+      // Memory-qualified: detect ID followed by KW 'array' or KW 'layout'
+      let memBank = null;
+      if (cur().type === TOK.ID &&
+          tokens[pos + 1] && tokens[pos + 1].type === TOK.KW &&
+          (tokens[pos + 1].value === 'array' || tokens[pos + 1].value === 'layout')) {
+        memBank = eat(TOK.ID).value;
+      }
+      // layout type: ptr: layout Sphere  (or: ptr: coords layout Sphere)
       if (at(TOK.KW, 'layout')) {
         pos++; // skip 'layout'
         const layoutName = eat(TOK.ID).value;
-        for (const n of names) params.push({ type: 'Param', name: n, vtype: 'i32', isArray: false, arrayDims: null, layoutType: layoutName });
+        for (const n of names) params.push({ type: 'Param', name: n, vtype: 'i32', isArray: false, arrayDims: null, layoutType: layoutName, memBank });
         maybe(TOK.PUNC, ','); // consume comma between param groups
         continue;
       }
@@ -260,7 +281,7 @@ export function parse(tokens) {
         }
       }
       const vtype = eat(TOK.KW).value;
-      for (const n of names) params.push({ type: 'Param', name: n, vtype, isArray, arrayDims });
+      for (const n of names) params.push({ type: 'Param', name: n, vtype, isArray, arrayDims, memBank });
       maybe(TOK.PUNC, ','); // consume comma between param groups
     }
     return params;

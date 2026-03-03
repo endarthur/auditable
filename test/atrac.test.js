@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { compile, buildSrc, formatSrcJs, bundle } from '../ext/atra/atrac.js';
+import { atra } from '../ext/atra/index.js';
 
 const alpackSource = readFileSync(
   new URL('../ext/atra/lib/alpack.atra', import.meta.url), 'utf8'
@@ -381,5 +382,164 @@ describe('CLI', () => {
     } finally {
       try { unlinkSync(dest); } catch {}
     }
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════
+// Multi-memory support
+// ═════════════════════════════════════════════════════════════════════
+
+describe('multi-memory', () => {
+  it('multi-memory is supported in this runtime', () => {
+    // Minimal module with 2 memories
+    const bytes = new Uint8Array([
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+      0x05, 0x05, 0x02, 0x00, 0x01, 0x00, 0x01
+    ]);
+    const mod = new WebAssembly.Module(bytes);
+    assert.ok(mod);
+  });
+
+  it('atra.hasMultiMemory is a boolean', () => {
+    assert.equal(typeof atra.hasMultiMemory, 'boolean');
+    assert.equal(atra.hasMultiMemory, true); // Node.js supports it
+  });
+
+  it('parses memory declarations', () => {
+    const bytes = compile(`
+      memory coords
+      memory grades
+      memory scratch: 100
+
+      subroutine store_val(arr: coords array f64; i: i32; v: f64)
+      begin
+        arr[i] := v
+      end
+    `);
+    assert.ok(bytes instanceof Uint8Array);
+    assert.ok(bytes.length > 8);
+  });
+
+  it('multi-memory load/store round-trip', () => {
+    const coords = new WebAssembly.Memory({ initial: 1 });
+    const grades = new WebAssembly.Memory({ initial: 1 });
+    const { set_coord, get_coord, set_grade, get_grade } = atra({ memory: { coords, grades } })`
+      memory coords
+      memory grades
+
+      subroutine set_coord(arr: coords array f64; i: i32; v: f64)
+      begin
+        arr[i] := v
+      end
+
+      function get_coord(arr: coords array f64; i: i32): f64
+      begin
+        get_coord := arr[i]
+      end
+
+      subroutine set_grade(arr: grades array f64; i: i32; v: f64)
+      begin
+        arr[i] := v
+      end
+
+      function get_grade(arr: grades array f64; i: i32): f64
+      begin
+        get_grade := arr[i]
+      end
+    `;
+    set_coord(0, 0, 42.5);
+    set_grade(0, 0, 3.14);
+    assert.equal(get_coord(0, 0), 42.5);
+    assert.equal(get_grade(0, 0), 3.14);
+    // Verify they're in different memories
+    const f64c = new Float64Array(coords.buffer);
+    const f64g = new Float64Array(grades.buffer);
+    assert.equal(f64c[0], 42.5);
+    assert.equal(f64g[0], 3.14);
+  });
+
+  it('no memory declaration = legacy single memory', () => {
+    const mem = new WebAssembly.Memory({ initial: 1 });
+    const { set, get } = atra({ memory: mem })`
+      subroutine set(arr: array f64; i: i32; v: f64)
+      begin
+        arr[i] := v
+      end
+      function get(arr: array f64; i: i32): f64
+      begin
+        get := arr[i]
+      end
+    `;
+    set(0, 0, 99.0);
+    assert.equal(get(0, 0), 99.0);
+  });
+
+  it('memory_size with bank argument', () => {
+    const data = new WebAssembly.Memory({ initial: 10 });
+    const { sz } = atra({ memory: { data } })`
+      memory data
+      function sz(): i32
+      begin
+        sz := memory_size(data)
+      end
+    `;
+    assert.equal(sz(), 10);
+  });
+
+  it('locally declared memory', () => {
+    const { set, get } = atra`
+      memory scratch: 1
+
+      subroutine set(ptr: scratch array f64; i: i32; v: f64)
+      begin
+        ptr[i] := v
+      end
+
+      function get(ptr: scratch array f64; i: i32): f64
+      begin
+        get := ptr[i]
+      end
+    `;
+    set(0, 0, 7.77);
+    assert.equal(get(0, 0), 7.77);
+  });
+
+  it('locally declared memory with max pages', () => {
+    const bytes = compile(`
+      memory scratch: 10, 100
+
+      function sz(): i32
+      begin
+        sz := memory_size(scratch)
+      end
+    `);
+    assert.ok(bytes instanceof Uint8Array);
+    assert.ok(bytes.length > 8);
+  });
+
+  it('mixed imported and local memories', () => {
+    const coords = new WebAssembly.Memory({ initial: 1 });
+    const { set_c, get_c, get_scratch_size } = atra({ memory: { coords } })`
+      memory coords
+      memory scratch: 2
+
+      subroutine set_c(arr: coords array f64; i: i32; v: f64)
+      begin
+        arr[i] := v
+      end
+
+      function get_c(arr: coords array f64; i: i32): f64
+      begin
+        get_c := arr[i]
+      end
+
+      function get_scratch_size(): i32
+      begin
+        get_scratch_size := memory_size(scratch)
+      end
+    `;
+    set_c(0, 0, 1.23);
+    assert.equal(get_c(0, 0), 1.23);
+    assert.equal(get_scratch_size(), 2);
   });
 });

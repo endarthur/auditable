@@ -9,9 +9,11 @@ const _math = {
 export function instantiate(imports = {}) {
   const importObj = { math: _math, host: {} };
   let mem = null;
+  const memories = {};
   for (const [k, v] of Object.entries(imports)) {
     if (k === 'memory' || k === '__memory') {
-      mem = v;
+      if (v instanceof WebAssembly.Memory) mem = v;
+      else if (v && typeof v === 'object') Object.assign(memories, v);
     } else if (typeof v === 'function') {
       importObj.host[k] = v;
     } else if (v && typeof v === 'object') {
@@ -20,8 +22,13 @@ export function instantiate(imports = {}) {
       }
     }
   }
-  if (!mem) mem = new WebAssembly.Memory({ initial: 1 });
-  importObj.env = { memory: mem };
+  importObj.env = {};
+  if (Object.keys(memories).length > 0) {
+    for (const [name, m] of Object.entries(memories)) importObj.env[name] = m;
+  } else {
+    if (!mem) mem = new WebAssembly.Memory({ initial: 1 });
+    importObj.env.memory = mem;
+  }
   const mod = new WebAssembly.Module(_bytes);
   const inst = new WebAssembly.Instance(mod, importObj);
   const exports = {};
