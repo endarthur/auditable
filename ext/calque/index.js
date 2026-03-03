@@ -1510,10 +1510,13 @@ stdlib.mod = function(val, divisor) {
 
 
 
-function evaluate(ast) {
+let _imports = {};
+
+function evaluate(ast, opts) {
   const globalScope = new Map();
   const sheets = new Map();
   const exports = new Map();
+  _imports = (opts && opts.imports) || {};
 
   for (const node of ast.body) {
     if (node.type === 'SheetBlock') {
@@ -1571,6 +1574,34 @@ function makeCallable(params, bodyAST, closure, parentScope) {
     }
     return evalExpr(bodyAST, callScope, parentScope);
   };
+}
+
+function resolveImport(data, sheetName) {
+  // Already a calque table
+  if (data && data.__table) return data;
+
+  // Array of objects → convert to table
+  if (Array.isArray(data) && data.length > 0 && typeof data[0] === 'object' && data[0] !== null) {
+    const headers = Object.keys(data[0]);
+    const columns = {};
+    for (const h of headers) {
+      const vals = data.map(r => r[h]);
+      const allNum = vals.every(v => v === null || v === undefined || typeof v === 'number');
+      columns[h] = allNum ? Float64Array.from(vals.map(v => v ?? NaN)) : vals;
+    }
+    const rows = data.length;
+    return { __table: true, columns, headers, rows };
+  }
+
+  // Multi-sheet object: { SheetName: table/array, ... }
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    const keys = Object.keys(data);
+    const key = sheetName || keys[0];
+    if (!key || !(key in data)) throw new Error(`import: sheet "${sheetName || '(default)'}" not found`);
+    return resolveImport(data[key], null);
+  }
+
+  throw new Error('import: unsupported data format');
 }
 
 function resolveInScope(name, scope, parentScope) {
@@ -1793,9 +1824,9 @@ function evalExpr(node, scope, parentScope) {
     }
 
     case 'Import': {
-      // Import is a runtime operation that would need file access
-      // For Phase 1, return a placeholder
-      throw new Error('import requires runtime file access (not available in evaluator)');
+      const data = _imports[node.path];
+      if (data === undefined) throw new Error(`import: no data provided for "${node.path}"`);
+      return resolveImport(data, node.sheetName);
     }
 
     default:
@@ -2598,15 +2629,24 @@ function toSource(stringsOrSource, values) {
 }
 
 function calque(stringsOrSource, ...values) {
+  // calque({ imports: {...} })`...` — curried with options
+  if (typeof stringsOrSource === 'object' && !Array.isArray(stringsOrSource) && !stringsOrSource.raw) {
+    const opts = stringsOrSource;
+    return function(strings, ...vals) {
+      const src = toSource(strings, vals);
+      if (src !== null) return calque.run(src, opts);
+      throw new Error('calque: expected tagged template after options');
+    };
+  }
   const source = toSource(stringsOrSource, values);
   if (source !== null) return calque.run(source);
   throw new Error('calque: expected string or tagged template');
 }
 
-calque.run = function(source) {
+calque.run = function(source, opts) {
   const tokens = lex(source);
   const ast = parse(tokens);
-  const result = evaluate(ast);
+  const result = evaluate(ast, opts);
   result.compile = function() {
     const layoutResult = layout(ast, result);
     const { workbook, warnings } = codegen(ast, layoutResult, result);

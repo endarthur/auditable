@@ -25,15 +25,24 @@ function toSource(stringsOrSource, values) {
 }
 
 export function calque(stringsOrSource, ...values) {
+  // calque({ imports: {...} })`...` — curried with options
+  if (typeof stringsOrSource === 'object' && !Array.isArray(stringsOrSource) && !stringsOrSource.raw) {
+    const opts = stringsOrSource;
+    return function(strings, ...vals) {
+      const src = toSource(strings, vals);
+      if (src !== null) return calque.run(src, opts);
+      throw new Error('calque: expected tagged template after options');
+    };
+  }
   const source = toSource(stringsOrSource, values);
   if (source !== null) return calque.run(source);
   throw new Error('calque: expected string or tagged template');
 }
 
-calque.run = function(source) {
+calque.run = function(source, opts) {
   const tokens = lex(source);
   const ast = parse(tokens);
-  const result = evaluate(ast);
+  const result = evaluate(ast, opts);
   result.compile = function() {
     const layoutResult = layout(ast, result);
     const { workbook, warnings } = codegen(ast, layoutResult, result);

@@ -565,6 +565,32 @@ describe('evaluate', () => {
     assert.deepEqual(r.bindings.msg, ['hi Alice', 'hi Bob']);
   });
 
+  it('import with array of objects', () => {
+    const data = [{ Name: 'Alice', Revenue: 100 }, { Name: 'Bob', Revenue: 200 }];
+    const r = calque.run('data = import "sales.csv"\ntotal = sum(data.Revenue)', { imports: { 'sales.csv': data } });
+    assert.ok(r.bindings.data.__table);
+    assert.equal(r.bindings.total, 300);
+  });
+
+  it('import with calque table', () => {
+    const table = { __table: true, columns: { x: Float64Array.from([1, 2, 3]) }, headers: ['x'], rows: 3 };
+    const r = calque.run('d = import "data.csv"\ny = sum(d.x)', { imports: { 'data.csv': table } });
+    assert.equal(r.bindings.y, 6);
+  });
+
+  it('import with multi-sheet and sheet selector', () => {
+    const data = {
+      Q1: [{ val: 10 }, { val: 20 }],
+      Q2: [{ val: 30 }, { val: 40 }],
+    };
+    const r = calque.run('d = import "report.xlsx" sheet "Q2"\ntotal = sum(d.val)', { imports: { 'report.xlsx': data } });
+    assert.equal(r.bindings.total, 70);
+  });
+
+  it('import without data throws', () => {
+    assert.throws(() => calque.run('d = import "missing.csv"'), /no data provided/);
+  });
+
   it('spec example: Sales + Summary', () => {
     const r = run(`
       Sales {
@@ -615,6 +641,12 @@ describe('calque API', () => {
   it('direct call with string', () => {
     const r = calque('x = 10\ny = x * 2');
     assert.equal(r.bindings.y, 20);
+  });
+
+  it('curried with imports', () => {
+    const data = [{ a: 1 }, { a: 2 }, { a: 3 }];
+    const r = calque({ imports: { 'data.csv': data } })`d = import "data.csv"\ntotal = sum(d.a)`;
+    assert.equal(r.bindings.total, 6);
   });
 
   it('result.compile() returns workbook', () => {
