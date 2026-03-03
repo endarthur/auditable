@@ -44,6 +44,9 @@ const SPILLED = new Set(['scan', 'sort', 'unique']);
 const POINTWISE = new Set(['abs', 'round', 'floor', 'ceil', 'sqrt', 'log', 'exp', 'mod',
   'left', 'right', 'mid', 'len', 'trim', 'text', 'str', 'iferror', 'ifna']);
 
+// Rolling ops: calque name → xlsx function
+const ROLLING_OPS = { sum: 'SUM', mean: 'AVERAGE', count: 'COUNT', min: 'MIN', max: 'MAX' };
+
 // Operator mapping calque → xlsx
 const OP_MAP = { '==': '=', '/=': '<>', '!=': '<>' };
 
@@ -61,7 +64,13 @@ function shouldBake(node, ctx) {
   if (node.type === 'ArrayLit') return 'array literal (data entry)';
   if (node.type === 'Range') return 'range expression (no xlsx equivalent)';
   if (node.type === 'FuncCall') {
-    if (node.name === 'rolling') return 'rolling() (no clean formula)';
+    // rolling: emit formula only for string-named reductions (mean, sum, etc.)
+    if (node.name === 'rolling') {
+      if (node.args.length >= 3 && node.args[2].type === 'StringLit' && ROLLING_OPS[node.args[2].value]) {
+        return null; // can emit
+      }
+      return 'rolling() with lambda (no clean formula)';
+    }
     // Nested reduction: allow if inner is a known pointwise function, otherwise bake
     if (REDUCTIONS.has(node.name) && node.args.length > 0) {
       const arg = node.args[0];
@@ -149,6 +158,20 @@ function emitCrossSheetRef(sheetName, fieldName, ctx, asRange) {
   return `${prefix}${col}${row}`;
 }
 
+// ── Binding info lookup ──
+
+function resolveBindingInfo(name, ctx) {
+  const layout = ctx.layout;
+  if (ctx.currentSheet && layout.sheets[ctx.currentSheet]) {
+    const info = layout.sheets[ctx.currentSheet].bindings[name];
+    if (info) return info;
+  }
+  for (const sd of Object.values(layout.sheets)) {
+    if (sd.bindings[name]) return sd.bindings[name];
+  }
+  return null;
+}
+
 // ── Formula emission ──
 
 function emitFormula(node, ctx) {
@@ -201,6 +224,27 @@ function emitFormula(node, ctx) {
       // Check for baked patterns
       const bakeReason = shouldBake(node, ctx);
       if (bakeReason) return null;
+
+      // rolling(col, window, 'op') → per-row reduction with sliding range
+      if (node.name === 'rolling') {
+        if (node.args.length < 3) return null;
+        const colNode = node.args[0];
+        const windowNode = node.args[1];
+        const opNode = node.args[2];
+        if (opNode.type !== 'StringLit' || !ROLLING_OPS[opNode.value]) return null;
+        if (windowNode.type !== 'NumberLit') return null;
+        const xlsFn = ROLLING_OPS[opNode.value];
+        const w = Math.round(windowNode.value);
+        const refName = colNode.type === 'Ident' ? colNode.name : null;
+        if (!refName) return null;
+        const info = resolveBindingInfo(refName, ctx);
+        if (!info) return null;
+        const letter = colLetter(info.col);
+        const start = Math.max(0, ctx.row - w + 1);
+        const startRow = info.row + 1 + start;
+        const endRow = info.row + 1 + ctx.row;
+        return `${xlsFn}(${letter}${startRow}:${letter}${endRow})`;
+      }
 
       const xlsxName = FUNC_MAP[node.name];
 

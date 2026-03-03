@@ -940,6 +940,38 @@ describe('codegen', () => {
     assert.ok(rCol.formulas);
     assert.equal(rCol.formulas[0], '=XLOOKUP(25,A$2:A$4,B$2:B$4,,-1)');
   });
+
+  it('rolling(col, 3, "mean") → per-row AVERAGE with sliding range', () => {
+    const { workbook } = compile('Sales {\n  x = [1, 2, 3, 4, 5]\n  y = rolling(x, 3, "mean")\n}');
+    const yCol = sheet(workbook, 'Sales').columns.y;
+    assert.ok(yCol.formulas);
+    // row 0: window [x0] → AVERAGE(A2:A2)
+    assert.equal(yCol.formulas[0], '=AVERAGE(A2:A2)');
+    // row 1: window [x0, x1] → AVERAGE(A2:A3)
+    assert.equal(yCol.formulas[1], '=AVERAGE(A2:A3)');
+    // row 2: window [x0, x1, x2] → full window AVERAGE(A2:A4)
+    assert.equal(yCol.formulas[2], '=AVERAGE(A2:A4)');
+    // row 3: window [x1, x2, x3] → slides: AVERAGE(A3:A5)
+    assert.equal(yCol.formulas[3], '=AVERAGE(A3:A5)');
+    // row 4: window [x2, x3, x4] → AVERAGE(A4:A6)
+    assert.equal(yCol.formulas[4], '=AVERAGE(A4:A6)');
+  });
+
+  it('rolling(col, 2, "sum") → per-row SUM', () => {
+    const { workbook } = compile('Sales {\n  x = [10, 20, 30]\n  y = rolling(x, 2, "sum")\n}');
+    const yCol = sheet(workbook, 'Sales').columns.y;
+    assert.ok(yCol.formulas);
+    assert.equal(yCol.formulas[0], '=SUM(A2:A2)');
+    assert.equal(yCol.formulas[1], '=SUM(A2:A3)');
+    assert.equal(yCol.formulas[2], '=SUM(A3:A4)');
+  });
+
+  it('rolling with lambda → baked', () => {
+    const { workbook, warnings } = compile('Sales {\n  x = [1, 2, 3]\n  y = rolling(x, 2, (w) -> sum(w))\n}');
+    const yCol = sheet(workbook, 'Sales').columns.y;
+    assert.ok(!yCol.formulas);
+    assert.ok(warnings.some(w => w.includes('rolling')));
+  });
 });
 
 // ═════════════════════════════════════════════════════════════════════
