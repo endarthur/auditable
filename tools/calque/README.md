@@ -78,6 +78,48 @@ canvas-based rendering with virtual scrolling. cells are editable inline -- doub
 | Alt+T | create binding from selection |
 | Alt+PageUp/Dn | switch sheet |
 
+## testing
+
+the calque compiler has a comprehensive test suite covering lexer, parser, stdlib, evaluator, layout, codegen, highlighting, and the public API.
+
+```
+node --test test/calque.test.js
+```
+
 ## language
 
 see `ext/calque/SPEC.md` for the full calque language specification.
+
+## roadmap
+
+### editor
+
+- **find/replace** -- CM6 has built-in search; wire it up for large file navigation
+- **code folding** -- collapse sheet blocks (`Sales { ... }`), CM6 supports fold markers
+- **formula bar** -- show selected cell's binding/value above the grid (like Excel)
+- **live diagnostics** -- parse errors as squiggles in the editor, not just after eval
+- **cell value preview** -- tooltip on hover for truncated cell content
+- **grid zoom** -- zoom in/out on the canvas grid
+- **freeze panes** -- lock header rows while scrolling large sheets
+- **undo/redo for grid edits** -- grid cell edits modify source; make them undoable
+- **column type hints** -- show icons (`#`, `@`, date) in column headers
+- **theme toggle** -- dark/light switch (currently locked to GCU dark)
+
+### language
+
+- **groupby** -- acknowledged gap in the spec; filter-then-reduce works but isn't ergonomic for pivot patterns
+- **xlsx formula decompilation** -- partial: import xlsx and get readable calque code back for simple patterns (not just values)
+- **multi-file imports** -- import other `.calque` files as modules
+
+### data
+
+- **format preservation** -- extend xlsx writer to capture cell formatting (fills, borders, fonts)
+- **conditional formatting** -- formula-driven color rules in the grid and xlsx output
+- **data validation UI** -- dropdown icons in cells where xlsx has validation
+- **chart support** -- model charts as bindings, render in grid, emit in xlsx
+
+### project management
+
+- **AF integration** -- host calque projects in the AF workspace shell
+- **project search** -- search/filter in the project list (currently max 20, no search)
+- **workspace format** -- multi-file `.calque` project support
