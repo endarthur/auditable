@@ -313,7 +313,7 @@ function calqueSigHint(code, cursor) {
 
 // ── Completions ──
 
-const CALQUE_DIRECTIVES = ['@below', '@right', '@anchor'];
+const CALQUE_DIRECTIVES = ['@below', '@right', '@anchor', '@formula'];
 
 function calqueCompletions(code, cursor, prefix) {
   if (cursor === undefined) {
@@ -2024,6 +2024,7 @@ function resolveDirectives(directives, bindings, nextCol, name, isCol) {
       return { col, row: row + headerOffset, label: anchorLabel };
     }
 
+    if (d.name === 'formula') continue; // codegen-only, no layout effect
     throw new Error(`Unknown directive @${d.name} in '${name}'`);
   }
 
@@ -2504,6 +2505,9 @@ function codegen(ast, layoutResult, evalResult, opts) {
     const globalBindings = evalResult.bindings;
     const columns = {};
 
+    // Compute sheet maxRows for scalar broadcasting
+    const sheetMaxRows = sheetLayout.maxRows || 1;
+
     for (const [bindingName, info] of Object.entries(sheetLayout.bindings)) {
       // Get evaluated value
       let val;
@@ -2514,7 +2518,8 @@ function codegen(ast, layoutResult, evalResult, opts) {
       }
 
       // Find the AST node for this binding
-      const astNode = findBindingAST(ast, sheetName, bindingName);
+      const bindingInfo = findBindingAST(ast, sheetName, bindingName);
+      const astNode = bindingInfo ? bindingInfo.expr : null;
 
       // Try to generate formulas
       const ctx = {
@@ -2527,11 +2532,21 @@ function codegen(ast, layoutResult, evalResult, opts) {
       let formulas = null;
       let bakeReason = null;
 
-      if (astNode) {
+      // For scalars in sheets with columns, fill all rows to match grid display
+      const numRows = info.isColumn ? info.rows : sheetMaxRows;
+
+      // Check for @formula directive — verbatim Excel formula passthrough
+      const formulaDir = bindingInfo?.directives?.find(d => d.name === 'formula');
+
+      if (formulaDir && formulaDir.args.length > 0) {
+        const raw = formulaDir.args[0];
+        let fStr = typeof raw === 'string' ? raw : raw.value;
+        if (!fStr.startsWith('=')) fStr = '=' + fStr;
+        formulas = Array(numRows).fill(fStr);
+      } else if (astNode) {
         bakeReason = shouldBake(astNode, ctx);
 
         if (!bakeReason) {
-          const numRows = info.isColumn ? info.rows : 1;
           const spilled = isSpilledNode(astNode);
 
           if (spilled) {
@@ -2562,7 +2577,7 @@ function codegen(ast, layoutResult, evalResult, opts) {
 
       if (formulas) {
         // Formulaic column
-        const values = bakeValues(val, info);
+        const values = bakeValues(val, info, numRows);
         const colObj = { values, formulas };
         if (hasPosition) { colObj.col = info.col; colObj.row = info.row; }
         if (info.label !== undefined && info.label !== 'above') colObj.label = info.label;
@@ -2575,12 +2590,12 @@ function codegen(ast, layoutResult, evalResult, opts) {
           warnings.push(`${sheetName}.${bindingName}: baked — could not emit formula`);
         }
         if (hasPosition) {
-          const values = bakeValues(val, info);
+          const values = bakeValues(val, info, numRows);
           const colObj = { values, col: info.col, row: info.row };
           if (info.label !== undefined && info.label !== 'above') colObj.label = info.label;
           columns[bindingName] = colObj;
         } else {
-          columns[bindingName] = bakeValues(val, info);
+          columns[bindingName] = bakeValues(val, info, numRows);
         }
       }
     }
@@ -2591,10 +2606,11 @@ function codegen(ast, layoutResult, evalResult, opts) {
   return { workbook, warnings };
 }
 
-function bakeValues(val, info) {
+function bakeValues(val, info, numRows) {
   if (val instanceof Float64Array) return val;
   if (isColumn(val)) return val;
-  // Scalar — wrap in array
+  // Scalar — fill to numRows for consistent xlsx output
+  if (numRows && numRows > 1) return Array(numRows).fill(val);
   return [val];
 }
 
@@ -2602,11 +2618,12 @@ function findBindingAST(ast, sheetName, bindingName) {
   for (const node of ast.body) {
     if (node.type === 'SheetBlock' && node.name === sheetName) {
       for (const b of node.body) {
-        if (b.type === 'Binding' && b.name === bindingName) return b.expr;
+        if (b.type === 'Binding' && b.name === bindingName)
+          return { expr: b.expr, directives: b.directives };
       }
     }
     if (sheetName === 'Sheet1' && node.type === 'Binding' && node.name === bindingName) {
-      return node.expr;
+      return { expr: node.expr, directives: node.directives };
     }
   }
   return null;

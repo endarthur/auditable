@@ -1,4 +1,8 @@
 <div id="cq-menubar" class="cq-menubar"></div>
+<div id="cq-formula-bar" class="cq-formula-bar">
+  <span id="cq-formula-ref" class="cq-formula-ref"></span>
+  <span id="cq-formula-val" class="cq-formula-val"></span>
+</div>
 <div id="cq-viewport" class="cq-viewport">
   <div id="cq-grid" class="cq-grid"></div>
   <div id="cq-sheet-tabs" class="cq-sheet-tabs"></div>
@@ -6,5 +10,13 @@
 <div id="cq-sig-hint" class="cq-sig-hint"></div>
 <div class="cq-statusbar">
   <span id="cq-status-msg" class="cq-status-msg">ready</span>
-  <span id="cq-status-cursor" class="cq-status-cursor">1:1</span>
+  <div class="cq-status-right">
+    <span id="cq-status-cursor" class="cq-status-cursor">1:1</span>
+    <div class="cq-zoom-control">
+      <button class="cq-zoom-btn" id="cq-zoom-out" title="Zoom out">&minus;</button>
+      <input type="range" id="cq-zoom-slider" class="cq-zoom-slider" min="50" max="200" value="100" step="10">
+      <button class="cq-zoom-btn" id="cq-zoom-in" title="Zoom in">+</button>
+      <span id="cq-zoom-pct" class="cq-zoom-pct">100%</span>
+    </div>
+  </div>
 </div>

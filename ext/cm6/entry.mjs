@@ -19,6 +19,7 @@ export {
   Compartment,
   StateEffect,
   StateField,
+  Transaction,
 } from '@codemirror/state';
 
 export {
@@ -78,3 +79,25 @@ export {
   tags,
   styleTags,
 } from '@lezer/highlight';
+
+export {
+  openSearchPanel,
+  closeSearchPanel,
+  search,
+  searchKeymap,
+  highlightSelectionMatches,
+} from '@codemirror/search';
+
+export {
+  foldGutter,
+  foldKeymap,
+  foldAll,
+  unfoldAll,
+  foldCode,
+  foldService,
+} from '@codemirror/language';
+
+export {
+  linter,
+  lintGutter,
+} from '@codemirror/lint';

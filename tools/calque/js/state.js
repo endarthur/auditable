@@ -17,6 +17,8 @@ const CQ = {
   importData: null,
   menuOpen: null,
   projectId: null,
+  theme: 'dark',
+  zoom: 1,
 };
 
 const STARTER = `Sales {

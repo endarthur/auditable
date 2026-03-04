@@ -6,7 +6,7 @@ function initMenuBar() {
   const menus = [
     { label: 'File', items: [
       { label: 'New', action: newFile, shortcut: 'Ctrl+N' },
-      { label: 'Open .calque...', action: openFile, shortcut: 'Ctrl+O' },
+      { label: 'Open...', action: openFile, shortcut: 'Ctrl+O' },
       { type: 'sep' },
       { label: 'Import .xlsx...', action: importXlsx },
       { type: 'sep' },
@@ -24,6 +24,13 @@ function initMenuBar() {
     ]},
     { label: 'View', items: [
       { label: 'Toggle Editor', action: toggleEditor, shortcut: 'Ctrl+E' },
+      { type: 'sep' },
+      { label: 'Toggle Theme', action: toggleTheme },
+      { label: 'Zoom In', action: () => setZoom(CQ.zoom + 0.1), shortcut: 'Ctrl+=' },
+      { label: 'Zoom Out', action: () => setZoom(CQ.zoom - 0.1), shortcut: 'Ctrl+-' },
+      { label: 'Reset Zoom', action: () => setZoom(1) },
+      { type: 'sep' },
+      { label: 'Freeze Header Row', action: toggleFreeze },
     ]},
     { label: 'Help', items: [
       { label: 'Keyboard Shortcuts', action: showShortcuts },
@@ -209,7 +216,14 @@ function showShortcuts() {
     '  Ctrl+Shift+E \u2014 Jump Editor \u2194 Cell\n' +
     '  Ctrl+Z \u2014 Undo\n' +
     '  Ctrl+Shift+Z \u2014 Redo\n' +
-    '  Ctrl+/ \u2014 Toggle Comment\n\n' +
+    '  Ctrl+/ \u2014 Toggle Comment\n' +
+    '  Ctrl+F \u2014 Find/Replace\n' +
+    '  Ctrl+Shift+[ \u2014 Fold Block\n' +
+    '  Ctrl+Shift+] \u2014 Unfold Block\n\n' +
+    'VIEW\n' +
+    '  Ctrl+= \u2014 Zoom In\n' +
+    '  Ctrl+- \u2014 Zoom Out\n' +
+    '  Ctrl+0 \u2014 Reset Zoom\n\n' +
     'GRID\n' +
     '  Arrows \u2014 Navigate\n' +
     '  Shift+Arrows \u2014 Extend Selection\n' +

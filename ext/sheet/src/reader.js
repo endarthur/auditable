@@ -127,6 +127,10 @@ function parseWorksheet(xml, sharedStrings, styles, options) {
       const vNode = find(c, 'v');
       const vText = vNode ? vNode.text : '';
 
+      // Extract formula element
+      const fNode = find(c, 'f');
+      const formula = fNode ? fNode.text : null;
+
       let value, type;
 
       if (t === 's') {
@@ -160,7 +164,7 @@ function parseWorksheet(xml, sharedStrings, styles, options) {
         type = dateIds.has(numFmtId) ? 'd' : 'n';
       }
 
-      rawCells.push({ col, row, value, type });
+      rawCells.push({ col, row, value, type, formula });
       if (col > maxCol) maxCol = col;
       if (row > maxRow) maxRow = row;
     }
@@ -249,7 +253,29 @@ function parseWorksheet(xml, sharedStrings, styles, options) {
     }
   }
 
-  return { columns, headers, rows: rowCount };
+  // Build parallel formulas object
+  const formulas = {};
+  for (let ci = 0; ci < colList.length; ci++) {
+    const col = colList[ci];
+    const name = headers[ci];
+    const cells = colCells[col];
+    const hasFormulas = cells.some(c => c.formula);
+    if (hasFormulas) {
+      const arr = new Array(rowCount).fill(null);
+      for (const c of cells) {
+        if (c.formula) arr[c.row - minDataRow] = c.formula;
+      }
+      formulas[name] = arr;
+    }
+  }
+
+  // Map column letter → header name for formula decompilation
+  const colLetterMap = {};
+  for (let ci = 0; ci < colList.length; ci++) {
+    colLetterMap[colLetter(colList[ci])] = headers[ci];
+  }
+
+  return { columns, headers, rows: rowCount, formulas, colLetterMap };
 }
 
 // ── Public API ──

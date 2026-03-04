@@ -308,7 +308,7 @@ export function calqueSigHint(code, cursor) {
 
 // ── Completions ──
 
-const CALQUE_DIRECTIVES = ['@below', '@right', '@anchor'];
+const CALQUE_DIRECTIVES = ['@below', '@right', '@anchor', '@formula'];
 
 export function calqueCompletions(code, cursor, prefix) {
   if (cursor === undefined) {

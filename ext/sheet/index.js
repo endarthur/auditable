@@ -482,6 +482,10 @@ function parseWorksheet(xml, sharedStrings, styles, options) {
       const vNode = find(c, 'v');
       const vText = vNode ? vNode.text : '';
 
+      // Extract formula element
+      const fNode = find(c, 'f');
+      const formula = fNode ? fNode.text : null;
+
       let value, type;
 
       if (t === 's') {
@@ -515,7 +519,7 @@ function parseWorksheet(xml, sharedStrings, styles, options) {
         type = dateIds.has(numFmtId) ? 'd' : 'n';
       }
 
-      rawCells.push({ col, row, value, type });
+      rawCells.push({ col, row, value, type, formula });
       if (col > maxCol) maxCol = col;
       if (row > maxRow) maxRow = row;
     }
@@ -604,7 +608,29 @@ function parseWorksheet(xml, sharedStrings, styles, options) {
     }
   }
 
-  return { columns, headers, rows: rowCount };
+  // Build parallel formulas object
+  const formulas = {};
+  for (let ci = 0; ci < colList.length; ci++) {
+    const col = colList[ci];
+    const name = headers[ci];
+    const cells = colCells[col];
+    const hasFormulas = cells.some(c => c.formula);
+    if (hasFormulas) {
+      const arr = new Array(rowCount).fill(null);
+      for (const c of cells) {
+        if (c.formula) arr[c.row - minDataRow] = c.formula;
+      }
+      formulas[name] = arr;
+    }
+  }
+
+  // Map column letter → header name for formula decompilation
+  const colLetterMap = {};
+  for (let ci = 0; ci < colList.length; ci++) {
+    colLetterMap[colLetter(colList[ci])] = headers[ci];
+  }
+
+  return { columns, headers, rows: rowCount, formulas, colLetterMap };
 }
 
 // ── Public API ──
@@ -772,6 +798,14 @@ function emitWorksheet(sheet, ssMap, styleInfo, tableRIds) {
     xmlns: 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
   }, tag('sheetData'));
 
+  // determine row count
+  let rowCount = 0;
+  for (const name of colNames) {
+    const col = cols[name];
+    const values = Array.isArray(col) || ArrayBuffer.isView(col) ? col : (col ? col.values || [] : []);
+    if (values.length > rowCount) rowCount = values.length;
+  }
+
   const { formatMap, fmtEntries, defaultDateFmt } = styleInfo;
 
   // helper: get style index for a column
@@ -789,159 +823,82 @@ function emitWorksheet(sheet, ssMap, styleInfo, tableRIds) {
     return idx >= 0 ? idx + 1 : 0;
   };
 
-  // helper: check if column object (not raw array)
-  const isColObj = (col) => col && typeof col === 'object' && !Array.isArray(col) && !ArrayBuffer.isView(col);
-
-  // Detect positioned mode: any column has a `col` property
-  const positioned = colNames.some(name => {
-    const col = cols[name];
-    return isColObj(col) && col.col !== undefined;
-  });
-
-  // helper: emit a cell tag
-  const emitCell = (ref, col, value, formulas, ri, sharedFormula, sharedFormulaIdx) => {
-    if (value === null || value === undefined) return null;
-    const attrs = { r: ref };
-    let children = '';
-
-    // handle shared formula
-    if (sharedFormula && ri === 0) {
-      const fText = sharedFormula.base.startsWith('=') ? sharedFormula.base.slice(1) : sharedFormula.base;
-      children += tag('f', { t: 'shared', ref: sharedFormula.ref, si: sharedFormulaIdx }, escape(fText));
-    } else if (sharedFormula && ri > 0) {
-      children += tag('f', { t: 'shared', si: sharedFormulaIdx });
-    }
-
-    // per-cell formula
-    if (!sharedFormula && formulas && ri < formulas.length && formulas[ri]) {
-      const fText = formulas[ri].startsWith('=') ? formulas[ri].slice(1) : formulas[ri];
-      children += tag('f', null, escape(fText));
-    }
-
-    // value
-    if (value instanceof Date) {
-      const serial = dateToSerial(value);
-      attrs.s = dateStyleIdx();
-      children += tag('v', null, String(serial));
-    } else if (typeof value === 'boolean') {
-      attrs.t = 'b';
-      children += tag('v', null, value ? '1' : '0');
-    } else if (typeof value === 'number') {
-      const si = getStyleIdx(col);
-      if (si > 0) attrs.s = si;
-      children += tag('v', null, String(value));
-    } else if (typeof value === 'string') {
-      attrs.t = 's';
-      const ssIdx = ssMap.get(value);
-      children += tag('v', null, String(ssIdx));
-    }
-
-    return tag('c', attrs, children);
-  };
-
   let sharedFormulaIdx = 0;
   const rows = [];
 
-  if (positioned) {
-    // Positioned mode: build sparse cell map
-    // cellMap: Map<rowIdx(0-based), Map<colIdx(0-based), cellXml>>
-    const cellMap = new Map();
-    const addCell = (r, c, xml) => {
-      if (!xml) return;
-      if (!cellMap.has(r)) cellMap.set(r, new Map());
-      cellMap.get(r).set(c, xml);
-    };
+  // header row
+  const headerCells = [];
+  for (let ci = 0; ci < colNames.length; ci++) {
+    const ref = cellRef(ci, 0);
+    const ssIdx = ssMap.get(colNames[ci]);
+    headerCells.push(tag('c', { r: ref, t: 's' }, tag('v', null, String(ssIdx))));
+  }
+  rows.push(tag('row', { r: 1 }, ...headerCells));
+
+  // data rows
+  for (let ri = 0; ri < rowCount; ri++) {
+    const rowCells = [];
+    const excelRow = ri + 2; // 1-indexed, after header
 
     for (let ci = 0; ci < colNames.length; ci++) {
-      const name = colNames[ci];
-      const col = cols[name];
-      const colIdx = isColObj(col) && col.col !== undefined ? col.col : ci;
-      const dataRow = isColObj(col) && col.row !== undefined ? col.row : 1;
-      const values = Array.isArray(col) || ArrayBuffer.isView(col) ? col : (isColObj(col) ? col.values || [] : []);
-      const formulas = isColObj(col) ? col.formulas : null;
-      const sharedFormula = isColObj(col) ? col.sharedFormula : null;
-
-      // Header cell — placement depends on label mode
-      const label = isColObj(col) ? col.label : undefined;
-      const ssIdx = ssMap.get(name);
-      if (label === 'left') {
-        // Header in cell to the left of data (same row), if col > 0
-        if (colIdx > 0) {
-          const headerRef = cellRef(colIdx - 1, dataRow);
-          addCell(dataRow, colIdx - 1, tag('c', { r: headerRef, t: 's' }, tag('v', null, String(ssIdx))));
-        }
-      } else if (label !== false) {
-        // "above" or undefined: header in row above data (default)
-        const headerRow = dataRow - 1; // 0-indexed
-        const headerRef = cellRef(colIdx, headerRow);
-        addCell(headerRow, colIdx, tag('c', { r: headerRef, t: 's' }, tag('v', null, String(ssIdx))));
-      }
-      // label === false: no header cell
-
-      // Data cells
-      for (let ri = 0; ri < values.length; ri++) {
-        const value = values[ri];
-        const rowIdx = dataRow + ri; // 0-indexed
-        const ref = cellRef(colIdx, rowIdx);
-        addCell(rowIdx, colIdx, emitCell(ref, col, value, formulas, ri, sharedFormula, sharedFormulaIdx));
-      }
-
-      if (sharedFormula) sharedFormulaIdx++;
-    }
-
-    // Emit rows in order
-    const sortedRows = [...cellMap.keys()].sort((a, b) => a - b);
-    for (const rowIdx of sortedRows) {
-      const cellEntries = [...cellMap.get(rowIdx).entries()].sort((a, b) => a[0] - b[0]);
-      const rowCells = cellEntries.map(([, xml]) => xml);
-      if (rowCells.length > 0) rows.push(tag('row', { r: rowIdx + 1 }, ...rowCells));
-    }
-  } else {
-    // Sequential mode (original logic)
-
-    // determine row count
-    let rowCount = 0;
-    for (const name of colNames) {
-      const col = cols[name];
+      const ref = cellRef(ci, ri + 1);
+      const col = cols[colNames[ci]];
       const values = Array.isArray(col) || ArrayBuffer.isView(col) ? col : (col ? col.values || [] : []);
-      if (values.length > rowCount) rowCount = values.length;
-    }
+      const formulas = (col && !Array.isArray(col) && !ArrayBuffer.isView(col)) ? col.formulas : null;
+      const sharedFormula = (col && !Array.isArray(col) && !ArrayBuffer.isView(col)) ? col.sharedFormula : null;
+      const value = ri < values.length ? values[ri] : null;
 
-    // header row
-    const headerCells = [];
-    for (let ci = 0; ci < colNames.length; ci++) {
-      const ref = cellRef(ci, 0);
-      const ssIdx = ssMap.get(colNames[ci]);
-      headerCells.push(tag('c', { r: ref, t: 's' }, tag('v', null, String(ssIdx))));
-    }
-    rows.push(tag('row', { r: 1 }, ...headerCells));
+      if (value === null || value === undefined) continue;
 
-    // data rows
-    for (let ri = 0; ri < rowCount; ri++) {
-      const rowCells = [];
-      const excelRow = ri + 2; // 1-indexed, after header
+      const attrs = { r: ref };
+      let children = '';
 
-      for (let ci = 0; ci < colNames.length; ci++) {
-        const ref = cellRef(ci, ri + 1);
-        const col = cols[colNames[ci]];
-        const values = Array.isArray(col) || ArrayBuffer.isView(col) ? col : (col ? col.values || [] : []);
-        const formulas = isColObj(col) ? col.formulas : null;
-        const sharedFormula = isColObj(col) ? col.sharedFormula : null;
-        const value = ri < values.length ? values[ri] : null;
-
-        const cell = emitCell(ref, col, value, formulas, ri, sharedFormula, sharedFormulaIdx);
-        if (cell) rowCells.push(cell);
+      // handle shared formula
+      if (sharedFormula && ri === 0) {
+        const fText = sharedFormula.base.startsWith('=') ? sharedFormula.base.slice(1) : sharedFormula.base;
+        children += tag('f', { t: 'shared', ref: sharedFormula.ref, si: sharedFormulaIdx }, escape(fText));
+      } else if (sharedFormula && ri > 0) {
+        children += tag('f', { t: 'shared', si: sharedFormulaIdx });
       }
 
-      if (rowCells.length > 0) rows.push(tag('row', { r: excelRow }, ...rowCells));
+      // per-cell formula
+      if (!sharedFormula && formulas && ri < formulas.length && formulas[ri]) {
+        const fText = formulas[ri].startsWith('=') ? formulas[ri].slice(1) : formulas[ri];
+        children += tag('f', null, escape(fText));
+      }
+
+      // value
+      if (value instanceof Date) {
+        const serial = dateToSerial(value);
+        attrs.s = dateStyleIdx();
+        children += tag('v', null, String(serial));
+      } else if (typeof value === 'boolean') {
+        attrs.t = 'b';
+        children += tag('v', null, value ? '1' : '0');
+      } else if (typeof value === 'number') {
+        const si = getStyleIdx(col);
+        if (si > 0) attrs.s = si;
+        children += tag('v', null, String(value));
+      } else if (typeof value === 'string') {
+        attrs.t = 's';
+        const ssIdx = ssMap.get(value);
+        children += tag('v', null, String(ssIdx));
+      }
+
+      rowCells.push(tag('c', attrs, children));
     }
 
-    // count shared formulas used
-    for (const name of colNames) {
-      const col = cols[name];
-      if (isColObj(col) && col.sharedFormula) {
-        sharedFormulaIdx++;
-      }
+    if (rowCells.length > 0) rows.push(tag('row', { r: excelRow }, ...rowCells));
+
+    // increment shared formula index at end of column processing
+    // (handled per-column below instead)
+  }
+
+  // count shared formulas used
+  for (const name of colNames) {
+    const col = cols[name];
+    if (col && typeof col === 'object' && !Array.isArray(col) && !ArrayBuffer.isView(col) && col.sharedFormula) {
+      sharedFormulaIdx++;
     }
   }
 

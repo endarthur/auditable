@@ -18,6 +18,22 @@
   --editor-font-size: 13px;
 }
 
+:root.cq-light {
+  --bg0: #f0f0f0;
+  --bg1: #fafafa;
+  --bg2: #e8e8e8;
+  --bg3: #ddd;
+  --fg: #444;
+  --fg-dim: #888;
+  --fg-bright: #222;
+  --accent: #8a6c2a;
+  --accent-dim: #b89b4a;
+  --err: #c33;
+  --ok: #2a7a50;
+  --border: #ccc;
+  --border-hi: #aaa;
+}
+
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body {
@@ -108,11 +124,49 @@ html, body {
   background: var(--border);
 }
 
+/* ── Formula Bar ── */
+
+.cq-formula-bar {
+  position: absolute;
+  top: 28px;
+  left: 0;
+  right: 0;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  z-index: 99;
+  overflow: hidden;
+}
+
+.cq-formula-ref {
+  flex-shrink: 0;
+  width: 48px;
+  text-align: center;
+  color: var(--fg-dim);
+  border-right: 1px solid var(--border);
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cq-formula-val {
+  flex: 1;
+  padding: 0 8px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ── Viewport (grid area) ── */
 
 .cq-viewport {
   position: absolute;
-  top: 28px;
+  top: 52px;
   left: 0;
   right: 0;
   bottom: 24px;
@@ -134,9 +188,9 @@ html, body {
   left: 0;
   width: 48px;
   height: 24px;
-  background: #1a1a1a;
-  border-right: 1px solid #2a2a2a;
-  border-bottom: 1px solid #2a2a2a;
+  background: var(--bg2);
+  border-right: 1px solid var(--border-hi);
+  border-bottom: 1px solid var(--border-hi);
   z-index: 4;
 }
 
@@ -154,6 +208,25 @@ html, body {
   left: 0;
   width: 48px;
   z-index: 3;
+}
+
+.cq-grid-frozen {
+  position: absolute;
+  left: 48px;
+  height: 0;
+  z-index: 3;
+  overflow: hidden;
+}
+
+.cq-grid-frozen-corner {
+  position: absolute;
+  left: 0;
+  width: 48px;
+  height: 0;
+  background: var(--bg2);
+  border-right: 1px solid var(--border-hi);
+  border-bottom: 1px solid var(--border-hi);
+  z-index: 4;
 }
 
 .cq-grid-body {
@@ -179,6 +252,23 @@ html, body {
   top: 0;
   left: 0;
   pointer-events: none;
+}
+
+/* ── Cell hover tooltip ── */
+
+.cq-cell-tooltip {
+  position: absolute;
+  z-index: 20;
+  background: var(--bg2);
+  border: 1px solid var(--border-hi);
+  color: var(--fg-bright);
+  font: 13px var(--mono);
+  padding: 2px 8px;
+  pointer-events: none;
+  white-space: nowrap;
+  max-width: 500px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ── Cell edit input ── */
@@ -219,6 +309,11 @@ html, body {
 .cq-grid-scroll::-webkit-scrollbar-corner {
   background: #141414;
 }
+
+:root.cq-light .cq-grid-scroll::-webkit-scrollbar-track { background: #e8e8e8; }
+:root.cq-light .cq-grid-scroll::-webkit-scrollbar-thumb { background: #bbb; border-color: #e8e8e8; }
+:root.cq-light .cq-grid-scroll::-webkit-scrollbar-thumb:hover { background: #999; }
+:root.cq-light .cq-grid-scroll::-webkit-scrollbar-corner { background: #e8e8e8; }
 
 /* ── Editor scrollbar ── */
 
@@ -285,7 +380,7 @@ html, body {
 
 .cq-window {
   position: absolute;
-  z-index: 50;
+  z-index: 110;
   background: var(--bg1);
   border: 1px solid var(--border-hi);
   display: flex;
@@ -427,8 +522,97 @@ html, body {
   color: var(--fg-dim);
 }
 
+.cq-status-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.cq-zoom-control {
+  border-left: 1px solid var(--border);
+  padding-left: 10px;
+}
+
 .cq-status-cursor {
   color: var(--fg-dim);
+}
+
+/* ── Zoom Control ── */
+
+.cq-zoom-control {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.cq-zoom-btn {
+  width: 18px;
+  height: 18px;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  font: 12px/1 var(--mono);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.cq-zoom-btn:hover {
+  color: var(--fg-bright);
+  border-color: var(--accent-dim);
+}
+
+.cq-zoom-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 80px;
+  height: 4px;
+  background: var(--border-hi);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.cq-zoom-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  background: var(--fg-dim);
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+}
+
+.cq-zoom-slider::-webkit-slider-thumb:hover {
+  background: var(--accent);
+}
+
+.cq-zoom-slider::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  background: var(--fg-dim);
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+}
+
+.cq-zoom-slider::-moz-range-thumb:hover {
+  background: var(--accent);
+}
+
+.cq-zoom-pct {
+  color: var(--fg-dim);
+  font-size: 11px;
+  min-width: 32px;
+  text-align: right;
+  cursor: pointer;
+}
+
+.cq-zoom-pct:hover {
+  color: var(--fg-bright);
 }
 
 /* ── Modal ── */
@@ -635,4 +819,112 @@ html, body {
 .cq-rename-ok {
   color: var(--accent) !important;
   border-color: var(--accent-dim) !important;
+}
+
+/* ── CM6 Search Panel ── */
+
+.cm-search {
+  background: var(--bg2) !important;
+  border-bottom: 1px solid var(--border-hi) !important;
+  color: var(--fg) !important;
+  font-family: var(--mono) !important;
+  font-size: 12px !important;
+}
+
+.cm-search input,
+.cm-search select {
+  background: var(--bg1) !important;
+  border: 1px solid var(--border-hi) !important;
+  color: var(--fg-bright) !important;
+  font: inherit !important;
+  padding: 2px 6px !important;
+  outline: none !important;
+}
+
+.cm-search input:focus {
+  border-color: var(--accent-dim) !important;
+}
+
+.cm-search button {
+  background: var(--bg3) !important;
+  border: 1px solid var(--border-hi) !important;
+  color: var(--fg) !important;
+  font: inherit !important;
+  cursor: pointer !important;
+  padding: 2px 8px !important;
+}
+
+.cm-search button:hover {
+  color: var(--fg-bright) !important;
+  border-color: var(--accent-dim) !important;
+}
+
+.cm-search label {
+  color: var(--fg-dim) !important;
+}
+
+.cm-searchMatch {
+  background: rgba(200, 155, 60, 0.3) !important;
+}
+
+.cm-searchMatch-selected {
+  background: rgba(200, 155, 60, 0.5) !important;
+}
+
+/* ── CM6 Fold Gutter ── */
+
+.cm-foldGutter {
+  width: 14px !important;
+  min-width: 14px !important;
+}
+
+.cm-foldGutter .cm-gutterElement {
+  color: var(--fg-dim) !important;
+  cursor: pointer !important;
+  padding: 0 1px !important;
+  width: 14px !important;
+  text-align: center !important;
+}
+
+.cm-foldGutter .cm-gutterElement:hover {
+  color: var(--accent) !important;
+}
+
+/* ── CM6 Lint Gutter ── */
+
+.cm-gutter-lint {
+  width: 10px !important;
+  min-width: 10px !important;
+}
+
+.cm-gutter-lint .cm-gutterElement {
+  padding: 0 !important;
+  width: 10px !important;
+}
+
+.cm-lint-marker {
+  width: 8px !important;
+  height: 8px !important;
+}
+
+.cm-lint-marker-error {
+  content: none !important;
+}
+
+.cm-diagnostic {
+  background: var(--bg2) !important;
+  border-left: 3px solid var(--err) !important;
+  color: var(--fg) !important;
+  font: 12px var(--mono) !important;
+  padding: 4px 8px !important;
+}
+
+.cm-diagnostic-error {
+  border-left-color: var(--err) !important;
+}
+
+.cm-lintRange-error {
+  background-image: none !important;
+  text-decoration: wavy underline var(--err) !important;
+  text-underline-offset: 3px !important;
 }

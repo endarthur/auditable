@@ -131,6 +131,7 @@ function resolveDirectives(directives, bindings, nextCol, name, isCol) {
       return { col, row: row + headerOffset, label: anchorLabel };
     }
 
+    if (d.name === 'formula') continue; // codegen-only, no layout effect
     throw new Error(`Unknown directive @${d.name} in '${name}'`);
   }
 

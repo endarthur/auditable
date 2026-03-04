@@ -2,7 +2,7 @@
 
 function initEditor(container) {
   const {
-    EditorView, EditorState, Compartment,
+    EditorView, EditorState, Compartment, Transaction,
     keymap, lineNumbers, highlightActiveLine, highlightSpecialChars,
     drawSelection, history, undo: cm6Undo, redo: cm6Redo,
     bracketMatching, syntaxHighlighting, HighlightStyle,
@@ -10,6 +10,9 @@ function initEditor(container) {
     indentWithTab, insertNewlineAndIndent, toggleComment,
     indentOnInput,
     tags, StreamLanguage,
+    search, searchKeymap, highlightSelectionMatches,
+    foldGutter, foldKeymap, foldService,
+    linter, lintGutter,
   } = window.CM6;
 
   // Token type → lezer Tag mapping
@@ -223,6 +226,55 @@ function initEditor(container) {
     }
   });
 
+  // Fold service for SheetName { ... } blocks
+  const calqueFold = foldService.of((state, lineStart, lineEnd) => {
+    const line = state.doc.lineAt(lineStart);
+    const text = line.text;
+    const m = text.match(/^\s*\w[\w\d]*\s*\{/);
+    if (!m) return null;
+    // Find matching closing brace
+    let depth = 1;
+    let pos = line.to;
+    while (pos < state.doc.length && depth > 0) {
+      pos++;
+      const ch = state.doc.sliceString(pos, pos + 1);
+      if (ch === '{') depth++;
+      else if (ch === '}') depth--;
+    }
+    if (depth === 0) return { from: line.to, to: pos };
+    return null;
+  });
+
+  // Lint source — parse errors from calque
+  const calqueLint = linter((view) => {
+    const src = view.state.doc.toString();
+    const diagnostics = [];
+    try {
+      if (typeof calque !== 'undefined' && calque._parse) {
+        const tokens = calque._lex(src);
+        calque._parse(tokens);
+      }
+    } catch (e) {
+      if (e.message) {
+        // Try to extract line:col from error message
+        const m = e.message.match(/line (\d+)/i);
+        let pos = 0;
+        if (m) {
+          const lineNum = Math.min(parseInt(m[1]), view.state.doc.lines);
+          const line = view.state.doc.line(lineNum);
+          pos = line.from;
+        }
+        diagnostics.push({
+          from: pos,
+          to: Math.min(pos + 1, view.state.doc.length),
+          severity: 'error',
+          message: e.message,
+        });
+      }
+    }
+    return diagnostics;
+  }, { delay: 300 });
+
   const extensions = [
     theme,
     syntaxHighlighting(highlightStyle),
@@ -236,7 +288,15 @@ function initEditor(container) {
     highlightSpecialChars(),
     drawSelection(),
     EditorView.lineWrapping,
+    search(),
+    highlightSelectionMatches(),
+    foldGutter(),
+    calqueFold,
+    calqueLint,
+    lintGutter(),
     autocompletion({ override: [calqueComplete] }),
+    keymap.of(searchKeymap),
+    keymap.of(foldKeymap),
     keymap.of([
       { key: 'Tab', run: acceptCompletion },
       indentWithTab,
@@ -276,7 +336,9 @@ function initEditor(container) {
 
 function setEditorSource(source) {
   if (!CQ.editorView) return;
+  const { Transaction } = window.CM6;
   CQ.editorView.dispatch({
     changes: { from: 0, to: CQ.editorView.state.doc.length, insert: source },
+    annotations: Transaction.addToHistory.of(false),
   });
 }

@@ -1,6 +1,10 @@
 // Virtualized spreadsheet grid — canvas-based, scrollable to any position
 
 const G = {
+  BASE_COL_W: 100,
+  BASE_ROW_H: 24,
+  BASE_HDR_H: 24,
+  BASE_ROW_W: 48,
   DEFAULT_COL_W: 100,
   ROW_H: 24,
   HDR_H: 24,
@@ -25,6 +29,10 @@ const G = {
   colHdrCtx: null,
   rowHdrCanvas: null,
   rowHdrCtx: null,
+  frozenCanvas: null,
+  frozenCtx: null,
+  frozenCorner: null,
+  freezeRow: false,
   scrollEl: null,
   dpr: 1,
   // resize state
@@ -227,7 +235,8 @@ function autoFitCol(c) {
   let maxW = 30; // minimum
 
   // Measure header text
-  ctx.font = '600 13px ' + mono;
+  const fs = Math.round(13 * CQ.zoom);
+  ctx.font = '600 ' + fs + 'px ' + mono;
   const hdrText = cqColLetter(c);
   maxW = Math.max(maxW, ctx.measureText(hdrText).width + 16);
 
@@ -237,7 +246,7 @@ function autoFitCol(c) {
   for (let r = r0; r <= r1; r++) {
     const cell = G.cells.get(r * 16384 + c);
     if (!cell) continue;
-    ctx.font = cell.header ? '600 13px ' + mono : '13px ' + mono;
+    ctx.font = cell.header ? '600 ' + fs + 'px ' + mono : fs + 'px ' + mono;
     const w = ctx.measureText(cell.text).width + 16;
     if (w > maxW) maxW = w;
   }
@@ -253,6 +262,76 @@ function getMono() {
     G._mono = getComputedStyle(document.documentElement).getPropertyValue('--mono').trim();
   }
   return G._mono;
+}
+
+function isLight() { return CQ.theme === 'light'; }
+
+function setZoom(level) {
+  CQ.zoom = Math.round(Math.max(0.5, Math.min(2, level)) * 10) / 10;
+  localStorage.setItem('cq-zoom', CQ.zoom);
+  applyZoom();
+}
+
+function applyZoom() {
+  const z = CQ.zoom;
+  G.DEFAULT_COL_W = Math.round(G.BASE_COL_W * z);
+  G.ROW_H = Math.round(G.BASE_ROW_H * z);
+  G.HDR_H = Math.round(G.BASE_HDR_H * z);
+  G.ROW_W = Math.round(G.BASE_ROW_W * z);
+  G._mono = null;
+  // Update CSS-positioned elements that use ROW_W
+  const corner = $('.cq-grid-corner');
+  if (corner) { corner.style.width = G.ROW_W + 'px'; corner.style.height = G.HDR_H + 'px'; }
+  const colHdr = $('.cq-grid-col-hdr');
+  if (colHdr) { colHdr.style.left = G.ROW_W + 'px'; colHdr.style.height = G.HDR_H + 'px'; }
+  const rowHdr = $('.cq-grid-row-hdr');
+  if (rowHdr) rowHdr.style.width = G.ROW_W + 'px';
+  const frozen = $('.cq-grid-frozen');
+  if (frozen) frozen.style.left = G.ROW_W + 'px';
+  const frozenCorner = $('.cq-grid-frozen-corner');
+  if (frozenCorner) { frozenCorner.style.width = G.ROW_W + 'px'; }
+  const body = $('.cq-grid-body');
+  if (body) body.style.left = G.ROW_W + 'px';
+  sizeCanvases();
+  paintGrid();
+  // Sync zoom UI
+  const pct = Math.round(z * 100);
+  const slider = $('#cq-zoom-slider');
+  if (slider) slider.value = pct;
+  const label = $('#cq-zoom-pct');
+  if (label) label.textContent = pct + '%';
+}
+
+function toggleFreeze() {
+  G.freezeRow = !G.freezeRow;
+  sizeCanvases();
+  paintGrid();
+}
+
+function toggleTheme() {
+  CQ.theme = CQ.theme === 'dark' ? 'light' : 'dark';
+  document.documentElement.classList.toggle('cq-light', CQ.theme === 'light');
+  localStorage.setItem('cq-theme', CQ.theme);
+  G._mono = null; // reset cached font
+  paintGrid();
+}
+
+// Canvas colors — theme-aware
+function gridColors() {
+  if (isLight()) return {
+    gridLine: '#ddd', hdrBg: '#e8e8e8', hdrBorder: '#ccc',
+    hdrText: '#888', cellText: '#444', cellNum: '#3a7a30',
+    cellHdrBg: 'rgba(138, 108, 42, 0.06)', cellHdrText: '#333',
+    selFill: 'rgba(138, 108, 42, 0.12)', selStroke: '#8a6c2a',
+    typeHint: '#bbb',
+  };
+  return {
+    gridLine: '#1e1e1e', hdrBg: '#1a1a1a', hdrBorder: '#2a2a2a',
+    hdrText: '#555', cellText: '#aaa', cellNum: '#8cb878',
+    cellHdrBg: 'rgba(200, 155, 60, 0.04)', cellHdrText: '#ccc',
+    selFill: 'rgba(200, 155, 60, 0.12)', selStroke: '#c89b3c',
+    typeHint: '#3a3a3a',
+  };
 }
 
 // ── Column width persistence ──
@@ -287,6 +366,31 @@ function cellAtPoint(clientX, clientY) {
   return { row: Math.max(0, row), col: Math.max(0, col) };
 }
 
+function updateFormulaBar() {
+  const refEl = $('#cq-formula-ref');
+  const valEl = $('#cq-formula-val');
+  if (!refEl || !valEl) return;
+  const sel = normSel(G.sel);
+  if (!sel) { refEl.textContent = ''; valEl.textContent = ''; return; }
+  const cellRef = cqColLetter(sel.c0) + (sel.r0 + 1);
+  refEl.textContent = cellRef;
+  setStatus('cursor', cellRef);
+  const key = sel.r0 * 16384 + sel.c0;
+  const info = G.cellSource ? G.cellSource.get(key) : null;
+  const cell = G.cells ? G.cells.get(key) : null;
+  if (info) {
+    const parts = [info.binding];
+    if (info.tableCol) parts.push('.' + info.tableCol);
+    if (info.index >= 0) parts.push('[' + info.index + ']');
+    const val = cell ? cell.text : '';
+    valEl.textContent = parts.join('') + ' = ' + val;
+  } else if (cell) {
+    valEl.textContent = cell.text;
+  } else {
+    valEl.textContent = '';
+  }
+}
+
 function normSel(sel) {
   if (!sel) return null;
   return {
@@ -300,6 +404,7 @@ function normSel(sel) {
 function onGridMouseDown(e) {
   // Only left-click, not on scrollbar
   if (e.button !== 0) return;
+  if (G.tooltip) G.tooltip.style.display = 'none';
   if (G.editing) cancelCellEdit();
   const cell = cellAtPoint(e.clientX, e.clientY);
   G.sel = { r0: cell.row, c0: cell.col, r1: cell.row, c1: cell.col };
@@ -514,6 +619,7 @@ function startCellEdit(row, col, initialChar) {
   const input = document.createElement('input');
   input.className = 'cq-cell-input';
   input.type = 'text';
+  input.style.fontSize = Math.round(13 * CQ.zoom) + 'px';
 
   const sx = G.scrollEl.scrollLeft;
   const sy = G.scrollEl.scrollTop;
@@ -1058,22 +1164,43 @@ function initGridCanvas() {
 
   const corner = document.createElement('div');
   corner.className = 'cq-grid-corner';
+  corner.style.width = G.ROW_W + 'px';
+  corner.style.height = G.HDR_H + 'px';
   gridEl.appendChild(corner);
 
   const colHdr = document.createElement('canvas');
   colHdr.className = 'cq-grid-col-hdr';
+  colHdr.style.left = G.ROW_W + 'px';
+  colHdr.style.height = G.HDR_H + 'px';
   gridEl.appendChild(colHdr);
   G.colHdrCanvas = colHdr;
   G.colHdrCtx = colHdr.getContext('2d');
 
   const rowHdr = document.createElement('canvas');
   rowHdr.className = 'cq-grid-row-hdr';
+  rowHdr.style.width = G.ROW_W + 'px';
+  rowHdr.style.top = G.HDR_H + 'px';
   gridEl.appendChild(rowHdr);
   G.rowHdrCanvas = rowHdr;
   G.rowHdrCtx = rowHdr.getContext('2d');
 
+  const frozenCorner = document.createElement('div');
+  frozenCorner.className = 'cq-grid-frozen-corner';
+  frozenCorner.style.width = G.ROW_W + 'px';
+  gridEl.appendChild(frozenCorner);
+  G.frozenCorner = frozenCorner;
+
+  const frozen = document.createElement('canvas');
+  frozen.className = 'cq-grid-frozen';
+  frozen.style.left = G.ROW_W + 'px';
+  gridEl.appendChild(frozen);
+  G.frozenCanvas = frozen;
+  G.frozenCtx = frozen.getContext('2d');
+
   const body = document.createElement('div');
   body.className = 'cq-grid-body';
+  body.style.left = G.ROW_W + 'px';
+  body.style.top = G.HDR_H + 'px';
   gridEl.appendChild(body);
 
   const scroll = document.createElement('div');
@@ -1101,6 +1228,43 @@ function initGridCanvas() {
   colHdr.addEventListener('mousedown', onColHdrMouseDown);
   colHdr.addEventListener('dblclick', onColHdrDblClick);
   colHdr.addEventListener('mousemove', onColHdrHover);
+
+  // Cell hover tooltip
+  const tooltip = document.createElement('div');
+  tooltip.className = 'cq-cell-tooltip';
+  tooltip.style.display = 'none';
+  body.appendChild(tooltip);
+  G.tooltip = tooltip;
+  let hoverTimer = 0;
+
+  scroll.addEventListener('mousemove', (e) => {
+    clearTimeout(hoverTimer);
+    hoverTimer = setTimeout(() => {
+      if (!G.cells || !G.ctx) { tooltip.style.display = 'none'; return; }
+      const cell = cellAtPoint(e.clientX, e.clientY);
+      const data = G.cells.get(cell.row * 16384 + cell.col);
+      if (!data || !data.text) { tooltip.style.display = 'none'; return; }
+      const mono = getMono();
+      G.ctx.setTransform(G.dpr, 0, 0, G.dpr, 0, 0);
+      G.ctx.font = data.header ? '600 13px ' + mono : '13px ' + mono;
+      const tw = G.ctx.measureText(data.text).width + 12;
+      if (tw <= colW(cell.col)) { tooltip.style.display = 'none'; return; }
+      const rect = body.getBoundingClientRect();
+      tooltip.textContent = data.text;
+      tooltip.style.left = (e.clientX - rect.left + 8) + 'px';
+      tooltip.style.top = (e.clientY - rect.top - 24) + 'px';
+      tooltip.style.display = 'block';
+    }, 50);
+  });
+
+  scroll.addEventListener('mouseleave', () => {
+    clearTimeout(hoverTimer);
+    tooltip.style.display = 'none';
+  });
+
+  scroll.addEventListener('scroll', () => {
+    tooltip.style.display = 'none';
+  }, { passive: true });
 
   // Cell selection
   scroll.addEventListener('mousedown', onGridMouseDown);
@@ -1278,8 +1442,9 @@ function sizeCanvases() {
   const h = gridEl.clientHeight;
   const dpr = G.dpr;
 
+  const frozenH = G.freezeRow ? G.ROW_H : 0;
   const viewW = w - G.ROW_W;
-  const viewH = h - G.HDR_H;
+  const viewH = h - G.HDR_H - frozenH;
 
   G.canvas.width = viewW * dpr;
   G.canvas.height = viewH * dpr;
@@ -1290,6 +1455,24 @@ function sizeCanvases() {
   G.colHdrCanvas.height = G.HDR_H * dpr;
   G.colHdrCanvas.style.width = viewW + 'px';
   G.colHdrCanvas.style.height = G.HDR_H + 'px';
+
+  // Frozen row canvas
+  G.frozenCanvas.width = viewW * dpr;
+  G.frozenCanvas.height = frozenH * dpr;
+  G.frozenCanvas.style.width = viewW + 'px';
+  G.frozenCanvas.style.height = frozenH + 'px';
+  G.frozenCanvas.style.top = G.HDR_H + 'px';
+  G.frozenCorner.style.top = G.HDR_H + 'px';
+  G.frozenCorner.style.height = frozenH + 'px';
+
+  // Adjust body and row header positions
+  const bodyTop = G.HDR_H + frozenH;
+  const bodyEl = G.canvas.parentElement;
+  if (bodyEl) bodyEl.style.top = bodyTop + 'px';
+  G.rowHdrCanvas.parentElement && (G.rowHdrCanvas.style.top = '0px');
+  // Row header needs to start below frozen row
+  const rowHdrParent = G.rowHdrCanvas;
+  rowHdrParent.style.top = (G.HDR_H + frozenH) + 'px' ;
 
   G.rowHdrCanvas.width = G.ROW_W * dpr;
   G.rowHdrCanvas.height = viewH * dpr;
@@ -1305,6 +1488,69 @@ function sizeCanvases() {
 
 // ── Paint ──
 
+function paintFrozenRow(c0, c1, sx, vw) {
+  const ctx = G.frozenCtx;
+  if (!ctx) return;
+  const dpr = G.dpr;
+  const h = G.ROW_H;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, vw, h);
+
+  const colors = gridColors();
+  ctx.fillStyle = colors.hdrBg;
+  ctx.fillRect(0, 0, vw, h);
+
+  // Grid lines
+  ctx.strokeStyle = colors.hdrBorder;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  for (let c = c0; c <= c1 + 1; c++) {
+    const x = Math.round(colXAt(c) - sx) + 0.5;
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, h);
+  }
+  ctx.moveTo(0, h - 0.5);
+  ctx.lineTo(vw, h - 0.5);
+  ctx.stroke();
+
+  // Paint row 0 cells
+  if (!G.cells) return;
+  const mono = getMono();
+  const fs = Math.round(13 * CQ.zoom);
+  const font = fs + 'px ' + mono;
+  const hdrFont = '600 ' + fs + 'px ' + mono;
+  const pad = 6;
+
+  for (let c = c0; c <= c1; c++) {
+    const cell = G.cells.get(0 * 16384 + c);
+    if (!cell) continue;
+    const x = colXAt(c) - sx;
+    const w = colW(c);
+    if (cell.header) {
+      ctx.fillStyle = colors.cellHdrBg;
+      ctx.fillRect(x + 1, 1, w - 1, h - 1);
+      ctx.font = hdrFont;
+      ctx.fillStyle = colors.cellHdrText;
+    } else {
+      ctx.font = font;
+      ctx.fillStyle = cell.numeric ? colors.cellNum : colors.cellText;
+    }
+    ctx.textBaseline = 'middle';
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x + 1, 0, w - 2, h);
+    ctx.clip();
+    if (cell.numeric && !cell.header) {
+      ctx.textAlign = 'right';
+      ctx.fillText(cell.text, x + w - pad, h / 2);
+    } else {
+      ctx.textAlign = 'left';
+      ctx.fillText(cell.text, x + pad, h / 2);
+    }
+    ctx.restore();
+  }
+}
+
 function paintGrid() {
   if (!G.ctx) return;
   const dpr = G.dpr;
@@ -1317,9 +1563,16 @@ function paintGrid() {
   const firstRow = Math.floor(sy / G.ROW_H);
   const lastRow = Math.min(G.totalRows - 1, Math.ceil((sy + vh) / G.ROW_H));
 
-  paintCells(firstCol, firstRow, lastCol, lastRow, sx, sy, vw, vh);
+  if (G.freezeRow) {
+    // Offset scroll by one frozen row so row 0 data doesn't appear in body
+    paintCells(firstCol, Math.max(1, firstRow), lastCol, lastRow, sx, sy, vw, vh);
+    paintFrozenRow(firstCol, lastCol, sx, vw);
+  } else {
+    paintCells(firstCol, firstRow, lastCol, lastRow, sx, sy, vw, vh);
+  }
   paintColHeaders(firstCol, lastCol, sx, vw);
-  paintRowHeaders(firstRow, lastRow, sy, vh);
+  paintRowHeaders(G.freezeRow ? Math.max(1, firstRow) : firstRow, lastRow, sy, vh);
+  updateFormulaBar();
 }
 
 function paintCells(c0, r0, c1, r1, sx, sy, vw, vh) {
@@ -1329,11 +1582,13 @@ function paintCells(c0, r0, c1, r1, sx, sy, vw, vh) {
   ctx.clearRect(0, 0, vw, vh);
 
   const mono = getMono();
-  const font = '13px ' + mono;
-  const hdrFont = '600 13px ' + mono;
+  const fs = Math.round(13 * CQ.zoom);
+  const font = fs + 'px ' + mono;
+  const hdrFont = '600 ' + fs + 'px ' + mono;
 
+  const colors = gridColors();
   // Grid lines
-  ctx.strokeStyle = '#1e1e1e';
+  ctx.strokeStyle = colors.gridLine;
   ctx.lineWidth = 1;
   ctx.beginPath();
 
@@ -1366,10 +1621,10 @@ function paintCells(c0, r0, c1, r1, sx, sy, vw, vh) {
       const pad = 6;
 
       if (cell.header) {
-        ctx.fillStyle = 'rgba(200, 155, 60, 0.04)';
+        ctx.fillStyle = colors.cellHdrBg;
         ctx.fillRect(x + 1, y + 1, w - 1, G.ROW_H - 1);
         ctx.font = hdrFont;
-        ctx.fillStyle = '#ccc';
+        ctx.fillStyle = colors.cellHdrText;
         ctx.textBaseline = 'middle';
         ctx.textAlign = 'left';
         ctx.save();
@@ -1386,11 +1641,11 @@ function paintCells(c0, r0, c1, r1, sx, sy, vw, vh) {
         ctx.rect(x + 1, y, w - 2, G.ROW_H);
         ctx.clip();
         if (cell.numeric) {
-          ctx.fillStyle = '#8cb878';
+          ctx.fillStyle = colors.cellNum;
           ctx.textAlign = 'right';
           ctx.fillText(cell.text, x + w - pad, y + G.ROW_H / 2);
         } else {
-          ctx.fillStyle = '#aaa';
+          ctx.fillStyle = colors.cellText;
           ctx.textAlign = 'left';
           ctx.fillText(cell.text, x + pad, y + G.ROW_H / 2);
         }
@@ -1402,8 +1657,8 @@ function paintCells(c0, r0, c1, r1, sx, sy, vw, vh) {
   // Selection highlight
   const sel = normSel(G.sel);
   if (sel) {
-    ctx.fillStyle = 'rgba(200, 155, 60, 0.12)';
-    ctx.strokeStyle = '#c89b3c';
+    ctx.fillStyle = colors.selFill;
+    ctx.strokeStyle = colors.selStroke;
     ctx.lineWidth = 2;
 
     const x0 = colXAt(sel.c0) - sx;
@@ -1419,18 +1674,20 @@ function paintCells(c0, r0, c1, r1, sx, sy, vw, vh) {
 function paintColHeaders(c0, c1, sx, vw) {
   const ctx = G.colHdrCtx;
   const dpr = G.dpr;
+  const colors = gridColors();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, vw, G.HDR_H);
 
-  ctx.fillStyle = '#1a1a1a';
+  ctx.fillStyle = colors.hdrBg;
   ctx.fillRect(0, 0, vw, G.HDR_H);
 
   const mono = getMono();
-  ctx.font = '11px ' + mono;
+  const hfs = Math.round(11 * CQ.zoom);
+  ctx.font = hfs + 'px ' + mono;
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'center';
 
-  ctx.strokeStyle = '#2a2a2a';
+  ctx.strokeStyle = colors.hdrBorder;
   ctx.lineWidth = 1;
   ctx.beginPath();
 
@@ -1443,28 +1700,51 @@ function paintColHeaders(c0, c1, sx, vw) {
   ctx.lineTo(vw, G.HDR_H - 0.5);
   ctx.stroke();
 
-  ctx.fillStyle = '#555';
+  ctx.fillStyle = colors.hdrText;
   for (let c = c0; c <= c1; c++) {
     const x = colXAt(c) - sx + colW(c) / 2;
     ctx.fillText(cqColLetter(c), x, G.HDR_H / 2);
+  }
+
+  // Type hints
+  if (G.cells) {
+    ctx.font = Math.round(9 * CQ.zoom) + 'px ' + mono;
+    ctx.fillStyle = colors.typeHint;
+    ctx.textAlign = 'right';
+    for (let c = c0; c <= c1; c++) {
+      let hasNum = false, hasStr = false;
+      for (let r = 0; r <= Math.min(G.maxRow, 500); r++) {
+        const cell = G.cells.get(r * 16384 + c);
+        if (!cell || cell.header || !cell.text) continue;
+        if (cell.numeric) hasNum = true; else hasStr = true;
+        if (hasNum && hasStr) break;
+      }
+      const hint = hasNum && hasStr ? '?' : hasNum ? '#' : hasStr ? 'T' : '';
+      if (hint) {
+        const x = colXAt(c) - sx + colW(c) - 4;
+        ctx.fillText(hint, x, G.HDR_H / 2 + 1);
+      }
+    }
   }
 }
 
 function paintRowHeaders(r0, r1, sy, vh) {
   const ctx = G.rowHdrCtx;
   const dpr = G.dpr;
+  const colors = gridColors();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, G.ROW_W, vh);
 
-  ctx.fillStyle = '#1a1a1a';
+  ctx.fillStyle = colors.hdrBg;
   ctx.fillRect(0, 0, G.ROW_W, vh);
 
   const mono = getMono();
-  ctx.font = '11px ' + mono;
+  const hfs = Math.round(11 * CQ.zoom);
+  ctx.font = hfs + 'px ' + mono;
   ctx.textBaseline = 'middle';
   ctx.textAlign = 'right';
 
-  ctx.strokeStyle = '#2a2a2a';
+  ctx.strokeStyle = colors.hdrBorder;
   ctx.lineWidth = 1;
   ctx.beginPath();
 
@@ -1477,7 +1757,7 @@ function paintRowHeaders(r0, r1, sy, vh) {
   ctx.lineTo(G.ROW_W - 0.5, vh);
   ctx.stroke();
 
-  ctx.fillStyle = '#555';
+  ctx.fillStyle = colors.hdrText;
   for (let r = r0; r <= r1; r++) {
     const y = r * G.ROW_H - sy + G.ROW_H / 2;
     ctx.fillText(String(r + 1), G.ROW_W - 6, y);
@@ -1540,6 +1820,7 @@ function renderGrid() {
   G.maxCol = map.maxCol;
   G.totalRows = G.MAX_ROWS;
   G.totalCols = G.MAX_COLS;
+
 
   sizeCanvases();
 

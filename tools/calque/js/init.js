@@ -54,6 +54,21 @@ function startProject(source) {
       e.preventDefault();
       toggleEditor();
     }
+    // Ctrl+= zoom in
+    if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) {
+      e.preventDefault();
+      setZoom(CQ.zoom + 0.1);
+    }
+    // Ctrl+- zoom out
+    if ((e.ctrlKey || e.metaKey) && e.key === '-') {
+      e.preventDefault();
+      setZoom(CQ.zoom - 0.1);
+    }
+    // Ctrl+0 reset zoom
+    if ((e.ctrlKey || e.metaKey) && e.key === '0') {
+      e.preventDefault();
+      setZoom(1);
+    }
   });
 
   // Dirty check on unload
@@ -69,11 +84,44 @@ function startProject(source) {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }
 
+  // Restore theme
+  const savedTheme = localStorage.getItem('cq-theme');
+  if (savedTheme === 'light') {
+    CQ.theme = 'light';
+    document.documentElement.classList.add('cq-light');
+  }
+
+  // Restore zoom (just set state — applyZoom needs canvas elements from initGridCanvas)
+  const savedZoom = parseFloat(localStorage.getItem('cq-zoom'));
+  if (savedZoom && savedZoom >= 0.5 && savedZoom <= 2) {
+    CQ.zoom = savedZoom;
+    const z = CQ.zoom;
+    G.DEFAULT_COL_W = Math.round(G.BASE_COL_W * z);
+    G.ROW_H = Math.round(G.BASE_ROW_H * z);
+    G.HDR_H = Math.round(G.BASE_HDR_H * z);
+    G.ROW_W = Math.round(G.BASE_ROW_W * z);
+  }
+
   // Build menu bar
   initMenuBar();
 
   // Init canvas grid
   initGridCanvas();
+
+  // Wire zoom controls
+  const zoomSlider = $('#cq-zoom-slider');
+  const zoomPct = $('#cq-zoom-pct');
+  if (zoomSlider) {
+    zoomSlider.value = Math.round(CQ.zoom * 100);
+    if (zoomPct) zoomPct.textContent = Math.round(CQ.zoom * 100) + '%';
+    zoomSlider.addEventListener('input', () => {
+      setZoom(parseInt(zoomSlider.value) / 100);
+    });
+  }
+  $('#cq-zoom-out')?.addEventListener('click', () => setZoom(CQ.zoom - 0.1));
+  $('#cq-zoom-in')?.addEventListener('click', () => setZoom(CQ.zoom + 0.1));
+  // Click percentage to reset
+  zoomPct?.addEventListener('click', () => setZoom(1));
 
   // Create floating editor window
   const win = createWindow();
