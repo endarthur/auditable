@@ -238,6 +238,30 @@ npm run build:af                 # both
 
 AF embeds the full auditable runtime, so new notebooks created inside AF are fully self-contained -- save one out and it works standalone.
 
+## calque -- spreadsheet language editor
+
+`tools/calque/index.html` is a standalone editor for the calque spreadsheet language. write calque source, see a live spreadsheet grid, export to xlsx.
+
+**features:**
+- **canvas grid** -- interactive spreadsheet with cell selection, inline editing, copy/paste
+- **live evaluation** -- 300ms debounced eval, results update in the grid as you type
+- **project management** -- localStorage-backed projects with splash screen on launch
+- **recent projects** -- splash screen shows recent projects with timestamps, File menu has recent section
+- **built-in examples** -- Sales Report, Budget, Math, Strings
+- **xlsx import/export** -- drag-drop .xlsx files onto the grid, export via File menu
+- **floating editor** -- draggable, resizable CM6 editor window with calque syntax highlighting
+- **template string highlighting** -- stateful stream tokenizer handles multi-line backtick strings
+- **PWA** -- installable, works offline via service worker
+
+**build:**
+```
+node build.js --target=calque    # builds tools/calque/index.html
+```
+
+**storage keys:** `cq-projects` (project index), `cq-project:<id>` (source text), `cq-active` (current project ID).
+
+see `ext/calque/SPEC.md` for the calque language specification.
+
 ## how it works
 
 cells declare variables with `const`, `let`, or `function`. the parser (`parseNames`) extracts top-level definitions -- including destructuring and comma-separated declarations -- and builds a dependency graph. when a cell changes, all downstream cells re-execute in topological order.
@@ -253,9 +277,11 @@ save serializes cell source as JSON in an HTML comment (`<!--AUDITABLE-DATA ... 
 ## building
 
 ```
-npm install      # (nothing to install -- zero dependencies)
-node build.js    # concatenates src/ modules into auditable.html
-npm test         # runs tests with node --test
+npm install                        # (nothing to install -- zero dependencies)
+node build.js                      # concatenates src/ modules into auditable.html
+node build.js --target=af          # builds af.html
+node build.js --target=calque      # builds tools/calque/index.html
+npm test                           # runs tests with node --test
 ```
 
 to regenerate examples after changes:
