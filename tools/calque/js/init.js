@@ -10,29 +10,15 @@ function setStatus(key, text) {
   }
 }
 
-;(function init() {
-  // Restore source from localStorage
-  const saved = localStorage.getItem('cq-source');
-  CQ.source = saved || STARTER;
-
-  // Build menu bar
-  initMenuBar();
-
-  // Init canvas grid
-  initGridCanvas();
-
-  // Create floating editor window
-  const win = createWindow();
-  const body = win.querySelector('#cq-win-body');
-  initEditor(body);
-
-  // Initial eval + render
+function startProject(source) {
+  CQ.source = source;
+  setEditorSource(CQ.source);
   cqEvaluate(CQ.source);
+  updateTitle();
+}
 
-  // Drag-drop
-  initDragDrop();
-
-  // Global keyboard shortcuts
+;(function init() {
+  // Global keyboard shortcuts — register first to prevent browser defaults
   document.addEventListener('keydown', e => {
     // Ctrl+S
     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
@@ -83,7 +69,101 @@ function setStatus(key, text) {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }
 
+  // Build menu bar
+  initMenuBar();
+
+  // Init canvas grid
+  initGridCanvas();
+
+  // Create floating editor window
+  const win = createWindow();
+  const body = win.querySelector('#cq-win-body');
+  initEditor(body);
+
+  // Drag-drop
+  initDragDrop();
+
   setStatus('msg', 'ready');
   setStatus('cursor', '1:1');
-  updateTitle();
+
+  // Migrate from legacy cq-source key
+  const legacySource = localStorage.getItem('cq-source');
+  if (legacySource && !getProjects().length) {
+    projectCreate(legacySource);
+    localStorage.removeItem('cq-source');
+  }
+
+  // Show splash — don't render anything behind it
+  showSplash(handleSplashChoice);
 })();
+
+function handleSplashChoice(action, arg) {
+  switch (action) {
+    case 'new':
+      CQ.source = 'Sheet1 {\n  \n}';
+      CQ.fileHandle = null;
+      CQ.fileName = null;
+      CQ.dirty = false;
+      CQ.importData = null;
+      projectCreate(CQ.source);
+      startProject(CQ.source);
+      break;
+
+    case 'open':
+      openFile();
+      break;
+
+    case 'resume': {
+      const activeId = localStorage.getItem('cq-active');
+      if (activeId) {
+        const src = projectLoad(activeId);
+        if (src != null) {
+          CQ.source = src;
+          CQ.fileHandle = null;
+          CQ.dirty = false;
+          CQ.importData = null;
+          const projects = getProjects();
+          const p = projects.find(e => e.id === activeId);
+          CQ.fileName = p ? p.name : null;
+          startProject(CQ.source);
+          break;
+        }
+      }
+      // Fallback if active project gone
+      CQ.source = STARTER;
+      projectCreate(CQ.source);
+      startProject(CQ.source);
+      break;
+    }
+
+    case 'load': {
+      const src = projectLoad(arg);
+      if (src != null) {
+        CQ.source = src;
+        CQ.fileHandle = null;
+        CQ.dirty = false;
+        CQ.importData = null;
+        // Restore project name as fileName
+        const projects = getProjects();
+        const p = projects.find(e => e.id === arg);
+        CQ.fileName = p ? p.name : null;
+        startProject(CQ.source);
+      }
+      break;
+    }
+
+    case 'example': {
+      const src = EXAMPLES[arg];
+      if (src) {
+        CQ.source = src;
+        CQ.fileHandle = null;
+        CQ.fileName = null;
+        CQ.dirty = false;
+        CQ.importData = null;
+        projectCreate(CQ.source, arg);
+        startProject(CQ.source);
+      }
+      break;
+    }
+  }
+}

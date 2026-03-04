@@ -21,8 +21,8 @@ function cqEvaluate(source) {
     setStatus('msg', 'error: ' + e.message);
   }
 
-  // Persist source
-  localStorage.setItem('cq-source', source);
+  // Persist source to active project
+  projectSave();
 }
 
 function forceEval() {

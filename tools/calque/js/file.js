@@ -2,11 +2,12 @@
 
 async function newFile() {
   if (CQ.dirty && !confirm('Discard unsaved changes?')) return;
-  CQ.source = STARTER;
+  CQ.source = 'Sheet1 {\n  \n}';
   CQ.fileHandle = null;
   CQ.fileName = null;
   CQ.dirty = false;
   CQ.importData = null;
+  projectCreate(CQ.source);
   setEditorSource(CQ.source);
   cqEvaluate(CQ.source);
   updateTitle();
@@ -32,6 +33,8 @@ async function openFile() {
     }
     CQ.dirty = false;
     CQ.importData = null;
+    const pname = (CQ.fileName || 'untitled').replace(/\.\w+$/, '');
+    projectCreate(CQ.source, pname);
     setEditorSource(CQ.source);
     cqEvaluate(CQ.source);
     updateTitle();
@@ -47,14 +50,31 @@ async function saveFile() {
       await writable.write(CQ.source);
       await writable.close();
       CQ.dirty = false;
+      projectSave();
       updateTitle();
       setStatus('msg', 'saved');
       return;
     } catch (e) {
-      // Fall through to Save As
+      // Fall through
     }
   }
-  await saveFileAs();
+  // No file handle — persisted to localStorage
+  if (isProjectUntitled()) {
+    // First save of untitled project — ask for a name
+    showRenamePrompt('untitled', name => {
+      projectUpdateName(name);
+      CQ.fileName = name;
+      CQ.dirty = false;
+      projectSave();
+      updateTitle();
+      setStatus('msg', 'saved as ' + name);
+    });
+    return;
+  }
+  CQ.dirty = false;
+  projectSave();
+  updateTitle();
+  setStatus('msg', 'saved');
 }
 
 async function saveFileAs() {
@@ -70,6 +90,8 @@ async function saveFileAs() {
       CQ.fileHandle = handle;
       CQ.fileName = handle.name;
       CQ.dirty = false;
+      projectUpdateName(handle.name.replace(/\.\w+$/, ''));
+      projectSave();
       updateTitle();
       setStatus('msg', 'saved');
     } else {
@@ -193,6 +215,8 @@ function initDragDrop() {
       CQ.fileName = file.name;
       CQ.fileHandle = null;
       CQ.dirty = false;
+      const pname = file.name.replace(/\.\w+$/, '');
+      projectCreate(CQ.source, pname);
       setEditorSource(CQ.source);
       cqEvaluate(CQ.source);
       updateTitle();

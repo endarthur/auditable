@@ -16,6 +16,7 @@ const CQ = {
   evalTimer: null,
   importData: null,
   menuOpen: null,
+  projectId: null,
 };
 
 const STARTER = `Sales {

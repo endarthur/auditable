@@ -478,3 +478,161 @@ html, body {
   color: var(--fg-bright);
   border-color: var(--accent-dim);
 }
+
+/* ── Splash Screen ── */
+
+.cq-splash {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 600;
+}
+
+.cq-splash-box {
+  background: var(--bg2);
+  border: 1px solid var(--border-hi);
+  padding: 32px 36px;
+  min-width: 360px;
+  max-width: 440px;
+  width: 90%;
+}
+
+.cq-splash-title {
+  text-align: center;
+  color: var(--accent);
+  font-size: 20px;
+  letter-spacing: 4px;
+  margin-bottom: 24px;
+}
+
+.cq-splash-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+
+.cq-splash-btn {
+  background: var(--bg3);
+  border: 1px solid var(--border-hi);
+  color: var(--fg);
+  padding: 5px 16px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.cq-splash-btn:hover {
+  color: var(--fg-bright);
+  border-color: var(--accent-dim);
+}
+
+.cq-splash-select {
+  background: var(--bg3);
+  border: 1px solid var(--border-hi);
+  color: var(--fg);
+  padding: 5px 8px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.cq-splash-select:hover {
+  border-color: var(--accent-dim);
+}
+
+.cq-splash-section {
+  color: var(--fg-dim);
+  font-size: 0.85em;
+  margin-bottom: 6px;
+  letter-spacing: 0.5px;
+}
+
+.cq-splash-list {
+  margin-bottom: 16px;
+}
+
+.cq-splash-entry {
+  display: flex;
+  align-items: center;
+  padding: 5px 8px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+
+.cq-splash-entry:hover {
+  background: rgba(200, 155, 60, 0.1);
+}
+
+.cq-splash-name {
+  flex: 1;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cq-splash-entry:hover .cq-splash-name {
+  color: var(--fg-bright);
+}
+
+.cq-splash-time {
+  color: var(--fg-dim);
+  font-size: 0.85em;
+  margin-left: 12px;
+  white-space: nowrap;
+}
+
+.cq-splash-rm {
+  background: none;
+  border: none;
+  color: var(--fg-dim);
+  font: 14px var(--mono);
+  cursor: pointer;
+  margin-left: 8px;
+  padding: 0 4px;
+}
+
+.cq-splash-rm:hover {
+  color: var(--err);
+}
+
+.cq-splash-resume {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.cq-splash-resume-btn {
+  color: var(--accent) !important;
+  border-color: var(--accent-dim) !important;
+}
+
+/* ── Rename Prompt ── */
+
+.cq-rename-input {
+  width: 100%;
+  background: var(--bg1);
+  border: 1px solid var(--border-hi);
+  color: var(--fg-bright);
+  padding: 6px 10px;
+  font: inherit;
+  outline: none;
+  margin-bottom: 12px;
+}
+
+.cq-rename-input:focus {
+  border-color: var(--accent-dim);
+}
+
+.cq-rename-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.cq-rename-ok {
+  color: var(--accent) !important;
+  border-color: var(--accent-dim) !important;
+}

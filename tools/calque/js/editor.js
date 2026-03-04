@@ -25,28 +25,125 @@ function initEditor(container) {
     dir:   tags.keyword,
   };
 
-  // Calque stream language from tokenizer
+  // Calque stream language — stateful tokenizer for multi-line template strings
   const calqueLang = StreamLanguage.define({
-    token(stream) {
-      if (stream.sol()) {
-        stream.lineTokens = tokenizeCalque(stream.string);
-        stream.lineTokenIdx = 0;
+    token(stream, state) {
+      // Inside template string body
+      if (state.inTemplate) {
+        while (!stream.eol()) {
+          if (stream.peek() === '\\') {
+            stream.next(); if (!stream.eol()) stream.next();
+            continue;
+          }
+          if (stream.peek() === '$' && stream.pos + 1 < stream.string.length && stream.string[stream.pos + 1] === '{') {
+            if (stream.pos > stream.start) return 'str';
+            stream.next(); stream.next();
+            state.inTemplate = false;
+            state.interpDepth++;
+            return 'punc';
+          }
+          if (stream.peek() === '`') {
+            stream.next();
+            state.inTemplate = false;
+            return 'str';
+          }
+          stream.next();
+        }
+        return 'str';
       }
-      const toks = stream.lineTokens;
-      if (!toks || stream.lineTokenIdx >= toks.length) {
-        stream.skipToEnd();
-        return null;
+
+      if (stream.eatSpace()) return null;
+
+      // Comments
+      if (stream.match('--')) { stream.skipToEnd(); return 'cmt'; }
+
+      // Template strings
+      if (stream.peek() === '`') {
+        stream.next();
+        while (!stream.eol()) {
+          if (stream.peek() === '\\') {
+            stream.next(); if (!stream.eol()) stream.next();
+            continue;
+          }
+          if (stream.peek() === '$' && stream.pos + 1 < stream.string.length && stream.string[stream.pos + 1] === '{') {
+            state.inTemplate = true;
+            return 'str';
+          }
+          if (stream.peek() === '`') { stream.next(); return 'str'; }
+          stream.next();
+        }
+        state.inTemplate = true;
+        return 'str';
       }
-      const tok = toks[stream.lineTokenIdx];
-      stream.lineTokenIdx++;
-      if (tok.text.length > 0) stream.pos += tok.text.length;
-      else stream.pos++;
-      const type = tok.type;
-      return (type && type in cqTokenTable) ? type : null;
+
+      // Regular strings
+      if (stream.peek() === '"') {
+        stream.next();
+        while (!stream.eol()) {
+          if (stream.peek() === '\\') { stream.next(); if (!stream.eol()) stream.next(); }
+          else if (stream.peek() === '"') { stream.next(); return 'str'; }
+          else stream.next();
+        }
+        return 'str';
+      }
+
+      // Numbers (including .5)
+      if (/\d/.test(stream.peek())) {
+        stream.match(/^\d+(\.\d+)?([eE][+-]?\d+)?/);
+        return 'num';
+      }
+      if (stream.peek() === '.' && stream.pos + 1 < stream.string.length && /\d/.test(stream.string[stream.pos + 1])) {
+        stream.match(/^\.\d+([eE][+-]?\d+)?/);
+        return 'num';
+      }
+
+      // Directives
+      if (stream.peek() === '@') {
+        stream.match(/^@[a-zA-Z_]\w*/);
+        return 'dir';
+      }
+
+      // Words
+      if (/[a-zA-Z_]/.test(stream.peek())) {
+        stream.match(/^[a-zA-Z_]\w*/);
+        const word = stream.current();
+        if (CALQUE_KEYWORDS.has(word)) return 'kw';
+        if (CALQUE_BUILTINS.has(word)) return 'fn';
+        if (!stream.eol() && stream.peek() === '(') return 'fn';
+        return 'id';
+      }
+
+      // Multi-char operators
+      if (stream.match('..') || stream.match('->') || stream.match('==') ||
+          stream.match('/=') || stream.match('>=') || stream.match('<=')) {
+        return 'op';
+      }
+
+      // Single-char operators
+      if ('+-*/^&<>='.includes(stream.peek())) { stream.next(); return 'op'; }
+
+      // Punctuation (tracks interpolation depth)
+      if ('()[]{},:'.includes(stream.peek())) {
+        const ch = stream.next();
+        if (state.interpDepth > 0) {
+          if (ch === '{') state.interpDepth++;
+          else if (ch === '}') {
+            state.interpDepth--;
+            if (state.interpDepth === 0) state.inTemplate = true;
+          }
+        }
+        return 'punc';
+      }
+
+      // Dot
+      if (stream.peek() === '.') { stream.next(); return 'punc'; }
+
+      stream.next();
+      return null;
     },
     tokenTable: cqTokenTable,
-    startState() { return {}; },
-    copyState() { return {}; },
+    startState() { return { inTemplate: false, interpDepth: 0 }; },
+    copyState(s) { return { inTemplate: s.inTemplate, interpDepth: s.interpDepth }; },
   });
 
   // GCU theme

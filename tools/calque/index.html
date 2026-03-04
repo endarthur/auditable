@@ -490,6 +490,164 @@ html, body {
   border-color: var(--accent-dim);
 }
 
+/* ── Splash Screen ── */
+
+.cq-splash {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 600;
+}
+
+.cq-splash-box {
+  background: var(--bg2);
+  border: 1px solid var(--border-hi);
+  padding: 32px 36px;
+  min-width: 360px;
+  max-width: 440px;
+  width: 90%;
+}
+
+.cq-splash-title {
+  text-align: center;
+  color: var(--accent);
+  font-size: 20px;
+  letter-spacing: 4px;
+  margin-bottom: 24px;
+}
+
+.cq-splash-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 20px;
+}
+
+.cq-splash-btn {
+  background: var(--bg3);
+  border: 1px solid var(--border-hi);
+  color: var(--fg);
+  padding: 5px 16px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.cq-splash-btn:hover {
+  color: var(--fg-bright);
+  border-color: var(--accent-dim);
+}
+
+.cq-splash-select {
+  background: var(--bg3);
+  border: 1px solid var(--border-hi);
+  color: var(--fg);
+  padding: 5px 8px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.cq-splash-select:hover {
+  border-color: var(--accent-dim);
+}
+
+.cq-splash-section {
+  color: var(--fg-dim);
+  font-size: 0.85em;
+  margin-bottom: 6px;
+  letter-spacing: 0.5px;
+}
+
+.cq-splash-list {
+  margin-bottom: 16px;
+}
+
+.cq-splash-entry {
+  display: flex;
+  align-items: center;
+  padding: 5px 8px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+
+.cq-splash-entry:hover {
+  background: rgba(200, 155, 60, 0.1);
+}
+
+.cq-splash-name {
+  flex: 1;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cq-splash-entry:hover .cq-splash-name {
+  color: var(--fg-bright);
+}
+
+.cq-splash-time {
+  color: var(--fg-dim);
+  font-size: 0.85em;
+  margin-left: 12px;
+  white-space: nowrap;
+}
+
+.cq-splash-rm {
+  background: none;
+  border: none;
+  color: var(--fg-dim);
+  font: 14px var(--mono);
+  cursor: pointer;
+  margin-left: 8px;
+  padding: 0 4px;
+}
+
+.cq-splash-rm:hover {
+  color: var(--err);
+}
+
+.cq-splash-resume {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.cq-splash-resume-btn {
+  color: var(--accent) !important;
+  border-color: var(--accent-dim) !important;
+}
+
+/* ── Rename Prompt ── */
+
+.cq-rename-input {
+  width: 100%;
+  background: var(--bg1);
+  border: 1px solid var(--border-hi);
+  color: var(--fg-bright);
+  padding: 6px 10px;
+  font: inherit;
+  outline: none;
+  margin-bottom: 12px;
+}
+
+.cq-rename-input:focus {
+  border-color: var(--accent-dim);
+}
+
+.cq-rename-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.cq-rename-ok {
+  color: var(--accent) !important;
+  border-color: var(--accent-dim) !important;
+}
+
 </style>
 </head>
 <body>
@@ -4699,6 +4857,7 @@ const CQ = {
   evalTimer: null,
   importData: null,
   menuOpen: null,
+  projectId: null,
 };
 
 const STARTER = `Sales {
@@ -5164,18 +5323,20 @@ function ensureBlankLine(source, pos) {
 function insertIntoSheet(newCode) {
   const source = CQ.source;
 
-  if (CQ.activeSheet === 'Sheet1') {
-    const trimmed = source.trimEnd();
-    const gap = ensureBlankLine(trimmed + '\n', trimmed.length + 1);
-    updateEditorSource(trimmed + '\n' + gap + newCode + '\n');
+  const pos = findSheetBlockEnd(source, CQ.activeSheet);
+  if (pos >= 0) {
+    // Named sheet block — insert before closing }
+    const gap = ensureBlankLine(source, pos);
+    updateEditorSource(source.slice(0, pos) + gap + newCode + '\n' + source.slice(pos));
     return;
   }
 
-  const pos = findSheetBlockEnd(source, CQ.activeSheet);
-  if (pos < 0) return;
-
-  const gap = ensureBlankLine(source, pos);
-  updateEditorSource(source.slice(0, pos) + gap + newCode + '\n' + source.slice(pos));
+  if (CQ.activeSheet === 'Sheet1') {
+    // Bare top-level bindings (no Sheet1 {} wrapper)
+    const trimmed = source.trimEnd();
+    const gap = ensureBlankLine(trimmed + '\n', trimmed.length + 1);
+    updateEditorSource(trimmed + '\n' + gap + newCode + '\n');
+  }
 }
 
 function updateEditorSource(newSource) {
@@ -5831,11 +5992,12 @@ function initGridCanvas() {
 
   // Grid keyboard handling
   document.addEventListener('keydown', (e) => {
-    // Skip if focus is inside the editor or cell input
+    // Skip if focus is inside the editor, cell input, or any input/textarea
     const active = document.activeElement;
     const editorEl = $('#cq-win-body');
     if (editorEl && editorEl.contains(active)) return;
     if (G.editing) return; // input handles its own keys
+    if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) return;
 
     // Ctrl+Z undo / Ctrl+Shift+Z redo
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
@@ -6430,28 +6592,125 @@ function initEditor(container) {
     dir:   tags.keyword,
   };
 
-  // Calque stream language from tokenizer
+  // Calque stream language — stateful tokenizer for multi-line template strings
   const calqueLang = StreamLanguage.define({
-    token(stream) {
-      if (stream.sol()) {
-        stream.lineTokens = tokenizeCalque(stream.string);
-        stream.lineTokenIdx = 0;
+    token(stream, state) {
+      // Inside template string body
+      if (state.inTemplate) {
+        while (!stream.eol()) {
+          if (stream.peek() === '\\') {
+            stream.next(); if (!stream.eol()) stream.next();
+            continue;
+          }
+          if (stream.peek() === '$' && stream.pos + 1 < stream.string.length && stream.string[stream.pos + 1] === '{') {
+            if (stream.pos > stream.start) return 'str';
+            stream.next(); stream.next();
+            state.inTemplate = false;
+            state.interpDepth++;
+            return 'punc';
+          }
+          if (stream.peek() === '`') {
+            stream.next();
+            state.inTemplate = false;
+            return 'str';
+          }
+          stream.next();
+        }
+        return 'str';
       }
-      const toks = stream.lineTokens;
-      if (!toks || stream.lineTokenIdx >= toks.length) {
-        stream.skipToEnd();
-        return null;
+
+      if (stream.eatSpace()) return null;
+
+      // Comments
+      if (stream.match('--')) { stream.skipToEnd(); return 'cmt'; }
+
+      // Template strings
+      if (stream.peek() === '`') {
+        stream.next();
+        while (!stream.eol()) {
+          if (stream.peek() === '\\') {
+            stream.next(); if (!stream.eol()) stream.next();
+            continue;
+          }
+          if (stream.peek() === '$' && stream.pos + 1 < stream.string.length && stream.string[stream.pos + 1] === '{') {
+            state.inTemplate = true;
+            return 'str';
+          }
+          if (stream.peek() === '`') { stream.next(); return 'str'; }
+          stream.next();
+        }
+        state.inTemplate = true;
+        return 'str';
       }
-      const tok = toks[stream.lineTokenIdx];
-      stream.lineTokenIdx++;
-      if (tok.text.length > 0) stream.pos += tok.text.length;
-      else stream.pos++;
-      const type = tok.type;
-      return (type && type in cqTokenTable) ? type : null;
+
+      // Regular strings
+      if (stream.peek() === '"') {
+        stream.next();
+        while (!stream.eol()) {
+          if (stream.peek() === '\\') { stream.next(); if (!stream.eol()) stream.next(); }
+          else if (stream.peek() === '"') { stream.next(); return 'str'; }
+          else stream.next();
+        }
+        return 'str';
+      }
+
+      // Numbers (including .5)
+      if (/\d/.test(stream.peek())) {
+        stream.match(/^\d+(\.\d+)?([eE][+-]?\d+)?/);
+        return 'num';
+      }
+      if (stream.peek() === '.' && stream.pos + 1 < stream.string.length && /\d/.test(stream.string[stream.pos + 1])) {
+        stream.match(/^\.\d+([eE][+-]?\d+)?/);
+        return 'num';
+      }
+
+      // Directives
+      if (stream.peek() === '@') {
+        stream.match(/^@[a-zA-Z_]\w*/);
+        return 'dir';
+      }
+
+      // Words
+      if (/[a-zA-Z_]/.test(stream.peek())) {
+        stream.match(/^[a-zA-Z_]\w*/);
+        const word = stream.current();
+        if (CALQUE_KEYWORDS.has(word)) return 'kw';
+        if (CALQUE_BUILTINS.has(word)) return 'fn';
+        if (!stream.eol() && stream.peek() === '(') return 'fn';
+        return 'id';
+      }
+
+      // Multi-char operators
+      if (stream.match('..') || stream.match('->') || stream.match('==') ||
+          stream.match('/=') || stream.match('>=') || stream.match('<=')) {
+        return 'op';
+      }
+
+      // Single-char operators
+      if ('+-*/^&<>='.includes(stream.peek())) { stream.next(); return 'op'; }
+
+      // Punctuation (tracks interpolation depth)
+      if ('()[]{},:'.includes(stream.peek())) {
+        const ch = stream.next();
+        if (state.interpDepth > 0) {
+          if (ch === '{') state.interpDepth++;
+          else if (ch === '}') {
+            state.interpDepth--;
+            if (state.interpDepth === 0) state.inTemplate = true;
+          }
+        }
+        return 'punc';
+      }
+
+      // Dot
+      if (stream.peek() === '.') { stream.next(); return 'punc'; }
+
+      stream.next();
+      return null;
     },
     tokenTable: cqTokenTable,
-    startState() { return {}; },
-    copyState() { return {}; },
+    startState() { return { inTemplate: false, interpDepth: 0 }; },
+    copyState(s) { return { inTemplate: s.inTemplate, interpDepth: s.interpDepth }; },
   });
 
   // GCU theme
@@ -6614,8 +6873,8 @@ function cqEvaluate(source) {
     setStatus('msg', 'error: ' + e.message);
   }
 
-  // Persist source
-  localStorage.setItem('cq-source', source);
+  // Persist source to active project
+  projectSave();
 }
 
 function forceEval() {
@@ -6638,9 +6897,10 @@ function initMenuBar() {
       { type: 'sep' },
       { label: 'Save', action: saveFile, shortcut: 'Ctrl+S' },
       { label: 'Save As...', action: saveFileAs },
+      { label: 'Rename...', action: renameProject },
       { type: 'sep' },
       { label: 'Export .xlsx', action: exportXlsx },
-    ]},
+    ], onOpen: buildRecentMenu },
     { label: 'Edit', items: [
       { label: 'Undo', action: () => editorCmd('undo'), shortcut: 'Ctrl+Z' },
       { label: 'Redo', action: () => editorCmd('redo'), shortcut: 'Ctrl+Shift+Z' },
@@ -6704,6 +6964,7 @@ function initMenuBar() {
         closeMenus();
       } else {
         closeMenus();
+        if (menu.onOpen) menu.onOpen(dropdown);
         item.classList.add('open');
         CQ.menuOpen = item;
       }
@@ -6713,6 +6974,7 @@ function initMenuBar() {
     label.addEventListener('mouseenter', () => {
       if (CQ.menuOpen && CQ.menuOpen !== item) {
         closeMenus();
+        if (menu.onOpen) menu.onOpen(dropdown);
         item.classList.add('open');
         CQ.menuOpen = item;
       }
@@ -6725,6 +6987,68 @@ function initMenuBar() {
       closeMenus();
     }
   });
+}
+
+function buildRecentMenu(dropdown) {
+  // Remove previous recent section
+  const old = dropdown.querySelector('.cq-menu-recent');
+  if (old) old.remove();
+
+  const projects = getProjects();
+  if (!projects.length) return;
+
+  const frag = document.createElement('div');
+  frag.className = 'cq-menu-recent';
+
+  const sep = document.createElement('div');
+  sep.className = 'cq-menu-sep';
+  frag.appendChild(sep);
+
+  const header = document.createElement('div');
+  header.className = 'cq-menu-entry cq-menu-recent-header';
+  header.textContent = 'Recent';
+  header.style.color = 'var(--fg-dim)';
+  header.style.fontSize = '0.85em';
+  header.style.cursor = 'default';
+  frag.appendChild(header);
+
+  for (const p of projects.slice(0, 8)) {
+    const btn = document.createElement('button');
+    btn.className = 'cq-menu-entry';
+    const lbl = document.createElement('span');
+    lbl.textContent = p.name;
+    lbl.style.overflow = 'hidden';
+    lbl.style.textOverflow = 'ellipsis';
+    lbl.style.whiteSpace = 'nowrap';
+    btn.appendChild(lbl);
+    if (p.id === CQ.projectId) {
+      lbl.style.color = 'var(--accent)';
+    }
+    const time = document.createElement('span');
+    time.className = 'cq-menu-shortcut';
+    time.textContent = timeAgo(p.ts);
+    btn.appendChild(time);
+    btn.addEventListener('click', () => {
+      closeMenus();
+      if (p.id === CQ.projectId) return;
+      // Save current, load selected
+      projectSave();
+      const src = projectLoad(p.id);
+      if (src != null) {
+        CQ.source = src;
+        CQ.fileHandle = null;
+        CQ.dirty = false;
+        CQ.importData = null;
+        CQ.fileName = p.name;
+        setEditorSource(CQ.source);
+        cqEvaluate(CQ.source);
+        updateTitle();
+      }
+    });
+    frag.appendChild(btn);
+  }
+
+  dropdown.appendChild(frag);
 }
 
 function closeMenus() {
@@ -6818,11 +7142,12 @@ function showModal(title, text) {
 
 async function newFile() {
   if (CQ.dirty && !confirm('Discard unsaved changes?')) return;
-  CQ.source = STARTER;
+  CQ.source = 'Sheet1 {\n  \n}';
   CQ.fileHandle = null;
   CQ.fileName = null;
   CQ.dirty = false;
   CQ.importData = null;
+  projectCreate(CQ.source);
   setEditorSource(CQ.source);
   cqEvaluate(CQ.source);
   updateTitle();
@@ -6848,6 +7173,8 @@ async function openFile() {
     }
     CQ.dirty = false;
     CQ.importData = null;
+    const pname = (CQ.fileName || 'untitled').replace(/\.\w+$/, '');
+    projectCreate(CQ.source, pname);
     setEditorSource(CQ.source);
     cqEvaluate(CQ.source);
     updateTitle();
@@ -6863,14 +7190,31 @@ async function saveFile() {
       await writable.write(CQ.source);
       await writable.close();
       CQ.dirty = false;
+      projectSave();
       updateTitle();
       setStatus('msg', 'saved');
       return;
     } catch (e) {
-      // Fall through to Save As
+      // Fall through
     }
   }
-  await saveFileAs();
+  // No file handle — persisted to localStorage
+  if (isProjectUntitled()) {
+    // First save of untitled project — ask for a name
+    showRenamePrompt('untitled', name => {
+      projectUpdateName(name);
+      CQ.fileName = name;
+      CQ.dirty = false;
+      projectSave();
+      updateTitle();
+      setStatus('msg', 'saved as ' + name);
+    });
+    return;
+  }
+  CQ.dirty = false;
+  projectSave();
+  updateTitle();
+  setStatus('msg', 'saved');
 }
 
 async function saveFileAs() {
@@ -6886,6 +7230,8 @@ async function saveFileAs() {
       CQ.fileHandle = handle;
       CQ.fileName = handle.name;
       CQ.dirty = false;
+      projectUpdateName(handle.name.replace(/\.\w+$/, ''));
+      projectSave();
       updateTitle();
       setStatus('msg', 'saved');
     } else {
@@ -7009,11 +7355,316 @@ function initDragDrop() {
       CQ.fileName = file.name;
       CQ.fileHandle = null;
       CQ.dirty = false;
+      const pname = file.name.replace(/\.\w+$/, '');
+      projectCreate(CQ.source, pname);
       setEditorSource(CQ.source);
       cqEvaluate(CQ.source);
       updateTitle();
     }
   });
+}
+
+// -- splash.js --
+
+// Project management + splash screen
+
+const EXAMPLES = {
+  'Sales Report': STARTER,
+  'Budget': `Income {
+  source = ["Salary", "Freelance", "Dividends"]
+  monthly = [5000, 1200, 300]
+  annual = monthly * 12
+}
+
+Expenses {
+  category = ["Rent", "Food", "Transport", "Savings"]
+  monthly = [1500, 600, 200, 800]
+  annual = monthly * 12
+}
+
+Balance {
+  total_income = sum(Income.monthly)
+  total_expenses = sum(Expenses.monthly)
+  net = total_income - total_expenses
+  status = if net > 0 then "surplus" else "deficit"
+}`,
+  'Math': `Sequences {
+  n = 1..10
+  squares = n ^ 2
+  cubes = n ^ 3
+  factorials = scan(1..10, 1, (a, b) -> a * b)
+}
+
+Stats {
+  data = [4, 8, 15, 16, 23, 42]
+  avg = mean(data)
+  total = sum(data)
+  hi = max(data)
+  lo = min(data)
+  spread = hi - lo
+}`,
+  'Strings': `People {
+  first = ["Alice", "Bob", "Carol"]
+  last = ["Smith", "Jones", "Lee"]
+  full = first & " " & last
+  initials = left(first, 1) & left(last, 1)
+  name_len = len(full)
+}
+
+Summary {
+  count = count(People.first)
+  longest = max(People.name_len)
+}`,
+};
+
+// ── Project CRUD ──
+
+function genId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+function getProjects() {
+  try { return JSON.parse(localStorage.getItem('cq-projects') || '[]'); }
+  catch { return []; }
+}
+
+function setProjects(list) {
+  localStorage.setItem('cq-projects', JSON.stringify(list));
+}
+
+function projectCreate(source, name) {
+  const id = genId();
+  const list = getProjects();
+  list.unshift({ id, name: name || 'untitled', ts: Date.now() });
+  if (list.length > 20) {
+    const removed = list.splice(20);
+    for (const r of removed) localStorage.removeItem('cq-project:' + r.id);
+  }
+  setProjects(list);
+  localStorage.setItem('cq-project:' + id, source);
+  localStorage.setItem('cq-active', id);
+  CQ.projectId = id;
+  return id;
+}
+
+function projectSave() {
+  if (!CQ.projectId) return;
+  localStorage.setItem('cq-project:' + CQ.projectId, CQ.source);
+  const list = getProjects();
+  const entry = list.find(p => p.id === CQ.projectId);
+  if (entry) {
+    entry.ts = Date.now();
+    setProjects(list);
+  }
+}
+
+function projectUpdateName(name) {
+  if (!CQ.projectId) return;
+  const list = getProjects();
+  const entry = list.find(p => p.id === CQ.projectId);
+  if (entry) {
+    entry.name = name;
+    setProjects(list);
+  }
+}
+
+function projectLoad(id) {
+  const src = localStorage.getItem('cq-project:' + id);
+  if (src == null) return null;
+  localStorage.setItem('cq-active', id);
+  CQ.projectId = id;
+  return src;
+}
+
+function projectRemove(id) {
+  let list = getProjects();
+  list = list.filter(p => p.id !== id);
+  setProjects(list);
+  localStorage.removeItem('cq-project:' + id);
+  if (localStorage.getItem('cq-active') === id) {
+    localStorage.removeItem('cq-active');
+  }
+}
+
+// ── Time formatting ──
+
+function timeAgo(ts) {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return 'just now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + ' min ago';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + ' hr ago';
+  const d = Math.floor(h / 24);
+  if (d === 1) return 'yesterday';
+  if (d < 30) return d + ' days ago';
+  return new Date(ts).toLocaleDateString();
+}
+
+// ── Splash screen ──
+
+function showSplash(onSelect) {
+  const projects = getProjects();
+  const activeId = localStorage.getItem('cq-active');
+
+  const overlay = document.createElement('div');
+  overlay.id = 'cq-splash';
+  overlay.className = 'cq-splash';
+
+  let recentHtml = '';
+  if (projects.length) {
+    recentHtml = `<div class="cq-splash-section">Recent</div>
+<div class="cq-splash-list">
+${projects.map(p => `<div class="cq-splash-entry" data-id="${p.id}">
+  <span class="cq-splash-name">${esc(p.name)}</span>
+  <span class="cq-splash-time">${timeAgo(p.ts)}</span>
+  <button class="cq-splash-rm" data-rm="${p.id}" title="Remove">\u00d7</button>
+</div>`).join('')}
+</div>`;
+  }
+
+  const hasActive = activeId && projects.some(p => p.id === activeId);
+
+  const exOpts = Object.keys(EXAMPLES).map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+
+  overlay.innerHTML = `<div class="cq-splash-box">
+  <div class="cq-splash-title">c a l q u e</div>
+  <div class="cq-splash-actions">
+    <button class="cq-splash-btn" data-action="new">New</button>
+    <button class="cq-splash-btn" data-action="open">Open\u2026</button>
+    <select class="cq-splash-select" data-action="example">
+      <option value="" disabled selected>Examples</option>
+      ${exOpts}
+    </select>
+  </div>
+  ${recentHtml}
+  ${hasActive ? '<div class="cq-splash-resume"><button class="cq-splash-btn cq-splash-resume-btn" data-action="resume">Resume Last</button></div>' : ''}
+</div>`;
+
+  function dismiss() {
+    overlay.remove();
+    document.removeEventListener('keydown', onKey);
+  }
+
+  function onKey(e) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      if (hasActive) {
+        dismiss();
+        onSelect('resume');
+      }
+    }
+  }
+
+  overlay.addEventListener('click', e => {
+    const rm = e.target.closest('[data-rm]');
+    if (rm) {
+      e.stopPropagation();
+      const rid = rm.dataset.rm;
+      projectRemove(rid);
+      rm.closest('.cq-splash-entry').remove();
+      // If list is now empty, remove section
+      if (!overlay.querySelector('.cq-splash-entry')) {
+        const sec = overlay.querySelector('.cq-splash-section');
+        const list = overlay.querySelector('.cq-splash-list');
+        if (sec) sec.remove();
+        if (list) list.remove();
+      }
+      return;
+    }
+
+    const btn = e.target.closest('[data-action]');
+    if (btn) {
+      const action = btn.dataset.action;
+      if (action === 'new' || action === 'resume' || action === 'open') {
+        dismiss();
+        onSelect(action);
+      }
+      return;
+    }
+
+    const entry = e.target.closest('.cq-splash-entry');
+    if (entry) {
+      dismiss();
+      onSelect('load', entry.dataset.id);
+    }
+  });
+
+  const sel = overlay.querySelector('.cq-splash-select');
+  if (sel) {
+    sel.addEventListener('change', () => {
+      const name = sel.value;
+      if (name && EXAMPLES[name]) {
+        dismiss();
+        onSelect('example', name);
+      }
+    });
+  }
+
+  document.addEventListener('keydown', onKey);
+  document.body.appendChild(overlay);
+}
+
+function esc(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// ── Inline rename prompt ──
+
+function showRenamePrompt(current, onDone) {
+  const overlay = document.createElement('div');
+  overlay.className = 'cq-modal-overlay';
+  overlay.innerHTML = `<div class="cq-modal">
+  <div class="cq-modal-title">Project Name</div>
+  <input class="cq-rename-input" type="text" value="${esc(current)}" spellcheck="false">
+  <div class="cq-rename-actions">
+    <button class="cq-modal-close" data-action="cancel">Cancel</button>
+    <button class="cq-modal-close cq-rename-ok" data-action="ok">OK</button>
+  </div>
+</div>`;
+
+  const input = overlay.querySelector('input');
+  const finish = (accept) => {
+    overlay.remove();
+    if (accept) {
+      const name = input.value.trim() || 'untitled';
+      onDone(name);
+    }
+  };
+
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+
+  overlay.addEventListener('click', e => {
+    const action = e.target.dataset.action;
+    if (action === 'ok') finish(true);
+    else if (action === 'cancel') finish(false);
+    else if (e.target === overlay) finish(false);
+  });
+
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => { input.select(); input.focus(); });
+}
+
+function renameProject() {
+  const projects = getProjects();
+  const p = projects.find(e => e.id === CQ.projectId);
+  const current = (p && p.name) || CQ.fileName || 'untitled';
+  showRenamePrompt(current, name => {
+    projectUpdateName(name);
+    CQ.fileName = name;
+    updateTitle();
+    setStatus('msg', 'renamed to ' + name);
+  });
+}
+
+function isProjectUntitled() {
+  if (!CQ.projectId) return true;
+  const projects = getProjects();
+  const p = projects.find(e => e.id === CQ.projectId);
+  return !p || p.name === 'untitled';
 }
 
 // -- init.js --
@@ -7030,29 +7681,15 @@ function setStatus(key, text) {
   }
 }
 
-;(function init() {
-  // Restore source from localStorage
-  const saved = localStorage.getItem('cq-source');
-  CQ.source = saved || STARTER;
-
-  // Build menu bar
-  initMenuBar();
-
-  // Init canvas grid
-  initGridCanvas();
-
-  // Create floating editor window
-  const win = createWindow();
-  const body = win.querySelector('#cq-win-body');
-  initEditor(body);
-
-  // Initial eval + render
+function startProject(source) {
+  CQ.source = source;
+  setEditorSource(CQ.source);
   cqEvaluate(CQ.source);
+  updateTitle();
+}
 
-  // Drag-drop
-  initDragDrop();
-
-  // Global keyboard shortcuts
+;(function init() {
+  // Global keyboard shortcuts — register first to prevent browser defaults
   document.addEventListener('keydown', e => {
     // Ctrl+S
     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
@@ -7103,10 +7740,104 @@ function setStatus(key, text) {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }
 
+  // Build menu bar
+  initMenuBar();
+
+  // Init canvas grid
+  initGridCanvas();
+
+  // Create floating editor window
+  const win = createWindow();
+  const body = win.querySelector('#cq-win-body');
+  initEditor(body);
+
+  // Drag-drop
+  initDragDrop();
+
   setStatus('msg', 'ready');
   setStatus('cursor', '1:1');
-  updateTitle();
+
+  // Migrate from legacy cq-source key
+  const legacySource = localStorage.getItem('cq-source');
+  if (legacySource && !getProjects().length) {
+    projectCreate(legacySource);
+    localStorage.removeItem('cq-source');
+  }
+
+  // Show splash — don't render anything behind it
+  showSplash(handleSplashChoice);
 })();
+
+function handleSplashChoice(action, arg) {
+  switch (action) {
+    case 'new':
+      CQ.source = 'Sheet1 {\n  \n}';
+      CQ.fileHandle = null;
+      CQ.fileName = null;
+      CQ.dirty = false;
+      CQ.importData = null;
+      projectCreate(CQ.source);
+      startProject(CQ.source);
+      break;
+
+    case 'open':
+      openFile();
+      break;
+
+    case 'resume': {
+      const activeId = localStorage.getItem('cq-active');
+      if (activeId) {
+        const src = projectLoad(activeId);
+        if (src != null) {
+          CQ.source = src;
+          CQ.fileHandle = null;
+          CQ.dirty = false;
+          CQ.importData = null;
+          const projects = getProjects();
+          const p = projects.find(e => e.id === activeId);
+          CQ.fileName = p ? p.name : null;
+          startProject(CQ.source);
+          break;
+        }
+      }
+      // Fallback if active project gone
+      CQ.source = STARTER;
+      projectCreate(CQ.source);
+      startProject(CQ.source);
+      break;
+    }
+
+    case 'load': {
+      const src = projectLoad(arg);
+      if (src != null) {
+        CQ.source = src;
+        CQ.fileHandle = null;
+        CQ.dirty = false;
+        CQ.importData = null;
+        // Restore project name as fileName
+        const projects = getProjects();
+        const p = projects.find(e => e.id === arg);
+        CQ.fileName = p ? p.name : null;
+        startProject(CQ.source);
+      }
+      break;
+    }
+
+    case 'example': {
+      const src = EXAMPLES[arg];
+      if (src) {
+        CQ.source = src;
+        CQ.fileHandle = null;
+        CQ.fileName = null;
+        CQ.dirty = false;
+        CQ.importData = null;
+        projectCreate(CQ.source, arg);
+        startProject(CQ.source);
+      }
+      break;
+    }
+  }
+}
 </script>
 </body>
 </html>

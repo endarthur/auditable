@@ -445,18 +445,20 @@ function ensureBlankLine(source, pos) {
 function insertIntoSheet(newCode) {
   const source = CQ.source;
 
-  if (CQ.activeSheet === 'Sheet1') {
-    const trimmed = source.trimEnd();
-    const gap = ensureBlankLine(trimmed + '\n', trimmed.length + 1);
-    updateEditorSource(trimmed + '\n' + gap + newCode + '\n');
+  const pos = findSheetBlockEnd(source, CQ.activeSheet);
+  if (pos >= 0) {
+    // Named sheet block — insert before closing }
+    const gap = ensureBlankLine(source, pos);
+    updateEditorSource(source.slice(0, pos) + gap + newCode + '\n' + source.slice(pos));
     return;
   }
 
-  const pos = findSheetBlockEnd(source, CQ.activeSheet);
-  if (pos < 0) return;
-
-  const gap = ensureBlankLine(source, pos);
-  updateEditorSource(source.slice(0, pos) + gap + newCode + '\n' + source.slice(pos));
+  if (CQ.activeSheet === 'Sheet1') {
+    // Bare top-level bindings (no Sheet1 {} wrapper)
+    const trimmed = source.trimEnd();
+    const gap = ensureBlankLine(trimmed + '\n', trimmed.length + 1);
+    updateEditorSource(trimmed + '\n' + gap + newCode + '\n');
+  }
 }
 
 function updateEditorSource(newSource) {
@@ -1112,11 +1114,12 @@ function initGridCanvas() {
 
   // Grid keyboard handling
   document.addEventListener('keydown', (e) => {
-    // Skip if focus is inside the editor or cell input
+    // Skip if focus is inside the editor, cell input, or any input/textarea
     const active = document.activeElement;
     const editorEl = $('#cq-win-body');
     if (editorEl && editorEl.contains(active)) return;
     if (G.editing) return; // input handles its own keys
+    if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA')) return;
 
     // Ctrl+Z undo / Ctrl+Shift+Z redo
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {

@@ -12,9 +12,10 @@ function initMenuBar() {
       { type: 'sep' },
       { label: 'Save', action: saveFile, shortcut: 'Ctrl+S' },
       { label: 'Save As...', action: saveFileAs },
+      { label: 'Rename...', action: renameProject },
       { type: 'sep' },
       { label: 'Export .xlsx', action: exportXlsx },
-    ]},
+    ], onOpen: buildRecentMenu },
     { label: 'Edit', items: [
       { label: 'Undo', action: () => editorCmd('undo'), shortcut: 'Ctrl+Z' },
       { label: 'Redo', action: () => editorCmd('redo'), shortcut: 'Ctrl+Shift+Z' },
@@ -78,6 +79,7 @@ function initMenuBar() {
         closeMenus();
       } else {
         closeMenus();
+        if (menu.onOpen) menu.onOpen(dropdown);
         item.classList.add('open');
         CQ.menuOpen = item;
       }
@@ -87,6 +89,7 @@ function initMenuBar() {
     label.addEventListener('mouseenter', () => {
       if (CQ.menuOpen && CQ.menuOpen !== item) {
         closeMenus();
+        if (menu.onOpen) menu.onOpen(dropdown);
         item.classList.add('open');
         CQ.menuOpen = item;
       }
@@ -99,6 +102,68 @@ function initMenuBar() {
       closeMenus();
     }
   });
+}
+
+function buildRecentMenu(dropdown) {
+  // Remove previous recent section
+  const old = dropdown.querySelector('.cq-menu-recent');
+  if (old) old.remove();
+
+  const projects = getProjects();
+  if (!projects.length) return;
+
+  const frag = document.createElement('div');
+  frag.className = 'cq-menu-recent';
+
+  const sep = document.createElement('div');
+  sep.className = 'cq-menu-sep';
+  frag.appendChild(sep);
+
+  const header = document.createElement('div');
+  header.className = 'cq-menu-entry cq-menu-recent-header';
+  header.textContent = 'Recent';
+  header.style.color = 'var(--fg-dim)';
+  header.style.fontSize = '0.85em';
+  header.style.cursor = 'default';
+  frag.appendChild(header);
+
+  for (const p of projects.slice(0, 8)) {
+    const btn = document.createElement('button');
+    btn.className = 'cq-menu-entry';
+    const lbl = document.createElement('span');
+    lbl.textContent = p.name;
+    lbl.style.overflow = 'hidden';
+    lbl.style.textOverflow = 'ellipsis';
+    lbl.style.whiteSpace = 'nowrap';
+    btn.appendChild(lbl);
+    if (p.id === CQ.projectId) {
+      lbl.style.color = 'var(--accent)';
+    }
+    const time = document.createElement('span');
+    time.className = 'cq-menu-shortcut';
+    time.textContent = timeAgo(p.ts);
+    btn.appendChild(time);
+    btn.addEventListener('click', () => {
+      closeMenus();
+      if (p.id === CQ.projectId) return;
+      // Save current, load selected
+      projectSave();
+      const src = projectLoad(p.id);
+      if (src != null) {
+        CQ.source = src;
+        CQ.fileHandle = null;
+        CQ.dirty = false;
+        CQ.importData = null;
+        CQ.fileName = p.name;
+        setEditorSource(CQ.source);
+        cqEvaluate(CQ.source);
+        updateTitle();
+      }
+    });
+    frag.appendChild(btn);
+  }
+
+  dropdown.appendChild(frag);
 }
 
 function closeMenus() {

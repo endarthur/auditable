@@ -8,4 +8,5 @@ import './editor.js';
 import './eval.js';
 import './menu.js';
 import './file.js';
+import './splash.js';
 import './init.js';
