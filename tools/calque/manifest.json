@@ -1,0 +1,10 @@
+{
+  "name": "Calque Editor",
+  "short_name": "Calque",
+  "description": "Spreadsheet language editor \u2014 write code, see spreadsheet, download xlsx",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#c89b3c",
+  "icons": []
+}

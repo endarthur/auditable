@@ -107,6 +107,80 @@ ${afJs}
 }
 
 // ══════════════════════════════════════════════════
+// TARGET: calque
+// ══════════════════════════════════════════════════
+
+if (target === 'calque') {
+  const toolDir = path.join(__dirname, 'tools', 'calque');
+  const toolJsDir = path.join(toolDir, 'js');
+
+  // 1. Process tool modules
+  let toolJs = processModules(path.join(toolJsDir, 'main.js'), toolJsDir);
+
+  // 2. Prepend dependencies: CM6 + calque compiler + sheet IO
+  const cm6Path = path.join(__dirname, 'ext/cm6/cm6.min.js');
+  const calquePath = path.join(__dirname, 'ext/calque/index.js');
+  const sheetPath = path.join(__dirname, 'ext/sheet/index.js');
+
+  let deps = '';
+  if (fs.existsSync(cm6Path)) deps += fs.readFileSync(cm6Path, 'utf8') + '\n\n';
+
+  // Strip export from calque
+  let calqueSrc = fs.readFileSync(calquePath, 'utf8');
+  calqueSrc = calqueSrc.replace(/^export\s*\{[^}]*\};?\s*$/gm, '');
+  deps += calqueSrc + '\n\n';
+
+  // Strip export from sheet — rename conflicting const declarations to avoid
+  // redeclaration errors when both extensions define the same names
+  let sheetSrc = fs.readFileSync(sheetPath, 'utf8');
+  sheetSrc = sheetSrc.replace(/^export\s*\{[^}]*\};?\s*$/gm, '');
+  // Prefix sheet-internal names that collide with calque internals
+  sheetSrc = sheetSrc.replace(/\bMS_PER_DAY\b/g, '_sheet_MS_PER_DAY');
+  sheetSrc = sheetSrc.replace(/\bdateToSerial\b/g, '_sheet_dateToSerial');
+  sheetSrc = sheetSrc.replace(/\bserialToDate\b/g, '_sheet_serialToDate');
+  sheetSrc = sheetSrc.replace(/\bcolLetter\b/g, '_sheet_colLetter');
+  deps += sheetSrc + '\n\n';
+
+  const js = deps + toolJs;
+
+  // 3. Read CSS and template
+  const toolCss = fs.readFileSync(path.join(toolDir, 'style.css'), 'utf8');
+  const toolTemplate = fs.readFileSync(path.join(toolDir, 'template.html'), 'utf8');
+
+  // 4. Assemble
+  const html = `<!DOCTYPE html>
+<!-- Calque Editor \u2014 spreadsheet language tool -->
+<!-- Part of the Auditable project \u2014 https://github.com/endarthur/auditable -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#c89b3c">
+<title>Calque</title>
+<style>
+${toolCss}
+</style>
+</head>
+<body>
+
+${toolTemplate}
+
+<script>
+${js}
+</script>
+</body>
+</html>
+`;
+
+  const outPath = path.join(toolDir, 'index.html');
+  fs.writeFileSync(outPath, html);
+  const size = fs.statSync(outPath).size;
+  console.log(`Built tools/calque/index.html (${(size / 1024).toFixed(1)} KB)`);
+  process.exit(0);
+}
+
+// ══════════════════════════════════════════════════
 // TARGET: scan
 // ══════════════════════════════════════════════════
 

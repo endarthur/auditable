@@ -1,0 +1,480 @@
+/* Calque Editor — GCU dark theme */
+
+:root {
+  --bg0: #0a0a0a;
+  --bg1: #111;
+  --bg2: #1a1a1a;
+  --bg3: #222;
+  --fg: #aaa;
+  --fg-dim: #555;
+  --fg-bright: #ccc;
+  --accent: #c89b3c;
+  --accent-dim: #8a6c2a;
+  --err: #a33;
+  --ok: #3a7;
+  --border: #222;
+  --border-hi: #333;
+  --mono: 'Courier New', Courier, monospace;
+  --editor-font-size: 13px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  background: var(--bg0);
+  color: var(--fg);
+  font: 13px/1.4 var(--mono);
+  overflow: hidden;
+}
+
+/* ── Menu Bar ── */
+
+.cq-menubar {
+  display: flex;
+  height: 28px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  user-select: none;
+  z-index: 100;
+  position: relative;
+}
+
+.cq-menu-item {
+  position: relative;
+}
+
+.cq-menu-label {
+  display: block;
+  padding: 4px 12px;
+  background: none;
+  border: none;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+  height: 28px;
+}
+
+.cq-menu-label:hover,
+.cq-menu-item.open > .cq-menu-label {
+  background: var(--bg3);
+  color: var(--fg-bright);
+}
+
+.cq-dropdown {
+  display: none;
+  position: absolute;
+  top: 28px;
+  left: 0;
+  min-width: 200px;
+  background: var(--bg2);
+  border: 1px solid var(--border-hi);
+  z-index: 200;
+  padding: 4px 0;
+}
+
+.cq-menu-item.open > .cq-dropdown {
+  display: block;
+}
+
+.cq-menu-entry {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  padding: 4px 16px;
+  background: none;
+  border: none;
+  color: var(--fg);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.cq-menu-entry:hover {
+  background: rgba(200, 155, 60, 0.15);
+  color: var(--fg-bright);
+}
+
+.cq-menu-shortcut {
+  color: var(--fg-dim);
+  margin-left: 24px;
+  font-size: 0.85em;
+}
+
+.cq-menu-sep {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--border);
+}
+
+/* ── Viewport (grid area) ── */
+
+.cq-viewport {
+  position: absolute;
+  top: 28px;
+  left: 0;
+  right: 0;
+  bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.cq-grid {
+  flex: 1;
+  overflow: hidden;
+  background: var(--bg1);
+  position: relative;
+}
+
+.cq-grid-corner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 48px;
+  height: 24px;
+  background: #1a1a1a;
+  border-right: 1px solid #2a2a2a;
+  border-bottom: 1px solid #2a2a2a;
+  z-index: 4;
+}
+
+.cq-grid-col-hdr {
+  position: absolute;
+  top: 0;
+  left: 48px;
+  height: 24px;
+  z-index: 3;
+}
+
+.cq-grid-row-hdr {
+  position: absolute;
+  top: 24px;
+  left: 0;
+  width: 48px;
+  z-index: 3;
+}
+
+.cq-grid-body {
+  position: absolute;
+  top: 24px;
+  left: 48px;
+  right: 0;
+  bottom: 0;
+}
+
+.cq-grid-scroll {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+}
+
+.cq-grid-spacer {
+  pointer-events: none;
+}
+
+.cq-grid-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+/* ── Cell edit input ── */
+
+.cq-cell-input {
+  position: absolute;
+  z-index: 10;
+  background: var(--bg1);
+  border: 2px solid var(--accent);
+  color: var(--fg-bright);
+  font: 13px var(--mono);
+  padding: 0 5px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+/* ── Scrollbar styling ── */
+
+.cq-grid-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.cq-grid-scroll::-webkit-scrollbar-track {
+  background: #141414;
+}
+
+.cq-grid-scroll::-webkit-scrollbar-thumb {
+  background: #333;
+  border: 2px solid #141414;
+  border-radius: 5px;
+}
+
+.cq-grid-scroll::-webkit-scrollbar-thumb:hover {
+  background: #444;
+}
+
+.cq-grid-scroll::-webkit-scrollbar-corner {
+  background: #141414;
+}
+
+/* ── Editor scrollbar ── */
+
+.cm-scroller::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.cm-scroller::-webkit-scrollbar-track {
+  background: #141414;
+}
+
+.cm-scroller::-webkit-scrollbar-thumb {
+  background: #333;
+  border: 2px solid #141414;
+  border-radius: 5px;
+}
+
+.cm-scroller::-webkit-scrollbar-thumb:hover {
+  background: #444;
+}
+
+.cm-scroller::-webkit-scrollbar-corner {
+  background: #141414;
+}
+
+/* ── Sheet Tabs ── */
+
+.cq-sheet-tabs {
+  display: flex;
+  background: var(--bg2);
+  border-top: 1px solid var(--border);
+  min-height: 26px;
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.cq-sheet-tab {
+  padding: 3px 14px;
+  background: none;
+  border: none;
+  border-right: 1px solid var(--border);
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 0.85em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.cq-sheet-tab:hover {
+  color: var(--fg);
+  background: var(--bg3);
+}
+
+.cq-sheet-tab.active {
+  color: var(--accent);
+  background: var(--bg1);
+  border-bottom: 2px solid var(--accent);
+}
+
+/* (table styles removed — using canvas grid) */
+
+/* ── Floating Window ── */
+
+.cq-window {
+  position: absolute;
+  z-index: 50;
+  background: var(--bg1);
+  border: 1px solid var(--border-hi);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.5);
+}
+
+.cq-window.hidden {
+  display: none;
+}
+
+.cq-window.minimized .cq-win-body,
+.cq-window.minimized .cq-win-resize {
+  display: none;
+}
+
+.cq-window.minimized {
+  height: auto !important;
+}
+
+.cq-win-tb {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 28px;
+  padding: 0 8px;
+  background: var(--bg3);
+  border-bottom: 1px solid var(--border);
+  cursor: grab;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.cq-win-tb:active {
+  cursor: grabbing;
+}
+
+.cq-win-title {
+  color: var(--fg-dim);
+  font-size: 0.85em;
+  letter-spacing: 0.5px;
+}
+
+.cq-win-btns {
+  display: flex;
+  gap: 2px;
+}
+
+.cq-win-btn {
+  width: 22px;
+  height: 22px;
+  background: none;
+  border: none;
+  color: var(--fg-dim);
+  font: 14px/1 var(--mono);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cq-win-btn:hover {
+  color: var(--fg-bright);
+  background: rgba(200, 155, 60, 0.15);
+}
+
+.cq-win-body {
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.cq-win-body .cm-editor {
+  height: 100%;
+}
+
+.cq-win-resize {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  opacity: 0.3;
+}
+
+.cq-win-resize::after {
+  content: '';
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--fg-dim);
+  border-bottom: 2px solid var(--fg-dim);
+}
+
+/* ── Signature Hint ── */
+
+.cq-sig-hint {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg2);
+  border: 1px solid var(--border-hi);
+  color: var(--fg);
+  padding: 3px 12px;
+  font-size: 12px;
+  z-index: 60;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.cq-sig-hint.visible {
+  opacity: 1;
+}
+
+/* ── Status Bar ── */
+
+.cq-statusbar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  background: var(--bg2);
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  z-index: 100;
+}
+
+.cq-status-msg {
+  color: var(--fg-dim);
+}
+
+.cq-status-cursor {
+  color: var(--fg-dim);
+}
+
+/* ── Modal ── */
+
+.cq-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 500;
+}
+
+.cq-modal {
+  background: var(--bg2);
+  border: 1px solid var(--border-hi);
+  padding: 20px;
+  max-width: 440px;
+  width: 90%;
+}
+
+.cq-modal-title {
+  color: var(--accent);
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.cq-modal-body {
+  color: var(--fg);
+  white-space: pre-wrap;
+  font: inherit;
+  margin-bottom: 16px;
+  line-height: 1.6;
+}
+
+.cq-modal-close {
+  background: var(--bg3);
+  border: 1px solid var(--border-hi);
+  color: var(--fg);
+  padding: 4px 16px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.cq-modal-close:hover {
+  color: var(--fg-bright);
+  border-color: var(--accent-dim);
+}

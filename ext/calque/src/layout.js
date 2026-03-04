@@ -123,8 +123,12 @@ function resolveDirectives(directives, bindings, nextCol, name, isCol) {
       if (col === null || row === null) {
         throw new Error(`@anchor requires numeric col and row in '${name}'`);
       }
-      // anchor specifies header position; data starts at row + 1
-      return { col, row: row + 1 };
+      const anchorLabel = getLabel(d, isCol);
+      // label false: data at exact row, no header offset
+      // label "above" (default): header at row, data at row + 1
+      // label "left": data at row + 1, header to the left
+      const headerOffset = anchorLabel === false ? 0 : 1;
+      return { col, row: row + headerOffset, label: anchorLabel };
     }
 
     throw new Error(`Unknown directive @${d.name} in '${name}'`);
