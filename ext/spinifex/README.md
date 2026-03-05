@@ -316,14 +316,43 @@ GCU aesthetic: amber (#c89b3c) accent for points, lines, and polygon fills. Defa
 
 ---
 
+## Testing
+
+No tests yet. Priority targets (all pure-math, no browser needed):
+
+- **dem.js** — `sample()` bilinear interpolation (interior, edges, corners, nodata neighbors, out-of-bounds), `profile()` distance/elevation arrays, Haversine accuracy
+- **srtm.js** — `tileKey()` for all quadrants (N/S/E/W, zero-padding), `tileUrl()` folder structure, `tilesForBbox()` tile enumeration and edge cases, IDB cache round-trip (`tilePut`/`tileGet`), mosaic overlap math
+- **render.js** — `terrainColor()` at ramp boundaries (0, 0.5, 1) and interpolation between stops
+- **loaders.js** — CSV column auto-detection (lon/latitude/easting/x variants, case sensitivity, missing columns)
+
+---
+
 ## Roadmap
+
+### Infrastructure
+- Tests for pure-math functions (see Testing section above)
+- Add spinifex to CLAUDE.md project structure and build checklist
+- Build-time size tracking
+
+### Feature interaction
+- Click/hover on features to inspect attributes (popup/tooltip)
+- Attribute table for loaded vector data
+- Feature selection by click, box, or polygon
+- Style-by-attribute: color/size features based on column values
+- Custom style functions passed to loaders
+
+### Map controls
+- Coordinate display on mouse move
+- Scale bar (`ol.control.ScaleLine`)
+- Map export as PNG/JPEG
+- Measurement tools (distance, area)
 
 ### Tile management
 - LRU eviction policy for IDB cache (configurable max size)
 - Cache age expiry
 - Pre-fetch tiles for visible extent
 
-### Data
+### Data formats
 - KML/KMZ loader (native, without GDAL)
 - GPX loader (native, without GDAL)
 - WMS/WMTS layer support
@@ -336,16 +365,9 @@ GCU aesthetic: amber (#c89b3c) accent for points, lines, and polygon fills. Defa
 - Volume calculation between surfaces
 - Configurable color ramps for DEM rendering
 
-### Visualization
-- Contour labels
-- Legend panel
-- Scale bar
-- Measurement tools (distance, area)
-- Coordinate display on hover
-
 ### Drawing
-- Edit/modify drawn features
-- Snap to features
+- Edit/modify drawn features after creation
+- Snap to existing features
 - Drawing undo/redo
 - Export drawn features as GeoJSON
 

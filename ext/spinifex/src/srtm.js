@@ -37,7 +37,7 @@ async function tilePut(key, data) {
   tx.objectStore('tiles').put({ key, data, ts: Date.now() });
 }
 
-function tileKey(lat, lon) {
+export function tileKey(lat, lon) {
   const ns = lat >= 0 ? 'N' : 'S';
   const ew = lon >= 0 ? 'E' : 'W';
   const latStr = String(Math.abs(lat)).padStart(2, '0');
@@ -45,7 +45,7 @@ function tileKey(lat, lon) {
   return `${ns}${latStr}${ew}${lonStr}`;
 }
 
-function tileUrl(lat, lon) {
+export function tileUrl(lat, lon) {
   const key = tileKey(lat, lon);
   const ns = lat >= 0 ? 'N' : 'S';
   const latStr = String(Math.abs(lat)).padStart(2, '0');
@@ -53,7 +53,7 @@ function tileUrl(lat, lon) {
   return `${SRTM_BASE}/${folder}/${key}.hgt.gz`;
 }
 
-function tilesForBbox(bbox) {
+export function tilesForBbox(bbox) {
   const [west, south, east, north] = bbox;
   const tiles = [];
   for (let lat = Math.floor(south); lat < Math.ceil(north); lat++) {

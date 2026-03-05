@@ -6,10 +6,10 @@ import { defaultStyle } from './render.js';
 
 // -- CSV loader --
 
-const LON_PATTERNS = /^(lon|longitude|lng|x|easting|long|coordx)$/i;
-const LAT_PATTERNS = /^(lat|latitude|y|northing|coordy)$/i;
+export const LON_PATTERNS = /^(lon|longitude|lng|x|easting|long|coordx)$/i;
+export const LAT_PATTERNS = /^(lat|latitude|y|northing|coordy)$/i;
 
-function detectColumn(headers, pattern) {
+export function detectColumn(headers, pattern) {
   for (const h of headers) {
     if (pattern.test(h.trim())) return h;
   }
