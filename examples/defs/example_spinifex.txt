@@ -1,0 +1,118 @@
+/// auditable
+/// title: web GIS
+/// settings: {"theme":"dark","fontSize":13,"width":"860","editorView":"yes"}
+/// module: ./ext/spinifex/index.js ext/spinifex/index.js
+
+/// md
+# web GIS with spinifex
+
+interactive map with **SRTM elevation data**, drawing tools, and elevation profiles. spinifex wraps OpenLayers for map rendering and fetches 30m resolution elevation tiles from AWS.
+
+this example loads a single SRTM tile over the **Quadrilátero Ferrífero** (Iron Quadrangle) in Minas Gerais, Brazil.
+
+/// code
+const { spx } = await load("./ext/spinifex/index.js");
+
+/// html
+<div id="map" style="width:100%;height:500px"></div>
+
+/// code
+const map = spx.map("#map", {
+  center: [-43.5, -20.25],
+  zoom: 10,
+  basemap: "topo"
+});
+
+/// md
+## SRTM elevation
+
+press **Ctrl+Enter** on the cell below to download a single SRTM tile (~2.5 MB) covering the Quadrilátero Ferrífero. the tile covers 20°S–21°S, 44°W–43°W.
+
+/// code
+// %manual
+ui.display("downloading SRTM tile...");
+const dem = await spx.srtm(map, [-44, -21, -43, -20], {
+  onProgress: (name, i, n) => ui.display(`fetching ${name} (${i}/${n})`)
+});
+ui.display(`DEM: ${dem.width}\u00d7${dem.height}, elevation ${dem.min.toFixed(0)}\u2013${dem.max.toFixed(0)} m`);
+
+/// md
+## elevation profile
+
+draw a line on the map to extract an elevation cross-section. press **Ctrl+Enter** on the cell below, then click two points on the map.
+
+/// code
+// %manual
+ui.display("click two points on the map to draw a profile line...");
+const line = await spx.draw(map, "polyline", { maxPoints: 2 });
+const [lonA, latA] = line.coords[0];
+const [lonB, latB] = line.coords[1];
+
+const profile = dem.data.profile(latA, lonA, latB, lonB, { samples: 300 });
+
+// render profile as canvas chart
+const w = 600, h = 200;
+const c = ui.canvas(w, h);
+const ctx = c.getContext("2d");
+
+// background
+ctx.fillStyle = "#1a1a1a";
+ctx.fillRect(0, 0, w, h);
+
+// find elevation range
+let eMin = Infinity, eMax = -Infinity;
+for (let i = 0; i < profile.elev.length; i++) {
+  const e = profile.elev[i];
+  if (e > -9000) {
+    if (e < eMin) eMin = e;
+    if (e > eMax) eMax = e;
+  }
+}
+const pad = (eMax - eMin) * 0.1 || 10;
+eMin -= pad; eMax += pad;
+const maxDist = profile.dist[profile.dist.length - 1];
+
+// draw filled profile
+ctx.beginPath();
+ctx.moveTo(0, h);
+for (let i = 0; i < profile.elev.length; i++) {
+  const x = (profile.dist[i] / maxDist) * w;
+  const y = h - ((profile.elev[i] - eMin) / (eMax - eMin)) * h;
+  ctx.lineTo(x, y);
+}
+ctx.lineTo(w, h);
+ctx.closePath();
+ctx.fillStyle = "rgba(200, 155, 60, 0.3)";
+ctx.fill();
+
+// draw profile line
+ctx.beginPath();
+for (let i = 0; i < profile.elev.length; i++) {
+  const x = (profile.dist[i] / maxDist) * w;
+  const y = h - ((profile.elev[i] - eMin) / (eMax - eMin)) * h;
+  if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+}
+ctx.strokeStyle = "#c89b3c";
+ctx.lineWidth = 1.5;
+ctx.stroke();
+
+// labels
+ctx.fillStyle = "#888";
+ctx.font = "11px monospace";
+ctx.fillText(`${eMax.toFixed(0)} m`, 4, 14);
+ctx.fillText(`${eMin.toFixed(0)} m`, 4, h - 4);
+ctx.fillText(`${(maxDist / 1000).toFixed(1)} km`, w - 50, h - 4);
+
+ui.display(`profile: ${(maxDist / 1000).toFixed(1)} km, ${eMin.toFixed(0)}\u2013${eMax.toFixed(0)} m`);
+
+/// md
+## point sampling
+
+press **Ctrl+Enter** to click a point on the map and read its elevation.
+
+/// code
+// %manual
+ui.display("click a point on the map...");
+const pt = await spx.draw(map, "point");
+const elev = dem.data.sample(pt.coord[1], pt.coord[0]);
+ui.display(`elevation at (${pt.coord[1].toFixed(4)}, ${pt.coord[0].toFixed(4)}): ${elev !== null ? elev.toFixed(1) + " m" : "no data"}`);

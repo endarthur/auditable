@@ -44,6 +44,7 @@ const defs = [
   'example_sheet.txt',
   'example_calque.txt',
   'example_calque_advanced.txt',
+  'example_spinifex.txt',
 ];
 
 // ── Parser ──

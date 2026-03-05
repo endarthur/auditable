@@ -4469,6 +4469,15 @@ async function execCell(cell) {
       }
     }
 
+    // @spinifex — web GIS (dev-mode fallback)
+    if (url === '@spinifex') {
+      if (!window._importCache[url] && !window._installedModules[url]) {
+        const mod = await import('./ext/spinifex/index.js');
+        window._importCache[url] = mod;
+        return mod;
+      }
+    }
+
     if (window._importCache[url]) return window._importCache[url];
 
     // binary assets — return blob URL
@@ -4548,6 +4557,21 @@ async function execCell(cell) {
     // @calque — spreadsheet language
     if (url === '@calque') {
       const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/calque/index.js';
+      const resp = await fetch(realUrl);
+      if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
+      const source = await resp.text();
+      window._installedModules[url] = { source, cellId: cell.id };
+      syncModules();
+      const blob = new Blob([source], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      const mod = await import(blobUrl);
+      window._importCache[url] = mod;
+      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB)`);
+      return mod;
+    }
+    // @spinifex — web GIS
+    if (url === '@spinifex') {
+      const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/spinifex/index.js';
       const resp = await fetch(realUrl);
       if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
       const source = await resp.text();
@@ -5974,8 +5998,8 @@ function togglePresent() {
 
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
-const __AUDITABLE_BUILD_DATE__ = '2026-03-04';
-const __AUDITABLE_BASE_SIZE__ = 981625;
+const __AUDITABLE_BUILD_DATE__ = '2026-03-05';
+const __AUDITABLE_BASE_SIZE__ = 983884;
 
 (function() {
   const ver = $('#aboutVersion');
@@ -8550,6 +8574,15 @@ async function execCell(cell) {
       }
     }
 
+    // @spinifex — web GIS (dev-mode fallback)
+    if (url === '@spinifex') {
+      if (!window._importCache[url] && !window._installedModules[url]) {
+        const mod = await import('./ext/spinifex/index.js');
+        window._importCache[url] = mod;
+        return mod;
+      }
+    }
+
     if (window._importCache[url]) return window._importCache[url];
 
     // binary assets — return blob URL
@@ -8629,6 +8662,21 @@ async function execCell(cell) {
     // @calque — spreadsheet language
     if (url === '@calque') {
       const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/calque/index.js';
+      const resp = await fetch(realUrl);
+      if (!resp.ok) throw new Error(\`Failed to fetch \${realUrl}: \${resp.status}\`);
+      const source = await resp.text();
+      window._installedModules[url] = { source, cellId: cell.id };
+      syncModules();
+      const blob = new Blob([source], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      const mod = await import(blobUrl);
+      window._importCache[url] = mod;
+      display(\`installed \${url} (\${(source.length / 1024).toFixed(1)} KB)\`);
+      return mod;
+    }
+    // @spinifex — web GIS
+    if (url === '@spinifex') {
+      const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/spinifex/index.js';
       const resp = await fetch(realUrl);
       if (!resp.ok) throw new Error(\`Failed to fetch \${realUrl}: \${resp.status}\`);
       const source = await resp.text();
@@ -9895,7 +9943,8 @@ function loadFromEmbed() {
         if (c.collapsed || isCollapsed(c.code)) cell.el.classList.add('collapsed');
       }
       // run after load (gated on resolved runOnLoad)
-      if (effectiveRun === 'yes' && S.cells.some(c => c.type === 'code')) {
+      // skip if editor view will be activated — enterSplitView() calls runAll() itself
+      if (effectiveRun === 'yes' && getEditorViewSetting() !== 'yes' && S.cells.some(c => c.type === 'code')) {
         setTimeout(runAll, 50);
       }
       return true;
@@ -11131,7 +11180,7 @@ function syncFromTxt(txt) {
       dirtyIds.push(oldCells[i].id);
     }
   }
-  if (dirtyIds.length) runAll();
+  if (dirtyIds.length) runDAG(dirtyIds);
 }
 
 function rebuildFromParsed(parsed) {
@@ -11241,8 +11290,9 @@ function enterSplitView() {
   // create CM6 editor
   S.splitEditor = createSplitEditor(left, txt);
 
-  // run all cells to populate outputs
-  runAll();
+  // run cells to populate outputs (not forced — respects %manual)
+  const ids = S.cells.filter(c => c.type === 'code' || c.type === 'html' || c.type === 'md').map(c => c.id);
+  if (ids.length) runDAG(ids);
 }
 
 function exitSplitView() {

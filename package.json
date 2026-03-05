@@ -8,5 +8,12 @@
     "build": "node build.js",
     "build:af": "node build.js && node build.js --target=af",
     "test": "node --no-warnings --test"
+  },
+  "devDependencies": {
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "@rollup/plugin-terser": "^1.0.0",
+    "ol": "^10.8.0",
+    "proj4": "^2.20.3",
+    "rollup": "^4.59.0"
   }
 }

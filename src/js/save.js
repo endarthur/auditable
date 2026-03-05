@@ -1,7 +1,7 @@
 import { S, $ } from './state.js';
 import { addCell } from './cell-ops.js';
 import { isCollapsed, isBare } from './dag.js';
-import { getSettings, applySettings, resolveExecMode, resolveRunOnLoad } from './settings.js';
+import { getSettings, applySettings, resolveExecMode, resolveRunOnLoad, getEditorViewSetting } from './settings.js';
 import { runAll } from './exec.js';
 import { setMsg } from './ui.js';
 
@@ -460,7 +460,8 @@ export function loadFromEmbed() {
         if (c.collapsed || isCollapsed(c.code)) cell.el.classList.add('collapsed');
       }
       // run after load (gated on resolved runOnLoad)
-      if (effectiveRun === 'yes' && S.cells.some(c => c.type === 'code')) {
+      // skip if editor view will be activated — enterSplitView() calls runAll() itself
+      if (effectiveRun === 'yes' && getEditorViewSetting() !== 'yes' && S.cells.some(c => c.type === 'code')) {
         setTimeout(runAll, 50);
       }
       return true;

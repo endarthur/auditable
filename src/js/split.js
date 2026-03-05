@@ -1,5 +1,5 @@
 import { S, $ } from './state.js';
-import { runAll, renderHtmlCell, renderMdCell } from './exec.js';
+import { runAll, runDAG, renderHtmlCell, renderMdCell } from './exec.js';
 import { isCollapsed } from './dag.js';
 import { addCell } from './cell-ops.js';
 import { getEditor } from './cm6.js';
@@ -655,7 +655,7 @@ function syncFromTxt(txt) {
       dirtyIds.push(oldCells[i].id);
     }
   }
-  if (dirtyIds.length) runAll();
+  if (dirtyIds.length) runDAG(dirtyIds);
 }
 
 function rebuildFromParsed(parsed) {
@@ -765,8 +765,9 @@ function enterSplitView() {
   // create CM6 editor
   S.splitEditor = createSplitEditor(left, txt);
 
-  // run all cells to populate outputs
-  runAll();
+  // run cells to populate outputs (not forced — respects %manual)
+  const ids = S.cells.filter(c => c.type === 'code' || c.type === 'html' || c.type === 'md').map(c => c.id);
+  if (ids.length) runDAG(ids);
 }
 
 function exitSplitView() {
