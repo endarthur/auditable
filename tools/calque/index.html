@@ -2408,17 +2408,154 @@ stdlib.trim = function(s) {
   return broadcastUnary(v => toString(v).trim(), s);
 };
 
-stdlib.text = function(val, fmt) {
-  // Simple formatting - full Excel format codes would be Phase 2
-  return broadcastUnary(v => {
-    if (typeof fmt === 'string' && fmt.includes('#')) {
-      // numeric format: count decimal places from format
-      const decMatch = fmt.match(/\.(0+|#+)/);
-      const decimals = decMatch ? decMatch[1].length : 0;
-      return toNumber(v).toFixed(decimals);
+// ── Excel format code engine for text() ──
+
+function splitFmtSections(fmt) {
+  // Split on unquoted semicolons into up to 4 sections: positive;negative;zero;text
+  const sections = [];
+  let cur = '', inQuote = false;
+  for (let i = 0; i < fmt.length; i++) {
+    const ch = fmt[i];
+    if (ch === '"') { inQuote = !inQuote; cur += ch; continue; }
+    if (ch === ';' && !inQuote) { sections.push(cur); cur = ''; continue; }
+    cur += ch;
+  }
+  sections.push(cur);
+  return sections;
+}
+
+function isDateFmt(section) {
+  // Strip quoted strings, then check for date tokens
+  const stripped = section.replace(/"[^"]*"/g, '');
+  return /\b(yyyy|yy|mmmm|mmm|dd|hh|ss)\b/i.test(stripped) ||
+         /\bmm\b/i.test(stripped);
+}
+
+function fmtDate(serial, section) {
+  const d = serialToDate(Math.floor(serial));
+  const y = d.getUTCFullYear(), mo = d.getUTCMonth() + 1, day = d.getUTCDate();
+  // Time from fractional part
+  const frac = serial - Math.floor(serial);
+  const totalSecs = Math.round(frac * 86400);
+  const hh = Math.floor(totalSecs / 3600);
+  const mm = Math.floor((totalSecs % 3600) / 60);
+  const ss = totalSecs % 60;
+  const pad = (n) => n < 10 ? '0' + n : '' + n;
+
+  // Strip quotes, replace tokens largest-first to avoid partial matches
+  let out = section;
+  // Handle quoted literals — preserve them as markers then restore
+  const literals = [];
+  out = out.replace(/"([^"]*)"/g, (_, lit) => { literals.push(lit); return '\x00' + (literals.length - 1) + '\x00'; });
+
+  out = out.replace(/yyyy/gi, '' + y);
+  out = out.replace(/yy/gi, pad(y % 100));
+  out = out.replace(/mmmm/gi, ['January','February','March','April','May','June','July','August','September','October','November','December'][mo - 1]);
+  out = out.replace(/mmm/gi, ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][mo - 1]);
+  out = out.replace(/mm/gi, pad(mo));
+  out = out.replace(/dd/gi, pad(day));
+  out = out.replace(/hh/gi, pad(hh));
+  out = out.replace(/ss/gi, pad(ss));
+
+  // Restore quoted literals
+  out = out.replace(/\x00(\d+)\x00/g, (_, i) => literals[+i]);
+  return out;
+}
+
+function fmtNumber(v, section) {
+  // Strip quoted literals, collect their positions for reassembly
+  const literals = [];
+  let work = section.replace(/"([^"]*)"/g, (_, lit) => { literals.push(lit); return '\x01'; });
+
+  const hasPct = work.includes('%');
+  if (hasPct) v *= 100;
+
+  const hasComma = /[#0],/.test(work) || /,[#0]/.test(work);
+
+  // Scientific notation
+  const sciMatch = work.match(/[Ee][+\-](\d+)/);
+  if (sciMatch) {
+    const expDigits = sciMatch[1].length;
+    const decMatch = work.match(/\.([#0]+)/);
+    const decimals = decMatch ? decMatch[1].length : 0;
+    let s = v.toExponential(decimals);
+    // Pad exponent
+    s = s.replace(/[eE]([+\-])(\d+)/, (_, sign, exp) => {
+      return 'E' + sign + exp.padStart(expDigits, '0');
+    });
+    return s;
+  }
+
+  // Count decimal digits
+  const decMatch = work.match(/\.([#0]+)/);
+  const decimals = decMatch ? decMatch[1].length : 0;
+  const decFmt = decMatch ? decMatch[1] : '';
+
+  let abs = Math.abs(v);
+  let fixed = abs.toFixed(decimals);
+
+  // Split into integer and decimal parts
+  let [intPart, decPart] = fixed.split('.');
+
+  // Thousand separator
+  if (hasComma) {
+    intPart = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  }
+
+  // Trim trailing zeros for '#' positions in decimal
+  if (decPart && decFmt) {
+    const chars = decPart.split('');
+    for (let i = chars.length - 1; i >= 0; i--) {
+      if (decFmt[i] === '#' && chars[i] === '0') chars[i] = '';
+      else break;
     }
-    return toString(v);
-  }, val);
+    decPart = chars.join('');
+  }
+
+  let result = decPart ? intPart + '.' + decPart : intPart;
+
+  // Re-insert prefix/suffix literals from format
+  // Extract the non-numeric chars before and after the number pattern
+  const numPattern = /[#0.,]+(%)?/;
+  const before = work.slice(0, work.search(numPattern)).replace(/\x01/g, () => literals.shift() || '');
+  const afterStart = work.search(numPattern) + work.match(numPattern)[0].length;
+  let after = work.slice(afterStart).replace(/\x01/g, () => literals.shift() || '');
+  if (hasPct) after = after.replace('%', '') + '%';
+
+  return before + result + after;
+}
+
+function formatExcel(v, fmt) {
+  if (typeof fmt !== 'string') return toString(v);
+  const sections = splitFmtSections(fmt);
+  const num = toNumber(v);
+
+  // Pick section based on value sign
+  let section;
+  if (sections.length >= 3 && num === 0) {
+    section = sections[2] || sections[0];
+  } else if (sections.length >= 2 && num < 0) {
+    section = sections[1];
+  } else {
+    section = sections[0];
+  }
+
+  // For text section (4th), just substitute
+  if (typeof v === 'string' && sections.length >= 4) {
+    return sections[3].replace(/@/g, v);
+  }
+
+  if (isNaN(num)) return toString(v);
+
+  if (isDateFmt(section)) return fmtDate(num, section);
+
+  // For negative section, use absolute value (section handles the sign/formatting)
+  const useVal = (sections.length >= 2 && num < 0) ? Math.abs(num) : num;
+  return fmtNumber(useVal, section);
+}
+
+stdlib.text = function(val, fmt) {
+  return broadcastUnary(v => formatExcel(v, fmt), val);
 };
 
 stdlib.str = function(val) {
@@ -5540,8 +5677,19 @@ function updateFormulaBar() {
     const parts = [info.binding];
     if (info.tableCol) parts.push('.' + info.tableCol);
     if (info.index >= 0) parts.push('[' + info.index + ']');
-    const val = cell ? cell.text : '';
-    valEl.textContent = parts.join('') + ' = ' + val;
+    if (info.editable) {
+      const val = cell ? cell.text : '';
+      valEl.textContent = parts.join('') + ' = ' + val;
+    } else {
+      const ast = CQ.result && CQ.result._ast;
+      let exprNode = getBindingExpr(ast, CQ.activeSheet, info.binding);
+      if (exprNode && info.tableCol && exprNode.type === 'TableLit') {
+        const col = exprNode.columns.find(c => c.name === info.tableCol);
+        if (col) exprNode = col.values;
+      }
+      const exprStr = exprNode ? exprToString(exprNode) : (cell ? cell.text : '');
+      valEl.textContent = parts.join('') + ' = ' + exprStr;
+    }
   } else if (cell) {
     valEl.textContent = cell.text;
   } else {
@@ -5735,6 +5883,47 @@ function updateEditorSource(newSource) {
 
 function isLiteralNode(node) {
   return ['NumberLit', 'StringLit', 'BoolLit', 'NullLit'].includes(node.type);
+}
+
+function exprToString(node) {
+  if (!node) return '?';
+  switch (node.type) {
+    case 'NumberLit': return String(node.value);
+    case 'StringLit': return '"' + node.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+    case 'BoolLit': return node.value ? 'true' : 'false';
+    case 'NullLit': return 'null';
+    case 'Ident': return node.name;
+    case 'UnaryOp': return node.op === 'not' ? 'not ' + exprToString(node.operand) : node.op + exprToString(node.operand);
+    case 'BinOp': return exprToString(node.left) + ' ' + node.op + ' ' + exprToString(node.right);
+    case 'FuncCall': {
+      const args = (node.args || []).map(exprToString);
+      const kw = (node.kwargs || []).map(k => k.name + ': ' + exprToString(k.value));
+      return node.name + '(' + args.concat(kw).join(', ') + ')';
+    }
+    case 'MemberAccess': return exprToString(node.object) + '.' + node.field;
+    case 'Subscript': return exprToString(node.object) + '[' + exprToString(node.index) + ']';
+    case 'ArrayLit': return '[' + node.elements.map(exprToString).join(', ') + ']';
+    case 'Range': return exprToString(node.start) + '..' + exprToString(node.end);
+    case 'TableLit': return '{' + node.columns.map(c => c.name + ': ' + exprToString(c.values)).join(', ') + '}';
+    case 'IfExpr': return 'if ' + exprToString(node.cond) + ' then ' + exprToString(node.then) + ' else ' + exprToString(node.else);
+    case 'Lambda': return '(' + node.params.join(', ') + ') -> ' + exprToString(node.body);
+    case 'Import': return 'import "' + node.path + '"' + (node.sheetName ? ' sheet "' + node.sheetName + '"' : '');
+    case 'TemplateStr': return '`' + node.parts.map(p => typeof p === 'string' ? p : '${' + p.expr + (p.format ? ':' + p.format : '') + '}').join('') + '`';
+    default: return '?';
+  }
+}
+
+function getBindingExpr(ast, sheetName, bindingName) {
+  if (!ast) return null;
+  let nodes;
+  if (sheetName === 'Sheet1') {
+    nodes = ast.body.filter(n => n.type === 'Binding');
+  } else {
+    const sheet = ast.body.find(n => n.type === 'SheetBlock' && n.name === sheetName);
+    nodes = sheet ? sheet.body.filter(n => n.type === 'Binding') : [];
+  }
+  const binding = nodes.find(n => n.name === bindingName);
+  return binding ? binding.expr : null;
 }
 
 function isEditableValue(ast, sheetName, bindingName, tableCol) {

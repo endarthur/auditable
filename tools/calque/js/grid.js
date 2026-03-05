@@ -382,8 +382,19 @@ function updateFormulaBar() {
     const parts = [info.binding];
     if (info.tableCol) parts.push('.' + info.tableCol);
     if (info.index >= 0) parts.push('[' + info.index + ']');
-    const val = cell ? cell.text : '';
-    valEl.textContent = parts.join('') + ' = ' + val;
+    if (info.editable) {
+      const val = cell ? cell.text : '';
+      valEl.textContent = parts.join('') + ' = ' + val;
+    } else {
+      const ast = CQ.result && CQ.result._ast;
+      let exprNode = getBindingExpr(ast, CQ.activeSheet, info.binding);
+      if (exprNode && info.tableCol && exprNode.type === 'TableLit') {
+        const col = exprNode.columns.find(c => c.name === info.tableCol);
+        if (col) exprNode = col.values;
+      }
+      const exprStr = exprNode ? exprToString(exprNode) : (cell ? cell.text : '');
+      valEl.textContent = parts.join('') + ' = ' + exprStr;
+    }
   } else if (cell) {
     valEl.textContent = cell.text;
   } else {
@@ -577,6 +588,47 @@ function updateEditorSource(newSource) {
 
 function isLiteralNode(node) {
   return ['NumberLit', 'StringLit', 'BoolLit', 'NullLit'].includes(node.type);
+}
+
+function exprToString(node) {
+  if (!node) return '?';
+  switch (node.type) {
+    case 'NumberLit': return String(node.value);
+    case 'StringLit': return '"' + node.value.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+    case 'BoolLit': return node.value ? 'true' : 'false';
+    case 'NullLit': return 'null';
+    case 'Ident': return node.name;
+    case 'UnaryOp': return node.op === 'not' ? 'not ' + exprToString(node.operand) : node.op + exprToString(node.operand);
+    case 'BinOp': return exprToString(node.left) + ' ' + node.op + ' ' + exprToString(node.right);
+    case 'FuncCall': {
+      const args = (node.args || []).map(exprToString);
+      const kw = (node.kwargs || []).map(k => k.name + ': ' + exprToString(k.value));
+      return node.name + '(' + args.concat(kw).join(', ') + ')';
+    }
+    case 'MemberAccess': return exprToString(node.object) + '.' + node.field;
+    case 'Subscript': return exprToString(node.object) + '[' + exprToString(node.index) + ']';
+    case 'ArrayLit': return '[' + node.elements.map(exprToString).join(', ') + ']';
+    case 'Range': return exprToString(node.start) + '..' + exprToString(node.end);
+    case 'TableLit': return '{' + node.columns.map(c => c.name + ': ' + exprToString(c.values)).join(', ') + '}';
+    case 'IfExpr': return 'if ' + exprToString(node.cond) + ' then ' + exprToString(node.then) + ' else ' + exprToString(node.else);
+    case 'Lambda': return '(' + node.params.join(', ') + ') -> ' + exprToString(node.body);
+    case 'Import': return 'import "' + node.path + '"' + (node.sheetName ? ' sheet "' + node.sheetName + '"' : '');
+    case 'TemplateStr': return '`' + node.parts.map(p => typeof p === 'string' ? p : '${' + p.expr + (p.format ? ':' + p.format : '') + '}').join('') + '`';
+    default: return '?';
+  }
+}
+
+function getBindingExpr(ast, sheetName, bindingName) {
+  if (!ast) return null;
+  let nodes;
+  if (sheetName === 'Sheet1') {
+    nodes = ast.body.filter(n => n.type === 'Binding');
+  } else {
+    const sheet = ast.body.find(n => n.type === 'SheetBlock' && n.name === sheetName);
+    nodes = sheet ? sheet.body.filter(n => n.type === 'Binding') : [];
+  }
+  const binding = nodes.find(n => n.name === bindingName);
+  return binding ? binding.expr : null;
 }
 
 function isEditableValue(ast, sheetName, bindingName, tableCol) {
