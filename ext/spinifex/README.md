@@ -28,6 +28,17 @@ const map = spx.map("#map", {
 });
 ```
 
+**Options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `center` | `[0, 0]` | `[lon, lat]` initial center |
+| `zoom` | `2` | Initial zoom level |
+| `basemap` | `"topo"` | `"topo"` \| `"osm"` \| `"satellite"` or custom tile URL |
+| `scalebar` | `true` | Show scale bar (metric by default) |
+| `scaleUnits` | `"metric"` | `"metric"` \| `"imperial"` \| `"nautical"` |
+| `coordinates` | `true` | Show lat/lon at cursor position |
+
 **Returns** a map wrapper with:
 
 | Property/Method | Description |
@@ -37,6 +48,8 @@ const map = spx.map("#map", {
 | `zoom` | number (getter/setter) |
 | `fitBounds(bbox, padding?)` | Fit view to extent |
 | `setBasemap(name)` | Swap tile source |
+| `exportImage(type?)` | Export map as data URL (default `"image/png"`) |
+| `measure(type?)` | Interactive measurement (see below) |
 | `ol` | Raw OpenLayers map instance |
 
 ### `spx.srtm(map, bounds?, opts?)`
@@ -143,6 +156,40 @@ const poly = await spx.draw(map, "polygon");
 const rect = await spx.draw(map, "rectangle");
 // rect.extent — [west, south, east, north]
 ```
+
+### `map.exportImage(type?)`
+
+Export the current map view as a data URL. Composites all visible layers.
+
+```js
+const dataUrl = await map.exportImage();          // PNG
+const jpegUrl = await map.exportImage('image/jpeg');
+
+// Display inline
+const img = document.createElement('img');
+img.src = dataUrl;
+ui.display(img);
+```
+
+### `map.measure(type?)`
+
+Interactive distance or area measurement. Returns a promise that resolves when the user finishes drawing.
+
+```js
+const m = await map.measure('distance');
+// m.distance — total distance in meters
+// m.unit — 'm'
+// m.coords — [[lon, lat], ...]
+// m.layer — the drawn feature layer (call m.layer.remove() to clean up)
+
+const a = await map.measure('area');
+// a.area — area in m²
+// a.unit — 'm²'
+// a.coords — [[lon, lat], ...]
+// a.layer — the drawn feature layer
+```
+
+The measurement line/polygon stays on the map with a dashed amber stroke. Remove it with `m.layer.remove()` when done.
 
 ### `spx.proj(code, def)`
 
@@ -318,20 +365,21 @@ GCU aesthetic: amber (#c89b3c) accent for points, lines, and polygon fills. Defa
 
 ## Testing
 
-No tests yet. Priority targets (all pure-math, no browser needed):
+54 tests in `test/spinifex.test.mjs`. Run with `node --test test/spinifex.test.mjs`.
 
-- **dem.js** — `sample()` bilinear interpolation (interior, edges, corners, nodata neighbors, out-of-bounds), `profile()` distance/elevation arrays, Haversine accuracy
-- **srtm.js** — `tileKey()` for all quadrants (N/S/E/W, zero-padding), `tileUrl()` folder structure, `tilesForBbox()` tile enumeration and edge cases, IDB cache round-trip (`tilePut`/`tileGet`), mosaic overlap math
-- **render.js** — `terrainColor()` at ramp boundaries (0, 0.5, 1) and interpolation between stops
-- **loaders.js** — CSV column auto-detection (lon/latitude/easting/x variants, case sensitivity, missing columns)
+- **DEM** — constructor min/max with nodata, `sample()` bilinear interpolation (corners, center, between pixels, OOB, nodata fallback), `profile()` array lengths, distance monotonicity, Haversine accuracy, default sample count
+- **SRTM** — `tileKey()` all quadrants (N/S/E/W, zero padding, negative zero), `tileUrl()` AWS S3 URL structure, `tilesForBbox()` single/multi-tile/fractional/equator-crossing/empty
+- **Terrain** — `terrainColor()` at ramp stops (0, 0.5, 1), clamping, interpolation between stops
+- **Loaders** — `detectColumn()` with lon/latitude/easting/northing/x/y/coordx variants, case insensitivity, missing columns, whitespace
+- **Haversine** — zero distance, 1° lat/lon at equator, longitude at 60°N, antipodal, symmetry
 
 ---
 
 ## Roadmap
 
 ### Infrastructure
-- Tests for pure-math functions (see Testing section above)
-- Add spinifex to CLAUDE.md project structure and build checklist
+- ~~Tests for pure-math functions~~ done
+- ~~Add spinifex to CLAUDE.md project structure and build checklist~~ done
 - Build-time size tracking
 
 ### Feature interaction
@@ -342,10 +390,10 @@ No tests yet. Priority targets (all pure-math, no browser needed):
 - Custom style functions passed to loaders
 
 ### Map controls
-- Coordinate display on mouse move
-- Scale bar (`ol.control.ScaleLine`)
-- Map export as PNG/JPEG
-- Measurement tools (distance, area)
+- ~~Coordinate display on mouse move~~ done
+- ~~Scale bar~~ done
+- ~~Map export as PNG/JPEG~~ done (`map.exportImage()`)
+- ~~Measurement tools (distance, area)~~ done (`map.measure()`)
 
 ### Tile management
 - LRU eviction policy for IDB cache (configurable max size)

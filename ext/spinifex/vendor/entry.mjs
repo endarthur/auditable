@@ -24,6 +24,8 @@ import OlPoint from 'ol/geom/Point.js';
 
 import OlDraw, { createBox } from 'ol/interaction/Draw.js';
 
+import ScaleLine from 'ol/control/ScaleLine.js';
+
 import { fromLonLat, toLonLat, transformExtent } from 'ol/proj.js';
 import { register as registerProj4 } from 'ol/proj/proj4.js';
 
@@ -64,6 +66,9 @@ const ol = {
   },
   interaction: {
     Draw: OlDraw,
+  },
+  control: {
+    ScaleLine,
   },
   proj: {
     fromLonLat,

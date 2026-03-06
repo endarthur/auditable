@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { DEM } from '../ext/spinifex/src/dem.js';
+import { DEM, haversine } from '../ext/spinifex/src/dem.js';
 import { tileKey, tileUrl, tilesForBbox } from '../ext/spinifex/src/srtm.js';
 import { terrainColor } from '../ext/spinifex/src/render.js';
 import { detectColumn, LON_PATTERNS, LAT_PATTERNS } from '../ext/spinifex/src/loaders.js';
@@ -321,5 +321,39 @@ describe('detectColumn', () => {
 
   it('handles whitespace in headers', () => {
     assert.strictEqual(detectColumn([' lon ', 'lat'], LON_PATTERNS), ' lon ');
+  });
+});
+
+// ── haversine ──
+
+describe('haversine', () => {
+  it('returns 0 for same point', () => {
+    assert.strictEqual(haversine(0, 0, 0, 0), 0);
+  });
+
+  it('1 degree latitude at equator ≈ 111 km', () => {
+    const d = haversine(0, 0, 1, 0);
+    assert.ok(d > 110000 && d < 112000, `expected ~111km, got ${(d / 1000).toFixed(1)}km`);
+  });
+
+  it('1 degree longitude at equator ≈ 111 km', () => {
+    const d = haversine(0, 0, 0, 1);
+    assert.ok(d > 110000 && d < 112000, `expected ~111km, got ${(d / 1000).toFixed(1)}km`);
+  });
+
+  it('1 degree longitude at 60° latitude ≈ 55.5 km', () => {
+    const d = haversine(60, 0, 60, 1);
+    assert.ok(d > 54000 && d < 57000, `expected ~55.5km, got ${(d / 1000).toFixed(1)}km`);
+  });
+
+  it('antipodal points ≈ 20015 km', () => {
+    const d = haversine(0, 0, 0, 180);
+    assert.ok(d > 20000000 && d < 20100000, `expected ~20015km, got ${(d / 1000).toFixed(1)}km`);
+  });
+
+  it('is symmetric', () => {
+    const d1 = haversine(10, 20, 30, 40);
+    const d2 = haversine(30, 40, 10, 20);
+    assert.ok(Math.abs(d1 - d2) < 0.001);
   });
 });
