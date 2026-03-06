@@ -155,37 +155,80 @@ settings travel with the file. execution mode can also be overridden globally vi
 
 ## examples
 
-the `examples/` directory contains:
+the `examples/` directory contains 33 self-contained notebooks organized by category. no server required -- just open any `.html` file.
+
+**basics/** -- core auditable features
 
 | file | what it shows |
 |------|---------------|
-| `example_life.html` | conway's game of life -- imperative callbacks in a `// %manual` cell |
-| `example_lorenz.html` | lorenz attractor with adjustable parameters and 3D rotation |
-| `example_mandelbrot.html` | mandelbrot set explorer with zoom, pan, and color shift |
-| `example_particles.html` | particle system with gravity and collision |
-| `example_dashboard.html` | multi-panel dashboard layout with CSS cells |
-| `example_idw.html` | inverse distance weighting interpolation with viridis colormap |
-| `example_modules.html` | `install()` and `load()` with esm.sh modules |
-| `example_python.html` | Python builtins (`range`, `enumerate`, `sorted`, etc.) in JS |
-| `example_sql.html` | SQL queries with sql.js -- `installBinary()` for WASM, `@auditable/sql` for syntax |
-| `example_shader.html` | GLSL fragment shaders with Shadertoy-compatible uniforms |
-| `example_stereonet.html` | structural geology stereonet using `@gcu/bearing` |
-| `example_synth.html` | web audio synthesizer with keyboard UI |
-| `example_widgets.html` | `<audit-*>` widget components in HTML cells |
-| `example_md_interpolation.html` | `${expr}` interpolation in markdown cells |
-| `example_atra.html` | atra -- compile typed array kernels to WebAssembly |
-| `example_atra_tour.html` | atra language tour -- syntax and features |
-| `example_atra_v_julia.html` | atra vs Julia -- side-by-side comparison |
-| `example_atra_layouts.html` | atra layouts -- N-body gravity simulation |
-| `example_atra_multi_memory.html` | atra multi-memory -- columnar block model with separate memory banks |
-| `example_alpack.html` | ALPACK -- dense linear algebra in Wasm |
-| `example_alpack_atra.html` | atra + ALPACK -- all-Wasm interpolation pipeline |
-| `example_gslib_kb2d.html` | KB2D -- 2D kriging from GSLIB |
-| `example_gslib_sgsim.html` | SGSIM -- sequential Gaussian simulation from GSLIB |
-| `example_natra.html` | natra -- ndarray for the browser with Wasm kernels |
-| `example_workshop.html` | workshop template for guided tutorials |
+| `example_workshop` | workshop template for guided tutorials |
+| `example_life` | conway's game of life -- imperative callbacks in a `// %manual` cell |
+| `example_lorenz` | lorenz attractor with adjustable parameters and 3D rotation |
+| `example_mandelbrot` | mandelbrot set explorer with zoom, pan, and color shift |
+| `example_particles` | particle system with gravity and collision |
+| `example_idw` | inverse distance weighting interpolation with viridis colormap |
+| `example_dashboard` | multi-panel dashboard layout with CSS cells |
+| `example_modules` | `install()` and `load()` with esm.sh modules |
+| `example_python` | Python builtins (`range`, `enumerate`, `sorted`, etc.) in JS |
+| `example_widgets` | `<audit-*>` widget components in HTML cells |
+| `example_app_export` | export notebooks as standalone reactive apps |
+| `example_md_interpolation` | `${expr}` interpolation in markdown cells |
 
-each is a self-contained HTML file. no server required.
+**atra/** -- Wasm compiler
+
+| file | what it shows |
+|------|---------------|
+| `example_atra` | variogram models with `call_indirect` function pointers |
+| `example_atra_tour` | atra language tour -- syntax and features |
+| `example_atra_v_julia` | animated Julia set fractal rendered in Wasm |
+| `example_atra_layouts` | N-body gravity simulation with memory layouts |
+| `example_atra_multi_memory` | columnar block model with separate memory banks |
+| `example_atra_strings` | data segments, character literals, and string operations |
+| `example_natra` | natra -- ndarray for the browser with Wasm kernels |
+
+**calque/** -- spreadsheet language
+
+| file | what it shows |
+|------|---------------|
+| `example_calque` | calque basics -- columns, formulas, xlsx export |
+| `example_calque_advanced` | lookup, templates, reductions, layouts |
+| `example_sheet` | interactive sheet widget |
+
+**gslib/** -- geostatistics
+
+| file | what it shows |
+|------|---------------|
+| `example_alpack` | ALPACK -- dense linear algebra + ordinary kriging |
+| `example_alpack_atra` | atra + ALPACK -- all-Wasm RBF interpolation pipeline |
+| `example_gslib_kb2d` | KB2D -- 2D kriging from GSLIB |
+| `example_gslib_sgsim` | SGSIM -- sequential Gaussian simulation from GSLIB |
+
+**gis/** -- spatial analysis
+
+| file | what it shows |
+|------|---------------|
+| `example_spinifex` | web GIS with SRTM elevation, drawing, profiles |
+| `example_raster` | terrain analysis -- slope, aspect, hillshade, curvature, contours |
+| `example_hydrology` | drainage analysis -- fill sinks, flow direction, accumulation, watersheds |
+
+**geology/** -- structural geology
+
+| file | what it shows |
+|------|---------------|
+| `example_stereonet` | equal-area stereonet using `@gcu/bearing` |
+
+**extensions/** -- language tags and browser APIs
+
+| file | what it shows |
+|------|---------------|
+| `example_sql` | SQL queries with sql.js -- `installBinary()` for WASM, `@auditable/sql` for syntax |
+| `example_shader` | GLSL fragment shaders with Shadertoy-compatible uniforms |
+
+**etc/** -- standalone demos
+
+| file | what it shows |
+|------|---------------|
+| `example_synth` | web audio synthesizer with keyboard UI |
 
 ## saved file format
 
