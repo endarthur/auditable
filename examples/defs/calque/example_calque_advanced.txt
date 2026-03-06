@@ -96,7 +96,7 @@ ui.display(calque.grid(roll));
 /// md
 ## lookup
 
-`lookup(needle, keys, values)` does exact match (XLOOKUP). `nearest: "below"` finds the largest key \u2264 needle.
+`lookup(needle, keys, values)` does exact match (XLOOKUP). `nearest: "below"` finds the largest key ≤ needle.
 
 /// code
 const lkp = calque`
@@ -131,7 +131,7 @@ ui.display(calque.grid(tmpl));
 /// md
 ## nested reductions and math
 
-pointwise functions inside reductions emit cleanly \u2014 `sum(abs(col))` becomes `SUM(ABS(range))`.
+pointwise functions inside reductions emit cleanly — `sum(abs(col))` becomes `SUM(ABS(range))`.
 
 /// code
 const math = calque`

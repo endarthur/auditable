@@ -90,7 +90,7 @@ if (shape === 'circle') {
   filled ? ctx.fill() : ctx.stroke();
 }
 
-ctx.fillStyle = 'var(--fg)' === color ? '#aaa' : '#aaa';
+ctx.fillStyle = '#aaa';
 ctx.font = '14px monospace';
 ctx.textAlign = 'center';
 ctx.fillText(label, cx, cy + r + 30);

@@ -167,4 +167,4 @@ const hexRows = hexTests.map(ch => ({
 ui.table(hexRows);
 
 /// md
-**how it works:** `data ptr, len = "text"` places UTF-8 bytes into Wasm linear memory at compile time and binds two i32 compile-time constants \u2014 no globals, no runtime overhead. character literals like `'A'` and `'\n'` desugar to `i32.const` at the lexer level, so the parser and codegen need zero changes. together they enable idiomatic character-level logic: classification (`is_lower`, `is_digit`), case conversion (`to_upper`), and ciphers (`rot13`, `caesar`) all expressed naturally with char comparisons like `ch >= 'a' and ch <= 'z'`.
+**how it works:** `data ptr, len = "text"` places UTF-8 bytes into Wasm linear memory at compile time and binds two i32 compile-time constants — no globals, no runtime overhead. character literals like `'A'` and `'\n'` desugar to `i32.const` at the lexer level, so the parser and codegen need zero changes. together they enable idiomatic character-level logic: classification (`is_lower`, `is_digit`), case conversion (`to_upper`), and ciphers (`rot13`, `caesar`) all expressed naturally with char comparisons like `ch >= 'a' and ch <= 'z'`.

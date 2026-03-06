@@ -138,3 +138,5 @@ const bar = document.createElement("div");
 bar.style.cssText = "display:flex;gap:8px;margin:8px 0;align-items:center";
 bar.append(btnStep, btnPlay, btnReset, genLabel);
 ui.display(bar);
+
+invalidation.then(() => { playing = false; clearInterval(timer); });

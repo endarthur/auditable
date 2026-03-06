@@ -20,6 +20,7 @@ const engine = sgsim({
   variogram: { structures: [{ type: "spherical", contribution: 1.0, range: range0 }] },
   search: { radius: Math.max(range0 * 2, 20), ndmax: 10, nodmax: 12 },
 });
+invalidation.then(() => engine.dispose());
 
 /// code
 // %manual
@@ -96,7 +97,7 @@ bar.append(btnStep, btnPlay, btnReset, genLabel);
 ui.display(bar);
 
 // cleanup on cell re-run
-invalidation.then(() => { engine.dispose(); clearInterval(timer); });
+invalidation.then(() => { clearInterval(timer); });
 
 // render first realization
 runOne();
