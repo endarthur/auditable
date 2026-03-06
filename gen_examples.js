@@ -2,9 +2,9 @@
 // Generates all example notebooks from auditable.html + plain-text definitions.
 // Usage: node gen_examples.js
 //
-// Each example is a .txt file in examples/defs/ using the /// comment format.
+// Each example is a .txt file in examples/defs/<category>/ using the /// comment format.
 // See examples/defs/FORMAT.md for the format specification.
-// To add a new example, create a .txt def and add its filename below.
+// To add a new example, create a .txt def and add it to the appropriate category below.
 
 const fs = require('fs');
 const path = require('path');
@@ -13,41 +13,77 @@ const makeExample = require('./make_example');
 const defsDir = path.join(__dirname, 'examples', 'defs');
 const outDir = path.join(__dirname, 'examples');
 
-const defs = [
-  'example_workshop.txt',
-  'example_life.txt',
-  'example_lorenz.txt',
-  'example_mandelbrot.txt',
-  'example_stereonet.txt',
-  'example_synth.txt',
-  'example_particles.txt',
-  'example_idw.txt',
-  'example_dashboard.txt',
-  'example_modules.txt',
-  'example_python.txt',
-  'example_sql.txt',
-  'example_shader.txt',
-  'example_atra.txt',
-  'example_atra_tour.txt',
-  'example_atra_v_julia.txt',
-  'example_alpack.txt',
-  'example_alpack_atra.txt',
-  'example_gslib_kb2d.txt',
-  'example_gslib_sgsim.txt',
-  'example_md_interpolation.txt',
-  'example_atra_layouts.txt',
-  'example_natra.txt',
-  'example_widgets.txt',
-  'example_app_export.txt',
-  'example_atra_multi_memory.txt',
-  'example_atra_strings.txt',
-  'example_sheet.txt',
-  'example_calque.txt',
-  'example_calque_advanced.txt',
-  'example_spinifex.txt',
-  'example_raster.txt',
-  'example_hydrology.txt',
-];
+// ── Example categories ──
+// Each key is a subfolder under examples/defs/.
+// Add new examples to the appropriate category.
+// Output HTML always goes to examples/ (flat).
+
+const categories = {
+  // basics — core auditable features: reactive DAG, widgets, modules, cells
+  basics: [
+    'example_workshop.txt',
+    'example_life.txt',
+    'example_lorenz.txt',
+    'example_mandelbrot.txt',
+    'example_particles.txt',
+    'example_idw.txt',
+    'example_dashboard.txt',
+    'example_modules.txt',
+    'example_python.txt',
+    'example_widgets.txt',
+    'example_app_export.txt',
+    'example_md_interpolation.txt',
+  ],
+
+  // atra — Wasm compiler: language features, kernels, natra
+  atra: [
+    'example_atra.txt',
+    'example_atra_tour.txt',
+    'example_atra_v_julia.txt',
+    'example_atra_layouts.txt',
+    'example_atra_multi_memory.txt',
+    'example_atra_strings.txt',
+    'example_natra.txt',
+  ],
+
+  // calque — spreadsheet language and sheet widget
+  calque: [
+    'example_calque.txt',
+    'example_calque_advanced.txt',
+    'example_sheet.txt',
+  ],
+
+  // gslib — geostatistics: kriging, simulation, linear algebra
+  gslib: [
+    'example_alpack.txt',
+    'example_alpack_atra.txt',
+    'example_gslib_kb2d.txt',
+    'example_gslib_sgsim.txt',
+  ],
+
+  // gis — spatial analysis: maps, raster, hydrology
+  gis: [
+    'example_spinifex.txt',
+    'example_raster.txt',
+    'example_hydrology.txt',
+  ],
+
+  // geology — structural geology, petrology, stratigraphy
+  geology: [
+    'example_stereonet.txt',
+  ],
+
+  // extensions — language tags and browser APIs
+  extensions: [
+    'example_sql.txt',
+    'example_shader.txt',
+  ],
+
+  // etc — standalone demos that don't fit elsewhere
+  etc: [
+    'example_synth.txt',
+  ],
+};
 
 // ── Parser ──
 
@@ -152,29 +188,38 @@ function trimCell(code) {
 
 // ── Generate ──
 
-console.log('Generating examples from auditable.html:');
-for (const defFile of defs) {
-  const text = fs.readFileSync(path.join(defsDir, defFile), 'utf8');
-  const notebook = parseDef(text);
+let total = 0;
+console.log('Generating examples from auditable.html:\n');
 
-  // resolve module file-path refs → inline source
-  let modules;
-  if (Object.keys(notebook.modules).length > 0) {
-    modules = {};
-    for (const [url, entry] of Object.entries(notebook.modules)) {
-      const refPath = path.join(__dirname, entry.ref);
-      const source = fs.readFileSync(refPath, 'utf8');
-      modules[url] = { source, cellId: null };
+for (const [category, defs] of Object.entries(categories)) {
+  console.log(`  ${category}/`);
+  for (const defFile of defs) {
+    const text = fs.readFileSync(path.join(defsDir, category, defFile), 'utf8');
+    const notebook = parseDef(text);
+
+    // resolve module file-path refs → inline source
+    let modules;
+    if (Object.keys(notebook.modules).length > 0) {
+      modules = {};
+      for (const [url, entry] of Object.entries(notebook.modules)) {
+        const refPath = path.join(__dirname, entry.ref);
+        const source = fs.readFileSync(refPath, 'utf8');
+        modules[url] = { source, cellId: null };
+      }
     }
-  }
 
-  const htmlFile = defFile.replace(/\.txt$/, '.html');
-  makeExample({
-    title: notebook.title,
-    cells: notebook.cells,
-    settings: notebook.settings,
-    modules,
-    outPath: path.join(outDir, htmlFile),
-  });
+    const htmlFile = defFile.replace(/\.txt$/, '.html');
+    const catOutDir = path.join(outDir, category);
+    if (!fs.existsSync(catOutDir)) fs.mkdirSync(catOutDir, { recursive: true });
+    makeExample({
+      title: notebook.title,
+      cells: notebook.cells,
+      settings: notebook.settings,
+      modules,
+      outPath: path.join(catOutDir, htmlFile),
+    });
+    total++;
+  }
 }
-console.log(`Done \u2014 ${defs.length} examples generated.`);
+
+console.log(`\nDone \u2014 ${total} examples generated.`);
