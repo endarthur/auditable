@@ -1,0 +1,626 @@
+! ══════════════════════════════════════════════════════════════════════
+! RASTER — geospatial terrain analysis kernels
+!
+! 3x3 neighborhood operations on Float32 row-major grids.
+! Row 0 = north edge. Border pixels → nodata.
+! Conservative nodata: if center OR any neighbor is nodata → output nodata.
+!
+! Horn's method (weighted 3x3 finite difference):
+!   dz/dx = ((z2-z0) + 2*(z5-z3) + (z8-z6)) / (8*cx)
+!   dz/dy = ((z6-z0) + 2*(z7-z1) + (z8-z2)) / (8*cy)
+!
+!   z0  z1  z2      idx-w-1  idx-w  idx-w+1
+!   z3  z4  z5      idx-1    idx    idx+1
+!   z6  z7  z8      idx+w-1  idx+w  idx+w+1
+! ══════════════════════════════════════════════════════════════════════
+
+! ── slope — degrees (0=flat, 90=vertical) ─────────────────────────────
+
+subroutine raster.slope(dem, out: array f32; w, h: i32; cx, cy: f64; nodata: f32)
+var
+  r, c, idx: i32
+  z0, z1, z2, z3, z4, z5, z6, z7, z8: f32
+  dx, dy, pi: f64
+begin
+  pi := 3.141592653589793
+
+  ! border rows/cols → nodata
+  for c := 0, w
+    out[c] := nodata
+    out[(h - 1) * w + c] := nodata
+  end for
+  for r := 0, h
+    out[r * w] := nodata
+    out[r * w + w - 1] := nodata
+  end for
+
+  ! interior
+  for r := 1, h - 1
+    for c := 1, w - 1
+      idx := r * w + c
+      z4 := dem[idx]
+      if (z4 == nodata) then
+        out[idx] := nodata
+      else
+        z0 := dem[idx - w - 1]
+        z1 := dem[idx - w]
+        z2 := dem[idx - w + 1]
+        z3 := dem[idx - 1]
+        z5 := dem[idx + 1]
+        z6 := dem[idx + w - 1]
+        z7 := dem[idx + w]
+        z8 := dem[idx + w + 1]
+        if (z0 == nodata) then
+          out[idx] := nodata
+        else if (z1 == nodata) then
+          out[idx] := nodata
+        else if (z2 == nodata) then
+          out[idx] := nodata
+        else if (z3 == nodata) then
+          out[idx] := nodata
+        else if (z5 == nodata) then
+          out[idx] := nodata
+        else if (z6 == nodata) then
+          out[idx] := nodata
+        else if (z7 == nodata) then
+          out[idx] := nodata
+        else if (z8 == nodata) then
+          out[idx] := nodata
+        else
+          dx := (f64(z2) - f64(z0) + 2.0 * (f64(z5) - f64(z3)) + f64(z8) - f64(z6)) / (8.0 * cx)
+          dy := (f64(z6) - f64(z0) + 2.0 * (f64(z7) - f64(z1)) + f64(z8) - f64(z2)) / (8.0 * cy)
+          out[idx] := f32(atan2(sqrt(dx * dx + dy * dy), 1.0) * 180.0 / pi)
+        end if
+      end if
+    end for
+  end for
+end
+
+! ── aspect — compass degrees (0=N, 90=E, 180=S, 270=W), flat → -1 ──
+
+subroutine raster.aspect(dem, out: array f32; w, h: i32; cx, cy: f64; nodata: f32)
+var
+  r, c, idx: i32
+  z0, z1, z2, z3, z4, z5, z6, z7, z8: f32
+  dx, dy, a, pi: f64
+begin
+  pi := 3.141592653589793
+
+  for c := 0, w
+    out[c] := nodata
+    out[(h - 1) * w + c] := nodata
+  end for
+  for r := 0, h
+    out[r * w] := nodata
+    out[r * w + w - 1] := nodata
+  end for
+
+  for r := 1, h - 1
+    for c := 1, w - 1
+      idx := r * w + c
+      z4 := dem[idx]
+      if (z4 == nodata) then
+        out[idx] := nodata
+      else
+        z0 := dem[idx - w - 1]
+        z1 := dem[idx - w]
+        z2 := dem[idx - w + 1]
+        z3 := dem[idx - 1]
+        z5 := dem[idx + 1]
+        z6 := dem[idx + w - 1]
+        z7 := dem[idx + w]
+        z8 := dem[idx + w + 1]
+        if (z0 == nodata) then
+          out[idx] := nodata
+        else if (z1 == nodata) then
+          out[idx] := nodata
+        else if (z2 == nodata) then
+          out[idx] := nodata
+        else if (z3 == nodata) then
+          out[idx] := nodata
+        else if (z5 == nodata) then
+          out[idx] := nodata
+        else if (z6 == nodata) then
+          out[idx] := nodata
+        else if (z7 == nodata) then
+          out[idx] := nodata
+        else if (z8 == nodata) then
+          out[idx] := nodata
+        else
+          dx := (f64(z2) - f64(z0) + 2.0 * (f64(z5) - f64(z3)) + f64(z8) - f64(z6)) / (8.0 * cx)
+          dy := (f64(z6) - f64(z0) + 2.0 * (f64(z7) - f64(z1)) + f64(z8) - f64(z2)) / (8.0 * cy)
+          if (dx == 0.0) then
+            if (dy == 0.0) then
+              out[idx] := f32(-1.0)
+            else
+              ! dy/dx gradient only
+              a := atan2(dy, 0.0 - dx) * 180.0 / pi
+              a := 90.0 - a
+              if (a < 0.0) then
+                a := a + 360.0
+              end if
+              out[idx] := f32(a)
+            end if
+          else
+            a := atan2(dy, 0.0 - dx) * 180.0 / pi
+            a := 90.0 - a
+            if (a < 0.0) then
+              a := a + 360.0
+            end if
+            if (a >= 360.0) then
+              a := a - 360.0
+            end if
+            out[idx] := f32(a)
+          end if
+        end if
+      end if
+    end for
+  end for
+end
+
+! ── hillshade — illumination 0–255 ───────────────────────────────────
+
+subroutine raster.hillshade(dem, out: array f32; w, h: i32; cx, cy: f64; nodata: f32; azRad, zenRad, zFactor: f64)
+var
+  r, c, idx: i32
+  z0, z1, z2, z3, z4, z5, z6, z7, z8: f32
+  dx, dy, slopeRad, aspectRad, hs, pi: f64
+begin
+  pi := 3.141592653589793
+
+  for c := 0, w
+    out[c] := nodata
+    out[(h - 1) * w + c] := nodata
+  end for
+  for r := 0, h
+    out[r * w] := nodata
+    out[r * w + w - 1] := nodata
+  end for
+
+  for r := 1, h - 1
+    for c := 1, w - 1
+      idx := r * w + c
+      z4 := dem[idx]
+      if (z4 == nodata) then
+        out[idx] := nodata
+      else
+        z0 := dem[idx - w - 1]
+        z1 := dem[idx - w]
+        z2 := dem[idx - w + 1]
+        z3 := dem[idx - 1]
+        z5 := dem[idx + 1]
+        z6 := dem[idx + w - 1]
+        z7 := dem[idx + w]
+        z8 := dem[idx + w + 1]
+        if (z0 == nodata) then
+          out[idx] := nodata
+        else if (z1 == nodata) then
+          out[idx] := nodata
+        else if (z2 == nodata) then
+          out[idx] := nodata
+        else if (z3 == nodata) then
+          out[idx] := nodata
+        else if (z5 == nodata) then
+          out[idx] := nodata
+        else if (z6 == nodata) then
+          out[idx] := nodata
+        else if (z7 == nodata) then
+          out[idx] := nodata
+        else if (z8 == nodata) then
+          out[idx] := nodata
+        else
+          dx := (f64(z2) - f64(z0) + 2.0 * (f64(z5) - f64(z3)) + f64(z8) - f64(z6)) / (8.0 * cx) * zFactor
+          dy := (f64(z6) - f64(z0) + 2.0 * (f64(z7) - f64(z1)) + f64(z8) - f64(z2)) / (8.0 * cy) * zFactor
+          slopeRad := atan2(sqrt(dx * dx + dy * dy), 1.0)
+          aspectRad := atan2(dy, 0.0 - dx)
+          hs := cos(zenRad) * cos(slopeRad) + sin(zenRad) * sin(slopeRad) * cos(azRad - aspectRad)
+          if (hs < 0.0) then
+            hs := 0.0
+          end if
+          out[idx] := f32(hs * 255.0)
+        end if
+      end if
+    end for
+  end for
+end
+
+! ── terrain — fused slope + aspect + hillshade in one pass ───────────
+
+subroutine raster.terrain(dem, sOut, aOut, hOut: array f32; w, h: i32; cx, cy: f64; nodata: f32; azRad, zenRad, zFactor: f64)
+var
+  r, c, idx: i32
+  z0, z1, z2, z3, z4, z5, z6, z7, z8: f32
+  dx, dy, slopeRad, aspectRad, hs, a, pi: f64
+begin
+  pi := 3.141592653589793
+
+  for c := 0, w
+    sOut[c] := nodata
+    aOut[c] := nodata
+    hOut[c] := nodata
+    sOut[(h - 1) * w + c] := nodata
+    aOut[(h - 1) * w + c] := nodata
+    hOut[(h - 1) * w + c] := nodata
+  end for
+  for r := 0, h
+    sOut[r * w] := nodata
+    aOut[r * w] := nodata
+    hOut[r * w] := nodata
+    sOut[r * w + w - 1] := nodata
+    aOut[r * w + w - 1] := nodata
+    hOut[r * w + w - 1] := nodata
+  end for
+
+  for r := 1, h - 1
+    for c := 1, w - 1
+      idx := r * w + c
+      z4 := dem[idx]
+      if (z4 == nodata) then
+        sOut[idx] := nodata
+        aOut[idx] := nodata
+        hOut[idx] := nodata
+      else
+        z0 := dem[idx - w - 1]
+        z1 := dem[idx - w]
+        z2 := dem[idx - w + 1]
+        z3 := dem[idx - 1]
+        z5 := dem[idx + 1]
+        z6 := dem[idx + w - 1]
+        z7 := dem[idx + w]
+        z8 := dem[idx + w + 1]
+        if (z0 == nodata) then
+          sOut[idx] := nodata
+          aOut[idx] := nodata
+          hOut[idx] := nodata
+        else if (z1 == nodata) then
+          sOut[idx] := nodata
+          aOut[idx] := nodata
+          hOut[idx] := nodata
+        else if (z2 == nodata) then
+          sOut[idx] := nodata
+          aOut[idx] := nodata
+          hOut[idx] := nodata
+        else if (z3 == nodata) then
+          sOut[idx] := nodata
+          aOut[idx] := nodata
+          hOut[idx] := nodata
+        else if (z5 == nodata) then
+          sOut[idx] := nodata
+          aOut[idx] := nodata
+          hOut[idx] := nodata
+        else if (z6 == nodata) then
+          sOut[idx] := nodata
+          aOut[idx] := nodata
+          hOut[idx] := nodata
+        else if (z7 == nodata) then
+          sOut[idx] := nodata
+          aOut[idx] := nodata
+          hOut[idx] := nodata
+        else if (z8 == nodata) then
+          sOut[idx] := nodata
+          aOut[idx] := nodata
+          hOut[idx] := nodata
+        else
+          dx := (f64(z2) - f64(z0) + 2.0 * (f64(z5) - f64(z3)) + f64(z8) - f64(z6)) / (8.0 * cx)
+          dy := (f64(z6) - f64(z0) + 2.0 * (f64(z7) - f64(z1)) + f64(z8) - f64(z2)) / (8.0 * cy)
+
+          ! slope
+          slopeRad := atan2(sqrt(dx * dx + dy * dy), 1.0)
+          sOut[idx] := f32(slopeRad * 180.0 / pi)
+
+          ! aspect
+          if (dx == 0.0) then
+            if (dy == 0.0) then
+              aOut[idx] := f32(-1.0)
+              aspectRad := 0.0
+            else
+              aspectRad := atan2(dy, 0.0 - dx)
+              a := 90.0 - aspectRad * 180.0 / pi
+              if (a < 0.0) then
+                a := a + 360.0
+              end if
+              aOut[idx] := f32(a)
+            end if
+          else
+            aspectRad := atan2(dy, 0.0 - dx)
+            a := 90.0 - aspectRad * 180.0 / pi
+            if (a < 0.0) then
+              a := a + 360.0
+            end if
+            if (a >= 360.0) then
+              a := a - 360.0
+            end if
+            aOut[idx] := f32(a)
+          end if
+
+          ! hillshade (apply zFactor to derivatives)
+          dx := dx * zFactor
+          dy := dy * zFactor
+          slopeRad := atan2(sqrt(dx * dx + dy * dy), 1.0)
+          aspectRad := atan2(dy, 0.0 - dx)
+          hs := cos(zenRad) * cos(slopeRad) + sin(zenRad) * sin(slopeRad) * cos(azRad - aspectRad)
+          if (hs < 0.0) then
+            hs := 0.0
+          end if
+          hOut[idx] := f32(hs * 255.0)
+        end if
+      end if
+    end for
+  end for
+end
+
+! ── TRI — Terrain Ruggedness Index (mean |z_i - z_center|) ──────────
+
+subroutine raster.tri(dem, out: array f32; w, h: i32; nodata: f32)
+var
+  r, c, idx: i32
+  z0, z1, z2, z3, z4, z5, z6, z7, z8: f32
+  s, d: f64
+begin
+  for c := 0, w
+    out[c] := nodata
+    out[(h - 1) * w + c] := nodata
+  end for
+  for r := 0, h
+    out[r * w] := nodata
+    out[r * w + w - 1] := nodata
+  end for
+
+  for r := 1, h - 1
+    for c := 1, w - 1
+      idx := r * w + c
+      z4 := dem[idx]
+      if (z4 == nodata) then
+        out[idx] := nodata
+      else
+        z0 := dem[idx - w - 1]
+        z1 := dem[idx - w]
+        z2 := dem[idx - w + 1]
+        z3 := dem[idx - 1]
+        z5 := dem[idx + 1]
+        z6 := dem[idx + w - 1]
+        z7 := dem[idx + w]
+        z8 := dem[idx + w + 1]
+        if (z0 == nodata) then
+          out[idx] := nodata
+        else if (z1 == nodata) then
+          out[idx] := nodata
+        else if (z2 == nodata) then
+          out[idx] := nodata
+        else if (z3 == nodata) then
+          out[idx] := nodata
+        else if (z5 == nodata) then
+          out[idx] := nodata
+        else if (z6 == nodata) then
+          out[idx] := nodata
+        else if (z7 == nodata) then
+          out[idx] := nodata
+        else if (z8 == nodata) then
+          out[idx] := nodata
+        else
+          s := 0.0
+          d := f64(z0) - f64(z4)
+          if (d < 0.0) then
+            s := s - d
+          else
+            s := s + d
+          end if
+          d := f64(z1) - f64(z4)
+          if (d < 0.0) then
+            s := s - d
+          else
+            s := s + d
+          end if
+          d := f64(z2) - f64(z4)
+          if (d < 0.0) then
+            s := s - d
+          else
+            s := s + d
+          end if
+          d := f64(z3) - f64(z4)
+          if (d < 0.0) then
+            s := s - d
+          else
+            s := s + d
+          end if
+          d := f64(z5) - f64(z4)
+          if (d < 0.0) then
+            s := s - d
+          else
+            s := s + d
+          end if
+          d := f64(z6) - f64(z4)
+          if (d < 0.0) then
+            s := s - d
+          else
+            s := s + d
+          end if
+          d := f64(z7) - f64(z4)
+          if (d < 0.0) then
+            s := s - d
+          else
+            s := s + d
+          end if
+          d := f64(z8) - f64(z4)
+          if (d < 0.0) then
+            s := s - d
+          else
+            s := s + d
+          end if
+          out[idx] := f32(s / 8.0)
+        end if
+      end if
+    end for
+  end for
+end
+
+! ── TPI — Topographic Position Index (z_center - mean(neighbors)) ────
+
+subroutine raster.tpi(dem, out: array f32; w, h: i32; nodata: f32)
+var
+  r, c, idx: i32
+  z0, z1, z2, z3, z4, z5, z6, z7, z8: f32
+  mean: f64
+begin
+  for c := 0, w
+    out[c] := nodata
+    out[(h - 1) * w + c] := nodata
+  end for
+  for r := 0, h
+    out[r * w] := nodata
+    out[r * w + w - 1] := nodata
+  end for
+
+  for r := 1, h - 1
+    for c := 1, w - 1
+      idx := r * w + c
+      z4 := dem[idx]
+      if (z4 == nodata) then
+        out[idx] := nodata
+      else
+        z0 := dem[idx - w - 1]
+        z1 := dem[idx - w]
+        z2 := dem[idx - w + 1]
+        z3 := dem[idx - 1]
+        z5 := dem[idx + 1]
+        z6 := dem[idx + w - 1]
+        z7 := dem[idx + w]
+        z8 := dem[idx + w + 1]
+        if (z0 == nodata) then
+          out[idx] := nodata
+        else if (z1 == nodata) then
+          out[idx] := nodata
+        else if (z2 == nodata) then
+          out[idx] := nodata
+        else if (z3 == nodata) then
+          out[idx] := nodata
+        else if (z5 == nodata) then
+          out[idx] := nodata
+        else if (z6 == nodata) then
+          out[idx] := nodata
+        else if (z7 == nodata) then
+          out[idx] := nodata
+        else if (z8 == nodata) then
+          out[idx] := nodata
+        else
+          mean := (f64(z0) + f64(z1) + f64(z2) + f64(z3) + f64(z5) + f64(z6) + f64(z7) + f64(z8)) / 8.0
+          out[idx] := f32(f64(z4) - mean)
+        end if
+      end if
+    end for
+  end for
+end
+
+! ── roughness — max(neighbors) - min(neighbors) ─────────────────────
+
+subroutine raster.roughness(dem, out: array f32; w, h: i32; nodata: f32)
+var
+  r, c, idx: i32
+  z0, z1, z2, z3, z4, z5, z6, z7, z8: f32
+  mn, mx, v: f64
+begin
+  for c := 0, w
+    out[c] := nodata
+    out[(h - 1) * w + c] := nodata
+  end for
+  for r := 0, h
+    out[r * w] := nodata
+    out[r * w + w - 1] := nodata
+  end for
+
+  for r := 1, h - 1
+    for c := 1, w - 1
+      idx := r * w + c
+      z4 := dem[idx]
+      if (z4 == nodata) then
+        out[idx] := nodata
+      else
+        z0 := dem[idx - w - 1]
+        z1 := dem[idx - w]
+        z2 := dem[idx - w + 1]
+        z3 := dem[idx - 1]
+        z5 := dem[idx + 1]
+        z6 := dem[idx + w - 1]
+        z7 := dem[idx + w]
+        z8 := dem[idx + w + 1]
+        if (z0 == nodata) then
+          out[idx] := nodata
+        else if (z1 == nodata) then
+          out[idx] := nodata
+        else if (z2 == nodata) then
+          out[idx] := nodata
+        else if (z3 == nodata) then
+          out[idx] := nodata
+        else if (z5 == nodata) then
+          out[idx] := nodata
+        else if (z6 == nodata) then
+          out[idx] := nodata
+        else if (z7 == nodata) then
+          out[idx] := nodata
+        else if (z8 == nodata) then
+          out[idx] := nodata
+        else
+          mn := f64(z0)
+          mx := f64(z0)
+          v := f64(z1)
+          if (v < mn) then
+            mn := v
+          end if
+          if (v > mx) then
+            mx := v
+          end if
+          v := f64(z2)
+          if (v < mn) then
+            mn := v
+          end if
+          if (v > mx) then
+            mx := v
+          end if
+          v := f64(z3)
+          if (v < mn) then
+            mn := v
+          end if
+          if (v > mx) then
+            mx := v
+          end if
+          v := f64(z4)
+          if (v < mn) then
+            mn := v
+          end if
+          if (v > mx) then
+            mx := v
+          end if
+          v := f64(z5)
+          if (v < mn) then
+            mn := v
+          end if
+          if (v > mx) then
+            mx := v
+          end if
+          v := f64(z6)
+          if (v < mn) then
+            mn := v
+          end if
+          if (v > mx) then
+            mx := v
+          end if
+          v := f64(z7)
+          if (v < mn) then
+            mn := v
+          end if
+          if (v > mx) then
+            mx := v
+          end if
+          v := f64(z8)
+          if (v < mn) then
+            mn := v
+          end if
+          if (v > mx) then
+            mx := v
+          end if
+          out[idx] := f32(mx - mn)
+        end if
+      end if
+    end for
+  end for
+end

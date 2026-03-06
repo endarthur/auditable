@@ -95,3 +95,16 @@ if (fs.existsSync(gslibAtraPath)) {
   const gslibBundleSize = fs.statSync(gslibBundlePath).size;
   console.log(`Built ext/atra/lib/gslib.js (${(gslibBundleSize / 1024).toFixed(1)} KB)`);
 }
+
+// ── raster ──
+
+const rasterAtraPath = path.join(__dirname, '..', 'raster', 'raster.atra');
+if (fs.existsSync(rasterAtraPath)) {
+  const rasterSrc = fs.readFileSync(rasterAtraPath, 'utf8');
+  let out = bundle(rasterSrc, { name: 'raster' });
+  const apiPath = path.join(__dirname, '..', 'raster', 'api.js');
+  if (fs.existsSync(apiPath)) out += '\n' + fs.readFileSync(apiPath, 'utf8');
+  const outPath = path.join(libDir, 'raster.js');
+  fs.writeFileSync(outPath, out);
+  console.log(`Built ext/atra/lib/raster.js (${(fs.statSync(outPath).size / 1024).toFixed(1)} KB)`);
+}

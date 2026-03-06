@@ -3336,13 +3336,18 @@ const palette10 = [
 
 // ── Export ──
 
+function hsl(h, s, l, a = 1) {
+  const [r, g, b] = hslToRgb(h, s, l);
+  return _makeColor(r, g, b, a);
+}
+
 const std = {
   csv, fetchJSON,
   sum, mean, median, extent, bin, linspace,
   unique, zip, cross,
   file, download, el, copy, fmt,
   include,
-  color, colorScale,
+  color, colorScale, hsl,
   viridis, magma, inferno, plasma, turbo,
   palette10,
 };
@@ -5999,7 +6004,7 @@ function togglePresent() {
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_BUILD_DATE__ = '2026-03-06';
-const __AUDITABLE_BASE_SIZE__ = 983884;
+const __AUDITABLE_BASE_SIZE__ = 984248;
 
 (function() {
   const ver = $('#aboutVersion');
@@ -7243,13 +7248,18 @@ const palette10 = [
 
 // ── Export ──
 
+function hsl(h, s, l, a = 1) {
+  const [r, g, b] = hslToRgb(h, s, l);
+  return _makeColor(r, g, b, a);
+}
+
 const std = {
   csv, fetchJSON,
   sum, mean, median, extent, bin, linspace,
   unique, zip, cross,
   file, download, el, copy, fmt,
   include,
-  color, colorScale,
+  color, colorScale, hsl,
   viridis, magma, inferno, plasma, turbo,
   palette10,
 };
@@ -11489,6 +11499,10 @@ const BUILTIN_HELP = {
   "std.color": {
     "sig": "std.color(input)",
     "desc": "create color from hex/rgb/hsl/array \u2014 .lighten/.darken/.mix/.rotate/.css/.hex"
+  },
+  "std.hsl": {
+    "sig": "std.hsl(h, s, l, a?)",
+    "desc": "create color from HSL \u2014 h: 0\u2013360, s: 0\u2013100, l: 0\u2013100"
   },
   "std.colorScale": {
     "sig": "std.colorScale(domain, colors)",

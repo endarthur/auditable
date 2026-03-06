@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { std } from '../src/js/stdlib.js';
 
 const { csv, sum, mean, median, extent, bin, linspace, unique, zip, cross, fmt, include,
-        color, colorScale, viridis, magma, inferno, plasma, turbo, palette10 } = std;
+        color, colorScale, hsl, viridis, magma, inferno, plasma, turbo, palette10 } = std;
 
 // ── csv ──
 
@@ -616,6 +616,66 @@ describe('color conversion helpers', () => {
     assert.strictEqual(r, 255);
     assert.strictEqual(g, 0);
     assert.strictEqual(b, 0);
+  });
+});
+
+// ── hsl ──
+
+describe('hsl', () => {
+  it('pure red', () => {
+    const c = hsl(0, 100, 50);
+    assert.strictEqual(c.r, 255);
+    assert.strictEqual(c.g, 0);
+    assert.strictEqual(c.b, 0);
+    assert.strictEqual(c.a, 1);
+  });
+
+  it('pure green', () => {
+    const c = hsl(120, 100, 50);
+    assert.strictEqual(c.r, 0);
+    assert.strictEqual(c.g, 255);
+    assert.strictEqual(c.b, 0);
+  });
+
+  it('pure blue', () => {
+    const c = hsl(240, 100, 50);
+    assert.strictEqual(c.r, 0);
+    assert.strictEqual(c.g, 0);
+    assert.strictEqual(c.b, 255);
+  });
+
+  it('white', () => {
+    const c = hsl(0, 0, 100);
+    assert.strictEqual(c.r, 255);
+    assert.strictEqual(c.g, 255);
+    assert.strictEqual(c.b, 255);
+  });
+
+  it('black', () => {
+    const c = hsl(0, 0, 0);
+    assert.strictEqual(c.r, 0);
+    assert.strictEqual(c.g, 0);
+    assert.strictEqual(c.b, 0);
+  });
+
+  it('with alpha', () => {
+    const c = hsl(0, 100, 50, 0.5);
+    assert.strictEqual(c.a, 0.5);
+    assert.strictEqual(c.css(), 'rgba(255,0,0,0.5)');
+  });
+
+  it('returns color object with methods', () => {
+    const c = hsl(200, 70, 50);
+    assert.strictEqual(typeof c.css, 'function');
+    assert.strictEqual(typeof c.hex, 'function');
+    assert.strictEqual(typeof c.lighten, 'function');
+    assert.strictEqual(typeof c.mix, 'function');
+  });
+
+  it('default alpha is 1', () => {
+    const c = hsl(180, 50, 50);
+    assert.strictEqual(c.a, 1);
+    assert.match(c.css(), /^rgb\(/);
   });
 });
 

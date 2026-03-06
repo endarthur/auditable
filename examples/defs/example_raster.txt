@@ -1,0 +1,216 @@
+/// auditable
+/// title: raster — terrain analysis
+/// module: @atra/raster ext/atra/lib/raster.js
+
+/// md
+# raster — terrain analysis from Wasm kernels
+
+Terrain derivatives computed by atra-compiled WebAssembly kernels. No GDAL, no CDN dependency — pure Wasm math on Float32 grids. Drag the sliders — the Wasm kernel re-runs on every input event.
+
+/// code
+const raster = await load("@atra/raster");
+
+/// code
+// %manual
+// diamond-square fractal terrain — multi-octave for realistic mountains
+function diamondSquare(n, roughness, seed) {
+  const size = (1 << n) + 1;
+  const grid = new Float32Array(size * size);
+  let s = seed | 0;
+  function rng() {
+    s = s + 0x6D2B79F5 | 0;
+    let t = Math.imul(s ^ s >>> 15, 1 | s);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296 - 0.5;
+  }
+  const g = (r, c) => grid[r * size + c];
+  const p = (r, c, v) => { grid[r * size + c] = v; };
+  p(0, 0, rng()); p(0, size - 1, rng());
+  p(size - 1, 0, rng()); p(size - 1, size - 1, rng());
+  for (let step = size - 1; step >= 2; step >>= 1) {
+    const half = step >> 1, scale = roughness * step;
+    for (let r = half; r < size; r += step)
+      for (let c = half; c < size; c += step)
+        p(r, c, (g(r-half,c-half)+g(r-half,c+half)+g(r+half,c-half)+g(r+half,c+half))/4 + rng()*scale);
+    for (let r = 0; r < size; r += half) {
+      for (let c = ((r/half)%2===0 ? half : 0); c < size; c += step) {
+        let sum = 0, cnt = 0;
+        if (r >= half) { sum += g(r-half,c); cnt++; }
+        if (r+half < size) { sum += g(r+half,c); cnt++; }
+        if (c >= half) { sum += g(r,c-half); cnt++; }
+        if (c+half < size) { sum += g(r,c+half); cnt++; }
+        p(r, c, sum/cnt + rng()*scale);
+      }
+    }
+  }
+  // normalize to [0, 1]
+  let mn = Infinity, mx = -Infinity;
+  for (let i = 0; i < grid.length; i++) { if (grid[i] < mn) mn = grid[i]; if (grid[i] > mx) mx = grid[i]; }
+  const rg = mx - mn || 1;
+  for (let i = 0; i < grid.length; i++) grid[i] = (grid[i] - mn) / rg;
+  return { grid, size };
+}
+
+// multi-octave: large mountains + medium ridges + fine texture
+const N = 8; // 257x257
+const o1 = diamondSquare(N, 0.7, 7331);   // broad mountain ranges
+const o2 = diamondSquare(N, 1.0, 4217);   // medium ridges & valleys
+const o3 = diamondSquare(N, 1.5, 9001);   // fine erosion detail
+const W = o1.size, H = W;
+const dem = new Float32Array(W * H);
+for (let i = 0; i < dem.length; i++) {
+  let h = o1.grid[i] * 2000 + o2.grid[i] * 600 + o3.grid[i] * 150;
+  // raise peaks: squaring biases toward higher terrain
+  h = 100 + h * (0.5 + 0.5 * o1.grid[i]);
+  dem[i] = h;
+}
+const NODATA = -9999, cellSize = 30;
+
+const canvasSize = Math.min(500, window.innerWidth - 80);
+const canvas = ui.canvas(canvasSize, canvasSize);
+const ctx = canvas.getContext("2d");
+const offscreen = new OffscreenCanvas(W, H);
+const octx = offscreen.getContext("2d");
+const statusEl = document.createElement("div");
+ui.display(statusEl);
+
+// ── mutable state ──
+let azimuth = 315, altitude = 45, zFactor = 1.0;
+let contourInterval = 50, view = "hillshade";
+
+// ── render function ──
+function render() {
+  const t0 = performance.now();
+  let grid, contourData;
+
+  if (view === "terrain + contours") {
+    const r = raster.terrain(dem, W, H, cellSize, { azimuth, altitude, zFactor });
+    grid = r.hillshade;
+    const bbox = [0, 0, W * cellSize, H * cellSize];
+    contourData = raster.contour(dem, W, H, bbox, { interval: contourInterval });
+  } else if (view === "slope") {
+    grid = raster.slope(dem, W, H, cellSize);
+  } else if (view === "aspect") {
+    grid = raster.aspect(dem, W, H, cellSize);
+  } else {
+    grid = raster.hillshade(dem, W, H, cellSize, { azimuth, altitude, zFactor });
+  }
+  const elapsed = (performance.now() - t0).toFixed(2);
+
+  // colorize
+  const img = octx.createImageData(W, H);
+  let vmin = Infinity, vmax = -Infinity;
+  for (let i = 0; i < grid.length; i++) {
+    if (grid[i] === NODATA) continue;
+    if (grid[i] < vmin) vmin = grid[i];
+    if (grid[i] > vmax) vmax = grid[i];
+  }
+  const vrange = vmax - vmin || 1;
+
+  for (let i = 0; i < grid.length; i++) {
+    const idx = i * 4;
+    if (grid[i] === NODATA) {
+      img.data[idx] = img.data[idx+1] = img.data[idx+2] = 0;
+      img.data[idx+3] = 255;
+      continue;
+    }
+    const t = (grid[i] - vmin) / vrange;
+    if (view === "aspect") {
+      if (grid[i] < 0) { img.data[idx] = img.data[idx+1] = img.data[idx+2] = 40; }
+      else {
+        const c = std.hsl(grid[i], 70, 50);
+        img.data[idx] = c.r; img.data[idx+1] = c.g; img.data[idx+2] = c.b;
+      }
+    } else if (view === "slope") {
+      const rgb = std.viridis(t);
+      const m = rgb.match(/\d+/g);
+      img.data[idx] = +m[0]; img.data[idx+1] = +m[1]; img.data[idx+2] = +m[2];
+    } else {
+      const v = Math.round(t * 255);
+      img.data[idx] = v; img.data[idx+1] = v; img.data[idx+2] = v;
+    }
+    img.data[idx+3] = 255;
+  }
+  octx.putImageData(img, 0, 0);
+  ctx.drawImage(offscreen, 0, 0, canvasSize, canvasSize);
+
+  // contour overlay
+  if (contourData) {
+    const scaleX = canvasSize / (W * cellSize);
+    const scaleY = canvasSize / (H * cellSize);
+    ctx.strokeStyle = "#c89b3c";
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.7;
+    for (const f of contourData.features) {
+      const coords = f.geometry.coordinates;
+      ctx.beginPath();
+      ctx.moveTo(coords[0][0] * scaleX, canvasSize - coords[0][1] * scaleY);
+      for (let i = 1; i < coords.length; i++)
+        ctx.lineTo(coords[i][0] * scaleX, canvasSize - coords[i][1] * scaleY);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  let label = `${view} \u00b7 ${W}\u00d7${H} \u00b7 ${elapsed} ms`;
+  if (contourData) label += ` \u00b7 ${contourData.features.length} contours`;
+  statusEl.textContent = label;
+}
+
+// ── controls with onInput callbacks ──
+ui.slider("sun azimuth", azimuth, {min: 0, max: 360, step: 1, onInput: v => { azimuth = v; render(); }});
+ui.slider("sun altitude", altitude, {min: 5, max: 90, step: 1, onInput: v => { altitude = v; render(); }});
+ui.slider("z exaggeration", zFactor, {min: 0.5, max: 5.0, step: 0.1, onInput: v => { zFactor = v; render(); }});
+ui.slider("contour interval", contourInterval, {min: 10, max: 200, step: 5, onInput: v => { contourInterval = v; render(); }});
+ui.dropdown("view", ["hillshade", "slope", "aspect", "terrain + contours"], null, {onInput: v => { view = v; render(); }});
+
+render();
+
+/// code
+// %manual
+// surface metrics (static — run once)
+const t1 = performance.now();
+const triResult = raster.tri(dem, W, H);
+const tpiResult = raster.tpi(dem, W, H);
+const roughResult = raster.roughness(dem, W, H);
+const metricsTime = (performance.now() - t1).toFixed(2);
+
+const mSize = Math.min(160, (window.innerWidth - 100) / 3);
+const labels = ["TRI", "TPI", "roughness"];
+const grids = [triResult, tpiResult, roughResult];
+const NODATA = -9999;
+
+for (let g = 0; g < 3; g++) {
+  const mc = ui.canvas(mSize, mSize);
+  const mctx = mc.getContext("2d");
+  const mimg = mctx.createImageData(W, H);
+  const arr = grids[g];
+
+  let mn = Infinity, mx = -Infinity;
+  for (let i = 0; i < arr.length; i++) {
+    if (arr[i] === NODATA) continue;
+    if (arr[i] < mn) mn = arr[i];
+    if (arr[i] > mx) mx = arr[i];
+  }
+  const rng = mx - mn || 1;
+
+  for (let i = 0; i < arr.length; i++) {
+    const idx = i * 4;
+    if (arr[i] === NODATA) {
+      mimg.data[idx] = mimg.data[idx+1] = mimg.data[idx+2] = 0;
+    } else {
+      const rgb = std.viridis((arr[i] - mn) / rng);
+      const m = rgb.match(/\d+/g);
+      mimg.data[idx] = +m[0]; mimg.data[idx+1] = +m[1]; mimg.data[idx+2] = +m[2];
+    }
+    mimg.data[idx+3] = 255;
+  }
+  const off = new OffscreenCanvas(W, H);
+  off.getContext("2d").putImageData(mimg, 0, 0);
+  mctx.drawImage(off, 0, 0, mSize, mSize);
+  ui.display(labels[g]);
+}
+ui.display(`surface metrics: ${metricsTime} ms`);
+
+/// md
+**How it works:** the terrain is generated by the diamond-square algorithm — a fractal midpoint displacement method that produces realistic ridgelines, valleys, and drainage patterns on a 257\u00d7257 grid. The terrain kernels are written in [atra](ext/atra/SPEC.md) and compiled to WebAssembly. Each kernel reads a 3\u00d73 neighborhood (Horn's method) and computes derivatives in f64 precision, with f32 I/O. The sliders use `onInput` callbacks — every drag event re-runs the Wasm kernel and repaints the canvas directly, bypassing the reactive DAG. Contour lines use marching squares in JS.

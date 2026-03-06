@@ -76,6 +76,14 @@ export function readI32(mem, off, n) {
   return new Int32Array(mem.buffer.slice(off, off + n * 4));
 }
 
+export function writeF32(mem, off, arr) {
+  new Float32Array(mem.buffer).set(arr, off / 4);
+}
+
+export function readF32(mem, off, n) {
+  return new Float32Array(mem.buffer.slice(off, off + n * 4));
+}
+
 // Grow memory if allocator offset exceeds current size (64KB pages)
 export function growMemory(mem, off) {
   const needed = Math.ceil(off / 65536);

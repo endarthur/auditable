@@ -582,13 +582,18 @@ const palette10 = [
 
 // ── Export ──
 
+function hsl(h, s, l, a = 1) {
+  const [r, g, b] = hslToRgb(h, s, l);
+  return _makeColor(r, g, b, a);
+}
+
 export const std = {
   csv, fetchJSON,
   sum, mean, median, extent, bin, linspace,
   unique, zip, cross,
   file, download, el, copy, fmt,
   include,
-  color, colorScale,
+  color, colorScale, hsl,
   viridis, magma, inferno, plasma, turbo,
   palette10,
 };
