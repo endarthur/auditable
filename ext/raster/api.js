@@ -93,6 +93,27 @@ export function terrain(data, w, h, cellSize, opts) {
   };
 }
 
+export function curvature(data, w, h, cellSize, opts) {
+  const [cx, cy] = _parseCellSize(cellSize);
+  const nodata = (opts && opts.nodata != null) ? opts.nodata : NODATA_DEFAULT;
+  const n = w * h;
+  const mem = _allocMem(4, n);
+  const lib = instantiate({ memory: mem });
+  const st = { off: 0 };
+  const pDem = alloc(st, 0, n);
+  const pProf = alloc(st, 0, n);
+  const pPlan = alloc(st, 0, n);
+  const pMean = alloc(st, 0, n);
+  growMemory(mem, st.off);
+  writeF32(mem, pDem, data);
+  lib.raster.curvature(pDem, pProf, pPlan, pMean, w, h, cx, cy, nodata);
+  return {
+    profile: readF32(mem, pProf, n),
+    plan: readF32(mem, pPlan, n),
+    mean: readF32(mem, pMean, n),
+  };
+}
+
 export function tri(data, w, h, opts) {
   const nodata = (opts && opts.nodata != null) ? opts.nodata : NODATA_DEFAULT;
   const n = w * h;

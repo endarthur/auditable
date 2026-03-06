@@ -624,3 +624,136 @@ begin
     end for
   end for
 end
+
+! ── curvature — profile, plan, mean (fused) ──────────────────────────
+!
+! Second-order partial derivatives from 3x3:
+!   zxx = (z3 - 2*z4 + z5) / cx²
+!   zyy = (z1 - 2*z4 + z7) / cy²
+!   zxy = (z0 - z2 - z6 + z8) / (4*cx*cy)
+!
+! First derivatives (Horn):
+!   p = dz/dx,  q = dz/dy
+!
+! Profile curvature (along steepest descent):
+!   Kp = -(p²*zxx + 2*p*q*zxy + q²*zyy) / ((p²+q²) * (1+p²+q²)^1.5)
+!
+! Plan curvature (perpendicular to steepest descent):
+!   Kc = -(q²*zxx - 2*p*q*zxy + p²*zyy) / (p²+q²)^1.5
+!
+! Mean curvature:
+!   Km = -((1+q²)*zxx - 2*p*q*zxy + (1+p²)*zyy) / (2*(1+p²+q²)^1.5)
+!
+! Flat areas (p²+q² < eps) → 0 for all three.
+
+subroutine raster.curvature(dem, profOut, planOut, meanOut: array f32; w, h: i32; cx, cy: f64; nodata: f32)
+var
+  r, c, idx: i32
+  z0, z1, z2, z3, z4, z5, z6, z7, z8: f32
+  p, q, zxx, zyy, zxy, p2, q2, p2q2, denom, kp, kc, km: f64
+begin
+  for c := 0, w
+    profOut[c] := nodata
+    planOut[c] := nodata
+    meanOut[c] := nodata
+    profOut[(h - 1) * w + c] := nodata
+    planOut[(h - 1) * w + c] := nodata
+    meanOut[(h - 1) * w + c] := nodata
+  end for
+  for r := 0, h
+    profOut[r * w] := nodata
+    planOut[r * w] := nodata
+    meanOut[r * w] := nodata
+    profOut[r * w + w - 1] := nodata
+    planOut[r * w + w - 1] := nodata
+    meanOut[r * w + w - 1] := nodata
+  end for
+
+  for r := 1, h - 1
+    for c := 1, w - 1
+      idx := r * w + c
+      z4 := dem[idx]
+      if (z4 == nodata) then
+        profOut[idx] := nodata
+        planOut[idx] := nodata
+        meanOut[idx] := nodata
+      else
+        z0 := dem[idx - w - 1]
+        z1 := dem[idx - w]
+        z2 := dem[idx - w + 1]
+        z3 := dem[idx - 1]
+        z5 := dem[idx + 1]
+        z6 := dem[idx + w - 1]
+        z7 := dem[idx + w]
+        z8 := dem[idx + w + 1]
+        if (z0 == nodata) then
+          profOut[idx] := nodata
+          planOut[idx] := nodata
+          meanOut[idx] := nodata
+        else if (z1 == nodata) then
+          profOut[idx] := nodata
+          planOut[idx] := nodata
+          meanOut[idx] := nodata
+        else if (z2 == nodata) then
+          profOut[idx] := nodata
+          planOut[idx] := nodata
+          meanOut[idx] := nodata
+        else if (z3 == nodata) then
+          profOut[idx] := nodata
+          planOut[idx] := nodata
+          meanOut[idx] := nodata
+        else if (z5 == nodata) then
+          profOut[idx] := nodata
+          planOut[idx] := nodata
+          meanOut[idx] := nodata
+        else if (z6 == nodata) then
+          profOut[idx] := nodata
+          planOut[idx] := nodata
+          meanOut[idx] := nodata
+        else if (z7 == nodata) then
+          profOut[idx] := nodata
+          planOut[idx] := nodata
+          meanOut[idx] := nodata
+        else if (z8 == nodata) then
+          profOut[idx] := nodata
+          planOut[idx] := nodata
+          meanOut[idx] := nodata
+        else
+          ! first derivatives (Horn)
+          p := (f64(z2) - f64(z0) + 2.0 * (f64(z5) - f64(z3)) + f64(z8) - f64(z6)) / (8.0 * cx)
+          q := (f64(z6) - f64(z0) + 2.0 * (f64(z7) - f64(z1)) + f64(z8) - f64(z2)) / (8.0 * cy)
+
+          ! second derivatives
+          zxx := (f64(z3) - 2.0 * f64(z4) + f64(z5)) / (cx * cx)
+          zyy := (f64(z1) - 2.0 * f64(z4) + f64(z7)) / (cy * cy)
+          zxy := (f64(z0) - f64(z2) - f64(z6) + f64(z8)) / (4.0 * cx * cy)
+
+          p2 := p * p
+          q2 := q * q
+          p2q2 := p2 + q2
+
+          ! mean curvature (always defined, denominator is (1+p²+q²)^1.5 ≥ 1)
+          denom := 2.0 * sqrt((1.0 + p2q2) * (1.0 + p2q2) * (1.0 + p2q2))
+          km := 0.0 - ((1.0 + q2) * zxx - 2.0 * p * q * zxy + (1.0 + p2) * zyy) / denom
+          meanOut[idx] := f32(km)
+
+          if (p2q2 < 1.0e-12) then
+            ! flat point: profile and plan undefined → 0
+            profOut[idx] := f32(0.0)
+            planOut[idx] := f32(0.0)
+          else
+            ! profile curvature
+            denom := p2q2 * sqrt((1.0 + p2q2) * (1.0 + p2q2) * (1.0 + p2q2))
+            kp := 0.0 - (p2 * zxx + 2.0 * p * q * zxy + q2 * zyy) / denom
+            profOut[idx] := f32(kp)
+
+            ! plan curvature
+            denom := sqrt(p2q2 * p2q2 * p2q2)
+            kc := 0.0 - (q2 * zxx - 2.0 * p * q * zxy + p2 * zyy) / denom
+            planOut[idx] := f32(kc)
+          end if
+        end if
+      end if
+    end for
+  end for
+end

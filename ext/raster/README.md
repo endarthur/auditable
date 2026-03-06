@@ -248,7 +248,7 @@ Tests in `test/raster.test.mjs`. Pure math, no browser needed.
 - [ ] tests
 
 ### Phase 3 — Advanced
-- [ ] curvature (profile, plan, mean)
+- [x] curvature (profile, plan, mean)
 - [ ] viewshed (ray-cast from observer point)
 - [ ] variable cell size (non-square cells for geographic coordinates)
 - [ ] optional WebGPU path for large grids (>10M pixels)

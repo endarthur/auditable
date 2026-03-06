@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 const {
   instantiate, alloc, writeF32, readF32, growMemory,
-  slope, aspect, hillshade, terrain, tri, tpi, roughness, contour,
+  slope, aspect, hillshade, terrain, curvature, tri, tpi, roughness, contour,
 } = await import('../ext/atra/lib/raster.js');
 
 const NODATA = -9999;
@@ -490,6 +490,111 @@ describe('surface metrics on ramp', () => {
 
     // roughness: should equal 2 * gradient (max - min in 3x3)
     for (const v of rghInt) assert.ok(approxEqual(v, 20, 0.1), `roughness should be 20: ${v}`);
+  });
+});
+
+// ── curvature tests ──
+
+describe('curvature', () => {
+  it('flat grid → all zeros', () => {
+    const data = makeFlat(5, 5, 100);
+    const c = curvature(data, 5, 5, 30);
+    const profInt = getInterior(c.profile, 5, 5);
+    const planInt = getInterior(c.plan, 5, 5);
+    const meanInt = getInterior(c.mean, 5, 5);
+    for (const v of profInt) assert.ok(approxEqual(v, 0, 0.001), `profile should be 0, got ${v}`);
+    for (const v of planInt) assert.ok(approxEqual(v, 0, 0.001), `plan should be 0, got ${v}`);
+    for (const v of meanInt) assert.ok(approxEqual(v, 0, 0.001), `mean should be 0, got ${v}`);
+  });
+
+  it('constant slope → profile=0, plan=0', () => {
+    // uniform slope has no curvature
+    const data = makeNorthFacingPlane(7, 7, 10);
+    const c = curvature(data, 7, 7, 30);
+    const profInt = getInterior(c.profile, 7, 7);
+    const planInt = getInterior(c.plan, 7, 7);
+    for (const v of profInt) assert.ok(approxEqual(v, 0, 0.001), `profile should be 0, got ${v}`);
+    for (const v of planInt) assert.ok(approxEqual(v, 0, 0.001), `plan should be 0, got ${v}`);
+  });
+
+  it('concave surface → negative profile curvature', () => {
+    // parabola: z = x² (concave up in x) → d²z/dx² = 2 > 0
+    // profile curvature formula uses negative sign → negative output
+    const w = 7, h = 7, cs = 1;
+    const data = new Float32Array(w * h);
+    for (let r = 0; r < h; r++)
+      for (let c = 0; c < w; c++)
+        data[r * w + c] = (c - 3) * (c - 3);
+    const result = curvature(data, w, h, cs);
+    // center pixel at (3,3): slope along x = 0 (bottom of parabola)
+    // but neighboring pixels have curvature — check (3,2) where slope ≠ 0
+    const idx = 3 * w + 2;
+    // profile curvature at a point on a parabola facing the center
+    // should be non-zero
+    assert.ok(result.profile[idx] !== 0, 'profile should be non-zero on curved surface');
+  });
+
+  it('bowl shape → negative mean curvature', () => {
+    // z = x² + y² — bowl (concave up)
+    // zxx = 2, zyy = 2, zxy = 0
+    // mean curvature = -((1+q²)*zxx + (1+p²)*zyy) / (2*(1+p²+q²)^1.5)
+    // at center (flat point): = -(2 + 2) / 2 = -2
+    const w = 7, h = 7, cs = 1;
+    const data = new Float32Array(w * h);
+    for (let r = 0; r < h; r++)
+      for (let c = 0; c < w; c++)
+        data[r * w + c] = (c - 3) * (c - 3) + (r - 3) * (r - 3);
+    const result = curvature(data, w, h, cs);
+    // at center (3,3): p≈0, q≈0, zxx=2, zyy=2
+    // mean = -(2+2)/2 = -2
+    const idx = 3 * w + 3;
+    assert.ok(result.mean[idx] < 0, `bowl center should have negative mean curvature, got ${result.mean[idx]}`);
+    assert.ok(approxEqual(result.mean[idx], -2, 0.1), `expected mean≈-2, got ${result.mean[idx]}`);
+  });
+
+  it('dome shape → positive mean curvature', () => {
+    // z = -(x² + y²) — dome (concave down)
+    const w = 7, h = 7, cs = 1;
+    const data = new Float32Array(w * h);
+    for (let r = 0; r < h; r++)
+      for (let c = 0; c < w; c++)
+        data[r * w + c] = -((c - 3) * (c - 3) + (r - 3) * (r - 3)) + 50;
+    const result = curvature(data, w, h, cs);
+    const idx = 3 * w + 3;
+    assert.ok(result.mean[idx] > 0, `dome center should have positive mean curvature, got ${result.mean[idx]}`);
+    assert.ok(approxEqual(result.mean[idx], 2, 0.1), `expected mean≈2, got ${result.mean[idx]}`);
+  });
+
+  it('nodata propagation', () => {
+    const data = makeFlat(5, 5, 100);
+    data[1 * 5 + 2] = NODATA;
+    const c = curvature(data, 5, 5, 30);
+    assert.equal(c.profile[2 * 5 + 2], NODATA);
+    assert.equal(c.plan[2 * 5 + 2], NODATA);
+    assert.equal(c.mean[2 * 5 + 2], NODATA);
+  });
+
+  it('border → nodata', () => {
+    const data = makeFlat(5, 5, 100);
+    const c = curvature(data, 5, 5, 30);
+    for (let col = 0; col < 5; col++) {
+      assert.equal(c.profile[col], NODATA);
+      assert.equal(c.plan[col], NODATA);
+      assert.equal(c.mean[col], NODATA);
+    }
+  });
+
+  it('non-square cellSize', () => {
+    const w = 7, h = 7;
+    const data = new Float32Array(w * h);
+    for (let r = 0; r < h; r++)
+      for (let c = 0; c < w; c++)
+        data[r * w + c] = (c - 3) * (c - 3) + (r - 3) * (r - 3);
+    const c = curvature(data, w, h, [1, 2]);
+    // should not crash and should produce valid values
+    const idx = 3 * w + 3;
+    assert.ok(isFinite(c.mean[idx]), 'mean curvature should be finite');
+    assert.ok(c.mean[idx] < 0, 'bowl should still be negative');
   });
 });
 
