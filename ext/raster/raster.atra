@@ -757,3 +757,154 @@ begin
     end for
   end for
 end
+
+! ── D8 flow direction — steepest downhill neighbor ─────────────────
+!
+! Per interior pixel: compute slope to each of 8 neighbors, pick
+! steepest downhill. Output D8 code (power of 2) or 0 for sinks/flats.
+!
+!  32  64  128       NW  N  NE
+!  16   0    1       W   .   E
+!   8   4    2       SW  S  SE
+!
+! Nodata neighbors are skipped (not candidates for steepest descent).
+! Only center == nodata → 0. Border → 0.
+
+subroutine raster.flowDir(dem: array f32; out: array i32; w, h: i32; cx, cy: f64; nodata: f32)
+var
+  r, c, idx, bestBit: i32
+  z4, zn: f32
+  diag, drop, slope, bestSlope: f64
+begin
+  diag := sqrt(cx * cx + cy * cy)
+
+  ! border → 0
+  for c := 0, w
+    out[c] := 0
+    out[(h - 1) * w + c] := 0
+  end for
+  for r := 0, h
+    out[r * w] := 0
+    out[r * w + w - 1] := 0
+  end for
+
+  ! interior
+  for r := 1, h - 1
+    for c := 1, w - 1
+      idx := r * w + c
+      z4 := dem[idx]
+      if (z4 == nodata) then
+        out[idx] := 0
+      else
+        bestSlope := 0.0
+        bestBit := 0
+
+        ! E (bit 0, code 1)
+        zn := dem[idx + 1]
+        if (zn /= nodata) then
+          drop := f64(z4) - f64(zn)
+          if (drop > 0.0) then
+            slope := drop / cx
+            if (slope > bestSlope) then
+              bestSlope := slope
+              bestBit := 1
+            end if
+          end if
+        end if
+
+        ! SE (bit 1, code 2)
+        zn := dem[idx + w + 1]
+        if (zn /= nodata) then
+          drop := f64(z4) - f64(zn)
+          if (drop > 0.0) then
+            slope := drop / diag
+            if (slope > bestSlope) then
+              bestSlope := slope
+              bestBit := 2
+            end if
+          end if
+        end if
+
+        ! S (bit 2, code 4)
+        zn := dem[idx + w]
+        if (zn /= nodata) then
+          drop := f64(z4) - f64(zn)
+          if (drop > 0.0) then
+            slope := drop / cy
+            if (slope > bestSlope) then
+              bestSlope := slope
+              bestBit := 4
+            end if
+          end if
+        end if
+
+        ! SW (bit 3, code 8)
+        zn := dem[idx + w - 1]
+        if (zn /= nodata) then
+          drop := f64(z4) - f64(zn)
+          if (drop > 0.0) then
+            slope := drop / diag
+            if (slope > bestSlope) then
+              bestSlope := slope
+              bestBit := 8
+            end if
+          end if
+        end if
+
+        ! W (bit 4, code 16)
+        zn := dem[idx - 1]
+        if (zn /= nodata) then
+          drop := f64(z4) - f64(zn)
+          if (drop > 0.0) then
+            slope := drop / cx
+            if (slope > bestSlope) then
+              bestSlope := slope
+              bestBit := 16
+            end if
+          end if
+        end if
+
+        ! NW (bit 5, code 32)
+        zn := dem[idx - w - 1]
+        if (zn /= nodata) then
+          drop := f64(z4) - f64(zn)
+          if (drop > 0.0) then
+            slope := drop / diag
+            if (slope > bestSlope) then
+              bestSlope := slope
+              bestBit := 32
+            end if
+          end if
+        end if
+
+        ! N (bit 6, code 64)
+        zn := dem[idx - w]
+        if (zn /= nodata) then
+          drop := f64(z4) - f64(zn)
+          if (drop > 0.0) then
+            slope := drop / cy
+            if (slope > bestSlope) then
+              bestSlope := slope
+              bestBit := 64
+            end if
+          end if
+        end if
+
+        ! NE (bit 7, code 128)
+        zn := dem[idx - w + 1]
+        if (zn /= nodata) then
+          drop := f64(z4) - f64(zn)
+          if (drop > 0.0) then
+            slope := drop / diag
+            if (slope > bestSlope) then
+              bestSlope := slope
+              bestBit := 128
+            end if
+          end if
+        end if
+
+        out[idx] := bestBit
+      end if
+    end for
+  end for
+end

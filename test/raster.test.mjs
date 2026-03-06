@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 const {
   instantiate, alloc, writeF32, readF32, growMemory,
   slope, aspect, hillshade, terrain, curvature, tri, tpi, roughness, contour,
+  flowDirection, fillSinks, flowAccumulation, watershed,
 } = await import('../ext/atra/lib/raster.js');
 
 const NODATA = -9999;
@@ -595,6 +596,257 @@ describe('curvature', () => {
     const idx = 3 * w + 3;
     assert.ok(isFinite(c.mean[idx]), 'mean curvature should be finite');
     assert.ok(c.mean[idx] < 0, 'bowl should still be negative');
+  });
+});
+
+// ── fillSinks tests ──
+
+describe('fillSinks', () => {
+  it('flat grid unchanged', () => {
+    const data = makeFlat(5, 5, 100);
+    const out = fillSinks(data, 5, 5);
+    for (let i = 0; i < 25; i++) assert.ok(approxEqual(out[i], 100, 0.001));
+  });
+
+  it('single pit filled', () => {
+    const data = makeFlat(5, 5, 100);
+    data[2 * 5 + 2] = 50; // pit in center
+    const out = fillSinks(data, 5, 5);
+    // pit should be raised to at least edge elevation (minus some epsilon accumulation)
+    assert.ok(out[2 * 5 + 2] >= 99, `pit should be filled, got ${out[2 * 5 + 2]}`);
+  });
+
+  it('multi-cell depression', () => {
+    const data = makeFlat(7, 7, 100);
+    // dig a 3x3 depression in center
+    for (let r = 2; r <= 4; r++)
+      for (let c = 2; c <= 4; c++)
+        data[r * 7 + c] = 50;
+    const out = fillSinks(data, 7, 7);
+    for (let r = 2; r <= 4; r++)
+      for (let c = 2; c <= 4; c++)
+        assert.ok(out[r * 7 + c] >= 99, `depression cell (${r},${c}) should be filled, got ${out[r * 7 + c]}`);
+  });
+
+  it('input unmodified', () => {
+    const data = makeFlat(5, 5, 100);
+    data[2 * 5 + 2] = 50;
+    const orig = data[2 * 5 + 2];
+    fillSinks(data, 5, 5);
+    assert.equal(data[2 * 5 + 2], orig);
+  });
+
+  it('nodata preserved', () => {
+    const data = makeFlat(5, 5, 100);
+    data[2 * 5 + 2] = NODATA;
+    const out = fillSinks(data, 5, 5);
+    assert.equal(out[2 * 5 + 2], NODATA);
+  });
+
+  it('monotonic epsilon gradient across filled flat', () => {
+    // A larger pit that gets filled — verify epsilon creates monotonic gradient
+    const w = 7, h = 7;
+    const data = makeFlat(w, h, 100);
+    // dig a deeper pit so center is well below pour point
+    for (let r = 2; r <= 4; r++)
+      for (let c = 2; c <= 4; c++)
+        data[r * w + c] = 10;
+    const out = fillSinks(data, w, h);
+    // center of pit should be strictly less than its neighbors (epsilon gradient)
+    const center = out[3 * w + 3];
+    const neighbor = out[3 * w + 4]; // east neighbor, also in filled area
+    // both are filled but center was reached after neighbor in BFS from edges,
+    // so center >= neighbor + eps (monotonically increasing inward)
+    assert.ok(center > neighbor || approxEqual(center, neighbor, 1e-3),
+      `center=${center} should be >= neighbor=${neighbor} (monotonic fill)`);
+  });
+});
+
+// ── flowDirection tests ──
+
+describe('flowDirection', () => {
+  it('uniform south slope → code 4 (S)', () => {
+    // elevation decreases going south → flow direction is south
+    const w = 5, h = 5;
+    const data = new Float32Array(w * h);
+    for (let r = 0; r < h; r++)
+      for (let c = 0; c < w; c++)
+        data[r * w + c] = (h - 1 - r) * 10; // row 0 = 40, row 4 = 0
+    const fdir = flowDirection(data, w, h, 30);
+    // interior cells should point south (code 4)
+    for (let r = 1; r < h - 1; r++)
+      for (let c = 1; c < w - 1; c++)
+        assert.equal(fdir[r * w + c], 4, `expected S(4) at (${r},${c}), got ${fdir[r * w + c]}`);
+  });
+
+  it('uniform east slope → code 1 (E)', () => {
+    const w = 5, h = 5;
+    const data = new Float32Array(w * h);
+    for (let r = 0; r < h; r++)
+      for (let c = 0; c < w; c++)
+        data[r * w + c] = (w - 1 - c) * 10; // col 0 = 40, col 4 = 0
+    const fdir = flowDirection(data, w, h, 30);
+    for (let r = 1; r < h - 1; r++)
+      for (let c = 1; c < w - 1; c++)
+        assert.equal(fdir[r * w + c], 1, `expected E(1) at (${r},${c}), got ${fdir[r * w + c]}`);
+  });
+
+  it('flat grid → 0 (sink)', () => {
+    const data = makeFlat(5, 5, 100);
+    const fdir = flowDirection(data, 5, 5, 30);
+    for (let r = 1; r < 4; r++)
+      for (let c = 1; c < 4; c++)
+        assert.equal(fdir[r * 5 + c], 0, `flat should be sink(0) at (${r},${c})`);
+  });
+
+  it('returns Uint8Array', () => {
+    const data = makeFlat(5, 5, 100);
+    const fdir = flowDirection(data, 5, 5, 30);
+    assert.ok(fdir instanceof Uint8Array);
+  });
+
+  it('nodata center → 0', () => {
+    const data = makeFlat(5, 5, 100);
+    data[2 * 5 + 2] = NODATA;
+    const fdir = flowDirection(data, 5, 5, 30);
+    assert.equal(fdir[2 * 5 + 2], 0);
+  });
+
+  it('border → 0', () => {
+    const data = makeNorthFacingPlane(5, 5, 10);
+    const fdir = flowDirection(data, 5, 5, 30);
+    for (let c = 0; c < 5; c++) {
+      assert.equal(fdir[c], 0, `top border should be 0`);
+      assert.equal(fdir[4 * 5 + c], 0, `bottom border should be 0`);
+    }
+    for (let r = 0; r < 5; r++) {
+      assert.equal(fdir[r * 5], 0, `left border should be 0`);
+      assert.equal(fdir[r * 5 + 4], 0, `right border should be 0`);
+    }
+  });
+});
+
+// ── flowAccumulation tests ──
+
+describe('flowAccumulation', () => {
+  it('uniform south slope → linear increase', () => {
+    const w = 5, h = 5;
+    // All interior cells point south (code 4)
+    const fdir = new Uint8Array(w * h);
+    for (let r = 1; r < h - 1; r++)
+      for (let c = 1; c < w - 1; c++)
+        fdir[r * w + c] = 4;
+    const acc = flowAccumulation(fdir, w, h);
+    // row 1 interior cells should have acc=1 (headwaters)
+    for (let c = 1; c < w - 1; c++)
+      assert.ok(approxEqual(acc[1 * w + c], 1), `headwater should be 1, got ${acc[1 * w + c]}`);
+    // row 2 interior cells should have acc=2
+    for (let c = 1; c < w - 1; c++)
+      assert.ok(approxEqual(acc[2 * w + c], 2), `row 2 should be 2, got ${acc[2 * w + c]}`);
+    // row 3 interior cells should have acc=3
+    for (let c = 1; c < w - 1; c++)
+      assert.ok(approxEqual(acc[3 * w + c], 3), `row 3 should be 3, got ${acc[3 * w + c]}`);
+  });
+
+  it('headwaters = 1', () => {
+    const fdir = new Uint8Array(25);
+    const acc = flowAccumulation(fdir, 5, 5);
+    for (let i = 0; i < 25; i++)
+      assert.ok(approxEqual(acc[i], 1), `all cells should be 1 (no flow), got ${acc[i]}`);
+  });
+
+  it('returns Float32Array', () => {
+    const fdir = new Uint8Array(25);
+    const acc = flowAccumulation(fdir, 5, 5);
+    assert.ok(acc instanceof Float32Array);
+  });
+});
+
+// ── watershed tests ──
+
+describe('watershed', () => {
+  it('single seed labels all upstream cells', () => {
+    const w = 5, h = 5;
+    // All interior cells point south
+    const fdir = new Uint8Array(w * h);
+    for (let r = 1; r < h - 1; r++)
+      for (let c = 1; c < w - 1; c++)
+        fdir[r * w + c] = 4;
+    // seed at bottom interior (row 3, col 2)
+    const labels = watershed(fdir, w, h, [[2, 3]]);
+    assert.ok(labels instanceof Int32Array);
+    // The seed itself
+    assert.equal(labels[3 * w + 2], 1);
+    // upstream: row 2 col 2 flows S into row 3 col 2
+    assert.equal(labels[2 * w + 2], 1);
+    // upstream: row 1 col 2 flows S into row 2 col 2
+    assert.equal(labels[1 * w + 2], 1);
+  });
+
+  it('two basins correct', () => {
+    const w = 7, h = 5;
+    // Left half flows east (code 1), right half flows west (code 16)
+    // Meeting in the middle at col 3
+    const fdir = new Uint8Array(w * h);
+    for (let r = 1; r < h - 1; r++) {
+      for (let c = 1; c < w - 1; c++) {
+        if (c < 3) fdir[r * w + c] = 1;       // E
+        else if (c > 3) fdir[r * w + c] = 16;  // W
+        else fdir[r * w + c] = 0;               // col 3 = sink
+      }
+    }
+    // Two seeds at col 3, different rows
+    const labels = watershed(fdir, w, h, [[3, 1], [3, 3]]);
+    // Cells flowing east toward col 3, row 1 should be basin 1
+    assert.equal(labels[1 * w + 2], 1); // flows E into seed 1 at (3,1)
+    assert.equal(labels[1 * w + 1], 1); // flows E into (2,1) which flows E into seed 1
+    // Cells flowing west toward col 3, row 3 should be basin 2
+    assert.equal(labels[3 * w + 4], 2); // flows W into seed 2 at (3,3)
+  });
+
+  it('returns Int32Array', () => {
+    const fdir = new Uint8Array(25);
+    const labels = watershed(fdir, 5, 5, [[2, 2]]);
+    assert.ok(labels instanceof Int32Array);
+  });
+});
+
+// ── integration: full hydrology pipeline ──
+
+describe('hydrology pipeline', () => {
+  it('fillSinks → flowDirection → flowAccumulation → watershed', () => {
+    // Two-basin terrain: V-shaped valleys on left and right halves
+    const w = 11, h = 11;
+    const data = new Float32Array(w * h);
+    for (let r = 0; r < h; r++) {
+      for (let c = 0; c < w; c++) {
+        // two basins separated by ridge at col 5
+        // left basin: elevation = |c - 2| + |r - 5| (valley at col 2, row 5)
+        // right basin: elevation = |c - 8| + |r - 5| (valley at col 8, row 5)
+        const leftDist = Math.abs(c - 2) + Math.abs(r - 5);
+        const rightDist = Math.abs(c - 8) + Math.abs(r - 5);
+        data[r * w + c] = Math.min(leftDist, rightDist) * 10 + 50;
+      }
+    }
+    // Add a ridge at col 5 to separate basins
+    for (let r = 0; r < h; r++) data[r * w + 5] = 200;
+
+    const filled = fillSinks(data, w, h);
+    assert.ok(filled instanceof Float32Array);
+    assert.equal(filled.length, w * h);
+
+    const fdir = flowDirection(filled, w, h, 30);
+    assert.ok(fdir instanceof Uint8Array);
+
+    const acc = flowAccumulation(fdir, w, h);
+    assert.ok(acc instanceof Float32Array);
+    // accumulation should be >= 1 everywhere
+    for (let i = 0; i < w * h; i++)
+      assert.ok(acc[i] >= 1, `acc should be >= 1, got ${acc[i]} at ${i}`);
+
+    // watershed from the two valley bottoms
+    const labels = watershed(fdir, w, h, [[2, 5], [8, 5]]);
+    assert.ok(labels instanceof Int32Array);
   });
 });
 

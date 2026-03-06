@@ -1,0 +1,334 @@
+/// auditable
+/// title: raster — hydrology
+/// module: @atra/raster ext/atra/lib/raster.js
+
+/// md
+# raster — hydrology from Wasm kernels
+
+Drainage analysis on procedurally generated terrain. The pipeline: **fill sinks** (priority-flood) → **flow direction** (D8, Wasm kernel) → **flow accumulation** (topological BFS) → **watershed delineation** (upstream BFS). Drag the seed points to re-delineate basins in real time.
+
+/// code
+const raster = await load("@atra/raster");
+
+/// code collapsed
+// %manual
+// multi-octave diamond-square terrain generator
+function diamondSquare(n, roughness, seed) {
+  const size = (1 << n) + 1;
+  const grid = new Float32Array(size * size);
+  let s = seed | 0;
+  function rng() {
+    s = s + 0x6D2B79F5 | 0;
+    let t = Math.imul(s ^ s >>> 15, 1 | s);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296 - 0.5;
+  }
+  const g = (r, c) => grid[r * size + c];
+  const p = (r, c, v) => { grid[r * size + c] = v; };
+  p(0, 0, rng()); p(0, size - 1, rng());
+  p(size - 1, 0, rng()); p(size - 1, size - 1, rng());
+  for (let step = size - 1; step >= 2; step >>= 1) {
+    const half = step >> 1, scale = roughness * step;
+    for (let r = half; r < size; r += step)
+      for (let c = half; c < size; c += step)
+        p(r, c, (g(r-half,c-half)+g(r-half,c+half)+g(r+half,c-half)+g(r+half,c+half))/4 + rng()*scale);
+    for (let r = 0; r < size; r += half) {
+      for (let c = ((r/half)%2===0 ? half : 0); c < size; c += step) {
+        let sum = 0, cnt = 0;
+        if (r >= half) { sum += g(r-half,c); cnt++; }
+        if (r+half < size) { sum += g(r+half,c); cnt++; }
+        if (c >= half) { sum += g(r,c-half); cnt++; }
+        if (c+half < size) { sum += g(r,c+half); cnt++; }
+        p(r, c, sum/cnt + rng()*scale);
+      }
+    }
+  }
+  let mn = Infinity, mx = -Infinity;
+  for (let i = 0; i < grid.length; i++) { if (grid[i] < mn) mn = grid[i]; if (grid[i] > mx) mx = grid[i]; }
+  const rg = mx - mn || 1;
+  for (let i = 0; i < grid.length; i++) grid[i] = (grid[i] - mn) / rg;
+  return { grid, size };
+}
+
+// build terrain: multi-octave fractal with regional slope
+const N = 8; // 257\u00d7257
+const o1 = diamondSquare(N, 0.7, 42);
+const o2 = diamondSquare(N, 1.0, 1337);
+const o3 = diamondSquare(N, 1.5, 7777);
+const W = o1.size, H = W;
+const dem = new Float32Array(W * H);
+for (let r = 0; r < H; r++) {
+  for (let c = 0; c < W; c++) {
+    const i = r * W + c;
+    let h = o1.grid[i] * 2000 + o2.grid[i] * 600 + o3.grid[i] * 150;
+    h = 100 + h * (0.5 + 0.5 * o1.grid[i]);
+    // regional slope: high in NW, low in SE
+    const nr = r / (H - 1), nc = c / (W - 1);
+    h += (1 - (nr + nc) / 2) * 600;
+    dem[i] = h;
+  }
+}
+const cellSize = 30;
+
+/// code
+// %manual
+// hydrology pipeline
+const t0 = performance.now();
+const filled = raster.fillSinks(dem, W, H);
+const tFill = performance.now();
+const fdir = raster.flowDirection(filled, W, H, cellSize);
+const tDir = performance.now();
+const acc = raster.flowAccumulation(fdir, W, H);
+const tAcc = performance.now();
+
+// log-scale accumulation for visualization
+const logAcc = new Float32Array(acc.length);
+for (let i = 0; i < acc.length; i++) logAcc[i] = Math.log(acc[i] + 1);
+
+ui.display(`fill: ${(tFill - t0).toFixed(1)} ms \u00b7 D8: ${(tDir - tFill).toFixed(1)} ms \u00b7 accumulation: ${(tAcc - tDir).toFixed(1)} ms \u00b7 ${W}\u00d7${H} = ${(W * H / 1000).toFixed(0)}k cells`);
+
+/// code
+// %manual
+// render helpers
+const NODATA = -9999;
+const canvasSize = Math.min(500, window.innerWidth - 80);
+
+function renderGrid(grid, colorFn) {
+  const canvas = ui.canvas(canvasSize, canvasSize);
+  const ctx = canvas.getContext("2d");
+  const off = new OffscreenCanvas(W, H);
+  const octx = off.getContext("2d");
+  const img = octx.createImageData(W, H);
+  let mn = Infinity, mx = -Infinity;
+  for (let i = 0; i < grid.length; i++) {
+    if (grid[i] === NODATA || !isFinite(grid[i])) continue;
+    if (grid[i] < mn) mn = grid[i]; if (grid[i] > mx) mx = grid[i];
+  }
+  const rng = mx - mn || 1;
+  for (let i = 0; i < grid.length; i++) {
+    const idx = i * 4;
+    const t = (grid[i] - mn) / rng;
+    const [r, g, b] = colorFn(t, grid[i]);
+    img.data[idx] = r; img.data[idx+1] = g; img.data[idx+2] = b; img.data[idx+3] = 255;
+  }
+  octx.putImageData(img, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(off, 0, 0, canvasSize, canvasSize);
+  return { canvas, ctx };
+}
+
+function parseRGB(cssColor) {
+  const m = cssColor.match(/\d+/g);
+  return [+m[0], +m[1], +m[2]];
+}
+
+/// code
+// %manual
+// hillshade + stream network overlay
+const hs = raster.hillshade(dem, W, H, cellSize, { azimuth: 315, altitude: 45 });
+const { canvas: hsCanvas, ctx: hsCtx } = renderGrid(hs, (t) => {
+  const v = Math.round(t * 255);
+  return [v, v, v];
+});
+
+// overlay stream network — draw as vector lines with width proportional to accumulation
+// D8 direction offsets: bit 0=E, 1=SE, 2=S, 3=SW, 4=W, 5=NW, 6=N, 7=NE
+const D8_DC = [1, 1, 0, -1, -1, -1, 0, 1];
+const D8_DR = [0, 1, 1, 1, 0, -1, -1, -1];
+const D8_BIT = new Uint8Array(129);
+for (let b = 0; b < 8; b++) D8_BIT[1 << b] = b;
+
+const maxAcc = acc.reduce((a, b) => Math.max(a, b), 0);
+const logMax = Math.log(maxAcc);
+const streamThresh = 20; // minimum accumulation to draw
+const scale = canvasSize / W;
+
+// collect stream segments sorted by accumulation so thicker ones draw on top
+const streams = [];
+for (let r = 1; r < H - 1; r++) {
+  for (let c = 1; c < W - 1; c++) {
+    const i = r * W + c;
+    if (acc[i] < streamThresh) continue;
+    const code = fdir[i];
+    if (code === 0) continue;
+    const b = D8_BIT[code];
+    const nr = r + D8_DR[b], nc = c + D8_DC[b];
+    if (nr < 0 || nr >= H || nc < 0 || nc >= W) continue;
+    streams.push([c, r, nc, nr, acc[i]]);
+  }
+}
+streams.sort((a, b) => a[4] - b[4]);
+
+for (const [c1, r1, c2, r2, a] of streams) {
+  const t = Math.log(a) / logMax;
+  const lw = 0.5 + t * 3.5; // line width: 0.5px headwater to 4px trunk
+  hsCtx.strokeStyle = `rgba(80,180,255,${0.5 + t * 0.5})`;
+  hsCtx.lineWidth = lw;
+  hsCtx.beginPath();
+  hsCtx.moveTo((c1 + 0.5) * scale, (r1 + 0.5) * scale);
+  hsCtx.lineTo((c2 + 0.5) * scale, (r2 + 0.5) * scale);
+  hsCtx.stroke();
+}
+ui.display("hillshade + stream network (acc > 20 cells)");
+
+/// code
+// %manual
+// flow accumulation — log scale
+renderGrid(logAcc, (t) => parseRGB(std.plasma(t)));
+ui.display("flow accumulation (log scale)");
+
+/// code
+// %manual
+// interactive watershed delineation
+const wsCanvas = ui.canvas(canvasSize, canvasSize);
+const wsCtx = wsCanvas.getContext("2d");
+const statusEl = document.createElement("div");
+ui.display(statusEl);
+
+// basin colors — distinct hues
+const basinColors = [
+  [200, 155, 60],   // amber
+  [60, 160, 220],   // blue
+  [180, 80, 180],   // purple
+  [80, 200, 120],   // green
+  [220, 100, 80],   // red
+  [100, 200, 200],  // teal
+  [220, 180, 60],   // gold
+  [160, 100, 220],  // violet
+];
+
+// find edge outlet cells — border cells that receive flow from interior.
+// these are the natural pour points where drainage exits the grid.
+const edgeOutlets = [];
+for (let r = 0; r < H; r++) {
+  for (let c = 0; c < W; c++) {
+    if (r > 0 && r < H - 1 && c > 0 && c < W - 1) continue; // skip interior
+    const i = r * W + c;
+    if (acc[i] > 1) edgeOutlets.push({ c, r, acc: acc[i] });
+  }
+}
+// sort by accumulation descending, take top outlets as seeds
+edgeOutlets.sort((a, b) => b.acc - a.acc);
+// merge nearby outlets (within 10 cells) to avoid duplicate basins
+const merged = [];
+for (const o of edgeOutlets) {
+  let tooClose = false;
+  for (const m of merged) {
+    if (Math.abs(o.c - m.c) + Math.abs(o.r - m.r) < 10) { tooClose = true; break; }
+  }
+  if (!tooClose) merged.push(o);
+  if (merged.length >= 8) break;
+}
+let seeds = merged.map(o => [o.c, o.r]);
+
+let dragIdx = -1;
+
+function renderWatershed() {
+  const t0 = performance.now();
+  const labels = raster.watershed(fdir, W, H, seeds);
+  const elapsed = (performance.now() - t0).toFixed(1);
+
+  // count cells per basin
+  const counts = new Array(seeds.length).fill(0);
+  for (let i = 0; i < labels.length; i++) {
+    if (labels[i] > 0) counts[labels[i] - 1]++;
+  }
+
+  const off = new OffscreenCanvas(W, H);
+  const octx = off.getContext("2d");
+  const img = octx.createImageData(W, H);
+
+  // hillshade base
+  const hsGrid = raster.hillshade(filled, W, H, cellSize);
+  let mn = Infinity, mx = -Infinity;
+  for (let i = 0; i < hsGrid.length; i++) {
+    if (hsGrid[i] !== NODATA) { if (hsGrid[i] < mn) mn = hsGrid[i]; if (hsGrid[i] > mx) mx = hsGrid[i]; }
+  }
+  const rng = mx - mn || 1;
+
+  for (let i = 0; i < W * H; i++) {
+    const idx = i * 4;
+    const hsVal = (hsGrid[i] - mn) / rng;
+    const lbl = labels[i];
+    if (lbl > 0) {
+      const col = basinColors[(lbl - 1) % basinColors.length];
+      // blend: basin color tinted by hillshade
+      const brightness = 0.3 + 0.7 * hsVal;
+      img.data[idx]     = Math.round(col[0] * brightness);
+      img.data[idx + 1] = Math.round(col[1] * brightness);
+      img.data[idx + 2] = Math.round(col[2] * brightness);
+    } else {
+      const v = Math.round(hsVal * 180);
+      img.data[idx] = v; img.data[idx+1] = v; img.data[idx+2] = v;
+    }
+    img.data[idx + 3] = 255;
+  }
+
+  octx.putImageData(img, 0, 0);
+  wsCtx.imageSmoothingEnabled = false;
+  wsCtx.drawImage(off, 0, 0, canvasSize, canvasSize);
+
+  // draw seed markers
+  const scale = canvasSize / W;
+  for (let s = 0; s < seeds.length; s++) {
+    const [sc, sr] = seeds[s];
+    const x = (sc + 0.5) * scale, y = (sr + 0.5) * scale;
+    const col = basinColors[s % basinColors.length];
+    wsCtx.beginPath();
+    wsCtx.arc(x, y, 6, 0, 2 * Math.PI);
+    wsCtx.fillStyle = `rgb(${col[0]},${col[1]},${col[2]})`;
+    wsCtx.fill();
+    wsCtx.strokeStyle = "#fff";
+    wsCtx.lineWidth = 2;
+    wsCtx.stroke();
+  }
+
+  const labeled = counts.reduce((a, b) => a + b, 0);
+  const pct = (labeled / (W * H) * 100).toFixed(0);
+  let info = seeds.map((_, i) => `${counts[i]}`).join(", ");
+  statusEl.textContent = `watershed: ${elapsed} ms \u00b7 ${seeds.length} basins \u00b7 ${pct}% covered \u00b7 cells: ${info}`;
+}
+
+// drag interaction
+wsCanvas.addEventListener("pointerdown", e => {
+  const rect = wsCanvas.getBoundingClientRect();
+  const scale = W / canvasSize;
+  const mc = Math.round((e.clientX - rect.left) * scale);
+  const mr = Math.round((e.clientY - rect.top) * scale);
+  let best = -1, bestDist = 15 * scale;
+  for (let s = 0; s < seeds.length; s++) {
+    const d = Math.abs(seeds[s][0] - mc) + Math.abs(seeds[s][1] - mr);
+    if (d < bestDist) { bestDist = d; best = s; }
+  }
+  if (best >= 0) {
+    dragIdx = best;
+    wsCanvas.setPointerCapture(e.pointerId);
+  }
+});
+
+wsCanvas.addEventListener("pointermove", e => {
+  if (dragIdx < 0) return;
+  const rect = wsCanvas.getBoundingClientRect();
+  const scale = W / canvasSize;
+  const mc = Math.max(0, Math.min(W - 1, Math.round((e.clientX - rect.left) * scale)));
+  const mr = Math.max(0, Math.min(H - 1, Math.round((e.clientY - rect.top) * scale)));
+  seeds[dragIdx] = [mc, mr];
+  renderWatershed();
+});
+
+wsCanvas.addEventListener("pointerup", () => { dragIdx = -1; });
+
+renderWatershed();
+
+/// md
+**How it works:** The terrain is a 257×257 multi-octave diamond-square fractal with a regional NW→SE slope. The hydrology pipeline runs four stages:
+
+1. **Fill sinks** — priority-flood (Barnes et al. 2014) with ε increment. Raises depressions to their pour point so every cell can drain to an edge. Uses a binary min-heap on typed arrays.
+
+2. **Flow direction** — D8 algorithm as an atra Wasm kernel. Each interior pixel examines its 8 neighbors, computes slope = drop/distance (diagonal × √2), and picks the steepest downhill neighbor. Output is a power-of-2 code (1=E, 2=SE, 4=S, ..., 128=NE) or 0 for sinks.
+
+3. **Flow accumulation** — topological-sort BFS in JS. Counts how many upstream cells flow into each cell. Headwaters = 1; outlets accumulate thousands.
+
+4. **Watershed delineation** — upstream BFS from seed points at edge outlets (border cells where drainage exits the grid). The top outlets by accumulation are auto-selected, producing major drainage basins that tile the terrain. Drag the colored markers to move pour points and watch basins re-delineate in real time.
+
+Stream network extraction is a simple threshold on accumulation — cells with more than 20 upstream cells are drawn as streams, with line width proportional to log accumulation.
