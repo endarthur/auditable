@@ -86,6 +86,85 @@ function stripCommentsAndStrings(code) {
   return out;
 }
 
+function findMatchingBracket(str, start) {
+  let depth = 1;
+  for (let i = start + 1; i < str.length; i++) {
+    if (str[i] === '{' || str[i] === '[') depth++;
+    else if (str[i] === '}' || str[i] === ']') {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+function extractDestructuredNames(pattern, names) {
+  let i = 0;
+  while (i < pattern.length) {
+    if (/[\s,]/.test(pattern[i])) { i++; continue; }
+
+    // rest element: ...name
+    if (pattern[i] === '.' && pattern[i + 1] === '.' && pattern[i + 2] === '.') {
+      i += 3;
+      const m = pattern.slice(i).match(/^(\w+)/);
+      if (m) { names.add(m[1]); i += m[1].length; }
+      continue;
+    }
+
+    // nested destructuring at top level: { ... } or [ ... ]
+    if (pattern[i] === '{' || pattern[i] === '[') {
+      const close = findMatchingBracket(pattern, i);
+      if (close > 0) {
+        extractDestructuredNames(pattern.slice(i + 1, close), names);
+        i = close + 1;
+      } else { i++; }
+      continue;
+    }
+
+    // identifier
+    const m = pattern.slice(i).match(/^(\w+)/);
+    if (m) {
+      i += m[1].length;
+      // skip whitespace
+      while (i < pattern.length && /\s/.test(pattern[i])) i++;
+      if (pattern[i] === ':') {
+        // rename or nested pattern
+        i++;
+        while (i < pattern.length && /\s/.test(pattern[i])) i++;
+        if (pattern[i] === '{' || pattern[i] === '[') {
+          // nested destructuring: a: { b, c }
+          const close = findMatchingBracket(pattern, i);
+          if (close > 0) {
+            extractDestructuredNames(pattern.slice(i + 1, close), names);
+            i = close + 1;
+          }
+        } else {
+          // rename: a: x — x is the binding
+          const rm = pattern.slice(i).match(/^(\w+)/);
+          if (rm) { names.add(rm[1]); i += rm[1].length; }
+        }
+      } else {
+        // plain identifier — this is the binding
+        names.add(m[1]);
+      }
+      // skip = default value expression
+      while (i < pattern.length && /\s/.test(pattern[i])) i++;
+      if (pattern[i] === '=') {
+        i++;
+        let d = 0;
+        while (i < pattern.length) {
+          if (pattern[i] === '{' || pattern[i] === '[' || pattern[i] === '(') d++;
+          else if (pattern[i] === '}' || pattern[i] === ']' || pattern[i] === ')') d--;
+          else if (pattern[i] === ',' && d === 0) break;
+          i++;
+        }
+      }
+      continue;
+    }
+    i++;
+  }
+}
+
 export function parseNames(code) {
   // extract ONLY top-level variable definitions (brace depth 0)
   const defines = new Set();
@@ -136,18 +215,12 @@ export function parseNames(code) {
       // destructuring: const { a, b } = ... or const [ a, b ] = ...
       const destruct = rest.match(/^(?:const|let|var)\s*[\{\[]/);
       if (destruct) {
-        // find the closing } or ] then extract identifiers
-        const opener = rest[destruct[0].length - 1];
-        const closer = opener === '{' ? '}' : ']';
-        const closeIdx = rest.indexOf(closer, destruct[0].length);
+        const openIdx = destruct[0].length - 1;
+        const closeIdx = findMatchingBracket(rest, openIdx);
         if (closeIdx > 0) {
-          const inner = rest.slice(destruct[0].length, closeIdx);
-          // split on commas, take last word of each part (handles renaming)
-          inner.split(',').forEach(part => {
-            const parts = part.trim().split(/\s*:\s*/);
-            const name = (parts.length > 1 ? parts[1] : parts[0]).trim().match(/^\w+/);
-            if (name) defines.add(name[0]);
-          });
+          const inner = rest.slice(openIdx + 1, closeIdx);
+          extractDestructuredNames(inner, defines);
+          // skip past the closing bracket (and let main loop handle the rest)
           i += closeIdx + 1;
           continue;
         }
