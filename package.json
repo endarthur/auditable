@@ -7,6 +7,7 @@
   "scripts": {
     "build": "node build.js",
     "build:af": "node build.js && node build.js --target=af",
+    "build:gcu-press": "node ext/gcu-press/build.js && node build.js --target=gcu-press",
     "test": "node --no-warnings --test"
   },
   "devDependencies": {

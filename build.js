@@ -181,6 +181,64 @@ ${js}
 }
 
 // ══════════════════════════════════════════════════
+// TARGET: gcu-press
+// ══════════════════════════════════════════════════
+
+if (target === 'gcu-press') {
+  const toolDir = path.join(__dirname, 'tools', 'gcu-press');
+  const toolJsDir = path.join(toolDir, 'js');
+
+  // 1. Process tool modules
+  let toolJs = processModules(path.join(toolJsDir, 'main.js'), toolJsDir);
+
+  // 2. Prepend dependencies: CM6 + gcu-press engine
+  const cm6Path = path.join(__dirname, 'ext/cm6/cm6.min.js');
+  const enginePath = path.join(__dirname, 'ext/gcu-press/index.js');
+
+  let deps = '';
+  if (fs.existsSync(cm6Path)) deps += fs.readFileSync(cm6Path, 'utf8') + '\n\n';
+  if (fs.existsSync(enginePath)) deps += fs.readFileSync(enginePath, 'utf8') + '\n\n';
+
+  const js = deps + toolJs;
+
+  // 3. Read CSS and template
+  const toolCss = fs.readFileSync(path.join(toolDir, 'style.css'), 'utf8');
+  const toolTemplate = fs.readFileSync(path.join(toolDir, 'template.html'), 'utf8');
+
+  // 4. Assemble
+  const html = `<!DOCTYPE html>
+<!-- GCU Press \u2014 typesetting editor -->
+<!-- Part of the Auditable project \u2014 https://github.com/endarthur/auditable -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#c89b3c">
+<title>GCU Press</title>
+<style>
+${toolCss}
+</style>
+</head>
+<body>
+
+${toolTemplate}
+
+<script>
+${js}
+</script>
+</body>
+</html>
+`;
+
+  const outPath = path.join(toolDir, 'index.html');
+  fs.writeFileSync(outPath, html);
+  const size = fs.statSync(outPath).size;
+  console.log(`Built tools/gcu-press/index.html (${(size / 1024).toFixed(1)} KB)`);
+  process.exit(0);
+}
+
+// ══════════════════════════════════════════════════
 // TARGET: scan
 // ══════════════════════════════════════════════════
 

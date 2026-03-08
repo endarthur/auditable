@@ -1,0 +1,10 @@
+{
+  "name": "GCU Press",
+  "short_name": "Press",
+  "description": "Typesetting editor \u2014 write markdown, see beautifully typeset pages",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#c89b3c",
+  "icons": []
+}
