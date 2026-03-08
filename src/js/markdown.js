@@ -18,8 +18,11 @@ export function renderMd(src) {
   // inline code
   html = html.replace(/`(.+?)`/g, '<code>$1</code>');
 
-  // links
-  html = html.replace(/\[(.+?)\]\((.+?)\)/g, '<a href="$2">$1</a>');
+  // links (reject dangerous URI schemes)
+  html = html.replace(/\[(.+?)\]\((.+?)\)/g, (m, text, url) => {
+    if (/^\s*(javascript|data|vbscript)\s*:/i.test(url)) return text;
+    return `<a href="${url}">${text}</a>`;
+  });
 
   // tables — detect pipe-delimited blocks before paragraph wrapping
   html = html.replace(

@@ -5,7 +5,7 @@ a reactive computational notebook that fits in a single HTML file.
 no build step. no server. no dependencies. open the file, write code, save. the HTML *is* the document, the runtime, and the lockfile.
 
 ```
-auditable.html  ~802KB
+auditable.html    — smaller than a floppy disk
 ```
 
 ## what it does

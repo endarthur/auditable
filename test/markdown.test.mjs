@@ -73,4 +73,30 @@ describe('renderMd', () => {
     const result = renderMd('a | b');
     assert.ok(!result.includes('<table>'));
   });
+
+  it('rejects javascript: URIs in links', () => {
+    const result = renderMd('[click](javascript:alert("xss"))');
+    assert.ok(!result.includes('href'));
+    assert.ok(result.includes('click'));
+  });
+
+  it('rejects data: URIs in links', () => {
+    const result = renderMd('[click](data:text/html,<img>)');
+    assert.ok(!result.includes('href'));
+  });
+
+  it('rejects vbscript: URIs in links', () => {
+    const result = renderMd('[click](vbscript:msgbox)');
+    assert.ok(!result.includes('href'));
+  });
+
+  it('allows normal URLs in links', () => {
+    const result = renderMd('[site](https://example.com)');
+    assert.ok(result.includes('href="https://example.com"'));
+  });
+
+  it('allows relative URLs in links', () => {
+    const result = renderMd('[page](./other.html)');
+    assert.ok(result.includes('href="./other.html"'));
+  });
 });

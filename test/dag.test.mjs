@@ -200,6 +200,84 @@ describe('parseNames', () => {
     assert.ok(defines.has('W'));
     assert.ok(defines.has('H'));
   });
+
+  // ── nested destructuring ──
+
+  it('nested object destructuring', () => {
+    const { defines } = parseNames('const { a: { b } } = obj;');
+    assert.ok(defines.has('b'));
+    assert.ok(!defines.has('a'));
+    assert.strictEqual(defines.size, 1);
+  });
+
+  it('deeply nested object destructuring', () => {
+    const { defines } = parseNames('const { a: { b: { c } } } = obj;');
+    assert.ok(defines.has('c'));
+    assert.ok(!defines.has('a'));
+    assert.ok(!defines.has('b'));
+    assert.strictEqual(defines.size, 1);
+  });
+
+  it('mixed object-array destructuring', () => {
+    const { defines } = parseNames('const { x: [a, b] } = obj;');
+    assert.ok(defines.has('a'));
+    assert.ok(defines.has('b'));
+    assert.ok(!defines.has('x'));
+    assert.strictEqual(defines.size, 2);
+  });
+
+  it('array with nested object destructuring', () => {
+    const { defines } = parseNames('const [x, { a: y }] = arr;');
+    assert.ok(defines.has('x'));
+    assert.ok(defines.has('y'));
+    assert.ok(!defines.has('a'));
+    assert.strictEqual(defines.size, 2);
+  });
+
+  it('rest element in destructuring', () => {
+    const { defines } = parseNames('const { a, ...rest } = obj;');
+    assert.ok(defines.has('a'));
+    assert.ok(defines.has('rest'));
+    assert.strictEqual(defines.size, 2);
+  });
+
+  it('nested rest element', () => {
+    const { defines } = parseNames('const { a: { ...rest } } = obj;');
+    assert.ok(defines.has('rest'));
+    assert.ok(!defines.has('a'));
+    assert.strictEqual(defines.size, 1);
+  });
+
+  it('destructuring with default values', () => {
+    const { defines } = parseNames('const { a = 1, b = 2 } = obj;');
+    assert.ok(defines.has('a'));
+    assert.ok(defines.has('b'));
+    assert.strictEqual(defines.size, 2);
+  });
+
+  it('nested destructuring with default', () => {
+    const { defines } = parseNames('const { a: { b = 5 } } = obj;');
+    assert.ok(defines.has('b'));
+    assert.ok(!defines.has('a'));
+    assert.strictEqual(defines.size, 1);
+  });
+
+  it('array rest element', () => {
+    const { defines } = parseNames('const [first, ...others] = arr;');
+    assert.ok(defines.has('first'));
+    assert.ok(defines.has('others'));
+    assert.strictEqual(defines.size, 2);
+  });
+
+  it('complex nested destructuring', () => {
+    const { defines } = parseNames('const { data: { rows: [head, ...tail], count } } = result;');
+    assert.ok(defines.has('head'));
+    assert.ok(defines.has('tail'));
+    assert.ok(defines.has('count'));
+    assert.ok(!defines.has('data'));
+    assert.ok(!defines.has('rows'));
+    assert.strictEqual(defines.size, 3);
+  });
 });
 
 // ── findUses ──
