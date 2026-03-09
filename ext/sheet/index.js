@@ -1,3 +1,4 @@
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: ext/sheet/src/  Build: node ext/sheet/build.js
 // @auditable/sheet — xlsx IO
 // Read and write xlsx files in the browser. Zero dependencies.
 

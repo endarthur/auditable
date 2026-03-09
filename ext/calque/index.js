@@ -1,3 +1,4 @@
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: ext/calque/src/  Build: node ext/calque/build.js
 // @auditable/calque — spreadsheet language
 // Minimal array-oriented language that compiles to xlsx.
 

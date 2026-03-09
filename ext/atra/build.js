@@ -45,7 +45,8 @@ for (const relPath of importPaths) {
   chunks.push(`// -- ${basename} --\n\n${src}`);
 }
 
-const header = '// @auditable/atra — Arithmetic TRAnspiler\n'
+const header = '// ⚠ GENERATED FILE — DO NOT EDIT. Source: ext/atra/src/  Build: node ext/atra/build.js\n'
+  + '// @auditable/atra — Arithmetic TRAnspiler\n'
   + '// Fortran/Pascal hybrid → WebAssembly bytecode. Single-file compiler.\n';
 
 const output = header + '\n' + chunks.join('\n\n') + '\n\nexport { atra };\n';

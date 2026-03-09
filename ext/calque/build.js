@@ -45,7 +45,8 @@ for (const relPath of importPaths) {
   chunks.push(`// -- ${basename} --\n\n${src}`);
 }
 
-const header = '// @auditable/calque \u2014 spreadsheet language\n'
+const header = '// \u26a0 GENERATED FILE \u2014 DO NOT EDIT. Source: ext/calque/src/  Build: node ext/calque/build.js\n'
+  + '// @auditable/calque \u2014 spreadsheet language\n'
   + '// Minimal array-oriented language that compiles to xlsx.\n';
 
 const output = header + '\n' + chunks.join('\n\n') + '\n\nexport { calque };\n';

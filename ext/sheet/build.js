@@ -45,7 +45,8 @@ for (const relPath of importPaths) {
   chunks.push(`// -- ${basename} --\n\n${src}`);
 }
 
-const header = '// @auditable/sheet \u2014 xlsx IO\n'
+const header = '// \u26a0 GENERATED FILE \u2014 DO NOT EDIT. Source: ext/sheet/src/  Build: node ext/sheet/build.js\n'
+  + '// @auditable/sheet \u2014 xlsx IO\n'
   + '// Read and write xlsx files in the browser. Zero dependencies.\n';
 
 const output = header + '\n' + chunks.join('\n\n') + '\n\nexport { sheet };\n';

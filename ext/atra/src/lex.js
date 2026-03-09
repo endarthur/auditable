@@ -32,6 +32,19 @@ export function lex(source) {
     if (/\d/.test(source[i]) || (source[i] === '.' && i + 1 < len && /\d/.test(source[i + 1]))) {
       const start = i;
       let isFloat = false;
+      // hex literal: 0x or 0X
+      if (source[i] === '0' && i + 1 < len && (source[i + 1] === 'x' || source[i + 1] === 'X')) {
+        adv(); adv(); // skip 0x
+        while (i < len && /[0-9a-fA-F]/.test(source[i])) adv();
+        let typeSuffix = null;
+        if (peek() === '_') {
+          const s = source.slice(i + 1, i + 4);
+          if (ATRA_TYPES.has(s)) { typeSuffix = s; adv(); adv(); adv(); adv(); }
+        }
+        const raw = source.slice(start, i);
+        tokens.push({ type: TOK.NUM, value: String(Number(raw)), isFloat: false, typeSuffix, line: tl, col: tc });
+        continue;
+      }
       while (i < len && /\d/.test(source[i])) adv();
       if (peek() === '.' && /\d/.test(source[i + 1] || '')) { isFloat = true; adv(); while (i < len && /\d/.test(source[i])) adv(); }
       if (/[eE]/.test(peek())) { isFloat = true; adv(); if (/[+-]/.test(peek())) adv(); while (i < len && /\d/.test(source[i])) adv(); }

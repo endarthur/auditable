@@ -44,7 +44,8 @@ for (const relPath of importPaths) {
   chunks.push(`// -- ${basename} --\n\n${src}`);
 }
 
-const header = '// gcu-press \u2014 typesetting engine\n'
+const header = '// \u26a0 GENERATED FILE \u2014 DO NOT EDIT. Source: ext/gcu-press/src/  Build: node ext/gcu-press/build.js\n'
+  + '// gcu-press \u2014 typesetting engine\n'
   + '// Knuth-Plass line breaking, page layout, canvas rendering.\n';
 
 const output = header + '\n' + chunks.join('\n\n') + '\n';

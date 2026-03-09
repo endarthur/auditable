@@ -37,6 +37,17 @@ export function tokenizeAtra(code) {
     // numbers (with optional type suffix _f32, _f64, _i32, _i64)
     if (/\d/.test(code[i]) || (code[i] === '.' && i + 1 < len && /\d/.test(code[i + 1]))) {
       const start = i;
+      // hex literal: 0x or 0X
+      if (code[i] === '0' && i + 1 < len && (code[i + 1] === 'x' || code[i + 1] === 'X')) {
+        i += 2;
+        while (i < len && /[0-9a-fA-F]/.test(code[i])) i++;
+        if (code[i] === '_' && i + 3 <= len && /^[fi]/.test(code[i + 1])) {
+          const suf = code.slice(i + 1, i + 4);
+          if (ATRA_TYPES.has(suf)) i += 4;
+        }
+        tokens.push({ type: 'num', text: code.slice(start, i) });
+        continue;
+      }
       while (i < len && /[0-9.]/.test(code[i])) i++;
       if (i < len && /[eE]/.test(code[i])) {
         i++;

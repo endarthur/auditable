@@ -1,3 +1,4 @@
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: ext/atra/src/  Build: node ext/atra/build.js
 // @auditable/atra — Arithmetic TRAnspiler
 // Fortran/Pascal hybrid → WebAssembly bytecode. Single-file compiler.
 
@@ -42,6 +43,17 @@ function tokenizeAtra(code) {
     // numbers (with optional type suffix _f32, _f64, _i32, _i64)
     if (/\d/.test(code[i]) || (code[i] === '.' && i + 1 < len && /\d/.test(code[i + 1]))) {
       const start = i;
+      // hex literal: 0x or 0X
+      if (code[i] === '0' && i + 1 < len && (code[i + 1] === 'x' || code[i + 1] === 'X')) {
+        i += 2;
+        while (i < len && /[0-9a-fA-F]/.test(code[i])) i++;
+        if (code[i] === '_' && i + 3 <= len && /^[fi]/.test(code[i + 1])) {
+          const suf = code.slice(i + 1, i + 4);
+          if (ATRA_TYPES.has(suf)) i += 4;
+        }
+        tokens.push({ type: 'num', text: code.slice(start, i) });
+        continue;
+      }
       while (i < len && /[0-9.]/.test(code[i])) i++;
       if (i < len && /[eE]/.test(code[i])) {
         i++;
@@ -459,6 +471,19 @@ function lex(source) {
     if (/\d/.test(source[i]) || (source[i] === '.' && i + 1 < len && /\d/.test(source[i + 1]))) {
       const start = i;
       let isFloat = false;
+      // hex literal: 0x or 0X
+      if (source[i] === '0' && i + 1 < len && (source[i + 1] === 'x' || source[i + 1] === 'X')) {
+        adv(); adv(); // skip 0x
+        while (i < len && /[0-9a-fA-F]/.test(source[i])) adv();
+        let typeSuffix = null;
+        if (peek() === '_') {
+          const s = source.slice(i + 1, i + 4);
+          if (ATRA_TYPES.has(s)) { typeSuffix = s; adv(); adv(); adv(); adv(); }
+        }
+        const raw = source.slice(start, i);
+        tokens.push({ type: TOK.NUM, value: String(Number(raw)), isFloat: false, typeSuffix, line: tl, col: tc });
+        continue;
+      }
       while (i < len && /\d/.test(source[i])) adv();
       if (peek() === '.' && /\d/.test(source[i + 1] || '')) { isFloat = true; adv(); while (i < len && /\d/.test(source[i])) adv(); }
       if (/[eE]/.test(peek())) { isFloat = true; adv(); if (/[+-]/.test(peek())) adv(); while (i < len && /\d/.test(source[i])) adv(); }
@@ -608,7 +633,11 @@ function parse(tokens) {
       else if (at(TOK.KW, 'function')) body.push(parseFunction());
       else if (at(TOK.KW, 'subroutine')) body.push(parseSubroutine());
       else if (at(TOK.KW, 'import')) body.push(parseImport());
-      else if (at(TOK.KW, 'export')) { pos++; body.push(parseFunction(true)); }
+      else if (at(TOK.KW, 'export')) {
+        pos++;
+        if (at(TOK.KW, 'subroutine')) body.push(parseSubroutine(true));
+        else body.push(parseFunction(true));
+      }
       else if (at(TOK.KW, 'layout')) body.push(parseLayout());
       else if (at(TOK.KW, 'memory')) body.push(parseMemoryDecl());
       else if (at(TOK.ID, 'data')) body.push(parseDataDecl());
@@ -783,7 +812,7 @@ function parse(tokens) {
     return { type: 'Function', name, params, retType, locals, body, exported };
   }
 
-  function parseSubroutine() {
+  function parseSubroutine(exported = false) {
     eat(TOK.KW, 'subroutine');
     const name = eat(TOK.ID).value;
     eat(TOK.PUNC, '(');
@@ -817,7 +846,7 @@ function parse(tokens) {
     eat(TOK.KW, 'begin');
     const body = parseStatements('end');
     eat(TOK.KW, 'end');
-    return { type: 'Subroutine', name, params, locals, body };
+    return { type: 'Subroutine', name, params, locals, body, exported };
   }
 
   // Param grouping: "x, y: f64" shares a type across comma-separated names.
@@ -987,9 +1016,11 @@ function parse(tokens) {
       body.push(parseStatement());
     }
     let elseBody = null;
-    if (maybe(TOK.KW, 'else')) {
-      if (at(TOK.KW, 'if')) {
-        // else if chain: inner parseIf handles everything including end if
+    if (at(TOK.KW, 'else')) {
+      const elseLine = cur().line;
+      pos++;
+      if (at(TOK.KW, 'if') && cur().line === elseLine) {
+        // else if chain (same line): inner parseIf handles everything including end if
         elseBody = [parseIf(true)];
       } else {
         elseBody = [];
@@ -2574,6 +2605,18 @@ function codegen(ast, interpValues, userImports) {
               if (method === 'load') return inferExprType(expr.args[0]) || 'f64x2'; // default to f64x2
               if (['and','or','xor','not'].includes(method)) return inferExprType(expr.args[0]);
               if (method === 'store') return 'i32'; // store is a statement, but type doesn't matter much
+            }
+            if (prefix === 'wasm') {
+              // wasm.* builtins: most return the type of their first arg
+              // reinterpret/extend/trunc return their target type
+              if (method === 'extend_i32_u') return 'i64';
+              if (method === 'reinterpret_f64') return 'i64';
+              if (method === 'reinterpret_f32') return 'i32';
+              if (method === 'reinterpret_i64') return 'f64';
+              if (method === 'reinterpret_i32') return 'f32';
+              if (method === 'trunc_sat_s' || method === 'trunc_sat_u') return expectedType || 'i32';
+              // arithmetic/shift/comparison: infer from first arg
+              return expr.args.length > 0 ? inferExprType(expr.args[0]) : 'i32';
             }
           }
           // Indirect call via function-typed variable

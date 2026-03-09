@@ -1,3 +1,4 @@
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: ext/gcu-press/src/  Build: node ext/gcu-press/build.js
 // gcu-press — typesetting engine
 // Knuth-Plass line breaking, page layout, canvas rendering.
 

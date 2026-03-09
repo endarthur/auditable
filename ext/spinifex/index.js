@@ -1,3 +1,4 @@
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: ext/spinifex/src/  Build: node ext/spinifex/build.js
 // @auditable/spinifex — web GIS
 // Map rendering, geodata loaders, SRTM elevation, drawing interactions.
 

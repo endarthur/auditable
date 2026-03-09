@@ -46,7 +46,8 @@ for (const relPath of importPaths) {
   chunks.push(`// -- ${basename} --\n\n${src}`);
 }
 
-const header = '// @auditable/spinifex \u2014 web GIS\n'
+const header = '// \u26a0 GENERATED FILE \u2014 DO NOT EDIT. Source: ext/spinifex/src/  Build: node ext/spinifex/build.js\n'
+  + '// @auditable/spinifex \u2014 web GIS\n'
   + '// Map rendering, geodata loaders, SRTM elevation, drawing interactions.\n';
 
 // Prepend vendored OL + proj4 (tree-shaken, built by vendor/build.js)

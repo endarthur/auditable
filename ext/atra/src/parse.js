@@ -39,7 +39,11 @@ export function parse(tokens) {
       else if (at(TOK.KW, 'function')) body.push(parseFunction());
       else if (at(TOK.KW, 'subroutine')) body.push(parseSubroutine());
       else if (at(TOK.KW, 'import')) body.push(parseImport());
-      else if (at(TOK.KW, 'export')) { pos++; body.push(parseFunction(true)); }
+      else if (at(TOK.KW, 'export')) {
+        pos++;
+        if (at(TOK.KW, 'subroutine')) body.push(parseSubroutine(true));
+        else body.push(parseFunction(true));
+      }
       else if (at(TOK.KW, 'layout')) body.push(parseLayout());
       else if (at(TOK.KW, 'memory')) body.push(parseMemoryDecl());
       else if (at(TOK.ID, 'data')) body.push(parseDataDecl());
@@ -214,7 +218,7 @@ export function parse(tokens) {
     return { type: 'Function', name, params, retType, locals, body, exported };
   }
 
-  function parseSubroutine() {
+  function parseSubroutine(exported = false) {
     eat(TOK.KW, 'subroutine');
     const name = eat(TOK.ID).value;
     eat(TOK.PUNC, '(');
@@ -248,7 +252,7 @@ export function parse(tokens) {
     eat(TOK.KW, 'begin');
     const body = parseStatements('end');
     eat(TOK.KW, 'end');
-    return { type: 'Subroutine', name, params, locals, body };
+    return { type: 'Subroutine', name, params, locals, body, exported };
   }
 
   // Param grouping: "x, y: f64" shares a type across comma-separated names.
@@ -418,9 +422,11 @@ export function parse(tokens) {
       body.push(parseStatement());
     }
     let elseBody = null;
-    if (maybe(TOK.KW, 'else')) {
-      if (at(TOK.KW, 'if')) {
-        // else if chain: inner parseIf handles everything including end if
+    if (at(TOK.KW, 'else')) {
+      const elseLine = cur().line;
+      pos++;
+      if (at(TOK.KW, 'if') && cur().line === elseLine) {
+        // else if chain (same line): inner parseIf handles everything including end if
         elseBody = [parseIf(true)];
       } else {
         elseBody = [];

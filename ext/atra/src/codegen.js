@@ -1124,6 +1124,18 @@ export function codegen(ast, interpValues, userImports) {
               if (['and','or','xor','not'].includes(method)) return inferExprType(expr.args[0]);
               if (method === 'store') return 'i32'; // store is a statement, but type doesn't matter much
             }
+            if (prefix === 'wasm') {
+              // wasm.* builtins: most return the type of their first arg
+              // reinterpret/extend/trunc return their target type
+              if (method === 'extend_i32_u') return 'i64';
+              if (method === 'reinterpret_f64') return 'i64';
+              if (method === 'reinterpret_f32') return 'i32';
+              if (method === 'reinterpret_i64') return 'f64';
+              if (method === 'reinterpret_i32') return 'f32';
+              if (method === 'trunc_sat_s' || method === 'trunc_sat_u') return expectedType || 'i32';
+              // arithmetic/shift/comparison: infer from first arg
+              return expr.args.length > 0 ? inferExprType(expr.args[0]) : 'i32';
+            }
           }
           // Indirect call via function-typed variable
           const callInfo = localMap[expr.name];
