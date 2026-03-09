@@ -3107,6 +3107,7 @@ function codegen(ast, interpValues, userImports) {
       if (op === 'reinterpret_i32') { emitExpr(expr.args[0], 'i32'); bw.byte(OP_F32_REINTERPRET_I32); return; }
       if (op === 'extend8_s') { emitExpr(expr.args[0], t); bw.byte(t === 'i64' ? OP_I64_EXTEND8_S : OP_I32_EXTEND8_S); return; }
       if (op === 'extend16_s') { emitExpr(expr.args[0], t); bw.byte(t === 'i64' ? OP_I64_EXTEND16_S : OP_I32_EXTEND16_S); return; }
+      if (op === 'extend_i32_u') { emitExpr(expr.args[0], 'i32'); bw.byte(OP_I64_EXTEND_I32_U); return; }
       if (op === 'trunc_sat_s') {
         const fromType = inferExprType(expr.args[0]);
         emitExpr(expr.args[0], fromType);

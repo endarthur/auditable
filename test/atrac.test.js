@@ -879,3 +879,41 @@ describe('case...of...end case', () => {
     assert.strictEqual(countUp(), 3);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════
+// wasm.extend_i32_u
+// ═════════════════════════════════════════════════════════════════════
+
+describe('wasm.extend_i32_u', () => {
+  it('zero-extends i32 to i64', () => {
+    const { hi32 } = atra`
+      function hi32(x: i32): i32
+      var w: i64
+      begin
+        w := wasm.extend_i32_u(x)
+        hi32 := i32(w >> 32)
+      end
+    `;
+    // positive value: high bits should be 0
+    assert.strictEqual(hi32(42), 0);
+    // negative i32 (-1 = 0xFFFFFFFF): signed extend would give 0xFFFFFFFF_FFFFFFFF,
+    // unsigned extend gives 0x00000000_FFFFFFFF — high word is 0, not -1
+    assert.strictEqual(hi32(-1), 0);
+  });
+
+  it('enables unsigned 64-bit multiply', () => {
+    const { mulhu } = atra`
+      function mulhu(a: i32, b: i32): i32
+      var a64, b64: i64
+      begin
+        a64 := wasm.extend_i32_u(a)
+        b64 := wasm.extend_i32_u(b)
+        mulhu := i32((a64 * b64) >> 32)
+      end
+    `;
+    // 0x80000000 * 2 = 0x100000000 → high word = 1
+    assert.strictEqual(mulhu(-2147483648, 2), 1);
+    // 0xFFFFFFFF * 0xFFFFFFFF = 0xFFFFFFFE00000001 → high word = 0xFFFFFFFE = -2
+    assert.strictEqual(mulhu(-1, -1), -2);
+  });
+});
