@@ -304,6 +304,19 @@ function navigateCell(dir) {
 }
 
 document.addEventListener('keydown', (e) => {
+  // ── GLOBAL FIRST — must run before mode branching to prevent browser defaults ──
+  // Ctrl+S — save (prevents browser "Save Page As" on file://)
+  if (e.key === 's' && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+    e.preventDefault();
+    saveNotebook();
+    return;
+  }
+  // Ctrl+Shift+Enter — toggle autorun
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+    e.preventDefault();
+    toggleAutorun();
+    return;
+  }
   // find bar shortcuts (must be before edit/command branches)
   if ((e.key === 'f') && (e.ctrlKey || e.metaKey) && !e.altKey) {
     e.preventDefault(); openFind(false); return;
@@ -524,11 +537,6 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  // global: Ctrl+S / Cmd+S
-  if (e.key === 's' && (e.ctrlKey || e.metaKey)) {
-    e.preventDefault();
-    saveNotebook();
-  }
 });
 
 // click to dismiss help

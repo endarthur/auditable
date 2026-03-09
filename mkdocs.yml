@@ -1,0 +1,78 @@
+site_name: auditable
+site_description: A reactive computational notebook in a single HTML file
+site_url: https://endarthur.github.io/auditable/
+repo_url: https://github.com/endarthur/auditable
+repo_name: endarthur/auditable
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  font:
+    text: Inter
+    code: JetBrains Mono
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - toc.follow
+    - navigation.footer
+
+extra_css:
+  - stylesheets/extra.css
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Cells & Reactivity: cells.md
+  - Builtins:
+    - UI: builtins-ui.md
+    - Standard Library: builtins-stdlib.md
+  - Widgets: widgets.md
+  - Directives: directives.md
+  - Modules:
+    - load & install: modules.md
+    - spinifex (GIS): mod-spinifex.md
+    - calque (Spreadsheet): mod-calque.md
+    - sheet (xlsx I/O): mod-sheet.md
+  - Tagged Languages:
+    - Overview: extensions.md
+    - atra: extensions-atra.md
+  - Export: export.md
+  - Settings: settings.md
+  - Keyboard Shortcuts: keyboard.md
+  - AF Workspace: af.md
+  - Advanced:
+    - Scope Model: advanced/scope-model.md
+    - Save Format: advanced/save-format.md
+
+copyright: "&copy; Geoscientific Chaos Union — MIT License"

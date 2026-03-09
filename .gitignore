@@ -148,5 +148,8 @@ vite.config.ts.timestamp-*
 CLAUDE.md
 ROADMAP.md
 
+# MkDocs build output
+site/
+
 # Specs to be ingested
 spec_inbox/

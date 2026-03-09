@@ -1701,6 +1701,7 @@ body.presenting .find-bar { display: none !important; }
 <h2>global</h2>
 <div class="help-row"><span class="help-key">F1</span><span class="help-desc">toggle this help</span></div>
 <div class="help-row"><span class="help-key">Ctrl+S</span><span class="help-desc">save notebook</span></div>
+<div class="help-row"><span class="help-key">Ctrl+Shift+Enter</span><span class="help-desc">toggle autorun</span></div>
 <div class="help-row"><span class="help-key">Ctrl+F</span><span class="help-desc">find in notebook</span></div>
 <div class="help-row"><span class="help-key">Ctrl+H</span><span class="help-desc">find and replace</span></div>
 
@@ -6079,8 +6080,8 @@ function togglePresent() {
 
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
-const __AUDITABLE_BUILD_DATE__ = '2026-03-08';
-const __AUDITABLE_BASE_SIZE__ = 988784;
+const __AUDITABLE_BUILD_DATE__ = '2026-03-09';
+const __AUDITABLE_BASE_SIZE__ = 989248;
 
 (function() {
   const ver = $('#aboutVersion');
@@ -12577,6 +12578,19 @@ function navigateCell(dir) {
 }
 
 document.addEventListener('keydown', (e) => {
+  // ── GLOBAL FIRST — must run before mode branching to prevent browser defaults ──
+  // Ctrl+S — save (prevents browser "Save Page As" on file://)
+  if (e.key === 's' && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+    e.preventDefault();
+    saveNotebook();
+    return;
+  }
+  // Ctrl+Shift+Enter — toggle autorun
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+    e.preventDefault();
+    toggleAutorun();
+    return;
+  }
   // find bar shortcuts (must be before edit/command branches)
   if ((e.key === 'f') && (e.ctrlKey || e.metaKey) && !e.altKey) {
     e.preventDefault(); openFind(false); return;
@@ -12797,11 +12811,6 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  // global: Ctrl+S / Cmd+S
-  if (e.key === 's' && (e.ctrlKey || e.metaKey)) {
-    e.preventDefault();
-    saveNotebook();
-  }
 });
 
 // click to dismiss help

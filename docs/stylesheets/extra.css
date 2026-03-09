@@ -1,0 +1,116 @@
+/* GCU Theme — geological color tokens from GCU Design System v5 */
+
+/* ── dark mode (slate) ── */
+[data-md-color-scheme="slate"] {
+  /* surfaces */
+  --md-default-bg-color: #181a1c;          /* Basalt */
+  --md-code-bg-color: #22252a;             /* Gabbro */
+
+  /* header */
+  --md-primary-fg-color: #c08028;          /* Copper (warm accent) */
+  --md-primary-bg-color: #1e2024;          /* Schist */
+
+  /* accents */
+  --md-accent-fg-color: #c08028;           /* Copper */
+  --md-typeset-a-color: #c08028;           /* Copper for links */
+
+  /* text */
+  --md-default-fg-color: #e8e4e0;          /* Calcite */
+  --md-default-fg-color--light: #b0aaa0;   /* Limestone */
+  --md-default-fg-color--lighter: #707068; /* Slate */
+  --md-default-fg-color--lightest: #383a40;
+
+  /* code */
+  --md-code-fg-color: #e8e4e0;
+  --md-code-hl-color: rgba(192, 128, 40, 0.15);
+
+  /* footer */
+  --md-footer-bg-color: #1e2024;
+  --md-footer-bg-color--dark: #181a1c;
+
+  /* admonitions — Azurite for info tones */
+  --md-admonition-fg-color: #e8e4e0;
+  --md-admonition-bg-color: #22252a;
+}
+
+/* ── light mode (default) ── */
+[data-md-color-scheme="default"] {
+  /* surfaces */
+  --md-default-bg-color: #f8f6f2;          /* Chalk */
+  --md-code-bg-color: #f0ece4;             /* warm paper */
+
+  /* header */
+  --md-primary-fg-color: #f8f6f2;          /* light text on dark header */
+  --md-primary-bg-color: #2a2c30;          /* dark header bar */
+
+  /* accents — darker Copper for contrast on white */
+  --md-accent-fg-color: #96601c;
+  --md-typeset-a-color: #96601c;
+
+  /* text */
+  --md-default-fg-color: #2a2c30;
+  --md-default-fg-color--light: #505050;
+  --md-default-fg-color--lighter: #909090;
+
+  /* code */
+  --md-code-fg-color: #2a2c30;
+  --md-code-hl-color: rgba(192, 128, 40, 0.1);
+}
+
+/* ── shared overrides ── */
+
+/* nav sidebar active/hover */
+.md-nav__link--active,
+.md-nav__link:is(:focus, :hover) {
+  color: var(--md-accent-fg-color);
+}
+
+/* TOC sidebar active */
+.md-nav--secondary .md-nav__link--active {
+  color: var(--md-accent-fg-color);
+}
+
+/* search highlight */
+.md-search-result mark {
+  color: var(--md-accent-fg-color);
+  background: transparent;
+}
+
+/* inline code styling */
+.md-typeset code {
+  border-radius: 3px;
+}
+
+/* admonition info/tip use Azurite accent */
+.md-typeset .admonition.info,
+.md-typeset details.info,
+.md-typeset .admonition.tip,
+.md-typeset details.tip {
+  border-color: #5090b0;  /* Azurite */
+}
+.md-typeset .info > .admonition-title,
+.md-typeset .info > summary,
+.md-typeset .tip > .admonition-title,
+.md-typeset .tip > summary {
+  background-color: rgba(80, 144, 176, 0.12);
+}
+.md-typeset .info > .admonition-title::before,
+.md-typeset .info > summary::before,
+.md-typeset .tip > .admonition-title::before,
+.md-typeset .tip > summary::before {
+  color: #5090b0;
+}
+
+/* admonition warning uses Copper */
+.md-typeset .admonition.warning,
+.md-typeset details.warning {
+  border-color: #c08028;  /* Copper */
+}
+.md-typeset .warning > .admonition-title,
+.md-typeset .warning > summary {
+  background-color: rgba(192, 128, 40, 0.12);
+}
+.md-typeset .warning > .admonition-title::before,
+.md-typeset .warning > summary::before {
+  color: #c08028;
+}
