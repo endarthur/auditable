@@ -7,7 +7,7 @@ export const ATRA_KEYWORDS = new Set([
   'function','subroutine','begin','end','var','const','if','then','else',
   'for','while','do','break','and','or','not','mod','import','export',
   'call','array','true','false','from','tailcall','return',
-  'layout','packed','memory',
+  'layout','packed','memory','case','of',
 ]);
 
 export const ATRA_TYPES = new Set(['i32','i64','f32','f64','f64x2','f32x4','i32x4','i64x2']);
@@ -160,7 +160,7 @@ const ATRA_BUILTIN_SIGS = {
 // ── User-defined name extraction ──
 
 const NAMING_KW = new Set(['var', 'const', 'function', 'subroutine', 'import']);
-const STMT_STARTERS = new Set(['begin', 'end', 'then', 'else', 'do']);
+const STMT_STARTERS = new Set(['begin', 'end', 'then', 'else', 'do', 'of']);
 const EXPR_KEYWORDS = new Set(['and', 'or', 'not', 'mod', 'true', 'false', 'array', 'call', 'tailcall']);
 
 function extractAtraNames(code) {

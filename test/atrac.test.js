@@ -702,3 +702,180 @@ describe('data segments', () => {
     assert.strictEqual(m.first_byte(), 0);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════
+// case...of...end case
+// ═════════════════════════════════════════════════════════════════════
+
+describe('case...of...end case', () => {
+  it('dispatches to correct arm', () => {
+    const { dispatch } = atra`
+      function dispatch(op: i32): i32
+      begin
+        case (op) of
+          0: dispatch := 10
+          1: dispatch := 20
+          2: dispatch := 30
+        else
+          dispatch := -1
+        end case
+      end
+    `;
+    assert.strictEqual(dispatch(0), 10);
+    assert.strictEqual(dispatch(1), 20);
+    assert.strictEqual(dispatch(2), 30);
+    assert.strictEqual(dispatch(3), -1);
+    assert.strictEqual(dispatch(-1), -1);
+  });
+
+  it('handles multi-label arms', () => {
+    const { classify } = atra`
+      function classify(x: i32): i32
+      begin
+        case (x) of
+          0, 1: classify := 100
+          2, 3: classify := 200
+        else
+          classify := 0
+        end case
+      end
+    `;
+    assert.strictEqual(classify(0), 100);
+    assert.strictEqual(classify(1), 100);
+    assert.strictEqual(classify(2), 200);
+    assert.strictEqual(classify(3), 200);
+    assert.strictEqual(classify(4), 0);
+  });
+
+  it('gap-fills non-contiguous labels', () => {
+    const { sparse } = atra`
+      function sparse(x: i32): i32
+      begin
+        case (x) of
+          0: sparse := 1
+          5: sparse := 2
+          10: sparse := 3
+        else
+          sparse := 0
+        end case
+      end
+    `;
+    assert.strictEqual(sparse(0), 1);
+    assert.strictEqual(sparse(3), 0);
+    assert.strictEqual(sparse(5), 2);
+    assert.strictEqual(sparse(10), 3);
+    assert.strictEqual(sparse(7), 0);
+  });
+
+  it('handles negative labels', () => {
+    const { neg } = atra`
+      function neg(x: i32): i32
+      begin
+        case (x) of
+          -1: neg := 10
+          0: neg := 20
+          1: neg := 30
+        else
+          neg := 0
+        end case
+      end
+    `;
+    assert.strictEqual(neg(-1), 10);
+    assert.strictEqual(neg(0), 20);
+    assert.strictEqual(neg(1), 30);
+    assert.strictEqual(neg(2), 0);
+  });
+
+  it('works as expression', () => {
+    const { cexpr } = atra`
+      function cexpr(op: i32): i32
+      begin
+        cexpr := case (op) of
+          0: 5
+          1: 10
+          2: 15
+        else 0
+        end case
+      end
+    `;
+    assert.strictEqual(cexpr(0), 5);
+    assert.strictEqual(cexpr(1), 10);
+    assert.strictEqual(cexpr(2), 15);
+    assert.strictEqual(cexpr(99), 0);
+  });
+
+  it('allows constant arithmetic in labels', () => {
+    const { arith } = atra`
+      function arith(x: i32): i32
+      begin
+        case (x) of
+          2*3: arith := 1
+          2*3+1: arith := 2
+        else
+          arith := 0
+        end case
+      end
+    `;
+    assert.strictEqual(arith(6), 1);
+    assert.strictEqual(arith(7), 2);
+    assert.strictEqual(arith(0), 0);
+  });
+
+  it('rejects duplicate labels', () => {
+    assert.throws(() => compile(`
+      function dup(x: i32): i32
+      begin
+        case (x) of
+          1: dup := 10
+          1: dup := 20
+        else
+          dup := 0
+        end case
+      end
+    `), /[Dd]uplicate/);
+  });
+
+  it('nests correctly', () => {
+    const { nested } = atra`
+      function nested(a: i32, b: i32): i32
+      begin
+        case (a) of
+          0:
+            case (b) of
+              0: nested := 1
+              1: nested := 2
+            else
+              nested := 3
+            end case
+          1: nested := 4
+        else
+          nested := 5
+        end case
+      end
+    `;
+    assert.strictEqual(nested(0, 0), 1);
+    assert.strictEqual(nested(0, 1), 2);
+    assert.strictEqual(nested(0, 9), 3);
+    assert.strictEqual(nested(1, 0), 4);
+    assert.strictEqual(nested(9, 0), 5);
+  });
+
+  it('break inside case breaks enclosing loop', () => {
+    const { countUp } = atra`
+      function countUp(): i32
+      var i: i32
+      begin
+        i := 0
+        while (i < 100)
+          case (i) of
+            0, 1, 2: i += 1
+          else
+            break
+          end case
+        end while
+        countUp := i
+      end
+    `;
+    assert.strictEqual(countUp(), 3);
+  });
+});

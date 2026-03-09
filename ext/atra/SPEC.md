@@ -491,6 +491,87 @@ do
 while (nclose < min_samples)
 ```
 
+### Case (multi-way branch)
+
+O(1) dispatch via Wasm `br_table`. Selector must be `i32`. Case labels are compile-time `i32` constants (arithmetic on constants is allowed: `case 0x33 >> 2:`). No fallthrough — each case is an independent block. `else` is required (Wasm `br_table` always needs a default label; use an empty body if the default should do nothing).
+
+```
+case (op) of
+  0x00: call exec.load(rd, rs1, imm, funct3)
+  0x04: call exec.opimm(rd, rs1, imm, funct3, funct7)
+  0x05: call exec.auipc(rd, imm)
+  0x08: call exec.store(rs1, rs2, imm, funct3)
+  0x0C: call exec.op(rd, rs1, rs2, funct3, funct7)
+  0x0D: call exec.lui(rd, imm)
+else
+  call exec.trap(inst)
+end case
+```
+
+Multiple labels per case — comma-separated:
+
+```
+case (funct3) of
+  0, 1: call exec.add_sub(rd, rs1, rs2, funct7)
+  4, 5, 6, 7: call exec.logic(rd, rs1, rs2, funct3)
+else
+  call exec.trap(inst)
+end case
+```
+
+Duplicate labels are a compile error. `break` inside a `case` that is inside a loop breaks the *loop*, not the case — each case already exits at `end case`.
+
+Cases can nest. A case body can contain another `case`:
+
+```
+case (major_op) of
+  0x0C:
+    case (funct3) of
+      0: call exec.add(rd, rs1, rs2)
+      1: call exec.sll(rd, rs1, rs2)
+      2: call exec.slt(rd, rs1, rs2)
+    else
+      call exec.trap(inst)
+    end case
+else
+  call exec.trap(inst)
+end case
+```
+
+### Case expression
+
+`case` can return a value, like `if`-expressions. All branches must produce the same type:
+
+```
+name_len := case (opcode) of
+  0x33: 5
+  0x13: 5
+  0x03: 4
+  else 0
+end case
+```
+
+Compiles to Wasm `br_table` inside a `block (result T)`.
+
+### Case compilation
+
+The compiler collects all case labels, computes `min` and `max`, subtracts `min` from the selector, and emits a `br_table` with `(max - min + 1)` entries. Gaps between labels point to the `else` branch. This is always O(1) dispatch regardless of label density.
+
+For dense labels (0, 1, 2, 3) this is a direct jump table. For sparse labels (0x03, 0x13, 0x23, 0x33) the table has gap entries pointing to `else` — a few extra bytes of branch targets, negligible cost. For very sparse values, pre-shift in the source:
+
+```
+! RISC-V opcodes: bits 1:0 are always 11, shift right 2
+case (opcode >> 2) of
+  0x00: call exec.load(inst)
+  0x04: call exec.itype(inst)
+  0x08: call exec.store(inst)
+  0x0C: call exec.rtype(inst)
+  0x18: call exec.branch(inst)
+else
+  call exec.trap(inst)
+end case
+```
+
 ### Break
 
 Exit the innermost loop:
@@ -1128,6 +1209,7 @@ No parser generators. No LLVM. No external dependencies. Fully auditable.
 | `for`                      | `block { loop { br_if ... br } }`       |
 | `while`                    | `block { loop { br_if ... br } }`       |
 | `do...while`               | `loop { ... br_if }`                    |
+| `case...of...end case`     | `block* { br_table ... } case_body* br`  |
 | `break`                    | `br` to enclosing block                 |
 | `call return(expr)`        | `return`                                |
 | `tailcall f(args)`         | `return_call` / `return_call_indirect`  |

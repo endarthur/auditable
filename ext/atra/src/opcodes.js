@@ -9,7 +9,7 @@
 // ── Control flow (0x00–0x1b) ──
 export const OP_UNREACHABLE = 0x00, OP_NOP = 0x01, OP_BLOCK = 0x02, OP_LOOP = 0x03,
   OP_IF = 0x04, OP_ELSE = 0x05, OP_END = 0x0b, OP_BR = 0x0c, OP_BR_IF = 0x0d,
-  OP_RETURN = 0x0f, OP_CALL = 0x10, OP_CALL_INDIRECT = 0x11,
+  OP_BR_TABLE = 0x0e, OP_RETURN = 0x0f, OP_CALL = 0x10, OP_CALL_INDIRECT = 0x11,
   OP_RETURN_CALL = 0x12, OP_RETURN_CALL_INDIRECT = 0x13, OP_SELECT = 0x1b,
 
 // ── Variable access (0x20–0x24) ──

@@ -13,7 +13,7 @@
 import { ATRA_TYPES, ATRA_VECTOR_TYPES } from './highlight.js';
 import { ByteWriter } from './bytewriter.js';
 import {
-  OP_BLOCK, OP_LOOP, OP_IF, OP_ELSE, OP_END, OP_BR, OP_BR_IF,
+  OP_BLOCK, OP_LOOP, OP_IF, OP_ELSE, OP_END, OP_BR, OP_BR_IF, OP_BR_TABLE,
   OP_RETURN, OP_CALL, OP_CALL_INDIRECT,
   OP_RETURN_CALL, OP_RETURN_CALL_INDIRECT, OP_SELECT,
   OP_LOCAL_GET, OP_LOCAL_SET, OP_GLOBAL_GET, OP_GLOBAL_SET,
@@ -232,6 +232,7 @@ export function codegen(ast, interpValues, userImports) {
     for (const s of stmts) {
       if (s.type === 'Call' || s.type === 'FuncCall') usedCalls.add(s.name);
       if (s.type === 'If') { scanCalls(s.body); if (s.elseBody) scanCalls(s.elseBody); }
+      if (s.type === 'Case') { for (const a of s.arms) scanCalls(a.body); scanCalls(s.elseBody); }
       if (s.type === 'For' || s.type === 'While' || s.type === 'DoWhile') scanCalls(s.body);
       // scan expressions
       scanExprCalls(s);
@@ -668,6 +669,38 @@ export function codegen(ast, interpValues, userImports) {
       throw new Error(`Expected memory bank name, got ${arg.type}: ${arg.name || '?'}`);
     }
 
+    // ── Compile-time constant evaluator for case labels ──
+    function evalConstI32(expr) {
+      if (expr.type === 'NumberLit') {
+        if (expr.isFloat) throw new Error('Case label must be i32, got float');
+        return parseInt(expr.value, 10) | 0;
+      }
+      if (expr.type === 'UnaryOp' && expr.op === '-') return (-evalConstI32(expr.operand)) | 0;
+      if (expr.type === 'BinOp') {
+        const l = evalConstI32(expr.left), r = evalConstI32(expr.right);
+        switch (expr.op) {
+          case '+': return (l + r) | 0;
+          case '-': return (l - r) | 0;
+          case '*': return (l * r) | 0;
+          case '/': if (r === 0) throw new Error('Division by zero in case label'); return (l / r) | 0;
+          case 'mod': if (r === 0) throw new Error('Modulo by zero in case label'); return (l % r) | 0;
+          case '<<': return (l << r) | 0;
+          case '>>': return (l >> r) | 0;
+          case '&': return (l & r) | 0;
+          case '|': return (l | r) | 0;
+          case '^': return (l ^ r) | 0;
+          default: throw new Error(`Unsupported operator in case label: ${expr.op}`);
+        }
+      }
+      if (expr.type === 'Ident') {
+        const gi = globalIndex[expr.name];
+        if (gi !== undefined && !globals[gi].mutable && globals[gi].init)
+          return evalConstI32(globals[gi].init);
+        throw new Error(`Case label must be a compile-time constant, got: ${expr.name}`);
+      }
+      throw new Error('Case label must be a compile-time i32 constant');
+    }
+
     // ── Statement emission ──
     let depth = 0; // current block nesting depth
     const breakTargets = []; // stack of {depth} for each enclosing loop's break block
@@ -845,6 +878,77 @@ export function codegen(ast, interpValues, userImports) {
           depth--; bw.byte(OP_END); // end loop
           breakTargets.pop();
           depth--; bw.byte(OP_END); // end block
+          break;
+        }
+        case 'Case': {
+          // Evaluate all labels at compile time, check for duplicates
+          const caseArms = [];
+          const labelSet = new Set();
+          for (const arm of stmt.arms) {
+            const labels = arm.labels.map(l => {
+              const v = evalConstI32(l);
+              if (labelSet.has(v)) throw new Error(`Duplicate case label: ${v}`);
+              labelSet.add(v);
+              return v;
+            });
+            caseArms.push({ labels, body: arm.body });
+          }
+
+          // Compute min/max for gap-filling
+          let minLabel = Infinity, maxLabel = -Infinity;
+          for (const a of caseArms) for (const v of a.labels) {
+            if (v < minLabel) minLabel = v;
+            if (v > maxLabel) maxLabel = v;
+          }
+          const tableSize = maxLabel - minLabel + 1;
+
+          // Build label-value → arm-index map
+          const labelToArm = new Map();
+          for (let ai = 0; ai < caseArms.length; ai++)
+            for (const v of caseArms[ai].labels) labelToArm.set(v, ai);
+
+          const numArms = caseArms.length;
+
+          // Emit nested blocks: $end, then $arm_N-1 down to $arm_0, then $else
+          bw.byte(OP_BLOCK); bw.byte(WASM_VOID); depth++; // $end
+          const endDepth = depth;
+          for (let ai = numArms - 1; ai >= 0; ai--) {
+            bw.byte(OP_BLOCK); bw.byte(WASM_VOID); depth++; // $arm_ai
+          }
+          bw.byte(OP_BLOCK); bw.byte(WASM_VOID); depth++; // $else
+
+          // Selector: subtract min, emit br_table
+          emitExpr(stmt.selector, 'i32');
+          if (minLabel !== 0) {
+            bw.byte(OP_I32_CONST); bw.s32(minLabel);
+            bw.byte(OP_I32_SUB);
+          }
+
+          // br_table: inside $else block, depths are:
+          //   $else=0, $arm_0=1, $arm_1=2, ..., $arm_N-1=N, $end=N+1
+          bw.byte(OP_BR_TABLE);
+          bw.u32(tableSize); // label vector count
+          for (let i = 0; i < tableSize; i++) {
+            const armIdx = labelToArm.get(minLabel + i);
+            bw.u32(armIdx !== undefined ? armIdx + 1 : 0); // gap → else (0)
+          }
+          bw.u32(0); // default → $else
+
+          // End $else block, emit else body, br to $end
+          depth--; bw.byte(OP_END);
+          emitStmts(stmt.elseBody);
+          bw.byte(OP_BR); bw.u32(depth - endDepth);
+
+          // End each arm block, emit body, br to $end (last arm falls through)
+          for (let ai = 0; ai < numArms; ai++) {
+            depth--; bw.byte(OP_END);
+            emitStmts(caseArms[ai].body);
+            if (ai < numArms - 1) {
+              bw.byte(OP_BR); bw.u32(depth - endDepth);
+            }
+          }
+
+          depth--; bw.byte(OP_END); // end $end
           break;
         }
         case 'Break': {
@@ -1045,6 +1149,7 @@ export function codegen(ast, interpValues, userImports) {
           return info ? (info.elemType || info.vtype) : 'f64';
         }
         case 'IfExpr': return inferExprType(expr.thenExpr);
+        case 'CaseExpr': return inferExprType(expr.arms[0].expr);
         default: return 'f64';
       }
     }
@@ -1199,6 +1304,74 @@ export function codegen(ast, interpValues, userImports) {
           bw.byte(OP_ELSE);
           emitExpr(expr.elseExpr, t);
           bw.byte(OP_END);
+          break;
+        }
+        case 'CaseExpr': {
+          const t = expectedType || inferExprType(expr.arms[0].expr);
+          const wt = wasmType(t);
+
+          // Evaluate labels, check duplicates
+          const ceArms = [];
+          const ceLabelSet = new Set();
+          for (const arm of expr.arms) {
+            const labels = arm.labels.map(l => {
+              const v = evalConstI32(l);
+              if (ceLabelSet.has(v)) throw new Error(`Duplicate case label: ${v}`);
+              ceLabelSet.add(v);
+              return v;
+            });
+            ceArms.push({ labels, expr: arm.expr });
+          }
+
+          let ceMin = Infinity, ceMax = -Infinity;
+          for (const a of ceArms) for (const v of a.labels) {
+            if (v < ceMin) ceMin = v;
+            if (v > ceMax) ceMax = v;
+          }
+          const ceTableSize = ceMax - ceMin + 1;
+          const ceLabelToArm = new Map();
+          for (let ai = 0; ai < ceArms.length; ai++)
+            for (const v of ceArms[ai].labels) ceLabelToArm.set(v, ai);
+          const ceNumArms = ceArms.length;
+
+          // Outer block (typed) — receives the final value
+          bw.byte(OP_BLOCK); bw.byte(wt); // $end (typed)
+          for (let ai = ceNumArms - 1; ai >= 0; ai--) {
+            bw.byte(OP_BLOCK); bw.byte(WASM_VOID); // $arm_ai
+          }
+          bw.byte(OP_BLOCK); bw.byte(WASM_VOID); // $else
+
+          // Selector
+          emitExpr(expr.selector, 'i32');
+          if (ceMin !== 0) {
+            bw.byte(OP_I32_CONST); bw.s32(ceMin);
+            bw.byte(OP_I32_SUB);
+          }
+
+          // br_table
+          bw.byte(OP_BR_TABLE);
+          bw.u32(ceTableSize);
+          for (let i = 0; i < ceTableSize; i++) {
+            const armIdx = ceLabelToArm.get(ceMin + i);
+            bw.u32(armIdx !== undefined ? armIdx + 1 : 0);
+          }
+          bw.u32(0); // default → $else
+
+          // end $else, emit else expr, br $end
+          bw.byte(OP_END);
+          emitExpr(expr.elseExpr, t);
+          bw.byte(OP_BR); bw.u32(ceNumArms); // br $end
+
+          // each arm
+          for (let ai = 0; ai < ceNumArms; ai++) {
+            bw.byte(OP_END);
+            emitExpr(ceArms[ai].expr, t);
+            if (ai < ceNumArms - 1) {
+              bw.byte(OP_BR); bw.u32(ceNumArms - ai - 1); // br $end
+            }
+          }
+
+          bw.byte(OP_END); // end $end
           break;
         }
         default:

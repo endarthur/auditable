@@ -5,9 +5,10 @@
 //   function   = 'function' ID '(' params ')' ':' TYPE [var locals] 'begin' stmts 'end'
 //   subroutine = 'subroutine' ID '(' params ')' [var locals] 'begin' stmts 'end'
 //   params     = name {',' name} ':' TYPE {',' params}    — comma-separated names share a type
-//   stmt       = if | for | while | do-while | break | tailcall | call | assign | arrayStore
+//   stmt       = if | case | for | while | do-while | break | tailcall | call | assign | arrayStore
 //   assign     = ID ':=' expr  |  ID '+=' expr  |  ID '/=' expr  (etc.)
 //   if         = 'if' '(' expr ')' 'then' stmts ['else' stmts | 'else' if] 'end' 'if'
+//   case       = 'case' '(' expr ')' 'of' { label {',' label} ':' stmts } 'else' stmts 'end' 'case'
 //   for        = 'for' ID ':=' expr ',' expr [',' step] stmts 'end' 'for'
 //   expr       = Pratt expression (see lbp for precedence tower)
 //   atom       = number | ID | ID '(' args ')' | ID '[' indices ']' | '(' expr ')'
@@ -335,6 +336,7 @@ export function parse(tokens) {
 
   function parseStatement() {
     if (at(TOK.KW, 'if')) return parseIf();
+    if (at(TOK.KW, 'case')) return parseCase();
     if (at(TOK.KW, 'for')) return parseFor();
     if (at(TOK.KW, 'while')) return parseWhile();
     if (at(TOK.KW, 'do')) return parseDoWhile();
@@ -433,6 +435,66 @@ export function parse(tokens) {
       maybe(TOK.KW, 'if');
     }
     return { type: 'If', cond, body, elseBody };
+  }
+
+  // case (expr) of  label{, label}: stmts  ...  else stmts  end case
+  function parseCase() {
+    eat(TOK.KW, 'case');
+    eat(TOK.PUNC, '(');
+    const selector = parseExpr(0);
+    eat(TOK.PUNC, ')');
+    eat(TOK.KW, 'of');
+    const arms = [];
+    while (!at(TOK.KW, 'else') && !at(TOK.KW, 'end') && !at(TOK.EOF)) {
+      const labels = [parseExpr(0)];
+      while (maybe(TOK.PUNC, ',') && !isCaseColon()) labels.push(parseExpr(0));
+      eat(TOK.PUNC, ':');
+      const body = [];
+      while (!at(TOK.KW, 'else') && !at(TOK.KW, 'end') && !at(TOK.EOF) && !isCaseLabelStart()) {
+        body.push(parseStatement());
+      }
+      arms.push({ labels, body });
+    }
+    eat(TOK.KW, 'else');
+    const elseBody = [];
+    while (!at(TOK.KW, 'end') && !at(TOK.EOF)) {
+      elseBody.push(parseStatement());
+    }
+    eat(TOK.KW, 'end');
+    maybe(TOK.KW, 'case');
+    return { type: 'Case', selector, arms, elseBody };
+  }
+
+  // Detect if current position starts a new case label (number or -number followed by : or ,)
+  function isCaseLabelStart() {
+    const t = cur();
+    if (t.type === TOK.NUM || (t.type === TOK.OP && t.value === '-' && tokens[pos + 1] && tokens[pos + 1].type === TOK.NUM)) {
+      return scanForCaseColon();
+    }
+    return false;
+  }
+
+  // Look ahead for an unparenthesized ':' (not ':=') — indicates a case label
+  function scanForCaseColon() {
+    let j = pos, depth = 0;
+    while (j < tokens.length) {
+      const t = tokens[j];
+      if (t.type === TOK.PUNC && t.value === '(') { depth++; j++; continue; }
+      if (t.type === TOK.PUNC && t.value === ')') { depth--; j++; continue; }
+      if (depth === 0 && t.type === TOK.PUNC && t.value === ':') {
+        // ':=' is assignment, not label
+        return !(tokens[j + 1] && tokens[j + 1].value === '=');
+      }
+      if (t.type === TOK.KW && ['if','for','while','do','call','break','case','else','end'].includes(t.value)) return false;
+      if (t.type === TOK.EOF) return false;
+      j++;
+    }
+    return false;
+  }
+
+  // Check if current token is ',' followed by ':' (end of label list, not another label)
+  function isCaseColon() {
+    return at(TOK.PUNC, ':') && !(tokens[pos + 1] && tokens[pos + 1].value === '=');
   }
 
   function parseFor() {
@@ -548,6 +610,28 @@ export function parse(tokens) {
       const expr = parseExpr(0);
       eat(TOK.PUNC, ')');
       return expr;
+    }
+
+    // case-expression: case (expr) of  label: expr  ...  else expr  end case
+    if (t.type === TOK.KW && t.value === 'case') {
+      pos++;
+      eat(TOK.PUNC, '(');
+      const selector = parseExpr(0);
+      eat(TOK.PUNC, ')');
+      eat(TOK.KW, 'of');
+      const arms = [];
+      while (!at(TOK.KW, 'else') && !at(TOK.KW, 'end') && !at(TOK.EOF)) {
+        const labels = [parseExpr(0)];
+        while (maybe(TOK.PUNC, ',') && !isCaseColon()) labels.push(parseExpr(0));
+        eat(TOK.PUNC, ':');
+        const expr = parseExpr(0);
+        arms.push({ labels, expr });
+      }
+      eat(TOK.KW, 'else');
+      const elseExpr = parseExpr(0);
+      eat(TOK.KW, 'end');
+      maybe(TOK.KW, 'case');
+      return { type: 'CaseExpr', selector, arms, elseExpr };
     }
 
     // if-expression (ternary): if (cond) then a else b
