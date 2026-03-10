@@ -74,16 +74,16 @@
       }
     };
 
-    // Forward keyboard input to worker
+    // Forward keyboard input to worker (send all bytes at once for escape sequences)
     RV.console.term.onData(data => {
-      for (let i = 0; i < data.length; i++) {
-        worker.postMessage({ type: 'key', ch: data.charCodeAt(i) });
-      }
+      const bytes = [];
+      for (let i = 0; i < data.length; i++) bytes.push(data.charCodeAt(i));
+      worker.postMessage({ type: 'keys', bytes });
     });
     RV.console.term.onBinary(data => {
-      for (let i = 0; i < data.length; i++) {
-        worker.postMessage({ type: 'key', ch: data.charCodeAt(i) });
-      }
+      const bytes = [];
+      for (let i = 0; i < data.length; i++) bytes.push(data.charCodeAt(i));
+      worker.postMessage({ type: 'keys', bytes });
     });
 
     // Send image to worker (transfer ownership for zero-copy)

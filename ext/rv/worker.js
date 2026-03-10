@@ -512,8 +512,8 @@ self.onmessage = function(e) {
     postMessage({ type: 'booted' });
     schedule();
 
-  } else if (msg.type === 'key') {
-    if (uart) uart.pushRx(msg.ch);
+  } else if (msg.type === 'keys') {
+    if (uart) for (let i = 0; i < msg.bytes.length; i++) uart.pushRx(msg.bytes[i]);
 
   } else if (msg.type === 'stop') {
     running = false;
