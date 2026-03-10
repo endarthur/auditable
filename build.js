@@ -246,33 +246,41 @@ if (target === 'rv') {
   const toolDir = path.join(__dirname, 'tools', 'rv');
   const toolJsDir = path.join(toolDir, 'js');
 
-  // 1. Process tool modules
+  // 1. Process tool modules (main thread: console + UI)
   let toolJs = processModules(path.join(toolJsDir, 'main.js'), toolJsDir);
 
-  // 2. Prepend rv engine (compiled atra CPU + JS host)
-  const rvPath = path.join(__dirname, 'ext/rv/index.js');
-  if (!fs.existsSync(rvPath)) {
-    console.error('Error: ext/rv/index.js not found. Run `node ext/rv/build.js` first.');
+  // 2. Read console.js (main thread needs it for xterm.js wrapper)
+  const consoleSrc = fs.readFileSync(path.join(__dirname, 'ext/rv/js/console.js'), 'utf8');
+
+  // 3. Read worker bundle (CPU + elf + dtb + uart + worker loop)
+  const workerPath = path.join(__dirname, 'ext/rv/worker.js');
+  if (!fs.existsSync(workerPath)) {
+    console.error('Error: ext/rv/worker.js not found. Run `node ext/rv/build.js` first.');
     process.exit(1);
   }
-  let rvSrc = fs.readFileSync(rvPath, 'utf8');
-  rvSrc = rvSrc.replace(/^export\s*\{[^}]*\};?\s*$/gm, '');
-  rvSrc = rvSrc.replace(/^export function /gm, 'function ');
-  rvSrc = rvSrc.replace(/^export const /gm, 'const ');
-  rvSrc = rvSrc.replace(/^export let /gm, 'let ');
-  const js = rvSrc + '\n\n' + toolJs;
+  let workerSrc = fs.readFileSync(workerPath, 'utf8');
+  workerSrc = workerSrc.replace(/^export\s*\{[^}]*\};?\s*$/gm, '');
+  workerSrc = workerSrc.replace(/^export function /gm, 'function ');
+  workerSrc = workerSrc.replace(/^export const /gm, 'const ');
+  workerSrc = workerSrc.replace(/^export let /gm, 'let ');
 
-  // 3. Read CSS and template
+  const mainJs = consoleSrc + '\n\n' + toolJs;
+
+  // 4. Read CSS and template
   const toolCss = fs.readFileSync(path.join(toolDir, 'style.css'), 'utf8');
   const toolTemplate = fs.readFileSync(path.join(toolDir, 'template.html'), 'utf8');
 
-  // 4. Read vendored xterm.js (gzipped base64) + fit addon
+  // 5. Read vendored xterm.js (gzipped base64) + fit addon
   const vendorDir = path.join(__dirname, 'ext/rv/vendor');
   const xtermJsGzB64 = fs.readFileSync(path.join(vendorDir, 'xterm.js.gz.b64'), 'utf8').trim();
   const xtermCss = fs.readFileSync(path.join(vendorDir, 'xterm.min.css'), 'utf8');
   const fitAddonJs = fs.readFileSync(path.join(vendorDir, 'addon-fit.min.js'), 'utf8');
 
-  // 5. Assemble
+  // 6. Escape worker source for embedding in script tag
+  // Replace </ with <\/ to avoid closing script tag prematurely
+  const escapedWorkerSrc = workerSrc.replace(/<\//g, '<\\/');
+
+  // 7. Assemble
   const html = `<!DOCTYPE html>
 <!-- rv \u2014 RISC-V RV32IMA system emulator -->
 <!-- Part of the Auditable project \u2014 https://github.com/endarthur/auditable -->
@@ -292,12 +300,16 @@ ${toolCss}
 
 ${toolTemplate}
 
+<script type="text/plain" id="rv-worker-src">
+${escapedWorkerSrc}
+</script>
+
 <script>
 // Decompress and load vendored xterm.js + fit addon
 (function(){var b="${xtermJsGzB64}";var d=Uint8Array.from(atob(b),c=>c.charCodeAt(0));new Response(new Blob([d]).stream().pipeThrough(new DecompressionStream("gzip"))).text().then(function(s){var e=document.createElement("script");e.textContent=s;document.head.appendChild(e);_rvBoot()})})();
 ${fitAddonJs}
 function _rvBoot(){
-${js}
+${mainJs}
 }
 </script>
 </body>
