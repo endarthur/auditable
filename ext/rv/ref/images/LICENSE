@@ -1,0 +1,15 @@
+The files in this directory are pre-built Linux kernel and Busybox images
+from https://github.com/cnlohr/mini-rv32ima-images and are licensed under
+the GNU General Public License v3.0.
+
+These images are test artifacts only and are NOT part of the rv emulator
+source code. They are not linked, compiled, or distributed with the
+emulator output.
+
+SPDX-License-Identifier: GPL-3.0-only
+
+                    GNU GENERAL PUBLIC LICENSE
+                       Version 3, 29 June 2007
+
+For the full license text, see:
+https://www.gnu.org/licenses/gpl-3.0.en.html

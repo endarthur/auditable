@@ -1,0 +1,554 @@
+! rv32ima — RISC-V RV32IMA CPU core
+! Translated from mini-rv32ima by cnlohr (MIT License, Copyright 2022)
+! Adapted for atra/Wasm target
+
+! ── Configuration (set by host before boot) ──
+
+var ram_bytes: i32 = 67108864;      ! RAM size in bytes (default 64 MB)
+var reg_base: i32 = 16777216;       ! ram_bytes / 4 = register file offset in i32 array
+const RAMO: i32 = -2147483648;      ! 0x80000000 (RAM image offset, signed)
+
+! ── Globals (CPU state, matches MiniRV32IMAState) ──
+
+var pc: i32;
+var mstatus: i32;
+var cyclel: i32;
+var cycleh: i32;
+var timerl: i32;
+var timerh: i32;
+var timermatchl: i32;
+var timermatchh: i32;
+var mscratch: i32;
+var mtvec: i32;
+var mie: i32;
+var mip: i32;
+var mepc: i32;
+var mtval: i32;
+var mcause: i32;
+! bits 0-1 = privilege mode (3=M, 0=U)
+! bit 2 = WFI
+! bits 3+ = load reservation address
+var extraflags: i32;
+
+! ── Imports (JS host handles MMIO) ──
+
+import mmio_read(addr: i32): i32
+import mmio_write(addr: i32, val: i32)
+
+! ── Trap handler (matches mini-rv32ima exactly) ──
+
+subroutine do_trap(cause, tval: i32)
+begin
+  if ((cause & RAMO) /= 0) then
+    ! Interrupt (MSB set): mepc = next instruction
+    mcause := cause;
+    mtval := 0;
+    pc := pc + 4
+  else
+    ! Exception: mepc = faulting instruction
+    mcause := cause - 1;
+    if (cause > 5 and wasm.le_u(cause, 8)) then
+      mtval := tval
+    else
+      mtval := pc
+    end if
+  end if;
+  mepc := pc;
+  ! MIE→MPIE, current privilege→MPP, clear MIE
+  mstatus := ((mstatus & 8) << 4) | ((extraflags & 3) << 11);
+  pc := mtvec;
+  ! Enter M-mode
+  extraflags := extraflags | 3
+end
+
+! ── Exported accessors ──
+
+export function get_pc(): i32
+begin get_pc := pc end
+
+export subroutine set_pc(val: i32)
+begin pc := val end
+
+export subroutine set_mtime(lo, hi: i32)
+begin timerl := lo; timerh := hi end
+
+export subroutine set_mtimecmp(lo, hi: i32)
+begin timermatchl := lo; timermatchh := hi end
+
+export function get_mtime_lo(): i32
+begin get_mtime_lo := timerl end
+
+export function get_mtime_hi(): i32
+begin get_mtime_hi := timerh end
+
+export function get_mtimecmp_lo(): i32
+begin get_mtimecmp_lo := timermatchl end
+
+export function get_mtimecmp_hi(): i32
+begin get_mtimecmp_hi := timermatchh end
+
+export function get_wait(): i32
+begin get_wait := if ((extraflags & 4) /= 0) then 1 else 0 end
+
+export subroutine clear_wait()
+begin extraflags := extraflags & (-5) end
+
+export function get_mie(): i32
+begin get_mie := mie end
+
+export function get_mip(): i32
+begin get_mip := mip end
+
+export function get_mstatus(): i32
+begin get_mstatus := mstatus end
+
+export function get_mtvec(): i32
+begin get_mtvec := mtvec end
+
+export function get_mcause(): i32
+begin get_mcause := mcause end
+
+export function get_mepc(): i32
+begin get_mepc := mepc end
+
+export function get_mtval(): i32
+begin get_mtval := mtval end
+
+export function get_mscratch(): i32
+begin get_mscratch := mscratch end
+
+export function get_extraflags(): i32
+begin get_extraflags := extraflags end
+
+export subroutine set_extraflags(val: i32)
+begin extraflags := val end
+
+export subroutine set_ram_size(bytes: i32)
+begin ram_bytes := bytes; reg_base := bytes >> 2 end
+
+! ── Main execution loop ──
+
+export function step_batch(ram: array i32; count: i32): i32
+var
+  trap, rval, ir, rdid: i32,
+  ofs_pc, imm, rs1v, rs2v, rsval: i32,
+  csrno, microop, writeval, irmid: i32,
+  dowrite, funct3, shift, w: i32,
+  startmstatus, startextraflags: i32,
+  a64, b64, r64: i64,
+  i: i32;
+begin
+  ! ── Timer interrupt check (matches mini-rv32ima: > not >=, check timermatch != 0) ──
+  if ((wasm.gt_u(timerh, timermatchh) or (timerh == timermatchh and wasm.gt_u(timerl, timermatchl))) and (timermatchh /= 0 or timermatchl /= 0)) then
+    extraflags := extraflags & (-5);  ! clear WFI
+    mip := mip | 128  ! set MTIP
+  else
+    mip := mip & (-129)  ! clear MTIP
+  end if;
+
+  ! ── WFI: don't execute ──
+  if ((extraflags & 4) /= 0) then
+    step_batch := 1;
+    call return(1)
+  end if;
+
+  trap := 0;
+  rval := 0;
+
+  ! ── Pending timer interrupt? ──
+  if ((mip & 128) /= 0 and (mie & 128) /= 0 and (mstatus & 8) /= 0) then
+    trap := -2147483641;  ! 0x80000007
+    pc := pc - 4
+  end if;
+
+  ! ── Instruction loop (only if no pending interrupt) ──
+  if (trap == 0) then
+  for i := 0, count
+    rval := 0;
+    trap := 0;
+    cyclel := cyclel + 1;
+    if (cyclel == 0) then cycleh := cycleh + 1 end if;
+
+    ofs_pc := pc - RAMO;
+
+    if (wasm.ge_u(ofs_pc, ram_bytes)) then
+      trap := 3;  ! instruction access fault (2+1)
+      rval := pc
+    else if ((ofs_pc & 3) /= 0) then
+      trap := 2;  ! instruction address misaligned (1+1)
+      rval := pc
+    else
+      ir := ram[ofs_pc >> 2];
+      rdid := (ir >> 7) & 31;
+
+      case (ir & 127) of
+        ! ── LUI (0x37) ──
+        0x37:
+          rval := ir & (-4096)
+
+        ! ── AUIPC (0x17) ──
+        0x17:
+          rval := pc + (ir & (-4096))
+
+        ! ── JAL (0x6F) ──
+        0x6F:
+          imm := wasm.shr_u(ir & RAMO, 11)
+              | wasm.shr_u(ir & 2145386496, 20)
+              | wasm.shr_u(ir & 1048576, 9)
+              | (ir & 1044480);
+          if ((imm & 1048576) /= 0) then imm := imm | (-2097152) end if;
+          rval := pc + 4;
+          pc := pc + imm - 4
+
+        ! ── JALR (0x67) ──
+        0x67:
+          imm := ir >> 20;  ! sign-extended I-type immediate
+          rval := pc + 4;
+          pc := ((ram[reg_base + ((ir >> 15) & 31)] + imm) & (-2)) - 4
+
+        ! ── BRANCH (0x63) ──
+        0x63:
+          imm := ((ir & 3840) >> 7)
+              | wasm.shr_u(ir & 2113929216, 20)
+              | ((ir & 128) << 4)
+              | (wasm.shr_u(ir, 31) << 12);
+          if ((imm & 4096) /= 0) then imm := imm | (-8192) end if;
+          rs1v := ram[reg_base + ((ir >> 15) & 31)];
+          rs2v := ram[reg_base + ((ir >> 20) & 31)];
+          imm := pc + imm - 4;
+          rdid := 0;
+          funct3 := (ir >> 12) & 7;
+          case (funct3) of
+            0: if (rs1v == rs2v) then pc := imm end if
+            1: if (rs1v /= rs2v) then pc := imm end if
+            4: if (rs1v < rs2v) then pc := imm end if
+            5: if (rs1v >= rs2v) then pc := imm end if
+            6: if (wasm.lt_u(rs1v, rs2v)) then pc := imm end if
+            7: if (wasm.ge_u(rs1v, rs2v)) then pc := imm end if
+          else
+            trap := 3
+          end case
+
+        ! ── LOAD (0x03) ──
+        0x03:
+          rs1v := ram[reg_base + ((ir >> 15) & 31)];
+          imm := ir >> 20;  ! sign-extended
+          rsval := rs1v + imm;
+          ofs_pc := rsval - RAMO;  ! reuse ofs_pc as RAM offset
+
+          if (wasm.ge_u(ofs_pc, ram_bytes - 3)) then
+            ! Outside RAM — check MMIO range 0x10000000..0x12000000
+            if (wasm.ge_u(rsval, 268435456) and wasm.lt_u(rsval, 301989888)) then
+              rval := mmio_read(rsval)
+            else
+              trap := 6;  ! load access fault (5+1)
+              rval := rsval
+            end if
+          else
+            funct3 := (ir >> 12) & 7;
+            case (funct3) of
+              0:  rval := wasm.load8_s(ofs_pc)    ! LB
+              1:  rval := wasm.load16_s(ofs_pc)   ! LH
+              2:  rval := ram[ofs_pc >> 2]         ! LW
+              4:  rval := wasm.load8_u(ofs_pc)    ! LBU
+              5:  rval := wasm.load16_u(ofs_pc)   ! LHU
+            else
+              trap := 3
+            end case
+          end if
+
+        ! ── STORE (0x23) ──
+        0x23:
+          rs1v := ram[reg_base + ((ir >> 15) & 31)];
+          rs2v := ram[reg_base + ((ir >> 20) & 31)];
+          imm := ((ir >> 20) & (-32)) | ((ir >> 7) & 31);  ! S-type immediate
+          rsval := rs1v + imm;
+          ofs_pc := rsval - RAMO;  ! reuse as RAM offset
+          rdid := 0;
+
+          if (wasm.ge_u(ofs_pc, ram_bytes - 3)) then
+            ! Outside RAM — check MMIO range
+            if (wasm.ge_u(rsval, 268435456) and wasm.lt_u(rsval, 301989888)) then
+              call mmio_write(rsval, rs2v)
+            else
+              trap := 8;  ! store access fault (7+1)
+              rval := rsval
+            end if
+          else
+            funct3 := (ir >> 12) & 7;
+            case (funct3) of
+              0:  call wasm.store8(ofs_pc, rs2v)    ! SB
+              1:  call wasm.store16(ofs_pc, rs2v)   ! SH
+              2:  ram[ofs_pc >> 2] := rs2v           ! SW
+            else
+              trap := 3
+            end case
+          end if
+
+        ! ── OP-IMM (0x13) ──
+        0x13:
+          imm := ir >> 20;  ! sign-extended
+          rs1v := ram[reg_base + ((ir >> 15) & 31)];
+          funct3 := (ir >> 12) & 7;
+          case (funct3) of
+            0: rval := rs1v + imm
+            1: rval := rs1v << (imm & 31)
+            2: rval := if (rs1v < imm) then 1 else 0
+            3: rval := if (wasm.lt_u(rs1v, imm)) then 1 else 0
+            4: rval := rs1v ^ imm
+            5:
+              if ((ir & 1073741824) /= 0) then
+                rval := rs1v >> (imm & 31)
+              else
+                rval := wasm.shr_u(rs1v, imm & 31)
+              end if
+            6: rval := rs1v | imm
+            7: rval := rs1v & imm
+          else
+            trap := 3
+          end case
+
+        ! ── OP (0x33) ──
+        0x33:
+          rs1v := ram[reg_base + ((ir >> 15) & 31)];
+          rs2v := ram[reg_base + ((ir >> 20) & 31)];
+          funct3 := (ir >> 12) & 7;
+
+          if ((ir & 33554432) /= 0) then
+            ! M extension (funct7 bit 0 = RV32M)
+            case (funct3) of
+              0: rval := rs1v * rs2v
+              1:  ! MULH
+                a64 := i64(rs1v); b64 := i64(rs2v);
+                rval := i32((a64 * b64) >> 32)
+              2:  ! MULHSU
+                a64 := i64(rs1v); b64 := wasm.extend_i32_u(rs2v);
+                rval := i32((a64 * b64) >> 32)
+              3:  ! MULHU
+                a64 := wasm.extend_i32_u(rs1v); b64 := wasm.extend_i32_u(rs2v);
+                rval := i32((a64 * b64) >> 32)
+              4:  ! DIV
+                if (rs2v == 0) then rval := -1
+                else if (rs1v == RAMO and rs2v == -1) then rval := rs1v
+                else rval := rs1v / rs2v end if
+              5:  ! DIVU
+                if (rs2v == 0) then rval := -1
+                else rval := wasm.div_u(rs1v, rs2v) end if
+              6:  ! REM
+                if (rs2v == 0) then rval := rs1v
+                else if (rs1v == RAMO and rs2v == -1) then rval := 0
+                else rval := rs1v mod rs2v end if
+              7:  ! REMU
+                if (rs2v == 0) then rval := rs1v
+                else rval := wasm.rem_u(rs1v, rs2v) end if
+            else
+              trap := 3
+            end case
+          else
+            case (funct3) of
+              0:
+                if ((ir & 1073741824) /= 0) then
+                  rval := rs1v - rs2v
+                else
+                  rval := rs1v + rs2v
+                end if
+              1: rval := rs1v << (rs2v & 31)
+              2: rval := if (rs1v < rs2v) then 1 else 0
+              3: rval := if (wasm.lt_u(rs1v, rs2v)) then 1 else 0
+              4: rval := rs1v ^ rs2v
+              5:
+                if ((ir & 1073741824) /= 0) then
+                  rval := rs1v >> (rs2v & 31)
+                else
+                  rval := wasm.shr_u(rs1v, rs2v & 31)
+                end if
+              6: rval := rs1v | rs2v
+              7: rval := rs1v & rs2v
+            else
+              trap := 3
+            end case
+          end if
+
+        ! ── FENCE (0x0F) ──
+        0x0F:
+          rdid := 0
+
+        ! ── SYSTEM (0x73) ──
+        0x73:
+          csrno := wasm.shr_u(ir, 20);
+          microop := (ir >> 12) & 7;
+
+          if ((microop & 3) /= 0) then
+            ! ── CSR instructions ──
+            rs1v := (ir >> 15) & 31;
+            writeval := ram[reg_base + rs1v];
+
+            ! Read CSR
+            case (csrno) of
+              0x340: rval := mscratch
+              0x305: rval := mtvec
+              0x304: rval := mie
+              0xC00: rval := cyclel
+              0x344: rval := mip
+              0x341: rval := mepc
+              0x300: rval := mstatus
+              0x342: rval := mcause
+              0x343: rval := mtval
+              0xF11: rval := -16121089  ! 0xFF0FF0FF mvendorid
+              0x301: rval := 1077940481  ! 0x40401101 misa
+              0xF14: rval := 0  ! mhartid
+              0xC01: rval := timerl
+              0xC80: rval := cycleh
+              0xC81: rval := timerh
+            else
+              rval := 0
+            end case;
+
+            ! Compute write value
+            case (microop) of
+              1: writeval := writeval            ! CSRRW
+              2: writeval := rval | writeval     ! CSRRS
+              3: writeval := rval & (writeval ^ (-1)) ! CSRRC (bitwise NOT)
+              5: writeval := rs1v               ! CSRRWI (zimm)
+              6: writeval := rval | rs1v        ! CSRRSI
+              7: writeval := rval & (rs1v ^ (-1))  ! CSRRCI (bitwise NOT)
+            else
+              trap := 3
+            end case;
+
+            ! Write CSR
+            if (trap == 0) then
+              case (csrno) of
+                0x340: mscratch := writeval
+                0x305: mtvec := writeval
+                0x304: mie := writeval
+                0x344: mip := writeval
+                0x341: mepc := writeval
+                0x300: mstatus := writeval
+                0x342: mcause := writeval
+                0x343: mtval := writeval
+              else
+                ! ignore unknown CSR writes
+              end case
+            end if
+
+          else if (microop == 0) then
+            ! ── SYSTEM instructions ──
+            rdid := 0;
+
+            if ((csrno & 255) == 2) then
+              ! MRET
+              startmstatus := mstatus;
+              startextraflags := extraflags;
+              mstatus := ((startmstatus & 128) >> 4) | ((startextraflags & 3) << 11) | 128;
+              extraflags := (startextraflags & (-4)) | ((startmstatus >> 11) & 3);
+              pc := mepc - 4
+            else if (csrno == 0) then
+              ! ECALL — always trap, let kernel handle SBI
+              trap := 12;
+              if ((extraflags & 3) == 0) then trap := 9 end if
+            else if (csrno == 1) then
+              ! EBREAK
+              trap := 4
+            else if (csrno == 261) then
+              ! WFI (0x105)
+              mstatus := mstatus | 8;
+              extraflags := extraflags | 4;
+              pc := pc + 4;
+              step_batch := 1;
+              call return(1)
+            else
+              trap := 3
+            end if
+
+          else
+            trap := 3
+          end if
+
+        ! ── ATOMIC (0x2F) ──
+        0x2F:
+          rs1v := ram[reg_base + ((ir >> 15) & 31)];
+          rs2v := ram[reg_base + ((ir >> 20) & 31)];
+          irmid := wasm.shr_u(ir, 27) & 31;
+          rsval := rs1v - RAMO;
+
+          if (wasm.ge_u(rsval, ram_bytes - 3)) then
+            trap := 8;  ! store/AMO access fault
+            rval := rs1v
+          else
+            rval := ram[rsval >> 2];
+            dowrite := 1;
+
+            case (irmid) of
+              2:  ! LR.W
+                dowrite := 0;
+                extraflags := (extraflags & 7) | (rsval << 3)
+              3:  ! SC.W
+                if (wasm.shr_u(extraflags, 3) /= (rsval & 536870911)) then
+                  rval := 1;
+                  dowrite := 0
+                else
+                  dowrite := 1;
+                  rval := 0
+                end if
+              1:  ! AMOSWAP
+                rs2v := rs2v  ! no-op, rs2v written as-is
+              0:  rs2v := rs2v + rval  ! AMOADD
+              4:  rs2v := rs2v ^ rval  ! AMOXOR
+              12: rs2v := rs2v & rval  ! AMOAND
+              8:  rs2v := rs2v | rval  ! AMOOR
+              16: ! AMOMIN
+                if (rs2v < rval) then rs2v := rs2v else rs2v := rval end if
+              20: ! AMOMAX
+                if (rs2v > rval) then rs2v := rs2v else rs2v := rval end if
+              24: ! AMOMINU
+                if (wasm.lt_u(rs2v, rval)) then rs2v := rs2v else rs2v := rval end if
+              28: ! AMOMAXU
+                if (wasm.gt_u(rs2v, rval)) then rs2v := rs2v else rs2v := rval end if
+            else
+              trap := 3;
+              dowrite := 0
+            end case;
+
+            if (dowrite /= 0) then ram[rsval >> 2] := rs2v end if
+          end if
+
+      else
+        trap := 3
+      end case;
+
+      ! ── Post-execute: trap or writeback ──
+      if (trap /= 0) then
+        ! Break out of loop on trap (match mini-rv32ima behavior)
+        ram[reg_base] := 0;
+        call do_trap(trap, rval);
+        step_batch := 0;
+        call return(0)
+      else
+        if (rdid /= 0) then
+          ram[reg_base + rdid] := rval
+        end if;
+        pc := pc + 4
+      end if
+    end if;  ! ofs_pc bounds check
+
+    ! Handle trap from bounds check
+    if (trap /= 0) then
+      ram[reg_base] := 0;
+      call do_trap(trap, rval);
+      step_batch := 0;
+      call return(0)
+    end if;
+
+    ! Hardwire x0 = 0
+    ram[reg_base] := 0
+  end for
+  end if;  ! trap == 0 (no pending interrupt)
+
+  ! ── Handle pending interrupt trap ──
+  if (trap /= 0) then
+    call do_trap(trap, 0)
+  end if;
+
+  step_batch := 0
+end

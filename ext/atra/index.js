@@ -1344,7 +1344,10 @@ const OP_UNREACHABLE = 0x00, OP_NOP = 0x01, OP_BLOCK = 0x02, OP_LOOP = 0x03,
 
 // ── Memory (0x28–0x40) ──
   OP_I32_LOAD = 0x28, OP_I64_LOAD = 0x29, OP_F32_LOAD = 0x2a, OP_F64_LOAD = 0x2b,
+  OP_I32_LOAD8_S = 0x2c, OP_I32_LOAD8_U = 0x2d,
+  OP_I32_LOAD16_S = 0x2e, OP_I32_LOAD16_U = 0x2f,
   OP_I32_STORE = 0x36, OP_I64_STORE = 0x37, OP_F32_STORE = 0x38, OP_F64_STORE = 0x39,
+  OP_I32_STORE8 = 0x3a, OP_I32_STORE16 = 0x3b,
   OP_MEMORY_SIZE = 0x3f, OP_MEMORY_GROW = 0x40,
 
 // ── Constants (0x41–0x44) ──
@@ -2452,6 +2455,11 @@ function codegen(ast, interpValues, userImports) {
             bw.byte(OP_RETURN);
             break;
           }
+          // wasm.* builtins used as statements (e.g. call wasm.store8(...))
+          if (stmt.name.startsWith('wasm.')) {
+            emitWasmBuiltin(stmt.name.slice(5), stmt, null);
+            break;
+          }
           // SIMD namespaced builtins used as statements (e.g. call v128.store(...))
           const callDotIdx = stmt.name.indexOf('.');
           if (callDotIdx !== -1) {
@@ -3151,6 +3159,14 @@ function codegen(ast, interpValues, userImports) {
       if (op === 'extend8_s') { emitExpr(expr.args[0], t); bw.byte(t === 'i64' ? OP_I64_EXTEND8_S : OP_I32_EXTEND8_S); return; }
       if (op === 'extend16_s') { emitExpr(expr.args[0], t); bw.byte(t === 'i64' ? OP_I64_EXTEND16_S : OP_I32_EXTEND16_S); return; }
       if (op === 'extend_i32_u') { emitExpr(expr.args[0], 'i32'); bw.byte(OP_I64_EXTEND_I32_U); return; }
+      // Sub-word memory access: wasm.load8_s(addr), wasm.store8(addr, val), etc.
+      // These emit i32.load8_s etc. with align=0, offset=0, operating on memory 0.
+      if (op === 'load8_s') { emitExpr(expr.args[0], 'i32'); bw.byte(OP_I32_LOAD8_S); bw.u32(0); bw.u32(0); return; }
+      if (op === 'load8_u') { emitExpr(expr.args[0], 'i32'); bw.byte(OP_I32_LOAD8_U); bw.u32(0); bw.u32(0); return; }
+      if (op === 'load16_s') { emitExpr(expr.args[0], 'i32'); bw.byte(OP_I32_LOAD16_S); bw.u32(0); bw.u32(0); return; }
+      if (op === 'load16_u') { emitExpr(expr.args[0], 'i32'); bw.byte(OP_I32_LOAD16_U); bw.u32(0); bw.u32(0); return; }
+      if (op === 'store8') { emitExpr(expr.args[0], 'i32'); emitExpr(expr.args[1], 'i32'); bw.byte(OP_I32_STORE8); bw.u32(0); bw.u32(0); return; }
+      if (op === 'store16') { emitExpr(expr.args[0], 'i32'); emitExpr(expr.args[1], 'i32'); bw.byte(OP_I32_STORE16); bw.u32(0); bw.u32(0); return; }
       if (op === 'trunc_sat_s') {
         const fromType = inferExprType(expr.args[0]);
         emitExpr(expr.args[0], fromType);

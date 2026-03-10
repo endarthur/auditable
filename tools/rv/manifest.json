@@ -1,0 +1,10 @@
+{
+  "name": "rv — RISC-V Emulator",
+  "short_name": "rv",
+  "description": "RISC-V RV32IMA system emulator — boots Linux in the browser",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#c89b3c",
+  "icons": []
+}

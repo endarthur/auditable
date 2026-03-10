@@ -239,6 +239,79 @@ ${js}
 }
 
 // ══════════════════════════════════════════════════
+// TARGET: rv
+// ══════════════════════════════════════════════════
+
+if (target === 'rv') {
+  const toolDir = path.join(__dirname, 'tools', 'rv');
+  const toolJsDir = path.join(toolDir, 'js');
+
+  // 1. Process tool modules
+  let toolJs = processModules(path.join(toolJsDir, 'main.js'), toolJsDir);
+
+  // 2. Prepend rv engine (compiled atra CPU + JS host)
+  const rvPath = path.join(__dirname, 'ext/rv/index.js');
+  if (!fs.existsSync(rvPath)) {
+    console.error('Error: ext/rv/index.js not found. Run `node ext/rv/build.js` first.');
+    process.exit(1);
+  }
+  let rvSrc = fs.readFileSync(rvPath, 'utf8');
+  rvSrc = rvSrc.replace(/^export\s*\{[^}]*\};?\s*$/gm, '');
+  rvSrc = rvSrc.replace(/^export function /gm, 'function ');
+  rvSrc = rvSrc.replace(/^export const /gm, 'const ');
+  rvSrc = rvSrc.replace(/^export let /gm, 'let ');
+  const js = rvSrc + '\n\n' + toolJs;
+
+  // 3. Read CSS and template
+  const toolCss = fs.readFileSync(path.join(toolDir, 'style.css'), 'utf8');
+  const toolTemplate = fs.readFileSync(path.join(toolDir, 'template.html'), 'utf8');
+
+  // 4. Read vendored xterm.js (gzipped base64) + fit addon
+  const vendorDir = path.join(__dirname, 'ext/rv/vendor');
+  const xtermJsGzB64 = fs.readFileSync(path.join(vendorDir, 'xterm.js.gz.b64'), 'utf8').trim();
+  const xtermCss = fs.readFileSync(path.join(vendorDir, 'xterm.min.css'), 'utf8');
+  const fitAddonJs = fs.readFileSync(path.join(vendorDir, 'addon-fit.min.js'), 'utf8');
+
+  // 5. Assemble
+  const html = `<!DOCTYPE html>
+<!-- rv \u2014 RISC-V RV32IMA system emulator -->
+<!-- Part of the Auditable project \u2014 https://github.com/endarthur/auditable -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#c89b3c">
+<title>rv</title>
+<style>
+${xtermCss}
+${toolCss}
+</style>
+</head>
+<body>
+
+${toolTemplate}
+
+<script>
+// Decompress and load vendored xterm.js + fit addon
+(function(){var b="${xtermJsGzB64}";var d=Uint8Array.from(atob(b),c=>c.charCodeAt(0));new Response(new Blob([d]).stream().pipeThrough(new DecompressionStream("gzip"))).text().then(function(s){var e=document.createElement("script");e.textContent=s;document.head.appendChild(e);_rvBoot()})})();
+${fitAddonJs}
+function _rvBoot(){
+${js}
+}
+</script>
+</body>
+</html>
+`;
+
+  const outPath = path.join(toolDir, 'index.html');
+  fs.writeFileSync(outPath, html);
+  const size = fs.statSync(outPath).size;
+  console.log(`Built tools/rv/index.html (${(size / 1024).toFixed(1)} KB)`);
+  process.exit(0);
+}
+
+// ══════════════════════════════════════════════════
 // TARGET: scan
 // ══════════════════════════════════════════════════
 
