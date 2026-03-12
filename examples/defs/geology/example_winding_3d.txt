@@ -1,0 +1,232 @@
+/// auditable
+/// title: winding number — 3D block model (three.js)
+/// settings: {"theme":"dark","fontSize":13,"width":"860","editorView":"yes"}
+/// module: ./ext/winding/index.js ext/winding/index.js
+
+/// md
+# generalized winding number — 3D view
+
+evaluate triangulated surfaces against block models using the [generalized winding number](https://igl.ethz.ch/projects/winding-number/) (Jacobson et al., SIGGRAPH 2013). blocks are rendered with three.js — drag to orbit, scroll to zoom.
+
+select a **mesh** and adjust block resolution. blocks are colored by their inside/outside proportion: amber = fully inside, blue = fully outside, with a gradient between.
+
+/// code collapsed
+// mesh generators
+
+function boxMesh(x0, y0, z0, x1, y1, z1) {
+  const v = new Float32Array([
+    x0,y0,z0, x1,y0,z0, x1,y1,z0, x0,y1,z0,
+    x0,y0,z1, x1,y0,z1, x1,y1,z1, x0,y1,z1,
+  ]);
+  const t = new Uint32Array([
+    0,2,1, 0,3,2, 4,5,6, 4,6,7,
+    0,1,5, 0,5,4, 2,3,7, 2,7,6,
+    0,4,7, 0,7,3, 1,2,6, 1,6,5,
+  ]);
+  return { vertices: v, triangles: t, name: 'box' };
+}
+
+function sphereMesh(cx, cy, cz, r, slices, stacks) {
+  const verts = [], tris = [];
+  for (let j = 0; j <= stacks; j++) {
+    const theta = Math.PI * j / stacks;
+    const sinT = Math.sin(theta), cosT = Math.cos(theta);
+    for (let i = 0; i <= slices; i++) {
+      const phi = 2 * Math.PI * i / slices;
+      verts.push(cx + r * sinT * Math.cos(phi), cy + r * sinT * Math.sin(phi), cz + r * cosT);
+    }
+  }
+  for (let j = 0; j < stacks; j++) {
+    for (let i = 0; i < slices; i++) {
+      const a = j * (slices + 1) + i, b = a + slices + 1;
+      tris.push(a, b, a + 1, a + 1, b, b + 1);
+    }
+  }
+  return { vertices: new Float32Array(verts), triangles: new Uint32Array(tris), name: 'sphere' };
+}
+
+function planeMesh(x0, y0, x1, y1, z, angle) {
+  const rad = angle * Math.PI / 180;
+  const cos = Math.cos(rad), sin = Math.sin(rad);
+  const cx = (x0 + x1) / 2, cz = z;
+  const pts = [[x0,y0,z],[x1,y0,z],[x1,y1,z],[x0,y1,z]];
+  const verts = [];
+  for (const [px, py, pz] of pts) {
+    const dx = px - cx, dz = pz - cz;
+    verts.push(cx + dx * cos - dz * sin, py, cz + dx * sin + dz * cos);
+  }
+  return {
+    vertices: new Float32Array(verts),
+    triangles: new Uint32Array([0,1,2, 0,2,3]),
+    name: 'plane',
+  };
+}
+
+/// code
+// parameters
+const THREE = await load("https://esm.sh/three@0.170.0");
+const { OrbitControls } = await load("https://esm.sh/three@0.170.0/examples/jsm/controls/OrbitControls.js");
+const { Winding } = await load("./ext/winding/index.js");
+
+const meshNames = ["sphere (r=2)", "box (2\u00d72\u00d72)", "tilted plane (30\u00b0)"];
+const meshChoice = ui.dropdown("mesh", meshNames);
+const meshIdx = meshNames.indexOf(meshChoice);
+const gridRes = ui.slider("grid resolution", 8, {min: 4, max: 40, step: 1});
+const subRes = ui.slider("sub-sampling", 2, {min: 1, max: 8, step: 1});
+const showWireframe = ui.checkbox("show mesh wireframe", true);
+const cutaway = ui.checkbox("cutaway (hide front half)", false);
+
+/// code collapsed
+// %manual
+// evaluate winding + render with three.js
+
+const meshes = [
+  () => sphereMesh(0, 0, 0, 2, 24, 12),
+  () => boxMesh(-1, -1, -1, 1, 1, 1),
+  () => planeMesh(-3, -3, 3, 3, 0, 30),
+];
+const mesh = meshes[meshIdx]();
+const { vertices, triangles } = mesh;
+const halfExtent = meshIdx === 2 ? 4 : 3;
+const isOpen = meshIdx === 2;
+
+// progress display
+const status = document.createElement('div');
+status.style.cssText = 'font:12px monospace;color:#888;margin:4px 0';
+status.textContent = 'evaluating\u2026';
+ui.display(status);
+
+// evaluate with winding module (GPU if available, CPU fallback)
+let gpuDevice = null;
+try {
+  const adapter = await navigator.gpu?.requestAdapter();
+  if (adapter) gpuDevice = await adapter.requestDevice();
+} catch (e) {}
+const winding = await Winding.create(gpuDevice);
+winding.setMesh(vertices, triangles);
+
+const blockSize = (2 * halfExtent) / gridRes;
+const t0 = performance.now();
+const result = await winding.evaluate({
+  origin: [-halfExtent, -halfExtent, -halfExtent],
+  size: [blockSize, blockSize, blockSize],
+  count: [gridRes, gridRes, gridRes],
+}, {
+  mode: 'proportion',
+  resolution: [subRes, subRes, subRes],
+  threshold: isOpen ? 0 : 0.5,
+  onProgress: frac => { status.textContent = `evaluating\u2026 ${(frac * 100).toFixed(0)}%`; },
+});
+const elapsed = (performance.now() - t0).toFixed(0);
+status.textContent = `evaluated in ${elapsed} ms`;
+
+// three.js scene
+const W = Math.min(560, window.innerWidth - 80);
+const H = W;
+const canvas = ui.canvas(W, H);
+
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setSize(W, H);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x0a0a0a);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, W / H, 0.1, 100);
+camera.position.set(halfExtent * 2, halfExtent * 1.5, halfExtent * 2);
+
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+
+// lighting
+scene.add(new THREE.AmbientLight(0x404040, 0.5));
+const sun = new THREE.DirectionalLight(0xc89b3c, 1.6);
+sun.position.set(4, 8, 3);
+scene.add(sun);
+const fill = new THREE.DirectionalLight(0x4466aa, 0.3);
+fill.position.set(-3, 4, -2);
+scene.add(fill);
+
+// axes helper
+const axes = new THREE.AxesHelper(halfExtent * 0.6);
+scene.add(axes);
+
+// mesh wireframe
+if (showWireframe) {
+  const nVerts = vertices.length / 3;
+  const meshGeo = new THREE.BufferGeometry();
+  meshGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(vertices), 3));
+  meshGeo.setIndex(new THREE.BufferAttribute(new Uint32Array(triangles), 1));
+  const wireframe = new THREE.WireframeGeometry(meshGeo);
+  const wireMat = new THREE.LineBasicMaterial({ color: 0xc89b3c, opacity: 0.25, transparent: true });
+  scene.add(new THREE.LineSegments(wireframe, wireMat));
+}
+
+// block cubes
+const { proportions } = result;
+const nx = gridRes, ny = gridRes, nz = gridRes;
+const cubeGeo = new THREE.BoxGeometry(blockSize * 0.85, blockSize * 0.85, blockSize * 0.85);
+
+const amber = new THREE.Color(0xc89b3c);
+const blue = new THREE.Color(0x2244aa);
+
+let blockCount = 0;
+for (let k = 0; k < nz; k++) {
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      const p = proportions[i + j * nx + k * nx * ny];
+      if (p < 0.01) continue;
+
+      const cx = -halfExtent + (i + 0.5) * blockSize;
+      const cy = -halfExtent + (j + 0.5) * blockSize;
+      const cz = -halfExtent + (k + 0.5) * blockSize;
+
+      // cutaway: skip blocks in front-right quadrant
+      if (cutaway && cx > 0 && cz > 0) continue;
+
+      const color = new THREE.Color().lerpColors(blue, amber, p);
+      const mat = new THREE.MeshLambertMaterial({
+        color,
+        transparent: p < 0.99,
+        opacity: 0.3 + 0.7 * p,
+      });
+      const cube = new THREE.Mesh(cubeGeo, mat);
+      cube.position.set(cx, cy, cz);
+      scene.add(cube);
+      blockCount++;
+    }
+  }
+}
+
+// render loop
+let running = true;
+function animate() {
+  if (!running) return;
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+// stats + analytical comparison
+let volSum = 0;
+for (let i = 0; i < proportions.length; i++) volSum += proportions[i];
+const volume = volSum * (blockSize ** 3);
+
+const analyticalVols = [
+  (4 / 3) * Math.PI * 8,  // sphere r=2: 4/3 \u03c0 r\u00b3
+  8,                        // box 2\u00d72\u00d72
+  0,                        // plane (open surface, no volume)
+];
+const exact = analyticalVols[meshIdx];
+const errPct = exact > 0 ? ((volume - exact) / exact * 100).toFixed(1) : '\u2014';
+const errStr = exact > 0 ? ` (exact ${exact.toFixed(2)}, error ${errPct}%)` : '';
+
+const backend = winding.hasGPU ? 'gpu' : 'cpu';
+ui.display(`${mesh.name} \u2014 ${blockCount}/${nx*ny*nz} blocks, vol \u2248 ${volume.toFixed(2)}${errStr}, ${elapsed} ms (${backend})`);
+
+invalidation.then(() => {
+  running = false;
+  renderer.dispose();
+  cubeGeo.dispose();
+});

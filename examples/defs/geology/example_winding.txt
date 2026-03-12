@@ -1,0 +1,274 @@
+/// auditable
+/// title: winding number — block model evaluation
+/// settings: {"theme":"dark","fontSize":13,"width":"860","editorView":"yes"}
+
+/// md
+# generalized winding number
+
+evaluate triangulated surfaces against block models using the [generalized winding number](https://igl.ethz.ch/projects/winding-number/) (Jacobson et al., SIGGRAPH 2013). works correctly on closed solids, open surfaces, and imperfect meshes with holes or flipped normals.
+
+select a **mesh** (sphere, box, or tilted plane) and adjust the block model resolution. the 3D view shows evaluated blocks colored by their inside/outside classification or volumetric proportion.
+
+/// code collapsed
+// mesh generators
+
+function boxMesh(x0, y0, z0, x1, y1, z1) {
+  const v = new Float32Array([
+    x0,y0,z0, x1,y0,z0, x1,y1,z0, x0,y1,z0,
+    x0,y0,z1, x1,y0,z1, x1,y1,z1, x0,y1,z1,
+  ]);
+  const t = new Uint32Array([
+    0,2,1, 0,3,2, 4,5,6, 4,6,7,
+    0,1,5, 0,5,4, 2,3,7, 2,7,6,
+    0,4,7, 0,7,3, 1,2,6, 1,6,5,
+  ]);
+  return { vertices: v, triangles: t, name: 'box' };
+}
+
+function sphereMesh(cx, cy, cz, r, slices, stacks) {
+  const verts = [], tris = [];
+  for (let j = 0; j <= stacks; j++) {
+    const theta = Math.PI * j / stacks;
+    const sinT = Math.sin(theta), cosT = Math.cos(theta);
+    for (let i = 0; i <= slices; i++) {
+      const phi = 2 * Math.PI * i / slices;
+      verts.push(cx + r * sinT * Math.cos(phi), cy + r * sinT * Math.sin(phi), cz + r * cosT);
+    }
+  }
+  for (let j = 0; j < stacks; j++) {
+    for (let i = 0; i < slices; i++) {
+      const a = j * (slices + 1) + i, b = a + slices + 1;
+      tris.push(a, b, a + 1, a + 1, b, b + 1);
+    }
+  }
+  return { vertices: new Float32Array(verts), triangles: new Uint32Array(tris), name: 'sphere' };
+}
+
+function planeMesh(x0, y0, x1, y1, z, angle) {
+  // tilted plane: rotate around y-axis by angle (degrees)
+  const rad = angle * Math.PI / 180;
+  const cos = Math.cos(rad), sin = Math.sin(rad);
+  const cx = (x0 + x1) / 2, cz = z;
+  const pts = [[x0,y0,z],[x1,y0,z],[x1,y1,z],[x0,y1,z]];
+  const verts = [];
+  for (const [px, py, pz] of pts) {
+    const dx = px - cx, dz = pz - cz;
+    verts.push(cx + dx * cos - dz * sin, py, cz + dx * sin + dz * cos);
+  }
+  return {
+    vertices: new Float32Array(verts),
+    triangles: new Uint32Array([0,1,2, 0,2,3]),
+    name: 'plane',
+  };
+}
+
+/// code
+// parameters
+const meshNames = ["sphere (r=2)", "box (2\u00d72\u00d72)", "tilted plane (30\u00b0)"];
+const meshChoice = ui.dropdown("mesh", meshNames);
+const meshIdx = meshNames.indexOf(meshChoice);
+const gridRes = ui.slider("grid resolution", 8, {min: 4, max: 40, step: 1});
+const subRes = ui.slider("sub-sampling", 2, {min: 1, max: 8, step: 1});
+const showWireframe = ui.checkbox("show mesh wireframe", true);
+const showProportions = ui.checkbox("color by proportion", true);
+
+/// code collapsed
+// build mesh and evaluate
+const meshes = [
+  () => sphereMesh(0, 0, 0, 2, 24, 12),
+  () => boxMesh(-1, -1, -1, 1, 1, 1),
+  () => planeMesh(-3, -3, 3, 3, 0, 30),
+];
+const mesh = meshes[meshIdx]();
+const { vertices, triangles } = mesh;
+
+// BVH + winding number evaluation (CPU path)
+const PI4 = 4 * Math.PI;
+
+function solidAngle(px, py, pz, ax, ay, az, bx, by, bz, cx, cy, cz) {
+  const apx = ax-px, apy = ay-py, apz = az-pz;
+  const bpx = bx-px, bpy = by-py, bpz = bz-pz;
+  const cpx = cx-px, cpy = cy-py, cpz = cz-pz;
+  const ra = Math.sqrt(apx*apx+apy*apy+apz*apz);
+  const rb = Math.sqrt(bpx*bpx+bpy*bpy+bpz*bpz);
+  const rc = Math.sqrt(cpx*cpx+cpy*cpy+cpz*cpz);
+  if (ra < 1e-10 || rb < 1e-10 || rc < 1e-10) return 0;
+  const crX = bpy*cpz-bpz*cpy, crY = bpz*cpx-bpx*cpz, crZ = bpx*cpy-bpy*cpx;
+  const num = apx*crX + apy*crY + apz*crZ;
+  const ab = apx*bpx+apy*bpy+apz*bpz;
+  const bc = bpx*cpx+bpy*cpy+bpz*cpz;
+  const ca = cpx*apx+cpy*apy+cpz*apz;
+  return 2 * Math.atan2(num, ra*rb*rc + ab*rc + bc*ra + ca*rb);
+}
+
+function windingAt(px, py, pz) {
+  let sum = 0;
+  const nTris = triangles.length / 3;
+  for (let i = 0; i < nTris; i++) {
+    const a = triangles[i*3], b = triangles[i*3+1], c = triangles[i*3+2];
+    sum += solidAngle(px, py, pz,
+      vertices[a*3], vertices[a*3+1], vertices[a*3+2],
+      vertices[b*3], vertices[b*3+1], vertices[b*3+2],
+      vertices[c*3], vertices[c*3+1], vertices[c*3+2]);
+  }
+  return sum / PI4;
+}
+
+// block model
+const halfExtent = meshIdx === 2 ? 4 : 3;
+const blockSize = (2 * halfExtent) / gridRes;
+const origin = [-halfExtent, -halfExtent, -halfExtent];
+const threshold = meshIdx === 2 ? 0 : 0.5; // open surface vs closed
+
+const t0 = performance.now();
+const nx = gridRes, ny = gridRes, nz = gridRes;
+const proportions = new Float32Array(nx * ny * nz);
+
+for (let k = 0; k < nz; k++) {
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      let inside = 0;
+      for (let sk = 0; sk < subRes; sk++) {
+        for (let sj = 0; sj < subRes; sj++) {
+          for (let si = 0; si < subRes; si++) {
+            const px = origin[0] + (i + (si + 0.5) / subRes) * blockSize;
+            const py = origin[1] + (j + (sj + 0.5) / subRes) * blockSize;
+            const pz = origin[2] + (k + (sk + 0.5) / subRes) * blockSize;
+            if (windingAt(px, py, pz) >= threshold) inside++;
+          }
+        }
+      }
+      proportions[i + j * nx + k * nx * ny] = inside / (subRes ** 3);
+    }
+  }
+}
+const elapsed = (performance.now() - t0).toFixed(0);
+
+// collect visible blocks
+const blocks = [];
+for (let k = 0; k < nz; k++) {
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      const p = proportions[i + j * nx + k * nx * ny];
+      if (p > 0.01) {
+        blocks.push({
+          x: origin[0] + (i + 0.5) * blockSize,
+          y: origin[1] + (j + 0.5) * blockSize,
+          z: origin[2] + (k + 0.5) * blockSize,
+          p,
+        });
+      }
+    }
+  }
+}
+
+/// code collapsed
+// 3D isometric renderer
+const W = Math.min(500, window.innerWidth - 80);
+const H = W;
+const ctx = ui.canvas(W, H).getContext('2d');
+
+// isometric projection
+const angle = Math.PI / 6;
+const cosA = Math.cos(angle), sinA = Math.sin(angle);
+const scale = W / (halfExtent * 5.5);
+
+function project(x, y, z) {
+  const px = (x - y) * cosA * scale + W / 2;
+  const py = -(x + y) * sinA * scale - z * scale + H * 0.6;
+  return [px, py];
+}
+
+function depthSort(x, y, z) {
+  return x + y - z;
+}
+
+// draw background
+ctx.fillStyle = '#0a0a0a';
+ctx.fillRect(0, 0, W, H);
+
+// draw axes
+ctx.strokeStyle = '#444';
+ctx.lineWidth = 1;
+const axLen = halfExtent * 0.8;
+const [ox, oy] = project(0, 0, -halfExtent);
+for (const [dx, dy, dz, label] of [[axLen,0,0,'X'],[0,axLen,0,'Y'],[0,0,axLen,'Z']]) {
+  const [ex, ey] = project(dx, dy, dz - halfExtent);
+  ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ex, ey); ctx.stroke();
+  ctx.fillStyle = '#666'; ctx.font = '11px monospace';
+  ctx.fillText(label, ex + 3, ey - 3);
+}
+
+// draw wireframe mesh
+if (showWireframe) {
+  ctx.strokeStyle = 'rgba(200, 155, 60, 0.25)';
+  ctx.lineWidth = 0.5;
+  const nTris = triangles.length / 3;
+  for (let i = 0; i < nTris; i++) {
+    const a = triangles[i*3], b = triangles[i*3+1], c = triangles[i*3+2];
+    const [ax, ay] = project(vertices[a*3], vertices[a*3+1], vertices[a*3+2]);
+    const [bx, by] = project(vertices[b*3], vertices[b*3+1], vertices[b*3+2]);
+    const [cx, cy] = project(vertices[c*3], vertices[c*3+1], vertices[c*3+2]);
+    ctx.beginPath();
+    ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.lineTo(cx, cy); ctx.closePath();
+    ctx.stroke();
+  }
+}
+
+// sort blocks back-to-front
+blocks.sort((a, b) => depthSort(a.x, a.y, a.z) - depthSort(b.x, b.y, b.z));
+
+// draw blocks
+const bHalf = blockSize * 0.42;
+for (const { x, y, z, p } of blocks) {
+  const alpha = showProportions ? p : 1;
+  const r = Math.round(40 + 160 * p);
+  const g = Math.round(80 + 80 * (1 - p));
+  const b = Math.round(200 * (1 - p));
+
+  // top face
+  const [x0, y0] = project(x - bHalf, y - bHalf, z + bHalf);
+  const [x1, y1] = project(x + bHalf, y - bHalf, z + bHalf);
+  const [x2, y2] = project(x + bHalf, y + bHalf, z + bHalf);
+  const [x3, y3] = project(x - bHalf, y + bHalf, z + bHalf);
+  ctx.fillStyle = `rgba(${r},${g},${b},${alpha * 0.9})`;
+  ctx.beginPath();
+  ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.lineTo(x2, y2); ctx.lineTo(x3, y3);
+  ctx.closePath(); ctx.fill();
+
+  // right face
+  const [x4, y4] = project(x + bHalf, y - bHalf, z - bHalf);
+  const [x5, y5] = project(x + bHalf, y + bHalf, z - bHalf);
+  ctx.fillStyle = `rgba(${Math.round(r*0.7)},${Math.round(g*0.7)},${Math.round(b*0.7)},${alpha * 0.9})`;
+  ctx.beginPath();
+  ctx.moveTo(x1, y1); ctx.lineTo(x4, y4); ctx.lineTo(x5, y5); ctx.lineTo(x2, y2);
+  ctx.closePath(); ctx.fill();
+
+  // left face
+  const [x6, y6] = project(x - bHalf, y + bHalf, z - bHalf);
+  ctx.fillStyle = `rgba(${Math.round(r*0.5)},${Math.round(g*0.5)},${Math.round(b*0.5)},${alpha * 0.9})`;
+  ctx.beginPath();
+  ctx.moveTo(x3, y3); ctx.lineTo(x2, y2); ctx.lineTo(x5, y5); ctx.lineTo(x6, y6);
+  ctx.closePath(); ctx.fill();
+}
+
+// stats
+const nInside = blocks.length;
+const totalBlocks = nx * ny * nz;
+let volSum = 0;
+for (let i = 0; i < proportions.length; i++) volSum += proportions[i];
+const volume = volSum * (blockSize ** 3);
+
+const analyticalVols = [
+  (4 / 3) * Math.PI * 8,  // sphere r=2
+  8,                        // box 2\u00d72\u00d72
+  0,                        // plane (open)
+];
+const exact = analyticalVols[meshIdx];
+const errStr = exact > 0 ? ` (exact ${exact.toFixed(2)}, err ${((volume - exact) / exact * 100).toFixed(1)}%)` : '';
+
+ctx.fillStyle = '#c89b3c';
+ctx.font = '12px monospace';
+ctx.fillText(`${mesh.name} \u2014 ${nInside}/${totalBlocks} blocks, vol \u2248 ${volume.toFixed(2)}${errStr}`, 8, H - 28);
+ctx.fillStyle = '#888';
+ctx.fillText(`grid ${nx}\u00b3, sub ${subRes}\u00b3, ${elapsed} ms`, 8, H - 12);

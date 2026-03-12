@@ -1,0 +1,725 @@
+// WINDING — Generalized Winding Number Block Model Evaluator
+// Auto-generated from ext/winding/src/ — do not edit directly
+
+// -- bvh.js --
+
+// BVH (Bounding Volume Hierarchy) construction for triangle meshes
+// Flat array layout for GPU-friendly traversal
+
+// Node layout (8 floats per node):
+// [min_x, min_y, min_z, max_x, max_y, max_z, left_or_first, count_or_right]
+// Leaf: count > 0, first = index into reordered tri_indices
+// Internal: count = 0, left/right = child node indices
+
+const NODE_SIZE = 8;
+
+function triCentroid(vertices, triangles, triIdx, axis) {
+  const i0 = triangles[triIdx * 3] * 3 + axis;
+  const i1 = triangles[triIdx * 3 + 1] * 3 + axis;
+  const i2 = triangles[triIdx * 3 + 2] * 3 + axis;
+  return (vertices[i0] + vertices[i1] + vertices[i2]) / 3;
+}
+
+function triBounds(vertices, triangles, triIdx) {
+  const a = triangles[triIdx * 3], b = triangles[triIdx * 3 + 1], c = triangles[triIdx * 3 + 2];
+  const ax = vertices[a * 3], ay = vertices[a * 3 + 1], az = vertices[a * 3 + 2];
+  const bx = vertices[b * 3], by = vertices[b * 3 + 1], bz = vertices[b * 3 + 2];
+  const cx = vertices[c * 3], cy = vertices[c * 3 + 1], cz = vertices[c * 3 + 2];
+  return [
+    Math.min(ax, bx, cx), Math.min(ay, by, cy), Math.min(az, bz, cz),
+    Math.max(ax, bx, cx), Math.max(ay, by, cy), Math.max(az, bz, cz),
+  ];
+}
+
+function triArea2(vertices, triangles, triIdx) {
+  // Returns 2x the squared area (avoids sqrt)
+  const a = triangles[triIdx * 3], b = triangles[triIdx * 3 + 1], c = triangles[triIdx * 3 + 2];
+  const ax = vertices[a * 3], ay = vertices[a * 3 + 1], az = vertices[a * 3 + 2];
+  const bx = vertices[b * 3] - ax, by = vertices[b * 3 + 1] - ay, bz = vertices[b * 3 + 2] - az;
+  const cx = vertices[c * 3] - ax, cy = vertices[c * 3 + 1] - ay, cz = vertices[c * 3 + 2] - az;
+  // cross product magnitude squared
+  const nx = by * cz - bz * cy;
+  const ny = bz * cx - bx * cz;
+  const nz = bx * cy - by * cx;
+  return nx * nx + ny * ny + nz * nz;
+}
+
+function buildBVH(vertices, triangles, { maxLeafSize = 4, degenerateEpsilon = 1e-6 } = {}) {
+  const nTris = triangles.length / 3;
+  if (nTris === 0) return { nodes: new Float32Array(0), triIndices: new Uint32Array(0), degenerateCount: 0 };
+
+  // Compute mesh bounding box diagonal for degenerate threshold
+  let mx0 = Infinity, my0 = Infinity, mz0 = Infinity;
+  let mx1 = -Infinity, my1 = -Infinity, mz1 = -Infinity;
+  for (let i = 0; i < vertices.length; i += 3) {
+    mx0 = Math.min(mx0, vertices[i]); my0 = Math.min(my0, vertices[i + 1]); mz0 = Math.min(mz0, vertices[i + 2]);
+    mx1 = Math.max(mx1, vertices[i]); my1 = Math.max(my1, vertices[i + 1]); mz1 = Math.max(mz1, vertices[i + 2]);
+  }
+  const diag = Math.sqrt((mx1 - mx0) ** 2 + (my1 - my0) ** 2 + (mz1 - mz0) ** 2);
+  const areaThresh = (degenerateEpsilon * diag) ** 2;
+
+  // Filter out degenerate triangles
+  const validIndices = [];
+  let degenerateCount = 0;
+  for (let i = 0; i < nTris; i++) {
+    if (triArea2(vertices, triangles, i) < areaThresh) {
+      degenerateCount++;
+    } else {
+      validIndices.push(i);
+    }
+  }
+
+  const n = validIndices.length;
+  if (n === 0) return { nodes: new Float32Array(NODE_SIZE), triIndices: new Uint32Array(0), degenerateCount };
+
+  // Working array of triangle indices (will be reordered by BVH build)
+  const triIdx = new Uint32Array(validIndices);
+
+  // Pre-allocate nodes (worst case: 2n-1 nodes for n leaves)
+  const maxNodes = Math.max(2 * n, 1);
+  const nodes = new Float32Array(maxNodes * NODE_SIZE);
+  let nodeCount = 0;
+
+  function allocNode() {
+    return nodeCount++;
+  }
+
+  function computeBounds(start, count) {
+    let x0 = Infinity, y0 = Infinity, z0 = Infinity;
+    let x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+    for (let i = start; i < start + count; i++) {
+      const b = triBounds(vertices, triangles, triIdx[i]);
+      x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]); z0 = Math.min(z0, b[2]);
+      x1 = Math.max(x1, b[3]); y1 = Math.max(y1, b[4]); z1 = Math.max(z1, b[5]);
+    }
+    return [x0, y0, z0, x1, y1, z1];
+  }
+
+  function buildNode(start, count) {
+    const idx = allocNode();
+    const off = idx * NODE_SIZE;
+    const bounds = computeBounds(start, count);
+    nodes[off] = bounds[0]; nodes[off + 1] = bounds[1]; nodes[off + 2] = bounds[2];
+    nodes[off + 3] = bounds[3]; nodes[off + 4] = bounds[4]; nodes[off + 5] = bounds[5];
+
+    if (count <= maxLeafSize) {
+      // Leaf node
+      nodes[off + 6] = start;  // first
+      nodes[off + 7] = count;  // count > 0 means leaf
+      return idx;
+    }
+
+    // Split along longest axis
+    const dx = bounds[3] - bounds[0];
+    const dy = bounds[4] - bounds[1];
+    const dz = bounds[5] - bounds[2];
+    const axis = dx >= dy && dx >= dz ? 0 : dy >= dz ? 1 : 2;
+
+    // Median split: partition triIdx[start..start+count) by centroid
+    const mid = start + (count >> 1);
+    // Partial sort: nth_element approximation via simple partitioning
+    partialSort(vertices, triangles, triIdx, start, start + count, mid, axis);
+
+    const leftChild = buildNode(start, mid - start);
+    const rightChild = buildNode(mid, start + count - mid);
+
+    // Internal node
+    nodes[off + 6] = leftChild;
+    nodes[off + 7] = rightChild;
+    // count = 0 means internal (already 0 from Float32Array init, but be explicit)
+    // Wait — we used off+7 for right child. We need a way to distinguish leaf vs internal.
+    // Convention: encode count in a separate way. Let's use:
+    // off+6: for leaf = first_tri_index, for internal = left_child (as float, reinterpreted as int)
+    // off+7: for leaf = count (> 0), for internal = right_child (reinterpreted, count=0 not possible since we store right)
+    // Problem: right_child could be 0. Let's use negative count trick:
+    // Actually, let's use a simpler approach: store count separately.
+    // Revised layout: [minx, miny, minz, maxx, maxy, maxz, data1, data2]
+    // Leaf: data1 = first, data2 = count (> 0)
+    // Internal: data1 = left, data2 = -(right) - 1 (negative = internal flag)
+    // Or even simpler: use the sign of data2. Positive = leaf count, negative = encode right child.
+
+    // Use negative data2 to indicate internal node:
+    // data2 < 0: internal, left = data1, right = -(data2) - 1
+    // data2 > 0: leaf, first = data1, count = data2
+    nodes[off + 6] = leftChild;
+    nodes[off + 7] = -(rightChild) - 1;
+
+    return idx;
+  }
+
+  buildNode(0, n);
+
+  return {
+    nodes: nodes.slice(0, nodeCount * NODE_SIZE),
+    triIndices: triIdx,
+    degenerateCount,
+    nodeCount,
+  };
+}
+
+function partialSort(vertices, triangles, indices, lo, hi, mid, axis) {
+  // Simple quickselect to partition around median
+  if (hi - lo <= 1) return;
+
+  let left = lo, right = hi - 1;
+  const pivotIdx = lo + ((hi - lo) >> 1);
+  const pivotVal = triCentroid(vertices, triangles, indices[pivotIdx], axis);
+
+  // Move pivot to end
+  const tmp0 = indices[pivotIdx]; indices[pivotIdx] = indices[right]; indices[right] = tmp0;
+
+  let store = lo;
+  for (let i = lo; i < right; i++) {
+    if (triCentroid(vertices, triangles, indices[i], axis) < pivotVal) {
+      const t = indices[store]; indices[store] = indices[i]; indices[i] = t;
+      store++;
+    }
+  }
+  const t = indices[store]; indices[store] = indices[right]; indices[right] = t;
+
+  if (store < mid) partialSort(vertices, triangles, indices, store + 1, hi, mid, axis);
+  else if (store > mid) partialSort(vertices, triangles, indices, lo, store, mid, axis);
+}
+
+// -- cpu.js --
+
+// CPU winding number evaluation
+// Used for testing and as fallback when WebGPU is unavailable
+
+
+const PI4 = 4 * Math.PI;
+
+// Van Oosterom-Strackee solid angle formula
+// Returns the signed solid angle subtended by triangle (a,b,c) at point p
+function solidAngle(px, py, pz, ax, ay, az, bx, by, bz, cx, cy, cz) {
+  const apx = ax - px, apy = ay - py, apz = az - pz;
+  const bpx = bx - px, bpy = by - py, bpz = bz - pz;
+  const cpx = cx - px, cpy = cy - py, cpz = cz - pz;
+
+  const ra = Math.sqrt(apx * apx + apy * apy + apz * apz);
+  const rb = Math.sqrt(bpx * bpx + bpy * bpy + bpz * bpz);
+  const rc = Math.sqrt(cpx * cpx + cpy * cpy + cpz * cpz);
+
+  if (ra < 1e-10 || rb < 1e-10 || rc < 1e-10) return 0; // point on vertex
+
+  // numerator = a' . (b' x c')
+  const crossX = bpy * cpz - bpz * cpy;
+  const crossY = bpz * cpx - bpx * cpz;
+  const crossZ = bpx * cpy - bpy * cpx;
+  const num = apx * crossX + apy * crossY + apz * crossZ;
+
+  // denominator = ra*rb*rc + (a'.b')*rc + (b'.c')*ra + (c'.a')*rb
+  const ab = apx * bpx + apy * bpy + apz * bpz;
+  const bc = bpx * cpx + bpy * cpy + bpz * cpz;
+  const ca = cpx * apx + cpy * apy + cpz * apz;
+  const den = ra * rb * rc + ab * rc + bc * ra + ca * rb;
+
+  return 2 * Math.atan2(num, den);
+}
+
+// Brute-force winding number (no BVH) — for testing small meshes
+function windingBrute(px, py, pz, vertices, triangles, triIndices) {
+  let sum = 0;
+  const n = triIndices ? triIndices.length : triangles.length / 3;
+  for (let i = 0; i < n; i++) {
+    const ti = triIndices ? triIndices[i] : i;
+    const a = triangles[ti * 3], b = triangles[ti * 3 + 1], c = triangles[ti * 3 + 2];
+    sum += solidAngle(px, py, pz,
+      vertices[a * 3], vertices[a * 3 + 1], vertices[a * 3 + 2],
+      vertices[b * 3], vertices[b * 3 + 1], vertices[b * 3 + 2],
+      vertices[c * 3], vertices[c * 3 + 1], vertices[c * 3 + 2]);
+  }
+  return sum / PI4;
+}
+
+// BVH-accelerated winding number
+function windingBVH(px, py, pz, vertices, triangles, bvhNodes, triIndices) {
+  let sum = 0;
+  const stack = [0]; // start at root
+
+  while (stack.length > 0) {
+    const nodeIdx = stack.pop();
+    const off = nodeIdx * NODE_SIZE;
+
+    // AABB test — skip if point is far from this node
+    // (For winding number, we can't skip based on distance alone without
+    // the far-field approximation. For correctness, traverse all overlapping nodes.
+    // A simple optimization: skip if the solid angle contribution from the entire
+    // node's bounding box is negligible. For now, just traverse everything.)
+
+    const data2 = bvhNodes[off + 7];
+
+    if (data2 > 0) {
+      // Leaf node: data1 = first, data2 = count
+      const first = bvhNodes[off + 6];
+      const count = data2;
+      for (let i = first; i < first + count; i++) {
+        const ti = triIndices[i];
+        const a = triangles[ti * 3], b = triangles[ti * 3 + 1], c = triangles[ti * 3 + 2];
+        sum += solidAngle(px, py, pz,
+          vertices[a * 3], vertices[a * 3 + 1], vertices[a * 3 + 2],
+          vertices[b * 3], vertices[b * 3 + 1], vertices[b * 3 + 2],
+          vertices[c * 3], vertices[c * 3 + 1], vertices[c * 3 + 2]);
+      }
+    } else {
+      // Internal node: data1 = left, data2 = -(right) - 1
+      const left = bvhNodes[off + 6];
+      const right = -(data2) - 1;
+      stack.push(left);
+      stack.push(right);
+    }
+  }
+
+  return sum / PI4;
+}
+
+// Evaluate block model on CPU
+// opts.onProgress: async (fraction) => void — called per z-layer, yields to UI
+async function evaluateCPU(vertices, triangles, bvhNodes, triIndices, blockModel, opts = {}) {
+  const { mode = 'proportion', resolution = [4, 4, 4], threshold = 0.5, onProgress } = opts;
+  const { origin, size, count } = blockModel;
+  const [nx, ny, nz] = count;
+  const [ox, oy, oz] = origin;
+  const [dx, dy, dz] = size;
+  const [sx, sy, sz] = resolution;
+  const total = nx * ny * nz;
+
+  const useBVH = bvhNodes && bvhNodes.length > 0;
+
+  function winding(px, py, pz) {
+    if (useBVH) return windingBVH(px, py, pz, vertices, triangles, bvhNodes, triIndices);
+    return windingBrute(px, py, pz, vertices, triangles, triIndices);
+  }
+
+  // yield to main thread so UI can update
+  const yield_ = onProgress
+    ? () => new Promise(r => setTimeout(r, 0))
+    : null;
+
+  if (mode === 'flag') {
+    const flags = new Uint8Array(total);
+    for (let k = 0; k < nz; k++) {
+      for (let j = 0; j < ny; j++) {
+        for (let i = 0; i < nx; i++) {
+          const px = ox + (i + 0.5) * dx;
+          const py = oy + (j + 0.5) * dy;
+          const pz = oz + (k + 0.5) * dz;
+          const w = winding(px, py, pz);
+          flags[i + j * nx + k * nx * ny] = w >= threshold ? 1 : 0;
+        }
+      }
+      if (onProgress) {
+        onProgress((k + 1) / nz);
+        await yield_();
+      }
+    }
+    return { flags };
+  }
+
+  // Proportion mode
+  const proportions = new Float32Array(total);
+  const flags = new Uint8Array(total);
+  const subTotal = sx * sy * sz;
+
+  for (let k = 0; k < nz; k++) {
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        let inside = 0;
+        for (let sk = 0; sk < sz; sk++) {
+          for (let sj = 0; sj < sy; sj++) {
+            for (let si = 0; si < sx; si++) {
+              const px = ox + (i + (si + 0.5) / sx) * dx;
+              const py = oy + (j + (sj + 0.5) / sy) * dy;
+              const pz = oz + (k + (sk + 0.5) / sz) * dz;
+              const w = winding(px, py, pz);
+              if (w >= threshold) inside++;
+            }
+          }
+        }
+        const idx = i + j * nx + k * nx * ny;
+        proportions[idx] = inside / subTotal;
+        flags[idx] = proportions[idx] >= threshold ? 1 : 0;
+      }
+    }
+    if (onProgress) {
+      onProgress((k + 1) / nz);
+      await yield_();
+    }
+  }
+
+  return { proportions, flags };
+}
+
+// -- gpu.js --
+
+// WebGPU winding number evaluation
+
+const WGSL_SHADER = /* wgsl */`
+struct Params {
+  origin: vec3<f32>,
+  block_size_x: f32,
+  block_size: vec3<f32>,
+  block_count_x: u32,
+  block_count: vec3<u32>,
+  resolution_x: u32,
+  resolution: vec3<u32>,
+  threshold: f32,
+  z_block: u32,
+  z_sub: u32,
+  _pad: u32,
+}
+
+struct BVHNode {
+  min: vec3<f32>,
+  max: vec3<f32>,
+  data1: f32,  // leaf: first, internal: left child
+  data2: f32,  // leaf: count > 0, internal: -(right) - 1
+}
+
+@group(0) @binding(0) var<storage, read> vertices: array<f32>;
+@group(0) @binding(1) var<storage, read> tri_indices_raw: array<u32>;
+@group(0) @binding(2) var<storage, read> bvh_nodes: array<f32>;
+@group(0) @binding(3) var<storage, read> bvh_tri_indices: array<u32>;
+@group(0) @binding(4) var<storage, read_write> counters: array<atomic<u32>>;
+@group(0) @binding(5) var<uniform> params: Params;
+
+fn solid_angle(p: vec3<f32>, a: vec3<f32>, b: vec3<f32>, c: vec3<f32>) -> f32 {
+  let ap = a - p;
+  let bp = b - p;
+  let cp = c - p;
+  let ra = length(ap);
+  let rb = length(bp);
+  let rc = length(cp);
+
+  if (ra < 1e-10 || rb < 1e-10 || rc < 1e-10) { return 0.0; }
+
+  let num = dot(ap, cross(bp, cp));
+  let den = ra * rb * rc + dot(ap, bp) * rc + dot(bp, cp) * ra + dot(cp, ap) * rb;
+  return 2.0 * atan2(num, den);
+}
+
+fn load_vertex(idx: u32) -> vec3<f32> {
+  return vec3<f32>(vertices[idx * 3u], vertices[idx * 3u + 1u], vertices[idx * 3u + 2u]);
+}
+
+fn traverse_bvh(p: vec3<f32>) -> f32 {
+  var winding: f32 = 0.0;
+  var stack: array<u32, 64>;
+  var sp: u32 = 0u;
+  stack[0] = 0u;
+  sp = 1u;
+
+  while (sp > 0u) {
+    sp -= 1u;
+    let node_idx = stack[sp];
+    let off = node_idx * 8u;
+
+    let data2 = bvh_nodes[off + 7u];
+
+    if (data2 > 0.0) {
+      // Leaf: first = data1, count = data2
+      let first = u32(bvh_nodes[off + 6u]);
+      let count = u32(data2);
+      for (var t = first; t < first + count; t++) {
+        let ti = bvh_tri_indices[t];
+        let a = load_vertex(tri_indices_raw[ti * 3u]);
+        let b = load_vertex(tri_indices_raw[ti * 3u + 1u]);
+        let c = load_vertex(tri_indices_raw[ti * 3u + 2u]);
+        winding += solid_angle(p, a, b, c);
+      }
+    } else {
+      // Internal: left = data1, right = -(data2) - 1
+      let left = u32(bvh_nodes[off + 6u]);
+      let right = u32(-(data2) - 1.0);
+      if (sp < 62u) {
+        stack[sp] = left; sp += 1u;
+        stack[sp] = right; sp += 1u;
+      }
+    }
+  }
+
+  return winding;
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let xi = gid.x;
+  let yi = gid.y;
+
+  let sx = params.resolution.x;
+  let sy = params.resolution.y;
+
+  let bi = xi / sx;
+  let bj = yi / sy;
+  if (bi >= params.block_count.x || bj >= params.block_count.y) { return; }
+
+  let si = xi % sx;
+  let sj = yi % sy;
+
+  let px = params.origin.x + (f32(bi) + (f32(si) + 0.5) / f32(sx)) * params.block_size.x;
+  let py = params.origin.y + (f32(bj) + (f32(sj) + 0.5) / f32(sy)) * params.block_size.y;
+  let pz = params.origin.z + (f32(params.z_block) + (f32(params.z_sub) + 0.5) / f32(params.resolution.z)) * params.block_size.z;
+
+  let w = traverse_bvh(vec3<f32>(px, py, pz));
+  let threshold_scaled = params.threshold * 4.0 * 3.14159265;
+  let inside = select(0u, 1u, w >= threshold_scaled);
+
+  let block_idx = bi + bj * params.block_count.x + params.z_block * params.block_count.x * params.block_count.y;
+  atomicAdd(&counters[block_idx], inside);
+}
+`;
+
+const WGSL_FINALIZE = /* wgsl */`
+@group(0) @binding(0) var<storage, read> counters: array<u32>;
+@group(0) @binding(1) var<storage, read_write> proportions: array<f32>;
+@group(0) @binding(2) var<uniform> sub_total: u32;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let idx = gid.x;
+  if (idx >= arrayLength(&proportions)) { return; }
+  proportions[idx] = f32(counters[idx]) / f32(sub_total);
+}
+`;
+
+async function createGPUEvaluator(device) {
+  const mainModule = device.createShaderModule({ code: WGSL_SHADER });
+  const finalizeModule = device.createShaderModule({ code: WGSL_FINALIZE });
+
+  const mainPipeline = device.createComputePipeline({
+    layout: 'auto',
+    compute: { module: mainModule, entryPoint: 'main' },
+  });
+
+  const finalizePipeline = device.createComputePipeline({
+    layout: 'auto',
+    compute: { module: finalizeModule, entryPoint: 'main' },
+  });
+
+  return { device, mainPipeline, finalizePipeline };
+}
+
+async function evaluateGPU(gpu, vertices, triangles, bvhNodes, triIndices, blockModel, opts = {}) {
+  const { device, mainPipeline, finalizePipeline } = gpu;
+  const { mode = 'proportion', resolution = [4, 4, 4], threshold = 0.5 } = opts;
+  const { origin, size, count } = blockModel;
+  const [nx, ny, nz] = count;
+  const [sx, sy, sz] = resolution;
+  const total = nx * ny * nz;
+  const subTotal = sx * sy * sz;
+
+  // Create GPU buffers
+  const vertBuf = device.createBuffer({ size: vertices.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  const triBuf = device.createBuffer({ size: triangles.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  const bvhBuf = device.createBuffer({ size: bvhNodes.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  const bvhTriBuf = device.createBuffer({ size: triIndices.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  const counterBuf = device.createBuffer({ size: total * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+  const propBuf = device.createBuffer({ size: total * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+  const readBuf = device.createBuffer({ size: total * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+
+  // Params: 16 floats (64 bytes), padded to 16-byte alignment
+  // origin(3) + pad + block_size(3) + block_count_x + block_count(3) + resolution_x
+  // + resolution(3) + threshold + z_block + z_sub + pad
+  const paramData = new ArrayBuffer(80);
+  const paramF = new Float32Array(paramData);
+  const paramU = new Uint32Array(paramData);
+  paramF[0] = origin[0]; paramF[1] = origin[1]; paramF[2] = origin[2]; paramF[3] = 0;
+  paramF[4] = size[0]; paramF[5] = size[1]; paramF[6] = size[2]; paramU[7] = nx;
+  paramU[8] = nx; paramU[9] = ny; paramU[10] = nz; paramU[11] = sx;
+  paramU[12] = sx; paramU[13] = sy; paramU[14] = sz; paramF[15] = threshold;
+  // z_block and z_sub set per dispatch
+
+  const paramBuf = device.createBuffer({ size: paramData.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+
+  // Upload static data
+  device.queue.writeBuffer(vertBuf, 0, vertices);
+  device.queue.writeBuffer(triBuf, 0, triangles);
+  device.queue.writeBuffer(bvhBuf, 0, bvhNodes);
+  device.queue.writeBuffer(bvhTriBuf, 0, triIndices);
+
+  const mainBindGroup = device.createBindGroup({
+    layout: mainPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: vertBuf } },
+      { binding: 1, resource: { buffer: triBuf } },
+      { binding: 2, resource: { buffer: bvhBuf } },
+      { binding: 3, resource: { buffer: bvhTriBuf } },
+      { binding: 4, resource: { buffer: counterBuf } },
+      { binding: 5, resource: { buffer: paramBuf } },
+    ],
+  });
+
+  // Dispatch: for each z-block and z-sub-layer
+  // Each z-layer gets its own submit so writeBuffer is visible to the dispatch
+  const dispatchX = Math.ceil((nx * sx) / 8);
+  const dispatchY = Math.ceil((ny * sy) / 8);
+
+  // Clear counters to zero
+  {
+    const enc = device.createCommandEncoder();
+    enc.clearBuffer(counterBuf);
+    device.queue.submit([enc.finish()]);
+  }
+
+  for (let zb = 0; zb < nz; zb++) {
+    for (let zs = 0; zs < sz; zs++) {
+      paramU[16] = zb;
+      paramU[17] = zs;
+      device.queue.writeBuffer(paramBuf, 0, paramData);
+
+      const enc = device.createCommandEncoder();
+      const pass = enc.beginComputePass();
+      pass.setPipeline(mainPipeline);
+      pass.setBindGroup(0, mainBindGroup);
+      pass.dispatchWorkgroups(dispatchX, dispatchY, 1);
+      pass.end();
+      device.queue.submit([enc.finish()]);
+    }
+  }
+
+  if (mode === 'proportion') {
+    // Finalize: convert counters to proportions
+    const subTotalBuf = device.createBuffer({ size: 4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(subTotalBuf, 0, new Uint32Array([subTotal]));
+
+    const finalizeBindGroup = device.createBindGroup({
+      layout: finalizePipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: counterBuf } },
+        { binding: 1, resource: { buffer: propBuf } },
+        { binding: 2, resource: { buffer: subTotalBuf } },
+      ],
+    });
+
+    const enc = device.createCommandEncoder();
+    const pass = enc.beginComputePass();
+    pass.setPipeline(finalizePipeline);
+    pass.setBindGroup(0, finalizeBindGroup);
+    pass.dispatchWorkgroups(Math.ceil(total / 64), 1, 1);
+    pass.end();
+
+    enc.copyBufferToBuffer(propBuf, 0, readBuf, 0, total * 4);
+    device.queue.submit([enc.finish()]);
+
+    await readBuf.mapAsync(GPUMapMode.READ);
+    const proportions = new Float32Array(readBuf.getMappedRange().slice(0));
+    readBuf.unmap();
+
+    const flags = new Uint8Array(total);
+    for (let i = 0; i < total; i++) flags[i] = proportions[i] >= threshold ? 1 : 0;
+
+    // Cleanup
+    vertBuf.destroy(); triBuf.destroy(); bvhBuf.destroy(); bvhTriBuf.destroy();
+    counterBuf.destroy(); propBuf.destroy(); readBuf.destroy(); paramBuf.destroy();
+    subTotalBuf.destroy();
+
+    return { proportions, flags };
+  }
+
+  // Flag mode: read counters (each is 0 or 1 for centroid-only)
+  {
+    const enc = device.createCommandEncoder();
+    enc.copyBufferToBuffer(counterBuf, 0, readBuf, 0, total * 4);
+    device.queue.submit([enc.finish()]);
+  }
+
+  await readBuf.mapAsync(GPUMapMode.READ);
+  const rawCounters = new Uint32Array(readBuf.getMappedRange().slice(0));
+  readBuf.unmap();
+
+  const flags = new Uint8Array(total);
+  for (let i = 0; i < total; i++) flags[i] = rawCounters[i] > 0 ? 1 : 0;
+
+  vertBuf.destroy(); triBuf.destroy(); bvhBuf.destroy(); bvhTriBuf.destroy();
+  counterBuf.destroy(); propBuf.destroy(); readBuf.destroy(); paramBuf.destroy();
+
+  return { flags };
+}
+
+// -- main.js --
+
+// WINDING — Generalized Winding Number Block Model Evaluator
+// Main API: Winding.create(device?), setMesh(), evaluate(), evaluateMultiple()
+
+
+
+
+class Winding {
+  constructor(gpu) {
+    this._gpu = gpu; // null for CPU-only mode
+    this._meshes = new Map(); // name -> { vertices, triangles, bvh }
+    this._defaultMesh = null;
+  }
+
+  // Create a Winding instance
+  // device: GPUDevice (optional — omit for CPU-only mode)
+  static async create(device) {
+    let gpu = null;
+    if (device) {
+      gpu = await createGPUEvaluator(device);
+    }
+    return new Winding(gpu);
+  }
+
+  // Load a mesh. Builds BVH internally.
+  // vertices: Float32Array [x0,y0,z0, x1,y1,z1, ...]
+  // triangles: Uint32Array [a0,b0,c0, a1,b1,c1, ...]
+  // opts.name: string (for multi-surface workflows, default: '_default')
+  // opts.maxLeafSize: number (BVH leaf size, default: 4)
+  setMesh(vertices, triangles, opts = {}) {
+    const name = opts.name || '_default';
+    const bvh = buildBVH(vertices, triangles, {
+      maxLeafSize: opts.maxLeafSize || 4,
+    });
+    const mesh = { vertices, triangles, bvh };
+    this._meshes.set(name, mesh);
+    if (name === '_default' || this._meshes.size === 1) {
+      this._defaultMesh = mesh;
+    }
+    return {
+      nodeCount: bvh.nodeCount,
+      triangleCount: bvh.triIndices.length,
+      degenerateCount: bvh.degenerateCount,
+    };
+  }
+
+  // Evaluate a single mesh against a block model
+  // blockModel: { origin: [x,y,z], size: [dx,dy,dz], count: [nx,ny,nz] }
+  // opts.mode: 'flag' | 'proportion' (default: 'proportion')
+  // opts.resolution: [sx,sy,sz] (default: [4,4,4])
+  // opts.threshold: number (default: 0.5)
+  // opts.mesh: string (mesh name, default: '_default')
+  async evaluate(blockModel, opts = {}) {
+    const meshName = opts.mesh || '_default';
+    const mesh = this._meshes.get(meshName) || this._defaultMesh;
+    if (!mesh) throw new Error('No mesh loaded. Call setMesh() first.');
+
+    const { vertices, triangles, bvh } = mesh;
+
+    if (this._gpu) {
+      return evaluateGPU(this._gpu, vertices, triangles,
+        bvh.nodes, bvh.triIndices, blockModel, opts);
+    }
+
+    return evaluateCPU(vertices, triangles,
+      bvh.nodes, bvh.triIndices, blockModel, opts);
+  }
+
+  // Evaluate multiple named surfaces against the same block model
+  // opts.surfaces: string[] (mesh names)
+  // Other opts same as evaluate()
+  async evaluateMultiple(blockModel, opts = {}) {
+    const { surfaces = [], ...evalOpts } = opts;
+    const results = {};
+    for (const name of surfaces) {
+      results[name] = await this.evaluate(blockModel, { ...evalOpts, mesh: name });
+    }
+    return results;
+  }
+
+  // Check if GPU acceleration is available
+  get hasGPU() {
+    return this._gpu !== null;
+  }
+}
+export { Winding, buildBVH, evaluateCPU, solidAngle, windingBrute, windingBVH };

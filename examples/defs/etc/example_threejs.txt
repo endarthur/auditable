@@ -1,0 +1,164 @@
+/// auditable
+/// title: three.js — procedural terrain
+/// settings: {"theme":"dark","fontSize":13,"width":"860","editorView":"yes"}
+
+/// md
+# three.js — procedural terrain
+
+a procedural fractal terrain rendered with three.js. drag to orbit, scroll to zoom. adjust parameters to reshape the landscape in real time.
+
+/// code collapsed
+// load three.js
+const THREE = await load("https://esm.sh/three@0.170.0");
+const { OrbitControls } = await load("https://esm.sh/three@0.170.0/examples/jsm/controls/OrbitControls.js");
+
+/// code
+// parameters
+const gridSize = ui.slider("grid size", 128, {min: 32, max: 256, step: 32});
+const heightScale = ui.slider("height scale", 2.5, {min: 0.5, max: 6, step: 0.1});
+const octaves = ui.slider("noise octaves", 6, {min: 1, max: 8, step: 1});
+const lacunarity = ui.slider("lacunarity", 2.0, {min: 1.2, max: 3.0, step: 0.1});
+const waterLevel = ui.slider("water level", 0.12, {min: -0.5, max: 1.0, step: 0.01});
+
+/// code collapsed
+// %manual
+// terrain generator + renderer
+
+// simple hash-based noise (no dependencies)
+function hash(x, y) {
+  let h = x * 374761393 + y * 668265263;
+  h = (h ^ (h >> 13)) * 1274126177;
+  return ((h ^ (h >> 16)) & 0x7fffffff) / 0x7fffffff;
+}
+
+function smoothNoise(x, y) {
+  const ix = Math.floor(x), iy = Math.floor(y);
+  const fx = x - ix, fy = y - iy;
+  const u = fx * fx * (3 - 2 * fx), v = fy * fy * (3 - 2 * fy);
+  const a = hash(ix, iy), b = hash(ix + 1, iy);
+  const c = hash(ix, iy + 1), d = hash(ix + 1, iy + 1);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+
+function fbm(x, y, oct, lac) {
+  let val = 0, amp = 1, freq = 1, max = 0;
+  for (let i = 0; i < oct; i++) {
+    val += smoothNoise(x * freq, y * freq) * amp;
+    max += amp;
+    amp *= 0.5;
+    freq *= lac;
+  }
+  return val / max;
+}
+
+// scene setup
+const W = Math.min(600, window.innerWidth - 80);
+const H = W * 0.75;
+const canvas = ui.canvas(W, H);
+
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setSize(W, H);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x0a0a0a);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x0a0a0a, 0.08);
+
+const camera = new THREE.PerspectiveCamera(50, W / H, 0.1, 100);
+camera.position.set(6, 5, 6);
+
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+controls.target.set(0, 0, 0);
+
+// terrain geometry
+const N = gridSize;
+const geo = new THREE.PlaneGeometry(8, 8, N - 1, N - 1);
+geo.rotateX(-Math.PI / 2);
+const pos = geo.attributes.position;
+
+for (let i = 0; i < pos.count; i++) {
+  const x = pos.getX(i), z = pos.getZ(i);
+  const h = fbm(x * 0.5 + 5, z * 0.5 + 5, octaves, lacunarity);
+  pos.setY(i, (h - 0.4) * heightScale);
+}
+geo.computeVertexNormals();
+
+// terrain color by height
+const colors = new Float32Array(pos.count * 3);
+for (let i = 0; i < pos.count; i++) {
+  const h = pos.getY(i) / heightScale + 0.4;
+  let r, g, b;
+  if (h < 0.35) {
+    // deep earth (dark brown)
+    r = 0.18; g = 0.12; b = 0.08;
+  } else if (h < 0.45) {
+    // lowland (olive)
+    const t = (h - 0.35) / 0.1;
+    r = 0.18 + t * 0.15; g = 0.12 + t * 0.2; b = 0.08 + t * 0.02;
+  } else if (h < 0.6) {
+    // midland (muted green)
+    const t = (h - 0.45) / 0.15;
+    r = 0.33 - t * 0.08; g = 0.32 + t * 0.05; b = 0.10;
+  } else if (h < 0.75) {
+    // highland (grey rock)
+    const t = (h - 0.6) / 0.15;
+    r = 0.25 + t * 0.2; g = 0.37 - t * 0.12; b = 0.10 + t * 0.15;
+  } else {
+    // peak (snow-dusted)
+    const t = Math.min(1, (h - 0.75) / 0.2);
+    r = 0.45 + t * 0.4; g = 0.25 + t * 0.5; b = 0.25 + t * 0.5;
+  }
+  colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = b;
+}
+geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+const terrainMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+const terrain = new THREE.Mesh(geo, terrainMat);
+scene.add(terrain);
+
+// water plane
+const waterGeo = new THREE.PlaneGeometry(12, 12);
+waterGeo.rotateX(-Math.PI / 2);
+const waterMat = new THREE.MeshLambertMaterial({
+  color: 0x1a3a4a,
+  transparent: true,
+  opacity: 0.7,
+});
+const water = new THREE.Mesh(waterGeo, waterMat);
+water.position.y = waterLevel;
+scene.add(water);
+
+// lighting
+const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+scene.add(ambientLight);
+
+const sun = new THREE.DirectionalLight(0xc89b3c, 1.8);
+sun.position.set(4, 8, 3);
+scene.add(sun);
+
+const fill = new THREE.DirectionalLight(0x4466aa, 0.4);
+fill.position.set(-3, 4, -2);
+scene.add(fill);
+
+// render loop
+let running = true;
+function animate() {
+  if (!running) return;
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+ui.display(`${N}\u00d7${N} vertices \u00b7 ${octaves} octaves \u00b7 lacunarity ${lacunarity}`);
+
+invalidation.then(() => {
+  running = false;
+  renderer.dispose();
+  geo.dispose();
+  terrainMat.dispose();
+  waterGeo.dispose();
+  waterMat.dispose();
+});

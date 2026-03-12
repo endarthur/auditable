@@ -71,6 +71,8 @@ const categories = {
   // geology — structural geology, petrology, stratigraphy
   geology: [
     'example_stereonet.txt',
+    'example_winding.txt',
+    'example_winding_3d.txt',
   ],
 
   // extensions — language tags and browser APIs
@@ -82,6 +84,7 @@ const categories = {
   // etc — standalone demos that don't fit elsewhere
   etc: [
     'example_synth.txt',
+    'example_threejs.txt',
   ],
 };
 
