@@ -8,7 +8,7 @@
 
 evaluate triangulated surfaces against block models using the [generalized winding number](https://igl.ethz.ch/projects/winding-number/) (Jacobson et al., SIGGRAPH 2013). blocks are rendered with three.js — drag to orbit, scroll to zoom.
 
-select a **mesh** and adjust block resolution. blocks are colored by their inside/outside proportion: amber = fully inside, blue = fully outside, with a gradient between.
+select a **mesh** and adjust block resolution, then press **evaluate** to run. blocks are colored by their inside/outside proportion: amber = fully inside, blue = fully outside, with a gradient between.
 
 /// code collapsed
 // mesh generators
@@ -62,69 +62,52 @@ function planeMesh(x0, y0, x1, y1, z, angle) {
   };
 }
 
-/// code
-// parameters
+/// code collapsed
+// %manual
+// winding number block model — three.js viewer
+
 const THREE = await load("https://esm.sh/three@0.170.0");
 const { OrbitControls } = await load("https://esm.sh/three@0.170.0/examples/jsm/controls/OrbitControls.js");
 const { Winding } = await load("./ext/winding/index.js");
 
+// state
 const meshNames = ["sphere (r=2)", "box (2\u00d72\u00d72)", "tilted plane (30\u00b0)"];
-const meshChoice = ui.dropdown("mesh", meshNames);
-const meshIdx = meshNames.indexOf(meshChoice);
-const gridRes = ui.slider("grid resolution", 8, {min: 4, max: 40, step: 1});
-const subRes = ui.slider("sub-sampling", 2, {min: 1, max: 8, step: 1});
-const showWireframe = ui.checkbox("show mesh wireframe", true);
-const cutaway = ui.checkbox("cutaway (hide front half)", false);
-
-/// code collapsed
-// %manual
-// evaluate winding + render with three.js
-
-const meshes = [
+const meshBuilders = [
   () => sphereMesh(0, 0, 0, 2, 24, 12),
   () => boxMesh(-1, -1, -1, 1, 1, 1),
   () => planeMesh(-3, -3, 3, 3, 0, 30),
 ];
-const mesh = meshes[meshIdx]();
-const { vertices, triangles } = mesh;
-const halfExtent = meshIdx === 2 ? 4 : 3;
-const isOpen = meshIdx === 2;
+const analyticalVols = [(4 / 3) * Math.PI * 8, 8, 0];
 
-// progress display
+let meshIdx = 0, gridRes = 8, subRes = 2, showWireframe = true, cutaway = false;
+
+// widgets (callback mode — no DAG re-execution)
+ui.dropdown("mesh", meshNames, null, { onInput: v => { meshIdx = meshNames.indexOf(v); } });
+ui.slider("grid resolution", gridRes, { min: 4, max: 40, step: 1, onInput: v => { gridRes = v; } });
+ui.slider("sub-sampling", subRes, { min: 1, max: 8, step: 1, onInput: v => { subRes = v; } });
+ui.checkbox("show mesh wireframe", showWireframe, { onInput: v => { showWireframe = v; } });
+ui.checkbox("cutaway (hide front half)", cutaway, { onInput: v => { cutaway = v; } });
+
+// evaluate button
+const btnEval = document.createElement('button');
+btnEval.textContent = 'evaluate';
+btnEval.style.cssText = 'margin:6px 0;padding:4px 16px;background:var(--accent);color:#111;border:none;border-radius:3px;font:12px var(--mono);cursor:pointer';
+ui.display(btnEval);
+
+// status + canvas
 const status = document.createElement('div');
 status.style.cssText = 'font:12px monospace;color:#888;margin:4px 0';
-status.textContent = 'evaluating\u2026';
 ui.display(status);
 
-// evaluate with winding module (GPU if available, CPU fallback)
-let gpuDevice = null;
-try {
-  const adapter = await navigator.gpu?.requestAdapter();
-  if (adapter) gpuDevice = await adapter.requestDevice();
-} catch (e) {}
-const winding = await Winding.create(gpuDevice);
-winding.setMesh(vertices, triangles);
-
-const blockSize = (2 * halfExtent) / gridRes;
-const t0 = performance.now();
-const result = await winding.evaluate({
-  origin: [-halfExtent, -halfExtent, -halfExtent],
-  size: [blockSize, blockSize, blockSize],
-  count: [gridRes, gridRes, gridRes],
-}, {
-  mode: 'proportion',
-  resolution: [subRes, subRes, subRes],
-  threshold: isOpen ? 0 : 0.5,
-  onProgress: frac => { status.textContent = `evaluating\u2026 ${(frac * 100).toFixed(0)}%`; },
-});
-const elapsed = (performance.now() - t0).toFixed(0);
-status.textContent = `evaluated in ${elapsed} ms`;
-
-// three.js scene
 const W = Math.min(560, window.innerWidth - 80);
 const H = W;
 const canvas = ui.canvas(W, H);
 
+const statsEl = document.createElement('div');
+statsEl.style.cssText = 'font:12px monospace;color:#888;margin:4px 0';
+ui.display(statsEl);
+
+// three.js scene (persistent)
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setSize(W, H);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -132,13 +115,10 @@ renderer.setClearColor(0x0a0a0a);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(45, W / H, 0.1, 100);
-camera.position.set(halfExtent * 2, halfExtent * 1.5, halfExtent * 2);
-
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
 controls.dampingFactor = 0.05;
 
-// lighting
 scene.add(new THREE.AmbientLight(0x404040, 0.5));
 const sun = new THREE.DirectionalLight(0xc89b3c, 1.6);
 sun.position.set(4, 8, 3);
@@ -147,58 +127,6 @@ const fill = new THREE.DirectionalLight(0x4466aa, 0.3);
 fill.position.set(-3, 4, -2);
 scene.add(fill);
 
-// axes helper
-const axes = new THREE.AxesHelper(halfExtent * 0.6);
-scene.add(axes);
-
-// mesh wireframe
-if (showWireframe) {
-  const nVerts = vertices.length / 3;
-  const meshGeo = new THREE.BufferGeometry();
-  meshGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(vertices), 3));
-  meshGeo.setIndex(new THREE.BufferAttribute(new Uint32Array(triangles), 1));
-  const wireframe = new THREE.WireframeGeometry(meshGeo);
-  const wireMat = new THREE.LineBasicMaterial({ color: 0xc89b3c, opacity: 0.25, transparent: true });
-  scene.add(new THREE.LineSegments(wireframe, wireMat));
-}
-
-// block cubes
-const { proportions } = result;
-const nx = gridRes, ny = gridRes, nz = gridRes;
-const cubeGeo = new THREE.BoxGeometry(blockSize * 0.85, blockSize * 0.85, blockSize * 0.85);
-
-const amber = new THREE.Color(0xc89b3c);
-const blue = new THREE.Color(0x2244aa);
-
-let blockCount = 0;
-for (let k = 0; k < nz; k++) {
-  for (let j = 0; j < ny; j++) {
-    for (let i = 0; i < nx; i++) {
-      const p = proportions[i + j * nx + k * nx * ny];
-      if (p < 0.01) continue;
-
-      const cx = -halfExtent + (i + 0.5) * blockSize;
-      const cy = -halfExtent + (j + 0.5) * blockSize;
-      const cz = -halfExtent + (k + 0.5) * blockSize;
-
-      // cutaway: skip blocks in front-right quadrant
-      if (cutaway && cx > 0 && cz > 0) continue;
-
-      const color = new THREE.Color().lerpColors(blue, amber, p);
-      const mat = new THREE.MeshLambertMaterial({
-        color,
-        transparent: p < 0.99,
-        opacity: 0.3 + 0.7 * p,
-      });
-      const cube = new THREE.Mesh(cubeGeo, mat);
-      cube.position.set(cx, cy, cz);
-      scene.add(cube);
-      blockCount++;
-    }
-  }
-}
-
-// render loop
 let running = true;
 function animate() {
   if (!running) return;
@@ -208,25 +136,123 @@ function animate() {
 }
 animate();
 
-// stats + analytical comparison
-let volSum = 0;
-for (let i = 0; i < proportions.length; i++) volSum += proportions[i];
-const volume = volSum * (blockSize ** 3);
+// persistent worker (created once, reused across evaluations)
+const winding = await Winding.create({ worker: true, gpu: true });
+let dynamicObjects = [];
 
-const analyticalVols = [
-  (4 / 3) * Math.PI * 8,  // sphere r=2: 4/3 \u03c0 r\u00b3
-  8,                        // box 2\u00d72\u00d72
-  0,                        // plane (open surface, no volume)
-];
-const exact = analyticalVols[meshIdx];
-const errPct = exact > 0 ? ((volume - exact) / exact * 100).toFixed(1) : '\u2014';
-const errStr = exact > 0 ? ` (exact ${exact.toFixed(2)}, error ${errPct}%)` : '';
+async function evaluate() {
+  btnEval.disabled = true;
+  status.textContent = 'evaluating\u2026';
 
-const backend = winding.hasGPU ? 'gpu' : 'cpu';
-ui.display(`${mesh.name} \u2014 ${blockCount}/${nx*ny*nz} blocks, vol \u2248 ${volume.toFixed(2)}${errStr}, ${elapsed} ms (${backend})`);
+  // clear previous blocks/wireframe
+  for (const obj of dynamicObjects) scene.remove(obj);
+  dynamicObjects = [];
+
+  const mesh = meshBuilders[meshIdx]();
+  const { vertices, triangles } = mesh;
+  const halfExtent = meshIdx === 2 ? 4 : 3;
+  const isOpen = meshIdx === 2;
+
+  // camera
+  camera.position.set(halfExtent * 2, halfExtent * 1.5, halfExtent * 2);
+  controls.target.set(0, 0, 0);
+
+  // axes
+  const axes = new THREE.AxesHelper(halfExtent * 0.6);
+  scene.add(axes);
+  dynamicObjects.push(axes);
+
+  // wireframe
+  if (showWireframe) {
+    const meshGeo = new THREE.BufferGeometry();
+    meshGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(vertices), 3));
+    meshGeo.setIndex(new THREE.BufferAttribute(new Uint32Array(triangles), 1));
+    const wireframe = new THREE.WireframeGeometry(meshGeo);
+    const wireMat = new THREE.LineBasicMaterial({ color: 0xc89b3c, opacity: 0.25, transparent: true });
+    const wireObj = new THREE.LineSegments(wireframe, wireMat);
+    scene.add(wireObj);
+    dynamicObjects.push(wireObj);
+  }
+
+  winding.setMesh(vertices, triangles);
+
+  const blockSize = (2 * halfExtent) / gridRes;
+  const t0 = performance.now();
+  const result = await winding.evaluate({
+    origin: [-halfExtent, -halfExtent, -halfExtent],
+    size: [blockSize, blockSize, blockSize],
+    count: [gridRes, gridRes, gridRes],
+  }, {
+    mode: 'proportion',
+    resolution: [subRes, subRes, subRes],
+    threshold: isOpen ? 0 : 0.5,
+    onProgress: frac => { status.textContent = `evaluating\u2026 ${(frac * 100).toFixed(0)}%`; },
+  });
+  const elapsed = (performance.now() - t0).toFixed(0);
+  status.textContent = `evaluated in ${elapsed} ms`;
+
+  // block cubes (InstancedMesh for performance)
+  const { proportions } = result;
+  const nx = gridRes, ny = gridRes, nz = gridRes;
+  const cubeGeo = new THREE.BoxGeometry(blockSize * 0.85, blockSize * 0.85, blockSize * 0.85);
+  const amber = new THREE.Color(0xc89b3c);
+  const blue = new THREE.Color(0x2244aa);
+
+  // count visible blocks first
+  const visible = [];
+  for (let k = 0; k < nz; k++) {
+    for (let j = 0; j < ny; j++) {
+      for (let i = 0; i < nx; i++) {
+        const p = proportions[i + j * nx + k * nx * ny];
+        if (p < 0.01) continue;
+        const cx = -halfExtent + (i + 0.5) * blockSize;
+        const cy = -halfExtent + (j + 0.5) * blockSize;
+        const cz = -halfExtent + (k + 0.5) * blockSize;
+        if (cutaway && cx > 0 && cz > 0) continue;
+        visible.push({ cx, cy, cz, p });
+      }
+    }
+  }
+  const blockCount = visible.length;
+
+  if (blockCount > 0) {
+    const mat = new THREE.MeshLambertMaterial({ transparent: true, opacity: 0.85 });
+    const instMesh = new THREE.InstancedMesh(cubeGeo, mat, blockCount);
+    const dummy = new THREE.Object3D();
+    const tmpColor = new THREE.Color();
+    for (let idx = 0; idx < blockCount; idx++) {
+      const { cx, cy, cz, p } = visible[idx];
+      dummy.position.set(cx, cy, cz);
+      dummy.updateMatrix();
+      instMesh.setMatrixAt(idx, dummy.matrix);
+      tmpColor.lerpColors(blue, amber, p);
+      instMesh.setColorAt(idx, tmpColor);
+    }
+    instMesh.instanceMatrix.needsUpdate = true;
+    instMesh.instanceColor.needsUpdate = true;
+    scene.add(instMesh);
+    dynamicObjects.push(instMesh);
+  }
+
+  // stats
+  let volSum = 0;
+  for (let i = 0; i < proportions.length; i++) volSum += proportions[i];
+  const volume = volSum * (blockSize ** 3);
+
+  const exact = analyticalVols[meshIdx];
+  const errPct = exact > 0 ? ((volume - exact) / exact * 100).toFixed(1) : '\u2014';
+  const errStr = exact > 0 ? ` (exact ${exact.toFixed(2)}, error ${errPct}%)` : '';
+  const backend = winding.hasWorker ? (winding.hasGPU ? 'worker+gpu' : 'worker+cpu') : (winding.hasGPU ? 'gpu' : 'cpu');
+  statsEl.textContent = `${mesh.name} \u2014 ${blockCount}/${nx*ny*nz} blocks, vol \u2248 ${volume.toFixed(2)}${errStr}, ${elapsed} ms (${backend})`;
+
+  btnEval.disabled = false;
+}
+
+btnEval.onclick = evaluate;
+evaluate(); // initial run
 
 invalidation.then(() => {
   running = false;
   renderer.dispose();
-  cubeGeo.dispose();
+  winding.terminate();
 });

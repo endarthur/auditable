@@ -147,7 +147,7 @@ async function createGPUEvaluator(device) {
 
 async function evaluateGPU(gpu, vertices, triangles, bvhNodes, triIndices, blockModel, opts = {}) {
   const { device, mainPipeline, finalizePipeline } = gpu;
-  const { mode = 'proportion', resolution = [4, 4, 4], threshold = 0.5 } = opts;
+  const { mode = 'proportion', resolution = [4, 4, 4], threshold = 0.5, onProgress } = opts;
   const { origin, size, count } = blockModel;
   const [nx, ny, nz] = count;
   const [sx, sy, sz] = resolution;
@@ -159,7 +159,7 @@ async function evaluateGPU(gpu, vertices, triangles, bvhNodes, triIndices, block
   const triBuf = device.createBuffer({ size: triangles.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
   const bvhBuf = device.createBuffer({ size: bvhNodes.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
   const bvhTriBuf = device.createBuffer({ size: triIndices.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-  const counterBuf = device.createBuffer({ size: total * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+  const counterBuf = device.createBuffer({ size: total * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
   const propBuf = device.createBuffer({ size: total * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
   const readBuf = device.createBuffer({ size: total * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
 
@@ -221,6 +221,8 @@ async function evaluateGPU(gpu, vertices, triangles, bvhNodes, triIndices, block
       pass.end();
       device.queue.submit([enc.finish()]);
     }
+    await device.queue.onSubmittedWorkDone();
+    if (onProgress) onProgress((zb + 1) / nz);
   }
 
   if (mode === 'proportion') {

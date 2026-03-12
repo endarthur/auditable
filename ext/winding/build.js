@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const srcDir = path.join(__dirname, 'src');
 
-const files = ['bvh.js', 'cpu.js', 'gpu.js', 'main.js'];
+const files = ['bvh.js', 'cpu.js', 'gpu.js', 'worker.js', 'main.js'];
 
 const chunks = [];
 for (const file of files) {

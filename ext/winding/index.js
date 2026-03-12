@@ -501,7 +501,7 @@ async function createGPUEvaluator(device) {
 
 async function evaluateGPU(gpu, vertices, triangles, bvhNodes, triIndices, blockModel, opts = {}) {
   const { device, mainPipeline, finalizePipeline } = gpu;
-  const { mode = 'proportion', resolution = [4, 4, 4], threshold = 0.5 } = opts;
+  const { mode = 'proportion', resolution = [4, 4, 4], threshold = 0.5, onProgress } = opts;
   const { origin, size, count } = blockModel;
   const [nx, ny, nz] = count;
   const [sx, sy, sz] = resolution;
@@ -513,7 +513,7 @@ async function evaluateGPU(gpu, vertices, triangles, bvhNodes, triIndices, block
   const triBuf = device.createBuffer({ size: triangles.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
   const bvhBuf = device.createBuffer({ size: bvhNodes.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
   const bvhTriBuf = device.createBuffer({ size: triIndices.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-  const counterBuf = device.createBuffer({ size: total * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+  const counterBuf = device.createBuffer({ size: total * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
   const propBuf = device.createBuffer({ size: total * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
   const readBuf = device.createBuffer({ size: total * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
 
@@ -575,6 +575,8 @@ async function evaluateGPU(gpu, vertices, triangles, bvhNodes, triIndices, block
       pass.end();
       device.queue.submit([enc.finish()]);
     }
+    await device.queue.onSubmittedWorkDone();
+    if (onProgress) onProgress((zb + 1) / nz);
   }
 
   if (mode === 'proportion') {
@@ -636,36 +638,196 @@ async function evaluateGPU(gpu, vertices, triangles, bvhNodes, triIndices, block
   return { flags };
 }
 
+// -- worker.js --
+
+// Web Worker for off-main-thread winding number evaluation (CPU and GPU paths)
+// Worker blob inlines all evaluation code via Function.toString() + JSON.stringify()
+
+
+
+
+function createWindingWorker(opts = {}) {
+  const source = `
+const NODE_SIZE = ${NODE_SIZE};
+const PI4 = 4 * Math.PI;
+
+// -- CPU path --
+${solidAngle.toString()}
+${windingBrute.toString()}
+${windingBVH.toString()}
+${evaluateCPU.toString()}
+
+// -- GPU path --
+const WGSL_SHADER = ${JSON.stringify(WGSL_SHADER)};
+const WGSL_FINALIZE = ${JSON.stringify(WGSL_FINALIZE)};
+${createGPUEvaluator.toString()}
+${evaluateGPU.toString()}
+
+const _meshes = new Map();
+let _gpu = null;
+
+async function init(tryGPU) {
+  if (tryGPU) {
+    try {
+      const adapter = await navigator.gpu?.requestAdapter();
+      if (adapter) {
+        const device = await adapter.requestDevice();
+        _gpu = await createGPUEvaluator(device);
+      }
+    } catch (e) {}
+  }
+  self.postMessage({ type: 'ready', hasGPU: !!_gpu });
+}
+
+self.onmessage = async function(e) {
+  const { type } = e.data;
+
+  if (type === 'init') {
+    await init(e.data.gpu);
+
+  } else if (type === 'setMesh') {
+    const { name, vertices, triangles, bvhNodes, triIndices } = e.data;
+    _meshes.set(name, { vertices, triangles, bvhNodes, triIndices });
+
+  } else if (type === 'evaluate') {
+    const { name, blockModel, mode, resolution, threshold } = e.data;
+    const mesh = _meshes.get(name);
+    if (!mesh) {
+      self.postMessage({ type: 'error', message: 'Mesh not found: ' + name });
+      return;
+    }
+    const opts = {
+      mode: mode || 'proportion',
+      resolution: resolution || [4, 4, 4],
+      threshold: threshold != null ? threshold : 0.5,
+      onProgress: (frac) => self.postMessage({ type: 'progress', fraction: frac }),
+    };
+    try {
+      let result;
+      if (_gpu) {
+        result = await evaluateGPU(_gpu, mesh.vertices, mesh.triangles,
+          mesh.bvhNodes, mesh.triIndices, blockModel, opts);
+      } else {
+        result = await evaluateCPU(mesh.vertices, mesh.triangles,
+          mesh.bvhNodes, mesh.triIndices, blockModel, opts);
+      }
+      const transfer = [];
+      if (result.proportions) transfer.push(result.proportions.buffer);
+      transfer.push(result.flags.buffer);
+      self.postMessage({
+        type: 'result',
+        proportions: result.proportions || null,
+        flags: result.flags,
+      }, transfer);
+    } catch (err) {
+      self.postMessage({ type: 'error', message: err.message });
+    }
+
+  } else if (type === 'terminate') {
+    self.close();
+  }
+};
+`;
+  const blob = new Blob([source], { type: 'application/javascript' });
+  const url = URL.createObjectURL(blob);
+  const worker = new Worker(url);
+  URL.revokeObjectURL(url);
+
+  // Send init message — caller awaits 'ready' response
+  worker.postMessage({ type: 'init', gpu: !!opts.gpu });
+  return worker;
+}
+
+// Wait for worker init to complete, returns { worker, hasGPU }
+async function initWindingWorker(opts = {}) {
+  const worker = createWindingWorker(opts);
+  const hasGPU = await new Promise((resolve, reject) => {
+    function handler(e) {
+      if (e.data.type === 'ready') {
+        worker.removeEventListener('message', handler);
+        resolve(e.data.hasGPU);
+      }
+    }
+    worker.addEventListener('message', handler);
+    worker.addEventListener('error', reject, { once: true });
+  });
+  return { worker, hasGPU };
+}
+
+function evaluateWorker(worker, meshName, blockModel, opts = {}) {
+  return new Promise((resolve, reject) => {
+    const { onProgress } = opts;
+
+    function handler(e) {
+      const { type } = e.data;
+      if (type === 'progress') {
+        if (onProgress) onProgress(e.data.fraction);
+      } else if (type === 'result') {
+        worker.removeEventListener('message', handler);
+        resolve({
+          proportions: e.data.proportions,
+          flags: e.data.flags,
+        });
+      } else if (type === 'error') {
+        worker.removeEventListener('message', handler);
+        reject(new Error(e.data.message));
+      }
+    }
+
+    worker.addEventListener('message', handler);
+    worker.addEventListener('error', reject, { once: true });
+
+    worker.postMessage({
+      type: 'evaluate',
+      name: meshName,
+      blockModel,
+      mode: opts.mode,
+      resolution: opts.resolution,
+      threshold: opts.threshold,
+    });
+  });
+}
+
 // -- main.js --
 
 // WINDING — Generalized Winding Number Block Model Evaluator
-// Main API: Winding.create(device?), setMesh(), evaluate(), evaluateMultiple()
+// Main API: Winding.create({ device?, worker?, gpu? }), setMesh(), evaluate()
+
 
 
 
 
 class Winding {
-  constructor(gpu) {
-    this._gpu = gpu; // null for CPU-only mode
-    this._meshes = new Map(); // name -> { vertices, triangles, bvh }
+  constructor() {
+    this._gpu = null;       // main-thread GPU evaluator
+    this._worker = null;    // Worker instance
+    this._workerGPU = false; // whether worker has GPU
+    this._meshes = new Map();
     this._defaultMesh = null;
   }
 
   // Create a Winding instance
-  // device: GPUDevice (optional — omit for CPU-only mode)
-  static async create(device) {
-    let gpu = null;
+  // opts.device: GPUDevice for main-thread WebGPU (e.g. Firefox, or shared with three.js)
+  // opts.worker: true to run evaluation in a Web Worker
+  // opts.gpu: true to let the worker request its own GPUDevice (requires worker: true)
+  static async create(opts = {}) {
+    const { device, worker, gpu } = opts;
+    const w = new Winding();
+
     if (device) {
-      gpu = await createGPUEvaluator(device);
+      w._gpu = await createGPUEvaluator(device);
     }
-    return new Winding(gpu);
+
+    if (worker) {
+      const result = await initWindingWorker({ gpu: !!gpu });
+      w._worker = result.worker;
+      w._workerGPU = result.hasGPU;
+    }
+
+    return w;
   }
 
-  // Load a mesh. Builds BVH internally.
-  // vertices: Float32Array [x0,y0,z0, x1,y1,z1, ...]
-  // triangles: Uint32Array [a0,b0,c0, a1,b1,c1, ...]
-  // opts.name: string (for multi-surface workflows, default: '_default')
-  // opts.maxLeafSize: number (BVH leaf size, default: 4)
+  // Load a mesh. Builds BVH on main thread, sends to worker if active.
   setMesh(vertices, triangles, opts = {}) {
     const name = opts.name || '_default';
     const bvh = buildBVH(vertices, triangles, {
@@ -676,6 +838,18 @@ class Winding {
     if (name === '_default' || this._meshes.size === 1) {
       this._defaultMesh = mesh;
     }
+
+    if (this._worker) {
+      this._worker.postMessage({
+        type: 'setMesh',
+        name,
+        vertices: new Float32Array(vertices),
+        triangles: new Uint32Array(triangles),
+        bvhNodes: new Float32Array(bvh.nodes),
+        triIndices: new Uint32Array(bvh.triIndices),
+      });
+    }
+
     return {
       nodeCount: bvh.nodeCount,
       triangleCount: bvh.triIndices.length,
@@ -684,15 +858,15 @@ class Winding {
   }
 
   // Evaluate a single mesh against a block model
-  // blockModel: { origin: [x,y,z], size: [dx,dy,dz], count: [nx,ny,nz] }
-  // opts.mode: 'flag' | 'proportion' (default: 'proportion')
-  // opts.resolution: [sx,sy,sz] (default: [4,4,4])
-  // opts.threshold: number (default: 0.5)
-  // opts.mesh: string (mesh name, default: '_default')
+  // Priority: worker (GPU or CPU) > main-thread GPU > main-thread CPU
   async evaluate(blockModel, opts = {}) {
     const meshName = opts.mesh || '_default';
     const mesh = this._meshes.get(meshName) || this._defaultMesh;
     if (!mesh) throw new Error('No mesh loaded. Call setMesh() first.');
+
+    if (this._worker) {
+      return evaluateWorker(this._worker, meshName, blockModel, opts);
+    }
 
     const { vertices, triangles, bvh } = mesh;
 
@@ -706,8 +880,6 @@ class Winding {
   }
 
   // Evaluate multiple named surfaces against the same block model
-  // opts.surfaces: string[] (mesh names)
-  // Other opts same as evaluate()
   async evaluateMultiple(blockModel, opts = {}) {
     const { surfaces = [], ...evalOpts } = opts;
     const results = {};
@@ -717,9 +889,17 @@ class Winding {
     return results;
   }
 
-  // Check if GPU acceleration is available
-  get hasGPU() {
-    return this._gpu !== null;
+  // true if any GPU path is active (main-thread or worker)
+  get hasGPU() { return this._gpu !== null || this._workerGPU; }
+  get hasWorker() { return this._worker !== null; }
+
+  // Terminate worker. Falls back to main-thread GPU or CPU.
+  terminate() {
+    if (this._worker) {
+      this._worker.postMessage({ type: 'terminate' });
+      this._worker = null;
+      this._workerGPU = false;
+    }
   }
 }
 export { Winding, buildBVH, evaluateCPU, solidAngle, windingBrute, windingBVH };

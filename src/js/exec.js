@@ -291,9 +291,9 @@ function wireWidgets(cell, viewEl) {
       if (w.tagName === 'AUDIT-SLIDER' || w.tagName === 'AUDIT-TEXT-INPUT') {
         clearTimeout(cell._inputTimer);
         const delay = w.tagName === 'AUDIT-TEXT-INPUT' ? 300 : 80;
-        cell._inputTimer = setTimeout(() => runDAG([cell.id], true), delay);
+        cell._inputTimer = setTimeout(() => runDAG([cell.id]), delay);
       } else {
-        runDAG([cell.id], true);
+        runDAG([cell.id]);
       }
     };
     w.addEventListener('input', handler);
@@ -467,8 +467,8 @@ export async function execCell(cell) {
       else if (!cb.onChange) {
         clearTimeout(cell._inputTimer);
         const delay = type === 'text' ? 300 : type === 'slider' ? 80 : 0;
-        if (delay) cell._inputTimer = setTimeout(() => runDAG([cell.id], true), delay);
-        else runDAG([cell.id], true);
+        if (delay) cell._inputTimer = setTimeout(() => runDAG([cell.id]), delay);
+        else runDAG([cell.id]);
       }
     });
     el.addEventListener('change', () => {
@@ -1106,7 +1106,10 @@ export async function execCell(cell) {
   }
 }
 
+let _dagGen = 0;
+
 export async function runDAG(dirtyIds, force = false) {
+  const gen = ++_dagGen;
   buildDAG();
   const isAutorun = S.autorun && !force;
 
@@ -1222,6 +1225,9 @@ export async function runDAG(dirtyIds, force = false) {
 
     if (window._beforeExec) window._beforeExec(cell);
     await execCell(cell);
+
+    // bail if a newer runDAG started while we were awaiting
+    if (_dagGen !== gen) return;
 
     // if the cell errored, poison its defines
     if (cell.error) {
