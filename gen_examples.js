@@ -73,6 +73,7 @@ const categories = {
     'example_stereonet.txt',
     'example_winding.txt',
     'example_winding_3d.txt',
+    'example_peel_3d.txt',
   ],
 
   // extensions — language tags and browser APIs
