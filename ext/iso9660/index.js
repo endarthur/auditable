@@ -752,11 +752,6 @@ function computeLayout(fileList, opts = {}) {
 
 
 
-import {
-  encodeDotRecord, encodeDotDotRecord, encodeDirRecord,
-  encodeBaseIdentifier, encodeJolietIdentifier,
-} from './dir-record.js';
-
 
 class ISOWriter {
   constructor(opts = {}) {

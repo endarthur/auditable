@@ -18,6 +18,7 @@ const chunks = [];
 for (const file of files) {
   let src = fs.readFileSync(path.join(srcDir, file), 'utf8');
   src = src.replace(/^import\s+.*['"].*['"];?\s*$/gm, '');
+  src = src.replace(/^import\s*\{[^}]*\}\s*from\s*['"].*['"];?\s*$/gm, '');
   src = src.replace(/^export\s*\{[^}]*\};?\s*$/gm, '');
   src = src.replace(/^export function /gm, 'function ');
   src = src.replace(/^export async function /gm, 'async function ');

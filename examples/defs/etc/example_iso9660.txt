@@ -1,0 +1,296 @@
+/// auditable
+/// title: iso 9660
+/// settings: {"theme":"dark","fontSize":13,"width":"860","editorView":"yes"}
+/// module: ./ext/iso9660/index.js ext/iso9660/index.js
+
+/// md
+# iso 9660
+
+create ISO 9660 disc images in the browser — no server, no dependencies. add text files inline, drop real files from your machine, set volume metadata, and download a valid `.iso`.
+
+**volume id limits:** the base ISO 9660 tree allows 32 ASCII characters for the volume label. with Joliet enabled, the label is stored as UCS-2 (2 bytes per character) in the same 32-byte field — so 16 characters max. longer labels are silently truncated. emoji in the volume label works (tested on Windows) — Joliet's UCS-2 encoding handles surrogate pairs.
+
+**saving:** on Chromium browsers, saving uses the File System Access API — the file is written directly to disk with no [Mark of the Web](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-security-zone-mapping), so Windows will mount it without security warnings. on Firefox/Safari the fallback blob download adds MOTW — right-click the `.iso` → Properties → Unblock to mount it.
+
+/// css
+.iso-app { font-family: monospace; color: #bbb; }
+.iso-app input, .iso-app textarea, .iso-app select {
+  font-family: monospace; font-size: 13px;
+  background: #1a1a1a; color: #ccc; border: 1px solid #333;
+  padding: 4px 8px; border-radius: 2px;
+}
+.iso-app input:focus, .iso-app textarea:focus { border-color: #c89b3c; outline: none; }
+.iso-app button {
+  font-family: monospace; font-size: 13px;
+  background: #1a1a1a; color: #c89b3c; border: 1px solid #444;
+  padding: 6px 14px; cursor: pointer; border-radius: 2px;
+}
+.iso-app button:hover { background: #252525; border-color: #c89b3c; }
+.iso-app button.primary { background: #2a2218; border-color: #c89b3c; }
+.iso-section { margin: 12px 0; padding: 10px; border: 1px solid #282828; border-radius: 3px; }
+.iso-section h3 { margin: 0 0 8px; color: #c89b3c; font-size: 13px; font-weight: normal; }
+.iso-tree { margin: 4px 0; padding: 0; list-style: none; font-size: 13px; }
+.iso-tree li { padding: 2px 0; display: flex; align-items: center; gap: 8px; }
+.iso-tree .dir { color: #c89b3c; }
+.iso-tree .file { color: #999; }
+.iso-tree .size { color: #555; font-size: 11px; }
+.iso-tree .remove { color: #666; cursor: pointer; font-size: 11px; }
+.iso-tree .remove:hover { color: #c44; }
+.iso-meta { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; align-items: center; }
+.iso-meta label { color: #777; font-size: 12px; text-align: right; }
+.iso-meta input { width: 100%; }
+.iso-status { color: #555; font-size: 12px; margin-top: 8px; }
+.iso-drop { border: 2px dashed #333; border-radius: 4px; padding: 20px; text-align: center; color: #555; margin: 8px 0; }
+.iso-drop.over { border-color: #c89b3c; color: #c89b3c; }
+
+/// code collapsed
+// %manual
+const { ISOWriter } = await load("./ext/iso9660/index.js");
+
+// state
+const files = [];
+let volumeId = "UNTITLED";
+let publisher = "";
+let joliet = true;
+
+const el = document.createElement("div");
+el.className = "iso-app";
+ui.display(el);
+
+function render() {
+  el.innerHTML = "";
+
+  // -- metadata section --
+  const metaSec = sec("volume metadata");
+  const meta = document.createElement("div");
+  meta.className = "iso-meta";
+  meta.innerHTML = `
+    <label>volume id</label><input type="text" value="${esc(volumeId)}" data-f="vol">
+    <label>publisher</label><input type="text" value="${esc(publisher)}" maxlength="128" data-f="pub">
+    <label>joliet</label><select data-f="jol"><option value="yes"${joliet ? " selected" : ""}>yes</option><option value="no"${!joliet ? " selected" : ""}>no</option></select>
+  `;
+  meta.querySelector("[data-f=vol]").oninput = e => { volumeId = e.target.value; };
+  meta.querySelector("[data-f=pub]").oninput = e => { publisher = e.target.value; };
+  meta.querySelector("[data-f=jol]").onchange = e => { joliet = e.target.value === "yes"; };
+  metaSec.appendChild(meta);
+  el.appendChild(metaSec);
+
+  // -- add files section --
+  const addSec = sec("add files");
+
+  // text file row
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex;gap:6px;margin-bottom:8px;align-items:center";
+  const nameIn = document.createElement("input");
+  nameIn.type = "text"; nameIn.placeholder = "path (e.g. readme.txt)";
+  nameIn.style.flex = "1";
+  const contentIn = document.createElement("input");
+  contentIn.type = "text"; contentIn.placeholder = "content";
+  contentIn.style.flex = "2";
+  const addBtn = document.createElement("button");
+  addBtn.textContent = "add text";
+  addBtn.onclick = () => {
+    const name = nameIn.value.trim();
+    if (!name) return;
+    files.push({ path: name, data: new TextEncoder().encode(contentIn.value), text: true });
+    nameIn.value = ""; contentIn.value = "";
+    render();
+  };
+  row.append(nameIn, contentIn, addBtn);
+  addSec.appendChild(row);
+
+  // buttons row: file picker + folder picker (FSAA)
+  const btnRow = document.createElement("div");
+  btnRow.style.cssText = "display:flex;gap:6px;margin-bottom:8px";
+  const fileBtn = document.createElement("button");
+  fileBtn.textContent = "add files\u2026";
+  fileBtn.onclick = () => {
+    const inp = document.createElement("input");
+    inp.type = "file"; inp.multiple = true;
+    inp.onchange = () => addFileList(inp.files);
+    inp.click();
+  };
+  btnRow.appendChild(fileBtn);
+  if (window.showDirectoryPicker) {
+    const dirBtn = document.createElement("button");
+    dirBtn.textContent = "add folder\u2026";
+    dirBtn.onclick = async () => {
+      try {
+        const handle = await window.showDirectoryPicker();
+        await addDirHandle(handle, "");
+        render();
+      } catch (e) { /* user cancelled */ }
+    };
+    btnRow.appendChild(dirBtn);
+  }
+  addSec.appendChild(btnRow);
+
+  // drop zone
+  const drop = document.createElement("div");
+  drop.className = "iso-drop";
+  drop.textContent = "drop files here";
+  drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+  drop.ondragleave = () => drop.classList.remove("over");
+  drop.ondrop = async e => {
+    e.preventDefault(); drop.classList.remove("over");
+    // try FSAA handles for dropped directories
+    if (e.dataTransfer.items && e.dataTransfer.items[0]?.getAsFileSystemHandle) {
+      for (const item of e.dataTransfer.items) {
+        const handle = await item.getAsFileSystemHandle();
+        if (handle.kind === "directory") {
+          await addDirHandle(handle, handle.name);
+        } else {
+          const f = await handle.getFile();
+          files.push({ path: f.name, data: new Uint8Array(await f.arrayBuffer()), text: false });
+        }
+      }
+      render();
+    } else {
+      addFileList(e.dataTransfer.files);
+    }
+  };
+  addSec.appendChild(drop);
+  el.appendChild(addSec);
+
+  // -- file tree section --
+  const treeSec = sec(`file tree (${files.length} file${files.length !== 1 ? "s" : ""})`);
+  if (files.length === 0) {
+    const empty = document.createElement("div");
+    empty.style.cssText = "color:#555;font-size:12px;padding:4px";
+    empty.textContent = "no files added yet";
+    treeSec.appendChild(empty);
+  } else {
+    const tree = buildTree(files);
+    treeSec.appendChild(tree);
+  }
+  el.appendChild(treeSec);
+
+  // -- build + download --
+  const actions = document.createElement("div");
+  actions.style.cssText = "display:flex;gap:8px;align-items:center;margin-top:12px";
+  const dlBtn = document.createElement("button");
+  dlBtn.className = "primary";
+  dlBtn.textContent = "\u25bc download .iso";
+  dlBtn.disabled = files.length === 0;
+  dlBtn.style.opacity = files.length === 0 ? "0.4" : "1";
+  dlBtn.onclick = buildAndDownload;
+
+  const status = document.createElement("span");
+  status.className = "iso-status";
+  status.id = "iso-status";
+
+  actions.append(dlBtn, status);
+  el.appendChild(actions);
+}
+
+function sec(title) {
+  const d = document.createElement("div");
+  d.className = "iso-section";
+  const h = document.createElement("h3");
+  h.textContent = title;
+  d.appendChild(h);
+  return d;
+}
+
+function esc(s) {
+  return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+}
+
+async function addFileList(fileList) {
+  for (const f of fileList) {
+    const buf = new Uint8Array(await f.arrayBuffer());
+    files.push({ path: f.name, data: buf, text: false });
+  }
+  render();
+}
+
+async function addDirHandle(dirHandle, prefix) {
+  for await (const [name, handle] of dirHandle.entries()) {
+    const path = prefix ? prefix + "/" + name : name;
+    if (handle.kind === "directory") {
+      await addDirHandle(handle, path);
+    } else {
+      const f = await handle.getFile();
+      files.push({ path, data: new Uint8Array(await f.arrayBuffer()), text: false });
+    }
+  }
+}
+
+function buildTree(files) {
+  // build nested structure for display
+  const root = { children: {}, files: [] };
+  for (let i = 0; i < files.length; i++) {
+    const parts = files[i].path.split("/");
+    let node = root;
+    for (let j = 0; j < parts.length - 1; j++) {
+      if (!node.children[parts[j]]) node.children[parts[j]] = { children: {}, files: [] };
+      node = node.children[parts[j]];
+    }
+    node.files.push({ name: parts[parts.length - 1], size: files[i].data.length, index: i });
+  }
+
+  function renderNode(node, depth) {
+    const ul = document.createElement("ul");
+    ul.className = "iso-tree";
+    ul.style.paddingLeft = depth > 0 ? "16px" : "0";
+
+    for (const [name, child] of Object.entries(node.children).sort((a, b) => a[0].localeCompare(b[0]))) {
+      const li = document.createElement("li");
+      li.innerHTML = `<span class="dir">\u25b8 ${esc(name)}/</span>`;
+      ul.appendChild(li);
+      ul.appendChild(renderNode(child, depth + 1));
+    }
+
+    for (const f of node.files.sort((a, b) => a.name.localeCompare(b.name))) {
+      const li = document.createElement("li");
+      const sizeStr = f.size < 1024 ? f.size + " B" : (f.size / 1024).toFixed(1) + " KB";
+      li.innerHTML = `<span class="file">\u00b7 ${esc(f.name)}</span><span class="size">${sizeStr}</span>`;
+      const rm = document.createElement("span");
+      rm.className = "remove";
+      rm.textContent = "\u00d7";
+      rm.onclick = () => { files.splice(f.index, 1); render(); };
+      li.appendChild(rm);
+      ul.appendChild(li);
+    }
+    return ul;
+  }
+
+  return renderNode(root, 0);
+}
+
+async function buildAndDownload() {
+  const statusEl = document.getElementById("iso-status");
+  try {
+    const iso = new ISOWriter({ volumeId: volumeId || "UNTITLED", publisher, joliet });
+    for (const f of files) iso.add(f.path, f.data);
+    const bytes = iso.toUint8Array();
+    const filename = (volumeId || "image").toLowerCase().replace(/[^a-z0-9_\-]/g, "_") + ".iso";
+    const kb = (bytes.length / 1024).toFixed(1);
+
+    // prefer FSAA — writes directly, no Mark of the Web
+    if (window.showSaveFilePicker) {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: filename,
+        types: [{ description: "ISO 9660 image", accept: { "application/octet-stream": [".iso"] } }],
+      });
+      const writable = await handle.createWritable();
+      await writable.write(bytes);
+      await writable.close();
+    } else {
+      const blob = new Blob([bytes], { type: "application/octet-stream" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = filename; a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    statusEl.textContent = `\u2713 ${kb} KB \u2014 ${files.length} file${files.length !== 1 ? "s" : ""}, ${joliet ? "joliet" : "base"}`;
+    statusEl.style.color = "#c89b3c";
+  } catch (e) {
+    if (e.name === "AbortError") return; // user cancelled save dialog
+    statusEl.textContent = "\u2717 " + e.message;
+    statusEl.style.color = "#c44";
+  }
+}
+
+render();
