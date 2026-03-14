@@ -1,0 +1,231 @@
+/// auditable
+/// title: @plan — project analysis
+/// settings: {"theme":"dark","fontSize":13,"width":"860","editorView":"yes"}
+/// module: @plan ext/plan/index.js
+
+/// md
+# @plan — project analysis
+
+Schedule analysis, resource risk, what-if scenarios, sensitivity, burndown,
+and project health — built on top of the scheduling and Monte Carlo engines.
+
+/// code collapsed
+const plan = await load("@plan");
+
+/// md
+## project setup
+
+/// code collapsed
+const tasks = [
+  { id: "design", name: "Design", duration: 5, resource: "alice",
+    cost: { rate: 600 } },
+  { id: "proto", name: "Prototype", optimistic: 3, mostLikely: 5, pessimistic: 10,
+    depends: ["design"], resource: "bob", cost: { rate: 500 } },
+  { id: "review", name: "Design Review", duration: 2, depends: ["design"],
+    resource: "carol", cost: { rate: 400 } },
+  { id: "backend", name: "Backend", optimistic: 8, mostLikely: 12, pessimistic: 20,
+    depends: ["proto", "review"], resource: "bob", cost: { rate: 500 } },
+  { id: "frontend", name: "Frontend", optimistic: 6, mostLikely: 10, pessimistic: 18,
+    depends: ["proto", "review"], resource: "alice", cost: { rate: 600 } },
+  { id: "integrate", name: "Integration", duration: 3,
+    depends: ["backend", "frontend"], resource: "bob", cost: { rate: 500 } },
+  { id: "test", name: "Testing", optimistic: 4, mostLikely: 6, pessimistic: 12,
+    depends: ["integrate"], resource: "carol", cost: { rate: 400 } },
+  { id: "deploy", name: "Deploy", duration: 1, depends: ["test"],
+    resource: "bob", cost: { rate: 500 } },
+];
+
+const calendar = { holidays: [{ date: "2026-04-03" }] };
+const resources = [
+  { id: "alice", name: "Alice", cost: { rate: 600 } },
+  { id: "bob", name: "Bob", cost: { rate: 500 } },
+  { id: "carol", name: "Carol", cost: { rate: 400 } },
+];
+
+const result = plan.schedule(tasks, calendar, "2026-03-16", resources);
+const fmt = d => d.toISOString().slice(0, 10);
+ui.display(`Project ends ${fmt(result.projectEnd)} \u00b7 ${result.projectDuration} working days \u00b7 Critical path: ${result.criticalPath.join(" \u2192 ")}`);
+
+/// md
+## slack budget
+
+Float distribution across all tasks — how much scheduling flexibility exists.
+
+/// code
+const sb = plan.slackBudget(result);
+
+ui.table([
+  { Zone: "Critical (0 days)", Tasks: sb.distribution.critical },
+  { Zone: "Tight (1\u20135 days)", Tasks: sb.distribution.tight },
+  { Zone: "Comfortable (6\u201315)", Tasks: sb.distribution.comfortable },
+  { Zone: "Buffered (>15)", Tasks: sb.distribution.buffered },
+]);
+ui.display(`Critical ratio: ${(sb.criticalRatio * 100).toFixed(0)}% \u00b7 Mean float: ${sb.meanFloat.toFixed(1)} days \u00b7 Median float: ${sb.medianFloat} days`);
+
+/// md
+## near-critical paths
+
+Tasks with float \u2264 5 days — one delay and they become critical.
+
+/// code
+const nc = plan.nearCritical(result, 5);
+ui.display(`${nc.count} near-critical task(s) in ${nc.paths.length} path(s)`);
+for (const p of nc.paths) {
+  ui.display(`  path: ${p.tasks.join(" \u2192 ")} (total float: ${p.totalFloat} days)`);
+}
+
+/// md
+## what-if scenarios
+
+What happens if Backend slips to 20 days? What if we add more Frontend work?
+
+/// code
+const scenarios = plan.whatIf(tasks, calendar, "2026-03-16", [
+  { label: "Backend slips to 20d", overrides: { backend: { duration: 20 } } },
+  { label: "Frontend doubles", overrides: { frontend: { duration: 20 } } },
+  { label: "Both slip", overrides: { backend: { duration: 20 }, frontend: { duration: 20 } } },
+]);
+
+ui.table(scenarios.scenarios.map(s => ({
+  Scenario: s.label,
+  "End Date": fmt(s.projectEnd),
+  "End \u0394": s.endDelta > 0 ? `+${s.endDelta}d` : `${s.endDelta}d`,
+  "Duration \u0394": s.durationDelta > 0 ? `+${s.durationDelta}d` : `${s.durationDelta}d`,
+})));
+
+/// md
+## delay impact
+
+Which tasks are most dangerous to delay? Shows downstream tasks and cost at risk.
+
+/// code
+for (const id of ["design", "backend", "test"]) {
+  const impact = plan.delayImpact(id, result.scheduled);
+  const t = result.scheduled.find(t => t.id === id);
+  ui.display(`${t.name}: ${impact.slipDays} days of float \u00b7 ${impact.downstreamTasks.length} downstream \u00b7 $${Math.round(impact.costAtRisk).toLocaleString()} at risk`);
+}
+
+/// md
+## scope drift
+
+Compare baseline vs current scope. Detect added, removed, and changed tasks.
+
+/// code
+const baseline = tasks;
+const current = [
+  ...tasks.filter(t => t.id !== "review"),  // removed review
+  { id: "security", name: "Security Audit", duration: 4, depends: ["backend"],
+    resource: "carol", cost: { rate: 400 } },  // added
+  { ...tasks.find(t => t.id === "test"), duration: 10 },  // test expanded
+];
+
+const drift = plan.scopeDrift(baseline, current);
+ui.display(`Added: ${drift.addedCount} \u00b7 Removed: ${drift.removedCount} \u00b7 Changed: ${drift.changedCount} \u00b7 Drift ratio: ${(drift.driftRatio * 100).toFixed(0)}%`);
+
+/// md
+## Monte Carlo sensitivity
+
+Which tasks most influence the project end date? Pearson correlation from 5 000 simulated iterations.
+
+/// code collapsed
+const mc = plan.monteCarlo(tasks, calendar, "2026-03-16", {
+  iterations: 5000, seed: 42, sensitivity: true,
+});
+
+ui.table(mc.sensitivity.map(s => ({
+  Task: s.name, "Correlation": s.correlation.toFixed(3),
+  "Impact": Math.abs(s.correlation) > 0.5 ? "high" : Math.abs(s.correlation) > 0.2 ? "medium" : "low",
+})));
+
+/// code collapsed
+ui.html(plan.tornadoPlot(mc.sensitivity, { width: 840, maxBars: 10 }));
+
+/// md
+## resource analysis
+
+/// md
+### bus factor
+
+Who is a single point of failure? Tasks only one person can do.
+
+/// code
+const bf = plan.busFactor(result.scheduled, resources);
+ui.table(bf.resources.map(r => ({
+  Resource: r.name, Tasks: r.taskCount,
+  "Critical Tasks": r.criticalTasks,
+  "Unique Tasks": r.uniqueTasks,
+  Risk: r.risk,
+})));
+
+/// md
+### switching overhead
+
+Peak concurrency and effective capacity per resource.
+
+/// code
+for (const r of resources) {
+  const so = plan.switchingOverhead(r.id, result.scheduled);
+  ui.display(`${r.name}: ${so.totalTasks} tasks \u00b7 peak concurrent: ${so.maxConcurrent} \u00b7 effective capacity: ${(so.effectiveCapacity * 100).toFixed(0)}%`);
+}
+
+/// md
+### constraint (bottleneck)
+
+Theory of Constraints: which resource has the highest utilization?
+
+/// code
+const c = plan.constraint(result.scheduled, resources);
+ui.display(`Bottleneck: ${c.bottleneck.name} \u00b7 utilization: ${(c.bottleneck.utilization * 100).toFixed(0)}% \u00b7 ${c.bottleneck.taskCount} tasks \u00b7 ${c.bottleneck.totalDuration} days`);
+
+/// md
+### meeting cost
+
+How expensive is a 2-hour all-hands?
+
+/// code
+const mtg = plan.meetingCost(["alice", "bob", "carol"], 2, resources);
+ui.display(`${mtg.attendees} attendees \u00d7 ${mtg.durationHours}h = ${mtg.totalPersonHours} person-hours \u00b7 $${Math.round(mtg.totalCost)} \u00b7 ${mtg.displacedWorkDays.toFixed(1)} displaced work-days`);
+
+/// md
+## mathematical models
+
+/// code
+const bl = plan.brooksLaw(5);
+ui.display(`Brooks's Law (team of ${bl.teamSize}): ${bl.channels} communication channels \u00b7 ${(bl.communicationOverhead * 100).toFixed(0)}% overhead \u00b7 effective capacity: ${bl.effectiveCapacity.toFixed(1)}`);
+
+const ll = plan.littlesLaw(12, 3);
+ui.display(`Little's Law: WIP=${ll.wip}, throughput=${ll.throughput}/wk \u2192 cycle time = ${ll.cycleTime.toFixed(1)} weeks`);
+
+const frag = plan.multiProjectFragmentation(3);
+ui.display(`Weinberg fragmentation (${frag.projectCount} projects): ${frag.effectivePerProject}% per project \u00b7 ${frag.totalEffective}% total \u00b7 ${frag.switchingLoss}% lost to switching`);
+
+/// md
+## burndown + project health
+
+Track remaining work over time. The burndown uses the scheduled tasks with simulated progress.
+
+/// code collapsed
+const rate = 500;
+const tracked = result.scheduled.map(t => ({
+  ...t,
+  cost: { rate },
+  progress: ["design", "proto", "review"].includes(t.id) ? 1
+    : t.id === "backend" ? 0.4
+    : t.id === "frontend" ? 0.25 : 0,
+}));
+
+const bd = plan.burndown(tracked, {
+  today: "2026-04-03", metric: "tasks", bucket: "week",
+});
+ui.html(plan.burndownPlot(bd, { width: 840 }));
+ui.display(`Total: ${bd.totalWork} tasks \u00b7 Completed: ${bd.completedWork.toFixed(1)} \u00b7 Velocity: ${bd.velocity.toFixed(2)}/week`);
+
+/// code
+const ev = plan.evm(tracked, "2026-04-03");
+const h = plan.health(result, ev);
+
+ui.display(`Project health: ${h.overall.toUpperCase()} \u2014 ${h.summary}`);
+ui.table(Object.entries(h.indicators).map(([k, v]) => ({
+  Indicator: k.charAt(0).toUpperCase() + k.slice(1),
+  Status: v.toUpperCase(),
+})));

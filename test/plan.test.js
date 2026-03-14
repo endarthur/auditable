@@ -11,6 +11,7 @@ const ev = await import('../ext/plan/src/evm.js');
 const wf = await import('../ext/plan/src/workflow.js');
 const mc = await import('../ext/plan/src/montecarlo.js');
 const render = await import('../ext/plan/src/render.js');
+const analysis = await import('../ext/plan/src/analysis.js');
 
 // ── Test calendar ──
 
@@ -590,5 +591,421 @@ describe('plan: render', () => {
     const mcResult = mc.monteCarlo(tasks, defaultCal, '2026-03-16', { iterations: 100, seed: 42 });
     const svg = render.monteCarloPlot(mcResult);
     assert.ok(svg.startsWith('<svg'));
+  });
+
+  it('tornadoPlot produces valid SVG', () => {
+    const data = [
+      { id: 'a', name: 'Task A', correlation: 0.85 },
+      { id: 'b', name: 'Task B', correlation: -0.42 },
+      { id: 'c', name: 'Task C', correlation: 0.15 },
+    ];
+    const svg = render.tornadoPlot(data);
+    assert.ok(svg.startsWith('<svg'));
+    assert.ok(svg.includes('Task A'));
+  });
+
+  it('tornadoPlot handles empty data', () => {
+    const svg = render.tornadoPlot([]);
+    assert.ok(svg.includes('No sensitivity data'));
+  });
+
+  it('burndownPlot produces valid SVG', () => {
+    const data = {
+      labels: ['2026-03-16', '2026-03-23', '2026-03-30'],
+      ideal: [10, 5, 0],
+      actual: [10, 7],
+      forecast: [null, null, 3],
+      totalWork: 10,
+    };
+    const svg = render.burndownPlot(data);
+    assert.ok(svg.startsWith('<svg'));
+    assert.ok(svg.includes('ideal'));
+    assert.ok(svg.includes('actual'));
+  });
+});
+
+// ── Analysis: Mathematical Models ──
+
+describe('plan: brooksLaw', () => {
+  it('returns correct channels for team of 5', () => {
+    const r = analysis.brooksLaw(5);
+    assert.equal(r.teamSize, 5);
+    assert.equal(r.channels, 10); // 5*4/2
+    assert.ok(r.effectiveCapacity > 0);
+    assert.ok(r.effectiveCapacity < 5);
+  });
+
+  it('team of 1 has 0 channels', () => {
+    const r = analysis.brooksLaw(1);
+    assert.equal(r.channels, 0);
+    assert.equal(r.communicationOverhead, 0);
+    assert.equal(r.effectiveCapacity, 1);
+  });
+
+  it('projection shows 5 increments', () => {
+    const r = analysis.brooksLaw(3);
+    assert.equal(r.projection.length, 5);
+    assert.equal(r.projection[0].additionalPeople, 1);
+    assert.equal(r.projection[0].newTeamSize, 4);
+  });
+
+  it('large team has high overhead', () => {
+    const r = analysis.brooksLaw(20);
+    assert.ok(r.communicationOverhead > 0.5);
+    assert.ok(r.effectiveCapacity < r.teamSize);
+  });
+});
+
+describe('plan: littlesLaw', () => {
+  it('computes cycle time correctly', () => {
+    const r = analysis.littlesLaw(10, 2);
+    assert.equal(r.cycleTime, 5);
+    assert.equal(r.wip, 10);
+    assert.equal(r.throughput, 2);
+  });
+
+  it('projection function works', () => {
+    const r = analysis.littlesLaw(10, 2);
+    assert.equal(r.projection(20), 10);
+    assert.equal(r.projection(4), 2);
+  });
+
+  it('handles zero throughput', () => {
+    const r = analysis.littlesLaw(5, 0);
+    assert.equal(r.cycleTime, Infinity);
+  });
+});
+
+describe('plan: multiProjectFragmentation', () => {
+  it('1 project = 100% effective', () => {
+    const r = analysis.multiProjectFragmentation(1);
+    assert.equal(r.effectivePerProject, 100);
+    assert.equal(r.totalEffective, 100);
+    assert.equal(r.switchingLoss, 0);
+  });
+
+  it('2 projects = 40% each (Weinberg)', () => {
+    const r = analysis.multiProjectFragmentation(2);
+    assert.equal(r.effectivePerProject, 40);
+    assert.equal(r.totalEffective, 80);
+    assert.equal(r.switchingLoss, 20);
+  });
+
+  it('3 projects = 20% each', () => {
+    const r = analysis.multiProjectFragmentation(3);
+    assert.equal(r.effectivePerProject, 20);
+    assert.equal(r.totalEffective, 60);
+  });
+
+  it('curve array includes expected range', () => {
+    const r = analysis.multiProjectFragmentation(2);
+    assert.ok(r.curve.length >= 5);
+    assert.equal(r.curve[0].projects, 1);
+    assert.equal(r.curve[0].effectivePerProject, 100);
+  });
+});
+
+// ── Analysis: Schedule Analysis ──
+
+describe('plan: slackBudget', () => {
+  it('categorizes float correctly', () => {
+    const result = sched.schedule([
+      { id: 'a', duration: 5 },
+      { id: 'b', duration: 3, depends: ['a'] },
+      { id: 'c', duration: 2 }, // parallel, should have float
+    ], defaultCal, '2026-03-16');
+    const sb = analysis.slackBudget(result);
+    assert.equal(sb.total, 3);
+    assert.ok(sb.distribution.critical >= 0);
+    assert.ok(sb.meanFloat >= 0);
+  });
+
+  it('all-critical schedule', () => {
+    const result = sched.schedule([
+      { id: 'a', duration: 5 },
+      { id: 'b', duration: 3, depends: ['a'] },
+    ], defaultCal, '2026-03-16');
+    const sb = analysis.slackBudget(result);
+    assert.equal(sb.distribution.critical, 2);
+    assert.equal(sb.criticalRatio, 1);
+  });
+});
+
+describe('plan: nearCritical', () => {
+  it('finds near-critical tasks', () => {
+    const result = sched.schedule([
+      { id: 'a', duration: 10 },
+      { id: 'b', duration: 8, depends: ['a'] },
+      { id: 'c', duration: 2 }, // parallel, has float
+    ], defaultCal, '2026-03-16');
+    const nc = analysis.nearCritical(result, 20); // wide threshold to capture all
+    assert.ok(nc.count > 0);
+  });
+
+  it('returns empty for no near-critical tasks', () => {
+    const result = sched.schedule([
+      { id: 'a', duration: 5 },
+      { id: 'b', duration: 3, depends: ['a'] },
+    ], defaultCal, '2026-03-16');
+    // All tasks are critical (float=0), maxFloat=-1 means nothing qualifies
+    const nc = analysis.nearCritical(result, -1);
+    assert.equal(nc.count, 0);
+  });
+});
+
+describe('plan: whatIf', () => {
+  it('computes scenario deltas', () => {
+    const tasks = [
+      { id: 'a', duration: 5 },
+      { id: 'b', duration: 3, depends: ['a'] },
+    ];
+    const result = analysis.whatIf(tasks, defaultCal, '2026-03-16', [
+      { label: 'slip A', overrides: { a: { duration: 10 } } },
+    ]);
+    assert.ok(result.baseline.projectEnd);
+    assert.equal(result.scenarios.length, 1);
+    assert.equal(result.scenarios[0].label, 'slip A');
+    assert.ok(result.scenarios[0].endDelta > 0); // project should be later
+  });
+
+  it('no change scenario has zero delta', () => {
+    const tasks = [
+      { id: 'a', duration: 5 },
+    ];
+    const result = analysis.whatIf(tasks, defaultCal, '2026-03-16', [
+      { label: 'no change', overrides: {} },
+    ]);
+    assert.equal(result.scenarios[0].endDelta, 0);
+    assert.equal(result.scenarios[0].durationDelta, 0);
+  });
+});
+
+describe('plan: delayImpact', () => {
+  it('identifies downstream tasks and cost', () => {
+    const result = sched.schedule([
+      { id: 'a', duration: 5 },
+      { id: 'b', duration: 3, depends: ['a'] },
+      { id: 'c', duration: 2, depends: ['b'] },
+    ], defaultCal, '2026-03-16');
+    const impact = analysis.delayImpact('a', result.scheduled);
+    assert.equal(impact.task, 'a');
+    assert.ok(impact.downstreamTasks.includes('b'));
+    assert.ok(impact.downstreamTasks.includes('c'));
+    assert.ok(impact.costAtRisk > 0);
+  });
+
+  it('leaf task has no downstream', () => {
+    const result = sched.schedule([
+      { id: 'a', duration: 5 },
+      { id: 'b', duration: 3, depends: ['a'] },
+    ], defaultCal, '2026-03-16');
+    const impact = analysis.delayImpact('b', result.scheduled);
+    assert.equal(impact.downstreamTasks.length, 0);
+  });
+
+  it('returns null for unknown task', () => {
+    const result = sched.schedule([{ id: 'a', duration: 5 }], defaultCal, '2026-03-16');
+    assert.equal(analysis.delayImpact('z', result.scheduled), null);
+  });
+});
+
+describe('plan: scopeDrift', () => {
+  it('detects added, removed, and changed tasks', () => {
+    const baseline = [
+      { id: 'a', name: 'A', duration: 5 },
+      { id: 'b', name: 'B', duration: 3 },
+    ];
+    const current = [
+      { id: 'a', name: 'A', duration: 8 }, // changed
+      { id: 'c', name: 'C', duration: 2 }, // added
+    ];
+    const drift = analysis.scopeDrift(baseline, current);
+    assert.deepEqual(drift.added, ['c']);
+    assert.deepEqual(drift.removed, ['b']);
+    assert.deepEqual(drift.changed, ['a']);
+    assert.ok(drift.driftRatio > 0);
+  });
+
+  it('no drift when identical', () => {
+    const tasks = [{ id: 'a', name: 'A', duration: 5 }];
+    const drift = analysis.scopeDrift(tasks, tasks);
+    assert.equal(drift.addedCount, 0);
+    assert.equal(drift.removedCount, 0);
+    assert.equal(drift.changedCount, 0);
+    assert.equal(drift.driftRatio, 0);
+  });
+});
+
+describe('plan: bufferStatus', () => {
+  it('green zone with no consumption', () => {
+    const tasks = [{ id: 'a', duration: 5, isCritical: true, earlyFinish: new Date('2026-03-20'), progress: 0 }];
+    const bs = analysis.bufferStatus(tasks, 10);
+    assert.equal(bs.zone, 'green');
+    assert.equal(bs.consumed, 0);
+    assert.equal(bs.remaining, 10);
+  });
+
+  it('handles zero buffer', () => {
+    const bs = analysis.bufferStatus([], 0);
+    assert.equal(bs.zone, 'green');
+    assert.equal(bs.bufferDays, 0);
+  });
+});
+
+// ── Analysis: Resource Analysis ──
+
+describe('plan: busFactor', () => {
+  it('identifies high-risk resources', () => {
+    const tasks = [
+      { id: 'a', resource: 'alice', isCritical: true },
+      { id: 'b', resource: 'alice', isCritical: true },
+      { id: 'c', resource: 'alice', isCritical: false },
+      { id: 'd', resource: 'bob', isCritical: false },
+    ];
+    const resources = [{ id: 'alice', name: 'Alice' }, { id: 'bob', name: 'Bob' }];
+    const bf = analysis.busFactor(tasks, resources);
+    assert.equal(bf.resources.length, 2);
+    const alice = bf.resources.find(r => r.id === 'alice');
+    assert.equal(alice.taskCount, 3);
+    assert.equal(alice.criticalTasks, 2);
+  });
+});
+
+describe('plan: switchingOverhead', () => {
+  it('reports max concurrent and effective capacity', () => {
+    const tasks = [
+      { id: 'a', resource: 'alice', earlyStart: new Date('2026-03-16'), earlyFinish: new Date('2026-03-25') },
+      { id: 'b', resource: 'alice', earlyStart: new Date('2026-03-18'), earlyFinish: new Date('2026-03-23') },
+      { id: 'c', resource: 'bob', earlyStart: new Date('2026-03-16'), earlyFinish: new Date('2026-03-20') },
+    ];
+    const so = analysis.switchingOverhead('alice', tasks);
+    assert.equal(so.totalTasks, 2);
+    assert.equal(so.maxConcurrent, 2);
+    assert.ok(so.effectiveCapacity < 1);
+  });
+
+  it('no tasks returns zero', () => {
+    const so = analysis.switchingOverhead('nobody', []);
+    assert.equal(so.totalTasks, 0);
+    assert.equal(so.maxConcurrent, 0);
+  });
+});
+
+describe('plan: meetingCost', () => {
+  it('computes total person-hours', () => {
+    const resources = [
+      { id: 'alice', cost: { rate: 80 } },
+      { id: 'bob', cost: { rate: 64 } },
+    ];
+    const mc = analysis.meetingCost(['alice', 'bob'], 2, resources);
+    assert.equal(mc.attendees, 2);
+    assert.equal(mc.totalPersonHours, 4);
+    assert.equal(mc.displacedWorkDays, 0.5);
+    assert.ok(mc.totalCost > 0);
+  });
+});
+
+describe('plan: constraint', () => {
+  it('identifies bottleneck resource', () => {
+    const tasks = sched.schedule([
+      { id: 'a', duration: 10, resource: 'alice' },
+      { id: 'b', duration: 3, resource: 'bob' },
+      { id: 'c', duration: 8, resource: 'alice', depends: ['a'] },
+    ], defaultCal, '2026-03-16').scheduled;
+    const resources = [{ id: 'alice', name: 'Alice' }, { id: 'bob', name: 'Bob' }];
+    const c = analysis.constraint(tasks, resources);
+    assert.equal(c.bottleneck.id, 'alice');
+    assert.ok(c.bottleneck.utilization > 0);
+  });
+});
+
+// ── Analysis: Progress Tracking ──
+
+describe('plan: burndown', () => {
+  it('produces labels and ideal curve', () => {
+    const tasks = sched.schedule([
+      { id: 'a', duration: 5 },
+      { id: 'b', duration: 5, depends: ['a'] },
+    ], defaultCal, '2026-03-16').scheduled;
+    const bd = analysis.burndown(tasks, { today: '2026-03-16' });
+    assert.ok(bd.labels.length > 0);
+    assert.equal(bd.totalWork, 2); // 2 tasks
+    assert.equal(bd.ideal[0], 2);
+    assert.equal(bd.ideal[bd.ideal.length - 1], 0);
+  });
+
+  it('handles empty tasks', () => {
+    const bd = analysis.burndown([]);
+    assert.equal(bd.totalWork, 0);
+    assert.equal(bd.labels.length, 0);
+  });
+});
+
+describe('plan: health', () => {
+  it('green when all indicators healthy', () => {
+    // Long critical path + many short parallel tasks = low critical ratio (<30%)
+    const tasks = sched.schedule([
+      { id: 'a', duration: 20 },
+      { id: 'b', duration: 20, depends: ['a'] },
+      { id: 'c', duration: 1 },
+      { id: 'd', duration: 1 },
+      { id: 'e', duration: 1 },
+      { id: 'f', duration: 1 },
+      { id: 'g', duration: 1 },
+      { id: 'h', duration: 1 },
+      { id: 'i', duration: 1 },
+    ], defaultCal, '2026-03-16');
+    const h = analysis.health(tasks, { spi: 1.0, cpi: 1.0 });
+    assert.equal(h.indicators.schedule, 'green');
+    assert.equal(h.indicators.cost, 'green');
+    assert.equal(h.overall, 'green');
+  });
+
+  it('red when SPI is low', () => {
+    const tasks = sched.schedule([
+      { id: 'a', duration: 5 },
+    ], defaultCal, '2026-03-16');
+    const h = analysis.health(tasks, { spi: 0.5, cpi: 1.0 });
+    assert.equal(h.indicators.schedule, 'red');
+    assert.equal(h.overall, 'red');
+  });
+
+  it('amber when CPI slightly below threshold', () => {
+    const h = analysis.health(null, { spi: 1.0, cpi: 0.9 });
+    assert.equal(h.indicators.cost, 'amber');
+  });
+});
+
+// ── Monte Carlo: Sensitivity ──
+
+describe('plan: monteCarlo sensitivity', () => {
+  it('returns sensitivity data by default', () => {
+    const tasks = [
+      { id: 'a', pert: { o: 3, m: 5, p: 15 } },
+      { id: 'b', pert: { o: 1, m: 2, p: 4 }, depends: ['a'] },
+    ];
+    const result = mc.monteCarlo(tasks, defaultCal, '2026-03-16', { iterations: 500, seed: 42 });
+    assert.ok(result.sensitivity);
+    assert.ok(result.sensitivity.length > 0);
+    // Task A should have higher correlation (wider range + upstream)
+    assert.equal(result.sensitivity[0].id, 'a');
+    assert.ok(Math.abs(result.sensitivity[0].correlation) > 0);
+  });
+
+  it('sensitivity can be disabled', () => {
+    const tasks = [{ id: 'a', pert: { o: 3, m: 5, p: 10 } }];
+    const result = mc.monteCarlo(tasks, defaultCal, '2026-03-16', { iterations: 100, seed: 42, sensitivity: false });
+    assert.equal(result.sensitivity, null);
+  });
+
+  it('sensitivity sorted by |correlation| descending', () => {
+    const tasks = [
+      { id: 'a', pert: { o: 1, m: 2, p: 3 } },
+      { id: 'b', pert: { o: 5, m: 10, p: 30 }, depends: ['a'] },
+    ];
+    const result = mc.monteCarlo(tasks, defaultCal, '2026-03-16', { iterations: 500, seed: 42 });
+    for (let i = 1; i < result.sensitivity.length; i++) {
+      assert.ok(Math.abs(result.sensitivity[i - 1].correlation) >= Math.abs(result.sensitivity[i].correlation));
+    }
   });
 });

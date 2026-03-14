@@ -10,8 +10,8 @@ const srcDir = path.join(__dirname, 'src');
 
 const files = [
   'calendar.js', 'pert.js', 'graph.js', 'schedule.js',
-  'resource.js', 'scurve.js', 'evm.js', 'workflow.js',
-  'montecarlo.js', 'render.js', 'xlsx.js',
+  'resource.js', 'scurve.js', 'evm.js', 'analysis.js',
+  'workflow.js', 'montecarlo.js', 'render.js', 'xlsx.js',
 ];
 
 const chunks = [];
@@ -53,8 +53,14 @@ export {
   instantiate, instantiateBatch, compose, stageGateMatrix, throughput,
   // montecarlo
   monteCarlo, createRng, samplePert,
+  // analysis
+  whatIf, delayImpact, nearCritical, slackBudget, scopeDrift, bufferStatus,
+  busFactor, switchingOverhead, meetingCost, constraint,
+  brooksLaw, littlesLaw, multiProjectFragmentation,
+  burndown, health,
   // render
   gantt, scurvePlot, resourceHistogram, stageGateView, workflowDiagram, monteCarloPlot,
+  tornadoPlot, burndownPlot,
   // xlsx
   planToXLSX,
 };

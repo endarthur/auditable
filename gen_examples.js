@@ -86,6 +86,7 @@ const categories = {
   etc: [
     'example_iso9660.txt',
     'example_plan.txt',
+    'example_plan_analysis.txt',
     'example_synth.txt',
     'example_threejs.txt',
   ],

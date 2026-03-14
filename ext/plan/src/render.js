@@ -580,6 +580,138 @@ function monteCarloPlot(monteCarloResult, options = {}) {
   return _svg(width, height, svg);
 }
 
+// ── Tornado Plot (Sensitivity) ──
+
+function tornadoPlot(sensitivityData, options = {}) {
+  const {
+    width = 600,
+    barHeight = 22,
+    maxBars = 15,
+  } = options;
+
+  if (!sensitivityData || sensitivityData.length === 0) {
+    return _svg(width, 40, _text(10, 25, 'No sensitivity data', GCU.textDim));
+  }
+
+  const data = sensitivityData.slice(0, maxBars);
+  const labelW = 140;
+  const scaleW = 60;
+  const pad = { top: 30, bottom: 20 };
+  const chartW = width - labelW - scaleW;
+  const centerX = labelW + chartW / 2;
+  const height = pad.top + data.length * barHeight + pad.bottom;
+
+  let svg = '';
+  svg += _rect(0, 0, width, height, GCU.bg);
+
+  // Scale labels
+  svg += _text(labelW, pad.top - 8, '-1.0', GCU.textDim, 'font-size="9" text-anchor="start"');
+  svg += _text(centerX, pad.top - 8, '0', GCU.textDim, 'font-size="9" text-anchor="middle"');
+  svg += _text(labelW + chartW, pad.top - 8, '1.0', GCU.textDim, 'font-size="9" text-anchor="end"');
+
+  // Center axis
+  svg += _line(centerX, pad.top, centerX, pad.top + data.length * barHeight, GCU.grid);
+
+  for (let i = 0; i < data.length; i++) {
+    const d = data[i];
+    const y = pad.top + i * barHeight;
+    const barW = Math.abs(d.correlation) * (chartW / 2);
+    const color = d.correlation >= 0 ? GCU.critical : GCU.normal;
+
+    // Label
+    const label = (d.name || d.id);
+    svg += _text(labelW - 6, y + barHeight * 0.7, label.length > 18 ? label.substring(0, 16) + '\u2026' : label,
+      GCU.text, 'text-anchor="end" font-size="10"');
+
+    // Bar
+    if (d.correlation >= 0) {
+      svg += _rect(centerX, y + 3, barW, barHeight - 6, color, 'opacity="0.8" rx="2"');
+    } else {
+      svg += _rect(centerX - barW, y + 3, barW, barHeight - 6, color, 'opacity="0.8" rx="2"');
+    }
+
+    // Value label
+    svg += _text(labelW + chartW + 4, y + barHeight * 0.7, d.correlation.toFixed(2),
+      GCU.textDim, 'font-size="9"');
+  }
+
+  return _svg(width, height, svg);
+}
+
+// ── Burndown Plot ──
+
+function burndownPlot(burndownData, options = {}) {
+  const {
+    width = 800,
+    height = 400,
+    showForecast = true,
+  } = options;
+
+  const { labels, ideal, actual, forecast, totalWork } = burndownData;
+  if (!labels || labels.length === 0) return _svg(width, height, _text(10, 25, 'No data', GCU.textDim));
+
+  const pad = { top: 30, right: 40, bottom: 60, left: 60 };
+  const plotW = width - pad.left - pad.right;
+  const plotH = height - pad.top - pad.bottom;
+
+  const maxY = totalWork || Math.max(...ideal, ...(actual || []).filter(v => v != null), ...(forecast || []).filter(v => v != null));
+  const xScale = (i) => pad.left + (i / (labels.length - 1 || 1)) * plotW;
+  const yScale = (v) => pad.top + plotH - (v / (maxY || 1)) * plotH; // 0 at bottom, totalWork at top
+
+  let svg = '';
+  svg += _rect(0, 0, width, height, GCU.bg);
+
+  // Grid
+  for (let i = 0; i <= 4; i++) {
+    const val = maxY * i / 4;
+    const y = yScale(val);
+    svg += _line(pad.left, y, pad.left + plotW, y, GCU.grid);
+    svg += _text(pad.left - 8, y + 4, String(Math.round(val)), GCU.textDim, 'text-anchor="end" font-size="10"');
+  }
+
+  // X-axis labels
+  const step = Math.max(1, Math.floor(labels.length / 8));
+  for (let i = 0; i < labels.length; i += step) {
+    svg += _text(xScale(i), height - pad.bottom + 20, labels[i], GCU.textDim, 'text-anchor="middle" font-size="9"');
+  }
+
+  // Polyline helper
+  function polyline(data, color, dash = '') {
+    if (!data || data.length === 0) return '';
+    const pts = [];
+    for (let i = 0; i < data.length; i++) {
+      if (data[i] != null) pts.push(`${xScale(i)},${yScale(data[i])}`);
+    }
+    if (pts.length === 0) return '';
+    return `<polyline points="${pts.join(' ')}" fill="none" stroke="${color}" stroke-width="2" ${dash}/>`;
+  }
+
+  // Ideal: dashed gray
+  svg += polyline(ideal, GCU.baseline, 'stroke-dasharray="4,4"');
+  // Actual: solid amber
+  svg += polyline(actual, GCU.actual);
+  // Forecast: dashed amber
+  if (showForecast && forecast) svg += polyline(forecast, GCU.forecast, 'stroke-dasharray="6,3"');
+
+  // Legend
+  const ly = 15;
+  svg += _rect(pad.left + 10, ly - 8, 12, 3, GCU.baseline);
+  svg += _text(pad.left + 26, ly, 'ideal', GCU.textDim, 'font-size="10"');
+  svg += _rect(pad.left + 70, ly - 8, 12, 3, GCU.actual);
+  svg += _text(pad.left + 86, ly, 'actual', GCU.textDim, 'font-size="10"');
+  if (showForecast) {
+    svg += _rect(pad.left + 140, ly - 8, 12, 3, GCU.forecast);
+    svg += _text(pad.left + 156, ly, 'forecast', GCU.textDim, 'font-size="10"');
+  }
+
+  // Axes
+  svg += _line(pad.left, pad.top, pad.left, pad.top + plotH, GCU.text);
+  svg += _line(pad.left, pad.top + plotH, pad.left + plotW, pad.top + plotH, GCU.text);
+
+  return _svg(width, height, svg);
+}
+
 export {
   gantt, scurvePlot, resourceHistogram, stageGateView, workflowDiagram, monteCarloPlot,
+  tornadoPlot, burndownPlot,
 };

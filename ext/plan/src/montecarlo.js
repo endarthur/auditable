@@ -54,11 +54,26 @@ function samplePert(pert, rng) {
   return o + sample * range;
 }
 
+function _pearson(xs, ys) {
+  const n = xs.length;
+  if (n < 3) return 0;
+  let sx = 0, sy = 0, sxy = 0, sx2 = 0, sy2 = 0;
+  for (let i = 0; i < n; i++) {
+    sx += xs[i]; sy += ys[i];
+    sxy += xs[i] * ys[i];
+    sx2 += xs[i] * xs[i];
+    sy2 += ys[i] * ys[i];
+  }
+  const denom = Math.sqrt((n * sx2 - sx * sx) * (n * sy2 - sy * sy));
+  return denom === 0 ? 0 : (n * sxy - sx * sy) / denom;
+}
+
 function monteCarlo(tasks, calendar, projectStart, options = {}) {
   const {
     iterations = 10000,
     reworkTransitions = [],
     seed = 42,
+    sensitivity: doSensitivity = true,
   } = options;
 
   const rng = createRng(seed);
@@ -80,20 +95,26 @@ function monteCarlo(tasks, calendar, projectStart, options = {}) {
     reworkCounts[rt.label] = { total: 0, max: 0 };
   }
 
+  const durSamples = doSensitivity ? {} : null;
+  if (doSensitivity) { for (const id of order) durSamples[id] = []; }
+
   for (let iter = 0; iter < iterations; iter++) {
     // Sample durations
     const durations = new Map();
     for (const id of order) {
       const task = taskMap.get(id);
+      let dur;
       if (task.milestone) {
-        durations.set(id, 0);
+        dur = 0;
       } else if (task.pert) {
-        durations.set(id, Math.round(samplePert(task.pert, rng)));
+        dur = Math.round(samplePert(task.pert, rng));
       } else if (task.optimistic != null) {
-        durations.set(id, Math.round(samplePert({ o: task.optimistic, m: task.mostLikely, p: task.pessimistic }, rng)));
+        dur = Math.round(samplePert({ o: task.optimistic, m: task.mostLikely, p: task.pessimistic }, rng));
       } else {
-        durations.set(id, task.duration || 0);
+        dur = task.duration || 0;
       }
+      durations.set(id, dur);
+      if (doSensitivity) durSamples[id].push(dur);
     }
 
     // Sample rework: add extra duration to the "from" task
@@ -118,6 +139,8 @@ function monteCarlo(tasks, calendar, projectStart, options = {}) {
       if (count > 0) {
         reworkCounts[rt.label].total += count;
         reworkCounts[rt.label].max = Math.max(reworkCounts[rt.label].max, count);
+        // Update duration sample after rework adjustments
+        if (doSensitivity) durSamples[rt.from][durSamples[rt.from].length - 1] = durations.get(rt.from);
       }
     }
 
@@ -160,6 +183,9 @@ function monteCarlo(tasks, calendar, projectStart, options = {}) {
       }
     }
   }
+
+  // Capture iteration-order project ends for sensitivity before sorting
+  const projectEndMsRaw = doSensitivity ? projectEnds.map(d => d.getTime()) : null;
 
   // Aggregate results
   projectEnds.sort((a, b) => a - b);
@@ -208,6 +234,24 @@ function monteCarlo(tasks, calendar, projectStart, options = {}) {
     };
   }
 
+  // Sensitivity: Pearson correlation between each task's sampled duration and project end
+  let sensitivity = null;
+  if (doSensitivity) {
+    const projectEndMs = projectEndMsRaw;
+    sensitivity = [];
+    for (const id of order) {
+      const task = taskMap.get(id);
+      if (task.milestone) continue;
+      // Only correlate tasks with variance
+      const samples = durSamples[id];
+      const first = samples[0];
+      if (samples.every(s => s === first)) continue;
+      const r = _pearson(samples, projectEndMs);
+      sensitivity.push({ id, name: task.name || id, correlation: Math.round(r * 1000) / 1000 });
+    }
+    sensitivity.sort((a, b) => Math.abs(b.correlation) - Math.abs(a.correlation));
+  }
+
   return {
     iterations,
     projectEnd: {
@@ -219,6 +263,7 @@ function monteCarlo(tasks, calendar, projectStart, options = {}) {
     taskEnd: taskEndPcts,
     criticalPathFrequency,
     reworkOccurrences,
+    sensitivity,
   };
 }
 
