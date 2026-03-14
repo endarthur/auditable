@@ -85,6 +85,7 @@ const categories = {
   // etc — standalone demos that don't fit elsewhere
   etc: [
     'example_iso9660.txt',
+    'example_plan.txt',
     'example_synth.txt',
     'example_threejs.txt',
   ],

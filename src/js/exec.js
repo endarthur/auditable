@@ -333,6 +333,12 @@ export async function execCell(cell) {
     for (const arg of args) {
       if (arg instanceof Element) {
         outputEl.appendChild(arg);
+      } else if (arg instanceof TaggedContent) {
+        const el = document.createElement('div');
+        if (arg.type === 'md') el.innerHTML = renderMd(arg.content);
+        else if (arg.type === 'html') el.innerHTML = arg.content;
+        else if (arg.type === 'css') { const s = document.createElement('style'); s.textContent = arg.content; el.appendChild(s); }
+        outputEl.appendChild(el);
       } else if (typeof arg === 'object' && arg !== null) {
         const pre = document.createElement('span');
         try { pre.textContent = JSON.stringify(arg, null, 2); }
@@ -344,6 +350,7 @@ export async function execCell(cell) {
       }
     }
   };
+  const displayHtml = (str) => display(new TaggedContent('html', str));
 
   // canvas helper — reuses existing canvas if dimensions match
   const canvas = (w = 400, h = 300) => {
@@ -360,47 +367,115 @@ export async function execCell(cell) {
   };
 
   // table helper
-  const table = (data, columns) => {
+  const table = (data, columnsOrOpts) => {
     if (!data || !data.length) return;
-    const cols = columns || Object.keys(data[0]);
+    let cols, sortable = false, filter = false;
+    if (Array.isArray(columnsOrOpts)) {
+      cols = columnsOrOpts;
+    } else if (columnsOrOpts && typeof columnsOrOpts === 'object') {
+      cols = columnsOrOpts.columns;
+      sortable = !!columnsOrOpts.sortable;
+      filter = !!columnsOrOpts.filter;
+    }
+    cols = cols || Object.keys(data[0]);
 
     // detect numeric columns by scanning first 10 rows
     const isNumCol = {};
     for (const c of cols) {
       let allNum = true;
-      const scanRows = data.slice(0, 10);
-      for (const row of scanRows) {
+      for (const row of data.slice(0, 10)) {
         const v = row[c];
         if (v !== null && v !== undefined && typeof v !== 'number') { allNum = false; break; }
       }
       isNumCol[c] = allNum;
     }
 
+    const wrap = document.createElement('div');
+    let rows = [...data];
+    let sortCol = null, sortAsc = true, filterStr = '';
+
+    // filter input
+    let filterInput;
+    if (filter) {
+      filterInput = document.createElement('input');
+      filterInput.type = 'text';
+      filterInput.placeholder = 'Filter\u2026';
+      filterInput.style.cssText = 'width:200px;margin:2px 0 4px;padding:2px 6px;background:var(--bg);color:var(--fg);border:1px solid var(--border);font:11px var(--mono);border-radius:2px;';
+      wrap.appendChild(filterInput);
+    }
+
     const t = document.createElement('table');
     const thead = document.createElement('thead');
-    const hr = document.createElement('tr');
-    for (const c of cols) {
-      const th = document.createElement('th');
-      th.textContent = c;
-      th.style.textAlign = isNumCol[c] ? 'right' : 'left';
-      hr.appendChild(th);
-    }
-    thead.appendChild(hr);
-    t.appendChild(thead);
     const tbody = document.createElement('tbody');
-    for (const row of data) {
-      const tr = document.createElement('tr');
+
+    function renderHead() {
+      thead.innerHTML = '';
+      const hr = document.createElement('tr');
       for (const c of cols) {
-        const td = document.createElement('td');
-        const v = row[c];
-        td.textContent = typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(4)) : String(v ?? '');
-        td.style.textAlign = isNumCol[c] ? 'right' : 'left';
-        tr.appendChild(td);
+        const th = document.createElement('th');
+        th.style.textAlign = isNumCol[c] ? 'right' : 'left';
+        let label = c;
+        if (sortable) {
+          th.style.cursor = 'pointer';
+          th.style.userSelect = 'none';
+          if (sortCol === c) label += sortAsc ? ' \u25b4' : ' \u25be';
+        }
+        th.textContent = label;
+        if (sortable) th.addEventListener('click', () => {
+          if (sortCol === c) sortAsc = !sortAsc;
+          else { sortCol = c; sortAsc = true; }
+          renderHead();
+          renderBody();
+        });
+        hr.appendChild(th);
       }
-      tbody.appendChild(tr);
+      thead.appendChild(hr);
     }
+
+    function renderBody() {
+      tbody.innerHTML = '';
+      let view = rows;
+      if (filterStr) {
+        const q = filterStr.toLowerCase();
+        view = view.filter(row => cols.some(c => String(row[c] ?? '').toLowerCase().includes(q)));
+      }
+      if (sortCol) {
+        view = [...view].sort((a, b) => {
+          const va = a[sortCol], vb = b[sortCol];
+          if (va == null && vb == null) return 0;
+          if (va == null) return 1;
+          if (vb == null) return -1;
+          const cmp = isNumCol[sortCol] ? va - vb : String(va).localeCompare(String(vb));
+          return sortAsc ? cmp : -cmp;
+        });
+      }
+      for (const row of view) {
+        const tr = document.createElement('tr');
+        for (const c of cols) {
+          const td = document.createElement('td');
+          const v = row[c];
+          td.textContent = typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(4)) : String(v ?? '');
+          td.style.textAlign = isNumCol[c] ? 'right' : 'left';
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+    }
+
+    renderHead();
+    renderBody();
+    t.appendChild(thead);
     t.appendChild(tbody);
-    outputEl.appendChild(t);
+    wrap.appendChild(t);
+
+    if (filter) {
+      filterInput.addEventListener('input', () => {
+        filterStr = filterInput.value;
+        renderBody();
+      });
+    }
+
+    outputEl.appendChild(wrap);
   };
 
   // input widget helpers — persist state and DOM across re-runs
@@ -543,6 +618,15 @@ export async function execCell(cell) {
       }
     }
 
+    // @plan — project management (dev-mode fallback)
+    if (url === '@plan') {
+      if (!window._importCache[url] && !window._installedModules[url]) {
+        const mod = await import('./ext/plan/index.js');
+        window._importCache[url] = mod;
+        return mod;
+      }
+    }
+
     if (window._importCache[url]) return window._importCache[url];
 
     // binary assets — return blob URL
@@ -637,6 +721,21 @@ export async function execCell(cell) {
     // @spinifex — web GIS
     if (url === '@spinifex') {
       const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/spinifex/index.js';
+      const resp = await fetch(realUrl);
+      if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
+      const source = await resp.text();
+      window._installedModules[url] = { source, cellId: cell.id };
+      syncModules();
+      const blob = new Blob([source], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      const mod = await import(blobUrl);
+      window._importCache[url] = mod;
+      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB)`);
+      return mod;
+    }
+    // @plan — project management
+    if (url === '@plan') {
+      const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/plan/index.js';
       const resp = await fetch(realUrl);
       if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
       const source = await resp.text();
@@ -843,7 +942,7 @@ export async function execCell(cell) {
   };
 
   // ui object — constructed per-cell (closes over cell context)
-  const ui = { display, print: display, canvas, table, slider, dropdown, checkbox, textInput, download, upload, drop };
+  const ui = { display, print: display, html: displayHtml, canvas, table, slider, dropdown, checkbox, textInput, download, upload, drop };
 
   // tagged template builtins
   const md = taggedTemplate('md');

@@ -1,0 +1,132 @@
+/// auditable
+/// title: @plan — project scheduling
+/// settings: {"theme":"dark","fontSize":13,"width":"860","editorView":"yes"}
+/// module: @plan ext/plan/index.js
+
+/// md
+# @plan — project scheduling
+
+CPM scheduling, PERT estimation, Monte Carlo simulation, resource leveling,
+earned value management, and SVG visualization — all in one module.
+
+Define tasks with durations, dependencies, and resources. The scheduler runs
+a forward/backward pass to find the critical path and float. Monte Carlo
+simulation samples PERT distributions to produce completion date probabilities.
+
+/// code collapsed
+const plan = await load("@plan");
+
+/// md
+## define a project
+
+/// code
+const tasks = [
+  { id: "design", name: "Design", duration: 5, resource: "alice" },
+  { id: "proto", name: "Prototype", optimistic: 3, mostLikely: 5, pessimistic: 10,
+    depends: ["design"], resource: "bob" },
+  { id: "review", name: "Design Review", duration: 2, depends: ["design"],
+    resource: "carol" },
+  { id: "backend", name: "Backend", optimistic: 8, mostLikely: 12, pessimistic: 20,
+    depends: ["proto", "review"], resource: "bob" },
+  { id: "frontend", name: "Frontend", optimistic: 6, mostLikely: 10, pessimistic: 18,
+    depends: ["proto", "review"], resource: "alice" },
+  { id: "integrate", name: "Integration", duration: 3,
+    depends: ["backend", "frontend"], resource: "bob" },
+  { id: "test", name: "Testing", optimistic: 4, mostLikely: 6, pessimistic: 12,
+    depends: ["integrate"], resource: "carol" },
+  { id: "deploy", name: "Deploy", duration: 1, depends: ["test"], resource: "bob" },
+];
+
+const calendar = { holidays: ["2026-04-03"] };
+const resources = [
+  { id: "alice", name: "Alice" },
+  { id: "bob", name: "Bob" },
+  { id: "carol", name: "Carol" },
+];
+
+/// md
+## schedule + gantt chart
+
+/// code collapsed
+const result = plan.schedule(tasks, calendar, "2026-03-16", resources);
+ui.display(`Project duration: ${result.projectDuration} working days \u00b7 Critical path: ${result.criticalPath.join(" \u2192 ")}`);
+const fmt = d => d.toISOString().slice(0, 10);
+ui.table(result.scheduled.map(t => ({
+  Task: t.name, Resource: t.resource || "",
+  Start: fmt(t.earlyStart), Finish: fmt(t.earlyFinish),
+  Float: t.totalFloat, Critical: t.isCritical ? "\u2731" : "",
+})), { sortable: true, filter: true });
+
+/// code collapsed
+ui.html(plan.gantt(result, { width: 840, showFloat: true, showResources: true }));
+
+/// md
+## resource histogram
+
+/// code collapsed
+ui.html(plan.resourceHistogram(result.scheduled, { width: 840, height: 260 }));
+
+/// md
+## Monte Carlo simulation
+
+Sample 5 000 iterations using PERT distributions to estimate completion date probability.
+
+/// code collapsed
+const mc = plan.monteCarlo(tasks, calendar, "2026-03-16", { iterations: 5000, seed: 42 });
+ui.display(`P50: ${mc.projectEnd.p50.toISOString().slice(0,10)}  P75: ${mc.projectEnd.p75.toISOString().slice(0,10)}  P90: ${mc.projectEnd.p90.toISOString().slice(0,10)}`);
+ui.html(plan.monteCarloPlot(mc, { width: 840 }));
+
+/// md
+## S-curve + earned value
+
+Track planned vs actual progress. Mark some tasks as partially complete.
+
+/// code collapsed
+// simulate partial progress
+// simulate partial progress — cost.rate puts everything in dollars
+const rate = 500;
+const tracked = result.scheduled.map(t => ({
+  ...t,
+  cost: { rate },
+  progress: ["design", "proto", "review"].includes(t.id) ? 1
+    : t.id === "backend" ? 0.4
+    : t.id === "frontend" ? 0.25 : 0,
+  actualCost: ["design", "proto", "review"].includes(t.id) ? (t.duration || 5) * rate
+    : t.id === "backend" ? 2400
+    : t.id === "frontend" ? 1250 : 0,
+}));
+
+const sc = plan.scurve(tracked, { metric: "cost", today: "2026-04-03" });
+ui.html(plan.scurvePlot(sc, { width: 840 }));
+
+const ev = plan.evm(tracked, "2026-04-03");
+const fmt = (v) => "$" + Math.round(v).toLocaleString();
+ui.display(`BAC: ${fmt(ev.bac)}  EV: ${fmt(ev.ev)}  AC: ${fmt(ev.ac)}  SPI: ${ev.spi.toFixed(2)}  CPI: ${ev.cpi.toFixed(2)}  EAC: ${fmt(ev.eac)}`);
+
+/// md
+## workflow template
+
+Define a reusable stage-gate workflow and instantiate it for a concrete project.
+
+/// code collapsed
+const workflow = {
+  id: "sdlc",
+  name: "Software Development",
+  stages: [
+    { id: "plan", name: "Planning", duration: 3, gate: "Scope approved?" },
+    { id: "dev", name: "Development", duration: 10, gate: "Code complete?" },
+    { id: "qa", name: "QA", duration: 5, gate: "Release approved?" },
+    { id: "rel", name: "Release", duration: 1 },
+  ],
+  transitions: [
+    { from: "plan", to: "dev" },
+    { from: "dev", to: "qa" },
+    { from: "qa", to: "rel" },
+    { from: "qa", to: "dev", probability: 0.15, label: "QA rework" },
+  ],
+};
+
+ui.html(plan.workflowDiagram(workflow, { showProbabilities: true }));
+
+const { tasks: wfTasks } = plan.instantiate(workflow, { id: "v2", name: "v2.0 Release" });
+ui.display(`Generated ${wfTasks.length} tasks: ${wfTasks.map(t => t.id).join(", ")}`);
