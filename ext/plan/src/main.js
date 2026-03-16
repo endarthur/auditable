@@ -11,9 +11,10 @@ export {
   whatIf, delayImpact, nearCritical, slackBudget, scopeDrift, bufferStatus,
   busFactor, switchingOverhead, meetingCost, constraint,
   brooksLaw, littlesLaw, multiProjectFragmentation,
-  burndown, health,
+  burndown, health, compress,
 } from './analysis.js';
 export { instantiate, instantiateBatch, compose, stageGateMatrix, throughput } from './workflow.js';
 export { monteCarlo, createRng, samplePert } from './montecarlo.js';
-export { gantt, scurvePlot, resourceHistogram, stageGateView, workflowDiagram, monteCarloPlot, tornadoPlot, burndownPlot } from './render.js';
+export { gantt, scurvePlot, resourceHistogram, stageGateView, workflowDiagram, monteCarloPlot, tornadoPlot, burndownPlot, deadlineRiskPlot } from './render.js';
 export { planToXLSX } from './xlsx.js';
+export { brazilHolidays, brazilCalendar, brazilMunicipalities, federalHolidays } from './holidays-br.js';

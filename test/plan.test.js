@@ -1009,3 +1009,108 @@ describe('plan: monteCarlo sensitivity', () => {
     }
   });
 });
+
+// ── compress ──
+
+describe('compress', () => {
+  it('returns original when budget exceeds total', () => {
+    const profile = { a: [2, 4, 6], b: [1, 3, 5] };
+    const r = analysis.compress(profile, 100);
+    assert.equal(r.alpha, 1);
+    assert.equal(r.feasible, true);
+    assert.deepStrictEqual(r.profile.a, [2, 4, 6]);
+  });
+
+  it('compresses to fit budget', () => {
+    const profile = { a: [2, 4, 8], b: [1, 3, 7] };
+    // original: a=4.33 + b=3.33 = 7.67
+    const r = analysis.compress(profile, 5);
+    assert.ok(r.compressed <= 5.1);
+    assert.ok(r.alpha < 1);
+    assert.ok(r.feasible);
+    // o values preserved
+    assert.equal(r.profile.a[0], 2);
+    assert.equal(r.profile.b[0], 1);
+    // m and p compressed toward o
+    assert.ok(r.profile.a[1] <= 4);
+    assert.ok(r.profile.a[2] <= 8);
+  });
+
+  it('reports infeasible when floor exceeds budget', () => {
+    const profile = { a: [5, 8, 12], b: [4, 6, 10] };
+    // floor = 5 + 4 = 9
+    const r = analysis.compress(profile, 7);
+    assert.equal(r.feasible, false);
+    assert.equal(r.alpha, 0);
+  });
+
+  it('respects fixed tasks', () => {
+    const profile = { a: [2, 4, 6], b: [1, 3, 5] };
+    const r = analysis.compress(profile, 5, { fixed: ['a'] });
+    // a should be unchanged
+    assert.deepStrictEqual(r.profile.a, [2, 4, 6]);
+    // b should be compressed
+    assert.ok(r.profile.b[1] < 3);
+  });
+
+  it('works with task array input', () => {
+    const tasks = [
+      { id: 'x', pert: { o: 2, m: 5, p: 10 } },
+      { id: 'y', pert: { o: 3, m: 6, p: 12 }, depends: ['x'] },
+    ];
+    const r = analysis.compress(tasks, 8);
+    assert.ok(r.compressed <= 8.1);
+    assert.ok(r.profile.x);
+    assert.ok(r.profile.y);
+  });
+});
+
+// ── holidays-br ──
+
+const br = await import('../ext/plan/src/holidays-br.js');
+
+describe('brazilHolidays', () => {
+  it('returns 13 federal holidays', () => {
+    const fed = br.federalHolidays(2026);
+    assert.equal(fed.length, 13);
+    assert.ok(fed.some(h => h.label === 'Natal'));
+    assert.ok(fed.some(h => h.label.startsWith('Carnaval')));
+  });
+
+  it('computes Easter-dependent dates correctly for 2026', () => {
+    const hols = br.brazilHolidays(2026);
+    // Easter 2026 = April 5
+    assert.ok(hols.some(h => h.date === '2026-02-16' && h.label.includes('Carnaval')));
+    assert.ok(hols.some(h => h.date === '2026-04-03' && h.label.includes('Sexta')));
+    assert.ok(hols.some(h => h.date === '2026-06-04' && h.label === 'Corpus Christi'));
+  });
+
+  it('includes state and municipal holidays', () => {
+    const hols = br.brazilHolidays(2026, { municipality: 'parauapebas-pa' });
+    assert.ok(hols.some(h => h.label === 'Adesão do Pará'));
+    assert.ok(hols.some(h => h.label === 'Aniversário de Parauapebas'));
+  });
+
+  it('excludes carnival when disabled', () => {
+    const hols = br.brazilHolidays(2026, { carnival: false });
+    assert.ok(!hols.some(h => h.label.includes('Carnaval')));
+  });
+
+  it('includes optional periods when enabled', () => {
+    const hols = br.brazilHolidays(2026, { optional: true });
+    assert.ok(hols.some(h => h.label.includes('Cinzas')));
+  });
+
+  it('brazilCalendar returns multi-year calendar object', () => {
+    const cal = br.brazilCalendar(2026, 2027);
+    assert.ok(cal.holidays.length > 20);
+    assert.ok(cal.holidays.some(h => h.date.startsWith('2027')));
+  });
+
+  it('brazilMunicipalities lists all entries', () => {
+    const munis = br.brazilMunicipalities();
+    assert.ok(munis.length >= 29);
+    assert.ok(munis.includes('parauapebas-pa'));
+    assert.ok(munis.includes('sao paulo-sp'));
+  });
+});

@@ -1305,6 +1305,109 @@ function health(scheduleResult, evmResult, options = {}) {
   return { overall, indicators, summary };
 }
 
+// Compress PERT profile to fit a time budget
+// profile: { stage: [o, m, p], ... } or tasks array with .pert
+// budget: target working days
+// Returns: { profile, alpha, original, compressed, surplus, feasible, tasks (if tasks input) }
+function compress(input, budget, options = {}) {
+  const { fixed = [] } = options;
+
+  // Normalize: accept either a profile object or array of tasks
+  let entries; // [{ key, o, m, p }]
+  const isProfile = !Array.isArray(input);
+
+  if (isProfile) {
+    entries = Object.entries(input)
+      .filter(([, v]) => v != null)
+      .map(([key, arr]) => {
+        const [o, m, p] = Array.isArray(arr) ? arr : [arr.o, arr.m, arr.p];
+        return { key, o, m, p };
+      });
+  } else {
+    entries = input
+      .filter(t => t.pert && !t.milestone)
+      .map(t => {
+        const { o, m, p } = t.pert;
+        return { key: t.id, o, m, p };
+      });
+  }
+
+  const pert = (o, m, p) => (o + 4 * m + p) / 6;
+
+  // Original expected
+  const origExpected = entries.map(e => ({
+    ...e,
+    expected: pert(e.o, e.m, e.p),
+    isFixed: fixed.includes(e.key),
+  }));
+
+  const originalTotal = origExpected.reduce((s, e) => s + e.expected, 0);
+  const fixedTotal = origExpected.filter(e => e.isFixed).reduce((s, e) => s + e.expected, 0);
+  const floorTotal = origExpected.reduce((s, e) => s + (e.isFixed ? e.expected : e.o), 0);
+
+  // If already fits, return as-is
+  if (originalTotal <= budget) {
+    const profile = {};
+    for (const e of entries) profile[e.key] = [e.o, e.m, e.p];
+    return {
+      profile, alpha: 1, original: originalTotal, compressed: originalTotal,
+      surplus: budget - originalTotal, feasible: true, floor: floorTotal, tasks: origExpected,
+    };
+  }
+
+  // If even all-optimistic doesn't fit
+  const feasible = floorTotal <= budget;
+
+  // Find alpha: each compressible task gets expected = o + alpha * (origExpected - o)
+  // Total = fixedTotal + sum_compressible(o_i + alpha * (exp_i - o_i)) = budget
+  // alpha = (budget - fixedTotal - sum_compressible(o_i)) / sum_compressible(exp_i - o_i)
+  const compressible = origExpected.filter(e => !e.isFixed);
+  const sumO = compressible.reduce((s, e) => s + e.o, 0);
+  const sumRange = compressible.reduce((s, e) => s + (e.expected - e.o), 0);
+
+  let alpha;
+  if (sumRange === 0) {
+    alpha = 0;
+  } else {
+    alpha = (budget - fixedTotal - sumO) / sumRange;
+    alpha = Math.max(0, Math.min(1, alpha));
+  }
+
+  // Build compressed profile
+  const profile = {};
+  const tasks = [];
+  let compressedTotal = 0;
+
+  for (const e of origExpected) {
+    if (e.isFixed) {
+      profile[e.key] = [e.o, e.m, e.p];
+      tasks.push({ ...e, newExpected: e.expected, cut: 0 });
+      compressedTotal += e.expected;
+    } else {
+      const newExp = e.o + alpha * (e.expected - e.o);
+      // Back-compute new m and p keeping o fixed
+      // newExp = (o + 4m' + p') / 6, and maintain p'/m' ratio relative to o
+      // m' = o + alpha * (m - o), p' = o + alpha * (p - o)
+      const newM = Math.max(e.o, Math.round((e.o + alpha * (e.m - e.o)) * 10) / 10);
+      const newP = Math.max(newM, Math.round((e.o + alpha * (e.p - e.o)) * 10) / 10);
+      profile[e.key] = [e.o, newM, newP];
+      const actualNew = pert(e.o, newM, newP);
+      tasks.push({ ...e, newM, newP, newExpected: actualNew, cut: e.expected - actualNew });
+      compressedTotal += actualNew;
+    }
+  }
+
+  return {
+    profile, alpha: +alpha.toFixed(4),
+    original: +originalTotal.toFixed(1),
+    compressed: +compressedTotal.toFixed(1),
+    surplus: +(budget - compressedTotal).toFixed(1),
+    floor: +floorTotal.toFixed(1),
+    feasible,
+    tasks,
+  };
+}
+
 // -- workflow.js --
 
 // Workflow engine — process templates, instantiation, stage-gate tracking
@@ -1593,6 +1696,7 @@ function monteCarlo(tasks, calendar, projectStart, options = {}) {
     reworkTransitions = [],
     seed = 42,
     sensitivity: doSensitivity = true,
+    retainTaskEnds: doRetainTaskEnds = false,
   } = options;
 
   const rng = createRng(seed);
@@ -1738,6 +1842,9 @@ function monteCarlo(tasks, calendar, projectStart, options = {}) {
     };
   }
 
+  // Retain sorted date arrays if requested
+  const taskEndDates = doRetainTaskEnds ? taskEnds : null;
+
   // Critical path frequency
   const criticalPathFrequency = {};
   for (const id of order) {
@@ -1783,6 +1890,7 @@ function monteCarlo(tasks, calendar, projectStart, options = {}) {
     criticalPathFrequency,
     reworkOccurrences,
     sensitivity,
+    taskEndDates,
   };
 }
 
@@ -1873,7 +1981,9 @@ function gantt(scheduleResult, options = {}) {
     if (showFloat && t.lateFinish > maxDate) maxDate = t.lateFinish;
   }
 
-  const headerHeight = 30;
+  const monthHeaderH = 18;
+  const weekHeaderH = 16;
+  const headerHeight = monthHeaderH + weekHeaderH;
   const height = headerHeight + rows.length * rowHeight + 10;
   const chartWidth = width - labelWidth - 20;
   const chartLeft = labelWidth + 10;
@@ -1886,17 +1996,83 @@ function gantt(scheduleResult, options = {}) {
   // Background
   svg += _rect(0, 0, width, height, colors.bg);
 
-  // Timeline header — month labels
+  // Header background
+  svg += _rect(chartLeft, 0, chartWidth, headerHeight, '#181818');
+  svg += _line(chartLeft, monthHeaderH, chartLeft + chartWidth, monthHeaderH, colors.grid);
+  svg += _line(chartLeft, headerHeight, chartLeft + chartWidth, headerHeight, colors.text, 'opacity="0.3"');
+
+  // Month labels (top tier)
   const d = new Date(minDate);
   d.setDate(1);
   while (d <= maxDate) {
     const x = dateToX(d);
     const label = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()] + ' ' + d.getFullYear();
     if (x >= chartLeft) {
+      svg += _line(x, 0, x, headerHeight, colors.grid);
       svg += _line(x, headerHeight, x, height, colors.grid, 'stroke-dasharray="2,4"');
-      svg += _text(x + 4, 20, label, colors.textDim, 'font-size="10"');
+      svg += _text(x + 4, 13, label, colors.textDim, 'font-size="10"');
     }
     d.setMonth(d.getMonth() + 1);
+  }
+
+  // Week labels + gridlines (bottom tier)
+  const wd = new Date(minDate);
+  wd.setDate(wd.getDate() + ((8 - wd.getDay()) % 7)); // advance to next Monday
+  const totalWeeks = Math.round(timeSpan / (7 * 86400000));
+  const showWeekLabel = totalWeeks <= 50; // hide labels if too many weeks
+  while (wd <= maxDate) {
+    const x = dateToX(wd);
+    if (x >= chartLeft && x <= chartLeft + chartWidth) {
+      svg += _line(x, monthHeaderH, x, headerHeight, colors.grid, 'opacity="0.5"');
+      svg += _line(x, headerHeight, x, height, colors.grid, 'opacity="0.15"');
+      if (showWeekLabel) {
+        const lbl = String(wd.getDate()).padStart(2, '0');
+        svg += _text(x + 2, monthHeaderH + 12, lbl, colors.textDim, 'font-size="8" opacity="0.6"');
+      }
+    }
+    wd.setDate(wd.getDate() + 7);
+  }
+
+  // Blocked periods & holidays
+  const calendar = options.calendar;
+  if (calendar) {
+    // Hatch pattern for blocked ranges
+    let hasHatch = false;
+    if (calendar.blocked && calendar.blocked.length > 0) {
+      hasHatch = true;
+      svg += `<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" stroke="${colors.blocked}" stroke-width="1" opacity="0.12"/></pattern></defs>`;
+    }
+    // Blocked ranges (vacation, etc.)
+    if (calendar.blocked) {
+      for (const b of calendar.blocked) {
+        const bs = _parseDate(b.start);
+        const be = _parseDate(b.end);
+        be.setHours(23, 59, 59);
+        if (be >= minDate && bs <= maxDate) {
+          const x1 = Math.max(chartLeft, dateToX(bs));
+          const x2 = Math.min(chartLeft + chartWidth, dateToX(be));
+          const bw = x2 - x1;
+          if (bw > 0) {
+            svg += _rect(x1, headerHeight, bw, height - headerHeight, colors.blocked, 'opacity="0.08"');
+            svg += `<rect x="${x1}" y="${headerHeight}" width="${bw}" height="${height - headerHeight}" fill="url(#hatch)"/>`;
+            if (b.label && bw > 30) {
+              const labelX = x1 + bw / 2;
+              svg += _text(labelX, headerHeight + 12, b.label, colors.blocked, 'font-size="9" text-anchor="middle" opacity="0.6"');
+            }
+          }
+        }
+      }
+    }
+    // Individual holidays
+    if (calendar.holidays) {
+      for (const h of calendar.holidays) {
+        const hd = _parseDate(h.date);
+        if (hd >= minDate && hd <= maxDate) {
+          const hx = dateToX(hd);
+          svg += _line(hx, headerHeight, hx, height, colors.blocked, 'stroke-width="1" opacity="0.25" stroke-dasharray="2,3"');
+        }
+      }
+    }
   }
 
   // Today line
@@ -2507,6 +2683,133 @@ function burndownPlot(burndownData, options = {}) {
   return _svg(width, height, svg);
 }
 
+// ── Deadline Risk Plot (multi-distribution overlay) ──
+
+// deadlines: [{ label, taskId, deadline (date string), color? }]
+// mcResult must have taskEndDates (run monteCarlo with retainTaskEnds: true)
+function deadlineRiskPlot(mcResult, deadlines, options = {}) {
+  const {
+    width = 940,
+    height = 360,
+    bins: nBins = 40,
+  } = options;
+
+  const { taskEndDates } = mcResult;
+  if (!taskEndDates) return _svg(width, 40, _text(10, 25, 'No taskEndDates — use retainTaskEnds: true', GCU.textDim));
+
+  // Default colors — one per deposit, distinct hues
+  const palette = ['#4A90D9', '#6BBF6B', '#D9A534', '#B87333', '#D94040', '#9B59B6', '#1ABC9C', '#E67E22'];
+
+  // Gather all dates to find global range
+  let globalMin = Infinity, globalMax = -Infinity;
+  const series = [];
+  for (let si = 0; si < deadlines.length; si++) {
+    const d = deadlines[si];
+    const dates = taskEndDates[d.taskId];
+    if (!dates || dates.length === 0) continue;
+    const first = dates[0].getTime(), last = dates[dates.length - 1].getTime();
+    if (first < globalMin) globalMin = first;
+    if (last > globalMax) globalMax = last;
+    const dl = _parseDate(d.deadline).getTime();
+    if (dl < globalMin) globalMin = dl;
+    if (dl > globalMax) globalMax = dl;
+    series.push({ ...d, dates, color: d.color || palette[si % palette.length] });
+  }
+
+  if (series.length === 0) return _svg(width, 40, _text(10, 25, 'No matching tasks', GCU.textDim));
+
+  // Add some padding to range
+  const range = globalMax - globalMin || 1;
+  globalMin -= range * 0.02;
+  globalMax += range * 0.02;
+  const binWidth = (globalMax - globalMin) / nBins;
+
+  // Build histograms per series
+  let maxCount = 0;
+  for (const s of series) {
+    s.counts = new Array(nBins).fill(0);
+    for (const d of s.dates) {
+      const bin = Math.min(nBins - 1, Math.floor((d.getTime() - globalMin) / binWidth));
+      s.counts[bin]++;
+    }
+    const sMax = Math.max(...s.counts);
+    if (sMax > maxCount) maxCount = sMax;
+  }
+
+  const pad = { top: 30, right: 20, bottom: 55, left: 40 };
+  const plotW = width - pad.left - pad.right;
+  const plotH = height - pad.top - pad.bottom;
+  const barW = Math.max(2, plotW / nBins - 0.5);
+
+  const dateToX = (ms) => pad.left + ((ms - globalMin) / (globalMax - globalMin)) * plotW;
+  const countToH = (c) => (c / maxCount) * plotH;
+
+  let svg = '';
+  svg += _rect(0, 0, width, height, GCU.bg);
+
+  // Bars — draw each series semi-transparent, overlapping
+  for (const s of series) {
+    for (let i = 0; i < nBins; i++) {
+      if (s.counts[i] === 0) continue;
+      const x = pad.left + (i / nBins) * plotW;
+      const barH = countToH(s.counts[i]);
+      svg += _rect(x, pad.top + plotH - barH, barW, barH, s.color, 'opacity="0.35" rx="1"');
+    }
+  }
+
+  // Deadline lines + labels
+  for (const s of series) {
+    const dlMs = _parseDate(s.deadline).getTime();
+    const x = dateToX(dlMs);
+    // Solid deadline line
+    svg += _line(x, pad.top, x, pad.top + plotH, s.color, 'stroke-width="2" opacity="0.9"');
+    // Small label at bottom
+    svg += _text(x, pad.top + plotH + 30, s.label || _fmtDate(new Date(dlMs)), s.color,
+      'text-anchor="middle" font-size="9" font-weight="bold"');
+    svg += _text(x, pad.top + plotH + 42, _fmtDate(new Date(dlMs)), s.color,
+      'text-anchor="middle" font-size="8" opacity="0.7"');
+  }
+
+  // P50 markers — small triangles at top
+  for (const s of series) {
+    const p50 = mcResult.taskEnd[s.taskId]?.p50;
+    if (!p50) continue;
+    const x = dateToX(p50.getTime());
+    const y = pad.top - 2;
+    svg += _path(`M${x-4} ${y-8} L${x+4} ${y-8} L${x} ${y} Z`, 'none', s.color, 'opacity="0.8"');
+  }
+
+  // X-axis date labels
+  const totalDays = (globalMax - globalMin) / 86400000;
+  const labelStep = totalDays < 60 ? 7 : totalDays < 180 ? 14 : 30;
+  const startDate = new Date(globalMin);
+  startDate.setDate(startDate.getDate() - startDate.getDay()); // align to week start
+  const d = new Date(startDate);
+  while (d.getTime() <= globalMax) {
+    const x = dateToX(d.getTime());
+    if (x >= pad.left && x <= pad.left + plotW) {
+      svg += _line(x, pad.top + plotH, x, pad.top + plotH + 4, GCU.textDim);
+      svg += _text(x, pad.top + plotH + 15, _fmtDate(d), GCU.textDim, 'text-anchor="middle" font-size="8"');
+    }
+    d.setDate(d.getDate() + labelStep);
+  }
+
+  // Legend
+  const legendY = pad.top - 18;
+  let legendX = pad.left;
+  for (const s of series) {
+    svg += _rect(legendX, legendY - 6, 10, 10, s.color, 'opacity="0.6" rx="2"');
+    svg += _text(legendX + 14, legendY + 3, s.label || s.taskId, s.color, 'font-size="9"');
+    legendX += (s.label || s.taskId).length * 6 + 28;
+  }
+
+  // Axes
+  svg += _line(pad.left, pad.top, pad.left, pad.top + plotH, GCU.text);
+  svg += _line(pad.left, pad.top + plotH, pad.left + plotW, pad.top + plotH, GCU.text);
+
+  return _svg(width, height, svg);
+}
+
 // -- xlsx.js --
 
 // XLSX export adapter — uses @sheet if available
@@ -2556,6 +2859,217 @@ function planToXLSX(scheduleResult, scurveData, options = {}) {
 
   return sheet.writeXLSX(wb);
 }
+
+// -- holidays-br.js --
+
+// Brazilian holidays — federal, state, and municipal
+// Returns arrays of { date: 'YYYY-MM-DD', label } compatible with plan calendar format
+
+// Easter Sunday by anonymous Gregorian algorithm (Computus)
+function _easter(year) {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(year, month - 1, day);
+}
+
+function _fmt(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+}
+
+function _offset(base, days) {
+  const d = new Date(base);
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
+// Federal holidays (national)
+function federalHolidays(year) {
+  const easter = _easter(year);
+  return [
+    { date: `${year}-01-01`, label: 'Confraternização Universal' },
+    { date: _fmt(_offset(easter, -48)), label: 'Carnaval (segunda)' },
+    { date: _fmt(_offset(easter, -47)), label: 'Carnaval (terça)' },
+    { date: _fmt(_offset(easter, -2)), label: 'Sexta-Feira Santa' },
+    { date: `${year}-04-21`, label: 'Tiradentes' },
+    { date: `${year}-05-01`, label: 'Dia do Trabalho' },
+    { date: _fmt(_offset(easter, 60)), label: 'Corpus Christi' },
+    { date: `${year}-09-07`, label: 'Independência' },
+    { date: `${year}-10-12`, label: 'Nossa Senhora Aparecida' },
+    { date: `${year}-11-02`, label: 'Finados' },
+    { date: `${year}-11-15`, label: 'Proclamação da República' },
+    { date: `${year}-11-20`, label: 'Consciência Negra' },
+    { date: `${year}-12-25`, label: 'Natal' },
+  ];
+}
+
+// State holidays by UF
+const STATE_HOLIDAYS = {
+  AC: [{ md: '01-23', label: 'Dia do Evangélico' }, { md: '06-15', label: 'Aniversário do Acre' }, { md: '09-05', label: 'Dia da Amazônia' }, { md: '11-17', label: 'Tratado de Petrópolis' }],
+  AL: [{ md: '06-24', label: 'São João' }, { md: '06-29', label: 'São Pedro' }, { md: '09-16', label: 'Emancipação de Alagoas' }],
+  AP: [{ md: '03-19', label: 'São José' }, { md: '07-25', label: 'São Tiago' }, { md: '10-05', label: 'Criação do Amapá' }],
+  AM: [{ md: '09-05', label: 'Elevação do Amazonas' }],
+  BA: [{ md: '07-02', label: 'Independência da Bahia' }],
+  CE: [{ md: '03-25', label: 'Abolição no Ceará' }],
+  DF: [],
+  ES: [],
+  GO: [],
+  MA: [{ md: '07-28', label: 'Adesão do Maranhão' }],
+  MT: [],
+  MS: [{ md: '10-11', label: 'Criação do MS' }],
+  MG: [],
+  PA: [{ md: '08-15', label: 'Adesão do Pará' }],
+  PB: [{ md: '08-05', label: 'Fundação do Estado' }],
+  PR: [{ md: '12-19', label: 'Emancipação do Paraná' }],
+  PE: [],
+  PI: [{ md: '10-19', label: 'Dia do Piauí' }],
+  RJ: [{ md: '04-23', label: 'São Jorge' }],
+  RN: [{ md: '10-03', label: 'Mártires de Cunhaú e Uruaçu' }],
+  RS: [{ md: '09-20', label: 'Revolução Farroupilha' }],
+  RO: [{ md: '01-04', label: 'Criação de Rondônia' }],
+  RR: [{ md: '10-05', label: 'Criação de Roraima' }],
+  SC: [],
+  SE: [{ md: '07-08', label: 'Emancipação de Sergipe' }],
+  SP: [{ md: '07-09', label: 'Revolução Constitucionalista' }],
+  TO: [{ md: '10-05', label: 'Criação do Tocantins' }],
+};
+
+// Municipal holidays — state capitals + mining towns
+// { key: [{ md, label }] } — key is 'city-UF' lowercase
+const MUNICIPAL_HOLIDAYS = {
+  // State capitals
+  'rio branco-ac':      [{ md: '12-28', label: 'Aniversário de Rio Branco' }],
+  'maceio-al':          [{ md: '12-05', label: 'Aniversário de Maceió' }],
+  'macapa-ap':          [{ md: '02-04', label: 'Aniversário de Macapá' }],
+  'manaus-am':          [{ md: '10-24', label: 'Aniversário de Manaus' }],
+  'salvador-ba':        [{ md: '03-29', label: 'Aniversário de Salvador' }],
+  'fortaleza-ce':       [{ md: '04-13', label: 'Aniversário de Fortaleza' }],
+  'brasilia-df':        [{ md: '04-21', label: 'Aniversário de Brasília' }],
+  'vitoria-es':         [{ md: '09-08', label: 'Aniversário de Vitória' }],
+  'goiania-go':         [{ md: '10-24', label: 'Aniversário de Goiânia' }],
+  'sao luis-ma':        [{ md: '09-08', label: 'Aniversário de São Luís' }],
+  'cuiaba-mt':          [{ md: '04-08', label: 'Aniversário de Cuiabá' }],
+  'campo grande-ms':    [{ md: '08-26', label: 'Aniversário de Campo Grande' }],
+  'belo horizonte-mg':  [{ md: '12-12', label: 'Aniversário de BH' }],
+  'belem-pa':           [{ md: '01-12', label: 'Aniversário de Belém' }],
+  'joao pessoa-pb':     [{ md: '08-05', label: 'Aniversário de João Pessoa' }],
+  'curitiba-pr':        [{ md: '03-29', label: 'Aniversário de Curitiba' }],
+  'recife-pe':          [{ md: '03-12', label: 'Aniversário de Recife' }],
+  'teresina-pi':        [{ md: '08-16', label: 'Aniversário de Teresina' }],
+  'rio de janeiro-rj':  [{ md: '01-20', label: 'São Sebastião' }, { md: '03-01', label: 'Aniversário do Rio' }],
+  'natal-rn':           [{ md: '12-25', label: 'Aniversário de Natal' }],
+  'porto alegre-rs':    [{ md: '02-02', label: 'Nossa Senhora dos Navegantes' }],
+  'porto velho-ro':     [{ md: '10-02', label: 'Aniversário de Porto Velho' }],
+  'boa vista-rr':       [{ md: '06-09', label: 'Aniversário de Boa Vista' }],
+  'florianopolis-sc':   [{ md: '03-23', label: 'Aniversário de Florianópolis' }],
+  'aracaju-se':         [{ md: '03-17', label: 'Aniversário de Aracaju' }],
+  'sao paulo-sp':       [{ md: '01-25', label: 'Aniversário de São Paulo' }],
+  'palmas-to':          [{ md: '05-20', label: 'Aniversário de Palmas' }],
+  // Mining towns — Carajás region
+  'parauapebas-pa':     [{ md: '05-10', label: 'Aniversário de Parauapebas' }],
+  'canaa dos carajas-pa': [{ md: '12-27', label: 'Aniversário de Canaã dos Carajás' }],
+  'maraba-pa':          [{ md: '04-05', label: 'Aniversário de Marabá' }],
+};
+
+// Optional periods — not official holidays but commonly observed
+function _optionalPeriods(year) {
+  const easter = _easter(year);
+  return [
+    // Carnival Wednesday (half-day / ponto facultativo)
+    { date: _fmt(_offset(easter, -46)), label: 'Quarta de Cinzas (ponto facultativo)' },
+    // Day before Carnival
+    { date: _fmt(_offset(easter, -49)), label: 'Pré-Carnaval (ponto facultativo)' },
+    // Corpus Christi bridge (day after, ponto facultativo)
+    { date: _fmt(_offset(easter, 61)), label: 'Pós-Corpus Christi (ponto facultativo)' },
+    // Public servant day
+    { date: `${year}-10-28`, label: 'Dia do Servidor Público (ponto facultativo)' },
+  ];
+}
+
+// Main function
+// options:
+//   uf: 'PA', 'SP', etc. — include state holidays
+//   municipality: 'parauapebas-PA', 'sao paulo-SP', etc. — include municipal holidays
+//   carnival: true (default) — include carnival Mon+Tue as holidays
+//   corpusChristi: true (default) — include Corpus Christi
+//   optional: false (default) — include ponto facultativo periods
+function brazilHolidays(year, options = {}) {
+  const {
+    uf = null,
+    municipality = null,
+    carnival = true,
+    corpusChristi = true,
+    optional = false,
+  } = options;
+
+  let holidays = federalHolidays(year);
+
+  // Filter carnival if disabled
+  if (!carnival) {
+    holidays = holidays.filter(h => !h.label.startsWith('Carnaval'));
+  }
+
+  // Filter Corpus Christi if disabled
+  if (!corpusChristi) {
+    holidays = holidays.filter(h => h.label !== 'Corpus Christi');
+  }
+
+  // State holidays
+  const effectiveUf = uf || (municipality ? municipality.split('-').pop().toUpperCase() : null);
+  if (effectiveUf && STATE_HOLIDAYS[effectiveUf]) {
+    for (const h of STATE_HOLIDAYS[effectiveUf]) {
+      holidays.push({ date: `${year}-${h.md}`, label: h.label });
+    }
+  }
+
+  // Municipal holidays
+  if (municipality) {
+    const key = municipality.toLowerCase();
+    if (MUNICIPAL_HOLIDAYS[key]) {
+      for (const h of MUNICIPAL_HOLIDAYS[key]) {
+        holidays.push({ date: `${year}-${h.md}`, label: h.label });
+      }
+    }
+  }
+
+  // Optional periods
+  if (optional) {
+    holidays.push(..._optionalPeriods(year));
+  }
+
+  // Sort by date
+  holidays.sort((a, b) => a.date.localeCompare(b.date));
+
+  return holidays;
+}
+
+// Generate holidays for a range of years
+function brazilCalendar(startYear, endYear, options = {}) {
+  const holidays = [];
+  for (let y = startYear; y <= endYear; y++) {
+    holidays.push(...brazilHolidays(y, options));
+  }
+  return { holidays };
+}
+
+// List available municipalities
+function brazilMunicipalities() {
+  return Object.keys(MUNICIPAL_HOLIDAYS).sort();
+}
 export {
   // calendar
   isWorkingDay, addWorkingDays, workingDays, nextWorkingDay, getBlockedDays,
@@ -2579,10 +3093,12 @@ export {
   whatIf, delayImpact, nearCritical, slackBudget, scopeDrift, bufferStatus,
   busFactor, switchingOverhead, meetingCost, constraint,
   brooksLaw, littlesLaw, multiProjectFragmentation,
-  burndown, health,
+  burndown, health, compress,
   // render
   gantt, scurvePlot, resourceHistogram, stageGateView, workflowDiagram, monteCarloPlot,
-  tornadoPlot, burndownPlot,
+  tornadoPlot, burndownPlot, deadlineRiskPlot,
   // xlsx
   planToXLSX,
+  // holidays
+  brazilHolidays, brazilCalendar, brazilMunicipalities, federalHolidays,
 };

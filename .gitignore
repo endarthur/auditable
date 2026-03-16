@@ -154,6 +154,9 @@ site/
 # Specs to be ingested
 spec_inbox/
 
+# Personal notebooks
+notebooks/
+
 # rv emulator — reference binaries (not ours to distribute)
 ext/rv/ref/mini-rv32ima.exe
 ext/rv/ref/our.dtb

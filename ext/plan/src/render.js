@@ -77,7 +77,9 @@ function gantt(scheduleResult, options = {}) {
     if (showFloat && t.lateFinish > maxDate) maxDate = t.lateFinish;
   }
 
-  const headerHeight = 30;
+  const monthHeaderH = 18;
+  const weekHeaderH = 16;
+  const headerHeight = monthHeaderH + weekHeaderH;
   const height = headerHeight + rows.length * rowHeight + 10;
   const chartWidth = width - labelWidth - 20;
   const chartLeft = labelWidth + 10;
@@ -90,17 +92,83 @@ function gantt(scheduleResult, options = {}) {
   // Background
   svg += _rect(0, 0, width, height, colors.bg);
 
-  // Timeline header — month labels
+  // Header background
+  svg += _rect(chartLeft, 0, chartWidth, headerHeight, '#181818');
+  svg += _line(chartLeft, monthHeaderH, chartLeft + chartWidth, monthHeaderH, colors.grid);
+  svg += _line(chartLeft, headerHeight, chartLeft + chartWidth, headerHeight, colors.text, 'opacity="0.3"');
+
+  // Month labels (top tier)
   const d = new Date(minDate);
   d.setDate(1);
   while (d <= maxDate) {
     const x = dateToX(d);
     const label = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getMonth()] + ' ' + d.getFullYear();
     if (x >= chartLeft) {
+      svg += _line(x, 0, x, headerHeight, colors.grid);
       svg += _line(x, headerHeight, x, height, colors.grid, 'stroke-dasharray="2,4"');
-      svg += _text(x + 4, 20, label, colors.textDim, 'font-size="10"');
+      svg += _text(x + 4, 13, label, colors.textDim, 'font-size="10"');
     }
     d.setMonth(d.getMonth() + 1);
+  }
+
+  // Week labels + gridlines (bottom tier)
+  const wd = new Date(minDate);
+  wd.setDate(wd.getDate() + ((8 - wd.getDay()) % 7)); // advance to next Monday
+  const totalWeeks = Math.round(timeSpan / (7 * 86400000));
+  const showWeekLabel = totalWeeks <= 50; // hide labels if too many weeks
+  while (wd <= maxDate) {
+    const x = dateToX(wd);
+    if (x >= chartLeft && x <= chartLeft + chartWidth) {
+      svg += _line(x, monthHeaderH, x, headerHeight, colors.grid, 'opacity="0.5"');
+      svg += _line(x, headerHeight, x, height, colors.grid, 'opacity="0.15"');
+      if (showWeekLabel) {
+        const lbl = String(wd.getDate()).padStart(2, '0');
+        svg += _text(x + 2, monthHeaderH + 12, lbl, colors.textDim, 'font-size="8" opacity="0.6"');
+      }
+    }
+    wd.setDate(wd.getDate() + 7);
+  }
+
+  // Blocked periods & holidays
+  const calendar = options.calendar;
+  if (calendar) {
+    // Hatch pattern for blocked ranges
+    let hasHatch = false;
+    if (calendar.blocked && calendar.blocked.length > 0) {
+      hasHatch = true;
+      svg += `<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" stroke="${colors.blocked}" stroke-width="1" opacity="0.12"/></pattern></defs>`;
+    }
+    // Blocked ranges (vacation, etc.)
+    if (calendar.blocked) {
+      for (const b of calendar.blocked) {
+        const bs = _parseDate(b.start);
+        const be = _parseDate(b.end);
+        be.setHours(23, 59, 59);
+        if (be >= minDate && bs <= maxDate) {
+          const x1 = Math.max(chartLeft, dateToX(bs));
+          const x2 = Math.min(chartLeft + chartWidth, dateToX(be));
+          const bw = x2 - x1;
+          if (bw > 0) {
+            svg += _rect(x1, headerHeight, bw, height - headerHeight, colors.blocked, 'opacity="0.08"');
+            svg += `<rect x="${x1}" y="${headerHeight}" width="${bw}" height="${height - headerHeight}" fill="url(#hatch)"/>`;
+            if (b.label && bw > 30) {
+              const labelX = x1 + bw / 2;
+              svg += _text(labelX, headerHeight + 12, b.label, colors.blocked, 'font-size="9" text-anchor="middle" opacity="0.6"');
+            }
+          }
+        }
+      }
+    }
+    // Individual holidays
+    if (calendar.holidays) {
+      for (const h of calendar.holidays) {
+        const hd = _parseDate(h.date);
+        if (hd >= minDate && hd <= maxDate) {
+          const hx = dateToX(hd);
+          svg += _line(hx, headerHeight, hx, height, colors.blocked, 'stroke-width="1" opacity="0.25" stroke-dasharray="2,3"');
+        }
+      }
+    }
   }
 
   // Today line
@@ -711,7 +779,134 @@ function burndownPlot(burndownData, options = {}) {
   return _svg(width, height, svg);
 }
 
+// ── Deadline Risk Plot (multi-distribution overlay) ──
+
+// deadlines: [{ label, taskId, deadline (date string), color? }]
+// mcResult must have taskEndDates (run monteCarlo with retainTaskEnds: true)
+function deadlineRiskPlot(mcResult, deadlines, options = {}) {
+  const {
+    width = 940,
+    height = 360,
+    bins: nBins = 40,
+  } = options;
+
+  const { taskEndDates } = mcResult;
+  if (!taskEndDates) return _svg(width, 40, _text(10, 25, 'No taskEndDates — use retainTaskEnds: true', GCU.textDim));
+
+  // Default colors — one per deposit, distinct hues
+  const palette = ['#4A90D9', '#6BBF6B', '#D9A534', '#B87333', '#D94040', '#9B59B6', '#1ABC9C', '#E67E22'];
+
+  // Gather all dates to find global range
+  let globalMin = Infinity, globalMax = -Infinity;
+  const series = [];
+  for (let si = 0; si < deadlines.length; si++) {
+    const d = deadlines[si];
+    const dates = taskEndDates[d.taskId];
+    if (!dates || dates.length === 0) continue;
+    const first = dates[0].getTime(), last = dates[dates.length - 1].getTime();
+    if (first < globalMin) globalMin = first;
+    if (last > globalMax) globalMax = last;
+    const dl = _parseDate(d.deadline).getTime();
+    if (dl < globalMin) globalMin = dl;
+    if (dl > globalMax) globalMax = dl;
+    series.push({ ...d, dates, color: d.color || palette[si % palette.length] });
+  }
+
+  if (series.length === 0) return _svg(width, 40, _text(10, 25, 'No matching tasks', GCU.textDim));
+
+  // Add some padding to range
+  const range = globalMax - globalMin || 1;
+  globalMin -= range * 0.02;
+  globalMax += range * 0.02;
+  const binWidth = (globalMax - globalMin) / nBins;
+
+  // Build histograms per series
+  let maxCount = 0;
+  for (const s of series) {
+    s.counts = new Array(nBins).fill(0);
+    for (const d of s.dates) {
+      const bin = Math.min(nBins - 1, Math.floor((d.getTime() - globalMin) / binWidth));
+      s.counts[bin]++;
+    }
+    const sMax = Math.max(...s.counts);
+    if (sMax > maxCount) maxCount = sMax;
+  }
+
+  const pad = { top: 30, right: 20, bottom: 55, left: 40 };
+  const plotW = width - pad.left - pad.right;
+  const plotH = height - pad.top - pad.bottom;
+  const barW = Math.max(2, plotW / nBins - 0.5);
+
+  const dateToX = (ms) => pad.left + ((ms - globalMin) / (globalMax - globalMin)) * plotW;
+  const countToH = (c) => (c / maxCount) * plotH;
+
+  let svg = '';
+  svg += _rect(0, 0, width, height, GCU.bg);
+
+  // Bars — draw each series semi-transparent, overlapping
+  for (const s of series) {
+    for (let i = 0; i < nBins; i++) {
+      if (s.counts[i] === 0) continue;
+      const x = pad.left + (i / nBins) * plotW;
+      const barH = countToH(s.counts[i]);
+      svg += _rect(x, pad.top + plotH - barH, barW, barH, s.color, 'opacity="0.35" rx="1"');
+    }
+  }
+
+  // Deadline lines + labels
+  for (const s of series) {
+    const dlMs = _parseDate(s.deadline).getTime();
+    const x = dateToX(dlMs);
+    // Solid deadline line
+    svg += _line(x, pad.top, x, pad.top + plotH, s.color, 'stroke-width="2" opacity="0.9"');
+    // Small label at bottom
+    svg += _text(x, pad.top + plotH + 30, s.label || _fmtDate(new Date(dlMs)), s.color,
+      'text-anchor="middle" font-size="9" font-weight="bold"');
+    svg += _text(x, pad.top + plotH + 42, _fmtDate(new Date(dlMs)), s.color,
+      'text-anchor="middle" font-size="8" opacity="0.7"');
+  }
+
+  // P50 markers — small triangles at top
+  for (const s of series) {
+    const p50 = mcResult.taskEnd[s.taskId]?.p50;
+    if (!p50) continue;
+    const x = dateToX(p50.getTime());
+    const y = pad.top - 2;
+    svg += _path(`M${x-4} ${y-8} L${x+4} ${y-8} L${x} ${y} Z`, 'none', s.color, 'opacity="0.8"');
+  }
+
+  // X-axis date labels
+  const totalDays = (globalMax - globalMin) / 86400000;
+  const labelStep = totalDays < 60 ? 7 : totalDays < 180 ? 14 : 30;
+  const startDate = new Date(globalMin);
+  startDate.setDate(startDate.getDate() - startDate.getDay()); // align to week start
+  const d = new Date(startDate);
+  while (d.getTime() <= globalMax) {
+    const x = dateToX(d.getTime());
+    if (x >= pad.left && x <= pad.left + plotW) {
+      svg += _line(x, pad.top + plotH, x, pad.top + plotH + 4, GCU.textDim);
+      svg += _text(x, pad.top + plotH + 15, _fmtDate(d), GCU.textDim, 'text-anchor="middle" font-size="8"');
+    }
+    d.setDate(d.getDate() + labelStep);
+  }
+
+  // Legend
+  const legendY = pad.top - 18;
+  let legendX = pad.left;
+  for (const s of series) {
+    svg += _rect(legendX, legendY - 6, 10, 10, s.color, 'opacity="0.6" rx="2"');
+    svg += _text(legendX + 14, legendY + 3, s.label || s.taskId, s.color, 'font-size="9"');
+    legendX += (s.label || s.taskId).length * 6 + 28;
+  }
+
+  // Axes
+  svg += _line(pad.left, pad.top, pad.left, pad.top + plotH, GCU.text);
+  svg += _line(pad.left, pad.top + plotH, pad.left + plotW, pad.top + plotH, GCU.text);
+
+  return _svg(width, height, svg);
+}
+
 export {
   gantt, scurvePlot, resourceHistogram, stageGateView, workflowDiagram, monteCarloPlot,
-  tornadoPlot, burndownPlot,
+  tornadoPlot, burndownPlot, deadlineRiskPlot,
 };

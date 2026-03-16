@@ -58,7 +58,7 @@ ui.table(result.scheduled.map(t => ({
 })), { sortable: true, filter: true });
 
 /// code collapsed
-ui.html(plan.gantt(result, { width: 840, showFloat: true, showResources: true }));
+ui.html(plan.gantt(result, { width: 840, showFloat: true, showResources: true, calendar }));
 
 /// md
 ## resource histogram

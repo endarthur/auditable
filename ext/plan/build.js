@@ -12,6 +12,7 @@ const files = [
   'calendar.js', 'pert.js', 'graph.js', 'schedule.js',
   'resource.js', 'scurve.js', 'evm.js', 'analysis.js',
   'workflow.js', 'montecarlo.js', 'render.js', 'xlsx.js',
+  'holidays-br.js',
 ];
 
 const chunks = [];
@@ -57,12 +58,14 @@ export {
   whatIf, delayImpact, nearCritical, slackBudget, scopeDrift, bufferStatus,
   busFactor, switchingOverhead, meetingCost, constraint,
   brooksLaw, littlesLaw, multiProjectFragmentation,
-  burndown, health,
+  burndown, health, compress,
   // render
   gantt, scurvePlot, resourceHistogram, stageGateView, workflowDiagram, monteCarloPlot,
-  tornadoPlot, burndownPlot,
+  tornadoPlot, burndownPlot, deadlineRiskPlot,
   // xlsx
   planToXLSX,
+  // holidays
+  brazilHolidays, brazilCalendar, brazilMunicipalities, federalHolidays,
 };
 `;
 

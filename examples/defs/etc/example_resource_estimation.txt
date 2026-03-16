@@ -1,0 +1,182 @@
+/// auditable
+/// title: resource estimation — 3 deposits
+/// settings: {"theme":"dark","fontSize":13,"width":"960","editorView":"yes"}
+/// module: @plan ext/plan/index.js
+
+/// md
+# resource estimation — 3 deposits
+
+Schedule and risk analysis for three deposits with staggered deadlines.
+
+| Deposit | Deadline | Complexity |
+|---------|----------|------------|
+| A | 2026-04-30 | Low (brownfield) |
+| B | 2026-05-29 | Medium |
+| C | 2026-06-30 | High (greenfield) |
+
+/// code collapsed
+const plan = await load("@plan");
+const fmt = d => d.toISOString().slice(0, 10);
+
+/// md
+## task definitions
+
+Baseline completion weights for EVM tracking. PERT estimates per deposit
+reflect increasing geological complexity.
+
+/// code
+const weights = {
+  audit: 10, domain: 20, dataprep: 10, blockmodel: 5,
+  estimation: 12, validation: 15, classification: 12,
+  postproc: 5, docs: 11,
+};
+
+const stages = [
+  { key: "audit", name: "DB Audit" },
+  { key: "domain", name: "Domaining" },
+  { key: "dataprep", name: "Data Prep" },
+  { key: "blockmodel", name: "Block Model" },
+  { key: "estimation", name: "Estimation" },
+  { key: "validation", name: "Validation" },
+  { key: "classification", name: "Classification" },
+  { key: "postproc", name: "Post Processing" },
+  { key: "docs", name: "Documentation" },
+];
+
+function deposit(id, label, perts) {
+  return stages.map((s, i) => ({
+    id: `${id}_${s.key}`,
+    name: s.name,
+    group: label,
+    pert: perts[s.key],
+    depends: i > 0 ? [`${id}_${stages[i - 1].key}`] : [],
+    cost: { rate: weights[s.key] },
+  }));
+}
+
+const tasksA = deposit("a", "Deposit A", {
+  audit: {o:2,m:3,p:5}, domain: {o:5,m:8,p:12}, dataprep: {o:2,m:4,p:6},
+  blockmodel: {o:1,m:2,p:3}, estimation: {o:3,m:5,p:8}, validation: {o:3,m:5,p:8},
+  classification: {o:2,m:4,p:6}, postproc: {o:1,m:2,p:3}, docs: {o:3,m:5,p:8},
+});
+const tasksB = deposit("b", "Deposit B", {
+  audit: {o:3,m:5,p:8}, domain: {o:8,m:12,p:18}, dataprep: {o:4,m:6,p:10},
+  blockmodel: {o:2,m:3,p:5}, estimation: {o:5,m:8,p:12}, validation: {o:5,m:8,p:12},
+  classification: {o:3,m:5,p:8}, postproc: {o:2,m:3,p:5}, docs: {o:4,m:7,p:12},
+});
+const tasksC = deposit("c", "Deposit C", {
+  audit: {o:5,m:7,p:12}, domain: {o:12,m:18,p:28}, dataprep: {o:5,m:8,p:12},
+  blockmodel: {o:2,m:4,p:6}, estimation: {o:6,m:10,p:16}, validation: {o:6,m:10,p:16},
+  classification: {o:4,m:7,p:12}, postproc: {o:2,m:4,p:6}, docs: {o:5,m:8,p:15},
+});
+
+const allTasks = [...tasksA, ...tasksB, ...tasksC];
+
+/// md
+## schedule + gantt
+
+/// code collapsed
+const calendar = { holidays: [{ date: "2026-04-03", label: "Good Friday" }] };
+const result = plan.schedule(allTasks, calendar, "2026-03-16");
+
+ui.table(result.scheduled.map(t => ({
+  Group: t.group, Task: t.name,
+  Start: fmt(t.earlyStart), Finish: fmt(t.earlyFinish),
+  Float: t.totalFloat, Critical: t.isCritical ? "\u2731" : "",
+})), { sortable: true, filter: true });
+
+/// code collapsed
+ui.html(plan.gantt(result, {
+  width: 940, showFloat: true, showGroups: true, labelWidth: 180,
+}));
+
+/// md
+## Monte Carlo — deadline risk
+
+5 000 iterations per deposit. How likely are we to meet each deadline?
+
+/// code collapsed
+const mcOpts = { iterations: 5000, seed: 42, sensitivity: true };
+const mcA = plan.monteCarlo(tasksA, calendar, "2026-03-16", mcOpts);
+const mcB = plan.monteCarlo(tasksB, calendar, "2026-03-16", mcOpts);
+const mcC = plan.monteCarlo(tasksC, calendar, "2026-03-16", mcOpts);
+
+const deadlines = [
+  { label: "Deposit A", mc: mcA, deadline: "2026-04-30" },
+  { label: "Deposit B", mc: mcB, deadline: "2026-05-29" },
+  { label: "Deposit C", mc: mcC, deadline: "2026-06-30" },
+];
+
+ui.table(deadlines.map(d => {
+  const dl = new Date(d.deadline);
+  const status = d.mc.projectEnd.p90 <= dl ? "on track"
+    : d.mc.projectEnd.p50 <= dl ? "at risk" : "behind";
+  return {
+    Deposit: d.label, Deadline: d.deadline,
+    P50: fmt(d.mc.projectEnd.p50), P75: fmt(d.mc.projectEnd.p75),
+    P90: fmt(d.mc.projectEnd.p90), Status: status,
+  };
+}));
+
+/// code collapsed
+// deposit A — tightest deadline
+ui.html(plan.monteCarloPlot(mcA, {
+  width: 940, showTarget: "2026-04-30", targetLabel: "Deposit A deadline",
+}));
+
+/// code collapsed
+// deposit B
+ui.html(plan.monteCarloPlot(mcB, {
+  width: 940, showTarget: "2026-05-29", targetLabel: "Deposit B deadline",
+}));
+
+/// code collapsed
+// deposit C
+ui.html(plan.monteCarloPlot(mcC, {
+  width: 940, showTarget: "2026-06-30", targetLabel: "Deposit C deadline",
+}));
+
+/// md
+## sensitivity — which tasks drive schedule risk?
+
+/// code collapsed
+// combined sensitivity across all deposits
+const mcAll = plan.monteCarlo(allTasks, calendar, "2026-03-16", mcOpts);
+ui.html(plan.tornadoPlot(mcAll.sensitivity, { width: 940, maxBars: 12 }));
+
+ui.table(mcAll.sensitivity.slice(0, 12).map(s => {
+  const dep = s.id.startsWith("a_") ? "A" : s.id.startsWith("b_") ? "B" : "C";
+  return { Task: s.name, Deposit: dep, Correlation: s.correlation.toFixed(3) };
+}));
+
+/// md
+## what-if scenarios
+
+/// code
+const scenarios = plan.whatIf(allTasks, calendar, "2026-03-16", [
+  { label: "Deposit B domaining takes 25 days",
+    overrides: { b_domain: { duration: 25 } } },
+  { label: "Deposit A needs re-estimation",
+    overrides: { a_estimation: { duration: 15 } } },
+  { label: "Deposit C database is messy",
+    overrides: { c_audit: { duration: 18 } } },
+]);
+
+ui.table(scenarios.scenarios.map(s => ({
+  Scenario: s.label,
+  "Project End": fmt(s.projectEnd),
+  "End \u0394": s.endDelta > 0 ? `+${s.endDelta}d` : `${s.endDelta}d`,
+})));
+
+/// md
+## slack budget
+
+/// code
+const sb = plan.slackBudget(result);
+ui.table([
+  { Zone: "Critical (0 days)", Tasks: sb.distribution.critical },
+  { Zone: "Tight (1\u20135 days)", Tasks: sb.distribution.tight },
+  { Zone: "Comfortable (6\u201315)", Tasks: sb.distribution.comfortable },
+  { Zone: "Buffered (>15)", Tasks: sb.distribution.buffered },
+]);
+ui.display(`Critical ratio: ${(sb.criticalRatio * 100).toFixed(0)}% \u00b7 Mean float: ${sb.meanFloat.toFixed(1)} days`);

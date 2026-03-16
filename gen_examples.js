@@ -87,6 +87,7 @@ const categories = {
     'example_iso9660.txt',
     'example_plan.txt',
     'example_plan_analysis.txt',
+    'example_resource_estimation.txt',
     'example_synth.txt',
     'example_threejs.txt',
   ],

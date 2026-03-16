@@ -568,9 +568,112 @@ function health(scheduleResult, evmResult, options = {}) {
   return { overall, indicators, summary };
 }
 
+// Compress PERT profile to fit a time budget
+// profile: { stage: [o, m, p], ... } or tasks array with .pert
+// budget: target working days
+// Returns: { profile, alpha, original, compressed, surplus, feasible, tasks (if tasks input) }
+function compress(input, budget, options = {}) {
+  const { fixed = [] } = options;
+
+  // Normalize: accept either a profile object or array of tasks
+  let entries; // [{ key, o, m, p }]
+  const isProfile = !Array.isArray(input);
+
+  if (isProfile) {
+    entries = Object.entries(input)
+      .filter(([, v]) => v != null)
+      .map(([key, arr]) => {
+        const [o, m, p] = Array.isArray(arr) ? arr : [arr.o, arr.m, arr.p];
+        return { key, o, m, p };
+      });
+  } else {
+    entries = input
+      .filter(t => t.pert && !t.milestone)
+      .map(t => {
+        const { o, m, p } = t.pert;
+        return { key: t.id, o, m, p };
+      });
+  }
+
+  const pert = (o, m, p) => (o + 4 * m + p) / 6;
+
+  // Original expected
+  const origExpected = entries.map(e => ({
+    ...e,
+    expected: pert(e.o, e.m, e.p),
+    isFixed: fixed.includes(e.key),
+  }));
+
+  const originalTotal = origExpected.reduce((s, e) => s + e.expected, 0);
+  const fixedTotal = origExpected.filter(e => e.isFixed).reduce((s, e) => s + e.expected, 0);
+  const floorTotal = origExpected.reduce((s, e) => s + (e.isFixed ? e.expected : e.o), 0);
+
+  // If already fits, return as-is
+  if (originalTotal <= budget) {
+    const profile = {};
+    for (const e of entries) profile[e.key] = [e.o, e.m, e.p];
+    return {
+      profile, alpha: 1, original: originalTotal, compressed: originalTotal,
+      surplus: budget - originalTotal, feasible: true, floor: floorTotal, tasks: origExpected,
+    };
+  }
+
+  // If even all-optimistic doesn't fit
+  const feasible = floorTotal <= budget;
+
+  // Find alpha: each compressible task gets expected = o + alpha * (origExpected - o)
+  // Total = fixedTotal + sum_compressible(o_i + alpha * (exp_i - o_i)) = budget
+  // alpha = (budget - fixedTotal - sum_compressible(o_i)) / sum_compressible(exp_i - o_i)
+  const compressible = origExpected.filter(e => !e.isFixed);
+  const sumO = compressible.reduce((s, e) => s + e.o, 0);
+  const sumRange = compressible.reduce((s, e) => s + (e.expected - e.o), 0);
+
+  let alpha;
+  if (sumRange === 0) {
+    alpha = 0;
+  } else {
+    alpha = (budget - fixedTotal - sumO) / sumRange;
+    alpha = Math.max(0, Math.min(1, alpha));
+  }
+
+  // Build compressed profile
+  const profile = {};
+  const tasks = [];
+  let compressedTotal = 0;
+
+  for (const e of origExpected) {
+    if (e.isFixed) {
+      profile[e.key] = [e.o, e.m, e.p];
+      tasks.push({ ...e, newExpected: e.expected, cut: 0 });
+      compressedTotal += e.expected;
+    } else {
+      const newExp = e.o + alpha * (e.expected - e.o);
+      // Back-compute new m and p keeping o fixed
+      // newExp = (o + 4m' + p') / 6, and maintain p'/m' ratio relative to o
+      // m' = o + alpha * (m - o), p' = o + alpha * (p - o)
+      const newM = Math.max(e.o, Math.round((e.o + alpha * (e.m - e.o)) * 10) / 10);
+      const newP = Math.max(newM, Math.round((e.o + alpha * (e.p - e.o)) * 10) / 10);
+      profile[e.key] = [e.o, newM, newP];
+      const actualNew = pert(e.o, newM, newP);
+      tasks.push({ ...e, newM, newP, newExpected: actualNew, cut: e.expected - actualNew });
+      compressedTotal += actualNew;
+    }
+  }
+
+  return {
+    profile, alpha: +alpha.toFixed(4),
+    original: +originalTotal.toFixed(1),
+    compressed: +compressedTotal.toFixed(1),
+    surplus: +(budget - compressedTotal).toFixed(1),
+    floor: +floorTotal.toFixed(1),
+    feasible,
+    tasks,
+  };
+}
+
 export {
   whatIf, delayImpact, nearCritical, slackBudget, scopeDrift, bufferStatus,
   busFactor, switchingOverhead, meetingCost, constraint,
   brooksLaw, littlesLaw, multiProjectFragmentation,
-  burndown, health,
+  burndown, health, compress,
 };

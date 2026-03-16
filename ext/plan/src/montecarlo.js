@@ -74,6 +74,7 @@ function monteCarlo(tasks, calendar, projectStart, options = {}) {
     reworkTransitions = [],
     seed = 42,
     sensitivity: doSensitivity = true,
+    retainTaskEnds: doRetainTaskEnds = false,
   } = options;
 
   const rng = createRng(seed);
@@ -219,6 +220,9 @@ function monteCarlo(tasks, calendar, projectStart, options = {}) {
     };
   }
 
+  // Retain sorted date arrays if requested
+  const taskEndDates = doRetainTaskEnds ? taskEnds : null;
+
   // Critical path frequency
   const criticalPathFrequency = {};
   for (const id of order) {
@@ -264,6 +268,7 @@ function monteCarlo(tasks, calendar, projectStart, options = {}) {
     criticalPathFrequency,
     reworkOccurrences,
     sensitivity,
+    taskEndDates,
   };
 }
 
