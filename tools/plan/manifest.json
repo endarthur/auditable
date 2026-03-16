@@ -1,0 +1,10 @@
+{
+  "name": "Plan",
+  "short_name": "Plan",
+  "description": "Project scheduling tool \u2014 PERT, CPM, Monte Carlo, Gantt",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#c89b3c",
+  "icons": []
+}

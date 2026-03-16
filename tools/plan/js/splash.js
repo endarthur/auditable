@@ -1,0 +1,284 @@
+// Project management + splash screen
+
+function futureDate(daysFromNow) {
+  const d = new Date();
+  d.setDate(d.getDate() + daysFromNow);
+  return d.toISOString().slice(0, 10);
+}
+
+const EXAMPLES = {
+  'Simple Project': {
+    tasks: STARTER_TASKS,
+    projectStart: futureDate(0),
+    deadlines: [
+      { label: 'Release', taskId: 'deploy', date: futureDate(45) },
+    ],
+  },
+  'Mining Schedule': {
+    tasks: [
+      createTask({ id: 'survey',    name: 'Geological Survey',      group: 'Exploration', o: '5', m: '10', p: '20' }),
+      createTask({ id: 'sampling',  name: 'Core Sampling',          group: 'Exploration', o: '10', m: '15', p: '25', depends: 'survey' }),
+      createTask({ id: 'assay',     name: 'Assay Analysis',         group: 'Exploration', o: '5', m: '8', p: '12', depends: 'sampling' }),
+      createTask({ id: 'model',     name: 'Resource Model',         group: 'Estimation',  o: '10', m: '20', p: '35', depends: 'assay' }),
+      createTask({ id: 'classify',  name: 'Classification',         group: 'Estimation',  o: '3', m: '5', p: '10', depends: 'model' }),
+      createTask({ id: 'mplan',     name: 'Mine Plan',              group: 'Planning',    o: '8', m: '15', p: '25', depends: 'classify' }),
+      createTask({ id: 'permit',    name: 'Environmental Permits',  group: 'Planning',    o: '20', m: '40', p: '80', depends: 'model' }),
+      createTask({ id: 'infra',     name: 'Infrastructure',         group: 'Build',       o: '15', m: '25', p: '40', depends: 'mplan, permit' }),
+      createTask({ id: 'prod',      name: 'Production Start',       group: 'Build',       o: '1', m: '1', p: '1', depends: 'infra' }),
+    ],
+    projectStart: futureDate(0),
+    deadlines: [
+      { label: 'Board Review', taskId: 'classify', date: futureDate(120) },
+      { label: 'Production Target', taskId: 'prod', date: futureDate(365) },
+    ],
+  },
+};
+
+// ── Project CRUD ──
+
+function genId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+function getProjects() {
+  try { return JSON.parse(localStorage.getItem('pp-projects') || '[]'); }
+  catch { return []; }
+}
+
+function setProjects(list) {
+  localStorage.setItem('pp-projects', JSON.stringify(list));
+}
+
+function projectCreate(name) {
+  const id = genId();
+  const list = getProjects();
+  list.unshift({ id, name: name || 'untitled', ts: Date.now() });
+  if (list.length > 20) {
+    const removed = list.splice(20);
+    for (const r of removed) localStorage.removeItem('pp-project:' + r.id);
+  }
+  setProjects(list);
+  localStorage.setItem('pp-project:' + id, serializeProject());
+  localStorage.setItem('pp-active', id);
+  PP.projectId = id;
+  return id;
+}
+
+function projectSave() {
+  if (!PP.projectId) return;
+  localStorage.setItem('pp-project:' + PP.projectId, serializeProject());
+  const list = getProjects();
+  const entry = list.find(p => p.id === PP.projectId);
+  if (entry) {
+    entry.ts = Date.now();
+    setProjects(list);
+  }
+}
+
+function projectUpdateName(name) {
+  if (!PP.projectId) return;
+  const list = getProjects();
+  const entry = list.find(p => p.id === PP.projectId);
+  if (entry) {
+    entry.name = name;
+    setProjects(list);
+  }
+}
+
+function projectLoad(id) {
+  const raw = localStorage.getItem('pp-project:' + id);
+  if (raw == null) return null;
+  localStorage.setItem('pp-active', id);
+  PP.projectId = id;
+  try { return JSON.parse(raw); }
+  catch { return null; }
+}
+
+function projectRemove(id) {
+  let list = getProjects();
+  list = list.filter(p => p.id !== id);
+  setProjects(list);
+  localStorage.removeItem('pp-project:' + id);
+  if (localStorage.getItem('pp-active') === id) {
+    localStorage.removeItem('pp-active');
+  }
+}
+
+function isProjectUntitled() {
+  if (!PP.projectId) return true;
+  const projects = getProjects();
+  const p = projects.find(e => e.id === PP.projectId);
+  return !p || p.name === 'untitled';
+}
+
+// ── Time formatting ──
+
+function timeAgo(ts) {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return 'just now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + ' min ago';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + ' hr ago';
+  const d = Math.floor(h / 24);
+  if (d === 1) return 'yesterday';
+  if (d < 30) return d + ' days ago';
+  return new Date(ts).toLocaleDateString();
+}
+
+// ── Splash screen ──
+
+function showSplash(onSelect) {
+  const projects = getProjects();
+  const activeId = localStorage.getItem('pp-active');
+
+  const overlay = document.createElement('div');
+  overlay.id = 'pp-splash';
+  overlay.className = 'pp-splash';
+
+  let recentHtml = '';
+  if (projects.length) {
+    recentHtml = '<div class="pp-splash-section">Recent</div>'
+      + '<div class="pp-splash-list">'
+      + projects.map(p => '<div class="pp-splash-entry" data-id="' + p.id + '">'
+        + '<span class="pp-splash-name">' + esc(p.name) + '</span>'
+        + '<span class="pp-splash-time">' + timeAgo(p.ts) + '</span>'
+        + '<button class="pp-splash-rm" data-rm="' + p.id + '" title="Remove">\u00d7</button>'
+        + '</div>').join('')
+      + '</div>';
+  }
+
+  const hasActive = activeId && projects.some(p => p.id === activeId);
+
+  const exOpts = Object.keys(EXAMPLES).map(n => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join('');
+
+  overlay.innerHTML = '<div class="pp-splash-box">'
+    + '<div class="pp-splash-title">p l a n</div>'
+    + '<div class="pp-splash-actions">'
+    + '<button class="pp-splash-btn" data-action="new">New</button>'
+    + '<button class="pp-splash-btn" data-action="open">Open\u2026</button>'
+    + '<select class="pp-splash-select" data-action="example">'
+    + '<option value="" disabled selected>Examples</option>'
+    + exOpts
+    + '</select>'
+    + '</div>'
+    + recentHtml
+    + (hasActive ? '<div class="pp-splash-resume"><button class="pp-splash-btn" data-action="resume">Resume Last</button></div>' : '')
+    + '</div>';
+
+  function dismiss() {
+    overlay.remove();
+    document.removeEventListener('keydown', onKey);
+  }
+
+  function onKey(e) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      if (hasActive) {
+        dismiss();
+        onSelect('resume');
+      }
+    }
+  }
+
+  overlay.addEventListener('click', e => {
+    const rm = e.target.closest('[data-rm]');
+    if (rm) {
+      e.stopPropagation();
+      const rid = rm.dataset.rm;
+      projectRemove(rid);
+      rm.closest('.pp-splash-entry').remove();
+      if (!overlay.querySelector('.pp-splash-entry')) {
+        const sec = overlay.querySelector('.pp-splash-section');
+        const list = overlay.querySelector('.pp-splash-list');
+        if (sec) sec.remove();
+        if (list) list.remove();
+      }
+      return;
+    }
+
+    const btn = e.target.closest('[data-action]');
+    if (btn) {
+      const action = btn.dataset.action;
+      if (action === 'new' || action === 'resume' || action === 'open') {
+        dismiss();
+        onSelect(action);
+      }
+      return;
+    }
+
+    const entry = e.target.closest('.pp-splash-entry');
+    if (entry) {
+      dismiss();
+      onSelect('load', entry.dataset.id);
+    }
+  });
+
+  const sel = overlay.querySelector('.pp-splash-select');
+  if (sel) {
+    sel.addEventListener('change', () => {
+      const name = sel.value;
+      if (name && EXAMPLES[name]) {
+        dismiss();
+        onSelect('example', name);
+      }
+    });
+  }
+
+  document.addEventListener('keydown', onKey);
+  document.body.appendChild(overlay);
+}
+
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// ── Inline rename prompt ──
+
+function showRenamePrompt(current, onDone) {
+  const overlay = document.createElement('div');
+  overlay.className = 'pp-modal-overlay';
+  overlay.innerHTML = '<div class="pp-modal">'
+    + '<div class="pp-modal-title">Project Name</div>'
+    + '<input class="pp-rename-input" type="text" value="' + esc(current) + '" spellcheck="false">'
+    + '<div class="pp-rename-actions">'
+    + '<button class="pp-modal-close" data-action="cancel">Cancel</button>'
+    + '<button class="pp-modal-close" data-action="ok">OK</button>'
+    + '</div></div>';
+
+  const input = overlay.querySelector('input');
+  const finish = (accept) => {
+    overlay.remove();
+    if (accept) {
+      const name = input.value.trim() || 'untitled';
+      onDone(name);
+    }
+  };
+
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+
+  overlay.addEventListener('click', e => {
+    const action = e.target.dataset.action;
+    if (action === 'ok') finish(true);
+    else if (action === 'cancel') finish(false);
+    else if (e.target === overlay) finish(false);
+  });
+
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => { input.select(); input.focus(); });
+}
+
+function renameProject() {
+  const projects = getProjects();
+  const p = projects.find(e => e.id === PP.projectId);
+  const current = (p && p.name) || PP.fileName || 'untitled';
+  showRenamePrompt(current, name => {
+    projectUpdateName(name);
+    PP.fileName = name;
+    updateTitle();
+    setStatus('msg', 'renamed to ' + name);
+  });
+}

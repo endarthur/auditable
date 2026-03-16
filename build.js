@@ -239,6 +239,64 @@ ${js}
 }
 
 // ══════════════════════════════════════════════════
+// TARGET: plan
+// ══════════════════════════════════════════════════
+
+if (target === 'plan') {
+  const toolDir = path.join(__dirname, 'tools', 'plan');
+  const toolJsDir = path.join(toolDir, 'js');
+
+  // 1. Process tool modules
+  let toolJs = processModules(path.join(toolJsDir, 'main.js'), toolJsDir);
+
+  // 2. Prepend dependency: plan library
+  const planPath = path.join(__dirname, 'ext/plan/index.js');
+
+  let deps = '';
+  let planSrc = fs.readFileSync(planPath, 'utf8');
+  planSrc = planSrc.replace(/^export\s*\{[^}]*\};?\s*$/gm, '');
+  deps += planSrc + '\n\n';
+
+  const js = deps + toolJs;
+
+  // 3. Read CSS and template
+  const toolCss = fs.readFileSync(path.join(toolDir, 'style.css'), 'utf8');
+  const toolTemplate = fs.readFileSync(path.join(toolDir, 'template.html'), 'utf8');
+
+  // 4. Assemble
+  const html = `<!DOCTYPE html>
+<!-- Plan \u2014 project scheduling tool -->
+<!-- Part of the Auditable project \u2014 https://github.com/endarthur/auditable -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#c89b3c">
+<title>Plan</title>
+<style>
+${toolCss}
+</style>
+</head>
+<body>
+
+${toolTemplate}
+
+<script>
+${js}
+</script>
+</body>
+</html>
+`;
+
+  const outPath = path.join(toolDir, 'index.html');
+  fs.writeFileSync(outPath, html);
+  const size = fs.statSync(outPath).size;
+  console.log(`Built tools/plan/index.html (${(size / 1024).toFixed(1)} KB)`);
+  process.exit(0);
+}
+
+// ══════════════════════════════════════════════════
 // TARGET: rv
 // ══════════════════════════════════════════════════
 
