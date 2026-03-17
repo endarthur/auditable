@@ -4,41 +4,133 @@ const GANTT = {
   pxPerDay: 18,
   rowH: 28,
   headerH: 44,
-  labelW: 180,
+  labelW: parseInt(localStorage.getItem('pp-gantt-labelW')) || 220,
   minPx: 4,
   maxPx: 60,
   bufferDays: 30,
   groupH: 22,
 };
 
+// Group color palette — muted tones that work on dark background
+const GROUP_COLORS = [
+  '#4A90D9', '#2D8B6F', '#B87333', '#8E6BBF',
+  '#6BBF6B', '#D9A534', '#D94070', '#1ABC9C',
+  '#E67E22', '#7B68EE',
+];
+
+function buildGroupColorMap(rows) {
+  const map = {};
+  let ci = 0;
+  for (const r of rows) {
+    if (r.type !== 'task' || !r.group) continue;
+    const top = r.group.split('/')[0].trim();
+    if (top && !(top in map)) {
+      map[top] = GROUP_COLORS[ci % GROUP_COLORS.length];
+      ci++;
+    }
+  }
+  return map;
+}
+
 // ── Build display rows from schedule result ──
 
 function ganttRows(result) {
   const scheduled = result.scheduled;
-  const rows = [];
-  let currentGroup = null;
+  const collapsed = PP.ui.collapsedGroups;
 
+  // Group tasks by their group field, preserving first-seen order
+  const groupOrder = [];
+  const groupMap = {};
   for (const s of scheduled) {
-    if (s.group && s.group !== currentGroup) {
-      currentGroup = s.group;
-      rows.push({ type: 'group', label: currentGroup });
+    const g = s.group || '';
+    if (!(g in groupMap)) {
+      groupMap[g] = [];
+      groupOrder.push(g);
     }
-    rows.push({
-      type: 'task',
-      id: s.id,
-      label: s.name || s.id,
-      start: s.earlyStart,
-      end: s.earlyFinish,
-      lateEnd: s.lateFinish,
-      isCritical: s.isCritical,
-      totalFloat: s.totalFloat || 0,
-      progress: s.progress || 0,
-      resource: s.resource,
-      depends: s.depends || [],
-      milestone: s.milestone,
-    });
+    groupMap[g].push(s);
+  }
+
+  // Sort groups so that shared prefixes are adjacent
+  // (e.g. "Deposit A/Exploration" before "Deposit A/Estimation")
+  groupOrder.sort();
+
+  // Build rows with hierarchical group headers
+  const rows = [];
+  let activePath = [];
+
+  for (const g of groupOrder) {
+    const newPath = g ? g.split('/').map(p => p.trim()) : [];
+
+    // Emit group headers for new path segments
+    if (g !== activePath.join('/')) {
+      let common = 0;
+      while (common < activePath.length && common < newPath.length && activePath[common] === newPath[common]) {
+        common++;
+      }
+
+      for (let d = common; d < newPath.length; d++) {
+        const fullPath = newPath.slice(0, d + 1).join('/');
+        const parentPath = d > 0 ? newPath.slice(0, d).join('/') : null;
+        if (parentPath && isGroupHidden(parentPath, collapsed)) continue;
+        rows.push({
+          type: 'group',
+          label: newPath[d],
+          path: fullPath,
+          depth: d,
+          collapsed: collapsed.has(fullPath),
+        });
+      }
+      activePath = newPath;
+    }
+
+    // Skip tasks if any ancestor group is collapsed
+    if (g && isGroupHidden(g, collapsed)) continue;
+
+    for (const s of groupMap[g]) {
+      const srcTask = PP.tasks.find(t => t.id === s.id);
+      rows.push({
+        type: 'task',
+        id: s.id,
+        label: s.name || s.id,
+        start: s.earlyStart,
+        end: s.earlyFinish,
+        lateEnd: s.lateFinish,
+        isCritical: s.isCritical,
+        totalFloat: s.totalFloat || 0,
+        progress: s.progress || 0,
+        resource: s.resource,
+        depends: s.depends || [],
+        milestone: s.milestone,
+        group: s.group,
+        linked: srcTask ? isLinkedTask(srcTask) : false,
+      });
+    }
   }
   return rows;
+}
+
+// Check if a group path (or any of its ancestors) is collapsed
+function collapseAllGroups() {
+  if (!PP.scheduleResult) return;
+  const rows = ganttRows(PP.scheduleResult);
+  for (const r of rows) {
+    if (r.type === 'group') PP.ui.collapsedGroups.add(r.path);
+  }
+  showGanttPanel();
+}
+
+function expandAllGroups() {
+  PP.ui.collapsedGroups.clear();
+  showGanttPanel();
+}
+
+function isGroupHidden(groupPath, collapsed) {
+  if (!groupPath) return false;
+  const parts = groupPath.split('/');
+  for (let i = 1; i <= parts.length; i++) {
+    if (collapsed.has(parts.slice(0, i).join('/'))) return true;
+  }
+  return false;
 }
 
 // ── Date helpers ──
@@ -84,6 +176,7 @@ function showGanttPanel() {
 
   const result = PP.scheduleResult;
   const rows = ganttRows(result);
+  const groupColors = buildGroupColorMap(rows);
 
   // Compute timeline bounds
   const projStart = startOfDay(new Date(PP.projectStart));
@@ -130,11 +223,68 @@ function showGanttPanel() {
   labelPane.className = 'pp-gantt-labels';
   labelPane.style.width = GANTT.labelW + 'px';
 
-  // Label header spacer
+  // Label header spacer + resize handle
   const labelHeader = document.createElement('div');
   labelHeader.className = 'pp-gantt-label-header';
   labelHeader.style.height = GANTT.headerH + 'px';
-  labelHeader.textContent = 'Task';
+
+  const labelTitle = document.createElement('span');
+  labelTitle.textContent = 'Task';
+  labelHeader.appendChild(labelTitle);
+
+  const labelResizeHandle = document.createElement('div');
+  labelResizeHandle.className = 'pp-gantt-label-resize';
+  labelHeader.appendChild(labelResizeHandle);
+
+  // Drag to resize label column
+  let lrDragging = false, lrStartX = 0, lrStartW = 0;
+  labelResizeHandle.addEventListener('mousedown', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    lrDragging = true;
+    lrStartX = e.clientX;
+    lrStartW = GANTT.labelW;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  });
+  document.addEventListener('mousemove', e => {
+    if (!lrDragging) return;
+    const newW = Math.max(80, lrStartW + e.clientX - lrStartX);
+    GANTT.labelW = newW;
+    labelPane.style.width = newW + 'px';
+  });
+  document.addEventListener('mouseup', () => {
+    if (!lrDragging) return;
+    lrDragging = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    localStorage.setItem('pp-gantt-labelW', GANTT.labelW);
+  });
+
+  // Double-click to auto-fit label width
+  labelResizeHandle.addEventListener('dblclick', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Measure max text width
+    const measurer = document.createElement('span');
+    measurer.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;font-size:12px;font-family:inherit;padding:0 8px';
+    document.body.appendChild(measurer);
+    let maxW = 60;
+    for (const r of rows) {
+      const text = r.type === 'group'
+        ? '\u25bc ' + r.label
+        : (r.linked ? '\u25cf ' : '') + r.label;
+      const indent = r.type === 'group' ? (r.depth || 0) * 12 + 8 : 0;
+      measurer.textContent = text;
+      const w = measurer.offsetWidth + indent + 16; // padding
+      if (w > maxW) maxW = w;
+    }
+    document.body.removeChild(measurer);
+    GANTT.labelW = Math.min(maxW, 500);
+    labelPane.style.width = GANTT.labelW + 'px';
+    localStorage.setItem('pp-gantt-labelW', GANTT.labelW);
+  });
+
   labelPane.appendChild(labelHeader);
 
   const labelBody = document.createElement('div');
@@ -145,21 +295,40 @@ function showGanttPanel() {
     const div = document.createElement('div');
     if (r.type === 'group') {
       div.className = 'pp-gantt-group-label';
+      if (r.collapsed) div.classList.add('pp-gantt-group-collapsed');
       div.style.height = GANTT.groupH + 'px';
       div.style.lineHeight = GANTT.groupH + 'px';
-      div.textContent = r.label;
+      const indent = (r.depth || 0) * 12;
+      div.style.paddingLeft = (8 + indent) + 'px';
+      div.innerHTML = '<span class="pp-gantt-group-arrow">' + (r.collapsed ? '\u25b6' : '\u25bc') + '</span> ' + esc(r.label);
+      // Color top-level group headers
+      const topGroup = r.path ? r.path.split('/')[0].trim() : '';
+      if (topGroup && groupColors[topGroup]) div.style.color = groupColors[topGroup];
+      div.style.cursor = 'pointer';
+      const groupPath = r.path;
+      div.addEventListener('click', () => {
+        if (PP.ui.collapsedGroups.has(groupPath)) PP.ui.collapsedGroups.delete(groupPath);
+        else PP.ui.collapsedGroups.add(groupPath);
+        showGanttPanel();
+      });
     } else {
       div.className = 'pp-gantt-task-label';
       if (r.isCritical) div.classList.add('pp-gantt-critical-label');
+      if (r.linked) div.classList.add('pp-gantt-linked-label');
       div.style.height = GANTT.rowH + 'px';
       div.style.lineHeight = GANTT.rowH + 'px';
-      div.textContent = r.label;
-      div.title = r.id + (r.resource ? ' [' + r.resource + ']' : '');
+      if (r.linked) {
+        div.innerHTML = '<span class="pp-link-indicator">\u25cf</span>' + esc(r.label);
+      } else {
+        div.textContent = r.label;
+      }
+      div.title = r.id + (r.resource ? ' [' + r.resource + ']' : '') + (r.linked ? ' (linked)' : '');
       div.dataset.taskId = r.id;
       div.addEventListener('click', () => selectTaskInGrid(r.id));
     }
     labelBody.appendChild(div);
   }
+  labelBody.style.top = GANTT.headerH + 'px';
   labelPane.appendChild(labelBody);
 
   // ── Timeline pane (scrollable) ──
@@ -269,48 +438,6 @@ function showGanttPanel() {
       }
     }
 
-    // MC percentile bands (render behind the deterministic bar)
-    if (PP.mcResult && PP.mcResult.taskEndDates && PP.mcResult.taskEndDates[r.id]) {
-      const ends = PP.mcResult.taskEndDates[r.id]; // sorted Date array
-      const n = ends.length;
-      if (n > 1) {
-        const p10 = ends[Math.floor(0.10 * (n - 1))];
-        const p25 = ends[Math.floor(0.25 * (n - 1))];
-        const p75 = ends[Math.floor(0.75 * (n - 1))];
-        const p90 = ends[Math.floor(0.90 * (n - 1))];
-
-        const barStart = startOfDay(new Date(r.start));
-        const bandX = daysBetween(timeStart, barStart) * GANTT.pxPerDay;
-        const isCrit = r.isCritical;
-
-        // P10-P90 outer band
-        const p10X = daysBetween(timeStart, startOfDay(p10)) * GANTT.pxPerDay;
-        const p90X = daysBetween(timeStart, startOfDay(p90)) * GANTT.pxPerDay;
-        const outerW = Math.max(p90X - bandX, 2);
-        const outer = document.createElement('div');
-        outer.className = 'pp-gantt-mc-band' + (isCrit ? ' pp-gantt-mc-band-critical' : '');
-        outer.style.left = bandX + 'px';
-        outer.style.top = (y + 6) + 'px';
-        outer.style.width = outerW + 'px';
-        outer.style.height = (GANTT.rowH - 12) + 'px';
-        outer.title = 'P10\u2013P90: ' + formatDate(p10) + ' \u2013 ' + formatDate(p90);
-        body.appendChild(outer);
-
-        // P25-P75 inner band
-        const p25X = daysBetween(timeStart, startOfDay(p25)) * GANTT.pxPerDay;
-        const p75X = daysBetween(timeStart, startOfDay(p75)) * GANTT.pxPerDay;
-        const innerW = Math.max(p75X - bandX, 2);
-        const inner = document.createElement('div');
-        inner.className = 'pp-gantt-mc-band pp-gantt-mc-band-inner' + (isCrit ? ' pp-gantt-mc-band-critical' : '');
-        inner.style.left = bandX + 'px';
-        inner.style.top = (y + 6) + 'px';
-        inner.style.width = innerW + 'px';
-        inner.style.height = (GANTT.rowH - 12) + 'px';
-        inner.title = 'P25\u2013P75: ' + formatDate(p25) + ' \u2013 ' + formatDate(p75);
-        body.appendChild(inner);
-      }
-    }
-
     // Bar
     const startDate = startOfDay(new Date(r.start));
     const endDate = startOfDay(new Date(r.end));
@@ -326,7 +453,12 @@ function showGanttPanel() {
       body.appendChild(diamond);
     } else {
       const bar = document.createElement('div');
-      bar.className = 'pp-gantt-bar' + (r.isCritical ? ' pp-gantt-bar-critical' : '');
+      bar.className = 'pp-gantt-bar' + (r.isCritical ? ' pp-gantt-bar-critical' : '') + (r.linked ? ' pp-gantt-bar-linked' : '');
+      // Color by top-level group
+      const topGroup = r.group ? r.group.split('/')[0].trim() : '';
+      if (topGroup && groupColors[topGroup]) {
+        bar.style.background = groupColors[topGroup];
+      }
       bar.style.left = barX + 'px';
       bar.style.top = (y + 4) + 'px';
       bar.style.width = barW + 'px';
@@ -353,6 +485,51 @@ function showGanttPanel() {
         floatBar.style.top = (y + GANTT.rowH / 2 - 1) + 'px';
         floatBar.style.width = floatW + 'px';
         body.appendChild(floatBar);
+      }
+
+      // MC percentile tails — use taskEnd summary stats (absolute dates)
+      // The deterministic bar uses ceil-rounded PERT expected durations, so
+      // it can exceed MC P50/P75. We position tails absolutely on the timeline
+      // and only render the portion that extends past the deterministic bar end.
+      if (PP.mcResult && PP.mcResult.taskEnd && PP.mcResult.taskEnd[r.id]) {
+        const te = PP.mcResult.taskEnd[r.id];
+        const barEnd = barX + barW;
+
+        // P90 outer tail
+        if (te.p90) {
+          const p90d = startOfDay(new Date(te.p90));
+          const p90X = daysBetween(timeStart, p90d) * GANTT.pxPerDay;
+          const tailStart = Math.max(barEnd, daysBetween(timeStart, endDate) * GANTT.pxPerDay);
+          const outerW = p90X - tailStart;
+          if (outerW > 2) {
+            const outer = document.createElement('div');
+            outer.className = 'pp-gantt-mc-tail' + (r.isCritical ? ' pp-gantt-mc-tail-critical' : '');
+            outer.style.left = tailStart + 'px';
+            outer.style.top = (y + 4) + 'px';
+            outer.style.width = outerW + 'px';
+            outer.style.height = (GANTT.rowH - 8) + 'px';
+            outer.title = 'P90: ' + formatDate(p90d);
+            body.appendChild(outer);
+          }
+        }
+
+        // P75 inner tail
+        if (te.p75) {
+          const p75d = startOfDay(new Date(te.p75));
+          const p75X = daysBetween(timeStart, p75d) * GANTT.pxPerDay;
+          const tailStart = Math.max(barEnd, daysBetween(timeStart, endDate) * GANTT.pxPerDay);
+          const innerW = p75X - tailStart;
+          if (innerW > 2) {
+            const inner = document.createElement('div');
+            inner.className = 'pp-gantt-mc-tail pp-gantt-mc-tail-inner' + (r.isCritical ? ' pp-gantt-mc-tail-critical' : '');
+            inner.style.left = tailStart + 'px';
+            inner.style.top = (y + 4) + 'px';
+            inner.style.width = innerW + 'px';
+            inner.style.height = (GANTT.rowH - 8) + 'px';
+            inner.title = 'P75: ' + formatDate(p75d);
+            body.appendChild(inner);
+          }
+        }
       }
     }
 
@@ -617,5 +794,33 @@ function buildDependencyArrows(rows, taskRowMap, timeStart) {
 
 function selectTaskInGrid(taskId) {
   const idx = PP.tasks.findIndex(t => t.id === taskId);
-  if (idx >= 0) selectRow(idx);
+  if (idx >= 0) {
+    selectRow(idx);
+    scrollGridToRow(idx);
+  }
+}
+
+function scrollGanttToTask(taskId) {
+  if (!PP.scheduleResult) return;
+  const s = PP.scheduleResult.scheduled.find(t => t.id === taskId);
+  if (!s || !s.earlyStart) return;
+
+  const timePane = $('.pp-gantt-timeline');
+  if (!timePane) return;
+
+  // Compute the x position of this task's bar
+  // We need to recalculate timeStart the same way showGanttPanel does
+  const projStart = startOfDay(new Date(PP.projectStart));
+  let earliest = projStart;
+  for (const r of PP.scheduleResult.scheduled) {
+    const rs = startOfDay(new Date(r.earlyStart));
+    if (rs < earliest) earliest = rs;
+  }
+  const timeStart = addDays(earliest, -7);
+  const taskStart = startOfDay(new Date(s.earlyStart));
+  const taskX = daysBetween(timeStart, taskStart) * GANTT.pxPerDay;
+
+  // Scroll so the task bar is roughly centered
+  const targetScroll = taskX - timePane.clientWidth / 3;
+  timePane.scrollLeft = Math.max(0, targetScroll);
 }

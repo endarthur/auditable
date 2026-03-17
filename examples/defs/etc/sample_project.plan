@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "title": "Sample Project",
+  "projectStart": "2026-03-16",
+  "calendar": {
+    "preset": "brazil-federal",
+    "weekends": [0, 6],
+    "holidays": [],
+    "blocked": [
+      { "start": "2026-04-06", "end": "2026-04-10", "label": "Team offsite" }
+    ]
+  },
+  "deadlines": [
+    { "label": "Phase 1", "taskId": "a_docs", "date": "2026-05-15" },
+    { "label": "Phase 2", "taskId": "b_model", "date": "2026-07-31" }
+  ],
+  "templates": [
+    {
+      "id": "tpl_geo",
+      "name": "Geo Study",
+      "tasks": [
+        { "id": "audit", "name": "DB Audit", "o": "1", "m": "2", "p": "4", "depends": "", "resource": "" },
+        { "id": "dataprep", "name": "Data Prep", "o": "1", "m": "1", "p": "2", "depends": "audit", "resource": "" },
+        { "id": "model", "name": "Modeling", "o": "3", "m": "5", "p": "10", "depends": "dataprep", "resource": "" },
+        { "id": "validation", "name": "Validation", "o": "2", "m": "3", "p": "5", "depends": "model", "resource": "" },
+        { "id": "docs", "name": "Report", "o": "1", "m": "2", "p": "3", "depends": "validation", "resource": "" }
+      ]
+    }
+  ],
+  "tasks": [
+    { "id": "a_audit", "name": "DB Audit", "group": "Area A/Geo Study", "o": "1", "m": "2", "p": "4", "depends": "", "resource": "", "progress": "100", "_tpl": "tpl_geo", "_tplTask": "audit", "_tplPrefix": "a" },
+    { "id": "a_dataprep", "name": "Data Prep", "group": "Area A/Geo Study", "o": "1", "m": "1", "p": "2", "depends": "a_audit", "resource": "", "progress": "50", "_tpl": "tpl_geo", "_tplTask": "dataprep", "_tplPrefix": "a" },
+    { "id": "a_model", "name": "Modeling", "group": "Area A/Geo Study", "o": "3", "m": "5", "p": "10", "depends": "a_dataprep", "resource": "", "progress": "", "_tpl": "tpl_geo", "_tplTask": "model", "_tplPrefix": "a" },
+    { "id": "a_validation", "name": "Validation", "group": "Area A/Geo Study", "o": "2", "m": "3", "p": "5", "depends": "a_model", "resource": "", "progress": "", "_tpl": "tpl_geo", "_tplTask": "validation", "_tplPrefix": "a" },
+    { "id": "a_docs", "name": "Report", "group": "Area A/Geo Study", "o": "1", "m": "2", "p": "3", "depends": "a_validation", "resource": "", "progress": "", "_tpl": "tpl_geo", "_tplTask": "docs", "_tplPrefix": "a" },
+    { "id": "b_audit", "name": "DB Audit", "group": "Area B/Geo Study", "o": "1", "m": "2", "p": "4", "depends": "a_docs", "resource": "", "progress": "", "_tpl": "tpl_geo", "_tplTask": "audit", "_tplPrefix": "b" },
+    { "id": "b_dataprep", "name": "Data Prep", "group": "Area B/Geo Study", "o": "1", "m": "1", "p": "2", "depends": "b_audit", "resource": "", "progress": "", "_tpl": "tpl_geo", "_tplTask": "dataprep", "_tplPrefix": "b" },
+    { "id": "b_model", "name": "Modeling", "group": "Area B/Geo Study", "o": "3", "m": "5", "p": "10", "depends": "b_dataprep", "resource": "", "progress": "", "_tpl": "tpl_geo", "_tplTask": "model", "_tplPrefix": "b" },
+    { "id": "b_validation", "name": "Validation", "group": "Area B/Geo Study", "o": "2", "m": "3", "p": "5", "depends": "b_model", "resource": "", "progress": "", "_tpl": "tpl_geo", "_tplTask": "validation", "_tplPrefix": "b" },
+    { "id": "b_docs", "name": "Report", "group": "Area B/Geo Study", "o": "1", "m": "2", "p": "3", "depends": "b_validation", "resource": "", "progress": "", "_tpl": "tpl_geo", "_tplTask": "docs", "_tplPrefix": "b" }
+  ],
+  "settings": { "showFloat": true, "pxPerDay": 12, "mcIterations": 5000 }
+}

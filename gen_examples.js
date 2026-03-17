@@ -87,6 +87,7 @@ const categories = {
     'example_iso9660.txt',
     'example_plan.txt',
     'example_plan_analysis.txt',
+    'example_plan_files.txt',
     'example_resource_estimation.txt',
     'example_synth.txt',
     'example_threejs.txt',
@@ -227,6 +228,20 @@ for (const [category, defs] of Object.entries(categories)) {
       outPath: path.join(catOutDir, htmlFile),
     });
     total++;
+  }
+}
+
+// Copy companion files (.plan, etc.) from defs/ to output
+for (const [category] of Object.entries(categories)) {
+  const catDefsDir = path.join(defsDir, category);
+  if (!fs.existsSync(catDefsDir)) continue;
+  for (const f of fs.readdirSync(catDefsDir)) {
+    if (f.endsWith('.plan')) {
+      const src = path.join(catDefsDir, f);
+      const dst = path.join(outDir, category, f);
+      fs.copyFileSync(src, dst);
+      console.log(`  ${category}/${f} (companion)`);
+    }
   }
 }
 

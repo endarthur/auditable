@@ -106,27 +106,11 @@ function applyCalendarPreset(preset) {
     return;
   }
 
-  // Determine year range from project start
   const startYear = parseInt(PP.projectStart.slice(0, 4)) || new Date().getFullYear();
   const endYear = startYear + 2;
 
   try {
-    if (preset === 'brazil-federal') {
-      const cal = brazilCalendar(startYear, endYear);
-      PP.calendar.holidays = cal.holidays || [];
-    } else {
-      // Municipality preset: "city-uf"
-      const parts = preset.split('-');
-      const uf = parts[parts.length - 1];
-      const municipality = parts.slice(0, -1).join('-');
-      const cal = brazilCalendar(startYear, endYear, {
-        uf,
-        municipality: preset,
-        carnival: true,
-        corpusChristi: true,
-      });
-      PP.calendar.holidays = cal.holidays || [];
-    }
+    PP.calendar.holidays = resolveCalendarPreset(preset, startYear, endYear);
   } catch (e) {
     setStatus('msg', 'calendar error: ' + e.message);
     PP.calendar.holidays = [];

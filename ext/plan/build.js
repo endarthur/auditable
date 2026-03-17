@@ -12,7 +12,7 @@ const files = [
   'calendar.js', 'pert.js', 'graph.js', 'schedule.js',
   'resource.js', 'scurve.js', 'evm.js', 'analysis.js',
   'workflow.js', 'montecarlo.js', 'render.js', 'xlsx.js',
-  'holidays-br.js',
+  'holidays-br.js', 'format.js',
 ];
 
 const chunks = [];
@@ -66,6 +66,11 @@ export {
   planToXLSX,
   // holidays
   brazilHolidays, brazilCalendar, brazilMunicipalities, federalHolidays,
+  // format
+  parsePlan, serializePlan, buildSchedulerTasks,
+  resolveCalendarPreset,
+  instancePlanTemplate, propagateTemplate,
+  isLinkedPlanTask, unlinkPlanTask,
 };
 `;
 

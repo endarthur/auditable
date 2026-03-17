@@ -123,9 +123,9 @@ describe('plan: pert', () => {
     assert.equal(pert.pertVariance({ o: 3, m: 5, p: 9 }), 1);
   });
 
-  it('effectiveDuration prefers PERT', () => {
+  it('effectiveDuration prefers PERT (rounded)', () => {
     const task = { duration: 5, pert: { o: 3, m: 5, p: 10 } };
-    assert.equal(pert.effectiveDuration(task), pert.pertExpected(task.pert));
+    assert.equal(pert.effectiveDuration(task), Math.round(pert.pertExpected(task.pert)));
   });
 
   it('effectiveDuration falls back to duration', () => {
@@ -1112,5 +1112,185 @@ describe('brazilHolidays', () => {
     assert.ok(munis.length >= 29);
     assert.ok(munis.includes('parauapebas-pa'));
     assert.ok(munis.includes('sao paulo-sp'));
+  });
+});
+
+// ── Format (.plan file) ──
+
+const fmt = await import('../ext/plan/src/format.js');
+
+describe('plan: format', () => {
+  const samplePlan = {
+    version: 1,
+    title: 'Test Project',
+    projectStart: '2026-03-16',
+    calendar: {
+      preset: null,
+      weekends: [0, 6],
+      holidays: [],
+      blocked: [{ start: '2026-04-06', end: '2026-04-17', label: 'Vacation' }],
+    },
+    deadlines: [{ label: 'Phase 1', taskId: 'b', date: '2026-05-01' }],
+    templates: [
+      {
+        id: 'tpl_test',
+        name: 'Test Template',
+        tasks: [
+          { id: 'audit', name: 'DB Audit', o: '1', m: '2', p: '4', depends: '', resource: '' },
+          { id: 'prep', name: 'Data Prep', o: '1', m: '1', p: '2', depends: 'audit', resource: '' },
+        ],
+      },
+    ],
+    tasks: [
+      { id: 'a', name: 'Task A', group: 'G1', o: '2', m: '3', p: '5', depends: '', resource: '', progress: '' },
+      { id: 'b', name: 'Task B', group: 'G1', o: '1', m: '2', p: '3', depends: 'a', resource: '', progress: '' },
+    ],
+    settings: { showFloat: true, pxPerDay: 12 },
+  };
+
+  it('parsePlan roundtrip', () => {
+    const json = JSON.stringify(samplePlan);
+    const project = fmt.parsePlan(json);
+    assert.equal(project.title, 'Test Project');
+    assert.equal(project.projectStart, '2026-03-16');
+    assert.equal(project.tasks.length, 2);
+    assert.equal(project.templates.length, 1);
+    assert.equal(project.templates[0].tasks.length, 2);
+    assert.equal(project.deadlines.length, 1);
+    assert.equal(project.calendar.blocked.length, 1);
+    assert.equal(project.settings.pxPerDay, 12);
+  });
+
+  it('parsePlan accepts object input', () => {
+    const project = fmt.parsePlan(samplePlan);
+    assert.equal(project.title, 'Test Project');
+    assert.equal(project.tasks.length, 2);
+  });
+
+  it('parsePlan resolves calendar preset', () => {
+    const project = fmt.parsePlan({
+      projectStart: '2026-01-05',
+      calendar: { preset: 'brazil-federal' },
+      tasks: [{ id: 'a', name: 'Task', o: '1', m: '2', p: '3' }],
+    });
+    assert.ok(project.calendar.holidays.length > 10, 'should have federal holidays');
+    assert.equal(project.calendarPreset, 'brazil-federal');
+  });
+
+  it('parsePlan resolves municipality preset', () => {
+    const project = fmt.parsePlan({
+      projectStart: '2026-01-05',
+      calendar: { preset: 'belo horizonte-mg' },
+      tasks: [],
+    });
+    assert.ok(project.calendar.holidays.length > 10, 'should have BH holidays');
+  });
+
+  it('serializePlan produces valid JSON', () => {
+    const project = fmt.parsePlan(samplePlan);
+    const json = fmt.serializePlan(project);
+    const reparsed = JSON.parse(json);
+    assert.equal(reparsed.title, 'Test Project');
+    assert.equal(reparsed.tasks.length, 2);
+    assert.equal(reparsed.templates.length, 1);
+  });
+
+  it('buildSchedulerTasks converts string fields to numeric', () => {
+    const planTasks = [
+      { id: 'a', name: 'T1', o: '2', m: '3', p: '5', depends: 'b, c', progress: '50' },
+      { id: 'b', name: 'T2', m: '4', o: '', p: '' },
+      { id: 'c', name: 'Milestone', o: '', m: '', p: '' },
+      { id: '', name: 'Empty' },
+    ];
+    const tasks = fmt.buildSchedulerTasks(planTasks);
+    assert.equal(tasks.length, 3, 'should skip empty id');
+    assert.deepEqual(tasks[0].pert, { o: 2, m: 3, p: 5 });
+    assert.deepEqual(tasks[0].depends, ['b', 'c']);
+    assert.equal(tasks[0].progress, 0.5);
+    assert.equal(tasks[1].duration, 4);
+    assert.equal(tasks[2].milestone, true);
+  });
+});
+
+describe('plan: template instancing', () => {
+  const tpl = {
+    id: 'tpl_1',
+    name: 'Exploration',
+    tasks: [
+      { id: 'audit', name: 'DB Audit', o: '1', m: '2', p: '4', depends: '', resource: '' },
+      { id: 'prep', name: 'Data Prep', o: '1', m: '1', p: '2', depends: 'audit', resource: 'geo' },
+      { id: 'model', name: 'Modeling', o: '2', m: '3', p: '5', depends: 'prep', resource: '' },
+    ],
+  };
+
+  it('instancePlanTemplate linked mode', () => {
+    const tasks = fmt.instancePlanTemplate(tpl, 'a', 'Deposit A/Exploration', 'linked');
+    assert.equal(tasks.length, 3);
+    assert.equal(tasks[0].id, 'a_audit');
+    assert.equal(tasks[0].group, 'Deposit A/Exploration');
+    assert.equal(tasks[0]._tpl, 'tpl_1');
+    assert.equal(tasks[0]._tplTask, 'audit');
+    assert.equal(tasks[0]._tplPrefix, 'a');
+    // Internal deps remapped
+    assert.equal(tasks[1].depends, 'a_audit');
+    assert.equal(tasks[2].depends, 'a_prep');
+  });
+
+  it('instancePlanTemplate detached mode', () => {
+    const tasks = fmt.instancePlanTemplate(tpl, 'b', 'Deposit B', 'detached');
+    assert.equal(tasks.length, 3);
+    assert.equal(tasks[0]._tpl, undefined);
+    assert.equal(tasks[1].depends, 'b_audit');
+  });
+
+  it('propagateTemplate syncs linked tasks', () => {
+    const tasks = fmt.instancePlanTemplate(tpl, 'x', 'G', 'linked');
+    // Modify template
+    const modified = { ...tpl, tasks: tpl.tasks.map(t => ({ ...t })) };
+    modified.tasks[0].name = 'Updated Audit';
+    modified.tasks[0].o = '2';
+    fmt.propagateTemplate(modified, tasks);
+    assert.equal(tasks[0].name, 'Updated Audit');
+    assert.equal(tasks[0].o, '2');
+  });
+
+  it('propagateTemplate unlinks deleted template tasks', () => {
+    const tasks = fmt.instancePlanTemplate(tpl, 'y', 'G', 'linked');
+    // Template with one task removed
+    const modified = { id: 'tpl_1', name: 'Exploration', tasks: [tpl.tasks[0]] };
+    fmt.propagateTemplate(modified, tasks);
+    // First task still linked
+    assert.ok(fmt.isLinkedPlanTask(tasks[0]));
+    // Others unlinked (template task gone)
+    assert.ok(!fmt.isLinkedPlanTask(tasks[1]));
+    assert.ok(!fmt.isLinkedPlanTask(tasks[2]));
+  });
+
+  it('unlinkPlanTask removes template metadata', () => {
+    const tasks = fmt.instancePlanTemplate(tpl, 'z', 'G', 'linked');
+    assert.ok(fmt.isLinkedPlanTask(tasks[0]));
+    fmt.unlinkPlanTask(tasks[0]);
+    assert.ok(!fmt.isLinkedPlanTask(tasks[0]));
+    // Values preserved
+    assert.equal(tasks[0].name, 'DB Audit');
+    assert.equal(tasks[0].o, '1');
+  });
+});
+
+describe('plan: resolveCalendarPreset', () => {
+  it('resolves brazil-federal', () => {
+    const holidays = fmt.resolveCalendarPreset('brazil-federal', 2026, 2027);
+    assert.ok(holidays.length > 10);
+    assert.ok(holidays.some(h => h.label.includes('Natal')));
+  });
+
+  it('resolves municipality preset', () => {
+    const holidays = fmt.resolveCalendarPreset('parauapebas-pa', 2026, 2027);
+    assert.ok(holidays.length > 10);
+  });
+
+  it('returns empty for null preset', () => {
+    const holidays = fmt.resolveCalendarPreset(null, 2026, 2027);
+    assert.deepEqual(holidays, []);
   });
 });

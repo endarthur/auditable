@@ -1,0 +1,184 @@
+/// auditable
+/// title: @plan — .plan files
+/// settings: {"theme":"dark","fontSize":13,"width":"860","editorView":"yes"}
+/// module: @plan ext/plan/index.js
+
+/// md
+# @plan — working with .plan files
+
+Load, analyze, modify, and save `.plan` project files directly from a notebook.
+The same format used by the standalone Plan tool — edit in either interface.
+
+/// code collapsed
+const plan = await load("@plan");
+
+/// md
+## sample project (inline)
+
+A sample `.plan` embedded as JSON. To load your own file, use the cell at the bottom.
+
+/// code collapsed
+const samplePlan = {
+  version: 1, title: "Sample Project", projectStart: "2026-03-16",
+  calendar: {
+    preset: "brazil-federal", weekends: [0, 6], holidays: [],
+    blocked: [{ start: "2026-04-06", end: "2026-04-10", label: "Team offsite" }],
+  },
+  deadlines: [
+    { label: "Phase 1", taskId: "a_docs", date: "2026-05-15" },
+    { label: "Phase 2", taskId: "b_model", date: "2026-07-31" },
+  ],
+  templates: [{
+    id: "tpl_geo", name: "Geo Study",
+    tasks: [
+      { id: "audit", name: "DB Audit", o: "1", m: "2", p: "4", depends: "", resource: "" },
+      { id: "dataprep", name: "Data Prep", o: "1", m: "1", p: "2", depends: "audit", resource: "" },
+      { id: "model", name: "Modeling", o: "3", m: "5", p: "10", depends: "dataprep", resource: "" },
+      { id: "validation", name: "Validation", o: "2", m: "3", p: "5", depends: "model", resource: "" },
+      { id: "docs", name: "Report", o: "1", m: "2", p: "3", depends: "validation", resource: "" },
+    ],
+  }],
+  tasks: [
+    { id: "a_audit", name: "DB Audit", group: "Area A/Geo Study", o: "1", m: "2", p: "4", depends: "", progress: "100", _tpl: "tpl_geo", _tplTask: "audit", _tplPrefix: "a" },
+    { id: "a_dataprep", name: "Data Prep", group: "Area A/Geo Study", o: "1", m: "1", p: "2", depends: "a_audit", progress: "50", _tpl: "tpl_geo", _tplTask: "dataprep", _tplPrefix: "a" },
+    { id: "a_model", name: "Modeling", group: "Area A/Geo Study", o: "3", m: "5", p: "10", depends: "a_dataprep", _tpl: "tpl_geo", _tplTask: "model", _tplPrefix: "a" },
+    { id: "a_validation", name: "Validation", group: "Area A/Geo Study", o: "2", m: "3", p: "5", depends: "a_model", _tpl: "tpl_geo", _tplTask: "validation", _tplPrefix: "a" },
+    { id: "a_docs", name: "Report", group: "Area A/Geo Study", o: "1", m: "2", p: "3", depends: "a_validation", _tpl: "tpl_geo", _tplTask: "docs", _tplPrefix: "a" },
+    { id: "b_audit", name: "DB Audit", group: "Area B/Geo Study", o: "1", m: "2", p: "4", depends: "a_docs", _tpl: "tpl_geo", _tplTask: "audit", _tplPrefix: "b" },
+    { id: "b_dataprep", name: "Data Prep", group: "Area B/Geo Study", o: "1", m: "1", p: "2", depends: "b_audit", _tpl: "tpl_geo", _tplTask: "dataprep", _tplPrefix: "b" },
+    { id: "b_model", name: "Modeling", group: "Area B/Geo Study", o: "3", m: "5", p: "10", depends: "b_dataprep", _tpl: "tpl_geo", _tplTask: "model", _tplPrefix: "b" },
+    { id: "b_validation", name: "Validation", group: "Area B/Geo Study", o: "2", m: "3", p: "5", depends: "b_model", _tpl: "tpl_geo", _tplTask: "validation", _tplPrefix: "b" },
+    { id: "b_docs", name: "Report", group: "Area B/Geo Study", o: "1", m: "2", p: "3", depends: "b_validation", _tpl: "tpl_geo", _tplTask: "docs", _tplPrefix: "b" },
+  ],
+  settings: { showFloat: true, pxPerDay: 12 },
+};
+
+/// code collapsed
+const project = plan.parsePlan(samplePlan);
+ui.display(`"${project.title}" \u2014 ${project.tasks.length} tasks, ${project.templates.length} template(s)`);
+
+/// md
+## inspect the project
+
+/// code collapsed
+const calInfo = [];
+if (project.calendarPreset) calInfo.push(`Preset: ${project.calendarPreset}`);
+calInfo.push(`${project.calendar.holidays.length} holidays`);
+calInfo.push(`${project.calendar.blocked.length} blocked period(s)`);
+ui.display(calInfo.join(" \u00b7 "));
+
+if (project.templates.length) {
+  ui.display("### Templates");
+  ui.table(project.templates.map(t => ({
+    Name: t.name,
+    Tasks: t.tasks.filter(tt => tt.id).length,
+    IDs: t.tasks.filter(tt => tt.id).map(tt => tt.id).join(", "),
+  })));
+}
+
+const linked = project.tasks.filter(t => plan.isLinkedPlanTask(t));
+const detached = project.tasks.filter(t => t.id && !plan.isLinkedPlanTask(t));
+ui.display(`Linked: ${linked.length} \u00b7 Independent: ${detached.length}`);
+
+/// md
+## schedule + gantt
+
+/// code collapsed
+const tasks = plan.buildSchedulerTasks(project.tasks);
+const result = plan.schedule(tasks, project.calendar, project.projectStart);
+
+ui.display(`Duration: ${result.projectDuration} days \u00b7 Critical path: ${result.criticalPath.length} tasks`);
+
+ui.table(result.scheduled.map(t => ({
+  ID: t.id, Name: t.name || t.id, Group: t.group || "",
+  Start: t.earlyStart.toISOString().slice(0,10),
+  Finish: t.earlyFinish.toISOString().slice(0,10),
+  Float: t.totalFloat, CP: t.isCritical ? "\u2731" : "",
+})), { sortable: true, filter: true });
+
+/// code collapsed
+ui.html(plan.gantt(result, { width: 840, showFloat: true, calendar: project.calendar }));
+
+/// md
+## Monte Carlo
+
+/// code collapsed
+const mc = plan.monteCarlo(tasks, project.calendar, project.projectStart, {
+  iterations: 5000, seed: 42, sensitivity: true,
+});
+ui.display(`P50: ${mc.projectEnd.p50.toISOString().slice(0,10)}  P75: ${mc.projectEnd.p75.toISOString().slice(0,10)}  P90: ${mc.projectEnd.p90.toISOString().slice(0,10)}`);
+ui.html(plan.monteCarloPlot(mc, { width: 840 }));
+
+/// md
+## deadline risk
+
+/// code collapsed
+if (project.deadlines.length) {
+  const deadlineObjs = project.deadlines.filter(d => d.date).map(d => ({
+    label: d.label || d.taskId || "Project",
+    taskId: d.taskId || null,
+    deadline: d.date,
+  }));
+  ui.html(plan.deadlineRiskPlot(mc, deadlineObjs, { width: 840 }));
+} else {
+  ui.display("No deadlines defined in this project.");
+}
+
+/// md
+## sensitivity
+
+/// code collapsed
+if (mc.sensitivity) {
+  ui.html(plan.tornadoPlot(mc.sensitivity, { width: 840, maxBars: 15 }));
+}
+
+/// md
+## template instancing
+
+Instance from the first template, then serialize. Change the prefix or mode
+and re-run to see different results.
+
+/// code
+const prefix = ui.textInput("prefix", "c", { placeholder: "prefix" });
+const instMode = ui.dropdown("mode", ["linked", "detached"]);
+
+/// code collapsed
+if (project.templates.length) {
+  const tpl = project.templates[0];
+  const group = prefix.toUpperCase() + "/" + tpl.name;
+  const existing = new Set(project.tasks.map(t => t.id));
+  const collision = tpl.tasks.some(tt => tt.id && existing.has(prefix + "_" + tt.id));
+
+  if (collision) {
+    ui.display(`Prefix "${prefix}" collides with existing task IDs.`);
+  } else {
+    const newTasks = plan.instancePlanTemplate(tpl, prefix, group, instMode);
+    ui.display(`Would add ${newTasks.length} ${instMode} tasks from "${tpl.name}":`);
+    ui.table(newTasks.map(t => ({
+      ID: t.id, Name: t.name, Group: t.group,
+      PERT: `${t.o}/${t.m}/${t.p}`,
+      Depends: t.depends,
+      Linked: plan.isLinkedPlanTask(t) ? "\u25cf" : "",
+    })));
+  }
+}
+
+/// md
+## load from file / save
+
+To load your own `.plan` file, press **Ctrl+Enter** on the cell below.
+To save, run the last cell.
+
+/// code
+// %manual
+// Ctrl+Enter to open file picker
+const f = await file(".plan,.json");
+const samplePlan = plan.parsePlan(f.text);
+ui.display(`Loaded "${samplePlan.title}" \u2014 replace samplePlan above to use it.`);
+
+/// code
+// %manual
+// Ctrl+Enter to download current project as .plan
+const json = plan.serializePlan(project);
+download(json, project.title + ".plan", "application/json");
+ui.display("Downloaded " + project.title + ".plan");

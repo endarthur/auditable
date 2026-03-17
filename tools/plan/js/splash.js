@@ -32,6 +32,131 @@ const EXAMPLES = {
       { label: 'Production Target', taskId: 'prod', date: futureDate(365) },
     ],
   },
+  'Multi-Deposit Mine': {
+    tasks: [
+      // Deposit A — Exploration
+      createTask({ id: 'a_map',     name: 'Geological Mapping',    group: 'Deposit A/Exploration', o: '5',  m: '8',  p: '14' }),
+      createTask({ id: 'a_drill',   name: 'Diamond Drilling',      group: 'Deposit A/Exploration', o: '15', m: '25', p: '40', depends: 'a_map' }),
+      createTask({ id: 'a_log',     name: 'Core Logging',          group: 'Deposit A/Exploration', o: '8',  m: '12', p: '20', depends: 'a_drill' }),
+      createTask({ id: 'a_assay',   name: 'Assay & QA/QC',        group: 'Deposit A/Exploration', o: '10', m: '15', p: '25', depends: 'a_log' }),
+      // Deposit A — Estimation
+      createTask({ id: 'a_db',      name: 'Database Validation',   group: 'Deposit A/Estimation',  o: '3',  m: '5',  p: '10', depends: 'a_assay' }),
+      createTask({ id: 'a_geo',     name: 'Geological Domains',    group: 'Deposit A/Estimation',  o: '5',  m: '10', p: '18', depends: 'a_db' }),
+      createTask({ id: 'a_vario',   name: 'Variography',           group: 'Deposit A/Estimation',  o: '5',  m: '8',  p: '15', depends: 'a_geo' }),
+      createTask({ id: 'a_krig',    name: 'Block Model & Kriging', group: 'Deposit A/Estimation',  o: '8',  m: '15', p: '25', depends: 'a_vario' }),
+      createTask({ id: 'a_class',   name: 'Resource Classification', group: 'Deposit A/Estimation', o: '3', m: '5', p: '8', depends: 'a_krig' }),
+      // Deposit B — Exploration
+      createTask({ id: 'b_map',     name: 'Geological Mapping',    group: 'Deposit B/Exploration', o: '4',  m: '7',  p: '12' }),
+      createTask({ id: 'b_rc',      name: 'RC Drilling',           group: 'Deposit B/Exploration', o: '10', m: '18', p: '30', depends: 'b_map' }),
+      createTask({ id: 'b_log',     name: 'Chip Logging',          group: 'Deposit B/Exploration', o: '5',  m: '8',  p: '14', depends: 'b_rc' }),
+      createTask({ id: 'b_assay',   name: 'Assay & QA/QC',        group: 'Deposit B/Exploration', o: '8',  m: '12', p: '20', depends: 'b_log' }),
+      // Deposit B — Estimation
+      createTask({ id: 'b_db',      name: 'Database Validation',   group: 'Deposit B/Estimation',  o: '2',  m: '4',  p: '8',  depends: 'b_assay' }),
+      createTask({ id: 'b_geo',     name: 'Geological Domains',    group: 'Deposit B/Estimation',  o: '4',  m: '8',  p: '14', depends: 'b_db' }),
+      createTask({ id: 'b_vario',   name: 'Variography',           group: 'Deposit B/Estimation',  o: '4',  m: '7',  p: '12', depends: 'b_geo' }),
+      createTask({ id: 'b_krig',    name: 'Block Model & Kriging', group: 'Deposit B/Estimation',  o: '6',  m: '12', p: '20', depends: 'b_vario' }),
+      createTask({ id: 'b_class',   name: 'Resource Classification', group: 'Deposit B/Estimation', o: '2', m: '4', p: '7', depends: 'b_krig' }),
+      // Integration
+      createTask({ id: 'int_model', name: 'Consolidated Model',    group: 'Integration/Reporting', o: '5',  m: '10', p: '18', depends: 'a_class, b_class' }),
+      createTask({ id: 'int_opt',   name: 'Pit Optimization',      group: 'Integration/Planning',  o: '5',  m: '8',  p: '15', depends: 'int_model' }),
+      createTask({ id: 'int_mine',  name: 'Mine Scheduling',       group: 'Integration/Planning',  o: '8',  m: '15', p: '25', depends: 'int_opt' }),
+      createTask({ id: 'int_econ',  name: 'Economic Analysis',     group: 'Integration/Planning',  o: '5',  m: '8',  p: '12', depends: 'int_mine' }),
+      createTask({ id: 'int_43',    name: 'NI 43-101 Report',      group: 'Integration/Reporting', o: '10', m: '20', p: '35', depends: 'int_econ, int_model' }),
+      createTask({ id: 'int_rev',   name: 'External Review',       group: 'Integration/Reporting', o: '5',  m: '10', p: '20', depends: 'int_43' }),
+    ],
+    projectStart: futureDate(0),
+    deadlines: [
+      { label: 'Dep A Resource', taskId: 'a_class', date: futureDate(180) },
+      { label: 'Dep B Resource', taskId: 'b_class', date: futureDate(160) },
+      { label: 'Board Presentation', taskId: 'int_rev', date: futureDate(365) },
+    ],
+  },
+  'Templated Multi-Deposit': (() => {
+    // Templates
+    const explorationTpl = {
+      id: 'tpl_exploration',
+      name: 'Exploration Workflow',
+      tasks: [
+        createTemplateTask({ id: 'map',   name: 'Geological Mapping', o: '5',  m: '8',  p: '14' }),
+        createTemplateTask({ id: 'drill', name: 'Drilling Program',   o: '12', m: '20', p: '35', depends: 'map' }),
+        createTemplateTask({ id: 'log',   name: 'Core/Chip Logging',  o: '6',  m: '10', p: '18', depends: 'drill' }),
+        createTemplateTask({ id: 'assay', name: 'Assay & QA/QC',      o: '8',  m: '12', p: '20', depends: 'log' }),
+      ],
+    };
+
+    const estimationTpl = {
+      id: 'tpl_estimation',
+      name: 'Resource Estimation',
+      tasks: [
+        createTemplateTask({ id: 'db',    name: 'Database Validation',   o: '3', m: '5',  p: '10' }),
+        createTemplateTask({ id: 'geo',   name: 'Geological Domains',    o: '5', m: '8',  p: '15', depends: 'db' }),
+        createTemplateTask({ id: 'vario', name: 'Variography',           o: '4', m: '7',  p: '12', depends: 'geo' }),
+        createTemplateTask({ id: 'krig',  name: 'Block Model & Kriging', o: '8', m: '14', p: '22', depends: 'vario' }),
+        createTemplateTask({ id: 'class', name: 'Resource Classification', o: '3', m: '5', p: '8', depends: 'krig' }),
+      ],
+    };
+
+    // Helper to instance a template into tasks
+    function inst(tpl, prefix, group, linked) {
+      const tplIds = new Set(tpl.tasks.map(t => t.id));
+      return tpl.tasks.filter(t => t.id).map(tt => {
+        const depends = tt.depends ? tt.depends.split(',').map(d => {
+          const dep = d.trim();
+          return tplIds.has(dep) ? prefix + '_' + dep : dep;
+        }).filter(Boolean).join(', ') : '';
+        const task = { id: prefix + '_' + tt.id, name: tt.name, group, o: tt.o, m: tt.m, p: tt.p, depends, resource: tt.resource || '' };
+        if (linked) { task._tpl = tpl.id; task._tplTask = tt.id; task._tplPrefix = prefix; }
+        return createTask(task);
+      });
+    }
+
+    // Deposit A: linked instances (read-only from templates)
+    const aTasks = [
+      ...inst(explorationTpl, 'a', 'Deposit A/Exploration', true),
+      ...inst(estimationTpl, 'a', 'Deposit A/Estimation', true),
+    ];
+    // Wire estimation to depend on exploration output
+    aTasks.find(t => t.id === 'a_db').depends = 'a_assay';
+
+    // Deposit B: linked instances
+    const bTasks = [
+      ...inst(explorationTpl, 'b', 'Deposit B/Exploration', true),
+      ...inst(estimationTpl, 'b', 'Deposit B/Estimation', true),
+    ];
+    bTasks.find(t => t.id === 'b_db').depends = 'b_assay';
+
+    // Deposit C: detached (copied, freely editable — smaller deposit, shorter estimates)
+    const cTasks = [
+      ...inst(explorationTpl, 'c', 'Deposit C/Exploration', false),
+      ...inst(estimationTpl, 'c', 'Deposit C/Estimation', false),
+    ];
+    cTasks.find(t => t.id === 'c_db').depends = 'c_assay';
+    // Customise detached tasks — smaller deposit, shorter drilling
+    const cDrill = cTasks.find(t => t.id === 'c_drill');
+    if (cDrill) { cDrill.name = 'RC Drilling (shallow)'; cDrill.o = '5'; cDrill.m = '10'; cDrill.p = '18'; }
+
+    // Integration tasks (manual, cross-instance dependencies)
+    const intTasks = [
+      createTask({ id: 'int_model', name: 'Consolidated Model',   group: 'Integration/Reporting', o: '5',  m: '10', p: '18', depends: 'a_class, b_class, c_class' }),
+      createTask({ id: 'int_opt',   name: 'Pit Optimization',     group: 'Integration/Planning',  o: '5',  m: '8',  p: '15', depends: 'int_model' }),
+      createTask({ id: 'int_mine',  name: 'Mine Scheduling',      group: 'Integration/Planning',  o: '8',  m: '15', p: '25', depends: 'int_opt' }),
+      createTask({ id: 'int_econ',  name: 'Economic Analysis',    group: 'Integration/Planning',  o: '5',  m: '8',  p: '12', depends: 'int_mine' }),
+      createTask({ id: 'int_43',    name: 'NI 43-101 Report',     group: 'Integration/Reporting', o: '10', m: '20', p: '35', depends: 'int_econ, int_model' }),
+      createTask({ id: 'int_rev',   name: 'External Review',      group: 'Integration/Reporting', o: '5',  m: '10', p: '20', depends: 'int_43' }),
+    ];
+
+    return {
+      tasks: [...aTasks, ...bTasks, ...cTasks, ...intTasks],
+      templates: [explorationTpl, estimationTpl],
+      projectStart: futureDate(0),
+      deadlines: [
+        { label: 'Dep A Resource', taskId: 'a_class', date: futureDate(180) },
+        { label: 'Dep B Resource', taskId: 'b_class', date: futureDate(170) },
+        { label: 'Dep C Resource', taskId: 'c_class', date: futureDate(150) },
+        { label: 'Board Presentation', taskId: 'int_rev', date: futureDate(400) },
+      ],
+    };
+  })(),
 };
 
 // ── Project CRUD ──

@@ -3,6 +3,7 @@
 async function newFile() {
   if (PP.dirty && !confirm('Discard unsaved changes?')) return;
   PP.tasks = [createTask()];
+  PP.templates = [];
   PP.calendar = { weekends: [0, 6], holidays: [], blocked: [] };
   PP.calendarPreset = null;
   PP.projectStart = new Date().toISOString().slice(0, 10);
@@ -114,18 +115,14 @@ async function saveFileAs() {
 function serializeProject() {
   const projects = getProjects();
   const p = projects.find(e => e.id === PP.projectId);
-  return JSON.stringify({
-    version: 1,
+  return serializePlan({
     title: (p && p.name) || PP.fileName || 'untitled',
     projectStart: PP.projectStart,
-    calendar: {
-      preset: PP.calendarPreset,
-      weekends: PP.calendar.weekends,
-      holidays: PP.calendar.holidays,
-      blocked: PP.calendar.blocked,
-    },
+    calendar: PP.calendar,
+    calendarPreset: PP.calendarPreset,
     deadlines: PP.deadlines,
-    baseline: PP.baseline || null,
+    baseline: PP.baseline,
+    templates: PP.templates,
     tasks: PP.tasks,
     settings: {
       showFloat: PP.ui.showFloat,
@@ -133,37 +130,32 @@ function serializeProject() {
       pxPerDay: GANTT.pxPerDay,
       mcIterations: PP.mcIterations || 5000,
     },
-  }, null, 2);
+  });
 }
 
 function loadProjectData(data) {
-  PP.tasks = (data.tasks || []).map(t => createTask(t));
-  PP.projectStart = data.projectStart || new Date().toISOString().slice(0, 10);
-  PP.deadlines = data.deadlines || [];
+  const project = parsePlan(data);
+
+  PP.tasks = project.tasks.map(t => createTask(t));
+  PP.templates = project.templates.map(t => ({
+    ...createTemplate(t),
+    tasks: (t.tasks || []).map(tt => createTemplateTask(tt)),
+  }));
+  PP.projectStart = project.projectStart;
+  PP.deadlines = project.deadlines;
   PP.undoStack = [];
   PP.redoStack = [];
   PP.mcResult = null;
   PP.evmResult = null;
-  PP.baseline = data.baseline || null;
+  PP.baseline = project.baseline;
+  PP.calendarPreset = project.calendarPreset;
+  PP.calendar = project.calendar;
 
-  if (data.calendar) {
-    PP.calendarPreset = data.calendar.preset || null;
-    PP.calendar = {
-      weekends: data.calendar.weekends || [0, 6],
-      holidays: data.calendar.holidays || [],
-      blocked: data.calendar.blocked || [],
-    };
-  } else {
-    PP.calendar = { weekends: [0, 6], holidays: [], blocked: [] };
-    PP.calendarPreset = null;
-  }
-
-  if (data.settings) {
-    if (data.settings.showFloat != null) PP.ui.showFloat = data.settings.showFloat;
-    if (data.settings.showProgress != null) PP.ui.showProgress = data.settings.showProgress;
-    if (data.settings.pxPerDay != null) GANTT.pxPerDay = Math.max(GANTT.minPx, Math.min(GANTT.maxPx, data.settings.pxPerDay));
-    if (data.settings.mcIterations != null) PP.mcIterations = data.settings.mcIterations;
-  }
+  const s = project.settings;
+  if (s.showFloat != null) PP.ui.showFloat = s.showFloat;
+  if (s.showProgress != null) PP.ui.showProgress = s.showProgress;
+  if (s.pxPerDay != null) GANTT.pxPerDay = Math.max(GANTT.minPx, Math.min(GANTT.maxPx, s.pxPerDay));
+  if (s.mcIterations != null) PP.mcIterations = s.mcIterations;
 }
 
 // Helpers

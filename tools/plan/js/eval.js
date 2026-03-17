@@ -36,37 +36,7 @@ function evaluate() {
 }
 
 function buildPlanTasks() {
-  const tasks = [];
-  for (const t of PP.tasks) {
-    if (!t.id) continue;
-    const task = { id: t.id };
-    if (t.name) task.name = t.name;
-    if (t.group) task.group = t.group;
-    if (t.resource) task.resource = t.resource;
-
-    const o = parseFloat(t.o);
-    const m = parseFloat(t.m);
-    const p = parseFloat(t.p);
-    if (!isNaN(o) && !isNaN(m) && !isNaN(p)) {
-      task.pert = { o, m, p };
-    } else if (!isNaN(m)) {
-      task.duration = m;
-    } else {
-      task.milestone = true;
-    }
-
-    if (t.depends) {
-      task.depends = t.depends.split(',').map(s => s.trim()).filter(Boolean);
-    }
-
-    const prog = parseFloat(t.progress);
-    if (!isNaN(prog)) {
-      task.progress = prog / 100;
-    }
-
-    tasks.push(task);
-  }
-  return tasks;
+  return buildSchedulerTasks(PP.tasks);
 }
 
 function updateStatus() {

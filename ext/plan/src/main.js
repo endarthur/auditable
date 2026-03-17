@@ -18,3 +18,9 @@ export { monteCarlo, createRng, samplePert } from './montecarlo.js';
 export { gantt, scurvePlot, resourceHistogram, stageGateView, workflowDiagram, monteCarloPlot, tornadoPlot, burndownPlot, deadlineRiskPlot } from './render.js';
 export { planToXLSX } from './xlsx.js';
 export { brazilHolidays, brazilCalendar, brazilMunicipalities, federalHolidays } from './holidays-br.js';
+export {
+  parsePlan, serializePlan, buildSchedulerTasks,
+  resolveCalendarPreset,
+  instancePlanTemplate, propagateTemplate,
+  isLinkedPlanTask, unlinkPlanTask,
+} from './format.js';

@@ -68,6 +68,10 @@ function toggleSidebar(key) {
       e.preventDefault();
       toggleTaskWindow();
     }
+    if ((e.ctrlKey || e.metaKey) && e.key === 't') {
+      e.preventDefault();
+      toggleTemplateWindow();
+    }
     if ((e.ctrlKey || e.metaKey) && e.key === 'm') {
       e.preventDefault();
       runMC();
@@ -200,6 +204,10 @@ function handleSplashChoice(action, arg) {
       const ex = EXAMPLES[arg];
       if (ex) {
         PP.tasks = ex.tasks.map(t => createTask(t));
+        PP.templates = (ex.templates || []).map(t => ({
+          ...createTemplate(t),
+          tasks: (t.tasks || []).map(tt => createTemplateTask(tt)),
+        }));
         PP.projectStart = ex.projectStart || new Date().toISOString().slice(0, 10);
         PP.deadlines = ex.deadlines || [];
         PP.fileHandle = null;

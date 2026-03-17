@@ -325,8 +325,7 @@ html, body {
   background: var(--bg1);
   border-right: 1px solid var(--border-hi);
   overflow: hidden;
-  display: flex;
-  flex-direction: column;
+  position: relative;
 }
 
 .pp-gantt-label-header {
@@ -339,13 +338,32 @@ html, body {
   color: var(--fg-dim);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  flex-shrink: 0;
+  position: relative;
+  z-index: 2;
   padding-bottom: 4px;
 }
 
+.pp-gantt-label-resize {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: col-resize;
+  z-index: 3;
+}
+
+.pp-gantt-label-resize:hover,
+.pp-gantt-label-resize:active {
+  background: var(--accent);
+  opacity: 0.5;
+}
+
 .pp-gantt-label-body {
-  flex: 1;
-  overflow: hidden;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
 }
 
 .pp-gantt-task-label {
@@ -377,6 +395,18 @@ html, body {
   letter-spacing: 0.05em;
   background: var(--bg2);
   border-bottom: 1px solid var(--border);
+  user-select: none;
+}
+
+.pp-gantt-group-label:hover {
+  background: var(--bg3);
+  color: var(--accent);
+}
+
+.pp-gantt-group-arrow {
+  font-size: 9px;
+  display: inline-block;
+  width: 12px;
 }
 
 .pp-gantt-timeline {
@@ -471,7 +501,7 @@ html, body {
 }
 
 .pp-gantt-bar-critical {
-  background: var(--critical-color);
+  border-left: 3px solid var(--critical-color);
 }
 
 .pp-gantt-progress {
@@ -577,23 +607,25 @@ html, body {
 
 /* ── MC Percentile Bands ── */
 
-.pp-gantt-mc-band {
+.pp-gantt-mc-tail {
   position: absolute;
-  background: rgba(200, 155, 60, 0.10);
-  border-radius: 2px;
+  background: rgba(200, 155, 60, 0.25);
+  border-radius: 0 2px 2px 0;
   pointer-events: none;
+  border-left: 1px dashed rgba(200, 155, 60, 0.5);
 }
 
-.pp-gantt-mc-band.pp-gantt-mc-band-inner {
-  background: rgba(200, 155, 60, 0.18);
+.pp-gantt-mc-tail.pp-gantt-mc-tail-inner {
+  background: rgba(200, 155, 60, 0.40);
 }
 
-.pp-gantt-mc-band-critical {
-  background: rgba(204, 68, 68, 0.10);
+.pp-gantt-mc-tail-critical {
+  background: rgba(204, 68, 68, 0.25);
+  border-left-color: rgba(204, 68, 68, 0.5);
 }
 
-.pp-gantt-mc-band-critical.pp-gantt-mc-band-inner {
-  background: rgba(204, 68, 68, 0.18);
+.pp-gantt-mc-tail-critical.pp-gantt-mc-tail-inner {
+  background: rgba(204, 68, 68, 0.40);
 }
 
 .pp-gantt-arrows {
@@ -637,6 +669,7 @@ html, body {
   color: var(--fg-dim);
   font-weight: normal;
   text-align: left;
+  position: relative;
   padding: 4px 6px;
   border-bottom: 1px solid var(--border-hi);
   border-right: 1px solid var(--border);
@@ -648,6 +681,20 @@ html, body {
 
 .pp-grid th:hover {
   color: var(--fg);
+}
+
+.pp-col-resize {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: col-resize;
+}
+
+.pp-col-resize:hover,
+.pp-col-resize:active {
+  background: var(--accent-dim);
 }
 
 .pp-grid td {
@@ -1282,6 +1329,182 @@ html, body {
   font-size: 12px;
 }
 
+/* ── Template window ── */
+
+.pp-tpl-toolbar {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pp-tpl-action {
+  padding: 3px 10px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.pp-tpl-action:hover {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+}
+
+.pp-tpl-danger {
+  color: var(--err);
+  font-weight: bold;
+  min-width: 24px;
+}
+
+.pp-tpl-danger:hover {
+  color: #f55;
+  border-color: var(--err);
+}
+
+.pp-tpl-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--fg-dim);
+  font-style: italic;
+}
+
+.pp-tpl-list {
+  padding: 4px 0;
+}
+
+.pp-tpl-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.pp-tpl-entry:hover {
+  background: var(--bg3);
+}
+
+.pp-tpl-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.pp-tpl-name {
+  color: var(--fg-bright);
+  font-weight: 500;
+}
+
+.pp-tpl-count {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.pp-tpl-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.pp-tpl-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pp-tpl-name-input {
+  flex: 1;
+  padding: 3px 8px;
+  background: var(--bg0);
+  border: 1px solid var(--border);
+  color: var(--fg-bright);
+  font: inherit;
+  font-size: 13px;
+}
+
+.pp-tpl-name-input:focus {
+  outline: 1px solid var(--accent);
+  border-color: var(--accent-dim);
+}
+
+.pp-tpl-grid {
+  font-size: 12px;
+}
+
+/* ── Linked task rows ── */
+
+tr.pp-linked-row {
+  border-left: 3px solid #4a8a9a;
+}
+
+tr.pp-linked-row td:first-child {
+  border-left: 3px solid #4a8a9a;
+}
+
+.pp-link-badge {
+  color: #4a8a9a;
+  font-size: 10px;
+  margin-right: 2px;
+  vertical-align: middle;
+}
+
+.pp-grid td.pp-linked {
+  background: rgba(74, 138, 154, 0.08);
+  color: var(--fg-dim);
+  cursor: default;
+}
+
+/* Gantt linked indicators */
+
+
+.pp-link-indicator {
+  color: #4a8a9a;
+  font-size: 9px;
+  margin-right: 3px;
+}
+
+/* ── Instance dialog ── */
+
+.pp-instance-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 0;
+}
+
+.pp-inst-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+
+.pp-inst-input {
+  padding: 5px 8px;
+  background: var(--bg0);
+  border: 1px solid var(--border);
+  color: var(--fg-bright);
+  font: inherit;
+  font-size: 13px;
+}
+
+.pp-inst-input:focus {
+  outline: 1px solid var(--accent);
+  border-color: var(--accent-dim);
+}
+
+select.pp-inst-input {
+  cursor: pointer;
+}
+
 </style>
 </head>
 <body>
@@ -1470,10 +1693,11 @@ function pertVariance({ o, m, p }) {
 }
 
 // Resolve a task's effective duration (PERT expected if available, else raw duration)
+// Rounded to integer so addWorkingDays doesn't implicitly ceil fractional days
 function effectiveDuration(task) {
   if (task.milestone) return 0;
-  if (task.pert) return pertExpected(task.pert);
-  if (task.optimistic != null) return pertExpected({ o: task.optimistic, m: task.mostLikely, p: task.pessimistic });
+  if (task.pert) return Math.round(pertExpected(task.pert));
+  if (task.optimistic != null) return Math.round(pertExpected({ o: task.optimistic, m: task.mostLikely, p: task.pessimistic }));
   return task.duration || 0;
 }
 
@@ -4378,6 +4602,259 @@ function brazilMunicipalities() {
   return Object.keys(MUNICIPAL_HOLIDAYS).sort();
 }
 
+// -- format.js --
+
+// .plan file format — parse, serialize, template instancing, calendar preset resolution
+
+
+// ── Calendar preset resolution ──
+
+function resolveCalendarPreset(preset, startYear, endYear) {
+  if (!preset) return [];
+  if (preset === 'brazil-federal') {
+    const cal = brazilCalendar(startYear, endYear);
+    return cal.holidays || [];
+  }
+  // Municipality preset: "city-uf" (e.g. "belo horizonte-mg", "parauapebas-pa")
+  const parts = preset.split('-');
+  const uf = parts[parts.length - 1];
+  const cal = brazilCalendar(startYear, endYear, {
+    uf,
+    municipality: preset,
+    carnival: true,
+    corpusChristi: true,
+  });
+  return cal.holidays || [];
+}
+
+// ── Template helpers ──
+
+function _defaultTemplate(overrides) {
+  return {
+    id: 'tpl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+    name: 'New Template',
+    tasks: [],
+    ...overrides,
+  };
+}
+
+function _defaultTemplateTask(overrides) {
+  return { id: '', name: '', o: '', m: '', p: '', depends: '', resource: '', ...overrides };
+}
+
+// Instance a template into concrete tasks
+// Returns array of task objects ready for the scheduler or for .plan task list
+function instancePlanTemplate(template, prefix, group, mode) {
+  const tasks = [];
+  const tplIds = new Set(template.tasks.map(t => t.id).filter(Boolean));
+
+  for (const tt of template.tasks) {
+    if (!tt.id) continue;
+
+    const newId = prefix + '_' + tt.id;
+
+    // Remap dependencies: prefix internal deps, leave external ones as-is
+    let depends = '';
+    if (tt.depends) {
+      depends = tt.depends.split(',').map(d => {
+        const dep = d.trim();
+        if (!dep) return '';
+        return tplIds.has(dep) ? prefix + '_' + dep : dep;
+      }).filter(Boolean).join(', ');
+    }
+
+    const task = {
+      id: newId,
+      name: tt.name || '',
+      group: group || '',
+      o: tt.o || '',
+      m: tt.m || '',
+      p: tt.p || '',
+      depends,
+      resource: tt.resource || '',
+      progress: '',
+    };
+
+    if (mode === 'linked') {
+      task._tpl = template.id;
+      task._tplTask = tt.id;
+      task._tplPrefix = prefix;
+    }
+
+    tasks.push(task);
+  }
+
+  return tasks;
+}
+
+// Propagate template changes to linked tasks in a task array
+function propagateTemplate(template, tasks) {
+  const tplIds = new Set(template.tasks.map(t => t.id).filter(Boolean));
+
+  for (const task of tasks) {
+    if (task._tpl !== template.id) continue;
+    const tt = template.tasks.find(t => t.id === task._tplTask);
+    if (!tt) {
+      // Template task was deleted — unlink
+      delete task._tpl;
+      delete task._tplTask;
+      delete task._tplPrefix;
+      continue;
+    }
+
+    const prefix = task._tplPrefix;
+    task.name = tt.name;
+    task.o = tt.o;
+    task.m = tt.m;
+    task.p = tt.p;
+    task.resource = tt.resource;
+
+    if (tt.depends) {
+      task.depends = tt.depends.split(',').map(d => {
+        const dep = d.trim();
+        if (!dep) return '';
+        return tplIds.has(dep) ? prefix + '_' + dep : dep;
+      }).filter(Boolean).join(', ');
+    } else {
+      task.depends = '';
+    }
+  }
+}
+
+// Check if a task is linked to a template
+function isLinkedPlanTask(task) {
+  return !!(task._tpl && task._tplTask);
+}
+
+// Unlink a task from its template (in place)
+function unlinkPlanTask(task) {
+  delete task._tpl;
+  delete task._tplTask;
+  delete task._tplPrefix;
+}
+
+// ── Parse .plan ──
+
+// Parse a .plan file (JSON string or object) into a structured project object.
+// Resolves calendar presets into actual holiday lists.
+// Returns { tasks, templates, calendar, projectStart, deadlines, baseline, title, settings }
+function parsePlan(input) {
+  const data = typeof input === 'string' ? JSON.parse(input) : input;
+
+  const projectStart = data.projectStart || new Date().toISOString().slice(0, 10);
+
+  // Calendar
+  const calData = data.calendar || {};
+  const calendar = {
+    weekends: calData.weekends || [0, 6],
+    holidays: calData.holidays || [],
+    blocked: calData.blocked || [],
+  };
+  const calendarPreset = calData.preset || null;
+
+  // Resolve preset holidays if preset is specified and no holidays provided
+  if (calendarPreset && calendar.holidays.length === 0) {
+    const startYear = parseInt(projectStart.slice(0, 4)) || new Date().getFullYear();
+    const endYear = startYear + 2;
+    try {
+      calendar.holidays = resolveCalendarPreset(calendarPreset, startYear, endYear);
+    } catch (_) { /* ignore — preset resolution is best-effort */ }
+  }
+
+  // Templates
+  const templates = (data.templates || []).map(t => ({
+    ..._defaultTemplate(t),
+    tasks: (t.tasks || []).map(tt => _defaultTemplateTask(tt)),
+  }));
+
+  // Tasks
+  const tasks = (data.tasks || []).map(t => ({
+    id: '', name: '', group: '', o: '', m: '', p: '',
+    depends: '', resource: '', progress: '',
+    ...t,
+  }));
+
+  // Deadlines
+  const deadlines = data.deadlines || [];
+
+  // Settings
+  const settings = data.settings || {};
+
+  return {
+    title: data.title || 'untitled',
+    version: data.version || 1,
+    projectStart,
+    calendar,
+    calendarPreset,
+    templates,
+    tasks,
+    deadlines,
+    baseline: data.baseline || null,
+    settings,
+  };
+}
+
+// ── Serialize .plan ──
+
+// Serialize a project object back to .plan JSON string
+function serializePlan(project) {
+  return JSON.stringify({
+    version: project.version || 1,
+    title: project.title || 'untitled',
+    projectStart: project.projectStart,
+    calendar: {
+      preset: project.calendarPreset || null,
+      weekends: project.calendar.weekends,
+      holidays: project.calendar.holidays,
+      blocked: project.calendar.blocked,
+    },
+    deadlines: project.deadlines || [],
+    baseline: project.baseline || null,
+    templates: (project.templates && project.templates.length) ? project.templates : undefined,
+    tasks: project.tasks,
+    settings: project.settings || {},
+  }, null, 2);
+}
+
+// ── Build scheduler-ready tasks from .plan task list ──
+
+// Convert .plan task format (string fields) to scheduler task format (numeric fields)
+function buildSchedulerTasks(planTasks) {
+  const tasks = [];
+  for (const t of planTasks) {
+    if (!t.id) continue;
+    const task = { id: t.id };
+    if (t.name) task.name = t.name;
+    if (t.group) task.group = t.group;
+    if (t.resource) task.resource = t.resource;
+
+    const o = parseFloat(t.o);
+    const m = parseFloat(t.m);
+    const p = parseFloat(t.p);
+    if (!isNaN(o) && !isNaN(m) && !isNaN(p)) {
+      task.pert = { o, m, p };
+    } else if (!isNaN(m)) {
+      task.duration = m;
+    } else {
+      task.milestone = true;
+    }
+
+    if (t.depends) {
+      task.depends = typeof t.depends === 'string'
+        ? t.depends.split(',').map(s => s.trim()).filter(Boolean)
+        : t.depends;
+    }
+
+    const prog = parseFloat(t.progress);
+    if (!isNaN(prog)) {
+      task.progress = prog / 100;
+    }
+
+    tasks.push(task);
+  }
+  return tasks;
+}
+
 
 // -- state.js --
 
@@ -4388,6 +4865,7 @@ const $$ = (s, p) => [...(p || document).querySelectorAll(s)];
 
 const PP = {
   tasks: [],
+  templates: [],
   calendar: { weekends: [0, 6], holidays: [], blocked: [] },
   calendarPreset: null,
   projectStart: new Date().toISOString().slice(0, 10),
@@ -4409,6 +4887,7 @@ const PP = {
     sidebarPanel: null,
     showFloat: true,
     showProgress: true,
+    collapsedGroups: new Set(),
   },
 };
 
@@ -4600,6 +5079,7 @@ function buildGrid() {
   const wrap = $('#pp-grid-wrap');
   if (!wrap) return;
   wrap.innerHTML = '';
+  loadColumnWidths();
 
   const table = document.createElement('table');
   table.className = 'pp-grid';
@@ -4607,11 +5087,20 @@ function buildGrid() {
   // Header
   const thead = document.createElement('thead');
   const hrow = document.createElement('tr');
-  for (const col of COLUMNS) {
+  for (let ci = 0; ci < COLUMNS.length; ci++) {
+    const col = COLUMNS[ci];
     const th = document.createElement('th');
     th.className = 'pp-col-' + (col.key === '#' ? 'num' : col.key === 'o' || col.key === 'm' || col.key === 'p' ? 'omp' : col.key);
     th.textContent = col.label;
     th.style.width = col.width + 'px';
+
+    // Resize handle
+    const handle = document.createElement('div');
+    handle.className = 'pp-col-resize';
+    handle.addEventListener('mousedown', colResizeStart(th, col, ci));
+    handle.addEventListener('dblclick', e => { e.stopPropagation(); colAutoResize(th, col, ci); });
+    th.appendChild(handle);
+
     hrow.appendChild(th);
   }
   thead.appendChild(hrow);
@@ -4624,6 +5113,82 @@ function buildGrid() {
 
   wrap.appendChild(table);
   renderRows();
+}
+
+function colResizeStart(th, col, ci) {
+  return function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startW = th.offsetWidth;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    function onMove(ev) {
+      const w = Math.max(24, startW + ev.clientX - startX);
+      th.style.width = w + 'px';
+      col.width = w;
+    }
+
+    function onUp() {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      // Persist column widths
+      saveColumnWidths();
+    }
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
+}
+
+function colAutoResize(th, col, ci) {
+  const tbody = $('#pp-tbody');
+  if (!tbody) return;
+
+  // Measure header text
+  const probe = document.createElement('span');
+  probe.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;font:inherit;padding:0 6px;';
+  probe.textContent = col.label;
+  th.appendChild(probe);
+  let maxW = probe.offsetWidth + 12; // padding + resize handle
+  th.removeChild(probe);
+
+  // Measure all cells in this column
+  const rows = tbody.querySelectorAll('tr[data-index]');
+  for (const row of rows) {
+    const cells = row.querySelectorAll('td');
+    const cell = cells[ci];
+    if (!cell) continue;
+    probe.textContent = cell.textContent;
+    document.body.appendChild(probe);
+    const w = probe.offsetWidth + 4;
+    document.body.removeChild(probe);
+    if (w > maxW) maxW = w;
+  }
+
+  maxW = Math.max(24, Math.min(maxW, 400));
+  th.style.width = maxW + 'px';
+  col.width = maxW;
+  saveColumnWidths();
+}
+
+function saveColumnWidths() {
+  const widths = {};
+  for (const col of COLUMNS) widths[col.key] = col.width;
+  localStorage.setItem('pp-col-widths', JSON.stringify(widths));
+}
+
+function loadColumnWidths() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('pp-col-widths'));
+    if (!saved) return;
+    for (const col of COLUMNS) {
+      if (saved[col.key] != null) col.width = saved[col.key];
+    }
+  } catch (_) {}
 }
 
 function renderRows() {
@@ -4643,13 +5208,20 @@ function renderRows() {
 
     if (sched && sched.isCritical) tr.classList.add('pp-critical');
     if (i === PP.ui.selectedRow) tr.classList.add('pp-selected');
+    const taskLinked = isLinkedTask(task);
+    if (taskLinked) tr.classList.add('pp-linked-row');
 
     for (const col of COLUMNS) {
       const td = document.createElement('td');
 
       if (col.type === 'rownum') {
         td.className = 'pp-row-num';
-        td.textContent = i + 1;
+        if (taskLinked) {
+          const tpl = PP.templates.find(t => t.id === task._tpl);
+          td.innerHTML = '<span class="pp-link-badge" title="Linked: ' + esc(tpl ? tpl.name : task._tpl) + '">\u25cf</span>' + (i + 1);
+        } else {
+          td.textContent = i + 1;
+        }
         td.addEventListener('click', () => selectRow(i));
         td.addEventListener('contextmenu', e => showRowContextMenu(e, i));
       } else if (col.computed) {
@@ -4658,17 +5230,22 @@ function renderRows() {
         td.textContent = getComputedValue(task, col.key, sched);
         if (col.key === 'critical') td.className = 'pp-critical-icon pp-computed';
       } else {
-        td.className = 'pp-editable';
+        const linked = isLinkedTask(task) && isLinkedField(col.key);
+        td.className = linked ? 'pp-editable pp-linked' : 'pp-editable';
         if (col.type === 'number') td.classList.add('pp-number');
-        td.contentEditable = 'true';
+        if (!linked) {
+          td.contentEditable = 'true';
+        }
         td.spellcheck = false;
         td.textContent = task[col.key] || '';
         td.dataset.col = col.key;
         td.dataset.row = i;
 
         td.addEventListener('focus', () => selectRow(i));
-        td.addEventListener('blur', e => onCellBlur(e, i, col.key));
-        td.addEventListener('keydown', e => onCellKeydown(e, i, col.key));
+        if (!linked) {
+          td.addEventListener('blur', e => onCellBlur(e, i, col.key));
+          td.addEventListener('keydown', e => onCellKeydown(e, i, col.key));
+        }
       }
 
       tr.appendChild(td);
@@ -4730,6 +5307,18 @@ function selectRow(i) {
     if (idx === i) r.classList.add('pp-selected');
     else r.classList.remove('pp-selected');
   }
+  // Scroll Gantt to show the selected task (skip if editing a cell)
+  const ae = document.activeElement;
+  const editing = ae && ae.contentEditable === 'true' && ae.closest('#pp-tbody');
+  if (!editing) {
+    const task = PP.tasks[i];
+    if (task && task.id) scrollGanttToTask(task.id);
+  }
+}
+
+function scrollGridToRow(i) {
+  const row = $(`#pp-tbody tr[data-index="${i}"]`);
+  if (row) row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
 function focusCell(row, colKey) {
@@ -4866,6 +5455,9 @@ function showRowContextMenu(e, row) {
   if (row < PP.tasks.length - 1) {
     items.push({ label: 'Move Down', action: () => moveRow(row, row + 1) });
   }
+  if (isLinkedTask(PP.tasks[row])) {
+    items.push({ label: 'Unlink from Template', action: () => unlinkTaskById(row) });
+  }
 
   for (const item of items) {
     const btn = document.createElement('button');
@@ -4899,15 +5491,17 @@ function closeContextMenu() {
 // Undo/redo
 
 function pushUndo() {
-  PP.undoStack.push(JSON.stringify(PP.tasks));
+  PP.undoStack.push(JSON.stringify({ tasks: PP.tasks, templates: PP.templates }));
   if (PP.undoStack.length > 50) PP.undoStack.shift();
   PP.redoStack = [];
 }
 
 function undo() {
   if (!PP.undoStack.length) return;
-  PP.redoStack.push(JSON.stringify(PP.tasks));
-  PP.tasks = JSON.parse(PP.undoStack.pop());
+  PP.redoStack.push(JSON.stringify({ tasks: PP.tasks, templates: PP.templates }));
+  const snap = JSON.parse(PP.undoStack.pop());
+  PP.tasks = snap.tasks || snap;
+  PP.templates = snap.templates || [];
   PP.dirty = true;
   updateTitle();
   renderRows();
@@ -4916,12 +5510,638 @@ function undo() {
 
 function redo() {
   if (!PP.redoStack.length) return;
-  PP.undoStack.push(JSON.stringify(PP.tasks));
-  PP.tasks = JSON.parse(PP.redoStack.pop());
+  PP.undoStack.push(JSON.stringify({ tasks: PP.tasks, templates: PP.templates }));
+  const snap = JSON.parse(PP.redoStack.pop());
+  PP.tasks = snap.tasks || snap;
+  PP.templates = snap.templates || [];
   PP.dirty = true;
   updateTitle();
   renderRows();
   scheduleEval();
+}
+
+// -- templates.js --
+
+// Template editor — floating window for reusable task templates
+
+const TPL_COLUMNS = [
+  { key: '#',       label: '#',       width: 28,  type: 'rownum' },
+  { key: 'id',      label: 'ID',      width: 70,  type: 'text',   editable: true },
+  { key: 'name',    label: 'Name',    width: 180, type: 'text',   editable: true },
+  { key: 'o',       label: 'O',       width: 45,  type: 'number', editable: true },
+  { key: 'm',       label: 'M',       width: 45,  type: 'number', editable: true },
+  { key: 'p',       label: 'P',       width: 45,  type: 'number', editable: true },
+  { key: 'depends', label: 'Depends', width: 100, type: 'text',   editable: true },
+  { key: 'resource',label: 'Resource',width: 80,  type: 'text',   editable: true },
+];
+
+function createTemplate(overrides) {
+  return {
+    id: 'tpl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+    name: 'New Template',
+    tasks: [],
+    ...overrides,
+  };
+}
+
+function createTemplateTask(overrides) {
+  return { id: '', name: '', o: '', m: '', p: '', depends: '', resource: '', ...overrides };
+}
+
+// ── Template window ──
+
+function createTemplateWindow() {
+  const existing = $('#pp-tpl-window');
+  if (existing) return existing;
+
+  const win = document.createElement('div');
+  win.id = 'pp-tpl-window';
+  win.className = 'pp-window hidden';
+
+  const saved = localStorage.getItem('pp-tpl-win-pos');
+  let pos = { left: 120, top: 100, width: 720, height: 420 };
+  if (saved) {
+    try { pos = JSON.parse(saved); } catch (_) {}
+  }
+  win.style.left = pos.left + 'px';
+  win.style.top = pos.top + 'px';
+  win.style.width = pos.width + 'px';
+  win.style.height = pos.height + 'px';
+
+  // Title bar
+  const tb = document.createElement('div');
+  tb.className = 'pp-win-tb';
+
+  const title = document.createElement('span');
+  title.className = 'pp-win-title';
+  title.id = 'pp-tpl-title';
+  title.textContent = 'TEMPLATES';
+  tb.appendChild(title);
+
+  const btns = document.createElement('div');
+  btns.className = 'pp-win-btns';
+
+  const minBtn = document.createElement('button');
+  minBtn.className = 'pp-win-btn';
+  minBtn.textContent = '\u2013';
+  minBtn.title = 'Minimize';
+  minBtn.addEventListener('click', () => win.classList.toggle('minimized'));
+  btns.appendChild(minBtn);
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'pp-win-btn';
+  closeBtn.textContent = '\u00d7';
+  closeBtn.title = 'Close';
+  closeBtn.addEventListener('click', () => toggleTemplateWindow());
+  btns.appendChild(closeBtn);
+
+  tb.appendChild(btns);
+  win.appendChild(tb);
+
+  // Body
+  const body = document.createElement('div');
+  body.className = 'pp-win-body';
+  body.id = 'pp-tpl-body';
+  win.appendChild(body);
+
+  // Resize handle
+  const resizeHandle = document.createElement('div');
+  resizeHandle.className = 'pp-win-resize';
+  win.appendChild(resizeHandle);
+
+  // Drag
+  let dragging = false, dragX = 0, dragY = 0;
+  tb.addEventListener('mousedown', e => {
+    if (e.target.closest('.pp-win-btn')) return;
+    e.preventDefault();
+    dragging = true;
+    dragX = e.clientX - win.offsetLeft;
+    dragY = e.clientY - win.offsetTop;
+    document.body.style.cursor = 'grabbing';
+    document.body.style.userSelect = 'none';
+  });
+
+  document.addEventListener('mousemove', e => {
+    if (dragging) {
+      win.style.left = Math.max(0, e.clientX - dragX) + 'px';
+      win.style.top = Math.max(0, e.clientY - dragY) + 'px';
+    }
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (dragging) {
+      dragging = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      saveTplWinPos(win);
+    }
+  });
+
+  // Resize
+  let resizing = false, resStartX = 0, resStartY = 0, resStartW = 0, resStartH = 0;
+  resizeHandle.addEventListener('mousedown', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    resizing = true;
+    resStartX = e.clientX;
+    resStartY = e.clientY;
+    resStartW = win.offsetWidth;
+    resStartH = win.offsetHeight;
+    document.body.style.cursor = 'nwse-resize';
+    document.body.style.userSelect = 'none';
+  });
+
+  document.addEventListener('mousemove', e => {
+    if (resizing) {
+      win.style.width = Math.max(400, resStartW + e.clientX - resStartX) + 'px';
+      win.style.height = Math.max(150, resStartH + e.clientY - resStartY) + 'px';
+    }
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (resizing) {
+      resizing = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      saveTplWinPos(win);
+    }
+  });
+
+  $('#pp-main').appendChild(win);
+  return win;
+}
+
+function saveTplWinPos(win) {
+  localStorage.setItem('pp-tpl-win-pos', JSON.stringify({
+    left: win.offsetLeft,
+    top: win.offsetTop,
+    width: win.offsetWidth,
+    height: win.offsetHeight,
+  }));
+}
+
+function toggleTemplateWindow() {
+  const win = createTemplateWindow();
+  win.classList.toggle('hidden');
+  if (!win.classList.contains('hidden')) renderTemplateList();
+}
+
+function showTemplateWindow() {
+  const win = createTemplateWindow();
+  win.classList.remove('hidden');
+  renderTemplateList();
+}
+
+// ── Template list view ──
+
+function renderTemplateList() {
+  const body = $('#pp-tpl-body');
+  if (!body) return;
+  body.innerHTML = '';
+
+  const titleEl = $('#pp-tpl-title');
+  if (titleEl) titleEl.textContent = 'TEMPLATES';
+
+  // Toolbar
+  const toolbar = document.createElement('div');
+  toolbar.className = 'pp-tpl-toolbar';
+
+  const addBtn = document.createElement('button');
+  addBtn.className = 'pp-tpl-action';
+  addBtn.textContent = '+ new template';
+  addBtn.addEventListener('click', () => {
+    pushUndo();
+    const tpl = createTemplate();
+    tpl.tasks.push(createTemplateTask());
+    PP.templates.push(tpl);
+    PP.dirty = true;
+    updateTitle();
+    openTemplateEditor(tpl.id);
+  });
+  toolbar.appendChild(addBtn);
+  body.appendChild(toolbar);
+
+  if (!PP.templates.length) {
+    const empty = document.createElement('div');
+    empty.className = 'pp-tpl-empty';
+    empty.textContent = 'No templates yet. Create one to define reusable task sequences.';
+    body.appendChild(empty);
+    return;
+  }
+
+  const list = document.createElement('div');
+  list.className = 'pp-tpl-list';
+
+  for (const tpl of PP.templates) {
+    const entry = document.createElement('div');
+    entry.className = 'pp-tpl-entry';
+
+    const info = document.createElement('div');
+    info.className = 'pp-tpl-info';
+    info.addEventListener('click', () => openTemplateEditor(tpl.id));
+
+    const name = document.createElement('span');
+    name.className = 'pp-tpl-name';
+    name.textContent = tpl.name;
+    info.appendChild(name);
+
+    const count = document.createElement('span');
+    count.className = 'pp-tpl-count';
+    const n = tpl.tasks.filter(t => t.id).length;
+    count.textContent = n + ' task' + (n !== 1 ? 's' : '');
+    info.appendChild(count);
+
+    entry.appendChild(info);
+
+    const actions = document.createElement('div');
+    actions.className = 'pp-tpl-actions';
+
+    const instBtn = document.createElement('button');
+    instBtn.className = 'pp-tpl-action';
+    instBtn.textContent = 'Instance';
+    instBtn.title = 'Create tasks from this template';
+    instBtn.addEventListener('click', e => { e.stopPropagation(); showInstanceDialog(tpl.id); });
+    actions.appendChild(instBtn);
+
+    const dupBtn = document.createElement('button');
+    dupBtn.className = 'pp-tpl-action';
+    dupBtn.textContent = 'Duplicate';
+    dupBtn.title = 'Duplicate this template';
+    dupBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      pushUndo();
+      const copy = createTemplate({
+        name: tpl.name + ' (copy)',
+        tasks: tpl.tasks.map(t => createTemplateTask(t)),
+      });
+      PP.templates.push(copy);
+      PP.dirty = true;
+      updateTitle();
+      renderTemplateList();
+    });
+    actions.appendChild(dupBtn);
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'pp-tpl-action pp-tpl-danger';
+    delBtn.textContent = '\u00d7';
+    delBtn.title = 'Delete template';
+    delBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      if (!confirm('Delete template "' + tpl.name + '"?')) return;
+      pushUndo();
+      PP.templates = PP.templates.filter(t => t.id !== tpl.id);
+      // Unlink any linked tasks
+      for (const task of PP.tasks) {
+        if (task._tpl === tpl.id) {
+          unlinkTask(task, tpl);
+        }
+      }
+      PP.dirty = true;
+      updateTitle();
+      renderTemplateList();
+      renderRows();
+      scheduleEval();
+    });
+    actions.appendChild(delBtn);
+
+    entry.appendChild(actions);
+    list.appendChild(entry);
+  }
+
+  body.appendChild(list);
+}
+
+// ── Template editor (single template) ──
+
+function openTemplateEditor(tplId) {
+  const tpl = PP.templates.find(t => t.id === tplId);
+  if (!tpl) return;
+
+  const body = $('#pp-tpl-body');
+  if (!body) return;
+  body.innerHTML = '';
+
+  const titleEl = $('#pp-tpl-title');
+  if (titleEl) titleEl.textContent = 'TEMPLATE: ' + tpl.name;
+
+  // Back + name row
+  const header = document.createElement('div');
+  header.className = 'pp-tpl-header';
+
+  const backBtn = document.createElement('button');
+  backBtn.className = 'pp-tpl-action';
+  backBtn.textContent = '\u2190 Back';
+  backBtn.addEventListener('click', () => renderTemplateList());
+  header.appendChild(backBtn);
+
+  const nameInput = document.createElement('input');
+  nameInput.className = 'pp-tpl-name-input';
+  nameInput.type = 'text';
+  nameInput.value = tpl.name;
+  nameInput.spellcheck = false;
+  nameInput.addEventListener('blur', () => {
+    const v = nameInput.value.trim() || 'Unnamed';
+    if (v !== tpl.name) {
+      tpl.name = v;
+      PP.dirty = true;
+      updateTitle();
+      if (titleEl) titleEl.textContent = 'TEMPLATE: ' + v;
+      // Update linked tasks' template ref name
+    }
+  });
+  nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') nameInput.blur(); });
+  header.appendChild(nameInput);
+
+  body.appendChild(header);
+
+  // Task table
+  const table = document.createElement('table');
+  table.className = 'pp-grid pp-tpl-grid';
+
+  const thead = document.createElement('thead');
+  const hrow = document.createElement('tr');
+  for (const col of TPL_COLUMNS) {
+    const th = document.createElement('th');
+    th.className = 'pp-col-' + (col.key === '#' ? 'num' : col.key === 'o' || col.key === 'm' || col.key === 'p' ? 'omp' : col.key);
+    th.textContent = col.label;
+    th.style.width = col.width + 'px';
+    hrow.appendChild(th);
+  }
+  thead.appendChild(hrow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+
+  for (let i = 0; i < tpl.tasks.length; i++) {
+    const task = tpl.tasks[i];
+    const tr = document.createElement('tr');
+    tr.dataset.index = i;
+
+    for (const col of TPL_COLUMNS) {
+      const td = document.createElement('td');
+
+      if (col.type === 'rownum') {
+        td.className = 'pp-row-num';
+        td.textContent = i + 1;
+        td.addEventListener('contextmenu', e => showTplRowMenu(e, tplId, i));
+      } else {
+        td.className = 'pp-editable';
+        if (col.type === 'number') td.classList.add('pp-number');
+        td.contentEditable = 'true';
+        td.spellcheck = false;
+        td.textContent = task[col.key] || '';
+        td.dataset.col = col.key;
+        td.dataset.row = i;
+
+        td.addEventListener('blur', () => {
+          const val = td.textContent.trim();
+          if (val !== (task[col.key] || '')) {
+            task[col.key] = val;
+            PP.dirty = true;
+            updateTitle();
+            propagateTemplateChange(tplId);
+          }
+        });
+
+        td.addEventListener('keydown', e => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            td.blur();
+            if (i + 1 < tpl.tasks.length) {
+              tplFocusCell(tbody, i + 1, col.key);
+            } else {
+              tpl.tasks.push(createTemplateTask());
+              PP.dirty = true;
+              openTemplateEditor(tplId);
+              requestAnimationFrame(() => {
+                const newBody = body.querySelector('tbody');
+                if (newBody) tplFocusCell(newBody, tpl.tasks.length - 1, col.key);
+              });
+            }
+          }
+          if (e.key === 'Escape') {
+            td.textContent = task[col.key] || '';
+            td.blur();
+          }
+          if (e.key === 'Tab') {
+            e.preventDefault();
+            td.blur();
+            const editableCols = TPL_COLUMNS.filter(c => c.editable);
+            const idx = editableCols.findIndex(c => c.key === col.key);
+            if (e.shiftKey) {
+              if (idx > 0) tplFocusCell(tbody, i, editableCols[idx - 1].key);
+              else if (i > 0) tplFocusCell(tbody, i - 1, editableCols[editableCols.length - 1].key);
+            } else {
+              if (idx < editableCols.length - 1) tplFocusCell(tbody, i, editableCols[idx + 1].key);
+              else if (i + 1 < tpl.tasks.length) tplFocusCell(tbody, i + 1, editableCols[0].key);
+            }
+          }
+          if (e.key === 'Delete' && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            if (tpl.tasks.length > 1) {
+              tpl.tasks.splice(i, 1);
+              PP.dirty = true;
+              updateTitle();
+              propagateTemplateChange(tplId);
+              openTemplateEditor(tplId);
+            }
+          }
+        });
+      }
+
+      tr.appendChild(td);
+    }
+
+    tbody.appendChild(tr);
+  }
+
+  // Add row
+  const addTr = document.createElement('tr');
+  const addTd = document.createElement('td');
+  addTd.colSpan = TPL_COLUMNS.length;
+  addTd.className = 'pp-add-row';
+  addTd.textContent = '+ add task';
+  addTd.addEventListener('click', () => {
+    tpl.tasks.push(createTemplateTask());
+    PP.dirty = true;
+    updateTitle();
+    openTemplateEditor(tplId);
+    requestAnimationFrame(() => {
+      const newBody = body.querySelector('tbody');
+      if (newBody) tplFocusCell(newBody, tpl.tasks.length - 1, 'id');
+    });
+  });
+  addTr.appendChild(addTd);
+  tbody.appendChild(addTr);
+
+  table.appendChild(tbody);
+  body.appendChild(table);
+}
+
+function tplFocusCell(tbody, row, colKey) {
+  requestAnimationFrame(() => {
+    const cell = tbody.querySelector('tr[data-index="' + row + '"] td[data-col="' + colKey + '"]');
+    if (cell) cell.focus();
+  });
+}
+
+function showTplRowMenu(e, tplId, row) {
+  e.preventDefault();
+  closeContextMenu();
+
+  const tpl = PP.templates.find(t => t.id === tplId);
+  if (!tpl) return;
+
+  const menu = document.createElement('div');
+  menu.className = 'pp-context-menu';
+  menu.style.left = e.clientX + 'px';
+  menu.style.top = e.clientY + 'px';
+
+  const items = [
+    { label: 'Insert Row Above', action: () => { tpl.tasks.splice(row, 0, createTemplateTask()); PP.dirty = true; propagateTemplateChange(tplId); openTemplateEditor(tplId); } },
+    { label: 'Insert Row Below', action: () => { tpl.tasks.splice(row + 1, 0, createTemplateTask()); PP.dirty = true; propagateTemplateChange(tplId); openTemplateEditor(tplId); } },
+    { label: 'Delete Row', action: () => { if (tpl.tasks.length > 1) { tpl.tasks.splice(row, 1); PP.dirty = true; propagateTemplateChange(tplId); openTemplateEditor(tplId); } } },
+  ];
+
+  for (const item of items) {
+    const btn = document.createElement('button');
+    btn.className = 'pp-context-entry';
+    btn.textContent = item.label;
+    btn.addEventListener('click', () => { closeContextMenu(); item.action(); });
+    menu.appendChild(btn);
+  }
+
+  document.body.appendChild(menu);
+
+  const rect = menu.getBoundingClientRect();
+  if (rect.right > window.innerWidth) menu.style.left = (window.innerWidth - rect.width - 4) + 'px';
+  if (rect.bottom > window.innerHeight) menu.style.top = (window.innerHeight - rect.height - 4) + 'px';
+
+  const dismiss = ev => {
+    if (!menu.contains(ev.target)) {
+      closeContextMenu();
+      document.removeEventListener('click', dismiss);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', dismiss), 0);
+}
+
+// ── Instance dialog ──
+
+function showInstanceDialog(tplId) {
+  const tpl = PP.templates.find(t => t.id === tplId);
+  if (!tpl) return;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'pp-modal-overlay';
+  overlay.innerHTML = '<div class="pp-modal">'
+    + '<div class="pp-modal-title">Instance: ' + esc(tpl.name) + '</div>'
+    + '<div class="pp-instance-form">'
+    + '<label class="pp-inst-label">Prefix<input class="pp-inst-input" id="pp-inst-prefix" type="text" placeholder="e.g. a" spellcheck="false"></label>'
+    + '<label class="pp-inst-label">Group Path<input class="pp-inst-input" id="pp-inst-group" type="text" placeholder="e.g. Deposit A/Exploration" spellcheck="false"></label>'
+    + '<label class="pp-inst-label">Mode'
+    + '<select class="pp-inst-input" id="pp-inst-mode">'
+    + '<option value="linked">Linked (read-only params from template)</option>'
+    + '<option value="detached">Detached (editable copy)</option>'
+    + '</select></label>'
+    + '</div>'
+    + '<div class="pp-rename-actions">'
+    + '<button class="pp-modal-close" data-action="cancel">Cancel</button>'
+    + '<button class="pp-modal-close" data-action="ok">Create</button>'
+    + '</div></div>';
+
+  const finish = (accept) => {
+    if (accept) {
+      const prefix = overlay.querySelector('#pp-inst-prefix').value.trim();
+      const group = overlay.querySelector('#pp-inst-group').value.trim();
+      const mode = overlay.querySelector('#pp-inst-mode').value;
+
+      if (!prefix) {
+        setStatus('msg', 'prefix is required');
+        return;
+      }
+
+      // Check for ID collisions
+      const existing = new Set(PP.tasks.map(t => t.id));
+      for (const tt of tpl.tasks) {
+        if (tt.id && existing.has(prefix + '_' + tt.id)) {
+          setStatus('msg', 'ID collision: ' + prefix + '_' + tt.id + ' already exists');
+          return;
+        }
+      }
+
+      pushUndo();
+      instanceTemplate(tplId, prefix, group, mode);
+      PP.dirty = true;
+      updateTitle();
+      renderRows();
+      scheduleEval();
+      setStatus('msg', 'instanced ' + tpl.name + ' (' + mode + ')');
+    }
+    overlay.remove();
+  };
+
+  overlay.addEventListener('click', e => {
+    const action = e.target.dataset.action;
+    if (action === 'ok') finish(true);
+    else if (action === 'cancel') finish(false);
+    else if (e.target === overlay) finish(false);
+  });
+
+  overlay.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+  });
+
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => {
+    const inp = overlay.querySelector('#pp-inst-prefix');
+    if (inp) inp.focus();
+  });
+}
+
+function instanceTemplate(tplId, prefix, group, mode) {
+  const tpl = PP.templates.find(t => t.id === tplId);
+  if (!tpl) return;
+  const newTasks = instancePlanTemplate(tpl, prefix, group, mode);
+  for (const t of newTasks) PP.tasks.push(createTask(t));
+}
+
+// ── Linked task management (delegates to library) ──
+
+function isLinkedTask(task) {
+  return isLinkedPlanTask(task);
+}
+
+function isLinkedField(colKey) {
+  return colKey === 'name' || colKey === 'o' || colKey === 'm' || colKey === 'p' || colKey === 'depends' || colKey === 'resource';
+}
+
+function unlinkTask(task) {
+  unlinkPlanTask(task);
+}
+
+function propagateTemplateChange(tplId) {
+  const tpl = PP.templates.find(t => t.id === tplId);
+  if (!tpl) return;
+  propagateTemplate(tpl, PP.tasks);
+  renderRows();
+  scheduleEval();
+}
+
+// ── Unlink a specific task from its template ──
+
+function unlinkTaskById(row) {
+  const task = PP.tasks[row];
+  if (!task || !isLinkedTask(task)) return;
+  pushUndo();
+  delete task._tpl;
+  delete task._tplTask;
+  delete task._tplPrefix;
+  PP.dirty = true;
+  updateTitle();
+  renderRows();
+  setStatus('msg', 'unlinked ' + task.id);
 }
 
 // -- eval.js --
@@ -4964,37 +6184,7 @@ function evaluate() {
 }
 
 function buildPlanTasks() {
-  const tasks = [];
-  for (const t of PP.tasks) {
-    if (!t.id) continue;
-    const task = { id: t.id };
-    if (t.name) task.name = t.name;
-    if (t.group) task.group = t.group;
-    if (t.resource) task.resource = t.resource;
-
-    const o = parseFloat(t.o);
-    const m = parseFloat(t.m);
-    const p = parseFloat(t.p);
-    if (!isNaN(o) && !isNaN(m) && !isNaN(p)) {
-      task.pert = { o, m, p };
-    } else if (!isNaN(m)) {
-      task.duration = m;
-    } else {
-      task.milestone = true;
-    }
-
-    if (t.depends) {
-      task.depends = t.depends.split(',').map(s => s.trim()).filter(Boolean);
-    }
-
-    const prog = parseFloat(t.progress);
-    if (!isNaN(prog)) {
-      task.progress = prog / 100;
-    }
-
-    tasks.push(task);
-  }
-  return tasks;
+  return buildSchedulerTasks(PP.tasks);
 }
 
 function updateStatus() {
@@ -5022,41 +6212,133 @@ const GANTT = {
   pxPerDay: 18,
   rowH: 28,
   headerH: 44,
-  labelW: 180,
+  labelW: parseInt(localStorage.getItem('pp-gantt-labelW')) || 220,
   minPx: 4,
   maxPx: 60,
   bufferDays: 30,
   groupH: 22,
 };
 
+// Group color palette — muted tones that work on dark background
+const GROUP_COLORS = [
+  '#4A90D9', '#2D8B6F', '#B87333', '#8E6BBF',
+  '#6BBF6B', '#D9A534', '#D94070', '#1ABC9C',
+  '#E67E22', '#7B68EE',
+];
+
+function buildGroupColorMap(rows) {
+  const map = {};
+  let ci = 0;
+  for (const r of rows) {
+    if (r.type !== 'task' || !r.group) continue;
+    const top = r.group.split('/')[0].trim();
+    if (top && !(top in map)) {
+      map[top] = GROUP_COLORS[ci % GROUP_COLORS.length];
+      ci++;
+    }
+  }
+  return map;
+}
+
 // ── Build display rows from schedule result ──
 
 function ganttRows(result) {
   const scheduled = result.scheduled;
-  const rows = [];
-  let currentGroup = null;
+  const collapsed = PP.ui.collapsedGroups;
 
+  // Group tasks by their group field, preserving first-seen order
+  const groupOrder = [];
+  const groupMap = {};
   for (const s of scheduled) {
-    if (s.group && s.group !== currentGroup) {
-      currentGroup = s.group;
-      rows.push({ type: 'group', label: currentGroup });
+    const g = s.group || '';
+    if (!(g in groupMap)) {
+      groupMap[g] = [];
+      groupOrder.push(g);
     }
-    rows.push({
-      type: 'task',
-      id: s.id,
-      label: s.name || s.id,
-      start: s.earlyStart,
-      end: s.earlyFinish,
-      lateEnd: s.lateFinish,
-      isCritical: s.isCritical,
-      totalFloat: s.totalFloat || 0,
-      progress: s.progress || 0,
-      resource: s.resource,
-      depends: s.depends || [],
-      milestone: s.milestone,
-    });
+    groupMap[g].push(s);
+  }
+
+  // Sort groups so that shared prefixes are adjacent
+  // (e.g. "Deposit A/Exploration" before "Deposit A/Estimation")
+  groupOrder.sort();
+
+  // Build rows with hierarchical group headers
+  const rows = [];
+  let activePath = [];
+
+  for (const g of groupOrder) {
+    const newPath = g ? g.split('/').map(p => p.trim()) : [];
+
+    // Emit group headers for new path segments
+    if (g !== activePath.join('/')) {
+      let common = 0;
+      while (common < activePath.length && common < newPath.length && activePath[common] === newPath[common]) {
+        common++;
+      }
+
+      for (let d = common; d < newPath.length; d++) {
+        const fullPath = newPath.slice(0, d + 1).join('/');
+        const parentPath = d > 0 ? newPath.slice(0, d).join('/') : null;
+        if (parentPath && isGroupHidden(parentPath, collapsed)) continue;
+        rows.push({
+          type: 'group',
+          label: newPath[d],
+          path: fullPath,
+          depth: d,
+          collapsed: collapsed.has(fullPath),
+        });
+      }
+      activePath = newPath;
+    }
+
+    // Skip tasks if any ancestor group is collapsed
+    if (g && isGroupHidden(g, collapsed)) continue;
+
+    for (const s of groupMap[g]) {
+      const srcTask = PP.tasks.find(t => t.id === s.id);
+      rows.push({
+        type: 'task',
+        id: s.id,
+        label: s.name || s.id,
+        start: s.earlyStart,
+        end: s.earlyFinish,
+        lateEnd: s.lateFinish,
+        isCritical: s.isCritical,
+        totalFloat: s.totalFloat || 0,
+        progress: s.progress || 0,
+        resource: s.resource,
+        depends: s.depends || [],
+        milestone: s.milestone,
+        group: s.group,
+        linked: srcTask ? isLinkedTask(srcTask) : false,
+      });
+    }
   }
   return rows;
+}
+
+// Check if a group path (or any of its ancestors) is collapsed
+function collapseAllGroups() {
+  if (!PP.scheduleResult) return;
+  const rows = ganttRows(PP.scheduleResult);
+  for (const r of rows) {
+    if (r.type === 'group') PP.ui.collapsedGroups.add(r.path);
+  }
+  showGanttPanel();
+}
+
+function expandAllGroups() {
+  PP.ui.collapsedGroups.clear();
+  showGanttPanel();
+}
+
+function isGroupHidden(groupPath, collapsed) {
+  if (!groupPath) return false;
+  const parts = groupPath.split('/');
+  for (let i = 1; i <= parts.length; i++) {
+    if (collapsed.has(parts.slice(0, i).join('/'))) return true;
+  }
+  return false;
 }
 
 // ── Date helpers ──
@@ -5102,6 +6384,7 @@ function showGanttPanel() {
 
   const result = PP.scheduleResult;
   const rows = ganttRows(result);
+  const groupColors = buildGroupColorMap(rows);
 
   // Compute timeline bounds
   const projStart = startOfDay(new Date(PP.projectStart));
@@ -5148,11 +6431,68 @@ function showGanttPanel() {
   labelPane.className = 'pp-gantt-labels';
   labelPane.style.width = GANTT.labelW + 'px';
 
-  // Label header spacer
+  // Label header spacer + resize handle
   const labelHeader = document.createElement('div');
   labelHeader.className = 'pp-gantt-label-header';
   labelHeader.style.height = GANTT.headerH + 'px';
-  labelHeader.textContent = 'Task';
+
+  const labelTitle = document.createElement('span');
+  labelTitle.textContent = 'Task';
+  labelHeader.appendChild(labelTitle);
+
+  const labelResizeHandle = document.createElement('div');
+  labelResizeHandle.className = 'pp-gantt-label-resize';
+  labelHeader.appendChild(labelResizeHandle);
+
+  // Drag to resize label column
+  let lrDragging = false, lrStartX = 0, lrStartW = 0;
+  labelResizeHandle.addEventListener('mousedown', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    lrDragging = true;
+    lrStartX = e.clientX;
+    lrStartW = GANTT.labelW;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  });
+  document.addEventListener('mousemove', e => {
+    if (!lrDragging) return;
+    const newW = Math.max(80, lrStartW + e.clientX - lrStartX);
+    GANTT.labelW = newW;
+    labelPane.style.width = newW + 'px';
+  });
+  document.addEventListener('mouseup', () => {
+    if (!lrDragging) return;
+    lrDragging = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    localStorage.setItem('pp-gantt-labelW', GANTT.labelW);
+  });
+
+  // Double-click to auto-fit label width
+  labelResizeHandle.addEventListener('dblclick', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Measure max text width
+    const measurer = document.createElement('span');
+    measurer.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;font-size:12px;font-family:inherit;padding:0 8px';
+    document.body.appendChild(measurer);
+    let maxW = 60;
+    for (const r of rows) {
+      const text = r.type === 'group'
+        ? '\u25bc ' + r.label
+        : (r.linked ? '\u25cf ' : '') + r.label;
+      const indent = r.type === 'group' ? (r.depth || 0) * 12 + 8 : 0;
+      measurer.textContent = text;
+      const w = measurer.offsetWidth + indent + 16; // padding
+      if (w > maxW) maxW = w;
+    }
+    document.body.removeChild(measurer);
+    GANTT.labelW = Math.min(maxW, 500);
+    labelPane.style.width = GANTT.labelW + 'px';
+    localStorage.setItem('pp-gantt-labelW', GANTT.labelW);
+  });
+
   labelPane.appendChild(labelHeader);
 
   const labelBody = document.createElement('div');
@@ -5163,21 +6503,40 @@ function showGanttPanel() {
     const div = document.createElement('div');
     if (r.type === 'group') {
       div.className = 'pp-gantt-group-label';
+      if (r.collapsed) div.classList.add('pp-gantt-group-collapsed');
       div.style.height = GANTT.groupH + 'px';
       div.style.lineHeight = GANTT.groupH + 'px';
-      div.textContent = r.label;
+      const indent = (r.depth || 0) * 12;
+      div.style.paddingLeft = (8 + indent) + 'px';
+      div.innerHTML = '<span class="pp-gantt-group-arrow">' + (r.collapsed ? '\u25b6' : '\u25bc') + '</span> ' + esc(r.label);
+      // Color top-level group headers
+      const topGroup = r.path ? r.path.split('/')[0].trim() : '';
+      if (topGroup && groupColors[topGroup]) div.style.color = groupColors[topGroup];
+      div.style.cursor = 'pointer';
+      const groupPath = r.path;
+      div.addEventListener('click', () => {
+        if (PP.ui.collapsedGroups.has(groupPath)) PP.ui.collapsedGroups.delete(groupPath);
+        else PP.ui.collapsedGroups.add(groupPath);
+        showGanttPanel();
+      });
     } else {
       div.className = 'pp-gantt-task-label';
       if (r.isCritical) div.classList.add('pp-gantt-critical-label');
+      if (r.linked) div.classList.add('pp-gantt-linked-label');
       div.style.height = GANTT.rowH + 'px';
       div.style.lineHeight = GANTT.rowH + 'px';
-      div.textContent = r.label;
-      div.title = r.id + (r.resource ? ' [' + r.resource + ']' : '');
+      if (r.linked) {
+        div.innerHTML = '<span class="pp-link-indicator">\u25cf</span>' + esc(r.label);
+      } else {
+        div.textContent = r.label;
+      }
+      div.title = r.id + (r.resource ? ' [' + r.resource + ']' : '') + (r.linked ? ' (linked)' : '');
       div.dataset.taskId = r.id;
       div.addEventListener('click', () => selectTaskInGrid(r.id));
     }
     labelBody.appendChild(div);
   }
+  labelBody.style.top = GANTT.headerH + 'px';
   labelPane.appendChild(labelBody);
 
   // ── Timeline pane (scrollable) ──
@@ -5287,48 +6646,6 @@ function showGanttPanel() {
       }
     }
 
-    // MC percentile bands (render behind the deterministic bar)
-    if (PP.mcResult && PP.mcResult.taskEndDates && PP.mcResult.taskEndDates[r.id]) {
-      const ends = PP.mcResult.taskEndDates[r.id]; // sorted Date array
-      const n = ends.length;
-      if (n > 1) {
-        const p10 = ends[Math.floor(0.10 * (n - 1))];
-        const p25 = ends[Math.floor(0.25 * (n - 1))];
-        const p75 = ends[Math.floor(0.75 * (n - 1))];
-        const p90 = ends[Math.floor(0.90 * (n - 1))];
-
-        const barStart = startOfDay(new Date(r.start));
-        const bandX = daysBetween(timeStart, barStart) * GANTT.pxPerDay;
-        const isCrit = r.isCritical;
-
-        // P10-P90 outer band
-        const p10X = daysBetween(timeStart, startOfDay(p10)) * GANTT.pxPerDay;
-        const p90X = daysBetween(timeStart, startOfDay(p90)) * GANTT.pxPerDay;
-        const outerW = Math.max(p90X - bandX, 2);
-        const outer = document.createElement('div');
-        outer.className = 'pp-gantt-mc-band' + (isCrit ? ' pp-gantt-mc-band-critical' : '');
-        outer.style.left = bandX + 'px';
-        outer.style.top = (y + 6) + 'px';
-        outer.style.width = outerW + 'px';
-        outer.style.height = (GANTT.rowH - 12) + 'px';
-        outer.title = 'P10\u2013P90: ' + formatDate(p10) + ' \u2013 ' + formatDate(p90);
-        body.appendChild(outer);
-
-        // P25-P75 inner band
-        const p25X = daysBetween(timeStart, startOfDay(p25)) * GANTT.pxPerDay;
-        const p75X = daysBetween(timeStart, startOfDay(p75)) * GANTT.pxPerDay;
-        const innerW = Math.max(p75X - bandX, 2);
-        const inner = document.createElement('div');
-        inner.className = 'pp-gantt-mc-band pp-gantt-mc-band-inner' + (isCrit ? ' pp-gantt-mc-band-critical' : '');
-        inner.style.left = bandX + 'px';
-        inner.style.top = (y + 6) + 'px';
-        inner.style.width = innerW + 'px';
-        inner.style.height = (GANTT.rowH - 12) + 'px';
-        inner.title = 'P25\u2013P75: ' + formatDate(p25) + ' \u2013 ' + formatDate(p75);
-        body.appendChild(inner);
-      }
-    }
-
     // Bar
     const startDate = startOfDay(new Date(r.start));
     const endDate = startOfDay(new Date(r.end));
@@ -5344,7 +6661,12 @@ function showGanttPanel() {
       body.appendChild(diamond);
     } else {
       const bar = document.createElement('div');
-      bar.className = 'pp-gantt-bar' + (r.isCritical ? ' pp-gantt-bar-critical' : '');
+      bar.className = 'pp-gantt-bar' + (r.isCritical ? ' pp-gantt-bar-critical' : '') + (r.linked ? ' pp-gantt-bar-linked' : '');
+      // Color by top-level group
+      const topGroup = r.group ? r.group.split('/')[0].trim() : '';
+      if (topGroup && groupColors[topGroup]) {
+        bar.style.background = groupColors[topGroup];
+      }
       bar.style.left = barX + 'px';
       bar.style.top = (y + 4) + 'px';
       bar.style.width = barW + 'px';
@@ -5371,6 +6693,51 @@ function showGanttPanel() {
         floatBar.style.top = (y + GANTT.rowH / 2 - 1) + 'px';
         floatBar.style.width = floatW + 'px';
         body.appendChild(floatBar);
+      }
+
+      // MC percentile tails — use taskEnd summary stats (absolute dates)
+      // The deterministic bar uses ceil-rounded PERT expected durations, so
+      // it can exceed MC P50/P75. We position tails absolutely on the timeline
+      // and only render the portion that extends past the deterministic bar end.
+      if (PP.mcResult && PP.mcResult.taskEnd && PP.mcResult.taskEnd[r.id]) {
+        const te = PP.mcResult.taskEnd[r.id];
+        const barEnd = barX + barW;
+
+        // P90 outer tail
+        if (te.p90) {
+          const p90d = startOfDay(new Date(te.p90));
+          const p90X = daysBetween(timeStart, p90d) * GANTT.pxPerDay;
+          const tailStart = Math.max(barEnd, daysBetween(timeStart, endDate) * GANTT.pxPerDay);
+          const outerW = p90X - tailStart;
+          if (outerW > 2) {
+            const outer = document.createElement('div');
+            outer.className = 'pp-gantt-mc-tail' + (r.isCritical ? ' pp-gantt-mc-tail-critical' : '');
+            outer.style.left = tailStart + 'px';
+            outer.style.top = (y + 4) + 'px';
+            outer.style.width = outerW + 'px';
+            outer.style.height = (GANTT.rowH - 8) + 'px';
+            outer.title = 'P90: ' + formatDate(p90d);
+            body.appendChild(outer);
+          }
+        }
+
+        // P75 inner tail
+        if (te.p75) {
+          const p75d = startOfDay(new Date(te.p75));
+          const p75X = daysBetween(timeStart, p75d) * GANTT.pxPerDay;
+          const tailStart = Math.max(barEnd, daysBetween(timeStart, endDate) * GANTT.pxPerDay);
+          const innerW = p75X - tailStart;
+          if (innerW > 2) {
+            const inner = document.createElement('div');
+            inner.className = 'pp-gantt-mc-tail pp-gantt-mc-tail-inner' + (r.isCritical ? ' pp-gantt-mc-tail-critical' : '');
+            inner.style.left = tailStart + 'px';
+            inner.style.top = (y + 4) + 'px';
+            inner.style.width = innerW + 'px';
+            inner.style.height = (GANTT.rowH - 8) + 'px';
+            inner.title = 'P75: ' + formatDate(p75d);
+            body.appendChild(inner);
+          }
+        }
       }
     }
 
@@ -5635,7 +7002,35 @@ function buildDependencyArrows(rows, taskRowMap, timeStart) {
 
 function selectTaskInGrid(taskId) {
   const idx = PP.tasks.findIndex(t => t.id === taskId);
-  if (idx >= 0) selectRow(idx);
+  if (idx >= 0) {
+    selectRow(idx);
+    scrollGridToRow(idx);
+  }
+}
+
+function scrollGanttToTask(taskId) {
+  if (!PP.scheduleResult) return;
+  const s = PP.scheduleResult.scheduled.find(t => t.id === taskId);
+  if (!s || !s.earlyStart) return;
+
+  const timePane = $('.pp-gantt-timeline');
+  if (!timePane) return;
+
+  // Compute the x position of this task's bar
+  // We need to recalculate timeStart the same way showGanttPanel does
+  const projStart = startOfDay(new Date(PP.projectStart));
+  let earliest = projStart;
+  for (const r of PP.scheduleResult.scheduled) {
+    const rs = startOfDay(new Date(r.earlyStart));
+    if (rs < earliest) earliest = rs;
+  }
+  const timeStart = addDays(earliest, -7);
+  const taskStart = startOfDay(new Date(s.earlyStart));
+  const taskX = daysBetween(timeStart, taskStart) * GANTT.pxPerDay;
+
+  // Scroll so the task bar is roughly centered
+  const targetScroll = taskX - timePane.clientWidth / 3;
+  timePane.scrollLeft = Math.max(0, targetScroll);
 }
 
 // -- calendar.js --
@@ -5748,27 +7143,11 @@ function applyCalendarPreset(preset) {
     return;
   }
 
-  // Determine year range from project start
   const startYear = parseInt(PP.projectStart.slice(0, 4)) || new Date().getFullYear();
   const endYear = startYear + 2;
 
   try {
-    if (preset === 'brazil-federal') {
-      const cal = brazilCalendar(startYear, endYear);
-      PP.calendar.holidays = cal.holidays || [];
-    } else {
-      // Municipality preset: "city-uf"
-      const parts = preset.split('-');
-      const uf = parts[parts.length - 1];
-      const municipality = parts.slice(0, -1).join('-');
-      const cal = brazilCalendar(startYear, endYear, {
-        uf,
-        municipality: preset,
-        carnival: true,
-        corpusChristi: true,
-      });
-      PP.calendar.holidays = cal.holidays || [];
-    }
+    PP.calendar.holidays = resolveCalendarPreset(preset, startYear, endYear);
   } catch (e) {
     setStatus('msg', 'calendar error: ' + e.message);
     PP.calendar.holidays = [];
@@ -6182,6 +7561,10 @@ function initMenuBar() {
     ]},
     { label: 'View', items: [
       { label: 'Toggle Tasks', action: toggleTaskWindow, shortcut: 'Ctrl+E' },
+      { label: 'Toggle Templates', action: toggleTemplateWindow, shortcut: 'Ctrl+T' },
+      { type: 'sep' },
+      { label: 'Collapse All Groups', action: collapseAllGroups },
+      { label: 'Expand All Groups', action: expandAllGroups },
       { type: 'sep' },
       { label: 'Calendar', action: () => showSidebar('calendar') },
       { label: 'Earned Value', action: () => showSidebar('evm') },
@@ -6341,7 +7724,8 @@ function showShortcuts() {
     + '  Ctrl+O \u2014 Open\n'
     + '  Ctrl+N \u2014 New\n\n'
     + 'VIEW\n'
-    + '  Ctrl+E \u2014 Toggle Tasks\n\n'
+    + '  Ctrl+E \u2014 Toggle Tasks\n'
+    + '  Ctrl+T \u2014 Toggle Templates\n\n'
     + 'ANALYSIS\n'
     + '  Ctrl+M \u2014 Run Monte Carlo\n\n'
     + 'EDIT\n'
@@ -6389,6 +7773,7 @@ function showModal(title, text) {
 async function newFile() {
   if (PP.dirty && !confirm('Discard unsaved changes?')) return;
   PP.tasks = [createTask()];
+  PP.templates = [];
   PP.calendar = { weekends: [0, 6], holidays: [], blocked: [] };
   PP.calendarPreset = null;
   PP.projectStart = new Date().toISOString().slice(0, 10);
@@ -6500,18 +7885,14 @@ async function saveFileAs() {
 function serializeProject() {
   const projects = getProjects();
   const p = projects.find(e => e.id === PP.projectId);
-  return JSON.stringify({
-    version: 1,
+  return serializePlan({
     title: (p && p.name) || PP.fileName || 'untitled',
     projectStart: PP.projectStart,
-    calendar: {
-      preset: PP.calendarPreset,
-      weekends: PP.calendar.weekends,
-      holidays: PP.calendar.holidays,
-      blocked: PP.calendar.blocked,
-    },
+    calendar: PP.calendar,
+    calendarPreset: PP.calendarPreset,
     deadlines: PP.deadlines,
-    baseline: PP.baseline || null,
+    baseline: PP.baseline,
+    templates: PP.templates,
     tasks: PP.tasks,
     settings: {
       showFloat: PP.ui.showFloat,
@@ -6519,37 +7900,32 @@ function serializeProject() {
       pxPerDay: GANTT.pxPerDay,
       mcIterations: PP.mcIterations || 5000,
     },
-  }, null, 2);
+  });
 }
 
 function loadProjectData(data) {
-  PP.tasks = (data.tasks || []).map(t => createTask(t));
-  PP.projectStart = data.projectStart || new Date().toISOString().slice(0, 10);
-  PP.deadlines = data.deadlines || [];
+  const project = parsePlan(data);
+
+  PP.tasks = project.tasks.map(t => createTask(t));
+  PP.templates = project.templates.map(t => ({
+    ...createTemplate(t),
+    tasks: (t.tasks || []).map(tt => createTemplateTask(tt)),
+  }));
+  PP.projectStart = project.projectStart;
+  PP.deadlines = project.deadlines;
   PP.undoStack = [];
   PP.redoStack = [];
   PP.mcResult = null;
   PP.evmResult = null;
-  PP.baseline = data.baseline || null;
+  PP.baseline = project.baseline;
+  PP.calendarPreset = project.calendarPreset;
+  PP.calendar = project.calendar;
 
-  if (data.calendar) {
-    PP.calendarPreset = data.calendar.preset || null;
-    PP.calendar = {
-      weekends: data.calendar.weekends || [0, 6],
-      holidays: data.calendar.holidays || [],
-      blocked: data.calendar.blocked || [],
-    };
-  } else {
-    PP.calendar = { weekends: [0, 6], holidays: [], blocked: [] };
-    PP.calendarPreset = null;
-  }
-
-  if (data.settings) {
-    if (data.settings.showFloat != null) PP.ui.showFloat = data.settings.showFloat;
-    if (data.settings.showProgress != null) PP.ui.showProgress = data.settings.showProgress;
-    if (data.settings.pxPerDay != null) GANTT.pxPerDay = Math.max(GANTT.minPx, Math.min(GANTT.maxPx, data.settings.pxPerDay));
-    if (data.settings.mcIterations != null) PP.mcIterations = data.settings.mcIterations;
-  }
+  const s = project.settings;
+  if (s.showFloat != null) PP.ui.showFloat = s.showFloat;
+  if (s.showProgress != null) PP.ui.showProgress = s.showProgress;
+  if (s.pxPerDay != null) GANTT.pxPerDay = Math.max(GANTT.minPx, Math.min(GANTT.maxPx, s.pxPerDay));
+  if (s.mcIterations != null) PP.mcIterations = s.mcIterations;
 }
 
 // Helpers
@@ -6701,6 +8077,131 @@ const EXAMPLES = {
       { label: 'Production Target', taskId: 'prod', date: futureDate(365) },
     ],
   },
+  'Multi-Deposit Mine': {
+    tasks: [
+      // Deposit A — Exploration
+      createTask({ id: 'a_map',     name: 'Geological Mapping',    group: 'Deposit A/Exploration', o: '5',  m: '8',  p: '14' }),
+      createTask({ id: 'a_drill',   name: 'Diamond Drilling',      group: 'Deposit A/Exploration', o: '15', m: '25', p: '40', depends: 'a_map' }),
+      createTask({ id: 'a_log',     name: 'Core Logging',          group: 'Deposit A/Exploration', o: '8',  m: '12', p: '20', depends: 'a_drill' }),
+      createTask({ id: 'a_assay',   name: 'Assay & QA/QC',        group: 'Deposit A/Exploration', o: '10', m: '15', p: '25', depends: 'a_log' }),
+      // Deposit A — Estimation
+      createTask({ id: 'a_db',      name: 'Database Validation',   group: 'Deposit A/Estimation',  o: '3',  m: '5',  p: '10', depends: 'a_assay' }),
+      createTask({ id: 'a_geo',     name: 'Geological Domains',    group: 'Deposit A/Estimation',  o: '5',  m: '10', p: '18', depends: 'a_db' }),
+      createTask({ id: 'a_vario',   name: 'Variography',           group: 'Deposit A/Estimation',  o: '5',  m: '8',  p: '15', depends: 'a_geo' }),
+      createTask({ id: 'a_krig',    name: 'Block Model & Kriging', group: 'Deposit A/Estimation',  o: '8',  m: '15', p: '25', depends: 'a_vario' }),
+      createTask({ id: 'a_class',   name: 'Resource Classification', group: 'Deposit A/Estimation', o: '3', m: '5', p: '8', depends: 'a_krig' }),
+      // Deposit B — Exploration
+      createTask({ id: 'b_map',     name: 'Geological Mapping',    group: 'Deposit B/Exploration', o: '4',  m: '7',  p: '12' }),
+      createTask({ id: 'b_rc',      name: 'RC Drilling',           group: 'Deposit B/Exploration', o: '10', m: '18', p: '30', depends: 'b_map' }),
+      createTask({ id: 'b_log',     name: 'Chip Logging',          group: 'Deposit B/Exploration', o: '5',  m: '8',  p: '14', depends: 'b_rc' }),
+      createTask({ id: 'b_assay',   name: 'Assay & QA/QC',        group: 'Deposit B/Exploration', o: '8',  m: '12', p: '20', depends: 'b_log' }),
+      // Deposit B — Estimation
+      createTask({ id: 'b_db',      name: 'Database Validation',   group: 'Deposit B/Estimation',  o: '2',  m: '4',  p: '8',  depends: 'b_assay' }),
+      createTask({ id: 'b_geo',     name: 'Geological Domains',    group: 'Deposit B/Estimation',  o: '4',  m: '8',  p: '14', depends: 'b_db' }),
+      createTask({ id: 'b_vario',   name: 'Variography',           group: 'Deposit B/Estimation',  o: '4',  m: '7',  p: '12', depends: 'b_geo' }),
+      createTask({ id: 'b_krig',    name: 'Block Model & Kriging', group: 'Deposit B/Estimation',  o: '6',  m: '12', p: '20', depends: 'b_vario' }),
+      createTask({ id: 'b_class',   name: 'Resource Classification', group: 'Deposit B/Estimation', o: '2', m: '4', p: '7', depends: 'b_krig' }),
+      // Integration
+      createTask({ id: 'int_model', name: 'Consolidated Model',    group: 'Integration/Reporting', o: '5',  m: '10', p: '18', depends: 'a_class, b_class' }),
+      createTask({ id: 'int_opt',   name: 'Pit Optimization',      group: 'Integration/Planning',  o: '5',  m: '8',  p: '15', depends: 'int_model' }),
+      createTask({ id: 'int_mine',  name: 'Mine Scheduling',       group: 'Integration/Planning',  o: '8',  m: '15', p: '25', depends: 'int_opt' }),
+      createTask({ id: 'int_econ',  name: 'Economic Analysis',     group: 'Integration/Planning',  o: '5',  m: '8',  p: '12', depends: 'int_mine' }),
+      createTask({ id: 'int_43',    name: 'NI 43-101 Report',      group: 'Integration/Reporting', o: '10', m: '20', p: '35', depends: 'int_econ, int_model' }),
+      createTask({ id: 'int_rev',   name: 'External Review',       group: 'Integration/Reporting', o: '5',  m: '10', p: '20', depends: 'int_43' }),
+    ],
+    projectStart: futureDate(0),
+    deadlines: [
+      { label: 'Dep A Resource', taskId: 'a_class', date: futureDate(180) },
+      { label: 'Dep B Resource', taskId: 'b_class', date: futureDate(160) },
+      { label: 'Board Presentation', taskId: 'int_rev', date: futureDate(365) },
+    ],
+  },
+  'Templated Multi-Deposit': (() => {
+    // Templates
+    const explorationTpl = {
+      id: 'tpl_exploration',
+      name: 'Exploration Workflow',
+      tasks: [
+        createTemplateTask({ id: 'map',   name: 'Geological Mapping', o: '5',  m: '8',  p: '14' }),
+        createTemplateTask({ id: 'drill', name: 'Drilling Program',   o: '12', m: '20', p: '35', depends: 'map' }),
+        createTemplateTask({ id: 'log',   name: 'Core/Chip Logging',  o: '6',  m: '10', p: '18', depends: 'drill' }),
+        createTemplateTask({ id: 'assay', name: 'Assay & QA/QC',      o: '8',  m: '12', p: '20', depends: 'log' }),
+      ],
+    };
+
+    const estimationTpl = {
+      id: 'tpl_estimation',
+      name: 'Resource Estimation',
+      tasks: [
+        createTemplateTask({ id: 'db',    name: 'Database Validation',   o: '3', m: '5',  p: '10' }),
+        createTemplateTask({ id: 'geo',   name: 'Geological Domains',    o: '5', m: '8',  p: '15', depends: 'db' }),
+        createTemplateTask({ id: 'vario', name: 'Variography',           o: '4', m: '7',  p: '12', depends: 'geo' }),
+        createTemplateTask({ id: 'krig',  name: 'Block Model & Kriging', o: '8', m: '14', p: '22', depends: 'vario' }),
+        createTemplateTask({ id: 'class', name: 'Resource Classification', o: '3', m: '5', p: '8', depends: 'krig' }),
+      ],
+    };
+
+    // Helper to instance a template into tasks
+    function inst(tpl, prefix, group, linked) {
+      const tplIds = new Set(tpl.tasks.map(t => t.id));
+      return tpl.tasks.filter(t => t.id).map(tt => {
+        const depends = tt.depends ? tt.depends.split(',').map(d => {
+          const dep = d.trim();
+          return tplIds.has(dep) ? prefix + '_' + dep : dep;
+        }).filter(Boolean).join(', ') : '';
+        const task = { id: prefix + '_' + tt.id, name: tt.name, group, o: tt.o, m: tt.m, p: tt.p, depends, resource: tt.resource || '' };
+        if (linked) { task._tpl = tpl.id; task._tplTask = tt.id; task._tplPrefix = prefix; }
+        return createTask(task);
+      });
+    }
+
+    // Deposit A: linked instances (read-only from templates)
+    const aTasks = [
+      ...inst(explorationTpl, 'a', 'Deposit A/Exploration', true),
+      ...inst(estimationTpl, 'a', 'Deposit A/Estimation', true),
+    ];
+    // Wire estimation to depend on exploration output
+    aTasks.find(t => t.id === 'a_db').depends = 'a_assay';
+
+    // Deposit B: linked instances
+    const bTasks = [
+      ...inst(explorationTpl, 'b', 'Deposit B/Exploration', true),
+      ...inst(estimationTpl, 'b', 'Deposit B/Estimation', true),
+    ];
+    bTasks.find(t => t.id === 'b_db').depends = 'b_assay';
+
+    // Deposit C: detached (copied, freely editable — smaller deposit, shorter estimates)
+    const cTasks = [
+      ...inst(explorationTpl, 'c', 'Deposit C/Exploration', false),
+      ...inst(estimationTpl, 'c', 'Deposit C/Estimation', false),
+    ];
+    cTasks.find(t => t.id === 'c_db').depends = 'c_assay';
+    // Customise detached tasks — smaller deposit, shorter drilling
+    const cDrill = cTasks.find(t => t.id === 'c_drill');
+    if (cDrill) { cDrill.name = 'RC Drilling (shallow)'; cDrill.o = '5'; cDrill.m = '10'; cDrill.p = '18'; }
+
+    // Integration tasks (manual, cross-instance dependencies)
+    const intTasks = [
+      createTask({ id: 'int_model', name: 'Consolidated Model',   group: 'Integration/Reporting', o: '5',  m: '10', p: '18', depends: 'a_class, b_class, c_class' }),
+      createTask({ id: 'int_opt',   name: 'Pit Optimization',     group: 'Integration/Planning',  o: '5',  m: '8',  p: '15', depends: 'int_model' }),
+      createTask({ id: 'int_mine',  name: 'Mine Scheduling',      group: 'Integration/Planning',  o: '8',  m: '15', p: '25', depends: 'int_opt' }),
+      createTask({ id: 'int_econ',  name: 'Economic Analysis',    group: 'Integration/Planning',  o: '5',  m: '8',  p: '12', depends: 'int_mine' }),
+      createTask({ id: 'int_43',    name: 'NI 43-101 Report',     group: 'Integration/Reporting', o: '10', m: '20', p: '35', depends: 'int_econ, int_model' }),
+      createTask({ id: 'int_rev',   name: 'External Review',      group: 'Integration/Reporting', o: '5',  m: '10', p: '20', depends: 'int_43' }),
+    ];
+
+    return {
+      tasks: [...aTasks, ...bTasks, ...cTasks, ...intTasks],
+      templates: [explorationTpl, estimationTpl],
+      projectStart: futureDate(0),
+      deadlines: [
+        { label: 'Dep A Resource', taskId: 'a_class', date: futureDate(180) },
+        { label: 'Dep B Resource', taskId: 'b_class', date: futureDate(170) },
+        { label: 'Dep C Resource', taskId: 'c_class', date: futureDate(150) },
+        { label: 'Board Presentation', taskId: 'int_rev', date: futureDate(400) },
+      ],
+    };
+  })(),
 };
 
 // ── Project CRUD ──
@@ -7024,6 +8525,10 @@ function toggleSidebar(key) {
       e.preventDefault();
       toggleTaskWindow();
     }
+    if ((e.ctrlKey || e.metaKey) && e.key === 't') {
+      e.preventDefault();
+      toggleTemplateWindow();
+    }
     if ((e.ctrlKey || e.metaKey) && e.key === 'm') {
       e.preventDefault();
       runMC();
@@ -7156,6 +8661,10 @@ function handleSplashChoice(action, arg) {
       const ex = EXAMPLES[arg];
       if (ex) {
         PP.tasks = ex.tasks.map(t => createTask(t));
+        PP.templates = (ex.templates || []).map(t => ({
+          ...createTemplate(t),
+          tasks: (t.tasks || []).map(tt => createTemplateTask(tt)),
+        }));
         PP.projectStart = ex.projectStart || new Date().toISOString().slice(0, 10);
         PP.deadlines = ex.deadlines || [];
         PP.fileHandle = null;

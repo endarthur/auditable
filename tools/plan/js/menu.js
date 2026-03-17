@@ -24,6 +24,10 @@ function initMenuBar() {
     ]},
     { label: 'View', items: [
       { label: 'Toggle Tasks', action: toggleTaskWindow, shortcut: 'Ctrl+E' },
+      { label: 'Toggle Templates', action: toggleTemplateWindow, shortcut: 'Ctrl+T' },
+      { type: 'sep' },
+      { label: 'Collapse All Groups', action: collapseAllGroups },
+      { label: 'Expand All Groups', action: expandAllGroups },
       { type: 'sep' },
       { label: 'Calendar', action: () => showSidebar('calendar') },
       { label: 'Earned Value', action: () => showSidebar('evm') },
@@ -183,7 +187,8 @@ function showShortcuts() {
     + '  Ctrl+O \u2014 Open\n'
     + '  Ctrl+N \u2014 New\n\n'
     + 'VIEW\n'
-    + '  Ctrl+E \u2014 Toggle Tasks\n\n'
+    + '  Ctrl+E \u2014 Toggle Tasks\n'
+    + '  Ctrl+T \u2014 Toggle Templates\n\n'
     + 'ANALYSIS\n'
     + '  Ctrl+M \u2014 Run Monte Carlo\n\n'
     + 'EDIT\n'

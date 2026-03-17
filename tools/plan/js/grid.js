@@ -145,6 +145,7 @@ function buildGrid() {
   const wrap = $('#pp-grid-wrap');
   if (!wrap) return;
   wrap.innerHTML = '';
+  loadColumnWidths();
 
   const table = document.createElement('table');
   table.className = 'pp-grid';
@@ -152,11 +153,20 @@ function buildGrid() {
   // Header
   const thead = document.createElement('thead');
   const hrow = document.createElement('tr');
-  for (const col of COLUMNS) {
+  for (let ci = 0; ci < COLUMNS.length; ci++) {
+    const col = COLUMNS[ci];
     const th = document.createElement('th');
     th.className = 'pp-col-' + (col.key === '#' ? 'num' : col.key === 'o' || col.key === 'm' || col.key === 'p' ? 'omp' : col.key);
     th.textContent = col.label;
     th.style.width = col.width + 'px';
+
+    // Resize handle
+    const handle = document.createElement('div');
+    handle.className = 'pp-col-resize';
+    handle.addEventListener('mousedown', colResizeStart(th, col, ci));
+    handle.addEventListener('dblclick', e => { e.stopPropagation(); colAutoResize(th, col, ci); });
+    th.appendChild(handle);
+
     hrow.appendChild(th);
   }
   thead.appendChild(hrow);
@@ -169,6 +179,82 @@ function buildGrid() {
 
   wrap.appendChild(table);
   renderRows();
+}
+
+function colResizeStart(th, col, ci) {
+  return function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startW = th.offsetWidth;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    function onMove(ev) {
+      const w = Math.max(24, startW + ev.clientX - startX);
+      th.style.width = w + 'px';
+      col.width = w;
+    }
+
+    function onUp() {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      // Persist column widths
+      saveColumnWidths();
+    }
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
+}
+
+function colAutoResize(th, col, ci) {
+  const tbody = $('#pp-tbody');
+  if (!tbody) return;
+
+  // Measure header text
+  const probe = document.createElement('span');
+  probe.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;font:inherit;padding:0 6px;';
+  probe.textContent = col.label;
+  th.appendChild(probe);
+  let maxW = probe.offsetWidth + 12; // padding + resize handle
+  th.removeChild(probe);
+
+  // Measure all cells in this column
+  const rows = tbody.querySelectorAll('tr[data-index]');
+  for (const row of rows) {
+    const cells = row.querySelectorAll('td');
+    const cell = cells[ci];
+    if (!cell) continue;
+    probe.textContent = cell.textContent;
+    document.body.appendChild(probe);
+    const w = probe.offsetWidth + 4;
+    document.body.removeChild(probe);
+    if (w > maxW) maxW = w;
+  }
+
+  maxW = Math.max(24, Math.min(maxW, 400));
+  th.style.width = maxW + 'px';
+  col.width = maxW;
+  saveColumnWidths();
+}
+
+function saveColumnWidths() {
+  const widths = {};
+  for (const col of COLUMNS) widths[col.key] = col.width;
+  localStorage.setItem('pp-col-widths', JSON.stringify(widths));
+}
+
+function loadColumnWidths() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('pp-col-widths'));
+    if (!saved) return;
+    for (const col of COLUMNS) {
+      if (saved[col.key] != null) col.width = saved[col.key];
+    }
+  } catch (_) {}
 }
 
 function renderRows() {
@@ -188,13 +274,20 @@ function renderRows() {
 
     if (sched && sched.isCritical) tr.classList.add('pp-critical');
     if (i === PP.ui.selectedRow) tr.classList.add('pp-selected');
+    const taskLinked = isLinkedTask(task);
+    if (taskLinked) tr.classList.add('pp-linked-row');
 
     for (const col of COLUMNS) {
       const td = document.createElement('td');
 
       if (col.type === 'rownum') {
         td.className = 'pp-row-num';
-        td.textContent = i + 1;
+        if (taskLinked) {
+          const tpl = PP.templates.find(t => t.id === task._tpl);
+          td.innerHTML = '<span class="pp-link-badge" title="Linked: ' + esc(tpl ? tpl.name : task._tpl) + '">\u25cf</span>' + (i + 1);
+        } else {
+          td.textContent = i + 1;
+        }
         td.addEventListener('click', () => selectRow(i));
         td.addEventListener('contextmenu', e => showRowContextMenu(e, i));
       } else if (col.computed) {
@@ -203,17 +296,22 @@ function renderRows() {
         td.textContent = getComputedValue(task, col.key, sched);
         if (col.key === 'critical') td.className = 'pp-critical-icon pp-computed';
       } else {
-        td.className = 'pp-editable';
+        const linked = isLinkedTask(task) && isLinkedField(col.key);
+        td.className = linked ? 'pp-editable pp-linked' : 'pp-editable';
         if (col.type === 'number') td.classList.add('pp-number');
-        td.contentEditable = 'true';
+        if (!linked) {
+          td.contentEditable = 'true';
+        }
         td.spellcheck = false;
         td.textContent = task[col.key] || '';
         td.dataset.col = col.key;
         td.dataset.row = i;
 
         td.addEventListener('focus', () => selectRow(i));
-        td.addEventListener('blur', e => onCellBlur(e, i, col.key));
-        td.addEventListener('keydown', e => onCellKeydown(e, i, col.key));
+        if (!linked) {
+          td.addEventListener('blur', e => onCellBlur(e, i, col.key));
+          td.addEventListener('keydown', e => onCellKeydown(e, i, col.key));
+        }
       }
 
       tr.appendChild(td);
@@ -275,6 +373,18 @@ function selectRow(i) {
     if (idx === i) r.classList.add('pp-selected');
     else r.classList.remove('pp-selected');
   }
+  // Scroll Gantt to show the selected task (skip if editing a cell)
+  const ae = document.activeElement;
+  const editing = ae && ae.contentEditable === 'true' && ae.closest('#pp-tbody');
+  if (!editing) {
+    const task = PP.tasks[i];
+    if (task && task.id) scrollGanttToTask(task.id);
+  }
+}
+
+function scrollGridToRow(i) {
+  const row = $(`#pp-tbody tr[data-index="${i}"]`);
+  if (row) row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
 function focusCell(row, colKey) {
@@ -411,6 +521,9 @@ function showRowContextMenu(e, row) {
   if (row < PP.tasks.length - 1) {
     items.push({ label: 'Move Down', action: () => moveRow(row, row + 1) });
   }
+  if (isLinkedTask(PP.tasks[row])) {
+    items.push({ label: 'Unlink from Template', action: () => unlinkTaskById(row) });
+  }
 
   for (const item of items) {
     const btn = document.createElement('button');
@@ -444,15 +557,17 @@ function closeContextMenu() {
 // Undo/redo
 
 function pushUndo() {
-  PP.undoStack.push(JSON.stringify(PP.tasks));
+  PP.undoStack.push(JSON.stringify({ tasks: PP.tasks, templates: PP.templates }));
   if (PP.undoStack.length > 50) PP.undoStack.shift();
   PP.redoStack = [];
 }
 
 function undo() {
   if (!PP.undoStack.length) return;
-  PP.redoStack.push(JSON.stringify(PP.tasks));
-  PP.tasks = JSON.parse(PP.undoStack.pop());
+  PP.redoStack.push(JSON.stringify({ tasks: PP.tasks, templates: PP.templates }));
+  const snap = JSON.parse(PP.undoStack.pop());
+  PP.tasks = snap.tasks || snap;
+  PP.templates = snap.templates || [];
   PP.dirty = true;
   updateTitle();
   renderRows();
@@ -461,8 +576,10 @@ function undo() {
 
 function redo() {
   if (!PP.redoStack.length) return;
-  PP.undoStack.push(JSON.stringify(PP.tasks));
-  PP.tasks = JSON.parse(PP.redoStack.pop());
+  PP.undoStack.push(JSON.stringify({ tasks: PP.tasks, templates: PP.templates }));
+  const snap = JSON.parse(PP.redoStack.pop());
+  PP.tasks = snap.tasks || snap;
+  PP.templates = snap.templates || [];
   PP.dirty = true;
   updateTitle();
   renderRows();

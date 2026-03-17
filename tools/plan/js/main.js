@@ -3,6 +3,7 @@
 
 import './state.js';
 import './grid.js';
+import './templates.js';
 import './eval.js';
 import './gantt.js';
 import './calendar.js';

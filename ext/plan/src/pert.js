@@ -17,10 +17,11 @@ function pertVariance({ o, m, p }) {
 }
 
 // Resolve a task's effective duration (PERT expected if available, else raw duration)
+// Rounded to integer so addWorkingDays doesn't implicitly ceil fractional days
 function effectiveDuration(task) {
   if (task.milestone) return 0;
-  if (task.pert) return pertExpected(task.pert);
-  if (task.optimistic != null) return pertExpected({ o: task.optimistic, m: task.mostLikely, p: task.pessimistic });
+  if (task.pert) return Math.round(pertExpected(task.pert));
+  if (task.optimistic != null) return Math.round(pertExpected({ o: task.optimistic, m: task.mostLikely, p: task.pessimistic }));
   return task.duration || 0;
 }
 

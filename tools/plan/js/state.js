@@ -5,6 +5,7 @@ const $$ = (s, p) => [...(p || document).querySelectorAll(s)];
 
 const PP = {
   tasks: [],
+  templates: [],
   calendar: { weekends: [0, 6], holidays: [], blocked: [] },
   calendarPreset: null,
   projectStart: new Date().toISOString().slice(0, 10),
@@ -26,6 +27,7 @@ const PP = {
     sidebarPanel: null,
     showFloat: true,
     showProgress: true,
+    collapsedGroups: new Set(),
   },
 };
 
