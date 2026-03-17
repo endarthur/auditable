@@ -4491,6 +4491,46 @@ customElements.define('audit-text-input', AuditTextInput);
 // are injected as additional parameters — listed in _injected, not in scope.
 // They are NOT propagated to downstream cells.
 
+// ── ERROR LINE EXTRACTION ──
+// AsyncFunction wraps cell code with a header (function signature + blank line +
+// "use strict"). the exact line offset varies by engine, so we detect it once.
+
+let _lineOffset = 0;
+
+// detect at runtime: create a function that throws on its first line, check
+// which line the stack trace reports, subtract 1 (the throw IS line 1).
+try {
+  const AF = Object.getPrototypeOf(async function(){}).constructor;
+  const fn = new AF('"use strict";\\nthrow new Error();\\n//# sourceURL=auditable://_probe.js');
+  fn().catch(() => {});
+} catch (_) {}
+// the probe runs async — we'll detect in the catch. use a sync approach instead:
+try {
+  const fn = new Function('"use strict";\\nthrow new Error();\\n//# sourceURL=auditable://_probe.js');
+  fn();
+} catch (e) {
+  const m = e.stack?.match(/auditable:\\/\\/_probe\\.js:(\\d+)/);
+  if (m) _lineOffset = parseInt(m[1], 10) - 1;
+}
+// fallback: if detection fails, use 3 (observed default for V8/Chrome/Node)
+if (!_lineOffset) _lineOffset = 3;
+
+function cellErrorLine(err, cellId) {
+  const tag = 'auditable://cell-' + cellId;
+  // runtime errors: stack contains "at auditable://cell-xxx.js:7:15"
+  if (err.stack) {
+    const escaped = tag.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&');
+    const m = err.stack.match(new RegExp(escaped + '[^:]*:(\\\\d+)'));
+    if (m) { const n = parseInt(m[1], 10) - _lineOffset; if (n > 0) return n; }
+  }
+  // syntax errors: "Unexpected token (5:12)" or "... (line 5)"
+  if (err.message) {
+    const m = err.message.match(/\\((\\d+):(\\d+)\\)\\s*$/) || err.message.match(/line (\\d+)/i);
+    if (m) { const n = parseInt(m[1], 10) - _lineOffset; if (n > 0) return n; }
+  }
+  return 0;
+}
+
 // ── BINARY HELPERS ──
 
 function uint8ToBase64(bytes) {
@@ -5717,8 +5757,11 @@ async function execCell(cell) {
     }
 
   } catch (e) {
+    // extract cell-relative line number from stack trace or syntax error
+    const line = cellErrorLine(e, cell.id);
+    const lineInfo = line > 0 ? \` (line \${line})\` : '';
     cell.error = e.message;
-    outputEl.textContent = e.message;
+    outputEl.textContent = e.message + lineInfo;
     outputEl.className = 'cell-output error';
     cell.el.classList.remove('stale', 'fresh');
     cell.el.classList.add('error');
@@ -6696,7 +6739,7 @@ function togglePresent() {
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_BUILD_DATE__ = '2026-03-17';
-const __AUDITABLE_BASE_SIZE__ = 1003395;
+const __AUDITABLE_BASE_SIZE__ = 1007156;
 
 (function() {
   const ver = $('#aboutVersion');
@@ -8836,6 +8879,46 @@ function moveCell() {}
 // are injected as additional parameters — listed in _injected, not in scope.
 // They are NOT propagated to downstream cells.
 
+// ── ERROR LINE EXTRACTION ──
+// AsyncFunction wraps cell code with a header (function signature + blank line +
+// "use strict"). the exact line offset varies by engine, so we detect it once.
+
+let _lineOffset = 0;
+
+// detect at runtime: create a function that throws on its first line, check
+// which line the stack trace reports, subtract 1 (the throw IS line 1).
+try {
+  const AF = Object.getPrototypeOf(async function(){}).constructor;
+  const fn = new AF('"use strict";\\\\nthrow new Error();\\\\n//# sourceURL=auditable://_probe.js');
+  fn().catch(() => {});
+} catch (_) {}
+// the probe runs async — we'll detect in the catch. use a sync approach instead:
+try {
+  const fn = new Function('"use strict";\\\\nthrow new Error();\\\\n//# sourceURL=auditable://_probe.js');
+  fn();
+} catch (e) {
+  const m = e.stack?.match(/auditable:\\\\/\\\\/_probe\\\\.js:(\\\\d+)/);
+  if (m) _lineOffset = parseInt(m[1], 10) - 1;
+}
+// fallback: if detection fails, use 3 (observed default for V8/Chrome/Node)
+if (!_lineOffset) _lineOffset = 3;
+
+function cellErrorLine(err, cellId) {
+  const tag = 'auditable://cell-' + cellId;
+  // runtime errors: stack contains "at auditable://cell-xxx.js:7:15"
+  if (err.stack) {
+    const escaped = tag.replace(/[.*+?^\\\${}()|[\\\\]\\\\\\\\]/g, '\\\\\\\\$&');
+    const m = err.stack.match(new RegExp(escaped + '[^:]*:(\\\\\\\\d+)'));
+    if (m) { const n = parseInt(m[1], 10) - _lineOffset; if (n > 0) return n; }
+  }
+  // syntax errors: "Unexpected token (5:12)" or "... (line 5)"
+  if (err.message) {
+    const m = err.message.match(/\\\\((\\\\d+):(\\\\d+)\\\\)\\\\s*$/) || err.message.match(/line (\\\\d+)/i);
+    if (m) { const n = parseInt(m[1], 10) - _lineOffset; if (n > 0) return n; }
+  }
+  return 0;
+}
+
 // ── BINARY HELPERS ──
 
 function uint8ToBase64(bytes) {
@@ -10062,8 +10145,11 @@ async function execCell(cell) {
     }
 
   } catch (e) {
+    // extract cell-relative line number from stack trace or syntax error
+    const line = cellErrorLine(e, cell.id);
+    const lineInfo = line > 0 ? \\\` (line \\\${line})\\\` : '';
     cell.error = e.message;
-    outputEl.textContent = e.message;
+    outputEl.textContent = e.message + lineInfo;
     outputEl.className = 'cell-output error';
     cell.el.classList.remove('stale', 'fresh');
     cell.el.classList.add('error');
