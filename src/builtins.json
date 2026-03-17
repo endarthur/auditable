@@ -159,6 +159,14 @@
     "sig": "invalidation",
     "desc": "promise \u2014 resolves when cell re-runs"
   },
+  "worker": {
+    "sig": "worker(fn)",
+    "desc": "create Web Worker from pure function \u2014 returns async callable, auto-terminates on re-run"
+  },
+  "workerPool": {
+    "sig": "workerPool(fn, n?)",
+    "desc": "pool of n workers (default: hardwareConcurrency) \u2014 .map(arr) for parallel batch"
+  },
   "atra": {
     "sig": "atra`...` or atra({imports})`...`",
     "desc": "compile Fortran/Pascal to Wasm (load ext/atra/index.js)"

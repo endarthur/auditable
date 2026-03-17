@@ -1,0 +1,101 @@
+/// auditable
+/// title: web workers
+
+/// md
+# web workers
+
+offload CPU-heavy computation to background threads with `worker(fn)` and `workerPool(fn, n)`.
+
+- **`worker(fn)`** — create a single Web Worker from a pure function. returns an async callable. auto-terminates on cell re-run.
+- **`workerPool(fn, n?)`** — pool of `n` workers (defaults to CPU core count). `.map(arr)` dispatches work in parallel.
+
+functions must be **pure** — no closures, no DOM access. for best results: send chunky work per task, and return `TypedArray` (transferred zero-copy) instead of plain arrays (cloned).
+
+/// md
+## single worker
+
+/// code
+const add = worker(function(a, b) { return a + b; });
+const result = await add(17, 25);
+ui.display(`worker result: ${result}`);
+
+/// md
+## worker pool — parallel Mandelbrot
+
+each worker computes a chunk of rows, returning a flat `Int32Array` of escape counts. typed arrays are **transferred** (zero-copy move), not cloned — this is the key to fast worker communication.
+
+/// code
+const maxIter = ui.slider("iterations", 200, {min: 20, max: 500, step: 10});
+
+/// code
+const size = Math.min(800, window.innerWidth - 80);
+const cores = navigator.hardwareConcurrency || 4;
+
+// pure function: compute escape counts for rows [yStart, yEnd)
+// returns flat Int32Array — transferred zero-copy back to main thread
+function escapeChunk(yStart, yEnd, width, maxIter) {
+  const rows = yEnd - yStart;
+  const out = new Int32Array(rows * width);
+  const scale = 3 / width, ox = -2.2, oy = -1.5;
+  for (let r = 0; r < rows; r++) {
+    const y0 = oy + (yStart + r) * scale;
+    const base = r * width;
+    for (let px = 0; px < width; px++) {
+      const x0 = ox + px * scale;
+      let x = 0, yi = 0, i = 0;
+      while (x * x + yi * yi <= 4 && i < maxIter) {
+        const t = x * x - yi * yi + x0;
+        yi = 2 * x * yi + y0;
+        x = t;
+        i++;
+      }
+      out[base + px] = i;
+    }
+  }
+  return out;
+}
+
+// sequential baseline
+const t0 = performance.now();
+escapeChunk(0, size, size, maxIter);
+const seqMs = performance.now() - t0;
+
+// parallel — one chunk per core
+const pool = workerPool(escapeChunk, cores);
+const chunkSize = Math.ceil(size / cores);
+const chunks = [];
+for (let y = 0; y < size; y += chunkSize)
+  chunks.push([y, Math.min(y + chunkSize, size)]);
+
+const t1 = performance.now();
+const chunkResults = await Promise.all(
+  chunks.map(([yStart, yEnd]) => pool(yStart, yEnd, size, maxIter))
+);
+const parMs = performance.now() - t1;
+
+// render
+const c = ui.canvas(size, size);
+const ctx = c.getContext("2d");
+const img = ctx.createImageData(size, size);
+let offset = 0;
+for (let ci = 0; ci < chunkResults.length; ci++) {
+  const chunk = chunkResults[ci];
+  for (let j = 0; j < chunk.length; j++) {
+    const idx = (offset + j) * 4;
+    const iter = chunk[j];
+    if (iter === maxIter) {
+      img.data[idx] = img.data[idx+1] = img.data[idx+2] = 0;
+    } else {
+      const t = iter / maxIter;
+      img.data[idx]   = Math.round(9 * (1-t) * t*t*t * 255);
+      img.data[idx+1] = Math.round(15 * (1-t)*(1-t) * t*t * 255);
+      img.data[idx+2] = Math.round(8.5 * (1-t)*(1-t)*(1-t) * t * 255);
+    }
+    img.data[idx+3] = 255;
+  }
+  offset += chunk.length;
+}
+ctx.putImageData(img, 0, 0);
+
+const speedup = (seqMs / parMs).toFixed(1);
+ui.display(`${size}\u00d7${size} \u00b7 ${maxIter} iterations \u00b7 sequential: ${seqMs.toFixed(0)}ms \u00b7 parallel (${cores} cores, ${chunks.length} chunks): ${parMs.toFixed(0)}ms \u00b7 ${speedup}\u00d7`);
