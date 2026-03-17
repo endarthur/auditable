@@ -2639,7 +2639,7 @@ function createEditor(container, cellId, initialCode, cellType, onChange) {
   });
 
   // clicks on the wrapper or gutter should focus the editor
-  container.addEventListener('mousedown', (e) => {
+  const focusHandler = (e) => {
     if (e.target === container) {
       e.preventDefault();
       view.focus();
@@ -2648,7 +2648,8 @@ function createEditor(container, cellId, initialCode, cellType, onChange) {
       // schedule focus after CM6's own mousedown runs
       setTimeout(() => { if (!view.hasFocus) view.focus(); }, 0);
     }
-  });
+  };
+  container.addEventListener('mousedown', focusHandler);
 
   const editor = {
     view,
@@ -2660,6 +2661,7 @@ function createEditor(container, cellId, initialCode, cellType, onChange) {
     },
     focus() { view.focus(); },
     destroy() {
+      container.removeEventListener('mousedown', focusHandler);
       view.destroy();
       _editors.delete(cellId);
     },
@@ -2768,6 +2770,7 @@ function registerProvider(name, fn) {
 // ── Data ──
 
 function csv(text, opts = {}) {
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
   const sep = opts.separator || ',';
   const typed = !!opts.typed;
   const lines = [];
@@ -4898,7 +4901,7 @@ async function execCell(cell) {
       btn.textContent = file.name;
       const cb = cell._callbacks[key];
       if (cb?.onChange) cb.onChange(result);
-      else runDAG([cell.id], true);
+      else runDAG([cell.id]);
     };
 
     widgetEl.appendChild(wrap);
@@ -4935,7 +4938,7 @@ async function execCell(cell) {
       zone.appendChild(input);
       const cb = cell._callbacks[key];
       if (cb?.onChange) cb.onChange(result);
-      else runDAG([cell.id], true);
+      else runDAG([cell.id]);
     };
 
     zone.onclick = () => input.click();
@@ -5279,8 +5282,8 @@ async function runDAG(dirtyIds, force = false) {
       continue;
     }
 
-    // skip manual cells unless force or explicitly triggered
-    if (!force && isManual(cell.code) && !dirtyIds.includes(cell.id)) {
+    // skip manual cells unless explicitly triggered (in dirtyIds)
+    if (isManual(cell.code) && !dirtyIds.includes(cell.id)) {
       if (cell._lastResult) {
         for (const [k, v] of Object.entries(cell._lastResult)) {
           if (v !== undefined) S.scope[k] = v;
@@ -5594,7 +5597,9 @@ function createCellEl(type, id, initialCode) {
   return div;
 }
 
-// undoable text replacement — uses execCommand so the browser records it in the undo stack
+// undoable text replacement — uses execCommand so the browser records it in the undo stack.
+// execCommand is deprecated but still works in all current browsers. direct ta.value
+// manipulation would break Ctrl+Z undo. if browsers remove it, switch to manual undo stack.
 function replaceRange(ta, from, to, text) {
   ta.focus();
   ta.selectionStart = from;
@@ -5727,8 +5732,10 @@ function toggleMdComment(ta) {
 
 function autoResize(e) {
   const ta = e.target || e;
-  ta.style.height = 'auto';
-  ta.style.height = ta.scrollHeight + 'px';
+  requestAnimationFrame(() => {
+    ta.style.height = 'auto';
+    ta.style.height = ta.scrollHeight + 'px';
+  });
 }
 
 // -- cell-ops.js --
@@ -5894,10 +5901,10 @@ function moveCell(id, dir) {
   const [cell] = S.cells.splice(idx, 1);
   S.cells.splice(newIdx, 0, cell);
 
-  // re-order DOM
+  // re-order DOM — use insertBefore to move only the target cell,
+  // preserving CM6 EditorView instances and their state
   const nb = $('#notebook');
-  nb.innerHTML = '';
-  for (const c of S.cells) nb.appendChild(c.el);
+  nb.insertBefore(cell.el, S.cells[newIdx + 1]?.el || null);
 
   // re-order CSS <style> elements in <head> to match cell order
   for (const c of S.cells) {
@@ -6185,8 +6192,8 @@ function togglePresent() {
 
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
-const __AUDITABLE_BUILD_DATE__ = '2026-03-16';
-const __AUDITABLE_BASE_SIZE__ = 996859;
+const __AUDITABLE_BUILD_DATE__ = '2026-03-17';
+const __AUDITABLE_BASE_SIZE__ = 998707;
 
 (function() {
   const ver = $('#aboutVersion');
@@ -6861,6 +6868,7 @@ function registerProvider(name, fn) {
 // ── Data ──
 
 function csv(text, opts = {}) {
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
   const sep = opts.separator || ',';
   const typed = !!opts.typed;
   const lines = [];
@@ -9189,7 +9197,7 @@ async function execCell(cell) {
       btn.textContent = file.name;
       const cb = cell._callbacks[key];
       if (cb?.onChange) cb.onChange(result);
-      else runDAG([cell.id], true);
+      else runDAG([cell.id]);
     };
 
     widgetEl.appendChild(wrap);
@@ -9226,7 +9234,7 @@ async function execCell(cell) {
       zone.appendChild(input);
       const cb = cell._callbacks[key];
       if (cb?.onChange) cb.onChange(result);
-      else runDAG([cell.id], true);
+      else runDAG([cell.id]);
     };
 
     zone.onclick = () => input.click();
@@ -9570,8 +9578,8 @@ async function runDAG(dirtyIds, force = false) {
       continue;
     }
 
-    // skip manual cells unless force or explicitly triggered
-    if (!force && isManual(cell.code) && !dirtyIds.includes(cell.id)) {
+    // skip manual cells unless explicitly triggered (in dirtyIds)
+    if (isManual(cell.code) && !dirtyIds.includes(cell.id)) {
       if (cell._lastResult) {
         for (const [k, v] of Object.entries(cell._lastResult)) {
           if (v !== undefined) S.scope[k] = v;
@@ -10198,7 +10206,7 @@ ${b64Lines}</pre>
 }
 
 function esc(s) {
-  return s.replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function exportAsTxt() {
@@ -11444,13 +11452,13 @@ function createSplitEditor(container, initialCode) {
     keymap.of([{ key: 'Tab', run: acceptCompletion }, indentWithTab]),
     keymap.of([{ key: 'Mod-/', run: toggleComment }]),
     keymap.of([{ key: 'Mod-z', run: cm6Undo }, { key: 'Mod-Shift-z', run: cm6Redo }]),
-    // Ctrl+Enter: immediate sync + run
+    // Ctrl+Enter: sync + force-run cell under cursor
     keymap.of([{
       key: 'Ctrl-Enter',
-      run: () => { immediateSync(); return true; },
+      run: (view) => { immediateSyncAndRun(view); return true; },
     }, {
       key: 'Shift-Enter',
-      run: () => { immediateSync(); return true; },
+      run: (view) => { immediateSyncAndRun(view); return true; },
     }]),
     // autocompletion — uses splitCompletionSource which extracts the code cell
     // around the cursor before delegating to getCompletions, so cursorContext
@@ -11467,6 +11475,7 @@ function createSplitEditor(container, initialCode) {
       if (update.docChanged) {
         clearTimeout(_syncTimer);
         _syncTimer = setTimeout(() => {
+          if (!S.splitEditor) return;
           syncFromTxt(update.view.state.doc.toString());
         }, 800);
       }
@@ -11481,6 +11490,36 @@ function immediateSync() {
   clearTimeout(_syncTimer);
   if (!S.splitEditor) return;
   syncFromTxt(S.splitEditor.state.doc.toString());
+}
+
+// Sync text and force-run the cell under the cursor
+function immediateSyncAndRun(view) {
+  immediateSync();
+  // Find which cell the cursor is in by scanning /// directives up to cursor line
+  const cursorPos = view.state.selection.main.head;
+  const cursorLine = view.state.doc.lineAt(cursorPos).number; // 1-based
+  const text = view.state.doc.toString();
+  const lines = text.split('\n');
+
+  let cellIdx = -1;
+  for (let i = 0; i < lines.length && i < cursorLine; i++) {
+    const l = lines[i].trimEnd();
+    if (/^\/\/\/\s+(code|md|css|html)/.test(l)) cellIdx++;
+  }
+
+  if (cellIdx >= 0 && cellIdx < S.cells.length) {
+    const cell = S.cells[cellIdx];
+    // verify parsed cell type matches — after structural sync, indices may shift
+    const expectedType = lines.slice(0, cursorLine).reverse()
+      .find(l => /^\/\/\/\s+(code|md|css|html)/.test(l.trimEnd()));
+    const parsedType = expectedType?.trimEnd().match(/^\/\/\/\s+(code|md|css|html)/)?.[1];
+    if (parsedType && parsedType !== cell.type) return;
+    if (cell.type === 'code') {
+      runDAG([cell.id], true);
+    } else if (cell.type === 'html') {
+      renderHtmlCell(cell);
+    }
+  }
 }
 
 // create lightweight output element for a cell type
@@ -11678,10 +11717,11 @@ function exitSplitView() {
   // restore original cell els
   restoreCellEls();
 
-  // destroy split editor
+  // destroy split editor — null ref first so debounced sync callbacks bail out
   if (S.splitEditor) {
-    S.splitEditor.destroy();
+    const ed = S.splitEditor;
     S.splitEditor = null;
+    ed.destroy();
   }
 
   // remove split container

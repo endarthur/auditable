@@ -546,13 +546,13 @@ function createSplitEditor(container, initialCode) {
     keymap.of([{ key: 'Tab', run: acceptCompletion }, indentWithTab]),
     keymap.of([{ key: 'Mod-/', run: toggleComment }]),
     keymap.of([{ key: 'Mod-z', run: cm6Undo }, { key: 'Mod-Shift-z', run: cm6Redo }]),
-    // Ctrl+Enter: immediate sync + run
+    // Ctrl+Enter: sync + force-run cell under cursor
     keymap.of([{
       key: 'Ctrl-Enter',
-      run: () => { immediateSync(); return true; },
+      run: (view) => { immediateSyncAndRun(view); return true; },
     }, {
       key: 'Shift-Enter',
-      run: () => { immediateSync(); return true; },
+      run: (view) => { immediateSyncAndRun(view); return true; },
     }]),
     // autocompletion — uses splitCompletionSource which extracts the code cell
     // around the cursor before delegating to getCompletions, so cursorContext
@@ -569,6 +569,7 @@ function createSplitEditor(container, initialCode) {
       if (update.docChanged) {
         clearTimeout(_syncTimer);
         _syncTimer = setTimeout(() => {
+          if (!S.splitEditor) return;
           syncFromTxt(update.view.state.doc.toString());
         }, 800);
       }
@@ -583,6 +584,36 @@ function immediateSync() {
   clearTimeout(_syncTimer);
   if (!S.splitEditor) return;
   syncFromTxt(S.splitEditor.state.doc.toString());
+}
+
+// Sync text and force-run the cell under the cursor
+function immediateSyncAndRun(view) {
+  immediateSync();
+  // Find which cell the cursor is in by scanning /// directives up to cursor line
+  const cursorPos = view.state.selection.main.head;
+  const cursorLine = view.state.doc.lineAt(cursorPos).number; // 1-based
+  const text = view.state.doc.toString();
+  const lines = text.split('\n');
+
+  let cellIdx = -1;
+  for (let i = 0; i < lines.length && i < cursorLine; i++) {
+    const l = lines[i].trimEnd();
+    if (/^\/\/\/\s+(code|md|css|html)/.test(l)) cellIdx++;
+  }
+
+  if (cellIdx >= 0 && cellIdx < S.cells.length) {
+    const cell = S.cells[cellIdx];
+    // verify parsed cell type matches — after structural sync, indices may shift
+    const expectedType = lines.slice(0, cursorLine).reverse()
+      .find(l => /^\/\/\/\s+(code|md|css|html)/.test(l.trimEnd()));
+    const parsedType = expectedType?.trimEnd().match(/^\/\/\/\s+(code|md|css|html)/)?.[1];
+    if (parsedType && parsedType !== cell.type) return;
+    if (cell.type === 'code') {
+      runDAG([cell.id], true);
+    } else if (cell.type === 'html') {
+      renderHtmlCell(cell);
+    }
+  }
 }
 
 // create lightweight output element for a cell type
@@ -780,10 +811,11 @@ function exitSplitView() {
   // restore original cell els
   restoreCellEls();
 
-  // destroy split editor
+  // destroy split editor — null ref first so debounced sync callbacks bail out
   if (S.splitEditor) {
-    S.splitEditor.destroy();
+    const ed = S.splitEditor;
     S.splitEditor = null;
+    ed.destroy();
   }
 
   // remove split container

@@ -2155,6 +2155,7 @@ body.presenting .find-bar { display: none !important; }
 <h2>global</h2>
 <div class="help-row"><span class="help-key">F1</span><span class="help-desc">toggle this help</span></div>
 <div class="help-row"><span class="help-key">Ctrl+S</span><span class="help-desc">save notebook</span></div>
+<div class="help-row"><span class="help-key">Ctrl+Shift+Enter</span><span class="help-desc">toggle autorun</span></div>
 <div class="help-row"><span class="help-key">Ctrl+F</span><span class="help-desc">find in notebook</span></div>
 <div class="help-row"><span class="help-key">Ctrl+H</span><span class="help-desc">find and replace</span></div>
 
@@ -3092,7 +3093,7 @@ function createEditor(container, cellId, initialCode, cellType, onChange) {
   });
 
   // clicks on the wrapper or gutter should focus the editor
-  container.addEventListener('mousedown', (e) => {
+  const focusHandler = (e) => {
     if (e.target === container) {
       e.preventDefault();
       view.focus();
@@ -3101,7 +3102,8 @@ function createEditor(container, cellId, initialCode, cellType, onChange) {
       // schedule focus after CM6's own mousedown runs
       setTimeout(() => { if (!view.hasFocus) view.focus(); }, 0);
     }
-  });
+  };
+  container.addEventListener('mousedown', focusHandler);
 
   const editor = {
     view,
@@ -3113,6 +3115,7 @@ function createEditor(container, cellId, initialCode, cellType, onChange) {
     },
     focus() { view.focus(); },
     destroy() {
+      container.removeEventListener('mousedown', focusHandler);
       view.destroy();
       _editors.delete(cellId);
     },
@@ -3221,6 +3224,7 @@ function registerProvider(name, fn) {
 // ── Data ──
 
 function csv(text, opts = {}) {
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
   const sep = opts.separator || ',';
   const typed = !!opts.typed;
   const lines = [];
@@ -3790,13 +3794,18 @@ const palette10 = [
 
 // ── Export ──
 
+function hsl(h, s, l, a = 1) {
+  const [r, g, b] = hslToRgb(h, s, l);
+  return _makeColor(r, g, b, a);
+}
+
 const std = {
   csv, fetchJSON,
   sum, mean, median, extent, bin, linspace,
   unique, zip, cross,
   file, download, el, copy, fmt,
   include,
-  color, colorScale,
+  color, colorScale, hsl,
   viridis, magma, inferno, plasma, turbo,
   palette10,
 };
@@ -3978,6 +3987,85 @@ function stripCommentsAndStrings(code) {
   return out;
 }
 
+function findMatchingBracket(str, start) {
+  let depth = 1;
+  for (let i = start + 1; i < str.length; i++) {
+    if (str[i] === '{' || str[i] === '[') depth++;
+    else if (str[i] === '}' || str[i] === ']') {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+function extractDestructuredNames(pattern, names) {
+  let i = 0;
+  while (i < pattern.length) {
+    if (/[\\s,]/.test(pattern[i])) { i++; continue; }
+
+    // rest element: ...name
+    if (pattern[i] === '.' && pattern[i + 1] === '.' && pattern[i + 2] === '.') {
+      i += 3;
+      const m = pattern.slice(i).match(/^(\\w+)/);
+      if (m) { names.add(m[1]); i += m[1].length; }
+      continue;
+    }
+
+    // nested destructuring at top level: { ... } or [ ... ]
+    if (pattern[i] === '{' || pattern[i] === '[') {
+      const close = findMatchingBracket(pattern, i);
+      if (close > 0) {
+        extractDestructuredNames(pattern.slice(i + 1, close), names);
+        i = close + 1;
+      } else { i++; }
+      continue;
+    }
+
+    // identifier
+    const m = pattern.slice(i).match(/^(\\w+)/);
+    if (m) {
+      i += m[1].length;
+      // skip whitespace
+      while (i < pattern.length && /\\s/.test(pattern[i])) i++;
+      if (pattern[i] === ':') {
+        // rename or nested pattern
+        i++;
+        while (i < pattern.length && /\\s/.test(pattern[i])) i++;
+        if (pattern[i] === '{' || pattern[i] === '[') {
+          // nested destructuring: a: { b, c }
+          const close = findMatchingBracket(pattern, i);
+          if (close > 0) {
+            extractDestructuredNames(pattern.slice(i + 1, close), names);
+            i = close + 1;
+          }
+        } else {
+          // rename: a: x — x is the binding
+          const rm = pattern.slice(i).match(/^(\\w+)/);
+          if (rm) { names.add(rm[1]); i += rm[1].length; }
+        }
+      } else {
+        // plain identifier — this is the binding
+        names.add(m[1]);
+      }
+      // skip = default value expression
+      while (i < pattern.length && /\\s/.test(pattern[i])) i++;
+      if (pattern[i] === '=') {
+        i++;
+        let d = 0;
+        while (i < pattern.length) {
+          if (pattern[i] === '{' || pattern[i] === '[' || pattern[i] === '(') d++;
+          else if (pattern[i] === '}' || pattern[i] === ']' || pattern[i] === ')') d--;
+          else if (pattern[i] === ',' && d === 0) break;
+          i++;
+        }
+      }
+      continue;
+    }
+    i++;
+  }
+}
+
 function parseNames(code) {
   // extract ONLY top-level variable definitions (brace depth 0)
   const defines = new Set();
@@ -4028,18 +4116,12 @@ function parseNames(code) {
       // destructuring: const { a, b } = ... or const [ a, b ] = ...
       const destruct = rest.match(/^(?:const|let|var)\\s*[\\{\\[]/);
       if (destruct) {
-        // find the closing } or ] then extract identifiers
-        const opener = rest[destruct[0].length - 1];
-        const closer = opener === '{' ? '}' : ']';
-        const closeIdx = rest.indexOf(closer, destruct[0].length);
+        const openIdx = destruct[0].length - 1;
+        const closeIdx = findMatchingBracket(rest, openIdx);
         if (closeIdx > 0) {
-          const inner = rest.slice(destruct[0].length, closeIdx);
-          // split on commas, take last word of each part (handles renaming)
-          inner.split(',').forEach(part => {
-            const parts = part.trim().split(/\\s*:\\s*/);
-            const name = (parts.length > 1 ? parts[1] : parts[0]).trim().match(/^\\w+/);
-            if (name) defines.add(name[0]);
-          });
+          const inner = rest.slice(openIdx + 1, closeIdx);
+          extractDestructuredNames(inner, defines);
+          // skip past the closing bracket (and let main loop handle the rest)
           i += closeIdx + 1;
           continue;
         }
@@ -4680,9 +4762,9 @@ function wireWidgets(cell, viewEl) {
       if (w.tagName === 'AUDIT-SLIDER' || w.tagName === 'AUDIT-TEXT-INPUT') {
         clearTimeout(cell._inputTimer);
         const delay = w.tagName === 'AUDIT-TEXT-INPUT' ? 300 : 80;
-        cell._inputTimer = setTimeout(() => runDAG([cell.id], true), delay);
+        cell._inputTimer = setTimeout(() => runDAG([cell.id]), delay);
       } else {
-        runDAG([cell.id], true);
+        runDAG([cell.id]);
       }
     };
     w.addEventListener('input', handler);
@@ -4722,6 +4804,12 @@ async function execCell(cell) {
     for (const arg of args) {
       if (arg instanceof Element) {
         outputEl.appendChild(arg);
+      } else if (arg instanceof TaggedContent) {
+        const el = document.createElement('div');
+        if (arg.type === 'md') el.innerHTML = renderMd(arg.content);
+        else if (arg.type === 'html') el.innerHTML = arg.content;
+        else if (arg.type === 'css') { const s = document.createElement('style'); s.textContent = arg.content; el.appendChild(s); }
+        outputEl.appendChild(el);
       } else if (typeof arg === 'object' && arg !== null) {
         const pre = document.createElement('span');
         try { pre.textContent = JSON.stringify(arg, null, 2); }
@@ -4733,6 +4821,7 @@ async function execCell(cell) {
       }
     }
   };
+  const displayHtml = (str) => display(new TaggedContent('html', str));
 
   // canvas helper — reuses existing canvas if dimensions match
   const canvas = (w = 400, h = 300) => {
@@ -4749,47 +4838,115 @@ async function execCell(cell) {
   };
 
   // table helper
-  const table = (data, columns) => {
+  const table = (data, columnsOrOpts) => {
     if (!data || !data.length) return;
-    const cols = columns || Object.keys(data[0]);
+    let cols, sortable = false, filter = false;
+    if (Array.isArray(columnsOrOpts)) {
+      cols = columnsOrOpts;
+    } else if (columnsOrOpts && typeof columnsOrOpts === 'object') {
+      cols = columnsOrOpts.columns;
+      sortable = !!columnsOrOpts.sortable;
+      filter = !!columnsOrOpts.filter;
+    }
+    cols = cols || Object.keys(data[0]);
 
     // detect numeric columns by scanning first 10 rows
     const isNumCol = {};
     for (const c of cols) {
       let allNum = true;
-      const scanRows = data.slice(0, 10);
-      for (const row of scanRows) {
+      for (const row of data.slice(0, 10)) {
         const v = row[c];
         if (v !== null && v !== undefined && typeof v !== 'number') { allNum = false; break; }
       }
       isNumCol[c] = allNum;
     }
 
+    const wrap = document.createElement('div');
+    let rows = [...data];
+    let sortCol = null, sortAsc = true, filterStr = '';
+
+    // filter input
+    let filterInput;
+    if (filter) {
+      filterInput = document.createElement('input');
+      filterInput.type = 'text';
+      filterInput.placeholder = 'Filter\\u2026';
+      filterInput.style.cssText = 'width:200px;margin:2px 0 4px;padding:2px 6px;background:var(--bg);color:var(--fg);border:1px solid var(--border);font:11px var(--mono);border-radius:2px;';
+      wrap.appendChild(filterInput);
+    }
+
     const t = document.createElement('table');
     const thead = document.createElement('thead');
-    const hr = document.createElement('tr');
-    for (const c of cols) {
-      const th = document.createElement('th');
-      th.textContent = c;
-      th.style.textAlign = isNumCol[c] ? 'right' : 'left';
-      hr.appendChild(th);
-    }
-    thead.appendChild(hr);
-    t.appendChild(thead);
     const tbody = document.createElement('tbody');
-    for (const row of data) {
-      const tr = document.createElement('tr');
+
+    function renderHead() {
+      thead.innerHTML = '';
+      const hr = document.createElement('tr');
       for (const c of cols) {
-        const td = document.createElement('td');
-        const v = row[c];
-        td.textContent = typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(4)) : String(v ?? '');
-        td.style.textAlign = isNumCol[c] ? 'right' : 'left';
-        tr.appendChild(td);
+        const th = document.createElement('th');
+        th.style.textAlign = isNumCol[c] ? 'right' : 'left';
+        let label = c;
+        if (sortable) {
+          th.style.cursor = 'pointer';
+          th.style.userSelect = 'none';
+          if (sortCol === c) label += sortAsc ? ' \\u25b4' : ' \\u25be';
+        }
+        th.textContent = label;
+        if (sortable) th.addEventListener('click', () => {
+          if (sortCol === c) sortAsc = !sortAsc;
+          else { sortCol = c; sortAsc = true; }
+          renderHead();
+          renderBody();
+        });
+        hr.appendChild(th);
       }
-      tbody.appendChild(tr);
+      thead.appendChild(hr);
     }
+
+    function renderBody() {
+      tbody.innerHTML = '';
+      let view = rows;
+      if (filterStr) {
+        const q = filterStr.toLowerCase();
+        view = view.filter(row => cols.some(c => String(row[c] ?? '').toLowerCase().includes(q)));
+      }
+      if (sortCol) {
+        view = [...view].sort((a, b) => {
+          const va = a[sortCol], vb = b[sortCol];
+          if (va == null && vb == null) return 0;
+          if (va == null) return 1;
+          if (vb == null) return -1;
+          const cmp = isNumCol[sortCol] ? va - vb : String(va).localeCompare(String(vb));
+          return sortAsc ? cmp : -cmp;
+        });
+      }
+      for (const row of view) {
+        const tr = document.createElement('tr');
+        for (const c of cols) {
+          const td = document.createElement('td');
+          const v = row[c];
+          td.textContent = typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(4)) : String(v ?? '');
+          td.style.textAlign = isNumCol[c] ? 'right' : 'left';
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+    }
+
+    renderHead();
+    renderBody();
+    t.appendChild(thead);
     t.appendChild(tbody);
-    outputEl.appendChild(t);
+    wrap.appendChild(t);
+
+    if (filter) {
+      filterInput.addEventListener('input', () => {
+        filterStr = filterInput.value;
+        renderBody();
+      });
+    }
+
+    outputEl.appendChild(wrap);
   };
 
   // input widget helpers — persist state and DOM across re-runs
@@ -4856,8 +5013,8 @@ async function execCell(cell) {
       else if (!cb.onChange) {
         clearTimeout(cell._inputTimer);
         const delay = type === 'text' ? 300 : type === 'slider' ? 80 : 0;
-        if (delay) cell._inputTimer = setTimeout(() => runDAG([cell.id], true), delay);
-        else runDAG([cell.id], true);
+        if (delay) cell._inputTimer = setTimeout(() => runDAG([cell.id]), delay);
+        else runDAG([cell.id]);
       }
     });
     el.addEventListener('change', () => {
@@ -4918,6 +5075,24 @@ async function execCell(cell) {
     if (url === '@calque') {
       if (!window._importCache[url] && !window._installedModules[url]) {
         const mod = await import('./ext/calque/index.js');
+        window._importCache[url] = mod;
+        return mod;
+      }
+    }
+
+    // @spinifex — web GIS (dev-mode fallback)
+    if (url === '@spinifex') {
+      if (!window._importCache[url] && !window._installedModules[url]) {
+        const mod = await import('./ext/spinifex/index.js');
+        window._importCache[url] = mod;
+        return mod;
+      }
+    }
+
+    // @plan — project management (dev-mode fallback)
+    if (url === '@plan') {
+      if (!window._importCache[url] && !window._installedModules[url]) {
+        const mod = await import('./ext/plan/index.js');
         window._importCache[url] = mod;
         return mod;
       }
@@ -5002,6 +5177,36 @@ async function execCell(cell) {
     // @calque — spreadsheet language
     if (url === '@calque') {
       const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/calque/index.js';
+      const resp = await fetch(realUrl);
+      if (!resp.ok) throw new Error(\`Failed to fetch \${realUrl}: \${resp.status}\`);
+      const source = await resp.text();
+      window._installedModules[url] = { source, cellId: cell.id };
+      syncModules();
+      const blob = new Blob([source], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      const mod = await import(blobUrl);
+      window._importCache[url] = mod;
+      display(\`installed \${url} (\${(source.length / 1024).toFixed(1)} KB)\`);
+      return mod;
+    }
+    // @spinifex — web GIS
+    if (url === '@spinifex') {
+      const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/spinifex/index.js';
+      const resp = await fetch(realUrl);
+      if (!resp.ok) throw new Error(\`Failed to fetch \${realUrl}: \${resp.status}\`);
+      const source = await resp.text();
+      window._installedModules[url] = { source, cellId: cell.id };
+      syncModules();
+      const blob = new Blob([source], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      const mod = await import(blobUrl);
+      window._importCache[url] = mod;
+      display(\`installed \${url} (\${(source.length / 1024).toFixed(1)} KB)\`);
+      return mod;
+    }
+    // @plan — project management
+    if (url === '@plan') {
+      const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/plan/index.js';
       const resp = await fetch(realUrl);
       if (!resp.ok) throw new Error(\`Failed to fetch \${realUrl}: \${resp.status}\`);
       const source = await resp.text();
@@ -5150,7 +5355,7 @@ async function execCell(cell) {
       btn.textContent = file.name;
       const cb = cell._callbacks[key];
       if (cb?.onChange) cb.onChange(result);
-      else runDAG([cell.id], true);
+      else runDAG([cell.id]);
     };
 
     widgetEl.appendChild(wrap);
@@ -5187,7 +5392,7 @@ async function execCell(cell) {
       zone.appendChild(input);
       const cb = cell._callbacks[key];
       if (cb?.onChange) cb.onChange(result);
-      else runDAG([cell.id], true);
+      else runDAG([cell.id]);
     };
 
     zone.onclick = () => input.click();
@@ -5208,7 +5413,7 @@ async function execCell(cell) {
   };
 
   // ui object — constructed per-cell (closes over cell context)
-  const ui = { display, print: display, canvas, table, slider, dropdown, checkbox, textInput, download, upload, drop };
+  const ui = { display, print: display, html: displayHtml, canvas, table, slider, dropdown, checkbox, textInput, download, upload, drop };
 
   // tagged template builtins
   const md = taggedTemplate('md');
@@ -5471,7 +5676,10 @@ async function execCell(cell) {
   }
 }
 
+let _dagGen = 0;
+
 async function runDAG(dirtyIds, force = false) {
+  const gen = ++_dagGen;
   buildDAG();
   const isAutorun = S.autorun && !force;
 
@@ -5528,8 +5736,8 @@ async function runDAG(dirtyIds, force = false) {
       continue;
     }
 
-    // skip manual cells unless force or explicitly triggered
-    if (!force && isManual(cell.code) && !dirtyIds.includes(cell.id)) {
+    // skip manual cells unless explicitly triggered (in dirtyIds)
+    if (isManual(cell.code) && !dirtyIds.includes(cell.id)) {
       if (cell._lastResult) {
         for (const [k, v] of Object.entries(cell._lastResult)) {
           if (v !== undefined) S.scope[k] = v;
@@ -5588,6 +5796,9 @@ async function runDAG(dirtyIds, force = false) {
     if (window._beforeExec) window._beforeExec(cell);
     await execCell(cell);
 
+    // bail if a newer runDAG started while we were awaiting
+    if (_dagGen !== gen) return;
+
     // if the cell errored, poison its defines
     if (cell.error) {
       if (cell.defines) for (const name of cell.defines) poisoned.add(name);
@@ -5644,8 +5855,11 @@ function renderMd(src) {
   // inline code
   html = html.replace(/\`(.+?)\`/g, '<code>$1</code>');
 
-  // links
-  html = html.replace(/\\[(.+?)\\]\\((.+?)\\)/g, '<a href="$2">$1</a>');
+  // links (reject dangerous URI schemes)
+  html = html.replace(/\\[(.+?)\\]\\((.+?)\\)/g, (m, text, url) => {
+    if (/^\\s*(javascript|data|vbscript)\\s*:/i.test(url)) return text;
+    return \`<a href="\${url}">\${text}</a>\`;
+  });
 
   // tables — detect pipe-delimited blocks before paragraph wrapping
   html = html.replace(
@@ -5837,7 +6051,9 @@ function createCellEl(type, id, initialCode) {
   return div;
 }
 
-// undoable text replacement — uses execCommand so the browser records it in the undo stack
+// undoable text replacement — uses execCommand so the browser records it in the undo stack.
+// execCommand is deprecated but still works in all current browsers. direct ta.value
+// manipulation would break Ctrl+Z undo. if browsers remove it, switch to manual undo stack.
 function replaceRange(ta, from, to, text) {
   ta.focus();
   ta.selectionStart = from;
@@ -5970,8 +6186,10 @@ function toggleMdComment(ta) {
 
 function autoResize(e) {
   const ta = e.target || e;
-  ta.style.height = 'auto';
-  ta.style.height = ta.scrollHeight + 'px';
+  requestAnimationFrame(() => {
+    ta.style.height = 'auto';
+    ta.style.height = ta.scrollHeight + 'px';
+  });
 }
 
 // -- cell-ops.js --
@@ -6137,10 +6355,10 @@ function moveCell(id, dir) {
   const [cell] = S.cells.splice(idx, 1);
   S.cells.splice(newIdx, 0, cell);
 
-  // re-order DOM
+  // re-order DOM — use insertBefore to move only the target cell,
+  // preserving CM6 EditorView instances and their state
   const nb = $('#notebook');
-  nb.innerHTML = '';
-  for (const c of S.cells) nb.appendChild(c.el);
+  nb.insertBefore(cell.el, S.cells[newIdx + 1]?.el || null);
 
   // re-order CSS <style> elements in <head> to match cell order
   for (const c of S.cells) {
@@ -6428,8 +6646,8 @@ function togglePresent() {
 
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
-const __AUDITABLE_BUILD_DATE__ = '2026-03-04';
-const __AUDITABLE_BASE_SIZE__ = 981625;
+const __AUDITABLE_BUILD_DATE__ = '2026-03-17';
+const __AUDITABLE_BASE_SIZE__ = 998707;
 
 (function() {
   const ver = $('#aboutVersion');
@@ -7104,6 +7322,7 @@ function registerProvider(name, fn) {
 // ── Data ──
 
 function csv(text, opts = {}) {
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
   const sep = opts.separator || ',';
   const typed = !!opts.typed;
   const lines = [];
@@ -7673,13 +7892,18 @@ const palette10 = [
 
 // ── Export ──
 
+function hsl(h, s, l, a = 1) {
+  const [r, g, b] = hslToRgb(h, s, l);
+  return _makeColor(r, g, b, a);
+}
+
 const std = {
   csv, fetchJSON,
   sum, mean, median, extent, bin, linspace,
   unique, zip, cross,
   file, download, el, copy, fmt,
   include,
-  color, colorScale,
+  color, colorScale, hsl,
   viridis, magma, inferno, plasma, turbo,
   palette10,
 };
@@ -7861,6 +8085,85 @@ function stripCommentsAndStrings(code) {
   return out;
 }
 
+function findMatchingBracket(str, start) {
+  let depth = 1;
+  for (let i = start + 1; i < str.length; i++) {
+    if (str[i] === '{' || str[i] === '[') depth++;
+    else if (str[i] === '}' || str[i] === ']') {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+function extractDestructuredNames(pattern, names) {
+  let i = 0;
+  while (i < pattern.length) {
+    if (/[\\\\s,]/.test(pattern[i])) { i++; continue; }
+
+    // rest element: ...name
+    if (pattern[i] === '.' && pattern[i + 1] === '.' && pattern[i + 2] === '.') {
+      i += 3;
+      const m = pattern.slice(i).match(/^(\\\\w+)/);
+      if (m) { names.add(m[1]); i += m[1].length; }
+      continue;
+    }
+
+    // nested destructuring at top level: { ... } or [ ... ]
+    if (pattern[i] === '{' || pattern[i] === '[') {
+      const close = findMatchingBracket(pattern, i);
+      if (close > 0) {
+        extractDestructuredNames(pattern.slice(i + 1, close), names);
+        i = close + 1;
+      } else { i++; }
+      continue;
+    }
+
+    // identifier
+    const m = pattern.slice(i).match(/^(\\\\w+)/);
+    if (m) {
+      i += m[1].length;
+      // skip whitespace
+      while (i < pattern.length && /\\\\s/.test(pattern[i])) i++;
+      if (pattern[i] === ':') {
+        // rename or nested pattern
+        i++;
+        while (i < pattern.length && /\\\\s/.test(pattern[i])) i++;
+        if (pattern[i] === '{' || pattern[i] === '[') {
+          // nested destructuring: a: { b, c }
+          const close = findMatchingBracket(pattern, i);
+          if (close > 0) {
+            extractDestructuredNames(pattern.slice(i + 1, close), names);
+            i = close + 1;
+          }
+        } else {
+          // rename: a: x — x is the binding
+          const rm = pattern.slice(i).match(/^(\\\\w+)/);
+          if (rm) { names.add(rm[1]); i += rm[1].length; }
+        }
+      } else {
+        // plain identifier — this is the binding
+        names.add(m[1]);
+      }
+      // skip = default value expression
+      while (i < pattern.length && /\\\\s/.test(pattern[i])) i++;
+      if (pattern[i] === '=') {
+        i++;
+        let d = 0;
+        while (i < pattern.length) {
+          if (pattern[i] === '{' || pattern[i] === '[' || pattern[i] === '(') d++;
+          else if (pattern[i] === '}' || pattern[i] === ']' || pattern[i] === ')') d--;
+          else if (pattern[i] === ',' && d === 0) break;
+          i++;
+        }
+      }
+      continue;
+    }
+    i++;
+  }
+}
+
 function parseNames(code) {
   // extract ONLY top-level variable definitions (brace depth 0)
   const defines = new Set();
@@ -7911,18 +8214,12 @@ function parseNames(code) {
       // destructuring: const { a, b } = ... or const [ a, b ] = ...
       const destruct = rest.match(/^(?:const|let|var)\\\\s*[\\\\{\\\\[]/);
       if (destruct) {
-        // find the closing } or ] then extract identifiers
-        const opener = rest[destruct[0].length - 1];
-        const closer = opener === '{' ? '}' : ']';
-        const closeIdx = rest.indexOf(closer, destruct[0].length);
+        const openIdx = destruct[0].length - 1;
+        const closeIdx = findMatchingBracket(rest, openIdx);
         if (closeIdx > 0) {
-          const inner = rest.slice(destruct[0].length, closeIdx);
-          // split on commas, take last word of each part (handles renaming)
-          inner.split(',').forEach(part => {
-            const parts = part.trim().split(/\\\\s*:\\\\s*/);
-            const name = (parts.length > 1 ? parts[1] : parts[0]).trim().match(/^\\\\w+/);
-            if (name) defines.add(name[0]);
-          });
+          const inner = rest.slice(openIdx + 1, closeIdx);
+          extractDestructuredNames(inner, defines);
+          // skip past the closing bracket (and let main loop handle the rest)
           i += closeIdx + 1;
           continue;
         }
@@ -8761,9 +9058,9 @@ function wireWidgets(cell, viewEl) {
       if (w.tagName === 'AUDIT-SLIDER' || w.tagName === 'AUDIT-TEXT-INPUT') {
         clearTimeout(cell._inputTimer);
         const delay = w.tagName === 'AUDIT-TEXT-INPUT' ? 300 : 80;
-        cell._inputTimer = setTimeout(() => runDAG([cell.id], true), delay);
+        cell._inputTimer = setTimeout(() => runDAG([cell.id]), delay);
       } else {
-        runDAG([cell.id], true);
+        runDAG([cell.id]);
       }
     };
     w.addEventListener('input', handler);
@@ -8803,6 +9100,12 @@ async function execCell(cell) {
     for (const arg of args) {
       if (arg instanceof Element) {
         outputEl.appendChild(arg);
+      } else if (arg instanceof TaggedContent) {
+        const el = document.createElement('div');
+        if (arg.type === 'md') el.innerHTML = renderMd(arg.content);
+        else if (arg.type === 'html') el.innerHTML = arg.content;
+        else if (arg.type === 'css') { const s = document.createElement('style'); s.textContent = arg.content; el.appendChild(s); }
+        outputEl.appendChild(el);
       } else if (typeof arg === 'object' && arg !== null) {
         const pre = document.createElement('span');
         try { pre.textContent = JSON.stringify(arg, null, 2); }
@@ -8814,6 +9117,7 @@ async function execCell(cell) {
       }
     }
   };
+  const displayHtml = (str) => display(new TaggedContent('html', str));
 
   // canvas helper — reuses existing canvas if dimensions match
   const canvas = (w = 400, h = 300) => {
@@ -8830,47 +9134,115 @@ async function execCell(cell) {
   };
 
   // table helper
-  const table = (data, columns) => {
+  const table = (data, columnsOrOpts) => {
     if (!data || !data.length) return;
-    const cols = columns || Object.keys(data[0]);
+    let cols, sortable = false, filter = false;
+    if (Array.isArray(columnsOrOpts)) {
+      cols = columnsOrOpts;
+    } else if (columnsOrOpts && typeof columnsOrOpts === 'object') {
+      cols = columnsOrOpts.columns;
+      sortable = !!columnsOrOpts.sortable;
+      filter = !!columnsOrOpts.filter;
+    }
+    cols = cols || Object.keys(data[0]);
 
     // detect numeric columns by scanning first 10 rows
     const isNumCol = {};
     for (const c of cols) {
       let allNum = true;
-      const scanRows = data.slice(0, 10);
-      for (const row of scanRows) {
+      for (const row of data.slice(0, 10)) {
         const v = row[c];
         if (v !== null && v !== undefined && typeof v !== 'number') { allNum = false; break; }
       }
       isNumCol[c] = allNum;
     }
 
+    const wrap = document.createElement('div');
+    let rows = [...data];
+    let sortCol = null, sortAsc = true, filterStr = '';
+
+    // filter input
+    let filterInput;
+    if (filter) {
+      filterInput = document.createElement('input');
+      filterInput.type = 'text';
+      filterInput.placeholder = 'Filter\\\\u2026';
+      filterInput.style.cssText = 'width:200px;margin:2px 0 4px;padding:2px 6px;background:var(--bg);color:var(--fg);border:1px solid var(--border);font:11px var(--mono);border-radius:2px;';
+      wrap.appendChild(filterInput);
+    }
+
     const t = document.createElement('table');
     const thead = document.createElement('thead');
-    const hr = document.createElement('tr');
-    for (const c of cols) {
-      const th = document.createElement('th');
-      th.textContent = c;
-      th.style.textAlign = isNumCol[c] ? 'right' : 'left';
-      hr.appendChild(th);
-    }
-    thead.appendChild(hr);
-    t.appendChild(thead);
     const tbody = document.createElement('tbody');
-    for (const row of data) {
-      const tr = document.createElement('tr');
+
+    function renderHead() {
+      thead.innerHTML = '';
+      const hr = document.createElement('tr');
       for (const c of cols) {
-        const td = document.createElement('td');
-        const v = row[c];
-        td.textContent = typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(4)) : String(v ?? '');
-        td.style.textAlign = isNumCol[c] ? 'right' : 'left';
-        tr.appendChild(td);
+        const th = document.createElement('th');
+        th.style.textAlign = isNumCol[c] ? 'right' : 'left';
+        let label = c;
+        if (sortable) {
+          th.style.cursor = 'pointer';
+          th.style.userSelect = 'none';
+          if (sortCol === c) label += sortAsc ? ' \\\\u25b4' : ' \\\\u25be';
+        }
+        th.textContent = label;
+        if (sortable) th.addEventListener('click', () => {
+          if (sortCol === c) sortAsc = !sortAsc;
+          else { sortCol = c; sortAsc = true; }
+          renderHead();
+          renderBody();
+        });
+        hr.appendChild(th);
       }
-      tbody.appendChild(tr);
+      thead.appendChild(hr);
     }
+
+    function renderBody() {
+      tbody.innerHTML = '';
+      let view = rows;
+      if (filterStr) {
+        const q = filterStr.toLowerCase();
+        view = view.filter(row => cols.some(c => String(row[c] ?? '').toLowerCase().includes(q)));
+      }
+      if (sortCol) {
+        view = [...view].sort((a, b) => {
+          const va = a[sortCol], vb = b[sortCol];
+          if (va == null && vb == null) return 0;
+          if (va == null) return 1;
+          if (vb == null) return -1;
+          const cmp = isNumCol[sortCol] ? va - vb : String(va).localeCompare(String(vb));
+          return sortAsc ? cmp : -cmp;
+        });
+      }
+      for (const row of view) {
+        const tr = document.createElement('tr');
+        for (const c of cols) {
+          const td = document.createElement('td');
+          const v = row[c];
+          td.textContent = typeof v === 'number' ? (Number.isInteger(v) ? v : v.toFixed(4)) : String(v ?? '');
+          td.style.textAlign = isNumCol[c] ? 'right' : 'left';
+          tr.appendChild(td);
+        }
+        tbody.appendChild(tr);
+      }
+    }
+
+    renderHead();
+    renderBody();
+    t.appendChild(thead);
     t.appendChild(tbody);
-    outputEl.appendChild(t);
+    wrap.appendChild(t);
+
+    if (filter) {
+      filterInput.addEventListener('input', () => {
+        filterStr = filterInput.value;
+        renderBody();
+      });
+    }
+
+    outputEl.appendChild(wrap);
   };
 
   // input widget helpers — persist state and DOM across re-runs
@@ -8937,8 +9309,8 @@ async function execCell(cell) {
       else if (!cb.onChange) {
         clearTimeout(cell._inputTimer);
         const delay = type === 'text' ? 300 : type === 'slider' ? 80 : 0;
-        if (delay) cell._inputTimer = setTimeout(() => runDAG([cell.id], true), delay);
-        else runDAG([cell.id], true);
+        if (delay) cell._inputTimer = setTimeout(() => runDAG([cell.id]), delay);
+        else runDAG([cell.id]);
       }
     });
     el.addEventListener('change', () => {
@@ -8999,6 +9371,24 @@ async function execCell(cell) {
     if (url === '@calque') {
       if (!window._importCache[url] && !window._installedModules[url]) {
         const mod = await import('./ext/calque/index.js');
+        window._importCache[url] = mod;
+        return mod;
+      }
+    }
+
+    // @spinifex — web GIS (dev-mode fallback)
+    if (url === '@spinifex') {
+      if (!window._importCache[url] && !window._installedModules[url]) {
+        const mod = await import('./ext/spinifex/index.js');
+        window._importCache[url] = mod;
+        return mod;
+      }
+    }
+
+    // @plan — project management (dev-mode fallback)
+    if (url === '@plan') {
+      if (!window._importCache[url] && !window._installedModules[url]) {
+        const mod = await import('./ext/plan/index.js');
         window._importCache[url] = mod;
         return mod;
       }
@@ -9083,6 +9473,36 @@ async function execCell(cell) {
     // @calque — spreadsheet language
     if (url === '@calque') {
       const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/calque/index.js';
+      const resp = await fetch(realUrl);
+      if (!resp.ok) throw new Error(\\\`Failed to fetch \\\${realUrl}: \\\${resp.status}\\\`);
+      const source = await resp.text();
+      window._installedModules[url] = { source, cellId: cell.id };
+      syncModules();
+      const blob = new Blob([source], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      const mod = await import(blobUrl);
+      window._importCache[url] = mod;
+      display(\\\`installed \\\${url} (\\\${(source.length / 1024).toFixed(1)} KB)\\\`);
+      return mod;
+    }
+    // @spinifex — web GIS
+    if (url === '@spinifex') {
+      const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/spinifex/index.js';
+      const resp = await fetch(realUrl);
+      if (!resp.ok) throw new Error(\\\`Failed to fetch \\\${realUrl}: \\\${resp.status}\\\`);
+      const source = await resp.text();
+      window._installedModules[url] = { source, cellId: cell.id };
+      syncModules();
+      const blob = new Blob([source], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      const mod = await import(blobUrl);
+      window._importCache[url] = mod;
+      display(\\\`installed \\\${url} (\\\${(source.length / 1024).toFixed(1)} KB)\\\`);
+      return mod;
+    }
+    // @plan — project management
+    if (url === '@plan') {
+      const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/plan/index.js';
       const resp = await fetch(realUrl);
       if (!resp.ok) throw new Error(\\\`Failed to fetch \\\${realUrl}: \\\${resp.status}\\\`);
       const source = await resp.text();
@@ -9231,7 +9651,7 @@ async function execCell(cell) {
       btn.textContent = file.name;
       const cb = cell._callbacks[key];
       if (cb?.onChange) cb.onChange(result);
-      else runDAG([cell.id], true);
+      else runDAG([cell.id]);
     };
 
     widgetEl.appendChild(wrap);
@@ -9268,7 +9688,7 @@ async function execCell(cell) {
       zone.appendChild(input);
       const cb = cell._callbacks[key];
       if (cb?.onChange) cb.onChange(result);
-      else runDAG([cell.id], true);
+      else runDAG([cell.id]);
     };
 
     zone.onclick = () => input.click();
@@ -9289,7 +9709,7 @@ async function execCell(cell) {
   };
 
   // ui object — constructed per-cell (closes over cell context)
-  const ui = { display, print: display, canvas, table, slider, dropdown, checkbox, textInput, download, upload, drop };
+  const ui = { display, print: display, html: displayHtml, canvas, table, slider, dropdown, checkbox, textInput, download, upload, drop };
 
   // tagged template builtins
   const md = taggedTemplate('md');
@@ -9552,7 +9972,10 @@ async function execCell(cell) {
   }
 }
 
+let _dagGen = 0;
+
 async function runDAG(dirtyIds, force = false) {
+  const gen = ++_dagGen;
   buildDAG();
   const isAutorun = S.autorun && !force;
 
@@ -9609,8 +10032,8 @@ async function runDAG(dirtyIds, force = false) {
       continue;
     }
 
-    // skip manual cells unless force or explicitly triggered
-    if (!force && isManual(cell.code) && !dirtyIds.includes(cell.id)) {
+    // skip manual cells unless explicitly triggered (in dirtyIds)
+    if (isManual(cell.code) && !dirtyIds.includes(cell.id)) {
       if (cell._lastResult) {
         for (const [k, v] of Object.entries(cell._lastResult)) {
           if (v !== undefined) S.scope[k] = v;
@@ -9669,6 +10092,9 @@ async function runDAG(dirtyIds, force = false) {
     if (window._beforeExec) window._beforeExec(cell);
     await execCell(cell);
 
+    // bail if a newer runDAG started while we were awaiting
+    if (_dagGen !== gen) return;
+
     // if the cell errored, poison its defines
     if (cell.error) {
       if (cell.defines) for (const name of cell.defines) poisoned.add(name);
@@ -9725,8 +10151,11 @@ function renderMd(src) {
   // inline code
   html = html.replace(/\\\`(.+?)\\\`/g, '<code>$1</code>');
 
-  // links
-  html = html.replace(/\\\\[(.+?)\\\\]\\\\((.+?)\\\\)/g, '<a href="$2">$1</a>');
+  // links (reject dangerous URI schemes)
+  html = html.replace(/\\\\[(.+?)\\\\]\\\\((.+?)\\\\)/g, (m, text, url) => {
+    if (/^\\\\s*(javascript|data|vbscript)\\\\s*:/i.test(url)) return text;
+    return \\\`<a href="\\\${url}">\\\${text}</a>\\\`;
+  });
 
   // tables — detect pipe-delimited blocks before paragraph wrapping
   html = html.replace(
@@ -10231,7 +10660,7 @@ async function savePackedNotebook() {
 }
 
 function esc(s) {
-  return s.replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function exportAsTxt() {
@@ -10349,7 +10778,8 @@ function loadFromEmbed() {
         if (c.collapsed || isCollapsed(c.code)) cell.el.classList.add('collapsed');
       }
       // run after load (gated on resolved runOnLoad)
-      if (effectiveRun === 'yes' && S.cells.some(c => c.type === 'code')) {
+      // skip if editor view will be activated — enterSplitView() calls runAll() itself
+      if (effectiveRun === 'yes' && getEditorViewSetting() !== 'yes' && S.cells.some(c => c.type === 'code')) {
         setTimeout(runAll, 50);
       }
       return true;
@@ -11476,13 +11906,13 @@ function createSplitEditor(container, initialCode) {
     keymap.of([{ key: 'Tab', run: acceptCompletion }, indentWithTab]),
     keymap.of([{ key: 'Mod-/', run: toggleComment }]),
     keymap.of([{ key: 'Mod-z', run: cm6Undo }, { key: 'Mod-Shift-z', run: cm6Redo }]),
-    // Ctrl+Enter: immediate sync + run
+    // Ctrl+Enter: sync + force-run cell under cursor
     keymap.of([{
       key: 'Ctrl-Enter',
-      run: () => { immediateSync(); return true; },
+      run: (view) => { immediateSyncAndRun(view); return true; },
     }, {
       key: 'Shift-Enter',
-      run: () => { immediateSync(); return true; },
+      run: (view) => { immediateSyncAndRun(view); return true; },
     }]),
     // autocompletion — uses splitCompletionSource which extracts the code cell
     // around the cursor before delegating to getCompletions, so cursorContext
@@ -11499,6 +11929,7 @@ function createSplitEditor(container, initialCode) {
       if (update.docChanged) {
         clearTimeout(_syncTimer);
         _syncTimer = setTimeout(() => {
+          if (!S.splitEditor) return;
           syncFromTxt(update.view.state.doc.toString());
         }, 800);
       }
@@ -11513,6 +11944,36 @@ function immediateSync() {
   clearTimeout(_syncTimer);
   if (!S.splitEditor) return;
   syncFromTxt(S.splitEditor.state.doc.toString());
+}
+
+// Sync text and force-run the cell under the cursor
+function immediateSyncAndRun(view) {
+  immediateSync();
+  // Find which cell the cursor is in by scanning /// directives up to cursor line
+  const cursorPos = view.state.selection.main.head;
+  const cursorLine = view.state.doc.lineAt(cursorPos).number; // 1-based
+  const text = view.state.doc.toString();
+  const lines = text.split('\\n');
+
+  let cellIdx = -1;
+  for (let i = 0; i < lines.length && i < cursorLine; i++) {
+    const l = lines[i].trimEnd();
+    if (/^\\/\\/\\/\\s+(code|md|css|html)/.test(l)) cellIdx++;
+  }
+
+  if (cellIdx >= 0 && cellIdx < S.cells.length) {
+    const cell = S.cells[cellIdx];
+    // verify parsed cell type matches — after structural sync, indices may shift
+    const expectedType = lines.slice(0, cursorLine).reverse()
+      .find(l => /^\\/\\/\\/\\s+(code|md|css|html)/.test(l.trimEnd()));
+    const parsedType = expectedType?.trimEnd().match(/^\\/\\/\\/\\s+(code|md|css|html)/)?.[1];
+    if (parsedType && parsedType !== cell.type) return;
+    if (cell.type === 'code') {
+      runDAG([cell.id], true);
+    } else if (cell.type === 'html') {
+      renderHtmlCell(cell);
+    }
+  }
 }
 
 // create lightweight output element for a cell type
@@ -11585,7 +12046,7 @@ function syncFromTxt(txt) {
       dirtyIds.push(oldCells[i].id);
     }
   }
-  if (dirtyIds.length) runAll();
+  if (dirtyIds.length) runDAG(dirtyIds);
 }
 
 function rebuildFromParsed(parsed) {
@@ -11695,8 +12156,9 @@ function enterSplitView() {
   // create CM6 editor
   S.splitEditor = createSplitEditor(left, txt);
 
-  // run all cells to populate outputs
-  runAll();
+  // run cells to populate outputs (not forced — respects %manual)
+  const ids = S.cells.filter(c => c.type === 'code' || c.type === 'html' || c.type === 'md').map(c => c.id);
+  if (ids.length) runDAG(ids);
 }
 
 function exitSplitView() {
@@ -11709,10 +12171,11 @@ function exitSplitView() {
   // restore original cell els
   restoreCellEls();
 
-  // destroy split editor
+  // destroy split editor — null ref first so debounced sync callbacks bail out
   if (S.splitEditor) {
-    S.splitEditor.destroy();
+    const ed = S.splitEditor;
     S.splitEditor = null;
+    ed.destroy();
   }
 
   // remove split container
@@ -11893,6 +12356,10 @@ const BUILTIN_HELP = {
   "std.color": {
     "sig": "std.color(input)",
     "desc": "create color from hex/rgb/hsl/array \\u2014 .lighten/.darken/.mix/.rotate/.css/.hex"
+  },
+  "std.hsl": {
+    "sig": "std.hsl(h, s, l, a?)",
+    "desc": "create color from HSL \\u2014 h: 0\\u2013360, s: 0\\u2013100, l: 0\\u2013100"
   },
   "std.colorScale": {
     "sig": "std.colorScale(domain, colors)",
@@ -12815,6 +13282,19 @@ function navigateCell(dir) {
 }
 
 document.addEventListener('keydown', (e) => {
+  // ── GLOBAL FIRST — must run before mode branching to prevent browser defaults ──
+  // Ctrl+S — save (prevents browser "Save Page As" on file://)
+  if (e.key === 's' && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+    e.preventDefault();
+    saveNotebook();
+    return;
+  }
+  // Ctrl+Shift+Enter — toggle autorun
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+    e.preventDefault();
+    toggleAutorun();
+    return;
+  }
   // find bar shortcuts (must be before edit/command branches)
   if ((e.key === 'f') && (e.ctrlKey || e.metaKey) && !e.altKey) {
     e.preventDefault(); openFind(false); return;
@@ -13035,11 +13515,6 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  // global: Ctrl+S / Cmd+S
-  if (e.key === 's' && (e.ctrlKey || e.metaKey)) {
-    e.preventDefault();
-    saveNotebook();
-  }
 });
 
 // click to dismiss help

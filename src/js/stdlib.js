@@ -13,6 +13,7 @@ export function registerProvider(name, fn) {
 // ── Data ──
 
 function csv(text, opts = {}) {
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
   const sep = opts.separator || ',';
   const typed = !!opts.typed;
   const lines = [];

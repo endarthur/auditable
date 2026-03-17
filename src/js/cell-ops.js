@@ -168,10 +168,10 @@ export function moveCell(id, dir) {
   const [cell] = S.cells.splice(idx, 1);
   S.cells.splice(newIdx, 0, cell);
 
-  // re-order DOM
+  // re-order DOM — use insertBefore to move only the target cell,
+  // preserving CM6 EditorView instances and their state
   const nb = $('#notebook');
-  nb.innerHTML = '';
-  for (const c of S.cells) nb.appendChild(c.el);
+  nb.insertBefore(cell.el, S.cells[newIdx + 1]?.el || null);
 
   // re-order CSS <style> elements in <head> to match cell order
   for (const c of S.cells) {

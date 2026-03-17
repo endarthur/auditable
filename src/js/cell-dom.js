@@ -162,7 +162,9 @@ export function createCellEl(type, id, initialCode) {
   return div;
 }
 
-// undoable text replacement — uses execCommand so the browser records it in the undo stack
+// undoable text replacement — uses execCommand so the browser records it in the undo stack.
+// execCommand is deprecated but still works in all current browsers. direct ta.value
+// manipulation would break Ctrl+Z undo. if browsers remove it, switch to manual undo stack.
 function replaceRange(ta, from, to, text) {
   ta.focus();
   ta.selectionStart = from;
@@ -295,6 +297,8 @@ export function toggleMdComment(ta) {
 
 export function autoResize(e) {
   const ta = e.target || e;
-  ta.style.height = 'auto';
-  ta.style.height = ta.scrollHeight + 'px';
+  requestAnimationFrame(() => {
+    ta.style.height = 'auto';
+    ta.style.height = ta.scrollHeight + 'px';
+  });
 }

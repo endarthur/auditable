@@ -580,7 +580,7 @@ export function createEditor(container, cellId, initialCode, cellType, onChange)
   });
 
   // clicks on the wrapper or gutter should focus the editor
-  container.addEventListener('mousedown', (e) => {
+  const focusHandler = (e) => {
     if (e.target === container) {
       e.preventDefault();
       view.focus();
@@ -589,7 +589,8 @@ export function createEditor(container, cellId, initialCode, cellType, onChange)
       // schedule focus after CM6's own mousedown runs
       setTimeout(() => { if (!view.hasFocus) view.focus(); }, 0);
     }
-  });
+  };
+  container.addEventListener('mousedown', focusHandler);
 
   const editor = {
     view,
@@ -601,6 +602,7 @@ export function createEditor(container, cellId, initialCode, cellType, onChange)
     },
     focus() { view.focus(); },
     destroy() {
+      container.removeEventListener('mousedown', focusHandler);
       view.destroy();
       _editors.delete(cellId);
     },

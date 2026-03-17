@@ -884,7 +884,7 @@ export async function execCell(cell) {
       btn.textContent = file.name;
       const cb = cell._callbacks[key];
       if (cb?.onChange) cb.onChange(result);
-      else runDAG([cell.id], true);
+      else runDAG([cell.id]);
     };
 
     widgetEl.appendChild(wrap);
@@ -921,7 +921,7 @@ export async function execCell(cell) {
       zone.appendChild(input);
       const cb = cell._callbacks[key];
       if (cb?.onChange) cb.onChange(result);
-      else runDAG([cell.id], true);
+      else runDAG([cell.id]);
     };
 
     zone.onclick = () => input.click();
@@ -1265,8 +1265,8 @@ export async function runDAG(dirtyIds, force = false) {
       continue;
     }
 
-    // skip manual cells unless force or explicitly triggered
-    if (!force && isManual(cell.code) && !dirtyIds.includes(cell.id)) {
+    // skip manual cells unless explicitly triggered (in dirtyIds)
+    if (isManual(cell.code) && !dirtyIds.includes(cell.id)) {
       if (cell._lastResult) {
         for (const [k, v] of Object.entries(cell._lastResult)) {
           if (v !== undefined) S.scope[k] = v;
