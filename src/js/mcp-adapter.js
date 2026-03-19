@@ -910,7 +910,10 @@ function _mcpGetDocumentation(input) {
 
 // ── Registration ──
 
-if (navigator.modelContext) {
+// Only register MCP tools when connected via our shim (bridge mode).
+// Native browser WebMCP (navigator.modelContext without our shim) is gated
+// behind a future settings flag to prevent unintended tool exposure.
+if (navigator.modelContext && window.__auditable_mcp) {
   const ro = { readOnlyHint: true, idempotentHint: true };
 
   navigator.modelContext.registerTool({
