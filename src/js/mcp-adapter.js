@@ -20,10 +20,11 @@ import { setCellCode } from './cell-ops.js';
 
 // ── User interaction / confirmation ──
 
-let _mcpAutoAccept = false;
+// Per-category auto-accept: 'code' | 'widget' | 'cell' | 'fs'
+const _mcpAutoAccept = new Set();
 
-function _mcpConfirm(title, body) {
-  if (_mcpAutoAccept) return Promise.resolve(true);
+function _mcpConfirm(title, body, category) {
+  if (_mcpAutoAccept.has(category)) return Promise.resolve(true);
 
   return new Promise((resolve) => {
     const overlay = document.getElementById('mcpConfirmOverlay');
@@ -42,6 +43,8 @@ function _mcpConfirm(title, body) {
       bodyEl.textContent = '';
       bodyEl.appendChild(body);
     }
+    // Show which category "accept all" applies to
+    acceptAllBtn.textContent = category ? `accept all ${category}` : 'accept all';
     overlay.style.display = '';
 
     function cleanup() {
@@ -51,7 +54,7 @@ function _mcpConfirm(title, body) {
       rejectBtn.onclick = null;
     }
     acceptBtn.onclick = () => { cleanup(); resolve(true); };
-    acceptAllBtn.onclick = () => { cleanup(); _mcpAutoAccept = true; resolve(true); };
+    acceptAllBtn.onclick = () => { cleanup(); if (category) _mcpAutoAccept.add(category); resolve(true); };
     rejectBtn.onclick = () => { cleanup(); resolve(false); };
   });
 }
@@ -301,7 +304,8 @@ async function _mcpManifestToolExecute(toolDef, input) {
     if (access !== 'rw') throw new Error(`Cell ${index} is read-only. Cannot update source.`);
     const accepted = await _mcpConfirm(
       `Update cell ${index}`,
-      _mcpSimpleDiff(cell.code || '', input.code)
+      _mcpSimpleDiff(cell.code || '', input.code),
+      'code'
     );
     if (!accepted) throw new Error('User rejected the change.');
     setCellCode(cell, input.code);
@@ -742,7 +746,8 @@ async function _mcpUpdateCellSource(input, client) {
   const oldCode = cell.code || '';
   const accepted = await _mcpConfirm(
     `Update cell ${index}` + (parseCellName(cell.code) ? ` (${parseCellName(cell.code)})` : ''),
-    _mcpSimpleDiff(oldCode, newCode)
+    _mcpSimpleDiff(oldCode, newCode),
+    'code'
   );
   if (!accepted) throw new Error('User rejected the change.');
 
@@ -778,7 +783,8 @@ async function _mcpAddCell(input) {
   const preview = code.length > 200 ? code.slice(0, 200) + '...' : code;
   const accepted = await _mcpConfirm(
     `Add ${type} cell ${posLabel}`,
-    preview || '(empty cell)'
+    preview || '(empty cell)',
+    'cell'
   );
   if (!accepted) throw new Error('User rejected cell creation.');
 
@@ -1043,7 +1049,8 @@ if (navigator.modelContext && window.__auditable_mcp) {
       const oldValue = widget.value;
       const accepted = await _mcpConfirm(
         `Set widget "${input.name}"`,
-        `${oldValue} \u2192 ${input.value}`
+        `${oldValue} \u2192 ${input.value}`,
+        'widget'
       );
       if (!accepted) throw new Error('User rejected the change.');
 
@@ -1224,7 +1231,7 @@ if (navigator.modelContext && window.__auditable_mcp) {
       const preview = input.binary
         ? `[binary, ${input.content.length} chars base64]`
         : (input.content.length > 200 ? input.content.slice(0, 200) + '...' : input.content);
-      const accepted = await _mcpConfirm(`Write file: ${input.path}`, preview);
+      const accepted = await _mcpConfirm(`Write file: ${input.path}`, preview, 'fs');
       if (!accepted) throw new Error('User rejected fs write.');
 
       let data = input.content;
@@ -1249,7 +1256,7 @@ if (navigator.modelContext && window.__auditable_mcp) {
     annotations: { destructiveHint: true, title: 'Delete embedded file' },
     execute: _mcpAudited('fsDelete', async (input) => {
       _mcpCheckFsWrite(input.path);
-      const accepted = await _mcpConfirm(`Delete: ${input.path}`, input.recursive ? '(recursive)' : '');
+      const accepted = await _mcpConfirm(`Delete: ${input.path}`, input.recursive ? '(recursive)' : '', 'fs');
       if (!accepted) throw new Error('User rejected fs delete.');
       const nfs = window._notebook?.fs;
       if (!nfs) throw new Error('notebook.fs not available');
@@ -1477,7 +1484,7 @@ export function mcpConnect() {
 if (window.__auditable_mcp) {
   const _origOnState2 = window.__auditable_mcp.onStateChange;
   window.__auditable_mcp.onStateChange = function(state, id) {
-    if (state === 'disconnected') _mcpAutoAccept = false;
+    if (state === 'disconnected') _mcpAutoAccept.clear();
     _mcpRefreshPanel();
     // Update statusbar
     const el = document.getElementById('statusMcp');
