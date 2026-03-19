@@ -51,6 +51,8 @@ Auditable uses per-cell directives to control what an MCP agent can see and do:
 
 Precedence: `%private` > `%mcp rw` > `%mcp` > manifest tool-level > manifest defaults > none.
 
+In HTML cells, `// %` directives are stripped from the rendered output — they work for access control but don't appear visually.
+
 ### Filesystem Sandboxing
 
 The `fsList`, `fsRead`, `fsWrite`, and `fsDelete` tools are gated by `// %mcp fs` directives. Without at least one `%mcp fs` directive (or manifest `fs` config), all fs tools return an error.
@@ -114,6 +116,7 @@ All notebook tools require a `notebook` parameter (injected by the bridge):
 | `getCellScreenshot` | read | Capture canvas output as PNG, or text content |
 | `updateCellSource` | rw | Update cell source via full replacement (`code`) or surgical patches (`patches`: array of {old, new}). Shows diff confirmation. Triggers reactive execution |
 | `addCell` | any | Add a new cell. Requires user confirmation |
+| `setWidgetValue` | rw | Set a widget value (slider, dropdown, checkbox, text-input). Triggers reactive execution or callback |
 | `runCell` | any | Execute a cell and its dependents |
 | `runAll` | any | Execute all cells |
 | `getDAG` | any | Get dependency graph (defines, uses, edges) |
@@ -122,7 +125,7 @@ All notebook tools require a `notebook` parameter (injected by the bridge):
 | `pauseAutorun` | any | Pause reactive execution (batch edits) |
 | `resumeAutorun` | any | Resume reactive execution, run all |
 | `getDocumentation` | any | Builtin API docs, extension docs, notebook.fs docs |
-| `getAuditLog` | any | Recent tool call history (last 100) |
+| `getAuditLog` | any | Recent tool call history (last 100). An **export** button downloads the full audit log as JSON for compliance records |
 | `fsList` | any | List files in notebook embedded filesystem |
 | `fsRead` | any | Read file from embedded filesystem |
 | `fsWrite` | any | Write file to embedded filesystem (confirmation required) |
@@ -151,6 +154,16 @@ For `updateCellSource`, the dialog shows a line-based diff of the proposed chang
 
 Patches are applied in order. If any `old` string is not found, the tool errors before applying anything. The confirmation dialog shows the same LCS diff regardless of mode.
 
+## Widget Interaction
+
+`setWidgetValue` lets the agent adjust widget values without editing code:
+
+```json
+{ "index": 5, "name": "smoothWindow", "value": 3 }
+```
+
+Works with all four widget types: slider (number), dropdown (string), checkbox (boolean), text-input (string). Triggers the same reactive execution or callback as user interaction. Requires `rw` access and user confirmation.
+
 ## Connection
 
 ### Programmatic
@@ -167,7 +180,7 @@ notebook.html#mcp=port:token
 
 ### MCP Panel
 
-Ellipsis menu > **mcp** > enter `port:token` > **connect**. The panel also shows connection status and the audit log.
+Ellipsis menu > **mcp** > enter `port:token` > **connect**. Toggle with **Ctrl+M**. The panel also shows connection status and the audit log.
 
 ### Notebook Naming
 
