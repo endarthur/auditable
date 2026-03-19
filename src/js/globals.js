@@ -5,11 +5,13 @@
 
 import { $, S } from './state.js';
 import { registerProvider } from './stdlib.js';
-import { toggleAutorun } from './editor.js';
+import { toggleAutorun, notifyDirty } from './editor.js';
 import { toggleSettings, togglePresent, applyTheme, applyFontSize, applyWidth, applyLineNumbers, applyHeader, applyExecMode, applyRunOnLoad, applyShowToggle, applyGlobalExecMode, applyGlobalRunOnLoad, applyEditorView } from './settings.js';
 import { toggleUpdate, checkForUpdate, applyOnlineUpdate, proceedUpdate, cancelUpdate, updateFromFile } from './update.js';
 import { saveNotebook, savePackedNotebook, setSaveMode, toggleSaveTray, exportAsTxt, showExportDialog, doExportApp, closeExportDialog } from './save.js';
 import { insertAt } from './ui.js';
+import { toggleFs, fsImport } from './fs.js';
+import { toggleMcpPanel, mcpConnect } from './mcp-adapter.js';
 import { openFind, closeFind } from './find.js';
 import { runAll } from './exec.js';
 import { toggleSplitView } from './split.js';
@@ -21,6 +23,7 @@ window.S = S;
 
 // editor
 window.toggleAutorun = toggleAutorun;
+window._notifyDirty = notifyDirty;
 
 // settings
 window.toggleSettings = toggleSettings;
@@ -83,3 +86,11 @@ window.newNotebook = newNotebook;
 
 // split view
 window.toggleSplitView = toggleSplitView;
+
+// filesystem panel
+window.toggleFs = toggleFs;
+window.fsImport = fsImport;
+
+// mcp panel
+window.toggleMcpPanel = toggleMcpPanel;
+window.mcpConnect = mcpConnect;

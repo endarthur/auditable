@@ -5,7 +5,64 @@ import { runAll, renderHtmlCell, renderMdCell } from './exec.js';
 import { updateStatus } from './ui.js';
 import { selectCell } from './keyboard.js';
 import { notifyDirty } from './editor.js';
-import { getEditor } from './cm6.js';
+import { getEditor, mcpHighlightEffect } from './cm6.js';
+
+// ── CELL CODE SETTER ──
+
+function _changedLines(oldCode, newCode) {
+  const oldL = (oldCode || '').split('\n');
+  const newL = newCode.split('\n');
+  const lines = [];
+  const max = Math.max(oldL.length, newL.length);
+  for (let i = 0; i < max; i++) {
+    if (oldL[i] !== newL[i]) lines.push(i + 1); // 1-based
+  }
+  return lines;
+}
+
+export function setCellCode(cell, newCode) {
+  const oldCode = cell.code || '';
+
+  // Split view registers S._splitSetCode when active
+  if (S._splitSetCode) {
+    const idx = S.cells.indexOf(cell);
+    if (idx >= 0 && S._splitSetCode(idx, newCode)) {
+      // highlight changed lines in split editor
+      if (S.splitEditor) {
+        // find offset of this cell in the split doc to remap line numbers
+        const doc = S.splitEditor.state.doc.toString();
+        const docLines = doc.split('\n');
+        let cellIdx = -1, cellStartLine = -1;
+        for (let i = 0; i < docLines.length; i++) {
+          if (/^\/\/\/\s+(code|md|css|html)/.test(docLines[i].trimEnd())) {
+            cellIdx++;
+            if (cellIdx === idx) { cellStartLine = i + 1; break; }
+          }
+        }
+        if (cellStartLine >= 0) {
+          const changed = _changedLines(oldCode, newCode);
+          const mapped = changed.map(l => l + cellStartLine); // remap to split doc lines
+          S.splitEditor.dispatch({ effects: mcpHighlightEffect.of(mapped) });
+        }
+      }
+      return;
+    }
+  }
+  const editor = getEditor(cell.id);
+  if (editor) {
+    editor.setCode(newCode);
+    // highlight changed lines
+    const changed = _changedLines(oldCode, newCode);
+    if (changed.length) {
+      editor.view.dispatch({ effects: mcpHighlightEffect.of(changed) });
+    }
+  } else if (cell.type === 'md') {
+    const ta = cell.el?.querySelector('textarea');
+    if (ta) { ta.value = newCode; cell.code = newCode; renderMdCell(cell); }
+  } else {
+    cell.code = newCode;
+  }
+}
 
 // ── CELL OPERATIONS ──
 

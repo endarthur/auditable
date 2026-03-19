@@ -2,6 +2,8 @@
 // Bundled standard library for notebook work.
 // Module-level — no per-cell state needed.
 
+import { fsWrite } from './fs.js';
+
 // ── Provider Registry ──
 
 const _providers = { file: null, download: null };
@@ -182,16 +184,24 @@ function cross(...arrays) {
 // ── DOM / IO ──
 
 async function file(accept) {
-  if (_providers.file) return _providers.file(accept);
+  const opts = typeof accept === 'string' ? { accept } : (accept || {});
+  if (_providers.file && !opts.embed) return _providers.file(opts.accept || accept);
   return new Promise((resolve, reject) => {
     const input = document.createElement('input');
     input.type = 'file';
-    if (accept) input.accept = accept;
+    if (opts.accept) input.accept = opts.accept;
     input.onchange = async () => {
       const f = input.files[0];
       if (!f) { reject(new Error('no file selected')); return; }
-      const text = await f.text();
-      resolve({ name: f.name, text, size: f.size });
+      if (opts.embed) {
+        // embed in notebook filesystem — fsWrite is in same IIFE scope (fs.js loaded before stdlib.js)
+        const path = (opts.prefix || '') + f.name;
+        await fsWrite(path, new Uint8Array(await f.arrayBuffer()), { type: f.type || undefined });
+        resolve(path);
+      } else {
+        const text = await f.text();
+        resolve({ name: f.name, text, size: f.size });
+      }
     };
     input.click();
   });
@@ -581,6 +591,146 @@ const palette10 = [
   '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ac',
 ];
 
+// ── Zip / Unzip ──
+// Pure browser-native zip using CompressionStream('deflate-raw').
+// Same implementation as ext/sheet/src/zip.js.
+
+const _CRC32_TABLE = new Uint32Array(256);
+for (let i = 0; i < 256; i++) {
+  let c = i;
+  for (let j = 0; j < 8; j++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+  _CRC32_TABLE[i] = c;
+}
+
+function _crc32(bytes) {
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) {
+    crc = _CRC32_TABLE[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+const _enc = new TextEncoder();
+const _dec = new TextDecoder();
+
+async function _deflateRaw(data) {
+  const cs = new CompressionStream('deflate-raw');
+  const writer = cs.writable.getWriter();
+  writer.write(data);
+  writer.close();
+  return new Uint8Array(await new Response(cs.readable).arrayBuffer());
+}
+
+async function _inflateRaw(data) {
+  const ds = new DecompressionStream('deflate-raw');
+  const writer = ds.writable.getWriter();
+  writer.write(data);
+  writer.close();
+  return new Uint8Array(await new Response(ds.readable).arrayBuffer());
+}
+
+function _readU16(buf, off) { return buf[off] | (buf[off + 1] << 8); }
+function _readU32(buf, off) { return (buf[off] | (buf[off + 1] << 8) | (buf[off + 2] << 16) | (buf[off + 3] << 24)) >>> 0; }
+function _writeU16(buf, off, val) { buf[off] = val & 0xFF; buf[off + 1] = (val >> 8) & 0xFF; }
+function _writeU32(buf, off, val) { buf[off] = val & 0xFF; buf[off + 1] = (val >> 8) & 0xFF; buf[off + 2] = (val >> 16) & 0xFF; buf[off + 3] = (val >> 24) & 0xFF; }
+
+async function unzipFn(bytes) {
+  const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const entries = new Map();
+  let eocdOff = -1;
+  for (let i = buf.length - 22; i >= 0 && i >= buf.length - 65557; i--) {
+    if (_readU32(buf, i) === 0x06054B50) { eocdOff = i; break; }
+  }
+  if (eocdOff === -1) throw new Error('not a ZIP file: EOCD not found');
+  const entryCount = _readU16(buf, eocdOff + 10);
+  let cdOff = _readU32(buf, eocdOff + 16);
+  for (let e = 0; e < entryCount; e++) {
+    if (_readU32(buf, cdOff) !== 0x02014B50) throw new Error('bad central directory entry');
+    const method = _readU16(buf, cdOff + 10);
+    const crc = _readU32(buf, cdOff + 16);
+    const compSize = _readU32(buf, cdOff + 20);
+    const nameLen = _readU16(buf, cdOff + 28);
+    const extraLen = _readU16(buf, cdOff + 30);
+    const commentLen = _readU16(buf, cdOff + 32);
+    const localOff = _readU32(buf, cdOff + 42);
+    const name = _dec.decode(buf.subarray(cdOff + 46, cdOff + 46 + nameLen));
+    cdOff += 46 + nameLen + extraLen + commentLen;
+    if (name.endsWith('/')) continue;
+    const localNameLen = _readU16(buf, localOff + 26);
+    const localExtraLen = _readU16(buf, localOff + 28);
+    const dataOff = localOff + 30 + localNameLen + localExtraLen;
+    const compressed = buf.subarray(dataOff, dataOff + compSize);
+    let data;
+    if (method === 0) data = compressed.slice();
+    else if (method === 8) data = await _inflateRaw(compressed);
+    else throw new Error(`unsupported compression method ${method} for ${name}`);
+    if (_crc32(data) !== crc) throw new Error(`CRC mismatch for ${name}`);
+    entries.set(name, data);
+  }
+  return entries;
+}
+
+async function zipFn(entries) {
+  const items = entries instanceof Map ? [...entries] : entries;
+  const localHeaders = [];
+  const centralEntries = [];
+  let offset = 0;
+  for (const [name, raw] of items) {
+    const nameBytes = _enc.encode(name);
+    const crc = _crc32(raw);
+    const compressed = await _deflateRaw(raw);
+    const useDeflate = compressed.length < raw.length;
+    const stored = useDeflate ? compressed : raw;
+    const method = useDeflate ? 8 : 0;
+    const local = new Uint8Array(30 + nameBytes.length + stored.length);
+    _writeU32(local, 0, 0x04034B50);
+    _writeU16(local, 4, 20);
+    _writeU16(local, 8, method);
+    _writeU32(local, 14, crc);
+    _writeU32(local, 18, stored.length);
+    _writeU32(local, 22, raw.length);
+    _writeU16(local, 26, nameBytes.length);
+    local.set(nameBytes, 30);
+    local.set(stored, 30 + nameBytes.length);
+    localHeaders.push(local);
+    const central = new Uint8Array(46 + nameBytes.length);
+    _writeU32(central, 0, 0x02014B50);
+    _writeU16(central, 4, 20);
+    _writeU16(central, 6, 20);
+    _writeU16(central, 10, method);
+    _writeU32(central, 16, crc);
+    _writeU32(central, 20, stored.length);
+    _writeU32(central, 24, raw.length);
+    _writeU16(central, 28, nameBytes.length);
+    _writeU32(central, 42, offset);
+    central.set(nameBytes, 46);
+    centralEntries.push(central);
+    offset += local.length;
+  }
+  const cdOffset = offset;
+  let cdSize = 0;
+  for (const c of centralEntries) cdSize += c.length;
+  const eocd = new Uint8Array(22);
+  _writeU32(eocd, 0, 0x06054B50);
+  _writeU16(eocd, 8, items.length);
+  _writeU16(eocd, 10, items.length);
+  _writeU32(eocd, 12, cdSize);
+  _writeU32(eocd, 16, cdOffset);
+  const total = offset + cdSize + 22;
+  const result = new Uint8Array(total);
+  let pos = 0;
+  for (const l of localHeaders) { result.set(l, pos); pos += l.length; }
+  for (const c of centralEntries) { result.set(c, pos); pos += c.length; }
+  result.set(eocd, pos);
+  return result;
+}
+
+// expose for fs.js import/export
+if (typeof window !== 'undefined') {
+  window._stdZip = zipFn;
+  window._stdUnzip = unzipFn;
+}
+
 // ── Export ──
 
 function hsl(h, s, l, a = 1) {
@@ -593,7 +743,7 @@ export const std = {
   sum, mean, median, extent, bin, linspace,
   unique, zip, cross,
   file, download, el, copy, fmt,
-  include,
+  include, zipArchive: zipFn, unzipArchive: unzipFn,
   color, colorScale, hsl,
   viridis, magma, inferno, plasma, turbo,
   palette10,

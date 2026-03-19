@@ -21,6 +21,25 @@ export const isBare      = code => hasDirective(code, 'bare');
 export const parseCellName    = code => getDirective(code, 'cellName');
 export const parseOutputId    = code => { const v = getDirective(code, 'outputId'); return v ? v.split(/\s+/)[0] : null; };
 export const parseOutputClass = code => getDirective(code, 'outputClass');
+export const isPrivate        = code => hasDirective(code, 'private');
+export const isMcp            = code => /^\s*\/\/\s*%mcp(\s+r)?\s*$/m.test(code);
+export const isMcpRw          = code => /^\s*\/\/\s*%mcp\s+rw\b/m.test(code);
+export function parseMcpDescribe(code) {
+  const m = code.match(/^\s*\/\/\s*%mcp\s+describe\s+"([^"]+)"/m);
+  return m ? m[1] : null;
+}
+export const isMcpManifest = code => /^\s*\/\/\s*%mcp\s+manifest\b/m.test(code);
+export function parseMcpFs(code) {
+  // // %mcp fs data/       → { prefix: "data/", readOnly: false }
+  // // %mcp fs:read data/  → { prefix: "data/", readOnly: true }
+  // // %mcp fs *           → { prefix: "", readOnly: false }
+  const m = code.match(/^\s*\/\/\s*%mcp\s+fs(?::read)?\s+(.+)/m);
+  if (!m) return null;
+  const readOnly = /^\s*\/\/\s*%mcp\s+fs:read\b/m.test(code);
+  const raw = m[1].trim();
+  const prefix = raw === '*' ? '' : raw;
+  return { prefix, readOnly };
+}
 
 // ── code analysis ──
 

@@ -7,6 +7,7 @@ import { python, zenOfPython } from './python.js';
 import { addCell } from './cell-ops.js';
 import { renderMd } from './markdown.js';
 import { syncModules } from './save.js';
+import { createNotebookFs, fsRead } from './fs.js';
 
 // ── EXECUTION ENGINE ──
 //
@@ -177,7 +178,10 @@ export function renderHtmlCell(cell) {
     }
   };
 
-  const hasExprs = /\$\{[^}]+\}/.test(cell.code);
+  // strip // %directive lines from HTML rendering (directives are parsed from raw source)
+  const htmlCode = cell.code.replace(/^\s*\/\/\s*%.+$/gm, '').trim();
+
+  const hasExprs = /\$\{[^}]+\}/.test(htmlCode);
 
   // invalidate bindings if viewEl changed (e.g. split view swap)
   if (cell._bindViewEl !== viewEl) {
@@ -189,10 +193,10 @@ export function renderHtmlCell(cell) {
   // first render or code change — full innerHTML with binding setup
   if (cell._bindCode !== cell.code || !cell._textMarkers) {
     if (!hasExprs) {
-      viewEl.innerHTML = cell.code;
+      viewEl.innerHTML = htmlCode;
     } else {
       // split on tags to classify ${expr} as text-content vs attribute-context
-      const parts = cell.code.split(/(<[^>]+>)/g);
+      const parts = htmlCode.split(/(<[^>]+>)/g);
       const textExprs = [];
       const attrBindings = []; // per-element: [{ attr, template }]
       let textIdx = 0;
@@ -616,6 +620,18 @@ export async function execCell(cell) {
     if (url === '@std') return std;
     if (url === '@python') return python;
     if (url === '@python/this') { display(zenOfPython()); return python; }
+
+    // fs: scheme — load from notebook filesystem
+    if (url.startsWith('fs:')) {
+      const fsPath = url.slice(3);
+      if (!window._importCache[url]) {
+        const source = await fsRead(fsPath, 'text');
+        const blob = new Blob([source], { type: 'text/javascript' });
+        const blobUrl = URL.createObjectURL(blob);
+        window._importCache[url] = await import(blobUrl);
+      }
+      return window._importCache[url];
+    }
 
     // @atra/<name> — atra library binary distributions
     // if pre-installed (via /// module: directive or install()), the existing
@@ -1210,6 +1226,7 @@ export async function execCell(cell) {
 
   // notebook API — programmatic notebook control
   const notebook = {
+    fs: createNotebookFs(),
     get cells() { return S.cells.map(c => ({ id: c.id, type: c.type, code: c.code })); },
     get scope() { return { ...S.scope }; },
     addCell: (type, code, afterId) => addCell(type, code, afterId),
@@ -1443,6 +1460,9 @@ export async function runDAG(dirtyIds, force = false) {
   for (const c of S.cells) {
     if (c._workshopRecheck) c._workshopRecheck();
   }
+
+  // MCP execution completion notification
+  if (window._mcpNotifyExecComplete) window._mcpNotifyExecComplete();
 }
 
 export async function runAll() {

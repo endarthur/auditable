@@ -58,6 +58,7 @@
 <div class="help-row"><span class="help-key">css``</span><span class="help-desc">CSS tagged template</span></div>
 <div class="help-row"><span class="help-key">workshop(pages)</span><span class="help-desc">interactive side panel with pages</span></div>
 <div class="help-row"><span class="help-key">notebook</span><span class="help-desc">API for cells, scope, scrollTo, focus</span></div>
+<div class="help-row"><span class="help-key">notebook.fs</span><span class="help-desc">embedded filesystem (write, read, list, delete, ...)</span></div>
 
 <h2>directives</h2>
 <div class="help-row"><span class="help-key">// %manual</span><span class="help-desc">skip cell on reactive updates</span></div>
@@ -211,6 +212,43 @@
   </div>
 </div>
 
+<div class="fs-panel" id="fsPanel">
+  <button class="settings-close" onclick="toggleFs()">&#x00d7;</button>
+  <h2>files <span class="fs-summary" id="fsSummary">empty</span></h2>
+  <div class="fs-panel-body" id="fsPanelBody"></div>
+  <div class="fs-panel-footer">
+    <button class="accent" onclick="fsImport()">+ import file</button>
+  </div>
+</div>
+
+<div class="mcp-panel" id="mcpPanel">
+  <button class="settings-close" onclick="toggleMcpPanel()">&#x00d7;</button>
+  <h2>mcp bridge <span class="mcp-panel-status" id="mcpPanelStatus">disconnected</span></h2>
+  <div class="mcp-panel-connect">
+    <input type="text" id="mcpConnectInput" placeholder="port:token" spellcheck="false" autocomplete="off">
+    <button class="accent" id="mcpConnectBtn" onclick="mcpConnect()">connect</button>
+  </div>
+  <div class="mcp-panel-name">
+    <label for="mcpNameInput">notebook name</label>
+    <input type="text" id="mcpNameInput" spellcheck="false" autocomplete="off">
+  </div>
+  <div class="mcp-panel-info" id="mcpPanelInfo"></div>
+  <h3>audit log <button class="mcp-log-export" id="mcpLogExport">export</button></h3>
+  <div class="mcp-panel-log" id="mcpPanelLog"><span class="dim">no tool calls yet</span></div>
+</div>
+
+<div class="export-overlay" id="mcpConfirmOverlay" style="display:none">
+  <div class="export-panel mcp-confirm-panel">
+    <h3 id="mcpConfirmTitle">MCP tool confirmation</h3>
+    <pre class="mcp-confirm-body" id="mcpConfirmBody"></pre>
+    <div class="export-actions">
+      <button class="accent" id="mcpConfirmAccept">accept</button>
+      <button id="mcpConfirmAcceptAll">accept all</button>
+      <button id="mcpConfirmReject">reject</button>
+    </div>
+  </div>
+</div>
+
 <div class="export-overlay" id="exportOverlay" style="display:none">
   <div class="export-panel">
     <h3>export as app</h3>
@@ -262,6 +300,8 @@
         <button class="toolbar-update-btn" onclick="toggleUpdate();toggleToolbarMenu()">update</button>
         <button onclick="togglePresent();toggleToolbarMenu()">present</button>
         <button onclick="toggleSplitView();toggleToolbarMenu()">editor view</button>
+        <button onclick="toggleFs();toggleToolbarMenu()">files</button>
+        <button onclick="toggleMcpPanel();toggleToolbarMenu()">mcp</button>
         <button onclick="openFind(false);toggleToolbarMenu()">find (Ctrl+F)</button>
       </div>
     </div>
@@ -292,6 +332,7 @@
 </div>
 
 <div class="statusbar">
+  <span class="status-mcp" id="statusMcp"></span>
   <span class="status-size" id="statusSize"></span>
   <span class="status-cells" id="statusCells">0 cells</span>
   <span class="status-msg" id="statusMsg"></span>
@@ -327,6 +368,8 @@
         <button class="toolbar-update-btn" onclick="toggleUpdate();toggleMoreTray()">update</button>
         <button onclick="togglePresent();toggleMoreTray()">present</button>
         <button onclick="toggleSplitView();toggleMoreTray()">editor view</button>
+        <button onclick="toggleFs();toggleMoreTray()">files</button>
+        <button onclick="toggleMcpPanel();toggleMoreTray()">mcp</button>
         <button onclick="openFind(false);toggleMoreTray()">find</button>
       </div>
       <button class="action-more" onclick="toggleMoreTray()">&#x22ef;</button>

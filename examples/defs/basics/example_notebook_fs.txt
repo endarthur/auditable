@@ -1,0 +1,215 @@
+/// auditable
+/// title: notebook filesystem
+
+/// md
+# notebook filesystem
+
+`notebook.fs` is an embedded filesystem stored inside the notebook HTML. files are compressed and base64-encoded — they survive saves, packed saves, and reloads. open the **files** panel from the ellipsis menu to browse and manage embedded files.
+
+use cases:
+- bundle input data (CSV, JSON) so notebooks are self-contained
+- store computed results that persist across sessions
+- embed JS/WASM libraries that don't work through `install()`
+- snapshot canvas renders as PNG
+
+/// md
+## write and read
+
+/// code
+// write a CSV string — auto-compressed, MIME inferred from extension
+await notebook.fs.write("data/cities.csv", `city,lat,lon,pop
+Tokyo,35.68,139.69,13960000
+Delhi,28.61,77.23,32940000
+Shanghai,31.23,121.47,28520000
+S\u00e3o Paulo,-23.55,-46.63,22430000
+Mexico City,19.43,-99.13,21920000
+Cairo,30.04,31.24,21750000
+Mumbai,19.08,72.88,21300000
+Beijing,39.91,116.40,21540000
+Dhaka,23.81,90.41,23210000
+Osaka,34.69,135.50,19110000`);
+
+// read it back as text (auto-detected from MIME)
+const csvText = await notebook.fs.read("data/cities.csv");
+ui.display("stored " + csvText.split("\n").length + " lines");
+
+/// code
+// read as parsed data — combine with std.csv
+const cities = std.csv(await notebook.fs.read("data/cities.csv"), { typed: true });
+ui.table(cities);
+
+/// md
+## write JSON and binary
+
+/// code
+// objects are auto-serialized as JSON
+await notebook.fs.write("results/stats.json", {
+  computed: new Date().toISOString(),
+  count: cities.length,
+  totalPop: std.sum(cities, d => d.pop),
+  avgLat: std.mean(cities, d => d.lat),
+});
+
+// read it back as parsed JSON
+const stats = await notebook.fs.read("results/stats.json", "json");
+ui.display(`${stats.count} cities, total pop: ${std.fmt(stats.totalPop)}, computed: ${stats.computed}`);
+
+/// code
+// binary data — Uint8Array stored directly
+const binary = new Uint8Array([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+await notebook.fs.write("test.bin", binary);
+const back = await notebook.fs.read("test.bin", "binary");
+ui.display(`binary roundtrip: ${back.length} bytes, header: ${[...back.slice(0,4)].map(b => b.toString(16)).join(" ")}`);
+
+/// md
+## canvas snapshots
+
+save a canvas rendering as a PNG in the filesystem — it persists across saves and reloads.
+
+/// code
+const size = Math.min(400, window.innerWidth - 80);
+const c = ui.canvas(size, size);
+const ctx = c.getContext("2d");
+
+// dark background
+ctx.fillStyle = "#1a1a1a";
+ctx.fillRect(0, 0, size, size);
+
+// plot cities
+const [lonMin, lonMax] = std.extent(cities, d => d.lon);
+const [latMin, latMax] = std.extent(cities, d => d.lat);
+const pad = 40;
+
+for (const city of cities) {
+  const x = pad + (city.lon - lonMin) / (lonMax - lonMin) * (size - 2 * pad);
+  const y = pad + (latMax - city.lat) / (latMax - latMin) * (size - 2 * pad);
+  const r = Math.sqrt(city.pop / 1e6) * 1.5;
+
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(200, 155, 60, 0.7)";
+  ctx.fill();
+  ctx.strokeStyle = "#c89b3c";
+  ctx.stroke();
+
+  ctx.fillStyle = "#999";
+  ctx.font = "10px monospace";
+  ctx.fillText(city.city, x + r + 4, y + 3);
+}
+
+ctx.fillStyle = "#555";
+ctx.font = "10px monospace";
+ctx.fillText("population (circle area)", pad, size - 12);
+
+// save the canvas as PNG in the filesystem
+await notebook.fs.write("plots/cities.png", c);
+ui.display(`saved canvas as plots/cities.png (${notebook.fs.stat("plots/cities.png").size} bytes)`);
+
+/// md
+## list, stat, and browse
+
+/// code
+// list all files
+const all = notebook.fs.list();
+ui.display(`${all.length} files, ${std.fmt(notebook.fs.size)} bytes total:`);
+for (const f of all) {
+  ui.display(`  ${f.path}  (${f.type}, ${std.fmt(f.size)} bytes)`);
+}
+
+/// code
+// glob — find all CSVs
+const csvFiles = notebook.fs.list("**/*.csv");
+ui.display(`CSV files: ${csvFiles.map(f => f.path).join(", ")}`);
+
+// prefix — list a folder
+const results = notebook.fs.list("results/");
+ui.display(`results/ folder: ${results.map(f => f.path).join(", ")}`);
+
+/// md
+## load JS from the filesystem
+
+embed a helper module in the notebook and import it with `load("fs:...")`. the module lives inside the HTML file — no network needed.
+
+/// code
+// write a JS module into the filesystem
+await notebook.fs.write("lib/geo.js", `
+export function haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 +
+    Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180) *
+    Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+export function bearing(lat1, lon1, lat2, lon2) {
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const y = Math.sin(dLon) * Math.cos(lat2 * Math.PI/180);
+  const x = Math.cos(lat1 * Math.PI/180) * Math.sin(lat2 * Math.PI/180) -
+    Math.sin(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180) * Math.cos(dLon);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+`);
+
+// import from the filesystem — works offline after save
+const { haversine, bearing } = await load("fs:lib/geo.js");
+
+// compute distances from Tokyo to all other cities
+const tokyo = cities[0];
+const distances = cities.slice(1).map(c => ({
+  from: tokyo.city,
+  to: c.city,
+  km: Math.round(haversine(tokyo.lat, tokyo.lon, c.lat, c.lon)),
+  bearing: bearing(tokyo.lat, tokyo.lon, c.lat, c.lon).toFixed(1) + "\u00b0",
+}));
+
+ui.table(distances);
+
+/// md
+## copy, rename, delete
+
+/// code
+// copy a file
+notebook.fs.copy("data/cities.csv", "backup/cities.csv");
+ui.display(`copied \u2192 backup/cities.csv exists: ${notebook.fs.exists("backup/cities.csv")}`);
+
+// rename
+notebook.fs.rename("backup/cities.csv", "backup/cities_v1.csv");
+ui.display(`renamed \u2192 backup/cities_v1.csv exists: ${notebook.fs.exists("backup/cities_v1.csv")}`);
+
+// clean up
+const deleted = notebook.fs.delete("backup", { recursive: true });
+ui.display(`deleted backup/ (${deleted} files)`);
+
+// delete single file
+notebook.fs.delete("test.bin");
+ui.display(`test.bin exists: ${notebook.fs.exists("test.bin")}`);
+
+/// md
+## zip archive
+
+`std.zipArchive()` and `std.unzipArchive()` create and extract zip files using browser-native compression. combine with `notebook.fs.export()` for folder downloads.
+
+/// code
+// create a zip from embedded files
+const entries = new Map();
+for (const f of notebook.fs.list("data/")) {
+  entries.set(f.path.replace("data/", ""), await notebook.fs.read(f.path, "binary"));
+}
+
+const zipBytes = await std.zipArchive(entries);
+ui.display(`zip: ${zipBytes.length} bytes, ${entries.size} entries`);
+
+// unzip it back
+const extracted = await std.unzipArchive(zipBytes);
+for (const [name, data] of extracted) {
+  ui.display(`  ${name}: ${data.length} bytes`);
+}
+
+/// md
+---
+
+open the **files** panel (ellipsis menu → files) to see all embedded files. right-click for context menu: copy read commands, download, rename, delete.
+
+after saving, reload — the filesystem persists inside the HTML.

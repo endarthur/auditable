@@ -33,8 +33,14 @@ export function updateStatus() {
   const sizeText = '~' + sizeKB + ' KB' + (useContent ? ' content' : '');
   $('#statusCells').textContent = statusText;
   const compare = typeof sizeCompare === 'function' ? sizeCompare(displayBytes) : '';
+  let fsText = '';
+  if (window._notebookFS?.size > 0) {
+    let fsBytes = 0;
+    for (const e of window._notebookFS.values()) fsBytes += e.size;
+    fsText = ' \u00b7 fs: ' + (fsBytes >= 1024 * 1024 ? (fsBytes / (1024 * 1024)).toFixed(1) + ' MB' : Math.max(1, Math.round(fsBytes / 1024)) + ' KB');
+  }
   const sizeEl = document.getElementById('statusSize');
-  if (sizeEl) sizeEl.textContent = (compare ? sizeText + ' \u00b7 ' + compare : sizeText) + ' \u00b7 ';
+  if (sizeEl) sizeEl.textContent = (compare ? sizeText + ' \u00b7 ' + compare : sizeText) + fsText + ' \u00b7 ';
   // mirror to toolbar for mobile
   const toolbarStatus = document.getElementById('toolbarStatus');
   if (toolbarStatus) toolbarStatus.textContent = (compare || sizeText) + ' \u00b7 ' + statusText;

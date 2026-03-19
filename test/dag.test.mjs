@@ -3,7 +3,7 @@ globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseNames, findUses, findHtmlUses, isManual, parseCellName, isHidden, isNorun, parseOutputId, parseOutputClass } from '../src/js/dag.js';
+import { parseNames, findUses, findHtmlUses, isManual, parseCellName, isHidden, isNorun, parseOutputId, parseOutputClass, isPrivate, isMcp, isMcpRw, parseMcpDescribe, isMcpManifest, parseMcpFs } from '../src/js/dag.js';
 
 // ── isManual ──
 
@@ -359,5 +359,147 @@ describe('findHtmlUses', () => {
     const allDefined = new Set(['x']);
     const uses = findHtmlUses('<p>hello</p>', allDefined);
     assert.strictEqual(uses.size, 0);
+  });
+});
+
+// ── MCP directives ──
+
+describe('isPrivate', () => {
+  it('detects // %private', () => {
+    assert.ok(isPrivate('// %private\nconst x = 1;'));
+  });
+  it('rejects without directive', () => {
+    assert.ok(!isPrivate('const x = 1;'));
+  });
+  it('detects with leading whitespace', () => {
+    assert.ok(isPrivate('  // %private'));
+  });
+});
+
+describe('isMcp', () => {
+  it('detects // %mcp', () => {
+    assert.ok(isMcp('// %mcp\nconst x = 1;'));
+  });
+  it('does not match // %mcp rw', () => {
+    assert.ok(!isMcp('// %mcp rw\nconst x = 1;'));
+  });
+  it('rejects without directive', () => {
+    assert.ok(!isMcp('const x = 1;'));
+  });
+  it('detects on any line', () => {
+    assert.ok(isMcp('const x = 1;\n// %mcp'));
+  });
+  it('detects // %mcp r as alias', () => {
+    assert.ok(isMcp('// %mcp r\nconst x = 1;'));
+  });
+  it('does not match // %mcp describe', () => {
+    assert.ok(!isMcp('// %mcp describe "test"'));
+  });
+});
+
+describe('isMcpRw', () => {
+  it('detects // %mcp rw', () => {
+    assert.ok(isMcpRw('// %mcp rw\nconst x = 1;'));
+  });
+  it('does not match plain // %mcp', () => {
+    assert.ok(!isMcpRw('// %mcp\nconst x = 1;'));
+  });
+  it('rejects without directive', () => {
+    assert.ok(!isMcpRw('const x = 1;'));
+  });
+  it('detects with leading whitespace', () => {
+    assert.ok(isMcpRw('  // %mcp rw'));
+  });
+});
+
+describe('parseMcpDescribe', () => {
+  it('extracts description', () => {
+    assert.strictEqual(parseMcpDescribe('// %mcp describe "test description"'), 'test description');
+  });
+  it('returns null without directive', () => {
+    assert.strictEqual(parseMcpDescribe('const x = 1;'), null);
+  });
+  it('extracts from multi-line code', () => {
+    assert.strictEqual(
+      parseMcpDescribe('// %private\n// %mcp describe "847 Fe composites"\nconst data = load("x");'),
+      '847 Fe composites'
+    );
+  });
+  it('returns null for plain %mcp', () => {
+    assert.strictEqual(parseMcpDescribe('// %mcp\nconst x = 1;'), null);
+  });
+});
+
+// ── isMcpManifest ──
+
+describe('isMcpManifest', () => {
+  it('detects // %mcp manifest', () => {
+    assert.ok(isMcpManifest('// %mcp manifest\n({ defaults: "rw" })'));
+  });
+  it('rejects plain // %mcp', () => {
+    assert.ok(!isMcpManifest('// %mcp\nconst x = 1;'));
+  });
+  it('rejects // %mcp rw', () => {
+    assert.ok(!isMcpManifest('// %mcp rw\nconst x = 1;'));
+  });
+  it('detects with leading whitespace', () => {
+    assert.ok(isMcpManifest('  // %mcp manifest'));
+  });
+  it('does not false-positive on isMcp', () => {
+    const code = '// %mcp manifest\n({ defaults: "rw" })';
+    assert.ok(isMcpManifest(code));
+    assert.ok(!isMcp(code));
+    assert.ok(!isMcpRw(code));
+  });
+});
+
+// ── parseMcpFs ──
+
+describe('parseMcpFs', () => {
+  it('extracts prefix', () => {
+    const r = parseMcpFs('// %mcp fs data/');
+    assert.deepStrictEqual(r, { prefix: 'data/', readOnly: false });
+  });
+  it('extracts read-only prefix', () => {
+    const r = parseMcpFs('// %mcp fs:read data/');
+    assert.deepStrictEqual(r, { prefix: 'data/', readOnly: true });
+  });
+  it('handles wildcard', () => {
+    const r = parseMcpFs('// %mcp fs *');
+    assert.deepStrictEqual(r, { prefix: '', readOnly: false });
+  });
+  it('returns null without directive', () => {
+    assert.strictEqual(parseMcpFs('const x = 1;'), null);
+  });
+  it('works on any line', () => {
+    const r = parseMcpFs('const x = 1;\n// %mcp fs output/');
+    assert.deepStrictEqual(r, { prefix: 'output/', readOnly: false });
+  });
+  it('does not match plain %mcp', () => {
+    assert.strictEqual(parseMcpFs('// %mcp\nconst x = 1;'), null);
+  });
+  it('does not match %mcp rw', () => {
+    assert.strictEqual(parseMcpFs('// %mcp rw\nconst x = 1;'), null);
+  });
+  it('trims prefix whitespace', () => {
+    const r = parseMcpFs('// %mcp fs   lib/  ');
+    assert.deepStrictEqual(r, { prefix: 'lib/', readOnly: false });
+  });
+});
+
+// ── JS directives in HTML cells ──
+
+describe('JS directives in HTML cells', () => {
+  it('isMcpRw works with // in HTML cell content', () => {
+    const code = '// %mcp rw\n<audit-slider name="x"></audit-slider>';
+    assert.ok(isMcpRw(code));
+  });
+  it('isPrivate works with // in HTML cell content', () => {
+    const code = '// %private\n<div>secret</div>';
+    assert.ok(isPrivate(code));
+  });
+  it('parseCellName works with // in HTML cell content', () => {
+    const code = '// %cellName myWidget\n<audit-slider name="x"></audit-slider>';
+    assert.strictEqual(parseCellName(code), 'myWidget');
   });
 });

@@ -863,6 +863,122 @@ audit-text-input input[type="text"] {
 :root.light ::-webkit-scrollbar-track { background: var(--bg); }
 :root.light ::-webkit-scrollbar-thumb { background: var(--border-hi); }
 
+/* ── FS PANEL ── */
+.fs-panel {
+  display: none;
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 320px;
+  max-width: 90vw;
+  background: var(--bg1);
+  border-left: 1px solid var(--border);
+  padding: 20px;
+  z-index: 1001;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg);
+  display: none;
+  flex-direction: column;
+}
+.fs-panel h2 {
+  color: var(--accent);
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  margin: 0 0 12px 0;
+}
+.fs-summary {
+  font-weight: normal;
+  color: var(--fg-dim);
+  letter-spacing: 0;
+  text-transform: none;
+  margin-left: 8px;
+}
+.fs-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+.fs-panel-footer {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  margin-top: 8px;
+}
+.fs-panel-footer button {
+  width: 100%;
+}
+.fs-folder-header {
+  padding: 4px 0;
+  cursor: pointer;
+  color: var(--fg-bright);
+  user-select: none;
+}
+.fs-folder-header:hover { color: var(--accent); }
+.fs-folder-toggle { display: inline-block; width: 14px; }
+.fs-folder-info {
+  color: var(--fg-dim);
+  font-size: 10px;
+  margin-left: 4px;
+}
+.fs-folder-contents { padding-left: 18px; }
+.fs-file-row {
+  display: flex;
+  align-items: center;
+  padding: 2px 0;
+  gap: 8px;
+}
+.fs-file-row:hover { background: var(--bg2); }
+.fs-file-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fs-file-size {
+  color: var(--fg-dim);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.fs-file-del {
+  background: none;
+  border: none;
+  color: var(--fg-dim);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+  opacity: 0;
+}
+.fs-file-row:hover .fs-file-del { opacity: 1; }
+.fs-file-del:hover { color: var(--err); }
+.fs-context-menu {
+  position: fixed;
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  padding: 4px 0;
+  z-index: 2000;
+  min-width: 160px;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.fs-context-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--fg);
+  padding: 4px 12px;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.fs-context-menu button:hover {
+  background: var(--accent);
+  color: #111;
+}
+
 /* ── EXPORT DIALOG ── */
 .export-overlay {
   position: fixed;
@@ -2181,6 +2297,7 @@ body.presenting .find-bar { display: none !important; }
 <div class="help-row"><span class="help-key">css\`\`</span><span class="help-desc">CSS tagged template</span></div>
 <div class="help-row"><span class="help-key">workshop(pages)</span><span class="help-desc">interactive side panel with pages</span></div>
 <div class="help-row"><span class="help-key">notebook</span><span class="help-desc">API for cells, scope, scrollTo, focus</span></div>
+<div class="help-row"><span class="help-key">notebook.fs</span><span class="help-desc">embedded filesystem (write, read, list, delete, ...)</span></div>
 
 <h2>directives</h2>
 <div class="help-row"><span class="help-key">// %manual</span><span class="help-desc">skip cell on reactive updates</span></div>
@@ -2334,6 +2451,15 @@ body.presenting .find-bar { display: none !important; }
   </div>
 </div>
 
+<div class="fs-panel" id="fsPanel">
+  <button class="settings-close" onclick="toggleFs()">&#x00d7;</button>
+  <h2>files <span class="fs-summary" id="fsSummary">empty</span></h2>
+  <div class="fs-panel-body" id="fsPanelBody"></div>
+  <div class="fs-panel-footer">
+    <button class="accent" onclick="fsImport()">+ import file</button>
+  </div>
+</div>
+
 <div class="export-overlay" id="exportOverlay" style="display:none">
   <div class="export-panel">
     <h3>export as app</h3>
@@ -2385,6 +2511,7 @@ body.presenting .find-bar { display: none !important; }
         <button class="toolbar-update-btn" onclick="toggleUpdate();toggleToolbarMenu()">update</button>
         <button onclick="togglePresent();toggleToolbarMenu()">present</button>
         <button onclick="toggleSplitView();toggleToolbarMenu()">editor view</button>
+        <button onclick="toggleFs();toggleToolbarMenu()">files</button>
         <button onclick="openFind(false);toggleToolbarMenu()">find (Ctrl+F)</button>
       </div>
     </div>
@@ -2450,6 +2577,7 @@ body.presenting .find-bar { display: none !important; }
         <button class="toolbar-update-btn" onclick="toggleUpdate();toggleMoreTray()">update</button>
         <button onclick="togglePresent();toggleMoreTray()">present</button>
         <button onclick="toggleSplitView();toggleMoreTray()">editor view</button>
+        <button onclick="toggleFs();toggleMoreTray()">files</button>
         <button onclick="openFind(false);toggleMoreTray()">find</button>
       </div>
       <button class="action-more" onclick="toggleMoreTray()">&#x22ef;</button>
@@ -3207,11 +3335,624 @@ function clearAllSearchDecorations() {
 // ── RE-EXPORTS FOR AUTOCOMPLETE ──
 
 
+// -- fs.js --
+
+// ── NOTEBOOK FILESYSTEM ──
+// Embedded key-value filesystem stored in the notebook HTML.
+// Files are base64-encoded (gzip-compressed when beneficial) in an AUDITABLE-FS comment block.
+// API lives at notebook.fs — available in every code cell.
+
+// notifyDirty() is called via window._notifyDirty — wired in globals.js
+// to avoid importing editor.js (which pulls in cm6.js and the full editor chain)
+
+// ── MIME / TYPE HELPERS ──
+
+const MIME_MAP = {
+  csv: 'text/csv', json: 'application/json', txt: 'text/plain', md: 'text/markdown',
+  html: 'text/html', js: 'text/javascript', mjs: 'text/javascript', css: 'text/css',
+  xml: 'application/xml', svg: 'image/svg+xml',
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp', gif: 'image/gif',
+  pdf: 'application/pdf', zip: 'application/zip', gz: 'application/gzip',
+  wasm: 'application/wasm', bin: 'application/octet-stream',
+};
+
+const SKIP_COMPRESS = new Set([
+  'image/png', 'image/jpeg', 'image/webp', 'image/gif',
+  'application/zip', 'application/gzip', 'application/wasm',
+]);
+
+function mimeFromExt(path) {
+  const ext = (path || '').split('.').pop().toLowerCase();
+  return MIME_MAP[ext] || 'application/octet-stream';
+}
+
+function isTextType(mime) {
+  if (mime.startsWith('text/')) return true;
+  return mime === 'application/json' || mime === 'application/javascript' || mime === 'image/svg+xml';
+}
+
+// ── PATH VALIDATION ──
+
+function validatePath(path) {
+  if (!path || typeof path !== 'string') throw new Error('fs: path must be a non-empty string');
+  if (path.startsWith('/')) throw new Error('fs: path must not start with /');
+  if (path.includes('..')) throw new Error('fs: path must not contain ..');
+  const segments = path.split('/');
+  if (segments.some(s => s === '')) throw new Error('fs: path must not contain empty segments');
+  return path;
+}
+
+// ── GLOB MATCHING ──
+
+function globMatch(pattern, path) {
+  // convert glob pattern to regex
+  let re = '';
+  let i = 0;
+  while (i < pattern.length) {
+    const ch = pattern[i];
+    if (ch === '*' && pattern[i + 1] === '*') {
+      // ** matches any depth
+      re += '.*';
+      i += 2;
+      if (pattern[i] === '/') i++; // skip trailing /
+    } else if (ch === '*') {
+      re += '[^/]*';
+      i++;
+    } else if (ch === '?') {
+      re += '[^/]';
+      i++;
+    } else {
+      re += ch.replace(/[.*+?^\${}()|[\\]\\\\]/g, '\\\\$&');
+      i++;
+    }
+  }
+  return new RegExp('^' + re + '$').test(path);
+}
+
+// ── COMPRESSION HELPERS ──
+
+async function gzipCompress(bytes) {
+  const cs = new CompressionStream('gzip');
+  const writer = cs.writable.getWriter();
+  writer.write(bytes);
+  writer.close();
+  return new Uint8Array(await new Response(cs.readable).arrayBuffer());
+}
+
+async function gzipDecompress(bytes) {
+  const ds = new DecompressionStream('gzip');
+  const writer = ds.writable.getWriter();
+  writer.write(bytes);
+  writer.close();
+  return new Uint8Array(await new Response(ds.readable).arrayBuffer());
+}
+
+function uint8ToBase64(bytes) {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+
+function base64ToUint8(b64) {
+  return Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+}
+
+// ── DIRTY TRACKING ──
+
+let _fsSyncTimer = null;
+
+function notifyFsDirty() {
+  if (typeof window !== 'undefined' && window._notifyDirty) window._notifyDirty();
+  // debounced live sync — syncFs is imported by save.js and wired up there
+  clearTimeout(_fsSyncTimer);
+  _fsSyncTimer = setTimeout(() => {
+    if (typeof window._syncFs === 'function') window._syncFs();
+  }, 500);
+}
+
+// ── FS MAP ──
+
+function getFs() {
+  if (!window._notebookFS) window._notebookFS = new Map();
+  return window._notebookFS;
+}
+
+// ── API ──
+
+async function write(path, content, opts = {}) {
+  validatePath(path);
+  const fs = getFs();
+
+  let bytes;
+  let mime = opts.type || mimeFromExt(path);
+
+  if (typeof content === 'string') {
+    bytes = new TextEncoder().encode(content);
+    if (!opts.type) mime = mimeFromExt(path);
+  } else if (content instanceof ArrayBuffer) {
+    bytes = new Uint8Array(content);
+  } else if (ArrayBuffer.isView(content)) {
+    bytes = new Uint8Array(content.buffer, content.byteOffset, content.byteLength);
+  } else if (typeof Blob !== 'undefined' && content instanceof Blob) {
+    if (content.type && !opts.type) mime = content.type;
+    bytes = new Uint8Array(await content.arrayBuffer());
+  } else if (typeof HTMLCanvasElement !== 'undefined' && content instanceof HTMLCanvasElement) {
+    const blob = await new Promise(resolve => content.toBlob(resolve, opts.type || 'image/png'));
+    mime = blob.type;
+    bytes = new Uint8Array(await blob.arrayBuffer());
+  } else if (typeof ImageData !== 'undefined' && content instanceof ImageData) {
+    const c = document.createElement('canvas');
+    c.width = content.width;
+    c.height = content.height;
+    c.getContext('2d').putImageData(content, 0, 0);
+    const blob = await new Promise(resolve => c.toBlob(resolve, opts.type || 'image/png'));
+    mime = blob.type;
+    bytes = new Uint8Array(await blob.arrayBuffer());
+  } else if (content != null && typeof content === 'object') {
+    bytes = new TextEncoder().encode(JSON.stringify(content, null, 2));
+    mime = opts.type || 'application/json';
+  } else {
+    throw new Error('fs.write: unsupported content type');
+  }
+
+  const size = bytes.length;
+  const shouldCompress = opts.compress !== false && !SKIP_COMPRESS.has(mime);
+  let data, compressed;
+
+  if (shouldCompress) {
+    const gz = await gzipCompress(bytes);
+    if (gz.length < size) {
+      data = uint8ToBase64(gz);
+      compressed = true;
+    } else {
+      data = uint8ToBase64(bytes);
+      compressed = false;
+    }
+  } else {
+    data = uint8ToBase64(bytes);
+    compressed = false;
+  }
+
+  fs.set(path, { type: mime, compressed, size, data });
+  notifyFsDirty();
+  return { path, size, compressedSize: Math.ceil(data.length * 3 / 4) };
+}
+
+async function read(path, format) {
+  const fs = getFs();
+  const entry = fs.get(path);
+  if (!entry) throw new Error(\`fs.read: file not found: \${path}\`);
+
+  let bytes = base64ToUint8(entry.data);
+  if (entry.compressed) bytes = await gzipDecompress(bytes);
+
+  const fmt = format || (isTextType(entry.type) ? 'text' : 'binary');
+
+  switch (fmt) {
+    case 'text': return new TextDecoder().decode(bytes);
+    case 'binary': return bytes;
+    case 'json': return JSON.parse(new TextDecoder().decode(bytes));
+    case 'blob': return new Blob([bytes], { type: entry.type });
+    case 'url': return URL.createObjectURL(new Blob([bytes], { type: entry.type }));
+    default: throw new Error(\`fs.read: unknown format: \${fmt}\`);
+  }
+}
+
+function list(pattern) {
+  const fs = getFs();
+  let entries;
+
+  if (!pattern) {
+    entries = [...fs.entries()];
+  } else if (pattern.includes('*') || pattern.includes('?')) {
+    entries = [...fs.entries()].filter(([p]) => globMatch(pattern, p));
+  } else if (pattern.endsWith('/')) {
+    entries = [...fs.entries()].filter(([p]) => p.startsWith(pattern));
+  } else {
+    // exact prefix + /
+    const prefix = pattern + '/';
+    entries = [...fs.entries()].filter(([p]) => p.startsWith(prefix) || p === pattern);
+  }
+
+  return entries
+    .map(([p, e]) => ({ path: p, type: e.type, size: e.size }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+}
+
+function delete_(path, opts = {}) {
+  const fs = getFs();
+
+  // exact file match
+  if (fs.has(path)) {
+    fs.delete(path);
+    notifyFsDirty();
+    return true;
+  }
+
+  // folder prefix
+  const prefix = path.endsWith('/') ? path : path + '/';
+  const children = [...fs.keys()].filter(k => k.startsWith(prefix));
+
+  if (children.length === 0) return false;
+  if (!opts.recursive) throw new Error('fs.delete: use { recursive: true } to delete folders');
+
+  for (const k of children) fs.delete(k);
+  notifyFsDirty();
+  return children.length;
+}
+
+function rename(oldPath, newPath) {
+  const fs = getFs();
+
+  // exact file
+  if (fs.has(oldPath)) {
+    const entry = fs.get(oldPath);
+    fs.delete(oldPath);
+    fs.set(newPath, entry);
+    notifyFsDirty();
+    return true;
+  }
+
+  // folder prefix rename
+  const oldPrefix = oldPath.endsWith('/') ? oldPath : oldPath + '/';
+  const newPrefix = newPath.endsWith('/') ? newPath : newPath + '/';
+  const children = [...fs.keys()].filter(k => k.startsWith(oldPrefix));
+  if (children.length === 0) return false;
+
+  for (const k of children) {
+    const entry = fs.get(k);
+    fs.delete(k);
+    fs.set(newPrefix + k.slice(oldPrefix.length), entry);
+  }
+  notifyFsDirty();
+  return true;
+}
+
+function copy(src, dest) {
+  const fs = getFs();
+
+  // exact file
+  if (fs.has(src)) {
+    const entry = fs.get(src);
+    fs.set(dest, { ...entry });
+    notifyFsDirty();
+    return { path: dest, size: entry.size };
+  }
+
+  // folder prefix copy
+  const srcPrefix = src.endsWith('/') ? src : src + '/';
+  const destPrefix = dest.endsWith('/') ? dest : dest + '/';
+  const children = [...fs.keys()].filter(k => k.startsWith(srcPrefix));
+  if (children.length === 0) throw new Error(\`fs.copy: source not found: \${src}\`);
+
+  let totalSize = 0;
+  for (const k of children) {
+    const entry = fs.get(k);
+    fs.set(destPrefix + k.slice(srcPrefix.length), { ...entry });
+    totalSize += entry.size;
+  }
+  notifyFsDirty();
+  return { path: dest, size: totalSize };
+}
+
+function stat(path) {
+  const fs = getFs();
+  const entry = fs.get(path);
+  if (!entry) return null;
+  return {
+    path,
+    type: entry.type,
+    size: entry.size,
+    compressedSize: Math.ceil(entry.data.length * 3 / 4),
+  };
+}
+
+function exists(path) {
+  return getFs().has(path);
+}
+
+function clear() {
+  const fs = getFs();
+  const count = fs.size;
+  fs.clear();
+  if (count) notifyFsDirty();
+  return count;
+}
+
+function getSize() {
+  let total = 0;
+  for (const entry of getFs().values()) total += entry.size;
+  return total;
+}
+
+async function import_(opts = {}) {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    if (opts.accept) input.accept = opts.accept;
+    if (opts.multiple) input.multiple = true;
+    input.onchange = async () => {
+      try {
+        const files = [...input.files];
+        if (!files.length) { reject(new Error('no file selected')); return; }
+
+        // unzip mode
+        if (opts.unzip && files.length === 1) {
+          const buf = new Uint8Array(await files[0].arrayBuffer());
+          // use std.unzip if available on window, else fall back
+          const unzipFn = window._stdUnzip;
+          if (!unzipFn) throw new Error('fs.import: unzip not available');
+          const entries = await unzipFn(buf);
+          const paths = [];
+          for (const [name, data] of entries) {
+            const path = (opts.prefix || '') + name;
+            await write(path, data);
+            paths.push(path);
+          }
+          resolve(opts.multiple ? paths : paths[0]);
+          return;
+        }
+
+        const paths = [];
+        for (const f of files) {
+          const path = (opts.prefix || '') + f.name;
+          const buf = new Uint8Array(await f.arrayBuffer());
+          await write(path, buf, { type: f.type || undefined });
+          paths.push(path);
+        }
+        resolve(opts.multiple ? paths : paths[0]);
+      } catch (e) {
+        reject(e);
+      }
+    };
+    input.click();
+  });
+}
+
+async function export_(path) {
+  const fs = getFs();
+
+  // exact file match
+  if (fs.has(path)) {
+    const bytes = await read(path, 'binary');
+    const entry = fs.get(path);
+    const blob = new Blob([bytes], { type: entry.type });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = path.split('/').pop();
+    a.click();
+    URL.revokeObjectURL(url);
+    return;
+  }
+
+  // glob
+  if (path.includes('*') || path.includes('?')) {
+    const matches = list(path);
+    if (!matches.length) throw new Error(\`fs.export: no files match: \${path}\`);
+    const entries = [];
+    for (const m of matches) {
+      entries.push([m.path, await read(m.path, 'binary')]);
+    }
+    const zipFn = window._stdZip;
+    if (!zipFn) throw new Error('fs.export: zip not available');
+    const zipBytes = await zipFn(entries);
+    const blob = new Blob([zipBytes], { type: 'application/zip' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'files.zip';
+    a.click();
+    URL.revokeObjectURL(url);
+    return;
+  }
+
+  // folder prefix
+  const prefix = path.endsWith('/') ? path : path + '/';
+  const matches = [...fs.keys()].filter(k => k.startsWith(prefix));
+  if (!matches.length) throw new Error(\`fs.export: not found: \${path}\`);
+
+  const entries = [];
+  for (const p of matches) {
+    entries.push([p.slice(prefix.length), await read(p, 'binary')]);
+  }
+  const zipFn = window._stdZip;
+  if (!zipFn) throw new Error('fs.export: zip not available');
+  const zipBytes = await zipFn(entries);
+  const name = (path.endsWith('/') ? path.slice(0, -1) : path).split('/').pop();
+  const blob = new Blob([zipBytes], { type: 'application/zip' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name + '.zip';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── PUBLIC API ──
+
+// exported for use by stdlib.js file({ embed }) and exec.js load('fs:...')
+const fsWrite = write;
+const fsRead = read;
+
+function createNotebookFs() {
+  return {
+    write, read, list, delete: delete_, rename, copy, stat, exists,
+    clear, get size() { return getSize(); },
+    import: import_, export: export_,
+  };
+}
+
+// ── UI PANEL ──
+
+let _fsPanelVisible = false;
+
+function toggleFs() {
+  _fsPanelVisible = !_fsPanelVisible;
+  const panel = document.getElementById('fsPanel');
+  if (panel) panel.style.display = _fsPanelVisible ? 'block' : '';
+  if (_fsPanelVisible) refreshFsPanel();
+}
+
+function fmtSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function refreshFsPanel() {
+  const body = document.getElementById('fsPanelBody');
+  if (!body) return;
+  const fs = getFs();
+
+  if (!fs.size) {
+    body.innerHTML = '<div style="color:var(--fg-dim);padding:12px 0;">no files</div>';
+    updateFsSummary();
+    return;
+  }
+
+  // group by first path segment
+  const folders = new Map(); // prefix -> [{path, entry}]
+  const root = []; // files without /
+
+  for (const [path, entry] of fs) {
+    const idx = path.indexOf('/');
+    if (idx === -1) {
+      root.push({ path, entry });
+    } else {
+      const prefix = path.slice(0, idx);
+      if (!folders.has(prefix)) folders.set(prefix, []);
+      folders.get(prefix).push({ path, entry });
+    }
+  }
+
+  let html = '';
+
+  // render folders
+  for (const [prefix, files] of [...folders.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const totalSize = files.reduce((s, f) => s + f.entry.size, 0);
+    html += \`<div class="fs-folder">\`;
+    html += \`<div class="fs-folder-header" data-prefix="\${esc(prefix)}" oncontextmenu="event.preventDefault();window._fsContextFolder(event,'\${esc(prefix)}')">\`
+      + \`<span class="fs-folder-toggle">\\u25b8</span> \${esc(prefix)}/ \`
+      + \`<span class="fs-folder-info">\${files.length} file\${files.length > 1 ? 's' : ''}, \${fmtSize(totalSize)}</span></div>\`;
+    html += \`<div class="fs-folder-contents" style="display:none">\`;
+    for (const { path, entry } of files.sort((a, b) => a.path.localeCompare(b.path))) {
+      const name = path.slice(prefix.length + 1);
+      html += \`<div class="fs-file-row" data-path="\${esc(path)}" oncontextmenu="event.preventDefault();window._fsContextFile(event,'\${esc(path)}')">\`
+        + \`<span class="fs-file-name">\${esc(name)}</span>\`
+        + \`<span class="fs-file-size">\${fmtSize(entry.size)}</span>\`
+        + \`<button class="fs-file-del" onclick="window._fsDelete('\${esc(path)}')">\\u00d7</button></div>\`;
+    }
+    html += \`</div></div>\`;
+  }
+
+  // render root files
+  for (const { path, entry } of root.sort((a, b) => a.path.localeCompare(b.path))) {
+    html += \`<div class="fs-file-row" data-path="\${esc(path)}" oncontextmenu="event.preventDefault();window._fsContextFile(event,'\${esc(path)}')">\`
+      + \`<span class="fs-file-name">\${esc(path)}</span>\`
+      + \`<span class="fs-file-size">\${fmtSize(entry.size)}</span>\`
+      + \`<button class="fs-file-del" onclick="window._fsDelete('\${esc(path)}')">\\u00d7</button></div>\`;
+  }
+
+  body.innerHTML = html;
+  updateFsSummary();
+
+  // wire folder toggles
+  body.querySelectorAll('.fs-folder-header').forEach(hdr => {
+    hdr.addEventListener('click', (e) => {
+      if (e.target.classList.contains('fs-file-del')) return;
+      const contents = hdr.nextElementSibling;
+      const toggle = hdr.querySelector('.fs-folder-toggle');
+      const open = contents.style.display !== 'none';
+      contents.style.display = open ? 'none' : '';
+      toggle.textContent = open ? '\\u25b8' : '\\u25be';
+    });
+  });
+}
+
+function updateFsSummary() {
+  const el = document.getElementById('fsSummary');
+  if (!el) return;
+  const fs = getFs();
+  if (!fs.size) { el.textContent = 'empty'; return; }
+  const total = getSize();
+  el.textContent = \`\${fs.size} file\${fs.size > 1 ? 's' : ''}, \${fmtSize(total)}\`;
+}
+
+function esc(s) {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function fsImport() {
+  import_({}).then(() => refreshFsPanel()).catch(() => {});
+}
+
+// context menu
+let _ctxMenu = null;
+
+function showContextMenu(x, y, items) {
+  closeContextMenu();
+  const menu = document.createElement('div');
+  menu.className = 'fs-context-menu';
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  for (const item of items) {
+    const btn = document.createElement('button');
+    btn.textContent = item.label;
+    btn.onclick = () => { closeContextMenu(); item.action(); };
+    menu.appendChild(btn);
+  }
+  document.body.appendChild(menu);
+  _ctxMenu = menu;
+
+  // close on outside click
+  setTimeout(() => document.addEventListener('click', closeContextMenu, { once: true }), 0);
+}
+
+function closeContextMenu() {
+  if (_ctxMenu) { _ctxMenu.remove(); _ctxMenu = null; }
+}
+
+// global handlers for onclick/oncontextmenu in generated HTML
+if (typeof window !== 'undefined') {
+  window._fsDelete = (path) => {
+    delete_(path);
+    refreshFsPanel();
+  };
+
+  window._fsContextFile = (event, path) => {
+    showContextMenu(event.clientX, event.clientY, [
+      { label: 'copy read command', action: () => navigator.clipboard.writeText(\`await notebook.fs.read("\${path}")\`) },
+      { label: 'copy path', action: () => navigator.clipboard.writeText(path) },
+      { label: 'rename', action: () => {
+        const newPath = prompt('new path:', path);
+        if (newPath && newPath !== path) { rename(path, newPath); refreshFsPanel(); }
+      }},
+      { label: 'download', action: () => export_(path) },
+      { label: 'delete', action: () => { delete_(path); refreshFsPanel(); } },
+    ]);
+  };
+
+  window._fsContextFolder = (event, prefix) => {
+    showContextMenu(event.clientX, event.clientY, [
+      { label: 'copy list command', action: () => navigator.clipboard.writeText(\`notebook.fs.list("\${prefix}/")\`) },
+      { label: 'download as zip', action: () => export_(prefix) },
+      { label: 'import into folder', action: () => import_({ prefix: prefix + '/' }).then(() => refreshFsPanel()).catch(() => {}) },
+      { label: 'rename folder', action: () => {
+        const newPrefix = prompt('new folder name:', prefix);
+        if (newPrefix && newPrefix !== prefix) { rename(prefix, newPrefix); refreshFsPanel(); }
+      }},
+      { label: 'delete folder', action: () => { delete_(prefix, { recursive: true }); refreshFsPanel(); } },
+    ]);
+  };
+}
+
 // -- stdlib.js --
 
 // ── STDLIB ──
 // Bundled standard library for notebook work.
 // Module-level — no per-cell state needed.
+
 
 // ── Provider Registry ──
 
@@ -3393,16 +4134,24 @@ function cross(...arrays) {
 // ── DOM / IO ──
 
 async function file(accept) {
-  if (_providers.file) return _providers.file(accept);
+  const opts = typeof accept === 'string' ? { accept } : (accept || {});
+  if (_providers.file && !opts.embed) return _providers.file(opts.accept || accept);
   return new Promise((resolve, reject) => {
     const input = document.createElement('input');
     input.type = 'file';
-    if (accept) input.accept = accept;
+    if (opts.accept) input.accept = opts.accept;
     input.onchange = async () => {
       const f = input.files[0];
       if (!f) { reject(new Error('no file selected')); return; }
-      const text = await f.text();
-      resolve({ name: f.name, text, size: f.size });
+      if (opts.embed) {
+        // embed in notebook filesystem — fsWrite is in same IIFE scope (fs.js loaded before stdlib.js)
+        const path = (opts.prefix || '') + f.name;
+        await fsWrite(path, new Uint8Array(await f.arrayBuffer()), { type: f.type || undefined });
+        resolve(path);
+      } else {
+        const text = await f.text();
+        resolve({ name: f.name, text, size: f.size });
+      }
     };
     input.click();
   });
@@ -3792,6 +4541,146 @@ const palette10 = [
   '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ac',
 ];
 
+// ── Zip / Unzip ──
+// Pure browser-native zip using CompressionStream('deflate-raw').
+// Same implementation as ext/sheet/src/zip.js.
+
+const _CRC32_TABLE = new Uint32Array(256);
+for (let i = 0; i < 256; i++) {
+  let c = i;
+  for (let j = 0; j < 8; j++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+  _CRC32_TABLE[i] = c;
+}
+
+function _crc32(bytes) {
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) {
+    crc = _CRC32_TABLE[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+const _enc = new TextEncoder();
+const _dec = new TextDecoder();
+
+async function _deflateRaw(data) {
+  const cs = new CompressionStream('deflate-raw');
+  const writer = cs.writable.getWriter();
+  writer.write(data);
+  writer.close();
+  return new Uint8Array(await new Response(cs.readable).arrayBuffer());
+}
+
+async function _inflateRaw(data) {
+  const ds = new DecompressionStream('deflate-raw');
+  const writer = ds.writable.getWriter();
+  writer.write(data);
+  writer.close();
+  return new Uint8Array(await new Response(ds.readable).arrayBuffer());
+}
+
+function _readU16(buf, off) { return buf[off] | (buf[off + 1] << 8); }
+function _readU32(buf, off) { return (buf[off] | (buf[off + 1] << 8) | (buf[off + 2] << 16) | (buf[off + 3] << 24)) >>> 0; }
+function _writeU16(buf, off, val) { buf[off] = val & 0xFF; buf[off + 1] = (val >> 8) & 0xFF; }
+function _writeU32(buf, off, val) { buf[off] = val & 0xFF; buf[off + 1] = (val >> 8) & 0xFF; buf[off + 2] = (val >> 16) & 0xFF; buf[off + 3] = (val >> 24) & 0xFF; }
+
+async function unzipFn(bytes) {
+  const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const entries = new Map();
+  let eocdOff = -1;
+  for (let i = buf.length - 22; i >= 0 && i >= buf.length - 65557; i--) {
+    if (_readU32(buf, i) === 0x06054B50) { eocdOff = i; break; }
+  }
+  if (eocdOff === -1) throw new Error('not a ZIP file: EOCD not found');
+  const entryCount = _readU16(buf, eocdOff + 10);
+  let cdOff = _readU32(buf, eocdOff + 16);
+  for (let e = 0; e < entryCount; e++) {
+    if (_readU32(buf, cdOff) !== 0x02014B50) throw new Error('bad central directory entry');
+    const method = _readU16(buf, cdOff + 10);
+    const crc = _readU32(buf, cdOff + 16);
+    const compSize = _readU32(buf, cdOff + 20);
+    const nameLen = _readU16(buf, cdOff + 28);
+    const extraLen = _readU16(buf, cdOff + 30);
+    const commentLen = _readU16(buf, cdOff + 32);
+    const localOff = _readU32(buf, cdOff + 42);
+    const name = _dec.decode(buf.subarray(cdOff + 46, cdOff + 46 + nameLen));
+    cdOff += 46 + nameLen + extraLen + commentLen;
+    if (name.endsWith('/')) continue;
+    const localNameLen = _readU16(buf, localOff + 26);
+    const localExtraLen = _readU16(buf, localOff + 28);
+    const dataOff = localOff + 30 + localNameLen + localExtraLen;
+    const compressed = buf.subarray(dataOff, dataOff + compSize);
+    let data;
+    if (method === 0) data = compressed.slice();
+    else if (method === 8) data = await _inflateRaw(compressed);
+    else throw new Error(\`unsupported compression method \${method} for \${name}\`);
+    if (_crc32(data) !== crc) throw new Error(\`CRC mismatch for \${name}\`);
+    entries.set(name, data);
+  }
+  return entries;
+}
+
+async function zipFn(entries) {
+  const items = entries instanceof Map ? [...entries] : entries;
+  const localHeaders = [];
+  const centralEntries = [];
+  let offset = 0;
+  for (const [name, raw] of items) {
+    const nameBytes = _enc.encode(name);
+    const crc = _crc32(raw);
+    const compressed = await _deflateRaw(raw);
+    const useDeflate = compressed.length < raw.length;
+    const stored = useDeflate ? compressed : raw;
+    const method = useDeflate ? 8 : 0;
+    const local = new Uint8Array(30 + nameBytes.length + stored.length);
+    _writeU32(local, 0, 0x04034B50);
+    _writeU16(local, 4, 20);
+    _writeU16(local, 8, method);
+    _writeU32(local, 14, crc);
+    _writeU32(local, 18, stored.length);
+    _writeU32(local, 22, raw.length);
+    _writeU16(local, 26, nameBytes.length);
+    local.set(nameBytes, 30);
+    local.set(stored, 30 + nameBytes.length);
+    localHeaders.push(local);
+    const central = new Uint8Array(46 + nameBytes.length);
+    _writeU32(central, 0, 0x02014B50);
+    _writeU16(central, 4, 20);
+    _writeU16(central, 6, 20);
+    _writeU16(central, 10, method);
+    _writeU32(central, 16, crc);
+    _writeU32(central, 20, stored.length);
+    _writeU32(central, 24, raw.length);
+    _writeU16(central, 28, nameBytes.length);
+    _writeU32(central, 42, offset);
+    central.set(nameBytes, 46);
+    centralEntries.push(central);
+    offset += local.length;
+  }
+  const cdOffset = offset;
+  let cdSize = 0;
+  for (const c of centralEntries) cdSize += c.length;
+  const eocd = new Uint8Array(22);
+  _writeU32(eocd, 0, 0x06054B50);
+  _writeU16(eocd, 8, items.length);
+  _writeU16(eocd, 10, items.length);
+  _writeU32(eocd, 12, cdSize);
+  _writeU32(eocd, 16, cdOffset);
+  const total = offset + cdSize + 22;
+  const result = new Uint8Array(total);
+  let pos = 0;
+  for (const l of localHeaders) { result.set(l, pos); pos += l.length; }
+  for (const c of centralEntries) { result.set(c, pos); pos += c.length; }
+  result.set(eocd, pos);
+  return result;
+}
+
+// expose for fs.js import/export
+if (typeof window !== 'undefined') {
+  window._stdZip = zipFn;
+  window._stdUnzip = unzipFn;
+}
+
 // ── Export ──
 
 function hsl(h, s, l, a = 1) {
@@ -3804,7 +4693,7 @@ const std = {
   sum, mean, median, extent, bin, linspace,
   unique, zip, cross,
   file, download, el, copy, fmt,
-  include,
+  include, zipArchive: zipFn, unzipArchive: unzipFn,
   color, colorScale, hsl,
   viridis, magma, inferno, plasma, turbo,
   palette10,
@@ -5088,6 +5977,18 @@ async function execCell(cell) {
     if (url === '@python') return python;
     if (url === '@python/this') { display(zenOfPython()); return python; }
 
+    // fs: scheme — load from notebook filesystem
+    if (url.startsWith('fs:')) {
+      const fsPath = url.slice(3);
+      if (!window._importCache[url]) {
+        const source = await fsRead(fsPath, 'text');
+        const blob = new Blob([source], { type: 'text/javascript' });
+        const blobUrl = URL.createObjectURL(blob);
+        window._importCache[url] = await import(blobUrl);
+      }
+      return window._importCache[url];
+    }
+
     // @atra/<name> — atra library binary distributions
     // if pre-installed (via /// module: directive or install()), the existing
     // _installedModules[url] check below handles it. this fallback covers
@@ -5681,6 +6582,7 @@ async function execCell(cell) {
 
   // notebook API — programmatic notebook control
   const notebook = {
+    fs: createNotebookFs(),
     get cells() { return S.cells.map(c => ({ id: c.id, type: c.type, code: c.code })); },
     get scope() { return { ...S.scope }; },
     addCell: (type, code, afterId) => addCell(type, code, afterId),
@@ -6738,8 +7640,8 @@ function togglePresent() {
 
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
-const __AUDITABLE_BUILD_DATE__ = '2026-03-17';
-const __AUDITABLE_BASE_SIZE__ = 1007156;
+const __AUDITABLE_BUILD_DATE__ = '2026-03-18';
+const __AUDITABLE_BASE_SIZE__ = 1046064;
 
 (function() {
   const ver = $('#aboutVersion');
@@ -7403,6 +8305,7 @@ const __AUDITABLE_PAGES_URL__ = 'https://endarthur.github.io/auditable';
 // Bundled standard library for notebook work.
 // Module-level — no per-cell state needed.
 
+
 // ── Provider Registry ──
 
 const _providers = { file: null, download: null };
@@ -7583,16 +8486,24 @@ function cross(...arrays) {
 // ── DOM / IO ──
 
 async function file(accept) {
-  if (_providers.file) return _providers.file(accept);
+  const opts = typeof accept === 'string' ? { accept } : (accept || {});
+  if (_providers.file && !opts.embed) return _providers.file(opts.accept || accept);
   return new Promise((resolve, reject) => {
     const input = document.createElement('input');
     input.type = 'file';
-    if (accept) input.accept = accept;
+    if (opts.accept) input.accept = opts.accept;
     input.onchange = async () => {
       const f = input.files[0];
       if (!f) { reject(new Error('no file selected')); return; }
-      const text = await f.text();
-      resolve({ name: f.name, text, size: f.size });
+      if (opts.embed) {
+        // embed in notebook filesystem — fsWrite is in same IIFE scope (fs.js loaded before stdlib.js)
+        const path = (opts.prefix || '') + f.name;
+        await fsWrite(path, new Uint8Array(await f.arrayBuffer()), { type: f.type || undefined });
+        resolve(path);
+      } else {
+        const text = await f.text();
+        resolve({ name: f.name, text, size: f.size });
+      }
     };
     input.click();
   });
@@ -7982,6 +8893,146 @@ const palette10 = [
   '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ac',
 ];
 
+// ── Zip / Unzip ──
+// Pure browser-native zip using CompressionStream('deflate-raw').
+// Same implementation as ext/sheet/src/zip.js.
+
+const _CRC32_TABLE = new Uint32Array(256);
+for (let i = 0; i < 256; i++) {
+  let c = i;
+  for (let j = 0; j < 8; j++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+  _CRC32_TABLE[i] = c;
+}
+
+function _crc32(bytes) {
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) {
+    crc = _CRC32_TABLE[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+const _enc = new TextEncoder();
+const _dec = new TextDecoder();
+
+async function _deflateRaw(data) {
+  const cs = new CompressionStream('deflate-raw');
+  const writer = cs.writable.getWriter();
+  writer.write(data);
+  writer.close();
+  return new Uint8Array(await new Response(cs.readable).arrayBuffer());
+}
+
+async function _inflateRaw(data) {
+  const ds = new DecompressionStream('deflate-raw');
+  const writer = ds.writable.getWriter();
+  writer.write(data);
+  writer.close();
+  return new Uint8Array(await new Response(ds.readable).arrayBuffer());
+}
+
+function _readU16(buf, off) { return buf[off] | (buf[off + 1] << 8); }
+function _readU32(buf, off) { return (buf[off] | (buf[off + 1] << 8) | (buf[off + 2] << 16) | (buf[off + 3] << 24)) >>> 0; }
+function _writeU16(buf, off, val) { buf[off] = val & 0xFF; buf[off + 1] = (val >> 8) & 0xFF; }
+function _writeU32(buf, off, val) { buf[off] = val & 0xFF; buf[off + 1] = (val >> 8) & 0xFF; buf[off + 2] = (val >> 16) & 0xFF; buf[off + 3] = (val >> 24) & 0xFF; }
+
+async function unzipFn(bytes) {
+  const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const entries = new Map();
+  let eocdOff = -1;
+  for (let i = buf.length - 22; i >= 0 && i >= buf.length - 65557; i--) {
+    if (_readU32(buf, i) === 0x06054B50) { eocdOff = i; break; }
+  }
+  if (eocdOff === -1) throw new Error('not a ZIP file: EOCD not found');
+  const entryCount = _readU16(buf, eocdOff + 10);
+  let cdOff = _readU32(buf, eocdOff + 16);
+  for (let e = 0; e < entryCount; e++) {
+    if (_readU32(buf, cdOff) !== 0x02014B50) throw new Error('bad central directory entry');
+    const method = _readU16(buf, cdOff + 10);
+    const crc = _readU32(buf, cdOff + 16);
+    const compSize = _readU32(buf, cdOff + 20);
+    const nameLen = _readU16(buf, cdOff + 28);
+    const extraLen = _readU16(buf, cdOff + 30);
+    const commentLen = _readU16(buf, cdOff + 32);
+    const localOff = _readU32(buf, cdOff + 42);
+    const name = _dec.decode(buf.subarray(cdOff + 46, cdOff + 46 + nameLen));
+    cdOff += 46 + nameLen + extraLen + commentLen;
+    if (name.endsWith('/')) continue;
+    const localNameLen = _readU16(buf, localOff + 26);
+    const localExtraLen = _readU16(buf, localOff + 28);
+    const dataOff = localOff + 30 + localNameLen + localExtraLen;
+    const compressed = buf.subarray(dataOff, dataOff + compSize);
+    let data;
+    if (method === 0) data = compressed.slice();
+    else if (method === 8) data = await _inflateRaw(compressed);
+    else throw new Error(\\\`unsupported compression method \\\${method} for \\\${name}\\\`);
+    if (_crc32(data) !== crc) throw new Error(\\\`CRC mismatch for \\\${name}\\\`);
+    entries.set(name, data);
+  }
+  return entries;
+}
+
+async function zipFn(entries) {
+  const items = entries instanceof Map ? [...entries] : entries;
+  const localHeaders = [];
+  const centralEntries = [];
+  let offset = 0;
+  for (const [name, raw] of items) {
+    const nameBytes = _enc.encode(name);
+    const crc = _crc32(raw);
+    const compressed = await _deflateRaw(raw);
+    const useDeflate = compressed.length < raw.length;
+    const stored = useDeflate ? compressed : raw;
+    const method = useDeflate ? 8 : 0;
+    const local = new Uint8Array(30 + nameBytes.length + stored.length);
+    _writeU32(local, 0, 0x04034B50);
+    _writeU16(local, 4, 20);
+    _writeU16(local, 8, method);
+    _writeU32(local, 14, crc);
+    _writeU32(local, 18, stored.length);
+    _writeU32(local, 22, raw.length);
+    _writeU16(local, 26, nameBytes.length);
+    local.set(nameBytes, 30);
+    local.set(stored, 30 + nameBytes.length);
+    localHeaders.push(local);
+    const central = new Uint8Array(46 + nameBytes.length);
+    _writeU32(central, 0, 0x02014B50);
+    _writeU16(central, 4, 20);
+    _writeU16(central, 6, 20);
+    _writeU16(central, 10, method);
+    _writeU32(central, 16, crc);
+    _writeU32(central, 20, stored.length);
+    _writeU32(central, 24, raw.length);
+    _writeU16(central, 28, nameBytes.length);
+    _writeU32(central, 42, offset);
+    central.set(nameBytes, 46);
+    centralEntries.push(central);
+    offset += local.length;
+  }
+  const cdOffset = offset;
+  let cdSize = 0;
+  for (const c of centralEntries) cdSize += c.length;
+  const eocd = new Uint8Array(22);
+  _writeU32(eocd, 0, 0x06054B50);
+  _writeU16(eocd, 8, items.length);
+  _writeU16(eocd, 10, items.length);
+  _writeU32(eocd, 12, cdSize);
+  _writeU32(eocd, 16, cdOffset);
+  const total = offset + cdSize + 22;
+  const result = new Uint8Array(total);
+  let pos = 0;
+  for (const l of localHeaders) { result.set(l, pos); pos += l.length; }
+  for (const c of centralEntries) { result.set(c, pos); pos += c.length; }
+  result.set(eocd, pos);
+  return result;
+}
+
+// expose for fs.js import/export
+if (typeof window !== 'undefined') {
+  window._stdZip = zipFn;
+  window._stdUnzip = unzipFn;
+}
+
 // ── Export ──
 
 function hsl(h, s, l, a = 1) {
@@ -7994,7 +9045,7 @@ const std = {
   sum, mean, median, extent, bin, linspace,
   unique, zip, cross,
   file, download, el, copy, fmt,
-  include,
+  include, zipArchive: zipFn, unzipArchive: unzipFn,
   color, colorScale, hsl,
   viridis, magma, inferno, plasma, turbo,
   palette10,
@@ -9476,6 +10527,18 @@ async function execCell(cell) {
     if (url === '@python') return python;
     if (url === '@python/this') { display(zenOfPython()); return python; }
 
+    // fs: scheme — load from notebook filesystem
+    if (url.startsWith('fs:')) {
+      const fsPath = url.slice(3);
+      if (!window._importCache[url]) {
+        const source = await fsRead(fsPath, 'text');
+        const blob = new Blob([source], { type: 'text/javascript' });
+        const blobUrl = URL.createObjectURL(blob);
+        window._importCache[url] = await import(blobUrl);
+      }
+      return window._importCache[url];
+    }
+
     // @atra/<name> — atra library binary distributions
     // if pre-installed (via /// module: directive or install()), the existing
     // _installedModules[url] check below handles it. this fallback covers
@@ -10069,6 +11132,7 @@ async function execCell(cell) {
 
   // notebook API — programmatic notebook control
   const notebook = {
+    fs: createNotebookFs(),
     get cells() { return S.cells.map(c => ({ id: c.id, type: c.type, code: c.code })); },
     get scope() { return { ...S.scope }; },
     addCell: (type, code, afterId) => addCell(type, code, afterId),
@@ -10531,7 +11595,7 @@ function decodeModules(raw) {
 // keep AUDITABLE-DATA/SETTINGS/MODULES comment nodes up-to-date in the live DOM
 // so that a native browser Ctrl+S (which dumps the DOM) produces a loadable file.
 
-let _dataNode = null, _settingsNode = null, _modulesNode = null;
+let _dataNode = null, _settingsNode = null, _modulesNode = null, _fsNode = null;
 let _liveSyncTimer = null;
 
 function findCommentNode(tag) {
@@ -10559,6 +11623,8 @@ function initLiveSync() {
   _settingsNode = ensureCommentNode('AUDITABLE-SETTINGS', 'notebook settings: JSON {theme, fontSize, width, ...}');
   // modules node is created on demand when modules exist
   _modulesNode = findCommentNode('AUDITABLE-MODULES');
+  // fs node is created on demand when files exist
+  _fsNode = findCommentNode('AUDITABLE-FS');
 }
 
 function syncData() {
@@ -10598,6 +11664,26 @@ function syncModules() {
   }
   _modulesNode.nodeValue = 'AUDITABLE-MODULES\\n' + encodeModules(mods) + '\\nAUDITABLE-MODULES';
 }
+
+function syncFs() {
+  const fs = window._notebookFS;
+  if (!fs || !fs.size) {
+    // remove node if no files
+    if (_fsNode) {
+      if (_fsNode.previousSibling?.nodeType === 8) _fsNode.previousSibling.remove();
+      _fsNode.remove();
+      _fsNode = null;
+    }
+    return;
+  }
+  if (!_fsNode) {
+    _fsNode = ensureCommentNode('AUDITABLE-FS', 'notebook filesystem: base64-encoded JSON mapping paths to {type, compressed, size, data}');
+  }
+  _fsNode.nodeValue = 'AUDITABLE-FS\\n' + encodeModules(Object.fromEntries(fs)) + '\\nAUDITABLE-FS';
+}
+
+// wire syncFs to window for fs.js debounced callback
+if (typeof window !== 'undefined') window._syncFs = syncFs;
 
 // ── SAVE / LOAD ──
 
@@ -10660,6 +11746,19 @@ function buildNotebookHtml() {
   const uStatus = updatePanEl.querySelector('#updateStatus');
   if (uStatus) { uStatus.innerHTML = ''; uStatus.className = 'update-status'; }
   const updatePanHTML = updatePanEl.outerHTML.replace(/display:\\s*block;?/, '');
+  // FS panel — reset to empty state
+  const fsPanEl = document.getElementById('fsPanel');
+  let fsPanHTML = '';
+  if (fsPanEl) {
+    const clone = fsPanEl.cloneNode(true);
+    clone.style.display = '';
+    const body = clone.querySelector('#fsPanelBody');
+    if (body) body.innerHTML = '';
+    const summary = clone.querySelector('#fsSummary');
+    if (summary) summary.textContent = 'empty';
+    fsPanHTML = clone.outerHTML.replace(/display:\\s*block;?/, '');
+  }
+
   const statusbarHTML = document.querySelector('.statusbar').outerHTML;
 
   // read toolbar from live DOM and patch the title value
@@ -10720,6 +11819,8 @@ function buildNotebookHtml() {
 \${updateOvHTML}
 \${updatePanHTML}
 
+\${fsPanHTML}
+
 \${toolbarHTML}
 
 \${findBarHTML}
@@ -10733,6 +11834,7 @@ function buildNotebookHtml() {
 
 \${'<!-- cell data: JSON array of {type, code, collapsed?} -->\\n<!--AUDITABLE-DATA\\n' + JSON.stringify(cellData) + '\\nAUDITABLE-DATA-->'}
 \${Object.keys(window._installedModules || {}).length ? '<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId} -->\\n<!--AUDITABLE-MODULES\\n' + encodeModules(window._installedModules) + '\\nAUDITABLE-MODULES-->' : ''}
+\${window._notebookFS?.size ? '<!-- notebook filesystem: base64-encoded JSON mapping paths to {type, compressed, size, data} -->\\n<!--AUDITABLE-FS\\n' + encodeModules(Object.fromEntries(window._notebookFS)) + '\\nAUDITABLE-FS-->' : ''}
 \${'<!-- notebook settings: JSON {theme, fontSize, width, ...} -->\\n<!--AUDITABLE-SETTINGS\\n' + JSON.stringify(getSettings()) + '\\nAUDITABLE-SETTINGS-->'}
 
 <script>\\n\${script}\\n<\\/script>
@@ -10923,6 +12025,16 @@ function loadFromEmbed() {
     }
   }
 
+  // restore notebook filesystem
+  const fsMatch = raw.match(/<!--AUDITABLE-FS\\n([\\s\\S]*?)\\nAUDITABLE-FS-->/);
+  if (fsMatch) {
+    try {
+      window._notebookFS = new Map(Object.entries(decodeModules(fsMatch[1])));
+    } catch (e) {
+      console.error('Failed to parse notebook FS:', e);
+    }
+  }
+
   // restore settings
   const setMatch = raw.match(/<!--AUDITABLE-SETTINGS\\n([\\s\\S]*?)\\nAUDITABLE-SETTINGS-->/);
   if (setMatch) {
@@ -11100,8 +12212,14 @@ function updateStatus() {
   const sizeText = '~' + sizeKB + ' KB' + (useContent ? ' content' : '');
   $('#statusCells').textContent = statusText;
   const compare = typeof sizeCompare === 'function' ? sizeCompare(displayBytes) : '';
+  let fsText = '';
+  if (window._notebookFS?.size > 0) {
+    let fsBytes = 0;
+    for (const e of window._notebookFS.values()) fsBytes += e.size;
+    fsText = ' \\u00b7 fs: ' + (fsBytes >= 1024 * 1024 ? (fsBytes / (1024 * 1024)).toFixed(1) + ' MB' : Math.max(1, Math.round(fsBytes / 1024)) + ' KB');
+  }
   const sizeEl = document.getElementById('statusSize');
-  if (sizeEl) sizeEl.textContent = (compare ? sizeText + ' \\u00b7 ' + compare : sizeText) + ' \\u00b7 ';
+  if (sizeEl) sizeEl.textContent = (compare ? sizeText + ' \\u00b7 ' + compare : sizeText) + fsText + ' \\u00b7 ';
   // mirror to toolbar for mobile
   const toolbarStatus = document.getElementById('toolbarStatus');
   if (toolbarStatus) toolbarStatus.textContent = (compare || sizeText) + ' \\u00b7 ' + statusText;
@@ -12597,6 +13715,38 @@ const BUILTIN_HELP = {
     "sig": "workerPool(fn, n?)",
     "desc": "pool of n workers (default: hardwareConcurrency) \\u2014 .map(arr) for parallel batch"
   },
+  "notebook.fs.write": {
+    "sig": "await notebook.fs.write(path, content, {compress?, type?}?)",
+    "desc": "embed file in notebook \\u2014 string/ArrayBuffer/Blob/Canvas/object"
+  },
+  "notebook.fs.read": {
+    "sig": "await notebook.fs.read(path, format?)",
+    "desc": "read embedded file \\u2014 format: text/binary/json/blob/url"
+  },
+  "notebook.fs.list": {
+    "sig": "notebook.fs.list(pattern?)",
+    "desc": "list files \\u2014 no arg=all, 'dir/'=prefix, '**/*.csv'=glob"
+  },
+  "notebook.fs.delete": {
+    "sig": "notebook.fs.delete(path, {recursive?}?)",
+    "desc": "delete file or folder ({recursive:true})"
+  },
+  "notebook.fs.import": {
+    "sig": "await notebook.fs.import({accept?, multiple?, prefix?, unzip?}?)",
+    "desc": "pick file(s) and embed in notebook filesystem"
+  },
+  "notebook.fs.export": {
+    "sig": "await notebook.fs.export(path)",
+    "desc": "download file, folder as zip, or glob match as zip"
+  },
+  "std.zipArchive": {
+    "sig": "await std.zipArchive(entries)",
+    "desc": "create zip \\u2014 Map or [[name, Uint8Array]] \\u2192 Uint8Array"
+  },
+  "std.unzipArchive": {
+    "sig": "await std.unzipArchive(bytes)",
+    "desc": "extract zip \\u2014 Uint8Array \\u2192 Map<string, Uint8Array>"
+  },
   "atra": {
     "sig": "atra\`...\` or atra({imports})\`...\`",
     "desc": "compile Fortran/Pascal to Wasm (load ext/atra/index.js)"
@@ -13904,12 +15054,14 @@ function applySizeCompareRef(val) {
 
 
 
+
 // state
 window.$ = $;
 window.S = S;
 
 // editor
 window.toggleAutorun = toggleAutorun;
+window._notifyDirty = notifyDirty;
 
 // settings
 window.toggleSettings = toggleSettings;
@@ -13972,6 +15124,10 @@ window.newNotebook = newNotebook;
 
 // split view
 window.toggleSplitView = toggleSplitView;
+
+// filesystem panel
+window.toggleFs = toggleFs;
+window.fsImport = fsImport;
 
 // -- init.js --
 

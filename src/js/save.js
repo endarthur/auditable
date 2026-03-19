@@ -29,7 +29,7 @@ export function decodeModules(raw) {
 // keep AUDITABLE-DATA/SETTINGS/MODULES comment nodes up-to-date in the live DOM
 // so that a native browser Ctrl+S (which dumps the DOM) produces a loadable file.
 
-let _dataNode = null, _settingsNode = null, _modulesNode = null;
+let _dataNode = null, _settingsNode = null, _modulesNode = null, _fsNode = null;
 let _liveSyncTimer = null;
 
 function findCommentNode(tag) {
@@ -57,6 +57,8 @@ export function initLiveSync() {
   _settingsNode = ensureCommentNode('AUDITABLE-SETTINGS', 'notebook settings: JSON {theme, fontSize, width, ...}');
   // modules node is created on demand when modules exist
   _modulesNode = findCommentNode('AUDITABLE-MODULES');
+  // fs node is created on demand when files exist
+  _fsNode = findCommentNode('AUDITABLE-FS');
 }
 
 export function syncData() {
@@ -96,6 +98,26 @@ export function syncModules() {
   }
   _modulesNode.nodeValue = 'AUDITABLE-MODULES\n' + encodeModules(mods) + '\nAUDITABLE-MODULES';
 }
+
+export function syncFs() {
+  const fs = window._notebookFS;
+  if (!fs || !fs.size) {
+    // remove node if no files
+    if (_fsNode) {
+      if (_fsNode.previousSibling?.nodeType === 8) _fsNode.previousSibling.remove();
+      _fsNode.remove();
+      _fsNode = null;
+    }
+    return;
+  }
+  if (!_fsNode) {
+    _fsNode = ensureCommentNode('AUDITABLE-FS', 'notebook filesystem: base64-encoded JSON mapping paths to {type, compressed, size, data}');
+  }
+  _fsNode.nodeValue = 'AUDITABLE-FS\n' + encodeModules(Object.fromEntries(fs)) + '\nAUDITABLE-FS';
+}
+
+// wire syncFs to window for fs.js debounced callback
+if (typeof window !== 'undefined') window._syncFs = syncFs;
 
 // ── SAVE / LOAD ──
 
@@ -158,6 +180,19 @@ function buildNotebookHtml() {
   const uStatus = updatePanEl.querySelector('#updateStatus');
   if (uStatus) { uStatus.innerHTML = ''; uStatus.className = 'update-status'; }
   const updatePanHTML = updatePanEl.outerHTML.replace(/display:\s*block;?/, '');
+  // FS panel — reset to empty state
+  const fsPanEl = document.getElementById('fsPanel');
+  let fsPanHTML = '';
+  if (fsPanEl) {
+    const clone = fsPanEl.cloneNode(true);
+    clone.style.display = '';
+    const body = clone.querySelector('#fsPanelBody');
+    if (body) body.innerHTML = '';
+    const summary = clone.querySelector('#fsSummary');
+    if (summary) summary.textContent = 'empty';
+    fsPanHTML = clone.outerHTML.replace(/display:\s*block;?/, '');
+  }
+
   const statusbarHTML = document.querySelector('.statusbar').outerHTML;
 
   // read toolbar from live DOM and patch the title value
@@ -218,6 +253,8 @@ ${settingsPanHTML}
 ${updateOvHTML}
 ${updatePanHTML}
 
+${fsPanHTML}
+
 ${toolbarHTML}
 
 ${findBarHTML}
@@ -231,6 +268,7 @@ ${statusbarHTML}
 
 ${'<!-- cell data: JSON array of {type, code, collapsed?} -->\n<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->'}
 ${Object.keys(window._installedModules || {}).length ? '<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId} -->\n<!--AUDITABLE-MODULES\n' + encodeModules(window._installedModules) + '\nAUDITABLE-MODULES-->' : ''}
+${window._notebookFS?.size ? '<!-- notebook filesystem: base64-encoded JSON mapping paths to {type, compressed, size, data} -->\n<!--AUDITABLE-FS\n' + encodeModules(Object.fromEntries(window._notebookFS)) + '\nAUDITABLE-FS-->' : ''}
 ${'<!-- notebook settings: JSON {theme, fontSize, width, ...} -->\n<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->'}
 
 <script>\n${script}\n<\/script>
@@ -418,6 +456,16 @@ export function loadFromEmbed() {
       window._installedModules = decodeModules(modMatch[1]);
     } catch (e) {
       console.error('Failed to parse installed modules:', e);
+    }
+  }
+
+  // restore notebook filesystem
+  const fsMatch = raw.match(/<!--AUDITABLE-FS\n([\s\S]*?)\nAUDITABLE-FS-->/);
+  if (fsMatch) {
+    try {
+      window._notebookFS = new Map(Object.entries(decodeModules(fsMatch[1])));
+    } catch (e) {
+      console.error('Failed to parse notebook FS:', e);
     }
   }
 

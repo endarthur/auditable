@@ -167,8 +167,60 @@
     "sig": "workerPool(fn, n?)",
     "desc": "pool of n workers (default: hardwareConcurrency) \u2014 .map(arr) for parallel batch"
   },
+  "notebook.fs.write": {
+    "sig": "await notebook.fs.write(path, content, {compress?, type?}?)",
+    "desc": "embed file in notebook \u2014 string/ArrayBuffer/Blob/Canvas/object"
+  },
+  "notebook.fs.read": {
+    "sig": "await notebook.fs.read(path, format?)",
+    "desc": "read embedded file \u2014 format: text/binary/json/blob/url"
+  },
+  "notebook.fs.list": {
+    "sig": "notebook.fs.list(pattern?)",
+    "desc": "list files \u2014 no arg=all, 'dir/'=prefix, '**/*.csv'=glob"
+  },
+  "notebook.fs.delete": {
+    "sig": "notebook.fs.delete(path, {recursive?}?)",
+    "desc": "delete file or folder ({recursive:true})"
+  },
+  "notebook.fs.import": {
+    "sig": "await notebook.fs.import({accept?, multiple?, prefix?, unzip?}?)",
+    "desc": "pick file(s) and embed in notebook filesystem"
+  },
+  "notebook.fs.export": {
+    "sig": "await notebook.fs.export(path)",
+    "desc": "download file, folder as zip, or glob match as zip"
+  },
+  "std.zipArchive": {
+    "sig": "await std.zipArchive(entries)",
+    "desc": "create zip \u2014 Map or [[name, Uint8Array]] \u2192 Uint8Array"
+  },
+  "std.unzipArchive": {
+    "sig": "await std.unzipArchive(bytes)",
+    "desc": "extract zip \u2014 Uint8Array \u2192 Map<string, Uint8Array>"
+  },
   "atra": {
     "sig": "atra`...` or atra({imports})`...`",
     "desc": "compile Fortran/Pascal to Wasm (load ext/atra/index.js)"
+  },
+  "// %mcp": {
+    "sig": "// %mcp | // %mcp r | // %mcp rw",
+    "desc": "MCP access: read-only (r), or read-write (rw). enables getCellSource/getCellOutput/updateCellSource"
+  },
+  "// %private": {
+    "sig": "// %private",
+    "desc": "hard opt-out from MCP \u2014 cell invisible to agents, overrides manifest defaults"
+  },
+  "// %mcp describe": {
+    "sig": "// %mcp describe \"description text\"",
+    "desc": "metadata for private cells \u2014 description visible in listCells without exposing source/output"
+  },
+  "// %mcp manifest": {
+    "sig": "// %mcp manifest",
+    "desc": "governance cell \u2014 returns {defaults, tools, fs} object. controls access for all cells"
+  },
+  "// %mcp fs": {
+    "sig": "// %mcp fs prefix/ | // %mcp fs:read prefix/ | // %mcp fs *",
+    "desc": "allow MCP agent to access notebook.fs under prefix. :read = no writes. * = all paths"
   }
 }

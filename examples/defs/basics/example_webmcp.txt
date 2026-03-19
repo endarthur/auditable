@@ -1,0 +1,213 @@
+/// auditable
+/// title: WebMCP bridge
+
+/// md
+# WebMCP bridge
+
+connect an MCP agent (Claude Code, or any MCP client) to a running notebook. the agent can inspect cells, read outputs, edit code, and interact with the embedded filesystem — all governed by per-cell access directives.
+
+**setup:** start the bridge (`node webmcp_bridge.js` or use `.mcp.json` auto-detection), then connect this notebook via the **mcp** panel (ellipsis menu → mcp) or append `#mcp=port:token` to the URL.
+
+/// md
+## access control
+
+every cell has an access level that determines what the agent can see and do:
+
+| directive | effect |
+|-----------|--------|
+| *(none)* | effectively private — agent sees index and type only |
+| `// %mcp` | read-only — agent can read source and output |
+| `// %mcp r` | same as `// %mcp` |
+| `// %mcp rw` | read-write — agent can read and update source |
+| `// %private` | hard opt-out — invisible to agent, overrides manifest |
+| `// %mcp describe "..."` | metadata for private cells — description visible without source |
+
+precedence: `%private` > `%mcp rw` > `%mcp` > manifest tool-level > manifest defaults > none
+
+/// md
+## read-only cell
+
+the agent can read this cell's source and output, but cannot modify it.
+
+/// code
+// %mcp
+// this cell is read-only to MCP agents
+const sensorData = [
+  { time: 0, temp: 22.1, humidity: 45 },
+  { time: 1, temp: 22.4, humidity: 44 },
+  { time: 2, temp: 23.0, humidity: 42 },
+  { time: 3, temp: 23.8, humidity: 40 },
+  { time: 4, temp: 24.2, humidity: 38 },
+  { time: 5, temp: 24.5, humidity: 37 },
+  { time: 6, temp: 24.1, humidity: 39 },
+  { time: 7, temp: 23.6, humidity: 41 },
+];
+ui.table(sensorData);
+
+/// md
+## widget cell
+
+the agent can read widget values via `getCellOutput` and set them via `setWidgetValue` — no code editing needed. this enables parameter sweeps: adjust a slider, read the output, adjust again.
+
+/// html
+// %mcp rw
+<audit-slider name="smoothWindow" min="1" max="4" step="1" value="1" label="smoothing window"></audit-slider>
+
+/// md
+## read-write cell
+
+the agent can both read and update this cell's source — useful for analysis code, parameters, or configuration.
+
+/// code
+// %mcp rw
+// the agent can edit this cell — try asking it to change the analysis
+// smoothWindow comes from the widget cell above (default: 1 = 3-point avg)
+const w = typeof smoothWindow !== 'undefined' ? smoothWindow : 1;
+const smoothed = sensorData.map((d, i, arr) => {
+  if (i < w || i >= arr.length - w) return d;
+  let tSum = 0, hSum = 0, n = 0;
+  for (let j = i - w; j <= i + w; j++) { tSum += arr[j].temp; hSum += arr[j].humidity; n++; }
+  return { ...d, temp: tSum / n, humidity: hSum / n };
+});
+
+const size = Math.min(500, window.innerWidth - 80);
+const c = ui.canvas(size, 200);
+const ctx = c.getContext("2d");
+
+ctx.fillStyle = "#1a1a1a";
+ctx.fillRect(0, 0, size, 200);
+
+// raw data
+ctx.strokeStyle = "#555";
+ctx.beginPath();
+for (const d of sensorData) {
+  const x = 40 + d.time / 7 * (size - 60);
+  const y = 180 - (d.temp - 20) / 6 * 160;
+  d === sensorData[0] ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+}
+ctx.stroke();
+
+// smoothed
+ctx.strokeStyle = "#c89b3c";
+ctx.lineWidth = 2;
+ctx.beginPath();
+for (const d of smoothed) {
+  const x = 40 + d.time / 7 * (size - 60);
+  const y = 180 - (d.temp - 20) / 6 * 160;
+  d === smoothed[0] ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+}
+ctx.stroke();
+
+ctx.fillStyle = "#666";
+ctx.font = "10px monospace";
+ctx.fillText("grey: raw, amber: smoothed", 40, 14);
+
+/// md
+## private cell
+
+`// %private` is a hard opt-out — the agent cannot see this cell at all, not even its index. use it for proprietary data, credentials, or anything that must never be exposed.
+
+/// code
+// %private
+// this cell is invisible to MCP agents
+const apiKey = "sk-demo-not-a-real-key-12345";
+const internalConfig = { endpoint: "https://internal.example.com", retries: 3 };
+
+/// md
+## described private cell
+
+`// %mcp describe` lets you attach metadata to a private cell. the agent sees the description in `listCells` but cannot read the source or output.
+
+/// code
+// %private
+// %mcp describe "Loads proprietary sensor calibration data (temperature offset, humidity correction factors)"
+const calibration = { tempOffset: -0.3, humidityFactor: 1.02 };
+
+/// md
+## manifest cell (Layer 3)
+
+a manifest cell declares the governance policy for the entire notebook. it sets default access levels and can define named tools that the agent sees as first-class MCP operations.
+
+/// code
+// %mcp manifest
+({
+  // all cells without explicit directives default to read-only
+  defaults: "read",
+
+  // named tools — the agent sees these as top-level MCP tools
+  // each tool runs its target cell and returns the output
+  tools: {
+    "getSensorData": {
+      cell: "sensors",
+      describe: "Retrieve the raw sensor time series",
+    },
+    "runSmoothing": {
+      cell: "analysis",
+      describe: "Execute the smoothing algorithm",
+      access: "rw",
+    },
+  },
+
+  // filesystem access — allow the agent to read/write under data/
+  fs: "data/",
+})
+
+/// md
+## cell names for manifest tools
+
+manifest tools reference cells by name (via `// %cellName`). this decouples governance from cell ordering — reorder cells freely without breaking tool definitions.
+
+/// code
+// %cellName sensors
+// %mcp
+// referenced by the "getSensorData" manifest tool
+ui.display(`sensor data: ${sensorData.length} readings, ${sensorData[0].time}\u2013${sensorData[sensorData.length-1].time}s`);
+
+/// code
+// %cellName analysis
+// %mcp rw
+// referenced by the "runSmoothing" manifest tool
+const tempRange = std.extent(smoothed, d => d.temp);
+const humRange = std.extent(smoothed, d => d.humidity);
+ui.display(`smoothed ranges \u2014 temp: ${tempRange[0].toFixed(1)}\u2013${tempRange[1].toFixed(1)}\u00b0C, humidity: ${humRange[0].toFixed(0)}\u2013${humRange[1].toFixed(0)}%`);
+
+/// md
+## filesystem sandboxing
+
+`// %mcp fs` directives control which paths an MCP agent can access in `notebook.fs`. without at least one `fs` directive (or manifest `fs` config), all fs tools return an error.
+
+/// code
+// %mcp fs data/
+// this directive allows the agent to read and write under data/
+// multiple fs directives across cells are combined (union of prefixes)
+await notebook.fs.write("data/readings.json", sensorData);
+const back = await notebook.fs.read("data/readings.json", "json");
+ui.display(`fs roundtrip: ${back.length} readings stored under data/`);
+
+/// code
+// %mcp fs:read reports/
+// :read variant — agent can only read, not write or delete
+await notebook.fs.write("reports/summary.txt",
+  `Sensor summary: ${sensorData.length} readings, temp ${tempRange[0].toFixed(1)}\u2013${tempRange[1].toFixed(1)}\u00b0C`);
+ui.display("report saved (agent can read but not modify)");
+
+/// md
+## governance patterns
+
+**methodology-only** — data stays private, agent edits analysis code:
+
+| cell | directive | effect |
+|------|-----------|--------|
+| 0 | `// %private` | data loading (hidden) |
+| 1 | `// %mcp describe "raw data"` | metadata only |
+| 2 | `// %mcp rw` | analysis (editable) |
+| 3 | `// %mcp` | visualization (readable) |
+
+**full collaboration** — `// %mcp manifest` with `({ defaults: "rw" })` — all cells open by default.
+
+**review mode** — `// %mcp manifest` with `({ defaults: "read" })` — all cells read-only.
+
+/// md
+---
+
+open the **mcp** panel (ellipsis menu → mcp) to connect. the panel shows connection status and an audit log of all agent tool calls. mutation tools (updateCellSource, addCell, fsWrite, fsDelete) require user confirmation — accept, accept all, or reject.

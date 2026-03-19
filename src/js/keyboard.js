@@ -324,6 +324,9 @@ document.addEventListener('keydown', (e) => {
   if ((e.key === 'h') && (e.ctrlKey || e.metaKey) && !e.altKey) {
     e.preventDefault(); openFind(true); return;
   }
+  if ((e.key === 'm') && (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+    e.preventDefault(); if (window.toggleMcpPanel) window.toggleMcpPanel(); return;
+  }
   if (e.key === 'Escape' && S.findActive) {
     e.preventDefault(); closeFind(); return;
   }

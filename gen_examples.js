@@ -34,6 +34,8 @@ const categories = {
     'example_app_export.txt',
     'example_md_interpolation.txt',
     'example_workers.txt',
+    'example_notebook_fs.txt',
+    'example_webmcp.txt',
   ],
 
   // atra — Wasm compiler: language features, kernels, natra

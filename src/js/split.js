@@ -83,6 +83,52 @@ export function toTxt() {
   return lines.join('\n') + '\n';
 }
 
+// Update a cell's code in the split editor (registered as S._splitSetCode when active)
+function _updateSplitCell(cellIndex, newCode) {
+  const doc = S.splitEditor.state.doc;
+  const text = doc.toString();
+  const lines = text.split('\n');
+
+  // find the start and end LINE of the cell at cellIndex by scanning /// directives
+  let idx = -1;
+  let cellStartLine = -1; // line after the /// directive
+  let cellEndLine = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\/\/\/\s+(code|md|css|html)/.test(lines[i].trimEnd())) {
+      idx++;
+      if (idx === cellIndex) {
+        cellStartLine = i + 1;
+      } else if (idx === cellIndex + 1) {
+        cellEndLine = i;
+        while (cellEndLine > cellStartLine && lines[cellEndLine - 1].trim() === '') cellEndLine--;
+        break;
+      }
+    }
+  }
+  if (cellStartLine < 0) return false;
+  if (cellEndLine < 0) {
+    cellEndLine = lines.length;
+    while (cellEndLine > cellStartLine && lines[cellEndLine - 1].trim() === '') cellEndLine--;
+  }
+
+  // convert line numbers to character offsets
+  let charPos = 0;
+  const lineOffsets = [];
+  for (let i = 0; i < lines.length; i++) {
+    lineOffsets.push(charPos);
+    charPos += lines[i].length + 1; // +1 for \n
+  }
+  const from = lineOffsets[cellStartLine];
+  const to = cellEndLine < lines.length ? lineOffsets[cellEndLine] - 1 : text.length; // -1 to not eat the \n before next directive
+
+  S.splitEditor.dispatch({
+    changes: { from, to, insert: newCode },
+  });
+  // sync to cells
+  syncFromTxt(S.splitEditor.state.doc.toString());
+  return true;
+}
+
 // ── SPLIT VIEW ──
 // CM6 symbols (EditorView, EditorState, keymap, javascript, etc.) are already
 // declared by cm6.js which is concatenated earlier in the IIFE build.
@@ -564,6 +610,7 @@ function createSplitEditor(container, initialCode) {
       maxRenderedOptions: 30,
     }),
     sigHintPlugin,
+    mcpHighlightField,
     // debounced sync on edit
     EditorView.updateListener.of(update => {
       if (update.docChanged) {
@@ -758,6 +805,7 @@ function onResizeStart(e) {
 
 function enterSplitView() {
   S.splitView = true;
+  S._splitSetCode = _updateSplitCell;
   applyEditorView('yes');
   document.body.classList.add('split-view');
 
@@ -823,6 +871,7 @@ function exitSplitView() {
   if (container) container.remove();
 
   S.splitView = false;
+  S._splitSetCode = null;
   applyEditorView('no');
   document.body.classList.remove('split-view');
 

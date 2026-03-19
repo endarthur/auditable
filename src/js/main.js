@@ -1,5 +1,6 @@
 import './state.js';
 import './cm6.js';
+import './fs.js';
 import './stdlib.js';
 import './python.js';
 import './dag.js';
@@ -19,5 +20,7 @@ import './complete.js';
 import './keyboard.js';
 import './goto.js'; // @optional
 import './size-compare.js'; // @optional
+import './shim.js';
+import './mcp-adapter.js';
 import './globals.js';
 import './init.js';

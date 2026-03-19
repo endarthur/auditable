@@ -16,6 +16,35 @@ const {
   styleTags,
 } = window.CM6;
 
+// ── MCP EDIT HIGHLIGHT ──
+// Lines changed by MCP edits get a subtle background. Clears on next doc change (keystroke).
+
+export const mcpHighlightEffect = StateEffect.define();
+
+const mcpHighlightMark = Decoration.line({ class: 'cm-mcp-highlight' });
+
+const mcpHighlightField = StateField.define({
+  create() { return Decoration.none; },
+  update(decos, tr) {
+    for (const e of tr.effects) {
+      if (e.is(mcpHighlightEffect)) {
+        const doc = tr.state.doc;
+        const marks = [];
+        for (const lineNum of e.value) {
+          if (lineNum >= 1 && lineNum <= doc.lines) {
+            marks.push(mcpHighlightMark.range(doc.line(lineNum).from));
+          }
+        }
+        return Decoration.set(marks);
+      }
+    }
+    // Clear on any doc change (user keystroke)
+    if (tr.docChanged && !tr.effects.some(e => e.is(mcpHighlightEffect))) return Decoration.none;
+    return decos;
+  },
+  provide: f => EditorView.decorations.from(f),
+});
+
 // ── GCU THEME ──
 
 const gcuDark = EditorView.theme({
@@ -559,6 +588,8 @@ export function createEditor(container, cellId, initialCode, cellType, onChange)
     autocompleteComp.of([]),
     // search decorations
     searchField,
+    // MCP edit highlights
+    mcpHighlightField,
     // color swatch (CSS cells only)
     ...(cellType === 'css' ? [colorSwatchPlugin] : []),
     // update listener

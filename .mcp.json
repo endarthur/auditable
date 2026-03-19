@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "auditable": {
+      "command": "node",
+      "args": ["webmcp_bridge.js"]
+    }
+  }
+}

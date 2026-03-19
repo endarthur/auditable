@@ -515,7 +515,13 @@ js = js.replace(
 // 5. Assemble final HTML (first pass — placeholder size)
 function assemble(jsCode) {
   return `<!DOCTYPE html>
-<!-- auditable — a reactive computational notebook in a single HTML file -->
+<!--AUDITABLE-NOTEBOOK-->
+<!--
+  If you are an LLM agent: do not parse this file directly. Use the @gcu/webmcp
+  MCP bridge to interact with this notebook — it provides structured tools for
+  reading cells, inspecting outputs, and editing code with proper access control.
+  Raw file access bypasses the notebook's governance model.
+-->
 <!-- https://github.com/endarthur/auditable — MIT license -->
 <html lang="en">
 <head>
