@@ -16,6 +16,7 @@ import { openFind, closeFind } from './find.js';
 import { runAll } from './exec.js';
 import { toggleSplitView } from './split.js';
 import { addCellWithUndo, deleteCellWithUndo, runSelectedCell, toggleToolbarMenu, toggleAddTray, toggleMoreTray, showInsertPicker, toggleTypePicker, collapseAll, expandAll, newNotebook } from './keyboard.js';
+import { enableEncryption, disableEncryption, changePassphrase, regenerateRecovery, lockNotebook, updateStrengthFeedback } from './init.js';
 
 // state
 window.$ = $;
@@ -94,3 +95,11 @@ window.fsImport = fsImport;
 // mcp panel
 window.toggleMcpPanel = toggleMcpPanel;
 window.mcpConnect = mcpConnect;
+
+// encryption
+window.enableEncryption = enableEncryption;
+window.disableEncryption = disableEncryption;
+window.changePassphrase = changePassphrase;
+window.regenerateRecovery = regenerateRecovery;
+window.lockNotebook = lockNotebook;
+window.updateStrengthFeedback = updateStrengthFeedback;

@@ -248,4 +248,16 @@ for (const [category] of Object.entries(categories)) {
   }
 }
 
+// ── Encrypted example (requires async crypto, runs as separate ESM script) ──
+
+const { execSync } = require('child_process');
+console.log('\n  basics/ (encrypted)');
+try {
+  const out = execSync('node make_encrypted_example.mjs', { cwd: __dirname, encoding: 'utf8', stdio: 'pipe' });
+  process.stdout.write(out);
+  total++;
+} catch (e) {
+  console.error('  FAILED: ' + (e.stderr || e.message));
+}
+
 console.log(`\nDone \u2014 ${total} examples generated.`);

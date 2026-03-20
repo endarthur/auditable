@@ -17,6 +17,15 @@ import { syncDataDebounced, syncSettings } from './save.js';
 import { setMsg } from './ui.js';
 import { fsWrite, fsRead, validatePath } from './fs.js';
 import { setCellCode } from './cell-ops.js';
+import { cryptoIsLocked } from './crypto.js';
+
+// ── Locked notebook gating ──
+
+function _mcpRequireUnlocked() {
+  if (typeof cryptoIsLocked === 'function' && cryptoIsLocked()) {
+    throw new Error('Notebook is encrypted and locked. Enter the passphrase in the browser.');
+  }
+}
 
 // ── User interaction / confirmation ──
 
@@ -166,9 +175,11 @@ function _mcpLogCall(tool, input, result, duration) {
   _mcpRefreshPanel();
 }
 
-// Wrap a tool execute to add audit logging
-function _mcpAudited(name, fn) {
+// Wrap a tool execute to add audit logging + locked gating
+function _mcpAudited(name, fn, opts) {
+  const skipLockCheck = opts && opts.skipLockCheck;
   return async function(input, client) {
+    if (!skipLockCheck) _mcpRequireUnlocked();
     const start = performance.now();
     try {
       const result = await fn(input, client);
@@ -846,10 +857,12 @@ function _mcpGetDAG() {
 // ── Tool: getNotebookStatus ──
 
 function _mcpGetNotebookStatus() {
+  const locked = typeof cryptoIsLocked === 'function' && cryptoIsLocked();
   return {
     title: document.getElementById('docTitle')?.value || 'untitled',
     cellCount: S.cells.length,
     autorun: S.autorun,
+    locked,
     errorCount: S.cells.filter(c => c.error).length,
     errors: _mcpCollectErrors(),
   };
@@ -1087,7 +1100,7 @@ if (navigator.modelContext && window.__auditable_mcp) {
     description: 'Get notebook status: title, cell count, autorun mode, and all errors.',
     inputSchema: { type: 'object', properties: {} },
     annotations: { ...ro, title: 'Get notebook status' },
-    execute: _mcpAudited('getNotebookStatus', async () => _mcpGetNotebookStatus()),
+    execute: _mcpAudited('getNotebookStatus', async () => _mcpGetNotebookStatus(), { skipLockCheck: true }),
   });
 
   navigator.modelContext.registerTool({
@@ -1133,7 +1146,7 @@ if (navigator.modelContext && window.__auditable_mcp) {
       },
     },
     annotations: { ...ro, title: 'Get documentation' },
-    execute: _mcpAudited('getDocumentation', async (input) => _mcpGetDocumentation(input)),
+    execute: _mcpAudited('getDocumentation', async (input) => _mcpGetDocumentation(input), { skipLockCheck: true }),
   });
 
   navigator.modelContext.registerTool({
@@ -1515,3 +1528,21 @@ window._mcpNotifyExecComplete = function(errors) {
 
 // Export audit log for UI panel access
 window._mcpAuditLog = _mcpAuditLog;
+
+// ── Re-lock / unlock hooks ──
+
+window._mcpOnRelock = function() {
+  _mcpAuditLog.length = 0;
+  _mcpAutoAccept.clear();
+  _mcpRefreshPanel();
+  if (navigator.modelContext && navigator.modelContext.notifyToolsChanged) {
+    navigator.modelContext.notifyToolsChanged();
+  }
+};
+
+window._mcpOnUnlock = function() {
+  _mcpRefreshPanel();
+  if (navigator.modelContext && navigator.modelContext.notifyToolsChanged) {
+    navigator.modelContext.notifyToolsChanged();
+  }
+};

@@ -24,6 +24,7 @@ auditable.html    — smaller than a floppy disk
 - **stdlib** -- `std.csv`, `std.sum`, `std.mean`, `std.linspace`, `std.bin`, `std.fmt`, and more
 - **self-contained save** -- Ctrl+S produces a new HTML file with all code, state, settings, and installed modules baked in
 - **packed save** -- gzip-compressed save format (~60% smaller) with readable, self-documenting bootstrap loader
+- **encryption** -- AES-256-GCM whole-notebook encryption with passphrase + recovery key. the file on disk is opaque without the passphrase. enable in settings, enter passphrase on load
 - **Ed25519 signatures** -- sign notebooks for integrity verification
 - **self-documenting format** -- every data block in saved HTML has a descriptive comment explaining what it is
 - **find/replace** -- Ctrl+F to search across cells, with regex and case-sensitive modes
@@ -151,11 +152,13 @@ click the gear icon in the toolbar:
 - **run on load** -- yes (default) or no
 - **show run toggle** -- yes or no
 
+- **encryption** -- enable AES-256-GCM encryption, change passphrase, regenerate recovery key, lock/unlock
+
 settings travel with the file. execution mode can also be overridden globally via localStorage.
 
 ## examples
 
-the `examples/` directory contains 33 self-contained notebooks organized by category. no server required -- just open any `.html` file.
+the `examples/` directory contains 46 self-contained notebooks organized by category. no server required -- just open any `.html` file.
 
 **basics/** -- core auditable features
 
@@ -173,6 +176,7 @@ the `examples/` directory contains 33 self-contained notebooks organized by cate
 | `example_widgets` | `<audit-*>` widget components in HTML cells |
 | `example_app_export` | export notebooks as standalone reactive apps |
 | `example_md_interpolation` | `${expr}` interpolation in markdown cells |
+| `example_encrypted_*` | pre-encrypted notebook (passphrase in filename, recovery key sidecar) |
 
 **atra/** -- Wasm compiler
 
@@ -259,6 +263,17 @@ AUDITABLE-SIGNATURE-->
 modules are base64-encoded to avoid HTML comment parsing issues. old notebooks with raw JSON still load (backward compatible).
 
 packed saves use gzip compression with a readable bootstrap loader that explains every step.
+
+encrypted notebooks replace all data blocks with a single opaque blob:
+
+```html
+<!-- encrypted notebook data: passphrase required to access cells, settings, and modules -->
+<!--AUDITABLE-CRYPTO
+{"version":1,"cipher":"AES-256-GCM","iv":"...","payload":"...","methods":[...]}
+AUDITABLE-CRYPTO-->
+```
+
+the runtime stays cleartext (it's the application). the data is opaque without the passphrase. a recovery key (random 256-bit, grouped hex) is generated as backup. see `ext/crypto/SPEC.md` for the full cryptographic design.
 
 ## auditable files (AF) -- experimental
 

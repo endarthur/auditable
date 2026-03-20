@@ -4,6 +4,7 @@ import { isCollapsed, isBare } from './dag.js';
 import { getSettings, applySettings, resolveExecMode, resolveRunOnLoad, getEditorViewSetting } from './settings.js';
 import { runAll } from './exec.js';
 import { setMsg } from './ui.js';
+import { cryptoIsEncrypted, cryptoIsLocked, cryptoBuildBlock, cryptoDetect } from './crypto.js';
 
 // ── APP RUNTIME ──
 // Injected at build time — contains the minimal JS bundle for exported apps.
@@ -62,6 +63,7 @@ export function initLiveSync() {
 }
 
 export function syncData() {
+  if (cryptoIsEncrypted()) { if (window._cryptoSyncTrigger) window._cryptoSyncTrigger(); return; }
   if (!_dataNode) return;
   const cellData = S.cells.map(c => ({
     type: c.type,
@@ -77,11 +79,13 @@ export function syncDataDebounced() {
 }
 
 export function syncSettings() {
+  if (cryptoIsEncrypted()) { if (window._cryptoSyncTrigger) window._cryptoSyncTrigger(); return; }
   if (!_settingsNode) return;
   _settingsNode.nodeValue = 'AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS';
 }
 
 export function syncModules() {
+  if (cryptoIsEncrypted()) { if (window._cryptoSyncTrigger) window._cryptoSyncTrigger(); return; }
   const mods = window._installedModules;
   if (!mods || !Object.keys(mods).length) {
     // remove node if no modules
@@ -100,6 +104,7 @@ export function syncModules() {
 }
 
 export function syncFs() {
+  if (cryptoIsEncrypted()) { if (window._cryptoSyncTrigger) window._cryptoSyncTrigger(); return; }
   const fs = window._notebookFS;
   if (!fs || !fs.size) {
     // remove node if no files
@@ -145,7 +150,7 @@ export function setSaveMode(mode) {
   if (mobPack) mobPack.classList.toggle('active-mode', mode === 'packed');
 }
 
-function buildNotebookHtml() {
+async function buildNotebookHtml() {
   // serialize current state back to a self-contained HTML file
   const title = $('#docTitle').value || 'untitled';
 
@@ -172,7 +177,28 @@ function buildNotebookHtml() {
   // read static elements from live DOM
   const helpHTML = $('#helpOverlay').outerHTML;
   const settingsOvHTML = $('#settingsOverlay').outerHTML;
-  const settingsPanHTML = $('#settingsPanel').outerHTML.replace(/display:\s*block;?/, '');
+  const settingsPanEl = $('#settingsPanel').cloneNode(true);
+  settingsPanEl.style.display = '';
+  // clear module/binary lists (they contain URLs that leak when encrypted)
+  const modList = settingsPanEl.querySelector('#moduleList');
+  if (modList) modList.innerHTML = '';
+  const binList = settingsPanEl.querySelector('#binaryList');
+  if (binList) binList.innerHTML = '';
+  // reset encryption UI
+  const cryptoStatus = settingsPanEl.querySelector('#cryptoStatus');
+  if (cryptoStatus) cryptoStatus.textContent = 'not encrypted';
+  const cryptoEnable = settingsPanEl.querySelector('#cryptoEnableSection');
+  if (cryptoEnable) cryptoEnable.style.display = '';
+  const cryptoManage = settingsPanEl.querySelector('#cryptoManageSection');
+  if (cryptoManage) cryptoManage.style.display = 'none';
+  // clear passphrase inputs
+  ['cryptoPassphrase', 'cryptoPassphraseConfirm', 'cryptoNewPassphrase', 'cryptoNewPassphraseConfirm'].forEach(id => {
+    const el = settingsPanEl.querySelector('#' + id);
+    if (el) el.setAttribute('value', '');
+  });
+  const cryptoStrength = settingsPanEl.querySelector('#cryptoStrength');
+  if (cryptoStrength) cryptoStrength.textContent = '';
+  const settingsPanHTML = settingsPanEl.outerHTML.replace(/display:\s*block;?/, '');
   const updateOvHTML = $('#updateOverlay').outerHTML.replace(/\bvisible\b/, '').replace(/class="\s*"/, 'class=""');
   const updatePanEl = $('#updatePanel').cloneNode(true);
   updatePanEl.style.display = '';
@@ -193,11 +219,50 @@ function buildNotebookHtml() {
     fsPanHTML = clone.outerHTML.replace(/display:\s*block;?/, '');
   }
 
-  const statusbarHTML = document.querySelector('.statusbar').outerHTML;
+  // reset statusbar dynamic state
+  const statusbarEl = document.querySelector('.statusbar').cloneNode(true);
+  const cryptoEl = statusbarEl.querySelector('#statusCrypto');
+  if (cryptoEl) { cryptoEl.textContent = ''; cryptoEl.onclick = null; }
+  const mcpStatusEl = statusbarEl.querySelector('#statusMcp');
+  if (mcpStatusEl) { mcpStatusEl.textContent = ''; mcpStatusEl.className = 'status-mcp'; }
+  const statusbarHTML = statusbarEl.outerHTML;
+
+  // capture overlay elements (reset to default hidden state)
+  function captureOverlay(id) {
+    const el = document.getElementById(id);
+    if (!el) return '';
+    const clone = el.cloneNode(true);
+    clone.style.display = 'none';
+    return clone.outerHTML;
+  }
+  const mcpConfirmHTML = captureOverlay('mcpConfirmOverlay');
+  const exportOverlayHTML = captureOverlay('exportOverlay');
+  const lockScreenHTML = captureOverlay('lockScreen');
+  const recoveryHTML = captureOverlay('recoveryOverlay');
+
+  // capture MCP panel (reset to default)
+  const mcpPanEl = document.getElementById('mcpPanel');
+  let mcpPanHTML = '';
+  if (mcpPanEl) {
+    const clone = mcpPanEl.cloneNode(true);
+    clone.classList.remove('visible');
+    const log = clone.querySelector('#mcpPanelLog');
+    if (log) log.innerHTML = '<span class="dim">no tool calls yet</span>';
+    const info = clone.querySelector('#mcpPanelInfo');
+    if (info) info.textContent = '';
+    const input = clone.querySelector('#mcpConnectInput');
+    if (input) { input.value = ''; input.disabled = false; }
+    const nameInput = clone.querySelector('#mcpNameInput');
+    if (nameInput) { nameInput.value = ''; nameInput.disabled = false; }
+    const status = clone.querySelector('#mcpPanelStatus');
+    if (status) { status.textContent = 'disconnected'; status.className = 'mcp-panel-status'; }
+    mcpPanHTML = clone.outerHTML;
+  }
 
   // read toolbar from live DOM and patch the title value
   const toolbarEl = document.querySelector('.toolbar').cloneNode(true);
-  toolbarEl.querySelector('#docTitle').value = title;
+  // mask title when encrypted (setAttribute needed — .value doesn't update the HTML attribute for outerHTML)
+  toolbarEl.querySelector('#docTitle').setAttribute('value', cryptoIsEncrypted() ? 'untitled' : title);
   toolbarEl.querySelector('#toolbarStatus').textContent = '';
   // reset autorun button state to match saved mode
   const autoBtn = toolbarEl.querySelector('#autorunBtn');
@@ -235,12 +300,32 @@ function buildNotebookHtml() {
     ? `<style id="auditable-app-css">\n${appStyles}\n</style>\n<style id="auditable-editor-css">\n${editorStyles}\n</style>`
     : `<style id="auditable-css">\n${styles}\n</style>`;
 
+  // data blocks: encrypted or cleartext
+  let dataBlocks;
+  const effectiveTitle = cryptoIsEncrypted() ? 'Encrypted' : esc(title);
+  if (cryptoIsEncrypted()) {
+    const payload = {
+      data: cellData,
+      settings: getSettings(),
+      modules: Object.keys(window._installedModules || {}).length ? encodeModules(window._installedModules) : null,
+      fs: window._notebookFS?.size ? encodeModules(Object.fromEntries(window._notebookFS)) : null,
+      title: title,
+    };
+    const block = await cryptoBuildBlock(payload);
+    dataBlocks = '<!-- encrypted notebook data: passphrase required to access cells, settings, and modules -->\n<!--AUDITABLE-CRYPTO\n' + JSON.stringify(block) + '\nAUDITABLE-CRYPTO-->';
+  } else {
+    dataBlocks = '<!-- cell data: JSON array of {type, code, collapsed?} -->\n<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->'
+      + '\n' + (Object.keys(window._installedModules || {}).length ? '<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId} -->\n<!--AUDITABLE-MODULES\n' + encodeModules(window._installedModules) + '\nAUDITABLE-MODULES-->' : '')
+      + '\n' + (window._notebookFS?.size ? '<!-- notebook filesystem: base64-encoded JSON mapping paths to {type, compressed, size, data} -->\n<!--AUDITABLE-FS\n' + encodeModules(Object.fromEntries(window._notebookFS)) + '\nAUDITABLE-FS-->' : '')
+      + '\n' + '<!-- notebook settings: JSON {theme, fontSize, width, ...} -->\n<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->';
+  }
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Auditable \u2014 ${esc(title)}</title>
+<title>Auditable \u2014 ${effectiveTitle}</title>
 ${styleBlock}
 </head>
 <body>
@@ -255,6 +340,14 @@ ${updatePanHTML}
 
 ${fsPanHTML}
 
+${mcpPanHTML}
+
+${mcpConfirmHTML}
+${exportOverlayHTML}
+
+${lockScreenHTML}
+${recoveryHTML}
+
 ${toolbarHTML}
 
 ${findBarHTML}
@@ -266,10 +359,7 @@ ${findBarHTML}
 
 ${statusbarHTML}
 
-${'<!-- cell data: JSON array of {type, code, collapsed?} -->\n<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->'}
-${Object.keys(window._installedModules || {}).length ? '<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId} -->\n<!--AUDITABLE-MODULES\n' + encodeModules(window._installedModules) + '\nAUDITABLE-MODULES-->' : ''}
-${window._notebookFS?.size ? '<!-- notebook filesystem: base64-encoded JSON mapping paths to {type, compressed, size, data} -->\n<!--AUDITABLE-FS\n' + encodeModules(Object.fromEntries(window._notebookFS)) + '\nAUDITABLE-FS-->' : ''}
-${'<!-- notebook settings: JSON {theme, fontSize, width, ...} -->\n<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->'}
+${dataBlocks}
 
 <script>\n${script}\n<\/script>
 </body>
@@ -287,13 +377,20 @@ function downloadHtml(html, title) {
   return a.download;
 }
 
-export function saveNotebook() {
+export async function saveNotebook() {
   if (_saveMode === 'packed') {
     savePackedNotebook();
     return;
   }
   const title = $('#docTitle').value || 'untitled';
-  const html = buildNotebookHtml();
+  let html;
+  try {
+    html = await buildNotebookHtml();
+  } catch (e) {
+    console.error('save failed:', e);
+    setMsg('save failed: ' + e.message, 'err');
+    return;
+  }
 
   // AF bridge: send serialized HTML to parent shell instead of downloading
   if (window.__AF_BRIDGE__) {
@@ -308,7 +405,7 @@ export function saveNotebook() {
 
 export async function savePackedNotebook() {
   const title = $('#docTitle').value || 'untitled';
-  const html = buildNotebookHtml();
+  const html = await buildNotebookHtml();
 
   try {
     // compress via CompressionStream
@@ -384,31 +481,17 @@ export function esc(s) {
 }
 
 export function exportAsTxt() {
+  if (cryptoIsLocked()) { setMsg('unlock first', 'err'); return; }
   const title = $('#docTitle').value || 'untitled';
-  const html = buildNotebookHtml();
 
-  // extract notebook data from HTML
-  const dataMatch = html.match(/<!--AUDITABLE-DATA\n([\s\S]*?)\nAUDITABLE-DATA-->/);
-  let cells = [];
-  if (dataMatch) {
-    try { cells = JSON.parse(dataMatch[1]); } catch {}
-  }
-
-  const setMatch = html.match(/<!--AUDITABLE-SETTINGS\n([\s\S]*?)\nAUDITABLE-SETTINGS-->/);
-  let settings = {};
-  if (setMatch) {
-    try { settings = JSON.parse(setMatch[1]); } catch {}
-  }
-
-  // extract module URLs (without sources — standalone export just records URLs)
-  const modMatch = html.match(/<!--AUDITABLE-MODULES\n([\s\S]*?)\nAUDITABLE-MODULES-->/);
-  let moduleUrls = [];
-  if (modMatch) {
-    try {
-      const decoded = decodeModules(modMatch[1]);
-      moduleUrls = Object.keys(decoded);
-    } catch {}
-  }
+  // read from live state directly (works for both encrypted and unencrypted)
+  const cells = S.cells.map(c => ({
+    type: c.type,
+    code: c.code,
+    collapsed: (c._splitOrigEl || c.el).classList.contains('collapsed') || undefined,
+  }));
+  const settings = getSettings();
+  const moduleUrls = Object.keys(window._installedModules || {});
 
   // build /// formatted text
   const lines = ['/// auditable'];
@@ -448,6 +531,9 @@ export function exportAsTxt() {
 export function loadFromEmbed() {
   // look for embedded cell data in HTML comments
   const raw = document.body.innerHTML;
+
+  // encrypted notebook — skip normal loading, init.js handles it
+  if (cryptoDetect(raw).found) return false;
 
   // restore installed modules first (before cells run)
   const modMatch = raw.match(/<!--AUDITABLE-MODULES\n([\s\S]*?)\nAUDITABLE-MODULES-->/);
@@ -602,6 +688,7 @@ export function showExportDialog() {
 }
 
 export function doExportApp() {
+  if (cryptoIsLocked()) { setMsg('unlock first', 'err'); return; }
   const title = document.getElementById('exportTitle').value;
   const includeBase = document.getElementById('exportBaseStyles').checked;
   closeExportDialog();

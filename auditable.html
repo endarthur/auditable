@@ -757,6 +757,146 @@ audit-text-input input[type="text"] {
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* ── LOCK SCREEN ── */
+.lock-screen {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.lock-panel {
+  text-align: center;
+  max-width: 340px;
+  width: 100%;
+  padding: 0 20px;
+}
+.lock-logo {
+  font-size: 11px;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 8px;
+}
+.lock-subtitle {
+  color: var(--fg-dim);
+  font-size: 11px;
+  margin-bottom: 24px;
+}
+.lock-input {
+  display: block;
+  width: 100%;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  color: var(--fg-bright);
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  outline: none;
+  box-sizing: border-box;
+}
+.lock-input:focus { border-color: var(--accent-dim); }
+.lock-form button {
+  width: 100%;
+  padding: 8px;
+  margin-bottom: 8px;
+}
+.lock-error {
+  color: var(--err);
+  font-size: 11px;
+  margin-bottom: 8px;
+}
+.lock-spinner {
+  color: var(--fg-dim);
+  font-size: 11px;
+  margin-bottom: 8px;
+}
+.lock-recovery-toggle {
+  color: var(--fg-dim);
+  font-size: 10px;
+  text-decoration: none;
+}
+.lock-recovery-toggle:hover { color: var(--accent); }
+
+body.locked .toolbar,
+body.locked .notebook,
+body.locked .statusbar,
+body.locked .find-bar,
+body.locked .present-exit { display: none !important; }
+
+/* ── ENCRYPTION SETTINGS ── */
+.crypto-input {
+  display: block;
+  width: 100%;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  color: var(--fg-bright);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 4px 8px;
+  margin: 4px 0;
+  outline: none;
+  box-sizing: border-box;
+}
+.crypto-input:focus { border-color: var(--accent-dim); }
+.crypto-strength {
+  font-size: 10px;
+  padding: 2px 0 4px;
+  min-height: 14px;
+}
+.crypto-strength-0 { color: var(--fg-dim); }
+.crypto-strength-1 { color: var(--err); }
+.crypto-strength-2 { color: var(--accent); }
+.crypto-strength-3 { color: var(--ok); }
+
+/* ── RECOVERY KEY MODAL ── */
+#recoveryOverlay { z-index: 1100; background: rgba(0,0,0,0.85); }
+.recovery-panel { max-width: 560px; width: 90vw; }
+.recovery-desc {
+  color: var(--fg-dim);
+  font-size: 11px;
+  line-height: 1.5;
+  margin-bottom: 12px;
+}
+.recovery-key {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 12px;
+  font-family: var(--mono);
+  font-size: 14px;
+  letter-spacing: 2px;
+  line-height: 2;
+  text-align: center;
+  color: var(--fg-bright);
+  user-select: all;
+  margin-bottom: 12px;
+}
+.recovery-copy-note {
+  color: var(--accent);
+  font-size: 10px;
+  margin: 4px 0 8px;
+}
+.recovery-saved {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  padding: 8px 0;
+  cursor: pointer;
+}
+.recovery-saved input { accent-color: var(--accent); }
+
+/* ── STATUSBAR CRYPTO ── */
+.statusbar .status-crypto {
+  font-size: 12px;
+  cursor: pointer;
+}
+.statusbar .status-crypto:hover { color: var(--accent); }
 </style>
 <style id="auditable-editor-css">
 /* ── TOOLBAR ── */
@@ -2133,6 +2273,31 @@ body.presenting .find-bar { display: none !important; }
     </select>
   </div>
 
+  <h2>encryption</h2>
+  <div class="settings-row">
+    <label>status</label>
+    <span id="cryptoStatus">not encrypted</span>
+  </div>
+  <div id="cryptoEnableSection">
+    <div class="settings-row"><label>passphrase</label></div>
+    <input type="password" id="cryptoPassphrase" class="crypto-input" placeholder="passphrase" autocomplete="off" oninput="updateStrengthFeedback()">
+    <div class="crypto-strength" id="cryptoStrength"></div>
+    <input type="password" id="cryptoPassphraseConfirm" class="crypto-input" placeholder="confirm passphrase" autocomplete="off">
+    <div class="settings-desc">use 4+ random words for a strong passphrase. a recovery key will be generated as backup.</div>
+    <button class="accent" onclick="enableEncryption()">enable encryption</button>
+  </div>
+  <div id="cryptoManageSection" style="display:none">
+    <div class="settings-row"><label>change passphrase</label></div>
+    <input type="password" id="cryptoNewPassphrase" class="crypto-input" placeholder="new passphrase" autocomplete="off">
+    <input type="password" id="cryptoNewPassphraseConfirm" class="crypto-input" placeholder="confirm" autocomplete="off">
+    <button onclick="changePassphrase()">change passphrase</button>
+    <div class="settings-row" style="margin-top:8px"><label>recovery key</label></div>
+    <button onclick="regenerateRecovery()">regenerate recovery key</button>
+    <div class="settings-row" style="margin-top:8px"></div>
+    <button onclick="disableEncryption()">disable encryption</button>
+    <button onclick="lockNotebook()" style="margin-top:4px">lock now</button>
+  </div>
+
   <h2>modules</h2>
   <div id="moduleList"></div>
   <h2>binaries</h2>
@@ -2222,6 +2387,41 @@ body.presenting .find-bar { display: none !important; }
   </div>
 </div>
 
+<div class="lock-screen" id="lockScreen" style="display:none">
+  <div class="lock-panel">
+    <div class="lock-logo">auditable</div>
+    <div class="lock-subtitle">this notebook is encrypted</div>
+    <div class="lock-form">
+      <input type="password" id="lockPassphrase" class="lock-input" placeholder="passphrase" autocomplete="off">
+      <button class="accent" id="lockUnlockBtn">unlock</button>
+      <div class="lock-error" id="lockError" style="display:none"></div>
+      <div class="lock-spinner" id="lockSpinner" style="display:none">deriving key&#x2026;</div>
+      <a href="#" class="lock-recovery-toggle" id="lockRecoveryToggle">use recovery key</a>
+      <div id="lockRecoverySection" style="display:none">
+        <textarea id="lockRecoveryInput" class="lock-input" placeholder="A7B4 767C &#x2026;" rows="2" spellcheck="false"></textarea>
+        <button class="accent" id="lockRecoveryBtn">unlock with recovery key</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="export-overlay" id="recoveryOverlay" style="display:none">
+  <div class="export-panel recovery-panel">
+    <h3>recovery key</h3>
+    <p class="recovery-desc">save this key somewhere safe. it is the only way to recover your data if you forget your passphrase.</p>
+    <pre class="recovery-key" id="recoveryKey"></pre>
+    <div class="export-actions">
+      <button class="accent" id="recoveryCopyBtn">copy</button>
+      <button id="recoveryDownloadBtn">download .txt</button>
+    </div>
+    <div class="recovery-copy-note" id="recoveryCopyNote" style="display:none">copied &#x2014; clear your clipboard when done</div>
+    <label class="recovery-saved"><input type="checkbox" id="recoverySavedCheck"> I have saved my recovery key</label>
+    <div class="export-actions">
+      <button class="accent" id="recoveryDoneBtn" disabled>done</button>
+    </div>
+  </div>
+</div>
+
 <div class="toolbar">
   <span class="toolbar-title">auditable</span>
   <span class="toolbar-badges" id="toolbarBadges"></span>
@@ -2293,6 +2493,7 @@ body.presenting .find-bar { display: none !important; }
 </div>
 
 <div class="statusbar">
+  <span class="status-crypto" id="statusCrypto"></span>
   <span class="status-mcp" id="statusMcp"></span>
   <span class="status-size" id="statusSize"></span>
   <span class="status-cells" id="statusCells">0 cells</span>
@@ -7516,8 +7717,8 @@ function togglePresent() {
 
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
-const __AUDITABLE_BUILD_DATE__ = '2026-03-19';
-const __AUDITABLE_BASE_SIZE__ = 1125532;
+const __AUDITABLE_BUILD_DATE__ = '2026-03-20';
+const __AUDITABLE_BASE_SIZE__ = 1165155;
 
 (function() {
   const ver = $('#aboutVersion');
@@ -8106,6 +8307,508 @@ async function verifySelf() {
   // Run self-verification on load
   verifySelf();
 })();
+
+// -- crypto.js --
+
+// ── ENCRYPTION ──
+// AES-256-GCM whole-notebook encryption via Web Crypto API.
+// All functions prefixed _crypto for IIFE build.
+
+// No imports from other modules — crypto.js is a pure crypto module.
+// UI interactions are wired in init.js.
+
+// ── State ──
+
+let _cryptoState = null; // null = unencrypted, or { dek, methods }
+let _cryptoLocked = false; // true when CRYPTO block detected but DEK not yet available
+
+function cryptoIsEncrypted() { return _cryptoState !== null; }
+function cryptoIsLocked() { return _cryptoLocked; }
+
+// ── Base64 helpers ──
+
+function _cryptoB64Encode(buf) {
+  const bytes = new Uint8Array(buf);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+function _cryptoB64Decode(str) {
+  const binary = atob(str);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+// ── Recovery key formatting ──
+
+function _cryptoFormatRecoveryKey(bytes) {
+  const arr = new Uint8Array(bytes);
+  let hex = '';
+  for (let i = 0; i < arr.length; i++) hex += arr[i].toString(16).padStart(2, '0').toUpperCase();
+  // group into 4-char chunks, 8 groups per row
+  const groups = hex.match(/.{4}/g);
+  return groups.slice(0, 8).join(' ') + '\n' + groups.slice(8).join(' ');
+}
+
+function _cryptoParseRecoveryKey(hex) {
+  const clean = hex.replace(/\s/g, '');
+  if (!/^[0-9a-fA-F]{64}$/.test(clean)) throw new Error('Invalid recovery key format');
+  const bytes = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) bytes[i] = parseInt(clean.substr(i * 2, 2), 16);
+  return bytes;
+}
+
+// ── PBKDF2 key derivation (in Web Worker to keep UI responsive) ──
+
+function _cryptoDeriveKeyWorker(passphrase, salt, iterations) {
+  // In Node.js test environment, fall back to sync
+  if (typeof window === 'undefined' || typeof Worker === 'undefined') {
+    return _cryptoDeriveKeySync(passphrase, salt, iterations);
+  }
+
+  return new Promise((resolve, reject) => {
+    const code = `self.onmessage = async ({data}) => {
+  try {
+    const enc = new TextEncoder().encode(data.passphrase);
+    const baseKey = await crypto.subtle.importKey('raw', enc, 'PBKDF2', false, ['deriveKey']);
+    const key = await crypto.subtle.deriveKey(
+      {name: 'PBKDF2', salt: new Uint8Array(data.salt), iterations: data.iterations, hash: 'SHA-256'},
+      baseKey,
+      {name: 'AES-GCM', length: 256},
+      true,
+      ['encrypt', 'decrypt']
+    );
+    // Export key bits to transfer back (extractable in worker, re-imported as non-extractable in main)
+    const raw = await crypto.subtle.exportKey('raw', key);
+    self.postMessage({raw: raw}, [raw]);
+  } catch (e) {
+    self.postMessage({error: e.message});
+  }
+};`;
+
+    const blob = new Blob([code], { type: 'application/javascript' });
+    const url = URL.createObjectURL(blob);
+    const worker = new Worker(url);
+
+    worker.onmessage = async ({ data }) => {
+      worker.terminate();
+      URL.revokeObjectURL(url);
+      if (data.error) { reject(new Error(data.error)); return; }
+      // Re-import as non-extractable CryptoKey
+      try {
+        const key = await crypto.subtle.importKey(
+          'raw', data.raw, { name: 'AES-GCM' }, false,
+          ['wrapKey', 'unwrapKey', 'encrypt', 'decrypt']
+        );
+        resolve(key);
+      } catch (e) { reject(e); }
+    };
+    worker.onerror = (e) => {
+      worker.terminate();
+      URL.revokeObjectURL(url);
+      reject(new Error('Worker error: ' + e.message));
+    };
+
+    worker.postMessage({
+      passphrase,
+      salt: Array.from(new Uint8Array(salt)),
+      iterations,
+    });
+  });
+}
+
+async function _cryptoDeriveKeySync(passphrase, salt, iterations) {
+  const enc = new TextEncoder().encode(passphrase);
+  const baseKey = await crypto.subtle.importKey('raw', enc, 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: new Uint8Array(salt), iterations, hash: 'SHA-256' },
+    baseKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['wrapKey', 'unwrapKey', 'encrypt', 'decrypt']
+  );
+}
+
+// ── HKDF for recovery key ──
+
+async function _cryptoDeriveRecoveryKey(rawBytes) {
+  const base = await crypto.subtle.importKey('raw', rawBytes, 'HKDF', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: new TextEncoder().encode('auditable-recovery-v1') },
+    base,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['wrapKey', 'unwrapKey', 'encrypt', 'decrypt']
+  );
+}
+
+// ── Check value ──
+
+const _CRYPTO_CHECK_PLAINTEXT = 'auditable-check-v1';
+
+async function _cryptoEncryptCheck(wrappingKey) {
+  const checkIv = crypto.getRandomValues(new Uint8Array(12));
+  const plaintext = new TextEncoder().encode(_CRYPTO_CHECK_PLAINTEXT);
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: checkIv }, wrappingKey, plaintext
+  );
+  return { checkIv, check: ciphertext };
+}
+
+async function _cryptoVerifyCheck(wrappingKey, checkIv, check) {
+  try {
+    const plain = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: new Uint8Array(checkIv) }, wrappingKey, check
+    );
+    const text = new TextDecoder().decode(plain);
+    return text === _CRYPTO_CHECK_PLAINTEXT;
+  } catch {
+    return false;
+  }
+}
+
+// ── DEK wrap/unwrap ──
+
+async function _cryptoWrapDek(dek, wrappingKey) {
+  const wrapIv = crypto.getRandomValues(new Uint8Array(12));
+  const wrapped = await crypto.subtle.wrapKey('raw', dek, wrappingKey, { name: 'AES-GCM', iv: wrapIv });
+  return { wrapIv, wrappedKey: wrapped };
+}
+
+async function _cryptoUnwrapDek(wrappedKey, wrappingKey, wrapIv) {
+  return crypto.subtle.unwrapKey(
+    'raw', wrappedKey, wrappingKey, { name: 'AES-GCM', iv: new Uint8Array(wrapIv) },
+    { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']
+  );
+}
+
+// ── Payload encrypt/decrypt ──
+
+async function _cryptoEncryptPayload(dek, plaintext) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encoded = new TextEncoder().encode(plaintext);
+  const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, dek, encoded);
+  return { iv, payload: ciphertext };
+}
+
+async function _cryptoDecryptPayload(dek, iv, ciphertext) {
+  const plain = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: new Uint8Array(iv) }, dek, ciphertext);
+  return new TextDecoder().decode(plain);
+}
+
+// ── CRYPTO block detection ──
+
+function cryptoDetect(bodyHtml) {
+  const match = bodyHtml.match(/<!--AUDITABLE-CRYPTO\n([\s\S]*?)\nAUDITABLE-CRYPTO-->/);
+  if (!match) return { found: false };
+  try {
+    return { found: true, block: JSON.parse(match[1]) };
+  } catch {
+    return { found: false, error: 'Invalid CRYPTO block JSON' };
+  }
+}
+
+// ── Unlock with passphrase ──
+
+async function cryptoUnlock(passphrase, block) {
+  const method = block.methods.find(m => m.type === 'pbkdf2');
+  if (!method) throw new Error('No passphrase method in crypto block');
+
+  const salt = _cryptoB64Decode(method.salt);
+  const wrappingKey = await _cryptoDeriveKeyWorker(passphrase, salt, method.iterations);
+
+  // Verify check value
+  const checkIv = _cryptoB64Decode(method.checkIv);
+  const check = _cryptoB64Decode(method.check);
+  const valid = await _cryptoVerifyCheck(wrappingKey, checkIv, check);
+  if (!valid) throw new Error('Wrong passphrase');
+
+  // Unwrap DEK
+  const wrappedKey = _cryptoB64Decode(method.wrappedKey);
+  const wrapIv = _cryptoB64Decode(method.wrapIv);
+  const dek = await _cryptoUnwrapDek(wrappedKey, wrappingKey, wrapIv);
+
+  // Decrypt payload
+  const iv = _cryptoB64Decode(block.iv);
+  const payload = _cryptoB64Decode(block.payload);
+  const plaintext = await _cryptoDecryptPayload(dek, iv, payload);
+  const data = JSON.parse(plaintext);
+
+  // Store state with method metadata (needed for re-wrapping)
+  _cryptoState = {
+    dek,
+    methods: block.methods.map(m => {
+      if (m.type === 'pbkdf2') {
+        return { type: 'pbkdf2', salt: new Uint8Array(salt), iterations: m.iterations, wrappingKey };
+      }
+      if (m.type === 'recovery') {
+        return { type: 'recovery', wrappingKey: null }; // no wrapping key until recovery used
+      }
+      return m;
+    }),
+  };
+  _cryptoLocked = false;
+
+  return data;
+}
+
+// ── Unlock with recovery key ──
+
+async function cryptoUnlockRecovery(hexKey, block) {
+  const rawBytes = _cryptoParseRecoveryKey(hexKey);
+  const method = block.methods.find(m => m.type === 'recovery');
+  if (!method) throw new Error('No recovery method in crypto block');
+
+  const wrappingKey = await _cryptoDeriveRecoveryKey(rawBytes);
+
+  // Verify check value
+  const checkIv = _cryptoB64Decode(method.checkIv);
+  const check = _cryptoB64Decode(method.check);
+  const valid = await _cryptoVerifyCheck(wrappingKey, checkIv, check);
+  if (!valid) throw new Error('Invalid recovery key');
+
+  // Unwrap DEK
+  const wrappedKey = _cryptoB64Decode(method.wrappedKey);
+  const wrapIv = _cryptoB64Decode(method.wrapIv);
+  const dek = await _cryptoUnwrapDek(wrappedKey, wrappingKey, wrapIv);
+
+  // Decrypt payload
+  const iv = _cryptoB64Decode(block.iv);
+  const payload = _cryptoB64Decode(block.payload);
+  const plaintext = await _cryptoDecryptPayload(dek, iv, payload);
+  const data = JSON.parse(plaintext);
+
+  // Store state — we have recovery wrapping key but not passphrase wrapping key
+  _cryptoState = {
+    dek,
+    methods: block.methods.map(m => {
+      if (m.type === 'pbkdf2') {
+        return { type: 'pbkdf2', salt: _cryptoB64Decode(m.salt), iterations: m.iterations, wrappingKey: null };
+      }
+      if (m.type === 'recovery') {
+        return { type: 'recovery', wrappingKey };
+      }
+      return m;
+    }),
+  };
+  _cryptoLocked = false;
+
+  return data;
+}
+
+// ── Enable encryption ──
+
+async function cryptoEnable(passphrase) {
+  // Generate DEK (extractable — needed for wrapKey)
+  const dek = await crypto.subtle.generateKey(
+    { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']
+  );
+
+  // Passphrase method
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const wrappingKey = await _cryptoDeriveKeyWorker(passphrase, salt, 600000);
+
+  // Recovery key method
+  const recoveryRaw = crypto.getRandomValues(new Uint8Array(32));
+  const recoveryWrappingKey = await _cryptoDeriveRecoveryKey(recoveryRaw);
+
+  _cryptoState = {
+    dek,
+    methods: [
+      { type: 'pbkdf2', salt, iterations: 600000, wrappingKey },
+      { type: 'recovery', wrappingKey: recoveryWrappingKey },
+    ],
+  };
+
+  return _cryptoFormatRecoveryKey(recoveryRaw);
+}
+
+// ── Disable encryption ──
+
+function cryptoDisable() {
+  _cryptoState = null;
+  _cryptoLocked = false;
+}
+
+// ── Change passphrase ──
+
+async function cryptoChangePassphrase(newPassphrase) {
+  if (!_cryptoState) throw new Error('Not encrypted');
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const wrappingKey = await _cryptoDeriveKeyWorker(newPassphrase, salt, 600000);
+
+  const pbkdf2 = _cryptoState.methods.find(m => m.type === 'pbkdf2');
+  if (pbkdf2) {
+    pbkdf2.salt = salt;
+    pbkdf2.iterations = 600000;
+    pbkdf2.wrappingKey = wrappingKey;
+  }
+}
+
+// ── Regenerate recovery key ──
+
+async function cryptoRegenerateRecovery() {
+  if (!_cryptoState) throw new Error('Not encrypted');
+  const recoveryRaw = crypto.getRandomValues(new Uint8Array(32));
+  const recoveryWrappingKey = await _cryptoDeriveRecoveryKey(recoveryRaw);
+
+  const recovery = _cryptoState.methods.find(m => m.type === 'recovery');
+  if (recovery) {
+    recovery.wrappingKey = recoveryWrappingKey;
+  } else {
+    _cryptoState.methods.push({ type: 'recovery', wrappingKey: recoveryWrappingKey });
+  }
+
+  return _cryptoFormatRecoveryKey(recoveryRaw);
+}
+
+// ── Build CRYPTO block for save ──
+
+async function cryptoBuildBlock(payload) {
+  if (!_cryptoState) return null;
+
+  // Encrypt payload
+  const plaintext = JSON.stringify(payload);
+  const { iv, payload: ciphertext } = await _cryptoEncryptPayload(_cryptoState.dek, plaintext);
+
+  // Build methods array with fresh IVs
+  const methods = [];
+  for (const m of _cryptoState.methods) {
+    if (m.type === 'pbkdf2' && m.wrappingKey) {
+      const { wrapIv, wrappedKey } = await _cryptoWrapDek(_cryptoState.dek, m.wrappingKey);
+      const { checkIv, check } = await _cryptoEncryptCheck(m.wrappingKey);
+      methods.push({
+        type: 'pbkdf2',
+        salt: _cryptoB64Encode(m.salt),
+        iterations: m.iterations,
+        hash: 'SHA-256',
+        wrapIv: _cryptoB64Encode(wrapIv),
+        wrappedKey: _cryptoB64Encode(wrappedKey),
+        checkIv: _cryptoB64Encode(checkIv),
+        check: _cryptoB64Encode(check),
+      });
+    } else if (m.type === 'recovery' && m.wrappingKey) {
+      const { wrapIv, wrappedKey } = await _cryptoWrapDek(_cryptoState.dek, m.wrappingKey);
+      const { checkIv, check } = await _cryptoEncryptCheck(m.wrappingKey);
+      methods.push({
+        type: 'recovery',
+        wrapIv: _cryptoB64Encode(wrapIv),
+        wrappedKey: _cryptoB64Encode(wrappedKey),
+        checkIv: _cryptoB64Encode(checkIv),
+        check: _cryptoB64Encode(check),
+      });
+    }
+  }
+
+  const block = {
+    version: 1,
+    cipher: 'AES-256-GCM',
+    iv: _cryptoB64Encode(iv),
+    payload: _cryptoB64Encode(ciphertext),
+    methods,
+  };
+
+  return block;
+}
+
+// ── Lock (clear keys from memory) ──
+
+function cryptoLock() {
+  if (!_cryptoState) return;
+  _cryptoState = null;
+  _cryptoLocked = true;
+
+  // Notify MCP if available
+  if (typeof window !== 'undefined' && window._mcpOnRelock) {
+    window._mcpOnRelock();
+  }
+}
+
+// ── Set locked flag (used during init when CRYPTO block found) ──
+
+function cryptoSetLocked(locked) {
+  _cryptoLocked = locked;
+}
+
+// ── Passphrase strength ──
+
+function cryptoPassphraseStrength(passphrase) {
+  if (!passphrase) return { level: 0, label: '' };
+  const len = passphrase.length;
+  let charSpace = 0;
+  if (/[a-z]/.test(passphrase)) charSpace += 26;
+  if (/[A-Z]/.test(passphrase)) charSpace += 26;
+  if (/[0-9]/.test(passphrase)) charSpace += 10;
+  if (/[^a-zA-Z0-9]/.test(passphrase)) charSpace += 32;
+  if (charSpace === 0) charSpace = 26;
+
+  const entropy = len * Math.log2(charSpace);
+  // assume 100,000 guesses/sec (GPU cluster with PBKDF2 600K)
+  const seconds = Math.pow(2, entropy) / 100000;
+
+  if (seconds < 3600) return { level: 1, label: 'weak \u2014 minutes to crack' };
+  if (seconds < 86400 * 365) return { level: 1, label: 'weak \u2014 hours to crack' };
+  if (seconds < 86400 * 365 * 100) return { level: 2, label: 'ok \u2014 years to crack' };
+  return { level: 3, label: 'strong \u2014 centuries to crack' };
+}
+
+// ── Live sync for encrypted notebooks ──
+
+let _cryptoNode = null;
+let _cryptoSyncTimer = null;
+
+function initCryptoSync() {
+  // Find or create the CRYPTO comment node
+  const iter = document.createNodeIterator(document.body, NodeFilter.SHOW_COMMENT);
+  let node;
+  while ((node = iter.nextNode())) {
+    if (node.nodeValue.startsWith('AUDITABLE-CRYPTO\n')) { _cryptoNode = node; return; }
+  }
+  // Create if not found
+  const desc = document.createComment(' encrypted notebook data: passphrase required to access cells, settings, and modules ');
+  document.body.appendChild(desc);
+  _cryptoNode = document.createComment('AUDITABLE-CRYPTO\n\nAUDITABLE-CRYPTO');
+  document.body.appendChild(_cryptoNode);
+}
+
+async function syncCrypto(payload) {
+  if (!_cryptoNode || !_cryptoState) return;
+  try {
+    const block = await cryptoBuildBlock(payload);
+    if (block) {
+      _cryptoNode.nodeValue = 'AUDITABLE-CRYPTO\n' + JSON.stringify(block) + '\nAUDITABLE-CRYPTO';
+    }
+  } catch (e) {
+    console.error('crypto sync error:', e);
+  }
+}
+
+function syncCryptoDebounced(payload) {
+  clearTimeout(_cryptoSyncTimer);
+  _cryptoSyncTimer = setTimeout(() => syncCrypto(payload), 500);
+}
+
+// ── Remove cleartext data comment nodes ──
+
+function removeCleartextNodes() {
+  const tags = ['AUDITABLE-DATA', 'AUDITABLE-SETTINGS', 'AUDITABLE-MODULES', 'AUDITABLE-FS'];
+  const iter = document.createNodeIterator(document.body, NodeFilter.SHOW_COMMENT);
+  const toRemove = [];
+  let node;
+  while ((node = iter.nextNode())) {
+    for (const tag of tags) {
+      if (node.nodeValue.startsWith(tag + '\n')) {
+        // Also remove description comment before it
+        if (node.previousSibling?.nodeType === 8) toRemove.push(node.previousSibling);
+        toRemove.push(node);
+        break;
+      }
+    }
+  }
+  for (const n of toRemove) n.remove();
+}
 
 // -- save.js --
 
@@ -11529,6 +12232,7 @@ function initLiveSync() {
 }
 
 function syncData() {
+  if (cryptoIsEncrypted()) { if (window._cryptoSyncTrigger) window._cryptoSyncTrigger(); return; }
   if (!_dataNode) return;
   const cellData = S.cells.map(c => ({
     type: c.type,
@@ -11544,11 +12248,13 @@ function syncDataDebounced() {
 }
 
 function syncSettings() {
+  if (cryptoIsEncrypted()) { if (window._cryptoSyncTrigger) window._cryptoSyncTrigger(); return; }
   if (!_settingsNode) return;
   _settingsNode.nodeValue = 'AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS';
 }
 
 function syncModules() {
+  if (cryptoIsEncrypted()) { if (window._cryptoSyncTrigger) window._cryptoSyncTrigger(); return; }
   const mods = window._installedModules;
   if (!mods || !Object.keys(mods).length) {
     // remove node if no modules
@@ -11567,6 +12273,7 @@ function syncModules() {
 }
 
 function syncFs() {
+  if (cryptoIsEncrypted()) { if (window._cryptoSyncTrigger) window._cryptoSyncTrigger(); return; }
   const fs = window._notebookFS;
   if (!fs || !fs.size) {
     // remove node if no files
@@ -11612,7 +12319,7 @@ function setSaveMode(mode) {
   if (mobPack) mobPack.classList.toggle('active-mode', mode === 'packed');
 }
 
-function buildNotebookHtml() {
+async function buildNotebookHtml() {
   // serialize current state back to a self-contained HTML file
   const title = $('#docTitle').value || 'untitled';
 
@@ -11639,7 +12346,28 @@ function buildNotebookHtml() {
   // read static elements from live DOM
   const helpHTML = $('#helpOverlay').outerHTML;
   const settingsOvHTML = $('#settingsOverlay').outerHTML;
-  const settingsPanHTML = $('#settingsPanel').outerHTML.replace(/display:\s*block;?/, '');
+  const settingsPanEl = $('#settingsPanel').cloneNode(true);
+  settingsPanEl.style.display = '';
+  // clear module/binary lists (they contain URLs that leak when encrypted)
+  const modList = settingsPanEl.querySelector('#moduleList');
+  if (modList) modList.innerHTML = '';
+  const binList = settingsPanEl.querySelector('#binaryList');
+  if (binList) binList.innerHTML = '';
+  // reset encryption UI
+  const cryptoStatus = settingsPanEl.querySelector('#cryptoStatus');
+  if (cryptoStatus) cryptoStatus.textContent = 'not encrypted';
+  const cryptoEnable = settingsPanEl.querySelector('#cryptoEnableSection');
+  if (cryptoEnable) cryptoEnable.style.display = '';
+  const cryptoManage = settingsPanEl.querySelector('#cryptoManageSection');
+  if (cryptoManage) cryptoManage.style.display = 'none';
+  // clear passphrase inputs
+  ['cryptoPassphrase', 'cryptoPassphraseConfirm', 'cryptoNewPassphrase', 'cryptoNewPassphraseConfirm'].forEach(id => {
+    const el = settingsPanEl.querySelector('#' + id);
+    if (el) el.setAttribute('value', '');
+  });
+  const cryptoStrength = settingsPanEl.querySelector('#cryptoStrength');
+  if (cryptoStrength) cryptoStrength.textContent = '';
+  const settingsPanHTML = settingsPanEl.outerHTML.replace(/display:\s*block;?/, '');
   const updateOvHTML = $('#updateOverlay').outerHTML.replace(/\bvisible\b/, '').replace(/class="\s*"/, 'class=""');
   const updatePanEl = $('#updatePanel').cloneNode(true);
   updatePanEl.style.display = '';
@@ -11660,11 +12388,50 @@ function buildNotebookHtml() {
     fsPanHTML = clone.outerHTML.replace(/display:\s*block;?/, '');
   }
 
-  const statusbarHTML = document.querySelector('.statusbar').outerHTML;
+  // reset statusbar dynamic state
+  const statusbarEl = document.querySelector('.statusbar').cloneNode(true);
+  const cryptoEl = statusbarEl.querySelector('#statusCrypto');
+  if (cryptoEl) { cryptoEl.textContent = ''; cryptoEl.onclick = null; }
+  const mcpStatusEl = statusbarEl.querySelector('#statusMcp');
+  if (mcpStatusEl) { mcpStatusEl.textContent = ''; mcpStatusEl.className = 'status-mcp'; }
+  const statusbarHTML = statusbarEl.outerHTML;
+
+  // capture overlay elements (reset to default hidden state)
+  function captureOverlay(id) {
+    const el = document.getElementById(id);
+    if (!el) return '';
+    const clone = el.cloneNode(true);
+    clone.style.display = 'none';
+    return clone.outerHTML;
+  }
+  const mcpConfirmHTML = captureOverlay('mcpConfirmOverlay');
+  const exportOverlayHTML = captureOverlay('exportOverlay');
+  const lockScreenHTML = captureOverlay('lockScreen');
+  const recoveryHTML = captureOverlay('recoveryOverlay');
+
+  // capture MCP panel (reset to default)
+  const mcpPanEl = document.getElementById('mcpPanel');
+  let mcpPanHTML = '';
+  if (mcpPanEl) {
+    const clone = mcpPanEl.cloneNode(true);
+    clone.classList.remove('visible');
+    const log = clone.querySelector('#mcpPanelLog');
+    if (log) log.innerHTML = '<span class="dim">no tool calls yet</span>';
+    const info = clone.querySelector('#mcpPanelInfo');
+    if (info) info.textContent = '';
+    const input = clone.querySelector('#mcpConnectInput');
+    if (input) { input.value = ''; input.disabled = false; }
+    const nameInput = clone.querySelector('#mcpNameInput');
+    if (nameInput) { nameInput.value = ''; nameInput.disabled = false; }
+    const status = clone.querySelector('#mcpPanelStatus');
+    if (status) { status.textContent = 'disconnected'; status.className = 'mcp-panel-status'; }
+    mcpPanHTML = clone.outerHTML;
+  }
 
   // read toolbar from live DOM and patch the title value
   const toolbarEl = document.querySelector('.toolbar').cloneNode(true);
-  toolbarEl.querySelector('#docTitle').value = title;
+  // mask title when encrypted (setAttribute needed — .value doesn't update the HTML attribute for outerHTML)
+  toolbarEl.querySelector('#docTitle').setAttribute('value', cryptoIsEncrypted() ? 'untitled' : title);
   toolbarEl.querySelector('#toolbarStatus').textContent = '';
   // reset autorun button state to match saved mode
   const autoBtn = toolbarEl.querySelector('#autorunBtn');
@@ -11702,12 +12469,32 @@ function buildNotebookHtml() {
     ? `<style id="auditable-app-css">\n${appStyles}\n</style>\n<style id="auditable-editor-css">\n${editorStyles}\n</style>`
     : `<style id="auditable-css">\n${styles}\n</style>`;
 
+  // data blocks: encrypted or cleartext
+  let dataBlocks;
+  const effectiveTitle = cryptoIsEncrypted() ? 'Encrypted' : esc(title);
+  if (cryptoIsEncrypted()) {
+    const payload = {
+      data: cellData,
+      settings: getSettings(),
+      modules: Object.keys(window._installedModules || {}).length ? encodeModules(window._installedModules) : null,
+      fs: window._notebookFS?.size ? encodeModules(Object.fromEntries(window._notebookFS)) : null,
+      title: title,
+    };
+    const block = await cryptoBuildBlock(payload);
+    dataBlocks = '<!-- encrypted notebook data: passphrase required to access cells, settings, and modules -->\n<!--AUDITABLE-CRYPTO\n' + JSON.stringify(block) + '\nAUDITABLE-CRYPTO-->';
+  } else {
+    dataBlocks = '<!-- cell data: JSON array of {type, code, collapsed?} -->\n<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->'
+      + '\n' + (Object.keys(window._installedModules || {}).length ? '<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId} -->\n<!--AUDITABLE-MODULES\n' + encodeModules(window._installedModules) + '\nAUDITABLE-MODULES-->' : '')
+      + '\n' + (window._notebookFS?.size ? '<!-- notebook filesystem: base64-encoded JSON mapping paths to {type, compressed, size, data} -->\n<!--AUDITABLE-FS\n' + encodeModules(Object.fromEntries(window._notebookFS)) + '\nAUDITABLE-FS-->' : '')
+      + '\n' + '<!-- notebook settings: JSON {theme, fontSize, width, ...} -->\n<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->';
+  }
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Auditable \u2014 ${esc(title)}</title>
+<title>Auditable \u2014 ${effectiveTitle}</title>
 ${styleBlock}
 </head>
 <body>
@@ -11722,6 +12509,14 @@ ${updatePanHTML}
 
 ${fsPanHTML}
 
+${mcpPanHTML}
+
+${mcpConfirmHTML}
+${exportOverlayHTML}
+
+${lockScreenHTML}
+${recoveryHTML}
+
 ${toolbarHTML}
 
 ${findBarHTML}
@@ -11733,10 +12528,7 @@ ${findBarHTML}
 
 ${statusbarHTML}
 
-${'<!-- cell data: JSON array of {type, code, collapsed?} -->\n<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->'}
-${Object.keys(window._installedModules || {}).length ? '<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId} -->\n<!--AUDITABLE-MODULES\n' + encodeModules(window._installedModules) + '\nAUDITABLE-MODULES-->' : ''}
-${window._notebookFS?.size ? '<!-- notebook filesystem: base64-encoded JSON mapping paths to {type, compressed, size, data} -->\n<!--AUDITABLE-FS\n' + encodeModules(Object.fromEntries(window._notebookFS)) + '\nAUDITABLE-FS-->' : ''}
-${'<!-- notebook settings: JSON {theme, fontSize, width, ...} -->\n<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->'}
+${dataBlocks}
 
 <script>\n${script}\n<\/script>
 </body>
@@ -11754,13 +12546,20 @@ function downloadHtml(html, title) {
   return a.download;
 }
 
-function saveNotebook() {
+async function saveNotebook() {
   if (_saveMode === 'packed') {
     savePackedNotebook();
     return;
   }
   const title = $('#docTitle').value || 'untitled';
-  const html = buildNotebookHtml();
+  let html;
+  try {
+    html = await buildNotebookHtml();
+  } catch (e) {
+    console.error('save failed:', e);
+    setMsg('save failed: ' + e.message, 'err');
+    return;
+  }
 
   // AF bridge: send serialized HTML to parent shell instead of downloading
   if (window.__AF_BRIDGE__) {
@@ -11775,7 +12574,7 @@ function saveNotebook() {
 
 async function savePackedNotebook() {
   const title = $('#docTitle').value || 'untitled';
-  const html = buildNotebookHtml();
+  const html = await buildNotebookHtml();
 
   try {
     // compress via CompressionStream
@@ -11851,31 +12650,17 @@ function esc(s) {
 }
 
 function exportAsTxt() {
+  if (cryptoIsLocked()) { setMsg('unlock first', 'err'); return; }
   const title = $('#docTitle').value || 'untitled';
-  const html = buildNotebookHtml();
 
-  // extract notebook data from HTML
-  const dataMatch = html.match(/<!--AUDITABLE-DATA\n([\s\S]*?)\nAUDITABLE-DATA-->/);
-  let cells = [];
-  if (dataMatch) {
-    try { cells = JSON.parse(dataMatch[1]); } catch {}
-  }
-
-  const setMatch = html.match(/<!--AUDITABLE-SETTINGS\n([\s\S]*?)\nAUDITABLE-SETTINGS-->/);
-  let settings = {};
-  if (setMatch) {
-    try { settings = JSON.parse(setMatch[1]); } catch {}
-  }
-
-  // extract module URLs (without sources — standalone export just records URLs)
-  const modMatch = html.match(/<!--AUDITABLE-MODULES\n([\s\S]*?)\nAUDITABLE-MODULES-->/);
-  let moduleUrls = [];
-  if (modMatch) {
-    try {
-      const decoded = decodeModules(modMatch[1]);
-      moduleUrls = Object.keys(decoded);
-    } catch {}
-  }
+  // read from live state directly (works for both encrypted and unencrypted)
+  const cells = S.cells.map(c => ({
+    type: c.type,
+    code: c.code,
+    collapsed: (c._splitOrigEl || c.el).classList.contains('collapsed') || undefined,
+  }));
+  const settings = getSettings();
+  const moduleUrls = Object.keys(window._installedModules || {});
 
   // build /// formatted text
   const lines = ['/// auditable'];
@@ -11915,6 +12700,9 @@ function exportAsTxt() {
 function loadFromEmbed() {
   // look for embedded cell data in HTML comments
   const raw = document.body.innerHTML;
+
+  // encrypted notebook — skip normal loading, init.js handles it
+  if (cryptoDetect(raw).found) return false;
 
   // restore installed modules first (before cells run)
   const modMatch = raw.match(/<!--AUDITABLE-MODULES\n([\s\S]*?)\nAUDITABLE-MODULES-->/);
@@ -12069,6 +12857,7 @@ function showExportDialog() {
 }
 
 function doExportApp() {
+  if (cryptoIsLocked()) { setMsg('unlock first', 'err'); return; }
   const title = document.getElementById('exportTitle').value;
   const includeBase = document.getElementById('exportBaseStyles').checked;
   closeExportDialog();
@@ -15333,6 +16122,15 @@ window.__auditable_mcp = {
 
 
 
+
+// ── Locked notebook gating ──
+
+function _mcpRequireUnlocked() {
+  if (typeof cryptoIsLocked === 'function' && cryptoIsLocked()) {
+    throw new Error('Notebook is encrypted and locked. Enter the passphrase in the browser.');
+  }
+}
+
 // ── User interaction / confirmation ──
 
 // Per-category auto-accept: 'code' | 'widget' | 'cell' | 'fs'
@@ -15481,9 +16279,11 @@ function _mcpLogCall(tool, input, result, duration) {
   _mcpRefreshPanel();
 }
 
-// Wrap a tool execute to add audit logging
-function _mcpAudited(name, fn) {
+// Wrap a tool execute to add audit logging + locked gating
+function _mcpAudited(name, fn, opts) {
+  const skipLockCheck = opts && opts.skipLockCheck;
   return async function(input, client) {
+    if (!skipLockCheck) _mcpRequireUnlocked();
     const start = performance.now();
     try {
       const result = await fn(input, client);
@@ -16161,10 +16961,12 @@ function _mcpGetDAG() {
 // ── Tool: getNotebookStatus ──
 
 function _mcpGetNotebookStatus() {
+  const locked = typeof cryptoIsLocked === 'function' && cryptoIsLocked();
   return {
     title: document.getElementById('docTitle')?.value || 'untitled',
     cellCount: S.cells.length,
     autorun: S.autorun,
+    locked,
     errorCount: S.cells.filter(c => c.error).length,
     errors: _mcpCollectErrors(),
   };
@@ -16402,7 +17204,7 @@ if (navigator.modelContext && window.__auditable_mcp) {
     description: 'Get notebook status: title, cell count, autorun mode, and all errors.',
     inputSchema: { type: 'object', properties: {} },
     annotations: { ...ro, title: 'Get notebook status' },
-    execute: _mcpAudited('getNotebookStatus', async () => _mcpGetNotebookStatus()),
+    execute: _mcpAudited('getNotebookStatus', async () => _mcpGetNotebookStatus(), { skipLockCheck: true }),
   });
 
   navigator.modelContext.registerTool({
@@ -16448,7 +17250,7 @@ if (navigator.modelContext && window.__auditable_mcp) {
       },
     },
     annotations: { ...ro, title: 'Get documentation' },
-    execute: _mcpAudited('getDocumentation', async (input) => _mcpGetDocumentation(input)),
+    execute: _mcpAudited('getDocumentation', async (input) => _mcpGetDocumentation(input), { skipLockCheck: true }),
   });
 
   navigator.modelContext.registerTool({
@@ -16831,12 +17633,31 @@ window._mcpNotifyExecComplete = function(errors) {
 // Export audit log for UI panel access
 window._mcpAuditLog = _mcpAuditLog;
 
+// ── Re-lock / unlock hooks ──
+
+window._mcpOnRelock = function() {
+  _mcpAuditLog.length = 0;
+  _mcpAutoAccept.clear();
+  _mcpRefreshPanel();
+  if (navigator.modelContext && navigator.modelContext.notifyToolsChanged) {
+    navigator.modelContext.notifyToolsChanged();
+  }
+};
+
+window._mcpOnUnlock = function() {
+  _mcpRefreshPanel();
+  if (navigator.modelContext && navigator.modelContext.notifyToolsChanged) {
+    navigator.modelContext.notifyToolsChanged();
+  }
+};
+
 // -- globals.js --
 
 // ── GLOBAL BINDINGS ──
 // This module wires exported functions to window.* for use by onclick/onchange
 // handlers in template HTML and dynamically generated markup.
 // Modules stay pure (no side effects, no window assignments).
+
 
 
 
@@ -16929,7 +17750,347 @@ window.fsImport = fsImport;
 window.toggleMcpPanel = toggleMcpPanel;
 window.mcpConnect = mcpConnect;
 
+// encryption
+window.enableEncryption = enableEncryption;
+window.disableEncryption = disableEncryption;
+window.changePassphrase = changePassphrase;
+window.regenerateRecovery = regenerateRecovery;
+window.lockNotebook = lockNotebook;
+window.updateStrengthFeedback = updateStrengthFeedback;
+
 // -- init.js --
+
+// ── LOCK SCREEN ──
+
+function _showLockScreen(block) {
+  const lockScreen = document.getElementById('lockScreen');
+  if (!lockScreen) return;
+
+  document.body.classList.add('locked');
+  lockScreen.style.display = '';
+
+  const passphraseInput = document.getElementById('lockPassphrase');
+  const unlockBtn = document.getElementById('lockUnlockBtn');
+  const errorEl = document.getElementById('lockError');
+  const spinnerEl = document.getElementById('lockSpinner');
+  const recoveryToggle = document.getElementById('lockRecoveryToggle');
+  const recoverySection = document.getElementById('lockRecoverySection');
+  const recoveryInput = document.getElementById('lockRecoveryInput');
+  const recoveryBtn = document.getElementById('lockRecoveryBtn');
+
+  function showError(msg) {
+    errorEl.textContent = msg;
+    errorEl.style.display = '';
+    spinnerEl.style.display = 'none';
+    unlockBtn.disabled = false;
+    if (recoveryBtn) recoveryBtn.disabled = false;
+  }
+
+  async function doUnlock(passphrase) {
+    errorEl.style.display = 'none';
+    spinnerEl.style.display = '';
+    unlockBtn.disabled = true;
+    try {
+      const data = await cryptoUnlock(passphrase, block);
+      _resumeAfterUnlock(data);
+    } catch (e) {
+      showError(e.message === 'Wrong passphrase' ? 'wrong passphrase' : 'decryption failed');
+    }
+  }
+
+  async function doUnlockRecovery(hex) {
+    errorEl.style.display = 'none';
+    spinnerEl.style.display = '';
+    if (recoveryBtn) recoveryBtn.disabled = true;
+    try {
+      const data = await cryptoUnlockRecovery(hex, block);
+      _resumeAfterUnlock(data);
+    } catch (e) {
+      showError(e.message === 'Invalid recovery key' ? 'invalid recovery key' : 'decryption failed');
+    }
+  }
+
+  unlockBtn.onclick = () => {
+    const p = passphraseInput.value;
+    if (!p) return;
+    doUnlock(p);
+  };
+
+  passphraseInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const p = passphraseInput.value;
+      if (p) doUnlock(p);
+    }
+  });
+
+  if (recoveryToggle) {
+    recoveryToggle.onclick = (e) => {
+      e.preventDefault();
+      recoverySection.style.display = recoverySection.style.display === 'none' ? '' : 'none';
+    };
+  }
+
+  if (recoveryBtn) {
+    recoveryBtn.onclick = () => {
+      const hex = recoveryInput.value.trim();
+      if (hex) doUnlockRecovery(hex);
+    };
+  }
+
+  // Focus passphrase input
+  setTimeout(() => passphraseInput.focus(), 100);
+}
+
+function _resumeAfterUnlock(payload) {
+  // Restore modules
+  if (payload.modules) {
+    try {
+      window._installedModules = decodeModules(payload.modules);
+    } catch (e) { console.error('Failed to restore modules:', e); }
+  }
+
+  // Restore filesystem
+  if (payload.fs) {
+    try {
+      window._notebookFS = new Map(Object.entries(decodeModules(payload.fs)));
+    } catch (e) { console.error('Failed to restore FS:', e); }
+  }
+
+  // Restore settings
+  if (payload.settings) {
+    try { applySettings(payload.settings); } catch (e) { console.error('Failed to restore settings:', e); }
+  }
+
+  // Restore title
+  const realTitle = payload.title || payload.settings?.title || 'untitled';
+  const titleInput = document.getElementById('docTitle');
+  if (titleInput) titleInput.value = realTitle;
+  document.title = 'Auditable \u2014 ' + realTitle;
+
+  // Clean dirty DOM
+  const nb = document.getElementById('notebook');
+  if (nb) nb.innerHTML = '';
+  document.querySelectorAll('style[data-cell-id]').forEach(el => el.remove());
+
+  // Load cells
+  if (payload.data && Array.isArray(payload.data)) {
+    for (const c of payload.data) {
+      const cell = addCell(c.type, c.code);
+      if (c.collapsed) cell.el.classList.add('collapsed');
+    }
+  }
+
+  S.initialized = true;
+
+  // Configure autocomplete
+  configureAllAutocomplete();
+
+  // Initialize crypto live sync (replaces cleartext sync)
+  removeCleartextNodes();
+  initCryptoSync();
+
+  // Schedule crypto sync on edits
+  _setupCryptoLiveSync();
+
+  // Update statusbar
+  _showCryptoStatus();
+
+  // Hide lock screen
+  document.body.classList.remove('locked');
+  const lockScreen = document.getElementById('lockScreen');
+  if (lockScreen) lockScreen.style.display = 'none';
+
+  // Notify MCP
+  if (window._mcpOnUnlock) window._mcpOnUnlock();
+
+  // Run all if configured
+  const effectiveRun = resolveRunOnLoad();
+  if (effectiveRun === 'yes' && getEditorViewSetting() !== 'yes' && S.cells.some(c => c.type === 'code')) {
+    setTimeout(runAll, 50);
+  }
+
+  // Enter editor view if configured
+  if (getEditorViewSetting() === 'yes') {
+    setTimeout(toggleSplitView, 60);
+  }
+}
+
+function _setupCryptoLiveSync() {
+  // Override the normal sync to use crypto sync instead
+  // This hooks into the existing edit/settings change flow
+  window._cryptoSyncTrigger = () => {
+    if (!cryptoIsEncrypted()) return;
+    const cellData = S.cells.map(c => ({
+      type: c.type,
+      code: c.code,
+      collapsed: (c._splitOrigEl || c.el).classList.contains('collapsed') || undefined,
+    }));
+    const payload = {
+      data: cellData,
+      settings: getSettings(),
+      modules: Object.keys(window._installedModules || {}).length ? encodeModules(window._installedModules) : null,
+      fs: window._notebookFS?.size ? encodeModules(Object.fromEntries(window._notebookFS)) : null,
+      title: document.getElementById('docTitle')?.value || 'untitled',
+    };
+    syncCryptoDebounced(payload);
+  };
+}
+
+function _showCryptoStatus() {
+  const el = document.getElementById('statusCrypto');
+  if (el) {
+    el.textContent = '\ud83d\udd13';
+    el.title = 'encrypted notebook (unlocked)';
+    el.style.cursor = 'pointer';
+    el.onclick = () => window.toggleSettings?.();
+  }
+}
+
+function _showCryptoError() {
+  const lockScreen = document.getElementById('lockScreen');
+  if (!lockScreen) return;
+  document.body.classList.add('locked');
+  lockScreen.style.display = '';
+  const subtitle = lockScreen.querySelector('.lock-subtitle');
+  if (subtitle) subtitle.textContent = 'your browser does not support Web Crypto API';
+  const form = lockScreen.querySelector('.lock-form');
+  if (form) form.style.display = 'none';
+}
+
+// ── Encryption settings UI handlers ──
+
+async function enableEncryption() {
+  const p1 = document.getElementById('cryptoPassphrase')?.value;
+  const p2 = document.getElementById('cryptoPassphraseConfirm')?.value;
+  if (!p1 || !p2) { setMsg('enter passphrase', 'err'); return; }
+  if (p1 !== p2) { setMsg('passphrases do not match', 'err'); return; }
+
+  try {
+    const recoveryHex = await cryptoEnable(p1);
+    // Show recovery key modal
+    _showRecoveryModal(recoveryHex);
+    // Setup crypto sync
+    removeCleartextNodes();
+    initCryptoSync();
+    _setupCryptoLiveSync();
+    _showCryptoStatus();
+    _updateCryptoSettingsUI();
+    setMsg('encryption enabled', 'ok');
+  } catch (e) {
+    setMsg('encryption failed: ' + e.message, 'err');
+  }
+}
+
+function disableEncryption() {
+  cryptoDisable();
+  _updateCryptoSettingsUI();
+  // Re-enable cleartext sync
+  initLiveSync();
+  syncData();
+  syncSettings();
+  if (window._installedModules && Object.keys(window._installedModules).length) syncModules();
+  const el = document.getElementById('statusCrypto');
+  if (el) { el.textContent = ''; el.onclick = null; }
+  setMsg('encryption disabled', 'ok');
+}
+
+async function changePassphrase() {
+  const p1 = document.getElementById('cryptoNewPassphrase')?.value;
+  const p2 = document.getElementById('cryptoNewPassphraseConfirm')?.value;
+  if (!p1 || !p2) { setMsg('enter new passphrase', 'err'); return; }
+  if (p1 !== p2) { setMsg('passphrases do not match', 'err'); return; }
+  try {
+    await cryptoChangePassphrase(p1);
+    document.getElementById('cryptoNewPassphrase').value = '';
+    document.getElementById('cryptoNewPassphraseConfirm').value = '';
+    setMsg('passphrase changed', 'ok');
+  } catch (e) {
+    setMsg('failed: ' + e.message, 'err');
+  }
+}
+
+async function regenerateRecovery() {
+  try {
+    const hex = await cryptoRegenerateRecovery();
+    _showRecoveryModal(hex);
+    setMsg('recovery key regenerated', 'ok');
+  } catch (e) {
+    setMsg('failed: ' + e.message, 'err');
+  }
+}
+
+function lockNotebook() {
+  cryptoLock();
+  // Reload the page to show lock screen
+  location.reload();
+}
+
+function updateStrengthFeedback() {
+  const el = document.getElementById('cryptoStrength');
+  const input = document.getElementById('cryptoPassphrase');
+  if (!el || !input) return;
+  const { level, label } = cryptoPassphraseStrength(input.value);
+  el.textContent = label;
+  el.className = 'crypto-strength crypto-strength-' + level;
+}
+
+function _showRecoveryModal(hex) {
+  const overlay = document.getElementById('recoveryOverlay');
+  if (!overlay) return;
+  overlay.style.display = '';
+  const pre = document.getElementById('recoveryKey');
+  if (pre) pre.textContent = hex;
+
+  const copyBtn = document.getElementById('recoveryCopyBtn');
+  const copyNote = document.getElementById('recoveryCopyNote');
+  const checkbox = document.getElementById('recoverySavedCheck');
+  const doneBtn = document.getElementById('recoveryDoneBtn');
+  const downloadBtn = document.getElementById('recoveryDownloadBtn');
+
+  if (doneBtn) doneBtn.disabled = true;
+  if (checkbox) {
+    checkbox.checked = false;
+    checkbox.onchange = () => { if (doneBtn) doneBtn.disabled = !checkbox.checked; };
+  }
+  if (copyBtn) {
+    copyBtn.onclick = () => {
+      navigator.clipboard?.writeText(hex);
+      if (copyNote) copyNote.style.display = '';
+    };
+  }
+  if (downloadBtn) {
+    downloadBtn.onclick = () => {
+      const title = document.getElementById('docTitle')?.value || 'untitled';
+      const blob = new Blob([hex], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = title.replace(/[^a-zA-Z0-9_-]/g, '_') + '-recovery-key.txt';
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+  }
+  if (doneBtn) {
+    doneBtn.onclick = () => { overlay.style.display = 'none'; };
+  }
+}
+
+function _updateCryptoSettingsUI() {
+  const statusEl = document.getElementById('cryptoStatus');
+  const enableSection = document.getElementById('cryptoEnableSection');
+  const manageSection = document.getElementById('cryptoManageSection');
+
+  if (cryptoIsEncrypted()) {
+    if (statusEl) statusEl.textContent = 'encrypted \u2014 unlocked';
+    if (enableSection) enableSection.style.display = 'none';
+    if (manageSection) manageSection.style.display = '';
+  } else {
+    if (statusEl) statusEl.textContent = 'not encrypted';
+    if (enableSection) enableSection.style.display = '';
+    if (manageSection) manageSection.style.display = 'none';
+  }
+}
 
 // ── INIT ──
 
@@ -16940,6 +18101,18 @@ window.mcpConnect = mcpConnect;
     packedMeta.remove();
     setBadge('packed', 'packed', 'toolbar-badge toolbar-badge-packed');
     setSaveMode('packed');
+  }
+
+  // detect encrypted notebook
+  const cryptoBlock = cryptoDetect(document.body.innerHTML);
+  if (cryptoBlock.found) {
+    if (!crypto?.subtle) {
+      _showCryptoError();
+      return;
+    }
+    cryptoSetLocked(true);
+    _showLockScreen(cryptoBlock.block);
+    return; // init stops, resumed after unlock
   }
 
   if (!loadFromEmbed()) {
@@ -16966,17 +18139,17 @@ window.mcpConnect = mcpConnect;
 // When running inside AF shell (iframe), establish postMessage communication.
 // No-op when running standalone (window.parent === window).
 //
-// Message protocol (notebook ↔ AF shell):
-//   af:ready          → sent on init with { title }
-//   af:serialize      ← received to trigger saveNotebook()
-//   af:saved          ← received after save (shows "saved" status)
-//   af:setTitle       ← received to update docTitle input
-//   af:resize         ← received when iframe becomes visible (recalc textareas)
-//   af:titleChanged   → sent when user edits the title
-//   af:fileRequest    → sent to request file picker { id, accept }
-//   af:fileResult     ← received with picked file { id, file }
-//   af:download       → sent to request download { data, filename, mimeType }
-//   af:dirty          → sent when notebook has unsaved changes
+// Message protocol (notebook <-> AF shell):
+//   af:ready          -> sent on init with { title }
+//   af:serialize      <- received to trigger saveNotebook()
+//   af:saved          <- received after save (shows "saved" status)
+//   af:setTitle       <- received to update docTitle input
+//   af:resize         <- received when iframe becomes visible (recalc textareas)
+//   af:titleChanged   -> sent when user edits the title
+//   af:fileRequest    -> sent to request file picker { id, accept }
+//   af:fileResult     <- received with picked file { id, file }
+//   af:download       -> sent to request download { data, filename, mimeType }
+//   af:dirty          -> sent when notebook has unsaved changes
 
 (function afBridge() {
   if (window.parent === window) return;

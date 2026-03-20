@@ -1,0 +1,59 @@
+/// auditable
+/// title: encrypted notebook
+
+/// md
+# encrypted notebook
+
+this notebook was saved with **AES-256-GCM** whole-notebook encryption. all cell data, settings, and modules are opaque at rest — the file on disk is just the auditable runtime plus ciphertext.
+
+## how it works
+
+1. a random **DEK** (data encryption key) is generated when encryption is first enabled
+2. the DEK encrypts the notebook payload (cells + settings + modules + filesystem)
+3. the DEK is wrapped by a **passphrase-derived key** (PBKDF2, 600K iterations)
+4. a **recovery key** (random 256-bit) wraps the same DEK via HKDF — backup in case the passphrase is forgotten
+5. every save uses a fresh IV — identical content produces different ciphertext
+
+the `AUDITABLE-CRYPTO` block replaces `DATA` / `SETTINGS` / `MODULES` blocks entirely. no cleartext cell data on disk.
+
+/// code
+// the notebook works normally once unlocked
+const secret = "this text is encrypted at rest"
+display(secret)
+
+/// code
+// reactive DAG, widgets, everything works as usual
+const n = ui.slider("n", 8, { min: 3, max: 20 })
+const angle = 2 * Math.PI / n
+
+const c = ui.canvas(300, 300)
+const ctx = c.getContext('2d')
+ctx.clearRect(0, 0, 300, 300)
+ctx.strokeStyle = '#c89b3c'
+ctx.lineWidth = 1.5
+
+const cx = 150, cy = 150, r = 120
+ctx.beginPath()
+for (let i = 0; i <= n; i++) {
+  const x = cx + r * Math.cos(angle * i - Math.PI / 2)
+  const y = cy + r * Math.sin(angle * i - Math.PI / 2)
+  i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)
+}
+ctx.stroke()
+
+display(`regular ${n}-gon`)
+
+/// md
+## encryption + MCP
+
+when the notebook is **locked**, MCP tools return:
+
+> *Notebook is encrypted and locked. Enter the passphrase in the browser.*
+
+when **unlocked**, MCP directives (`// %mcp`, `// %mcp rw`, `// %private`) govern live access as usual. on re-lock, the audit log is cleared.
+
+## try it
+
+- **settings panel** → encryption section to manage passphrase, recovery key, or disable
+- **lock now** button to re-lock without closing the tab
+- **Ctrl+S** saves encrypted — the file on disk is always opaque

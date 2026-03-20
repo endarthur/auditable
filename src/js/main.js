@@ -12,6 +12,7 @@ import './cell-ops.js';
 import './editor.js';
 import './settings.js';
 import './update.js';
+import './crypto.js';
 import './save.js';
 import './ui.js';
 import './find.js';
