@@ -31,20 +31,6 @@ def _exec_cell(code, ns):
     exec(compile(code, '<cell>', 'exec'), ns)
     return None
 
-async def call(name, args=None, **kwargs):
-    """Call a JS/WASM function via async bridge.
-    Avoids nested-WASM crash (MicroPython is itself WASM).
-    The call runs in a separate macrotask after Asyncify suspends.
-
-    Usage:
-        result = await call("_gslib.kb2d", {"data": pts, "grid": {...}})
-        est = result["est"]
-    """
-    import js, json
-    payload = args if args is not None else kwargs
-    result_json = await js.globalThis._adder_call(name, json.dumps(payload))
-    return json.loads(result_json)
-
 def _build_async_wrapper(code, defines):
     """Wrap cell code in async def with global declarations for defines.
     The wrapper function is exec'd with ns as globals, so 'global' pushes
@@ -325,33 +311,8 @@ async function initInterpreter() {
       }
     }
 
-    // bootstrap _exec_cell helper and call() bridge
+    // bootstrap _exec_cell helper
     _mp.runPython(BRIDGE_PY);
-
-    // JS-side async bridge: lets Python call JS/WASM functions without
-    // nested-WASM crash. setTimeout(0) ensures the call happens in a
-    // new macrotask after MicroPython's Asyncify has fully unwound.
-    window._adder_call = (name, argsJson) => new Promise((resolve, reject) => {
-      setTimeout(() => {
-        try {
-          const parts = name.split('.');
-          let fn = window;
-          for (const p of parts) fn = fn[p];
-          if (typeof fn !== 'function') throw new Error(name + ' is not a function');
-          const result = fn(JSON.parse(argsJson));
-          // convert TypedArrays to plain arrays for JSON serialization
-          if (result && typeof result === 'object' && !Array.isArray(result)) {
-            const out = {};
-            for (const [k, v] of Object.entries(result)) {
-              out[k] = ArrayBuffer.isView(v) ? Array.from(v) : v;
-            }
-            resolve(JSON.stringify(out));
-          } else {
-            resolve(JSON.stringify(result));
-          }
-        } catch (e) { reject(e); }
-      }, 0);
-    });
 
     return _mp;
   })();
@@ -517,6 +478,23 @@ function _stripPython(code) {
   return out;
 }
 
+// ── PyProxy → native JS conversion ──
+// PyProxy (MicroPython's FFI wrapper) has .toJs() that recursively converts
+// list → Array, dict → Object, primitives pass through. We detect PyProxy by
+// the _ref property and grab the toJs static method from its constructor.
+let _toJs = null;
+
+function pyToJs(val) {
+  if (val === null || val === undefined) return val;
+  if (typeof val !== 'object' && typeof val !== 'function') return val;
+  // detect PyProxy: has _ref, is not a plain object/array
+  if (val._ref !== undefined && val.constructor && val.constructor.toJs) {
+    if (!_toJs) _toJs = val.constructor.toJs;
+    return _toJs(val);
+  }
+  return val;
+}
+
 // ── execute: run Python cell code ──
 
 async function pythonExecute(code, scopeIn, cell) {
@@ -534,8 +512,6 @@ async function pythonExecute(code, scopeIn, cell) {
       mp.runPython(`_adder_ns["${k}"] = _adder_inject_v`);
     }
     try { mp.globals.delete('_adder_inject_v'); } catch {}
-    // inject call() builtin — async bridge for JS/WASM calls
-    mp.runPython('_adder_ns["call"] = call');
 
     // execute cell code
     mp.globals.set('_adder_code', code);
@@ -569,14 +545,16 @@ async function pythonExecute(code, scopeIn, cell) {
     const stdout = flushStdout();
     const stderr = flushStderr();
 
-    // extract defines from namespace
+    // extract defines from namespace — convert PyProxy to native JS
+    // (list → Array, dict → Object) so downstream JS/WASM gets native types.
+    // Functions stay as PyProxy (callable from JS via FFI).
     const defines = {};
     const cellDefines = pythonParseNames(code);
     for (const name of cellDefines) {
       try {
         mp.runPython(`_adder_extract = _adder_ns.get("${name}", None)`);
         const val = mp.globals.get('_adder_extract');
-        if (val !== undefined && val !== null) defines[name] = val;
+        if (val !== undefined && val !== null) defines[name] = pyToJs(val);
       } catch {
         // name not in namespace (e.g. import failed)
       }
@@ -586,7 +564,10 @@ async function pythonExecute(code, scopeIn, cell) {
     const parts = [];
     if (stdout.length) parts.push(stdout.join('\n'));
     if (stderr.length) parts.push(stderr.join('\n'));
-    if (lastExpr !== undefined && lastExpr !== null) parts.push(String(lastExpr));
+    if (lastExpr !== undefined && lastExpr !== null) {
+      const jsExpr = pyToJs(lastExpr);
+      parts.push(typeof jsExpr === 'object' ? JSON.stringify(jsExpr, null, 2) : String(jsExpr));
+    }
     const output = parts.length ? parts.join('\n') : undefined;
 
     // cleanup

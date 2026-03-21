@@ -25,20 +25,6 @@ def _exec_cell(code, ns):
     exec(compile(code, '<cell>', 'exec'), ns)
     return None
 
-async def call(name, args=None, **kwargs):
-    """Call a JS/WASM function via async bridge.
-    Avoids nested-WASM crash (MicroPython is itself WASM).
-    The call runs in a separate macrotask after Asyncify suspends.
-
-    Usage:
-        result = await call("_gslib.kb2d", {"data": pts, "grid": {...}})
-        est = result["est"]
-    """
-    import js, json
-    payload = args if args is not None else kwargs
-    result_json = await js.globalThis._adder_call(name, json.dumps(payload))
-    return json.loads(result_json)
-
 def _build_async_wrapper(code, defines):
     """Wrap cell code in async def with global declarations for defines.
     The wrapper function is exec'd with ns as globals, so 'global' pushes

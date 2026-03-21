@@ -141,6 +141,23 @@ function _stripPython(code) {
   return out;
 }
 
+// ── PyProxy → native JS conversion ──
+// PyProxy (MicroPython's FFI wrapper) has .toJs() that recursively converts
+// list → Array, dict → Object, primitives pass through. We detect PyProxy by
+// the _ref property and grab the toJs static method from its constructor.
+let _toJs = null;
+
+function pyToJs(val) {
+  if (val === null || val === undefined) return val;
+  if (typeof val !== 'object' && typeof val !== 'function') return val;
+  // detect PyProxy: has _ref, is not a plain object/array
+  if (val._ref !== undefined && val.constructor && val.constructor.toJs) {
+    if (!_toJs) _toJs = val.constructor.toJs;
+    return _toJs(val);
+  }
+  return val;
+}
+
 // ── execute: run Python cell code ──
 
 export async function pythonExecute(code, scopeIn, cell) {
@@ -158,8 +175,6 @@ export async function pythonExecute(code, scopeIn, cell) {
       mp.runPython(`_adder_ns["${k}"] = _adder_inject_v`);
     }
     try { mp.globals.delete('_adder_inject_v'); } catch {}
-    // inject call() builtin — async bridge for JS/WASM calls
-    mp.runPython('_adder_ns["call"] = call');
 
     // execute cell code
     mp.globals.set('_adder_code', code);
@@ -193,14 +208,16 @@ export async function pythonExecute(code, scopeIn, cell) {
     const stdout = flushStdout();
     const stderr = flushStderr();
 
-    // extract defines from namespace
+    // extract defines from namespace — convert PyProxy to native JS
+    // (list → Array, dict → Object) so downstream JS/WASM gets native types.
+    // Functions stay as PyProxy (callable from JS via FFI).
     const defines = {};
     const cellDefines = pythonParseNames(code);
     for (const name of cellDefines) {
       try {
         mp.runPython(`_adder_extract = _adder_ns.get("${name}", None)`);
         const val = mp.globals.get('_adder_extract');
-        if (val !== undefined && val !== null) defines[name] = val;
+        if (val !== undefined && val !== null) defines[name] = pyToJs(val);
       } catch {
         // name not in namespace (e.g. import failed)
       }
@@ -210,7 +227,10 @@ export async function pythonExecute(code, scopeIn, cell) {
     const parts = [];
     if (stdout.length) parts.push(stdout.join('\n'));
     if (stderr.length) parts.push(stderr.join('\n'));
-    if (lastExpr !== undefined && lastExpr !== null) parts.push(String(lastExpr));
+    if (lastExpr !== undefined && lastExpr !== null) {
+      const jsExpr = pyToJs(lastExpr);
+      parts.push(typeof jsExpr === 'object' ? JSON.stringify(jsExpr, null, 2) : String(jsExpr));
+    }
     const output = parts.length ? parts.join('\n') : undefined;
 
     // cleanup

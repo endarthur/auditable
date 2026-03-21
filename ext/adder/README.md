@@ -159,7 +159,14 @@ returns a plain JS object with all non-underscore-prefixed names from the Python
 
 ### WASM-from-WASM limitation
 
-MicroPython runs as WASM with Asyncify. Calling another WASM module (e.g. GSLIB's `kb2d`) from within Python hits "RuntimeError: unreachable" — the Asyncify stack overflows. Python cells cannot call WASM routines directly via `js.globalThis`. Use a thin JS bridge cell for WASM calls instead. See `example_adder_gslib` for the pattern.
+MicroPython runs as WASM with Asyncify. It cannot call other WASM modules (e.g. GSLIB's `kb2d`) from Python — two failure modes:
+
+1. **Synchronous call** (`js.globalThis._gslib.kb2d(...)`) — "RuntimeError: unreachable" (nested WASM stacks, Asyncify overflow)
+2. **Async bridge** (`await promise_that_calls_wasm`) — "Assertion failed: proxy_c_to_js_call is running asynchronously" (the vendored MicroPython build's `proxy_c_to_js_call` in the Asyncify resume path lacks `{async: true}` on its ccall)
+
+**Workaround:** use a thin JS bridge cell for WASM calls. Python exports data as JSON, JS calls the WASM function, JS serializes results as JSON, Python consumes them. See `example_adder_gslib` for the pattern.
+
+**Fix:** patching the vendored `micropython.mjs`/`.wasm` to add `{async: true}` to the ccall in `proxy_call_python` would enable custom Promise resolution during Asyncify resume. This is a MicroPython/Emscripten build configuration change, not an adder bug.
 
 ## FFI: JS <-> Python
 
