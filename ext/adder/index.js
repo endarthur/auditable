@@ -3440,11 +3440,30 @@ async function pythonExecute(code, scopeIn, cell) {
   // parse
   const ast = adderParse(code);
 
-  // create scope with builtins + upstream variables
+  // create scope with builtins + upstream variables + cell context
   const scope = new AdderScope();
   const builtins = adderBuiltins(printFn);
   for (const [k, v] of Object.entries(builtins)) scope.set(k, v);
   for (const [k, v] of Object.entries(scopeIn)) scope.set(k, v);
+
+  // inject cell context (ui, std, load, display, etc.) if available
+  // these are the same builtins JS code cells get, created by _createCellContext
+  if (cell._ctx) {
+    const ctx = cell._ctx;
+    // override print to use display (renders to output DOM)
+    scope.set('print', (...args) => {
+      let sep = ' ', end = '\n';
+      if (args.length > 0 && args[args.length - 1]?._kw) { const kw = args.pop(); if (kw.sep !== undefined) sep = kw.sep; if (kw.end !== undefined) end = kw.end; }
+      const text = args.map(pyStr).join(sep) + end;
+      printFn(text);
+      return null;
+    });
+    // expose key builtins — skip internal/DOM-only ones
+    const expose = ['ui', 'std', 'load', 'install', 'installBinary', 'display', 'invalidation', 'worker', 'workerPool', 'notebook'];
+    for (const name of expose) {
+      if (ctx[name] !== undefined) scope.set(name, ctx[name]);
+    }
+  }
 
   // evaluate
   let lastExpr;

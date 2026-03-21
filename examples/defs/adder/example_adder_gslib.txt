@@ -6,35 +6,33 @@
 /// md
 # Python + GSLIB — cross-language geostatistics
 
-A resource estimation pipeline. **Python** generates drill holes, computes the experimental variogram, runs kriging, and builds the grade-tonnage curve. **JS** handles widgets and rendering. Python values are native JS values — no FFI, no marshalling, no bridge cells.
+A resource estimation pipeline, entirely in Python. Data generation, variogram computation, kriging, widgets, plotting, and grade-tonnage \u2014 all in adder. Python values are native JS values: no FFI, no marshalling, no bridge cells.
 
-/// code collapsed
-// %collapsed
+/// adder collapsed
+# %collapsed
 await load("@gcu/adder")
-const { kb2d } = await load("@atra/gslib")
+_kb2d = (await load("@atra/gslib")).kb2d
 
 /// md
 ## parameters
 
-/// code
-const nHoles = ui.slider("drill holes", 30, {min: 10, max: 80, step: 1});
-const noise = ui.slider("noise", 0.3, {min: 0.0, max: 1.0, step: 0.05});
-const seed = ui.slider("seed", 42, {min: 1, max: 999, step: 1});
-const modelNames = ["spherical", "exponential", "gaussian"];
-const modelIdx = ui.dropdown("variogram model", modelNames);
-const vRange = ui.slider("range", 0.30, {min: 0.05, max: 0.60, step: 0.01});
-const vSill = ui.slider("sill", 0.8, {min: 0.1, max: 3.0, step: 0.05});
-const vNugget = ui.slider("nugget", 0.05, {min: 0.0, max: 0.5, step: 0.01});
-const gridN = ui.slider("grid", 60, {min: 20, max: 120, step: 5});
+/// adder
+import math
+
+nHoles = ui.slider("drill holes", 30, {"min": 10, "max": 80, "step": 1})
+noise = ui.slider("noise", 0.3, {"min": 0.0, "max": 1.0, "step": 0.05})
+seed = ui.slider("seed", 42, {"min": 1, "max": 999, "step": 1})
+_modelNames = ["spherical", "exponential", "gaussian"]
+modelIdx = ui.dropdown("variogram model", _modelNames)
+vRange = ui.slider("range", 0.30, {"min": 0.05, "max": 0.60, "step": 0.01})
+vSill = ui.slider("sill", 0.8, {"min": 0.1, "max": 3.0, "step": 0.05})
+vNugget = ui.slider("nugget", 0.05, {"min": 0.0, "max": 0.5, "step": 0.01})
+gridN = ui.slider("grid", 60, {"min": 20, "max": 120, "step": 5})
 
 /// md
 ## data + variogram
 
-Python generates synthetic drill holes and computes the omnidirectional experimental semivariogram. The `samples` list is a native JS Array \u2014 no conversion needed.
-
 /// adder
-import math
-
 _s = seed
 def _rng():
     global _s
@@ -85,56 +83,98 @@ print(f"variogram: {sum(b[0] for b in _bins)} pairs, {len(vario_h)} lags")
 /// md
 ## variogram plot
 
-/// code
-const vc = ui.canvas(460, 220);
-const vctx = vc.getContext("2d");
-vctx.fillStyle = "#1a1a1a"; vctx.fillRect(0, 0, 460, 220);
+/// adder
+import js
 
-const pad = {l: 50, r: 20, t: 15, b: 35};
-const pw = 460 - pad.l - pad.r, ph = 220 - pad.t - pad.b;
-const maxH = Math.max(...vario_h) * 1.1;
-const maxG = Math.max(...vario_gamma, vNugget + vSill) * 1.2;
-const sx = h => pad.l + (h / maxH) * pw;
-const sy = g => pad.t + ph - (g / maxG) * ph;
+_vc = ui.canvas(460, 220)
+_vctx = _vc.getContext("2d")
+_vctx.fillStyle = "#1a1a1a"
+_vctx.fillRect(0, 0, 460, 220)
 
-vctx.strokeStyle = "#555"; vctx.lineWidth = 1;
-vctx.beginPath(); vctx.moveTo(pad.l, pad.t); vctx.lineTo(pad.l, pad.t + ph); vctx.lineTo(pad.l + pw, pad.t + ph); vctx.stroke();
-vctx.fillStyle = "#888"; vctx.font = "10px monospace"; vctx.textAlign = "center";
-vctx.fillText("lag distance", pad.l + pw / 2, 220 - 5);
-vctx.save(); vctx.translate(12, pad.t + ph / 2); vctx.rotate(-Math.PI / 2); vctx.fillText("\u03b3(h)", 0, 0); vctx.restore();
-for (let i = 0; i <= 4; i++) { vctx.fillStyle = "#666"; vctx.fillText(((maxH/4)*i).toFixed(2), sx((maxH/4)*i), pad.t + ph + 14); }
-for (let i = 0; i <= 3; i++) { vctx.textAlign = "right"; vctx.fillText(((maxG/3)*i).toFixed(2), pad.l - 5, sy((maxG/3)*i) + 3); }
+_pad = {"l": 50, "r": 20, "t": 15, "b": 35}
+_pw = 460 - _pad["l"] - _pad["r"]
+_ph = 220 - _pad["t"] - _pad["b"]
+_maxH = max(vario_h) * 1.1
+_maxG = max(max(vario_gamma), vNugget + vSill) * 1.2
 
-const modelFn = (h) => {
-  if (h === 0) return 0;
-  const hr = h / vRange;
-  let c;
-  if (modelIdx === "spherical") c = hr >= 1 ? vSill : vSill * (1.5 * hr - 0.5 * hr**3);
-  else if (modelIdx === "exponential") c = vSill * (1 - Math.exp(-3 * hr));
-  else c = vSill * (1 - Math.exp(-3 * hr * hr));
-  return vNugget + c;
-};
-vctx.strokeStyle = "#c89b3c"; vctx.lineWidth = 2; vctx.beginPath();
-for (let i = 0; i <= 100; i++) { const h = (maxH/100)*i; i === 0 ? vctx.moveTo(sx(h), sy(modelFn(h))) : vctx.lineTo(sx(h), sy(modelFn(h))); }
-vctx.stroke();
-vctx.setLineDash([4,4]); vctx.strokeStyle = "#555"; vctx.lineWidth = 0.5;
-vctx.beginPath(); vctx.moveTo(pad.l, sy(vNugget+vSill)); vctx.lineTo(pad.l+pw, sy(vNugget+vSill)); vctx.stroke(); vctx.setLineDash([]);
+def _sx(h):
+    return _pad["l"] + (h / _maxH) * _pw
 
-for (let i = 0; i < vario_h.length; i++) {
-  vctx.beginPath(); vctx.arc(sx(vario_h[i]), sy(vario_gamma[i]), 4, 0, Math.PI * 2);
-  vctx.fillStyle = "#fff"; vctx.fill(); vctx.strokeStyle = "#000"; vctx.lineWidth = 1; vctx.stroke();
-}
+def _sy(g):
+    return _pad["t"] + _ph - (g / _maxG) * _ph
+
+_vctx.strokeStyle = "#555"
+_vctx.lineWidth = 1
+_vctx.beginPath()
+_vctx.moveTo(_pad["l"], _pad["t"])
+_vctx.lineTo(_pad["l"], _pad["t"] + _ph)
+_vctx.lineTo(_pad["l"] + _pw, _pad["t"] + _ph)
+_vctx.stroke()
+_vctx.fillStyle = "#888"
+_vctx.font = "10px monospace"
+_vctx.textAlign = "center"
+_vctx.fillText("lag distance", _pad["l"] + _pw / 2, 220 - 5)
+_vctx.save()
+_vctx.translate(12, _pad["t"] + _ph / 2)
+_vctx.rotate(-js.Math.PI / 2)
+_vctx.fillText("\u03b3(h)", 0, 0)
+_vctx.restore()
+for i in range(5):
+    _vctx.fillStyle = "#666"
+    _vctx.fillText(f"{(_maxH / 4) * i:.2f}", _sx((_maxH / 4) * i), _pad["t"] + _ph + 14)
+for i in range(4):
+    _vctx.textAlign = "right"
+    _vctx.fillText(f"{(_maxG / 3) * i:.2f}", _pad["l"] - 5, _sy((_maxG / 3) * i) + 3)
+
+def _modelFn(h):
+    if h == 0:
+        return 0
+    hr = h / vRange
+    if modelIdx == "spherical":
+        c = vSill if hr >= 1 else vSill * (1.5 * hr - 0.5 * hr**3)
+    elif modelIdx == "exponential":
+        c = vSill * (1 - math.exp(-3 * hr))
+    else:
+        c = vSill * (1 - math.exp(-3 * hr * hr))
+    return vNugget + c
+
+_vctx.strokeStyle = "#c89b3c"
+_vctx.lineWidth = 2
+_vctx.beginPath()
+for i in range(101):
+    h = (_maxH / 100) * i
+    y = _sy(_modelFn(h))
+    if i == 0:
+        _vctx.moveTo(_sx(h), y)
+    else:
+        _vctx.lineTo(_sx(h), y)
+_vctx.stroke()
+_vctx.setLineDash([4, 4])
+_vctx.strokeStyle = "#555"
+_vctx.lineWidth = 0.5
+_vctx.beginPath()
+_vctx.moveTo(_pad["l"], _sy(vNugget + vSill))
+_vctx.lineTo(_pad["l"] + _pw, _sy(vNugget + vSill))
+_vctx.stroke()
+_vctx.setLineDash([])
+
+for i in range(len(vario_h)):
+    _vctx.beginPath()
+    _vctx.arc(_sx(vario_h[i]), _sy(vario_gamma[i]), 4, 0, js.Math.PI * 2)
+    _vctx.fillStyle = "#fff"
+    _vctx.fill()
+    _vctx.strokeStyle = "#000"
+    _vctx.lineWidth = 1
+    _vctx.stroke()
 
 /// md
 ## kriging
-
-Python calls GSLIB's `kb2d` directly \u2014 `samples` is already a native JS Array, so the WASM wrapper works without conversion. No bridge cell needed.
 
 /// adder
 import js
 
 _t0 = js.performance.now()
-kResult = kb2d({"data": samples, "grid": {"nx": gridN, "ny": gridN, "xsiz": 1/gridN, "ysiz": 1/gridN}, "variogram": {"nugget": vNugget, "structures": [{"type": modelIdx, "contribution": vSill, "range": vRange}]}, "search": {"radius": 2.0, "ndmax": min(nHoles, 24)}})
+kResult = _kb2d({"data": samples, "grid": {"nx": gridN, "ny": gridN, "xsiz": 1/gridN, "ysiz": 1/gridN}, "variogram": {"nugget": vNugget, "structures": [{"type": modelIdx, "contribution": vSill, "range": vRange}]}, "search": {"radius": 2.0, "ndmax": min(nHoles, 24)}})
 _elapsed = js.performance.now() - _t0
 
 est = kResult.est
@@ -144,43 +184,50 @@ print(f"kriged {gridN}\u00d7{gridN} in {_elapsed:.1f} ms")
 /// md
 ## kriging map
 
-/// code
-const showVar = ui.checkbox("show variance", false);
+/// adder
+import js
 
-/// code
-const gridData = showVar ? estv : est;
-const cmap = showVar ? std.magma : std.viridis;
+showVar = ui.checkbox("show variance", False)
 
-let vmin = Infinity, vmax = -Infinity;
-for (let i = 0; i < gridData.length; i++) {
-  if (gridData[i] < -900) continue;
-  if (gridData[i] < vmin) vmin = gridData[i];
-  if (gridData[i] > vmax) vmax = gridData[i];
-}
-const vr = vmax - vmin || 1;
+/// adder
+import js
 
-const size = Math.min(500, window.innerWidth - 80);
-const c = ui.canvas(size, size);
-const ctx = c.getContext("2d");
-const cellW = size / gridN;
-for (let iy = 0; iy < gridN; iy++) {
-  for (let ix = 0; ix < gridN; ix++) {
-    const v = gridData[iy * gridN + ix];
-    ctx.fillStyle = v < -900 ? "#222" : cmap((v - vmin) / vr);
-    ctx.fillRect(ix * cellW, iy * cellW, cellW + 0.5, cellW + 0.5);
-  }
-}
-for (const [px, py, pv] of samples) {
-  ctx.beginPath(); ctx.arc(px * size, py * size, 3, 0, Math.PI * 2);
-  ctx.fillStyle = cmap((pv - vmin) / vr); ctx.fill();
-  ctx.lineWidth = 1.5; ctx.strokeStyle = "#000"; ctx.stroke();
-}
-display(`${showVar ? "variance" : modelIdx} \u00b7 ${nHoles} holes`);
+_gridData = estv if showVar else est
+_cmap = std.magma if showVar else std.viridis
+
+_vmin = float("inf")
+_vmax = float("-inf")
+for i in range(_gridData.length):
+    _v = _gridData[i]
+    if _v < -900:
+        continue
+    if _v < _vmin:
+        _vmin = _v
+    if _v > _vmax:
+        _vmax = _v
+_vr = _vmax - _vmin if _vmax - _vmin != 0 else 1
+
+_size = min(500, js.window.innerWidth - 80)
+_c = ui.canvas(_size, _size)
+_ctx = _c.getContext("2d")
+_cellW = _size / gridN
+for iy in range(gridN):
+    for ix in range(gridN):
+        v = _gridData[iy * gridN + ix]
+        _ctx.fillStyle = "#222" if v < -900 else _cmap((v - _vmin) / _vr)
+        _ctx.fillRect(ix * _cellW, iy * _cellW, _cellW + 0.5, _cellW + 0.5)
+for p in samples:
+    _ctx.beginPath()
+    _ctx.arc(p[0] * _size, p[1] * _size, 3, 0, js.Math.PI * 2)
+    _ctx.fillStyle = _cmap((p[2] - _vmin) / _vr)
+    _ctx.fill()
+    _ctx.lineWidth = 1.5
+    _ctx.strokeStyle = "#000"
+    _ctx.stroke()
+display(f"{'variance' if showVar else modelIdx} \u00b7 {nHoles} holes")
 
 /// md
 ## grade-tonnage
-
-Python computes the grade-tonnage curve from the kriged grid. `est` is a JS Float64Array \u2014 directly indexable from adder.
 
 /// adder
 _valid = [float(est[i]) for i in range(gridN * gridN) if float(est[i]) > -900]
@@ -204,4 +251,4 @@ for r in gt_rows:
 /// md
 ---
 
-**data flow:** all computation is Python. The JS cells handle only widgets (`ui.slider`, `ui.canvas`) and rendering. Python calls `kb2d()` directly \u2014 no bridge cell, no conversion. `samples` (Python list) is a native JS Array. `est` (WASM Float64Array) is directly indexable from Python.
+**Pure Python.** Every cell is adder. Widgets (`ui.slider`, `ui.canvas`, `ui.checkbox`), colormaps (`std.viridis`), module loading (`load`), and output (`display`) are all available as adder builtins. Python calls `kb2d()` directly \u2014 `samples` is a native JS Array, no conversion needed.

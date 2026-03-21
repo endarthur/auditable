@@ -365,7 +365,9 @@ function wireWidgets(cell, viewEl) {
   }
 }
 
-export async function execCell(cell) {
+// ── cell context — shared builtins for code cells and plugin cells ──
+
+function _createCellContext(cell) {
   // fire invalidation promise from previous run (cleanup resources)
   if (cell._invalidate) { cell._invalidate(); cell._invalidate = null; }
 
@@ -624,12 +626,6 @@ export async function execCell(cell) {
   const dropdown = (label, options, defaultVal, opts = {}) => mkInput(label, 'dropdown', defaultVal || options[0], { ...opts, options });
   const checkbox = (label, defaultVal = false, opts = {}) => mkInput(label, 'checkbox', defaultVal, opts);
   const textInput = (label, defaultVal = '', opts = {}) => mkInput(label, 'text', defaultVal, opts);
-
-  // execute with scoped parameters (only what this cell uses, for stable V8 JIT)
-  // filter out injected names — they're per-cell params, not scope-propagated
-  const _injected = ['ui', 'std', 'load', 'install', 'installBinary', 'invalidation', 'print', 'display', 'md', 'html', 'css', 'workshop', 'notebook', 'worker', 'workerPool'];
-  const scopeKeys = cell.uses ? [...cell.uses].filter(k => !_injected.includes(k)).sort() : [];
-  const defNames = cell.defines ? [...cell.defines].sort().join(', ') : '';
 
   // import cache — shared across all cells
   if (!window._importCache) window._importCache = {};
@@ -1310,6 +1306,22 @@ export async function execCell(cell) {
     run: (ids) => runDAG(Array.isArray(ids) ? ids : [ids], true),
   };
 
+  return { ui, std, load, install, installBinary, invalidation, display, print: display,
+           md, html, css, workshop, notebook, worker, workerPool, usedWidgets, outputEl, widgetEl };
+}
+
+export async function execCell(cell) {
+  const ctx = _createCellContext(cell);
+  const { ui, std, load, install, installBinary, invalidation, display, print: print_,
+          md, html, css, workshop, notebook, worker, workerPool,
+          usedWidgets, outputEl, widgetEl } = ctx;
+
+  // execute with scoped parameters (only what this cell uses, for stable V8 JIT)
+  // filter out injected names — they're per-cell params, not scope-propagated
+  const _injected = ['ui', 'std', 'load', 'install', 'installBinary', 'invalidation', 'print', 'display', 'md', 'html', 'css', 'workshop', 'notebook', 'worker', 'workerPool'];
+  const scopeKeys = cell.uses ? [...cell.uses].filter(k => !_injected.includes(k)).sort() : [];
+  const defNames = cell.defines ? [...cell.defines].sort().join(', ') : '';
+
   // function caching — reuse compiled function if code/uses/defines unchanged
   const cacheKey = scopeKeys.join(',') + '|' + defNames + '|' + cell.code;
 
@@ -1453,13 +1465,14 @@ export async function runDAG(dirtyIds, force = false) {
         }
       }
 
-      // build upstream scope
+      // build upstream scope + cell context (same builtins as JS code cells)
       const upstream = {};
       if (cell.uses) {
         for (const name of cell.uses) {
           if (S.scope[name] !== undefined) upstream[name] = S.scope[name];
         }
       }
+      cell._ctx = _createCellContext(cell);
 
       try {
         const result = await handler.execute(cell.code, upstream, cell);
@@ -1476,9 +1489,21 @@ export async function runDAG(dirtyIds, force = false) {
         cell.el.classList.remove('stale', 'error');
         cell.el.classList.add('fresh');
         setTimeout(() => cell.el.classList.remove('fresh'), 800);
+
+        // remove widgets no longer referenced by code
+        if (cell._ctx.usedWidgets) {
+          const widgetEl = cell._ctx.widgetEl;
+          for (const w of widgetEl.querySelectorAll('[data-widget-key]')) {
+            if (!cell._ctx.usedWidgets.has(w.dataset.widgetKey)) {
+              delete cell._inputs[w.dataset.widgetKey];
+              delete cell._callbacks[w.dataset.widgetKey];
+              w.remove();
+            }
+          }
+        }
       } catch (e) {
         cell.error = e.message;
-        const outputEl = cell.el.querySelector('.cell-output');
+        const outputEl = cell._ctx?.outputEl || cell.el.querySelector('.cell-output');
         if (outputEl) {
           outputEl.textContent = e.message;
           outputEl.className = 'cell-output error';
