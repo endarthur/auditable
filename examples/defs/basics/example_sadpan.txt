@@ -1,0 +1,96 @@
+/// auditable
+/// title: sadpan — Dataframe Library
+/// module: @gcu/sadpan ext/sadpan/index.js
+
+/// md
+# sadpan — Lightweight Dataframes
+
+**@gcu/sadpan** provides column-oriented tables, groupby, join, Series
+operators, and aggregation helpers — all in ~450 lines of vanilla JS.
+
+Zero dependencies. Immutable verbs. Plays nicely with `ui.table()`.
+
+/// code
+const sp = await load("@gcu/sadpan")
+
+// create a table from column dict
+const assays = sp.table({
+  hole:  ["DDH01", "DDH01", "DDH01", "DDH02", "DDH02", "DDH02", "DDH03", "DDH03"],
+  from:  [0,       10,      20,      0,       10,      20,      0,       10],
+  to:    [10,      20,      30,      10,      20,      30,      10,      20],
+  lith:  ["BIF",   "BIF",   "ITA",   "BIF",   "ITA",   "ITA",   "BIF",   "BIF"],
+  fe:    [58.2,    61.4,    48.1,    62.0,    45.3,    50.2,    59.8,    63.1],
+  au:    [0.12,    0.34,    0.08,    0.45,    0.02,    0.11,    0.28,    0.56],
+})
+
+ui.table(assays.objects())
+
+/// md
+## filter + sort
+
+/// code
+const highGrade = assays
+  .filter(row => row.lith === "BIF" && row.fe > 60)
+  .orderby({ fe: "desc" })
+
+ui.table(highGrade.objects())
+
+/// md
+## groupby + aggregation
+
+/// code
+const byLith = assays
+  .groupby("lith")
+  .rollup({
+    fe: sp.op.mean,
+    au: sp.op.mean,
+    count: a => a.length,
+  })
+
+ui.table(byLith.objects())
+
+/// md
+## derive computed columns
+
+/// code
+const enriched = assays
+  .derive({
+    thickness: (row) => row.to - row.from,
+    fe_class:  (row) => row.fe > 60 ? "high" : row.fe > 50 ? "mid" : "low",
+  })
+  .select("hole", "from", "to", "fe", "fe_class", "thickness")
+
+ui.table(enriched.objects())
+
+/// md
+## join two tables
+
+/// code
+const collars = sp.table({
+  hole: ["DDH01", "DDH02", "DDH03"],
+  east: [500, 520, 480],
+  north: [1000, 1015, 990],
+})
+
+const merged = assays
+  .join(collars, "hole")
+  .select("hole", "from", "to", "fe", "east", "north")
+
+ui.table(merged.objects())
+
+/// md
+## Series operations
+
+/// code
+const feSeries = sp.series(assays.array("fe"), "fe")
+
+ui.display(`Fe: mean=${feSeries.mean().toFixed(1)}, std=${feSeries.std().toFixed(1)}, min=${feSeries.min()}, max=${feSeries.max()}`)
+
+/// md
+## CSV round-trip
+
+/// code
+const csvText = assays.toCSV()
+const parsed = sp.csv(csvText)
+ui.display(`Round-trip: ${parsed.numRows()} rows, ${parsed.numCols()} columns`)
+ui.display(csvText.split("\n").slice(0, 4).join("\n"))

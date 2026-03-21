@@ -155,7 +155,7 @@ export async function adderEval(node, scope) {
       const operand = await adderEval(node.operand, scope);
       if (node.op === '-') return typeof operand === 'number' ? -operand : (typeof operand?.__neg__ === 'function' ? operand.__neg__() : -operand);
       if (node.op === '+') return +operand;
-      if (node.op === '~') return ~operand;
+      if (node.op === '~') return typeof operand?.__invert__ === 'function' ? operand.__invert__() : ~operand;
       if (node.op === 'not') return !pyBool(operand);
       throw new AdderError('TypeError', `unsupported unary op: ${node.op}`, node.line);
     }
@@ -171,6 +171,12 @@ export async function adderEval(node, scope) {
     }
     case 'Compare': {
       let left = await adderEval(node.left, scope);
+      // single comparison: return dunder result directly (e.g. BooleanMask from Series.__gt__)
+      if (node.ops.length === 1) {
+        const right = await adderEval(node.comparators[0], scope);
+        return _compareOp(node.ops[0], left, right);
+      }
+      // chained comparisons: coerce to boolean (a < b < c → a < b and b < c)
       for (let i = 0; i < node.ops.length; i++) {
         const right = await adderEval(node.comparators[i], scope);
         if (!_compareOp(node.ops[i], left, right)) return false;
@@ -294,6 +300,7 @@ async function _assignTarget(target, value, scope) {
       const obj = await adderEval(target.value, scope);
       const key = target.slice.type === 'Slice' ? await adderEval(target.slice, scope) : await adderEval(target.slice, scope);
       if (obj instanceof Map) obj.set(key, value);
+      else if (typeof obj?.__setitem__ === 'function') obj.__setitem__(key, value);
       else obj[key] = value;
       break;
     }
@@ -394,7 +401,7 @@ const _dunders = {
 function _compareOp(op, left, right) {
   switch (op) {
     case '==': return _pyEq(left, right);
-    case '!=': return !_pyEq(left, right);
+    case '!=': return typeof left?.__ne__ === 'function' ? left.__ne__(right) : !_pyEq(left, right);
     case '<': return typeof left?.__lt__ === 'function' ? left.__lt__(right) : left < right;
     case '<=': return typeof left?.__le__ === 'function' ? left.__le__(right) : left <= right;
     case '>': return typeof left?.__gt__ === 'function' ? left.__gt__(right) : left > right;
@@ -439,6 +446,10 @@ async function _evalSubscript(node, scope) {
     const lower = node.slice.lower ? await adderEval(node.slice.lower, scope) : null;
     const upper = node.slice.upper ? await adderEval(node.slice.upper, scope) : null;
     const step = node.slice.step ? await adderEval(node.slice.step, scope) : null;
+    if (typeof obj === 'string' || Array.isArray(obj) || obj instanceof Uint8Array)
+      return _applySlice(obj, lower, upper, step);
+    if (typeof obj?.__getitem__ === 'function')
+      return obj.__getitem__({ _slice: true, lower, upper, step });
     return _applySlice(obj, lower, upper, step);
   }
   const key = await adderEval(node.slice, scope);
@@ -527,11 +538,20 @@ async function _callValue(func, args, kwArgs, line) {
     // for print, max, min, sorted — they check for _kw marker
     const kw = { _kw: true };
     for (const [k, v] of kwArgs) kw[k] = v;
-    return func(...args, kw);
+    try {
+      return func(...args, kw);
+    } catch (e) {
+      if (e instanceof TypeError && /cannot be invoked without 'new'/.test(e.message)) return new func(...args, kw);
+      if (e instanceof AdderError || e instanceof _BreakSignal || e instanceof _ContinueSignal || e instanceof _ReturnSignal) throw e;
+      throw new AdderError('RuntimeError', e.message || String(e), line);
+    }
   }
   try {
     return await func(...args);
   } catch (e) {
+    // ES6 class constructors require `new` — retry if that's the error
+    // (also handles bound class constructors where toString() detection fails)
+    if (e instanceof TypeError && /cannot be invoked without 'new'/.test(e.message)) return new func(...args);
     if (e instanceof AdderError || e instanceof _BreakSignal || e instanceof _ContinueSignal || e instanceof _ReturnSignal) throw e;
     throw new AdderError('RuntimeError', e.message || String(e), line);
   }
@@ -822,9 +842,16 @@ async function _evalClass(node, scope) {
     cls.prototype = Object.create(bases[0].prototype);
   }
 
-  // assign methods
+  // assign methods and properties
   for (const [name, value] of Object.entries(classVars)) {
-    if (typeof value === 'function') {
+    if (value && value.__property__) {
+      // @property decorator — define getter on prototype
+      const fget = value.fget;
+      Object.defineProperty(cls.prototype, name, {
+        get() { return fget(this); },
+        configurable: true,
+      });
+    } else if (typeof value === 'function') {
       if (name === '__init__' || name.startsWith('__')) {
         // bound method: inject `self` as first arg
         const originalFn = value;

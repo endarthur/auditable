@@ -898,6 +898,7 @@ export function adderBuiltins(printFn) {
     getattr: (obj, name, def) => { try { return adderGetAttr(obj, name); } catch { if (def !== undefined) return def; throw new AdderError('AttributeError', `'${pyTypeName(obj)}' object has no attribute '${name}'`); } },
     setattr: (obj, name, value) => { obj[name] = value; return null; },
     delattr: (obj, name) => { delete obj[name]; return null; },
+    property: (fget) => ({ __property__: true, fget }),
     callable: (obj) => typeof obj === 'function',
     chr: (n) => String.fromCodePoint(n),
     ord: (c) => { if (typeof c !== 'string' || c.length !== 1) throw new AdderError('TypeError', 'ord() expected a character'); return c.codePointAt(0); },

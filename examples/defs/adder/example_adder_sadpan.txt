@@ -1,0 +1,100 @@
+/// auditable
+/// title: adder + sadpan — pandas-style dataframes
+/// module: @gcu/adder ext/adder/index.js
+/// module: @gcu/sadpan ext/sadpan/index.js
+
+/// md
+# sadpan in adder
+
+**sadpan** registers as an auditable extension, so adder cells can
+`import sadpan` directly. The `DataFrame` wrapper gives it a pandas face:
+`df['col']`, `df[mask]`, `groupby().agg()`.
+
+/// code collapsed
+// %collapsed
+await load("@gcu/adder")
+await load("@gcu/sadpan")
+
+/// md
+## create a DataFrame
+
+/// adder
+import sadpan as pd
+
+df = pd.DataFrame({
+    "hole":  ["DDH01", "DDH01", "DDH01", "DDH02", "DDH02", "DDH02", "DDH03", "DDH03"],
+    "from":  [0,       10,      20,      0,       10,      20,      0,       10],
+    "to":    [10,      20,      30,      10,      20,      30,      10,      20],
+    "lith":  ["BIF",   "BIF",   "ITA",   "BIF",   "ITA",   "ITA",   "BIF",   "BIF"],
+    "fe":    [58.2,    61.4,    48.1,    62.0,    45.3,    50.2,    59.8,    63.1],
+    "au":    [0.12,    0.34,    0.08,    0.45,    0.02,    0.11,    0.28,    0.56],
+})
+
+ui.table(df.to_records())
+
+/// md
+## Series operators + boolean masking
+
+`df['fe'] > 60` returns a `BooleanMask`. Pass it back to `df[mask]`
+to filter rows — just like pandas.
+
+/// adder
+high_fe = df[df['fe'] > 60]
+ui.table(high_fe.to_records())
+
+/// md
+## filter with lambda
+
+/// adder
+au_rich = df.filter(lambda row: row['au'] > 0.2)
+ui.table(au_rich.to_records())
+
+/// md
+## compound masks
+
+/// adder
+bif_rich = df[(df['fe'] > 55) & (df['lith'] == "BIF")]
+ui.table(bif_rich.to_records())
+
+/// md
+## groupby + agg
+
+/// adder
+grouped = df.groupby("lith").agg({"fe": "mean", "au": "sum"})
+ui.table(grouped.to_records())
+
+/// md
+## sort values
+
+/// adder
+sorted_df = df.sort_values("fe", ascending=False).head(5)
+ui.table(sorted_df.to_records())
+
+/// md
+## add a column
+
+/// adder
+df2 = pd.DataFrame({"x": [1, 2, 3], "y": [4, 5, 6]})
+df2['z'] = df2['x'] + df2['y']
+ui.table(df2.to_records())
+
+/// md
+## Series math
+
+/// adder
+s = df['fe']
+stats = f"mean={s.mean():.1f}, std={s.std():.1f}, min={s.min()}, max={s.max()}"
+display(stats)
+
+/// md
+## merge (join)
+
+/// adder
+collars = pd.DataFrame({
+    "hole": ["DDH01", "DDH02", "DDH03"],
+    "east": [500, 520, 480],
+    "north": [1000, 1015, 990],
+})
+
+merged = df.merge(collars, on="hole").select("hole", "from", "to", "fe", "east", "north")
+ui.table(merged.to_records())

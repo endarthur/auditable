@@ -729,6 +729,15 @@ function _createCellContext(cell) {
       }
     }
 
+    // @gcu/sadpan — lightweight dataframe (dev-mode fallback)
+    if (url === '@gcu/sadpan') {
+      if (!window._importCache[url] && !window._installedModules[url]) {
+        const mod = await import('./ext/sadpan/index.js');
+        window._importCache[url] = mod;
+        return mod;
+      }
+    }
+
     if (window._importCache[url]) return window._importCache[url];
 
     // binary assets — return blob URL
@@ -879,6 +888,22 @@ function _createCellContext(cell) {
     // @gcu/plot — Canvas 2D plotting
     if (url === '@gcu/plot') {
       const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/plot/index.js';
+      const resp = await fetch(realUrl);
+      if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
+      const source = await resp.text();
+      const compressedSrc = await compressText(source);
+      window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
+      syncModules();
+      const blob = new Blob([source], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      const mod = await import(blobUrl);
+      window._importCache[url] = mod;
+      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB \u2192 ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
+      return mod;
+    }
+    // @gcu/sadpan — lightweight dataframe
+    if (url === '@gcu/sadpan') {
+      const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/sadpan/index.js';
       const resp = await fetch(realUrl);
       if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
       const source = await resp.text();

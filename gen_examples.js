@@ -37,6 +37,7 @@ const categories = {
     'example_notebook_fs.txt',
     'example_webmcp.txt',
     'example_plot.txt',
+    'example_sadpan.txt',
   ],
 
   // atra — Wasm compiler: language features, kernels, natra
@@ -93,6 +94,7 @@ const categories = {
     'example_adder_gslib.txt',
     'example_adder_estimation.txt',
     'example_adder_dhsa.txt',
+    'example_adder_sadpan.txt',
   ],
 
   // etc — standalone demos that don't fit elsewhere
