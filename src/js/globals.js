@@ -129,9 +129,17 @@ window._ctDoInstallPlugin = async () => {
   try {
     // use the same install path as code cells
     if (window._installedModules?.[url]) {
-      // already installed — just re-import
+      // already installed — just re-import (decompress if needed)
       const entry = window._installedModules[url];
-      const src = typeof entry === 'string' ? entry : entry.source;
+      let src;
+      if (typeof entry === 'object' && entry.compressed && !entry.binary) {
+        const bytes = Uint8Array.from(atob(entry.source), c => c.charCodeAt(0));
+        const ds = new DecompressionStream('gzip');
+        const stream = new Blob([bytes]).stream().pipeThrough(ds);
+        src = await new Response(stream).text();
+      } else {
+        src = typeof entry === 'string' ? entry : entry.source;
+      }
       const blob = new Blob([src], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
       await import(blobUrl);

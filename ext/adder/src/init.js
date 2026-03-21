@@ -16,7 +16,15 @@ export async function initInterpreter() {
     let loadMicroPython;
     if (window._installedModules?.['@gcu/adder/micropython.mjs']) {
       const entry = window._installedModules['@gcu/adder/micropython.mjs'];
-      const src = typeof entry === 'string' ? entry : entry.source;
+      let src;
+      if (typeof entry === 'object' && entry.compressed && !entry.binary) {
+        const bytes = Uint8Array.from(atob(entry.source), c => c.charCodeAt(0));
+        const ds = new DecompressionStream('gzip');
+        const stream = new Blob([bytes]).stream().pipeThrough(ds);
+        src = await new Response(stream).text();
+      } else {
+        src = typeof entry === 'string' ? entry : entry.source;
+      }
       const blob = new Blob([src], { type: 'application/javascript' });
       const url = URL.createObjectURL(blob);
       const mod = await import(url);

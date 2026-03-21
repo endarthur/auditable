@@ -5761,6 +5761,25 @@ async function decodeBinary(entry) {
   return URL.createObjectURL(new Blob([bytes], { type }));
 }
 
+// ── TEXT COMPRESSION ──
+// TextEncoder → CompressionStream('gzip') → base64 (for persistent module storage)
+
+async function compressText(str) {
+  const bytes = new TextEncoder().encode(str);
+  const cs = new CompressionStream('gzip');
+  const stream = new Blob([bytes]).stream().pipeThrough(cs);
+  const compressed = new Uint8Array(await new Response(stream).arrayBuffer());
+  return uint8ToBase64(compressed);
+}
+
+// base64 → DecompressionStream('gzip') → TextDecoder (inverse of compressText)
+async function decompressText(base64) {
+  const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+  const ds = new DecompressionStream('gzip');
+  const stream = new Blob([bytes]).stream().pipeThrough(ds);
+  return new Response(stream).text();
+}
+
 // ── TAGGED CONTENT ──
 
 class TaggedContent {
@@ -6387,7 +6406,12 @@ async function execCell(cell) {
     // check installed (offline) modules first
     if (window._installedModules[url]) {
       const entry = window._installedModules[url];
-      let src = typeof entry === 'string' ? entry : entry.source;
+      let src;
+      if (typeof entry === 'object' && entry.compressed && !entry.binary) {
+        src = await decompressText(entry.source);
+      } else {
+        src = typeof entry === 'string' ? entry : entry.source;
+      }
       // resolve root-relative paths for legacy saved modules
       try { src = resolveModulePaths(src, url); } catch {}
       const blob = new Blob([src], { type: 'application/javascript' });
@@ -6424,13 +6448,14 @@ async function execCell(cell) {
       const resp = await fetch(realUrl);
       if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
       const source = await resp.text();
-      window._installedModules[url] = { source, cellId: cell.id };
+      const compressedSrc = await compressText(source);
+      window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
       syncModules();
       const blob = new Blob([source], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
       const mod = await import(blobUrl);
       window._importCache[url] = mod;
-      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB)`);
+      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB \u2192 ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
       return mod;
     }
     // @sheet — xlsx IO library
@@ -6439,13 +6464,14 @@ async function execCell(cell) {
       const resp = await fetch(realUrl);
       if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
       const source = await resp.text();
-      window._installedModules[url] = { source, cellId: cell.id };
+      const compressedSrc = await compressText(source);
+      window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
       syncModules();
       const blob = new Blob([source], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
       const mod = await import(blobUrl);
       window._importCache[url] = mod;
-      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB)`);
+      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB \u2192 ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
       return mod;
     }
     // @calque — spreadsheet language
@@ -6454,13 +6480,14 @@ async function execCell(cell) {
       const resp = await fetch(realUrl);
       if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
       const source = await resp.text();
-      window._installedModules[url] = { source, cellId: cell.id };
+      const compressedSrc = await compressText(source);
+      window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
       syncModules();
       const blob = new Blob([source], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
       const mod = await import(blobUrl);
       window._importCache[url] = mod;
-      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB)`);
+      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB \u2192 ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
       return mod;
     }
     // @spinifex — web GIS
@@ -6469,13 +6496,14 @@ async function execCell(cell) {
       const resp = await fetch(realUrl);
       if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
       const source = await resp.text();
-      window._installedModules[url] = { source, cellId: cell.id };
+      const compressedSrc = await compressText(source);
+      window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
       syncModules();
       const blob = new Blob([source], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
       const mod = await import(blobUrl);
       window._importCache[url] = mod;
-      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB)`);
+      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB \u2192 ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
       return mod;
     }
     // @plan — project management
@@ -6484,13 +6512,14 @@ async function execCell(cell) {
       const resp = await fetch(realUrl);
       if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
       const source = await resp.text();
-      window._installedModules[url] = { source, cellId: cell.id };
+      const compressedSrc = await compressText(source);
+      window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
       syncModules();
       const blob = new Blob([source], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
       const mod = await import(blobUrl);
       window._importCache[url] = mod;
-      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB)`);
+      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB \u2192 ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
       return mod;
     }
     // @gcu/adder — MicroPython extension
@@ -6500,12 +6529,14 @@ async function execCell(cell) {
       const resp = await fetch(baseUrl + 'index.js');
       if (!resp.ok) throw new Error(`Failed to fetch adder: ${resp.status}`);
       const source = await resp.text();
-      window._installedModules[url] = { source, cellId: cell.id };
+      const compressedSrc = await compressText(source);
+      window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
       // also chain-install micropython.mjs
       const mjsResp = await fetch(baseUrl + 'micropython.mjs');
       if (mjsResp.ok) {
         const mjsSrc = await mjsResp.text();
-        window._installedModules['@gcu/adder/micropython.mjs'] = { source: mjsSrc, cellId: cell.id };
+        const mjsCompressed = await compressText(mjsSrc);
+        window._installedModules['@gcu/adder/micropython.mjs'] = { source: mjsCompressed, compressed: true, cellId: cell.id };
       }
       // chain-install micropython.wasm as binary
       const wasmResp = await fetch(baseUrl + 'micropython.wasm');
@@ -6526,7 +6557,7 @@ async function execCell(cell) {
       const blobUrl = URL.createObjectURL(blob);
       const mod = await import(blobUrl);
       window._importCache[url] = mod;
-      display(`installed @gcu/adder (${(source.length / 1024).toFixed(1)} KB)`);
+      display(`installed @gcu/adder (${(source.length / 1024).toFixed(1)} KB \u2192 ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
       return mod;
     }
     // normalize: add ?bundle for esm.sh if not present
@@ -6540,15 +6571,16 @@ async function execCell(cell) {
     let source = await resp.text();
     // resolve root-relative paths to absolute so blob URLs work
     source = resolveModulePaths(source, resp.url);
-    // store under original url with cell reference
-    window._installedModules[url] = { source, cellId: cell.id };
+    // store under original url with cell reference (compressed for persistent storage)
+    const compressedSrc = await compressText(source);
+    window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
     syncModules();
     // also load it into cache
     const blob = new Blob([source], { type: 'application/javascript' });
     const blobUrl = URL.createObjectURL(blob);
     const mod = await import(blobUrl);
     window._importCache[url] = mod;
-    display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB)`);
+    display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB \u2192 ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
     return mod;
   };
 
@@ -8265,7 +8297,7 @@ function togglePresent() {
 const __AUDITABLE_VERSION__ = '0.3.0';
 const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_BUILD_DATE__ = '2026-03-21';
-const __AUDITABLE_BASE_SIZE__ = 1242301;
+const __AUDITABLE_BASE_SIZE__ = 1248782;
 
 (function() {
   const ver = $('#aboutVersion');
@@ -8297,8 +8329,9 @@ function renderEntryRow(url, entry) {
   const src = typeof entry === 'string' ? entry : entry.source;
   const cellId = typeof entry === 'string' ? null : entry.cellId;
   const isBinary = typeof entry === 'object' && entry.binary;
+  const isCompressed = typeof entry === 'object' && entry.compressed;
   const size = src ? src.length : 0;
-  const displaySize = isBinary ? Math.floor(size * 3 / 4) : size;
+  const displaySize = (isBinary || isCompressed) ? Math.floor(size * 3 / 4) : size;
 
   const row = document.createElement('div');
   row.className = 'module-row';
@@ -8312,7 +8345,7 @@ function renderEntryRow(url, entry) {
   const info = document.createElement('span');
   info.className = 'module-info';
   info.textContent = (cellId != null ? 'cell ' + cellId + '  ' : '')
-    + (isBinary && entry.compressed ? 'gzipped  ' : '')
+    + (isCompressed ? 'gzipped  ' : '')
     + formatSize(displaySize);
   row.appendChild(info);
 
@@ -11220,6 +11253,25 @@ async function decodeBinary(entry) {
   return URL.createObjectURL(new Blob([bytes], { type }));
 }
 
+// ── TEXT COMPRESSION ──
+// TextEncoder → CompressionStream('gzip') → base64 (for persistent module storage)
+
+async function compressText(str) {
+  const bytes = new TextEncoder().encode(str);
+  const cs = new CompressionStream('gzip');
+  const stream = new Blob([bytes]).stream().pipeThrough(cs);
+  const compressed = new Uint8Array(await new Response(stream).arrayBuffer());
+  return uint8ToBase64(compressed);
+}
+
+// base64 → DecompressionStream('gzip') → TextDecoder (inverse of compressText)
+async function decompressText(base64) {
+  const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+  const ds = new DecompressionStream('gzip');
+  const stream = new Blob([bytes]).stream().pipeThrough(ds);
+  return new Response(stream).text();
+}
+
 // ── TAGGED CONTENT ──
 
 class TaggedContent {
@@ -11846,7 +11898,12 @@ async function execCell(cell) {
     // check installed (offline) modules first
     if (window._installedModules[url]) {
       const entry = window._installedModules[url];
-      let src = typeof entry === 'string' ? entry : entry.source;
+      let src;
+      if (typeof entry === 'object' && entry.compressed && !entry.binary) {
+        src = await decompressText(entry.source);
+      } else {
+        src = typeof entry === 'string' ? entry : entry.source;
+      }
       // resolve root-relative paths for legacy saved modules
       try { src = resolveModulePaths(src, url); } catch {}
       const blob = new Blob([src], { type: 'application/javascript' });
@@ -11883,13 +11940,14 @@ async function execCell(cell) {
       const resp = await fetch(realUrl);
       if (!resp.ok) throw new Error(\`Failed to fetch \${realUrl}: \${resp.status}\`);
       const source = await resp.text();
-      window._installedModules[url] = { source, cellId: cell.id };
+      const compressedSrc = await compressText(source);
+      window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
       syncModules();
       const blob = new Blob([source], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
       const mod = await import(blobUrl);
       window._importCache[url] = mod;
-      display(\`installed \${url} (\${(source.length / 1024).toFixed(1)} KB)\`);
+      display(\`installed \${url} (\${(source.length / 1024).toFixed(1)} KB \\u2192 \${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)\`);
       return mod;
     }
     // @sheet — xlsx IO library
@@ -11898,13 +11956,14 @@ async function execCell(cell) {
       const resp = await fetch(realUrl);
       if (!resp.ok) throw new Error(\`Failed to fetch \${realUrl}: \${resp.status}\`);
       const source = await resp.text();
-      window._installedModules[url] = { source, cellId: cell.id };
+      const compressedSrc = await compressText(source);
+      window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
       syncModules();
       const blob = new Blob([source], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
       const mod = await import(blobUrl);
       window._importCache[url] = mod;
-      display(\`installed \${url} (\${(source.length / 1024).toFixed(1)} KB)\`);
+      display(\`installed \${url} (\${(source.length / 1024).toFixed(1)} KB \\u2192 \${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)\`);
       return mod;
     }
     // @calque — spreadsheet language
@@ -11913,13 +11972,14 @@ async function execCell(cell) {
       const resp = await fetch(realUrl);
       if (!resp.ok) throw new Error(\`Failed to fetch \${realUrl}: \${resp.status}\`);
       const source = await resp.text();
-      window._installedModules[url] = { source, cellId: cell.id };
+      const compressedSrc = await compressText(source);
+      window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
       syncModules();
       const blob = new Blob([source], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
       const mod = await import(blobUrl);
       window._importCache[url] = mod;
-      display(\`installed \${url} (\${(source.length / 1024).toFixed(1)} KB)\`);
+      display(\`installed \${url} (\${(source.length / 1024).toFixed(1)} KB \\u2192 \${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)\`);
       return mod;
     }
     // @spinifex — web GIS
@@ -11928,13 +11988,14 @@ async function execCell(cell) {
       const resp = await fetch(realUrl);
       if (!resp.ok) throw new Error(\`Failed to fetch \${realUrl}: \${resp.status}\`);
       const source = await resp.text();
-      window._installedModules[url] = { source, cellId: cell.id };
+      const compressedSrc = await compressText(source);
+      window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
       syncModules();
       const blob = new Blob([source], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
       const mod = await import(blobUrl);
       window._importCache[url] = mod;
-      display(\`installed \${url} (\${(source.length / 1024).toFixed(1)} KB)\`);
+      display(\`installed \${url} (\${(source.length / 1024).toFixed(1)} KB \\u2192 \${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)\`);
       return mod;
     }
     // @plan — project management
@@ -11943,13 +12004,14 @@ async function execCell(cell) {
       const resp = await fetch(realUrl);
       if (!resp.ok) throw new Error(\`Failed to fetch \${realUrl}: \${resp.status}\`);
       const source = await resp.text();
-      window._installedModules[url] = { source, cellId: cell.id };
+      const compressedSrc = await compressText(source);
+      window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
       syncModules();
       const blob = new Blob([source], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
       const mod = await import(blobUrl);
       window._importCache[url] = mod;
-      display(\`installed \${url} (\${(source.length / 1024).toFixed(1)} KB)\`);
+      display(\`installed \${url} (\${(source.length / 1024).toFixed(1)} KB \\u2192 \${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)\`);
       return mod;
     }
     // @gcu/adder — MicroPython extension
@@ -11959,12 +12021,14 @@ async function execCell(cell) {
       const resp = await fetch(baseUrl + 'index.js');
       if (!resp.ok) throw new Error(\`Failed to fetch adder: \${resp.status}\`);
       const source = await resp.text();
-      window._installedModules[url] = { source, cellId: cell.id };
+      const compressedSrc = await compressText(source);
+      window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
       // also chain-install micropython.mjs
       const mjsResp = await fetch(baseUrl + 'micropython.mjs');
       if (mjsResp.ok) {
         const mjsSrc = await mjsResp.text();
-        window._installedModules['@gcu/adder/micropython.mjs'] = { source: mjsSrc, cellId: cell.id };
+        const mjsCompressed = await compressText(mjsSrc);
+        window._installedModules['@gcu/adder/micropython.mjs'] = { source: mjsCompressed, compressed: true, cellId: cell.id };
       }
       // chain-install micropython.wasm as binary
       const wasmResp = await fetch(baseUrl + 'micropython.wasm');
@@ -11985,7 +12049,7 @@ async function execCell(cell) {
       const blobUrl = URL.createObjectURL(blob);
       const mod = await import(blobUrl);
       window._importCache[url] = mod;
-      display(\`installed @gcu/adder (\${(source.length / 1024).toFixed(1)} KB)\`);
+      display(\`installed @gcu/adder (\${(source.length / 1024).toFixed(1)} KB \\u2192 \${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)\`);
       return mod;
     }
     // normalize: add ?bundle for esm.sh if not present
@@ -11999,15 +12063,16 @@ async function execCell(cell) {
     let source = await resp.text();
     // resolve root-relative paths to absolute so blob URLs work
     source = resolveModulePaths(source, resp.url);
-    // store under original url with cell reference
-    window._installedModules[url] = { source, cellId: cell.id };
+    // store under original url with cell reference (compressed for persistent storage)
+    const compressedSrc = await compressText(source);
+    window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
     syncModules();
     // also load it into cache
     const blob = new Blob([source], { type: 'application/javascript' });
     const blobUrl = URL.createObjectURL(blob);
     const mod = await import(blobUrl);
     window._importCache[url] = mod;
-    display(\`installed \${url} (\${(source.length / 1024).toFixed(1)} KB)\`);
+    display(\`installed \${url} (\${(source.length / 1024).toFixed(1)} KB \\u2192 \${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)\`);
     return mod;
   };
 
@@ -13022,7 +13087,7 @@ function syncModules() {
     return;
   }
   if (!_modulesNode) {
-    _modulesNode = ensureCommentNode('AUDITABLE-MODULES', 'installed modules: base64-encoded JSON mapping URLs to {source, cellId}');
+    _modulesNode = ensureCommentNode('AUDITABLE-MODULES', 'installed modules: base64-encoded JSON mapping URLs to {source, cellId, compressed?, binary?, type?}');
   }
   _modulesNode.nodeValue = 'AUDITABLE-MODULES\n' + encodeModules(mods) + '\nAUDITABLE-MODULES';
 }
@@ -13074,7 +13139,34 @@ function setSaveMode(mode) {
   if (mobPack) mobPack.classList.toggle('active-mode', mode === 'packed');
 }
 
-async function buildNotebookHtml() {
+// ── RUNTIME COMPRESSION ──
+// Gzip + base64 the JS runtime for smaller saved notebooks.
+// The loader decompresses, normalizes the DOM (so verifySelf/update still work),
+// then evals the runtime in global scope.
+
+async function compressRuntime(script) {
+  const blob = new Blob([script]);
+  const cs = new CompressionStream('gzip');
+  const compressed = await new Response(blob.stream().pipeThrough(cs)).arrayBuffer();
+  const bytes = new Uint8Array(compressed);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  const b64 = btoa(binary).replace(/.{1,76}/g, '$&\n');
+
+  // Loader: decompress, normalize DOM (replace script content, remove data element),
+  // then eval. Capturing 'me' synchronously before async ensures we get the right element.
+  const loader =
+    '(function(){var me=document.scripts[document.scripts.length-1];(async function(){' +
+    "var b=document.getElementById('_rt').textContent.replace(/\\\\s/g,'');" +
+    'var d=Uint8Array.from(atob(b),function(c){return c.charCodeAt(0)});' +
+    "var s=await new Response(new Blob([d]).stream().pipeThrough(new DecompressionStream('gzip'))).text();" +
+    "me.textContent=s;document.getElementById('_rt').remove();" +
+    '(0,eval)(s)})()})()';
+
+  return `<script type="text/plain" id="_rt">\n${b64}<\/script>\n<script>\n${loader}\n<\/script>`;
+}
+
+async function buildNotebookHtml(opts = {}) {
   // serialize current state back to a self-contained HTML file
   const title = $('#docTitle').value || 'untitled';
 
@@ -13094,9 +13186,13 @@ async function buildNotebookHtml() {
   const fallbackStyleEl = document.querySelector('#auditable-css');
   const styles = fallbackStyleEl ? fallbackStyleEl.textContent : (appStyles + '\n' + editorStyles);
 
-  // get the script
+  // get the script — compress runtime by default for smaller saved notebooks
   const scriptEl = document.querySelector('script');
   const script = scriptEl.textContent;
+  const compress = opts.compress !== false;
+  const scriptBlock = compress
+    ? await compressRuntime(script)
+    : `<script>\n${script}\n<\/script>`;
 
   // read static elements from live DOM
   const helpHTML = $('#helpOverlay').outerHTML;
@@ -13241,7 +13337,7 @@ async function buildNotebookHtml() {
     dataBlocks = '<!-- encrypted notebook data: passphrase required to access cells, settings, and modules -->\n<!--AUDITABLE-CRYPTO\n' + JSON.stringify(block) + '\nAUDITABLE-CRYPTO-->';
   } else {
     dataBlocks = '<!-- cell data: JSON array of {type, code, collapsed?} -->\n<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->'
-      + '\n' + (Object.keys(window._installedModules || {}).length ? '<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId} -->\n<!--AUDITABLE-MODULES\n' + encodeModules(window._installedModules) + '\nAUDITABLE-MODULES-->' : '')
+      + '\n' + (Object.keys(window._installedModules || {}).length ? '<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId, compressed?, binary?, type?} -->\n<!--AUDITABLE-MODULES\n' + encodeModules(window._installedModules) + '\nAUDITABLE-MODULES-->' : '')
       + '\n' + (window._notebookFS?.size ? '<!-- notebook filesystem: base64-encoded JSON mapping paths to {type, compressed, size, data} -->\n<!--AUDITABLE-FS\n' + encodeModules(Object.fromEntries(window._notebookFS)) + '\nAUDITABLE-FS-->' : '')
       + '\n' + '<!-- notebook settings: JSON {theme, fontSize, width, ...} -->\n<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->';
   }
@@ -13287,7 +13383,7 @@ ${statusbarHTML}
 
 ${dataBlocks}
 
-<script>\n${script}\n<\/script>
+${scriptBlock}
 </body>
 </html>`;
 }
@@ -13331,7 +13427,7 @@ async function saveNotebook() {
 
 async function savePackedNotebook() {
   const title = $('#docTitle').value || 'untitled';
-  const html = await buildNotebookHtml();
+  const html = await buildNotebookHtml({ compress: false });
 
   try {
     // compress via CompressionStream
@@ -18639,9 +18735,17 @@ window._ctDoInstallPlugin = async () => {
   try {
     // use the same install path as code cells
     if (window._installedModules?.[url]) {
-      // already installed — just re-import
+      // already installed — just re-import (decompress if needed)
       const entry = window._installedModules[url];
-      const src = typeof entry === 'string' ? entry : entry.source;
+      let src;
+      if (typeof entry === 'object' && entry.compressed && !entry.binary) {
+        const bytes = Uint8Array.from(atob(entry.source), c => c.charCodeAt(0));
+        const ds = new DecompressionStream('gzip');
+        const stream = new Blob([bytes]).stream().pipeThrough(ds);
+        src = await new Response(stream).text();
+      } else {
+        src = typeof entry === 'string' ? entry : entry.source;
+      }
       const blob = new Blob([src], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
       await import(blobUrl);

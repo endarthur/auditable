@@ -20,7 +20,15 @@ async function getAtra() {
       for (const key of ATRA_KEYS) {
         const entry = window._installedModules[key];
         if (entry) {
-          const src = typeof entry === 'string' ? entry : entry.source;
+          let src;
+          if (typeof entry === 'object' && entry.compressed && !entry.binary) {
+            const bytes = Uint8Array.from(atob(entry.source), c => c.charCodeAt(0));
+            const ds = new DecompressionStream('gzip');
+            const stream = new Blob([bytes]).stream().pipeThrough(ds);
+            src = await new Response(stream).text();
+          } else {
+            src = typeof entry === 'string' ? entry : entry.source;
+          }
           const blob = new Blob([src], { type: 'application/javascript' });
           const url = URL.createObjectURL(blob);
           const mod = await import(url);
@@ -50,7 +58,15 @@ async function getAlpackAll() {
       for (const key of ALPACK_KEYS) {
         const entry = window._installedModules[key];
         if (entry) {
-          const src = typeof entry === 'string' ? entry : entry.source;
+          let src;
+          if (typeof entry === 'object' && entry.compressed && !entry.binary) {
+            const bytes = Uint8Array.from(atob(entry.source), c => c.charCodeAt(0));
+            const ds = new DecompressionStream('gzip');
+            const stream = new Blob([bytes]).stream().pipeThrough(ds);
+            src = await new Response(stream).text();
+          } else {
+            src = typeof entry === 'string' ? entry : entry.source;
+          }
           const blob = new Blob([src], { type: 'application/javascript' });
           const url = URL.createObjectURL(blob);
           const mod = await import(url);

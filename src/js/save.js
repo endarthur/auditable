@@ -98,7 +98,7 @@ export function syncModules() {
     return;
   }
   if (!_modulesNode) {
-    _modulesNode = ensureCommentNode('AUDITABLE-MODULES', 'installed modules: base64-encoded JSON mapping URLs to {source, cellId}');
+    _modulesNode = ensureCommentNode('AUDITABLE-MODULES', 'installed modules: base64-encoded JSON mapping URLs to {source, cellId, compressed?, binary?, type?}');
   }
   _modulesNode.nodeValue = 'AUDITABLE-MODULES\n' + encodeModules(mods) + '\nAUDITABLE-MODULES';
 }
@@ -150,7 +150,34 @@ export function setSaveMode(mode) {
   if (mobPack) mobPack.classList.toggle('active-mode', mode === 'packed');
 }
 
-async function buildNotebookHtml() {
+// ── RUNTIME COMPRESSION ──
+// Gzip + base64 the JS runtime for smaller saved notebooks.
+// The loader decompresses, normalizes the DOM (so verifySelf/update still work),
+// then evals the runtime in global scope.
+
+async function compressRuntime(script) {
+  const blob = new Blob([script]);
+  const cs = new CompressionStream('gzip');
+  const compressed = await new Response(blob.stream().pipeThrough(cs)).arrayBuffer();
+  const bytes = new Uint8Array(compressed);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  const b64 = btoa(binary).replace(/.{1,76}/g, '$&\n');
+
+  // Loader: decompress, normalize DOM (replace script content, remove data element),
+  // then eval. Capturing 'me' synchronously before async ensures we get the right element.
+  const loader =
+    '(function(){var me=document.scripts[document.scripts.length-1];(async function(){' +
+    "var b=document.getElementById('_rt').textContent.replace(/\\\\s/g,'');" +
+    'var d=Uint8Array.from(atob(b),function(c){return c.charCodeAt(0)});' +
+    "var s=await new Response(new Blob([d]).stream().pipeThrough(new DecompressionStream('gzip'))).text();" +
+    "me.textContent=s;document.getElementById('_rt').remove();" +
+    '(0,eval)(s)})()})()';
+
+  return `<script type="text/plain" id="_rt">\n${b64}<\/script>\n<script>\n${loader}\n<\/script>`;
+}
+
+async function buildNotebookHtml(opts = {}) {
   // serialize current state back to a self-contained HTML file
   const title = $('#docTitle').value || 'untitled';
 
@@ -170,16 +197,22 @@ async function buildNotebookHtml() {
   const fallbackStyleEl = document.querySelector('#auditable-css');
   const styles = fallbackStyleEl ? fallbackStyleEl.textContent : (appStyles + '\n' + editorStyles);
 
-  // get the script
+  // get the script — compress runtime by default for smaller saved notebooks
   const scriptEl = document.querySelector('script');
   const script = scriptEl.textContent;
+  const compress = opts.compress !== false;
+  const scriptBlock = compress
+    ? await compressRuntime(script)
+    : `<script>\n${script}\n<\/script>`;
 
   // read static elements from live DOM
   const helpHTML = $('#helpOverlay').outerHTML;
   const settingsOvHTML = $('#settingsOverlay').outerHTML;
   const settingsPanEl = $('#settingsPanel').cloneNode(true);
   settingsPanEl.style.display = '';
-  // clear module/binary lists (they contain URLs that leak when encrypted)
+  // clear module/binary/plugin lists (they contain URLs that leak when encrypted)
+  const plugList = settingsPanEl.querySelector('#pluginList');
+  if (plugList) plugList.innerHTML = '';
   const modList = settingsPanEl.querySelector('#moduleList');
   if (modList) modList.innerHTML = '';
   const binList = settingsPanEl.querySelector('#binaryList');
@@ -315,7 +348,7 @@ async function buildNotebookHtml() {
     dataBlocks = '<!-- encrypted notebook data: passphrase required to access cells, settings, and modules -->\n<!--AUDITABLE-CRYPTO\n' + JSON.stringify(block) + '\nAUDITABLE-CRYPTO-->';
   } else {
     dataBlocks = '<!-- cell data: JSON array of {type, code, collapsed?} -->\n<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->'
-      + '\n' + (Object.keys(window._installedModules || {}).length ? '<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId} -->\n<!--AUDITABLE-MODULES\n' + encodeModules(window._installedModules) + '\nAUDITABLE-MODULES-->' : '')
+      + '\n' + (Object.keys(window._installedModules || {}).length ? '<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId, compressed?, binary?, type?} -->\n<!--AUDITABLE-MODULES\n' + encodeModules(window._installedModules) + '\nAUDITABLE-MODULES-->' : '')
       + '\n' + (window._notebookFS?.size ? '<!-- notebook filesystem: base64-encoded JSON mapping paths to {type, compressed, size, data} -->\n<!--AUDITABLE-FS\n' + encodeModules(Object.fromEntries(window._notebookFS)) + '\nAUDITABLE-FS-->' : '')
       + '\n' + '<!-- notebook settings: JSON {theme, fontSize, width, ...} -->\n<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->';
   }
@@ -361,7 +394,7 @@ ${statusbarHTML}
 
 ${dataBlocks}
 
-<script>\n${script}\n<\/script>
+${scriptBlock}
 </body>
 </html>`;
 }
@@ -405,7 +438,7 @@ export async function saveNotebook() {
 
 export async function savePackedNotebook() {
   const title = $('#docTitle').value || 'untitled';
-  const html = await buildNotebookHtml();
+  const html = await buildNotebookHtml({ compress: false });
 
   try {
     // compress via CompressionStream

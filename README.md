@@ -16,14 +16,14 @@ auditable.html    — smaller than a floppy disk
 - **markdown interpolation** -- `${expr}` in markdown and HTML cells, live-patched without destroying DOM
 - **split view** -- side-by-side source + output editing (`e` in command mode)
 - **autocomplete** -- fuzzy completion for JS globals, builtins, scope variables, and tagged language keywords
-- **module system** -- `await load("https://esm.sh/d3")` for dynamic ESM imports; `install()` embeds the source in the HTML so it works offline
+- **module system** -- `await load("https://esm.sh/d3")` for dynamic ESM imports; `install()` embeds the source (gzip-compressed) in the HTML so it works offline
 - **binary assets** -- `installBinary()` embeds binary files (WASM, images, etc.) with gzip compression
 - **atra** -- embedded language for compiling typed array kernels to WebAssembly, with split-view editor, syntax highlighting, and completions
 - **language extensions** -- tagged template literals for GLSL shaders and SQL with syntax highlighting and completions
 - **colormaps & color utilities** -- `std.viridis/magma/inferno/plasma/turbo`, `std.color()` with OKLAB/OKLCH, `std.colorScale()`
 - **stdlib** -- `std.csv`, `std.sum`, `std.mean`, `std.linspace`, `std.bin`, `std.fmt`, and more
-- **self-contained save** -- Ctrl+S produces a new HTML file with all code, state, settings, and installed modules baked in
-- **packed save** -- gzip-compressed save format (~60% smaller) with readable, self-documenting bootstrap loader
+- **self-contained save** -- Ctrl+S produces a new HTML file with all code, state, settings, and installed modules baked in. the JS runtime is gzip-compressed for ~55% smaller files
+- **packed save** -- gzip-compressed save format (compresses the entire HTML, including data blocks) with readable, self-documenting bootstrap loader
 - **encryption** -- AES-256-GCM whole-notebook encryption with passphrase + recovery key. the file on disk is opaque without the passphrase. enable in settings, enter passphrase on load
 - **Ed25519 signatures** -- sign notebooks for integrity verification
 - **self-documenting format** -- every data block in saved HTML has a descriptive comment explaining what it is
@@ -113,7 +113,7 @@ markdown cells support `${expr}` interpolation from upstream scope. HTML cells s
 const d3 = await load("https://esm.sh/d3");
 const { Stereonet } = await load("https://esm.sh/@gcu/bearing");
 
-// install() fetches the source and embeds it in the HTML
+// install() fetches the source, gzip-compresses it, and embeds it in the HTML
 // the notebook works offline after that
 await install("https://esm.sh/peerjs");
 
@@ -244,7 +244,7 @@ saved notebooks are self-documenting. every data block has a descriptive HTML co
 [{"type":"code","code":"const x = 1"}, ...]
 AUDITABLE-DATA-->
 
-<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId} -->
+<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId, compressed?, binary?, type?} -->
 <!--AUDITABLE-MODULES
 eyJodHRwczovL2VzbS5zaC9kMyI6...
 AUDITABLE-MODULES-->
@@ -260,9 +260,9 @@ AUDITABLE-SETTINGS-->
 AUDITABLE-SIGNATURE-->
 ```
 
-modules are base64-encoded to avoid HTML comment parsing issues. old notebooks with raw JSON still load (backward compatible).
+modules are base64-encoded to avoid HTML comment parsing issues. JS modules are gzip-compressed before encoding (~74% savings). old notebooks with raw JSON or uncompressed modules still load (backward compatible).
 
-packed saves use gzip compression with a readable bootstrap loader that explains every step.
+the JS runtime is gzip-compressed in saved notebooks and examples. a small self-extracting loader decompresses and evals the runtime on load — data blocks, title, and HTML structure remain cleartext and human-readable. packed saves gzip the entire HTML (including data blocks) with a readable bootstrap loader.
 
 encrypted notebooks replace all data blocks with a single opaque blob:
 
@@ -330,7 +330,7 @@ the scope is passed by value between cells via `AsyncFunction` constructors. mut
 
 widgets are keyed by label. when a slider's value changes, the cell that created it re-executes, which triggers its dependents. the DAG handles the rest.
 
-save serializes cell source as JSON in an HTML comment (`<!--AUDITABLE-DATA ... -->`), along with settings and installed module sources. the runtime reads these on load. the browser is the runtime. the HTML is the lockfile.
+save serializes cell source as JSON in an HTML comment (`<!--AUDITABLE-DATA ... -->`), along with settings and installed module sources (gzip-compressed). the JS runtime is also gzip-compressed with a self-extracting loader. data blocks stay cleartext for auditability. the browser is the runtime. the HTML is the lockfile.
 
 ## building
 

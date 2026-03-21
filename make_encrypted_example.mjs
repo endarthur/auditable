@@ -9,6 +9,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { webcrypto } from 'crypto';
+import { gzipSync } from 'zlib';
 
 // Ensure crypto.subtle is available
 if (!globalThis.crypto?.subtle) {
@@ -104,9 +105,24 @@ html = html.replace(
   '<title>Auditable \u2014 Encrypted</title>'
 );
 
-// Insert CRYPTO block before <script>
+// Insert CRYPTO block and compress runtime
 const cryptoComment = '<!-- encrypted notebook data: passphrase required to access cells, settings, and modules -->\n<!--AUDITABLE-CRYPTO\n' + JSON.stringify(cryptoBlock) + '\nAUDITABLE-CRYPTO-->';
-html = html.replace('\n<script>', () => '\n' + cryptoComment + '\n\n<script>');
+
+// Compress runtime (same as make_example.js compressRuntimeNode)
+const scriptMatch = html.match(/<script>([\s\S]*?)<\/script>/);
+if (!scriptMatch) { console.error('Could not find <script> in auditable.html'); process.exit(1); }
+const scriptContent = scriptMatch[1].trim();
+const compressed = gzipSync(Buffer.from(scriptContent, 'utf8'));
+const b64 = compressed.toString('base64').replace(/.{1,76}/g, '$&\n');
+const loader =
+  '(function(){var me=document.scripts[document.scripts.length-1];(async function(){' +
+  "var b=document.getElementById('_rt').textContent.replace(/\\\\s/g,'');" +
+  'var d=Uint8Array.from(atob(b),function(c){return c.charCodeAt(0)});' +
+  "var s=await new Response(new Blob([d]).stream().pipeThrough(new DecompressionStream('gzip'))).text();" +
+  "me.textContent=s;document.getElementById('_rt').remove();" +
+  '(0,eval)(s)})()})()';
+const compressedBlock = `<script type="text/plain" id="_rt">\n${b64}</script>\n<script>\n${loader}\n</script>`;
+html = html.replace(/\n<script>[\s\S]*?<\/script>/, () => '\n' + cryptoComment + '\n\n' + compressedBlock);
 
 // Write output
 const outDir = join(__dirname, 'examples', 'basics');

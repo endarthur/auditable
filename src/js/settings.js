@@ -16,7 +16,10 @@ export function toggleSettings() {
   const open = !overlay.classList.contains('visible');
   overlay.classList.toggle('visible');
   panel.style.display = open ? 'block' : 'none';
-  if (open) refreshModuleList();
+  if (open) {
+    refreshPluginList();
+    refreshModuleList();
+  }
 }
 
 export function applyTheme(theme) {
@@ -208,8 +211,9 @@ function renderEntryRow(url, entry) {
   const src = typeof entry === 'string' ? entry : entry.source;
   const cellId = typeof entry === 'string' ? null : entry.cellId;
   const isBinary = typeof entry === 'object' && entry.binary;
+  const isCompressed = typeof entry === 'object' && entry.compressed;
   const size = src ? src.length : 0;
-  const displaySize = isBinary ? Math.floor(size * 3 / 4) : size;
+  const displaySize = (isBinary || isCompressed) ? Math.floor(size * 3 / 4) : size;
 
   const row = document.createElement('div');
   row.className = 'module-row';
@@ -223,7 +227,7 @@ function renderEntryRow(url, entry) {
   const info = document.createElement('span');
   info.className = 'module-info';
   info.textContent = (cellId != null ? 'cell ' + cellId + '  ' : '')
-    + (isBinary && entry.compressed ? 'gzipped  ' : '')
+    + (isCompressed ? 'gzipped  ' : '')
     + formatSize(displaySize);
   row.appendChild(info);
 
@@ -265,9 +269,11 @@ export function refreshModuleList() {
   if (!modList) return;
 
   const mods = window._installedModules || {};
+  const pluginUrls = window._auditablePlugins || new Map();
   const modUrls = [];
   const binUrls = [];
   for (const url of Object.keys(mods)) {
+    if (pluginUrls.has(url)) continue; // filter out plugins — shown in plugins section
     const entry = mods[url];
     if (typeof entry === 'object' && entry.binary) binUrls.push(url);
     else modUrls.push(url);
@@ -275,6 +281,62 @@ export function refreshModuleList() {
 
   renderSection(modList, modUrls, mods, 'no modules installed');
   if (binList) renderSection(binList, binUrls, mods, 'no binaries installed');
+}
+
+export function refreshPluginList() {
+  const list = $('#pluginList');
+  if (!list) return;
+  list.innerHTML = '';
+
+  const plugins = window._auditablePlugins || new Map();
+  if (plugins.size === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'module-empty';
+    empty.textContent = 'no plugins installed';
+    list.appendChild(empty);
+    return;
+  }
+
+  for (const [url, meta] of plugins) {
+    const row = document.createElement('div');
+    row.className = 'module-row';
+
+    const urlSpan = document.createElement('span');
+    urlSpan.className = 'module-url';
+    urlSpan.textContent = url;
+    urlSpan.title = url;
+    row.appendChild(urlSpan);
+
+    // show registered capabilities
+    const caps = [];
+    for (const [name, h] of Object.entries(window._cellTypes || {})) {
+      if (h._pluginUrl === url) caps.push(name + ' cells');
+    }
+    if (meta.description) caps.unshift(meta.description);
+
+    const info = document.createElement('span');
+    info.className = 'module-info';
+    const entry = window._installedModules?.[url];
+    const src = entry ? (typeof entry === 'string' ? entry : entry.source) : null;
+    const sizeText = src ? formatSize(src.length) : '';
+    info.textContent = (caps.length ? caps.join(', ') + '  ' : '') + sizeText;
+    row.appendChild(info);
+
+    const btn = document.createElement('button');
+    btn.className = 'module-remove';
+    btn.textContent = '\u00d7';
+    btn.title = 'uninstall plugin';
+    btn.onclick = () => {
+      if (window._ctUninstallPlugin) window._ctUninstallPlugin(url);
+      syncModules();
+      refreshPluginList();
+      refreshModuleList();
+      updateStatus();
+    };
+    row.appendChild(btn);
+
+    list.appendChild(row);
+  }
 }
 
 export function removeModule(url) {

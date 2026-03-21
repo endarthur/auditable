@@ -237,8 +237,12 @@ for (const [category, defs] of Object.entries(categories)) {
           const mimeMap = { wasm: 'application/wasm', png: 'image/png', jpg: 'image/jpeg' };
           modules[url] = { source, cellId: null, binary: true, compressed: true, type: mimeMap[ext] || 'application/octet-stream' };
         } else {
-          const source = fs.readFileSync(refPath, 'utf8');
-          modules[url] = { source, cellId: null };
+          // text module: gzip-compress for smaller saved notebooks
+          const zlib = require('zlib');
+          const raw = fs.readFileSync(refPath, 'utf8');
+          const compressed = zlib.gzipSync(Buffer.from(raw, 'utf8'));
+          const source = compressed.toString('base64');
+          modules[url] = { source, compressed: true, cellId: null };
         }
       }
     }
