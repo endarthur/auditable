@@ -8,11 +8,14 @@
 /// md
 # Python + GSLIB — cross-language geostatistics
 
-A resource estimation pipeline. **Python** generates drill holes, computes the experimental variogram, and builds the grade-tonnage curve. **GSLIB/WASM** runs the kriging (called from a thin JS bridge — Python can't call WASM directly since MicroPython is itself WASM). **JS** handles widgets and rendering.
+A resource estimation pipeline driven from Python. Data generation, experimental variography, kriging, and grade-tonnage analysis all happen in Python cells. GSLIB's WASM kriging is called from Python via the `call()` bridge. JS handles only widgets and canvas rendering.
 
 /// code collapsed
 // %collapsed
 await load("@gcu/adder")
+// expose gslib on window so Python's call() can reach it
+const gslib = await load("@atra/gslib")
+window._gslib = gslib
 
 /// md
 ## parameters
@@ -29,21 +32,21 @@ const vNugget = ui.slider("nugget", 0.05, {min: 0.0, max: 0.5, step: 0.01});
 const gridN = ui.slider("grid", 60, {min: 20, max: 120, step: 5});
 
 /// md
-## data + variogram
+## Python pipeline
 
-Python generates synthetic drill holes and computes the experimental semivariogram (O(n\u00b2) all-pairs).
+One Python cell does everything: generates drill holes, computes the experimental variogram, calls GSLIB's `kb2d` for kriging via `call()`, and builds the grade-tonnage table. `call()` is a built-in async bridge that suspends MicroPython, runs the WASM function in a separate task, and returns the result.
 
 /// python
-import math, json as _json
+import math, json
 
-# seeded RNG
+# ---- RNG ----
 _s = seed
 def _rng():
     global _s
     _s = (_s * 1103515245 + 12345) & 0x7fffffff
     return _s / 0x7fffffff
 
-# synthetic grade: two Gaussian blobs + background + noise
+# ---- generate drill holes ----
 def _grade(x, y):
     g1 = 2.5 * math.exp(-((x - 0.3)**2 + (y - 0.6)**2) / 0.02)
     g2 = 1.8 * math.exp(-((x - 0.7)**2 + (y - 0.35)**2) / 0.04)
@@ -60,7 +63,6 @@ _mean = sum(_grades) / _n
 _std = (sum((g - _mean)**2 for g in _grades) / (_n - 1)) ** 0.5
 
 print(f"{_n} samples \u00b7 mean {_mean:.3f} \u00b7 std {_std:.3f} \u00b7 CV {_std/_mean:.2f}")
-print(f"range [{min(_grades):.3f}, {max(_grades):.3f}]")
 
 # ---- experimental variogram (pure Python, O(n\u00b2)) ----
 _nlag = 12
@@ -83,22 +85,58 @@ vario_h, vario_gamma = [], []
 for k in range(_nlag):
     cnt, sq, hs = _bins[k]
     if cnt > 0:
-        vario_h.append(hs / cnt)
-        vario_gamma.append(sq / (2 * cnt))
+        vario_h.append(round(hs / cnt, 6))
+        vario_gamma.append(round(sq / (2 * cnt), 6))
 
 print(f"variogram: {sum(b[0] for b in _bins)} pairs, {len(vario_h)} lags")
 
-# export samples + variogram for JS
-samples_json = _json.dumps(_pts)
-vario_json = _json.dumps({"h": vario_h, "gamma": vario_gamma})
+# ---- kriging via call() — Python calls WASM through async bridge ----
+krig_result = await call("_gslib.kb2d", {
+    "data": _pts,
+    "grid": {"nx": gridN, "ny": gridN, "xsiz": 1.0 / gridN, "ysiz": 1.0 / gridN},
+    "variogram": {"nugget": vNugget, "structures": [{"type": modelIdx, "contribution": vSill, "range": vRange}]},
+    "search": {"radius": 2.0, "ndmax": min(nHoles, 24)},
+})
+est = krig_result["est"]
+estv = krig_result["var"]
+
+print(f"kriged {gridN}\u00d7{gridN} grid")
+
+# ---- grade-tonnage curve ----
+_valid = [v for v in est if v > -900]
+_block_t = 2.7 / (gridN * gridN)
+
+gt_rows = []
+for co_x10 in range(0, 31):
+    co = co_x10 * 0.1
+    above = [v for v in _valid if v >= co]
+    if not above:
+        break
+    t = len(above) * _block_t
+    g = sum(above) / len(above)
+    gt_rows.append([round(co, 1), len(above), round(t, 3), round(g, 3), round(t * g, 3)])
+
+# ---- export for JS rendering ----
+pipeline_json = json.dumps({
+    "samples": _pts,
+    "vario": {"h": vario_h, "gamma": vario_gamma},
+    "est": est,
+    "estv": estv,
+    "gt": gt_rows,
+})
+
+/// code collapsed
+// %collapsed
+const pipeline = JSON.parse(pipeline_json)
+const samples = pipeline.samples
+const lagDist = pipeline.vario.h, lagGamma = pipeline.vario.gamma
+const est_arr = pipeline.est, estv_arr = pipeline.estv
+const gtRows = pipeline.gt
 
 /// md
-## variogram plot
+## variogram
 
 /// code
-const vario = JSON.parse(vario_json)
-const lagDist = vario.h, lagGamma = vario.gamma
-
 const vc = ui.canvas(460, 220);
 const vctx = vc.getContext("2d");
 vctx.fillStyle = "#1a1a1a"; vctx.fillRect(0, 0, 460, 220);
@@ -139,35 +177,13 @@ for (let i = 0; i < lagDist.length; i++) {
 }
 
 /// md
-## kriging
-
-JS bridge cell: calls GSLIB's `kb2d` WASM routine and serializes results for Python. (MicroPython is itself WASM, so it can't call another WASM module directly — Asyncify stack overflow.)
-
-/// code
-const { kb2d } = await load("@atra/gslib");
-const samples = JSON.parse(samples_json);
-const t0 = performance.now();
-const kResult = kb2d({
-  data: samples,
-  grid: { nx: gridN, ny: gridN, xsiz: 1/gridN, ysiz: 1/gridN },
-  variogram: { nugget: vNugget, structures: [{ type: modelIdx, contribution: vSill, range: vRange }] },
-  search: { radius: 2.0, ndmax: Math.min(nHoles, 24) },
-});
-const elapsed = (performance.now() - t0).toFixed(1);
-const est = kResult.est, estv = kResult.var;
-
-// serialize for Python
-const est_json = JSON.stringify(Array.from(est))
-display(`kriged ${gridN}\u00d7${gridN} in ${elapsed} ms`)
-
-/// md
 ## kriging map
 
 /// code
 const showVar = ui.checkbox("show variance", false);
 
 /// code
-const gridData = showVar ? estv : est;
+const gridData = showVar ? estv_arr : est_arr;
 const cmap = showVar ? std.magma : std.viridis;
 
 let vmin = Infinity, vmax = -Infinity;
@@ -199,33 +215,11 @@ display(`${showVar ? "variance" : modelIdx} \u00b7 ${nHoles} holes`);
 /// md
 ## grade-tonnage
 
-Python receives the kriged grid back from WASM and computes the grade-tonnage curve. Data has flowed Python \u2192 JS/WASM \u2192 Python.
-
-/// python
-import json as _json
-
-_est = _json.loads(est_json)
-_valid = [v for v in _est if v > -900]
-_block_t = 2.7 / (gridN * gridN)
-
-gt_rows = []
-for co_x10 in range(0, 31):
-    co = co_x10 * 0.1
-    above = [v for v in _valid if v >= co]
-    if not above:
-        break
-    t = len(above) * _block_t
-    g = sum(above) / len(above)
-    gt_rows.append({"cutoff": co, "blocks": len(above), "tonnes": round(t, 3), "grade": round(g, 3), "metal": round(t * g, 3)})
-
-gt_json = _json.dumps(gt_rows)
-
-print(f"{'cutoff':>7}  {'blocks':>6}  {'tonnes':>8}  {'grade':>6}  {'metal':>7}")
-print(f"{'------':>7}  {'------':>6}  {'------':>8}  {'-----':>6}  {'-----':>7}")
-for r in gt_rows:
-    print(f"{r['cutoff']:7.1f}  {r['blocks']:6d}  {r['tonnes']:8.3f}  {r['grade']:6.3f}  {r['metal']:7.3f}")
+/// code
+ui.table(gtRows.map(r => ({cutoff: r[0], blocks: r[1], tonnes: r[2], grade: r[3], metal: r[4]})),
+  {columns: ["cutoff", "blocks", "tonnes", "grade", "metal"]})
 
 /// md
 ---
 
-**data flow:** Python \u2192 (samples, variogram) \u2192 JS bridge \u2192 GSLIB/WASM kriging \u2192 (est_json) \u2192 Python grade-tonnage. Python can't call WASM directly (MicroPython is itself WASM \u2014 nested WASM calls hit the Asyncify stack limit), so a thin JS cell handles the `kb2d` call. Everything else \u2014 data generation, variography, and resource reporting \u2014 is Python.
+**how it works:** `call(name, args)` is a Python built-in that bridges the nested-WASM gap. MicroPython is itself WASM (Asyncify), so it can't call another WASM module directly. `call()` suspends MicroPython via `await`, the JS bridge runs the WASM function in a `setTimeout(0)` macrotask (clean stack), and resumes Python with the JSON result. Arguments and results are marshalled via JSON automatically. TypedArrays (like kriging's Float64Array output) are converted to plain arrays.

@@ -158,6 +158,8 @@ export async function pythonExecute(code, scopeIn, cell) {
       mp.runPython(`_adder_ns["${k}"] = _adder_inject_v`);
     }
     try { mp.globals.delete('_adder_inject_v'); } catch {}
+    // inject call() builtin — async bridge for JS/WASM calls
+    mp.runPython('_adder_ns["call"] = call');
 
     // execute cell code
     mp.globals.set('_adder_code', code);

@@ -67,8 +67,33 @@ export async function initInterpreter() {
       }
     }
 
-    // bootstrap _exec_cell helper
+    // bootstrap _exec_cell helper and call() bridge
     _mp.runPython(BRIDGE_PY);
+
+    // JS-side async bridge: lets Python call JS/WASM functions without
+    // nested-WASM crash. setTimeout(0) ensures the call happens in a
+    // new macrotask after MicroPython's Asyncify has fully unwound.
+    window._adder_call = (name, argsJson) => new Promise((resolve, reject) => {
+      setTimeout(() => {
+        try {
+          const parts = name.split('.');
+          let fn = window;
+          for (const p of parts) fn = fn[p];
+          if (typeof fn !== 'function') throw new Error(name + ' is not a function');
+          const result = fn(JSON.parse(argsJson));
+          // convert TypedArrays to plain arrays for JSON serialization
+          if (result && typeof result === 'object' && !Array.isArray(result)) {
+            const out = {};
+            for (const [k, v] of Object.entries(result)) {
+              out[k] = ArrayBuffer.isView(v) ? Array.from(v) : v;
+            }
+            resolve(JSON.stringify(out));
+          } else {
+            resolve(JSON.stringify(result));
+          }
+        } catch (e) { reject(e); }
+      }, 0);
+    });
 
     return _mp;
   })();
