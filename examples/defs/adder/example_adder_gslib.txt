@@ -1,0 +1,300 @@
+/// auditable
+/// title: adder + gslib — Python-driven kriging
+/// module: @gcu/adder ext/adder/index.js
+/// module: @gcu/adder/micropython.mjs ext/adder/micropython.mjs
+/// module-binary: @gcu/adder/micropython.wasm ext/adder/micropython.wasm
+/// module: @atra/gslib ext/atra/lib/gslib.js
+
+/// md
+# Python + GSLIB — cross-language geostatistics
+
+A mini resource estimation pipeline using three languages: **Python** generates and explores drill hole data, **atra/WASM** runs kriging and variography, **JS** renders the results. All connected through Auditable's reactive DAG.
+
+/// code collapsed
+// %collapsed
+await load("@gcu/adder")
+
+/// md
+## drill hole data
+
+Python generates synthetic drill holes with a buried high-grade zone. Adjust the number of holes and the noise level — downstream cells (variography, kriging, visualization) all re-execute automatically.
+
+/// code
+const nHoles = ui.slider("drill holes", 30, {min: 10, max: 80, step: 1});
+const noise = ui.slider("noise", 0.3, {min: 0.0, max: 1.0, step: 0.05});
+const seed = ui.slider("seed", 42, {min: 1, max: 999, step: 1});
+
+/// python
+import math
+
+# seeded RNG (MicroPython has no numpy)
+_s = seed
+def _rng():
+    global _s
+    _s = (_s * 1103515245 + 12345) & 0x7fffffff
+    return _s / 0x7fffffff
+
+# synthetic grade model: two Gaussian blobs + noise
+def grade_model(x, y):
+    g1 = 2.5 * math.exp(-((x - 0.3)**2 + (y - 0.6)**2) / 0.02)
+    g2 = 1.8 * math.exp(-((x - 0.7)**2 + (y - 0.35)**2) / 0.04)
+    return max(0.01, g1 + g2 + 0.2 + noise * (_rng() - 0.5))
+
+# generate drill holes
+samples = []
+for i in range(nHoles):
+    x, y = _rng(), _rng()
+    v = round(grade_model(x, y), 3)
+    samples.append([x, y, v])
+
+/// md
+## summary statistics
+
+Python computes basic stats on the sample data. These flow into downstream cells via the DAG.
+
+/// python
+grades = [s[2] for s in samples]
+n = len(grades)
+mean_grade = sum(grades) / n
+var_grade = sum((g - mean_grade)**2 for g in grades) / (n - 1)
+std_grade = var_grade ** 0.5
+min_grade = min(grades)
+max_grade = max(grades)
+median_grade = sorted(grades)[n // 2]
+cv = std_grade / mean_grade
+
+print(f"samples:  {n}")
+print(f"mean:     {mean_grade:.3f}")
+print(f"std dev:  {std_grade:.3f}")
+print(f"CV:       {cv:.2f}")
+print(f"min:      {min_grade:.3f}")
+print(f"median:   {median_grade:.3f}")
+print(f"max:      {max_grade:.3f}")
+
+/// md
+## experimental variogram
+
+GSLIB's `gamv` (compiled to WASM via atra) computes the experimental semivariogram. The Python-defined `samples` array flows through the DAG into this JS cell.
+
+/// code
+const { gamv, kb2d } = await load("@atra/gslib");
+
+const varioResult = gamv({
+  data: samples,
+  lags: { n: 12, size: 0.06, tolerance: 0.03 },
+  directions: [
+    { azimuth: 0, tolerance: 90, bandwidthH: Infinity },
+  ],
+});
+
+// extract lag distances and semivariogram values (skip lag 0)
+const lagDist = [], lagGamma = [], lagNpairs = [];
+for (let i = 1; i <= 12; i++) {
+  if (varioResult.npairs[i] > 0) {
+    lagDist.push(varioResult.distance[i]);
+    lagGamma.push(varioResult.value[i]);
+    lagNpairs.push(varioResult.npairs[i]);
+  }
+}
+
+/// md
+## variogram model
+
+Fit a variogram model to the experimental points. The model parameters control the kriging interpolation.
+
+/// code
+const modelNames = ["spherical", "exponential", "gaussian"];
+const modelIdx = ui.dropdown("model", modelNames);
+const vRange = ui.slider("range", 0.30, {min: 0.05, max: 0.60, step: 0.01});
+const vSill = ui.slider("sill", 0.8, {min: 0.1, max: 3.0, step: 0.05});
+const vNugget = ui.slider("nugget", 0.05, {min: 0.0, max: 0.5, step: 0.01});
+
+/// code
+// plot experimental variogram + fitted model
+const vc = ui.canvas(460, 220);
+const vctx = vc.getContext("2d");
+vctx.fillStyle = "#1a1a1a";
+vctx.fillRect(0, 0, 460, 220);
+
+const pad = {l: 50, r: 20, t: 15, b: 35};
+const pw = 460 - pad.l - pad.r, ph = 220 - pad.t - pad.b;
+
+// auto-scale
+const maxH = Math.max(...lagDist) * 1.1;
+const maxG = Math.max(...lagGamma, vNugget + vSill) * 1.2;
+
+const sx = h => pad.l + (h / maxH) * pw;
+const sy = g => pad.t + ph - (g / maxG) * ph;
+
+// axes
+vctx.strokeStyle = "#555";
+vctx.lineWidth = 1;
+vctx.beginPath();
+vctx.moveTo(pad.l, pad.t);
+vctx.lineTo(pad.l, pad.t + ph);
+vctx.lineTo(pad.l + pw, pad.t + ph);
+vctx.stroke();
+
+// axis labels
+vctx.fillStyle = "#888";
+vctx.font = "10px monospace";
+vctx.textAlign = "center";
+vctx.fillText("lag distance", pad.l + pw / 2, 220 - 5);
+vctx.save();
+vctx.translate(12, pad.t + ph / 2);
+vctx.rotate(-Math.PI / 2);
+vctx.fillText("\u03b3(h)", 0, 0);
+vctx.restore();
+
+// tick labels
+for (let i = 0; i <= 4; i++) {
+  const h = (maxH / 4) * i;
+  vctx.fillStyle = "#666";
+  vctx.fillText(h.toFixed(2), sx(h), pad.t + ph + 14);
+}
+for (let i = 0; i <= 3; i++) {
+  const g = (maxG / 3) * i;
+  vctx.textAlign = "right";
+  vctx.fillText(g.toFixed(2), pad.l - 5, sy(g) + 3);
+}
+
+// model curve
+const modelFn = (h) => {
+  if (h === 0) return 0;
+  const hr = h / vRange;
+  let cov;
+  if (modelIdx === "spherical") cov = hr >= 1 ? vSill : vSill * (1.5 * hr - 0.5 * hr * hr * hr);
+  else if (modelIdx === "exponential") cov = vSill * (1 - Math.exp(-3 * hr));
+  else cov = vSill * (1 - Math.exp(-3 * hr * hr));
+  return vNugget + cov;
+};
+
+vctx.strokeStyle = "#c89b3c";
+vctx.lineWidth = 2;
+vctx.beginPath();
+for (let i = 0; i <= 100; i++) {
+  const h = (maxH / 100) * i;
+  const g = modelFn(h);
+  if (i === 0) vctx.moveTo(sx(h), sy(g));
+  else vctx.lineTo(sx(h), sy(g));
+}
+vctx.stroke();
+
+// sill + nugget reference lines
+vctx.setLineDash([4, 4]);
+vctx.strokeStyle = "#555";
+vctx.lineWidth = 0.5;
+vctx.beginPath();
+vctx.moveTo(pad.l, sy(vNugget + vSill));
+vctx.lineTo(pad.l + pw, sy(vNugget + vSill));
+vctx.stroke();
+vctx.setLineDash([]);
+
+// experimental points
+for (let i = 0; i < lagDist.length; i++) {
+  vctx.beginPath();
+  vctx.arc(sx(lagDist[i]), sy(lagGamma[i]), 4, 0, Math.PI * 2);
+  vctx.fillStyle = "#fff";
+  vctx.fill();
+  vctx.strokeStyle = "#000";
+  vctx.lineWidth = 1;
+  vctx.stroke();
+}
+
+/// md
+## kriging
+
+GSLIB's `kb2d` runs ordinary kriging on the grid. The variogram model parameters from the sliders above drive the interpolation. Toggle between the estimate and variance maps.
+
+/// code
+const gridN = ui.slider("grid resolution", 60, {min: 20, max: 120, step: 5});
+const showVar = ui.checkbox("show variance", false);
+
+/// code
+// run kb2d
+const t0 = performance.now();
+const kResult = kb2d({
+  data: samples,
+  grid: { nx: gridN, ny: gridN, xsiz: 1/gridN, ysiz: 1/gridN },
+  variogram: { nugget: vNugget, structures: [{ type: modelIdx, contribution: vSill, range: vRange }] },
+  search: { radius: 2.0, ndmax: Math.min(nHoles, 24) },
+});
+const elapsed = (performance.now() - t0).toFixed(1);
+const est = kResult.est, estv = kResult.var;
+
+/// code
+// render kriged grid
+const gridData = showVar ? estv : est;
+const cmap = showVar ? std.magma : std.viridis;
+
+let vmin = Infinity, vmax = -Infinity;
+for (let i = 0; i < gridData.length; i++) {
+  if (gridData[i] < -900) continue;
+  if (gridData[i] < vmin) vmin = gridData[i];
+  if (gridData[i] > vmax) vmax = gridData[i];
+}
+const vr = vmax - vmin || 1;
+
+const size = Math.min(500, window.innerWidth - 80);
+const c = ui.canvas(size, size);
+const ctx = c.getContext("2d");
+
+const cellW = size / gridN;
+for (let iy = 0; iy < gridN; iy++) {
+  for (let ix = 0; ix < gridN; ix++) {
+    const v = gridData[iy * gridN + ix];
+    if (v < -900) { ctx.fillStyle = "#222"; }
+    else { ctx.fillStyle = cmap((v - vmin) / vr); }
+    ctx.fillRect(ix * cellW, iy * cellW, cellW + 0.5, cellW + 0.5);
+  }
+}
+
+// overlay drill holes
+for (const [sx, sy, sv] of samples) {
+  ctx.beginPath();
+  ctx.arc(sx * size, sy * size, 3, 0, Math.PI * 2);
+  ctx.fillStyle = cmap((sv - vmin) / vr);
+  ctx.fill();
+  ctx.lineWidth = 1.5;
+  ctx.strokeStyle = "#000";
+  ctx.stroke();
+}
+
+const label = showVar ? "kriging variance" : `kriging estimate (${modelIdx})`;
+display(`${label} \u00b7 ${gridN}\u00d7${gridN} \u00b7 ${nHoles} holes \u00b7 ${elapsed} ms`);
+
+/// md
+## grade-tonnage
+
+Python computes the grade-tonnage curve from the kriged estimates. The cutoff slider controls the reporting threshold.
+
+/// code
+const cutoff = ui.slider("cutoff grade", 0.5, {min: 0.0, max: 3.0, step: 0.05});
+
+/// python
+# grade-tonnage from kriged estimates
+block_volume = 1.0 / (gridN * gridN)
+density = 2.7  # t/m\u00b3 (typical rock density)
+block_tonnage = block_volume * density
+
+# filter valid estimates above cutoff
+above = [float(est[i]) for i in range(len(est)) if float(est[i]) > -900 and float(est[i]) >= cutoff]
+total_valid = sum(1 for i in range(len(est)) if float(est[i]) > -900)
+
+tonnes = len(above) * block_tonnage
+grade_above = sum(above) / len(above) if above else 0
+metal = tonnes * grade_above
+total_tonnes = total_valid * block_tonnage
+
+pct_above = 100 * len(above) / total_valid if total_valid else 0
+
+print(f"cutoff:       {cutoff:.2f}")
+print(f"blocks:       {len(above)} / {total_valid} ({pct_above:.0f}%)")
+print(f"tonnes:       {tonnes:.1f} t")
+print(f"mean grade:   {grade_above:.3f}")
+print(f"metal:        {metal:.2f} units")
+
+/// md
+---
+
+**how it works:** Python defines the drill hole data and computes statistics. The `samples` array flows through the reactive DAG into JS cells that call GSLIB's WASM routines (`gamv` for variography, `kb2d` for kriging). The kriged grid flows back to Python for grade-tonnage reporting. Three languages, one DAG, zero glue code.
