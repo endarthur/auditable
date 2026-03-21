@@ -3590,9 +3590,9 @@ if (!window._cellTypes?.['adder']) {
 
   // register as plugin
   if (window.registerPlugin) {
-    window.registerPlugin('@gcu/adder', { description: 'adder — Python cells and tagged template' });
+    window.registerPlugin('@gcu/adder', { description: 'JS-targeting Python dialect — adder cells and tagged template' });
   } else if (window._auditablePlugins) {
-    window._auditablePlugins.set('@gcu/adder', { description: 'adder — Python cells and tagged template' });
+    window._auditablePlugins.set('@gcu/adder', { description: 'JS-targeting Python dialect — adder cells and tagged template' });
   }
 
   // global tags

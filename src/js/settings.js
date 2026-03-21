@@ -300,27 +300,25 @@ export function refreshPluginList() {
   for (const [url, meta] of plugins) {
     const row = document.createElement('div');
     row.className = 'module-row';
+    row.style.flexWrap = 'wrap';
 
     const urlSpan = document.createElement('span');
     urlSpan.className = 'module-url';
-    urlSpan.textContent = url;
+    // show short name before the dash, full url on hover
+    const shortName = url.replace(/^@\w+\//, '');
+    urlSpan.textContent = shortName;
     urlSpan.title = url;
     row.appendChild(urlSpan);
 
-    // show registered capabilities
-    const caps = [];
-    for (const [name, h] of Object.entries(window._cellTypes || {})) {
-      if (h._pluginUrl === url) caps.push(name + ' cells');
-    }
-    if (meta.description) caps.unshift(meta.description);
-
-    const info = document.createElement('span');
-    info.className = 'module-info';
     const entry = window._installedModules?.[url];
     const src = entry ? (typeof entry === 'string' ? entry : entry.source) : null;
     const sizeText = src ? formatSize(src.length) : '';
-    info.textContent = (caps.length ? caps.join(', ') + '  ' : '') + sizeText;
-    row.appendChild(info);
+    if (sizeText) {
+      const info = document.createElement('span');
+      info.className = 'module-info';
+      info.textContent = sizeText;
+      row.appendChild(info);
+    }
 
     const btn = document.createElement('button');
     btn.className = 'module-remove';
@@ -334,8 +332,15 @@ export function refreshPluginList() {
       updateStatus();
     };
     row.appendChild(btn);
-
     list.appendChild(row);
+
+    // description line — wraps below the name
+    if (meta.description) {
+      const desc = document.createElement('div');
+      desc.className = 'module-desc';
+      desc.textContent = meta.description;
+      list.appendChild(desc);
+    }
   }
 }
 

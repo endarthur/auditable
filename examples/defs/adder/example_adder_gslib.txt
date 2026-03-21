@@ -1,12 +1,12 @@
 /// auditable
-/// title: adder + gslib — Python-driven kriging
+/// title: adder + gslib — kriging
 /// module: @gcu/adder ext/adder/index.js
 /// module: @atra/gslib ext/atra/lib/gslib.js
 
 /// md
-# Python + GSLIB — cross-language geostatistics
+# adder + GSLIB — cross-language geostatistics
 
-A resource estimation pipeline in Python. Data generation, variogram computation, kriging, widgets, plotting, and grade-tonnage — all in adder. One JS cell bootstraps the extensions; everything else is Python. Values are native JS values: no FFI, no marshalling.
+A resource estimation pipeline in adder, a JS-targeting Python dialect. Data generation, variogram computation, kriging, widgets, plotting, and grade-tonnage — all in adder. One JS cell bootstraps the extensions; everything else is adder. Values are native JS values: no FFI, no marshalling.
 
 /// code collapsed
 // %collapsed
@@ -248,4 +248,4 @@ for r in gt_rows:
 /// md
 ---
 
-**Pure Python.** Every cell is adder (except the bootstrap loader). Widgets (`ui.slider`, `ui.canvas`, `ui.checkbox`), colormaps (`std.viridis`), module loading (`load`), and output (`display`) are all available as adder builtins. Python calls `kb2d()` directly — `samples` is a native JS Array, no conversion needed.
+**Pure adder.** Every cell is adder (except the bootstrap loader). Widgets (`ui.slider`, `ui.canvas`, `ui.checkbox`), colormaps (`std.viridis`), module loading (`load`), and output (`display`) are all available as adder builtins. Adder calls `kb2d()` directly — `samples` is a native JS Array, no conversion needed.

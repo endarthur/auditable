@@ -1,11 +1,11 @@
 /// auditable
-/// title: adder — Python cells
+/// title: adder — cells and tags
 /// module: @gcu/adder ext/adder/index.js
 
 /// md
-# @gcu/adder — Python cells
+# @gcu/adder
 
-Python as a first-class cell language — pure JS interpreter, no WASM. Python cells participate in Auditable's reactive DAG — define variables in Python, use them downstream in JS or other Python cells.
+A JS-targeting Python dialect as a first-class cell language — pure JS tree-walking interpreter, no WASM. Adder cells participate in Auditable's reactive DAG — define variables in adder, use them downstream in JS or other adder cells.
 
 /// code collapsed
 // %collapsed

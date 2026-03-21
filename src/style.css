@@ -1664,6 +1664,13 @@ html.hide-run-toggle #autorunBtnMobile { display: none; }
   white-space: nowrap;
   font-size: 10px;
 }
+.module-desc {
+  color: var(--fg-dim);
+  font-size: 10px;
+  padding: 0 0 4px;
+  line-height: 1.4;
+  word-wrap: break-word;
+}
 .module-remove {
   background: none;
   border: none;

@@ -6,7 +6,7 @@
 /// md
 # simulate, drill, estimate
 
-A complete resource estimation validation workflow in Python. Generate a "true" deposit by unconditional Gaussian simulation, sample it with synthetic drillholes, krige the samples, then compare the estimate to the truth. One JS cell bootstraps the extensions; everything else is adder.
+A complete resource estimation validation workflow in adder, a JS-targeting Python dialect. Generate a "true" deposit by unconditional Gaussian simulation, sample it with synthetic drillholes, krige the samples, then compare the estimate to the truth. One JS cell bootstraps the extensions; everything else is adder.
 
 /// code collapsed
 // %collapsed
