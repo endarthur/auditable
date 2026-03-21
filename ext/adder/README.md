@@ -157,6 +157,10 @@ returns a plain JS object with all non-underscore-prefixed names from the Python
 - **stdout is discarded** — `print()` inside an `mpy` template produces no visible output. `flushStdout()` is called before and after execution to drain the buffer, but the captured lines are not returned or displayed. Python cells capture and display stdout; `mpy` does not.
 - **no error location** — exceptions propagate to JS but without Python line numbers relative to the template.
 
+### WASM-from-WASM limitation
+
+MicroPython runs as WASM with Asyncify. Calling another WASM module (e.g. GSLIB's `kb2d`) from within Python hits "RuntimeError: unreachable" — the Asyncify stack overflows. Python cells cannot call WASM routines directly via `js.globalThis`. Use a thin JS bridge cell for WASM calls instead. See `example_adder_gslib` for the pattern.
+
 ## FFI: JS <-> Python
 
 ### JS values in Python
