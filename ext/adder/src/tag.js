@@ -1,45 +1,59 @@
-// mpy tagged template + self-registration
+// adder tagged template + mpy alias
+// Pure JS evaluation — no WASM bridge
 
-import { initInterpreter, flushStdout } from './init.js';
+import { adderParse } from './parse.js';
+import { adderEval, AdderScope } from './eval.js';
+import { adderBuiltins, pyStr } from './builtins.js';
 
-export async function mpy(strings, ...values) {
-  const mp = await initInterpreter();
-
-  flushStdout(); // drain stale output
-
-  // build code with _v0, _v1 placeholders, inject values via Python
-  mp.runPython('_adder_ns = {}');
+export async function adderTag(strings, ...values) {
+  // build code with _v0, _v1 placeholders
   let code = strings[0];
   for (let i = 0; i < values.length; i++) {
-    const key = '_v' + i;
-    mp.globals.set('_adder_inject_v', values[i]);
-    mp.runPython(`_adder_ns["${key}"] = _adder_inject_v`);
-    code += key + strings[i + 1];
+    code += '_v' + i + strings[i + 1];
   }
-  try { mp.globals.delete('_adder_inject_v'); } catch {}
 
-  // execute
-  mp.globals.set('_adder_code', code);
-  mp.runPython('_exec_cell(_adder_code, _adder_ns)');
+  // dedent: strip common leading whitespace
+  const lines = code.split('\n');
+  let start = 0;
+  if (lines[start].trim() === '') start++;
+  let minIndent = Infinity;
+  for (let i = start; i < lines.length; i++) {
+    if (lines[i].trim() === '') continue;
+    const indent = lines[i].match(/^ */)[0].length;
+    if (indent < minIndent) minIndent = indent;
+  }
+  if (minIndent > 0 && minIndent < Infinity) {
+    for (let i = start; i < lines.length; i++) {
+      if (lines[i].trim() !== '') lines[i] = lines[i].slice(minIndent);
+    }
+  }
+  // trim leading blank line
+  if (start > 0 && lines[0].trim() === '') lines.shift();
+  // trim trailing blank line
+  while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop();
+  code = lines.join('\n');
 
-  // extract results — get keys as JSON, filter out _-prefixed
-  mp.runPython('import json as _adder_json; _adder_keys = _adder_json.dumps([k for k in _adder_ns if not k.startswith("_")])');
-  const keysJson = mp.globals.get('_adder_keys');
-  const keys = keysJson ? JSON.parse(keysJson) : [];
+  // parse
+  const ast = adderParse(code);
 
+  // create scope with builtins + injected values
+  const scope = new AdderScope();
+  const builtins = adderBuiltins(() => {}); // discard print output in tag context
+  for (const [k, v] of Object.entries(builtins)) scope.set(k, v);
+  for (let i = 0; i < values.length; i++) scope.set('_v' + i, values[i]);
+
+  // evaluate
+  await adderEval(ast, scope);
+
+  // extract non-underscore-prefixed names
   const result = {};
-  for (const k of keys) {
-    mp.runPython(`_adder_extract = _adder_ns["${k}"]`);
-    result[k] = mp.globals.get('_adder_extract');
+  for (const [k, v] of scope.vars) {
+    if (!k.startsWith('_') && typeof v !== 'function' || (typeof v === 'function' && v._pyFunc)) {
+      if (!k.startsWith('_')) result[k] = v;
+    }
   }
-
-  // cleanup
-  try { mp.globals.delete('_adder_ns'); } catch {}
-  try { mp.globals.delete('_adder_code'); } catch {}
-  try { mp.globals.delete('_adder_keys'); } catch {}
-  try { mp.globals.delete('_adder_extract'); } catch {}
-
-  flushStdout(); // drain any print output from mpy execution
-
   return result;
 }
+
+// back-compat alias
+export const mpy = adderTag;

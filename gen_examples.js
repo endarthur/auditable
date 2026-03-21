@@ -85,7 +85,7 @@ const categories = {
     'example_shader.txt',
   ],
 
-  // adder — MicroPython: Python cells, mpy tag, cross-language DAG
+  // adder — Python interpreter: adder cells, adder/mpy tag, cross-language DAG
   adder: [
     'example_adder.txt',
     'example_adder_gslib.txt',

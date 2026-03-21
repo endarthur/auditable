@@ -1,18 +1,17 @@
 /// auditable
 /// title: adder + gslib — Python-driven kriging
 /// module: @gcu/adder ext/adder/index.js
-/// module: @gcu/adder/micropython.mjs ext/adder/micropython.mjs
-/// module-binary: @gcu/adder/micropython.wasm ext/adder/micropython.wasm
 /// module: @atra/gslib ext/atra/lib/gslib.js
 
 /// md
 # Python + GSLIB — cross-language geostatistics
 
-A resource estimation pipeline. **Python** generates drill holes, computes the experimental variogram, and builds the grade-tonnage curve. **GSLIB/WASM** runs kriging via a thin JS bridge. **JS** handles widgets and rendering. Python lists and dicts cross the FFI as native JS arrays and objects — no JSON serialization needed.
+A resource estimation pipeline. **Python** generates drill holes, computes the experimental variogram, runs kriging, and builds the grade-tonnage curve. **JS** handles widgets and rendering. Python values are native JS values — no FFI, no marshalling, no bridge cells.
 
 /// code collapsed
 // %collapsed
 await load("@gcu/adder")
+const { kb2d } = await load("@atra/gslib")
 
 /// md
 ## parameters
@@ -31,9 +30,9 @@ const gridN = ui.slider("grid", 60, {min: 20, max: 120, step: 5});
 /// md
 ## data + variogram
 
-Python generates synthetic drill holes and computes the omnidirectional experimental semivariogram. The `samples` list crosses to JS as a native Array via the FFI — no JSON serialization.
+Python generates synthetic drill holes and computes the omnidirectional experimental semivariogram. The `samples` list is a native JS Array \u2014 no conversion needed.
 
-/// python
+/// adder
 import math
 
 _s = seed
@@ -129,20 +128,18 @@ for (let i = 0; i < vario_h.length; i++) {
 /// md
 ## kriging
 
-JS bridge: calls GSLIB's `kb2d` WASM. Python's `samples` list arrives as a native JS Array (via `PyProxy.toJs()`), so GSLIB's wrapper works directly — no JSON conversion needed.
+Python calls GSLIB's `kb2d` directly \u2014 `samples` is already a native JS Array, so the WASM wrapper works without conversion. No bridge cell needed.
 
-/// code
-const { kb2d } = await load("@atra/gslib");
-const t0 = performance.now();
-const kResult = kb2d({
-  data: samples,
-  grid: { nx: gridN, ny: gridN, xsiz: 1/gridN, ysiz: 1/gridN },
-  variogram: { nugget: vNugget, structures: [{ type: modelIdx, contribution: vSill, range: vRange }] },
-  search: { radius: 2.0, ndmax: Math.min(nHoles, 24) },
-});
-const elapsed = (performance.now() - t0).toFixed(1);
-const est = kResult.est, estv = kResult.var;
-display(`kriged ${gridN}\u00d7${gridN} in ${elapsed} ms`);
+/// adder
+import js
+
+_t0 = js.performance.now()
+kResult = kb2d({"data": samples, "grid": {"nx": gridN, "ny": gridN, "xsiz": 1/gridN, "ysiz": 1/gridN}, "variogram": {"nugget": vNugget, "structures": [{"type": modelIdx, "contribution": vSill, "range": vRange}]}, "search": {"radius": 2.0, "ndmax": min(nHoles, 24)}})
+_elapsed = js.performance.now() - _t0
+
+est = kResult.est
+estv = kResult["var"]
+print(f"kriged {gridN}\u00d7{gridN} in {_elapsed:.1f} ms")
 
 /// md
 ## kriging map
@@ -183,10 +180,9 @@ display(`${showVar ? "variance" : modelIdx} \u00b7 ${nHoles} holes`);
 /// md
 ## grade-tonnage
 
-Python receives the kriged grid (JS Float64Array arrives as an indexable JsProxy) and computes the grade-tonnage curve.
+Python computes the grade-tonnage curve from the kriged grid. `est` is a JS Float64Array \u2014 directly indexable from adder.
 
-/// python
-# est is a JsProxy of Float64Array — indexable, iterable
+/// adder
 _valid = [float(est[i]) for i in range(gridN * gridN) if float(est[i]) > -900]
 _block_t = 2.7 / (gridN * gridN)
 
@@ -208,4 +204,4 @@ for r in gt_rows:
 /// md
 ---
 
-**data flow:** Python `list` defines cross to JS as native `Array` via `PyProxy.toJs()` — no JSON serialization. JS Float64Array from WASM arrives in Python as an indexable JsProxy. The only bridge cell is for the `kb2d` WASM call (MicroPython can't call other WASM modules directly due to an Asyncify/GC limitation in the vendored build).
+**data flow:** all computation is Python. The JS cells handle only widgets (`ui.slider`, `ui.canvas`) and rendering. Python calls `kb2d()` directly \u2014 no bridge cell, no conversion. `samples` (Python list) is a native JS Array. `est` (WASM Float64Array) is directly indexable from Python.

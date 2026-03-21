@@ -703,7 +703,7 @@ export async function execCell(cell) {
       }
     }
 
-    // @gcu/adder — MicroPython extension (dev-mode fallback)
+    // @gcu/adder — Python interpreter (dev-mode fallback)
     if (url === '@gcu/adder') {
       if (!window._importCache[url] && !window._installedModules[url]) {
         const mod = await import('./ext/adder/index.js');
@@ -843,36 +843,14 @@ export async function execCell(cell) {
       display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB \u2192 ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
       return mod;
     }
-    // @gcu/adder — MicroPython extension
+    // @gcu/adder — Python extension
     if (url === '@gcu/adder') {
       const baseUrl = __AUDITABLE_PAGES_URL__ + '/ext/adder/';
-      // install adder extension JS
       const resp = await fetch(baseUrl + 'index.js');
       if (!resp.ok) throw new Error(`Failed to fetch adder: ${resp.status}`);
       const source = await resp.text();
       const compressedSrc = await compressText(source);
       window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
-      // also chain-install micropython.mjs
-      const mjsResp = await fetch(baseUrl + 'micropython.mjs');
-      if (mjsResp.ok) {
-        const mjsSrc = await mjsResp.text();
-        const mjsCompressed = await compressText(mjsSrc);
-        window._installedModules['@gcu/adder/micropython.mjs'] = { source: mjsCompressed, compressed: true, cellId: cell.id };
-      }
-      // chain-install micropython.wasm as binary
-      const wasmResp = await fetch(baseUrl + 'micropython.wasm');
-      if (wasmResp.ok) {
-        const buf = await wasmResp.arrayBuffer();
-        const raw = new Uint8Array(buf);
-        const cs = new CompressionStream('gzip');
-        const stream = new Blob([raw]).stream().pipeThrough(cs);
-        const compressed = new Uint8Array(await new Response(stream).arrayBuffer());
-        let bin = '';
-        for (let i = 0; i < compressed.length; i++) bin += String.fromCharCode(compressed[i]);
-        window._installedModules['@gcu/adder/micropython.wasm'] = {
-          source: btoa(bin), cellId: cell.id, binary: true, compressed: true, type: 'application/wasm'
-        };
-      }
       syncModules();
       const blob = new Blob([source], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);

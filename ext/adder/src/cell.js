@@ -1,6 +1,9 @@
 // Python cell type handler: parseNames, findUses, execute
+// adder v2 — pure JS interpreter, no WASM
 
-import { initInterpreter, flushStdout, flushStderr } from './init.js';
+import { adderParse } from './parse.js';
+import { adderEval, AdderScope, AdderError } from './eval.js';
+import { adderBuiltins, pyStr, pyRepr } from './builtins.js';
 
 // ── parseNames: extract top-level defines from Python code ──
 
@@ -43,12 +46,12 @@ export function pythonParseNames(code) {
     m = trimmed.match(/^import\s+(\w+)(?:\s+as\s+(\w+))?/);
     if (m) { defines.add(m[2] || m[1]); continue; }
 
-    // tuple unpacking: x, y = ... (must not start with keyword)
-    m = trimmed.match(/^([a-zA-Z_]\w*(?:\s*,\s*[a-zA-Z_]\w*)+)\s*=/);
-    if (m && !_isPyKeyword(m[1].split(',')[0].trim())) {
+    // tuple unpacking: x, y = ... or a, *b, c = ... (must not start with keyword)
+    m = trimmed.match(/^(\*?[a-zA-Z_]\w*(?:\s*,\s*\*?[a-zA-Z_]\w*)+)\s*=/);
+    if (m && !_isPyKeyword(m[1].split(',')[0].trim().replace(/^\*/, ''))) {
       const names = m[1].split(',');
       for (const n of names) {
-        const name = n.trim();
+        const name = n.trim().replace(/^\*/, '');
         if (name && /^[a-zA-Z_]\w*$/.test(name)) defines.add(name);
       }
       continue;
@@ -141,115 +144,54 @@ function _stripPython(code) {
   return out;
 }
 
-// ── PyProxy → native JS conversion ──
-// PyProxy (MicroPython's FFI wrapper) has .toJs() that recursively converts
-// list → Array, dict → Object, primitives pass through. We detect PyProxy by
-// the _ref property and grab the toJs static method from its constructor.
-let _toJs = null;
-
-function pyToJs(val) {
-  if (val === null || val === undefined) return val;
-  if (typeof val !== 'object' && typeof val !== 'function') return val;
-  // detect PyProxy: has _ref, is not a plain object/array
-  if (val._ref !== undefined && val.constructor && val.constructor.toJs) {
-    if (!_toJs) _toJs = val.constructor.toJs;
-    return _toJs(val);
-  }
-  return val;
-}
-
 // ── execute: run Python cell code ──
 
 export async function pythonExecute(code, scopeIn, cell) {
-  const mp = await initInterpreter();
+  // capture print output
+  const outputParts = [];
+  const printFn = (text) => outputParts.push(text);
 
-  // drain any stale output
-  flushStdout();
-  flushStderr();
+  // parse
+  const ast = adderParse(code);
 
+  // create scope with builtins + upstream variables
+  const scope = new AdderScope();
+  const builtins = adderBuiltins(printFn);
+  for (const [k, v] of Object.entries(builtins)) scope.set(k, v);
+  for (const [k, v] of Object.entries(scopeIn)) scope.set(k, v);
+
+  // evaluate
+  let lastExpr;
   try {
-    // build namespace from upstream scope in Python
-    mp.runPython('_adder_ns = {}');
-    for (const [k, v] of Object.entries(scopeIn)) {
-      mp.globals.set('_adder_inject_v', v);
-      mp.runPython(`_adder_ns["${k}"] = _adder_inject_v`);
-    }
-    try { mp.globals.delete('_adder_inject_v'); } catch {}
-
-    // execute cell code
-    mp.globals.set('_adder_code', code);
-    const hasAwait = /\bawait\b/.test(code);
-    let lastExpr;
-
-    if (hasAwait) {
-      // async path: wrap in async def with global declarations
-      // so assignments flow back to ns without polluting __main__
-      const defines = [...pythonParseNames(code)];
-      mp.globals.set('_adder_defines', defines);
-      // inject sys.modules imports into ns so they resolve inside the wrapper
-      mp.runPython('import sys as _adder_sys');
-      mp.runPython('for _m in _adder_sys.modules: _adder_ns.setdefault(_m, _adder_sys.modules[_m])');
-      // build and exec the async wrapper
-      mp.runPython('_adder_wrapper = _build_async_wrapper(_adder_code, _adder_defines)');
-      mp.runPython('exec(compile(_adder_wrapper, "<cell>", "exec"), _adder_ns)');
-      // await the wrapper function
-      await mp.runPythonAsync('await _adder_ns["_adder_cell"]()');
-      // extract last expression if present
-      mp.runPython('_adder_result = _adder_ns.get("_adder_last_expr", None)');
-      lastExpr = mp.globals.get('_adder_result');
-      try { mp.globals.delete('_adder_defines'); } catch {}
-    } else {
-      // sync path: use _exec_cell with isolated namespace
-      await mp.runPythonAsync('_adder_result = _exec_cell(_adder_code, _adder_ns)');
-      lastExpr = mp.globals.get('_adder_result');
-    }
-
-    // collect stdout/stderr captured during execution
-    const stdout = flushStdout();
-    const stderr = flushStderr();
-
-    // extract defines from namespace — convert PyProxy to native JS
-    // (list → Array, dict → Object) so downstream JS/WASM gets native types.
-    // Functions stay as PyProxy (callable from JS via FFI).
-    const defines = {};
-    const cellDefines = pythonParseNames(code);
-    for (const name of cellDefines) {
-      try {
-        mp.runPython(`_adder_extract = _adder_ns.get("${name}", None)`);
-        const val = mp.globals.get('_adder_extract');
-        if (val !== undefined && val !== null) defines[name] = pyToJs(val);
-      } catch {
-        // name not in namespace (e.g. import failed)
-      }
-    }
-
-    // build output: stdout lines + last expression
-    const parts = [];
-    if (stdout.length) parts.push(stdout.join('\n'));
-    if (stderr.length) parts.push(stderr.join('\n'));
-    if (lastExpr !== undefined && lastExpr !== null) {
-      const jsExpr = pyToJs(lastExpr);
-      parts.push(typeof jsExpr === 'object' ? JSON.stringify(jsExpr, null, 2) : String(jsExpr));
-    }
-    const output = parts.length ? parts.join('\n') : undefined;
-
-    // cleanup
-    try { mp.globals.delete('_adder_ns'); } catch {}
-    try { mp.globals.delete('_adder_code'); } catch {}
-    try { mp.globals.delete('_adder_result'); } catch {}
-    try { mp.globals.delete('_adder_extract'); } catch {}
-
-    return { defines, output };
-
+    lastExpr = await adderEval(ast, scope);
   } catch (e) {
-    // drain any output from the failed execution
-    flushStdout();
-    flushStderr();
-    // clean up globals
-    try { mp.globals.delete('_adder_ns'); } catch {}
-    try { mp.globals.delete('_adder_code'); } catch {}
-    try { mp.globals.delete('_adder_result'); } catch {}
-    try { mp.globals.delete('_adder_extract'); } catch {}
+    if (e instanceof AdderError) throw e;
     throw e;
   }
+
+  // extract defines
+  const defines = {};
+  const cellDefines = pythonParseNames(code);
+  for (const name of cellDefines) {
+    if (scope.vars.has(name)) {
+      defines[name] = scope.vars.get(name);
+    }
+  }
+
+  // build output
+  const parts = [];
+  const printOutput = outputParts.join('');
+  if (printOutput) parts.push(printOutput.endsWith('\n') ? printOutput.slice(0, -1) : printOutput);
+  if (lastExpr !== undefined && lastExpr !== null) {
+    parts.push(pyRepr(lastExpr));
+  }
+  const output = parts.length ? parts.join('\n') : undefined;
+
+  return { defines, output };
+}
+
+function _jsonReplacer(key, value) {
+  if (value instanceof Map) return Object.fromEntries(value);
+  if (value instanceof Set) return [...value];
+  return value;
 }

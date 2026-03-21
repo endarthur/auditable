@@ -47,8 +47,8 @@ for (const relPath of importPaths) {
 }
 
 const header = '// \u26a0 GENERATED FILE \u2014 DO NOT EDIT. Source: ext/adder/src/  Build: node ext/adder/build.js\n'
-  + '// @gcu/adder \u2014 MicroPython extension for Auditable\n'
-  + '// Python cells, mpy tagged template, AdderFinder import hook.\n';
+  + '// @gcu/adder \u2014 Pure JS Python interpreter for Auditable\n'
+  + '// Python cells, adder/mpy tagged template, tree-walking evaluator.\n';
 
 const output = header + '\n' + chunks.join('\n\n') + '\n\nexport { adder };\n';
 

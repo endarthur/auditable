@@ -1,0 +1,1084 @@
+// adder v2 — tree-walking evaluator
+// Evaluates AST nodes produced by the parser. All values are native JS values.
+
+import { adderParse, _adderParseExpr } from './parse.js';
+import {
+  AdderError, AdderRange, adderBuiltins, adderModules, adderGetAttr,
+  pyBool, pyTypeName, pyStr, pyRepr, pyIter, pyCollect, pyFormatValue,
+} from './builtins.js';
+
+// ── scope ──
+
+export class AdderScope {
+  constructor(parent = null) {
+    this.vars = new Map();
+    this.parent = parent;
+    this.globals = new Set();
+    this.nonlocals = new Set();
+  }
+  get(name) {
+    if (this.globals.has(name)) return this._getGlobal(name);
+    if (this.nonlocals.has(name)) return this._getEnclosing(name);
+    if (this.vars.has(name)) return this.vars.get(name);
+    if (this.parent) return this.parent.get(name);
+    throw new AdderError('NameError', `name '${name}' is not defined`);
+  }
+  set(name, value) {
+    if (this.globals.has(name)) { this._setGlobal(name, value); return; }
+    if (this.nonlocals.has(name)) { this._setEnclosing(name, value); return; }
+    this.vars.set(name, value);
+  }
+  has(name) {
+    if (this.vars.has(name)) return true;
+    if (this.parent) return this.parent.has(name);
+    return false;
+  }
+  delete(name) { this.vars.delete(name); }
+  _getGlobal(name) {
+    let s = this; while (s.parent) s = s.parent;
+    if (s.vars.has(name)) return s.vars.get(name);
+    throw new AdderError('NameError', `name '${name}' is not defined`);
+  }
+  _setGlobal(name, value) { let s = this; while (s.parent) s = s.parent; s.vars.set(name, value); }
+  _getEnclosing(name) {
+    let s = this.parent;
+    while (s) { if (s.vars.has(name)) return s.vars.get(name); s = s.parent; }
+    throw new AdderError('NameError', `name '${name}' is not defined`);
+  }
+  _setEnclosing(name, value) {
+    let s = this.parent;
+    while (s) { if (s.vars.has(name)) { s.vars.set(name, value); return; } s = s.parent; }
+    throw new AdderError('NameError', `name '${name}' is not defined`);
+  }
+}
+
+// ── control flow signals ──
+
+class _BreakSignal { }
+class _ContinueSignal { }
+class _ReturnSignal { constructor(value) { this.value = value; } }
+
+// ── evaluator ──
+
+export async function adderEval(node, scope) {
+  if (!node) return null;
+  switch (node.type) {
+    case 'Module': return _evalModule(node, scope);
+    case 'Expr': return adderEval(node.value, scope);
+    case 'Constant': return node.value;
+    case 'Name': return scope.get(node.id);
+    case 'Pass': return null;
+    case 'Break': throw new _BreakSignal();
+    case 'Continue': throw new _ContinueSignal();
+    case 'Return': throw new _ReturnSignal(node.value ? await adderEval(node.value, scope) : null);
+
+    // ── assignments ──
+    case 'Assign': {
+      const value = await adderEval(node.value, scope);
+      for (const target of node.targets) await _assignTarget(target, value, scope);
+      return null;
+    }
+    case 'AugAssign': {
+      const current = await _evalTarget(node.target, scope);
+      const value = await adderEval(node.value, scope);
+      const result = _binOp(node.op, current, value, node.line);
+      await _assignTarget(node.target, result, scope);
+      return null;
+    }
+    case 'AnnAssign': {
+      if (node.value) {
+        const value = await adderEval(node.value, scope);
+        await _assignTarget(node.target, value, scope);
+      }
+      return null;
+    }
+
+    // ── control flow ──
+    case 'If': {
+      const test = await adderEval(node.test, scope);
+      if (pyBool(test)) { for (const s of node.body) await adderEval(s, scope); }
+      else { for (const s of node.orelse) await adderEval(s, scope); }
+      return null;
+    }
+    case 'For': return _evalFor(node, scope);
+    case 'While': return _evalWhile(node, scope);
+    case 'With': return _evalWith(node, scope);
+
+    // ── functions / classes ──
+    case 'FunctionDef': case 'AsyncFunctionDef': {
+      let fn = _makeFunction(node, scope);
+      for (let i = node.decorators.length - 1; i >= 0; i--) {
+        const dec = await adderEval(node.decorators[i], scope);
+        fn = await _callValue(dec, [fn], [], node.line);
+      }
+      fn._pyName = node.name;
+      scope.set(node.name, fn);
+      return null;
+    }
+    case 'ClassDef': return _evalClass(node, scope);
+    case 'Lambda': return _makeLambda(node, scope);
+
+    // ── exceptions ──
+    case 'Try': return _evalTry(node, scope);
+    case 'Raise': {
+      const exc = node.exc ? await adderEval(node.exc, scope) : null;
+      if (exc instanceof AdderError) throw exc;
+      if (exc instanceof Error) throw exc;
+      if (typeof exc === 'function') throw await _callValue(exc, [], [], node.line);
+      throw new AdderError('RuntimeError', exc ? pyStr(exc) : 're-raise outside except', node.line);
+    }
+    case 'Assert': {
+      const test = await adderEval(node.test, scope);
+      if (!pyBool(test)) {
+        const msg = node.msg ? await adderEval(node.msg, scope) : 'assertion failed';
+        throw new AdderError('AssertionError', pyStr(msg), node.line);
+      }
+      return null;
+    }
+
+    // ── scope declarations ──
+    case 'Global': { for (const n of node.names) scope.globals.add(n); return null; }
+    case 'Nonlocal': { for (const n of node.names) scope.nonlocals.add(n); return null; }
+    case 'Delete': { for (const t of node.targets) await _deleteTarget(t, scope); return null; }
+
+    // ── imports ──
+    case 'Import': return _evalImport(node, scope);
+    case 'ImportFrom': return _evalImportFrom(node, scope);
+
+    // ── expressions ──
+    case 'BinOp': {
+      const left = await adderEval(node.left, scope);
+      const right = await adderEval(node.right, scope);
+      return _binOp(node.op, left, right, node.line);
+    }
+    case 'UnaryOp': {
+      const operand = await adderEval(node.operand, scope);
+      if (node.op === '-') return typeof operand === 'number' ? -operand : (typeof operand?.__neg__ === 'function' ? operand.__neg__() : -operand);
+      if (node.op === '+') return +operand;
+      if (node.op === '~') return ~operand;
+      if (node.op === 'not') return !pyBool(operand);
+      throw new AdderError('TypeError', `unsupported unary op: ${node.op}`, node.line);
+    }
+    case 'BoolOp': {
+      if (node.op === 'or') {
+        let result;
+        for (const v of node.values) { result = await adderEval(v, scope); if (pyBool(result)) return result; }
+        return result;
+      }
+      let result;
+      for (const v of node.values) { result = await adderEval(v, scope); if (!pyBool(result)) return result; }
+      return result;
+    }
+    case 'Compare': {
+      let left = await adderEval(node.left, scope);
+      for (let i = 0; i < node.ops.length; i++) {
+        const right = await adderEval(node.comparators[i], scope);
+        if (!_compareOp(node.ops[i], left, right)) return false;
+        left = right;
+      }
+      return true;
+    }
+    case 'IfExp': {
+      const test = await adderEval(node.test, scope);
+      return pyBool(test) ? adderEval(node.body, scope) : adderEval(node.orelse, scope);
+    }
+
+    // ── calls ──
+    case 'Call': return _evalCall(node, scope);
+
+    // ── attribute / subscript ──
+    case 'Attribute': {
+      const obj = await adderEval(node.value, scope);
+      return adderGetAttr(obj, node.attr);
+    }
+    case 'Subscript': return _evalSubscript(node, scope);
+
+    // ── collections ──
+    case 'List': { const elts = []; for (const e of node.elts) { if (e.type === 'Starred') { for (const v of pyIter(await adderEval(e.value, scope))) elts.push(v); } else elts.push(await adderEval(e, scope)); } return elts; }
+    case 'Tuple': { const elts = []; for (const e of node.elts) { if (e.type === 'Starred') { for (const v of pyIter(await adderEval(e.value, scope))) elts.push(v); } else elts.push(await adderEval(e, scope)); } return elts; }
+    case 'Dict': {
+      const allStringKeys = node.keys.every(k => k && (k.type === 'Constant' && typeof k.value === 'string') || k === null);
+      if (allStringKeys) {
+        const obj = {};
+        for (let i = 0; i < node.keys.length; i++) {
+          if (node.keys[i] === null) { // **unpack
+            const src = await adderEval(node.values[i], scope);
+            if (src instanceof Map) { for (const [k, v] of src) obj[k] = v; }
+            else { Object.assign(obj, src); }
+          } else {
+            obj[await adderEval(node.keys[i], scope)] = await adderEval(node.values[i], scope);
+          }
+        }
+        return obj;
+      }
+      const map = new Map();
+      for (let i = 0; i < node.keys.length; i++) {
+        if (node.keys[i] === null) {
+          const src = await adderEval(node.values[i], scope);
+          if (src instanceof Map) { for (const [k, v] of src) map.set(k, v); }
+          else { for (const k of Object.keys(src)) map.set(k, src[k]); }
+        } else {
+          map.set(await adderEval(node.keys[i], scope), await adderEval(node.values[i], scope));
+        }
+      }
+      return map;
+    }
+    case 'Set': {
+      const s = new Set();
+      for (const e of node.elts) s.add(await adderEval(e, scope));
+      return s;
+    }
+
+    // ── comprehensions ──
+    case 'ListComp': return _evalComp(node, scope, 'list');
+    case 'SetComp': return _evalComp(node, scope, 'set');
+    case 'DictComp': return _evalComp(node, scope, 'dict');
+    case 'GeneratorExp': return _evalGenExpr(node, scope);
+
+    // ── f-strings ──
+    case 'JoinedStr': {
+      let result = '';
+      for (const v of node.values) result += await adderEval(v, scope);
+      return result;
+    }
+    case 'FormattedValue': {
+      let val = await adderEval(node.value, scope);
+      if (node.conversion === 'r') val = pyRepr(val);
+      else if (node.conversion === 's') val = pyStr(val);
+      return node.formatSpec ? pyFormatValue(val, node.formatSpec) : pyStr(val);
+    }
+
+    // ── await ──
+    case 'Await': return await (await adderEval(node.value, scope));
+    case 'Yield': throw new AdderError('SyntaxError', 'yield outside function', node.line);
+    case 'YieldFrom': throw new AdderError('SyntaxError', 'yield outside function', node.line);
+    case 'NamedExpr': { const value = await adderEval(node.value, scope); scope.set(node.target.id, value); return value; }
+
+    // ── starred (in expression context) ──
+    case 'Starred': return await adderEval(node.value, scope);
+
+    // ── slice (standalone) ──
+    case 'Slice': return { _slice: true, lower: node.lower ? await adderEval(node.lower, scope) : null, upper: node.upper ? await adderEval(node.upper, scope) : null, step: node.step ? await adderEval(node.step, scope) : null };
+
+    default:
+      throw new AdderError('RuntimeError', `Unknown AST node type: ${node.type}`, node.line);
+  }
+}
+
+// ── module execution ──
+
+async function _evalModule(node, scope) {
+  let lastExpr = undefined;
+  for (let i = 0; i < node.body.length; i++) {
+    const stmt = node.body[i];
+    if (i === node.body.length - 1 && stmt.type === 'Expr') {
+      lastExpr = await adderEval(stmt.value, scope);
+    } else {
+      await adderEval(stmt, scope);
+    }
+  }
+  return lastExpr;
+}
+
+// ── assignment / target helpers ──
+
+async function _assignTarget(target, value, scope) {
+  switch (target.type) {
+    case 'Name': scope.set(target.id, value); break;
+    case 'Attribute': {
+      const obj = await adderEval(target.value, scope);
+      obj[target.attr] = value;
+      break;
+    }
+    case 'Subscript': {
+      const obj = await adderEval(target.value, scope);
+      const key = target.slice.type === 'Slice' ? await adderEval(target.slice, scope) : await adderEval(target.slice, scope);
+      if (obj instanceof Map) obj.set(key, value);
+      else obj[key] = value;
+      break;
+    }
+    case 'Tuple': case 'List': {
+      const items = [...pyIter(value)];
+      const starIdx = target.elts.findIndex(e => e.type === 'Starred');
+      if (starIdx >= 0) {
+        // starred unpacking
+        const before = target.elts.slice(0, starIdx);
+        const after = target.elts.slice(starIdx + 1);
+        for (let i = 0; i < before.length; i++) await _assignTarget(before[i], items[i], scope);
+        const starItems = items.slice(before.length, items.length - after.length);
+        await _assignTarget(target.elts[starIdx].value, starItems, scope);
+        for (let i = 0; i < after.length; i++) await _assignTarget(after[i], items[items.length - after.length + i], scope);
+      } else {
+        for (let i = 0; i < target.elts.length; i++) await _assignTarget(target.elts[i], items[i], scope);
+      }
+      break;
+    }
+    case 'Starred': await _assignTarget(target.value, value, scope); break;
+    default: throw new AdderError('RuntimeError', `Cannot assign to ${target.type}`);
+  }
+}
+
+async function _evalTarget(target, scope) {
+  if (target.type === 'Name') return scope.get(target.id);
+  if (target.type === 'Attribute') { const obj = await adderEval(target.value, scope); return obj[target.attr]; }
+  if (target.type === 'Subscript') { return _evalSubscript(target, scope); }
+  throw new AdderError('RuntimeError', `Cannot read target ${target.type}`);
+}
+
+async function _deleteTarget(target, scope) {
+  if (target.type === 'Name') { scope.delete(target.id); return; }
+  if (target.type === 'Attribute') { const obj = await adderEval(target.value, scope); delete obj[target.attr]; return; }
+  if (target.type === 'Subscript') {
+    const obj = await adderEval(target.value, scope);
+    const key = await adderEval(target.slice, scope);
+    if (obj instanceof Map) obj.delete(key);
+    else if (Array.isArray(obj)) obj.splice(key, 1);
+    else delete obj[key];
+    return;
+  }
+}
+
+// ── binary operations ──
+
+function _binOp(op, left, right, line) {
+  // check dunder methods
+  if (left !== null && typeof left === 'object') {
+    const dunder = _dunders[op];
+    if (dunder && typeof left[dunder] === 'function') return left[dunder](right);
+  }
+  switch (op) {
+    case '+':
+      if (typeof left === 'string' && typeof right === 'string') return left + right;
+      if (Array.isArray(left) && Array.isArray(right)) return [...left, ...right];
+      return left + right;
+    case '-': return left - right;
+    case '*':
+      if (typeof left === 'string' && typeof right === 'number') return left.repeat(right);
+      if (typeof left === 'number' && typeof right === 'string') return right.repeat(left);
+      if (Array.isArray(left) && typeof right === 'number') { const r = []; for (let i = 0; i < right; i++) r.push(...left); return r; }
+      return left * right;
+    case '/': if (right === 0) throw new AdderError('ZeroDivisionError', 'division by zero', line); return left / right;
+    case '//': if (right === 0) throw new AdderError('ZeroDivisionError', 'integer division or modulo by zero', line); return Math.floor(left / right);
+    case '%': if (right === 0) throw new AdderError('ZeroDivisionError', 'integer division or modulo by zero', line);
+      if (typeof left === 'string') return _strPercentFormat(left, Array.isArray(right) ? right : [right]);
+      return ((left % right) + right) % right;
+    case '**': return Math.pow(left, right);
+    case '&': return left & right;
+    case '|': return left | right;
+    case '^': return left ^ right;
+    case '<<': return left << right;
+    case '>>': return left >> right;
+    case '@': throw new AdderError('TypeError', 'matmul is not supported', line);
+    default: throw new AdderError('TypeError', `unsupported operator: ${op}`, line);
+  }
+}
+
+function _strPercentFormat(fmt, args) {
+  // Python % formatting: "%s %d" % (arg1, arg2)
+  let i = 0;
+  return fmt.replace(/%([sd%fegx])/g, (_, code) => {
+    if (code === '%') return '%';
+    return pyStr(args[i++]);
+  });
+}
+
+const _dunders = {
+  '+': '__add__', '-': '__sub__', '*': '__mul__', '/': '__truediv__',
+  '//': '__floordiv__', '%': '__mod__', '**': '__pow__',
+  '&': '__and__', '|': '__or__', '^': '__xor__',
+  '<<': '__lshift__', '>>': '__rshift__', '@': '__matmul__',
+};
+
+// ── comparison ──
+
+function _compareOp(op, left, right) {
+  switch (op) {
+    case '==': return _pyEq(left, right);
+    case '!=': return !_pyEq(left, right);
+    case '<': return typeof left?.__lt__ === 'function' ? left.__lt__(right) : left < right;
+    case '<=': return typeof left?.__le__ === 'function' ? left.__le__(right) : left <= right;
+    case '>': return typeof left?.__gt__ === 'function' ? left.__gt__(right) : left > right;
+    case '>=': return typeof left?.__ge__ === 'function' ? left.__ge__(right) : left >= right;
+    case 'in': return _pyIn(right, left);
+    case 'not in': return !_pyIn(right, left);
+    case 'is': return left === right;
+    case 'is not': return left !== right;
+    default: throw new AdderError('TypeError', `unsupported comparison: ${op}`);
+  }
+}
+
+function _pyEq(a, b) {
+  if (a === b) return true;
+  if (typeof a?.__eq__ === 'function') return a.__eq__(b);
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (!_pyEq(a[i], b[i])) return false;
+    return true;
+  }
+  return false;
+}
+
+function _pyIn(container, value) {
+  if (typeof container === 'string') return container.includes(String(value));
+  if (Array.isArray(container)) return container.some(v => _pyEq(v, value));
+  if (container instanceof Map) return container.has(value);
+  if (container instanceof Set) return container.has(value);
+  if (container instanceof AdderRange) return container.includes(value);
+  if (typeof container === 'object' && container !== null) {
+    if (typeof container.__contains__ === 'function') return container.__contains__(value);
+    return value in container;
+  }
+  throw new AdderError('TypeError', `argument of type '${pyTypeName(container)}' is not iterable`);
+}
+
+// ── subscript ──
+
+async function _evalSubscript(node, scope) {
+  const obj = await adderEval(node.value, scope);
+  if (node.slice.type === 'Slice') {
+    const lower = node.slice.lower ? await adderEval(node.slice.lower, scope) : null;
+    const upper = node.slice.upper ? await adderEval(node.slice.upper, scope) : null;
+    const step = node.slice.step ? await adderEval(node.slice.step, scope) : null;
+    return _applySlice(obj, lower, upper, step);
+  }
+  const key = await adderEval(node.slice, scope);
+  if (obj instanceof Map) {
+    if (!obj.has(key)) throw new AdderError('KeyError', pyRepr(key), node.line);
+    return obj.get(key);
+  }
+  if (typeof obj === 'string' || Array.isArray(obj) || obj instanceof Uint8Array) {
+    const idx = key < 0 ? obj.length + key : key;
+    if (idx < 0 || idx >= obj.length) throw new AdderError('IndexError', `${pyTypeName(obj)} index out of range`, node.line);
+    return obj[idx];
+  }
+  if (typeof obj === 'object' && obj !== null) {
+    if (typeof obj.__getitem__ === 'function') return obj.__getitem__(key);
+    if (key in obj) return obj[key];
+    throw new AdderError('KeyError', pyRepr(key), node.line);
+  }
+  throw new AdderError('TypeError', `'${pyTypeName(obj)}' object is not subscriptable`, node.line);
+}
+
+function _applySlice(obj, lower, upper, step) {
+  if (typeof obj === 'string' || Array.isArray(obj) || obj instanceof Uint8Array) {
+    const len = obj.length;
+    step = step ?? 1;
+    if (step === 0) throw new AdderError('ValueError', 'slice step cannot be zero');
+    if (step === 1) {
+      const l = lower == null ? 0 : lower < 0 ? Math.max(0, len + lower) : Math.min(lower, len);
+      const u = upper == null ? len : upper < 0 ? Math.max(0, len + upper) : Math.min(upper, len);
+      return typeof obj === 'string' ? obj.slice(l, u) : obj.slice(l, u);
+    }
+    // general step
+    let start, stop;
+    if (step > 0) {
+      start = lower == null ? 0 : lower < 0 ? Math.max(0, len + lower) : Math.min(lower, len);
+      stop = upper == null ? len : upper < 0 ? Math.max(0, len + upper) : Math.min(upper, len);
+    } else {
+      start = lower == null ? len - 1 : lower < 0 ? Math.max(-1, len + lower) : Math.min(lower, len - 1);
+      stop = upper == null ? -1 : upper < 0 ? Math.max(-1, len + upper) : upper;
+    }
+    const result = [];
+    if (step > 0) { for (let i = start; i < stop; i += step) result.push(obj[i]); }
+    else { for (let i = start; i > stop; i += step) result.push(obj[i]); }
+    return typeof obj === 'string' ? result.join('') : result;
+  }
+  throw new AdderError('TypeError', `'${pyTypeName(obj)}' object does not support slicing`);
+}
+
+// ── function call ──
+
+async function _evalCall(node, scope) {
+  const func = await adderEval(node.func, scope);
+  const args = [];
+  for (const a of node.args) {
+    if (a.type === 'Starred') { for (const v of pyIter(await adderEval(a.value, scope))) args.push(v); }
+    else args.push(await adderEval(a, scope));
+  }
+  const kwArgs = [];
+  for (const kw of node.keywords) {
+    if (kw.name === null) {
+      // **kwargs unpacking
+      const obj = await adderEval(kw.value, scope);
+      if (obj instanceof Map) { for (const [k, v] of obj) kwArgs.push([k, v]); }
+      else { for (const k of Object.keys(obj)) kwArgs.push([k, obj[k]]); }
+    } else {
+      kwArgs.push([kw.name, await adderEval(kw.value, scope)]);
+    }
+  }
+  return _callValue(func, args, kwArgs, node.line);
+}
+
+async function _callValue(func, args, kwArgs, line) {
+  if (typeof func !== 'function') {
+    // check for __call__ dunder
+    if (typeof func === 'object' && func !== null && typeof func.__call__ === 'function') {
+      return _callValue(func.__call__.bind(func), args, kwArgs, line);
+    }
+    throw new AdderError('TypeError', `'${pyTypeName(func)}' object is not callable`, line);
+  }
+  // pack keyword args
+  if (kwArgs.length > 0) {
+    if (func._pyFunc) {
+      // adder function — pass kwargs through the calling convention
+      return func(...args, ...kwArgs.map(([_, v]) => v), { _kw: true, ...Object.fromEntries(kwArgs) });
+    }
+    // builtins and native JS — try to inject kwargs
+    // for print, max, min, sorted — they check for _kw marker
+    const kw = { _kw: true };
+    for (const [k, v] of kwArgs) kw[k] = v;
+    return func(...args, kw);
+  }
+  try {
+    return await func(...args);
+  } catch (e) {
+    if (e instanceof AdderError || e instanceof _BreakSignal || e instanceof _ContinueSignal || e instanceof _ReturnSignal) throw e;
+    throw new AdderError('RuntimeError', e.message || String(e), line);
+  }
+}
+
+// ── function creation ──
+
+function _hasYield(node) {
+  if (!node || typeof node !== 'object') return false;
+  if (node.type === 'Yield' || node.type === 'YieldFrom') return true;
+  // don't descend into nested function/class defs
+  if (node.type === 'FunctionDef' || node.type === 'AsyncFunctionDef' || node.type === 'ClassDef' || node.type === 'Lambda') return false;
+  for (const key of Object.keys(node)) {
+    const val = node[key];
+    if (Array.isArray(val)) { for (const item of val) { if (_hasYield(item)) return true; } }
+    else if (val && typeof val === 'object' && val.type) { if (_hasYield(val)) return true; }
+  }
+  return false;
+}
+
+function _makeFunction(node, scope) {
+  const isAsync = node.type === 'AsyncFunctionDef';
+  const isGenerator = node.body.some(s => _hasYield(s));
+
+  if (isGenerator) return _makeGeneratorFunction(node, scope);
+
+  const fn = async function (...callArgs) {
+    const localScope = new AdderScope(scope);
+    // bind parameters
+    await _bindParams(node, callArgs, localScope);
+    // execute body
+    try {
+      for (let i = 0; i < node.body.length; i++) {
+        const stmt = node.body[i];
+        // docstring — skip first string expression
+        if (i === 0 && stmt.type === 'Expr' && stmt.value.type === 'Constant' && typeof stmt.value.value === 'string') {
+          fn.__doc__ = stmt.value.value;
+          continue;
+        }
+        await adderEval(stmt, localScope);
+      }
+      return null;
+    } catch (e) {
+      if (e instanceof _ReturnSignal) return e.value;
+      throw e;
+    }
+  };
+  fn._pyFunc = true;
+  fn._pyName = node.name;
+  return fn;
+}
+
+function _makeGeneratorFunction(node, scope) {
+  // Generator functions use a _YieldSignal to communicate yield values
+  // back to the async-generator wrapper.
+  const fn = function (...callArgs) {
+    // Return an object that implements both sync and async iteration.
+    // We use an async generator internally, exposed via Symbol.asyncIterator.
+    // For sync consumers (for..of), we also provide Symbol.iterator
+    // that collects eagerly — but the primary path is for-await.
+    const genObj = {
+      [Symbol.asyncIterator]() {
+        return _runGenerator(node, scope, callArgs);
+      },
+      // sync iterator: collect all values eagerly (used by list(), sorted(), etc.)
+      [Symbol.iterator]() {
+        throw new AdderError('TypeError', 'Use "for await" or list() with generators');
+      },
+    };
+    return genObj;
+  };
+  fn._pyFunc = true;
+  fn._pyName = node.name;
+  fn._isGenerator = true;
+  return fn;
+}
+
+async function* _runGenerator(node, scope, callArgs) {
+  const localScope = new AdderScope(scope);
+  await _bindParams(node, callArgs, localScope);
+  try {
+    for (let i = 0; i < node.body.length; i++) {
+      const stmt = node.body[i];
+      if (i === 0 && stmt.type === 'Expr' && stmt.value.type === 'Constant' && typeof stmt.value.value === 'string') continue;
+      yield* await _evalGenStmt(stmt, localScope);
+    }
+  } catch (e) {
+    if (e instanceof _ReturnSignal) return;
+    throw e;
+  }
+}
+
+async function* _evalGenStmt(node, scope) {
+  // Like adderEval but yields instead of throwing for Yield nodes
+  switch (node.type) {
+    case 'Expr':
+      if (node.value.type === 'Yield') {
+        yield node.value.value ? await adderEval(node.value.value, scope) : null;
+        return;
+      }
+      if (node.value.type === 'YieldFrom') {
+        const iterable = await adderEval(node.value.value, scope);
+        if (iterable[Symbol.asyncIterator]) { for await (const v of iterable) yield v; }
+        else { for (const v of pyIter(iterable)) yield v; }
+        return;
+      }
+      await adderEval(node, scope);
+      return;
+    case 'For': {
+      const iterable = await adderEval(node.iter, scope);
+      let broke = false;
+      const iter = iterable[Symbol.asyncIterator] ? iterable : pyIter(iterable);
+      for await (const value of iter) {
+        await _assignTarget(node.target, value, scope);
+        try {
+          for (const stmt of node.body) yield* await _evalGenStmt(stmt, scope);
+        } catch (e) {
+          if (e instanceof _BreakSignal) { broke = true; break; }
+          if (e instanceof _ContinueSignal) continue;
+          throw e;
+        }
+      }
+      if (!broke) for (const stmt of node.orelse) yield* await _evalGenStmt(stmt, scope);
+      return;
+    }
+    case 'While': {
+      let broke = false, iterations = 0;
+      while (pyBool(await adderEval(node.test, scope))) {
+        if (++iterations > 1000000) throw new AdderError('RuntimeError', 'maximum loop iterations exceeded');
+        try {
+          for (const stmt of node.body) yield* await _evalGenStmt(stmt, scope);
+        } catch (e) {
+          if (e instanceof _BreakSignal) { broke = true; break; }
+          if (e instanceof _ContinueSignal) continue;
+          throw e;
+        }
+      }
+      if (!broke) for (const stmt of node.orelse) yield* await _evalGenStmt(stmt, scope);
+      return;
+    }
+    case 'If': {
+      const test = await adderEval(node.test, scope);
+      const branch = pyBool(test) ? node.body : node.orelse;
+      for (const stmt of branch) yield* await _evalGenStmt(stmt, scope);
+      return;
+    }
+    case 'Try': {
+      try {
+        for (const stmt of node.body) yield* await _evalGenStmt(stmt, scope);
+      } catch (e) {
+        if (e instanceof _BreakSignal || e instanceof _ContinueSignal || e instanceof _ReturnSignal) throw e;
+        let handled = false;
+        for (const handler of node.handlers) {
+          let excTypeVal = null;
+          if (handler.excType) try { excTypeVal = await adderEval(handler.excType, scope); } catch {}
+          if (!handler.excType || _matchException(e, excTypeVal)) {
+            if (handler.name) scope.set(handler.name, e);
+            handled = true;
+            for (const stmt of handler.body) yield* await _evalGenStmt(stmt, scope);
+            break;
+          }
+        }
+        if (!handled) { for (const stmt of node.finalbody) yield* await _evalGenStmt(stmt, scope); throw e; }
+      }
+      for (const stmt of node.finalbody) yield* await _evalGenStmt(stmt, scope);
+      return;
+    }
+    default:
+      // non-yielding statements — just eval normally
+      await adderEval(node, scope);
+  }
+}
+
+async function _bindParams(node, callArgs, localScope) {
+  const { params, vararg, kwonly, kwarg } = node;
+  let positionalIdx = 0;
+  let kwObj = null;
+
+  // check if last arg is keyword bag
+  if (callArgs.length > 0 && callArgs[callArgs.length - 1]?._kw) {
+    kwObj = callArgs.pop();
+  }
+
+  // bind positional params
+  for (let i = 0; i < params.length; i++) {
+    const p = params[i];
+    if (positionalIdx < callArgs.length) {
+      localScope.set(p.name, callArgs[positionalIdx++]);
+    } else if (kwObj && p.name in kwObj) {
+      localScope.set(p.name, kwObj[p.name]);
+    } else if (p.default) {
+      localScope.set(p.name, await adderEval(p.default, localScope));
+    } else {
+      throw new AdderError('TypeError', `${node.name}() missing required argument: '${p.name}'`);
+    }
+  }
+
+  // vararg
+  if (vararg) {
+    localScope.set(vararg, callArgs.slice(positionalIdx));
+    positionalIdx = callArgs.length;
+  }
+
+  // keyword-only params
+  for (const p of kwonly) {
+    if (kwObj && p.name in kwObj) {
+      localScope.set(p.name, kwObj[p.name]);
+    } else if (p.default) {
+      localScope.set(p.name, await adderEval(p.default, localScope));
+    } else {
+      throw new AdderError('TypeError', `${node.name}() missing keyword argument: '${p.name}'`);
+    }
+  }
+
+  // **kwargs
+  if (kwarg) {
+    const extra = {};
+    if (kwObj) {
+      const usedNames = new Set([...params.map(p => p.name), ...kwonly.map(p => p.name), '_kw']);
+      for (const k of Object.keys(kwObj)) {
+        if (!usedNames.has(k)) extra[k] = kwObj[k];
+      }
+    }
+    localScope.set(kwarg, extra);
+  }
+}
+
+function _makeLambda(node, scope) {
+  const fn = async function (...callArgs) {
+    const localScope = new AdderScope(scope);
+    let positionalIdx = 0;
+    let kwObj = null;
+    if (callArgs.length > 0 && callArgs[callArgs.length - 1]?._kw) kwObj = callArgs.pop();
+    for (let i = 0; i < node.params.length; i++) {
+      const p = node.params[i];
+      if (positionalIdx < callArgs.length) localScope.set(p.name, callArgs[positionalIdx++]);
+      else if (kwObj && p.name in kwObj) localScope.set(p.name, kwObj[p.name]);
+      else if (p.default) localScope.set(p.name, await adderEval(p.default, localScope));
+    }
+    if (node.vararg) localScope.set(node.vararg, callArgs.slice(positionalIdx));
+    if (node.kwarg) {
+      const extra = {};
+      if (kwObj) { const used = new Set([...node.params.map(p => p.name), '_kw']); for (const k of Object.keys(kwObj)) if (!used.has(k)) extra[k] = kwObj[k]; }
+      localScope.set(node.kwarg, extra);
+    }
+    return adderEval(node.body, localScope);
+  };
+  fn._pyFunc = true;
+  fn._pyName = '<lambda>';
+  return fn;
+}
+
+// ── class ──
+
+async function _evalClass(node, scope) {
+  const bases = [];
+  for (const b of node.bases) bases.push(await adderEval(b, scope));
+
+  // evaluate class body in a class scope
+  const classScope = new AdderScope(scope);
+  for (const stmt of node.body) await adderEval(stmt, classScope);
+
+  // build class
+  const classVars = Object.fromEntries(classScope.vars);
+
+  // constructor function
+  const cls = function (...args) {
+    const instance = Object.create(cls.prototype);
+    instance.__adderClass__ = node.name;
+    // copy class variables (non-function)
+    for (const [k, v] of Object.entries(classVars)) {
+      if (typeof v !== 'function') instance[k] = v;
+    }
+    // call __init__ if present
+    if (typeof cls.prototype.__init__ === 'function') {
+      const result = cls.prototype.__init__.call(instance, ...args);
+      if (result instanceof Promise) return result.then(() => instance);
+    }
+    return instance;
+  };
+
+  cls.prototype = {};
+  cls._pyName = node.name;
+  cls._pyClass = true;
+
+  // inheritance
+  if (bases.length > 0 && bases[0]?.prototype) {
+    cls.prototype = Object.create(bases[0].prototype);
+  }
+
+  // assign methods
+  for (const [name, value] of Object.entries(classVars)) {
+    if (typeof value === 'function') {
+      if (name === '__init__' || name.startsWith('__')) {
+        // bound method: inject `self` as first arg
+        const originalFn = value;
+        cls.prototype[name] = function (...args) { return originalFn(this, ...args); };
+        cls.prototype[name]._pyName = `${node.name}.${name}`;
+      } else {
+        const originalFn = value;
+        cls.prototype[name] = function (...args) { return originalFn(this, ...args); };
+        cls.prototype[name]._pyName = `${node.name}.${name}`;
+      }
+    }
+  }
+
+  // handle decorators
+  let result = cls;
+  for (let i = node.decorators.length - 1; i >= 0; i--) {
+    const dec = await adderEval(node.decorators[i], scope);
+    result = await _callValue(dec, [result], [], node.line);
+  }
+
+  scope.set(node.name, result);
+  return null;
+}
+
+// ── for loop ──
+
+async function _evalFor(node, scope) {
+  const iterable = await adderEval(node.iter, scope);
+  let broke = false;
+  // for-await handles both sync iterables and async generators
+  const iter = iterable[Symbol.asyncIterator] ? iterable : pyIter(iterable);
+  for await (const value of iter) {
+    await _assignTarget(node.target, value, scope);
+    try {
+      for (const stmt of node.body) await adderEval(stmt, scope);
+    } catch (e) {
+      if (e instanceof _BreakSignal) { broke = true; break; }
+      if (e instanceof _ContinueSignal) continue;
+      throw e;
+    }
+  }
+  if (!broke) {
+    for (const stmt of node.orelse) await adderEval(stmt, scope);
+  }
+  return null;
+}
+
+// ── while loop ──
+
+async function _evalWhile(node, scope) {
+  let broke = false;
+  let iterations = 0;
+  while (pyBool(await adderEval(node.test, scope))) {
+    if (++iterations > 1000000) throw new AdderError('RuntimeError', 'maximum loop iterations exceeded (1M)');
+    try {
+      for (const stmt of node.body) await adderEval(stmt, scope);
+    } catch (e) {
+      if (e instanceof _BreakSignal) { broke = true; break; }
+      if (e instanceof _ContinueSignal) continue;
+      throw e;
+    }
+  }
+  if (!broke) {
+    for (const stmt of node.orelse) await adderEval(stmt, scope);
+  }
+  return null;
+}
+
+// ── with statement ──
+
+async function _evalWith(node, scope) {
+  const managers = [];
+  for (const item of node.items) {
+    const mgr = await adderEval(item.contextExpr, scope);
+    const enter = mgr.__enter__ || mgr.enter;
+    const exit = mgr.__exit__ || mgr.exit;
+    if (typeof enter !== 'function' || typeof exit !== 'function') {
+      throw new AdderError('AttributeError', `'${pyTypeName(mgr)}' does not support the context manager protocol`);
+    }
+    const value = await enter.call(mgr);
+    if (item.optionalVar) await _assignTarget(item.optionalVar, value, scope);
+    managers.push({ mgr, exit });
+  }
+  try {
+    for (const stmt of node.body) await adderEval(stmt, scope);
+    for (const { mgr, exit } of managers.reverse()) await exit.call(mgr, null, null, null);
+  } catch (e) {
+    for (const { mgr, exit } of managers.reverse()) {
+      const suppress = await exit.call(mgr, e.pyType || 'Exception', e, null);
+      if (!suppress) throw e;
+    }
+  }
+  return null;
+}
+
+// ── try/except ──
+
+async function _evalTry(node, scope) {
+  let caught = false;
+  try {
+    for (const stmt of node.body) await adderEval(stmt, scope);
+  } catch (e) {
+    if (e instanceof _BreakSignal || e instanceof _ContinueSignal || e instanceof _ReturnSignal) throw e;
+    caught = true;
+    let handled = false;
+    for (const handler of node.handlers) {
+      let excTypeVal = null;
+      if (handler.excType) try { excTypeVal = await adderEval(handler.excType, scope); } catch {}
+      if (!handler.excType || _matchException(e, excTypeVal)) {
+        if (handler.name) scope.set(handler.name, e);
+        handled = true;
+        try {
+          for (const stmt of handler.body) await adderEval(stmt, scope);
+        } catch (e2) {
+          if (e2 instanceof _BreakSignal || e2 instanceof _ContinueSignal || e2 instanceof _ReturnSignal) throw e2;
+          throw e2;
+        }
+        break;
+      }
+    }
+    if (!handled) {
+      // execute finally before re-throwing
+      for (const stmt of node.finalbody) await adderEval(stmt, scope);
+      throw e;
+    }
+  }
+  if (!caught) {
+    // else clause runs if no exception
+    for (const stmt of node.orelse) await adderEval(stmt, scope);
+  }
+  // finally always runs
+  for (const stmt of node.finalbody) await adderEval(stmt, scope);
+  return null;
+}
+
+function _matchException(error, excTypeVal) {
+  if (!excTypeVal) return true;
+  // excTypeVal is an evaluated value — could be a function (exception constructor) or tuple of them
+  if (Array.isArray(excTypeVal)) return excTypeVal.some(t => _matchException(error, t));
+  if (error instanceof AdderError) {
+    if (typeof excTypeVal === 'function') return error.pyType === (excTypeVal._pyName || excTypeVal.name);
+    if (typeof excTypeVal === 'string') return error.pyType === excTypeVal;
+  }
+  if (typeof excTypeVal === 'function') return error instanceof excTypeVal;
+  return false;
+}
+
+// ── comprehensions ──
+
+function _evalGenExpr(node, scope) {
+  // Return an object with async iteration — lazy, not materialized
+  return {
+    [Symbol.asyncIterator]() {
+      return _genExprIter(node, new AdderScope(scope), 0);
+    },
+  };
+}
+
+async function* _genExprIter(node, scope, genIdx) {
+  const gen = node.generators[genIdx];
+  const iterable = await adderEval(gen.iter, scope);
+  const iter = iterable[Symbol.asyncIterator] ? iterable : pyIter(iterable);
+  for await (const value of iter) {
+    await _assignTarget(gen.target, value, scope);
+    let pass = true;
+    for (const ifNode of gen.ifs) {
+      if (!pyBool(await adderEval(ifNode, scope))) { pass = false; break; }
+    }
+    if (!pass) continue;
+    if (genIdx + 1 < node.generators.length) {
+      yield* _genExprIter(node, scope, genIdx + 1);
+    } else {
+      yield await adderEval(node.elt, scope);
+    }
+  }
+}
+
+async function _evalComp(node, scope, kind) {
+  const result = kind === 'list' ? [] : kind === 'set' ? new Set() : {};
+  const compScope = new AdderScope(scope);
+  await _evalCompIter(node, compScope, result, kind, 0);
+  return result;
+}
+
+async function _evalCompIter(node, scope, result, kind, genIdx) {
+  const gen = node.generators[genIdx];
+  const iterable = await adderEval(gen.iter, scope);
+  for (const value of pyIter(iterable)) {
+    await _assignTarget(gen.target, value, scope);
+    // check if filters
+    let pass = true;
+    for (const ifNode of gen.ifs) {
+      if (!pyBool(await adderEval(ifNode, scope))) { pass = false; break; }
+    }
+    if (!pass) continue;
+    if (genIdx + 1 < node.generators.length) {
+      await _evalCompIter(node, scope, result, kind, genIdx + 1);
+    } else {
+      if (kind === 'list') {
+        result.push(await adderEval(node.elt, scope));
+      } else if (kind === 'set') {
+        result.add(await adderEval(node.elt, scope));
+      } else {
+        const k = await adderEval(node.key, scope);
+        const v = await adderEval(node.value, scope);
+        result[k] = v;
+      }
+    }
+  }
+}
+
+// ── imports ──
+
+async function _evalImport(node, scope) {
+  for (const { module, alias } of node.names) {
+    const mod = adderModules[module];
+    if (mod) {
+      scope.set(alias || module, mod);
+      // import this — print the zen (side effect, like CPython)
+      if (module === 'this' && mod.s) { const printFn = scope.has('print') ? scope.get('print') : null; if (printFn) await printFn(mod.s); }
+      continue;
+    }
+    // try loading from auditable extensions
+    if (typeof window !== 'undefined' && window._auditableExtensions?.[module]) {
+      scope.set(alias || module, window._auditableExtensions[module]);
+      continue;
+    }
+    throw new AdderError('ModuleNotFoundError', `No module named '${module}'`, node.line);
+  }
+  return null;
+}
+
+async function _evalImportFrom(node, scope) {
+  const mod = adderModules[node.module];
+  if (!mod) {
+    if (typeof window !== 'undefined' && window._auditableExtensions?.[node.module]) {
+      const extMod = window._auditableExtensions[node.module];
+      for (const { name, alias } of node.names) {
+        if (name === '*') { for (const k of Object.keys(extMod)) scope.set(k, extMod[k]); }
+        else scope.set(alias || name, extMod[name]);
+      }
+      return null;
+    }
+    throw new AdderError('ModuleNotFoundError', `No module named '${node.module}'`, node.line);
+  }
+  for (const { name, alias } of node.names) {
+    if (name === '*') { for (const k of Object.keys(mod)) scope.set(k, mod[k]); }
+    else {
+      if (!(name in mod)) throw new AdderError('ImportError', `cannot import name '${name}' from '${node.module}'`, node.line);
+      scope.set(alias || name, mod[name]);
+    }
+  }
+  return null;
+}
+
+// re-export for cell.js
+export { AdderError, adderParse };

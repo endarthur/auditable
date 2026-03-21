@@ -185,7 +185,7 @@ class AuditableParser extends Parser {
 
         const flushCell = (end) => {
           if (cellType && cellStart >= 0 && end > cellStart) {
-            const typeMap = { code: 2, css: 3, html: 4, md: 5, python: 6 };
+            const typeMap = { code: 2, css: 3, html: 4, md: 5, adder: 6 };
             const typeId = typeMap[cellType] || 5;
             children.push(new Tree(_auditableNodeSet.types[typeId], [], [], end - cellStart));
             positions.push(cellStart);
@@ -203,7 +203,7 @@ class AuditableParser extends Parser {
             children.push(new Tree(_auditableNodeSet.types[1], [], [], lineLen));
             positions.push(lineStart);
             const t = lines[i].slice(4).split(' ')[0];
-            if (['code', 'css', 'html', 'md', 'python'].includes(t)) {
+            if (['code', 'css', 'html', 'md', 'adder'].includes(t)) {
               cellType = t;
               cellStart = Math.min(lineStart + lineLen + 1, text.length);
             }

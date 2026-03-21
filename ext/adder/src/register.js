@@ -2,27 +2,18 @@
 
 import { pythonParseNames, pythonFindUses, pythonExecute } from './cell.js';
 import { tokenizePython, pythonCompletions } from './highlight.js';
-import { getInterpreter } from './init.js';
-import { mpy } from './tag.js';
+import { adderTag, mpy } from './tag.js';
+import { adderParse } from './parse.js';
 
 const handler = {
-  label: 'python',
+  label: 'adder',
   color: '#4B8BBE',
   shortcut: 'n',
   editDebounce: 500,
   parseNames: pythonParseNames,
   syntaxCheck: (code) => {
-    const mp = getInterpreter();
-    if (!mp) return true; // not initialized yet — allow execution
-    try {
-      mp.globals.set('_adder_check', code);
-      mp.runPython('compile(_adder_check, "<check>", "exec")');
-      try { mp.globals.delete('_adder_check'); } catch {}
-      return true;
-    } catch {
-      try { mp.globals.delete('_adder_check'); } catch {}
-      return false;
-    }
+    try { adderParse(code); return true; }
+    catch { return false; }
   },
   findUses: pythonFindUses,
   execute: pythonExecute,
@@ -32,7 +23,7 @@ const handler = {
     if (!window._ctCreateEditor) return null;
     const wrap = document.createElement('div');
     wrap.className = 'editor-wrap';
-    const editor = window._ctCreateEditor(wrap, cell.id, cell.code, 'python', onChange);
+    const editor = window._ctCreateEditor(wrap, cell.id, cell.code, 'adder', onChange);
     return {
       el: wrap,
       getCode: () => editor.view.state.doc.toString(),
@@ -43,16 +34,20 @@ const handler = {
 };
 
 // guard: only register once (module may be re-imported from different blob URLs)
-if (!window._cellTypes?.['python']) {
-  // register cell type
+if (!window._cellTypes?.['adder']) {
+  // register 'adder' cell type (shows in insert bar)
   if (window.registerCellType) {
-    window.registerCellType('python', handler, '@gcu/adder');
+    window.registerCellType('adder', handler, '@gcu/adder');
   } else if (window._cellTypes) {
-    window._cellTypes['python'] = handler;
+    window._cellTypes['adder'] = handler;
   }
 
-  // register tagged language for mpy`` syntax highlighting
+  // register tagged language for both adder`` and mpy`` syntax highlighting
   window._taggedLanguages = window._taggedLanguages || {};
+  window._taggedLanguages['adder'] = {
+    tokenize: tokenizePython,
+    completions: pythonCompletions,
+  };
   window._taggedLanguages['mpy'] = {
     tokenize: tokenizePython,
     completions: pythonCompletions,
@@ -60,16 +55,18 @@ if (!window._cellTypes?.['python']) {
 
   // register as plugin
   if (window.registerPlugin) {
-    window.registerPlugin('@gcu/adder', { description: 'Python cells and mpy tagged template' });
+    window.registerPlugin('@gcu/adder', { description: 'adder — Python cells and tagged template' });
   } else if (window._auditablePlugins) {
-    window._auditablePlugins.set('@gcu/adder', { description: 'Python cells and mpy tagged template' });
+    window._auditablePlugins.set('@gcu/adder', { description: 'adder — Python cells and tagged template' });
   }
 
-  // global mpy tag
+  // global tags
+  window.adder = adderTag;
   window.mpy = mpy;
 }
 
 export const adder = {
+  adderTag,
   mpy,
   handler,
   pythonParseNames,

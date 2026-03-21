@@ -547,7 +547,7 @@ function getLangExtension(cellType) {
   if (cellType === 'code') return mixedJavascript();
   if (cellType === 'css') return css();
   if (cellType === 'html') return html();
-  if (cellType === 'python') return [pythonLang(), indentUnit.of('    ')];
+  if (cellType === 'adder') return [pythonLang(), indentUnit.of('    ')];
   // other plugin cell types — use handler's tokenizer via StreamLanguage
   const handler = window._cellTypes?.[cellType];
   if (handler?.tokenize) {
