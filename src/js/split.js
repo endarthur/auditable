@@ -145,6 +145,7 @@ const _auditableNodeTypes = [
   NodeType.define({ id: 3, name: 'CssCell' }),
   NodeType.define({ id: 4, name: 'HtmlCell' }),
   NodeType.define({ id: 5, name: 'MdCell' }),
+  NodeType.define({ id: 6, name: 'PythonCell' }),
 ];
 
 const _auditableNodeSet = new NodeSet(_auditableNodeTypes).extend(
@@ -154,11 +155,13 @@ const _auditableNodeSet = new NodeSet(_auditableNodeTypes).extend(
 const _jsParser = mixedJavascript().language.parser;
 const _cssParser = css().language.parser;
 const _htmlParser = html().language.parser;
+const _pythonParser = pythonLang().language.parser;
 
 const _nestLanguages = parseMixed(node => {
   if (node.name === 'CodeCell') return { parser: _jsParser };
   if (node.name === 'CssCell') return { parser: _cssParser };
   if (node.name === 'HtmlCell') return { parser: _htmlParser };
+  if (node.name === 'PythonCell') return { parser: _pythonParser };
   return null;
 });
 
@@ -182,7 +185,7 @@ class AuditableParser extends Parser {
 
         const flushCell = (end) => {
           if (cellType && cellStart >= 0 && end > cellStart) {
-            const typeMap = { code: 2, css: 3, html: 4, md: 5 };
+            const typeMap = { code: 2, css: 3, html: 4, md: 5, python: 6 };
             const typeId = typeMap[cellType] || 5;
             children.push(new Tree(_auditableNodeSet.types[typeId], [], [], end - cellStart));
             positions.push(cellStart);
@@ -200,7 +203,7 @@ class AuditableParser extends Parser {
             children.push(new Tree(_auditableNodeSet.types[1], [], [], lineLen));
             positions.push(lineStart);
             const t = lines[i].slice(4).split(' ')[0];
-            if (['code', 'css', 'html', 'md'].includes(t)) {
+            if (['code', 'css', 'html', 'md', 'python'].includes(t)) {
               cellType = t;
               cellStart = Math.min(lineStart + lineLen + 1, text.length);
             }
