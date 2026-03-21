@@ -89,6 +89,7 @@ const categories = {
   adder: [
     'example_adder.txt',
     'example_adder_gslib.txt',
+    'example_adder_estimation.txt',
   ],
 
   // etc — standalone demos that don't fit elsewhere

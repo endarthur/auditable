@@ -1,0 +1,166 @@
+/// auditable
+/// title: adder — simulate, drill, estimate
+/// module: @gcu/adder ext/adder/index.js
+/// module: @atra/gslib ext/atra/lib/gslib.js
+
+/// md
+# simulate, drill, estimate
+
+A complete resource estimation validation workflow in Python. Generate a "true" deposit by unconditional Gaussian simulation, sample it with synthetic drillholes, krige the samples, then compare the estimate to the truth. One JS cell bootstraps the extensions; everything else is adder.
+
+/// code collapsed
+// %collapsed
+await load("@gcu/adder")
+const gslib = await load("@atra/gslib")
+
+/// md
+## parameters
+
+/// adder
+import math
+import random
+
+gridN = ui.slider("grid", 50, {"min": 20, "max": 80, "step": 5})
+vRange = ui.slider("range", 12, {"min": 3, "max": 30, "step": 1})
+vSill = ui.slider("sill", 1.0, {"min": 0.2, "max": 3.0, "step": 0.1})
+vNugget = ui.slider("nugget", 0.1, {"min": 0.0, "max": 0.5, "step": 0.05})
+nHoles = ui.slider("drill holes", 40, {"min": 10, "max": 100, "step": 5})
+simSeed = ui.slider("sim seed", 42, {"min": 1, "max": 999, "step": 1})
+
+/// md
+## truth — unconditional simulation
+
+Generate the "true" deposit using GSLIB's `sgsim`. This is what we're trying to estimate.
+
+/// adder
+vario = {"nugget": vNugget, "structures": [{"type": "spherical", "contribution": vSill, "range": vRange}]}
+search = {"radius": max(vRange * 2, 20), "ndmax": 10, "nodmax": 12}
+grid = {"nx": gridN, "ny": gridN, "xsiz": 1, "ysiz": 1}
+
+engine = gslib.sgsim({"grid": grid, "variogram": vario, "search": search})
+truth = engine.run(simSeed)
+print(f"simulated {gridN}\u00d7{gridN} grid ({len(truth)} nodes)")
+
+/// md
+## drilling — sample the truth
+
+Random drillhole locations. Each sample reads the true value at the nearest grid node.
+
+/// adder
+random.seed(simSeed + 1000)
+
+samples = []
+for i in range(nHoles):
+    x = random.random() * gridN
+    y = random.random() * gridN
+    ix = min(int(x), gridN - 1)
+    iy = min(int(y), gridN - 1)
+    v = truth[iy * gridN + ix]
+    samples.append([x, y, v])
+
+vals = [s[2] for s in samples]
+mean = sum(vals) / len(vals)
+sd = (sum((v - mean)**2 for v in vals) / (len(vals) - 1)) ** 0.5
+print(f"{nHoles} samples \u00b7 mean {mean:.3f} \u00b7 std {sd:.3f}")
+
+/// md
+## estimation — krige the samples
+
+/// adder
+import js
+
+t0 = js.performance.now()
+kResult = gslib.kb2d({
+    "data": samples,
+    "grid": grid,
+    "variogram": vario,
+    "search": {"radius": max(vRange * 2, 20), "ndmax": min(nHoles, 24)}
+})
+est = kResult.est
+estv = kResult["var"]
+print(f"kriged in {js.performance.now() - t0:.0f} ms")
+
+/// md
+## comparison — truth vs estimate
+
+/// adder
+import js
+
+size = min(400, int(js.window.innerWidth / 2) - 60)
+
+# truth map
+c1 = ui.canvas(size, size)
+ctx1 = c1.getContext("2d")
+
+# estimate map
+c2 = ui.canvas(size, size)
+ctx2 = c2.getContext("2d")
+
+# shared color range from truth
+vmin = float("inf")
+vmax = float("-inf")
+for i in range(len(truth)):
+    if truth[i] < vmin:
+        vmin = truth[i]
+    if truth[i] > vmax:
+        vmax = truth[i]
+vr = vmax - vmin if vmax - vmin != 0 else 1
+
+cellW = size / gridN
+for iy in range(gridN):
+    for ix in range(gridN):
+        idx = iy * gridN + ix
+        # truth
+        ctx1.fillStyle = std.viridis((truth[idx] - vmin) / vr)
+        ctx1.fillRect(ix * cellW, iy * cellW, cellW + 0.5, cellW + 0.5)
+        # estimate
+        v = est[idx]
+        ctx2.fillStyle = "#222" if v < -900 else std.viridis((v - vmin) / vr)
+        ctx2.fillRect(ix * cellW, iy * cellW, cellW + 0.5, cellW + 0.5)
+
+# drillholes on estimate map
+for s in samples:
+    ctx2.beginPath()
+    ctx2.arc(s[0] / gridN * size, s[1] / gridN * size, 2, 0, js.Math.PI * 2)
+    ctx2.fillStyle = "#fff"
+    ctx2.fill()
+    ctx2.strokeStyle = "#000"
+    ctx2.lineWidth = 0.5
+    ctx2.stroke()
+
+display(f"truth (left) vs estimate (right) \u00b7 {nHoles} holes")
+
+/// md
+## error statistics
+
+/// adder
+errors = []
+for i in range(gridN * gridN):
+    if est[i] > -900:
+        errors.append(est[i] - truth[i])
+
+n = len(errors)
+me = sum(errors) / n
+mae = sum(abs(e) for e in errors) / n
+mse = sum(e**2 for e in errors) / n
+rmse = mse ** 0.5
+
+# correlation coefficient
+t_mean = sum(truth[i] for i in range(gridN * gridN)) / (gridN * gridN)
+e_mean = sum(est[i] for i in range(gridN * gridN) if est[i] > -900) / n
+cov = sum((truth[i] - t_mean) * (est[i] - e_mean) for i in range(gridN * gridN) if est[i] > -900) / n
+t_std = (sum((truth[i] - t_mean)**2 for i in range(gridN * gridN)) / (gridN * gridN)) ** 0.5
+e_std = (sum((est[i] - e_mean)**2 for i in range(gridN * gridN) if est[i] > -900) / n) ** 0.5
+corr = cov / (t_std * e_std) if t_std * e_std > 0 else 0
+
+print(f"nodes estimated: {n} / {gridN * gridN}")
+print(f"mean error:      {me:+.4f}")
+print(f"mean abs error:  {mae:.4f}")
+print(f"RMSE:            {rmse:.4f}")
+print(f"correlation:     {corr:.4f}")
+print(f"conditional bias: {me / rmse:.3f}" if rmse > 0 else "")
+
+/// md
+---
+
+**Workflow:** sgsim generates the truth (no conditioning data). Random drillholes sample it. Kriging estimates the field from samples alone. Error stats measure how well the estimate recovers the truth. Try increasing holes or decreasing range to see estimation quality change.
