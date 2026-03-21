@@ -811,7 +811,7 @@ export function adderBuiltins(printFn) {
     },
     range: (a, b, c) => new AdderRange(a, b, c),
     int: (x, base) => { if (base !== undefined) return parseInt(String(x), base); return typeof x === 'string' ? parseInt(x) : Math.trunc(Number(x)); },
-    float: (x) => x === undefined ? 0.0 : Number(x),
+    float: (x) => { if (x === undefined) return 0.0; if (typeof x === 'string') { const s = x.trim().toLowerCase(); if (s === 'inf' || s === '+inf' || s === 'infinity') return Infinity; if (s === '-inf' || s === '-infinity') return -Infinity; if (s === 'nan') return NaN; } return Number(x); },
     str: (x) => x === undefined ? '' : pyStr(x),
     bool: (x) => x === undefined ? false : pyBool(x),
     list: async (x) => x === undefined ? [] : await pyCollect(x),

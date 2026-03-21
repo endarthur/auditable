@@ -372,7 +372,13 @@ function _createCellContext(cell) {
   if (cell._invalidate) { cell._invalidate(); cell._invalidate = null; }
 
   const outputEl = cell.el.querySelector('.cell-output');
-  const widgetEl = cell.el.querySelector('.cell-widgets');
+  let widgetEl = cell.el.querySelector('.cell-widgets');
+  // plugin cells don't have a widget container — create one if missing
+  if (!widgetEl) {
+    widgetEl = document.createElement('div');
+    widgetEl.className = 'cell-widgets';
+    outputEl.parentNode.insertBefore(widgetEl, outputEl);
+  }
 
   // preserve canvases before clearing output
   const prevCanvases = [...outputEl.querySelectorAll('canvas')];
@@ -390,12 +396,17 @@ function _createCellContext(cell) {
   const invalidation = new Promise(r => { invalidationResolve = r; });
   cell._invalidate = invalidationResolve;
 
+  // stale guard — when invalidation fires, prevent old closures from mutating DOM
+  let _stale = false;
+  invalidation.then(() => { _stale = true; });
+
   // track which widgets are used this run
   const usedWidgets = new Set();
   let canvasIdx = 0;
 
   // build display function for this cell
   const display = (...args) => {
+    if (_stale) return;
     for (const arg of args) {
       if (arg instanceof Element) {
         outputEl.appendChild(arg);
@@ -420,6 +431,7 @@ function _createCellContext(cell) {
 
   // canvas helper — reuses existing canvas if dimensions match
   const canvas = (w = 400, h = 300) => {
+    if (_stale) { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; } // orphan
     const prev = prevCanvases[canvasIdx++];
     if (prev && prev.width === w && prev.height === h) {
       outputEl.appendChild(prev);

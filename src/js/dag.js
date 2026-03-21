@@ -324,6 +324,22 @@ export function buildDAG() {
     }
   }
 
+  // collect defines from plugin-type cells (skip fallback)
+  for (const c of S.cells) {
+    if (c.type === 'code' || c.type === 'html' || c.type === 'md' || c.type === 'css') continue;
+    if (c._fallback) continue;
+    const handler = window._cellTypes?.[c.type];
+    if (!handler?.parseNames) continue;
+    if (c.code !== c._parsedCode) {
+      const result = handler.parseNames(c.code);
+      c.defines = result instanceof Set ? result : new Set(result);
+      c._parsedCode = c.code;
+    }
+    for (const name of c.defines) {
+      allDefined.set(name, c.id);
+    }
+  }
+
   // find uses for each cell (invalidate if code changed or global names changed)
   const definedNames = new Set(allDefined.keys());
   const definedKey = [...definedNames].sort().join(',');
@@ -339,6 +355,17 @@ export function buildDAG() {
         c.uses = findHtmlUses(c.code, definedNames);
         c._usesCode = c.code;
         c._definedKey = definedKey;
+      }
+    } else if (c.type !== 'css' && !c._fallback) {
+      // plugin-type cells
+      const handler = window._cellTypes?.[c.type];
+      if (handler?.findUses) {
+        if (c.code !== c._usesCode || c._definedKey !== definedKey) {
+          const result = handler.findUses(c.code, definedNames);
+          c.uses = result instanceof Set ? result : new Set(result);
+          c._usesCode = c.code;
+          c._definedKey = definedKey;
+        }
       }
     }
   }

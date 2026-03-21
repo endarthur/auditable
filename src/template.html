@@ -197,6 +197,13 @@
     <button onclick="lockNotebook()" style="margin-top:4px">lock now</button>
   </div>
 
+  <h2>plugins</h2>
+  <div class="plugin-install">
+    <input type="text" id="pluginInstallInput" placeholder="@gcu/adder" spellcheck="false">
+    <button class="accent" onclick="_ctDoInstallPlugin()">+</button>
+  </div>
+  <div id="pluginList"></div>
+
   <h2>modules</h2>
   <div id="moduleList"></div>
   <h2>binaries</h2>

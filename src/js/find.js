@@ -144,9 +144,14 @@ export function findReplace() {
       ta.value = cell.code;
       ta.dispatchEvent(new Event('input'));
     }
+  } else if (cell._pluginEditor?.setCode) {
+    cell._pluginEditor.setCode(cell.code);
   } else {
     const editor = getEditor(cell.id);
     if (editor) editor.setCode(cell.code);
+    // fallback plugin textarea
+    const pta = cell.el?.querySelector('.plugin-textarea');
+    if (pta) pta.value = cell.code;
   }
   findComputeMatches();
 }
@@ -175,9 +180,13 @@ export function findReplaceAll() {
           ta.value = cell.code;
           ta.dispatchEvent(new Event('input'));
         }
+      } else if (cell._pluginEditor?.setCode) {
+        cell._pluginEditor.setCode(cell.code);
       } else {
         const editor = getEditor(cell.id);
         if (editor) editor.setCode(cell.code);
+        const pta = cell.el?.querySelector('.plugin-textarea');
+        if (pta) pta.value = cell.code;
       }
     }
   }

@@ -75,73 +75,31 @@ const _pyKeywords = new Set([
 
 function _isPyKeyword(name) { return _pyKeywords.has(name); }
 
-// ── findUses: find which names from other cells this code references ──
+// ── findUses: walk the AST for Name nodes ──
 
 export function pythonFindUses(code, allDefined) {
   const selfDefines = pythonParseNames(code);
   const uses = new Set();
-
-  // strip comments and strings
-  const stripped = _stripPython(code);
-
-  for (const name of allDefined) {
-    if (selfDefines.has(name)) continue;
-    // word-boundary match
-    const re = new RegExp('\\b' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
-    if (re.test(stripped)) uses.add(name);
+  try {
+    const ast = adderParse(code);
+    _collectNames(ast, allDefined, selfDefines, uses);
+  } catch {
+    // parse error — fall back to regex scan (better than no DAG wiring)
+    for (const name of allDefined) {
+      if (!selfDefines.has(name) && new RegExp('\\b' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(code)) uses.add(name);
+    }
   }
   return uses;
 }
 
-function _stripPython(code) {
-  let out = '', i = 0;
-  const len = code.length;
-
-  while (i < len) {
-    const ch = code[i];
-
-    if (ch === '#') {
-      while (i < len && code[i] !== '\n') i++;
-      continue;
-    }
-
-    let prefixLen = 0;
-    if (/[fFrRbBuU]/.test(ch)) {
-      let j = i;
-      while (j < len && /[fFrRbBuU]/.test(code[j])) j++;
-      if (j < len && (code[j] === '"' || code[j] === "'")) {
-        prefixLen = j - i;
-      }
-    }
-
-    if (ch === '"' || ch === "'" || prefixLen > 0) {
-      i += prefixLen;
-      if (i < len && (code[i] === '"' || code[i] === "'")) {
-        const q = code[i];
-        if (code[i + 1] === q && code[i + 2] === q) {
-          i += 3;
-          while (i < len) {
-            if (code[i] === '\\') { i += 2; continue; }
-            if (code[i] === q && code[i + 1] === q && code[i + 2] === q) { i += 3; break; }
-            i++;
-          }
-        } else {
-          i++;
-          while (i < len && code[i] !== q && code[i] !== '\n') {
-            if (code[i] === '\\') { i += 2; continue; }
-            i++;
-          }
-          if (i < len && code[i] === q) i++;
-        }
-        out += ' ';
-        continue;
-      }
-    }
-
-    out += ch;
-    i++;
+function _collectNames(node, allDefined, selfDefines, uses) {
+  if (!node || typeof node !== 'object') return;
+  if (node.type === 'Name' && allDefined.has(node.id) && !selfDefines.has(node.id)) uses.add(node.id);
+  for (const key of Object.keys(node)) {
+    const val = node[key];
+    if (Array.isArray(val)) { for (const item of val) _collectNames(item, allDefined, selfDefines, uses); }
+    else if (val && typeof val === 'object' && val.type) _collectNames(val, allDefined, selfDefines, uses);
   }
-  return out;
 }
 
 // ── execute: run Python cell code ──
@@ -162,14 +120,16 @@ export async function pythonExecute(code, scopeIn, cell) {
 
   // inject cell context (ui, std, load, display, etc.) if available
   // these are the same builtins JS code cells get, created by _createCellContext
-  if (cell._ctx) {
+  const hasCtx = !!cell._ctx;
+  if (hasCtx) {
     const ctx = cell._ctx;
-    // override print to use display (renders to output DOM)
+    // override print to render directly to the output DOM (not buffered)
+    // so print output coexists with canvases and other DOM content
     scope.set('print', (...args) => {
       let sep = ' ', end = '\n';
       if (args.length > 0 && args[args.length - 1]?._kw) { const kw = args.pop(); if (kw.sep !== undefined) sep = kw.sep; if (kw.end !== undefined) end = kw.end; }
       const text = args.map(pyStr).join(sep) + end;
-      printFn(text);
+      ctx.display(text.endsWith('\n') ? text.slice(0, -1) : text);
       return null;
     });
     // expose key builtins — skip internal/DOM-only ones
@@ -198,15 +158,21 @@ export async function pythonExecute(code, scopeIn, cell) {
   }
 
   // build output
+  if (hasCtx) {
+    // output already rendered to DOM via display() — show last expression too
+    if (lastExpr !== undefined && lastExpr !== null) {
+      cell._ctx.display(pyRepr(lastExpr));
+    }
+    return { defines };
+  }
+  // no cell context (standalone/test mode) — return output as string
   const parts = [];
   const printOutput = outputParts.join('');
   if (printOutput) parts.push(printOutput.endsWith('\n') ? printOutput.slice(0, -1) : printOutput);
   if (lastExpr !== undefined && lastExpr !== null) {
     parts.push(pyRepr(lastExpr));
   }
-  const output = parts.length ? parts.join('\n') : undefined;
-
-  return { defines, output };
+  return { defines, output: parts.length ? parts.join('\n') : undefined };
 }
 
 function _jsonReplacer(key, value) {

@@ -856,7 +856,10 @@ async function _evalFor(node, scope) {
   let broke = false;
   // for-await handles both sync iterables and async generators
   const iter = iterable[Symbol.asyncIterator] ? iterable : pyIter(iterable);
+  let _loopCount = 0;
   for await (const value of iter) {
+    // yield to event loop periodically to prevent page lockup
+    if (++_loopCount % 1000 === 0) await new Promise(r => setTimeout(r, 0));
     await _assignTarget(node.target, value, scope);
     try {
       for (const stmt of node.body) await adderEval(stmt, scope);
@@ -879,6 +882,7 @@ async function _evalWhile(node, scope) {
   let iterations = 0;
   while (pyBool(await adderEval(node.test, scope))) {
     if (++iterations > 1000000) throw new AdderError('RuntimeError', 'maximum loop iterations exceeded (1M)');
+    if (iterations % 1000 === 0) await new Promise(r => setTimeout(r, 0));
     try {
       for (const stmt of node.body) await adderEval(stmt, scope);
     } catch (e) {

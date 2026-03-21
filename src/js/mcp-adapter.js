@@ -685,6 +685,16 @@ function _mcpGetCellOutput(input) {
     value = viewEl ? viewEl.textContent : null;
   } else if (cell.type === 'css') {
     value = cell.code;
+  } else {
+    // plugin cell type
+    if (cell._lastResult && Object.keys(cell._lastResult).length > 0) {
+      value = Object.keys(cell._lastResult).length === 1
+        ? Object.values(cell._lastResult)[0]
+        : cell._lastResult;
+    } else {
+      const outEl = cell.el?.querySelector('.cell-output');
+      value = outEl ? outEl.textContent : null;
+    }
   }
 
   if (input.path) {
@@ -783,8 +793,9 @@ async function _mcpUpdateCellSource(input, client) {
 
 async function _mcpAddCell(input) {
   const type = input.type;
-  if (!['code', 'md', 'css', 'html'].includes(type)) {
-    throw new Error('type must be one of: code, md, css, html');
+  const validTypes = ['code', 'md', 'css', 'html', ...Object.keys(window._cellTypes || {})];
+  if (!validTypes.includes(type)) {
+    throw new Error('type must be one of: ' + validTypes.join(', '));
   }
   const code = input.code || '';
   const pos = input.position;
