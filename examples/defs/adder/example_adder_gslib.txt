@@ -25,7 +25,7 @@ const noise = ui.slider("noise", 0.3, {min: 0.0, max: 1.0, step: 0.05});
 const seed = ui.slider("seed", 42, {min: 1, max: 999, step: 1});
 
 /// python
-import math
+import math, js
 
 # seeded RNG (MicroPython has no numpy)
 _s = seed
@@ -40,12 +40,19 @@ def grade_model(x, y):
     g2 = 1.8 * math.exp(-((x - 0.7)**2 + (y - 0.35)**2) / 0.04)
     return max(0.01, g1 + g2 + 0.2 + noise * (_rng() - 0.5))
 
-# generate drill holes
-samples = []
+# generate drill holes — build a plain JSON string so downstream JS
+# gets native arrays (GSLIB's WASM wrapper expects JS arrays, not JsProxy)
+import json as _json
+_pts = []
 for i in range(nHoles):
     x, y = _rng(), _rng()
     v = round(grade_model(x, y), 3)
-    samples.append([x, y, v])
+    _pts.append([x, y, v])
+samples_json = _json.dumps(_pts)
+
+/// code
+// parse Python's JSON string into native JS arrays for GSLIB
+const samples = JSON.parse(samples_json)
 
 /// md
 ## summary statistics
@@ -53,7 +60,7 @@ for i in range(nHoles):
 Python computes basic stats on the sample data. These flow into downstream cells via the DAG.
 
 /// python
-grades = [s[2] for s in samples]
+grades = [s[2] for s in _pts]
 n = len(grades)
 mean_grade = sum(grades) / n
 var_grade = sum((g - mean_grade)**2 for g in grades) / (n - 1)
@@ -266,35 +273,35 @@ display(`${label} \u00b7 ${gridN}\u00d7${gridN} \u00b7 ${nHoles} holes \u00b7 ${
 /// md
 ## grade-tonnage
 
-Python computes the grade-tonnage curve from the kriged estimates. The cutoff slider controls the reporting threshold.
+Grade-tonnage reporting from the kriged estimates. The cutoff slider controls the reporting threshold.
 
 /// code
 const cutoff = ui.slider("cutoff grade", 0.5, {min: 0.0, max: 3.0, step: 0.05});
 
-/// python
-# grade-tonnage from kriged estimates
-block_volume = 1.0 / (gridN * gridN)
-density = 2.7  # t/m\u00b3 (typical rock density)
-block_tonnage = block_volume * density
+/// code
+// grade-tonnage from kriged estimates
+const blockVol = 1.0 / (gridN * gridN);
+const density = 2.7; // t/m\u00b3
+const blockT = blockVol * density;
 
-# filter valid estimates above cutoff
-above = [float(est[i]) for i in range(len(est)) if float(est[i]) > -900 and float(est[i]) >= cutoff]
-total_valid = sum(1 for i in range(len(est)) if float(est[i]) > -900)
+let nAbove = 0, sumAbove = 0, nValid = 0;
+for (let i = 0; i < est.length; i++) {
+  if (est[i] < -900) continue;
+  nValid++;
+  if (est[i] >= cutoff) { nAbove++; sumAbove += est[i]; }
+}
+const tonnes = nAbove * blockT;
+const meanAbove = nAbove > 0 ? sumAbove / nAbove : 0;
+const metal = tonnes * meanAbove;
+const pct = nValid > 0 ? (100 * nAbove / nValid) : 0;
 
-tonnes = len(above) * block_tonnage
-grade_above = sum(above) / len(above) if above else 0
-metal = tonnes * grade_above
-total_tonnes = total_valid * block_tonnage
-
-pct_above = 100 * len(above) / total_valid if total_valid else 0
-
-print(f"cutoff:       {cutoff:.2f}")
-print(f"blocks:       {len(above)} / {total_valid} ({pct_above:.0f}%)")
-print(f"tonnes:       {tonnes:.1f} t")
-print(f"mean grade:   {grade_above:.3f}")
-print(f"metal:        {metal:.2f} units")
+display(`cutoff:       ${cutoff.toFixed(2)}`);
+display(`blocks:       ${nAbove} / ${nValid} (${pct.toFixed(0)}%)`);
+display(`tonnes:       ${tonnes.toFixed(1)} t`);
+display(`mean grade:   ${meanAbove.toFixed(3)}`);
+display(`metal:        ${metal.toFixed(2)} units`);
 
 /// md
 ---
 
-**how it works:** Python defines the drill hole data and computes statistics. The `samples` array flows through the reactive DAG into JS cells that call GSLIB's WASM routines (`gamv` for variography, `kb2d` for kriging). The kriged grid flows back to Python for grade-tonnage reporting. Three languages, one DAG, zero glue code.
+**how it works:** Python defines the drill hole data and computes statistics. The data flows through the reactive DAG (via JSON serialization) into JS cells that call GSLIB's WASM routines (`gamv` for variography, `kb2d` for kriging). Python's JsProxy objects don't have `.length`, so the bridge is a JSON string that JS parses into native arrays. Three languages, one DAG.
