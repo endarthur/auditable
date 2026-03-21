@@ -1,0 +1,106 @@
+/// auditable
+/// title: @gcu/plot — canvas plotting
+/// module: @gcu/plot ext/plot/index.js
+
+/// md
+# @gcu/plot
+
+Canvas 2D plotting library. Axes-based API inspired by matplotlib.
+
+/// code
+const plot = await load("@gcu/plot")
+
+/// md
+## line plot
+
+/// code
+const {fig, ax} = plot.subplots(1, 1, {figsize: [500, 300]})
+const x = std.linspace(0, 10, 100)
+const y1 = x.map(v => Math.sin(v))
+const y2 = x.map(v => Math.cos(v))
+ax.plot(x, y1, {color: '#c89b3c', label: 'sin(x)'})
+ax.plot(x, y2, 'b--', {label: 'cos(x)'})
+ax.set_title('trigonometric functions')
+ax.set_xlabel('x')
+ax.set_ylabel('y')
+ax.legend()
+ax.grid(true)
+display(fig.show())
+
+/// md
+## scatter plot
+
+/// code
+const n = 200
+const sx = Array.from({length: n}, () => Math.random() * 10)
+const sy = sx.map(v => v + (Math.random() - 0.5) * 4)
+const sc = sx.map((v, i) => sy[i])
+const {fig: f2, ax: a2} = plot.subplots(1, 1, {figsize: [400, 400]})
+a2.scatter(sx, sy, {c: sc, cmap: 'viridis', s: 6})
+a2.set_title('scatter with colormap')
+a2.set_xlabel('x')
+a2.set_ylabel('y')
+a2.set_aspect('equal')
+a2.colorbar({label: 'y value'})
+display(f2.show())
+
+/// md
+## histogram
+
+/// code
+const data = Array.from({length: 500}, () => {
+  let s = 0
+  for (let i = 0; i < 12; i++) s += Math.random()
+  return s - 6
+})
+const {fig: f3, ax: a3} = plot.subplots(1, 1, {figsize: [450, 280]})
+a3.hist(data, {bins: 30, color: '#5ba3b5', edgecolor: '#333'})
+a3.axvline(0, {color: '#e07050', linestyle: '--'})
+a3.set_title('normal distribution (CLT)')
+a3.set_xlabel('value')
+a3.set_ylabel('count')
+display(f3.show())
+
+/// md
+## imshow grid
+
+/// code
+const gridN = 40
+const grid = []
+for (let iy = 0; iy < gridN; iy++) {
+  for (let ix = 0; ix < gridN; ix++) {
+    const cx = ix - gridN / 2, cy = iy - gridN / 2
+    grid.push(Math.sin(Math.sqrt(cx * cx + cy * cy) * 0.5))
+  }
+}
+const {fig: f4, ax: a4} = plot.subplots(1, 1, {figsize: [400, 400]})
+a4.imshow(grid, gridN, gridN, {cmap: 'turbo'})
+a4.set_title('radial wave')
+a4.colorbar({label: 'amplitude'})
+display(f4.show())
+
+/// md
+## subplots
+
+/// code
+const {fig: f5, axes} = plot.subplots(1, 3, {figsize: [900, 280]})
+const cmaps = ['viridis', 'coolwarm', 'turbo']
+for (let k = 0; k < 3; k++) {
+  const d = grid.map(v => v + (k - 1) * 0.5)
+  axes[k].imshow(d, gridN, gridN, {cmap: cmaps[k]})
+  axes[k].set_title(cmaps[k])
+}
+display(f5.show())
+
+/// md
+## bar chart
+
+/// code
+const categories = [1, 2, 3, 4, 5]
+const values = [23, 45, 12, 67, 34]
+const {fig: f6, ax: a6} = plot.subplots(1, 1, {figsize: [400, 280]})
+a6.bar(categories, values, {color: '#b5854b', edgecolor: '#222'})
+a6.set_title('bar chart')
+a6.set_xlabel('category')
+a6.set_ylabel('value')
+display(f6.show())

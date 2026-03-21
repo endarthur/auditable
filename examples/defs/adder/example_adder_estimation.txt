@@ -1,6 +1,7 @@
 /// auditable
 /// title: adder — simulate, drill, estimate
 /// module: @gcu/adder ext/adder/index.js
+/// module: @gcu/plot ext/plot/index.js
 /// module: @atra/gslib ext/atra/lib/gslib.js
 
 /// md
@@ -10,6 +11,7 @@ A complete resource estimation validation workflow in adder, a JS-targeting Pyth
 
 /// code collapsed
 // %collapsed
+await load("@gcu/plot")
 await load("@gcu/adder")
 const gslib = await load("@atra/gslib")
 
@@ -84,51 +86,23 @@ print(f"kriged in {js.performance.now() - t0:.0f} ms")
 ## comparison — truth vs estimate
 
 /// adder
-import js
+import plt
 
-size = min(400, int(js.window.innerWidth / 2) - 60)
+vmin = min(truth)
+vmax = max(truth)
 
-# truth map
-c1 = ui.canvas(size, size)
-ctx1 = c1.getContext("2d")
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=[800, 400])
 
-# estimate map
-c2 = ui.canvas(size, size)
-ctx2 = c2.getContext("2d")
+ax1.imshow(truth, gridN, gridN, cmap="viridis", vmin=vmin, vmax=vmax)
+ax1.set_title("truth")
 
-# shared color range from truth
-vmin = float("inf")
-vmax = float("-inf")
-for i in range(len(truth)):
-    if truth[i] < vmin:
-        vmin = truth[i]
-    if truth[i] > vmax:
-        vmax = truth[i]
-vr = vmax - vmin if vmax - vmin != 0 else 1
+ax2.imshow(est, gridN, gridN, cmap="viridis", vmin=vmin, vmax=vmax, nodata=-999)
+xs = [s[0] for s in samples]
+ys = [s[1] for s in samples]
+ax2.scatter(xs, ys, c="white", s=4)
+ax2.set_title(f"estimate ({nHoles} holes)")
 
-cellW = size / gridN
-for iy in range(gridN):
-    for ix in range(gridN):
-        idx = iy * gridN + ix
-        # truth
-        ctx1.fillStyle = std.viridis((truth[idx] - vmin) / vr)
-        ctx1.fillRect(ix * cellW, iy * cellW, cellW + 0.5, cellW + 0.5)
-        # estimate
-        v = est[idx]
-        ctx2.fillStyle = "#222" if v < -900 else std.viridis((v - vmin) / vr)
-        ctx2.fillRect(ix * cellW, iy * cellW, cellW + 0.5, cellW + 0.5)
-
-# drillholes on estimate map
-for s in samples:
-    ctx2.beginPath()
-    ctx2.arc(s[0] / gridN * size, s[1] / gridN * size, 2, 0, js.Math.PI * 2)
-    ctx2.fillStyle = "#fff"
-    ctx2.fill()
-    ctx2.strokeStyle = "#000"
-    ctx2.lineWidth = 0.5
-    ctx2.stroke()
-
-display(f"truth (left) vs estimate (right) \u00b7 {nHoles} holes")
+display(fig.show())
 
 /// md
 ## error statistics

@@ -1,6 +1,7 @@
 /// auditable
 /// title: adder — drill hole spacing analysis
 /// module: @gcu/adder ext/adder/index.js
+/// module: @gcu/plot ext/plot/index.js
 /// module: @atra/gslib ext/atra/lib/gslib.js
 
 /// md
@@ -8,10 +9,11 @@
 
 Determine optimal drill spacing for resource classification. Generate a reference model by unconditional simulation, decimate to progressively wider spacings, re-estimate at each level, and measure how estimation quality degrades. The spacing-vs-correlation curve maps directly to JORC/NI 43-101 confidence categories.
 
-Written in adder, a JS-targeting Python dialect.
+Written in [adder](https://github.com/endarthur/auditable), a Python dialect that compiles to JavaScript. Adder runs inside [auditable](https://endarthur.github.io/auditable/) — a reactive computational notebook in a single HTML file. The code cells below use Python syntax but execute natively in the browser, with direct access to JS libraries like `gslib` (geostatistics compiled to WebAssembly) and `@gcu/plot` (canvas plotting). No server, no install — just open the HTML file.
 
 /// code collapsed
 // %collapsed
+await load("@gcu/plot")
 await load("@gcu/adder")
 const gslib = await load("@atra/gslib")
 
@@ -109,158 +111,63 @@ for r in results:
 ## maps — truth vs selected spacings
 
 /// adder
+import plt
 import js
+import math
 
-# pick spacings to display: truth + 4 evenly spaced from results
-show_idx = []
-if len(results) >= 4:
-    step = (len(results) - 1) / 3
-    show_idx = [int(round(i * step)) for i in range(4)]
+nPick = min(len(results), 5)
+if nPick >= 2:
+    show_idx = [int(round(i * (len(results) - 1) / (nPick - 1))) for i in range(nPick)]
 else:
     show_idx = list(range(len(results)))
-show = [results[i] for i in show_idx]
+seen = []
+for idx in show_idx:
+    if idx not in seen:
+        seen.append(idx)
+show = [results[i] for i in seen]
 
-ncols = len(show) + 1
-sz = min(180, int((js.window.innerWidth - 60) / ncols) - 10)
+nPanels = len(show) + 1
+nCols = math.ceil(nPanels / 2)
+vmin = min(truth)
+vmax = max(truth)
 
-# shared color range from truth
-vmin = float("inf")
-vmax = float("-inf")
-for i in range(len(truth)):
-    if truth[i] < vmin:
-        vmin = truth[i]
-    if truth[i] > vmax:
-        vmax = truth[i]
-vr = vmax - vmin if vmax - vmin != 0 else 1
-cellW = sz / gridN
+mapW = min(220, int((js.window.innerWidth - 40) / nCols))
+fig, axes = plt.subplots(2, nCols, figsize=[nCols * mapW, 2 * (mapW + 20)])
 
-# truth map
-ct = ui.canvas(sz, sz)
-ctxt = ct.getContext("2d")
-for iy in range(gridN):
-    for ix in range(gridN):
-        ctxt.fillStyle = std.viridis((truth[iy * gridN + ix] - vmin) / vr)
-        ctxt.fillRect(ix * cellW, iy * cellW, cellW + 0.5, cellW + 0.5)
-display("truth")
+axes[0].imshow(truth, gridN, gridN, cmap="viridis", vmin=vmin, vmax=vmax)
+axes[0].set_title("truth")
 
-# spacing maps
-for r in show:
-    ce = ui.canvas(sz, sz)
-    ctxe = ce.getContext("2d")
-    est = r["est"]
-    for iy in range(gridN):
-        for ix in range(gridN):
-            v = est[iy * gridN + ix]
-            ctxe.fillStyle = "#222" if v < -900 else std.viridis((v - vmin) / vr)
-            ctxe.fillRect(ix * cellW, iy * cellW, cellW + 0.5, cellW + 0.5)
-    # drill holes
-    for s in r["samples"]:
-        ctxe.beginPath()
-        ctxe.arc(s[0] / gridN * sz, s[1] / gridN * sz, 1.5, 0, js.Math.PI * 2)
-        ctxe.fillStyle = "#fff"
-        ctxe.fill()
-    display(f"spacing={r['spacing']}  r={r['corr']:.2f}")
+for k in range(len(show)):
+    r = show[k]
+    axes[k + 1].imshow(r["est"], gridN, gridN, cmap="viridis", vmin=vmin, vmax=vmax, nodata=-999)
+    sx = [s[0] for s in r["samples"]]
+    sy = [s[1] for s in r["samples"]]
+    axes[k + 1].scatter(sx, sy, c="white", s=2)
+    axes[k + 1].set_title(f"s={r['spacing']} r={r['corr']:.2f}")
+
+display(fig.show())
 
 /// md
 ## classification curve
 
 /// adder
-import js
+import plt
 
-w = min(500, int(js.window.innerWidth) - 80)
-h = 280
-c = ui.canvas(w, h)
-ctx = c.getContext("2d")
-ctx.fillStyle = "#1a1a1a"
-ctx.fillRect(0, 0, w, h)
+sp = [r["spacing"] for r in results]
+corr = [r["corr"] for r in results]
 
-pad = {"l": 55, "r": 20, "t": 20, "b": 40}
-pw = w - pad["l"] - pad["r"]
-ph = h - pad["t"] - pad["b"]
-
-if len(results) > 0:
-    max_sp = max(r["spacing"] for r in results) * 1.1
-    min_corr = min(r["corr"] for r in results)
-    y_lo = max(0, min_corr - 0.05)
-
-    def sx(sp):
-        return pad["l"] + (sp / max_sp) * pw
-    def sy(corr):
-        return pad["t"] + ph - ((corr - y_lo) / (1.0 - y_lo)) * ph
-
-    ctx.strokeStyle = "#555"
-    ctx.lineWidth = 1
-    ctx.beginPath()
-    ctx.moveTo(pad["l"], pad["t"])
-    ctx.lineTo(pad["l"], pad["t"] + ph)
-    ctx.lineTo(pad["l"] + pw, pad["t"] + ph)
-    ctx.stroke()
-
-    thresholds = [
-        [0.95, "#4caf50", "measured"],
-        [0.85, "#ff9800", "indicated"],
-        [0.70, "#f44336", "inferred"]
-    ]
-    for thresh, color, label in thresholds:
-        if thresh >= y_lo:
-            y = sy(thresh)
-            ctx.setLineDash([6, 4])
-            ctx.strokeStyle = color
-            ctx.lineWidth = 1
-            ctx.beginPath()
-            ctx.moveTo(pad["l"], y)
-            ctx.lineTo(pad["l"] + pw, y)
-            ctx.stroke()
-            ctx.setLineDash([])
-            ctx.fillStyle = color
-            ctx.font = "10px monospace"
-            ctx.textAlign = "left"
-            ctx.fillText(f"{label} (r={thresh})", pad["l"] + 4, y - 3)
-
-    ctx.strokeStyle = "#c89b3c"
-    ctx.lineWidth = 2
-    ctx.beginPath()
-    for i in range(len(results)):
-        x = sx(results[i]["spacing"])
-        y = sy(results[i]["corr"])
-        if i == 0:
-            ctx.moveTo(x, y)
-        else:
-            ctx.lineTo(x, y)
-    ctx.stroke()
-
-    for r in results:
-        x = sx(r["spacing"])
-        y = sy(r["corr"])
-        ctx.beginPath()
-        ctx.arc(x, y, 4, 0, js.Math.PI * 2)
-        ctx.fillStyle = "#fff"
-        ctx.fill()
-        ctx.strokeStyle = "#000"
-        ctx.lineWidth = 1
-        ctx.stroke()
-
-    ctx.fillStyle = "#888"
-    ctx.font = "10px monospace"
-    ctx.textAlign = "center"
-    ctx.fillText("drill hole spacing", pad["l"] + pw / 2, h - 5)
-    for r in results:
-        ctx.fillStyle = "#666"
-        ctx.fillText(str(r["spacing"]), sx(r["spacing"]), pad["t"] + ph + 14)
-    ctx.textAlign = "right"
-    for v_tick in [0.7, 0.8, 0.9, 1.0]:
-        if v_tick >= y_lo:
-            ctx.fillStyle = "#666"
-            ctx.fillText(f"{v_tick:.1f}", pad["l"] - 5, sy(v_tick) + 3)
-    ctx.save()
-    ctx.translate(12, pad["t"] + ph / 2)
-    ctx.rotate(-js.Math.PI / 2)
-    ctx.fillStyle = "#888"
-    ctx.textAlign = "center"
-    ctx.fillText("correlation", 0, 0)
-    ctx.restore()
-
-display(f"DHSA: {len(results)} spacing levels, range={vRange}")
+fig2, ax2 = plt.subplots(1, 1, figsize=[500, 280])
+ax2.plot(sp, corr, color="#c89b3c", linewidth=2, marker="o")
+ax2.axhline(0.95, color="#4caf50", linestyle="--")
+ax2.axhline(0.85, color="#ff9800", linestyle="--")
+ax2.axhline(0.70, color="#f44336", linestyle="--")
+ax2.text(sp[0], 0.96, "measured (r=0.95)", color="#4caf50")
+ax2.text(sp[0], 0.86, "indicated (r=0.85)", color="#ff9800")
+ax2.text(sp[0], 0.71, "inferred (r=0.70)", color="#f44336")
+ax2.set_xlabel("drill hole spacing")
+ax2.set_ylabel("correlation")
+ax2.grid(True)
+display(fig2.show())
 
 /// md
 ## slope of regression
@@ -268,80 +175,19 @@ display(f"DHSA: {len(results)} spacing levels, range={vRange}")
 Conditional bias. Slope = 1.0 is unbiased; < 1.0 means over-smoothing.
 
 /// adder
-import js
+import plt
 
-w2 = min(500, int(js.window.innerWidth) - 80)
-h2 = 200
-c2 = ui.canvas(w2, h2)
-ctx2 = c2.getContext("2d")
-ctx2.fillStyle = "#1a1a1a"
-ctx2.fillRect(0, 0, w2, h2)
+sp = [r["spacing"] for r in results]
+slopes = [r["slope"] for r in results]
 
-pad2 = {"l": 55, "r": 20, "t": 15, "b": 40}
-pw2 = w2 - pad2["l"] - pad2["r"]
-ph2 = h2 - pad2["t"] - pad2["b"]
-
-if len(results) > 0:
-    max_sp = max(r["spacing"] for r in results) * 1.1
-
-    def sx2(sp):
-        return pad2["l"] + (sp / max_sp) * pw2
-    def sy2(slope):
-        return pad2["t"] + ph2 - (slope / 1.2) * ph2
-
-    ctx2.strokeStyle = "#555"
-    ctx2.lineWidth = 1
-    ctx2.beginPath()
-    ctx2.moveTo(pad2["l"], pad2["t"])
-    ctx2.lineTo(pad2["l"], pad2["t"] + ph2)
-    ctx2.lineTo(pad2["l"] + pw2, pad2["t"] + ph2)
-    ctx2.stroke()
-
-    ctx2.setLineDash([6, 4])
-    ctx2.strokeStyle = "#4caf50"
-    ctx2.beginPath()
-    ctx2.moveTo(pad2["l"], sy2(1.0))
-    ctx2.lineTo(pad2["l"] + pw2, sy2(1.0))
-    ctx2.stroke()
-    ctx2.setLineDash([])
-    ctx2.fillStyle = "#4caf50"
-    ctx2.font = "10px monospace"
-    ctx2.textAlign = "left"
-    ctx2.fillText("unbiased (slope=1)", pad2["l"] + 4, sy2(1.0) - 3)
-
-    ctx2.strokeStyle = "#c89b3c"
-    ctx2.lineWidth = 2
-    ctx2.beginPath()
-    for i in range(len(results)):
-        x = sx2(results[i]["spacing"])
-        y = sy2(results[i]["slope"])
-        if i == 0:
-            ctx2.moveTo(x, y)
-        else:
-            ctx2.lineTo(x, y)
-    ctx2.stroke()
-
-    for r in results:
-        x = sx2(r["spacing"])
-        y = sy2(r["slope"])
-        ctx2.beginPath()
-        ctx2.arc(x, y, 4, 0, js.Math.PI * 2)
-        ctx2.fillStyle = "#fff"
-        ctx2.fill()
-        ctx2.strokeStyle = "#000"
-        ctx2.lineWidth = 1
-        ctx2.stroke()
-
-    ctx2.fillStyle = "#888"
-    ctx2.font = "10px monospace"
-    ctx2.textAlign = "center"
-    ctx2.fillText("drill hole spacing", pad2["l"] + pw2 / 2, h2 - 5)
-    ctx2.save()
-    ctx2.translate(12, pad2["t"] + ph2 / 2)
-    ctx2.rotate(-js.Math.PI / 2)
-    ctx2.textAlign = "center"
-    ctx2.fillText("slope", 0, 0)
-    ctx2.restore()
+fig3, ax3 = plt.subplots(1, 1, figsize=[500, 200])
+ax3.plot(sp, slopes, color="#c89b3c", linewidth=2, marker="o")
+ax3.axhline(1.0, color="#4caf50", linestyle="--")
+ax3.text(sp[0], 1.01, "unbiased (slope=1)", color="#4caf50")
+ax3.set_xlabel("drill hole spacing")
+ax3.set_ylabel("slope")
+ax3.grid(True)
+display(fig3.show())
 
 /// md
 ---

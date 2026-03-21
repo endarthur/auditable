@@ -1,5 +1,6 @@
 /// auditable
 /// title: DHSA — drill hole spacing analysis
+/// module: @gcu/plot ext/plot/index.js
 /// module: @atra/gslib ext/atra/lib/gslib.js
 
 /// md
@@ -16,6 +17,7 @@ const simSeed = ui.slider("seed", 42, {min: 1, max: 999, step: 1});
 
 /// code collapsed
 // %collapsed
+const plot = await load("@gcu/plot");
 const { sgsim, kb2d } = await load("@atra/gslib");
 
 const vario = { nugget: vNugget, structures: [{ type: "spherical", contribution: vSill, range: vRange }] };
@@ -73,133 +75,66 @@ for (const r of results)
 ## maps — truth vs selected spacings
 
 /// code
-// pick 4 evenly spaced results
-const showIdx = results.length >= 4
-  ? [0, Math.round((results.length - 1) / 3), Math.round(2 * (results.length - 1) / 3), results.length - 1]
+const nPick = Math.min(results.length, 5);
+const showIdx = nPick >= 2
+  ? Array.from({length: nPick}, (_, i) => Math.round(i * (results.length - 1) / (nPick - 1)))
   : results.map((_, i) => i);
-const show = showIdx.map(i => results[i]);
-const ncols = show.length + 1;
-const sz = Math.min(180, Math.floor((window.innerWidth - 60) / ncols) - 10);
-const cellW = sz / gridN;
+const show = [...new Set(showIdx)].map(i => results[i]);
+const nPanels = show.length + 1;
+const nCols = Math.ceil(nPanels / 2);
 
-// color range from truth
 let vmin = Infinity, vmax = -Infinity;
 for (let i = 0; i < truth.length; i++) { if (truth[i] < vmin) vmin = truth[i]; if (truth[i] > vmax) vmax = truth[i]; }
-const vr = vmax - vmin || 1;
 
-// truth
-const ct = ui.canvas(sz, sz);
-const ctxt = ct.getContext("2d");
-for (let iy = 0; iy < gridN; iy++)
-  for (let ix = 0; ix < gridN; ix++) {
-    ctxt.fillStyle = std.viridis((truth[iy * gridN + ix] - vmin) / vr);
-    ctxt.fillRect(ix * cellW, iy * cellW, cellW + 0.5, cellW + 0.5);
-  }
-display("truth");
+const mapW = Math.min(220, Math.floor((window.innerWidth - 40) / nCols));
+const {fig, axes} = plot.subplots(2, nCols, {figsize: [nCols * mapW, 2 * (mapW + 20)]});
 
-// spacing maps
-for (const r of show) {
-  const ce = ui.canvas(sz, sz);
-  const ctxe = ce.getContext("2d");
-  for (let iy = 0; iy < gridN; iy++)
-    for (let ix = 0; ix < gridN; ix++) {
-      const v = r.est[iy * gridN + ix];
-      ctxe.fillStyle = v < -900 ? "#222" : std.viridis((v - vmin) / vr);
-      ctxe.fillRect(ix * cellW, iy * cellW, cellW + 0.5, cellW + 0.5);
-    }
-  for (const [sx, sy] of r.samples) {
-    ctxe.beginPath(); ctxe.arc(sx / gridN * sz, sy / gridN * sz, 1.5, 0, Math.PI * 2);
-    ctxe.fillStyle = "#fff"; ctxe.fill();
-  }
-  display(`spacing=${r.spacing}  r=${r.corr.toFixed(2)}`);
+axes[0].imshow(truth, gridN, gridN, {cmap: 'viridis', vmin, vmax});
+axes[0].set_title('truth');
+
+for (let k = 0; k < show.length; k++) {
+  const r = show[k];
+  axes[k + 1].imshow(r.est, gridN, gridN, {cmap: 'viridis', vmin, vmax, nodata: -999});
+  axes[k + 1].scatter(r.samples.map(s => s[0]), r.samples.map(s => s[1]), {c: 'white', s: 2});
+  axes[k + 1].set_title(`s=${r.spacing} r=${r.corr.toFixed(2)}`);
 }
+display(fig.show());
 
 /// md
 ## classification curve
 
 /// code
-const w = Math.min(500, window.innerWidth - 80), h = 280;
-const c = ui.canvas(w, h);
-const ctx = c.getContext("2d");
-ctx.fillStyle = "#1a1a1a"; ctx.fillRect(0, 0, w, h);
+const sp = results.map(r => r.spacing);
+const corr = results.map(r => r.corr);
 
-const pad = {l: 55, r: 20, t: 20, b: 40};
-const pw = w - pad.l - pad.r, ph = h - pad.t - pad.b;
-
-if (results.length > 0) {
-  const maxSp = Math.max(...results.map(r => r.spacing)) * 1.1;
-  const minCorr = Math.min(...results.map(r => r.corr));
-  const yLo = Math.max(0, minCorr - 0.05);
-  const sx = sp => pad.l + (sp / maxSp) * pw;
-  const sy = corr => pad.t + ph - ((corr - yLo) / (1.0 - yLo)) * ph;
-
-  ctx.strokeStyle = "#555"; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.moveTo(pad.l, pad.t); ctx.lineTo(pad.l, pad.t + ph); ctx.lineTo(pad.l + pw, pad.t + ph); ctx.stroke();
-
-  for (const [thresh, color, label] of [[0.95, "#4caf50", "measured"], [0.85, "#ff9800", "indicated"], [0.70, "#f44336", "inferred"]]) {
-    if (thresh < yLo) continue;
-    const y = sy(thresh);
-    ctx.setLineDash([6, 4]); ctx.strokeStyle = color; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(pad.l + pw, y); ctx.stroke();
-    ctx.setLineDash([]); ctx.fillStyle = color; ctx.font = "10px monospace"; ctx.textAlign = "left";
-    ctx.fillText(`${label} (r=${thresh})`, pad.l + 4, y - 3);
-  }
-
-  ctx.strokeStyle = "#c89b3c"; ctx.lineWidth = 2; ctx.beginPath();
-  results.forEach((r, i) => { const x = sx(r.spacing), y = sy(r.corr); i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); });
-  ctx.stroke();
-
-  for (const r of results) {
-    ctx.beginPath(); ctx.arc(sx(r.spacing), sy(r.corr), 4, 0, Math.PI * 2);
-    ctx.fillStyle = "#fff"; ctx.fill(); ctx.strokeStyle = "#000"; ctx.lineWidth = 1; ctx.stroke();
-  }
-
-  ctx.fillStyle = "#888"; ctx.font = "10px monospace"; ctx.textAlign = "center";
-  ctx.fillText("drill hole spacing", pad.l + pw / 2, h - 5);
-  for (const r of results) { ctx.fillStyle = "#666"; ctx.fillText(r.spacing, sx(r.spacing), pad.t + ph + 14); }
-  ctx.textAlign = "right";
-  for (const v of [0.7, 0.8, 0.9, 1.0]) { if (v >= yLo) { ctx.fillStyle = "#666"; ctx.fillText(v.toFixed(1), pad.l - 5, sy(v) + 3); } }
-  ctx.save(); ctx.translate(12, pad.t + ph / 2); ctx.rotate(-Math.PI / 2); ctx.fillStyle = "#888"; ctx.textAlign = "center"; ctx.fillText("correlation", 0, 0); ctx.restore();
-}
+const {fig: f2, ax: a2} = plot.subplots(1, 1, {figsize: [500, 280]});
+a2.plot(sp, corr, {color: '#c89b3c', linewidth: 2, marker: 'o'});
+a2.axhline(0.95, {color: '#4caf50', linestyle: '--'});
+a2.axhline(0.85, {color: '#ff9800', linestyle: '--'});
+a2.axhline(0.70, {color: '#f44336', linestyle: '--'});
+a2.text(sp[0], 0.96, 'measured (r=0.95)', {color: '#4caf50'});
+a2.text(sp[0], 0.86, 'indicated (r=0.85)', {color: '#ff9800'});
+a2.text(sp[0], 0.71, 'inferred (r=0.70)', {color: '#f44336'});
+a2.set_xlabel('drill hole spacing');
+a2.set_ylabel('correlation');
+a2.grid(true);
+display(f2.show());
 
 /// md
 ## slope of regression
 
+Conditional bias. Slope = 1.0 is unbiased; < 1.0 means over-smoothing.
+
 /// code
-const w2 = Math.min(500, window.innerWidth - 80), h2 = 200;
-const c2 = ui.canvas(w2, h2);
-const ctx2 = c2.getContext("2d");
-ctx2.fillStyle = "#1a1a1a"; ctx2.fillRect(0, 0, w2, h2);
-
-const pad2 = {l: 55, r: 20, t: 15, b: 40};
-const pw2 = w2 - pad2.l - pad2.r, ph2 = h2 - pad2.t - pad2.b;
-
-if (results.length > 0) {
-  const maxSp = Math.max(...results.map(r => r.spacing)) * 1.1;
-  const sx2 = sp => pad2.l + (sp / maxSp) * pw2;
-  const sy2 = sl => pad2.t + ph2 - (sl / 1.2) * ph2;
-
-  ctx2.strokeStyle = "#555"; ctx2.lineWidth = 1;
-  ctx2.beginPath(); ctx2.moveTo(pad2.l, pad2.t); ctx2.lineTo(pad2.l, pad2.t + ph2); ctx2.lineTo(pad2.l + pw2, pad2.t + ph2); ctx2.stroke();
-
-  ctx2.setLineDash([6, 4]); ctx2.strokeStyle = "#4caf50";
-  ctx2.beginPath(); ctx2.moveTo(pad2.l, sy2(1.0)); ctx2.lineTo(pad2.l + pw2, sy2(1.0)); ctx2.stroke();
-  ctx2.setLineDash([]); ctx2.fillStyle = "#4caf50"; ctx2.font = "10px monospace"; ctx2.textAlign = "left";
-  ctx2.fillText("unbiased (slope=1)", pad2.l + 4, sy2(1.0) - 3);
-
-  ctx2.strokeStyle = "#c89b3c"; ctx2.lineWidth = 2; ctx2.beginPath();
-  results.forEach((r, i) => { const x = sx2(r.spacing), y = sy2(r.slope); i === 0 ? ctx2.moveTo(x, y) : ctx2.lineTo(x, y); });
-  ctx2.stroke();
-
-  for (const r of results) {
-    ctx2.beginPath(); ctx2.arc(sx2(r.spacing), sy2(r.slope), 4, 0, Math.PI * 2);
-    ctx2.fillStyle = "#fff"; ctx2.fill(); ctx2.strokeStyle = "#000"; ctx2.lineWidth = 1; ctx2.stroke();
-  }
-
-  ctx2.fillStyle = "#888"; ctx2.font = "10px monospace"; ctx2.textAlign = "center";
-  ctx2.fillText("drill hole spacing", pad2.l + pw2 / 2, h2 - 5);
-  ctx2.save(); ctx2.translate(12, pad2.t + ph2 / 2); ctx2.rotate(-Math.PI / 2); ctx2.textAlign = "center"; ctx2.fillText("slope", 0, 0); ctx2.restore();
-}
+const slopes = results.map(r => r.slope);
+const {fig: f3, ax: a3} = plot.subplots(1, 1, {figsize: [500, 200]});
+a3.plot(sp, slopes, {color: '#c89b3c', linewidth: 2, marker: 'o'});
+a3.axhline(1.0, {color: '#4caf50', linestyle: '--'});
+a3.text(sp[0], 1.01, 'unbiased (slope=1)', {color: '#4caf50'});
+a3.set_xlabel('drill hole spacing');
+a3.set_ylabel('slope');
+a3.grid(true);
+display(f3.show());
 
 /// md
 ---
