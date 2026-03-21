@@ -8,33 +8,45 @@
 /// md
 # Python + GSLIB — cross-language geostatistics
 
-A resource estimation pipeline across three languages. **Python** generates drill hole data, computes the experimental variogram, and builds the grade-tonnage curve. **Atra/WASM** runs ordinary kriging. **JS** renders everything. Data flows both ways through the reactive DAG.
+A resource estimation pipeline where **Python drives everything** — data generation, variography, kriging (calling GSLIB's WASM routines directly from Python via FFI), and grade-tonnage reporting. JS handles only the widgets and rendering.
 
 /// code collapsed
 // %collapsed
 await load("@gcu/adder")
+// expose gslib to Python via window global
+const gslib = await load("@atra/gslib")
+window._gslib = gslib
 
 /// md
-## drill hole data
-
-Python generates synthetic drill holes with a buried high-grade zone. Adjust the parameters — everything downstream re-executes automatically.
+## parameters
 
 /// code
 const nHoles = ui.slider("drill holes", 30, {min: 10, max: 80, step: 1});
 const noise = ui.slider("noise", 0.3, {min: 0.0, max: 1.0, step: 0.05});
 const seed = ui.slider("seed", 42, {min: 1, max: 999, step: 1});
+const modelNames = ["spherical", "exponential", "gaussian"];
+const modelIdx = ui.dropdown("variogram model", modelNames);
+const vRange = ui.slider("range", 0.30, {min: 0.05, max: 0.60, step: 0.01});
+const vSill = ui.slider("sill", 0.8, {min: 0.1, max: 3.0, step: 0.05});
+const vNugget = ui.slider("nugget", 0.05, {min: 0.0, max: 0.5, step: 0.01});
+const gridN = ui.slider("grid", 60, {min: 20, max: 120, step: 5});
+
+/// md
+## Python pipeline
+
+One Python cell does everything: generates drill holes, computes the experimental variogram, calls GSLIB's `kb2d` kriging via JS FFI, and builds the grade-tonnage table. Results are exported as JSON for the JS rendering cells below.
 
 /// python
-import math, json as _json
+import math, json as _json, js
 
-# seeded RNG (MicroPython has no numpy)
+# ---- RNG ----
 _s = seed
 def _rng():
     global _s
     _s = (_s * 1103515245 + 12345) & 0x7fffffff
     return _s / 0x7fffffff
 
-# synthetic grade: two Gaussian blobs + background + noise
+# ---- generate drill holes ----
 def _grade(x, y):
     g1 = 2.5 * math.exp(-((x - 0.3)**2 + (y - 0.6)**2) / 0.02)
     g2 = 1.8 * math.exp(-((x - 0.7)**2 + (y - 0.35)**2) / 0.04)
@@ -45,36 +57,17 @@ for i in range(nHoles):
     x, y = _rng(), _rng()
     _pts.append([x, y, round(_grade(x, y), 3)])
 
-# summary statistics
 _grades = [p[2] for p in _pts]
-n = len(_grades)
-mean_grade = sum(_grades) / n
-std_grade = (sum((g - mean_grade)**2 for g in _grades) / (n - 1)) ** 0.5
-cv = std_grade / mean_grade
+_n = len(_grades)
+_mean = sum(_grades) / _n
+_std = (sum((g - _mean)**2 for g in _grades) / (_n - 1)) ** 0.5
 
-print(f"{n} samples \u00b7 mean {mean_grade:.3f} \u00b7 std {std_grade:.3f} \u00b7 CV {cv:.2f}")
-print(f"range [{min(_grades):.3f}, {max(_grades):.3f}] \u00b7 median {sorted(_grades)[n//2]:.3f}")
+print(f"samples: {_n} \u00b7 mean {_mean:.3f} \u00b7 std {_std:.3f} \u00b7 CV {_std/_mean:.2f}")
+print(f"range [{min(_grades):.3f}, {max(_grades):.3f}]")
 
-# export as JSON for JS/WASM consumption
-samples_json = _json.dumps(_pts)
-
-/// code collapsed
-// %collapsed
-// bridge: parse Python's JSON into native JS arrays for GSLIB's WASM wrapper
-const samples = JSON.parse(samples_json)
-
-/// md
-## experimental variogram
-
-Python computes the omnidirectional experimental semivariogram \u2014 an O(n\u00b2) all-pairs computation that's perfectly tractable for tens of samples.
-
-/// python
-# experimental semivariogram: all-pairs, omnidirectional
+# ---- experimental variogram (Python, O(n\u00b2)) ----
 _nlag = 12
 _lag_size = 0.06
-_lag_tol = 0.03
-
-# accumulators: [count, sum_of_squared_differences, sum_of_distances]
 _bins = [[0, 0.0, 0.0] for _ in range(_nlag)]
 
 for i in range(len(_pts)):
@@ -82,64 +75,85 @@ for i in range(len(_pts)):
     for j in range(i + 1, len(_pts)):
         xj, yj, vj = _pts[j]
         h = math.sqrt((xi - xj)**2 + (yi - yj)**2)
-        # assign to lag bin
         for k in range(_nlag):
-            center = (k + 1) * _lag_size
-            if abs(h - center) <= _lag_tol:
+            if abs(h - (k + 1) * _lag_size) <= _lag_size / 2:
                 _bins[k][0] += 1
                 _bins[k][1] += (vi - vj)**2
                 _bins[k][2] += h
                 break
 
-# build variogram arrays: distance, gamma, npairs
-vario_h = []
-vario_gamma = []
-vario_np = []
+vario_h, vario_gamma = [], []
 for k in range(_nlag):
-    count, sq_sum, h_sum = _bins[k]
-    if count > 0:
-        vario_h.append(h_sum / count)
-        vario_gamma.append(sq_sum / (2 * count))
-        vario_np.append(count)
+    cnt, sq, hs = _bins[k]
+    if cnt > 0:
+        vario_h.append(hs / cnt)
+        vario_gamma.append(sq / (2 * cnt))
 
-print(f"{sum(b[0] for b in _bins)} pairs across {len(vario_h)} lags")
+print(f"variogram: {sum(b[0] for b in _bins)} pairs, {len(vario_h)} lags")
 
-# export for JS plotting
-vario_json = _json.dumps({"h": vario_h, "gamma": vario_gamma, "np": vario_np})
+# ---- kriging via GSLIB WASM (called from Python!) ----
+_opts = _json.dumps({
+    "data": _pts,
+    "grid": {"nx": gridN, "ny": gridN, "xsiz": 1.0 / gridN, "ysiz": 1.0 / gridN},
+    "variogram": {"nugget": vNugget, "structures": [{"type": modelIdx, "contribution": vSill, "range": vRange}]},
+    "search": {"radius": 2.0, "ndmax": min(nHoles, 24)},
+})
+_result = js.globalThis._gslib.kb2d(js.globalThis.JSON.parse(_opts))
+
+# extract Float64Array results via JS interop
+_est = [float(_result.est[i]) for i in range(gridN * gridN)]
+_estv = [float(_result.var[i]) for i in range(gridN * gridN)]
+
+# ---- grade-tonnage curve ----
+_valid = [v for v in _est if v > -900]
+_block_t = 2.7 / (gridN * gridN)  # density / n_blocks
+
+gt_rows = []
+for co_x10 in range(0, 31):
+    co = co_x10 * 0.1
+    above = [v for v in _valid if v >= co]
+    if not above:
+        break
+    t = len(above) * _block_t
+    g = sum(above) / len(above)
+    gt_rows.append([round(co, 1), len(above), round(t, 3), round(g, 3), round(t * g, 3)])
+
+# ---- export everything for JS rendering ----
+pipeline_json = _json.dumps({
+    "samples": _pts,
+    "vario": {"h": vario_h, "gamma": vario_gamma},
+    "est": _est,
+    "estv": _estv,
+    "gt": gt_rows,
+})
+
+print(f"kriged {gridN}\u00d7{gridN} grid, {len(gt_rows)} cutoffs in GT curve")
 
 /// code collapsed
 // %collapsed
-const vario = JSON.parse(vario_json)
-const lagDist = vario.h, lagGamma = vario.gamma
+// unpack Python results
+const pipeline = JSON.parse(pipeline_json)
+const samples = pipeline.samples
+const lagDist = pipeline.vario.h, lagGamma = pipeline.vario.gamma
+const est = pipeline.est, estv = pipeline.estv
+const gtRows = pipeline.gt
 
 /// md
-## variogram model
-
-Fit a model to the experimental points. These parameters drive the kriging.
-
-/// code
-const modelNames = ["spherical", "exponential", "gaussian"];
-const modelIdx = ui.dropdown("model", modelNames);
-const vRange = ui.slider("range", 0.30, {min: 0.05, max: 0.60, step: 0.01});
-const vSill = ui.slider("sill", 0.8, {min: 0.1, max: 3.0, step: 0.05});
-const vNugget = ui.slider("nugget", 0.05, {min: 0.0, max: 0.5, step: 0.01});
+## variogram
 
 /// code
 // plot experimental variogram + fitted model
 const vc = ui.canvas(460, 220);
 const vctx = vc.getContext("2d");
-vctx.fillStyle = "#1a1a1a";
-vctx.fillRect(0, 0, 460, 220);
+vctx.fillStyle = "#1a1a1a"; vctx.fillRect(0, 0, 460, 220);
 
 const pad = {l: 50, r: 20, t: 15, b: 35};
 const pw = 460 - pad.l - pad.r, ph = 220 - pad.t - pad.b;
-
 const maxH = Math.max(...lagDist) * 1.1;
 const maxG = Math.max(...lagGamma, vNugget + vSill) * 1.2;
 const sx = h => pad.l + (h / maxH) * pw;
 const sy = g => pad.t + ph - (g / maxG) * ph;
 
-// axes
 vctx.strokeStyle = "#555"; vctx.lineWidth = 1;
 vctx.beginPath(); vctx.moveTo(pad.l, pad.t); vctx.lineTo(pad.l, pad.t + ph); vctx.lineTo(pad.l + pw, pad.t + ph); vctx.stroke();
 vctx.fillStyle = "#888"; vctx.font = "10px monospace"; vctx.textAlign = "center";
@@ -161,43 +175,21 @@ const modelFn = (h) => {
 vctx.strokeStyle = "#c89b3c"; vctx.lineWidth = 2; vctx.beginPath();
 for (let i = 0; i <= 100; i++) { const h = (maxH/100)*i; i === 0 ? vctx.moveTo(sx(h), sy(modelFn(h))) : vctx.lineTo(sx(h), sy(modelFn(h))); }
 vctx.stroke();
-
-// sill line
 vctx.setLineDash([4,4]); vctx.strokeStyle = "#555"; vctx.lineWidth = 0.5;
 vctx.beginPath(); vctx.moveTo(pad.l, sy(vNugget+vSill)); vctx.lineTo(pad.l+pw, sy(vNugget+vSill)); vctx.stroke(); vctx.setLineDash([]);
 
-// experimental points
 for (let i = 0; i < lagDist.length; i++) {
   vctx.beginPath(); vctx.arc(sx(lagDist[i]), sy(lagGamma[i]), 4, 0, Math.PI * 2);
   vctx.fillStyle = "#fff"; vctx.fill(); vctx.strokeStyle = "#000"; vctx.lineWidth = 1; vctx.stroke();
 }
 
 /// md
-## kriging
-
-GSLIB's `kb2d` (atra \u2192 WASM) runs ordinary kriging. The variogram model above drives the interpolation.
+## kriging map
 
 /// code
-const gridN = ui.slider("grid resolution", 60, {min: 20, max: 120, step: 5});
 const showVar = ui.checkbox("show variance", false);
 
 /// code
-const { kb2d } = await load("@atra/gslib");
-const t0 = performance.now();
-const kResult = kb2d({
-  data: samples,
-  grid: { nx: gridN, ny: gridN, xsiz: 1/gridN, ysiz: 1/gridN },
-  variogram: { nugget: vNugget, structures: [{ type: modelIdx, contribution: vSill, range: vRange }] },
-  search: { radius: 2.0, ndmax: Math.min(nHoles, 24) },
-});
-const elapsed = (performance.now() - t0).toFixed(1);
-const est = kResult.est, estv = kResult.var;
-
-// serialize kriged estimates for Python grade-tonnage analysis
-const est_json = JSON.stringify(Array.from(est));
-
-/// code
-// render kriged grid
 const gridData = showVar ? estv : est;
 const cmap = showVar ? std.magma : std.viridis;
 
@@ -225,47 +217,16 @@ for (const [px, py, pv] of samples) {
   ctx.fillStyle = cmap((pv - vmin) / vr); ctx.fill();
   ctx.lineWidth = 1.5; ctx.strokeStyle = "#000"; ctx.stroke();
 }
-
-const lbl = showVar ? "kriging variance" : `kriging estimate (${modelIdx})`;
-display(`${lbl} \u00b7 ${gridN}\u00d7${gridN} \u00b7 ${nHoles} holes \u00b7 ${elapsed} ms`);
+display(`${showVar ? "variance" : modelIdx} \u00b7 ${gridN}\u00d7${gridN} \u00b7 ${nHoles} holes`);
 
 /// md
 ## grade-tonnage
 
-Python receives the kriged grid back from WASM and computes the grade-tonnage curve across multiple cutoffs. Data has now flowed Python \u2192 JS/WASM \u2192 Python.
-
-/// python
-import json as _json
-
-# receive kriged estimates from JS/WASM
-_est = _json.loads(est_json)
-_valid = [v for v in _est if v > -900]
-_n = len(_valid)
-
-# block model parameters
-_block_vol = 1.0 / (gridN * gridN)
-_density = 2.7  # t/m\u00b3
-_block_t = _block_vol * _density
-
-# grade-tonnage curve across cutoffs
-_cutoffs = [i * 0.1 for i in range(0, 31)]
-gt_table = []
-for co in _cutoffs:
-    above = [v for v in _valid if v >= co]
-    if not above:
-        break
-    t = len(above) * _block_t
-    g = sum(above) / len(above)
-    gt_table.append([round(co, 2), len(above), round(t, 2), round(g, 3), round(t * g, 2)])
-
-# print table
-print(f"{'cutoff':>7}  {'blocks':>6}  {'tonnes':>8}  {'grade':>6}  {'metal':>7}")
-print(f"{'------':>7}  {'------':>6}  {'------':>8}  {'-----':>6}  {'-----':>7}")
-for row in gt_table:
-    co, nb, t, g, m = row
-    print(f"{co:7.2f}  {nb:6d}  {t:8.2f}  {g:6.3f}  {m:7.2f}")
+/// code
+ui.table(gtRows.map(r => ({cutoff: r[0], blocks: r[1], tonnes: r[2], grade: r[3], metal: r[4]})),
+  {columns: ["cutoff", "blocks", "tonnes", "grade", "metal"]})
 
 /// md
 ---
 
-**data flow:** Python generates samples \u2192 JSON bridge \u2192 JS parses into native arrays \u2192 GSLIB/WASM runs kriging \u2192 JS serializes Float64Array to JSON \u2192 Python computes grade-tonnage. The variogram is computed entirely in Python (O(n\u00b2) all-pairs). Three languages, bidirectional DAG.
+**how it works:** one Python cell drives the entire pipeline. It generates drill holes, computes the experimental variogram (pure Python O(n\u00b2)), calls GSLIB's `kb2d` WASM routine directly via `js.globalThis._gslib.kb2d(...)`, reads back the kriged Float64Array, and builds the grade-tonnage curve. JS only handles widgets and rendering. The key FFI trick: Python builds the options as a JSON string, parses it with `js.globalThis.JSON.parse()` to get a native JS object, and passes it to the WASM wrapper.
