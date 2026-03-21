@@ -2,6 +2,7 @@
 /// title: adder — simulate, drill, estimate
 /// module: @gcu/adder ext/adder/index.js
 /// module: @gcu/plot ext/plot/index.js
+/// module: @gcu/sadpan ext/sadpan/index.js
 /// module: @atra/gslib ext/atra/lib/gslib.js
 
 /// md
@@ -13,6 +14,7 @@ A complete resource estimation validation workflow in adder, a JS-targeting Pyth
 // %collapsed
 await load("@gcu/plot")
 await load("@gcu/adder")
+await load("@gcu/sadpan")
 const gslib = await load("@atra/gslib")
 
 /// md
@@ -108,31 +110,39 @@ display(fig.show())
 ## error statistics
 
 /// adder
-errors = []
+import sadpan as pd
+
+# build a dataframe of truth vs estimate, filtering unestimated nodes
+t_vals = []
+e_vals = []
 for i in range(gridN * gridN):
     if est[i] > -900:
-        errors.append(est[i] - truth[i])
+        t_vals.append(truth[i])
+        e_vals.append(est[i])
 
-n = len(errors)
-me = sum(errors) / n
-mae = sum(abs(e) for e in errors) / n
-mse = sum(e**2 for e in errors) / n
-rmse = mse ** 0.5
+df = pd.DataFrame({"truth": t_vals, "est": e_vals})
+df["error"] = df["est"] - df["truth"]
 
-# correlation coefficient
-t_mean = sum(truth[i] for i in range(gridN * gridN)) / (gridN * gridN)
-e_mean = sum(est[i] for i in range(gridN * gridN) if est[i] > -900) / n
-cov = sum((truth[i] - t_mean) * (est[i] - e_mean) for i in range(gridN * gridN) if est[i] > -900) / n
-t_std = (sum((truth[i] - t_mean)**2 for i in range(gridN * gridN)) / (gridN * gridN)) ** 0.5
-e_std = (sum((est[i] - e_mean)**2 for i in range(gridN * gridN) if est[i] > -900) / n) ** 0.5
-corr = cov / (t_std * e_std) if t_std * e_std > 0 else 0
+err = df["error"]
+t_s = df["truth"]
+e_s = df["est"]
 
-print(f"nodes estimated: {n} / {gridN * gridN}")
-print(f"mean error:      {me:+.4f}")
-print(f"mean abs error:  {mae:.4f}")
-print(f"RMSE:            {rmse:.4f}")
-print(f"correlation:     {corr:.4f}")
-print(f"conditional bias: {me / rmse:.3f}" if rmse > 0 else "")
+me = err.mean()
+mae = err.abs().mean()
+rmse = err.apply(lambda v: v**2).mean() ** 0.5
+
+# correlation: cov(t,e) / (std_t * std_e)
+cov = ((t_s - t_s.mean()) * (e_s - e_s.mean())).mean()
+corr = cov / (t_s.std() * e_s.std()) if t_s.std() > 0 and e_s.std() > 0 else 0
+
+ui.table(pd.DataFrame([{
+    "estimated": f"{len(df)} / {gridN * gridN}",
+    "mean error": round(me, 4),
+    "MAE": round(mae, 4),
+    "RMSE": round(rmse, 4),
+    "correlation": round(corr, 4),
+    "cond. bias": round(me / rmse, 3) if rmse > 0 else 0,
+}]).to_records())
 
 /// md
 ---

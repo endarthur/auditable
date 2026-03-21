@@ -2,6 +2,7 @@
 /// title: adder — drill hole spacing analysis
 /// module: @gcu/adder ext/adder/index.js
 /// module: @gcu/plot ext/plot/index.js
+/// module: @gcu/sadpan ext/sadpan/index.js
 /// module: @atra/gslib ext/atra/lib/gslib.js
 
 /// md
@@ -15,6 +16,7 @@ Written in [adder](https://github.com/endarthur/auditable), a Python dialect tha
 // %collapsed
 await load("@gcu/plot")
 await load("@gcu/adder")
+await load("@gcu/sadpan")
 const gslib = await load("@atra/gslib")
 
 /// md
@@ -46,6 +48,7 @@ print(f"reference model: {gridN}\u00d7{gridN} grid, range={vRange}, sill={vSill}
 
 /// adder
 import js
+import sadpan as pd
 
 spacings = [2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30]
 spacings = [s for s in spacings if s < gridN / 2]
@@ -65,36 +68,21 @@ for spacing in spacings:
         "search": {"radius": max(vRange * 2.5, spacing * 2), "ndmax": min(len(samples), 24)}
     }).est
 
-    n = 0
-    sum_t = 0.0
-    sum_e = 0.0
-    sum_t2 = 0.0
-    sum_e2 = 0.0
-    sum_te = 0.0
-    sum_err2 = 0.0
-    for i in range(gridN * gridN):
-        if est[i] > -900:
-            t = truth[i]
-            e = est[i]
-            n += 1
-            sum_t += t
-            sum_e += e
-            sum_t2 += t * t
-            sum_e2 += e * e
-            sum_te += t * e
-            sum_err2 += (e - t) ** 2
-
-    if n < 2:
+    # build paired series, filtering unestimated nodes
+    t_vals = [truth[i] for i in range(gridN * gridN) if est[i] > -900]
+    e_vals = [est[i] for i in range(gridN * gridN) if est[i] > -900]
+    if len(t_vals) < 2:
         continue
 
-    mt = sum_t / n
-    me = sum_e / n
-    vt = sum_t2 / n - mt * mt
-    ve = sum_e2 / n - me * me
-    cov = sum_te / n - mt * me
-    corr = cov / (vt ** 0.5 * ve ** 0.5) if vt > 0 and ve > 0 else 0
+    t_s = pd.Series(t_vals)
+    e_s = pd.Series(e_vals)
+    err = e_s - t_s
+
+    cov = ((t_s - t_s.mean()) * (e_s - e_s.mean())).mean()
+    vt = ((t_s - t_s.mean()) * (t_s - t_s.mean())).mean()
+    corr = cov / (t_s.std() * e_s.std()) if t_s.std() > 0 and e_s.std() > 0 else 0
     slope = cov / vt if vt > 0 else 0
-    rmse = (sum_err2 / n) ** 0.5
+    rmse = (err.apply(lambda v: v**2).mean()) ** 0.5
 
     results.append({
         "spacing": spacing, "nsamples": len(samples),
@@ -102,10 +90,8 @@ for spacing in spacings:
         "est": est, "samples": samples
     })
 
-print(f"{'spacing':>7}  {'samples':>7}  {'corr':>7}  {'slope':>7}  {'RMSE':>7}")
-print(f"{'-------':>7}  {'-------':>7}  {'------':>7}  {'------':>7}  {'------':>7}")
-for r in results:
-    print(f"{r['spacing']:7d}  {r['nsamples']:7d}  {r['corr']:7.4f}  {r['slope']:7.4f}  {r['rmse']:7.4f}")
+results_df = pd.DataFrame([{"spacing": r["spacing"], "nsamples": r["nsamples"], "corr": r["corr"], "slope": r["slope"], "rmse": r["rmse"]} for r in results])
+ui.table(results_df.to_records())
 
 /// md
 ## maps — truth vs selected spacings
@@ -153,8 +139,8 @@ display(fig.show())
 /// adder
 import plt
 
-sp = [r["spacing"] for r in results]
-corr = [r["corr"] for r in results]
+sp = list(results_df['spacing'].values)
+corr = list(results_df['corr'].values)
 
 fig2, ax2 = plt.subplots(1, 1, figsize=[500, 280])
 ax2.plot(sp, corr, color="#c89b3c", linewidth=2, marker="o")
@@ -177,8 +163,8 @@ Conditional bias. Slope = 1.0 is unbiased; < 1.0 means over-smoothing.
 /// adder
 import plt
 
-sp = [r["spacing"] for r in results]
-slopes = [r["slope"] for r in results]
+sp = list(results_df['spacing'].values)
+slopes = list(results_df['slope'].values)
 
 fig3, ax3 = plt.subplots(1, 1, figsize=[500, 200])
 ax3.plot(sp, slopes, color="#c89b3c", linewidth=2, marker="o")

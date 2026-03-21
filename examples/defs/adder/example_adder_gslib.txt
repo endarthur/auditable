@@ -1,6 +1,7 @@
 /// auditable
 /// title: adder + gslib — kriging
 /// module: @gcu/adder ext/adder/index.js
+/// module: @gcu/sadpan ext/sadpan/index.js
 /// module: @atra/gslib ext/atra/lib/gslib.js
 
 /// md
@@ -11,6 +12,7 @@ A resource estimation pipeline in adder, a JS-targeting Python dialect. Data gen
 /// code collapsed
 // %collapsed
 await load("@gcu/adder")
+await load("@gcu/sadpan")
 const gslib = await load("@atra/gslib")
 
 /// md
@@ -227,23 +229,23 @@ display(f"{'variance' if showVar else modelIdx} \u00b7 {nHoles} holes")
 ## grade-tonnage
 
 /// adder
-_valid = [float(est[i]) for i in range(gridN * gridN) if float(est[i]) > -900]
+import sadpan as pd
+
+_grades = pd.DataFrame({"grade": [float(est[i]) for i in range(gridN * gridN) if float(est[i]) > -900]})
 _block_t = 2.7 / (gridN * gridN)
 
 gt_rows = []
 for co_x10 in range(0, 31):
     co = co_x10 * 0.1
-    above = [v for v in _valid if v >= co]
-    if not above:
+    above = _grades.filter(lambda row: row["grade"] >= co)
+    if len(above) == 0:
         break
+    g_s = above['grade']
     t = len(above) * _block_t
-    g = sum(above) / len(above)
+    g = g_s.mean()
     gt_rows.append({"cutoff": co, "blocks": len(above), "tonnes": round(t, 3), "grade": round(g, 3), "metal": round(t * g, 3)})
 
-print(f"{'cutoff':>7}  {'blocks':>6}  {'tonnes':>8}  {'grade':>6}  {'metal':>7}")
-print(f"{'------':>7}  {'------':>6}  {'------':>8}  {'-----':>6}  {'-----':>7}")
-for r in gt_rows:
-    print(f"{r['cutoff']:7.1f}  {r['blocks']:6d}  {r['tonnes']:8.3f}  {r['grade']:6.3f}  {r['metal']:7.3f}")
+ui.table(pd.DataFrame(gt_rows).to_records())
 
 /// md
 ---
