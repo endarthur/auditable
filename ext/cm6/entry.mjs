@@ -35,6 +35,10 @@ export {
 } from '@codemirror/lang-css';
 
 export {
+  python,
+} from '@codemirror/lang-python';
+
+export {
   html,
 } from '@codemirror/lang-html';
 
@@ -53,6 +57,7 @@ export {
   syntaxHighlighting,
   HighlightStyle,
   indentOnInput,
+  indentUnit,
   StreamLanguage,
   LanguageSupport,
   Language,

@@ -9,9 +9,12 @@
     "build:af": "node build.js && node build.js --target=af",
     "build:gcu-press": "node ext/gcu-press/build.js && node build.js --target=gcu-press",
     "build:rv": "node ext/rv/build.js && node build.js --target=rv",
-    "test": "node --no-warnings --test"
+    "test": "node --no-warnings --test \"test/!(adder-wasm).test.*\"",
+    "test:wasm": "node --no-warnings --test-force-exit test/adder-wasm.test.mjs",
+    "test:all": "npm test && npm run test:wasm"
   },
   "devDependencies": {
+    "@codemirror/lang-python": "^6.2.1",
     "@rollup/plugin-node-resolve": "^16.0.3",
     "@rollup/plugin-terser": "^1.0.0",
     "ol": "^10.8.0",

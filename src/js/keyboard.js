@@ -1,6 +1,7 @@
 import { S, $, $$ } from './state.js';
 import { addCell, deleteCell, convertCell } from './cell-ops.js';
 import { runDAG, runAll, renderHtmlCell } from './exec.js';
+import { _ctGetHandler } from './cell-types.js';
 import { toggleAutorun } from './editor.js';
 import { toggleSettings, togglePresent, applyLineNumbers, getSettings } from './settings.js';
 import { saveNotebook, savePackedNotebook, setSaveMode, toggleSaveTray } from './save.js';
@@ -64,7 +65,7 @@ export function selectCell(id, scroll) {
 
 function getEditingCell() {
   const active = document.activeElement;
-  // textarea (md cells)
+  // textarea (md cells + plugin fallback cells)
   if (active && active.tagName === 'TEXTAREA') {
     const cellEl = active.closest('.cell');
     if (cellEl) {
@@ -74,6 +75,14 @@ function getEditingCell() {
   }
   // CM6 editor (code/css/html cells)
   if (active && active.closest('.cm-editor')) {
+    const cellEl = active.closest('.cell');
+    if (cellEl) {
+      const id = parseInt(cellEl.dataset.id);
+      return S.cells.find(c => c.id === id) || null;
+    }
+  }
+  // plugin custom editor
+  if (active && active.closest('.cell-plugin-code')) {
     const cellEl = active.closest('.cell');
     if (cellEl) {
       const id = parseInt(cellEl.dataset.id);
@@ -122,6 +131,13 @@ export function editCell(id) {
       editor.view.requestMeasure();
       editor.focus();
     }
+  } else if (cell._pluginEditor) {
+    // plugin cell with custom editor
+    if (cell._pluginEditor.focus) cell._pluginEditor.focus();
+  } else if (cell.type !== 'code') {
+    // fallback plugin cell — focus textarea
+    const ta = cell.el.querySelector('.plugin-textarea');
+    if (ta) ta.focus();
   } else {
     // code cell — always visible
     const editor = getEditor(id);
@@ -148,6 +164,8 @@ function runSelected() {
     runDAG([cell.id]);
   } else if (cell.type === 'html') {
     renderHtmlCell(cell);
+  } else if (_ctGetHandler(cell.type) && !cell._fallback) {
+    runDAG([cell.id]);
   }
 }
 
@@ -155,14 +173,14 @@ function runSelected() {
 function cm6RunCell(cellId) {
   const cell = S.cells.find(c => c.id === cellId);
   if (!cell) return;
-  if (cell.type === 'code') runDAG([cellId], true);
+  if (cell.type === 'code' || (_ctGetHandler(cell.type) && !cell._fallback)) runDAG([cellId], true);
 }
 
 // CM6 callback: run cell and advance
 function cm6RunAndAdvance(cellId) {
   const cell = S.cells.find(c => c.id === cellId);
   if (!cell) return;
-  if (cell.type === 'code') runDAG([cellId], true);
+  if (cell.type === 'code' || (_ctGetHandler(cell.type) && !cell._fallback)) runDAG([cellId], true);
   // advance — respect goto target if set
   const gotoIdx = window._lastGotoTarget;
   if (gotoIdx != null && gotoIdx >= 0 && gotoIdx < S.cells.length) {
@@ -224,9 +242,11 @@ export function showInsertPicker(id, dir) {
     const idx = S.cells.findIndex(c => c.id === id);
     afterId = idx > 0 ? S.cells[idx - 1].id : null;
   }
-  picker.innerHTML = ['code', 'md', 'css', 'html'].map(t =>
-    `<button onclick="insertAt(${afterId !== null ? afterId : 'null'},'${t}');this.closest('.cell-insert-picker').remove()">${t}</button>`
-  ).join('');
+  const allTypes = ['code', 'md', 'css', 'html', ...Object.keys(window._cellTypes || {})];
+  picker.innerHTML = allTypes.map(t => {
+    const label = window._cellTypes?.[t]?.label || t;
+    return `<button onclick="insertAt(${afterId !== null ? afterId : 'null'},'${t}');this.closest('.cell-insert-picker').remove()">${label}</button>`;
+  }).join('');
   const header = cell.el.querySelector('.cell-header');
   header.style.position = 'relative';
   picker.style.top = '100%';
@@ -343,6 +363,13 @@ document.addEventListener('keydown', (e) => {
     }
     // Escape for md textarea cells (CM6 handles via keymap)
     if (e.key === 'Escape' && editing.type === 'md') {
+      e.preventDefault();
+      exitEdit();
+      selectCell(editing.id);
+      return;
+    }
+    // Escape for plugin textarea cells
+    if (e.key === 'Escape' && !['code', 'md', 'css', 'html'].includes(editing.type)) {
       e.preventDefault();
       exitEdit();
       selectCell(editing.id);
@@ -503,6 +530,16 @@ document.addEventListener('keydown', (e) => {
       convertCell(S.selectedId, 'html');
       return;
     }
+    // plugin type shortcuts
+    if (S.selectedId !== null) {
+      for (const [name, handler] of Object.entries(window._cellTypes || {})) {
+        if (handler.shortcut && e.key === handler.shortcut) {
+          e.preventDefault();
+          convertCell(S.selectedId, name);
+          return;
+        }
+      }
+    }
   }
 
   // global: F1 help overlay
@@ -559,11 +596,11 @@ document.addEventListener('click', (e) => {
     moreTray.classList.remove('open');
   }
   // close cell type pickers if clicking outside
-  if (!e.target.closest('.cell-type-picker') && !e.target.closest('.cell-type')) {
+  if (!e.target.closest('.cell-type-picker') && !e.target.closest('.cell-type') && !e.target.closest('.cell-convert')) {
     document.querySelectorAll('.cell-type-picker.open').forEach(el => el.classList.remove('open'));
   }
   // close cell insert pickers if clicking outside
-  if (!e.target.closest('.cell-insert-picker')) {
+  if (!e.target.closest('.cell-insert-picker') && !e.target.closest('.cell-insert')) {
     document.querySelectorAll('.cell-insert-picker').forEach(el => el.remove());
   }
   // close toolbar overflow menu if clicking outside

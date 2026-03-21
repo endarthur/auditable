@@ -94,7 +94,7 @@ function _updateSplitCell(cellIndex, newCode) {
   let cellStartLine = -1; // line after the /// directive
   let cellEndLine = -1;
   for (let i = 0; i < lines.length; i++) {
-    if (/^\/\/\/\s+(code|md|css|html)/.test(lines[i].trimEnd())) {
+    if (/^\/\/\/\s+(\w+)/.test(lines[i].trimEnd())) {
       idx++;
       if (idx === cellIndex) {
         cellStartLine = i + 1;
@@ -645,15 +645,15 @@ function immediateSyncAndRun(view) {
   let cellIdx = -1;
   for (let i = 0; i < lines.length && i < cursorLine; i++) {
     const l = lines[i].trimEnd();
-    if (/^\/\/\/\s+(code|md|css|html)/.test(l)) cellIdx++;
+    if (/^\/\/\/\s+(\w+)/.test(l)) cellIdx++;
   }
 
   if (cellIdx >= 0 && cellIdx < S.cells.length) {
     const cell = S.cells[cellIdx];
     // verify parsed cell type matches — after structural sync, indices may shift
     const expectedType = lines.slice(0, cursorLine).reverse()
-      .find(l => /^\/\/\/\s+(code|md|css|html)/.test(l.trimEnd()));
-    const parsedType = expectedType?.trimEnd().match(/^\/\/\/\s+(code|md|css|html)/)?.[1];
+      .find(l => /^\/\/\/\s+(\w+)/.test(l.trimEnd()));
+    const parsedType = expectedType?.trimEnd().match(/^\/\/\/\s+(\w+)/)?.[1];
     if (parsedType && parsedType !== cell.type) return;
     if (cell.type === 'code') {
       runDAG([cell.id], true);
@@ -676,6 +676,9 @@ function createOutputEl(type, id) {
     div.innerHTML = '<div class="cell-md-view"></div>';
   } else if (type === 'html') {
     div.innerHTML = '<div class="cell-html-view"></div><div class="cell-output"></div>';
+  } else if (type !== 'css') {
+    // plugin cell types (python, etc.) — need output container
+    div.innerHTML = '<div class="cell-widgets"></div><div class="cell-output"></div>';
   }
   // css: no visible output
   return div;
@@ -688,6 +691,33 @@ function buildOutputPanel(container) {
     container.appendChild(outEl);
     // swap cell.el to the lightweight output element
     cell._splitOrigEl = cell.el;
+
+    // splice existing output into new panel element
+    const oldOutput = cell.el.querySelector('.cell-output');
+    const newOutput = outEl.querySelector('.cell-output');
+    if (oldOutput && newOutput && oldOutput.childNodes.length) {
+      while (oldOutput.firstChild) newOutput.appendChild(oldOutput.firstChild);
+      newOutput.className = oldOutput.className;
+    }
+    // splice existing widgets
+    const oldWidgets = cell.el.querySelector('.cell-widgets');
+    const newWidgets = outEl.querySelector('.cell-widgets');
+    if (oldWidgets && newWidgets && oldWidgets.childNodes.length) {
+      while (oldWidgets.firstChild) newWidgets.appendChild(oldWidgets.firstChild);
+    }
+    // splice md view
+    const oldMd = cell.el.querySelector('.cell-md-view');
+    const newMd = outEl.querySelector('.cell-md-view');
+    if (oldMd && newMd && oldMd.innerHTML) {
+      newMd.innerHTML = oldMd.innerHTML;
+    }
+    // splice html view
+    const oldHtml = cell.el.querySelector('.cell-html-view');
+    const newHtml = outEl.querySelector('.cell-html-view');
+    if (oldHtml && newHtml && oldHtml.innerHTML) {
+      newHtml.innerHTML = oldHtml.innerHTML;
+    }
+
     cell.el = outEl;
   }
 }

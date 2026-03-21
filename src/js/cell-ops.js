@@ -1,6 +1,7 @@
 import { S, $ } from './state.js';
 import { createCellEl, autoResize, cssSummary } from './cell-dom.js';
 import { isManual } from './dag.js';
+import { _ctGetHandler, _ctIsBuiltin } from './cell-types.js';
 import { runAll, renderHtmlCell, renderMdCell } from './exec.js';
 import { updateStatus } from './ui.js';
 import { selectCell } from './keyboard.js';
@@ -34,7 +35,7 @@ export function setCellCode(cell, newCode) {
         const docLines = doc.split('\n');
         let cellIdx = -1, cellStartLine = -1;
         for (let i = 0; i < docLines.length; i++) {
-          if (/^\/\/\/\s+(code|md|css|html)/.test(docLines[i].trimEnd())) {
+          if (/^\/\/\/\s+(\w+)/.test(docLines[i].trimEnd())) {
             cellIdx++;
             if (cellIdx === idx) { cellStartLine = i + 1; break; }
           }
@@ -56,10 +57,16 @@ export function setCellCode(cell, newCode) {
     if (changed.length) {
       editor.view.dispatch({ effects: mcpHighlightEffect.of(changed) });
     }
+  } else if (cell._pluginEditor?.setCode) {
+    cell._pluginEditor.setCode(newCode);
+    cell.code = newCode;
   } else if (cell.type === 'md') {
     const ta = cell.el?.querySelector('textarea');
     if (ta) { ta.value = newCode; cell.code = newCode; renderMdCell(cell); }
   } else {
+    // fallback plugin cells or unknown — update textarea if present
+    const ta = cell.el?.querySelector('.plugin-textarea');
+    if (ta) { ta.value = newCode; }
     cell.code = newCode;
   }
 }
@@ -104,6 +111,17 @@ export function addCell(type, code = '', afterId = null, beforeId = null) {
     nb.appendChild(cell.el);
   }
 
+  // mark fallback for unknown plugin types
+  if (!_ctIsBuiltin(type) && !_ctGetHandler(type)) {
+    cell._fallback = true;
+  }
+
+  // transfer plugin editor from DOM element
+  if (cell.el._pluginEditor) {
+    cell._pluginEditor = cell.el._pluginEditor;
+    delete cell.el._pluginEditor;
+  }
+
   // set code (CM6 editors receive initialCode via createCellEl; only md needs post-init setup)
   if (code) {
     if (type === 'md') {
@@ -111,6 +129,10 @@ export function addCell(type, code = '', afterId = null, beforeId = null) {
       ta.value = code;
       autoResize({ target: ta });
       renderMdCell(cell);
+    } else if (!_ctIsBuiltin(type)) {
+      // plugin cell — textarea already has code from createCellEl
+      const ta = cell.el.querySelector('.plugin-textarea');
+      if (ta) autoResize({ target: ta });
     } else {
       if (type === 'code' && isManual(code)) cell.el.classList.add('manual');
     }
@@ -136,6 +158,11 @@ export function addCell(type, code = '', afterId = null, beforeId = null) {
     if (type === 'md') {
       const ta = cell.el.querySelector('textarea');
       if (ta) ta.focus();
+    } else if (cell._pluginEditor?.focus) {
+      cell._pluginEditor.focus();
+    } else if (!_ctIsBuiltin(type)) {
+      const ta = cell.el.querySelector('.plugin-textarea');
+      if (ta) ta.focus();
     } else {
       const editor = getEditor(id);
       if (editor) editor.focus();
@@ -157,13 +184,18 @@ export function deleteCell(id) {
     S.cells[idx]._styleEl.remove();
     S.cells[idx]._styleEl = null;
   }
+  // destroy plugin editor
+  if (S.cells[idx]._pluginEditor?.destroy) {
+    S.cells[idx]._pluginEditor.destroy();
+    S.cells[idx]._pluginEditor = null;
+  }
   // destroy CM6 editor
   const editor = getEditor(id);
   if (editor) editor.destroy();
   S.cells[idx].el.remove();
   S.cells.splice(idx, 1);
   // re-run to clean scope
-  if (S.cells.some(c => c.type === 'code' || c.type === 'html' || c.type === 'md')) runAll();
+  if (S.cells.some(c => c.type === 'code' || c.type === 'html' || c.type === 'md' || (_ctGetHandler(c.type) && !c._fallback))) runAll();
   updateStatus();
   notifyDirty();
 }
@@ -179,6 +211,12 @@ export function convertCell(id, newType) {
     cell._styleEl.remove();
     cell._styleEl = null;
   }
+  // destroy old plugin editor
+  if (cell._pluginEditor?.destroy) {
+    cell._pluginEditor.destroy();
+    cell._pluginEditor = null;
+  }
+  cell._fallback = false;
   // destroy old CM6 editor
   const oldEditor = getEditor(id);
   if (oldEditor) oldEditor.destroy();
@@ -211,10 +249,21 @@ export function convertCell(id, newType) {
     renderHtmlCell(cell);
   }
 
+  // plugin type post-init
+  if (!_ctIsBuiltin(newType)) {
+    if (!_ctGetHandler(newType)) cell._fallback = true;
+    if (newEl._pluginEditor) {
+      cell._pluginEditor = newEl._pluginEditor;
+      delete newEl._pluginEditor;
+    }
+    const ta = newEl.querySelector('.plugin-textarea');
+    if (ta) autoResize({ target: ta });
+  }
+
   selectCell(id);
   updateStatus();
   notifyDirty();
-  if (S.cells.some(c => c.type === 'code' || c.type === 'html' || c.type === 'md')) runAll();
+  if (S.cells.some(c => c.type === 'code' || c.type === 'html' || c.type === 'md' || (_ctGetHandler(c.type) && !c._fallback))) runAll();
 }
 
 export function moveCell(id, dir) {
@@ -236,5 +285,5 @@ export function moveCell(id, dir) {
   }
 
   notifyDirty();
-  if (S.cells.some(c => c.type === 'code' || c.type === 'html' || c.type === 'md')) runAll();
+  if (S.cells.some(c => c.type === 'code' || c.type === 'html' || c.type === 'md' || (_ctGetHandler(c.type) && !c._fallback))) runAll();
 }

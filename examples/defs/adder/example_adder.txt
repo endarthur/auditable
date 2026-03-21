@@ -1,0 +1,119 @@
+/// auditable
+/// title: adder — Python cells
+/// module: @gcu/adder ext/adder/index.js
+/// module: @gcu/adder/micropython.mjs ext/adder/micropython.mjs
+/// module-binary: @gcu/adder/micropython.wasm ext/adder/micropython.wasm
+
+/// md
+# @gcu/adder — Python cells
+
+MicroPython as a first-class cell language. Python cells participate in Auditable's reactive DAG — define variables in Python, use them downstream in JS or other Python cells.
+
+/// code collapsed
+// %collapsed
+await load("@gcu/adder")
+
+/// md
+## basics
+
+Assignment and last-expression output:
+
+/// python
+x = 42
+y = x + 8
+y
+
+/// md
+The `y` variable is now in the DAG scope. Downstream cells see it:
+
+/// code
+display(`y from Python: ${y}`)
+
+/// md
+## functions
+
+Python functions cross the FFI boundary — callable from JS:
+
+/// python
+def greet(name):
+    return "hello, " + name
+
+/// code
+display(greet("auditable"))
+
+/// md
+## print output
+
+`print()` output appears in the cell's output area, composed with last-expression results:
+
+/// python
+for i in range(5):
+    print(f"step {i}")
+"done"
+
+/// md
+## top-level await
+
+Python cells support `await` for async JS interop:
+
+/// python
+import js
+response = await js.globalThis.fetch("data:text/plain,hello%20from%20fetch")
+text = await response.text()
+text
+
+/// md
+## JS extension imports
+
+Auditable extensions registered via `registerJsModule` are importable from Python. The `std` library is available:
+
+/// code
+// register std as an importable module for Python
+const { registerExtension } = await load("@gcu/adder")
+
+/// md
+## mpy tagged template
+
+Inline Python from JS cells using the `mpy` tag:
+
+/// code
+const result = await mpy`
+a = 10
+b = 20
+total = a + b
+`
+display(`total from mpy: ${result.total}`)
+
+/// md
+## mpy with interpolation
+
+JS values are injected via template literal interpolation:
+
+/// code
+const base = 100
+const factor = 3
+const calc = await mpy`
+result = ${base} * ${factor}
+label = f"${base} \u00d7 ${factor}"
+`
+display(`${calc.label} = ${calc.result}`)
+
+/// md
+## cross-language DAG
+
+Python and JS cells interleave freely in the reactive DAG:
+
+/// code
+const data = [1, 2, 3, 4, 5]
+
+/// python
+# JS arrays arrive as JsProxy — sum() iterates fine,
+# but len() needs a Python list
+items = list(data)
+total = sum(items)
+mean = total / len(items)
+mean
+
+/// code
+display(`mean = ${mean}`)
+display(`computed in Python, displayed in JS`)

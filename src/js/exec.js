@@ -1,5 +1,6 @@
 import { S } from './state.js';
 import { buildDAG, topoSort, isManual, isNorun, isHidden, parseCellName, parseOutputId, parseOutputClass } from './dag.js';
+import { _ctGetHandler, _ctRenderOutput } from './cell-types.js';
 import { setMsg } from './ui.js';
 import { refreshTaggedLanguages, getEditor } from './cm6.js';
 import { std } from './stdlib.js';
@@ -683,6 +684,15 @@ export async function execCell(cell) {
       }
     }
 
+    // @gcu/adder — MicroPython extension (dev-mode fallback)
+    if (url === '@gcu/adder') {
+      if (!window._importCache[url] && !window._installedModules[url]) {
+        const mod = await import('./ext/adder/index.js');
+        window._importCache[url] = mod;
+        return mod;
+      }
+    }
+
     if (window._importCache[url]) return window._importCache[url];
 
     // binary assets — return blob URL
@@ -802,6 +812,42 @@ export async function execCell(cell) {
       const mod = await import(blobUrl);
       window._importCache[url] = mod;
       display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB)`);
+      return mod;
+    }
+    // @gcu/adder — MicroPython extension
+    if (url === '@gcu/adder') {
+      const baseUrl = __AUDITABLE_PAGES_URL__ + '/ext/adder/';
+      // install adder extension JS
+      const resp = await fetch(baseUrl + 'index.js');
+      if (!resp.ok) throw new Error(`Failed to fetch adder: ${resp.status}`);
+      const source = await resp.text();
+      window._installedModules[url] = { source, cellId: cell.id };
+      // also chain-install micropython.mjs
+      const mjsResp = await fetch(baseUrl + 'micropython.mjs');
+      if (mjsResp.ok) {
+        const mjsSrc = await mjsResp.text();
+        window._installedModules['@gcu/adder/micropython.mjs'] = { source: mjsSrc, cellId: cell.id };
+      }
+      // chain-install micropython.wasm as binary
+      const wasmResp = await fetch(baseUrl + 'micropython.wasm');
+      if (wasmResp.ok) {
+        const buf = await wasmResp.arrayBuffer();
+        const raw = new Uint8Array(buf);
+        const cs = new CompressionStream('gzip');
+        const stream = new Blob([raw]).stream().pipeThrough(cs);
+        const compressed = new Uint8Array(await new Response(stream).arrayBuffer());
+        let bin = '';
+        for (let i = 0; i < compressed.length; i++) bin += String.fromCharCode(compressed[i]);
+        window._installedModules['@gcu/adder/micropython.wasm'] = {
+          source: btoa(bin), cellId: cell.id, binary: true, compressed: true, type: 'application/wasm'
+        };
+      }
+      syncModules();
+      const blob = new Blob([source], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      const mod = await import(blobUrl);
+      window._importCache[url] = mod;
+      display(`installed @gcu/adder (${(source.length / 1024).toFixed(1)} KB)`);
       return mod;
     }
     // normalize: add ?bundle for esm.sh if not present
@@ -1362,6 +1408,80 @@ export async function runDAG(dirtyIds, force = false) {
       }
       continue;
     }
+    // ── plugin cell dispatch ──
+    if (cell.type !== 'code' && cell.type !== 'html' && cell.type !== 'md' && cell.type !== 'css') {
+      if (cell._fallback) continue; // fallback cells are excluded from execution
+      const handler = _ctGetHandler(cell.type);
+      if (!handler) continue;
+
+      if (!runSet.has(cell.id)) {
+        // not in run set — restore cached results
+        if (cell._lastResult) {
+          for (const [k, v] of Object.entries(cell._lastResult)) {
+            if (v !== undefined) S.scope[k] = v;
+          }
+        }
+        continue;
+      }
+
+      // error isolation: check poisoned upstream
+      if (cell.uses && cell.uses.size > 0) {
+        let blocked = false;
+        for (const name of cell.uses) {
+          if (poisoned.has(name)) { blocked = true; break; }
+        }
+        if (blocked) {
+          const outputEl = cell.el.querySelector('.cell-output');
+          if (outputEl) {
+            outputEl.textContent = 'blocked by upstream error';
+            outputEl.className = 'cell-output error';
+          }
+          cell.el.classList.remove('stale', 'fresh');
+          cell.el.classList.add('error');
+          if (cell.defines) for (const name of cell.defines) poisoned.add(name);
+          continue;
+        }
+      }
+
+      // build upstream scope
+      const upstream = {};
+      if (cell.uses) {
+        for (const name of cell.uses) {
+          if (S.scope[name] !== undefined) upstream[name] = S.scope[name];
+        }
+      }
+
+      try {
+        const result = await handler.execute(cell.code, upstream, cell);
+        if (result && result.defines) {
+          cell._lastResult = result.defines;
+          for (const [k, v] of Object.entries(result.defines)) {
+            if (v !== undefined) S.scope[k] = v;
+          }
+        }
+        if (result && result.output !== undefined) {
+          _ctRenderOutput(cell, result.output);
+        }
+        cell.error = null;
+        cell.el.classList.remove('stale', 'error');
+        cell.el.classList.add('fresh');
+        setTimeout(() => cell.el.classList.remove('fresh'), 800);
+      } catch (e) {
+        cell.error = e.message;
+        const outputEl = cell.el.querySelector('.cell-output');
+        if (outputEl) {
+          outputEl.textContent = e.message;
+          outputEl.className = 'cell-output error';
+        }
+        cell.el.classList.remove('stale', 'fresh');
+        cell.el.classList.add('error');
+        if (cell.defines) for (const name of cell.defines) poisoned.add(name);
+      }
+
+      if (_dagGen !== gen) return;
+      continue;
+    }
+
     if (cell.type !== 'code') continue;
 
     // skip norun cells (unless explicitly triggered)
@@ -1416,8 +1536,9 @@ export async function runDAG(dirtyIds, force = false) {
     }
 
     // value-equality gating: if this cell is a downstream dependent (not directly
-    // dirty) and all its input values are unchanged, skip re-execution entirely
-    if (!dirtyIds.includes(cell.id) && cell._lastResult && cell.uses && cell.uses.size > 0) {
+    // dirty) and all its input values are unchanged, skip re-execution entirely.
+    // always re-execute if cell is in error/blocked state
+    if (!cell.error && !cell.el.classList.contains('error') && !dirtyIds.includes(cell.id) && cell._lastResult && cell.uses && cell.uses.size > 0) {
       let inputsChanged = false;
       for (const name of cell.uses) {
         if (S.scope[name] !== cell._prevInputs?.[name]) { inputsChanged = true; break; }
@@ -1466,7 +1587,10 @@ export async function runDAG(dirtyIds, force = false) {
 }
 
 export async function runAll() {
-  const ids = S.cells.filter(c => c.type === 'code' || c.type === 'html' || c.type === 'md').map(c => c.id);
+  const ids = S.cells.filter(c =>
+    c.type === 'code' || c.type === 'html' || c.type === 'md' ||
+    (_ctGetHandler(c.type) && !c._fallback)
+  ).map(c => c.id);
   if (ids.length === 0) return;
   await runDAG(ids, true);
   setMsg('ran all cells', 'ok');

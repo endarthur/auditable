@@ -6,9 +6,9 @@ const {
   EditorView, EditorState, Compartment, StateEffect, StateField,
   keymap, lineNumbers, highlightActiveLine, highlightSpecialChars,
   ViewPlugin, Decoration, WidgetType, drawSelection,
-  minimalSetup, javascript, css, html,
+  minimalSetup, javascript, css, html, python: pythonLang,
   indentWithTab, insertNewlineAndIndent, toggleComment, history, undo: cm6Undo, redo: cm6Redo,
-  bracketMatching, syntaxHighlighting, HighlightStyle, syntaxTree, indentOnInput, indentService,
+  bracketMatching, syntaxHighlighting, HighlightStyle, syntaxTree, indentOnInput, indentUnit, indentService,
   autocompletion, CompletionContext, closeBrackets, acceptCompletion,
   tags,
   StreamLanguage, LanguageSupport, Language, defineLanguageFacet, parseMixed,
@@ -269,6 +269,7 @@ const _tokenTable = {
 function makeStreamLang(lang) {
   if (lang._streamLang) return lang._streamLang;
   const tokenize = lang.tokenize;
+  const indentFn = lang.indent || null;
   lang._streamLang = StreamLanguage.define({
     token(stream) {
       if (stream.sol()) {
@@ -293,7 +294,7 @@ function makeStreamLang(lang) {
     },
     tokenTable: _tokenTable,
     indent(state, textAfter, cx) {
-      // preserve previous line's indentation
+      if (indentFn) return indentFn(state, textAfter, cx);
       return cx.lineIndent(cx.pos, -1);
     },
     startState() { return {}; },
@@ -546,6 +547,14 @@ function getLangExtension(cellType) {
   if (cellType === 'code') return mixedJavascript();
   if (cellType === 'css') return css();
   if (cellType === 'html') return html();
+  if (cellType === 'python') return [pythonLang(), indentUnit.of('    ')];
+  // other plugin cell types — use handler's tokenizer via StreamLanguage
+  const handler = window._cellTypes?.[cellType];
+  if (handler?.tokenize) {
+    const lang = makeStreamLang(handler);
+    if (handler.indentUnit) return [lang, indentUnit.of(handler.indentUnit)];
+    return lang;
+  }
   return [];
 }
 

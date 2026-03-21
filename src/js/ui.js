@@ -21,7 +21,13 @@ function estimateFileSize() {
 
 export function updateStatus() {
   const counts = { code: 0, md: 0, css: 0, html: 0 };
-  for (const c of S.cells) if (counts[c.type] !== undefined) counts[c.type]++;
+  for (const c of S.cells) {
+    if (counts[c.type] !== undefined) counts[c.type]++;
+    else {
+      if (!counts[c.type]) counts[c.type] = 0;
+      counts[c.type]++;
+    }
+  }
   const parts = [];
   for (const [t, n] of Object.entries(counts)) if (n > 0) parts.push(`${n} ${t}`);
   const statusText = parts.join(' \u00b7 ') || '0 cells';
@@ -57,11 +63,15 @@ export function updateInsertBars() {
     const bar = document.createElement('div');
     bar.className = 'insert-bar';
     const afterId = i > 0 ? S.cells[i - 1].id : null;
+    const pluginBtns = Object.entries(window._cellTypes || {}).map(([name, h]) =>
+      `<button onclick="insertAt(${afterId},'${name}')"${h.color ? ` style="color:${h.color}"` : ''}>+ ${h.label || name}</button>`
+    ).join('');
     bar.innerHTML = `<div class="insert-btns">
       <button onclick="insertAt(${afterId},'code')">+ code</button>
       <button onclick="insertAt(${afterId},'md')">+ md</button>
       <button onclick="insertAt(${afterId},'css')">+ css</button>
       <button onclick="insertAt(${afterId},'html')">+ html</button>
+      ${pluginBtns}
     </div>`;
     if (i < S.cells.length) {
       S.cells[i].el.before(bar);

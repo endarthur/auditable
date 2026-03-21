@@ -1,5 +1,6 @@
 import { S } from './state.js';
 import { isManual } from './dag.js';
+import { _ctGetHandler, _ctIsBuiltin } from './cell-types.js';
 import { renderMd } from './markdown.js';
 import { onCodeEdit, onCssEdit, onHtmlEdit, onMdEdit } from './editor.js';
 import { renderMdCell } from './exec.js';
@@ -15,6 +16,9 @@ export function cssSummary(code) {
 }
 
 function cellHeaderHTML(type, id) {
+  const pluginBtns = Object.entries(window._cellTypes || {}).map(([name, h]) =>
+    `<button onclick="convertCell(${id},'${name}')">${h.label || name}</button>`
+  ).join('');
   return `<div class="cell-header">
     <span class="cell-type">${type}</span>
     <button class="cell-btn cell-convert" onclick="toggleTypePicker(${id})" title="convert type">\u21c4</button>
@@ -23,6 +27,7 @@ function cellHeaderHTML(type, id) {
       <button onclick="convertCell(${id},'md')">md</button>
       <button onclick="convertCell(${id},'css')">css</button>
       <button onclick="convertCell(${id},'html')">html</button>
+      ${pluginBtns}
     </div>
     <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'before')" title="insert above">+\u2191</button>
     <button class="cell-btn cell-insert" onclick="showInsertPicker(${id},'after')" title="insert below">+\u2193</button>
@@ -117,6 +122,68 @@ export function createCellEl(type, id, initialCode) {
       onHtmlEdit(id);
     });
     div._editor = editor;
+  } else if (type !== 'md') {
+    // plugin or fallback cell type
+    const handler = _ctGetHandler(type);
+    const isFallback = !handler;
+    const label = isFallback ? type + ' (not installed)' : (handler.label || type);
+
+    div.innerHTML = `
+      ${cellHeaderHTML(label, id)}
+      <div class="cell-plugin-code">
+        <textarea class="plugin-textarea" rows="4" spellcheck="false" placeholder="${type} cell"></textarea>
+      </div>
+      <div class="cell-output"></div>
+    `;
+
+    const labelEl = div.querySelector('.cell-type');
+    if (handler?.color) labelEl.style.color = handler.color;
+    if (isFallback) labelEl.classList.add('fallback-label');
+
+    labelEl.addEventListener('click', () => div.classList.toggle('collapsed'));
+
+    const ta = div.querySelector('.plugin-textarea');
+    if (initialCode) ta.value = initialCode;
+    ta.addEventListener('input', (e) => {
+      autoResize(e);
+      const cell = S.cells.find(c => c.id === id);
+      if (cell) {
+        cell.code = ta.value;
+        if (!isFallback && S.autorun) {
+          clearTimeout(S.editTimer);
+          S.editTimer = setTimeout(() => {
+            if (window._ctRunDAG) {
+              const { buildDAG } = { buildDAG: () => { /* imported at top */ } };
+              window._ctRunDAG([id]);
+            }
+          }, 300);
+        }
+      }
+    });
+    ta.addEventListener('keydown', handleTab);
+
+    // if handler provides a custom editor, replace the textarea
+    if (handler?.createEditor) {
+      const codeWrap = div.querySelector('.cell-plugin-code');
+      const editorObj = handler.createEditor({ id, code: initialCode || '', el: div }, (newCode) => {
+        const cell = S.cells.find(c => c.id === id);
+        if (cell) {
+          cell.code = newCode;
+          if (S.autorun) {
+            clearTimeout(S.editTimer);
+            S.editTimer = setTimeout(() => {
+              if (window._ctRunDAG) window._ctRunDAG([id]);
+            }, 300);
+          }
+        }
+      });
+      if (editorObj && editorObj.el) {
+        ta.remove();
+        codeWrap.appendChild(editorObj.el);
+        div._pluginEditor = editorObj;
+      }
+    }
+
   } else {
     // markdown — stays as textarea
     div.innerHTML = `

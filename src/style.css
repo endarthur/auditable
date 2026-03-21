@@ -88,6 +88,9 @@ button.accent:hover {
   border-left-color: var(--ok);
   transition: border-color 0.5s;
 }
+.cell.syntax-pending {
+  border-left-color: var(--fg-dim);
+}
 
 /* ── CELL OUTPUT ── */
 .cell-output {
@@ -1686,6 +1689,49 @@ html.hide-run-toggle #autorunBtnMobile { display: none; }
   font-style: italic;
   padding: 4px 0;
 }
+
+/* ── PLUGIN CELLS ── */
+.plugin-textarea {
+  width: 100%;
+  min-height: 60px;
+  padding: 8px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: var(--editor-font-size);
+  line-height: 1.5;
+  resize: vertical;
+  box-sizing: border-box;
+  tab-size: 2;
+}
+.plugin-textarea:focus { border-color: var(--accent); outline: none; }
+.cell-plugin-code { position: relative; }
+.fallback-label { opacity: 0.5; font-style: italic; }
+
+/* ── PLUGIN INSTALL (settings panel) ── */
+.plugin-install {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.plugin-install input {
+  flex: 1;
+  padding: 4px 8px;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: 11px;
+  border-radius: 2px;
+}
+.plugin-install input:focus { border-color: var(--accent); outline: none; }
+.plugin-install button {
+  padding: 4px 10px;
+  font-size: 14px;
+  line-height: 1;
+}
+
 /* ── UPDATE PANEL ── */
 .update-overlay {
   display: none;

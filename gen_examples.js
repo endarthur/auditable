@@ -85,6 +85,11 @@ const categories = {
     'example_shader.txt',
   ],
 
+  // adder — MicroPython: Python cells, mpy tag, cross-language DAG
+  adder: [
+    'example_adder.txt',
+  ],
+
   // etc — standalone demos that don't fit elsewhere
   etc: [
     'example_iso9660.txt',
@@ -163,6 +168,11 @@ function parseDef(text) {
         title = directive.slice(7);
       } else if (directive.startsWith('settings: ')) {
         settings = JSON.parse(directive.slice(10));
+      } else if (directive.startsWith('module-binary: ')) {
+        const parts = directive.slice(15).split(' ');
+        const url = parts[0];
+        const ref = parts.slice(1).join(' ');
+        modules[url] = { ref, binary: true };
       } else if (directive.startsWith('module: ')) {
         const parts = directive.slice(8).split(' ');
         const url = parts[0];
@@ -209,14 +219,27 @@ for (const [category, defs] of Object.entries(categories)) {
     const text = fs.readFileSync(path.join(defsDir, category, defFile), 'utf8');
     const notebook = parseDef(text);
 
-    // resolve module file-path refs → inline source
+    // resolve module file-path refs → inline source (text or binary)
     let modules;
     if (Object.keys(notebook.modules).length > 0) {
       modules = {};
       for (const [url, entry] of Object.entries(notebook.modules)) {
         const refPath = path.join(__dirname, entry.ref);
-        const source = fs.readFileSync(refPath, 'utf8');
-        modules[url] = { source, cellId: null };
+        if (entry.binary) {
+          // binary module: gzip-compress, base64-encode
+          const raw = fs.readFileSync(refPath);
+          const { execSync } = require('child_process');
+          // use Node's zlib for sync gzip
+          const zlib = require('zlib');
+          const compressed = zlib.gzipSync(raw);
+          const source = compressed.toString('base64');
+          const ext = path.extname(refPath).slice(1);
+          const mimeMap = { wasm: 'application/wasm', png: 'image/png', jpg: 'image/jpeg' };
+          modules[url] = { source, cellId: null, binary: true, compressed: true, type: mimeMap[ext] || 'application/octet-stream' };
+        } else {
+          const source = fs.readFileSync(refPath, 'utf8');
+          modules[url] = { source, cellId: null };
+        }
       }
     }
 
