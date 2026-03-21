@@ -6,12 +6,12 @@
 /// md
 # Python + GSLIB — cross-language geostatistics
 
-A resource estimation pipeline, entirely in Python. Data generation, variogram computation, kriging, widgets, plotting, and grade-tonnage \u2014 all in adder. Python values are native JS values: no FFI, no marshalling, no bridge cells.
+A resource estimation pipeline in Python. Data generation, variogram computation, kriging, widgets, plotting, and grade-tonnage — all in adder. One JS cell bootstraps the extensions; everything else is Python. Values are native JS values: no FFI, no marshalling.
 
-/// adder collapsed
-# %collapsed
+/// code collapsed
+// %collapsed
 await load("@gcu/adder")
-_kb2d = (await load("@atra/gslib")).kb2d
+const _kb2d = (await load("@atra/gslib")).kb2d
 
 /// md
 ## parameters
@@ -251,4 +251,4 @@ for r in gt_rows:
 /// md
 ---
 
-**Pure Python.** Every cell is adder. Widgets (`ui.slider`, `ui.canvas`, `ui.checkbox`), colormaps (`std.viridis`), module loading (`load`), and output (`display`) are all available as adder builtins. Python calls `kb2d()` directly \u2014 `samples` is a native JS Array, no conversion needed.
+**Pure Python.** Every cell is adder (except the bootstrap loader). Widgets (`ui.slider`, `ui.canvas`, `ui.checkbox`), colormaps (`std.viridis`), module loading (`load`), and output (`display`) are all available as adder builtins. Python calls `kb2d()` directly — `samples` is a native JS Array, no conversion needed.
