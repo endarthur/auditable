@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const root = path.join(__dirname, '..');
-const htmlPath = path.join(root, 'auditable.html');
+const htmlPath = path.join(root, 'build', 'auditable.html');
 
 // ── Build output tests ──
 

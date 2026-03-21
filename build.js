@@ -99,9 +99,29 @@ ${afJs}
 </html>
 `;
 
-  const afOutPath = path.join(__dirname, 'af.html');
-  fs.writeFileSync(afOutPath, afHtml);
-  const afSize = fs.statSync(afOutPath).size;
+  const zlib = require('zlib');
+  const buildDir = path.join(__dirname, 'build');
+  if (!fs.existsSync(buildDir)) fs.mkdirSync(buildDir);
+  // uncompressed → build/ (for tests/signing)
+  fs.writeFileSync(path.join(buildDir, 'af.html'), afHtml);
+  // compressed → root (for distribution)
+  const afScript = afHtml.match(/<script>([\s\S]*?)<\/script>/);
+  let afDist = afHtml;
+  if (afScript) {
+    const compressed = zlib.gzipSync(Buffer.from(afScript[1], 'utf8'));
+    const b64 = compressed.toString('base64').replace(/.{1,76}/g, '$&\n');
+    const loader =
+      '(function(){var me=document.scripts[document.scripts.length-1];(async function(){' +
+      "var b=document.getElementById('_rt').textContent.replace(/\\s/g,'');" +
+      'var d=Uint8Array.from(atob(b),function(c){return c.charCodeAt(0)});' +
+      "var s=await new Response(new Blob([d]).stream().pipeThrough(new DecompressionStream('gzip'))).text();" +
+      "me.textContent=s;document.getElementById('_rt').remove();" +
+      '(0,eval)(s)})()})()';
+    afDist = afHtml.replace(/<script>[\s\S]*?<\/script>/,
+      `<script type="text/plain" id="_rt">\n${b64}</script>\n<script>\n${loader}\n</script>`);
+  }
+  fs.writeFileSync(path.join(__dirname, 'af.html'), afDist);
+  const afSize = fs.statSync(path.join(__dirname, 'af.html')).size;
   console.log(`Built af.html (${(afSize / 1024).toFixed(1)} KB)`);
   process.exit(0);
 }
@@ -557,15 +577,38 @@ js = js.replace(
 const html = assemble(js);
 
 // 6. Write output
+// Uncompressed → build/ (for signing, tests, make_example)
+// Compressed  → root   (for distribution)
+const zlib = require('zlib');
+const buildDir = path.join(__dirname, 'build');
+if (!fs.existsSync(buildDir)) fs.mkdirSync(buildDir);
+
+fs.writeFileSync(path.join(buildDir, 'auditable.html'), html);
+
+function compressRuntimeForDist(rawHtml) {
+  const m = rawHtml.match(/<script>([\s\S]*?)<\/script>/);
+  if (!m) return rawHtml;
+  const compressed = zlib.gzipSync(Buffer.from(m[1], 'utf8'));
+  const b64 = compressed.toString('base64').replace(/.{1,76}/g, '$&\n');
+  const loader =
+    '(function(){var me=document.scripts[document.scripts.length-1];(async function(){' +
+    "var b=document.getElementById('_rt').textContent.replace(/\\s/g,'');" +
+    'var d=Uint8Array.from(atob(b),function(c){return c.charCodeAt(0)});' +
+    "var s=await new Response(new Blob([d]).stream().pipeThrough(new DecompressionStream('gzip'))).text();" +
+    "me.textContent=s;document.getElementById('_rt').remove();" +
+    '(0,eval)(s)})()})()';
+  return rawHtml.replace(/<script>[\s\S]*?<\/script>/,
+    `<script type="text/plain" id="_rt">\n${b64}</script>\n<script>\n${loader}\n</script>`);
+}
+
 if (compress) {
-  const zlib = require('zlib');
+  // --compress: whole-file gzip pack (smallest, shows "unpacking..." splash)
   const gz = zlib.gzipSync(html, { level: 9 });
   const b64 = gz.toString('base64');
-  const title = 'Auditable';
   const packed = '<!DOCTYPE html>\n'
     + '<html lang="en"><head><meta charset="UTF-8">'
     + '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
-    + '<title>' + title + '</title>'
+    + '<title>Auditable</title>'
     + '<style>html{background:#1a1a1a}'
     + 'body{color:#999;font:14px/1.5 monospace;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}'
     + '</style></head><body>'
@@ -580,14 +623,13 @@ if (compress) {
     + "document.open();document.write(h);document.close();"
     + "})().catch(function(e){document.getElementById('_l').textContent='error: '+e.message});"
     + '<\/script></body></html>';
-  const outPath = path.join(__dirname, 'auditable.html');
-  fs.writeFileSync(outPath, packed);
-  const size = fs.statSync(outPath).size;
-  const unpackedKb = (Buffer.byteLength(html) / 1024).toFixed(1);
-  console.log(`Built auditable.html packed (${(size / 1024).toFixed(1)} KB, unpacked ${unpackedKb} KB)`);
+  fs.writeFileSync(path.join(__dirname, 'auditable.html'), packed);
+  const size = fs.statSync(path.join(__dirname, 'auditable.html')).size;
+  console.log(`Built auditable.html packed (${(size / 1024).toFixed(1)} KB, unpacked ${(Buffer.byteLength(html) / 1024).toFixed(1)} KB)`);
 } else {
-  const outPath = path.join(__dirname, 'auditable.html');
-  fs.writeFileSync(outPath, html);
-  const size = fs.statSync(outPath).size;
+  // default: runtime-compressed (same as saved notebooks / examples)
+  const dist = compressRuntimeForDist(html);
+  fs.writeFileSync(path.join(__dirname, 'auditable.html'), dist);
+  const size = fs.statSync(path.join(__dirname, 'auditable.html')).size;
   console.log(`Built auditable.html (${(size / 1024).toFixed(1)} KB)`);
 }

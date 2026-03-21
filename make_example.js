@@ -28,9 +28,9 @@ function compressRuntimeNode(script) {
 }
 
 function makeExample({ title, cells, settings, modules, outPath }) {
-  const basePath = path.join(__dirname, 'auditable.html');
+  const basePath = path.join(__dirname, 'build', 'auditable.html');
   if (!fs.existsSync(basePath)) {
-    throw new Error('auditable.html not found — run `node build.js` first');
+    throw new Error('build/auditable.html not found — run `node build.js` first');
   }
   let html = fs.readFileSync(basePath, 'utf8');
 

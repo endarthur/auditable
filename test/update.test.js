@@ -295,11 +295,11 @@ describe('full round-trip: build → sign → verify → update', () => {
       env: { ...process.env, AUDITABLE_PUBLIC_KEY: keys.pub },
     });
 
-    // Sign with the test private key
-    execSync(`node sign.js auditable.html --key=${keys.priv}`, { cwd: root });
+    // Sign with the test private key (sign the uncompressed build)
+    execSync(`node sign.js build/auditable.html --key=${keys.priv}`, { cwd: root });
 
-    // Read the signed file
-    const signed = fs.readFileSync(path.join(root, 'auditable.html'), 'utf8');
+    // Read the signed file (uncompressed)
+    const signed = fs.readFileSync(path.join(root, 'build', 'auditable.html'), 'utf8');
 
     // Verify public key was baked in
     assert.ok(signed.includes(keys.pub), 'public key should be embedded in script');
