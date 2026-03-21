@@ -1,0 +1,349 @@
+/// auditable
+/// title: adder — drill hole spacing analysis
+/// module: @gcu/adder ext/adder/index.js
+/// module: @atra/gslib ext/atra/lib/gslib.js
+
+/// md
+# drill hole spacing analysis
+
+Determine optimal drill spacing for resource classification. Generate a reference model by unconditional simulation, decimate to progressively wider spacings, re-estimate at each level, and measure how estimation quality degrades. The spacing-vs-correlation curve maps directly to JORC/NI 43-101 confidence categories.
+
+Written in adder, a JS-targeting Python dialect.
+
+/// code collapsed
+// %collapsed
+await load("@gcu/adder")
+const gslib = await load("@atra/gslib")
+
+/// md
+## parameters
+
+/// adder
+import math
+import random
+
+gridN = ui.slider("grid", 60, {"min": 30, "max": 100, "step": 5})
+vRange = ui.slider("range", 15, {"min": 5, "max": 40, "step": 1})
+vSill = ui.slider("sill", 1.0, {"min": 0.2, "max": 3.0, "step": 0.1})
+vNugget = ui.slider("nugget", 0.1, {"min": 0.0, "max": 0.5, "step": 0.05})
+simSeed = ui.slider("seed", 42, {"min": 1, "max": 999, "step": 1})
+
+/// md
+## reference model
+
+/// adder
+vario = {"nugget": vNugget, "structures": [{"type": "spherical", "contribution": vSill, "range": vRange}]}
+grid = {"nx": gridN, "ny": gridN, "xsiz": 1, "ysiz": 1}
+
+engine = gslib.sgsim({"grid": grid, "variogram": vario, "search": {"radius": max(vRange * 2, 20), "ndmax": 12, "nodmax": 12}})
+truth = engine.run(simSeed)
+print(f"reference model: {gridN}\u00d7{gridN} grid, range={vRange}, sill={vSill}, nugget={vNugget}")
+
+/// md
+## spacing analysis
+
+/// adder
+import js
+
+spacings = [2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30]
+spacings = [s for s in spacings if s < gridN / 2]
+
+results = []
+for spacing in spacings:
+    samples = []
+    for iy in range(0, gridN, spacing):
+        for ix in range(0, gridN, spacing):
+            samples.append([ix + 0.5, iy + 0.5, truth[iy * gridN + ix]])
+
+    if len(samples) < 4:
+        continue
+
+    est = gslib.kb2d({
+        "data": samples, "grid": grid, "variogram": vario,
+        "search": {"radius": max(vRange * 2.5, spacing * 2), "ndmax": min(len(samples), 24)}
+    }).est
+
+    n = 0
+    sum_t = 0.0
+    sum_e = 0.0
+    sum_t2 = 0.0
+    sum_e2 = 0.0
+    sum_te = 0.0
+    sum_err2 = 0.0
+    for i in range(gridN * gridN):
+        if est[i] > -900:
+            t = truth[i]
+            e = est[i]
+            n += 1
+            sum_t += t
+            sum_e += e
+            sum_t2 += t * t
+            sum_e2 += e * e
+            sum_te += t * e
+            sum_err2 += (e - t) ** 2
+
+    if n < 2:
+        continue
+
+    mt = sum_t / n
+    me = sum_e / n
+    vt = sum_t2 / n - mt * mt
+    ve = sum_e2 / n - me * me
+    cov = sum_te / n - mt * me
+    corr = cov / (vt ** 0.5 * ve ** 0.5) if vt > 0 and ve > 0 else 0
+    slope = cov / vt if vt > 0 else 0
+    rmse = (sum_err2 / n) ** 0.5
+
+    results.append({
+        "spacing": spacing, "nsamples": len(samples),
+        "corr": round(corr, 4), "slope": round(slope, 4), "rmse": round(rmse, 4),
+        "est": est, "samples": samples
+    })
+
+print(f"{'spacing':>7}  {'samples':>7}  {'corr':>7}  {'slope':>7}  {'RMSE':>7}")
+print(f"{'-------':>7}  {'-------':>7}  {'------':>7}  {'------':>7}  {'------':>7}")
+for r in results:
+    print(f"{r['spacing']:7d}  {r['nsamples']:7d}  {r['corr']:7.4f}  {r['slope']:7.4f}  {r['rmse']:7.4f}")
+
+/// md
+## maps — truth vs selected spacings
+
+/// adder
+import js
+
+# pick spacings to display: truth + 4 evenly spaced from results
+show_idx = []
+if len(results) >= 4:
+    step = (len(results) - 1) / 3
+    show_idx = [int(round(i * step)) for i in range(4)]
+else:
+    show_idx = list(range(len(results)))
+show = [results[i] for i in show_idx]
+
+ncols = len(show) + 1
+sz = min(180, int((js.window.innerWidth - 60) / ncols) - 10)
+
+# shared color range from truth
+vmin = float("inf")
+vmax = float("-inf")
+for i in range(len(truth)):
+    if truth[i] < vmin:
+        vmin = truth[i]
+    if truth[i] > vmax:
+        vmax = truth[i]
+vr = vmax - vmin if vmax - vmin != 0 else 1
+cellW = sz / gridN
+
+# truth map
+ct = ui.canvas(sz, sz)
+ctxt = ct.getContext("2d")
+for iy in range(gridN):
+    for ix in range(gridN):
+        ctxt.fillStyle = std.viridis((truth[iy * gridN + ix] - vmin) / vr)
+        ctxt.fillRect(ix * cellW, iy * cellW, cellW + 0.5, cellW + 0.5)
+display("truth")
+
+# spacing maps
+for r in show:
+    ce = ui.canvas(sz, sz)
+    ctxe = ce.getContext("2d")
+    est = r["est"]
+    for iy in range(gridN):
+        for ix in range(gridN):
+            v = est[iy * gridN + ix]
+            ctxe.fillStyle = "#222" if v < -900 else std.viridis((v - vmin) / vr)
+            ctxe.fillRect(ix * cellW, iy * cellW, cellW + 0.5, cellW + 0.5)
+    # drill holes
+    for s in r["samples"]:
+        ctxe.beginPath()
+        ctxe.arc(s[0] / gridN * sz, s[1] / gridN * sz, 1.5, 0, js.Math.PI * 2)
+        ctxe.fillStyle = "#fff"
+        ctxe.fill()
+    display(f"spacing={r['spacing']}  r={r['corr']:.2f}")
+
+/// md
+## classification curve
+
+/// adder
+import js
+
+w = min(500, int(js.window.innerWidth) - 80)
+h = 280
+c = ui.canvas(w, h)
+ctx = c.getContext("2d")
+ctx.fillStyle = "#1a1a1a"
+ctx.fillRect(0, 0, w, h)
+
+pad = {"l": 55, "r": 20, "t": 20, "b": 40}
+pw = w - pad["l"] - pad["r"]
+ph = h - pad["t"] - pad["b"]
+
+if len(results) > 0:
+    max_sp = max(r["spacing"] for r in results) * 1.1
+    min_corr = min(r["corr"] for r in results)
+    y_lo = max(0, min_corr - 0.05)
+
+    def sx(sp):
+        return pad["l"] + (sp / max_sp) * pw
+    def sy(corr):
+        return pad["t"] + ph - ((corr - y_lo) / (1.0 - y_lo)) * ph
+
+    ctx.strokeStyle = "#555"
+    ctx.lineWidth = 1
+    ctx.beginPath()
+    ctx.moveTo(pad["l"], pad["t"])
+    ctx.lineTo(pad["l"], pad["t"] + ph)
+    ctx.lineTo(pad["l"] + pw, pad["t"] + ph)
+    ctx.stroke()
+
+    thresholds = [
+        [0.95, "#4caf50", "measured"],
+        [0.85, "#ff9800", "indicated"],
+        [0.70, "#f44336", "inferred"]
+    ]
+    for thresh, color, label in thresholds:
+        if thresh >= y_lo:
+            y = sy(thresh)
+            ctx.setLineDash([6, 4])
+            ctx.strokeStyle = color
+            ctx.lineWidth = 1
+            ctx.beginPath()
+            ctx.moveTo(pad["l"], y)
+            ctx.lineTo(pad["l"] + pw, y)
+            ctx.stroke()
+            ctx.setLineDash([])
+            ctx.fillStyle = color
+            ctx.font = "10px monospace"
+            ctx.textAlign = "left"
+            ctx.fillText(f"{label} (r={thresh})", pad["l"] + 4, y - 3)
+
+    ctx.strokeStyle = "#c89b3c"
+    ctx.lineWidth = 2
+    ctx.beginPath()
+    for i in range(len(results)):
+        x = sx(results[i]["spacing"])
+        y = sy(results[i]["corr"])
+        if i == 0:
+            ctx.moveTo(x, y)
+        else:
+            ctx.lineTo(x, y)
+    ctx.stroke()
+
+    for r in results:
+        x = sx(r["spacing"])
+        y = sy(r["corr"])
+        ctx.beginPath()
+        ctx.arc(x, y, 4, 0, js.Math.PI * 2)
+        ctx.fillStyle = "#fff"
+        ctx.fill()
+        ctx.strokeStyle = "#000"
+        ctx.lineWidth = 1
+        ctx.stroke()
+
+    ctx.fillStyle = "#888"
+    ctx.font = "10px monospace"
+    ctx.textAlign = "center"
+    ctx.fillText("drill hole spacing", pad["l"] + pw / 2, h - 5)
+    for r in results:
+        ctx.fillStyle = "#666"
+        ctx.fillText(str(r["spacing"]), sx(r["spacing"]), pad["t"] + ph + 14)
+    ctx.textAlign = "right"
+    for v_tick in [0.7, 0.8, 0.9, 1.0]:
+        if v_tick >= y_lo:
+            ctx.fillStyle = "#666"
+            ctx.fillText(f"{v_tick:.1f}", pad["l"] - 5, sy(v_tick) + 3)
+    ctx.save()
+    ctx.translate(12, pad["t"] + ph / 2)
+    ctx.rotate(-js.Math.PI / 2)
+    ctx.fillStyle = "#888"
+    ctx.textAlign = "center"
+    ctx.fillText("correlation", 0, 0)
+    ctx.restore()
+
+display(f"DHSA: {len(results)} spacing levels, range={vRange}")
+
+/// md
+## slope of regression
+
+Conditional bias. Slope = 1.0 is unbiased; < 1.0 means over-smoothing.
+
+/// adder
+import js
+
+w2 = min(500, int(js.window.innerWidth) - 80)
+h2 = 200
+c2 = ui.canvas(w2, h2)
+ctx2 = c2.getContext("2d")
+ctx2.fillStyle = "#1a1a1a"
+ctx2.fillRect(0, 0, w2, h2)
+
+pad2 = {"l": 55, "r": 20, "t": 15, "b": 40}
+pw2 = w2 - pad2["l"] - pad2["r"]
+ph2 = h2 - pad2["t"] - pad2["b"]
+
+if len(results) > 0:
+    max_sp = max(r["spacing"] for r in results) * 1.1
+
+    def sx2(sp):
+        return pad2["l"] + (sp / max_sp) * pw2
+    def sy2(slope):
+        return pad2["t"] + ph2 - (slope / 1.2) * ph2
+
+    ctx2.strokeStyle = "#555"
+    ctx2.lineWidth = 1
+    ctx2.beginPath()
+    ctx2.moveTo(pad2["l"], pad2["t"])
+    ctx2.lineTo(pad2["l"], pad2["t"] + ph2)
+    ctx2.lineTo(pad2["l"] + pw2, pad2["t"] + ph2)
+    ctx2.stroke()
+
+    ctx2.setLineDash([6, 4])
+    ctx2.strokeStyle = "#4caf50"
+    ctx2.beginPath()
+    ctx2.moveTo(pad2["l"], sy2(1.0))
+    ctx2.lineTo(pad2["l"] + pw2, sy2(1.0))
+    ctx2.stroke()
+    ctx2.setLineDash([])
+    ctx2.fillStyle = "#4caf50"
+    ctx2.font = "10px monospace"
+    ctx2.textAlign = "left"
+    ctx2.fillText("unbiased (slope=1)", pad2["l"] + 4, sy2(1.0) - 3)
+
+    ctx2.strokeStyle = "#c89b3c"
+    ctx2.lineWidth = 2
+    ctx2.beginPath()
+    for i in range(len(results)):
+        x = sx2(results[i]["spacing"])
+        y = sy2(results[i]["slope"])
+        if i == 0:
+            ctx2.moveTo(x, y)
+        else:
+            ctx2.lineTo(x, y)
+    ctx2.stroke()
+
+    for r in results:
+        x = sx2(r["spacing"])
+        y = sy2(r["slope"])
+        ctx2.beginPath()
+        ctx2.arc(x, y, 4, 0, js.Math.PI * 2)
+        ctx2.fillStyle = "#fff"
+        ctx2.fill()
+        ctx2.strokeStyle = "#000"
+        ctx2.lineWidth = 1
+        ctx2.stroke()
+
+    ctx2.fillStyle = "#888"
+    ctx2.font = "10px monospace"
+    ctx2.textAlign = "center"
+    ctx2.fillText("drill hole spacing", pad2["l"] + pw2 / 2, h2 - 5)
+    ctx2.save()
+    ctx2.translate(12, pad2["t"] + ph2 / 2)
+    ctx2.rotate(-js.Math.PI / 2)
+    ctx2.textAlign = "center"
+    ctx2.fillText("slope", 0, 0)
+    ctx2.restore()
+
+/// md
+---
+
+**Workflow:** sgsim generates a reference model. At each spacing level, samples are placed on a regular grid and the field is re-estimated by kriging. The maps show how spatial resolution degrades. The classification curve shows which spacing achieves measured, indicated, or inferred confidence. Try increasing range (smoother, wider spacing works) or adding nugget (noisier, need denser drilling).

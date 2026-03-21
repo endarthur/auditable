@@ -62,6 +62,7 @@ const categories = {
     'example_alpack_atra.txt',
     'example_gslib_kb2d.txt',
     'example_gslib_sgsim.txt',
+    'example_gslib_dhsa.txt',
   ],
 
   // gis — spatial analysis: maps, raster, hydrology
@@ -90,6 +91,7 @@ const categories = {
     'example_adder.txt',
     'example_adder_gslib.txt',
     'example_adder_estimation.txt',
+    'example_adder_dhsa.txt',
   ],
 
   // etc — standalone demos that don't fit elsewhere
