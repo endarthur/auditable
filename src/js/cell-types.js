@@ -76,6 +76,40 @@ export function _ctIsBuiltin(type) {
   return _builtinTypes.has(type);
 }
 
+// ── CAPABILITY QUERIES ──
+// Built-in capabilities + duck-typed plugin capabilities via handler fields.
+
+/** Can be run via Ctrl+Enter, participates in reactive DAG execution. */
+export function _ctIsExecutable(type) {
+  if (type === 'code' || type === 'html') return true;
+  if (type === 'md' || type === 'css') return false;
+  const h = window._cellTypes?.[type];
+  return !!(h?.execute);
+}
+
+/** Defines scope variables visible to downstream cells. */
+export function _ctDefinesScope(type) {
+  if (type === 'code' || type === 'html') return true;
+  if (type === 'md' || type === 'css') return false;
+  const h = window._cellTypes?.[type];
+  return !!(h?.parseNames);
+}
+
+/** Has an output area for display/results. */
+export function _ctHasOutput(type) {
+  if (type === 'code' || type === 'html') return true;
+  if (type === 'md' || type === 'css') return false;
+  const h = window._cellTypes?.[type];
+  return !!(h?.execute);
+}
+
+/** Has a CM6 code editor (vs textarea fallback). */
+export function _ctHasEditor(type) {
+  if (_builtinTypes.has(type)) return true;
+  const h = window._cellTypes?.[type];
+  return !!(h?.createEditor || h?.tokenize);
+}
+
 export function _ctAllTypeNames() {
   // built-in types + registered plugin types
   return [..._builtinTypes, ...Object.keys(window._cellTypes || {})];

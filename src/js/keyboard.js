@@ -1,7 +1,7 @@
 import { S, $, $$ } from './state.js';
 import { addCell, deleteCell, convertCell } from './cell-ops.js';
 import { runDAG, runAll, renderHtmlCell } from './exec.js';
-import { _ctGetHandler } from './cell-types.js';
+import { _ctGetHandler, _ctIsExecutable } from './cell-types.js';
 import { toggleAutorun } from './editor.js';
 import { toggleSettings, togglePresent, applyLineNumbers, getSettings } from './settings.js';
 import { saveNotebook, savePackedNotebook, setSaveMode, toggleSaveTray } from './save.js';
@@ -46,7 +46,7 @@ export function undo() {
     const newCell = addCell(type, code, validAfter, validBefore);
     if (collapsed) newCell.el.classList.add('collapsed');
     selectCell(newCell.id);
-    if ((type === 'code' || type === 'html') && S.cells.some(c => c.type === 'code' || c.type === 'html')) runAll();
+    if (_ctIsExecutable(type) && S.cells.some(c => _ctIsExecutable(c.type))) runAll();
     setMsg('restored cell', 'ok');
   }
 }
@@ -160,12 +160,9 @@ function runSelected() {
   if (S.selectedId === null && S.cells.length) selectCell(S.cells[0].id);
   const cell = S.cells.find(c => c.id === S.selectedId);
   if (!cell) return;
-  if (cell.type === 'code') {
-    runDAG([cell.id]);
-  } else if (cell.type === 'html') {
-    renderHtmlCell(cell);
-  } else if (_ctGetHandler(cell.type) && !cell._fallback) {
-    runDAG([cell.id]);
+  if (_ctIsExecutable(cell.type) && !cell._fallback) {
+    if (cell.type === 'html') renderHtmlCell(cell);
+    else runDAG([cell.id]);
   }
 }
 
@@ -173,14 +170,14 @@ function runSelected() {
 function cm6RunCell(cellId) {
   const cell = S.cells.find(c => c.id === cellId);
   if (!cell) return;
-  if (cell.type === 'code' || (_ctGetHandler(cell.type) && !cell._fallback)) runDAG([cellId], true);
+  if (_ctIsExecutable(cell.type) && !cell._fallback) runDAG([cellId], true);
 }
 
 // CM6 callback: run cell and advance
 function cm6RunAndAdvance(cellId) {
   const cell = S.cells.find(c => c.id === cellId);
   if (!cell) return;
-  if (cell.type === 'code' || (_ctGetHandler(cell.type) && !cell._fallback)) runDAG([cellId], true);
+  if (_ctIsExecutable(cell.type) && !cell._fallback) runDAG([cellId], true);
   // advance — respect goto target if set
   const gotoIdx = window._lastGotoTarget;
   if (gotoIdx != null && gotoIdx >= 0 && gotoIdx < S.cells.length) {
@@ -471,7 +468,7 @@ document.addEventListener('keydown', (e) => {
       e.preventDefault();
       const newCell = addCellWithUndo(S.clipboard.type, S.clipboard.code, S.selectedId);
       selectCell(newCell.id);
-      if (S.clipboard.type === 'code' && S.cells.some(c => c.type === 'code')) runAll();
+      if (_ctIsExecutable(S.clipboard.type) && S.cells.some(c => _ctIsExecutable(c.type))) runAll();
       return;
     }
     if (e.key === 'x' && S.selectedId !== null) {

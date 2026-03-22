@@ -1,6 +1,7 @@
 import { S } from './state.js';
 import { loadFromEmbed, saveNotebook, setSaveMode, initLiveSync, syncData, syncSettings, syncModules } from './save.js';
 import { addCell } from './cell-ops.js';
+import { _ctIsExecutable } from './cell-types.js';
 import { setMsg } from './ui.js';
 import { setBadge } from './update.js';
 import { registerProvider } from './stdlib.js';
@@ -158,7 +159,7 @@ function _resumeAfterUnlock(payload) {
 
   // Run all if configured
   const effectiveRun = resolveRunOnLoad();
-  if (effectiveRun === 'yes' && getEditorViewSetting() !== 'yes' && S.cells.some(c => c.type === 'code')) {
+  if (effectiveRun === 'yes' && getEditorViewSetting() !== 'yes' && S.cells.some(c => _ctIsExecutable(c.type))) {
     setTimeout(runAll, 50);
   }
 

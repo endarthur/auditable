@@ -12,6 +12,7 @@ import { S } from './state.js';
 import { buildDAG, isManual, isNorun, parseCellName, isPrivate, isMcp, isMcpRw, parseMcpDescribe, isMcpManifest, parseMcpFs } from './dag.js';
 import { runDAG, runAll, renderMdCell, renderHtmlCell } from './exec.js';
 import { addCell } from './cell-ops.js';
+import { _ctIsExecutable } from './cell-types.js';
 import { notifyDirty } from './editor.js';
 import { syncDataDebounced, syncSettings } from './save.js';
 import { setMsg } from './ui.js';
@@ -778,7 +779,7 @@ async function _mcpUpdateCellSource(input, client) {
   clearTimeout(S.editTimer);
   notifyDirty();
 
-  if (S.autorun && (cell.type === 'code' || cell.type === 'html' || cell.type === 'md')) {
+  if (S.autorun && (cell.type === 'md' || _ctIsExecutable(cell.type))) {
     await runDAG([cell.id], false);
   }
 

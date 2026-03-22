@@ -1,6 +1,6 @@
 import { S } from './state.js';
 import { buildDAG, topoSort, isManual, isNorun, isHidden, parseCellName, parseOutputId, parseOutputClass } from './dag.js';
-import { _ctGetHandler, _ctRenderOutput } from './cell-types.js';
+import { _ctGetHandler, _ctRenderOutput, _ctIsExecutable } from './cell-types.js';
 import { setMsg } from './ui.js';
 import { refreshTaggedLanguages, getEditor } from './cm6.js';
 import { std } from './stdlib.js';
@@ -1692,8 +1692,7 @@ export async function runDAG(dirtyIds, force = false) {
 
 export async function runAll() {
   const ids = S.cells.filter(c =>
-    c.type === 'code' || c.type === 'html' || c.type === 'md' ||
-    (_ctGetHandler(c.type) && !c._fallback)
+    c.type === 'md' || (_ctIsExecutable(c.type) && !c._fallback)
   ).map(c => c.id);
   if (ids.length === 0) return;
   await runDAG(ids, true);

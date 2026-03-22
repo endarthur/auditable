@@ -2,6 +2,7 @@ import { S, $ } from './state.js';
 import { runAll, runDAG, renderHtmlCell, renderMdCell } from './exec.js';
 import { isCollapsed } from './dag.js';
 import { addCell } from './cell-ops.js';
+import { _ctIsExecutable, _ctHasOutput } from './cell-types.js';
 import { getEditor } from './cm6.js';
 import { cssSummary } from './cell-dom.js';
 import { applyEditorView } from './settings.js';
@@ -658,10 +659,10 @@ function immediateSyncAndRun(view) {
       .find(l => /^\/\/\/\s+(\w+)/.test(l.trimEnd()));
     const parsedType = expectedType?.trimEnd().match(/^\/\/\/\s+(\w+)/)?.[1];
     if (parsedType && parsedType !== cell.type) return;
-    if (cell.type === 'code') {
-      runDAG([cell.id], true);
-    } else if (cell.type === 'html') {
+    if (cell.type === 'html') {
       renderHtmlCell(cell);
+    } else if (_ctIsExecutable(cell.type)) {
+      runDAG([cell.id], true);
     }
   }
 }
@@ -878,7 +879,7 @@ function enterSplitView() {
   S.splitEditor = createSplitEditor(left, txt);
 
   // run cells to populate outputs (not forced — respects %manual)
-  const ids = S.cells.filter(c => c.type === 'code' || c.type === 'html' || c.type === 'md').map(c => c.id);
+  const ids = S.cells.filter(c => c.type === 'md' || (_ctIsExecutable(c.type) && !c._fallback)).map(c => c.id);
   if (ids.length) runDAG(ids);
 }
 
