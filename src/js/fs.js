@@ -523,13 +523,19 @@ export function createNotebookFs() {
 
 // ── UI PANEL ──
 
-let _fsPanelVisible = false;
+let _fsState = {
+  visible: false,
+  cwd: '/home/nb',
+  root: '/home/nb',   // current view directory (breadcrumb navigates this)
+  expanded: new Set(), // subdirs expanded within current root
+  cache: new Map(),
+};
 
 export function toggleFs() {
-  _fsPanelVisible = !_fsPanelVisible;
+  _fsState.visible = !_fsState.visible;
   const panel = document.getElementById('fsPanel');
-  if (panel) panel.style.display = _fsPanelVisible ? 'block' : '';
-  if (_fsPanelVisible) refreshFsPanel();
+  if (panel) panel.style.display = _fsState.visible ? 'block' : '';
+  if (_fsState.visible) refreshFsPanel();
 }
 
 function fmtSize(bytes) {
@@ -538,7 +544,223 @@ function fmtSize(bytes) {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
-function refreshFsPanel() {
+function esc(s) {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// ── BREADCRUMB ──
+
+function navigateTo(dirPath) {
+  _fsState.root = dirPath;
+  _fsState.expanded.clear();
+  _fsState.cache.clear();
+  refreshFsPanel();
+}
+
+function renderBreadcrumb() {
+  const el = document.getElementById('fsBreadcrumb');
+  if (!el) return;
+  el.innerHTML = '';
+  const root = _fsState.root;
+  const parts = root === '/' ? [''] : root.split('/');
+  for (let i = 0; i < parts.length; i++) {
+    if (i > 0) {
+      const sep = document.createElement('span');
+      sep.className = 'fs-crumb-sep';
+      sep.textContent = '\u203a';
+      el.appendChild(sep);
+    }
+    const btn = document.createElement('button');
+    btn.className = 'fs-crumb';
+    btn.textContent = i === 0 ? '/' : parts[i];
+    const crumbPath = i === 0 ? '/' : parts.slice(0, i + 1).join('/');
+    // clicking navigates to that directory
+    if (crumbPath !== root) {
+      btn.onclick = () => navigateTo(crumbPath);
+    } else {
+      btn.style.color = 'var(--fg-bright)';
+      btn.style.cursor = 'default';
+    }
+    el.appendChild(btn);
+    if (crumbPath === _fsState.cwd) {
+      const badge = document.createElement('span');
+      badge.className = 'fs-cwd-badge';
+      badge.textContent = 'cwd';
+      el.appendChild(badge);
+    }
+  }
+}
+
+// ── VFS TREE RENDERER ──
+
+// For unmounted intermediate paths (/, /home, /usr, /usr/lib),
+// synthesize directory entries from mount point paths.
+function synthChildren(vfs, dirPath) {
+  const prefix = dirPath === '/' ? '/' : dirPath + '/';
+  const children = new Set();
+  for (const { path: mp } of vfs.mounts()) {
+    if (dirPath === '/') {
+      const first = mp.split('/').filter(Boolean)[0];
+      if (first) children.add(first);
+    } else if (mp.startsWith(prefix)) {
+      const rest = mp.slice(prefix.length);
+      const next = rest.split('/')[0];
+      if (next) children.add(next);
+    }
+  }
+  return [...children].sort().map(name => ({ name, type: 'directory', size: 0 }));
+}
+
+async function renderDirectory(parentEl, dirPath, depth) {
+  const vfs = getVfs();
+  if (!vfs) return;
+  let entries;
+  try {
+    entries = await vfs.readdir(dirPath, { stat: true });
+  } catch {
+    // No backend for this path — synthesize from mount points
+    entries = synthChildren(vfs, dirPath);
+    if (!entries.length) return;
+  }
+
+  // sort: directories first, then alphabetical
+  entries.sort((a, b) => {
+    if (a.type === 'directory' && b.type !== 'directory') return -1;
+    if (a.type !== 'directory' && b.type === 'directory') return 1;
+    return a.name.localeCompare(b.name);
+  });
+
+  const mountPaths = new Set(vfs._mounts.keys());
+  const isVolatile = dirPath === '/tmp' || dirPath.startsWith('/tmp/');
+
+  for (const entry of entries) {
+    const absPath = dirPath === '/' ? '/' + entry.name : dirPath + '/' + entry.name;
+
+    if (entry.type === 'directory') {
+      const isExpanded = _fsState.expanded.has(absPath);
+      const isMountPoint = mountPaths.has(absPath);
+      const isCwd = absPath === _fsState.cwd;
+
+      const row = document.createElement('div');
+      row.className = 'fs-dir-row';
+      row.style.paddingLeft = (depth * 18) + 'px';
+      row.oncontextmenu = (e) => { e.preventDefault(); e.stopPropagation(); contextDir(e, absPath, isMountPoint); };
+
+      const toggle = document.createElement('span');
+      toggle.className = 'fs-dir-toggle';
+      toggle.textContent = isExpanded ? '\u25be' : '\u25b8';
+      row.appendChild(toggle);
+
+      const name = document.createElement('span');
+      name.textContent = ' ' + entry.name + '/';
+      if (isVolatile || absPath === '/tmp' || absPath.startsWith('/tmp/')) name.className = 'fs-volatile';
+      row.appendChild(name);
+
+      if (isCwd) {
+        const badge = document.createElement('span');
+        badge.className = 'fs-cwd-badge';
+        badge.textContent = 'cwd';
+        row.appendChild(badge);
+      }
+      if (isMountPoint) {
+        let type = 'mount';
+        try { type = vfs.capabilities(absPath).type || 'mount'; } catch {}
+        const badge = document.createElement('span');
+        badge.className = 'fs-mount-badge';
+        badge.textContent = type;
+        row.appendChild(badge);
+      }
+
+      // arrow toggles inline expand/collapse
+      toggle.onclick = (e) => {
+        e.stopPropagation();
+        if (isExpanded) _fsState.expanded.delete(absPath);
+        else _fsState.expanded.add(absPath);
+        _fsState.cache.clear();
+        refreshFsPanel();
+      };
+      // clicking name navigates into directory
+      name.onclick = (e) => {
+        e.stopPropagation();
+        navigateTo(absPath);
+      };
+      name.style.cursor = 'pointer';
+      parentEl.appendChild(row);
+
+      if (isExpanded) {
+        await renderDirectory(parentEl, absPath, depth + 1);
+      }
+    } else {
+      // file row
+      const row = document.createElement('div');
+      row.className = 'fs-file-row';
+      row.style.paddingLeft = (depth * 18) + 'px';
+      row.oncontextmenu = (e) => { e.preventDefault(); contextFile(e, absPath, dirPath); };
+
+      const fname = document.createElement('span');
+      fname.className = 'fs-file-name';
+      if (isVolatile) fname.className += ' fs-volatile';
+      fname.textContent = entry.name;
+      row.appendChild(fname);
+
+      const size = document.createElement('span');
+      size.className = 'fs-file-size';
+      size.textContent = fmtSize(entry.size || 0);
+      row.appendChild(size);
+
+      // delete button — only for writable backends
+      let writable = true;
+      try { writable = vfs.capabilities(absPath).writable; } catch {}
+      if (writable) {
+        const del = document.createElement('button');
+        del.className = 'fs-file-del';
+        del.textContent = '\u00d7';
+        del.onclick = async (e) => {
+          e.stopPropagation();
+          try { await vfs.unlink(absPath); } catch {}
+          _fsState.cache.clear();
+          refreshFsPanel();
+        };
+        row.appendChild(del);
+      }
+
+      parentEl.appendChild(row);
+    }
+  }
+}
+
+async function renderTree() {
+  const body = document.getElementById('fsPanelBody');
+  if (!body) return;
+  body.innerHTML = '';
+  const loading = document.createElement('div');
+  loading.className = 'fs-loading';
+  loading.textContent = 'loading\u2026';
+  body.appendChild(loading);
+
+  try {
+    await renderDirectory(body, _fsState.root, 0);
+    // remove loading placeholder (it's the first child if still there)
+    if (body.firstChild === loading) body.removeChild(loading);
+    // if body is empty after render, show "no files"
+    if (!body.children.length) {
+      const empty = document.createElement('div');
+      empty.className = 'fs-loading';
+      empty.textContent = 'no files';
+      body.appendChild(empty);
+    }
+  } catch (e) {
+    body.innerHTML = '';
+    const err = document.createElement('div');
+    err.className = 'fs-loading';
+    err.textContent = 'error: ' + e.message;
+    body.appendChild(err);
+  }
+}
+
+// ── LEGACY RENDERER (no VFS) ──
+
+function refreshFsPanelLegacy() {
   const body = document.getElementById('fsPanelBody');
   if (!body) return;
   const fs = getFs();
@@ -549,9 +771,8 @@ function refreshFsPanel() {
     return;
   }
 
-  // group by first path segment
-  const folders = new Map(); // prefix -> [{path, entry}]
-  const root = []; // files without /
+  const folders = new Map();
+  const root = [];
 
   for (const [path, entry] of fs) {
     const idx = path.indexOf('/');
@@ -566,7 +787,6 @@ function refreshFsPanel() {
 
   let html = '';
 
-  // render folders
   for (const [prefix, files] of [...folders.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     const totalSize = files.reduce((s, f) => s + f.entry.size, 0);
     html += `<div class="fs-folder">`;
@@ -584,7 +804,6 @@ function refreshFsPanel() {
     html += `</div></div>`;
   }
 
-  // render root files
   for (const { path, entry } of root.sort((a, b) => a.path.localeCompare(b.path))) {
     html += `<div class="fs-file-row" data-path="${esc(path)}" oncontextmenu="event.preventDefault();window._fsContextFile(event,'${esc(path)}')">`
       + `<span class="fs-file-name">${esc(path)}</span>`
@@ -595,7 +814,6 @@ function refreshFsPanel() {
   body.innerHTML = html;
   updateFsSummary();
 
-  // wire folder toggles
   body.querySelectorAll('.fs-folder-header').forEach(hdr => {
     hdr.addEventListener('click', (e) => {
       if (e.target.classList.contains('fs-file-del')) return;
@@ -608,6 +826,22 @@ function refreshFsPanel() {
   });
 }
 
+// ── PANEL ENTRY POINT ──
+
+function refreshFsPanel() {
+  const vfs = getVfs();
+  if (vfs) {
+    renderBreadcrumb();
+    renderTree();
+    updateFsSummary();
+  } else {
+    // hide breadcrumb in legacy mode
+    const bc = document.getElementById('fsBreadcrumb');
+    if (bc) bc.innerHTML = '';
+    refreshFsPanelLegacy();
+  }
+}
+
 function updateFsSummary() {
   const el = document.getElementById('fsSummary');
   if (!el) return;
@@ -617,15 +851,12 @@ function updateFsSummary() {
   el.textContent = `${fs.size} file${fs.size > 1 ? 's' : ''}, ${fmtSize(total)}`;
 }
 
-function esc(s) {
-  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
 export function fsImport() {
-  import_({}).then(() => refreshFsPanel()).catch(() => {});
+  import_({}).then(() => { _fsState.cache.clear(); refreshFsPanel(); }).catch(() => {});
 }
 
-// context menu
+// ── CONTEXT MENUS ──
+
 let _ctxMenu = null;
 
 function showContextMenu(x, y, items) {
@@ -642,8 +873,6 @@ function showContextMenu(x, y, items) {
   }
   document.body.appendChild(menu);
   _ctxMenu = menu;
-
-  // close on outside click
   setTimeout(() => document.addEventListener('click', closeContextMenu, { once: true }), 0);
 }
 
@@ -652,6 +881,7 @@ function closeContextMenu() {
 }
 
 function copyText(text) {
+  if (navigator.clipboard) { navigator.clipboard.writeText(text).catch(() => {}); return; }
   const ta = document.createElement('textarea');
   ta.value = text;
   ta.style.cssText = 'position:fixed;left:-9999px';
@@ -661,7 +891,120 @@ function copyText(text) {
   ta.remove();
 }
 
-// global handlers for onclick/oncontextmenu in generated HTML
+function relPath(absPath) {
+  // convert absolute VFS path to relative notebook.fs path (for /home/nb files)
+  if (absPath.startsWith(NB_PREFIX)) return absPath.slice(NB_PREFIX.length);
+  return absPath;
+}
+
+function contextFile(event, absPath, dirPath) {
+  const vfs = getVfs();
+  const isNb = absPath.startsWith(NB_PREFIX);
+  const displayPath = isNb ? relPath(absPath) : absPath;
+
+  const items = [];
+
+  // copy read command — use relative path for /home/nb, vfs for others
+  if (isNb) {
+    items.push({ label: 'copy read command', action: () => copyText(`await notebook.fs.read("${relPath(absPath)}")`) });
+  } else {
+    items.push({ label: 'copy read command', action: () => copyText(`await vfs.readFile("${absPath}", "text")`) });
+  }
+  items.push({ label: 'copy path', action: () => copyText(displayPath) });
+
+  let writable = true;
+  let isMountRoot = false;
+  if (vfs) {
+    try { writable = vfs.capabilities(absPath).writable; } catch {}
+    isMountRoot = vfs._mounts.has(absPath);
+  }
+
+  if (writable && !isMountRoot) {
+    items.push({ label: 'rename', action: async () => {
+      const name = absPath.split('/').pop();
+      const newName = prompt('new name:', name);
+      if (!newName || newName === name) return;
+      const newPath = dirPath === '/' ? '/' + newName : dirPath + '/' + newName;
+      if (isNb && newPath.startsWith(NB_PREFIX)) {
+        await rename(relPath(absPath), relPath(newPath));
+      } else if (vfs) {
+        await vfs.rename(absPath, newPath);
+      }
+      _fsState.cache.clear();
+      refreshFsPanel();
+    }});
+  }
+
+  if (isNb) {
+    items.push({ label: 'download', action: () => export_(relPath(absPath)) });
+  }
+
+  if (writable && !isMountRoot) {
+    items.push({ label: 'delete', action: async () => {
+      if (isNb) {
+        await delete_(relPath(absPath));
+      } else if (vfs) {
+        await vfs.unlink(absPath);
+      }
+      _fsState.cache.clear();
+      refreshFsPanel();
+    }});
+  }
+
+  showContextMenu(event.clientX, event.clientY, items);
+}
+
+function contextDir(event, absPath, isMountPoint) {
+  const vfs = getVfs();
+  const isNb = absPath.startsWith(NB_PREFIX);
+  const displayPath = isNb ? relPath(absPath) : absPath;
+
+  const items = [];
+  items.push({ label: 'copy path', action: () => copyText(displayPath) });
+
+  if (isNb) {
+    const rel = relPath(absPath);
+    items.push({ label: 'copy list command', action: () => copyText(`notebook.fs.list("${rel}/")`) });
+    items.push({ label: 'download as zip', action: () => export_(rel) });
+    items.push({ label: 'import into folder', action: () => import_({ prefix: rel + '/' }).then(() => { _fsState.cache.clear(); refreshFsPanel(); }).catch(() => {}) });
+  }
+
+  let writable = true;
+  if (vfs) {
+    try { writable = vfs.capabilities(absPath).writable; } catch {}
+  }
+
+  if (writable && !isMountPoint) {
+    items.push({ label: 'rename folder', action: async () => {
+      const name = absPath.split('/').pop();
+      const newName = prompt('new folder name:', name);
+      if (!newName || newName === name) return;
+      const parent = absPath.slice(0, absPath.lastIndexOf('/')) || '/';
+      const newPath = parent === '/' ? '/' + newName : parent + '/' + newName;
+      if (isNb && newPath.startsWith(NB_PREFIX)) {
+        await rename(relPath(absPath), relPath(newPath));
+      } else if (vfs) {
+        await vfs.rename(absPath, newPath);
+      }
+      _fsState.cache.clear();
+      refreshFsPanel();
+    }});
+    items.push({ label: 'delete folder', action: async () => {
+      if (isNb) {
+        await delete_(relPath(absPath), { recursive: true });
+      } else if (vfs) {
+        await vfs.rmdir(absPath, { recursive: true });
+      }
+      _fsState.expanded.delete(absPath);
+      _fsState.cache.clear();
+      refreshFsPanel();
+    }});
+  }
+
+  showContextMenu(event.clientX, event.clientY, items);
+}
+
+// legacy global handlers (for innerHTML-based legacy mode)
 if (typeof window !== 'undefined') {
   window._fsDelete = async (path) => {
     await delete_(path);
@@ -693,4 +1036,7 @@ if (typeof window !== 'undefined') {
       { label: 'delete folder', action: async () => { await delete_(prefix, { recursive: true }); refreshFsPanel(); } },
     ]);
   };
+
+  // expose refresh for VFS event wiring
+  window._fsPanelRefresh = () => { if (_fsState.visible) { _fsState.cache.clear(); refreshFsPanel(); } };
 }

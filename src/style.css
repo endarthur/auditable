@@ -519,6 +519,61 @@ audit-text-input input[type="text"] {
   color: #111;
 }
 
+.fs-breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  font-size: 11px;
+  padding: 0 0 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+  min-height: 0;
+}
+.fs-breadcrumb:empty { display: none; }
+.fs-crumb {
+  background: none;
+  border: none;
+  color: var(--fg-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 1px 4px;
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.fs-crumb:hover { color: var(--accent); }
+.fs-crumb-sep { color: var(--fg-dim); opacity: 0.5; user-select: none; }
+.fs-cwd-badge {
+  font-size: 9px;
+  color: var(--accent);
+  border: 1px solid var(--accent-dim);
+  padding: 0 3px;
+  margin-left: 2px;
+  user-select: none;
+}
+.fs-mount-badge {
+  font-size: 9px;
+  color: var(--fg-dim);
+  border: 1px solid var(--border);
+  padding: 0 3px;
+  margin-left: 4px;
+  user-select: none;
+}
+.fs-volatile { font-style: italic; color: var(--fg-dim); }
+.fs-loading { color: var(--fg-dim); font-style: italic; padding: 8px 0; }
+.fs-indent { display: inline-block; }
+.fs-dir-row {
+  display: flex;
+  align-items: center;
+  padding: 2px 0;
+  cursor: pointer;
+  color: var(--fg-bright);
+  user-select: none;
+}
+.fs-dir-row:hover { color: var(--accent); }
+.fs-dir-toggle { display: inline-block; width: 14px; text-align: center; }
+
 /* ── EXPORT DIALOG ── */
 .export-overlay {
   position: fixed;

@@ -144,6 +144,14 @@ if (typeof VFS !== 'undefined') {
   // /usr/lib/python — system Python modules (extensions install here)
   _notebookVFS._mounts.set('/usr/lib/python', new MemoryBackend());
   window._notebookVFS = _notebookVFS;
+  // auto-refresh files panel on VFS changes
+  let _fsRefreshTimer = null;
+  const _debouncedRefresh = () => {
+    clearTimeout(_fsRefreshTimer);
+    _fsRefreshTimer = setTimeout(() => { if (window._fsPanelRefresh) window._fsPanelRefresh(); }, 150);
+  };
+  _notebookVFS.on('write', _debouncedRefresh);
+  _notebookVFS.on('delete', _debouncedRefresh);
 }
 // VFS path utils for adder fs modules
 window._vfsPath = typeof path !== 'undefined' && path.join ? path : null;
