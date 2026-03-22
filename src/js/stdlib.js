@@ -747,4 +747,5 @@ export const std = {
   color, colorScale, hsl,
   viridis, magma, inferno, plasma, turbo,
   palette10,
+  ...(typeof VFS !== 'undefined' ? { VFS, path } : {}),
 };

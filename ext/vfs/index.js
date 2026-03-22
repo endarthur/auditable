@@ -2927,12 +2927,7 @@ function fromPicker(vfs, destPath, opts) {
 
 // -- api.js --
 
-// Public API for @gcu/vfs — plugin registration
-
-if (typeof window !== 'undefined' && window.registerPlugin) {
-  window.registerPlugin('@gcu/vfs', {
-    description: 'Virtual filesystem with pluggable backends and mount table',
-  });
-}
+// @gcu/vfs — integrated into the base image
+// No plugin registration needed — VFS is available as a builtin.
 
 export { VFS, VFSError, path };

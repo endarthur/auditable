@@ -222,5 +222,13 @@
   "// %mcp fs": {
     "sig": "// %mcp fs prefix/ | // %mcp fs:read prefix/ | // %mcp fs *",
     "desc": "allow MCP agent to access notebook.fs under prefix. :read = no writes. * = all paths"
+  },
+  "vfs": {
+    "sig": "await vfs.create(config?)",
+    "desc": "virtual filesystem \u2014 pluggable backends (memory, idb, opfs, fetch, overlay, cache), mount table, glob, permissions"
+  },
+  "std.VFS": {
+    "sig": "std.VFS",
+    "desc": "alias for vfs \u2014 the VFS class for creating virtual filesystems"
   }
 }

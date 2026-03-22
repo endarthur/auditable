@@ -1,66 +1,66 @@
 /// auditable
 /// title: virtual filesystem
-/// module: ./ext/vfs/index.js ext/vfs/index.js
 
 /// md
 # virtual filesystem
 
-`@gcu/vfs` is a pluggable virtual filesystem with a mount table, path resolution, permissions, and multiple backends. mount different storage engines at different paths and interact with them through a unified POSIX-like API.
+`vfs` is a pluggable virtual filesystem with a mount table, path resolution, permissions, and multiple backends. mount different storage engines at different paths and interact with them through a unified POSIX-like API.
+
+available as `vfs` (the VFS class) and `std.VFS` in every cell.
 
 /// md
 ## create and mount
 
 /// code
-const { VFS, path } = await load("./ext/vfs/index.js");
-
 // create a VFS with a memory backend at /
-const vfs = await VFS.create();
+const fs = await vfs.create();
 
 // write some files
-await vfs.mkdir("/data");
-await vfs.writeFile("/data/cities.csv", `city,lat,lon,pop
+await fs.mkdir("/data");
+await fs.writeFile("/data/cities.csv", `city,lat,lon,pop
 Tokyo,35.68,139.69,13960000
 Delhi,28.61,77.23,32940000
 Shanghai,31.23,121.47,28520000
 Cairo,30.04,31.24,21750000
 Mumbai,19.08,72.88,21300000`);
 
-await vfs.writeFile("/data/notes.txt", "field campaign Q3 2025");
+await fs.writeFile("/data/notes.txt", "field campaign Q3 2025");
 
-await vfs.mkdir("/tmp");
-await vfs.writeFile("/tmp/scratch.txt", "ephemeral");
+await fs.mkdir("/tmp");
+await fs.writeFile("/tmp/scratch.txt", "ephemeral");
 
 // list mounts
 ui.display("mounts:");
-for (const m of vfs.mounts()) {
+for (const m of fs.mounts()) {
   ui.display(`  ${m.path} \u2192 ${m.type}`);
 }
 
 /// md
 ## path utilities
 
-the `path` module provides `join`, `dirname`, `basename`, `extname`, `normalize`, `resolve`, `relative`, `mime` \u2014 no dependencies, works everywhere.
+VFS includes a `path` module with `join`, `dirname`, `basename`, `extname`, `normalize`, `resolve`, `relative`, `mime` \u2014 no dependencies, works everywhere.
 
 /// code
-ui.display(`join:      ${path.join("/home", "data", "file.csv")}`);
-ui.display(`dirname:   ${path.dirname("/home/data/file.csv")}`);
-ui.display(`basename:  ${path.basename("/home/data/file.csv")}`);
-ui.display(`extname:   ${path.extname("/home/data/file.csv")}`);
-ui.display(`normalize: ${path.normalize("/home/../etc/./hosts")}`);
-ui.display(`relative:  ${path.relative("/home/data", "/home/other")}`);
-ui.display(`mime:      ${path.mime("data.csv")} | ${path.mime("image.png")} | ${path.mime("app.wasm")}`);
+const p = std.path;
+ui.display(`join:      ${p.join("/home", "data", "file.csv")}`);
+ui.display(`dirname:   ${p.dirname("/home/data/file.csv")}`);
+ui.display(`basename:  ${p.basename("/home/data/file.csv")}`);
+ui.display(`extname:   ${p.extname("/home/data/file.csv")}`);
+ui.display(`normalize: ${p.normalize("/home/../etc/./hosts")}`);
+ui.display(`relative:  ${p.relative("/home/data", "/home/other")}`);
+ui.display(`mime:      ${p.mime("data.csv")} | ${p.mime("image.png")} | ${p.mime("app.wasm")}`);
 
 /// md
 ## CRUD and stat
 
 /// code
 // read back
-const csv = await vfs.readFile("/data/cities.csv");
+const csv = await fs.readFile("/data/cities.csv");
 const rows = std.csv(csv, { typed: true });
 ui.table(rows);
 
 // stat
-const info = await vfs.stat("/data/cities.csv");
+const info = await fs.stat("/data/cities.csv");
 ui.display(`type: ${info.type}, size: ${info.size} bytes, modified: ${info.modified.toISOString()}`);
 
 /// md
@@ -68,18 +68,18 @@ ui.display(`type: ${info.type}, size: ${info.size} bytes, modified: ${info.modif
 
 /// code
 // find all CSV files anywhere
-const csvFiles = await vfs.glob("/**/*.csv");
+const csvFiles = await fs.glob("/**/*.csv");
 ui.display(`CSV files: ${csvFiles.join(", ")}`);
 
 // find all .txt files
-const txtFiles = await vfs.glob("/**/*.txt");
+const txtFiles = await fs.glob("/**/*.txt");
 ui.display(`TXT files: ${txtFiles.join(", ")}`);
 
 /// md
 ## disk usage
 
 /// code
-const usage = await vfs.du("/");
+const usage = await fs.du("/");
 ui.display(`${usage.files} files, ${usage.directories} directories, ${std.fmt(usage.bytes)} bytes`);
 
 /// md
@@ -88,23 +88,23 @@ ui.display(`${usage.files} files, ${usage.directories} directories, ${std.fmt(us
 mount a second memory backend at `/scratch` \u2014 it gets its own isolated storage. path resolution finds the longest matching mount prefix.
 
 /// code
-await vfs.mount("/scratch", { type: "memory" });
+await fs.mount("/scratch", { type: "memory" });
 
-await vfs.writeFile("/scratch/temp.txt", "isolated from /");
+await fs.writeFile("/scratch/temp.txt", "isolated from /");
 
 // resolve shows which mount handles each path
-const r1 = vfs.resolve("/data/cities.csv");
-const r2 = vfs.resolve("/scratch/temp.txt");
+const r1 = fs.resolve("/data/cities.csv");
+const r2 = fs.resolve("/scratch/temp.txt");
 ui.display(`/data/cities.csv \u2192 mount: ${r1.mount}, subpath: ${r1.subpath}`);
 ui.display(`/scratch/temp.txt \u2192 mount: ${r2.mount}, subpath: ${r2.subpath}`);
 
 // readdir at root shows child mount names
-const root = await vfs.readdir("/");
+const root = await fs.readdir("/");
 ui.display(`root entries: ${root.join(", ")}`);
 
 // capabilities per mount
-for (const m of vfs.mounts()) {
-  const caps = vfs.capabilities(m.path === "/" ? "/" : m.path);
+for (const m of fs.mounts()) {
+  const caps = fs.capabilities(m.path === "/" ? "/" : m.path);
   ui.display(`${m.path}: persistent=${caps.persistent}, writable=${caps.writable}, symlinks=${caps.symlinks}`);
 }
 
@@ -115,7 +115,7 @@ for (const m of vfs.mounts()) {
 
 /// code
 // create an overlay VFS
-const ovfs = await VFS.create({
+const ovfs = await vfs.create({
   type: "overlay",
   lower: { type: "memory" },
   upper: { type: "memory" },
@@ -155,14 +155,14 @@ VFS emits `write`, `delete`, `mkdir`, `mount`, `unmount` events \u2014 useful fo
 
 /// code
 const log = [];
-vfs.on("write", e => log.push(`write ${e.path}`));
-vfs.on("delete", e => log.push(`delete ${e.path}`));
-vfs.on("mkdir", e => log.push(`mkdir ${e.path}`));
+fs.on("write", e => log.push(`write ${e.path}`));
+fs.on("delete", e => log.push(`delete ${e.path}`));
+fs.on("mkdir", e => log.push(`mkdir ${e.path}`));
 
-await vfs.mkdir("/events");
-await vfs.writeFile("/events/test.txt", "hello");
-await vfs.unlink("/events/test.txt");
-await vfs.rmdir("/events");
+await fs.mkdir("/events");
+await fs.writeFile("/events/test.txt", "hello");
+await fs.unlink("/events/test.txt");
+await fs.rmdir("/events");
 
 ui.display("event log:");
 for (const entry of log) ui.display(`  ${entry}`);
@@ -174,21 +174,21 @@ snapshot the entire filesystem as a plain object, then restore it elsewhere.
 
 /// code
 // write some data
-await vfs.mkdir("/project");
-await vfs.writeFile("/project/readme.txt", "my project");
-await vfs.writeFile("/project/data.csv", "x,y\n1,2\n3,4");
+await fs.mkdir("/project");
+await fs.writeFile("/project/readme.txt", "my project");
+await fs.writeFile("/project/data.csv", "x,y\n1,2\n3,4");
 
 // export as { relativePath: content }
-const snapshot = await vfs.export("/project");
+const snapshot = await fs.export("/project");
 ui.display("exported keys: " + Object.keys(snapshot).join(", "));
 
 // import into a new location
-await vfs.mkdir("/restored");
-await vfs.import("/restored", snapshot);
-ui.display("restored: " + await vfs.readFile("/restored/readme.txt"));
-ui.display("data: " + await vfs.readFile("/restored/data.csv"));
+await fs.mkdir("/restored");
+await fs.import("/restored", snapshot);
+ui.display("restored: " + await fs.readFile("/restored/readme.txt"));
+ui.display("data: " + await fs.readFile("/restored/data.csv"));
 
 /// md
 ---
 
-`@gcu/vfs` also provides `IDBBackend` (IndexedDB persistence), `CommentBackend` (HTML comment storage), `HandleBackend` (OPFS/FSAA), `FetchBackend` (read-only HTTP), `RESTBackend` (read-write HTTP), and `CacheBackend` (transparent caching with TTL). all backends share the same API and can be mixed via the mount table.
+VFS also provides `IDBBackend` (IndexedDB persistence), `CommentBackend` (HTML comment storage), `HandleBackend` (OPFS/FSAA), `FetchBackend` (read-only HTTP), `RESTBackend` (read-write HTTP), and `CacheBackend` (transparent caching with TTL). all backends share the same API and can be mixed via the mount table.

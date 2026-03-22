@@ -1375,19 +1375,21 @@ function _createCellContext(cell) {
     run: (ids) => runDAG(Array.isArray(ids) ? ids : [ids], true),
   };
 
+  const vfs = typeof VFS !== 'undefined' ? VFS : undefined;
+
   return { ui, std, load, install, installBinary, invalidation, display, print: display,
-           md, html, css, workshop, notebook, worker, workerPool, usedWidgets, outputEl, widgetEl };
+           md, html, css, workshop, notebook, worker, workerPool, vfs, usedWidgets, outputEl, widgetEl };
 }
 
 export async function execCell(cell) {
   const ctx = _createCellContext(cell);
   const { ui, std, load, install, installBinary, invalidation, display, print: print_,
-          md, html, css, workshop, notebook, worker, workerPool,
+          md, html, css, workshop, notebook, worker, workerPool, vfs,
           usedWidgets, outputEl, widgetEl } = ctx;
 
   // execute with scoped parameters (only what this cell uses, for stable V8 JIT)
   // filter out injected names — they're per-cell params, not scope-propagated
-  const _injected = ['ui', 'std', 'load', 'install', 'installBinary', 'invalidation', 'print', 'display', 'md', 'html', 'css', 'workshop', 'notebook', 'worker', 'workerPool'];
+  const _injected = ['ui', 'std', 'load', 'install', 'installBinary', 'invalidation', 'print', 'display', 'md', 'html', 'css', 'workshop', 'notebook', 'worker', 'workerPool', 'vfs'];
   const scopeKeys = cell.uses ? [...cell.uses].filter(k => !_injected.includes(k)).sort() : [];
   const defNames = cell.defines ? [...cell.defines].sort().join(', ') : '';
 

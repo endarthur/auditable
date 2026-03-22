@@ -41,6 +41,6 @@ export const JS_BUILTINS = new Set([
   'Math','Array','Object','String','Number','Float64Array','Float32Array',
   'Int32Array','Uint8Array','Map','Set','Promise','console','JSON',
   'ui','std','load','install','print',
-  'workshop','notebook','md','html','css'
+  'workshop','notebook','md','html','css','vfs'
 ]);
 

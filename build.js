@@ -455,6 +455,14 @@ if (fs.existsSync(cm6Path)) {
   js = cm6 + '\n\n' + js;
 }
 
+// 2c. Prepend VFS bundle (if built)
+const vfsPath = path.join(__dirname, 'ext/vfs/index.js');
+if (fs.existsSync(vfsPath)) {
+  let vfsSrc = fs.readFileSync(vfsPath, 'utf8');
+  vfsSrc = vfsSrc.replace(/^export\s*\{[^}]*\};?\s*$/gm, '');
+  js = vfsSrc + '\n\n' + js;
+}
+
 // 3. Read CSS and HTML template
 const cssRaw = fs.readFileSync(path.join(srcDir, 'style.css'), 'utf8');
 const template = fs.readFileSync(path.join(srcDir, 'template.html'), 'utf8');
