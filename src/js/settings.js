@@ -179,8 +179,8 @@ export function togglePresent() {
 
 // ── ABOUT ──
 
-const __AUDITABLE_VERSION__ = '0.0.0';
-const __AUDITABLE_RELEASE__ = 'dev';
+export const __AUDITABLE_VERSION__ = '0.0.0';
+export const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_BUILD_DATE__ = 'dev';
 const __AUDITABLE_BASE_SIZE__ = 0;
 

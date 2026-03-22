@@ -446,22 +446,86 @@ const appRuntime = buildAppRuntime();
 const appRuntimeSize = (Buffer.byteLength(appRuntime, 'utf8') / 1024).toFixed(1);
 console.log(`App runtime: ${appRuntimeSize} KB`);
 
-let js = processModules(path.join(jsDir, 'main.js'), jsDir, { lean });
+// ── Module registry: preserve ES module import/export, rewrite paths ──
 
-// 2b. Prepend CM6 bundle (if built)
-const cm6Path = path.join(__dirname, 'ext/cm6/cm6.min.js');
-if (fs.existsSync(cm6Path)) {
-  const cm6 = fs.readFileSync(cm6Path, 'utf8');
-  js = cm6 + '\n\n' + js;
+function processModulesAsRegistry(mainPath, moduleDir, opts = {}) {
+  const mainSrc = fs.readFileSync(mainPath, 'utf8');
+  const importPaths = [];
+  for (const line of mainSrc.split('\n')) {
+    if (opts.lean && line.includes('@optional')) continue;
+    const m = line.match(/^import\s+.*['"](\.\.?\/.+?)['"];?\s*(?:\/\/.*)?$/);
+    if (m) importPaths.push(m[1]);
+  }
+
+  const modules = [];
+  for (const relPath of importPaths) {
+    const filePath = path.join(moduleDir, relPath);
+    let src = fs.readFileSync(filePath, 'utf8');
+    const name = path.basename(relPath, '.js');
+
+    // Rewrite relative imports to hash-prefixed specifiers for import map resolution:
+    //   from './state.js' → from '#state'
+    //   import './state.js' → import '#state'
+    src = src.replace(/(from\s+)['"]\.\/(.+?)\.js['"]/g, (_, pre, mod) => `${pre}'#${mod}'`);
+    src = src.replace(/(import\s+)['"]\.\/(.+?)\.js['"]/g, (_, pre, mod) => `${pre}'#${mod}'`);
+
+    src = src.replace(/^\n+/, '').replace(/\n+$/, '');
+    modules.push({ name, source: src });
+  }
+
+  return modules;
 }
 
-// 2c. Prepend VFS bundle (if built)
+function generateModuleBoot(cm6Src, modules) {
+  const entries = [];
+  for (const m of modules) {
+    let json = JSON.stringify(m.source);
+    // Prevent </script> from closing the HTML script tag (only </script> matters)
+    json = json.replace(/<\/script>/gi, '<\\/script>');
+    entries.push(JSON.stringify(m.name) + ': ' + json);
+  }
+
+  const order = JSON.stringify(modules.map(m => m.name));
+
+  const boot =
+    '(async () => {\n' +
+    'const _S = {\n' + entries.join(',\n') + '\n};\n' +
+    'const _O = ' + order + ';\n' +
+    'const _U = {};\n' +
+    'for (const n of _O) {\n' +
+    "  _U[n] = URL.createObjectURL(new Blob([_S[n] + '\\n//# sourceURL=auditable/' + n + '.js\\n'], {type: 'application/javascript'}));\n" +
+    '}\n' +
+    "const _m = document.createElement('script');\n" +
+    "_m.type = 'importmap';\n" +
+    'const _im = {};\n' +
+    "for (const n of _O) _im['#' + n] = _U[n];\n" +
+    "_m.textContent = JSON.stringify({imports: _im});\n" +
+    'document.body.appendChild(_m);\n' +
+    "for (const n of _O) await import(_U[n]);\n" +
+    '_m.remove();\n' +
+    '})();\n';
+
+  let js = '';
+  if (cm6Src) js = cm6Src + '\n\n';
+  js += boot;
+  return js;
+}
+
+// ── Build module registry ──
+
+const modules = processModulesAsRegistry(path.join(jsDir, 'main.js'), jsDir, { lean });
+
+// Add VFS bundle as a module entry (ES module with exports intact)
 const vfsPath = path.join(__dirname, 'ext/vfs/index.js');
 if (fs.existsSync(vfsPath)) {
   let vfsSrc = fs.readFileSync(vfsPath, 'utf8');
-  vfsSrc = vfsSrc.replace(/^export\s*\{[^}]*\};?\s*$/gm, '');
-  js = vfsSrc + '\n\n' + js;
+  vfsSrc = vfsSrc.replace(/^\n+/, '').replace(/\n+$/, '');
+  modules.unshift({ name: 'vfs', source: vfsSrc });
 }
+
+// Read CM6 bundle (classic IIFE, not an ES module — sets window.CM6 via var)
+const cm6Path = path.join(__dirname, 'ext/cm6/cm6.min.js');
+const cm6Src = fs.existsSync(cm6Path) ? fs.readFileSync(cm6Path, 'utf8') : '';
 
 // 3. Read CSS and HTML template
 const cssRaw = fs.readFileSync(path.join(srcDir, 'style.css'), 'utf8');
@@ -472,75 +536,69 @@ const cssMarker = '/* \u2550\u2550 APP CSS ABOVE \u2550\u2550\u2550 EDITOR CSS B
 const cssParts = cssRaw.split(cssMarker);
 const appCss = cssParts[0].trimEnd();
 const editorCss = cssParts.length > 1 ? cssParts[1].trimStart() : '';
-// combined for the full build (both style tags)
-const css = cssRaw;
 
-// 4. Inject build-time constants
-// These placeholders in the source get replaced with environment or computed values:
-//   __AUDITABLE_BUILTINS__           — JSON from src/builtins.json (help text for cell builtins)
-//   __AUDITABLE_VERSION__            — version from package.json
-//   __AUDITABLE_RELEASE__            — env AUDITABLE_RELEASE (default: 'dev')
-//   __AUDITABLE_BUILD_DATE__         — ISO date string (YYYY-MM-DD)
-//   __AUDITABLE_PUBLIC_KEY__         — env AUDITABLE_PUBLIC_KEY (Ed25519 pub for signature verification)
-//   __AUDITABLE_REPO__               — env AUDITABLE_REPO (default: 'endarthur/auditable')
-//   __AUDITABLE_PAGES_URL__          — env AUDITABLE_PAGES_URL (update check URL)
-//   __AUDITABLE_DEFAULT_EXEC_MODE__  — --exec-mode flag (default: 'reactive')
-//   __AUDITABLE_DEFAULT_RUN_ON_LOAD__— --run-on-load flag (default: 'yes')
-//   __AUDITABLE_BASE_SIZE__          — computed after first assembly pass (runtime size in bytes)
+// 4. Inject build-time constants into module sources
+// These placeholders get replaced with environment or computed values.
+// Applied per-module (no-op for modules that don't contain the placeholder).
 const builtins = fs.readFileSync(path.join(srcDir, 'builtins.json'), 'utf8');
-js = js.replace("'__AUDITABLE_BUILTINS__'", builtins.trim());
-
 const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
 const buildDate = new Date().toISOString().slice(0, 10);
-js = js.replace(
-  "const __AUDITABLE_VERSION__ = '0.0.0';",
-  `const __AUDITABLE_VERSION__ = '${pkg.version || '0.0.0'}';`
-);
 const release = process.env.AUDITABLE_RELEASE || 'dev';
-js = js.replace(
-  "const __AUDITABLE_RELEASE__ = 'dev';",
-  `const __AUDITABLE_RELEASE__ = '${release}';`
-);
-js = js.replace(
-  "const __AUDITABLE_BUILD_DATE__ = 'dev';",
-  `const __AUDITABLE_BUILD_DATE__ = '${buildDate}';`
-);
 const pubKey = process.env.AUDITABLE_PUBLIC_KEY || '';
 const repo = process.env.AUDITABLE_REPO || 'endarthur/auditable';
-js = js.replace(
-  "const __AUDITABLE_PUBLIC_KEY__ = '';",
-  `const __AUDITABLE_PUBLIC_KEY__ = '${pubKey}';`
-);
-js = js.replace(
-  "const __AUDITABLE_REPO__ = 'endarthur/auditable';",
-  `const __AUDITABLE_REPO__ = '${repo}';`
-);
 const pagesUrl = process.env.AUDITABLE_PAGES_URL || 'https://endarthur.github.io/auditable';
-js = js.replace(
-  "const __AUDITABLE_PAGES_URL__ = 'https://endarthur.github.io/auditable';",
-  `const __AUDITABLE_PAGES_URL__ = '${pagesUrl}';`
-);
-if (execModeArg) {
-  js = js.replace(
-    "const __AUDITABLE_DEFAULT_EXEC_MODE__ = 'reactive';",
-    `const __AUDITABLE_DEFAULT_EXEC_MODE__ = '${execModeArg}';`
+
+for (const mod of modules) {
+  mod.source = mod.source.replace("'__AUDITABLE_BUILTINS__'", builtins.trim());
+  mod.source = mod.source.replace(
+    "const __AUDITABLE_VERSION__ = '0.0.0';",
+    `const __AUDITABLE_VERSION__ = '${pkg.version || '0.0.0'}';`
   );
-}
-if (runOnLoadArg) {
-  js = js.replace(
-    "const __AUDITABLE_DEFAULT_RUN_ON_LOAD__ = 'yes';",
-    `const __AUDITABLE_DEFAULT_RUN_ON_LOAD__ = '${runOnLoadArg}';`
+  mod.source = mod.source.replace(
+    "const __AUDITABLE_RELEASE__ = 'dev';",
+    `const __AUDITABLE_RELEASE__ = '${release}';`
   );
+  mod.source = mod.source.replace(
+    "const __AUDITABLE_BUILD_DATE__ = 'dev';",
+    `const __AUDITABLE_BUILD_DATE__ = '${buildDate}';`
+  );
+  mod.source = mod.source.replace(
+    "const __AUDITABLE_PUBLIC_KEY__ = '';",
+    `const __AUDITABLE_PUBLIC_KEY__ = '${pubKey}';`
+  );
+  mod.source = mod.source.replace(
+    "const __AUDITABLE_REPO__ = 'endarthur/auditable';",
+    `const __AUDITABLE_REPO__ = '${repo}';`
+  );
+  mod.source = mod.source.replace(
+    "const __AUDITABLE_PAGES_URL__ = 'https://endarthur.github.io/auditable';",
+    `const __AUDITABLE_PAGES_URL__ = '${pagesUrl}';`
+  );
+  if (execModeArg) {
+    mod.source = mod.source.replace(
+      "const __AUDITABLE_DEFAULT_EXEC_MODE__ = 'reactive';",
+      `const __AUDITABLE_DEFAULT_EXEC_MODE__ = '${execModeArg}';`
+    );
+  }
+  if (runOnLoadArg) {
+    mod.source = mod.source.replace(
+      "const __AUDITABLE_DEFAULT_RUN_ON_LOAD__ = 'yes';",
+      `const __AUDITABLE_DEFAULT_RUN_ON_LOAD__ = '${runOnLoadArg}';`
+    );
+  }
 }
 
-// 4b. Inject app runtime as escaped string constant
+// 4b. Inject app runtime as escaped string constant into save module
 const appRuntimeEscaped = appRuntime.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${').replace(/<\/script>/gi, '<\\/script>');
-js = js.replace(
-  "const __APP_RUNTIME__ = '';",
-  () => 'const __APP_RUNTIME__ = `' + appRuntimeEscaped + '`;'
-);
+const saveMod = modules.find(m => m.name === 'save');
+if (saveMod) {
+  saveMod.source = saveMod.source.replace(
+    "const __APP_RUNTIME__ = '';",
+    () => 'const __APP_RUNTIME__ = `' + appRuntimeEscaped + '`;'
+  );
+}
 
-// 5. Assemble final HTML (first pass — placeholder size)
+// 5. Assemble final HTML
 function assemble(jsCode) {
   return `<!DOCTYPE html>
 <!--AUDITABLE-NOTEBOOK-->
@@ -576,12 +634,17 @@ ${jsCode}
 `;
 }
 
-// compute base size then inject it
+// compute base size then inject it (two-pass: first with placeholder, then with actual value)
+let js = generateModuleBoot(cm6Src, modules);
 const baseSize = Buffer.byteLength(assemble(js), 'utf8');
-js = js.replace(
-  'const __AUDITABLE_BASE_SIZE__ = 0;',
-  `const __AUDITABLE_BASE_SIZE__ = ${baseSize};`
-);
+const sizeCompareMod = modules.find(m => m.name === 'size-compare');
+if (sizeCompareMod) {
+  sizeCompareMod.source = sizeCompareMod.source.replace(
+    'const __AUDITABLE_BASE_SIZE__ = 0;',
+    `const __AUDITABLE_BASE_SIZE__ = ${baseSize};`
+  );
+}
+js = generateModuleBoot(cm6Src, modules);
 const html = assemble(js);
 
 // 6. Write output

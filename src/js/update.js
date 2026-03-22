@@ -1,6 +1,6 @@
 import { S, $ } from './state.js';
 import { setMsg } from './ui.js';
-import { getSettings } from './settings.js';
+import { getSettings, __AUDITABLE_VERSION__, __AUDITABLE_RELEASE__ } from './settings.js';
 import { renderMd } from './markdown.js';
 import { encodeModules } from './save.js';
 

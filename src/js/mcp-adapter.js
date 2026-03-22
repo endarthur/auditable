@@ -19,6 +19,7 @@ import { setMsg } from './ui.js';
 import { fsWrite, fsRead, validatePath } from './fs.js';
 import { setCellCode } from './cell-ops.js';
 import { cryptoIsLocked } from './crypto.js';
+import { BUILTIN_HELP } from './complete.js';
 
 // ── Locked notebook gating ──
 
@@ -914,9 +915,7 @@ function _mcpGetNotebookContext() {
 function _mcpGetDocumentation(input) {
   const topics = {};
   // Builtins help (injected at build time)
-  if (typeof BUILTIN_HELP !== 'undefined') {
-    for (const [k, v] of Object.entries(BUILTIN_HELP)) topics[k] = v;
-  }
+  for (const [k, v] of Object.entries(BUILTIN_HELP)) topics[k] = v;
   // Tagged language extensions
   if (window._taggedLanguages) {
     for (const [lang, ext] of Object.entries(window._taggedLanguages)) {

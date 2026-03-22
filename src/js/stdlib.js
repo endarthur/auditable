@@ -3,6 +3,7 @@
 // Module-level — no per-cell state needed.
 
 import { fsWrite } from './fs.js';
+import { VFS, path } from './vfs.js';
 
 // ── Provider Registry ──
 
@@ -747,5 +748,5 @@ export const std = {
   color, colorScale, hsl,
   viridis, magma, inferno, plasma, turbo,
   palette10,
-  ...(typeof VFS !== 'undefined' ? { VFS, path } : {}),
+  VFS, path,
 };

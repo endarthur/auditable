@@ -6,6 +6,7 @@
 import { $, S } from './state.js';
 import { registerCellType, registerExtension, hasExtension, getExtension, registerPlugin, _ctUninstallPlugin } from './cell-types.js';
 import { registerProvider } from './stdlib.js';
+import { convertCell, moveCell } from './cell-ops.js';
 import { toggleAutorun, notifyDirty } from './editor.js';
 import { toggleSettings, togglePresent, applyTheme, applyFontSize, applyWidth, applyLineNumbers, applyHeader, applyExecMode, applyRunOnLoad, applyShowToggle, applyGlobalExecMode, applyGlobalRunOnLoad, applyEditorView } from './settings.js';
 import { toggleUpdate, checkForUpdate, applyOnlineUpdate, proceedUpdate, cancelUpdate, updateFromFile } from './update.js';
@@ -20,6 +21,7 @@ import { toggleSplitView } from './split.js';
 import { addCellWithUndo, deleteCellWithUndo, runSelectedCell, toggleToolbarMenu, toggleAddTray, toggleMoreTray, showInsertPicker, toggleTypePicker, collapseAll, expandAll, newNotebook } from './keyboard.js';
 import { enableEncryption, disableEncryption, changePassphrase, regenerateRecovery, lockNotebook, updateStrengthFeedback } from './init.js';
 import { refreshPluginList, refreshModuleList } from './settings.js';
+import { VFS, CommentBackend, MemoryBackend, path } from './vfs.js';
 
 // state
 window.$ = $;
@@ -80,6 +82,10 @@ window.closeFind = closeFind;
 // stdlib
 window.__auditable_registerProvider = registerProvider;
 
+// cell ops
+window.convertCell = convertCell;
+window.moveCell = moveCell;
+
 // keyboard / toolbar
 window.addCellWithUndo = addCellWithUndo;
 window.deleteCellWithUndo = deleteCellWithUndo;
@@ -122,40 +128,38 @@ window._ctUninstallPlugin = _ctUninstallPlugin;
 window._ctCreateEditor = createEditor;
 
 // Shared VFS instance — notebook.fs delegates here, adder/Python uses it directly
-if (typeof VFS !== 'undefined') {
-  const _notebookVFS = new VFS();
-  const _commentBackend = new CommentBackend({});
-  // Always read from the current _notebookFS Map (survives reassignment in init/crypto)
-  Object.defineProperty(_commentBackend, '_map', {
-    get: () => {
-      if (!window._notebookFS) window._notebookFS = new Map();
-      return window._notebookFS;
-    },
-    configurable: true,
-  });
-  _commentBackend._syncComment = () => {
-    if (window._notifyDirty) window._notifyDirty();
-    clearTimeout(_commentBackend._syncTimer);
-    _commentBackend._syncTimer = setTimeout(() => { if (window._syncFs) window._syncFs(); }, 500);
-  };
-  _notebookVFS._mounts.set('/home/nb', _commentBackend);
-  // /tmp — volatile scratch space (MemoryBackend, not saved in notebook)
-  _notebookVFS._mounts.set('/tmp', new MemoryBackend());
-  // /usr/lib/python — system Python modules (extensions install here)
-  _notebookVFS._mounts.set('/usr/lib/python', new MemoryBackend());
-  window._notebookVFS = _notebookVFS;
-  // auto-refresh files panel on VFS changes
-  let _fsRefreshTimer = null;
-  const _debouncedRefresh = () => {
-    clearTimeout(_fsRefreshTimer);
-    _fsRefreshTimer = setTimeout(() => { if (window._fsPanelRefresh) window._fsPanelRefresh(); }, 150);
-  };
-  _notebookVFS.on('write', _debouncedRefresh);
-  _notebookVFS.on('delete', _debouncedRefresh);
-  _notebookVFS.on('rename', _debouncedRefresh);
-}
+const _notebookVFS = new VFS();
+const _commentBackend = new CommentBackend({});
+// Always read from the current _notebookFS Map (survives reassignment in init/crypto)
+Object.defineProperty(_commentBackend, '_map', {
+  get: () => {
+    if (!window._notebookFS) window._notebookFS = new Map();
+    return window._notebookFS;
+  },
+  configurable: true,
+});
+_commentBackend._syncComment = () => {
+  if (window._notifyDirty) window._notifyDirty();
+  clearTimeout(_commentBackend._syncTimer);
+  _commentBackend._syncTimer = setTimeout(() => { if (window._syncFs) window._syncFs(); }, 500);
+};
+_notebookVFS._mounts.set('/home/nb', _commentBackend);
+// /tmp — volatile scratch space (MemoryBackend, not saved in notebook)
+_notebookVFS._mounts.set('/tmp', new MemoryBackend());
+// /usr/lib/python — system Python modules (extensions install here)
+_notebookVFS._mounts.set('/usr/lib/python', new MemoryBackend());
+window._notebookVFS = _notebookVFS;
+// auto-refresh files panel on VFS changes
+let _fsRefreshTimer = null;
+const _debouncedRefresh = () => {
+  clearTimeout(_fsRefreshTimer);
+  _fsRefreshTimer = setTimeout(() => { if (window._fsPanelRefresh) window._fsPanelRefresh(); }, 150);
+};
+_notebookVFS.on('write', _debouncedRefresh);
+_notebookVFS.on('delete', _debouncedRefresh);
+_notebookVFS.on('rename', _debouncedRefresh);
 // VFS path utils for adder fs modules
-window._vfsPath = typeof path !== 'undefined' && path.join ? path : null;
+window._vfsPath = path;
 
 // late-bound helpers for cell-types.js (avoids circular dep)
 window._ctRunDAG = (...args) => runDAG(...args);

@@ -35,7 +35,7 @@ const PROTO_PROPS = {
 
 // ── BUILTIN HELP (injected by build.js from src/builtins.json) ──
 
-const BUILTIN_HELP = '__AUDITABLE_BUILTINS__';
+export const BUILTIN_HELP = '__AUDITABLE_BUILTINS__';
 
 // ── FUZZY MATCHING ──
 
@@ -570,7 +570,7 @@ function dismissSigHint() {
   if (_sigHint) { _sigHint.style.display = 'none'; }
 }
 
-const sigHintPlugin = window.CM6.ViewPlugin.define(() => ({
+export const sigHintPlugin = window.CM6.ViewPlugin.define(() => ({
   update(update) {
     if (update.selectionSet || update.docChanged) {
       // delay slightly to let autocomplete menu show first

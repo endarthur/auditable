@@ -23,7 +23,7 @@ export const mcpHighlightEffect = StateEffect.define();
 
 const mcpHighlightMark = Decoration.line({ class: 'cm-mcp-highlight' });
 
-const mcpHighlightField = StateField.define({
+export const mcpHighlightField = StateField.define({
   create() { return Decoration.none; },
   update(decos, tr) {
     for (const e of tr.effects) {
@@ -355,7 +355,7 @@ function nestTaggedTemplates(node, input) {
 // Base JS language (cached)
 const _baseJs = javascript();
 
-function mixedJavascript() {
+export function mixedJavascript() {
   const wrapped = _baseJs.language.configure({
     wrap: parseMixed(nestTaggedTemplates),
   });
@@ -727,6 +727,20 @@ export function clearAllSearchDecorations() {
   }
 }
 
-// ── RE-EXPORTS FOR AUTOCOMPLETE ──
+// ── RE-EXPORTS ──
 
 export { autocompletion, CompletionContext };
+export {
+  EditorView, EditorState, Compartment, keymap,
+  lineNumbers, highlightActiveLine, highlightSpecialChars, drawSelection,
+  ViewPlugin, Decoration,
+  indentWithTab, insertNewlineAndIndent, toggleComment,
+  history, cm6Undo, cm6Redo,
+  bracketMatching, syntaxHighlighting, HighlightStyle, indentOnInput, indentUnit,
+  closeBrackets, acceptCompletion,
+  tags,
+  Language, defineLanguageFacet, parseMixed,
+  Parser, NodeType, NodeSet, Tree,
+  styleTags,
+  javascript, css, html, pythonLang,
+};

@@ -3,7 +3,23 @@ import { runAll, runDAG, renderHtmlCell, renderMdCell } from './exec.js';
 import { isCollapsed } from './dag.js';
 import { addCell } from './cell-ops.js';
 import { _ctIsExecutable, _ctHasOutput } from './cell-types.js';
-import { getEditor } from './cm6.js';
+import {
+  getEditor, mcpHighlightField, mixedJavascript,
+  EditorView, EditorState, Compartment, keymap,
+  lineNumbers, highlightActiveLine, highlightSpecialChars, drawSelection,
+  ViewPlugin, Decoration,
+  indentWithTab, insertNewlineAndIndent, toggleComment,
+  history, cm6Undo, cm6Redo,
+  bracketMatching, syntaxHighlighting, HighlightStyle, indentOnInput,
+  closeBrackets, acceptCompletion,
+  tags,
+  Language, defineLanguageFacet, parseMixed,
+  Parser, NodeType, NodeSet, Tree,
+  styleTags,
+  javascript, css, html, pythonLang,
+  autocompletion,
+} from './cm6.js';
+import { sigHintPlugin } from './complete.js';
 import { cssSummary } from './cell-dom.js';
 import { applyEditorView } from './settings.js';
 
@@ -131,8 +147,6 @@ function _updateSplitCell(cellIndex, newCode) {
 }
 
 // ── SPLIT VIEW ──
-// CM6 symbols (EditorView, EditorState, keymap, javascript, etc.) are already
-// declared by cm6.js which is concatenated earlier in the IIFE build.
 
 // ── AUDITABLE FORMAT PARSER ──
 // Custom Parser subclass for the /// notebook format. Segments the document

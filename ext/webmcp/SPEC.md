@@ -1124,7 +1124,7 @@ window.__extensionDocs = window.__extensionDocs || {};
 window.__extensionDocs.atra = `# Atra Language\n\n...`;
 ```
 
-> **Note on `__docs__` convention:** JS doesn't have Python's dunder tradition, but double underscores signal "framework metadata, not user API" clearly enough in any language. The alternative — `Symbol('mcp:docs')` — is harder to access across module boundaries in the IIFE-bundled build. A simple `window.__extensionDocs` registry is pragmatic. Format: a markdown string for now. If structured docs are needed later (API reference, examples, caveats as separate fields), upgrade to `{ summary: "...", api: "...", examples: "..." }` — the string form remains valid as shorthand.
+> **Note on `__docs__` convention:** JS doesn't have Python's dunder tradition, but double underscores signal "framework metadata, not user API" clearly enough in any language. The alternative — `Symbol('mcp:docs')` — is harder to access across module boundaries (extensions are loaded as blob URL modules and communicate via `window.*`). A simple `window.__extensionDocs` registry is pragmatic. Format: a markdown string for now. If structured docs are needed later (API reference, examples, caveats as separate fields), upgrade to `{ summary: "...", api: "...", examples: "..." }` — the string form remains valid as shorthand.
 
 The shim collects docs from loaded extensions and serves them via the `getDocumentation` tool when the bridge requests them.
 
