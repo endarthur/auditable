@@ -585,12 +585,206 @@ const sigHintPlugin = window.CM6.ViewPlugin.define(() => ({
   destroy() { dismissSigHint(); },
 }));
 
+// ── PYTHON / ADDER AUTOCOMPLETE ──
+
+const PY_KEYWORDS = [
+  'False', 'None', 'True', 'and', 'as', 'assert', 'async', 'await',
+  'break', 'class', 'continue', 'def', 'del', 'elif', 'else', 'except',
+  'finally', 'for', 'from', 'global', 'if', 'import', 'in', 'is',
+  'lambda', 'nonlocal', 'not', 'or', 'pass', 'raise', 'return',
+  'try', 'while', 'with', 'yield',
+];
+
+const PY_BUILTINS = [
+  'abs', 'all', 'any', 'bin', 'bool', 'callable', 'chr', 'dict', 'dir',
+  'divmod', 'enumerate', 'filter', 'float', 'format', 'getattr', 'hasattr',
+  'hash', 'hex', 'id', 'input', 'int', 'isinstance', 'iter', 'len', 'list',
+  'map', 'max', 'min', 'next', 'object', 'oct', 'ord', 'pow', 'print',
+  'property', 'range', 'repr', 'reversed', 'round', 'set', 'setattr',
+  'sorted', 'str', 'sum', 'super', 'tuple', 'type', 'vars', 'zip',
+  'display', 'ui', 'std', 'load', 'install',
+  'ValueError', 'TypeError', 'KeyError', 'IndexError', 'AttributeError',
+  'RuntimeError', 'StopIteration', 'ZeroDivisionError', 'Exception',
+];
+
+const PY_MODULE_PROPS = {
+  math: ['pi', 'e', 'tau', 'inf', 'nan', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2',
+         'sqrt', 'exp', 'log', 'log2', 'log10', 'pow', 'floor', 'ceil', 'trunc', 'fabs',
+         'radians', 'degrees', 'factorial', 'gcd', 'comb', 'perm', 'hypot', 'isnan', 'isinf'],
+  random: ['random', 'seed', 'randint', 'uniform', 'choice', 'shuffle', 'gauss', 'sample'],
+  json: ['dumps', 'loads'],
+  re: ['match', 'search', 'findall', 'sub', 'split', 'compile', 'escape'],
+  itertools: ['chain', 'product', 'combinations', 'permutations', 'repeat', 'accumulate', 'starmap', 'islice', 'zip_longest', 'groupby'],
+  functools: ['reduce', 'partial', 'lru_cache'],
+  collections: ['OrderedDict', 'defaultdict', 'Counter', 'namedtuple'],
+  string: ['ascii_lowercase', 'ascii_uppercase', 'ascii_letters', 'digits', 'punctuation', 'whitespace'],
+  ui: ['display', 'print', 'canvas', 'table', 'slider', 'dropdown', 'checkbox', 'textInput'],
+  std: ['csv', 'fetchJSON', 'sum', 'mean', 'median', 'extent', 'bin', 'linspace',
+        'unique', 'zip', 'cross', 'file', 'download', 'el', 'copy', 'fmt', 'include',
+        'color', 'colorScale', 'viridis', 'magma', 'inferno', 'plasma', 'turbo', 'palette10'],
+};
+
+function pyCursorContext(code, cursor) {
+  let i = 0;
+  while (i < cursor) {
+    const ch = code[i];
+    // # comment
+    if (ch === '#') {
+      const nl = code.indexOf('\n', i);
+      if (nl === -1 || nl >= cursor) return 'comment';
+      i = nl + 1;
+      continue;
+    }
+    // triple-quoted strings
+    if ((ch === '"' || ch === "'") && code[i + 1] === ch && code[i + 2] === ch) {
+      const q3 = ch + ch + ch;
+      const end = code.indexOf(q3, i + 3);
+      if (end === -1 || end + 3 > cursor) return 'string';
+      i = end + 3;
+      continue;
+    }
+    // single/double-quoted strings
+    if (ch === '"' || ch === "'") {
+      const q = ch;
+      i++;
+      while (i < code.length) {
+        if (code[i] === '\\') { i += 2; continue; }
+        if (code[i] === q) { i++; break; }
+        if (code[i] === '\n') { i++; break; } // unterminated
+        if (i >= cursor) return 'string';
+        i++;
+      }
+      continue;
+    }
+    // skip string prefixes (f, r, b, u)
+    if (/[fFrRbBuU]/.test(ch) && (code[i + 1] === '"' || code[i + 1] === "'")) {
+      i++; continue; // let the next iteration handle the quote
+    }
+    i++;
+  }
+  return 'code';
+}
+
+function pyDetectDot(code, cursor) {
+  const before = code.slice(0, cursor);
+  const m = before.match(/([a-zA-Z_]\w*)\.\s*([a-zA-Z_]\w*)?$/);
+  if (m) return { obj: m[1], prefix: m[2] || '' };
+  return null;
+}
+
+function pyGetCompletions(code, cursor, cellId) {
+  const ctx = pyCursorContext(code, cursor);
+  if (ctx !== 'code') return { prefix: '', items: [] };
+
+  // dot completion
+  const dot = pyDetectDot(code, cursor);
+  if (dot) {
+    const items = [];
+    const prefix = dot.prefix;
+    let propList = [];
+
+    // known module props
+    if (PY_MODULE_PROPS[dot.obj]) {
+      propList = PY_MODULE_PROPS[dot.obj];
+    } else if (dot.obj in S.scope) {
+      // live value inspection
+      const val = S.scope[dot.obj];
+      if (val != null) {
+        propList = getPropsForValue(val);
+        // filter out dunders and private for cleaner completions
+        propList = propList.filter(p => !p.startsWith('_'));
+      }
+    }
+
+    for (const p of propList) {
+      if (!prefix) {
+        items.push({ text: p, kind: 'prop', score: 0, indices: [] });
+        continue;
+      }
+      const m = fuzzyMatch(prefix, p);
+      if (m) items.push({ text: p, kind: 'prop', score: m.score, indices: m.indices });
+    }
+
+    items.sort((a, b) => b.score - a.score || a.text.localeCompare(b.text));
+    return { prefix, items: items.slice(0, 30) };
+  }
+
+  // word prefix completion
+  const { prefix } = extractPrefix(code, cursor);
+  if (!prefix) return { prefix: '', items: [] };
+
+  const items = [];
+  const seen = new Set();
+  const candidates = [];
+
+  // 1. scope variables
+  for (const name of Object.keys(S.scope)) {
+    if (!seen.has(name) && !name.startsWith('_')) { seen.add(name); candidates.push({ text: name, kind: 'var' }); }
+  }
+
+  // 2. own cell defines
+  const cell = S.cells.find(c => c.id === cellId);
+  if (cell && cell.defines) {
+    for (const name of cell.defines) {
+      if (!seen.has(name)) { seen.add(name); candidates.push({ text: name, kind: 'def' }); }
+    }
+  }
+
+  // 3. Python builtins
+  for (const name of PY_BUILTINS) {
+    if (!seen.has(name)) { seen.add(name); candidates.push({ text: name, kind: 'fn' }); }
+  }
+
+  // 4. Python keywords
+  if (prefix.length >= 2) {
+    for (const name of PY_KEYWORDS) {
+      if (!seen.has(name)) { seen.add(name); candidates.push({ text: name, kind: 'kw' }); }
+    }
+  }
+
+  // fuzzy match
+  for (const c of candidates) {
+    if (c.text === prefix) continue;
+    const m = fuzzyMatch(prefix, c.text);
+    if (m) items.push({ text: c.text, kind: c.kind, score: m.score, indices: m.indices });
+  }
+
+  items.sort((a, b) => b.score - a.score || a.text.localeCompare(b.text));
+  return { prefix, items: items.slice(0, 30) };
+}
+
+function pyCompletionSource(context) {
+  const code = context.state.doc.toString();
+  const cursor = context.pos;
+
+  if (!context.explicit) {
+    const word = context.matchBefore(/[a-zA-Z_]\w*/);
+    if (!word) return null;
+  }
+
+  const cmEl = context.view.dom.closest('[data-cm-cell-id]');
+  const cellId = cmEl ? parseInt(cmEl.dataset.cmCellId) : null;
+
+  const result = pyGetCompletions(code, cursor, cellId);
+  if (!result || !result.items.length) return null;
+
+  return {
+    from: cursor - result.prefix.length,
+    filter: false,
+    options: result.items.map(item => ({
+      label: item.text,
+      type: KIND_MAP[item.kind] || 'text',
+      boost: item.score,
+    })),
+  };
+}
+
 // ── CONFIGURE AUTOCOMPLETE FOR A CELL ──
 
-export function configureAutocomplete(cellId) {
+export function configureAutocomplete(cellId, source) {
   setEditorAutocomplete(cellId, [
     autocompletion({
-      override: [audCompletionSource],
+      override: [source || audCompletionSource],
       icons: false,
       activateOnTyping: true,
       maxRenderedOptions: 30,
@@ -602,12 +796,12 @@ export function configureAutocomplete(cellId) {
 // configure autocomplete for all existing cells on init
 export function configureAllAutocomplete() {
   for (const cell of S.cells) {
-    if (cell.type === 'code') {
-      configureAutocomplete(cell.id);
-    }
+    if (cell.type === 'code') configureAutocomplete(cell.id);
+    else if (cell.type === 'adder') configureAutocomplete(cell.id, pyCompletionSource);
   }
-  // register callback so new code cells get autocomplete
+  // register callback so new cells get autocomplete
   setOnEditorCreated((cellId, cellType) => {
     if (cellType === 'code') configureAutocomplete(cellId);
+    else if (cellType === 'adder') configureAutocomplete(cellId, pyCompletionSource);
   });
 }
