@@ -3610,6 +3610,7 @@ const handler = {
       el: wrap,
       getCode: () => editor.view.state.doc.toString(),
       setCode: (s) => editor.view.dispatch({ changes: { from: 0, to: editor.view.state.doc.length, insert: s } }),
+      focus: () => editor.focus(),
       destroy: () => editor.destroy(),
     };
   },

@@ -519,11 +519,7 @@ const notebookKeymap = keymap.of([
   { key: 'Ctrl-Enter', run: (view) => {
     const cellId = getCellIdFromView(view);
     if (cellId !== null) {
-      const cell = S.cells.find(c => c.id === cellId);
-      if (cell && cell.type === 'code') {
-        // runDAG is called via the callback
-        if (_runSelectedCell) _runSelectedCell(cellId);
-      }
+      if (_runSelectedCell) _runSelectedCell(cellId);
     }
     return true;
   }},
