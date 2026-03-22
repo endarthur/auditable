@@ -152,6 +152,7 @@ if (typeof VFS !== 'undefined') {
   };
   _notebookVFS.on('write', _debouncedRefresh);
   _notebookVFS.on('delete', _debouncedRefresh);
+  _notebookVFS.on('rename', _debouncedRefresh);
 }
 // VFS path utils for adder fs modules
 window._vfsPath = typeof path !== 'undefined' && path.join ? path : null;

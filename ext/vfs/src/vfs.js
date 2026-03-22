@@ -283,8 +283,9 @@ class VFS extends EventEmitter {
     if (src.backend === dst.backend) {
       this._checkWrite(src.backend, oldP);
       await src.backend.rename(src.subpath, dst.subpath);
+      this.emit('rename', { oldPath: path.normalize(oldP), newPath: path.normalize(newP) });
     } else {
-      // Cross-mount: copy + delete
+      // Cross-mount: copy + delete (not atomic — emit write + delete, not rename)
       this._checkWrite(dst.backend, newP);
       this._checkWrite(src.backend, oldP);
       const info = await src.backend.stat(src.subpath);
@@ -296,9 +297,9 @@ class VFS extends EventEmitter {
         await dst.backend.writeFile(dst.subpath, content);
         await src.backend.unlink(src.subpath);
       }
+      this.emit('write', { path: path.normalize(newP) });
+      this.emit('delete', { path: path.normalize(oldP) });
     }
-    this.emit('write', { path: path.normalize(newP) });
-    this.emit('delete', { path: path.normalize(oldP) });
   }
 
   async _crossMountCpRecursive(srcBackend, srcPath, dstBackend, dstPath) {
