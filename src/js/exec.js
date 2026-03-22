@@ -1407,7 +1407,7 @@ export async function execCell(cell) {
       fn = new AsyncFunction(
         ...scopeKeys,
         'ui', 'std', 'load', 'install', 'installBinary', 'invalidation', 'print', 'display',
-        'md', 'html', 'css', 'workshop', 'notebook', 'worker', 'workerPool',
+        'md', 'html', 'css', 'workshop', 'notebook', 'worker', 'workerPool', 'vfs',
         `"use strict";\n${cell.code}\n\n` +
         `return { ${defNames} };\n` +
         `//# sourceURL=auditable://cell-${cell.id}${slug}.js`
@@ -1418,7 +1418,7 @@ export async function execCell(cell) {
 
     const scopeVals = scopeKeys.map(k => S.scope[k]);
     const result = await fn(...scopeVals, ui, std, load, install, installBinary, invalidation, display, display,
-      md, html, css, workshop, notebook, worker, workerPool);
+      md, html, css, workshop, notebook, worker, workerPool, vfs);
 
     // update scope with defined variables
     if (result && typeof result === 'object') {
