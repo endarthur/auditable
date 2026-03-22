@@ -220,6 +220,10 @@ export function pyFormatValue(value, spec) {
 
 // ── method dispatch ──
 
+function _isNativeClass(fn) {
+  try { return /^class[\s{]/.test(Function.prototype.toString.call(fn)); } catch { return false; }
+}
+
 export function adderGetAttr(obj, attr) {
   // string methods
   if (typeof obj === 'string') return _strMethod(obj, attr);
@@ -239,6 +243,7 @@ export function adderGetAttr(obj, attr) {
   if (obj !== null && typeof obj === 'object' && !(obj instanceof Array) && !(obj instanceof Map) && !(obj instanceof Set)) {
     // check for adder class method on prototype
     if (typeof obj[attr] === 'function') {
+      if (_isNativeClass(obj[attr])) return obj[attr];
       const fn = obj[attr].bind(obj);
       fn._pyName = attr;
       return fn;
@@ -254,7 +259,7 @@ export function adderGetAttr(obj, attr) {
   // generic
   if (obj !== null && obj !== undefined && attr in obj) {
     const val = obj[attr];
-    return typeof val === 'function' ? val.bind(obj) : val;
+    return typeof val === 'function' ? (_isNativeClass(val) ? val : val.bind(obj)) : val;
   }
   throw new AdderError('AttributeError', `'${pyTypeName(obj)}' object has no attribute '${attr}'`);
 }

@@ -541,7 +541,7 @@ async function _callValue(func, args, kwArgs, line) {
     try {
       return func(...args, kw);
     } catch (e) {
-      if (e instanceof TypeError && /cannot be invoked without 'new'/.test(e.message)) return new func(...args, kw);
+      if (e instanceof TypeError && /\bnew\b/.test(e.message)) return new func(...args, kw);
       if (e instanceof AdderError || e instanceof _BreakSignal || e instanceof _ContinueSignal || e instanceof _ReturnSignal) throw e;
       throw new AdderError('RuntimeError', e.message || String(e), line);
     }
@@ -551,7 +551,7 @@ async function _callValue(func, args, kwArgs, line) {
   } catch (e) {
     // ES6 class constructors require `new` — retry if that's the error
     // (also handles bound class constructors where toString() detection fails)
-    if (e instanceof TypeError && /cannot be invoked without 'new'/.test(e.message)) return new func(...args);
+    if (e instanceof TypeError && /\bnew\b/.test(e.message)) return new func(...args);
     if (e instanceof AdderError || e instanceof _BreakSignal || e instanceof _ContinueSignal || e instanceof _ReturnSignal) throw e;
     throw new AdderError('RuntimeError', e.message || String(e), line);
   }
