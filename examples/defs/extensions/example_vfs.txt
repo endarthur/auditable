@@ -1,0 +1,194 @@
+/// auditable
+/// title: virtual filesystem
+/// module: ./ext/vfs/index.js ext/vfs/index.js
+
+/// md
+# virtual filesystem
+
+`@gcu/vfs` is a pluggable virtual filesystem with a mount table, path resolution, permissions, and multiple backends. mount different storage engines at different paths and interact with them through a unified POSIX-like API.
+
+/// md
+## create and mount
+
+/// code
+const { VFS, path } = await load("./ext/vfs/index.js");
+
+// create a VFS with a memory backend at /
+const vfs = await VFS.create();
+
+// write some files
+await vfs.mkdir("/data");
+await vfs.writeFile("/data/cities.csv", `city,lat,lon,pop
+Tokyo,35.68,139.69,13960000
+Delhi,28.61,77.23,32940000
+Shanghai,31.23,121.47,28520000
+Cairo,30.04,31.24,21750000
+Mumbai,19.08,72.88,21300000`);
+
+await vfs.writeFile("/data/notes.txt", "field campaign Q3 2025");
+
+await vfs.mkdir("/tmp");
+await vfs.writeFile("/tmp/scratch.txt", "ephemeral");
+
+// list mounts
+ui.display("mounts:");
+for (const m of vfs.mounts()) {
+  ui.display(`  ${m.path} \u2192 ${m.type}`);
+}
+
+/// md
+## path utilities
+
+the `path` module provides `join`, `dirname`, `basename`, `extname`, `normalize`, `resolve`, `relative`, `mime` \u2014 no dependencies, works everywhere.
+
+/// code
+ui.display(`join:      ${path.join("/home", "data", "file.csv")}`);
+ui.display(`dirname:   ${path.dirname("/home/data/file.csv")}`);
+ui.display(`basename:  ${path.basename("/home/data/file.csv")}`);
+ui.display(`extname:   ${path.extname("/home/data/file.csv")}`);
+ui.display(`normalize: ${path.normalize("/home/../etc/./hosts")}`);
+ui.display(`relative:  ${path.relative("/home/data", "/home/other")}`);
+ui.display(`mime:      ${path.mime("data.csv")} | ${path.mime("image.png")} | ${path.mime("app.wasm")}`);
+
+/// md
+## CRUD and stat
+
+/// code
+// read back
+const csv = await vfs.readFile("/data/cities.csv");
+const rows = std.csv(csv, { typed: true });
+ui.table(rows);
+
+// stat
+const info = await vfs.stat("/data/cities.csv");
+ui.display(`type: ${info.type}, size: ${info.size} bytes, modified: ${info.modified.toISOString()}`);
+
+/// md
+## glob search
+
+/// code
+// find all CSV files anywhere
+const csvFiles = await vfs.glob("/**/*.csv");
+ui.display(`CSV files: ${csvFiles.join(", ")}`);
+
+// find all .txt files
+const txtFiles = await vfs.glob("/**/*.txt");
+ui.display(`TXT files: ${txtFiles.join(", ")}`);
+
+/// md
+## disk usage
+
+/// code
+const usage = await vfs.du("/");
+ui.display(`${usage.files} files, ${usage.directories} directories, ${std.fmt(usage.bytes)} bytes`);
+
+/// md
+## multiple mounts
+
+mount a second memory backend at `/scratch` \u2014 it gets its own isolated storage. path resolution finds the longest matching mount prefix.
+
+/// code
+await vfs.mount("/scratch", { type: "memory" });
+
+await vfs.writeFile("/scratch/temp.txt", "isolated from /");
+
+// resolve shows which mount handles each path
+const r1 = vfs.resolve("/data/cities.csv");
+const r2 = vfs.resolve("/scratch/temp.txt");
+ui.display(`/data/cities.csv \u2192 mount: ${r1.mount}, subpath: ${r1.subpath}`);
+ui.display(`/scratch/temp.txt \u2192 mount: ${r2.mount}, subpath: ${r2.subpath}`);
+
+// readdir at root shows child mount names
+const root = await vfs.readdir("/");
+ui.display(`root entries: ${root.join(", ")}`);
+
+// capabilities per mount
+for (const m of vfs.mounts()) {
+  const caps = vfs.capabilities(m.path === "/" ? "/" : m.path);
+  ui.display(`${m.path}: persistent=${caps.persistent}, writable=${caps.writable}, symlinks=${caps.symlinks}`);
+}
+
+/// md
+## overlay: layered filesystem
+
+`OverlayBackend` layers a writable upper over a read-only lower \u2014 like Docker's overlayfs. edits go to the upper layer; the lower stays pristine. deletes create whiteout markers.
+
+/// code
+// create an overlay VFS
+const ovfs = await VFS.create({
+  type: "overlay",
+  lower: { type: "memory" },
+  upper: { type: "memory" },
+});
+
+// populate the "base image" (lower layer) directly
+const { backend } = ovfs.resolve("/");
+await backend._lower.writeFile("/config.json", '{"version": 1, "mode": "production"}');
+await backend._lower.mkdir("/lib");
+await backend._lower.writeFile("/lib/utils.js", "export function hello() { return 'world'; }");
+
+// read-through: upper is empty, reads fall through to lower
+ui.display("config (from lower): " + await ovfs.readFile("/config.json"));
+
+// write override: goes to upper, lower unchanged
+await ovfs.writeFile("/config.json", '{"version": 2, "mode": "debug"}');
+ui.display("config (from upper): " + await ovfs.readFile("/config.json"));
+ui.display("lower still has: " + await backend._lower.readFile("/config.json"));
+
+// stat shows which layer
+const s = await ovfs.stat("/config.json");
+ui.display(`layer: ${s.layer}`);
+
+// delete with whiteout
+await ovfs.unlink("/lib/utils.js");
+ui.display("utils.js visible: " + await ovfs.exists("/lib/utils.js"));
+ui.display("utils.js in lower: " + await backend._lower.exists("/lib/utils.js"));
+
+// reset restores lower layer view
+await backend.reset();
+ui.display("after reset, utils.js visible: " + await ovfs.exists("/lib/utils.js"));
+
+/// md
+## events
+
+VFS emits `write`, `delete`, `mkdir`, `mount`, `unmount` events \u2014 useful for reactive UIs.
+
+/// code
+const log = [];
+vfs.on("write", e => log.push(`write ${e.path}`));
+vfs.on("delete", e => log.push(`delete ${e.path}`));
+vfs.on("mkdir", e => log.push(`mkdir ${e.path}`));
+
+await vfs.mkdir("/events");
+await vfs.writeFile("/events/test.txt", "hello");
+await vfs.unlink("/events/test.txt");
+await vfs.rmdir("/events");
+
+ui.display("event log:");
+for (const entry of log) ui.display(`  ${entry}`);
+
+/// md
+## export and import
+
+snapshot the entire filesystem as a plain object, then restore it elsewhere.
+
+/// code
+// write some data
+await vfs.mkdir("/project");
+await vfs.writeFile("/project/readme.txt", "my project");
+await vfs.writeFile("/project/data.csv", "x,y\n1,2\n3,4");
+
+// export as { relativePath: content }
+const snapshot = await vfs.export("/project");
+ui.display("exported keys: " + Object.keys(snapshot).join(", "));
+
+// import into a new location
+await vfs.mkdir("/restored");
+await vfs.import("/restored", snapshot);
+ui.display("restored: " + await vfs.readFile("/restored/readme.txt"));
+ui.display("data: " + await vfs.readFile("/restored/data.csv"));
+
+/// md
+---
+
+`@gcu/vfs` also provides `IDBBackend` (IndexedDB persistence), `CommentBackend` (HTML comment storage), `HandleBackend` (OPFS/FSAA), `FetchBackend` (read-only HTTP), `RESTBackend` (read-write HTTP), and `CacheBackend` (transparent caching with TTL). all backends share the same API and can be mixed via the mount table.
