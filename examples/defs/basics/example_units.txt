@@ -1,0 +1,133 @@
+/// auditable
+/// title: @gcu/units — unit conversions
+/// module: @gcu/units ext/units/index.js
+
+/// md
+# @gcu/units
+
+Unit conversion primitives for geoscience. Covers length, mass, grade, density, area, volume, angle, and magnetic field — plus sieve mesh and drill core lookup tables.
+
+/// code
+const { convert, format, sieve, core, grade, density } = await load("@gcu/units")
+
+/// md
+## grade conversions
+
+the classic source of silent bugs — oz/t short ton vs long ton, g/t vs ppm vs pct. `convert()` is explicit: you say what you have, you say what you want.
+
+/// code
+const assay_gt = ui.slider("Au grade (g/t)", 5.0, {min: 0.1, max: 50, step: 0.1})
+
+/// code
+const gt = assay_gt
+const ppm = convert(gt, "g/t", "ppm")
+const pct = convert(gt, "g/t", "pct")
+const ozt = convert(gt, "g/t", "oz/t")
+const ozt_lt = convert(gt, "g/t", "oz/lt")
+const frac = convert(gt, "g/t", "fraction")
+
+ui.table([
+  ["g/t",      gt.toFixed(2)],
+  ["ppm",      ppm.toFixed(2)],
+  ["%",        pct.toFixed(6)],
+  ["oz/t (short ton)", ozt.toFixed(4)],
+  ["oz/lt (long ton)", ozt_lt.toFixed(4)],
+  ["fraction", frac.toExponential(4)],
+], {headers: ["unit", "value"]})
+
+/// md
+## density
+
+g/cm³ = t/m³ numerically. the library doesn't distinguish SG from density — they're the same number in g/cm³.
+
+/// code
+const sg = ui.slider("SG", 2.65, {min: 1.5, max: 5.0, step: 0.01})
+
+/// code
+ui.table([
+  ["g/cm³",  sg.toFixed(2)],
+  ["kg/m³",  convert(sg, "g/cm3", "kg/m3").toFixed(0)],
+  ["t/m³",   convert(sg, "g/cm3", "t/m3").toFixed(2)],
+  ["lb/ft³", convert(sg, "g/cm3", "lb/ft3").toFixed(2)],
+], {headers: ["unit", "value"]})
+
+/// md
+## sieve mesh
+
+Tyler/ASTM mesh ↔ µm lookup. feeds directly into Gy's formula for particle sizes and grind checks.
+
+/// code
+const mesh = ui.dropdown("mesh", [400, 325, 270, 200, 150, 100, 80, 60, 35, 20, 10])
+
+/// code
+const um = sieve.toMicrons(Number(mesh))
+const cm = sieve.toCm(Number(mesh))
+
+ui.display(`mesh ${mesh} = ${um} µm = ${cm} cm`)
+
+/// code
+// full sieve table
+ui.table(
+  sieve.table().map(r => [r.mesh, r.aperture_um, (r.aperture_um / 10000).toFixed(4)]),
+  {headers: ["mesh", "µm", "cm"]}
+)
+
+/// md
+## drill core sizes
+
+DCDMA wireline standards. `sampleMass()` wraps the geometry — multiply unit volume by length and density.
+
+/// code
+const coreCode = ui.dropdown("core size", ["AQ", "BQ", "NQ", "NQ2", "NQ3", "HQ", "HQ3", "PQ", "PQ3"])
+const coreLength = ui.slider("interval (m)", 1.0, {min: 0.1, max: 3.0, step: 0.1})
+const coreDensity = ui.slider("density (g/cm³)", 2.65, {min: 1.5, max: 5.0, step: 0.01})
+const coreSplit = ui.dropdown("split", ["whole", "half", "quarter"])
+
+/// code
+const d = core.diameter(coreCode)
+const hd = core.holeDiameter(coreCode)
+const hcd = core.halfCoreDiameter(coreCode)
+const vol = core.unitVolume(coreCode, {split: coreSplit})
+const sm = core.sampleMass({
+  code: coreCode,
+  length_m: coreLength,
+  density_gcm3: coreDensity,
+  split: coreSplit,
+})
+
+ui.table([
+  ["core diameter",  `${d.mm} mm (${d.cm} cm)`],
+  ["hole diameter",  `${hd.mm} mm`],
+  ["half-core Ø",    `${hcd.mm} mm`],
+  ["unit volume",    `${vol.cm3_per_m} cm³/m`],
+  ["sample volume",  `${sm.volume_cm3} cm³`],
+  ["sample mass",    `${sm.mass_g} g (${sm.mass_kg} kg)`],
+], {headers: ["property", "value"]})
+
+/// md
+## format with auto-scaling
+
+`format()` renders unit labels with Unicode (m² → m², µm) and auto-scales values to readable ranges.
+
+/// code
+ui.table([
+  [format(0.0075, "cm", {auto: true, decimals: 0}),     "0.0075 cm → µm"],
+  [format(2650, "kg/m3", {auto: true, decimals: 2}),     "2650 kg/m³ → g/cm³"],
+  [format(62.3, "pct", {decimals: 1}),                    "pct renders as %"],
+  [format(1780.4, "cm3", {decimals: 1}),                  "cm3 → cm³"],
+  [format(500, "m2", {decimals: 0}),                      "m2 → m²"],
+  [format(45, "deg", {decimals: 0}),                      "plain unit"],
+], {headers: ["formatted", "note"]})
+
+/// md
+## array conversion
+
+works on plain arrays and typed arrays. `{inplace: true}` mutates in place for hot paths.
+
+/// code
+const depths_ft = new Float64Array([100, 250, 500, 750, 1000])
+const depths_m = convert(depths_ft, "ft", "m")
+ui.table(
+  Array.from(depths_ft).map((ft, i) => [ft.toFixed(0), depths_m[i].toFixed(2)]),
+  {headers: ["ft", "m"]}
+)
