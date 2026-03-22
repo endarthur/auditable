@@ -1,6 +1,6 @@
 # @gcu/adder
 
-MicroPython as a first-class cell language in auditable. Python cells participate in the reactive DAG — define variables in Python, use them downstream in JS or other Python cells.
+A Python dialect as a first-class cell language in auditable. Pure JS tree-walking interpreter — no WASM, no external runtime. Python cells participate in the reactive DAG: define variables in Python, use them downstream in JS or other Python cells.
 
 ## quick start
 
@@ -11,7 +11,7 @@ await load("@gcu/adder")
 await install("@gcu/adder")
 ```
 
-this registers the `python` cell type. press `n` in command mode to convert a cell, or use the cell header button.
+this registers the `adder` cell type. press `n` in command mode to convert a cell, or use the cell header button.
 
 ## architecture
 
@@ -19,118 +19,99 @@ this registers the `python` cell type. press `n` in command mode to convert a ce
 ext/adder/
   index.js           — BUILD OUTPUT (bundled from src/)
   build.js           — concatenates src/ modules into index.js
-  micropython.mjs    — vendored MicroPython v1.27.0 loader (patched)
-  micropython.wasm   — vendored MicroPython v1.27.0 binary (patched)
   src/
     main.js          — entry point (import order for bundler)
-    bridge.js        — Python bootstrap: _exec_cell, _build_async_wrapper
-    init.js          — lazy interpreter init, stdout buffering, WASM resolution
+    parse.js         — tokenizer + recursive-descent parser → AST
+    eval.js          — tree-walking evaluator (async)
+    builtins.js      — builtins, method dispatch, modules, format specs, VFS
     cell.js          — pythonParseNames, pythonFindUses, pythonExecute
     highlight.js     — tokenizePython, pythonCompletions
-    tag.js           — mpy tagged template
+    tag.js           — adder/mpy tagged template
     register.js      — cell type, tagged language, plugin registration
 ```
 
 ### runtime
 
-vendored MicroPython v1.27.0 (JS + WASM). two patches applied to the upstream build:
-
-- **`mp_js_hook` stdin fix** — prevents stdin prompt from blocking the event loop
-- **`mp_hal_get_interrupt_char` arity** — fixes a parameter count mismatch
-
-the interpreter is initialized lazily on first Python cell execution. a single `_mp` instance is shared across all cells — isolation is at the namespace level, not the interpreter level.
+Pure JS — a single-pass tokenizer feeds a recursive-descent parser (`parse.js`) that produces an AST, which is then tree-walked by an async evaluator (`eval.js`). No compilation step, no WASM, no external binary.
 
 ### install workflow
 
-`install("@gcu/adder")` chain-installs three assets:
+`install("@gcu/adder")` installs one asset — the JS bundle (gzip-compressed). it's embedded in the notebook's `AUDITABLE-MODULES` block. the notebook works offline after install.
 
-1. `@gcu/adder` — adder extension JS (gzip-compressed)
-2. `@gcu/adder/micropython.mjs` — MicroPython loader (gzip-compressed)
-3. `@gcu/adder/micropython.wasm` — MicroPython binary (gzip-compressed binary)
+`load("@gcu/adder")` uses a dev-mode fallback (relative import) when the module isn't installed — works on a local dev server but not in saved notebooks opened from `file://`.
 
-all three are embedded in the notebook's `AUDITABLE-MODULES` block. the notebook works offline after install.
+### data model
 
-`load("@gcu/adder")` uses a dev-mode fallback (relative import) when modules aren't installed — works on a local dev server but not in saved notebooks opened from `file://`.
+Python values ARE JS values — there is no FFI boundary:
 
-### init sequence
+| Python type | JS representation |
+|-------------|-------------------|
+| `int`, `float` | `number` |
+| `str` | `string` |
+| `bool` | `boolean` |
+| `None` | `null` |
+| `list`, `tuple` | `Array` |
+| `dict` | plain `Object` (or `Map` for non-string keys) |
+| `set` | `Set` |
+| `range` | `AdderRange` (lazy, iterable) |
+| `bytes` | `Uint8Array` |
 
-1. `initInterpreter()` called (lazy, once)
-2. resolve `micropython.mjs` — check `_installedModules` (decompress if needed), fallback to relative import
-3. resolve `micropython.wasm` — check `_installedModules` (decompress if needed), omit if not found (MicroPython fetches default)
-4. call `loadMicroPython()` with stdout/stderr callbacks
-5. register all `window._auditableExtensions` via `mp.registerJsModule(name, exports)`
-6. bootstrap `_exec_cell` and `_build_async_wrapper` helpers via `mp.runPython(BRIDGE_PY)`
+since there's no FFI, values pass between Python and JS cells without conversion — a list defined in Python is a regular `Array` in downstream JS cells, and vice versa.
 
-**note:** extensions registered via `registerExtension()` after step 5 are NOT visible to Python. there is no mechanism to inject JS modules into an already-running interpreter. this means notebooks must `load("@gcu/adder")` after all extensions they want accessible from Python.
+### scope model
 
-## Python cells
+`AdderScope` implements Python's LEGB scoping with a `vars` Map and parent chain. `global` and `nonlocal` declarations are tracked via Sets and resolved by walking the scope chain. each cell execution creates a fresh scope with builtins + upstream variables.
+
+## adder cells
 
 ### DAG integration
 
-Python cells are full DAG citizens:
+adder cells are full DAG citizens:
 
-- **defines** — `pythonParseNames(code)` extracts top-level names: `def`, `async def`, `class`, `import`, `from...import` (with `as`), tuple unpacking, simple/annotated assignment. only column-0 (unindented) lines are considered.
-- **uses** — `pythonFindUses(code, allDefined)` strips comments and strings via `_stripPython()`, then word-boundary matches against all names defined by other cells. self-defines are excluded.
-- **execution** — `pythonExecute(code, scopeIn, cell)` builds a Python namespace from upstream scope, runs the code, extracts defined values back into JS scope.
+- **defines** — `pythonParseNames(code)` parses the AST and walks module-scope statements to find assignments, function/class defs, and imports. descends into block statements (`for`, `if`, `with`, `try`, `while`) but stops at `def`/`class` (which create new scopes). falls back to regex on parse error.
+- **uses** — `pythonFindUses(code, allDefined)` walks the AST for `Name` nodes, matching against names defined by other cells. self-defines are excluded. falls back to regex on parse error.
+- **execution** — `pythonExecute(code, scopeIn, cell)` parses the code, creates an `AdderScope` with builtins + upstream scope, evaluates via `adderEval`, and extracts defined values back into JS scope.
 
 ### execution model
 
-two paths, selected by `await` detection (`/\bawait\b/.test(code)`):
+single unified path — parse AST, tree-walk evaluate:
 
-**sync path** (no `await`):
-1. build namespace dict `_adder_ns` from upstream JS scope
-2. call `_exec_cell(code, _adder_ns)` — compiles and executes in the namespace
-3. last-expression detection: if the last non-blank/non-comment line compiles as `eval`, it's separated and returned as the cell's display value
-4. extract defined names from namespace back to JS scope
+1. parse source via `adderParse(code)` → AST
+2. create `AdderScope` with builtins + upstream scope variables
+3. inject cell context (`ui`, `std`, `load`, `display`, etc.) if running inside auditable
+4. `await adderEval(ast, scope)` — the evaluator is always async
+5. extract defined names from scope back to JS scope
 
-**async path** (has `await`):
-1. build namespace dict, inject `sys.modules` for import resolution
-2. `_build_async_wrapper(code, defines)` wraps code in `async def _adder_cell()` with `global` declarations for all defines
-3. `exec()` the wrapper definition, then `await _adder_ns["_adder_cell"]()`
-4. globals flow back to `_adder_ns` via the `global` declarations
-5. last-expression capture via `_adder_last_expr` global
+`await` works natively (the evaluator is async JS). no sync/async split needed.
 
 ### output
 
-cell output is assembled from:
-1. **stdout** — lines captured via MicroPython's stdout callback during execution
-2. **stderr** — lines captured via stderr callback
-3. **last expression** — the return value of the last line (if it compiles as `eval`)
-
-these are joined with newlines and rendered as plain text in the cell output area.
-
-### namespace isolation
-
-each cell execution creates a fresh `_adder_ns` dict. defines from upstream JS cells are injected as entries. after execution, defined Python values are extracted back to JS scope. the interpreter's `__main__` module is not used — all execution happens in isolated namespace dicts.
-
-`sys.modules` persists across cells (it's interpreter-global). `import foo` in one cell makes `foo` available to subsequent cells that also `import foo`, without re-importing.
+in cell context: `print()` renders to DOM via `display()`, last expression value is also displayed. in standalone/test mode: stdout is buffered as a string, returned alongside defines.
 
 ### syntax checking
 
-`syntaxCheck(code)` calls `compile(code, "<check>", "exec")` on the live MicroPython interpreter. returns `true` if the code parses, `false` on `SyntaxError`. the cell type system gates execution behind a successful syntax check — the cell shows a `syntax-pending` visual state while editing.
-
-**note:** before the interpreter is initialized (no Python cell has run yet), `syntaxCheck` returns `true` unconditionally. the check only activates after the first Python cell triggers `initInterpreter()`.
+`adderParse(code)` — pure JS parser. returns `true` if the code parses without error, `false` on `SyntaxError`. instant — no interpreter initialization needed.
 
 ### syntax highlighting
 
-Python cells use CodeMirror 6's built-in Python language mode (`@codemirror/lang-python`) for full-fidelity highlighting with 4-space indentation. this is handled in `cm6.js` as a special case — other plugin cell types use a `StreamLanguage` wrapper around their `tokenize()` function.
+Python cells use CodeMirror 6's built-in Python language mode (`@codemirror/lang-python`) for full-fidelity highlighting with 4-space indentation.
 
 the `tokenizePython()` function in `highlight.js` is used for:
-- `mpy` tagged template highlighting in JS code cells
+- `adder` and `mpy` tagged template highlighting in JS code cells
 - completions (keywords + builtins)
 
 it produces tokens: `kw`, `fn`, `id`, `str`, `num`, `cmt`, `dec`, `op`, `ws`.
 
 ### completions
 
-`pythonCompletions(prefix)` returns case-insensitive prefix matches against Python keywords and builtins. does not include user-defined names or `sys.modules` entries.
+`pythonCompletions(prefix)` returns case-insensitive prefix matches against Python keywords and builtins. does not include user-defined names.
 
-## `mpy` tagged template
+## tagged template
 
-inline Python in JS code cells:
+inline Python in JS code cells via `adder` or `mpy` (back-compat alias):
 
 ```js
-const { x, y } = await mpy`
+const { x, y } = await adder`
 x = 42
 y = x + 8
 `
@@ -142,57 +123,69 @@ JS values are injected as `_v0`, `_v1`, etc.:
 
 ```js
 const scale = 2.5
-const { result } = await mpy`
+const { result } = await adder`
 result = ${scale} * 10
 `
 ```
 
 ### return value
 
-returns a plain JS object with all non-underscore-prefixed names from the Python namespace. `_v0`, `_v1`, and other `_`-prefixed names are filtered out.
+returns a plain JS object with all non-underscore-prefixed names from the scope. `_v0`, `_v1`, and other `_`-prefixed names are filtered out.
 
-### known limitations
+### tagged template limitations
 
-- **sync-only** — `mpy` uses `mp.runPython()`, not `runPythonAsync()`. `await` inside an `mpy` template will not work. Python cells support async; `mpy` does not.
-- **stdout is discarded** — `print()` inside an `mpy` template produces no visible output. `flushStdout()` is called before and after execution to drain the buffer, but the captured lines are not returned or displayed. Python cells capture and display stdout; `mpy` does not.
+- **stdout is discarded** — `print()` inside a tagged template produces no visible output. adder cells capture and display stdout; the tag does not.
 - **no error location** — exceptions propagate to JS but without Python line numbers relative to the template.
 
-### WASM-from-WASM limitation
+## modules
 
-MicroPython runs as WASM with Asyncify. It cannot call other WASM modules (e.g. GSLIB's `kb2d`) from Python — two failure modes:
+built-in modules available via `import`:
 
-1. **Synchronous call** (`js.globalThis._gslib.kb2d(...)`) — "RuntimeError: unreachable" (nested WASM stacks, Asyncify overflow)
-2. **Async bridge** (`await promise_that_calls_wasm`) — "Assertion failed: proxy_c_to_js_call is running asynchronously" (the vendored MicroPython build's `proxy_c_to_js_call` in the Asyncify resume path lacks `{async: true}` on its ccall)
+| module | description |
+|--------|-------------|
+| `math` | math constants and functions (pi, sin, sqrt, factorial, gcd, ...) |
+| `json` | `dumps()`, `loads()` (Map/Set aware) |
+| `js` | proxy to `globalThis` — access any browser API |
+| `random` | `random()`, `randint()`, `uniform()`, `choice()`, `shuffle()`, `gauss()`, `sample()` (xoshiro128 PRNG) |
+| `itertools` | `chain`, `product`, `combinations`, `permutations`, `repeat`, `accumulate`, `starmap`, `islice`, `zip_longest`, `groupby` |
+| `functools` | `reduce`, `partial`, `lru_cache` |
+| `collections` | `OrderedDict`, `defaultdict`, `Counter`, `namedtuple` |
+| `re` | `match`, `search`, `findall`, `sub`, `split`, `compile`, `escape` (wraps JS RegExp) |
+| `string` | `ascii_lowercase`, `digits`, `punctuation`, etc. |
+| `sys` | `version`, `platform`, `path`, `modules`, `argv`, `exit` |
+| `this` | the Zen of Python (and `this.gcu`) |
 
-**Workaround:** use a thin JS bridge cell for WASM calls. Python exports data as JSON, JS calls the WASM function, JS serializes results as JSON, Python consumes them. See `example_adder_gslib` for the pattern.
+### VFS modules
 
-**Fix:** patching the vendored `micropython.mjs`/`.wasm` to add `{async: true}` to the ccall in `proxy_call_python` would enable custom Promise resolution during Asyncify resume. This is a MicroPython/Emscripten build configuration change, not an adder bug.
+when the notebook's virtual filesystem is available (`window._notebookVFS`), adder automatically wires it up and provides filesystem modules:
 
-## FFI: JS <-> Python
+| module | description |
+|--------|-------------|
+| `os` | `listdir`, `mkdir`, `makedirs`, `remove`, `rename`, `stat`, `walk`, `getcwd`, `chdir` |
+| `os.path` | `join`, `dirname`, `basename`, `splitext`, `exists`, `isfile`, `isdir`, `getsize` |
+| `pathlib` | `Path` class with `read_text`, `write_text`, `exists`, `mkdir`, `glob`, `iterdir`, `/` operator |
+| `shutil` | `copy`, `copytree`, `rmtree`, `move` |
+| `glob` | `glob(pattern)` |
 
-### JS values in Python
+the built-in `open()` function also works when VFS is available, supporting text and binary modes with context managers (`with`).
 
-upstream JS scope variables are injected into the Python namespace. type mapping:
+## method dispatch
 
-| JS type | Python type |
-|---------|------------|
-| `number` | `int` or `float` |
-| `string` | `str` |
-| `boolean` | `bool` |
-| `null` | `None` |
-| `Array` | `JsProxy` (use `list(x)` to convert) |
-| `Object` | `JsProxy` (property access works) |
+adder implements Python-style method dispatch on JS types:
 
-### Python values in JS
+- **str** — `upper`, `lower`, `strip`, `split`, `join`, `replace`, `find`, `startswith`, `endswith`, `format`, `encode`, `capitalize`, `title`, `zfill`, `partition`, `removeprefix`, `removesuffix`, `splitlines`, and more
+- **list** — `append`, `extend`, `insert`, `remove`, `pop`, `clear`, `index`, `count`, `sort`, `reverse`, `copy`
+- **dict** (Map and plain Object) — `keys`, `values`, `items`, `get`, `pop`, `setdefault`, `update`, `clear`, `copy`
+- **set** — `add`, `remove`, `discard`, `pop`, `clear`, `union`, `intersection`, `difference`, `symmetric_difference`, `update`, `issubset`, `issuperset`, `copy`
 
-defined Python values are extracted back to JS scope. MicroPython's `JsProxy` handles most conversions. Python `int` becomes JS `number`, `str` becomes `string`, etc. Python `list`/`dict` stay as `JsProxy` objects — access with `.get()` or convert in Python before returning.
+format specs (`f"{x:.2f}"`, `format(x, "08d")`) are fully implemented.
 
-### calling Python functions from JS
+## calling Python functions from JS
 
-Python `def` at column 0 creates a callable in JS scope:
+Python `def` at module scope creates a callable in JS scope:
 
 ```python
-# python cell
+# adder cell
 def greet(name):
     return "hello, " + name
 ```
@@ -202,39 +195,38 @@ def greet(name):
 display(greet("auditable"))  // "hello, auditable"
 ```
 
-### JS imports from Python
+## what's not supported
 
-JS modules registered via `window._auditableExtensions` before interpreter init are importable:
+- generators / `yield` (parsed but not evaluated)
+- multiple inheritance
+- metaclasses
+- `match` / `case`
+- `exec()` / `eval()`
+- complex numbers
 
-```python
-import my_extension
-my_extension.do_something()
-```
-
-MicroPython does not support `sys.meta_path` finders — `registerJsModule()` is the only mechanism.
+see `SPEC.md` for full language details.
 
 ## tests
 
 ```
-test/adder.test.mjs       — 40 pure JS tests (no WASM)
-test/adder-wasm.test.mjs  — 51 WASM integration tests (requires --test-force-exit)
+test/adder.test.mjs        — pure JS tests (parseNames, findUses, tokenizer, completions)
+test/adder-interp.test.mjs — interpreter tests (parse, eval, builtins, async, classes, etc.)
 ```
 
-run with `npm test` (pure JS) and `npm run test:wasm` (WASM).
+run with `npm test`.
 
 ### coverage
 
-- **pythonParseNames** — simple/annotated assignment, tuple unpacking, def/async def, class, import/from-import with as, indented scope skipping, keyword guard
-- **pythonFindUses** — upstream refs, self-exclusion, string/comment stripping, function calls, triple-quoted strings
-- **tokenizePython** — keywords, builtins, strings (single/triple/f-string), numbers (int/hex/float/complex), comments, decorators, operators
+- **pythonParseNames** — simple/annotated assignment, tuple unpacking, def/async def, class, import/from-import with as, scope descent (for/if/try/with) without entering def/class, regex fallback
+- **pythonFindUses** — upstream refs, self-exclusion, AST walk for Name nodes, regex fallback
+- **tokenizePython** — keywords, builtins, strings (single/triple/f-string), numbers (int/hex/float), comments, decorators, operators
 - **pythonCompletions** — keyword match, builtin match, case-insensitive, no-match
-- **BRIDGE_PY** — `_exec_cell` last-expression detection, empty/comment code, expression-after-def
-- **registerJsModule** — import, ImportError, sys.modules caching, namespace access, callable FFI
-- **pythonExecute** — namespace building, define extraction, last-expression, globals cleanup, error recovery, function defines
-- **mpy patterns** — namespace return, `_v` interpolation, `_`-prefix filtering, function extraction
-- **stdout** — callback capture, buffering, ordering
-- **output assembly** — print-only, expr-only, print+expr, assignment-only, defines+output
-- **async** — Promise resolution, upstream scope, last-expression, no-last-expr, print+await
-- **FFI marshalling** — number/string/boolean roundtrip, null-to-None, object property access
+- **adderParse** — expressions, statements, control flow, classes, comprehensions, error recovery
+- **adderEval** — assignments, operators, control flow, functions, classes, async/await, comprehensions, exception handling, decorators, dunders
+- **builtins** — print, len, range, type conversions, sorted/reversed/enumerate/zip/map/filter, isinstance, format specs
+- **modules** — math, json, random, itertools, functools, collections, re
+- **tagged template** — namespace return, `_v` interpolation, `_`-prefix filtering
+- **scope** — LEGB chain, global/nonlocal, closure capture
+- **method dispatch** — str/list/dict/set methods
+- **FFI** — number/string/boolean/null roundtrip, no conversion boundary
 - **error handling** — SyntaxError, NameError, TypeError, ZeroDivisionError, recovery
-- **namespace isolation** — independent cells, sys.modules persistence
