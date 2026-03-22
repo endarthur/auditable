@@ -10,15 +10,15 @@ workshop([
 Use the **prev** and **next** buttons below to navigate
 between pages, or click the progress dots to jump directly.
 
-Close this panel with the **\u00d7** button. Reopen it
+Close this panel with the **×** button. Reopen it
 anytime with the **workshop** tab on the right edge
 of the screen.`
   },
   {
     title: 'CSS cells',
     content: md`The \`css\` cell type injects a
-\`<style>\` element into the page. CSS cells don\u2019t
-participate in the DAG \u2014 they\u2019re static side
+\`<style>\` element into the page. CSS cells don’t
+participate in the DAG — they’re static side
 effects that apply globally.
 
 Use CSS variables like \`var(--accent)\` and
@@ -33,8 +33,8 @@ as HTML with **reactive interpolation**. Expressions
 like \`\${filtered.length}\` are evaluated using
 the current scope.
 
-HTML cells are **read-only** in the DAG \u2014 they
-consume variables but don\u2019t define any. When upstream
+HTML cells are **read-only** in the DAG — they
+consume variables but don’t define any. When upstream
 values change, the HTML re-renders automatically.
 This is how the stat cards update when you type in
 the search box.`
@@ -49,7 +49,7 @@ string value reactively.
 The filter cell computes \`filtered\`, \`totalPop\`,
 \`avgLat\`, and \`nCountries\` from the raw data. Both
 the HTML cell and the table cell consume these
-computed values \u2014 change the search text and
+computed values — change the search text and
 everything downstream updates.`
   },
   {
@@ -63,7 +63,7 @@ The DAG engine uses \`findHtmlUses()\` to detect
 which scope names appear in \`\${...}\` blocks,
 ensuring the HTML cell re-renders when its
 dependencies change. Only \`\${...}\` expressions are
-evaluated \u2014 plain text and HTML are passed through
+evaluated — plain text and HTML are passed through
 as-is.`
   },
 ])
@@ -99,7 +99,7 @@ const cities = [
   { city: "Tokyo",         country: "Japan",     pop: 37.4,  lat: 35.68,  lon: 139.69 },
   { city: "Delhi",         country: "India",     pop: 32.9,  lat: 28.61,  lon: 77.23  },
   { city: "Shanghai",      country: "China",     pop: 29.2,  lat: 31.23,  lon: 121.47 },
-  { city: "S\u00e3o Paulo",     country: "Brazil",    pop: 22.6,  lat: -23.55, lon: -46.63 },
+  { city: "São Paulo",     country: "Brazil",    pop: 22.6,  lat: -23.55, lon: -46.63 },
   { city: "Mexico City",   country: "Mexico",    pop: 22.1,  lat: 19.43,  lon: -99.13 },
   { city: "Cairo",         country: "Egypt",     pop: 21.8,  lat: 30.04,  lon: 31.24  },
   { city: "Dhaka",         country: "Bangladesh",pop: 23.2,  lat: 23.81,  lon: 90.41  },

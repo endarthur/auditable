@@ -157,7 +157,7 @@ const nAbove = wasm.grade_above_cutoff(gPtr, maskPtr, N, cutoff);
 const meanG = nAbove > 0 ? wasm.mean_grade(gPtr, maskPtr, nAbove) : 0;
 const inRadius = wasm.blocks_in_radius(xPtr, yPtr, N, 50.0);
 
-ui.display(`${N} blocks | cutoff \u2265 ${cutoff.toFixed(2)}: ${nAbove} blocks (${(100*nAbove/N).toFixed(1)}%) | mean grade above cutoff: ${meanG.toFixed(3)}`);
+ui.display(`${N} blocks | cutoff ≥ ${cutoff.toFixed(2)}: ${nAbove} blocks (${(100*nAbove/N).toFixed(1)}%) | mean grade above cutoff: ${meanG.toFixed(3)}`);
 ui.display(`blocks within radius 50: ${inRadius} (${(100*inRadius/N).toFixed(1)}%)`);
 
 // visualize: block map colored by grade, highlight above-cutoff

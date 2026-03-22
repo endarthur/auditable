@@ -1375,7 +1375,7 @@ function _createCellContext(cell) {
     run: (ids) => runDAG(Array.isArray(ids) ? ids : [ids], true),
   };
 
-  const vfs = typeof VFS !== 'undefined' ? VFS : undefined;
+  const vfs = window._notebookVFS || undefined;
 
   return { ui, std, load, install, installBinary, invalidation, display, print: display,
            md, html, css, workshop, notebook, worker, workerPool, vfs, usedWidgets, outputEl, widgetEl };

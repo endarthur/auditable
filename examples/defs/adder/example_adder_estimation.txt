@@ -43,7 +43,7 @@ grid = {"nx": gridN, "ny": gridN, "xsiz": 1, "ysiz": 1}
 
 engine = gslib.sgsim({"grid": grid, "variogram": vario, "search": search})
 truth = engine.run(simSeed)
-print(f"simulated {gridN}\u00d7{gridN} grid ({len(truth)} nodes)")
+print(f"simulated {gridN}×{gridN} grid ({len(truth)} nodes)")
 
 /// md
 ## drilling — sample the truth
@@ -65,7 +65,7 @@ for i in range(nHoles):
 vals = [s[2] for s in samples]
 mean = sum(vals) / len(vals)
 sd = (sum((v - mean)**2 for v in vals) / (len(vals) - 1)) ** 0.5
-print(f"{nHoles} samples \u00b7 mean {mean:.3f} \u00b7 std {sd:.3f}")
+print(f"{nHoles} samples · mean {mean:.3f} · std {sd:.3f}")
 
 /// md
 ## estimation — krige the samples

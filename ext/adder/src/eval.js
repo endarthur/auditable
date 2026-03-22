@@ -5,6 +5,7 @@ import { adderParse, _adderParseExpr } from './parse.js';
 import {
   AdderError, AdderRange, adderBuiltins, adderModules, adderGetAttr,
   pyBool, pyTypeName, pyStr, pyRepr, pyIter, pyCollect, pyFormatValue,
+  _excParents, getAdderVFS, _getVfsPath,
 } from './builtins.js';
 
 // ── scope ──
@@ -355,21 +356,34 @@ function _binOp(op, left, right, line) {
   }
   switch (op) {
     case '+':
+      if (typeof left === 'number' && typeof right === 'number') return left + right;
       if (typeof left === 'string' && typeof right === 'string') return left + right;
       if (Array.isArray(left) && Array.isArray(right)) return [...left, ...right];
-      return left + right;
-    case '-': return left - right;
+      throw new AdderError('TypeError', `unsupported operand type(s) for +: '${pyTypeName(left)}' and '${pyTypeName(right)}'`, line);
+    case '-':
+      if (typeof left === 'number' && typeof right === 'number') return left - right;
+      throw new AdderError('TypeError', `unsupported operand type(s) for -: '${pyTypeName(left)}' and '${pyTypeName(right)}'`, line);
     case '*':
+      if (typeof left === 'number' && typeof right === 'number') return left * right;
       if (typeof left === 'string' && typeof right === 'number') return left.repeat(right);
       if (typeof left === 'number' && typeof right === 'string') return right.repeat(left);
       if (Array.isArray(left) && typeof right === 'number') { const r = []; for (let i = 0; i < right; i++) r.push(...left); return r; }
-      return left * right;
-    case '/': if (right === 0) throw new AdderError('ZeroDivisionError', 'division by zero', line); return left / right;
-    case '//': if (right === 0) throw new AdderError('ZeroDivisionError', 'integer division or modulo by zero', line); return Math.floor(left / right);
+      throw new AdderError('TypeError', `unsupported operand type(s) for *: '${pyTypeName(left)}' and '${pyTypeName(right)}'`, line);
+    case '/':
+      if (right === 0) throw new AdderError('ZeroDivisionError', 'division by zero', line);
+      if (typeof left === 'number' && typeof right === 'number') return left / right;
+      throw new AdderError('TypeError', `unsupported operand type(s) for /: '${pyTypeName(left)}' and '${pyTypeName(right)}'`, line);
+    case '//':
+      if (right === 0) throw new AdderError('ZeroDivisionError', 'integer division or modulo by zero', line);
+      if (typeof left === 'number' && typeof right === 'number') return Math.floor(left / right);
+      throw new AdderError('TypeError', `unsupported operand type(s) for //: '${pyTypeName(left)}' and '${pyTypeName(right)}'`, line);
     case '%': if (right === 0) throw new AdderError('ZeroDivisionError', 'integer division or modulo by zero', line);
       if (typeof left === 'string') return _strPercentFormat(left, Array.isArray(right) ? right : [right]);
-      return ((left % right) + right) % right;
-    case '**': return Math.pow(left, right);
+      if (typeof left === 'number' && typeof right === 'number') return ((left % right) + right) % right;
+      throw new AdderError('TypeError', `unsupported operand type(s) for %: '${pyTypeName(left)}' and '${pyTypeName(right)}'`, line);
+    case '**':
+      if (typeof left === 'number' && typeof right === 'number') return Math.pow(left, right);
+      throw new AdderError('TypeError', `unsupported operand type(s) for **: '${pyTypeName(left)}' and '${pyTypeName(right)}'`, line);
     case '&': return left & right;
     case '|': return left | right;
     case '^': return left ^ right;
@@ -996,8 +1010,14 @@ function _matchException(error, excTypeVal) {
   // excTypeVal is an evaluated value — could be a function (exception constructor) or tuple of them
   if (Array.isArray(excTypeVal)) return excTypeVal.some(t => _matchException(error, t));
   if (error instanceof AdderError) {
-    if (typeof excTypeVal === 'function') return error.pyType === (excTypeVal._pyName || excTypeVal.name);
-    if (typeof excTypeVal === 'string') return error.pyType === excTypeVal;
+    const targetName = typeof excTypeVal === 'function' ? (excTypeVal._pyName || excTypeVal.name) :
+                       (typeof excTypeVal === 'string' ? excTypeVal : null);
+    if (targetName) {
+      if (error.pyType === targetName) return true;
+      // Walk parent chain (e.g. FileNotFoundError → OSError)
+      let pt = _excParents[error.pyType];
+      while (pt) { if (pt === targetName) return true; pt = _excParents[pt]; }
+    }
   }
   if (typeof excTypeVal === 'function') return error instanceof excTypeVal;
   return false;
@@ -1069,38 +1089,81 @@ async function _evalCompIter(node, scope, result, kind, genIdx) {
 
 // ── imports ──
 
+function _resolveModule(name) {
+  if (adderModules[name]) return adderModules[name];
+  if (typeof window !== 'undefined' && window._auditableExtensions?.[name]) return window._auditableExtensions[name];
+  return null;
+}
+
+async function _loadVfsModule(name) {
+  // check cache
+  const cache = adderModules.sys.modules;
+  if (cache[name]) return cache[name];
+
+  const vfs = getAdderVFS();
+  if (!vfs) return null;
+  const pth = _getVfsPath();
+  if (!pth) return null;
+
+  // search sys.path for name.py or name/__init__.py
+  let source = null, filePath = null;
+  const cwd = adderModules.os?.getcwd?.() || '/';
+  for (let dir of adderModules.sys.path) {
+    // resolve relative entries (e.g. '.') against os.getcwd()
+    if (!pth.isAbsolute(dir)) dir = pth.join(cwd, dir);
+    const fp = pth.join(dir, name + '.py');
+    try { source = await vfs.readFile(fp); filePath = fp; break; } catch {}
+    const ip = pth.join(dir, name, '__init__.py');
+    try { source = await vfs.readFile(ip); filePath = ip; break; } catch {}
+  }
+  if (source === null) return null;
+
+  // parse and evaluate in a fresh scope
+  const ast = adderParse(source);
+  const modScope = new AdderScope();
+  const builtins = adderBuiltins(() => {});
+  const builtinNames = new Set(Object.keys(builtins));
+  for (const [k, v] of Object.entries(builtins)) modScope.set(k, v);
+  modScope.set('__name__', name);
+  modScope.set('__file__', filePath);
+
+  // placeholder in cache (handles circular imports)
+  const mod = { __adderModule__: true };
+  cache[name] = mod;
+
+  await adderEval(ast, modScope);
+
+  // extract module-level names (skip builtins and dunders we injected)
+  for (const [k, v] of modScope.vars) {
+    if (!builtinNames.has(k) && k !== '__name__' && k !== '__file__') mod[k] = v;
+  }
+  mod.__name__ = name;
+  mod.__file__ = filePath;
+
+  return mod;
+}
+
 async function _evalImport(node, scope) {
   for (const { module, alias } of node.names) {
-    const mod = adderModules[module];
+    let mod = _resolveModule(module);
     if (mod) {
       scope.set(alias || module, mod);
       // import this — print the zen (side effect, like CPython)
       if (module === 'this' && mod.s) { const printFn = scope.has('print') ? scope.get('print') : null; if (printFn) await printFn(mod.s); }
       continue;
     }
-    // try loading from auditable extensions
-    if (typeof window !== 'undefined' && window._auditableExtensions?.[module]) {
-      scope.set(alias || module, window._auditableExtensions[module]);
-      continue;
-    }
+    // try VFS import (searches sys.path for .py files)
+    mod = await _loadVfsModule(module);
+    if (mod) { scope.set(alias || module, mod); continue; }
     throw new AdderError('ModuleNotFoundError', `No module named '${module}'`, node.line);
   }
   return null;
 }
 
 async function _evalImportFrom(node, scope) {
-  const mod = adderModules[node.module];
-  if (!mod) {
-    if (typeof window !== 'undefined' && window._auditableExtensions?.[node.module]) {
-      const extMod = window._auditableExtensions[node.module];
-      for (const { name, alias } of node.names) {
-        if (name === '*') { for (const k of Object.keys(extMod)) scope.set(k, extMod[k]); }
-        else scope.set(alias || name, extMod[name]);
-      }
-      return null;
-    }
-    throw new AdderError('ModuleNotFoundError', `No module named '${node.module}'`, node.line);
-  }
+  let mod = _resolveModule(node.module);
+  if (!mod) mod = await _loadVfsModule(node.module);
+  if (!mod) throw new AdderError('ModuleNotFoundError', `No module named '${node.module}'`, node.line);
   for (const { name, alias } of node.names) {
     if (name === '*') { for (const k of Object.keys(mod)) scope.set(k, mod[k]); }
     else {

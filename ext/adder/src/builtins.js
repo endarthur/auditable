@@ -244,8 +244,8 @@ export function adderGetAttr(obj, attr) {
     // check for adder class method on prototype
     if (typeof obj[attr] === 'function') {
       if (_isNativeClass(obj[attr])) return obj[attr];
-      // adder functions expect self as first arg — inject it
-      if (obj[attr]._pyFunc) {
+      // adder functions expect self as first arg — inject it (skip for modules)
+      if (obj[attr]._pyFunc && !obj.__adderModule__) {
         const originalFn = obj[attr];
         const fn = (...args) => originalFn(obj, ...args);
         fn._pyFunc = true;
@@ -794,12 +794,416 @@ But why, some say, JavaScript? Why choose this as our language? And they may wel
 
 We choose to write JavaScript. We choose to write JavaScript... We choose to write JavaScript in this decade and do the other things, not because it is good, but because it is bad; because that goal will serve to organize and measure the best of our energies and skills, because that challenge is one that we are willing to accept, one we are unwilling to postpone, and one we intend to ship, and the others, too.`;
 
+// ── shared cwd + path resolution ──
+
+const _cwd = { value: '/home/nb' };
+const _HOME = '/home/nb';
+
+// Expand ~ and resolve relative paths against cwd. Used by open(), Path(), os._resolve().
+export function _resolvePath(p, pth) {
+  if (!p || p === '.') return _cwd.value;
+  // ~ expansion
+  if (p === '~') return _HOME;
+  if (p.startsWith('~/')) p = _HOME + p.slice(1);
+  if (pth && !pth.isAbsolute(p)) return pth.join(_cwd.value, p);
+  if (pth) return pth.normalize(p);
+  // fallback without path utils: just basic join
+  if (p.startsWith('/')) return p;
+  return _cwd.value + ((_cwd.value === '/') ? '' : '/') + p;
+}
+
+// ── sys module ──
+
+const _sysModule = {
+  version: '3.12.0 (adder)',
+  version_info: [3, 12, 0, 'adder', 0],
+  platform: 'auditable',
+  maxsize: Number.MAX_SAFE_INTEGER,
+  path: ['.', 'lib', '/usr/lib/python'],
+  modules: {},
+  argv: [''],
+  exit: (code) => { throw new AdderError('SystemExit', String(code ?? 0)); },
+  stdout: { write(s) { return String(s).length; }, flush() {}, encoding: 'utf-8' },
+  stderr: { write(s) { return String(s).length; }, flush() {}, encoding: 'utf-8' },
+  getsizeof: () => 0,
+  getrecursionlimit: () => 1000,
+  setrecursionlimit: () => null,
+  executable: '',
+  prefix: '/usr',
+  exec_prefix: '/usr',
+  get home() { return _HOME; },
+};
+
 export const adderModules = {
   math: _mathModule, json: _jsonModule, js: _jsModule, random: _randomModule,
   itertools: _itertoolsModule, functools: _functoolsModule,
   collections: _collectionsModule, re: _reModule, string: _stringModule,
-  this: _thisModule,
+  this: _thisModule, sys: _sysModule,
 };
+
+// ── filesystem exception hierarchy ──
+
+export const _excParents = {
+  FileNotFoundError: 'OSError', FileExistsError: 'OSError',
+  IsADirectoryError: 'OSError', NotADirectoryError: 'OSError',
+  PermissionError: 'OSError', IOError: 'OSError',
+};
+
+function _mapVFSError(e) {
+  const map = { ENOENT: 'FileNotFoundError', EEXIST: 'FileExistsError',
+    EISDIR: 'IsADirectoryError', ENOTDIR: 'NotADirectoryError', EACCES: 'PermissionError' };
+  return new AdderError(map[e?.code] || 'OSError', e?.message || String(e));
+}
+
+// ── file object ──
+
+async function _createAdderFile(vfs, filePath, mode) {
+  const isBinary = mode.includes('b');
+  const isRead = mode[0] === 'r';
+  const isAppend = mode[0] === 'a';
+
+  let _content = null, _buffer = isBinary ? [] : '', _pos = 0, _closed = false;
+
+  if (isRead || isAppend) {
+    try {
+      _content = await vfs.readFile(filePath, isBinary ? 'bytes' : undefined);
+      if (isAppend) _buffer = isBinary ? [_content] : _content;
+    } catch (e) {
+      if (isRead) throw _mapVFSError(e);
+      _content = isBinary ? new Uint8Array(0) : '';
+    }
+  }
+
+  const f = {
+    _path: filePath, _mode: mode,
+    __adderClass__: isBinary ? 'BufferedIOBase' : 'TextIOWrapper',
+
+    read(size) {
+      if (_closed) throw new AdderError('ValueError', 'I/O operation on closed file');
+      if (!isRead) throw new AdderError('IOError', 'not readable');
+      if (size != null) { const chunk = _content.slice(_pos, _pos + size); _pos += size; return chunk; }
+      const rest = _content.slice(_pos);
+      _pos = typeof _content === 'string' ? _content.length : _content.byteLength;
+      return rest;
+    },
+
+    readline() {
+      if (_closed) throw new AdderError('ValueError', 'I/O operation on closed file');
+      if (!isRead) throw new AdderError('IOError', 'not readable');
+      if (typeof _content !== 'string') throw new AdderError('IOError', 'readline on binary file');
+      const nl = _content.indexOf('\n', _pos);
+      if (nl === -1) { const line = _content.slice(_pos); _pos = _content.length; return line; }
+      const line = _content.slice(_pos, nl + 1);
+      _pos = nl + 1;
+      return line;
+    },
+
+    readlines() {
+      if (_closed) throw new AdderError('ValueError', 'I/O operation on closed file');
+      if (!isRead) throw new AdderError('IOError', 'not readable');
+      const lines = [];
+      const len = typeof _content === 'string' ? _content.length : _content.byteLength;
+      while (_pos < len) lines.push(f.readline());
+      return lines;
+    },
+
+    write(data) {
+      if (_closed) throw new AdderError('ValueError', 'I/O operation on closed file');
+      if (isRead) throw new AdderError('IOError', 'not writable');
+      if (isBinary) {
+        const chunk = data instanceof Uint8Array ? data : new TextEncoder().encode(String(data));
+        _buffer.push(chunk);
+        return chunk.byteLength;
+      }
+      const s = String(data);
+      _buffer += s;
+      return s.length;
+    },
+
+    writelines(lines) { for (const line of pyIter(lines)) f.write(line); return null; },
+
+    async close() {
+      if (_closed) return;
+      _closed = true;
+      if (!isRead) {
+        try {
+          if (isBinary) {
+            const total = _buffer.reduce((s, b) => s + b.byteLength, 0);
+            const result = new Uint8Array(total);
+            let off = 0;
+            for (const b of _buffer) { result.set(b, off); off += b.byteLength; }
+            await vfs.writeFile(filePath, result);
+          } else {
+            await vfs.writeFile(filePath, _buffer);
+          }
+        } catch (e) { throw _mapVFSError(e); }
+      }
+    },
+
+    __enter__() { return f; },
+    async __exit__() { await f.close(); return false; },
+    __repr__() { return `<_io.${isBinary ? 'BufferedWriter' : 'TextIOWrapper'} name='${filePath}' mode='${mode}'>`; },
+    __str__() { return f.__repr__(); },
+    __bool__() { return true; },
+
+    [Symbol.iterator]() {
+      if (!isRead) throw new AdderError('IOError', 'not readable');
+      let iterPos = _pos;
+      const content = _content;
+      return {
+        next() {
+          const len = typeof content === 'string' ? content.length : content.byteLength;
+          if (iterPos >= len) return { done: true };
+          if (typeof content !== 'string') {
+            const rest = content.slice(iterPos);
+            iterPos = content.byteLength;
+            return { value: rest, done: false };
+          }
+          const nl = content.indexOf('\n', iterPos);
+          if (nl === -1) {
+            const line = content.slice(iterPos);
+            iterPos = content.length;
+            return line ? { value: line, done: false } : { done: true };
+          }
+          const line = content.slice(iterPos, nl + 1);
+          iterPos = nl + 1;
+          return { value: line, done: false };
+        }
+      };
+    },
+
+    get name() { return filePath; },
+    get closed() { return _closed; },
+  };
+
+  return f;
+}
+
+// ── os module ──
+
+function _createOsModule(getVfs, pth) {
+  const _resolve = (p) => _resolvePath(p, pth);
+
+  const osPath = {
+    join: (...parts) => pth.join(...parts),
+    dirname: (p) => pth.dirname(p),
+    basename: (p) => pth.basename(p),
+    splitext: (p) => { const ext = pth.extname(p); return ext ? [p.slice(0, -ext.length), ext] : [p, '']; },
+    normpath: (p) => pth.normalize(p),
+    relpath: (p, start) => pth.relative(start || _cwd.value, p),
+    isabs: (p) => pth.isAbsolute(p),
+    exists: async (p) => { try { await getVfs().stat(_resolve(p)); return true; } catch { return false; } },
+    isfile: async (p) => { try { return (await getVfs().stat(_resolve(p))).type === 'file'; } catch { return false; } },
+    isdir: async (p) => { try { return (await getVfs().stat(_resolve(p))).type === 'directory'; } catch { return false; } },
+    getsize: async (p) => { try { return (await getVfs().stat(_resolve(p))).size; } catch (e) { throw _mapVFSError(e); } },
+    sep: '/',
+  };
+
+  const os = {
+    sep: '/', linesep: '\n', name: 'posix',
+    path: osPath,
+
+    listdir: async (p) => {
+      try { return await getVfs().readdir(_resolve(p || '.')); }
+      catch (e) { throw _mapVFSError(e); }
+    },
+    mkdir: async (p) => {
+      try { await getVfs().mkdir(_resolve(p)); }
+      catch (e) { throw _mapVFSError(e); }
+    },
+    makedirs: async (p, exist_ok) => {
+      if (exist_ok != null && typeof exist_ok === 'object' && exist_ok._kw) exist_ok = exist_ok.exist_ok;
+      const resolved = _resolve(p);
+      const vfs = getVfs();
+      let exists = false;
+      try { await vfs.stat(resolved); exists = true; } catch {}
+      if (exists && !exist_ok) throw new AdderError('FileExistsError', resolved);
+      if (!exists) {
+        try { await vfs.mkdir(resolved, { recursive: true }); }
+        catch (e) { throw _mapVFSError(e); }
+      }
+    },
+    remove: async (p) => {
+      try { await getVfs().unlink(_resolve(p)); }
+      catch (e) { throw _mapVFSError(e); }
+    },
+    unlink: async (p) => {
+      try { await getVfs().unlink(_resolve(p)); }
+      catch (e) { throw _mapVFSError(e); }
+    },
+    rmdir: async (p) => {
+      try { await getVfs().rmdir(_resolve(p)); }
+      catch (e) { throw _mapVFSError(e); }
+    },
+    rename: async (src, dst) => {
+      try { await getVfs().rename(_resolve(src), _resolve(dst)); }
+      catch (e) { throw _mapVFSError(e); }
+    },
+    stat: async (p) => {
+      try {
+        const info = await getVfs().stat(_resolve(p));
+        return { st_size: info.size, st_mtime: info.modified?.getTime() / 1000 || 0,
+                 st_mode: info.mode || 0, st_type: info.type };
+      } catch (e) { throw _mapVFSError(e); }
+    },
+    getcwd: () => _cwd.value,
+    chdir: (p) => { _cwd.value = _resolve(p); },
+
+    walk: (top) => {
+      const resolved = _resolve(top || '.');
+      const vfs = getVfs();
+      async function* gen(dir) {
+        let entries;
+        try { entries = await vfs.readdir(dir); } catch { return; }
+        const dirs = [], files = [];
+        for (const name of entries) {
+          const full = dir === '/' ? '/' + name : dir + '/' + name;
+          try {
+            const info = await vfs.stat(full);
+            if (info.type === 'directory') dirs.push(name);
+            else files.push(name);
+          } catch { files.push(name); }
+        }
+        yield [dir, dirs, files];
+        for (const d of dirs) {
+          yield* gen(dir === '/' ? '/' + d : dir + '/' + d);
+        }
+      }
+      return { [Symbol.asyncIterator]() { return gen(resolved); } };
+    },
+  };
+
+  return os;
+}
+
+// ── pathlib module ──
+
+function _createPathClass(getVfs, pth) {
+  function _Path(p) {
+    if (typeof p === 'object' && p?._path) return p;
+    let raw = String(p || '.');
+    // expand ~ but don't resolve relative paths (pathlib keeps them relative)
+    if (raw === '~') raw = _HOME;
+    else if (raw.startsWith('~/')) raw = _HOME + raw.slice(1);
+    const _p = pth.normalize(raw);
+    // resolve for I/O — relative paths against cwd
+    const _abs = () => pth.isAbsolute(_p) ? _p : pth.join(_cwd.value, _p);
+    return {
+      _path: _p,
+      __adderClass__: 'PosixPath',
+      get name() { return pth.basename(_p); },
+      get stem() { const b = pth.basename(_p); const ext = pth.extname(_p); return ext ? b.slice(0, -ext.length) : b; },
+      get suffix() { return pth.extname(_p); },
+      get parent() { return _Path(pth.dirname(_p)); },
+      get parts() { return _p === '/' ? ['/'] : ['/', ..._p.split('/').filter(Boolean)]; },
+
+      __truediv__(other) { return _Path(pth.join(_p, String(other?._path || other))); },
+      __str__() { return _p; },
+      __repr__() { return `PosixPath('${_p}')`; },
+      __eq__(other) { return _p === (other?._path || String(other)); },
+      __hash__() { let h = 0; for (let i = 0; i < _p.length; i++) h = (h * 31 + _p.charCodeAt(i)) | 0; return h; },
+
+      joinpath(...parts) { return _Path(pth.join(_p, ...parts.map(x => x?._path || String(x)))); },
+      with_suffix(s) { const ext = pth.extname(_p); const base = ext ? _p.slice(0, -ext.length) : _p; return _Path(base + s); },
+      with_name(n) { return _Path(pth.join(pth.dirname(_p), n)); },
+
+      async read_text() { try { return await getVfs().readFile(_abs()); } catch (e) { throw _mapVFSError(e); } },
+      async read_bytes() { try { return await getVfs().readFile(_abs(), 'bytes'); } catch (e) { throw _mapVFSError(e); } },
+      async write_text(data) { try { await getVfs().writeFile(_abs(), String(data)); } catch (e) { throw _mapVFSError(e); } },
+      async write_bytes(data) { try { await getVfs().writeFile(_abs(), data); } catch (e) { throw _mapVFSError(e); } },
+      async exists() { return getVfs().exists(_abs()); },
+      async is_file() { try { return (await getVfs().stat(_abs())).type === 'file'; } catch { return false; } },
+      async is_dir() { try { return (await getVfs().stat(_abs())).type === 'directory'; } catch { return false; } },
+      async mkdir(parents, exist_ok) {
+        if (parents != null && typeof parents === 'object' && parents._kw) { exist_ok = parents.exist_ok; parents = parents.parents; }
+        try { await getVfs().mkdir(_abs(), { recursive: !!parents }); }
+        catch (e) { if (exist_ok && e?.code === 'EEXIST') return; throw _mapVFSError(e); }
+      },
+      async unlink() { try { await getVfs().unlink(_abs()); } catch (e) { throw _mapVFSError(e); } },
+      async rename(target) { const t = target?._path || String(target); const ta = pth.isAbsolute(t) ? t : pth.join(_cwd.value, t); try { await getVfs().rename(_abs(), ta); return _Path(t); } catch (e) { throw _mapVFSError(e); } },
+      async iterdir() {
+        try {
+          const entries = await getVfs().readdir(_abs());
+          return entries.map(name => _Path(pth.join(_p, name)));
+        } catch (e) { throw _mapVFSError(e); }
+      },
+      async glob(pattern) {
+        try { return await getVfs().glob(pth.join(_abs(), pattern)); }
+        catch (e) { throw _mapVFSError(e); }
+      },
+      async touch() { try { await getVfs().touch(_abs()); } catch (e) { throw _mapVFSError(e); } },
+      async stat() {
+        try {
+          const info = await getVfs().stat(_abs());
+          return { st_size: info.size, st_mtime: info.modified?.getTime() / 1000 || 0, st_mode: info.mode || 0, st_type: info.type };
+        } catch (e) { throw _mapVFSError(e); }
+      },
+    };
+  }
+  return _Path;
+}
+
+// ── shutil module ──
+
+function _createShutilModule(getVfs) {
+  return {
+    copy: async (src, dst) => { try { await getVfs().cp(src, dst); } catch (e) { throw _mapVFSError(e); } },
+    copy2: async (src, dst) => { try { await getVfs().cp(src, dst); } catch (e) { throw _mapVFSError(e); } },
+    copytree: async (src, dst) => { try { await getVfs().cp(src, dst, { recursive: true }); } catch (e) { throw _mapVFSError(e); } },
+    rmtree: async (p) => { try { await getVfs().rm(p, { recursive: true }); } catch (e) { throw _mapVFSError(e); } },
+    move: async (src, dst) => { try { await getVfs().rename(src, dst); } catch (e) { throw _mapVFSError(e); } },
+  };
+}
+
+// ── glob module ──
+
+function _createGlobModule(getVfs) {
+  return {
+    glob: async (pattern) => { try { return await getVfs().glob(pattern); } catch (e) { throw _mapVFSError(e); } },
+  };
+}
+
+// ── fs module registration ──
+
+let _adderVFS = null;
+let _vfsPath = null;
+
+export function getAdderVFS() { return _adderVFS; }
+export function _getVfsPath() { return _vfsPath; }
+
+export function setAdderVFS(vfsInstance, pathUtils) {
+  _adderVFS = vfsInstance;
+  if (pathUtils) _vfsPath = pathUtils;
+  // reset cwd and module cache for the new VFS
+  _cwd.value = _HOME;
+  for (const k of Object.keys(_sysModule.modules)) delete _sysModule.modules[k];
+  // re-register modules if path available (allows calling setAdderVFS after initial load)
+  if (_vfsPath) {
+    delete adderModules.os;
+    _ensureFsModules();
+  }
+}
+
+export function _ensureFsModules(pathUtils) {
+  if (adderModules.os) return;
+  if (pathUtils) _vfsPath = pathUtils;
+  if (!_vfsPath) {
+    try { if (typeof path !== 'undefined' && path.join) _vfsPath = path; } catch {}
+  }
+  if (!_vfsPath) return;
+
+  const pth = _vfsPath;
+  const getVfs = () => {
+    if (!_adderVFS) throw new AdderError('RuntimeError', 'filesystem not available — call adder.setVFS(vfsInstance, pathUtils) first');
+    return _adderVFS;
+  };
+
+  adderModules.os = _createOsModule(getVfs, pth);
+  adderModules['os.path'] = adderModules.os.path;
+  adderModules.pathlib = { Path: _createPathClass(getVfs, pth) };
+  adderModules.shutil = _createShutilModule(getVfs);
+  adderModules.glob = _createGlobModule(getVfs);
+}
 
 // ── builtins ──
 
@@ -828,8 +1232,8 @@ export function adderBuiltins(printFn) {
       throw new AdderError('TypeError', `object of type '${pyTypeName(obj)}' has no len()`);
     },
     range: (a, b, c) => new AdderRange(a, b, c),
-    int: (x, base) => { if (base !== undefined) return parseInt(String(x), base); return typeof x === 'string' ? parseInt(x) : Math.trunc(Number(x)); },
-    float: (x) => { if (x === undefined) return 0.0; if (typeof x === 'string') { const s = x.trim().toLowerCase(); if (s === 'inf' || s === '+inf' || s === 'infinity') return Infinity; if (s === '-inf' || s === '-infinity') return -Infinity; if (s === 'nan') return NaN; } return Number(x); },
+    int: (x, base) => { if (x === undefined) return 0; if (base !== undefined) { const n = parseInt(String(x), base); if (isNaN(n)) throw new AdderError('ValueError', `invalid literal for int() with base ${base}: ${pyRepr(String(x))}`); return n; } if (typeof x === 'string') { const n = parseInt(x); if (isNaN(n)) throw new AdderError('ValueError', `invalid literal for int() with base 10: ${pyRepr(x)}`); return n; } return Math.trunc(Number(x)); },
+    float: (x) => { if (x === undefined) return 0.0; if (typeof x === 'string') { const s = x.trim().toLowerCase(); if (s === 'inf' || s === '+inf' || s === 'infinity') return Infinity; if (s === '-inf' || s === '-infinity') return -Infinity; if (s === 'nan') return NaN; if (s === '') throw new AdderError('ValueError', `could not convert string to float: ${pyRepr(x)}`); const n = Number(x); if (isNaN(n)) throw new AdderError('ValueError', `could not convert string to float: ${pyRepr(x)}`); return n; } return Number(x); },
     str: (x) => x === undefined ? '' : pyStr(x),
     bool: (x) => x === undefined ? false : pyBool(x),
     list: async (x) => x === undefined ? [] : await pyCollect(x),
@@ -948,6 +1352,19 @@ export function adderBuiltins(printFn) {
     NotImplementedError: (msg) => new AdderError('NotImplementedError', msg),
     AssertionError: (msg) => new AdderError('AssertionError', msg),
     Exception: (msg) => new AdderError('Exception', msg),
+    FileNotFoundError: (msg) => new AdderError('FileNotFoundError', msg),
+    FileExistsError: (msg) => new AdderError('FileExistsError', msg),
+    IsADirectoryError: (msg) => new AdderError('IsADirectoryError', msg),
+    NotADirectoryError: (msg) => new AdderError('NotADirectoryError', msg),
+    PermissionError: (msg) => new AdderError('PermissionError', msg),
+    OSError: (msg) => new AdderError('OSError', msg),
+    IOError: (msg) => new AdderError('IOError', msg),
+    open: async (pathOrObj, mode) => {
+      if (!_adderVFS) throw new AdderError('RuntimeError', 'filesystem not available — call adder.setVFS(vfsInstance, pathUtils) first');
+      const raw = pathOrObj?._path ? pathOrObj._path : String(pathOrObj);
+      const p = _resolvePath(raw, _vfsPath);
+      return _createAdderFile(_adderVFS, p, mode || 'r');
+    },
   };
   return builtins;
 }

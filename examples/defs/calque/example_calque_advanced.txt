@@ -237,7 +237,7 @@ const { workbook: laidWb, warnings: laidWarn } = laid.compile();
 if (laidWarn.length) ui.display("warnings: " + laidWarn.join(", "));
 
 const laidBytes = await sheet.write(laidWb);
-ui.download("\u2b07 download report.xlsx", laidBytes, "report.xlsx");
+ui.download("⬇ download report.xlsx", laidBytes, "report.xlsx");
 
 /// md
 ## compile and download
@@ -249,4 +249,4 @@ const { workbook, warnings } = roll.compile();
 if (warnings.length) ui.display("warnings: " + warnings.join(", "));
 
 const bytes = await sheet.write(workbook);
-ui.download("\u2b07 download sensors.xlsx", bytes, "sensors.xlsx");
+ui.download("⬇ download sensors.xlsx", bytes, "sensors.xlsx");

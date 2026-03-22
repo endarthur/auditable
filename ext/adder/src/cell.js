@@ -3,65 +3,140 @@
 
 import { adderParse } from './parse.js';
 import { adderEval, AdderScope, AdderError } from './eval.js';
-import { adderBuiltins, pyStr, pyRepr } from './builtins.js';
+import { adderBuiltins, pyStr, pyRepr, _ensureFsModules, getAdderVFS, setAdderVFS } from './builtins.js';
 
-// ── parseNames: extract top-level defines from Python code ──
+// ── parseNames: extract module-scope defines from Python code ──
+// Uses the AST to find assignments at module scope — descends into with/for/if/
+// try/while (which don't create Python scopes) but NOT into def/class (which do).
+// Falls back to regex for unparseable code.
 
 export function pythonParseNames(code) {
+  try {
+    const ast = adderParse(code);
+    const defines = new Set();
+    _collectDefines(ast.body, defines);
+    return defines;
+  } catch {
+    // parse error — fall back to regex (column-0 only)
+    return _parseNamesRegex(code);
+  }
+}
+
+// Walk AST statements, collecting assignment targets.
+// Descends into block statements (with/for/if/try/while) but stops at def/class.
+function _collectDefines(stmts, defines) {
+  for (const node of stmts) {
+    switch (node.type) {
+      case 'Assign':
+        for (const t of node.targets) _collectTargetNames(t, defines);
+        break;
+      case 'AugAssign':
+        _collectTargetNames(node.target, defines);
+        break;
+      case 'AnnAssign':
+        if (node.value) _collectTargetNames(node.target, defines);
+        break;
+      case 'FunctionDef':
+      case 'AsyncFunctionDef':
+        defines.add(node.name);
+        break; // don't descend — new scope
+      case 'ClassDef':
+        defines.add(node.name);
+        break; // don't descend — new scope
+      case 'Import':
+        for (const alias of node.names) defines.add(alias.alias || alias.module);
+        break;
+      case 'ImportFrom':
+        for (const alias of node.names) defines.add(alias.alias || alias.name);
+        break;
+      case 'For':
+      case 'AsyncFor':
+        _collectTargetNames(node.target, defines);
+        _collectDefines(node.body, defines);
+        if (node.orelse) _collectDefines(node.orelse, defines);
+        break;
+      case 'While':
+        _collectDefines(node.body, defines);
+        if (node.orelse) _collectDefines(node.orelse, defines);
+        break;
+      case 'If':
+        _collectDefines(node.body, defines);
+        if (node.orelse) _collectDefines(node.orelse, defines);
+        break;
+      case 'With':
+      case 'AsyncWith':
+        for (const item of node.items) {
+          if (item.optionalVar) _collectTargetNames(item.optionalVar, defines);
+        }
+        _collectDefines(node.body, defines);
+        break;
+      case 'Try':
+        _collectDefines(node.body, defines);
+        if (node.handlers) {
+          for (const h of node.handlers) {
+            if (h.name) defines.add(h.name);
+            if (h.body) _collectDefines(h.body, defines);
+          }
+        }
+        if (node.orelse) _collectDefines(node.orelse, defines);
+        if (node.finalbody) _collectDefines(node.finalbody, defines);
+        break;
+      default:
+        break;
+    }
+  }
+}
+
+// Extract names from assignment targets (Name, Tuple, List, Starred)
+function _collectTargetNames(target, defines) {
+  if (!target) return;
+  if (target.type === 'Name') { defines.add(target.id); return; }
+  if (target.type === 'Tuple' || target.type === 'List') {
+    for (const elt of target.elts) _collectTargetNames(elt, defines);
+    return;
+  }
+  if (target.type === 'Starred' && target.value) {
+    _collectTargetNames(target.value, defines);
+  }
+}
+
+// Regex fallback for unparseable code (column-0 only, same as before)
+function _parseNamesRegex(code) {
   const defines = new Set();
   const lines = code.split('\n');
 
   for (const line of lines) {
-    // only column-0 (not indented)
     if (line.length === 0 || line[0] === ' ' || line[0] === '\t') continue;
     const trimmed = line.trim();
     if (!trimmed || trimmed[0] === '#') continue;
 
     let m;
-
-    // def foo(...): / async def foo(...):
     m = trimmed.match(/^(?:async\s+)?def\s+([a-zA-Z_]\w*)/);
     if (m) { defines.add(m[1]); continue; }
-
-    // class Foo:
     m = trimmed.match(/^class\s+([a-zA-Z_]\w*)/);
     if (m) { defines.add(m[1]); continue; }
-
-    // from foo import x, y as z
     m = trimmed.match(/^from\s+\S+\s+import\s+(.+)/);
     if (m) {
-      const parts = m[1].split(',');
-      for (const part of parts) {
+      for (const part of m[1].split(',')) {
         const asMatch = part.trim().match(/(\w+)\s+as\s+(\w+)/);
         if (asMatch) defines.add(asMatch[2]);
-        else {
-          const name = part.trim().match(/^([a-zA-Z_]\w*)/);
-          if (name) defines.add(name[1]);
-        }
+        else { const name = part.trim().match(/^([a-zA-Z_]\w*)/); if (name) defines.add(name[1]); }
       }
       continue;
     }
-
-    // import foo [as bar]
     m = trimmed.match(/^import\s+(\w+)(?:\s+as\s+(\w+))?/);
     if (m) { defines.add(m[2] || m[1]); continue; }
-
-    // tuple unpacking: x, y = ... or a, *b, c = ... (must not start with keyword)
     m = trimmed.match(/^(\*?[a-zA-Z_]\w*(?:\s*,\s*\*?[a-zA-Z_]\w*)+)\s*=/);
     if (m && !_isPyKeyword(m[1].split(',')[0].trim().replace(/^\*/, ''))) {
-      const names = m[1].split(',');
-      for (const n of names) {
+      for (const n of m[1].split(',')) {
         const name = n.trim().replace(/^\*/, '');
         if (name && /^[a-zA-Z_]\w*$/.test(name)) defines.add(name);
       }
       continue;
     }
-
-    // simple assignment: x = ... or x: type = ...
     m = trimmed.match(/^([a-zA-Z_]\w*)\s*(?::[^=]+=|=)/);
     if (m && !_isPyKeyword(m[1])) { defines.add(m[1]); continue; }
   }
-
   return defines;
 }
 
@@ -133,11 +208,17 @@ export async function pythonExecute(code, scopeIn, cell) {
       return null;
     });
     // expose key builtins — skip internal/DOM-only ones
-    const expose = ['ui', 'std', 'load', 'install', 'installBinary', 'display', 'invalidation', 'worker', 'workerPool', 'notebook'];
+    const expose = ['ui', 'std', 'load', 'install', 'installBinary', 'display', 'invalidation', 'worker', 'workerPool', 'notebook', 'vfs'];
     for (const name of expose) {
       if (ctx[name] !== undefined) scope.set(name, ctx[name]);
     }
   }
+
+  // Wire VFS from auditable runtime (lazy, once)
+  if (!getAdderVFS() && typeof window !== 'undefined' && window._notebookVFS) {
+    setAdderVFS(window._notebookVFS, window._vfsPath);
+  }
+  _ensureFsModules();
 
   // evaluate
   let lastExpr;
@@ -175,6 +256,8 @@ export async function pythonExecute(code, scopeIn, cell) {
   }
   return { defines, output: parts.length ? parts.join('\n') : undefined };
 }
+
+export { setAdderVFS };
 
 function _jsonReplacer(key, value) {
   if (value instanceof Map) return Object.fromEntries(value);

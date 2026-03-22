@@ -10,7 +10,7 @@ workshop([
 Use the **prev** and **next** buttons below to navigate
 between pages, or click the progress dots to jump directly.
 
-Close this panel with the **\u00d7** button. Reopen it
+Close this panel with the **×** button. Reopen it
 anytime with the **workshop** tab on the right edge
 of the screen.`
   },
@@ -22,22 +22,22 @@ has an \`onInput\` callback that fires on every
 input event.
 
 With callbacks, dragging a slider calls your function
-directly \u2014 no cell re-run, no DAG traversal, no
+directly — no cell re-run, no DAG traversal, no
 scope rebuild. This is essential for real-time audio
 where even a few milliseconds of latency matters.`
   },
   {
     title: 'Manual cells & mutable state',
     content: md`The \`// %manual\` directive means this
-cell only runs on Ctrl+Enter or Run All \u2014 never
+cell only runs on Ctrl+Enter or Run All — never
 automatically.
 
 Manual cells can use \`let\` for mutable state
 (\`currentWave\`, \`currentOctave\`). Callbacks write
 to these variables directly. In a reactive cell,
 scope is passed by value so cross-cell mutation
-doesn\u2019t work \u2014 but within a single manual cell,
-it\u2019s fine.`
+doesn’t work — but within a single manual cell,
+it’s fine.`
   },
   {
     title: 'Web Audio & invalidation',

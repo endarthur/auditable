@@ -152,8 +152,8 @@ function render() {
     ctx.globalAlpha = 1;
   }
 
-  let label = `${view} \u00b7 ${W}\u00d7${H} \u00b7 ${elapsed} ms`;
-  if (contourData) label += ` \u00b7 ${contourData.features.length} contours`;
+  let label = `${view} · ${W}×${H} · ${elapsed} ms`;
+  if (contourData) label += ` · ${contourData.features.length} contours`;
   statusEl.textContent = label;
 }
 

@@ -64,7 +64,7 @@ function planeMesh(x0, y0, x1, y1, z, angle) {
 
 /// code
 // parameters
-const meshNames = ["sphere (r=2)", "box (2\u00d72\u00d72)", "tilted plane (30\u00b0)"];
+const meshNames = ["sphere (r=2)", "box (2×2×2)", "tilted plane (30°)"];
 const meshChoice = ui.dropdown("mesh", meshNames);
 const meshIdx = meshNames.indexOf(meshChoice);
 const gridRes = ui.slider("grid resolution", 8, {min: 4, max: 40, step: 1});
@@ -261,7 +261,7 @@ const volume = volSum * (blockSize ** 3);
 
 const analyticalVols = [
   (4 / 3) * Math.PI * 8,  // sphere r=2
-  8,                        // box 2\u00d72\u00d72
+  8,                        // box 2×2×2
   0,                        // plane (open)
 ];
 const exact = analyticalVols[meshIdx];
@@ -269,6 +269,6 @@ const errStr = exact > 0 ? ` (exact ${exact.toFixed(2)}, err ${((volume - exact)
 
 ctx.fillStyle = '#c89b3c';
 ctx.font = '12px monospace';
-ctx.fillText(`${mesh.name} \u2014 ${nInside}/${totalBlocks} blocks, vol \u2248 ${volume.toFixed(2)}${errStr}`, 8, H - 28);
+ctx.fillText(`${mesh.name} — ${nInside}/${totalBlocks} blocks, vol ≈ ${volume.toFixed(2)}${errStr}`, 8, H - 28);
 ctx.fillStyle = '#888';
-ctx.fillText(`grid ${nx}\u00b3, sub ${subRes}\u00b3, ${elapsed} ms`, 8, H - 12);
+ctx.fillText(`grid ${nx}³, sub ${subRes}³, ${elapsed} ms`, 8, H - 12);

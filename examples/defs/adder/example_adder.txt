@@ -83,7 +83,7 @@ const base = 100
 const factor = 3
 const calc = await mpy`
 result = ${base} * ${factor}
-label = f"${base} \u00d7 ${factor}"
+label = f"${base} × ${factor}"
 `
 display(`${calc.label} = ${calc.result}`)
 

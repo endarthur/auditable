@@ -27,7 +27,7 @@ ALAS Level 1: SIMD-accelerated `daxpy` (y := αx + y) and `ddot` (dot product). 
 /// code
 // Level 1 demo: daxpy and ddot
 const n1 = ui.slider("vector length", 8, {min: 2, max: 64, step: 1});
-const alpha = ui.slider("\u03b1 (scale)", 2.0, {min: -5.0, max: 5.0, step: 0.1});
+const alpha = ui.slider("α (scale)", 2.0, {min: -5.0, max: 5.0, step: 0.1});
 
 // set up vectors at known offsets
 const xOff = 0, yOff = 100, zOff = 200;
@@ -45,10 +45,10 @@ const z = Array.from(f64.subarray(zOff, zOff + n1));
 
 const tbl = [];
 for (let i = 0; i < n1; i++) {
-  tbl.push({ i, x: f64[xOff + i], y: f64[yOff + i], [`\u03b1x+y`]: z[i] });
+  tbl.push({ i, x: f64[xOff + i], y: f64[yOff + i], [`αx+y`]: z[i] });
 }
 ui.table(tbl);
-ui.display(`dot(x, y) = ${dot.toFixed(2)} \u00b7 ||x|| = ${nrm.toFixed(4)}`);
+ui.display(`dot(x, y) = ${dot.toFixed(2)} · ||x|| = ${nrm.toFixed(4)}`);
 
 /// md
 ## Kriging — spatial interpolation via LU solve
@@ -165,7 +165,7 @@ for (const s of samples) {
   ctx.stroke();
 }
 
-ui.display(`ordinary kriging \u00b7 ${gridN}\u00d7${gridN} grid \u00b7 ${nPts} samples \u00b7 ${elapsed} ms`);
+ui.display(`ordinary kriging · ${gridN}×${gridN} grid · ${nPts} samples · ${elapsed} ms`);
 
 /// md
 ## Eigendecomposition — orientation tensor analysis
@@ -177,8 +177,8 @@ structural geologists characterize fabric shape using the eigenvalues of a 3×3 
 // normalized eigenvalues: S1 >= S2 >= S3, S1+S2+S3 = 1
 // Woodcock parameters: K = ln(S1/S2) / ln(S2/S3), C = ln(S1/S3)
 
-const s1w = ui.slider("S\u2081 weight", 0.7, {min: 0.01, max: 0.98, step: 0.01});
-const s2w = ui.slider("S\u2082 weight", 0.2, {min: 0.01, max: 0.98, step: 0.01});
+const s1w = ui.slider("S₁ weight", 0.7, {min: 0.01, max: 0.98, step: 0.01});
+const s2w = ui.slider("S₂ weight", 0.2, {min: 0.01, max: 0.98, step: 0.01});
 
 // build symmetric orientation tensor with desired eigenvalue ratios
 const s3w = Math.max(0.01, 1 - s1w - s2w);
@@ -220,8 +220,8 @@ if (C > 1.5) fabric = K > 1 ? "cluster (prolate)" : "girdle (oblate)";
 else if (C > 0.5) fabric = K > 1 ? "weak cluster" : "weak girdle";
 
 ui.display(`eigenvalues: [${e.map(v => v.toFixed(4)).join(", ")}]`);
-ui.display(`K = ${K.toFixed(3)}, C = ${C.toFixed(3)} \u2192 **${fabric}**`);
-ui.display(`trace check: ${eigSum.toFixed(6)} (should \u2248 1.0)`);
+ui.display(`K = ${K.toFixed(3)}, C = ${C.toFixed(3)} → **${fabric}**`);
+ui.display(`trace check: ${eigSum.toFixed(6)} (should ≈ 1.0)`);
 
 /// md
 **routines used:**

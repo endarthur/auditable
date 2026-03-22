@@ -58,7 +58,7 @@ a 1D diffusion simulation using natra scopes. each timestep computes the Laplaci
 /// code
 // %manual
 const N = ui.slider("grid points", 200, {min: 50, max: 500, step: 10});
-const diffCoeff = ui.slider("diffusion \u00d7 1000", 500, {min: 10, max: 2000, step: 10});
+const diffCoeff = ui.slider("diffusion × 1000", 500, {min: 10, max: 2000, step: 10});
 const steps = ui.slider("steps per frame", 20, {min: 1, max: 100, step: 1});
 const D = diffCoeff / 1000;
 const dx = 1.0 / N;
@@ -145,11 +145,11 @@ views create new ndarray descriptors over the same memory. no data is copied —
 
 /// code
 const M = ctx.array([[1, 2, 3], [4, 5, 6]]);
-ui.display("M (2\u00d73):");
+ui.display("M (2×3):");
 ui.table(ctx.toArray(M).map((row, i) => ({ row: i, ...Object.fromEntries(row.map((v, j) => [`c${j}`, v])) })));
 
 const MT = M.T;
-ui.display("M.T (3\u00d72) \u2014 same ptr, reversed strides:");
+ui.display("M.T (3×2) — same ptr, reversed strides:");
 ui.table(ctx.toArray(MT).map((row, i) => ({ row: i, ...Object.fromEntries(row.map((v, j) => [`c${j}`, v])) })));
 
 ui.display(`M.ptr = ${M.ptr}, M.T.ptr = ${MT.ptr} (same memory)`);
@@ -163,7 +163,7 @@ ui.table(ctx.toArray(grid).map((row, i) => ({ row: i, ...Object.fromEntries(row.
 
 // slice: select sub-region
 const col01 = grid.slice(null, [0, 2]);
-ui.display("grid[:, 0:2] \u2014 first two columns:");
+ui.display("grid[:, 0:2] — first two columns:");
 ui.table(ctx.toArray(col01).map((row, i) => ({ row: i, ...Object.fromEntries(row.map((v, j) => [`c${j}`, v])) })));
 
 // slice with step
@@ -172,7 +172,7 @@ ui.display("flat[::2] = " + JSON.stringify(ctx.toArray(everyOther)));
 
 // diag: diagonal of a square matrix
 const sq = ctx.array([[10, 20, 30], [40, 50, 60], [70, 80, 90]]);
-ui.display("diag of 3\u00d73 matrix = " + JSON.stringify(ctx.toArray(sq.diag())));
+ui.display("diag of 3×3 matrix = " + JSON.stringify(ctx.toArray(sq.diag())));
 
 /// md
 ## broadcasting
@@ -191,7 +191,7 @@ ui.table(ctx.toArray(added).map((r, i) => ({ row: i, ...Object.fromEntries(r.map
 const col = ctx.array([[1], [2], [3]]);
 const r2 = ctx.array([[10, 20, 30, 40]]);
 const outer = ctx.scope(s => s.mul(col, r2));
-ui.display("[3,1] \u00d7 [1,4] outer product:");
+ui.display("[3,1] × [1,4] outer product:");
 ui.table(ctx.toArray(outer).map((r, i) => ({ row: i, ...Object.fromEntries(r.map((v, j) => [`c${j}`, v])) })));
 
 /// md
@@ -244,23 +244,23 @@ pass an `axis` argument to reduce along a single dimension instead of flattening
 
 /// code
 const G = ctx.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]]);
-ui.display("G (3\u00d73):");
+ui.display("G (3×3):");
 ui.table(ctx.toArray(G).map((r, i) => ({ row: i, c0: r[0], c1: r[1], c2: r[2] })));
 
 const colSums = ctx.scope(s => s.sum(G, 0));
-ui.display("sum(G, 0) \u2014 column sums: " + JSON.stringify(ctx.toArray(colSums)));
+ui.display("sum(G, 0) — column sums: " + JSON.stringify(ctx.toArray(colSums)));
 
 const rowSums = ctx.scope(s => s.sum(G, 1));
-ui.display("sum(G, 1) \u2014 row sums: " + JSON.stringify(ctx.toArray(rowSums)));
+ui.display("sum(G, 1) — row sums: " + JSON.stringify(ctx.toArray(rowSums)));
 
 const colMeans = ctx.scope(s => s.mean(G, 0));
-ui.display("mean(G, 0) \u2014 column means: " + JSON.stringify(ctx.toArray(colMeans)));
+ui.display("mean(G, 0) — column means: " + JSON.stringify(ctx.toArray(colMeans)));
 
 const rowMin = ctx.scope(s => s.min(G, 1));
-ui.display("min(G, 1) \u2014 row minimums: " + JSON.stringify(ctx.toArray(rowMin)));
+ui.display("min(G, 1) — row minimums: " + JSON.stringify(ctx.toArray(rowMin)));
 
 const colMax = ctx.scope(s => s.max(G, 0));
-ui.display("max(G, 0) \u2014 column maximums: " + JSON.stringify(ctx.toArray(colMax)));
+ui.display("max(G, 0) — column maximums: " + JSON.stringify(ctx.toArray(colMax)));
 
 /// code
 // nan-safe axis reductions
@@ -284,7 +284,7 @@ ui.display("nanmean(H, 1): " + JSON.stringify(ctx.toArray(nanRowMean)));
 const L = ctx.array([[1, 2], [3, 4]]);
 const N2 = ctx.array([[5, 6], [7, 8]]);
 const prod2 = ctx.scope(s => s.matmul(L, N2));
-ui.display("L \u00d7 N:");
+ui.display("L × N:");
 ui.table(ctx.toArray(prod2).map((r, i) => ({ row: i, c0: r[0], c1: r[1] })));
 
 // solve A*x = b
@@ -375,7 +375,7 @@ ui.display("uniform [0,1): " + JSON.stringify(ctx.toArray(U).map(v => +v.toFixed
 const Z = ctx.randn([8]);
 ui.display("normal N(0,1): " + JSON.stringify(ctx.toArray(Z).map(v => +v.toFixed(6))));
 
-// Monte Carlo \u03c0 estimate
+// Monte Carlo π estimate
 ctx.seed(0);
 const N3 = 50000;
 const xs = ctx.random([N3]);
@@ -385,7 +385,7 @@ const inside = ctx.scope(s => {
   return s.sum(s.le(r2, 1));
 });
 const piEst = 4 * inside / N3;
-ui.display(`\nMonte Carlo \u03c0 (${N3} points): ${piEst.toFixed(6)} (error: ${Math.abs(piEst - Math.PI).toExponential(2)})`);
+ui.display(`\nMonte Carlo π (${N3} points): ${piEst.toFixed(6)} (error: ${Math.abs(piEst - Math.PI).toExponential(2)})`);
 
 /// md
 ## display — toString and trace

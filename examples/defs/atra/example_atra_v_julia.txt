@@ -105,7 +105,7 @@ function frame() {
   ctx.drawImage(tmp, 0, 0, size, size);
 
   const ms = (performance.now() - t0).toFixed(1);
-  info.textContent = `c = ${cr.toFixed(3)} + ${ci.toFixed(3)}i \u00b7 ${ms} ms/frame \u00b7 ${res}\u00d7${res}`;
+  info.textContent = `c = ${cr.toFixed(3)} + ${ci.toFixed(3)}i · ${ms} ms/frame · ${res}×${res}`;
 
   angle += speed * 0.02;
   requestAnimationFrame(frame);

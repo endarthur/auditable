@@ -10,7 +10,7 @@ workshop([
 Use the **prev** and **next** buttons below to navigate
 between pages, or click the progress dots to jump directly.
 
-Close this panel with the **\u00d7** button. Reopen it
+Close this panel with the **×** button. Reopen it
 anytime with the **workshop** tab on the right edge
 of the screen.`
   },
@@ -18,7 +18,7 @@ of the screen.`
     title: 'Mixed widget patterns',
     content: md`This example uses **both** reactive and
 callback widgets in the same cell. The \`count\` slider
-is reactive \u2014 changing it re-runs the cell to resize
+is reactive — changing it re-runs the cell to resize
 the particle array.
 
 The other sliders (speed, size, hue) use \`onInput\`

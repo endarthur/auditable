@@ -194,7 +194,7 @@ for (let i = 0; i < nPts; i++) {
   ctx.stroke();
 }
 
-ui.display(`${modelName} \u00b7 ${gridN}\u00d7${gridN} grid \u00b7 ${nPts} samples \u00b7 Wasm kernel: ${elapsed} ms`);
+ui.display(`${modelName} · ${gridN}×${gridN} grid · ${nPts} samples · Wasm kernel: ${elapsed} ms`);
 
 /// code
 // variogram curve plot
@@ -216,7 +216,7 @@ cx.stroke();
 cx.fillStyle = "#999";
 cx.font = "11px monospace";
 cx.fillText("h", w - 20, h - pad + 4);
-cx.fillText("\u03b3(h)", pad - 4, 14);
+cx.fillText("γ(h)", pad - 4, 14);
 
 // plot selected model curve
 const evalModel = wasm[modelName]; // spherical, gaussian, or exponential

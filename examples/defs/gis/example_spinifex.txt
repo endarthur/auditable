@@ -34,7 +34,7 @@ ui.display("downloading SRTM tile...");
 const dem = await spx.srtm(map, [-44, -21, -43, -20], {
   onProgress: (name, i, n) => ui.display(`fetching ${name} (${i}/${n})`)
 });
-ui.display(`DEM: ${dem.width}\u00d7${dem.height}, elevation ${dem.min.toFixed(0)}\u2013${dem.max.toFixed(0)} m`);
+ui.display(`DEM: ${dem.width}×${dem.height}, elevation ${dem.min.toFixed(0)}–${dem.max.toFixed(0)} m`);
 
 /// md
 ## elevation profile
@@ -103,7 +103,7 @@ ctx.fillText(`${eMax.toFixed(0)} m`, 4, 14);
 ctx.fillText(`${eMin.toFixed(0)} m`, 4, h - 4);
 ctx.fillText(`${(maxDist / 1000).toFixed(1)} km`, w - 50, h - 4);
 
-ui.display(`profile: ${(maxDist / 1000).toFixed(1)} km, ${eMin.toFixed(0)}\u2013${eMax.toFixed(0)} m`);
+ui.display(`profile: ${(maxDist / 1000).toFixed(1)} km, ${eMin.toFixed(0)}–${eMax.toFixed(0)} m`);
 
 /// md
 ## point sampling

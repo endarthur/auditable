@@ -61,7 +61,7 @@ function runOne() {
 
   realNum++;
   seed = (seed * 69069 + 1) & 0x7fffffff;
-  genLabel.textContent = `realization ${realNum} \u00b7 ${elapsed.toFixed(1)} ms \u00b7 seed ${seed}`;
+  genLabel.textContent = `realization ${realNum} · ${elapsed.toFixed(1)} ms · seed ${seed}`;
 }
 
 // controls
@@ -73,10 +73,10 @@ btnStep.textContent = "step";
 btnStep.onclick = () => { runOne(); };
 
 const btnPlay = document.createElement("button");
-btnPlay.textContent = "\u25b6 play";
+btnPlay.textContent = "▶ play";
 btnPlay.onclick = () => {
   playing = !playing;
-  btnPlay.textContent = playing ? "\u23f8 pause" : "\u25b6 play";
+  btnPlay.textContent = playing ? "⏸ pause" : "▶ play";
   if (playing) {
     timer = setInterval(runOne, 50);
   } else clearInterval(timer);
@@ -86,7 +86,7 @@ const btnReset = document.createElement("button");
 btnReset.textContent = "reset";
 btnReset.onclick = () => {
   playing = false; clearInterval(timer);
-  btnPlay.textContent = "\u25b6 play";
+  btnPlay.textContent = "▶ play";
   seed = 69069; realNum = 0;
   runOne();
 };

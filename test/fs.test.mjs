@@ -10,6 +10,11 @@ if (typeof globalThis.window === 'undefined') globalThis.window = globalThis;
 // mock notifyDirty (from editor.js)
 globalThis.notifyDirty = () => {};
 
+// import VFS classes for test setup
+const { VFS } = await import('../ext/vfs/src/vfs.js');
+const { CommentBackend } = await import('../ext/vfs/src/comment.js');
+const { MemoryBackend } = await import('../ext/vfs/src/memory.js');
+
 // import fs module functions
 const { mimeFromExt, isTextType, validatePath, globMatch, uint8ToBase64, base64ToUint8, createNotebookFs } = await import('../src/js/fs.js');
 
@@ -96,6 +101,14 @@ describe('notebook.fs core', () => {
 
   beforeEach(() => {
     window._notebookFS = new Map();
+    // set up shared VFS instance for tests
+    const testVfs = new VFS();
+    const backend = new CommentBackend({});
+    Object.defineProperty(backend, '_map', { get: () => window._notebookFS, configurable: true });
+    backend._syncComment = () => {};
+    testVfs._mounts.set('/home/nb', backend);
+    testVfs._mounts.set('/tmp', new MemoryBackend());
+    window._notebookVFS = testVfs;
     fs = createNotebookFs();
   });
 
@@ -174,29 +187,29 @@ describe('notebook.fs core', () => {
     it('single file', async () => {
       await fs.write('file.txt', 'content');
       assert.equal(fs.exists('file.txt'), true);
-      fs.delete('file.txt');
+      await fs.delete('file.txt');
       assert.equal(fs.exists('file.txt'), false);
     });
 
     it('recursive folder', async () => {
       await fs.write('data/a.csv', 'a');
       await fs.write('data/b.csv', 'b');
-      const count = fs.delete('data', { recursive: true });
+      const count = await fs.delete('data', { recursive: true });
       assert.equal(count, 2);
       assert.equal(fs.exists('data/a.csv'), false);
       assert.equal(fs.exists('data/b.csv'), false);
     });
 
-    it('folder without recursive throws', async () => {
+    it('folder without recursive rejects', async () => {
       await fs.write('data/a.csv', 'a');
-      assert.throws(() => fs.delete('data/'), /recursive/);
+      await assert.rejects(() => fs.delete('data/'), /recursive/);
     });
   });
 
   describe('rename', () => {
     it('file rename', async () => {
       await fs.write('old.txt', 'content');
-      fs.rename('old.txt', 'new.txt');
+      await fs.rename('old.txt', 'new.txt');
       assert.equal(fs.exists('old.txt'), false);
       assert.equal(fs.exists('new.txt'), true);
       const text = await fs.read('new.txt');
@@ -206,7 +219,7 @@ describe('notebook.fs core', () => {
     it('folder rename', async () => {
       await fs.write('data/a.csv', 'a');
       await fs.write('data/b.csv', 'b');
-      fs.rename('data', 'archive');
+      await fs.rename('data', 'archive');
       assert.equal(fs.exists('data/a.csv'), false);
       assert.equal(fs.exists('archive/a.csv'), true);
       assert.equal(fs.exists('archive/b.csv'), true);
@@ -216,7 +229,7 @@ describe('notebook.fs core', () => {
   describe('copy', () => {
     it('file copy', async () => {
       await fs.write('src.txt', 'content');
-      fs.copy('src.txt', 'dest.txt');
+      await fs.copy('src.txt', 'dest.txt');
       assert.equal(fs.exists('src.txt'), true);
       assert.equal(fs.exists('dest.txt'), true);
       const text = await fs.read('dest.txt');

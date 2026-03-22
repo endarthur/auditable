@@ -55,7 +55,7 @@ const samplePlan = {
 
 /// code collapsed
 const project = plan.parsePlan(samplePlan);
-ui.display(`"${project.title}" \u2014 ${project.tasks.length} tasks, ${project.templates.length} template(s)`);
+ui.display(`"${project.title}" — ${project.tasks.length} tasks, ${project.templates.length} template(s)`);
 
 /// md
 ## inspect the project
@@ -65,7 +65,7 @@ const calInfo = [];
 if (project.calendarPreset) calInfo.push(`Preset: ${project.calendarPreset}`);
 calInfo.push(`${project.calendar.holidays.length} holidays`);
 calInfo.push(`${project.calendar.blocked.length} blocked period(s)`);
-ui.display(calInfo.join(" \u00b7 "));
+ui.display(calInfo.join(" · "));
 
 if (project.templates.length) {
   ui.display("### Templates");
@@ -78,7 +78,7 @@ if (project.templates.length) {
 
 const linked = project.tasks.filter(t => plan.isLinkedPlanTask(t));
 const detached = project.tasks.filter(t => t.id && !plan.isLinkedPlanTask(t));
-ui.display(`Linked: ${linked.length} \u00b7 Independent: ${detached.length}`);
+ui.display(`Linked: ${linked.length} · Independent: ${detached.length}`);
 
 /// md
 ## schedule + gantt
@@ -87,13 +87,13 @@ ui.display(`Linked: ${linked.length} \u00b7 Independent: ${detached.length}`);
 const tasks = plan.buildSchedulerTasks(project.tasks);
 const result = plan.schedule(tasks, project.calendar, project.projectStart);
 
-ui.display(`Duration: ${result.projectDuration} days \u00b7 Critical path: ${result.criticalPath.length} tasks`);
+ui.display(`Duration: ${result.projectDuration} days · Critical path: ${result.criticalPath.length} tasks`);
 
 ui.table(result.scheduled.map(t => ({
   ID: t.id, Name: t.name || t.id, Group: t.group || "",
   Start: t.earlyStart.toISOString().slice(0,10),
   Finish: t.earlyFinish.toISOString().slice(0,10),
-  Float: t.totalFloat, CP: t.isCritical ? "\u2731" : "",
+  Float: t.totalFloat, CP: t.isCritical ? "✱" : "",
 })), { sortable: true, filter: true });
 
 /// code collapsed
@@ -158,7 +158,7 @@ if (project.templates.length) {
       ID: t.id, Name: t.name, Group: t.group,
       PERT: `${t.o}/${t.m}/${t.p}`,
       Depends: t.depends,
-      Linked: plan.isLinkedPlanTask(t) ? "\u25cf" : "",
+      Linked: plan.isLinkedPlanTask(t) ? "●" : "",
     })));
   }
 }
@@ -174,7 +174,7 @@ To save, run the last cell.
 // Ctrl+Enter to open file picker
 const f = await file(".plan,.json");
 const samplePlan = plan.parsePlan(f.text);
-ui.display(`Loaded "${samplePlan.title}" \u2014 replace samplePlan above to use it.`);
+ui.display(`Loaded "${samplePlan.title}" — replace samplePlan above to use it.`);
 
 /// code
 // %manual

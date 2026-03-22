@@ -4,16 +4,16 @@
 /// md
 # virtual filesystem
 
-`vfs` is a pluggable virtual filesystem with a mount table, path resolution, permissions, and multiple backends. mount different storage engines at different paths and interact with them through a unified POSIX-like API.
+`vfs` is the notebook's shared VFS instance (with `/home/nb`, `/tmp`, and `/usr/lib/python` pre-mounted). `std.VFS` is the class for creating custom standalone instances.
 
-available as `vfs` (the VFS class) and `std.VFS` in every cell.
+`std.VFS.create()` creates a fresh VFS with a memory backend — useful for isolated scratch work.
 
 /// md
 ## create and mount
 
 /// code
 // create a VFS with a memory backend at /
-const fs = await vfs.create();
+const fs = await std.VFS.create();
 
 // write some files
 await fs.mkdir("/data");
@@ -32,13 +32,13 @@ await fs.writeFile("/tmp/scratch.txt", "ephemeral");
 // list mounts
 ui.display("mounts:");
 for (const m of fs.mounts()) {
-  ui.display(`  ${m.path} \u2192 ${m.type}`);
+  ui.display(`  ${m.path} → ${m.type}`);
 }
 
 /// md
 ## path utilities
 
-VFS includes a `path` module with `join`, `dirname`, `basename`, `extname`, `normalize`, `resolve`, `relative`, `mime` \u2014 no dependencies, works everywhere.
+VFS includes a `path` module with `join`, `dirname`, `basename`, `extname`, `normalize`, `resolve`, `relative`, `mime` — no dependencies, works everywhere.
 
 /// code
 const p = std.path;
@@ -85,7 +85,7 @@ ui.display(`${usage.files} files, ${usage.directories} directories, ${std.fmt(us
 /// md
 ## multiple mounts
 
-mount a second memory backend at `/scratch` \u2014 it gets its own isolated storage. path resolution finds the longest matching mount prefix.
+mount a second memory backend at `/scratch` — it gets its own isolated storage. path resolution finds the longest matching mount prefix.
 
 /// code
 await fs.mount("/scratch", { type: "memory" });
@@ -95,8 +95,8 @@ await fs.writeFile("/scratch/temp.txt", "isolated from /");
 // resolve shows which mount handles each path
 const r1 = fs.resolve("/data/cities.csv");
 const r2 = fs.resolve("/scratch/temp.txt");
-ui.display(`/data/cities.csv \u2192 mount: ${r1.mount}, subpath: ${r1.subpath}`);
-ui.display(`/scratch/temp.txt \u2192 mount: ${r2.mount}, subpath: ${r2.subpath}`);
+ui.display(`/data/cities.csv → mount: ${r1.mount}, subpath: ${r1.subpath}`);
+ui.display(`/scratch/temp.txt → mount: ${r2.mount}, subpath: ${r2.subpath}`);
 
 // readdir at root shows child mount names
 const root = await fs.readdir("/");
@@ -111,11 +111,11 @@ for (const m of fs.mounts()) {
 /// md
 ## overlay: layered filesystem
 
-`OverlayBackend` layers a writable upper over a read-only lower \u2014 like Docker's overlayfs. edits go to the upper layer; the lower stays pristine. deletes create whiteout markers.
+`OverlayBackend` layers a writable upper over a read-only lower — like Docker's overlayfs. edits go to the upper layer; the lower stays pristine. deletes create whiteout markers.
 
 /// code
 // create an overlay VFS
-const ovfs = await vfs.create({
+const ovfs = await std.VFS.create({
   type: "overlay",
   lower: { type: "memory" },
   upper: { type: "memory" },
@@ -151,7 +151,7 @@ ui.display("after reset, utils.js visible: " + await ovfs.exists("/lib/utils.js"
 /// md
 ## events
 
-VFS emits `write`, `delete`, `mkdir`, `mount`, `unmount` events \u2014 useful for reactive UIs.
+VFS emits `write`, `delete`, `mkdir`, `mount`, `unmount` events — useful for reactive UIs.
 
 /// code
 const log = [];

@@ -16,7 +16,7 @@ const alpack = await load("./ext/atra/lib/alpack.src.js");
 
 const nPts = ui.slider("samples", 25, {min: 5, max: 60, step: 1});
 const gridN = ui.slider("grid", 100, {min: 40, max: 200, step: 10});
-const eps0 = ui.slider("\u03b5 (shape)", 20.0, {min: 1, max: 100, step: 1});
+const eps0 = ui.slider("ε (shape)", 20.0, {min: 1, max: 100, step: 1});
 
 /// code
 // all-atra RBF interpolation — ALPACK solver + application kernel
@@ -176,7 +176,7 @@ for (let i = 0; i < nPts; i++) {
   ctx.stroke();
 }
 
-ui.display(`RBF interpolation \u00b7 ${gridN}\u00d7${gridN} grid \u00b7 ${nPts} samples \u00b7 \u03b5=${eps0} \u00b7 all-Wasm: ${elapsed} ms`);
+ui.display(`RBF interpolation · ${gridN}×${gridN} grid · ${nPts} samples · ε=${eps0} · all-Wasm: ${elapsed} ms`);
 
 /// md
 **how it works:** `alpack.src.js` exports each ALPACK routine as a source string, plus a dependency map. `std.include(alpack, 'alpack.dgetrf', 'alpack.dgetrs')` resolves transitive dependencies and returns the needed source. `${}` splices it into the tagged template — atra treats string interpolations as source inclusion. the result is a single Wasm module where `rbf.solve` calls `alpack.dgetrf` and `alpack.dgetrs` with plain `call` instructions. the entire pipeline runs in Wasm; JS only writes sample coordinates into shared linear memory and reads the grid back for rendering.

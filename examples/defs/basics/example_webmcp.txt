@@ -161,7 +161,7 @@ manifest tools reference cells by name (via `// %cellName`). this decouples gove
 // %cellName sensors
 // %mcp
 // referenced by the "getSensorData" manifest tool
-ui.display(`sensor data: ${sensorData.length} readings, ${sensorData[0].time}\u2013${sensorData[sensorData.length-1].time}s`);
+ui.display(`sensor data: ${sensorData.length} readings, ${sensorData[0].time}–${sensorData[sensorData.length-1].time}s`);
 
 /// code
 // %cellName analysis
@@ -169,7 +169,7 @@ ui.display(`sensor data: ${sensorData.length} readings, ${sensorData[0].time}\u2
 // referenced by the "runSmoothing" manifest tool
 const tempRange = std.extent(smoothed, d => d.temp);
 const humRange = std.extent(smoothed, d => d.humidity);
-ui.display(`smoothed ranges \u2014 temp: ${tempRange[0].toFixed(1)}\u2013${tempRange[1].toFixed(1)}\u00b0C, humidity: ${humRange[0].toFixed(0)}\u2013${humRange[1].toFixed(0)}%`);
+ui.display(`smoothed ranges — temp: ${tempRange[0].toFixed(1)}–${tempRange[1].toFixed(1)}°C, humidity: ${humRange[0].toFixed(0)}–${humRange[1].toFixed(0)}%`);
 
 /// md
 ## filesystem sandboxing
@@ -188,7 +188,7 @@ ui.display(`fs roundtrip: ${back.length} readings stored under data/`);
 // %mcp fs:read reports/
 // :read variant — agent can only read, not write or delete
 await notebook.fs.write("reports/summary.txt",
-  `Sensor summary: ${sensorData.length} readings, temp ${tempRange[0].toFixed(1)}\u2013${tempRange[1].toFixed(1)}\u00b0C`);
+  `Sensor summary: ${sensorData.length} readings, temp ${tempRange[0].toFixed(1)}–${tempRange[1].toFixed(1)}°C`);
 ui.display("report saved (agent can read but not modify)");
 
 /// md

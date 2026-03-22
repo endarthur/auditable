@@ -1,0 +1,122 @@
+/// auditable
+/// title: unified filesystem
+/// module: @gcu/adder ext/adder/index.js
+
+/// md
+# unified filesystem
+
+`notebook.fs` and `vfs` share the same storage. `notebook.fs` uses relative paths (rooted at `/home/nb`). `vfs` uses absolute paths with a full mount table. one filesystem, two API styles.
+
+| API | path style | example |
+|-----|-----------|---------|
+| `notebook.fs` | relative | `notebook.fs.write('data.csv', ...)` |
+| `vfs` | absolute | `vfs.readFile('/home/nb/data.csv')` |
+| Python `open()` | relative (cwd = `/home/nb`) | `open('data.csv')` |
+
+/// md
+## write from notebook.fs, read from vfs
+
+/// code
+// notebook.fs.write — relative path
+await notebook.fs.write("survey/drillholes.csv",
+  `hole,from,to,fe
+DDH01,0,10,58.2
+DDH01,10,20,61.4
+DDH02,0,15,55.0
+DDH02,15,30,62.8`)
+
+// vfs.readFile — same file at its absolute path
+const csv = await vfs.readFile("/home/nb/survey/drillholes.csv")
+display("read via vfs:")
+display(csv)
+
+/// md
+## write from vfs, read from notebook.fs
+
+/// code
+// vfs writes to /home/nb — appears in notebook.fs and the files panel
+await vfs.writeFile("/home/nb/survey/notes.txt", "field visit 2025-Q3: 5 holes completed")
+
+// notebook.fs reads the same file with a relative path
+const notes = await notebook.fs.read("survey/notes.txt")
+display("read via notebook.fs:")
+display(notes)
+
+/// md
+## /tmp — volatile scratch space
+
+`vfs` also mounts `/tmp` (memory-backed, not saved). useful for intermediate computation.
+
+/// code
+await vfs.writeFile("/tmp/scratch.txt", "temporary working data")
+const tmp = await vfs.readFile("/tmp/scratch.txt")
+display(`/tmp content: ${tmp}`)
+display("(this file won't survive a save/reload)")
+
+/// md
+## Python reads what JS wrote
+
+Python's `open()` resolves relative paths against `/home/nb` — the same directory notebook.fs writes to. no import or bridge needed.
+
+/// code collapsed
+// %collapsed
+await load("@gcu/adder")
+
+/// adder
+# Python reads the CSV that JS wrote above
+with open("survey/drillholes.csv") as f:
+    header = f.readline().strip()
+    rows = [line.strip().split(",") for line in f if line.strip()]
+
+print(f"columns: {header}")
+for row in rows:
+    print(f"  {row[0]} {row[1]}-{row[2]}m: Fe={row[3]}%")
+
+/// md
+## Python writes, JS reads back
+
+/// adder
+import json
+
+# re-read the CSV and compute a summary
+with open("survey/drillholes.csv") as f:
+    f.readline()  # skip header
+    rows = [line.strip().split(",") for line in f if line.strip()]
+
+summary = {
+    "holes": 2,
+    "intervals": len(rows),
+    "mean_fe": sum(float(r[3]) for r in rows) / len(rows),
+}
+
+with open("survey/summary.json", "w") as f:
+    f.write(json.dumps(summary, indent=2))
+
+print(f"wrote summary.json: {summary}")
+
+/// code
+// JS reads the JSON that Python wrote
+const summary = JSON.parse(await notebook.fs.read("survey/summary.json"))
+display(`${summary.holes} holes, ${summary.intervals} intervals, mean Fe = ${summary.mean_fe.toFixed(1)}%`)
+
+/// md
+## VFS-style aliases on notebook.fs
+
+`notebook.fs` also exposes VFS-named methods for convenience — all using relative paths:
+
+/// code
+// readdir — list immediate children of a directory
+const entries = notebook.fs.readdir("survey")
+display(`survey/ contains: ${entries.join(", ")}`)
+
+// glob — pattern match
+const csvFiles = notebook.fs.glob("**/*.csv")
+display(`all CSVs: ${csvFiles.join(", ")}`)
+
+// the raw VFS instance is accessible too
+display(`vfs mounts: ${vfs.mounts().map(m => m.path).join(", ")}`)
+
+/// md
+---
+
+all three APIs — `notebook.fs`, `vfs`, and Python `open()` — see the same files. persistent files live under `/home/nb` (saved in the notebook HTML). `/tmp` is volatile. open the **files** panel to browse.

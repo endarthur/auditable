@@ -121,6 +121,33 @@ window.registerPlugin = registerPlugin;
 window._ctUninstallPlugin = _ctUninstallPlugin;
 window._ctCreateEditor = createEditor;
 
+// Shared VFS instance — notebook.fs delegates here, adder/Python uses it directly
+if (typeof VFS !== 'undefined') {
+  const _notebookVFS = new VFS();
+  const _commentBackend = new CommentBackend({});
+  // Always read from the current _notebookFS Map (survives reassignment in init/crypto)
+  Object.defineProperty(_commentBackend, '_map', {
+    get: () => {
+      if (!window._notebookFS) window._notebookFS = new Map();
+      return window._notebookFS;
+    },
+    configurable: true,
+  });
+  _commentBackend._syncComment = () => {
+    if (window._notifyDirty) window._notifyDirty();
+    clearTimeout(_commentBackend._syncTimer);
+    _commentBackend._syncTimer = setTimeout(() => { if (window._syncFs) window._syncFs(); }, 500);
+  };
+  _notebookVFS._mounts.set('/home/nb', _commentBackend);
+  // /tmp — volatile scratch space (MemoryBackend, not saved in notebook)
+  _notebookVFS._mounts.set('/tmp', new MemoryBackend());
+  // /usr/lib/python — system Python modules (extensions install here)
+  _notebookVFS._mounts.set('/usr/lib/python', new MemoryBackend());
+  window._notebookVFS = _notebookVFS;
+}
+// VFS path utils for adder fs modules
+window._vfsPath = typeof path !== 'undefined' && path.join ? path : null;
+
 // late-bound helpers for cell-types.js (avoids circular dep)
 window._ctRunDAG = (...args) => runDAG(...args);
 window._ctRunAll = (...args) => runAll(...args);

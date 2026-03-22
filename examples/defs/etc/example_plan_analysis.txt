@@ -44,7 +44,7 @@ const resources = [
 
 const result = plan.schedule(tasks, calendar, "2026-03-16", resources);
 const fmt = d => d.toISOString().slice(0, 10);
-ui.display(`Project ends ${fmt(result.projectEnd)} \u00b7 ${result.projectDuration} working days \u00b7 Critical path: ${result.criticalPath.join(" \u2192 ")}`);
+ui.display(`Project ends ${fmt(result.projectEnd)} · ${result.projectDuration} working days · Critical path: ${result.criticalPath.join(" → ")}`);
 
 /// md
 ## slack budget
@@ -56,22 +56,22 @@ const sb = plan.slackBudget(result);
 
 ui.table([
   { Zone: "Critical (0 days)", Tasks: sb.distribution.critical },
-  { Zone: "Tight (1\u20135 days)", Tasks: sb.distribution.tight },
-  { Zone: "Comfortable (6\u201315)", Tasks: sb.distribution.comfortable },
+  { Zone: "Tight (1–5 days)", Tasks: sb.distribution.tight },
+  { Zone: "Comfortable (6–15)", Tasks: sb.distribution.comfortable },
   { Zone: "Buffered (>15)", Tasks: sb.distribution.buffered },
 ]);
-ui.display(`Critical ratio: ${(sb.criticalRatio * 100).toFixed(0)}% \u00b7 Mean float: ${sb.meanFloat.toFixed(1)} days \u00b7 Median float: ${sb.medianFloat} days`);
+ui.display(`Critical ratio: ${(sb.criticalRatio * 100).toFixed(0)}% · Mean float: ${sb.meanFloat.toFixed(1)} days · Median float: ${sb.medianFloat} days`);
 
 /// md
 ## near-critical paths
 
-Tasks with float \u2264 5 days — one delay and they become critical.
+Tasks with float ≤ 5 days — one delay and they become critical.
 
 /// code
 const nc = plan.nearCritical(result, 5);
 ui.display(`${nc.count} near-critical task(s) in ${nc.paths.length} path(s)`);
 for (const p of nc.paths) {
-  ui.display(`  path: ${p.tasks.join(" \u2192 ")} (total float: ${p.totalFloat} days)`);
+  ui.display(`  path: ${p.tasks.join(" → ")} (total float: ${p.totalFloat} days)`);
 }
 
 /// md
@@ -89,8 +89,8 @@ const scenarios = plan.whatIf(tasks, calendar, "2026-03-16", [
 ui.table(scenarios.scenarios.map(s => ({
   Scenario: s.label,
   "End Date": fmt(s.projectEnd),
-  "End \u0394": s.endDelta > 0 ? `+${s.endDelta}d` : `${s.endDelta}d`,
-  "Duration \u0394": s.durationDelta > 0 ? `+${s.durationDelta}d` : `${s.durationDelta}d`,
+  "End Δ": s.endDelta > 0 ? `+${s.endDelta}d` : `${s.endDelta}d`,
+  "Duration Δ": s.durationDelta > 0 ? `+${s.durationDelta}d` : `${s.durationDelta}d`,
 })));
 
 /// md
@@ -102,7 +102,7 @@ Which tasks are most dangerous to delay? Shows downstream tasks and cost at risk
 for (const id of ["design", "backend", "test"]) {
   const impact = plan.delayImpact(id, result.scheduled);
   const t = result.scheduled.find(t => t.id === id);
-  ui.display(`${t.name}: ${impact.slipDays} days of float \u00b7 ${impact.downstreamTasks.length} downstream \u00b7 $${Math.round(impact.costAtRisk).toLocaleString()} at risk`);
+  ui.display(`${t.name}: ${impact.slipDays} days of float · ${impact.downstreamTasks.length} downstream · $${Math.round(impact.costAtRisk).toLocaleString()} at risk`);
 }
 
 /// md
@@ -120,7 +120,7 @@ const current = [
 ];
 
 const drift = plan.scopeDrift(baseline, current);
-ui.display(`Added: ${drift.addedCount} \u00b7 Removed: ${drift.removedCount} \u00b7 Changed: ${drift.changedCount} \u00b7 Drift ratio: ${(drift.driftRatio * 100).toFixed(0)}%`);
+ui.display(`Added: ${drift.addedCount} · Removed: ${drift.removedCount} · Changed: ${drift.changedCount} · Drift ratio: ${(drift.driftRatio * 100).toFixed(0)}%`);
 
 /// md
 ## Monte Carlo sensitivity
@@ -165,7 +165,7 @@ Peak concurrency and effective capacity per resource.
 /// code
 for (const r of resources) {
   const so = plan.switchingOverhead(r.id, result.scheduled);
-  ui.display(`${r.name}: ${so.totalTasks} tasks \u00b7 peak concurrent: ${so.maxConcurrent} \u00b7 effective capacity: ${(so.effectiveCapacity * 100).toFixed(0)}%`);
+  ui.display(`${r.name}: ${so.totalTasks} tasks · peak concurrent: ${so.maxConcurrent} · effective capacity: ${(so.effectiveCapacity * 100).toFixed(0)}%`);
 }
 
 /// md
@@ -175,7 +175,7 @@ Theory of Constraints: which resource has the highest utilization?
 
 /// code
 const c = plan.constraint(result.scheduled, resources);
-ui.display(`Bottleneck: ${c.bottleneck.name} \u00b7 utilization: ${(c.bottleneck.utilization * 100).toFixed(0)}% \u00b7 ${c.bottleneck.taskCount} tasks \u00b7 ${c.bottleneck.totalDuration} days`);
+ui.display(`Bottleneck: ${c.bottleneck.name} · utilization: ${(c.bottleneck.utilization * 100).toFixed(0)}% · ${c.bottleneck.taskCount} tasks · ${c.bottleneck.totalDuration} days`);
 
 /// md
 ### meeting cost
@@ -184,20 +184,20 @@ How expensive is a 2-hour all-hands?
 
 /// code
 const mtg = plan.meetingCost(["alice", "bob", "carol"], 2, resources);
-ui.display(`${mtg.attendees} attendees \u00d7 ${mtg.durationHours}h = ${mtg.totalPersonHours} person-hours \u00b7 $${Math.round(mtg.totalCost)} \u00b7 ${mtg.displacedWorkDays.toFixed(1)} displaced work-days`);
+ui.display(`${mtg.attendees} attendees × ${mtg.durationHours}h = ${mtg.totalPersonHours} person-hours · $${Math.round(mtg.totalCost)} · ${mtg.displacedWorkDays.toFixed(1)} displaced work-days`);
 
 /// md
 ## mathematical models
 
 /// code
 const bl = plan.brooksLaw(5);
-ui.display(`Brooks's Law (team of ${bl.teamSize}): ${bl.channels} communication channels \u00b7 ${(bl.communicationOverhead * 100).toFixed(0)}% overhead \u00b7 effective capacity: ${bl.effectiveCapacity.toFixed(1)}`);
+ui.display(`Brooks's Law (team of ${bl.teamSize}): ${bl.channels} communication channels · ${(bl.communicationOverhead * 100).toFixed(0)}% overhead · effective capacity: ${bl.effectiveCapacity.toFixed(1)}`);
 
 const ll = plan.littlesLaw(12, 3);
-ui.display(`Little's Law: WIP=${ll.wip}, throughput=${ll.throughput}/wk \u2192 cycle time = ${ll.cycleTime.toFixed(1)} weeks`);
+ui.display(`Little's Law: WIP=${ll.wip}, throughput=${ll.throughput}/wk → cycle time = ${ll.cycleTime.toFixed(1)} weeks`);
 
 const frag = plan.multiProjectFragmentation(3);
-ui.display(`Weinberg fragmentation (${frag.projectCount} projects): ${frag.effectivePerProject}% per project \u00b7 ${frag.totalEffective}% total \u00b7 ${frag.switchingLoss}% lost to switching`);
+ui.display(`Weinberg fragmentation (${frag.projectCount} projects): ${frag.effectivePerProject}% per project · ${frag.totalEffective}% total · ${frag.switchingLoss}% lost to switching`);
 
 /// md
 ## burndown + project health
@@ -218,13 +218,13 @@ const bd = plan.burndown(tracked, {
   today: "2026-04-03", metric: "tasks", bucket: "week",
 });
 ui.html(plan.burndownPlot(bd, { width: 840 }));
-ui.display(`Total: ${bd.totalWork} tasks \u00b7 Completed: ${bd.completedWork.toFixed(1)} \u00b7 Velocity: ${bd.velocity.toFixed(2)}/week`);
+ui.display(`Total: ${bd.totalWork} tasks · Completed: ${bd.completedWork.toFixed(1)} · Velocity: ${bd.velocity.toFixed(2)}/week`);
 
 /// code
 const ev = plan.evm(tracked, "2026-04-03");
 const h = plan.health(result, ev);
 
-ui.display(`Project health: ${h.overall.toUpperCase()} \u2014 ${h.summary}`);
+ui.display(`Project health: ${h.overall.toUpperCase()} — ${h.summary}`);
 ui.table(Object.entries(h.indicators).map(([k, v]) => ({
   Indicator: k.charAt(0).toUpperCase() + k.slice(1),
   Status: v.toUpperCase(),

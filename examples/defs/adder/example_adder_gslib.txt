@@ -52,9 +52,9 @@ _grades = [p[2] for p in samples]
 _n = len(_grades)
 _mean = sum(_grades) / _n
 _std = (sum((g - _mean)**2 for g in _grades) / (_n - 1)) ** 0.5
-print(f"{_n} samples \u00b7 mean {_mean:.3f} \u00b7 std {_std:.3f} \u00b7 CV {_std/_mean:.2f}")
+print(f"{_n} samples · mean {_mean:.3f} · std {_std:.3f} · CV {_std/_mean:.2f}")
 
-# experimental variogram (O(n\u00b2) all-pairs)
+# experimental variogram (O(n²) all-pairs)
 _nlag = 12
 _lag_size = 0.06
 _bins = [[0, 0.0, 0.0] for _ in range(_nlag)]
@@ -116,7 +116,7 @@ _vctx.fillText("lag distance", _pad["l"] + _pw / 2, 220 - 5)
 _vctx.save()
 _vctx.translate(12, _pad["t"] + _ph / 2)
 _vctx.rotate(-js.Math.PI / 2)
-_vctx.fillText("\u03b3(h)", 0, 0)
+_vctx.fillText("γ(h)", 0, 0)
 _vctx.restore()
 for i in range(5):
     _vctx.fillStyle = "#666"
@@ -178,7 +178,7 @@ _elapsed = js.performance.now() - _t0
 
 est = kResult.est
 estv = kResult["var"]
-print(f"kriged {gridN}\u00d7{gridN} in {_elapsed:.1f} ms")
+print(f"kriged {gridN}×{gridN} in {_elapsed:.1f} ms")
 
 /// md
 ## kriging map
@@ -223,7 +223,7 @@ for p in samples:
     _ctx.lineWidth = 1.5
     _ctx.strokeStyle = "#000"
     _ctx.stroke()
-display(f"{'variance' if showVar else modelIdx} \u00b7 {nHoles} holes")
+display(f"{'variance' if showVar else modelIdx} · {nHoles} holes")
 
 /// md
 ## grade-tonnage

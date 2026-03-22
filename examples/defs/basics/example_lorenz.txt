@@ -10,7 +10,7 @@ workshop([
 Use the **prev** and **next** buttons below to navigate
 between pages, or click the progress dots to jump directly.
 
-Close this panel with the **\u00d7** button. Reopen it
+Close this panel with the **×** button. Reopen it
 anytime with the **workshop** tab on the right edge
 of the screen.`
   },
@@ -18,21 +18,21 @@ of the screen.`
     title: 'Reactive DAG',
     content: md`This notebook has three cells: **parameters**,
 **integration**, and **rendering**. They form a dependency
-chain \u2014 the DAG (directed acyclic graph).
+chain — the DAG (directed acyclic graph).
 
 When you drag a slider, auditable detects which variables
 changed, finds all downstream cells, and re-executes them
-in topological order. You don\u2019t wire anything up \u2014
+in topological order. You don’t wire anything up —
 the DAG engine does it automatically.`
   },
   {
     title: 'Reactive widgets',
     content: md`\`ui.slider(label, default, opts)\` returns
 the current numeric value. Without an \`onInput\` callback,
-it\u2019s a **reactive widget**: changing it re-runs the cell
+it’s a **reactive widget**: changing it re-runs the cell
 and all dependents.
 
-The five sliders here (\u03c3, \u03c1, \u03b2, steps, rotation)
+The five sliders here (σ, ρ, β, steps, rotation)
 each define a \`const\`. Downstream cells that reference
 those names are automatically re-executed when any
 slider moves.`
@@ -43,9 +43,9 @@ slider moves.`
 Cell 3 consumes \`pts\`, \`rotation\`, \`steps\`, etc.
 The DAG ensures cell 3 always sees fresh data.
 
-Scope is passed **by value** \u2014 each cell gets its
+Scope is passed **by value** — each cell gets its
 upstream variables as function parameters. This means
-you can\u2019t mutate a variable in one cell and see the
+you can’t mutate a variable in one cell and see the
 change in another. Design your data flow as immutable
 pipelines.`
   },
@@ -58,9 +58,9 @@ a 3D chaotic system rendered as a 2D projection. adjust the parameters and watch
 
 /// code
 // parameters
-const sigma = ui.slider("\u03c3 (sigma)", 10, {min:1, max:30, step:0.5});
-const rho = ui.slider("\u03c1 (rho)", 28, {min:1, max:50, step:0.5});
-const beta = ui.slider("\u03b2 (beta)", 2.667, {min:0.5, max:8, step:0.1});
+const sigma = ui.slider("σ (sigma)", 10, {min:1, max:30, step:0.5});
+const rho = ui.slider("ρ (rho)", 28, {min:1, max:50, step:0.5});
+const beta = ui.slider("β (beta)", 2.667, {min:0.5, max:8, step:0.1});
 const steps = ui.slider("steps", 8000, {min:1000, max:20000, step:500});
 const rotation = ui.slider("rotation", 0, {min:0, max:360, step:1});
 
@@ -141,4 +141,4 @@ for (let i = 1; i < pts.length; i++) {
 }
 
 ctx.globalAlpha = 1;
-ui.display(`${steps} steps \u00b7 \u03c3=${sigma} \u03c1=${rho} \u03b2=${beta}`);
+ui.display(`${steps} steps · σ=${sigma} ρ=${rho} β=${beta}`);

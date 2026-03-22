@@ -1285,7 +1285,7 @@ if (navigator.modelContext && window.__auditable_mcp) {
       if (!accepted) throw new Error('User rejected fs delete.');
       const nfs = window._notebook?.fs;
       if (!nfs) throw new Error('notebook.fs not available');
-      const result = nfs.delete(input.path, { recursive: !!input.recursive });
+      const result = await nfs.delete(input.path, { recursive: !!input.recursive });
       return { deleted: result };
     }),
   });

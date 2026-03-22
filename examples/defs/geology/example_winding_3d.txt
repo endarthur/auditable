@@ -71,7 +71,7 @@ const { OrbitControls } = await load("https://esm.sh/three@0.170.0/examples/jsm/
 const { Winding } = await load("./ext/winding/index.js");
 
 // state
-const meshNames = ["sphere (r=2)", "box (2\u00d72\u00d72)", "tilted plane (30\u00b0)"];
+const meshNames = ["sphere (r=2)", "box (2×2×2)", "tilted plane (30°)"];
 const meshBuilders = [
   () => sphereMesh(0, 0, 0, 2, 24, 12),
   () => boxMesh(-1, -1, -1, 1, 1, 1),
@@ -142,7 +142,7 @@ let dynamicObjects = [];
 
 async function evaluate() {
   btnEval.disabled = true;
-  status.textContent = 'evaluating\u2026';
+  status.textContent = 'evaluating…';
 
   // clear previous blocks/wireframe
   for (const obj of dynamicObjects) scene.remove(obj);
@@ -186,7 +186,7 @@ async function evaluate() {
     mode: 'proportion',
     resolution: [subRes, subRes, subRes],
     threshold: isOpen ? 0 : 0.5,
-    onProgress: frac => { status.textContent = `evaluating\u2026 ${(frac * 100).toFixed(0)}%`; },
+    onProgress: frac => { status.textContent = `evaluating… ${(frac * 100).toFixed(0)}%`; },
   });
   const elapsed = (performance.now() - t0).toFixed(0);
   status.textContent = `evaluated in ${elapsed} ms`;
@@ -240,10 +240,10 @@ async function evaluate() {
   const volume = volSum * (blockSize ** 3);
 
   const exact = analyticalVols[meshIdx];
-  const errPct = exact > 0 ? ((volume - exact) / exact * 100).toFixed(1) : '\u2014';
+  const errPct = exact > 0 ? ((volume - exact) / exact * 100).toFixed(1) : '—';
   const errStr = exact > 0 ? ` (exact ${exact.toFixed(2)}, error ${errPct}%)` : '';
   const backend = winding.hasWorker ? (winding.hasGPU ? 'worker+gpu' : 'worker+cpu') : (winding.hasGPU ? 'gpu' : 'cpu');
-  statsEl.textContent = `${mesh.name} \u2014 ${blockCount}/${nx*ny*nz} blocks, vol \u2248 ${volume.toFixed(2)}${errStr}, ${elapsed} ms (${backend})`;
+  statsEl.textContent = `${mesh.name} — ${blockCount}/${nx*ny*nz} blocks, vol ≈ ${volume.toFixed(2)}${errStr}, ${elapsed} ms (${backend})`;
 
   btnEval.disabled = false;
 }

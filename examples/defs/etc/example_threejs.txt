@@ -152,7 +152,7 @@ function animate() {
 }
 animate();
 
-ui.display(`${N}\u00d7${N} vertices \u00b7 ${octaves} octaves \u00b7 lacunarity ${lacunarity}`);
+ui.display(`${N}×${N} vertices · ${octaves} octaves · lacunarity ${lacunarity}`);
 
 invalidation.then(() => {
   running = false;

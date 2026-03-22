@@ -118,11 +118,16 @@ function getFs() {
   return window._notebookFS;
 }
 
+// ── VFS DELEGATION ──
+
+const NB_PREFIX = '/home/nb/';
+function toAbs(p) { return NB_PREFIX + p; }
+function getVfs() { return window._notebookVFS; }
+
 // ── API ──
 
 async function write(path, content, opts = {}) {
   validatePath(path);
-  const fs = getFs();
 
   let bytes;
   let mime = opts.type || mimeFromExt(path);
@@ -156,6 +161,19 @@ async function write(path, content, opts = {}) {
     throw new Error('fs.write: unsupported content type');
   }
 
+  // delegate to VFS — CommentBackend handles compression + base64 + syncComment
+  const vfs = getVfs();
+  if (vfs) {
+    await vfs.writeFile(toAbs(path), bytes);
+    // patch MIME type if specified (CommentBackend infers from extension)
+    const entry = getFs().get(path);
+    if (entry && opts.type && entry.type !== opts.type) entry.type = opts.type;
+    const size = bytes.length;
+    return { path, size, compressedSize: entry ? Math.ceil(entry.data.length * 3 / 4) : size };
+  }
+
+  // fallback: direct Map write (test environment without VFS)
+  const fs = getFs();
   const size = bytes.length;
   const shouldCompress = opts.compress !== false && !SKIP_COMPRESS.has(mime);
   let data, compressed;
@@ -184,8 +202,15 @@ async function read(path, format) {
   const entry = fs.get(path);
   if (!entry) throw new Error(`fs.read: file not found: ${path}`);
 
-  let bytes = base64ToUint8(entry.data);
-  if (entry.compressed) bytes = await gzipDecompress(bytes);
+  // delegate to VFS if available — readFile returns decompressed bytes
+  const vfs = getVfs();
+  let bytes;
+  if (vfs) {
+    bytes = await vfs.readFile(toAbs(path), 'bytes');
+  } else {
+    bytes = base64ToUint8(entry.data);
+    if (entry.compressed) bytes = await gzipDecompress(bytes);
+  }
 
   const fmt = format || (isTextType(entry.type) ? 'text' : 'binary');
 
@@ -220,13 +245,14 @@ function list(pattern) {
     .sort((a, b) => a.path.localeCompare(b.path));
 }
 
-function delete_(path, opts = {}) {
+async function delete_(path, opts = {}) {
   const fs = getFs();
+  const vfs = getVfs();
 
   // exact file match
   if (fs.has(path)) {
-    fs.delete(path);
-    notifyFsDirty();
+    if (vfs) await vfs.unlink(toAbs(path));
+    else { fs.delete(path); notifyFsDirty(); }
     return true;
   }
 
@@ -237,20 +263,29 @@ function delete_(path, opts = {}) {
   if (children.length === 0) return false;
   if (!opts.recursive) throw new Error('fs.delete: use { recursive: true } to delete folders');
 
-  for (const k of children) fs.delete(k);
-  notifyFsDirty();
+  if (vfs) {
+    for (const k of children) await vfs.unlink(toAbs(k));
+  } else {
+    for (const k of children) fs.delete(k);
+    notifyFsDirty();
+  }
   return children.length;
 }
 
-function rename(oldPath, newPath) {
+async function rename(oldPath, newPath) {
   const fs = getFs();
+  const vfs = getVfs();
 
   // exact file
   if (fs.has(oldPath)) {
-    const entry = fs.get(oldPath);
-    fs.delete(oldPath);
-    fs.set(newPath, entry);
-    notifyFsDirty();
+    if (vfs) {
+      await vfs.rename(toAbs(oldPath), toAbs(newPath));
+    } else {
+      const entry = fs.get(oldPath);
+      fs.delete(oldPath);
+      fs.set(newPath, entry);
+      notifyFsDirty();
+    }
     return true;
   }
 
@@ -260,24 +295,37 @@ function rename(oldPath, newPath) {
   const children = [...fs.keys()].filter(k => k.startsWith(oldPrefix));
   if (children.length === 0) return false;
 
-  for (const k of children) {
-    const entry = fs.get(k);
-    fs.delete(k);
-    fs.set(newPrefix + k.slice(oldPrefix.length), entry);
+  if (vfs) {
+    for (const k of children) {
+      await vfs.rename(toAbs(k), toAbs(newPrefix + k.slice(oldPrefix.length)));
+    }
+  } else {
+    for (const k of children) {
+      const entry = fs.get(k);
+      fs.delete(k);
+      fs.set(newPrefix + k.slice(oldPrefix.length), entry);
+    }
+    notifyFsDirty();
   }
-  notifyFsDirty();
   return true;
 }
 
-function fsCopy(src, dest) {
+async function fsCopy(src, dest) {
   const fs = getFs();
+  const vfs = getVfs();
 
-  // exact file
+  // exact file — use read+write through VFS (not vfs.cp which reads as utf8)
   if (fs.has(src)) {
-    const entry = fs.get(src);
-    fs.set(dest, { ...entry });
-    notifyFsDirty();
-    return { path: dest, size: entry.size };
+    if (vfs) {
+      const bytes = await vfs.readFile(toAbs(src), 'bytes');
+      await vfs.writeFile(toAbs(dest), bytes);
+    } else {
+      const entry = fs.get(src);
+      fs.set(dest, { ...entry });
+      notifyFsDirty();
+    }
+    const entry = fs.get(dest);
+    return { path: dest, size: entry ? entry.size : 0 };
   }
 
   // folder prefix copy
@@ -287,12 +335,20 @@ function fsCopy(src, dest) {
   if (children.length === 0) throw new Error(`fs.copy: source not found: ${src}`);
 
   let totalSize = 0;
-  for (const k of children) {
-    const entry = fs.get(k);
-    fs.set(destPrefix + k.slice(srcPrefix.length), { ...entry });
-    totalSize += entry.size;
+  if (vfs) {
+    for (const k of children) {
+      const bytes = await vfs.readFile(toAbs(k), 'bytes');
+      await vfs.writeFile(toAbs(destPrefix + k.slice(srcPrefix.length)), bytes);
+      totalSize += bytes.length;
+    }
+  } else {
+    for (const k of children) {
+      const entry = fs.get(k);
+      fs.set(destPrefix + k.slice(srcPrefix.length), { ...entry });
+      totalSize += entry.size;
+    }
+    notifyFsDirty();
   }
-  notifyFsDirty();
   return { path: dest, size: totalSize };
 }
 
@@ -441,6 +497,27 @@ export function createNotebookFs() {
     write, read, list, delete: delete_, rename, copy: fsCopy, stat, exists,
     clear, get size() { return getSize(); },
     import: import_, export: export_,
+    // VFS-named aliases (relative paths, same as above)
+    readFile: async (p, enc) => read(p, enc === 'bytes' ? 'binary' : undefined),
+    writeFile: async (p, content) => write(p, content),
+    readdir: (prefix) => {
+      const fs = getFs();
+      const dir = prefix ? (prefix.endsWith('/') ? prefix : prefix + '/') : '';
+      const seen = new Set();
+      for (const k of fs.keys()) {
+        if (!k.startsWith(dir)) continue;
+        const rest = k.slice(dir.length);
+        const idx = rest.indexOf('/');
+        seen.add(idx === -1 ? rest : rest.slice(0, idx));
+      }
+      return [...seen].sort();
+    },
+    mkdir: async () => {},  // no-op (CommentBackend has implicit dirs)
+    unlink: async (p) => delete_(p),
+    rmdir: async (p) => delete_(p, { recursive: true }),
+    glob: (pattern) => list(pattern).map(f => f.path),
+    touch: async (p) => { const vfs = getVfs(); if (vfs) await vfs.touch(toAbs(p)); },
+    get vfs() { return window._notebookVFS; },
   };
 }
 
@@ -586,8 +663,8 @@ function copyText(text) {
 
 // global handlers for onclick/oncontextmenu in generated HTML
 if (typeof window !== 'undefined') {
-  window._fsDelete = (path) => {
-    delete_(path);
+  window._fsDelete = async (path) => {
+    await delete_(path);
     refreshFsPanel();
   };
 
@@ -595,12 +672,12 @@ if (typeof window !== 'undefined') {
     showContextMenu(event.clientX, event.clientY, [
       { label: 'copy read command', action: () => copyText(`await notebook.fs.read("${path}")`) },
       { label: 'copy path', action: () => copyText(path) },
-      { label: 'rename', action: () => {
+      { label: 'rename', action: async () => {
         const newPath = prompt('new path:', path);
-        if (newPath && newPath !== path) { rename(path, newPath); refreshFsPanel(); }
+        if (newPath && newPath !== path) { await rename(path, newPath); refreshFsPanel(); }
       }},
       { label: 'download', action: () => export_(path) },
-      { label: 'delete', action: () => { delete_(path); refreshFsPanel(); } },
+      { label: 'delete', action: async () => { await delete_(path); refreshFsPanel(); } },
     ]);
   };
 
@@ -609,11 +686,11 @@ if (typeof window !== 'undefined') {
       { label: 'copy list command', action: () => copyText(`notebook.fs.list("${prefix}/")`) },
       { label: 'download as zip', action: () => export_(prefix) },
       { label: 'import into folder', action: () => import_({ prefix: prefix + '/' }).then(() => refreshFsPanel()).catch(() => {}) },
-      { label: 'rename folder', action: () => {
+      { label: 'rename folder', action: async () => {
         const newPrefix = prompt('new folder name:', prefix);
-        if (newPrefix && newPrefix !== prefix) { rename(prefix, newPrefix); refreshFsPanel(); }
+        if (newPrefix && newPrefix !== prefix) { await rename(prefix, newPrefix); refreshFsPanel(); }
       }},
-      { label: 'delete folder', action: () => { delete_(prefix, { recursive: true }); refreshFsPanel(); } },
+      { label: 'delete folder', action: async () => { await delete_(prefix, { recursive: true }); refreshFsPanel(); } },
     ]);
   };
 }

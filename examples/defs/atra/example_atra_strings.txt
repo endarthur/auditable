@@ -118,21 +118,21 @@ const helloPtr = wasm.get_hello();
 const helloLen = wasm.get_hello_len();
 const hello = dec.decode(u8.slice(helloPtr, helloPtr + helloLen));
 
-ui.display(`**data segment** \u2014 baked into Wasm linear memory at compile time:`);
+ui.display(`**data segment** — baked into Wasm linear memory at compile time:`);
 ui.display(`\`data hello_ptr, hello_len = "Hello, WebAssembly!"\``);
-ui.display(`ptr=${helloPtr}, len=${helloLen} \u2192 "${hello}"`);
+ui.display(`ptr=${helloPtr}, len=${helloLen} → "${hello}"`);
 
 /// code
 // character classification with char literal comparisons
-ui.display("**character classification** \u2014 char literals compile to i32 constants:");
+ui.display("**character classification** — char literals compile to i32 constants:");
 
 const tests = [65, 122, 53, 33, 32, 48, 70, 97];
 const rows = tests.map(code => ({
   char: JSON.stringify(String.fromCharCode(code)),
   code,
-  is_lower: wasm.is_lower(code) ? "\u2714" : "",
-  is_upper: wasm.is_upper(code) ? "\u2714" : "",
-  is_digit: wasm.is_digit(code) ? "\u2714" : "",
+  is_lower: wasm.is_lower(code) ? "✔" : "",
+  is_upper: wasm.is_upper(code) ? "✔" : "",
+  is_digit: wasm.is_digit(code) ? "✔" : "",
   to_upper: String.fromCharCode(wasm.to_upper(code)),
   to_lower: String.fromCharCode(wasm.to_lower(code))
 }));
@@ -151,12 +151,12 @@ const rot13 = applyCharFn(input, ch => wasm.rot13_char(ch));
 const caesar = applyCharFn(input, ch => wasm.caesar_char(ch, shift));
 const caesar_back = applyCharFn(caesar, ch => wasm.caesar_char(ch, 26 - shift));
 
-ui.display(`**ROT13:** "${input}" \u2192 "${rot13}" \u2192 "${applyCharFn(rot13, ch => wasm.rot13_char(ch))}"`);
-ui.display(`**Caesar(${shift}):** "${input}" \u2192 "${caesar}" \u2192 "${caesar_back}"`);
+ui.display(`**ROT13:** "${input}" → "${rot13}" → "${applyCharFn(rot13, ch => wasm.rot13_char(ch))}"`);
+ui.display(`**Caesar(${shift}):** "${input}" → "${caesar}" → "${caesar_back}"`);
 
 /// code
 // hex digit parsing
-ui.display("**digit_value** \u2014 parse decimal and hex digit characters:");
+ui.display("**digit_value** — parse decimal and hex digit characters:");
 
 const hexTests = "0123456789ABCDEFabcdef!".split('');
 const hexRows = hexTests.map(ch => ({

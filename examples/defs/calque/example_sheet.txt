@@ -42,7 +42,7 @@ const wb = {
 };
 
 const xlsxBytes = await sheet.write(wb);
-ui.display(`wrote ${(xlsxBytes.length / 1024).toFixed(1)} KB xlsx \u2014 ${names.length} rows, 6 columns (1 with live formulas)`);
+ui.display(`wrote ${(xlsxBytes.length / 1024).toFixed(1)} KB xlsx — ${names.length} rows, 6 columns (1 with live formulas)`);
 
 /// code
 // round-trip: read the xlsx back into typed columns
@@ -60,7 +60,7 @@ for (let i = 0; i < s.rows; i++) {
   rows.push(row);
 }
 ui.table(rows);
-ui.display(`read back: ${s.headers.length} columns \u2014 types: ${s.headers.map(h => s.columns[h].constructor.name).join(", ")}`);
+ui.display(`read back: ${s.headers.length} columns — types: ${s.headers.map(h => s.columns[h].constructor.name).join(", ")}`);
 
 /// code
 // download
@@ -68,6 +68,6 @@ const blob = new Blob([xlsxBytes], { type: "application/vnd.openxmlformats-offic
 const a = document.createElement("a");
 a.href = URL.createObjectURL(blob);
 a.download = "planets.xlsx";
-a.textContent = "\u2b07 download planets.xlsx";
+a.textContent = "⬇ download planets.xlsx";
 a.style.cssText = "color:var(--accent);cursor:pointer";
 ui.display(a);

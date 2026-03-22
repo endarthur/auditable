@@ -82,7 +82,7 @@ const result = plan.schedule(allTasks, calendar, "2026-03-16");
 ui.table(result.scheduled.map(t => ({
   Group: t.group, Task: t.name,
   Start: fmt(t.earlyStart), Finish: fmt(t.earlyFinish),
-  Float: t.totalFloat, Critical: t.isCritical ? "\u2731" : "",
+  Float: t.totalFloat, Critical: t.isCritical ? "✱" : "",
 })), { sortable: true, filter: true });
 
 /// code collapsed
@@ -165,7 +165,7 @@ const scenarios = plan.whatIf(allTasks, calendar, "2026-03-16", [
 ui.table(scenarios.scenarios.map(s => ({
   Scenario: s.label,
   "Project End": fmt(s.projectEnd),
-  "End \u0394": s.endDelta > 0 ? `+${s.endDelta}d` : `${s.endDelta}d`,
+  "End Δ": s.endDelta > 0 ? `+${s.endDelta}d` : `${s.endDelta}d`,
 })));
 
 /// md
@@ -175,8 +175,8 @@ ui.table(scenarios.scenarios.map(s => ({
 const sb = plan.slackBudget(result);
 ui.table([
   { Zone: "Critical (0 days)", Tasks: sb.distribution.critical },
-  { Zone: "Tight (1\u20135 days)", Tasks: sb.distribution.tight },
-  { Zone: "Comfortable (6\u201315)", Tasks: sb.distribution.comfortable },
+  { Zone: "Tight (1–5 days)", Tasks: sb.distribution.tight },
+  { Zone: "Comfortable (6–15)", Tasks: sb.distribution.comfortable },
   { Zone: "Buffered (>15)", Tasks: sb.distribution.buffered },
 ]);
-ui.display(`Critical ratio: ${(sb.criticalRatio * 100).toFixed(0)}% \u00b7 Mean float: ${sb.meanFloat.toFixed(1)} days`);
+ui.display(`Critical ratio: ${(sb.criticalRatio * 100).toFixed(0)}% · Mean float: ${sb.meanFloat.toFixed(1)} days`);

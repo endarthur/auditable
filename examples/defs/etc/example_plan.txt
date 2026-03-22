@@ -49,12 +49,12 @@ const resources = [
 
 /// code collapsed
 const result = plan.schedule(tasks, calendar, "2026-03-16", resources);
-ui.display(`Project duration: ${result.projectDuration} working days \u00b7 Critical path: ${result.criticalPath.join(" \u2192 ")}`);
+ui.display(`Project duration: ${result.projectDuration} working days · Critical path: ${result.criticalPath.join(" → ")}`);
 const fmt = d => d.toISOString().slice(0, 10);
 ui.table(result.scheduled.map(t => ({
   Task: t.name, Resource: t.resource || "",
   Start: fmt(t.earlyStart), Finish: fmt(t.earlyFinish),
-  Float: t.totalFloat, Critical: t.isCritical ? "\u2731" : "",
+  Float: t.totalFloat, Critical: t.isCritical ? "✱" : "",
 })), { sortable: true, filter: true });
 
 /// code collapsed

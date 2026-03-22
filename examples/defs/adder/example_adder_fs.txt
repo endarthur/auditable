@@ -1,0 +1,326 @@
+/// auditable
+/// title: adder — Python filesystem
+/// module: @gcu/adder ext/adder/index.js
+
+/// md
+# Python filesystem
+
+Adder provides `open()`, `os`, `os.path`, `pathlib`, `shutil`, and `glob` — standard Python filesystem operations backed by the notebook's embedded filesystem. Files written from Python are the same files visible in the **files** panel and accessible from JS via `notebook.fs`.
+
+The filesystem follows a Unix layout: cwd starts at `/home/nb`, `/tmp` is volatile scratch space, `/usr/lib/python` holds system modules. Relative paths just work — `open('data/x.csv')` in Python and `notebook.fs.read('data/x.csv')` in JS point to the same file.
+
+/// code collapsed
+// %collapsed
+await load("@gcu/adder")
+
+/// md
+## open() — read and write files
+
+`open()` works like Python's built-in — modes `r`, `w`, `a`, `rb`, `wb`, `ab`. Context managers (`with`) auto-close. Paths are relative to cwd (`/home/nb`).
+
+/// adder
+# write a CSV — relative path, lands in /home/nb/data/
+with open("data/samples.csv", "w") as f:
+    f.write("hole,from,to,fe,au\n")
+    f.write("DDH01,0,10,58.2,0.12\n")
+    f.write("DDH01,10,20,61.4,0.34\n")
+    f.write("DDH02,0,10,62.0,0.45\n")
+    f.write("DDH02,10,20,45.3,0.02\n")
+    f.write("DDH03,0,10,59.8,0.28\n")
+
+# read it back
+with open("data/samples.csv", "r") as f:
+    header = f.readline().strip()
+    rows = f.readlines()
+
+print(f"header: {header}")
+print(f"{len(rows)} data rows")
+
+/// md
+## iterate lines
+
+`for line in f:` yields lines one at a time — the natural Python file idiom:
+
+/// adder
+grades = {}
+with open("data/samples.csv", "r") as f:
+    header = f.readline()
+    for line in f:
+        parts = line.strip().split(",")
+        fe = float(parts[3])
+        if fe >= 60:
+            grades[parts[0]] = grades.get(parts[0], 0) + 1
+
+for hole, count in grades.items():
+    print(f"{hole}: {count} high-grade interval(s)")
+
+/// md
+## append mode
+
+/// adder
+with open("data/samples.csv", "a") as f:
+    f.write("DDH03,10,20,63.1,0.56\n")
+
+# verify — count total lines
+with open("data/samples.csv", "r") as f:
+    lines = f.readlines()
+print(f"total rows (including header): {len(lines)}")
+
+/// md
+## os module
+
+`import os` gives you `listdir`, `mkdir`, `makedirs`, `stat`, `walk`, `getcwd`/`chdir`, `rename`, `remove`.
+
+/// adder
+import os
+
+# cwd is /home/nb — relative paths resolve here
+print(f"cwd: {os.getcwd()}")
+
+# directory listing
+files = os.listdir("data")
+print(f"data/ contains: {files}")
+
+# stat
+info = os.stat("data/samples.csv")
+print(f"samples.csv: {info['st_size']} bytes, type={info['st_type']}")
+
+# make nested directories
+os.makedirs("output/reports/q1", exist_ok=True)
+print(f"output/ exists: {os.path.isdir('output')}")
+print(f"nested q1 exists: {os.path.isdir('output/reports/q1')}")
+
+/// md
+## os.walk — recursive traversal
+
+/// adder
+import os
+
+# write a few files into the tree
+with open("output/summary.txt", "w") as f:
+    f.write("quarterly summary")
+with open("output/reports/q1/iron.csv", "w") as f:
+    f.write("hole,fe_avg\nDDH01,59.8\nDDH02,53.65\nDDH03,61.45\n")
+
+for dirpath, dirnames, filenames in os.walk("."):
+    depth = dirpath.replace(os.getcwd(), "").count("/")
+    indent = "  " * depth
+    print(f"{indent}{os.path.basename(dirpath) or '~'}/")
+    for fn in filenames:
+        print(f"{indent}  {fn}")
+
+/// md
+## os.path — path manipulation
+
+Pure string operations — no I/O needed:
+
+/// adder
+import os
+
+p = os.path.join("data", "samples.csv")
+print(f"join:     {p}")
+print(f"dirname:  {os.path.dirname(p)}")
+print(f"basename: {os.path.basename(p)}")
+
+root, ext = os.path.splitext(p)
+print(f"splitext: root={root}, ext={ext}")
+print(f"isabs:    {os.path.isabs(p)}")
+print(f"isabs /x: {os.path.isabs('/data/x.csv')}")
+
+/// adder
+import os
+
+# I/O queries — relative paths resolve against cwd
+print(f"exists:  {os.path.exists('data/samples.csv')}")
+print(f"isfile:  {os.path.isfile('data/samples.csv')}")
+print(f"isdir:   {os.path.isdir('data')}")
+print(f"getsize: {os.path.getsize('data/samples.csv')} bytes")
+print(f"missing: {os.path.exists('nope.txt')}")
+
+/// md
+## os.path — also importable directly
+
+/// adder
+from os.path import join, basename
+
+result = join("reports", "2024", "annual.pdf")
+print(f"joined:   {result}")
+print(f"basename: {basename(result)}")
+
+/// md
+## pathlib — object-oriented paths
+
+`Path` objects support the `/` operator, properties like `.name`, `.stem`, `.suffix`, `.parent`, and async I/O methods. `~` expands to `/home/nb`.
+
+/// adder
+from pathlib import Path
+
+# build paths with /
+p = Path("data") / "samples.csv"
+print(f"path:   {p}")
+print(f"name:   {p.name}")
+print(f"stem:   {p.stem}")
+print(f"suffix: {p.suffix}")
+print(f"parent: {p.parent}")
+print(f"parts:  {p.parts}")
+
+/// adder
+from pathlib import Path
+
+# read/write
+out = Path("output/fe_summary.txt")
+out.write_text("Fe summary: DDH01=59.8, DDH02=53.65, DDH03=61.45")
+content = out.read_text()
+print(content)
+
+# ~ expands to /home/nb
+home = Path("~")
+print(f"home: {home}")
+
+/// adder
+from pathlib import Path
+
+# iterdir — list directory contents as Path objects
+p = Path("data")
+for entry in p.iterdir():
+    info = entry.stat()
+    print(f"  {entry.name}: {info['st_size']} bytes")
+
+# with_suffix / with_name
+csv = Path("data/samples.csv")
+print(f"as .tsv:  {csv.with_suffix('.tsv')}")
+print(f"renamed:  {csv.with_name('assays.csv')}")
+
+/// md
+## shutil — high-level file operations
+
+/// adder
+import shutil, os
+
+# copy a single file
+shutil.copy("data/samples.csv", "output/samples_backup.csv")
+print(f"copied: {os.path.exists('output/samples_backup.csv')}")
+
+# copy entire directory tree
+shutil.copytree("data", "archive/data_snapshot")
+print(f"snapshot: {os.listdir('archive/data_snapshot')}")
+
+# move a file
+shutil.move("output/samples_backup.csv", "archive/samples_backup.csv")
+print(f"moved to archive: {os.path.exists('archive/samples_backup.csv')}")
+
+# remove entire tree
+shutil.rmtree("archive")
+print(f"archive removed: {not os.path.exists('archive')}")
+
+/// md
+## /tmp — volatile scratch space
+
+`/tmp` is backed by a memory filesystem — fast, not saved in the notebook HTML. Use it for intermediate computation.
+
+/// adder
+import os
+
+with open("/tmp/scratch.txt", "w") as f:
+    f.write("temporary data")
+
+content = open("/tmp/scratch.txt").read()
+print(f"/tmp content: {content}")
+print(f"/tmp exists: {os.path.exists('/tmp/scratch.txt')}")
+print("(this file won't survive a save/reload)")
+
+/// md
+## glob — pattern matching
+
+/// adder
+import glob
+
+csvs = glob.glob("/home/nb/**/*.csv")
+print(f"all CSVs: {csvs}")
+
+txts = glob.glob("/home/nb/output/**/*.txt")
+print(f"output txts: {txts}")
+
+/// md
+## error handling
+
+Python exception hierarchy works as expected — `FileNotFoundError` is a subclass of `OSError`:
+
+/// adder
+# specific exception
+try:
+    f = open("does/not/exist.txt", "r")
+except FileNotFoundError as e:
+    print(f"caught FileNotFoundError: {e}")
+
+# parent exception catches children
+try:
+    f = open("also/missing.txt", "r")
+except OSError as e:
+    print(f"caught via OSError: {e}")
+
+/// md
+## cross-language bridge — Python writes, JS reads
+
+Relative paths match between Python and JS. `open('data/x.csv')` in Python and `notebook.fs.read('data/x.csv')` in JS point to the same file — the notebook.fs Map key is the same.
+
+/// adder
+import json, os
+
+report = {
+    "title": "drill hole summary",
+    "holes": ["DDH01", "DDH02", "DDH03"],
+    "avg_fe": 58.3,
+    "high_grade_count": 3,
+}
+
+with open("output/report.json", "w") as f:
+    f.write(json.dumps(report, indent=2))
+
+print(f"wrote output/report.json ({os.path.getsize('output/report.json')} bytes)")
+
+/// code
+// JS reads the same file Python wrote — same relative path
+const report = JSON.parse(await notebook.fs.read("output/report.json"))
+display(`title: ${report.title}`)
+display(`holes: ${report.holes.join(", ")}`)
+display(`avg Fe: ${report.avg_fe}%`)
+display(`high-grade intervals: ${report.high_grade_count}`)
+
+/// md
+## VFS imports — write Python modules, import them
+
+Put `.py` files in `lib/` and `import` them. `sys.path` searches `['.', 'lib', '/usr/lib/python']`.
+
+/// adder
+# write a reusable module
+import os
+os.makedirs("lib", exist_ok=True)
+
+with open("lib/geo.py", "w") as f:
+    f.write("""
+import math
+
+def haversine(lat1, lon1, lat2, lon2):
+    R = 6371
+    dLat = math.radians(lat2 - lat1)
+    dLon = math.radians(lon2 - lon1)
+    a = math.sin(dLat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dLon/2)**2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+""")
+
+# now import it
+import geo
+d = geo.haversine(-23.55, -46.63, 35.68, 139.69)
+print(f"São Paulo → Tokyo: {int(d)} km")
+
+/// md
+---
+
+Files persist inside the notebook HTML — save, reload, and they're still there. Open the **files** panel (ellipsis menu → files) to browse. `/tmp` files are volatile — they disappear on reload.
+
+| path | backend | persists? |
+|------|---------|-----------|
+| `/home/nb/` (cwd) | CommentBackend → notebook.fs | yes |
+| `/tmp/` | MemoryBackend | no |
+| `/usr/lib/python/` | MemoryBackend | no |

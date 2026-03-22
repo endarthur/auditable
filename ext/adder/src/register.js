@@ -1,6 +1,6 @@
 // Registration: cell type, tagged language, plugin, extension
 
-import { pythonParseNames, pythonFindUses, pythonExecute } from './cell.js';
+import { pythonParseNames, pythonFindUses, pythonExecute, setAdderVFS } from './cell.js';
 import { tokenizePython, pythonCompletions } from './highlight.js';
 import { adderTag, mpy } from './tag.js';
 import { adderParse } from './parse.js';
@@ -74,4 +74,5 @@ export const adder = {
   pythonFindUses,
   tokenizePython,
   pythonCompletions,
+  setVFS: setAdderVFS,
 };

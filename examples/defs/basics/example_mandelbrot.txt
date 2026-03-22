@@ -10,14 +10,14 @@ workshop([
 Use the **prev** and **next** buttons below to navigate
 between pages, or click the progress dots to jump directly.
 
-Close this panel with the **\u00d7** button. Reopen it
+Close this panel with the **×** button. Reopen it
 anytime with the **workshop** tab on the right edge
 of the screen.`
   },
   {
     title: 'Reactive widgets',
     content: md`Five \`ui.slider\` calls define the exploration
-parameters. Each returns a numeric \`const\` \u2014 when the
+parameters. Each returns a numeric \`const\` — when the
 user drags a slider, the cell re-runs and all downstream
 cells re-execute automatically.
 
@@ -31,11 +31,11 @@ for real-time control.`
     content: md`The render cell creates an \`ImageData\`
 buffer and writes RGBA values pixel by pixel. This is
 the fastest way to do per-pixel computation on a
-canvas \u2014 no draw calls, just array writes followed
+canvas — no draw calls, just array writes followed
 by a single \`putImageData\`.
 
 \`ui.canvas(w, h)\` creates the canvas element in the
-cell output. The computation runs synchronously \u2014
+cell output. The computation runs synchronously —
 for very high iterations or resolution, consider
 \`// %manual\` to avoid blocking on every slider drag.`
   },
@@ -43,13 +43,13 @@ for very high iterations or resolution, consider
     title: 'Computed dependencies',
     content: md`Both cells live in the same notebook scope.
 The render cell references \`maxIter\`, \`zoom\`,
-\`centerX\`, \`centerY\`, and \`colorShift\` \u2014 all
+\`centerX\`, \`centerY\`, and \`colorShift\` — all
 defined by the slider cell.
 
 The DAG engine sees these references via
 \`findUses()\` and builds the dependency edge
-automatically. Change any slider \u2192 parameter cell
-re-runs \u2192 render cell re-runs. No manual wiring
+automatically. Change any slider → parameter cell
+re-runs → render cell re-runs. No manual wiring
 needed.`
   },
 ])
@@ -115,4 +115,4 @@ for (let py = 0; py < size; py++) {
 }
 
 ctx.putImageData(img, 0, 0);
-ui.display(`${size}\u00d7${size} \u00b7 ${maxIter} iterations \u00b7 zoom ${zoom}x \u00b7 center (${centerX}, ${centerY})`);
+ui.display(`${size}×${size} · ${maxIter} iterations · zoom ${zoom}x · center (${centerX}, ${centerY})`);

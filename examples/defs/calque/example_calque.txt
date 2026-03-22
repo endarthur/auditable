@@ -46,7 +46,7 @@ const { workbook, warnings } = report.compile();
 if (warnings.length) ui.display("warnings: " + warnings.join(", "));
 
 const bytes = await sheet.write(workbook);
-ui.download("\u2b07 download report.xlsx", bytes, "report.xlsx");
+ui.download("⬇ download report.xlsx", bytes, "report.xlsx");
 
 /// md
 ## reactive computation

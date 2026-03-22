@@ -98,4 +98,4 @@ for (let ci = 0; ci < chunkResults.length; ci++) {
 ctx.putImageData(img, 0, 0);
 
 const speedup = (seqMs / parMs).toFixed(1);
-ui.display(`${size}\u00d7${size} \u00b7 ${maxIter} iterations \u00b7 sequential: ${seqMs.toFixed(0)}ms \u00b7 parallel (${cores} cores, ${chunks.length} chunks): ${parMs.toFixed(0)}ms \u00b7 ${speedup}\u00d7`);
+ui.display(`${size}×${size} · ${maxIter} iterations · sequential: ${seqMs.toFixed(0)}ms · parallel (${cores} cores, ${chunks.length} chunks): ${parMs.toFixed(0)}ms · ${speedup}×`);

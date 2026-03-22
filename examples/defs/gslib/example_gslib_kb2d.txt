@@ -14,7 +14,7 @@ const modelIdx = ui.dropdown("variogram model", modelNames);
 
 const range0 = ui.slider("range", 0.35, {min: 0.05, max: 1.0, step: 0.01});
 const sill = ui.slider("sill (cc)", 0.8, {min: 0.1, max: 2.0, step: 0.05});
-const nugget = ui.slider("nugget (c\u2080)", 0.1, {min: 0.0, max: 0.5, step: 0.01});
+const nugget = ui.slider("nugget (c₀)", 0.1, {min: 0.0, max: 0.5, step: 0.01});
 const nPts = ui.slider("samples", 20, {min: 5, max: 60, step: 1});
 const gridN = ui.slider("grid", 60, {min: 20, max: 120, step: 5});
 const showPts = ui.checkbox("show samples", true);
@@ -92,7 +92,7 @@ if (showPts) {
 }
 
 const label = showVar ? "kriging variance" : "kriging estimate";
-ui.display(`${label} \u00b7 ${modelIdx} \u00b7 ${gridN}\u00d7${gridN} grid \u00b7 ${nPts} samples \u00b7 ${elapsed} ms`);
+ui.display(`${label} · ${modelIdx} · ${gridN}×${gridN} grid · ${nPts} samples · ${elapsed} ms`);
 
 /// md
 **how it works:** `kb2d` solves the kriging system for each grid node — a linear system whose coefficients come from the variogram model evaluated at inter-sample distances. the **nugget** adds a discontinuity at the origin (measurement noise), the **sill** is the maximum variance, and the **range** controls how far spatial correlation extends. toggle **show variance** to see the kriging variance — it's lowest near sample points and highest where data is sparse, regardless of the actual values.

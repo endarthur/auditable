@@ -41,7 +41,7 @@ grid = {"nx": gridN, "ny": gridN, "xsiz": 1, "ysiz": 1}
 
 engine = gslib.sgsim({"grid": grid, "variogram": vario, "search": {"radius": max(vRange * 2, 20), "ndmax": 12, "nodmax": 12}})
 truth = engine.run(simSeed)
-print(f"reference model: {gridN}\u00d7{gridN} grid, range={vRange}, sill={vSill}, nugget={vNugget}")
+print(f"reference model: {gridN}×{gridN} grid, range={vRange}, sill={vSill}, nugget={vNugget}")
 
 /// md
 ## spacing analysis

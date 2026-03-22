@@ -27,7 +27,7 @@ const searchRadius = Math.max(vRange * 2, 20);
 const engine = sgsim({ grid, variogram: vario, search: { radius: searchRadius, ndmax: 12, nodmax: 12 } });
 invalidation.then(() => engine.dispose());
 const truth = engine.run(simSeed);
-display(`reference: ${gridN}\u00d7${gridN}, range=${vRange}, sill=${vSill}, nugget=${vNugget}`);
+display(`reference: ${gridN}×${gridN}, range=${vRange}, sill=${vSill}, nugget=${vNugget}`);
 
 /// md
 ## spacing analysis

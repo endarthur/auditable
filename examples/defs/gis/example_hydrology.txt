@@ -51,7 +51,7 @@ function diamondSquare(n, roughness, seed) {
 }
 
 // build terrain: multi-octave fractal with regional slope
-const N = 8; // 257\u00d7257
+const N = 8; // 257×257
 const o1 = diamondSquare(N, 0.7, 42);
 const o2 = diamondSquare(N, 1.0, 1337);
 const o3 = diamondSquare(N, 1.5, 7777);
@@ -85,7 +85,7 @@ const tAcc = performance.now();
 const logAcc = new Float32Array(acc.length);
 for (let i = 0; i < acc.length; i++) logAcc[i] = Math.log(acc[i] + 1);
 
-ui.display(`fill: ${(tFill - t0).toFixed(1)} ms \u00b7 D8: ${(tDir - tFill).toFixed(1)} ms \u00b7 accumulation: ${(tAcc - tDir).toFixed(1)} ms \u00b7 ${W}\u00d7${H} = ${(W * H / 1000).toFixed(0)}k cells`);
+ui.display(`fill: ${(tFill - t0).toFixed(1)} ms · D8: ${(tDir - tFill).toFixed(1)} ms · accumulation: ${(tAcc - tDir).toFixed(1)} ms · ${W}×${H} = ${(W * H / 1000).toFixed(0)}k cells`);
 
 /// code
 // %manual
@@ -286,7 +286,7 @@ function renderWatershed() {
   const labeled = counts.reduce((a, b) => a + b, 0);
   const pct = (labeled / (W * H) * 100).toFixed(0);
   let info = seeds.map((_, i) => `${counts[i]}`).join(", ");
-  statusEl.textContent = `watershed: ${elapsed} ms \u00b7 ${seeds.length} basins \u00b7 ${pct}% covered \u00b7 cells: ${info}`;
+  statusEl.textContent = `watershed: ${elapsed} ms · ${seeds.length} basins · ${pct}% covered · cells: ${info}`;
 }
 
 // drag interaction

@@ -185,7 +185,7 @@ tctx.putImageData(img, 0, 0);
 ctx.imageSmoothingEnabled = false;
 ctx.drawImage(tmp, 0, 0, size, size);
 
-ui.display(`${res}\u00d7${res} \u00b7 max ${maxIter} iterations \u00b7 Wasm kernel: ${elapsed} ms`);
+ui.display(`${res}×${res} · max ${maxIter} iterations · Wasm kernel: ${elapsed} ms`);
 
 /// md
 **features used:**

@@ -103,7 +103,7 @@ function render() {
   const btnRow = document.createElement("div");
   btnRow.style.cssText = "display:flex;gap:6px;margin-bottom:8px";
   const fileBtn = document.createElement("button");
-  fileBtn.textContent = "add files\u2026";
+  fileBtn.textContent = "add files…";
   fileBtn.onclick = () => {
     const inp = document.createElement("input");
     inp.type = "file"; inp.multiple = true;
@@ -113,7 +113,7 @@ function render() {
   btnRow.appendChild(fileBtn);
   if (window.showDirectoryPicker) {
     const dirBtn = document.createElement("button");
-    dirBtn.textContent = "add folder\u2026";
+    dirBtn.textContent = "add folder…";
     dirBtn.onclick = async () => {
       try {
         const handle = await window.showDirectoryPicker();
@@ -170,7 +170,7 @@ function render() {
   actions.style.cssText = "display:flex;gap:8px;align-items:center;margin-top:12px";
   const dlBtn = document.createElement("button");
   dlBtn.className = "primary";
-  dlBtn.textContent = "\u25bc download .iso";
+  dlBtn.textContent = "▼ download .iso";
   dlBtn.disabled = files.length === 0;
   dlBtn.style.opacity = files.length === 0 ? "0.4" : "1";
   dlBtn.onclick = buildAndDownload;
@@ -236,7 +236,7 @@ function buildTree(files) {
 
     for (const [name, child] of Object.entries(node.children).sort((a, b) => a[0].localeCompare(b[0]))) {
       const li = document.createElement("li");
-      li.innerHTML = `<span class="dir">\u25b8 ${esc(name)}/</span>`;
+      li.innerHTML = `<span class="dir">▸ ${esc(name)}/</span>`;
       ul.appendChild(li);
       ul.appendChild(renderNode(child, depth + 1));
     }
@@ -244,10 +244,10 @@ function buildTree(files) {
     for (const f of node.files.sort((a, b) => a.name.localeCompare(b.name))) {
       const li = document.createElement("li");
       const sizeStr = f.size < 1024 ? f.size + " B" : (f.size / 1024).toFixed(1) + " KB";
-      li.innerHTML = `<span class="file">\u00b7 ${esc(f.name)}</span><span class="size">${sizeStr}</span>`;
+      li.innerHTML = `<span class="file">· ${esc(f.name)}</span><span class="size">${sizeStr}</span>`;
       const rm = document.createElement("span");
       rm.className = "remove";
-      rm.textContent = "\u00d7";
+      rm.textContent = "×";
       rm.onclick = () => { files.splice(f.index, 1); render(); };
       li.appendChild(rm);
       ul.appendChild(li);
@@ -284,11 +284,11 @@ async function buildAndDownload() {
       URL.revokeObjectURL(url);
     }
 
-    statusEl.textContent = `\u2713 ${kb} KB \u2014 ${files.length} file${files.length !== 1 ? "s" : ""}, ${joliet ? "joliet" : "base"}`;
+    statusEl.textContent = `✓ ${kb} KB — ${files.length} file${files.length !== 1 ? "s" : ""}, ${joliet ? "joliet" : "base"}`;
     statusEl.style.color = "#c89b3c";
   } catch (e) {
     if (e.name === "AbortError") return; // user cancelled save dialog
-    statusEl.textContent = "\u2717 " + e.message;
+    statusEl.textContent = "✗ " + e.message;
     statusEl.style.color = "#c44";
   }
 }

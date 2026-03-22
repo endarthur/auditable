@@ -10,7 +10,7 @@ workshop([
 Use the **prev** and **next** buttons below to navigate
 between pages, or click the progress dots to jump directly.
 
-Close this panel with the **\u00d7** button. Reopen it
+Close this panel with the **×** button. Reopen it
 anytime with the **workshop** tab on the right edge
 of the screen.`
   },
@@ -23,8 +23,8 @@ network access. Use it for dependencies you need
 offline.
 
 \`load(url)\` imports a module at runtime from the
-network. It\u2019s cached for the session but not
-persisted. Use it for modules you\u2019re experimenting
+network. It’s cached for the session but not
+persisted. Use it for modules you’re experimenting
 with or that are too large to embed.`
   },
   {
@@ -35,7 +35,7 @@ in the \`AUDITABLE-MODULES\` HTML comment block
 (base64-encoded). The notebook becomes fully
 self-contained.
 
-Open a saved notebook on an airplane \u2014 installed
+Open a saved notebook on an airplane — installed
 modules work. \`load()\`-ed modules will fail because
 they need the network. This is the core trade-off:
 embed size vs offline access.`
