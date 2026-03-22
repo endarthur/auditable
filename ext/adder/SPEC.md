@@ -882,28 +882,65 @@ Ellipsis: `...`
 
 ---
 
-## 12. What adder is NOT
+## 12. Multiple backends from one AST
+
+The parser produces an AST with type annotations preserved. The evaluator ignores annotations, but typed backends consume them. This makes adder's AST a universal intermediate form:
+
+```
+adder parser (shared)
+    ↓ AST with annotations
+    ├─→ eval       — tree-walking JS interpreter (untyped, default)
+    ├─→ transpile  — emit JS source (untyped, fast)
+    ├─→ patra      — emit atra → WASM (typed, @kernel)
+    └─→ wgsl       — emit WebGPU compute shaders (typed, @gpu, future)
+```
+
+Each backend is selected by a decorator: no decorator = eval/transpile, `@kernel` = patra, `@gpu` = WGSL. The user writes Python, the decorator picks the target. Same syntax, same parser, same AST, different codegen.
+
+Annotations are parsed and preserved even though the eval backend doesn't use them — they're the type information that compiled backends need. Adding a new backend is adding a new AST walker, not a new language.
+
+### 12.1 Eval mode (shipped)
+
+Tree-walking interpreter. Each AST node type has an eval handler. Best error messages (Python line numbers, native errors). Slower for tight loops (interpreted dispatch per node). Best for interactive development, small cells, debugging.
+
+### 12.2 Transpile mode (planned)
+
+Emit JS source from AST, wrapped in `AsyncFunction`, JIT-compiled by V8. Native performance for loops. Python-specific semantics (integer division, truthiness, `for/else`) handled by runtime helper functions emitted inline:
+
+```js
+const __floor_div = (a, b) => Math.floor(a / b);
+const __py_mod = (a, b) => ((a % b) + b) % b;
+const __py_bool = (v) => Array.isArray(v) ? v.length > 0 : !!v;
+```
+
+Both backends share the same parser, AST, and scope model. The cell executor could choose automatically (eval for small cells, transpile for loops) or the user could force it with a directive (`// %transpile`).
+
+### 12.3 @kernel — patra (planned)
+
+Python syntax for atra numeric kernels. The `@kernel` decorator marks functions for compilation to atra → WASM bytecode. The parser extracts `@kernel` blocks, sends them to `patra.transpile()` → `atra.run()`, injects WASM exports into the Python scope. The remaining code runs in the eval backend.
+
+This works cleanly because there's no WASM-from-WASM problem — the eval backend is pure JS, so calling WASM functions from the remaining code is just calling JS functions.
+
+---
+
+## 13. What adder is NOT
 
 - **Not a full CPython implementation.** No multiple inheritance, no metaclasses, no descriptor protocol (beyond `@property`), no `__slots__`, no `__new__`, no `exec()`/`eval()`, no complex numbers, no `match`/`case`.
-- **Not a transpiler.** Single backend: tree-walking eval. No JS source emission, no source maps.
-- **Not a replacement for atra.** Adder is for glue code and scripting. Performance-critical numeric kernels belong in atra. Adder can call atra functions seamlessly — that's the point.
+- **Not a replacement for atra.** Adder is for glue code and scripting. Performance-critical numeric kernels belong in atra (or patra for Python syntax → atra). Adder can call atra functions seamlessly — that's the point.
 - **Not trying to run pip packages.** The standard library is minimal and purpose-built. numpy, pandas, scipy are not targets.
 - **Not Python.** It's adder — a Python-flavored language that runs in JS. Duck-typed over Python syntax, with JS values underneath.
 
 ---
 
-## 13. Future
+## 14. Not yet implemented
 
-Not yet implemented:
 - **Generator coroutine protocol** — `send()`, `throw()`, `close()` on generator objects. Generators work for iteration (`for await`, `list()`) but not as coroutines.
-
-Not planned for v2:
+- **Transpile mode** — JS source emission from AST (section 12.2)
+- **@kernel / patra** — typed Python → atra → WASM (section 12.3)
 - Multiple inheritance, metaclasses, `__new__`, descriptors, `__slots__`
 - `match`/`case` (Python 3.10+)
 - `exec()`/`eval()`
 - Complex numbers
-- `@kernel` decorator / patra integration (separate spec)
-- Transpile mode (emit JS source for JIT compilation)
 
 ---
 
