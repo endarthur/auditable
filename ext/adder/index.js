@@ -1308,6 +1308,14 @@ function adderGetAttr(obj, attr) {
     // check for adder class method on prototype
     if (typeof obj[attr] === 'function') {
       if (_isNativeClass(obj[attr])) return obj[attr];
+      // adder functions expect self as first arg — inject it
+      if (obj[attr]._pyFunc) {
+        const originalFn = obj[attr];
+        const fn = (...args) => originalFn(obj, ...args);
+        fn._pyFunc = true;
+        fn._pyName = `${attr}`;
+        return fn;
+      }
       const fn = obj[attr].bind(obj);
       fn._pyName = attr;
       return fn;
@@ -1323,7 +1331,12 @@ function adderGetAttr(obj, attr) {
   // generic
   if (obj !== null && obj !== undefined && attr in obj) {
     const val = obj[attr];
-    return typeof val === 'function' ? (_isNativeClass(val) ? val : val.bind(obj)) : val;
+    if (typeof val === 'function') {
+      if (_isNativeClass(val)) return val;
+      if (val._pyFunc) { const fn = (...args) => val(obj, ...args); fn._pyFunc = true; fn._pyName = attr; return fn; }
+      return val.bind(obj);
+    }
+    return val;
   }
   throw new AdderError('AttributeError', `'${pyTypeName(obj)}' object has no attribute '${attr}'`);
 }
@@ -3484,7 +3497,8 @@ async function pythonExecute(code, scopeIn, cell) {
   if (hasCtx) {
     // output already rendered to DOM via display() — show last expression too
     if (lastExpr !== undefined && lastExpr !== null) {
-      cell._ctx.display(pyRepr(lastExpr));
+      if (typeof lastExpr === 'object' && typeof lastExpr._repr_html_ === 'function') cell._ctx.display(lastExpr);
+      else cell._ctx.display(pyRepr(lastExpr));
     }
     return { defines };
   }

@@ -10,6 +10,9 @@
 `import sadpan` directly. The `DataFrame` wrapper gives it a pandas face:
 `df['col']`, `df[mask]`, `groupby().agg()`.
 
+DataFrames implement `_repr_html_()`, so they render as tables
+automatically when they're the last expression in a cell.
+
 /// code collapsed
 // %collapsed
 await load("@gcu/adder")
@@ -30,7 +33,7 @@ df = pd.DataFrame({
     "au":    [0.12,    0.34,    0.08,    0.45,    0.02,    0.11,    0.28,    0.56],
 })
 
-ui.table(df.to_records())
+df
 
 /// md
 ## Series operators + boolean masking
@@ -39,36 +42,31 @@ ui.table(df.to_records())
 to filter rows — just like pandas.
 
 /// adder
-high_fe = df[df['fe'] > 60]
-ui.table(high_fe.to_records())
+df[df['fe'] > 60]
 
 /// md
 ## filter with lambda
 
 /// adder
-au_rich = df.filter(lambda row: row['au'] > 0.2)
-ui.table(au_rich.to_records())
+df.filter(lambda row: row['au'] > 0.2)
 
 /// md
 ## compound masks
 
 /// adder
-bif_rich = df[(df['fe'] > 55) & (df['lith'] == "BIF")]
-ui.table(bif_rich.to_records())
+df[(df['fe'] > 55) & (df['lith'] == "BIF")]
 
 /// md
 ## groupby + agg
 
 /// adder
-grouped = df.groupby("lith").agg({"fe": "mean", "au": "sum"})
-ui.table(grouped.to_records())
+df.groupby("lith").agg({"fe": "mean", "au": "sum"})
 
 /// md
 ## sort values
 
 /// adder
-sorted_df = df.sort_values("fe", ascending=False).head(5)
-ui.table(sorted_df.to_records())
+df.sort_values("fe", ascending=False).head(5)
 
 /// md
 ## add a column
@@ -76,15 +74,14 @@ ui.table(sorted_df.to_records())
 /// adder
 df2 = pd.DataFrame({"x": [1, 2, 3], "y": [4, 5, 6]})
 df2['z'] = df2['x'] + df2['y']
-ui.table(df2.to_records())
+df2
 
 /// md
 ## Series math
 
 /// adder
 s = df['fe']
-stats = f"mean={s.mean():.1f}, std={s.std():.1f}, min={s.min()}, max={s.max()}"
-display(stats)
+f"mean={s.mean():.1f}, std={s.std():.1f}, min={s.min()}, max={s.max()}"
 
 /// md
 ## merge (join)
@@ -96,5 +93,4 @@ collars = pd.DataFrame({
     "north": [1000, 1015, 990],
 })
 
-merged = df.merge(collars, on="hole").select("hole", "from", "to", "fe", "east", "north")
-ui.table(merged.to_records())
+df.merge(collars, on="hole").select("hole", "from", "to", "fe", "east", "north")

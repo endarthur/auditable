@@ -96,6 +96,25 @@ class Series {
   __len__() { return this._values.length; }
 
   [Symbol.iterator]() { return this._values[Symbol.iterator](); }
+
+  _repr_html_() {
+    const n = this._values.length;
+    const maxRows = 20;
+    const show = Math.min(n, maxRows);
+    const name = this._name || 'value';
+    const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    let html = '<table style="border-collapse:collapse;font-family:var(--mono,monospace);font-size:12px">';
+    html += `<tr><th style="padding:3px 8px;border-bottom:2px solid var(--fg-dim,#666);text-align:left">${esc(name)}</th></tr>`;
+    for (let i = 0; i < show; i++) {
+      const v = this._values[i];
+      const text = v == null ? '' : typeof v === 'number' ? (Number.isInteger(v) ? String(v) : v.toFixed(4).replace(/\.?0+$/, '')) : esc(String(v));
+      const align = typeof v === 'number' ? 'right' : 'left';
+      html += `<tr><td style="padding:2px 8px;border-bottom:1px solid var(--bg-cell,#333);text-align:${align}">${text}</td></tr>`;
+    }
+    html += '</table>';
+    if (n > maxRows) html += `<div style="font-size:11px;color:var(--fg-dim,#888);margin-top:4px">\u2026 ${n} values</div>`;
+    return html;
+  }
 }
 
 export { Series, BooleanMask };

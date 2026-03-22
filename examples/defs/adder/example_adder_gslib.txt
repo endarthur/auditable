@@ -245,7 +245,7 @@ for co_x10 in range(0, 31):
     g = g_s.mean()
     gt_rows.append({"cutoff": co, "blocks": len(above), "tonnes": round(t, 3), "grade": round(g, 3), "metal": round(t * g, 3)})
 
-ui.table(pd.DataFrame(gt_rows).to_records())
+pd.DataFrame(gt_rows)
 
 /// md
 ---

@@ -135,14 +135,14 @@ rmse = err.apply(lambda v: v**2).mean() ** 0.5
 cov = ((t_s - t_s.mean()) * (e_s - e_s.mean())).mean()
 corr = cov / (t_s.std() * e_s.std()) if t_s.std() > 0 and e_s.std() > 0 else 0
 
-ui.table(pd.DataFrame([{
+pd.DataFrame([{
     "estimated": f"{len(df)} / {gridN * gridN}",
     "mean error": round(me, 4),
     "MAE": round(mae, 4),
     "RMSE": round(rmse, 4),
     "correlation": round(corr, 4),
     "cond. bias": round(me / rmse, 3) if rmse > 0 else 0,
-}]).to_records())
+}])
 
 /// md
 ---

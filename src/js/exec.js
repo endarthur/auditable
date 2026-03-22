@@ -417,11 +417,18 @@ function _createCellContext(cell) {
         else if (arg.type === 'css') { const s = document.createElement('style'); s.textContent = arg.content; el.appendChild(s); }
         outputEl.appendChild(el);
       } else if (typeof arg === 'object' && arg !== null) {
-        const pre = document.createElement('span');
-        try { pre.textContent = JSON.stringify(arg, null, 2); }
-        catch { pre.textContent = String(arg); }
-        outputEl.appendChild(pre);
-        outputEl.appendChild(document.createTextNode('\n'));
+        // _repr_html_() — rich display protocol (IPython convention)
+        if (typeof arg._repr_html_ === 'function') {
+          const el = document.createElement('div');
+          el.innerHTML = arg._repr_html_();
+          outputEl.appendChild(el);
+        } else {
+          const pre = document.createElement('span');
+          try { pre.textContent = JSON.stringify(arg, null, 2); }
+          catch { pre.textContent = String(arg); }
+          outputEl.appendChild(pre);
+          outputEl.appendChild(document.createTextNode('\n'));
+        }
       } else {
         outputEl.appendChild(document.createTextNode(String(arg) + '\n'));
       }

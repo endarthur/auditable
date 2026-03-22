@@ -91,7 +91,7 @@ for spacing in spacings:
     })
 
 results_df = pd.DataFrame([{"spacing": r["spacing"], "nsamples": r["nsamples"], "corr": r["corr"], "slope": r["slope"], "rmse": r["rmse"]} for r in results])
-ui.table(results_df.to_records())
+results_df
 
 /// md
 ## maps — truth vs selected spacings

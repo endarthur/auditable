@@ -102,6 +102,25 @@ class Series {
   __len__() { return this._values.length; }
 
   [Symbol.iterator]() { return this._values[Symbol.iterator](); }
+
+  _repr_html_() {
+    const n = this._values.length;
+    const maxRows = 20;
+    const show = Math.min(n, maxRows);
+    const name = this._name || 'value';
+    const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    let html = '<table style="border-collapse:collapse;font-family:var(--mono,monospace);font-size:12px">';
+    html += `<tr><th style="padding:3px 8px;border-bottom:2px solid var(--fg-dim,#666);text-align:left">${esc(name)}</th></tr>`;
+    for (let i = 0; i < show; i++) {
+      const v = this._values[i];
+      const text = v == null ? '' : typeof v === 'number' ? (Number.isInteger(v) ? String(v) : v.toFixed(4).replace(/\.?0+$/, '')) : esc(String(v));
+      const align = typeof v === 'number' ? 'right' : 'left';
+      html += `<tr><td style="padding:2px 8px;border-bottom:1px solid var(--bg-cell,#333);text-align:${align}">${text}</td></tr>`;
+    }
+    html += '</table>';
+    if (n > maxRows) html += `<div style="font-size:11px;color:var(--fg-dim,#888);margin-top:4px">\u2026 ${n} values</div>`;
+    return html;
+  }
 }
 
 // -- table.js --
@@ -555,6 +574,11 @@ function toCSV(table, opts = {}) {
 
 
 
+// ── html helpers ──
+
+function _escHtml(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function _fmtNum(v) { return Number.isInteger(v) ? String(v) : v.toFixed(4).replace(/\.?0+$/, ''); }
+
 // ── factories ──
 
 function table(columns) {
@@ -660,6 +684,27 @@ class DataFrame {
   __contains__(key) { return this._tbl.columnNames().includes(key); }
   __repr__() { return this._tbl.print(10); }
   __str__() { return this._tbl.print(10); }
+
+  _repr_html_() {
+    const names = this._tbl.columnNames();
+    const n = this._tbl.numRows();
+    const maxRows = 20;
+    const show = Math.min(n, maxRows);
+    let html = '<table style="border-collapse:collapse;font-family:var(--mono,monospace);font-size:12px">';
+    html += '<tr>' + names.map(c => `<th style="padding:3px 8px;border-bottom:2px solid var(--fg-dim,#666);text-align:left">${_escHtml(c)}</th>`).join('') + '</tr>';
+    for (let i = 0; i < show; i++) {
+      html += '<tr>' + names.map(c => {
+        const v = this._tbl._columns[c][i];
+        const align = typeof v === 'number' ? 'right' : 'left';
+        const text = v == null ? '' : typeof v === 'number' ? _fmtNum(v) : _escHtml(String(v));
+        return `<td style="padding:2px 8px;border-bottom:1px solid var(--bg-cell,#333);text-align:${align}">${text}</td>`;
+      }).join('') + '</tr>';
+    }
+    html += '</table>';
+    if (n > maxRows) html += `<div style="font-size:11px;color:var(--fg-dim,#888);margin-top:4px">\u2026 ${n} rows \u00d7 ${names.length} columns</div>`;
+    else html += `<div style="font-size:11px;color:var(--fg-dim,#888);margin-top:4px">${n} rows \u00d7 ${names.length} columns</div>`;
+    return html;
+  }
   [Symbol.iterator]() { return this._tbl.columnNames()[Symbol.iterator](); }
 
   // properties (JS getters — work in both JS and adder)
