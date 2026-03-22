@@ -13,7 +13,7 @@
 <div class="help-row"><span class="help-key">v</span><span class="help-desc">paste cell below</span></div>
 <div class="help-row"><span class="help-key">x</span><span class="help-desc">cut cell</span></div>
 <div class="help-row"><span class="help-key">m</span><span class="help-desc">convert to markdown</span></div>
-<div class="help-row"><span class="help-key">y</span><span class="help-desc">convert to code</span></div>
+<div class="help-row"><span class="help-key">y</span><span class="help-desc">convert to js</span></div>
 <div class="help-row"><span class="help-key">s</span><span class="help-desc">convert to css</span></div>
 <div class="help-row"><span class="help-key">t</span><span class="help-desc">convert to html template</span></div>
 <div class="help-row"><span class="help-key">h</span><span class="help-desc">collapse / expand cell</span></div>
@@ -336,7 +336,7 @@
     <input type="text" id="docTitle" value="untitled" spellcheck="false">
   </span>
   <span class="toolbar-status" id="toolbarStatus"></span>
-  <button class="toolbar-add" onclick="addCellWithUndo('code','',S.selectedId)">+ code</button>
+  <span class="code-split" id="toolbarCodeCombo"><button class="toolbar-add" onclick="addCellWithUndo(getPreferredCodeType(),'',S.selectedId)">+ js</button><button class="toolbar-add code-caret" style="display:none" onclick="toggleCodeTray(this)">&#x25be;</button><div class="code-tray"></div></span>
   <button class="toolbar-add" onclick="addCellWithUndo('md','',S.selectedId)">+ md</button>
   <button class="toolbar-secondary" onclick="addCellWithUndo('css','',S.selectedId)">+ css</button>
   <button class="toolbar-secondary" onclick="addCellWithUndo('html','',S.selectedId)">+ html</button>
@@ -413,8 +413,8 @@
   </span>
   <div class="action-bar">
     <div>
-      <div class="action-add-tray">
-        <button onclick="insertAt(S.selectedId,'code');toggleAddTray()">+ code</button>
+      <div class="action-add-tray" id="mobileAddTray">
+        <button onclick="insertAt(S.selectedId,'code');toggleAddTray()">+ js</button>
         <button onclick="insertAt(S.selectedId,'md');toggleAddTray()">+ md</button>
         <button onclick="insertAt(S.selectedId,'css');toggleAddTray()">+ css</button>
         <button onclick="insertAt(S.selectedId,'html');toggleAddTray()">+ html</button>

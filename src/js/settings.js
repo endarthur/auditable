@@ -1,5 +1,5 @@
 import { S, $ } from './state.js';
-import { updateStatus, setMsg } from './ui.js';
+import { updateStatus, setMsg, setPreferredCodeType, getRawPreferredCodeType } from './ui.js';
 import { updateAllEditorThemes, updateAllEditorLineNumbers, updateAllEditorReadOnly } from './cm6.js';
 import { syncModules, syncSettings } from './save.js';
 
@@ -148,6 +148,8 @@ export function getSettings() {
     showToggle: _showToggle,
     editorView: _editorView,
   };
+  const rawPref = getRawPreferredCodeType();
+  if (rawPref && rawPref !== 'code') s.preferredCodeType = rawPref;
   if (window._sizeCompare) s.sizeCompare = true;
   if (window._sizeCompareRef === 'content') s.sizeCompareRef = 'content';
   return s;
@@ -164,6 +166,7 @@ export function applySettings(s) {
   if (s.runOnLoad) applyRunOnLoad(s.runOnLoad);
   if (s.showToggle) applyShowToggle(s.showToggle);
   if (s.editorView) applyEditorView(s.editorView);
+  if (s.preferredCodeType) setPreferredCodeType(s.preferredCodeType);
   // optional: size-compare.js (typeof guards for --lean builds without it)
   if (s.sizeCompare !== undefined && typeof applySizeCompare === 'function') applySizeCompare(s.sizeCompare);
   if (s.sizeCompareRef !== undefined && typeof applySizeCompareRef === 'function') applySizeCompareRef(s.sizeCompareRef);

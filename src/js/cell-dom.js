@@ -19,11 +19,12 @@ function cellHeaderHTML(type, id) {
   const pluginBtns = Object.entries(window._cellTypes || {}).map(([name, h]) =>
     `<button onclick="convertCell(${id},'${name}')">${h.label || name}</button>`
   ).join('');
+  const typeLabel = type === 'code' ? 'js' : type;
   return `<div class="cell-header">
-    <span class="cell-type">${type}</span>
+    <span class="cell-type">${typeLabel}</span>
     <button class="cell-btn cell-convert" onclick="toggleTypePicker(${id})" title="convert type">\u21c4</button>
     <div class="cell-type-picker" data-cell-id="${id}">
-      <button onclick="convertCell(${id},'code')">code</button>
+      <button onclick="convertCell(${id},'code')">js</button>
       <button onclick="convertCell(${id},'md')">md</button>
       <button onclick="convertCell(${id},'css')">css</button>
       <button onclick="convertCell(${id},'html')">html</button>

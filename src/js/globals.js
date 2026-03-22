@@ -10,7 +10,7 @@ import { toggleAutorun, notifyDirty } from './editor.js';
 import { toggleSettings, togglePresent, applyTheme, applyFontSize, applyWidth, applyLineNumbers, applyHeader, applyExecMode, applyRunOnLoad, applyShowToggle, applyGlobalExecMode, applyGlobalRunOnLoad, applyEditorView } from './settings.js';
 import { toggleUpdate, checkForUpdate, applyOnlineUpdate, proceedUpdate, cancelUpdate, updateFromFile } from './update.js';
 import { saveNotebook, savePackedNotebook, setSaveMode, toggleSaveTray, exportAsTxt, showExportDialog, doExportApp, closeExportDialog } from './save.js';
-import { insertAt } from './ui.js';
+import { insertAt, getPreferredCodeType, setPreferredCodeType, setPreferredAndInsert, toggleCodeTray, updateToolbarCodeBtn } from './ui.js';
 import { toggleFs, fsImport } from './fs.js';
 import { toggleMcpPanel, mcpConnect } from './mcp-adapter.js';
 import { openFind, closeFind } from './find.js';
@@ -67,6 +67,11 @@ window.runAll = runAll;
 
 // ui
 window.insertAt = insertAt;
+window.getPreferredCodeType = getPreferredCodeType;
+window.setPreferredCodeType = setPreferredCodeType;
+window.setPreferredAndInsert = setPreferredAndInsert;
+window.toggleCodeTray = toggleCodeTray;
+window.updateToolbarCodeBtn = updateToolbarCodeBtn;
 
 // find
 window.openFind = openFind;

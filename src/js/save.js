@@ -310,6 +310,16 @@ async function buildNotebookHtml(opts = {}) {
   if (overflow) overflow.classList.remove('open');
   const saveTray = toolbarEl.querySelector('#saveTray');
   if (saveTray) saveTray.classList.remove('open');
+  // reset code combo tray
+  const codeCombo = toolbarEl.querySelector('#toolbarCodeCombo');
+  if (codeCombo) {
+    const codeTray = codeCombo.querySelector('.code-tray');
+    if (codeTray) { codeTray.classList.remove('open'); codeTray.innerHTML = ''; }
+    const codeCaret = codeCombo.querySelector('.code-caret');
+    if (codeCaret) codeCaret.style.display = 'none';
+    const codeBtn = codeCombo.querySelector('.toolbar-add');
+    if (codeBtn) codeBtn.textContent = '+ js';
+  }
   // reset save label to default
   const saveLabel = toolbarEl.querySelector('#saveLabel');
   if (saveLabel) saveLabel.textContent = 'save';

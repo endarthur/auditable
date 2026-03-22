@@ -1398,6 +1398,54 @@ body.split-view .present-exit { display: none; }
   color: var(--accent);
 }
 
+/* ── CODE COMBO (insert bar + toolbar) ── */
+.code-split {
+  display: inline-flex;
+  position: relative;
+}
+.code-caret {
+  padding: 1px 3px !important;
+  border-left: none !important;
+  font-size: 8px !important;
+}
+.code-tray {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  z-index: 200;
+  min-width: 80px;
+  flex-direction: column;
+}
+.code-tray.open { display: flex; }
+.code-tray button {
+  padding: 4px 12px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-size: 9px;
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  cursor: pointer;
+}
+.code-tray button:last-child { border-bottom: none; }
+.code-tray button:hover { background: var(--bg2); color: var(--fg-bright); }
+
+/* toolbar code-split overrides */
+#toolbarCodeCombo .code-caret {
+  padding: 3px 4px !important;
+  font-size: 10px !important;
+}
+#toolbarCodeCombo .code-tray button {
+  padding: 6px 14px;
+  font-size: 10px;
+  min-height: 28px;
+}
+
 /* ── ADD CELL BAR ── */
 .add-bar {
   display: flex;

@@ -5,7 +5,7 @@ import { _ctGetHandler, _ctIsExecutable } from './cell-types.js';
 import { toggleAutorun } from './editor.js';
 import { toggleSettings, togglePresent, applyLineNumbers, getSettings } from './settings.js';
 import { saveNotebook, savePackedNotebook, setSaveMode, toggleSaveTray } from './save.js';
-import { setMsg } from './ui.js';
+import { setMsg, getPreferredCodeType } from './ui.js';
 import { toggleMdComment, autoResize, cssSummary } from './cell-dom.js';
 import { openFind, closeFind } from './find.js';
 import { getEditor, setCm6Callbacks } from './cm6.js';
@@ -187,7 +187,7 @@ function cm6RunAndAdvance(cellId) {
     if (idx < S.cells.length - 1) {
       editCell(S.cells[idx + 1].id);
     } else {
-      const newCell = addCellWithUndo('code', '', cellId);
+      const newCell = addCellWithUndo(getPreferredCodeType(), '', cellId);
       selectCell(newCell.id);
       editCell(newCell.id);
     }
@@ -241,7 +241,7 @@ export function showInsertPicker(id, dir) {
   }
   const allTypes = ['code', 'md', 'css', 'html', ...Object.keys(window._cellTypes || {})];
   picker.innerHTML = allTypes.map(t => {
-    const label = window._cellTypes?.[t]?.label || t;
+    const label = t === 'code' ? 'js' : (window._cellTypes?.[t]?.label || t);
     return `<button onclick="insertAt(${afterId !== null ? afterId : 'null'},'${t}');this.closest('.cell-insert-picker').remove()">${label}</button>`;
   }).join('');
   const header = cell.el.querySelector('.cell-header');
@@ -301,7 +301,7 @@ function runSelectedAndAdvance() {
     if (idx < S.cells.length - 1) {
       editCell(S.cells[idx + 1].id);
     } else {
-      const newCell = addCellWithUndo('code', '', S.selectedId);
+      const newCell = addCellWithUndo(getPreferredCodeType(), '', S.selectedId);
       selectCell(newCell.id);
     }
   }
@@ -386,7 +386,7 @@ document.addEventListener('keydown', (e) => {
       if (idx < S.cells.length - 1) {
         editCell(S.cells[idx + 1].id);
       } else {
-        const newCell = addCellWithUndo('code', '', editing.id);
+        const newCell = addCellWithUndo(getPreferredCodeType(), '', editing.id);
         selectCell(newCell.id);
         editCell(newCell.id);
       }
@@ -420,14 +420,14 @@ document.addEventListener('keydown', (e) => {
     }
     if (e.key === 'a') {
       e.preventDefault();
-      const newCell = addCellWithUndo('code', '', null, S.selectedId);
+      const newCell = addCellWithUndo(getPreferredCodeType(), '', null, S.selectedId);
       selectCell(newCell.id);
       editCell(newCell.id);
       return;
     }
     if (e.key === 'b') {
       e.preventDefault();
-      const newCell = addCellWithUndo('code', '', S.selectedId);
+      const newCell = addCellWithUndo(getPreferredCodeType(), '', S.selectedId);
       selectCell(newCell.id);
       editCell(newCell.id);
       return;
@@ -609,6 +609,10 @@ document.addEventListener('click', (e) => {
   const saveTray = document.getElementById('saveTray');
   if (saveTray && saveTray.classList.contains('open') && !saveTray.parentElement.contains(e.target)) {
     saveTray.classList.remove('open');
+  }
+  // close code trays if clicking outside
+  if (!e.target.closest('.code-split')) {
+    document.querySelectorAll('.code-tray.open').forEach(el => el.classList.remove('open'));
   }
 
   const cellEl = e.target.closest('.cell');
