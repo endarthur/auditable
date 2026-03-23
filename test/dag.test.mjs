@@ -3,7 +3,7 @@ globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseNames, findUses, findHtmlUses, isManual, parseCellName, isHidden, isNorun, parseOutputId, parseOutputClass, isPrivate, isMcp, isMcpRw, parseMcpDescribe, isMcpManifest, parseMcpFs } from '../src/js/dag.js';
+import { parseNames, findUses, findHtmlUses, isManual, parseCellName, isHidden, isNorun, isCollapsed, parseOutputId, parseOutputClass, isPrivate, isMcp, isMcpRw, parseMcpDescribe, isMcpManifest, parseMcpFs } from '../src/js/dag.js';
 
 // ── isManual ──
 
@@ -484,6 +484,58 @@ describe('parseMcpFs', () => {
   it('trims prefix whitespace', () => {
     const r = parseMcpFs('// %mcp fs   lib/  ');
     assert.deepStrictEqual(r, { prefix: 'lib/', readOnly: false });
+  });
+});
+
+// ── Python-style (#) directives ──
+
+describe('# directives (adder cells)', () => {
+  it('# %manual', () => {
+    assert.ok(isManual('# %manual\nx = 1'));
+  });
+  it('# %hide', () => {
+    assert.ok(isHidden('# %hide\nx = 1'));
+  });
+  it('# %norun', () => {
+    assert.ok(isNorun('# %norun\nx = 1'));
+  });
+  it('# %cellName', () => {
+    assert.strictEqual(parseCellName('# %cellName setup'), 'setup');
+  });
+  it('# %mcp', () => {
+    assert.ok(isMcp('# %mcp\nx = 1'));
+  });
+  it('# %mcp r', () => {
+    assert.ok(isMcp('# %mcp r\nx = 1'));
+  });
+  it('# %mcp rw', () => {
+    assert.ok(isMcpRw('# %mcp rw\nx = 1'));
+  });
+  it('# %mcp manifest', () => {
+    assert.ok(isMcpManifest('# %mcp manifest'));
+  });
+  it('# %mcp describe', () => {
+    assert.strictEqual(parseMcpDescribe('# %mcp describe "helper"'), 'helper');
+  });
+  it('# %mcp fs', () => {
+    const r = parseMcpFs('# %mcp fs data/');
+    assert.deepStrictEqual(r, { prefix: 'data/', readOnly: false });
+  });
+  it('# %mcp fs:read', () => {
+    const r = parseMcpFs('# %mcp fs:read logs/');
+    assert.deepStrictEqual(r, { prefix: 'logs/', readOnly: true });
+  });
+  it('# %private', () => {
+    assert.ok(isPrivate('# %private\nx = 1'));
+  });
+  it('# %collapsed', () => {
+    assert.ok(isCollapsed('# %collapsed\nx = 1'));
+  });
+  it('with leading whitespace', () => {
+    assert.ok(isManual('  # %manual'));
+  });
+  it('on any line', () => {
+    assert.ok(isManual('x = 1\n# %manual'));
   });
 });
 
