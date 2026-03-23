@@ -1402,9 +1402,6 @@ body.split-view .present-exit { display: none; }
 
 .split-output { margin-bottom: 12px; }
 .split-output .cell-md-view { color: var(--fg-bright); }
-.split-output .cell-md-view h1,
-.split-output .cell-md-view h2,
-.split-output .cell-md-view h3 { color: var(--fg-bright); margin: 0.5em 0; }
 .split-output .cell-output { white-space: pre-wrap; word-break: break-word; }
 .split-output .cell-output.error { color: var(--err); }
 
