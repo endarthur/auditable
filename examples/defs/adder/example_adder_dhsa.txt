@@ -19,13 +19,17 @@ await load("@gcu/adder")
 await load("@gcu/sadpan")
 const gslib = await load("@atra/gslib")
 
+/// adder
+import math
+import random
+import js
+import sadpan as pd
+import plt
+
 /// md
 ## parameters
 
 /// adder
-import math
-import random
-
 gridN = ui.slider("grid", 60, {"min": 30, "max": 100, "step": 5})
 vRange = ui.slider("range", 15, {"min": 5, "max": 40, "step": 1})
 vSill = ui.slider("sill", 1.0, {"min": 0.2, "max": 3.0, "step": 0.1})
@@ -47,9 +51,6 @@ print(f"reference model: {gridN}×{gridN} grid, range={vRange}, sill={vSill}, nu
 ## spacing analysis
 
 /// adder
-import js
-import sadpan as pd
-
 spacings = [2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30]
 spacings = [s for s in spacings if s < gridN / 2]
 
@@ -97,10 +98,6 @@ results_df
 ## maps — truth vs selected spacings
 
 /// adder
-import plt
-import js
-import math
-
 nPick = min(len(results), 5)
 if nPick >= 2:
     show_idx = [int(round(i * (len(results) - 1) / (nPick - 1))) for i in range(nPick)]
@@ -137,8 +134,6 @@ display(fig.show())
 ## classification curve
 
 /// adder
-import plt
-
 sp = list(results_df['spacing'].values)
 corr = list(results_df['corr'].values)
 
@@ -161,8 +156,6 @@ display(fig2.show())
 Conditional bias. Slope = 1.0 is unbiased; < 1.0 means over-smoothing.
 
 /// adder
-import plt
-
 sp = list(results_df['spacing'].values)
 slopes = list(results_df['slope'].values)
 

@@ -1320,10 +1320,10 @@ function adderGetAttr(obj, attr) {
       fn._pyName = attr;
       return fn;
     }
+    // regular property access (before dict-like methods, so getters/own props take priority)
+    if (attr in obj) return obj[attr];
     // dict-like attribute access — keys, values, items, get, etc.
     if (_objDictMethods[attr]) return _objDictMethods[attr](obj);
-    // regular property access
-    if (attr in obj) return obj[attr];
     // __getattr__ dunder
     if (typeof obj.__getattr__ === 'function') return obj.__getattr__(attr);
     throw new AdderError('AttributeError', `'${pyTypeName(obj)}' object has no attribute '${attr}'`);
