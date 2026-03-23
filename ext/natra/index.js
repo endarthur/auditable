@@ -2189,6 +2189,13 @@ async function natra(opts = {}) {
         }
         return out;
       },
+
+      // Element-wise JS function map (for Math.abs, Math.sqrt, etc.)
+      map(a, fn) {
+        const out = allocScoped(a.shape);
+        stridedUnaryOp(memory, a.ptr, a.strides, out.ptr, out.strides, a.shape, fn);
+        return out;
+      },
     };
 
     return s;
@@ -2208,6 +2215,29 @@ async function natra(opts = {}) {
     array, zeros, ones, full, eye, linspace, arange,
     random, randn, seed,
     scope, reset,
+
+    // Sync permPtr to heapPtr (prevents perm allocs from overwriting arena scratch)
+    _syncPerm() {
+      if (permPtr.value < heapPtr.value) permPtr.value = heapPtr.value;
+    },
+
+    // Cell-scope API for adder integration
+    _beginCellScope() {
+      if (permPtr.value < heapPtr.value) permPtr.value = heapPtr.value;
+      const arena = new Arena(memory, heapPtr, null, maxPages);
+      return { arena, ops: makeScopeOps(arena) };
+    },
+    _endCellScope(arena, arraysToKeep) {
+      if (!arraysToKeep || arraysToKeep.length === 0) {
+        for (const arr of arena.arrays) _deadArrays.add(arr);
+        heapPtr.value = arena.watermark;
+        if (permPtr.value < heapPtr.value) permPtr.value = heapPtr.value;
+        return [];
+      }
+      const result = arraysToKeep.length === 1 ? arraysToKeep[0] : arraysToKeep;
+      const promoted = promote(result, arena);
+      return Array.isArray(promoted) ? promoted : [promoted];
+    },
 
     // data access as methods (also available as module functions)
     toArray(arr) { return toArray(arr); },

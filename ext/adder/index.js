@@ -2311,7 +2311,7 @@ function adderBuiltins(printFn) {
       throw new AdderError('TypeError', `cannot convert '${pyTypeName(x)}' to dict`);
     },
     set: async (x) => x === undefined ? new Set() : new Set(await pyCollect(x)),
-    abs: Math.abs,
+    abs: (x) => (typeof x === 'object' && x !== null && typeof x.__abs__ === 'function') ? x.__abs__() : Math.abs(x),
     round: (x, n) => {
       if (n === undefined || n === 0) return Math.round(x);
       const f = Math.pow(10, n);
@@ -2805,10 +2805,14 @@ async function _deleteTarget(target, scope) {
 // ── binary operations ──
 
 function _binOp(op, left, right, line) {
-  // check dunder methods
+  // check dunder methods (left operand first, then reflected on right)
   if (left !== null && typeof left === 'object') {
     const dunder = _dunders[op];
     if (dunder && typeof left[dunder] === 'function') return left[dunder](right);
+  }
+  if (right !== null && typeof right === 'object') {
+    const rdunder = _rdunders[op];
+    if (rdunder && typeof right[rdunder] === 'function') return right[rdunder](left);
   }
   switch (op) {
     case '+':
@@ -2845,7 +2849,7 @@ function _binOp(op, left, right, line) {
     case '^': return left ^ right;
     case '<<': return left << right;
     case '>>': return left >> right;
-    case '@': throw new AdderError('TypeError', 'matmul is not supported', line);
+    case '@': throw new AdderError('TypeError', `unsupported operand type(s) for @: '${pyTypeName(left)}' and '${pyTypeName(right)}'`, line);
     default: throw new AdderError('TypeError', `unsupported operator: ${op}`, line);
   }
 }
@@ -2864,6 +2868,11 @@ const _dunders = {
   '//': '__floordiv__', '%': '__mod__', '**': '__pow__',
   '&': '__and__', '|': '__or__', '^': '__xor__',
   '<<': '__lshift__', '>>': '__rshift__', '@': '__matmul__',
+};
+
+const _rdunders = {
+  '+': '__radd__', '-': '__rsub__', '*': '__rmul__', '/': '__rtruediv__',
+  '//': '__rfloordiv__', '%': '__rmod__', '**': '__rpow__', '@': '__rmatmul__',
 };
 
 // ── comparison ──
@@ -4035,11 +4044,23 @@ async function pythonExecute(code, scopeIn, cell) {
   }
   _ensureFsModules();
 
+  // run before-cell hooks
+  const _hookStates = [];
+  if (typeof window !== 'undefined' && window._adderCellHooks) {
+    for (const h of window._adderCellHooks) _hookStates.push(h.before?.(scope, cell) ?? null);
+  }
+
   // evaluate
   let lastExpr;
   try {
     lastExpr = await adderEval(ast, scope);
   } catch (e) {
+    // run after-cell hooks even on error (for cleanup)
+    if (typeof window !== 'undefined' && window._adderCellHooks) {
+      for (let i = 0; i < window._adderCellHooks.length; i++) {
+        try { window._adderCellHooks[i].after?.(_hookStates[i], {}, scope); } catch {}
+      }
+    }
     if (e instanceof AdderError) throw e;
     throw e;
   }
@@ -4050,6 +4071,13 @@ async function pythonExecute(code, scopeIn, cell) {
   for (const name of cellDefines) {
     if (scope.vars.has(name)) {
       defines[name] = scope.vars.get(name);
+    }
+  }
+
+  // run after-cell hooks
+  if (typeof window !== 'undefined' && window._adderCellHooks) {
+    for (let i = 0; i < window._adderCellHooks.length; i++) {
+      window._adderCellHooks[i].after?.(_hookStates[i], defines, scope);
     }
   }
 

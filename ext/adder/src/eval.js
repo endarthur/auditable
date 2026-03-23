@@ -349,10 +349,14 @@ async function _deleteTarget(target, scope) {
 // ── binary operations ──
 
 function _binOp(op, left, right, line) {
-  // check dunder methods
+  // check dunder methods (left operand first, then reflected on right)
   if (left !== null && typeof left === 'object') {
     const dunder = _dunders[op];
     if (dunder && typeof left[dunder] === 'function') return left[dunder](right);
+  }
+  if (right !== null && typeof right === 'object') {
+    const rdunder = _rdunders[op];
+    if (rdunder && typeof right[rdunder] === 'function') return right[rdunder](left);
   }
   switch (op) {
     case '+':
@@ -389,7 +393,7 @@ function _binOp(op, left, right, line) {
     case '^': return left ^ right;
     case '<<': return left << right;
     case '>>': return left >> right;
-    case '@': throw new AdderError('TypeError', 'matmul is not supported', line);
+    case '@': throw new AdderError('TypeError', `unsupported operand type(s) for @: '${pyTypeName(left)}' and '${pyTypeName(right)}'`, line);
     default: throw new AdderError('TypeError', `unsupported operator: ${op}`, line);
   }
 }
@@ -408,6 +412,11 @@ const _dunders = {
   '//': '__floordiv__', '%': '__mod__', '**': '__pow__',
   '&': '__and__', '|': '__or__', '^': '__xor__',
   '<<': '__lshift__', '>>': '__rshift__', '@': '__matmul__',
+};
+
+const _rdunders = {
+  '+': '__radd__', '-': '__rsub__', '*': '__rmul__', '/': '__rtruediv__',
+  '//': '__rfloordiv__', '%': '__rmod__', '**': '__rpow__', '@': '__rmatmul__',
 };
 
 // ── comparison ──

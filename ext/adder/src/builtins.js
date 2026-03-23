@@ -1247,7 +1247,7 @@ export function adderBuiltins(printFn) {
       throw new AdderError('TypeError', `cannot convert '${pyTypeName(x)}' to dict`);
     },
     set: async (x) => x === undefined ? new Set() : new Set(await pyCollect(x)),
-    abs: Math.abs,
+    abs: (x) => (typeof x === 'object' && x !== null && typeof x.__abs__ === 'function') ? x.__abs__() : Math.abs(x),
     round: (x, n) => {
       if (n === undefined || n === 0) return Math.round(x);
       const f = Math.pow(10, n);

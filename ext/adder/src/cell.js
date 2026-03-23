@@ -220,11 +220,23 @@ export async function pythonExecute(code, scopeIn, cell) {
   }
   _ensureFsModules();
 
+  // run before-cell hooks
+  const _hookStates = [];
+  if (typeof window !== 'undefined' && window._adderCellHooks) {
+    for (const h of window._adderCellHooks) _hookStates.push(h.before?.(scope, cell) ?? null);
+  }
+
   // evaluate
   let lastExpr;
   try {
     lastExpr = await adderEval(ast, scope);
   } catch (e) {
+    // run after-cell hooks even on error (for cleanup)
+    if (typeof window !== 'undefined' && window._adderCellHooks) {
+      for (let i = 0; i < window._adderCellHooks.length; i++) {
+        try { window._adderCellHooks[i].after?.(_hookStates[i], {}, scope); } catch {}
+      }
+    }
     if (e instanceof AdderError) throw e;
     throw e;
   }
@@ -235,6 +247,13 @@ export async function pythonExecute(code, scopeIn, cell) {
   for (const name of cellDefines) {
     if (scope.vars.has(name)) {
       defines[name] = scope.vars.get(name);
+    }
+  }
+
+  // run after-cell hooks
+  if (typeof window !== 'undefined' && window._adderCellHooks) {
+    for (let i = 0; i < window._adderCellHooks.length; i++) {
+      window._adderCellHooks[i].after?.(_hookStates[i], defines, scope);
     }
   }
 

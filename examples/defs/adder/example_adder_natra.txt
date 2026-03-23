@@ -1,0 +1,136 @@
+/// auditable
+/// title: adder × natra — numpy for Python cells
+/// module: @gcu/adder ext/adder/index.js
+/// module: ./ext/atra/index.js ext/atra/index.js
+/// module: ./ext/atra/lib/alpack.src.js ext/atra/lib/alpack.src.js
+/// module: ./ext/natra/index.js ext/natra/index.js
+/// module: ./ext/natra/adder.js ext/natra/adder.js
+
+/// md
+# adder × natra
+
+Write `import natra as np` in adder cells and get numpy-like syntax — operators, slicing, reductions — backed by natra's Wasm-accelerated ndarray engine.
+
+/// code collapsed
+// %collapsed
+await load("@gcu/adder")
+await load("./ext/natra/index.js")
+await load("./ext/natra/adder.js")
+
+/// adder
+import natra as np
+
+/// md
+## array creation
+
+Standard numpy constructors — `array`, `zeros`, `ones`, `eye`, `linspace`, `arange`:
+
+/// adder
+a = np.array([1, 2, 3, 4, 5])
+b = np.zeros([3])
+c = np.ones([2, 3])
+I = np.eye(3)
+t = np.linspace(0, 1, 5)
+r = np.arange(10)
+
+print(f"a = {a}")
+print(f"zeros = {b}")
+print(f"ones shape = {c.shape}")
+print(f"eye =\n{I}")
+print(f"linspace = {t}")
+print(f"arange = {r}")
+
+/// md
+## operators
+
+Arithmetic operators (+, -, *, /) work element-wise. Scalar–array operations use reflected dunders (`__radd__`, `__rmul__`, etc.), so `2 * a` works naturally:
+
+/// adder
+a = np.array([1, 2, 3, 4, 5])
+b = np.array([10, 20, 30, 40, 50])
+
+print("a + b =", (a + b).tolist())
+print("a * 3 =", (a * 3).tolist())
+print("10 - a =", (10 - a).tolist())
+print("-a =", (-a).tolist())
+print("abs(-a) =", abs(-a).tolist())
+
+/// md
+## matrix multiply (@)
+
+The `@` operator dispatches to natra's Wasm BLAS-backed matmul:
+
+/// adder
+A = np.array([[1, 2], [3, 4]])
+B = np.array([[5, 6], [7, 8]])
+C = A @ B
+print(f"A @ B =\n{C}")
+
+/// md
+## reductions and math
+
+Methods `.sum()`, `.mean()`, `.min()`, `.max()` and module functions `np.sqrt()`, `np.exp()`, `np.sin()`:
+
+/// adder
+a = np.array([1, 4, 9, 16, 25])
+
+print("sum =", a.sum())
+print("mean =", a.mean())
+print("min =", a.min())
+print("max =", a.max())
+print("sqrt =", np.sqrt(a).tolist())
+
+/// md
+## indexing
+
+Integer indexing, row extraction, and element assignment:
+
+/// adder
+a = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
+
+print("a[0] =", a[0].tolist())
+print("a[1][2] =", a[1][2])
+print("a[-1] =", a[-1].tolist())
+
+/// md
+## comparisons and where
+
+Comparison operators return mask arrays. `np.where` selects elements:
+
+/// adder
+a = np.array([1, 5, 3, 7, 2, 8, 4, 6])
+mask = a > 4
+print("a > 4 =", mask.tolist())
+
+filtered = np.where(mask, a, np.zeros([8]))
+print("where =", filtered.tolist())
+
+/// md
+## linear algebra
+
+`np.linalg` wraps natra's LAPACK routines:
+
+/// adder
+A = np.array([[4, 2], [2, 3]])
+b = np.array([1, 2])
+
+x = np.linalg.solve(A, b)
+print("solve:", x.tolist())
+print("det:", np.linalg.det(A))
+print("norm:", np.linalg.norm(b))
+
+# eigendecomposition
+w, V = np.linalg.eigh(A)
+print("eigenvalues:", w.tolist())
+
+/// md
+## iteration
+
+NdArrays support Python for-loops:
+
+/// adder
+a = np.array([10, 20, 30])
+total = 0
+for x in a:
+    total += x
+print("sum via loop:", total)

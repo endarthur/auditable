@@ -99,6 +99,7 @@ const categories = {
     'example_adder_dhsa.txt',
     'example_adder_sadpan.txt',
     'example_adder_fs.txt',
+    'example_adder_natra.txt',
   ],
 
   // etc — standalone demos that don't fit elsewhere
