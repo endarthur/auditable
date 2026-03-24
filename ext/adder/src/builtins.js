@@ -39,7 +39,82 @@ export class AdderError extends Error {
   }
 }
 
+// ── Complex number ──
+
+export class Complex {
+  constructor(real, imag = 0) {
+    this.real = typeof real === 'number' ? real : Number(real);
+    this.imag = typeof imag === 'number' ? imag : Number(imag);
+  }
+  __add__(other) {
+    if (other instanceof Complex) return new Complex(this.real + other.real, this.imag + other.imag);
+    if (typeof other === 'number') return new Complex(this.real + other, this.imag);
+  }
+  __radd__(left) {
+    if (typeof left === 'number') return new Complex(this.real + left, this.imag);
+  }
+  __sub__(other) {
+    if (other instanceof Complex) return new Complex(this.real - other.real, this.imag - other.imag);
+    if (typeof other === 'number') return new Complex(this.real - other, this.imag);
+  }
+  __rsub__(left) {
+    if (typeof left === 'number') return new Complex(left - this.real, -this.imag);
+  }
+  __mul__(other) {
+    if (other instanceof Complex) return new Complex(this.real * other.real - this.imag * other.imag, this.real * other.imag + this.imag * other.real);
+    if (typeof other === 'number') return new Complex(this.real * other, this.imag * other);
+  }
+  __rmul__(left) {
+    if (typeof left === 'number') return new Complex(this.real * left, this.imag * left);
+  }
+  __truediv__(other) {
+    let or, oi;
+    if (other instanceof Complex) { or = other.real; oi = other.imag; }
+    else if (typeof other === 'number') { or = other; oi = 0; }
+    else return;
+    const denom = or * or + oi * oi;
+    if (denom === 0) throw new AdderError('ZeroDivisionError', 'complex division by zero');
+    return new Complex((this.real * or + this.imag * oi) / denom, (this.imag * or - this.real * oi) / denom);
+  }
+  __rtruediv__(left) {
+    if (typeof left === 'number') return new Complex(left, 0).__truediv__(this);
+  }
+  __pow__(other) {
+    const r = Math.sqrt(this.real * this.real + this.imag * this.imag);
+    const theta = Math.atan2(this.imag, this.real);
+    if (typeof other === 'number') {
+      const newR = Math.pow(r, other);
+      const newTheta = other * theta;
+      return new Complex(newR * Math.cos(newTheta), newR * Math.sin(newTheta));
+    }
+    if (other instanceof Complex) {
+      const logR = Math.log(r), a = other.real, b = other.imag;
+      const newR = Math.exp(a * logR - b * theta);
+      const newTheta = b * logR + a * theta;
+      return new Complex(newR * Math.cos(newTheta), newR * Math.sin(newTheta));
+    }
+  }
+  __neg__() { return new Complex(-this.real, -this.imag); }
+  __abs__() { return Math.sqrt(this.real * this.real + this.imag * this.imag); }
+  __eq__(other) {
+    if (other instanceof Complex) return this.real === other.real && this.imag === other.imag;
+    if (typeof other === 'number') return this.imag === 0 && this.real === other;
+    return false;
+  }
+  __bool__() { return this.real !== 0 || this.imag !== 0; }
+  __repr__() {
+    if (this.real === 0) return `${this.imag}j`;
+    const sign = this.imag >= 0 ? '+' : '';
+    return `(${this.real}${sign}${this.imag}j)`;
+  }
+  __str__() { return this.__repr__(); }
+  get conjugate() { return () => new Complex(this.real, -this.imag); }
+}
+
 // ── type helpers ──
+
+// type object registry — populated by adderBuiltins()
+const _typeObjects = {};
 
 export function pyTypeName(v) {
   if (v === null || v === undefined) return 'NoneType';
@@ -50,6 +125,7 @@ export function pyTypeName(v) {
   if (v instanceof Map) return 'dict';
   if (v instanceof Set) return 'set';
   if (v instanceof AdderRange) return 'range';
+  if (v instanceof Complex) return 'complex';
   if (v instanceof Uint8Array) return 'bytes';
   if (typeof v === 'function') return 'function';
   if (v?.__adderClass__) return v.__adderClass__;
@@ -83,7 +159,11 @@ export function pyRepr(v) {
     if (v.step === 1) return `range(${v.start}, ${v.stop})`;
     return `range(${v.start}, ${v.stop}, ${v.step})`;
   }
-  if (typeof v === 'function') return `<function ${v._pyName || v.name || '<lambda>'}>`;
+  if (v instanceof Complex) return v.__repr__();
+  if (typeof v === 'function') {
+    if (v._pyClass) return `<class '${v._pyName || v.name}'>`;
+    return `<function ${v._pyName || v.name || '<lambda>'}>`;
+  }
   if (typeof v === 'object' && typeof v.__repr__ === 'function') return v.__repr__();
   if (typeof v === 'object' && typeof v.__str__ === 'function') return v.__str__();
   try { return JSON.stringify(v); } catch { return String(v); }
@@ -94,6 +174,8 @@ export function pyStr(v) {
   if (v === true) return 'True';
   if (v === false) return 'False';
   if (typeof v === 'string') return v;
+  if (v instanceof Complex) return v.__str__();
+  if (typeof v === 'function' && v._pyClass) return `<class '${v._pyName || v.name}'>`;
   if (typeof v === 'object' && typeof v.__str__ === 'function') return v.__str__();
   return pyRepr(v);
 }
@@ -502,121 +584,178 @@ const _randomModule = {
   },
 };
 
-// ── itertools ──
+// ── itertools (lazy async iterables) ──
+
+function _aiter(obj) {
+  if (obj && typeof obj[Symbol.asyncIterator] === 'function') return obj;
+  return pyIter(obj);
+}
 
 const _itertoolsModule = {
-  chain: (...iterables) => {
-    const result = [];
-    for (const it of iterables) for (const v of pyIter(it)) result.push(v);
-    return result;
-  },
-  product: (...iterables) => {
-    const arrs = iterables.map(it => [...pyIter(it)]);
-    if (arrs.length === 0) return [[]];
-    const result = [];
-    const indices = arrs.map(() => 0);
-    while (true) {
-      result.push(indices.map((idx, i) => arrs[i][idx]));
-      let i = arrs.length - 1;
-      while (i >= 0) { indices[i]++; if (indices[i] < arrs[i].length) break; indices[i] = 0; i--; }
-      if (i < 0) break;
-    }
-    return result;
-  },
-  combinations: (iterable, r) => {
-    const pool = [...pyIter(iterable)];
-    const n = pool.length;
-    if (r > n) return [];
-    const result = [];
-    const indices = Array.from({ length: r }, (_, i) => i);
-    result.push(indices.map(i => pool[i]));
-    while (true) {
-      let i = r - 1;
-      while (i >= 0 && indices[i] === i + n - r) i--;
-      if (i < 0) break;
-      indices[i]++;
-      for (let j = i + 1; j < r; j++) indices[j] = indices[j - 1] + 1;
-      result.push(indices.map(i => pool[i]));
-    }
-    return result;
-  },
-  permutations: (iterable, r) => {
-    const pool = [...pyIter(iterable)];
-    const n = pool.length;
-    r = r !== undefined ? r : n;
-    if (r > n) return [];
-    const result = [];
-    const indices = Array.from({ length: n }, (_, i) => i);
-    const cycles = Array.from({ length: r }, (_, i) => n - i);
-    result.push(indices.slice(0, r).map(i => pool[i]));
-    while (true) {
-      let found = false;
-      for (let i = r - 1; i >= 0; i--) {
-        cycles[i]--;
-        if (cycles[i] === 0) {
-          indices.push(indices.splice(i, 1)[0]);
-          cycles[i] = n - i;
-        } else {
-          const j = indices.length - cycles[i];
-          [indices[i], indices[j]] = [indices[j], indices[i]];
-          result.push(indices.slice(0, r).map(i => pool[i]));
-          found = true;
-          break;
+  chain: (...iterables) => ({
+    [Symbol.asyncIterator]() {
+      return (async function*() {
+        for (const it of iterables) for await (const v of _aiter(it)) yield v;
+      })();
+    },
+  }),
+  product: (...iterables) => ({
+    [Symbol.asyncIterator]() {
+      return (async function*() {
+        const arrs = [];
+        for (const it of iterables) arrs.push(await pyCollect(it));
+        if (arrs.length === 0) { yield []; return; }
+        const indices = arrs.map(() => 0);
+        while (true) {
+          yield indices.map((idx, i) => arrs[i][idx]);
+          let i = arrs.length - 1;
+          while (i >= 0) { indices[i]++; if (indices[i] < arrs[i].length) break; indices[i] = 0; i--; }
+          if (i < 0) break;
         }
-      }
-      if (!found) break;
-    }
-    return result;
-  },
-  repeat: (value, times) => {
-    if (times === undefined) { const a = []; for (let i = 0; i < 1000; i++) a.push(value); return a; } // capped
-    const result = []; for (let i = 0; i < times; i++) result.push(value); return result;
-  },
-  accumulate: (iterable, func) => {
-    const arr = [...pyIter(iterable)];
-    if (arr.length === 0) return [];
-    const result = [arr[0]];
-    for (let i = 1; i < arr.length; i++) result.push(func ? func(result[i - 1], arr[i]) : result[i - 1] + arr[i]);
-    return result;
-  },
-  starmap: (func, iterable) => [...pyIter(iterable)].map(args => func(...args)),
-  islice: (iterable, ...args) => {
-    let start = 0, stop, step = 1;
-    if (args.length === 1) { stop = args[0]; }
-    else if (args.length === 2) { start = args[0]; stop = args[1]; }
-    else { start = args[0]; stop = args[1]; step = args[2] || 1; }
-    const result = [];
-    let i = 0;
-    for (const v of pyIter(iterable)) {
-      if (i >= stop) break;
-      if (i >= start && (i - start) % step === 0) result.push(v);
-      i++;
-    }
-    return result;
-  },
+      })();
+    },
+  }),
+  combinations: (iterable, r) => ({
+    [Symbol.asyncIterator]() {
+      return (async function*() {
+        const pool = await pyCollect(iterable);
+        const n = pool.length;
+        if (r > n) return;
+        const indices = Array.from({ length: r }, (_, i) => i);
+        yield indices.map(i => pool[i]);
+        while (true) {
+          let i = r - 1;
+          while (i >= 0 && indices[i] === i + n - r) i--;
+          if (i < 0) break;
+          indices[i]++;
+          for (let j = i + 1; j < r; j++) indices[j] = indices[j - 1] + 1;
+          yield indices.map(i => pool[i]);
+        }
+      })();
+    },
+  }),
+  permutations: (iterable, r) => ({
+    [Symbol.asyncIterator]() {
+      return (async function*() {
+        const pool = await pyCollect(iterable);
+        const n = pool.length;
+        r = r !== undefined ? r : n;
+        if (r > n) return;
+        const indices = Array.from({ length: n }, (_, i) => i);
+        const cycles = Array.from({ length: r }, (_, i) => n - i);
+        yield indices.slice(0, r).map(i => pool[i]);
+        while (true) {
+          let found = false;
+          for (let i = r - 1; i >= 0; i--) {
+            cycles[i]--;
+            if (cycles[i] === 0) { indices.push(indices.splice(i, 1)[0]); cycles[i] = n - i; }
+            else { const j = indices.length - cycles[i]; [indices[i], indices[j]] = [indices[j], indices[i]]; yield indices.slice(0, r).map(i => pool[i]); found = true; break; }
+          }
+          if (!found) break;
+        }
+      })();
+    },
+  }),
+  repeat: (value, times) => ({
+    [Symbol.asyncIterator]() {
+      return (async function*() {
+        if (times === undefined) { while (true) yield value; }
+        else { for (let i = 0; i < times; i++) yield value; }
+      })();
+    },
+  }),
+  accumulate: (iterable, func) => ({
+    [Symbol.asyncIterator]() {
+      return (async function*() {
+        let acc, first = true;
+        for await (const v of _aiter(iterable)) {
+          if (first) { acc = v; first = true; yield acc; first = false; }
+          else { acc = func ? func(acc, v) : acc + v; yield acc; }
+        }
+      })();
+    },
+  }),
+  starmap: (func, iterable) => ({
+    [Symbol.asyncIterator]() {
+      return (async function*() {
+        for await (const args of _aiter(iterable)) yield await func(...args);
+      })();
+    },
+  }),
+  islice: (iterable, ...args) => ({
+    [Symbol.asyncIterator]() {
+      return (async function*() {
+        let start = 0, stop, step = 1;
+        if (args.length === 1) { stop = args[0]; }
+        else if (args.length === 2) { start = args[0]; stop = args[1]; }
+        else { start = args[0]; stop = args[1]; step = args[2] || 1; }
+        let i = 0;
+        for await (const v of _aiter(iterable)) {
+          if (stop !== undefined && i >= stop) break;
+          if (i >= start && (i - start) % step === 0) yield v;
+          i++;
+        }
+      })();
+    },
+  }),
   zip_longest: (...args) => {
     let fillvalue = null;
     if (args.length > 0 && args[args.length - 1]?._kw) { fillvalue = args.pop().fillvalue ?? null; }
-    const arrs = args.map(it => [...pyIter(it)]);
-    const maxLen = Math.max(...arrs.map(a => a.length));
-    const result = [];
-    for (let i = 0; i < maxLen; i++) result.push(arrs.map(a => i < a.length ? a[i] : fillvalue));
-    return result;
+    return {
+      [Symbol.asyncIterator]() {
+        return (async function*() {
+          const arrs = [];
+          for (const it of args) arrs.push(await pyCollect(it));
+          const maxLen = Math.max(...arrs.map(a => a.length));
+          for (let i = 0; i < maxLen; i++) yield arrs.map(a => i < a.length ? a[i] : fillvalue);
+        })();
+      },
+    };
   },
-  groupby: (iterable, key) => {
-    const arr = [...pyIter(iterable)];
-    const result = [];
-    let currentKey = undefined, currentGroup = [];
-    for (const item of arr) {
-      const k = key ? key(item) : item;
-      if (result.length === 0 || k !== currentKey) {
-        if (currentGroup.length > 0) result.push([currentKey, currentGroup]);
-        currentKey = k; currentGroup = [item];
-      } else { currentGroup.push(item); }
-    }
-    if (currentGroup.length > 0) result.push([currentKey, currentGroup]);
-    return result;
-  },
+  groupby: (iterable, key) => ({
+    [Symbol.asyncIterator]() {
+      return (async function*() {
+        let currentKey, currentGroup = [], first = true;
+        for await (const item of _aiter(iterable)) {
+          const k = key ? key(item) : item;
+          if (first || k !== currentKey) {
+            if (currentGroup.length > 0) yield [currentKey, currentGroup];
+            currentKey = k; currentGroup = [item]; first = false;
+          } else { currentGroup.push(item); }
+        }
+        if (currentGroup.length > 0) yield [currentKey, currentGroup];
+      })();
+    },
+  }),
+  count: (start, step) => ({
+    [Symbol.asyncIterator]() {
+      return (async function*() {
+        let n = start ?? 0;
+        const s = step ?? 1;
+        while (true) { yield n; n += s; }
+      })();
+    },
+  }),
+  cycle: (iterable) => ({
+    [Symbol.asyncIterator]() {
+      return (async function*() {
+        const saved = [];
+        for await (const v of _aiter(iterable)) { saved.push(v); yield v; }
+        while (saved.length > 0) { for (const v of saved) yield v; }
+      })();
+    },
+  }),
+  pairwise: (iterable) => ({
+    [Symbol.asyncIterator]() {
+      return (async function*() {
+        let prev, hasPrev = false;
+        for await (const v of _aiter(iterable)) {
+          if (hasPrev) yield [prev, v];
+          prev = v; hasPrev = true;
+        }
+      })();
+    },
+  }),
 };
 
 // ── functools ──
@@ -692,22 +831,29 @@ const _collectionsModule = {
 
 // ── re (regex) ──
 
+// Translate Python regex syntax to JS: (?P<name>...) → (?<name>...), (?P=name) → \k<name>
+function _pyRegexToJs(pattern) {
+  return pattern.replace(/\(\?P<([^>]+)>/g, '(?<$1>').replace(/\(\?P=([a-zA-Z_]\w*)\)/g, '\\k<$1>');
+}
+
 const _reModule = {
-  match: (pattern, string) => { const m = string.match(new RegExp(pattern)); return m ? _reMatch(m) : null; },
-  search: (pattern, string) => { const m = string.match(new RegExp(pattern)); return m ? _reMatch(m) : null; },
-  findall: (pattern, string) => { const re = new RegExp(pattern, 'g'); const r = []; let m; while ((m = re.exec(string))) r.push(m[1] !== undefined ? m[1] : m[0]); return r; },
+  match: (pattern, string) => { const m = string.match(new RegExp(_pyRegexToJs(pattern))); return m ? _reMatch(m) : null; },
+  search: (pattern, string) => { const m = string.match(new RegExp(_pyRegexToJs(pattern))); return m ? _reMatch(m) : null; },
+  findall: (pattern, string) => { const re = new RegExp(_pyRegexToJs(pattern), 'g'); const r = []; let m; while ((m = re.exec(string))) r.push(m[1] !== undefined ? m[1] : m[0]); return r; },
   sub: (pattern, repl, string, count) => {
+    const jsPat = _pyRegexToJs(pattern);
     if (count !== undefined && count > 0) {
       let n = 0;
-      return string.replace(new RegExp(pattern, 'g'), (m) => n++ < count ? (typeof repl === 'function' ? repl(_reMatch([m])) : repl) : m);
+      return string.replace(new RegExp(jsPat, 'g'), (...args) => n++ < count ? (typeof repl === 'function' ? repl(_reMatch(_reMatchFromArgs(args))) : repl) : args[0]);
     }
-    return string.replace(new RegExp(pattern, 'g'), typeof repl === 'function' ? (m) => repl(_reMatch([m])) : repl);
+    return string.replace(new RegExp(jsPat, 'g'), typeof repl === 'function' ? (...args) => repl(_reMatch(_reMatchFromArgs(args))) : repl);
   },
   split: (pattern, string, maxsplit) => {
+    const jsPat = _pyRegexToJs(pattern);
     if (maxsplit !== undefined) {
       const parts = []; let rest = string;
       for (let i = 0; i < maxsplit; i++) {
-        const m = rest.match(new RegExp(pattern));
+        const m = rest.match(new RegExp(jsPat));
         if (!m) break;
         parts.push(rest.slice(0, m.index));
         rest = rest.slice(m.index + m[0].length);
@@ -715,16 +861,17 @@ const _reModule = {
       parts.push(rest);
       return parts;
     }
-    return string.split(new RegExp(pattern));
+    return string.split(new RegExp(jsPat));
   },
   compile: (pattern) => {
-    const re = new RegExp(pattern, 'g');
+    const jsPat = _pyRegexToJs(pattern);
+    const re = new RegExp(jsPat, 'g');
     return {
       match: (s) => { re.lastIndex = 0; const m = re.exec(s); return m && m.index === 0 ? _reMatch(m) : null; },
       search: (s) => { re.lastIndex = 0; const m = re.exec(s); return m ? _reMatch(m) : null; },
       findall: (s) => { re.lastIndex = 0; const r = []; let m; while ((m = re.exec(s))) r.push(m[1] !== undefined ? m[1] : m[0]); return r; },
-      sub: (repl, s) => s.replace(new RegExp(pattern, 'g'), repl),
-      split: (s) => s.split(new RegExp(pattern)),
+      sub: (repl, s) => s.replace(new RegExp(jsPat, 'g'), repl),
+      split: (s) => s.split(new RegExp(jsPat)),
     };
   },
   escape: (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
@@ -733,10 +880,21 @@ const _reModule = {
   DOTALL: 's', S: 's',
 };
 
+function _reMatchFromArgs(args) {
+  // Reconstruct match object from replace callback args
+  const m = [args[0]];
+  let i = 1;
+  while (i < args.length && typeof args[i] !== 'number') { m.push(args[i]); i++; }
+  m.index = args[i]; m.input = args[i + 1];
+  if (typeof args[i + 2] === 'object') m.groups = args[i + 2];
+  return m;
+}
+
 function _reMatch(m) {
   return {
-    group: (n) => n === undefined ? m[0] : m[n],
+    group: (n) => n === undefined ? m[0] : (typeof n === 'string' ? (m.groups?.[n] ?? null) : m[n]),
     groups: () => m.slice(1),
+    groupdict: () => m.groups || {},
     start: () => m.index,
     end: () => m.index + m[0].length,
     span: () => [m.index, m.index + m[0].length],
@@ -1315,12 +1473,23 @@ export function adderBuiltins(printFn) {
     any: async (iterable) => { for (const v of await pyCollect(iterable)) if (pyBool(v)) return true; return false; },
     all: async (iterable) => { for (const v of await pyCollect(iterable)) if (!pyBool(v)) return false; return true; },
     isinstance: (obj, typeOrTuple) => _pyIsInstance(obj, typeOrTuple),
-    type: (obj) => pyTypeName(obj),
+    type: (obj) => {
+      if (obj !== null && obj !== undefined && obj.__adderType__) return obj.__adderType__;
+      const name = pyTypeName(obj);
+      return _typeObjects[name] || name;
+    },
     hasattr: (obj, name) => { try { adderGetAttr(obj, name); return true; } catch { return false; } },
     getattr: (obj, name, def) => { try { return adderGetAttr(obj, name); } catch { if (def !== undefined) return def; throw new AdderError('AttributeError', `'${pyTypeName(obj)}' object has no attribute '${name}'`); } },
     setattr: (obj, name, value) => { obj[name] = value; return null; },
     delattr: (obj, name) => { delete obj[name]; return null; },
-    property: (fget) => ({ __property__: true, fget }),
+    property: (fget) => {
+      const prop = { __property__: true, fget, fset: null };
+      prop.setter = (fset) => { prop.fset = fset; return prop; };
+      return prop;
+    },
+    staticmethod: (fn) => ({ __staticmethod__: true, fn }),
+    classmethod: (fn) => ({ __classmethod__: true, fn }),
+    complex: (real, imag) => new Complex(real ?? 0, imag ?? 0),
     callable: (obj) => typeof obj === 'function',
     chr: (n) => String.fromCodePoint(n),
     ord: (c) => { if (typeof c !== 'string' || c.length !== 1) throw new AdderError('TypeError', 'ord() expected a character'); return c.codePointAt(0); },
@@ -1365,17 +1534,56 @@ export function adderBuiltins(printFn) {
       const p = _resolvePath(raw, _vfsPath);
       return _createAdderFile(_adderVFS, p, mode || 'r');
     },
+    eval: _builtinEval,
+    exec: _builtinExec,
+    super: _builtinSuper,
   };
+  // Mark conversion builtins as type objects for isinstance()/type()
+  for (const name of ['int', 'float', 'str', 'bool', 'list', 'tuple', 'dict', 'set', 'range', 'object', 'complex']) {
+    if (builtins[name]) { builtins[name]._pyName = name; builtins[name]._pyClass = true; builtins[name].__name__ = name; _typeObjects[name] = builtins[name]; }
+  }
+  for (const name of ['ValueError', 'TypeError', 'KeyError', 'IndexError', 'AttributeError',
+                       'RuntimeError', 'StopIteration', 'ZeroDivisionError', 'NotImplementedError',
+                       'AssertionError', 'Exception', 'FileNotFoundError', 'FileExistsError',
+                       'IsADirectoryError', 'NotADirectoryError', 'PermissionError', 'OSError', 'IOError']) {
+    if (builtins[name]) { builtins[name]._pyName = name; builtins[name]._pyClass = true; _typeObjects[name] = builtins[name]; }
+  }
   return builtins;
 }
+
+// Sentinel functions for eval/exec/super — handled specially by the evaluator
+export const _builtinEval = Object.assign(() => {}, { _pyName: 'eval', _sentinel: 'eval' });
+export const _builtinExec = Object.assign(() => {}, { _pyName: 'exec', _sentinel: 'exec' });
+export const _builtinSuper = Object.assign(() => {}, { _pyName: 'super', _sentinel: 'super' });
 
 function _pyIsInstance(obj, typeOrTuple) {
   const types = Array.isArray(typeOrTuple) ? typeOrTuple : [typeOrTuple];
   const name = pyTypeName(obj);
   for (const t of types) {
-    if (typeof t === 'string') { if (name === t) return true; }
-    else if (typeof t === 'function') { if (obj instanceof t) return true; }
-    else if (t === null) { if (obj === null) return true; }
+    if (typeof t === 'string') {
+      if (name === t) return true;
+    } else if (typeof t === 'function') {
+      if (t._pyClass && t._pyName) {
+        // type object — match by name
+        if (name === t._pyName) return true;
+        // walk MRO of the object's adder type
+        const objType = obj?.__adderType__;
+        if (objType?._pyMRO) {
+          for (const mroClass of objType._pyMRO) {
+            if (mroClass === t || mroClass._pyName === t._pyName) return true;
+          }
+        }
+        // walk exception parent chain
+        if (obj instanceof AdderError) {
+          let pt = _excParents[obj.pyType];
+          while (pt) { if (pt === t._pyName) return true; pt = _excParents[pt]; }
+        }
+      } else {
+        try { if (obj instanceof t) return true; } catch { /* arrow fn without prototype */ }
+      }
+    } else if (t === null) {
+      if (obj === null) return true;
+    }
   }
   return false;
 }

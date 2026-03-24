@@ -226,6 +226,14 @@ export async function pythonExecute(code, scopeIn, cell) {
     for (const h of window._adderCellHooks) _hookStates.push(h.before?.(scope, cell) ?? null);
   }
 
+  // parse loop-limit directive
+  if (code.includes('# %noloop-limit')) {
+    scope.set('__loop_limit__', 0);
+  } else {
+    const _llm = code.match(/# %loop-limit\s+(\d+)/);
+    if (_llm) scope.set('__loop_limit__', parseInt(_llm[1]));
+  }
+
   // evaluate
   let lastExpr;
   try {

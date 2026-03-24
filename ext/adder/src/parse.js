@@ -226,15 +226,22 @@ export function adderTokenize(code) {
         if (pos < len && (code[pos] === '+' || code[pos] === '-')) pos++;
         while (pos < len && /[0-9_]/.test(code[pos])) pos++;
       }
-      if (pos < len && (code[pos] === 'j' || code[pos] === 'J')) pos++; // complex — treat as float
-      const raw = code.slice(start, pos).replace(/_/g, '');
-      const value = isFloat ? parseFloat(raw)
-        : (raw.startsWith('0x') || raw.startsWith('0X')) ? parseInt(raw.slice(2), 16)
-        : (raw.startsWith('0o') || raw.startsWith('0O')) ? parseInt(raw.slice(2), 8)
-        : (raw.startsWith('0b') || raw.startsWith('0B')) ? parseInt(raw.slice(2), 2)
-        : parseInt(raw, 10);
-      col += pos - start;
-      tokens.push(tok('NUMBER', value));
+      let isComplex = false;
+      if (pos < len && (code[pos] === 'j' || code[pos] === 'J')) { pos++; isComplex = true; }
+      const raw = code.slice(start, pos).replace(/_/g, '').replace(/[jJ]$/, '');
+      if (isComplex) {
+        const coeff = parseFloat(raw) || 0;
+        col += pos - start;
+        tokens.push(tok('NUMBER', { _complex: true, imag: coeff }));
+      } else {
+        const value = isFloat ? parseFloat(raw)
+          : (raw.startsWith('0x') || raw.startsWith('0X')) ? parseInt(raw.slice(2), 16)
+          : (raw.startsWith('0o') || raw.startsWith('0O')) ? parseInt(raw.slice(2), 8)
+          : (raw.startsWith('0b') || raw.startsWith('0B')) ? parseInt(raw.slice(2), 2)
+          : parseInt(raw, 10);
+        col += pos - start;
+        tokens.push(tok('NUMBER', value));
+      }
       continue;
     }
 

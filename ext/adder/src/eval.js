@@ -3,9 +3,10 @@
 
 import { adderParse, _adderParseExpr } from './parse.js';
 import {
-  AdderError, AdderRange, adderBuiltins, adderModules, adderGetAttr,
+  AdderError, AdderRange, Complex, adderBuiltins, adderModules, adderGetAttr,
   pyBool, pyTypeName, pyStr, pyRepr, pyIter, pyCollect, pyFormatValue,
   _excParents, getAdderVFS, _getVfsPath,
+  _builtinEval, _builtinExec, _builtinSuper,
 } from './builtins.js';
 
 // ── scope ──
@@ -66,7 +67,11 @@ export async function adderEval(node, scope) {
   switch (node.type) {
     case 'Module': return _evalModule(node, scope);
     case 'Expr': return adderEval(node.value, scope);
-    case 'Constant': return node.value;
+    case 'Constant': {
+      const v = node.value;
+      if (v && typeof v === 'object' && v._complex) return new Complex(0, v.imag);
+      return v;
+    }
     case 'Name': return scope.get(node.id);
     case 'Pass': return null;
     case 'Break': throw new _BreakSignal();
@@ -82,7 +87,13 @@ export async function adderEval(node, scope) {
     case 'AugAssign': {
       const current = await _evalTarget(node.target, scope);
       const value = await adderEval(node.value, scope);
-      const result = _binOp(node.op, current, value, node.line);
+      const iDunder = _iDunders[node.op];
+      let result;
+      if (iDunder && current !== null && typeof current === 'object' && typeof current[iDunder] === 'function') {
+        result = current[iDunder](value);
+      } else {
+        result = _binOp(node.op, current, value, node.line);
+      }
       await _assignTarget(node.target, result, scope);
       return null;
     }
@@ -294,6 +305,12 @@ async function _assignTarget(target, value, scope) {
     case 'Name': scope.set(target.id, value); break;
     case 'Attribute': {
       const obj = await adderEval(target.value, scope);
+      // check for @property setter on prototype chain (async — can't use JS setter directly)
+      for (let p = Object.getPrototypeOf(obj); p; p = Object.getPrototypeOf(p)) {
+        const d = Object.getOwnPropertyDescriptor(p, target.attr);
+        if (d?.set?._pyFset) { await d.set._pyFset(obj, value); return null; }
+        if (d) break;
+      }
       obj[target.attr] = value;
       break;
     }
@@ -419,6 +436,13 @@ const _rdunders = {
   '//': '__rfloordiv__', '%': '__rmod__', '**': '__rpow__', '@': '__rmatmul__',
 };
 
+const _iDunders = {
+  '+': '__iadd__', '-': '__isub__', '*': '__imul__', '/': '__itruediv__',
+  '//': '__ifloordiv__', '%': '__imod__', '**': '__ipow__',
+  '&': '__iand__', '|': '__ior__', '^': '__ixor__',
+  '<<': '__ilshift__', '>>': '__irshift__', '@': '__imatmul__',
+};
+
 // ── comparison ──
 
 function _compareOp(op, left, right) {
@@ -532,7 +556,6 @@ async function _evalCall(node, scope) {
   const kwArgs = [];
   for (const kw of node.keywords) {
     if (kw.name === null) {
-      // **kwargs unpacking
       const obj = await adderEval(kw.value, scope);
       if (obj instanceof Map) { for (const [k, v] of obj) kwArgs.push([k, v]); }
       else { for (const k of Object.keys(obj)) kwArgs.push([k, obj[k]]); }
@@ -540,43 +563,60 @@ async function _evalCall(node, scope) {
       kwArgs.push([kw.name, await adderEval(kw.value, scope)]);
     }
   }
+  // special builtins that need caller's scope
+  if (func._sentinel === 'super') return _evalSuperCall(args, scope, node.line);
+  if (func._sentinel === 'eval') return _evalBuiltinEval(args, scope, node.line);
+  if (func._sentinel === 'exec') return _evalBuiltinExec(args, scope, node.line);
   return _callValue(func, args, kwArgs, node.line);
 }
 
+// ── call stack for tracebacks ──
+
+const _callStack = [];
+
 async function _callValue(func, args, kwArgs, line) {
   if (typeof func !== 'function') {
-    // check for __call__ dunder
     if (typeof func === 'object' && func !== null && typeof func.__call__ === 'function') {
       return _callValue(func.__call__.bind(func), args, kwArgs, line);
     }
     throw new AdderError('TypeError', `'${pyTypeName(func)}' object is not callable`, line);
   }
-  // pack keyword args
-  if (kwArgs.length > 0) {
-    if (func._pyFunc) {
-      // adder function — pass kwargs through the calling convention
-      return func(...args, ...kwArgs.map(([_, v]) => v), { _kw: true, ...Object.fromEntries(kwArgs) });
-    }
-    // builtins and native JS — try to inject kwargs
-    // for print, max, min, sorted — they check for _kw marker
-    const kw = { _kw: true };
-    for (const [k, v] of kwArgs) kw[k] = v;
-    try {
-      return func(...args, kw);
-    } catch (e) {
-      if (e instanceof TypeError && /\bnew\b/.test(e.message)) return new func(...args, kw);
-      if (e instanceof AdderError || e instanceof _BreakSignal || e instanceof _ContinueSignal || e instanceof _ReturnSignal) throw e;
-      throw new AdderError('RuntimeError', e.message || String(e), line);
-    }
-  }
+  const name = func._pyName || func.name || '<anonymous>';
+  _callStack.push({ name, line });
   try {
+    if (kwArgs.length > 0) {
+      if (func._pyFunc) {
+        return await func(...args, ...kwArgs.map(([_, v]) => v), { _kw: true, ...Object.fromEntries(kwArgs) });
+      }
+      const kw = { _kw: true };
+      for (const [k, v] of kwArgs) kw[k] = v;
+      try {
+        return await func(...args, kw);
+      } catch (e) {
+        if (e instanceof TypeError && /\bnew\b/.test(e.message)) return new func(...args, kw);
+        if (e instanceof AdderError || e instanceof _BreakSignal || e instanceof _ContinueSignal || e instanceof _ReturnSignal) throw e;
+        throw new AdderError('RuntimeError', e.message || String(e), line);
+      }
+    }
     return await func(...args);
   } catch (e) {
-    // ES6 class constructors require `new` — retry if that's the error
-    // (also handles bound class constructors where toString() detection fails)
-    if (e instanceof TypeError && /\bnew\b/.test(e.message)) return new func(...args);
-    if (e instanceof AdderError || e instanceof _BreakSignal || e instanceof _ContinueSignal || e instanceof _ReturnSignal) throw e;
-    throw new AdderError('RuntimeError', e.message || String(e), line);
+    if (e instanceof TypeError && /\bnew\b/.test(e.message)) {
+      try { return new func(...args); } catch (e2) {
+        if (e2 instanceof AdderError) throw e2;
+        throw new AdderError('RuntimeError', e2.message || String(e2), line);
+      }
+    }
+    if (e instanceof AdderError) {
+      if (!e._tracebackSet) { e._traceback = _callStack.map(f => ({ ...f })); e._tracebackSet = true; }
+      throw e;
+    }
+    if (e instanceof _BreakSignal || e instanceof _ContinueSignal || e instanceof _ReturnSignal) throw e;
+    const ae = new AdderError('RuntimeError', e.message || String(e), line);
+    ae._traceback = _callStack.map(f => ({ ...f }));
+    ae._tracebackSet = true;
+    throw ae;
+  } finally {
+    _callStack.pop();
   }
 }
 
@@ -829,6 +869,27 @@ function _makeLambda(node, scope) {
 
 // ── class ──
 
+// ── C3 linearization (MRO) ──
+
+function _computeMRO(cls) {
+  if (!cls._pyBases || cls._pyBases.length === 0) return [cls];
+  const baseMROs = cls._pyBases.map(b => [..._computeMRO(b)]);
+  const result = [cls];
+  const lists = [...baseMROs, [...cls._pyBases]];
+  while (lists.some(l => l.length > 0)) {
+    let head = null;
+    for (const list of lists) {
+      if (list.length === 0) continue;
+      const candidate = list[0];
+      if (lists.every(l => { const idx = l.indexOf(candidate); return idx <= 0; })) { head = candidate; break; }
+    }
+    if (!head) throw new AdderError('TypeError', 'Cannot create a consistent method resolution order');
+    result.push(head);
+    for (const list of lists) { const idx = list.indexOf(head); if (idx !== -1) list.splice(idx, 1); }
+  }
+  return result;
+}
+
 async function _evalClass(node, scope) {
   const bases = [];
   for (const b of node.bases) bases.push(await adderEval(b, scope));
@@ -844,9 +905,10 @@ async function _evalClass(node, scope) {
   const cls = function (...args) {
     const instance = Object.create(cls.prototype);
     instance.__adderClass__ = node.name;
-    // copy class variables (non-function)
+    instance.__adderType__ = cls;
+    // copy class variables (non-function, non-property)
     for (const [k, v] of Object.entries(classVars)) {
-      if (typeof v !== 'function') instance[k] = v;
+      if (typeof v !== 'function' && !(v && (v.__property__ || v.__staticmethod__ || v.__classmethod__))) instance[k] = v;
     }
     // call __init__ if present
     if (typeof cls.prototype.__init__ === 'function') {
@@ -859,34 +921,82 @@ async function _evalClass(node, scope) {
   cls.prototype = {};
   cls._pyName = node.name;
   cls._pyClass = true;
+  cls._pyBases = bases.filter(b => b?._pyClass);
 
-  // inheritance
-  if (bases.length > 0 && bases[0]?.prototype) {
-    cls.prototype = Object.create(bases[0].prototype);
-  }
+  // MRO: compute and apply
+  const mro = _computeMRO(cls);
+  cls._pyMRO = mro;
 
-  // assign methods and properties
-  for (const [name, value] of Object.entries(classVars)) {
-    if (value && value.__property__) {
-      // @property decorator — define getter on prototype
-      const fget = value.fget;
-      Object.defineProperty(cls.prototype, name, {
-        get() { return fget(this); },
-        configurable: true,
-      });
-    } else if (typeof value === 'function') {
-      if (name === '__init__' || name.startsWith('__')) {
-        // bound method: inject `self` as first arg
-        const originalFn = value;
-        cls.prototype[name] = function (...args) { return originalFn(this, ...args); };
-        cls.prototype[name]._pyName = `${node.name}.${name}`;
-      } else {
-        const originalFn = value;
-        cls.prototype[name] = function (...args) { return originalFn(this, ...args); };
-        cls.prototype[name]._pyName = `${node.name}.${name}`;
-      }
+  // copy ONLY own methods from bases in MRO order (reverse = most base first, overridden by closer)
+  for (let i = mro.length - 1; i >= 1; i--) {
+    const base = mro[i];
+    if (!base.prototype || !base._pyOwnMembers) continue;
+    for (const key of base._pyOwnMembers) {
+      const desc = Object.getOwnPropertyDescriptor(base.prototype, key);
+      if (desc) Object.defineProperty(cls.prototype, key, desc);
     }
   }
+
+  // track own members for this class
+  for (const [name, value] of Object.entries(classVars)) {
+    if (value && value.__property__) {
+      const fget = value.fget;
+      const fset = value.fset;
+      const desc = { get() { return fget(this); }, configurable: true, enumerable: true };
+      if (fset) {
+        const setFn = function(v) { fset(this, v); };
+        setFn._pyFset = fset;
+        desc.set = setFn;
+      }
+      Object.defineProperty(cls.prototype, name, desc);
+    } else if (value && value.__staticmethod__) {
+      // @staticmethod — no self injection; wrap to strip _pyFunc flag
+      const rawFn = value.fn;
+      const sm = (...args) => rawFn(...args);
+      sm._pyName = `${node.name}.${name}`;
+      cls.prototype[name] = sm;
+      cls[name] = sm; // accessible as ClassName.method()
+    } else if (value && value.__classmethod__) {
+      // @classmethod — inject cls as first arg instead of self
+      const originalFn = value.fn;
+      const cm = function (...args) { return originalFn(cls, ...args); };
+      cm._pyName = `${node.name}.${name}`;
+      cls.prototype[name] = cm;
+      cls[name] = cm; // accessible as ClassName.method()
+    } else if (typeof value === 'function') {
+      const originalFn = value;
+      cls.prototype[name] = function (...args) { return originalFn(this, ...args); };
+      cls.prototype[name]._pyName = `${node.name}.${name}`;
+    }
+  }
+
+  // copy class variables to constructor (for @classmethod access via cls.attr)
+  for (const [k, v] of Object.entries(classVars)) {
+    if (typeof v !== 'function' && !(v && (v.__property__ || v.__staticmethod__ || v.__classmethod__))) {
+      cls[k] = v;
+    }
+  }
+
+  // inherit static/class methods from base constructors
+  for (let i = mro.length - 1; i >= 1; i--) {
+    const base = mro[i];
+    if (!base._pyOwnMembers) continue;
+    for (const key of base._pyOwnMembers) {
+      if (key in base && typeof base[key] === 'function') cls[key] = base[key];
+    }
+  }
+  // own static/class methods override inherited (already set above, but re-apply to be safe)
+  for (const [name, value] of Object.entries(classVars)) {
+    if (value && (value.__staticmethod__ || value.__classmethod__) && cls[name]) { /* already set */ }
+  }
+
+  cls._pyOwnMembers = new Set();
+  for (const [name, value] of Object.entries(classVars)) {
+    if (typeof value === 'function' || (value && (value.__property__ || value.__staticmethod__ || value.__classmethod__))) cls._pyOwnMembers.add(name);
+  }
+
+  // set __class__ in class scope so super() works inside methods
+  classScope.set('__class__', cls);
 
   // handle decorators
   let result = cls;
@@ -930,8 +1040,9 @@ async function _evalFor(node, scope) {
 async function _evalWhile(node, scope) {
   let broke = false;
   let iterations = 0;
+  const limit = scope.has('__loop_limit__') ? scope.get('__loop_limit__') : 1000000;
   while (pyBool(await adderEval(node.test, scope))) {
-    if (++iterations > 1000000) throw new AdderError('RuntimeError', 'maximum loop iterations exceeded (1M)');
+    if (limit > 0 && ++iterations > limit) throw new AdderError('RuntimeError', `maximum loop iterations exceeded (${limit})`);
     if (iterations % 1000 === 0) await new Promise(r => setTimeout(r, 0));
     try {
       for (const stmt of node.body) await adderEval(stmt, scope);
@@ -1016,20 +1127,80 @@ async function _evalTry(node, scope) {
 
 function _matchException(error, excTypeVal) {
   if (!excTypeVal) return true;
-  // excTypeVal is an evaluated value — could be a function (exception constructor) or tuple of them
   if (Array.isArray(excTypeVal)) return excTypeVal.some(t => _matchException(error, t));
   if (error instanceof AdderError) {
     const targetName = typeof excTypeVal === 'function' ? (excTypeVal._pyName || excTypeVal.name) :
                        (typeof excTypeVal === 'string' ? excTypeVal : null);
     if (targetName) {
       if (error.pyType === targetName) return true;
-      // Walk parent chain (e.g. FileNotFoundError → OSError)
       let pt = _excParents[error.pyType];
       while (pt) { if (pt === targetName) return true; pt = _excParents[pt]; }
     }
   }
-  if (typeof excTypeVal === 'function') return error instanceof excTypeVal;
+  // custom class exceptions — walk prototype chain
+  if (typeof excTypeVal === 'function' && excTypeVal._pyClass && error !== null && typeof error === 'object') {
+    let proto = error;
+    while (proto) {
+      if (proto.__adderClass__ === (excTypeVal._pyName || excTypeVal.name)) return true;
+      proto = Object.getPrototypeOf(proto);
+    }
+  }
+  if (typeof excTypeVal === 'function' && !excTypeVal._pyClass) {
+    try { return error instanceof excTypeVal; } catch { /* arrow fn without prototype */ }
+  }
   return false;
+}
+
+// ── super() / eval() / exec() builtins ──
+
+function _evalSuperCall(args, scope, line) {
+  let cls;
+  try { cls = scope.get('__class__'); } catch { throw new AdderError('RuntimeError', 'super(): __class__ not found', line); }
+  let self;
+  try { self = scope.get('self'); } catch { throw new AdderError('RuntimeError', 'super(): self not found', line); }
+  const mro = cls._pyMRO || [cls];
+  const idx = mro.indexOf(cls);
+  if (idx < 0 || idx + 1 >= mro.length) return {};
+  // create proxy that delegates to next class in MRO
+  return new Proxy({}, {
+    get(_, name) {
+      // search MRO starting from the class after current
+      for (let i = idx + 1; i < mro.length; i++) {
+        const base = mro[i];
+        if (!base.prototype) continue;
+        const desc = Object.getOwnPropertyDescriptor(base.prototype, name);
+        if (desc) {
+          if (desc.get) return desc.get.call(self);
+          if (typeof desc.value === 'function') return (...a) => desc.value.call(self, ...a);
+          return desc.value;
+        }
+      }
+      return undefined;
+    }
+  });
+}
+
+async function _evalBuiltinEval(args, scope, line) {
+  const code = String(args[0]);
+  try {
+    const exprAst = _adderParseExpr(code);
+    return await adderEval(exprAst, scope);
+  } catch (e) {
+    if (e instanceof AdderError) throw e;
+    throw new AdderError('SyntaxError', e.message || String(e), line);
+  }
+}
+
+async function _evalBuiltinExec(args, scope, line) {
+  const code = String(args[0]);
+  try {
+    const ast = adderParse(code);
+    await adderEval(ast, scope);
+  } catch (e) {
+    if (e instanceof AdderError) throw e;
+    throw new AdderError('SyntaxError', e.message || String(e), line);
+  }
+  return null;
 }
 
 // ── comprehensions ──

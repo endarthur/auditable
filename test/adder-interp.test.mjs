@@ -22,7 +22,7 @@ globalThis.CSS = { escape: s => s };
 
 const { adderTokenize, adderParse } = await import('../ext/adder/src/parse.js');
 const { adderEval, AdderScope } = await import('../ext/adder/src/eval.js');
-const { adderBuiltins, pyBool, pyStr, pyFormatValue, AdderRange } = await import('../ext/adder/src/builtins.js');
+const { adderBuiltins, pyBool, pyStr, pyFormatValue, AdderRange, Complex } = await import('../ext/adder/src/builtins.js');
 const { pythonExecute } = await import('../ext/adder/src/cell.js');
 const { adderTag } = await import('../ext/adder/src/tag.js');
 
@@ -530,14 +530,19 @@ describe('adderEval — builtins', () => {
     assert.deepStrictEqual(defines.x, [3, 4]);
   });
 
-  it('isinstance', async () => {
+  it('isinstance (string)', async () => {
     const { output } = await pyEval('isinstance(42, "int")');
+    assert.strictEqual(output, 'True');
+  });
+
+  it('isinstance (type object)', async () => {
+    const { output } = await pyEval('isinstance(42, int)');
     assert.strictEqual(output, 'True');
   });
 
   it('type', async () => {
     const { output } = await pyEval('type([])');
-    assert.strictEqual(output, "'list'");
+    assert.strictEqual(output, "<class 'list'>");
   });
 
   it('abs', async () => {
@@ -576,7 +581,7 @@ describe('adderEval — modules', () => {
   });
 
   it('itertools.chain', async () => {
-    const { defines } = await pyEval('from itertools import chain\nx = chain([1, 2], [3, 4])');
+    const { defines } = await pyEval('from itertools import chain\nx = list(chain([1, 2], [3, 4]))');
     assert.deepStrictEqual(defines.x, [1, 2, 3, 4]);
   });
 
@@ -838,5 +843,525 @@ describe('adderTag', () => {
     `;
     assert.strictEqual(result.public, 2);
     assert.strictEqual(result._internal, undefined);
+  });
+});
+
+// ── Phase 1a: regex named groups ──
+
+describe('adderEval — regex named groups', () => {
+  it('(?P<name>...) translates to JS named groups', async () => {
+    const { defines } = await pyEval('import re\nm = re.search(r"(?P<year>\\d{4})-(?P<month>\\d{2})", "date: 2024-03")\ny = m.group("year")\nmo = m.group("month")');
+    assert.strictEqual(defines.y, '2024');
+    assert.strictEqual(defines.mo, '03');
+  });
+
+  it('groupdict returns named groups', async () => {
+    const { defines } = await pyEval('import re\nm = re.search(r"(?P<a>\\w+)@(?P<b>\\w+)", "user@host")\nd = m.groupdict()');
+    assert.strictEqual(defines.d.a, 'user');
+    assert.strictEqual(defines.d.b, 'host');
+  });
+
+  it('compile with named groups', async () => {
+    const { defines } = await pyEval('import re\np = re.compile(r"(?P<key>\\w+)=(?P<val>\\w+)")\nm = p.search("foo=bar")\nk = m.group("key")\nv = m.group("val")');
+    assert.strictEqual(defines.k, 'foo');
+    assert.strictEqual(defines.v, 'bar');
+  });
+});
+
+// ── Phase 1b: augmented assignment dunders ──
+
+describe('adderEval — __iadd__ etc.', () => {
+  it('__iadd__ on custom class', async () => {
+    const { defines } = await pyEval(`
+class Vec:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+    def __iadd__(self, other):
+        return Vec(self.x + other.x, self.y + other.y)
+v = Vec(1, 2)
+v += Vec(3, 4)
+rx = v.x
+ry = v.y`);
+    assert.strictEqual(defines.rx, 4);
+    assert.strictEqual(defines.ry, 6);
+  });
+
+  it('falls back to __add__ when __iadd__ is missing', async () => {
+    const { defines } = await pyEval('x = 5\nx += 3');
+    assert.strictEqual(defines.x, 8);
+  });
+});
+
+// ── Phase 1c: @property setter ──
+
+describe('adderEval — @property setter', () => {
+  it('property getter and setter', async () => {
+    const { defines } = await pyEval(`
+class Circle:
+    def __init__(self, r):
+        self._r = r
+    @property
+    def radius(self):
+        return self._r
+    @radius.setter
+    def radius(self, value):
+        self._r = max(0, value)
+c = Circle(5)
+r1 = c.radius
+c.radius = -3
+r2 = c.radius`);
+    assert.strictEqual(defines.r1, 5);
+    assert.strictEqual(defines.r2, 0);
+  });
+});
+
+// ── Phase 1d: while loop limit directive ──
+
+describe('adderEval — loop limit directive', () => {
+  it('# %loop-limit overrides default', async () => {
+    await assert.rejects(
+      () => pyEval('# %loop-limit 10\ni = 0\nwhile True:\n    i += 1'),
+      e => e instanceof Error && /maximum loop iterations/.test(e.message)
+    );
+  });
+
+  it('# %noloop-limit disables limit', async () => {
+    // verify the directive sets __loop_limit__ to 0
+    const { defines } = await pyEval('# %noloop-limit\nlimit = __loop_limit__');
+    assert.strictEqual(defines.limit, 0);
+  });
+});
+
+// ── Phase 2a: isinstance improvements ──
+
+describe('adderEval — isinstance improvements', () => {
+  it('isinstance with builtin type objects', async () => {
+    const { defines } = await pyEval(`
+a = isinstance("hello", str)
+b = isinstance(3.14, float)
+c = isinstance([1,2], list)
+d = isinstance(True, bool)`);
+    assert.strictEqual(defines.a, true);
+    assert.strictEqual(defines.b, true);
+    assert.strictEqual(defines.c, true);
+    assert.strictEqual(defines.d, true);
+  });
+
+  it('isinstance with tuple of types', async () => {
+    const { defines } = await pyEval('x = isinstance(42, (str, int, float))');
+    assert.strictEqual(defines.x, true);
+  });
+
+  it('isinstance with custom class inheritance', async () => {
+    const { defines } = await pyEval(`
+class Animal:
+    pass
+class Dog(Animal):
+    pass
+d = Dog()
+a = isinstance(d, Dog)
+b = isinstance(d, Animal)`);
+    assert.strictEqual(defines.a, true);
+    assert.strictEqual(defines.b, true);
+  });
+
+  it('isinstance with exception hierarchy', async () => {
+    const { defines } = await pyEval(`
+try:
+    raise FileNotFoundError("missing")
+except OSError:
+    a = True
+except:
+    a = False
+b = isinstance(FileNotFoundError("x"), OSError)`);
+    assert.strictEqual(defines.a, true);
+    assert.strictEqual(defines.b, true);
+  });
+});
+
+// ── Phase 2b: type() returns type objects ──
+
+describe('adderEval — type() returns type objects', () => {
+  it('type returns callable type object', async () => {
+    const { defines } = await pyEval('t = type(42)\nname = t.__name__');
+    assert.strictEqual(defines.name, 'int');
+  });
+
+  it('type(x) == type(y) for same types', async () => {
+    const { output } = await pyEval('type(1) == type(2)');
+    assert.strictEqual(output, 'True');
+  });
+
+  it('type for custom class', async () => {
+    const { defines } = await pyEval(`
+class Foo:
+    pass
+f = Foo()
+t = type(f)
+same = t is Foo`);
+    assert.strictEqual(defines.same, true);
+  });
+});
+
+// ── Phase 3: exec() / eval() ──
+
+describe('adderEval — exec/eval', () => {
+  it('eval evaluates expression', async () => {
+    const { defines } = await pyEval('x = eval("2 + 3")');
+    assert.strictEqual(defines.x, 5);
+  });
+
+  it('eval sees enclosing scope', async () => {
+    const { defines } = await pyEval('a = 10\nx = eval("a * 2")');
+    assert.strictEqual(defines.x, 20);
+  });
+
+  it('exec executes statements', async () => {
+    const { defines } = await pyEval('y = 0\nexec("y = 42")');
+    assert.strictEqual(defines.y, 42);
+  });
+
+  it('exec modifies caller scope', async () => {
+    const { defines } = await pyEval('x = 1\nexec("x = 99")');
+    assert.strictEqual(defines.x, 99);
+  });
+});
+
+// ── Phase 4: complex numbers ──
+
+describe('adderEval — complex numbers', () => {
+  it('complex literal', async () => {
+    const { defines } = await pyEval('x = 3j');
+    assert.ok(defines.x instanceof Complex);
+    assert.strictEqual(defines.x.real, 0);
+    assert.strictEqual(defines.x.imag, 3);
+  });
+
+  it('complex arithmetic', async () => {
+    const { defines } = await pyEval('x = (1 + 2j) + (3 + 4j)');
+    assert.ok(defines.x instanceof Complex);
+    assert.strictEqual(defines.x.real, 4);
+    assert.strictEqual(defines.x.imag, 6);
+  });
+
+  it('complex multiplication', async () => {
+    const { defines } = await pyEval('x = (1 + 2j) * (3 + 4j)');
+    assert.strictEqual(defines.x.real, -5);
+    assert.strictEqual(defines.x.imag, 10);
+  });
+
+  it('complex division', async () => {
+    const { defines } = await pyEval('x = (1 + 2j) / (1 + 0j)');
+    assert.strictEqual(defines.x.real, 1);
+    assert.strictEqual(defines.x.imag, 2);
+  });
+
+  it('abs of complex', async () => {
+    const { defines } = await pyEval('x = abs(3 + 4j)');
+    assert.strictEqual(defines.x, 5);
+  });
+
+  it('complex() builtin', async () => {
+    const { defines } = await pyEval('x = complex(3, 4)');
+    assert.strictEqual(defines.x.real, 3);
+    assert.strictEqual(defines.x.imag, 4);
+  });
+
+  it('complex conjugate', async () => {
+    const { defines } = await pyEval('x = (3 + 4j).conjugate()');
+    assert.strictEqual(defines.x.real, 3);
+    assert.strictEqual(defines.x.imag, -4);
+  });
+
+  it('complex repr', async () => {
+    const { output } = await pyEval('3 + 4j');
+    assert.strictEqual(output, '(3+4j)');
+  });
+
+  it('complex type', async () => {
+    const { output } = await pyEval('type(1j)');
+    assert.strictEqual(output, "<class 'complex'>");
+  });
+
+  it('isinstance complex', async () => {
+    const { output } = await pyEval('isinstance(1j, complex)');
+    assert.strictEqual(output, 'True');
+  });
+
+  it('number + complex', async () => {
+    const { defines } = await pyEval('x = 5 + 3j');
+    assert.strictEqual(defines.x.real, 5);
+    assert.strictEqual(defines.x.imag, 3);
+  });
+
+  it('complex negation', async () => {
+    const { defines } = await pyEval('x = -(3 + 4j)');
+    assert.strictEqual(defines.x.real, -3);
+    assert.strictEqual(defines.x.imag, -4);
+  });
+
+  it('complex bool', async () => {
+    const { defines } = await pyEval('a = bool(0j)\nb = bool(1j)');
+    assert.strictEqual(defines.a, false);
+    assert.strictEqual(defines.b, true);
+  });
+});
+
+// ── Phase 5: MRO / multiple inheritance ──
+
+describe('adderEval — MRO and multiple inheritance', () => {
+  it('single inheritance', async () => {
+    const { defines } = await pyEval(`
+class A:
+    def who(self):
+        return "A"
+class B(A):
+    pass
+b = B()
+result = b.who()`);
+    assert.strictEqual(defines.result, 'A');
+  });
+
+  it('method override', async () => {
+    const { defines } = await pyEval(`
+class A:
+    def who(self):
+        return "A"
+class B(A):
+    def who(self):
+        return "B"
+result = B().who()`);
+    assert.strictEqual(defines.result, 'B');
+  });
+
+  it('multiple inheritance — diamond', async () => {
+    const { defines } = await pyEval(`
+class A:
+    def who(self):
+        return "A"
+class B(A):
+    pass
+class C(A):
+    def who(self):
+        return "C"
+class D(B, C):
+    pass
+result = D().who()`);
+    assert.strictEqual(defines.result, 'C');
+  });
+
+  it('super() basic', async () => {
+    const { defines } = await pyEval(`
+class Base:
+    def __init__(self):
+        self.x = 10
+class Child(Base):
+    def __init__(self):
+        super().__init__()
+        self.y = 20
+c = Child()
+rx = c.x
+ry = c.y`);
+    assert.strictEqual(defines.rx, 10);
+    assert.strictEqual(defines.ry, 20);
+  });
+
+  it('super() method call', async () => {
+    const { defines } = await pyEval(`
+class A:
+    def greet(self):
+        return "hello"
+class B(A):
+    def greet(self):
+        return super().greet() + " world"
+result = B().greet()`);
+    assert.strictEqual(defines.result, 'hello world');
+  });
+
+  it('isinstance with inheritance chain', async () => {
+    const { defines } = await pyEval(`
+class A:
+    pass
+class B(A):
+    pass
+class C(B):
+    pass
+c = C()
+a = isinstance(c, A)
+b = isinstance(c, B)`);
+    assert.strictEqual(defines.a, true);
+    assert.strictEqual(defines.b, true);
+  });
+});
+
+// ── Phase 6: lazy itertools ──
+
+describe('adderEval — lazy itertools', () => {
+  it('chain is lazy', async () => {
+    const { defines } = await pyEval(`
+from itertools import chain
+result = []
+for x in chain([1, 2], [3]):
+    result.append(x)
+    if len(result) >= 2:
+        break`);
+    assert.deepStrictEqual(defines.result, [1, 2]);
+  });
+
+  it('count is infinite', async () => {
+    const { defines } = await pyEval(`
+from itertools import count, islice
+result = list(islice(count(10, 5), 4))`);
+    assert.deepStrictEqual(defines.result, [10, 15, 20, 25]);
+  });
+
+  it('repeat infinite until break', async () => {
+    const { defines } = await pyEval(`
+from itertools import repeat
+result = []
+for x in repeat(42):
+    result.append(x)
+    if len(result) >= 3:
+        break`);
+    assert.deepStrictEqual(defines.result, [42, 42, 42]);
+  });
+
+  it('cycle repeats', async () => {
+    const { defines } = await pyEval(`
+from itertools import cycle, islice
+result = list(islice(cycle([1, 2, 3]), 7))`);
+    assert.deepStrictEqual(defines.result, [1, 2, 3, 1, 2, 3, 1]);
+  });
+
+  it('pairwise', async () => {
+    const { defines } = await pyEval(`
+from itertools import pairwise
+result = list(pairwise([1, 2, 3, 4]))`);
+    assert.deepStrictEqual(defines.result, [[1, 2], [2, 3], [3, 4]]);
+  });
+
+  it('accumulate lazy', async () => {
+    const { defines } = await pyEval(`
+from itertools import accumulate
+result = list(accumulate([1, 2, 3, 4]))`);
+    assert.deepStrictEqual(defines.result, [1, 3, 6, 10]);
+  });
+
+  it('islice on infinite', async () => {
+    const { defines } = await pyEval(`
+from itertools import count, islice
+result = list(islice(count(), 5))`);
+    assert.deepStrictEqual(defines.result, [0, 1, 2, 3, 4]);
+  });
+
+  it('groupby lazy', async () => {
+    const { defines } = await pyEval(`
+from itertools import groupby
+result = list(groupby([1, 1, 2, 2, 3]))`);
+    assert.strictEqual(defines.result.length, 3);
+    assert.strictEqual(defines.result[0][0], 1);
+  });
+
+  it('starmap lazy', async () => {
+    const { defines } = await pyEval(`
+from itertools import starmap
+result = list(starmap(lambda a, b: a + b, [(1, 2), (3, 4)]))`);
+    assert.deepStrictEqual(defines.result, [3, 7]);
+  });
+});
+
+// ── @staticmethod / @classmethod ──
+
+describe('adderEval — staticmethod / classmethod', () => {
+  it('@staticmethod has no self', async () => {
+    const { defines } = await pyEval(`
+class MathUtils:
+    @staticmethod
+    def add(a, b):
+        return a + b
+result = MathUtils.add(3, 4)
+result2 = MathUtils().add(3, 4)`);
+    assert.strictEqual(defines.result, 7);
+    assert.strictEqual(defines.result2, 7);
+  });
+
+  it('@classmethod receives cls', async () => {
+    const { defines } = await pyEval(`
+class Animal:
+    species = "unknown"
+    def __init__(self, name):
+        self.name = name
+    @classmethod
+    def create(cls, name):
+        return cls(name)
+a = Animal.create("Rex")
+result = a.name`);
+    assert.strictEqual(defines.result, 'Rex');
+  });
+
+  it('@classmethod on instance also works', async () => {
+    const { defines } = await pyEval(`
+class Counter:
+    count = 0
+    @classmethod
+    def increment(cls):
+        cls.count += 1
+        return cls.count
+c = Counter()
+r1 = c.increment()
+r2 = Counter.increment()`);
+    assert.strictEqual(defines.r1, 1);
+    assert.strictEqual(defines.r2, 2);
+  });
+
+  it('@staticmethod inherited', async () => {
+    const { defines } = await pyEval(`
+class Base:
+    @staticmethod
+    def helper(x):
+        return x * 2
+class Child(Base):
+    pass
+result = Child.helper(5)`);
+    assert.strictEqual(defines.result, 10);
+  });
+});
+
+// ── Phase 7: tracebacks ──
+
+describe('adderEval — tracebacks', () => {
+  it('error has traceback', async () => {
+    try {
+      await pyEval(`
+def inner():
+    return 1 / 0
+def outer():
+    return inner()
+outer()`);
+      assert.fail('should throw');
+    } catch (e) {
+      assert.ok(e._traceback, 'error should have _traceback');
+      assert.ok(e._traceback.length > 0, 'traceback should have entries');
+      assert.ok(e._traceback.some(f => f.name === 'inner'), 'should include inner');
+    }
+  });
+
+  it('traceback includes call chain', async () => {
+    try {
+      await pyEval(`
+def a():
+    raise ValueError("boom")
+def b():
+    return a()
+def c():
+    return b()
+c()`);
+      assert.fail('should throw');
+    } catch (e) {
+      assert.ok(e._traceback.some(f => f.name === 'a'));
+      assert.ok(e._traceback.some(f => f.name === 'b'));
+      assert.ok(e._traceback.some(f => f.name === 'c'));
+    }
   });
 });

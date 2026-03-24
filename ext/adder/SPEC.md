@@ -170,7 +170,21 @@ class Point:
 
 **Class variables:** non-function values from the class body are copied to each instance at construction time.
 
-**Single inheritance:** `class Derived(Base):` — prototype chain via `Object.create(Base.prototype)`. `super()` resolves to the parent class; `super().__init__(...)` calls the parent constructor.
+**Multiple inheritance with C3 linearization:** `class D(B, C):` works. The MRO is computed via C3 linearization, and `super()` dispatches to the next class in the MRO. Only own methods (not inherited copies) are tracked per class, so diamond inheritance resolves correctly.
+
+**`@property` getter and setter:**
+
+```python
+class Circle:
+    def __init__(self, r):
+        self._r = r
+    @property
+    def radius(self):
+        return self._r
+    @radius.setter
+    def radius(self, value):
+        self._r = max(0, value)
+```
 
 **Operator overloading via dunder methods:**
 
@@ -378,8 +392,9 @@ abs(x) / round(x, n=0) / pow(x, y, mod=None)
 divmod(a, b)                        # returns [floor_div, py_mod]
 int(x, base=10) / float(x) / str(x) / bool(x)
 list(x) / tuple(x) / dict(x) / set(x)
-type(x)                             # returns type name string
-isinstance(x, t)                    # checks pyTypeName or instanceof
+complex(real, imag)                 # Complex number constructor
+type(x)                             # returns type object (<class 'int'>, etc.)
+isinstance(x, t)                    # walks MRO, exception hierarchy; accepts type objects or strings
 issubclass(c, t)                    # stub, returns False
 hasattr(obj, name) / getattr(obj, name, default) / setattr(obj, name, value) / delattr(obj, name)
 id(x)                               # sequential counter on objects
@@ -389,8 +404,11 @@ chr(n) / ord(c)
 hex(n) / oct(n) / bin(n)
 repr(x) / format(value, spec)
 iter(x) / next(iter, default)
-property(fget)                      # creates {__property__: true, fget}
-object() / super()
+property(fget)                      # creates property with .setter method
+staticmethod(fn)                    # no self injection; accessible on class and instance
+classmethod(fn)                     # injects cls as first arg; accessible on class and instance
+object() / super()                  # super() walks MRO in method context
+eval(expr) / exec(code)             # dynamic code execution in caller's scope
 vars(obj) / dir(obj)
 open(path, mode)                    # VFS file object (see VFS section)
 input()                             # raises NotImplementedError
@@ -553,15 +571,18 @@ itertools.chain(*iterables)
 itertools.product(*iterables)
 itertools.combinations(iterable, r)
 itertools.permutations(iterable, r=None)
-itertools.repeat(value, times=None)     # capped at 1000 if times not given
+itertools.repeat(value, times=None)     # infinite if times not given
 itertools.accumulate(iterable, func=None)
 itertools.starmap(func, iterable)
 itertools.islice(iterable, stop) / islice(iterable, start, stop, step=1)
 itertools.zip_longest(*iterables, fillvalue=None)
 itertools.groupby(iterable, key=None)
+itertools.count(start=0, step=1)        # infinite counter
+itertools.cycle(iterable)               # infinite cycle
+itertools.pairwise(iterable)            # sliding window of 2
 ```
 
-All return materialized lists (not lazy iterators).
+All return lazy async iterables. Use `list()` to materialize, or consume with `for` loops.
 
 **`functools`**:
 
@@ -864,7 +885,7 @@ The tokenizer (`adderTokenize`) produces a flat token stream with INDENT/DEDENT 
 
 ### Number literals
 
-Supports: decimal, hex (`0x`), octal (`0o`), binary (`0b`), float, scientific notation (`1e10`), complex suffix (`j`/`J`, treated as float), underscore separators (`1_000_000`).
+Supports: decimal, hex (`0x`), octal (`0o`), binary (`0b`), float, scientific notation (`1e10`), complex suffix (`j`/`J`, creates `Complex(0, coeff)`), underscore separators (`1_000_000`).
 
 ### String prefixes
 
@@ -925,7 +946,7 @@ This works cleanly because there's no WASM-from-WASM problem — the eval backen
 
 ## 13. What adder is NOT
 
-- **Not a full CPython implementation.** No multiple inheritance, no metaclasses, no descriptor protocol (beyond `@property`), no `__slots__`, no `__new__`, no `exec()`/`eval()`, no complex numbers, no `match`/`case`.
+- **Not a full CPython implementation.** No metaclasses, no general descriptor protocol (`__get__`/`__set__`/`__delete__`), no `__slots__`, no `__new__`, no `match`/`case`. `@property`, `@staticmethod`, `@classmethod` are supported.
 - **Not a replacement for atra.** Adder is for glue code and scripting. Performance-critical numeric kernels belong in atra (or patra for Python syntax → atra). Adder can call atra functions seamlessly — that's the point.
 - **Not trying to run pip packages.** The standard library is minimal and purpose-built. numpy, pandas, scipy are not targets.
 - **Not Python.** It's adder — a Python-flavored language that runs in JS. Duck-typed over Python syntax, with JS values underneath.
@@ -937,10 +958,9 @@ This works cleanly because there's no WASM-from-WASM problem — the eval backen
 - **Generator coroutine protocol** — `send()`, `throw()`, `close()` on generator objects. Generators work for iteration (`for await`, `list()`) but not as coroutines.
 - **Transpile mode** — JS source emission from AST (section 12.2)
 - **@kernel / patra** — typed Python → atra → WASM (section 12.3)
-- Multiple inheritance, metaclasses, `__new__`, descriptors, `__slots__`
+- Metaclasses, `__new__`, descriptors (beyond `@property`), `__slots__`
 - `match`/`case` (Python 3.10+)
-- `exec()`/`eval()`
-- Complex numbers
+- `cmath` module
 
 ---
 
