@@ -181,4 +181,7 @@ Each cell receives these injected parameters (not propagated via scope):
 | `install(url)` | Fetch, store, and import a module. Persists across saves |
 | `installBinary(url, opts?)` | Fetch and store a binary asset as base64. Returns blob URL |
 | `invalidation` | Promise that resolves before cell re-runs |
+| `worker` | Create a background Web Worker from a pure function |
+| `workerPool` | Create a pool of workers for parallel batch processing |
+| `notebook` | Notebook API (embedded filesystem access via `notebook.fs`) |
 | `print` | Alias for `ui.display` |

@@ -6,7 +6,8 @@ the file before the `<script>` tag.
 
 ## Data Blocks
 
-A saved notebook contains up to four data blocks:
+A saved notebook contains up to six data blocks (though CRYPTO replaces the others
+when encryption is enabled):
 
 ```html
 <!-- cell data: JSON array of {type, code, collapsed?} -->
@@ -23,6 +24,11 @@ AUDITABLE-SETTINGS-->
 <!--AUDITABLE-MODULES
 eyJsb2Rhc2giOnsiY29kZSI6Ii8vIG1vZHVsZSBzb3VyY2UuLi4ifX0=
 AUDITABLE-MODULES-->
+
+<!-- embedded filesystem -->
+<!--AUDITABLE-FS
+{base64-encoded gzip data}
+AUDITABLE-FS-->
 
 <!-- Ed25519 signature -->
 <!--AUDITABLE-SIGNATURE
@@ -41,7 +47,9 @@ blocks during save.
 | `AUDITABLE-DATA` | JSON array of cell objects (`type`, `code`, `collapsed`) | Yes |
 | `AUDITABLE-SETTINGS` | JSON object with theme, width, font, autorun, etc. | Yes |
 | `AUDITABLE-MODULES` | Base64-encoded JSON of installed modules | Only if modules installed |
+| `AUDITABLE-FS` | Base64-encoded gzip of embedded filesystem JSON | Only if files stored |
 | `AUDITABLE-SIGNATURE` | Ed25519 signature for update verification | Only for signed releases |
+| `AUDITABLE-CRYPTO` | Encrypted blob replacing DATA/SETTINGS/MODULES/FS | Only if encrypted |
 
 ## Modules Encoding
 
@@ -74,6 +82,46 @@ const modules = JSON.parse(decodeURIComponent(escape(atob(b64))))
 !!! note "Legacy compatibility"
     `decodeModules()` detects legacy raw JSON (content starts with `{`) and
     parses it directly, maintaining backward compatibility with older saves.
+
+## AUDITABLE-FS
+
+Embedded filesystem data. Stores files added via `notebook.fs` or the files panel.
+
+```html
+<!--AUDITABLE-FS
+{base64-encoded gzip data}
+AUDITABLE-FS-->
+```
+
+Files are stored as a JSON map of path → `{ data, type, compressed?, size, mtime }`.
+The entire map is gzip-compressed and base64-encoded when beneficial.
+
+## AUDITABLE-CRYPTO
+
+When encryption is enabled, **all other data blocks** (DATA, SETTINGS, MODULES, FS)
+are replaced by a single encrypted blob:
+
+```html
+<!--AUDITABLE-CRYPTO
+{"version":1,"cipher":"AES-256-GCM","iv":"...","payload":"...","methods":[...]}
+AUDITABLE-CRYPTO-->
+```
+
+The `methods` array contains independently wrapped copies of the Data Encryption Key
+(DEK) — one per unlock method (passphrase, recovery key). The runtime stays cleartext;
+only the data payload is encrypted.
+
+See [Encryption](../encryption.md) for the full cryptographic design.
+
+## Runtime Compression
+
+Saved notebooks gzip-compress the JavaScript runtime into a
+`<script type="text/plain" id="_rt">` base64 payload with a small self-extracting
+loader. This reduces file size from ~1.2 MB to ~540 KB. The loader decompresses at
+load time and evals the bootstrap script.
+
+`buildNotebookHtml({ compress: false })` skips compression (used by packed saves,
+which compress the entire file instead).
 
 ## Save Modes
 

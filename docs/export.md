@@ -28,7 +28,15 @@ my_notebook.html  (~200–500 KB typical)
 !!! info "Data format"
     Cell data, settings, and modules are stored as JSON inside HTML comments:
     `<!--AUDITABLE-DATA\n[...]\nAUDITABLE-DATA-->`. This keeps them invisible
-    to the browser while making the file fully self-contained.
+    to the browser while making the file fully self-contained. Notebooks with
+    embedded files include an additional `<!--AUDITABLE-FS\n{...}\nAUDITABLE-FS-->`
+    block.
+
+!!! info "Encrypted notebooks"
+    When encryption is enabled, all data blocks are replaced by a single
+    `AUDITABLE-CRYPTO` block. The `<title>` is masked to "Auditable — Encrypted"
+    and module URLs in the settings panel are cleared. The runtime (HTML, CSS, JS)
+    stays cleartext — only the data is encrypted.
 
 ---
 

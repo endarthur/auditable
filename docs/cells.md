@@ -6,7 +6,7 @@ Auditable notebooks are built from **cells** — editable blocks that hold code,
 
 | Cell     | Type   | DAG Role           | Defines         | Uses | Key | Label |
 |----------|--------|--------------------|-----------------|------|-----|-------|
-| Code     | `code` | reactive r/w       | yes             | yes  | `y` | code  |
+| Code     | `code` | reactive r/w       | yes             | yes  | `y` | js    |
 | Markdown | `md`   | reactive read-only | no              | yes  | `m` | md    |
 | CSS      | `css`  | static side effect | no              | no   | `s` | css   |
 | HTML     | `html` | reactive r/w       | yes (widgets)   | yes  | `t` | html  |
@@ -221,7 +221,12 @@ Every cell receives these injected parameters (not propagated through scope):
 | `install(url)` | Fetch, store, and import a module (persists across saves) |
 | `installBinary(url, opts?)` | Fetch and store a binary asset as base64 |
 | `invalidation` | Promise that resolves before cell re-runs (for cleanup)  |
+| `worker(fn)` | Create a Web Worker from a pure function. Returns an async callable. Auto-terminates on cell re-run. TypedArrays transfer zero-copy. |
+| `workerPool(fn, n?)` | Pool of `n` workers (defaults to CPU core count). `.map(arr, ...extra)` for parallel batch dispatch. Uses free-worker queue. |
+| `notebook` | Notebook API object. Access the embedded filesystem via `notebook.fs`. |
 | `print`        | Alias for `ui.display`                                   |
+
+Cells can also use plugin cell types for custom languages — see [Plugins](plugins.md).
 
 See [Modules](modules.md) for full documentation on `load()`, `install()`, and virtual modules.
 

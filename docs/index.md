@@ -14,9 +14,22 @@ Open `auditable.html` in a browser. Write code. Press Ctrl+S. Email the file. Th
 | **Module system** | `load()` for session imports, `install()` for persistent embedding. Works offline after save. |
 | **Self-contained save** | Ctrl+S produces a standalone HTML file with all code, data, and dependencies baked in. |
 | **Packed export** | Gzip-compress the entire notebook into a minimal self-decompressing HTML loader. |
+| **Encryption** | AES-256-GCM whole-notebook encryption with passphrase + recovery key. |
+| **MCP bridge** | Connect Claude Code or other AI agents to a running notebook via WebSocket. |
+| **Notebook filesystem** | Embedded file storage that persists with the notebook. |
+| **Plugin cell types** | Custom cell types beyond js/md/css/html via `registerPlugin()`. |
+| **Python cells** | adder — a Python dialect with a pure JS interpreter, no server needed. |
 | **Atra Wasm compiler** | Write Fortran/Pascal-style code that compiles to WebAssembly in the browser. |
 | **Language extensions** | Tagged templates for GLSL shaders, SQL, and custom languages with syntax highlighting. |
+| **Web Workers** | `worker()` and `workerPool()` for background computation with zero-copy transfers. |
+| **Split view** | Side-by-side source and output editing mode. |
+| **Headless runtime** | Run notebooks in Node.js without a browser via `createNotebook()`. |
+| **GIS analysis** | spinifex module with maps, raster, DEM, and GDAL processing. |
+| **Spreadsheet** | calque formula language + sheet widget with xlsx import/export. |
 | **Presentation mode** | Hide cells, set output IDs and classes — turn a notebook into an app. |
+| **Self-update** | Built-in Ed25519-verified updates — no reinstall, no package manager. |
+
+**Learn more:** [Encryption](encryption.md) · [MCP Bridge](mcp.md) · [Notebook Filesystem](filesystem.md) · [Plugins](plugins.md) · [adder (Python)](adder/index.md)
 
 ## Get auditable
 

@@ -110,6 +110,26 @@ ui.table(result[0].values, { headers: result[0].columns });
 
 ---
 
+### adder (Python)
+
+A Python dialect interpreter written in pure JavaScript. Load it to enable `adder` cells with Python syntax, reactive DAG integration, and JS interop.
+
+```js
+await load("@gcu/adder");
+```
+
+Python values are JS values — no FFI boundary. Lists are Arrays, dicts are Objects, and cross-cell reactivity works the same as JS cells.
+
+See [adder](adder/index.md) for the full language reference.
+
+---
+
+### spinifex (GIS)
+
+Web GIS module wrapping OpenLayers 10. Map rendering, geodata loaders, SRTM elevation tiles, drawing, DEM analysis, and GDAL Wasm processing. See [spinifex](mod-spinifex.md) for full documentation.
+
+---
+
 ## Loading Extensions
 
 Extensions are installed with `install()` and self-register on import:
@@ -154,3 +174,13 @@ window.dispatchEvent(new Event("auditable:langchange"));
 
 The `type` field on each token maps to CSS classes for syntax coloring, matching
 the same token types used by the JavaScript highlighter.
+
+---
+
+## Plugin cell types
+
+Beyond tagged templates, auditable supports full **plugin cell types** that appear in the cell type picker alongside js, md, css, and html.
+
+Plugins register via `registerCellType(name, handler)` and can provide custom parsing, execution, highlighting, and completions. Adder is the reference implementation — after `load("@gcu/adder")`, an "adder" option appears in the type picker.
+
+See [Plugins](plugins.md) for the registration API and handler interface.

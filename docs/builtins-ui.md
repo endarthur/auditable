@@ -179,3 +179,65 @@ API for programmatic notebook control.
 | `notebook.collapse(id)` | Collapse a cell |
 | `notebook.expand(id)` | Expand a cell |
 | `notebook.run(ids)` | Run one or more cells by id |
+
+---
+
+## worker(fn)
+
+Create a Web Worker from a pure function. The worker runs in a background thread — ideal for heavy computation that would block the UI.
+
+```js
+const compute = worker(function(data) {
+  // runs in a separate thread
+  let sum = 0;
+  for (const x of data) sum += x * x;
+  return sum;
+});
+
+const result = await compute(largeArray);
+```
+
+The function must be **self-contained** — it cannot reference variables from the cell scope. Returns an async callable that serializes arguments, runs the function in a Worker, and returns the result.
+
+TypedArrays in the return value are **transferred** (zero-copy), not cloned.
+
+!!! tip
+    Workers auto-terminate when the cell re-runs (via `invalidation`), so you don't need manual cleanup.
+
+## workerPool(fn, n?)
+
+Create a pool of `n` workers (defaults to `navigator.hardwareConcurrency`). Use `.map()` for parallel batch processing.
+
+```js
+const pool = workerPool(function(x) {
+  return x * x;
+});
+
+const results = await pool.map([1, 2, 3, 4, 5]);
+// [1, 4, 9, 16, 25]
+```
+
+The pool uses a **free-worker queue** — tasks are dispatched to the next idle worker, not round-robin. Extra arguments to `.map()` are passed to every invocation:
+
+```js
+const pool = workerPool(function(item, config) {
+  return item * config.scale;
+});
+
+const results = await pool.map([1, 2, 3], { scale: 10 });
+// [10, 20, 30]
+```
+
+Call `pool.terminate()` to explicitly clean up, or let `invalidation` handle it automatically.
+
+## notebook.fs
+
+Access the notebook's embedded filesystem. Files are stored inside the notebook HTML and persist across saves.
+
+```js
+await notebook.fs.write("data/points.csv", csvText);
+const content = await notebook.fs.readText("data/points.csv");
+const files = await notebook.fs.list();
+```
+
+See [Notebook Filesystem](filesystem.md) for the full API reference.

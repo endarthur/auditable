@@ -1,6 +1,6 @@
 # Directives
 
-Directives are special comments that control cell behavior. They use the pattern `// %name` — a JavaScript line comment followed by a percent sign and the directive name.
+Directives are special comments that control cell behavior. They use the pattern `// %name` — a JavaScript line comment followed by a percent sign and the directive name. Adder (Python) cells use `#` instead of `//` — e.g. `# %manual`.
 
 ```js
 // %manual
@@ -176,3 +176,45 @@ ui.display(buildDashboard(data));
 | `// %goto cellName`    | Jump to named cell                          | Redirects DAG flow   |
 | `// %outputId id`      | Set output element id                       | None                 |
 | `// %outputClass cls`  | Set output element CSS classes              | None                 |
+
+---
+
+## MCP directives
+
+These directives control how [MCP agents](mcp.md) interact with cells. Without any MCP directive, cells are effectively private.
+
+| Directive | Effect |
+|-----------|--------|
+| `// %mcp` | Read-only — agent can read source and output |
+| `// %mcp r` | Alias for `// %mcp` |
+| `// %mcp rw` | Read-write — agent can read source/output and edit source |
+| `// %private` | Hard opt-out — overrides manifest defaults |
+| `// %mcp describe "text"` | Metadata description visible in `listCells` |
+| `// %mcp manifest` | Governance cell: set defaults, custom tools, fs config |
+| `// %mcp fs prefix/` | Allow agent to read/write `notebook.fs` under prefix |
+| `// %mcp fs:read prefix/` | Allow agent to read (not write) under prefix |
+| `// %mcp fs *` | Allow agent full access to `notebook.fs` |
+
+```js
+// %mcp rw
+// This cell's source is editable by MCP agents
+const data = [1, 2, 3];
+```
+
+The manifest cell defines notebook-wide MCP policy:
+
+```js
+// %mcp manifest
+({
+  defaults: "rw",
+  tools: {
+    "getData": { cell: 0, describe: "Fetch the dataset" }
+  },
+  fs: "data/"
+})
+```
+
+See [MCP Bridge](mcp.md) for full documentation.
+
+!!! info
+    Adder (Python) cells use `#` instead of `//` for directives: `# %mcp rw`.

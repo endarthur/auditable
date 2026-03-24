@@ -67,6 +67,15 @@ nav:
   - Tagged Languages:
     - Overview: extensions.md
     - atra: extensions-atra.md
+    - adder (Python):
+      - Overview: adder/index.md
+      - Language Guide: adder/language.md
+      - Built-in Modules: adder/modules.md
+      - CPython Differences: adder/limits.md
+  - Encryption: encryption.md
+  - MCP Bridge: mcp.md
+  - Notebook Filesystem: filesystem.md
+  - Plugins: plugins.md
   - Export: export.md
   - Settings: settings.md
   - Keyboard Shortcuts: keyboard.md

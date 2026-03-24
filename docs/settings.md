@@ -115,6 +115,28 @@ See [Modules](modules.md) for more on `load()`, `install()`, and `installBinary(
 
 ---
 
+## Encryption
+
+Encrypt the entire notebook with a passphrase. When enabled, cell data, settings, modules,
+and filesystem contents are encrypted as a single AES-256-GCM blob — the HTML/CSS/JS
+runtime stays cleartext.
+
+| Setting | Description |
+|---------|-------------|
+| **Enable encryption** | Set a passphrase and save a recovery key |
+| **Change passphrase** | Re-wrap the data key with a new passphrase |
+| **Regenerate recovery key** | Create a new recovery key (invalidates the old one) |
+| **Lock notebook** | Clear the decryption key from memory immediately |
+| **Disable encryption** | Remove encryption (requires current passphrase) |
+
+!!! warning
+    Save your recovery key somewhere safe — it's the only way to access the notebook
+    if you forget the passphrase.
+
+See [Encryption](encryption.md) for the full guide.
+
+---
+
 ## About
 
 The settings panel footer shows version information:

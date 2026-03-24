@@ -163,6 +163,38 @@ Web GIS module wrapping OpenLayers 10. See [Spinifex module](mod-spinifex.md) fo
     as `@atra` — installed source first, then dev-mode relative import, then
     CDN install.
 
+### @gcu/ namespace
+
+Extensions under the `@gcu/` prefix are first-party auditable modules:
+
+| Module | Description |
+|--------|-------------|
+| `@gcu/adder` | Python dialect interpreter — enables `adder` cell type |
+| `@gcu/plot` | Charting library (line, bar, scatter, histogram, heatmap) |
+| `@gcu/sadpan` | Stereographic analysis and projection |
+| `@gcu/natra` | N-dimensional array operations |
+| `@gcu/units` | Unit conversion, sieve mesh, drill core calculations |
+| `@gcu/vfs` | Virtual filesystem with multiple backends |
+
+Other named modules:
+
+| Module | Description |
+|--------|-------------|
+| `@plan` | Project scheduling (CPM, PERT, Monte Carlo, EVM) |
+| `@sheet` | Spreadsheet widget with xlsx I/O |
+| `@calque` | Spreadsheet formula language |
+
+```js
+// load a first-party module
+const plot = await load("@gcu/plot");
+
+// load and register the Python cell type
+await load("@gcu/adder");
+```
+
+!!! info
+    `@gcu/` modules are bundled into saved notebooks via `install()`, so they work offline after the first load.
+
 ---
 
 ## Managing installed modules
