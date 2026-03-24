@@ -28,17 +28,19 @@ function processModules(mainPath, moduleDir, opts = {}) {
     let src = fs.readFileSync(filePath, 'utf8');
     const basename = path.basename(relPath);
 
-    // Strip import lines
-    src = src.replace(/^import\s+.*['"].*['"];?\s*$/gm, '');
+    // Strip import statements (single-line and multiline)
+    src = src.replace(/^import\b[\s\S]*?from\s+['"][^'"]*['"];?\s*$/gm, '');
+    src = src.replace(/^import\s+['"][^'"]*['"];?\s*$/gm, ''); // side-effect imports
 
-    // Replace export function -> function, export const -> const, etc.
+    // Replace export declarations → plain declarations
     src = src.replace(/^export function /gm, 'function ');
     src = src.replace(/^export async function /gm, 'async function ');
     src = src.replace(/^export const /gm, 'const ');
     src = src.replace(/^export let /gm, 'let ');
+    src = src.replace(/^export class /gm, 'class ');
 
-    // Strip export { ... } and export default lines
-    src = src.replace(/^export\s*\{[^}]*\};?\s*$/gm, '');
+    // Strip export { ... } (single-line and multiline) and export default
+    src = src.replace(/^export\s*\{[\s\S]*?\}\s*;?\s*$/gm, '');
     src = src.replace(/^export\s+default\s+.*$/gm, '');
 
     // Trim leading/trailing blank lines

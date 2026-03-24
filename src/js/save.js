@@ -6,26 +6,14 @@ import { getSettings, applySettings, resolveExecMode, resolveRunOnLoad, getEdito
 import { runAll } from './exec.js';
 import { setMsg } from './ui.js';
 import { cryptoIsEncrypted, cryptoIsLocked, cryptoBuildBlock, cryptoDetect } from './crypto.js';
+import { serializeCells, encodeModules, decodeModules, esc as _esc, buildTxtExport } from './serialize.js';
+
+// re-export for backward compatibility (init.js, update.js import from save.js)
+export { encodeModules, decodeModules };
 
 // ── APP RUNTIME ──
 // Injected at build time — contains the minimal JS bundle for exported apps.
 const __APP_RUNTIME__ = '';
-
-// ── MODULES ENCODING ──
-// base64-encode modules JSON to avoid HTML comment / String.replace issues
-// (source code can contain --, $', etc.)
-
-export function encodeModules(obj) {
-  const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(obj))));
-  return b64.replace(/.{1,76}/g, '$&\n').trimEnd();
-}
-
-export function decodeModules(raw) {
-  const b64 = raw.replace(/\s/g, '');
-  // detect legacy format: starts with { means raw JSON (not base64)
-  if (b64.startsWith('{') || b64.startsWith('%7B')) return JSON.parse(raw);
-  return JSON.parse(decodeURIComponent(escape(atob(b64))));
-}
 
 // ── LIVE COMMENT SYNC ──
 // keep AUDITABLE-DATA/SETTINGS/MODULES comment nodes up-to-date in the live DOM
@@ -66,12 +54,7 @@ export function initLiveSync() {
 export function syncData() {
   if (cryptoIsEncrypted()) { if (window._cryptoSyncTrigger) window._cryptoSyncTrigger(); return; }
   if (!_dataNode) return;
-  const cellData = S.cells.map(c => ({
-    type: c.type,
-    code: c.code,
-    collapsed: (c._splitOrigEl || c.el).classList.contains('collapsed') || undefined
-  }));
-  _dataNode.nodeValue = 'AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA';
+  _dataNode.nodeValue = 'AUDITABLE-DATA\n' + JSON.stringify(serializeCells(S.cells)) + '\nAUDITABLE-DATA';
 }
 
 export function syncDataDebounced() {
@@ -182,12 +165,7 @@ async function buildNotebookHtml(opts = {}) {
   // serialize current state back to a self-contained HTML file
   const title = $('#docTitle').value || 'untitled';
 
-  // collect cells as data
-  const cellData = S.cells.map(c => ({
-    type: c.type,
-    code: c.code,
-    collapsed: (c._splitOrigEl || c.el).classList.contains('collapsed') || undefined
-  }));
+  const cellData = serializeCells(S.cells);
 
   // get the runtime and styles from current document (two style tags since CSS split)
   const appStyleEl = document.querySelector('#auditable-app-css');
@@ -522,42 +500,17 @@ ${b64Lines}</pre>
   }
 }
 
-export function esc(s) {
-  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
+export const esc = _esc;
 
 export function exportAsTxt() {
   if (cryptoIsLocked()) { setMsg('unlock first', 'err'); return; }
   const title = $('#docTitle').value || 'untitled';
-
-  // read from live state directly (works for both encrypted and unencrypted)
-  const cells = S.cells.map(c => ({
-    type: c.type,
-    code: c.code,
-    collapsed: (c._splitOrigEl || c.el).classList.contains('collapsed') || undefined,
-  }));
-  const settings = getSettings();
-  const moduleUrls = Object.keys(window._installedModules || {});
-
-  // build /// formatted text
-  const lines = ['/// auditable'];
-  if (title && title !== 'untitled') {
-    lines.push('/// title: ' + title);
-  }
-  const defaultSettings = { theme: 'dark', fontSize: 13, width: '860' };
-  if (JSON.stringify(settings) !== JSON.stringify(defaultSettings)) {
-    lines.push('/// settings: ' + JSON.stringify(settings));
-  }
-  for (const url of moduleUrls) {
-    lines.push('/// module: ' + url);
-  }
-  for (const cell of cells) {
-    lines.push('');
-    const flags = cell.collapsed ? ' collapsed' : '';
-    lines.push('/// ' + cell.type + flags);
-    lines.push(cell.code || '');
-  }
-  const txt = lines.join('\n') + '\n';
+  const txt = buildTxtExport({
+    title,
+    cells: serializeCells(S.cells),
+    settings: getSettings(),
+    moduleUrls: Object.keys(window._installedModules || {}),
+  });
 
   // download
   if (window.__AF_BRIDGE__) {
@@ -637,7 +590,7 @@ export function loadFromEmbed() {
 
       for (const c of data) {
         const cell = addCell(c.type, c.code);
-        if (c.collapsed || isCollapsed(c.code)) cell.el.classList.add('collapsed');
+        if (c.collapsed || isCollapsed(c.code)) { cell.el.classList.add('collapsed'); cell.collapsed = true; }
       }
       // run after load (gated on resolved runOnLoad)
       // skip if editor view will be activated — enterSplitView() calls runAll() itself
@@ -658,13 +611,7 @@ export function exportAsApp(opts = {}) {
   const title = opts.title || $('#docTitle').value || 'untitled';
   const includeBase = opts.includeBaseStyles !== false;
 
-  // collect cells as data
-  const cellData = S.cells.map(c => ({
-    type: c.type,
-    code: c.code,
-    collapsed: (c._splitOrigEl || c.el).classList.contains('collapsed') || undefined
-  }));
-
+  const cellData = serializeCells(S.cells);
   const settings = getSettings();
 
   // build CSS for the app

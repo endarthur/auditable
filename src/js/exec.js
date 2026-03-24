@@ -9,6 +9,7 @@ import { addCell } from './cell-ops.js';
 import { renderMd } from './markdown.js';
 import { syncModules } from './save.js';
 import { createNotebookFs, fsRead } from './fs.js';
+import { INJECTED_NAMES, TaggedContent, taggedTemplate, cellErrorLine, compileCellCode, cellCacheKey, executeDAG } from './engine.js';
 
 // ── EXECUTION ENGINE ──
 //
@@ -22,45 +23,8 @@ import { createNotebookFs, fsRead } from './fs.js';
 // are injected as additional parameters — listed in _injected, not in scope.
 // They are NOT propagated to downstream cells.
 
-// ── ERROR LINE EXTRACTION ──
-// AsyncFunction wraps cell code with a header (function signature + blank line +
-// "use strict"). the exact line offset varies by engine, so we detect it once.
-
-let _lineOffset = 0;
-
-// detect at runtime: create a function that throws on its first line, check
-// which line the stack trace reports, subtract 1 (the throw IS line 1).
-try {
-  const AF = Object.getPrototypeOf(async function(){}).constructor;
-  const fn = new AF('"use strict";\nthrow new Error();\n//# sourceURL=auditable://_probe.js');
-  fn().catch(() => {});
-} catch (_) {}
-// the probe runs async — we'll detect in the catch. use a sync approach instead:
-try {
-  const fn = new Function('"use strict";\nthrow new Error();\n//# sourceURL=auditable://_probe.js');
-  fn();
-} catch (e) {
-  const m = e.stack?.match(/auditable:\/\/_probe\.js:(\d+)/);
-  if (m) _lineOffset = parseInt(m[1], 10) - 1;
-}
-// fallback: if detection fails, use 3 (observed default for V8/Chrome/Node)
-if (!_lineOffset) _lineOffset = 3;
-
-export function cellErrorLine(err, cellId) {
-  const tag = 'auditable://cell-' + cellId;
-  // runtime errors: stack contains "at auditable://cell-xxx.js:7:15"
-  if (err.stack) {
-    const escaped = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const m = err.stack.match(new RegExp(escaped + '[^:]*:(\\d+)'));
-    if (m) { const n = parseInt(m[1], 10) - _lineOffset; if (n > 0) return n; }
-  }
-  // syntax errors: "Unexpected token (5:12)" or "... (line 5)"
-  if (err.message) {
-    const m = err.message.match(/\((\d+):(\d+)\)\s*$/) || err.message.match(/line (\d+)/i);
-    if (m) { const n = parseInt(m[1], 10) - _lineOffset; if (n > 0) return n; }
-  }
-  return 0;
-}
+// cellErrorLine, TaggedContent, taggedTemplate, INJECTED_NAMES — imported from engine.js
+export { cellErrorLine };
 
 // ── BINARY HELPERS ──
 
@@ -101,20 +65,6 @@ async function decompressText(base64) {
   return new Response(stream).text();
 }
 
-// ── TAGGED CONTENT ──
-
-class TaggedContent {
-  constructor(type, content) { this.type = type; this.content = content; }
-  toString() { return this.content; }
-}
-
-function taggedTemplate(type) {
-  return (strings, ...values) => {
-    let result = strings[0];
-    for (let i = 0; i < values.length; i++) result += String(values[i]) + strings[i + 1];
-    return new TaggedContent(type, result);
-  };
-}
 
 // ── EXECUTION ──
 
@@ -1366,11 +1316,11 @@ function _createCellContext(cell) {
     },
     collapse: (id) => {
       const c = S.cells.find(c => c.id === id);
-      if (c?.el) c.el.classList.add('collapsed');
+      if (c) { c.collapsed = true; if (c.el) c.el.classList.add('collapsed'); }
     },
     expand: (id) => {
       const c = S.cells.find(c => c.id === id);
-      if (c?.el) c.el.classList.remove('collapsed');
+      if (c) { c.collapsed = false; if (c.el) c.el.classList.remove('collapsed'); }
     },
     run: (ids) => runDAG(Array.isArray(ids) ? ids : [ids], true),
   };
@@ -1387,47 +1337,31 @@ export async function execCell(cell) {
           md, html, css, workshop, notebook, worker, workerPool, vfs,
           usedWidgets, outputEl, widgetEl } = ctx;
 
-  // execute with scoped parameters (only what this cell uses, for stable V8 JIT)
-  // filter out injected names — they're per-cell params, not scope-propagated
-  const _injected = ['ui', 'std', 'load', 'install', 'installBinary', 'invalidation', 'print', 'display', 'md', 'html', 'css', 'workshop', 'notebook', 'worker', 'workerPool', 'vfs'];
-  const scopeKeys = cell.uses ? [...cell.uses].filter(k => !_injected.includes(k)).sort() : [];
+  const scopeKeys = cell.uses ? [...cell.uses].filter(k => !INJECTED_NAMES.includes(k)).sort() : [];
   const defNames = cell.defines ? [...cell.defines].sort().join(', ') : '';
-
-  // function caching — reuse compiled function if code/uses/defines unchanged
-  const cacheKey = scopeKeys.join(',') + '|' + defNames + '|' + cell.code;
+  const cacheKey = cellCacheKey(scopeKeys, defNames, cell.code);
 
   try {
     let fn;
     if (cell._cacheKey === cacheKey && cell._cachedFn) {
       fn = cell._cachedFn;
     } else {
-      const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
-      const cellName = parseCellName(cell.code);
-      const slug = cellName ? '-' + cellName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') : '';
-      fn = new AsyncFunction(
-        ...scopeKeys,
-        'ui', 'std', 'load', 'install', 'installBinary', 'invalidation', 'print', 'display',
-        'md', 'html', 'css', 'workshop', 'notebook', 'worker', 'workerPool', 'vfs',
-        `"use strict";\n${cell.code}\n\n` +
-        `return { ${defNames} };\n` +
-        `//# sourceURL=auditable://cell-${cell.id}${slug}.js`
-      );
+      fn = compileCellCode(cell.code, scopeKeys, defNames, cell.id, parseCellName(cell.code));
       cell._cachedFn = fn;
       cell._cacheKey = cacheKey;
     }
 
     const scopeVals = scopeKeys.map(k => S.scope[k]);
-    const result = await fn(...scopeVals, ui, std, load, install, installBinary, invalidation, display, display,
-      md, html, css, workshop, notebook, worker, workerPool, vfs);
+    const injectedVals = [ui, std, load, install, installBinary, invalidation, display, display,
+      md, html, css, workshop, notebook, worker, workerPool, vfs];
+    const result = await fn(...scopeVals, ...injectedVals);
 
-    // update scope with defined variables
+    // store result for DAG caching (scope update delegated to executeDAG)
     if (result && typeof result === 'object') {
       cell._lastResult = result;
-      for (const [k, v] of Object.entries(result)) {
-        if (v !== undefined) S.scope[k] = v;
-      }
     }
 
+    cell.error = null;
     cell.el.classList.remove('stale', 'error');
     cell.el.classList.add('fresh');
     setTimeout(() => cell.el.classList.remove('fresh'), 800);
@@ -1441,8 +1375,8 @@ export async function execCell(cell) {
       }
     }
 
+    return { defines: cell._lastResult || {}, error: null };
   } catch (e) {
-    // extract cell-relative line number from stack trace or syntax error
     const line = cellErrorLine(e, cell.id);
     const lineInfo = line > 0 ? ` (line ${line})` : '';
     cell.error = e.message;
@@ -1450,6 +1384,7 @@ export async function execCell(cell) {
     outputEl.className = 'cell-output error';
     cell.el.classList.remove('stale', 'fresh');
     cell.el.classList.add('error');
+    return { defines: {}, error: e };
   }
 }
 
@@ -1459,84 +1394,27 @@ export async function runDAG(dirtyIds, force = false) {
   const gen = ++_dagGen;
   buildDAG();
   const isAutorun = S.autorun && !force;
-
-  // determine which cells need execution via topo sort
   const runSet = new Set(topoSort(dirtyIds));
 
   if (window._dagStart) window._dagStart();
 
-  // rebuild scope in document order, only executing cells in runSet
   S.scope = {};
-  const poisoned = new Set(); // variable names defined by errored cells
-  for (let i = 0; i < S.cells.length; i++) {
-    const cell = S.cells[i];
 
-    if (cell.type === 'html') {
-      if (runSet.has(cell.id)) {
-        // check if any used variable is poisoned
-        if (cell.uses && [...cell.uses].some(n => poisoned.has(n))) {
-          cell.el.classList.remove('fresh');
-          cell.el.classList.add('stale');
-        } else {
-          renderHtmlCell(cell);
-        }
-      }
-      // inject widget-defined variables into scope for downstream cells
-      if (cell.defines && cell.defines.size > 0) {
-        for (const name of cell.defines) {
-          if (cell._inputs && cell._inputs[name] !== undefined) {
-            S.scope[name] = cell._inputs[name];
-          }
-        }
-      }
-      continue;
-    }
-    if (cell.type === 'md') {
-      if (runSet.has(cell.id)) {
-        if (cell.uses && [...cell.uses].some(n => poisoned.has(n))) {
-          cell.el.classList.add('stale');
-        } else {
-          renderMdCell(cell);
-        }
-      }
-      continue;
-    }
-    // ── plugin cell dispatch ──
-    if (cell.type !== 'code' && cell.type !== 'html' && cell.type !== 'md' && cell.type !== 'css') {
-      if (cell._fallback) continue; // fallback cells are excluded from execution
+  const result = await executeDAG(S.cells, dirtyIds, runSet, S.scope, {
+    isAutorun,
+
+    onExecCode: async (cell) => {
+      if (window._beforeExec) window._beforeExec(cell);
+      return execCell(cell);
+    },
+
+    onExecHtml: (cell) => renderHtmlCell(cell),
+    onExecMd: (cell) => renderMdCell(cell),
+
+    onExecPlugin: async (cell) => {
       const handler = _ctGetHandler(cell.type);
-      if (!handler) continue;
+      if (!handler) return null;
 
-      if (!runSet.has(cell.id)) {
-        // not in run set — restore cached results
-        if (cell._lastResult) {
-          for (const [k, v] of Object.entries(cell._lastResult)) {
-            if (v !== undefined) S.scope[k] = v;
-          }
-        }
-        continue;
-      }
-
-      // error isolation: check poisoned upstream
-      if (cell.uses && cell.uses.size > 0) {
-        let blocked = false;
-        for (const name of cell.uses) {
-          if (poisoned.has(name)) { blocked = true; break; }
-        }
-        if (blocked) {
-          const outputEl = cell.el.querySelector('.cell-output');
-          if (outputEl) {
-            outputEl.textContent = 'blocked by upstream error';
-            outputEl.className = 'cell-output error';
-          }
-          cell.el.classList.remove('stale', 'fresh');
-          cell.el.classList.add('error');
-          if (cell.defines) for (const name of cell.defines) poisoned.add(name);
-          continue;
-        }
-      }
-
-      // build upstream scope + cell context (same builtins as JS code cells)
       const upstream = {};
       if (cell.uses) {
         for (const name of cell.uses) {
@@ -1549,9 +1427,6 @@ export async function runDAG(dirtyIds, force = false) {
         const result = await handler.execute(cell.code, upstream, cell);
         if (result && result.defines) {
           cell._lastResult = result.defines;
-          for (const [k, v] of Object.entries(result.defines)) {
-            if (v !== undefined) S.scope[k] = v;
-          }
         }
         if (result && result.output !== undefined) {
           _ctRenderOutput(cell, result.output);
@@ -1561,7 +1436,6 @@ export async function runDAG(dirtyIds, force = false) {
         cell.el.classList.add('fresh');
         setTimeout(() => cell.el.classList.remove('fresh'), 800);
 
-        // remove widgets no longer referenced by code
         if (cell._ctx.usedWidgets) {
           const widgetEl = cell._ctx.widgetEl;
           for (const w of widgetEl.querySelectorAll('[data-widget-key]')) {
@@ -1572,6 +1446,7 @@ export async function runDAG(dirtyIds, force = false) {
             }
           }
         }
+        return { defines: cell._lastResult || {}, error: null };
       } catch (e) {
         cell.error = e.message;
         const outputEl = cell._ctx?.outputEl || cell.el.querySelector('.cell-output');
@@ -1581,53 +1456,15 @@ export async function runDAG(dirtyIds, force = false) {
         }
         cell.el.classList.remove('stale', 'fresh');
         cell.el.classList.add('error');
-        if (cell.defines) for (const name of cell.defines) poisoned.add(name);
+        return { defines: {}, error: e };
       }
+    },
 
-      if (_dagGen !== gen) return;
-      continue;
-    }
-
-    if (cell.type !== 'code') continue;
-
-    // skip norun cells (unless explicitly triggered)
-    if (isNorun(cell.code) && !dirtyIds.includes(cell.id)) {
-      if (cell._lastResult) {
-        for (const [k, v] of Object.entries(cell._lastResult)) {
-          if (v !== undefined) S.scope[k] = v;
-        }
-      }
-      continue;
-    }
-
-    // skip manual cells unless explicitly triggered (in dirtyIds)
-    if (isManual(cell.code) && !dirtyIds.includes(cell.id)) {
-      if (cell._lastResult) {
-        for (const [k, v] of Object.entries(cell._lastResult)) {
-          if (v !== undefined) S.scope[k] = v;
-        }
-      }
-      cell.el.classList.add('stale');
-      continue;
-    }
-
-    // not in run set — restore cached results, skip execution
-    if (!runSet.has(cell.id)) {
-      if (cell._lastResult) {
-        for (const [k, v] of Object.entries(cell._lastResult)) {
-          if (v !== undefined) S.scope[k] = v;
-        }
-      }
-      continue;
-    }
-
-    // error isolation: if any upstream dependency is poisoned, skip this cell
-    if (cell.uses && cell.uses.size > 0) {
-      let blocked = false;
-      for (const name of cell.uses) {
-        if (poisoned.has(name)) { blocked = true; break; }
-      }
-      if (blocked) {
+    onCellStatus: (cell, status) => {
+      if (status === 'stale') {
+        cell.el.classList.remove('fresh');
+        cell.el.classList.add('stale');
+      } else if (status === 'blocked') {
         const outputEl = cell.el.querySelector('.cell-output');
         if (outputEl && !cell.error) {
           outputEl.textContent = 'blocked by upstream error';
@@ -1635,60 +1472,25 @@ export async function runDAG(dirtyIds, force = false) {
         }
         cell.el.classList.remove('stale', 'fresh');
         cell.el.classList.add('error');
-        // poison our own defines so downstream also blocks
-        if (cell.defines) for (const name of cell.defines) poisoned.add(name);
-        continue;
       }
-    }
+    },
 
-    // value-equality gating: if this cell is a downstream dependent (not directly
-    // dirty) and all its input values are unchanged, skip re-execution entirely.
-    // always re-execute if cell is in error/blocked state
-    if (!cell.error && !cell.el.classList.contains('error') && !dirtyIds.includes(cell.id) && cell._lastResult && cell.uses && cell.uses.size > 0) {
-      let inputsChanged = false;
-      for (const name of cell.uses) {
-        if (S.scope[name] !== cell._prevInputs?.[name]) { inputsChanged = true; break; }
-      }
-      if (!inputsChanged) {
-        // inputs identical — restore previous results, skip execution
-        for (const [k, v] of Object.entries(cell._lastResult)) {
-          if (v !== undefined) S.scope[k] = v;
-        }
-        continue;
-      }
-    }
+    checkGeneration: () => _dagGen === gen,
 
-    if (window._beforeExec) window._beforeExec(cell);
-    await execCell(cell);
+    onAfterExec: (cell, i) => {
+      if (window._afterExec && !isAutorun) return window._afterExec(cell, i);
+      return -1;
+    },
+  });
 
-    // bail if a newer runDAG started while we were awaiting
-    if (_dagGen !== gen) return;
-
-    // if the cell errored, poison its defines
-    if (cell.error) {
-      if (cell.defines) for (const name of cell.defines) poisoned.add(name);
-    }
-
-    // snapshot input values for future equality checks
-    if (cell.uses) {
-      cell._prevInputs = {};
-      for (const name of cell.uses) cell._prevInputs[name] = S.scope[name];
-    }
-
-    if (window._afterExec && !isAutorun) {
-      const jump = window._afterExec(cell, i);
-      if (jump >= 0) { i = jump - 1; continue; }
-    }
-  }
+  if (result.aborted) return;
 
   updateStatus();
 
-  // recheck workshop canAdvance gates after scope changes
   for (const c of S.cells) {
     if (c._workshopRecheck) c._workshopRecheck();
   }
 
-  // MCP execution completion notification
   if (window._mcpNotifyExecComplete) window._mcpNotifyExecComplete();
 }
 

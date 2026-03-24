@@ -25,7 +25,7 @@ export function deleteCellWithUndo(id) {
   const cell = S.cells[idx];
   const afterId = idx > 0 ? S.cells[idx - 1].id : null;
   const beforeId = afterId === null && idx < S.cells.length - 1 ? S.cells[idx + 1].id : null;
-  S.trash.push({ action: 'delete', type: cell.type, code: cell.code, afterId, beforeId, collapsed: !!cell.el.classList.contains('collapsed') });
+  S.trash.push({ action: 'delete', type: cell.type, code: cell.code, afterId, beforeId, collapsed: !!cell.collapsed });
   deleteCell(id);
   setMsg('deleted cell (z to undo)', 'ok');
 }
@@ -44,7 +44,7 @@ export function undo() {
     const validAfter = afterId !== null && S.cells.find(c => c.id === afterId) ? afterId : null;
     const validBefore = beforeId !== null && S.cells.find(c => c.id === beforeId) ? beforeId : null;
     const newCell = addCell(type, code, validAfter, validBefore);
-    if (collapsed) newCell.el.classList.add('collapsed');
+    if (collapsed) { newCell.el.classList.add('collapsed'); newCell.collapsed = true; }
     selectCell(newCell.id);
     if (_ctIsExecutable(type) && S.cells.some(c => _ctIsExecutable(c.type))) runAll();
     setMsg('restored cell', 'ok');
@@ -259,12 +259,12 @@ export function toggleTypePicker(id) {
 }
 
 export function collapseAll() {
-  S.cells.forEach(c => c.el.classList.add('collapsed'));
+  S.cells.forEach(c => { c.el.classList.add('collapsed'); c.collapsed = true; });
   setMsg('collapsed all', 'ok');
 }
 
 export function expandAll() {
-  S.cells.forEach(c => c.el.classList.remove('collapsed'));
+  S.cells.forEach(c => { c.el.classList.remove('collapsed'); c.collapsed = false; });
   setMsg('expanded all', 'ok');
 }
 
@@ -487,7 +487,7 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'h' && S.selectedId !== null) {
       e.preventDefault();
       const cell = S.cells.find(c => c.id === S.selectedId);
-      if (cell) cell.el.classList.toggle('collapsed');
+      if (cell) { cell.el.classList.toggle('collapsed'); cell.collapsed = cell.el.classList.contains('collapsed'); }
       return;
     }
     if (e.key === 'l') {

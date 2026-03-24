@@ -85,12 +85,14 @@ describe('app runtime JS', () => {
       const filePath = path.join(buildDir, relPath);
       let src = fs.readFileSync(filePath, 'utf8');
       const basename = path.basename(relPath);
-      src = src.replace(/^import\s+.*['"].*['"];?\s*$/gm, '');
+      src = src.replace(/^import\b[\s\S]*?from\s+['"][^'"]*['"];?\s*$/gm, '');
+      src = src.replace(/^import\s+['"][^'"]*['"];?\s*$/gm, '');
       src = src.replace(/^export function /gm, 'function ');
       src = src.replace(/^export async function /gm, 'async function ');
       src = src.replace(/^export const /gm, 'const ');
       src = src.replace(/^export let /gm, 'let ');
-      src = src.replace(/^export\s*\{[^}]*\};?\s*$/gm, '');
+      src = src.replace(/^export class /gm, 'class ');
+      src = src.replace(/^export\s*\{[\s\S]*?\}\s*;?\s*$/gm, '');
       src = src.replace(/^export\s+default\s+.*$/gm, '');
       src = src.replace(/^\n+/, '').replace(/\n+$/, '');
       chunks.push(`// -- ${basename} --\n\n${src}`);
@@ -184,7 +186,10 @@ describe('isBare', () => {
 
   it('isBare is exported from dag.js source', () => {
     const dagSrc = fs.readFileSync(path.join(root, 'src/js/dag.js'), 'utf8');
-    assert.ok(dagSrc.includes("export const isBare"), 'isBare not exported from dag.js');
-    assert.ok(dagSrc.includes("hasDirective(code, 'bare')"), 'isBare should use hasDirective');
+    // dag.js re-exports from dag-core.js — check it exports isBare
+    assert.ok(dagSrc.includes('isBare'), 'isBare not exported from dag.js');
+    // verify dag-core.js has the actual implementation
+    const coreSrc = fs.readFileSync(path.join(root, 'src/js/dag-core.js'), 'utf8');
+    assert.ok(coreSrc.includes("hasDirective(code, 'bare')"), 'isBare should use hasDirective in dag-core.js');
   });
 });

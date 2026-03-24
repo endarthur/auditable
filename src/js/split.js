@@ -91,7 +91,7 @@ export function toTxt() {
 
   for (const cell of S.cells) {
     lines.push('');
-    const collapsed = cell.el && cell.el.classList.contains('collapsed');
+    const collapsed = cell.collapsed;
     const flags = collapsed ? ' collapsed' : '';
     lines.push('/// ' + cell.type + flags);
     lines.push(cell.code || '');
@@ -803,7 +803,7 @@ function rebuildFromParsed(parsed) {
   // add new cells (addCell appends to #notebook which is hidden — that's fine)
   for (const c of parsed.cells) {
     const cell = addCell(c.type, c.code);
-    if (c.collapsed || isCollapsed(c.code)) cell.el.classList.add('collapsed');
+    if (c.collapsed || isCollapsed(c.code)) { cell.el.classList.add('collapsed'); cell.collapsed = true; }
   }
 
   // rebuild output panel

@@ -637,7 +637,7 @@ function _mcpListCells() {
     if (name) entry.name = name;
     const desc = parseMcpDescribe(c.code);
     if (desc) entry.description = desc;
-    entry.collapsed = c.el?.classList.contains('collapsed') || false;
+    entry.collapsed = c.collapsed || false;
     if (c.type === 'code') {
       if (isManual(c.code)) entry.manual = true;
       if (isNorun(c.code)) entry.norun = true;

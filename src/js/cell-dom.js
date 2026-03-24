@@ -54,7 +54,11 @@ export function createCellEl(type, id, initialCode) {
       <div class="cell-output"></div>
     `;
 
-    div.querySelector('.cell-type').addEventListener('click', () => div.classList.toggle('collapsed'));
+    div.querySelector('.cell-type').addEventListener('click', () => {
+      div.classList.toggle('collapsed');
+      const cell = S.cells.find(c => c.id === id);
+      if (cell) cell.collapsed = div.classList.contains('collapsed');
+    });
     const editorWrap = div.querySelector('.editor-wrap');
     const editor = createEditor(editorWrap, id, initialCode || '', 'code', (code) => {
       const cell = S.cells.find(c => c.id === id);
@@ -75,7 +79,11 @@ export function createCellEl(type, id, initialCode) {
     const cssView = div.querySelector('.cell-css-view');
     const cssEditWrap = div.querySelector('.cell-css-edit');
     const editorWrap = div.querySelector('.editor-wrap');
-    div.querySelector('.cell-type').addEventListener('click', () => div.classList.toggle('collapsed'));
+    div.querySelector('.cell-type').addEventListener('click', () => {
+      div.classList.toggle('collapsed');
+      const cell = S.cells.find(c => c.id === id);
+      if (cell) cell.collapsed = div.classList.contains('collapsed');
+    });
 
     const editor = createEditor(editorWrap, id, initialCode || '', 'css', (code) => {
       const cell = S.cells.find(c => c.id === id);
@@ -115,7 +123,11 @@ export function createCellEl(type, id, initialCode) {
     `;
 
     const editorWrap = div.querySelector('.editor-wrap');
-    div.querySelector('.cell-type').addEventListener('click', () => div.classList.toggle('collapsed'));
+    div.querySelector('.cell-type').addEventListener('click', () => {
+      div.classList.toggle('collapsed');
+      const cell = S.cells.find(c => c.id === id);
+      if (cell) cell.collapsed = div.classList.contains('collapsed');
+    });
 
     const editor = createEditor(editorWrap, id, initialCode || '', 'html', (code) => {
       const cell = S.cells.find(c => c.id === id);
@@ -141,7 +153,11 @@ export function createCellEl(type, id, initialCode) {
     if (handler?.color) labelEl.style.color = handler.color;
     if (isFallback) labelEl.classList.add('fallback-label');
 
-    labelEl.addEventListener('click', () => div.classList.toggle('collapsed'));
+    labelEl.addEventListener('click', () => {
+      div.classList.toggle('collapsed');
+      const cell = S.cells.find(c => c.id === id);
+      if (cell) cell.collapsed = div.classList.contains('collapsed');
+    });
 
     const ta = div.querySelector('.plugin-textarea');
     if (initialCode) ta.value = initialCode;
@@ -198,7 +214,11 @@ export function createCellEl(type, id, initialCode) {
     const view = div.querySelector('.cell-md-view');
     const editWrap = div.querySelector('.cell-md-edit');
     const ta = div.querySelector('.cell-md-edit textarea');
-    div.querySelector('.cell-type').addEventListener('click', () => div.classList.toggle('collapsed'));
+    div.querySelector('.cell-type').addEventListener('click', () => {
+      div.classList.toggle('collapsed');
+      const cell = S.cells.find(c => c.id === id);
+      if (cell) cell.collapsed = div.classList.contains('collapsed');
+    });
 
     view.addEventListener('click', () => {
       editWrap.style.display = '';

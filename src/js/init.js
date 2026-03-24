@@ -130,7 +130,7 @@ function _resumeAfterUnlock(payload) {
   if (payload.data && Array.isArray(payload.data)) {
     for (const c of payload.data) {
       const cell = addCell(c.type, c.code);
-      if (c.collapsed) cell.el.classList.add('collapsed');
+      if (c.collapsed) { cell.el.classList.add('collapsed'); cell.collapsed = true; }
     }
   }
 
@@ -177,7 +177,7 @@ function _setupCryptoLiveSync() {
     const cellData = S.cells.map(c => ({
       type: c.type,
       code: c.code,
-      collapsed: (c._splitOrigEl || c.el).classList.contains('collapsed') || undefined,
+      collapsed: c.collapsed || undefined,
     }));
     const payload = {
       data: cellData,

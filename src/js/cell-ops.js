@@ -77,6 +77,7 @@ export function addCell(type, code = '', afterId = null, beforeId = null) {
   const id = S.cellId++;
   const cell = {
     id, type, code,
+    collapsed: false,
     defines: new Set(),
     uses: new Set(),
     error: null,

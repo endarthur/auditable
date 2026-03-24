@@ -323,7 +323,7 @@ function finishUpdate(newHtml, version) {
     const cellData = S.cells.map(c => ({
       type: c.type,
       code: c.code,
-      collapsed: c.el?.classList.contains('collapsed') || undefined
+      collapsed: c.collapsed || undefined
     }));
     oldData.data = '<!-- cell data: JSON array of {type, code, collapsed?} -->\n<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->';
   }
