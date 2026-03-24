@@ -2,6 +2,7 @@ import './state.js';
 import './cell-types.js';
 import './cm6.js';
 import './fs.js';
+import './stdlib-core.js';
 import './stdlib.js';
 import './python.js';
 import './dag-core.js';

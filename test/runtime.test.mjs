@@ -265,6 +265,99 @@ describe('runtime: error isolation', () => {
   });
 });
 
+describe('runtime: std injection', () => {
+  it('std is available in cells', async () => {
+    const nb = createNotebook();
+    nb.addCell('code', 'const s = std.sum([1, 2, 3])');
+    const result = await nb.run();
+    assert.equal(result.scope.s, 6);
+  });
+
+  it('std.csv parses data', async () => {
+    const nb = createNotebook();
+    nb.addCell('code', `const data = std.csv("a,b\\n1,2\\n3,4", { typed: true })`);
+    nb.addCell('code', 'const total = std.sum(data, d => d.a)');
+    const result = await nb.run();
+    assert.equal(result.scope.total, 4);
+  });
+
+  it('std.linspace generates array', async () => {
+    const nb = createNotebook();
+    nb.addCell('code', 'const arr = std.linspace(0, 1, 5)');
+    const result = await nb.run();
+    assert.equal(result.scope.arr.length, 5);
+    assert.equal(result.scope.arr[0], 0);
+    assert.equal(result.scope.arr[4], 1);
+  });
+
+  it('std.color works', async () => {
+    const nb = createNotebook();
+    nb.addCell('code', `const c = std.color('#ff0000')`);
+    nb.addCell('code', 'const r = c.r');
+    const result = await nb.run();
+    assert.equal(result.scope.r, 255);
+  });
+});
+
+describe('runtime: load / modules', () => {
+  it('load(@std) returns std', async () => {
+    const nb = createNotebook();
+    nb.addCell('code', 'const { sum } = await load("@std")');
+    nb.addCell('code', 'const s = sum([10, 20, 30])');
+    const result = await nb.run();
+    assert.equal(result.scope.s, 60);
+  });
+
+  it('load custom module from registry', async () => {
+    const myLib = { greet: (name) => `hello ${name}` };
+    const nb = createNotebook({ modules: { 'my-lib': myLib } });
+    nb.addCell('code', 'const lib = await load("my-lib")');
+    nb.addCell('code', 'const msg = lib.greet("world")');
+    const result = await nb.run();
+    assert.equal(result.scope.msg, 'hello world');
+  });
+
+  it('load with custom fallback loader', async () => {
+    const nb = createNotebook({
+      load: async (url) => {
+        if (url === 'dynamic://math') return { double: x => x * 2 };
+        throw new Error('not found');
+      },
+    });
+    nb.addCell('code', 'const m = await load("dynamic://math")');
+    nb.addCell('code', 'const y = m.double(21)');
+    const result = await nb.run();
+    assert.equal(result.scope.y, 42);
+  });
+
+  it('load throws for unknown module without fallback', async () => {
+    const nb = createNotebook();
+    nb.addCell('code', 'const m = await load("nonexistent")');
+    const result = await nb.run();
+    assert.ok(result.cells[0].error);
+    assert.ok(result.cells[0].error.includes('headless'));
+  });
+
+  it('install delegates to load', async () => {
+    const nb = createNotebook({ modules: { 'test-mod': { x: 99 } } });
+    nb.addCell('code', 'const m = await install("test-mod")');
+    nb.addCell('code', 'const v = m.x');
+    const result = await nb.run();
+    assert.equal(result.scope.v, 99);
+  });
+
+  it('modules are cached across cells', async () => {
+    let loadCount = 0;
+    const nb = createNotebook({
+      load: async () => { loadCount++; return { val: 1 }; },
+    });
+    nb.addCell('code', 'const a = await load("x")');
+    nb.addCell('code', 'const b = await load("x")');
+    const result = await nb.run();
+    assert.equal(loadCount, 1); // second call hits cache
+  });
+});
+
 describe('runtime: plugin cell types', () => {
   it('executes plugin cells with cellTypes option', async () => {
     const mockPlugin = {

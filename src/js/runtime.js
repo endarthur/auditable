@@ -24,6 +24,8 @@ import {
   parseCellName, buildDAG, topoSort
 } from './dag-core.js';
 
+import { std as stdCore } from './stdlib-core.js';
+
 // ── TXT PARSING (duplicated from split.js to avoid DOM import chain) ──
 
 function _parseTxt(content) {
@@ -70,6 +72,9 @@ function _parseTxt(content) {
 
 export function createNotebook(options = {}) {
   const cellTypes = options.cellTypes || {};
+  const moduleRegistry = { '@std': stdCore, ...options.modules };
+  const moduleCache = {};
+  const customLoad = options.load || null;
   let _cellId = 0;
   const cells = [];
 
@@ -139,10 +144,24 @@ export function createNotebook(options = {}) {
         const md = taggedTemplate('md');
         const html = taggedTemplate('html');
         const css = taggedTemplate('css');
+
+        // headless load: registry → custom loader → error
+        const load = async (url) => {
+          if (moduleCache[url]) return moduleCache[url];
+          if (moduleRegistry[url]) { moduleCache[url] = moduleRegistry[url]; return moduleRegistry[url]; }
+          if (customLoad) { const mod = await customLoad(url); moduleCache[url] = mod; return mod; }
+          throw new Error(`Module not available in headless mode: ${url}`);
+        };
+        // install delegates to load (no persistence in headless mode)
+        const install = async (url) => load(url);
+
         const injected = new Array(INJECTED_NAMES.length).fill(undefined);
         injected[INJECTED_NAMES.indexOf('display')] = display;
         injected[INJECTED_NAMES.indexOf('print')] = display;
         injected[INJECTED_NAMES.indexOf('ui')] = { display, print: display };
+        injected[INJECTED_NAMES.indexOf('std')] = stdCore;
+        injected[INJECTED_NAMES.indexOf('load')] = load;
+        injected[INJECTED_NAMES.indexOf('install')] = install;
         injected[INJECTED_NAMES.indexOf('md')] = md;
         injected[INJECTED_NAMES.indexOf('html')] = html;
         injected[INJECTED_NAMES.indexOf('css')] = css;
