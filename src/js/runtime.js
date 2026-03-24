@@ -257,11 +257,23 @@ export function createNotebook(options = {}) {
     });
   }
 
+  function analyze() {
+    buildDAG(cells, cellTypes);
+    const graph = cells.map(c => ({
+      id: c.id,
+      type: c.type,
+      defines: c.defines ? [...c.defines] : [],
+      uses: c.uses ? [...c.uses] : [],
+    }));
+    return graph;
+  }
+
   return {
     get cells() { return cells; },
     addCell,
     removeCell,
     run,
+    analyze,
     loadTxt,
     loadHtml,
     serialize,

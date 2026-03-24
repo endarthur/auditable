@@ -214,6 +214,78 @@ describe('runtime: loadHtml', () => {
   });
 });
 
+describe('runtime: analyze', () => {
+  it('returns defines and uses for each cell', () => {
+    const nb = createNotebook();
+    nb.addCell('code', 'const x = 1');
+    nb.addCell('code', 'const y = x + 1');
+    const graph = nb.analyze();
+    assert.equal(graph.length, 2);
+    assert.deepEqual(graph[0].defines, ['x']);
+    assert.deepEqual(graph[0].uses, []);
+    assert.deepEqual(graph[1].defines, ['y']);
+    assert.deepEqual(graph[1].uses, ['x']);
+  });
+
+  it('handles destructuring', () => {
+    const nb = createNotebook();
+    nb.addCell('code', 'const { a, b } = { a: 1, b: 2 }');
+    const graph = nb.analyze();
+    assert.ok(graph[0].defines.includes('a'));
+    assert.ok(graph[0].defines.includes('b'));
+  });
+
+  it('handles function declarations', () => {
+    const nb = createNotebook();
+    nb.addCell('code', 'function greet(name) { return "hi " + name }');
+    nb.addCell('code', 'const msg = greet("world")');
+    const graph = nb.analyze();
+    assert.deepEqual(graph[0].defines, ['greet']);
+    assert.deepEqual(graph[1].uses, ['greet']);
+  });
+
+  it('handles HTML widget defines', () => {
+    const nb = createNotebook();
+    nb.addCell('html', '<audit-slider name="power" min="0" max="100">');
+    nb.addCell('code', 'const doubled = power * 2');
+    const graph = nb.analyze();
+    assert.deepEqual(graph[0].defines, ['power']);
+    assert.deepEqual(graph[1].uses, ['power']);
+  });
+
+  it('handles md template uses', () => {
+    const nb = createNotebook();
+    nb.addCell('code', 'const x = 42');
+    nb.addCell('md', 'The answer is ${x}');
+    const graph = nb.analyze();
+    assert.deepEqual(graph[1].uses, ['x']);
+  });
+
+  it('does not execute cells', () => {
+    const nb = createNotebook();
+    nb.addCell('code', 'const x = 1');
+    nb.analyze();
+    // cells should have defines/uses populated but no _lastResult
+    assert.equal(nb.cells[0]._lastResult, null);
+  });
+
+  it('works with loaded notebooks', () => {
+    const nb = createNotebook();
+    nb.loadTxt(`/// auditable
+
+/// code
+const radius = 5
+
+/// code
+const area = Math.PI * radius * radius
+`);
+    const graph = nb.analyze();
+    assert.deepEqual(graph[0].defines, ['radius']);
+    assert.deepEqual(graph[1].defines, ['area']);
+    assert.deepEqual(graph[1].uses, ['radius']);
+  });
+});
+
 describe('runtime: serialize', () => {
   it('serializes cells', () => {
     const nb = createNotebook();
