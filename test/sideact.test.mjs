@@ -50,11 +50,15 @@ class _Node {
     this.childNodes[i] = newChild;
     return oldChild;
   }
+  removeChild(child) {
+    const i = this.childNodes.indexOf(child);
+    if (i >= 0) this.childNodes.splice(i, 1);
+    child.parentNode = null;
+    return child;
+  }
   remove() {
     if (!this.parentNode) return;
-    const i = this.parentNode.childNodes.indexOf(this);
-    if (i >= 0) this.parentNode.childNodes.splice(i, 1);
-    this.parentNode = null;
+    this.parentNode.removeChild(this);
   }
   cloneNode(deep) {
     const clone = new this.constructor(this.nodeType);

@@ -258,5 +258,9 @@
   "sr.batch": {
     "sig": "sr.batch(fn)",
     "desc": "batch signal writes \u2014 effects fire once after fn completes"
+  },
+  "sr.state": {
+    "sig": "sr.state(initial) \u2192 [read, write]",
+    "desc": "cell-persistent signal \u2014 survives re-execution from upstream changes, resets on code edit"
   }
 }

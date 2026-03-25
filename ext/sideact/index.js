@@ -205,28 +205,19 @@ function _findBindings(node, bindings) {
   if (node.nodeType === 3) { // Text
     const m = node.textContent.match(_MARKER_RE);
     if (m) {
-      const idx = parseInt(m[1]);
-      // split text node: before | anchor | after
+      // split text node around markers: before | anchor | ... | after
       const parts = node.textContent.split(_MARKER_RE_G);
       const parent = node.parentNode;
       const ref = node.nextSibling;
-      parent.childNodes.splice(parent.childNodes.indexOf(node), 1);
-      node.parentNode = null;
+      parent.removeChild(node);
       for (let i = 0; i < parts.length; i++) {
         if (i % 2 === 0) {
           // static text
-          if (parts[i]) {
-            const t = document.createTextNode(parts[i]);
-            t.parentNode = parent;
-            if (ref) parent.childNodes.splice(parent.childNodes.indexOf(ref), 0, t);
-            else parent.childNodes.push(t);
-          }
+          if (parts[i]) parent.insertBefore(document.createTextNode(parts[i]), ref);
         } else {
-          // marker index — replace with anchor text node
+          // marker index — insert anchor text node
           const anchor = document.createTextNode('');
-          anchor.parentNode = parent;
-          if (ref) parent.childNodes.splice(parent.childNodes.indexOf(ref), 0, anchor);
-          else parent.childNodes.push(anchor);
+          parent.insertBefore(anchor, ref);
           bindings.push({ type: 'text', path: _nodePath(anchor), idx: parseInt(parts[i]) });
         }
       }
@@ -243,7 +234,11 @@ function _nodePath(target) {
   let node = target;
   while (node.parentNode) {
     const parent = node.parentNode;
-    path.unshift(parent.childNodes.indexOf(node));
+    let idx = 0;
+    for (let c = parent.firstChild; c; c = c.nextSibling, idx++) {
+      if (c === node) break;
+    }
+    path.unshift(idx);
     node = parent;
   }
   return path;
@@ -274,6 +269,13 @@ function _instantiate(cached, values) {
   }
 
   fragment._disposers = disposers;
+  // strip leading/trailing whitespace-only text nodes
+  while (fragment.firstChild && fragment.firstChild.nodeType === 3 && !fragment.firstChild.textContent.trim()) {
+    fragment.removeChild(fragment.firstChild);
+  }
+  while (fragment.lastChild && fragment.lastChild.nodeType === 3 && !fragment.lastChild.textContent.trim()) {
+    fragment.removeChild(fragment.lastChild);
+  }
   const children = [...fragment.childNodes];
   if (children.length === 1) {
     children[0]._disposers = disposers;
@@ -494,4 +496,31 @@ export function render(content, container) {
     }
     container.textContent = '';
   };
+}
+
+// ── notebook integration hook ──
+// Self-registers sr.state() when running inside auditable cells.
+// sr.state(initial) persists signals across cell re-executions.
+// Pure sideact (signal/computed/effect/h/each/render) is unaffected.
+
+if (typeof window !== 'undefined') {
+  (window._cellContextHooks = window._cellContextHooks || []).push({
+    setup(cell, ctx) {
+      if (!ctx.sr) return;
+      if (!cell._srState) cell._srState = [];
+      // reset persisted state when cell code changes
+      if (cell._srStateCode !== cell.code) {
+        cell._srState = [];
+        cell._srStateCode = cell.code;
+      }
+      let hookIdx = 0;
+      ctx.sr.state = function state(initial) {
+        const idx = hookIdx++;
+        if (idx < cell._srState.length) return cell._srState[idx];
+        const s = signal(initial);
+        cell._srState[idx] = s;
+        return s;
+      };
+    },
+  });
 }

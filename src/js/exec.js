@@ -359,7 +359,7 @@ function _createCellContext(cell) {
   const display = (...args) => {
     if (_stale) return;
     for (const arg of args) {
-      if (arg instanceof Element) {
+      if (arg instanceof Element || (arg && arg.nodeType === 11)) {
         outputEl.appendChild(arg);
       } else if (arg instanceof TaggedContent) {
         const el = document.createElement('div');
@@ -1329,8 +1329,13 @@ function _createCellContext(cell) {
   const vfs = window._notebookVFS || undefined;
   const sr = { signal, computed, effect, batch, h, each, render };
 
-  return { ui, std, sr, load, install, installBinary, invalidation, display, print: display,
+  const ctx = { ui, std, sr, load, install, installBinary, invalidation, display, print: display,
            md, html, css, workshop, notebook, worker, workerPool, vfs, usedWidgets, outputEl, widgetEl };
+
+  // run cell context hooks (e.g. sr.state persistence)
+  for (const hook of (window._cellContextHooks || [])) hook.setup(cell, ctx);
+
+  return ctx;
 }
 
 export async function execCell(cell) {

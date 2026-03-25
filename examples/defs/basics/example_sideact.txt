@@ -1,0 +1,133 @@
+/// auditable
+/// title: sideact — reactive UI
+
+/// md
+# sr — reactive signals + DOM
+
+The `sr` namespace provides reactive primitives for building live UIs directly in code cells. No framework, no build step — just signals and tagged templates.
+
+/// md
+## counter
+
+A basic reactive counter. The `signal` holds state, `sr.h` builds DOM with live bindings, and clicking the button updates everything automatically.
+
+/// code
+const [count, setCount] = sr.signal(0);
+const doubled = sr.computed(() => count() * 2);
+
+display(sr.h`
+  <div style="display:flex;align-items:center;gap:12px;font:14px var(--mono)">
+    <button onclick=${() => setCount(c => c - 1)} style="padding:4px 12px;cursor:pointer">−</button>
+    <span>count: ${() => count()}</span>
+    <button onclick=${() => setCount(c => c + 1)} style="padding:4px 12px;cursor:pointer">+</button>
+    <span style="opacity:0.5">doubled: ${() => doubled()}</span>
+  </div>
+`);
+
+/// md
+## temperature converter
+
+Two signals linked by computed values. Editing one updates the other.
+
+/// code
+const [celsius, setCelsius] = sr.signal(20);
+const [fahrenheit, setFahrenheit] = sr.signal(68);
+
+const fromC = (c) => { setCelsius(c); setFahrenheit(c * 9/5 + 32); };
+const fromF = (f) => { setFahrenheit(f); setCelsius((f - 32) * 5/9); };
+
+display(sr.h`
+  <div style="display:flex;gap:16px;align-items:center;font:14px var(--mono)">
+    <label>°C <input type="number" value=${() => Math.round(celsius() * 10) / 10}
+      oninput=${e => fromC(+e.target.value)}
+      style="width:80px;background:var(--bg);color:var(--fg);border:1px solid var(--border);padding:4px"></label>
+    <span>=</span>
+    <label>°F <input type="number" value=${() => Math.round(fahrenheit() * 10) / 10}
+      oninput=${e => fromF(+e.target.value)}
+      style="width:80px;background:var(--bg);color:var(--fg);border:1px solid var(--border);padding:4px"></label>
+  </div>
+`);
+
+/// md
+## dynamic list
+
+Add and remove items from a reactive list. `sr.each` handles minimal DOM updates.
+
+/// code
+const [items, setItems] = sr.signal(["alpha", "beta", "gamma"]);
+
+const addItem = () => {
+  const name = `item-${Math.random().toString(36).slice(2, 6)}`;
+  setItems(prev => [...prev, name]);
+};
+
+const removeItem = (idx) => {
+  setItems(prev => prev.filter((_, i) => i !== idx));
+};
+
+display(sr.h`
+  <div style="font:13px var(--mono)">
+    <button onclick=${addItem} style="padding:4px 12px;margin-bottom:8px;cursor:pointer">+ add</button>
+    <span style="opacity:0.5;margin-left:8px">${() => items().length} items</span>
+    <ul style="list-style:none;padding:0;margin:4px 0">
+      ${sr.each(items, (item, i) => sr.h`
+        <li style="padding:2px 0">
+          ${item}
+          <button onclick=${() => removeItem(i)} style="margin-left:8px;cursor:pointer;opacity:0.5">×</button>
+        </li>
+      `)}
+    </ul>
+  </div>
+`);
+
+/// md
+## hyperscript mode
+
+`sr.h` also works as a function call — useful for programmatic DOM generation.
+
+/// code
+const [n, setN] = sr.signal(5);
+
+const container = sr.h("div", null);
+
+display(sr.h`
+  <div style="font:13px var(--mono)">
+    <label>bars: <input type="range" min="1" max="20" value=${() => n()}
+      oninput=${e => setN(+e.target.value)}></label>
+    <span style="margin-left:8px">${() => n()}</span>
+    ${container}
+  </div>
+`);
+
+// hyperscript for computed structure — rebuilds on signal change
+sr.effect(() => {
+  const bars = n();
+  container.textContent = '';
+  for (let i = 0; i < bars; i++) {
+    const h = Math.round(20 + 60 * Math.sin(i * 0.7) ** 2);
+    container.appendChild(sr.h("div", {
+      style: `display:inline-block;width:${Math.max(4, Math.floor(200/bars))}px;height:${h}px;background:var(--accent);border-radius:2px 2px 0 0;margin-right:2px;vertical-align:bottom`
+    }));
+  }
+});
+
+/// md
+## mixing with the DAG
+
+`sr.signal` is cell-local — it resets when the cell re-executes. `sr.state` persists across re-executions: changing the slider above won't reset the exponent below.
+
+/// code
+const base = ui.slider("base", 10, {min: 1, max: 50});
+
+/// code
+const [exp, setExp] = sr.state(2);
+
+display(sr.h`
+  <div style="font:14px var(--mono)">
+    <label>exponent: <input type="range" min="1" max="5" step="0.1" value=${() => exp()}
+      oninput=${e => setExp(+e.target.value)}></label>
+    <div style="margin-top:8px">
+      ${() => base}<sup>${() => exp().toFixed(1)}</sup> = ${() => Math.pow(base, exp()).toFixed(2)}
+    </div>
+  </div>
+`);

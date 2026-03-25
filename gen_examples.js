@@ -40,6 +40,7 @@ const categories = {
     'example_sadpan.txt',
     'example_unified_fs.txt',
     'example_units.txt',
+    'example_sideact.txt',
   ],
 
   // atra — Wasm compiler: language features, kernels, natra
