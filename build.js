@@ -525,6 +525,14 @@ if (fs.existsSync(vfsPath)) {
   modules.unshift({ name: 'vfs', source: vfsSrc });
 }
 
+// Add sideact bundle as a module entry
+const sideactPath = path.join(__dirname, 'ext/sideact/index.js');
+if (fs.existsSync(sideactPath)) {
+  let sideactSrc = fs.readFileSync(sideactPath, 'utf8');
+  sideactSrc = sideactSrc.replace(/^\n+/, '').replace(/\n+$/, '');
+  modules.unshift({ name: 'sideact', source: sideactSrc });
+}
+
 // Read CM6 bundle (classic IIFE, not an ES module — sets window.CM6 via var)
 const cm6Path = path.join(__dirname, 'ext/cm6/cm6.min.js');
 const cm6Src = fs.existsSync(cm6Path) ? fs.readFileSync(cm6Path, 'utf8') : '';

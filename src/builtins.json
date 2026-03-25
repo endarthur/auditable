@@ -230,5 +230,33 @@
   "std.VFS": {
     "sig": "std.VFS",
     "desc": "alias for vfs \u2014 the VFS class for creating virtual filesystems"
+  },
+  "sr.signal": {
+    "sig": "sr.signal(initial) \u2192 [read, write]",
+    "desc": "reactive atom \u2014 read() tracks, write(v) or write(fn) notifies"
+  },
+  "sr.computed": {
+    "sig": "sr.computed(fn) \u2192 read",
+    "desc": "derived signal \u2014 recomputes lazily when deps change"
+  },
+  "sr.effect": {
+    "sig": "sr.effect(fn) \u2192 dispose",
+    "desc": "side effect \u2014 re-runs on signal change, return cleanup fn"
+  },
+  "sr.h": {
+    "sig": "sr.h`<tag>${\u2026}</tag>` | sr.h(tag, props?, \u2026children)",
+    "desc": "reactive DOM \u2014 tagged template or hyperscript, signal-driven bindings"
+  },
+  "sr.each": {
+    "sig": "sr.each(signalOrFn, mapFn, keyFn?)",
+    "desc": "reactive list \u2014 minimal DOM updates on array changes"
+  },
+  "sr.render": {
+    "sig": "sr.render(content, container) \u2192 dispose",
+    "desc": "mount reactive content, returns dispose for cleanup"
+  },
+  "sr.batch": {
+    "sig": "sr.batch(fn)",
+    "desc": "batch signal writes \u2014 effects fire once after fn completes"
   }
 }

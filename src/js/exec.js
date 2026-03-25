@@ -4,6 +4,7 @@ import { _ctGetHandler, _ctRenderOutput, _ctIsExecutable } from './cell-types.js
 import { setMsg } from './ui.js';
 import { refreshTaggedLanguages, getEditor } from './cm6.js';
 import { std } from './stdlib.js';
+import { signal, computed, effect, batch, h, each, render } from './sideact.js';
 import { python, zenOfPython } from './python.js';
 import { addCell } from './cell-ops.js';
 import { renderMd } from './markdown.js';
@@ -1326,14 +1327,15 @@ function _createCellContext(cell) {
   };
 
   const vfs = window._notebookVFS || undefined;
+  const sr = { signal, computed, effect, batch, h, each, render };
 
-  return { ui, std, load, install, installBinary, invalidation, display, print: display,
+  return { ui, std, sr, load, install, installBinary, invalidation, display, print: display,
            md, html, css, workshop, notebook, worker, workerPool, vfs, usedWidgets, outputEl, widgetEl };
 }
 
 export async function execCell(cell) {
   const ctx = _createCellContext(cell);
-  const { ui, std, load, install, installBinary, invalidation, display, print: print_,
+  const { ui, std, sr, load, install, installBinary, invalidation, display, print: print_,
           md, html, css, workshop, notebook, worker, workerPool, vfs,
           usedWidgets, outputEl, widgetEl } = ctx;
 
@@ -1352,7 +1354,7 @@ export async function execCell(cell) {
     }
 
     const scopeVals = scopeKeys.map(k => S.scope[k]);
-    const injectedVals = [ui, std, load, install, installBinary, invalidation, display, display,
+    const injectedVals = [ui, std, sr, load, install, installBinary, invalidation, display, display,
       md, html, css, workshop, notebook, worker, workerPool, vfs];
     const result = await fn(...scopeVals, ...injectedVals);
 
