@@ -43,7 +43,8 @@ export function create(container, opts = {}) {
 
   // pick system
   const _bgColor = opts.background ?? 0x1a1a2e;
-  const pick = _createPickSystem(THREE, renderer, scene, _activeCamera, origin, container, _bgColor);
+  // pass a getter so pick always uses the current camera
+  const pick = _createPickSystem(THREE, renderer, scene, () => _activeCamera, origin, container, _bgColor);
 
   // layers
   const _layers = new Map();
@@ -150,14 +151,14 @@ export function create(container, opts = {}) {
       _updateOrtho();
       _activeCamera = _orthoCamera;
       controls._controls.object = _activeCamera;
-      pick._camera = _activeCamera;
+      // camera updated via getCamera()
       markDirty();
     },
     perspective() {
       _isOrtho = false;
       _activeCamera = camera;
       controls._controls.object = _activeCamera;
-      pick._camera = _activeCamera;
+      // camera updated via getCamera()
       markDirty();
     },
 
@@ -292,42 +293,51 @@ function _createControls(THREE, camera, domElement, origin, scene) {
 
 // ── pick system ──
 
-function _createPickSystem(THREE, renderer, scene, camera, origin, container, clearColor) {
+function _createPickSystem(THREE, renderer, scene, getCamera, origin, container, clearColor) {
   const _clearColor = clearColor;
   let _w = Math.max(1, container.clientWidth);
   let _h = Math.max(1, container.clientHeight);
-  let _rt = new THREE.WebGLRenderTarget(_w, _h, { format: THREE.RGBAFormat, type: THREE.UnsignedByteType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+  let _depthTex = new THREE.DepthTexture(_w, _h);
+  let _rt = new THREE.WebGLRenderTarget(_w, _h, {
+    format: THREE.RGBAFormat, type: THREE.UnsignedByteType,
+    minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+    depthTexture: _depthTex,
+    depthBuffer: true, stencilBuffer: false,
+  });
   const _pixel = new Uint8Array(4);
   let _dirty = true;
   let _enabled = true;
   let _debug = false;
-  const _layers = new Map(); // layerName → { resolve(id) → result, idStart, idEnd }
+  const _layers = new Map();
   let _nextId = 1;
-  let _camera = camera;
   const _callbacks = { hover: [], click: [], dblclick: [] };
+
+  let _debugNoSwap = false; // diagnostic: render normal materials to pick target
 
   function _render(cam) {
     if (!_enabled) return;
-    _camera = cam;
-    // swap materials: pickMaterial ↔ normal material
     const swapped = [];
     const hidden = [];
-    scene.traverse(obj => {
-      if (obj._pickMaterial) {
-        swapped.push([obj, obj.material]);
-        obj.material = obj._pickMaterial;
-      } else if ((obj.isMesh || obj.isPoints || obj.isLine) && obj.visible) {
-        hidden.push(obj);
-        obj.visible = false;
-      }
-    });
+    if (!_debugNoSwap) {
+      scene.traverse(obj => {
+        if (obj._pickMaterial) {
+          swapped.push([obj, obj.material]);
+          obj.material = obj._pickMaterial;
+        } else if ((obj.isMesh || obj.isPoints || obj.isLine) && obj.visible) {
+          hidden.push(obj);
+          obj.visible = false;
+        }
+      });
+    }
+    const prevAutoClear = renderer.autoClear;
+    renderer.autoClear = false;
     renderer.setRenderTarget(_rt);
     renderer.setClearColor(0x000000, 0);
-    renderer.clear();
+    renderer.clear(true, true, true);
     renderer.render(scene, cam);
     renderer.setRenderTarget(null);
     renderer.setClearColor(_clearColor, 1);
-    // restore
+    renderer.autoClear = prevAutoClear;
     for (const [obj, origMat] of swapped) obj.material = origMat;
     for (const obj of hidden) obj.visible = true;
     _dirty = false;
@@ -335,7 +345,7 @@ function _createPickSystem(THREE, renderer, scene, camera, origin, container, cl
 
   function _query(x, y) {
     if (!_enabled) return null;
-    if (_dirty) _render(_camera);
+    _render(getCamera()); // always use current camera
     const px = Math.floor(x * _w / container.clientWidth);
     const py = _h - 1 - Math.floor(y * _h / container.clientHeight);
     renderer.readRenderTargetPixels(_rt, px, py, 1, 1, _pixel);
@@ -371,13 +381,19 @@ function _createPickSystem(THREE, renderer, scene, camera, origin, container, cl
 
   return {
     _render,
-    _camera,
     _layers,
     _dirty: true,
     _resize(w, h) {
       _w = Math.max(1, w);
       _h = Math.max(1, h);
-      _rt.setSize(_w, _h);
+      _rt.dispose();
+      _depthTex = new THREE.DepthTexture(_w, _h);
+      _rt = new THREE.WebGLRenderTarget(_w, _h, {
+        format: THREE.RGBAFormat, type: THREE.UnsignedByteType,
+        minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+        depthTexture: _depthTex,
+        depthBuffer: true, stencilBuffer: false,
+      });
       _dirty = true;
     },
     _dispose() { _rt.dispose(); },
@@ -395,6 +411,50 @@ function _createPickSystem(THREE, renderer, scene, camera, origin, container, cl
     },
     markDirty() { _dirty = true; },
     set debug(v) { _debug = v; },
+    set debugNoSwap(v) { _debugNoSwap = v; },
+    // render pick materials to main canvas for visual diagnostic
+    debugPickToScreen() {
+      const swapped = [];
+      const hidden = [];
+      scene.traverse(obj => {
+        if (obj._pickMaterial) {
+          swapped.push([obj, obj.material]);
+          obj.material = obj._pickMaterial;
+        } else if ((obj.isMesh || obj.isPoints || obj.isLine) && obj.visible) {
+          hidden.push(obj);
+          obj.visible = false;
+        }
+      });
+      renderer.setClearColor(0x000000, 1);
+      renderer.render(scene, getCamera());
+      renderer.setClearColor(_clearColor, 1);
+      for (const [obj, origMat] of swapped) obj.material = origMat;
+      for (const obj of hidden) obj.visible = true;
+    },
+    // render pick buffer to a visible canvas for debugging
+    debugCanvas() {
+      _render(getCamera());
+      const pixels = new Uint8Array(_w * _h * 4);
+      renderer.readRenderTargetPixels(_rt, 0, 0, _w, _h, pixels);
+      const c = document.createElement('canvas');
+      c.width = _w; c.height = _h;
+      const ctx = c.getContext('2d');
+      const img = ctx.createImageData(_w, _h);
+      // flip Y and amplify colors for visibility
+      for (let y = 0; y < _h; y++) {
+        for (let x = 0; x < _w; x++) {
+          const srcIdx = ((_h - 1 - y) * _w + x) * 4;
+          const dstIdx = (y * _w + x) * 4;
+          // raw RGB, force alpha=255
+          img.data[dstIdx] = pixels[srcIdx];
+          img.data[dstIdx + 1] = pixels[srcIdx + 1];
+          img.data[dstIdx + 2] = pixels[srcIdx + 2];
+          img.data[dstIdx + 3] = 255;
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+      return c;
+    },
   };
 }
 

@@ -146,18 +146,8 @@ scene.addBlockModel('fe', prepared.meshes, { colorMap: cmap })
 // drillholes
 scene.addDrillholes('holes', { holes, colorMap: cmap, radius: 3 })
 
-// bounding box
+// bounding box + fit
 scene.hud.boundingBox(grid.boundingBox(gridDef))
-
-// picking — show block info on hover
-const tooltip = document.createElement('div')
-tooltip.style.cssText = 'position:absolute;top:8px;left:8px;font:12px monospace;color:#ccc;pointer-events:none;z-index:10;'
-container.appendChild(tooltip)
-scene.pick.debug = true
-scene.pick.on('hover', (result) => {
-  tooltip.textContent = result ? `${result.layer} — quad ${result.quadIndex}` : ''
-})
-
 scene.controls.fitAll()
 
 /// md

@@ -146,15 +146,14 @@ describe('voxmesh: meshing', () => {
     assert.ok(mesh.indices.length > 0);
   });
 
-  it('two adjacent different-bin blocks keep internal faces', () => {
+  it('two adjacent different-bin blocks cull shared internal face', () => {
     const g2 = { origin: [0, 0, 0], size: [1, 1, 1], count: [2, 1, 1] };
     const c = chunk(g2, { hint: 32 });
     const b = bucket(c, { values: new Float64Array([1, 5]), indices: new Int32Array([0, 1]) }, new Uint8Array([0, 1]));
     addGhosts(c, b);
     const mesh = meshChunk(b.values().next().value, c, g2);
-    // 12 external faces + 2 internal faces (different bins) = total 12 faces, but the
-    // internal ones aren't culled. Each block has 6 faces, no culling = 72 indices
-    assert.strictEqual(mesh.indices.length, 72);
+    // same as same-bin: shared internal face culled regardless of bin
+    assert.ok(mesh.indices.length < 72, `expected culled: got ${mesh.indices.length}`);
   });
 
   it('meshAll produces one mesh per chunk', () => {

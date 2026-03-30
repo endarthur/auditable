@@ -25,8 +25,8 @@ export function meshChunk(chunkBucket, chunks, gridDef) {
     }
   }
 
-  // pass 1: face culling — collect visible faces
-  // face = { i, j, k, dir, binId }
+  // pass 1: face culling — emit face only if neighbor is absent (shell extraction)
+  // bin ID determines face color, NOT face existence
   const faces = [[], [], [], [], [], []]; // per direction
   for (let p = 0; p < b.n; p++) {
     const bi = b.ijk[p * 3], bj = b.ijk[p * 3 + 1], bk = b.ijk[p * 3 + 2];
@@ -34,7 +34,7 @@ export function meshChunk(chunkBucket, chunks, gridDef) {
     for (let d = 0; d < 6; d++) {
       const ni = bi + _DIRS[d][0], nj = bj + _DIRS[d][1], nk = bk + _DIRS[d][2];
       const neighborBin = lookup.get(_key(ni, nj, nk));
-      if (neighborBin === undefined || neighborBin !== binId) {
+      if (neighborBin === undefined) {
         faces[d].push(bi, bj, bk, binId);
       }
     }

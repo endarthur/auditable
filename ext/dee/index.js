@@ -192,13 +192,9 @@ function colorBar(cmap, opts = {}) {
 let _pickMat = null;
 function _getPickMaterial(THREE, dee) {
   if (_pickMat) return _pickMat;
-  _pickMat = new THREE.RawShaderMaterial({
+  _pickMat = new THREE.ShaderMaterial({
     vertexShader: `
-      precision highp float;
-      attribute vec3 position;
       attribute vec4 aPickColor;
-      uniform mat4 modelViewMatrix;
-      uniform mat4 projectionMatrix;
       varying vec4 vPick;
       void main() {
         vPick = aPickColor;
@@ -206,14 +202,14 @@ function _getPickMaterial(THREE, dee) {
       }
     `,
     fragmentShader: `
-      precision highp float;
       varying vec4 vPick;
       void main() {
         gl_FragColor = vPick;
       }
     `,
-    side: THREE.DoubleSide,
-    blending: THREE.NoBlending,
+    side: 2, // THREE.DoubleSide = 2
+    blending: 0, // THREE.NoBlending = 0
+    transparent: false,
     depthTest: true,
     depthWrite: true,
   });
@@ -270,7 +266,7 @@ function addBlockModelLayer(dee, name, meshes, opts = {}) {
     const mesh = new THREE.Mesh(geom, mat);
     mesh.name = `${name}_chunk_${chunkIdx}`;
 
-    // pick: per-vertex RGBA ID via ShaderMaterial on the same geometry
+    // pick: per-vertex ID as vec4 attribute
     if (dee.pick) {
       const pickColors = new Float32Array(nVerts * 4);
       for (let t = 0; t < nTris; t++) {
@@ -289,7 +285,7 @@ function addBlockModelLayer(dee, name, meshes, opts = {}) {
           }
         }
       }
-      geom.setAttribute('aPickColor', new THREE.BufferAttribute(new Float32Array(pickColors), 4));
+      geom.setAttribute('aPickColor', new THREE.Float32BufferAttribute(pickColors, 4));
       mesh._pickMaterial = _getPickMaterial(THREE, dee);
       idOffset += Math.ceil(nTris / 2);
     }
@@ -392,17 +388,19 @@ function addSectionLayer(dee, name, sectionMesh, opts = {}) {
   geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
 
   const mat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
+  const secGroup = new THREE.Group();
+  secGroup.position.set(-dee.origin[0], -dee.origin[1], -dee.origin[2]);
   const mesh = new THREE.Mesh(geom, mat);
   mesh.name = name;
-  mesh.position.set(-dee.origin[0], -dee.origin[1], -dee.origin[2]);
+  secGroup.add(mesh);
 
-  dee.scene.add(mesh);
+  dee.scene.add(secGroup);
   dee.markDirty();
 
   const layer = {
     name, mesh, type: 'section',
-    get visible() { return mesh.visible; },
-    set visible(v) { mesh.visible = v; dee.markDirty(); },
+    get visible() { return secGroup.visible; },
+    set visible(v) { secGroup.visible = v; dee.markDirty(); },
     updateMesh(newMesh) {
       geom.setAttribute('position', new THREE.Float32BufferAttribute(newMesh.positions, 3));
       geom.setAttribute('normal', new THREE.Float32BufferAttribute(newMesh.normals, 3));
@@ -410,7 +408,7 @@ function addSectionLayer(dee, name, sectionMesh, opts = {}) {
       geom.attributes.position.needsUpdate = true;
       dee.markDirty();
     },
-    _dispose() { geom.dispose(); mat.dispose(); dee.scene.remove(mesh); },
+    _dispose() { geom.dispose(); mat.dispose(); dee.scene.remove(secGroup); },
   };
   dee._layers.set(name, layer);
   return layer;
@@ -422,11 +420,10 @@ function addPointsLayer(dee, name, opts = {}) {
   const THREE = dee.THREE;
   const n = opts.positions.length / 3;
   const pos = new Float32Array(n * 3);
-  const ox = dee.origin[0], oy = dee.origin[1], oz = dee.origin[2];
   for (let i = 0; i < n; i++) {
-    pos[i * 3] = opts.positions[i * 3] - ox;
-    pos[i * 3 + 1] = opts.positions[i * 3 + 1] - oy;
-    pos[i * 3 + 2] = opts.positions[i * 3 + 2] - oz;
+    pos[i * 3] = opts.positions[i * 3];
+    pos[i * 3 + 1] = opts.positions[i * 3 + 1];
+    pos[i * 3 + 2] = opts.positions[i * 3 + 2];
   }
 
   const geom = new THREE.BufferGeometry();
@@ -449,16 +446,19 @@ function addPointsLayer(dee, name, opts = {}) {
     clippingPlanes: opts.clippingPlanes || dee.clippingPlanes,
   });
 
+  const pointGroup = new THREE.Group();
+  pointGroup.position.set(-dee.origin[0], -dee.origin[1], -dee.origin[2]);
   const points = new THREE.Points(geom, mat);
   points.name = name;
-  dee.scene.add(points);
+  pointGroup.add(points);
+  dee.scene.add(pointGroup);
   dee.markDirty();
 
   const layer = {
     name, points, type: 'points',
     get visible() { return points.visible; },
     set visible(v) { points.visible = v; dee.markDirty(); },
-    _dispose() { geom.dispose(); mat.dispose(); dee.scene.remove(points); },
+    _dispose() { geom.dispose(); mat.dispose(); dee.scene.remove(pointGroup); },
   };
   dee._layers.set(name, layer);
   return layer;
@@ -474,7 +474,14 @@ function addDrillholeLayer(dee, name, opts = {}) {
   const segments = opts.segments || 8;
   const method = opts.method || 'minimumCurvature';
   const cmap = opts.colorMap;
-  const ox = dee.origin[0], oy = dee.origin[1], oz = dee.origin[2];
+
+  // count total intervals for pick ID allocation
+  let totalIntervals = 0;
+  for (const hole of (opts.holes || [])) totalIntervals += (hole.intervals || []).length;
+  const idStart = dee.pick ? dee.pick.allocateIds(totalIntervals + 1) : 0;
+  let idOffset = 0;
+  // map: localId → { holeId, intervalIndex, from, to }
+  const pickMap = [];
 
   for (const hole of (opts.holes || [])) {
     const path = desurvey(hole.collar, hole.surveys, { method });
@@ -484,26 +491,34 @@ function addDrillholeLayer(dee, name, opts = {}) {
     for (const iv of hole.intervals) { depths.push(iv.from, iv.to); }
     const pts = interpolatePath(path, hole.surveys, new Float64Array(depths));
 
-    // build tube geometry
     const positions = [], normals = [], colors = [], indices = [];
+    const pickColors = [];
     let vOff = 0;
 
     for (let iv = 0; iv < hole.intervals.length; iv++) {
       const interval = hole.intervals[iv];
-      const p0 = [pts[iv * 2 * 3] - ox, pts[iv * 2 * 3 + 1] - oy, pts[iv * 2 * 3 + 2] - oz];
-      const p1 = [pts[(iv * 2 + 1) * 3] - ox, pts[(iv * 2 + 1) * 3 + 1] - oy, pts[(iv * 2 + 1) * 3 + 2] - oz];
+      const p0 = [pts[iv * 2 * 3], pts[iv * 2 * 3 + 1], pts[iv * 2 * 3 + 2]];
+      const p1 = [pts[(iv * 2 + 1) * 3], pts[(iv * 2 + 1) * 3 + 1], pts[(iv * 2 + 1) * 3 + 2]];
 
       const dir = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]];
       const len = Math.sqrt(dir[0] ** 2 + dir[1] ** 2 + dir[2] ** 2);
       if (len < 1e-6) continue;
       dir[0] /= len; dir[1] /= len; dir[2] /= len;
 
-      // perpendicular vectors
       let perp = Math.abs(dir[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
       const u = _cross(dir, perp); _normalize(u);
       const v = _cross(dir, u); _normalize(v);
 
       const [r, g, b] = cmap && interval.value !== undefined ? cmap.map(interval.value) : [0.5, 0.5, 0.5];
+
+      // pick ID for this interval
+      const pickId = idStart + idOffset;
+      const pr = (pickId & 0xFF) / 255;
+      const pg = ((pickId >> 8) & 0xFF) / 255;
+      const pb = ((pickId >> 16) & 0xFF) / 255;
+      const pa = ((pickId >>> 24) & 0xFF) / 255;
+      pickMap.push({ holeId: hole.id, intervalIndex: iv, from: interval.from, to: interval.to, value: interval.value, category: interval.category });
+      idOffset++;
 
       for (let ring = 0; ring < 2; ring++) {
         const p = ring === 0 ? p0 : p1;
@@ -513,14 +528,14 @@ function addDrillholeLayer(dee, name, opts = {}) {
           positions.push(p[0] + u[0] * cos + v[0] * sin, p[1] + u[1] * cos + v[1] * sin, p[2] + u[2] * cos + v[2] * sin);
           normals.push(u[0] * Math.cos(angle) + v[0] * Math.sin(angle), u[1] * Math.cos(angle) + v[1] * Math.sin(angle), u[2] * Math.cos(angle) + v[2] * Math.sin(angle));
           colors.push(r, g, b);
+          pickColors.push(pr, pg, pb, pa);
         }
       }
 
-      // indices
       for (let s = 0; s < segments; s++) {
         const a = vOff + s, b2 = vOff + (s + 1) % segments;
         const c2 = vOff + segments + s, d = vOff + segments + (s + 1) % segments;
-        indices.push(a, c2, b2, b2, c2, d);
+        indices.push(a, b2, c2, b2, d, c2); // CCW from outside
       }
       vOff += segments * 2;
     }
@@ -535,10 +550,30 @@ function addDrillholeLayer(dee, name, opts = {}) {
     const mat = new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: false });
     const mesh = new THREE.Mesh(geom, mat);
     mesh.name = `${name}_${hole.id || 'hole'}`;
+    if (dee.pick) {
+      geom.setAttribute('aPickColor', new THREE.Float32BufferAttribute(new Float32Array(pickColors), 4));
+      mesh._pickMaterial = _getPickMaterial(THREE, dee);
+    }
     group.add(mesh);
   }
 
+  // offset group same as block model — world coords, group transform subtracts origin
+  group.position.set(-dee.origin[0], -dee.origin[1], -dee.origin[2]);
   dee.scene.add(group);
+
+  if (dee.pick && idStart) {
+    dee.pick.registerLayer(name, {
+      idStart,
+      idEnd: idStart + idOffset,
+      resolve(localId, layerName) {
+        const info = pickMap[localId];
+        if (!info) return { layer: layerName, type: 'drillhole' };
+        return { layer: layerName, type: 'drillhole', holeId: info.holeId, intervalIndex: info.intervalIndex, from: info.from, to: info.to, value: info.value, category: info.category };
+      },
+    });
+    dee.pick.markDirty();
+  }
+
   dee.markDirty();
 
   const layer = {
@@ -645,11 +680,10 @@ function addSurfaceLayer(dee, name, opts = {}) {
   const THREE = dee.THREE;
   const n = opts.positions.length / 3;
   const pos = new Float32Array(n * 3);
-  const ox = dee.origin[0], oy = dee.origin[1], oz = dee.origin[2];
   for (let i = 0; i < n; i++) {
-    pos[i * 3] = opts.positions[i * 3] - ox;
-    pos[i * 3 + 1] = opts.positions[i * 3 + 1] - oy;
-    pos[i * 3 + 2] = opts.positions[i * 3 + 2] - oz;
+    pos[i * 3] = opts.positions[i * 3];
+    pos[i * 3 + 1] = opts.positions[i * 3 + 1];
+    pos[i * 3 + 2] = opts.positions[i * 3 + 2];
   }
 
   const geom = new THREE.BufferGeometry();
@@ -667,18 +701,21 @@ function addSurfaceLayer(dee, name, opts = {}) {
     clippingPlanes: opts.clippingPlanes || dee.clippingPlanes,
   });
 
+  const surfGroup = new THREE.Group();
+  surfGroup.position.set(-dee.origin[0], -dee.origin[1], -dee.origin[2]);
   const mesh = new THREE.Mesh(geom, mat);
   mesh.name = name;
-  dee.scene.add(mesh);
+  surfGroup.add(mesh);
+  dee.scene.add(surfGroup);
   dee.markDirty();
 
   const layer = {
     name, mesh, type: 'surface',
-    get visible() { return mesh.visible; },
-    set visible(v) { mesh.visible = v; dee.markDirty(); },
+    get visible() { return surfGroup.visible; },
+    set visible(v) { surfGroup.visible = v; dee.markDirty(); },
     get opacity() { return mat.opacity; },
     set opacity(v) { mat.opacity = v; mat.transparent = v < 1; dee.markDirty(); },
-    _dispose() { geom.dispose(); mat.dispose(); dee.scene.remove(mesh); },
+    _dispose() { geom.dispose(); mat.dispose(); dee.scene.remove(surfGroup); },
   };
   dee._layers.set(name, layer);
   return layer;
@@ -690,15 +727,15 @@ function addPolylinesLayer(dee, name, opts = {}) {
   const THREE = dee.THREE;
   const group = new THREE.Group();
   group.name = name;
-  const ox = dee.origin[0], oy = dee.origin[1], oz = dee.origin[2];
+  group.position.set(-dee.origin[0], -dee.origin[1], -dee.origin[2]);
 
   for (const line of (opts.lines || [])) {
     const n = line.vertices.length / 3;
     const pos = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) {
-      pos[i * 3] = line.vertices[i * 3] - ox;
-      pos[i * 3 + 1] = line.vertices[i * 3 + 1] - oy;
-      pos[i * 3 + 2] = line.vertices[i * 3 + 2] - oz;
+      pos[i * 3] = line.vertices[i * 3];
+      pos[i * 3 + 1] = line.vertices[i * 3 + 1];
+      pos[i * 3 + 2] = line.vertices[i * 3 + 2];
     }
     const geom = new THREE.BufferGeometry();
     geom.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -932,7 +969,8 @@ function create(container, opts = {}) {
 
   // pick system
   const _bgColor = opts.background ?? 0x1a1a2e;
-  const pick = _createPickSystem(THREE, renderer, scene, _activeCamera, origin, container, _bgColor);
+  // pass a getter so pick always uses the current camera
+  const pick = _createPickSystem(THREE, renderer, scene, () => _activeCamera, origin, container, _bgColor);
 
   // layers
   const _layers = new Map();
@@ -1039,14 +1077,14 @@ function create(container, opts = {}) {
       _updateOrtho();
       _activeCamera = _orthoCamera;
       controls._controls.object = _activeCamera;
-      pick._camera = _activeCamera;
+      // camera updated via getCamera()
       markDirty();
     },
     perspective() {
       _isOrtho = false;
       _activeCamera = camera;
       controls._controls.object = _activeCamera;
-      pick._camera = _activeCamera;
+      // camera updated via getCamera()
       markDirty();
     },
 
@@ -1182,42 +1220,51 @@ function _createControls(THREE, camera, domElement, origin, scene) {
 
 // ── pick system ──
 
-function _createPickSystem(THREE, renderer, scene, camera, origin, container, clearColor) {
+function _createPickSystem(THREE, renderer, scene, getCamera, origin, container, clearColor) {
   const _clearColor = clearColor;
   let _w = Math.max(1, container.clientWidth);
   let _h = Math.max(1, container.clientHeight);
-  let _rt = new THREE.WebGLRenderTarget(_w, _h, { format: THREE.RGBAFormat, type: THREE.UnsignedByteType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+  let _depthTex = new THREE.DepthTexture(_w, _h);
+  let _rt = new THREE.WebGLRenderTarget(_w, _h, {
+    format: THREE.RGBAFormat, type: THREE.UnsignedByteType,
+    minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+    depthTexture: _depthTex,
+    depthBuffer: true, stencilBuffer: false,
+  });
   const _pixel = new Uint8Array(4);
   let _dirty = true;
   let _enabled = true;
   let _debug = false;
-  const _layers = new Map(); // layerName → { resolve(id) → result, idStart, idEnd }
+  const _layers = new Map();
   let _nextId = 1;
-  let _camera = camera;
   const _callbacks = { hover: [], click: [], dblclick: [] };
+
+  let _debugNoSwap = false; // diagnostic: render normal materials to pick target
 
   function _render(cam) {
     if (!_enabled) return;
-    _camera = cam;
-    // swap materials: pickMaterial ↔ normal material
     const swapped = [];
     const hidden = [];
-    scene.traverse(obj => {
-      if (obj._pickMaterial) {
-        swapped.push([obj, obj.material]);
-        obj.material = obj._pickMaterial;
-      } else if ((obj.isMesh || obj.isPoints || obj.isLine) && obj.visible) {
-        hidden.push(obj);
-        obj.visible = false;
-      }
-    });
+    if (!_debugNoSwap) {
+      scene.traverse(obj => {
+        if (obj._pickMaterial) {
+          swapped.push([obj, obj.material]);
+          obj.material = obj._pickMaterial;
+        } else if ((obj.isMesh || obj.isPoints || obj.isLine) && obj.visible) {
+          hidden.push(obj);
+          obj.visible = false;
+        }
+      });
+    }
+    const prevAutoClear = renderer.autoClear;
+    renderer.autoClear = false;
     renderer.setRenderTarget(_rt);
     renderer.setClearColor(0x000000, 0);
-    renderer.clear();
+    renderer.clear(true, true, true);
     renderer.render(scene, cam);
     renderer.setRenderTarget(null);
     renderer.setClearColor(_clearColor, 1);
-    // restore
+    renderer.autoClear = prevAutoClear;
     for (const [obj, origMat] of swapped) obj.material = origMat;
     for (const obj of hidden) obj.visible = true;
     _dirty = false;
@@ -1225,7 +1272,7 @@ function _createPickSystem(THREE, renderer, scene, camera, origin, container, cl
 
   function _query(x, y) {
     if (!_enabled) return null;
-    if (_dirty) _render(_camera);
+    _render(getCamera()); // always use current camera
     const px = Math.floor(x * _w / container.clientWidth);
     const py = _h - 1 - Math.floor(y * _h / container.clientHeight);
     renderer.readRenderTargetPixels(_rt, px, py, 1, 1, _pixel);
@@ -1261,13 +1308,19 @@ function _createPickSystem(THREE, renderer, scene, camera, origin, container, cl
 
   return {
     _render,
-    _camera,
     _layers,
     _dirty: true,
     _resize(w, h) {
       _w = Math.max(1, w);
       _h = Math.max(1, h);
-      _rt.setSize(_w, _h);
+      _rt.dispose();
+      _depthTex = new THREE.DepthTexture(_w, _h);
+      _rt = new THREE.WebGLRenderTarget(_w, _h, {
+        format: THREE.RGBAFormat, type: THREE.UnsignedByteType,
+        minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+        depthTexture: _depthTex,
+        depthBuffer: true, stencilBuffer: false,
+      });
       _dirty = true;
     },
     _dispose() { _rt.dispose(); },
@@ -1285,6 +1338,50 @@ function _createPickSystem(THREE, renderer, scene, camera, origin, container, cl
     },
     markDirty() { _dirty = true; },
     set debug(v) { _debug = v; },
+    set debugNoSwap(v) { _debugNoSwap = v; },
+    // render pick materials to main canvas for visual diagnostic
+    debugPickToScreen() {
+      const swapped = [];
+      const hidden = [];
+      scene.traverse(obj => {
+        if (obj._pickMaterial) {
+          swapped.push([obj, obj.material]);
+          obj.material = obj._pickMaterial;
+        } else if ((obj.isMesh || obj.isPoints || obj.isLine) && obj.visible) {
+          hidden.push(obj);
+          obj.visible = false;
+        }
+      });
+      renderer.setClearColor(0x000000, 1);
+      renderer.render(scene, getCamera());
+      renderer.setClearColor(_clearColor, 1);
+      for (const [obj, origMat] of swapped) obj.material = origMat;
+      for (const obj of hidden) obj.visible = true;
+    },
+    // render pick buffer to a visible canvas for debugging
+    debugCanvas() {
+      _render(getCamera());
+      const pixels = new Uint8Array(_w * _h * 4);
+      renderer.readRenderTargetPixels(_rt, 0, 0, _w, _h, pixels);
+      const c = document.createElement('canvas');
+      c.width = _w; c.height = _h;
+      const ctx = c.getContext('2d');
+      const img = ctx.createImageData(_w, _h);
+      // flip Y and amplify colors for visibility
+      for (let y = 0; y < _h; y++) {
+        for (let x = 0; x < _w; x++) {
+          const srcIdx = ((_h - 1 - y) * _w + x) * 4;
+          const dstIdx = (y * _w + x) * 4;
+          // raw RGB, force alpha=255
+          img.data[dstIdx] = pixels[srcIdx];
+          img.data[dstIdx + 1] = pixels[srcIdx + 1];
+          img.data[dstIdx + 2] = pixels[srcIdx + 2];
+          img.data[dstIdx + 3] = 255;
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+      return c;
+    },
   };
 }
 
