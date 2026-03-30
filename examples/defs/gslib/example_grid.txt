@@ -1,0 +1,253 @@
+/// auditable
+/// title: @gcu/grid — block model operations
+/// module: @gcu/plot ext/plot/index.js
+/// module: @gcu/grid ext/grid/index.js
+
+/// md
+# @gcu/grid — block model operations
+
+Post-estimation workflow on a synthetic block model: domains, statistics, grade-tonnage curves, histograms, swath plots, morphology.
+
+/// code
+const plot = await load("@gcu/plot")
+const grid = await load("@gcu/grid")
+
+/// md
+## synthetic block model
+
+A 50×40×20 grid with two overlapping domains (oxide and fresh) and a grade variable with spatial correlation.
+
+/// code
+const gridDef = {
+  origin: [1000, 5000, -100],
+  size: [10, 10, 5],
+  count: [50, 40, 20],
+}
+const n = grid.nBlocks(gridDef)
+ui.display(`grid: ${gridDef.count.join("×")} = ${n.toLocaleString()} blocks`)
+ui.display(`block size: ${gridDef.size.join("×")}m, volume: ${grid.blockVolume(gridDef)}m³`)
+
+/// code collapsed
+// generate spatially correlated grade using simple moving average of random values
+const seed = 42
+let _rng = seed
+function rand() { _rng = (_rng * 1103515245 + 12345) & 0x7fffffff; return _rng / 0x7fffffff; }
+
+const raw = new Float64Array(n)
+for (let i = 0; i < n; i++) raw[i] = rand() * 4
+
+// smooth in 3D (3-pass box filter for spatial correlation)
+const nx = gridDef.count[0], ny = gridDef.count[1], nz = gridDef.count[2], nxy = nx * ny
+function smooth(arr) {
+  const out = new Float64Array(arr.length)
+  for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    let sum = 0, c = 0
+    for (let dk = -1; dk <= 1; dk++) for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+      const ii = i + di, jj = j + dj, kk = k + dk
+      if (ii >= 0 && ii < nx && jj >= 0 && jj < ny && kk >= 0 && kk < nz) {
+        sum += arr[ii + jj * nx + kk * nxy]; c++
+      }
+    }
+    out[i + j * nx + k * nxy] = sum / c
+  }
+  return out
+}
+const grade = smooth(smooth(smooth(raw)))
+
+// domain: oxide above z=-50, fresh below z=-70, transition between
+const domain = new Int32Array(n)
+for (let k = 0; k < nz; k++) {
+  const z = gridDef.origin[2] + k * gridDef.size[2]
+  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    const idx = i + j * nx + k * nxy
+    domain[idx] = z > -50 ? 1 : z > -70 ? 2 : 3  // 1=oxide, 2=transition, 3=fresh
+  }
+}
+
+// add domain-dependent grade shift
+for (let i = 0; i < n; i++) {
+  if (domain[i] === 1) grade[i] *= 1.3       // oxide enriched
+  else if (domain[i] === 3) grade[i] *= 0.7  // fresh depleted
+}
+
+/// md
+## global statistics
+
+/// code
+const s = grid.stats(grade)
+const rows = [
+  ["count", s.count], ["min", s.min.toFixed(3)], ["max", s.max.toFixed(3)],
+  ["mean", s.mean.toFixed(3)], ["stddev", s.stddev.toFixed(3)],
+  ["P10", s.p10.toFixed(3)], ["P50", s.p50.toFixed(3)], ["P90", s.p90.toFixed(3)],
+]
+ui.table(rows.map(([k, v]) => ({statistic: k, value: v})))
+
+/// md
+## domain statistics
+
+/// code
+const domainNames = {1: "oxide", 2: "transition", 3: "fresh"}
+const domainStats = []
+for (const code of [1, 2, 3]) {
+  const mask = grid.maskEqualTo(domain, code)
+  const ds = grid.stats(grade, {mask})
+  domainStats.push({
+    domain: domainNames[code],
+    blocks: ds.count,
+    mean: ds.mean.toFixed(3),
+    stddev: ds.stddev.toFixed(3),
+    P10: ds.p10.toFixed(3),
+    P50: ds.p50.toFixed(3),
+    P90: ds.p90.toFixed(3),
+  })
+}
+ui.table(domainStats)
+
+/// md
+## histograms by domain
+
+/// code
+const {fig, axes} = plot.subplots(1, 3, {figsize: [700, 220]})
+const colors = ['#c89b3c', '#6b8e23', '#4682b4']
+for (let d = 0; d < 3; d++) {
+  const code = d + 1
+  const mask = grid.maskEqualTo(domain, code)
+  const vals = grid.gather(grade, grid.maskToIndices(mask))
+  axes[d].hist(vals, {bins: 30, color: colors[d]})
+  axes[d].set_title(domainNames[code])
+  axes[d].set_xlabel('grade')
+  if (d === 0) axes[d].set_ylabel('frequency')
+}
+display(fig.show())
+
+/// md
+## grade-tonnage curve
+
+Interactive cutoff — drag the slider to see tonnes, grade, and metal above cutoff.
+
+/// code
+const cutoff = ui.slider("cutoff", 1.0, {min: 0, max: 3.5, step: 0.05})
+
+/// code
+const gt = grid.gradeTonnage(grade, 2.7, {gridDef, nCutoffs: 80})
+
+const {fig: gtFig, axes: gtAxes} = plot.subplots(1, 3, {figsize: [700, 250]})
+
+// tonnes above cutoff
+gtAxes[0].plot(gt.cutoffs, gt.tonnes.map(t => t / 1e6), {color: '#c89b3c'})
+gtAxes[0].axvline(cutoff, {color: '#ff4444', linestyle: '--'})
+gtAxes[0].set_title('tonnes (Mt)')
+gtAxes[0].set_xlabel('cutoff')
+gtAxes[0].grid(true)
+
+// mean grade above cutoff
+gtAxes[1].plot(gt.cutoffs, gt.grade, {color: '#4682b4'})
+gtAxes[1].axvline(cutoff, {color: '#ff4444', linestyle: '--'})
+gtAxes[1].set_title('mean grade')
+gtAxes[1].set_xlabel('cutoff')
+gtAxes[1].grid(true)
+
+// contained metal
+gtAxes[2].plot(gt.cutoffs, gt.metal.map(m => m / 1e6), {color: '#6b8e23'})
+gtAxes[2].axvline(cutoff, {color: '#ff4444', linestyle: '--'})
+gtAxes[2].set_title('metal (Mt)')
+gtAxes[2].set_xlabel('cutoff')
+gtAxes[2].grid(true)
+
+display(gtFig.show())
+
+// summary at current cutoff
+const ci = gt.cutoffs.findIndex(c => c >= cutoff)
+if (ci >= 0) {
+  ui.display(`at cutoff ${cutoff}: ${(gt.tonnes[ci]/1e6).toFixed(1)} Mt @ ${gt.grade[ci].toFixed(3)} = ${(gt.metal[ci]/1e6).toFixed(1)} Mt metal (${gt.nBlocks[ci].toLocaleString()} blocks)`)
+}
+
+/// md
+## swath plots
+
+Mean grade per slice along each axis — the standard check for spatial bias.
+
+/// code
+const {fig: swFig, axes: swAxes} = plot.subplots(1, 3, {figsize: [700, 220]})
+for (const [i, axis] of ['x', 'y', 'z'].entries()) {
+  const sp = grid.swathPlot(grade, gridDef, {axis})
+  swAxes[i].plot(sp.positions, sp.values, {color: '#c89b3c'})
+  swAxes[i].set_title(`swath — ${axis}`)
+  swAxes[i].set_xlabel(axis === 'x' ? 'easting' : axis === 'y' ? 'northing' : 'elevation')
+  swAxes[i].set_ylabel('mean grade')
+  swAxes[i].grid(true)
+}
+display(swFig.show())
+
+/// md
+## plan view — level slice
+
+Canvas rendering of a single K-level slice. Drag the slider to browse levels.
+
+/// code
+const level = ui.slider("level", 10, {min: 0, max: gridDef.count[2] - 1, step: 1})
+
+/// code
+const sliceIndices = grid.sliceK(gridDef, level)
+const sliceGrade = grid.gather(grade, sliceIndices)
+const sliceDomain = grid.gather(new Float64Array(domain), sliceIndices)
+
+const cw = 8, ch = 8  // pixels per block
+const cnv = ui.canvas(nx * cw, ny * ch)
+const ctx = cnv.getContext('2d')
+
+// color by grade
+const lo = 0, hi = 3.5
+for (let j = 0; j < ny; j++) {
+  for (let i = 0; i < nx; i++) {
+    const v = sliceGrade[i + j * nx]
+    const t = Math.max(0, Math.min(1, (v - lo) / (hi - lo)))
+    // viridis-like: dark purple → teal → yellow
+    const r = Math.round(68 + t * 187)
+    const g = Math.round(1 + t * 190)
+    const b = Math.round(84 + (1 - t) * 100)
+    ctx.fillStyle = `rgb(${r},${g},${b})`
+    ctx.fillRect(i * cw, (ny - 1 - j) * ch, cw, ch)
+  }
+}
+ui.display(`level ${level}, z = ${(gridDef.origin[2] + level * gridDef.size[2]).toFixed(0)}m`)
+
+/// md
+## morphology
+
+Dilate and erode a domain mask. The oxide domain (code=1) expanded by 2 blocks and shrunk by 2 blocks.
+
+/// code
+const oxideMask = grid.maskEqualTo(domain, 1)
+const dilated = grid.dilateGrid(gridDef, oxideMask, 2)
+const eroded = grid.erodeGrid(gridDef, oxideMask, 2)
+
+const oxCount = grid.maskCount(oxideMask)
+const dilCount = grid.maskCount(dilated)
+const eroCount = grid.maskCount(eroded)
+
+ui.table([
+  {operation: "original oxide", blocks: oxCount.toLocaleString()},
+  {operation: "dilated (+2)", blocks: dilCount.toLocaleString()},
+  {operation: "eroded (-2)", blocks: eroCount.toLocaleString()},
+  {operation: "shell (dilated − original)", blocks: (dilCount - oxCount).toLocaleString()},
+])
+
+/// md
+## compact variable alignment
+
+Two domains with different extents — `align` merges them over the union of indices.
+
+/// code
+const oxideIndices = grid.maskToIndices(grid.maskEqualTo(domain, 1))
+const freshIndices = grid.maskToIndices(grid.maskEqualTo(domain, 3))
+
+const oxideGrade = {values: grid.gather(grade, oxideIndices), indices: oxideIndices}
+const freshGrade = {values: grid.gather(grade, freshIndices), indices: freshIndices}
+
+const meanGrade = grid.mean([oxideGrade, freshGrade])
+
+ui.display(`oxide: ${oxideIndices.length.toLocaleString()} blocks`)
+ui.display(`fresh: ${freshIndices.length.toLocaleString()} blocks`)
+ui.display(`union: ${meanGrade.indices.length.toLocaleString()} blocks`)
+ui.display(`(no overlap — oxide is above, fresh is below)`)

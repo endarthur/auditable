@@ -61,8 +61,9 @@ const categories = {
     'example_sheet.txt',
   ],
 
-  // gslib — geostatistics: kriging, simulation, linear algebra
+  // gslib — geostatistics: kriging, simulation, linear algebra, grid
   gslib: [
+    'example_grid.txt',
     'example_alpack.txt',
     'example_alpack_atra.txt',
     'example_gslib_kb2d.txt',
