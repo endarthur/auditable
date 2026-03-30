@@ -1,0 +1,194 @@
+/// auditable
+/// title: @gcu/dee — 3D block model viewer
+/// module: @atra/gslib ext/atra/lib/gslib.js
+/// module: @gcu/grid ext/grid/index.js
+/// module: @gcu/voxmesh ext/voxmesh/index.js
+/// module: @gcu/dee ext/dee/index.js
+
+/// md
+# @gcu/dee — 3D block model viewer
+
+Full geostatistical workflow: unconditional simulation → drillhole sampling → ordinary kriging → 3D visualization with interactive cutoff.
+
+/// code
+const THREE = await load("https://esm.sh/three@0.170.0")
+const { OrbitControls } = await load("https://esm.sh/three@0.170.0/examples/jsm/controls/OrbitControls.js")
+globalThis.THREE = THREE
+globalThis.OrbitControls = OrbitControls
+
+const { sgsim, kt3d } = await load("@atra/gslib")
+const grid = await load("@gcu/grid")
+const voxmesh = await load("@gcu/voxmesh")
+const dee = await load("@gcu/dee")
+
+/// md
+## 1. generate "truth" via unconditional simulation
+
+/// code
+const gridDef = {
+  origin: [650000, 7200000, -200],
+  size: [10, 10, 16],
+  count: [30, 25, 15],
+}
+const nx = gridDef.count[0], ny = gridDef.count[1], nz = gridDef.count[2]
+const n = grid.nBlocks(gridDef)
+
+const simEngine = sgsim({
+  grid: { nx, ny, nz, xsiz: gridDef.size[0], ysiz: gridDef.size[1], zsiz: gridDef.size[2] },
+  variogram: { structures: [{ type: "spherical", contribution: 1.0, range: 80 }] },
+  search: { radius: 160, ndmax: 12, nodmax: 12 },
+})
+const truth = simEngine.run(42)
+simEngine.dispose()
+
+// add a high-grade zone: ellipsoidal enrichment centered at mid-grid
+const cx = nx / 2, cy = ny / 2, cz = nz / 2
+for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+  const di = (i - cx) / (nx * 0.3), dj = (j - cy) / (ny * 0.3), dk = (k - cz) / (nz * 0.4)
+  const r2 = di * di + dj * dj + dk * dk
+  const enrichment = Math.max(0, 4.0 * (1 - r2))
+  truth[i + j * nx + k * nx * ny] += enrichment
+}
+// shift to positive grades (simulate Fe %)
+for (let i = 0; i < n; i++) truth[i] = Math.max(5, truth[i] * 6 + 28)
+
+const s = grid.stats(truth)
+ui.display(`truth model: ${nx}×${ny}×${nz} = ${n.toLocaleString()} blocks, mean ${s.mean.toFixed(1)}%, range [${s.min.toFixed(1)}–${s.max.toFixed(1)}]`)
+
+/// md
+## 2. sample with drillholes
+
+Vertical drillholes on a regular grid, sampling the truth at each block they intersect.
+
+/// code
+const drillSpacingX = 8, drillSpacingY = 6
+const holes = []
+const samples = []
+let holeId = 0
+
+for (let dj = 2; dj < ny; dj += drillSpacingY) {
+  for (let di = 2; di < nx; di += drillSpacingX) {
+    const cx = gridDef.origin[0] + di * gridDef.size[0]
+    const cy = gridDef.origin[1] + dj * gridDef.size[1]
+    const collar = [cx, cy, gridDef.origin[2] + (nz - 1) * gridDef.size[2]]
+    const intervals = []
+
+    for (let k = nz - 1; k >= 0; k--) {
+      const idx = di + dj * nx + k * nx * ny
+      const depth = (nz - 1 - k) * gridDef.size[2]
+      const val = truth[idx]
+      intervals.push({ from: depth, to: depth + gridDef.size[2], value: val })
+      // sample for kriging: x, y, z, value
+      const sz = gridDef.origin[2] + k * gridDef.size[2]
+      samples.push([cx, cy, sz, val])
+    }
+
+    holes.push({
+      id: `DDH-${String(++holeId).padStart(3, '0')}`,
+      collar,
+      surveys: [{ depth: 0, azimuth: 0, dip: -90 }],
+      intervals,
+    })
+  }
+}
+ui.display(`${holes.length} drillholes, ${samples.length} samples`)
+
+/// md
+## 3. ordinary kriging from drillhole data
+
+/// code
+const t0 = performance.now()
+const kriged = kt3d({
+  data: samples,
+  grid: {
+    nx, ny, nz,
+    xmn: gridDef.origin[0], ymn: gridDef.origin[1], zmn: gridDef.origin[2],
+    xsiz: gridDef.size[0], ysiz: gridDef.size[1], zsiz: gridDef.size[2],
+  },
+  variogram: {
+    nugget: 0.1,
+    structures: [{ type: "spherical", contribution: 0.9, range: 80 }],
+  },
+  search: { radius: 120, ndmax: 12, ndmin: 1 },
+})
+const elapsed = (performance.now() - t0).toFixed(0)
+
+// replace unestimated blocks with NaN
+const est = kriged.est
+for (let i = 0; i < n; i++) if (est[i] < -998) est[i] = NaN
+
+const estimated = grid.maskNotNaN(est)
+const nEst = grid.maskCount(estimated)
+const estIndices = grid.maskToIndices(estimated)
+const estValues = grid.gather(est, estIndices)
+
+const ks = grid.stats(estValues)
+ui.display(`kriged ${nEst.toLocaleString()} blocks in ${elapsed}ms, mean ${ks.mean.toFixed(1)}%, variance mean ${grid.stats(new Float64Array(kriged.var.filter(v => v > -998))).mean.toFixed(2)}`)
+
+/// md
+## 4. 3D viewer
+
+/// code
+// %outputClass dee-viewer
+const container = document.createElement('div')
+container.style.cssText = 'width:100%;height:500px;position:relative;background:#1a1a2e;'
+display(container)
+
+const scene = dee.create(container, { THREE, origin: gridDef.origin })
+
+// mesh the estimated model
+const feGrade = { values: estValues, indices: estIndices }
+const prepared = voxmesh.prepare(gridDef, feGrade, { count: 10, hint: 16 })
+const cmap = dee.colorMap({ breaks: prepared.breaks, palette: 'viridis' })
+
+scene.addBlockModel('fe', prepared.meshes, { colorMap: cmap })
+
+// drillholes
+scene.addDrillholes('holes', { holes, colorMap: cmap, radius: 3 })
+
+// bounding box
+scene.hud.boundingBox(grid.boundingBox(gridDef))
+
+// picking — show block info on hover
+const tooltip = document.createElement('div')
+tooltip.style.cssText = 'position:absolute;top:8px;left:8px;font:12px monospace;color:#ccc;pointer-events:none;z-index:10;'
+container.appendChild(tooltip)
+scene.pick.debug = true
+scene.pick.on('hover', (result) => {
+  tooltip.textContent = result ? `${result.layer} — quad ${result.quadIndex}` : ''
+})
+
+scene.controls.fitAll()
+
+/// md
+## interactive cutoff
+
+/// code
+const cutoff = ui.slider("cutoff", 25, {min: 10, max: 50, step: 0.5})
+
+/// code
+const aboveMask = grid.maskAboveValue(estValues, cutoff)
+const aboveLocal = grid.maskToIndices(aboveMask)
+const aboveGridIdx = grid.take(estIndices, aboveLocal)
+const aboveVals = grid.take(estValues, aboveLocal)
+const aboveVar = { values: aboveVals, indices: aboveGridIdx }
+
+const cutPrepared = voxmesh.prepare(gridDef, aboveVar, { count: 10, hint: 16 })
+scene.getLayer('fe').replaceAll(cutPrepared.meshes)
+scene.markDirty()
+
+const gt = grid.gradeTonnage(est, 2.7, { gridDef, cutoffs: new Float64Array([cutoff]) })
+ui.display(`cutoff ${cutoff}%: ${aboveLocal.length.toLocaleString()} blocks, ${(gt.tonnes[0]/1e6).toFixed(2)} Mt @ ${gt.grade[0].toFixed(1)}%`)
+
+/// md
+## camera presets
+
+/// code
+const view = ui.dropdown("view", ["perspective", "plan", "section N", "section E"], "perspective")
+
+/// code
+if (view === "plan") scene.controls.planView()
+else if (view === "section N") scene.controls.sectionNorth(gridDef.origin[1] + ny/2 * gridDef.size[1])
+else if (view === "section E") scene.controls.sectionEast(gridDef.origin[0] + nx/2 * gridDef.size[0])
+else scene.controls.fitAll()
+scene.markDirty()
