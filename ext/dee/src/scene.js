@@ -41,11 +41,6 @@ export function create(container, opts = {}) {
   // controls (OrbitControls)
   const controls = _createControls(THREE, _activeCamera, renderer.domElement, origin, scene);
 
-  // pick system
-  const _bgColor = opts.background ?? 0x1a1a2e;
-  // pass a getter so pick always uses the current camera
-  const pick = _createPickSystem(THREE, renderer, scene, () => _activeCamera, origin, container, _bgColor);
-
   // layers
   const _layers = new Map();
 
@@ -67,7 +62,6 @@ export function create(container, opts = {}) {
 
     for (const fn of _beforeRender) fn();
     renderer.render(scene, _activeCamera);
-    pick._render(_activeCamera);
     for (const fn of _afterRender) fn();
 
     _dirty = false;
@@ -76,7 +70,6 @@ export function create(container, opts = {}) {
 
   function markDirty() {
     _dirty = true;
-    pick.markDirty();
     if (!_rafId) _rafId = requestAnimationFrame(_renderFrame);
   }
 
@@ -96,7 +89,6 @@ export function create(container, opts = {}) {
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     _updateOrtho();
-    pick._resize(w, h);
     markDirty();
   });
   _resizeObs.observe(container);
@@ -118,7 +110,7 @@ export function create(container, opts = {}) {
   markDirty();
 
   const dee = {
-    THREE, renderer, scene, camera, controls, pick, lighting,
+    THREE, renderer, scene, camera, controls, lighting,
     origin, clippingPlanes,
 
     // layers
@@ -173,7 +165,6 @@ export function create(container, opts = {}) {
       if (_rafId) cancelAnimationFrame(_rafId);
       _resizeObs.disconnect();
       controls._controls.dispose();
-      pick._dispose();
       for (const [_, l] of _layers) l._dispose();
       renderer.dispose();
       renderer.domElement.remove();
@@ -295,172 +286,9 @@ function _createControls(THREE, camera, domElement, origin, scene) {
   return ctrl;
 }
 
-// ── pick system ──
+// ── pick system (GPU) — removed, using raycaster instead. See README.md ──
+// Preserved in git history at commit 8565072.
 
-function _createPickSystem(THREE, renderer, scene, getCamera, origin, container, clearColor) {
-  const _clearColor = clearColor;
-  let _w = Math.max(1, container.clientWidth);
-  let _h = Math.max(1, container.clientHeight);
-  let _depthTex = new THREE.DepthTexture(_w, _h);
-  let _rt = new THREE.WebGLRenderTarget(_w, _h, {
-    format: THREE.RGBAFormat, type: THREE.UnsignedByteType,
-    minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
-    depthTexture: _depthTex,
-    depthBuffer: true, stencilBuffer: false,
-  });
-  const _pixel = new Uint8Array(4);
-  let _dirty = true;
-  let _enabled = true;
-  let _debug = false;
-  const _layers = new Map();
-  let _nextId = 1;
-  const _callbacks = { hover: [], click: [], dblclick: [] };
-
-  let _debugNoSwap = false; // diagnostic: render normal materials to pick target
-
-  function _render(cam) {
-    if (!_enabled) return;
-    const swapped = [];
-    const hidden = [];
-    if (!_debugNoSwap) {
-      scene.traverse(obj => {
-        if (obj._pickMaterial) {
-          swapped.push([obj, obj.material]);
-          obj.material = obj._pickMaterial;
-        } else if ((obj.isMesh || obj.isPoints || obj.isLine) && obj.visible) {
-          hidden.push(obj);
-          obj.visible = false;
-        }
-      });
-    }
-    const prevAutoClear = renderer.autoClear;
-    renderer.autoClear = false;
-    renderer.setRenderTarget(_rt);
-    renderer.setClearColor(0x000000, 0);
-    renderer.clear(true, true, true);
-    renderer.render(scene, cam);
-    renderer.setRenderTarget(null);
-    renderer.setClearColor(_clearColor, 1);
-    renderer.autoClear = prevAutoClear;
-    for (const [obj, origMat] of swapped) obj.material = origMat;
-    for (const obj of hidden) obj.visible = true;
-    _dirty = false;
-  }
-
-  function _query(x, y) {
-    if (!_enabled) return null;
-    _render(getCamera()); // always use current camera
-    const px = Math.floor(x * _w / container.clientWidth);
-    const py = _h - 1 - Math.floor(y * _h / container.clientHeight);
-    renderer.readRenderTargetPixels(_rt, px, py, 1, 1, _pixel);
-    const id = (_pixel[0] | (_pixel[1] << 8) | (_pixel[2] << 16) | (_pixel[3] << 24)) >>> 0;
-    if (_debug) console.log('pick:', px, py, '→ rgba', _pixel[0], _pixel[1], _pixel[2], _pixel[3], '= id', id);
-    if (id === 0) return null;
-    for (const [name, info] of _layers) {
-      if (id >= info.idStart && id < info.idEnd) {
-        return info.resolve(id - info.idStart, name);
-      }
-    }
-    return null;
-  }
-
-  // mouse events
-  let _hoverRaf = null;
-  container.addEventListener('mousemove', (e) => {
-    if (_hoverRaf) return;
-    _hoverRaf = requestAnimationFrame(() => {
-      _hoverRaf = null;
-      const result = _query(e.offsetX, e.offsetY);
-      for (const fn of _callbacks.hover) fn(result);
-    });
-  });
-  container.addEventListener('click', (e) => {
-    const result = _query(e.offsetX, e.offsetY);
-    for (const fn of _callbacks.click) fn(result);
-  });
-  container.addEventListener('dblclick', (e) => {
-    const result = _query(e.offsetX, e.offsetY);
-    for (const fn of _callbacks.dblclick) fn(result);
-  });
-
-  return {
-    _render,
-    _layers,
-    _dirty: true,
-    _resize(w, h) {
-      _w = Math.max(1, w);
-      _h = Math.max(1, h);
-      _rt.dispose();
-      _depthTex = new THREE.DepthTexture(_w, _h);
-      _rt = new THREE.WebGLRenderTarget(_w, _h, {
-        format: THREE.RGBAFormat, type: THREE.UnsignedByteType,
-        minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
-        depthTexture: _depthTex,
-        depthBuffer: true, stencilBuffer: false,
-      });
-      _dirty = true;
-    },
-    _dispose() { _rt.dispose(); },
-    enable() { _enabled = true; },
-    disable() { _enabled = false; },
-    at(x, y) { return _query(x, y); },
-    on(event, fn) { if (_callbacks[event]) _callbacks[event].push(fn); },
-    allocateIds(count) {
-      const start = _nextId;
-      _nextId += count;
-      return start;
-    },
-    registerLayer(name, info) {
-      _layers.set(name, info);
-    },
-    markDirty() { _dirty = true; },
-    set debug(v) { _debug = v; },
-    set debugNoSwap(v) { _debugNoSwap = v; },
-    // render pick materials to main canvas for visual diagnostic
-    debugPickToScreen() {
-      const swapped = [];
-      const hidden = [];
-      scene.traverse(obj => {
-        if (obj._pickMaterial) {
-          swapped.push([obj, obj.material]);
-          obj.material = obj._pickMaterial;
-        } else if ((obj.isMesh || obj.isPoints || obj.isLine) && obj.visible) {
-          hidden.push(obj);
-          obj.visible = false;
-        }
-      });
-      renderer.setClearColor(0x000000, 1);
-      renderer.render(scene, getCamera());
-      renderer.setClearColor(_clearColor, 1);
-      for (const [obj, origMat] of swapped) obj.material = origMat;
-      for (const obj of hidden) obj.visible = true;
-    },
-    // render pick buffer to a visible canvas for debugging
-    debugCanvas() {
-      _render(getCamera());
-      const pixels = new Uint8Array(_w * _h * 4);
-      renderer.readRenderTargetPixels(_rt, 0, 0, _w, _h, pixels);
-      const c = document.createElement('canvas');
-      c.width = _w; c.height = _h;
-      const ctx = c.getContext('2d');
-      const img = ctx.createImageData(_w, _h);
-      // flip Y and amplify colors for visibility
-      for (let y = 0; y < _h; y++) {
-        for (let x = 0; x < _w; x++) {
-          const srcIdx = ((_h - 1 - y) * _w + x) * 4;
-          const dstIdx = (y * _w + x) * 4;
-          // raw RGB, force alpha=255
-          img.data[dstIdx] = pixels[srcIdx];
-          img.data[dstIdx + 1] = pixels[srcIdx + 1];
-          img.data[dstIdx + 2] = pixels[srcIdx + 2];
-          img.data[dstIdx + 3] = 255;
-        }
-      }
-      ctx.putImageData(img, 0, 0);
-      return c;
-    },
-  };
-}
 
 // ── screenshot ──
 

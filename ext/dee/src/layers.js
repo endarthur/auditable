@@ -1,34 +1,5 @@
 // @gcu/dee — layer implementations: block model, points, drillholes, surface, polylines, section
 
-// ── shared pick material ──
-
-let _pickMat = null;
-function _getPickMaterial(THREE, dee) {
-  if (_pickMat) return _pickMat;
-  _pickMat = new THREE.ShaderMaterial({
-    vertexShader: `
-      attribute vec4 aPickColor;
-      varying vec4 vPick;
-      void main() {
-        vPick = aPickColor;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }
-    `,
-    fragmentShader: `
-      varying vec4 vPick;
-      void main() {
-        gl_FragColor = vPick;
-      }
-    `,
-    side: 2, // THREE.DoubleSide = 2
-    blending: 0, // THREE.NoBlending = 0
-    transparent: false,
-    depthTest: true,
-    depthWrite: true,
-  });
-  return _pickMat;
-}
-
 // ── block model layer ──
 
 export function addBlockModelLayer(dee, name, meshes, opts = {}) {
@@ -37,11 +8,6 @@ export function addBlockModelLayer(dee, name, meshes, opts = {}) {
   const group = new THREE.Group();
   group.name = name;
   const chunkMeshes = new Map();
-  // pre-count quads for ID allocation
-  let totalQuadCount = 0;
-  for (const [_, md] of meshes) totalQuadCount += Math.ceil(md.binIds.length / 2);
-  const idStart = dee.pick ? dee.pick.allocateIds(totalQuadCount + 1) : 0;
-  let idOffset = 0;
 
   function _buildChunk(chunkIdx, meshData) {
     const geom = new THREE.BufferGeometry();
@@ -79,30 +45,6 @@ export function addBlockModelLayer(dee, name, meshes, opts = {}) {
     const mesh = new THREE.Mesh(geom, mat);
     mesh.name = `${name}_chunk_${chunkIdx}`;
 
-    // pick: per-vertex ID as vec4 attribute
-    if (dee.pick) {
-      const pickColors = new Float32Array(nVerts * 4);
-      for (let t = 0; t < nTris; t++) {
-        const quadIdx = (t >> 1);
-        const id = idStart + idOffset + quadIdx;
-        const r = (id & 0xFF) / 255;
-        const g = ((id >> 8) & 0xFF) / 255;
-        const b = ((id >> 16) & 0xFF) / 255;
-        const a = ((id >>> 24) & 0xFF) / 255;
-        const baseVert = quadIdx * 4;
-        for (let v = 0; v < 4; v++) {
-          const vi = baseVert + v;
-          if (vi < nVerts) {
-            pickColors[vi * 4] = r; pickColors[vi * 4 + 1] = g;
-            pickColors[vi * 4 + 2] = b; pickColors[vi * 4 + 3] = a;
-          }
-        }
-      }
-      geom.setAttribute('aPickColor', new THREE.Float32BufferAttribute(pickColors, 4));
-      mesh._pickMaterial = _getPickMaterial(THREE, dee);
-      idOffset += Math.ceil(nTris / 2);
-    }
-
     group.add(mesh);
     chunkMeshes.set(chunkIdx, mesh);
   }
@@ -116,19 +58,6 @@ export function addBlockModelLayer(dee, name, meshes, opts = {}) {
   group.position.set(-ox, -oy, -oz);
 
   dee.scene.add(group);
-
-  // register pick resolve
-  if (dee.pick && idStart) {
-    dee.pick.registerLayer(name, {
-      idStart,
-      idEnd: idStart + idOffset,
-      resolve(localId, layerName) {
-        return { layer: layerName, type: 'block', quadIndex: localId };
-      },
-    });
-    dee.pick.markDirty();
-  }
-
   dee.markDirty();
 
   const layer = {
@@ -158,13 +87,7 @@ export function addBlockModelLayer(dee, name, meshes, opts = {}) {
         if (m.material !== _pickMat) m.material.dispose();
       }
       chunkMeshes.clear();
-      idOffset = 0;
       for (const [chunkIdx, meshData] of newMeshes) _buildChunk(chunkIdx, meshData);
-      if (dee.pick) {
-        dee.pick.registerLayer(name, { idStart, idEnd: idStart + idOffset,
-          resolve(localId, layerName) { return { layer: layerName, type: 'block', quadIndex: localId }; },
-        });
-      }
       dee.markDirty();
     },
     _dispose() {
@@ -288,13 +211,6 @@ export function addDrillholeLayer(dee, name, opts = {}) {
   const method = opts.method || 'minimumCurvature';
   const cmap = opts.colorMap;
 
-  // count total intervals for pick ID allocation
-  let totalIntervals = 0;
-  for (const hole of (opts.holes || [])) totalIntervals += (hole.intervals || []).length;
-  const idStart = dee.pick ? dee.pick.allocateIds(totalIntervals + 1) : 0;
-  let idOffset = 0;
-  // map: localId → { holeId, intervalIndex, from, to }
-  const pickMap = [];
 
   for (const hole of (opts.holes || [])) {
     const path = desurvey(hole.collar, hole.surveys, { method });
@@ -305,7 +221,6 @@ export function addDrillholeLayer(dee, name, opts = {}) {
     const pts = interpolatePath(path, hole.surveys, new Float64Array(depths));
 
     const positions = [], normals = [], colors = [], indices = [];
-    const pickColors = [];
     let vOff = 0;
 
     for (let iv = 0; iv < hole.intervals.length; iv++) {
@@ -324,15 +239,6 @@ export function addDrillholeLayer(dee, name, opts = {}) {
 
       const [r, g, b] = cmap && interval.value !== undefined ? cmap.map(interval.value) : [0.5, 0.5, 0.5];
 
-      // pick ID for this interval
-      const pickId = idStart + idOffset;
-      const pr = (pickId & 0xFF) / 255;
-      const pg = ((pickId >> 8) & 0xFF) / 255;
-      const pb = ((pickId >> 16) & 0xFF) / 255;
-      const pa = ((pickId >>> 24) & 0xFF) / 255;
-      pickMap.push({ holeId: hole.id, intervalIndex: iv, from: interval.from, to: interval.to, value: interval.value, category: interval.category });
-      idOffset++;
-
       for (let ring = 0; ring < 2; ring++) {
         const p = ring === 0 ? p0 : p1;
         for (let s = 0; s < segments; s++) {
@@ -341,8 +247,7 @@ export function addDrillholeLayer(dee, name, opts = {}) {
           positions.push(p[0] + u[0] * cos + v[0] * sin, p[1] + u[1] * cos + v[1] * sin, p[2] + u[2] * cos + v[2] * sin);
           normals.push(u[0] * Math.cos(angle) + v[0] * Math.sin(angle), u[1] * Math.cos(angle) + v[1] * Math.sin(angle), u[2] * Math.cos(angle) + v[2] * Math.sin(angle));
           colors.push(r, g, b);
-          pickColors.push(pr, pg, pb, pa);
-        }
+}
       }
 
       for (let s = 0; s < segments; s++) {
@@ -363,10 +268,6 @@ export function addDrillholeLayer(dee, name, opts = {}) {
     const mat = new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: false, side: THREE.DoubleSide });
     const mesh = new THREE.Mesh(geom, mat);
     mesh.name = `${name}_${hole.id || 'hole'}`;
-    if (dee.pick) {
-      geom.setAttribute('aPickColor', new THREE.Float32BufferAttribute(new Float32Array(pickColors), 4));
-      mesh._pickMaterial = _getPickMaterial(THREE, dee);
-    }
     // store metadata for raycaster interval resolution
     mesh._holeData = { id: hole.id, intervals: hole.intervals, segments };
     group.add(mesh);
@@ -375,19 +276,6 @@ export function addDrillholeLayer(dee, name, opts = {}) {
   // offset group same as block model — world coords, group transform subtracts origin
   group.position.set(-dee.origin[0], -dee.origin[1], -dee.origin[2]);
   dee.scene.add(group);
-
-  if (dee.pick && idStart) {
-    dee.pick.registerLayer(name, {
-      idStart,
-      idEnd: idStart + idOffset,
-      resolve(localId, layerName) {
-        const info = pickMap[localId];
-        if (!info) return { layer: layerName, type: 'drillhole' };
-        return { layer: layerName, type: 'drillhole', holeId: info.holeId, intervalIndex: info.intervalIndex, from: info.from, to: info.to, value: info.value, category: info.category };
-      },
-    });
-    dee.pick.markDirty();
-  }
 
   dee.markDirty();
 

@@ -187,35 +187,6 @@ function colorBar(cmap, opts = {}) {
 
 // @gcu/dee — layer implementations: block model, points, drillholes, surface, polylines, section
 
-// ── shared pick material ──
-
-let _pickMat = null;
-function _getPickMaterial(THREE, dee) {
-  if (_pickMat) return _pickMat;
-  _pickMat = new THREE.ShaderMaterial({
-    vertexShader: `
-      attribute vec4 aPickColor;
-      varying vec4 vPick;
-      void main() {
-        vPick = aPickColor;
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }
-    `,
-    fragmentShader: `
-      varying vec4 vPick;
-      void main() {
-        gl_FragColor = vPick;
-      }
-    `,
-    side: 2, // THREE.DoubleSide = 2
-    blending: 0, // THREE.NoBlending = 0
-    transparent: false,
-    depthTest: true,
-    depthWrite: true,
-  });
-  return _pickMat;
-}
-
 // ── block model layer ──
 
 function addBlockModelLayer(dee, name, meshes, opts = {}) {
@@ -224,11 +195,6 @@ function addBlockModelLayer(dee, name, meshes, opts = {}) {
   const group = new THREE.Group();
   group.name = name;
   const chunkMeshes = new Map();
-  // pre-count quads for ID allocation
-  let totalQuadCount = 0;
-  for (const [_, md] of meshes) totalQuadCount += Math.ceil(md.binIds.length / 2);
-  const idStart = dee.pick ? dee.pick.allocateIds(totalQuadCount + 1) : 0;
-  let idOffset = 0;
 
   function _buildChunk(chunkIdx, meshData) {
     const geom = new THREE.BufferGeometry();
@@ -266,30 +232,6 @@ function addBlockModelLayer(dee, name, meshes, opts = {}) {
     const mesh = new THREE.Mesh(geom, mat);
     mesh.name = `${name}_chunk_${chunkIdx}`;
 
-    // pick: per-vertex ID as vec4 attribute
-    if (dee.pick) {
-      const pickColors = new Float32Array(nVerts * 4);
-      for (let t = 0; t < nTris; t++) {
-        const quadIdx = (t >> 1);
-        const id = idStart + idOffset + quadIdx;
-        const r = (id & 0xFF) / 255;
-        const g = ((id >> 8) & 0xFF) / 255;
-        const b = ((id >> 16) & 0xFF) / 255;
-        const a = ((id >>> 24) & 0xFF) / 255;
-        const baseVert = quadIdx * 4;
-        for (let v = 0; v < 4; v++) {
-          const vi = baseVert + v;
-          if (vi < nVerts) {
-            pickColors[vi * 4] = r; pickColors[vi * 4 + 1] = g;
-            pickColors[vi * 4 + 2] = b; pickColors[vi * 4 + 3] = a;
-          }
-        }
-      }
-      geom.setAttribute('aPickColor', new THREE.Float32BufferAttribute(pickColors, 4));
-      mesh._pickMaterial = _getPickMaterial(THREE, dee);
-      idOffset += Math.ceil(nTris / 2);
-    }
-
     group.add(mesh);
     chunkMeshes.set(chunkIdx, mesh);
   }
@@ -303,19 +245,6 @@ function addBlockModelLayer(dee, name, meshes, opts = {}) {
   group.position.set(-ox, -oy, -oz);
 
   dee.scene.add(group);
-
-  // register pick resolve
-  if (dee.pick && idStart) {
-    dee.pick.registerLayer(name, {
-      idStart,
-      idEnd: idStart + idOffset,
-      resolve(localId, layerName) {
-        return { layer: layerName, type: 'block', quadIndex: localId };
-      },
-    });
-    dee.pick.markDirty();
-  }
-
   dee.markDirty();
 
   const layer = {
@@ -345,13 +274,7 @@ function addBlockModelLayer(dee, name, meshes, opts = {}) {
         if (m.material !== _pickMat) m.material.dispose();
       }
       chunkMeshes.clear();
-      idOffset = 0;
       for (const [chunkIdx, meshData] of newMeshes) _buildChunk(chunkIdx, meshData);
-      if (dee.pick) {
-        dee.pick.registerLayer(name, { idStart, idEnd: idStart + idOffset,
-          resolve(localId, layerName) { return { layer: layerName, type: 'block', quadIndex: localId }; },
-        });
-      }
       dee.markDirty();
     },
     _dispose() {
@@ -475,13 +398,6 @@ function addDrillholeLayer(dee, name, opts = {}) {
   const method = opts.method || 'minimumCurvature';
   const cmap = opts.colorMap;
 
-  // count total intervals for pick ID allocation
-  let totalIntervals = 0;
-  for (const hole of (opts.holes || [])) totalIntervals += (hole.intervals || []).length;
-  const idStart = dee.pick ? dee.pick.allocateIds(totalIntervals + 1) : 0;
-  let idOffset = 0;
-  // map: localId → { holeId, intervalIndex, from, to }
-  const pickMap = [];
 
   for (const hole of (opts.holes || [])) {
     const path = desurvey(hole.collar, hole.surveys, { method });
@@ -492,7 +408,6 @@ function addDrillholeLayer(dee, name, opts = {}) {
     const pts = interpolatePath(path, hole.surveys, new Float64Array(depths));
 
     const positions = [], normals = [], colors = [], indices = [];
-    const pickColors = [];
     let vOff = 0;
 
     for (let iv = 0; iv < hole.intervals.length; iv++) {
@@ -511,15 +426,6 @@ function addDrillholeLayer(dee, name, opts = {}) {
 
       const [r, g, b] = cmap && interval.value !== undefined ? cmap.map(interval.value) : [0.5, 0.5, 0.5];
 
-      // pick ID for this interval
-      const pickId = idStart + idOffset;
-      const pr = (pickId & 0xFF) / 255;
-      const pg = ((pickId >> 8) & 0xFF) / 255;
-      const pb = ((pickId >> 16) & 0xFF) / 255;
-      const pa = ((pickId >>> 24) & 0xFF) / 255;
-      pickMap.push({ holeId: hole.id, intervalIndex: iv, from: interval.from, to: interval.to, value: interval.value, category: interval.category });
-      idOffset++;
-
       for (let ring = 0; ring < 2; ring++) {
         const p = ring === 0 ? p0 : p1;
         for (let s = 0; s < segments; s++) {
@@ -528,8 +434,7 @@ function addDrillholeLayer(dee, name, opts = {}) {
           positions.push(p[0] + u[0] * cos + v[0] * sin, p[1] + u[1] * cos + v[1] * sin, p[2] + u[2] * cos + v[2] * sin);
           normals.push(u[0] * Math.cos(angle) + v[0] * Math.sin(angle), u[1] * Math.cos(angle) + v[1] * Math.sin(angle), u[2] * Math.cos(angle) + v[2] * Math.sin(angle));
           colors.push(r, g, b);
-          pickColors.push(pr, pg, pb, pa);
-        }
+}
       }
 
       for (let s = 0; s < segments; s++) {
@@ -550,10 +455,6 @@ function addDrillholeLayer(dee, name, opts = {}) {
     const mat = new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: false, side: THREE.DoubleSide });
     const mesh = new THREE.Mesh(geom, mat);
     mesh.name = `${name}_${hole.id || 'hole'}`;
-    if (dee.pick) {
-      geom.setAttribute('aPickColor', new THREE.Float32BufferAttribute(new Float32Array(pickColors), 4));
-      mesh._pickMaterial = _getPickMaterial(THREE, dee);
-    }
     // store metadata for raycaster interval resolution
     mesh._holeData = { id: hole.id, intervals: hole.intervals, segments };
     group.add(mesh);
@@ -562,19 +463,6 @@ function addDrillholeLayer(dee, name, opts = {}) {
   // offset group same as block model — world coords, group transform subtracts origin
   group.position.set(-dee.origin[0], -dee.origin[1], -dee.origin[2]);
   dee.scene.add(group);
-
-  if (dee.pick && idStart) {
-    dee.pick.registerLayer(name, {
-      idStart,
-      idEnd: idStart + idOffset,
-      resolve(localId, layerName) {
-        const info = pickMap[localId];
-        if (!info) return { layer: layerName, type: 'drillhole' };
-        return { layer: layerName, type: 'drillhole', holeId: info.holeId, intervalIndex: info.intervalIndex, from: info.from, to: info.to, value: info.value, category: info.category };
-      },
-    });
-    dee.pick.markDirty();
-  }
 
   dee.markDirty();
 
@@ -1299,11 +1187,6 @@ function create(container, opts = {}) {
   // controls (OrbitControls)
   const controls = _createControls(THREE, _activeCamera, renderer.domElement, origin, scene);
 
-  // pick system
-  const _bgColor = opts.background ?? 0x1a1a2e;
-  // pass a getter so pick always uses the current camera
-  const pick = _createPickSystem(THREE, renderer, scene, () => _activeCamera, origin, container, _bgColor);
-
   // layers
   const _layers = new Map();
 
@@ -1325,7 +1208,6 @@ function create(container, opts = {}) {
 
     for (const fn of _beforeRender) fn();
     renderer.render(scene, _activeCamera);
-    pick._render(_activeCamera);
     for (const fn of _afterRender) fn();
 
     _dirty = false;
@@ -1334,7 +1216,6 @@ function create(container, opts = {}) {
 
   function markDirty() {
     _dirty = true;
-    pick.markDirty();
     if (!_rafId) _rafId = requestAnimationFrame(_renderFrame);
   }
 
@@ -1354,7 +1235,6 @@ function create(container, opts = {}) {
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     _updateOrtho();
-    pick._resize(w, h);
     markDirty();
   });
   _resizeObs.observe(container);
@@ -1376,7 +1256,7 @@ function create(container, opts = {}) {
   markDirty();
 
   const dee = {
-    THREE, renderer, scene, camera, controls, pick, lighting,
+    THREE, renderer, scene, camera, controls, lighting,
     origin, clippingPlanes,
 
     // layers
@@ -1431,7 +1311,6 @@ function create(container, opts = {}) {
       if (_rafId) cancelAnimationFrame(_rafId);
       _resizeObs.disconnect();
       controls._controls.dispose();
-      pick._dispose();
       for (const [_, l] of _layers) l._dispose();
       renderer.dispose();
       renderer.domElement.remove();
@@ -1553,172 +1432,9 @@ function _createControls(THREE, camera, domElement, origin, scene) {
   return ctrl;
 }
 
-// ── pick system ──
+// ── pick system (GPU) — removed, using raycaster instead. See README.md ──
+// Preserved in git history at commit 8565072.
 
-function _createPickSystem(THREE, renderer, scene, getCamera, origin, container, clearColor) {
-  const _clearColor = clearColor;
-  let _w = Math.max(1, container.clientWidth);
-  let _h = Math.max(1, container.clientHeight);
-  let _depthTex = new THREE.DepthTexture(_w, _h);
-  let _rt = new THREE.WebGLRenderTarget(_w, _h, {
-    format: THREE.RGBAFormat, type: THREE.UnsignedByteType,
-    minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
-    depthTexture: _depthTex,
-    depthBuffer: true, stencilBuffer: false,
-  });
-  const _pixel = new Uint8Array(4);
-  let _dirty = true;
-  let _enabled = true;
-  let _debug = false;
-  const _layers = new Map();
-  let _nextId = 1;
-  const _callbacks = { hover: [], click: [], dblclick: [] };
-
-  let _debugNoSwap = false; // diagnostic: render normal materials to pick target
-
-  function _render(cam) {
-    if (!_enabled) return;
-    const swapped = [];
-    const hidden = [];
-    if (!_debugNoSwap) {
-      scene.traverse(obj => {
-        if (obj._pickMaterial) {
-          swapped.push([obj, obj.material]);
-          obj.material = obj._pickMaterial;
-        } else if ((obj.isMesh || obj.isPoints || obj.isLine) && obj.visible) {
-          hidden.push(obj);
-          obj.visible = false;
-        }
-      });
-    }
-    const prevAutoClear = renderer.autoClear;
-    renderer.autoClear = false;
-    renderer.setRenderTarget(_rt);
-    renderer.setClearColor(0x000000, 0);
-    renderer.clear(true, true, true);
-    renderer.render(scene, cam);
-    renderer.setRenderTarget(null);
-    renderer.setClearColor(_clearColor, 1);
-    renderer.autoClear = prevAutoClear;
-    for (const [obj, origMat] of swapped) obj.material = origMat;
-    for (const obj of hidden) obj.visible = true;
-    _dirty = false;
-  }
-
-  function _query(x, y) {
-    if (!_enabled) return null;
-    _render(getCamera()); // always use current camera
-    const px = Math.floor(x * _w / container.clientWidth);
-    const py = _h - 1 - Math.floor(y * _h / container.clientHeight);
-    renderer.readRenderTargetPixels(_rt, px, py, 1, 1, _pixel);
-    const id = (_pixel[0] | (_pixel[1] << 8) | (_pixel[2] << 16) | (_pixel[3] << 24)) >>> 0;
-    if (_debug) console.log('pick:', px, py, '→ rgba', _pixel[0], _pixel[1], _pixel[2], _pixel[3], '= id', id);
-    if (id === 0) return null;
-    for (const [name, info] of _layers) {
-      if (id >= info.idStart && id < info.idEnd) {
-        return info.resolve(id - info.idStart, name);
-      }
-    }
-    return null;
-  }
-
-  // mouse events
-  let _hoverRaf = null;
-  container.addEventListener('mousemove', (e) => {
-    if (_hoverRaf) return;
-    _hoverRaf = requestAnimationFrame(() => {
-      _hoverRaf = null;
-      const result = _query(e.offsetX, e.offsetY);
-      for (const fn of _callbacks.hover) fn(result);
-    });
-  });
-  container.addEventListener('click', (e) => {
-    const result = _query(e.offsetX, e.offsetY);
-    for (const fn of _callbacks.click) fn(result);
-  });
-  container.addEventListener('dblclick', (e) => {
-    const result = _query(e.offsetX, e.offsetY);
-    for (const fn of _callbacks.dblclick) fn(result);
-  });
-
-  return {
-    _render,
-    _layers,
-    _dirty: true,
-    _resize(w, h) {
-      _w = Math.max(1, w);
-      _h = Math.max(1, h);
-      _rt.dispose();
-      _depthTex = new THREE.DepthTexture(_w, _h);
-      _rt = new THREE.WebGLRenderTarget(_w, _h, {
-        format: THREE.RGBAFormat, type: THREE.UnsignedByteType,
-        minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
-        depthTexture: _depthTex,
-        depthBuffer: true, stencilBuffer: false,
-      });
-      _dirty = true;
-    },
-    _dispose() { _rt.dispose(); },
-    enable() { _enabled = true; },
-    disable() { _enabled = false; },
-    at(x, y) { return _query(x, y); },
-    on(event, fn) { if (_callbacks[event]) _callbacks[event].push(fn); },
-    allocateIds(count) {
-      const start = _nextId;
-      _nextId += count;
-      return start;
-    },
-    registerLayer(name, info) {
-      _layers.set(name, info);
-    },
-    markDirty() { _dirty = true; },
-    set debug(v) { _debug = v; },
-    set debugNoSwap(v) { _debugNoSwap = v; },
-    // render pick materials to main canvas for visual diagnostic
-    debugPickToScreen() {
-      const swapped = [];
-      const hidden = [];
-      scene.traverse(obj => {
-        if (obj._pickMaterial) {
-          swapped.push([obj, obj.material]);
-          obj.material = obj._pickMaterial;
-        } else if ((obj.isMesh || obj.isPoints || obj.isLine) && obj.visible) {
-          hidden.push(obj);
-          obj.visible = false;
-        }
-      });
-      renderer.setClearColor(0x000000, 1);
-      renderer.render(scene, getCamera());
-      renderer.setClearColor(_clearColor, 1);
-      for (const [obj, origMat] of swapped) obj.material = origMat;
-      for (const obj of hidden) obj.visible = true;
-    },
-    // render pick buffer to a visible canvas for debugging
-    debugCanvas() {
-      _render(getCamera());
-      const pixels = new Uint8Array(_w * _h * 4);
-      renderer.readRenderTargetPixels(_rt, 0, 0, _w, _h, pixels);
-      const c = document.createElement('canvas');
-      c.width = _w; c.height = _h;
-      const ctx = c.getContext('2d');
-      const img = ctx.createImageData(_w, _h);
-      // flip Y and amplify colors for visibility
-      for (let y = 0; y < _h; y++) {
-        for (let x = 0; x < _w; x++) {
-          const srcIdx = ((_h - 1 - y) * _w + x) * 4;
-          const dstIdx = (y * _w + x) * 4;
-          // raw RGB, force alpha=255
-          img.data[dstIdx] = pixels[srcIdx];
-          img.data[dstIdx + 1] = pixels[srcIdx + 1];
-          img.data[dstIdx + 2] = pixels[srcIdx + 2];
-          img.data[dstIdx + 3] = 255;
-        }
-      }
-      ctx.putImageData(img, 0, 0);
-      return c;
-    },
-  };
-}
 
 // ── screenshot ──
 
