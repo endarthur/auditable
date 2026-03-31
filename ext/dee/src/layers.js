@@ -62,6 +62,8 @@ export function addBlockModelLayer(dee, name, meshes, opts = {}) {
 
   const layer = {
     name, group, type: 'blockmodel',
+    gridDef: opts.gridDef || null,
+    compactVar: opts.compactVar || null,
     get visible() { return group.visible; },
     set visible(v) { group.visible = v; dee.markDirty(); },
     get opacity() { return chunkMeshes.size > 0 ? chunkMeshes.values().next().value.material.opacity : 1; },

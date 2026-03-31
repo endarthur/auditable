@@ -141,7 +141,7 @@ const feGrade = { values: estValues, indices: estIndices }
 const prepared = voxmesh.prepare(gridDef, feGrade, { count: 10, hint: 16 })
 const cmap = dee.colorMap({ breaks: prepared.breaks, palette: 'viridis' })
 
-scene.addBlockModel('fe', prepared.meshes, { colorMap: cmap })
+scene.addBlockModel('fe', prepared.meshes, { colorMap: cmap, gridDef, compactVar: feGrade })
 
 // drillholes
 scene.addDrillholes('holes', { holes, colorMap: cmap, radius: 3 })
@@ -150,11 +150,8 @@ scene.addDrillholes('holes', { holes, colorMap: cmap, radius: 3 })
 scene.hud.boundingBox(grid.boundingBox(gridDef))
 scene.controls.fitAll()
 
-// picking — one call sets up click-to-identify with highlights and label
-scene.raycast.enablePicking({
-  gridDef, compactVar: feGrade,
-  grid: { locate: grid.locate, ijk: grid.ijk },
-})
+// picking — one call, metadata already on the layer
+scene.raycast.enablePicking({ grid: { locate: grid.locate, ijk: grid.ijk } })
 
 /// md
 ## interactive cutoff

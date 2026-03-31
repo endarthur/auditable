@@ -315,8 +315,6 @@ export function createRaycaster(dee) {
   // ── high-level picking helper ──
 
   function enablePicking(opts = {}) {
-    const gridDef = opts.gridDef;
-    const compactVar = opts.compactVar;
     const gridFns = opts.grid; // { locate, ijk }
     const formatBlock = opts.formatBlock || _defaultFormatBlock;
     const formatDrillhole = opts.formatDrillhole || _defaultFormatDrillhole;
@@ -325,19 +323,25 @@ export function createRaycaster(dee) {
 
     if (gridFns) window._gcu_grid = gridFns;
 
-    // create label
+    // create label — append to canvas parent (the container div), not the canvas itself
     const label = document.createElement('div');
     label.style.cssText = 'position:absolute;bottom:8px;left:8px;font:12px monospace;color:#ccc;pointer-events:none;z-index:10;background:rgba(0,0,0,0.5);padding:2px 6px;border-radius:2px;';
-    container.appendChild(label);
+    container.parentElement.appendChild(label);
 
     const handler = (result) => {
       if (!result) { clearHighlight(); label.textContent = ''; return; }
 
-      if (result.type === 'blockmodel' && gridDef) {
-        const info = resolveBlock(result, gridDef, compactVar);
-        if (info) {
-          highlightBlock(gridDef, info.blockIndex);
-          label.textContent = formatBlock(info, gridDef, gridFns);
+      if (result.type === 'blockmodel') {
+        // look up gridDef and compactVar from the layer
+        const layer = result.layer ? dee._layers.get(result.layer) : null;
+        const gd = layer?.gridDef;
+        const cv = layer?.compactVar;
+        if (gd) {
+          const info = resolveBlock(result, gd, cv);
+          if (info) {
+            highlightBlock(gd, info.blockIndex);
+            label.textContent = formatBlock(info, gd, gridFns);
+          }
         }
       } else if (result.type === 'drillholes') {
         const dh = resolveDrillhole(result);
