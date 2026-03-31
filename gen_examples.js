@@ -70,6 +70,7 @@ const categories = {
     'example_gslib_sgsim.txt',
     'example_gslib_dhsa.txt',
     'example_dee.txt',
+    'example_dee_domains.txt',
   ],
 
   // gis — spatial analysis: maps, raster, hydrology

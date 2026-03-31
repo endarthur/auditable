@@ -1,0 +1,363 @@
+/// auditable
+/// title: domain estimation — peel + grid + dee
+/// module: @atra/gslib ext/atra/lib/gslib.js
+/// module: @gcu/grid ext/grid/index.js
+/// module: @gcu/voxmesh ext/voxmesh/index.js
+/// module: @gcu/dee ext/dee/index.js
+/// module: @gcu/peel ext/peel/index.js
+
+/// md
+# domain-controlled estimation
+
+Full workflow: mesh domain surfaces → depth peeling → per-domain simulation → drillhole sampling → per-domain kriging → domain dilution → 3D visualization.
+
+/// code
+const THREE = await load("https://esm.sh/three@0.170.0")
+const { OrbitControls } = await load("https://esm.sh/three@0.170.0/examples/jsm/controls/OrbitControls.js")
+globalThis.THREE = THREE
+globalThis.OrbitControls = OrbitControls
+
+const { sgsim, kt3d } = await load("@atra/gslib")
+const grid = await load("@gcu/grid")
+const voxmesh = await load("@gcu/voxmesh")
+const dee = await load("@gcu/dee")
+const { Peel } = await load("@gcu/peel")
+
+/// md
+## 1. grid and domain surfaces
+
+Two contact surfaces divide the block model into three domains: oxide (top), transition (middle), fresh (bottom). Surfaces dip and fold like real geological contacts.
+
+/// code
+const gridDef = {
+  origin: [650000, 7200000, -200],
+  size: [10, 10, 10],
+  count: [30, 30, 20],
+}
+const n = grid.nBlocks(gridDef)
+const nx = gridDef.count[0], ny = gridDef.count[1], nz = gridDef.count[2]
+ui.display(`grid: ${nx}×${ny}×${nz} = ${n.toLocaleString()} blocks`)
+
+/// code collapsed
+// contact surface: dipping plane with gentle folds, extends beyond grid
+function contactSurface(gridDef, baseZ, dipDeg, dipDirDeg, foldAmp, foldFreqX, foldFreqY, res) {
+  const ox = gridDef.origin[0], oy = gridDef.origin[1]
+  const extX = nx * gridDef.size[0], extY = ny * gridDef.size[1]
+  // extend 10% beyond grid on each side
+  const pad = 0.1
+  const x0 = ox - extX * pad, x1 = ox + extX * (1 + pad)
+  const y0 = oy - extY * pad, y1 = oy + extY * (1 + pad)
+  const nsx = res, nsy = res
+  const dx = (x1 - x0) / nsx, dy = (y1 - y0) / nsy
+
+  const dipRad = dipDeg * Math.PI / 180
+  const dirRad = dipDirDeg * Math.PI / 180
+  // dip vector components (how much Z changes per unit in dip direction)
+  const dipX = Math.sin(dirRad) * Math.tan(dipRad)
+  const dipY = Math.cos(dirRad) * Math.tan(dipRad)
+
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2
+  const verts = [], tris = []
+  for (let j = 0; j <= nsy; j++) {
+    for (let i = 0; i <= nsx; i++) {
+      const x = x0 + i * dx, y = y0 + j * dy
+      // dipping plane + folds
+      const z = baseZ
+        + (x - cx) * dipX + (y - cy) * dipY
+        + foldAmp * Math.sin((x - cx) / extX * foldFreqX * Math.PI)
+                   * Math.cos((y - cy) / extY * foldFreqY * Math.PI)
+      verts.push(x, y, z)
+    }
+  }
+  for (let j = 0; j < nsy; j++) {
+    for (let i = 0; i < nsx; i++) {
+      const a = j * (nsx + 1) + i, b = a + nsx + 1
+      tris.push(a, b, a + 1, a + 1, b, b + 1)
+    }
+  }
+  return { vertices: new Float32Array(verts), triangles: new Uint32Array(tris) }
+}
+
+// upper contact (oxide/transition boundary): gentle dip NE, broad fold
+const upperContact = contactSurface(gridDef, gridDef.origin[2] + nz * gridDef.size[2] * 0.6, 8, 45, 15, 3, 2, 60)
+// lower contact (transition/fresh boundary): steeper dip, tighter folds
+const lowerContact = contactSurface(gridDef, gridDef.origin[2] + nz * gridDef.size[2] * 0.3, 12, 30, 10, 4, 3, 60)
+
+ui.display(`upper contact: ${upperContact.vertices.length/3} verts, lower: ${lowerContact.vertices.length/3}`)
+
+/// md
+## 2. depth peeling → domain classification
+
+Peel each surface against the grid to get volumetric proportions per block.
+
+/// code
+const peel = await Peel.create({ worker: true, gpu: true })
+const peelGrid = {
+  origin: gridDef.origin,
+  size: gridDef.size,
+  count: gridDef.count,
+}
+
+// upper contact: proportion BELOW the surface (oxide above, transition below)
+peel.setMesh(upperContact.vertices, upperContact.triangles)
+const upperResult = await peel.evaluate(peelGrid, { mode: 'proportion', axis: 'z', surfaceType: 'open', maxPeels: 4 })
+
+// lower contact: proportion BELOW the surface (transition above, fresh below)
+peel.setMesh(lowerContact.vertices, lowerContact.triangles)
+const lowerResult = await peel.evaluate(peelGrid, { mode: 'proportion', axis: 'z', surfaceType: 'open', maxPeels: 4 })
+
+peel.terminate()
+
+// domain proportions from two contacts:
+// oxide = above upper contact = 1 - upperBelow
+// transition = below upper, above lower = upperBelow - lowerBelow
+// fresh = below lower contact = lowerBelow
+const domainCode = new Int32Array(n)
+const oxideProp = new Float64Array(n)
+const transProp = new Float64Array(n)
+const freshProp = new Float64Array(n)
+
+let nOx = 0, nTr = 0, nFr = 0
+for (let i = 0; i < n; i++) {
+  const ub = upperResult.proportions[i] // fraction below upper contact
+  const lb = lowerResult.proportions[i] // fraction below lower contact
+
+  oxideProp[i] = Math.max(0, 1 - ub)
+  transProp[i] = Math.max(0, ub - lb)
+  freshProp[i] = lb
+
+  // dominant domain
+  if (oxideProp[i] >= transProp[i] && oxideProp[i] >= freshProp[i]) { domainCode[i] = 1; nOx++; }
+  else if (transProp[i] >= freshProp[i]) { domainCode[i] = 2; nTr++; }
+  else { domainCode[i] = 3; nFr++; }
+}
+ui.display(`domains: oxide ${nOx}, transition ${nTr}, fresh ${nFr}`)
+
+/// md
+## 3. simulate "truth" per domain
+
+Unconditional SGSIM with different parameters per domain.
+
+/// code
+const gslibGrid = {
+  nx, ny, nz,
+  xsiz: gridDef.size[0], ysiz: gridDef.size[1], zsiz: gridDef.size[2],
+}
+
+// oxide: high grade, short range
+const simOx = sgsim({
+  grid: gslibGrid,
+  variogram: { structures: [{ type: "spherical", contribution: 1.0, range: 60 }] },
+  search: { radius: 120, ndmax: 12, nodmax: 12 },
+})
+const truthOx = simOx.run(42)
+simOx.dispose()
+
+// transition: medium grade
+const simTr = sgsim({
+  grid: gslibGrid,
+  variogram: { structures: [{ type: "spherical", contribution: 0.8, range: 80 }] },
+  search: { radius: 160, ndmax: 12, nodmax: 12 },
+})
+const truthTr = simTr.run(123)
+simTr.dispose()
+
+// fresh: low grade, long range
+const simFr = sgsim({
+  grid: gslibGrid,
+  variogram: { structures: [{ type: "spherical", contribution: 0.6, range: 100 }] },
+  search: { radius: 200, ndmax: 12, nodmax: 12 },
+})
+const truthFr = simFr.run(456)
+simFr.dispose()
+
+// combine into truth model with domain-dependent grade shifts
+const truth = new Float64Array(n)
+for (let i = 0; i < n; i++) {
+  if (domainCode[i] === 1) truth[i] = Math.max(5, truthOx[i] * 3 + 20)       // oxide: ~20% Fe (leached)
+  else if (domainCode[i] === 2) truth[i] = Math.max(5, truthTr[i] * 5 + 38)   // transition: ~38% (enriched)
+  else if (domainCode[i] === 3) truth[i] = Math.max(5, truthFr[i] * 3 + 18)   // fresh: ~18% (primary)
+  else truth[i] = NaN
+}
+
+// stats per domain
+for (const [code, name] of [[1, 'oxide'], [2, 'transition'], [3, 'fresh']]) {
+  const mask = grid.maskEqualTo(domainCode, code)
+  const vals = grid.gather(truth, grid.maskToIndices(mask))
+  const s = grid.stats(vals)
+  ui.display(`${name}: ${s.count} blocks, mean ${s.mean.toFixed(1)}%, std ${s.stddev.toFixed(1)}`)
+}
+
+/// md
+## 4. sample with drillholes
+
+/// code
+const drillSpacingX = 6, drillSpacingY = 6
+const holes = [], allSamples = { 1: [], 2: [], 3: [] }
+let holeId = 0
+
+for (let dj = 3; dj < ny; dj += drillSpacingY) {
+  for (let di = 3; di < nx; di += drillSpacingX) {
+    const cx = gridDef.origin[0] + di * gridDef.size[0]
+    const cy = gridDef.origin[1] + dj * gridDef.size[1]
+    const collar = [cx, cy, gridDef.origin[2] + (nz - 1) * gridDef.size[2]]
+    const intervals = []
+
+    for (let k = nz - 1; k >= 0; k--) {
+      const idx = di + dj * nx + k * nx * ny
+      if (domainCode[idx] === 0) continue // skip outside
+      const depth = (nz - 1 - k) * gridDef.size[2]
+      const val = truth[idx]
+      if (isNaN(val)) continue
+      intervals.push({ from: depth, to: depth + gridDef.size[2], value: val, category: domainCode[idx] })
+      const sz = gridDef.origin[2] + k * gridDef.size[2]
+      allSamples[domainCode[idx]].push([cx, cy, sz, val])
+    }
+
+    if (intervals.length > 0) {
+      holes.push({
+        id: `DDH-${String(++holeId).padStart(3, '0')}`,
+        collar,
+        surveys: [{ depth: 0, azimuth: 0, dip: -90 }],
+        intervals,
+      })
+    }
+  }
+}
+ui.display(`${holes.length} drillholes, samples: oxide ${allSamples[1].length}, transition ${allSamples[2].length}, fresh ${allSamples[3].length}`)
+
+/// md
+## 5. krige per domain
+
+/// code
+const gslibEstGrid = {
+  nx, ny, nz,
+  xmn: gridDef.origin[0], ymn: gridDef.origin[1], zmn: gridDef.origin[2],
+  xsiz: gridDef.size[0], ysiz: gridDef.size[1], zsiz: gridDef.size[2],
+}
+
+function krigeOnDomain(samples, nugget, sill, range) {
+  if (samples.length < 2) return new Float64Array(n).fill(NaN)
+  const result = kt3d({
+    data: samples,
+    grid: gslibEstGrid,
+    variogram: { nugget, structures: [{ type: "spherical", contribution: sill, range }] },
+    search: { radius: range * 2, ndmax: 12, ndmin: 1 },
+  })
+  const est = result.est
+  for (let i = 0; i < n; i++) if (est[i] < -998) est[i] = NaN
+  return est
+}
+
+const t0 = performance.now()
+const estOx = krigeOnDomain(allSamples[1], 0.5, 4.5, 60)
+const estTr = krigeOnDomain(allSamples[2], 0.4, 3.6, 80)
+const estFr = krigeOnDomain(allSamples[3], 0.3, 2.7, 100)
+const krigeTime = (performance.now() - t0).toFixed(0)
+ui.display(`kriging complete in ${krigeTime}ms`)
+
+/// md
+## 6. domain dilution
+
+Combine per-domain estimates using peel proportions as weights.
+
+/// code
+// build compact variables per domain (only blocks inside each domain)
+function makeCompact(est, code) {
+  const indices = [], values = []
+  for (let i = 0; i < n; i++) {
+    if (domainCode[i] === code && !isNaN(est[i])) {
+      indices.push(i)
+      values.push(est[i])
+    }
+  }
+  return { values: new Float64Array(values), indices: new Int32Array(indices) }
+}
+
+const oxCompact = makeCompact(estOx, 1)
+const trCompact = makeCompact(estTr, 2)
+const frCompact = makeCompact(estFr, 3)
+
+// dilute at boundaries using peel proportions
+const diluted = grid.dilute([
+  { ...oxCompact, proportions: grid.gather(oxideProp, oxCompact.indices) },
+  { ...trCompact, proportions: grid.gather(transProp, trCompact.indices) },
+  { ...frCompact, proportions: grid.gather(freshProp, frCompact.indices) },
+])
+
+ui.display(`diluted model: ${diluted.indices.length} blocks`)
+const ds = grid.stats(diluted.values)
+ui.display(`mean ${ds.mean.toFixed(1)}%, range [${ds.min.toFixed(1)}–${ds.max.toFixed(1)}]`)
+
+/// md
+## 7. 3D viewer
+
+/// code
+// %outputClass dee-viewer
+const container = document.createElement('div')
+container.style.cssText = 'width:100%;height:500px;position:relative;background:#1a1a2e;'
+display(container)
+
+const scene = dee.create(container, { THREE, origin: gridDef.origin })
+
+// mesh the diluted model
+const prepared = voxmesh.prepare(gridDef, diluted, { count: 10, hint: 64 })
+const cmap = dee.colorMap({ breaks: prepared.breaks, palette: 'viridis' })
+scene.addBlockModel('grade', prepared.meshes, { colorMap: cmap, gridDef, compactVar: diluted })
+
+// contact surfaces (transparent)
+scene.addSurface('upper_contact', {
+  positions: new Float64Array(upperContact.vertices),
+  indices: upperContact.triangles,
+  color: 0xc89b3c, opacity: 0.25, doubleSided: true,
+})
+scene.addSurface('lower_contact', {
+  positions: new Float64Array(lowerContact.vertices),
+  indices: lowerContact.triangles,
+  color: 0x4682b4, opacity: 0.25, doubleSided: true,
+})
+
+// drillholes
+scene.addDrillholes('holes', { holes, colorMap: cmap, radius: 2 })
+
+// setup
+scene.hud.boundingBox(grid.boundingBox(gridDef))
+scene.controls.fitAll()
+scene.raycast.enablePicking({ grid: { locate: grid.locate, ijk: grid.ijk } })
+
+/// md
+## interactive cutoff
+
+/// code
+const cutoff = ui.slider("cutoff", 20, {min: 5, max: 45, step: 0.5})
+
+/// code
+const aboveMask = grid.maskAboveValue(diluted.values, cutoff)
+const aboveLocal = grid.maskToIndices(aboveMask)
+const aboveGridIdx = grid.take(diluted.indices, aboveLocal)
+const aboveVals = grid.take(diluted.values, aboveLocal)
+const aboveVar = { values: aboveVals, indices: aboveGridIdx }
+
+const cutPrepared = voxmesh.prepare(gridDef, aboveVar, { count: 10, hint: 64 })
+scene.getLayer('grade').replaceAll(cutPrepared.meshes)
+scene.markDirty()
+
+const gt = grid.gradeTonnage(diluted.values, 2.7, { gridDef, cutoffs: new Float64Array([cutoff]) })
+if (gt.nBlocks[0] > 0) {
+  ui.display(`cutoff ${cutoff}%: ${aboveLocal.length.toLocaleString()} blocks, ${(gt.tonnes[0]/1e6).toFixed(2)} Mt @ ${gt.grade[0].toFixed(1)}%`)
+} else {
+  ui.display(`cutoff ${cutoff}%: no blocks above cutoff`)
+}
+
+/// md
+## camera presets
+
+/// code
+const view = ui.dropdown("view", ["perspective", "plan", "section N", "section E"], "perspective")
+
+/// code
+if (view === "plan") scene.controls.planView()
+else if (view === "section N") scene.controls.sectionNorth(gridDef.origin[1] + ny/2 * gridDef.size[1])
+else if (view === "section E") scene.controls.sectionEast(gridDef.origin[0] + nx/2 * gridDef.size[0])
+else scene.controls.fitAll()
+scene.markDirty()
