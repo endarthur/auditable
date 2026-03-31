@@ -375,7 +375,9 @@ async function evaluateCPU(vertices, triangles, bvhNodes, triIndices, blockModel
     onProgress,
   } = opts;
 
-  const { origin, size, count } = blockModel;
+  const { origin: _origin, size, count } = blockModel;
+  // origin is block (0,0,0) centroid — convert to corner for internal math
+  const origin = [_origin[0] - size[0] / 2, _origin[1] - size[1] / 2, _origin[2] - size[2] / 2];
   const [nx, ny, nz] = count;
   const total = nx * ny * nz;
 
@@ -787,7 +789,9 @@ async function evaluateGPU(gpu, vertices, triangles, bvhNodes, triIndices, block
     maxPeels = 16, resolution = [1, 1], onProgress,
   } = opts;
 
-  const { origin, size, count } = blockModel;
+  const { origin: _origin, size, count } = blockModel;
+  // origin is block (0,0,0) centroid — convert to corner for internal math
+  const origin = [_origin[0] - size[0] / 2, _origin[1] - size[1] / 2, _origin[2] - size[2] / 2];
   const [nx, ny, nz] = count;
   const total = nx * ny * nz;
 

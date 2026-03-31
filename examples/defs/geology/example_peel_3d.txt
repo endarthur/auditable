@@ -183,7 +183,7 @@ async function evaluate() {
   const blockSize = (2 * halfExtent) / gridRes;
   const t0 = performance.now();
   const result = await peel.evaluate({
-    origin: [-halfExtent, -halfExtent, -halfExtent],
+    origin: [-halfExtent + blockSize / 2, -halfExtent + blockSize / 2, -halfExtent + blockSize / 2],
     size: [blockSize, blockSize, blockSize],
     count: [gridRes, gridRes, gridRes],
   }, {

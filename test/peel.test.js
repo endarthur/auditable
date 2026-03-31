@@ -196,7 +196,7 @@ describe('peel: CPU evaluation — proportion mode', () => {
     const { vertices, triangles } = planeMeshZ(1.5);
     const bvh = buildBVH(vertices, triangles);
     const result = await evaluateCPU(vertices, triangles, bvh.nodes, bvh.triIndices, {
-      origin: [-1, -1, 0], size: [2, 2, 1], count: [1, 1, 3],
+      origin: [0, 0, 0.5], size: [2, 2, 1], count: [1, 1, 3],
     }, { mode: 'proportion', axis: 'z', surfaceType: 'open' });
 
     // Block k=0 (z=0..1): fully below plane → 1.0
@@ -213,7 +213,7 @@ describe('peel: CPU evaluation — proportion mode', () => {
     const bvh = buildBVH(vertices, triangles);
     // Block model enclosing the box
     const result = await evaluateCPU(vertices, triangles, bvh.nodes, bvh.triIndices, {
-      origin: [-2, -2, -2], size: [0.5, 0.5, 0.5], count: [8, 8, 8],
+      origin: [-1.75, -1.75, -1.75], size: [0.5, 0.5, 0.5], count: [8, 8, 8],
     }, { mode: 'proportion', axis: 'z', surfaceType: 'closed' });
 
     let volSum = 0;
@@ -228,7 +228,7 @@ describe('peel: CPU evaluation — proportion mode', () => {
     const { vertices, triangles } = sphereMesh(0, 0, 0, 2, 24, 12);
     const bvh = buildBVH(vertices, triangles);
     const result = await evaluateCPU(vertices, triangles, bvh.nodes, bvh.triIndices, {
-      origin: [-3, -3, -3], size: [0.5, 0.5, 0.5], count: [12, 12, 12],
+      origin: [-2.75, -2.75, -2.75], size: [0.5, 0.5, 0.5], count: [12, 12, 12],
     }, { mode: 'proportion', axis: 'z', surfaceType: 'closed', resolution: [2, 2] });
 
     let volSum = 0;
@@ -245,7 +245,7 @@ describe('peel: axis selection', () => {
     await load();
     const { vertices, triangles } = boxMesh(-1, -1, -1, 1, 1, 1);
     const bvh = buildBVH(vertices, triangles);
-    const bm = { origin: [-2, -2, -2], size: [1, 1, 1], count: [4, 4, 4] };
+    const bm = { origin: [-1.5, -1.5, -1.5], size: [1, 1, 1], count: [4, 4, 4] };
 
     const rZ = await evaluateCPU(vertices, triangles, bvh.nodes, bvh.triIndices, bm,
       { mode: 'proportion', axis: 'z', surfaceType: 'closed' });
@@ -271,7 +271,7 @@ describe('peel: overflow reporting', () => {
     const t = new Uint32Array([0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7]);
     const bvh = buildBVH(v, t);
     const result = await evaluateCPU(v, t, bvh.nodes, bvh.triIndices, {
-      origin: [-1, -1, 0], size: [2, 2, 1], count: [1, 1, 4],
+      origin: [0, 0, 0.5], size: [2, 2, 1], count: [1, 1, 4],
     }, { mode: 'proportion', axis: 'z', surfaceType: 'closed', maxPeels: 1 });
 
     assert.ok(result.overflow > 0, `expected overflow, got ${result.overflow}`);
@@ -282,7 +282,7 @@ describe('peel: overflow reporting', () => {
     const { vertices, triangles } = boxMesh(-1, -1, -1, 1, 1, 1);
     const bvh = buildBVH(vertices, triangles);
     const result = await evaluateCPU(vertices, triangles, bvh.nodes, bvh.triIndices, {
-      origin: [-2, -2, -2], size: [1, 1, 1], count: [4, 4, 4],
+      origin: [-1.5, -1.5, -1.5], size: [1, 1, 1], count: [4, 4, 4],
     }, { mode: 'proportion', axis: 'z', surfaceType: 'closed', maxPeels: 16 });
 
     assert.equal(result.overflow, 0);
@@ -296,7 +296,7 @@ describe('peel: progress callback', () => {
     const bvh = buildBVH(vertices, triangles);
     const fracs = [];
     await evaluateCPU(vertices, triangles, bvh.nodes, bvh.triIndices, {
-      origin: [-2, -2, -2], size: [1, 1, 1], count: [4, 4, 4],
+      origin: [-1.5, -1.5, -1.5], size: [1, 1, 1], count: [4, 4, 4],
     }, { mode: 'flag', axis: 'z', surfaceType: 'closed', onProgress: f => fracs.push(f) });
 
     assert.ok(fracs.length > 0, 'should have progress callbacks');
