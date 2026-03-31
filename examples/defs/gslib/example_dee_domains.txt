@@ -79,9 +79,9 @@ function contactSurface(gridDef, baseZ, dipDeg, dipDirDeg, foldAmp, foldFreqX, f
 }
 
 // upper contact (oxide/transition boundary): gentle dip NE, broad fold
-const upperContact = contactSurface(gridDef, gridDef.origin[2] + nz * gridDef.size[2] * 0.6, 8, 45, 15, 3, 2, 60)
+const upperContact = contactSurface(gridDef, gridDef.origin[2] + nz * gridDef.size[2] * 0.6, 8, 45, 15, 3, 2, 20)
 // lower contact (transition/fresh boundary): steeper dip, tighter folds
-const lowerContact = contactSurface(gridDef, gridDef.origin[2] + nz * gridDef.size[2] * 0.3, 12, 30, 10, 4, 3, 60)
+const lowerContact = contactSurface(gridDef, gridDef.origin[2] + nz * gridDef.size[2] * 0.3, 12, 30, 10, 4, 3, 20)
 
 ui.display(`upper contact: ${upperContact.vertices.length/3} verts, lower: ${lowerContact.vertices.length/3}`)
 
@@ -100,11 +100,11 @@ const peelGrid = {
 
 // upper contact: proportion BELOW the surface (oxide above, transition below)
 peel.setMesh(upperContact.vertices, upperContact.triangles)
-const upperResult = await peel.evaluate(peelGrid, { mode: 'proportion', axis: 'z', surfaceType: 'open', maxPeels: 4 })
+const upperResult = await peel.evaluate(peelGrid, { mode: 'proportion', axis: 'z', surfaceType: 'open', maxPeels: 4, resolution: [2, 2] })
 
 // lower contact: proportion BELOW the surface (transition above, fresh below)
 peel.setMesh(lowerContact.vertices, lowerContact.triangles)
-const lowerResult = await peel.evaluate(peelGrid, { mode: 'proportion', axis: 'z', surfaceType: 'open', maxPeels: 4 })
+const lowerResult = await peel.evaluate(peelGrid, { mode: 'proportion', axis: 'z', surfaceType: 'open', maxPeels: 4, resolution: [2, 2] })
 
 peel.terminate()
 
@@ -250,7 +250,7 @@ function krigeOnDomain(samples, nugget, sill, range) {
 }
 
 const t0 = performance.now()
-const estOx = krigeOnDomain(allSamples[1], 0.5, 4.5, 60)
+const estOx = krigeOnDomain(allSamples[1], 0.5, 4.5, 20)
 const estTr = krigeOnDomain(allSamples[2], 0.4, 3.6, 80)
 const estFr = krigeOnDomain(allSamples[3], 0.3, 2.7, 100)
 const krigeTime = (performance.now() - t0).toFixed(0)

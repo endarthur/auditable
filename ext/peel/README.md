@@ -10,7 +10,7 @@ const { Peel } = await load("./ext/peel/index.js");
 const p = await Peel.create({ worker: true, gpu: true });
 p.setMesh(vertices, triangles);
 const { proportions, flags, overflow } = await p.evaluate({
-  origin: [-3, -3, -3],
+  origin: [-2.75, -2.75, -2.75],  // centroid of block (0,0,0)
   size: [0.5, 0.5, 0.5],
   count: [12, 12, 12],
 }, { axis: 'z', surfaceType: 'closed', maxPeels: 16 });
@@ -150,8 +150,15 @@ Use PEEL for production meshes (clean, validated geometry). Use WINDING as a saf
 
 ---
 
+## Known issue: triangle edge artifacts
+
+When a ray hits exactly on a shared edge between two triangles, floating-point precision determines whether it intersects triangle A, B, both, or neither. With regular surface and block grids, certain columns systematically align with edges, producing grid-pattern artifacts in proportions.
+
+**Mitigation:** use `resolution: [2, 2]` — sub-rays at offset positions mostly avoid edges, and averaging gives correct proportions.
+
 ## Roadmap
 
+- **Watertight ray-triangle intersection** — implement per Woop, Benthin, Wald (2013), "Watertight Ray/Triangle Intersection" (JCGT). Guarantees rays on shared edges hit exactly one adjacent triangle. Eliminates edge artifacts without resolution oversampling. Change is in `src/bvh.js` ray-triangle test (Moller-Trumbore → watertight).
 - **Arbitrary ray direction** — non-axis-aligned rays for oblique cross-sections and dipping geology
 - **Section mode** — cutting plane intersection returning polyline segments
 - **Drillhole intersection** — polyline rays, not grid-aligned
