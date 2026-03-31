@@ -150,6 +150,35 @@ scene.addDrillholes('holes', { holes, colorMap: cmap, radius: 3 })
 scene.hud.boundingBox(grid.boundingBox(gridDef))
 scene.controls.fitAll()
 
+// picking via raycaster — click (without drag) to identify blocks/drillholes
+// expose grid functions for the raycaster's resolveBlock
+window._gcu_grid = { locate: grid.locate, ijk: grid.ijk }
+
+const pickLabel = document.createElement('div')
+pickLabel.style.cssText = 'position:absolute;bottom:8px;left:8px;font:12px monospace;color:#ccc;pointer-events:none;z-index:10;'
+container.appendChild(pickLabel)
+
+scene.raycast.on('click', (result) => {
+  if (!result) { scene.raycast.clearHighlight(); pickLabel.textContent = ''; return; }
+  if (result.type === 'blockmodel') {
+    const info = scene.raycast.resolveBlock(result, gridDef, feGrade)
+    if (info) {
+      const [bi, bj, bk] = grid.ijk(gridDef, info.blockIndex)
+      scene.raycast.highlightBlock(gridDef, info.blockIndex)
+      pickLabel.textContent = `block [${bi},${bj},${bk}] idx=${info.blockIndex} Fe=${info.value?.toFixed(1) ?? '—'}%`
+    }
+  } else if (result.type === 'drillholes') {
+    const dh = scene.raycast.resolveDrillhole(result)
+    if (dh) {
+      scene.raycast.highlightDrillholeInterval(result, dh)
+      pickLabel.textContent = `${dh.holeId} [${dh.from}–${dh.to}m] Fe: ${dh.value?.toFixed(1) ?? '—'}%`
+    }
+  } else {
+    scene.raycast.highlightPoint(result.scenePoint, 3)
+    pickLabel.textContent = `${result.layer || 'unknown'} — ${result.type || 'object'}`
+  }
+})
+
 /// md
 ## interactive cutoff
 

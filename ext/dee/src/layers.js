@@ -360,13 +360,15 @@ export function addDrillholeLayer(dee, name, opts = {}) {
     geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
     geom.setIndex(indices);
 
-    const mat = new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: false });
+    const mat = new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: false, side: THREE.DoubleSide });
     const mesh = new THREE.Mesh(geom, mat);
     mesh.name = `${name}_${hole.id || 'hole'}`;
     if (dee.pick) {
       geom.setAttribute('aPickColor', new THREE.Float32BufferAttribute(new Float32Array(pickColors), 4));
       mesh._pickMaterial = _getPickMaterial(THREE, dee);
     }
+    // store metadata for raycaster interval resolution
+    mesh._holeData = { id: hole.id, intervals: hole.intervals, segments };
     group.add(mesh);
   }
 

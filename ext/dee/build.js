@@ -9,6 +9,7 @@ const modules = [
   'color.js',
   'layers.js',
   'hud.js',
+  'raycast.js',
   'scene.js',
 ];
 
@@ -53,11 +54,7 @@ output = output.replace(
   'function _addClipPlane(dee, opts) { return addClipPlane(dee, opts); }'
 );
 
-// add HUD wiring into create()
-output = output.replace(
-  "return dee;",
-  "dee.hud = createHUD(dee);\n  return dee;"
-);
+// HUD and raycaster wired in scene.js create() via typeof checks
 
 output += `
 // ── exports ──
@@ -67,7 +64,7 @@ export {
   addBlockModelLayer, addSectionLayer, addPointsLayer,
   addDrillholeLayer, addSurfaceLayer, addPolylinesLayer, addClipPlane,
   desurvey, interpolatePath,
-  createHUD,
+  createHUD, createRaycaster,
 };
 `;
 

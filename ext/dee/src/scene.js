@@ -180,6 +180,10 @@ export function create(container, opts = {}) {
     },
   };
 
+  // wire HUD and raycaster (functions available from prior modules in build concat order)
+  if (typeof createHUD === 'function') dee.hud = createHUD(dee);
+  if (typeof createRaycaster === 'function') dee.raycast = createRaycaster(dee);
+
   return dee;
 }
 
