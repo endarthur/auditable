@@ -84,7 +84,7 @@ export function addBlockModelLayer(dee, name, meshes, opts = {}) {
       for (const [_, m] of chunkMeshes) {
         group.remove(m);
         m.geometry.dispose();
-        if (m.material !== _pickMat) m.material.dispose();
+        m.material.dispose();
       }
       chunkMeshes.clear();
       for (const [chunkIdx, meshData] of newMeshes) _buildChunk(chunkIdx, meshData);

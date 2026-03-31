@@ -312,6 +312,63 @@ export function createRaycaster(dee) {
     for (const fn of _callbacks.dblclick) fn(result);
   });
 
+  // ── high-level picking helper ──
+
+  function enablePicking(opts = {}) {
+    const gridDef = opts.gridDef;
+    const compactVar = opts.compactVar;
+    const gridFns = opts.grid; // { locate, ijk }
+    const formatBlock = opts.formatBlock || _defaultFormatBlock;
+    const formatDrillhole = opts.formatDrillhole || _defaultFormatDrillhole;
+    const formatOther = opts.formatOther || ((result) => `${result.layer || 'unknown'} — ${result.type || 'object'}`);
+    const event = opts.event || 'click';
+
+    if (gridFns) window._gcu_grid = gridFns;
+
+    // create label
+    const label = document.createElement('div');
+    label.style.cssText = 'position:absolute;bottom:8px;left:8px;font:12px monospace;color:#ccc;pointer-events:none;z-index:10;background:rgba(0,0,0,0.5);padding:2px 6px;border-radius:2px;';
+    container.appendChild(label);
+
+    const handler = (result) => {
+      if (!result) { clearHighlight(); label.textContent = ''; return; }
+
+      if (result.type === 'blockmodel' && gridDef) {
+        const info = resolveBlock(result, gridDef, compactVar);
+        if (info) {
+          highlightBlock(gridDef, info.blockIndex);
+          label.textContent = formatBlock(info, gridDef, gridFns);
+        }
+      } else if (result.type === 'drillholes') {
+        const dh = resolveDrillhole(result);
+        if (dh) {
+          highlightDrillholeInterval(result, dh);
+          label.textContent = formatDrillhole(dh);
+        }
+      } else {
+        highlightPoint(result.scenePoint, 3);
+        label.textContent = formatOther(result);
+      }
+
+      if (opts.onPick) opts.onPick(result);
+    };
+
+    _callbacks[event].push(handler);
+    return { label, dispose() { label.remove(); clearHighlight(); } };
+  }
+
+  function _defaultFormatBlock(info, gridDef, gridFns) {
+    if (gridFns?.ijk) {
+      const [i, j, k] = gridFns.ijk(gridDef, info.blockIndex);
+      return `block [${i},${j},${k}] idx=${info.blockIndex}${info.value != null ? ` val=${info.value.toFixed(2)}` : ''}`;
+    }
+    return `block idx=${info.blockIndex}${info.value != null ? ` val=${info.value.toFixed(2)}` : ''}`;
+  }
+
+  function _defaultFormatDrillhole(dh) {
+    return `${dh.holeId} [${dh.from}–${dh.to}m]${dh.value != null ? ` val=${dh.value.toFixed(2)}` : ''}`;
+  }
+
   return {
     pick: _pick,
     resolveBlock,
@@ -321,6 +378,7 @@ export function createRaycaster(dee) {
     highlightInterval,
     highlightPoint,
     clearHighlight,
+    enablePicking,
     on(event, fn) { if (_callbacks[event]) _callbacks[event].push(fn); },
     raycaster,
   };
