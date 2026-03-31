@@ -410,6 +410,7 @@ export function addSurfaceLayer(dee, name, opts = {}) {
   surfGroup.position.set(-dee.origin[0], -dee.origin[1], -dee.origin[2]);
   const mesh = new THREE.Mesh(geom, mat);
   mesh.name = name;
+  if (opts.pickable === false) mesh._noPick = true;
   surfGroup.add(mesh);
   dee.scene.add(surfGroup);
   dee.markDirty();

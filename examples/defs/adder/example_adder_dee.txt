@@ -1,0 +1,290 @@
+/// auditable
+/// title: adder — domain estimation + dee
+/// module: @gcu/adder ext/adder/index.js
+/// module: @atra/gslib ext/atra/lib/gslib.js
+/// module: @gcu/grid ext/grid/index.js
+/// module: @gcu/voxmesh ext/voxmesh/index.js
+/// module: @gcu/dee ext/dee/index.js
+/// module: @gcu/peel ext/peel/index.js
+
+/// md
+# domain estimation in Python
+
+Same workflow as the JS domain example — mesh contacts, depth peeling, per-domain simulation and kriging, dilution — entirely in adder Python cells (except the JS bootstrap loader).
+
+/// code collapsed
+// %collapsed
+await load("@gcu/adder")
+const THREE = await load("https://esm.sh/three@0.170.0")
+const { OrbitControls } = await load("https://esm.sh/three@0.170.0/examples/jsm/controls/OrbitControls.js")
+globalThis.THREE = THREE
+globalThis.OrbitControls = OrbitControls
+
+const gslib = await load("@atra/gslib")
+const grid = await load("@gcu/grid")
+const voxmesh = await load("@gcu/voxmesh")
+const dee = await load("@gcu/dee")
+const Peel = (await load("@gcu/peel")).Peel
+
+/// md
+## 1. grid and contact surfaces
+
+/// adder collapsed
+import math
+import js
+
+grid_def = {
+    "origin": [650000, 7200000, -200],
+    "size": [10, 10, 10],
+    "count": [30, 30, 20],
+}
+nx, ny, nz = grid_def["count"]
+n = nx * ny * nz
+print(f"grid: {nx}x{ny}x{nz} = {n} blocks")
+
+def contact_surface(grid_def, base_z, dip_deg, dip_dir_deg, fold_amp, fold_fx, fold_fy, res):
+    ox, oy = grid_def["origin"][0], grid_def["origin"][1]
+    sx, sy = grid_def["size"][0], grid_def["size"][1]
+    ext_x, ext_y = nx * sx, ny * sy
+    pad = 0.1
+    x0 = ox - ext_x * pad
+    x1 = ox + ext_x * (1 + pad)
+    y0 = oy - ext_y * pad
+    y1 = oy + ext_y * (1 + pad)
+    dx = (x1 - x0) / res
+    dy = (y1 - y0) / res
+    dip_rad = dip_deg * math.pi / 180
+    dir_rad = dip_dir_deg * math.pi / 180
+    dip_x = math.sin(dir_rad) * math.tan(dip_rad)
+    dip_y = math.cos(dir_rad) * math.tan(dip_rad)
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+
+    verts = []
+    tris = []
+    for j in range(res + 1):
+        for i in range(res + 1):
+            x = x0 + i * dx
+            y = y0 + j * dy
+            z = base_z + (x - cx) * dip_x + (y - cy) * dip_y
+            z += fold_amp * math.sin((x - cx) / ext_x * fold_fx * math.pi) * math.cos((y - cy) / ext_y * fold_fy * math.pi)
+            verts.extend([x, y, z])
+    for j in range(res):
+        for i in range(res):
+            a = j * (res + 1) + i
+            b = a + res + 1
+            tris.extend([a, b, a + 1, a + 1, b, b + 1])
+
+    return {"vertices": js.Float32Array(verts), "triangles": js.Uint32Array(tris)}
+
+z_extent = nz * grid_def["size"][2]
+upper_contact = contact_surface(grid_def, grid_def["origin"][2] + z_extent * 0.6, 8, 45, 15, 3, 2, 20)
+lower_contact = contact_surface(grid_def, grid_def["origin"][2] + z_extent * 0.3, 12, 30, 10, 4, 3, 20)
+
+/// md
+## 2. depth peeling
+
+/// adder
+import js
+
+peel = await Peel.create({"worker": True, "gpu": True})
+peel_grid = {"origin": grid_def["origin"], "size": grid_def["size"], "count": grid_def["count"]}
+peel_opts = {"mode": "proportion", "axis": "z", "surfaceType": "open", "maxPeels": 4, "resolution": [2, 2]}
+
+peel.setMesh(upper_contact["vertices"], upper_contact["triangles"])
+upper_result = await peel.evaluate(peel_grid, peel_opts)
+
+peel.setMesh(lower_contact["vertices"], lower_contact["triangles"])
+lower_result = await peel.evaluate(peel_grid, peel_opts)
+peel.terminate()
+
+domain_code = js.Int32Array(n)
+oxide_prop = js.Float64Array(n)
+trans_prop = js.Float64Array(n)
+fresh_prop = js.Float64Array(n)
+
+n_ox = n_tr = n_fr = 0
+for i in range(n):
+    ub = upper_result.proportions[i]
+    lb = lower_result.proportions[i]
+    oxide_prop[i] = max(0, 1 - ub)
+    trans_prop[i] = max(0, ub - lb)
+    fresh_prop[i] = lb
+    if oxide_prop[i] >= trans_prop[i] and oxide_prop[i] >= fresh_prop[i]:
+        domain_code[i] = 1
+        n_ox += 1
+    elif trans_prop[i] >= fresh_prop[i]:
+        domain_code[i] = 2
+        n_tr += 1
+    else:
+        domain_code[i] = 3
+        n_fr += 1
+
+print(f"domains: oxide {n_ox}, transition {n_tr}, fresh {n_fr}")
+
+/// md
+## 3. simulate truth per domain
+
+/// adder
+import js
+
+gslib_grid = {"nx": nx, "ny": ny, "nz": nz,
+              "xsiz": grid_def["size"][0], "ysiz": grid_def["size"][1], "zsiz": grid_def["size"][2]}
+
+def simulate(seed, sill, range_):
+    engine = gslib.sgsim({
+        "grid": gslib_grid,
+        "variogram": {"structures": [{"type": "spherical", "contribution": sill, "range": range_}]},
+        "search": {"radius": range_ * 2, "ndmax": 12, "nodmax": 12},
+    })
+    result = engine.run(seed)
+    engine.dispose()
+    return result
+
+sim_ox = simulate(42, 1.0, 60)
+sim_tr = simulate(123, 0.8, 80)
+sim_fr = simulate(456, 0.6, 100)
+
+truth = js.Float64Array(n)
+for i in range(n):
+    c = domain_code[i]
+    if c == 1:
+        truth[i] = max(5, sim_ox[i] * 3 + 20)
+    elif c == 2:
+        truth[i] = max(5, sim_tr[i] * 5 + 38)
+    elif c == 3:
+        truth[i] = max(5, sim_fr[i] * 3 + 18)
+
+for code, name in [(1, "oxide"), (2, "transition"), (3, "fresh")]:
+    mask = grid.maskEqualTo(domain_code, code)
+    vals = grid.gather(truth, grid.maskToIndices(mask))
+    s = grid.stats(vals)
+    print(f"{name}: {s.count} blocks, mean {s.mean:.1f}%, std {s.stddev:.1f}")
+
+/// md
+## 4. drillhole sampling
+
+/// adder
+holes = []
+all_samples = {1: [], 2: [], 3: []}
+hole_id = 0
+
+for dj in range(3, ny, 6):
+    for di in range(3, nx, 6):
+        cx = grid_def["origin"][0] + di * grid_def["size"][0]
+        cy = grid_def["origin"][1] + dj * grid_def["size"][1]
+        collar = [cx, cy, grid_def["origin"][2] + (nz - 1) * grid_def["size"][2]]
+        intervals = []
+        for k in range(nz - 1, -1, -1):
+            idx = di + dj * nx + k * nx * ny
+            depth = (nz - 1 - k) * grid_def["size"][2]
+            val = truth[idx]
+            intervals.append({"from": depth, "to": depth + grid_def["size"][2], "value": val, "category": int(domain_code[idx])})
+            sz = grid_def["origin"][2] + k * grid_def["size"][2]
+            all_samples[domain_code[idx]].append([cx, cy, sz, val])
+        if len(intervals) > 0:
+            hole_id += 1
+            holes.append({
+                "id": f"DDH-{hole_id:03d}",
+                "collar": collar,
+                "surveys": [{"depth": 0, "azimuth": 0, "dip": -90}],
+                "intervals": intervals,
+            })
+
+print(f"{len(holes)} drillholes")
+
+/// md
+## 5. per-domain kriging
+
+/// adder
+import math
+
+est_grid = {
+    "nx": nx, "ny": ny, "nz": nz,
+    "xmn": grid_def["origin"][0], "ymn": grid_def["origin"][1], "zmn": grid_def["origin"][2],
+    "xsiz": grid_def["size"][0], "ysiz": grid_def["size"][1], "zsiz": grid_def["size"][2],
+}
+
+def krige_domain(samples, nugget, sill, range_):
+    if len(samples) < 2:
+        return js.Float64Array(n)
+    result = gslib.kt3d({
+        "data": samples,
+        "grid": est_grid,
+        "variogram": {"nugget": nugget, "structures": [{"type": "spherical", "contribution": sill, "range": range_}]},
+        "search": {"radius": range_ * 2, "ndmax": 12, "ndmin": 1},
+    })
+    est = result.est
+    for i in range(n):
+        if est[i] < -998:
+            est[i] = float("nan")
+    return est
+
+est_ox = krige_domain(all_samples[1], 0.5, 4.5, 60)
+est_tr = krige_domain(all_samples[2], 0.4, 3.6, 80)
+est_fr = krige_domain(all_samples[3], 0.3, 2.7, 100)
+print("kriging complete")
+
+/// md
+## 6. domain dilution
+
+/// adder
+import math
+
+def make_compact(est, code):
+    indices = []
+    values = []
+    for i in range(n):
+        if domain_code[i] == code and not math.isnan(est[i]):
+            indices.append(i)
+            values.append(est[i])
+    return {"values": js.Float64Array(values), "indices": js.Int32Array(indices)}
+
+ox_c = make_compact(est_ox, 1)
+tr_c = make_compact(est_tr, 2)
+fr_c = make_compact(est_fr, 3)
+
+diluted = grid.dilute([
+    {"values": ox_c["values"], "indices": ox_c["indices"], "proportions": grid.gather(oxide_prop, ox_c["indices"])},
+    {"values": tr_c["values"], "indices": tr_c["indices"], "proportions": grid.gather(trans_prop, tr_c["indices"])},
+    {"values": fr_c["values"], "indices": fr_c["indices"], "proportions": grid.gather(fresh_prop, fr_c["indices"])},
+])
+
+ds = grid.stats(diluted.values)
+print(f"diluted: {len(diluted.indices)} blocks, mean {ds.mean:.1f}%")
+
+/// md
+## 7. 3D viewer
+
+/// adder
+import js
+
+container = js.document.createElement("div")
+container.style.cssText = "width:100%;height:500px;position:relative;background:#1a1a2e;"
+display(container)
+
+scene = dee.create(container, {"THREE": THREE, "origin": grid_def["origin"]})
+prepared = voxmesh.prepare(grid_def, diluted, {"count": 10, "hint": 64})
+cmap = dee.colorMap({"breaks": prepared.breaks, "palette": "viridis"})
+scene.addBlockModel("grade", prepared.meshes, {"colorMap": cmap, "gridDef": grid_def, "compactVar": diluted})
+scene.addSurface("upper", {"positions": js.Float64Array(upper_contact["vertices"]), "indices": upper_contact["triangles"], "color": 0xc89b3c, "opacity": 0.25, "doubleSided": True, "pickable": False})
+scene.addSurface("lower", {"positions": js.Float64Array(lower_contact["vertices"]), "indices": lower_contact["triangles"], "color": 0x4682b4, "opacity": 0.25, "doubleSided": True, "pickable": False})
+scene.addDrillholes("holes", {"holes": holes, "colorMap": cmap, "radius": 2})
+scene.hud.boundingBox(grid.boundingBox(grid_def))
+scene.controls.fitAll()
+scene.raycast.enablePicking({"grid": {"locate": grid.locate, "ijk": grid.ijk}})
+
+/// md
+## interactive cutoff
+
+/// code
+const cutoff = ui.slider("cutoff", 20, {min: 5, max: 45, step: 0.5})
+
+/// code
+const aboveMask = grid.maskAboveValue(diluted.values, cutoff)
+const aboveLocal = grid.maskToIndices(aboveMask)
+const aboveVar = { values: grid.take(diluted.values, aboveLocal), indices: grid.take(diluted.indices, aboveLocal) }
+const cutPrepared = voxmesh.prepare(grid_def, aboveVar, { count: 10, hint: 64 })
+scene.getLayer('grade').replaceAll(cutPrepared.meshes)
+scene.markDirty()
+const gt = grid.gradeTonnage(diluted.values, 2.7, { gridDef: grid_def, cutoffs: new Float64Array([cutoff]) })
+if (gt.nBlocks[0] > 0) ui.display(`cutoff ${cutoff}%: ${aboveLocal.length.toLocaleString()} blocks, ${(gt.tonnes[0]/1e6).toFixed(2)} Mt @ ${gt.grade[0].toFixed(1)}%`)

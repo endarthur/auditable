@@ -309,12 +309,12 @@ scene.addBlockModel('grade', prepared.meshes, { colorMap: cmap, gridDef, compact
 scene.addSurface('upper_contact', {
   positions: new Float64Array(upperContact.vertices),
   indices: upperContact.triangles,
-  color: 0xc89b3c, opacity: 0.25, doubleSided: true,
+  color: 0xc89b3c, opacity: 0.25, doubleSided: true, pickable: false,
 })
 scene.addSurface('lower_contact', {
   positions: new Float64Array(lowerContact.vertices),
   indices: lowerContact.triangles,
-  color: 0x4682b4, opacity: 0.25, doubleSided: true,
+  color: 0x4682b4, opacity: 0.25, doubleSided: true, pickable: false,
 })
 
 // drillholes

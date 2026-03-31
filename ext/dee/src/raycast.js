@@ -16,10 +16,10 @@ export function createRaycaster(dee) {
     mouse.y = -((y - rect.top) / rect.height) * 2 + 1;
     raycaster.setFromCamera(mouse, dee.camera);
 
-    // collect pickable objects
+    // collect pickable objects (skip highlights and non-pickable)
     const objects = [];
     dee.scene.traverse(obj => {
-      if ((obj.isMesh || obj.isPoints) && obj.visible && !obj._isHighlight) {
+      if ((obj.isMesh || obj.isPoints) && obj.visible && !obj._isHighlight && !obj._noPick) {
         objects.push(obj);
       }
     });
