@@ -1,0 +1,10 @@
+{
+  "name": "dee",
+  "short_name": "dee",
+  "description": "3D block model viewer — part of the Auditable project",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#c89b3c",
+  "icons": []
+}

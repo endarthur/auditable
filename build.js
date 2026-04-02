@@ -319,6 +319,83 @@ ${js}
 }
 
 // ══════════════════════════════════════════════════
+// TARGET: dee (3D block model viewer)
+// ══════════════════════════════════════════════════
+
+if (target === 'dee') {
+  const toolDir = path.join(__dirname, 'tools', 'dee');
+  const toolJsDir = path.join(toolDir, 'js');
+
+  // 1. Process tool modules
+  let toolJs = processModules(path.join(toolJsDir, 'main.js'), toolJsDir);
+
+  // 2. Prepend dependencies as IIFE namespaces (avoid name collisions)
+  const extPaths = [
+    ['_grid', path.join(__dirname, 'ext/grid/index.js')],
+    ['_voxmesh', path.join(__dirname, 'ext/voxmesh/index.js')],
+  ];
+
+  let deps = '';
+  for (const [ns, p] of extPaths) {
+    let src = fs.readFileSync(p, 'utf8');
+    // extract export names
+    const exportMatch = src.match(/^export\s*\{([^}]+)\}/m);
+    const exportNames = exportMatch ? exportMatch[1].split(',').map(s => s.trim().split(/\s+as\s+/).pop().trim()).filter(Boolean) : [];
+    // strip exports
+    src = src.replace(/^export\s*\{[^}]*\};?\s*$/gm, '');
+    src = src.replace(/^export\s+(function|const|let|var|class)\s/gm, '$1 ');
+    deps += `const ${ns} = (function() {\n${src}\nreturn { ${exportNames.join(', ')} };\n})();\n\n`;
+  }
+
+  // dee and peel have unique names — prepend bare (no IIFE wrapping)
+  for (const p of [path.join(__dirname, 'ext/dee/index.js'), path.join(__dirname, 'ext/peel/index.js')]) {
+    if (!fs.existsSync(p)) continue;
+    let src = fs.readFileSync(p, 'utf8');
+    src = src.replace(/^export\s*\{[^}]*\};?\s*$/gm, '');
+    src = src.replace(/^export\s+(function|const|let|var|class)\s/gm, '$1 ');
+    deps += src + '\n\n';
+  }
+
+  const js = deps + toolJs;
+
+  // 3. Read CSS and template
+  const toolCss = fs.readFileSync(path.join(toolDir, 'style.css'), 'utf8');
+  const toolTemplate = fs.readFileSync(path.join(toolDir, 'template.html'), 'utf8');
+
+  // 4. Assemble
+  const html = `<!DOCTYPE html>
+<!-- dee \u2014 3D block model viewer -->
+<!-- Part of the Auditable project \u2014 https://github.com/endarthur/auditable -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#c89b3c">
+<title>dee</title>
+<style>
+${toolCss}
+</style>
+</head>
+<body>
+
+${toolTemplate}
+
+<script>
+${js}
+</script>
+</body>
+</html>
+`;
+
+  const outPath = path.join(toolDir, 'index.html');
+  fs.writeFileSync(outPath, html);
+  const size = fs.statSync(outPath).size;
+  console.log(`Built tools/dee/index.html (${(size / 1024).toFixed(1)} KB)`);
+  process.exit(0);
+}
+
+// ══════════════════════════════════════════════════
 // TARGET: rv
 // ══════════════════════════════════════════════════
 
