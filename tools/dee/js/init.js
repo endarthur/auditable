@@ -24,6 +24,9 @@
     if (e.key === '3') { D3.scene?.controls.sectionNorth(); D3.scene?.markDirty(); }
     if (e.key === '4') { D3.scene?.controls.sectionEast(); D3.scene?.markDirty(); }
     if (e.key === 'Tab') { e.preventDefault(); toggleSidebar(); }
+    if (e.key === 's' || e.key === 'S') { if (!e.ctrlKey && !e.metaKey) enterSectionMode(); }
+    if (e.key === 'w' || e.key === 'W') { if (!e.ctrlKey && !e.metaKey) toggleWireframe(); }
+    if (e.key === 'Escape') { if (D3.sectionMode) exitSectionMode(); }
   });
 
   // dirty check
@@ -59,6 +62,9 @@
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }
+
+  // section drag interaction
+  initSectionDrag();
 
   // menu bar
   initMenuBar();

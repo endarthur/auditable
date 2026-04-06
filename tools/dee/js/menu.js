@@ -20,12 +20,16 @@ function initMenuBar() {
       { label: 'Section East', action: () => D3.scene?.controls.sectionEast(), shortcut: '4' },
       { type: 'sep' },
       { label: 'Toggle Sidebar', action: toggleSidebar, shortcut: 'Tab' },
+      { label: 'Toggle Wireframe', action: toggleWireframe, shortcut: 'W' },
     ]},
     { label: 'Tools', items: [
       { label: 'Generate: Small (4K)', action: () => generateAndLoad('small') },
       { label: 'Generate: Medium (50K)', action: () => generateAndLoad('medium') },
       { label: 'Generate: Large (300K)', action: () => generateAndLoad('large') },
       { label: 'Generate: Stress (2M)', action: () => generateAndLoad('stress') },
+      { type: 'sep' },
+      { label: 'Draw Section Plane', action: enterSectionMode, shortcut: 'S' },
+      { label: 'Clear Section', action: clearSection },
     ]},
     { label: 'Help', items: [
       { label: 'Keyboard Shortcuts', action: showShortcuts },

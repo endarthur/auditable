@@ -259,10 +259,16 @@ export function meshSection(gridDef, compactVar, binIds, plane) {
     }
   }
 
-  // collect section faces as quads on the plane
+  // for each block near the plane, compute plane-cuboid intersection polygon
   const positions = [], normals = [], indices = [], binIdOut = [];
   let vertCount = 0;
   const s = gridDef.size, o = gridDef.origin;
+  const hx = s[0]/2, hy = s[1]/2, hz = s[2]/2;
+
+  // 12 edges of a cuboid: pairs of corner indices
+  // corners: 0(-,-,-) 1(+,-,-) 2(+,+,-) 3(-,+,-) 4(-,-,+) 5(+,-,+) 6(+,+,+) 7(-,+,+)
+  const _edges = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+  const _cornerSigns = [[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]];
 
   for (let kz = 0; kz < nz; kz++) {
     for (let j = 0; j < ny; j++) {
@@ -270,8 +276,6 @@ export function meshSection(gridDef, compactVar, binIds, plane) {
         let dx = i * s[0], dy = j * s[1], dz = kz * s[2];
         if (rot) { const r = _applyRot(rot, dx, dy, dz); dx = r[0]; dy = r[1]; dz = r[2]; }
         const cx = o[0] + dx, cy = o[1] + dy, cz = o[2] + dz;
-        const dist = Math.abs(nn[0]*cx + nn[1]*cy + nn[2]*cz - d);
-        if (dist > halfDist) continue;
 
         const idx = i + j * nx + kz * nxy;
         let binId;
@@ -283,33 +287,64 @@ export function meshSection(gridDef, compactVar, binIds, plane) {
           if (binId === 255) continue;
         }
 
-        // emit quad centered on block centroid, lying on the plane
-        // use block face closest to the plane normal
-        const hx = s[0]/2, hy = s[1]/2, hz = s[2]/2;
-        // simplified: emit block-sized quad perpendicular to plane normal
-        // compute tangent vectors
-        let t1, t2;
-        if (Math.abs(nn[2]) > 0.9) { t1 = [1,0,0]; t2 = [0,1,0]; }
-        else if (Math.abs(nn[1]) > 0.9) { t1 = [1,0,0]; t2 = [0,0,1]; }
-        else { t1 = [0,1,0]; t2 = [0,0,1]; }
+        // classify 8 corners against the plane
+        const cornerDists = [];
+        const cornerPos = [];
+        for (let c = 0; c < 8; c++) {
+          const px = cx + _cornerSigns[c][0] * hx;
+          const py = cy + _cornerSigns[c][1] * hy;
+          const pz = cz + _cornerSigns[c][2] * hz;
+          cornerPos.push(px, py, pz);
+          cornerDists.push(nn[0]*px + nn[1]*py + nn[2]*pz - d);
+        }
 
-        const hw = (Math.abs(t1[0])*hx + Math.abs(t1[1])*hy + Math.abs(t1[2])*hz);
-        const hh = (Math.abs(t2[0])*hx + Math.abs(t2[1])*hy + Math.abs(t2[2])*hz);
+        // find edge intersections (where sign changes)
+        const polyPts = [];
+        for (const [a, b] of _edges) {
+          if ((cornerDists[a] > 0) !== (cornerDists[b] > 0)) {
+            const t = cornerDists[a] / (cornerDists[a] - cornerDists[b]);
+            polyPts.push(
+              cornerPos[a*3]   + t * (cornerPos[b*3]   - cornerPos[a*3]),
+              cornerPos[a*3+1] + t * (cornerPos[b*3+1] - cornerPos[a*3+1]),
+              cornerPos[a*3+2] + t * (cornerPos[b*3+2] - cornerPos[a*3+2]),
+            );
+          }
+        }
 
+        const nPts = polyPts.length / 3;
+        if (nPts < 3) continue;
+
+        // order polygon vertices by angle around centroid on the plane
+        let pcx = 0, pcy = 0, pcz = 0;
+        for (let p = 0; p < nPts; p++) { pcx += polyPts[p*3]; pcy += polyPts[p*3+1]; pcz += polyPts[p*3+2]; }
+        pcx /= nPts; pcy /= nPts; pcz /= nPts;
+
+        // tangent basis for angle sorting
+        let t1x = polyPts[0] - pcx, t1y = polyPts[1] - pcy, t1z = polyPts[2] - pcz;
+        const t1len = Math.sqrt(t1x*t1x + t1y*t1y + t1z*t1z);
+        if (t1len < 1e-10) continue;
+        t1x /= t1len; t1y /= t1len; t1z /= t1len;
+        let t2x = nn[1]*t1z - nn[2]*t1y, t2y = nn[2]*t1x - nn[0]*t1z, t2z = nn[0]*t1y - nn[1]*t1x;
+
+        const angles = [];
+        for (let p = 0; p < nPts; p++) {
+          const dx = polyPts[p*3] - pcx, dy = polyPts[p*3+1] - pcy, dz = polyPts[p*3+2] - pcz;
+          angles.push(Math.atan2(dx*t2x+dy*t2y+dz*t2z, dx*t1x+dy*t1y+dz*t1z));
+        }
+        const order = Array.from({length: nPts}, (_, k) => k).sort((a, b) => angles[a] - angles[b]);
+
+        // emit fan triangulation
         const vi = vertCount;
-        for (let c = 0; c < 4; c++) {
-          const su = (c === 1 || c === 2) ? hw : -hw;
-          const sv = (c === 2 || c === 3) ? hh : -hh;
-          positions.push(
-            cx + t1[0]*su + t2[0]*sv,
-            cy + t1[1]*su + t2[1]*sv,
-            cz + t1[2]*su + t2[2]*sv,
-          );
+        for (let p = 0; p < nPts; p++) {
+          const oi = order[p];
+          positions.push(polyPts[oi*3], polyPts[oi*3+1], polyPts[oi*3+2]);
           normals.push(nn[0], nn[1], nn[2]);
         }
-        indices.push(vi, vi+1, vi+2, vi, vi+2, vi+3);
-        binIdOut.push(binId, binId);
-        vertCount += 4;
+        for (let p = 1; p < nPts - 1; p++) {
+          indices.push(vi, vi + p, vi + p + 1);
+          binIdOut.push(binId);
+        }
+        vertCount += nPts;
       }
     }
   }

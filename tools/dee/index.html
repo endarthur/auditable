@@ -1908,10 +1908,16 @@ function meshSection(gridDef, compactVar, binIds, plane) {
     }
   }
 
-  // collect section faces as quads on the plane
+  // for each block near the plane, compute plane-cuboid intersection polygon
   const positions = [], normals = [], indices = [], binIdOut = [];
   let vertCount = 0;
   const s = gridDef.size, o = gridDef.origin;
+  const hx = s[0]/2, hy = s[1]/2, hz = s[2]/2;
+
+  // 12 edges of a cuboid: pairs of corner indices
+  // corners: 0(-,-,-) 1(+,-,-) 2(+,+,-) 3(-,+,-) 4(-,-,+) 5(+,-,+) 6(+,+,+) 7(-,+,+)
+  const _edges = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+  const _cornerSigns = [[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]];
 
   for (let kz = 0; kz < nz; kz++) {
     for (let j = 0; j < ny; j++) {
@@ -1919,8 +1925,6 @@ function meshSection(gridDef, compactVar, binIds, plane) {
         let dx = i * s[0], dy = j * s[1], dz = kz * s[2];
         if (rot) { const r = _applyRot(rot, dx, dy, dz); dx = r[0]; dy = r[1]; dz = r[2]; }
         const cx = o[0] + dx, cy = o[1] + dy, cz = o[2] + dz;
-        const dist = Math.abs(nn[0]*cx + nn[1]*cy + nn[2]*cz - d);
-        if (dist > halfDist) continue;
 
         const idx = i + j * nx + kz * nxy;
         let binId;
@@ -1932,33 +1936,64 @@ function meshSection(gridDef, compactVar, binIds, plane) {
           if (binId === 255) continue;
         }
 
-        // emit quad centered on block centroid, lying on the plane
-        // use block face closest to the plane normal
-        const hx = s[0]/2, hy = s[1]/2, hz = s[2]/2;
-        // simplified: emit block-sized quad perpendicular to plane normal
-        // compute tangent vectors
-        let t1, t2;
-        if (Math.abs(nn[2]) > 0.9) { t1 = [1,0,0]; t2 = [0,1,0]; }
-        else if (Math.abs(nn[1]) > 0.9) { t1 = [1,0,0]; t2 = [0,0,1]; }
-        else { t1 = [0,1,0]; t2 = [0,0,1]; }
+        // classify 8 corners against the plane
+        const cornerDists = [];
+        const cornerPos = [];
+        for (let c = 0; c < 8; c++) {
+          const px = cx + _cornerSigns[c][0] * hx;
+          const py = cy + _cornerSigns[c][1] * hy;
+          const pz = cz + _cornerSigns[c][2] * hz;
+          cornerPos.push(px, py, pz);
+          cornerDists.push(nn[0]*px + nn[1]*py + nn[2]*pz - d);
+        }
 
-        const hw = (Math.abs(t1[0])*hx + Math.abs(t1[1])*hy + Math.abs(t1[2])*hz);
-        const hh = (Math.abs(t2[0])*hx + Math.abs(t2[1])*hy + Math.abs(t2[2])*hz);
+        // find edge intersections (where sign changes)
+        const polyPts = [];
+        for (const [a, b] of _edges) {
+          if ((cornerDists[a] > 0) !== (cornerDists[b] > 0)) {
+            const t = cornerDists[a] / (cornerDists[a] - cornerDists[b]);
+            polyPts.push(
+              cornerPos[a*3]   + t * (cornerPos[b*3]   - cornerPos[a*3]),
+              cornerPos[a*3+1] + t * (cornerPos[b*3+1] - cornerPos[a*3+1]),
+              cornerPos[a*3+2] + t * (cornerPos[b*3+2] - cornerPos[a*3+2]),
+            );
+          }
+        }
 
+        const nPts = polyPts.length / 3;
+        if (nPts < 3) continue;
+
+        // order polygon vertices by angle around centroid on the plane
+        let pcx = 0, pcy = 0, pcz = 0;
+        for (let p = 0; p < nPts; p++) { pcx += polyPts[p*3]; pcy += polyPts[p*3+1]; pcz += polyPts[p*3+2]; }
+        pcx /= nPts; pcy /= nPts; pcz /= nPts;
+
+        // tangent basis for angle sorting
+        let t1x = polyPts[0] - pcx, t1y = polyPts[1] - pcy, t1z = polyPts[2] - pcz;
+        const t1len = Math.sqrt(t1x*t1x + t1y*t1y + t1z*t1z);
+        if (t1len < 1e-10) continue;
+        t1x /= t1len; t1y /= t1len; t1z /= t1len;
+        let t2x = nn[1]*t1z - nn[2]*t1y, t2y = nn[2]*t1x - nn[0]*t1z, t2z = nn[0]*t1y - nn[1]*t1x;
+
+        const angles = [];
+        for (let p = 0; p < nPts; p++) {
+          const dx = polyPts[p*3] - pcx, dy = polyPts[p*3+1] - pcy, dz = polyPts[p*3+2] - pcz;
+          angles.push(Math.atan2(dx*t2x+dy*t2y+dz*t2z, dx*t1x+dy*t1y+dz*t1z));
+        }
+        const order = Array.from({length: nPts}, (_, k) => k).sort((a, b) => angles[a] - angles[b]);
+
+        // emit fan triangulation
         const vi = vertCount;
-        for (let c = 0; c < 4; c++) {
-          const su = (c === 1 || c === 2) ? hw : -hw;
-          const sv = (c === 2 || c === 3) ? hh : -hh;
-          positions.push(
-            cx + t1[0]*su + t2[0]*sv,
-            cy + t1[1]*su + t2[1]*sv,
-            cz + t1[2]*su + t2[2]*sv,
-          );
+        for (let p = 0; p < nPts; p++) {
+          const oi = order[p];
+          positions.push(polyPts[oi*3], polyPts[oi*3+1], polyPts[oi*3+2]);
           normals.push(nn[0], nn[1], nn[2]);
         }
-        indices.push(vi, vi+1, vi+2, vi, vi+2, vi+3);
-        binIdOut.push(binId, binId);
-        vertCount += 4;
+        for (let p = 1; p < nPts - 1; p++) {
+          indices.push(vi, vi + p, vi + p + 1);
+          binIdOut.push(binId);
+        }
+        vertCount += nPts;
       }
     }
   }
@@ -2387,11 +2422,12 @@ function addSectionLayer(dee, name, sectionMesh, opts = {}) {
   }
   geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
 
-  const mat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
+  const mat = new THREE.MeshPhongMaterial({ vertexColors: true, side: THREE.DoubleSide });
   const secGroup = new THREE.Group();
   secGroup.position.set(-dee.origin[0], -dee.origin[1], -dee.origin[2]);
   const mesh = new THREE.Mesh(geom, mat);
   mesh.name = name;
+  if (opts.pickable === false) mesh._noPick = true;
   secGroup.add(mesh);
 
   dee.scene.add(secGroup);
@@ -2918,10 +2954,66 @@ function createRaycaster(dee) {
       }
     });
 
-    const hits = raycaster.intersectObjects(objects, false);
+    const allHits = raycaster.intersectObjects(objects, false);
+    // filter out hits on the clipped side — only for objects that actually have clipping
+    const hits = allHits.filter(hit => {
+      const mat = hit.object?.material;
+      const hasClipping = mat?.clippingPlanes && mat.clippingPlanes.length > 0;
+      if (!hasClipping) return true; // unclipped objects always pass
+      for (const plane of mat.clippingPlanes) {
+        if (plane.distanceToPoint(hit.point) < -0.01) return false;
+      }
+      return true;
+    });
+    // also check section plane (ray-plane intersection, no mesh needed)
+    let _sectionPlaneEntry = null;
+    if (dee._sectionPlane) {
+      const planeHit = new THREE.Vector3();
+      const intersected = raycaster.ray.intersectPlane(dee._sectionPlane, planeHit);
+      if (intersected) {
+        const planeDist = planeHit.distanceTo(raycaster.ray.origin);
+        _sectionPlaneEntry = { point: planeHit, distance: planeDist, object: null, faceIndex: null, _sectionPlaneHit: true };
+        // insert at correct depth position
+        if (hits.length === 0 || planeDist < hits[0].distance) {
+          hits.unshift(_sectionPlaneEntry);
+        } else {
+          // insert sorted by distance
+          let inserted = false;
+          for (let i = 0; i < hits.length; i++) {
+            if (planeDist < hits[i].distance) { hits.splice(i, 0, _sectionPlaneEntry); inserted = true; break; }
+          }
+          if (!inserted) hits.push(_sectionPlaneEntry);
+        }
+      }
+    }
+
     if (hits.length === 0) return null;
 
-    const hit = hits[0];
+    // try hits in order — skip section plane hit if it doesn't resolve to a block
+    let hit = null;
+    for (const candidate of hits) {
+      if (candidate._sectionPlaneHit) {
+        // check if this resolves to an actual block before accepting
+        const invScene = new THREE.Matrix4().copy(dee.scene.matrixWorld).invert();
+        const testPt = candidate.point.clone().applyMatrix4(invScene);
+        const testGeo = [testPt.x + dee.origin[0], testPt.y + dee.origin[1], testPt.z + dee.origin[2]];
+        const { locate } = window._gcu_grid || {};
+        if (locate) {
+          // find any layer with gridDef
+          let gd = null;
+          for (const [_, l] of dee._layers) { if (l.gridDef) { gd = l.gridDef; break; } }
+          if (gd && locate(gd, testGeo[0], testGeo[1], testGeo[2]) >= 0) {
+            hit = candidate;
+            break;
+          }
+        }
+        // no block found — skip this hit, try next
+        continue;
+      }
+      hit = candidate;
+      break;
+    }
+    if (!hit) return null;
     // hit.point is in Three.js world space (scene rotation applied)
     // undo scene rotation to get geological coords, then add origin
     const invScene = new THREE.Matrix4().copy(dee.scene.matrixWorld).invert();
@@ -2934,10 +3026,15 @@ function createRaycaster(dee) {
 
     // determine layer
     let layerName = null, layerType = null;
-    for (const [name, layer] of dee._layers) {
-      if (layer.group) {
+    if (hit._sectionPlaneHit) {
+      layerName = '_sectionPlane'; layerType = 'section';
+    } else {
+      for (const [name, layer] of dee._layers) {
         let found = false;
-        layer.group.traverse(obj => { if (obj === hit.object) found = true; });
+        if (layer.group) {
+          layer.group.traverse(obj => { if (obj === hit.object) found = true; });
+        }
+        if (!found && layer.mesh === hit.object) found = true;
         if (found) { layerName = name; layerType = layer.type; break; }
       }
     }
@@ -3225,11 +3322,17 @@ function createRaycaster(dee) {
     const handler = (result) => {
       if (!result) { clearHighlight(); label.textContent = ''; return; }
 
-      if (result.type === 'blockmodel') {
-        // look up gridDef and compactVar from the layer
-        const layer = result.layer ? dee._layers.get(result.layer) : null;
-        const gd = layer?.gridDef;
-        const cv = layer?.compactVar;
+      if (result.type === 'blockmodel' || result.type === 'section') {
+        // look up gridDef and compactVar from the layer (or from a block model layer for sections)
+        let layer = result.layer ? dee._layers.get(result.layer) : null;
+        let gd = layer?.gridDef;
+        let cv = layer?.compactVar;
+        // section layers may not have gridDef — fall back to any block model layer
+        if (!gd) {
+          for (const [_, l] of dee._layers) {
+            if (l.gridDef) { gd = l.gridDef; cv = l.compactVar; break; }
+          }
+        }
         if (gd) {
           const info = resolveBlock(result, gd, cv);
           if (info) {
@@ -4950,6 +5053,11 @@ const D3 = {
   blockLayer: null,
   holeLayer: null,
 
+  // section
+  sectionMode: false,
+  sectionClip: null,
+  sectionLayer: null,
+
   // UI
   dirty: false,
   fileName: null,
@@ -5269,6 +5377,7 @@ function loadBlockModel(gridDef, compactVar, columnName) {
   const t0 = performance.now();
   const hint = Math.max(16, Math.min(64, Math.ceil(Math.max(gridDef.count[0], gridDef.count[1], gridDef.count[2]) / 4)));
   D3.prepared = _voxmesh.prepare(gridDef, compactVar, { count: D3.binCount, hint });
+  D3.breaks = D3.prepared.breaks;
   D3.perf.meshTime = performance.now() - t0;
 
   // count triangles
@@ -5322,7 +5431,8 @@ function updateCutoff(value) {
 
   const t0 = performance.now();
   const hint = Math.max(16, Math.min(64, Math.ceil(Math.max(D3.gridDef.count[0], D3.gridDef.count[1], D3.gridDef.count[2]) / 4)));
-  const prepared = _voxmesh.prepare(D3.gridDef, compactVar, { count: D3.binCount, hint });
+  // use same breaks as the full model so colors stay consistent
+  const prepared = _voxmesh.prepare(D3.gridDef, compactVar, { breaks: D3.breaks, hint });
   D3.perf.meshTime = performance.now() - t0;
 
   let tris = 0;
@@ -5355,6 +5465,165 @@ function teardownScene() {
   D3.blockLayer = null;
   D3.holeLayer = null;
   D3.prepared = null;
+  D3.sectionMode = false;
+  D3.sectionClip = null;
+  D3.sectionLayer = null;
+}
+
+function toggleWireframe() {
+  if (!D3.scene) return;
+  D3.scene.scene.traverse(obj => {
+    if (obj.isMesh && obj.material && !obj._isHighlight) {
+      obj.material.wireframe = !obj.material.wireframe;
+    }
+  });
+  D3.scene.markDirty();
+}
+
+function _getCurrentCompactVar() {
+  const cv = D3.columns[D3.activeColumn];
+  if (!cv) return null;
+  if (D3.cutoff === null) return cv;
+  const aboveMask = _grid.maskAboveValue(cv.values, D3.cutoff);
+  const aboveLocal = _grid.maskToIndices(aboveMask);
+  return {
+    values: _grid.take(cv.values, aboveLocal),
+    indices: _grid.take(cv.indices, aboveLocal),
+  };
+}
+
+// ── section plane via click-drag ──
+
+function enterSectionMode() {
+  if (!D3.scene) return;
+  D3.sectionMode = true;
+  const vp = $('#d3-viewport');
+  if (vp) vp.style.cursor = 'crosshair';
+  // disable orbit controls during section draw
+  if (D3.scene?.controls._controls) D3.scene.controls._controls.enabled = false;
+  updateStatus();
+  const msg = $('#d3-status-msg');
+  if (msg) msg.textContent = 'click and drag to define section plane';
+}
+
+function exitSectionMode() {
+  D3.sectionMode = false;
+  const vp = $('#d3-viewport');
+  if (vp) vp.style.cursor = '';
+  if (D3.scene?.controls._controls) D3.scene.controls._controls.enabled = true;
+  updateStatus();
+}
+
+function clearSection() {
+  if (D3.sectionClip) { D3.sectionClip.remove(); D3.sectionClip = null; }
+  if (D3.sectionLayer) { D3.scene.removeLayer('section'); D3.sectionLayer = null; }
+  if (D3.scene) D3.scene._sectionPlane = null;
+  D3.scene?.markDirty();
+}
+
+function initSectionDrag() {
+  const canvas = $('#d3-viewport');
+  if (!canvas) return;
+  let startX = null, startY = null;
+  let lineEl = null;
+
+  canvas.addEventListener('mousedown', (e) => {
+    if (!D3.sectionMode || e.button !== 0) return;
+    startX = e.offsetX; startY = e.offsetY;
+    // create drag line overlay
+    lineEl = document.createElement('div');
+    lineEl.className = 'd3-section-line';
+    lineEl.style.cssText = `position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:20;`;
+    canvas.appendChild(lineEl);
+  });
+
+  canvas.addEventListener('mousemove', (e) => {
+    if (!D3.sectionMode || startX === null || !lineEl) return;
+    // draw SVG line
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    lineEl.innerHTML = `<svg width="${w}" height="${h}" style="position:absolute;top:0;left:0">
+      <line x1="${startX}" y1="${startY}" x2="${e.offsetX}" y2="${e.offsetY}" stroke="#c89b3c" stroke-width="2" stroke-dasharray="6,4"/>
+    </svg>`;
+  });
+
+  canvas.addEventListener('mouseup', (e) => {
+    if (!D3.sectionMode || startX === null) return;
+    const endX = e.offsetX, endY = e.offsetY;
+    if (lineEl) { lineEl.remove(); lineEl = null; }
+
+    // need minimum drag distance
+    const dx = endX - startX, dy = endY - startY;
+    if (dx * dx + dy * dy < 100) { startX = null; return; }
+
+    // compute section plane from the two screen points + camera
+    applySection(startX, startY, endX, endY);
+    startX = null;
+    exitSectionMode();
+  });
+}
+
+function applySection(x1, y1, x2, y2) {
+  if (!D3.scene || !D3.gridDef) return;
+  const THREE = globalThis.THREE;
+  const camera = D3.scene.camera;
+  const vp = $('#d3-viewport');
+  const w = vp.clientWidth, h = vp.clientHeight;
+
+  // three points define the plane: camera + two unprojected screen points
+  const a = new THREE.Vector3((x1 / w) * 2 - 1, -(y1 / h) * 2 + 1, 0.5).unproject(camera);
+  const b = new THREE.Vector3((x2 / w) * 2 - 1, -(y2 / h) * 2 + 1, 0.5).unproject(camera);
+  const c = camera.position;
+
+  const ca = a.clone().sub(c);
+  const cb = b.clone().sub(c);
+  const normal = ca.clone().cross(cb).normalize();
+  if (normal.lengthSq() < 0.001) return;
+
+  // clear previous
+  clearSection();
+
+  // clip plane in world space
+  const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, c);
+
+  clearSection();
+  D3.scene.clippingPlanes.push(plane);
+
+  // section fill: use the same filtered data as the current view
+  const cv = _getCurrentCompactVar();
+  if (cv && D3.prepared) {
+    const invScene = new THREE.Matrix4().copy(D3.scene.scene.matrixWorld).invert();
+    const normMat = new THREE.Matrix3().getNormalMatrix(invScene);
+
+    // transform midpoint of drag to geological coords
+    const midWorld = a.clone().add(b).multiplyScalar(0.5);
+    const midGeo = midWorld.clone().applyMatrix4(invScene);
+    const normalGeo = normal.clone().applyMatrix3(normMat).normalize();
+
+    const geoPoint = [midGeo.x + D3.scene.origin[0], midGeo.y + D3.scene.origin[1], midGeo.z + D3.scene.origin[2]];
+    const geoNormal = [normalGeo.x, normalGeo.y, normalGeo.z];
+
+    const binIds = _voxmesh.discretize(cv.values, D3.breaks);
+    const sectionMesh = _voxmesh.meshSection(D3.gridDef, cv, binIds, { point: geoPoint, normal: geoNormal });
+    if (sectionMesh.positions.length > 0) {
+      const cmap = colorMap({ breaks: D3.breaks, palette: D3.palette });
+      D3.sectionLayer = D3.scene.addSection('section', sectionMesh, { colorMap: cmap, pickable: false });
+
+      // store plane on dee for ray-plane picking (no mesh needed)
+      D3.scene._sectionPlane = plane;
+    }
+  }
+
+  D3.scene.markDirty();
+
+  D3.sectionClip = {
+    plane,
+    remove() {
+      const idx = D3.scene.clippingPlanes.indexOf(plane);
+      if (idx >= 0) D3.scene.clippingPlanes.splice(idx, 1);
+      D3.scene.markDirty();
+    },
+    flip() { plane.negate(); D3.scene.markDirty(); },
+  };
 }
 
 // -- perf.js --
@@ -5420,12 +5689,16 @@ function initMenuBar() {
       { label: 'Section East', action: () => D3.scene?.controls.sectionEast(), shortcut: '4' },
       { type: 'sep' },
       { label: 'Toggle Sidebar', action: toggleSidebar, shortcut: 'Tab' },
+      { label: 'Toggle Wireframe', action: toggleWireframe, shortcut: 'W' },
     ]},
     { label: 'Tools', items: [
       { label: 'Generate: Small (4K)', action: () => generateAndLoad('small') },
       { label: 'Generate: Medium (50K)', action: () => generateAndLoad('medium') },
       { label: 'Generate: Large (300K)', action: () => generateAndLoad('large') },
       { label: 'Generate: Stress (2M)', action: () => generateAndLoad('stress') },
+      { type: 'sep' },
+      { label: 'Draw Section Plane', action: enterSectionMode, shortcut: 'S' },
+      { label: 'Clear Section', action: clearSection },
     ]},
     { label: 'Help', items: [
       { label: 'Keyboard Shortcuts', action: showShortcuts },
@@ -5712,6 +5985,9 @@ function closeSplash() {
     if (e.key === '3') { D3.scene?.controls.sectionNorth(); D3.scene?.markDirty(); }
     if (e.key === '4') { D3.scene?.controls.sectionEast(); D3.scene?.markDirty(); }
     if (e.key === 'Tab') { e.preventDefault(); toggleSidebar(); }
+    if (e.key === 's' || e.key === 'S') { if (!e.ctrlKey && !e.metaKey) enterSectionMode(); }
+    if (e.key === 'w' || e.key === 'W') { if (!e.ctrlKey && !e.metaKey) toggleWireframe(); }
+    if (e.key === 'Escape') { if (D3.sectionMode) exitSectionMode(); }
   });
 
   // dirty check
@@ -5747,6 +6023,9 @@ function closeSplash() {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }
+
+  // section drag interaction
+  initSectionDrag();
 
   // menu bar
   initMenuBar();

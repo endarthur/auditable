@@ -27,6 +27,11 @@ const D3 = {
   blockLayer: null,
   holeLayer: null,
 
+  // section
+  sectionMode: false,
+  sectionClip: null,
+  sectionLayer: null,
+
   // UI
   dirty: false,
   fileName: null,

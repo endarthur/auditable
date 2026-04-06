@@ -24,10 +24,66 @@ export function createRaycaster(dee) {
       }
     });
 
-    const hits = raycaster.intersectObjects(objects, false);
+    const allHits = raycaster.intersectObjects(objects, false);
+    // filter out hits on the clipped side — only for objects that actually have clipping
+    const hits = allHits.filter(hit => {
+      const mat = hit.object?.material;
+      const hasClipping = mat?.clippingPlanes && mat.clippingPlanes.length > 0;
+      if (!hasClipping) return true; // unclipped objects always pass
+      for (const plane of mat.clippingPlanes) {
+        if (plane.distanceToPoint(hit.point) < -0.01) return false;
+      }
+      return true;
+    });
+    // also check section plane (ray-plane intersection, no mesh needed)
+    let _sectionPlaneEntry = null;
+    if (dee._sectionPlane) {
+      const planeHit = new THREE.Vector3();
+      const intersected = raycaster.ray.intersectPlane(dee._sectionPlane, planeHit);
+      if (intersected) {
+        const planeDist = planeHit.distanceTo(raycaster.ray.origin);
+        _sectionPlaneEntry = { point: planeHit, distance: planeDist, object: null, faceIndex: null, _sectionPlaneHit: true };
+        // insert at correct depth position
+        if (hits.length === 0 || planeDist < hits[0].distance) {
+          hits.unshift(_sectionPlaneEntry);
+        } else {
+          // insert sorted by distance
+          let inserted = false;
+          for (let i = 0; i < hits.length; i++) {
+            if (planeDist < hits[i].distance) { hits.splice(i, 0, _sectionPlaneEntry); inserted = true; break; }
+          }
+          if (!inserted) hits.push(_sectionPlaneEntry);
+        }
+      }
+    }
+
     if (hits.length === 0) return null;
 
-    const hit = hits[0];
+    // try hits in order — skip section plane hit if it doesn't resolve to a block
+    let hit = null;
+    for (const candidate of hits) {
+      if (candidate._sectionPlaneHit) {
+        // check if this resolves to an actual block before accepting
+        const invScene = new THREE.Matrix4().copy(dee.scene.matrixWorld).invert();
+        const testPt = candidate.point.clone().applyMatrix4(invScene);
+        const testGeo = [testPt.x + dee.origin[0], testPt.y + dee.origin[1], testPt.z + dee.origin[2]];
+        const { locate } = window._gcu_grid || {};
+        if (locate) {
+          // find any layer with gridDef
+          let gd = null;
+          for (const [_, l] of dee._layers) { if (l.gridDef) { gd = l.gridDef; break; } }
+          if (gd && locate(gd, testGeo[0], testGeo[1], testGeo[2]) >= 0) {
+            hit = candidate;
+            break;
+          }
+        }
+        // no block found — skip this hit, try next
+        continue;
+      }
+      hit = candidate;
+      break;
+    }
+    if (!hit) return null;
     // hit.point is in Three.js world space (scene rotation applied)
     // undo scene rotation to get geological coords, then add origin
     const invScene = new THREE.Matrix4().copy(dee.scene.matrixWorld).invert();
@@ -40,10 +96,15 @@ export function createRaycaster(dee) {
 
     // determine layer
     let layerName = null, layerType = null;
-    for (const [name, layer] of dee._layers) {
-      if (layer.group) {
+    if (hit._sectionPlaneHit) {
+      layerName = '_sectionPlane'; layerType = 'section';
+    } else {
+      for (const [name, layer] of dee._layers) {
         let found = false;
-        layer.group.traverse(obj => { if (obj === hit.object) found = true; });
+        if (layer.group) {
+          layer.group.traverse(obj => { if (obj === hit.object) found = true; });
+        }
+        if (!found && layer.mesh === hit.object) found = true;
         if (found) { layerName = name; layerType = layer.type; break; }
       }
     }
@@ -331,11 +392,17 @@ export function createRaycaster(dee) {
     const handler = (result) => {
       if (!result) { clearHighlight(); label.textContent = ''; return; }
 
-      if (result.type === 'blockmodel') {
-        // look up gridDef and compactVar from the layer
-        const layer = result.layer ? dee._layers.get(result.layer) : null;
-        const gd = layer?.gridDef;
-        const cv = layer?.compactVar;
+      if (result.type === 'blockmodel' || result.type === 'section') {
+        // look up gridDef and compactVar from the layer (or from a block model layer for sections)
+        let layer = result.layer ? dee._layers.get(result.layer) : null;
+        let gd = layer?.gridDef;
+        let cv = layer?.compactVar;
+        // section layers may not have gridDef — fall back to any block model layer
+        if (!gd) {
+          for (const [_, l] of dee._layers) {
+            if (l.gridDef) { gd = l.gridDef; cv = l.compactVar; break; }
+          }
+        }
         if (gd) {
           const info = resolveBlock(result, gd, cv);
           if (info) {

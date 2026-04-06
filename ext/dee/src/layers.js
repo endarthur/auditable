@@ -125,11 +125,12 @@ export function addSectionLayer(dee, name, sectionMesh, opts = {}) {
   }
   geom.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
 
-  const mat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
+  const mat = new THREE.MeshPhongMaterial({ vertexColors: true, side: THREE.DoubleSide });
   const secGroup = new THREE.Group();
   secGroup.position.set(-dee.origin[0], -dee.origin[1], -dee.origin[2]);
   const mesh = new THREE.Mesh(geom, mat);
   mesh.name = name;
+  if (opts.pickable === false) mesh._noPick = true;
   secGroup.add(mesh);
 
   dee.scene.add(secGroup);
