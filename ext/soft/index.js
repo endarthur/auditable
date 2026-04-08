@@ -2907,10 +2907,43 @@ function softCompletions(prefix) {
 
 
 
+
+// ensure locale is active for parsing (DAG analysis may run before locale cell executes)
+function _ensureLocale() {
+  if (softGetLocale()) return; // already active
+  if (typeof window === 'undefined') return;
+  // check installed modules for a locale
+  const mods = window._installedModules;
+  if (!mods) return;
+  for (const key of Object.keys(mods)) {
+    if (key.startsWith('@gcu/soft/') && key !== '@gcu/soft') {
+      try {
+        let src = mods[key];
+        if (src.compressed && !src.binary && window.decompressText) {
+          // can't await here — try sync parse if source is already decoded
+          return;
+        }
+        if (typeof src === 'string') { softSetLocale(JSON.parse(src)); return; }
+        if (src.source && !src.compressed) { softSetLocale(JSON.parse(src.source)); return; }
+      } catch { /* ignore */ }
+    }
+  }
+  // check import cache
+  const cache = window._importCache;
+  if (!cache) return;
+  for (const key of Object.keys(cache)) {
+    if (key.startsWith('@gcu/soft/') && key !== '@gcu/soft' && cache[key]?.keywords) {
+      softSetLocale(cache[key]);
+      return;
+    }
+  }
+}
+
 // ── parseNames: extract top-level variable defines ──
 // Walks the AST for Set, Define, Capture, Use at top level.
 
 function softParseNames(code) {
+  _ensureLocale();
   try {
     const ast = softParse(code);
     const defines = new Set();
@@ -2963,6 +2996,7 @@ function _parseNamesRegex(code) {
 // ── findUses: find references to other cells ──
 
 function softFindUses(code, allDefined) {
+  _ensureLocale();
   const selfDefines = softParseNames(code);
   const uses = new Set();
   // strip comments and strings, then scan for identifiers
