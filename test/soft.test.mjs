@@ -1453,7 +1453,7 @@ describe('soft pt-BR locale', () => {
 pegue dados
 mantenha grau acima 50
 conte
-diga "resultado: " it`;
+diga "resultado: " isso`;
       assert.deepEqual(out(code), ['resultado: 2']);
     });
 
@@ -1474,7 +1474,7 @@ diga dobro 5`;
 pegue d
 ordene por g decrescente
 média de g
-diga it`;
+diga isso`;
       assert.deepEqual(out(code), ['20']);
     });
 

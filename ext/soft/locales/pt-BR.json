@@ -19,7 +19,7 @@
     "round":      ["arredonde", "arredondar"],
     "with":       ["com"],
 
-    "set":        ["defina"],
+    "set":        ["defina", "atribua", "atribuir"],
     "to":         ["para"],
     "of":         ["de", "do", "da", "dos", "das"],
     "say":        ["diga", "dizer", "diz", "fala", "fale"],
@@ -93,7 +93,11 @@
     "assume":     ["assuma", "assumir"],
     "suppose":    ["suponha", "supor"],
     "try":        ["tente", "tentar"],
-    "fails":      ["falha", "falhar"]
+    "fails":      ["falha", "falhar"],
+    "it":         ["isso"],
+    "that":       ["aquilo"],
+    "there":      ["há"],
+    "the":        ["o", "a", "os", "as"]
   },
-  "noise": ["o", "a", "os", "as", "um", "uma", "este", "esse", "esta", "essa"]
+  "noise": ["um", "uma", "este", "esse", "esta", "essa"]
 }
