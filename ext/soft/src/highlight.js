@@ -1,6 +1,6 @@
 // soft — syntax highlighting tokenizer + completions for CM6
 
-import { KEYWORDS } from './tokenize.js';
+import { KEYWORDS, softGetLocale } from './tokenize.js';
 
 const SOFT_KEYWORDS = [...KEYWORDS];
 const _kwSet = new Set(SOFT_KEYWORDS);
@@ -73,15 +73,18 @@ export function tokenizeSoft(code) {
     if (/[\p{L}_]/u.test(ch)) {
       const start = i;
       while (i < len && /[\p{L}\p{N}_.]/u.test(code[i])) i++;
-      const word = code.slice(start, i);
-      const isDotPath = word.includes('.');
+      const rawWord = code.slice(start, i);
+      const isDotPath = rawWord.includes('.');
+      // resolve locale: map Portuguese words to English canonical for classification
+      const locale = softGetLocale();
+      const word = (!isDotPath && locale?.[rawWord.toLowerCase()]) || rawWord;
       let type;
       if (isDotPath) type = 'fn';
       else if (_builtinSet.has(word)) type = 'fn';
       else if (SOFT_TRANSFORMS.has(word)) type = 'tf';
       else if (_kwSet.has(word)) type = 'kw';
       else type = 'id';
-      tokens.push({ type, text: word });
+      tokens.push({ type, text: rawWord });
       continue;
     }
 

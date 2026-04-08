@@ -1281,8 +1281,8 @@ function softParse(code) {
       return N('While', { cond: N('Unary', { op: 'not', expr: cond }), body });
     }
     // repeat from X to Y [by Z] as I
-    if (kw('from')) {
-      pos++;
+    if (kw('from') || kw('of')) {
+      pos++; // "repeat from X to Y" / "repita de X para Y"
       const from = arithmetic();
       expectKw('to');
       const to = arithmetic();
@@ -1545,6 +1545,11 @@ function softParse(code) {
 
   function filterRaw() {
     const op = cur().value; pos++;
+    // optional filler: "keep if ...", "keep rows where ...", "keep lines where ..."
+    if (!eatKw('if')) {
+      const saved = pos;
+      if ((eatKw('rows') || eatKw('lines')) && !eatKw('where')) pos = saved; // backtrack if no 'where'
+    }
     const cond = condition();
     return N('Filter', { op: (op === 'drop') ? 'drop' : 'keep', cond });
   }
@@ -2815,15 +2820,18 @@ function tokenizeSoft(code) {
     if (/[\p{L}_]/u.test(ch)) {
       const start = i;
       while (i < len && /[\p{L}\p{N}_.]/u.test(code[i])) i++;
-      const word = code.slice(start, i);
-      const isDotPath = word.includes('.');
+      const rawWord = code.slice(start, i);
+      const isDotPath = rawWord.includes('.');
+      // resolve locale: map Portuguese words to English canonical for classification
+      const locale = softGetLocale();
+      const word = (!isDotPath && locale?.[rawWord.toLowerCase()]) || rawWord;
       let type;
       if (isDotPath) type = 'fn';
       else if (_builtinSet.has(word)) type = 'fn';
       else if (SOFT_TRANSFORMS.has(word)) type = 'tf';
       else if (_kwSet.has(word)) type = 'kw';
       else type = 'id';
-      tokens.push({ type, text: word });
+      tokens.push({ type, text: rawWord });
       continue;
     }
 
@@ -2907,32 +2915,10 @@ function softCompletions(prefix) {
 
 
 
-
-// ensure locale is active for parsing (DAG analysis may run before locale cell executes)
-function _ensureLocale() {
-  if (softGetLocale()) return; // already active
-  if (typeof window === 'undefined') return;
-  // check stored raw locale (set by _softSetLocale wrapper in register.js)
-  if (window._softActiveLocale) {
-    softSetLocale(window._softActiveLocale);
-    return;
-  }
-  // check import cache
-  const cache = window._importCache;
-  if (!cache) return;
-  for (const key of Object.keys(cache)) {
-    if (key.startsWith('@gcu/soft/') && key !== '@gcu/soft' && cache[key]?.keywords) {
-      softSetLocale(cache[key]);
-      return;
-    }
-  }
-}
-
 // ── parseNames: extract top-level variable defines ──
 // Walks the AST for Set, Define, Capture, Use at top level.
 
 function softParseNames(code) {
-  _ensureLocale();
   try {
     const ast = softParse(code);
     const defines = new Set();
@@ -2949,6 +2935,7 @@ function _collectDefines(node, defines) {
     case 'Define': defines.add(node.name); break;
     case 'Capture': defines.add(node.name); break;
     case 'Use': defines.add(node.alias || node.path.split('.').pop()); break;
+    case 'Load': if (node.name) defines.add(node.name); break;
     case 'PipeCalled': if (node.name) defines.add(node.name); _collectDefines(node.step, defines); break;
     case 'If':
       for (const s of node.body) _collectDefines(s, defines);
@@ -2985,7 +2972,6 @@ function _parseNamesRegex(code) {
 // ── findUses: find references to other cells ──
 
 function softFindUses(code, allDefined) {
-  _ensureLocale();
   const selfDefines = softParseNames(code);
   const uses = new Set();
   // strip comments and strings, then scan for identifiers
@@ -3066,43 +3052,43 @@ async function softExecute(code, scopeIn, cell) {
     return text;
   };
 
-  // pre-fetch URLs for load statements (async before sync evaluator runs)
-  const prefetched = {};
-  const urlPattern = /\bload\s+"(https?:\/\/[^"]+)"/g;
-  let urlMatch;
-  while ((urlMatch = urlPattern.exec(code))) {
-    const url = urlMatch[1];
-    try { prefetched[url] = await (await fetch(url)).text(); } catch (e) { /* fetched at eval time */ }
+  // pre-read all files referenced in load statements (async, before sync evaluator)
+  // parse the AST to find Load nodes — works regardless of locale
+  const preloaded = {};
+  const nbFs = hasCtx ? cell._ctx?.notebook?.fs : null;
+  let loadPaths = [];
+  try {
+    const ast = softParse(code);
+    for (const node of ast.body) {
+      if (node.type === 'Load' && node.path?.type === 'Str') loadPaths.push(node.path.value);
+    }
+  } catch { /* parse error — no pre-loading */ }
+  for (const path of loadPaths) {
+    try {
+      if (path.startsWith('http://') || path.startsWith('https://')) {
+        preloaded[path] = await (await fetch(path)).text();
+      } else if (nbFs) {
+        preloaded[path] = await nbFs.read(path);
+      }
+    } catch { /* will error at eval time */ }
   }
 
-  // file I/O via VFS + prefetch cache
-  const vfs = (typeof window !== 'undefined' && window._notebookVFS) ? window._notebookVFS : null;
   host.load = (path) => {
-    // prefetched URL
-    if (prefetched[path]) return parseContent(path, prefetched[path]);
-    // VFS
-    if (vfs) {
-      try {
-        const content = vfs.readFileSync(path, 'utf8');
-        return parseContent(path, content);
-      } catch { /* fall through */ }
-    }
-    // scope variable (load variableName)
+    if (preloaded[path] !== undefined) return parseContent(path, preloaded[path]);
     if (path in scopeIn) return scopeIn[path];
     throw new Error(`Cannot load "${path}": file not found`);
   };
-  if (vfs) {
-    host.save = (path, data) => {
+  if (nbFs) {
+    host.save = async (path, data) => {
       let content;
       if (typeof data === 'string') content = data;
       else if (Array.isArray(data) && data.length > 0 && typeof data[0] === 'object') {
-        // CSV from array of records
         const keys = Object.keys(data[0]);
         content = keys.join(',') + '\n' + data.map(r => keys.map(k => r[k] ?? '').join(',')).join('\n');
       } else {
         content = JSON.stringify(data, null, 2);
       }
-      vfs.writeFileSync(path, content);
+      await nbFs.write(path, content);
     };
   }
 
@@ -3299,13 +3285,112 @@ if (!window._cellTypes?.['soft']) {
 }
 
 
-// expose setLocale on window for easy access from JS cells
-window._softSetLocale = (locale) => {
-  softSetLocale(locale);
-  // store raw locale for _ensureLocale to find on page reload
-  if (locale) window._softActiveLocale = locale;
-  else delete window._softActiveLocale;
-};
+// expose for manual use (e.g. from browser console)
+window._softSetLocale = softSetLocale;
+
+// register a locale as a new cell type (e.g. 'soft-ptbr')
+function registerLocale(localeData) {
+  const localeName = (localeData.locale || 'unknown').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const cellType = 'soft-' + localeName;
+
+  // activate globally (for the base 'soft' type too)
+  softSetLocale(localeData);
+
+  // create locale-aware wrapper functions
+  const withLocale = (fn) => (...args) => {
+    const prev = softGetLocale();
+    softSetLocale(localeData);
+    try { return fn(...args); } finally { if (!prev) softSetLocale(null); }
+  };
+
+  const localeHandler = {
+    label: cellType,
+    color: '#c89b3c',
+    shortcut: null, // no keyboard shortcut for locale variants
+    editDebounce: 500,
+    indent: softIndent,
+    indentUnit: '  ',
+    parseNames: withLocale(softParseNames),
+    syntaxCheck: withLocale((code) => { try { softParse(code); return true; } catch { return false; } }),
+    findUses: withLocale(softFindUses),
+    execute: async (code, scopeIn, cell) => {
+      softSetLocale(localeData);
+      return softExecute(code, scopeIn, cell);
+    },
+    tokenize: withLocale(tokenizeSoft),
+    completions: withLocale((prefix) => softCompletions(prefix)),
+    createEditor: (cell, onChange) => {
+      if (!window._ctCreateEditor) return null;
+      const wrap = document.createElement('div');
+      wrap.className = 'editor-wrap';
+      const editor = window._ctCreateEditor(wrap, cell.id, cell.code, cellType, onChange);
+      return {
+        el: wrap,
+        getCode: () => editor.view.state.doc.toString(),
+        setCode: (s) => editor.view.dispatch({ changes: { from: 0, to: editor.view.state.doc.length, insert: s } }),
+        focus: () => editor.focus(),
+        destroy: () => editor.destroy(),
+      };
+    },
+  };
+
+  // register cell type
+  if (window.registerCellType) {
+    window.registerCellType(cellType, localeHandler, '@gcu/soft/' + localeData.locale);
+  } else if (window._cellTypes) {
+    window._cellTypes[cellType] = localeHandler;
+  }
+
+  // register tagged language
+  window._taggedLanguages = window._taggedLanguages || {};
+  window._taggedLanguages[cellType] = {
+    tokenize: localeHandler.tokenize,
+    completions: localeHandler.completions,
+    indent: softIndent,
+  };
+
+  // configure autocomplete for existing cells of this type
+  if (window._configurePluginAutocomplete) {
+    window._configurePluginAutocomplete(cellType);
+  }
+
+}
+
+// load a locale by name — handles dev-mode fetch + installed module decompression
+async function loadLocale(name) {
+  // check import cache
+  if (window._importCache?.['@gcu/soft/' + name]) {
+    registerLocale(window._importCache['@gcu/soft/' + name]);
+    return;
+  }
+  // check installed modules (saved notebook — gzip+base64 compressed JSON)
+  const key = '@gcu/soft/' + name;
+  if (window._installedModules?.[key]) {
+    let src = window._installedModules[key];
+    if (src.compressed && !src.binary && typeof src.source === 'string') {
+      // decompress gzip+base64
+      const bin = Uint8Array.from(atob(src.source), c => c.charCodeAt(0));
+      const ds = new DecompressionStream('gzip');
+      const writer = ds.writable.getWriter();
+      writer.write(bin); writer.close();
+      src = await new Response(ds.readable).text();
+    } else if (src.source) {
+      src = src.source;
+    }
+    const data = typeof src === 'string' ? JSON.parse(src) : src;
+    window._importCache = window._importCache || {};
+    window._importCache[key] = data;
+    registerLocale(data);
+    return;
+  }
+  // dev-mode: fetch from filesystem
+  const resp = await fetch(`./ext/soft/locales/${name}.json`);
+  if (!resp.ok) throw new Error(`Locale "${name}" not found`);
+  const data = await resp.json();
+  window._importCache = window._importCache || {};
+  window._importCache[key] = data;
+  registerLocale(data);
+}
 
 const soft = {
   softTag,
@@ -3315,6 +3400,8 @@ const soft = {
   tokenizeSoft,
   softCompletions,
   setLocale: softSetLocale,
+  registerLocale,
+  loadLocale,
 };
 
 export { soft };

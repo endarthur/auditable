@@ -1019,8 +1019,8 @@ export function softParse(code) {
       return N('While', { cond: N('Unary', { op: 'not', expr: cond }), body });
     }
     // repeat from X to Y [by Z] as I
-    if (kw('from')) {
-      pos++;
+    if (kw('from') || kw('of')) {
+      pos++; // "repeat from X to Y" / "repita de X para Y"
       const from = arithmetic();
       expectKw('to');
       const to = arithmetic();
@@ -1283,6 +1283,11 @@ export function softParse(code) {
 
   function filterRaw() {
     const op = cur().value; pos++;
+    // optional filler: "keep if ...", "keep rows where ...", "keep lines where ..."
+    if (!eatKw('if')) {
+      const saved = pos;
+      if ((eatKw('rows') || eatKw('lines')) && !eatKw('where')) pos = saved; // backtrack if no 'where'
+    }
     const cond = condition();
     return N('Filter', { op: (op === 'drop') ? 'drop' : 'keep', cond });
   }

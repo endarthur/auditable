@@ -705,37 +705,6 @@ function _createCellContext(cell) {
       }
     }
 
-    // @gcu/soft/<locale> — Soft language locale (dev-mode fallback + installed)
-    if (url.startsWith('@gcu/soft/') && url !== '@gcu/soft') {
-      const _activateLocale = (data) => {
-        if (window._softSetLocale) window._softSetLocale(data);
-        window._importCache[url] = data;
-        // rebuild DAG so parseNames/findUses see the locale-translated keywords
-        buildDAG();
-      };
-      if (window._importCache[url]) {
-        _activateLocale(window._importCache[url]);
-        return window._importCache[url];
-      }
-      // try installed modules (saved notebook)
-      if (window._installedModules[url]) {
-        let source = window._installedModules[url];
-        if (source.compressed && !source.binary) source = await decompressText(source.source);
-        else if (typeof source === 'object' && source.source) source = source.source;
-        const data = typeof source === 'string' ? JSON.parse(source) : source;
-        _activateLocale(data);
-        return data;
-      }
-      // dev-mode: fetch from filesystem
-      const locale = url.slice('@gcu/soft/'.length);
-      const resp = await fetch(`./ext/soft/locales/${locale}.json`);
-      if (resp.ok) {
-        const data = await resp.json();
-        _activateLocale(data);
-        return data;
-      }
-    }
-
     if (window._importCache[url]) return window._importCache[url];
 
     // binary assets — return blob URL
@@ -930,22 +899,6 @@ function _createCellContext(cell) {
       window._importCache[url] = mod;
       display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB → ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
       return mod;
-    }
-    // @gcu/soft/<locale> — Soft language locale
-    if (url.startsWith('@gcu/soft/') && url !== '@gcu/soft') {
-      const locale = url.slice('@gcu/soft/'.length);
-      const realUrl = __AUDITABLE_PAGES_URL__ + `/ext/soft/locales/${locale}.json`;
-      const resp = await fetch(realUrl);
-      if (!resp.ok) throw new Error(`Failed to fetch locale ${locale}: ${resp.status}`);
-      const source = await resp.text();
-      const compressedSrc = await compressText(source);
-      window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
-      syncModules();
-      const data = JSON.parse(source);
-      if (window._softSetLocale) window._softSetLocale(data);
-      window._importCache[url] = data;
-      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB → ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
-      return data;
     }
     // normalize: add ?bundle for esm.sh if not present
     let bundleUrl = url;

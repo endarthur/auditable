@@ -2,33 +2,11 @@
 
 import { softParse } from './parse.js';
 import { softEval, softString as softStringify } from './eval.js';
-import { softSetLocale, softGetLocale } from './tokenize.js';
-
-// ensure locale is active for parsing (DAG analysis may run before locale cell executes)
-function _ensureLocale() {
-  if (softGetLocale()) return; // already active
-  if (typeof window === 'undefined') return;
-  // check stored raw locale (set by _softSetLocale wrapper in register.js)
-  if (window._softActiveLocale) {
-    softSetLocale(window._softActiveLocale);
-    return;
-  }
-  // check import cache
-  const cache = window._importCache;
-  if (!cache) return;
-  for (const key of Object.keys(cache)) {
-    if (key.startsWith('@gcu/soft/') && key !== '@gcu/soft' && cache[key]?.keywords) {
-      softSetLocale(cache[key]);
-      return;
-    }
-  }
-}
 
 // ── parseNames: extract top-level variable defines ──
 // Walks the AST for Set, Define, Capture, Use at top level.
 
 export function softParseNames(code) {
-  _ensureLocale();
   try {
     const ast = softParse(code);
     const defines = new Set();
@@ -45,6 +23,7 @@ function _collectDefines(node, defines) {
     case 'Define': defines.add(node.name); break;
     case 'Capture': defines.add(node.name); break;
     case 'Use': defines.add(node.alias || node.path.split('.').pop()); break;
+    case 'Load': if (node.name) defines.add(node.name); break;
     case 'PipeCalled': if (node.name) defines.add(node.name); _collectDefines(node.step, defines); break;
     case 'If':
       for (const s of node.body) _collectDefines(s, defines);
@@ -81,7 +60,6 @@ function _parseNamesRegex(code) {
 // ── findUses: find references to other cells ──
 
 export function softFindUses(code, allDefined) {
-  _ensureLocale();
   const selfDefines = softParseNames(code);
   const uses = new Set();
   // strip comments and strings, then scan for identifiers
@@ -162,43 +140,43 @@ export async function softExecute(code, scopeIn, cell) {
     return text;
   };
 
-  // pre-fetch URLs for load statements (async before sync evaluator runs)
-  const prefetched = {};
-  const urlPattern = /\bload\s+"(https?:\/\/[^"]+)"/g;
-  let urlMatch;
-  while ((urlMatch = urlPattern.exec(code))) {
-    const url = urlMatch[1];
-    try { prefetched[url] = await (await fetch(url)).text(); } catch (e) { /* fetched at eval time */ }
+  // pre-read all files referenced in load statements (async, before sync evaluator)
+  // parse the AST to find Load nodes — works regardless of locale
+  const preloaded = {};
+  const nbFs = hasCtx ? cell._ctx?.notebook?.fs : null;
+  let loadPaths = [];
+  try {
+    const ast = softParse(code);
+    for (const node of ast.body) {
+      if (node.type === 'Load' && node.path?.type === 'Str') loadPaths.push(node.path.value);
+    }
+  } catch { /* parse error — no pre-loading */ }
+  for (const path of loadPaths) {
+    try {
+      if (path.startsWith('http://') || path.startsWith('https://')) {
+        preloaded[path] = await (await fetch(path)).text();
+      } else if (nbFs) {
+        preloaded[path] = await nbFs.read(path);
+      }
+    } catch { /* will error at eval time */ }
   }
 
-  // file I/O via VFS + prefetch cache
-  const vfs = (typeof window !== 'undefined' && window._notebookVFS) ? window._notebookVFS : null;
   host.load = (path) => {
-    // prefetched URL
-    if (prefetched[path]) return parseContent(path, prefetched[path]);
-    // VFS
-    if (vfs) {
-      try {
-        const content = vfs.readFileSync(path, 'utf8');
-        return parseContent(path, content);
-      } catch { /* fall through */ }
-    }
-    // scope variable (load variableName)
+    if (preloaded[path] !== undefined) return parseContent(path, preloaded[path]);
     if (path in scopeIn) return scopeIn[path];
     throw new Error(`Cannot load "${path}": file not found`);
   };
-  if (vfs) {
-    host.save = (path, data) => {
+  if (nbFs) {
+    host.save = async (path, data) => {
       let content;
       if (typeof data === 'string') content = data;
       else if (Array.isArray(data) && data.length > 0 && typeof data[0] === 'object') {
-        // CSV from array of records
         const keys = Object.keys(data[0]);
         content = keys.join(',') + '\n' + data.map(r => keys.map(k => r[k] ?? '').join(',')).join('\n');
       } else {
         content = JSON.stringify(data, null, 2);
       }
-      vfs.writeFileSync(path, content);
+      await nbFs.write(path, content);
     };
   }
 

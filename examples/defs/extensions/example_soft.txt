@@ -444,7 +444,7 @@ say Text.trim "  spaces  "
 
 /// code
 // first, create a CSV file in the notebook filesystem
-notebook.fs.writeFile("drillholes.csv",
+await notebook.fs.writeFile("drillholes.csv",
   "hole,from,to,grade,lithology\nDDH001,0,10,62.1,itabirite\nDDH001,10,20,48.3,phyllite\nDDH002,0,15,55.0,itabirite\nDDH002,15,25,31.2,phyllite")
 
 /// soft
@@ -463,14 +463,13 @@ say it
 
 /// soft
 make "button" as btn
-set btn.textContent to "click me"
-set btn.style.padding to "8px 16px"
+set textContent of btn to "click me"
 set counter to 0
 
 on click btn
   set counter to counter plus 1
-  set output.textContent to "clicked " & counter " times"
+  set textContent of output to "clicked " & counter " times"
 end
 
 make "div" as output
-set output.textContent to "not clicked yet"
+set textContent of output to "not clicked yet"
