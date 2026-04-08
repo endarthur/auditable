@@ -531,6 +531,10 @@ export function softParse(code) {
 
     // it / that / result
     if (kw('it') || kw('that')) { pos++; return N('Ref', { name: 'it' }); }
+    // 'result' as bare alias for 'it' (when not followed by 'of' — that's handled in unary)
+    if (kw('result') && !(tokens[pos + 1]?.type === T.KW && tokens[pos + 1]?.value === 'of')) {
+      pos++; return N('Ref', { name: 'it' });
+    }
 
     // parenthesized
     if (eat(T.LPAREN)) {
