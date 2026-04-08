@@ -1,6 +1,7 @@
 /// auditable
 /// title: soft — programação em português
 /// module: @gcu/soft ext/soft/index.js
+/// module: @gcu/soft/pt-BR ext/soft/locales/pt-BR.json
 
 /// md
 # @gcu/soft — português brasileiro
