@@ -522,8 +522,8 @@ function softParse(code) {
     if (eat(T.CMP, '!=')) return '!=';
     if (eat(T.CMP, '>=')) return '>=';
     if (eat(T.CMP, '<=')) return '<=';
-    if (kw('above')) { pos++; return '>'; }
-    if (kw('below')) { pos++; return '<'; }
+    if (kw('above')) { pos++; eatKw('of'); return '>'; }
+    if (kw('below')) { pos++; eatKw('of'); return '<'; }
     if (kw('is')) {
       const saved = pos; pos++;
       if (kw('not')) {
@@ -532,8 +532,8 @@ function softParse(code) {
         return '!=';
       }
       if (kw('a') || kw('an')) { pos = saved; return null; } // is a → type check, not comparison
-      if (kw('above')) { pos++; return '>'; }
-      if (kw('below')) { pos++; return '<'; }
+      if (kw('above')) { pos++; eatKw('of'); return '>'; }
+      if (kw('below')) { pos++; eatKw('of'); return '<'; }
       if (kw('equal')) { pos++; eatKw('to'); return '=='; } // "is equal to"
       if (kw('greater')) { pos++; eatKw('than'); return '>'; } // "is greater than"
       if (kw('less')) { pos++; eatKw('than'); return '<'; } // "is less than"
