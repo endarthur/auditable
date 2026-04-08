@@ -254,6 +254,13 @@ export function softParse(code) {
   }
 
   function comparisonOp() {
+    // skip noise words before comparison (allows "se x for ao menos 5" in Portuguese)
+    const savedNoise = pos;
+    while (kw('the') || kw('a') || kw('an')) pos++;
+    if (pos > savedNoise && !at(T.CMP) && !kw('above') && !kw('below') && !kw('is') && !kw('at') &&
+      !kw('equals') && !kw('greater') && !kw('less') && !kw('more') && !kw('under') && !kw('does') && !kw('not')) {
+      pos = savedNoise; // backtrack — no comparison follows
+    }
     if (eat(T.CMP, '>')) return '>';
     if (eat(T.CMP, '<')) return '<';
     if (eat(T.CMP, '==')) return '==';
