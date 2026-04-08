@@ -2912,21 +2912,10 @@ function softCompletions(prefix) {
 function _ensureLocale() {
   if (softGetLocale()) return; // already active
   if (typeof window === 'undefined') return;
-  // check installed modules for a locale
-  const mods = window._installedModules;
-  if (!mods) return;
-  for (const key of Object.keys(mods)) {
-    if (key.startsWith('@gcu/soft/') && key !== '@gcu/soft') {
-      try {
-        let src = mods[key];
-        if (src.compressed && !src.binary && window.decompressText) {
-          // can't await here — try sync parse if source is already decoded
-          return;
-        }
-        if (typeof src === 'string') { softSetLocale(JSON.parse(src)); return; }
-        if (src.source && !src.compressed) { softSetLocale(JSON.parse(src.source)); return; }
-      } catch { /* ignore */ }
-    }
+  // check stored raw locale (set by _softSetLocale wrapper in register.js)
+  if (window._softActiveLocale) {
+    softSetLocale(window._softActiveLocale);
+    return;
   }
   // check import cache
   const cache = window._importCache;
@@ -3311,7 +3300,12 @@ if (!window._cellTypes?.['soft']) {
 
 
 // expose setLocale on window for easy access from JS cells
-window._softSetLocale = softSetLocale;
+window._softSetLocale = (locale) => {
+  softSetLocale(locale);
+  // store raw locale for _ensureLocale to find on page reload
+  if (locale) window._softActiveLocale = locale;
+  else delete window._softActiveLocale;
+};
 
 const soft = {
   softTag,

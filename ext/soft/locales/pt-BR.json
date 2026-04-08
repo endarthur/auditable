@@ -30,6 +30,7 @@
     "list":       ["lista"],
     "load":       ["carregue", "carregar"],
     "save":       ["salve", "salvar"],
+    "being":      ["sendo"],
     "called":     ["chamado", "chamada"],
 
     "if":         ["se", "caso"],

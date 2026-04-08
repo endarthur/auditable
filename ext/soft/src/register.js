@@ -72,7 +72,12 @@ if (!window._cellTypes?.['soft']) {
 import { softSetLocale } from './tokenize.js';
 
 // expose setLocale on window for easy access from JS cells
-window._softSetLocale = softSetLocale;
+window._softSetLocale = (locale) => {
+  softSetLocale(locale);
+  // store raw locale for _ensureLocale to find on page reload
+  if (locale) window._softActiveLocale = locale;
+  else delete window._softActiveLocale;
+};
 
 export const soft = {
   softTag,

@@ -707,8 +707,14 @@ function _createCellContext(cell) {
 
     // @gcu/soft/<locale> — Soft language locale (dev-mode fallback + installed)
     if (url.startsWith('@gcu/soft/') && url !== '@gcu/soft') {
+      const _activateLocale = (data) => {
+        if (window._softSetLocale) window._softSetLocale(data);
+        window._importCache[url] = data;
+        // rebuild DAG so parseNames/findUses see the locale-translated keywords
+        buildDAG();
+      };
       if (window._importCache[url]) {
-        if (window._softSetLocale) window._softSetLocale(window._importCache[url]);
+        _activateLocale(window._importCache[url]);
         return window._importCache[url];
       }
       // try installed modules (saved notebook)
@@ -717,8 +723,7 @@ function _createCellContext(cell) {
         if (source.compressed && !source.binary) source = await decompressText(source.source);
         else if (typeof source === 'object' && source.source) source = source.source;
         const data = typeof source === 'string' ? JSON.parse(source) : source;
-        if (window._softSetLocale) window._softSetLocale(data);
-        window._importCache[url] = data;
+        _activateLocale(data);
         return data;
       }
       // dev-mode: fetch from filesystem
@@ -726,8 +731,7 @@ function _createCellContext(cell) {
       const resp = await fetch(`./ext/soft/locales/${locale}.json`);
       if (resp.ok) {
         const data = await resp.json();
-        if (window._softSetLocale) window._softSetLocale(data);
-        window._importCache[url] = data;
+        _activateLocale(data);
         return data;
       }
     }
