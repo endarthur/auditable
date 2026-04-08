@@ -3262,6 +3262,10 @@ if (!window._cellTypes?.['soft']) {
   }
 }
 
+
+// expose setLocale on window for easy access from JS cells
+window._softSetLocale = softSetLocale;
+
 const soft = {
   softTag,
   handler,
@@ -3269,6 +3273,7 @@ const soft = {
   softFindUses,
   tokenizeSoft,
   softCompletions,
+  setLocale: softSetLocale,
 };
 
 export { soft };

@@ -1,0 +1,376 @@
+/// auditable
+/// title: soft — programação em português
+/// module: @gcu/soft ext/soft/index.js
+
+/// md
+# @gcu/soft — português brasileiro
+
+Uma linguagem de programação onde todos os comandos são palavras do português. Consultas de dados, células reativas e interoperabilidade com JavaScript.
+
+/// code collapsed
+// %collapsed
+const { soft: _soft } = await load("@gcu/soft")
+
+// ativar locale pt-BR
+const _ptBR = {
+  locale: "pt-BR",
+  keywords: {
+    take:["pegue","pegar","pega","tome","tomar"], keep:["mantenha","manter","mantém"],
+    drop:["descarte","descartar"], sort:["ordene","ordenar"],
+    ascending:["ascendente","crescente"], descending:["descendente","decrescente"],
+    first:["primeiro","primeira"], last:["último","última"],
+    average:["média"], total:["total","some"], count:["conte","contar","contagem"],
+    smallest:["mín"], largest:["máx"],
+    group:["agrupe","agrupar"], pick:["escolha","escolher"],
+    round:["arredonde","arredondar"], with:["com"],
+    set:["defina","atribua","atribuir"], to:["para"],
+    of:["de","do","da","dos","das"],
+    say:["diga","dizer","diz","fala","fale"], show:["mostre","mostrar"],
+    put:["ponha","coloque"], into:["dentro"],
+    record:["registro"], list:["lista"],
+    load:["carregue","carregar"], save:["salve","salvar"],
+    called:["chamado","chamada"],
+    if:["se","caso"], otherwise:["senão"], end:["fim"],
+    repeat:["repita","repetir","repete"], times:["vezes"],
+    while:["enquanto"], until:["até"], each:["cada"],
+    in:["em","nos","nas"], stop:["pare","parar"], skip:["pule","pular"], by:["por"],
+    define:["declare","definir","crie"], return:["retorne","retornar"],
+    takes:["recebe"], use:["use","usar"], as:["como"],
+    call:["chame","chamar"], run:["execute","executar"], result:["resultado"],
+    on:["quando"],
+    above:["acima"], below:["abaixo"], is:["é"], not:["não"],
+    and:["e"], or:["ou"], between:["entre"], contains:["contém"],
+    matches:["corresponde"],
+    at:["ao","no","pelo"], least:["menos","mínimo"], most:["máximo","mais"],
+    equals:["igual"], greater:["maior"], less:["menor"], than:["que"], does:["faz"],
+    true:["verdadeiro","verdadeira","sim"], false:["falso","falsa"],
+    nothing:["nada"], empty:["vazio","vazia"],
+    length:["comprimento","tamanho"], number:["número"],
+    item:["item"], character:["caractere"], characters:["caracteres"],
+    word:["palavra"], words:["palavras"], line:["linha"], lines:["linhas"],
+    add:["adicione","adicionar"], remove:["remova","remover"],
+    assume:["assuma","assumir"], suppose:["suponha","supor"],
+    try:["tente","tentar"], fails:["falha","falhar"],
+    it:["isso"], that:["aquilo"], there:["há"], the:["o","a","os","as"]
+  },
+  noise: ["um","uma","este","esse","esta","essa"]
+}
+_soft.setLocale(_ptBR)
+
+/// md
+## olá mundo
+
+Células Soft são reativas — definem variáveis que outras células podem usar. `diga` ou `fale` exibem o resultado. Valores após `diga` são concatenados automaticamente:
+
+/// soft
+defina nome para "Arthur"
+diga "olá " nome "!"
+
+/// soft
+fale "fale também funciona!"
+
+/// md
+## variáveis e aritmética
+
+Palavras em português e símbolos funcionam juntos:
+
+/// soft
+defina largura para 12
+defina altura para 8
+defina área para largura vezes altura
+defina perímetro para (largura + altura) * 2
+diga "área: " área
+diga "perímetro: " perímetro
+
+/// md
+## condicionais
+
+`se`/`senão`/`fim` para blocos. `é` é opcional — deixa a leitura mais natural:
+
+/// soft
+defina teor para 62
+se teor é acima 50
+  diga "minério"
+senão
+  diga "estéril"
+fim
+
+/// soft
+defina x para 10
+se x é acima 5
+  diga "x é acima de 5"
+fim
+se x é abaixo 100
+  diga "x é abaixo de 100"
+fim
+se x é 10
+  diga "x é exatamente 10"
+fim
+se x não é 7
+  diga "x não é 7"
+fim
+
+/// md
+## funções
+
+Funções com parâmetros rotulados que leem como frases:
+
+/// soft
+declare envie mensagem para pessoa
+  diga pessoa " recebeu: " mensagem
+fim
+envie "relatório de sondagem" para "Jéssica"
+
+/// soft
+declare limite valor entre baixo e alto
+  se valor abaixo baixo
+    retorne baixo
+  fim
+  se valor acima alto
+    retorne alto
+  fim
+  retorne valor
+fim
+diga limite 150 entre 0 e 100
+diga limite -5 entre 0 e 100
+diga limite 42 entre 0 e 100
+
+/// md
+## consultas de dados
+
+O recurso principal — consulte dados tabulares em português:
+
+/// soft
+defina intervalos para lista
+  registro furo "DDH001" teor 62.1 litologia "itabirito" comprimento 4 densidade 3.2,
+  registro furo "DDH001" teor 48.3 litologia "filito"    comprimento 6 densidade 2.8,
+  registro furo "DDH002" teor 55.0 litologia "itabirito" comprimento 3 densidade 3.5,
+  registro furo "DDH002" teor 31.2 litologia "filito"    comprimento 5 densidade 2.6,
+  registro furo "DDH003" teor 70.5 litologia "itabirito" comprimento 2 densidade 3.8
+
+/// md
+Filtrar, agregar, arredondar — cada linha alimenta a próxima:
+
+/// soft
+pegue intervalos
+mantenha litologia é "itabirito"
+média de teor
+arredonde para 1
+diga "teor médio do minério: " o resultado
+
+/// md
+Ordenar, limitar, selecionar colunas:
+
+/// soft
+pegue intervalos
+ordene por teor decrescente
+primeiro 3
+escolha furo e teor
+diga o resultado
+
+/// md
+Colunas calculadas com `com`, capture intermediários com `chamado`:
+
+/// soft
+pegue intervalos
+com tonelagem sendo comprimento vezes densidade
+mantenha litologia é "itabirito" chamado minério
+média de tonelagem chamado ton_média
+diga tamanho de minério " intervalos de minério"
+diga "tonelagem média: " ton_média
+
+/// md
+## múltiplas consultas
+
+Execute consultas separadas e combine os resultados:
+
+/// soft
+pegue intervalos
+mantenha litologia é "itabirito"
+conte
+dentro ore_count
+
+pegue intervalos
+mantenha litologia é "filito"
+conte
+dentro waste_count
+
+diga ore_count " minério, " waste_count " estéril"
+diga "relação estéril/minério: " round (waste_count over ore_count) para 2
+
+/// md
+## laços
+
+Todos os laços fecham com `fim`. Seis formas:
+
+**Contado** — repetir um número fixo de vezes:
+
+/// soft
+repita 5 vezes
+  diga "toc toc"
+fim
+
+/// md
+**Para-cada** — iterar sobre uma lista:
+
+/// soft
+defina total para 0
+repita cada linha em intervalos
+  defina total para total + teor de linha
+fim
+diga "soma dos teores: " total
+
+/// md
+**Faixa** — laço numérico com variável e passo opcional:
+
+/// soft
+repita de 0 para 100 por 25 como corte
+  pegue intervalos
+  mantenha teor acima corte
+  conte
+  diga corte "% corte → " isso " intervalos"
+fim
+
+/// md
+**Enquanto** — repetir enquanto uma condição for verdadeira:
+
+/// soft
+defina n para 1
+enquanto n ao menos 64
+  diga n
+  defina n para n vezes 2
+fim
+
+/// md
+**Até** — repetir até que uma condição se torne verdadeira:
+
+/// soft
+defina n para 1
+até n é acima 100
+  defina n para n vezes 3
+fim
+diga "primeira potência de 3 acima de 100: " n
+
+/// md
+**Pare e pule** — `pare` sai do laço, `pule` pula para a próxima iteração:
+
+/// soft
+defina itens para lista 10, 20, 30, 40, 50
+repita cada x em itens
+  pule se x é 30
+  pare se x é acima 40
+  diga x
+fim
+
+/// md
+## operações com texto
+
+Expressões de fragmento para cirurgia em strings — leia e escreva por caractere, palavra ou linha:
+
+/// soft
+defina s para "o rápido coelho marrom"
+diga palavra 2 de s
+diga caractere 0 de s
+diga número de palavras em s " palavras"
+
+defina s para "olá mundo"
+defina palavra 1 de s para "Soft"
+diga s
+
+/// md
+## registros e propriedades
+
+Crie registros, leia/escreva propriedades com `de`:
+
+/// soft
+defina jogador para registro nome "Arthur" vida 100 x 0 y 0
+diga nome de jogador " tem " vida de jogador " HP"
+
+defina vida de jogador para 80
+diga nome de jogador " sofreu dano: " vida de jogador " HP"
+
+/// md
+## verificação de tipos e assuma
+
+Verificação de tipos em tempo de execução com `é`. `assuma` é um contrato — falha com erro claro se violado:
+
+/// soft
+defina x para 42
+se x é número
+  diga "x é número"
+fim
+
+assuma x acima 0
+diga "x é positivo: " x
+
+/// md
+## tratamento de erros e hipóteses
+
+`tente`/`se isso falha` para tratamento de erros. `suponha` para análise de hipóteses:
+
+/// soft
+defina corte para 50
+
+suponha corte é 30
+  pegue intervalos
+  mantenha teor acima corte
+  conte
+  diga "a 30%: " isso " intervalos"
+fim
+
+suponha corte é 60
+  pegue intervalos
+  mantenha teor acima corte
+  conte
+  diga "a 60%: " isso " intervalos"
+fim
+
+diga "corte real: " corte
+
+/// md
+## closures e funções de primeira classe
+
+Funções capturam seu escopo de definição. Use `chame`, `execute` ou `resultado de` para invocar:
+
+/// soft
+declare crie_contador
+  defina n para 0
+  declare incremento
+    defina n para n + 1
+    retorne n
+  fim
+  retorne incremento
+fim
+
+defina contador para crie_contador
+diga "contagem: " chame contador
+diga "contagem: " execute contador
+diga "contagem: " resultado de contador
+
+/// md
+## DAG entre linguagens
+
+Células Soft definem variáveis que células JS podem usar, e vice-versa:
+
+/// code
+const corte = ui.slider("teor de corte", 50, {min: 0, max: 100})
+
+/// soft
+pegue intervalos
+mantenha teor acima corte
+conte
+dentro n_minério
+
+diga n_minério " intervalos acima de " corte "%"
+
+/// md
+## interoperabilidade com JS
+
+Chame funções JavaScript via `use` ou caminhos com ponto:
+
+/// soft
+use Math.round como arredonde
+diga arredonde 3.14159
+
+diga Text.upper "olá soft"
+diga Text.trim "  espaços  "

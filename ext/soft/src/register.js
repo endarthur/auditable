@@ -69,6 +69,11 @@ if (!window._cellTypes?.['soft']) {
   }
 }
 
+import { softSetLocale } from './tokenize.js';
+
+// expose setLocale on window for easy access from JS cells
+window._softSetLocale = softSetLocale;
+
 export const soft = {
   softTag,
   handler,
@@ -76,4 +81,5 @@ export const soft = {
   softFindUses,
   tokenizeSoft,
   softCompletions,
+  setLocale: softSetLocale,
 };
