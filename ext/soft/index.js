@@ -555,6 +555,12 @@ function softParse(code) {
     if (kw('less')) { pos++; eatKw('than'); return '<'; }
     if (kw('more')) { pos++; eatKw('than'); return '>'; }
     if (kw('under')) { pos++; return '<'; }
+    // "not is" / "não é" → != (Portuguese word order: não before é)
+    if (kw('not')) {
+      const saved = pos; pos++;
+      if (kw('is')) { pos++; return '!='; }
+      pos = saved;
+    }
     // "does not equal" → !=
     if (kw('does')) {
       const saved = pos; pos++;
