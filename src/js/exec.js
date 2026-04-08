@@ -696,6 +696,15 @@ function _createCellContext(cell) {
       }
     }
 
+    // @gcu/soft — English keyword language (dev-mode fallback)
+    if (url === '@gcu/soft') {
+      if (!window._importCache[url] && !window._installedModules[url]) {
+        const mod = await import('./ext/soft/index.js');
+        window._importCache[url] = mod;
+        return mod;
+      }
+    }
+
     if (window._importCache[url]) return window._importCache[url];
 
     // binary assets — return blob URL
@@ -873,6 +882,22 @@ function _createCellContext(cell) {
       const mod = await import(blobUrl);
       window._importCache[url] = mod;
       display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB \u2192 ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
+      return mod;
+    }
+    // @gcu/soft — English keyword language
+    if (url === '@gcu/soft') {
+      const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/soft/index.js';
+      const resp = await fetch(realUrl);
+      if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
+      const source = await resp.text();
+      const compressedSrc = await compressText(source);
+      window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
+      syncModules();
+      const blob = new Blob([source], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      const mod = await import(blobUrl);
+      window._importCache[url] = mod;
+      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB → ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
       return mod;
     }
     // normalize: add ?bundle for esm.sh if not present

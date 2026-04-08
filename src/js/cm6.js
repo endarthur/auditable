@@ -263,6 +263,8 @@ const _tokenTable = {
   str:   tags.string,
   id:    tags.variableName,
   dir:   tags.keyword,
+  tf:    tags.function(tags.keyword),
+  dec:   tags.meta,
 };
 
 // Convert an auditable tokenizer to a CM6 StreamLanguage

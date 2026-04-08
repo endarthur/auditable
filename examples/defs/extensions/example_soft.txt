@@ -1,0 +1,476 @@
+/// auditable
+/// title: soft — English keyword language
+/// module: @gcu/soft ext/soft/index.js
+
+/// md
+# @gcu/soft
+
+A general-purpose programming language designed for soft keyboard input. Every keyword is a common English word — the language can be written entirely without symbols. Data query pipelines, reactive cells, and JS interop.
+
+/// code collapsed
+// %collapsed
+await load("@gcu/soft")
+
+/// md
+## hello world
+
+Soft cells are reactive — they define variables that downstream cells can use. `say` is the output statement. Values after `say` are automatically concatenated — or use `&` for explicit concatenation anywhere:
+
+/// soft
+set name to "Arthur"
+say "hello " name "!"
+
+/// md
+## variables and arithmetic
+
+Both English keywords and symbols work for arithmetic. Mix freely:
+
+/// soft
+set width to 12
+set height to 8
+set area to width times height
+set perimeter to (width + height) * 2
+say "area: " area
+say "perimeter: " perimeter
+
+/// md
+## conditionals
+
+`if`/`otherwise`/`end` for blocks. Comparisons read like English — `is` is optional filler that makes them flow naturally:
+
+/// soft
+set grade to 62
+if grade is at least 50
+  say "ore"
+otherwise
+  say "waste"
+end
+
+/// md
+`is` works with all comparison forms — use it wherever it reads well:
+
+/// soft
+set x to 10
+if x is above 5
+  say "x is above 5"
+end
+if x is below 100
+  say "x is below 100"
+end
+if x is 10
+  say "x is exactly 10"
+end
+if x is not 7
+  say "x is not 7"
+end
+
+/// md
+Inline conditionals work too:
+
+/// soft
+set grade to 62
+set label to "ore" if grade is above 50 otherwise "waste"
+say label
+
+/// md
+## functions
+
+Functions have labeled parameters that read like English sentences. The call syntax mirrors the definition:
+
+/// soft
+define send message to person
+  say person " received: " message
+end
+send "drilling report" to "Jessica"
+
+/// soft
+define clamp value between low and high
+  if value below low
+    return low
+  end
+  if value above high
+    return high
+  end
+  return value
+end
+say clamp 150 between 0 and 100
+say clamp -5 between 0 and 100
+say clamp 42 between 0 and 100
+
+/// md
+## data pipelines
+
+The killer feature — query tabular data with English:
+
+/// soft
+set intervals to list
+  record hole "DDH001" grade 62.1 lithology "itabirite" length 4 density 3.2,
+  record hole "DDH001" grade 48.3 lithology "phyllite"  length 6 density 2.8,
+  record hole "DDH002" grade 55.0 lithology "itabirite" length 3 density 3.5,
+  record hole "DDH002" grade 31.2 lithology "phyllite"  length 5 density 2.6,
+  record hole "DDH003" grade 70.5 lithology "itabirite" length 2 density 3.8
+
+/// md
+Filter, aggregate, round — each line pipes into the next:
+
+/// soft
+take intervals
+keep lithology is "itabirite"
+average grade
+round to 1
+say "mean ore grade: " it
+
+/// md
+Sort, limit, pick columns:
+
+/// soft
+take intervals
+sort by grade descending
+first 3
+pick hole and grade
+say it
+
+/// md
+Computed columns with `with`, capture intermediates with `called`:
+
+/// soft
+take intervals
+with tonnage being length times density
+keep lithology is "itabirite" called ore
+average tonnage called avg_tonnage
+say length of ore " ore intervals"
+say "average tonnage: " avg_tonnage
+
+/// md
+Explicit `then` piping on a single line:
+
+/// soft
+take intervals then keep grade is above 50 then count
+say it " intervals above 50%"
+
+/// md
+Group and count — iterate groups to display each one:
+
+/// soft
+take intervals
+group by lithology
+into groups
+
+repeat each g in groups
+  say lithology of g ": " count of g " intervals"
+  say rows of g
+end
+
+/// md
+## multiple pipelines
+
+Run separate queries and combine results:
+
+/// soft
+take intervals
+keep lithology is "itabirite"
+count
+into ore_count
+
+take intervals
+keep lithology is "phyllite"
+count
+into waste_count
+
+say ore_count " ore, " waste_count " waste"
+say "strip ratio: " round (waste_count over ore_count) to 2
+
+/// md
+## loops
+
+All loops close with `end`. Six forms:
+
+**Counted** — run a fixed number of times:
+
+/// soft
+repeat 5 times
+  say "knock knock"
+end
+
+/// md
+**For-each** — iterate over a list (`for` is optional filler):
+
+/// soft
+set total to 0
+repeat each row in intervals
+  set total to total plus grade of row
+end
+say "sum of grades: " total
+
+/// md
+**Range** — numeric loop with variable, optional step:
+
+/// soft
+repeat from 0 to 100 by 25 as cutoff
+  take intervals
+  keep grade above cutoff
+  count
+  say cutoff "% cutoff → " it " intervals"
+end
+
+/// md
+Countdown works too:
+
+/// soft
+repeat from 3 to 1 by -1 as n
+  say n "..."
+end
+say "go!"
+
+/// md
+**While** — repeat as long as a condition holds:
+
+/// soft
+set n to 1
+while n at most 64
+  say n
+  set n to n times 2
+end
+
+/// md
+**Until** — repeat until a condition becomes true:
+
+/// soft
+set n to 1
+until n is above 100
+  set n to n times 3
+end
+say "first power of 3 above 100: " n
+
+/// md
+**Stop and skip** — `stop` breaks out of a loop, `skip` jumps to the next iteration. Both work with suffix conditionals:
+
+/// soft
+set items to list 10, 20, 30, 40, 50
+repeat each x in items
+  skip if x is 30
+  stop if x is above 40
+  say x
+end
+
+/// md
+## string operations
+
+Chunk expressions for string surgery — read and write by character, word, or line:
+
+/// soft
+set s to "the quick brown fox"
+say word 2 of s
+say character 0 of s
+say number of words in s " words"
+
+set s to "hello world"
+set word 1 of s to "Soft"
+say s
+
+/// md
+## records and properties
+
+Create records, read/write properties with `of`:
+
+/// soft
+set player to record name "Arthur" health 100 x 0 y 0
+say name of player " has " health of player " HP"
+
+set health of player to 80
+say name of player " took damage: " health of player " HP"
+
+/// md
+## type checks and assume
+
+Runtime type checking with `is a`. `assume` is a contract — fails with a clear error if violated:
+
+/// soft
+set x to 42
+if x is a number
+  say "x is a number"
+end
+if x is not a text
+  say "x is not text"
+end
+
+assume x above 0
+say "x is positive: " x
+
+/// md
+## error handling and what-if
+
+`try`/`if it fails` for error handling. `suppose` for scoped what-if analysis:
+
+/// soft
+try
+  set result to 1 over 0
+  say "result: " result
+if it fails
+  say "caught: " the error
+end
+
+/// soft
+set cutoff to 50
+
+suppose cutoff is 30
+  take intervals
+  keep grade above cutoff
+  count
+  say "at 30%: " it " intervals"
+end
+
+suppose cutoff is 60
+  take intervals
+  keep grade above cutoff
+  count
+  say "at 60%: " it " intervals"
+end
+
+say "actual cutoff: " cutoff
+
+/// md
+## closures and first-class functions
+
+Functions capture their defining scope. Use `call`, `run`, or `result of` to invoke a function stored in a variable:
+
+/// soft
+define make_counter
+  set n to 0
+  define increment
+    set n to n plus 1
+    return n
+  end
+  return increment
+end
+
+set counter to make_counter
+say "count: " call counter
+say "count: " run counter
+say "count: " result of counter
+
+/// md
+Functions are first-class values — pass them, store them, invoke them explicitly:
+
+/// soft
+define make_greeter takes greeting
+  define greet takes name
+    return greeting & " " & name
+  end
+  return greet
+end
+
+set formal to make_greeter "good morning"
+set casual to make_greeter "hey"
+
+say call formal "Arthur"
+say call casual "Arthur"
+
+/// md
+## cross-language DAG
+
+Soft cells define variables that JS cells can use, and vice versa:
+
+/// code
+const cutoff = ui.slider("cutoff grade", 50, {min: 0, max: 100})
+
+/// soft
+take intervals
+keep grade above cutoff
+count
+into ore_count
+
+say ore_count " intervals above " cutoff "%"
+
+/// md
+## the `soft` tagged template
+
+Use Soft inline from JS code cells:
+
+/// code
+const base = 100
+const result = soft`
+  set doubled to ${base} times 2
+  set label to "base × 2"
+`
+display(`${result.label} = ${result.doubled}`)
+
+/// md
+## pattern matching
+
+`matches` accepts glob patterns (strings) or regex literals:
+
+/// soft
+set holes to list "DDH001", "DDH002", "RC001", "RC002", "DDH003"
+repeat each h in holes
+  if h matches "DDH*"
+    say h " — diamond"
+  end
+  if h matches /^RC\d+$/
+    say h " — reverse circulation"
+  end
+end
+
+/// md
+## function piping with `then`
+
+`then` chains any function — the piped value becomes the first argument. Works with transforms and host functions:
+
+/// soft
+"  hello world  " then Text.trim then Text.upper
+say it
+
+/// soft
+set names to list "alice", "bob", "carol"
+names then List.reverse then List.join " and "
+say it
+
+/// md
+## JS interop
+
+Call JavaScript functions via `use` or dot-paths. Host globals `Math`, `Text`, `List` are available:
+
+/// soft
+use Math.round as round
+say round 3.14159
+
+say Text.upper "hello soft"
+say Text.trim "  spaces  "
+
+/// md
+## file I/O
+
+`load` reads files from the notebook filesystem (VFS). CSV files become arrays of records automatically. `save` writes data back:
+
+/// code
+// first, create a CSV file in the notebook filesystem
+notebook.fs.writeFile("drillholes.csv",
+  "hole,from,to,grade,lithology\nDDH001,0,10,62.1,itabirite\nDDH001,10,20,48.3,phyllite\nDDH002,0,15,55.0,itabirite\nDDH002,15,25,31.2,phyllite")
+
+/// soft
+load "drillholes.csv" as data
+say data
+
+/// soft
+take data
+keep grade is above 50
+say it
+
+/// md
+## DOM creation with `make`
+
+`make` creates HTML elements in the cell output. Combine with `on` for interactivity:
+
+/// soft
+make "button" as btn
+set btn.textContent to "click me"
+set btn.style.padding to "8px 16px"
+set counter to 0
+
+on click btn
+  set counter to counter plus 1
+  set output.textContent to "clicked " & counter " times"
+end
+
+make "div" as output
+set output.textContent to "not clicked yet"

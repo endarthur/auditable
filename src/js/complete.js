@@ -793,15 +793,55 @@ export function configureAutocomplete(cellId, source) {
   ]);
 }
 
+// build a CM6 completion source from a plugin cell type handler
+function pluginCompletionSource(handler) {
+  return (cx) => {
+    const word = cx.matchBefore(/[\w]*/);
+    if (!word || word.from === word.to) return null;
+    const prefix = word.text;
+    if (!prefix) return null;
+    const items = handler.completions(prefix);
+    if (!items || items.length === 0) return null;
+    return {
+      from: word.from,
+      filter: false,
+      options: items.map(it => {
+        const text = typeof it === 'string' ? it : it.text;
+        const m = fuzzyMatch(prefix, text);
+        return { label: text, type: 'keyword', boost: m ? m.score : 0 };
+      }).sort((a, b) => b.boost - a.boost).slice(0, 30),
+    };
+  };
+}
+
+// configure autocomplete for existing cells of a given plugin type (called by plugins after registration)
+export function configurePluginAutocomplete(cellType) {
+  const handler = window._cellTypes?.[cellType];
+  if (!handler?.completions) return;
+  const source = pluginCompletionSource(handler);
+  for (const cell of S.cells) {
+    if (cell.type === cellType) configureAutocomplete(cell.id, source);
+  }
+}
+
 // configure autocomplete for all existing cells on init
 export function configureAllAutocomplete() {
   for (const cell of S.cells) {
     if (cell.type === 'code') configureAutocomplete(cell.id);
     else if (cell.type === 'adder') configureAutocomplete(cell.id, pyCompletionSource);
+    else if (window._cellTypes?.[cell.type]?.completions) {
+      configureAutocomplete(cell.id, pluginCompletionSource(window._cellTypes[cell.type]));
+    }
   }
+  // expose for plugins to call after late registration
+  window._configurePluginAutocomplete = configurePluginAutocomplete;
+
   // register callback so new cells get autocomplete
   setOnEditorCreated((cellId, cellType) => {
     if (cellType === 'code') configureAutocomplete(cellId);
     else if (cellType === 'adder') configureAutocomplete(cellId, pyCompletionSource);
+    else if (window._cellTypes?.[cellType]?.completions) {
+      configureAutocomplete(cellId, pluginCompletionSource(window._cellTypes[cellType]));
+    }
   });
 }

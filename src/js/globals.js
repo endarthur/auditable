@@ -126,6 +126,7 @@ window.getExtension = getExtension;
 window.registerPlugin = registerPlugin;
 window._ctUninstallPlugin = _ctUninstallPlugin;
 window._ctCreateEditor = createEditor;
+window._configurePluginAutocomplete = null; // set by complete.js init
 
 // Shared VFS instance — notebook.fs delegates here, adder/Python uses it directly
 const _notebookVFS = new VFS();

@@ -5,7 +5,7 @@ import { _ctIsExecutable } from './cell-types.js';
 import { setMsg } from './ui.js';
 import { setBadge } from './update.js';
 import { registerProvider } from './stdlib.js';
-import { configureAllAutocomplete } from './complete.js';
+import { configureAllAutocomplete, configurePluginAutocomplete } from './complete.js';
 import { applySettings, getEditorViewSetting, resolveExecMode, resolveRunOnLoad } from './settings.js';
 import { toggleSplitView } from './split.js';
 import { cryptoDetect, cryptoUnlock, cryptoUnlockRecovery, cryptoSetLocked, cryptoIsEncrypted, initCryptoSync, syncCryptoDebounced, removeCleartextNodes, cryptoPassphraseStrength, cryptoEnable, cryptoDisable, cryptoChangePassphrase, cryptoRegenerateRecovery, cryptoLock } from './crypto.js';

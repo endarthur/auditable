@@ -93,6 +93,7 @@ const categories = {
     'example_sql.txt',
     'example_shader.txt',
     'example_vfs.txt',
+    'example_soft.txt',
   ],
 
   // adder — Python interpreter: adder cells, adder/mpy tag, cross-language DAG
