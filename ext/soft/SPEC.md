@@ -1896,18 +1896,19 @@ Singular and plural forms are interchangeable for all unit and chunk keywords:
 
 ### 13.6 Result Aliases
 
-`that` and `the result` are aliases for the implicit variable `it`:
+`that`, `result`, and `the result` are aliases for the implicit variable `it`:
 
 ```
 take intervals
 average grade
 say "mean is " & that
+say "also: " & the result
 
-ask "cutoff?"
-say "you chose " & the result
+5 plus 3
+say result
 ```
 
-These resolve to the same `it` variable in the environment.
+These all resolve to the same `it` variable in the environment. Bare `result` is distinguished from `result of <expr>` (function invocation, §3.7) by peek: `result` followed by `of` is invocation, bare `result` is the alias.
 
 ### 13.7 Range Loop
 
@@ -2323,7 +2324,7 @@ postfix       = atom { "of" atom }
 noise         = "the" | "a" | "an" | "that" | "this"  (* consumed and ignored *)
 atom          = NUM | STR | REGEX | "true" | "yes" | "false" | "no"
               | "nothing" | "empty" | noise postfix
-              | "result"                           (* alias for 'it' *)
+              | "result"                           (* alias for 'it' — bare only, 'result of' is invocation *)
               | "(" expression ")"                 (* parenthesized grouping *)
               | "list" { arithmetic }
               | "record" "with" NAME { "," NAME } { "," NAME "is" arithmetic }
