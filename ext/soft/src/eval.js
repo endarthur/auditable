@@ -603,7 +603,16 @@ export function softEval(code, options) {
     if (!host.on) return null; // silently skip in headless
     const handler = (e) => {
       const handlerScope = createScope(sc);
-      if (node.target) handlerScope[node.target] = e.target || e;
+      // inject event object properties into handler scope
+      if (e) {
+        if (node.target) handlerScope[node.target] = e.target || e;
+        handlerScope['the event'] = e;
+        // common event properties as bare names
+        if (e.key !== undefined) handlerScope.key = e.key;
+        if (e.target) handlerScope.target = e.target;
+        if (e.value !== undefined) handlerScope.value = e.value;
+        else if (e.target?.value !== undefined) handlerScope.value = e.target.value;
+      }
       try { evalBlock(node.body, handlerScope); } catch (err) {
         if (err instanceof StopSignal) return;
         if (!(err instanceof ReturnSignal)) throw err;

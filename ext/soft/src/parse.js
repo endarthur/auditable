@@ -1034,6 +1034,9 @@ export function softParse(code) {
     expectKw('end');
     return N('Define', { name, sig, body });
   }
+  // note: nested defines are NOT registered in signatures — sibling inner functions
+  // call each other via `call`/`run`/`result of`. this avoids the return-auto-call
+  // problem where `return inner_func` would invoke instead of returning the value.
 
   function parseSignature() {
     const params = [];

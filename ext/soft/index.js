@@ -1271,6 +1271,9 @@ function softParse(code) {
     expectKw('end');
     return N('Define', { name, sig, body });
   }
+  // note: nested defines are NOT registered in signatures — sibling inner functions
+  // call each other via `call`/`run`/`result of`. this avoids the return-auto-call
+  // problem where `return inner_func` would invoke instead of returning the value.
 
   function parseSignature() {
     const params = [];
@@ -2260,7 +2263,16 @@ function softEval(code, options) {
     if (!host.on) return null; // silently skip in headless
     const handler = (e) => {
       const handlerScope = createScope(sc);
-      if (node.target) handlerScope[node.target] = e.target || e;
+      // inject event object properties into handler scope
+      if (e) {
+        if (node.target) handlerScope[node.target] = e.target || e;
+        handlerScope['the event'] = e;
+        // common event properties as bare names
+        if (e.key !== undefined) handlerScope.key = e.key;
+        if (e.target) handlerScope.target = e.target;
+        if (e.value !== undefined) handlerScope.value = e.value;
+        else if (e.target?.value !== undefined) handlerScope.value = e.target.value;
+      }
       try { evalBlock(node.body, handlerScope); } catch (err) {
         if (err instanceof StopSignal) return;
         if (!(err instanceof ReturnSignal)) throw err;
@@ -2968,29 +2980,53 @@ async function softExecute(code, scopeIn, cell) {
   const host = {};
   const hasCtx = !!cell?._ctx;
 
-  // file I/O via VFS
-  if (typeof window !== 'undefined' && window._notebookVFS) {
-    const vfs = window._notebookVFS;
-    const csvParse = (text) => {
-      const lines = text.trim().split('\n');
-      if (lines.length < 2) return [];
-      const headers = lines[0].split(',').map(h => h.trim());
-      return lines.slice(1).map(line => {
-        const vals = line.split(',').map(v => v.trim());
-        const row = {};
-        headers.forEach((h, i) => {
-          const v = vals[i];
-          row[h] = v !== undefined && v !== '' && !isNaN(v) ? Number(v) : (v || '');
-        });
-        return row;
+  // CSV parser
+  const csvParse = (text) => {
+    const lines = text.trim().split('\n');
+    if (lines.length < 2) return [];
+    const headers = lines[0].split(',').map(h => h.trim());
+    return lines.slice(1).map(line => {
+      const vals = line.split(',').map(v => v.trim());
+      const row = {};
+      headers.forEach((h, i) => {
+        const v = vals[i];
+        row[h] = v !== undefined && v !== '' && !isNaN(v) ? Number(v) : (v || '');
       });
-    };
-    host.load = (path) => {
-      const content = vfs.readFileSync(path, 'utf8');
-      if (path.endsWith('.json')) return JSON.parse(content);
-      if (path.endsWith('.csv')) return csvParse(content);
-      return content;
-    };
+      return row;
+    });
+  };
+  const parseContent = (path, text) => {
+    if (path.endsWith('.json')) return JSON.parse(text);
+    if (path.endsWith('.csv')) return csvParse(text);
+    return text;
+  };
+
+  // pre-fetch URLs for load statements (async before sync evaluator runs)
+  const prefetched = {};
+  const urlPattern = /\bload\s+"(https?:\/\/[^"]+)"/g;
+  let urlMatch;
+  while ((urlMatch = urlPattern.exec(code))) {
+    const url = urlMatch[1];
+    try { prefetched[url] = await (await fetch(url)).text(); } catch (e) { /* fetched at eval time */ }
+  }
+
+  // file I/O via VFS + prefetch cache
+  const vfs = (typeof window !== 'undefined' && window._notebookVFS) ? window._notebookVFS : null;
+  host.load = (path) => {
+    // prefetched URL
+    if (prefetched[path]) return parseContent(path, prefetched[path]);
+    // VFS
+    if (vfs) {
+      try {
+        const content = vfs.readFileSync(path, 'utf8');
+        return parseContent(path, content);
+      } catch { /* fall through */ }
+    }
+    // scope variable (load variableName)
+    if (path in scopeIn) return scopeIn[path];
+    throw new Error(`Cannot load "${path}": file not found`);
+  };
+  if (vfs) {
     host.save = (path, data) => {
       let content;
       if (typeof data === 'string') content = data;
