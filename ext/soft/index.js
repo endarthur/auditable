@@ -73,6 +73,22 @@ function processEscapes(raw) {
   return out;
 }
 
+// ── locale support ──
+
+let _localeLookup = null; // word → canonical English keyword
+let _localeNoise = null;  // set of noise words
+
+function softSetLocale(locale) {
+  if (!locale) { _localeLookup = null; _localeNoise = null; return; }
+  _localeLookup = {};
+  for (const [canonical, forms] of Object.entries(locale.keywords || {})) {
+    for (const form of forms) _localeLookup[form.toLowerCase()] = canonical;
+  }
+  _localeNoise = locale.noise ? new Set(locale.noise.map(w => w.toLowerCase())) : null;
+}
+
+function softGetLocale() { return _localeLookup; }
+
 // ── main tokenizer ──
 
 function softTokenize(code) {
@@ -158,6 +174,15 @@ function softTokenize(code) {
     if (isIdStart(c)) {
       let word = '';
       while (pos < len && (isIdCont(peek()) || peek() === '.')) word += advance();
+      // locale: resolve to canonical English
+      const lc = word.toLowerCase();
+      if (_localeLookup && _localeLookup[lc]) {
+        word = _localeLookup[lc];
+      }
+      // locale noise words → canonical noise
+      if (_localeNoise && _localeNoise.has(lc)) {
+        word = 'the'; // map to English noise word
+      }
       // dot-path identifiers are always ID, never KW
       if (word.includes('.')) {
         emit(T.ID, word, startLine, startCol);

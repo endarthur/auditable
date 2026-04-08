@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { softTokenize, T, KEYWORDS } from '../ext/soft/src/tokenize.js';
+import { softTokenize, T, KEYWORDS, softSetLocale } from '../ext/soft/src/tokenize.js';
 import { softParse } from '../ext/soft/src/parse.js';
 import { softParseNames, softFindUses, softExecute } from '../ext/soft/src/cell.js';
 import { tokenizeSoft, softCompletions } from '../ext/soft/src/highlight.js';
@@ -1396,5 +1396,98 @@ describe('soft on events', () => {
     });
     // calling handler with stop should not throw
     assert.doesNotThrow(() => handlerFn({}));
+  });
+});
+
+// ── pt-BR locale ──
+
+import { readFileSync } from 'fs';
+const ptBR = JSON.parse(readFileSync('ext/soft/locales/pt-BR.json', 'utf8'));
+
+describe('soft pt-BR locale', () => {
+  // activate locale before tests, deactivate after
+  it('setup: activate pt-BR', () => { softSetLocale(ptBR); });
+
+  describe('tokenizer', () => {
+    it('maps Portuguese keywords to English', () => {
+      const toks = softTokenize('diga "olá"');
+      const kws = toks.filter(t => t.type === T.KW);
+      assert.equal(kws[0].value, 'say');
+    });
+
+    it('fale also maps to say', () => {
+      const toks = softTokenize('fale "olá"');
+      const kws = toks.filter(t => t.type === T.KW);
+      assert.equal(kws[0].value, 'say');
+    });
+
+    it('noise words consumed', () => {
+      const toks = softTokenize('o grau');
+      assert.equal(toks.filter(t => t.type === T.KW)[0].value, 'the'); // 'o' → 'the'
+    });
+  });
+
+  describe('full programs', () => {
+    it('hello world', () => {
+      assert.deepEqual(out('diga "olá mundo"'), ['olá mundo']);
+    });
+
+    it('fale variant', () => {
+      assert.deepEqual(out('fale "olá mundo"'), ['olá mundo']);
+    });
+
+    it('set and say', () => {
+      assert.deepEqual(out('defina nome para "Arthur"\ndiga "olá " nome'), ['olá Arthur']);
+    });
+
+    it('conditional', () => {
+      assert.deepEqual(out('defina grau para 62\nse grau acima 50\ndiga "minério"\nsenão\ndiga "estéril"\nfim'), ['minério']);
+    });
+
+    it('pipeline', () => {
+      const code = `defina dados para lista
+  registro grau 60 litologia "itabirito",
+  registro grau 40 litologia "filito",
+  registro grau 80 litologia "itabirito"
+
+pegue dados
+mantenha grau acima 50
+conte
+diga "resultado: " it`;
+      assert.deepEqual(out(code), ['resultado: 2']);
+    });
+
+    it('loop', () => {
+      assert.deepEqual(out('repita 3 vezes\ndiga "oi"\nfim'), ['oi', 'oi', 'oi']);
+    });
+
+    it('function definition and call', () => {
+      const code = `declare dobro recebe n
+  retorne n vezes 2
+fim
+diga dobro 5`;
+      assert.deepEqual(out(code), ['10']);
+    });
+
+    it('pipeline with sort and average', () => {
+      const code = `defina d para lista registro g 10, registro g 30, registro g 20
+pegue d
+ordene por g decrescente
+média de g
+diga it`;
+      assert.deepEqual(out(code), ['20']);
+    });
+
+    it('mixed Portuguese and symbols', () => {
+      assert.deepEqual(out('defina x para 3 + 4 * 2\ndiga x'), ['11']);
+    });
+  });
+
+  // deactivate locale
+  it('cleanup: deactivate locale', () => { softSetLocale(null); });
+
+  // verify English still works after deactivation
+  it('English works after locale deactivation', () => {
+    assert.deepEqual(out('say "hello"'), ['hello']);
   });
 });
