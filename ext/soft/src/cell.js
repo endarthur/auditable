@@ -158,18 +158,23 @@ export async function softExecute(code, scopeIn, cell) {
   // DOM helpers
   if (hasCtx) {
     const outputEl = cell._ctx.outputEl;
+    // cleanup tracking for event listeners
+    const cleanups = [];
+    if (cell._ctx.invalidation) {
+      cell._ctx.invalidation.then(() => { for (const fn of cleanups) fn(); });
+    }
+
     host.make = (tag, parent) => {
       const el = document.createElement(tag);
       (parent || outputEl).appendChild(el);
       return el;
     };
     host.on = (event, target, handler) => {
-      const el = target || outputEl;
-      if (typeof el === 'string') {
-        const found = document.getElementById(el);
-        if (found) found.addEventListener(event, handler);
-      } else if (el && el.addEventListener) {
+      let el = target || outputEl;
+      if (typeof el === 'string') el = document.getElementById(el);
+      if (el && el.addEventListener) {
         el.addEventListener(event, handler);
+        cleanups.push(() => el.removeEventListener(event, handler));
       }
     };
   }

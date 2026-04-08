@@ -160,6 +160,14 @@ export function softEval(code, options) {
 
   // ── eval node ──
 
+  function lineError(node, e) {
+    if (e._softLine) throw e; // already tagged
+    const msg = e.message || String(e);
+    const err = new Error(node.line ? `${msg} (line ${node.line})` : msg);
+    err._softLine = true;
+    throw err;
+  }
+
   function evalNode(node, sc) {
     step();
     switch (node.type) {
@@ -210,6 +218,13 @@ export function softEval(code, options) {
 
   function evalExpr(node, sc) {
     step();
+    try { return evalExprInner(node, sc); } catch (e) {
+      if (e instanceof ReturnSignal || e instanceof StopSignal || e instanceof SkipSignal) throw e;
+      if (e._softLine) throw e;
+      lineError(node, e);
+    }
+  }
+  function evalExprInner(node, sc) {
     switch (node.type) {
       case 'Num': return node.value;
       case 'Str': return node.value;

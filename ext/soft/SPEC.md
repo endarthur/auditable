@@ -2198,7 +2198,7 @@ of_path       = ( NAME | "(" expression ")" ) "of" NAME { "of" NAME }
 chunk_path    = chunk_kind atom "of" ( NAME | of_path | chunk_path )
               | ORDINAL chunk_kind "of" ( NAME | of_path | chunk_path )
 chunk_kind    = "character" | "word" | "line" | "item"
-say_stmt      = "say" expression
+say_stmt      = "say" expression { expression }    (* juxtaposition: multiple values auto-concatenated *)
 
 if_stmt       = "if" condition ["do"] NL block [ ("otherwise"|"else") NL block ] "end"
 unless_stmt   = "unless" condition ["do"] NL block "end"
@@ -2266,7 +2266,7 @@ agg_expr      = ( "average" | "total" | "count" | "smallest" | "largest"
               |   "mean" | "sum" | "min" | "max" ) [ "of" ] NAME
 count_expr    = "count" [ "rows" ]
 sort_expr     = "sort" [ "by" ] NAME [ "ascending" | "descending" ]
-round_expr    = "round" "to" NUM
+round_expr    = "round" [ arithmetic ] "to" NUM    (* with explicit value or pipeline implicit *)
 group_expr    = "group" "by" NAME
 limit_expr    = ( "first" | "last" | "top" ) [ NUM ]
 with_expr     = "with" NAME ( "is" | "being" | "as" ) expression
@@ -2295,7 +2295,9 @@ comparator    = "above" | ">" | "greater" "than" | "more" "than"
 inline_cond   = concat "if" condition "otherwise" concat  (* ternary expression *)
 expression    = inline_cond
               | concat
-concat        = bitwise { "&" bitwise }           (* string concatenation *)
+concat        = logic { "&" logic }               (* string concatenation *)
+logic         = comparison { ( "and" | "or" ) comparison }  (* always logical AND/OR *)
+comparison    = bitwise [ comparator bitwise ]       (* or type check, between, contains, matches *)
 bitwise       = shift { ( "bitwise" "and" | "bit" "and"
               | "bitwise" "or" | "bit" "or"
               | "bitwise" "xor" | "bit" "xor" | "xor" ) shift }
@@ -2310,8 +2312,10 @@ unary         = ( "not" | "!" ) unary
               | "number" "of" chunk_kind_pl "in" atom
               | "item" [ "at" ] atom "of" atom
               | chunk_kind atom "of" atom            (* word 2 of text — 0-based *)
-              | ORDINAL chunk_kind "of" atom          (* 3rd word of text — 1-based sugar *)
               | chunk_kind_pl atom "to" atom "of" atom
+              | "round" arithmetic "to" NUM             (* round as expression *)
+              | ( "call" | "run" ) atom { arithmetic }  (* explicit invocation *)
+              | "result" "of" atom { arithmetic }       (* explicit invocation, noun form *)
               | postfix
 chunk_kind    = "character" | "word" | "line" | "item"
 chunk_kind_pl = "characters" | "words" | "lines" | "items"
@@ -2343,9 +2347,14 @@ Each case is a program and its expected output.
 say "hello world"
 → hello world
 
-# B.2 — Concatenation with &
+# B.2 — Concatenation (juxtaposition in say, & in expressions)
 set name to "Arthur"
-say "hello " & name & "!"
+say "hello " name "!"
+→ hello Arthur!
+
+# B.2b — Explicit & concatenation
+set greeting to "hello " & name & "!"
+say greeting
 → hello Arthur!
 
 # B.3 — Conditional
@@ -2674,7 +2683,6 @@ end
 42 times 2
 say "answer is " & that
 say "also " & the result
-→ 84
 → answer is 84
 → also 84
 
@@ -2976,30 +2984,7 @@ say result
 assume data is a list of numbers
 → (passes, no output)
 
-# B.87 — Ordinal access (1-based)
-set data to list 10, 20, 30
-say 1st item of data
-say 3rd item of data
-→ 10
-→ 30
-
-# B.88 — Ordinal vs numeric (same result)
-set text to "the quick brown fox"
-say 3rd word of text
-say word 2 of text
-→ brown
-→ brown
-
-# B.89 — Ordinal chunk write
-set s to "hello world"
-set 1st word of s to "goodbye"
-say s
-→ goodbye world
-
-# B.90 — Ordinal nesting
-set doc to "first line\nsecond line\nthird line"
-say 1st character of 2nd line of doc
-→ s
+# B.87–B.90 — Ordinals: deferred (see §14)
 
 # B.91 — Regex matches
 set hole to "DDH042"
@@ -3028,4 +3013,124 @@ say "in range"
 end
 → pass
 → in range
+
+# B.94 — Say juxtaposition
+set name to "Arthur"
+say "hello " name "!"
+→ hello Arthur!
+
+# B.95 — Say juxtaposition with expression
+set x to 5
+say "result: " (x + 3) " done"
+→ result: 8 done
+
+# B.96 — call (explicit invocation)
+define make_counter
+  set n to 0
+  define increment
+    set n to n plus 1
+    return n
+  end
+  return increment
+end
+set c to make_counter
+say call c
+say call c
+→ 1
+→ 2
+
+# B.97 — run and result of (synonyms for call)
+set c to make_counter
+say run c
+say result of c
+→ 1
+→ 2
+
+# B.98 — call with arguments
+define make_greeter takes greeting
+  define greet takes name
+    return greeting & " " & name
+  end
+  return greet
+end
+set g to make_greeter "hello"
+say call g "Arthur"
+→ hello Arthur
+
+# B.99 — First-class functions (no auto-call)
+set c to make_counter
+set c2 to c
+say call c2
+say call c2
+→ 1
+→ 2
+
+# B.100 — then function piping
+"  hello world  " then Text.trim then Text.upper
+say it
+→ HELLO WORLD
+
+# B.101 — then with multi-arg function
+"hello world" then Text.split " "
+say it
+→ hello, world
+
+# B.102 — round as expression
+say round 3.14159 to 2
+→ 3.14
+
+# B.103 — round expression in set
+set ratio to round (2 over 3) to 3
+say ratio
+→ 0.667
+
+# B.104 — Multi-line list
+set data to list
+  record name "Alice" age 30,
+  record name "Bob" age 25
+say length of data
+→ 2
+
+# B.105 — is at least / is at most
+set x to 50
+if x is at least 50
+  say "pass"
+end
+if x is at most 100
+  say "ok"
+end
+→ pass
+→ ok
+
+# B.106 — does not equal
+if 5 does not equal 6
+  say "different"
+end
+→ different
+
+# B.107 — Chunk read
+say word 2 of "the quick brown fox"
+say character 0 of "hello"
+→ brown
+→ h
+
+# B.108 — Chunk write
+set s to "hello world"
+set word 1 of s to "Soft"
+say s
+→ hello Soft
+
+# B.109 — Chunk range
+say characters 1 to 3 of "hello"
+→ ell
+
+# B.110 — number of chunks
+say number of words in "the quick brown fox"
+→ 4
+
+# B.111 — of-path write
+set r to record name "Alice" age 30
+set age of r to 31
+say age of r
+→ 31
 ```

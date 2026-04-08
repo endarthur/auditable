@@ -242,7 +242,8 @@ function shouldNegateBeUnary(tokens) {
 
 // ── AST node constructors ──
 
-const N = (type, props) => ({ type, ...props });
+let _curLine = 1;
+const N = (type, props) => ({ type, line: _curLine, ...props });
 
 // ── parser ──
 
@@ -251,7 +252,7 @@ function softParse(code) {
   let pos = 0;
 
   // -- token access --
-  function cur() { return tokens[pos] || { type: T.EOF, value: '' }; }
+  function cur() { const t = tokens[pos] || { type: T.EOF, value: '', line: _curLine }; _curLine = t.line || _curLine; return t; }
   function at(type, value) {
     const t = cur();
     if (value !== undefined) return t.type === type && t.value === value;
@@ -1816,6 +1817,14 @@ function softEval(code, options) {
 
   // ── eval node ──
 
+  function lineError(node, e) {
+    if (e._softLine) throw e; // already tagged
+    const msg = e.message || String(e);
+    const err = new Error(node.line ? `${msg} (line ${node.line})` : msg);
+    err._softLine = true;
+    throw err;
+  }
+
   function evalNode(node, sc) {
     step();
     switch (node.type) {
@@ -1866,6 +1875,13 @@ function softEval(code, options) {
 
   function evalExpr(node, sc) {
     step();
+    try { return evalExprInner(node, sc); } catch (e) {
+      if (e instanceof ReturnSignal || e instanceof StopSignal || e instanceof SkipSignal) throw e;
+      if (e._softLine) throw e;
+      lineError(node, e);
+    }
+  }
+  function evalExprInner(node, sc) {
     switch (node.type) {
       case 'Num': return node.value;
       case 'Str': return node.value;
@@ -2992,18 +3008,23 @@ async function softExecute(code, scopeIn, cell) {
   // DOM helpers
   if (hasCtx) {
     const outputEl = cell._ctx.outputEl;
+    // cleanup tracking for event listeners
+    const cleanups = [];
+    if (cell._ctx.invalidation) {
+      cell._ctx.invalidation.then(() => { for (const fn of cleanups) fn(); });
+    }
+
     host.make = (tag, parent) => {
       const el = document.createElement(tag);
       (parent || outputEl).appendChild(el);
       return el;
     };
     host.on = (event, target, handler) => {
-      const el = target || outputEl;
-      if (typeof el === 'string') {
-        const found = document.getElementById(el);
-        if (found) found.addEventListener(event, handler);
-      } else if (el && el.addEventListener) {
+      let el = target || outputEl;
+      if (typeof el === 'string') el = document.getElementById(el);
+      if (el && el.addEventListener) {
         el.addEventListener(event, handler);
+        cleanups.push(() => el.removeEventListener(event, handler));
       }
     };
   }

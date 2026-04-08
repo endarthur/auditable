@@ -5,7 +5,8 @@ import { softTokenize, T } from './tokenize.js';
 
 // ── AST node constructors ──
 
-const N = (type, props) => ({ type, ...props });
+let _curLine = 1;
+const N = (type, props) => ({ type, line: _curLine, ...props });
 
 // ── parser ──
 
@@ -14,7 +15,7 @@ export function softParse(code) {
   let pos = 0;
 
   // -- token access --
-  function cur() { return tokens[pos] || { type: T.EOF, value: '' }; }
+  function cur() { const t = tokens[pos] || { type: T.EOF, value: '', line: _curLine }; _curLine = t.line || _curLine; return t; }
   function at(type, value) {
     const t = cur();
     if (value !== undefined) return t.type === type && t.value === value;
