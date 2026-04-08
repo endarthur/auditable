@@ -1251,7 +1251,7 @@ function softParse(code) {
 
     // repeat ...
     // repeat each
-    if (eatKw('for')) { /* optional filler */ }
+    if (eatKw('for') || eatKw('to')) { /* optional filler: "repeat for each" / "repita para cada" */ }
     if (kw('each')) {
       pos++;
       const varName = expectName();
