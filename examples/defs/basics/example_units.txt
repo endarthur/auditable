@@ -1,14 +1,15 @@
 /// auditable
 /// title: @gcu/units — unit conversions
-/// module: @gcu/units ext/units/index.js
 
 /// md
 # @gcu/units
 
 Unit conversion primitives for geoscience. Covers length, mass, grade, density, area, volume, angle, and magnetic field — plus sieve mesh and drill core lookup tables.
 
+This example `install()`s `@gcu/units` from npm on first open — cached in the notebook afterwards for offline reuse. Same pattern for any `@gcu/*` package.
+
 /// code
-const { convert, format, sieve, core, grade, density } = await load("@gcu/units")
+const { convert, format, sieve, core, grade, density } = await install("@gcu/units")
 
 /// md
 ## grade conversions

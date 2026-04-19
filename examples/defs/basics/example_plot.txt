@@ -1,14 +1,15 @@
 /// auditable
 /// title: @gcu/plot — canvas plotting
-/// module: @gcu/plot ext/plot/index.js
 
 /// md
 # @gcu/plot
 
 Canvas 2D plotting library. Axes-based API inspired by matplotlib.
 
+This example `install()`s the extension from npm (via [esm.sh](https://esm.sh)) on first open — the module is fetched once and cached in the notebook so subsequent opens work offline. The same pattern works for any `@gcu/*` package: `await install("@gcu/<name>")`.
+
 /// code
-const plot = await load("@gcu/plot")
+const plot = await install("@gcu/plot")
 
 /// md
 ## line plot

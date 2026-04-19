@@ -1,15 +1,16 @@
 /// auditable
 /// title: soft — English keyword language
-/// module: @gcu/soft ext/soft/index.js
 
 /// md
 # @gcu/soft
 
 A general-purpose programming language designed for soft keyboard input. Every keyword is a common English word — the language can be written entirely without symbols. Data query pipelines, reactive cells, and JS interop.
 
+This example `install()`s `@gcu/soft` from npm on first open. The install triggers side-effect registration that wires `soft` in as a cell type — the `/// soft` cells below then work the same as a native language.
+
 /// code collapsed
 // %collapsed
-await load("@gcu/soft")
+await install("@gcu/soft")
 
 /// md
 ## hello world
