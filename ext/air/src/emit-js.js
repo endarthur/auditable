@@ -125,10 +125,12 @@ class EmitCtx {
     return '_' + id.slice(1); // %0 → _0
   }
 
-  // Apply V8 type hints to an expression
+  // Apply V8 type hints to an expression.
+  // Wrap the whole result in parens so precedence survives when inlined
+  // into an outer expression: `((a+b) | 0)` instead of `(a+b) | 0`.
   hintExpr(expr, type) {
     if (!this.hinted || !type || isDynamic(type)) return expr;
-    if (type.kind === 'i32' || type.kind === 'u32') return `(${expr}) | 0`;
+    if (type.kind === 'i32' || type.kind === 'u32') return `((${expr}) | 0)`;
     if (type.kind === 'f32') return `Math.fround(${expr})`;
     return expr;
   }

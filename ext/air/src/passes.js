@@ -70,6 +70,18 @@ function taElementType(t) {
 export function propagateTypes(module, opts = {}) {
   const types = new Map();     // SSA id → type
   const nameTypes = new Map(); // variable name → current type
+  const nameOrigins = new Map(); // variable name → current value SSA id
+
+  // Resolve a value ssa id through load ops (using currently-tracked origins)
+  function resolveValue(ssaId) {
+    const op = findOpAnywhere(module.ops, ssaId);
+    if (!op) return null;
+    if (op.op === 'load' && typeof op.args[0] === 'string') {
+      const originId = nameOrigins.get(op.args[0]);
+      if (originId) return resolveValue(originId);
+    }
+    return op;
+  }
 
   // Seed nameTypes from imports (cross-cell type flow)
   // opts.importTypes: Map<importName, Type>
@@ -178,6 +190,7 @@ export function propagateTypes(module, opts = {}) {
           const declared = op.type && !isDynamic(op.type) && op.type.kind !== 'void';
           const t = declared ? op.type : valType;
           nameTypes.set(name, t);
+          nameOrigins.set(name, valId);
           types.set(op.id, VOID);
           break;
         }
@@ -192,7 +205,30 @@ export function propagateTypes(module, opts = {}) {
           break;
         }
 
-        case 'object_get': case 'array_get': {
+        case 'object_get': {
+          // If the object was produced (possibly through a load chain) by an
+          // object_new with a statically-known field matching this key, infer
+          // the field's type.
+          const objId = op.args[0];
+          const key = op.args[1];
+          let inferred = op.type || DYNAMIC;
+          if (typeof key === 'string' && isDynamic(inferred)) {
+            const srcOp = resolveValue(objId);
+            if (srcOp && srcOp.op === 'object_new' && Array.isArray(srcOp.args)) {
+              for (const pair of srcOp.args) {
+                if (pair && pair.key === key && pair.id) {
+                  const fieldT = types.get(pair.id);
+                  if (fieldT && !isDynamic(fieldT)) inferred = fieldT;
+                  break;
+                }
+              }
+            }
+          }
+          op.type = inferred;
+          types.set(op.id, inferred);
+          break;
+        }
+        case 'array_get': {
           types.set(op.id, op.type || DYNAMIC);
           break;
         }
@@ -603,9 +639,53 @@ function bothNumeric(lt, rt) {
 //   %C = call [%B, arg1, arg2]
 //   %D = await [%C]
 // In that case we replace both %C and %D; subsequent uses of %D get redirected to the new op.
+// Walks ops in order; for each name, tracks the origin op of its current value.
+// If a name has a unique origin, we can trace `load name` back to that origin
+// for specialization purposes. If reassigned with different origins, the current
+// value can change — we use the most recent.
+function computeNameOrigins(allOps) {
+  const origins = new Map(); // name → SSA id of the value stored
+  const opsById = new Map(); // SSA id → op, for fast lookup
+  function visit(ops) {
+    for (const op of ops) {
+      if (op.id) opsById.set(op.id, op);
+      if (op.op === 'store' && typeof op.args[0] === 'string') {
+        origins.set(op.args[0], op.args[1]);
+      }
+      for (const key of ['then_body', 'else_body', 'body', 'init', 'test',
+                         'update', 'try_body', 'catch_body', 'finally_body']) {
+        if (op[key]) visit(op[key]);
+      }
+      if (op.cases) for (const c of op.cases) {
+        if (c.test_ops) visit(c.test_ops);
+        if (c.body) visit(c.body);
+      }
+    }
+  }
+  visit(allOps);
+  return { origins, opsById };
+}
+
+// Resolve an SSA id through load ops to its source op (object_new, array_new, etc.)
+function resolveOrigin(ssaId, origins, opsById) {
+  let op = opsById.get(ssaId);
+  if (!op) return null;
+  if (op.op === 'load' && typeof op.args[0] === 'string') {
+    const originId = origins.get(op.args[0]);
+    if (originId) return resolveOrigin(originId, origins, opsById);
+  }
+  return op;
+}
+
 export function specializeRuntimeHelpers(module, types) {
   const replacements = new Map(); // old SSA id → new SSA id (for arg rewrites)
   let changed = false;
+  const { origins, opsById } = computeNameOrigins(module.ops);
+
+  // Helper: find op or follow load chains
+  function traceOp(ssaId) {
+    return resolveOrigin(ssaId, origins, opsById);
+  }
 
   function specialize(ops) {
     for (let i = 0; i < ops.length; i++) {
@@ -650,6 +730,85 @@ export function specializeRuntimeHelpers(module, types) {
       if (!specs) continue;
 
       const method = calleeOp.args[1];
+
+      // --- Special: getattr on plain objects / typed arrays ---
+      // _py.getattr(obj, "name") → obj.name when obj is provably a plain value.
+      if (method === 'getattr' && op.args.length === 3) {
+        const objId = op.args[1];
+        const nameId = op.args[2];
+        const nameOp = traceOp(nameId);
+        if (nameOp && nameOp.op === 'const' && typeof nameOp.args[0] === 'string') {
+          const attrName = nameOp.args[0];
+          const objOp = traceOp(objId);
+          // Plain object literal → direct dot access (no class dispatch needed)
+          // Typed/plain array .length → direct (very common)
+          const isPlainObject = objOp && objOp.op === 'object_new';
+          const isArrayLength = (objOp?.op === 'array_new' || objOp?.op === 'ta_new') && attrName === 'length';
+          if (isPlainObject || isArrayLength) {
+            op.op = 'object_get';
+            op.args = [objId, attrName];
+            op.type = isArrayLength ? I32 : DYNAMIC;
+            types.set(op.id, op.type);
+            changed = true;
+            // Absorb trailing await if present
+            const nextOp = ops[i + 1];
+            if (nextOp && nextOp.op === 'await' && nextOp.args[0] === op.id) {
+              nextOp.op = 'const';
+              nextOp.args = [undefined];
+              nextOp.type = VOID;
+              types.set(nextOp.id, VOID);
+              replacements.set(nextOp.id, op.id);
+            }
+            continue;
+          }
+        }
+      }
+
+      // --- Special: getitem specialization ---
+      // Plain object literal + const string key → obj.key
+      // Plain/typed array + const non-negative index → arr[idx]
+      // (Skip the helper's negative-index/dict/dunder handling.)
+      if (method === 'getitem' && op.args.length === 3) {
+        const objId = op.args[1];
+        const idxId = op.args[2];
+        const objOp = traceOp(objId);
+        const idxOp = traceOp(idxId);
+
+        const isArray = objOp && (objOp.op === 'array_new' || objOp.op === 'ta_new');
+        const isObject = objOp && objOp.op === 'object_new';
+        const isNonNegNumConst = idxOp?.op === 'const' &&
+                                  typeof idxOp.args[0] === 'number' && idxOp.args[0] >= 0;
+        const isStringConst = idxOp?.op === 'const' && typeof idxOp.args[0] === 'string';
+
+        let specialized = false;
+        if (isArray && isNonNegNumConst) {
+          op.op = 'array_get';
+          op.args = [objId, idxId];
+          op.type = objOp.op === 'ta_new' ? (taElementType(objOp.type) || DYNAMIC) : DYNAMIC;
+          specialized = true;
+        } else if (isObject && isStringConst) {
+          // Dict-as-object: direct property access with string key
+          op.op = 'object_get';
+          op.args = [objId, idxOp.args[0]];
+          op.type = DYNAMIC;
+          specialized = true;
+        }
+
+        if (specialized) {
+          types.set(op.id, op.type);
+          changed = true;
+          const nextOp = ops[i + 1];
+          if (nextOp && nextOp.op === 'await' && nextOp.args[0] === op.id) {
+            nextOp.op = 'const';
+            nextOp.args = [undefined];
+            nextOp.type = VOID;
+            types.set(nextOp.id, VOID);
+            replacements.set(nextOp.id, op.id);
+          }
+          continue;
+        }
+      }
+
       const spec = specs[method];
       if (!spec) continue;
 
@@ -708,6 +867,7 @@ export function specializeRuntimeHelpers(module, types) {
       op.type = resT;
       types.set(op.id, resT);
       changed = true;
+      // Fall through to async-absorb handling below
       const nextOp = ops[i + 1];
       if (nextOp && nextOp.op === 'await' && nextOp.args[0] === op.id) {
         // The await is now redundant (we produced a direct value, not a promise)
