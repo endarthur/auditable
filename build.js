@@ -555,6 +555,53 @@ function processModulesAsRegistry(mainPath, moduleDir, opts = {}) {
   return modules;
 }
 
+// Process an extension's src/ tree as a set of ES-module registry entries.
+// Unlike processModulesAsRegistry, this supports subfolders (e.g. ext/air/src/lower/js.js)
+// and namespaces each module under the extension name to avoid collisions:
+//   ext/air/src/types.js       → registry entry 'air/types',     imported as '#air/types'
+//   ext/air/src/lower/js.js    → registry entry 'air/lower/js',  imported as '#air/lower/js'
+//
+// Each file's relative imports are rewritten to the '#<ext>/<resolved-path>' form,
+// resolved against the file's own location (so '../types.js' from lower/js.js
+// becomes '#air/types'). This preserves real ES-module scope per file — each file
+// has its own closure, eliminating the identifier-collision class of bug the
+// naive concat suffers from.
+//
+// main.js is treated purely as a build-time manifest and is NOT registered
+// (its job is to define ordering and it has no runtime significance).
+function processExtensionAsRegistry(extName, srcDir) {
+  const mainPath = path.join(srcDir, 'main.js');
+  const mainSrc = fs.readFileSync(mainPath, 'utf8');
+  const importPaths = [];
+  for (const line of mainSrc.split('\n')) {
+    const m = line.match(/^(?:import|export)\s+.*['"]\.\/(.+?)['"];?\s*(?:\/\/.*)?$/);
+    if (m) importPaths.push(m[1]); // e.g. 'types.js' or 'lower/js.js'
+  }
+
+  const modules = [];
+  for (const relPath of importPaths) {
+    const filePath = path.join(srcDir, relPath);
+    let src = fs.readFileSync(filePath, 'utf8');
+    const moduleRelNoExt = relPath.replace(/\.js$/, '').replace(/\\/g, '/');
+    const name = `${extName}/${moduleRelNoExt}`;
+    const currentDir = path.dirname(relPath);
+
+    // Rewrite relative imports in this file, resolved against its directory.
+    const rewriteImport = (_, pre, relative) => {
+      const joined = currentDir === '.' ? relative : path.join(currentDir, relative);
+      const resolvedNoExt = path.normalize(joined).replace(/\\/g, '/').replace(/\.js$/, '');
+      return `${pre}'#${extName}/${resolvedNoExt}'`;
+    };
+    src = src.replace(/(from\s+)['"](\.\.?\/.+?\.js)['"]/g, rewriteImport);
+    src = src.replace(/(import\s+)['"](\.\.?\/.+?\.js)['"]/g, rewriteImport);
+
+    src = src.replace(/^\n+/, '').replace(/\n+$/, '');
+    modules.push({ name, source: src });
+  }
+
+  return modules;
+}
+
 function generateModuleBoot(cm6Src, modules, acornSrc) {
   const entries = [];
   for (const m of modules) {
@@ -619,12 +666,15 @@ const cm6Src = fs.existsSync(cm6Path) ? fs.readFileSync(cm6Path, 'utf8') : '';
 const acornPath = path.join(__dirname, 'ext/acorn/acorn.min.js');
 const acornSrc = fs.existsSync(acornPath) ? fs.readFileSync(acornPath, 'utf8') : '';
 
-// Add AIR bundle as a module entry (ES module, uses window.Acorn)
-const airPath = path.join(__dirname, 'ext/air/index.js');
-if (fs.existsSync(airPath)) {
-  let airSrc = fs.readFileSync(airPath, 'utf8');
-  airSrc = airSrc.replace(/^\n+/, '').replace(/\n+$/, '');
-  modules.push({ name: 'air', source: airSrc });
+// Add AIR as individual ES-module registry entries (real per-file scope, no concat flattening).
+// Each ext/air/src/*.js becomes its own module under the #air/... namespace. This is the same
+// pattern src/js/ uses and avoids the identifier-collision class of bug naive concat is prone to.
+// The concat ext/air/index.js is still produced by ext/air/build.js, but only as the /bundled
+// artifact for npm consumers — Auditable's own runtime no longer loads it.
+const airSrcDir = path.join(__dirname, 'ext/air/src');
+if (fs.existsSync(airSrcDir)) {
+  const airModules = processExtensionAsRegistry('air', airSrcDir);
+  for (const m of airModules) modules.push(m);
 }
 
 // 3. Read CSS and HTML template

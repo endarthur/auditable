@@ -43,13 +43,13 @@ function emitSoftCall(ctx, method, args, loc, type) {
   return ctx.emit('call', [methodGet.id, ...args.map(a => a.id)], type || DYNAMIC, loc);
 }
 
-function emitAwaitedCall(ctx, fnId, argIds, loc, type) {
+function emitAwaitedCall_sf(ctx, fnId, argIds, loc, type) {
   const call = ctx.emit('call', [fnId, ...argIds], type || DYNAMIC, loc);
   return ctx.emit('await', [call.id], type || DYNAMIC, loc);
 }
 
 // Collect top-level defines from the AST (Set, Define, Capture, Use)
-function collectDefines(body, defines) {
+function collectDefines_sf(body, defines) {
   for (const node of body || []) {
     switch (node.type) {
       case 'Set': defines.add(node.name); break;
@@ -60,19 +60,19 @@ function collectDefines(body, defines) {
       case 'Take': defines.add(node.name); break;
       case 'PipeCalled': if (node.name) defines.add(node.name); break;
       case 'If':
-        collectDefines(node.body, defines);
-        if (node.elseBody) collectDefines(node.elseBody, defines);
+        collectDefines_sf(node.body, defines);
+        if (node.elseBody) collectDefines_sf(node.elseBody, defines);
         break;
       case 'While': case 'Repeat':
-        collectDefines(node.body, defines);
+        collectDefines_sf(node.body, defines);
         break;
       case 'ForEach':
         defines.add(node.varName);
-        collectDefines(node.body, defines);
+        collectDefines_sf(node.body, defines);
         break;
       case 'RangeLoop':
         defines.add(node.varName);
-        collectDefines(node.body, defines);
+        collectDefines_sf(node.body, defines);
         break;
     }
   }
@@ -85,7 +85,7 @@ export function lowerSoft(ast, source) {
 
   if (ast.type !== 'Program') throw new SoftLowerError('Expected Program node');
 
-  collectDefines(ast.body, ctx.defines);
+  collectDefines_sf(ast.body, ctx.defines);
 
   // Identify names that will be declared by `Define` (function syntax-like)
   const funcNames = new Set();
@@ -102,7 +102,7 @@ export function lowerSoft(ast, source) {
     ctx.symbols.set(name, undef.id);
   }
 
-  for (const stmt of ast.body) lowerStmt(ctx, stmt);
+  for (const stmt of ast.body) lowerStmt_sf(ctx, stmt);
 
   const exports = new Map();
   for (const name of ctx.defines) {
@@ -123,7 +123,7 @@ export function lowerSoft(ast, source) {
 
 // ── Statement lowering ──
 
-function lowerStmt(ctx, node) {
+function lowerStmt_sf(ctx, node) {
   if (!node) return null;
   const l = ctx.loc(node);
 
@@ -131,17 +131,17 @@ function lowerStmt(ctx, node) {
     case 'Set': return lowerSet(ctx, node);
     case 'Define': return lowerDefine(ctx, node);
     case 'Say': return lowerSay(ctx, node);
-    case 'If': return lowerIf(ctx, node);
-    case 'While': return lowerWhile(ctx, node);
+    case 'If': return lowerIf_sf(ctx, node);
+    case 'While': return lowerWhile_sf(ctx, node);
     case 'ForEach': return lowerForEach(ctx, node);
     case 'RangeLoop': return lowerRangeLoop(ctx, node);
     case 'Repeat': return lowerRepeat(ctx, node);
     case 'Return': {
-      const val = node.value ? lowerExpr(ctx, node.value) : ctx.emit('const', [null], VOID, l);
+      const val = node.value ? lowerExpr_sf(ctx, node.value) : ctx.emit('const', [null], VOID, l);
       ctx.emit('return', [val.id], VOID, l);
       return null;
     }
-    case 'ExprStmt': return lowerExpr(ctx, node.expr);
+    case 'ExprStmt': return lowerExpr_sf(ctx, node.expr);
     case 'Capture': return lowerCapture(ctx, node);
     case 'Stop': ctx.emit('break', [], VOID, l); return null;
     case 'Skip': ctx.emit('continue', [], VOID, l); return null;
@@ -173,7 +173,7 @@ function lowerStmt(ctx, node) {
 
 // ── Expression lowering ──
 
-function lowerExpr(ctx, node) {
+function lowerExpr_sf(ctx, node) {
   if (!node) return ctx.emit('const', [null], VOID, null);
   const l = ctx.loc(node);
 
@@ -187,11 +187,11 @@ function lowerExpr(ctx, node) {
     case 'Bool': return ctx.emit('const', [node.value], BOOL, l);
     case 'Nothing': return ctx.emit('const', [null], DYNAMIC, l);
     case 'Ref': return lowerRef(ctx, node);
-    case 'Group': return lowerExpr(ctx, node.expr);
+    case 'Group': return lowerExpr_sf(ctx, node.expr);
 
-    case 'BinOp': return lowerBinOp(ctx, node);
-    case 'Unary': return lowerUnary(ctx, node);
-    case 'Compare': return lowerCompare(ctx, node);
+    case 'BinOp': return lowerBinOp_sf(ctx, node);
+    case 'Unary': return lowerUnary_sf(ctx, node);
+    case 'Compare': return lowerCompare_sf(ctx, node);
     case 'Logic': return lowerLogic(ctx, node);
     case 'Between': return lowerBetween(ctx, node);
     case 'TypeCheck': return lowerTypeCheck(ctx, node);
@@ -199,15 +199,15 @@ function lowerExpr(ctx, node) {
 
     case 'Of': return lowerOf(ctx, node);
     case 'LengthOf': {
-      const e = lowerExpr(ctx, node.expr);
+      const e = lowerExpr_sf(ctx, node.expr);
       return emitSoftCall(ctx, 'lengthOf', [e], l);
     }
 
-    case 'Call': return lowerCall(ctx, node);
+    case 'Call': return lowerCall_sf(ctx, node);
     case 'Invoke': return lowerInvoke(ctx, node);
 
     case 'List': {
-      const items = node.items.map(e => lowerExpr(ctx, e).id);
+      const items = node.items.map(e => lowerExpr_sf(ctx, e).id);
       return ctx.emit('array_new', items, DYNAMIC, l);
     }
 
@@ -216,7 +216,7 @@ function lowerExpr(ctx, node) {
 
     case 'Juxtapose': {
       // String concat — a & b & c or implicit juxtaposition in say
-      const parts = node.parts.map(p => lowerExpr(ctx, p));
+      const parts = node.parts.map(p => lowerExpr_sf(ctx, p));
       if (parts.length === 0) return ctx.emit('const', [''], STRING, l);
       let result = emitSoftCall(ctx, 'str', [parts[0]], l, STRING);
       for (let i = 1; i < parts.length; i++) {
@@ -227,20 +227,20 @@ function lowerExpr(ctx, node) {
     }
 
     case 'Chunk': {
-      const target = lowerExpr(ctx, node.target);
-      const index = lowerExpr(ctx, node.index);
+      const target = lowerExpr_sf(ctx, node.target);
+      const index = lowerExpr_sf(ctx, node.index);
       const kind = ctx.emit('const', [node.kind], STRING, l);
       return emitSoftCall(ctx, 'chunk', [kind, index, target], l);
     }
     case 'ChunkRange': {
-      const target = lowerExpr(ctx, node.target);
-      const from = lowerExpr(ctx, node.from);
-      const to = lowerExpr(ctx, node.to);
+      const target = lowerExpr_sf(ctx, node.target);
+      const from = lowerExpr_sf(ctx, node.from);
+      const to = lowerExpr_sf(ctx, node.to);
       const kind = ctx.emit('const', [node.kind], STRING, l);
       return emitSoftCall(ctx, 'chunkRange', [kind, from, to, target], l);
     }
     case 'CountChunks': {
-      const e = lowerExpr(ctx, node.expr);
+      const e = lowerExpr_sf(ctx, node.expr);
       const kind = ctx.emit('const', [node.kind], STRING, l);
       return emitSoftCall(ctx, 'countChunks', [kind, e], l);
     }
@@ -314,20 +314,20 @@ const BINOP_TO_AIR = {
   'bitand': 'bitwise_and', 'bitor': 'bitwise_or', 'bitxor': 'bitwise_xor',
 };
 
-function lowerBinOp(ctx, node) {
+function lowerBinOp_sf(ctx, node) {
   const l = ctx.loc(node);
   if (node.op === '&') {
     // String concat — softString both, then +
-    const left = lowerExpr(ctx, node.left);
-    const right = lowerExpr(ctx, node.right);
+    const left = lowerExpr_sf(ctx, node.left);
+    const right = lowerExpr_sf(ctx, node.right);
     const ls = emitSoftCall(ctx, 'str', [left], l, STRING);
     const rs = emitSoftCall(ctx, 'str', [right], l, STRING);
     return ctx.emit('add', [ls.id, rs.id], STRING, l);
   }
   const airOp = BINOP_TO_AIR[node.op];
   if (!airOp) throw new SoftLowerError(`Soft: unknown binop ${node.op}`);
-  const left = lowerExpr(ctx, node.left);
-  const right = lowerExpr(ctx, node.right);
+  const left = lowerExpr_sf(ctx, node.left);
+  const right = lowerExpr_sf(ctx, node.right);
   // Soft uses direct JS arithmetic — no runtime dispatch. Result type
   // is dynamic (could be number, string concat via '+', etc.) but we
   // emit the JS op directly which is correct.
@@ -336,9 +336,9 @@ function lowerBinOp(ctx, node) {
   return ctx.emit(airOp, [left.id, right.id], typeHint, l);
 }
 
-function lowerUnary(ctx, node) {
+function lowerUnary_sf(ctx, node) {
   const l = ctx.loc(node);
-  const arg = lowerExpr(ctx, node.expr);
+  const arg = lowerExpr_sf(ctx, node.expr);
   switch (node.op) {
     case 'not': {
       // !_soft.truthy(v) — Soft's "not" uses its own truthiness
@@ -351,10 +351,10 @@ function lowerUnary(ctx, node) {
   }
 }
 
-function lowerCompare(ctx, node) {
+function lowerCompare_sf(ctx, node) {
   const l = ctx.loc(node);
-  const left = lowerExpr(ctx, node.left);
-  const right = lowerExpr(ctx, node.right);
+  const left = lowerExpr_sf(ctx, node.left);
+  const right = lowerExpr_sf(ctx, node.right);
   switch (node.op) {
     case '<': return ctx.emit('lt', [left.id, right.id], BOOL, l);
     case '>': return ctx.emit('gt', [left.id, right.id], BOOL, l);
@@ -378,12 +378,12 @@ function lowerLogic(ctx, node) {
   // Soft's and/or: short-circuit, return actual value not bool
   // a and b → truthy(a) ? b : a
   // a or b  → truthy(a) ? a : b
-  const left = lowerExpr(ctx, node.left);
+  const left = lowerExpr_sf(ctx, node.left);
   const truthy = emitSoftCall(ctx, 'truthy', [left], l, BOOL);
 
   const savedOps = ctx.ops;
   ctx.ops = [];
-  const right = lowerExpr(ctx, node.right);
+  const right = lowerExpr_sf(ctx, node.right);
   const rightBody = ctx.ops;
   ctx.ops = savedOps;
 
@@ -404,15 +404,15 @@ function lowerLogic(ctx, node) {
 
 function lowerBetween(ctx, node) {
   const l = ctx.loc(node);
-  const v = lowerExpr(ctx, node.value);
-  const lo = lowerExpr(ctx, node.lo);
-  const hi = lowerExpr(ctx, node.hi);
+  const v = lowerExpr_sf(ctx, node.value);
+  const lo = lowerExpr_sf(ctx, node.lo);
+  const hi = lowerExpr_sf(ctx, node.hi);
   return emitSoftCall(ctx, 'between', [v, lo, hi], l, BOOL);
 }
 
 function lowerTypeCheck(ctx, node) {
   const l = ctx.loc(node);
-  const e = lowerExpr(ctx, node.expr);
+  const e = lowerExpr_sf(ctx, node.expr);
   const tn = ctx.emit('const', [node.typeName], STRING, l);
   return emitSoftCall(ctx, 'isType', [e, tn], l, BOOL);
 }
@@ -420,15 +420,15 @@ function lowerTypeCheck(ctx, node) {
 function lowerTernary(ctx, node) {
   const l = ctx.loc(node);
   // X if cond otherwise Y → _soft.truthy(cond) ? X : Y
-  const cond = lowerExpr(ctx, node.cond);
+  const cond = lowerExpr_sf(ctx, node.cond);
   const truthy = emitSoftCall(ctx, 'truthy', [cond], l, BOOL);
 
   const savedOps = ctx.ops;
   ctx.ops = [];
-  const thenVal = lowerExpr(ctx, node.ifTrue);
+  const thenVal = lowerExpr_sf(ctx, node.ifTrue);
   const thenBody = ctx.ops;
   ctx.ops = [];
-  const elseVal = lowerExpr(ctx, node.ifFalse);
+  const elseVal = lowerExpr_sf(ctx, node.ifFalse);
   const elseBody = ctx.ops;
   ctx.ops = savedOps;
 
@@ -443,14 +443,14 @@ function lowerTernary(ctx, node) {
 
 function lowerOf(ctx, node) {
   const l = ctx.loc(node);
-  const obj = lowerExpr(ctx, node.obj);
+  const obj = lowerExpr_sf(ctx, node.obj);
   // node.prop is a node like Ref — get its name
   let propName;
   if (node.prop.type === 'Ref') propName = node.prop.name;
   else if (node.prop.type === 'Str') propName = node.prop.value;
   else {
     // Computed — use array_get (dynamic property)
-    const prop = lowerExpr(ctx, node.prop);
+    const prop = lowerExpr_sf(ctx, node.prop);
     return emitSoftCall(ctx, 'of', [obj, prop], l);
   }
   const name = ctx.emit('const', [propName], STRING, l);
@@ -459,10 +459,10 @@ function lowerOf(ctx, node) {
 
 // ── Call ──
 
-function lowerCall(ctx, node) {
+function lowerCall_sf(ctx, node) {
   const l = ctx.loc(node);
   const name = node.name;
-  const args = node.args.map(a => lowerExpr(ctx, a));
+  const args = node.args.map(a => lowerExpr_sf(ctx, a));
 
   // Dotted names (Text.upper, List.reverse, etc.) — lower as nested object_gets + call
   if (name.includes('.')) {
@@ -475,20 +475,20 @@ function lowerCall(ctx, node) {
     for (let i = 1; i < parts.length; i++) {
       fn = ctx.emit('object_get', [fn.id, parts[i]], DYNAMIC, l);
     }
-    return emitAwaitedCall(ctx, fn.id, args.map(a => a.id), l);
+    return emitAwaitedCall_sf(ctx, fn.id, args.map(a => a.id), l);
   }
 
   if (!ctx.symbols.has(name) && !ctx.defines.has(name)) {
     ctx.imports.add(name);
   }
   const fn = ctx.emit('load', [name], DYNAMIC, l);
-  return emitAwaitedCall(ctx, fn.id, args.map(a => a.id), l);
+  return emitAwaitedCall_sf(ctx, fn.id, args.map(a => a.id), l);
 }
 
 function lowerInvoke(ctx, node) {
   const l = ctx.loc(node);
-  const fn = lowerExpr(ctx, node.expr);
-  const args = node.args.map(a => lowerExpr(ctx, a));
+  const fn = lowerExpr_sf(ctx, node.expr);
+  const args = node.args.map(a => lowerExpr_sf(ctx, a));
   // Use _soft.invoke to handle the "already resolved to non-function" case
   const argsArr = ctx.emit('array_new', args.map(a => a.id), DYNAMIC, l);
   const call = emitSoftCall(ctx, 'invoke', [fn, argsArr], l);
@@ -501,7 +501,7 @@ function lowerRecord(ctx, node) {
   const l = ctx.loc(node);
   const pairs = node.fields.map(f => ({
     key: f.name,
-    id: lowerExpr(ctx, f.value).id,
+    id: lowerExpr_sf(ctx, f.value).id,
   }));
   return ctx.emit('object_new', pairs, DYNAMIC, l);
 }
@@ -515,7 +515,7 @@ function lowerRecordWith(ctx, node) {
 
 function lowerSet(ctx, node) {
   const l = ctx.loc(node);
-  const val = lowerExpr(ctx, node.value);
+  const val = lowerExpr_sf(ctx, node.value);
   ctx.emit('store', [node.name, val.id], VOID, l);
   ctx.symbols.set(node.name, val.id);
   if (ctx.topLevel) ctx.defines.add(node.name);
@@ -554,7 +554,7 @@ function lowerDefine(ctx, node) {
   // Soft functions use `it` as implicit result
   ctx.symbols.set('it', null);
 
-  for (const s of node.body) lowerStmt(ctx, s);
+  for (const s of node.body) lowerStmt_sf(ctx, s);
   const body = ctx.ops;
 
   ctx.ops = savedOps;
@@ -577,28 +577,28 @@ function lowerDefine(ctx, node) {
 
 function lowerSay(ctx, node) {
   const l = ctx.loc(node);
-  const val = lowerExpr(ctx, node.value);
+  const val = lowerExpr_sf(ctx, node.value);
   // Soft's say calls `say` builtin (or the cell's display). Just call `say`.
   if (!ctx.symbols.has('say') && !ctx.defines.has('say')) {
     ctx.imports.add('say');
   }
   const sayFn = ctx.emit('load', ['say'], DYNAMIC, l);
-  return emitAwaitedCall(ctx, sayFn.id, [val.id], l);
+  return emitAwaitedCall_sf(ctx, sayFn.id, [val.id], l);
 }
 
 // ── If / While / ForEach / RangeLoop / Repeat ──
 
-function lowerIf(ctx, node) {
+function lowerIf_sf(ctx, node) {
   const l = ctx.loc(node);
-  const cond = lowerExpr(ctx, node.cond);
+  const cond = lowerExpr_sf(ctx, node.cond);
   const truthy = emitSoftCall(ctx, 'truthy', [cond], l, BOOL);
 
   const savedOps = ctx.ops;
   ctx.ops = [];
-  for (const s of node.body) lowerStmt(ctx, s);
+  for (const s of node.body) lowerStmt_sf(ctx, s);
   const thenBody = ctx.ops;
   ctx.ops = [];
-  if (node.elseBody) for (const s of node.elseBody) lowerStmt(ctx, s);
+  if (node.elseBody) for (const s of node.elseBody) lowerStmt_sf(ctx, s);
   const elseBody = ctx.ops;
   ctx.ops = savedOps;
 
@@ -607,17 +607,17 @@ function lowerIf(ctx, node) {
   });
 }
 
-function lowerWhile(ctx, node) {
+function lowerWhile_sf(ctx, node) {
   const l = ctx.loc(node);
   const savedOps = ctx.ops;
 
   ctx.ops = [];
-  const cond = lowerExpr(ctx, node.cond);
+  const cond = lowerExpr_sf(ctx, node.cond);
   const truthy = emitSoftCall(ctx, 'truthy', [cond], l, BOOL);
   const testOps = ctx.ops;
 
   ctx.ops = [];
-  for (const s of node.body) lowerStmt(ctx, s);
+  for (const s of node.body) lowerStmt_sf(ctx, s);
   const body = ctx.ops;
   ctx.ops = savedOps;
 
@@ -629,13 +629,13 @@ function lowerWhile(ctx, node) {
 
 function lowerForEach(ctx, node) {
   const l = ctx.loc(node);
-  const iter = lowerExpr(ctx, node.iter);
+  const iter = lowerExpr_sf(ctx, node.iter);
   // Pre-declare var
   if (ctx.topLevel) ctx.defines.add(node.varName);
 
   const savedOps = ctx.ops;
   ctx.ops = [];
-  for (const s of node.body) lowerStmt(ctx, s);
+  for (const s of node.body) lowerStmt_sf(ctx, s);
   const body = ctx.ops;
   ctx.ops = savedOps;
 
@@ -655,26 +655,26 @@ function lowerRangeLoop(ctx, node) {
   const savedOps = ctx.ops;
 
   ctx.ops = [];
-  const from = lowerExpr(ctx, node.from);
+  const from = lowerExpr_sf(ctx, node.from);
   ctx.emit('store', [varName, from.id], VOID, l);
   ctx.symbols.set(varName, from.id);
   const initOps = ctx.ops;
 
   ctx.ops = [];
-  const to = lowerExpr(ctx, node.to);
+  const to = lowerExpr_sf(ctx, node.to);
   const vLoad = ctx.emit('load', [varName], DYNAMIC, l);
   const testOp = ctx.emit('lte', [vLoad.id, to.id], BOOL, l);
   const testOps = ctx.ops;
 
   ctx.ops = [];
-  const stepVal = node.step ? lowerExpr(ctx, node.step) : ctx.emit('const', [1], I32, l);
+  const stepVal = node.step ? lowerExpr_sf(ctx, node.step) : ctx.emit('const', [1], I32, l);
   const vLoad2 = ctx.emit('load', [varName], DYNAMIC, l);
   const newV = ctx.emit('add', [vLoad2.id, stepVal.id], DYNAMIC, l);
   ctx.emit('store', [varName, newV.id], VOID, l);
   const updateOps = ctx.ops;
 
   ctx.ops = [];
-  for (const s of node.body) lowerStmt(ctx, s);
+  for (const s of node.body) lowerStmt_sf(ctx, s);
   const body = ctx.ops;
 
   ctx.ops = savedOps;
@@ -692,7 +692,7 @@ function lowerRangeLoop(ctx, node) {
 function lowerRepeat(ctx, node) {
   const l = ctx.loc(node);
   // repeat N times: body → for-loop 0..N
-  const countExpr = lowerExpr(ctx, node.count);
+  const countExpr = lowerExpr_sf(ctx, node.count);
   const tempVar = `__rep_${_softNextId}`;
 
   const savedOps = ctx.ops;
@@ -716,7 +716,7 @@ function lowerRepeat(ctx, node) {
   const updateOps = ctx.ops;
 
   ctx.ops = [];
-  for (const s of node.body) lowerStmt(ctx, s);
+  for (const s of node.body) lowerStmt_sf(ctx, s);
   const body = ctx.ops;
 
   ctx.ops = savedOps;
@@ -731,7 +731,7 @@ function lowerRepeat(ctx, node) {
 
 function lowerCapture(ctx, node) {
   const l = ctx.loc(node);
-  const val = lowerExpr(ctx, node.expr);
+  const val = lowerExpr_sf(ctx, node.expr);
   ctx.emit('store', [node.name, val.id], VOID, l);
   ctx.symbols.set(node.name, val.id);
   if (ctx.topLevel) ctx.defines.add(node.name);
@@ -742,8 +742,8 @@ function lowerCapture(ctx, node) {
 
 function lowerAddRemove(ctx, node, kind) {
   const l = ctx.loc(node);
-  const value = lowerExpr(ctx, node.value);
-  const target = lowerExpr(ctx, node.target);
+  const value = lowerExpr_sf(ctx, node.value);
+  const target = lowerExpr_sf(ctx, node.target);
   emitSoftCall(ctx, kind, [value, target], l, VOID);
   return null;
 }
@@ -752,12 +752,12 @@ function lowerAddRemove(ctx, node, kind) {
 
 function lowerAssume(ctx, node) {
   const l = ctx.loc(node);
-  const cond = lowerExpr(ctx, node.cond);
+  const cond = lowerExpr_sf(ctx, node.cond);
   const truthy = emitSoftCall(ctx, 'truthy', [cond], l, BOOL);
 
   const savedOps = ctx.ops;
   ctx.ops = [];
-  const msg = node.message ? lowerExpr(ctx, node.message)
+  const msg = node.message ? lowerExpr_sf(ctx, node.message)
     : ctx.emit('const', ['assumption failed'], STRING, l);
   ctx.emit('throw', [msg.id], VOID, l);
   const thenBody = ctx.ops;

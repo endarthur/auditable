@@ -48,7 +48,7 @@ class AdderLowerCtx {
 // Python: any assignment at module level creates a binding in module scope.
 // Descends into if/for/while/try/with blocks (no scope) but not def/class.
 
-function collectDefines(stmts, defines) {
+function collectDefines_ad(stmts, defines) {
   for (const node of stmts || []) {
     switch (node.type) {
       case 'Assign':
@@ -71,31 +71,31 @@ function collectDefines(stmts, defines) {
         break;
       case 'For': case 'AsyncFor':
         collectTargetNames(node.target, defines);
-        collectDefines(node.body, defines);
-        if (node.orelse) collectDefines(node.orelse, defines);
+        collectDefines_ad(node.body, defines);
+        if (node.orelse) collectDefines_ad(node.orelse, defines);
         break;
       case 'While':
-        collectDefines(node.body, defines);
-        if (node.orelse) collectDefines(node.orelse, defines);
+        collectDefines_ad(node.body, defines);
+        if (node.orelse) collectDefines_ad(node.orelse, defines);
         break;
       case 'If':
-        collectDefines(node.body, defines);
-        if (node.orelse) collectDefines(node.orelse, defines);
+        collectDefines_ad(node.body, defines);
+        if (node.orelse) collectDefines_ad(node.orelse, defines);
         break;
       case 'With': case 'AsyncWith':
         for (const item of node.items) {
           if (item.optionalVar) collectTargetNames(item.optionalVar, defines);
         }
-        collectDefines(node.body, defines);
+        collectDefines_ad(node.body, defines);
         break;
       case 'Try':
-        collectDefines(node.body, defines);
+        collectDefines_ad(node.body, defines);
         if (node.handlers) for (const h of node.handlers) {
           if (h.name) defines.add(h.name);
-          if (h.body) collectDefines(h.body, defines);
+          if (h.body) collectDefines_ad(h.body, defines);
         }
-        if (node.orelse) collectDefines(node.orelse, defines);
-        if (node.finalbody) collectDefines(node.finalbody, defines);
+        if (node.orelse) collectDefines_ad(node.orelse, defines);
+        if (node.finalbody) collectDefines_ad(node.finalbody, defines);
         break;
     }
   }
@@ -120,7 +120,7 @@ function emitPyCall(ctx, method, args, loc, type) {
 }
 
 // User-facing calls (Python funcs / adder builtins) may be async — await them.
-function emitAwaitedCall(ctx, fnId, argIds, loc, type) {
+function emitAwaitedCall_ad(ctx, fnId, argIds, loc, type) {
   const call = ctx.emit('call', [fnId, ...argIds], type || DYNAMIC, loc);
   return ctx.emit('await', [call.id], type || DYNAMIC, loc);
 }
@@ -135,7 +135,7 @@ export function lowerAdder(ast, source) {
   if (ast.type !== 'Module') throw new AirLowerError('Expected Module node');
 
   // Collect all module-scope defines up front (Python module-scope semantics)
-  collectDefines(ast.body, ctx.defines);
+  collectDefines_ad(ast.body, ctx.defines);
 
   // Identify names that will be declared by `function`/`class` syntax —
   // those don't need (and can't have) a `let` pre-declaration.
@@ -160,7 +160,7 @@ export function lowerAdder(ast, source) {
   // Lower each statement; track last Expr for REPL-like display
   let lastExpr = null;
   for (const stmt of ast.body) {
-    const result = lowerStmt(ctx, stmt);
+    const result = lowerStmt_ad(ctx, stmt);
     if (stmt.type === 'Expr' && result) lastExpr = result.id;
   }
 
@@ -192,7 +192,7 @@ export function lowerAdder(ast, source) {
 
 // ── Statement lowering ──
 
-function lowerStmt(ctx, node) {
+function lowerStmt_ad(ctx, node) {
   if (!node) return null;
   const l = ctx.loc(node);
 
@@ -200,7 +200,7 @@ function lowerStmt(ctx, node) {
     case 'Pass': return null;
     case 'Break': ctx.emit('break', [], VOID, l); return null;
     case 'Continue': ctx.emit('continue', [], VOID, l); return null;
-    case 'Expr': return lowerExpr(ctx, node.value);
+    case 'Expr': return lowerExpr_ad(ctx, node.value);
 
     case 'Assign': return lowerAssign(ctx, node);
     case 'AugAssign': return lowerAugAssign(ctx, node);
@@ -208,14 +208,14 @@ function lowerStmt(ctx, node) {
     case 'Delete': return lowerDelete(ctx, node);
 
     case 'Return': {
-      const val = node.value ? lowerExpr(ctx, node.value) : ctx.emit('const', [null], VOID, l);
+      const val = node.value ? lowerExpr_ad(ctx, node.value) : ctx.emit('const', [null], VOID, l);
       ctx.emit('return', [val.id], VOID, l);
       return null;
     }
 
-    case 'If': return lowerIf(ctx, node);
-    case 'For': return lowerFor(ctx, node);
-    case 'While': return lowerWhile(ctx, node);
+    case 'If': return lowerIf_ad(ctx, node);
+    case 'For': return lowerFor_ad(ctx, node);
+    case 'While': return lowerWhile_ad(ctx, node);
 
     case 'FunctionDef':
     case 'AsyncFunctionDef':
@@ -228,26 +228,26 @@ function lowerStmt(ctx, node) {
       return lowerClassDef(ctx, node);
 
     case 'Try':
-      return lowerTry(ctx, node);
+      return lowerTry_ad(ctx, node);
 
     case 'With':
     case 'AsyncWith':
       return lowerWith(ctx, node);
 
     case 'Raise': {
-      const exc = node.exc ? lowerExpr(ctx, node.exc) : ctx.emit('const', [null], VOID, l);
+      const exc = node.exc ? lowerExpr_ad(ctx, node.exc) : ctx.emit('const', [null], VOID, l);
       emitPyCall(ctx, 'raise', [exc], l, VOID);
       return null;
     }
 
     case 'Assert': {
       // assert test, msg → if not _py.truthy(test) throw AssertionError(msg)
-      const test = lowerExpr(ctx, node.test);
+      const test = lowerExpr_ad(ctx, node.test);
       const truthy = emitPyCall(ctx, 'truthy', [test], l, BOOL);
       // if (!truthy) raise AssertionError
       const savedOps = ctx.ops;
       ctx.ops = [];
-      const msg = node.msg ? lowerExpr(ctx, node.msg) : ctx.emit('const', ['assertion failed'], STRING, l);
+      const msg = node.msg ? lowerExpr_ad(ctx, node.msg) : ctx.emit('const', ['assertion failed'], STRING, l);
       emitPyCall(ctx, 'raise', [msg], l, VOID);
       const thenBody = ctx.ops;
       ctx.ops = savedOps;
@@ -279,7 +279,7 @@ function lowerStmt(ctx, node) {
 
 // ── Expression lowering ──
 
-function lowerExpr(ctx, node) {
+function lowerExpr_ad(ctx, node) {
   if (!node) return ctx.emit('const', [null], VOID, null);
   const l = ctx.loc(node);
 
@@ -309,15 +309,15 @@ function lowerExpr(ctx, node) {
       return ctx.emit('load', [name], DYNAMIC, l);
     }
 
-    case 'BinOp': return lowerBinOp(ctx, node);
+    case 'BinOp': return lowerBinOp_ad(ctx, node);
     case 'UnaryOp': return lowerUnaryOp(ctx, node);
     case 'BoolOp': return lowerBoolOp(ctx, node);
-    case 'Compare': return lowerCompare(ctx, node);
+    case 'Compare': return lowerCompare_ad(ctx, node);
 
-    case 'Call': return lowerCall(ctx, node);
+    case 'Call': return lowerCall_ad(ctx, node);
 
     case 'Attribute': {
-      const obj = lowerExpr(ctx, node.value);
+      const obj = lowerExpr_ad(ctx, node.value);
       const name = ctx.emit('const', [node.attr], STRING, l);
       return emitPyCall(ctx, 'getattr', [obj, name], l);
     }
@@ -336,25 +336,25 @@ function lowerExpr(ctx, node) {
         for (let i = 0; i < node.keys.length; i++) {
           if (node.keys[i] === null) {
             // **unpack
-            const src = lowerExpr(ctx, node.values[i]);
+            const src = lowerExpr_ad(ctx, node.values[i]);
             pairs.push({ spread: true, id: src.id });
           } else {
-            const val = lowerExpr(ctx, node.values[i]);
+            const val = lowerExpr_ad(ctx, node.values[i]);
             pairs.push({ key: node.keys[i].value, id: val.id });
           }
         }
         return ctx.emit('object_new', pairs, DYNAMIC, l);
       }
       // Build a Map via _py.makeDict with arrays of keys and values
-      const keys = node.keys.map(k => k ? lowerExpr(ctx, k).id : null);
-      const values = node.values.map(v => lowerExpr(ctx, v).id);
+      const keys = node.keys.map(k => k ? lowerExpr_ad(ctx, k).id : null);
+      const values = node.values.map(v => lowerExpr_ad(ctx, v).id);
       const keysArr = ctx.emit('array_new', keys.filter(k => k), DYNAMIC, l);
       const valsArr = ctx.emit('array_new', values, DYNAMIC, l);
       return emitPyCall(ctx, 'makeDict', [keysArr, valsArr], l);
     }
 
     case 'Set': {
-      const elts = node.elts.map(e => lowerExpr(ctx, e).id);
+      const elts = node.elts.map(e => lowerExpr_ad(ctx, e).id);
       const arr = ctx.emit('array_new', elts, DYNAMIC, l);
       return emitPyCall(ctx, 'makeSet', [arr], l);
     }
@@ -366,15 +366,15 @@ function lowerExpr(ctx, node) {
 
     case 'IfExp': {
       // a if cond else b — ternary
-      const cond = lowerExpr(ctx, node.test);
+      const cond = lowerExpr_ad(ctx, node.test);
       const truthy = emitPyCall(ctx, 'truthy', [cond], l, BOOL);
 
       const savedOps = ctx.ops;
       ctx.ops = [];
-      const thenVal = lowerExpr(ctx, node.body);
+      const thenVal = lowerExpr_ad(ctx, node.body);
       const thenBody = ctx.ops;
       ctx.ops = [];
-      const elseVal = lowerExpr(ctx, node.orelse);
+      const elseVal = lowerExpr_ad(ctx, node.orelse);
       const elseBody = ctx.ops;
       ctx.ops = savedOps;
 
@@ -393,9 +393,9 @@ function lowerExpr(ctx, node) {
         if (part.type === 'Constant') {
           piece = ctx.emit('const', [part.value], STRING, l);
         } else if (part.type === 'FormattedValue') {
-          const val = lowerExpr(ctx, part.value);
+          const val = lowerExpr_ad(ctx, part.value);
           const spec = part.formatSpec
-            ? lowerExpr(ctx, part.formatSpec)
+            ? lowerExpr_ad(ctx, part.formatSpec)
             : ctx.emit('const', [''], STRING, l);
           piece = emitPyCall(ctx, 'fmt', [val, spec], l, STRING);
         } else {
@@ -411,13 +411,13 @@ function lowerExpr(ctx, node) {
     case 'ListComp': return lowerComprehension(ctx, node);
 
     case 'Await': {
-      const val = lowerExpr(ctx, node.value);
+      const val = lowerExpr_ad(ctx, node.value);
       return ctx.emit('await', [val.id], DYNAMIC, l);
     }
 
     case 'NamedExpr': {
       // walrus: (name := value) — assign then evaluate as the value
-      const val = lowerExpr(ctx, node.value);
+      const val = lowerExpr_ad(ctx, node.value);
       const name = node.target.id;
       ctx.emit('store', [name, val.id], VOID, l);
       ctx.symbols.set(name, val.id);
@@ -429,11 +429,11 @@ function lowerExpr(ctx, node) {
       throw new AirLowerError('starred expression in unsupported position');
 
     case 'Yield': {
-      const val = node.value ? lowerExpr(ctx, node.value) : null;
+      const val = node.value ? lowerExpr_ad(ctx, node.value) : null;
       return ctx.emit('yield', val ? [val.id] : [], DYNAMIC, l);
     }
     case 'YieldFrom': {
-      const val = lowerExpr(ctx, node.value);
+      const val = lowerExpr_ad(ctx, node.value);
       return ctx.emit('yield_delegate', [val.id], DYNAMIC, l);
     }
 
@@ -451,10 +451,10 @@ const BINOP_HELPER = {
   '<<': 'lshift', '>>': 'rshift',
 };
 
-function lowerBinOp(ctx, node) {
+function lowerBinOp_ad(ctx, node) {
   const l = ctx.loc(node);
-  const lhs = lowerExpr(ctx, node.left);
-  const rhs = lowerExpr(ctx, node.right);
+  const lhs = lowerExpr_ad(ctx, node.left);
+  const rhs = lowerExpr_ad(ctx, node.right);
   const op = node.op;
 
   // Bitwise ops: just use JS — Python int bitwise matches JS i32 bitwise
@@ -471,7 +471,7 @@ function lowerBinOp(ctx, node) {
 
 function lowerUnaryOp(ctx, node) {
   const l = ctx.loc(node);
-  const arg = lowerExpr(ctx, node.operand);
+  const arg = lowerExpr_ad(ctx, node.operand);
   const op = node.op;
   if (op === 'not') {
     // not x → !_py.truthy(x)
@@ -490,15 +490,15 @@ function lowerBoolOp(ctx, node) {
   // x or y  → (_py.truthy(x) ? x : y)
   // For n-ary, chain: a and b and c → a_and_b-result and c
   const l = ctx.loc(node);
-  if (node.values.length < 2) return lowerExpr(ctx, node.values[0]);
+  if (node.values.length < 2) return lowerExpr_ad(ctx, node.values[0]);
 
-  let result = lowerExpr(ctx, node.values[0]);
+  let result = lowerExpr_ad(ctx, node.values[0]);
   for (let i = 1; i < node.values.length; i++) {
     const truthy = emitPyCall(ctx, 'truthy', [result], l, BOOL);
     const savedOps = ctx.ops;
 
     ctx.ops = [];
-    const next = lowerExpr(ctx, node.values[i]);
+    const next = lowerExpr_ad(ctx, node.values[i]);
     const nextBody = ctx.ops;
     ctx.ops = savedOps;
 
@@ -525,16 +525,16 @@ const CMP_HELPER = {
   '==': 'eq', '!=': 'neq', '<': 'lt', '<=': 'lte', '>': 'gt', '>=': 'gte',
 };
 
-function lowerCompare(ctx, node) {
+function lowerCompare_ad(ctx, node) {
   const l = ctx.loc(node);
   // Chained compare: a < b < c → (a < b) && (b < c)
   // Note: Python evaluates b only once, but for simplicity we re-evaluate it.
   // This is observable but rare in practice.
-  let left = lowerExpr(ctx, node.left);
+  let left = lowerExpr_ad(ctx, node.left);
   let result = null;
   for (let i = 0; i < node.ops.length; i++) {
     const op = node.ops[i];
-    const right = lowerExpr(ctx, node.comparators[i]);
+    const right = lowerExpr_ad(ctx, node.comparators[i]);
 
     let cmp;
     if (op === 'in') {
@@ -562,20 +562,20 @@ function lowerCompare(ctx, node) {
 
 function lowerSubscript(ctx, node) {
   const l = ctx.loc(node);
-  const obj = lowerExpr(ctx, node.value);
+  const obj = lowerExpr_ad(ctx, node.value);
   if (node.slice.type === 'Slice') {
-    const lower = node.slice.lower ? lowerExpr(ctx, node.slice.lower) : ctx.emit('const', [null], VOID, l);
-    const upper = node.slice.upper ? lowerExpr(ctx, node.slice.upper) : ctx.emit('const', [null], VOID, l);
-    const step = node.slice.step ? lowerExpr(ctx, node.slice.step) : ctx.emit('const', [null], VOID, l);
+    const lower = node.slice.lower ? lowerExpr_ad(ctx, node.slice.lower) : ctx.emit('const', [null], VOID, l);
+    const upper = node.slice.upper ? lowerExpr_ad(ctx, node.slice.upper) : ctx.emit('const', [null], VOID, l);
+    const step = node.slice.step ? lowerExpr_ad(ctx, node.slice.step) : ctx.emit('const', [null], VOID, l);
     return emitPyCall(ctx, 'slice', [obj, lower, upper, step], l);
   }
-  const key = lowerExpr(ctx, node.slice);
+  const key = lowerExpr_ad(ctx, node.slice);
   return emitPyCall(ctx, 'getitem', [obj, key], l);
 }
 
 // ── Call ──
 
-function lowerCall(ctx, node) {
+function lowerCall_ad(ctx, node) {
   const l = ctx.loc(node);
 
   const hasStarred = node.args.some(a => a.type === 'Starred');
@@ -586,12 +586,12 @@ function lowerCall(ctx, node) {
   const argIds = [];
   for (const a of node.args) {
     if (a.type === 'Starred') {
-      const inner = lowerExpr(ctx, a.value);
+      const inner = lowerExpr_ad(ctx, a.value);
       // Emit spread on the iter-converted value so JS ...spread works
       const arr = emitPyCall(ctx, 'iter', [inner], l);
       argIds.push(ctx.emit('spread', [arr.id], DYNAMIC, l).id);
     } else {
-      argIds.push(lowerExpr(ctx, a).id);
+      argIds.push(lowerExpr_ad(ctx, a).id);
     }
   }
 
@@ -604,10 +604,10 @@ function lowerCall(ctx, node) {
       if (kw.name === null) {
         // **kw splat
         hasSplat = true;
-        const src = lowerExpr(ctx, kw.value);
+        const src = lowerExpr_ad(ctx, kw.value);
         pairs.push({ spread: true, id: src.id });
       } else {
-        const val = lowerExpr(ctx, kw.value);
+        const val = lowerExpr_ad(ctx, kw.value);
         pairs.push({ key: kw.name, id: val.id });
       }
     }
@@ -618,23 +618,23 @@ function lowerCall(ctx, node) {
 
   // Assemble final call
   if (node.func.type === 'Attribute') {
-    const obj = lowerExpr(ctx, node.func.value);
+    const obj = lowerExpr_ad(ctx, node.func.value);
     const name = ctx.emit('const', [node.func.attr], STRING, l);
     const method = emitPyCall(ctx, 'getattr', [obj, name], l);
     const finalArgs = kwObjId ? [...argIds, kwObjId] : argIds;
-    return emitAwaitedCall(ctx, method.id, finalArgs, l);
+    return emitAwaitedCall_ad(ctx, method.id, finalArgs, l);
   }
 
-  const fn = lowerExpr(ctx, node.func);
+  const fn = lowerExpr_ad(ctx, node.func);
   const finalArgs = kwObjId ? [...argIds, kwObjId] : argIds;
-  return emitAwaitedCall(ctx, fn.id, finalArgs, l);
+  return emitAwaitedCall_ad(ctx, fn.id, finalArgs, l);
 }
 
 // ── Assignment ──
 
 function lowerAssign(ctx, node) {
   const l = ctx.loc(node);
-  const value = lowerExpr(ctx, node.value);
+  const value = lowerExpr_ad(ctx, node.value);
   for (const target of node.targets) {
     lowerAssignTarget(ctx, target, value, l);
   }
@@ -701,17 +701,17 @@ function lowerAssignTarget(ctx, target, value, l) {
     return lowerAssignTarget(ctx, target.value, value, l);
   }
   if (target.type === 'Attribute') {
-    const obj = lowerExpr(ctx, target.value);
+    const obj = lowerExpr_ad(ctx, target.value);
     const name = ctx.emit('const', [target.attr], STRING, l);
     emitPyCall(ctx, 'setattr', [obj, name, value], l, VOID);
     return;
   }
   if (target.type === 'Subscript') {
-    const obj = lowerExpr(ctx, target.value);
+    const obj = lowerExpr_ad(ctx, target.value);
     if (target.slice.type === 'Slice') {
       throw new AirLowerError('slice assignment not yet supported');
     }
-    const key = lowerExpr(ctx, target.slice);
+    const key = lowerExpr_ad(ctx, target.slice);
     emitPyCall(ctx, 'setitem', [obj, key, value], l, VOID);
     return;
   }
@@ -726,18 +726,18 @@ function lowerAugAssign(ctx, node) {
   if (node.target.type === 'Name') {
     current = ctx.emit('load', [node.target.id], DYNAMIC, l);
   } else if (node.target.type === 'Attribute') {
-    const obj = lowerExpr(ctx, node.target.value);
+    const obj = lowerExpr_ad(ctx, node.target.value);
     const name = ctx.emit('const', [node.target.attr], STRING, l);
     current = emitPyCall(ctx, 'getattr', [obj, name], l);
   } else if (node.target.type === 'Subscript') {
-    const obj = lowerExpr(ctx, node.target.value);
-    const key = lowerExpr(ctx, node.target.slice);
+    const obj = lowerExpr_ad(ctx, node.target.value);
+    const key = lowerExpr_ad(ctx, node.target.slice);
     current = emitPyCall(ctx, 'getitem', [obj, key], l);
   } else {
     throw new AirLowerError(`unsupported augassign target: ${node.target.type}`);
   }
 
-  const rhs = lowerExpr(ctx, node.value);
+  const rhs = lowerExpr_ad(ctx, node.value);
   const op = node.op;
   let result;
   if (op === '&') result = ctx.emit('bitwise_and', [current.id, rhs.id], I32, l);
@@ -759,12 +759,12 @@ function lowerAnnAssign(ctx, node) {
   // Annotated assignment: `x: int = 5`. Ignore annotation for now.
   if (!node.value) return null;
   const l = ctx.loc(node);
-  const value = lowerExpr(ctx, node.value);
+  const value = lowerExpr_ad(ctx, node.value);
   lowerAssignTarget(ctx, node.target, value, l);
   return null;
 }
 
-function lowerTry(ctx, node) {
+function lowerTry_ad(ctx, node) {
   // try: body [except [Type] [as name]: handler] [else: orelse] [finally: finalbody]
   const l = ctx.loc(node);
 
@@ -772,11 +772,11 @@ function lowerTry(ctx, node) {
 
   // try body
   ctx.ops = [];
-  for (const s of node.body) lowerStmt(ctx, s);
+  for (const s of node.body) lowerStmt_ad(ctx, s);
   // If there's an else clause and no exception, run it too. Represent as:
   // try { body; else_body } catch { handlers } finally { finalbody }
   if (node.orelse && node.orelse.length) {
-    for (const s of node.orelse) lowerStmt(ctx, s);
+    for (const s of node.orelse) lowerStmt_ad(ctx, s);
   }
   const tryBody = ctx.ops;
 
@@ -808,10 +808,10 @@ function lowerTry(ctx, node) {
           ctx.emit('store', [h.name, excLoad.id], VOID, l);
           ctx.symbols.set(h.name, excLoad.id);
         }
-        for (const s of h.body) lowerStmt(ctx, s);
+        for (const s of h.body) lowerStmt_ad(ctx, s);
         return;
       }
-      const excType = lowerExpr(ctx, h.excType);
+      const excType = lowerExpr_ad(ctx, h.excType);
       const excLoad = ctx.emit('load', [catchParam], DYNAMIC, l);
       const cond = emitPyCall(ctx, 'matchException', [excLoad, excType], l, BOOL);
 
@@ -823,7 +823,7 @@ function lowerTry(ctx, node) {
         ctx.emit('store', [h.name, excLoad2.id], VOID, l);
         ctx.symbols.set(h.name, excLoad2.id);
       }
-      for (const s of h.body) lowerStmt(ctx, s);
+      for (const s of h.body) lowerStmt_ad(ctx, s);
       const thenBody = ctx.ops;
       // else branch: next handler
       ctx.ops = [];
@@ -842,7 +842,7 @@ function lowerTry(ctx, node) {
   let finallyBody = [];
   if (node.finalbody && node.finalbody.length) {
     ctx.ops = [];
-    for (const s of node.finalbody) lowerStmt(ctx, s);
+    for (const s of node.finalbody) lowerStmt_ad(ctx, s);
     finallyBody = ctx.ops;
   }
 
@@ -869,7 +869,7 @@ function lowerWith(ctx, node) {
   const tempNames = [];
   for (let i = 0; i < node.items.length; i++) {
     const item = node.items[i];
-    const mgr = lowerExpr(ctx, item.contextExpr);
+    const mgr = lowerExpr_ad(ctx, item.contextExpr);
     const mgrName = `__with_mgr_${_adderNextId}`;
     ctx.emit('store', [mgrName, mgr.id], VOID, l);
     ctx.symbols.set(mgrName, mgr.id);
@@ -878,7 +878,7 @@ function lowerWith(ctx, node) {
     const mgrLoad = ctx.emit('load', [mgrName], DYNAMIC, l);
     const enterName = ctx.emit('const', ['__enter__'], STRING, l);
     const enterFn = emitPyCall(ctx, 'getattr', [mgrLoad, enterName], l);
-    const enterCall = emitAwaitedCall(ctx, enterFn.id, [], l);
+    const enterCall = emitAwaitedCall_ad(ctx, enterFn.id, [], l);
     if (item.optionalVar) {
       lowerAssignTarget(ctx, item.optionalVar, enterCall, l);
     }
@@ -886,7 +886,7 @@ function lowerWith(ctx, node) {
 
   // try { body } finally { for each manager in reverse: __exit__(None, None, None) }
   ctx.ops = [];
-  for (const s of node.body) lowerStmt(ctx, s);
+  for (const s of node.body) lowerStmt_ad(ctx, s);
   const tryBody = ctx.ops;
 
   ctx.ops = [];
@@ -895,7 +895,7 @@ function lowerWith(ctx, node) {
     const exitName = ctx.emit('const', ['__exit__'], STRING, l);
     const exitFn = emitPyCall(ctx, 'getattr', [mgrLoad, exitName], l);
     const noneVal = ctx.emit('const', [null], VOID, l);
-    emitAwaitedCall(ctx, exitFn.id, [noneVal.id, noneVal.id, noneVal.id], l);
+    emitAwaitedCall_ad(ctx, exitFn.id, [noneVal.id, noneVal.id, noneVal.id], l);
   }
   const finallyBody = ctx.ops;
 
@@ -914,7 +914,7 @@ function lowerClassDef(ctx, node) {
   const name = node.name;
 
   // Evaluate bases
-  const bases = (node.bases || []).map(b => lowerExpr(ctx, b));
+  const bases = (node.bases || []).map(b => lowerExpr_ad(ctx, b));
   const basesArr = ctx.emit('array_new', bases.map(b => b.id), DYNAMIC, l);
 
   // Lower class body as a function that receives an empty object and populates it.
@@ -929,7 +929,7 @@ function lowerClassDef(ctx, node) {
   ctx.symbols = new Map(savedSymbols);
 
   // Run class body — method defs become locals, assignments become locals
-  for (const stmt of node.body) lowerStmt(ctx, stmt);
+  for (const stmt of node.body) lowerStmt_ad(ctx, stmt);
 
   // Build the class members dict from the locals
   // We need to track which names were defined in the class body.
@@ -965,7 +965,7 @@ function lowerClassDef(ctx, node) {
   });
 
   // decorators, bottom-up
-  const decorators = (node.decorators || []).map(d => lowerExpr(ctx, d));
+  const decorators = (node.decorators || []).map(d => lowerExpr_ad(ctx, d));
 
   // Call class body to get members
   const membersCall = ctx.emit('call', [bodyFn.id], DYNAMIC, l);
@@ -1038,11 +1038,11 @@ function lowerDelete(ctx, node) {
       ctx.emit('store', [target.id, undef.id], VOID, l);
       ctx.symbols.set(target.id, undef.id);
     } else if (target.type === 'Subscript') {
-      const obj = lowerExpr(ctx, target.value);
-      const key = lowerExpr(ctx, target.slice);
+      const obj = lowerExpr_ad(ctx, target.value);
+      const key = lowerExpr_ad(ctx, target.slice);
       emitPyCall(ctx, 'delitem', [obj, key], l, VOID);
     } else if (target.type === 'Attribute') {
-      const obj = lowerExpr(ctx, target.value);
+      const obj = lowerExpr_ad(ctx, target.value);
       const name = ctx.emit('const', [target.attr], STRING, l);
       emitPyCall(ctx, 'delattr', [obj, name], l, VOID);
     } else {
@@ -1054,19 +1054,19 @@ function lowerDelete(ctx, node) {
 
 // ── Control flow ──
 
-function lowerIf(ctx, node) {
+function lowerIf_ad(ctx, node) {
   const l = ctx.loc(node);
-  const test = lowerExpr(ctx, node.test);
+  const test = lowerExpr_ad(ctx, node.test);
   const truthy = emitPyCall(ctx, 'truthy', [test], l, BOOL);
 
   const savedOps = ctx.ops;
 
   ctx.ops = [];
-  for (const s of node.body) lowerStmt(ctx, s);
+  for (const s of node.body) lowerStmt_ad(ctx, s);
   const thenBody = ctx.ops;
 
   ctx.ops = [];
-  if (node.orelse) for (const s of node.orelse) lowerStmt(ctx, s);
+  if (node.orelse) for (const s of node.orelse) lowerStmt_ad(ctx, s);
   const elseBody = ctx.ops;
 
   ctx.ops = savedOps;
@@ -1078,14 +1078,14 @@ function lowerIf(ctx, node) {
   });
 }
 
-function lowerFor(ctx, node) {
+function lowerFor_ad(ctx, node) {
   // for target in iter: body (target may be Name or Tuple/List)
   const l = ctx.loc(node);
   if (node.orelse && node.orelse.length) {
     throw new AirLowerError('for/else not yet supported');
   }
 
-  const iter = lowerExpr(ctx, node.iter);
+  const iter = lowerExpr_ad(ctx, node.iter);
   const iterArr = emitPyCall(ctx, 'iter', [iter], l);
 
   // Simple case: target is an Identifier
@@ -1098,7 +1098,7 @@ function lowerFor(ctx, node) {
 
     const savedOps = ctx.ops;
     ctx.ops = [];
-    for (const s of node.body) lowerStmt(ctx, s);
+    for (const s of node.body) lowerStmt_ad(ctx, s);
     const body = ctx.ops;
     ctx.ops = savedOps;
 
@@ -1123,7 +1123,7 @@ function lowerFor(ctx, node) {
       const item = emitPyCall(ctx, 'getitem', [tempLoad, idx], l);
       lowerAssignTarget(ctx, elt, item, l);
     }
-    for (const s of node.body) lowerStmt(ctx, s);
+    for (const s of node.body) lowerStmt_ad(ctx, s);
     const body = ctx.ops;
     ctx.ops = savedOps;
 
@@ -1152,7 +1152,7 @@ function _preDeclareTargetNames(ctx, target, l) {
   if (target.type === 'Starred') _preDeclareTargetNames(ctx, target.value, l);
 }
 
-function lowerWhile(ctx, node) {
+function lowerWhile_ad(ctx, node) {
   const l = ctx.loc(node);
   if (node.orelse && node.orelse.length) {
     throw new AirLowerError('while/else not yet supported');
@@ -1161,12 +1161,12 @@ function lowerWhile(ctx, node) {
   const savedOps = ctx.ops;
 
   ctx.ops = [];
-  const test = lowerExpr(ctx, node.test);
+  const test = lowerExpr_ad(ctx, node.test);
   const truthy = emitPyCall(ctx, 'truthy', [test], l, BOOL);
   const testOps = ctx.ops;
 
   ctx.ops = [];
-  for (const s of node.body) lowerStmt(ctx, s);
+  for (const s of node.body) lowerStmt_ad(ctx, s);
   const body = ctx.ops;
 
   ctx.ops = savedOps;
@@ -1252,7 +1252,7 @@ function _buildParamBinding(ctx, node, l) {
     usedNames.push(p.name);
     if (p.default) {
       // Evaluate default in case not provided
-      const defVal = lowerExpr(ctx, p.default);
+      const defVal = lowerExpr_ad(ctx, p.default);
       emitRaw(ctx, `let ${p.name} = (__args.length > ${i}) ? __args[${i}] : (__kw && '${p.name}' in __kw ? __kw['${p.name}'] : ${_refExpr(ctx, defVal.id)});`);
     } else {
       emitRaw(ctx, `let ${p.name} = (__args.length > ${i}) ? __args[${i}] : (__kw && '${p.name}' in __kw ? __kw['${p.name}'] : (() => { throw new Error("${node.name || '<fn>'}() missing required argument: '${p.name}'"); })());`);
@@ -1271,7 +1271,7 @@ function _buildParamBinding(ctx, node, l) {
   for (const p of kwonly) {
     usedNames.push(p.name);
     if (p.default) {
-      const defVal = lowerExpr(ctx, p.default);
+      const defVal = lowerExpr_ad(ctx, p.default);
       emitRaw(ctx, `let ${p.name} = (__kw && '${p.name}' in __kw) ? __kw['${p.name}'] : ${_refExpr(ctx, defVal.id)};`);
     } else {
       emitRaw(ctx, `let ${p.name} = (__kw && '${p.name}' in __kw) ? __kw['${p.name}'] : (() => { throw new Error("${node.name || '<fn>'}() missing keyword argument: '${p.name}'"); })();`);
@@ -1313,7 +1313,7 @@ function lowerFuncDef(ctx, node) {
   const isGenerator = _containsYield(node.body);
 
   // Lower decorators (evaluated at def time, applied bottom-up after def)
-  const decorators = (node.decorators || []).map(d => lowerExpr(ctx, d));
+  const decorators = (node.decorators || []).map(d => lowerExpr_ad(ctx, d));
 
   // Lower body in nested scope
   const savedTopLevel = ctx.topLevel;
@@ -1337,7 +1337,7 @@ function lowerFuncDef(ctx, node) {
       typeof node.body[0].value.value === 'string') {
     startIdx = 1;
   }
-  for (let i = startIdx; i < node.body.length; i++) lowerStmt(ctx, node.body[i]);
+  for (let i = startIdx; i < node.body.length; i++) lowerStmt_ad(ctx, node.body[i]);
   const body = ctx.ops;
 
   ctx.ops = savedOps;
@@ -1391,7 +1391,7 @@ function lowerLambda(ctx, node) {
   const { params, prologueOps } = _buildParamBinding(ctx, node, l);
   for (const op of prologueOps) ctx.ops.push(op);
 
-  const val = lowerExpr(ctx, node.body);
+  const val = lowerExpr_ad(ctx, node.body);
   ctx.emit('return', [val.id], VOID, l);
   const body = ctx.ops;
 
@@ -1413,16 +1413,16 @@ function lowerListOrTuple(ctx, node) {
   // If no starred elements, use array_new directly
   const hasStarred = node.elts.some(e => e.type === 'Starred');
   if (!hasStarred) {
-    const elts = node.elts.map(e => lowerExpr(ctx, e).id);
+    const elts = node.elts.map(e => lowerExpr_ad(ctx, e).id);
     return ctx.emit('array_new', elts, DYNAMIC, l);
   }
   // With starred elements: build via _py.buildList which flattens starred iterables
   const parts = node.elts.map(e => {
     if (e.type === 'Starred') {
-      const inner = lowerExpr(ctx, e.value);
+      const inner = lowerExpr_ad(ctx, e.value);
       return { spread: true, id: inner.id };
     }
-    return { spread: false, id: lowerExpr(ctx, e).id };
+    return { spread: false, id: lowerExpr_ad(ctx, e).id };
   });
   // Emit object with spread markers — use object_new with mixed spread/plain
   // Actually, easier: use _py.buildList with an array of {spread, value} pairs.
@@ -1466,21 +1466,21 @@ function lowerComprehension(ctx, node) {
       // innermost: append/add/set to result
       const loadResult = ctx.emit('load', [tempName], DYNAMIC, l);
       if (kind === 'ListComp' || kind === 'GeneratorExp') {
-        const val = lowerExpr(ctx, node.elt);
+        const val = lowerExpr_ad(ctx, node.elt);
         ctx.emit('call_method', [loadResult.id, 'push', val.id], VOID, l);
       } else if (kind === 'SetComp') {
-        const val = lowerExpr(ctx, node.elt);
+        const val = lowerExpr_ad(ctx, node.elt);
         ctx.emit('call_method', [loadResult.id, 'add', val.id], VOID, l);
       } else {
         // DictComp: key and value
-        const key = lowerExpr(ctx, node.key);
-        const val = lowerExpr(ctx, node.value);
+        const key = lowerExpr_ad(ctx, node.key);
+        const val = lowerExpr_ad(ctx, node.value);
         ctx.emit('call_method', [loadResult.id, 'set', key.id, val.id], VOID, l);
       }
       return;
     }
     const gen = node.generators[genIdx];
-    const iter = lowerExpr(ctx, gen.iter);
+    const iter = lowerExpr_ad(ctx, gen.iter);
     const iterArr = emitPyCall(ctx, 'iter', [iter], l);
 
     const savedOps = ctx.ops;
@@ -1511,7 +1511,7 @@ function lowerComprehension(ctx, node) {
         buildComp(genIdx + 1);
         return;
       }
-      const cond = lowerExpr(ctx, gen.ifs[filterIdx]);
+      const cond = lowerExpr_ad(ctx, gen.ifs[filterIdx]);
       const truthy = emitPyCall(ctx, 'truthy', [cond], l, BOOL);
       const savedInner = ctx.ops;
       ctx.ops = [];

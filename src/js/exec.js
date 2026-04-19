@@ -623,6 +623,16 @@ function _createCellContext(cell) {
   if (!window._importCache) window._importCache = {};
   if (!window._installedModules) window._installedModules = {}; // url -> { source, cellId }
 
+  // Legacy single-segment aliases that predate the @gcu/* scope.
+  // Kept for backward compatibility with existing saved notebooks.
+  // New notebooks should prefer @gcu/<name>.
+  const legacyAliases = {
+    '@sheet':    '@gcu/sheet',
+    '@calque':   '@gcu/calque',
+    '@spinifex': '@gcu/spinifex',
+    '@plan':     '@gcu/plan',
+  };
+
   const load = async (url) => {
     // virtual modules
     if (url === '@std') return std;
@@ -641,10 +651,10 @@ function _createCellContext(cell) {
       return window._importCache[url];
     }
 
-    // @atra/<name> — atra library binary distributions
-    // if pre-installed (via /// module: directive or install()), the existing
-    // _installedModules[url] check below handles it. this fallback covers
-    // development mode where the file is available at a relative path.
+    // @atra/<name> — dev-mode fallback to atra library binary distributions.
+    // If pre-installed (via /// module: directive or install()), the
+    // _installedModules check below handles it. This path covers development
+    // mode where the file is available at a relative path.
     if (url.startsWith('@atra/')) {
       if (!window._importCache[url] && !window._installedModules[url]) {
         const name = url.slice(6);
@@ -655,75 +665,21 @@ function _createCellContext(cell) {
       // fall through to normal _importCache / _installedModules handling below
     }
 
-    // @sheet — xlsx IO library (dev-mode fallback)
-    if (url === '@sheet') {
-      if (!window._importCache[url] && !window._installedModules[url]) {
-        const mod = await import('./ext/sheet/index.js');
+    // Legacy alias + @scope/name dev-mode fallback. Resolves @sheet/@calque/
+    // @spinifex/@plan and any @gcu/<name> to a relative ./ext/<name>/index.js
+    // import, which works when auditable.html is served alongside the ext/
+    // directory (dev server). Saved notebooks opened from file:// should have
+    // these modules pre-installed in _installedModules instead.
+    const resolved = legacyAliases[url] || url;
+    const scopedMatch = /^@[\w.-]+\/([\w.-]+)$/.exec(resolved);
+    if (scopedMatch && !resolved.startsWith('@atra/')
+        && !window._importCache[url] && !window._installedModules[url]) {
+      try {
+        const mod = await import('./ext/' + scopedMatch[1] + '/index.js');
         window._importCache[url] = mod;
         return mod;
-      }
-    }
-
-    // @calque — spreadsheet language (dev-mode fallback)
-    if (url === '@calque') {
-      if (!window._importCache[url] && !window._installedModules[url]) {
-        const mod = await import('./ext/calque/index.js');
-        window._importCache[url] = mod;
-        return mod;
-      }
-    }
-
-    // @spinifex — web GIS (dev-mode fallback)
-    if (url === '@spinifex') {
-      if (!window._importCache[url] && !window._installedModules[url]) {
-        const mod = await import('./ext/spinifex/index.js');
-        window._importCache[url] = mod;
-        return mod;
-      }
-    }
-
-    // @plan — project management (dev-mode fallback)
-    if (url === '@plan') {
-      if (!window._importCache[url] && !window._installedModules[url]) {
-        const mod = await import('./ext/plan/index.js');
-        window._importCache[url] = mod;
-        return mod;
-      }
-    }
-
-    // @gcu/adder — Python interpreter (dev-mode fallback)
-    if (url === '@gcu/adder') {
-      if (!window._importCache[url] && !window._installedModules[url]) {
-        const mod = await import('./ext/adder/index.js');
-        window._importCache[url] = mod;
-        return mod;
-      }
-    }
-
-    // @gcu/plot — Canvas 2D plotting (dev-mode fallback)
-    if (url === '@gcu/plot') {
-      if (!window._importCache[url] && !window._installedModules[url]) {
-        const mod = await import('./ext/plot/index.js');
-        window._importCache[url] = mod;
-        return mod;
-      }
-    }
-
-    // @gcu/sadpan — lightweight dataframe (dev-mode fallback)
-    if (url === '@gcu/sadpan') {
-      if (!window._importCache[url] && !window._installedModules[url]) {
-        const mod = await import('./ext/sadpan/index.js');
-        window._importCache[url] = mod;
-        return mod;
-      }
-    }
-
-    // @gcu/soft — English keyword language (dev-mode fallback)
-    if (url === '@gcu/soft') {
-      if (!window._importCache[url] && !window._installedModules[url]) {
-        const mod = await import('./ext/soft/index.js');
-        window._importCache[url] = mod;
-        return mod;
+      } catch {
+        // dev path not available; fall through to normal handling below
       }
     }
 
@@ -770,179 +726,94 @@ function _createCellContext(cell) {
   // resolve root-relative paths in module source so blob URLs work
   const resolveModulePaths = (source, responseUrl) => {
     const origin = new URL(responseUrl).origin;
-    return source.replace(/(from\s+["'])(\/[^"']+)(["'])/g, '$1' + origin + '$2$3')
-                 .replace(/(import\s*\(["'])(\/[^"']+)(["']\))/g, '$1' + origin + '$2$3')
-                 .replace(/(export\s+\*\s+from\s+["'])(\/[^"']+)(["'])/g, '$1' + origin + '$2$3')
-                 .replace(/(export\s*\{[^}]*\}\s*from\s+["'])(\/[^"']+)(["'])/g, '$1' + origin + '$2$3');
+    return source.replace(/(from\s*["'])(\/[^"']+)(["'])/g, '$1' + origin + '$2$3')
+                 .replace(/(import\s+["'])(\/[^"']+)(["'])/g, '$1' + origin + '$2$3')
+                 .replace(/(import\s*\(\s*["'])(\/[^"']+)(["']\s*\))/g, '$1' + origin + '$2$3')
+                 .replace(/(export\s+\*\s+from\s*["'])(\/[^"']+)(["'])/g, '$1' + origin + '$2$3')
+                 .replace(/(export\s*\{[^}]*\}\s*from\s*["'])(\/[^"']+)(["'])/g, '$1' + origin + '$2$3');
   };
 
   const install = async (url) => {
-    // @atra/<name> — resolve to CDN URL, store under virtual key
-    if (url.startsWith('@atra/')) {
-      const name = url.slice(6);
+    const storeKey = url; // preserve original identifier in _installedModules for backward compat
+    const resolved = legacyAliases[url] || url;
+
+    // @atra/<name> — atra binary + source distributions served from Pages origin.
+    // Includes @atra/alpack.src, the source distribution for std.include cherry-picking
+    // (no single-file npm equivalent yet — the binary is @gcu/alpack, the source is a separate artifact).
+    if (resolved.startsWith('@atra/')) {
+      const name = resolved.slice(6);
       const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/atra/lib/' + name + '.js';
       const resp = await fetch(realUrl);
       if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
       const source = await resp.text();
       const compressedSrc = await compressText(source);
-      window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
+      window._installedModules[storeKey] = { source: compressedSrc, compressed: true, cellId: cell.id };
       syncModules();
       const blob = new Blob([source], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
       const mod = await import(blobUrl);
-      window._importCache[url] = mod;
-      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB \u2192 ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
+      window._importCache[storeKey] = mod;
+      display(`installed ${storeKey} (${(source.length / 1024).toFixed(1)} KB \u2192 ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
       return mod;
     }
-    // @sheet — xlsx IO library
-    if (url === '@sheet') {
-      const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/sheet/index.js';
-      const resp = await fetch(realUrl);
-      if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
-      const source = await resp.text();
-      const compressedSrc = await compressText(source);
-      window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
-      syncModules();
-      const blob = new Blob([source], { type: 'application/javascript' });
-      const blobUrl = URL.createObjectURL(blob);
-      const mod = await import(blobUrl);
-      window._importCache[url] = mod;
-      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB \u2192 ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
-      return mod;
+
+    // @scope/name → esm.sh (handles all @gcu/* and any other npm scoped package).
+    // esm.sh always returns a thin wrapper that re-exports from /esNNNN/*.mjs sub-paths,
+    // so we unwrap one level to get a self-contained single file that survives offline reload.
+    // For @gcu/* we prefer the /bundled subpath (points at each package's concat'd index.js),
+    // with a fallback to main when the package doesn't declare /bundled in its exports map.
+    const isScoped = /^@[\w.-]+\/[\w.-]+$/.test(resolved);
+    let esmUrl = resolved;
+    let esmFallbackUrl = null;
+    if (isScoped) {
+      if (resolved.startsWith('@gcu/')) {
+        esmUrl = 'https://esm.sh/' + resolved + '/bundled';
+        esmFallbackUrl = 'https://esm.sh/' + resolved;
+      } else {
+        esmUrl = 'https://esm.sh/' + resolved;
+      }
+    } else if (esmUrl.includes('esm.sh') && !esmUrl.includes('?bundle') && !esmUrl.includes('&bundle')) {
+      esmUrl += (esmUrl.includes('?') ? '&' : '?') + 'bundle';
     }
-    // @calque — spreadsheet language
-    if (url === '@calque') {
-      const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/calque/index.js';
-      const resp = await fetch(realUrl);
-      if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
-      const source = await resp.text();
-      const compressedSrc = await compressText(source);
-      window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
-      syncModules();
-      const blob = new Blob([source], { type: 'application/javascript' });
-      const blobUrl = URL.createObjectURL(blob);
-      const mod = await import(blobUrl);
-      window._importCache[url] = mod;
-      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB \u2192 ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
-      return mod;
+
+    // Wrapper unwrap: if the fetched source is a thin "export * from URL" re-export
+    // (esm.sh's default shape), follow to the real content. Bounded to 3 hops.
+    const wrapperRe = /^\s*(?:\/\*[\s\S]*?\*\/\s*)?export\s+\*\s+from\s*["']([^"']+)["'];?\s*$/;
+    const fetchAndUnwrap = async (startUrl) => {
+      let currentUrl = startUrl;
+      for (let hop = 0; hop < 3; hop++) {
+        const resp = await fetch(currentUrl);
+        if (!resp.ok) {
+          if (hop === 0) return { ok: false, status: resp.status };
+          throw new Error(`Failed to fetch ${currentUrl}: ${resp.status}`);
+        }
+        const text = await resp.text();
+        const m = text.trim().match(wrapperRe);
+        if (m) {
+          currentUrl = new URL(m[1], resp.url).href;
+          continue;
+        }
+        return { ok: true, source: text, finalUrl: resp.url };
+      }
+      throw new Error('Too many esm.sh wrapper redirects');
+    };
+
+    let result = await fetchAndUnwrap(esmUrl);
+    if (!result.ok && esmFallbackUrl) {
+      // /bundled not present on this package; try main
+      result = await fetchAndUnwrap(esmFallbackUrl);
     }
-    // @spinifex — web GIS
-    if (url === '@spinifex') {
-      const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/spinifex/index.js';
-      const resp = await fetch(realUrl);
-      if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
-      const source = await resp.text();
-      const compressedSrc = await compressText(source);
-      window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
-      syncModules();
-      const blob = new Blob([source], { type: 'application/javascript' });
-      const blobUrl = URL.createObjectURL(blob);
-      const mod = await import(blobUrl);
-      window._importCache[url] = mod;
-      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB \u2192 ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
-      return mod;
-    }
-    // @plan — project management
-    if (url === '@plan') {
-      const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/plan/index.js';
-      const resp = await fetch(realUrl);
-      if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
-      const source = await resp.text();
-      const compressedSrc = await compressText(source);
-      window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
-      syncModules();
-      const blob = new Blob([source], { type: 'application/javascript' });
-      const blobUrl = URL.createObjectURL(blob);
-      const mod = await import(blobUrl);
-      window._importCache[url] = mod;
-      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB \u2192 ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
-      return mod;
-    }
-    // @gcu/adder — Python extension
-    if (url === '@gcu/adder') {
-      const baseUrl = __AUDITABLE_PAGES_URL__ + '/ext/adder/';
-      const resp = await fetch(baseUrl + 'index.js');
-      if (!resp.ok) throw new Error(`Failed to fetch adder: ${resp.status}`);
-      const source = await resp.text();
-      const compressedSrc = await compressText(source);
-      window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
-      syncModules();
-      const blob = new Blob([source], { type: 'application/javascript' });
-      const blobUrl = URL.createObjectURL(blob);
-      const mod = await import(blobUrl);
-      window._importCache[url] = mod;
-      display(`installed @gcu/adder (${(source.length / 1024).toFixed(1)} KB \u2192 ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
-      return mod;
-    }
-    // @gcu/plot — Canvas 2D plotting
-    if (url === '@gcu/plot') {
-      const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/plot/index.js';
-      const resp = await fetch(realUrl);
-      if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
-      const source = await resp.text();
-      const compressedSrc = await compressText(source);
-      window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
-      syncModules();
-      const blob = new Blob([source], { type: 'application/javascript' });
-      const blobUrl = URL.createObjectURL(blob);
-      const mod = await import(blobUrl);
-      window._importCache[url] = mod;
-      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB \u2192 ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
-      return mod;
-    }
-    // @gcu/sadpan — lightweight dataframe
-    if (url === '@gcu/sadpan') {
-      const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/sadpan/index.js';
-      const resp = await fetch(realUrl);
-      if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
-      const source = await resp.text();
-      const compressedSrc = await compressText(source);
-      window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
-      syncModules();
-      const blob = new Blob([source], { type: 'application/javascript' });
-      const blobUrl = URL.createObjectURL(blob);
-      const mod = await import(blobUrl);
-      window._importCache[url] = mod;
-      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB \u2192 ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
-      return mod;
-    }
-    // @gcu/soft — English keyword language
-    if (url === '@gcu/soft') {
-      const realUrl = __AUDITABLE_PAGES_URL__ + '/ext/soft/index.js';
-      const resp = await fetch(realUrl);
-      if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
-      const source = await resp.text();
-      const compressedSrc = await compressText(source);
-      window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
-      syncModules();
-      const blob = new Blob([source], { type: 'application/javascript' });
-      const blobUrl = URL.createObjectURL(blob);
-      const mod = await import(blobUrl);
-      window._importCache[url] = mod;
-      display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB → ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
-      return mod;
-    }
-    // normalize: add ?bundle for esm.sh if not present
-    let bundleUrl = url;
-    if (bundleUrl.includes('esm.sh') && !bundleUrl.includes('?bundle') && !bundleUrl.includes('&bundle')) {
-      bundleUrl += (bundleUrl.includes('?') ? '&' : '?') + 'bundle';
-    }
-    // fetch source
-    const resp = await fetch(bundleUrl);
-    if (!resp.ok) throw new Error(`Failed to fetch ${bundleUrl}: ${resp.status}`);
-    let source = await resp.text();
-    // resolve root-relative paths to absolute so blob URLs work
-    source = resolveModulePaths(source, resp.url);
-    // store under original url with cell reference (compressed for persistent storage)
+    if (!result.ok) throw new Error(`Failed to fetch ${esmUrl}: ${result.status}`);
+
+    let source = resolveModulePaths(result.source, result.finalUrl);
     const compressedSrc = await compressText(source);
-    window._installedModules[url] = { source: compressedSrc, compressed: true, cellId: cell.id };
+    window._installedModules[storeKey] = { source: compressedSrc, compressed: true, cellId: cell.id };
     syncModules();
-    // also load it into cache
     const blob = new Blob([source], { type: 'application/javascript' });
     const blobUrl = URL.createObjectURL(blob);
     const mod = await import(blobUrl);
-    window._importCache[url] = mod;
-    display(`installed ${url} (${(source.length / 1024).toFixed(1)} KB \u2192 ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
+    window._importCache[storeKey] = mod;
+    display(`installed ${storeKey} (${(source.length / 1024).toFixed(1)} KB \u2192 ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
     return mod;
   };
 
