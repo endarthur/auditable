@@ -735,6 +735,27 @@ function _createCellContext(cell) {
 
   const install = async (url) => {
     const storeKey = url; // preserve original identifier in _installedModules for backward compat
+
+    // Cache-first: if we've already imported it this session, reuse the module object.
+    if (window._importCache[storeKey]) return window._importCache[storeKey];
+
+    // If the module is already stored locally (prior install, /// module: directive,
+    // or saved-notebook restore), skip the network fetch entirely — decompress and import
+    // from the stored source. Makes install() idempotent and makes saved notebooks work
+    // offline without re-hitting the CDN on every reload.
+    const existing = window._installedModules[storeKey];
+    if (existing && !existing.binary) {
+      const src = existing.compressed
+        ? await decompressText(existing.source)
+        : (typeof existing === 'string' ? existing : existing.source);
+      const blob = new Blob([src], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      const mod = await import(blobUrl);
+      window._importCache[storeKey] = mod;
+      display(`loaded ${storeKey} from cache (${(src.length / 1024).toFixed(1)} KB)`);
+      return mod;
+    }
+
     const resolved = legacyAliases[url] || url;
 
     // @atra/<name> — atra binary + source distributions served from Pages origin.
