@@ -27,6 +27,28 @@ import { INJECTED_NAMES, TaggedContent, taggedTemplate, cellErrorLine, compileCe
 // cellErrorLine, TaggedContent, taggedTemplate, INJECTED_NAMES — imported from engine.js
 export { cellErrorLine };
 
+// ── AIR COMPILATION (Phase 2) ──
+
+function _airCompile(cell, scopeKeys, defNames) {
+  // Skip if AIR emitter not available or cell wasn't AIR-analyzed
+  if (!window._airEmit || !cell._air) return null;
+  try {
+    const emittedJS = window._airEmit(cell._air, scopeKeys, INJECTED_NAMES, {
+      hinted: true,
+      cellId: cell.id,
+      cellName: parseCellName(cell.code),
+    });
+    const isAsync = window._airNeedsAsync ? window._airNeedsAsync(cell._air) : true;
+    const Ctor = isAsync
+      ? Object.getPrototypeOf(async function(){}).constructor
+      : Function;
+    return new Ctor(...scopeKeys, ...INJECTED_NAMES, emittedJS);
+  } catch (e) {
+    if (window._airDebug) console.warn('[AIR] emit fallback for cell', cell.id, ':', e.message);
+    return null;
+  }
+}
+
 // ── BINARY HELPERS ──
 
 function uint8ToBase64(bytes) {
@@ -1378,7 +1400,8 @@ export async function execCell(cell) {
     if (cell._cacheKey === cacheKey && cell._cachedFn) {
       fn = cell._cachedFn;
     } else {
-      fn = compileCellCode(cell.code, scopeKeys, defNames, cell.id, parseCellName(cell.code));
+      fn = _airCompile(cell, scopeKeys, defNames) ||
+           compileCellCode(cell.code, scopeKeys, defNames, cell.id, parseCellName(cell.code));
       cell._cachedFn = fn;
       cell._cacheKey = cacheKey;
     }

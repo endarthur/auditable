@@ -555,7 +555,7 @@ function processModulesAsRegistry(mainPath, moduleDir, opts = {}) {
   return modules;
 }
 
-function generateModuleBoot(cm6Src, modules) {
+function generateModuleBoot(cm6Src, modules, acornSrc) {
   const entries = [];
   for (const m of modules) {
     let json = JSON.stringify(m.source);
@@ -586,6 +586,7 @@ function generateModuleBoot(cm6Src, modules) {
 
   let js = '';
   if (cm6Src) js = cm6Src + '\n\n';
+  if (acornSrc) js += acornSrc + '\n\n';
   js += boot;
   return js;
 }
@@ -613,6 +614,18 @@ if (fs.existsSync(sideactPath)) {
 // Read CM6 bundle (classic IIFE, not an ES module — sets window.CM6 via var)
 const cm6Path = path.join(__dirname, 'ext/cm6/cm6.min.js');
 const cm6Src = fs.existsSync(cm6Path) ? fs.readFileSync(cm6Path, 'utf8') : '';
+
+// Read Acorn bundle (IIFE, sets window.Acorn — Parser + tsPlugin for AIR)
+const acornPath = path.join(__dirname, 'ext/acorn/acorn.min.js');
+const acornSrc = fs.existsSync(acornPath) ? fs.readFileSync(acornPath, 'utf8') : '';
+
+// Add AIR bundle as a module entry (ES module, uses window.Acorn)
+const airPath = path.join(__dirname, 'ext/air/index.js');
+if (fs.existsSync(airPath)) {
+  let airSrc = fs.readFileSync(airPath, 'utf8');
+  airSrc = airSrc.replace(/^\n+/, '').replace(/\n+$/, '');
+  modules.push({ name: 'air', source: airSrc });
+}
 
 // 3. Read CSS and HTML template
 const cssRaw = fs.readFileSync(path.join(srcDir, 'style.css'), 'utf8');
@@ -722,7 +735,7 @@ ${jsCode}
 }
 
 // compute base size then inject it (two-pass: first with placeholder, then with actual value)
-let js = generateModuleBoot(cm6Src, modules);
+let js = generateModuleBoot(cm6Src, modules, acornSrc);
 const baseSize = Buffer.byteLength(assemble(js), 'utf8');
 const sizeCompareMod = modules.find(m => m.name === 'size-compare');
 if (sizeCompareMod) {
@@ -731,7 +744,7 @@ if (sizeCompareMod) {
     `const __AUDITABLE_BASE_SIZE__ = ${baseSize};`
   );
 }
-js = generateModuleBoot(cm6Src, modules);
+js = generateModuleBoot(cm6Src, modules, acornSrc);
 const html = assemble(js);
 
 // 6. Write output

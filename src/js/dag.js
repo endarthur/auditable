@@ -22,7 +22,7 @@ export {
 
 // S.cells wrappers — preserve existing API
 export function buildDAG() {
-  return _buildDAG(S.cells, window._cellTypes);
+  return _buildDAG(S.cells, window._cellTypes, window._airAnalyzer || null);
 }
 
 export function topoSort(dirtyIds) {

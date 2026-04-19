@@ -240,15 +240,29 @@ export function parseHtmlDefines(html) {
  * Build dependency graph from cells.
  * @param {Array} cells — ordered cell array
  * @param {Object} [cellTypes] — plugin type handlers (browser: window._cellTypes)
+ * @param {Function} [analyzer] — optional AIR analyzer: (code, allDefined) → { defines, uses } | null
  * @returns {Map} allDefined — name → cell id
  */
-export function buildDAG(cells, cellTypes) {
+export function buildDAG(cells, cellTypes, analyzer) {
   const allDefined = new Map();
 
   for (const c of cells) {
     if (c.type === 'code') {
       if (c.code !== c._parsedCode) {
-        c.defines = parseNames(c.code).defines;
+        // Try AIR analysis first, fall back to regex
+        let airResult = null;
+        if (analyzer) {
+          try { airResult = analyzer(c.code, null); } catch (e) { /* fallback */ }
+        }
+        if (airResult) {
+          c.defines = airResult.defines;
+          c._air = airResult.air;
+          c._airAnalyzed = true;
+        } else {
+          c.defines = parseNames(c.code).defines;
+          c._air = null;
+          c._airAnalyzed = false;
+        }
         c._parsedCode = c.code;
       }
     } else if (c.type === 'html') {
@@ -274,7 +288,20 @@ export function buildDAG(cells, cellTypes) {
   for (const c of cells) {
     if (c.type === 'code') {
       if (c.code !== c._usesCode || c._definedKey !== definedKey) {
-        c.uses = findUses(c.code, definedNames, c.defines);
+        // If AIR analyzed this cell, re-analyze with full allDefined for accurate uses
+        if (analyzer && c._airAnalyzed) {
+          const airResult = analyzer(c.code, definedNames);
+          if (airResult) {
+            c.uses = airResult.uses;
+            c._air = airResult.air;
+          } else {
+            c.uses = findUses(c.code, definedNames, c.defines);
+            c._air = null;
+            c._airAnalyzed = false;
+          }
+        } else {
+          c.uses = findUses(c.code, definedNames, c.defines);
+        }
         c._usesCode = c.code;
         c._definedKey = definedKey;
       }
