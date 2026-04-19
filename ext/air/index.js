@@ -4243,6 +4243,19 @@ function propagateTypes(module, opts = {}) {
   }
 
   propagate(module.ops);
+
+  // Update the module's exports map with inferred types
+  if (module.exports) {
+    for (const [name, exp] of module.exports) {
+      if (nameTypes.has(name)) {
+        const t = nameTypes.get(name);
+        if (t && !isDynamic(t)) {
+          exp.type = t;
+        }
+      }
+    }
+  }
+
   return types;
 }
 
@@ -5794,6 +5807,17 @@ if (typeof window !== 'undefined' && window.Acorn) {
     } catch (e) {
       if (e instanceof SoftLowerError) return null;
       throw e;
+    }
+  };
+  // Re-run passes on an existing air module with given import types.
+  // Used for cross-cell type flow: upstream cell's export types seed
+  // downstream cell's imports. Returns true if anything changed.
+  window._airRePropagate = function(air, opts) {
+    try {
+      runPasses(air, opts || {});
+      return true;
+    } catch (e) {
+      return false;
     }
   };
 }

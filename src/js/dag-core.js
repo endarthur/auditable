@@ -241,9 +241,10 @@ export function parseHtmlDefines(html) {
  * @param {Array} cells — ordered cell array
  * @param {Object} [cellTypes] — plugin type handlers (browser: window._cellTypes)
  * @param {Function} [analyzer] — optional AIR analyzer: (code, allDefined) → { defines, uses } | null
+ * @param {Function} [rePropagate] — optional cross-cell type propagator: (air, opts) → bool
  * @returns {Map} allDefined — name → cell id
  */
-export function buildDAG(cells, cellTypes, analyzer) {
+export function buildDAG(cells, cellTypes, analyzer, rePropagate) {
   const allDefined = new Map();
 
   for (const c of cells) {
@@ -321,6 +322,45 @@ export function buildDAG(cells, cellTypes, analyzer) {
           c._definedKey = definedKey;
         }
       }
+    }
+  }
+
+  // ── Third pass: cross-cell type propagation ──
+  // Repeatedly gather each cell's export types and re-run passes on downstream
+  // cells with upstream types seeded. Iterate to fixed point so chains like
+  // A exports → B imports/exports → C imports propagate fully.
+  if (rePropagate) {
+    const MAX_ITERATIONS = Math.max(cells.length + 1, 3);
+    for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
+      // Collect fresh exportTypes from current AIR state
+      const exportTypes = new Map();
+      for (const c of cells) {
+        if (c._air && c._air.exports) {
+          for (const [name, exp] of c._air.exports) {
+            if (exp && exp.type && exp.type.kind && exp.type.kind !== 'dynamic') {
+              exportTypes.set(name, exp.type);
+            }
+          }
+        }
+      }
+      let anyChanged = false;
+      for (const c of cells) {
+        if (!c._air || !c._airAnalyzed || !c.uses) continue;
+        const importTypes = new Map();
+        for (const name of c.uses) {
+          if (exportTypes.has(name)) importTypes.set(name, exportTypes.get(name));
+        }
+        if (importTypes.size === 0) continue;
+        const key = [...importTypes.entries()]
+          .map(([k, v]) => `${k}:${v.kind}`).sort().join(',');
+        if (c._airImportKey === key) continue;
+        rePropagate(c._air, { importTypes });
+        c._airImportKey = key;
+        c._cachedFn = null;
+        c._cacheKey = null;
+        anyChanged = true;
+      }
+      if (!anyChanged) break;
     }
   }
 

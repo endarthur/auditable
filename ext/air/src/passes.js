@@ -394,6 +394,19 @@ export function propagateTypes(module, opts = {}) {
   }
 
   propagate(module.ops);
+
+  // Update the module's exports map with inferred types
+  if (module.exports) {
+    for (const [name, exp] of module.exports) {
+      if (nameTypes.has(name)) {
+        const t = nameTypes.get(name);
+        if (t && !isDynamic(t)) {
+          exp.type = t;
+        }
+      }
+    }
+  }
+
   return types;
 }
 

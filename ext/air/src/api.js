@@ -145,4 +145,15 @@ if (typeof window !== 'undefined' && window.Acorn) {
       throw e;
     }
   };
+  // Re-run passes on an existing air module with given import types.
+  // Used for cross-cell type flow: upstream cell's export types seed
+  // downstream cell's imports. Returns true if anything changed.
+  window._airRePropagate = function(air, opts) {
+    try {
+      runPasses(air, opts || {});
+      return true;
+    } catch (e) {
+      return false;
+    }
+  };
 }
