@@ -2,6 +2,7 @@
 
 import { softParse } from './parse.js';
 import { softEval, softString as softStringify } from './eval.js';
+import { _soft } from './runtime.js';
 
 // ── parseNames: extract top-level variable defines ──
 // Walks the AST for Set, Define, Capture, Use at top level.
@@ -204,11 +205,60 @@ export async function softExecute(code, scopeIn, cell) {
     };
   }
 
-  const result = softEval(code, {
-    globals,
-    scopeInit: scopeIn,
-    host,
-  });
+  // Try transpile path first; fall back to tree-walker on any failure
+  let result = null;
+  let usedTranspile = false;
+
+  if (typeof window !== 'undefined' && window._airLowerSoft && window._airEmit) {
+    try {
+      const ast = softParse(code);
+      const lowered = window._airLowerSoft(ast, code);
+      if (lowered) {
+        const air = lowered.air;
+        const importNames = [...air.imports];
+        const emittedJS = window._airEmit(air, importNames, [], {
+          hinted: false,
+          cellId: cell?.id || 'soft',
+        });
+        const AF = Object.getPrototypeOf(async function(){}).constructor;
+        const transpileOutput = [];
+        const saySink = (val) => { transpileOutput.push(val); return null; };
+        // Resolve each import from: scopeIn, globals, builtins, special (say)
+        const argValues = importNames.map(name => {
+          if (name === 'say') return saySink;
+          if (scopeIn && name in scopeIn) return scopeIn[name];
+          if (name in globals) return globals[name];
+          return undefined;
+        });
+        const fn = new AF('_soft', ...importNames, emittedJS);
+        const retObj = await fn(_soft, ...argValues);
+        // Build a compat scope object
+        const transpileScope = { ...scopeIn };
+        if (retObj && typeof retObj === 'object') {
+          for (const [k, v] of Object.entries(retObj)) {
+            if (k === '__lastExpr__') continue;
+            transpileScope[k] = v;
+          }
+        }
+        result = { scope: transpileScope, output: transpileOutput };
+        usedTranspile = true;
+      }
+    } catch (e) {
+      if (typeof window !== 'undefined' && window._airDebug) {
+        console.warn('[AIR] soft transpile fallback for cell', cell?.id, ':', e.message);
+      }
+      usedTranspile = false;
+      result = null;
+    }
+  }
+
+  if (!usedTranspile) {
+    result = softEval(code, {
+      globals,
+      scopeInit: scopeIn,
+      host,
+    });
+  }
 
   // extract defines
   const defines = {};

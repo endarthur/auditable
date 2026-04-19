@@ -2,6 +2,7 @@
 import './tokenize.js';
 import './parse.js';
 import './eval.js';
+import './runtime.js';
 import './highlight.js';
 import './cell.js';
 import './tag.js';

@@ -4,6 +4,7 @@
 import './types.js';
 import './lower/js.js';
 import './lower/adder.js';
+import './lower/soft.js';
 import './passes.js';
 import './emit-js.js';
 import './api.js';

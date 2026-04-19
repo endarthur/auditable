@@ -3,6 +3,7 @@
 
 import { lowerJS } from './lower/js.js';
 import { lowerAdder, AirLowerError } from './lower/adder.js';
+import { lowerSoft, SoftLowerError } from './lower/soft.js';
 import { runPasses, extractDependencies } from './passes.js';
 
 // Debug logging — true during development, settable via window._airDebug
@@ -130,6 +131,17 @@ if (typeof window !== 'undefined' && window.Acorn) {
       return { air, defines: air.defines };
     } catch (e) {
       if (e instanceof AirLowerError) return null;
+      throw e;
+    }
+  };
+  // Soft transpile entry
+  window._airLowerSoft = function(ast, code) {
+    try {
+      const air = lowerSoft(ast, code);
+      runPasses(air);
+      return { air, defines: air.defines };
+    } catch (e) {
+      if (e instanceof SoftLowerError) return null;
       throw e;
     }
   };
