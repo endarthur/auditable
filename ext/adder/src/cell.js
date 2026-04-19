@@ -4,6 +4,7 @@
 import { adderParse } from './parse.js';
 import { adderEval, AdderScope, AdderError } from './eval.js';
 import { adderBuiltins, pyStr, pyRepr, _ensureFsModules, getAdderVFS, setAdderVFS } from './builtins.js';
+import { _py } from './runtime.js';
 
 // ── parseNames: extract module-scope defines from Python code ──
 // Uses the AST to find assignments at module scope — descends into with/for/if/
@@ -234,27 +235,68 @@ export async function pythonExecute(code, scopeIn, cell) {
     if (_llm) scope.set('__loop_limit__', parseInt(_llm[1]));
   }
 
-  // evaluate
+  // evaluate — try transpile path first, fall back to tree-walker on any failure
   let lastExpr;
-  try {
-    lastExpr = await adderEval(ast, scope);
-  } catch (e) {
-    // run after-cell hooks even on error (for cleanup)
-    if (typeof window !== 'undefined' && window._adderCellHooks) {
-      for (let i = 0; i < window._adderCellHooks.length; i++) {
-        try { window._adderCellHooks[i].after?.(_hookStates[i], {}, scope); } catch {}
+  let usedTranspile = false;
+  let defines = {};
+
+  if (typeof window !== 'undefined' && window._airLowerAdder && window._airEmit) {
+    try {
+      const lowered = window._airLowerAdder(ast, code);
+      if (lowered) {
+        const air = lowered.air;
+        const importNames = [...air.imports];
+        const emittedJS = window._airEmit(air, importNames, [], {
+          hinted: false,
+          cellId: cell.id,
+        });
+        const AF = Object.getPrototypeOf(async function(){}).constructor;
+        const allParams = ['_py', ...importNames];
+        const fn = new AF(...allParams, emittedJS);
+
+        // Resolve each import from scope
+        const argValues = importNames.map(name => {
+          if (scope.vars.has(name)) return scope.vars.get(name);
+          return undefined;
+        });
+
+        const result = await fn(_py, ...argValues);
+        usedTranspile = true;
+
+        // Extract defines (excluding synthetic __lastExpr__)
+        if (result && typeof result === 'object') {
+          for (const [k, v] of Object.entries(result)) {
+            if (k === '__lastExpr__') { lastExpr = v; continue; }
+            defines[k] = v;
+            scope.set(k, v); // also populate scope for hooks
+          }
+        }
       }
+    } catch (e) {
+      if (typeof window !== 'undefined' && window._airDebug) {
+        console.warn('[AIR] adder transpile fallback for cell', cell.id, ':', e.message);
+      }
+      // fall through to tree-walker
+      usedTranspile = false;
+      defines = {};
     }
-    if (e instanceof AdderError) throw e;
-    throw e;
   }
 
-  // extract defines
-  const defines = {};
-  const cellDefines = pythonParseNames(code);
-  for (const name of cellDefines) {
-    if (scope.vars.has(name)) {
-      defines[name] = scope.vars.get(name);
+  if (!usedTranspile) {
+    try {
+      lastExpr = await adderEval(ast, scope);
+    } catch (e) {
+      if (typeof window !== 'undefined' && window._adderCellHooks) {
+        for (let i = 0; i < window._adderCellHooks.length; i++) {
+          try { window._adderCellHooks[i].after?.(_hookStates[i], {}, scope); } catch {}
+        }
+      }
+      if (e instanceof AdderError) throw e;
+      throw e;
+    }
+    const cellDefines = pythonParseNames(code);
+    for (const name of cellDefines) {
+      if (scope.vars.has(name)) defines[name] = scope.vars.get(name);
     }
   }
 

@@ -2,6 +2,7 @@
 import './parse.js';
 import './builtins.js';
 import './eval.js';
+import './runtime.js';
 import './highlight.js';
 import './cell.js';
 import './tag.js';

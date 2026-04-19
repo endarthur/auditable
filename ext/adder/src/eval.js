@@ -1269,13 +1269,13 @@ async function _evalCompIter(node, scope, result, kind, genIdx) {
 
 // ── imports ──
 
-function _resolveModule(name) {
+export function _resolveModule(name) {
   if (adderModules[name]) return adderModules[name];
   if (typeof window !== 'undefined' && window._auditableExtensions?.[name]) return window._auditableExtensions[name];
   return null;
 }
 
-async function _loadVfsModule(name) {
+export async function _loadVfsModule(name) {
   // check cache
   const cache = adderModules.sys.modules;
   if (cache[name]) return cache[name];

@@ -2,6 +2,7 @@
 // Clean interface matching existing parseNames/findUses output shapes
 
 import { lowerJS } from './lower/js.js';
+import { lowerAdder, AirLowerError } from './lower/adder.js';
 import { runPasses, extractDependencies } from './passes.js';
 
 // Debug logging — true during development, settable via window._airDebug
@@ -121,4 +122,15 @@ if (typeof window !== 'undefined' && window.Acorn) {
   // Phase 2: emitter functions for exec.js
   window._airEmit = emitJS;
   window._airNeedsAsync = needsAsync;
+  // Phase 3: adder transpile entry — returns { air, defines } or null on failure
+  window._airLowerAdder = function(ast, code) {
+    try {
+      const air = lowerAdder(ast, code);
+      runPasses(air);
+      return { air, defines: air.defines };
+    } catch (e) {
+      if (e instanceof AirLowerError) return null;
+      throw e;
+    }
+  };
 }
