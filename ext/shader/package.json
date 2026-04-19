@@ -1,18 +1,27 @@
 {
-  "name": "@auditable/shader",
+  "name": "@gcu/shader",
   "version": "0.1.0",
-  "description": "Shadertoy-compatible WebGL 2 shader helper for Auditable notebooks",
+  "description": "Shadertoy-compatible WebGL 2 shader helper. Tagged-template `glsl` + `shader(canvas, code)` for live hot-compile fragment shaders with Shadertoy-style uniforms.",
   "type": "module",
   "main": "index.js",
   "exports": {
-    ".": "./index.js"
+    ".": "./index.js",
+    "./package.json": "./package.json"
   },
+  "files": [
+    "index.js",
+    "README.md"
+  ],
+  "keywords": ["shader", "webgl", "webgl2", "shadertoy", "glsl", "tagged-template", "auditable", "gcu"],
   "license": "MIT",
   "author": "Arthur Endlein Correia",
   "repository": {
     "type": "git",
-    "url": "https://github.com/endarthur/auditable",
+    "url": "git+https://github.com/endarthur/auditable.git",
     "directory": "ext/shader"
   },
-  "keywords": ["shader", "webgl", "shadertoy", "glsl", "auditable"]
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/shader",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
 }

@@ -1,6 +1,10 @@
 {
+  "name": "auditable-workspace",
   "version": "0.3.0",
   "private": true,
+  "workspaces": [
+    "ext/*"
+  ],
   "bin": {
     "atrac": "./ext/atra/atrac.js"
   },

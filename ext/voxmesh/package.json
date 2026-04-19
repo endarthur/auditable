@@ -1,0 +1,37 @@
+{
+  "name": "@gcu/voxmesh",
+  "version": "0.1.0",
+  "description": "Greedy voxel meshing for block models and volumetric data. Binning, bucket aggregation, chunked meshing, convenience helpers. Produces triangle meshes for rendering.",
+  "type": "module",
+  "main": "src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./bin": "./src/bin.js",
+    "./chunk": "./src/chunk.js",
+    "./bucket": "./src/bucket.js",
+    "./mesh": "./src/mesh.js",
+    "./convenience": "./src/convenience.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["voxel", "meshing", "greedy", "block-model", "3d", "volumetric", "geology", "mining", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/voxmesh"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/voxmesh",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}

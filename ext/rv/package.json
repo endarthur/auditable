@@ -1,0 +1,37 @@
+{
+  "name": "@gcu/rv",
+  "version": "0.1.0",
+  "description": "RV32IMA RISC-V system emulator. Atra-compiled Wasm CPU core + JS host (ELF loader, DTB, UART console, Web Worker wrapper). Capable of booting a Linux kernel.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./worker": "./worker.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "worker.js",
+    "README.md",
+    "SPEC.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "devDependencies": {
+    "@gcu/atra": "^0.1.0"
+  },
+  "keywords": ["risc-v", "rv32ima", "emulator", "cpu", "wasm", "atra", "linux", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/rv"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/rv",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}

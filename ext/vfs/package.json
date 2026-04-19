@@ -1,0 +1,43 @@
+{
+  "name": "@gcu/vfs",
+  "version": "0.1.0",
+  "description": "Virtual filesystem abstraction over multiple backends: in-memory, File System Access API, OPFS, IndexedDB, HTML-comment embedded, fetch, REST, and overlays. Glob matching, event emitter, permissions.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./memory": "./src/memory.js",
+    "./fsaa": "./src/fsaa.js",
+    "./opfs": "./src/opfs.js",
+    "./idb": "./src/idb.js",
+    "./overlay": "./src/overlay.js",
+    "./fetch": "./src/fetch-backend.js",
+    "./rest": "./src/rest.js",
+    "./comment": "./src/comment.js",
+    "./glob": "./src/glob.js",
+    "./path": "./src/path.js",
+    "./service-worker": "./vfs-sw.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "vfs-sw.js",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["filesystem", "vfs", "fs", "fsaa", "opfs", "indexeddb", "storage", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/vfs"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/vfs",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}

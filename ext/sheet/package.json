@@ -1,0 +1,34 @@
+{
+  "name": "@gcu/sheet",
+  "version": "0.1.0",
+  "description": "XLSX file reader and writer in pure JavaScript. Zero runtime dependencies — bundles its own zip and XML handling.",
+  "type": "module",
+  "main": "src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./api": "./src/api.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "README.md",
+    "SPEC.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["xlsx", "excel", "spreadsheet", "io", "zip", "xml", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/sheet"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/sheet",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}

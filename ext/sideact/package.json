@@ -1,0 +1,35 @@
+{
+  "name": "@gcu/sideact",
+  "version": "0.1.0",
+  "description": "Signals + templates + DOM binding. Standalone reactive UI library — zero dependencies. `@gcu/sideact/signals` gives you signal/computed/effect/batch without any DOM code.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./signals": "./src/signals.js",
+    "./dom": "./src/dom.js",
+    "./render": "./src/render.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["signals", "reactive", "dom", "template", "tagged-template", "hyperscript", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/sideact"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/sideact",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}

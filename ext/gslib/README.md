@@ -946,3 +946,7 @@ Non-graphical programs from GSLIB 2nd edition (Deutsch & Journel, 1998) not yet 
 | **rotcoord** | Trivial 2D coordinate rotation |
 | **draw** | Monte Carlo CDF sampling — trivial in JS |
 | **anneal** | Post-process categorical realizations — very specialized |
+
+## License
+
+CC0-1.0 (public domain dedication). See [LICENSE](./LICENSE).

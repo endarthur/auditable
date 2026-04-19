@@ -1,0 +1,29 @@
+{
+  "name": "@gcu/gslib",
+  "version": "0.1.0",
+  "description": "Geostatistics library — kriging (kb2d, kt3d, cokb3d, ik3d), simulation (sgsim, sisim), variography (gamv, vmodel), declustering, normal-score transforms. Ported from classic GSLIB Fortran, compiled to WebAssembly via atra.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "api.js",
+    "gslib.atra",
+    "README.md"
+  ],
+  "keywords": ["geostatistics", "kriging", "simulation", "variogram", "gslib", "mining", "geology", "wasm", "atra", "auditable", "gcu"],
+  "license": "CC0-1.0",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/gslib"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/gslib",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}

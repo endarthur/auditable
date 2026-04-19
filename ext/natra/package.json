@@ -1,0 +1,42 @@
+{
+  "name": "@gcu/natra",
+  "version": "0.1.0",
+  "description": "ndarray operations backed by atra-compiled Wasm kernels. NumPy-compatible element-wise ops, reductions, broadcasting, strided views. Designed to pair with @gcu/adder (Python) for numpy-style code; standalone JS API also available.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./adder": "./adder.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "adder.js",
+    "NATRA.md",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@gcu/atra": "^0.1.0",
+    "@gcu/adder": "^0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@gcu/atra": {
+      "optional": true
+    },
+    "@gcu/adder": {
+      "optional": true
+    }
+  },
+  "keywords": ["ndarray", "numpy", "array", "linear-algebra", "simd", "wasm", "atra", "adder", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/natra"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/natra",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}

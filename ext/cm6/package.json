@@ -1,4 +1,6 @@
 {
+  "name": "auditable-cm6-bundle",
+  "version": "0.0.0",
   "private": true,
   "type": "module",
   "devDependencies": {

@@ -5,6 +5,7 @@ import { lowerJS } from './lower/js.js';
 import { lowerAdder, AirLowerError } from './lower/adder.js';
 import { lowerSoft, SoftLowerError } from './lower/soft.js';
 import { runPasses, extractDependencies } from './passes.js';
+import { emitJS, needsAsync } from './emit-js.js';
 
 // Debug logging — true during development, settable via window._airDebug
 let _airDebug = (typeof window !== 'undefined') ? (window._airDebug ?? true) : false;
@@ -108,7 +109,7 @@ export function extractExportTypes(module) {
   return types;
 }
 
-export { lowerJS, runPasses, extractDependencies };
+export { lowerJS, lowerAdder, lowerSoft, runPasses, extractDependencies, emitJS, needsAsync, AirLowerError, SoftLowerError };
 
 // --- Browser init: register AIR on window ---
 // When loaded in the browser with Acorn available, create the parser

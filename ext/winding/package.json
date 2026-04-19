@@ -1,0 +1,32 @@
+{
+  "name": "@gcu/winding",
+  "version": "0.1.0",
+  "description": "Generalized winding number solid containment for triangle meshes. CPU + WebGPU evaluators with BVH acceleration and optional Web Worker offload.",
+  "type": "module",
+  "main": "src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["winding-number", "point-in-mesh", "containment", "bvh", "webgpu", "mesh", "geometry", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/winding"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/winding",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}

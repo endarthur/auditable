@@ -1,0 +1,36 @@
+{
+  "name": "@gcu/units",
+  "version": "0.1.0",
+  "description": "Unit conversion for length, mass, area, volume, angle, grade, density, and magnetic quantities. Sieve mesh conversions, drill core utilities, formatting helpers.",
+  "type": "module",
+  "main": "src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./convert": "./src/convert.js",
+    "./sieve": "./src/sieve.js",
+    "./core": "./src/core.js",
+    "./format": "./src/format.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["units", "conversion", "sieve", "drill-core", "geology", "mining", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/units"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/units",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}

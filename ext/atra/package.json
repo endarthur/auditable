@@ -1,14 +1,38 @@
 {
-  "name": "atra",
+  "name": "@gcu/atra",
   "version": "0.1.0",
-  "description": "Fortran/Pascal to WebAssembly compiler — arithmetic transpiler",
-  "main": "index.js",
+  "description": "Fortran/Pascal-style language that compiles to WebAssembly. Supports SIMD, multi-memory, structured control flow. Library API + atrac CLI.",
   "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./cli": "./atrac.js",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "atrac": "./atrac.js"
+  },
+  "files": [
+    "index.js",
+    "atrac.js",
+    "lib",
+    "README.md",
+    "SPEC.md"
+  ],
   "scripts": {
     "build": "node build.js",
     "test": "node --no-warnings --test ../../test/atra.test.js"
   },
-  "keywords": ["webassembly", "wasm", "compiler", "fortran", "simd"],
+  "keywords": ["webassembly", "wasm", "compiler", "fortran", "pascal", "simd", "multi-memory", "auditable", "gcu"],
   "license": "MIT",
-  "author": "Arthur Endlein Correia"
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/atra"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/atra",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
 }

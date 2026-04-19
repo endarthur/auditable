@@ -1,4 +1,60 @@
 {
-  "private": true,
-  "type": "module"
+  "name": "@gcu/air",
+  "version": "0.1.0",
+  "description": "Auditable Intermediate Representation — SSA IR compiler for JS, TypeScript, Python (adder), and Soft dialects. Type propagation, constant folding, runtime-helper specialization, and V8-hinted JS emission.",
+  "type": "module",
+  "main": "src/api.js",
+  "exports": {
+    ".": "./src/api.js",
+    "./types": "./src/types.js",
+    "./passes": "./src/passes.js",
+    "./emit": "./src/emit-js.js",
+    "./lower/js": "./src/lower/js.js",
+    "./lower/adder": "./src/lower/adder.js",
+    "./lower/soft": "./src/lower/soft.js",
+    "./bundled": "./index.js"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "peerDependencies": {
+    "acorn": "^8.0.0",
+    "acorn-typescript": "^1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "acorn": {
+      "optional": true
+    },
+    "acorn-typescript": {
+      "optional": true
+    }
+  },
+  "keywords": [
+    "compiler",
+    "ssa",
+    "intermediate-representation",
+    "javascript",
+    "typescript",
+    "python",
+    "wasm",
+    "auditable",
+    "gcu"
+  ],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/air"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/air",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
 }

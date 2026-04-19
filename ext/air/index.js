@@ -5671,6 +5671,7 @@ function emitOpaque(ctx, op) {
 
 
 
+
 // Debug logging — true during development, settable via window._airDebug
 let _airDebug = (typeof window !== 'undefined') ? (window._airDebug ?? true) : false;
 

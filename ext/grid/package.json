@@ -1,0 +1,37 @@
+{
+  "name": "@gcu/grid",
+  "version": "0.1.0",
+  "description": "Regular block-model grid utilities: geometry (index/flat conversion, centroids, rotation), selections (masks, boolean ops), compacting, operations (map, reduce, histogram, grade-tonnage), spatial queries (slices, shells, regridding).",
+  "type": "module",
+  "main": "src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./geometry": "./src/geometry.js",
+    "./selection": "./src/selection.js",
+    "./compact": "./src/compact.js",
+    "./operations": "./src/operations.js",
+    "./spatial": "./src/spatial.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["block-model", "grid", "geology", "mining", "geostatistics", "raster", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/grid"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/grid",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}

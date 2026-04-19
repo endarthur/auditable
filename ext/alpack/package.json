@@ -1,0 +1,29 @@
+{
+  "name": "@gcu/alpack",
+  "version": "0.1.0",
+  "description": "Dense linear algebra for the browser, compiled to WebAssembly. ALAS (BLAS equivalent: ddot, daxpy, dgemv, dgemm, ...) + ALPACK (LAPACK equivalent: dpotrf, dgesv, dsyev, ...). Runs in any Wasm runtime.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./src": "./src.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "src.js",
+    "README.md"
+  ],
+  "keywords": ["blas", "lapack", "linear-algebra", "matrix", "wasm", "webassembly", "simd", "atra", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/alpack"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/alpack",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}

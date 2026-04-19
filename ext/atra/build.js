@@ -56,56 +56,81 @@ fs.writeFileSync(outPath, output);
 const size = fs.statSync(outPath).size;
 console.log(`Built ext/atra/index.js (${(size / 1024).toFixed(1)} KB)`);
 
-// ── Build lib/alpack.src.js from lib/alpack.atra ──
+// ── Build atra libraries: alpack, gslib, raster ──
+// Outputs are dual-written:
+//   - ext/atra/lib/<name>.js          (for Auditable's @atra/* resolver and /// module: refs)
+//   - ext/<name>/index.js             (for npm publishing as @gcu/<name>)
+// Source stays at its canonical location (ext/atra/lib/alpack.atra for alpack,
+// ext/<name>/<name>.atra for gslib/raster).
 
 import { buildSrc, formatSrcJs, bundle } from './atrac.js';
 
 const libDir = path.join(__dirname, 'lib');
+const extDir = path.join(__dirname, '..');
+
+function writeDual(primaryPath, secondaryPath, content, label) {
+  fs.writeFileSync(primaryPath, content);
+  const size = fs.statSync(primaryPath).size;
+  console.log(`Built ${label} (${(size / 1024).toFixed(1)} KB)`);
+  fs.mkdirSync(path.dirname(secondaryPath), { recursive: true });
+  fs.writeFileSync(secondaryPath, content);
+}
 
 // ── alpack ──
 
 const alpackPath = path.join(libDir, 'alpack.atra');
 if (fs.existsSync(alpackPath)) {
   const atraSrc = fs.readFileSync(alpackPath, 'utf8');
-  const libOut = formatSrcJs(buildSrc(atraSrc));
-  const libOutPath = path.join(libDir, 'alpack.src.js');
-  fs.writeFileSync(libOutPath, libOut);
-  const libSize = fs.statSync(libOutPath).size;
-  console.log(`Built ext/atra/lib/alpack.src.js (${(libSize / 1024).toFixed(1)} KB)`);
 
+  // Source distribution (for `load("@atra/alpack.src")` and @gcu/alpack/src)
+  const srcOut = formatSrcJs(buildSrc(atraSrc));
+  writeDual(
+    path.join(libDir, 'alpack.src.js'),
+    path.join(extDir, 'alpack', 'src.js'),
+    srcOut,
+    'ext/atra/lib/alpack.src.js → ext/alpack/src.js',
+  );
+
+  // Binary distribution (for `load("@atra/alpack")` and @gcu/alpack)
   const bundleOut = bundle(atraSrc, { name: 'alpack' });
-  const bundlePath = path.join(libDir, 'alpack.js');
-  fs.writeFileSync(bundlePath, bundleOut);
-  const bundleSize = fs.statSync(bundlePath).size;
-  console.log(`Built ext/atra/lib/alpack.js (${(bundleSize / 1024).toFixed(1)} KB)`);
+  writeDual(
+    path.join(libDir, 'alpack.js'),
+    path.join(extDir, 'alpack', 'index.js'),
+    bundleOut,
+    'ext/atra/lib/alpack.js → ext/alpack/index.js',
+  );
 }
 
 // ── gslib ──
 
-const gslibAtraPath = path.join(__dirname, '..', 'gslib', 'gslib.atra');
+const gslibAtraPath = path.join(extDir, 'gslib', 'gslib.atra');
 if (fs.existsSync(gslibAtraPath)) {
   const gslibSrc = fs.readFileSync(gslibAtraPath, 'utf8');
-
-  let gslibBundleOut = bundle(gslibSrc, { name: 'gslib' });
-  const gslibApiPath = path.join(__dirname, '..', 'gslib', 'api.js');
+  let out = bundle(gslibSrc, { name: 'gslib' });
+  const gslibApiPath = path.join(extDir, 'gslib', 'api.js');
   if (fs.existsSync(gslibApiPath)) {
-    gslibBundleOut += '\n' + fs.readFileSync(gslibApiPath, 'utf8');
+    out += '\n' + fs.readFileSync(gslibApiPath, 'utf8');
   }
-  const gslibBundlePath = path.join(libDir, 'gslib.js');
-  fs.writeFileSync(gslibBundlePath, gslibBundleOut);
-  const gslibBundleSize = fs.statSync(gslibBundlePath).size;
-  console.log(`Built ext/atra/lib/gslib.js (${(gslibBundleSize / 1024).toFixed(1)} KB)`);
+  writeDual(
+    path.join(libDir, 'gslib.js'),
+    path.join(extDir, 'gslib', 'index.js'),
+    out,
+    'ext/atra/lib/gslib.js → ext/gslib/index.js',
+  );
 }
 
 // ── raster ──
 
-const rasterAtraPath = path.join(__dirname, '..', 'raster', 'raster.atra');
+const rasterAtraPath = path.join(extDir, 'raster', 'raster.atra');
 if (fs.existsSync(rasterAtraPath)) {
   const rasterSrc = fs.readFileSync(rasterAtraPath, 'utf8');
   let out = bundle(rasterSrc, { name: 'raster' });
-  const apiPath = path.join(__dirname, '..', 'raster', 'api.js');
+  const apiPath = path.join(extDir, 'raster', 'api.js');
   if (fs.existsSync(apiPath)) out += '\n' + fs.readFileSync(apiPath, 'utf8');
-  const outPath = path.join(libDir, 'raster.js');
-  fs.writeFileSync(outPath, out);
-  console.log(`Built ext/atra/lib/raster.js (${(fs.statSync(outPath).size / 1024).toFixed(1)} KB)`);
+  writeDual(
+    path.join(libDir, 'raster.js'),
+    path.join(extDir, 'raster', 'index.js'),
+    out,
+    'ext/atra/lib/raster.js → ext/raster/index.js',
+  );
 }

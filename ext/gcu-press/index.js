@@ -762,3 +762,5 @@ function renderPages(pages, pageSpec, defaultFont) {
   }
   return canvases;
 }
+
+export { createMetrics, box, glue, penalty, lineBreak, INF_PENALTY, NEG_INF_PENALTY, findHyphenPoints, parseToItems, layoutPages, renderPage, renderPages };

@@ -1,5 +1,11 @@
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: ext/sideact/src/  Build: node ext/sideact/build.js
 // @gcu/sideact — signals + templates + DOM binding
 // standalone reactive UI library. zero dependencies.
+
+// -- signals.js --
+
+// @gcu/sideact — signals: reactive primitives (signal, computed, effect, batch)
+// Zero dependencies, no DOM. Usable in Node, workers, or any JS environment.
 
 // ── tracking ──
 
@@ -22,7 +28,7 @@ function _schedule(e) {
 
 // ── signal ──
 
-export function signal(initial) {
+function signal(initial) {
   let _value = initial;
   const _subs = new Set();
 
@@ -46,7 +52,7 @@ export function signal(initial) {
 
 // ── computed ──
 
-export function computed(fn) {
+function computed(fn) {
   let _value, _dirty = true;
   const _subs = new Set();
 
@@ -89,7 +95,7 @@ export function computed(fn) {
 
 // ── effect ──
 
-export function effect(fn) {
+function effect(fn) {
   let _cleanup = null;
   let _disposed = false;
   const _deps = new Set(); // signals/computeds we're subscribed to
@@ -120,7 +126,7 @@ export function effect(fn) {
 
 // ── batch ──
 
-export function batch(fn) {
+function batch(fn) {
   _batchDepth++;
   try { fn(); } finally {
     _batchDepth--;
@@ -131,11 +137,17 @@ export function batch(fn) {
   }
 }
 
+// -- dom.js --
+
+// @gcu/sideact — DOM: template/hyperscript element creation and binding.
+// Requires `document` — browser/JSDOM environments only.
+
+
 // ── h: dual-mode element creator ──
 
 const _templateCache = new WeakMap();
 
-export function h(first, ...rest) {
+function h(first, ...rest) {
   if (Array.isArray(first) && first.raw) return _templateMode(first, rest);
   return _hyperscriptMode(first, rest[0], rest.slice(1));
 }
@@ -389,9 +401,16 @@ function _appendHChild(parent, child, disposers) {
   }
 }
 
+// -- render.js --
+
+// @gcu/sideact — render: list rendering (each) and root mount (render).
+// Requires `document`.
+
+
+
 // ── each ──
 
-export function each(signalOrFn, mapFn, keyFn) {
+function each(signalOrFn, mapFn, keyFn) {
   const frag = document.createDocumentFragment();
   const anchor = document.createComment('each');
   frag.appendChild(anchor);
@@ -481,7 +500,7 @@ export function each(signalOrFn, mapFn, keyFn) {
 
 // ── render ──
 
-export function render(content, container) {
+function render(content, container) {
   container.textContent = '';
   const allDisposers = [];
 
@@ -498,8 +517,17 @@ export function render(content, container) {
   };
 }
 
+// -- main.js --
+
+// @gcu/sideact — concat build manifest + Auditable cell-hook registration.
+// Import order below doubles as concat order for build.js.
+
+
+
+
+
 // ── notebook integration hook ──
-// Self-registers sr.state() when running inside auditable cells.
+// Self-registers sr.state() when running inside Auditable cells.
 // sr.state(initial) persists signals across cell re-executions.
 // Pure sideact (signal/computed/effect/h/each/render) is unaffected.
 
@@ -524,3 +552,5 @@ if (typeof window !== 'undefined') {
     },
   });
 }
+
+export { signal, computed, effect, batch, h, each, render };

@@ -1,0 +1,53 @@
+{
+  "name": "@gcu/plan",
+  "version": "0.1.0",
+  "description": "Project scheduling and analysis: CPM, PERT, Monte Carlo, EVM, S-curves, resource leveling, sensitivity. Working calendars with holidays (pt-BR built-in). SVG Gantt and analysis rendering.",
+  "type": "module",
+  "main": "src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./calendar": "./src/calendar.js",
+    "./pert": "./src/pert.js",
+    "./graph": "./src/graph.js",
+    "./schedule": "./src/schedule.js",
+    "./resource": "./src/resource.js",
+    "./scurve": "./src/scurve.js",
+    "./evm": "./src/evm.js",
+    "./analysis": "./src/analysis.js",
+    "./workflow": "./src/workflow.js",
+    "./montecarlo": "./src/montecarlo.js",
+    "./render": "./src/render.js",
+    "./xlsx": "./src/xlsx.js",
+    "./holidays-br": "./src/holidays-br.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "peerDependencies": {
+    "@gcu/sheet": "^0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@gcu/sheet": {
+      "optional": true
+    }
+  },
+  "keywords": ["project-management", "cpm", "pert", "gantt", "monte-carlo", "evm", "scheduling", "earned-value", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/plan"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/plan",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}

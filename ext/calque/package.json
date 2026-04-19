@@ -1,0 +1,34 @@
+{
+  "name": "@gcu/calque",
+  "version": "0.1.0",
+  "description": "Calque — a spreadsheet language that compiles to xlsx. Tagged-template `calque` parses formulas, evaluates, and renders as tables. Language spec at ext/calque/SPEC.md.",
+  "type": "module",
+  "main": "src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./api": "./src/api.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "README.md",
+    "SPEC.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["spreadsheet", "calque", "formula", "xlsx", "dsl", "language", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/calque"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/calque",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}

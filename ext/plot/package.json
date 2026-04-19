@@ -1,0 +1,37 @@
+{
+  "name": "@gcu/plot",
+  "version": "0.1.0",
+  "description": "Matplotlib-style plotting for the browser: subplots, plot, scatter, imshow, hist, bar. Canvas-based, zero runtime dependencies.",
+  "type": "module",
+  "main": "src/api.js",
+  "exports": {
+    ".": "./src/api.js",
+    "./axes": "./src/axes.js",
+    "./color": "./src/color.js",
+    "./figure": "./src/figure.js",
+    "./scale": "./src/scale.js",
+    "./format": "./src/format.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["plot", "plotting", "chart", "matplotlib", "canvas", "visualization", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/plot"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/plot",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}

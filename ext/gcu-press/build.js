@@ -48,7 +48,9 @@ const header = '// \u26a0 GENERATED FILE \u2014 DO NOT EDIT. Source: ext/gcu-pre
   + '// gcu-press \u2014 typesetting engine\n'
   + '// Knuth-Plass line breaking, page layout, canvas rendering.\n';
 
-const output = header + '\n' + chunks.join('\n\n') + '\n';
+const exportBlock = '\nexport { createMetrics, box, glue, penalty, lineBreak, INF_PENALTY, NEG_INF_PENALTY, findHyphenPoints, parseToItems, layoutPages, renderPage, renderPages };\n';
+
+const output = header + '\n' + chunks.join('\n\n') + '\n' + exportBlock;
 
 const outPath = path.join(__dirname, 'index.js');
 fs.writeFileSync(outPath, output);

@@ -1,4 +1,6 @@
 {
+  "name": "auditable-acorn-bundle",
+  "version": "0.0.0",
   "private": true,
   "type": "module",
   "dependencies": {

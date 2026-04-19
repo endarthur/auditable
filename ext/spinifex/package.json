@@ -1,11 +1,30 @@
 {
-  "private": true,
+  "name": "@gcu/spinifex",
+  "version": "0.1.0",
+  "description": "Web GIS toolkit: map rendering, GeoJSON / Shapefile / GeoTIFF / CSV loaders, SRTM elevation tiles with IndexedDB cache, drawing interactions, DEM sampling/profiles, GDAL Wasm processing (contour, slope, aspect, hillshade). Ships vendored OpenLayers 10 + proj4 (tree-shaken).",
   "type": "module",
-  "devDependencies": {
-    "ol": "^10.5.0",
-    "proj4": "^2.15.0",
-    "rollup": "^4.34.8",
-    "@rollup/plugin-node-resolve": "^16.0.1",
-    "@rollup/plugin-terser": "^0.4.4"
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["gis", "geospatial", "openlayers", "geotiff", "shapefile", "srtm", "dem", "gdal", "maps", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/spinifex"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/spinifex",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
   }
 }

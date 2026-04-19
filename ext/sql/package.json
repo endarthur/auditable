@@ -1,0 +1,27 @@
+{
+  "name": "@gcu/sql",
+  "version": "0.1.0",
+  "description": "SQL language tag with syntax highlighting and completions. Zero-dep tagged-template helper used by Auditable and usable standalone.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "README.md"
+  ],
+  "keywords": ["sql", "tagged-template", "syntax-highlighting", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/sql"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/sql",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}

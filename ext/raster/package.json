@@ -1,0 +1,29 @@
+{
+  "name": "@gcu/raster",
+  "version": "0.1.0",
+  "description": "Raster analysis kernels for DEMs: slope, aspect, hillshade, curvature, terrain derivatives (TRI, TPI, roughness), D8 flow direction/accumulation, sink filling. Compiled to WebAssembly via atra.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "api.js",
+    "raster.atra",
+    "README.md"
+  ],
+  "keywords": ["raster", "dem", "slope", "aspect", "hillshade", "hydrology", "flow-accumulation", "gis", "geology", "wasm", "atra", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/raster"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/raster",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}

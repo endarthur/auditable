@@ -93,3 +93,8 @@ node --test test/soft.test.mjs   # Soft tests only
 ## spec
 
 See [SPEC.md](SPEC.md) for the full language specification, grammar, and test cases.
+
+## license
+
+Implementation: MIT — see [LICENSE](./LICENSE).
+Language specification (grammar, keywords, semantics as documented in SPEC.md): CC0-1.0 — reimplement freely.

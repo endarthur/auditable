@@ -1,0 +1,45 @@
+{
+  "name": "@gcu/dee",
+  "version": "0.1.0",
+  "description": "Three.js-based 3D scene for geoscientific visualization: block models, sections, drillholes, surfaces, polylines, clip planes, raycasting. Expects THREE on globalThis or passed via opts.",
+  "type": "module",
+  "main": "src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./scene": "./src/scene.js",
+    "./layers": "./src/layers.js",
+    "./hud": "./src/hud.js",
+    "./raycast": "./src/raycast.js",
+    "./color": "./src/color.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "peerDependencies": {
+    "three": "^0.160.0"
+  },
+  "peerDependenciesMeta": {
+    "three": {
+      "optional": true
+    }
+  },
+  "keywords": ["3d", "three.js", "geology", "block-model", "drillhole", "visualization", "section", "mining", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/dee"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/dee",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}

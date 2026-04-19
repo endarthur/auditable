@@ -1,0 +1,38 @@
+{
+  "name": "@gcu/gcu-press",
+  "version": "0.1.0",
+  "description": "Typesetting engine — Knuth-Plass line breaking, hyphenation, page layout, canvas rendering. Turn markdown-ish source into typeset pages.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./linebreak": "./src/linebreak.js",
+    "./layout": "./src/layout.js",
+    "./render": "./src/render.js",
+    "./parse": "./src/parse.js",
+    "./metrics": "./src/metrics.js",
+    "./hyphenate": "./src/hyphenate.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "README.md",
+    "SPEC.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["typesetting", "knuth-plass", "linebreak", "hyphenation", "pagination", "canvas", "gcu-press", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/gcu-press"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/gcu-press",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}
