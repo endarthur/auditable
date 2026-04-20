@@ -1,6 +1,6 @@
 {
   "name": "@gcu/adder",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Python-in-JavaScript. AST parser + tree-walking evaluator in pure JS, no Wasm. Standalone library — Python values are JS values (no FFI boundary). Used by Auditable as a cell type.",
   "type": "module",
   "main": "src/index.js",
@@ -40,7 +40,7 @@
     "build": "node build.js"
   },
   "peerDependencies": {
-    "@gcu/air": "^0.1.0"
+    "@gcu/air": "^0.2.0"
   },
   "peerDependenciesMeta": {
     "@gcu/air": {
