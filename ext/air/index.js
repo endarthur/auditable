@@ -2533,7 +2533,11 @@ function lowerImport(ctx, node) {
   // import a, b as c, d.e as f
   for (const { module, alias } of node.names) {
     const nameConst = ctx.emit('const', [module], STRING, l);
-    const mod = emitPyCall(ctx, 'import', [nameConst], l);
+    // _py.import is async (it may need to async-load a module from VFS), so
+    // the emitted call must be awaited. Unlike the sync `_py.*` helpers
+    // (add, sub, truthy, ...), the result is a Promise, not the module.
+    const call = emitPyCall(ctx, 'import', [nameConst], l);
+    const mod = ctx.emit('await', [call.id], DYNAMIC, l);
     // For dotted names like `a.b`, bind the top-level `a` unless aliased.
     const bindName = alias || module.split('.')[0];
     ctx.emit('store', [bindName, mod.id], VOID, l);
@@ -2555,7 +2559,9 @@ function lowerImportFrom(ctx, node) {
   });
   const namesArr = ctx.emit('array_new', pairs.map(p => p.id), DYNAMIC, l);
   const moduleName = ctx.emit('const', [node.module], STRING, l);
-  const result = emitPyCall(ctx, 'importFrom', [moduleName, namesArr], l);
+  // _py.importFrom is async (same reason as _py.import) — await the result.
+  const importFromCall = emitPyCall(ctx, 'importFrom', [moduleName, namesArr], l);
+  const result = ctx.emit('await', [importFromCall.id], DYNAMIC, l);
   // Destructure result into scope: for each name, bind (alias || name) to result[name]
   for (const { name, alias } of node.names) {
     if (name === '*') continue; // wildcard — would need runtime enumeration
