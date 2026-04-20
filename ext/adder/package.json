@@ -1,11 +1,22 @@
 {
   "name": "@gcu/adder",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Python-in-JavaScript. AST parser + tree-walking evaluator in pure JS, no Wasm. Standalone library — Python values are JS values (no FFI boundary). Used by Auditable as a cell type.",
   "type": "module",
   "main": "src/index.js",
   "exports": {
-    ".": "./src/index.js",
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./air": {
+      "types": "./src/air.d.ts",
+      "default": "./src/air.js"
+    },
+    "./vfs": {
+      "types": "./src/vfs.d.ts",
+      "default": "./src/vfs.js"
+    },
     "./parse": "./src/parse.js",
     "./eval": "./src/eval.js",
     "./builtins": "./src/builtins.js",
@@ -17,9 +28,11 @@
     "./bundled": "./index.js",
     "./package.json": "./package.json"
   },
+  "types": "./src/index.d.ts",
   "files": [
     "src",
     "index.js",
+    "LICENSE",
     "README.md",
     "SPEC.md"
   ],

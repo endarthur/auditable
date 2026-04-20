@@ -1,24 +1,29 @@
 {
   "name": "@gcu/air",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Auditable Intermediate Representation — SSA IR compiler for JS, TypeScript, Python (adder), and Soft dialects. Type propagation, constant folding, runtime-helper specialization, and V8-hinted JS emission.",
   "type": "module",
   "main": "src/api.js",
+  "types": "./src/api.d.ts",
   "exports": {
-    ".": "./src/api.js",
+    ".": {
+      "types": "./src/api.d.ts",
+      "default": "./src/api.js"
+    },
     "./types": "./src/types.js",
     "./passes": "./src/passes.js",
     "./emit": "./src/emit-js.js",
     "./lower/js": "./src/lower/js.js",
     "./lower/adder": "./src/lower/adder.js",
     "./lower/soft": "./src/lower/soft.js",
-    "./bundled": "./index.js"
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
   },
   "files": [
     "src",
     "index.js",
-    "README.md",
-    "LICENSE"
+    "LICENSE",
+    "README.md"
   ],
   "scripts": {
     "build": "node build.js"

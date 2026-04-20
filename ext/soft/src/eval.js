@@ -143,6 +143,11 @@ export function softEval(code, options) {
   const scopeInit = (options && options.scopeInit) || {};
   for (const [name, val] of Object.entries(scopeInit)) scope[name] = val;
 
+  // Optional callback fired for every `say` statement — streaming hook for
+  // REPLs and CLI-style consumers that want output as it's produced rather
+  // than waiting for the `output` array at end of evaluation.
+  const onSay = (options && options.onSay) || null;
+
   // host functions (file I/O, DOM, events — injected by cell handler)
   const host = (options && options.host) || {};
 
@@ -291,6 +296,7 @@ export function softEval(code, options) {
   function evalSay(node, sc) {
     const val = evalExpr(node.value, sc);
     output.push(val); // push raw value — cell handler decides rendering
+    if (onSay) onSay(val);
     return null;
   }
 

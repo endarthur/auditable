@@ -1,100 +1,190 @@
 # @gcu/soft
 
-English keyword programming language for [Auditable](https://github.com/endarthur/auditable). Every keyword is a common English word. Data query pipelines, reactive cells, closures, first-class functions, i18n.
+Soft — a programming language with English keywords, designed for soft-keyboard input. Every keyword is a common English word; the language can be written without symbols entirely. Usable as a standalone interpreter library or as an [Auditable](https://github.com/endarthur/auditable) cell type.
 
-## quick start
+Pure JS tree-walking interpreter. Ships with an optional AIR-transpilation fast path (`@gcu/soft/air`) via [@gcu/air](https://www.npmjs.com/package/@gcu/air).
+
+Locale-aware — the same language is available in English and Brazilian Portuguese (`pt-BR`) via `softSetLocale()`.
+
+Pre-1.0 — APIs may change on minor version bumps.
+
+## Install
+
+```sh
+npm install @gcu/soft
+
+# optional: install @gcu/air for the fast-path transpiler
+npm install @gcu/air
+```
+
+## Quick start
 
 ```js
-// in an Auditable JS cell:
-await load("@gcu/soft")
+import { run } from '@gcu/soft';
+
+const { scope, output } = run(`
+  set name to "Arthur"
+  set greeting to "Hello, " & name
+  say greeting
+`);
+
+console.log(scope.greeting);   // "Hello, Arthur"
+console.log(output);           // ["Hello, Arthur"]
 ```
 
-Then create Soft cells from the insert bar (amber, shortcut `f`).
-
-```
-set intervals to list
-  record hole "DDH001" grade 62.1 lithology "itabirite",
-  record hole "DDH002" grade 55.0 lithology "itabirite",
-  record hole "DDH003" grade 31.2 lithology "phyllite"
-
-take intervals
-keep rows where grade above 50
-average grade
-round to 1
-say "mean ore grade: " it
-```
-
-## features
-
-**core language:** set/put, say (with juxtaposition), if/else/unless (block + inline + suffix), repeat/each/while/until/range, define/return, closures, call/run/result-of invocation, try/catch, assume, suppose.
-
-**pipeline DSL:** take, keep/drop (with if/rows where filler), sort, average/total/smallest/largest, count, first/last, group by, pick, with (computed columns), round, then/and-then chaining, called (mid-pipeline naming), into/as (result capture).
-
-**data types:** numbers (hex/bin/oct), strings (with escapes), booleans, nothing, records, multi-line lists, chunk expressions (character/word/line/item — read + write + ranges + counting).
-
-**property access:** `grade of row` (of-chains, right-to-left resolution, array mapping), `(field) of row` (dynamic), of-path writes.
-
-**pattern matching:** globs with character classes, regex literals.
-
-**auditable integration:** reactive DAG, ui.table for arrays-of-objects, syntax highlighting with auto-indent, completions, tagged template (`soft\`...\``), load/save via notebook.fs, make (DOM creation), on (event handlers with cleanup).
-
-**i18n:** locale system with keyword table swap. pt-BR locale included. Locales register as separate cell types (e.g. `soft-ptbr`).
-
-## portuguese
+AIR fast path — same API shape:
 
 ```js
-const { soft } = await load("@gcu/soft")
-await soft.loadLocale("pt-BR")
+import { run } from '@gcu/soft/air';
+const { scope, output } = await run(code);
 ```
 
-Then create `soft-ptbr` cells:
+## API
 
-```
-pegue intervalos
-mantenha linhas onde teor é acima de 50
-média de teor
-arredonde para 1
-diga "teor médio: " o resultado
-```
+Same shape as @gcu/adder but soft's `run()` returns `{ scope, output }` — the `output` array collects every value emitted by `say` in order.
 
-## architecture
+### `run(code, opts?): { scope, output }`
 
-```
-ext/soft/
-  src/
-    tokenize.js   — lexer (keywords, locale lookup, regex literals)
-    parse.js      — two-pass recursive descent (prescan + parse)
-    eval.js       — synchronous tree-walking evaluator
-    highlight.js  — CM6 syntax highlighting, auto-indent, completions
-    cell.js       — DAG integration (parseNames, findUses, execute)
-    tag.js        — soft`` tagged template
-    register.js   — self-registering cell type + locale cell type factory
-    main.js       — ES module entry point
-  build.js        — concatenates src/ into index.js
-  index.js        — build output (111 KB)
-  locales/
-    pt-BR.json    — Brazilian Portuguese keyword mappings
-  SPEC.md         — language specification (0.9-draft)
-```
+### `evalExpr(code, opts?): value`
 
-**two-pass parser:** pass 1 (prescan) scans all tokens for `define`/`use` statements to register function signatures. pass 2 builds the AST. this enables forward references — call functions before they're defined.
+Evaluate a soft expression. Returns the implicit `it` result.
 
-**locale system:** `softSetLocale(locale)` installs an inverted word→canonical lookup in the tokenizer. Portuguese words resolve to English tokens before parsing — zero parser changes for the core language. seven small parser tweaks handle word order differences (não é, acima de, para cada, etc.).
+### `compile(code): { ast, run(opts?) }`
 
-**cell type per locale:** `soft.loadLocale("pt-BR")` registers `soft-ptbr` as a separate cell type. Each locale type wraps the base handler with locale-aware parseNames/findUses/tokenize/execute. No global mutable state — the locale is always active for its cell type.
+Compile once, run many.
 
-## tests
+### `isIncomplete(code): boolean`
 
-```
-npm test               # runs full Auditable suite (includes 225 Soft tests)
-node --test test/soft.test.mjs   # Soft tests only
+For REPL line-continuation.
+
+## Options
+
+```ts
+{
+  globals?: Record<string, unknown>
+  locals?:  Record<string, unknown>
+  say?:     (value: unknown) => void     // receives raw values from `say`
+  stdout?:  (s: string) => void           // default say formats & writes here
+  stderr?:  (s: string) => void
+  stdin?:   () => string | null | Promise<string | null>
+  host?:    Record<string, unknown>       // cell-handler host integration
+}
 ```
 
-## spec
+`say` is soft's output verb. Unlike Python's `print`, it passes the raw value (number, string, list, record) to the `say` callback so consumers can format as they wish. The default `say` formats via `softString()` and writes to `stdout` with a newline.
 
-See [SPEC.md](SPEC.md) for the full language specification, grammar, and test cases.
+## Usage patterns
 
-## license
+### Capturing output (tests)
+
+```js
+const captured = [];
+run(`
+  say 1
+  say "two"
+  say 3.14
+`, {
+  say: v => captured.push(v),
+});
+// captured: [1, "two", 3.14]
+```
+
+### Stream to stdout
+
+```js
+run(`say "hello"`, {
+  stdout: s => process.stdout.write(s),
+});
+// prints "hello\n"
+```
+
+### Compile once, vary bindings
+
+```js
+const m = compile(`
+  set doubled to n * 2
+`);
+m.run({ globals: { n: 5 } }).scope.doubled;   // 10
+m.run({ globals: { n: 10 } }).scope.doubled;  // 20
+```
+
+### Inject host globals
+
+```js
+run(`
+  set π to Math.PI
+  set area to π times r times r
+  say area
+`, {
+  globals: {
+    Math: Math,
+    r: 5,
+  },
+});
+```
+
+### Portuguese locale
+
+```js
+import { run, softSetLocale } from '@gcu/soft';
+softSetLocale('pt-BR');
+
+const { scope } = run(`
+  defina nome como "Arthur"
+  defina saudação como "Olá, " & nome
+  diga saudação
+`);
+console.log(scope['saudação']);   // "Olá, Arthur"
+```
+
+### Building a REPL
+
+```js
+import { isIncomplete, evalExpr, run } from '@gcu/soft/air';
+import readline from 'node:readline/promises';
+import { stdin, stdout } from 'node:process';
+
+const rl = readline.createInterface({ input: stdin, output: stdout });
+const scope = {};
+const opts = { locals: scope, stdout: s => stdout.write(s) };
+
+let buffer = '';
+while (true) {
+  const line = await rl.question(buffer ? '... ' : '> ');
+  buffer = buffer ? buffer + '\n' + line : line;
+  if (isIncomplete(buffer)) continue;
+
+  try {
+    const value = await evalExpr(buffer, opts);
+    if (value != null) stdout.write(String(value) + '\n');
+  } catch {
+    const r = await run(buffer, opts);
+    Object.assign(scope, r.scope);
+  }
+  buffer = '';
+}
+```
+
+### Tagged template
+
+```js
+import { softTag } from '@gcu/soft';
+
+const { scope } = softTag`
+  set name to "Arthur"
+  set greeting to "Hello, " & name
+`;
+```
+
+## Using @gcu/soft inside Auditable
+
+```js
+await install("@gcu/soft")
+```
+
+Registers `soft` as a cell type. Press `y` or use the cell-header button to convert a cell. `@gcu/soft/register` is the side-effect entry point.
+
+## License
 
 Implementation: MIT — see [LICENSE](./LICENSE).
-Language specification (grammar, keywords, semantics as documented in SPEC.md): CC0-1.0 — reimplement freely.
+Language specification (grammar, keywords, semantics as documented in SPEC.md): CC0-1.0 — anyone is free to produce a clean-room reimplementation.

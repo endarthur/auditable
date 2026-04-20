@@ -5675,7 +5675,8 @@ function emitOpaque(ctx, op) {
 // Debug logging — true during development, settable via window._airDebug
 let _airDebug = (typeof window !== 'undefined') ? (window._airDebug ?? true) : false;
 
-// JS_GLOBALS: names that are not cell imports (built-in globals)
+// JS_GLOBALS: ambient names that should not be treated as module imports
+// (global intrinsics, browser globals, common environment provisions).
 const JS_GLOBALS = new Set([
   'Math', 'console', 'JSON', 'Object', 'Array', 'String', 'Number', 'Boolean',
   'Date', 'RegExp', 'Error', 'TypeError', 'RangeError', 'SyntaxError',
@@ -5705,16 +5706,18 @@ const JS_GLOBALS = new Set([
 ]);
 
 /**
- * Analyze a JS/TS cell: parse, lower to AIR, run passes, extract defines/uses.
+ * Analyze a JS/TS module: parse, lower to AIR, run passes, extract defines/uses.
  * Returns { defines: Set<string>, uses: Set<string>, air: CellModule } on success,
  * or null if parsing/lowering fails.
  *
- * @param {string} code - Cell source code
+ * @param {string} code - module source code
  * @param {object} parser - Acorn parser instance (Parser.extend(tsPlugin()))
- * @param {Set<string>} allDefined - All names defined across all cells (for use detection)
+ * @param {Set<string>} [allDefined] - if provided, restricts `uses` to names defined
+ *   elsewhere in a set of sibling modules (used by Auditable's cell-scope model).
+ *   Pass null/undefined for "any free name is a use."
  * @returns {{ defines: Set<string>, uses: Set<string>, air: object } | null}
  */
-function analyzeCell(code, parser, allDefined) {
+function analyzeModule(code, parser, allDefined) {
   try {
     const ast = parser.parse(code, {
       ecmaVersion: 'latest',
@@ -5727,25 +5730,31 @@ function analyzeCell(code, parser, allDefined) {
 
     const defines = module.defines;
 
-    // Filter imports: only keep names that are defined by other cells
-    // (not JS globals, not self-defined)
+    // Filter imports to a "uses" set. When allDefined is provided we only count
+    // names that appear in it (Auditable's cell-scope semantics); when not,
+    // we count every free name that isn't a JS global.
     const uses = new Set();
     for (const name of module.imports) {
-      if (allDefined && allDefined.has(name) && !defines.has(name) && !JS_GLOBALS.has(name)) {
-        uses.add(name);
-      }
+      if (defines.has(name) || JS_GLOBALS.has(name)) continue;
+      if (!allDefined || allDefined.has(name)) uses.add(name);
     }
 
     return { defines, uses, air: module };
   } catch (e) {
-    if (_airDebug) console.warn('[AIR] fallback for cell:', e.message);
+    if (_airDebug) console.warn('[AIR] analyze fallback:', e.message);
     return null;
   }
 }
 
 /**
+ * Back-compat alias. Prefer `analyzeModule` in new code.
+ * @deprecated since 0.2.0 — use analyzeModule
+ */
+const analyzeCell = analyzeModule;
+
+/**
  * Extract defines only (for cases where we just need the names).
- * Lighter than full analyzeCell — no passes, no use filtering.
+ * Lighter than full analyzeModule — no passes, no use filtering.
  */
 function extractDefines(code, parser) {
   try {
@@ -5763,7 +5772,7 @@ function extractDefines(code, parser) {
 }
 
 /**
- * Get export types for a cell (for fine-grained change detection).
+ * Get export types for a module (for fine-grained change detection).
  */
 function extractExportTypes(module) {
   if (!module) return null;
@@ -5783,7 +5792,7 @@ if (typeof window !== 'undefined' && window.Acorn) {
   const { Parser, tsPlugin } = window.Acorn;
   const _airParser = Parser.extend(tsPlugin());
   window._airAnalyzer = function(code, allDefined) {
-    return analyzeCell(code, _airParser, allDefined);
+    return analyzeModule(code, _airParser, allDefined);
   };
   // Phase 2: emitter functions for exec.js
   window._airEmit = emitJS;
@@ -5810,9 +5819,9 @@ if (typeof window !== 'undefined' && window.Acorn) {
       throw e;
     }
   };
-  // Re-run passes on an existing air module with given import types.
-  // Used for cross-cell type flow: upstream cell's export types seed
-  // downstream cell's imports. Returns true if anything changed.
+  // Re-run passes on an existing AIR module with given import types.
+  // Used by Auditable for cross-cell type flow: the upstream module's export
+  // types seed the downstream module's imports. Returns true if anything changed.
   window._airRePropagate = function(air, opts) {
     try {
       runPasses(air, opts || {});
