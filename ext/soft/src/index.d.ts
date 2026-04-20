@@ -56,10 +56,19 @@ export function softEval(code: string | unknown, options?: {
   maxCallDepth?: number;
 }): RunResult;
 
-/** Set the active soft locale (e.g. 'en', 'pt-BR'). */
-export function softSetLocale(locale: string): void;
-/** Get the active soft locale. */
-export function softGetLocale(): string;
+/** Parsed locale definition — the shape of the JSON files under `locales/`. */
+export interface SoftLocale {
+  locale: string;
+  keywords: Record<string, string[]>;
+  noise?: string[];
+}
+
+/** Install an active soft locale. Pass a parsed locale object (as exported
+ *  from the JSON files under `locales/`), or `null` to reset to English. */
+export function softSetLocale(locale: SoftLocale | null): void;
+
+/** Get the active locale lookup table (word → canonical English keyword), or null. */
+export function softGetLocale(): Record<string, string> | null;
 /** Render a value to its display string (soft's display convention). */
 export function softString(value: unknown): string;
 

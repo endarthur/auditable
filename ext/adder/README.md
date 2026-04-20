@@ -111,16 +111,29 @@ Name resolution order: `locals` → `globals` → adder builtins (print, input, 
 ```js
 import { run } from '@gcu/adder/air';
 import { readFile } from 'node:fs/promises';
+import readline from 'node:readline';
+
+// Line-by-line stdin reader, returns null on EOF.
+const rl = readline.createInterface({ input: process.stdin });
+const buffered = [];
+let resolveNext = null;
+let closed = false;
+rl.on('line',  line => resolveNext ? (resolveNext(line), resolveNext = null) : buffered.push(line));
+rl.on('close', ()   => { closed = true; if (resolveNext) { resolveNext(null); resolveNext = null; } });
+const nextLine = () => buffered.length ? Promise.resolve(buffered.shift())
+                     : closed         ? Promise.resolve(null)
+                                      : new Promise(r => { resolveNext = r; });
 
 const script = await readFile(process.argv[2], 'utf8');
 await run(script, {
-  stdin:  makeLineReader(process.stdin),
+  stdin:  nextLine,
   stdout: s => process.stdout.write(s),
   stderr: s => process.stderr.write(s),
   globals: {
     sys: { argv: process.argv.slice(2) },
   },
 });
+rl.close();
 ```
 
 ### Capturing output (tests, server-side rendering)
@@ -183,14 +196,11 @@ await run(`
 import { isIncomplete, evalExpr, run } from '@gcu/adder/air';
 import readline from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
+import { inspect } from 'node:util';
 
 const rl = readline.createInterface({ input: stdin, output: stdout });
 const scope = {};
-const opts = {
-  locals: scope,
-  stdout: s => stdout.write(s),
-  stdin:  () => rl.question(''),
-};
+const opts = { locals: scope, stdout: s => stdout.write(s) };
 
 let buffer = '';
 while (true) {
@@ -199,9 +209,11 @@ while (true) {
   if (isIncomplete(buffer)) continue;
 
   try {
+    // Try as an expression first — if it parses, display its value
     const value = await evalExpr(buffer, opts);
-    if (value !== undefined) stdout.write(require('util').inspect(value) + '\n');
+    if (value !== undefined) stdout.write(inspect(value) + '\n');
   } catch {
+    // Not a single expression — run as a statement block and absorb the scope
     Object.assign(scope, await run(buffer, opts));
   }
   buffer = '';

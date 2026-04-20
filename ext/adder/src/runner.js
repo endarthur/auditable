@@ -6,6 +6,26 @@ import { adderParse, _adderParseExpr } from './parse.js';
 import { adderEval, AdderScope } from './eval.js';
 import { adderBuiltins, setAdderVFS, getAdderVFS } from './builtins.js';
 
+// Strip common leading whitespace. Python has no meaningful indentation at the
+// module level, so a natural template literal like `\n    def foo(): ...` can
+// be safely normalized — and it has to be, otherwise adder's indentation-
+// sensitive parser rejects it. Ignores completely-blank lines when computing
+// the common indent.
+function _dedent(code) {
+  if (typeof code !== 'string' || code.indexOf('\n') === -1) return code;
+  const lines = code.split('\n');
+  let min = Infinity;
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const m = line.match(/^[ \t]*/);
+    const n = m ? m[0].length : 0;
+    if (n < min) min = n;
+    if (min === 0) break;
+  }
+  if (!Number.isFinite(min) || min === 0) return code;
+  return lines.map(l => l.slice(min)).join('\n');
+}
+
 // ── IO defaults ──
 
 const _defaultStdout = (s) => {
@@ -96,7 +116,7 @@ function _scopeToObject(scope, bindings) {
  * @returns {Promise<Record<string, any>>} the module scope
  */
 export async function run(code, opts = {}) {
-  const ast = adderParse(code);
+  const ast = adderParse(_dedent(code));
   const scope = new AdderScope();
   const bindings = _makeBindings(opts);
   for (const [k, v] of Object.entries(bindings)) scope.set(k, v);
@@ -114,7 +134,7 @@ export async function run(code, opts = {}) {
  * @returns {Promise<any>} the expression value
  */
 export async function evalExpr(code, opts = {}) {
-  const ast = _adderParseExpr(code);
+  const ast = _adderParseExpr(_dedent(code).trim());
   const scope = new AdderScope();
   const bindings = _makeBindings(opts);
   for (const [k, v] of Object.entries(bindings)) scope.set(k, v);
@@ -129,7 +149,7 @@ export async function evalExpr(code, opts = {}) {
  * @returns {{ ast: object, run(opts?): Promise<Record<string, any>> }}
  */
 export function compile(code) {
-  const ast = adderParse(code);
+  const ast = adderParse(_dedent(code));
   return {
     ast,
     async run(opts = {}) {
@@ -155,7 +175,7 @@ export function compile(code) {
 export function isIncomplete(code) {
   if (code == null || code === '' || /^\s*$/.test(code)) return true;
   try {
-    adderParse(code);
+    adderParse(_dedent(code));
     return false;
   } catch (e) {
     const msg = (e && e.message) || '';

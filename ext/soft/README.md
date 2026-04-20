@@ -125,28 +125,39 @@ run(`
 
 ### Portuguese locale
 
+Pass a locale object to `softSetLocale`. Locale JSON files ship with the
+package under `locales/` — load one and pass its parsed contents:
+
 ```js
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { run, softSetLocale } from '@gcu/soft';
-softSetLocale('pt-BR');
+
+const ptBrPath = fileURLToPath(new URL('../node_modules/@gcu/soft/locales/pt-BR.json', import.meta.url));
+const ptBR = JSON.parse(await readFile(ptBrPath, 'utf8'));
+softSetLocale(ptBR);
 
 const { scope } = run(`
-  defina nome como "Arthur"
-  defina saudação como "Olá, " & nome
+  defina nome para "Arthur"
+  defina saudação para "Olá, " & nome
   diga saudação
 `);
 console.log(scope['saudação']);   // "Olá, Arthur"
+
+softSetLocale(null);   // back to English
 ```
+
+`softSetLocale(null)` resets to English (the base language). `softGetLocale()` returns the active lookup table or null.
 
 ### Building a REPL
 
 ```js
-import { isIncomplete, evalExpr, run } from '@gcu/soft/air';
+import { isIncomplete, run } from '@gcu/soft/air';
 import readline from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 
 const rl = readline.createInterface({ input: stdin, output: stdout });
 const scope = {};
-const opts = { locals: scope, stdout: s => stdout.write(s) };
 
 let buffer = '';
 while (true) {
@@ -154,13 +165,11 @@ while (true) {
   buffer = buffer ? buffer + '\n' + line : line;
   if (isIncomplete(buffer)) continue;
 
-  try {
-    const value = await evalExpr(buffer, opts);
-    if (value != null) stdout.write(String(value) + '\n');
-  } catch {
-    const r = await run(buffer, opts);
-    Object.assign(scope, r.scope);
-  }
+  const r = await run(buffer, {
+    locals: scope,
+    say: v => stdout.write(String(v) + '\n'),
+  });
+  Object.assign(scope, r.scope);
   buffer = '';
 }
 ```

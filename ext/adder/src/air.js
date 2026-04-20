@@ -11,6 +11,22 @@ import { _py } from './runtime.js';
 import { adderBuiltins, setAdderVFS, getAdderVFS } from './builtins.js';
 import { isIncomplete } from './runner.js';
 
+// Strip common leading whitespace — same rationale as @gcu/adder's runner.js.
+function _dedent(code) {
+  if (typeof code !== 'string' || code.indexOf('\n') === -1) return code;
+  const lines = code.split('\n');
+  let min = Infinity;
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const m = line.match(/^[ \t]*/);
+    const n = m ? m[0].length : 0;
+    if (n < min) min = n;
+    if (min === 0) break;
+  }
+  if (!Number.isFinite(min) || min === 0) return code;
+  return lines.map(l => l.slice(min)).join('\n');
+}
+
 const _AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
 // JS intrinsics that air.imports may surface but which resolve via the ambient
@@ -123,8 +139,9 @@ function _callCompiled(compiled, opts) {
  * @returns {Promise<Record<string, any>>} the module scope
  */
 export async function run(code, opts = {}) {
-  const ast = adderParse(code);
-  const compiled = await _compileModule(ast, code);
+  const src = _dedent(code);
+  const ast = adderParse(src);
+  const compiled = await _compileModule(ast, src);
   return await _callCompiled(compiled, opts);
 }
 
@@ -138,7 +155,7 @@ export async function run(code, opts = {}) {
 export async function evalExpr(code, opts = {}) {
   // Wrap the expression as an assignment so the emitted code captures the value,
   // then pluck it from the returned scope.
-  const wrapped = `__adder_expr_result = (${code})`;
+  const wrapped = `__adder_expr_result = (${_dedent(code).trim()})`;
   const ast = adderParse(wrapped);
   const compiled = await _compileModule(ast, wrapped);
   const scope = await _callCompiled(compiled, opts);
@@ -153,8 +170,9 @@ export async function evalExpr(code, opts = {}) {
  * @returns {Promise<{ air: object, imports: string[], run(opts?): Promise<Record<string, any>> }>}
  */
 export async function compile(code) {
-  const ast = adderParse(code);
-  const compiled = await _compileModule(ast, code);
+  const src = _dedent(code);
+  const ast = adderParse(src);
+  const compiled = await _compileModule(ast, src);
   return {
     air: compiled.air,
     imports: compiled.imports.slice(),
