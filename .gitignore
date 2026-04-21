@@ -38,7 +38,7 @@ bower_components
 build/Release
 
 # Build intermediates (uncompressed auditable.html / af.html)
-build/
+/build/
 
 # Dependency directories
 node_modules/

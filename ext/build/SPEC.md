@@ -1,0 +1,880 @@
+# @gcu/build — specification
+
+**Status:** draft
+**Target LOC:** 400–500 for the core
+**Audience:** implementers (including Claude Code), future maintainers, reviewers
+
+## 1. Motivation
+
+Auditable's `ext/*` packages each ship an `index.js` produced by a hand-written `build.js` that regex-strips `import`/`export` keywords and concatenates source files in manifest order. The pattern is stable enough across ~20 packages to centralize, and has at least one structural failure mode: independent modules declaring top-level identifiers with the same name (`lowerExpr` across three AIR language lowerers) collide silently in flat scope. The current mitigation (manual `_ad`, `_sf` suffixes) doesn't scale and doesn't catch unknown collisions at build time.
+
+`@gcu/build` replaces the per-package `build.js` regex pipeline with a small AST-based bundler. It reuses `@gcu/air`'s scope-analysis pass, parses with vendored `acorn`, and emits a single flat-scope ES module with a source map. Scope isolation is achieved by renaming on collision, not by wrapping in IIFEs or emitting a runtime `require`.
+
+The tool is deliberately narrow. Bundlers in the broader ecosystem solve module resolution, transformation, tree-shaking, code splitting, dev-server/HMR, and minification in addition to concatenation. `@gcu/build` solves concatenation and scope isolation only, because the GCU ecosystem is shaped so the other concerns don't apply: manifest-driven graph, relative imports only, bare specifiers passed through, hand-authored sources with no tree-shaking benefit, single-file output, no dev server. The constraints produce the simplicity; the tool is the consequence.
+
+## 2. Non-goals
+
+Declared out of scope, explicitly, so they don't get added later without consensus:
+
+- **Plugin system.** No transform hooks, no loader registration, no config-driven pipeline.
+- **Configuration files.** All options are function arguments. The library does not read `.gcubuildrc`, `gcu-build.config.js`, or any such file.
+- **node_modules resolution.** Bare specifiers pass through unchanged.
+- **Package.json `"browser"` field remapping.** Downstream bundlers handle this.
+- **Polyfill injection.** Output targets modern runtimes; consumers polyfill if needed.
+- **Minification.** Separate concern, separate tool if ever needed.
+- **Code splitting / dynamic `import()`.** `import()` expressions in sources are a build error.
+- **CSS, asset, or non-JS imports beyond JSON via `import attributes`.** Deferred; currently a build error.
+- **HMR / dev server.** A separate tool (`@gcu/watch` or similar) may wrap `@gcu/build` later.
+- **CJS or UMD output.** ESM only.
+- **Tree-shaking.** All manifest-listed modules are included in full.
+- **TypeScript syntax beyond annotation elision.** No type-aware transformations. (Elision itself is a phase 2 addition; see §14.)
+
+## 3. Manifest format
+
+The manifest is `src/main.js`. Its `import` and `export ... from` declarations, in source order, define the module set and its build order. No separate JSON or declarative format.
+
+Rationale: the main.js-as-manifest convention is already used across every existing `ext/*` `build.js`. It's an ES module that the runtime can also load directly, which means there is exactly one source of truth for "what this package contains." A separate declarative format would introduce a drift surface.
+
+The bundler walks imports transitively from `src/main.js`. Declaration order at each level is preserved. Once a module is included, subsequent imports of it are no-ops.
+
+### 3.1 Import forms recognized
+
+```js
+import './file.js';                          // side-effect import
+import { foo, bar } from './file.js';        // named imports
+import { foo as baz } from './file.js';      // aliased
+import defaultExport from './file.js';       // ERROR: default exports disallowed
+import * as ns from './file.js';             // namespace import (allowed, see §7.3)
+export { foo } from './file.js';             // named re-export
+export { foo as bar } from './file.js';      // aliased re-export
+export * from './file.js';                   // wildcard re-export
+```
+
+### 3.2 Rejected forms
+
+```js
+import('./file.js')                          // dynamic import — error
+import 'some-package'                        // bare specifier (see §4)
+await import(...)                            // dynamic — error
+export default ...                           // default exports disallowed
+```
+
+Default exports are banned in sources. If a default is genuinely required for external consumers, use `export { foo as default }` at the entry point. In practice no existing ext/* needs this.
+
+## 4. Resolution
+
+Two rules:
+
+1. **Relative imports** (`./foo.js`, `../lib/bar.js`) that resolve to a path inside the package's `src/` directory are **inlined**. Extensions must be explicit. No directory-index inference (`./foo` meaning `./foo/index.js` is an error). No extension inference (`./foo` meaning `./foo.js` is an error).
+
+2. **Bare specifiers** (`@gcu/air`, `acorn`, etc.) and **relative imports that escape `src/`** (`../../vendor/lib.js`) are **external**. They appear in the output `index.js` verbatim. Downstream resolution (by Auditable's loader, by Vite, by a downstream bundler) handles them.
+
+No `node_modules` traversal. No `package.json` `exports` field consultation. No conditional exports. If a relative import points to a file outside `src/` it is passed through as-is, identifier-for-identifier, as an external dependency.
+
+### 4.1 Import attributes
+
+`import x from './config.json' with { type: 'json' }` is recognized as a build error in phase 1 (deferred). In a later phase, inline the JSON as a frozen object bound to `x`. Pass-through is not an option because the output is a single ESM file and relative paths are eliminated by inlining.
+
+## 5. Annotations
+
+Source-level comments the bundler honors. All annotations use the `bundle-` prefix and live in block comments immediately preceding a declaration.
+
+### 5.1 `@bundle-share`
+
+Marks a top-level binding as intentionally shared across modules. The binding is not renamed on collision. If two modules declare `@bundle-share` bindings with the same name, the bundler errors — shared-intent is a contract, not a coincidence.
+
+```js
+/* @bundle-share */
+const REGISTRY = new Map();
+```
+
+Use case: module-global singletons (language registries, DOM id tables, sentinel values) where the alternative of putting the binding in its own file and importing it everywhere is more noise than signal.
+
+### 5.2 `@bundle-verbatim`
+
+Marks a declaration whose body should be emitted textually unchanged. The bundler still parses the declaration for scope analysis (the top-level binding still participates in collision detection) but does not rewrite identifiers within the body. Use case: hand-tuned regex literals, string contents that shouldn't be mangled, inlined vendor code.
+
+```js
+/* @bundle-verbatim */
+function parseEscaped() {
+  // contents emitted byte-for-byte
+}
+```
+
+Rare. Include for the same reason `eslint-disable` exists: the escape hatch is cheaper than the alternative when you need it.
+
+## 6. Rename algorithm
+
+The rename pass operates in three passes over the module set (post-parse, post-scope-analysis).
+
+### 6.1 Collect bindings
+
+For each module, parse with acorn, call `@gcu/air`'s `analyzeModule(code, parser, allDefined)` to obtain `{defines, uses, air}`. The `defines` set (AIR's top-level name extraction) drives collision detection; the raw AST is kept alongside for the rewrite pass (§6.3). The `air` IR object is not used by the bundler — it's SSA-form for emission, not a rewrite surface.
+
+For each top-level binding in `defines`, record `(name, module, isShared, source)` where `source` distinguishes locally-declared bindings from externally-imported ones (see §7.5). The import forms (`import { foo } ...`, `import * as ns ...`) are scanned directly on the AST at this stage, since AIR reports them as `uses` not `defines`.
+
+Top-level bindings include:
+- Locally-declared names: `let`, `const`, `function`, `class`.
+- Imports from inlined modules: the imported identifier (or its `as`-alias) becomes a top-level binding of the importer, eliminated after rewriting (§7.1).
+- Imports from external sources: the imported identifier (or its `as`-alias) becomes a top-level binding of the importer, preserved in the output (§7.5).
+
+Inner scopes (function bodies, block scopes, class methods) do not contribute to this set. A `const REGISTRY` inside a function body in one module does not collide with a `@bundle-share` `REGISTRY` at the top level of another; at most it triggers `W001` (shadowing warning) if the enclosing file itself has a top-level `REGISTRY`.
+
+### 6.2 Classify
+
+For each name, consult the set of modules that declare it:
+
+- **Zero or one module:** no rename, no further action.
+- **Multiple modules, one or more `@bundle-share`:** if exactly one share and no others, that's an error (share must not collide with a non-shared declaration of the same name — the intent is ambiguous). If multiple `@bundle-share` declarations across modules, also error (shared-intent must be single-site).
+- **Multiple modules, none shared:** collision. Every declaration is renamed to `name$moduleBasename` where `moduleBasename` is the source file's name without extension, sanitized to valid identifier characters.
+
+Only-on-collision rename is chosen over always-rename because readable output is a design goal. The tradeoff: adding a new binding in one file can retroactively rename a binding in another file (a diff-noise effect, not a correctness risk). Mitigated by the fact that renames are deterministic from content — inspecting meta.json shows exactly what happened.
+
+### 6.3 Rewrite
+
+For each module's AST:
+
+- Replace every declaration of a renamed binding with its new name.
+- Replace every reference to a renamed binding with its new name (scope-aware — inner scopes that shadow the name are not touched).
+- Replace imported references with the renamed target. `import { foo } from './x.js'` where `x.js`'s `foo` was renamed to `foo$x` rewrites references to `foo` in the importer to `foo$x`.
+- Strip the `import` statement itself (the reference is now direct).
+- `import * as ns from './x.js'` (§7.3) is handled separately.
+
+**Scope tracker:** the rewrite pass needs to distinguish top-level references from inner-scope shadows, which AIR does not expose on the AST. A lightweight scope walker lives in `scope.js` (~60–80 LOC): walks the AST pushing/popping scopes at function, block, catch, and class boundaries; collects declared names per scope (`let`/`const`/`function`/`class`/params/catch-binding/class-name). For each `Identifier` reference, scope-lookup determines whether it resolves to the module's top-level binding or a nested declaration. Only top-level resolutions get renamed. This walker is orthogonal to AIR — AIR's internal scope tracking is tuned for SSA lowering, not for identifier-reference rewriting against original AST positions.
+
+### 6.4 Emit strategy: text-splice over original source
+
+Chosen: **text-splice**, not AST re-serialization.
+
+The bundler keeps the original source text of each module and emits by concatenating slices of it, with targeted overwrites at the byte ranges of renamed identifiers and stripped import statements. Acorn's `ranges: true` gives each AST node a `[start, end]` byte offset pair; rewriting is a matter of collecting a sorted list of `{start, end, replacement}` patches per module and walking both lists in tandem during emit.
+
+Why this over re-serialization:
+
+- **Comment preservation is free.** Comments, whitespace, formatting, string escapes — all preserved byte-for-byte because the emitter is mostly copying the source as-is. A re-serializer has to re-emit comments (acorn doesn't attach them to nodes by default) and tends to normalize whitespace, breaking `@bundle-verbatim` semantics (§5.2) without extra work.
+- **Source maps are simpler.** Output positions track input positions almost 1:1, deviating only at patch boundaries. VLQ mappings become a straightforward walk over the patch list plus module boundaries.
+- **Smaller implementation.** No AST→string serializer, no formatter, no whitespace normalizer. `emit.js` becomes ~80 LOC of patch-application and position-tracking, instead of ~300+ for a full serializer.
+
+The cost is that AST-level transforms limited to identifier renames and statement removal cover every case in the spec. If a future feature ever needs to synthesize new syntax (e.g. an inserted `const` declaration that wasn't in any source), we emit a freshly-authored string at the appropriate module boundary and record no source-map entry for it — same as the synthesized namespace objects in §7.3. This is a narrow enough case that it doesn't pull in a serializer.
+
+Implementation contract: `emit.js` exports `applyPatches(source, patches) → { code, offsetMap }` where `offsetMap` lets `sourcemap.js` translate any input position to its corresponding output position for mapping generation. Patches are validated to be non-overlapping and in-order before emission.
+
+### 6.5 Pseudocode
+
+```
+function bundle(entry):
+    modules = walkManifest(entry)
+    for module in modules:
+        module.ast = parse(module.source)
+        module.bindings = collectTopLevelBindings(module.ast)
+        module.annotations = collectBundleAnnotations(module.ast)
+
+    renames = {}                          # (module, originalName) -> newName
+    sharedOwners = {}                     # name -> module
+    bindingsByName = groupBy(allBindings, b -> b.name)
+
+    for name, group in bindingsByName:
+        sharedInGroup = [b for b in group if b.isShared]
+        if len(sharedInGroup) > 1:
+            error("`" + name + "` marked @bundle-share in multiple modules")
+        if len(sharedInGroup) == 1 and len(group) > 1:
+            error("`" + name + "` is @bundle-share but also declared elsewhere")
+        if len(sharedInGroup) == 1:
+            sharedOwners[name] = sharedInGroup[0].module
+        elif len(group) > 1:
+            for binding in group:
+                newName = name + "$" + moduleBasename(binding.module)
+                renames[(binding.module, name)] = newName
+
+    for module in modules:
+        rewriteBindings(module.ast, renames)
+        rewriteImports(module.ast, renames, modules)
+
+    return emit(modules, renames, sharedOwners)
+```
+
+## 7. Import / export rewriting
+
+### 7.1 Named imports
+
+`import { foo, bar as baz } from './x.js'`:
+
+- Delete the statement from the output.
+- Every reference to `foo` in the importer becomes the renamed-or-original name of `x.js`'s `foo`.
+- Every reference to `baz` becomes the renamed-or-original name of `x.js`'s `bar`.
+
+### 7.2 Side-effect imports
+
+`import './x.js'`:
+
+- Delete the statement. The module is already in the bundle; its top-level code runs in manifest order.
+
+### 7.3 Namespace imports
+
+`import * as ns from './x.js'`:
+
+- The namespace object must be synthesized at bundle time. Emit a synthetic object near the module boundary:
+  ```js
+  const ns = Object.freeze({ foo: foo$x, bar: bar$x /* all of x.js's exports */ });
+  ```
+- `ns.foo` references in the importer resolve normally through the synthesized object.
+- Frozen to match ESM namespace object semantics (immutable, live bindings emulated by property access on the renamed identifiers).
+- Synthesized names (`ns` above) participate in collision detection along with user-authored bindings.
+
+### 7.4 Named re-exports
+
+`export { foo } from './x.js'` and `export { foo as bar } from './x.js'`:
+
+- Contribute to the final export block.
+- Emit nothing in the module body.
+- The exported name in the public surface is `foo` (or `bar` for the aliased form); the internal binding it refers to is `foo$x` if renamed.
+
+### 7.5 External import bindings
+
+External imports (bare specifiers like `acorn`, `@gcu/air`, and relative imports that escape `src/`) introduce top-level bindings into the module that imports them, exactly like inlined-module imports. They participate in collision detection (§6.1) and are renamed on collision under the same rules.
+
+Collapsing: if multiple modules import the **same binding from the same external source** (`import { Parser } from 'acorn'` in both `a.js` and `b.js`), the bundler emits a single `import { Parser } from 'acorn'` at the top of the output. No rename needed — the binding refers to the same external symbol everywhere.
+
+Collision: if multiple modules import the **same identifier from different external sources** (`import { Parser } from 'acorn'` in `a.js` and `import { Parser } from '@gcu/sql-parser'` in `b.js`), it's a collision. The bundler renames using the same `$moduleBasename` rule, producing two separate imports at the top of the output:
+
+```js
+import { Parser as Parser$a } from 'acorn';
+import { Parser as Parser$b } from '@gcu/sql-parser';
+```
+
+References within each module are rewritten accordingly.
+
+Aliased imports are normalized before collision detection: `import { Parser as P } from 'acorn'` contributes the top-level name `P`, not `Parser`.
+
+### 7.6 Wildcard re-exports
+
+`export * from './x.js'`:
+
+- Enumerate `x.js`'s named exports (excluding `default`, which doesn't exist in GCU sources).
+- Add each to the final export block under its source name.
+- Collision across multiple `export *` declarations: per ESM spec, ambiguous re-exports become non-exports, not errors, unless accessed. The bundler emits a warning for each ambiguous re-export and omits the name from the export block.
+
+### 7.7 Final export block
+
+Emitted at the bottom of `index.js`:
+
+```js
+export {
+  name1,
+  name2,
+  rename1$mod as externalName1,
+  // ...
+};
+```
+
+Order: **manifest order** (the order in which the names first appeared in `src/main.js`'s export declarations, then any `export *` contributions in the order the source modules were visited). Manifest order over alphabetical because it preserves authorial intent in the output; it's what the author is most recently thinking about.
+
+## 8. Comments
+
+All comments from source are preserved in output. No stripping, no filtering. Rationale: GCU's output is readable-by-design; JSDoc annotations survive into the bundle; license and attribution comments are preserved automatically without a special case.
+
+The bundler **adds** two kinds of comment content:
+
+- **File header** at top of `index.js`:
+  ```
+  // ⚠ GENERATED FILE — DO NOT EDIT. Source: ext/<pkg>/src/  Build: npx @gcu/build src/main.js
+  // <package-name> — <package-description from package.json if available>
+  ```
+- **Section markers** between modules:
+  ```
+  // ── src/parse.js ──
+  ```
+
+Comment preservation is exact: position relative to the declaration it belongs to is maintained, and source-map mappings point at original comment locations. When a declaration is moved, renamed, or rewritten, any preceding block comment moves with it.
+
+## 9. Lint rules
+
+The bundler enforces a small set of rules at parse time, at zero additional implementation cost given the AST is already walked. These are not style rules; they protect the bundler's assumptions or catch bugs that flat-scope concatenation would turn silent.
+
+Errors (build fails):
+
+- **No `var` declarations.** `let` or `const` only.
+- **No `with` statements.**
+- **No `eval` calls or references.**
+- **No implicit globals.** Assignment to an undeclared identifier is an error. Catches typos like `regsitry = new Map()`.
+- **No `arguments` in arrow functions.** (Already a syntax error; the bundler's message is more helpful than V8's.)
+- **No `import()` expressions.**
+- **No `export default`.**
+- **No relative imports escaping `src/`** (prevents accidental coupling to sibling ext/* or repo layout).
+- **No `@bundle-share` name colliding with a non-shared declaration of the same name.**
+- **No `@bundle-share` declared in multiple modules.**
+
+Warnings (logged, not fatal):
+
+- **Shadowing of top-level bindings by inner scopes.** Inner function declares `function tokenize()` when the enclosing file's top level also has `function tokenize()`. Usually refactor residue.
+- **Ambiguous `export *` re-exports.** As per §7.6.
+
+Lint output uses the standard error format (§12).
+
+## 10. Define substitution
+
+Optional feature. The bundler accepts a `define` option mapping identifier names to literal expressions:
+
+```js
+bundle({
+  entry: 'src/main.js',
+  define: {
+    __VERSION__: JSON.stringify('0.3.1'),
+    __GCU_BUILD_HASH__: JSON.stringify(gitShortSha()),
+  },
+});
+```
+
+Substitution happens at the AST level on `Identifier` nodes whose name matches a key, only in expression position. Identifiers inside strings, comments, property keys, or as declaration names are not substituted. This matches esbuild's `define` semantics.
+
+Keys must follow the `__NAME__` convention (leading and trailing double-underscore, uppercase with underscores between). The bundler rejects keys that don't match, because non-conventional names (`VERSION`, `pi`) would be too easy to collide accidentally with user code.
+
+Values must be strings containing valid JavaScript literal expressions — `JSON.stringify("0.3.1")`, `"42"`, `"true"`. They are parsed and inserted as AST nodes, not text-substituted.
+
+Bindings produced by `define` participate in collision detection: if user code already declares a top-level `__VERSION__`, that's an error regardless of whether `define` is set.
+
+## 11. Source maps
+
+Source Map v3 format, always emitted unless suppressed. A `.map` file is written alongside `index.js`, and a `//# sourceMappingURL=index.js.map` comment is appended to `index.js`.
+
+Suppress with `sourcemap: false` in the library API or `--no-sourcemap` on the CLI.
+
+### 11.1 Fields
+
+- `version`: 3
+- `sources`: relative paths to original source files, in manifest order
+- `sourcesContent`: full text of each source, inlined. Always included — consumers get working stack traces without needing the original files, and the size cost is negligible for our scale.
+- `mappings`: VLQ-base64 encoded segments, one per meaningful position
+- `names`: **omitted**. Scope-panel name mapping is devtools-only functionality; line/column is ~90% of the debugging value. Add later if someone asks.
+- `file`: `index.js`
+
+### 11.2 Mapping density
+
+Segments are emitted at patch boundaries and module boundaries, not per AST node (see §11.3 and §6.4). Between boundaries, positions are recoverable by linear offset because the output is a verbatim copy of the input. This gives stack-trace-accurate mappings with far fewer segments than per-node emission.
+
+### 11.3 Position tracking
+
+Given text-splice emit (§6.4), mappings fall out of the patch walk:
+
+- Between patches: output is a verbatim slice of input. A single mapping at each slice boundary is enough; positions within the slice are recoverable by linear offset from the boundary.
+- At patches: record a mapping from the patch's output position to `node.loc.start` of the AST node that produced the patch (the renamed identifier, the stripped import, etc.).
+- At module boundaries: record a mapping to `(source_index, line 1, column 0)` of the next module.
+- Synthesized output (namespace objects §7.3, final export block §7.7, file header, section markers) has no source-map entry. The map skips those output ranges — stack traces there point at the bundler itself, which is correct.
+
+This produces a map with O(patches + modules) segments rather than O(AST nodes), which is smaller and equally useful for stack traces.
+
+## 12. Meta output
+
+A sidecar `index.meta.json` written alongside `index.js`. Always emitted unless suppressed (`meta: false` / `--no-meta`).
+
+Shape:
+
+```json
+{
+  "entry": "src/main.js",
+  "package": "@gcu/adder",
+  "version": "0.3.1",
+  "modules": [
+    {
+      "path": "src/parse.js",
+      "bytes": 3421,
+      "lines": 142,
+      "exports": ["tokenize", "parseModule"]
+    }
+  ],
+  "renames": [
+    {
+      "original": "lowerExpr",
+      "renamed": "lowerExpr$adder",
+      "module": "src/adder.js",
+      "reason": "collision",
+      "collidingModules": ["src/adder.js", "src/soft.js", "src/calque.js"]
+    }
+  ],
+  "shared": [
+    { "name": "REGISTRY", "module": "src/registry.js" }
+  ],
+  "exports": ["adder"],
+  "warnings": [],
+  "bundleSize": 84231,
+  "bundleHash": "sha256-..."
+}
+```
+
+`bundleHash` is a hash of the emitted `index.js` content, for cache-busting and change detection.
+
+Field names are stable; new fields may be added, existing fields do not change shape. Consumers that parse meta.json can rely on this.
+
+## 13. API
+
+### 13.1 Library (primary)
+
+```js
+import { bundle } from '@gcu/build';
+
+await bundle({
+  entry: 'src/main.js',          // required
+  outDir: '.',                   // default: cwd
+  outFile: 'index.js',           // default: 'index.js'
+  sourcemap: true,               // default: true
+  meta: true,                    // default: true
+  define: { __VERSION__: '"1.0"' },  // optional
+  header: '// Custom header',    // optional — replaces default header
+});
+```
+
+Returns a `BundleResult`:
+
+```ts
+{
+  code: string,
+  map: object,         // source map v3, not stringified
+  meta: object,        // index.meta.json shape
+  warnings: Warning[], // emitted warnings
+}
+```
+
+Writing to disk is a side effect of `bundle()`. A lower-level `bundleToString(options)` returns the `BundleResult` without writing anything; useful for tests and tooling. Both are exposed.
+
+### 13.2 CLI
+
+Available as a `bin` entry in `package.json` when `@gcu/build` is published. Usage:
+
+```
+gcu-build [options] <entry>
+npx @gcu/build [options] <entry>
+```
+
+Options:
+
+```
+--out-dir <dir>         default: directory of entry's parent (so src/main.js -> ./index.js)
+--out-file <name>       default: index.js
+--no-sourcemap          suppress source map emission
+--no-meta               suppress meta.json emission
+--define <KEY=VALUE>    repeatable; value is parsed as JSON
+--check                 run full pipeline, emit no output, exit nonzero if bundling would fail
+--stdout                emit code to stdout, no disk writes; implies --no-sourcemap --no-meta
+--workspace <glob>      bundle every dir matching glob whose src/main.js exists
+--quiet                 suppress non-error output
+--help
+--version
+```
+
+The CLI is a thin wrapper over the library. The library is the load-bearing contract: `bin` can be removed and every existing `build.js` keeps working; the CLI can be changed or extended freely without breaking library consumers.
+
+`--stdout` is the CLI mirror of `bundleToString()` — code only, no sidecars. Intended for piping (`gcu-build --stdout src/main.js | node`), determinism checks, and ad-hoc tooling. If a user wants sidecars *and* code on stdout, they should call `bundleToString()` from a script; the CLI doesn't complicate itself for that edge.
+
+### 13.3 Per-package `build.js`
+
+Each `ext/<pkg>/build.js` becomes, ideally, a three-line file:
+
+```js
+#!/usr/bin/env node
+import { bundle } from '@gcu/build';
+await bundle({ entry: 'src/main.js' });
+```
+
+The existing convention of `node ext/<pkg>/build.js` continues to work. Packages may pass package-specific options (`define`, custom header, etc.) here.
+
+## 14. Output format
+
+### 14.1 Structure
+
+```
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: <dir>  Build: npx @gcu/build <entry>
+// @gcu/<pkg> — <description>
+
+// ── src/<first-module>.js ──
+
+<module body, rewritten>
+
+// ── src/<next-module>.js ──
+
+<module body, rewritten>
+
+// ...
+
+export {
+  name1,
+  renamed$mod as external,
+  // ...
+};
+
+//# sourceMappingURL=index.js.map
+```
+
+### 14.2 Determinism
+
+Two identical inputs produce byte-identical output. Sources of nondeterminism to avoid:
+
+- **No timestamps** in headers or anywhere else.
+- **Manifest-ordered iteration** throughout — never filesystem-order, never Map-insertion-order dependent on async resolution.
+- **Stable rename suffixes** — always `$moduleBasename`, deterministic from file name alone.
+- **Export block in manifest order** (§7.7).
+- **Meta.json key order** specified: top-level keys in the order declared in §12; array elements in manifest order; object keys within array elements in declaration order.
+- **`sourcesContent` in `sources` order**, never sorted or deduplicated.
+
+Regression test: `diff <(gcu-build --stdout src/main.js) <(gcu-build --stdout src/main.js)` produces no output. (The `--stdout` flag, §13.2, suppresses sidecars and writes code to stdout, making this a one-liner.) Included as part of the synthetic fixture test suite.
+
+## 15. Error format
+
+All errors and warnings use the format:
+
+```
+gcu-build: <severity> <code>: <message>
+  at <file>:<line>:<col>
+  <suggestion, if any>
+```
+
+Where `<severity>` is `error` or `warning`, and `<code>` is a stable short identifier (e.g. `E001`, `W003`). Codes are not renumbered; new codes get new numbers.
+
+Example:
+
+```
+gcu-build: error E007: `lowerExpr` declared at top level in multiple modules
+  at src/soft.js:42:9
+  also declared at src/adder.js:8:9, src/calque.js:15:9
+  suggestion: mark one as /* @bundle-share */ if intentionally shared, or allow automatic renaming (no action needed in that case — this error only fires if automatic rename would produce an ambiguous name)
+```
+
+Error codes in use (expandable):
+
+- `E001`: parse error (propagated from acorn with position adjusted)
+- `E002`: relative import escapes `src/`
+- `E003`: extension-less import
+- `E004`: directory-index import (`./foo` meaning `./foo/index.js`)
+- `E005`: `export default` in sources
+- `E006`: dynamic `import()` in sources
+- `E007`: unresolvable collision (shared + non-shared, or multiple shared)
+- `E008`: `@bundle-share` annotation on non-top-level declaration
+- `E009`: implicit global assignment
+- `E010`: `var` declaration
+- `E011`: `with` statement
+- `E012`: `eval` reference
+- `E013`: circular import detected
+- `E014`: top-level code in module depends on binding from later module (manifest-order violation)
+- `E015`: malformed `define` key (not `__NAME__` convention)
+- `E016`: malformed `define` value (not a valid literal expression)
+
+Warnings:
+
+- `W001`: top-level binding shadowed by inner scope declaration
+- `W002`: ambiguous `export *` re-export
+- `W003`: `import` attribute (`with { type: 'json' }`) not yet supported in this phase
+
+## 16. Test structure
+
+Three layers:
+
+### 16.1 Synthetic fixture suite
+
+A checked-in directory `tests/fixtures/` containing small (~5 file) synthetic packages. Fixtures split into two kinds by how they verify:
+
+**Semantic fixtures** (no goldens): run the bundler, import the bundled module, assert behavior. Structural and behavioral features go here, because they're what actually matters. Emit-layer formatting changes don't churn these.
+
+- `01-basic/`: single module, named exports — asserts exports match
+- `02-collision/`: two modules with colliding top-level name — asserts both exports resolve to the correct renamed binding and their values are distinguishable
+- `03-shared/`: `@bundle-share` binding — asserts the shared binding is a single object identity across importers
+- `03b-shared-inner-shadow/`: `@bundle-share REGISTRY` at top level, another module declares `const REGISTRY` inside a function body — asserts: no error, `W001` not raised (inner scope doesn't count), shared binding's identity preserved
+- `04-reexport/`: `export { foo } from './x.js'`, aliased re-export, wildcard re-export — asserts export surface
+- `05-namespace-import/`: `import * as ns from './x.js'` — asserts `ns.foo` resolves and object is frozen
+- `06-tla/`: top-level await passes through — asserts awaited value reaches exports
+- `07-external-collision/`: `import { Parser } from 'acorn'` and `import { Parser } from '@gcu/sql-parser'` in two modules — asserts both imports appear in output, renamed, and both references resolve
+- `09-define/`: `__VERSION__` substitution — asserts the literal shows up at the right positions and not inside strings
+- `10-verbatim/`: `@bundle-verbatim` function body — asserts the body text is preserved byte-for-byte (inspected via `toString()` on the bundled function)
+- `11-lint/`: each lint rule, catch each error code — asserts bundler throws the expected `E0xx` / `W0xx` code
+
+**Golden fixtures** (output compared to checked-in `expected/`): only for things where the *shape* of the output file is the contract, not its behavior. Small set, kept stable on purpose.
+
+- `G1-shape/`: header format, section markers between modules, final export block structure — the canonical "what the output looks like" fixture
+- `G2-determinism/`: runs the bundler twice via `--stdout`, diffs output — no `expected/`, just asserts byte-identical
+- `G3-comments/`: JSDoc, license block (`/*! ... */`), inline comments — asserts each is preserved at the correct position
+- `G4-sourcemap/`: small bundle with source map — asserts the map decodes to correct source positions for a fixed set of output locations
+
+Rationale for the split: goldens are expensive to maintain (any whitespace change churns every file), but irreplaceable for format-shape contracts. Semantic tests scale linearly with features without adding maintenance cost. The 4-vs-11 ratio reflects that most bundler contracts are behavioral, not textual.
+
+### 16.2 Round-trip suite against real `ext/*`
+
+For each shipped `ext/<pkg>/`:
+
+- Import `src/main.js` and `index.js` as ES modules.
+- Assert `Object.keys(srcExports).sort() === Object.keys(bundledExports).sort()`.
+- Invoke a small fixed set of exported functions on fixed inputs; assert equal outputs.
+
+No golden files. Purely semantic check that the bundled version behaves like the source. When an ext/* adds a new export, the test must be updated with the new name, but that update is trivial (one line in the per-package test fixture listing expected exports).
+
+### 16.3 Self-hosting check
+
+`@gcu/build` bundles itself. The bundled version bundles `ext/adder/`. The output matches what the unbundled `@gcu/build` produces on the same input. One test case, catches a wide class of regressions.
+
+## 17. Module layout
+
+Lives at `ext/build/`, following the convention that any package with `src/main.js` → `index.js` lives under `ext/`.
+
+```
+ext/build/
+  package.json
+  cli.js                 # CLI entry, `bin` target (thin wrapper over src/main.js)
+  build.js               # self-bundler: runs @gcu/build against its own src/
+  src/
+    main.js              # manifest + library entry; exports bundle(), bundleToString()
+    parse.js             # acorn wrappers, comment attachment
+    manifest.js          # walk imports transitively, produce ordered module list
+    scope.js             # AST scope walker for rewrite pass (§6.3); AIR integration helpers
+    annotations.js       # extract @bundle-share and @bundle-verbatim from comments
+    rename.js            # the three-pass rename algorithm (§6)
+    rewrite.js           # patch generation: identifier renames, import/export stripping
+    emit.js              # apply sorted patches to original source; build offset map (§6.4)
+    sourcemap.js         # VLQ encoding, segment building, v3 map construction from offset map
+    meta.js              # meta.json construction
+    lint.js              # lint rules (§9)
+    define.js            # define substitution (§10)
+    errors.js            # error codes, formatting, throw helpers
+  tests/
+    fixtures/            # §16.1
+    roundtrip/           # §16.2
+    self-host/           # §16.3
+    run.js               # test runner (node:test or a minimal custom one)
+  index.js               # bundled output (generated by ext/build/build.js)
+  index.js.map
+  index.meta.json
+```
+
+Vendored dependencies:
+
+```
+ext/acorn/               # already present, shared across GCU tooling
+ext/air/                 # already present, scope analysis
+```
+
+`@gcu/build` imports from both as bare specifiers. The bundler's own `index.js` (after self-hosting) treats these as external, so consumers resolve them through their own dependency tree.
+
+### 17.1 Bootstrap
+
+`@gcu/build` bundles itself, which raises the chicken-and-egg question of where the first `index.js` comes from. Resolution:
+
+- **Before first bundle exists:** `ext/build/build.js` runs the unbundled source directly via `node --experimental-vm-modules` or, more simply, by importing `./src/main.js` as an ES module and calling `bundle()` on its own manifest. Node handles inlined relative ES modules natively, so no wrapper tooling is required to run the source tree.
+- **After first bundle exists:** `ext/build/build.js` can switch to importing `./index.js` for faster startup, but this is optional — running from source stays correct. Most ext-repo build scripts already pay ~50ms of startup; re-bundling the bundler is not a hot path.
+- **CI safety net:** the self-hosting test (§16.3) runs both modes (from-source and from-bundle) and asserts identical output. Any drift is caught immediately.
+
+New implementers: start in from-source mode. Only switch to from-bundle after the test suite goes green end-to-end.
+
+## 18. Phased implementation
+
+### Phase 1 — Core bundling
+
+**Goal:** bundle a real `ext/<pkg>/` and produce byte-identical exports to the current hand-written `build.js` output (modulo formatting differences).
+
+**Scope:**
+- Manifest walking (§3)
+- Relative import resolution, extensions required (§4)
+- Collision detection and rename (§6)
+- Named imports and side-effect imports rewriting (§7.1, §7.2)
+- Named re-exports only (§7.4) — namespace imports and `export *` deferred
+- Default-export ban enforced (§3.2)
+- Basic errors: parse, resolve, collision (§15)
+- Comment preservation (§8)
+- Section markers and file header (§8)
+- Final export block (§7.7)
+- Library API `bundle()` and `bundleToString()` (§13.1)
+- Synthetic fixture tests for phase-1 features (§16.1)
+- Round-trip test against `ext/adder` (§16.2)
+
+**Out:**
+- Source maps
+- Meta.json
+- Lint rules
+- Define substitution
+- Namespace imports (`import * as`)
+- Wildcard re-exports (`export *`)
+- Annotations (`@bundle-share`, `@bundle-verbatim`)
+- CLI
+- TS annotation elision
+
+**LOC estimate:** ~200.
+
+**Exit criterion:** `ext/build/src/main.js`'s `bundle()` can replace `ext/adder/build.js`'s concat pipeline, and round-trip tests pass.
+
+### Phase 2 — Production bundling
+
+**Goal:** `@gcu/build` replaces every existing `ext/<pkg>/build.js` across the repo.
+
+**Scope:**
+- Source map emission (§11), with `--no-sourcemap` flag
+- Meta.json emission (§12), with `--no-meta` flag
+- Namespace imports (§7.3)
+- Wildcard re-exports (§7.6)
+- Annotations: `@bundle-share`, `@bundle-verbatim` (§5)
+- Lint rules (§9), all errors and warnings
+- Define substitution (§10)
+- CLI (§13.2) with `bin` entry
+- All error codes (§15)
+- Full synthetic fixture suite (§16.1)
+- Round-trip tests for every `ext/<pkg>/` (§16.2)
+- Self-hosting check (§16.3)
+- Determinism regression test
+
+**LOC estimate:** ~400–500 cumulative (phase 1 + phase 2 combined).
+
+**Exit criterion:** every `ext/<pkg>/build.js` is a three-line wrapper around `bundle()`. CI runs the full test suite. `@gcu/build` is publishable.
+
+### Phase 3 — Comfort features
+
+**Goal:** quality-of-life additions, none blocking.
+
+**Scope (pick as needed):**
+- TS annotation elision (if any ext/* migrates to `.ts` sources)
+- Import attributes inlining (`import json from './x.json' with { type: 'json' }`)
+- `--workspace <glob>` for bulk rebuilds (§13.2)
+- `--check` mode for pre-commit / CI gating (§13.2)
+- Manifest-order violation detection (`E014`) — requires extra top-level code flow analysis
+- Improved error suggestions using AIR's scope info (e.g. "did you mean `<similarly-named binding>`")
+
+**Out (still):**
+- Plugins, configs, minification, chunking, watch mode, HMR — these are separate tools or explicit non-goals.
+
+**LOC estimate:** +100–200 depending on which features land.
+
+### Phase 4 — Ecosystem
+
+**Goal:** `@gcu/build` is usable by external authors building GCU-style extensions or unrelated flat-bundle libraries.
+
+**Scope:**
+- Published to npm as `@gcu/build`
+- Documentation site or README-driven docs
+- `npx @gcu/build` usage documented
+- Blog post or GCU-PRESS entry explaining the constraints and the why
+- Integration notes for downstream consumers (pyskit, etc.) that still want esbuild for node_modules resolution — document the layering
+
+Not implementation work. Organizational.
+
+## 19. Open questions for later
+
+Flagged here so they don't get lost but don't need resolution to begin implementation:
+
+- If TS annotation elision lands in phase 3, does it also imply JSDoc preservation semantics change (since annotations become code positions)? Probably not, but verify with a fixture.
+- Should the bundler enforce a maximum module count or bundle size? Currently no. A warning threshold might be useful.
+- Should warnings be promotable to errors via an option? Similar to `--warnings-as-errors`. Probably phase 3.
+- Workshop use case (`GCU-CERT-101` or future `GCU-BUILD-101`): does the tool need a `--verbose` mode that narrates its passes for pedagogy? Cheap to add; defer until asked.
+
+## 20. Summary of decisions
+
+For quick reference and in case Claude Code or a future reviewer wants the decisions without the rationale:
+
+- Rename: only on collision, `$moduleBasename` suffix, deterministic
+- Annotations: `@bundle-share`, `@bundle-verbatim`, block-comment form
+- Default exports: banned, build error
+- Dynamic imports: banned, build error
+- Top-level await: allowed, no special handling needed
+- Manifest: `src/main.js`, no separate format
+- Resolution: relative inside `src/` inlined, everything else external
+- Output: single ESM file, preserved comments, section markers, `index.js.map` + `index.meta.json` sidecars by default
+- Export block: manifest order
+- Source maps: v3 with `sourcesContent`, no `names` field
+- Lint rules: enforced at parse, see §9
+- Define: `__NAME__`-convention keys, expression-context-only substitution
+- API: library primary, CLI secondary, both present at phase 2
+- Tests: synthetic fixtures + real-package round-trip + self-hosting
+- Non-goals: plugins, configs, node_modules resolution, polyfills, minification, chunking, CSS/asset, browser-field, HMR, tree-shaking, CJS/UMD
+- Determinism: byte-identical output from identical input, explicitly tested
+- Target core LOC: ~400–500 after phase 2
+
+## 21. AIR prerequisites
+
+Four small additions to `@gcu/air`'s public API land alongside or before `@gcu/build` v1. They are independently useful (other consumers benefit), bounded (~30 LOC total in `ext/air/src/api.js`), and feed AIR's existing domain — AIR already parses and walks ASTs; these just expose more of what it already does.
+
+Ship as `@gcu/air 0.3.0`. None are breaking changes.
+
+### 21.1 Return the AST from `analyzeModule`
+
+Today `analyzeModule(code, parser, allDefined)` returns `{defines, uses, air}`. Add `ast` to the return shape:
+
+```js
+return { defines, uses, air: module, ast };
+```
+
+Rationale: `analyzeModule` already parses internally. The bundler would otherwise re-parse to get its own AST for the rewrite pass. Returning the existing AST saves one parse per module (~20 modules per ext/* package × ~50 packages in the long tail = real savings). Cost: zero new code, one extra field in the return object.
+
+### 21.2 Enable `ranges: true` on acorn parse
+
+Update the `parser.parse(code, {...})` call in `analyzeModule` and `extractDefines` to include `ranges: true`:
+
+```js
+const ast = parser.parse(code, {
+  ecmaVersion: 'latest',
+  sourceType: 'module',
+  locations: true,
+  ranges: true,          // NEW
+});
+```
+
+Rationale: byte-offset `[start, end]` pairs on every AST node are free at parse time. The bundler needs them for text-splice emit (§6.4). Any future byte-level AST consumer (formatter, refactor tool, precise source-map generator) benefits. Cost: one flag, ~no perf impact on acorn.
+
+### 21.3 Export `parseModule(code)` convenience
+
+Every consumer of AIR currently repeats the same parser setup:
+
+```js
+const { Parser, tsPlugin } = window.Acorn;   // or acorn in node
+const parser = Parser.extend(tsPlugin());
+const ast = parser.parse(code, { ... });
+```
+
+Add a zero-argument helper to `api.js`:
+
+```js
+import { Parser } from 'acorn';
+import tsPlugin from 'acorn-typescript';
+const _parser = Parser.extend(tsPlugin());
+
+export function parseModule(code) {
+  return _parser.parse(code, {
+    ecmaVersion: 'latest',
+    sourceType: 'module',
+    locations: true,
+    ranges: true,
+  });
+}
+```
+
+Rationale: single source of truth for parser config. If AIR ever swaps parsers (e.g. for a faster one, or adds plugins), consumers don't rewrite their setup. Cost: ~10 LOC including exports. Also useful for test harnesses.
+
+### 21.4 Expose `extractImports(ast)` / `extractExports(ast)`
+
+AIR already walks the AST during lowering. It's natural to expose structured extraction of ES module declarations as standalone helpers:
+
+```js
+export function extractImports(ast) {
+  // returns array of:
+  // { kind: 'named', source: './x.js', specifiers: [{ imported, local }] }
+  // { kind: 'namespace', source: './x.js', local: 'ns' }
+  // { kind: 'side-effect', source: './x.js' }
+  // kind: 'default' excluded — not used in GCU ecosystem
+}
+
+export function extractExports(ast) {
+  // returns array of:
+  // { kind: 'named', specifiers: [{ local, exported }] }
+  // { kind: 'reexport-named', source: './x.js', specifiers: [...] }
+  // { kind: 'reexport-wildcard', source: './x.js' }
+  // { kind: 'declaration', declaration: <ast node> }  (export const/let/function/class)
+}
+```
+
+Rationale: the bundler's primary need — classification of import/export declarations — is a narrow AST walk that doesn't belong to the bundler specifically. Future reactive-DAG work in Auditable (distinguishing static ES imports from runtime `load()` calls) would use the same helpers. Cost: ~40 LOC of AST walking, well-bounded.
+
+**Non-goal:** these helpers do not resolve or rewrite. They only report structure. Resolution (which specifier maps to which inlined module) stays in the bundler; import stripping and reference rewriting stay in the bundler.
+
+### 21.5 Not in scope for AIR
+
+Rejected or deferred, to keep AIR focused:
+
+- **Generic scope tree / scope-lookup service.** AIR's internal scope tracking is tuned for SSA lowering (mutable captures, hoisting, slot allocation). A bundler needs lexical-resolution-of-identifier-reference, which is a different question. The bundler rolls its own ~60 LOC walker (§6.3). Not worth binding AIR to a second use case.
+- **Comment attachment.** Text-splice emit (§6.4) doesn't need structured comment access — comments are bytes between nodes, preserved by slicing. If a future consumer ever needs attached comments, revisit then.
+- **AST rewriting utilities / code generation.** Out of AIR's domain (compilation) and overlaps with what the bundler already does locally.
+
+These four additions are the whole set. If implementation reveals a fifth genuinely-needed helper, we add it; otherwise this is the complete AIR-side surface for `@gcu/build`.
+
+---
+
+*End of specification.*
