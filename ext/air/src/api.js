@@ -40,26 +40,61 @@ const JS_GLOBALS = new Set([
   'arguments',
 ]);
 
+// Single source of truth for parser options. Downstream tooling (bundlers,
+// formatters) that asks AIR for an AST gets byte ranges + source positions
+// for free.
+const DEFAULT_PARSE_OPTIONS = {
+  ecmaVersion: 'latest',
+  sourceType: 'module',
+  locations: true,
+  ranges: true,
+};
+
+// Lazily-created parser instance. Set at browser init (from window.Acorn) or
+// on first parseModule() call that provides a parser factory.
+let _cachedParser = null;
+
+function _getDefaultParser() {
+  if (_cachedParser) return _cachedParser;
+  if (typeof window !== 'undefined' && window.Acorn) {
+    const { Parser, tsPlugin } = window.Acorn;
+    _cachedParser = Parser.extend(tsPlugin());
+    return _cachedParser;
+  }
+  return null;
+}
+
 /**
- * Analyze a JS/TS module: parse, lower to AIR, run passes, extract defines/uses.
- * Returns { defines: Set<string>, uses: Set<string>, air: CellModule } on success,
- * or null if parsing/lowering fails.
+ * Parse a JS/TS module into an ESTree AST with AIR's default options
+ * (module source type, locations and ranges enabled). Single source of truth
+ * for parser configuration — downstream tooling should call this rather than
+ * reinventing the option set.
  *
  * @param {string} code - module source code
- * @param {object} parser - Acorn parser instance (Parser.extend(tsPlugin()))
+ * @param {object} [parser] - Acorn parser instance. Optional in browser
+ *   contexts where window.Acorn is available; required otherwise.
+ * @returns {object} ESTree Program node
+ */
+export function parseModule(code, parser) {
+  const p = parser || _getDefaultParser();
+  if (!p) throw new Error('parseModule: no parser available. Pass one explicitly, or ensure window.Acorn is loaded in the browser.');
+  return p.parse(code, DEFAULT_PARSE_OPTIONS);
+}
+
+/**
+ * Analyze a JS/TS module: parse, lower to AIR, run passes, extract defines/uses.
+ * Returns { defines, uses, air, ast } on success, or null if parsing/lowering fails.
+ *
+ * @param {string} code - module source code
+ * @param {object} [parser] - Acorn parser instance; optional in browser
  * @param {Set<string>} [allDefined] - if provided, restricts `uses` to names defined
  *   elsewhere in a set of sibling modules (used by Auditable's cell-scope model).
  *   Pass null/undefined for "any free name is a use."
- * @returns {{ defines: Set<string>, uses: Set<string>, air: object } | null}
+ * @returns {{ defines: Set<string>, uses: Set<string>, air: object, ast: object } | null}
  */
 export function analyzeModule(code, parser, allDefined) {
   try {
-    const ast = parser.parse(code, {
-      ecmaVersion: 'latest',
-      sourceType: 'module',
-      locations: true,
-    });
-
+    const ast = parseModule(code, parser);
     const module = lowerJS(ast, code);
     runPasses(module);
 
@@ -74,7 +109,7 @@ export function analyzeModule(code, parser, allDefined) {
       if (!allDefined || allDefined.has(name)) uses.add(name);
     }
 
-    return { defines, uses, air: module };
+    return { defines, uses, air: module, ast };
   } catch (e) {
     if (_airDebug) console.warn('[AIR] analyze fallback:', e.message);
     return null;
@@ -93,17 +128,110 @@ export const analyzeCell = analyzeModule;
  */
 export function extractDefines(code, parser) {
   try {
-    const ast = parser.parse(code, {
-      ecmaVersion: 'latest',
-      sourceType: 'module',
-      locations: true,
-    });
+    const ast = parseModule(code, parser);
     const module = lowerJS(ast, code);
     return module.defines;
   } catch (e) {
     if (_airDebug) console.warn('[AIR] extractDefines fallback:', e.message);
     return null;
   }
+}
+
+/**
+ * Extract structured import declarations from an AST. Returns an array of
+ * descriptors — consumers (bundler, reactive DAG) decide how to handle each kind.
+ *
+ *   { kind: 'named',       source, specifiers: [{ imported, local }] }
+ *   { kind: 'namespace',   source, local }
+ *   { kind: 'default',     source, local }
+ *   { kind: 'side-effect', source }
+ *
+ * For `import defaultExport, { foo } from './x'` both a 'default' and a 'named'
+ * descriptor are emitted (one per role) so consumers don't miss either piece.
+ *
+ * @param {object} ast - ESTree Program node (from parseModule)
+ * @returns {Array<object>}
+ */
+export function extractImports(ast) {
+  const out = [];
+  for (const node of ast.body) {
+    if (node.type !== 'ImportDeclaration') continue;
+    const source = node.source.value;
+    if (node.specifiers.length === 0) { out.push({ kind: 'side-effect', source }); continue; }
+
+    const named = [];
+    for (const spec of node.specifiers) {
+      switch (spec.type) {
+        case 'ImportNamespaceSpecifier':
+          out.push({ kind: 'namespace', source, local: spec.local.name });
+          break;
+        case 'ImportDefaultSpecifier':
+          out.push({ kind: 'default', source, local: spec.local.name });
+          break;
+        case 'ImportSpecifier':
+          named.push({
+            imported: spec.imported.type === 'Identifier' ? spec.imported.name : spec.imported.value,
+            local: spec.local.name,
+          });
+          break;
+      }
+    }
+    if (named.length > 0) out.push({ kind: 'named', source, specifiers: named });
+  }
+  return out;
+}
+
+/**
+ * Extract structured export declarations from an AST. Returns an array of:
+ *
+ *   { kind: 'named',             specifiers: [{ local, exported }] }
+ *   { kind: 'reexport-named',    source, specifiers: [{ local, exported }] }
+ *   { kind: 'reexport-wildcard', source, exported }  // exported is the `as ns` name, or null
+ *   { kind: 'declaration',       declaration: <ESTree node> }  // export const/let/function/class
+ *   { kind: 'default',           declaration: <ESTree node> }
+ *
+ * @param {object} ast - ESTree Program node (from parseModule)
+ * @returns {Array<object>}
+ */
+export function extractExports(ast) {
+  const out = [];
+  for (const node of ast.body) {
+    switch (node.type) {
+      case 'ExportNamedDeclaration':
+        if (node.declaration) {
+          out.push({ kind: 'declaration', declaration: node.declaration });
+        } else if (node.source) {
+          out.push({
+            kind: 'reexport-named',
+            source: node.source.value,
+            specifiers: node.specifiers.map(s => ({
+              local: s.local.type === 'Identifier' ? s.local.name : s.local.value,
+              exported: s.exported.type === 'Identifier' ? s.exported.name : s.exported.value,
+            })),
+          });
+        } else {
+          out.push({
+            kind: 'named',
+            specifiers: node.specifiers.map(s => ({
+              local: s.local.type === 'Identifier' ? s.local.name : s.local.value,
+              exported: s.exported.type === 'Identifier' ? s.exported.name : s.exported.value,
+            })),
+          });
+        }
+        break;
+      case 'ExportAllDeclaration':
+        out.push({
+          kind: 'reexport-wildcard',
+          source: node.source.value,
+          exported: node.exported ? (node.exported.type === 'Identifier' ? node.exported.name : node.exported.value) : null,
+        });
+        break;
+      case 'ExportDefaultDeclaration':
+        out.push({ kind: 'default', declaration: node.declaration });
+        break;
+    }
+  }
+  return out;
 }
 
 /**
@@ -125,10 +253,12 @@ export { lowerJS, lowerAdder, lowerSoft, runPasses, extractDependencies, emitJS,
 // and set window._air for dag.js and exec.js to pick up.
 
 if (typeof window !== 'undefined' && window.Acorn) {
+  // Seed the cached parser; parseModule() and analyzeModule() both see it
+  // via _getDefaultParser() when no parser is passed explicitly.
   const { Parser, tsPlugin } = window.Acorn;
-  const _airParser = Parser.extend(tsPlugin());
+  _cachedParser = Parser.extend(tsPlugin());
   window._airAnalyzer = function(code, allDefined) {
-    return analyzeModule(code, _airParser, allDefined);
+    return analyzeModule(code, _cachedParser, allDefined);
   };
   // Phase 2: emitter functions for exec.js
   window._airEmit = emitJS;

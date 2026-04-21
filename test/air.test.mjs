@@ -13,7 +13,7 @@ import {
 
 import { lowerJS } from '../ext/air/src/lower/js.js';
 import { runPasses, propagateTypes, foldConstants, extractDependencies } from '../ext/air/src/passes.js';
-import { analyzeCell, extractDefines, extractExportTypes } from '../ext/air/src/api.js';
+import { analyzeCell, analyzeModule, extractDefines, extractExportTypes, parseModule, extractImports, extractExports } from '../ext/air/src/api.js';
 import { emitJS, needsAsync } from '../ext/air/src/emit-js.js';
 import { Parser, tsPlugin } from '../ext/acorn/acorn.esm.min.js';
 
@@ -716,6 +716,178 @@ describe('AIR API — extractExportTypes', () => {
 
   it('handles null module', () => {
     assert.equal(extractExportTypes(null), null);
+  });
+});
+
+// =============================================================================
+// §21 — @gcu/build prerequisites (AIR 0.3.0)
+// =============================================================================
+
+describe('AIR API — parseModule', () => {
+  it('returns an ESTree Program', () => {
+    const ast = parseModule('const x = 1', AcornTS);
+    assert.equal(ast.type, 'Program');
+    assert.equal(ast.body[0].type, 'VariableDeclaration');
+  });
+
+  it('enables ranges on AST nodes (for text-splice bundling)', () => {
+    const ast = parseModule('const x = 1', AcornTS);
+    const decl = ast.body[0];
+    assert.equal(typeof decl.start, 'number');
+    assert.equal(typeof decl.end, 'number');
+    assert.ok(Array.isArray(decl.range));
+    assert.equal(decl.range[0], 0);
+    assert.equal(decl.range[1], 'const x = 1'.length);
+  });
+
+  it('enables locations on AST nodes', () => {
+    const ast = parseModule('const x = 1', AcornTS);
+    const decl = ast.body[0];
+    assert.equal(decl.loc.start.line, 1);
+    assert.equal(decl.loc.start.column, 0);
+  });
+
+  it('throws a helpful error when no parser and no window.Acorn', () => {
+    assert.throws(() => parseModule('const x = 1'), /no parser available/);
+  });
+
+  it('accepts module syntax (import/export)', () => {
+    const ast = parseModule("import { foo } from './x.js'", AcornTS);
+    assert.equal(ast.body[0].type, 'ImportDeclaration');
+  });
+});
+
+describe('AIR API — analyzeModule returns ast', () => {
+  it('includes the parsed AST alongside defines/uses/air', () => {
+    const result = analyzeModule('const x = 1', AcornTS, new Set());
+    assert.ok(result.ast);
+    assert.equal(result.ast.type, 'Program');
+    assert.ok(result.ast.body[0].range, 'ast nodes should carry ranges');
+  });
+});
+
+describe('AIR API — extractImports', () => {
+  it('extracts named imports', () => {
+    const ast = parseModule("import { foo, bar as baz } from './x.js'", AcornTS);
+    const imports = extractImports(ast);
+    assert.deepStrictEqual(imports, [{
+      kind: 'named',
+      source: './x.js',
+      specifiers: [
+        { imported: 'foo', local: 'foo' },
+        { imported: 'bar', local: 'baz' },
+      ],
+    }]);
+  });
+
+  it('extracts namespace imports', () => {
+    const ast = parseModule("import * as ns from './x.js'", AcornTS);
+    const imports = extractImports(ast);
+    assert.deepStrictEqual(imports, [{ kind: 'namespace', source: './x.js', local: 'ns' }]);
+  });
+
+  it('extracts side-effect imports', () => {
+    const ast = parseModule("import './x.js'", AcornTS);
+    const imports = extractImports(ast);
+    assert.deepStrictEqual(imports, [{ kind: 'side-effect', source: './x.js' }]);
+  });
+
+  it('extracts default imports', () => {
+    const ast = parseModule("import def from './x.js'", AcornTS);
+    const imports = extractImports(ast);
+    assert.deepStrictEqual(imports, [{ kind: 'default', source: './x.js', local: 'def' }]);
+  });
+
+  it('splits mixed default + named imports into separate descriptors', () => {
+    const ast = parseModule("import def, { foo } from './x.js'", AcornTS);
+    const imports = extractImports(ast);
+    assert.equal(imports.length, 2);
+    assert.equal(imports[0].kind, 'default');
+    assert.equal(imports[0].local, 'def');
+    assert.equal(imports[1].kind, 'named');
+    assert.deepStrictEqual(imports[1].specifiers, [{ imported: 'foo', local: 'foo' }]);
+  });
+
+  it('returns empty array for code with no imports', () => {
+    const ast = parseModule('const x = 1', AcornTS);
+    assert.deepStrictEqual(extractImports(ast), []);
+  });
+
+  it('handles multiple import declarations', () => {
+    const ast = parseModule("import { a } from './x.js'\nimport { b } from './y.js'", AcornTS);
+    const imports = extractImports(ast);
+    assert.equal(imports.length, 2);
+    assert.equal(imports[0].source, './x.js');
+    assert.equal(imports[1].source, './y.js');
+  });
+});
+
+describe('AIR API — extractExports', () => {
+  it('extracts declaration exports (const/let/function/class)', () => {
+    const ast = parseModule('export const x = 1', AcornTS);
+    const exports = extractExports(ast);
+    assert.equal(exports.length, 1);
+    assert.equal(exports[0].kind, 'declaration');
+    assert.equal(exports[0].declaration.type, 'VariableDeclaration');
+  });
+
+  it('extracts named exports (no source)', () => {
+    const ast = parseModule('const foo = 1\nexport { foo, foo as bar }', AcornTS);
+    const exports = extractExports(ast);
+    // First is the `const foo` declaration (not exported — skipped)
+    // Second is `export { foo, foo as bar }` — one named-exports descriptor
+    const named = exports.find(e => e.kind === 'named');
+    assert.ok(named);
+    assert.deepStrictEqual(named.specifiers, [
+      { local: 'foo', exported: 'foo' },
+      { local: 'foo', exported: 'bar' },
+    ]);
+  });
+
+  it('extracts named re-exports (with source)', () => {
+    const ast = parseModule("export { foo, bar as baz } from './x.js'", AcornTS);
+    const exports = extractExports(ast);
+    assert.deepStrictEqual(exports, [{
+      kind: 'reexport-named',
+      source: './x.js',
+      specifiers: [
+        { local: 'foo', exported: 'foo' },
+        { local: 'bar', exported: 'baz' },
+      ],
+    }]);
+  });
+
+  it('extracts wildcard re-exports', () => {
+    const ast = parseModule("export * from './x.js'", AcornTS);
+    const exports = extractExports(ast);
+    assert.deepStrictEqual(exports, [{ kind: 'reexport-wildcard', source: './x.js', exported: null }]);
+  });
+
+  it('extracts namespaced wildcard re-exports', () => {
+    const ast = parseModule("export * as ns from './x.js'", AcornTS);
+    const exports = extractExports(ast);
+    assert.deepStrictEqual(exports, [{ kind: 'reexport-wildcard', source: './x.js', exported: 'ns' }]);
+  });
+
+  it('extracts default exports', () => {
+    const ast = parseModule('export default function foo() {}', AcornTS);
+    const exports = extractExports(ast);
+    assert.equal(exports.length, 1);
+    assert.equal(exports[0].kind, 'default');
+    assert.equal(exports[0].declaration.type, 'FunctionDeclaration');
+  });
+
+  it('extracts function and class declaration exports', () => {
+    const ast = parseModule('export function f() {}\nexport class C {}', AcornTS);
+    const exports = extractExports(ast);
+    assert.equal(exports.length, 2);
+    assert.equal(exports[0].declaration.type, 'FunctionDeclaration');
+    assert.equal(exports[1].declaration.type, 'ClassDeclaration');
+  });
+
+  it('returns empty array for code with no exports', () => {
+    const ast = parseModule('const x = 1', AcornTS);
+    assert.deepStrictEqual(extractExports(ast), []);
   });
 });
 

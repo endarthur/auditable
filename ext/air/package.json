@@ -1,6 +1,6 @@
 {
   "name": "@gcu/air",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Auditable Intermediate Representation — SSA IR compiler for JS, TypeScript, Python (adder), and Soft dialects. Type propagation, constant folding, runtime-helper specialization, and V8-hinted JS emission.",
   "type": "module",
   "main": "src/api.js",

@@ -6,6 +6,7 @@ export interface Parser {
     ecmaVersion: string | number;
     sourceType: string;
     locations: boolean;
+    ranges: boolean;
   }): unknown;
 }
 
@@ -28,28 +29,65 @@ export interface AnalysisResult {
   defines: Set<string>;
   uses: Set<string>;
   air: AirModule;
+  /** The parsed ESTree AST. Exposed so downstream tooling (bundlers,
+   *  formatters) can reuse the parse rather than re-parsing. */
+  ast: unknown;
 }
+
+/** Parse JS/TS source into an ESTree AST with AIR's default options
+ *  (module source type, locations + ranges enabled). Single source of truth
+ *  for parser configuration; downstream tooling should prefer this over
+ *  reinventing the option set.
+ *
+ *  @param code - module source code
+ *  @param parser - optional acorn-compatible Parser; required outside browser
+ *    contexts where window.Acorn is not available
+ */
+export function parseModule(code: string, parser?: Parser): unknown;
 
 /** Parse JS/TS source, lower to AIR, run passes, and extract defines/uses.
  *  Returns null if parse or lowering fails (the caller should fall back).
+ *  The returned object also includes the parsed AST so consumers can reuse it.
  *
  *  @param code - module source code
- *  @param parser - an acorn-compatible Parser (extend with acorn-typescript for TS)
+ *  @param parser - optional acorn-compatible Parser (uses window.Acorn if omitted)
  *  @param allDefined - optional set of names defined in sibling modules.
  *    When provided, `uses` is restricted to names in this set; when absent,
  *    every free non-JS-global name becomes a use.
  */
-export function analyzeModule(code: string, parser: Parser, allDefined?: Set<string>): AnalysisResult | null;
+export function analyzeModule(code: string, parser?: Parser, allDefined?: Set<string>): AnalysisResult | null;
 
 /** Back-compat alias for analyzeModule.
  *  @deprecated since 0.2.0 — use analyzeModule */
 export const analyzeCell: typeof analyzeModule;
 
 /** Extract only defined names from a source module. Lighter than analyzeModule. */
-export function extractDefines(code: string, parser: Parser): Set<string> | null;
+export function extractDefines(code: string, parser?: Parser): Set<string> | null;
 
 /** Extract a name→type map from an AIR module's exports. */
 export function extractExportTypes(module: AirModule | null): Map<string, AirType> | null;
+
+// ── ES module declaration extraction ──
+
+export type ImportDescriptor =
+  | { kind: 'named'; source: string; specifiers: Array<{ imported: string; local: string }> }
+  | { kind: 'namespace'; source: string; local: string }
+  | { kind: 'default'; source: string; local: string }
+  | { kind: 'side-effect'; source: string };
+
+export type ExportDescriptor =
+  | { kind: 'named'; specifiers: Array<{ local: string; exported: string }> }
+  | { kind: 'reexport-named'; source: string; specifiers: Array<{ local: string; exported: string }> }
+  | { kind: 'reexport-wildcard'; source: string; exported: string | null }
+  | { kind: 'declaration'; declaration: unknown }
+  | { kind: 'default'; declaration: unknown };
+
+/** Walk top-level ImportDeclarations in an AST and return structured descriptors.
+ *  Consumers (bundlers, reactive-DAG tooling) decide how to handle each kind. */
+export function extractImports(ast: unknown): ImportDescriptor[];
+
+/** Walk top-level ExportDeclarations in an AST and return structured descriptors. */
+export function extractExports(ast: unknown): ExportDescriptor[];
 
 // ── lowering ──
 
