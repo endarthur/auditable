@@ -2530,16 +2530,26 @@ function lowerClassDef(ctx, node) {
 
 function lowerImport(ctx, node) {
   const l = ctx.loc(node);
-  // import a, b as c, d.e as f
-  for (const { module, alias } of node.names) {
-    const nameConst = ctx.emit('const', [module], STRING, l);
-    // _py.import is async (it may need to async-load a module from VFS), so
-    // the emitted call must be awaited. Unlike the sync `_py.*` helpers
-    // (add, sub, truthy, ...), the result is a Promise, not the module.
-    const call = emitPyCall(ctx, 'import', [nameConst], l);
-    const mod = ctx.emit('await', [call.id], DYNAMIC, l);
-    // For dotted names like `a.b`, bind the top-level `a` unless aliased.
-    const bindName = alias || module.split('.')[0];
+  // import a, b as c, d.e as f, "./utils.py" as u
+  for (const { module, alias, path } of node.names) {
+    let mod;
+    let bindName;
+    if (path) {
+      // Path import: `import "./utils.py" as u`. Alias always present (required by parser).
+      const pathConst = ctx.emit('const', [path], STRING, l);
+      const call = emitPyCall(ctx, 'importPath', [pathConst], l);
+      mod = ctx.emit('await', [call.id], DYNAMIC, l);
+      bindName = alias;
+    } else {
+      const nameConst = ctx.emit('const', [module], STRING, l);
+      // _py.import is async (it may need to async-load a module from VFS), so
+      // the emitted call must be awaited. Unlike the sync `_py.*` helpers
+      // (add, sub, truthy, ...), the result is a Promise, not the module.
+      const call = emitPyCall(ctx, 'import', [nameConst], l);
+      mod = ctx.emit('await', [call.id], DYNAMIC, l);
+      // For dotted names like `a.b`, bind the top-level `a` unless aliased.
+      bindName = alias || module.split('.')[0];
+    }
     ctx.emit('store', [bindName, mod.id], VOID, l);
     ctx.symbols.set(bindName, mod.id);
     if (ctx.topLevel) ctx.defines.add(bindName);
@@ -2558,10 +2568,17 @@ function lowerImportFrom(ctx, node) {
     return ctx.emit('object_new', p, DYNAMIC, l);
   });
   const namesArr = ctx.emit('array_new', pairs.map(p => p.id), DYNAMIC, l);
-  const moduleName = ctx.emit('const', [node.module], STRING, l);
-  // _py.importFrom is async (same reason as _py.import) — await the result.
-  const importFromCall = emitPyCall(ctx, 'importFrom', [moduleName, namesArr], l);
-  const result = ctx.emit('await', [importFromCall.id], DYNAMIC, l);
+  // Path form: `from "./utils.py" import foo` → _py.importFromPath(path, names).
+  // Logical form: `from os import path` → _py.importFrom(module, names).
+  let importCall;
+  if (node.path) {
+    const pathConst = ctx.emit('const', [node.path], STRING, l);
+    importCall = emitPyCall(ctx, 'importFromPath', [pathConst, namesArr], l);
+  } else {
+    const moduleName = ctx.emit('const', [node.module], STRING, l);
+    importCall = emitPyCall(ctx, 'importFrom', [moduleName, namesArr], l);
+  }
+  const result = ctx.emit('await', [importCall.id], DYNAMIC, l);
   // Destructure result into scope: for each name, bind (alias || name) to result[name]
   for (const { name, alias } of node.names) {
     if (name === '*') continue; // wildcard — would need runtime enumeration

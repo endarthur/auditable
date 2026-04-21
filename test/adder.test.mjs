@@ -23,6 +23,7 @@ globalThis.CSS = { escape: s => s };
 // ── import modules under test ──
 const { pythonParseNames, pythonFindUses } = await import('../ext/adder/src/cell.js');
 const { tokenizePython, pythonCompletions, PYTHON_KEYWORDS, PYTHON_BUILTINS } = await import('../ext/adder/src/highlight.js');
+const { adderParse } = await import('../ext/adder/src/parse.js');
 
 // ── pythonParseNames ──
 
@@ -65,6 +66,39 @@ describe('pythonParseNames', () => {
 
   it('from import as', () => {
     assert.deepStrictEqual(pythonParseNames('from os import path as p, getcwd as cwd'), new Set(['p', 'cwd']));
+  });
+
+  it('string-literal import', () => {
+    assert.deepStrictEqual(pythonParseNames('import "./utils.py" as utils'), new Set(['utils']));
+  });
+
+  it('string-literal from-import', () => {
+    assert.deepStrictEqual(pythonParseNames('from "./utils.py" import foo, bar'), new Set(['foo', 'bar']));
+  });
+
+  it('string-literal from-import with aliases', () => {
+    assert.deepStrictEqual(pythonParseNames('from "https://example.com/lib.py" import foo as f, bar'), new Set(['f', 'bar']));
+  });
+
+  it('string-literal import without alias throws', () => {
+    // Use the raw parser — pythonParseNames falls back to regex on parse errors.
+    assert.throws(() => adderParse('import "./utils.py"'), /path imports require 'as/);
+  });
+
+  it('string-literal import AST shape', () => {
+    const ast = adderParse('import "./utils.py" as utils');
+    assert.equal(ast.body[0].type, 'Import');
+    assert.equal(ast.body[0].names[0].path, './utils.py');
+    assert.equal(ast.body[0].names[0].alias, 'utils');
+    assert.equal(ast.body[0].names[0].module, undefined);
+  });
+
+  it('string-literal from-import AST shape', () => {
+    const ast = adderParse('from "./utils.py" import foo, bar as b');
+    assert.equal(ast.body[0].type, 'ImportFrom');
+    assert.equal(ast.body[0].path, './utils.py');
+    assert.equal(ast.body[0].module, undefined);
+    assert.deepStrictEqual(ast.body[0].names, [{ name: 'foo', alias: null }, { name: 'bar', alias: 'b' }]);
   });
 
   it('captures assignments inside if blocks', () => {
@@ -293,7 +327,7 @@ describe('pythonCompletions', () => {
 // ── filesystem tests ──
 
 // Import evaluator components for fs tests
-const { adderParse } = await import('../ext/adder/src/parse.js');
+// (adderParse already imported above)
 const { adderEval, AdderScope } = await import('../ext/adder/src/eval.js');
 const { adderBuiltins, setAdderVFS, getAdderVFS } = await import('../ext/adder/src/builtins.js');
 
@@ -1184,6 +1218,188 @@ import derived
 v = derived.VALUE
 `);
     assert.strictEqual(r.get('v'), 20);
+  });
+});
+
+describe('string-literal (path) imports', () => {
+  it('import absolute VFS path as alias', async () => {
+    await freshVFS();
+    const vfs = getAdderVFS();
+    await vfs.mkdir('/home/nb/extras', { recursive: true });
+    await vfs.writeFile('/home/nb/extras/util.py', `Q = 7\ndef sq(x): return x * x`);
+    const r = await pyExec(`
+import "/home/nb/extras/util.py" as util
+q = util.Q
+sq3 = util.sq(3)
+`);
+    assert.strictEqual(r.get('q'), 7);
+    assert.strictEqual(r.get('sq3'), 9);
+  });
+
+  it('from absolute VFS path import names', async () => {
+    await freshVFS();
+    const vfs = getAdderVFS();
+    await vfs.mkdir('/home/nb/extras', { recursive: true });
+    await vfs.writeFile('/home/nb/extras/helpers.py', `A = 1\nB = 2`);
+    const r = await pyExec(`
+from "/home/nb/extras/helpers.py" import A, B as beta
+a = A
+b = beta
+`);
+    assert.strictEqual(r.get('a'), 1);
+    assert.strictEqual(r.get('b'), 2);
+  });
+
+  it('path import missing file raises ModuleNotFoundError', async () => {
+    await freshVFS();
+    await assert.rejects(
+      () => pyExec(`import "/no/such/file.py" as x`),
+      (e) => e.pyType === 'ModuleNotFoundError'
+    );
+  });
+
+  it('path import cache: two imports of same path share module', async () => {
+    await freshVFS();
+    const vfs = getAdderVFS();
+    await vfs.writeFile('/home/nb/shared.py', `count = 0`);
+    const r = await pyExec(`
+import "/home/nb/shared.py" as m1
+m1.count = 42
+import "/home/nb/shared.py" as m2
+val = m2.count
+`);
+    assert.strictEqual(r.get('val'), 42);
+  });
+});
+
+describe('HTTP module loading', () => {
+  // Restore globalThis.fetch after each test block.
+  const realFetch = globalThis.fetch;
+
+  function mockFetch(responses) {
+    globalThis.fetch = async (url) => {
+      if (url in responses) return { ok: true, text: async () => responses[url] };
+      return { ok: false, status: 404, text: async () => 'not found' };
+    };
+  }
+
+  function restoreFetch() {
+    if (realFetch) globalThis.fetch = realFetch;
+    else delete globalThis.fetch;
+  }
+
+  it('import via sys.path URL base', async () => {
+    await freshVFS();
+    mockFetch({
+      'https://cdn.example.com/httpmod.py': `K = 123\ndef triple(x): return x * 3`,
+    });
+    try {
+      const r = await pyExec(`
+import sys
+sys.path.append('https://cdn.example.com/')
+import httpmod
+k = httpmod.K
+t = httpmod.triple(4)
+`);
+      assert.strictEqual(r.get('k'), 123);
+      assert.strictEqual(r.get('t'), 12);
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  it('from import via sys.path URL base', async () => {
+    await freshVFS();
+    mockFetch({
+      'https://cdn.example.com/mathy.py': `TAU = 6.283\ndef half(x): return x / 2`,
+    });
+    try {
+      const r = await pyExec(`
+import sys
+sys.path.append('https://cdn.example.com/')
+from mathy import TAU, half
+t = TAU
+h = half(10)
+`);
+      assert.strictEqual(r.get('t'), 6.283);
+      assert.strictEqual(r.get('h'), 5);
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  it('tries __init__.py when name.py missing', async () => {
+    await freshVFS();
+    mockFetch({
+      'https://cdn.example.com/pkg/__init__.py': `PKGVAL = 'init'`,
+    });
+    try {
+      const r = await pyExec(`
+import sys
+sys.path.append('https://cdn.example.com/')
+import pkg
+v = pkg.PKGVAL
+`);
+      assert.strictEqual(r.get('v'), 'init');
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  it('direct URL import via string literal', async () => {
+    await freshVFS();
+    mockFetch({
+      'https://example.com/direct.py': `ANSWER = 42`,
+    });
+    try {
+      const r = await pyExec(`
+import "https://example.com/direct.py" as d
+a = d.ANSWER
+`);
+      assert.strictEqual(r.get('a'), 42);
+    } finally {
+      restoreFetch();
+    }
+  });
+
+  it('page-relative sys.path base resolves against document.baseURI', async () => {
+    await freshVFS();
+    const realBaseURI = globalThis.document.baseURI;
+    globalThis.document.baseURI = 'https://app.example.com/notebooks/';
+    mockFetch({
+      'https://app.example.com/notebooks/lib/relmod.py': `REL = 'ok'`,
+    });
+    try {
+      const r = await pyExec(`
+import sys
+sys.path.append('./lib/')
+import relmod
+v = relmod.REL
+`);
+      assert.strictEqual(r.get('v'), 'ok');
+    } finally {
+      restoreFetch();
+      globalThis.document.baseURI = realBaseURI;
+    }
+  });
+
+  it('page-relative string-literal import resolves against document.baseURI', async () => {
+    await freshVFS();
+    const realBaseURI = globalThis.document.baseURI;
+    globalThis.document.baseURI = 'https://app.example.com/nbs/';
+    mockFetch({
+      'https://app.example.com/nbs/utils.py': `MARK = 'rel'`,
+    });
+    try {
+      const r = await pyExec(`
+import "./utils.py" as u
+m = u.MARK
+`);
+      assert.strictEqual(r.get('m'), 'rel');
+    } finally {
+      restoreFetch();
+      globalThis.document.baseURI = realBaseURI;
+    }
   });
 });
 

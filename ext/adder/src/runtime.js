@@ -6,7 +6,7 @@ import {
   pyBool, pyTypeName, pyStr, pyRepr, pyIter, pyCollect, pyFormatValue,
   adderGetAttr,
 } from './builtins.js';
-import { _resolveModule, _loadVfsModule } from './eval.js';
+import { _resolveModule, _loadVfsModule, _loadHttpModule, _loadDirectModule } from './eval.js';
 
 // ── Arithmetic (preserve Python semantics) ──
 
@@ -241,21 +241,40 @@ async function _import(name) {
   if (mod) return mod;
   mod = await _loadVfsModule(name);
   if (mod) return mod;
+  mod = await _loadHttpModule(name);
+  if (mod) return mod;
   throw new AdderError('ModuleNotFoundError', `No module named '${name}'`);
+}
+
+async function _importPath(path) {
+  const mod = await _loadDirectModule(path);
+  if (mod) return mod;
+  throw new AdderError('ModuleNotFoundError', `cannot load module from '${path}'`);
 }
 
 async function _importFrom(moduleName, names) {
   // names: array of { name, alias } (or special "*" to expose all)
   let mod = _resolveModule(moduleName);
   if (!mod) mod = await _loadVfsModule(moduleName);
+  if (!mod) mod = await _loadHttpModule(moduleName);
   if (!mod) throw new AdderError('ModuleNotFoundError', `No module named '${moduleName}'`);
+  return _extractFromImport(mod, names, moduleName);
+}
+
+async function _importFromPath(path, names) {
+  const mod = await _loadDirectModule(path);
+  if (!mod) throw new AdderError('ModuleNotFoundError', `cannot load module from '${path}'`);
+  return _extractFromImport(mod, names, path);
+}
+
+function _extractFromImport(mod, names, displayName) {
   const result = {};
   for (const { name, alias } of names) {
     if (name === '*') {
       for (const k of Object.keys(mod)) result[k] = mod[k];
     } else {
       if (!(name in mod)) {
-        throw new AdderError('ImportError', `cannot import name '${name}' from '${moduleName}'`);
+        throw new AdderError('ImportError', `cannot import name '${name}' from '${displayName}'`);
       }
       result[alias || name] = mod[name];
     }
@@ -490,7 +509,9 @@ export const _py = {
   matchException: _rtMatchException,
   // imports
   import: _import,
+  importPath: _importPath,
   importFrom: _importFrom,
+  importFromPath: _importFromPath,
   // class
   createClass: _createClass,
 };

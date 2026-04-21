@@ -1275,8 +1275,34 @@ export function _resolveModule(name) {
   return null;
 }
 
+// Parse + evaluate source as a fresh module, cache it under cacheKey.
+// Shared by _loadVfsModule, _loadHttpModule, _loadDirectModule.
+async function _instantiateModule(cacheKey, displayName, source, filePath) {
+  const cache = adderModules.sys.modules;
+  const ast = adderParse(source);
+  const modScope = new AdderScope();
+  const builtins = adderBuiltins(() => {});
+  const builtinNames = new Set(Object.keys(builtins));
+  for (const [k, v] of Object.entries(builtins)) modScope.set(k, v);
+  modScope.set('__name__', displayName);
+  modScope.set('__file__', filePath);
+
+  // placeholder in cache (handles circular imports)
+  const mod = { __adderModule__: true };
+  cache[cacheKey] = mod;
+
+  await adderEval(ast, modScope);
+
+  for (const [k, v] of modScope.vars) {
+    if (!builtinNames.has(k) && k !== '__name__' && k !== '__file__') mod[k] = v;
+  }
+  mod.__name__ = displayName;
+  mod.__file__ = filePath;
+
+  return mod;
+}
+
 export async function _loadVfsModule(name) {
-  // check cache
   const cache = adderModules.sys.modules;
   if (cache[name]) return cache[name];
 
@@ -1289,6 +1315,9 @@ export async function _loadVfsModule(name) {
   let source = null, filePath = null;
   const cwd = adderModules.os?.getcwd?.() || '/';
   for (let dir of adderModules.sys.path) {
+    if (typeof dir !== 'string') continue;
+    // skip URL-like entries — those are for _loadHttpModule
+    if (/^https?:\/\//.test(dir)) continue;
     // resolve relative entries (e.g. '.') against os.getcwd()
     if (!pth.isAbsolute(dir)) dir = pth.join(cwd, dir);
     const fp = pth.join(dir, name + '.py');
@@ -1298,33 +1327,104 @@ export async function _loadVfsModule(name) {
   }
   if (source === null) return null;
 
-  // parse and evaluate in a fresh scope
-  const ast = adderParse(source);
-  const modScope = new AdderScope();
-  const builtins = adderBuiltins(() => {});
-  const builtinNames = new Set(Object.keys(builtins));
-  for (const [k, v] of Object.entries(builtins)) modScope.set(k, v);
-  modScope.set('__name__', name);
-  modScope.set('__file__', filePath);
+  return _instantiateModule(name, name, source, filePath);
+}
 
-  // placeholder in cache (handles circular imports)
-  const mod = { __adderModule__: true };
-  cache[name] = mod;
+// Join a base URL with a relative path component. Ensures exactly one '/' between.
+function _urlJoin(base, rel) {
+  if (!base.endsWith('/')) base += '/';
+  return base + rel;
+}
 
-  await adderEval(ast, modScope);
+export async function _loadHttpModule(name) {
+  if (typeof fetch !== 'function') return null;
+  const cache = adderModules.sys.modules;
+  if (cache[name]) return cache[name];
 
-  // extract module-level names (skip builtins and dunders we injected)
-  for (const [k, v] of modScope.vars) {
-    if (!builtinNames.has(k) && k !== '__name__' && k !== '__file__') mod[k] = v;
+  // Iterate sys.path entries suitable as URL bases:
+  //   - absolute URLs ("https://cdn.example.com/")
+  //   - relative URL bases ("./", "../lib/") resolved against document.baseURI when available
+  let source = null, fetchedUrl = null;
+  for (const entry of adderModules.sys.path) {
+    if (typeof entry !== 'string') continue;
+    let base;
+    if (/^https?:\/\//.test(entry)) {
+      base = entry;
+    } else if (entry.startsWith('./') || entry.startsWith('../') || entry === '.' || entry === '..') {
+      base = (typeof document !== 'undefined' && document.baseURI)
+        ? new URL(entry === '.' ? './' : (entry === '..' ? '../' : entry), document.baseURI).href
+        : null;
+    } else {
+      // absolute filesystem paths ("/", "/srv/lib/") are VFS territory, skip
+      continue;
+    }
+    if (!base) continue;
+
+    for (const candidate of [_urlJoin(base, name + '.py'), _urlJoin(base, name + '/__init__.py')]) {
+      try {
+        const resp = await fetch(candidate);
+        if (resp.ok) { source = await resp.text(); fetchedUrl = candidate; break; }
+      } catch {}
+    }
+    if (source !== null) break;
   }
-  mod.__name__ = name;
-  mod.__file__ = filePath;
+  if (source === null) return null;
 
-  return mod;
+  return _instantiateModule(name, name, source, fetchedUrl);
+}
+
+// Direct import from an explicit path/URL: `import "./foo.py" as foo`.
+// Accepts absolute URLs, page-relative URLs, and VFS paths (if VFS is available).
+export async function _loadDirectModule(path) {
+  const cache = adderModules.sys.modules;
+  if (cache[path]) return cache[path];
+
+  // Derive a display name from the last path segment (stripped of .py).
+  const base = path.split(/[/\\]/).pop() || path;
+  const displayName = base.replace(/\.py$/, '') || path;
+
+  let source = null, resolvedPath = path;
+
+  // Absolute or page-relative URL → fetch
+  if (/^https?:\/\//.test(path) || path.startsWith('./') || path.startsWith('../') || path.startsWith('/')) {
+    if (typeof fetch === 'function') {
+      try {
+        const url = /^https?:\/\//.test(path)
+          ? path
+          : (typeof document !== 'undefined' && document.baseURI)
+            ? new URL(path, document.baseURI).href
+            : path;
+        const resp = await fetch(url);
+        if (resp.ok) { source = await resp.text(); resolvedPath = url; }
+      } catch {}
+    }
+    // VFS fallback for absolute paths when fetch failed or unavailable
+    if (source === null && path.startsWith('/')) {
+      const vfs = getAdderVFS();
+      if (vfs) {
+        try { source = await vfs.readFile(path); resolvedPath = path; } catch {}
+      }
+    }
+  } else {
+    // Bare relative form (no ./ prefix) — try VFS only; HTTP loading is opt-in via ./
+    const vfs = getAdderVFS();
+    if (vfs) {
+      try { source = await vfs.readFile(path); resolvedPath = path; } catch {}
+    }
+  }
+
+  if (source === null) return null;
+  return _instantiateModule(path, displayName, source, resolvedPath);
 }
 
 async function _evalImport(node, scope) {
-  for (const { module, alias } of node.names) {
+  for (const { module, alias, path } of node.names) {
+    if (path) {
+      const mod = await _loadDirectModule(path);
+      if (!mod) throw new AdderError('ModuleNotFoundError', `cannot load module from '${path}'`, node.line);
+      scope.set(alias, mod);
+      continue;
+    }
     let mod = _resolveModule(module);
     if (mod) {
       scope.set(alias || module, mod);
@@ -1332,8 +1432,9 @@ async function _evalImport(node, scope) {
       if (module === 'this' && mod.s) { const printFn = scope.has('print') ? scope.get('print') : null; if (printFn) await printFn(mod.s); }
       continue;
     }
-    // try VFS import (searches sys.path for .py files)
     mod = await _loadVfsModule(module);
+    if (mod) { scope.set(alias || module, mod); continue; }
+    mod = await _loadHttpModule(module);
     if (mod) { scope.set(alias || module, mod); continue; }
     throw new AdderError('ModuleNotFoundError', `No module named '${module}'`, node.line);
   }
@@ -1341,13 +1442,22 @@ async function _evalImport(node, scope) {
 }
 
 async function _evalImportFrom(node, scope) {
-  let mod = _resolveModule(node.module);
-  if (!mod) mod = await _loadVfsModule(node.module);
-  if (!mod) throw new AdderError('ModuleNotFoundError', `No module named '${node.module}'`, node.line);
+  let mod;
+  let displayModule;
+  if (node.path) {
+    mod = await _loadDirectModule(node.path);
+    displayModule = node.path;
+  } else {
+    mod = _resolveModule(node.module);
+    if (!mod) mod = await _loadVfsModule(node.module);
+    if (!mod) mod = await _loadHttpModule(node.module);
+    displayModule = node.module;
+  }
+  if (!mod) throw new AdderError('ModuleNotFoundError', `No module named '${displayModule}'`, node.line);
   for (const { name, alias } of node.names) {
     if (name === '*') { for (const k of Object.keys(mod)) scope.set(k, mod[k]); }
     else {
-      if (!(name in mod)) throw new AdderError('ImportError', `cannot import name '${name}' from '${node.module}'`, node.line);
+      if (!(name in mod)) throw new AdderError('ImportError', `cannot import name '${name}' from '${displayModule}'`, node.line);
       scope.set(alias || name, mod[name]);
     }
   }

@@ -443,16 +443,42 @@ class _Parser {
     const t = this.advance();
     const names = [];
     do {
-      let module = this.expect('NAME').value;
-      while (this.eat('OP', '.')) module += '.' + this.expect('NAME').value;
-      const alias = this.eat('NAME', 'as') ? this.expect('NAME').value : null;
-      names.push({ module, alias });
+      // String-literal import: `import "./utils.py" as u`. Alias required — can't
+      // derive an identifier from an arbitrary path.
+      if (this.at('STRING')) {
+        const path = this.advance().value;
+        if (!this.eat('NAME', 'as')) {
+          throw new Error(`path imports require 'as <alias>' at line ${t.line} (cannot derive a name from "${path}")`);
+        }
+        const alias = this.expect('NAME').value;
+        names.push({ path, alias });
+      } else {
+        let module = this.expect('NAME').value;
+        while (this.eat('OP', '.')) module += '.' + this.expect('NAME').value;
+        const alias = this.eat('NAME', 'as') ? this.expect('NAME').value : null;
+        names.push({ module, alias });
+      }
     } while (this.eat('OP', ','));
     return { type: 'Import', names, line: t.line, col: t.col };
   }
 
   parseFromImport() {
     const t = this.advance(); // 'from'
+    // String-literal from-import: `from "./utils.py" import foo, bar`
+    if (this.at('STRING')) {
+      const path = this.advance().value;
+      this.expect('NAME', 'import');
+      if (this.eat('OP', '*')) return { type: 'ImportFrom', path, names: [{ name: '*', alias: null }], line: t.line, col: t.col };
+      const names = [];
+      const paren = this.eat('OP', '(');
+      do {
+        const name = this.expect('NAME').value;
+        const alias = this.eat('NAME', 'as') ? this.expect('NAME').value : null;
+        names.push({ name, alias });
+      } while (this.eat('OP', ','));
+      if (paren) this.expect('OP', ')');
+      return { type: 'ImportFrom', path, names, line: t.line, col: t.col };
+    }
     let module = '';
     while (this.at('OP', '.') || this.at('OP', '...')) {
       module += this.advance().value;
