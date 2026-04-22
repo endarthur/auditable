@@ -268,7 +268,7 @@ const _tokenTable = {
 };
 
 // Convert an auditable tokenizer to a CM6 StreamLanguage
-function makeStreamLang(lang) {
+export function makeStreamLang(lang) {
   if (lang._streamLang) return lang._streamLang;
   const tokenize = lang.tokenize;
   const indentFn = lang.indent || null;

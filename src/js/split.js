@@ -17,7 +17,7 @@ import {
   Parser, NodeType, NodeSet, Tree,
   styleTags,
   javascript, css, html, pythonLang,
-  autocompletion,
+  autocompletion, makeStreamLang,
 } from './cm6.js';
 import { sigHintPlugin } from './complete.js';
 import { cssSummary } from './cell-dom.js';
@@ -161,7 +161,15 @@ const _auditableNodeTypes = [
   NodeType.define({ id: 4, name: 'HtmlCell' }),
   NodeType.define({ id: 5, name: 'MdCell' }),
   NodeType.define({ id: 6, name: 'PythonCell' }),
+  NodeType.define({ id: 7, name: 'PluginCell' }),
 ];
+
+// Built-in cell-type → parser-region node id. Plugin types (soft, soft-ptbr,
+// and anything registered via window._cellTypes) share the generic PluginCell
+// node, which carries no nested parser but at least establishes the region
+// so directives are recognized and the body renders as a distinct cell.
+const _BUILTIN_CELL_TYPE_IDS = { code: 2, css: 3, html: 4, md: 5, adder: 6 };
+const _PLUGIN_CELL_TYPE_ID = 7;
 
 const _auditableNodeSet = new NodeSet(_auditableNodeTypes).extend(
   styleTags({ Directive: tags.comment })
@@ -172,11 +180,36 @@ const _cssParser = css().language.parser;
 const _htmlParser = html().language.parser;
 const _pythonParser = pythonLang().language.parser;
 
-const _nestLanguages = parseMixed(node => {
+// For PluginCell regions, walk backwards from node.from to find the preceding
+// /// <type> directive line, then look up the plugin's tokenizer in
+// window._taggedLanguages. Returns the StreamLanguage parser, or null if the
+// plugin doesn't ship a tokenizer (cell renders as plain text like md).
+function _pluginCellParser(node, input) {
+  const lookbackStart = Math.max(0, node.from - 300);
+  const prefix = input.read(lookbackStart, node.from);
+  const lines = prefix.split('\n');
+  let directiveType = null;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].startsWith('/// ')) {
+      directiveType = lines[i].slice(4).split(' ')[0];
+      break;
+    }
+  }
+  if (!directiveType) return null;
+  const lang = (typeof window !== 'undefined' && window._taggedLanguages) ? window._taggedLanguages[directiveType] : null;
+  if (!lang || !lang.tokenize) return null;
+  return makeStreamLang(lang).parser;
+}
+
+const _nestLanguages = parseMixed((node, input) => {
   if (node.name === 'CodeCell') return { parser: _jsParser };
   if (node.name === 'CssCell') return { parser: _cssParser };
   if (node.name === 'HtmlCell') return { parser: _htmlParser };
   if (node.name === 'PythonCell') return { parser: _pythonParser };
+  if (node.name === 'PluginCell') {
+    const parser = _pluginCellParser(node, input);
+    return parser ? { parser } : null;
+  }
   return null;
 });
 
@@ -195,19 +228,19 @@ class AuditableParser extends Parser {
         const positions = [];
         const lines = text.split('\n');
         let pos = 0;
-        let cellType = null;
+        let cellTypeId = 0;
         let cellStart = -1;
 
         const flushCell = (end) => {
-          if (cellType && cellStart >= 0 && end > cellStart) {
-            const typeMap = { code: 2, css: 3, html: 4, md: 5, adder: 6 };
-            const typeId = typeMap[cellType] || 5;
-            children.push(new Tree(_auditableNodeSet.types[typeId], [], [], end - cellStart));
+          if (cellTypeId && cellStart >= 0 && end > cellStart) {
+            children.push(new Tree(_auditableNodeSet.types[cellTypeId], [], [], end - cellStart));
             positions.push(cellStart);
           }
-          cellType = null;
+          cellTypeId = 0;
           cellStart = -1;
         };
+
+        const _pluginTypes = (typeof window !== 'undefined' && window._cellTypes) || null;
 
         for (let i = 0; i < lines.length; i++) {
           const lineStart = pos;
@@ -218,8 +251,11 @@ class AuditableParser extends Parser {
             children.push(new Tree(_auditableNodeSet.types[1], [], [], lineLen));
             positions.push(lineStart);
             const t = lines[i].slice(4).split(' ')[0];
-            if (['code', 'css', 'html', 'md', 'adder'].includes(t)) {
-              cellType = t;
+            let nextId = 0;
+            if (t in _BUILTIN_CELL_TYPE_IDS) nextId = _BUILTIN_CELL_TYPE_IDS[t];
+            else if (_pluginTypes && _pluginTypes[t]) nextId = _PLUGIN_CELL_TYPE_ID;
+            if (nextId) {
+              cellTypeId = nextId;
               cellStart = Math.min(lineStart + lineLen + 1, text.length);
             }
           }
