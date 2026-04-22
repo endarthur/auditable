@@ -270,6 +270,47 @@ Available via `import` inside adder code:
 
 When `opts.vfs` is set, additional filesystem modules are available: `os`, `os.path`, `pathlib`, `shutil`, `glob`. The built-in `open()` also works with `with` context managers.
 
+## Importing from paths and URLs
+
+In addition to built-in and VFS modules, adder supports loading modules directly by path or URL. Two forms:
+
+### String-literal imports
+
+Address a module directly — alias required for the `import` form since a path isn't a valid identifier:
+
+```python
+import "./utils.py" as utils                          # relative to document.baseURI
+import "https://cdn.example.com/lib.py" as lib        # absolute URL
+import "/home/nb/helpers.py" as helpers               # absolute VFS path
+
+from "./math_extras.py" import gcd, lcm               # no alias needed
+from "https://cdn.example.com/ml.py" import train     # works with from-import too
+```
+
+The `import X as Y` form requires the `as` alias; the `from X import ...` form does not.
+
+### HTTP module loading via sys.path
+
+Append URL bases to `sys.path` and import by short name — adder tries VFS first, then HTTP:
+
+```python
+import sys
+sys.path.append('https://cdn.example.com/mylib/')
+
+import utils          # fetches https://cdn.example.com/mylib/utils.py
+import pkg            # tries pkg.py, then pkg/__init__.py
+```
+
+Relative sys.path entries (`./lib/`, `../shared/`) resolve against `document.baseURI` in browser contexts. `sys.modules` caches successful loads — repeat imports are free.
+
+Resolution chain for a bare `import foo`:
+1. Built-in module table (math, json, re, ...)
+2. VFS `sys.path` search (if VFS is configured)
+3. HTTP `sys.path` search (URL bases and page-relative paths)
+4. `ModuleNotFoundError`
+
+Existing notebooks are unaffected — they don't have URL entries in sys.path by default.
+
 ## Using @gcu/adder inside Auditable
 
 Load as a cell type from a notebook:

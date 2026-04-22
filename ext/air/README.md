@@ -12,7 +12,7 @@ Pre-1.0 — APIs may change on minor version bumps.
 npm install @gcu/air acorn acorn-typescript
 ```
 
-`acorn` and `acorn-typescript` are optional peer dependencies — supply whichever parser you prefer (or pre-parsed ASTs) to `analyzeModule()`.
+`acorn` and `acorn-typescript` are optional peer dependencies — supply whichever parser you prefer (or pre-parsed ASTs) to `analyzeModule()`. In a browser context where `window.Acorn` is available, the parser argument can be omitted.
 
 ## Usage
 
@@ -27,18 +27,37 @@ const parser = Parser.extend(tsPlugin());
 const result = analyzeModule('const y = x + 1; const z = y * 2;', parser, null);
 // result.defines: Set(['y', 'z'])
 // result.uses:    Set(['x'])       — free names
-// result.air:     the full AIR module
+// result.air:     the full AIR module (SSA IR)
+// result.ast:     the parsed ESTree Program (reuse instead of re-parsing)
 ```
 
 Pass a non-null `allDefined` set to restrict `uses` to names defined in a sibling-module environment (Auditable's cell-scope semantics).
 
+### Parse once, reuse the AST
+
+`parseModule(code, parser?)` is the single source of truth for parser options (module source type, locations and byte ranges enabled). Prefer it over reinventing the option set:
+
+```js
+import { parseModule, extractImports, extractExports } from '@gcu/air';
+
+const ast = parseModule("import { foo } from './x.js'; export const bar = 1");
+// ast is a standard ESTree Program with .loc and .range on every node
+
+extractImports(ast);
+// [{ kind: 'named', source: './x.js', specifiers: [{ imported: 'foo', local: 'foo' }] }]
+
+extractExports(ast);
+// [{ kind: 'declaration', declaration: <VariableDeclaration node> }]
+```
+
+Both `extractImports` and `extractExports` return structured descriptors covering every form of ES module declaration (named, namespace, default, side-effect, wildcard re-exports, etc.). See TypeScript declarations in `src/api.d.ts` for the full discriminated-union shapes.
+
 ### Lower and emit directly
 
 ```js
-import { Parser } from 'acorn';
-import { lowerJS, runPasses, emitJS, needsAsync } from '@gcu/air';
+import { parseModule, lowerJS, runPasses, emitJS, needsAsync } from '@gcu/air';
 
-const ast = Parser.parse(source, { ecmaVersion: 'latest', sourceType: 'module', locations: true });
+const ast = parseModule(source, parser);  // uses AIR's default options (locations + ranges)
 const air = lowerJS(ast, source);
 runPasses(air);
 
@@ -92,7 +111,7 @@ The concat'd `index.js` — all source modules merged into one file. Used by Aud
 
 Four phases, of which the first three are shipped:
 
-- **Analysis** — parse (via your chosen parser), lower to AIR (structured SSA, typed operands, regions for control flow). `analyzeModule()` returns `{ defines, uses, air }`.
+- **Analysis** — parse (via your chosen parser), lower to AIR (structured SSA, typed operands, regions for control flow). `analyzeModule()` returns `{ defines, uses, air, ast }` — AST included so downstream tooling can reuse the parse.
 - **Passes** — type propagation (dataflow, branch merges, range-loop induction, object fields), constant folding, runtime-helper specialization (`_py.add` rewrites to raw `+` when both operands are typed numbers), DCE, hint insertion.
 - **Emission** — V8-friendly JS: `|0` for i32, `0.0` initialization for f64, `Math.fround()` for f32, sync function detection, SSA inlining, opaque regions preserving source text verbatim.
 - **(Planned) WASM** — emit directly to atra bytecode for hot kernels.
@@ -119,7 +138,7 @@ Parsed via `acorn-typescript`. Users who don't want annotations never need them.
 
 | Sub-path | File | Contents |
 |---|---|---|
-| `@gcu/air` | `src/api.js` | `analyzeModule`, `analyzeCell` (back-compat alias), `extractDefines`, `extractExportTypes`, re-exports |
+| `@gcu/air` | `src/api.js` | `parseModule`, `analyzeModule`, `analyzeCell` (back-compat alias), `extractDefines`, `extractImports`, `extractExports`, `extractExportTypes`, re-exports |
 | `@gcu/air/types` | `src/types.js` | Primitive type singletons (i8–u64, f32/f64, bool, string, void, dynamic), compound constructors |
 | `@gcu/air/lower/js` | `src/lower/js.js` | ESTree → AIR |
 | `@gcu/air/lower/adder` | `src/lower/adder.js` | adder (Python) AST → AIR |
