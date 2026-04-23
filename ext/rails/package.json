@@ -1,0 +1,36 @@
+{
+  "name": "@gcu/rails",
+  "version": "0.1.0",
+  "description": "Layout engine for docked tab-based workspaces with floating groups. Rails, stacks, tabs, floats — no recursion, no popout. Panels never reparent, so iframes and canvases survive every drag. Zero dependencies.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./bundled": "./index.js",
+    "./rails.css": "./rails.css",
+    "./rails-default.css": "./rails-default.css",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "rails.css",
+    "rails-default.css",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["layout", "docking", "tabs", "workspace", "panels", "splitter", "floats", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/rails"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/rails",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}

@@ -1,0 +1,187 @@
+/*
+ * @gcu/rails — default theme
+ * Optional decorative styling. Load after rails.css. Override any
+ * --rails-* custom property to customize.
+ */
+
+:root {
+  --rails-bg: #0f1114;
+  --rails-surface: #16191e;
+  --rails-chrome: #1f242c;
+  --rails-border: #2a303a;
+  --rails-border-strong: #3a4250;
+  --rails-text: #d6dae1;
+  --rails-text-dim: #8a93a3;
+  --rails-text-faint: #5a6373;
+  --rails-accent: #6ab0ff;
+  --rails-accent-bg: rgba(106, 176, 255, 0.14);
+  --rails-danger: #e07a6a;
+  --rails-font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+}
+
+.rails-root {
+  background: var(--rails-bg);
+  color: var(--rails-text);
+  font-family: var(--rails-font-mono);
+  font-size: 13px;
+}
+
+/* Rail + splitters */
+.rails-rail { background: var(--rails-surface); }
+
+.rails-rail-split {
+  border-left: 1px solid var(--rails-border);
+  margin-left: -1px;
+  transition: background 80ms;
+}
+.rails-rail-split:hover { background: var(--rails-accent-bg); }
+
+.rails-stack-split {
+  border-top: 1px solid var(--rails-border);
+  margin-top: -1px;
+  transition: background 80ms;
+}
+.rails-stack-split:hover { background: var(--rails-accent-bg); }
+
+/* Tab strip */
+.rails-strip {
+  background: var(--rails-chrome);
+  border-bottom: 1px solid var(--rails-border);
+  scrollbar-width: thin;
+  scrollbar-color: var(--rails-border-strong) transparent;
+}
+.rails-strip::-webkit-scrollbar { height: 4px; }
+.rails-strip::-webkit-scrollbar-thumb { background: var(--rails-border-strong); }
+
+.rails-stack.rails-tabs-bottom .rails-strip {
+  border-bottom: none;
+  border-top: 1px solid var(--rails-border);
+}
+
+.rails-tab {
+  padding: 7px 10px 7px 12px;
+  font-size: 11px;
+  color: var(--rails-text-dim);
+  border-right: 1px solid var(--rails-border);
+  gap: 8px;
+  transition: color 80ms, background 80ms;
+}
+.rails-tab:hover { color: var(--rails-text); }
+.rails-tab.rails-active {
+  background: var(--rails-surface);
+  color: var(--rails-text);
+  box-shadow: inset 0 2px 0 var(--rails-accent);
+}
+.rails-stack.rails-tabs-bottom .rails-tab.rails-active {
+  box-shadow: inset 0 -2px 0 var(--rails-accent);
+}
+
+.rails-x {
+  opacity: 0.4;
+  font-size: 14px;
+  line-height: 0.5;
+  width: 12px;
+  text-align: center;
+  transition: opacity 80ms;
+}
+.rails-x:hover { opacity: 1; color: var(--rails-danger); }
+
+/* Panel */
+.rails-panel { background: var(--rails-surface); }
+
+/* Ghost + drop zones */
+.rails-ghost {
+  background: var(--rails-chrome);
+  border: 1px solid var(--rails-border-strong);
+  padding: 5px 12px;
+  font-size: 11px;
+  color: var(--rails-text);
+  border-radius: 3px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  opacity: 0.98;
+}
+
+.rails-zone { transition: background 80ms, box-shadow 80ms; border-radius: 2px; }
+.rails-zone.rails-active {
+  background: var(--rails-accent-bg);
+  box-shadow: 0 0 0 1px var(--rails-accent);
+}
+.rails-zone.rails-zone-insert.rails-active {
+  background: var(--rails-accent);
+  box-shadow: none;
+}
+.rails-zone.rails-zone-float.rails-active {
+  background: transparent;
+  outline: 2px dashed var(--rails-accent);
+  outline-offset: -4px;
+  box-shadow: none;
+}
+
+/* Floats — NO opaque background; the frame is a titlebar + strip + border.
+   The slot area is click-through to the panel behind (which has its own bg). */
+.rails-float {
+  border: 1px solid var(--rails-border);
+  border-radius: 3px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+}
+.rails-float.rails-minimized {
+  height: auto !important;
+}
+.rails-float.rails-minimized .rails-stack,
+.rails-float.rails-minimized .rails-resize-handle {
+  display: none;
+}
+
+.rails-titlebar {
+  background: var(--rails-chrome);
+  border-bottom: 1px solid var(--rails-border);
+  padding: 4px 6px 4px 10px;
+  min-height: 28px;
+}
+
+.rails-titlebar-label {
+  font-size: 11px;
+  color: var(--rails-text-dim);
+  letter-spacing: 0.03em;
+  padding-right: 8px;
+}
+
+.rails-titlebar-buttons button {
+  width: 22px;
+  height: 20px;
+  border: none;
+  background: transparent;
+  color: var(--rails-text-dim);
+  border-radius: 2px;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1;
+  transition: background 80ms, color 80ms;
+}
+.rails-titlebar-buttons button:hover {
+  background: var(--rails-border);
+  color: var(--rails-text);
+}
+.rails-titlebar-buttons .rails-btn-close:hover {
+  color: var(--rails-danger);
+}
+
+/* Resize handles — transparent, but a faint visual hint on hover. */
+.rails-resize-handle {
+  transition: background 80ms;
+}
+.rails-resize-handle:hover {
+  background: var(--rails-accent-bg);
+}
+
+/* Empty workspace */
+.rails-empty {
+  color: var(--rails-text-faint);
+  font-size: 12px;
+}
+
+/* Focus rings for keyboard nav */
+.rails-tab:focus-visible {
+  outline: 1px solid var(--rails-accent);
+  outline-offset: -2px;
+}
