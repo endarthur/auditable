@@ -1536,6 +1536,11 @@ function createRails(host, options = {}) {
     contentLayer,
     state,
     panels: new Map(),
+    // Panels preserved after close — keyed by tabId, value is the last-known
+    // tab object. The panel itself stays in `panels` too, hidden via display:none.
+    // Re-adding the same tab ID reuses the cached panel; releasePreservedPanel
+    // forces destruction. See closeTab({ preserve: true }).
+    preservedTabs: new Map(),
     callbacks,
     config,
     events,
@@ -1583,6 +1588,7 @@ function createRails(host, options = {}) {
   inst._onFloatTitlebarDown = (e, floatId) => onFloatTitlebarDown(inst, e, floatId);
   inst._onFloatResizeDown = (e, floatId, dir) => onFloatResizeDown(inst, e, floatId, dir);
   inst._onStripKeyDown = (e, stack) => onStripKeyDown(inst, e, stack);
+  inst._closeTab = (tabId) => closeTab(tabId);
   inst._raiseFloat = (floatId) => raiseFloatInPlace(inst, floatId);
   inst._toggleFloatMinimized = (floatId) => toggleFloatMinimized(floatId);
   inst._toggleFloatMaximized = (floatId) => toggleFloatMaximized(floatId);
@@ -1594,10 +1600,14 @@ function createRails(host, options = {}) {
     inst._renderChrome();
   };
 
-  // Delegated click handler: close-× affordance.
+  // Delegated click handler: close-× affordance. Routes through preserve if
+  // the tab has preserveOnClose:true, otherwise destroys.
   host.addEventListener('click', e => {
     const tabId = e.target?.dataset?.closeTab;
-    if (tabId) closeTab(tabId);
+    if (!tabId) return;
+    const hit = findTab(inst.state, tabId);
+    if (hit?.tab?.preserveOnClose) closeTab(tabId, { preserve: true });
+    else closeTab(tabId);
   });
 
   // Pointerdown-to-raise for floats: hit-test against every float's screen
@@ -1622,12 +1632,15 @@ function createRails(host, options = {}) {
   // Global keyboard shortcuts (only when focus is inside host).
   host.addEventListener('keydown', e => {
     if (!host.contains(document.activeElement) && document.activeElement !== host) return;
-    // Ctrl-W / Cmd-W: close active tab of the focused stack.
+    // Ctrl-W / Cmd-W: close active tab of the focused stack. Routes through
+    // preserve if the tab has preserveOnClose:true.
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'w') {
       const stack = focusedStack(inst);
       if (stack && stack.active) {
         e.preventDefault();
-        closeTab(stack.active);
+        const activeTab = stack.tabs.find(t => t.id === stack.active);
+        if (activeTab?.preserveOnClose) closeTab(stack.active, { preserve: true });
+        else closeTab(stack.active);
       }
       return;
     }
@@ -1676,24 +1689,41 @@ function createRails(host, options = {}) {
       throw new Error(`rails: duplicate tab id ${tab.id}`);
     }
 
+    // If this tab was previously closed-with-preserve, the cached panel is
+    // about to become visible again. Drop it from the preserved set — the
+    // tab is now live again. The panel element itself is reused automatically
+    // via the panels Map (renderPanel won't be called again).
+    inst.preservedTabs.delete(tab.id);
+
     const t = target || defaultAddTarget(inst.state);
     insertAtTarget(inst, tab, t);
     inst._renderChrome();
   }
 
-  function closeTab(tabId) {
+  function closeTab(tabId, opts = {}) {
     const hit = findTab(inst.state, tabId);
     if (!hit) return;
     if (hit.tab.closeable === false) return;
     if (inst.callbacks.canCloseTab && !inst.callbacks.canCloseTab(hit.tab)) return;
 
     const from = { stackId: hit.stack.id, at: hit.idx };
+    const tab = hit.tab;
     removeTabFromStack(inst.state, tabId);
-    // Tab is being evicted (not moved) — destroy its panel.
-    destroyPanel(inst, tabId, hit.tab);
+
+    if (opts.preserve) {
+      // Keep the panel element alive but hide it. Re-adding with the same
+      // tab id reuses the cached element — renderPanel is NOT called again.
+      const panel = inst.panels.get(tabId);
+      if (panel) panel.style.display = 'none';
+      inst.preservedTabs.set(tabId, tab);
+    } else {
+      // Normal close: destroy panel + fire onPanelDestroy.
+      destroyPanel(inst, tabId, tab);
+    }
+
     cleanup(inst.state);
     inst._renderChrome();
-    inst._emit('tab:close', { tab: hit.tab, from });
+    inst._emit('tab:close', { tab, from, preserved: !!opts.preserve });
   }
 
   function activateTab(tabId) {
@@ -1824,23 +1854,33 @@ function createRails(host, options = {}) {
     });
   }
 
+  function releasePreservedPanel(tabId) {
+    if (!inst.preservedTabs.has(tabId)) return;
+    const tab = inst.preservedTabs.get(tabId);
+    inst.preservedTabs.delete(tabId);
+    destroyPanel(inst, tabId, tab);
+  }
+
+  function listPreservedPanels() {
+    return [...inst.preservedTabs.entries()].map(([id, tab]) => ({ id, tab }));
+  }
+
   function closeFloat(floatId) {
     const float = findFloat(inst.state, floatId);
     if (!float) return;
-    // Close each tab, subject to canCloseTab.
+    // Delegate each tab through closeTab so its preserveOnClose flag routes
+    // to preserve instead of destroy (matching UI behavior for rail tabs).
+    // canCloseTab / closeable:false checks and tab:close emission happen
+    // inside closeTab. batch() collapses the repeated cleanups into one
+    // chrome rebuild.
     const tabs = [...(float.stack?.tabs || [])];
-    for (const tab of tabs) {
-      if (tab.closeable === false) continue;
-      if (inst.callbacks.canCloseTab && !inst.callbacks.canCloseTab(tab)) continue;
-      destroyPanel(inst, tab.id, tab);
-      float.stack.tabs = float.stack.tabs.filter(t => t.id !== tab.id);
-      inst._emit('tab:close', { tab, from: { floatId } });
-    }
-    // If the float now has any tabs left (e.g., some refused close), keep it.
-    // Otherwise cleanup will drop it.
-    cleanup(inst.state);
-    inst._renderChrome();
-    // Only emit float:close if it was actually removed.
+    batch(() => {
+      for (const tab of tabs) {
+        closeTab(tab.id, { preserve: !!tab.preserveOnClose });
+      }
+    });
+    // Only emit float:close if the float was actually removed (all tabs
+    // closed or preserved; none refused via canCloseTab / closeable:false).
     if (!findFloat(inst.state, floatId)) {
       inst._emit('float:close', { float });
     }
@@ -1865,12 +1905,20 @@ function createRails(host, options = {}) {
     if (!Array.isArray(next.floats)) next.floats = [];
     if (next.rails.length > 0) validateState(next);
     inst.state = next;
+    // Deserialize evicts preserved panels whose ids aren't in the new state —
+    // reconcilePanels handles the DOM + onPanelDestroy; we clear the preserved
+    // bookkeeping for those too so it doesn't drift from the panel cache.
+    const nextIds = liveTabIds(next);
+    for (const [id] of inst.preservedTabs) {
+      if (!nextIds.has(id)) inst.preservedTabs.delete(id);
+    }
     reconcilePanels(inst);
     renderChrome(inst);
   }
 
   function destroy() {
     destroyAllPanels(inst);
+    inst.preservedTabs.clear();
     ro?.disconnect();
     window.removeEventListener('resize', inst._reposition);
     host.classList.remove('rails-root');
@@ -1897,6 +1945,8 @@ function createRails(host, options = {}) {
     toggleFloatMinimized,
     toggleFloatMaximized,
     closeFloat,
+    releasePreservedPanel,
+    listPreservedPanels,
     on,
     off,
     serialize,

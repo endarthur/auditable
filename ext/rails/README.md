@@ -66,7 +66,8 @@ Height fallbacks via `height: 100%` are unreliable inside flex containers — us
 ## What's in this release
 
 - Rails + stacks + tabs
-- **Floats** — tear off tabs into draggable/resizable frames, 8 resize handles, maximize/minimize/close, redock by dragging the titlebar onto any rail zone, z-raise on focus (O(1), no chrome rebuild)
+- **Floats** — tear off tabs into draggable/resizable frames, 8 resize handles, maximize/minimize/close, redock by dragging the titlebar onto any rail zone, z-raise on focus
+- **Panel preservation** — `closeTab(id, { preserve: true })` hides the panel instead of destroying it. Per-tab `preserveOnClose: true` flag routes UI close (× / Ctrl-W) through preserve. `releasePreservedPanel(id)` / `listPreservedPanels()` round out the lifecycle. Iframe, canvas, form state intact across close → re-open.
 - Drop zones: reorder, new rail, new stack, append, new float, float titlebar
 - Rail and stack splitters with flex preservation
 - Panel cache with `onPanelDestroy` cleanup hook (fires for any reactive-framework teardown)

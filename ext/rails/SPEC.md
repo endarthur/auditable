@@ -114,10 +114,11 @@ Floats use explicit `x/y/w/h` in workspace coordinates. The library enforces a m
 
 ### 3.2 Per-tab policy flags
 
-The library reads two optional flags on each tab:
+The library reads three optional flags on each tab:
 
 - **`closeable`** — default `true`. When `false`, the tab's × affordance is not rendered and click-close is a no-op. `closeTab(id)` called programmatically still closes; the flag is a UI policy, not a data integrity lock. Consumers wanting hard locking should reject via the `canCloseTab` hook.
 - **`draggable`** — default `true`. When `false`, pointerdown on the tab does not initiate drag; the tab can still be activated by click. Useful for permanent "home" tabs.
+- **`preserveOnClose`** — default `false`. When `true`, UI-driven close (× click, Ctrl-W) routes through `closeTab(id, { preserve: true })` — the tab is removed from state but its panel stays in the cache (hidden) so re-adding with the same ID reuses it. Programmatic `closeTab(id)` is NOT affected by this flag; callers must pass `{ preserve: true }` explicitly for programmatic preserve. Useful for inspectors, sidebars, devtools — anything whose mounted state matters across close/reopen.
 
 These are intentionally coarse. Finer-grained policy (can-move-to-specific-stack, can-close-when-dirty) flows through hooks (§5.4), not flags.
 
@@ -244,10 +245,14 @@ const rails = createRails(hostElement, {
 
   // Tab operations
   addTab(tab, target?): void;   // target: MoveTarget (see below); default: first stack (creates one if empty)
-  closeTab(tabId): void;
+  closeTab(tabId, opts?): void; // opts.preserve keeps panel cached + hidden; re-addTab(sameId) reuses it
   activateTab(tabId): void;
   moveTab(tabId, target): void; // target: MoveTarget
   updateTab(tabId, patch): void;// merge-patch tab fields; chrome rebuild only if chrome-visible field changed (§4.6)
+
+  // Preserved-panel lifecycle
+  releasePreservedPanel(tabId): void;     // force-destroy a preserved panel (fires onPanelDestroy)
+  listPreservedPanels(): Array<{ id: string, tab: Tab }>;  // audit preserved panels
 
   // Float operations
   floatTab(tabId, bounds?): void;         // tear off into a new float

@@ -205,6 +205,47 @@ rails.batch(() => {
 });
 ```
 
+### Singleton / preserved panels (sidebars, inspectors, devtools)
+
+Panels whose mounted state matters (iframe with loaded doc, running WebSocket, unsaved form input) can survive close-and-reopen. Three entry points:
+
+**Programmatic preserve:**
+```js
+rails.closeTab('inspector', { preserve: true });   // panel hidden, not destroyed
+// ...later...
+rails.addTab({ id: 'inspector', title: 'Inspector' }, target);
+// → reuses cached panel. renderPanel is NOT called again. iframe stays loaded.
+```
+
+**UI close preserves automatically — per-tab flag:**
+```js
+{ id: 'inspector', title: 'Inspector', preserveOnClose: true }
+```
+Clicking the × or pressing Ctrl-W on this tab preserves instead of destroys. Programmatic `closeTab(id)` (no opts) still destroys unless `{ preserve: true }` is passed — the flag is explicitly UI-scoped.
+
+**Audit and force-release:**
+```js
+rails.listPreservedPanels();             // → [{ id, tab }, ...]
+rails.releasePreservedPanel('inspector');// force destroy (fires onPanelDestroy)
+```
+
+**Singleton pattern:**
+```js
+function activateOrOpen(tabSpec, target) {
+  const existing = rails.state.rails.flatMap(r => r.stacks).some(s => s.tabs.some(t => t.id === tabSpec.id));
+  if (existing) rails.activateTab(tabSpec.id);
+  else rails.addTab(tabSpec, target);  // reuses preserved panel if present
+}
+// Inspector is always accessible, content never re-initializes.
+rails.closeTab('inspector', { preserve: true });
+activateOrOpen({ id: 'inspector', title: 'Inspector' }, { to: 'stack', stackId: 'right' });
+```
+
+**Gotchas:**
+- Preserved panels live in memory until `releasePreservedPanel` or `destroy()`. Audit via `listPreservedPanels()` if you preserve aggressively.
+- `renderPanel` runs once per tab ID, period — so when you re-add with the same ID, the panel won't see new fields you put on the tab object. Use `updateTab(id, patch)` to sync visible fields (title, etc.); the panel can read `rails.state` to see its own current fields.
+- `deserialize` evicts preserved panels whose IDs aren't in the new state, just like live panels. If you're switching layouts, preserved panels that don't survive the layout transition get `onPanelDestroy`'d.
+
 ### Restrict moves / prevent tear-off
 
 Per-tab flags for ergonomic policy, hooks for runtime policy:

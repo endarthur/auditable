@@ -103,6 +103,7 @@
   <button id="add-canvas">+ canvas</button>
   <button id="add-text">+ text</button>
   <button id="add-float">+ float</button>
+  <button id="reopen-inspector">reopen inspector</button>
   <button id="close-all">close all</button>
 </header>
 <main id="workspace"></main>
@@ -217,7 +218,8 @@ const rails = createRails(document.getElementById('workspace'), {
               <p>panels live in a flat layer and reposition via <code>style.left/top/width/height</code> — never reparented. iframes, canvases, and form state survive every drag (rails, floats, and moves between them).</p>
               <p>float titlebar: drag to move, min/max/close buttons, 8 resize handles on edges and corners. <code>Esc</code> cancels any drag mid-flight.</p>
               <p>click a tab header to activate — no chrome rebuild. click any part of a float to raise it.</p>` },
-          { id: 't2', kind: 'text', title: 'scratch.txt' }
+          { id: 't2', kind: 'text', title: 'scratch.txt' },
+          { id: 't-inspector', kind: 'iframe', title: 'inspector.html \u2197', preserveOnClose: true }
         ]
       }] },
       { id: 'r2', flex: 1.3, stacks: [
@@ -274,6 +276,16 @@ document.getElementById('add-float').onclick = () => {
   rails.addTab({ id, kind: 'canvas', title: `float-${nextId}` });
   rails.floatTab(id, { x: 200 + (nextId * 20) % 200, y: 140 + (nextId * 20) % 200, w: 400, h: 300 });
 };
+document.getElementById('reopen-inspector').onclick = () => {
+  // If already open, just activate. Otherwise re-add — rails reuses the cached
+  // panel (no iframe reload) because inspector was closed with preserve.
+  const state = rails.state;
+  const exists = state.rails.some(r => r.stacks.some(s => s.tabs.some(t => t.id === 't-inspector')))
+    || state.floats.some(f => f.stack.tabs.some(t => t.id === 't-inspector'));
+  if (exists) rails.activateTab('t-inspector');
+  else rails.addTab({ id: 't-inspector', kind: 'iframe', title: 'inspector.html \u2197', preserveOnClose: true });
+};
+
 document.getElementById('close-all').onclick = () => {
   rails.batch(() => {
     const state = rails.state;

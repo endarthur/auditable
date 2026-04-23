@@ -369,3 +369,19 @@ test('freshId does not collide with float ids', () => {
   assert.notEqual(newS, 'fs1');
   assert.notEqual(newF, 'f1');
 });
+
+test('preserveOnClose flag is a pass-through on tabs (library does not read it at the state level)', () => {
+  const s = {
+    rails: [{ id: 'r1', flex: 1, stacks: [{
+      id: 's1', flex: 1, active: 'a',
+      tabs: [{ id: 'a', title: 'A', preserveOnClose: true }]
+    }] }],
+    floats: []
+  };
+  validateState(s);
+  const hit = findTab(s, 'a');
+  assert.equal(hit.tab.preserveOnClose, true);
+  // Patching the flag works like any other field.
+  patchTab(s, 'a', { preserveOnClose: false });
+  assert.equal(findTab(s, 'a').tab.preserveOnClose, false);
+});
