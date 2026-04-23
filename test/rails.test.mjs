@@ -370,6 +370,34 @@ test('freshId does not collide with float ids', () => {
   assert.notEqual(newF, 'f1');
 });
 
+test('Tab.badge is a chrome-visible field: patchTab flags chromeVisible=true when badge changes', () => {
+  const s = makeState();
+  const r1 = patchTab(s, 'a', { badge: 5 });
+  assert.equal(r1.changed, true);
+  assert.equal(r1.chromeVisible, true);
+  const r2 = patchTab(s, 'a', { badge: 5 });
+  assert.equal(r2.changed, false);
+  const r3 = patchTab(s, 'a', { badge: null });
+  assert.equal(r3.changed, true);
+  assert.equal(r3.chromeVisible, true);
+});
+
+test('Rail.collapsed and Rail.collapsible pass through on state', () => {
+  const s = {
+    rails: [
+      { id: 'r1', flex: 1, collapsible: true, collapsed: false,
+        stacks: [{ id: 's1', flex: 1, active: 'a', tabs: [{ id: 'a' }] }] }
+    ],
+    floats: []
+  };
+  validateState(s);
+  assert.equal(s.rails[0].collapsible, true);
+  assert.equal(s.rails[0].collapsed, false);
+  // Toggle is consumer responsibility; library just respects the flag.
+  s.rails[0].collapsed = true;
+  validateState(s);
+});
+
 test('preserveOnClose flag is a pass-through on tabs (library does not read it at the state level)', () => {
   const s = {
     rails: [{ id: 'r1', flex: 1, stacks: [{

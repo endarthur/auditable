@@ -202,7 +202,7 @@ function validateStack(stack, seenStackIds, seenTabIds) {
 
 // Merge-patch a tab's fields. Returns {changed, chromeVisible} for render routing.
 // chromeVisible fields force a structural strip rebuild; others are payload-only.
-const CHROME_VISIBLE_FIELDS = new Set(['title', 'closeable', 'draggable']);
+const CHROME_VISIBLE_FIELDS = new Set(['title', 'closeable', 'draggable', 'badge']);
 
 export function patchTab(state, tabId, patch) {
   const hit = findTab(state, tabId);

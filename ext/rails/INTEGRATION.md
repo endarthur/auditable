@@ -205,6 +205,69 @@ rails.batch(() => {
 });
 ```
 
+### Tab overflow menu
+
+When tabs exceed a strip's width, a `⋯` button appears at the right edge. Clicking it emits `strip:overflow` — the library doesn't ship the menu UI itself (per §9: "menus are consumer"), but it gives you everything you need:
+
+```js
+rails.on('strip:overflow', ({ stack, overflowTabs, x, y }) => {
+  // stack — the Stack object
+  // overflowTabs — [Tab, ...] the tabs clipped by the strip's viewport
+  // x, y — screen coords of the button's bottom-right corner (anchor for your menu)
+  const menu = buildMenu(overflowTabs, tab => {
+    rails.activateTab(tab.id);
+    // Optionally scroll the activated tab into view
+    document.querySelector(`.rails-strip[data-stack-id="${stack.id}"] .rails-tab[data-tab-id="${tab.id}"]`)
+      ?.scrollIntoView({ block: 'nearest', inline: 'center' });
+  });
+  positionAt(menu, x, y);
+});
+```
+
+See `demo.html` for a complete sample implementation (~30 lines). A native `<dialog>` or the `popover` attribute both work well.
+
+### Collapsible sidebar rail
+
+IDE-style layout with a sidebar rail that can collapse to an icon strip:
+
+```js
+const rails = createRails(host, {
+  initialState: {
+    rails: [
+      { id: 'sidebar', flex: 0, width: 240, collapsible: true,
+        stacks: [{ id: 'files', flex: 1, active: 'f', tabs: [{ id: 'f', title: 'Files' }] }] },
+      { id: 'main', flex: 1,
+        stacks: [{ id: 'editors', flex: 1, active: 'e', tabs: [{ id: 'e', title: 'index.js' }] }] }
+    ],
+    floats: []
+  },
+  renderPanel,
+});
+
+// Toggle from a menu or keyboard shortcut:
+document.addEventListener('keydown', e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
+    e.preventDefault();
+    rails.toggleRailCollapsed('sidebar');
+  }
+});
+
+// Hook events for analytics / UI sync:
+rails.on('rail:collapse', ({ rail }) => analytics('sidebar-collapsed', rail.id));
+rails.on('rail:expand', ({ rail }) => analytics('sidebar-expanded', rail.id));
+```
+
+The collapsed rail is a 32px strip with a restore button by default. For richer collapsed UI (per-stack icons, a hover-to-preview popover), style `.rails-rail.rails-collapsed` in your own CSS — the library provides the mechanism; the visual is yours.
+
+### Tab badges (unread count, dirty indicator)
+
+```js
+rails.updateTab('messages', { badge: unreadCount });   // chrome rebuild for that strip
+rails.updateTab('draft', { badge: dirty ? '●' : null });
+```
+
+`badge: null | undefined | ''` removes the pill. `updateTab` detects `badge` as a chrome-visible field — only the affected stack's strip rebuilds; panel layer is untouched.
+
 ### Singleton / preserved panels (sidebars, inspectors, devtools)
 
 Panels whose mounted state matters (iframe with loaded doc, running WebSocket, unsaved form input) can survive close-and-reopen. Three entry points:

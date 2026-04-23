@@ -136,6 +136,7 @@ export function createRails(host, options = {}) {
   inst._onFloatResizeDown = (e, floatId, dir) => onFloatResizeDown(inst, e, floatId, dir);
   inst._onStripKeyDown = (e, stack) => onStripKeyDown(inst, e, stack);
   inst._closeTab = (tabId) => closeTab(tabId);
+  inst._toggleRailCollapsed = (railId) => toggleRailCollapsed(railId);
   inst._raiseFloat = (floatId) => raiseFloatInPlace(inst, floatId);
   inst._toggleFloatMinimized = (floatId) => toggleFloatMinimized(floatId);
   inst._toggleFloatMaximized = (floatId) => toggleFloatMaximized(floatId);
@@ -401,6 +402,14 @@ export function createRails(host, options = {}) {
     });
   }
 
+  function toggleRailCollapsed(railId) {
+    const rail = findRail(inst.state, railId);
+    if (!rail) return;
+    rail.collapsed = !rail.collapsed;
+    inst._renderChrome();
+    inst._emit(rail.collapsed ? 'rail:collapse' : 'rail:expand', { rail });
+  }
+
   function releasePreservedPanel(tabId) {
     if (!inst.preservedTabs.has(tabId)) return;
     const tab = inst.preservedTabs.get(tabId);
@@ -492,6 +501,7 @@ export function createRails(host, options = {}) {
     toggleFloatMinimized,
     toggleFloatMaximized,
     closeFloat,
+    toggleRailCollapsed,
     releasePreservedPanel,
     listPreservedPanels,
     on,

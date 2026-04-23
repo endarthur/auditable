@@ -76,33 +76,65 @@ export function renderChrome(inst) {
   inst._emit('layout:change', { state: inst.state });
 }
 
+function buildRailBtn(inst, rail, kind) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = kind === 'expand' ? 'rails-rail-expand-btn' : 'rails-rail-collapse-btn';
+  btn.textContent = kind === 'expand' ? '\u25b6' : '\u25c0';
+  btn.setAttribute('aria-label', kind === 'expand' ? 'Expand rail' : 'Collapse rail');
+  btn.title = kind === 'expand' ? 'Expand rail' : 'Collapse rail';
+  btn.tabIndex = -1;
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    inst._toggleRailCollapsed(rail.id);
+  });
+  return btn;
+}
+
 function renderRails(inst) {
   inst.state.rails.forEach((rail, ri) => {
     const railEl = document.createElement('div');
     railEl.className = 'rails-rail';
-    if (rail.width != null) {
-      railEl.style.flex = `0 0 ${rail.width}px`;
-    } else {
-      railEl.style.flex = rail.flex ?? 1;
-    }
+    if (rail.collapsed) railEl.classList.add('rails-collapsed');
     railEl.dataset.railId = rail.id;
 
-    rail.stacks.forEach((stack, si) => {
-      const stackEl = buildStackEl(inst, stack);
-      if (stack.height != null) {
-        stackEl.style.flex = `0 0 ${stack.height}px`;
+    if (rail.collapsed) {
+      // Collapsed rail: fixed-width strip with a restore button. No stacks
+      // render; their panels are hidden by reposition (no slot found).
+      railEl.style.flex = '0 0 32px';
+      railEl.appendChild(buildRailBtn(inst, rail, 'expand'));
+    } else {
+      if (rail.width != null) {
+        railEl.style.flex = `0 0 ${rail.width}px`;
       } else {
-        stackEl.style.flex = stack.flex ?? 1;
+        railEl.style.flex = rail.flex ?? 1;
       }
-      railEl.appendChild(stackEl);
 
-      if (si < rail.stacks.length - 1) {
-        const sp = document.createElement('div');
-        sp.className = 'rails-stack-split';
-        sp.addEventListener('pointerdown', e => inst._onSplitterDown(e, 'stack', rail, si));
-        railEl.appendChild(sp);
+      rail.stacks.forEach((stack, si) => {
+        const stackEl = buildStackEl(inst, stack);
+        if (stack.height != null) {
+          stackEl.style.flex = `0 0 ${stack.height}px`;
+        } else {
+          stackEl.style.flex = stack.flex ?? 1;
+        }
+        railEl.appendChild(stackEl);
+
+        if (si < rail.stacks.length - 1) {
+          const sp = document.createElement('div');
+          sp.className = 'rails-stack-split';
+          sp.addEventListener('pointerdown', e => inst._onSplitterDown(e, 'stack', rail, si));
+          railEl.appendChild(sp);
+        }
+      });
+
+      // For collapsible rails, append the collapse button into the first
+      // stack's strip-wrap so it sits as a flex sibling of the tabs/overflow
+      // button (intentional neighbors), not absolutely-positioned over them.
+      if (rail.collapsible && rail.stacks.length > 0) {
+        const firstWrap = railEl.querySelector('.rails-strip-wrap');
+        if (firstWrap) firstWrap.appendChild(buildRailBtn(inst, rail, 'collapse'));
       }
-    });
+    }
 
     inst.railsLayer.appendChild(railEl);
 
@@ -124,7 +156,7 @@ function buildStackEl(inst, stack) {
   if (tabPos === 'bottom') stackEl.classList.add('rails-tabs-bottom');
   stackEl.dataset.stackId = stack.id;
 
-  const strip = buildStrip(inst, stack);
+  const stripWrap = buildStripWrap(inst, stack);
   const slot = document.createElement('div');
   slot.className = 'rails-slot';
   slot.dataset.slotFor = stack.id;
@@ -133,11 +165,72 @@ function buildStackEl(inst, stack) {
   slot.id = `rails-panel-${stack.id}`;
 
   if (tabPos === 'bottom') {
-    stackEl.append(slot, strip);
+    stackEl.append(slot, stripWrap);
   } else {
-    stackEl.append(strip, slot);
+    stackEl.append(stripWrap, slot);
   }
   return stackEl;
+}
+
+// Strip wrapper — flex row holding the scrollable strip + overflow button.
+// The button lives next to (not inside) the scrollable strip so it doesn't
+// scroll away with the tabs.
+function buildStripWrap(inst, stack) {
+  const wrap = document.createElement('div');
+  wrap.className = 'rails-strip-wrap';
+  const strip = buildStrip(inst, stack);
+  const overflowBtn = buildOverflowBtn(inst, stack, strip);
+  wrap.append(strip, overflowBtn);
+  return wrap;
+}
+
+function buildOverflowBtn(inst, stack, strip) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'rails-overflow-btn';
+  btn.textContent = '\u22ef'; // ⋯
+  btn.setAttribute('aria-label', 'Overflow tabs');
+  btn.title = 'Overflow tabs';
+  btn.tabIndex = -1;
+  btn.hidden = true;
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    const overflowTabs = computeOverflowTabs(strip, stack);
+    const r = btn.getBoundingClientRect();
+    inst._emit('strip:overflow', {
+      stack, overflowTabs,
+      x: r.right, y: r.bottom,
+    });
+  });
+  // Observe the strip for size/content changes; toggle btn visibility.
+  if (typeof ResizeObserver !== 'undefined') {
+    const ro = new ResizeObserver(() => updateOverflowBtn(btn, strip));
+    ro.observe(strip);
+  }
+  // Initial compute in a microtask so layout has run.
+  Promise.resolve().then(() => updateOverflowBtn(btn, strip));
+  return btn;
+}
+
+function updateOverflowBtn(btn, strip) {
+  if (!btn.isConnected) return;
+  const overflow = strip.scrollWidth > strip.clientWidth + 1;
+  btn.hidden = !overflow;
+}
+
+function computeOverflowTabs(strip, stack) {
+  // Tabs whose rendered edges fall outside the strip's visible viewport.
+  const tabEls = strip.querySelectorAll(':scope > .rails-tab');
+  const sr = strip.getBoundingClientRect();
+  const out = [];
+  tabEls.forEach(el => {
+    const r = el.getBoundingClientRect();
+    if (r.right > sr.right + 1 || r.left < sr.left - 1) {
+      const tab = stack.tabs.find(t => t.id === el.dataset.tabId);
+      if (tab) out.push(tab);
+    }
+  });
+  return out;
 }
 
 function buildStrip(inst, stack) {
@@ -174,6 +267,13 @@ function buildStrip(inst, stack) {
     label.className = 'rails-tab-label';
     label.textContent = tab.title ?? tab.id;
     tabEl.appendChild(label);
+
+    if (tab.badge != null && tab.badge !== '') {
+      const badge = document.createElement('span');
+      badge.className = 'rails-tab-badge';
+      badge.textContent = String(tab.badge);
+      tabEl.appendChild(badge);
+    }
 
     if (tab.closeable !== false) {
       const x = document.createElement('span');
@@ -294,7 +394,9 @@ function makeTitleButton(cls, glyph, label) {
   return b;
 }
 
-// Rebuild a single stack's strip in place (used by updateTab).
+// Rebuild a single stack's strip wrapper in place (used by updateTab).
+// Rebuilds the whole strip-wrap (strip + overflow button) so the RO and
+// click-handler closures reference the new strip element.
 export function rebuildStrip(inst, stackId) {
   const oldStrip = inst.chromeLayer.querySelector(
     `.rails-strip[data-stack-id="${cssEscape(stackId)}"]`
@@ -308,8 +410,13 @@ export function rebuildStrip(inst, stackId) {
     renderChrome(inst);
     return;
   }
-  const newStrip = buildStrip(inst, stack);
-  oldStrip.replaceWith(newStrip);
+  const oldWrap = oldStrip.parentElement;
+  if (!oldWrap || !oldWrap.classList.contains('rails-strip-wrap')) {
+    renderChrome(inst);
+    return;
+  }
+  const newWrap = buildStripWrap(inst, stack);
+  oldWrap.replaceWith(newWrap);
   reposition(inst);
   inst._emit('layout:change', { state: inst.state });
 }

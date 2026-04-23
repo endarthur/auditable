@@ -68,6 +68,10 @@ Height fallbacks via `height: 100%` are unreliable inside flex containers — us
 - Rails + stacks + tabs
 - **Floats** — tear off tabs into draggable/resizable frames, 8 resize handles, maximize/minimize/close, redock by dragging the titlebar onto any rail zone, z-raise on focus
 - **Panel preservation** — `closeTab(id, { preserve: true })` hides the panel instead of destroying it. Per-tab `preserveOnClose: true` flag routes UI close (× / Ctrl-W) through preserve. `releasePreservedPanel(id)` / `listPreservedPanels()` round out the lifecycle. Iframe, canvas, form state intact across close → re-open.
+- **Tab overflow** — when the tab count exceeds the strip width, a `⋯` button appears at the right edge. Clicking emits `strip:overflow` with the list of clipped tabs and a screen-space anchor — consumer renders the menu UI.
+- **Drag ergonomics** — hover-to-activate during drag (hold over an inactive tab for 500ms), auto-scroll overflowing strips when the drag cursor nears the edges, Escape to cancel.
+- **Collapsible rails** — opt-in per rail via `collapsible: true`. `rail.toggleRailCollapsed(railId)` flips `collapsed`. Collapsed rails render as a 32px strip with a restore button; consumers can decorate further via `.rails-rail.rails-collapsed`.
+- **Tab badges** — `badge?: string | number` on a tab renders as a pill after the title (styled by default theme). Updated via `updateTab(id, { badge })`.
 - Drop zones: reorder, new rail, new stack, append, new float, float titlebar
 - Rail and stack splitters with flex preservation
 - Panel cache with `onPanelDestroy` cleanup hook (fires for any reactive-framework teardown)

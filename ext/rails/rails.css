@@ -71,6 +71,39 @@
   overflow: hidden;
 }
 
+/* Collapsed rail: narrow icon strip. */
+.rails-rail.rails-collapsed {
+  min-width: 32px;
+}
+
+/* Collapse button: inline in the first strip-wrap, right of the overflow ⋯.
+   Expand button: inline at the top of a collapsed 32px rail. */
+.rails-rail-collapse-btn {
+  flex: 0 0 auto;
+  width: 28px;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  padding: 0;
+  user-select: none;
+}
+
+.rails-rail-expand-btn {
+  flex: 0 0 auto;
+  width: 100%;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  padding: 4px 0;
+  user-select: none;
+}
+
 .rails-rail-split {
   flex: 0 0 6px;
   cursor: col-resize;
@@ -101,15 +134,31 @@
   touch-action: none;
 }
 
-/* Strip — the row of tab headers. */
-.rails-strip {
+/* Strip-wrap — holds the scrollable strip + overflow button side-by-side.
+   Only present when tabs are rendered (always, in practice). */
+.rails-strip-wrap {
   display: flex;
+  flex-direction: row;
   flex-shrink: 0;
   min-height: 30px;
+  pointer-events: auto;
+}
+
+/* Strip — the row of tab headers. Lives inside .rails-strip-wrap. */
+.rails-strip {
+  display: flex;
+  flex: 1;
+  min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
   pointer-events: auto;
 }
+
+.rails-overflow-btn {
+  flex: 0 0 auto;
+  cursor: pointer;
+}
+.rails-overflow-btn[hidden] { display: none; }
 
 .rails-strip:focus { outline: none; }
 
@@ -130,6 +179,10 @@
 .rails-tab-label {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.rails-tab-badge {
+  flex-shrink: 0;
 }
 
 .rails-x {

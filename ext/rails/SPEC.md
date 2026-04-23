@@ -114,11 +114,17 @@ Floats use explicit `x/y/w/h` in workspace coordinates. The library enforces a m
 
 ### 3.2 Per-tab policy flags
 
-The library reads three optional flags on each tab:
+The library reads four optional flags on each tab:
 
 - **`closeable`** — default `true`. When `false`, the tab's × affordance is not rendered and click-close is a no-op. `closeTab(id)` called programmatically still closes; the flag is a UI policy, not a data integrity lock. Consumers wanting hard locking should reject via the `canCloseTab` hook.
 - **`draggable`** — default `true`. When `false`, pointerdown on the tab does not initiate drag; the tab can still be activated by click. Useful for permanent "home" tabs.
-- **`preserveOnClose`** — default `false`. When `true`, UI-driven close (× click, Ctrl-W) routes through `closeTab(id, { preserve: true })` — the tab is removed from state but its panel stays in the cache (hidden) so re-adding with the same ID reuses it. Programmatic `closeTab(id)` is NOT affected by this flag; callers must pass `{ preserve: true }` explicitly for programmatic preserve. Useful for inspectors, sidebars, devtools — anything whose mounted state matters across close/reopen.
+- **`preserveOnClose`** — default `false`. When `true`, UI-driven close (× click, Ctrl-W, float close) routes through `closeTab(id, { preserve: true })` — the tab is removed from state but its panel stays in the cache (hidden) so re-adding with the same ID reuses it. Programmatic `closeTab(id)` is NOT affected by this flag; callers must pass `{ preserve: true }` explicitly for programmatic preserve. Useful for inspectors, sidebars, devtools — anything whose mounted state matters across close/reopen.
+- **`badge`** — optional string or number. When set, renders as a pill after the title. Chrome-visible: changes trigger a strip rebuild via `updateTab(id, { badge })`.
+
+Rails themselves also have two optional UI flags:
+
+- **`collapsible`** — opt-in per rail. When `true`, a collapse button (◀) is rendered on the rail; clicking it flips `collapsed`.
+- **`collapsed`** — current state. Collapsed rails render as a 32px icon strip with an expand button (▶); their stacks and slots aren't rendered and their tabs' panels go to `display: none`. Consumers can decorate the collapsed state via the `.rails-collapsed` class.
 
 These are intentionally coarse. Finer-grained policy (can-move-to-specific-stack, can-close-when-dirty) flows through hooks (§5.4), not flags.
 
@@ -253,6 +259,9 @@ const rails = createRails(hostElement, {
   // Preserved-panel lifecycle
   releasePreservedPanel(tabId): void;     // force-destroy a preserved panel (fires onPanelDestroy)
   listPreservedPanels(): Array<{ id: string, tab: Tab }>;  // audit preserved panels
+
+  // Rail collapse
+  toggleRailCollapsed(railId): void;      // flips rail.collapsed; emits rail:collapse / rail:expand
 
   // Float operations
   floatTab(tabId, bounds?): void;         // tear off into a new float

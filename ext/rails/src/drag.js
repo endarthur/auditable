@@ -1,8 +1,12 @@
 // @gcu/rails — tab drag, splitter drag, float drag/resize, drop zones, Escape-cancel
 // All drag state lives on the instance (inst.drag); no module-scoped mutables.
 
-import { findTab, findFloat } from './state.js';
-import { cssEscape, setFloatBoundsInPlace, raiseFloatInPlace } from './render.js';
+import { findTab, findFloat, findStack } from './state.js';
+import { cssEscape, setFloatBoundsInPlace, raiseFloatInPlace, activateInPlace } from './render.js';
+
+const HOVER_ACTIVATE_DELAY_MS = 500;
+const STRIP_EDGE_SCROLL_PX = 40;
+const STRIP_EDGE_SCROLL_SPEED = 8; // px per frame
 
 // ── splitter drag ─────────────────────────────────────────────────────────
 
@@ -467,8 +471,104 @@ function updateTabDrag(inst, ev) {
   // Stash cursor position for new-float targets (so tear-off places the float
   // at drop point, not at a static rect origin).
   if (best && best.type === 'new-float') {
-    best._cursorX = lx - 60;  // offset so the ghost-tearing point becomes titlebar-ish
+    best._cursorX = lx - 60;
     best._cursorY = ly - 10;
+  }
+
+  maybeHoverActivate(inst, ev);
+  maybeEdgeScroll(inst, ev);
+}
+
+// Hover-to-activate: if the cursor hovers over an inactive tab for
+// HOVER_ACTIVATE_DELAY_MS, activate it. Lets users drop into a stack whose
+// active tab is different from the target one.
+function maybeHoverActivate(inst, ev) {
+  const drag = inst.drag;
+  if (!drag) return;
+  // scrim covers the workspace — we need to see through it. Temporarily disable.
+  if (drag.scrim) drag.scrim.style.pointerEvents = 'none';
+  const el = document.elementFromPoint(ev.clientX, ev.clientY);
+  const tabEl = el?.closest?.('.rails-tab');
+  const stripEl = tabEl?.closest?.('.rails-strip');
+  const hoverTabId = tabEl?.dataset?.tabId;
+  const hoverStackId = stripEl?.dataset?.stackId;
+
+  if (!hoverTabId || !hoverStackId || hoverTabId === drag.tab.id) {
+    // Cursor off any hoverable tab, or over the dragged tab itself — cancel.
+    if (drag.hoverTimer) {
+      clearTimeout(drag.hoverTimer);
+      drag.hoverTimer = null;
+      drag.hoverTabId = null;
+    }
+    return;
+  }
+
+  // Don't re-arm the timer if we're still over the same tab we already armed for.
+  if (drag.hoverTabId === hoverTabId) return;
+
+  if (drag.hoverTimer) clearTimeout(drag.hoverTimer);
+  drag.hoverTabId = hoverTabId;
+  drag.hoverTimer = setTimeout(() => {
+    drag.hoverTimer = null;
+    // Re-resolve stack from state (it might have changed since we armed).
+    const stackHit = findStack(inst.state, hoverStackId);
+    if (!stackHit) return;
+    const stack = stackHit.stack;
+    if (stack.active === hoverTabId) return; // already active
+    activateInPlace(inst, stack, hoverTabId);
+    // activateInPlace calls reposition, which may have changed slot rects.
+    // Recompute drop zones so they stay correct against the new layout.
+    for (const zel of drag.zoneEls) zel.remove();
+    drag.zones = computeZones(inst, drag.tab);
+    drag.zoneEls = drag.zones.map(z => makeZoneEl(inst, z));
+  }, HOVER_ACTIVATE_DELAY_MS);
+}
+
+// Scroll an overflowing strip when the drag cursor nears its left or right
+// edge. Runs a rAF loop for smooth scroll until the cursor moves away.
+function maybeEdgeScroll(inst, ev) {
+  const drag = inst.drag;
+  if (!drag) return;
+
+  if (drag.scrim) drag.scrim.style.pointerEvents = 'none';
+  const el = document.elementFromPoint(ev.clientX, ev.clientY);
+  const strip = el?.closest?.('.rails-strip');
+  if (!strip || strip.scrollWidth <= strip.clientWidth + 1) {
+    stopEdgeScroll(drag);
+    return;
+  }
+
+  const sr = strip.getBoundingClientRect();
+  let dir = 0;
+  if (ev.clientX < sr.left + STRIP_EDGE_SCROLL_PX) dir = -1;
+  else if (ev.clientX > sr.right - STRIP_EDGE_SCROLL_PX) dir = 1;
+
+  if (dir === 0) {
+    stopEdgeScroll(drag);
+    return;
+  }
+
+  if (drag.edgeScroll?.strip === strip && drag.edgeScroll?.dir === dir) return;
+
+  stopEdgeScroll(drag);
+  const state = { strip, dir, raf: 0 };
+  const tick = () => {
+    state.strip.scrollLeft += state.dir * STRIP_EDGE_SCROLL_SPEED;
+    // Recompute tab-insert zones against the new scroll position so drops
+    // stay accurate.
+    for (const zel of drag.zoneEls) zel.remove();
+    drag.zones = computeZones(inst, drag.tab);
+    drag.zoneEls = drag.zones.map(z => makeZoneEl(inst, z));
+    state.raf = requestAnimationFrame(tick);
+  };
+  state.raf = requestAnimationFrame(tick);
+  drag.edgeScroll = state;
+}
+
+function stopEdgeScroll(drag) {
+  if (drag?.edgeScroll) {
+    cancelAnimationFrame(drag.edgeScroll.raf);
+    drag.edgeScroll = null;
   }
 }
 
@@ -531,6 +631,8 @@ function cancelTabDrag(inst) {
 function teardownTabDrag(inst) {
   const drag = inst.drag;
   if (!drag || drag.kind !== 'tab') return;
+  if (drag.hoverTimer) clearTimeout(drag.hoverTimer);
+  stopEdgeScroll(drag);
   drag.ghost?.remove();
   drag.scrim?.remove();
   drag.zoneEls?.forEach(el => el.remove());

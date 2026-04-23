@@ -8,7 +8,7 @@
   /* Minimal decorative theme — not part of rails.css. */
   :root {
     --bg: #0f1114; --surface: #16191e; --chrome: #1f242c;
-    --border: #2a303a; --text: #d6dae1; --text-dim: #8a93a3;
+    --border: #2a303a; --text: #d6dae1; --text-dim: #8a93a3; --text-faint: #5a6373;
     --accent: #6ab0ff; --accent-bg: rgba(106,176,255,0.14);
     --danger: #e07a6a;
     --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
@@ -31,7 +31,12 @@
   .rails-rail-split, .rails-stack-split { border-top: 1px solid var(--border); }
   .rails-rail-split { border-left: 1px solid var(--border); border-top: none; }
   .rails-rail-split:hover, .rails-stack-split:hover { background: var(--accent-bg); }
-  .rails-strip { background: var(--chrome); border-bottom: 1px solid var(--border); }
+  .rails-strip { background: var(--chrome); border-bottom: 1px solid var(--border);
+    scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+  .rails-strip::-webkit-scrollbar { height: 4px; }
+  .rails-strip::-webkit-scrollbar-track { background: transparent; }
+  .rails-strip::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .rails-strip::-webkit-scrollbar-thumb:hover { background: var(--text-faint); }
   .rails-stack.rails-tabs-bottom .rails-strip { border-bottom: none; border-top: 1px solid var(--border); }
   .rails-tab { padding: 7px 12px; color: var(--text-dim); border-right: 1px solid var(--border);
     gap: 8px; transition: color 80ms, background 80ms; }
@@ -40,6 +45,19 @@
   .rails-tab:hover { color: var(--text); }
   .rails-x { opacity: 0.4; font-size: 14px; line-height: 0.5; width: 12px; text-align: center;
     transition: opacity 80ms; }
+  .rails-tab-badge { font-size: 10px; line-height: 1; padding: 2px 5px; margin-left: 2px;
+    border-radius: 8px; background: var(--border); color: var(--text-dim); }
+  .rails-tab.rails-active .rails-tab-badge { background: var(--accent); color: var(--bg); }
+  .rails-overflow-btn { background: var(--chrome); color: var(--text-dim); font-size: 14px;
+    border: none; border-left: 1px solid var(--border); font-family: inherit; line-height: 1;
+    transition: color 80ms, background 80ms; }
+  .rails-overflow-btn:hover { background: var(--border); color: var(--text); }
+  .rails-rail-collapse-btn { background: var(--chrome); color: var(--text-dim); font-size: 11px;
+    border-left: 1px solid var(--border); transition: color 80ms, background 80ms; }
+  .rails-rail-collapse-btn:hover { background: var(--border); color: var(--text); }
+  .rails-rail-expand-btn { color: var(--text-dim); font-size: 11px; height: 28px;
+    transition: color 80ms, background 80ms; }
+  .rails-rail-expand-btn:hover { background: var(--border); color: var(--text); }
   .rails-x:hover { opacity: 1; color: var(--danger); }
   .rails-panel { background: var(--surface); }
   .rails-ghost { background: var(--chrome); border: 1px solid var(--border);
@@ -209,7 +227,7 @@ const rails = createRails(document.getElementById('workspace'), {
   },
   initialState: {
     rails: [
-      { id: 'r1', flex: 1, stacks: [{
+      { id: 'r1', flex: 1, collapsible: true, stacks: [{
         id: 's1', flex: 1, active: 't1',
         tabs: [
           { id: 't1', kind: 'html', title: 'readme.md',
@@ -217,8 +235,9 @@ const rails = createRails(document.getElementById('workspace'), {
               <p>drag tabs between strips. drop in rail/stack gaps to create new columns or stacks. drop anywhere in empty space to tear off into a <b>float</b>. drag a float's titlebar onto a rail zone to redock.</p>
               <p>panels live in a flat layer and reposition via <code>style.left/top/width/height</code> — never reparented. iframes, canvases, and form state survive every drag (rails, floats, and moves between them).</p>
               <p>float titlebar: drag to move, min/max/close buttons, 8 resize handles on edges and corners. <code>Esc</code> cancels any drag mid-flight.</p>
-              <p>click a tab header to activate — no chrome rebuild. click any part of a float to raise it.</p>` },
-          { id: 't2', kind: 'text', title: 'scratch.txt' },
+              <p>click a tab header to activate — no chrome rebuild. click any part of a float to raise it.</p>
+              <p>left rail is <b>collapsible</b> — click the ◀ at its top. scratch.txt has a <b>badge</b>. inspector is <b>preserveOnClose</b> (close and reopen to see iframe state persist). drag many tabs here to see the overflow ⋯ button appear.</p>` },
+          { id: 't2', kind: 'text', title: 'scratch.txt', badge: 3 },
           { id: 't-inspector', kind: 'iframe', title: 'inspector.html \u2197', preserveOnClose: true }
         ]
       }] },
@@ -276,6 +295,56 @@ document.getElementById('add-float').onclick = () => {
   rails.addTab({ id, kind: 'canvas', title: `float-${nextId}` });
   rails.floatTab(id, { x: 200 + (nextId * 20) % 200, y: 140 + (nextId * 20) % 200, w: 400, h: 300 });
 };
+// Consumer-side sample: minimal overflow menu. Rails emits strip:overflow
+// with the list of clipped tabs and a screen-space anchor. Build any UI.
+let overflowMenuEl = null;
+function dismissOverflowMenu() {
+  overflowMenuEl?.remove();
+  overflowMenuEl = null;
+  document.removeEventListener('pointerdown', dismissOverflowMenu);
+  document.removeEventListener('keydown', onOverflowEsc);
+}
+function onOverflowEsc(e) { if (e.key === 'Escape') dismissOverflowMenu(); }
+
+rails.on('strip:overflow', ({ stack, overflowTabs, x, y }) => {
+  dismissOverflowMenu();
+  const menu = document.createElement('div');
+  menu.className = 'demo-overflow-menu';
+  Object.assign(menu.style, {
+    position: 'fixed', left: `${x - 200}px`, top: `${y}px`,
+    minWidth: '200px', maxHeight: '300px', overflow: 'auto',
+    background: 'var(--chrome)', border: '1px solid var(--border)',
+    borderRadius: '3px', boxShadow: '0 6px 20px rgba(0,0,0,0.6)',
+    zIndex: 20000, padding: '4px 0'
+  });
+  for (const tab of overflowTabs) {
+    const item = document.createElement('div');
+    item.textContent = tab.title;
+    Object.assign(item.style, {
+      padding: '6px 12px', fontSize: '11px', cursor: 'pointer',
+      color: 'var(--text-dim)',
+    });
+    item.onmouseenter = () => { item.style.background = 'var(--border)'; item.style.color = 'var(--text)'; };
+    item.onmouseleave = () => { item.style.background = ''; item.style.color = 'var(--text-dim)'; };
+    item.onclick = () => {
+      rails.activateTab(tab.id);
+      // Scroll the activated tab into view in the strip.
+      const strip = document.querySelector(`.rails-strip[data-stack-id="${stack.id}"]`);
+      const tabEl = strip?.querySelector(`.rails-tab[data-tab-id="${tab.id}"]`);
+      tabEl?.scrollIntoView({ block: 'nearest', inline: 'center' });
+      dismissOverflowMenu();
+    };
+    menu.appendChild(item);
+  }
+  document.body.appendChild(menu);
+  overflowMenuEl = menu;
+  // Defer the outside-dismiss until next tick so the current click doesn't dismiss immediately.
+  setTimeout(() => {
+    document.addEventListener('pointerdown', dismissOverflowMenu);
+    document.addEventListener('keydown', onOverflowEsc);
+  }, 0);
+});
+
 document.getElementById('reopen-inspector').onclick = () => {
   // If already open, just activate. Otherwise re-add — rails reuses the cached
   // panel (no iframe reload) because inspector was closed with preserve.
