@@ -335,7 +335,7 @@ createRails(host, {
 
 ## Migrating from a linear tab system
 
-Most existing tab UIs (VS Code editors, Chrome tabs, AF's current tabs.js) are one flat list. Migrating to rails:
+Most existing tab UIs (VS Code editors, Chrome tabs, Auditable Works's current tabs.js) are one flat list. Migrating to rails:
 
 1. **Wrap your tab array in the state shape:**
    ```js

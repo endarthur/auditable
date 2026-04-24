@@ -120,6 +120,6 @@ see `ext/calque/SPEC.md` for the full calque language specification.
 
 ### project management
 
-- **AF integration** -- host calque projects in the AF workspace shell
+- **Works integration** -- host calque projects in the Auditable Works workspace shell
 - **project search** -- search/filter in the project list (currently max 20, no search)
 - **workspace format** -- multi-file `.calque` project support

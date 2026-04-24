@@ -127,11 +127,11 @@ When the notebook is locked, all MCP tools except `getDocumentation` and
 can detect the state. On re-lock, the MCP audit log is cleared and auto-accept permissions
 are reset.
 
-### AF workspace
+### Works workspace
 
-AF handles encrypted notebooks transparently --- the lock screen appears inside the
-notebook iframe. AF never sees the passphrase or the decrypted content. When an encrypted
-notebook is dropped into an AF box, AF stores the encrypted payload as-is without
+Auditable Works handles encrypted notebooks transparently --- the lock screen appears inside the
+notebook iframe. Works never sees the passphrase or the decrypted content. When an encrypted
+notebook is dropped into a Works box, Works stores the encrypted payload as-is without
 attempting decryption.
 
 ### Saves and exports

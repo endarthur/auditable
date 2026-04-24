@@ -79,7 +79,7 @@ nav:
   - Export: export.md
   - Settings: settings.md
   - Keyboard Shortcuts: keyboard.md
-  - AF Workspace: af.md
+  - Auditable Works: works.md
   - Advanced:
     - Scope Model: advanced/scope-model.md
     - Save Format: advanced/save-format.md

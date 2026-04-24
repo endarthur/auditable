@@ -41,7 +41,7 @@ auditable.html    — smaller than a floppy disk
 
 that's it. email the file to someone. they open it. it runs.
 
-**note:** Ctrl+S triggers auditable's own save (downloads a self-contained HTML file). on `file://`, some browsers intercept Ctrl+S before the page can handle it — use the **SAVE** button in the toolbar instead. when served over `http://`/`https://` (or inside AF), Ctrl+S works as expected.
+**note:** Ctrl+S triggers auditable's own save (downloads a self-contained HTML file). on `file://`, some browsers intercept Ctrl+S before the page can handle it — use the **SAVE** button in the toolbar instead. when served over `http://`/`https://` (or inside Works), Ctrl+S works as expected.
 
 ## keyboard shortcuts
 
@@ -275,26 +275,26 @@ AUDITABLE-CRYPTO-->
 
 the runtime stays cleartext (it's the application). the data is opaque without the passphrase. a recovery key (random 256-bit, grouped hex) is generated as backup. see `ext/crypto/SPEC.md` for the full cryptographic design.
 
-## auditable files (AF) -- experimental
+## auditable works -- experimental
 
-`af.html` is a workspace shell for managing multiple notebooks, similar to JupyterLab. open it in a browser to get a file tree, tab bar, and iframe-based notebook editing.
+`works.html` is a workspace shell for managing multiple notebooks, similar to JupyterLab. open it in a browser to get a file tree, tab bar, and iframe-based notebook editing.
 
 **features:**
 - **multi-root workspace** -- open real directories (File System Access API, Chromium only) and virtual "boxes" (IndexedDB, all browsers) side by side
 - **tab management** -- preview tabs (single-click), permanent tabs (double-click or edit), drag to reorder
 - **postMessage bridge** -- Ctrl+S in a notebook saves back to the workspace (disk or box)
-- **box export/import** -- export a box as a self-contained `af.html` file, import it elsewhere
+- **box export/import** -- export a box as a self-contained `works.html` file, import it elsewhere
 - **localStorage shim** -- blob URL iframes get per-file storage backed by IndexedDB, so any single-file HTML app works
 - **persistence** -- workspace roots, open tabs, sidebar width, and active tab restore on reload
 
 **build:**
 ```
 node build.js                    # builds auditable.html
-node build.js --target=af        # builds af.html (requires auditable.html)
-npm run build:af                 # both
+node build.js --target=works     # builds works.html (requires auditable.html)
+npm run build:works              # both
 ```
 
-AF embeds the full auditable runtime, so new notebooks created inside AF are fully self-contained -- save one out and it works standalone.
+Works embeds the full auditable runtime, so new notebooks created inside Works are fully self-contained -- save one out and it works standalone.
 
 ## calque -- spreadsheet language editor
 
@@ -337,7 +337,7 @@ save serializes cell source as JSON in an HTML comment (`<!--AUDITABLE-DATA ... 
 ```
 npm install                        # (nothing to install -- zero dependencies)
 node build.js                      # concatenates src/ modules into auditable.html
-node build.js --target=af          # builds af.html
+node build.js --target=works       # builds works.html
 node build.js --target=calque      # builds tools/calque/index.html
 npm test                           # runs tests with node --test
 ```
@@ -357,7 +357,7 @@ node gen_examples.js
 
 ## roadmap
 
-see `ROADMAP.md` for planned features and AF development.
+see `ROADMAP.md` for planned features and Works development.
 
 ## license
 

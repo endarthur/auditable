@@ -1,4 +1,4 @@
-import { AFS, $ } from './state.js';
+import { WKS, $ } from './state.js';
 import { openDB, fsaaOpen, boxCreate, boxImport, extractBoxData, walkRoot } from './fs.js';
 import { renderTree, closeContextMenu } from './tree.js';
 import { openTab, switchTab, renderTabBar, showEmptyState, hideEmptyState, setStatus, closeTab } from './tabs.js';
@@ -11,13 +11,13 @@ import { saveWorkspaceState, loadWorkspaceState, restoreRoots } from './persist.
   // wire UI first — before any async work, so buttons respond even if DB fails (e.g. file://)
   initBridge();
 
-  const addFolderBtn = $('#af-add-folder');
-  const addBoxBtn = $('#af-add-box');
-  const saveBtn = $('#af-save');
-  const importBtn = $('#af-import');
+  const addFolderBtn = $('#works-add-folder');
+  const addBoxBtn = $('#works-add-box');
+  const saveBtn = $('#works-save');
+  const importBtn = $('#works-import');
 
   if (addFolderBtn) {
-    if (AFS.hasFSAA) {
+    if (WKS.hasFSAA) {
       addFolderBtn.addEventListener('click', addFolder);
     } else {
       addFolderBtn.style.display = 'none';
@@ -58,16 +58,16 @@ import { saveWorkspaceState, loadWorkspaceState, restoreRoots } from './persist.
   if (embeddedBox) {
     const box = await boxImport(document.documentElement.outerHTML);
     if (box) {
-      AFS.roots.push({ type: 'box', name: box.name, boxId: box.id });
+      WKS.roots.push({ type: 'box', name: box.name, boxId: box.id });
       await renderTree();
       setStatus('imported box: ' + box.name);
     }
   } else {
     const saved = await loadWorkspaceState();
     if (saved) {
-      AFS.roots = await restoreRoots(saved.roots);
-      AFS.sidebarWidth = saved.sidebarWidth || 240;
-      AFS.treeOpen = saved.treeOpen || {};
+      WKS.roots = await restoreRoots(saved.roots);
+      WKS.sidebarWidth = saved.sidebarWidth || 240;
+      WKS.treeOpen = saved.treeOpen || {};
       applySidebarWidth();
 
       await renderTree();
@@ -75,23 +75,23 @@ import { saveWorkspaceState, loadWorkspaceState, restoreRoots } from './persist.
       // re-open saved tabs silently (no switch, no save)
       if (saved.tabs) {
         for (const st of saved.tabs) {
-          if (st.rootIndex < AFS.roots.length) {
-            const root = AFS.roots[st.rootIndex];
+          if (st.rootIndex < WKS.roots.length) {
+            const root = WKS.roots[st.rootIndex];
             if (!root.needsPermission) {
               await openTab(st.rootIndex, st.path, st.title, { silent: true, preview: st.preview });
             }
           }
         }
         // restore active tab (or fall back to first)
-        const activeIdx = saved.activeTabIndex >= 0 && saved.activeTabIndex < AFS.tabs.length
+        const activeIdx = saved.activeTabIndex >= 0 && saved.activeTabIndex < WKS.tabs.length
           ? saved.activeTabIndex : 0;
-        if (AFS.tabs.length > 0) {
-          switchTab(AFS.tabs[activeIdx].id);
+        if (WKS.tabs.length > 0) {
+          switchTab(WKS.tabs[activeIdx].id);
         }
       }
 
       // show roots that need re-permission
-      const needPerm = AFS.roots.filter(r => r.needsPermission);
+      const needPerm = WKS.roots.filter(r => r.needsPermission);
       if (needPerm.length > 0) {
         setStatus(needPerm.length + ' folder(s) need permission \u2014 click to re-grant');
       }
@@ -99,11 +99,11 @@ import { saveWorkspaceState, loadWorkspaceState, restoreRoots } from './persist.
   }
 
   // show empty state if nothing loaded
-  if (AFS.tabs.length === 0) showEmptyState();
+  if (WKS.tabs.length === 0) showEmptyState();
 
   // handle beforeunload for dirty tabs
   window.addEventListener('beforeunload', (e) => {
-    if (AFS.tabs.some(t => t.dirty)) {
+    if (WKS.tabs.some(t => t.dirty)) {
       e.preventDefault();
       e.returnValue = '';
     }
@@ -115,7 +115,7 @@ import { saveWorkspaceState, loadWorkspaceState, restoreRoots } from './persist.
 async function addFolder() {
   try {
     const root = await fsaaOpen();
-    AFS.roots.push(root);
+    WKS.roots.push(root);
     hideEmptyState();
     await renderTree();
     saveWorkspaceState();
@@ -129,7 +129,7 @@ async function addBox() {
   const name = prompt('box name:', 'scratch');
   if (!name) return;
   const box = await boxCreate(name);
-  AFS.roots.push({ type: 'box', name, boxId: box.id });
+  WKS.roots.push({ type: 'box', name, boxId: box.id });
   hideEmptyState();
   await renderTree();
   saveWorkspaceState();
@@ -146,7 +146,7 @@ async function importBoxFromFile() {
     const html = await file.text();
     const box = await boxImport(html);
     if (box) {
-      AFS.roots.push({ type: 'box', name: box.name, boxId: box.id });
+      WKS.roots.push({ type: 'box', name: box.name, boxId: box.id });
       hideEmptyState();
       await renderTree();
       saveWorkspaceState();
@@ -161,7 +161,7 @@ async function importBoxFromFile() {
 // ── SIDEBAR RESIZE ──
 
 function initResize() {
-  const handle = $('#af-resize');
+  const handle = $('#works-resize');
   if (!handle) return;
 
   let startX, startW;
@@ -169,7 +169,7 @@ function initResize() {
   handle.addEventListener('mousedown', (e) => {
     e.preventDefault();
     startX = e.clientX;
-    startW = AFS.sidebarWidth;
+    startW = WKS.sidebarWidth;
     document.addEventListener('mousemove', onResize);
     document.addEventListener('mouseup', onResizeEnd);
     document.body.style.cursor = 'col-resize';
@@ -178,7 +178,7 @@ function initResize() {
 
   function onResize(e) {
     const delta = e.clientX - startX;
-    AFS.sidebarWidth = Math.max(120, Math.min(600, startW + delta));
+    WKS.sidebarWidth = Math.max(120, Math.min(600, startW + delta));
     applySidebarWidth();
   }
 
@@ -192,13 +192,13 @@ function initResize() {
 }
 
 function applySidebarWidth() {
-  document.documentElement.style.setProperty('--sidebar-w', AFS.sidebarWidth + 'px');
+  document.documentElement.style.setProperty('--sidebar-w', WKS.sidebarWidth + 'px');
 }
 
 // ── RE-GRANT FSAA PERMISSIONS ──
 
 async function regrantPermission(rootIndex) {
-  const root = AFS.roots[rootIndex];
+  const root = WKS.roots[rootIndex];
   if (!root || root.type !== 'fsaa' || !root.needsPermission) return;
   try {
     const perm = await root.dirHandle.requestPermission({ mode: 'readwrite' });

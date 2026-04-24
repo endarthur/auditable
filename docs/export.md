@@ -206,11 +206,11 @@ settings, and installed modules.
 
 ---
 
-## AF Workspace Integration
+## Works Workspace Integration
 
-When a notebook runs inside an [AF workspace](af.md), saving works differently — instead
-of downloading a file, the serialized HTML is sent to the AF shell via `postMessage`
-(`af:serialized`). The AF shell handles persistence to its storage backend (File System
+When a notebook runs inside an [Auditable Works workspace](works.md), saving works differently — instead
+of downloading a file, the serialized HTML is sent to the Works shell via `postMessage`
+(`works:serialized`). The Works shell handles persistence to its storage backend (File System
 Access API or IndexedDB box).
 
-The notebook detects the AF parent automatically. No user configuration is needed.
+The notebook detects the Works parent automatically. No user configuration is needed.

@@ -845,7 +845,7 @@ path resolution: given `/home/project/file.csv`, the mount table finds `/home` a
 
 cross-mount operations: `rename` and `cp` across mount boundaries work by reading from the source backend and writing to the destination. `rename` across mounts is a copy+delete (not atomic). same-backend `rename` delegates to the backend's native rename.
 
-mount/unmount at runtime allows dynamic workspace composition — AF already does this with its FSAA directories and IndexedDB boxes.
+mount/unmount at runtime allows dynamic workspace composition — Auditable Works already does this with its FSAA directories and IndexedDB boxes.
 
 ## auto-configuration
 
@@ -882,18 +882,18 @@ cells access it as `notebook.fs.readFile(...)`, `notebook.fs.writeFile(...)`, et
 
 the MCP bridge's `fsList`, `fsRead`, `fsWrite`, `fsDelete` tools delegate to the same VFS instance, respecting per-cell `// %mcp fs` directives for path sandboxing.
 
-AF's workspace mounts multiple backends:
+The Works workspace mounts multiple backends:
 
 ```js
 const workspace = await VFS.create({
   backends: {
-    "/box/default": { type: "idb", name: "af-default-box" },
+    "/box/default": { type: "idb", name: "works-default-box" },
     "/disk/project": { type: "fsaa", handle: projectDirHandle },
   }
 });
 ```
 
-the file tree UI maps 1:1 to VFS paths. creating a file in the tree calls `workspace.writeFile(...)`. opening a notebook reads it. the bridge protocol between AF shell and notebook iframes proxies filesystem operations through `postMessage`.
+the file tree UI maps 1:1 to VFS paths. creating a file in the tree calls `workspace.writeFile(...)`. opening a notebook reads it. the bridge protocol between Works shell and notebook iframes proxies filesystem operations through `postMessage`.
 
 ### mesh integration (future — M6)
 
@@ -1048,7 +1048,7 @@ await vfs.import("/data", snapshot);
 ```
 
 this is useful for:
-- AF box export (serialize an IndexedDB box to JSON, embed in HTML)
+- Works box export (serialize an IndexedDB box to JSON, embed in HTML)
 - notebook portability (extract comment-backed files as a ZIP or flat bundle)
 - testing (seed a memory backend from fixtures)
 

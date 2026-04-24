@@ -24,8 +24,8 @@ jobs:
           AUDITABLE_PUBLIC_KEY: ${{ vars.AUDITABLE_PUBLIC_KEY }}
           AUDITABLE_RELEASE: ${{ github.event.release.tag_name }}
 
-      - name: Build af.html
-        run: node build.js --target=af
+      - name: Build works.html
+        run: node build.js --target=works
         env:
           AUDITABLE_PUBLIC_KEY: ${{ vars.AUDITABLE_PUBLIC_KEY }}
           AUDITABLE_RELEASE: ${{ github.event.release.tag_name }}
@@ -36,9 +36,9 @@ jobs:
         env:
           ED25519_PRIVATE_KEY: ${{ secrets.ED25519_PRIVATE_KEY }}
 
-      - name: Sign af.html
+      - name: Sign works.html
         if: env.ED25519_PRIVATE_KEY != ''
-        run: node sign.js af.html
+        run: node sign.js works.html
         env:
           ED25519_PRIVATE_KEY: ${{ secrets.ED25519_PRIVATE_KEY }}
 
@@ -48,7 +48,7 @@ jobs:
         run: |
           gh release upload "${{ github.event.release.tag_name }}" \
             auditable.html \
-            af.html \
+            works.html \
             --clobber
 
       - name: Deploy to GitHub Pages
@@ -58,8 +58,8 @@ jobs:
           # Prepare gh-pages content
           mkdir -p _pages/scan
           cp auditable.html _pages/
-          cp af.html _pages/
-          cp af.html _pages/index.html
+          cp works.html _pages/
+          cp works.html _pages/index.html
           cp scan/index.html _pages/scan/
           cp scan/manifest.json _pages/scan/
           cp scan/sw.js _pages/scan/

@@ -1,20 +1,20 @@
-# AF Workspace
+# Auditable Works
 
-AF (Auditable Files) is a tabbed workspace shell for managing multiple
+Auditable Works is a tabbed workspace shell for managing multiple
 notebooks, similar to JupyterLab. It hosts auditable notebooks as iframes and
 provides a file tree, tab management, and persistent storage.
 
 ## Building
 
-AF requires the base `auditable.html` to exist first, since it embeds the
+Works requires the base `auditable.html` to exist first, since it embeds the
 notebook runtime as a template literal.
 
 ```bash
-node build.js                # build auditable.html
-node build.js --target=af    # build af.html (embeds auditable.html)
+node build.js                   # build auditable.html
+node build.js --target=works    # build works.html (embeds auditable.html)
 ```
 
-The output is a single self-contained `af.html` file.
+The output is a single self-contained `works.html` file.
 
 ## Features
 
@@ -41,7 +41,7 @@ backend.
 
 ### Persistence
 
-AF restores workspace state on reload:
+Works restores workspace state on reload:
 
 - Open directory roots (FSAA) and boxes
 - Active tabs and their order
@@ -50,7 +50,7 @@ AF restores workspace state on reload:
 
 ## Storage Backends
 
-AF supports two storage backends that can be used simultaneously.
+Works supports two storage backends that can be used simultaneously.
 
 ### FSAA (File System Access API)
 
@@ -71,8 +71,8 @@ access and after restart.
 A virtual filesystem stored entirely in the browser's IndexedDB. Works in all
 modern browsers, no filesystem permissions needed.
 
-- Portable: export a box as a self-contained `af.html` file
-- Import: drop a box-exported `af.html` to restore it
+- Portable: export a box as a self-contained `works.html` file
+- Import: drop a box-exported `works.html` to restore it
 - Data persists until browser storage is cleared
 
 !!! warning "Box durability"
@@ -81,7 +81,7 @@ modern browsers, no filesystem permissions needed.
 
 ## Lightweight Notebook Format
 
-Notebooks stored inside AF boxes use a compact JSON format instead of full
+Notebooks stored inside Works boxes use a compact JSON format instead of full
 self-contained HTML:
 
 ```json
@@ -100,44 +100,44 @@ self-contained HTML:
 }
 ```
 
-The `ref` values are SHA-256 hashes pointing to AF's content-addressed blob store in IndexedDB.
+The `ref` values are SHA-256 hashes pointing to the Works content-addressed blob store in IndexedDB.
 
 ### Content-Addressed Module Storage
 
-Modules and binaries are stored separately in AF's blob store, keyed by content
-hash. This provides deduplication across notebooks — if ten notebooks use the
-same library, only one copy is stored.
+Modules and binaries are stored separately in the Works blob store, keyed by
+content hash. This provides deduplication across notebooks — if ten notebooks
+use the same library, only one copy is stored.
 
 | Operation | What happens |
 |-----------|-------------|
-| Open notebook | AF hydrates JSON into the runtime template (injects data blocks into iframe `srcdoc`) |
-| Save notebook | AF dehydrates: extracts cells/settings, stores each module by content hash, replaces inline data with refs |
+| Open notebook | Works hydrates JSON into the runtime template (injects data blocks into iframe `srcdoc`) |
+| Save notebook | Works dehydrates: extracts cells/settings, stores each module by content hash, replaces inline data with refs |
 | Drop `.html` into box | Auto-converts: extracts data blocks, deduplicates modules into blob store, stores lightweight JSON |
 | Export from box | Produces a full standalone `auditable.html` with all modules inlined |
 
 ## Bridge Protocol
 
-AF and notebook iframes communicate via `postMessage`. The protocol handles
+Works and notebook iframes communicate via `postMessage`. The protocol handles
 save workflows, UI state sync, file operations, and layout coordination.
 
 ```
-AF Shell                          Notebook Iframe
-────────                          ───────────────
-         ◄── af:ready             (iframe loaded)
-af:serialize ──►
-         ◄── af:serialized        (full HTML)
-         ◄── af:dirty             (unsaved changes)
-         ◄── af:titleChanged      (title updated)
-af:storage ──►
-         ◄── af:saved
-         ◄── af:fileRequest       (file picker proxy)
-af:fileResult ──►
-         ◄── af:download          (download proxy)
-af:resize ──►
-af:setTitle ──►
+Works Shell                       Notebook Iframe
+───────────                       ───────────────
+         ◄── works:ready          (iframe loaded)
+works:serialize ──►
+         ◄── works:serialized     (full HTML)
+         ◄── works:dirty          (unsaved changes)
+         ◄── works:titleChanged   (title updated)
+works:storage ──►
+         ◄── works:saved
+         ◄── works:fileRequest    (file picker proxy)
+works:fileResult ──►
+         ◄── works:download       (download proxy)
+works:resize ──►
+works:setTitle ──►
 ```
 
-!!! note "AF bridge detection"
-    When a notebook detects it is running inside an AF iframe, it sets
-    `window.__AF_BRIDGE__ = true` and routes save/file/download operations
+!!! note "Works bridge detection"
+    When a notebook detects it is running inside a Works iframe, it sets
+    `window.__WORKS_BRIDGE__ = true` and routes save/file/download operations
     through the bridge instead of using browser-native APIs.

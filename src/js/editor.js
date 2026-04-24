@@ -7,7 +7,7 @@ import { syncDataDebounced, syncSettings } from './save.js';
 // ── EDITING ──
 
 export function notifyDirty() {
-  if (S.initialized && window.__AF_BRIDGE__) window.parent.postMessage({ type: 'af:dirty' }, '*');
+  if (S.initialized && window.__WORKS_BRIDGE__) window.parent.postMessage({ type: 'works:dirty' }, '*');
   syncDataDebounced();
 }
 

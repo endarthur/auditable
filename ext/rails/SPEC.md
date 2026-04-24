@@ -586,7 +586,7 @@ createRails(host, {
 });
 ```
 
-### 8.2 Auditable Files notebook workspace
+### 8.2 Auditable Works notebook workspace
 
 Multiple notebooks open in rails and floats, with dirty-tab close protection and layout autosave.
 
@@ -960,7 +960,7 @@ Bug fixes add minimal repros (state snapshot + scripted operation sequence) to a
 - **Should `canCloseTab` etc. be allowed to return `Promise<boolean>` for async confirmation dialogs?** Synchronous is simpler; async opens coordination issues (what if another event fires while the promise pends?). Consumers wanting async can fire their own dialog and replay the operation. Leaning synchronous.
 - **Should float maximize be per-float or global (only one float maximized at a time)?** Per-float is consistent with desktop. Global would prevent "two maximized floats stacked" weirdness but requires library state for "which float is currently maximized" that nothing else needs. Leaning per-float, document the edge case.
 - **Do `canDropOn` and `canMoveTab` both need to exist, or is one redundant?** `canDropOn` vetoes at drag start (zone filtering, transparent UX); `canMoveTab` vetoes at drop commit (runs regardless of UI path, so `moveTab(id, target)` called programmatically still checks). Both serve different purposes — keep both, document that `canDropOn` is the UX-facing filter and `canMoveTab` is the last-resort integrity guard.
-- **Split-view of one buffer (§10.3): is the cost worth the feature?** Deepest architectural change on the roadmap. Defer until a consumer explicitly needs it. Auditable Files might.
+- **Split-view of one buffer (§10.3): is the cost worth the feature?** Deepest architectural change on the roadmap. Defer until a consumer explicitly needs it. Auditable Works might.
 - **`onPanelDestroy` sync-vs-async.** Synchronous, matching hooks. If a consumer needs async cleanup (flush buffer, write to disk before teardown), they gate via `canCloseTab` — veto close, do async work, then call `closeTab` again. Opening async destroy would require a "pending destruction" state in the library that nothing else needs.
 - **`updateTab` field classification.** Which fields count as "chrome-visible" and trigger rebuild? Firm: `title`, `closeable`, `draggable`. Soft: anything the default theme reads (icon backing fields). Consumers with custom themes that read additional fields will need to call `rails.render()` explicitly, or we expose a `chromeVisibleFields: string[]` construction option. Leaning simple firm set + explicit `render()` escape hatch; add the option if it comes up.
 - **`batch` and exceptions.** If `fn` throws, render fires with the partial state as of the throw point, and the exception propagates. Alternative: roll back state via snapshot. Rollback is expensive (deep-copy of `state` at batch start) and the "partial state + exception" behavior matches how most imperative frameworks handle it. Leaning no rollback; document clearly.

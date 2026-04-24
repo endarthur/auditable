@@ -51,7 +51,7 @@ The browser is the vault. The file is the transport.
 - Standard Web Crypto only. No external libraries.
 - All-or-nothing encryption. The notebook is locked or unlocked, no mixed state.
 - Single passphrase entry on load.
-- Transparent to everything once unlocked — DAG, MCP, AF, all work normally.
+- Transparent to everything once unlocked — DAG, MCP, Works, all work normally.
 - Works on `file://`, works offline, no external process needed.
 - Pre-1.0: format may change, no migration guarantees.
 
@@ -354,9 +354,9 @@ The two features are orthogonal. No special interaction.
 
 ---
 
-## Interaction with AF
+## Interaction with Works
 
-1. AF opens an encrypted notebook. The lightweight JSON format stores the encrypted payload as-is:
+1. Works opens an encrypted notebook. The lightweight JSON format stores the encrypted payload as-is:
 
 ```json
 {
@@ -366,15 +366,15 @@ The two features are orthogonal. No special interaction.
 }
 ```
 
-2. AF hydrates the notebook into an iframe with the encrypted payload.
-3. The iframe handles decryption. AF never sees the plaintext.
+2. Works hydrates the notebook into an iframe with the encrypted payload.
+3. The iframe handles decryption. Works never sees the plaintext.
 4. MCP bridge, DAG, everything works normally after decryption inside the iframe.
 
-**Passphrase entry happens in the iframe.** AF doesn't handle, see, or store the passphrase.
+**Passphrase entry happens in the iframe.** Works doesn't handle, see, or store the passphrase.
 
-### Dropping encrypted notebooks into AF
+### Dropping encrypted notebooks into Works
 
-Same as unencrypted: AF extracts the data blocks. For encrypted notebooks, the "data blocks" are the single CRYPTO blob. AF stores it as-is. No decryption needed for AF's purposes — AF manages files, not cell contents.
+Same as unencrypted: Works extracts the data blocks. For encrypted notebooks, the "data blocks" are the single CRYPTO blob. Works stores it as-is. No decryption needed for Works's purposes — Works manages files, not cell contents.
 
 ---
 
@@ -473,7 +473,7 @@ Before shipping:
 
 3. **Copy/paste from encrypted notebook.** User copies a cell and pastes it into another (unencrypted) notebook. The decrypted content leaves the encrypted container. This is intentional user action — don't prevent it, but maybe flash a subtle indicator ("content from encrypted notebook").
 
-4. **Save atomicity.** A crash during save could leave the file in a bad state (old crypto block removed, new one not yet written). Options: (a) write to a temp file, then rename (atomic on most filesystems); (b) keep the old crypto block until the new one is fully written. For browser-based saves via download or AF, this is less of a concern — the save produces a complete buffer in memory before writing. But for FSAA (File System Access API) writes, atomicity matters.
+4. **Save atomicity.** A crash during save could leave the file in a bad state (old crypto block removed, new one not yet written). Options: (a) write to a temp file, then rename (atomic on most filesystems); (b) keep the old crypto block until the new one is fully written. For browser-based saves via download or Works, this is less of a concern — the save produces a complete buffer in memory before writing. But for FSAA (File System Access API) writes, atomicity matters.
 
 5. **~~Passphrase strength.~~** Resolved: estimated brute-force time display. No minimum length, no blocking. See **Passphrase Strength Feedback** in UX section.
 

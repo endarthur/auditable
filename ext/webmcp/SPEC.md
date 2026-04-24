@@ -9,7 +9,7 @@
 A system for connecting one or more Auditable computational notebooks (running in a browser) to MCP clients (such as Claude Code). The bridge speaks MCP over stdio to Claude Code. Two connection modes:
 
 - **Standalone mode:** Each notebook opens a WebSocket directly to the bridge.
-- **AF mode:** The AF (Auditable Files) workspace shell connects once and proxies for all its notebook iframes.
+- **Works mode:** The Auditable Works workspace shell connects once and proxies for all its notebook iframes.
 
 Two components. No browser extension.
 
@@ -25,10 +25,10 @@ Standalone mode:
 │  (any browser)   │
 └──────────────────┘
 
-AF mode:
+Works mode:
 
 ┌─────────────────────────────────┐
-│  AF shell                       │
+│  Works shell                       │
 │  ┌───────────┐ ┌───────────┐    │  WebSocket    ┌──────────┐  stdio   ┌─────────────┐
 │  │ Notebook A│ │ Notebook B│    │──localhost───►│  Bridge  │◄────────►│ Claude Code │
 │  │ (iframe)  │ │ (iframe)  │    │               │ (node)   │  MCP     │             │
@@ -193,7 +193,7 @@ The notebook should show bridge connection status. Auditable's statusbar is the 
 - **Connected**: green indicator with the notebook's assigned ID (e.g., `MCP nb-1`). Clicking could show a tooltip or panel with: bridge port, number of exposed tools, list of `%mcp` / `%mcp rw` cells.
 - **Error**: red indicator if the WebSocket failed or the token was rejected.
 
-In AF mode, the AF toolbar shows a single bridge status indicator, plus per-tab connection badges.
+In Works mode, the Works toolbar shows a single bridge status indicator, plus per-tab connection badges.
 
 This is a small UI addition but critical for trust — the user should always know when their notebook is talking to an external process, and what it's exposing.
 
@@ -547,98 +547,98 @@ interface ToolMetadata {
 
 ---
 
-## AF Integration Mode
+## Works Integration Mode
 
-AF (Auditable Files) is the tabbed workspace shell that hosts multiple notebooks as iframes. It already has a `postMessage` bridge protocol with its notebooks (`af:ready`, `af:serialize`, `af:dirty`, etc.) and knows about all open tabs, their titles, and dirty state. When running inside AF, individual notebooks **do not** connect to the bridge. AF does.
+Auditable Works is the tabbed workspace shell that hosts multiple notebooks as iframes. It already has a `postMessage` bridge protocol with its notebooks (`works:ready`, `works:serialize`, `works:dirty`, etc.) and knows about all open tabs, their titles, and dirty state. When running inside Works, individual notebooks **do not** connect to the bridge. Works does.
 
 ### How It Works
 
-1. The user provides the bridge connection string to AF (not to individual notebooks). AF has a connection widget in its toolbar.
-2. AF opens a single WebSocket to `ws://localhost:{port}`.
-3. AF sends a `hello` for **itself** (with a workspace flag), then sends `notebook_hello` for each open notebook tab.
-4. When the user opens/closes notebook tabs, AF sends `notebook_hello` / `notebook_goodbye` messages for the affected notebooks.
-5. When a `tool_invoke` arrives, AF routes it to the correct notebook iframe via the existing `postMessage` bridge, executes the tool inside the notebook's scope, and returns the result.
+1. The user provides the bridge connection string to Works (not to individual notebooks). Works has a connection widget in its toolbar.
+2. Works opens a single WebSocket to `ws://localhost:{port}`.
+3. Works sends a `hello` for **itself** (with a workspace flag), then sends `notebook_hello` for each open notebook tab.
+4. When the user opens/closes notebook tabs, Works sends `notebook_hello` / `notebook_goodbye` messages for the affected notebooks.
+5. When a `tool_invoke` arrives, Works routes it to the correct notebook iframe via the existing `postMessage` bridge, executes the tool inside the notebook's scope, and returns the result.
 
-### AF Multi-Notebook Protocol
+### Works Multi-Notebook Protocol
 
-AF mode uses a single WebSocket to multiplex multiple logical notebooks. This requires notebook identity on every message that flows through the socket.
+Works mode uses a single WebSocket to multiplex multiple logical notebooks. This requires notebook identity on every message that flows through the socket.
 
-**AF → Bridge messages carry a `notebookId` field** (the bridge-assigned ID from `notebook_welcome`):
+**Works → Bridge messages carry a `notebookId` field** (the bridge-assigned ID from `notebook_welcome`):
 
 ```ts
-// AF → Bridge: register a notebook tab
+// Works → Bridge: register a notebook tab
 { type: "notebook_hello", tabId: string, title: string, path: string }
 
-// Bridge → AF: acknowledge notebook registration
+// Bridge → Works: acknowledge notebook registration
 { type: "notebook_welcome", tabId: string, id: string }
 
-// AF → Bridge: announce tools for a specific notebook
+// Works → Bridge: announce tools for a specific notebook
 { type: "tools_changed", notebookId: string, tools: ToolMetadata[] }
 
-// AF → Bridge: notebook tab closed
+// Works → Bridge: notebook tab closed
 { type: "notebook_goodbye", notebookId: string }
 
-// AF → Bridge: tool result from a specific notebook
+// Works → Bridge: tool result from a specific notebook
 { type: "tool_result", notebookId: string, callId: string, result?: any, error?: string }
 
-// Bridge → AF: invoke tool on a specific notebook
+// Bridge → Works: invoke tool on a specific notebook
 { type: "tool_invoke", notebookId: string, callId: string, name: string, input: object }
 
-// AF → Bridge: docs from a specific notebook
+// Works → Bridge: docs from a specific notebook
 { type: "docs_available", notebookId: string, topics: string[] }
 { type: "doc_result", notebookId: string, callId: string, content: string }
 ```
 
-The bridge uses `notebookId` to route tool calls and track per-notebook state. AF maintains the `notebookId ↔ tabId` mapping internally.
+The bridge uses `notebookId` to route tool calls and track per-notebook state. Works maintains the `notebookId ↔ tabId` mapping internally.
 
-AF's initial `hello` message includes `workspace: true` to signal multiplexing mode:
-
-```ts
-{ type: "hello", protocol: 1, title: "AF Workspace", path: "/projects/qf/", token: "a1b2c3", workspace: true }
-```
-
-The bridge responds with `{ type: "welcome", protocol: 1, id: "af-1" }`. This is the AF-level ID. Individual notebooks get IDs via `notebook_welcome`.
-
-### AF postMessage Extension
-
-AF's existing `postMessage` bridge protocol needs new message types for MCP. These use the existing `af:*` namespace:
+Works's initial `hello` message includes `workspace: true` to signal multiplexing mode:
 
 ```ts
-// AF shell → Notebook iframe
-{ type: "af:mcpInvoke", callId: string, name: string, input: object }
-{ type: "af:mcpDocRequest", callId: string, topic: string }
-
-// Notebook iframe → AF shell
-{ type: "af:mcpResult", callId: string, result?: any, error?: string }
-{ type: "af:mcpDocResult", callId: string, content: string }
-{ type: "af:mcpToolsChanged", tools: ToolMetadata[] }
-{ type: "af:mcpDocsAvailable", topics: string[] }
+{ type: "hello", protocol: 1, title: "Works Workspace", path: "/projects/qf/", token: "a1b2c3", workspace: true }
 ```
 
-### AF-Level Tools
+The bridge responds with `{ type: "welcome", protocol: 1, id: "works-1" }`. This is the Works-level ID. Individual notebooks get IDs via `notebook_welcome`.
 
-AF can also register workspace-level tools that don't belong to any notebook:
+### Works postMessage Extension
+
+The Works `postMessage` bridge protocol needs new message types for MCP. These use the existing `works:*` namespace:
+
+```ts
+// Works shell → Notebook iframe
+{ type: "works:mcpInvoke", callId: string, name: string, input: object }
+{ type: "works:mcpDocRequest", callId: string, topic: string }
+
+// Notebook iframe → Works shell
+{ type: "works:mcpResult", callId: string, result?: any, error?: string }
+{ type: "works:mcpDocResult", callId: string, content: string }
+{ type: "works:mcpToolsChanged", tools: ToolMetadata[] }
+{ type: "works:mcpDocsAvailable", topics: string[] }
+```
+
+### Works-Level Tools
+
+Works can also register workspace-level tools that don't belong to any notebook:
 
 - **`listFiles`** — list files in the current workspace (FSAA directory or Box).
 - **`openNotebook`** — open a notebook by path, creating a new tab.
-- **`saveNotebook`** — trigger save for a notebook (proxies `af:serialize`).
+- **`saveNotebook`** — trigger save for a notebook (proxies `works:serialize`).
 - **`saveAll`** — save all dirty notebooks.
 
 These are registered as regular tools with no `notebook` param on the MCP side.
 
 ### Notebook-Side: No Changes Needed
 
-When running inside AF, the notebook doesn't need the shim's WebSocket code at all. AF handles the bridge connection. The notebook's `registerTool` calls (Layer 1) or directives (Layer 2) still work — AF reads the tool registrations from the iframe's scope and proxies them to the bridge via the postMessage extension. The notebook detects AF via `window.__AF_BRIDGE__` (already exists) and skips direct WebSocket connection.
+When running inside Works, the notebook doesn't need the shim's WebSocket code at all. Works handles the bridge connection. The notebook's `registerTool` calls (Layer 1) or directives (Layer 2) still work — Works reads the tool registrations from the iframe's scope and proxies them to the bridge via the postMessage extension. The notebook detects Works via `window.__WORKS_BRIDGE__` (already exists) and skips direct WebSocket connection.
 
 ### Standalone Fallback
 
-If the same notebook is opened outside AF (as a standalone `file://` or `http://` page), the shim connects directly to the bridge as described in Component 1. The notebook works in both modes with no changes.
+If the same notebook is opened outside Works (as a standalone `file://` or `http://` page), the shim connects directly to the bridge as described in Component 1. The notebook works in both modes with no changes.
 
 ---
 
 ## MCP Directives
 
-New cell directives for controlling MCP visibility. These follow Auditable's existing `// %directive` convention and are processed by the **adapter** (Layer 2) or by AF when generating tool registrations.
+New cell directives for controlling MCP visibility. These follow Auditable's existing `// %directive` convention and are processed by the **adapter** (Layer 2) or by Works when generating tool registrations.
 
 ### `// %mcp`
 
@@ -674,7 +674,7 @@ Applicable to **code** cells only. Markdown, CSS, and HTML cells can use `// %mc
 
 ### `// %private`
 
-Explicitly exclude this cell from MCP exposure, overriding any notebook-level or AF-level default policy. A cell marked `%private` will never appear in tool registrations, even if a Layer 3 manifest cell tries to include it.
+Explicitly exclude this cell from MCP exposure, overriding any notebook-level or Works-level default policy. A cell marked `%private` will never appear in tool registrations, even if a Layer 3 manifest cell tries to include it.
 
 ```js
 // %private
@@ -713,7 +713,7 @@ Without this, the auto-generated description is generic: "Output of cell variogr
 
 ### Default Tool Set (Layer 2)
 
-When any cell uses `// %mcp` or `// %mcp rw`, the adapter (or AF) auto-registers a standard set of structural tools alongside the cell-specific tools:
+When any cell uses `// %mcp` or `// %mcp rw`, the adapter (or Works) auto-registers a standard set of structural tools alongside the cell-specific tools:
 
 - **`listCells`** — returns all cells with id, name, type, directives, and MCP visibility.
 - **`getCellOutput`** — generic output getter for any `%mcp` cell (by cell ID or name). Supports output slicing (see below).
@@ -1080,8 +1080,8 @@ Topics:
 | `glsl` | Shader tag, Shadertoy-compatible uniforms |
 | `sql` | SQL tag, tokenizer |
 | `python` | @python compat — range, enumerate, len, sorted, reversed, etc. |
-| `save` | Save modes, packed format, export app, AF lightweight format |
-| `af` | AF workspace shell — storage backends, bridge protocol, file tree |
+| `save` | Save modes, packed format, export app, Works lightweight format |
+| `af` | Works workspace shell — storage backends, bridge protocol, file tree |
 
 Returns `{ content: "...", source: "bridge" | "notebook" }` so the agent knows where it came from.
 
@@ -1114,7 +1114,7 @@ Cons: gets stale if the notebook is running a newer Auditable version or has cus
 
 ### Option B: Notebook-Served Docs
 
-The notebook (or AF) is the authority on what it can do. `getDocumentation` is routed to a connected notebook, which returns docs for its active capabilities. The notebook knows which extensions are loaded (`_taggedLanguages`, installed modules), what atra version it's running, etc.
+The notebook (or Works) is the authority on what it can do. `getDocumentation` is routed to a connected notebook, which returns docs for its active capabilities. The notebook knows which extensions are loaded (`_taggedLanguages`, installed modules), what atra version it's running, etc.
 
 This means the documentation lives inside Auditable itself — either bundled into the HTML (like `builtins.json` already is), or fetchable from the extensions at runtime. Each extension exposes a `__docs__` property:
 
@@ -1441,7 +1441,7 @@ If the notebook is a local `file://` HTML, any MCP client with filesystem access
 The bridge provides structured, scoped, interactive access to a *running* notebook — live scope values, execution, widgets, the DAG. Reading the static file gives you the source code but not the runtime state. The governance model protects the live interaction, not the file at rest.
 
 **Mitigations for sensitive notebooks:**
-- **AF Box storage** (IndexedDB) — no file on disk. The MCP client cannot access IndexedDB.
+- **Works Box storage** (IndexedDB) — no file on disk. The MCP client cannot access IndexedDB.
 - **Packed saves** — base64-gzipped. Not encryption, but not trivially readable either.
 - **Don't put the notebook in the MCP client's working directory.** If the notebook is in `~/private-models/` and the MCP bridge is configured in `~/projects/auditable/`, the client has no reason to look there.
 
@@ -1526,7 +1526,7 @@ For truly sensitive data, the real protection is the governance patterns: keep d
 - `// %private` cells are invisible to MCP regardless of any other configuration. Combined with `// %mcp describe`, they expose metadata without content. **Descriptions are transmitted to the MCP client** — treat them as semi-public. Do not include confidential specifics in `%mcp describe` text.
 - `getCellOutput` returns data subject to the `format` parameter. Use `schema` format to expose structure without values. The `full` format has a hard 64KB cap to prevent accidental context flooding.
 - Multiple notebooks connected to the same bridge cannot see each other's data. The bridge routes tool calls by notebook ID — there is no cross-notebook tool invocation.
-- In AF mode, the AF shell proxies tool calls to iframes but does not inspect or log the data flowing through. AF-level tools (`listFiles`, `saveNotebook`) operate on workspace metadata, not notebook content.
+- In Works mode, the Works shell proxies tool calls to iframes but does not inspect or log the data flowing through. Works-level tools (`listFiles`, `saveNotebook`) operate on workspace metadata, not notebook content.
 - `notebook.fs` access is opt-in, path-prefix-sandboxed, size-limited, and requires user confirmation on writes. See **notebook.fs Integration** section.
 - See **Governance Patterns** for recommended configurations at various privacy levels, from full collaboration to described-private mode.
 
@@ -1570,7 +1570,7 @@ This is critical for trust — the user can review what the agent did after the 
 ├── adapter.js         # ~1200 lines, Auditable-specific: directive parsing,
 │                      # tool generation, manifest, FS tools, audit log, panel UI,
 │                      # LCS diff, edit highlights, confirmation dialog
-├── af-bridge.js       # ~120 lines, AF-side bridge client (inlined into af.html)
+├── works-bridge.js    # ~120 lines, Works-side bridge client (inlined into works.html)
 │                      # (multi-notebook multiplexing, postMessage routing)
 ├── docs/              # core documentation (markdown), bundled with bridge
 │   ├── cells.md
@@ -1604,7 +1604,7 @@ Total estimated LoC: **~1000-1200** (code), plus docs. The adapter grew with `ad
 
 4. **~~Tool description/schema merging.~~** Resolved: first-to-READY wins canonical schema and description. On disconnect, next provider is promoted. Bridge does not merge schemas. See **Tool Schema Merging** section.
 
-5. **~~AF postMessage extension.~~** Resolved: new `af:mcp*` message types in the existing namespace. See **AF postMessage Extension** section.
+5. **~~Works postMessage extension.~~** Resolved: new `works:mcp*` message types in the existing namespace. See **Works postMessage Extension** section.
 
 6. **~~Directive parsing coupling.~~** Resolved: shim.js is a generic WebMCP polyfill with no Auditable knowledge. adapter.js handles directive parsing and tool generation from `S.cells`. The coupling is isolated to the adapter, which is its explicit purpose.
 
@@ -1629,8 +1629,8 @@ Total estimated LoC: **~1000-1200** (code), plus docs. The adapter grew with `ad
 - **Multi-client:** Allow multiple MCP clients to connect to the same bridge.
 - **WebMCP discovery manifest:** If the spec adds `.well-known/webmcp`, hosted notebooks could advertise tools for browser agents.
 - **`deleteCell`:** `deleteCell({ notebook, cellId })` — allow Claude Code to remove cells. Requires `requestUserInteraction` confirmation. (`addCell` is in v1; `deleteCell` deferred as it's harder to undo.)
-- **AF workspace tools:** `createNotebook`, `deleteFile`, `importFile` — full workspace operations from Claude Code.
-- **Save-on-edit:** When Claude Code updates cell source via `updateCellSource`, AF auto-saves. Configurable.
+- **Works workspace tools:** `createNotebook`, `deleteFile`, `importFile` — full workspace operations from Claude Code.
+- **Save-on-edit:** When Claude Code updates cell source via `updateCellSource`, Works auto-saves. Configurable.
 - ~~**Undo integration:** `updateCellSource` pushes to the notebook's undo stack so the user can Ctrl+Z agent edits.~~ ✓ — CM6 `dispatch({ changes })` adds to undo stack by default.
 - **Contextual doc hints:** When a tool call fails, the bridge could suggest relevant documentation topics in the error message (e.g., "Tool failed — try getDocumentation({topic: 'atra'}) for syntax help").
 - **Browser extension (optional):** For users who want automatic port discovery or a connection UI outside the notebook, a minimal extension could be added as a convenience layer. Not a requirement.

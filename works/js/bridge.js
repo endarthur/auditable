@@ -1,4 +1,4 @@
-import { AFS, $ } from './state.js';
+import { WKS, $ } from './state.js';
 import { writeEntry } from './fs.js';
 import { dehydrate, extractNotebook, storeModuleBlobs, toTxt } from './notebook.js';
 import { findTabBySource, markDirty, markClean, renderTabBar, setStatus, updateStatusBar, handleStorageMessage } from './tabs.js';
@@ -13,13 +13,13 @@ function initBridge() {
 
 function handleMessage(event) {
   const msg = event.data;
-  if (!msg?.type || !msg.type.startsWith('af:')) return;
+  if (!msg?.type || !msg.type.startsWith('works:')) return;
 
   const tab = findTabBySource(event.source);
   if (!tab) return;
 
   switch (msg.type) {
-    case 'af:ready': {
+    case 'works:ready': {
       if (msg.payload?.title) {
         tab.title = msg.payload.title;
         renderTabBar();
@@ -27,7 +27,7 @@ function handleMessage(event) {
       break;
     }
 
-    case 'af:serialized': {
+    case 'works:serialized': {
       const pending = pendingSerialize.get(tab.id);
       if (pending) {
         clearTimeout(pending.timer);
@@ -37,12 +37,12 @@ function handleMessage(event) {
       break;
     }
 
-    case 'af:dirty': {
+    case 'works:dirty': {
       markDirty(tab.id);
       break;
     }
 
-    case 'af:titleChanged': {
+    case 'works:titleChanged': {
       if (msg.payload?.title) {
         tab.title = msg.payload.title;
         renderTabBar();
@@ -51,7 +51,7 @@ function handleMessage(event) {
       break;
     }
 
-    case 'af:storage': {
+    case 'works:storage': {
       if (msg.payload) handleStorageMessage(tab, msg.payload);
       break;
     }
@@ -60,7 +60,7 @@ function handleMessage(event) {
 
 function requestSerialize(tabId) {
   return new Promise((resolve, reject) => {
-    const tab = AFS.tabs.find(t => t.id === tabId);
+    const tab = WKS.tabs.find(t => t.id === tabId);
     if (!tab?.iframe?.contentWindow) {
       reject(new Error('no iframe for tab'));
       return;
@@ -72,12 +72,12 @@ function requestSerialize(tabId) {
     }, 5000);
 
     pendingSerialize.set(tabId, { resolve, timer });
-    tab.iframe.contentWindow.postMessage({ type: 'af:serialize' }, '*');
+    tab.iframe.contentWindow.postMessage({ type: 'works:serialize' }, '*');
   });
 }
 
 async function saveActiveTab() {
-  const tab = AFS.tabs.find(t => t.id === AFS.activeTabId);
+  const tab = WKS.tabs.find(t => t.id === WKS.activeTabId);
   if (!tab) return;
 
   try {
@@ -88,7 +88,7 @@ async function saveActiveTab() {
     }
 
     // choose format based on path extension and storage backend
-    const root = AFS.roots[tab.rootIndex];
+    const root = WKS.roots[tab.rootIndex];
     let content = html;
     if (tab.path.endsWith('.txt')) {
       const notebook = extractNotebook(html);
@@ -102,7 +102,7 @@ async function saveActiveTab() {
     }
 
     await writeEntry(tab.rootIndex, tab.path, content);
-    tab.iframe.contentWindow.postMessage({ type: 'af:saved' }, '*');
+    tab.iframe.contentWindow.postMessage({ type: 'works:saved' }, '*');
     markClean(tab.id);
     setStatus('saved ' + tab.title);
   } catch (err) {
@@ -112,13 +112,13 @@ async function saveActiveTab() {
 }
 
 async function saveAllTabs() {
-  for (const tab of AFS.tabs) {
+  for (const tab of WKS.tabs) {
     if (!tab.dirty) continue;
     try {
       const html = await requestSerialize(tab.id);
       if (html) {
         // choose format based on path extension and storage backend
-        const root = AFS.roots[tab.rootIndex];
+        const root = WKS.roots[tab.rootIndex];
         let content = html;
         if (tab.path.endsWith('.txt')) {
           const notebook = extractNotebook(html);
@@ -131,7 +131,7 @@ async function saveAllTabs() {
           if (lightweight) content = lightweight;
         }
         await writeEntry(tab.rootIndex, tab.path, content);
-        tab.iframe.contentWindow.postMessage({ type: 'af:saved' }, '*');
+        tab.iframe.contentWindow.postMessage({ type: 'works:saved' }, '*');
         markClean(tab.id);
       }
     } catch (err) {

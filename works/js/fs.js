@@ -7,7 +7,7 @@ const DB_NAME = 'auditable-files';
 const DB_VERSION = 3;
 
 function openDB() {
-  if (AFS.db) return Promise.resolve(AFS.db);
+  if (WKS.db) return Promise.resolve(WKS.db);
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
@@ -25,14 +25,14 @@ function openDB() {
         db.createObjectStore('blobs', { keyPath: 'hash' });
       }
     };
-    req.onsuccess = () => { AFS.db = req.result; resolve(req.result); };
+    req.onsuccess = () => { WKS.db = req.result; resolve(req.result); };
     req.onerror = () => reject(req.error);
-    req.onblocked = () => reject(new Error('IndexedDB blocked \u2014 close other AF tabs and reload'));
+    req.onblocked = () => reject(new Error('IndexedDB blocked \u2014 close other Works tabs and reload'));
   });
 }
 
 function dbTx(store, mode = 'readonly') {
-  return AFS.db.transaction(store, mode).objectStore(store);
+  return WKS.db.transaction(store, mode).objectStore(store);
 }
 
 function dbGet(store, key) {
@@ -287,17 +287,17 @@ async function boxExport(boxId) {
   }
   const data = { name: box.name, files };
   const json = JSON.stringify(data);
-  // read the current af.html shell as base — use our own document
-  const shellHtml = '<!DOCTYPE html>\n<html><head><meta charset="UTF-8"><title>AF Box \u2014 ' +
-    box.name + '</title></head><body><p>This file contains an Auditable Files box. ' +
-    'Open it in AF to import.</p>\n' +
-    '<!--AF-BOX\n' + json + '\nAF-BOX-->\n' +
+  // read the current works.html shell as base — use our own document
+  const shellHtml = '<!DOCTYPE html>\n<html><head><meta charset="UTF-8"><title>Works Box \u2014 ' +
+    box.name + '</title></head><body><p>This file contains an Auditable Works box. ' +
+    'Open it in Works to import.</p>\n' +
+    '<!--WORKS-BOX\n' + json + '\nWORKS-BOX-->\n' +
     '</body></html>';
   return shellHtml;
 }
 
 function extractBoxData(html) {
-  const match = html.match(/<!--AF-BOX\n([\s\S]*?)\nAF-BOX-->/);
+  const match = html.match(/<!--WORKS-BOX\n([\s\S]*?)\nWORKS-BOX-->/);
   if (!match) return null;
   try { return JSON.parse(match[1]); } catch { return null; }
 }
@@ -327,7 +327,7 @@ async function boxImport(html) {
 // ── Unified interface ──
 
 async function readEntry(rootIndex, path) {
-  const root = AFS.roots[rootIndex];
+  const root = WKS.roots[rootIndex];
   if (!root) return null;
   if (root.type === 'fsaa') {
     const { fileHandle } = await fsaaResolve(root.dirHandle, path);
@@ -337,7 +337,7 @@ async function readEntry(rootIndex, path) {
 }
 
 async function writeEntry(rootIndex, path, content) {
-  const root = AFS.roots[rootIndex];
+  const root = WKS.roots[rootIndex];
   if (!root) return;
   if (root.type === 'fsaa') {
     const { fileHandle } = await fsaaResolve(root.dirHandle, path);
@@ -347,7 +347,7 @@ async function writeEntry(rootIndex, path, content) {
 }
 
 async function createEntry(rootIndex, parentPath, name, content) {
-  const root = AFS.roots[rootIndex];
+  const root = WKS.roots[rootIndex];
   if (!root) return;
   const fullPath = parentPath ? parentPath + '/' + name : name;
   if (root.type === 'fsaa') {
@@ -358,7 +358,7 @@ async function createEntry(rootIndex, parentPath, name, content) {
 }
 
 async function deleteEntry(rootIndex, path) {
-  const root = AFS.roots[rootIndex];
+  const root = WKS.roots[rootIndex];
   if (!root) return;
   if (root.type === 'fsaa') {
     const parts = path.split('/');
@@ -371,7 +371,7 @@ async function deleteEntry(rootIndex, path) {
 }
 
 async function walkRoot(rootIndex) {
-  const root = AFS.roots[rootIndex];
+  const root = WKS.roots[rootIndex];
   if (!root) return [];
   if (root.type === 'fsaa') {
     return fsaaWalk(root.dirHandle);

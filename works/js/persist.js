@@ -1,4 +1,4 @@
-import { AFS } from './state.js';
+import { WKS } from './state.js';
 import { openDB, dbGet, dbPut } from './fs.js';
 
 // ── PERSISTENCE ──
@@ -16,19 +16,19 @@ async function _flushSave() {
   try {
     await openDB();
     const state = {
-      roots: AFS.roots.map(r => {
+      roots: WKS.roots.map(r => {
         if (r.type === 'fsaa') return { type: 'fsaa', name: r.name, dirHandle: r.dirHandle };
         return { type: 'box', name: r.name, boxId: r.boxId };
       }),
-      tabs: AFS.tabs.map(t => ({
+      tabs: WKS.tabs.map(t => ({
         rootIndex: t.rootIndex,
         path: t.path,
         title: t.title,
         preview: t.preview || undefined,
       })),
-      activeTabIndex: AFS.tabs.findIndex(t => t.id === AFS.activeTabId),
-      sidebarWidth: AFS.sidebarWidth,
-      treeOpen: AFS.treeOpen,
+      activeTabIndex: WKS.tabs.findIndex(t => t.id === WKS.activeTabId),
+      sidebarWidth: WKS.sidebarWidth,
+      treeOpen: WKS.treeOpen,
     };
     await dbPut('state', state, 'workspace');
   } catch (err) {

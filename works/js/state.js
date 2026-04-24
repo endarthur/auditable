@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════
-// AUDITABLE FILES — workspace shell
+// AUDITABLE WORKS — workspace shell
 // Geoscientific Chaos Union, 2025
 // ═══════════════════════════════════════════════════
 
@@ -7,7 +7,7 @@ const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 
 // ── STATE ──
-const AFS = {
+const WKS = {
   roots: [],          // WorkspaceRoot[] — { type, name, dirHandle?, boxId? }
   tabs: [],           // { id, path, rootIndex, blobUrl, iframe, dirty, title }
   activeTabId: null,

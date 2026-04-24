@@ -53,15 +53,15 @@ function processModules(mainPath, moduleDir, opts = {}) {
 }
 
 // ══════════════════════════════════════════════════
-// TARGET: af
+// TARGET: works
 // ══════════════════════════════════════════════════
 
-if (target === 'af') {
-  const afDir = path.join(__dirname, 'af');
-  const afJsDir = path.join(afDir, 'js');
+if (target === 'works') {
+  const worksDir = path.join(__dirname, 'works');
+  const worksJsDir = path.join(worksDir, 'js');
 
-  // 1. Process AF modules
-  let afJs = processModules(path.join(afJsDir, 'main.js'), afJsDir);
+  // 1. Process Works modules
+  let worksJs = processModules(path.join(worksJsDir, 'main.js'), worksJsDir);
 
   // 2. Read the already-built auditable.html and embed as template literal
   const auditablePath = path.join(__dirname, 'auditable.html');
@@ -71,31 +71,31 @@ if (target === 'af') {
   }
   const auditableHtml = fs.readFileSync(auditablePath, 'utf8');
   const escaped = auditableHtml.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${').replace(/<\/script>/gi, '<\\/script>');
-  afJs = `const __AUDITABLE_RUNTIME__ = \`${escaped}\`;\n\n` + afJs;
+  worksJs = `const __AUDITABLE_RUNTIME__ = \`${escaped}\`;\n\n` + worksJs;
 
-  // 3. Read AF CSS and template
-  const afCss = fs.readFileSync(path.join(afDir, 'style.css'), 'utf8');
-  const afTemplate = fs.readFileSync(path.join(afDir, 'template.html'), 'utf8');
+  // 3. Read Works CSS and template
+  const worksCss = fs.readFileSync(path.join(worksDir, 'style.css'), 'utf8');
+  const worksTemplate = fs.readFileSync(path.join(worksDir, 'template.html'), 'utf8');
 
-  // 4. Assemble af.html
-  const afHtml = `<!DOCTYPE html>
-<!-- AF (Auditable Files) — multi-tab workspace shell for managing auditable notebooks -->
+  // 4. Assemble works.html
+  const worksHtml = `<!DOCTYPE html>
+<!-- Auditable Works — multi-tab workspace shell for managing auditable notebooks -->
 <!-- hosts notebooks as iframes, communicates via postMessage bridge protocol -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Auditable Files</title>
+<title>Auditable Works</title>
 <style>
-${afCss}
+${worksCss}
 </style>
 </head>
 <body>
 
-${afTemplate}
+${worksTemplate}
 
 <script>
-${afJs}
+${worksJs}
 </script>
 </body>
 </html>
@@ -105,12 +105,12 @@ ${afJs}
   const buildDir = path.join(__dirname, 'build');
   if (!fs.existsSync(buildDir)) fs.mkdirSync(buildDir);
   // uncompressed → build/ (for tests/signing)
-  fs.writeFileSync(path.join(buildDir, 'af.html'), afHtml);
+  fs.writeFileSync(path.join(buildDir, 'works.html'), worksHtml);
   // compressed → root (for distribution)
-  const afScript = afHtml.match(/<script>([\s\S]*?)<\/script>/);
-  let afDist = afHtml;
-  if (afScript) {
-    const compressed = zlib.gzipSync(Buffer.from(afScript[1], 'utf8'));
+  const worksScript = worksHtml.match(/<script>([\s\S]*?)<\/script>/);
+  let worksDist = worksHtml;
+  if (worksScript) {
+    const compressed = zlib.gzipSync(Buffer.from(worksScript[1], 'utf8'));
     const b64 = compressed.toString('base64').replace(/.{1,76}/g, '$&\n');
     const loader =
       '(function(){var me=document.scripts[document.scripts.length-1];(async function(){' +
@@ -119,12 +119,12 @@ ${afJs}
       "var s=await new Response(new Blob([d]).stream().pipeThrough(new DecompressionStream('gzip'))).text();" +
       "me.textContent=s;document.getElementById('_rt').remove();" +
       '(0,eval)(s)})()})()';
-    afDist = afHtml.replace(/<script>[\s\S]*?<\/script>/,
+    worksDist = worksHtml.replace(/<script>[\s\S]*?<\/script>/,
       `<script type="text/plain" id="_rt">\n${b64}</script>\n<script>\n${loader}\n</script>`);
   }
-  fs.writeFileSync(path.join(__dirname, 'af.html'), afDist);
-  const afSize = fs.statSync(path.join(__dirname, 'af.html')).size;
-  console.log(`Built af.html (${(afSize / 1024).toFixed(1)} KB)`);
+  fs.writeFileSync(path.join(__dirname, 'works.html'), worksDist);
+  const worksSize = fs.statSync(path.join(__dirname, 'works.html')).size;
+  console.log(`Built works.html (${(worksSize / 1024).toFixed(1)} KB)`);
   process.exit(0);
 }
 

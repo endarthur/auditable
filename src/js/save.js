@@ -416,9 +416,9 @@ export async function saveNotebook() {
     return;
   }
 
-  // AF bridge: send serialized HTML to parent shell instead of downloading
-  if (window.__AF_BRIDGE__) {
-    window.parent.postMessage({ type: 'af:serialized', payload: { html } }, '*');
+  // Works bridge: send serialized HTML to parent shell instead of downloading
+  if (window.__WORKS_BRIDGE__) {
+    window.parent.postMessage({ type: 'works:serialized', payload: { html } }, '*');
     setMsg('saved', 'ok');
     return;
   }
@@ -513,8 +513,8 @@ export function exportAsTxt() {
   });
 
   // download
-  if (window.__AF_BRIDGE__) {
-    window.parent.postMessage({ type: 'af:download', payload: { data: txt, filename: title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.txt', mime: 'text/plain' } }, '*');
+  if (window.__WORKS_BRIDGE__) {
+    window.parent.postMessage({ type: 'works:download', payload: { data: txt, filename: title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.txt', mime: 'text/plain' } }, '*');
   } else {
     const blob = new Blob([txt], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
@@ -657,8 +657,8 @@ ${__APP_RUNTIME__}
 </body>
 </html>`;
 
-  if (window.__AF_BRIDGE__) {
-    window.parent.postMessage({ type: 'af:download', payload: { data: html, filename: title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.html', mime: 'text/html' } }, '*');
+  if (window.__WORKS_BRIDGE__) {
+    window.parent.postMessage({ type: 'works:download', payload: { data: html, filename: title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.html', mime: 'text/html' } }, '*');
   } else {
     downloadHtml(html, title);
   }

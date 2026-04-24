@@ -1,4 +1,4 @@
-import { AFS, $ } from './state.js';
+import { WKS, $ } from './state.js';
 import { walkRoot, readEntry } from './fs.js';
 import { openTab, setStatus } from './tabs.js';
 import { saveWorkspaceState } from './persist.js';
@@ -7,20 +7,20 @@ import { extractNotebook, toTxt, parseTxt, hydrateNotebook } from './notebook.js
 // ── FILE TREE ──
 
 async function renderTree() {
-  const container = $('#af-tree');
+  const container = $('#works-tree');
   if (!container) return;
   container.innerHTML = '';
 
-  for (let ri = 0; ri < AFS.roots.length; ri++) {
-    const root = AFS.roots[ri];
+  for (let ri = 0; ri < WKS.roots.length; ri++) {
+    const root = WKS.roots[ri];
     const entries = await walkRoot(ri);
     const rootKey = 'r' + ri;
     const rootEl = document.createElement('details');
     rootEl.className = 'tree-root';
-    rootEl.open = AFS.treeOpen[rootKey] !== false; // default open
+    rootEl.open = WKS.treeOpen[rootKey] !== false; // default open
     rootEl.dataset.rootIndex = ri;
     rootEl.addEventListener('toggle', () => {
-      AFS.treeOpen[rootKey] = rootEl.open;
+      WKS.treeOpen[rootKey] = rootEl.open;
       saveWorkspaceState();
     });
 
@@ -43,7 +43,7 @@ async function renderTree() {
     container.appendChild(rootEl);
   }
 
-  if (AFS.roots.length === 0) {
+  if (WKS.roots.length === 0) {
     container.innerHTML = '<div class="tree-empty">no workspaces open</div>';
   }
 }
@@ -54,9 +54,9 @@ function renderEntries(parent, entries, rootIndex) {
       const dirKey = 'r' + rootIndex + ':' + entry.path;
       const details = document.createElement('details');
       details.className = 'tree-dir';
-      details.open = !!AFS.treeOpen[dirKey]; // default closed
+      details.open = !!WKS.treeOpen[dirKey]; // default closed
       details.addEventListener('toggle', () => {
-        AFS.treeOpen[dirKey] = details.open;
+        WKS.treeOpen[dirKey] = details.open;
         saveWorkspaceState();
       });
       const summary = document.createElement('summary');
@@ -100,20 +100,20 @@ function renderEntries(parent, entries, rootIndex) {
 // ── CONTEXT MENUS ──
 
 function closeContextMenu() {
-  if (AFS.contextMenu) {
-    AFS.contextMenu.remove();
-    AFS.contextMenu = null;
+  if (WKS.contextMenu) {
+    WKS.contextMenu.remove();
+    WKS.contextMenu = null;
   }
 }
 
 function createContextMenu(x, y, items) {
   closeContextMenu();
   const menu = document.createElement('div');
-  menu.className = 'af-context-menu';
+  menu.className = 'works-context-menu';
   for (const item of items) {
     if (item === '---') {
       const sep = document.createElement('div');
-      sep.className = 'af-ctx-sep';
+      sep.className = 'works-ctx-sep';
       menu.appendChild(sep);
       continue;
     }
@@ -126,7 +126,7 @@ function createContextMenu(x, y, items) {
   menu.style.left = x + 'px';
   menu.style.top = y + 'px';
   document.body.appendChild(menu);
-  AFS.contextMenu = menu;
+  WKS.contextMenu = menu;
 
   // close on outside click
   setTimeout(() => {
@@ -135,7 +135,7 @@ function createContextMenu(x, y, items) {
 }
 
 function showRootContextMenu(e, rootIndex) {
-  const root = AFS.roots[rootIndex];
+  const root = WKS.roots[rootIndex];
   const items = [];
 
   items.push({
@@ -215,7 +215,7 @@ async function promptNewNotebook(rootIndex, parentPath) {
   const name = prompt('notebook name:', 'untitled.html');
   if (!name) return;
   const finalName = (name.endsWith('.html') || name.endsWith('.txt')) ? name : name + '.html';
-  const root = AFS.roots[rootIndex];
+  const root = WKS.roots[rootIndex];
   let content;
   if (finalName.endsWith('.txt')) {
     content = '/// auditable\n/// title: ' + finalName.replace(/\.txt$/, '') + '\n';
@@ -237,7 +237,7 @@ async function promptNewNotebook(rootIndex, parentPath) {
 }
 
 async function promptRenameBox(rootIndex) {
-  const root = AFS.roots[rootIndex];
+  const root = WKS.roots[rootIndex];
   if (root.type !== 'box') return;
   const newName = prompt('rename box:', root.name);
   if (!newName || newName === root.name) return;
@@ -249,7 +249,7 @@ async function promptRenameBox(rootIndex) {
 }
 
 async function promptRename(rootIndex, entry) {
-  const root = AFS.roots[rootIndex];
+  const root = WKS.roots[rootIndex];
   const newName = prompt('rename:', entry.name);
   if (!newName || newName === entry.name) return;
 
@@ -261,7 +261,7 @@ async function promptRename(rootIndex, entry) {
     await boxRename(root.boxId, oldPath, newPath);
 
     // update any open tabs
-    for (const tab of AFS.tabs) {
+    for (const tab of WKS.tabs) {
       if (tab.rootIndex === rootIndex && (tab.path === oldPath || tab.path.startsWith(oldPath + '/'))) {
         tab.path = newPath + tab.path.slice(oldPath.length);
         tab.title = newName;
@@ -290,7 +290,7 @@ async function promptDelete(rootIndex, entry) {
   if (!confirm('delete ' + entry.name + '?')) return;
 
   // close any open tabs for this file
-  const tabsToClose = AFS.tabs.filter(t =>
+  const tabsToClose = WKS.tabs.filter(t =>
     t.rootIndex === rootIndex && (t.path === entry.path || t.path.startsWith(entry.path + '/'))
   );
   for (const tab of tabsToClose) closeTab(tab.id);
@@ -300,7 +300,7 @@ async function promptDelete(rootIndex, entry) {
 }
 
 async function exportBox(rootIndex) {
-  const root = AFS.roots[rootIndex];
+  const root = WKS.roots[rootIndex];
   if (root.type !== 'box') return;
   const html = await boxExport(root.boxId);
   if (!html) return;
@@ -357,13 +357,13 @@ async function exportEntryAsHtml(rootIndex, entry) {
 
 function removeRoot(rootIndex) {
   // close tabs belonging to this root
-  const tabsToClose = AFS.tabs.filter(t => t.rootIndex === rootIndex);
+  const tabsToClose = WKS.tabs.filter(t => t.rootIndex === rootIndex);
   for (const tab of tabsToClose) closeTab(tab.id);
 
-  AFS.roots.splice(rootIndex, 1);
+  WKS.roots.splice(rootIndex, 1);
 
   // fix rootIndex in remaining tabs
-  for (const tab of AFS.tabs) {
+  for (const tab of WKS.tabs) {
     if (tab.rootIndex > rootIndex) tab.rootIndex--;
   }
 
