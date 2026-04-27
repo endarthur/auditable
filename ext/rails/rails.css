@@ -230,6 +230,14 @@
      style by toggleFloatMaximized. No structural CSS change needed here. */
 }
 
+/* Single-tab floats: hide the redundant in-stack strip. The titlebar already
+   shows the tab title, and there are no peers to switch between. As soon as
+   a second tab joins (drop on titlebar), the class is dropped on the next
+   chrome rebuild and the strip reappears. */
+.rails-float.rails-float-single-tab .rails-strip-wrap {
+  display: none;
+}
+
 .rails-titlebar {
   flex: 0 0 auto;
   display: flex;
@@ -260,11 +268,24 @@
   cursor: pointer;
 }
 
+/* Per-float handles overlay — sibling of .rails-float in floatsLayer, sized
+   to match the float, but at a higher z so it paints above the panel. The
+   overlay itself is pointer-transparent; only the 8 handle strips re-enable
+   pointer events. Hidden when the float is minimized (no resize affordance
+   on a collapsed-to-titlebar float). */
+.rails-float-handles {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+.rails-float-handles.rails-minimized {
+  display: none;
+}
+
 /* Resize handles — 8 per float. Edges are 6px thick strips; corners are
    12×12 squares that overlap the edges and cover the true corners. */
 .rails-resize-handle {
   position: absolute;
-  z-index: 2;
   touch-action: none;
   pointer-events: auto;
 }

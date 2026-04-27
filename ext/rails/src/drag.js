@@ -658,6 +658,7 @@ function makeZoneEl(inst, z) {
 // Zones for a tab drag — includes new-float.
 function computeZones(inst, tab, touch) {
   const zones = collectRailsZones(inst);
+  collectFloatStackZones(inst, zones);
   collectFloatTitlebarZones(inst, zones);
   const dropZones = inst.config.dropZones || {};
   if (dropZones['new-float'] !== false) {
@@ -690,9 +691,11 @@ function inflateZonesForTouch(zones) {
 
 // Zones for float redock (float titlebar dragged onto rails) — rails-only,
 // no new-float (can't redock into another new float). excludeFloatId skips
-// the dragging float's own titlebar zone so self-drops don't happen.
+// the dragging float's own titlebar / strip / body zones so self-drops don't
+// happen.
 function computeRedockZones(inst, tab, excludeFloatId) {
   const zones = collectRailsZones(inst);
+  collectFloatStackZones(inst, zones, excludeFloatId);
   collectFloatTitlebarZones(inst, zones, excludeFloatId);
   return filterZones(inst, zones, tab);
 }
@@ -746,44 +749,83 @@ function collectRailsZones(inst) {
           rect: { x: rr.left - wsRect.left, y: gy - 9, w: rr.width, h: 18 } });
       }
 
-      const strip = stackEl.querySelector('.rails-strip');
-      if (!strip) return;
-      const stripRect = strip.getBoundingClientRect();
-
-      if (enabled('tab-append-strip')) {
-        zones.push({ type: 'tab-append', stackId: stack.id,
-          rect: { x: stripRect.left - wsRect.left, y: stripRect.top - wsRect.top,
-                  w: stripRect.width, h: stripRect.height } });
-      }
-
-      if (enabled('tab-insert')) {
-        const tabEls = strip.querySelectorAll('.rails-tab');
-        const inserts = [];
-        tabEls.forEach((t, ti) => {
-          const r = t.getBoundingClientRect();
-          inserts.push({ x: r.left, at: ti });
-        });
-        inserts.push({ x: stripRect.right, at: tabEls.length });
-        inserts.forEach(ins => {
-          zones.push({ type: 'tab-insert', stackId: stack.id, at: ins.at,
-            rect: { x: ins.x - wsRect.left - 3, y: stripRect.top - wsRect.top,
-                    w: 6, h: stripRect.height } });
-        });
-      }
-
-      if (enabled('tab-append-body')) {
-        const slot = stackEl.querySelector('.rails-slot');
-        if (slot) {
-          const slotRect = slot.getBoundingClientRect();
-          zones.push({ type: 'tab-append', stackId: stack.id,
-            rect: { x: slotRect.left - wsRect.left, y: slotRect.top - wsRect.top,
-                    w: slotRect.width, h: slotRect.height },
-            priority: 'body-append' });
-        }
-      }
+      collectStackInternalZones(zones, stackEl, stack, wsRect, enabled);
     });
   });
   return zones;
+}
+
+// Push tab-insert / tab-append-strip / tab-append-body zones for a stack's
+// rendered DOM. Used both for rail-stacks (via collectRailsZones) and for
+// float-stacks (via collectFloatStackZones), so dropping into a float behaves
+// the same as dropping into a docked stack — true mini-workspace semantics.
+//
+// A hidden strip (single-tab float, where rails.css collapses .rails-strip-wrap)
+// reports a zero-area rect; we skip strip-derived zones in that case so we
+// don't generate dead hit-targets. Body-append still applies — drops on the
+// float's slot append to the existing stack rather than spawning a new float
+// stacked on top.
+function collectStackInternalZones(zones, stackEl, stack, wsRect, enabled) {
+  const strip = stackEl.querySelector('.rails-strip');
+  if (strip) {
+    const stripRect = strip.getBoundingClientRect();
+    const stripVisible = stripRect.width > 0 && stripRect.height > 0;
+
+    if (stripVisible && enabled('tab-append-strip')) {
+      zones.push({ type: 'tab-append', stackId: stack.id,
+        rect: { x: stripRect.left - wsRect.left, y: stripRect.top - wsRect.top,
+                w: stripRect.width, h: stripRect.height } });
+    }
+
+    if (stripVisible && enabled('tab-insert')) {
+      const tabEls = strip.querySelectorAll('.rails-tab');
+      const inserts = [];
+      tabEls.forEach((t, ti) => {
+        const r = t.getBoundingClientRect();
+        inserts.push({ x: r.left, at: ti });
+      });
+      inserts.push({ x: stripRect.right, at: tabEls.length });
+      inserts.forEach(ins => {
+        zones.push({ type: 'tab-insert', stackId: stack.id, at: ins.at,
+          rect: { x: ins.x - wsRect.left - 3, y: stripRect.top - wsRect.top,
+                  w: 6, h: stripRect.height } });
+      });
+    }
+  }
+
+  if (enabled('tab-append-body')) {
+    const slot = stackEl.querySelector('.rails-slot');
+    if (slot) {
+      const slotRect = slot.getBoundingClientRect();
+      if (slotRect.width > 0 && slotRect.height > 0) {
+        zones.push({ type: 'tab-append', stackId: stack.id,
+          rect: { x: slotRect.left - wsRect.left, y: slotRect.top - wsRect.top,
+                  w: slotRect.width, h: slotRect.height },
+          priority: 'body-append' });
+      }
+    }
+  }
+}
+
+// Per-stack drop zones for floats — same set as rail-stacks but sourced from
+// the floats sublayer. Skips minimized/maximized floats (no usable strip/slot)
+// and the dragging float's own zones (excludeFloatId) so a redock can't drop
+// the float onto itself.
+function collectFloatStackZones(inst, zones, excludeFloatId) {
+  if (!Array.isArray(inst.state.floats)) return;
+  const wsRect = inst.host.getBoundingClientRect();
+  const dropZones = inst.config.dropZones || {};
+  const enabled = (type) => dropZones[type] !== false;
+  for (const float of inst.state.floats) {
+    if (float.id === excludeFloatId) continue;
+    if (float.minimized) continue;
+    if (!float.stack) continue;
+    const stackEl = inst.floatsLayer?.querySelector(
+      `.rails-float[data-float-id="${cssEscape(float.id)}"] .rails-stack`
+    );
+    if (!stackEl) continue;
+    collectStackInternalZones(zones, stackEl, float.stack, wsRect, enabled);
+  }
 }
 
 function collectFloatTitlebarZones(inst, zones, excludeFloatId) {

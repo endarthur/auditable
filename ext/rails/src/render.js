@@ -10,13 +10,20 @@ export function cssEscape(s) {
 }
 
 // z-index scheme. Rail panels sit at RAIL_PANEL_Z, above rail/stack splitters
-// (z:2) but below the lowest float. Each float's chrome and panel get
-// interleaved z-indexes so that float windows (chrome + panel together) stack
-// as discrete units — a higher float fully paints above a lower float.
+// (z:2) but below the lowest float. Each float gets a 10-unit z-band:
+//   chrome  (titlebar/strip/slot)        : base + z*10 + 0
+//   panel   (the rendered tab body)      : base + z*10 + 5
+//   handles (resize handles overlay)     : base + z*10 + 6
+// The handles overlay is a sibling of the float (not a child), so it lives
+// outside the float's stacking context and can paint above the panel — which
+// otherwise would cover the bottom and side handles wherever the slot extends
+// to the float's edges. The next float's chrome starts at +10 above this one,
+// so float windows still stack as discrete units.
 const RAIL_PANEL_Z = 5;
 const FLOAT_Z_BASE = 100;
 const FLOAT_Z_STEP = 10;
 const FLOAT_PANEL_OFFSET = 5;
+const FLOAT_HANDLES_OFFSET = 6;
 
 export function floatChromeZ(z) {
   return FLOAT_Z_BASE + z * FLOAT_Z_STEP;
@@ -24,6 +31,10 @@ export function floatChromeZ(z) {
 
 export function floatPanelZ(z) {
   return FLOAT_Z_BASE + z * FLOAT_Z_STEP + FLOAT_PANEL_OFFSET;
+}
+
+export function floatHandlesZ(z) {
+  return FLOAT_Z_BASE + z * FLOAT_Z_STEP + FLOAT_HANDLES_OFFSET;
 }
 
 // Chrome sublayer structure (built once in api.js's createRails init):
@@ -303,6 +314,7 @@ function renderFloats(inst) {
   const sorted = [...inst.state.floats].sort((a, b) => a.z - b.z);
   for (const float of sorted) {
     inst.floatsLayer.appendChild(buildFloatEl(inst, float));
+    inst.floatsLayer.appendChild(buildFloatHandlesEl(inst, float));
   }
 }
 
@@ -311,6 +323,10 @@ function buildFloatEl(inst, float) {
   el.className = 'rails-float';
   if (float.minimized) el.classList.add('rails-minimized');
   if (float.maximized) el.classList.add('rails-maximized');
+  // Auto-hide the in-stack tab strip when the float holds exactly one tab.
+  // The titlebar already shows that tab's title, so the strip would just be
+  // a redundant single-pill row. CSS keys off this class.
+  if ((float.stack?.tabs?.length ?? 0) <= 1) el.classList.add('rails-float-single-tab');
   el.dataset.floatId = float.id;
   el.setAttribute('role', 'dialog');
   el.setAttribute('aria-label', float.stack?.tabs.find(t => t.id === float.stack.active)?.title ?? 'Floating panel');
@@ -364,15 +380,6 @@ function buildFloatEl(inst, float) {
     el.appendChild(stackEl);
   }
 
-  // 8 resize handles
-  for (const dir of ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']) {
-    const handle = document.createElement('div');
-    handle.className = `rails-resize-handle rails-resize-handle-${dir}`;
-    handle.dataset.resize = dir;
-    handle.addEventListener('pointerdown', e => inst._onFloatResizeDown(e, float.id, dir));
-    el.appendChild(handle);
-  }
-
   // Raise-on-pointerdown anywhere in the float.
   el.addEventListener('pointerdown', e => {
     // Only raise if the float isn't already topmost.
@@ -381,6 +388,37 @@ function buildFloatEl(inst, float) {
   }, true);
 
   return el;
+}
+
+// Per-float handles overlay — sibling of the float in floatsLayer, at z above
+// the panel. Pointer-transparent; only the 8 handles re-enable pointer events.
+// The overlay's bounds and z-index are kept synced to the float by
+// setFloatBoundsInPlace and raiseFloatInPlace.
+function buildFloatHandlesEl(inst, float) {
+  const overlay = document.createElement('div');
+  overlay.className = 'rails-float-handles';
+  if (float.minimized) overlay.classList.add('rails-minimized');
+  if (float.maximized) overlay.classList.add('rails-maximized');
+  overlay.dataset.handlesFor = float.id;
+  overlay.style.left = float.x + 'px';
+  overlay.style.top = float.y + 'px';
+  overlay.style.width = float.w + 'px';
+  overlay.style.height = float.h + 'px';
+  overlay.style.zIndex = floatHandlesZ(float.z);
+
+  for (const dir of ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']) {
+    const handle = document.createElement('div');
+    handle.className = `rails-resize-handle rails-resize-handle-${dir}`;
+    handle.dataset.resize = dir;
+    handle.addEventListener('pointerdown', e => inst._onFloatResizeDown(e, float.id, dir));
+    overlay.appendChild(handle);
+  }
+
+  // No raise-on-pointerdown listener here: onFloatResizeDown already raises
+  // the float at resize start, and the overlay itself is pointer-transparent
+  // (pointer-events: none) so non-handle clicks fall through to the panel.
+
+  return overlay;
 }
 
 function makeTitleButton(cls, glyph, label) {
@@ -534,8 +572,8 @@ export function activateInPlace(inst, stack, tabId) {
   if (tab) inst._emit('tab:activate', { tab, stack });
 }
 
-// In-place raise of a float: update zIndex on the single float element and
-// re-run reposition so the float's panel z-index (10 + float.z) is current.
+// In-place raise of a float: update zIndex on the float element + handles
+// overlay, then re-run reposition so the float's panel z-index is current.
 // Without the reposition, a freshly-raised float's panel still has its old
 // z-index and a previously-topmost float's panel keeps painting above it.
 export function raiseFloatInPlace(inst, floatId) {
@@ -546,11 +584,16 @@ export function raiseFloatInPlace(inst, floatId) {
   float.z = maxZ + 1;
   const el = inst.chromeLayer.querySelector(`.rails-float[data-float-id="${cssEscape(floatId)}"]`);
   if (el) el.style.zIndex = floatChromeZ(float.z);
+  const handlesEl = inst.chromeLayer.querySelector(
+    `.rails-float-handles[data-handles-for="${cssEscape(floatId)}"]`
+  );
+  if (handlesEl) handlesEl.style.zIndex = floatHandlesZ(float.z);
   reposition(inst);
   inst._emit('float:raise', { float });
 }
 
-// In-place bounds update (drag / resize). No chrome rebuild.
+// In-place bounds update (drag / resize). No chrome rebuild. Updates both
+// the float root element and its handles overlay sibling.
 export function setFloatBoundsInPlace(inst, floatId, bounds) {
   const float = inst.state.floats.find(f => f.id === floatId);
   if (!float) return;
@@ -564,6 +607,15 @@ export function setFloatBoundsInPlace(inst, floatId, bounds) {
     el.style.top = float.y + 'px';
     el.style.width = float.w + 'px';
     el.style.height = float.h + 'px';
+  }
+  const handlesEl = inst.chromeLayer.querySelector(
+    `.rails-float-handles[data-handles-for="${cssEscape(floatId)}"]`
+  );
+  if (handlesEl) {
+    handlesEl.style.left = float.x + 'px';
+    handlesEl.style.top = float.y + 'px';
+    handlesEl.style.width = float.w + 'px';
+    handlesEl.style.height = float.h + 'px';
   }
   reposition(inst);
 }

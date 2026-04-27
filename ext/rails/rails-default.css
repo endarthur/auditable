@@ -183,10 +183,12 @@
 .rails-float.rails-minimized {
   height: auto !important;
 }
-.rails-float.rails-minimized .rails-stack,
-.rails-float.rails-minimized .rails-resize-handle {
+.rails-float.rails-minimized .rails-stack {
   display: none;
 }
+/* Handles overlay is a sibling, not a descendant of .rails-float — its own
+   .rails-minimized class is synced by toggleFloatMinimized. The structural
+   `display: none` for that case lives in rails.css. */
 
 .rails-titlebar {
   background: var(--rails-chrome);

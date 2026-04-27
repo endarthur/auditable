@@ -142,7 +142,8 @@ host
 │   ├── .rails-rails               — rail/stack layout
 │   │   └── .rails-rail[] > .rails-stack[] > (.rails-strip, .rails-slot)
 │   └── .rails-floats              — float frames (drawn above rails)
-│       └── .rails-float[] > (.rails-titlebar, .rails-strip, .rails-slot, .rails-resize-handle[])
+│       └── for each float: .rails-float        > (.rails-titlebar, .rails-strip, .rails-slot)
+│                            .rails-float-handles > .rails-resize-handle[]   (sibling, z above panel)
 └── .rails-content                (absolute, inset: 0, pointer-events: none)
     └── .rails-panel[]             — absolute, positioned to match slots from either chrome sub-layer
 ```
@@ -421,10 +422,12 @@ Computed at drag start from the current layout.
 | `new-rail` | 18px-wide vertical strip between rails and at outer left/right edges | Create new rail with one stack containing the dragged tab |
 | `new-stack` | 18px-tall horizontal strip between stacks in a rail, and at rail top/bottom edges | Create new stack in that rail with the dragged tab |
 | `tab-insert` | 6px-wide vertical strip at each tab's leading edge in any strip (rail-stack or float), plus trailing edge | Insert the tab at that index in that stack |
-| `tab-append` (strip) | The whole tab strip | Append tab to that stack |
-| `tab-append` (body) | The whole panel body area, lowest priority | Append tab to that stack |
+| `tab-append` (strip) | The whole tab strip — rail-stack or float | Append tab to that stack |
+| `tab-append` (body) | The whole panel body area — rail-stack or float — lowest priority | Append tab to that stack |
 | `new-float` | Everywhere inside the workspace not covered by a higher-priority zone | Create new float at cursor position with the dragged tab |
 | `float-titlebar` | The titlebar of each existing float | Append tab to that float's stack |
+
+Floats are first-class mini-stacks: every tab-level drop zone (`tab-insert`, `tab-append-strip`, `tab-append-body`) is generated for float stacks too, so dropping inside an existing float adds a tab to that float rather than spawning a new float on top of it. Single-tab floats hide their in-stack strip (the titlebar already labels the only tab); the strip reappears as soon as a second tab joins. `float-titlebar` is the only float-specific zone, kept because the strip can be hidden and the titlebar gives a stable always-visible drop target.
 
 ### 6.2 Precedence
 
@@ -530,7 +533,9 @@ The library ships two stylesheets:
 | `.rails-titlebar` | Float titlebar (drag handle + buttons) |
 | `.rails-titlebar-buttons` | Button container (minimize, maximize, close) |
 | `.rails-btn-minimize`, `.rails-btn-maximize`, `.rails-btn-close` | Titlebar buttons |
-| `.rails-resize-handle` | Float resize handle |
+| `.rails-float-handles` | Per-float resize-handle overlay (sibling of `.rails-float`, sized to match it, z-index above the panel so handles aren't covered by the slot's panel paint). `data-handles-for` attribute carries the float id. |
+| `.rails-float-handles.rails-minimized` | Set when the float is minimized — library hides the overlay |
+| `.rails-resize-handle` | Float resize handle (lives inside `.rails-float-handles`) |
 | `.rails-resize-handle-n`, `-s`, `-e`, `-w`, `-ne`, `-nw`, `-se`, `-sw` | Edge/corner variants |
 | `.rails-ghost` | Drag ghost following the cursor |
 | `.rails-zone` | Drop zone overlay |
@@ -623,10 +628,11 @@ const rails = createRails(host, {
 
 ```css
 .rails-float.rails-minimized .rails-strip,
-.rails-float.rails-minimized .rails-slot,
-.rails-float.rails-minimized .rails-resize-handle {
+.rails-float.rails-minimized .rails-slot {
   display: none;
 }
+/* The handles overlay is a sibling of .rails-float — library mirrors the
+   minimized class onto it, and rails.css already hides it when set. */
 .rails-float.rails-minimized { height: auto !important; }
 ```
 

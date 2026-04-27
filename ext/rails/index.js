@@ -249,13 +249,20 @@ function cssEscape(s) {
 }
 
 // z-index scheme. Rail panels sit at RAIL_PANEL_Z, above rail/stack splitters
-// (z:2) but below the lowest float. Each float's chrome and panel get
-// interleaved z-indexes so that float windows (chrome + panel together) stack
-// as discrete units — a higher float fully paints above a lower float.
+// (z:2) but below the lowest float. Each float gets a 10-unit z-band:
+//   chrome  (titlebar/strip/slot)        : base + z*10 + 0
+//   panel   (the rendered tab body)      : base + z*10 + 5
+//   handles (resize handles overlay)     : base + z*10 + 6
+// The handles overlay is a sibling of the float (not a child), so it lives
+// outside the float's stacking context and can paint above the panel — which
+// otherwise would cover the bottom and side handles wherever the slot extends
+// to the float's edges. The next float's chrome starts at +10 above this one,
+// so float windows still stack as discrete units.
 const RAIL_PANEL_Z = 5;
 const FLOAT_Z_BASE = 100;
 const FLOAT_Z_STEP = 10;
 const FLOAT_PANEL_OFFSET = 5;
+const FLOAT_HANDLES_OFFSET = 6;
 
 function floatChromeZ(z) {
   return FLOAT_Z_BASE + z * FLOAT_Z_STEP;
@@ -263,6 +270,10 @@ function floatChromeZ(z) {
 
 function floatPanelZ(z) {
   return FLOAT_Z_BASE + z * FLOAT_Z_STEP + FLOAT_PANEL_OFFSET;
+}
+
+function floatHandlesZ(z) {
+  return FLOAT_Z_BASE + z * FLOAT_Z_STEP + FLOAT_HANDLES_OFFSET;
 }
 
 // Chrome sublayer structure (built once in api.js's createRails init):
@@ -542,6 +553,7 @@ function renderFloats(inst) {
   const sorted = [...inst.state.floats].sort((a, b) => a.z - b.z);
   for (const float of sorted) {
     inst.floatsLayer.appendChild(buildFloatEl(inst, float));
+    inst.floatsLayer.appendChild(buildFloatHandlesEl(inst, float));
   }
 }
 
@@ -550,6 +562,10 @@ function buildFloatEl(inst, float) {
   el.className = 'rails-float';
   if (float.minimized) el.classList.add('rails-minimized');
   if (float.maximized) el.classList.add('rails-maximized');
+  // Auto-hide the in-stack tab strip when the float holds exactly one tab.
+  // The titlebar already shows that tab's title, so the strip would just be
+  // a redundant single-pill row. CSS keys off this class.
+  if ((float.stack?.tabs?.length ?? 0) <= 1) el.classList.add('rails-float-single-tab');
   el.dataset.floatId = float.id;
   el.setAttribute('role', 'dialog');
   el.setAttribute('aria-label', float.stack?.tabs.find(t => t.id === float.stack.active)?.title ?? 'Floating panel');
@@ -603,15 +619,6 @@ function buildFloatEl(inst, float) {
     el.appendChild(stackEl);
   }
 
-  // 8 resize handles
-  for (const dir of ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']) {
-    const handle = document.createElement('div');
-    handle.className = `rails-resize-handle rails-resize-handle-${dir}`;
-    handle.dataset.resize = dir;
-    handle.addEventListener('pointerdown', e => inst._onFloatResizeDown(e, float.id, dir));
-    el.appendChild(handle);
-  }
-
   // Raise-on-pointerdown anywhere in the float.
   el.addEventListener('pointerdown', e => {
     // Only raise if the float isn't already topmost.
@@ -620,6 +627,37 @@ function buildFloatEl(inst, float) {
   }, true);
 
   return el;
+}
+
+// Per-float handles overlay — sibling of the float in floatsLayer, at z above
+// the panel. Pointer-transparent; only the 8 handles re-enable pointer events.
+// The overlay's bounds and z-index are kept synced to the float by
+// setFloatBoundsInPlace and raiseFloatInPlace.
+function buildFloatHandlesEl(inst, float) {
+  const overlay = document.createElement('div');
+  overlay.className = 'rails-float-handles';
+  if (float.minimized) overlay.classList.add('rails-minimized');
+  if (float.maximized) overlay.classList.add('rails-maximized');
+  overlay.dataset.handlesFor = float.id;
+  overlay.style.left = float.x + 'px';
+  overlay.style.top = float.y + 'px';
+  overlay.style.width = float.w + 'px';
+  overlay.style.height = float.h + 'px';
+  overlay.style.zIndex = floatHandlesZ(float.z);
+
+  for (const dir of ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw']) {
+    const handle = document.createElement('div');
+    handle.className = `rails-resize-handle rails-resize-handle-${dir}`;
+    handle.dataset.resize = dir;
+    handle.addEventListener('pointerdown', e => inst._onFloatResizeDown(e, float.id, dir));
+    overlay.appendChild(handle);
+  }
+
+  // No raise-on-pointerdown listener here: onFloatResizeDown already raises
+  // the float at resize start, and the overlay itself is pointer-transparent
+  // (pointer-events: none) so non-handle clicks fall through to the panel.
+
+  return overlay;
 }
 
 function makeTitleButton(cls, glyph, label) {
@@ -773,8 +811,8 @@ function activateInPlace(inst, stack, tabId) {
   if (tab) inst._emit('tab:activate', { tab, stack });
 }
 
-// In-place raise of a float: update zIndex on the single float element and
-// re-run reposition so the float's panel z-index (10 + float.z) is current.
+// In-place raise of a float: update zIndex on the float element + handles
+// overlay, then re-run reposition so the float's panel z-index is current.
 // Without the reposition, a freshly-raised float's panel still has its old
 // z-index and a previously-topmost float's panel keeps painting above it.
 function raiseFloatInPlace(inst, floatId) {
@@ -785,11 +823,16 @@ function raiseFloatInPlace(inst, floatId) {
   float.z = maxZ + 1;
   const el = inst.chromeLayer.querySelector(`.rails-float[data-float-id="${cssEscape(floatId)}"]`);
   if (el) el.style.zIndex = floatChromeZ(float.z);
+  const handlesEl = inst.chromeLayer.querySelector(
+    `.rails-float-handles[data-handles-for="${cssEscape(floatId)}"]`
+  );
+  if (handlesEl) handlesEl.style.zIndex = floatHandlesZ(float.z);
   reposition(inst);
   inst._emit('float:raise', { float });
 }
 
-// In-place bounds update (drag / resize). No chrome rebuild.
+// In-place bounds update (drag / resize). No chrome rebuild. Updates both
+// the float root element and its handles overlay sibling.
 function setFloatBoundsInPlace(inst, floatId, bounds) {
   const float = inst.state.floats.find(f => f.id === floatId);
   if (!float) return;
@@ -803,6 +846,15 @@ function setFloatBoundsInPlace(inst, floatId, bounds) {
     el.style.top = float.y + 'px';
     el.style.width = float.w + 'px';
     el.style.height = float.h + 'px';
+  }
+  const handlesEl = inst.chromeLayer.querySelector(
+    `.rails-float-handles[data-handles-for="${cssEscape(floatId)}"]`
+  );
+  if (handlesEl) {
+    handlesEl.style.left = float.x + 'px';
+    handlesEl.style.top = float.y + 'px';
+    handlesEl.style.width = float.w + 'px';
+    handlesEl.style.height = float.h + 'px';
   }
   reposition(inst);
 }
@@ -1468,6 +1520,7 @@ function makeZoneEl(inst, z) {
 // Zones for a tab drag — includes new-float.
 function computeZones(inst, tab, touch) {
   const zones = collectRailsZones(inst);
+  collectFloatStackZones(inst, zones);
   collectFloatTitlebarZones(inst, zones);
   const dropZones = inst.config.dropZones || {};
   if (dropZones['new-float'] !== false) {
@@ -1500,9 +1553,11 @@ function inflateZonesForTouch(zones) {
 
 // Zones for float redock (float titlebar dragged onto rails) — rails-only,
 // no new-float (can't redock into another new float). excludeFloatId skips
-// the dragging float's own titlebar zone so self-drops don't happen.
+// the dragging float's own titlebar / strip / body zones so self-drops don't
+// happen.
 function computeRedockZones(inst, tab, excludeFloatId) {
   const zones = collectRailsZones(inst);
+  collectFloatStackZones(inst, zones, excludeFloatId);
   collectFloatTitlebarZones(inst, zones, excludeFloatId);
   return filterZones(inst, zones, tab);
 }
@@ -1556,44 +1611,83 @@ function collectRailsZones(inst) {
           rect: { x: rr.left - wsRect.left, y: gy - 9, w: rr.width, h: 18 } });
       }
 
-      const strip = stackEl.querySelector('.rails-strip');
-      if (!strip) return;
-      const stripRect = strip.getBoundingClientRect();
-
-      if (enabled('tab-append-strip')) {
-        zones.push({ type: 'tab-append', stackId: stack.id,
-          rect: { x: stripRect.left - wsRect.left, y: stripRect.top - wsRect.top,
-                  w: stripRect.width, h: stripRect.height } });
-      }
-
-      if (enabled('tab-insert')) {
-        const tabEls = strip.querySelectorAll('.rails-tab');
-        const inserts = [];
-        tabEls.forEach((t, ti) => {
-          const r = t.getBoundingClientRect();
-          inserts.push({ x: r.left, at: ti });
-        });
-        inserts.push({ x: stripRect.right, at: tabEls.length });
-        inserts.forEach(ins => {
-          zones.push({ type: 'tab-insert', stackId: stack.id, at: ins.at,
-            rect: { x: ins.x - wsRect.left - 3, y: stripRect.top - wsRect.top,
-                    w: 6, h: stripRect.height } });
-        });
-      }
-
-      if (enabled('tab-append-body')) {
-        const slot = stackEl.querySelector('.rails-slot');
-        if (slot) {
-          const slotRect = slot.getBoundingClientRect();
-          zones.push({ type: 'tab-append', stackId: stack.id,
-            rect: { x: slotRect.left - wsRect.left, y: slotRect.top - wsRect.top,
-                    w: slotRect.width, h: slotRect.height },
-            priority: 'body-append' });
-        }
-      }
+      collectStackInternalZones(zones, stackEl, stack, wsRect, enabled);
     });
   });
   return zones;
+}
+
+// Push tab-insert / tab-append-strip / tab-append-body zones for a stack's
+// rendered DOM. Used both for rail-stacks (via collectRailsZones) and for
+// float-stacks (via collectFloatStackZones), so dropping into a float behaves
+// the same as dropping into a docked stack — true mini-workspace semantics.
+//
+// A hidden strip (single-tab float, where rails.css collapses .rails-strip-wrap)
+// reports a zero-area rect; we skip strip-derived zones in that case so we
+// don't generate dead hit-targets. Body-append still applies — drops on the
+// float's slot append to the existing stack rather than spawning a new float
+// stacked on top.
+function collectStackInternalZones(zones, stackEl, stack, wsRect, enabled) {
+  const strip = stackEl.querySelector('.rails-strip');
+  if (strip) {
+    const stripRect = strip.getBoundingClientRect();
+    const stripVisible = stripRect.width > 0 && stripRect.height > 0;
+
+    if (stripVisible && enabled('tab-append-strip')) {
+      zones.push({ type: 'tab-append', stackId: stack.id,
+        rect: { x: stripRect.left - wsRect.left, y: stripRect.top - wsRect.top,
+                w: stripRect.width, h: stripRect.height } });
+    }
+
+    if (stripVisible && enabled('tab-insert')) {
+      const tabEls = strip.querySelectorAll('.rails-tab');
+      const inserts = [];
+      tabEls.forEach((t, ti) => {
+        const r = t.getBoundingClientRect();
+        inserts.push({ x: r.left, at: ti });
+      });
+      inserts.push({ x: stripRect.right, at: tabEls.length });
+      inserts.forEach(ins => {
+        zones.push({ type: 'tab-insert', stackId: stack.id, at: ins.at,
+          rect: { x: ins.x - wsRect.left - 3, y: stripRect.top - wsRect.top,
+                  w: 6, h: stripRect.height } });
+      });
+    }
+  }
+
+  if (enabled('tab-append-body')) {
+    const slot = stackEl.querySelector('.rails-slot');
+    if (slot) {
+      const slotRect = slot.getBoundingClientRect();
+      if (slotRect.width > 0 && slotRect.height > 0) {
+        zones.push({ type: 'tab-append', stackId: stack.id,
+          rect: { x: slotRect.left - wsRect.left, y: slotRect.top - wsRect.top,
+                  w: slotRect.width, h: slotRect.height },
+          priority: 'body-append' });
+      }
+    }
+  }
+}
+
+// Per-stack drop zones for floats — same set as rail-stacks but sourced from
+// the floats sublayer. Skips minimized/maximized floats (no usable strip/slot)
+// and the dragging float's own zones (excludeFloatId) so a redock can't drop
+// the float onto itself.
+function collectFloatStackZones(inst, zones, excludeFloatId) {
+  if (!Array.isArray(inst.state.floats)) return;
+  const wsRect = inst.host.getBoundingClientRect();
+  const dropZones = inst.config.dropZones || {};
+  const enabled = (type) => dropZones[type] !== false;
+  for (const float of inst.state.floats) {
+    if (float.id === excludeFloatId) continue;
+    if (float.minimized) continue;
+    if (!float.stack) continue;
+    const stackEl = inst.floatsLayer?.querySelector(
+      `.rails-float[data-float-id="${cssEscape(float.id)}"] .rails-stack`
+    );
+    if (!stackEl) continue;
+    collectStackInternalZones(zones, stackEl, float.stack, wsRect, enabled);
+  }
 }
 
 function collectFloatTitlebarZones(inst, zones, excludeFloatId) {
@@ -1908,6 +2002,14 @@ function createRails(host, options = {}) {
     const t = target || defaultAddTarget(inst.state);
     insertAtTarget(inst, tab, t);
     inst._renderChrome();
+    // Emit float:create for the new-float target so consumers see the same
+    // event whether a float was created via floatTab(id) or addTab(tab,
+    // {to:'new-float'}). insertAtTarget pushes the new float to the end of
+    // state.floats, so it's the last entry.
+    if (t.to === 'new-float') {
+      const float = inst.state.floats[inst.state.floats.length - 1];
+      if (float) inst._emit('float:create', { float, tab });
+    }
   }
 
   function closeTab(tabId, opts = {}) {
@@ -2033,9 +2135,14 @@ function createRails(host, options = {}) {
     const float = findFloat(inst.state, floatId);
     if (!float) return;
     float.minimized = !float.minimized;
-    // Update DOM class + visibility in place; emit event.
+    // Update DOM class + visibility in place on both the float and its
+    // handles-overlay sibling; emit event.
     const el = inst.chromeLayer.querySelector(`.rails-float[data-float-id="${cssEscape(floatId)}"]`);
     if (el) el.classList.toggle('rails-minimized', !!float.minimized);
+    const handlesEl = inst.chromeLayer.querySelector(
+      `.rails-float-handles[data-handles-for="${cssEscape(floatId)}"]`
+    );
+    if (handlesEl) handlesEl.classList.toggle('rails-minimized', !!float.minimized);
     reposition(inst);
     inst._emit('float:minimize', { float });
   }
@@ -2273,9 +2380,32 @@ function insertAtTarget(inst, tab, target) {
       rail.stacks.splice(at, 0, stack);
       break;
     }
-    case 'float':
-    case 'new-float':
-      throw new Error('rails: floats not yet implemented (pending next pass)');
+    case 'float': {
+      const float = findFloat(inst.state, target.floatId);
+      if (!float) throw new Error(`rails: float ${target.floatId} not found`);
+      if (!float.stack) throw new Error(`rails: float ${target.floatId} missing stack`);
+      const at = target.at == null ? float.stack.tabs.length : target.at;
+      float.stack.tabs.splice(at, 0, tab);
+      float.stack.active = tab.id;
+      break;
+    }
+    case 'new-float': {
+      const w = target.w ?? inst.config.defaultFloatSize?.w ?? 400;
+      const h = target.h ?? inst.config.defaultFloatSize?.h ?? 300;
+      const x = target.x ?? 80;
+      const y = target.y ?? 80;
+      const maxZ = Math.max(0, ...(inst.state.floats || []).map(f => f.z));
+      const stack = { id: inst._freshId('s'), flex: 1, tabs: [tab], active: tab.id };
+      const float = {
+        id: inst._freshId('f'),
+        stack,
+        x, y, w, h,
+        z: maxZ + 1,
+      };
+      if (!Array.isArray(inst.state.floats)) inst.state.floats = [];
+      inst.state.floats.push(float);
+      break;
+    }
     default:
       throw new Error(`rails: unknown MoveTarget ${target.to}`);
   }

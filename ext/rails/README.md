@@ -66,7 +66,7 @@ Height fallbacks via `height: 100%` are unreliable inside flex containers — us
 ## What's in this release
 
 - Rails + stacks + tabs
-- **Floats** — tear off tabs into draggable/resizable frames, 8 resize handles, maximize/minimize/close, redock by dragging the titlebar onto any rail zone, z-raise on focus
+- **Floats** — tear off tabs into draggable/resizable frames, 8 resize handles, maximize/minimize/close, redock by dragging the titlebar onto any rail zone, z-raise on focus. Floats are first-class mini-stacks: they accept multiple tabs (drop on titlebar, strip, or body), and the in-stack tab strip auto-hides when only one tab is present so the titlebar is the only chrome.
 - **Panel preservation** — `closeTab(id, { preserve: true })` hides the panel instead of destroying it. Per-tab `preserveOnClose: true` flag routes UI close (× / Ctrl-W) through preserve. `releasePreservedPanel(id)` / `listPreservedPanels()` round out the lifecycle. Iframe, canvas, form state intact across close → re-open.
 - **Tab overflow** — when the tab count exceeds the strip width, a `⋯` button appears at the right edge. Clicking emits `strip:overflow` with the list of clipped tabs and a screen-space anchor — consumer renders the menu UI.
 - **Drag ergonomics** — hover-to-activate during drag (hold over an inactive tab for 500ms), auto-scroll overflowing strips when the drag cursor nears the edges, Escape to cancel.

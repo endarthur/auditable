@@ -292,8 +292,10 @@ document.getElementById('add-text').onclick = () => {
 };
 document.getElementById('add-float').onclick = () => {
   const id = gid('t');
-  rails.addTab({ id, kind: 'canvas', title: `float-${nextId}` });
-  rails.floatTab(id, { x: 200 + (nextId * 20) % 200, y: 140 + (nextId * 20) % 200, w: 400, h: 300 });
+  rails.addTab(
+    { id, kind: 'canvas', title: `float-${nextId}` },
+    { to: 'new-float', x: 200 + (nextId * 20) % 200, y: 140 + (nextId * 20) % 200, w: 400, h: 300 }
+  );
 };
 // Consumer-side sample: minimal overflow menu. Rails emits strip:overflow
 // with the list of clipped tabs and a screen-space anchor. Build any UI.

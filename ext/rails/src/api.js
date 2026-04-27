@@ -246,6 +246,14 @@ export function createRails(host, options = {}) {
     const t = target || defaultAddTarget(inst.state);
     insertAtTarget(inst, tab, t);
     inst._renderChrome();
+    // Emit float:create for the new-float target so consumers see the same
+    // event whether a float was created via floatTab(id) or addTab(tab,
+    // {to:'new-float'}). insertAtTarget pushes the new float to the end of
+    // state.floats, so it's the last entry.
+    if (t.to === 'new-float') {
+      const float = inst.state.floats[inst.state.floats.length - 1];
+      if (float) inst._emit('float:create', { float, tab });
+    }
   }
 
   function closeTab(tabId, opts = {}) {
@@ -371,9 +379,14 @@ export function createRails(host, options = {}) {
     const float = findFloat(inst.state, floatId);
     if (!float) return;
     float.minimized = !float.minimized;
-    // Update DOM class + visibility in place; emit event.
+    // Update DOM class + visibility in place on both the float and its
+    // handles-overlay sibling; emit event.
     const el = inst.chromeLayer.querySelector(`.rails-float[data-float-id="${cssEscape(floatId)}"]`);
     if (el) el.classList.toggle('rails-minimized', !!float.minimized);
+    const handlesEl = inst.chromeLayer.querySelector(
+      `.rails-float-handles[data-handles-for="${cssEscape(floatId)}"]`
+    );
+    if (handlesEl) handlesEl.classList.toggle('rails-minimized', !!float.minimized);
     reposition(inst);
     inst._emit('float:minimize', { float });
   }
@@ -611,9 +624,32 @@ function insertAtTarget(inst, tab, target) {
       rail.stacks.splice(at, 0, stack);
       break;
     }
-    case 'float':
-    case 'new-float':
-      throw new Error('rails: floats not yet implemented (pending next pass)');
+    case 'float': {
+      const float = findFloat(inst.state, target.floatId);
+      if (!float) throw new Error(`rails: float ${target.floatId} not found`);
+      if (!float.stack) throw new Error(`rails: float ${target.floatId} missing stack`);
+      const at = target.at == null ? float.stack.tabs.length : target.at;
+      float.stack.tabs.splice(at, 0, tab);
+      float.stack.active = tab.id;
+      break;
+    }
+    case 'new-float': {
+      const w = target.w ?? inst.config.defaultFloatSize?.w ?? 400;
+      const h = target.h ?? inst.config.defaultFloatSize?.h ?? 300;
+      const x = target.x ?? 80;
+      const y = target.y ?? 80;
+      const maxZ = Math.max(0, ...(inst.state.floats || []).map(f => f.z));
+      const stack = { id: inst._freshId('s'), flex: 1, tabs: [tab], active: tab.id };
+      const float = {
+        id: inst._freshId('f'),
+        stack,
+        x, y, w, h,
+        z: maxZ + 1,
+      };
+      if (!Array.isArray(inst.state.floats)) inst.state.floats = [];
+      inst.state.floats.push(float);
+      break;
+    }
     default:
       throw new Error(`rails: unknown MoveTarget ${target.to}`);
   }
