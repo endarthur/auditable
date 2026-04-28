@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>@gcu/dialog — demo</title>
+<link rel="stylesheet" href="./dialog.css">
+<link rel="stylesheet" href="./dialog-default.css">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%;
+    background: #0f1114; color: #d6dae1;
+    font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 13px; }
+  body { display: flex; flex-direction: column; }
+  header { padding: 10px 16px; border-bottom: 1px solid #2a303a;
+    display: flex; gap: 12px; align-items: center; background: #16191e; }
+  header h1 { margin: 0; font-size: 12px; font-weight: 500; letter-spacing: 0.04em; }
+  main { flex: 1; padding: 24px; overflow: auto; }
+  section { margin-bottom: 32px; }
+  h2 { font-size: 12px; font-weight: 500; margin: 0 0 12px;
+    color: #8a93a3; letter-spacing: 0.04em; text-transform: uppercase; }
+  button.demo-btn { font: inherit; padding: 6px 14px; background: #1f242c;
+    border: 1px solid #2a303a; color: #d6dae1; cursor: pointer;
+    border-radius: 3px; margin-right: 8px; margin-bottom: 8px; }
+  button.demo-btn:hover { background: #2a303a; }
+  .log { font-size: 11px; color: #8a93a3; margin-top: 8px;
+    padding: 8px; background: #16191e; border-radius: 3px; min-height: 24px; }
+  label { display: block; margin: 6px 0; }
+  input[type="text"], select { font: inherit; padding: 4px 8px; background: #0f1114;
+    color: #d6dae1; border: 1px solid #2a303a; border-radius: 3px; width: 100%;
+    box-sizing: border-box; }
+</style>
+</head>
+<body>
+<header>
+  <h1>@gcu/dialog — demo</h1>
+</header>
+<main>
+
+  <section>
+    <h2>Convenience: confirm / prompt / alert</h2>
+    <button id="b-confirm" class="demo-btn">confirm</button>
+    <button id="b-confirm-danger" class="demo-btn">confirm (danger)</button>
+    <button id="b-prompt" class="demo-btn">prompt</button>
+    <button id="b-prompt-validated" class="demo-btn">prompt (validated, min 3 chars)</button>
+    <button id="b-prompt-multi" class="demo-btn">prompt (multiline)</button>
+    <button id="b-alert" class="demo-btn">alert</button>
+    <div id="log-conv" class="log">last: (none)</div>
+  </section>
+
+  <section>
+    <h2>Custom render</h2>
+    <button id="b-custom" class="demo-btn">Export form (custom render)</button>
+    <button id="b-static" class="demo-btn">backdrop: "static"</button>
+    <button id="b-no-backdrop" class="demo-btn">backdrop: false</button>
+    <div id="log-custom" class="log">last: (none)</div>
+  </section>
+
+  <section>
+    <h2>Stacking (genuine — both visible at once)</h2>
+    <button id="b-stack" class="demo-btn">Form with "Need help?" button</button>
+    <button id="b-stack3" class="demo-btn">3-deep stack</button>
+    <button id="b-dismissall" class="demo-btn">dismissAll while stacked</button>
+    <div id="log-stack" class="log">last: (none)</div>
+  </section>
+
+</main>
+
+<script type="module">
+  import { Dialog, confirm, prompt, alert, dismissAll, openCount } from './src/index.js';
+
+  const log = (id, msg) => { document.getElementById(id).textContent = `last: ${msg}`; };
+
+  // ── convenience ────────────────────────────────────────────────────────
+  document.getElementById('b-confirm').onclick = async () => {
+    const ok = await confirm('Discard unsaved changes?', { title: 'Confirm' });
+    log('log-conv', `confirm → ${ok}`);
+  };
+
+  document.getElementById('b-confirm-danger').onclick = async () => {
+    const ok = await confirm('Delete 3 files? This cannot be undone.', {
+      title: 'Delete files',
+      okLabel: 'Delete',
+      danger: true,
+    });
+    log('log-conv', `confirm(danger) → ${ok}`);
+  };
+
+  document.getElementById('b-prompt').onclick = async () => {
+    const name = await prompt('Enter a name:', {
+      title: 'Rename',
+      defaultValue: 'untitled.csv',
+      placeholder: 'filename',
+    });
+    log('log-conv', `prompt → ${name === null ? 'cancelled' : JSON.stringify(name)}`);
+  };
+
+  document.getElementById('b-prompt-validated').onclick = async () => {
+    const name = await prompt('Pick a name (min 3 chars, no spaces):', {
+      title: 'Validated input',
+      validate: (v) => {
+        if (!v.trim())   return 'Name cannot be empty';
+        if (v.length < 3) return 'Name must be at least 3 characters';
+        if (/\s/.test(v)) return 'Name cannot contain spaces';
+        return null;
+      },
+    });
+    log('log-conv', `prompt → ${name === null ? 'cancelled' : JSON.stringify(name)}`);
+  };
+
+  document.getElementById('b-prompt-multi').onclick = async () => {
+    const note = await prompt('Notes (Ctrl+Enter to submit):', {
+      title: 'Multiline',
+      multiline: true,
+      defaultValue: 'line one\nline two',
+    });
+    log('log-conv', `prompt(multi) → ${note === null ? 'cancelled' : JSON.stringify(note).slice(0, 60)}`);
+  };
+
+  document.getElementById('b-alert').onclick = async () => {
+    await alert('Operation complete.', { title: 'Done' });
+    log('log-conv', 'alert dismissed');
+  };
+
+  // ── custom render ──────────────────────────────────────────────────────
+  document.getElementById('b-custom').onclick = async () => {
+    const result = await new Dialog({
+      title: 'Export Options',
+      width: 380,
+      render(body, ctx) {
+        body.innerHTML = `
+          <label>Format: <select data-fmt>
+            <option value="csv">CSV</option>
+            <option value="json">JSON</option>
+            <option value="parquet">Parquet</option>
+          </select></label>
+          <label><input type="checkbox" data-hdr checked> Include header</label>
+          <label>Delimiter (CSV only): <input type="text" data-delim value="," maxlength="3"></label>
+          <div class="gcu-dialog-buttons" style="margin-top:12px">
+            <button type="button" data-cancel class="gcu-dialog-button">Cancel</button>
+            <button type="button" data-default="true" class="gcu-dialog-button gcu-dialog-button-default">Export</button>
+          </div>
+        `;
+        body.querySelector('[data-cancel]').onclick = () => ctx.close(null);
+        body.querySelector('[data-default]').onclick = () => ctx.close({
+          format:    body.querySelector('[data-fmt]').value,
+          header:    body.querySelector('[data-hdr]').checked,
+          delimiter: body.querySelector('[data-delim]').value,
+        });
+      },
+    }).show();
+    log('log-custom', `custom → ${result === null ? 'cancelled' : JSON.stringify(result)}`);
+  };
+
+  document.getElementById('b-static').onclick = async () => {
+    const ok = await confirm('Static backdrop — clicking outside does nothing. Use a button or Esc.', {
+      title: 'Static',
+      backdrop: 'static',
+    });
+    log('log-custom', `static → ${ok}`);
+  };
+
+  document.getElementById('b-no-backdrop').onclick = async () => {
+    const ok = await confirm('No visible backdrop. The page behind is interactive (use sparingly).', {
+      title: 'No backdrop',
+      backdrop: false,
+    });
+    log('log-custom', `no-backdrop → ${ok}`);
+  };
+
+  // ── stacking ───────────────────────────────────────────────────────────
+  // GENUINE stacking: open dialog B from inside dialog A's render — A is
+  // still mounted while B appears on top. To verify, the outer dialog has
+  // a "Need help?" button that opens a confirm WITHOUT closing the form.
+  // After confirming, the form is still visible and editable.
+  document.getElementById('b-stack').onclick = async () => {
+    const result = await new Dialog({
+      title: 'Form (try the help button)',
+      width: 380,
+      render(body, ctx) {
+        body.innerHTML = `
+          <label>Name: <input type="text" data-name placeholder="anything" autofocus></label>
+          <label>Notes: <input type="text" data-notes placeholder="optional"></label>
+          <div class="gcu-dialog-buttons" style="margin-top:12px">
+            <button type="button" data-help class="gcu-dialog-button">Need help?</button>
+            <span style="flex:1"></span>
+            <button type="button" data-cancel class="gcu-dialog-button">Cancel</button>
+            <button type="button" data-default="true" class="gcu-dialog-button gcu-dialog-button-default">Save</button>
+          </div>
+        `;
+
+        // Help button opens a confirm on top — the form stays mounted behind.
+        body.querySelector('[data-help]').addEventListener('click', async () => {
+          const ok = await confirm(
+            'Help dialog stacked over the form — close me and the form is still here.',
+            { title: 'Help', okLabel: 'Got it' }
+          );
+          log('log-stack', `help inner → ${ok} (form still open: ${openCount() === 1})`);
+        });
+
+        body.querySelector('[data-cancel]').onclick = () => ctx.close(null);
+        body.querySelector('[data-default]').onclick = () => ctx.close({
+          name:  body.querySelector('[data-name]').value,
+          notes: body.querySelector('[data-notes]').value,
+        });
+      },
+    }).show();
+    log('log-stack', `form → ${result === null ? 'cancelled' : JSON.stringify(result)}`);
+  };
+
+  // 3-deep stack — each layer opens the next one without closing itself.
+  document.getElementById('b-stack3').onclick = async () => {
+    const buildLayer = (n) => new Dialog({
+      title: `Layer ${n}`,
+      width: 320,
+      render(body, ctx) {
+        const p = document.createElement('p');
+        p.className = 'gcu-dialog-message';
+        p.textContent = `This is layer ${n}. Open count: ${openCount()}`;
+        body.appendChild(p);
+
+        const row = document.createElement('div');
+        row.className = 'gcu-dialog-buttons';
+        row.style.marginTop = '12px';
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'gcu-dialog-button';
+        close.textContent = 'Close this layer';
+        close.dataset.default = 'true';
+        close.onclick = () => ctx.close(`closed-${n}`);
+        if (n < 3) {
+          const next = document.createElement('button');
+          next.type = 'button';
+          next.className = 'gcu-dialog-button gcu-dialog-button-default';
+          next.textContent = `Open layer ${n + 1}`;
+          next.onclick = () => buildLayer(n + 1).show();
+          row.appendChild(next);
+        }
+        row.appendChild(close);
+        body.appendChild(row);
+      },
+    });
+    const result = await buildLayer(1).show();
+    log('log-stack', `layer 1 → ${result}`);
+  };
+
+  document.getElementById('b-dismissall').onclick = async () => {
+    // Open a 2-deep stack, then call dismissAll after 2s. Both should
+    // disappear together; promises resolve null.
+    log('log-stack', 'opening 2-deep stack, calling dismissAll() in 2s...');
+    setTimeout(() => dismissAll(), 2000);
+
+    const result = await new Dialog({
+      title: 'Outer',
+      width: 320,
+      render(body, ctx) {
+        body.innerHTML = `
+          <p class="gcu-dialog-message">I am the outer dialog. An inner one will open shortly.</p>
+          <div class="gcu-dialog-buttons" style="margin-top:12px">
+            <button type="button" data-default="true" class="gcu-dialog-button gcu-dialog-button-default">OK</button>
+          </div>
+        `;
+        body.querySelector('[data-default]').onclick = () => ctx.close('outer-ok');
+
+        // Open the inner dialog right away (without awaiting it — we want it
+        // to appear ON TOP of the outer one, not after).
+        confirm('Inner dialog stacked on top. dismissAll() will close both.', {
+          title: 'Inner',
+        }).then(v => log('log-stack', `inner resolved → ${v} (open: ${openCount()})`));
+      },
+    }).show();
+    log('log-stack', `outer resolved → ${result} (open: ${openCount()})`);
+  };
+</script>
+</body>
+</html>

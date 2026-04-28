@@ -1,0 +1,36 @@
+{
+  "name": "@gcu/dialog",
+  "version": "0.1.0",
+  "description": "Modal dialogs: confirm, prompt, alert, custom forms. Promise-resolving show(), focus trap, stacking, ARIA. CSS-variable themed. Zero dependencies.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./bundled": "./index.js",
+    "./dialog.css": "./dialog.css",
+    "./dialog-default.css": "./dialog-default.css",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "dialog.css",
+    "dialog-default.css",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["dialog", "modal", "confirm", "prompt", "alert", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/dialog"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/dialog",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}

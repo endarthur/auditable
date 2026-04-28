@@ -1,0 +1,119 @@
+/*
+ * @gcu/dialog — structural stylesheet
+ * Layout, positioning, animation. Zero colors or fonts.
+ * Decorative styling lives in dialog-default.css (optional) or consumer CSS.
+ */
+
+.gcu-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  opacity: 0;
+  transition: opacity var(--ui-duration, 120ms) var(--ui-easing, ease-out);
+  pointer-events: auto;
+}
+.gcu-dialog-backdrop.gcu-dialog-open  { opacity: 1; }
+.gcu-dialog-backdrop.gcu-dialog-closing { opacity: 0; }
+
+.gcu-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(0.97);
+  opacity: 0;
+  transition: opacity var(--ui-duration, 120ms) var(--ui-easing, ease-out),
+              transform var(--ui-duration, 120ms) var(--ui-easing, ease-out);
+  display: flex;
+  flex-direction: column;
+  max-width: var(--ui-dialog-max-w, 90vw);
+  max-height: var(--ui-dialog-max-h, 80vh);
+  min-width: 280px;
+  pointer-events: auto;
+  outline: none;
+}
+.gcu-dialog.gcu-dialog-open {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+.gcu-dialog.gcu-dialog-closing {
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.97);
+}
+
+.gcu-dialog-header {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.gcu-dialog-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gcu-dialog-close {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+}
+
+.gcu-dialog-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.gcu-dialog-message {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.gcu-dialog-input {
+  font: inherit;
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+textarea.gcu-dialog-input {
+  min-height: 80px;
+  resize: vertical;
+}
+
+.gcu-dialog-error[hidden] { display: none; }
+
+.gcu-dialog-buttons {
+  display: flex;
+  flex-direction: row;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.gcu-dialog-button {
+  font: inherit;
+  cursor: pointer;
+  border: none;
+}
+
+.gcu-dialog-button[disabled] {
+  cursor: default;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gcu-dialog,
+  .gcu-dialog-backdrop {
+    transition: none;
+  }
+}
