@@ -1623,6 +1623,10 @@ class AdderLowerCtx {
     this.defines = new Set();   // names to export
     this.imports = new Set();   // referenced undefined names
     this.source = null;
+    this.syncFunctions = new Set(); // names of user-defined sync functions —
+                                    // populated by analyseSyncFunctions before
+                                    // any body is lowered. Calls to a name in
+                                    // this set skip the `await` wrapping.
   }
   emit(op, args, type, loc, extra) {
     const o = _adderMkOp(op, args, type, loc, extra);
@@ -1702,6 +1706,137 @@ function collectTargetNames(target, defines) {
   if (target.type === 'Starred' && target.value) collectTargetNames(target.value, defines);
 }
 
+// ── Sync-function analysis ──
+//
+// Before any lowering, walk every top-level FunctionDef and decide whether
+// it can be emitted as a plain `function` instead of `async function`.
+//
+// A function is "sync" if (a) its source body contains no `await` expression
+// and no `yield`/`yield from`, and (b) every Call in its body whose callee
+// is a bare Name resolves to either:
+//   - itself (recursion is fine — registers self in the candidate set), or
+//   - another function that is also sync (transitive).
+//
+// Method calls (`obj.x()`), attribute callees, lambdas, list/dict/set/gen
+// comprehensions, and any non-Name callee (Attribute, Subscript, Call) are
+// all conservatively treated as potentially-async — calling such a target
+// disqualifies the enclosing function. Cheap to compute, easy to reason about,
+// and `fib`-style recursion qualifies cleanly.
+//
+// The result is a Set<string> of sync function names. Adder lowering uses
+// it to skip the `await` wrapping at known-safe call sites and to set
+// `is_async: false` on the func_region.
+
+function _astHasAwaitOrYield(node) {
+  if (!node || typeof node !== 'object') return false;
+  if (node.type === 'Await' || node.type === 'Yield' || node.type === 'YieldFrom') {
+    return true;
+  }
+  // Don't descend into nested function definitions — their async-ness is
+  // their own affair.
+  if (node.type === 'FunctionDef' || node.type === 'AsyncFunctionDef' ||
+      node.type === 'Lambda') {
+    return false;
+  }
+  for (const key of Object.keys(node)) {
+    if (key === 'type' || key === 'line' || key === 'col') continue;
+    const v = node[key];
+    if (Array.isArray(v)) {
+      for (const item of v) if (_astHasAwaitOrYield(item)) return true;
+    } else if (v && typeof v === 'object') {
+      if (_astHasAwaitOrYield(v)) return true;
+    }
+  }
+  return false;
+}
+
+function _collectNameCallees(node, out, disqualifyRef) {
+  if (!node || typeof node !== 'object') return;
+  if (node.type === 'FunctionDef' || node.type === 'AsyncFunctionDef' ||
+      node.type === 'Lambda') {
+    return;
+  }
+  if (node.type === 'Call') {
+    if (node.func && node.func.type === 'Name') {
+      out.push(node.func.id);
+    } else {
+      // Non-Name callee (attribute, subscript, dynamic) — disqualifies the
+      // enclosing function from sync.
+      disqualifyRef.value = true;
+    }
+    // Still walk args / keywords below.
+  }
+  for (const key of Object.keys(node)) {
+    if (key === 'type' || key === 'line' || key === 'col') continue;
+    const v = node[key];
+    if (Array.isArray(v)) {
+      for (const item of v) _collectNameCallees(item, out, disqualifyRef);
+    } else if (v && typeof v === 'object') {
+      _collectNameCallees(v, out, disqualifyRef);
+    }
+  }
+}
+
+function analyseSyncFunctions(moduleStmts) {
+  // Collect top-level FunctionDefs (only — we don't analyse nested defs;
+  // they go through their own per-region analysis when their parent is lowered).
+  const funcs = [];
+  for (const stmt of moduleStmts) {
+    if (stmt.type === 'FunctionDef' || stmt.type === 'AsyncFunctionDef') {
+      const hasAwaitOrYield = _astHasAwaitOrYield({ type: 'Block', body: stmt.body });
+      const callees = [];
+      const disqualifyRef = { value: false };
+      _collectNameCallees({ type: 'Block', body: stmt.body }, callees, disqualifyRef);
+      // Decorators rewrite the binding to whatever the decorator returns —
+      // could be async (e.g. @cached, @memoize that wrap with awaits, or any
+      // user decorator). The source-level FunctionDef is one thing; the
+      // bound name after decoration is another. We can't statically know
+      // what shape the decorated value is, so we conservatively bail out
+      // of sync classification.
+      const decorated = (stmt.decorators && stmt.decorators.length > 0);
+      funcs.push({
+        name: stmt.name,
+        disqualified: hasAwaitOrYield || disqualifyRef.value || decorated,
+        callees,
+      });
+    }
+  }
+
+  // All top-level FunctionDef names — used to decide "external callee".
+  const allNames = new Set(funcs.map(f => f.name));
+
+  // Initial candidate set: all functions not pre-disqualified.
+  let sync = new Set();
+  for (const f of funcs) if (!f.disqualified) sync.add(f.name);
+
+  // Iterate: remove any function that calls a name we don't know is sync.
+  // External callees (range, len, any builtin or imported function) are
+  // conservatively treated as async — they go through emitAwaitedCall_ad
+  // and produce an await op, which would make this function async too.
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const f of funcs) {
+      if (!sync.has(f.name)) continue;
+      for (const callee of f.callees) {
+        // Self-recursion is fine: callee === f.name.
+        if (callee === f.name) continue;
+        // Other top-level FunctionDefs: must already be in sync.
+        if (allNames.has(callee)) {
+          if (!sync.has(callee)) { sync.delete(f.name); changed = true; break; }
+          continue;
+        }
+        // Anything else (builtins, imported, params with the same name as
+        // the callee) — conservatively async.
+        sync.delete(f.name);
+        changed = true;
+        break;
+      }
+    }
+  }
+  return sync;
+}
+
 // ── Helper: call a _py runtime method (sync, no await needed) ──
 
 function emitPyCall(ctx, method, args, loc, type) {
@@ -1711,8 +1846,13 @@ function emitPyCall(ctx, method, args, loc, type) {
 }
 
 // User-facing calls (Python funcs / adder builtins) may be async — await them.
-function emitAwaitedCall_ad(ctx, fnId, argIds, loc, type) {
+// Pass `sync: true` when the callee is statically known to be sync (e.g. a
+// user FunctionDef that analyseSyncFunctions classified as sync); the await
+// wrapping is then skipped, which is the difference between fib being a
+// Promise-allocating loop and a tight sync recursion.
+function emitAwaitedCall_ad(ctx, fnId, argIds, loc, type, opts) {
   const call = ctx.emit('call', [fnId, ...argIds], type || DYNAMIC, loc);
+  if (opts && opts.sync) return call;
   return ctx.emit('await', [call.id], type || DYNAMIC, loc);
 }
 
@@ -1727,6 +1867,13 @@ function lowerAdder(ast, source) {
 
   // Collect all module-scope defines up front (Python module-scope semantics)
   collectDefines_ad(ast.body, ctx.defines);
+
+  // Pre-analyse top-level FunctionDefs to determine which are sync — done
+  // before any body is lowered, so recursive call sites and forward
+  // references inside other functions can take the no-await fast path.
+  for (const name of analyseSyncFunctions(ast.body)) {
+    ctx.syncFunctions.add(name);
+  }
 
   // Identify names that will be declared by `function`/`class` syntax —
   // those don't need (and can't have) a `let` pre-declaration.
@@ -2207,7 +2354,9 @@ function lowerCall_ad(ctx, node) {
     kwObjId = ctx.emit('object_new', pairs, DYNAMIC, l).id;
   }
 
-  // Assemble final call
+  // Assemble final call. Skip the await when the callee is a Name that
+  // analyseSyncFunctions classified as sync — that's the path that makes
+  // recursive integer-only functions (fib, ackermann, etc.) actually fast.
   if (node.func.type === 'Attribute') {
     const obj = lowerExpr_ad(ctx, node.func.value);
     const name = ctx.emit('const', [node.func.attr], STRING, l);
@@ -2216,9 +2365,14 @@ function lowerCall_ad(ctx, node) {
     return emitAwaitedCall_ad(ctx, method.id, finalArgs, l);
   }
 
+  const isSyncCallee =
+    node.func.type === 'Name' &&
+    !hasStarred && !hasKwargs &&
+    ctx.syncFunctions.has(node.func.id);
+
   const fn = lowerExpr_ad(ctx, node.func);
   const finalArgs = kwObjId ? [...argIds, kwObjId] : argIds;
-  return emitAwaitedCall_ad(ctx, fn.id, finalArgs, l);
+  return emitAwaitedCall_ad(ctx, fn.id, finalArgs, l, undefined, { sync: isSyncCallee });
 }
 
 // ── Assignment ──
@@ -2973,10 +3127,17 @@ function lowerFuncDef(ctx, node) {
   // call sites can read off ret_type. Mirrors what the JS lowerer does.
   const fType = func(params.map(p => p.type || DYNAMIC), retType);
 
+  // Sync if analyseSyncFunctions flagged this name AND it's not a generator.
+  // The body's lowering above already used ctx.syncFunctions to skip awaits
+  // at sync callsites, so the body has zero await ops in the sync case.
+  const isSync = !isGenerator && ctx.syncFunctions.has(name);
+
   const op = ctx.emit('func_region', [name], fType, l, {
     name, params, body, ret_type: retType,
-    // Async in transpile (for builtin await) unless generator
-    is_async: !isGenerator,
+    // Sync user functions emit as plain `function`; only async generators stay
+    // generators. Everything else stays async because some call site or
+    // builtin in the body needed the await wrapping.
+    is_async: !isSync && !isGenerator,
     is_generator: isGenerator,
   });
 
