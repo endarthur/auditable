@@ -141,3 +141,45 @@ def fib_memo(n, memo):
     return memo[n]
 fib_memo(30, {})
 `, 20, CPY.memo);
+
+// ──────────────────────────────────────────────────────────────────────
+// Annotated variants — same workloads with type hints. Lets AIR specialise
+// _py.add → raw +, _py.lt → raw <, etc. Only the cases where annotations
+// can actually help (numeric arithmetic) — list comp and string concat
+// don't change because their bottlenecks aren't typed binary ops.
+// ──────────────────────────────────────────────────────────────────────
+
+console.log('\n--- annotated variants ---');
+
+await bench('sum 1..10000 [annotated]', `
+total: int = 0
+for i in range(10000):
+    total = total + i
+total
+`, 20, CPY.sum);
+
+await bench('fib(25) [annotated]', `
+def fib(n: int) -> int:
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+fib(25)
+`, 5, CPY.fib);
+
+await bench('nested loop 100x100 [annotated]', `
+total: int = 0
+for i in range(100):
+    for j in range(100):
+        total = total + i * j
+total
+`, 10, CPY.nested);
+
+await bench('fibonacci via memo [annotated]', `
+def fib_memo(n: int, memo) -> int:
+    if n < 2:
+        return n
+    if n not in memo:
+        memo[n] = fib_memo(n - 1, memo) + fib_memo(n - 2, memo)
+    return memo[n]
+fib_memo(30, {})
+`, 20, CPY.memo);

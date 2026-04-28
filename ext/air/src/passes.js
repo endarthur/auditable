@@ -258,14 +258,32 @@ export function propagateTypes(module, opts = {}) {
         }
 
         case 'call': case 'call_method': {
-          // TODO: infer return type from typed callee signatures
-          types.set(op.id, op.type || DYNAMIC);
+          // If the callee carries a function type, use its declared return.
+          // The callee's SSA type may be a `func(params, ret)` set on the
+          // func_region (e.g. by adder/JS lowering with a `-> Type` annotation),
+          // or DYNAMIC. We propagate ret only — params aren't used here.
+          let inferred = op.type || DYNAMIC;
+          if (isDynamic(inferred) && op.op === 'call' && op.args.length > 0) {
+            const calleeT = typeOf(op.args[0]);
+            if (calleeT && calleeT.kind === 'function' && calleeT.ret) {
+              inferred = calleeT.ret;
+            }
+          }
+          op.type = inferred;
+          types.set(op.id, inferred);
           break;
         }
 
         case 'await': {
-          // await unwraps Promise but we don't track Promise<T> — pass-through
-          types.set(op.id, op.type || DYNAMIC);
+          // await unwraps Promise but we don't track Promise<T> explicitly.
+          // We carry the inner type through directly: emit-side, async funcs
+          // declared with `ret_type: T` return T-when-awaited as the user
+          // sees it. So pass through whatever the awaited expression's type
+          // resolved to.
+          const innerT = typeOf(op.args[0]);
+          const t = isDynamic(op.type) ? (innerT || DYNAMIC) : op.type;
+          op.type = t;
+          types.set(op.id, t);
           break;
         }
 
@@ -273,6 +291,13 @@ export function propagateTypes(module, opts = {}) {
           types.set(op.id, op.type);
           // Recurse into body with a scope snapshot
           const saved = new Map(nameTypes);
+          // Seed self-recursion: when the body loads its own name, give it
+          // the function's own type so recursive calls infer ret_type
+          // correctly (e.g. fib's body calling fib). Without this, the load
+          // would default to DYNAMIC and binary helpers wouldn't specialise.
+          if (op.name && op.type && op.type.kind === 'function') {
+            nameTypes.set(op.name, op.type);
+          }
           // Seed params with their declared types
           if (op.params) {
             for (const p of op.params) {

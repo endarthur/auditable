@@ -1549,6 +1549,57 @@ function scanIdentifiers(ctx, node) {
 
 class AirLowerError extends Error {}
 
+// ── adder annotation resolver ──
+//
+// Maps adder type annotations (whatever's after `:` or `->`) to AIR types.
+// Annotations are opt-in performance hints; unknown shapes → DYNAMIC, which
+// means passes fall back to dataflow inference (current default).
+//
+// Supported names:
+//   - Python: int → i32, float → f64, bool → bool, str → string, None → void
+//   - Direct AIR: i8, u8, i16, u16, i32, u32, i64, u64, f32, f64, bool, string,
+//                 void, dynamic
+//   - Typed arrays: Int32Array, Float64Array, ..., i32array, f64array, ...
+//
+// Returns DYNAMIC for anything we don't recognise — including subscripts
+// (`list[int]`, `dict[str, int]`), unions, generic tuples — so the rest of
+// the pipeline keeps working unchanged.
+const _ADDER_NAME_TO_TYPE = {
+  // Python builtins
+  'int': I32, 'float': F64, 'bool': BOOL, 'str': STRING,
+  'None': VOID, 'NoneType': VOID,
+  // Direct AIR primitive names — same set the JS lowerer recognises
+  'i8': I8, 'u8': U8, 'i16': I16, 'u16': U16,
+  'i32': I32, 'u32': U32, 'i64': I64, 'u64': U64,
+  'f32': F32, 'f64': F64, 'string': STRING, 'void': VOID,
+  'dynamic': DYNAMIC,
+  // Typed-array constructors (matches TS_TYPE_MAP in types.js)
+  'Int8Array': typedArray('i8'), 'Uint8Array': typedArray('u8'),
+  'Int16Array': typedArray('i16'), 'Uint16Array': typedArray('u16'),
+  'Int32Array': typedArray('i32'), 'Uint32Array': typedArray('u32'),
+  'Float32Array': typedArray('f32'), 'Float64Array': typedArray('f64'),
+  'BigInt64Array': typedArray('i64'), 'BigUint64Array': typedArray('u64'),
+  // GCU typed-array aliases
+  'i8array': typedArray('i8'), 'u8array': typedArray('u8'),
+  'i16array': typedArray('i16'), 'u16array': typedArray('u16'),
+  'i32array': typedArray('i32'), 'u32array': typedArray('u32'),
+  'f32array': typedArray('f32'), 'f64array': typedArray('f64'),
+  'i64array': typedArray('i64'), 'u64array': typedArray('u64'),
+};
+
+function resolveAdderAnnotation(node) {
+  if (!node) return DYNAMIC;
+  // Bare name: `int`, `float`, `i32`, `Int32Array`, `None`, …
+  if (node.type === 'Name' && typeof node.id === 'string') {
+    return _ADDER_NAME_TO_TYPE[node.id] ?? DYNAMIC;
+  }
+  // `None` written as a literal constant in some annotation shapes.
+  if (node.type === 'Constant' && node.value === null) return VOID;
+  // Subscripts like `list[int]` aren't generic-aware in v1; keep dynamic so
+  // the type system doesn't lie about element types.
+  return DYNAMIC;
+}
+
 // ── SSA counter (shared across lowerer invocations via module state) ──
 
 let _adderNextId = 0;
@@ -2296,10 +2347,14 @@ function lowerAugAssign(ctx, node) {
 }
 
 function lowerAnnAssign(ctx, node) {
-  // Annotated assignment: `x: int = 5`. Ignore annotation for now.
+  // Annotated assignment: `x: int = 5`. Resolve the annotation; if it's
+  // a recognisable AIR type, stamp it onto the SSA value so passes propagate
+  // (e.g. `_py.add` → raw `+` when both sides are typed numbers).
   if (!node.value) return null;
   const l = ctx.loc(node);
   const value = lowerExpr_ad(ctx, node.value);
+  const ann = resolveAdderAnnotation(node.annotation);
+  if (!isDynamic(ann)) value.type = ann;
   lowerAssignTarget(ctx, node.target, value, l);
   return null;
 }
@@ -2787,8 +2842,12 @@ function _buildParamBinding(ctx, node, l) {
 
   if (isSimple) {
     // Fast path: native JS params, with handling for a trailing kwargs bag that
-    // may be ignored or matched by name.
-    const params = positionalParams.map(p => ({ name: p.name, type: DYNAMIC }));
+    // may be ignored or matched by name. Resolve param annotations so passes
+    // can specialise arithmetic and helper calls inside the body.
+    const params = positionalParams.map(p => ({
+      name: p.name,
+      type: resolveAdderAnnotation(p.annotation),
+    }));
     // Prologue: strip trailing _kw bag if present (caller may pass kwargs)
     const prologueOps = [];
     return { params, prologueOps, isSimple: true };
@@ -2907,8 +2966,15 @@ function lowerFuncDef(ctx, node) {
   ctx.topLevel = savedTopLevel;
   ctx.symbols = savedSymbols;
 
-  const op = ctx.emit('func_region', [name], DYNAMIC, l, {
-    name, params, body, ret_type: DYNAMIC,
+  // Return type from `-> Type` annotation, if present.
+  const retType = node.returns ? resolveAdderAnnotation(node.returns) : DYNAMIC;
+
+  // Carry the function's signature as the op's own type so name-typing at
+  // call sites can read off ret_type. Mirrors what the JS lowerer does.
+  const fType = func(params.map(p => p.type || DYNAMIC), retType);
+
+  const op = ctx.emit('func_region', [name], fType, l, {
+    name, params, body, ret_type: retType,
     // Async in transpile (for builtin await) unless generator
     is_async: !isGenerator,
     is_generator: isGenerator,
@@ -4130,14 +4196,32 @@ function propagateTypes(module, opts = {}) {
         }
 
         case 'call': case 'call_method': {
-          // TODO: infer return type from typed callee signatures
-          types.set(op.id, op.type || DYNAMIC);
+          // If the callee carries a function type, use its declared return.
+          // The callee's SSA type may be a `func(params, ret)` set on the
+          // func_region (e.g. by adder/JS lowering with a `-> Type` annotation),
+          // or DYNAMIC. We propagate ret only — params aren't used here.
+          let inferred = op.type || DYNAMIC;
+          if (isDynamic(inferred) && op.op === 'call' && op.args.length > 0) {
+            const calleeT = typeOf(op.args[0]);
+            if (calleeT && calleeT.kind === 'function' && calleeT.ret) {
+              inferred = calleeT.ret;
+            }
+          }
+          op.type = inferred;
+          types.set(op.id, inferred);
           break;
         }
 
         case 'await': {
-          // await unwraps Promise but we don't track Promise<T> — pass-through
-          types.set(op.id, op.type || DYNAMIC);
+          // await unwraps Promise but we don't track Promise<T> explicitly.
+          // We carry the inner type through directly: emit-side, async funcs
+          // declared with `ret_type: T` return T-when-awaited as the user
+          // sees it. So pass through whatever the awaited expression's type
+          // resolved to.
+          const innerT = typeOf(op.args[0]);
+          const t = isDynamic(op.type) ? (innerT || DYNAMIC) : op.type;
+          op.type = t;
+          types.set(op.id, t);
           break;
         }
 
@@ -4145,6 +4229,13 @@ function propagateTypes(module, opts = {}) {
           types.set(op.id, op.type);
           // Recurse into body with a scope snapshot
           const saved = new Map(nameTypes);
+          // Seed self-recursion: when the body loads its own name, give it
+          // the function's own type so recursive calls infer ret_type
+          // correctly (e.g. fib's body calling fib). Without this, the load
+          // would default to DYNAMIC and binary helpers wouldn't specialise.
+          if (op.name && op.type && op.type.kind === 'function') {
+            nameTypes.set(op.name, op.type);
+          }
           // Seed params with their declared types
           if (op.params) {
             for (const p of op.params) {
