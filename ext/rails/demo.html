@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <title>@gcu/rails — demo</title>
 <link rel="stylesheet" href="./rails.css">
+<link rel="stylesheet" href="../menu/menu.css">
+<link rel="stylesheet" href="../menu/menu-default.css">
 <style>
   /* Minimal decorative theme — not part of rails.css. */
   :root {
@@ -128,6 +130,7 @@
 
 <script type="module">
 import { createRails } from './index.js';
+import { Menu } from '../menu/src/index.js';
 
 const IFRAME_SRC = `<!doctype html><html><head><style>
   body { font-family: ui-monospace, monospace; padding: 18px; color: #222; background: #fafafa; margin: 0; font-size: 13px; line-height: 1.6; }
@@ -236,7 +239,8 @@ const rails = createRails(document.getElementById('workspace'), {
               <p>panels live in a flat layer and reposition via <code>style.left/top/width/height</code> — never reparented. iframes, canvases, and form state survive every drag (rails, floats, and moves between them).</p>
               <p>float titlebar: drag to move, min/max/close buttons, 8 resize handles on edges and corners. <code>Esc</code> cancels any drag mid-flight.</p>
               <p>click a tab header to activate — no chrome rebuild. click any part of a float to raise it.</p>
-              <p>left rail is <b>collapsible</b> — click the ◀ at its top. scratch.txt has a <b>badge</b>. inspector is <b>preserveOnClose</b> (close and reopen to see iframe state persist). drag many tabs here to see the overflow ⋯ button appear.</p>` },
+              <p>left rail is <b>collapsible</b> — click the ◀ at its top. scratch.txt has a <b>badge</b>. inspector is <b>preserveOnClose</b> (close and reopen to see iframe state persist). drag many tabs here to see the overflow ⋯ button appear.</p>
+              <p><b>Right-click anywhere</b> for context menus: tabs, empty strip area, float titlebars — each gets its own menu via <code>@gcu/menu</code>.</p>` },
           { id: 't2', kind: 'text', title: 'scratch.txt', badge: 3 },
           { id: 't-inspector', kind: 'iframe', title: 'inspector.html \u2197', preserveOnClose: true }
         ]
@@ -297,54 +301,165 @@ document.getElementById('add-float').onclick = () => {
     { to: 'new-float', x: 200 + (nextId * 20) % 200, y: 140 + (nextId * 20) % 200, w: 400, h: 300 }
   );
 };
-// Consumer-side sample: minimal overflow menu. Rails emits strip:overflow
-// with the list of clipped tabs and a screen-space anchor. Build any UI.
-let overflowMenuEl = null;
-function dismissOverflowMenu() {
-  overflowMenuEl?.remove();
-  overflowMenuEl = null;
-  document.removeEventListener('pointerdown', dismissOverflowMenu);
-  document.removeEventListener('keydown', onOverflowEsc);
-}
-function onOverflowEsc(e) { if (e.key === 'Escape') dismissOverflowMenu(); }
+// Consumer-side overflow menu — uses @gcu/menu. Rails emits strip:overflow
+// with the list of clipped tabs and a screen-space anchor (the right edge of
+// the ⋯ button). Menu.show handles positioning, dismissal, keyboard, ARIA.
+rails.on('strip:overflow', async ({ stack, overflowTabs, x, y }) => {
+  const tabId = await Menu.show(
+    overflowTabs.map(tab => ({ label: tab.title, action: tab.id })),
+    { x, y, placement: 'bottom-end' }
+  );
+  if (!tabId) return;
+  rails.activateTab(tabId);
+  // Scroll the activated tab into view in the strip.
+  const strip = document.querySelector(`.rails-strip[data-stack-id="${stack.id}"]`);
+  const tabEl = strip?.querySelector(`.rails-tab[data-tab-id="${tabId}"]`);
+  tabEl?.scrollIntoView({ block: 'nearest', inline: 'center' });
+});
 
-rails.on('strip:overflow', ({ stack, overflowTabs, x, y }) => {
-  dismissOverflowMenu();
-  const menu = document.createElement('div');
-  menu.className = 'demo-overflow-menu';
-  Object.assign(menu.style, {
-    position: 'fixed', left: `${x - 200}px`, top: `${y}px`,
-    minWidth: '200px', maxHeight: '300px', overflow: 'auto',
-    background: 'var(--chrome)', border: '1px solid var(--border)',
-    borderRadius: '3px', boxShadow: '0 6px 20px rgba(0,0,0,0.6)',
-    zIndex: 20000, padding: '4px 0'
-  });
-  for (const tab of overflowTabs) {
-    const item = document.createElement('div');
-    item.textContent = tab.title;
-    Object.assign(item.style, {
-      padding: '6px 12px', fontSize: '11px', cursor: 'pointer',
-      color: 'var(--text-dim)',
-    });
-    item.onmouseenter = () => { item.style.background = 'var(--border)'; item.style.color = 'var(--text)'; };
-    item.onmouseleave = () => { item.style.background = ''; item.style.color = 'var(--text-dim)'; };
-    item.onclick = () => {
+// Tab context menu (right-click a tab). Demonstrates: disabled items,
+// checkbox toggles for per-tab flags, separators, danger items, and
+// per-stack bulk operations via rails.batch().
+rails.on('tab:contextmenu', async ({ tab, stack, x, y }) => {
+  const closeable = tab.closeable !== false;       // default true
+  const draggable = tab.draggable !== false;       // default true; "Locked" = not draggable
+  const moreThanOne = stack.tabs.length > 1;
+
+  const action = await Menu.show([
+    { label: 'Activate',                  action: 'activate' },
+    { label: 'Close',                     action: 'close',       shortcut: 'Ctrl+W', disabled: !closeable },
+    '---',
+    { label: 'Closeable',                 action: 'toggle:closeable', checked: closeable },
+    { label: 'Locked (no drag)',          action: 'toggle:locked',    checked: !draggable },
+    '---',
+    { label: 'Float',                     action: 'float' },
+    '---',
+    { label: 'Close others in stack',     action: 'close-others', disabled: !moreThanOne },
+    { label: 'Close all in stack',        action: 'close-all',    danger: true },
+  ], { x, y });
+
+  switch (action) {
+    case 'activate':
       rails.activateTab(tab.id);
-      // Scroll the activated tab into view in the strip.
-      const strip = document.querySelector(`.rails-strip[data-stack-id="${stack.id}"]`);
-      const tabEl = strip?.querySelector(`.rails-tab[data-tab-id="${tab.id}"]`);
-      tabEl?.scrollIntoView({ block: 'nearest', inline: 'center' });
-      dismissOverflowMenu();
-    };
-    menu.appendChild(item);
+      break;
+    case 'close':
+      if (tab.preserveOnClose) rails.closeTab(tab.id, { preserve: true });
+      else rails.closeTab(tab.id);
+      break;
+    case 'toggle:closeable':
+      rails.updateTab(tab.id, { closeable: !closeable });
+      break;
+    case 'toggle:locked':
+      // Locked = draggable: false. Toggle inverts.
+      rails.updateTab(tab.id, { draggable: !draggable });
+      break;
+    case 'float':
+      rails.floatTab(tab.id, { x: 220, y: 160, w: 400, h: 280 });
+      break;
+    case 'close-others':
+      rails.batch(() => {
+        for (const t of [...stack.tabs]) {
+          if (t.id === tab.id || t.closeable === false) continue;
+          rails.closeTab(t.id, t.preserveOnClose ? { preserve: true } : undefined);
+        }
+      });
+      break;
+    case 'close-all':
+      rails.batch(() => {
+        for (const t of [...stack.tabs]) {
+          if (t.closeable === false) continue;
+          rails.closeTab(t.id, t.preserveOnClose ? { preserve: true } : undefined);
+        }
+      });
+      break;
   }
-  document.body.appendChild(menu);
-  overflowMenuEl = menu;
-  // Defer the outside-dismiss until next tick so the current click doesn't dismiss immediately.
-  setTimeout(() => {
-    document.addEventListener('pointerdown', dismissOverflowMenu);
-    document.addEventListener('keydown', onOverflowEsc);
-  }, 0);
+});
+
+// Strip context menu (right-click empty strip area, away from any tab).
+// Demonstrates: a submenu of new-tab kinds, a radio group for tabs-position,
+// and a danger close-all action.
+const NEW_TAB_FACTORIES = {
+  text:   id => ({ id, kind: 'text',   title: `scratch-${nextId}.txt` }),
+  html:   id => ({ id, kind: 'html',   title: `page-${nextId}.html`,
+                   html: '<p>fresh html cell — edit in code.</p>' }),
+  canvas: id => ({ id, kind: 'canvas', title: `canvas-${nextId}` }),
+  iframe: id => ({ id, kind: 'iframe', title: `iframe-${nextId} \u2197` }),
+};
+
+rails.on('strip:contextmenu', async ({ stack, x, y }) => {
+  const tabPos = stack.tabPosition || 'top';
+  const allLocked = stack.tabs.every(t => t.closeable === false);
+
+  const action = await Menu.show([
+    { label: 'New tab', children: [
+      { label: 'Text scratch', action: 'new:text' },
+      { label: 'HTML',         action: 'new:html' },
+      { label: 'Canvas',       action: 'new:canvas' },
+      { label: 'Iframe',       action: 'new:iframe' },
+    ]},
+    '---',
+    { label: 'Tabs at top',    group: 'tab-pos', checked: tabPos === 'top',    action: 'pos:top' },
+    { label: 'Tabs at bottom', group: 'tab-pos', checked: tabPos === 'bottom', action: 'pos:bottom' },
+    '---',
+    { label: 'Close all in stack', action: 'close-all', danger: true, disabled: allLocked },
+  ], { x, y });
+
+  if (!action) return;
+
+  if (action.startsWith('new:')) {
+    const kind = action.slice(4);
+    const factory = NEW_TAB_FACTORIES[kind];
+    if (!factory) return;
+    rails.addTab(factory(gid('t')), { to: 'stack', stackId: stack.id });
+    return;
+  }
+  if (action.startsWith('pos:')) {
+    // tabPosition lives on the Stack but rails has no public stack mutator —
+    // for the demo, mutate the state object directly and force a re-render.
+    stack.tabPosition = action.slice(4);
+    rails.render();
+    return;
+  }
+  if (action === 'close-all') {
+    rails.batch(() => {
+      for (const t of [...stack.tabs]) {
+        if (t.closeable === false) continue;
+        rails.closeTab(t.id, t.preserveOnClose ? { preserve: true } : undefined);
+      }
+    });
+  }
+});
+
+// Float titlebar context menu. Mirrors the titlebar buttons (handy when the
+// titlebar is narrow) and adds a "Redock" action that the buttons can't do.
+rails.on('float:titlebar:contextmenu', async ({ float, x, y }) => {
+  const hasRail = rails.state.rails.length > 0;
+  const allLocked = float.stack.tabs.every(t => t.closeable === false);
+
+  const action = await Menu.show([
+    { label: float.minimized ? 'Unminimize' : 'Minimize', action: 'toggle-min' },
+    { label: float.maximized ? 'Restore'    : 'Maximize', action: 'toggle-max' },
+    '---',
+    { label: 'Redock all tabs to first stack', action: 'redock', disabled: !hasRail },
+    '---',
+    { label: 'Close float', action: 'close', danger: true, disabled: allLocked },
+  ], { x, y });
+
+  switch (action) {
+    case 'toggle-min': rails.toggleFloatMinimized(float.id); break;
+    case 'toggle-max': rails.toggleFloatMaximized(float.id); break;
+    case 'redock': {
+      const target = rails.state.rails[0]?.stacks[0];
+      if (!target) break;
+      rails.batch(() => {
+        for (const tab of [...float.stack.tabs]) {
+          rails.moveTab(tab.id, { to: 'stack', stackId: target.id });
+        }
+      });
+      break;
+    }
+    case 'close': rails.closeFloat(float.id); break;
+  }
 });
 
 document.getElementById('reopen-inspector').onclick = () => {
