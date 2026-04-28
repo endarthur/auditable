@@ -1777,6 +1777,44 @@ function _collectNameCallees(node, out, disqualifyRef) {
   }
 }
 
+// Builtins that are definitively sync — i.e. they neither await internally
+// nor iterate user iterables nor invoke user callables. Source of truth is
+// ext/adder/src/builtins.js: anything declared without `async` and that
+// doesn't reach into pyCollect/await is sync. Most primitive constructors,
+// inspectors, and conversion helpers qualify; iteration / map / filter /
+// list / tuple / dict / set / sorted / max / min / sum / any / all do NOT
+// (they need `await pyCollect(...)` to handle async iterables).
+//
+// Keep this list in lockstep with builtins.js. If a user shadows one of
+// these names with their own (necessarily-async) implementation, this
+// optimisation will be incorrect for their code; the spec's "annotations
+// are opt-in performance hints" stance applies — mismatches are a known
+// edge.
+const KNOWN_SYNC_BUILTINS = new Set([
+  // primitive constructors / converters
+  'int', 'float', 'str', 'bool', 'complex', 'bytes', 'chr', 'ord',
+  // numeric helpers
+  'abs', 'round', 'hex', 'oct', 'bin', 'pow',
+  // inspectors
+  'len', 'type', 'isinstance', 'issubclass', 'callable',
+  'hasattr', 'getattr', 'setattr', 'delattr',
+  'id', 'hash', 'repr', 'ascii',
+  // iteration constructors that don't materialise — the iter object itself
+  // is sync; consumers iterate it via _py.iter which is sync
+  'range', 'iter',
+  // I/O surfaces that return sync values (the underlying display may be
+  // async but adder's `print` discards the result and returns null sync)
+  'print',
+  // misc
+  'globals', 'locals', 'vars', 'dir',
+  // exceptions (constructors)
+  'Exception', 'ValueError', 'TypeError', 'KeyError', 'IndexError',
+  'AttributeError', 'NameError', 'StopIteration', 'StopAsyncIteration',
+  'RuntimeError', 'ZeroDivisionError', 'NotImplementedError',
+  'ImportError', 'ModuleNotFoundError', 'FileNotFoundError',
+  'OSError', 'AssertionError', 'ArithmeticError', 'OverflowError',
+]);
+
 function analyseSyncFunctions(moduleStmts) {
   // Collect top-level FunctionDefs (only — we don't analyse nested defs;
   // they go through their own per-region analysis when their parent is lowered).
@@ -1810,9 +1848,10 @@ function analyseSyncFunctions(moduleStmts) {
   for (const f of funcs) if (!f.disqualified) sync.add(f.name);
 
   // Iterate: remove any function that calls a name we don't know is sync.
-  // External callees (range, len, any builtin or imported function) are
-  // conservatively treated as async — they go through emitAwaitedCall_ad
-  // and produce an await op, which would make this function async too.
+  // Known-sync builtins (range, len, int, abs, …) are accepted; other
+  // external callees (imported, user-shadowed, async builtins like list /
+  // sorted / map) are conservatively treated as async, since they go
+  // through emitAwaitedCall_ad and produce an await op.
   let changed = true;
   while (changed) {
     changed = false;
@@ -1826,8 +1865,10 @@ function analyseSyncFunctions(moduleStmts) {
           if (!sync.has(callee)) { sync.delete(f.name); changed = true; break; }
           continue;
         }
-        // Anything else (builtins, imported, params with the same name as
-        // the callee) — conservatively async.
+        // Known-sync builtin — accepts.
+        if (KNOWN_SYNC_BUILTINS.has(callee)) continue;
+        // Anything else (imported, async builtins like sorted/map, params
+        // shadowing as call targets) — conservatively async.
         sync.delete(f.name);
         changed = true;
         break;
@@ -1872,6 +1913,13 @@ function lowerAdder(ast, source) {
   // before any body is lowered, so recursive call sites and forward
   // references inside other functions can take the no-await fast path.
   for (const name of analyseSyncFunctions(ast.body)) {
+    ctx.syncFunctions.add(name);
+  }
+  // Seed known-sync builtins (range, len, int, abs, …) into the same set so
+  // module-level loops like `for i in range(10000)` skip the await on
+  // range itself. This is the difference between sum-1..10000 still
+  // having an await at iter-construction and being fully sync.
+  for (const name of KNOWN_SYNC_BUILTINS) {
     ctx.syncFunctions.add(name);
   }
 
