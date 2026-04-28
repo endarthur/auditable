@@ -1,0 +1,36 @@
+{
+  "name": "@gcu/pdf3a",
+  "version": "0.1.0",
+  "description": "PDF/A-3B enrichment for pdf-lib documents: sRGB output intent, XMP metadata with custom-namespace support, /AF Associated Files table with per-attachment AFRelationship, trailer /ID. ISO 19005-3 level B. Zero dependencies (pdf-lib is a peer).",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "SPEC.md",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "peerDependencies": {
+    "pdf-lib": ">=1.17.0"
+  },
+  "keywords": ["pdf", "pdfa", "pdf-a", "pdf-a-3", "pdfa3", "iso-19005-3", "xmp", "embedded-files", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/pdf3a"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/pdf3a",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}
