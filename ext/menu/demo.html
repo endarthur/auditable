@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>@gcu/menu — demo</title>
+<link rel="stylesheet" href="./menu.css">
+<link rel="stylesheet" href="./menu-default.css">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%;
+    background: #0f1114; color: #d6dae1;
+    font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 13px; }
+  body { display: flex; flex-direction: column; }
+  header { padding: 10px 16px; border-bottom: 1px solid #2a303a;
+    display: flex; gap: 12px; align-items: center; background: #16191e; }
+  header h1 { margin: 0; font-size: 12px; font-weight: 500; letter-spacing: 0.04em; }
+  main { flex: 1; padding: 24px; overflow: auto; }
+  section { margin-bottom: 32px; }
+  h2 { font-size: 12px; font-weight: 500; margin: 0 0 12px;
+    color: #8a93a3; letter-spacing: 0.04em; text-transform: uppercase; }
+  button.demo-btn { font: inherit; padding: 6px 14px; background: #1f242c;
+    border: 1px solid #2a303a; color: #d6dae1; cursor: pointer;
+    border-radius: 3px; margin-right: 8px; }
+  button.demo-btn:hover { background: #2a303a; }
+  .ctx-target { padding: 24px; border: 1px dashed #2a303a; border-radius: 3px;
+    text-align: center; color: #8a93a3; cursor: context-menu; }
+  .log { font-size: 11px; color: #8a93a3; margin-top: 8px;
+    padding: 8px; background: #16191e; border-radius: 3px; min-height: 24px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>@gcu/menu — demo</h1>
+</header>
+<main>
+
+  <section>
+    <h2>Menubar</h2>
+    <div id="menubar"></div>
+    <div id="menubar-log" class="log">last action: (none)</div>
+  </section>
+
+  <section>
+    <h2>Dropdown</h2>
+    <button id="dd-btn" class="demo-btn">File ▾</button>
+    <button id="dd-recent-btn" class="demo-btn">Recent (factory items) ▾</button>
+    <div id="dd-log" class="log">last action: (none)</div>
+  </section>
+
+  <section>
+    <h2>Context menu (right-click the box)</h2>
+    <div id="ctx-target" class="ctx-target">right-click anywhere here for a context menu</div>
+    <div id="ctx-log" class="log">last action: (none)</div>
+  </section>
+
+  <section>
+    <h2>Submenus, separators, danger, checks</h2>
+    <button id="sm-btn" class="demo-btn">Show menu ▾</button>
+    <div id="sm-log" class="log">last action: (none)</div>
+  </section>
+
+</main>
+
+<script type="module">
+  import { Menu, MenuBar } from './src/index.js';
+
+  function logTo(id, msg) {
+    document.getElementById(id).textContent = `last action: ${msg}`;
+  }
+
+  // ── Menubar ────────────────────────────────────────────────────────────
+  let isDirty = false;
+  let showSidebar = true;
+
+  const bar = new MenuBar(document.getElementById('menubar'), () => [
+    { label: 'File', items: () => [
+      { label: 'New',    shortcut: 'Ctrl+N',       action: 'file:new' },
+      { label: 'Open…',  shortcut: 'Ctrl+O',       action: 'file:open' },
+      { label: 'Save',   shortcut: 'Ctrl+S',       action: 'file:save', disabled: !isDirty },
+      '---',
+      { label: 'Open Recent', children: [
+        { label: 'analysis.html',     action: 'open:analysis' },
+        { label: 'model.html',        action: 'open:model' },
+        { label: 'block-model.html',  action: 'open:bm' },
+        '---',
+        { label: 'Clear Recent',      action: 'recent:clear', danger: true },
+      ]},
+      '---',
+      { label: 'Exit',  action: 'file:exit' },
+    ]},
+    { label: 'Edit', items: [
+      { label: 'Undo',  shortcut: 'Ctrl+Z',        action: 'edit:undo' },
+      { label: 'Redo',  shortcut: 'Ctrl+Shift+Z',  action: 'edit:redo' },
+      '---',
+      { label: 'Cut',   shortcut: 'Ctrl+X',        action: 'edit:cut' },
+      { label: 'Copy',  shortcut: 'Ctrl+C',        action: 'edit:copy' },
+      { label: 'Paste', shortcut: 'Ctrl+V',        action: 'edit:paste' },
+    ]},
+    { label: 'View', items: () => [
+      { label: 'Zoom In',  shortcut: 'Ctrl+=',     action: 'view:zoom-in' },
+      { label: 'Zoom Out', shortcut: 'Ctrl+-',     action: 'view:zoom-out' },
+      '---',
+      { label: 'Sidebar', checked: showSidebar,    action: 'view:sidebar' },
+    ]},
+    { label: 'Help', items: [
+      { label: 'Documentation', icon: '📖',       action: 'help:docs' },
+      { label: 'About',                            action: 'help:about' },
+    ]},
+  ]);
+
+  bar.on('action', (action) => {
+    logTo('menubar-log', String(action));
+    if (action === 'file:save') { isDirty = false; bar.refresh(); }
+    if (action === 'view:sidebar') { showSidebar = !showSidebar; bar.refresh(); }
+  });
+
+  // Toggle dirtiness for demo purposes.
+  setTimeout(() => { isDirty = true; bar.refresh(); }, 1500);
+
+  // ── Dropdown ───────────────────────────────────────────────────────────
+  Menu.dropdown(document.getElementById('dd-btn'), [
+    { label: 'New',  action: 'new' },
+    { label: 'Open', action: 'open' },
+    { label: 'Save', action: 'save' },
+  ], { onAction: a => logTo('dd-log', a) });
+
+  // Factory items — evaluated on each open.
+  let openCount = 0;
+  Menu.dropdown(document.getElementById('dd-recent-btn'), () => {
+    openCount++;
+    return [
+      { label: `Open count: ${openCount}`, disabled: true },
+      '---',
+      { label: 'Item A', action: 'a' },
+      { label: 'Item B', action: 'b' },
+    ];
+  }, { onAction: a => logTo('dd-log', a) });
+
+  // ── Context menu ───────────────────────────────────────────────────────
+  document.getElementById('ctx-target').addEventListener('contextmenu', async (e) => {
+    e.preventDefault();
+    const action = await Menu.show([
+      { label: 'Cut',   shortcut: 'Ctrl+X',  action: 'cut' },
+      { label: 'Copy',  shortcut: 'Ctrl+C',  action: 'copy' },
+      { label: 'Paste', shortcut: 'Ctrl+V',  action: 'paste', disabled: true },
+      '---',
+      { label: 'Select All', shortcut: 'Ctrl+A', action: 'select-all' },
+      '---',
+      { label: 'Delete', icon: '🗑',  action: 'delete', danger: true },
+    ], { x: e.clientX, y: e.clientY });
+    if (action) logTo('ctx-log', action);
+  });
+
+  // ── Submenus, separators, danger, checks ───────────────────────────────
+  let sortBy = 'name';
+  document.getElementById('sm-btn').addEventListener('click', async (e) => {
+    const action = await Menu.show([
+      { label: 'New File',     icon: '📄',  shortcut: 'Ctrl+N', action: 'new' },
+      { label: 'Open Recent', children: [
+        { label: 'analysis.html', action: 'open:analysis' },
+        { label: 'model.html',    action: 'open:model' },
+        { label: 'Deeply', children: [
+          { label: 'Nested',  action: 'deep:nested' },
+          { label: 'Submenu', action: 'deep:submenu' },
+        ]},
+      ]},
+      '---',
+      { label: 'Sort by Name', group: 'sort', checked: sortBy === 'name', action: 'sort:name' },
+      { label: 'Sort by Date', group: 'sort', checked: sortBy === 'date', action: 'sort:date' },
+      { label: 'Sort by Size', group: 'sort', checked: sortBy === 'size', action: 'sort:size' },
+      '---',
+      { label: 'Show Hidden', checked: false, action: 'toggle:hidden' },
+      '---',
+      { label: 'Delete All', icon: '🗑',  action: 'delete', danger: true },
+    ], { anchor: e.currentTarget, placement: 'bottom-start' });
+    if (action) {
+      logTo('sm-log', action);
+      if (action.startsWith('sort:')) sortBy = action.split(':')[1];
+    }
+  });
+</script>
+</body>
+</html>

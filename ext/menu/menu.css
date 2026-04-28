@@ -1,0 +1,90 @@
+/*
+ * @gcu/menu — structural stylesheet
+ * Layout, positioning, pointer-events. Zero colors or fonts.
+ * Decorative styling lives in menu-default.css (optional) or consumer CSS.
+ */
+
+.gcu-menu {
+  position: fixed;
+  /* Default 9000 sits well above rails floats (100-200 range) and any
+     reasonable app chrome. Override via --ui-z-dropdown if needed. */
+  z-index: var(--ui-z-dropdown, 9000);
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  max-width: 360px;
+  max-height: 80vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  user-select: none;
+  pointer-events: auto;
+}
+
+.gcu-menu-submenu {
+  /* same as root for now */
+}
+
+.gcu-menu-item {
+  display: grid;
+  grid-template-columns: 18px 18px 1fr auto 14px;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.gcu-menu-item.gcu-menu-disabled {
+  cursor: default;
+  pointer-events: none;
+}
+
+.gcu-menu-check,
+.gcu-menu-icon,
+.gcu-menu-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.gcu-menu-icon img {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.gcu-menu-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.gcu-menu-shortcut {
+  flex-shrink: 0;
+}
+
+.gcu-menu-sep {
+  height: 1px;
+  margin: 4px 0;
+  pointer-events: none;
+}
+
+.gcu-menubar {
+  display: flex;
+  flex-direction: row;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.gcu-menubar-trigger {
+  font: inherit;
+  padding: 4px 12px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gcu-menu { transition: none; }
+}

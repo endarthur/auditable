@@ -1,0 +1,110 @@
+/*
+ * @gcu/menu — default theme
+ * Optional decorative styling. Load after menu.css. Override any
+ * --ui-* custom property to customize.
+ */
+
+:root {
+  --ui-bg-raised:     #16191e;
+  --ui-bg-hover:      #2a303a;
+  --ui-bg-selected:   #3a4250;
+  --ui-fg:            #d6dae1;
+  --ui-fg-muted:      #8a93a3;
+  --ui-fg-error:      #e07a6a;
+  --ui-border:        #2a303a;
+  --ui-border-focus:  #6ab0ff;
+  --ui-border-radius: 3px;
+  --ui-shadow:        0 6px 20px rgba(0, 0, 0, 0.5);
+  --ui-font:          ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  --ui-font-size:     12px;
+  --ui-padding:       8px;
+  --ui-padding-sm:    4px;
+  --ui-z-dropdown:    9000;   /* above rails floats (100-200) and app chrome */
+  --ui-duration:      120ms;
+  --ui-easing:        ease-out;
+}
+
+.gcu-menu {
+  background: var(--ui-bg-raised);
+  color: var(--ui-fg);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-border-radius);
+  box-shadow: var(--ui-shadow);
+  font-family: var(--ui-font);
+  font-size: var(--ui-font-size);
+  padding: 4px 0;
+  animation: gcu-menu-in var(--ui-duration) var(--ui-easing);
+}
+
+@keyframes gcu-menu-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gcu-menu { animation: none; }
+}
+
+.gcu-menu-item {
+  color: var(--ui-fg);
+  transition: background 80ms;
+}
+
+.gcu-menu-item.gcu-menu-active {
+  background: var(--ui-bg-hover);
+}
+
+.gcu-menu-item.gcu-menu-disabled {
+  color: var(--ui-fg-muted);
+  opacity: 0.55;
+}
+
+.gcu-menu-item.gcu-menu-danger .gcu-menu-label {
+  color: var(--ui-fg-error);
+}
+
+.gcu-menu-item.gcu-menu-checked {
+  /* check glyph is rendered into .gcu-menu-check */
+}
+
+.gcu-menu-shortcut {
+  color: var(--ui-fg-muted);
+  font-size: 0.92em;
+  letter-spacing: 0.02em;
+}
+
+.gcu-menu-arrow {
+  color: var(--ui-fg-muted);
+  font-size: 0.85em;
+}
+
+.gcu-menu-sep {
+  background: var(--ui-border);
+}
+
+.gcu-menubar {
+  background: var(--ui-bg-raised);
+  border-bottom: 1px solid var(--ui-border);
+  font-family: var(--ui-font);
+  font-size: var(--ui-font-size);
+  color: var(--ui-fg);
+}
+
+.gcu-menubar-trigger {
+  color: var(--ui-fg);
+  transition: background 80ms;
+}
+
+.gcu-menubar-trigger:hover,
+.gcu-menubar-trigger.gcu-menubar-focused {
+  background: var(--ui-bg-hover);
+}
+
+.gcu-menubar-trigger.gcu-menubar-active {
+  background: var(--ui-bg-selected);
+}
+
+.gcu-menubar-trigger:focus-visible {
+  outline: 1px solid var(--ui-border-focus);
+  outline-offset: -2px;
+}

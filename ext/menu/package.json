@@ -1,0 +1,36 @@
+{
+  "name": "@gcu/menu",
+  "version": "0.1.0",
+  "description": "Popup menus and menubars: context menus, dropdowns, submenus, MenuBar. Promise-resolving show(), CSS-variable themed, full keyboard, drag-aware, ~250 LOC. Zero dependencies.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./bundled": "./index.js",
+    "./menu.css": "./menu.css",
+    "./menu-default.css": "./menu-default.css",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "menu.css",
+    "menu-default.css",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["menu", "menubar", "context-menu", "dropdown", "popup", "submenu", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/menu"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/menu",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}
