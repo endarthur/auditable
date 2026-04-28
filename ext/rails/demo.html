@@ -6,6 +6,8 @@
 <link rel="stylesheet" href="./rails.css">
 <link rel="stylesheet" href="../menu/menu.css">
 <link rel="stylesheet" href="../menu/menu-default.css">
+<link rel="stylesheet" href="../dialog/dialog.css">
+<link rel="stylesheet" href="../dialog/dialog-default.css">
 <style>
   /* Minimal decorative theme — not part of rails.css. */
   :root {
@@ -131,6 +133,7 @@
 <script type="module">
 import { createRails } from './index.js';
 import { Menu } from '../menu/src/index.js';
+import { confirm, prompt } from '../dialog/src/index.js';
 
 const IFRAME_SRC = `<!doctype html><html><head><style>
   body { font-family: ui-monospace, monospace; padding: 18px; color: #222; background: #fafafa; margin: 0; font-size: 13px; line-height: 1.6; }
@@ -240,7 +243,7 @@ const rails = createRails(document.getElementById('workspace'), {
               <p>float titlebar: drag to move, min/max/close buttons, 8 resize handles on edges and corners. <code>Esc</code> cancels any drag mid-flight.</p>
               <p>click a tab header to activate — no chrome rebuild. click any part of a float to raise it.</p>
               <p>left rail is <b>collapsible</b> — click the ◀ at its top. scratch.txt has a <b>badge</b>. inspector is <b>preserveOnClose</b> (close and reopen to see iframe state persist). drag many tabs here to see the overflow ⋯ button appear.</p>
-              <p><b>Right-click anywhere</b> for context menus: tabs, empty strip area, float titlebars — each gets its own menu via <code>@gcu/menu</code>.</p>` },
+              <p><b>Right-click anywhere</b> for context menus: tabs, empty strip area, float titlebars — each gets its own menu via <code>@gcu/menu</code>. Tab "Rename\u2026" and bulk-close confirmations use <code>@gcu/dialog</code>.</p>` },
           { id: 't2', kind: 'text', title: 'scratch.txt', badge: 3 },
           { id: 't-inspector', kind: 'iframe', title: 'inspector.html \u2197', preserveOnClose: true }
         ]
@@ -327,6 +330,7 @@ rails.on('tab:contextmenu', async ({ tab, stack, x, y }) => {
 
   const action = await Menu.show([
     { label: 'Activate',                  action: 'activate' },
+    { label: 'Rename\u2026',              action: 'rename' },
     { label: 'Close',                     action: 'close',       shortcut: 'Ctrl+W', disabled: !closeable },
     '---',
     { label: 'Closeable',                 action: 'toggle:closeable', checked: closeable },
@@ -342,6 +346,17 @@ rails.on('tab:contextmenu', async ({ tab, stack, x, y }) => {
     case 'activate':
       rails.activateTab(tab.id);
       break;
+    case 'rename': {
+      const next = await prompt('New tab title:', {
+        title: 'Rename tab',
+        defaultValue: tab.title || tab.id,
+        validate: (v) => v.trim() ? null : 'Title cannot be empty',
+      });
+      if (next != null) {
+        rails.updateTab(tab.id, { title: next.trim() });
+      }
+      break;
+    }
     case 'close':
       if (tab.preserveOnClose) rails.closeTab(tab.id, { preserve: true });
       else rails.closeTab(tab.id);
@@ -356,22 +371,41 @@ rails.on('tab:contextmenu', async ({ tab, stack, x, y }) => {
     case 'float':
       rails.floatTab(tab.id, { x: 220, y: 160, w: 400, h: 280 });
       break;
-    case 'close-others':
+    case 'close-others': {
+      const others = stack.tabs.filter(t => t.id !== tab.id && t.closeable !== false);
+      // Confirm only if there's more than one tab to close (no-op for one).
+      if (others.length > 1) {
+        const ok = await confirm(`Close ${others.length} tabs in this stack?`, {
+          title: 'Close others',
+          okLabel: 'Close',
+          danger: true,
+        });
+        if (!ok) break;
+      }
       rails.batch(() => {
-        for (const t of [...stack.tabs]) {
-          if (t.id === tab.id || t.closeable === false) continue;
+        for (const t of others) {
           rails.closeTab(t.id, t.preserveOnClose ? { preserve: true } : undefined);
         }
       });
       break;
-    case 'close-all':
+    }
+    case 'close-all': {
+      const closeables = stack.tabs.filter(t => t.closeable !== false);
+      if (closeables.length > 1) {
+        const ok = await confirm(`Close all ${closeables.length} tabs in this stack?`, {
+          title: 'Close all',
+          okLabel: 'Close all',
+          danger: true,
+        });
+        if (!ok) break;
+      }
       rails.batch(() => {
-        for (const t of [...stack.tabs]) {
-          if (t.closeable === false) continue;
+        for (const t of closeables) {
           rails.closeTab(t.id, t.preserveOnClose ? { preserve: true } : undefined);
         }
       });
       break;
+    }
   }
 });
 
@@ -421,9 +455,17 @@ rails.on('strip:contextmenu', async ({ stack, x, y }) => {
     return;
   }
   if (action === 'close-all') {
+    const closeables = stack.tabs.filter(t => t.closeable !== false);
+    if (closeables.length > 1) {
+      const ok = await confirm(`Close all ${closeables.length} tabs in this stack?`, {
+        title: 'Close all',
+        okLabel: 'Close all',
+        danger: true,
+      });
+      if (!ok) return;
+    }
     rails.batch(() => {
-      for (const t of [...stack.tabs]) {
-        if (t.closeable === false) continue;
+      for (const t of closeables) {
         rails.closeTab(t.id, t.preserveOnClose ? { preserve: true } : undefined);
       }
     });
@@ -458,7 +500,19 @@ rails.on('float:titlebar:contextmenu', async ({ float, x, y }) => {
       });
       break;
     }
-    case 'close': rails.closeFloat(float.id); break;
+    case 'close': {
+      const closeables = float.stack.tabs.filter(t => t.closeable !== false);
+      if (closeables.length > 1) {
+        const ok = await confirm(`Close this float and its ${closeables.length} tabs?`, {
+          title: 'Close float',
+          okLabel: 'Close',
+          danger: true,
+        });
+        if (!ok) break;
+      }
+      rails.closeFloat(float.id);
+      break;
+    }
   }
 });
 
