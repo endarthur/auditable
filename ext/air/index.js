@@ -498,9 +498,17 @@ function lowerStatement(ctx, node) {
       ctx.emit('continue', [], VOID, l);
       return null;
 
-    case 'BlockStatement':
+    case 'BlockStatement': {
+      // Block scope — lexical declarations inside are not cell-level exports.
+      // Wrappers like lowerIf/lowerFor/etc. don't need to set this themselves;
+      // their bodies are always either a BlockStatement (handled here) or a
+      // single statement (which can't host let/const/class declarations).
+      const savedTopLevel = ctx.topLevel;
+      ctx.topLevel = false;
       for (const s of node.body) lowerStatement(ctx, s);
+      ctx.topLevel = savedTopLevel;
       return null;
+    }
 
     case 'EmptyStatement':
       return null;
@@ -901,10 +909,15 @@ function lowerLabeled(ctx, node) {
   const l = ctx.loc(node);
   const savedOps = ctx.ops;
   ctx.ops = [];
+  // Track whether body was a block — emitter needs to re-wrap in braces so
+  // `label: let x = 1;` (a JS strict-mode error) becomes `label: { let x; }`.
+  // Loop bodies bring their own braces; we only wrap when the label was on a
+  // bare block.
+  const isBlock = node.body?.type === 'BlockStatement';
   lowerStatement(ctx, node.body);
   const body = ctx.ops;
   ctx.ops = savedOps;
-  return ctx.emit('labeled', [node.label.name], VOID, l, { body });
+  return ctx.emit('labeled', [node.label.name], VOID, l, { body, is_block: isBlock });
 }
 
 function lowerClassDecl(ctx, node) {
@@ -5871,8 +5884,16 @@ function emitTry(ctx, op) {
 
 function emitLabeled(ctx, op) {
   const label = op.args[0];
-  ctx.line(`${label}:`);
-  if (op.body) emitOps(ctx, op.body);
+  if (op.is_block) {
+    ctx.line(`${label}: {`);
+    ctx.push();
+    if (op.body) emitOps(ctx, op.body);
+    ctx.pop();
+    ctx.line('}');
+  } else {
+    ctx.line(`${label}:`);
+    if (op.body) emitOps(ctx, op.body);
+  }
 }
 
 function emitClass(ctx, op) {

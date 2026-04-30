@@ -761,8 +761,16 @@ function emitTry(ctx, op) {
 
 function emitLabeled(ctx, op) {
   const label = op.args[0];
-  ctx.line(`${label}:`);
-  if (op.body) emitOps(ctx, op.body);
+  if (op.is_block) {
+    ctx.line(`${label}: {`);
+    ctx.push();
+    if (op.body) emitOps(ctx, op.body);
+    ctx.pop();
+    ctx.line('}');
+  } else {
+    ctx.line(`${label}:`);
+    if (op.body) emitOps(ctx, op.body);
+  }
 }
 
 function emitClass(ctx, op) {

@@ -69,6 +69,7 @@ const categories = {
     'example_gslib_kb2d.txt',
     'example_gslib_sgsim.txt',
     'example_gslib_dhsa.txt',
+    'example_pairing.txt',
     'example_dee.txt',
     'example_dee_domains.txt',
   ],

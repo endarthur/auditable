@@ -1,0 +1,333 @@
+/// auditable
+/// title: pairing analysis — historic vs infill
+/// module: @atra/gslib ext/atra/lib/gslib.js
+/// module: @gcu/plot ext/plot/index.js
+
+/// md
+# pairing analysis — historic vs infill drilling
+
+A property has two campaigns of drilling: a sparse **historic** grid (Phase 1) and a denser **infill** program (Phase 2) that may use a different lab, drill rig, or sampling method. Before merging the data, we want to know: are the two datasets compatible, or does Phase 2 carry a systematic bias?
+
+The classic check is **pairing analysis** — for each Phase 2 sample, find the nearest Phase 1 sample within a tolerance, then look at the paired residuals. Bias shows up as a non-zero mean residual; precision shows up as RMSE; pairs that fall far from the 1:1 line are flagged as anomalies.
+
+Below, we generate a "true" grade field with `sgsim`, sample it twice with different patterns, and inject controllable bias and noise into Phase 2 to simulate the kind of drift the analysis is designed to detect.
+
+/// code
+// generation parameters — changing these regenerates the truth and samples
+const gridN = ui.slider("grid", 60, {min: 30, max: 100, step: 5});
+const sgRange = ui.slider("variogram range", 12, {min: 4, max: 30, step: 1});
+const nHist = ui.slider("historic samples", 36, {min: 9, max: 100, step: 1});
+const nInfill = ui.slider("infill samples", 80, {min: 10, max: 200, step: 5});
+const biasPct = ui.slider("infill bias %", 5, {min: -25, max: 25, step: 1});
+const sigmaPct = ui.slider("infill noise σ %", 8, {min: 0, max: 30, step: 1});
+
+/// md
+## 1. generate truth
+
+Unconditional Gaussian simulation, shifted to a positive grade-like range (think % Fe or g/t Au). Fixed seed → reproducible field.
+
+/// code
+const { sgsim } = await load("@atra/gslib");
+const engine = sgsim({
+  grid: { nx: gridN, ny: gridN, xsiz: 1, ysiz: 1 },
+  variogram: { structures: [{ type: "spherical", contribution: 1.0, range: sgRange }] },
+  search: { radius: Math.max(sgRange * 2, 20), ndmax: 10, nodmax: 12 },
+});
+const sim = engine.run(31337);
+engine.dispose();
+
+// shift to grade-like values: mean ≈ 30, σ ≈ 8
+const truth = new Float64Array(gridN * gridN);
+for (let i = 0; i < truth.length; i++) truth[i] = Math.max(0, sim[i] * 8 + 30);
+
+const ts = std.extent(truth);
+ui.display(`truth: ${gridN}×${gridN} grid, range ${ts[0].toFixed(1)}–${ts[1].toFixed(1)}, mean ${std.mean(truth).toFixed(1)}`);
+
+/// md
+## 2. sample both campaigns
+
+Phase 1 lays out a roughly regular grid (jittered to avoid pixel alignment). Phase 2 scatters samples randomly across the same area, then applies a known **bias** (multiplicative) and **noise** (lognormal-like proportional error). The bias sliders let you dial in the exact distortion the analysis should recover.
+
+/// code
+// seeded RNG so the layout doesn't change with every slider tweak
+function mulberry32(seed) {
+  let a = seed | 0;
+  return function() {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+function gauss(rng) {
+  // Box-Muller
+  const u = Math.max(1e-12, rng()), v = rng();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+function sampleAt(x, y) {
+  const ix = Math.max(0, Math.min(gridN - 1, Math.floor(x)));
+  const iy = Math.max(0, Math.min(gridN - 1, Math.floor(y)));
+  return truth[iy * gridN + ix];
+}
+
+// Phase 1: jittered regular grid
+const rngH = mulberry32(11);
+const sideH = Math.max(2, Math.ceil(Math.sqrt(nHist)));
+const stepH = gridN / sideH;
+const historic = [];
+for (let j = 0; j < sideH && historic.length < nHist; j++) {
+  for (let i = 0; i < sideH && historic.length < nHist; i++) {
+    const x = (i + 0.5) * stepH + (rngH() - 0.5) * stepH * 0.4;
+    const y = (j + 0.5) * stepH + (rngH() - 0.5) * stepH * 0.4;
+    historic.push({ x, y, val: sampleAt(x, y) });
+  }
+}
+
+// Phase 2: random scatter with bias + noise
+const rngI = mulberry32(929);
+const biasFactor = 1 + biasPct / 100;
+const sigma = sigmaPct / 100;
+const infill = [];
+for (let k = 0; k < nInfill; k++) {
+  const x = rngI() * gridN;
+  const y = rngI() * gridN;
+  const tval = sampleAt(x, y);
+  // proportional Gaussian noise + multiplicative bias
+  const measured = Math.max(0, tval * biasFactor * (1 + sigma * gauss(rngI)));
+  infill.push({ x, y, val: measured });
+}
+
+ui.display(`historic: ${historic.length} samples · infill: ${infill.length} samples (bias ×${biasFactor.toFixed(3)}, σ ${(sigma*100).toFixed(1)}%)`);
+
+/// md
+## 3. pair samples
+
+For each Phase 2 sample, find the nearest Phase 1 sample. If that nearest neighbor is farther than `maxDist`, the sample is **unpaired** — it will not contribute to the comparison. The two sliders below only control pairing and analysis (the truth and samples don't regenerate when you tweak them).
+
+/// code
+const maxDist = ui.slider("max pair distance", 6, {min: 1, max: 20, step: 0.5});
+const anomPct = ui.slider("anomaly threshold %", 25, {min: 5, max: 100, step: 1});
+
+/// code
+// brute-force nearest neighbor (small N — fine)
+const pairs = [];
+const unpaired = [];
+for (const I of infill) {
+  let best = -1, bestD2 = Infinity;
+  for (let h = 0; h < historic.length; h++) {
+    const dx = I.x - historic[h].x, dy = I.y - historic[h].y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < bestD2) { bestD2 = d2; best = h; }
+  }
+  const dist = Math.sqrt(bestD2);
+  if (dist > maxDist) {
+    unpaired.push(I);
+  } else {
+    const H = historic[best];
+    const residual = I.val - H.val;
+    const relPct = H.val > 0 ? (residual / H.val) * 100 : 0;
+    pairs.push({ H, I, dist, residual, relPct });
+  }
+}
+ui.display(`paired ${pairs.length} of ${infill.length} infill samples (${unpaired.length} unpaired beyond ${maxDist})`);
+
+/// md
+## 4. statistics
+
+`bias` is the mean signed residual — its sign tells you which way Phase 2 drifts. `RMSE` is the spread around 1:1. `R²` is the linear fit quality. `regression slope` near 1 with intercept near 0 means consistent campaigns; a slope ≠ 1 hints at a multiplicative effect.
+
+/// code
+const histVals = pairs.map(p => p.H.val);
+const inflVals = pairs.map(p => p.I.val);
+const residuals = pairs.map(p => p.residual);
+const relPcts = pairs.map(p => p.relPct);
+
+const bias = std.mean(residuals);
+const mae = std.mean(residuals.map(Math.abs));
+const rmse = Math.sqrt(std.mean(residuals.map(r => r * r)));
+
+// Pearson correlation and OLS slope/intercept (infill ~ slope·hist + b)
+function ols(x, y) {
+  const mx = std.mean(x), my = std.mean(y);
+  let sxx = 0, syy = 0, sxy = 0;
+  for (let i = 0; i < x.length; i++) {
+    const dx = x[i] - mx, dy = y[i] - my;
+    sxx += dx * dx; syy += dy * dy; sxy += dx * dy;
+  }
+  const slope = sxy / (sxx || 1);
+  const intercept = my - slope * mx;
+  const r = sxy / (Math.sqrt(sxx * syy) || 1);
+  return { slope, intercept, r, r2: r * r };
+}
+const fit = pairs.length >= 2 ? ols(histVals, inflVals) : { slope: NaN, intercept: NaN, r: NaN, r2: NaN };
+const meanRelPct = std.mean(relPcts);
+
+const flagged = pairs.filter(p => Math.abs(p.relPct) > anomPct);
+ui.display([
+  `bias       ${bias >= 0 ? '+' : ''}${bias.toFixed(2)}    (${meanRelPct >= 0 ? '+' : ''}${meanRelPct.toFixed(1)}% relative)`,
+  `MAE        ${mae.toFixed(2)}`,
+  `RMSE       ${rmse.toFixed(2)}`,
+  `R²         ${fit.r2.toFixed(3)}`,
+  `slope      ${fit.slope.toFixed(3)}    intercept ${fit.intercept.toFixed(2)}`,
+  `anomalies  ${flagged.length} pair(s) with |Δ| > ${anomPct}%`,
+].join("\n"));
+
+/// md
+## 5. scatter — paired values
+
+The dashed gray line is 1:1 (perfect agreement). The amber line is the OLS fit. Each point is colored by its residual via a diverging `coolwarm` colormap centered on zero — warm reads higher than Phase 1, cool reads lower, near-white sits on 1:1. With the default sliders (+5% bias, 8% σ) the cloud should drift slightly to the warm side of 1:1.
+
+/// code
+const plot = await load("@gcu/plot");
+const lim = [
+  Math.min(...histVals, ...inflVals) * 0.95,
+  Math.max(...histVals, ...inflVals) * 1.05,
+];
+const rMax = Math.max(...residuals.map(Math.abs), 1e-6);
+
+const { fig, ax } = plot.subplots(1, 1, { figsize: [500, 460] });
+// 1:1 line
+ax.plot(lim, lim, { color: "#bbb", linestyle: "--", label: "1:1" });
+// OLS fit
+if (pairs.length >= 2) {
+  const fy = lim.map(x => fit.slope * x + fit.intercept);
+  ax.plot(lim, fy, { color: "#c89b3c", label: `fit (slope ${fit.slope.toFixed(2)})` });
+}
+// scatter colored by residual magnitude/sign
+ax.scatter(histVals, inflVals, {
+  c: residuals, cmap: "coolwarm", vmin: -rMax, vmax: rMax,
+  s: 36, edgecolor: "#fff", linewidth: 0.6,
+});
+ax.set_title("paired values — Phase 1 (historic) vs Phase 2 (infill)");
+ax.set_xlabel("historic value");
+ax.set_ylabel("infill value");
+ax.set_xlim(lim[0], lim[1]);
+ax.set_ylim(lim[0], lim[1]);
+ax.set_aspect("equal");
+ax.grid(true);
+ax.legend();
+ax.colorbar({ label: "residual (infill − historic)" });
+display(fig.show());
+
+/// md
+## 6. residual distribution
+
+Histogram of `(infill − historic)`. Solid amber line = mean bias; dashed = the anomaly threshold expressed in absolute units (using the historic mean as a reference). A symmetric distribution centered on zero means random measurement noise. A shifted center means systematic bias. Long tails outside the threshold lines are the flagged anomalies.
+
+/// code
+const refHist = std.mean(histVals);
+const thrAbs = (anomPct / 100) * refHist;
+
+const { fig: f2, ax: a2 } = plot.subplots(1, 1, { figsize: [520, 280] });
+a2.hist(residuals, { bins: 24, color: "#5ba3b5", edgecolor: "#222" });
+a2.axvline(0, { color: "#888", linestyle: ":" });
+a2.axvline(bias, { color: "#c89b3c", label: `bias ${bias.toFixed(2)}` });
+a2.axvline(thrAbs, { color: "#e07050", linestyle: "--", label: `±${anomPct}% of ref` });
+a2.axvline(-thrAbs, { color: "#e07050", linestyle: "--" });
+a2.set_title("residual distribution — infill minus historic");
+a2.set_xlabel("residual");
+a2.set_ylabel("count");
+a2.legend();
+display(f2.show());
+
+/// md
+## 7. spatial map
+
+Truth in the background (viridis). White circles are historic samples, black-edged colored dots are infill samples (color = residual sign), and thin lines connect each infill sample to the historic sample it was paired with. Anomalous pairs (|Δ%| > threshold) are highlighted with thicker amber outlines. Unpaired infill samples are drawn as gray ×.
+
+/// code
+const size = Math.min(540, window.innerWidth - 80);
+const c = ui.canvas(size, size);
+const ctx = c.getContext("2d");
+const cell = size / gridN;
+
+// truth background
+let vmin = Infinity, vmax = -Infinity;
+for (let i = 0; i < truth.length; i++) {
+  if (truth[i] < vmin) vmin = truth[i];
+  if (truth[i] > vmax) vmax = truth[i];
+}
+const vrange = vmax - vmin || 1;
+for (let iy = 0; iy < gridN; iy++) {
+  for (let ix = 0; ix < gridN; ix++) {
+    ctx.fillStyle = std.viridis((truth[iy * gridN + ix] - vmin) / vrange);
+    ctx.fillRect(ix * cell, iy * cell, cell + 0.5, cell + 0.5);
+  }
+}
+
+// pair lines
+ctx.lineWidth = 1;
+for (const p of pairs) {
+  const flagged = Math.abs(p.relPct) > anomPct;
+  ctx.strokeStyle = flagged ? "#c89b3c" : (p.residual >= 0 ? "rgba(224,112,80,0.7)" : "rgba(91,163,181,0.7)");
+  ctx.lineWidth = flagged ? 2 : 1;
+  ctx.beginPath();
+  ctx.moveTo(p.H.x * cell, p.H.y * cell);
+  ctx.lineTo(p.I.x * cell, p.I.y * cell);
+  ctx.stroke();
+}
+ctx.lineWidth = 1;
+
+// infill dots — colored by residual sign, anomalies ringed
+for (const p of pairs) {
+  const flagged = Math.abs(p.relPct) > anomPct;
+  ctx.beginPath();
+  ctx.arc(p.I.x * cell, p.I.y * cell, flagged ? 5 : 3.5, 0, Math.PI * 2);
+  ctx.fillStyle = p.residual >= 0 ? "#e07050" : "#5ba3b5";
+  ctx.fill();
+  ctx.strokeStyle = flagged ? "#c89b3c" : "#000";
+  ctx.lineWidth = flagged ? 2 : 1;
+  ctx.stroke();
+}
+
+// historic — white squares
+for (const H of historic) {
+  ctx.fillStyle = "#fff";
+  ctx.strokeStyle = "#000";
+  ctx.lineWidth = 1;
+  ctx.fillRect(H.x * cell - 3, H.y * cell - 3, 6, 6);
+  ctx.strokeRect(H.x * cell - 3, H.y * cell - 3, 6, 6);
+}
+
+// unpaired infill — gray ×
+ctx.strokeStyle = "#bbb";
+ctx.lineWidth = 1.5;
+for (const I of unpaired) {
+  const x = I.x * cell, y = I.y * cell;
+  ctx.beginPath();
+  ctx.moveTo(x - 4, y - 4); ctx.lineTo(x + 4, y + 4);
+  ctx.moveTo(x - 4, y + 4); ctx.lineTo(x + 4, y - 4);
+  ctx.stroke();
+}
+
+/// md
+## 8. worst outliers
+
+The five pairs with the largest relative discrepancy. Inspect these in the field — duplicate the assay, retrieve the original sample, or check whether one campaign's collar coordinates are suspect.
+
+/// code
+const top = [...pairs].sort((a, b) => Math.abs(b.relPct) - Math.abs(a.relPct)).slice(0, 5);
+const rows = ["#  hist (x, y)              infill (x, y)            dist    H val    I val    Δ        Δ %"];
+top.forEach((p, i) => {
+  const sgn = p.relPct >= 0 ? "+" : "";
+  rows.push(
+    `${(i + 1).toString().padEnd(3)}` +
+    `(${p.H.x.toFixed(1).padStart(5)}, ${p.H.y.toFixed(1).padStart(5)})    ` +
+    `(${p.I.x.toFixed(1).padStart(5)}, ${p.I.y.toFixed(1).padStart(5)})    ` +
+    `${p.dist.toFixed(2).padStart(5)}   ` +
+    `${p.H.val.toFixed(2).padStart(6)}   ${p.I.val.toFixed(2).padStart(6)}   ` +
+    `${sgn}${p.residual.toFixed(2).padStart(6)}   ${sgn}${p.relPct.toFixed(1)}%`
+  );
+});
+ui.display(rows.join("\n"));
+
+/// md
+## reading the result
+
+- **bias near zero, slope near 1, R² high** → the two campaigns agree. merge the data.
+- **bias offset, slope ≈ 1** → constant additive shift. likely a sampling or sample-prep difference; correct with a single offset.
+- **slope ≠ 1, R² high** → multiplicative effect (e.g., different lab calibration, different assay method). correct with a regression.
+- **low R², large RMSE, no bias** → poor precision. the Phase 2 method is noisy but unbiased; use it with caution at small block sizes.
+- **clusters of anomalies in one part of the map** → spatially localized issue, possibly a single bad batch or a domain change between campaigns.
+
+The pairing distance is a tradeoff: too small and you discard usable comparisons; too large and you start pairing samples across geological variation, which inflates the residuals for reasons unrelated to data quality. Pick a tolerance comparable to the variogram range or finer.

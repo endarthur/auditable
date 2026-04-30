@@ -400,6 +400,70 @@ describe('AIR lowerer — control flow', () => {
   });
 });
 
+describe('AIR lowerer — block scoping (regression)', () => {
+  // Regression: const/let declared inside any block-introducing form must not
+  // be added to module.defines (which would cause the emitter's
+  // `return { ... }` epilogue to reference an out-of-scope binding at runtime).
+  function execEmit(src) {
+    const module = lower(src);
+    runPasses(module);
+    const js = emitJS(module, [], [], { hinted: true, cellId: 't', cellName: 'test' });
+    let runtimeError = null;
+    try { new Function(js)(); } catch (e) { runtimeError = e.message; }
+    return { module, js, runtimeError };
+  }
+
+  for (const [label, src] of [
+    ['if-block',      `if (true) { const fy = 1; }`],
+    ['if-else',       `if (false) {} else { const fy = 1; }`],
+    ['for-body',      `for (let i = 0; i < 1; i++) { const fy = 1; }`],
+    ['while-body',    `while (false) { const fy = 1; }`],
+    ['do-while-body', `do { const fy = 1; } while (false);`],
+    ['switch-case',   `switch (1) { case 1: { const fy = 1; break; } }`],
+    ['try-block',     `try { const fy = 1; } catch (e) {}`],
+    ['catch-block',   `try {} catch (e) { const fy = 1; }`],
+    ['finally-block', `try {} finally { const fy = 1; }`],
+    ['for-in-body',   `for (const k in {a:1}) { const fy = 1; }`],
+    ['for-of-body',   `for (const it of [1, 2]) { const fy = 1; }`],
+    ['labeled-block', `outer: { const fy = 1; }`],
+    ['bare-block',    `{ const fy = 1; }`],
+  ]) {
+    it(`block-scoped const inside ${label} is not exported`, () => {
+      const { module, runtimeError } = execEmit(src);
+      assert.ok(!module.defines.has('fy'), `fy should not be in defines for ${label}`);
+      assert.equal(runtimeError, null, `emitted JS should run cleanly for ${label}: ${runtimeError}`);
+    });
+  }
+
+  it('const used inside the same if-block (the original repro)', () => {
+    const src = `
+      const lim = [0, 1];
+      const fit = { slope: 2, intercept: 1 };
+      const pairs = [{}, {}];
+      let captured;
+      if (pairs.length >= 2) {
+        const fy = lim.map(x => fit.slope * x + fit.intercept);
+        captured = fy[1];
+      }
+    `;
+    const { module, runtimeError } = execEmit(src);
+    assert.ok(module.defines.has('lim'));
+    assert.ok(module.defines.has('fit'));
+    assert.ok(module.defines.has('pairs'));
+    assert.ok(module.defines.has('captured'));
+    assert.ok(!module.defines.has('fy'));
+    assert.equal(runtimeError, null);
+  });
+
+  it('top-level const/let/fn/class still exported', () => {
+    const m = lower(`const a = 1; let b = 2; function f() {} class C {}`);
+    assert.ok(m.defines.has('a'));
+    assert.ok(m.defines.has('b'));
+    assert.ok(m.defines.has('f'));
+    assert.ok(m.defines.has('C'));
+  });
+});
+
 describe('AIR lowerer — functions', () => {
   it('arrow function expression', () => {
     const m = lower('const f = (x) => x + 1');
