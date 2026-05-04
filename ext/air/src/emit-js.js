@@ -88,6 +88,25 @@ function countUses(ops, counts) {
 // Emit context
 // =============================================================================
 
+// Lexical scope for emitted name bindings. Each block-introducing emit
+// (for/for-of/for-in/while/do-while/if/switch/try/labeled-block/function)
+// pushes a fresh scope around its body; on exit, every name declared
+// inside falls out of scope so a sibling region can re-`let` the same
+// name. The cell's top-level (root) scope is not popped — exports live
+// there and their `let` only needs to be emitted once.
+class Scope {
+  constructor(parent) {
+    this.parent = parent;
+    this.declared = new Set();
+  }
+  has(name) {
+    return this.declared.has(name) || (this.parent ? this.parent.has(name) : false);
+  }
+  declare(name) {
+    this.declared.add(name);
+  }
+}
+
 class EmitCtx {
   constructor(module, options) {
     this.module = module;
@@ -105,8 +124,14 @@ class EmitCtx {
     // SSA id → type
     this.types = new Map();
 
-    // Track which SSA ids have been emitted as let bindings
+    // Tracks which multi-use SSA ids have been emitted as `let _N = …`
+    // bindings. SSA ids are unique across the whole module so this set
+    // is module-global — no scoping. Distinct from `scope.declared`
+    // which tracks user-named bindings (i, raf, fy, etc).
     this.emitted = new Set();
+
+    // Current lexical scope for named bindings.
+    this.scope = new Scope(null);
 
     this.lines = [];
     this.indent = 0;
@@ -115,6 +140,12 @@ class EmitCtx {
   line(s) { this.lines.push('  '.repeat(this.indent) + s); }
   push() { this.indent++; }
   pop() { this.indent--; }
+
+  pushScope() { this.scope = new Scope(this.scope); }
+  popScope() {
+    if (!this.scope.parent) throw new Error('popScope: already at root');
+    this.scope = this.scope.parent;
+  }
 
   // Resolve an SSA ref to an expression string.
   // Single-use values are inlined; multi-use values are variable names.
@@ -371,22 +402,17 @@ function emitStore(ctx, op) {
   const valId = op.args[1];
   const val = ctx.ref(valId);
 
-  // If this is a top-level define, emit as let/const
-  // Don't apply hints here — the value's own emission handles V8 hints.
-  if (ctx.module.defines.has(name)) {
-    if (ctx.emitted.has('decl:' + name)) {
-      ctx.line(`${name} = ${val};`);
-    } else {
-      ctx.line(`let ${name} = ${val};`);
-      ctx.emitted.add('decl:' + name);
-    }
+  // First store of a name in the current scope chain emits a fresh
+  // `let`; subsequent stores within the same scope emit a bare
+  // assignment. Cell-export names (top-level defines) are stored in
+  // the root scope and persist for the whole module — they get one
+  // `let` and any further updates assign. Block-scoped names live in
+  // an inner scope that's popped on exit, so siblings can re-`let`.
+  if (ctx.scope.has(name)) {
+    ctx.line(`${name} = ${val};`);
   } else {
-    if (!ctx.emitted.has('decl:' + name)) {
-      ctx.line(`let ${name} = ${val};`);
-      ctx.emitted.add('decl:' + name);
-    } else {
-      ctx.line(`${name} = ${val};`);
-    }
+    ctx.line(`let ${name} = ${val};`);
+    ctx.scope.declare(name);
   }
 }
 
@@ -394,7 +420,7 @@ function emitSlotAlloc(ctx, op) {
   const name = op.args[0];
   // Slots are mutable-captured variables — emit as let
   ctx.line(`let ${name};`);
-  ctx.emitted.add('decl:' + name);
+  ctx.scope.declare(name);
   // Map the slot id so slot_load/slot_store can find the name
   ctx.exprs.set(op.id, name);
   ctx.types.set(op.id, op.type);
@@ -552,43 +578,27 @@ function emitIf(ctx, op) {
     phiVar = ctx.varName(op.id);
     ctx.line(`let ${phiVar};`);
   }
-  // Each branch is its own block scope. Snapshot the `decl:NAME` keys
-  // before each branch and clear any introduced inside on exit, so a
-  // sibling branch (or any later code) can re-declare the same name as
-  // a fresh `let`. Without this, `if (…) { const s = … } else { const s = … }`
-  // emitted the else's `s` as a bare assignment to an out-of-scope binding.
-  const snapshot = (fn) => {
-    const before = new Set();
-    for (const k of ctx.emitted) if (typeof k === 'string' && k.startsWith('decl:')) before.add(k);
-    fn();
-    for (const k of [...ctx.emitted]) {
-      if (typeof k === 'string' && k.startsWith('decl:') && !before.has(k)) {
-        ctx.emitted.delete(k);
-      }
-    }
-  };
-
   ctx.line(`if (${cond}) {`);
   ctx.push();
-  snapshot(() => {
-    if (op.then_body) emitOps(ctx, op.then_body);
-    if (phi && phi.then_val) {
-      const thenVal = ctx.ref(phi.then_val);
-      ctx.line(`${phiVar} = ${thenVal};`);
-    }
-  });
+  ctx.pushScope();
+  if (op.then_body) emitOps(ctx, op.then_body);
+  if (phi && phi.then_val) {
+    const thenVal = ctx.ref(phi.then_val);
+    ctx.line(`${phiVar} = ${thenVal};`);
+  }
+  ctx.popScope();
   ctx.pop();
   const hasElse = (op.else_body && op.else_body.length) || (phi && phi.else_val);
   if (hasElse) {
     ctx.line('} else {');
     ctx.push();
-    snapshot(() => {
-      if (op.else_body) emitOps(ctx, op.else_body);
-      if (phi && phi.else_val) {
-        const elseVal = ctx.ref(phi.else_val);
-        ctx.line(`${phiVar} = ${elseVal};`);
-      }
-    });
+    ctx.pushScope();
+    if (op.else_body) emitOps(ctx, op.else_body);
+    if (phi && phi.else_val) {
+      const elseVal = ctx.ref(phi.else_val);
+      ctx.line(`${phiVar} = ${elseVal};`);
+    }
+    ctx.popScope();
     ctx.pop();
   }
   ctx.line('}');
@@ -636,21 +646,10 @@ function combineForUpdate(lines) {
 }
 
 function emitFor(ctx, op) {
-  // Snapshot the set of `decl:NAME` flags before entering the loop. The
-  // for-loop is its own block scope: init declarations and any body-level
-  // lets fall out when we exit, so a sibling `for (let i …)` (or an
-  // `for-of` over the same names) later in the cell starts fresh. SSA
-  // `%N` tracking is untouched — those ids are unique across the module.
-  const declSnapshot = new Set();
-  for (const k of ctx.emitted) if (typeof k === 'string' && k.startsWith('decl:')) declSnapshot.add(k);
-  // Clear any `decl:` for names this loop's init will declare so the
-  // init emits a fresh `let`. Cell-exports are excluded — they live in
-  // module scope.
-  const initNames = (op.init || [])
-    .filter(o => o.op === 'store' && !ctx.module.defines.has(o.args[0]))
-    .map(o => o.args[0]);
-  for (const n of initNames) ctx.emitted.delete('decl:' + n);
-
+  // The whole loop is its own scope: init declarations + body-level lets
+  // fall out on exit so a sibling `for (let i …)` (or for-of over the
+  // same name) later in the cell starts fresh.
+  ctx.pushScope();
   try {
     const captureLines = (fn) => {
       const saved = ctx.lines;
@@ -703,13 +702,7 @@ function emitFor(ctx, op) {
     ctx.pop();
     ctx.line('}');
   } finally {
-    // Drop every `decl:NAME` introduced inside the loop (init or body),
-    // restoring the pre-loop snapshot. SSA tracking is untouched.
-    for (const k of [...ctx.emitted]) {
-      if (typeof k === 'string' && k.startsWith('decl:') && !declSnapshot.has(k)) {
-        ctx.emitted.delete(k);
-      }
-    }
+    ctx.popScope();
   }
 }
 
@@ -717,7 +710,9 @@ function emitForIn(ctx, op) {
   const iter = ctx.ref(op.args[0]);
   ctx.line(`for (const _k in ${iter}) {`);
   ctx.push();
+  ctx.pushScope();
   if (op.body) emitOps(ctx, op.body);
+  ctx.popScope();
   ctx.pop();
   ctx.line('}');
 }
@@ -725,37 +720,27 @@ function emitForIn(ctx, op) {
 function emitForOf(ctx, op) {
   const iter = ctx.ref(op.args[0]);
   const target = op.target_name || '_v';
-  // Two scoping concerns:
-  //   (1) the loop variable itself (`d`) — adder/Soft put it in `defines`
-  //       so the value leaks past the loop; JS-style cells should re-`let`
-  //       on each sibling for-of.
-  //   (2) any block-scoped lets *inside* the body — sibling for-ofs that
-  //       both declare `const x = …` should each get their own `let x`.
-  // We snapshot the `decl:NAME` subset of `ctx.emitted` before the loop
-  // and restore after, so any decl introduced inside the body falls out
-  // of scope when we exit. SSA `%N` bindings persist (they're unique
-  // across the module).
-  const isCellExport = ctx.module.defines.has(target);
-  const declSnapshot = new Set();
-  for (const k of ctx.emitted) if (typeof k === 'string' && k.startsWith('decl:')) declSnapshot.add(k);
-  if (!isCellExport) ctx.emitted.delete('decl:' + target);
-
+  // Loop variable is scoped to this loop unless it's a cell-export
+  // (adder/Soft Python-style loop-var leak); in that case the outer
+  // root scope already declares it, so `scope.has()` returns true and
+  // we emit `for (target of …)` (no `let`), letting the loop assign
+  // to the cell-level binding so the value persists past the loop.
+  ctx.pushScope();
   try {
-    const kind = isCellExport && declSnapshot.has('decl:' + target) ? '' : 'let ';
+    let kind;
+    if (ctx.scope.has(target)) {
+      kind = '';
+    } else {
+      kind = 'let ';
+      ctx.scope.declare(target);
+    }
     ctx.line(`for (${kind}${target} of ${iter}) {`);
-    if (kind === 'let ') ctx.emitted.add('decl:' + target);
     ctx.push();
     if (op.body) emitOps(ctx, op.body);
     ctx.pop();
     ctx.line('}');
   } finally {
-    // Drop every `decl:NAME` introduced inside the loop; restore the ones
-    // that existed before. SSA tracking (non-`decl:` keys) is untouched.
-    for (const k of [...ctx.emitted]) {
-      if (typeof k === 'string' && k.startsWith('decl:') && !declSnapshot.has(k)) {
-        ctx.emitted.delete(k);
-      }
-    }
+    ctx.popScope();
   }
 }
 
@@ -763,7 +748,9 @@ function emitLoop(ctx, op) {
   if (op.loop_kind === 'do_while') {
     ctx.line('do {');
     ctx.push();
+    ctx.pushScope();
     if (op.body) emitOps(ctx, op.body);
+    ctx.popScope();
     ctx.pop();
     if (op.test) emitOps(ctx, op.test);
     const testExpr = op.test_val ? ctx.ref(op.test_val) : 'true';
@@ -772,12 +759,14 @@ function emitLoop(ctx, op) {
     // while loop
     ctx.line('while (true) {');
     ctx.push();
+    ctx.pushScope();
     if (op.test) emitOps(ctx, op.test);
     if (op.test_val) {
       const testExpr = ctx.ref(op.test_val);
       ctx.line(`if (!(${testExpr})) break;`);
     }
     if (op.body) emitOps(ctx, op.body);
+    ctx.popScope();
     ctx.pop();
     ctx.line('}');
   }
@@ -805,15 +794,17 @@ function emitFunc(ctx, op) {
   if (emitAsDecl) {
     ctx.line(`${asyncPrefix}function${star} ${name}(${params}) {`);
     ctx.push();
-    // Enter new scope: function body has its own local decl tracking
-    const savedEmitted = ctx.emitted;
-    ctx.emitted = new Set(savedEmitted);
+    // Function body is its own scope; pre-declare params so a `let p = …`
+    // inside the body emits as `p = …` rather than re-declaring.
+    ctx.pushScope();
+    for (const p of (op.params || [])) ctx.scope.declare(p.name);
     if (op.body) emitOps(ctx, op.body);
-    ctx.emitted = savedEmitted;
+    ctx.popScope();
     ctx.pop();
     ctx.line('}');
-    ctx.emitted.add('decl:' + name);
-    // Register so store doesn't re-declare
+    // Register the function name in the enclosing scope so subsequent
+    // stores don't re-declare it.
+    ctx.scope.declare(name);
     ctx.exprs.set(op.id, name);
     ctx.types.set(op.id, op.type);
   } else {
@@ -821,10 +812,10 @@ function emitFunc(ctx, op) {
     const savedLines = ctx.lines;
     ctx.lines = [];
     ctx.push();
-    const savedEmitted = ctx.emitted;
-    ctx.emitted = new Set(savedEmitted);
+    ctx.pushScope();
+    for (const p of (op.params || [])) ctx.scope.declare(p.name);
     if (op.body) emitOps(ctx, op.body);
-    ctx.emitted = savedEmitted;
+    ctx.popScope();
     ctx.pop();
     const bodyLines = ctx.lines;
     ctx.lines = savedLines;
@@ -856,6 +847,11 @@ function emitSwitch(ctx, op) {
   const disc = ctx.ref(op.args[0]);
   ctx.line(`switch (${disc}) {`);
   ctx.push();
+  // Each case body is its own block scope so two cases declaring the
+  // same name (`case 1: { let x = … } case 2: { let x = … }`) each get
+  // their own `let`. Source-level cases that wrap their body in `{}`
+  // already get scoping from the BlockStatement op, but the scope
+  // pushed here also covers cases whose body is a flat statement list.
   for (const c of op.cases || []) {
     if (c.test_val) {
       if (c.test_ops) emitOps(ctx, c.test_ops);
@@ -865,7 +861,9 @@ function emitSwitch(ctx, op) {
       ctx.line('default:');
     }
     ctx.push();
+    ctx.pushScope();
     emitOps(ctx, c.body);
+    ctx.popScope();
     ctx.pop();
   }
   ctx.pop();
@@ -873,21 +871,31 @@ function emitSwitch(ctx, op) {
 }
 
 function emitTry(ctx, op) {
+  // Each of try / catch / finally is its own block scope. The catch
+  // parameter is pre-declared so a body-level `let e = …` would be
+  // detected (and emit a fresh declaration in JS, matching semantics).
   ctx.line('try {');
   ctx.push();
+  ctx.pushScope();
   if (op.try_body) emitOps(ctx, op.try_body);
+  ctx.popScope();
   ctx.pop();
   if (op.catch_param != null || (op.catch_body && op.catch_body.length)) {
     const param = op.catch_param ? `(${op.catch_param})` : '';
     ctx.line(`} catch${param} {`);
     ctx.push();
+    ctx.pushScope();
+    if (op.catch_param) ctx.scope.declare(op.catch_param);
     if (op.catch_body) emitOps(ctx, op.catch_body);
+    ctx.popScope();
     ctx.pop();
   }
   if (op.finally_body && op.finally_body.length) {
     ctx.line('} finally {');
     ctx.push();
+    ctx.pushScope();
     emitOps(ctx, op.finally_body);
+    ctx.popScope();
     ctx.pop();
   }
   ctx.line('}');
@@ -898,7 +906,9 @@ function emitLabeled(ctx, op) {
   if (op.is_block) {
     ctx.line(`${label}: {`);
     ctx.push();
+    ctx.pushScope();
     if (op.body) emitOps(ctx, op.body);
+    ctx.popScope();
     ctx.pop();
     ctx.line('}');
   } else {
@@ -932,7 +942,7 @@ function emitClass(ctx, op) {
   ctx.line('}');
 
   if (isDecl) {
-    ctx.emitted.add('decl:' + name);
+    ctx.scope.declare(name);
     ctx.exprs.set(op.id, name);
     ctx.types.set(op.id, op.type);
   } else {
@@ -1006,8 +1016,10 @@ function emitOpaque(ctx, op) {
   // expression-level (instanceof, **, typeof — have consumers).
   const src = op.args[0] || '(void 0)';
   const uses = ctx.useCounts.get(op.id) || 0;
-  // Side signal: mark a name as already declared (for global/nonlocal)
-  if (op._markDeclared) ctx.emitted.add('decl:' + op._markDeclared);
+  // Side signal: mark a name as already declared in the current scope
+  // (used by adder/Soft for `nonlocal` / `global` markers — subsequent
+  // stores in this scope should bare-assign rather than `let`-redeclare).
+  if (op._markDeclared) ctx.scope.declare(op._markDeclared);
   if (uses === 0) {
     // Statement-level: emit as a line (skip the marker comment itself)
     if (op._markDeclared) return;
