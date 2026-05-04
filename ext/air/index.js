@@ -275,22 +275,44 @@ function findMutableCaptured(ast) {
 
     if (isFn) {
       scopes.push(new Set());
-      // collect params
+      // Params live in the function's outer scope. The body's BlockStatement
+      // gets its own scope below (via the isBlock branch), which collects
+      // body declarations there. We don't double-collect into the function
+      // scope — that would put body lets in BOTH scopes and cause any
+      // reassignment inside the function to look like a capture from outside.
       if (node.params) {
         for (const p of node.params) collectPatternNames(p, currentScope());
       }
-      // collect body declarations
-      if (node.body?.type === 'BlockStatement') {
-        for (const stmt of node.body.body) collectDeclarations(stmt);
-      }
-      // walk body in nested function context
       walk(node.body, true);
       scopes.pop();
       return;
     }
 
-    // Collect declarations for current scope
-    collectDeclarations(node);
+    // Block-introducing forms get their own scope so block-scoped lets and
+    // for-init declarations don't leak to the enclosing function / cell as
+    // "outer-declared". Without this, `for (let i …)` made `i` visible to
+    // inner closures, falsely marking it captured and forcing a slot.
+    const isBlock = node.type === 'BlockStatement' ||
+                    node.type === 'ForStatement' ||
+                    node.type === 'ForInStatement' ||
+                    node.type === 'ForOfStatement';
+    if (isBlock) {
+      scopes.push(new Set());
+      if (node.type === 'BlockStatement') {
+        for (const stmt of node.body) collectDeclarations(stmt);
+      } else {
+        if (node.init && node.init.type === 'VariableDeclaration') collectDeclarations(node.init);
+        if (node.left && node.left.type === 'VariableDeclaration') collectDeclarations(node.left);
+      }
+      for (const key of Object.keys(node)) {
+        if (key === 'type' || key === 'start' || key === 'end' || key === 'loc' ||
+            key === 'typeAnnotation' || key === 'returnType') continue;
+        const child = node[key];
+        if (child && typeof child === 'object') walk(child, inFunction);
+      }
+      scopes.pop();
+      return;
+    }
 
     // Check assignments to outer-scope variables inside functions
     if (inFunction) {
@@ -789,6 +811,18 @@ function lowerForIn(ctx, node) {
 
 function lowerForOf(ctx, node) {
   const l = ctx.loc(node);
+
+  // Destructuring loop variables (`for (const [i, s] of …)`, `for (const {a} of …)`)
+  // would need a synthetic temp + a destructure in the body, which the IR
+  // doesn't model directly. Preserve the source verbatim — the emitter
+  // round-trips opaque text and `scanIdentifiers` still picks up cross-cell
+  // deps.
+  const isPatternTarget =
+    (node.left.type === 'VariableDeclaration' &&
+     node.left.declarations[0]?.id?.type !== 'Identifier') ||
+    (node.left.type !== 'VariableDeclaration' && node.left.type !== 'Identifier');
+  if (isPatternTarget) return lowerOpaque(ctx, node);
+
   const iter = lowerExpr(ctx, node.right);
   const savedOps = ctx.ops;
   ctx.ops = [];
@@ -5166,9 +5200,22 @@ function needsAsync(module) {
 function countUses(ops, counts) {
   for (const op of ops) {
     if (op.args) {
-      for (const arg of op.args) {
-        if (typeof arg === 'string' && arg.startsWith('%')) {
-          counts.set(arg, (counts.get(arg) || 0) + 1);
+      // object_new stores pairs as { key, id } / { spread, id } objects
+      // rather than bare SSA ids — without this branch, the values used
+      // in object literals didn't count, the opaque/let bindings they
+      // referenced fell back to the zero-uses statement-emit path, and
+      // the object literal then dangled `_N` references.
+      if (op.op === 'object_new') {
+        for (const pair of op.args) {
+          if (pair && typeof pair.id === 'string' && pair.id.startsWith('%')) {
+            counts.set(pair.id, (counts.get(pair.id) || 0) + 1);
+          }
+        }
+      } else {
+        for (const arg of op.args) {
+          if (typeof arg === 'string' && arg.startsWith('%')) {
+            counts.set(arg, (counts.get(arg) || 0) + 1);
+          }
         }
       }
     }
@@ -5576,9 +5623,15 @@ function emitObjectSet(ctx, op) {
 function emitArrayGet(ctx, op) {
   const arr = ctx.ref(op.args[0]);
   const idx = ctx.ref(op.args[1]);
-  const hintedIdx = ctx.hinted ? `(${idx}) | 0` : idx;
+  // Only coerce the index to i32 when AIR has typed it as an integer.
+  // Without the type guard, `obj[stringKey]` got wrapped as
+  // `obj[(stringKey) | 0]` → `obj[0]` (since string|0 === 0), so any
+  // dynamic property access with a string key silently returned undefined.
+  const idxType = ctx.types.get(op.args[1]);
+  const hintIdx = ctx.hinted && idxType && isInteger(idxType);
+  const idxExpr = hintIdx ? `(${idx}) | 0` : idx;
   const bracket = op.optional ? '?.[' : '[';
-  register(ctx, op, `${arr}${bracket}${hintedIdx}]`);
+  register(ctx, op, `${arr}${bracket}${idxExpr}]`);
 }
 
 function emitArraySet(ctx, op) {
@@ -5729,63 +5782,81 @@ function combineForUpdate(lines) {
 }
 
 function emitFor(ctx, op) {
-  // Capture init, test (and its expression), and update as line arrays. Order
-  // matters: init must run first so its declarations register in `ctx.emitted`
-  // before the update emits assignments to the same names.
-  const captureLines = (fn) => {
-    const saved = ctx.lines;
-    ctx.lines = [];
-    fn();
-    const out = ctx.lines;
-    ctx.lines = saved;
-    return out;
-  };
+  // Snapshot the set of `decl:NAME` flags before entering the loop. The
+  // for-loop is its own block scope: init declarations and any body-level
+  // lets fall out when we exit, so a sibling `for (let i …)` (or an
+  // `for-of` over the same names) later in the cell starts fresh. SSA
+  // `%N` tracking is untouched — those ids are unique across the module.
+  const declSnapshot = new Set();
+  for (const k of ctx.emitted) if (typeof k === 'string' && k.startsWith('decl:')) declSnapshot.add(k);
+  // Clear any `decl:` for names this loop's init will declare so the
+  // init emits a fresh `let`. Cell-exports are excluded — they live in
+  // module scope.
+  const initNames = (op.init || [])
+    .filter(o => o.op === 'store' && !ctx.module.defines.has(o.args[0]))
+    .map(o => o.args[0]);
+  for (const n of initNames) ctx.emitted.delete('decl:' + n);
 
-  const initLines = op.init && op.init.length
-    ? captureLines(() => emitOps(ctx, op.init)) : [];
+  try {
+    const captureLines = (fn) => {
+      const saved = ctx.lines;
+      ctx.lines = [];
+      fn();
+      const out = ctx.lines;
+      ctx.lines = saved;
+      return out;
+    };
 
-  let testExpr = '';
-  const testLines = captureLines(() => {
-    if (op.test) emitOps(ctx, op.test);
-    if (op.test_val) testExpr = ctx.ref(op.test_val);
-  });
+    const initLines = op.init && op.init.length
+      ? captureLines(() => emitOps(ctx, op.init)) : [];
 
-  const updateLines = op.update && op.update.length
-    ? captureLines(() => emitOps(ctx, op.update)) : [];
+    let testExpr = '';
+    const testLines = captureLines(() => {
+      if (op.test) emitOps(ctx, op.test);
+      if (op.test_val) testExpr = ctx.ref(op.test_val);
+    });
 
-  // Compact form: `for (init; test; update) { body }` if everything fits.
-  const initStr = combineForInit(initLines);
-  const updateStr = combineForUpdate(updateLines);
-  const compact = initStr !== null && updateStr !== null && testLines.length === 0;
+    const updateLines = op.update && op.update.length
+      ? captureLines(() => emitOps(ctx, op.update)) : [];
 
-  if (compact) {
-    ctx.line(`for (${initStr}; ${testExpr}; ${updateStr}) {`);
+    const initStr = combineForInit(initLines);
+    const updateStr = combineForUpdate(updateLines);
+    const compact = initStr !== null && updateStr !== null && testLines.length === 0;
+
+    if (compact) {
+      ctx.line(`for (${initStr}; ${testExpr}; ${updateStr}) {`);
+      ctx.push();
+      if (op.body) emitOps(ctx, op.body);
+      ctx.pop();
+      ctx.line('}');
+      return;
+    }
+
+    // Fallback: desugar to `{ init; while (true) { test; body; update } }`.
+    // `continue` inside body skips the update — acceptable trade-off because
+    // the compact path covers the common case.
+    ctx.line('{');
     ctx.push();
+    for (const l of initLines) ctx.lines.push(l);
+    ctx.line('while (true) {');
+    ctx.push();
+    for (const l of testLines) ctx.lines.push(l);
+    if (testExpr) ctx.line(`if (!(${testExpr})) break;`);
     if (op.body) emitOps(ctx, op.body);
+    for (const l of updateLines) ctx.lines.push(l);
     ctx.pop();
     ctx.line('}');
-    return;
+    ctx.pop();
+    ctx.line('}');
+  } finally {
+    // Drop every `decl:NAME` introduced inside the loop (init or body),
+    // restoring the pre-loop snapshot. SSA tracking is untouched.
+    for (const k of [...ctx.emitted]) {
+      if (typeof k === 'string' && k.startsWith('decl:') && !declSnapshot.has(k)) {
+        ctx.emitted.delete(k);
+      }
+    }
   }
-
-  // Fallback: desugar to a `{ init; while (true) { test; body; update; } }`
-  // form so multi-statement inits and updates emit correctly. Wrapped in a
-  // block so the init declarations stay scoped to the loop.
-  // Note: `continue` inside body skips the update — acceptable trade-off
-  // because the compact path covers the overwhelmingly common case and the
-  // alternative was outright broken.
-  ctx.line('{');
-  ctx.push();
-  for (const l of initLines) ctx.lines.push(l);
-  ctx.line('while (true) {');
-  ctx.push();
-  for (const l of testLines) ctx.lines.push(l);
-  if (testExpr) ctx.line(`if (!(${testExpr})) break;`);
-  if (op.body) emitOps(ctx, op.body);
-  for (const l of updateLines) ctx.lines.push(l);
-  ctx.pop();
-  ctx.line('}');
-  ctx.pop();
-  ctx.line('}');
 }
 
 function emitForIn(ctx, op) {
@@ -5800,15 +5871,38 @@ function emitForIn(ctx, op) {
 function emitForOf(ctx, op) {
   const iter = ctx.ref(op.args[0]);
   const target = op.target_name || '_v';
-  // If target_name is a Python-style variable that wasn't pre-declared,
-  // use `let` to declare per-iteration. The emitter tracks via emitted set.
-  const kind = ctx.emitted.has('decl:' + target) ? '' : 'let ';
-  ctx.line(`for (${kind}${target} of ${iter}) {`);
-  if (kind === 'let ') ctx.emitted.add('decl:' + target);
-  ctx.push();
-  if (op.body) emitOps(ctx, op.body);
-  ctx.pop();
-  ctx.line('}');
+  // Two scoping concerns:
+  //   (1) the loop variable itself (`d`) — adder/Soft put it in `defines`
+  //       so the value leaks past the loop; JS-style cells should re-`let`
+  //       on each sibling for-of.
+  //   (2) any block-scoped lets *inside* the body — sibling for-ofs that
+  //       both declare `const x = …` should each get their own `let x`.
+  // We snapshot the `decl:NAME` subset of `ctx.emitted` before the loop
+  // and restore after, so any decl introduced inside the body falls out
+  // of scope when we exit. SSA `%N` bindings persist (they're unique
+  // across the module).
+  const isCellExport = ctx.module.defines.has(target);
+  const declSnapshot = new Set();
+  for (const k of ctx.emitted) if (typeof k === 'string' && k.startsWith('decl:')) declSnapshot.add(k);
+  if (!isCellExport) ctx.emitted.delete('decl:' + target);
+
+  try {
+    const kind = isCellExport && declSnapshot.has('decl:' + target) ? '' : 'let ';
+    ctx.line(`for (${kind}${target} of ${iter}) {`);
+    if (kind === 'let ') ctx.emitted.add('decl:' + target);
+    ctx.push();
+    if (op.body) emitOps(ctx, op.body);
+    ctx.pop();
+    ctx.line('}');
+  } finally {
+    // Drop every `decl:NAME` introduced inside the loop; restore the ones
+    // that existed before. SSA tracking (non-`decl:` keys) is untouched.
+    for (const k of [...ctx.emitted]) {
+      if (typeof k === 'string' && k.startsWith('decl:') && !declSnapshot.has(k)) {
+        ctx.emitted.delete(k);
+      }
+    }
+  }
 }
 
 function emitLoop(ctx, op) {

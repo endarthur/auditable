@@ -414,6 +414,118 @@ describe('AIR lowerer — control flow', () => {
     const op = findOp(m, 'for_of_region');
     assert.equal(op?.target_name, 'item');
   });
+
+  it('object literal counts pair values as uses (regression)', () => {
+    // object_new stores pairs as { key, id } objects rather than bare
+    // SSA ids in `op.args`. countUses used to skip them, so a referenced
+    // value (e.g. an opaque tagged template) was treated as unused,
+    // emitted as a statement, and its varname dangled inside the object
+    // literal as `_N is not defined`. Surfaced by example_idw's workshop
+    // call: `workshop([{ content: md\`...\` }])`.
+    const module = lower('workshop([{ content: md`hello` }])');
+    runPasses(module);
+    const js = emitJS(module, [], [], { hinted: true, cellId: 't' });
+    let err = null;
+    const md = (s) => ({ src: s[0] });
+    const workshop = () => {};
+    try { new Function('workshop', 'md', js)(workshop, md); } catch (e) { err = e.message; }
+    assert.equal(err, null);
+    // The opaque tagged-template should appear inline inside the object
+    // literal, not as a dangling statement above the call.
+    assert.match(js, /workshop\(\[\{[^}]*content:\s*md`hello`/);
+  });
+
+  it('sibling for-loops with same loop var each get their own let', () => {
+    // Without the per-loop save/restore of `decl:i`, the second for-loop
+    // emitted `i = 0` (bare assignment), combineForInit rejected the
+    // compact form, fallback while-desugar referenced an undefined `i`.
+    const module = lower(`
+      const arr = [1, 2, 3];
+      let total = 0;
+      for (let i = 0; i < arr.length; i++) total += arr[i];
+      for (let i = 0; i < arr.length; i++) total += arr[i] * 2;
+    `);
+    runPasses(module);
+    const js = emitJS(module, [], [], { hinted: true, cellId: 't' });
+    let err = null;
+    try { new Function(js)(); } catch (e) { err = e.message; }
+    assert.equal(err, null);
+    // Both for-headers should declare `i` with `let`, not bare assignment.
+    const forHeaders = js.match(/for \(let i = 0;/g) || [];
+    assert.equal(forHeaders.length, 2);
+  });
+
+  it('sibling for-of loops with same target each get their own let', () => {
+    // Same pattern as the for-loop case but for `for-of` — surfaced by
+    // example_webmcp where two consecutive `for (const d of …)` loops
+    // referenced an outer `d` that was actually scoped to the first loop.
+    const module = lower(`
+      const a = [1]; const b = [2];
+      let s = 0;
+      for (const d of a) s += d;
+      for (const d of b) s += d * 2;
+    `);
+    runPasses(module);
+    const js = emitJS(module, [], [], { hinted: true, cellId: 't' });
+    let err = null;
+    try { new Function(js)(); } catch (e) { err = e.message; }
+    assert.equal(err, null);
+    const headers = js.match(/for \(let d of /g) || [];
+    assert.equal(headers.length, 2);
+  });
+
+  it('body-level lets in sibling for-of loops do not leak between loops', () => {
+    // Each for-of body is its own block scope. A `const x = …` in the
+    // first loop must not prevent the second loop from also declaring
+    // its own `let x = …`.
+    const module = lower(`
+      for (const d of [1]) { const x = d * 2; }
+      for (const d of [2]) { const x = d * 3; }
+    `);
+    runPasses(module);
+    const js = emitJS(module, [], [], { hinted: true, cellId: 't' });
+    let err = null;
+    try { new Function(js)(); } catch (e) { err = e.message; }
+    assert.equal(err, null);
+    const xs = js.match(/let x =/g) || [];
+    assert.equal(xs.length, 2);
+  });
+
+  it('destructuring for-of target falls back to opaque', () => {
+    // `for (const [i, s] of enumerate(arr))` had no representation in
+    // the IR — lowerForOf checked node.left.declarations[0]?.id?.name
+    // which is undefined for ArrayPatterns. The emitter then fell back
+    // to `_v` and the body's references to `i` and `s` were unbound.
+    const module = lower('for (const [i, s] of pairs) { use(i, s) }');
+    runPasses(module);
+    const js = emitJS(module, [], [], { hinted: true, cellId: 't' });
+    // Source should round-trip through the opaque path.
+    assert.match(js, /for \(const \[i, s\] of pairs\)/);
+  });
+
+  it('dynamic property access with string key does not coerce to int', () => {
+    // emitArrayGet used to wrap every index in `(idx) | 0`, which turns
+    // a string key into `(string) | 0 === 0`. Surfaced by example_atra:
+    // `evalModel = wasm[modelName]` with modelName a slider string ended
+    // up doing `wasm[0]`, returning undefined.
+    const module = lower(`
+      const obj = { spherical: 42 };
+      const key = "spherical";
+      const v = obj[key];
+    `);
+    runPasses(module);
+    const js = emitJS(module, [], [], { hinted: true, cellId: 't' });
+    assert.doesNotMatch(js, /\(\s*key\s*\)\s*\|\s*0/);
+    // Numeric indices should still get the int hint.
+    const numIdx = lower('const arr = [1,2,3]; const v = arr[1];');
+    runPasses(numIdx);
+    const js2 = emitJS(numIdx, [], [], { hinted: true, cellId: 't' });
+    // Either an inlined integer or the |0 coerce — both fine. Just
+    // assert the cell runs.
+    let err = null;
+    try { new Function(js2)(); } catch (e) { err = e.message; }
+    assert.equal(err, null);
+  });
 });
 
 describe('AIR lowerer — block scoping (regression)', () => {

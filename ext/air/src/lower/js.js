@@ -82,22 +82,44 @@ function findMutableCaptured(ast) {
 
     if (isFn) {
       scopes.push(new Set());
-      // collect params
+      // Params live in the function's outer scope. The body's BlockStatement
+      // gets its own scope below (via the isBlock branch), which collects
+      // body declarations there. We don't double-collect into the function
+      // scope — that would put body lets in BOTH scopes and cause any
+      // reassignment inside the function to look like a capture from outside.
       if (node.params) {
         for (const p of node.params) collectPatternNames(p, currentScope());
       }
-      // collect body declarations
-      if (node.body?.type === 'BlockStatement') {
-        for (const stmt of node.body.body) collectDeclarations(stmt);
-      }
-      // walk body in nested function context
       walk(node.body, true);
       scopes.pop();
       return;
     }
 
-    // Collect declarations for current scope
-    collectDeclarations(node);
+    // Block-introducing forms get their own scope so block-scoped lets and
+    // for-init declarations don't leak to the enclosing function / cell as
+    // "outer-declared". Without this, `for (let i …)` made `i` visible to
+    // inner closures, falsely marking it captured and forcing a slot.
+    const isBlock = node.type === 'BlockStatement' ||
+                    node.type === 'ForStatement' ||
+                    node.type === 'ForInStatement' ||
+                    node.type === 'ForOfStatement';
+    if (isBlock) {
+      scopes.push(new Set());
+      if (node.type === 'BlockStatement') {
+        for (const stmt of node.body) collectDeclarations(stmt);
+      } else {
+        if (node.init && node.init.type === 'VariableDeclaration') collectDeclarations(node.init);
+        if (node.left && node.left.type === 'VariableDeclaration') collectDeclarations(node.left);
+      }
+      for (const key of Object.keys(node)) {
+        if (key === 'type' || key === 'start' || key === 'end' || key === 'loc' ||
+            key === 'typeAnnotation' || key === 'returnType') continue;
+        const child = node[key];
+        if (child && typeof child === 'object') walk(child, inFunction);
+      }
+      scopes.pop();
+      return;
+    }
 
     // Check assignments to outer-scope variables inside functions
     if (inFunction) {
@@ -596,6 +618,18 @@ function lowerForIn(ctx, node) {
 
 function lowerForOf(ctx, node) {
   const l = ctx.loc(node);
+
+  // Destructuring loop variables (`for (const [i, s] of …)`, `for (const {a} of …)`)
+  // would need a synthetic temp + a destructure in the body, which the IR
+  // doesn't model directly. Preserve the source verbatim — the emitter
+  // round-trips opaque text and `scanIdentifiers` still picks up cross-cell
+  // deps.
+  const isPatternTarget =
+    (node.left.type === 'VariableDeclaration' &&
+     node.left.declarations[0]?.id?.type !== 'Identifier') ||
+    (node.left.type !== 'VariableDeclaration' && node.left.type !== 'Identifier');
+  if (isPatternTarget) return lowerOpaque(ctx, node);
+
   const iter = lowerExpr(ctx, node.right);
   const savedOps = ctx.ops;
   ctx.ops = [];
