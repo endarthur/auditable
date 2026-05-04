@@ -526,6 +526,90 @@ describe('AIR lowerer — control flow', () => {
     try { new Function(js2)(); } catch (e) { err = e.message; }
     assert.equal(err, null);
   });
+
+  it('nested function declarations emit as JS function statements', () => {
+    // Inside another function, `function rng() {}` was emitted as an
+    // inline `let _N = function rng() {};` because the lowerer kept the
+    // name out of `defines` (correct) but the emitter only emitted
+    // `function name(){}` syntax for cell-export names. Body callers
+    // referenced `rng` as a bare identifier, which dangled.
+    const module = lower(`
+      function outer(seed) {
+        let s = seed;
+        function rng() { s = s + 1; return s; }
+        return rng() + rng();
+      }
+      const v = outer(10);
+    `);
+    runPasses(module);
+    const js = emitJS(module, [], [], { hinted: true, cellId: 't' });
+    let err = null, exports;
+    try { exports = new Function(js)(); } catch (e) { err = e.message; }
+    assert.equal(err, null);
+    assert.equal(exports.v, 23); // 11 + 12
+    assert.match(js, /function outer\(/);
+    assert.match(js, /function rng\(/);
+  });
+
+  it('chained assignment to member targets returns rhs (regression)', () => {
+    // `a[i] = b[j] = c[k] = 0` — lowerAssignment for MemberExpression
+    // used to return its own VOID `array_set` op id, so the outer
+    // assignments referenced the void op as their value. The emitter
+    // dangled `_N` for each level. Surfaced by raster + mandelbrot
+    // (`img.data[idx] = img.data[idx+1] = img.data[idx+2] = 0`).
+    const module = lower(`
+      const a = new Array(5).fill(99);
+      a[0] = a[1] = a[2] = 0;
+    `);
+    runPasses(module);
+    const js = emitJS(module, [], [], { hinted: true, cellId: 't' });
+    let err = null, exports;
+    try { exports = new Function(js)(); } catch (e) { err = e.message; }
+    assert.equal(err, null);
+    assert.deepEqual([...exports.a], [0, 0, 0, 99, 99]);
+  });
+
+  it('if/else branches each scope their own block-scoped lets', () => {
+    // `if (…) { const s = … } else { const s = … }` — emitIf ran both
+    // bodies against the same `decl:` set, so the second branch saw
+    // `decl:s` already set and emitted `s = …` (bare assignment) to a
+    // binding that didn't exist in its scope.
+    const module = lower(`
+      const x = Math.random() < 2 ? 1 : 0;
+      let result;
+      if (x === 1) {
+        const s = 100;
+        result = s;
+      } else {
+        const s = 200;
+        result = s;
+      }
+    `);
+    runPasses(module);
+    const js = emitJS(module, [], [], { hinted: true, cellId: 't' });
+    let err = null;
+    try { new Function(js)(); } catch (e) { err = e.message; }
+    assert.equal(err, null);
+    // Both branches should declare `s` with `let`.
+    const ss = js.match(/let s =/g) || [];
+    assert.equal(ss.length, 2);
+  });
+
+  it('unary `+x` emits as a real plus, not `(x + undefined)`', () => {
+    // lowerUnary for `+` used to emit an `add` op with one argument,
+    // which the emitter rendered with `op.args[1]` as `undefined`,
+    // turning `+m[0]` into `(m[0] + undefined)`. Surfaced by raster
+    // (`img.data[idx] = +m[0]`).
+    const module = lower('const x = +"42"; const y = +x;');
+    runPasses(module);
+    const js = emitJS(module, [], [], { hinted: true, cellId: 't' });
+    assert.doesNotMatch(js, /\+ undefined/);
+    let err = null, exports;
+    try { exports = new Function(js)(); } catch (e) { err = e.message; }
+    assert.equal(err, null);
+    assert.equal(exports.x, 42);
+    assert.equal(exports.y, 42);
+  });
 });
 
 describe('AIR lowerer — block scoping (regression)', () => {

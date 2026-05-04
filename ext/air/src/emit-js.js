@@ -214,6 +214,7 @@ function emitOp(ctx, op) {
     case 'add': case 'sub': case 'mul': case 'div': case 'mod': case 'exp':
       return emitBinary(ctx, op);
     case 'neg': return emitUnary(ctx, op, '-');
+    case 'unary_plus': return emitUnary(ctx, op, '+');
     case 'logical_not': return emitUnary(ctx, op, '!');
     case 'bitwise_or': case 'bitwise_and': case 'bitwise_xor':
     case 'shift_left': case 'shift_right': case 'ushift_right':
@@ -551,23 +552,43 @@ function emitIf(ctx, op) {
     phiVar = ctx.varName(op.id);
     ctx.line(`let ${phiVar};`);
   }
+  // Each branch is its own block scope. Snapshot the `decl:NAME` keys
+  // before each branch and clear any introduced inside on exit, so a
+  // sibling branch (or any later code) can re-declare the same name as
+  // a fresh `let`. Without this, `if (…) { const s = … } else { const s = … }`
+  // emitted the else's `s` as a bare assignment to an out-of-scope binding.
+  const snapshot = (fn) => {
+    const before = new Set();
+    for (const k of ctx.emitted) if (typeof k === 'string' && k.startsWith('decl:')) before.add(k);
+    fn();
+    for (const k of [...ctx.emitted]) {
+      if (typeof k === 'string' && k.startsWith('decl:') && !before.has(k)) {
+        ctx.emitted.delete(k);
+      }
+    }
+  };
+
   ctx.line(`if (${cond}) {`);
   ctx.push();
-  if (op.then_body) emitOps(ctx, op.then_body);
-  if (phi && phi.then_val) {
-    const thenVal = ctx.ref(phi.then_val);
-    ctx.line(`${phiVar} = ${thenVal};`);
-  }
+  snapshot(() => {
+    if (op.then_body) emitOps(ctx, op.then_body);
+    if (phi && phi.then_val) {
+      const thenVal = ctx.ref(phi.then_val);
+      ctx.line(`${phiVar} = ${thenVal};`);
+    }
+  });
   ctx.pop();
   const hasElse = (op.else_body && op.else_body.length) || (phi && phi.else_val);
   if (hasElse) {
     ctx.line('} else {');
     ctx.push();
-    if (op.else_body) emitOps(ctx, op.else_body);
-    if (phi && phi.else_val) {
-      const elseVal = ctx.ref(phi.else_val);
-      ctx.line(`${phiVar} = ${elseVal};`);
-    }
+    snapshot(() => {
+      if (op.else_body) emitOps(ctx, op.else_body);
+      if (phi && phi.else_val) {
+        const elseVal = ctx.ref(phi.else_val);
+        ctx.line(`${phiVar} = ${elseVal};`);
+      }
+    });
     ctx.pop();
   }
   ctx.line('}');
@@ -775,7 +796,13 @@ function emitFunc(ctx, op) {
   // If so, emit as function declaration or const assignment
   const uses = ctx.useCounts.get(op.id) || 0;
 
-  if (name && ctx.module.defines.has(name)) {
+  // Emit as a real `function name(...) {}` declaration whenever the
+  // source had a FunctionDeclaration — the binding is hoisted to the
+  // enclosing block in JS, and callers reference the name directly.
+  // Cell-export functions (top-level FunctionDeclarations) were always
+  // handled this way; this branch now also covers nested function decls.
+  const emitAsDecl = name && (ctx.module.defines.has(name) || op.is_decl);
+  if (emitAsDecl) {
     ctx.line(`${asyncPrefix}function${star} ${name}(${params}) {`);
     ctx.push();
     // Enter new scope: function body has its own local decl tracking

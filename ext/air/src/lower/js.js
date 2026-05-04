@@ -518,6 +518,11 @@ function lowerFuncDecl(ctx, node) {
     name, params, body: bodyOps, ret_type: retType,
     is_async: node.async || false,
     is_generator: node.generator || false,
+    // FunctionDeclaration → emit as `function name(...) {}` statement at
+    // wherever this op sits, not as an expression. Without the flag, a
+    // nested function decl was registered as an inline `function name(){}`
+    // expression — body callers found the name unbound.
+    is_decl: true,
   });
 
   if (name && ctx.topLevel) {
@@ -1102,9 +1107,12 @@ function lowerUnary(ctx, node) {
     return ctx.emit('logical_not', [arg.id], BOOL, l);
   }
   if (node.operator === '+') {
-    // Unary + is a ToNumber coercion
+    // Unary `+` is a ToNumber coercion in JS (e.g. `+"42" === 42`).
+    // Emit as a dedicated unary op — used to be `add` with a single
+    // arg, which the emitter rendered as `(arg + undefined)` because
+    // emitBinary expected two operands.
     const arg = lowerExpr(ctx, node.argument);
-    return ctx.emit('add', [arg.id], F64, l); // coercion hint
+    return ctx.emit('unary_plus', [arg.id], F64, l);
   }
   if (node.operator === 'typeof') {
     const arg = lowerExpr(ctx, node.argument);
@@ -1185,11 +1193,15 @@ function lowerAssignment(ctx, node) {
     const rhs = lowerExpr(ctx, node.right);
     if (node.left.computed) {
       const key = lowerExpr(ctx, node.left.property);
-      return ctx.emit('array_set', [obj.id, key.id, rhs.id], VOID, l);
+      ctx.emit('array_set', [obj.id, key.id, rhs.id], VOID, l);
     } else {
       const key = (node.left.property.type === 'PrivateIdentifier' ? '#' : '') + node.left.property.name;
-      return ctx.emit('object_set', [obj.id, key, rhs.id], VOID, l);
+      ctx.emit('object_set', [obj.id, key, rhs.id], VOID, l);
     }
+    // Assignment expressions evaluate to their rhs in JS — return `rhs`,
+    // not the void store op, so chained assignments like
+    // `a[i] = b[j] = c[k] = 0` find a real value at each rhs slot.
+    return rhs;
   }
 
   // Destructuring assignment

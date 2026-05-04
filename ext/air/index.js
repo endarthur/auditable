@@ -711,6 +711,11 @@ function lowerFuncDecl(ctx, node) {
     name, params, body: bodyOps, ret_type: retType,
     is_async: node.async || false,
     is_generator: node.generator || false,
+    // FunctionDeclaration → emit as `function name(...) {}` statement at
+    // wherever this op sits, not as an expression. Without the flag, a
+    // nested function decl was registered as an inline `function name(){}`
+    // expression — body callers found the name unbound.
+    is_decl: true,
   });
 
   if (name && ctx.topLevel) {
@@ -1295,9 +1300,12 @@ function lowerUnary(ctx, node) {
     return ctx.emit('logical_not', [arg.id], BOOL, l);
   }
   if (node.operator === '+') {
-    // Unary + is a ToNumber coercion
+    // Unary `+` is a ToNumber coercion in JS (e.g. `+"42" === 42`).
+    // Emit as a dedicated unary op — used to be `add` with a single
+    // arg, which the emitter rendered as `(arg + undefined)` because
+    // emitBinary expected two operands.
     const arg = lowerExpr(ctx, node.argument);
-    return ctx.emit('add', [arg.id], F64, l); // coercion hint
+    return ctx.emit('unary_plus', [arg.id], F64, l);
   }
   if (node.operator === 'typeof') {
     const arg = lowerExpr(ctx, node.argument);
@@ -1378,11 +1386,15 @@ function lowerAssignment(ctx, node) {
     const rhs = lowerExpr(ctx, node.right);
     if (node.left.computed) {
       const key = lowerExpr(ctx, node.left.property);
-      return ctx.emit('array_set', [obj.id, key.id, rhs.id], VOID, l);
+      ctx.emit('array_set', [obj.id, key.id, rhs.id], VOID, l);
     } else {
       const key = (node.left.property.type === 'PrivateIdentifier' ? '#' : '') + node.left.property.name;
-      return ctx.emit('object_set', [obj.id, key, rhs.id], VOID, l);
+      ctx.emit('object_set', [obj.id, key, rhs.id], VOID, l);
     }
+    // Assignment expressions evaluate to their rhs in JS — return `rhs`,
+    // not the void store op, so chained assignments like
+    // `a[i] = b[j] = c[k] = 0` find a real value at each rhs slot.
+    return rhs;
   }
 
   // Destructuring assignment
@@ -5381,6 +5393,7 @@ function emitOp(ctx, op) {
     case 'add': case 'sub': case 'mul': case 'div': case 'mod': case 'exp':
       return emitBinary(ctx, op);
     case 'neg': return emitUnary(ctx, op, '-');
+    case 'unary_plus': return emitUnary(ctx, op, '+');
     case 'logical_not': return emitUnary(ctx, op, '!');
     case 'bitwise_or': case 'bitwise_and': case 'bitwise_xor':
     case 'shift_left': case 'shift_right': case 'ushift_right':
@@ -5718,23 +5731,43 @@ function emitIf(ctx, op) {
     phiVar = ctx.varName(op.id);
     ctx.line(`let ${phiVar};`);
   }
+  // Each branch is its own block scope. Snapshot the `decl:NAME` keys
+  // before each branch and clear any introduced inside on exit, so a
+  // sibling branch (or any later code) can re-declare the same name as
+  // a fresh `let`. Without this, `if (…) { const s = … } else { const s = … }`
+  // emitted the else's `s` as a bare assignment to an out-of-scope binding.
+  const snapshot = (fn) => {
+    const before = new Set();
+    for (const k of ctx.emitted) if (typeof k === 'string' && k.startsWith('decl:')) before.add(k);
+    fn();
+    for (const k of [...ctx.emitted]) {
+      if (typeof k === 'string' && k.startsWith('decl:') && !before.has(k)) {
+        ctx.emitted.delete(k);
+      }
+    }
+  };
+
   ctx.line(`if (${cond}) {`);
   ctx.push();
-  if (op.then_body) emitOps(ctx, op.then_body);
-  if (phi && phi.then_val) {
-    const thenVal = ctx.ref(phi.then_val);
-    ctx.line(`${phiVar} = ${thenVal};`);
-  }
+  snapshot(() => {
+    if (op.then_body) emitOps(ctx, op.then_body);
+    if (phi && phi.then_val) {
+      const thenVal = ctx.ref(phi.then_val);
+      ctx.line(`${phiVar} = ${thenVal};`);
+    }
+  });
   ctx.pop();
   const hasElse = (op.else_body && op.else_body.length) || (phi && phi.else_val);
   if (hasElse) {
     ctx.line('} else {');
     ctx.push();
-    if (op.else_body) emitOps(ctx, op.else_body);
-    if (phi && phi.else_val) {
-      const elseVal = ctx.ref(phi.else_val);
-      ctx.line(`${phiVar} = ${elseVal};`);
-    }
+    snapshot(() => {
+      if (op.else_body) emitOps(ctx, op.else_body);
+      if (phi && phi.else_val) {
+        const elseVal = ctx.ref(phi.else_val);
+        ctx.line(`${phiVar} = ${elseVal};`);
+      }
+    });
     ctx.pop();
   }
   ctx.line('}');
@@ -5942,7 +5975,13 @@ function emitFunc(ctx, op) {
   // If so, emit as function declaration or const assignment
   const uses = ctx.useCounts.get(op.id) || 0;
 
-  if (name && ctx.module.defines.has(name)) {
+  // Emit as a real `function name(...) {}` declaration whenever the
+  // source had a FunctionDeclaration — the binding is hoisted to the
+  // enclosing block in JS, and callers reference the name directly.
+  // Cell-export functions (top-level FunctionDeclarations) were always
+  // handled this way; this branch now also covers nested function decls.
+  const emitAsDecl = name && (ctx.module.defines.has(name) || op.is_decl);
+  if (emitAsDecl) {
     ctx.line(`${asyncPrefix}function${star} ${name}(${params}) {`);
     ctx.push();
     // Enter new scope: function body has its own local decl tracking
