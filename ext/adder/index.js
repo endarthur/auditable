@@ -2401,12 +2401,17 @@ function _createPathClass(getVfs, pth) {
 // ── shutil module ──
 
 function _createShutilModule(getVfs) {
+  // Resolve user-facing paths (relative-to-cwd, ~ expansion) before
+  // passing to VFS — `os` and `os.path` already do this via _resolve;
+  // shutil/glob used to skip that step and the raw `data/foo.csv`
+  // hit `vfs.resolve` which has no mount for non-absolute paths.
+  const r = (p) => _resolvePath(p, _vfsPath);
   return {
-    copy: async (src, dst) => { try { await getVfs().cp(src, dst); } catch (e) { throw _mapVFSError(e); } },
-    copy2: async (src, dst) => { try { await getVfs().cp(src, dst); } catch (e) { throw _mapVFSError(e); } },
-    copytree: async (src, dst) => { try { await getVfs().cp(src, dst, { recursive: true }); } catch (e) { throw _mapVFSError(e); } },
-    rmtree: async (p) => { try { await getVfs().rm(p, { recursive: true }); } catch (e) { throw _mapVFSError(e); } },
-    move: async (src, dst) => { try { await getVfs().rename(src, dst); } catch (e) { throw _mapVFSError(e); } },
+    copy: async (src, dst) => { try { await getVfs().cp(r(src), r(dst)); } catch (e) { throw _mapVFSError(e); } },
+    copy2: async (src, dst) => { try { await getVfs().cp(r(src), r(dst)); } catch (e) { throw _mapVFSError(e); } },
+    copytree: async (src, dst) => { try { await getVfs().cp(r(src), r(dst), { recursive: true }); } catch (e) { throw _mapVFSError(e); } },
+    rmtree: async (p) => { try { await getVfs().rm(r(p), { recursive: true }); } catch (e) { throw _mapVFSError(e); } },
+    move: async (src, dst) => { try { await getVfs().rename(r(src), r(dst)); } catch (e) { throw _mapVFSError(e); } },
   };
 }
 
@@ -2414,7 +2419,10 @@ function _createShutilModule(getVfs) {
 
 function _createGlobModule(getVfs) {
   return {
-    glob: async (pattern) => { try { return await getVfs().glob(pattern); } catch (e) { throw _mapVFSError(e); } },
+    glob: async (pattern) => {
+      try { return await getVfs().glob(_resolvePath(pattern, _vfsPath)); }
+      catch (e) { throw _mapVFSError(e); }
+    },
   };
 }
 
@@ -4598,7 +4606,37 @@ function _pos(a) {
 
 function _invert(a) {
   if (typeof a === 'number') return ~a;
+  // dunder fallback so e.g. sadpan's BooleanMask.__invert__ fires
+  if (a !== null && typeof a === 'object' && typeof a.__invert__ === 'function') return a.__invert__();
   throw new AdderError('TypeError', `bad operand type for unary ~: '${pyTypeName(a)}'`);
+}
+
+// ── Bitwise (with dunder fallback) ──
+// Lowered from `&`, `|`, `^` between values whose types AIR can't prove
+// are ints. Fast-path real ints to native bitwise; fall through to
+// __and__/__or__/__xor__ so libraries like sadpan can overload (their
+// BooleanMask combines via these). The constant-fold pass in passes.js
+// can short-circuit back to native bitwise once both operands are typed.
+
+function _and_(a, b) {
+  if (typeof a === 'number' && typeof b === 'number') return a & b;
+  if (a !== null && typeof a === 'object' && typeof a.__and__ === 'function') return a.__and__(b);
+  if (b !== null && typeof b === 'object' && typeof b.__rand__ === 'function') return b.__rand__(a);
+  throw new AdderError('TypeError', `unsupported operand type(s) for &: '${pyTypeName(a)}' and '${pyTypeName(b)}'`);
+}
+
+function _or_(a, b) {
+  if (typeof a === 'number' && typeof b === 'number') return a | b;
+  if (a !== null && typeof a === 'object' && typeof a.__or__ === 'function') return a.__or__(b);
+  if (b !== null && typeof b === 'object' && typeof b.__ror__ === 'function') return b.__ror__(a);
+  throw new AdderError('TypeError', `unsupported operand type(s) for |: '${pyTypeName(a)}' and '${pyTypeName(b)}'`);
+}
+
+function _xor(a, b) {
+  if (typeof a === 'number' && typeof b === 'number') return a ^ b;
+  if (a !== null && typeof a === 'object' && typeof a.__xor__ === 'function') return a.__xor__(b);
+  if (b !== null && typeof b === 'object' && typeof b.__rxor__ === 'function') return b.__rxor__(a);
+  throw new AdderError('TypeError', `unsupported operand type(s) for ^: '${pyTypeName(a)}' and '${pyTypeName(b)}'`);
 }
 
 // ── Function call with kwargs ──
@@ -4641,6 +4679,8 @@ const _py = {
   // arithmetic
   add: _add, sub: _sub, mul: _mul, div: _div,
   floordiv: _floordiv, mod: _mod, pow: _pow,
+  // bitwise (with dunder fallback for masks/sets/etc.)
+  and_: _and_, or_: _or_, xor: _xor,
   // unary
   neg: _neg, pos: _pos, invert: _invert,
   // comparison

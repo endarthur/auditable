@@ -705,12 +705,15 @@ function lowerBinOp_ad(ctx, node) {
   const rhs = lowerExpr_ad(ctx, node.right);
   const op = node.op;
 
-  // Bitwise ops: just use JS — Python int bitwise matches JS i32 bitwise
-  if (op === '&') return ctx.emit('bitwise_and', [lhs.id, rhs.id], I32, l);
-  if (op === '|') return ctx.emit('bitwise_or', [lhs.id, rhs.id], I32, l);
-  if (op === '^') return ctx.emit('bitwise_xor', [lhs.id, rhs.id], I32, l);
+  // Shifts: JS i32 matches Python int. No `__lshift__` overloading worth
+  // supporting in cell-side code (vs &/|/^ where libraries like sadpan
+  // overload them for boolean masks).
   if (op === '<<') return ctx.emit('shift_left', [lhs.id, rhs.id], I32, l);
   if (op === '>>') return ctx.emit('shift_right', [lhs.id, rhs.id], I32, l);
+  // &, |, ^ go through `_py.and_` / `or_` / `xor` so dunder methods
+  // (`__and__`, `__or__`, `__xor__`) fire — sadpan's BooleanMask combines
+  // via these. The runtime helpers fast-path to native bitwise when both
+  // operands are real ints, so this isn't a perf hit for normal int code.
 
   const helper = BINOP_HELPER[op];
   if (!helper) throw new AirLowerError(`unsupported binop: ${op}`);

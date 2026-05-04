@@ -1304,12 +1304,17 @@ function _createPathClass(getVfs, pth) {
 // ── shutil module ──
 
 function _createShutilModule(getVfs) {
+  // Resolve user-facing paths (relative-to-cwd, ~ expansion) before
+  // passing to VFS — `os` and `os.path` already do this via _resolve;
+  // shutil/glob used to skip that step and the raw `data/foo.csv`
+  // hit `vfs.resolve` which has no mount for non-absolute paths.
+  const r = (p) => _resolvePath(p, _vfsPath);
   return {
-    copy: async (src, dst) => { try { await getVfs().cp(src, dst); } catch (e) { throw _mapVFSError(e); } },
-    copy2: async (src, dst) => { try { await getVfs().cp(src, dst); } catch (e) { throw _mapVFSError(e); } },
-    copytree: async (src, dst) => { try { await getVfs().cp(src, dst, { recursive: true }); } catch (e) { throw _mapVFSError(e); } },
-    rmtree: async (p) => { try { await getVfs().rm(p, { recursive: true }); } catch (e) { throw _mapVFSError(e); } },
-    move: async (src, dst) => { try { await getVfs().rename(src, dst); } catch (e) { throw _mapVFSError(e); } },
+    copy: async (src, dst) => { try { await getVfs().cp(r(src), r(dst)); } catch (e) { throw _mapVFSError(e); } },
+    copy2: async (src, dst) => { try { await getVfs().cp(r(src), r(dst)); } catch (e) { throw _mapVFSError(e); } },
+    copytree: async (src, dst) => { try { await getVfs().cp(r(src), r(dst), { recursive: true }); } catch (e) { throw _mapVFSError(e); } },
+    rmtree: async (p) => { try { await getVfs().rm(r(p), { recursive: true }); } catch (e) { throw _mapVFSError(e); } },
+    move: async (src, dst) => { try { await getVfs().rename(r(src), r(dst)); } catch (e) { throw _mapVFSError(e); } },
   };
 }
 
@@ -1317,7 +1322,10 @@ function _createShutilModule(getVfs) {
 
 function _createGlobModule(getVfs) {
   return {
-    glob: async (pattern) => { try { return await getVfs().glob(pattern); } catch (e) { throw _mapVFSError(e); } },
+    glob: async (pattern) => {
+      try { return await getVfs().glob(_resolvePath(pattern, _vfsPath)); }
+      catch (e) { throw _mapVFSError(e); }
+    },
   };
 }
 

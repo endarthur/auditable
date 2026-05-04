@@ -57,6 +57,33 @@ describe('adder transpile — arithmetic', () => {
     const r = await runTranspile('x = -5\nprint(x)');
     assert.equal(r.output, '-5');
   });
+  it('bitwise int and', async () => {
+    const r = await runTranspile('print(0b1100 & 0b1010)');
+    assert.equal(r.output, '8');
+  });
+  it('bitwise int or', async () => {
+    const r = await runTranspile('print(0b1100 | 0b1010)');
+    assert.equal(r.output, '14');
+  });
+  it('bitwise int xor', async () => {
+    const r = await runTranspile('print(0b1100 ^ 0b1010)');
+    assert.equal(r.output, '6');
+  });
+  it('bitwise & calls __and__ on objects', async () => {
+    // Regression: lowerBinOp_ad fast-pathed `&` to native bitwise_and
+    // unconditionally, which coerced sadpan's BooleanMask to 0 and
+    // broke df[mask1 & mask2]. Now routes through _py.and_ which
+    // checks for __and__ dunder before falling back to int bitwise.
+    // Sanity: confirm the helper itself dispatches; the adder path
+    // is exercised by example_adder_sadpan in the smoke sweep.
+    const a = { __and__: (other) => `and-called:${a.v}&${other.v}`, v: 'a' };
+    const b = { v: 'b' };
+    assert.equal(_py.and_(a, b), 'and-called:a&b');
+    // ints still fast-path
+    assert.equal(_py.and_(0b1100, 0b1010), 8);
+    assert.equal(_py.or_(0b1100, 0b1010), 14);
+    assert.equal(_py.xor(0b1100, 0b1010), 6);
+  });
 });
 
 describe('adder transpile — strings', () => {
