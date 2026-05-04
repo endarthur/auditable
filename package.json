@@ -15,6 +15,7 @@
     "build:rv": "node ext/rv/build.js && node build.js --target=rv",
     "test": "node --no-warnings --test \"test/!(adder-wasm).test.*\"",
     "test:wasm": "node --no-warnings --test-force-exit test/adder-wasm.test.mjs",
+    "test:examples": "node test/examples-smoke.mjs",
     "test:all": "npm test && npm run test:wasm"
   },
   "devDependencies": {
@@ -22,6 +23,7 @@
     "@rollup/plugin-node-resolve": "^16.0.3",
     "@rollup/plugin-terser": "^1.0.0",
     "ol": "^10.8.0",
+    "playwright": "^1.59.1",
     "proj4": "^2.20.3",
     "rollup": "^4.59.0"
   }

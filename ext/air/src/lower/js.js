@@ -600,18 +600,28 @@ function lowerForOf(ctx, node) {
   const savedOps = ctx.ops;
   ctx.ops = [];
 
+  // Capture the loop variable's name so the emitter can use it instead of
+  // falling back to a synthetic `_v`. References inside the body (`s.x`,
+  // etc.) emit as bare identifiers, so the for-of header has to bind the
+  // same name.
+  let targetName = null;
   if (node.left.type === 'VariableDeclaration') {
     const name = node.left.declarations[0]?.id?.name;
     if (name) {
+      targetName = name;
       ctx.symbols.set(name, null);
     }
+  } else if (node.left.type === 'Identifier') {
+    targetName = node.left.name;
   }
 
   lowerStatement(ctx, node.body);
   const bodyOps = ctx.ops;
   ctx.ops = savedOps;
 
-  return ctx.emit('for_of_region', [iter.id], VOID, l, { body: bodyOps, phis: [] });
+  return ctx.emit('for_of_region', [iter.id], VOID, l, {
+    body: bodyOps, phis: [], target_name: targetName,
+  });
 }
 
 function lowerWhile(ctx, node) {

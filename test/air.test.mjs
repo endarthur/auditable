@@ -398,6 +398,22 @@ describe('AIR lowerer — control flow', () => {
     const m = lower('for (const x of arr) { sum += x }');
     assert.ok(findOp(m, 'for_of_region'));
   });
+
+  it('for-of carries target_name through to the IR', () => {
+    // Regression: lowerForOf used to drop the loop-variable name, so the
+    // emitter fell back to a synthetic `_v` and any reference to the
+    // user's name in the body became "X is not defined" at runtime.
+    // Surfaced by examples/defs/gslib/example_alpack.txt.
+    const m = lower('for (const s of arr) { use(s.x) }');
+    const op = findOp(m, 'for_of_region');
+    assert.equal(op?.target_name, 's');
+  });
+
+  it('for-of with bare identifier target also carries the name', () => {
+    const m = lower('let item; for (item of arr) { use(item) }');
+    const op = findOp(m, 'for_of_region');
+    assert.equal(op?.target_name, 'item');
+  });
 });
 
 describe('AIR lowerer — block scoping (regression)', () => {
