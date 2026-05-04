@@ -886,13 +886,13 @@ function lowerExpr(ctx, node) {
     case 'TemplateLiteral':
       return lowerTemplateLiteral(ctx, node);
 
-    case 'TaggedTemplateExpression': {
-      // Lower the tag (e.g. atra, glsl, sql) to capture its reference
-      const tag = lowerExpr(ctx, node.tag);
-      // Lower template expressions to capture their references
-      for (const expr of node.quasi.expressions) lowerExpr(ctx, expr);
-      return ctx.emit('call', [tag.id], DYNAMIC, l);
-    }
+    case 'TaggedTemplateExpression':
+      // Tagged templates have unique call semantics — the tag is invoked with
+      // (stringsArray, ...interpolatedValues), where stringsArray carries the
+      // raw source segments. AIR's plain `call` op can't represent this, so
+      // we keep the original source verbatim. lowerOpaque scans for cross-cell
+      // identifier references so dependency tracking still works.
+      return lowerOpaque(ctx, node);
 
     case 'ArrowFunctionExpression':
     case 'FunctionExpression':

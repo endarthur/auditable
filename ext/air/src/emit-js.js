@@ -560,50 +560,97 @@ function emitIf(ctx, op) {
   }
 }
 
+// Combine a sequence of single-statement lines into a comma-separated form
+// suitable for a for-header init clause, e.g.
+//   ['let i = 0;', 'let j = 0;'] -> 'let i = 0, j = 0'
+// Returns null if the lines can't be safely combined (mixed declarators,
+// non-trivial statements, multi-line expressions, etc.).
+function combineForInit(lines) {
+  if (lines.length === 0) return '';
+  let kind = null;
+  const parts = [];
+  for (const line of lines) {
+    const m = line.match(/^\s*(let|const|var)\s+(.+);\s*$/);
+    if (!m) return null;
+    if (kind === null) kind = m[1];
+    else if (kind !== m[1]) return null;
+    parts.push(m[2]);
+  }
+  return `${kind} ${parts.join(', ')}`;
+}
+
+// Combine simple assignment statements into a comma expression for the
+// for-header update clause:
+//   ['i = i + 1;', 'j = j + 4;'] -> 'i = i + 1, j = j + 4'
+// Rejects anything that contains a declarator keyword or doesn't end with `;`.
+function combineForUpdate(lines) {
+  if (lines.length === 0) return '';
+  const parts = [];
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t.endsWith(';')) return null;
+    if (/^(let|const|var)\b/.test(t)) return null;
+    parts.push(t.slice(0, -1).trim());
+  }
+  return parts.join(', ');
+}
+
 function emitFor(ctx, op) {
-  // Emit init, test, update as separate regions
-  // The init may contain let declarations, so we wrap in a block
-  if (op.init && op.init.length) {
-    // Capture init as inline statements
-    const savedLines = ctx.lines;
+  // Capture init, test (and its expression), and update as line arrays. Order
+  // matters: init must run first so its declarations register in `ctx.emitted`
+  // before the update emits assignments to the same names.
+  const captureLines = (fn) => {
+    const saved = ctx.lines;
     ctx.lines = [];
-    emitOps(ctx, op.init);
-    const initLines = ctx.lines;
-    ctx.lines = savedLines;
+    fn();
+    const out = ctx.lines;
+    ctx.lines = saved;
+    return out;
+  };
 
-    // Single-line init goes in the for header
-    if (initLines.length === 1) {
-      const initStr = initLines[0].trim().replace(/;$/, '');
+  const initLines = op.init && op.init.length
+    ? captureLines(() => emitOps(ctx, op.init)) : [];
 
-      const savedLines2 = ctx.lines;
-      ctx.lines = [];
-      if (op.test) emitOps(ctx, op.test);
-      const testExpr = op.test_val ? ctx.ref(op.test_val) : '';
-      const testLines = ctx.lines;
-      ctx.lines = savedLines2;
+  let testExpr = '';
+  const testLines = captureLines(() => {
+    if (op.test) emitOps(ctx, op.test);
+    if (op.test_val) testExpr = ctx.ref(op.test_val);
+  });
 
-      const savedLines3 = ctx.lines;
-      ctx.lines = [];
-      if (op.update) emitOps(ctx, op.update);
-      const updateLines = ctx.lines;
-      ctx.lines = savedLines3;
-      const updateStr = updateLines.length === 1 ? updateLines[0].trim().replace(/;$/, '') : '';
+  const updateLines = op.update && op.update.length
+    ? captureLines(() => emitOps(ctx, op.update)) : [];
 
-      ctx.line(`for (${initStr}; ${testExpr}; ${updateStr}) {`);
-    } else {
-      // Multi-line init: emit separately
-      for (const l of initLines) ctx.lines.push(l);
-      const testExpr = op.test_val ? ctx.ref(op.test_val) : '';
-      ctx.line(`for (; ${testExpr};) {`);
-    }
-  } else {
-    const testExpr = op.test_val ? ctx.ref(op.test_val) : '';
-    ctx.line(`for (; ${testExpr};) {`);
+  // Compact form: `for (init; test; update) { body }` if everything fits.
+  const initStr = combineForInit(initLines);
+  const updateStr = combineForUpdate(updateLines);
+  const compact = initStr !== null && updateStr !== null && testLines.length === 0;
+
+  if (compact) {
+    ctx.line(`for (${initStr}; ${testExpr}; ${updateStr}) {`);
+    ctx.push();
+    if (op.body) emitOps(ctx, op.body);
+    ctx.pop();
+    ctx.line('}');
+    return;
   }
 
+  // Fallback: desugar to a `{ init; while (true) { test; body; update; } }`
+  // form so multi-statement inits and updates emit correctly. Wrapped in a
+  // block so the init declarations stay scoped to the loop.
+  // Note: `continue` inside body skips the update — acceptable trade-off
+  // because the compact path covers the overwhelmingly common case and the
+  // alternative was outright broken.
+  ctx.line('{');
   ctx.push();
+  for (const l of initLines) ctx.lines.push(l);
+  ctx.line('while (true) {');
+  ctx.push();
+  for (const l of testLines) ctx.lines.push(l);
+  if (testExpr) ctx.line(`if (!(${testExpr})) break;`);
   if (op.body) emitOps(ctx, op.body);
-  // update at end of body if we couldn't put it in the header
+  for (const l of updateLines) ctx.lines.push(l);
+  ctx.pop();
+  ctx.line('}');
   ctx.pop();
   ctx.line('}');
 }

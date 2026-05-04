@@ -464,6 +464,125 @@ describe('AIR lowerer — block scoping (regression)', () => {
   });
 });
 
+describe('AIR emitter — for loop init/update (regression)', () => {
+  // Regression: the emitter used to drop multi-decl inits and multi-update
+  // sequence expressions, hoisting them outside the loop and producing
+  // `for (; _testSsa;)` with an unbound test reference.
+  function emit(src) {
+    const module = lower(src);
+    runPasses(module);
+    return emitJS(module, [], [], { hinted: true, cellId: 't' });
+  }
+  function exec(src, scope = {}) {
+    const js = emit(src);
+    const params = Object.keys(scope);
+    const args = params.map(k => scope[k]);
+    let err = null;
+    try { new Function(...params, js)(...args); } catch (e) { err = e.message; }
+    return { js, err };
+  }
+
+  it('multi-decl init combines into a single header', () => {
+    const js = emit(`
+      const arr = new Array(4).fill(0);
+      for (let i = 0, j = 1; i < 4; i++) { arr[i] = i + j; }
+    `);
+    assert.match(js, /for \(let i = 0, j = 1;/);
+    assert.doesNotMatch(js, /for \(; /);
+  });
+
+  it('multi-update sequence combines into a single header', () => {
+    const js = emit(`
+      const arr = new Array(4).fill(0);
+      for (let i = 0, j = 0; i < 4; i++, j += 4) { arr[i] = j; }
+    `);
+    assert.match(js, /i = .*, j = /);
+    assert.doesNotMatch(js, /for \(; /);
+  });
+
+  it('Julia-set inner loop pattern emits valid JS that runs', () => {
+    const { err } = exec(`
+      const n = 16;
+      const d = new Array(n * 4).fill(0);
+      for (let i = 0, j = 0; i < n; i++, j += 4) {
+        d[j] = i; d[j + 1] = i + 1; d[j + 2] = i + 2; d[j + 3] = 255;
+      }
+    `);
+    assert.equal(err, null);
+  });
+
+  it('single-decl init + single update still uses compact form', () => {
+    const js = emit(`for (let i = 0; i < 10; i++) { console.log(i); }`);
+    assert.match(js, /for \(let i = 0; \(i < 10\); i = /);
+  });
+
+  it('runtime: writes to all four bytes with multi-update', () => {
+    const sink = [];
+    const { err } = exec(`
+      for (let i = 0, j = 0; i < 3; i++, j += 4) {
+        sink.push([i, j]);
+      }
+    `, { sink });
+    assert.equal(err, null);
+    assert.deepEqual(sink, [[0, 0], [1, 4], [2, 8]]);
+  });
+});
+
+describe('AIR lowerer — tagged templates (regression)', () => {
+  // Regression: TaggedTemplateExpression used to lower as a plain `call(tag)`
+  // op that emitted `tag()` — dropping the strings array AND interpolations
+  // entirely. atra/glsl/sql cells silently received `undefined` for their
+  // source and crashed with `Cannot read properties of undefined (reading '0')`
+  // when the tag implementation tried to read `strings[0]`.
+  function emit(src) {
+    const module = lowerJS(AcornTS.parse(src, { ecmaVersion: 'latest', sourceType: 'module', locations: true }), src);
+    runPasses(module);
+    return emitJS(module, [], [], { hinted: true, cellId: 't' });
+  }
+
+  it('preserves tagged template syntax verbatim', () => {
+    const js = emit('const wasm = atra({ memory: mem })`! source\nbegin\nend\n`;');
+    assert.match(js, /atra\(\{ memory: mem \}\)`/);
+    assert.match(js, /! source/);
+  });
+
+  it('runtime: tag receives strings array', () => {
+    const captured = {};
+    const tag = (strings, ...values) => { captured.strings = strings; captured.values = values; return 'ok'; };
+    const js = emit('const r = tag`hello ${1 + 1} world`;');
+    new Function('tag', js)(tag);
+    assert.deepEqual(captured.strings.raw ? [...captured.strings] : captured.strings, ['hello ', ' world']);
+    assert.deepEqual(captured.values, [2]);
+  });
+
+  it('cross-cell deps from tag function and interpolations are tracked', () => {
+    // The tag (`atra`) and any interpolated names (`mem`, `value`) must show
+    // up as imports so the DAG knows this cell depends on them.
+    const ast = AcornTS.parse('const w = atra({ memory: mem })`code ${value}`;', {
+      ecmaVersion: 'latest', sourceType: 'module', locations: true,
+    });
+    const m = lowerJS(ast, 'const w = atra({ memory: mem })`code ${value}`;');
+    runPasses(m);
+    assert.ok(m.imports.has('atra'), 'tag function should be tracked');
+    assert.ok(m.imports.has('mem'), 'identifiers in tag args should be tracked');
+    assert.ok(m.imports.has('value'), 'interpolated identifiers should be tracked');
+  });
+
+  it('Julia atra cell pattern emits + executes', () => {
+    const src = `
+      const mem = new WebAssembly.Memory({ initial: 1 });
+      const wasm = atra({ memory: mem })\`
+        function julia.eval(): f64 begin julia.eval := -1.0 end
+      \`;
+    `;
+    const js = emit(src);
+    const fakeAtra = (opts) => (strings) => ({ source: strings[0], opts });
+    let err = null;
+    try { new Function('atra', js)(fakeAtra); } catch (e) { err = e.message; }
+    assert.equal(err, null, `tagged template should execute cleanly: ${err}`);
+  });
+});
+
 describe('AIR lowerer — functions', () => {
   it('arrow function expression', () => {
     const m = lower('const f = (x) => x + 1');
