@@ -14,7 +14,7 @@ import { runDAG, runAll, renderMdCell, renderHtmlCell } from './exec.js';
 import { addCell } from './cell-ops.js';
 import { _ctIsExecutable } from './cell-types.js';
 import { notifyDirty } from './editor.js';
-import { syncDataDebounced, syncSettings } from './save.js';
+
 import { setMsg } from './ui.js';
 import { fsWrite, fsRead, validatePath } from './fs.js';
 import { setCellCode } from './cell-ops.js';
@@ -1125,7 +1125,7 @@ if (navigator.modelContext && window.__auditable_mcp) {
       if (btn) { btn.textContent = '\u2016'; btn.className = 'autorun-off'; }
       const btnMobile = document.getElementById('autorunBtnMobile');
       if (btnMobile) { btnMobile.textContent = '\u2016'; btnMobile.className = 'autorun-off'; }
-      syncSettings();
+      window.auditable?.hooks?.emit("notebook:dirty");
       return { autorun: false };
     }),
   });
@@ -1141,7 +1141,7 @@ if (navigator.modelContext && window.__auditable_mcp) {
       if (btn) { btn.textContent = '\u25b6'; btn.className = 'autorun-on'; }
       const btnMobile = document.getElementById('autorunBtnMobile');
       if (btnMobile) { btnMobile.textContent = '\u25b6'; btnMobile.className = 'autorun-on'; }
-      syncSettings();
+      window.auditable?.hooks?.emit("notebook:dirty");
       await runAll();
       return { autorun: true, errors: _mcpCollectErrors() };
     }),
@@ -1524,36 +1524,40 @@ if (window.__auditable_mcp) {
 }
 
 // ── Execution completion notification ──
+// Subscribes to dag:complete on the hook bus (replaces window._mcpNotifyExecComplete).
 
-// Hook into DAG execution — notify bridge when execution settles
-window._mcpNotifyExecComplete = function(errors) {
-  const mcp = window.__auditable_mcp;
-  if (!mcp || mcp.state !== 'connected') return;
-  mcp.notify('execution/complete', {
-    errors: errors || _mcpCollectErrors(),
-    cellCount: S.cells.length,
-    timestamp: new Date().toISOString(),
+if (window.auditable?.hooks) {
+  window.auditable.hooks.on('dag:complete', () => {
+    const mcp = window.__auditable_mcp;
+    if (!mcp || mcp.state !== 'connected') return;
+    mcp.notify('execution/complete', {
+      errors: _mcpCollectErrors(),
+      cellCount: S.cells.length,
+      timestamp: new Date().toISOString(),
+    });
+    _mcpRefreshPanel(); // refresh audit log in panel
   });
-  _mcpRefreshPanel(); // refresh audit log in panel
-};
+}
 
 // Export audit log for UI panel access
 window._mcpAuditLog = _mcpAuditLog;
 
-// ── Re-lock / unlock hooks ──
+// ── Re-lock / unlock hooks (subscribed via the auditable hook bus) ──
 
-window._mcpOnRelock = function() {
-  _mcpAuditLog.length = 0;
-  _mcpAutoAccept.clear();
-  _mcpRefreshPanel();
-  if (navigator.modelContext && navigator.modelContext.notifyToolsChanged) {
-    navigator.modelContext.notifyToolsChanged();
-  }
-};
+if (window.auditable?.hooks) {
+  window.auditable.hooks.on('crypto:locked', () => {
+    _mcpAuditLog.length = 0;
+    _mcpAutoAccept.clear();
+    _mcpRefreshPanel();
+    if (navigator.modelContext && navigator.modelContext.notifyToolsChanged) {
+      navigator.modelContext.notifyToolsChanged();
+    }
+  });
 
-window._mcpOnUnlock = function() {
-  _mcpRefreshPanel();
-  if (navigator.modelContext && navigator.modelContext.notifyToolsChanged) {
-    navigator.modelContext.notifyToolsChanged();
-  }
-};
+  window.auditable.hooks.on('crypto:unlocked', () => {
+    _mcpRefreshPanel();
+    if (navigator.modelContext && navigator.modelContext.notifyToolsChanged) {
+      navigator.modelContext.notifyToolsChanged();
+    }
+  });
+}

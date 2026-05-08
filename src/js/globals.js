@@ -4,10 +4,11 @@
 // Modules stay pure (no side effects, no window assignments).
 
 import { $, S } from './state.js';
-import { registerCellType, registerExtension, hasExtension, getExtension, registerPlugin, _ctUninstallPlugin } from './cell-types.js';
+import * as hooks from './hooks.js';
+import { registerExtension, _ctUninstallPlugin, getExtension, getCellType, getTaggedLanguage, getExports, hasExports, listExtensions } from './cell-types.js';
 import { registerProvider } from './stdlib.js';
 import { convertCell, moveCell } from './cell-ops.js';
-import { toggleAutorun, notifyDirty } from './editor.js';
+import { toggleAutorun } from './editor.js';
 import { toggleSettings, togglePresent, applyTheme, applyFontSize, applyWidth, applyLineNumbers, applyHeader, applyExecMode, applyRunOnLoad, applyShowToggle, applyGlobalExecMode, applyGlobalRunOnLoad, applyEditorView } from './settings.js';
 import { toggleUpdate, checkForUpdate, applyOnlineUpdate, proceedUpdate, cancelUpdate, updateFromFile } from './update.js';
 import { saveNotebook, savePackedNotebook, setSaveMode, toggleSaveTray, exportAsTxt, showExportDialog, doExportApp, closeExportDialog } from './save.js';
@@ -27,9 +28,29 @@ import { VFS, CommentBackend, MemoryBackend, path } from './vfs.js';
 window.$ = $;
 window.S = S;
 
+// auditable namespace — single canonical surface for hooks, registries, services.
+// Replaces the ad-hoc window._x slot pattern; see spec_inbox/shipped/auditable-hook-bus-spec.md.
+window.auditable = window.auditable || {};
+window.auditable.hooks = {
+  on: hooks.on,
+  once: hooks.once,
+  off: hooks.off,
+  emit: hooks.emit,
+  emitAsync: hooks.emitAsync,
+  listenerCount: hooks.listenerCount,
+  setDagCellInterceptor: hooks.setDagCellInterceptor,
+  getDagCellInterceptor: hooks.getDagCellInterceptor,
+};
+window.auditable.registerExtension = registerExtension;
+window.auditable.getExtension = getExtension;
+window.auditable.listExtensions = listExtensions;
+window.auditable.getCellType = getCellType;
+window.auditable.getTaggedLanguage = getTaggedLanguage;
+window.auditable.getExports = getExports;
+window.auditable.hasExports = hasExports;
+
 // editor
 window.toggleAutorun = toggleAutorun;
-window._notifyDirty = notifyDirty;
 
 // settings
 window.toggleSettings = toggleSettings;
@@ -118,12 +139,9 @@ window.regenerateRecovery = regenerateRecovery;
 window.lockNotebook = lockNotebook;
 window.updateStrengthFeedback = updateStrengthFeedback;
 
-// cell types / plugins
-window.registerCellType = registerCellType;
-window.registerExtension = registerExtension;
-window.hasExtension = hasExtension;
-window.getExtension = getExtension;
-window.registerPlugin = registerPlugin;
+// cell types / plugins — public surface lives on window.auditable.* (see top
+// of file). _ctUninstallPlugin stays exposed because the settings panel UI
+// references it inline.
 window._ctUninstallPlugin = _ctUninstallPlugin;
 window._ctCreateEditor = createEditor;
 window._configurePluginAutocomplete = null; // set by complete.js init
@@ -140,25 +158,23 @@ Object.defineProperty(_commentBackend, '_map', {
   configurable: true,
 });
 _commentBackend._syncComment = () => {
-  if (window._notifyDirty) window._notifyDirty();
-  clearTimeout(_commentBackend._syncTimer);
-  _commentBackend._syncTimer = setTimeout(() => { if (window._syncFs) window._syncFs(); }, 500);
+  hooks.emit('notebook:dirty');
+  hooks.emit('fs:changed');
 };
 _notebookVFS._mounts.set('/home/nb', _commentBackend);
+// /var — variable persistent state (notebook content + installed modules).
+// Per spec_inbox/shipped/auditable-persistence-spec.md.
+_notebookVFS._mounts.set('/var', new MemoryBackend());
 // /tmp — volatile scratch space (MemoryBackend, not saved in notebook)
 _notebookVFS._mounts.set('/tmp', new MemoryBackend());
 // /usr/lib/python — system Python modules (extensions install here)
 _notebookVFS._mounts.set('/usr/lib/python', new MemoryBackend());
 window._notebookVFS = _notebookVFS;
-// auto-refresh files panel on VFS changes
-let _fsRefreshTimer = null;
-const _debouncedRefresh = () => {
-  clearTimeout(_fsRefreshTimer);
-  _fsRefreshTimer = setTimeout(() => { if (window._fsPanelRefresh) window._fsPanelRefresh(); }, 150);
-};
-_notebookVFS.on('write', _debouncedRefresh);
-_notebookVFS.on('delete', _debouncedRefresh);
-_notebookVFS.on('rename', _debouncedRefresh);
+// VFS native events → fs:changed bus emission. Subscribers (save.js syncFs,
+// fs.js panel refresh) debounce on their side.
+_notebookVFS.on('write', () => hooks.emit('fs:changed'));
+_notebookVFS.on('delete', () => hooks.emit('fs:changed'));
+_notebookVFS.on('rename', () => hooks.emit('fs:changed'));
 // VFS path utils for adder fs modules
 window._vfsPath = path;
 

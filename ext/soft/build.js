@@ -19,30 +19,34 @@ for (const line of mainSrc.split('\n')) {
   if (m) importPaths.push(m[1]);
 }
 
-const chunks = [];
-for (const relPath of importPaths) {
-  const filePath = path.join(srcDir, relPath);
-  let src = fs.readFileSync(filePath, 'utf8');
-  const basename = path.basename(relPath);
-
-  // Strip import lines (single-line and multi-line)
+// Strip imports/exports and trim a source chunk for concat-bundling.
+function stripModuleSyntax(src) {
   src = src.replace(/^import\s+.*['"].*['"];?\s*$/gm, '');
   src = src.replace(/^import\s*\{[\s\S]*?\}\s*from\s*['"].*['"];?\s*$/gm, '');
-
-  // Replace export function -> function, export const -> const, etc.
   src = src.replace(/^export function /gm, 'function ');
   src = src.replace(/^export const /gm, 'const ');
   src = src.replace(/^export let /gm, 'let ');
   src = src.replace(/^export class /gm, 'class ');
   src = src.replace(/^export async function /gm, 'async function ');
-
-  // Strip export { ... } and export default lines
   src = src.replace(/^export\s*\{[^}]*\};?\s*$/gm, '');
   src = src.replace(/^export\s+default\s+.*$/gm, '');
+  return src.replace(/^\n+/, '').replace(/\n+$/, '');
+}
 
-  // Trim leading/trailing blank lines
-  src = src.replace(/^\n+/, '').replace(/\n+$/, '');
+const chunks = [];
 
+// air-lower.js imports types from ext/air/src/types.js. Inline those types
+// up-front so the bundle is self-contained.
+const airTypesPath = path.join(__dirname, '..', 'air', 'src', 'types.js');
+if (fs.existsSync(airTypesPath)) {
+  const airTypesSrc = stripModuleSyntax(fs.readFileSync(airTypesPath, 'utf8'));
+  chunks.push(`// -- inlined: ../air/src/types.js (AIR type singletons) --\n\n${airTypesSrc}`);
+}
+
+for (const relPath of importPaths) {
+  const filePath = path.join(srcDir, relPath);
+  const src = stripModuleSyntax(fs.readFileSync(filePath, 'utf8'));
+  const basename = path.basename(relPath);
   chunks.push(`// -- ${basename} --\n\n${src}`);
 }
 

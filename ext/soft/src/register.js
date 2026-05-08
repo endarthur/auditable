@@ -1,78 +1,88 @@
-// soft — cell type, tagged language, plugin registration
+// Registration: cell type, tagged language, AIR lowerer, plugin metadata.
+// Single auditable.registerExtension(manifest) call replaces the legacy
+// fan-out. Locale handling stays on a side channel since locales register
+// additional cell types dynamically.
 
 import { softParseNames, softFindUses, softExecute } from './cell.js';
 import { tokenizeSoft, softCompletions, softIndent } from './highlight.js';
 import { softTag } from './tag.js';
 import { softParse } from './parse.js';
+import { lowerSoft } from './air-lower.js';
+import { softSetLocale, softGetLocale } from './tokenize.js';
 
-const handler = {
-  label: 'soft',
-  color: '#c89b3c',
-  shortcut: 'f',
-  editDebounce: 500,
-  indent: softIndent,
-  indentUnit: '  ',
+const SOFT_VERSION = '0.1.0';
+
+const _baseHandler = {
   parseNames: softParseNames,
-  syntaxCheck: (code) => {
-    try { softParse(code); return true; }
-    catch { return false; }
-  },
   findUses: softFindUses,
   execute: softExecute,
   tokenize: tokenizeSoft,
   completions: (prefix) => softCompletions(prefix),
-  createEditor: (cell, onChange) => {
-    if (!window._ctCreateEditor) return null;
-    const wrap = document.createElement('div');
-    wrap.className = 'editor-wrap';
-    const editor = window._ctCreateEditor(wrap, cell.id, cell.code, 'soft', onChange);
-    return {
-      el: wrap,
-      getCode: () => editor.view.state.doc.toString(),
-      setCode: (s) => editor.view.dispatch({ changes: { from: 0, to: editor.view.state.doc.length, insert: s } }),
-      focus: () => editor.focus(),
-      destroy: () => editor.destroy(),
-    };
-  },
+  syntaxCheck: (code) => { try { softParse(code); return true; } catch { return false; } },
+  indent: softIndent,
+  indentUnit: '  ',
 };
 
-// guard: only register once
-if (!window._cellTypes?.['soft']) {
-  // register 'soft' cell type
-  if (window.registerCellType) {
-    window.registerCellType('soft', handler, '@gcu/soft');
-  } else if (window._cellTypes) {
-    window._cellTypes['soft'] = handler;
-  }
+if (typeof window !== 'undefined' && !window._cellTypes?.['soft']) {
+  const register = window.auditable?.registerExtension;
+  if (register) {
+    register({
+      name: '@gcu/soft',
+      version: SOFT_VERSION,
+      apiVersion: '0.x',
+      description: 'English keyword programming language — soft cells and tagged template',
+      pluginUrl: '@gcu/soft',
 
-  // register tagged language for soft`` syntax highlighting
-  window._taggedLanguages = window._taggedLanguages || {};
-  window._taggedLanguages['soft'] = {
-    tokenize: tokenizeSoft,
-    completions: softCompletions,
-    indent: softIndent,
-  };
+      cellType: {
+        name: 'soft',
+        label: 'soft',
+        color: '#c89b3c',
+        shortcut: 'f',
+        editDebounce: 500,
+        capabilities: {
+          executable: true,
+          definesScope: true,
+          hasOutput: true,
+          hasEditor: true,
+          builtin: false,
+        },
+        ..._baseHandler,
+        createEditor: (cell, onChange) => {
+          if (!window._ctCreateEditor) return null;
+          const wrap = document.createElement('div');
+          wrap.className = 'editor-wrap';
+          const editor = window._ctCreateEditor(wrap, cell.id, cell.code, 'soft', onChange);
+          return {
+            el: wrap,
+            getCode: () => editor.view.state.doc.toString(),
+            setCode: (s) => editor.view.dispatch({ changes: { from: 0, to: editor.view.state.doc.length, insert: s } }),
+            focus: () => editor.focus(),
+            destroy: () => editor.destroy(),
+          };
+        },
+      },
 
-  // register as plugin
-  if (window.registerPlugin) {
-    window.registerPlugin('@gcu/soft', { description: 'English keyword programming language — soft cells and tagged template' });
-  } else if (window._auditablePlugins) {
-    window._auditablePlugins.set('@gcu/soft', { description: 'English keyword programming language — soft cells and tagged template' });
-  }
+      taggedLanguage: {
+        name: 'soft',
+        tokenize: tokenizeSoft,
+        completions: softCompletions,
+        indent: softIndent,
+      },
 
-  // global tag
-  window.soft = softTag;
+      airLowerer: { language: 'soft', fn: lowerSoft },
 
-  // configure autocomplete for any existing soft cells (they were created before this plugin loaded)
-  if (window._configurePluginAutocomplete) {
-    window._configurePluginAutocomplete('soft');
+      globals: { soft: softTag },
+
+      onActivate: () => {
+        // configure autocomplete for any existing soft cells (created before plugin loaded)
+        if (window._configurePluginAutocomplete) window._configurePluginAutocomplete('soft');
+      },
+    });
   }
 }
 
-import { softSetLocale, softGetLocale } from './tokenize.js';
-
-// expose for manual use (e.g. from browser console)
-window._softSetLocale = softSetLocale;
+// Locale switcher kept as a side channel — not a cell-type contribution per se.
+if (typeof window !== 'undefined') window._softSetLocale = softSetLocale;
 
 // register a locale as a new cell type (e.g. 'soft-ptbr')
 function registerLocale(localeData) {
@@ -89,72 +99,72 @@ function registerLocale(localeData) {
     try { return fn(...args); } finally { if (!prev) softSetLocale(null); }
   };
 
-  const localeHandler = {
-    label: cellType,
-    color: '#c89b3c',
-    shortcut: null, // no keyboard shortcut for locale variants
-    editDebounce: 500,
-    indent: softIndent,
-    indentUnit: '  ',
-    parseNames: withLocale(softParseNames),
-    syntaxCheck: withLocale((code) => { try { softParse(code); return true; } catch { return false; } }),
-    findUses: withLocale(softFindUses),
-    execute: async (code, scopeIn, cell) => {
-      softSetLocale(localeData);
-      return softExecute(code, scopeIn, cell);
+  const register = window.auditable?.registerExtension;
+  if (!register) return;
+
+  register({
+    name: '@gcu/soft/' + localeData.locale,
+    version: SOFT_VERSION,
+    pluginUrl: '@gcu/soft/' + localeData.locale,
+
+    cellType: {
+      name: cellType,
+      label: cellType,
+      color: '#c89b3c',
+      editDebounce: 500,
+      capabilities: {
+        executable: true,
+        definesScope: true,
+        hasOutput: true,
+        hasEditor: true,
+        builtin: false,
+      },
+      parseNames: withLocale(softParseNames),
+      findUses: withLocale(softFindUses),
+      execute: async (code, scopeIn, cell) => { softSetLocale(localeData); return softExecute(code, scopeIn, cell); },
+      tokenize: withLocale(tokenizeSoft),
+      completions: withLocale((prefix) => softCompletions(prefix)),
+      syntaxCheck: withLocale((code) => { try { softParse(code); return true; } catch { return false; } }),
+      indent: softIndent,
+      indentUnit: '  ',
+      createEditor: (cell, onChange) => {
+        if (!window._ctCreateEditor) return null;
+        const wrap = document.createElement('div');
+        wrap.className = 'editor-wrap';
+        const editor = window._ctCreateEditor(wrap, cell.id, cell.code, cellType, onChange);
+        return {
+          el: wrap,
+          getCode: () => editor.view.state.doc.toString(),
+          setCode: (s) => editor.view.dispatch({ changes: { from: 0, to: editor.view.state.doc.length, insert: s } }),
+          focus: () => editor.focus(),
+          destroy: () => editor.destroy(),
+        };
+      },
     },
-    tokenize: withLocale(tokenizeSoft),
-    completions: withLocale((prefix) => softCompletions(prefix)),
-    createEditor: (cell, onChange) => {
-      if (!window._ctCreateEditor) return null;
-      const wrap = document.createElement('div');
-      wrap.className = 'editor-wrap';
-      const editor = window._ctCreateEditor(wrap, cell.id, cell.code, cellType, onChange);
-      return {
-        el: wrap,
-        getCode: () => editor.view.state.doc.toString(),
-        setCode: (s) => editor.view.dispatch({ changes: { from: 0, to: editor.view.state.doc.length, insert: s } }),
-        focus: () => editor.focus(),
-        destroy: () => editor.destroy(),
-      };
+
+    taggedLanguage: {
+      name: cellType,
+      tokenize: withLocale(tokenizeSoft),
+      completions: withLocale(softCompletions),
+      indent: softIndent,
     },
-  };
 
-  // register cell type
-  if (window.registerCellType) {
-    window.registerCellType(cellType, localeHandler, '@gcu/soft/' + localeData.locale);
-  } else if (window._cellTypes) {
-    window._cellTypes[cellType] = localeHandler;
-  }
-
-  // register tagged language
-  window._taggedLanguages = window._taggedLanguages || {};
-  window._taggedLanguages[cellType] = {
-    tokenize: localeHandler.tokenize,
-    completions: localeHandler.completions,
-    indent: softIndent,
-  };
-
-  // configure autocomplete for existing cells of this type
-  if (window._configurePluginAutocomplete) {
-    window._configurePluginAutocomplete(cellType);
-  }
-
+    onActivate: () => {
+      if (window._configurePluginAutocomplete) window._configurePluginAutocomplete(cellType);
+    },
+  });
 }
 
 // load a locale by name — handles dev-mode fetch + installed module decompression
 async function loadLocale(name) {
-  // check import cache
   if (window._importCache?.['@gcu/soft/' + name]) {
     registerLocale(window._importCache['@gcu/soft/' + name]);
     return;
   }
-  // check installed modules (saved notebook — gzip+base64 compressed JSON)
   const key = '@gcu/soft/' + name;
   if (window._installedModules?.[key]) {
     let src = window._installedModules[key];
     if (src.compressed && !src.binary && typeof src.source === 'string') {
-      // decompress gzip+base64
       const bin = Uint8Array.from(atob(src.source), c => c.charCodeAt(0));
       const ds = new DecompressionStream('gzip');
       const writer = ds.writable.getWriter();
@@ -169,7 +179,6 @@ async function loadLocale(name) {
     registerLocale(data);
     return;
   }
-  // dev-mode: fetch from filesystem
   const resp = await fetch(`./ext/soft/locales/${name}.json`);
   if (!resp.ok) throw new Error(`Locale "${name}" not found`);
   const data = await resp.json();
@@ -180,7 +189,6 @@ async function loadLocale(name) {
 
 export const soft = {
   softTag,
-  handler,
   softParseNames,
   softFindUses,
   tokenizeSoft,

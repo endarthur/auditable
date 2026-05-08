@@ -145,8 +145,17 @@ function glslCompletions() {
 // ── Self-registration ──
 
 if (typeof window !== 'undefined') {
-  if (!window._taggedLanguages) window._taggedLanguages = {};
-  window._taggedLanguages.glsl = { tokenize: tokenizeGlsl, completions: glslCompletions };
+  const register = window.auditable?.registerExtension;
+  if (register) {
+    register({
+      name: '@gcu/shader',
+      version: '0.1.0',
+      taggedLanguage: { name: 'glsl', tokenize: tokenizeGlsl, completions: glslCompletions },
+    });
+  } else {
+    if (!window._taggedLanguages) window._taggedLanguages = {};
+    window._taggedLanguages.glsl = { tokenize: tokenizeGlsl, completions: glslCompletions };
+  }
 }
 
 // ── GLSL constants ──

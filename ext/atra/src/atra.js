@@ -211,8 +211,18 @@ atra.run = function(source, userImports) {
 // ── Self-registration ──
 
 if (typeof window !== 'undefined') {
-  if (!window._taggedLanguages) window._taggedLanguages = {};
-  window._taggedLanguages.atra = { tokenize: tokenizeAtra, completions: atraCompletions, sigHint: atraSigHint };
+  const register = window.auditable?.registerExtension;
+  if (register) {
+    register({
+      name: '@gcu/atra',
+      version: '0.1.0',
+      taggedLanguage: { name: 'atra', tokenize: tokenizeAtra, completions: atraCompletions, sigHint: atraSigHint },
+    });
+  } else {
+    // bare-language fallback — used when atra is loaded outside Auditable
+    if (!window._taggedLanguages) window._taggedLanguages = {};
+    window._taggedLanguages.atra = { tokenize: tokenizeAtra, completions: atraCompletions, sigHint: atraSigHint };
+  }
 }
 
 // ── Feature detection ──

@@ -13,7 +13,7 @@ import { signal } from './signals.js';
 // Pure sideact (signal/computed/effect/h/each/render) is unaffected.
 
 if (typeof window !== 'undefined') {
-  (window._cellContextHooks = window._cellContextHooks || []).push({
+  const _srHook = {
     setup(cell, ctx) {
       if (!ctx.sr) return;
       if (!cell._srState) cell._srState = [];
@@ -31,5 +31,17 @@ if (typeof window !== 'undefined') {
         return s;
       };
     },
-  });
+  };
+
+  const register = window.auditable?.registerExtension;
+  if (register) {
+    register({
+      name: '@gcu/sideact',
+      version: '0.1.0',
+      description: 'Signals + DOM binding — sr.state() persistence across cell re-executions',
+      contextHook: _srHook,
+    });
+  } else {
+    (window._cellContextHooks = window._cellContextHooks || []).push(_srHook);
+  }
 }

@@ -34,13 +34,20 @@ export const cmap = getCmap;
 // register as auditable extension for adder `import plt`
 if (typeof window !== 'undefined') {
   const _plt = { subplots, Figure, cmap, plot, scatter, imshow, hist, bar };
-  window._auditableExtensions = window._auditableExtensions || {};
-  window._auditableExtensions['plt'] = _plt;
-
-  // register as plugin
-  if (window.registerPlugin) {
-    window.registerPlugin('@gcu/plot', { description: 'Canvas 2D plotting library \u2014 line, scatter, bar, hist, imshow' });
-  } else if (window._auditablePlugins) {
-    window._auditablePlugins.set('@gcu/plot', { description: 'Canvas 2D plotting library \u2014 line, scatter, bar, hist, imshow' });
+  const register = window.auditable?.registerExtension;
+  if (register) {
+    register({
+      name: '@gcu/plot',
+      version: '0.1.0',
+      description: 'Canvas 2D plotting library \u2014 line, scatter, bar, hist, imshow',
+      pluginUrl: '@gcu/plot',
+      exports: { plt: _plt },
+    });
+  } else {
+    window._auditableExtensions = window._auditableExtensions || {};
+    window._auditableExtensions['plt'] = _plt;
+    if (window._auditablePlugins) {
+      window._auditablePlugins.set('@gcu/plot', { description: 'Canvas 2D plotting library \u2014 line, scatter, bar, hist, imshow' });
+    }
   }
 }

@@ -2,7 +2,7 @@
 
 import { softParse } from '../ext/soft/src/parse.js';
 import { softEval } from '../ext/soft/src/eval.js';
-import { lowerSoft } from '../ext/air/src/lower/soft.js';
+import { lowerSoft } from '../ext/soft/src/air-lower.js';
 import { runPasses } from '../ext/air/src/passes.js';
 import { emitJS } from '../ext/air/src/emit-js.js';
 import { _soft } from '../ext/soft/src/runtime.js';

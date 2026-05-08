@@ -2,6 +2,198 @@
 // @gcu/soft — English keyword programming language for Auditable
 // Soft cells, tagged template, data query pipeline.
 
+// -- inlined: ../air/src/types.js (AIR type singletons) --
+
+// @gcu/air — Type system
+// Plain objects, no classes. See spec §2.
+
+// --- Singleton type constructors ---
+
+const I8    = Object.freeze({ kind: 'i8' });
+const U8    = Object.freeze({ kind: 'u8' });
+const I16   = Object.freeze({ kind: 'i16' });
+const U16   = Object.freeze({ kind: 'u16' });
+const I32   = Object.freeze({ kind: 'i32' });
+const U32   = Object.freeze({ kind: 'u32' });
+const I64   = Object.freeze({ kind: 'i64' });
+const U64   = Object.freeze({ kind: 'u64' });
+const F32   = Object.freeze({ kind: 'f32' });
+const F64   = Object.freeze({ kind: 'f64' });
+const BOOL  = Object.freeze({ kind: 'bool' });
+const STRING = Object.freeze({ kind: 'string' });
+const VOID  = Object.freeze({ kind: 'void' });
+const DYNAMIC = Object.freeze({ kind: 'dynamic' });
+
+function typedArray(element) {
+  return Object.freeze({ kind: 'typed_array', element });
+}
+
+function array(element) {
+  return Object.freeze({ kind: 'array', element });
+}
+
+function object(fields) {
+  return Object.freeze({ kind: 'object', fields });
+}
+
+function func(params, ret) {
+  return Object.freeze({ kind: 'function', params, ret });
+}
+
+// --- Type annotation mapping (spec §2.2) ---
+
+const TS_TYPE_MAP = {
+  // GCU numeric types
+  'i8': I8, 'u8': U8, 'i16': I16, 'u16': U16,
+  'i32': I32, 'u32': U32, 'i64': I64, 'u64': U64,
+  'f32': F32, 'f64': F64, 'bool': BOOL,
+  // Standard TS types
+  'number': F64, 'boolean': BOOL, 'string': STRING, 'void': VOID,
+  // Standard typed array constructors
+  'Int8Array': typedArray('i8'), 'Uint8Array': typedArray('u8'),
+  'Int16Array': typedArray('i16'), 'Uint16Array': typedArray('u16'),
+  'Int32Array': typedArray('i32'), 'Uint32Array': typedArray('u32'),
+  'Float32Array': typedArray('f32'), 'Float64Array': typedArray('f64'),
+  'BigInt64Array': typedArray('i64'), 'BigUint64Array': typedArray('u64'),
+  // GCU typed array aliases
+  'i8array': typedArray('i8'), 'u8array': typedArray('u8'),
+  'i16array': typedArray('i16'), 'u16array': typedArray('u16'),
+  'i32array': typedArray('i32'), 'u32array': typedArray('u32'),
+  'f32array': typedArray('f32'), 'f64array': typedArray('f64'),
+  'i64array': typedArray('i64'), 'u64array': typedArray('u64'),
+};
+
+// Resolve a TS annotation AST node to an AIR type
+function resolveAnnotation(node) {
+  if (!node) return DYNAMIC;
+  const ann = node.typeAnnotation || node;
+  switch (ann.type) {
+    case 'TSTypeAnnotation':
+      return resolveAnnotation(ann.typeAnnotation);
+    case 'TSTypeReference':
+      return TS_TYPE_MAP[ann.typeName?.name] || DYNAMIC;
+    case 'TSNumberKeyword': return F64;
+    case 'TSBooleanKeyword': return BOOL;
+    case 'TSStringKeyword': return STRING;
+    case 'TSVoidKeyword': return VOID;
+    case 'TSArrayType': {
+      const el = resolveAnnotation(ann.elementType);
+      return array(el);
+    }
+    default: return DYNAMIC;
+  }
+}
+
+// --- Type predicates ---
+
+function isNumeric(t) {
+  const k = t.kind;
+  return k === 'i8' || k === 'u8' || k === 'i16' || k === 'u16' ||
+         k === 'i32' || k === 'u32' || k === 'i64' || k === 'u64' ||
+         k === 'f32' || k === 'f64';
+}
+
+function isInteger(t) {
+  const k = t.kind;
+  return k === 'i8' || k === 'u8' || k === 'i16' || k === 'u16' ||
+         k === 'i32' || k === 'u32' || k === 'i64' || k === 'u64';
+}
+
+function isFloat(t) {
+  return t.kind === 'f32' || t.kind === 'f64';
+}
+
+function isSigned(t) {
+  const k = t.kind;
+  return k === 'i8' || k === 'i16' || k === 'i32' || k === 'i64';
+}
+
+function isDynamic(t) {
+  return t.kind === 'dynamic';
+}
+
+function isConcrete(t) {
+  return t.kind !== 'dynamic';
+}
+
+// --- Type width (bits) for promotion ---
+
+const TYPE_WIDTH = {
+  'i8': 8, 'u8': 8, 'i16': 16, 'u16': 16,
+  'i32': 32, 'u32': 32, 'i64': 64, 'u64': 64,
+  'f32': 32, 'f64': 64,
+};
+
+// Promotion hierarchy lookup
+const PROMOTE_RANK = {
+  'i8': 0, 'u8': 0, 'i16': 1, 'u16': 1,
+  'i32': 2, 'u32': 2, 'i64': 3, 'u64': 3,
+  'f32': 4, 'f64': 5,
+};
+
+const RANK_TO_SIGNED   = { 0: I8, 1: I16, 2: I32, 3: I64 };
+const RANK_TO_UNSIGNED = { 0: U8, 1: U16, 2: U32, 3: U64 };
+
+// --- Arithmetic result type (spec §2.5) ---
+
+function arithmeticResult(lhs, rhs) {
+  if (isDynamic(lhs) || isDynamic(rhs)) return DYNAMIC;
+  if (!isNumeric(lhs) || !isNumeric(rhs)) return DYNAMIC;
+
+  const lr = PROMOTE_RANK[lhs.kind];
+  const rr = PROMOTE_RANK[rhs.kind];
+
+  // Both float
+  if (isFloat(lhs) && isFloat(rhs)) {
+    return lr >= rr ? lhs : rhs;
+  }
+  // One float, one integer → float wins
+  if (isFloat(lhs)) return lhs;
+  if (isFloat(rhs)) return rhs;
+
+  // Both integer — promote narrower, signed wins on same width
+  if (lr !== rr) {
+    const maxRank = Math.max(lr, rr);
+    // use signed if either is signed
+    if (isSigned(lhs) || isSigned(rhs)) return RANK_TO_SIGNED[maxRank];
+    return RANK_TO_UNSIGNED[maxRank];
+  }
+  // Same width — signed wins
+  if (isSigned(lhs) || isSigned(rhs)) return RANK_TO_SIGNED[lr];
+  return RANK_TO_UNSIGNED[lr];
+}
+
+// Comparison always → bool
+function comparisonResult(lhs, rhs) {
+  return BOOL;
+}
+
+// Bitwise ops always → i32
+function bitwiseResult() {
+  return I32;
+}
+
+// --- Type equality ---
+
+function typeEq(a, b) {
+  if (a === b) return true;
+  if (a.kind !== b.kind) return false;
+  if (a.kind === 'typed_array') return a.element === b.element;
+  if (a.kind === 'array') return typeEq(a.element, b.element);
+  if (a.kind === 'function') {
+    if (a.params.length !== b.params.length) return false;
+    if (!typeEq(a.ret, b.ret)) return false;
+    return a.params.every((p, i) => typeEq(p, b.params[i]));
+  }
+  if (a.kind === 'object') {
+    const aKeys = [...a.fields.keys()].sort();
+    const bKeys = [...b.fields.keys()].sort();
+    if (aKeys.length !== bKeys.length) return false;
+    return aKeys.every((k, i) => k === bKeys[i] && typeEq(a.fields.get(k), b.fields.get(k)));
+  }
+  return true;
+}
+
 // -- tokenize.js --
 
 // soft — tokenizer
@@ -3069,6 +3261,781 @@ function softCompletions(prefix) {
   return results;
 }
 
+// -- air-lower.js --
+
+// @gcu/air — Soft → AIR lowerer
+// Soft is simpler than Python: direct JS arithmetic, JS-semantic comparison,
+// no dunder methods, no classes. Result: fewer _soft helper calls than _py needed.
+
+
+class SoftLowerError extends Error {
+  constructor(message) { super(message); this._airFallback = true; }
+}
+
+let _softNextId = 0;
+function _softResetIds() { _softNextId = 0; }
+function _softMkOp(op, args, type, loc, extra) {
+  const id = '%' + (_softNextId++);
+  const o = { id, op, args, type: type || DYNAMIC, loc };
+  if (extra) Object.assign(o, extra);
+  return o;
+}
+
+class SoftLowerCtx {
+  constructor() {
+    this.ops = [];
+    this.symbols = new Map();
+    this.types = new Map();
+    this.topLevel = true;
+    this.defines = new Set();
+    this.imports = new Set();
+    this.source = null;
+  }
+  emit(op, args, type, loc, extra) {
+    const o = _softMkOp(op, args, type, loc, extra);
+    this.ops.push(o);
+    if (type) this.types.set(o.id, type);
+    return o;
+  }
+  loc(node) {
+    return node?.line != null ? { line: node.line, col: 0 } : null;
+  }
+}
+
+// _soft.XYZ call
+function emitSoftCall(ctx, method, args, loc, type) {
+  const softLoad = ctx.emit('load', ['_soft'], DYNAMIC, loc);
+  const methodGet = ctx.emit('object_get', [softLoad.id, method], DYNAMIC, loc);
+  return ctx.emit('call', [methodGet.id, ...args.map(a => a.id)], type || DYNAMIC, loc);
+}
+
+function emitAwaitedCall_sf(ctx, fnId, argIds, loc, type) {
+  const call = ctx.emit('call', [fnId, ...argIds], type || DYNAMIC, loc);
+  return ctx.emit('await', [call.id], type || DYNAMIC, loc);
+}
+
+// Collect top-level defines from the AST (Set, Define, Capture, Use)
+function collectDefines_sf(body, defines) {
+  for (const node of body || []) {
+    switch (node.type) {
+      case 'Set': defines.add(node.name); break;
+      case 'Define': defines.add(node.name); break;
+      case 'Capture': defines.add(node.name); break;
+      case 'Use': defines.add(node.alias || node.path.split('.').pop()); break;
+      case 'Load': if (node.name) defines.add(node.name); break;
+      case 'Take': defines.add(node.name); break;
+      case 'PipeCalled': if (node.name) defines.add(node.name); break;
+      case 'If':
+        collectDefines_sf(node.body, defines);
+        if (node.elseBody) collectDefines_sf(node.elseBody, defines);
+        break;
+      case 'While': case 'Repeat':
+        collectDefines_sf(node.body, defines);
+        break;
+      case 'ForEach':
+        defines.add(node.varName);
+        collectDefines_sf(node.body, defines);
+        break;
+      case 'RangeLoop':
+        defines.add(node.varName);
+        collectDefines_sf(node.body, defines);
+        break;
+    }
+  }
+}
+
+function lowerSoft(ast, source) {
+  _softResetIds();
+  const ctx = new SoftLowerCtx();
+  ctx.source = source || null;
+
+  if (ast.type !== 'Program') throw new SoftLowerError('Expected Program node');
+
+  collectDefines_sf(ast.body, ctx.defines);
+
+  // Identify names that will be declared by `Define` (function syntax-like)
+  const funcNames = new Set();
+  for (const stmt of ast.body) {
+    if (stmt.type === 'Define') funcNames.add(stmt.name);
+  }
+
+  // Pre-declare all module-level defines (except functions)
+  for (const name of ctx.defines) {
+    if (name === '__lastExpr__') continue;
+    if (funcNames.has(name)) continue;
+    const undef = ctx.emit('const', [undefined], VOID, null);
+    ctx.emit('store', [name, undef.id], VOID, null);
+    ctx.symbols.set(name, undef.id);
+  }
+
+  for (const stmt of ast.body) lowerStmt_sf(ctx, stmt);
+
+  const exports = new Map();
+  for (const name of ctx.defines) {
+    const ssaId = ctx.symbols.get(name);
+    const type = ssaId ? (ctx.types.get(ssaId) || DYNAMIC) : DYNAMIC;
+    exports.set(name, { ssa_name: ssaId || null, type });
+  }
+
+  return {
+    ops: ctx.ops,
+    symbol_table: new Map(ctx.symbols),
+    exports,
+    imports: new Set(ctx.imports),
+    defines: new Set(ctx.defines),
+    side_effects: true,
+  };
+}
+
+// ── Statement lowering ──
+
+function lowerStmt_sf(ctx, node) {
+  if (!node) return null;
+  const l = ctx.loc(node);
+
+  switch (node.type) {
+    case 'Set': return lowerSet(ctx, node);
+    case 'Define': return lowerDefine(ctx, node);
+    case 'Say': return lowerSay(ctx, node);
+    case 'If': return lowerIf_sf(ctx, node);
+    case 'While': return lowerWhile_sf(ctx, node);
+    case 'ForEach': return lowerForEach(ctx, node);
+    case 'RangeLoop': return lowerRangeLoop(ctx, node);
+    case 'Repeat': return lowerRepeat(ctx, node);
+    case 'Return': {
+      const val = node.value ? lowerExpr_sf(ctx, node.value) : ctx.emit('const', [null], VOID, l);
+      ctx.emit('return', [val.id], VOID, l);
+      return null;
+    }
+    case 'ExprStmt': return lowerExpr_sf(ctx, node.expr);
+    case 'Capture': return lowerCapture(ctx, node);
+    case 'Stop': ctx.emit('break', [], VOID, l); return null;
+    case 'Skip': ctx.emit('continue', [], VOID, l); return null;
+    case 'Add': return lowerAddRemove(ctx, node, 'add');
+    case 'Remove': return lowerAddRemove(ctx, node, 'remove');
+    case 'Assume': return lowerAssume(ctx, node);
+    case 'Explain': return null; // no-op for transpile
+
+    // Fallback for complex constructs
+    case 'Try':
+    case 'Suppose':
+    case 'Use':
+    case 'On':
+    case 'Load':
+    case 'Save':
+    case 'Make':
+    case 'SetOf':
+    case 'SetChunk':
+    case 'Take':
+    case 'Filter': case 'Sort': case 'Aggregate': case 'Count':
+    case 'Limit': case 'Group': case 'Pick': case 'Round': case 'With':
+    case 'PipeCalled': case 'Pipeline': case 'PipeCall':
+      throw new SoftLowerError(`Soft: ${node.type} not yet supported in transpile`);
+
+    default:
+      throw new SoftLowerError(`Soft: unsupported statement: ${node.type}`);
+  }
+}
+
+// ── Expression lowering ──
+
+function lowerExpr_sf(ctx, node) {
+  if (!node) return ctx.emit('const', [null], VOID, null);
+  const l = ctx.loc(node);
+
+  switch (node.type) {
+    case 'Num': {
+      const v = node.value;
+      const isInt = Number.isInteger(v) && v >= -2147483648 && v <= 2147483647;
+      return ctx.emit('const', [v], isInt ? I32 : F64, l);
+    }
+    case 'Str': return ctx.emit('const', [node.value], STRING, l);
+    case 'Bool': return ctx.emit('const', [node.value], BOOL, l);
+    case 'Nothing': return ctx.emit('const', [null], DYNAMIC, l);
+    case 'Ref': return lowerRef(ctx, node);
+    case 'Group': return lowerExpr_sf(ctx, node.expr);
+
+    case 'BinOp': return lowerBinOp_sf(ctx, node);
+    case 'Unary': return lowerUnary_sf(ctx, node);
+    case 'Compare': return lowerCompare_sf(ctx, node);
+    case 'Logic': return lowerLogic(ctx, node);
+    case 'Between': return lowerBetween(ctx, node);
+    case 'TypeCheck': return lowerTypeCheck(ctx, node);
+    case 'Ternary': return lowerTernary(ctx, node);
+
+    case 'Of': return lowerOf(ctx, node);
+    case 'LengthOf': {
+      const e = lowerExpr_sf(ctx, node.expr);
+      return emitSoftCall(ctx, 'lengthOf', [e], l);
+    }
+
+    case 'Call': return lowerCall_sf(ctx, node);
+    case 'Invoke': return lowerInvoke(ctx, node);
+
+    case 'List': {
+      const items = node.items.map(e => lowerExpr_sf(ctx, e).id);
+      return ctx.emit('array_new', items, DYNAMIC, l);
+    }
+
+    case 'Record': return lowerRecord(ctx, node);
+    case 'RecordWith': return lowerRecordWith(ctx, node);
+
+    case 'Juxtapose': {
+      // String concat — a & b & c or implicit juxtaposition in say
+      const parts = node.parts.map(p => lowerExpr_sf(ctx, p));
+      if (parts.length === 0) return ctx.emit('const', [''], STRING, l);
+      let result = emitSoftCall(ctx, 'str', [parts[0]], l, STRING);
+      for (let i = 1; i < parts.length; i++) {
+        const s = emitSoftCall(ctx, 'str', [parts[i]], l, STRING);
+        result = ctx.emit('add', [result.id, s.id], STRING, l);
+      }
+      return result;
+    }
+
+    case 'Chunk': {
+      const target = lowerExpr_sf(ctx, node.target);
+      const index = lowerExpr_sf(ctx, node.index);
+      const kind = ctx.emit('const', [node.kind], STRING, l);
+      return emitSoftCall(ctx, 'chunk', [kind, index, target], l);
+    }
+    case 'ChunkRange': {
+      const target = lowerExpr_sf(ctx, node.target);
+      const from = lowerExpr_sf(ctx, node.from);
+      const to = lowerExpr_sf(ctx, node.to);
+      const kind = ctx.emit('const', [node.kind], STRING, l);
+      return emitSoftCall(ctx, 'chunkRange', [kind, from, to, target], l);
+    }
+    case 'CountChunks': {
+      const e = lowerExpr_sf(ctx, node.expr);
+      const kind = ctx.emit('const', [node.kind], STRING, l);
+      return emitSoftCall(ctx, 'countChunks', [kind, e], l);
+    }
+
+    case 'ThereIs': {
+      // There is X — X in scope and not null/undefined
+      if (!ctx.symbols.has(node.name) && !ctx.defines.has(node.name)) {
+        ctx.imports.add(node.name);
+      }
+      // Emit: (x !== undefined && x !== null)
+      const load = ctx.emit('load', [node.name], DYNAMIC, l);
+      const undef = ctx.emit('const', [undefined], VOID, l);
+      const nullVal = ctx.emit('const', [null], VOID, l);
+      const notUndef = ctx.emit('neq', [load.id, undef.id], BOOL, l);
+      const notNull = ctx.emit('neq', [load.id, nullVal.id], BOOL, l);
+      return ctx.emit('logical_and', [notUndef.id, notNull.id], BOOL, l);
+    }
+    case 'ThereIsNo': {
+      if (!ctx.symbols.has(node.name) && !ctx.defines.has(node.name)) {
+        ctx.imports.add(node.name);
+      }
+      const load = ctx.emit('load', [node.name], DYNAMIC, l);
+      const undef = ctx.emit('const', [undefined], VOID, l);
+      const nullVal = ctx.emit('const', [null], VOID, l);
+      const isUndef = ctx.emit('eq', [load.id, undef.id], BOOL, l);
+      const isNull = ctx.emit('eq', [load.id, nullVal.id], BOOL, l);
+      return ctx.emit('logical_or', [isUndef.id, isNull.id], BOOL, l);
+    }
+
+    case 'Regex':
+      throw new SoftLowerError('Soft: Regex not yet supported');
+
+    case 'RoundExpr':
+    case 'PipeCall':
+      throw new SoftLowerError(`Soft: ${node.type} not yet supported in transpile`);
+
+    default:
+      throw new SoftLowerError(`Soft: unsupported expression: ${node.type}`);
+  }
+}
+
+// ── Reference ──
+
+function lowerRef(ctx, node) {
+  const l = ctx.loc(node);
+  const name = node.name;
+  if (name.includes('.')) {
+    // Dot path: resolve as Of chain
+    const parts = name.split('.');
+    const rootName = parts[0];
+    if (!ctx.symbols.has(rootName) && !ctx.defines.has(rootName)) {
+      ctx.imports.add(rootName);
+    }
+    let v = ctx.emit('load', [rootName], DYNAMIC, l);
+    for (let i = 1; i < parts.length; i++) {
+      v = ctx.emit('object_get', [v.id, parts[i]], DYNAMIC, l);
+    }
+    return v;
+  }
+  if (!ctx.symbols.has(name) && !ctx.defines.has(name)) {
+    ctx.imports.add(name);
+  }
+  return ctx.emit('load', [name], DYNAMIC, l);
+}
+
+// ── BinOp / Unary / Compare / Logic ──
+
+const BINOP_TO_AIR = {
+  '+': 'add', '-': 'sub', '*': 'mul', '/': 'div', '%': 'mod', '**': 'exp',
+  '<<': 'shift_left', '>>': 'shift_right',
+  'bitand': 'bitwise_and', 'bitor': 'bitwise_or', 'bitxor': 'bitwise_xor',
+};
+
+function lowerBinOp_sf(ctx, node) {
+  const l = ctx.loc(node);
+  if (node.op === '&') {
+    // String concat — softString both, then +
+    const left = lowerExpr_sf(ctx, node.left);
+    const right = lowerExpr_sf(ctx, node.right);
+    const ls = emitSoftCall(ctx, 'str', [left], l, STRING);
+    const rs = emitSoftCall(ctx, 'str', [right], l, STRING);
+    return ctx.emit('add', [ls.id, rs.id], STRING, l);
+  }
+  const airOp = BINOP_TO_AIR[node.op];
+  if (!airOp) throw new SoftLowerError(`Soft: unknown binop ${node.op}`);
+  const left = lowerExpr_sf(ctx, node.left);
+  const right = lowerExpr_sf(ctx, node.right);
+  // Soft uses direct JS arithmetic — no runtime dispatch. Result type
+  // is dynamic (could be number, string concat via '+', etc.) but we
+  // emit the JS op directly which is correct.
+  const typeHint = airOp === 'shift_left' || airOp === 'shift_right' ||
+    airOp.startsWith('bitwise_') ? I32 : DYNAMIC;
+  return ctx.emit(airOp, [left.id, right.id], typeHint, l);
+}
+
+function lowerUnary_sf(ctx, node) {
+  const l = ctx.loc(node);
+  const arg = lowerExpr_sf(ctx, node.expr);
+  switch (node.op) {
+    case 'not': {
+      // !_soft.truthy(v) — Soft's "not" uses its own truthiness
+      const truthy = emitSoftCall(ctx, 'truthy', [arg], l, BOOL);
+      return ctx.emit('logical_not', [truthy.id], BOOL, l);
+    }
+    case 'neg': return ctx.emit('neg', [arg.id], DYNAMIC, l);
+    case 'bitnot': return ctx.emit('bitwise_not', [arg.id], I32, l);
+    default: throw new SoftLowerError(`Soft: unknown unary ${node.op}`);
+  }
+}
+
+function lowerCompare_sf(ctx, node) {
+  const l = ctx.loc(node);
+  const left = lowerExpr_sf(ctx, node.left);
+  const right = lowerExpr_sf(ctx, node.right);
+  switch (node.op) {
+    case '<': return ctx.emit('lt', [left.id, right.id], BOOL, l);
+    case '>': return ctx.emit('gt', [left.id, right.id], BOOL, l);
+    case '<=': return ctx.emit('lte', [left.id, right.id], BOOL, l);
+    case '>=': return ctx.emit('gte', [left.id, right.id], BOOL, l);
+    case '==':
+      // Case-insensitive for strings — use _soft.eq helper
+      return emitSoftCall(ctx, 'eq', [left, right], l, BOOL);
+    case '!=':
+      return emitSoftCall(ctx, 'neq', [left, right], l, BOOL);
+    case 'contains':
+      return emitSoftCall(ctx, 'contains', [left, right], l, BOOL);
+    case 'matches':
+      return emitSoftCall(ctx, 'matches', [left, right], l, BOOL);
+    default: throw new SoftLowerError(`Soft: unknown comparison ${node.op}`);
+  }
+}
+
+function lowerLogic(ctx, node) {
+  const l = ctx.loc(node);
+  // Soft's and/or: short-circuit, return actual value not bool
+  // a and b → truthy(a) ? b : a
+  // a or b  → truthy(a) ? a : b
+  const left = lowerExpr_sf(ctx, node.left);
+  const truthy = emitSoftCall(ctx, 'truthy', [left], l, BOOL);
+
+  const savedOps = ctx.ops;
+  ctx.ops = [];
+  const right = lowerExpr_sf(ctx, node.right);
+  const rightBody = ctx.ops;
+  ctx.ops = savedOps;
+
+  if (node.op === 'and') {
+    return ctx.emit('if_region', [truthy.id], DYNAMIC, l, {
+      then_body: rightBody,
+      else_body: [],
+      phis: [{ then_val: right.id, else_val: left.id }],
+    });
+  }
+  // or
+  return ctx.emit('if_region', [truthy.id], DYNAMIC, l, {
+    then_body: [],
+    else_body: rightBody,
+    phis: [{ then_val: left.id, else_val: right.id }],
+  });
+}
+
+function lowerBetween(ctx, node) {
+  const l = ctx.loc(node);
+  const v = lowerExpr_sf(ctx, node.value);
+  const lo = lowerExpr_sf(ctx, node.lo);
+  const hi = lowerExpr_sf(ctx, node.hi);
+  return emitSoftCall(ctx, 'between', [v, lo, hi], l, BOOL);
+}
+
+function lowerTypeCheck(ctx, node) {
+  const l = ctx.loc(node);
+  const e = lowerExpr_sf(ctx, node.expr);
+  const tn = ctx.emit('const', [node.typeName], STRING, l);
+  return emitSoftCall(ctx, 'isType', [e, tn], l, BOOL);
+}
+
+function lowerTernary(ctx, node) {
+  const l = ctx.loc(node);
+  // X if cond otherwise Y → _soft.truthy(cond) ? X : Y
+  const cond = lowerExpr_sf(ctx, node.cond);
+  const truthy = emitSoftCall(ctx, 'truthy', [cond], l, BOOL);
+
+  const savedOps = ctx.ops;
+  ctx.ops = [];
+  const thenVal = lowerExpr_sf(ctx, node.ifTrue);
+  const thenBody = ctx.ops;
+  ctx.ops = [];
+  const elseVal = lowerExpr_sf(ctx, node.ifFalse);
+  const elseBody = ctx.ops;
+  ctx.ops = savedOps;
+
+  return ctx.emit('if_region', [truthy.id], DYNAMIC, l, {
+    then_body: thenBody,
+    else_body: elseBody,
+    phis: [{ then_val: thenVal.id, else_val: elseVal.id }],
+  });
+}
+
+// ── Of: x of y → y.x (with null-safety) ──
+
+function lowerOf(ctx, node) {
+  const l = ctx.loc(node);
+  const obj = lowerExpr_sf(ctx, node.obj);
+  // node.prop is a node like Ref — get its name
+  let propName;
+  if (node.prop.type === 'Ref') propName = node.prop.name;
+  else if (node.prop.type === 'Str') propName = node.prop.value;
+  else {
+    // Computed — use array_get (dynamic property)
+    const prop = lowerExpr_sf(ctx, node.prop);
+    return emitSoftCall(ctx, 'of', [obj, prop], l);
+  }
+  const name = ctx.emit('const', [propName], STRING, l);
+  return emitSoftCall(ctx, 'of', [obj, name], l);
+}
+
+// ── Call ──
+
+function lowerCall_sf(ctx, node) {
+  const l = ctx.loc(node);
+  const name = node.name;
+  const args = node.args.map(a => lowerExpr_sf(ctx, a));
+
+  // Dotted names (Text.upper, List.reverse, etc.) — lower as nested object_gets + call
+  if (name.includes('.')) {
+    const parts = name.split('.');
+    const rootName = parts[0];
+    if (!ctx.symbols.has(rootName) && !ctx.defines.has(rootName)) {
+      ctx.imports.add(rootName);
+    }
+    let fn = ctx.emit('load', [rootName], DYNAMIC, l);
+    for (let i = 1; i < parts.length; i++) {
+      fn = ctx.emit('object_get', [fn.id, parts[i]], DYNAMIC, l);
+    }
+    return emitAwaitedCall_sf(ctx, fn.id, args.map(a => a.id), l);
+  }
+
+  if (!ctx.symbols.has(name) && !ctx.defines.has(name)) {
+    ctx.imports.add(name);
+  }
+  const fn = ctx.emit('load', [name], DYNAMIC, l);
+  return emitAwaitedCall_sf(ctx, fn.id, args.map(a => a.id), l);
+}
+
+function lowerInvoke(ctx, node) {
+  const l = ctx.loc(node);
+  const fn = lowerExpr_sf(ctx, node.expr);
+  const args = node.args.map(a => lowerExpr_sf(ctx, a));
+  // Use _soft.invoke to handle the "already resolved to non-function" case
+  const argsArr = ctx.emit('array_new', args.map(a => a.id), DYNAMIC, l);
+  const call = emitSoftCall(ctx, 'invoke', [fn, argsArr], l);
+  return ctx.emit('await', [call.id], DYNAMIC, l);
+}
+
+// ── Records ──
+
+function lowerRecord(ctx, node) {
+  const l = ctx.loc(node);
+  const pairs = node.fields.map(f => ({
+    key: f.name,
+    id: lowerExpr_sf(ctx, f.value).id,
+  }));
+  return ctx.emit('object_new', pairs, DYNAMIC, l);
+}
+
+function lowerRecordWith(ctx, node) {
+  // Same as Record — field names spell out the shape
+  return lowerRecord(ctx, node);
+}
+
+// ── Set ──
+
+function lowerSet(ctx, node) {
+  const l = ctx.loc(node);
+  const val = lowerExpr_sf(ctx, node.value);
+  ctx.emit('store', [node.name, val.id], VOID, l);
+  ctx.symbols.set(node.name, val.id);
+  if (ctx.topLevel) ctx.defines.add(node.name);
+  return null;
+}
+
+// ── Define (function) ──
+
+function lowerDefine(ctx, node) {
+  const l = ctx.loc(node);
+  const name = node.name;
+
+  // Extract params from signature. Soft sig is an array of { param, variadic? }
+  const params = [];
+  for (const s of node.sig || []) {
+    if (typeof s === 'object' && s !== null && s.param) {
+      if (s.variadic) {
+        params.push({ name: '...' + s.param, type: DYNAMIC });
+      } else {
+        params.push({ name: s.param, type: DYNAMIC });
+      }
+    }
+  }
+
+  const savedTopLevel = ctx.topLevel;
+  const savedOps = ctx.ops;
+  const savedSymbols = ctx.symbols;
+
+  ctx.topLevel = false;
+  ctx.ops = [];
+  ctx.symbols = new Map(savedSymbols);
+  for (const p of params) {
+    const pname = p.name.replace(/^\.\.\./, '');
+    ctx.symbols.set(pname, null);
+  }
+  // Soft functions use `it` as implicit result
+  ctx.symbols.set('it', null);
+
+  for (const s of node.body) lowerStmt_sf(ctx, s);
+  const body = ctx.ops;
+
+  ctx.ops = savedOps;
+  ctx.topLevel = savedTopLevel;
+  ctx.symbols = savedSymbols;
+
+  const op = ctx.emit('func_region', [name], DYNAMIC, l, {
+    name, params, body, ret_type: DYNAMIC,
+    is_async: true,
+    is_generator: false,
+  });
+
+  ctx.emit('store', [name, op.id], VOID, l);
+  ctx.symbols.set(name, op.id);
+  if (ctx.topLevel) ctx.defines.add(name);
+  return op;
+}
+
+// ── Say ──
+
+function lowerSay(ctx, node) {
+  const l = ctx.loc(node);
+  const val = lowerExpr_sf(ctx, node.value);
+  // Soft's say calls `say` builtin (or the cell's display). Just call `say`.
+  if (!ctx.symbols.has('say') && !ctx.defines.has('say')) {
+    ctx.imports.add('say');
+  }
+  const sayFn = ctx.emit('load', ['say'], DYNAMIC, l);
+  return emitAwaitedCall_sf(ctx, sayFn.id, [val.id], l);
+}
+
+// ── If / While / ForEach / RangeLoop / Repeat ──
+
+function lowerIf_sf(ctx, node) {
+  const l = ctx.loc(node);
+  const cond = lowerExpr_sf(ctx, node.cond);
+  const truthy = emitSoftCall(ctx, 'truthy', [cond], l, BOOL);
+
+  const savedOps = ctx.ops;
+  ctx.ops = [];
+  for (const s of node.body) lowerStmt_sf(ctx, s);
+  const thenBody = ctx.ops;
+  ctx.ops = [];
+  if (node.elseBody) for (const s of node.elseBody) lowerStmt_sf(ctx, s);
+  const elseBody = ctx.ops;
+  ctx.ops = savedOps;
+
+  return ctx.emit('if_region', [truthy.id], VOID, l, {
+    then_body: thenBody, else_body: elseBody, phis: [],
+  });
+}
+
+function lowerWhile_sf(ctx, node) {
+  const l = ctx.loc(node);
+  const savedOps = ctx.ops;
+
+  ctx.ops = [];
+  const cond = lowerExpr_sf(ctx, node.cond);
+  const truthy = emitSoftCall(ctx, 'truthy', [cond], l, BOOL);
+  const testOps = ctx.ops;
+
+  ctx.ops = [];
+  for (const s of node.body) lowerStmt_sf(ctx, s);
+  const body = ctx.ops;
+  ctx.ops = savedOps;
+
+  return ctx.emit('loop_region', [], VOID, l, {
+    test: testOps, test_val: truthy.id,
+    body, phis: [], loop_kind: 'while',
+  });
+}
+
+function lowerForEach(ctx, node) {
+  const l = ctx.loc(node);
+  const iter = lowerExpr_sf(ctx, node.iter);
+  // Pre-declare var
+  if (ctx.topLevel) ctx.defines.add(node.varName);
+
+  const savedOps = ctx.ops;
+  ctx.ops = [];
+  for (const s of node.body) lowerStmt_sf(ctx, s);
+  const body = ctx.ops;
+  ctx.ops = savedOps;
+
+  return ctx.emit('for_of_region', [iter.id], VOID, l, {
+    body, phis: [], target_name: node.varName,
+  });
+}
+
+function lowerRangeLoop(ctx, node) {
+  const l = ctx.loc(node);
+  // for each i from X to Y [by step]: body
+  // Lower as: let i = X; while (step > 0 ? i <= Y : i >= Y) { body; i += step }
+  // Use a standard for_region.
+  const varName = node.varName;
+  if (ctx.topLevel) ctx.defines.add(varName);
+
+  const savedOps = ctx.ops;
+
+  ctx.ops = [];
+  const from = lowerExpr_sf(ctx, node.from);
+  ctx.emit('store', [varName, from.id], VOID, l);
+  ctx.symbols.set(varName, from.id);
+  const initOps = ctx.ops;
+
+  ctx.ops = [];
+  const to = lowerExpr_sf(ctx, node.to);
+  const vLoad = ctx.emit('load', [varName], DYNAMIC, l);
+  const testOp = ctx.emit('lte', [vLoad.id, to.id], BOOL, l);
+  const testOps = ctx.ops;
+
+  ctx.ops = [];
+  const stepVal = node.step ? lowerExpr_sf(ctx, node.step) : ctx.emit('const', [1], I32, l);
+  const vLoad2 = ctx.emit('load', [varName], DYNAMIC, l);
+  const newV = ctx.emit('add', [vLoad2.id, stepVal.id], DYNAMIC, l);
+  ctx.emit('store', [varName, newV.id], VOID, l);
+  const updateOps = ctx.ops;
+
+  ctx.ops = [];
+  for (const s of node.body) lowerStmt_sf(ctx, s);
+  const body = ctx.ops;
+
+  ctx.ops = savedOps;
+
+  return ctx.emit('for_region', [], VOID, l, {
+    init: initOps,
+    test: testOps,
+    test_val: testOp.id,
+    update: updateOps,
+    body,
+    phis: [],
+  });
+}
+
+function lowerRepeat(ctx, node) {
+  const l = ctx.loc(node);
+  // repeat N times: body → for-loop 0..N
+  const countExpr = lowerExpr_sf(ctx, node.count);
+  const tempVar = `__rep_${_softNextId}`;
+
+  const savedOps = ctx.ops;
+
+  ctx.ops = [];
+  const zero = ctx.emit('const', [0], I32, l);
+  ctx.emit('store', [tempVar, zero.id], VOID, l);
+  ctx.symbols.set(tempVar, zero.id);
+  const initOps = ctx.ops;
+
+  ctx.ops = [];
+  const vLoad = ctx.emit('load', [tempVar], DYNAMIC, l);
+  const testOp = ctx.emit('lt', [vLoad.id, countExpr.id], BOOL, l);
+  const testOps = ctx.ops;
+
+  ctx.ops = [];
+  const one = ctx.emit('const', [1], I32, l);
+  const vLoad2 = ctx.emit('load', [tempVar], DYNAMIC, l);
+  const newV = ctx.emit('add', [vLoad2.id, one.id], I32, l);
+  ctx.emit('store', [tempVar, newV.id], VOID, l);
+  const updateOps = ctx.ops;
+
+  ctx.ops = [];
+  for (const s of node.body) lowerStmt_sf(ctx, s);
+  const body = ctx.ops;
+
+  ctx.ops = savedOps;
+
+  return ctx.emit('for_region', [], VOID, l, {
+    init: initOps, test: testOps, test_val: testOp.id,
+    update: updateOps, body, phis: [],
+  });
+}
+
+// ── Capture ──
+
+function lowerCapture(ctx, node) {
+  const l = ctx.loc(node);
+  const val = lowerExpr_sf(ctx, node.expr);
+  ctx.emit('store', [node.name, val.id], VOID, l);
+  ctx.symbols.set(node.name, val.id);
+  if (ctx.topLevel) ctx.defines.add(node.name);
+  return null;
+}
+
+// ── Add / Remove ──
+
+function lowerAddRemove(ctx, node, kind) {
+  const l = ctx.loc(node);
+  const value = lowerExpr_sf(ctx, node.value);
+  const target = lowerExpr_sf(ctx, node.target);
+  emitSoftCall(ctx, kind, [value, target], l, VOID);
+  return null;
+}
+
+// ── Assume ──
+
+function lowerAssume(ctx, node) {
+  const l = ctx.loc(node);
+  const cond = lowerExpr_sf(ctx, node.cond);
+  const truthy = emitSoftCall(ctx, 'truthy', [cond], l, BOOL);
+
+  const savedOps = ctx.ops;
+  ctx.ops = [];
+  const msg = node.message ? lowerExpr_sf(ctx, node.message)
+    : ctx.emit('const', ['assumption failed'], STRING, l);
+  ctx.emit('throw', [msg.id], VOID, l);
+  const thenBody = ctx.ops;
+  ctx.ops = savedOps;
+
+  const notTruthy = ctx.emit('logical_not', [truthy.id], BOOL, l);
+  ctx.emit('if_region', [notTruthy.id], VOID, l, {
+    then_body: thenBody, else_body: [], phis: [],
+  });
+  return null;
+}
+
 // -- cell.js --
 
 // soft — cell type handler: parseNames, findUses, execute
@@ -3281,10 +4248,13 @@ async function softExecute(code, scopeIn, cell) {
   let result = null;
   let usedTranspile = false;
 
-  if (typeof window !== 'undefined' && window._airLowerSoft && window._airEmit) {
+  const _airSoftLower = (typeof window !== 'undefined' && window._airGetLowerer)
+    ? window._airGetLowerer('soft')
+    : null;
+  if (_airSoftLower && typeof window !== 'undefined' && window._airEmit) {
     try {
       const ast = softParse(code);
-      const lowered = window._airLowerSoft(ast, code);
+      const lowered = _airSoftLower(ast, code);
       if (lowered) {
         const air = lowered.air;
         const importNames = [...air.imports];
@@ -3424,79 +4394,90 @@ function softTag(strings, ...values) {
 
 // -- register.js --
 
-// soft — cell type, tagged language, plugin registration
+// Registration: cell type, tagged language, AIR lowerer, plugin metadata.
+// Single auditable.registerExtension(manifest) call replaces the legacy
+// fan-out. Locale handling stays on a side channel since locales register
+// additional cell types dynamically.
 
 
 
 
 
-const handler = {
-  label: 'soft',
-  color: '#c89b3c',
-  shortcut: 'f',
-  editDebounce: 500,
-  indent: softIndent,
-  indentUnit: '  ',
+
+
+const SOFT_VERSION = '0.1.0';
+
+const _baseHandler = {
   parseNames: softParseNames,
-  syntaxCheck: (code) => {
-    try { softParse(code); return true; }
-    catch { return false; }
-  },
   findUses: softFindUses,
   execute: softExecute,
   tokenize: tokenizeSoft,
   completions: (prefix) => softCompletions(prefix),
-  createEditor: (cell, onChange) => {
-    if (!window._ctCreateEditor) return null;
-    const wrap = document.createElement('div');
-    wrap.className = 'editor-wrap';
-    const editor = window._ctCreateEditor(wrap, cell.id, cell.code, 'soft', onChange);
-    return {
-      el: wrap,
-      getCode: () => editor.view.state.doc.toString(),
-      setCode: (s) => editor.view.dispatch({ changes: { from: 0, to: editor.view.state.doc.length, insert: s } }),
-      focus: () => editor.focus(),
-      destroy: () => editor.destroy(),
-    };
-  },
+  syntaxCheck: (code) => { try { softParse(code); return true; } catch { return false; } },
+  indent: softIndent,
+  indentUnit: '  ',
 };
 
-// guard: only register once
-if (!window._cellTypes?.['soft']) {
-  // register 'soft' cell type
-  if (window.registerCellType) {
-    window.registerCellType('soft', handler, '@gcu/soft');
-  } else if (window._cellTypes) {
-    window._cellTypes['soft'] = handler;
-  }
+if (typeof window !== 'undefined' && !window._cellTypes?.['soft']) {
+  const register = window.auditable?.registerExtension;
+  if (register) {
+    register({
+      name: '@gcu/soft',
+      version: SOFT_VERSION,
+      apiVersion: '0.x',
+      description: 'English keyword programming language — soft cells and tagged template',
+      pluginUrl: '@gcu/soft',
 
-  // register tagged language for soft`` syntax highlighting
-  window._taggedLanguages = window._taggedLanguages || {};
-  window._taggedLanguages['soft'] = {
-    tokenize: tokenizeSoft,
-    completions: softCompletions,
-    indent: softIndent,
-  };
+      cellType: {
+        name: 'soft',
+        label: 'soft',
+        color: '#c89b3c',
+        shortcut: 'f',
+        editDebounce: 500,
+        capabilities: {
+          executable: true,
+          definesScope: true,
+          hasOutput: true,
+          hasEditor: true,
+          builtin: false,
+        },
+        ..._baseHandler,
+        createEditor: (cell, onChange) => {
+          if (!window._ctCreateEditor) return null;
+          const wrap = document.createElement('div');
+          wrap.className = 'editor-wrap';
+          const editor = window._ctCreateEditor(wrap, cell.id, cell.code, 'soft', onChange);
+          return {
+            el: wrap,
+            getCode: () => editor.view.state.doc.toString(),
+            setCode: (s) => editor.view.dispatch({ changes: { from: 0, to: editor.view.state.doc.length, insert: s } }),
+            focus: () => editor.focus(),
+            destroy: () => editor.destroy(),
+          };
+        },
+      },
 
-  // register as plugin
-  if (window.registerPlugin) {
-    window.registerPlugin('@gcu/soft', { description: 'English keyword programming language — soft cells and tagged template' });
-  } else if (window._auditablePlugins) {
-    window._auditablePlugins.set('@gcu/soft', { description: 'English keyword programming language — soft cells and tagged template' });
-  }
+      taggedLanguage: {
+        name: 'soft',
+        tokenize: tokenizeSoft,
+        completions: softCompletions,
+        indent: softIndent,
+      },
 
-  // global tag
-  window.soft = softTag;
+      airLowerer: { language: 'soft', fn: lowerSoft },
 
-  // configure autocomplete for any existing soft cells (they were created before this plugin loaded)
-  if (window._configurePluginAutocomplete) {
-    window._configurePluginAutocomplete('soft');
+      globals: { soft: softTag },
+
+      onActivate: () => {
+        // configure autocomplete for any existing soft cells (created before plugin loaded)
+        if (window._configurePluginAutocomplete) window._configurePluginAutocomplete('soft');
+      },
+    });
   }
 }
 
-
-// expose for manual use (e.g. from browser console)
-window._softSetLocale = softSetLocale;
+// Locale switcher kept as a side channel — not a cell-type contribution per se.
+if (typeof window !== 'undefined') window._softSetLocale = softSetLocale;
 
 // register a locale as a new cell type (e.g. 'soft-ptbr')
 function registerLocale(localeData) {
@@ -3513,72 +4494,72 @@ function registerLocale(localeData) {
     try { return fn(...args); } finally { if (!prev) softSetLocale(null); }
   };
 
-  const localeHandler = {
-    label: cellType,
-    color: '#c89b3c',
-    shortcut: null, // no keyboard shortcut for locale variants
-    editDebounce: 500,
-    indent: softIndent,
-    indentUnit: '  ',
-    parseNames: withLocale(softParseNames),
-    syntaxCheck: withLocale((code) => { try { softParse(code); return true; } catch { return false; } }),
-    findUses: withLocale(softFindUses),
-    execute: async (code, scopeIn, cell) => {
-      softSetLocale(localeData);
-      return softExecute(code, scopeIn, cell);
+  const register = window.auditable?.registerExtension;
+  if (!register) return;
+
+  register({
+    name: '@gcu/soft/' + localeData.locale,
+    version: SOFT_VERSION,
+    pluginUrl: '@gcu/soft/' + localeData.locale,
+
+    cellType: {
+      name: cellType,
+      label: cellType,
+      color: '#c89b3c',
+      editDebounce: 500,
+      capabilities: {
+        executable: true,
+        definesScope: true,
+        hasOutput: true,
+        hasEditor: true,
+        builtin: false,
+      },
+      parseNames: withLocale(softParseNames),
+      findUses: withLocale(softFindUses),
+      execute: async (code, scopeIn, cell) => { softSetLocale(localeData); return softExecute(code, scopeIn, cell); },
+      tokenize: withLocale(tokenizeSoft),
+      completions: withLocale((prefix) => softCompletions(prefix)),
+      syntaxCheck: withLocale((code) => { try { softParse(code); return true; } catch { return false; } }),
+      indent: softIndent,
+      indentUnit: '  ',
+      createEditor: (cell, onChange) => {
+        if (!window._ctCreateEditor) return null;
+        const wrap = document.createElement('div');
+        wrap.className = 'editor-wrap';
+        const editor = window._ctCreateEditor(wrap, cell.id, cell.code, cellType, onChange);
+        return {
+          el: wrap,
+          getCode: () => editor.view.state.doc.toString(),
+          setCode: (s) => editor.view.dispatch({ changes: { from: 0, to: editor.view.state.doc.length, insert: s } }),
+          focus: () => editor.focus(),
+          destroy: () => editor.destroy(),
+        };
+      },
     },
-    tokenize: withLocale(tokenizeSoft),
-    completions: withLocale((prefix) => softCompletions(prefix)),
-    createEditor: (cell, onChange) => {
-      if (!window._ctCreateEditor) return null;
-      const wrap = document.createElement('div');
-      wrap.className = 'editor-wrap';
-      const editor = window._ctCreateEditor(wrap, cell.id, cell.code, cellType, onChange);
-      return {
-        el: wrap,
-        getCode: () => editor.view.state.doc.toString(),
-        setCode: (s) => editor.view.dispatch({ changes: { from: 0, to: editor.view.state.doc.length, insert: s } }),
-        focus: () => editor.focus(),
-        destroy: () => editor.destroy(),
-      };
+
+    taggedLanguage: {
+      name: cellType,
+      tokenize: withLocale(tokenizeSoft),
+      completions: withLocale(softCompletions),
+      indent: softIndent,
     },
-  };
 
-  // register cell type
-  if (window.registerCellType) {
-    window.registerCellType(cellType, localeHandler, '@gcu/soft/' + localeData.locale);
-  } else if (window._cellTypes) {
-    window._cellTypes[cellType] = localeHandler;
-  }
-
-  // register tagged language
-  window._taggedLanguages = window._taggedLanguages || {};
-  window._taggedLanguages[cellType] = {
-    tokenize: localeHandler.tokenize,
-    completions: localeHandler.completions,
-    indent: softIndent,
-  };
-
-  // configure autocomplete for existing cells of this type
-  if (window._configurePluginAutocomplete) {
-    window._configurePluginAutocomplete(cellType);
-  }
-
+    onActivate: () => {
+      if (window._configurePluginAutocomplete) window._configurePluginAutocomplete(cellType);
+    },
+  });
 }
 
 // load a locale by name — handles dev-mode fetch + installed module decompression
 async function loadLocale(name) {
-  // check import cache
   if (window._importCache?.['@gcu/soft/' + name]) {
     registerLocale(window._importCache['@gcu/soft/' + name]);
     return;
   }
-  // check installed modules (saved notebook — gzip+base64 compressed JSON)
   const key = '@gcu/soft/' + name;
   if (window._installedModules?.[key]) {
     let src = window._installedModules[key];
     if (src.compressed && !src.binary && typeof src.source === 'string') {
-      // decompress gzip+base64
       const bin = Uint8Array.from(atob(src.source), c => c.charCodeAt(0));
       const ds = new DecompressionStream('gzip');
       const writer = ds.writable.getWriter();
@@ -3593,7 +4574,6 @@ async function loadLocale(name) {
     registerLocale(data);
     return;
   }
-  // dev-mode: fetch from filesystem
   const resp = await fetch(`./ext/soft/locales/${name}.json`);
   if (!resp.ok) throw new Error(`Locale "${name}" not found`);
   const data = await resp.json();
@@ -3604,7 +4584,6 @@ async function loadLocale(name) {
 
 const soft = {
   softTag,
-  handler,
   softParseNames,
   softFindUses,
   tokenizeSoft,

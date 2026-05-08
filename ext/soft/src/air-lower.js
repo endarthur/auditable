@@ -2,9 +2,11 @@
 // Soft is simpler than Python: direct JS arithmetic, JS-semantic comparison,
 // no dunder methods, no classes. Result: fewer _soft helper calls than _py needed.
 
-import { I32, F64, BOOL, STRING, VOID, DYNAMIC } from '../types.js';
+import { I32, F64, BOOL, STRING, VOID, DYNAMIC } from '../../air/src/types.js';
 
-export class SoftLowerError extends Error {}
+export class SoftLowerError extends Error {
+  constructor(message) { super(message); this._airFallback = true; }
+}
 
 let _softNextId = 0;
 function _softResetIds() { _softNextId = 0; }

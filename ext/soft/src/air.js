@@ -8,6 +8,7 @@ import { softParse } from './parse.js';
 import { softString } from './eval.js';
 import { _soft } from './runtime.js';
 import { isIncomplete } from './runner.js';
+import { lowerSoft } from './air-lower.js';
 
 const _AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
@@ -56,7 +57,8 @@ function _makeSayHandler(opts) {
 // shape matches the tree-walker's { scope, output } for consistency.
 
 async function _compileModule(ast, code) {
-  const { lowerSoft, runPasses, emitJS, needsAsync } = await _loadAir();
+  // lowerSoft is owned by @gcu/soft; passes/emit/needsAsync come from @gcu/air (peer dep)
+  const { runPasses, emitJS, needsAsync } = await _loadAir();
   const air = lowerSoft(ast, code);
   runPasses(air);
   const imports = [...(air.imports || [])].filter(n => !_JS_INTRINSICS.has(n));

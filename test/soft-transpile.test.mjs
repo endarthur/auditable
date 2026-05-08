@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 
 import { softParse } from '../ext/soft/src/parse.js';
 import { softString } from '../ext/soft/src/eval.js';
-import { lowerSoft, SoftLowerError } from '../ext/air/src/lower/soft.js';
+import { lowerSoft, SoftLowerError } from '../ext/soft/src/air-lower.js';
 import { runPasses } from '../ext/air/src/passes.js';
 import { emitJS } from '../ext/air/src/emit-js.js';
 import { _soft } from '../ext/soft/src/runtime.js';

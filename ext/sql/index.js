@@ -172,6 +172,15 @@ function sqlCompletions() {
 // ── Self-registration ──
 
 if (typeof window !== 'undefined') {
-  if (!window._taggedLanguages) window._taggedLanguages = {};
-  window._taggedLanguages.sql = { tokenize: tokenizeSql, completions: sqlCompletions };
+  const register = window.auditable?.registerExtension;
+  if (register) {
+    register({
+      name: '@gcu/sql',
+      version: '0.1.0',
+      taggedLanguage: { name: 'sql', tokenize: tokenizeSql, completions: sqlCompletions },
+    });
+  } else {
+    if (!window._taggedLanguages) window._taggedLanguages = {};
+    window._taggedLanguages.sql = { tokenize: tokenizeSql, completions: sqlCompletions };
+  }
 }

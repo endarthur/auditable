@@ -3,8 +3,8 @@
 // Files are base64-encoded (gzip-compressed when beneficial) in an AUDITABLE-FS comment block.
 // API lives at notebook.fs — available in every code cell.
 
-// notifyDirty() is called via window._notifyDirty — wired in globals.js
-// to avoid importing editor.js (which pulls in cm6.js and the full editor chain)
+// Dirty signaling flows through the hook bus (window.auditable.hooks)
+// to avoid importing editor.js (which pulls in cm6.js and the full editor chain).
 
 // ── MIME / TYPE HELPERS ──
 
@@ -99,16 +99,14 @@ export function base64ToUint8(b64) {
 }
 
 // ── DIRTY TRACKING ──
-
-let _fsSyncTimer = null;
+// Emits two bus events: notebook:dirty (Works bridge + cell-data sync) and
+// fs:changed (filesystem-state mutation). Consumers (save.js, fs panel)
+// debounce on their side.
 
 function notifyFsDirty() {
-  if (typeof window !== 'undefined' && window._notifyDirty) window._notifyDirty();
-  // debounced live sync — syncFs is imported by save.js and wired up there
-  clearTimeout(_fsSyncTimer);
-  _fsSyncTimer = setTimeout(() => {
-    if (typeof window._syncFs === 'function') window._syncFs();
-  }, 500);
+  if (typeof window === 'undefined' || !window.auditable?.hooks) return;
+  window.auditable.hooks.emit('notebook:dirty');
+  window.auditable.hooks.emit('fs:changed');
 }
 
 // ── FS MAP ──
@@ -1037,6 +1035,17 @@ if (typeof window !== 'undefined') {
     ]);
   };
 
-  // expose refresh for VFS event wiring
-  window._fsPanelRefresh = () => { if (_fsState.visible) { _fsState.cache.clear(); refreshFsPanel(); } };
+  // fs:changed bus subscriber — debounces 150ms before refreshing the panel
+  // (replaces the legacy window._fsPanelRefresh callable).
+  let _panelRefreshTimer = null;
+  if (typeof window !== 'undefined' && window.auditable?.hooks) {
+    window.auditable.hooks.on('fs:changed', () => {
+      if (!_fsState.visible) return;
+      clearTimeout(_panelRefreshTimer);
+      _panelRefreshTimer = setTimeout(() => {
+        _fsState.cache.clear();
+        refreshFsPanel();
+      }, 150);
+    });
+  }
 }

@@ -418,10 +418,23 @@ const _module = {
 };
 
 // ── Registration ──
+// Adder cell hooks (window._adderCellHooks) stay on a side channel — they're
+// adder-internals (arena lifecycle), not a generic Auditable extension hook
+// surface. The cross-language exports go through the manifest API.
 
 if (typeof window !== 'undefined') {
-  window._auditableExtensions = window._auditableExtensions || {};
-  window._auditableExtensions['natra'] = _module;
+  const register = window.auditable?.registerExtension;
+  if (register) {
+    register({
+      name: '@gcu/natra',
+      version: '0.1.0',
+      description: 'Numpy-compatible ndarray wrapper for adder cells',
+      exports: { natra: _module },
+    });
+  } else {
+    window._auditableExtensions = window._auditableExtensions || {};
+    window._auditableExtensions['natra'] = _module;
+  }
 }
 
 export { _module as natraAdder };

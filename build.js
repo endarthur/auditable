@@ -540,13 +540,22 @@ function processModulesAsRegistry(mainPath, moduleDir, opts = {}) {
   for (const relPath of importPaths) {
     const filePath = path.join(moduleDir, relPath);
     let src = fs.readFileSync(filePath, 'utf8');
-    const name = path.basename(relPath, '.js');
 
-    // Rewrite relative imports to hash-prefixed specifiers for import map resolution:
-    //   from './state.js' → from '#state'
-    //   import './state.js' → import '#state'
-    src = src.replace(/(from\s+)['"]\.\/(.+?)\.js['"]/g, (_, pre, mod) => `${pre}'#${mod}'`);
-    src = src.replace(/(import\s+)['"]\.\/(.+?)\.js['"]/g, (_, pre, mod) => `${pre}'#${mod}'`);
+    // Registry name preserves subdirectory structure so `./cell-builtins/ui.js`
+    // becomes `#cell-builtins/ui`, distinct from a hypothetical top-level `ui.js`.
+    const name = relPath.replace(/^\.\//, '').replace(/\.js$/, '').replace(/\\/g, '/');
+    const currentDir = path.dirname(relPath);
+
+    // Rewrite relative imports to hash-prefixed specifiers, resolved against
+    // the importer's directory. Handles both './x.js' and '../x.js' forms,
+    // including cross-subdir paths like '../engine.js' from cell-builtins/.
+    const rewriteImport = (match, pre, relative) => {
+      const joined = currentDir === '.' ? relative : path.join(currentDir, relative);
+      const resolvedNoExt = path.normalize(joined).replace(/\\/g, '/').replace(/\.js$/, '').replace(/^\.\//, '');
+      return `${pre}'#${resolvedNoExt}'`;
+    };
+    src = src.replace(/(from\s+)['"](\.\.?\/.+?\.js)['"]/g, rewriteImport);
+    src = src.replace(/(import\s+)['"](\.\.?\/.+?\.js)['"]/g, rewriteImport);
 
     src = src.replace(/^\n+/, '').replace(/\n+$/, '');
     modules.push({ name, source: src });

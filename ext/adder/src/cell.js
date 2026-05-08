@@ -240,9 +240,12 @@ export async function pythonExecute(code, scopeIn, cell) {
   let usedTranspile = false;
   let defines = {};
 
-  if (typeof window !== 'undefined' && window._airLowerAdder && window._airEmit) {
+  const _airAdderLower = (typeof window !== 'undefined' && window._airGetLowerer)
+    ? window._airGetLowerer('adder')
+    : null;
+  if (_airAdderLower && typeof window !== 'undefined' && window._airEmit) {
     try {
-      const lowered = window._airLowerAdder(ast, code);
+      const lowered = _airAdderLower(ast, code);
       if (lowered) {
         const air = lowered.air;
         const importNames = [...air.imports];

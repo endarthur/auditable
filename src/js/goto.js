@@ -1,5 +1,6 @@
 import { S } from './state.js';
 import { parseCellName } from './dag.js';
+import * as hooks from './hooks.js';
 
 // ── GOTO ── @optional
 
@@ -12,12 +13,12 @@ function parseGoto(code) {
 const MAX_VISITS = 1000;
 let visits = {};
 
-window._dagStart = function() {
+hooks.on('dag:start', () => {
   visits = {};
   window._lastGotoTarget = null;
-};
+});
 
-window._beforeExec = function(cell) {
+hooks.on('dag:cell:before-exec', (cell) => {
   const target = parseGoto(cell.code);
   if (target !== null) {
     S.scope.__goto = target;
@@ -25,9 +26,11 @@ window._beforeExec = function(cell) {
   } else {
     delete S.scope.__goto;
   }
-};
+});
 
-window._afterExec = function(cell, index) {
+// Interceptor: returns the next-cell index to redirect to, or -1 to continue.
+// Used by exec.js after each cell runs in manual (force) mode.
+hooks.setDagCellInterceptor(function gotoInterceptor(cell, index) {
   const gotoTarget = S.scope.__goto;
   delete S.scope.__goto;
   window._lastGotoTarget = null;
@@ -39,7 +42,7 @@ window._afterExec = function(cell, index) {
   if (targetIdx < 0) {
     const out = cell.el.querySelector('.cell-output');
     if (out) {
-      out.appendChild(document.createTextNode('\ngoto: cell \u201c' + gotoTarget + '\u201d not found'));
+      out.appendChild(document.createTextNode('\ngoto: cell “' + gotoTarget + '” not found'));
       out.classList.add('error');
     }
     return -1;
@@ -59,4 +62,4 @@ window._afterExec = function(cell, index) {
 
   window._lastGotoTarget = targetIdx;
   return targetIdx;
-};
+});

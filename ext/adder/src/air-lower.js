@@ -7,9 +7,11 @@ import {
   I32, F64, BOOL, STRING, VOID, DYNAMIC,
   I8, U8, I16, U16, U32, I64, U64, F32,
   typedArray, isDynamic, func,
-} from '../types.js';
+} from '../../air/src/types.js';
 
-export class AirLowerError extends Error {}
+export class AirLowerError extends Error {
+  constructor(message) { super(message); this._airFallback = true; }
+}
 
 // ── adder annotation resolver ──
 //

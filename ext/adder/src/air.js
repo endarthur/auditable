@@ -10,6 +10,7 @@ import { adderParse, _adderParseExpr } from './parse.js';
 import { _py } from './runtime.js';
 import { adderBuiltins, setAdderVFS, getAdderVFS } from './builtins.js';
 import { isIncomplete } from './runner.js';
+import { lowerAdder } from './air-lower.js';
 
 // Strip common leading whitespace — same rationale as @gcu/adder's runner.js.
 function _dedent(code) {
@@ -108,7 +109,8 @@ function _withVfs(opts, fn) {
 // ── compile pipeline ──
 
 async function _compileModule(ast, code) {
-  const { lowerAdder, runPasses, emitJS, needsAsync } = await _loadAir();
+  // lowerAdder is owned by @gcu/adder; passes/emit/needsAsync come from @gcu/air (peer dep)
+  const { runPasses, emitJS, needsAsync } = await _loadAir();
   const air = lowerAdder(ast, code);
   runPasses(air);
   // Determine which imports are concrete free names that need scope-key injection

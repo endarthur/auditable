@@ -2,10 +2,59 @@
 // Clean interface matching existing parseNames/findUses output shapes
 
 import { lowerJS } from './lower/js.js';
-import { lowerAdder, AirLowerError } from './lower/adder.js';
-import { lowerSoft, SoftLowerError } from './lower/soft.js';
 import { runPasses, extractDependencies } from './passes.js';
 import { emitJS, needsAsync } from './emit-js.js';
+
+// ── Lowerer registry ───────────────────────────────────────────────
+// Languages other than JS register themselves here. AIR self-registers
+// 'js' below in the browser-init block. Each registered lowerer is a
+// function (ast, sourceCode) => airModule (or throws).
+
+const _lowerers = new Map();
+
+/**
+ * Register a lowerer for a language. AIR doesn't ship knowledge of any
+ * language other than JS; frontends like @gcu/adder and @gcu/soft register
+ * their own lowerers here at module init time.
+ *
+ * @param {string} language - language identifier (e.g. 'adder', 'soft')
+ * @param {(ast: object, sourceCode: string) => object} lowerFn - ast + source → AIR module
+ */
+export function registerLowerer(language, lowerFn) {
+  if (typeof language !== 'string' || !language) {
+    throw new Error('registerLowerer: language must be a non-empty string');
+  }
+  if (typeof lowerFn !== 'function') {
+    throw new Error('registerLowerer: lowerFn must be a function');
+  }
+  if (_lowerers.has(language)) {
+    if (typeof console !== 'undefined') {
+      console.warn(`[air] lowerer for "${language}" already registered, replacing`);
+    }
+  }
+  _lowerers.set(language, lowerFn);
+}
+
+/**
+ * Look up a registered lowerer by language. Returns null if not registered.
+ */
+export function getLowerer(language) {
+  return _lowerers.get(language) || null;
+}
+
+/**
+ * Lower an AST through the registered lowerer for a language. Returns null
+ * if no lowerer is registered or if the lowerer throws (debug-logged).
+ */
+export function lower(language, ast, sourceCode) {
+  const fn = _lowerers.get(language);
+  if (!fn) return null;
+  try { return fn(ast, sourceCode); }
+  catch (e) {
+    if (_airDebug) console.warn(`[air] lower(${language}) failed:`, e.message);
+    return null;
+  }
+}
 
 // Debug logging — true during development, settable via window._airDebug
 let _airDebug = (typeof window !== 'undefined') ? (window._airDebug ?? true) : false;
@@ -246,7 +295,7 @@ export function extractExportTypes(module) {
   return types;
 }
 
-export { lowerJS, lowerAdder, lowerSoft, runPasses, extractDependencies, emitJS, needsAsync, AirLowerError, SoftLowerError };
+export { lowerJS, runPasses, extractDependencies, emitJS, needsAsync };
 
 // --- Browser init: register AIR on window ---
 // When loaded in the browser with Acorn available, create the parser
@@ -263,28 +312,33 @@ if (typeof window !== 'undefined' && window.Acorn) {
   // Phase 2: emitter functions for exec.js
   window._airEmit = emitJS;
   window._airNeedsAsync = needsAsync;
-  // Phase 3: adder transpile entry — returns { air, defines } or null on failure
-  window._airLowerAdder = function(ast, code) {
-    try {
-      const air = lowerAdder(ast, code);
-      runPasses(air);
-      return { air, defines: air.defines };
-    } catch (e) {
-      if (e instanceof AirLowerError) return null;
-      throw e;
-    }
+
+  // Lowerer registry — frontends register their own lowerers here.
+  window._airRegisterLowerer = registerLowerer;
+  window._airGetLowerer = function(language) {
+    const fn = _lowerers.get(language);
+    if (!fn) return null;
+    // Wrap to match the legacy adder/soft signature: returns { air, defines } | null,
+    // catches errors marked `_airFallback: true` (lowerer's own "this construct
+    // is not supported, fall back to the tree-walker" signal). Other errors
+    // propagate so real bugs surface instead of being silently swallowed.
+    return function(ast, code) {
+      try {
+        const air = fn(ast, code);
+        runPasses(air);
+        return { air, defines: air.defines };
+      } catch (e) {
+        if (e && e._airFallback) return null;
+        throw e;
+      }
+    };
   };
-  // Soft transpile entry
-  window._airLowerSoft = function(ast, code) {
-    try {
-      const air = lowerSoft(ast, code);
-      runPasses(air);
-      return { air, defines: air.defines };
-    } catch (e) {
-      if (e instanceof SoftLowerError) return null;
-      throw e;
-    }
-  };
+
+  // AIR self-registers its reference frontend. Other languages (adder, soft,
+  // future patra/etc.) live in their own packages and call registerLowerer
+  // from their own init.
+  registerLowerer('js', lowerJS);
+
   // Re-run passes on an existing AIR module with given import types.
   // Used by Auditable for cross-cell type flow: the upstream module's export
   // types seed the downstream module's imports. Returns true if anything changed.

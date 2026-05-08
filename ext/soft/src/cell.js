@@ -209,10 +209,13 @@ export async function softExecute(code, scopeIn, cell) {
   let result = null;
   let usedTranspile = false;
 
-  if (typeof window !== 'undefined' && window._airLowerSoft && window._airEmit) {
+  const _airSoftLower = (typeof window !== 'undefined' && window._airGetLowerer)
+    ? window._airGetLowerer('soft')
+    : null;
+  if (_airSoftLower && typeof window !== 'undefined' && window._airEmit) {
     try {
       const ast = softParse(code);
-      const lowered = window._airLowerSoft(ast, code);
+      const lowered = _airSoftLower(ast, code);
       if (lowered) {
         const air = lowered.air;
         const importNames = [...air.imports];

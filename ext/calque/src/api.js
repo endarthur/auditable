@@ -86,6 +86,15 @@ calque._stdlib = stdlib;
 // ── Self-registration ──
 
 if (typeof window !== 'undefined') {
-  if (!window._taggedLanguages) window._taggedLanguages = {};
-  window._taggedLanguages.calque = { tokenize: tokenizeCalque, completions: calqueCompletions, sigHint: calqueSigHint };
+  const register = window.auditable?.registerExtension;
+  if (register) {
+    register({
+      name: '@gcu/calque',
+      version: '0.1.0',
+      taggedLanguage: { name: 'calque', tokenize: tokenizeCalque, completions: calqueCompletions, sigHint: calqueSigHint },
+    });
+  } else {
+    if (!window._taggedLanguages) window._taggedLanguages = {};
+    window._taggedLanguages.calque = { tokenize: tokenizeCalque, completions: calqueCompletions, sigHint: calqueSigHint };
+  }
 }

@@ -2,7 +2,7 @@ import { S, $ } from './state.js';
 import { addCell } from './cell-ops.js';
 import { _ctIsExecutable } from './cell-types.js';
 import { selectCell, editCell, addCellWithUndo } from './keyboard.js';
-import { syncSettings } from './save.js';
+import * as hooks from './hooks.js';
 
 // ── PREFERRED CODE TYPE ──
 
@@ -21,7 +21,7 @@ export function getRawPreferredCodeType() {
 
 export function setPreferredCodeType(type) {
   _preferredCodeType = type;
-  syncSettings();
+  hooks.emit("notebook:dirty");
 }
 
 export function setPreferredAndInsert(afterId, type) {

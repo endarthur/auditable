@@ -1,117 +1,284 @@
 import { S } from './state.js';
 import { buildDAG } from './dag.js';
+import * as hooks from './hooks.js';
 
-// ── EXTENSIBLE CELL TYPES ──
+// ── EXTENSION REGISTRY ──
 //
-// Registration API for plugin cell types. The four built-in types (code, md,
-// css, html) stay hardcoded. This module provides dispatch helpers and
-// activation logic for plugin-registered types.
+// Single canonical API for everything an extension contributes:
+// cell types, tagged languages, AIR lowerers, cross-language exports,
+// cell-context hooks, plus plugin metadata. Replaces 4–6 scattered
+// register* calls per extension with one `registerExtension(manifest)`.
+//
+// Storage: `window._cellTypes`, `window._taggedLanguages`,
+// `window._auditableExtensions`, `window._auditablePlugins` are kept
+// as the underlying maps (consumers in src/js/ still read them directly
+// in some hot paths). The new API is the canonical *write* path; reads
+// should prefer getCellType / getTaggedLanguage / getExports.
+//
+// Built-in cell types (code, md, css, html) are auto-registered as
+// manifests at module load so listExtensions() / getCellType() return
+// truthful results uniformly.
 
 const _builtinTypes = new Set(['code', 'md', 'css', 'html']);
 
-// name → handler
+// Underlying registries (legacy; kept for hot-path readers)
 window._cellTypes = window._cellTypes || {};
-
-// name → exports (for cross-language imports)
+window._taggedLanguages = window._taggedLanguages || {};
 window._auditableExtensions = window._auditableExtensions || {};
-
-// url → { description }
 window._auditablePlugins = window._auditablePlugins || new Map();
 
-// pluginUrl → handler.name (for uninstall tracking)
-const _pluginCellTypes = new Map(); // pluginUrl → Set<name>
+// New manifest registry (name → manifest)
+const _manifests = new Map();
 
-// ── REGISTRATION ──
+// pluginUrl → Set<cellType-name>  (for uninstall tracking)
+const _pluginCellTypes = new Map();
 
-export function registerCellType(name, handler, pluginUrl) {
-  if (_builtinTypes.has(name)) {
-    console.warn(`Cannot register built-in type "${name}"`);
+const _SEMVER_RE = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
+
+// ── Validation ──
+
+function _validateManifest(m) {
+  if (!m || typeof m !== 'object') throw new Error('registerExtension: manifest must be an object');
+  if (typeof m.name !== 'string' || !m.name) throw new Error('registerExtension: manifest.name is required');
+  if (typeof m.version !== 'string' || !_SEMVER_RE.test(m.version)) {
+    throw new Error(`registerExtension: manifest.version "${m.version}" must be semver (\\d+.\\d+.\\d+)`);
+  }
+  if (m.cellType) {
+    const ct = m.cellType;
+    if (typeof ct.name !== 'string' || !ct.name) throw new Error('registerExtension: cellType.name is required');
+    if (_builtinTypes.has(ct.name) && !ct.capabilities?.builtin) {
+      throw new Error(`registerExtension: built-in cell type "${ct.name}" cannot be shadowed`);
+    }
+    if (!ct.capabilities || typeof ct.capabilities !== 'object') {
+      throw new Error(`registerExtension: cellType.capabilities is required`);
+    }
+    // Built-in cell types are dispatched via hardcoded paths in exec.js, so
+    // they don't require execute()/parseNames() — capabilities describe them
+    // for uniform queries, not for plugin-style dispatch.
+    if (!ct.capabilities.builtin) {
+      if (ct.capabilities.executable && typeof ct.execute !== 'function') {
+        throw new Error(`registerExtension: cellType "${ct.name}" declares executable: true but provides no execute()`);
+      }
+      if (ct.capabilities.definesScope && typeof ct.parseNames !== 'function') {
+        throw new Error(`registerExtension: cellType "${ct.name}" declares definesScope: true but provides no parseNames()`);
+      }
+    }
+  }
+  if (m.taggedLanguage) {
+    const tl = m.taggedLanguage;
+    if (typeof tl.name !== 'string' || !tl.name) throw new Error('registerExtension: taggedLanguage.name is required');
+    if (typeof tl.tokenize !== 'function') throw new Error(`registerExtension: taggedLanguage "${tl.name}" requires tokenize()`);
+  }
+  if (m.taggedLanguages) {
+    if (!Array.isArray(m.taggedLanguages)) throw new Error('registerExtension: taggedLanguages must be an array');
+    for (const tl of m.taggedLanguages) {
+      if (typeof tl.name !== 'string' || !tl.name) throw new Error('registerExtension: taggedLanguages[].name is required');
+      if (typeof tl.tokenize !== 'function') throw new Error(`registerExtension: taggedLanguages "${tl.name}" requires tokenize()`);
+    }
+  }
+  if (m.airLowerer) {
+    if (typeof m.airLowerer.language !== 'string') throw new Error('registerExtension: airLowerer.language is required');
+    if (typeof m.airLowerer.fn !== 'function') throw new Error('registerExtension: airLowerer.fn is required');
+  }
+  if (m.contextHook && typeof m.contextHook.setup !== 'function') {
+    throw new Error('registerExtension: contextHook.setup must be a function');
+  }
+}
+
+// ── Public API: registerExtension ──
+
+export function registerExtension(manifest) {
+  _validateManifest(manifest);
+
+  const existing = _manifests.get(manifest.name);
+  if (existing) {
+    console.warn(`[auditable] extension "${manifest.name}" already registered, replacing`);
+    _unregisterContributions(existing);
+  }
+  _manifests.set(manifest.name, manifest);
+
+  // Apply contributions to underlying registries.
+  if (manifest.cellType) _applyCellType(manifest);
+  if (manifest.taggedLanguage) _applyTaggedLanguage(manifest.taggedLanguage);
+  if (manifest.taggedLanguages) {
+    for (const tl of manifest.taggedLanguages) _applyTaggedLanguage(tl);
+  }
+  if (manifest.airLowerer && window._airRegisterLowerer) {
+    window._airRegisterLowerer(manifest.airLowerer.language, manifest.airLowerer.fn);
+  }
+  if (manifest.exports) {
+    for (const [k, v] of Object.entries(manifest.exports)) {
+      window._auditableExtensions[k] = v;
+    }
+  }
+  if (manifest.globals) {
+    for (const [k, v] of Object.entries(manifest.globals)) window[k] = v;
+  }
+  if (manifest.contextHook) {
+    (window._cellContextHooks = window._cellContextHooks || []).push(manifest.contextHook);
+  }
+  if (manifest.description || manifest.pluginUrl) {
+    window._auditablePlugins.set(manifest.pluginUrl || manifest.name, {
+      description: manifest.description || '',
+    });
+  }
+
+  if (typeof manifest.onActivate === 'function') {
+    try { manifest.onActivate(); } catch (e) { console.error(`[auditable] onActivate for "${manifest.name}":`, e); }
+  }
+}
+
+function _applyCellType(manifest) {
+  const ct = manifest.cellType;
+
+  // Built-ins are registered with capabilities.builtin = true; we still
+  // populate _cellTypes for them so plugin-style code paths can find them.
+  // Direct hardcoded checks (cell.type === 'code') still work as before.
+
+  // Compose a handler-shaped object for compatibility with legacy readers.
+  const handler = {
+    label: ct.label || ct.name,
+    color: ct.color,
+    shortcut: ct.shortcut,
+    editDebounce: ct.editDebounce,
+    parseNames: ct.parseNames,
+    findUses: ct.findUses,
+    execute: ct.execute,
+    createEditor: ct.createEditor,
+    syntaxCheck: ct.syntaxCheck,
+    completions: ct.completions,
+    tokenize: ct.tokenize,
+    indent: ct.indent,
+    indentUnit: ct.indentUnit,
+    capabilities: ct.capabilities,
+    _manifest: manifest,
+  };
+  if (manifest.pluginUrl) handler._pluginUrl = manifest.pluginUrl;
+
+  if (_builtinTypes.has(ct.name)) {
+    // built-in: don't register into _cellTypes (which is for plugins),
+    // but the manifest is reachable via getCellType('code') etc.
     return;
   }
-  if (window._cellTypes[name]) {
-    console.warn(`Cell type "${name}" already registered`);
-    return;
-  }
-  window._cellTypes[name] = handler;
-  if (pluginUrl) {
-    handler._pluginUrl = pluginUrl;
-    if (!_pluginCellTypes.has(pluginUrl)) _pluginCellTypes.set(pluginUrl, new Set());
-    _pluginCellTypes.get(pluginUrl).add(name);
+
+  window._cellTypes[ct.name] = handler;
+  if (manifest.pluginUrl) {
+    let set = _pluginCellTypes.get(manifest.pluginUrl);
+    if (!set) { set = new Set(); _pluginCellTypes.set(manifest.pluginUrl, set); }
+    set.add(ct.name);
   }
   // activate any fallback cells of this type
-  _ctActivatePendingCells(name);
+  _ctActivatePendingCells(ct.name);
 }
 
-export function registerExtension(name, exports) {
-  window._auditableExtensions[name] = exports;
+function _applyTaggedLanguage(tl) {
+  // Pass through all fields except `name` so consumers (cm6, complete) see
+  // the same shape as legacy `_taggedLanguages[x] = {...}` writes — including
+  // optional fields like `sigHint`, `indent`, etc.
+  const { name, ...rest } = tl;
+  window._taggedLanguages[name] = rest;
 }
 
-export function hasExtension(name) {
-  return !!(window._auditableExtensions && window._auditableExtensions[name]);
+function _unregisterContributions(manifest) {
+  if (manifest.cellType && !_builtinTypes.has(manifest.cellType.name)) {
+    delete window._cellTypes[manifest.cellType.name];
+  }
+  if (manifest.taggedLanguage) delete window._taggedLanguages[manifest.taggedLanguage.name];
+  if (manifest.taggedLanguages) for (const tl of manifest.taggedLanguages) delete window._taggedLanguages[tl.name];
+  if (manifest.exports) for (const k of Object.keys(manifest.exports)) delete window._auditableExtensions[k];
+  // contextHook removal: filter out by reference
+  if (manifest.contextHook && Array.isArray(window._cellContextHooks)) {
+    const idx = window._cellContextHooks.indexOf(manifest.contextHook);
+    if (idx >= 0) window._cellContextHooks.splice(idx, 1);
+  }
+  if (typeof manifest.onDeactivate === 'function') {
+    try { manifest.onDeactivate(); } catch (e) { console.error(`[auditable] onDeactivate for "${manifest.name}":`, e); }
+  }
 }
 
-export function getExtension(name) {
-  return window._auditableExtensions?.[name] || null;
+// ── Public API: lookup ──
+
+export function getExtension(name) { return _manifests.get(name) || null; }
+export function listExtensions() { return [..._manifests.values()]; }
+
+export function getCellType(name) {
+  // Built-ins are returned via their synthesized manifest's cellType field.
+  for (const m of _manifests.values()) {
+    if (m.cellType && m.cellType.name === name) return m.cellType;
+  }
+  // Fallback: legacy registerCellType call paths that haven't migrated
+  const handler = window._cellTypes?.[name];
+  if (handler) return _legacyHandlerToCellType(name, handler);
+  return null;
 }
 
-export function registerPlugin(url, meta) {
-  window._auditablePlugins.set(url, meta || {});
+function _legacyHandlerToCellType(name, handler) {
+  // Synthesize a cellType view from a legacy handler object.
+  return {
+    name,
+    label: handler.label,
+    color: handler.color,
+    shortcut: handler.shortcut,
+    editDebounce: handler.editDebounce,
+    parseNames: handler.parseNames,
+    findUses: handler.findUses,
+    execute: handler.execute,
+    createEditor: handler.createEditor,
+    syntaxCheck: handler.syntaxCheck,
+    completions: handler.completions,
+    tokenize: handler.tokenize,
+    indent: handler.indent,
+    indentUnit: handler.indentUnit,
+    capabilities: handler.capabilities || {
+      executable: !!handler.execute,
+      definesScope: !!handler.parseNames,
+      hasOutput: !!handler.execute,
+      hasEditor: !!(handler.createEditor || handler.tokenize),
+      builtin: false,
+    },
+  };
 }
 
-// ── DISPATCH HELPERS ──
+export function getTaggedLanguage(name) { return window._taggedLanguages?.[name] || null; }
+export function getExports(name) { return window._auditableExtensions?.[name] || null; }
+export function hasExports(name) { return !!(window._auditableExtensions && window._auditableExtensions[name]); }
+
+// ── Capability checks (manifest-driven; legacy duck-typing kept as fallback) ──
+
+/** Can be run via Ctrl+Enter, participates in reactive DAG execution. */
+export function _ctIsExecutable(type) {
+  return !!getCellType(type)?.capabilities?.executable;
+}
+
+/** Defines scope variables visible to downstream cells. */
+export function _ctDefinesScope(type) {
+  return !!getCellType(type)?.capabilities?.definesScope;
+}
+
+/** Has an output area for display/results. */
+export function _ctHasOutput(type) {
+  return !!getCellType(type)?.capabilities?.hasOutput;
+}
+
+/** Has a CM6 code editor (vs textarea fallback). */
+export function _ctHasEditor(type) {
+  return !!getCellType(type)?.capabilities?.hasEditor;
+}
+
+export function _ctIsBuiltin(type) { return _builtinTypes.has(type); }
+
+export function _ctIsPlugin(type) {
+  if (_builtinTypes.has(type)) return false;
+  return !!window._cellTypes?.[type];
+}
+
+export function _ctIsFallback(cell) { return !!cell._fallback; }
 
 export function _ctGetHandler(type) {
   return window._cellTypes?.[type] || null;
 }
 
-export function _ctIsPlugin(type) {
-  return !_builtinTypes.has(type) && !!window._cellTypes?.[type];
-}
-
-export function _ctIsFallback(cell) {
-  return !!cell._fallback;
-}
-
-export function _ctIsBuiltin(type) {
-  return _builtinTypes.has(type);
-}
-
-// ── CAPABILITY QUERIES ──
-// Built-in capabilities + duck-typed plugin capabilities via handler fields.
-
-/** Can be run via Ctrl+Enter, participates in reactive DAG execution. */
-export function _ctIsExecutable(type) {
-  if (type === 'code' || type === 'html') return true;
-  if (type === 'md' || type === 'css') return false;
-  const h = window._cellTypes?.[type];
-  return !!(h?.execute);
-}
-
-/** Defines scope variables visible to downstream cells. */
-export function _ctDefinesScope(type) {
-  if (type === 'code' || type === 'html') return true;
-  if (type === 'md' || type === 'css') return false;
-  const h = window._cellTypes?.[type];
-  return !!(h?.parseNames);
-}
-
-/** Has an output area for display/results. */
-export function _ctHasOutput(type) {
-  if (type === 'code' || type === 'html') return true;
-  if (type === 'md' || type === 'css') return false;
-  const h = window._cellTypes?.[type];
-  return !!(h?.execute);
-}
-
-/** Has a CM6 code editor (vs textarea fallback). */
-export function _ctHasEditor(type) {
-  if (_builtinTypes.has(type)) return true;
-  const h = window._cellTypes?.[type];
-  return !!(h?.createEditor || h?.tokenize);
-}
-
 export function _ctAllTypeNames() {
-  // built-in types + registered plugin types
   return [..._builtinTypes, ...Object.keys(window._cellTypes || {})];
 }
 
@@ -119,7 +286,51 @@ export function _ctRegisteredTypes() {
   return Object.keys(window._cellTypes || {});
 }
 
-// ── ACTIVATION ──
+// ── Built-in cell type manifests ──
+// Auto-registered at module load so getCellType('code') etc. return uniform results.
+
+registerExtension({
+  name: 'auditable:builtin/code',
+  version: '1.0.0',
+  cellType: {
+    name: 'code',
+    label: 'js',
+    capabilities: { executable: true, definesScope: true, hasOutput: true, hasEditor: true, builtin: true },
+  },
+});
+registerExtension({
+  name: 'auditable:builtin/md',
+  version: '1.0.0',
+  cellType: {
+    name: 'md',
+    label: 'md',
+    capabilities: { executable: false, definesScope: false, hasOutput: false, hasEditor: true, builtin: true },
+  },
+});
+registerExtension({
+  name: 'auditable:builtin/css',
+  version: '1.0.0',
+  cellType: {
+    name: 'css',
+    label: 'css',
+    capabilities: { executable: false, definesScope: false, hasOutput: false, hasEditor: true, builtin: true },
+  },
+});
+registerExtension({
+  name: 'auditable:builtin/html',
+  version: '1.0.0',
+  cellType: {
+    name: 'html',
+    label: 'html',
+    capabilities: { executable: true, definesScope: true, hasOutput: true, hasEditor: true, builtin: true },
+  },
+});
+
+// (Legacy registerCellType / registerPlugin shims removed 2026-05-08 once all
+// in-tree extensions migrated to registerExtension manifests. Pre-1.0 — no
+// deprecation window. Re-add only if external consumers materialise.)
+
+// ── Cell type activation (when a plugin loads after fallback cells exist) ──
 
 function _ctActivatePendingCells(typeName) {
   const handler = window._cellTypes[typeName];
@@ -149,10 +360,9 @@ function _ctActivatePendingCells(typeName) {
             if (S.autorun) {
               clearTimeout(S.editTimer);
               if (handler.syntaxCheck) {
-                // syntax-gated execution: only run if code compiles
                 const ok = handler.syntaxCheck(newCode);
                 cell.el?.classList.toggle('syntax-pending', !ok);
-                if (!ok) return; // wait for valid syntax
+                if (!ok) return;
                 cell.el?.classList.remove('syntax-pending');
               }
               S.editTimer = setTimeout(() => {
@@ -175,18 +385,16 @@ function _ctActivatePendingCells(typeName) {
 
   if (!activated) return;
 
-  // rebuild DAG to pick up new cells
   buildDAG();
-  // re-run to include newly activated cells
   if (window._ctRunAll) window._ctRunAll();
 }
 
-// ── PLUGIN OUTPUT RENDERING ──
+// ── Plugin output rendering ──
 
 export function _ctRenderOutput(cell, output) {
   const el = cell.el.querySelector('.cell-output');
   if (!el) return;
-  el.className = 'cell-output'; // clear error/stale classes
+  el.className = 'cell-output';
   if (output === undefined || output === null) {
     el.textContent = '';
     return;
@@ -205,15 +413,21 @@ export function _ctRenderOutput(cell, output) {
   }
 }
 
-// ── UNINSTALL ──
+// ── Uninstall ──
 
 export function _ctUninstallPlugin(url) {
-  // unregister cell types from this plugin
+  // Find any manifests with matching pluginUrl and remove them
+  for (const [name, m] of [..._manifests.entries()]) {
+    if (m.pluginUrl === url || name === url) {
+      _unregisterContributions(m);
+      _manifests.delete(name);
+    }
+  }
+
+  // Revert any cells of removed types to fallback
   const types = _pluginCellTypes.get(url);
   if (types) {
     for (const name of types) {
-      delete window._cellTypes[name];
-      // revert cells to fallback
       for (const cell of S.cells) {
         if (cell.type === name) {
           cell._fallback = true;
@@ -221,13 +435,11 @@ export function _ctUninstallPlugin(url) {
             if (cell._pluginEditor.destroy) cell._pluginEditor.destroy();
             cell._pluginEditor = null;
           }
-          // rebuild cell element header
           const labelEl = cell.el.querySelector('.cell-type');
           if (labelEl) {
             labelEl.textContent = name + ' (not installed)';
             labelEl.style.color = '';
           }
-          // restore textarea if needed
           const codeWrap = cell.el.querySelector('.cell-plugin-code');
           if (codeWrap && !codeWrap.querySelector('textarea')) {
             const ta = document.createElement('textarea');
@@ -243,7 +455,7 @@ export function _ctUninstallPlugin(url) {
     }
     _pluginCellTypes.delete(url);
   }
-  // remove from registries
+
   window._auditablePlugins.delete(url);
   if (window._installedModules) delete window._installedModules[url];
   if (window._importCache) delete window._importCache[url];

@@ -2,14 +2,21 @@ import { S, $ } from './state.js';
 import { isManual } from './dag.js';
 import { runDAG } from './exec.js';
 import { setMsg } from './ui.js';
-import { syncDataDebounced, syncSettings } from './save.js';
+import * as hooks from './hooks.js';
 
 // ── EDITING ──
 
+// notifyDirty: emit the bus event so subscribers (Works bridge, anything
+// else interested) know the notebook has been touched. Persistence is
+// write-on-save-only (per spec_inbox/shipped/auditable-persistence-spec.md);
+// nothing happens to the DOM or VFS until the user saves.
 export function notifyDirty() {
-  if (S.initialized && window.__WORKS_BRIDGE__) window.parent.postMessage({ type: 'works:dirty' }, '*');
-  syncDataDebounced();
+  hooks.emit('notebook:dirty');
 }
+
+hooks.on('notebook:dirty', () => {
+  if (S.initialized && window.__WORKS_BRIDGE__) window.parent.postMessage({ type: 'works:dirty' }, '*');
+});
 
 export function toggleAutorun() {
   S.autorun = !S.autorun;
@@ -26,7 +33,7 @@ export function toggleAutorun() {
   }
   const sel = $('#setExecMode');
   if (sel) sel.value = S.autorun ? 'reactive' : 'manual';
-  syncSettings();
+  notifyDirty();
   setMsg(S.autorun ? 'autorun on' : 'autorun off', 'ok');
 }
 

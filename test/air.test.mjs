@@ -13,7 +13,7 @@ import {
 
 import { lowerJS } from '../ext/air/src/lower/js.js';
 import { runPasses, propagateTypes, foldConstants, extractDependencies } from '../ext/air/src/passes.js';
-import { analyzeCell, analyzeModule, extractDefines, extractExportTypes, parseModule, extractImports, extractExports } from '../ext/air/src/api.js';
+import { analyzeCell, analyzeModule, extractDefines, extractExportTypes, parseModule, extractImports, extractExports, registerLowerer, getLowerer, lower as airLower } from '../ext/air/src/api.js';
 import { emitJS, needsAsync } from '../ext/air/src/emit-js.js';
 import { Parser, tsPlugin } from '../ext/acorn/acorn.esm.min.js';
 
@@ -1644,5 +1644,67 @@ describe('AIR emitter — needsAsync', () => {
   it('function call → async (conservative)', () => {
     const m = lower('const x = foo()');
     assert.equal(needsAsync(m), true);
+  });
+});
+
+describe('AIR registerLowerer / getLowerer / lower', () => {
+  // The registry is process-global; use unique language names per test
+  // to avoid cross-test interference. Don't touch 'js' (registered by AIR
+  // itself when window.Acorn is present, which is not the case in Node tests).
+
+  it('register and look up a lowerer', () => {
+    const fn = (ast) => ({ ops: [], defines: new Set(), imports: new Set() });
+    registerLowerer('test_lang_lookup', fn);
+    assert.equal(getLowerer('test_lang_lookup'), fn);
+  });
+
+  it('getLowerer returns null for unregistered language', () => {
+    assert.equal(getLowerer('test_lang_unregistered'), null);
+  });
+
+  it('lower returns null for unregistered language (does not throw)', () => {
+    assert.equal(airLower('test_lang_missing', {}, ''), null);
+  });
+
+  it('re-registering the same language warns and replaces', () => {
+    const first = (ast) => ({ ops: [], defines: new Set(), imports: new Set(), tag: 'first' });
+    const second = (ast) => ({ ops: [], defines: new Set(), imports: new Set(), tag: 'second' });
+    registerLowerer('test_lang_replace', first);
+    const origWarn = console.warn;
+    let warned = false;
+    console.warn = () => { warned = true; };
+    try { registerLowerer('test_lang_replace', second); }
+    finally { console.warn = origWarn; }
+    assert.equal(warned, true);
+    assert.equal(getLowerer('test_lang_replace'), second);
+  });
+
+  it('lower passes ast and source through to the registered fn', () => {
+    let captured = null;
+    registerLowerer('test_lang_passthrough', (ast, src) => {
+      captured = { ast, src };
+      return { ops: [], defines: new Set(), imports: new Set() };
+    });
+    const ast = { type: 'Module', body: [] };
+    const result = airLower('test_lang_passthrough', ast, 'source code');
+    assert.equal(captured.ast, ast);
+    assert.equal(captured.src, 'source code');
+    assert.ok(result);
+  });
+
+  it('lower catches lowerer errors and returns null', () => {
+    registerLowerer('test_lang_throws', () => { throw new Error('lowerer broke'); });
+    // Should NOT throw — returns null with debug log (suppressed in tests).
+    assert.equal(airLower('test_lang_throws', {}, ''), null);
+  });
+
+  it('registerLowerer rejects non-string language', () => {
+    assert.throws(() => registerLowerer('', () => {}), /non-empty string/);
+    assert.throws(() => registerLowerer(null, () => {}), /non-empty string/);
+  });
+
+  it('registerLowerer rejects non-function lowerer', () => {
+    assert.throws(() => registerLowerer('test_lang_bad_fn', null), /must be a function/);
+    assert.throws(() => registerLowerer('test_lang_bad_fn', 'not a fn'), /must be a function/);
   });
 });

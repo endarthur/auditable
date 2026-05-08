@@ -1,7 +1,7 @@
 import { S, $ } from './state.js';
 import { updateStatus, setMsg, setPreferredCodeType, getRawPreferredCodeType } from './ui.js';
 import { updateAllEditorThemes, updateAllEditorLineNumbers, updateAllEditorReadOnly } from './cm6.js';
-import { syncModules, syncSettings } from './save.js';
+import * as hooks from './hooks.js';
 
 // ── SETTINGS ──
 
@@ -30,7 +30,7 @@ export function applyTheme(theme) {
   }
   $('#setTheme').value = theme;
   updateAllEditorThemes(theme !== 'light');
-  syncSettings();
+  hooks.emit("notebook:dirty");
 }
 
 export function applyFontSize(size) {
@@ -38,14 +38,14 @@ export function applyFontSize(size) {
   document.documentElement.style.setProperty('--editor-font-size', size + 'px');
   $('#setFontSize').value = size;
   $('#setFontSizeVal').textContent = size;
-  syncSettings();
+  hooks.emit("notebook:dirty");
 }
 
 export function applyWidth(w) {
   const nb = $('#notebook');
   nb.style.maxWidth = w;
   $('#setWidth').value = w;
-  syncSettings();
+  hooks.emit("notebook:dirty");
 }
 
 export function applyLineNumbers(show) {
@@ -54,7 +54,7 @@ export function applyLineNumbers(show) {
   const el = $('#setLineNumbers');
   if (el) el.value = on ? 'on' : 'off';
   updateAllEditorLineNumbers(on);
-  syncSettings();
+  hooks.emit("notebook:dirty");
 }
 
 export function applyHeader(mode) {
@@ -65,7 +65,7 @@ export function applyHeader(mode) {
   else if (mode === 'compact') root.classList.add('header-compact');
   // 'auto' = no class, CSS media queries handle it
   $('#setHeader').value = mode;
-  syncSettings();
+  hooks.emit("notebook:dirty");
 }
 
 // ── EXECUTION MODE ──
@@ -87,14 +87,14 @@ export function applyExecMode(mode) {
   if (btnMobile) { btnMobile.textContent = text; btnMobile.className = cls; }
   const sel = $('#setExecMode');
   if (sel) sel.value = mode;
-  syncSettings();
+  hooks.emit("notebook:dirty");
 }
 
 export function applyRunOnLoad(val) {
   _runOnLoad = val;
   const sel = $('#setRunOnLoad');
   if (sel) sel.value = val;
-  syncSettings();
+  hooks.emit("notebook:dirty");
 }
 
 export function applyShowToggle(val) {
@@ -102,7 +102,7 @@ export function applyShowToggle(val) {
   document.documentElement.classList.toggle('hide-run-toggle', val === 'no');
   const sel = $('#setShowToggle');
   if (sel) sel.value = val;
-  syncSettings();
+  hooks.emit("notebook:dirty");
 }
 
 export function applyGlobalExecMode(val) {
@@ -131,7 +131,7 @@ export function applyEditorView(val) {
   _editorView = val;
   const sel = $('#setEditorView');
   if (sel) sel.value = val;
-  syncSettings();
+  hooks.emit("notebook:dirty");
 }
 
 export function getEditorViewSetting() { return _editorView; }
@@ -329,7 +329,7 @@ export function refreshPluginList() {
     btn.title = 'uninstall plugin';
     btn.onclick = () => {
       if (window._ctUninstallPlugin) window._ctUninstallPlugin(url);
-      syncModules();
+      hooks.emit("notebook:dirty");
       refreshPluginList();
       refreshModuleList();
       updateStatus();
@@ -353,7 +353,7 @@ export function removeModule(url) {
   const kind = entry?.binary ? 'binary' : 'module';
   if (window._installedModules) delete window._installedModules[url];
   if (window._importCache) delete window._importCache[url];
-  syncModules();
+  hooks.emit("notebook:dirty");
   refreshModuleList();
   updateStatus();
   if (cellId != null) {

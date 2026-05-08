@@ -408,9 +408,9 @@ export function cryptoLock() {
   _cryptoState = null;
   _cryptoLocked = true;
 
-  // Notify MCP if available
-  if (typeof window !== 'undefined' && window._mcpOnRelock) {
-    window._mcpOnRelock();
+  // Notify subscribers (MCP, statusbar) via the hook bus.
+  if (typeof window !== 'undefined' && window.auditable?.hooks) {
+    window.auditable.hooks.emit('crypto:locked');
   }
 }
 

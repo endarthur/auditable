@@ -1,6 +1,6 @@
 // Compare pure-adder (transpiled) array ops against NumPy (run separately).
 import { adderParse } from '../ext/adder/src/parse.js';
-import { lowerAdder } from '../ext/air/src/lower/adder.js';
+import { lowerAdder } from '../ext/adder/src/air-lower.js';
 import { runPasses } from '../ext/air/src/passes.js';
 import { emitJS } from '../ext/air/src/emit-js.js';
 import { _py } from '../ext/adder/src/runtime.js';

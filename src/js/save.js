@@ -6,7 +6,8 @@ import { getSettings, applySettings, resolveExecMode, resolveRunOnLoad, getEdito
 import { runAll } from './exec.js';
 import { setMsg } from './ui.js';
 import { cryptoIsEncrypted, cryptoIsLocked, cryptoBuildBlock, cryptoDetect } from './crypto.js';
-import { serializeCells, encodeModules, decodeModules, esc as _esc, buildTxtExport } from './serialize.js';
+import { serializeCells, encodeModules, decodeModules, esc as _esc, buildTxtExport, serializeVfs, hydrateVfs, parseNotebookTxt } from './serialize.js';
+import { flushPendingDirty, hydrateModulesFromVfs, isLegacyFormat, importLegacyFormat } from './persist.js';
 
 // re-export for backward compatibility (init.js, update.js import from save.js)
 export { encodeModules, decodeModules };
@@ -15,98 +16,10 @@ export { encodeModules, decodeModules };
 // Injected at build time — contains the minimal JS bundle for exported apps.
 const __APP_RUNTIME__ = '';
 
-// ── LIVE COMMENT SYNC ──
-// keep AUDITABLE-DATA/SETTINGS/MODULES comment nodes up-to-date in the live DOM
-// so that a native browser Ctrl+S (which dumps the DOM) produces a loadable file.
-
-let _dataNode = null, _settingsNode = null, _modulesNode = null, _fsNode = null;
-let _liveSyncTimer = null;
-
-function findCommentNode(tag) {
-  const iter = document.createNodeIterator(document.body, NodeFilter.SHOW_COMMENT);
-  let node;
-  while ((node = iter.nextNode())) {
-    if (node.nodeValue.startsWith(tag + '\n')) return node;
-  }
-  return null;
-}
-
-function ensureCommentNode(tag, descComment) {
-  let node = findCommentNode(tag);
-  if (!node) {
-    // create the description comment + data comment pair
-    if (descComment) document.body.appendChild(document.createComment(' ' + descComment + ' '));
-    node = document.createComment(tag + '\n\n' + tag);
-    document.body.appendChild(node);
-  }
-  return node;
-}
-
-export function initLiveSync() {
-  _dataNode = ensureCommentNode('AUDITABLE-DATA', 'cell data: JSON array of {type, code, collapsed?}');
-  _settingsNode = ensureCommentNode('AUDITABLE-SETTINGS', 'notebook settings: JSON {theme, fontSize, width, ...}');
-  // modules node is created on demand when modules exist
-  _modulesNode = findCommentNode('AUDITABLE-MODULES');
-  // fs node is created on demand when files exist
-  _fsNode = findCommentNode('AUDITABLE-FS');
-}
-
-export function syncData() {
-  if (cryptoIsEncrypted()) { if (window._cryptoSyncTrigger) window._cryptoSyncTrigger(); return; }
-  if (!_dataNode) return;
-  _dataNode.nodeValue = 'AUDITABLE-DATA\n' + JSON.stringify(serializeCells(S.cells)) + '\nAUDITABLE-DATA';
-}
-
-export function syncDataDebounced() {
-  clearTimeout(_liveSyncTimer);
-  _liveSyncTimer = setTimeout(syncData, 500);
-}
-
-export function syncSettings() {
-  if (cryptoIsEncrypted()) { if (window._cryptoSyncTrigger) window._cryptoSyncTrigger(); return; }
-  if (!_settingsNode) return;
-  _settingsNode.nodeValue = 'AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS';
-}
-
-export function syncModules() {
-  if (cryptoIsEncrypted()) { if (window._cryptoSyncTrigger) window._cryptoSyncTrigger(); return; }
-  const mods = window._installedModules;
-  if (!mods || !Object.keys(mods).length) {
-    // remove node if no modules
-    if (_modulesNode) {
-      // also remove description comment before it
-      if (_modulesNode.previousSibling?.nodeType === 8) _modulesNode.previousSibling.remove();
-      _modulesNode.remove();
-      _modulesNode = null;
-    }
-    return;
-  }
-  if (!_modulesNode) {
-    _modulesNode = ensureCommentNode('AUDITABLE-MODULES', 'installed modules: base64-encoded JSON mapping URLs to {source, cellId, compressed?, binary?, type?}');
-  }
-  _modulesNode.nodeValue = 'AUDITABLE-MODULES\n' + encodeModules(mods) + '\nAUDITABLE-MODULES';
-}
-
-export function syncFs() {
-  if (cryptoIsEncrypted()) { if (window._cryptoSyncTrigger) window._cryptoSyncTrigger(); return; }
-  const fs = window._notebookFS;
-  if (!fs || !fs.size) {
-    // remove node if no files
-    if (_fsNode) {
-      if (_fsNode.previousSibling?.nodeType === 8) _fsNode.previousSibling.remove();
-      _fsNode.remove();
-      _fsNode = null;
-    }
-    return;
-  }
-  if (!_fsNode) {
-    _fsNode = ensureCommentNode('AUDITABLE-FS', 'notebook filesystem: base64-encoded JSON mapping paths to {type, compressed, size, data}');
-  }
-  _fsNode.nodeValue = 'AUDITABLE-FS\n' + encodeModules(Object.fromEntries(fs)) + '\nAUDITABLE-FS';
-}
-
-// wire syncFs to window for fs.js debounced callback
-if (typeof window !== 'undefined') window._syncFs = syncFs;
+// (Legacy sync surfaces — initLiveSync, syncData, syncDataDebounced,
+// syncSettings, syncModules, syncFs — removed in spec E. Persistence is
+// write-on-save-only via the Persister; dirty notifications flow through
+// the `notebook:dirty` hook bus event.)
 
 // ── SAVE / LOAD ──
 
@@ -324,24 +237,29 @@ async function buildNotebookHtml(opts = {}) {
     ? `<style id="auditable-app-css">\n${appStyles}\n</style>\n<style id="auditable-editor-css">\n${editorStyles}\n</style>`
     : `<style id="auditable-css">\n${styles}\n</style>`;
 
-  // data blocks: encrypted or cleartext
-  let dataBlocks;
+  // data blocks: VFS-unified single block (AUDITABLE-VFS or AUDITABLE-CRYPTO).
+  // Persistence flow per spec_inbox/shipped/auditable-persistence-spec.md.
   const effectiveTitle = cryptoIsEncrypted() ? 'Encrypted' : esc(title);
-  if (cryptoIsEncrypted()) {
-    const payload = {
-      data: cellData,
-      settings: getSettings(),
-      modules: Object.keys(window._installedModules || {}).length ? encodeModules(window._installedModules) : null,
-      fs: window._notebookFS?.size ? encodeModules(Object.fromEntries(window._notebookFS)) : null,
-      title: title,
-    };
-    const block = await cryptoBuildBlock(payload);
-    dataBlocks = '<!-- encrypted notebook data: passphrase required to access cells, settings, and modules -->\n<!--AUDITABLE-CRYPTO\n' + JSON.stringify(block) + '\nAUDITABLE-CRYPTO-->';
-  } else {
-    dataBlocks = '<!-- cell data: JSON array of {type, code, collapsed?} -->\n<!--AUDITABLE-DATA\n' + JSON.stringify(cellData) + '\nAUDITABLE-DATA-->'
-      + '\n' + (Object.keys(window._installedModules || {}).length ? '<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId, compressed?, binary?, type?} -->\n<!--AUDITABLE-MODULES\n' + encodeModules(window._installedModules) + '\nAUDITABLE-MODULES-->' : '')
-      + '\n' + (window._notebookFS?.size ? '<!-- notebook filesystem: base64-encoded JSON mapping paths to {type, compressed, size, data} -->\n<!--AUDITABLE-FS\n' + encodeModules(Object.fromEntries(window._notebookFS)) + '\nAUDITABLE-FS-->' : '')
-      + '\n' + '<!-- notebook settings: JSON {theme, fontSize, width, ...} -->\n<!--AUDITABLE-SETTINGS\n' + JSON.stringify(getSettings()) + '\nAUDITABLE-SETTINGS-->';
+  let dataBlocks;
+  {
+    const vfs = window._notebookVFS;
+    if (vfs) {
+      // 1. Sync runtime state (cells, settings, modules) → VFS files
+      await flushPendingDirty(vfs, S, getSettings(), title);
+
+      // 2. Walk persistent mounts → JSON dump
+      const dump = await serializeVfs(vfs);
+
+      if (cryptoIsEncrypted()) {
+        const block = await cryptoBuildBlock(dump);
+        dataBlocks = '<!-- encrypted notebook data: passphrase required to access cells, settings, modules, files -->\n<!--AUDITABLE-CRYPTO\n' + JSON.stringify(block) + '\nAUDITABLE-CRYPTO-->';
+      } else {
+        dataBlocks = '<!-- auditable notebook data: VFS dump (persistent mounts only) -->\n<!--AUDITABLE-VFS\n' + JSON.stringify(dump) + '\nAUDITABLE-VFS-->';
+      }
+    } else {
+      // Fallback path (no VFS available — shouldn't happen in browser builds)
+      dataBlocks = '<!--AUDITABLE-VFS\n{}\nAUDITABLE-VFS-->';
+    }
   }
 
   return `<!DOCTYPE html>
@@ -527,80 +445,69 @@ export function exportAsTxt() {
   setMsg('exported .txt', 'ok');
 }
 
-export function loadFromEmbed() {
-  // look for embedded cell data in HTML comments
+export async function loadFromEmbed() {
   const raw = document.body.innerHTML;
+  const vfs = window._notebookVFS;
 
   // encrypted notebook — skip normal loading, init.js handles it
   if (cryptoDetect(raw).found) return false;
 
-  // restore installed modules first (before cells run)
-  const modMatch = raw.match(/<!--AUDITABLE-MODULES\n([\s\S]*?)\nAUDITABLE-MODULES-->/);
-  if (modMatch) {
-    try {
-      window._installedModules = decodeModules(modMatch[1]);
-    } catch (e) {
-      console.error('Failed to parse installed modules:', e);
-    }
+  // Try new format (AUDITABLE-VFS); fall back to legacy four-block format.
+  const vfsMatch = raw.match(/<!--AUDITABLE-VFS\n([\s\S]*?)\nAUDITABLE-VFS-->/);
+  let dump = null;
+  if (vfsMatch) {
+    try { dump = JSON.parse(vfsMatch[1]); }
+    catch (e) { console.error('Failed to parse AUDITABLE-VFS:', e); }
+  } else if (isLegacyFormat(raw)) {
+    if (vfs) await importLegacyFormat(vfs, raw, decodeModules);
   }
 
-  // restore notebook filesystem
-  const fsMatch = raw.match(/<!--AUDITABLE-FS\n([\s\S]*?)\nAUDITABLE-FS-->/);
-  if (fsMatch) {
-    try {
-      window._notebookFS = new Map(Object.entries(decodeModules(fsMatch[1])));
-    } catch (e) {
-      console.error('Failed to parse notebook FS:', e);
-    }
+  if (dump && vfs) await hydrateVfs(vfs, dump);
+
+  if (vfs) {
+    const modules = await hydrateModulesFromVfs(vfs);
+    if (Object.keys(modules).length > 0) window._installedModules = modules;
   }
 
-  // restore settings
-  const setMatch = raw.match(/<!--AUDITABLE-SETTINGS\n([\s\S]*?)\nAUDITABLE-SETTINGS-->/);
-  if (setMatch) {
+  let parsed = null;
+  if (vfs) {
     try {
-      applySettings(JSON.parse(setMatch[1]));
-    } catch (e) {
-      console.error('Failed to parse settings:', e);
-    }
+      const txt = await vfs.readFile('/var/notebook.txt', 'text');
+      parsed = parseNotebookTxt(txt);
+      if (parsed.title) {
+        const titleInput = document.getElementById('docTitle');
+        if (titleInput) titleInput.value = parsed.title;
+        document.title = 'Auditable — ' + parsed.title;
+      }
+      if (parsed.settings) applySettings(parsed.settings);
+    } catch { /* fresh notebook */ }
   }
 
-  // apply execution mode priority chain (localStorage > notebook > build default)
   const effectiveMode = resolveExecMode();
   const effectiveRun = resolveRunOnLoad();
   if (effectiveMode === 'manual') {
     S.autorun = false;
     const btn = document.getElementById('autorunBtn');
     const btnMobile = document.getElementById('autorunBtnMobile');
-    if (btn) { btn.className = 'autorun-off'; btn.textContent = '\u2016'; btn.title = 'manual mode \u2014 only Run All or Ctrl+Enter'; }
-    if (btnMobile) { btnMobile.className = 'autorun-off'; btnMobile.textContent = '\u2016'; }
+    if (btn) { btn.className = 'autorun-off'; btn.textContent = '‖'; btn.title = 'manual mode — only Run All or Ctrl+Enter'; }
+    if (btnMobile) { btnMobile.className = 'autorun-off'; btnMobile.textContent = '‖'; }
     const sel = document.getElementById('setExecMode');
     if (sel) sel.value = 'manual';
   }
 
-  const match = raw.match(/<!--AUDITABLE-DATA\n([\s\S]*?)\nAUDITABLE-DATA-->/);
-  if (match) {
-    try {
-      const data = JSON.parse(match[1]);
+  if (parsed && parsed.cells && parsed.cells.length > 0) {
+    const nb = document.getElementById('notebook');
+    if (nb) nb.innerHTML = '';
+    document.querySelectorAll('style[data-cell-id]').forEach(el => el.remove());
 
-      // clean dirty DOM (native browser save leaves stale cell elements)
-      const nb = document.getElementById('notebook');
-      if (nb) nb.innerHTML = '';
-      // remove stale CSS cell <style> elements from <head>
-      document.querySelectorAll('style[data-cell-id]').forEach(el => el.remove());
-
-      for (const c of data) {
-        const cell = addCell(c.type, c.code);
-        if (c.collapsed || isCollapsed(c.code)) { cell.el.classList.add('collapsed'); cell.collapsed = true; }
-      }
-      // run after load (gated on resolved runOnLoad)
-      // skip if editor view will be activated — enterSplitView() calls runAll() itself
-      if (effectiveRun === 'yes' && getEditorViewSetting() !== 'yes' && S.cells.some(c => _ctIsExecutable(c.type))) {
-        setTimeout(runAll, 50);
-      }
-      return true;
-    } catch (e) {
-      console.error('Failed to parse embedded data:', e);
+    for (const c of parsed.cells) {
+      const cell = addCell(c.type, c.code);
+      if (c.collapsed || isCollapsed(c.code)) { cell.el.classList.add('collapsed'); cell.collapsed = true; }
     }
+    if (effectiveRun === 'yes' && getEditorViewSetting() !== 'yes' && S.cells.some(c => _ctIsExecutable(c.type))) {
+      setTimeout(runAll, 50);
+    }
+    return true;
   }
   return false;
 }

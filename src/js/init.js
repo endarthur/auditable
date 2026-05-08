@@ -1,5 +1,5 @@
 import { S } from './state.js';
-import { loadFromEmbed, saveNotebook, setSaveMode, initLiveSync, syncData, syncSettings, syncModules } from './save.js';
+import { loadFromEmbed, saveNotebook, setSaveMode } from './save.js';
 import { addCell } from './cell-ops.js';
 import { _ctIsExecutable } from './cell-types.js';
 import { setMsg } from './ui.js';
@@ -8,8 +8,9 @@ import { registerProvider } from './stdlib.js';
 import { configureAllAutocomplete, configurePluginAutocomplete } from './complete.js';
 import { applySettings, getEditorViewSetting, resolveExecMode, resolveRunOnLoad } from './settings.js';
 import { toggleSplitView } from './split.js';
-import { cryptoDetect, cryptoUnlock, cryptoUnlockRecovery, cryptoSetLocked, cryptoIsEncrypted, initCryptoSync, syncCryptoDebounced, removeCleartextNodes, cryptoPassphraseStrength, cryptoEnable, cryptoDisable, cryptoChangePassphrase, cryptoRegenerateRecovery, cryptoLock } from './crypto.js';
-import { decodeModules, encodeModules } from './save.js';
+import { cryptoDetect, cryptoUnlock, cryptoUnlockRecovery, cryptoSetLocked, cryptoIsEncrypted, syncCryptoDebounced, cryptoPassphraseStrength, cryptoEnable, cryptoDisable, cryptoChangePassphrase, cryptoRegenerateRecovery, cryptoLock } from './crypto.js';
+import { decodeModules, encodeModules, parseNotebookTxt, hydrateVfs } from './serialize.js';
+import { hydrateModulesFromVfs, flushPendingDirty } from './persist.js';
 import { getSettings } from './settings.js';
 import { runAll } from './exec.js';
 
@@ -45,7 +46,7 @@ function _showLockScreen(block) {
     unlockBtn.disabled = true;
     try {
       const data = await cryptoUnlock(passphrase, block);
-      _resumeAfterUnlock(data);
+      await _resumeAfterUnlock(data);
     } catch (e) {
       showError(e.message === 'Wrong passphrase' ? 'wrong passphrase' : 'decryption failed');
     }
@@ -57,7 +58,7 @@ function _showLockScreen(block) {
     if (recoveryBtn) recoveryBtn.disabled = true;
     try {
       const data = await cryptoUnlockRecovery(hex, block);
-      _resumeAfterUnlock(data);
+      await _resumeAfterUnlock(data);
     } catch (e) {
       showError(e.message === 'Invalid recovery key' ? 'invalid recovery key' : 'decryption failed');
     }
@@ -95,42 +96,77 @@ function _showLockScreen(block) {
   setTimeout(() => passphraseInput.focus(), 100);
 }
 
-function _resumeAfterUnlock(payload) {
-  // Restore modules
-  if (payload.modules) {
-    try {
-      window._installedModules = decodeModules(payload.modules);
-    } catch (e) { console.error('Failed to restore modules:', e); }
-  }
+async function _resumeAfterUnlock(payload) {
+  const vfs = window._notebookVFS;
 
-  // Restore filesystem
-  if (payload.fs) {
-    try {
-      window._notebookFS = new Map(Object.entries(decodeModules(payload.fs)));
-    } catch (e) { console.error('Failed to restore FS:', e); }
-  }
+  // Detect new VFS-dump shape vs legacy { data, settings, modules, fs, title }
+  // shape. New dumps are flat path \u2192 entry maps; legacy payloads have the
+  // four named top-level fields.
+  const isLegacy = payload && (payload.data || payload.modules || payload.fs || payload.settings || payload.title);
 
-  // Restore settings
-  if (payload.settings) {
-    try { applySettings(payload.settings); } catch (e) { console.error('Failed to restore settings:', e); }
-  }
+  if (isLegacy) {
+    // Legacy notebooks self-upgrade on next save.
+    if (payload.modules) {
+      try { window._installedModules = decodeModules(payload.modules); }
+      catch (e) { console.error('Failed to restore modules:', e); }
+    }
+    if (payload.fs) {
+      try { window._notebookFS = new Map(Object.entries(decodeModules(payload.fs))); }
+      catch (e) { console.error('Failed to restore FS:', e); }
+    }
+    if (payload.settings) {
+      try { applySettings(payload.settings); } catch (e) { console.error('Failed to restore settings:', e); }
+    }
+    const realTitle = payload.title || payload.settings?.title || 'untitled';
+    const titleInput = document.getElementById('docTitle');
+    if (titleInput) titleInput.value = realTitle;
+    document.title = 'Auditable \u2014 ' + realTitle;
 
-  // Restore title
-  const realTitle = payload.title || payload.settings?.title || 'untitled';
-  const titleInput = document.getElementById('docTitle');
-  if (titleInput) titleInput.value = realTitle;
-  document.title = 'Auditable \u2014 ' + realTitle;
+    const nb = document.getElementById('notebook');
+    if (nb) nb.innerHTML = '';
+    document.querySelectorAll('style[data-cell-id]').forEach(el => el.remove());
 
-  // Clean dirty DOM
-  const nb = document.getElementById('notebook');
-  if (nb) nb.innerHTML = '';
-  document.querySelectorAll('style[data-cell-id]').forEach(el => el.remove());
+    if (payload.data && Array.isArray(payload.data)) {
+      for (const c of payload.data) {
+        const cell = addCell(c.type, c.code);
+        if (c.collapsed) { cell.el.classList.add('collapsed'); cell.collapsed = true; }
+      }
+    }
+  } else {
+    // New format: payload IS the VFS dump.
+    if (vfs && payload) await hydrateVfs(vfs, payload);
 
-  // Load cells
-  if (payload.data && Array.isArray(payload.data)) {
-    for (const c of payload.data) {
-      const cell = addCell(c.type, c.code);
-      if (c.collapsed) { cell.el.classList.add('collapsed'); cell.collapsed = true; }
+    // Hydrate runtime state from VFS
+    if (vfs) {
+      const modules = await hydrateModulesFromVfs(vfs);
+      if (Object.keys(modules).length > 0) window._installedModules = modules;
+    }
+
+    // Read /// txt notebook content from /var/notebook.txt
+    let parsed = null;
+    if (vfs) {
+      try {
+        const txt = await vfs.readFile('/var/notebook.txt', 'text');
+        parsed = parseNotebookTxt(txt);
+      } catch { /* fresh notebook */ }
+    }
+
+    if (parsed) {
+      if (parsed.title) {
+        const titleInput = document.getElementById('docTitle');
+        if (titleInput) titleInput.value = parsed.title;
+        document.title = 'Auditable \u2014 ' + parsed.title;
+      }
+      if (parsed.settings) applySettings(parsed.settings);
+
+      const nb = document.getElementById('notebook');
+      if (nb) nb.innerHTML = '';
+      document.querySelectorAll('style[data-cell-id]').forEach(el => el.remove());
+
+      for (const c of parsed.cells || []) {
+        const cell = addCell(c.type, c.code);
+        if (c.collapsed) { cell.el.classList.add('collapsed'); cell.collapsed = true; }
+      }
     }
   }
 
@@ -138,13 +174,6 @@ function _resumeAfterUnlock(payload) {
 
   // Configure autocomplete
   configureAllAutocomplete();
-
-  // Initialize crypto live sync (replaces cleartext sync)
-  removeCleartextNodes();
-  initCryptoSync();
-
-  // Schedule crypto sync on edits
-  _setupCryptoLiveSync();
 
   // Update statusbar
   _showCryptoStatus();
@@ -154,8 +183,8 @@ function _resumeAfterUnlock(payload) {
   const lockScreen = document.getElementById('lockScreen');
   if (lockScreen) lockScreen.style.display = 'none';
 
-  // Notify MCP
-  if (window._mcpOnUnlock) window._mcpOnUnlock();
+  // Notify subscribers (MCP) via the hook bus
+  if (window.auditable?.hooks) window.auditable.hooks.emit('crypto:unlocked');
 
   // Run all if configured
   const effectiveRun = resolveRunOnLoad();
@@ -169,26 +198,8 @@ function _resumeAfterUnlock(payload) {
   }
 }
 
-function _setupCryptoLiveSync() {
-  // Override the normal sync to use crypto sync instead
-  // This hooks into the existing edit/settings change flow
-  window._cryptoSyncTrigger = () => {
-    if (!cryptoIsEncrypted()) return;
-    const cellData = S.cells.map(c => ({
-      type: c.type,
-      code: c.code,
-      collapsed: c.collapsed || undefined,
-    }));
-    const payload = {
-      data: cellData,
-      settings: getSettings(),
-      modules: Object.keys(window._installedModules || {}).length ? encodeModules(window._installedModules) : null,
-      fs: window._notebookFS?.size ? encodeModules(Object.fromEntries(window._notebookFS)) : null,
-      title: document.getElementById('docTitle')?.value || 'untitled',
-    };
-    syncCryptoDebounced(payload);
-  };
-}
+// (legacy _setupCryptoLiveSync retired in spec E — persistence is now
+// write-on-save-only via the Persister, not DOM-mutating sync triggers.)
 
 function _showCryptoStatus() {
   const el = document.getElementById('statusCrypto');
@@ -223,10 +234,6 @@ export async function enableEncryption() {
     const recoveryHex = await cryptoEnable(p1);
     // Show recovery key modal
     _showRecoveryModal(recoveryHex);
-    // Setup crypto sync
-    removeCleartextNodes();
-    initCryptoSync();
-    _setupCryptoLiveSync();
     _showCryptoStatus();
     _updateCryptoSettingsUI();
     setMsg('encryption enabled', 'ok');
@@ -238,11 +245,6 @@ export async function enableEncryption() {
 export function disableEncryption() {
   cryptoDisable();
   _updateCryptoSettingsUI();
-  // Re-enable cleartext sync
-  initLiveSync();
-  syncData();
-  syncSettings();
-  if (window._installedModules && Object.keys(window._installedModules).length) syncModules();
   const el = document.getElementById('statusCrypto');
   if (el) { el.textContent = ''; el.onclick = null; }
   setMsg('encryption disabled', 'ok');
@@ -347,7 +349,7 @@ export function _updateCryptoSettingsUI() {
 
 // ── INIT ──
 
-(function init() {
+(async function init() {
   // detect packed format (meta tag injected by loader)
   const packedMeta = document.querySelector('meta[name="auditable-packed"]');
   if (packedMeta) {
@@ -368,19 +370,13 @@ export function _updateCryptoSettingsUI() {
     return; // init stops, resumed after unlock
   }
 
-  if (!loadFromEmbed()) {
+  if (!await loadFromEmbed()) {
     addCell('md', '');
     addCell('code', '');
   }
   // configure CM6 autocomplete for all code cells
   configureAllAutocomplete();
   S.initialized = true;
-
-  // initialize live comment sync (keeps DOM comments up-to-date for native Ctrl+S)
-  initLiveSync();
-  syncData();
-  syncSettings();
-  if (window._installedModules && Object.keys(window._installedModules).length) syncModules();
 
   // enter editor view if notebook setting requests it
   if (getEditorViewSetting() === 'yes') {

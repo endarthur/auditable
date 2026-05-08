@@ -937,8 +937,18 @@ const sadpanModule = {
 };
 
 if (typeof window !== 'undefined') {
-  if (!window._auditableExtensions) window._auditableExtensions = {};
-  window._auditableExtensions['sadpan'] = sadpanModule;
+  const register = window.auditable?.registerExtension;
+  if (register) {
+    register({
+      name: '@gcu/sadpan',
+      version: '0.1.0',
+      description: 'Column-oriented dataframe library',
+      exports: { sadpan: sadpanModule },
+    });
+  } else {
+    if (!window._auditableExtensions) window._auditableExtensions = {};
+    window._auditableExtensions['sadpan'] = sadpanModule;
+  }
 }
 
 export { table, from, csv, series, concat, merge, semijoin, antijoin, op,
