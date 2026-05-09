@@ -945,6 +945,14 @@ function lowerExpr(ctx, node) {
     case 'MetaProperty':
       return ctx.emit('meta', [node.meta.name, node.property.name], DYNAMIC, l);
 
+    case 'ThisExpression':
+      // Lower `this` as a load of the synthetic name 'this'. Emit-js
+      // renders `load('this')` as the bare identifier `this`, which JS
+      // scopes correctly to the surrounding function/method's receiver.
+      // The interpreter binds `'this'` in the function-body scope from
+      // the JS-side receiver (see interp.js func_region wrapper).
+      return ctx.emit('load', ['this'], DYNAMIC, l);
+
     default:
       return lowerOpaque(ctx, node);
   }
@@ -1037,17 +1045,57 @@ function lowerBinary(ctx, node) {
 }
 
 // --- Logical operations ---
+//
+// JS short-circuits `&&` / `||` / `??` — RHS evaluates only when LHS
+// doesn't determine the result. Lowering the RHS eagerly at the same
+// nesting as LHS would make the IR lossy: emit-js used to recover
+// short-circuit via ctx.exprs inlining (RHS expression text gets
+// inlined into the `_lhs && _rhs` template), but the AIR interpreter
+// executes ops in declaration order and would always evaluate RHS.
+//
+// The faithful representation is if_region with phi (matching adder
+// and soft's and/or/coalesce lowering): condition is LHS, taken
+// branch evaluates RHS, untaken branch passes LHS through. Phi picks
+// the active branch's value.
 
 function lowerLogical(ctx, node) {
   const l = ctx.loc(node);
+  const op = node.operator;
+  if (op !== '&&' && op !== '||' && op !== '??') return lowerOpaque(ctx, node);
   const lhs = lowerExpr(ctx, node.left);
-  const rhs = lowerExpr(ctx, node.right);
-  const opName = node.operator === '&&' ? 'logical_and' :
-                 node.operator === '||' ? 'logical_or' :
-                 node.operator === '??' ? 'nullish_coalesce' : 'opaque';
-  if (opName === 'opaque') return lowerOpaque(ctx, node);
-  const rt = ctx.types.get(rhs.id) || DYNAMIC;
-  return ctx.emit(opName, [lhs.id, rhs.id], rt, l);
+
+  if (op === '&&') {
+    // a && b → if (a) { return b; } else { return a; }
+    return emitPhiSelect(ctx, lhs.id,
+      () => lowerExpr(ctx, node.right),  // then: evaluate b
+      () => lhs,                            // else: identity (a)
+      l, DYNAMIC);
+  }
+  if (op === '||') {
+    // a || b → if (a) { return a; } else { return b; }
+    return emitPhiSelect(ctx, lhs.id,
+      () => lhs,                            // then: identity
+      () => lowerExpr(ctx, node.right),  // else: evaluate b
+      l, DYNAMIC);
+  }
+  // ?? — `a ?? b` is `(a == null) ? b : a` (loose-equal-null catches both
+  // null and undefined). Encode as `(a === null) || (a === undefined)`
+  // → if-true: b, else: a.
+  const nullConst = ctx.emit('const', [null], VOID, l);
+  const isNull = ctx.emit('eq', [lhs.id, nullConst.id], BOOL, l);
+  const undefConst = ctx.emit('const', [undefined], VOID, l);
+  const isUndef = ctx.emit('eq', [lhs.id, undefConst.id], BOOL, l);
+  // We want "is nullish" → use logical_or? But we just got rid of flat
+  // logical_or. Use phi-select again: if isNull → true, else isUndef.
+  // Simpler: compose via if_region with phi.
+  const isNullish = emitPhiSelect(ctx, isNull.id,
+    () => isNull,    // then: true (already known)
+    () => isUndef,   // else: check undef
+    l, BOOL);
+  return emitPhiSelect(ctx, isNullish.id,
+    () => lowerExpr(ctx, node.right),  // then: nullish, use b
+    () => lhs,                            // else: not nullish, use a
+    l, DYNAMIC);
 }
 
 // --- Unary operations ---

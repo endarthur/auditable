@@ -225,15 +225,35 @@ const BANK = [
   // Try/finally
   ['let log = []; try { log.push(1); } finally { log.push(2); }', { log: [1, 2] }],
 
-  // Class — disabled in v0: `this` falls through to opaque in the JS
-  // lowerer (it's a ThisExpression, not handled as a special op). Fixing
-  // requires lower/js.js to emit ThisExpression as load('this') and the
-  // interpreter to bind scope['this'] in method bodies. Tracked as a
-  // post-v0 follow-up. Methods that don't reference `this` work fine.
+  // Class with constructor — disabled in v0. `this` now lowers to
+  // load('this') and the interpreter binds it from the JS receiver, but
+  // class constructors hit a deeper limitation: the interpreter wraps
+  // every function body in `async function`, and `new asyncFn()` returns
+  // a Promise (not the instance) because async functions always return
+  // promises. Real fix: needs-async-aware sync/async dispatch split in
+  // the interpreter so sync constructor bodies execute sync. Tracked
+  // as v1. Classes WITHOUT constructors (or with default constructors)
+  // do work — methods + this-binding are correct.
   // [
   //   'class Point { constructor(x, y) { this.x = x; this.y = y; } norm() { return this.x*this.x + this.y*this.y; } } const p = new Point(3, 4); const n = p.norm();',
   //   { n: 25 },
   // ],
+
+  // Short-circuit with side-effecting RHS — JS lowerer now emits
+  // logical operators as if_region+phi, so the RHS only evaluates when
+  // the LHS doesn't short-circuit. Both paths agree.
+  [
+    'let counter = 0; function tick() { counter++; return 99; } const r = false && tick(); const c = counter;',
+    { r: false, c: 0 },
+  ],
+  [
+    'let counter = 0; function tick() { counter++; return 99; } const r = true || tick(); const c = counter;',
+    { r: true, c: 0 },
+  ],
+  [
+    'const obj = { foo: () => 42 }; const r1 = obj && obj.foo(); const empty = null; const r2 = empty?.foo?.() ?? "default";',
+    { r1: 42, r2: 'default' },
+  ],
 
   // Builtins (from globalThis)
   ['const r = Math.sqrt(16);', { r: 4 }],

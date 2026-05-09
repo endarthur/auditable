@@ -3047,6 +3047,14 @@ function lowerExpr(ctx, node) {
     case 'MetaProperty':
       return ctx.emit('meta', [node.meta.name, node.property.name], DYNAMIC, l);
 
+    case 'ThisExpression':
+      // Lower `this` as a load of the synthetic name 'this'. Emit-js
+      // renders `load('this')` as the bare identifier `this`, which JS
+      // scopes correctly to the surrounding function/method's receiver.
+      // The interpreter binds `'this'` in the function-body scope from
+      // the JS-side receiver (see interp.js func_region wrapper).
+      return ctx.emit('load', ['this'], DYNAMIC, l);
+
     default:
       return lowerOpaque(ctx, node);
   }
@@ -3139,17 +3147,57 @@ function lowerBinary(ctx, node) {
 }
 
 // --- Logical operations ---
+//
+// JS short-circuits `&&` / `||` / `??` — RHS evaluates only when LHS
+// doesn't determine the result. Lowering the RHS eagerly at the same
+// nesting as LHS would make the IR lossy: emit-js used to recover
+// short-circuit via ctx.exprs inlining (RHS expression text gets
+// inlined into the `_lhs && _rhs` template), but the AIR interpreter
+// executes ops in declaration order and would always evaluate RHS.
+//
+// The faithful representation is if_region with phi (matching adder
+// and soft's and/or/coalesce lowering): condition is LHS, taken
+// branch evaluates RHS, untaken branch passes LHS through. Phi picks
+// the active branch's value.
 
 function lowerLogical(ctx, node) {
   const l = ctx.loc(node);
+  const op = node.operator;
+  if (op !== '&&' && op !== '||' && op !== '??') return lowerOpaque(ctx, node);
   const lhs = lowerExpr(ctx, node.left);
-  const rhs = lowerExpr(ctx, node.right);
-  const opName = node.operator === '&&' ? 'logical_and' :
-                 node.operator === '||' ? 'logical_or' :
-                 node.operator === '??' ? 'nullish_coalesce' : 'opaque';
-  if (opName === 'opaque') return lowerOpaque(ctx, node);
-  const rt = ctx.types.get(rhs.id) || DYNAMIC;
-  return ctx.emit(opName, [lhs.id, rhs.id], rt, l);
+
+  if (op === '&&') {
+    // a && b → if (a) { return b; } else { return a; }
+    return emitPhiSelect(ctx, lhs.id,
+      () => lowerExpr(ctx, node.right),  // then: evaluate b
+      () => lhs,                            // else: identity (a)
+      l, DYNAMIC);
+  }
+  if (op === '||') {
+    // a || b → if (a) { return a; } else { return b; }
+    return emitPhiSelect(ctx, lhs.id,
+      () => lhs,                            // then: identity
+      () => lowerExpr(ctx, node.right),  // else: evaluate b
+      l, DYNAMIC);
+  }
+  // ?? — `a ?? b` is `(a == null) ? b : a` (loose-equal-null catches both
+  // null and undefined). Encode as `(a === null) || (a === undefined)`
+  // → if-true: b, else: a.
+  const nullConst = ctx.emit('const', [null], VOID, l);
+  const isNull = ctx.emit('eq', [lhs.id, nullConst.id], BOOL, l);
+  const undefConst = ctx.emit('const', [undefined], VOID, l);
+  const isUndef = ctx.emit('eq', [lhs.id, undefConst.id], BOOL, l);
+  // We want "is nullish" → use logical_or? But we just got rid of flat
+  // logical_or. Use phi-select again: if isNull → true, else isUndef.
+  // Simpler: compose via if_region with phi.
+  const isNullish = emitPhiSelect(ctx, isNull.id,
+    () => isNull,    // then: true (already known)
+    () => isUndef,   // else: check undef
+    l, BOOL);
+  return emitPhiSelect(ctx, isNullish.id,
+    () => lowerExpr(ctx, node.right),  // then: nullish, use b
+    () => lhs,                            // else: not nullish, use a
+    l, DYNAMIC);
 }
 
 // --- Unary operations ---
@@ -5483,6 +5531,7 @@ function emitOpaque(ctx, op) {
 // production execution path.
 
 
+
 class AirInterpError extends Error {
   constructor(message) { super(message); this.name = 'AirInterpError'; }
 }
@@ -5540,6 +5589,23 @@ class Interpreter {
     for (const [k, v] of Object.entries(options.scope || {})) {
       this.scope.set(k, v);
     }
+
+    // Pre-compute slot SSA-id → variable-name mapping. Slot ops use the
+    // slot_alloc's SSA id as their args[0]; the actual variable name is
+    // in slot_alloc's args[0]. emit-js keeps this mapping in ctx.exprs;
+    // the interpreter precomputes it so closures (which capture lexical
+    // scope, not per-invocation SSA values) can resolve slot names.
+    this.slotNames = new Map();
+    this._collectSlotNames(module.ops);
+  }
+
+  _collectSlotNames(ops) {
+    for (const op of ops) {
+      if (op.op === 'slot_alloc' && op.id) {
+        this.slotNames.set(op.id, op.args[0]);
+      }
+      forEachRegion(op, (_n, rops) => this._collectSlotNames(rops));
+    }
   }
 
   async run() {
@@ -5594,19 +5660,27 @@ class Interpreter {
       }
 
       // ── Slot allocation (closure cells for mutable captures) ─────────
+      // emit-js renders these as bare `let name;` — a regular JS variable
+      // closures naturally capture. We mirror that: slots are scope
+      // bindings keyed by name. The slot_alloc op's args[0] IS the name;
+      // slot_load/slot_store receive the slot_alloc's SSA id (not a name)
+      // and we resolve via the precomputed slotNames map.
       case 'slot_alloc': {
-        // A slot is a single-property object so writes are visible to closures
-        const slot = { value: undefined };
-        this.scope.set(args[0], slot);
-        return slot;
+        this.scope.set(args[0], undefined);
+        return args[0];  // op's value is the variable name
       }
       case 'slot_load': {
-        const slot = this.scope.get(args[0]);
-        return slot ? slot.value : undefined;
+        const name = this.slotNames.get(args[0]);
+        return name != null ? this.scope.get(name) : undefined;
       }
       case 'slot_store': {
-        const slot = this.scope.get(args[0]);
-        if (slot) slot.value = this.ref(args[1]);
+        const name = this.slotNames.get(args[0]);
+        if (name != null) {
+          // setOrExisting walks up to update the binding wherever it
+          // was declared (outer scope where slot_alloc happened), so
+          // closures' mutations are visible to the outer scope.
+          this.scope.setOrExisting(name, this.ref(args[1]));
+        }
         return undefined;
       }
 
@@ -5921,6 +5995,14 @@ class Interpreter {
         const body = op.body || [];
         const capturedScope = this.scope;
         const interp = this;
+        // `function` (not arrow) so `this` binds to the JS receiver at
+        // call time. Methods invoked via call_method get the correct
+        // `obj` here; constructors via `new` get the new instance;
+        // free calls get undefined (strict mode). NOTE: arrow functions
+        // SHOULD inherit `this` from the lexical scope, but the IR
+        // doesn't currently distinguish arrow vs declaration via
+        // is_arrow. v0 limitation; arrows that reference `this` in
+        // their body will see the call-site receiver instead.
         const fn = async function fn(...callArgs) {
           // Each invocation needs its own SSA-value frame: ssa ids are
           // module-global in the IR, but the same body's ops are
@@ -5931,6 +6013,9 @@ class Interpreter {
           const savedValues = interp.values;
           interp.scope = capturedScope.push();
           interp.values = new Map();
+          // Bind `this` from the JS receiver. Methods on prototypes get
+          // the right `this` because call_method does fn.apply(obj, args).
+          interp.scope.set('this', this);
           // Bind parameters
           for (let i = 0; i < params.length; i++) {
             const p = params[i];
