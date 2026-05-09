@@ -847,13 +847,17 @@ Values are already JS values — no marshalling.
 
 ### 10.5 Registration
 
-The module registers:
-- Cell type `'adder'` via `registerCellType` (label: "adder", color: #4B8BBE, shortcut: `n`)
-- Tagged languages `'adder'` and `'mpy'` in `window._taggedLanguages`
-- Plugin `'@gcu/adder'` via `registerPlugin`
-- Global tags `window.adder` and `window.mpy`
+The module registers via `auditable.registerExtension(manifest)` (single
+canonical registration entry — see `INTERNALS.md`). The manifest declares:
+- Cell type `'adder'` (label "adder", color `#4B8BBE`, shortcut `n`, full
+  capabilities)
+- Tagged languages `'adder'` and `'mpy'` (highlighting + completions)
+- AIR lowerer for `'adder'` (the transpile path; tree-walker is the fallback)
+- Cross-language exports + plugin metadata
+- Globals `window.adder` and `window.mpy` (tag-template functions)
 
-Guard: registration only happens once even if the module is re-imported from different blob URLs.
+Guard: registration only happens once even if the module is re-imported from
+different blob URLs.
 
 ---
 

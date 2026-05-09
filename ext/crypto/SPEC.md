@@ -159,9 +159,18 @@ A known plaintext (`"auditable-check-v1"`) encrypted with the **wrapping key** (
 
 ### `AUDITABLE-CRYPTO` Block
 
-New HTML comment block. Replaces `AUDITABLE-DATA`, `AUDITABLE-SETTINGS`, and `AUDITABLE-MODULES` when encryption is enabled.
+> **Note (2026-05-08):** Persistence has unified onto VFS — see `spec_inbox/shipped/auditable-persistence-spec.md`. The cleartext format is now a single `AUDITABLE-VFS` block holding a JSON dump of the persistent VFS mounts (`/home/nb/`, `/var/`). The encrypted variant wraps the same dump JSON in `AUDITABLE-CRYPTO`. The four-block legacy format below is what crypto originally replaced; it's preserved for legacy import compatibility but no longer written by current saves.
+
+HTML comment block. Replaces `AUDITABLE-VFS` when encryption is enabled.
 
 **Unencrypted notebook (current):**
+```html
+<!--AUDITABLE-VFS
+{ "/var/notebook.txt": ..., "/home/nb/data.csv": ..., "/var/modules/lodash/source": ... }
+AUDITABLE-VFS-->
+```
+
+**Unencrypted notebook (legacy, auto-imports on load):**
 ```html
 <!--AUDITABLE-DATA
 [...]

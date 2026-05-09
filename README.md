@@ -236,23 +236,15 @@ the `examples/` directory contains 46 self-contained notebooks organized by cate
 
 ## saved file format
 
-saved notebooks are self-documenting. every data block has a descriptive HTML comment:
+saved notebooks carry a single VFS-dump comment block. cleartext:
 
 ```html
-<!-- cell data: JSON array of {type, code, collapsed?} -->
-<!--AUDITABLE-DATA
-[{"type":"code","code":"const x = 1"}, ...]
-AUDITABLE-DATA-->
-
-<!-- installed modules: base64-encoded JSON mapping URLs to {source, cellId, compressed?, binary?, type?} -->
-<!--AUDITABLE-MODULES
-eyJodHRwczovL2VzbS5zaC9kMyI6...
-AUDITABLE-MODULES-->
-
-<!-- notebook settings: JSON {theme, fontSize, width, ...} -->
-<!--AUDITABLE-SETTINGS
-{"theme":"dark","fontSize":13,"width":"860"}
-AUDITABLE-SETTINGS-->
+<!-- auditable notebook data: VFS dump (persistent mounts only) -->
+<!--AUDITABLE-VFS
+{ "/var/notebook.txt": { "type":"file","kind":"text","content":"/// auditable\n/// title: ..." },
+  "/home/nb/data.csv": { ... },
+  "/var/modules/lodash/source": { ... } }
+AUDITABLE-VFS-->
 
 <!-- Ed25519 signature: verify style+script content against pub key -->
 <!--AUDITABLE-SIGNATURE
@@ -264,10 +256,14 @@ modules are base64-encoded to avoid HTML comment parsing issues. JS modules are 
 
 the JS runtime is gzip-compressed in saved notebooks and examples. a small self-extracting loader decompresses and evals the runtime on load — data blocks, title, and HTML structure remain cleartext and human-readable. packed saves gzip the entire HTML (including data blocks) with a readable bootstrap loader.
 
-encrypted notebooks replace all data blocks with a single opaque blob:
+the VFS dump covers the persistent mounts: `/home/nb/` (user files), `/var/notebook.txt` (cells + settings + module declarations in `///` form), `/var/modules/<url-encoded>/` (installed module bodies). volatile mounts (`/tmp/`, `/usr/lib/python/`) aren't serialized.
+
+cells are persisted in the `///` text format documented at `examples/defs/FORMAT.md` — same format as the example definitions. legacy notebooks with the older 4-block format (`AUDITABLE-DATA` + `AUDITABLE-SETTINGS` + `AUDITABLE-MODULES` + `AUDITABLE-FS`) auto-import on load and self-upgrade to the new format on next save.
+
+encrypted notebooks wrap the same VFS dump in a single AES-GCM blob:
 
 ```html
-<!-- encrypted notebook data: passphrase required to access cells, settings, and modules -->
+<!-- encrypted notebook data: passphrase required to access cells, settings, modules, files -->
 <!--AUDITABLE-CRYPTO
 {"version":1,"cipher":"AES-256-GCM","iv":"...","payload":"...","methods":[...]}
 AUDITABLE-CRYPTO-->
@@ -330,7 +326,7 @@ the scope is passed by value between cells via `AsyncFunction` constructors. mut
 
 widgets are keyed by label. when a slider's value changes, the cell that created it re-executes, which triggers its dependents. the DAG handles the rest.
 
-save serializes cell source as JSON in an HTML comment (`<!--AUDITABLE-DATA ... -->`), along with settings and installed module sources (gzip-compressed). the JS runtime is also gzip-compressed with a self-extracting loader. data blocks stay cleartext for auditability. the browser is the runtime. the HTML is the lockfile.
+save serializes the persistent VFS mounts (cells, settings, installed modules, user files) as a single JSON dump in an HTML comment (`<!--AUDITABLE-VFS ... -->`). cells live in the `///` text format inside `/var/notebook.txt`. the JS runtime is gzip-compressed with a self-extracting loader. data stays cleartext for auditability. the browser is the runtime. the HTML is the lockfile.
 
 ## building
 
