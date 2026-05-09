@@ -489,6 +489,24 @@ class BaseLowerCtx {
       loc,
     );
   }
+
+  /**
+   * Coerce a value to a boolean for branching contexts (if / while /
+   * and / or / ternary). Default is JS-style pass-through — the if_region
+   * op accepts the value as-is. Frontends with non-JS truthiness
+   * semantics (Python's _py.truthy with empty-list/empty-dict cases,
+   * Soft's case-folding rules) override:
+   *
+   *   class AdderLowerCtx extends BaseLowerCtx {
+   *     truthy(valueOp, loc) {
+   *       return this.emitNamespacedCall('_py', 'truthy', [valueOp], loc, BOOL);
+   *     }
+   *   }
+   *
+   * Used by lowerIfRegion, lowerLoopRegion, and (soon) phi-select for
+   * and/or short-circuiting.
+   */
+  truthy(valueOp, _loc) { return valueOp; }
 }
 
 /**
@@ -551,6 +569,59 @@ function captureOps(ctx, fn) {
   } finally {
     ctx.ops = saved;
   }
+}
+
+/**
+ * Lower an `if` / `else` construct into AIR. Frontend-agnostic — picks up
+ * the truthy-coercion via `ctx.truthy()` so each language's bool-coercion
+ * semantics fold in. Frontend wrapper is just AST-shape adaptation:
+ *
+ *   function lowerIf(ctx, node) {        // adder
+ *     return lowerIfRegion(ctx,
+ *       () => lowerExpr_ad(ctx, node.test),
+ *       () => { for (const s of node.body) lowerStmt_ad(ctx, s); },
+ *       () => { if (node.orelse) for (const s of node.orelse) lowerStmt_ad(ctx, s); },
+ *       ctx.loc(node));
+ *   }
+ *
+ * Frontends that need extra phi-tracking, special else-if folding, or
+ * other quirks keep their own inline lowerIf — the helper is opt-in.
+ */
+function lowerIfRegion(ctx, condFn, thenFn, elseFn, loc) {
+  const condValue = condFn();
+  const cond = ctx.truthy(condValue, loc);
+  const thenBody = captureOps(ctx, thenFn);
+  const elseBody = captureOps(ctx, elseFn);
+  return ctx.emit('if_region', [cond.id], VOID, loc, {
+    then_body: thenBody, else_body: elseBody, phis: [],
+  });
+}
+
+/**
+ * Lower a `while`-style loop region. `kind` matches AIR's loop_region
+ * extras (`'while'` | `'do_while'` | …) so the emitter picks the right
+ * JS construct.
+ *
+ *   function lowerWhile(ctx, node) {     // soft
+ *     return lowerLoopRegion(ctx,
+ *       () => lowerExpr_sf(ctx, node.cond),
+ *       () => { for (const s of node.body) lowerStmt_sf(ctx, s); },
+ *       ctx.loc(node), 'while');
+ *   }
+ */
+function lowerLoopRegion(ctx, condFn, bodyFn, loc, kind = 'while') {
+  let truthy = null;
+  const testOps = captureOps(ctx, () => {
+    truthy = ctx.truthy(condFn(), loc);
+  });
+  const body = captureOps(ctx, bodyFn);
+  return ctx.emit('loop_region', [], VOID, loc, {
+    test: testOps,
+    test_val: truthy.id,
+    body,
+    phis: [],
+    loop_kind: kind,
+  });
 }
 
 // -- parse.js --
@@ -5454,6 +5525,7 @@ function pythonCompletions(prefix) {
 // triggering fallback to the tree-walker.
 
 
+
 // Re-export AirLowerError from @gcu/air. Lifted to ext/air/src/lower/base.js
 // so all frontends share one definition; the marker `_airFallback: true`
 // is the load-bearing contract that AIR's wrapper checks.
@@ -5531,6 +5603,13 @@ class AdderLowerCtx extends BaseLowerCtx {
   }
   loc(node) {
     return node?.line != null ? { line: node.line, col: node.col || 0 } : null;
+  }
+  // Python's `bool()` semantics: empty list/dict/string/zero/None are
+  // falsy. The _py.truthy runtime helper encodes these correctly; AIR's
+  // bare condition check would just JS-coerce, which gets it wrong for
+  // empty-list-is-truthy-in-JS-but-falsy-in-Python cases.
+  truthy(valueOp, loc) {
+    return this.emitNamespacedCall('_py', 'truthy', [valueOp], loc, BOOL);
   }
 }
 
@@ -6051,7 +6130,7 @@ function lowerExpr_ad(ctx, node) {
     case 'IfExp': {
       // a if cond else b — ternary
       const cond = lowerExpr_ad(ctx, node.test);
-      const truthy = emitPyCall(ctx, 'truthy', [cond], l, BOOL);
+      const truthy = ctx.truthy(cond, l);
       return emitPhiSelect(ctx, truthy.id,
         () => lowerExpr_ad(ctx, node.body),
         () => lowerExpr_ad(ctx, node.orelse),
@@ -6176,7 +6255,7 @@ function lowerBoolOp(ctx, node) {
 
   let result = lowerExpr_ad(ctx, node.values[0]);
   for (let i = 1; i < node.values.length; i++) {
-    const truthy = emitPyCall(ctx, 'truthy', [result], l, BOOL);
+    const truthy = ctx.truthy(result, l);
     // and: if truthy(prev) → next else → prev
     // or:  if truthy(prev) → prev else → next
     // The "identity" branch returns prev without emitting anything;
@@ -6735,20 +6814,11 @@ function lowerDelete(ctx, node) {
 // ── Control flow ──
 
 function lowerIf_ad(ctx, node) {
-  const l = ctx.loc(node);
-  const test = lowerExpr_ad(ctx, node.test);
-  const truthy = emitPyCall(ctx, 'truthy', [test], l, BOOL);
-  const thenBody = captureOps(ctx, () => {
-    for (const s of node.body) lowerStmt_ad(ctx, s);
-  });
-  const elseBody = captureOps(ctx, () => {
-    if (node.orelse) for (const s of node.orelse) lowerStmt_ad(ctx, s);
-  });
-  return ctx.emit('if_region', [truthy.id], VOID, l, {
-    then_body: thenBody,
-    else_body: elseBody,
-    phis: [],
-  });
+  return lowerIfRegion(ctx,
+    () => lowerExpr_ad(ctx, node.test),
+    () => { for (const s of node.body) lowerStmt_ad(ctx, s); },
+    () => { if (node.orelse) for (const s of node.orelse) lowerStmt_ad(ctx, s); },
+    ctx.loc(node));
 }
 
 function lowerFor_ad(ctx, node) {
@@ -6820,27 +6890,13 @@ function _preDeclareTargetNames(ctx, target, l) {
 }
 
 function lowerWhile_ad(ctx, node) {
-  const l = ctx.loc(node);
   if (node.orelse && node.orelse.length) {
     throw new AirLowerError('while/else not yet supported');
   }
-
-  let truthy = null;
-  const testOps = captureOps(ctx, () => {
-    const test = lowerExpr_ad(ctx, node.test);
-    truthy = emitPyCall(ctx, 'truthy', [test], l, BOOL);
-  });
-  const body = captureOps(ctx, () => {
-    for (const s of node.body) lowerStmt_ad(ctx, s);
-  });
-
-  return ctx.emit('loop_region', [], VOID, l, {
-    test: testOps,
-    test_val: truthy.id,
-    body,
-    phis: [],
-    loop_kind: 'while',
-  });
+  return lowerLoopRegion(ctx,
+    () => lowerExpr_ad(ctx, node.test),
+    () => { for (const s of node.body) lowerStmt_ad(ctx, s); },
+    ctx.loc(node), 'while');
 }
 
 // ── Functions and lambdas ──

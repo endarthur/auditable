@@ -489,6 +489,24 @@ class BaseLowerCtx {
       loc,
     );
   }
+
+  /**
+   * Coerce a value to a boolean for branching contexts (if / while /
+   * and / or / ternary). Default is JS-style pass-through — the if_region
+   * op accepts the value as-is. Frontends with non-JS truthiness
+   * semantics (Python's _py.truthy with empty-list/empty-dict cases,
+   * Soft's case-folding rules) override:
+   *
+   *   class AdderLowerCtx extends BaseLowerCtx {
+   *     truthy(valueOp, loc) {
+   *       return this.emitNamespacedCall('_py', 'truthy', [valueOp], loc, BOOL);
+   *     }
+   *   }
+   *
+   * Used by lowerIfRegion, lowerLoopRegion, and (soon) phi-select for
+   * and/or short-circuiting.
+   */
+  truthy(valueOp, _loc) { return valueOp; }
 }
 
 /**
@@ -551,6 +569,59 @@ function captureOps(ctx, fn) {
   } finally {
     ctx.ops = saved;
   }
+}
+
+/**
+ * Lower an `if` / `else` construct into AIR. Frontend-agnostic — picks up
+ * the truthy-coercion via `ctx.truthy()` so each language's bool-coercion
+ * semantics fold in. Frontend wrapper is just AST-shape adaptation:
+ *
+ *   function lowerIf(ctx, node) {        // adder
+ *     return lowerIfRegion(ctx,
+ *       () => lowerExpr_ad(ctx, node.test),
+ *       () => { for (const s of node.body) lowerStmt_ad(ctx, s); },
+ *       () => { if (node.orelse) for (const s of node.orelse) lowerStmt_ad(ctx, s); },
+ *       ctx.loc(node));
+ *   }
+ *
+ * Frontends that need extra phi-tracking, special else-if folding, or
+ * other quirks keep their own inline lowerIf — the helper is opt-in.
+ */
+function lowerIfRegion(ctx, condFn, thenFn, elseFn, loc) {
+  const condValue = condFn();
+  const cond = ctx.truthy(condValue, loc);
+  const thenBody = captureOps(ctx, thenFn);
+  const elseBody = captureOps(ctx, elseFn);
+  return ctx.emit('if_region', [cond.id], VOID, loc, {
+    then_body: thenBody, else_body: elseBody, phis: [],
+  });
+}
+
+/**
+ * Lower a `while`-style loop region. `kind` matches AIR's loop_region
+ * extras (`'while'` | `'do_while'` | …) so the emitter picks the right
+ * JS construct.
+ *
+ *   function lowerWhile(ctx, node) {     // soft
+ *     return lowerLoopRegion(ctx,
+ *       () => lowerExpr_sf(ctx, node.cond),
+ *       () => { for (const s of node.body) lowerStmt_sf(ctx, s); },
+ *       ctx.loc(node), 'while');
+ *   }
+ */
+function lowerLoopRegion(ctx, condFn, bodyFn, loc, kind = 'while') {
+  let truthy = null;
+  const testOps = captureOps(ctx, () => {
+    truthy = ctx.truthy(condFn(), loc);
+  });
+  const body = captureOps(ctx, bodyFn);
+  return ctx.emit('loop_region', [], VOID, loc, {
+    test: testOps,
+    test_val: truthy.id,
+    body,
+    phis: [],
+    loop_kind: kind,
+  });
 }
 
 // -- tokenize.js --
@@ -3642,6 +3713,12 @@ class SoftLowerCtx extends BaseLowerCtx {
   loc(node) {
     return node?.line != null ? { line: node.line, col: 0 } : null;
   }
+  // Soft has its own truthiness rules (case-insensitive string equality
+  // factors in, empty list/string is falsy, etc.). _soft.truthy applies
+  // them; bare JS coercion would diverge.
+  truthy(valueOp, loc) {
+    return this.emitNamespacedCall('_soft', 'truthy', [valueOp], loc, BOOL);
+  }
 }
 
 // _soft.XYZ call — thin wrapper over the shared emitNamespacedCall.
@@ -3986,7 +4063,7 @@ function lowerLogic(ctx, node) {
   // a and b → truthy(a) ? b : a
   // a or b  → truthy(a) ? a : b
   const left = lowerExpr_sf(ctx, node.left);
-  const truthy = emitSoftCall(ctx, 'truthy', [left], l, BOOL);
+  const truthy = ctx.truthy(left, l);
   // and: if truthy(left) → right else → left
   // or:  if truthy(left) → left else → right
   return emitPhiSelect(ctx, truthy.id,
@@ -4014,7 +4091,7 @@ function lowerTernary(ctx, node) {
   const l = ctx.loc(node);
   // X if cond otherwise Y → _soft.truthy(cond) ? X : Y
   const cond = lowerExpr_sf(ctx, node.cond);
-  const truthy = emitSoftCall(ctx, 'truthy', [cond], l, BOOL);
+  const truthy = ctx.truthy(cond, l);
   return emitPhiSelect(ctx, truthy.id,
     () => lowerExpr_sf(ctx, node.ifTrue),
     () => lowerExpr_sf(ctx, node.ifFalse),
@@ -4167,34 +4244,18 @@ function lowerSay(ctx, node) {
 // ── If / While / ForEach / RangeLoop / Repeat ──
 
 function lowerIf_sf(ctx, node) {
-  const l = ctx.loc(node);
-  const cond = lowerExpr_sf(ctx, node.cond);
-  const truthy = emitSoftCall(ctx, 'truthy', [cond], l, BOOL);
-  const thenBody = captureOps(ctx, () => {
-    for (const s of node.body) lowerStmt_sf(ctx, s);
-  });
-  const elseBody = captureOps(ctx, () => {
-    if (node.elseBody) for (const s of node.elseBody) lowerStmt_sf(ctx, s);
-  });
-  return ctx.emit('if_region', [truthy.id], VOID, l, {
-    then_body: thenBody, else_body: elseBody, phis: [],
-  });
+  return lowerIfRegion(ctx,
+    () => lowerExpr_sf(ctx, node.cond),
+    () => { for (const s of node.body) lowerStmt_sf(ctx, s); },
+    () => { if (node.elseBody) for (const s of node.elseBody) lowerStmt_sf(ctx, s); },
+    ctx.loc(node));
 }
 
 function lowerWhile_sf(ctx, node) {
-  const l = ctx.loc(node);
-  let truthy = null;
-  const testOps = captureOps(ctx, () => {
-    const cond = lowerExpr_sf(ctx, node.cond);
-    truthy = emitSoftCall(ctx, 'truthy', [cond], l, BOOL);
-  });
-  const body = captureOps(ctx, () => {
-    for (const s of node.body) lowerStmt_sf(ctx, s);
-  });
-  return ctx.emit('loop_region', [], VOID, l, {
-    test: testOps, test_val: truthy.id,
-    body, phis: [], loop_kind: 'while',
-  });
+  return lowerLoopRegion(ctx,
+    () => lowerExpr_sf(ctx, node.cond),
+    () => { for (const s of node.body) lowerStmt_sf(ctx, s); },
+    ctx.loc(node), 'while');
 }
 
 function lowerForEach(ctx, node) {

@@ -32,6 +32,7 @@ import { prettyPrint, parseText } from '../ext/air/src/text.js';
 import { ScopeChain } from '../ext/air/src/scope.js';
 import {
   BaseLowerCtx, captureOps, emitPhiSelect, AirLowerError,
+  lowerIfRegion, lowerLoopRegion,
 } from '../ext/air/src/lower/base.js';
 
 import { lowerJS } from '../ext/air/src/lower/js.js';
@@ -664,6 +665,61 @@ describe('lowerer SDK', () => {
     const before = ctx.ops;
     assert.throws(() => captureOps(ctx, () => { throw new Error('boom'); }), /boom/);
     assert.equal(ctx.ops, before, 'ctx.ops must be restored after throw');
+  });
+
+  it('truthy default is JS-style pass-through', () => {
+    const ctx = new BaseLowerCtx();
+    const v = ctx.emit('const', [42], null, null);
+    assert.equal(ctx.truthy(v, null), v);
+  });
+
+  it('truthy override hooks language-specific bool coercion', () => {
+    class TestCtx extends BaseLowerCtx {
+      truthy(valueOp, loc) {
+        return this.emitNamespacedCall('_test', 'truthy', [valueOp], loc, null);
+      }
+    }
+    const ctx = new TestCtx();
+    const v = ctx.emit('const', [42], null, null);
+    const t = ctx.truthy(v, null);
+    // Three ops added: load _test, object_get truthy, call
+    assert.equal(t.op, 'call');
+    assert.equal(ctx.ops[1].op, 'load');
+    assert.equal(ctx.ops[1].args[0], '_test');
+  });
+
+  it('lowerIfRegion picks up subclass truthy semantics', () => {
+    class WrappingCtx extends BaseLowerCtx {
+      truthy(valueOp, loc) {
+        return this.emitNamespacedCall('_rt', 'truthy', [valueOp], loc, null);
+      }
+    }
+    const ctx = new WrappingCtx();
+    const region = lowerIfRegion(ctx,
+      () => ctx.emit('const', [true], null, null),
+      () => ctx.emit('const', [1], null, null),
+      () => ctx.emit('const', [2], null, null),
+      null);
+    assert.equal(region.op, 'if_region');
+    assert.equal(region.then_body.length, 1);
+    assert.equal(region.else_body.length, 1);
+    // The condition feeding if_region's args[0] is the truthy-call's id,
+    // not the raw const. Three ops were added between the const and the
+    // region's emission: load _rt, object_get truthy, call.
+    const condProducer = ctx.ops.find(o => o.id === region.args[0]);
+    assert.equal(condProducer.op, 'call');
+  });
+
+  it('lowerLoopRegion produces loop_region with separate test + body', () => {
+    const ctx = new BaseLowerCtx();
+    const region = lowerLoopRegion(ctx,
+      () => ctx.emit('const', [true], null, null),
+      () => ctx.emit('const', [1], null, null),
+      null, 'while');
+    assert.equal(region.op, 'loop_region');
+    assert.equal(region.test.length, 1);
+    assert.equal(region.body.length, 1);
+    assert.equal(region.loop_kind, 'while');
   });
 });
 
