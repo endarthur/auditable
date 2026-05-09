@@ -412,6 +412,78 @@ describe('coverage stats', () => {
 });
 
 // =============================================================================
+// §6.6 — ctx.symbols scope-aware tracking (regression for v0.3 step 7)
+// =============================================================================
+
+describe('ctx.symbols — function-scope shadowing', () => {
+  // Bypass passes — we want to test the lowerer's symbol-table state, not
+  // what propagateTypes (which has its own correctly-scoped nameTypes)
+  // patches up afterward. The bug surface is the *exported* type for
+  // top-level defines: ctx.symbols.get(name) at the end of lowerJS feeds
+  // the export type. Under flat Map, an inner-fn shadow clobbered the
+  // outer ssa, so the export type came from the inner shadow.
+  function lowerOnly(code) {
+    const ast = AcornTS.parse(code, { ecmaVersion: 'latest', sourceType: 'module', locations: true });
+    return lowerJS(ast, code);
+  }
+
+  it('top-level export type survives inner-fn shadowing', () => {
+    // Spec §2.3 fix. Without push/pop at the function boundary, the
+    // inner `const x = "shadowed"` would have left ctx.symbols.get('x')
+    // pointing at the inner ssa (with string type), making the exported
+    // top-level x appear to be string instead of i32.
+    const m = lowerOnly(`
+      const x: i32 = 1;
+      function f() {
+        const x = "shadowed";
+        return x;
+      }
+    `);
+    const xExp = m.exports.get('x');
+    assert.ok(xExp, 'x should be exported');
+    assert.equal(xExp.type.kind, 'i32',
+      `expected outer x export type to be i32, got ${xExp.type?.kind}`);
+  });
+
+  it('class method body does not leak its locals into outer exports', () => {
+    const m = lowerOnly(`
+      const flag: bool = true;
+      class C {
+        m() {
+          const flag = "method-local";
+          return flag;
+        }
+      }
+    `);
+    const flagExp = m.exports.get('flag');
+    assert.ok(flagExp);
+    assert.equal(flagExp.type.kind, 'bool');
+  });
+
+  it('arrow-fn body does not leak locals into outer exports', () => {
+    const m = lowerOnly(`
+      const z: i32 = 7;
+      const f = () => {
+        const z = "shadowed";
+        return z;
+      };
+    `);
+    assert.equal(m.exports.get('z').type.kind, 'i32');
+  });
+
+  it('inner fn locals do not pollute outer defines set', () => {
+    const m = lowerOnly(`
+      function f() {
+        const inner = 42;
+        return inner;
+      }
+    `);
+    assert.equal(m.defines.has('inner'), false);
+    assert.equal(m.defines.has('f'), true);
+  });
+});
+
+// =============================================================================
 // §6 — Integration: lower → passes → validate, full sweep
 // =============================================================================
 

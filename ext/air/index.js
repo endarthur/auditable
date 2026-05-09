@@ -1535,7 +1535,13 @@ const CTOR_TO_ELEMENT = {
 class LowerCtx {
   constructor(mutableCaptured) {
     this.ops = [];
-    this.symbols = new Map(); // name → current SSA id
+    // Lexical-scope name → current SSA id. Backed by ScopeChain (v0.3
+    // §3.3) — push/pop wraps function-body lowering so inner-fn shadows
+    // don't leak to outer reads (the spec §2.3 latent type-prop bug).
+    // Block-level scoping (for-loop init, catch param, nested blocks)
+    // is a future refinement; today's chain only pushes at function
+    // boundaries.
+    this.symbols = new ScopeChain();
     this.types = new Map();   // SSA id → type
     this.mutableCaptured = mutableCaptured;
     this.slots = new Map();   // name → slot SSA id
@@ -1596,7 +1602,9 @@ function lowerJS(ast, source) {
 
   return {
     ops: ctx.ops,
-    symbol_table: new Map(ctx.symbols),
+    // Snapshot every visible binding (inner-wins) for downstream consumers
+    // that want a flat lookup of names → ssa ids.
+    symbol_table: ctx.symbols.flatten(),
     exports,
     imports: new Set(ctx.imports),
     defines: new Set(ctx.defines),
@@ -1821,17 +1829,21 @@ function lowerFuncDecl(ctx, node) {
 
   const retType = node.returnType ? resolveAnnotation(node.returnType) : DYNAMIC;
 
-  // Lower function body in a new "scope" context
+  // Lower function body in a new "scope" context. Push a new ctx.symbols
+  // frame so let/const declarations inside the body don't leak to outer
+  // reads (the spec §2.3 fix).
   const savedTopLevel = ctx.topLevel;
   ctx.topLevel = false;
   const bodyOps = [];
   const savedOps = ctx.ops;
   ctx.ops = bodyOps;
+  ctx.symbols = ctx.symbols.push();
 
   if (node.body?.type === 'BlockStatement') {
     for (const stmt of node.body.body) lowerStatement(ctx, stmt);
   }
 
+  ctx.symbols = ctx.symbols.pop();
   ctx.ops = savedOps;
   ctx.topLevel = savedTopLevel;
 
@@ -2127,8 +2139,10 @@ function lowerClassNode(ctx, node, l) {
     if (member.type === 'StaticBlock') {
       const savedOps = ctx.ops;
       ctx.ops = [];
+      ctx.symbols = ctx.symbols.push();
       for (const stmt of member.body) lowerStatement(ctx, stmt);
       const body = ctx.ops;
+      ctx.symbols = ctx.symbols.pop();
       ctx.ops = savedOps;
       members.push({ kind: 'static_block', body, loc: mLoc });
       continue;
@@ -2176,10 +2190,12 @@ function lowerClassNode(ctx, node, l) {
 
     const savedOps = ctx.ops;
     ctx.ops = [];
+    ctx.symbols = ctx.symbols.push();
     if (fn.body?.type === 'BlockStatement') {
       for (const stmt of fn.body.body) lowerStatement(ctx, stmt);
     }
     const bodyOps = ctx.ops;
+    ctx.symbols = ctx.symbols.pop();
     ctx.ops = savedOps;
 
     const fType = func(params.map(p => p.type), retType);
@@ -2667,6 +2683,7 @@ function lowerFuncExpr(ctx, node) {
   const savedOps = ctx.ops;
   ctx.topLevel = false;
   ctx.ops = [];
+  ctx.symbols = ctx.symbols.push();
 
   const body = node.body;
   if (body.type === 'BlockStatement') {
@@ -2678,6 +2695,7 @@ function lowerFuncExpr(ctx, node) {
   }
 
   const bodyOps = ctx.ops;
+  ctx.symbols = ctx.symbols.pop();
   ctx.ops = savedOps;
   ctx.topLevel = savedTopLevel;
 
