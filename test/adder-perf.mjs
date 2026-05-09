@@ -82,13 +82,14 @@ console.log('Adder performance comparison');
 console.log('============================');
 
 // CPython times (ms/run) from `python test/perf_py.py`. Update manually after running.
+// Updated 2026-05-09 on AMD Ryzen AI 9 HX 370, Python 3.13.
 const CPY = {
-  sum: 0.730,
-  fib: 8.661,
-  listcomp: 0.335,
-  nested: 0.809,
-  strcat: 0.820,
-  memo: 0.046,
+  sum: 0.585,
+  fib: 9.557,
+  listcomp: 0.271,
+  nested: 0.650,
+  strcat: 0.727,
+  memo: 0.036,
 };
 
 // Numeric: sum of range
