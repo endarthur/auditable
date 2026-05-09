@@ -2713,23 +2713,16 @@ function propagateTypes(module, opts = {}) {
     return types.get(id) || DYNAMIC;
   }
 
-  // When processing a branched region, collect writes so outer scope can union/invalidate
+  // When processing a branched region, collect writes so outer scope can
+  // union/invalidate. Schema-derived: forEachRegion walks every region
+  // declared on the op (incl. switch cases, class methods, try/catch/
+  // finally — the legacy walker missed class methods and switch test_ops).
   function collectWrittenNames(ops, writes) {
     for (const op of ops || []) {
       if (op.op === 'store' && typeof op.args[0] === 'string') {
         writes.add(op.args[0]);
       }
-      // Recurse into sub-regions
-      if (op.then_body) collectWrittenNames(op.then_body, writes);
-      if (op.else_body) collectWrittenNames(op.else_body, writes);
-      if (op.body) collectWrittenNames(op.body, writes);
-      if (op.init) collectWrittenNames(op.init, writes);
-      if (op.test) collectWrittenNames(op.test, writes);
-      if (op.update) collectWrittenNames(op.update, writes);
-      if (op.try_body) collectWrittenNames(op.try_body, writes);
-      if (op.catch_body) collectWrittenNames(op.catch_body, writes);
-      if (op.finally_body) collectWrittenNames(op.finally_body, writes);
-      if (op.cases) for (const c of op.cases) collectWrittenNames(c.body, writes);
+      forEachRegion(op, (_name, rops) => collectWrittenNames(rops, writes));
     }
   }
 
@@ -3064,13 +3057,10 @@ function foldConstants(module) {
     for (let i = 0; i < ops.length; i++) {
       const op = ops[i];
 
-      // Recurse into regions
-      if (op.then_body) fold(op.then_body);
-      if (op.else_body) fold(op.else_body);
-      if (op.body) fold(op.body);
-      if (op.init) fold(op.init);
-      if (op.test) fold(op.test);
-      if (op.update) fold(op.update);
+      // Schema-derived recursion — picks up regions the legacy walker
+      // missed (switch cases, try blocks, class methods) so constants
+      // inside them now get folded.
+      forEachRegion(op, (_name, rops) => fold(rops));
 
       // Fold binary ops on constants
       if ((op.op === 'add' || op.op === 'sub' || op.op === 'mul' ||
@@ -3112,15 +3102,18 @@ function foldConstants(module) {
   return changed;
 }
 
+// Schema-derived op lookup. Searches every region (declared + synthetic
+// switch cases / class members) — this is now a superset of the previous
+// hand-rolled walker, but it's safe: looking up an SSA id and finding it
+// in a region the previous walker missed only fixes existing bugs.
 function findOpById(ops, id) {
   for (const op of ops) {
     if (op.id === id) return op;
-    if (op.then_body) { const r = findOpById(op.then_body, id); if (r) return r; }
-    if (op.else_body) { const r = findOpById(op.else_body, id); if (r) return r; }
-    if (op.body) { const r = findOpById(op.body, id); if (r) return r; }
-    if (op.init) { const r = findOpById(op.init, id); if (r) return r; }
-    if (op.test) { const r = findOpById(op.test, id); if (r) return r; }
-    if (op.update) { const r = findOpById(op.update, id); if (r) return r; }
+    let found = null;
+    forEachRegion(op, (_name, rops) => {
+      if (!found) { const r = findOpById(rops, id); if (r) found = r; }
+    });
+    if (found) return found;
   }
   return null;
 }
@@ -3135,27 +3128,13 @@ function eliminateDeadCode(module) {
 
   function markReachable(ops) {
     for (const op of ops) {
-      // Always-live ops
-      if (op.op === 'opaque' || op.op === 'call' || op.op === 'call_method' ||
-          op.op === 'slot_store' || op.op === 'store' || op.op === 'object_set' ||
-          op.op === 'array_set' || op.op === 'ta_set' || op.op === 'await' ||
-          op.op === 'return' || op.op === 'break' || op.op === 'continue') {
-        live.add(op.id);
-      }
-
-      // Recurse into regions (all region contents are potentially live)
-      if (op.then_body) markReachable(op.then_body);
-      if (op.else_body) markReachable(op.else_body);
-      if (op.body) markReachable(op.body);
-      if (op.init) markReachable(op.init);
-      if (op.test) markReachable(op.test);
-      if (op.update) markReachable(op.update);
-
-      // Regions themselves are live
-      if (op.op === 'if_region' || op.op === 'for_region' || op.op === 'loop_region' ||
-          op.op === 'for_in_region' || op.op === 'for_of_region' || op.op === 'func_region') {
-        live.add(op.id);
-      }
+      // Schema-derived "always live" check. side_effecting covers the
+      // legacy hand-rolled list (opaque, call, call_method, store, *_set,
+      // await, return, break, continue) — plus correctly catches new,
+      // throw, debugger, yield, etc. introducesScope covers region ops
+      // (if/for/loop/func/class/switch/try/labeled).
+      if (isSideEffecting(op) || introducesScope(op)) live.add(op.id);
+      forEachRegion(op, (_name, rops) => markReachable(rops));
     }
   }
 
@@ -3190,14 +3169,8 @@ function insertHints(module, typeMap) {
         if (!op.meta) op.meta = {};
         op.meta.hint = 'typed';
       }
-
-      // Recurse
-      if (op.then_body) hint(op.then_body);
-      if (op.else_body) hint(op.else_body);
-      if (op.body) hint(op.body);
-      if (op.init) hint(op.init);
-      if (op.test) hint(op.test);
-      if (op.update) hint(op.update);
+      // Schema-derived recursion (now also walks try/catch/switch/class bodies)
+      forEachRegion(op, (_name, rops) => hint(rops));
     }
   }
 
@@ -3357,20 +3330,10 @@ function specializeRuntimeHelpers(module, types) {
         }
       }
 
-      // Recurse into regions first so nested ops are processed
-      if (op.then_body) specialize(op.then_body);
-      if (op.else_body) specialize(op.else_body);
-      if (op.body) specialize(op.body);
-      if (op.init) specialize(op.init);
-      if (op.test) specialize(op.test);
-      if (op.update) specialize(op.update);
-      if (op.try_body) specialize(op.try_body);
-      if (op.catch_body) specialize(op.catch_body);
-      if (op.finally_body) specialize(op.finally_body);
-      if (op.cases) for (const c of op.cases) {
-        if (c.test_ops) specialize(c.test_ops);
-        if (c.body) specialize(c.body);
-      }
+      // Schema-derived recursion. Specialization runs over every region
+      // — including class methods, where _py helper calls inside method
+      // bodies were missed by the legacy walker.
+      forEachRegion(op, (_name, rops) => specialize(rops));
 
       // Look for call to a runtime helper method
       if (op.op !== 'call') continue;
@@ -3543,22 +3506,12 @@ function specializeRuntimeHelpers(module, types) {
   return { replacements, changed };
 }
 
-function findOpAnywhere(ops, id) {
-  for (const op of ops) {
-    if (op.id === id) return op;
-    for (const field of ['then_body','else_body','body','init','test','update',
-                         'try_body','catch_body','finally_body']) {
-      if (op[field]) { const r = findOpAnywhere(op[field], id); if (r) return r; }
-    }
-    if (op.cases) {
-      for (const c of op.cases) {
-        if (c.test_ops) { const r = findOpAnywhere(c.test_ops, id); if (r) return r; }
-        if (c.body) { const r = findOpAnywhere(c.body, id); if (r) return r; }
-      }
-    }
-  }
-  return null;
-}
+// Alias to the schema-derived findOpById so older callers don't need an
+// edit. Both used to differ in which regions they walked (findOpById
+// missed switch cases; findOpAnywhere missed class members) — the
+// schema-derived version is a superset of both and they now collapse
+// to one implementation.
+const findOpAnywhere = findOpById;
 
 // =============================================================================
 // Combined pass runner
@@ -3585,22 +3538,25 @@ function runPasses(module, opts = {}) {
 // Walks AIR ops and produces V8-friendly JS with type hints.
 
 
+
 // =============================================================================
 // Async detection
 // =============================================================================
 
 function needsAsync(module) {
+  // Schema-derived. canBeAsync(op) consults OP_SCHEMA's `can_be_async`
+  // flag; forEachRegion walks every region (incl. try/catch/finally,
+  // switch cases, class members) — the legacy walker missed those, so
+  // a try-block containing `await` in catch could compile under a sync
+  // wrapper and fail at runtime. Conservative on call/call_method/new
+  // matches the legacy intent: anything that calls user code may load/
+  // install/fetch and want awaiting.
   function check(ops) {
     for (const op of ops) {
-      if (op.op === 'await') return true;
-      if (op.op === 'opaque') return true; // may contain await
-      if (op.op === 'call') return true;   // may call load/install/fetch
-      if (op.then_body && check(op.then_body)) return true;
-      if (op.else_body && check(op.else_body)) return true;
-      if (op.body && check(op.body)) return true;
-      if (op.init && check(op.init)) return true;
-      if (op.test && check(op.test)) return true;
-      if (op.update && check(op.update)) return true;
+      if (canBeAsync(op)) return true;
+      let found = false;
+      forEachRegion(op, (_name, rops) => { if (!found && check(rops)) found = true; });
+      if (found) return true;
     }
     return false;
   }
@@ -3611,57 +3567,18 @@ function needsAsync(module) {
 // Use counting — determines which SSA values become let bindings vs inline
 // =============================================================================
 
+// Schema-derived. The bespoke 50-line walker this replaces had to
+// re-implement op-by-op knowledge of where SSA refs live (object_new pair
+// records, switch case test_vals, phi then_val/else_val, class member
+// computed keys, etc.). The schema's `forEachSsaRef` knows all that;
+// `forEachRegion` handles every region/synthetic-region traversal. Adding
+// a new op type is one schema row; this walker picks it up automatically.
 function countUses(ops, counts) {
   for (const op of ops) {
-    if (op.args) {
-      // object_new stores pairs as { key, id } / { spread, id } objects
-      // rather than bare SSA ids — without this branch, the values used
-      // in object literals didn't count, the opaque/let bindings they
-      // referenced fell back to the zero-uses statement-emit path, and
-      // the object literal then dangled `_N` references.
-      if (op.op === 'object_new') {
-        for (const pair of op.args) {
-          if (pair && typeof pair.id === 'string' && pair.id.startsWith('%')) {
-            counts.set(pair.id, (counts.get(pair.id) || 0) + 1);
-          }
-        }
-      } else {
-        for (const arg of op.args) {
-          if (typeof arg === 'string' && arg.startsWith('%')) {
-            counts.set(arg, (counts.get(arg) || 0) + 1);
-          }
-        }
-      }
-    }
-    if (op.then_body) countUses(op.then_body, counts);
-    if (op.else_body) countUses(op.else_body, counts);
-    if (op.body) countUses(op.body, counts);
-    if (op.init) countUses(op.init, counts);
-    if (op.test) countUses(op.test, counts);
-    if (op.update) countUses(op.update, counts);
-    if (op.try_body) countUses(op.try_body, counts);
-    if (op.catch_body) countUses(op.catch_body, counts);
-    if (op.finally_body) countUses(op.finally_body, counts);
-    if (op.cases) {
-      for (const c of op.cases) {
-        if (c.test_ops) countUses(c.test_ops, counts);
-        if (c.test_val) counts.set(c.test_val, (counts.get(c.test_val) || 0) + 1);
-        countUses(c.body, counts);
-      }
-    }
-    if (op.members) {
-      for (const m of op.members) {
-        if (m.value) counts.set(m.value, (counts.get(m.value) || 0) + 1);
-        if (m.computedKeyId) counts.set(m.computedKeyId, (counts.get(m.computedKeyId) || 0) + 1);
-        if (m.body) countUses(m.body, counts);
-      }
-    }
-    if (op.phis) {
-      for (const p of op.phis) {
-        if (p.then_val) counts.set(p.then_val, (counts.get(p.then_val) || 0) + 1);
-        if (p.else_val) counts.set(p.else_val, (counts.get(p.else_val) || 0) + 1);
-      }
-    }
+    forEachSsaRef(op, (id) => {
+      counts.set(id, (counts.get(id) || 0) + 1);
+    });
+    forEachRegion(op, (_name, rops) => countUses(rops, counts));
   }
 }
 

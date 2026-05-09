@@ -3,23 +3,26 @@
 // Walks AIR ops and produces V8-friendly JS with type hints.
 
 import { isDynamic, isNumeric, isInteger, isFloat, isConcrete } from './types.js';
+import { forEachSsaRef, forEachRegion, canBeAsync } from './schema.js';
 
 // =============================================================================
 // Async detection
 // =============================================================================
 
 export function needsAsync(module) {
+  // Schema-derived. canBeAsync(op) consults OP_SCHEMA's `can_be_async`
+  // flag; forEachRegion walks every region (incl. try/catch/finally,
+  // switch cases, class members) — the legacy walker missed those, so
+  // a try-block containing `await` in catch could compile under a sync
+  // wrapper and fail at runtime. Conservative on call/call_method/new
+  // matches the legacy intent: anything that calls user code may load/
+  // install/fetch and want awaiting.
   function check(ops) {
     for (const op of ops) {
-      if (op.op === 'await') return true;
-      if (op.op === 'opaque') return true; // may contain await
-      if (op.op === 'call') return true;   // may call load/install/fetch
-      if (op.then_body && check(op.then_body)) return true;
-      if (op.else_body && check(op.else_body)) return true;
-      if (op.body && check(op.body)) return true;
-      if (op.init && check(op.init)) return true;
-      if (op.test && check(op.test)) return true;
-      if (op.update && check(op.update)) return true;
+      if (canBeAsync(op)) return true;
+      let found = false;
+      forEachRegion(op, (_name, rops) => { if (!found && check(rops)) found = true; });
+      if (found) return true;
     }
     return false;
   }
@@ -30,57 +33,18 @@ export function needsAsync(module) {
 // Use counting — determines which SSA values become let bindings vs inline
 // =============================================================================
 
+// Schema-derived. The bespoke 50-line walker this replaces had to
+// re-implement op-by-op knowledge of where SSA refs live (object_new pair
+// records, switch case test_vals, phi then_val/else_val, class member
+// computed keys, etc.). The schema's `forEachSsaRef` knows all that;
+// `forEachRegion` handles every region/synthetic-region traversal. Adding
+// a new op type is one schema row; this walker picks it up automatically.
 function countUses(ops, counts) {
   for (const op of ops) {
-    if (op.args) {
-      // object_new stores pairs as { key, id } / { spread, id } objects
-      // rather than bare SSA ids — without this branch, the values used
-      // in object literals didn't count, the opaque/let bindings they
-      // referenced fell back to the zero-uses statement-emit path, and
-      // the object literal then dangled `_N` references.
-      if (op.op === 'object_new') {
-        for (const pair of op.args) {
-          if (pair && typeof pair.id === 'string' && pair.id.startsWith('%')) {
-            counts.set(pair.id, (counts.get(pair.id) || 0) + 1);
-          }
-        }
-      } else {
-        for (const arg of op.args) {
-          if (typeof arg === 'string' && arg.startsWith('%')) {
-            counts.set(arg, (counts.get(arg) || 0) + 1);
-          }
-        }
-      }
-    }
-    if (op.then_body) countUses(op.then_body, counts);
-    if (op.else_body) countUses(op.else_body, counts);
-    if (op.body) countUses(op.body, counts);
-    if (op.init) countUses(op.init, counts);
-    if (op.test) countUses(op.test, counts);
-    if (op.update) countUses(op.update, counts);
-    if (op.try_body) countUses(op.try_body, counts);
-    if (op.catch_body) countUses(op.catch_body, counts);
-    if (op.finally_body) countUses(op.finally_body, counts);
-    if (op.cases) {
-      for (const c of op.cases) {
-        if (c.test_ops) countUses(c.test_ops, counts);
-        if (c.test_val) counts.set(c.test_val, (counts.get(c.test_val) || 0) + 1);
-        countUses(c.body, counts);
-      }
-    }
-    if (op.members) {
-      for (const m of op.members) {
-        if (m.value) counts.set(m.value, (counts.get(m.value) || 0) + 1);
-        if (m.computedKeyId) counts.set(m.computedKeyId, (counts.get(m.computedKeyId) || 0) + 1);
-        if (m.body) countUses(m.body, counts);
-      }
-    }
-    if (op.phis) {
-      for (const p of op.phis) {
-        if (p.then_val) counts.set(p.then_val, (counts.get(p.then_val) || 0) + 1);
-        if (p.else_val) counts.set(p.else_val, (counts.get(p.else_val) || 0) + 1);
-      }
-    }
+    forEachSsaRef(op, (id) => {
+      counts.set(id, (counts.get(id) || 0) + 1);
+    });
+    forEachRegion(op, (_name, rops) => countUses(rops, counts));
   }
 }
 
