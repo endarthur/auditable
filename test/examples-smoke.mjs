@@ -86,6 +86,42 @@ async function checkExample(browser, ex) {
       const head = (cm ? cm.textContent : '').slice(0, 60).replace(/\s+/g, ' ');
       return { id, msg, head };
     }));
+
+    // Silent load failure detector: a notebook that bails out of loadFromEmbed
+    // without throwing falls back to addCell('md','') + addCell('code','') —
+    // two empty cells, no errors. Compare runtime cell count with what the
+    // source notebook claims.
+    const cellCountCheck = await page.evaluate(async () => {
+      const html = document.body.innerHTML;
+      // Source-of-truth cell count: try AUDITABLE-VFS (/var/notebook.txt /// form),
+      // then legacy AUDITABLE-DATA JSON.
+      const vfsMatch = html.match(/<!--AUDITABLE-VFS\n([\s\S]*?)\nAUDITABLE-VFS-->/);
+      let expected = -1;
+      if (vfsMatch) {
+        try {
+          const dump = JSON.parse(vfsMatch[1]);
+          const txt = dump['/var/notebook.txt']?.content;
+          if (typeof txt === 'string') {
+            expected = (txt.match(/^\/\/\/ (?:code|md|css|html|[a-z][\w-]*)/gm) || []).length;
+          }
+        } catch {}
+      } else {
+        const dataMatch = html.match(/<!--AUDITABLE-DATA\n([\s\S]*?)\nAUDITABLE-DATA-->/);
+        if (dataMatch) {
+          try { expected = JSON.parse(dataMatch[1]).length; } catch {}
+        }
+      }
+      const actual = window.S?.cells?.length ?? 0;
+      const allEmpty = (window.S?.cells || []).every(c => !c.code);
+      return { expected, actual, allEmpty };
+    });
+    if (cellCountCheck.expected > 0 && cellCountCheck.actual === 2 && cellCountCheck.allEmpty) {
+      cellErrors.push({
+        id: '<load>',
+        msg: `loadFromEmbed silent failure: expected ${cellCountCheck.expected} cells, got 2 empty (default fallback)`,
+        head: '',
+      });
+    }
   } catch (e) {
     cellErrors.push({ id: '<navigation>', msg: e.message, head: '' });
   }

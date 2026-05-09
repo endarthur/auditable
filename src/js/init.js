@@ -348,8 +348,12 @@ export function _updateCryptoSettingsUI() {
 }
 
 // ── INIT ──
+// Deferred to next macrotask so all module bodies (in particular globals.js's
+// VFS setup) complete before init runs. globals.js imports from this module
+// for window.enableEncryption etc., so without the defer, init's IIFE would
+// fire mid-globals-evaluation and see window._notebookVFS still undefined.
 
-(async function init() {
+setTimeout(async function init() {
   // detect packed format (meta tag injected by loader)
   const packedMeta = document.querySelector('meta[name="auditable-packed"]');
   if (packedMeta) {
@@ -382,7 +386,7 @@ export function _updateCryptoSettingsUI() {
   if (getEditorViewSetting() === 'yes') {
     setTimeout(toggleSplitView, 60);
   }
-})();
+}, 0);
 
 // ── WORKS BRIDGE ──
 // When running inside Works shell (iframe), establish postMessage communication.
