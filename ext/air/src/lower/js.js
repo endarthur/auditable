@@ -6,6 +6,7 @@ import {
   typedArray, array, func,
   resolveAnnotation, isDynamic,
 } from '../types.js';
+import { ScopeChain } from '../scope.js';
 
 // --- Op constructors ---
 
@@ -24,44 +25,42 @@ function mkOp(op, args, type, loc, extra) {
 
 function findMutableCaptured(ast) {
   const captured = new Set();
-  const scopes = [new Set()]; // stack of variable scopes
+  // Scope stack uses ScopeChain (v0.3 §3.3): names declared in this scope
+  // hold value `true`. `chain.hasInOuter(name)` is the closure-detection
+  // primitive — "is name visible from any enclosing scope but not THIS
+  // one, so an assignment captures it?".
+  let chain = new ScopeChain();
 
-  function currentScope() { return scopes[scopes.length - 1]; }
-  function outerDeclared(name) {
-    for (let i = scopes.length - 2; i >= 0; i--) {
-      if (scopes[i].has(name)) return true;
-    }
-    return false;
-  }
+  function declare(name) { chain.set(name, true); }
 
   function collectDeclarations(node) {
     if (!node) return;
     if (node.type === 'VariableDeclaration') {
       for (const decl of node.declarations) {
-        collectPatternNames(decl.id, currentScope());
+        collectPatternNames(decl.id, declare);
       }
     } else if (node.type === 'FunctionDeclaration' && node.id) {
-      currentScope().add(node.id.name);
+      declare(node.id.name);
     }
   }
 
-  function collectPatternNames(pattern, set) {
+  function collectPatternNames(pattern, addFn) {
     if (!pattern) return;
     if (pattern.type === 'Identifier') {
-      set.add(pattern.name);
+      addFn(pattern.name);
     } else if (pattern.type === 'ObjectPattern') {
       for (const prop of pattern.properties) {
-        if (prop.type === 'RestElement') collectPatternNames(prop.argument, set);
-        else collectPatternNames(prop.value, set);
+        if (prop.type === 'RestElement') collectPatternNames(prop.argument, addFn);
+        else collectPatternNames(prop.value, addFn);
       }
     } else if (pattern.type === 'ArrayPattern') {
       for (const el of pattern.elements) {
         if (!el) continue;
-        if (el.type === 'RestElement') collectPatternNames(el.argument, set);
-        else collectPatternNames(el, set);
+        if (el.type === 'RestElement') collectPatternNames(el.argument, addFn);
+        else collectPatternNames(el, addFn);
       }
     } else if (pattern.type === 'AssignmentPattern') {
-      collectPatternNames(pattern.left, set);
+      collectPatternNames(pattern.left, addFn);
     }
   }
 
@@ -81,17 +80,17 @@ function findMutableCaptured(ast) {
                  node.type === 'ArrowFunctionExpression';
 
     if (isFn) {
-      scopes.push(new Set());
+      chain = chain.push();
       // Params live in the function's outer scope. The body's BlockStatement
       // gets its own scope below (via the isBlock branch), which collects
       // body declarations there. We don't double-collect into the function
       // scope — that would put body lets in BOTH scopes and cause any
       // reassignment inside the function to look like a capture from outside.
       if (node.params) {
-        for (const p of node.params) collectPatternNames(p, currentScope());
+        for (const p of node.params) collectPatternNames(p, declare);
       }
       walk(node.body, true);
-      scopes.pop();
+      chain = chain.pop();
       return;
     }
 
@@ -104,7 +103,7 @@ function findMutableCaptured(ast) {
                     node.type === 'ForInStatement' ||
                     node.type === 'ForOfStatement';
     if (isBlock) {
-      scopes.push(new Set());
+      chain = chain.push();
       if (node.type === 'BlockStatement') {
         for (const stmt of node.body) collectDeclarations(stmt);
       } else {
@@ -117,17 +116,17 @@ function findMutableCaptured(ast) {
         const child = node[key];
         if (child && typeof child === 'object') walk(child, inFunction);
       }
-      scopes.pop();
+      chain = chain.pop();
       return;
     }
 
     // Check assignments to outer-scope variables inside functions
     if (inFunction) {
       if (node.type === 'AssignmentExpression' && node.left?.type === 'Identifier') {
-        if (outerDeclared(node.left.name)) captured.add(node.left.name);
+        if (chain.hasInOuter(node.left.name)) captured.add(node.left.name);
       }
       if (node.type === 'UpdateExpression' && node.argument?.type === 'Identifier') {
-        if (outerDeclared(node.argument.name)) captured.add(node.argument.name);
+        if (chain.hasInOuter(node.argument.name)) captured.add(node.argument.name);
       }
     }
 

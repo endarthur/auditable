@@ -2,7 +2,7 @@
 // Clean interface matching existing parseNames/findUses output shapes
 
 import { lowerJS } from './lower/js.js';
-import { runPasses, extractDependencies } from './passes.js';
+import { runPasses, extractDependencies, PASSES } from './passes.js';
 import { emitJS, needsAsync } from './emit-js.js';
 import { validateModule, validateOrThrow, AirValidationError } from './validate.js';
 import { prettyPrint } from './text.js';
@@ -298,7 +298,7 @@ export function extractExportTypes(module) {
   return types;
 }
 
-export { lowerJS, runPasses, extractDependencies, emitJS, needsAsync };
+export { lowerJS, runPasses, extractDependencies, PASSES, emitJS, needsAsync };
 export { validateModule, validateOrThrow, AirValidationError, prettyPrint };
 
 // --- Browser init: register AIR on window ---

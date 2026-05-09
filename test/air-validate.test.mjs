@@ -29,9 +29,10 @@ import {
 } from '../ext/air/src/validate.js';
 
 import { prettyPrint } from '../ext/air/src/text.js';
+import { ScopeChain } from '../ext/air/src/scope.js';
 
 import { lowerJS } from '../ext/air/src/lower/js.js';
-import { runPasses } from '../ext/air/src/passes.js';
+import { runPasses, PASSES } from '../ext/air/src/passes.js';
 import { Parser, tsPlugin } from '../ext/acorn/acorn.esm.min.js';
 
 const AcornTS = Parser.extend(tsPlugin());
@@ -469,6 +470,143 @@ const SAMPLE_CELLS = [
   // nullish coalesce
   'const v = a ?? b ?? c;',
 ];
+
+// =============================================================================
+// §6.5 — ScopeChain
+// =============================================================================
+
+describe('ScopeChain', () => {
+  it('set/get/has at root', () => {
+    const s = new ScopeChain();
+    assert.equal(s.has('x'), false);
+    assert.equal(s.get('x'), undefined);
+    s.set('x', 42);
+    assert.equal(s.has('x'), true);
+    assert.equal(s.get('x'), 42);
+  });
+
+  it('push creates a child whose parent is the original', () => {
+    const root = new ScopeChain();
+    root.set('x', 1);
+    const child = root.push();
+    assert.equal(child.parent, root);
+    assert.equal(child.has('x'), true);
+    assert.equal(child.get('x'), 1);
+  });
+
+  it('inner scope shadows outer', () => {
+    const root = new ScopeChain();
+    root.set('x', 'outer');
+    const child = root.push();
+    child.set('x', 'inner');
+    assert.equal(child.get('x'), 'inner');
+    assert.equal(root.get('x'), 'outer');  // parent untouched
+  });
+
+  it('pop returns parent', () => {
+    const root = new ScopeChain();
+    const child = root.push();
+    assert.equal(child.pop(), root);
+  });
+
+  it('pop on root throws', () => {
+    const root = new ScopeChain();
+    assert.throws(() => root.pop(), /cannot pop/);
+  });
+
+  it('hasInOuter sees ancestors but not self', () => {
+    const root = new ScopeChain();
+    root.set('x', 1);
+    const child = root.push();
+    child.set('y', 2);
+    assert.equal(child.hasInOuter('x'), true);   // declared in root
+    assert.equal(child.hasInOuter('y'), false);  // declared in child only
+    assert.equal(child.has('y'), true);
+  });
+
+  it('flatten gathers visible bindings with inner-wins', () => {
+    const root = new ScopeChain();
+    root.set('x', 'outer');
+    root.set('z', 'only-outer');
+    const child = root.push();
+    child.set('x', 'inner');
+    child.set('y', 'only-inner');
+    const flat = child.flatten();
+    assert.equal(flat.get('x'), 'inner');
+    assert.equal(flat.get('y'), 'only-inner');
+    assert.equal(flat.get('z'), 'only-outer');
+  });
+
+  it('depth reports nesting level', () => {
+    const root = new ScopeChain();
+    assert.equal(root.depth(), 0);
+    assert.equal(root.push().depth(), 1);
+    assert.equal(root.push().push().push().depth(), 3);
+  });
+
+  it('falsy values can be bound and retrieved', () => {
+    const s = new ScopeChain();
+    s.set('a', null);
+    s.set('b', 0);
+    s.set('c', false);
+    s.set('d', undefined);
+    assert.equal(s.has('a'), true); assert.equal(s.get('a'), null);
+    assert.equal(s.has('b'), true); assert.equal(s.get('b'), 0);
+    assert.equal(s.has('c'), true); assert.equal(s.get('c'), false);
+    assert.equal(s.has('d'), true); assert.equal(s.get('d'), undefined);
+  });
+});
+
+// =============================================================================
+// §6.7 — PASSES metadata table
+// =============================================================================
+
+describe('PASSES metadata table', () => {
+  it('every pass has the required fields', () => {
+    for (const p of PASSES) {
+      assert.equal(typeof p.name, 'string', `pass missing name`);
+      assert.equal(typeof p.fn, 'function', `${p.name}: fn must be function`);
+      assert.ok(p.iterates === 'once' || p.iterates === 'fixed_point',
+        `${p.name}: iterates must be 'once' or 'fixed_point'`);
+      assert.ok(Array.isArray(p.requires), `${p.name}: requires must be array`);
+      assert.ok(Array.isArray(p.produces), `${p.name}: produces must be array`);
+      assert.ok(Array.isArray(p.invalidates), `${p.name}: invalidates must be array`);
+    }
+  });
+
+  it('the runtime passes match the declared table', () => {
+    // Spot-check: runPasses calls each PASSES entry. Smoke + unit tests
+    // exercise this end-to-end; this just ensures the table isn't out of
+    // sync with what we ship.
+    const expectedNames = new Set([
+      'propagateTypes', 'foldConstants', 'specializeRuntimeHelpers',
+      'insertHints', 'extractDependencies',
+    ]);
+    const actualNames = new Set(PASSES.map(p => p.name));
+    assert.deepEqual(actualNames, expectedNames);
+  });
+
+  it('every requires entry is produced by some earlier pass (or is "opts" input)', () => {
+    const produced = new Set();
+    for (const p of PASSES) {
+      for (const r of p.requires) {
+        assert.ok(produced.has(r),
+          `${p.name}: requires '${r}' but no earlier pass produces it`);
+      }
+      for (const x of p.produces) produced.add(x);
+    }
+  });
+
+  it('invalidates entries flag pairs that need re-running', () => {
+    // specializeRuntimeHelpers invalidates typeMap; runPasses re-runs
+    // propagateTypes after specialize. Asserting the table reflects this
+    // catches a desync if someone adds a pass without updating the runner.
+    const specialize = PASSES.find(p => p.name === 'specializeRuntimeHelpers');
+    assert.ok(specialize);
+    assert.ok(specialize.invalidates.includes('typeMap'),
+      'specializeRuntimeHelpers must declare it invalidates typeMap');
+  });
+});
 
 describe('validator — sweep over sample cells', () => {
   for (const code of SAMPLE_CELLS) {

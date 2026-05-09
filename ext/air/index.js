@@ -753,6 +753,126 @@ function _isSsaId(v) {
   return typeof v === 'string' && v.length > 0 && v[0] === '%';
 }
 
+// -- scope.js --
+
+// @gcu/air — ScopeChain (v0.3 §3.3)
+//
+// Single shared lexical-scope abstraction for everything in AIR that
+// tracks names → values across nested scopes. Today three places do
+// this independently:
+//
+//   1. lower/js.js findMutableCaptured — closure-detection scope walker
+//      using a `scopes` array of Sets directly.
+//   2. emit-js.js Scope — `let` declaration tracker (Set-of-names with
+//      a parent pointer).
+//   3. lower/js.js ctx.symbols — flat Map<name, ssaId>. Doesn't pop at
+//      scope exit, leading to silent type-prop wrongness when an inner
+//      scope shadows an outer name (the spec's §2.3 latent bug).
+//
+// This class is the abstraction the first two migrate to in v0.3. The
+// ctx.symbols migration is its own session — adding push/pop semantics
+// to a previously-flat lookup is a real behavior change, not a rename.
+//
+// Design: name → any value (ssa id, boolean, type, …). Each layer is a
+// Map so a name can be set to falsy values (null, 0, false). `has`
+// distinguishes "name exists with value undefined" from "name not bound".
+
+class ScopeChain {
+  /**
+   * @param {ScopeChain | null} parent
+   */
+  constructor(parent = null) {
+    this.parent = parent;
+    this.bindings = new Map();
+  }
+
+  /**
+   * Bind a name in THIS scope (does not propagate up).
+   */
+  set(name, value) {
+    this.bindings.set(name, value);
+    return this;
+  }
+
+  /**
+   * Look up a name. Returns the binding from the innermost scope where
+   * it exists, or undefined if unbound at every level.
+   */
+  get(name) {
+    if (this.bindings.has(name)) return this.bindings.get(name);
+    return this.parent ? this.parent.get(name) : undefined;
+  }
+
+  /**
+   * True if the name is bound at this scope or any enclosing scope.
+   */
+  has(name) {
+    if (this.bindings.has(name)) return true;
+    return this.parent ? this.parent.has(name) : false;
+  }
+
+  /**
+   * True if the name is bound in any enclosing scope, but NOT in this
+   * scope. Used by closure-detection: "is this name visible from outer
+   * lexical context, such that an assignment captures it?"
+   */
+  hasInOuter(name) {
+    return this.parent ? this.parent.has(name) : false;
+  }
+
+  /**
+   * Return a new child scope with `this` as parent. Caller is responsible
+   * for assigning the result somewhere — e.g. `chain = chain.push()`.
+   */
+  push() {
+    return new ScopeChain(this);
+  }
+
+  /**
+   * Return the parent scope, dropping `this`. Throws if at root.
+   */
+  pop() {
+    if (!this.parent) {
+      throw new Error('ScopeChain: cannot pop the root scope');
+    }
+    return this.parent;
+  }
+
+  /**
+   * Snapshot every binding visible from this scope, with the innermost
+   * value winning for shadowed names. Useful for debugging and for
+   * code that needs a flat Map (legacy callers like lower/js.js's
+   * `symbol_table: new Map(ctx.symbols)` snapshot).
+   */
+  flatten() {
+    const out = new Map();
+    // Walk from root → leaf so inner shadows the outer naturally
+    const chain = [];
+    for (let s = this; s; s = s.parent) chain.push(s);
+    for (let i = chain.length - 1; i >= 0; i--) {
+      for (const [k, v] of chain[i].bindings) out.set(k, v);
+    }
+    return out;
+  }
+
+  /**
+   * Iterate every binding visible from this scope (innermost wins).
+   * Yields [name, value] pairs.
+   */
+  *entries() {
+    yield* this.flatten();
+  }
+
+  /**
+   * Depth from root. Root is 0, first child is 1, etc.
+   */
+  depth() {
+    let d = 0;
+    for (let s = this.parent; s; s = s.parent) d++;
+    return d;
+  }
+}
+
 // -- text.js --
 
 // @gcu/air — Textual IR pretty-printer (v0.3 §3.4)
@@ -1228,44 +1348,42 @@ function mkOp(op, args, type, loc, extra) {
 
 function findMutableCaptured(ast) {
   const captured = new Set();
-  const scopes = [new Set()]; // stack of variable scopes
+  // Scope stack uses ScopeChain (v0.3 §3.3): names declared in this scope
+  // hold value `true`. `chain.hasInOuter(name)` is the closure-detection
+  // primitive — "is name visible from any enclosing scope but not THIS
+  // one, so an assignment captures it?".
+  let chain = new ScopeChain();
 
-  function currentScope() { return scopes[scopes.length - 1]; }
-  function outerDeclared(name) {
-    for (let i = scopes.length - 2; i >= 0; i--) {
-      if (scopes[i].has(name)) return true;
-    }
-    return false;
-  }
+  function declare(name) { chain.set(name, true); }
 
   function collectDeclarations(node) {
     if (!node) return;
     if (node.type === 'VariableDeclaration') {
       for (const decl of node.declarations) {
-        collectPatternNames(decl.id, currentScope());
+        collectPatternNames(decl.id, declare);
       }
     } else if (node.type === 'FunctionDeclaration' && node.id) {
-      currentScope().add(node.id.name);
+      declare(node.id.name);
     }
   }
 
-  function collectPatternNames(pattern, set) {
+  function collectPatternNames(pattern, addFn) {
     if (!pattern) return;
     if (pattern.type === 'Identifier') {
-      set.add(pattern.name);
+      addFn(pattern.name);
     } else if (pattern.type === 'ObjectPattern') {
       for (const prop of pattern.properties) {
-        if (prop.type === 'RestElement') collectPatternNames(prop.argument, set);
-        else collectPatternNames(prop.value, set);
+        if (prop.type === 'RestElement') collectPatternNames(prop.argument, addFn);
+        else collectPatternNames(prop.value, addFn);
       }
     } else if (pattern.type === 'ArrayPattern') {
       for (const el of pattern.elements) {
         if (!el) continue;
-        if (el.type === 'RestElement') collectPatternNames(el.argument, set);
-        else collectPatternNames(el, set);
+        if (el.type === 'RestElement') collectPatternNames(el.argument, addFn);
+        else collectPatternNames(el, addFn);
       }
     } else if (pattern.type === 'AssignmentPattern') {
-      collectPatternNames(pattern.left, set);
+      collectPatternNames(pattern.left, addFn);
     }
   }
 
@@ -1285,17 +1403,17 @@ function findMutableCaptured(ast) {
                  node.type === 'ArrowFunctionExpression';
 
     if (isFn) {
-      scopes.push(new Set());
+      chain = chain.push();
       // Params live in the function's outer scope. The body's BlockStatement
       // gets its own scope below (via the isBlock branch), which collects
       // body declarations there. We don't double-collect into the function
       // scope — that would put body lets in BOTH scopes and cause any
       // reassignment inside the function to look like a capture from outside.
       if (node.params) {
-        for (const p of node.params) collectPatternNames(p, currentScope());
+        for (const p of node.params) collectPatternNames(p, declare);
       }
       walk(node.body, true);
-      scopes.pop();
+      chain = chain.pop();
       return;
     }
 
@@ -1308,7 +1426,7 @@ function findMutableCaptured(ast) {
                     node.type === 'ForInStatement' ||
                     node.type === 'ForOfStatement';
     if (isBlock) {
-      scopes.push(new Set());
+      chain = chain.push();
       if (node.type === 'BlockStatement') {
         for (const stmt of node.body) collectDeclarations(stmt);
       } else {
@@ -1321,17 +1439,17 @@ function findMutableCaptured(ast) {
         const child = node[key];
         if (child && typeof child === 'object') walk(child, inFunction);
       }
-      scopes.pop();
+      chain = chain.pop();
       return;
     }
 
     // Check assignments to outer-scope variables inside functions
     if (inFunction) {
       if (node.type === 'AssignmentExpression' && node.left?.type === 'Identifier') {
-        if (outerDeclared(node.left.name)) captured.add(node.left.name);
+        if (chain.hasInOuter(node.left.name)) captured.add(node.left.name);
       }
       if (node.type === 'UpdateExpression' && node.argument?.type === 'Identifier') {
-        if (outerDeclared(node.argument.name)) captured.add(node.argument.name);
+        if (chain.hasInOuter(node.argument.name)) captured.add(node.argument.name);
       }
     }
 
@@ -3514,13 +3632,78 @@ function specializeRuntimeHelpers(module, types) {
 const findOpAnywhere = findOpById;
 
 // =============================================================================
-// Combined pass runner
+// Combined pass runner (v0.3 §3.5)
 // =============================================================================
+//
+// PASSES is the declarative source-of-truth for what runs, in what order,
+// and why. runPasses still hand-rolls the orchestration because the
+// propagate ↔ specialize fixed-point is genuinely coupled (specialize
+// rewrites IR shape, types may need re-propagation) — declarative
+// orchestration would either lose that or special-case it back. The table
+// exists for:
+//
+//   - Discoverability: `import { PASSES } from '@gcu/air'` lists every pass
+//   - Documentation: each row carries requires/produces/iterates contract
+//   - Future validation: tests assert table matches runPasses' behavior
+//   - Future Phase 4: atra/Wasm backend can append its own pass schedule
+//
+// Each row:
+//   name        — pass identifier
+//   fn          — the pass function
+//   iterates    — 'once' | 'fixed_point'
+//   requires    — string[] of metadata entries this pass consumes
+//   produces    — string[] of metadata entries this pass produces
+//   invalidates — string[] of metadata entries other passes' output goes
+//                 stale after this runs
+
+const PASSES = [
+  {
+    name: 'propagateTypes',
+    fn: propagateTypes,
+    iterates: 'fixed_point',  // re-runs after specialize rewrites IR
+    requires: [],             // optional: opts.importTypes
+    produces: ['typeMap'],
+    invalidates: [],
+  },
+  {
+    name: 'foldConstants',
+    fn: foldConstants,
+    iterates: 'once',
+    requires: [],
+    produces: [],
+    invalidates: [],
+  },
+  {
+    name: 'specializeRuntimeHelpers',
+    fn: specializeRuntimeHelpers,
+    iterates: 'fixed_point',
+    requires: ['typeMap'],
+    produces: [],
+    invalidates: ['typeMap'],  // rewrites IR; types may further refine
+  },
+  {
+    name: 'insertHints',
+    fn: insertHints,
+    iterates: 'once',
+    requires: ['typeMap'],
+    produces: [],
+    invalidates: [],
+  },
+  {
+    name: 'extractDependencies',
+    fn: extractDependencies,
+    iterates: 'once',
+    requires: [],
+    produces: ['deps'],
+    invalidates: [],
+  },
+];
 
 function runPasses(module, opts = {}) {
   let typeMap = propagateTypes(module, opts);
   foldConstants(module);
   // Iterate specialize ↔ re-propagate until fixed point (typically 2-3 rounds).
+  // Bounded by max_iterations to guard against pathological self-rewriting.
   for (let i = 0; i < 5; i++) {
     const { changed } = specializeRuntimeHelpers(module, typeMap);
     if (!changed) break;
@@ -3536,6 +3719,7 @@ function runPasses(module, opts = {}) {
 // @gcu/air — JS emitter (Phase 2)
 // Spec §9: AIR → optimized JavaScript
 // Walks AIR ops and produces V8-friendly JS with type hints.
+
 
 
 
@@ -3592,16 +3776,19 @@ function countUses(ops, counts) {
 // inside falls out of scope so a sibling region can re-`let` the same
 // name. The cell's top-level (root) scope is not popped — exports live
 // there and their `let` only needs to be emitted once.
+//
+// Backed by ScopeChain (v0.3 §3.3) — same shape, shared with lower/js.js
+// findMutableCaptured.
 class Scope {
   constructor(parent) {
+    this._chain = parent ? parent._chain.push() : new ScopeChain();
     this.parent = parent;
-    this.declared = new Set();
   }
   has(name) {
-    return this.declared.has(name) || (this.parent ? this.parent.has(name) : false);
+    return this._chain.has(name);
   }
   declare(name) {
-    this.declared.add(name);
+    this._chain.set(name, true);
   }
 }
 

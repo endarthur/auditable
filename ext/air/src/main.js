@@ -6,6 +6,7 @@
 
 import './types.js';
 import './schema.js';
+import './scope.js';
 import './text.js';
 import './validate.js';
 import './lower/js.js';

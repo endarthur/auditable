@@ -4,6 +4,7 @@
 
 import { isDynamic, isNumeric, isInteger, isFloat, isConcrete } from './types.js';
 import { forEachSsaRef, forEachRegion, canBeAsync } from './schema.js';
+import { ScopeChain } from './scope.js';
 
 // =============================================================================
 // Async detection
@@ -58,16 +59,19 @@ function countUses(ops, counts) {
 // inside falls out of scope so a sibling region can re-`let` the same
 // name. The cell's top-level (root) scope is not popped — exports live
 // there and their `let` only needs to be emitted once.
+//
+// Backed by ScopeChain (v0.3 §3.3) — same shape, shared with lower/js.js
+// findMutableCaptured.
 class Scope {
   constructor(parent) {
+    this._chain = parent ? parent._chain.push() : new ScopeChain();
     this.parent = parent;
-    this.declared = new Set();
   }
   has(name) {
-    return this.declared.has(name) || (this.parent ? this.parent.has(name) : false);
+    return this._chain.has(name);
   }
   declare(name) {
-    this.declared.add(name);
+    this._chain.set(name, true);
   }
 }
 

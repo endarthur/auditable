@@ -897,13 +897,78 @@ export function specializeRuntimeHelpers(module, types) {
 const findOpAnywhere = findOpById;
 
 // =============================================================================
-// Combined pass runner
+// Combined pass runner (v0.3 §3.5)
 // =============================================================================
+//
+// PASSES is the declarative source-of-truth for what runs, in what order,
+// and why. runPasses still hand-rolls the orchestration because the
+// propagate ↔ specialize fixed-point is genuinely coupled (specialize
+// rewrites IR shape, types may need re-propagation) — declarative
+// orchestration would either lose that or special-case it back. The table
+// exists for:
+//
+//   - Discoverability: `import { PASSES } from '@gcu/air'` lists every pass
+//   - Documentation: each row carries requires/produces/iterates contract
+//   - Future validation: tests assert table matches runPasses' behavior
+//   - Future Phase 4: atra/Wasm backend can append its own pass schedule
+//
+// Each row:
+//   name        — pass identifier
+//   fn          — the pass function
+//   iterates    — 'once' | 'fixed_point'
+//   requires    — string[] of metadata entries this pass consumes
+//   produces    — string[] of metadata entries this pass produces
+//   invalidates — string[] of metadata entries other passes' output goes
+//                 stale after this runs
+
+export const PASSES = [
+  {
+    name: 'propagateTypes',
+    fn: propagateTypes,
+    iterates: 'fixed_point',  // re-runs after specialize rewrites IR
+    requires: [],             // optional: opts.importTypes
+    produces: ['typeMap'],
+    invalidates: [],
+  },
+  {
+    name: 'foldConstants',
+    fn: foldConstants,
+    iterates: 'once',
+    requires: [],
+    produces: [],
+    invalidates: [],
+  },
+  {
+    name: 'specializeRuntimeHelpers',
+    fn: specializeRuntimeHelpers,
+    iterates: 'fixed_point',
+    requires: ['typeMap'],
+    produces: [],
+    invalidates: ['typeMap'],  // rewrites IR; types may further refine
+  },
+  {
+    name: 'insertHints',
+    fn: insertHints,
+    iterates: 'once',
+    requires: ['typeMap'],
+    produces: [],
+    invalidates: [],
+  },
+  {
+    name: 'extractDependencies',
+    fn: extractDependencies,
+    iterates: 'once',
+    requires: [],
+    produces: ['deps'],
+    invalidates: [],
+  },
+];
 
 export function runPasses(module, opts = {}) {
   let typeMap = propagateTypes(module, opts);
   foldConstants(module);
   // Iterate specialize ↔ re-propagate until fixed point (typically 2-3 rounds).
+  // Bounded by max_iterations to guard against pathological self-rewriting.
   for (let i = 0; i < 5; i++) {
     const { changed } = specializeRuntimeHelpers(module, typeMap);
     if (!changed) break;
