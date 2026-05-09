@@ -717,6 +717,27 @@ describe('ScopeChain', () => {
     assert.equal(root.push().push().push().depth(), 3);
   });
 
+  it('delete walks up the chain to consume', () => {
+    const root = new ScopeChain();
+    root.set('x', 1);
+    const child = root.push();
+    assert.equal(child.delete('x'), true);   // found in root, deleted
+    assert.equal(child.has('x'), false);
+    assert.equal(root.has('x'), false);      // really gone from root
+    assert.equal(child.delete('y'), false);  // never bound
+  });
+
+  it('delete prefers innermost binding', () => {
+    const root = new ScopeChain();
+    root.set('x', 'outer');
+    const child = root.push();
+    child.set('x', 'inner');
+    assert.equal(child.delete('x'), true);
+    // Inner gone, outer still visible
+    assert.equal(child.get('x'), 'outer');
+    assert.equal(root.get('x'), 'outer');
+  });
+
   it('falsy values can be bound and retrieved', () => {
     const s = new ScopeChain();
     s.set('a', null);

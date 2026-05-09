@@ -86,8 +86,14 @@ class EmitCtx {
     this.useCounts = new Map();
     countUses(module.ops, this.useCounts);
 
-    // SSA id → expression string (for inlining single-use values)
-    this.exprs = new Map();
+    // SSA id → expression string (for inlining single-use values).
+    //
+    // Backed by ScopeChain (v0.3 §3.3): each region body pushes a fresh
+    // frame, popped on exit. Single-use values registered inside a region
+    // body are consumed within that region; cross-region reference would
+    // resolve to a region-local `_N` JS binding and be a runtime error,
+    // so the pop-time invariant warns under dev validator (see popScope).
+    this.exprs = new ScopeChain();
 
     // SSA id → type
     this.types = new Map();
@@ -109,10 +115,39 @@ class EmitCtx {
   push() { this.indent++; }
   pop() { this.indent--; }
 
-  pushScope() { this.scope = new Scope(this.scope); }
+  pushScope() {
+    this.scope = new Scope(this.scope);
+    this.exprs = this.exprs.push();
+  }
   popScope() {
     if (!this.scope.parent) throw new Error('popScope: already at root');
+    // Invariant: every entry in the popped frame should be consumed
+    // (single-use, deleted by ref) or dead (countUses === 0). An
+    // unconsumed live entry means the lowerer placed a use cross-region;
+    // ref() outside this region would fall through to `_N` referring to
+    // a never-emitted binding. We could throw, but that would block
+    // lowering progress; instead warn under dev validator and best-effort
+    // leave the entry visible to the parent frame so the consumer at
+    // least gets the inline expression (not necessarily correctly scoped).
+    if (typeof window !== 'undefined' && window._airValidate) {
+      for (const [id, expr] of this.exprs.bindings) {
+        const uses = this.useCounts.get(id) || 0;
+        if (uses > 0) {
+          console.warn(
+            `[AIR] emit-js consume invariant: ${id} (uses=${uses}) unconsumed at scope pop. expr: ${String(expr).slice(0, 80)}`
+          );
+        }
+      }
+    }
+    // Promote unconsumed live entries to the parent frame. This is the
+    // best-effort recovery: the inline expression text references things
+    // that may have been block-scoped, but at least ref() won't return a
+    // stale `_N` for a never-emitted binding.
+    for (const [id, expr] of this.exprs.bindings) {
+      if (this.useCounts.get(id) > 0) this.exprs.parent.set(id, expr);
+    }
     this.scope = this.scope.parent;
+    this.exprs = this.exprs.pop();
   }
 
   // Resolve an SSA ref to an expression string.
@@ -123,7 +158,8 @@ class EmitCtx {
     if (this.exprs.has(id)) {
       const uses = this.useCounts.get(id) || 0;
       if (uses <= 1) {
-        // Inline: consume the expression
+        // Inline: consume the expression (chain-aware delete walks up to
+        // wherever the binding was registered).
         const expr = this.exprs.get(id);
         this.exprs.delete(id);
         return expr;

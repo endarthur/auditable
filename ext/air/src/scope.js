@@ -64,6 +64,20 @@ class ScopeChain {
   }
 
   /**
+   * Remove a binding. Walks up the chain and deletes from the innermost
+   * scope where the name is bound. Returns true if a binding was removed,
+   * false if the name wasn't bound anywhere visible.
+   *
+   * Used by emit-js's `ctx.exprs` consume semantics — when a single-use
+   * SSA value is inlined at its consumer, the entry is deleted from
+   * whichever frame registered it.
+   */
+  delete(name) {
+    if (this.bindings.has(name)) { this.bindings.delete(name); return true; }
+    return this.parent ? this.parent.delete(name) : false;
+  }
+
+  /**
    * Return a new child scope with `this` as parent. Caller is responsible
    * for assigning the result somewhere — e.g. `chain = chain.push()`.
    */
