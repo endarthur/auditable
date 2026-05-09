@@ -5730,9 +5730,15 @@ function lowerExpr_ad(ctx, node) {
           piece = ctx.emit('const', [part.value], STRING, l);
         } else if (part.type === 'FormattedValue') {
           const val = lowerExpr_ad(ctx, part.value);
-          const spec = part.formatSpec
-            ? lowerExpr_ad(ctx, part.formatSpec)
-            : ctx.emit('const', [''], STRING, l);
+          let spec;
+          if (part.formatSpec == null) {
+            spec = ctx.emit('const', [''], STRING, l);
+          } else if (typeof part.formatSpec === 'string') {
+            // adder parser emits formatSpec as a raw string (e.g. ".2f")
+            spec = ctx.emit('const', [part.formatSpec], STRING, l);
+          } else {
+            spec = lowerExpr_ad(ctx, part.formatSpec);
+          }
           piece = emitPyCall(ctx, 'fmt', [val, spec], l, STRING);
         } else {
           throw new AirLowerError(`unexpected JoinedStr part: ${part.type}`);

@@ -107,6 +107,12 @@ describe('adder transpile — strings', () => {
     const r = await runTranspile('x = 5\nprint(f"{x * 2}")');
     assert.equal(r.output, '10');
   });
+  it('f-string with format spec', async () => {
+    // adder parser emits formatSpec as a raw string (".2f"); lowerer must
+    // handle that path, not just the JoinedStr-shaped one.
+    const r = await runTranspile('x = 3.14159\nprint(f"{x:.2f}")');
+    assert.equal(r.output, '3.14');
+  });
 });
 
 describe('adder transpile — comparison and bool', () => {
