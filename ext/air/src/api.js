@@ -4,6 +4,9 @@
 import { lowerJS } from './lower/js.js';
 import { runPasses, extractDependencies } from './passes.js';
 import { emitJS, needsAsync } from './emit-js.js';
+import { validateModule, validateOrThrow, AirValidationError } from './validate.js';
+import { prettyPrint } from './text.js';
+import { computeStats } from './schema.js';
 
 // ── Lowerer registry ───────────────────────────────────────────────
 // Languages other than JS register themselves here. AIR self-registers
@@ -296,6 +299,7 @@ export function extractExportTypes(module) {
 }
 
 export { lowerJS, runPasses, extractDependencies, emitJS, needsAsync };
+export { validateModule, validateOrThrow, AirValidationError, prettyPrint };
 
 // --- Browser init: register AIR on window ---
 // When loaded in the browser with Acorn available, create the parser
@@ -313,6 +317,16 @@ if (typeof window !== 'undefined' && window.Acorn) {
   window._airEmit = emitJS;
   window._airNeedsAsync = needsAsync;
 
+  // v0.3 §3.2: dev-mode validator. URL flag `?airdebug=1` flips it on so
+  // notebook authors hit IR-shape bugs at fail-fast time instead of mystery
+  // emit-time output. Off by default in production.
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('airdebug') === '1') window._airValidate = true;
+  } catch { /* file:// or other non-URL contexts — ignore */ }
+  window._airValidateModule = validateModule;
+  window._airPrettyPrint = prettyPrint;
+
   // Lowerer registry — frontends register their own lowerers here.
   window._airRegisterLowerer = registerLowerer;
   window._airGetLowerer = function(language) {
@@ -326,6 +340,16 @@ if (typeof window !== 'undefined' && window.Acorn) {
       try {
         const air = fn(ast, code);
         runPasses(air);
+        // v0.3 §3.2: opt-in validator. window._airValidate flips on under
+        // ?airdebug=1; tests call validateModule directly. Wraps a real
+        // bug as a clear "AIR shape mismatch" error instead of a mystery
+        // emit-time exception or silent miscompile.
+        if (typeof window !== 'undefined' && window._airValidate) {
+          validateOrThrow(air, prettyPrint);
+        }
+        // v0.3 fold-in: coverage stats. Cheap single walk; lets debug
+        // panels report "21/26 ops on AIR fast path, 3 opaque, 8 dyn".
+        air._airStats = computeStats(air);
         return { air, defines: air.defines };
       } catch (e) {
         if (e && e._airFallback) return null;

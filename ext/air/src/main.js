@@ -5,6 +5,9 @@
 // register their own lowerers via window._airRegisterLowerer at init.
 
 import './types.js';
+import './schema.js';
+import './text.js';
+import './validate.js';
 import './lower/js.js';
 import './passes.js';
 import './emit-js.js';

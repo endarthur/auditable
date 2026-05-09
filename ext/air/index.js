@@ -194,6 +194,1017 @@ function typeEq(a, b) {
   return true;
 }
 
+// -- schema.js --
+
+// @gcu/air — Op schema (v0.3 §3.1)
+//
+// Single declarative source of truth for what every AIR op contains: how
+// many SSA refs, in what shape, whether it has region children, what extras
+// it requires, whether it's pure or side-effecting, whether it can be async.
+//
+// Every pass that walks the IR (countUses, propagateTypes, foldConstants,
+// needsAsync, the validator, the pretty-printer) consults the schema via
+// the helper functions below, so adding a new op is one row instead of
+// editing eight switch statements.
+//
+// Args shape vocabulary:
+//   'ssa'        — bare SSA id string ('%N')
+//   'literal'    — JS literal (string/number/bool/undefined/null) for const
+//   'name'       — variable name (for load/store/slot_*)
+//   'key'        — string key (for object_get/set, call_method)
+//   'label'      — label name for break/continue/labeled
+//   'kind'       — typed-array element kind for ta_new
+//   'meta_name'  — meta target ('new', 'import')
+//
+// Variadic shapes:
+//   'ssa_list'         — args is an array of bare SSA ids (call args, array_new)
+//   'pair_list'        — args is an array of { key|spread, id } records (object_new)
+//   'name_then_ssas'   — args[0] is name, rest are SSA ids (call_method first
+//                        position is the receiver SSA, but call_method is
+//                        encoded as [obj_ssa, method_string, ...arg_ssa] so
+//                        it gets its own shape)
+//   'method_call'      — [ssa, key, ...ssa] for call_method
+//   'ta_new_args'      — [kind, ...ssa] for ta_new
+
+const SSA = 'ssa';
+const LIT = 'literal';
+const NAME = 'name';
+const KEY = 'key';
+const LABEL = 'label';
+
+const OP_SCHEMA = {
+  // ── Constants and primitive loads ──────────────────────────────────
+  const: {
+    arity: 'fixed', args: [LIT],
+    result: 'value', side_effecting: false, can_be_async: false,
+  },
+  null: {
+    arity: 'fixed', args: [],
+    result: 'value', side_effecting: false, can_be_async: false,
+  },
+  load: {
+    arity: 'fixed', args: [NAME],
+    result: 'value', side_effecting: false, can_be_async: false,
+  },
+  store: {
+    arity: 'fixed', args: [NAME, SSA],
+    result: 'void', side_effecting: true, can_be_async: false,
+  },
+  meta: {
+    arity: 'fixed', args: ['meta_name', 'meta_prop'],
+    result: 'value', side_effecting: false, can_be_async: false,
+  },
+
+  // ── Slot allocation (closure cells for mutable captures) ───────────
+  slot_alloc: {
+    arity: 'fixed', args: [NAME],
+    result: 'value', side_effecting: false, can_be_async: false,
+  },
+  slot_load: {
+    arity: 'fixed', args: [NAME],
+    result: 'value', side_effecting: false, can_be_async: false,
+  },
+  slot_store: {
+    arity: 'fixed', args: [NAME, SSA],
+    result: 'void', side_effecting: true, can_be_async: false,
+  },
+
+  // ── Arithmetic ─────────────────────────────────────────────────────
+  add: { arity: 'fixed', args: [SSA, SSA], result: 'value', side_effecting: false, can_be_async: false },
+  sub: { arity: 'fixed', args: [SSA, SSA], result: 'value', side_effecting: false, can_be_async: false },
+  mul: { arity: 'fixed', args: [SSA, SSA], result: 'value', side_effecting: false, can_be_async: false },
+  div: { arity: 'fixed', args: [SSA, SSA], result: 'value', side_effecting: false, can_be_async: false },
+  mod: { arity: 'fixed', args: [SSA, SSA], result: 'value', side_effecting: false, can_be_async: false },
+  exp: { arity: 'fixed', args: [SSA, SSA], result: 'value', side_effecting: false, can_be_async: false },
+
+  // ── Comparison ─────────────────────────────────────────────────────
+  eq:  { arity: 'fixed', args: [SSA, SSA], result: 'value', side_effecting: false, can_be_async: false },
+  neq: { arity: 'fixed', args: [SSA, SSA], result: 'value', side_effecting: false, can_be_async: false },
+  lt:  { arity: 'fixed', args: [SSA, SSA], result: 'value', side_effecting: false, can_be_async: false },
+  lte: { arity: 'fixed', args: [SSA, SSA], result: 'value', side_effecting: false, can_be_async: false },
+  gt:  { arity: 'fixed', args: [SSA, SSA], result: 'value', side_effecting: false, can_be_async: false },
+  gte: { arity: 'fixed', args: [SSA, SSA], result: 'value', side_effecting: false, can_be_async: false },
+
+  // ── Bitwise ────────────────────────────────────────────────────────
+  bitwise_or:    { arity: 'fixed', args: [SSA, SSA], result: 'value', side_effecting: false, can_be_async: false },
+  bitwise_and:   { arity: 'fixed', args: [SSA, SSA], result: 'value', side_effecting: false, can_be_async: false },
+  bitwise_xor:   { arity: 'fixed', args: [SSA, SSA], result: 'value', side_effecting: false, can_be_async: false },
+  shift_left:    { arity: 'fixed', args: [SSA, SSA], result: 'value', side_effecting: false, can_be_async: false },
+  shift_right:   { arity: 'fixed', args: [SSA, SSA], result: 'value', side_effecting: false, can_be_async: false },
+  ushift_right:  { arity: 'fixed', args: [SSA, SSA], result: 'value', side_effecting: false, can_be_async: false },
+
+  // ── Logical ────────────────────────────────────────────────────────
+  logical_and:       { arity: 'fixed', args: [SSA, SSA], result: 'value', side_effecting: false, can_be_async: false },
+  logical_or:        { arity: 'fixed', args: [SSA, SSA], result: 'value', side_effecting: false, can_be_async: false },
+  nullish_coalesce:  { arity: 'fixed', args: [SSA, SSA], result: 'value', side_effecting: false, can_be_async: false },
+
+  // ── Membership ─────────────────────────────────────────────────────
+  in:         { arity: 'fixed', args: [SSA, SSA], result: 'value', side_effecting: false, can_be_async: false },
+  instanceof: { arity: 'fixed', args: [SSA, SSA], result: 'value', side_effecting: false, can_be_async: false },
+
+  // ── Unary ──────────────────────────────────────────────────────────
+  neg:         { arity: 'fixed', args: [SSA], result: 'value', side_effecting: false, can_be_async: false },
+  unary_plus:  { arity: 'fixed', args: [SSA], result: 'value', side_effecting: false, can_be_async: false },
+  logical_not: { arity: 'fixed', args: [SSA], result: 'value', side_effecting: false, can_be_async: false },
+  bitwise_not: { arity: 'fixed', args: [SSA], result: 'value', side_effecting: false, can_be_async: false },
+  typeof:      { arity: 'fixed', args: [SSA], result: 'value', side_effecting: false, can_be_async: false },
+  void:        { arity: 'fixed', args: [SSA], result: 'value', side_effecting: false, can_be_async: false },
+  delete:      { arity: 'fixed', args: [SSA], result: 'value', side_effecting: true,  can_be_async: false },
+
+  // ── Member access ──────────────────────────────────────────────────
+  object_get: {
+    arity: 'fixed', args: [SSA, KEY],
+    result: 'value', side_effecting: false, can_be_async: false,
+    extras: { optional: 'bool?' },
+  },
+  object_set: {
+    arity: 'fixed', args: [SSA, KEY, SSA],
+    result: 'void', side_effecting: true, can_be_async: false,
+  },
+  array_get: {
+    arity: 'fixed', args: [SSA, SSA],
+    result: 'value', side_effecting: false, can_be_async: false,
+    extras: { optional: 'bool?' },
+  },
+  array_set: {
+    arity: 'fixed', args: [SSA, SSA, SSA],
+    result: 'void', side_effecting: true, can_be_async: false,
+  },
+
+  // ── Construction ───────────────────────────────────────────────────
+  array_new: {
+    arity: 'variadic', args: 'ssa_list',
+    result: 'value', side_effecting: false, can_be_async: false,
+  },
+  object_new: {
+    arity: 'variadic', args: 'pair_list',
+    result: 'value', side_effecting: false, can_be_async: false,
+  },
+  ta_new: {
+    arity: 'variadic', args: 'ta_new_args',  // [kind_string, ...ssa]
+    result: 'value', side_effecting: false, can_be_async: false,
+  },
+  new: {
+    arity: 'variadic', args: 'ssa_list',  // [ctor_ssa, ...arg_ssa]
+    result: 'value', side_effecting: true, can_be_async: true,
+  },
+
+  // ── Calls ──────────────────────────────────────────────────────────
+  call: {
+    arity: 'variadic', args: 'ssa_list',  // [fn_ssa, ...arg_ssa]
+    result: 'value', side_effecting: true, can_be_async: true,
+  },
+  call_method: {
+    arity: 'variadic', args: 'method_call',  // [obj_ssa, method_key, ...arg_ssa]
+    result: 'value', side_effecting: true, can_be_async: true,
+  },
+  await: {
+    arity: 'fixed', args: [SSA],
+    result: 'value', side_effecting: true, can_be_async: true,
+  },
+  spread: {
+    arity: 'fixed', args: [SSA],
+    result: 'value', side_effecting: false, can_be_async: false,
+  },
+  import: {
+    arity: 'fixed', args: [SSA],
+    result: 'value', side_effecting: true, can_be_async: true,
+  },
+
+  // ── Statements ─────────────────────────────────────────────────────
+  throw: {
+    arity: 'fixed', args: [SSA],
+    result: 'void', side_effecting: true, can_be_async: false,
+  },
+  debugger: {
+    arity: 'fixed', args: [],
+    result: 'void', side_effecting: true, can_be_async: false,
+  },
+  return: {
+    arity: 'fixed', args: [SSA],
+    result: 'void', side_effecting: true, can_be_async: false,
+  },
+  break: {
+    // args=[] for unlabeled, [label] for labeled
+    arity: 'variadic', args: 'label_optional',
+    result: 'void', side_effecting: true, can_be_async: false,
+  },
+  continue: {
+    arity: 'variadic', args: 'label_optional',
+    result: 'void', side_effecting: true, can_be_async: false,
+  },
+  yield: {
+    // args=[] for `yield` no value, [ssa] for `yield expr`
+    arity: 'variadic', args: 'ssa_optional',
+    result: 'value', side_effecting: true, can_be_async: false,
+  },
+  yield_delegate: {
+    arity: 'fixed', args: [SSA],
+    result: 'value', side_effecting: true, can_be_async: false,
+  },
+
+  // ── Region ops ─────────────────────────────────────────────────────
+  // if_region — produces a value when used as ternary (else_body present);
+  // void as a statement. Conservatively 'value' here.
+  if_region: {
+    arity: 'fixed', args: [SSA],  // condition
+    result: 'value', side_effecting: true, can_be_async: false,  // body decides actual side-effect
+    regions: {
+      then_body: { scope: 'block' },
+      else_body: { scope: 'block', optional: true },
+    },
+    extras: {
+      then_val: 'ssa?',
+      else_val: 'ssa?',
+      phis: 'phi_list?',
+    },
+    introduces_scope: true,
+  },
+  for_region: {
+    arity: 'fixed', args: [],
+    result: 'void', side_effecting: true, can_be_async: false,
+    regions: {
+      init: { scope: 'loop' },
+      test: { scope: 'loop' },
+      update: { scope: 'loop' },
+      body: { scope: 'loop' },
+    },
+    extras: {
+      test_val: 'ssa?',
+      phis: 'phi_list?',
+    },
+    introduces_scope: true,
+  },
+  for_in_region: {
+    arity: 'fixed', args: [SSA],  // iterable
+    result: 'void', side_effecting: true, can_be_async: false,
+    regions: { body: { scope: 'loop' } },
+    extras: {
+      target_name: 'string?',
+      phis: 'phi_list?',
+    },
+    introduces_scope: true,
+  },
+  for_of_region: {
+    arity: 'fixed', args: [SSA],  // iterable
+    result: 'void', side_effecting: true, can_be_async: false,
+    regions: { body: { scope: 'loop' } },
+    extras: {
+      target_name: 'string',  // REQUIRED (no silent _v fallback per v0.3 §3.2)
+      phis: 'phi_list?',
+    },
+    introduces_scope: true,
+  },
+  loop_region: {
+    arity: 'fixed', args: [],
+    result: 'void', side_effecting: true, can_be_async: false,
+    regions: {
+      test: { scope: 'loop', optional: true },
+      body: { scope: 'loop' },
+      update: { scope: 'loop', optional: true },
+    },
+    extras: {
+      test_val: 'ssa?',
+      phis: 'phi_list?',
+      kind: 'string?',  // 'while' | 'do_while' | 'condition_first' etc.
+    },
+    introduces_scope: true,
+  },
+  switch_region: {
+    arity: 'fixed', args: [SSA],  // discriminant
+    result: 'void', side_effecting: true, can_be_async: false,
+    extras: {
+      cases: 'case_list',  // [{ test_ops, test_val?, body }]
+    },
+    introduces_scope: true,
+  },
+  try_region: {
+    arity: 'fixed', args: [],
+    result: 'void', side_effecting: true, can_be_async: false,
+    regions: {
+      try_body: { scope: 'block' },
+      catch_body: { scope: 'block', optional: true },
+      finally_body: { scope: 'block', optional: true },
+    },
+    extras: {
+      catch_param: 'string?',
+    },
+    introduces_scope: true,
+  },
+  labeled: {
+    arity: 'fixed', args: [LABEL],
+    result: 'void', side_effecting: true, can_be_async: false,
+    regions: { body: { scope: 'block' } },
+    extras: {
+      is_block: 'bool?',
+    },
+    introduces_scope: true,
+  },
+  func_region: {
+    // args is [name|null]; name is also kept on op for emit convenience
+    arity: 'fixed', args: ['func_name'],
+    result: 'value', side_effecting: false, can_be_async: false,  // declaring is pure
+    regions: { body: { scope: 'function' } },
+    extras: {
+      name: 'string?',
+      params: 'param_list',
+      ret_type: 'type?',
+      is_async: 'bool?',
+      is_generator: 'bool?',
+      is_decl: 'bool?',
+    },
+    introduces_scope: true,
+  },
+  class_region: {
+    arity: 'fixed', args: ['class_name'],
+    result: 'value', side_effecting: false, can_be_async: false,
+    extras: {
+      name: 'string?',
+      members: 'member_list',  // [{ kind, key, value?, body?, ... }]
+      superclass: 'ssa?',
+    },
+    introduces_scope: true,
+  },
+
+  // ── Special ────────────────────────────────────────────────────────
+  // `opaque` is the relief valve for anything the lowerer can't model.
+  // Args[0] is the JS source string; the emitter prints it verbatim.
+  // Side effects unknown — conservative: yes; can be async too.
+  opaque: {
+    arity: 'fixed', args: ['source'],
+    result: 'value', side_effecting: true, can_be_async: true,
+    extras: {
+      _markDeclared: 'string?',  // adder/soft global/nonlocal hint
+    },
+  },
+};
+
+// ── Helper API ────────────────────────────────────────────────────────
+
+/**
+ * Iterate every SSA reference an op contains. Replaces per-op switch-style
+ * walkers in countUses, type propagation, dead-code elimination, etc.
+ *
+ * Calls fn(id) for each '%N' SSA reference found in args, region phis,
+ * member declarations, switch case test_vals, and `extras` declared as
+ * 'ssa'/'ssa?' in the schema.
+ *
+ * Does NOT recurse into region bodies — callers handle that explicitly via
+ * forEachRegion (so they can control traversal order, scope tracking, etc).
+ */
+function forEachSsaRef(op, fn) {
+  const schema = OP_SCHEMA[op.op];
+  if (!schema) return;
+
+  // 1. Direct args based on shape
+  if (schema.arity === 'fixed') {
+    for (let i = 0; i < schema.args.length; i++) {
+      if (schema.args[i] === SSA && _isSsaId(op.args[i])) fn(op.args[i]);
+    }
+  } else if (schema.args === 'ssa_list') {
+    for (const a of op.args) if (_isSsaId(a)) fn(a);
+  } else if (schema.args === 'pair_list') {
+    for (const p of op.args) {
+      if (p && _isSsaId(p.id)) fn(p.id);
+    }
+  } else if (schema.args === 'method_call') {
+    // [ssa, key, ...ssa]
+    if (_isSsaId(op.args[0])) fn(op.args[0]);
+    for (let i = 2; i < op.args.length; i++) {
+      if (_isSsaId(op.args[i])) fn(op.args[i]);
+    }
+  } else if (schema.args === 'ta_new_args') {
+    // [kind, ...ssa]
+    for (let i = 1; i < op.args.length; i++) {
+      if (_isSsaId(op.args[i])) fn(op.args[i]);
+    }
+  } else if (schema.args === 'label_optional') {
+    /* args[0] is label string if present, no SSA */
+  } else if (schema.args === 'ssa_optional') {
+    if (op.args.length && _isSsaId(op.args[0])) fn(op.args[0]);
+  }
+
+  // 2. Extras declared as ssa/ssa?
+  if (schema.extras) {
+    for (const [key, spec] of Object.entries(schema.extras)) {
+      if (spec === 'ssa' || spec === 'ssa?') {
+        const v = op[key];
+        if (_isSsaId(v)) fn(v);
+      }
+    }
+  }
+
+  // 3. phi lists (then_val/else_val per phi entry)
+  if (op.phis) {
+    for (const p of op.phis) {
+      if (_isSsaId(p.then_val)) fn(p.then_val);
+      if (_isSsaId(p.else_val)) fn(p.else_val);
+    }
+  }
+
+  // 4. Switch case test_vals + member computed-key SSA refs + member-init
+  //    values (class members store {value: ssa, computedKeyId: ssa}).
+  if (op.cases) {
+    for (const c of op.cases) {
+      if (_isSsaId(c.test_val)) fn(c.test_val);
+    }
+  }
+  if (op.members) {
+    for (const m of op.members) {
+      if (_isSsaId(m.value)) fn(m.value);
+      if (_isSsaId(m.computedKeyId)) fn(m.computedKeyId);
+    }
+  }
+  if (_isSsaId(op.superclass)) fn(op.superclass);
+}
+
+/**
+ * Iterate every region of an op. Calls fn(name, ops, scopeKind) for each
+ * region declared in the schema. Also walks switch cases' bodies (treated
+ * as a synthetic 'cases' region group) and class members' bodies.
+ *
+ * @param op   the op object
+ * @param fn   (name, ops, scopeKind) called per region
+ */
+function forEachRegion(op, fn) {
+  const schema = OP_SCHEMA[op.op];
+  if (!schema || !schema.regions) {
+    // Switch/class don't have schema.regions; they have synthetic regions.
+    if (op.cases) {
+      for (let i = 0; i < op.cases.length; i++) {
+        const c = op.cases[i];
+        if (c.test_ops) fn(`cases[${i}].test_ops`, c.test_ops, 'block');
+        if (c.body) fn(`cases[${i}].body`, c.body, 'block');
+      }
+    }
+    if (op.members) {
+      for (let i = 0; i < op.members.length; i++) {
+        const m = op.members[i];
+        if (m.body) fn(`members[${i}].body`, m.body, 'function');
+      }
+    }
+    return;
+  }
+  for (const [name, info] of Object.entries(schema.regions)) {
+    const ops = op[name];
+    if (ops) fn(name, ops, info.scope);
+  }
+  // Switch cases / class members may also coexist with declared regions
+  // (e.g. some hypothetical region op with both — none currently). For
+  // future-proofing, mirror the synthetic-region branch above.
+  if (op.cases) {
+    for (let i = 0; i < op.cases.length; i++) {
+      const c = op.cases[i];
+      if (c.test_ops) fn(`cases[${i}].test_ops`, c.test_ops, 'block');
+      if (c.body) fn(`cases[${i}].body`, c.body, 'block');
+    }
+  }
+  if (op.members) {
+    for (let i = 0; i < op.members.length; i++) {
+      const m = op.members[i];
+      if (m.body) fn(`members[${i}].body`, m.body, 'function');
+    }
+  }
+}
+
+/**
+ * True if this op type introduces a new lexical scope. Used by ScopeChain
+ * (v0.3 step 7) to decide push/pop boundaries.
+ */
+function introducesScope(op) {
+  const schema = OP_SCHEMA[op.op];
+  return !!(schema && schema.introduces_scope);
+}
+
+/**
+ * True if this op has observable side effects — must be kept by DCE even
+ * with zero uses.
+ */
+function isSideEffecting(op) {
+  const schema = OP_SCHEMA[op.op];
+  return !!(schema && schema.side_effecting);
+}
+
+/**
+ * True if this op may produce or contain an async point. Used by
+ * needsAsync to decide whether the cell wrapper is sync or AsyncFunction.
+ */
+function canBeAsync(op) {
+  const schema = OP_SCHEMA[op.op];
+  return !!(schema && schema.can_be_async);
+}
+
+/**
+ * Returns the list of extras keys that must be present on ops of this
+ * type (i.e. extras whose schema spec doesn't end with '?').
+ */
+function requiredExtras(opName) {
+  const schema = OP_SCHEMA[opName];
+  if (!schema || !schema.extras) return [];
+  return Object.entries(schema.extras)
+    .filter(([, spec]) => typeof spec === 'string' && !spec.endsWith('?'))
+    .map(([k]) => k);
+}
+
+/**
+ * Returns the schema row for an op type, or undefined if unknown.
+ */
+function getSchema(opName) {
+  return OP_SCHEMA[opName];
+}
+
+/**
+ * Compute coverage stats for an AIR module. Walks every op (including
+ * inside regions) and counts:
+ *   - opCount        total ops
+ *   - opaqueCount    ops emitted as 'opaque' (lowering relief valve)
+ *   - dynCount       ops whose result type is 'dynamic' (no specialization)
+ *   - byKind         { [opName]: count }
+ *
+ * Cheap (single walk, no allocations per-op beyond the counter map).
+ * Stored on `module._airStats` after passes run.
+ *
+ * Lets future debug panels show "21/26 cells used AIR" / "this cell has
+ * 5 opaque ops" as structured data instead of console-spam parsing.
+ */
+function computeStats(module) {
+  let opCount = 0;
+  let opaqueCount = 0;
+  let dynCount = 0;
+  const byKind = Object.create(null);
+
+  function walk(ops) {
+    for (const op of ops) {
+      opCount++;
+      byKind[op.op] = (byKind[op.op] || 0) + 1;
+      if (op.op === 'opaque') opaqueCount++;
+      if (op.type && op.type.kind === 'dynamic') dynCount++;
+      forEachRegion(op, (_n, rops) => walk(rops));
+    }
+  }
+  walk(module.ops);
+
+  return { opCount, opaqueCount, dynCount, byKind };
+}
+
+// ── internals ─────────────────────────────────────────────────────────
+
+function _isSsaId(v) {
+  return typeof v === 'string' && v.length > 0 && v[0] === '%';
+}
+
+// -- text.js --
+
+// @gcu/air — Textual IR pretty-printer (v0.3 §3.4)
+//
+// Round-trippable text format for AIR modules. Pretty for humans;
+// validator messages and debug logs use it instead of JSON dumps.
+// Parser is deferred (v0.3 step 10).
+//
+// Format overview:
+//
+//   module {
+//     defines: [grid, n]
+//     imports: [ui, std]
+//
+//     %0 = const 60
+//     store n, %0
+//     for_region {
+//       init: [
+//         %1 = const 0
+//         store i, %1
+//       ]
+//       test: [
+//         %2 = lt load(i), load(n)
+//       ]
+//       test_val: %2
+//       update: [
+//         %3 = const 1
+//         %4 = add load(i), %3
+//         store i, %4
+//       ]
+//       body: [
+//         array_set load(grid), load(i), load(i)
+//       ]
+//     }
+//   }
+
+
+const INDENT = '  ';
+
+/**
+ * Pretty-print an AIR module to a string.
+ */
+function prettyPrint(module) {
+  const out = [];
+  out.push('module {');
+  if (module.defines && [...module.defines].length) {
+    out.push(`${INDENT}defines: [${[...module.defines].sort().join(', ')}]`);
+  }
+  if (module.imports && [...module.imports].length) {
+    out.push(`${INDENT}imports: [${[...module.imports].sort().join(', ')}]`);
+  }
+  out.push('');
+  for (const op of module.ops) {
+    _printOp(op, INDENT, out);
+  }
+  out.push('}');
+  return out.join('\n');
+}
+
+function _printOp(op, prefix, out) {
+  const schema = OP_SCHEMA[op.op];
+  const head = op.id ? `${op.id} = ` : '';
+
+  // Region ops: print the multi-line block form
+  if (schema && (schema.regions || op.cases || op.members)) {
+    out.push(`${prefix}${head}${op.op}${_renderArgsInline(op, schema)} {`);
+    _printRegionsAndExtras(op, schema, prefix + INDENT, out);
+    out.push(`${prefix}}`);
+    return;
+  }
+
+  // Single-line form: `<id> = <op> <args>`
+  out.push(`${prefix}${head}${op.op}${_renderArgsInline(op, schema)}${_renderExtrasInline(op, schema)}`);
+}
+
+function _renderArgsInline(op, schema) {
+  if (!schema || !op.args) return '';
+  if (op.args.length === 0) return '';
+
+  if (schema.arity === 'fixed') {
+    const parts = [];
+    for (let i = 0; i < op.args.length; i++) {
+      parts.push(_renderArg(op.args[i], schema.args[i]));
+    }
+    return ' ' + parts.join(', ');
+  }
+
+  switch (schema.args) {
+    case 'ssa_list':
+      return ' ' + op.args.map(a => String(a)).join(', ');
+    case 'pair_list':
+      return ' ' + op.args.map(p => {
+        if (!p) return 'null';
+        if (p.spread) return `...${p.id}`;
+        return `${JSON.stringify(p.key)}: ${p.id}`;
+      }).join(', ');
+    case 'method_call':
+      // [obj, method, ...args]
+      if (op.args.length < 2) return ' ' + op.args.map(_lit).join(', ');
+      return ` ${op.args[0]}.${op.args[1]}(${op.args.slice(2).join(', ')})`;
+    case 'ta_new_args':
+      if (op.args.length < 1) return '';
+      return ` <${op.args[0]}>(${op.args.slice(1).join(', ')})`;
+    case 'label_optional':
+      return op.args.length ? ' ' + JSON.stringify(op.args[0]) : '';
+    case 'ssa_optional':
+      return op.args.length ? ' ' + op.args[0] : '';
+    default:
+      return ' ' + op.args.map(_lit).join(', ');
+  }
+}
+
+function _renderArg(v, kind) {
+  if (kind === 'ssa') return String(v);
+  if (kind === 'name' || kind === 'key' || kind === 'label' ||
+      kind === 'meta_name' || kind === 'meta_prop' ||
+      kind === 'func_name' || kind === 'class_name' || kind === 'source')
+    return JSON.stringify(v);
+  if (kind === 'literal') return _lit(v);
+  return _lit(v);
+}
+
+function _lit(v) {
+  if (v === undefined) return 'undefined';
+  if (v === null) return 'null';
+  if (typeof v === 'string') return JSON.stringify(v);
+  if (typeof v === 'bigint') return `${v}n`;
+  if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+  if (v instanceof RegExp) return v.toString();
+  try { return JSON.stringify(v); } catch { return String(v); }
+}
+
+function _renderExtrasInline(op, schema) {
+  if (!schema || !schema.extras) return '';
+  const parts = [];
+  for (const [key, spec] of Object.entries(schema.extras)) {
+    const val = op[key];
+    if (val === undefined || val === null) continue;
+    // Skip 'phi_list?', 'param_list', 'member_list', 'case_list' — these
+    // are heavy and printed inside region blocks; if we're here, the op
+    // has none of those (no region map), so they shouldn't be present.
+    if (spec === 'phi_list?' || spec === 'param_list' || spec === 'member_list' ||
+        spec === 'case_list') continue;
+    parts.push(`${key}=${_renderExtraValue(val, spec)}`);
+  }
+  return parts.length ? `  // ${parts.join(', ')}` : '';
+}
+
+function _renderExtraValue(val, spec) {
+  if (spec === 'ssa' || spec === 'ssa?') return String(val);
+  if (spec === 'string' || spec === 'string?') return JSON.stringify(val);
+  if (spec === 'bool' || spec === 'bool?') return String(val);
+  if (spec === 'type' || spec === 'type?') {
+    return val && val.kind ? val.kind : '?';
+  }
+  return _lit(val);
+}
+
+function _printRegionsAndExtras(op, schema, prefix, out) {
+  // Print extras first (inline scalars), then regions.
+  if (schema && schema.extras) {
+    for (const [key, spec] of Object.entries(schema.extras)) {
+      const val = op[key];
+      if (val === undefined || val === null) continue;
+      if (spec === 'phi_list?' || spec === 'phi_list') {
+        if (Array.isArray(val) && val.length) {
+          out.push(`${prefix}${key}: [`);
+          for (const phi of val) {
+            const cnt = phi.var
+              ? `${phi.var}: then=${phi.then_val ?? '_'} else=${phi.else_val ?? '_'}`
+              : JSON.stringify(phi);
+            out.push(`${prefix}${INDENT}${cnt}`);
+          }
+          out.push(`${prefix}]`);
+        }
+        continue;
+      }
+      if (spec === 'param_list') {
+        out.push(`${prefix}${key}: ${_renderParamList(val)}`);
+        continue;
+      }
+      if (spec === 'member_list') {
+        // members printed via forEachRegion's synthetic regions; skip here.
+        continue;
+      }
+      if (spec === 'case_list') {
+        // cases printed via forEachRegion below
+        continue;
+      }
+      // Scalar extra
+      out.push(`${prefix}${key}: ${_renderExtraValue(val, spec)}`);
+    }
+  }
+
+  // Regions
+  forEachRegion(op, (rname, rops) => {
+    if (rops.length === 0) {
+      out.push(`${prefix}${rname}: []`);
+      return;
+    }
+    out.push(`${prefix}${rname}: [`);
+    for (const child of rops) {
+      _printOp(child, prefix + INDENT, out);
+    }
+    out.push(`${prefix}]`);
+  });
+}
+
+function _renderParamList(params) {
+  if (!Array.isArray(params)) return '?';
+  const parts = params.map(p => {
+    if (typeof p === 'string') return p;
+    if (p && p.name) {
+      let s = p.name;
+      if (p.type && p.type.kind && p.type.kind !== 'dynamic') s += `: ${p.type.kind}`;
+      if (p.default !== undefined) s += ' = …';
+      return s;
+    }
+    return _lit(p);
+  });
+  return `(${parts.join(', ')})`;
+}
+
+// -- validate.js --
+
+// @gcu/air — IR validator (v0.3 §3.2)
+//
+// Schema-driven shape check. Walks every op in a module and verifies it
+// matches its OP_SCHEMA row: known op type, correct arity, required extras
+// present, no dangling SSA refs (ids referenced must point to ops that
+// exist within the same scope chain).
+//
+// Off by default in production for performance; opt in via runPasses({
+// validate: true }) — wired for the test harness, dev-mode browser
+// (?airdebug=1), and one-off debugging.
+//
+// Bug classes the validator catches at IR-build time, before reaching the
+// emitter (see v0.3 §3.2):
+//   - lowerForOf forgetting target_name           → arity check fails
+//   - lowerUnary emitting `add` with one arg      → arity check fails
+//   - missing required extras (e.g. cases for switch_region)
+//   - dangling SSA refs (consumer ahead of producer)
+//   - unknown op types
+
+
+class AirValidationError extends Error {
+  constructor(errors, ir) {
+    const head = errors.slice(0, 5).map(e => '  ' + e).join('\n');
+    const more = errors.length > 5 ? `\n  … and ${errors.length - 5} more` : '';
+    const irBlock = ir ? `\n\nIR:\n${ir}` : '';
+    super(`AIR validation failed (${errors.length} error${errors.length === 1 ? '' : 's'}):\n${head}${more}${irBlock}`);
+    this.errors = errors;
+    this.ir = ir;
+    this.name = 'AirValidationError';
+  }
+}
+
+/**
+ * Validate an AIR module against the schema.
+ * Returns array of error strings; empty array means valid.
+ *
+ * Does NOT throw — caller decides. (validateOrThrow does.)
+ *
+ * Reference-resolution model: flat-set, not strict scope-aware. Cross-region
+ * "result" extras (if_region.then_val pointing into then_body, for_region.
+ * test_val pointing into test, phi entries pointing into branch bodies) are
+ * legitimate uses but live across scope boundaries. A strict scope-aware
+ * walker would reject them as false positives. Flat-set still catches the
+ * real bug class — typos, ordering errors, malformed lowering output —
+ * without the scope-tracking complexity. Strict scoping is a future
+ * enhancement (v0.3 step 7's ScopeChain makes it cheap once landed).
+ */
+function validateModule(module) {
+  const errors = [];
+
+  // Pass 1: collect every SSA id produced anywhere in the module.
+  const allIds = new Set();
+  const collect = (ops) => {
+    for (const op of ops) {
+      if (op.id) allIds.add(op.id);
+      forEachRegion(op, (_n, rops) => collect(rops));
+    }
+  };
+  collect(module.ops);
+
+  // Pass 2: walk + validate each op against the schema.
+  const validate = (ops, path) => {
+    for (let i = 0; i < ops.length; i++) {
+      const op = ops[i];
+      const opPath = `${path}[${i}]:${op.op}`;
+      const schema = OP_SCHEMA[op.op];
+
+      if (!schema) {
+        errors.push(`${opPath}: unknown op '${op.op}'`);
+        forEachRegion(op, (rname, rops) => validate(rops, `${opPath}.${rname}`));
+        continue;
+      }
+
+      _checkArity(op, schema, opPath, errors);
+
+      const required = requiredExtras(op.op);
+      for (const k of required) {
+        if (op[k] === undefined || op[k] === null) {
+          errors.push(`${opPath}: missing required extra '${k}'`);
+        }
+      }
+
+      forEachSsaRef(op, (id) => {
+        if (!allIds.has(id)) {
+          errors.push(`${opPath}: dangling ref ${id}`);
+        }
+      });
+
+      forEachRegion(op, (rname, rops) => validate(rops, `${opPath}.${rname}`));
+    }
+  };
+
+  validate(module.ops, 'root');
+  return errors;
+}
+
+/**
+ * Validate and throw AirValidationError on failure.
+ * Used by runPasses when opts.validate === true and by tests.
+ */
+function validateOrThrow(module, irRenderer) {
+  const errors = validateModule(module);
+  if (errors.length === 0) return;
+  let ir;
+  if (typeof irRenderer === 'function') {
+    try { ir = irRenderer(module); } catch { /* renderer optional */ }
+  }
+  throw new AirValidationError(errors, ir);
+}
+
+// ── Arity helpers ───────────────────────────────────────────────────
+
+function _checkArity(op, schema, opPath, errors) {
+  const args = op.args;
+  if (!Array.isArray(args)) {
+    errors.push(`${opPath}: args is not an array`);
+    return;
+  }
+
+  if (schema.arity === 'fixed') {
+    const expected = schema.args.length;
+    if (args.length !== expected) {
+      errors.push(`${opPath}: expected ${expected} args, got ${args.length}`);
+    }
+    // Soft-check positions: for SSA-typed slots, ensure the value looks
+    // like an SSA id ('%N'). For LITERAL/STRING/NAME slots we don't try
+    // to validate content semantically — just that they're present.
+    for (let i = 0; i < Math.min(args.length, expected); i++) {
+      const expectedKind = schema.args[i];
+      const v = args[i];
+      if (expectedKind === 'ssa') {
+        if (!_isSsaId(v)) {
+          errors.push(`${opPath}: arg[${i}] expected ssa, got ${_describe(v)}`);
+        }
+      }
+    }
+    return;
+  }
+
+  // Variadic shapes
+  switch (schema.args) {
+    case 'ssa_list':
+      for (let i = 0; i < args.length; i++) {
+        if (!_isSsaId(args[i])) {
+          errors.push(`${opPath}: arg[${i}] expected ssa, got ${_describe(args[i])}`);
+        }
+      }
+      break;
+    case 'pair_list':
+      for (let i = 0; i < args.length; i++) {
+        const p = args[i];
+        if (!p || typeof p !== 'object') {
+          errors.push(`${opPath}: arg[${i}] expected pair record, got ${_describe(p)}`);
+          continue;
+        }
+        if (!('key' in p) && !('spread' in p)) {
+          errors.push(`${opPath}: arg[${i}] missing 'key' or 'spread'`);
+        }
+        if (!_isSsaId(p.id)) {
+          errors.push(`${opPath}: arg[${i}].id expected ssa, got ${_describe(p.id)}`);
+        }
+      }
+      break;
+    case 'method_call':
+      // [obj_ssa, method_key (string), ...arg_ssa]
+      if (args.length < 2) {
+        errors.push(`${opPath}: expected at least [obj, method], got ${args.length} args`);
+      } else {
+        if (!_isSsaId(args[0])) {
+          errors.push(`${opPath}: arg[0] expected obj ssa, got ${_describe(args[0])}`);
+        }
+        if (typeof args[1] !== 'string') {
+          errors.push(`${opPath}: arg[1] expected method name string, got ${_describe(args[1])}`);
+        }
+        for (let i = 2; i < args.length; i++) {
+          if (!_isSsaId(args[i])) {
+            errors.push(`${opPath}: arg[${i}] expected ssa, got ${_describe(args[i])}`);
+          }
+        }
+      }
+      break;
+    case 'ta_new_args':
+      // [kind_string, ...ssa]
+      if (args.length < 1) {
+        errors.push(`${opPath}: ta_new requires at least element kind`);
+      } else {
+        if (typeof args[0] !== 'string') {
+          errors.push(`${opPath}: arg[0] expected element-kind string, got ${_describe(args[0])}`);
+        }
+        for (let i = 1; i < args.length; i++) {
+          if (!_isSsaId(args[i])) {
+            errors.push(`${opPath}: arg[${i}] expected ssa, got ${_describe(args[i])}`);
+          }
+        }
+      }
+      break;
+    case 'label_optional':
+      if (args.length > 1) {
+        errors.push(`${opPath}: label_optional accepts 0 or 1 args, got ${args.length}`);
+      }
+      break;
+    case 'ssa_optional':
+      if (args.length > 1) {
+        errors.push(`${opPath}: ssa_optional accepts 0 or 1 args, got ${args.length}`);
+      }
+      if (args.length === 1 && !_isSsaId(args[0])) {
+        errors.push(`${opPath}: arg[0] expected ssa, got ${_describe(args[0])}`);
+      }
+      break;
+    default:
+      errors.push(`${opPath}: schema declares unknown variadic shape '${schema.args}'`);
+  }
+}
+
+function _isSsaId(v) {
+  return typeof v === 'string' && v.length > 0 && v[0] === '%';
+}
+
+function _describe(v) {
+  if (v === null) return 'null';
+  if (v === undefined) return 'undefined';
+  const t = typeof v;
+  if (t === 'string') return `string ${JSON.stringify(v.slice(0, 30))}`;
+  if (t === 'number' || t === 'boolean') return `${t} ${v}`;
+  return t;
+}
+
 // -- lower_js.js --
 
 // @gcu/air — JS/TS lowerer: ESTree → AIR
@@ -3607,6 +4618,9 @@ function emitOpaque(ctx, op) {
 
 
 
+
+
+
 // ── Lowerer registry ───────────────────────────────────────────────
 // Languages other than JS register themselves here. AIR self-registers
 // 'js' below in the browser-init block. Each registered lowerer is a
@@ -3898,6 +4912,7 @@ function extractExportTypes(module) {
 }
 
 
+
 // --- Browser init: register AIR on window ---
 // When loaded in the browser with Acorn available, create the parser
 // and set window._air for dag.js and exec.js to pick up.
@@ -3914,6 +4929,16 @@ if (typeof window !== 'undefined' && window.Acorn) {
   window._airEmit = emitJS;
   window._airNeedsAsync = needsAsync;
 
+  // v0.3 §3.2: dev-mode validator. URL flag `?airdebug=1` flips it on so
+  // notebook authors hit IR-shape bugs at fail-fast time instead of mystery
+  // emit-time output. Off by default in production.
+  try {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('airdebug') === '1') window._airValidate = true;
+  } catch { /* file:// or other non-URL contexts — ignore */ }
+  window._airValidateModule = validateModule;
+  window._airPrettyPrint = prettyPrint;
+
   // Lowerer registry — frontends register their own lowerers here.
   window._airRegisterLowerer = registerLowerer;
   window._airGetLowerer = function(language) {
@@ -3927,6 +4952,16 @@ if (typeof window !== 'undefined' && window.Acorn) {
       try {
         const air = fn(ast, code);
         runPasses(air);
+        // v0.3 §3.2: opt-in validator. window._airValidate flips on under
+        // ?airdebug=1; tests call validateModule directly. Wraps a real
+        // bug as a clear "AIR shape mismatch" error instead of a mystery
+        // emit-time exception or silent miscompile.
+        if (typeof window !== 'undefined' && window._airValidate) {
+          validateOrThrow(air, prettyPrint);
+        }
+        // v0.3 fold-in: coverage stats. Cheap single walk; lets debug
+        // panels report "21/26 ops on AIR fast path, 3 opaque, 8 dyn".
+        air._airStats = computeStats(air);
         return { air, defines: air.defines };
       } catch (e) {
         if (e && e._airFallback) return null;
