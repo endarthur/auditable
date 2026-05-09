@@ -6,28 +6,28 @@
 
 `@gcu/air` is the compiler infrastructure that powers Auditable's reactive cell engine. Every JS, Python (`@gcu/adder`), or Soft (`@gcu/soft`) cell goes through AIR: parse → lower to a structured SSA IR → run optimization passes → emit V8-friendly JavaScript (or, in the future, WebAssembly via `@atra`).
 
-This notebook lets you peek at AIR's IR directly. Type JavaScript on the left, see the lowered IR on the right.
+This notebook lets you peek at AIR's IR directly — edit the **source** cell below and watch the IR cell re-render.
 
 `window._airAnalyzer(code)` is what the runtime calls for every cell. `window._airPrettyPrint(module)` is the human-readable renderer (added in v0.3 for debugging).
 
-/// html
-<div style="display:flex;gap:1rem;align-items:flex-start">
-  <div style="flex:1">
-    <label style="font-size:0.85em;color:var(--muted)">source</label>
-    <audit-text-input name="src" rows="14" value="const n: i32 = 10;
+/// code
+// Edit this source string to try different snippets. Type annotations
+// (`: i32`, `: f64`, etc.) are opt-in performance hints AIR uses for
+// type propagation. They show up as types on each op in the IR below.
+const source = `
+const n: i32 = 10;
 let total: i32 = 0;
 for (let i = 0; i < n; i++) {
   total = total + i * 2;
-}"></audit-text-input>
-  </div>
-</div>
+}
+`.trim();
 
 /// code
-// Lower whatever the user typed and pretty-print the AIR.
+// Lower whatever the source cell holds and pretty-print the AIR.
 //
 // `_airAnalyzer` parses + lowers + runs passes + extracts defines/uses.
-// On parse error it returns null (graceful — the textbox might be mid-edit).
-const result = window._airAnalyzer ? window._airAnalyzer(src) : null;
+// On parse error it returns null (graceful — source might be mid-edit).
+const result = window._airAnalyzer ? window._airAnalyzer(source) : null;
 
 if (!result) {
   ui.display(std.el('pre', { style: 'color:var(--err)' },
