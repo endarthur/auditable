@@ -95,4 +95,39 @@ class BaseLowerCtx {
   loc(_node) { return null; }
 }
 
-export { BaseLowerCtx, mkOp, makeIdGen };
+/**
+ * Run `fn` with `ctx.ops` swapped to a fresh array, capturing whatever ops
+ * `fn` emits during its execution. Restore the previous `ctx.ops` and
+ * return the captured array.
+ *
+ * Replaces the save-ops / lower-body / restore-ops idiom that every
+ * region-introducing lowering function in all three lowerers used to
+ * inline:
+ *
+ *   const savedOps = ctx.ops;
+ *   ctx.ops = [];
+ *   for (const s of body) lowerStmt(ctx, s);
+ *   const bodyOps = ctx.ops;
+ *   ctx.ops = savedOps;
+ *
+ * Becomes:
+ *
+ *   const bodyOps = captureOps(ctx, () => {
+ *     for (const s of body) lowerStmt(ctx, s);
+ *   });
+ *
+ * Restores `ctx.ops` even if `fn` throws, so partial errors don't leave
+ * the lowerer with a stale ops array referencing a half-built region.
+ */
+function captureOps(ctx, fn) {
+  const saved = ctx.ops;
+  ctx.ops = [];
+  try {
+    fn();
+    return ctx.ops;
+  } finally {
+    ctx.ops = saved;
+  }
+}
+
+export { BaseLowerCtx, mkOp, makeIdGen, captureOps };

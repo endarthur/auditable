@@ -426,6 +426,41 @@ class BaseLowerCtx {
   loc(_node) { return null; }
 }
 
+/**
+ * Run `fn` with `ctx.ops` swapped to a fresh array, capturing whatever ops
+ * `fn` emits during its execution. Restore the previous `ctx.ops` and
+ * return the captured array.
+ *
+ * Replaces the save-ops / lower-body / restore-ops idiom that every
+ * region-introducing lowering function in all three lowerers used to
+ * inline:
+ *
+ *   const savedOps = ctx.ops;
+ *   ctx.ops = [];
+ *   for (const s of body) lowerStmt(ctx, s);
+ *   const bodyOps = ctx.ops;
+ *   ctx.ops = savedOps;
+ *
+ * Becomes:
+ *
+ *   const bodyOps = captureOps(ctx, () => {
+ *     for (const s of body) lowerStmt(ctx, s);
+ *   });
+ *
+ * Restores `ctx.ops` even if `fn` throws, so partial errors don't leave
+ * the lowerer with a stale ops array referencing a half-built region.
+ */
+function captureOps(ctx, fn) {
+  const saved = ctx.ops;
+  ctx.ops = [];
+  try {
+    fn();
+    return ctx.ops;
+  } finally {
+    ctx.ops = saved;
+  }
+}
+
 // -- parse.js --
 
 // adder v2 — tokenizer + recursive-descent parser
@@ -5802,12 +5837,10 @@ function lowerStmt_ad(ctx, node) {
       const test = lowerExpr_ad(ctx, node.test);
       const truthy = emitPyCall(ctx, 'truthy', [test], l, BOOL);
       // if (!truthy) raise AssertionError
-      const savedOps = ctx.ops;
-      ctx.ops = [];
-      const msg = node.msg ? lowerExpr_ad(ctx, node.msg) : ctx.emit('const', ['assertion failed'], STRING, l);
-      emitPyCall(ctx, 'raise', [msg], l, VOID);
-      const thenBody = ctx.ops;
-      ctx.ops = savedOps;
+      const thenBody = captureOps(ctx, () => {
+        const msg = node.msg ? lowerExpr_ad(ctx, node.msg) : ctx.emit('const', ['assertion failed'], STRING, l);
+        emitPyCall(ctx, 'raise', [msg], l, VOID);
+      });
       // Emit: if (!_py.truthy(test)) { raise msg }
       const notTruthy = ctx.emit('logical_not', [truthy.id], BOOL, l);
       ctx.emit('if_region', [notTruthy.id], VOID, l, {
@@ -5925,16 +5958,9 @@ function lowerExpr_ad(ctx, node) {
       // a if cond else b — ternary
       const cond = lowerExpr_ad(ctx, node.test);
       const truthy = emitPyCall(ctx, 'truthy', [cond], l, BOOL);
-
-      const savedOps = ctx.ops;
-      ctx.ops = [];
-      const thenVal = lowerExpr_ad(ctx, node.body);
-      const thenBody = ctx.ops;
-      ctx.ops = [];
-      const elseVal = lowerExpr_ad(ctx, node.orelse);
-      const elseBody = ctx.ops;
-      ctx.ops = savedOps;
-
+      let thenVal = null, elseVal = null;
+      const thenBody = captureOps(ctx, () => { thenVal = lowerExpr_ad(ctx, node.body); });
+      const elseBody = captureOps(ctx, () => { elseVal = lowerExpr_ad(ctx, node.orelse); });
       return ctx.emit('if_region', [truthy.id], DYNAMIC, l, {
         then_body: thenBody,
         else_body: elseBody,
@@ -6061,12 +6087,8 @@ function lowerBoolOp(ctx, node) {
   let result = lowerExpr_ad(ctx, node.values[0]);
   for (let i = 1; i < node.values.length; i++) {
     const truthy = emitPyCall(ctx, 'truthy', [result], l, BOOL);
-    const savedOps = ctx.ops;
-
-    ctx.ops = [];
-    const next = lowerExpr_ad(ctx, node.values[i]);
-    const nextBody = ctx.ops;
-    ctx.ops = savedOps;
+    let next = null;
+    const nextBody = captureOps(ctx, () => { next = lowerExpr_ad(ctx, node.values[i]); });
 
     if (node.op === 'and') {
       // if truthy(prev): next else: prev
@@ -6345,17 +6367,15 @@ function lowerTry_ad(ctx, node) {
   // try: body [except [Type] [as name]: handler] [else: orelse] [finally: finalbody]
   const l = ctx.loc(node);
 
-  const savedOps = ctx.ops;
-
-  // try body
-  ctx.ops = [];
-  for (const s of node.body) lowerStmt_ad(ctx, s);
-  // If there's an else clause and no exception, run it too. Represent as:
-  // try { body; else_body } catch { handlers } finally { finalbody }
-  if (node.orelse && node.orelse.length) {
-    for (const s of node.orelse) lowerStmt_ad(ctx, s);
-  }
-  const tryBody = ctx.ops;
+  // try body (plus else clause appended — represents Python's "run else
+  // only when no exception" semantically by treating it as the tail of
+  // the try body)
+  const tryBody = captureOps(ctx, () => {
+    for (const s of node.body) lowerStmt_ad(ctx, s);
+    if (node.orelse && node.orelse.length) {
+      for (const s of node.orelse) lowerStmt_ad(ctx, s);
+    }
+  });
 
   // Catch handlers — build a combined catch body that checks each handler's type
   // Use a single JS catch(__e) that does an if/else chain of _py.matchException.
@@ -6363,11 +6383,6 @@ function lowerTry_ad(ctx, node) {
   let catchBody = [];
   if (node.handlers && node.handlers.length) {
     catchParam = '__exc';
-    ctx.ops = [];
-    // Build if/elif chain
-    let elseChain = ctx.ops; // initially the current ops
-    let firstHandlerOps = null;
-    let lastElseBody = null;
 
     // We'll manually build a nested if_region ladder
     function buildHandler(idx) {
@@ -6392,38 +6407,30 @@ function lowerTry_ad(ctx, node) {
       const excLoad = ctx.emit('load', [catchParam], DYNAMIC, l);
       const cond = emitPyCall(ctx, 'matchException', [excLoad, excType], l, BOOL);
 
-      const savedInner = ctx.ops;
-      // then branch: bind name and run handler body
-      ctx.ops = [];
-      if (h.name) {
-        const excLoad2 = ctx.emit('load', [catchParam], DYNAMIC, l);
-        ctx.emit('store', [h.name, excLoad2.id], VOID, l);
-        ctx.symbols.set(h.name, excLoad2.id);
-      }
-      for (const s of h.body) lowerStmt_ad(ctx, s);
-      const thenBody = ctx.ops;
-      // else branch: next handler
-      ctx.ops = [];
-      buildHandler(idx + 1);
-      const elseBody = ctx.ops;
-      ctx.ops = savedInner;
+      const thenBody = captureOps(ctx, () => {
+        if (h.name) {
+          const excLoad2 = ctx.emit('load', [catchParam], DYNAMIC, l);
+          ctx.emit('store', [h.name, excLoad2.id], VOID, l);
+          ctx.symbols.set(h.name, excLoad2.id);
+        }
+        for (const s of h.body) lowerStmt_ad(ctx, s);
+      });
+      const elseBody = captureOps(ctx, () => buildHandler(idx + 1));
       ctx.emit('if_region', [cond.id], VOID, l, {
         then_body: thenBody, else_body: elseBody, phis: [],
       });
     }
-    buildHandler(0);
-    catchBody = ctx.ops;
+    catchBody = captureOps(ctx, () => buildHandler(0));
   }
 
   // Finally
   let finallyBody = [];
   if (node.finalbody && node.finalbody.length) {
-    ctx.ops = [];
-    for (const s of node.finalbody) lowerStmt_ad(ctx, s);
-    finallyBody = ctx.ops;
+    finallyBody = captureOps(ctx, () => {
+      for (const s of node.finalbody) lowerStmt_ad(ctx, s);
+    });
   }
 
-  ctx.ops = savedOps;
   return ctx.emit('try_region', [], VOID, l, {
     try_body: tryBody,
     catch_param: catchParam,
@@ -6439,10 +6446,7 @@ function lowerWith(ctx, node) {
   // This misses __exit__ exception suppression semantics — acceptable for v1.
   const l = ctx.loc(node);
 
-  const savedOps = ctx.ops;
-
   // Enter each context manager; record (mgr, exit) pairs as synthetic locals
-  const enterOps = [];
   const tempNames = [];
   for (let i = 0; i < node.items.length; i++) {
     const item = node.items[i];
@@ -6462,21 +6466,19 @@ function lowerWith(ctx, node) {
   }
 
   // try { body } finally { for each manager in reverse: __exit__(None, None, None) }
-  ctx.ops = [];
-  for (const s of node.body) lowerStmt_ad(ctx, s);
-  const tryBody = ctx.ops;
+  const tryBody = captureOps(ctx, () => {
+    for (const s of node.body) lowerStmt_ad(ctx, s);
+  });
+  const finallyBody = captureOps(ctx, () => {
+    for (let i = tempNames.length - 1; i >= 0; i--) {
+      const mgrLoad = ctx.emit('load', [tempNames[i]], DYNAMIC, l);
+      const exitName = ctx.emit('const', ['__exit__'], STRING, l);
+      const exitFn = emitPyCall(ctx, 'getattr', [mgrLoad, exitName], l);
+      const noneVal = ctx.emit('const', [null], VOID, l);
+      emitAwaitedCall_ad(ctx, exitFn.id, [noneVal.id, noneVal.id, noneVal.id], l);
+    }
+  });
 
-  ctx.ops = [];
-  for (let i = tempNames.length - 1; i >= 0; i--) {
-    const mgrLoad = ctx.emit('load', [tempNames[i]], DYNAMIC, l);
-    const exitName = ctx.emit('const', ['__exit__'], STRING, l);
-    const exitFn = emitPyCall(ctx, 'getattr', [mgrLoad, exitName], l);
-    const noneVal = ctx.emit('const', [null], VOID, l);
-    emitAwaitedCall_ad(ctx, exitFn.id, [noneVal.id, noneVal.id, noneVal.id], l);
-  }
-  const finallyBody = ctx.ops;
-
-  ctx.ops = savedOps;
   return ctx.emit('try_region', [], VOID, l, {
     try_body: tryBody,
     catch_param: null,
@@ -6497,40 +6499,37 @@ function lowerClassDef(ctx, node) {
   // Lower class body as a function that receives an empty object and populates it.
   // The class body is a sequence of statements (method defs, assignments, etc.)
   // that assign to names. We collect them into an object we return.
-  const savedOps = ctx.ops;
   const savedTopLevel = ctx.topLevel;
-
   ctx.topLevel = false;
-  ctx.ops = [];
   ctx.symbols = ctx.symbols.push();
 
-  // Run class body — method defs become locals, assignments become locals
-  for (const stmt of node.body) lowerStmt_ad(ctx, stmt);
+  const body = captureOps(ctx, () => {
+    // Run class body — method defs become locals, assignments become locals
+    for (const stmt of node.body) lowerStmt_ad(ctx, stmt);
 
-  // Build the class members dict from the locals
-  // We need to track which names were defined in the class body.
-  // Use a synthetic approach: collect names via post-analysis of the ops.
-  const classMemberNames = [];
-  for (const op of ctx.ops) {
-    if (op.op === 'store' && typeof op.args[0] === 'string' &&
-        !op.args[0].startsWith('__') && !classMemberNames.includes(op.args[0])) {
-      classMemberNames.push(op.args[0]);
+    // Build the class members dict from the locals
+    // We need to track which names were defined in the class body.
+    // Use a synthetic approach: collect names via post-analysis of the ops.
+    const classMemberNames = [];
+    for (const op of ctx.ops) {
+      if (op.op === 'store' && typeof op.args[0] === 'string' &&
+          !op.args[0].startsWith('__') && !classMemberNames.includes(op.args[0])) {
+        classMemberNames.push(op.args[0]);
+      }
+      // Also catch func_region direct defines
+      if (op.op === 'func_region' && op.name && !classMemberNames.includes(op.name)) {
+        classMemberNames.push(op.name);
+      }
     }
-    // Also catch func_region direct defines
-    if (op.op === 'func_region' && op.name && !classMemberNames.includes(op.name)) {
-      classMemberNames.push(op.name);
-    }
-  }
-  // Append object literal containing all member names
-  const pairs = classMemberNames.map(n => ({
-    key: n,
-    id: ctx.emit('load', [n], DYNAMIC, l).id,
-  }));
-  const membersObj = ctx.emit('object_new', pairs, DYNAMIC, l);
-  ctx.emit('return', [membersObj.id], VOID, l);
+    // Append object literal containing all member names
+    const pairs = classMemberNames.map(n => ({
+      key: n,
+      id: ctx.emit('load', [n], DYNAMIC, l).id,
+    }));
+    const membersObj = ctx.emit('object_new', pairs, DYNAMIC, l);
+    ctx.emit('return', [membersObj.id], VOID, l);
+  });
 
-  const body = ctx.ops;
-  ctx.ops = savedOps;
   ctx.topLevel = savedTopLevel;
   ctx.symbols = ctx.symbols.pop();
 
@@ -6657,19 +6656,12 @@ function lowerIf_ad(ctx, node) {
   const l = ctx.loc(node);
   const test = lowerExpr_ad(ctx, node.test);
   const truthy = emitPyCall(ctx, 'truthy', [test], l, BOOL);
-
-  const savedOps = ctx.ops;
-
-  ctx.ops = [];
-  for (const s of node.body) lowerStmt_ad(ctx, s);
-  const thenBody = ctx.ops;
-
-  ctx.ops = [];
-  if (node.orelse) for (const s of node.orelse) lowerStmt_ad(ctx, s);
-  const elseBody = ctx.ops;
-
-  ctx.ops = savedOps;
-
+  const thenBody = captureOps(ctx, () => {
+    for (const s of node.body) lowerStmt_ad(ctx, s);
+  });
+  const elseBody = captureOps(ctx, () => {
+    if (node.orelse) for (const s of node.orelse) lowerStmt_ad(ctx, s);
+  });
   return ctx.emit('if_region', [truthy.id], VOID, l, {
     then_body: thenBody,
     else_body: elseBody,
@@ -6695,12 +6687,9 @@ function lowerFor_ad(ctx, node) {
     ctx.symbols.set(loopVar, undefOp.id);
     if (ctx.topLevel) ctx.defines.add(loopVar);
 
-    const savedOps = ctx.ops;
-    ctx.ops = [];
-    for (const s of node.body) lowerStmt_ad(ctx, s);
-    const body = ctx.ops;
-    ctx.ops = savedOps;
-
+    const body = captureOps(ctx, () => {
+      for (const s of node.body) lowerStmt_ad(ctx, s);
+    });
     return ctx.emit('for_of_region', [iterArr.id], VOID, l, {
       body, phis: [], target_name: loopVar,
     });
@@ -6712,20 +6701,17 @@ function lowerFor_ad(ctx, node) {
     // Pre-declare each target element at module scope if top-level
     _preDeclareTargetNames(ctx, node.target, l);
 
-    const savedOps = ctx.ops;
-    ctx.ops = [];
-    // Unpack temp into target
-    const tempLoad = ctx.emit('load', [tempName], DYNAMIC, l);
-    for (let i = 0; i < node.target.elts.length; i++) {
-      const elt = node.target.elts[i];
-      const idx = ctx.emit('const', [i], I32, l);
-      const item = emitPyCall(ctx, 'getitem', [tempLoad, idx], l);
-      lowerAssignTarget(ctx, elt, item, l);
-    }
-    for (const s of node.body) lowerStmt_ad(ctx, s);
-    const body = ctx.ops;
-    ctx.ops = savedOps;
-
+    const body = captureOps(ctx, () => {
+      // Unpack temp into target
+      const tempLoad = ctx.emit('load', [tempName], DYNAMIC, l);
+      for (let i = 0; i < node.target.elts.length; i++) {
+        const elt = node.target.elts[i];
+        const idx = ctx.emit('const', [i], I32, l);
+        const item = emitPyCall(ctx, 'getitem', [tempLoad, idx], l);
+        lowerAssignTarget(ctx, elt, item, l);
+      }
+      for (const s of node.body) lowerStmt_ad(ctx, s);
+    });
     return ctx.emit('for_of_region', [iterArr.id], VOID, l, {
       body, phis: [], target_name: tempName,
     });
@@ -6757,18 +6743,14 @@ function lowerWhile_ad(ctx, node) {
     throw new AirLowerError('while/else not yet supported');
   }
 
-  const savedOps = ctx.ops;
-
-  ctx.ops = [];
-  const test = lowerExpr_ad(ctx, node.test);
-  const truthy = emitPyCall(ctx, 'truthy', [test], l, BOOL);
-  const testOps = ctx.ops;
-
-  ctx.ops = [];
-  for (const s of node.body) lowerStmt_ad(ctx, s);
-  const body = ctx.ops;
-
-  ctx.ops = savedOps;
+  let truthy = null;
+  const testOps = captureOps(ctx, () => {
+    const test = lowerExpr_ad(ctx, node.test);
+    truthy = emitPyCall(ctx, 'truthy', [test], l, BOOL);
+  });
+  const body = captureOps(ctx, () => {
+    for (const s of node.body) lowerStmt_ad(ctx, s);
+  });
 
   return ctx.emit('loop_region', [], VOID, l, {
     test: testOps,
@@ -6838,9 +6820,7 @@ function _buildParamBinding(ctx, node, l) {
   // The JS function signature is `function(...__args)`, and we extract from __args.
   const params = [{ name: '...__args', type: DYNAMIC }];
 
-  const savedOps = ctx.ops;
-  ctx.ops = [];
-
+  const prologueOps = captureOps(ctx, () => {
   // _kwObj = (last arg has _kw marker) ? args.pop() : null
   // const _kwObj = (__args.length > 0 && __args[__args.length-1]?._kw) ? __args.pop() : null;
   emitRaw(ctx, `let __kw = null;`);
@@ -6888,9 +6868,8 @@ function _buildParamBinding(ctx, node, l) {
     emitRaw(ctx, `let ${kwarg} = {}; if (__kw) { const __used = new Set([${excludeList}]); for (const __k in __kw) if (!__used.has(__k)) ${kwarg}[__k] = __kw[__k]; }`);
     ctx.symbols.set(kwarg, null);
   }
+  });
 
-  const prologueOps = ctx.ops;
-  ctx.ops = savedOps;
   return { params, prologueOps, isSimple: false };
 }
 
@@ -6922,29 +6901,29 @@ function lowerFuncDef(ctx, node) {
   // run is replaced by ScopeChain push/pop now that ctx.symbols extends
   // BaseLowerCtx — same semantics, less ceremony.
   const savedTopLevel = ctx.topLevel;
-  const savedOps = ctx.ops;
-
   ctx.topLevel = false;
-  ctx.ops = [];
   ctx.symbols = ctx.symbols.push();
 
-  // Build parameter binding (prologue + JS params)
-  const { params, prologueOps, isSimple } = _buildParamBinding(ctx, node, l);
+  let params = null;
+  let isSimple = null;
+  const body = captureOps(ctx, () => {
+    // Build parameter binding (prologue + JS params)
+    const r = _buildParamBinding(ctx, node, l);
+    params = r.params; isSimple = r.isSimple;
 
-  // Emit prologue ops
-  for (const op of prologueOps) ctx.ops.push(op);
+    // Emit prologue ops
+    for (const op of r.prologueOps) ctx.ops.push(op);
 
-  // Docstring skip (first string expression)
-  let startIdx = 0;
-  if (node.body.length > 0 && node.body[0].type === 'Expr' &&
-      node.body[0].value.type === 'Constant' &&
-      typeof node.body[0].value.value === 'string') {
-    startIdx = 1;
-  }
-  for (let i = startIdx; i < node.body.length; i++) lowerStmt_ad(ctx, node.body[i]);
-  const body = ctx.ops;
+    // Docstring skip (first string expression)
+    let startIdx = 0;
+    if (node.body.length > 0 && node.body[0].type === 'Expr' &&
+        node.body[0].value.type === 'Constant' &&
+        typeof node.body[0].value.value === 'string') {
+      startIdx = 1;
+    }
+    for (let i = startIdx; i < node.body.length; i++) lowerStmt_ad(ctx, node.body[i]);
+  });
 
-  ctx.ops = savedOps;
   ctx.topLevel = savedTopLevel;
   ctx.symbols = ctx.symbols.pop();
 
@@ -6998,21 +6977,20 @@ function lowerFuncDef(ctx, node) {
 function lowerLambda(ctx, node) {
   const l = ctx.loc(node);
   const savedTopLevel = ctx.topLevel;
-  const savedOps = ctx.ops;
-
   ctx.topLevel = false;
-  ctx.ops = [];
   ctx.symbols = ctx.symbols.push();
 
-  // Reuse the function param binding logic
-  const { params, prologueOps } = _buildParamBinding(ctx, node, l);
-  for (const op of prologueOps) ctx.ops.push(op);
+  let params = null;
+  const body = captureOps(ctx, () => {
+    // Reuse the function param binding logic
+    const r = _buildParamBinding(ctx, node, l);
+    params = r.params;
+    for (const op of r.prologueOps) ctx.ops.push(op);
 
-  const val = lowerExpr_ad(ctx, node.body);
-  ctx.emit('return', [val.id], VOID, l);
-  const body = ctx.ops;
+    const val = lowerExpr_ad(ctx, node.body);
+    ctx.emit('return', [val.id], VOID, l);
+  });
 
-  ctx.ops = savedOps;
   ctx.topLevel = savedTopLevel;
   ctx.symbols = ctx.symbols.pop();
 
@@ -7100,49 +7078,41 @@ function lowerComprehension(ctx, node) {
     const iter = lowerExpr_ad(ctx, gen.iter);
     const iterArr = emitPyCall(ctx, 'iter', [iter], l);
 
-    const savedOps = ctx.ops;
-    ctx.ops = [];
-
-    // Handle target (Name or Tuple/List for unpacking)
     let targetName;
-    if (gen.target.type === 'Name') {
-      targetName = gen.target.id;
-      ctx.symbols.set(targetName, null);
-    } else if (gen.target.type === 'Tuple' || gen.target.type === 'List') {
-      targetName = `__gen_${ctx._idGen.peek()}`;
-      _preDeclareTargetNames(ctx, gen.target, l);
-      // Unpack inside the loop body
-      const tempLoad = ctx.emit('load', [targetName], DYNAMIC, l);
-      for (let i = 0; i < gen.target.elts.length; i++) {
-        const elt = gen.target.elts[i];
-        const idx = ctx.emit('const', [i], I32, l);
-        const item = emitPyCall(ctx, 'getitem', [tempLoad, idx], l);
-        lowerAssignTarget(ctx, elt, item, l);
+    const body = captureOps(ctx, () => {
+      // Handle target (Name or Tuple/List for unpacking)
+      if (gen.target.type === 'Name') {
+        targetName = gen.target.id;
+        ctx.symbols.set(targetName, null);
+      } else if (gen.target.type === 'Tuple' || gen.target.type === 'List') {
+        targetName = `__gen_${ctx._idGen.peek()}`;
+        _preDeclareTargetNames(ctx, gen.target, l);
+        // Unpack inside the loop body
+        const tempLoad = ctx.emit('load', [targetName], DYNAMIC, l);
+        for (let i = 0; i < gen.target.elts.length; i++) {
+          const elt = gen.target.elts[i];
+          const idx = ctx.emit('const', [i], I32, l);
+          const item = emitPyCall(ctx, 'getitem', [tempLoad, idx], l);
+          lowerAssignTarget(ctx, elt, item, l);
+        }
+      } else {
+        throw new AirLowerError('unsupported comprehension target type');
       }
-    } else {
-      throw new AirLowerError('unsupported comprehension target type');
-    }
 
-    function withFilters(filterIdx) {
-      if (!gen.ifs || filterIdx >= gen.ifs.length) {
-        buildComp(genIdx + 1);
-        return;
+      function withFilters(filterIdx) {
+        if (!gen.ifs || filterIdx >= gen.ifs.length) {
+          buildComp(genIdx + 1);
+          return;
+        }
+        const cond = lowerExpr_ad(ctx, gen.ifs[filterIdx]);
+        const truthy = emitPyCall(ctx, 'truthy', [cond], l, BOOL);
+        const thenBody = captureOps(ctx, () => withFilters(filterIdx + 1));
+        ctx.emit('if_region', [truthy.id], VOID, l, {
+          then_body: thenBody, else_body: [], phis: [],
+        });
       }
-      const cond = lowerExpr_ad(ctx, gen.ifs[filterIdx]);
-      const truthy = emitPyCall(ctx, 'truthy', [cond], l, BOOL);
-      const savedInner = ctx.ops;
-      ctx.ops = [];
-      withFilters(filterIdx + 1);
-      const thenBody = ctx.ops;
-      ctx.ops = savedInner;
-      ctx.emit('if_region', [truthy.id], VOID, l, {
-        then_body: thenBody, else_body: [], phis: [],
-      });
-    }
-    withFilters(0);
-
-    const body = ctx.ops;
-    ctx.ops = savedOps;
+      withFilters(0);
+    });
 
     ctx.emit('for_of_region', [iterArr.id], VOID, l, {
       body, phis: [], target_name: targetName,

@@ -985,6 +985,41 @@ class BaseLowerCtx {
   loc(_node) { return null; }
 }
 
+/**
+ * Run `fn` with `ctx.ops` swapped to a fresh array, capturing whatever ops
+ * `fn` emits during its execution. Restore the previous `ctx.ops` and
+ * return the captured array.
+ *
+ * Replaces the save-ops / lower-body / restore-ops idiom that every
+ * region-introducing lowering function in all three lowerers used to
+ * inline:
+ *
+ *   const savedOps = ctx.ops;
+ *   ctx.ops = [];
+ *   for (const s of body) lowerStmt(ctx, s);
+ *   const bodyOps = ctx.ops;
+ *   ctx.ops = savedOps;
+ *
+ * Becomes:
+ *
+ *   const bodyOps = captureOps(ctx, () => {
+ *     for (const s of body) lowerStmt(ctx, s);
+ *   });
+ *
+ * Restores `ctx.ops` even if `fn` throws, so partial errors don't leave
+ * the lowerer with a stale ops array referencing a half-built region.
+ */
+function captureOps(ctx, fn) {
+  const saved = ctx.ops;
+  ctx.ops = [];
+  try {
+    fn();
+    return ctx.ops;
+  } finally {
+    ctx.ops = saved;
+  }
+}
+
 // -- text.js --
 
 // @gcu/air — Textual IR pretty-printer + parser (v0.3 §3.4 + §3.10)
@@ -2381,17 +2416,13 @@ function lowerFuncDecl(ctx, node) {
   // reads (the spec §2.3 fix).
   const savedTopLevel = ctx.topLevel;
   ctx.topLevel = false;
-  const bodyOps = [];
-  const savedOps = ctx.ops;
-  ctx.ops = bodyOps;
   ctx.symbols = ctx.symbols.push();
-
-  if (node.body?.type === 'BlockStatement') {
-    for (const stmt of node.body.body) lowerStatement(ctx, stmt);
-  }
-
+  const bodyOps = captureOps(ctx, () => {
+    if (node.body?.type === 'BlockStatement') {
+      for (const stmt of node.body.body) lowerStatement(ctx, stmt);
+    }
+  });
   ctx.symbols = ctx.symbols.pop();
-  ctx.ops = savedOps;
   ctx.topLevel = savedTopLevel;
 
   const fType = func(params.map(p => p.type), retType);
@@ -2419,19 +2450,10 @@ function lowerFuncDecl(ctx, node) {
 function lowerIf(ctx, node) {
   const l = ctx.loc(node);
   const cond = lowerExpr(ctx, node.test);
-
-  const savedOps = ctx.ops;
-
-  ctx.ops = [];
-  lowerStatement(ctx, node.consequent);
-  const thenBody = ctx.ops;
-
-  ctx.ops = [];
-  if (node.alternate) lowerStatement(ctx, node.alternate);
-  const elseBody = ctx.ops;
-
-  ctx.ops = savedOps;
-
+  const thenBody = captureOps(ctx, () => lowerStatement(ctx, node.consequent));
+  const elseBody = captureOps(ctx, () => {
+    if (node.alternate) lowerStatement(ctx, node.alternate);
+  });
   return ctx.emit('if_region', [cond.id], VOID, l, {
     then_body: thenBody,
     else_body: elseBody,
@@ -2441,41 +2463,31 @@ function lowerIf(ctx, node) {
 
 function lowerFor(ctx, node) {
   const l = ctx.loc(node);
-  const savedOps = ctx.ops;
 
   // for-header let/const are block-scoped — push a fresh ctx.symbols frame
   // so `for (let i …)` doesn't leak `i` into the outer scope, where outer
   // type-prop would then read the loop var's last-iteration ssa id.
   ctx.symbols = ctx.symbols.push();
-
-  // init
-  ctx.ops = [];
   const savedTopLevel = ctx.topLevel;
   ctx.topLevel = false;
-  if (node.init) {
-    if (node.init.type === 'VariableDeclaration') lowerVarDecl(ctx, node.init);
-    else lowerExpr(ctx, node.init);
-  }
+
+  let test = null;
+  const initOps = captureOps(ctx, () => {
+    if (node.init) {
+      if (node.init.type === 'VariableDeclaration') lowerVarDecl(ctx, node.init);
+      else lowerExpr(ctx, node.init);
+    }
+  });
+  const testOps = captureOps(ctx, () => {
+    if (node.test) test = lowerExpr(ctx, node.test);
+  });
+  const updateOps = captureOps(ctx, () => {
+    if (node.update) lowerExpr(ctx, node.update);
+  });
+  const bodyOps = captureOps(ctx, () => lowerStatement(ctx, node.body));
+
   ctx.topLevel = savedTopLevel;
-  const initOps = ctx.ops;
-
-  // test
-  ctx.ops = [];
-  const test = node.test ? lowerExpr(ctx, node.test) : null;
-  const testOps = ctx.ops;
-
-  // update
-  ctx.ops = [];
-  if (node.update) lowerExpr(ctx, node.update);
-  const updateOps = ctx.ops;
-
-  // body
-  ctx.ops = [];
-  lowerStatement(ctx, node.body);
-  const bodyOps = ctx.ops;
-
   ctx.symbols = ctx.symbols.pop();
-  ctx.ops = savedOps;
 
   return ctx.emit('for_region', [], VOID, l, {
     init: initOps,
@@ -2490,8 +2502,6 @@ function lowerFor(ctx, node) {
 function lowerForIn(ctx, node) {
   const l = ctx.loc(node);
   const iter = lowerExpr(ctx, node.right);
-  const savedOps = ctx.ops;
-  ctx.ops = [];
   ctx.symbols = ctx.symbols.push();
 
   // Declare the iteration variable (block-scoped, not top-level)
@@ -2502,10 +2512,8 @@ function lowerForIn(ctx, node) {
     }
   }
 
-  lowerStatement(ctx, node.body);
-  const bodyOps = ctx.ops;
+  const bodyOps = captureOps(ctx, () => lowerStatement(ctx, node.body));
   ctx.symbols = ctx.symbols.pop();
-  ctx.ops = savedOps;
 
   return ctx.emit('for_in_region', [iter.id], VOID, l, { body: bodyOps, phis: [] });
 }
@@ -2525,8 +2533,6 @@ function lowerForOf(ctx, node) {
   if (isPatternTarget) return lowerOpaque(ctx, node);
 
   const iter = lowerExpr(ctx, node.right);
-  const savedOps = ctx.ops;
-  ctx.ops = [];
   ctx.symbols = ctx.symbols.push();
 
   // Capture the loop variable's name so the emitter can use it instead of
@@ -2544,10 +2550,8 @@ function lowerForOf(ctx, node) {
     targetName = node.left.name;
   }
 
-  lowerStatement(ctx, node.body);
-  const bodyOps = ctx.ops;
+  const bodyOps = captureOps(ctx, () => lowerStatement(ctx, node.body));
   ctx.symbols = ctx.symbols.pop();
-  ctx.ops = savedOps;
 
   return ctx.emit('for_of_region', [iter.id], VOID, l, {
     body: bodyOps, phis: [], target_name: targetName,
@@ -2556,18 +2560,9 @@ function lowerForOf(ctx, node) {
 
 function lowerWhile(ctx, node) {
   const l = ctx.loc(node);
-  const savedOps = ctx.ops;
-
-  ctx.ops = [];
-  const cond = lowerExpr(ctx, node.test);
-  const testOps = ctx.ops;
-
-  ctx.ops = [];
-  lowerStatement(ctx, node.body);
-  const bodyOps = ctx.ops;
-
-  ctx.ops = savedOps;
-
+  let cond = null;
+  const testOps = captureOps(ctx, () => { cond = lowerExpr(ctx, node.test); });
+  const bodyOps = captureOps(ctx, () => lowerStatement(ctx, node.body));
   return ctx.emit('loop_region', [], VOID, l, {
     test: testOps, test_val: cond.id,
     body: bodyOps, phis: [],
@@ -2577,18 +2572,9 @@ function lowerWhile(ctx, node) {
 
 function lowerDoWhile(ctx, node) {
   const l = ctx.loc(node);
-  const savedOps = ctx.ops;
-
-  ctx.ops = [];
-  lowerStatement(ctx, node.body);
-  const bodyOps = ctx.ops;
-
-  ctx.ops = [];
-  const cond = lowerExpr(ctx, node.test);
-  const testOps = ctx.ops;
-
-  ctx.ops = savedOps;
-
+  const bodyOps = captureOps(ctx, () => lowerStatement(ctx, node.body));
+  let cond = null;
+  const testOps = captureOps(ctx, () => { cond = lowerExpr(ctx, node.test); });
   return ctx.emit('loop_region', [], VOID, l, {
     test: testOps, test_val: cond.id,
     body: bodyOps, phis: [],
@@ -2599,60 +2585,48 @@ function lowerDoWhile(ctx, node) {
 function lowerSwitch(ctx, node) {
   const l = ctx.loc(node);
   const disc = lowerExpr(ctx, node.discriminant);
-  const savedOps = ctx.ops;
-
   const cases = [];
   for (const c of node.cases) {
-    // Lower test expression separately from body
-    ctx.ops = [];
-    const test = c.test ? lowerExpr(ctx, c.test) : null;
-    const testOps = ctx.ops;
-
-    ctx.ops = [];
-    for (const stmt of c.consequent) lowerStatement(ctx, stmt);
-    cases.push({ test_ops: testOps, test_val: test?.id || null, body: ctx.ops });
+    let test = null;
+    const testOps = captureOps(ctx, () => {
+      if (c.test) test = lowerExpr(ctx, c.test);
+    });
+    const body = captureOps(ctx, () => {
+      for (const stmt of c.consequent) lowerStatement(ctx, stmt);
+    });
+    cases.push({ test_ops: testOps, test_val: test?.id || null, body });
   }
-
-  ctx.ops = savedOps;
   return ctx.emit('switch_region', [disc.id], VOID, l, { cases });
 }
 
 function lowerTry(ctx, node) {
   const l = ctx.loc(node);
-  const savedOps = ctx.ops;
 
   // try / catch / finally blocks are each their own block scope. Push
   // around each so let-bindings (and the catch param) don't leak.
-  ctx.ops = [];
   ctx.symbols = ctx.symbols.push();
-  lowerStatement(ctx, node.block);
-  const tryBody = ctx.ops;
+  const tryBody = captureOps(ctx, () => lowerStatement(ctx, node.block));
   ctx.symbols = ctx.symbols.pop();
 
   let catchParam = null;
   let catchBody = [];
   if (node.handler) {
-    ctx.ops = [];
     ctx.symbols = ctx.symbols.push();
     if (node.handler.param?.type === 'Identifier') {
       catchParam = node.handler.param.name;
       ctx.symbols.set(catchParam, null);
     }
-    lowerStatement(ctx, node.handler.body);
-    catchBody = ctx.ops;
+    catchBody = captureOps(ctx, () => lowerStatement(ctx, node.handler.body));
     ctx.symbols = ctx.symbols.pop();
   }
 
   let finallyBody = [];
   if (node.finalizer) {
-    ctx.ops = [];
     ctx.symbols = ctx.symbols.push();
-    lowerStatement(ctx, node.finalizer);
-    finallyBody = ctx.ops;
+    finallyBody = captureOps(ctx, () => lowerStatement(ctx, node.finalizer));
     ctx.symbols = ctx.symbols.pop();
   }
 
-  ctx.ops = savedOps;
   return ctx.emit('try_region', [], VOID, l, {
     try_body: tryBody,
     catch_param: catchParam,
@@ -2663,16 +2637,12 @@ function lowerTry(ctx, node) {
 
 function lowerLabeled(ctx, node) {
   const l = ctx.loc(node);
-  const savedOps = ctx.ops;
-  ctx.ops = [];
   // Track whether body was a block — emitter needs to re-wrap in braces so
   // `label: let x = 1;` (a JS strict-mode error) becomes `label: { let x; }`.
   // Loop bodies bring their own braces; we only wrap when the label was on a
   // bare block.
   const isBlock = node.body?.type === 'BlockStatement';
-  lowerStatement(ctx, node.body);
-  const body = ctx.ops;
-  ctx.ops = savedOps;
+  const body = captureOps(ctx, () => lowerStatement(ctx, node.body));
   return ctx.emit('labeled', [node.label.name], VOID, l, { body, is_block: isBlock });
 }
 
@@ -2703,13 +2673,11 @@ function lowerClassNode(ctx, node, l) {
     const mLoc = ctx.loc(member);
 
     if (member.type === 'StaticBlock') {
-      const savedOps = ctx.ops;
-      ctx.ops = [];
       ctx.symbols = ctx.symbols.push();
-      for (const stmt of member.body) lowerStatement(ctx, stmt);
-      const body = ctx.ops;
+      const body = captureOps(ctx, () => {
+        for (const stmt of member.body) lowerStatement(ctx, stmt);
+      });
       ctx.symbols = ctx.symbols.pop();
-      ctx.ops = savedOps;
       members.push({ kind: 'static_block', body, loc: mLoc });
       continue;
     }
@@ -2754,15 +2722,13 @@ function lowerClassNode(ctx, node, l) {
     });
     const retType = fn.returnType ? resolveAnnotation(fn.returnType) : DYNAMIC;
 
-    const savedOps = ctx.ops;
-    ctx.ops = [];
     ctx.symbols = ctx.symbols.push();
-    if (fn.body?.type === 'BlockStatement') {
-      for (const stmt of fn.body.body) lowerStatement(ctx, stmt);
-    }
-    const bodyOps = ctx.ops;
+    const bodyOps = captureOps(ctx, () => {
+      if (fn.body?.type === 'BlockStatement') {
+        for (const stmt of fn.body.body) lowerStatement(ctx, stmt);
+      }
+    });
     ctx.symbols = ctx.symbols.pop();
-    ctx.ops = savedOps;
 
     const fType = func(params.map(p => p.type), retType);
     const fnOp = ctx.emit('func_region', [null], fType, mLoc, {
@@ -3192,19 +3158,9 @@ function lowerObjectExpr(ctx, node) {
 function lowerConditional(ctx, node) {
   const l = ctx.loc(node);
   const cond = lowerExpr(ctx, node.test);
-
-  const savedOps = ctx.ops;
-
-  ctx.ops = [];
-  const thenVal = lowerExpr(ctx, node.consequent);
-  const thenBody = ctx.ops;
-
-  ctx.ops = [];
-  const elseVal = lowerExpr(ctx, node.alternate);
-  const elseBody = ctx.ops;
-
-  ctx.ops = savedOps;
-
+  let thenVal = null, elseVal = null;
+  const thenBody = captureOps(ctx, () => { thenVal = lowerExpr(ctx, node.consequent); });
+  const elseBody = captureOps(ctx, () => { elseVal = lowerExpr(ctx, node.alternate); });
   return ctx.emit('if_region', [cond.id], DYNAMIC, l, {
     then_body: thenBody,
     else_body: elseBody,
@@ -3246,23 +3202,19 @@ function lowerFuncExpr(ctx, node) {
   const retType = node.returnType ? resolveAnnotation(node.returnType) : DYNAMIC;
 
   const savedTopLevel = ctx.topLevel;
-  const savedOps = ctx.ops;
   ctx.topLevel = false;
-  ctx.ops = [];
   ctx.symbols = ctx.symbols.push();
-
   const body = node.body;
-  if (body.type === 'BlockStatement') {
-    for (const stmt of body.body) lowerStatement(ctx, stmt);
-  } else {
-    // Arrow with expression body
-    const val = lowerExpr(ctx, body);
-    ctx.emit('return', [val.id], VOID, ctx.loc(body));
-  }
-
-  const bodyOps = ctx.ops;
+  const bodyOps = captureOps(ctx, () => {
+    if (body.type === 'BlockStatement') {
+      for (const stmt of body.body) lowerStatement(ctx, stmt);
+    } else {
+      // Arrow with expression body
+      const val = lowerExpr(ctx, body);
+      ctx.emit('return', [val.id], VOID, ctx.loc(body));
+    }
+  });
   ctx.symbols = ctx.symbols.pop();
-  ctx.ops = savedOps;
   ctx.topLevel = savedTopLevel;
 
   const fType = func(params.map(p => p.type), retType);

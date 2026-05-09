@@ -426,6 +426,41 @@ class BaseLowerCtx {
   loc(_node) { return null; }
 }
 
+/**
+ * Run `fn` with `ctx.ops` swapped to a fresh array, capturing whatever ops
+ * `fn` emits during its execution. Restore the previous `ctx.ops` and
+ * return the captured array.
+ *
+ * Replaces the save-ops / lower-body / restore-ops idiom that every
+ * region-introducing lowering function in all three lowerers used to
+ * inline:
+ *
+ *   const savedOps = ctx.ops;
+ *   ctx.ops = [];
+ *   for (const s of body) lowerStmt(ctx, s);
+ *   const bodyOps = ctx.ops;
+ *   ctx.ops = savedOps;
+ *
+ * Becomes:
+ *
+ *   const bodyOps = captureOps(ctx, () => {
+ *     for (const s of body) lowerStmt(ctx, s);
+ *   });
+ *
+ * Restores `ctx.ops` even if `fn` throws, so partial errors don't leave
+ * the lowerer with a stale ops array referencing a half-built region.
+ */
+function captureOps(ctx, fn) {
+  const saved = ctx.ops;
+  ctx.ops = [];
+  try {
+    fn();
+    return ctx.ops;
+  } finally {
+    ctx.ops = saved;
+  }
+}
+
 // -- tokenize.js --
 
 // soft — tokenizer
@@ -3860,12 +3895,8 @@ function lowerLogic(ctx, node) {
   // a or b  → truthy(a) ? a : b
   const left = lowerExpr_sf(ctx, node.left);
   const truthy = emitSoftCall(ctx, 'truthy', [left], l, BOOL);
-
-  const savedOps = ctx.ops;
-  ctx.ops = [];
-  const right = lowerExpr_sf(ctx, node.right);
-  const rightBody = ctx.ops;
-  ctx.ops = savedOps;
+  let right = null;
+  const rightBody = captureOps(ctx, () => { right = lowerExpr_sf(ctx, node.right); });
 
   if (node.op === 'and') {
     return ctx.emit('if_region', [truthy.id], DYNAMIC, l, {
@@ -3902,16 +3933,9 @@ function lowerTernary(ctx, node) {
   // X if cond otherwise Y → _soft.truthy(cond) ? X : Y
   const cond = lowerExpr_sf(ctx, node.cond);
   const truthy = emitSoftCall(ctx, 'truthy', [cond], l, BOOL);
-
-  const savedOps = ctx.ops;
-  ctx.ops = [];
-  const thenVal = lowerExpr_sf(ctx, node.ifTrue);
-  const thenBody = ctx.ops;
-  ctx.ops = [];
-  const elseVal = lowerExpr_sf(ctx, node.ifFalse);
-  const elseBody = ctx.ops;
-  ctx.ops = savedOps;
-
+  let thenVal = null, elseVal = null;
+  const thenBody = captureOps(ctx, () => { thenVal = lowerExpr_sf(ctx, node.ifTrue); });
+  const elseBody = captureOps(ctx, () => { elseVal = lowerExpr_sf(ctx, node.ifFalse); });
   return ctx.emit('if_region', [truthy.id], DYNAMIC, l, {
     then_body: thenBody,
     else_body: elseBody,
@@ -4021,10 +4045,7 @@ function lowerDefine(ctx, node) {
   }
 
   const savedTopLevel = ctx.topLevel;
-  const savedOps = ctx.ops;
-
   ctx.topLevel = false;
-  ctx.ops = [];
   ctx.symbols = ctx.symbols.push();
   for (const p of params) {
     const pname = p.name.replace(/^\.\.\./, '');
@@ -4033,10 +4054,10 @@ function lowerDefine(ctx, node) {
   // Soft functions use `it` as implicit result
   ctx.symbols.set('it', null);
 
-  for (const s of node.body) lowerStmt_sf(ctx, s);
-  const body = ctx.ops;
+  const body = captureOps(ctx, () => {
+    for (const s of node.body) lowerStmt_sf(ctx, s);
+  });
 
-  ctx.ops = savedOps;
   ctx.topLevel = savedTopLevel;
   ctx.symbols = ctx.symbols.pop();
 
@@ -4071,16 +4092,12 @@ function lowerIf_sf(ctx, node) {
   const l = ctx.loc(node);
   const cond = lowerExpr_sf(ctx, node.cond);
   const truthy = emitSoftCall(ctx, 'truthy', [cond], l, BOOL);
-
-  const savedOps = ctx.ops;
-  ctx.ops = [];
-  for (const s of node.body) lowerStmt_sf(ctx, s);
-  const thenBody = ctx.ops;
-  ctx.ops = [];
-  if (node.elseBody) for (const s of node.elseBody) lowerStmt_sf(ctx, s);
-  const elseBody = ctx.ops;
-  ctx.ops = savedOps;
-
+  const thenBody = captureOps(ctx, () => {
+    for (const s of node.body) lowerStmt_sf(ctx, s);
+  });
+  const elseBody = captureOps(ctx, () => {
+    if (node.elseBody) for (const s of node.elseBody) lowerStmt_sf(ctx, s);
+  });
   return ctx.emit('if_region', [truthy.id], VOID, l, {
     then_body: thenBody, else_body: elseBody, phis: [],
   });
@@ -4088,18 +4105,14 @@ function lowerIf_sf(ctx, node) {
 
 function lowerWhile_sf(ctx, node) {
   const l = ctx.loc(node);
-  const savedOps = ctx.ops;
-
-  ctx.ops = [];
-  const cond = lowerExpr_sf(ctx, node.cond);
-  const truthy = emitSoftCall(ctx, 'truthy', [cond], l, BOOL);
-  const testOps = ctx.ops;
-
-  ctx.ops = [];
-  for (const s of node.body) lowerStmt_sf(ctx, s);
-  const body = ctx.ops;
-  ctx.ops = savedOps;
-
+  let truthy = null;
+  const testOps = captureOps(ctx, () => {
+    const cond = lowerExpr_sf(ctx, node.cond);
+    truthy = emitSoftCall(ctx, 'truthy', [cond], l, BOOL);
+  });
+  const body = captureOps(ctx, () => {
+    for (const s of node.body) lowerStmt_sf(ctx, s);
+  });
   return ctx.emit('loop_region', [], VOID, l, {
     test: testOps, test_val: truthy.id,
     body, phis: [], loop_kind: 'while',
@@ -4111,13 +4124,9 @@ function lowerForEach(ctx, node) {
   const iter = lowerExpr_sf(ctx, node.iter);
   // Pre-declare var
   if (ctx.topLevel) ctx.defines.add(node.varName);
-
-  const savedOps = ctx.ops;
-  ctx.ops = [];
-  for (const s of node.body) lowerStmt_sf(ctx, s);
-  const body = ctx.ops;
-  ctx.ops = savedOps;
-
+  const body = captureOps(ctx, () => {
+    for (const s of node.body) lowerStmt_sf(ctx, s);
+  });
   return ctx.emit('for_of_region', [iter.id], VOID, l, {
     body, phis: [], target_name: node.varName,
   });
@@ -4131,32 +4140,26 @@ function lowerRangeLoop(ctx, node) {
   const varName = node.varName;
   if (ctx.topLevel) ctx.defines.add(varName);
 
-  const savedOps = ctx.ops;
-
-  ctx.ops = [];
-  const from = lowerExpr_sf(ctx, node.from);
-  ctx.emit('store', [varName, from.id], VOID, l);
-  ctx.symbols.set(varName, from.id);
-  const initOps = ctx.ops;
-
-  ctx.ops = [];
-  const to = lowerExpr_sf(ctx, node.to);
-  const vLoad = ctx.emit('load', [varName], DYNAMIC, l);
-  const testOp = ctx.emit('lte', [vLoad.id, to.id], BOOL, l);
-  const testOps = ctx.ops;
-
-  ctx.ops = [];
-  const stepVal = node.step ? lowerExpr_sf(ctx, node.step) : ctx.emit('const', [1], I32, l);
-  const vLoad2 = ctx.emit('load', [varName], DYNAMIC, l);
-  const newV = ctx.emit('add', [vLoad2.id, stepVal.id], DYNAMIC, l);
-  ctx.emit('store', [varName, newV.id], VOID, l);
-  const updateOps = ctx.ops;
-
-  ctx.ops = [];
-  for (const s of node.body) lowerStmt_sf(ctx, s);
-  const body = ctx.ops;
-
-  ctx.ops = savedOps;
+  const initOps = captureOps(ctx, () => {
+    const from = lowerExpr_sf(ctx, node.from);
+    ctx.emit('store', [varName, from.id], VOID, l);
+    ctx.symbols.set(varName, from.id);
+  });
+  let testOp = null;
+  const testOps = captureOps(ctx, () => {
+    const to = lowerExpr_sf(ctx, node.to);
+    const vLoad = ctx.emit('load', [varName], DYNAMIC, l);
+    testOp = ctx.emit('lte', [vLoad.id, to.id], BOOL, l);
+  });
+  const updateOps = captureOps(ctx, () => {
+    const stepVal = node.step ? lowerExpr_sf(ctx, node.step) : ctx.emit('const', [1], I32, l);
+    const vLoad2 = ctx.emit('load', [varName], DYNAMIC, l);
+    const newV = ctx.emit('add', [vLoad2.id, stepVal.id], DYNAMIC, l);
+    ctx.emit('store', [varName, newV.id], VOID, l);
+  });
+  const body = captureOps(ctx, () => {
+    for (const s of node.body) lowerStmt_sf(ctx, s);
+  });
 
   return ctx.emit('for_region', [], VOID, l, {
     init: initOps,
@@ -4174,31 +4177,25 @@ function lowerRepeat(ctx, node) {
   const countExpr = lowerExpr_sf(ctx, node.count);
   const tempVar = `__rep_${ctx._idGen.peek()}`;
 
-  const savedOps = ctx.ops;
-
-  ctx.ops = [];
-  const zero = ctx.emit('const', [0], I32, l);
-  ctx.emit('store', [tempVar, zero.id], VOID, l);
-  ctx.symbols.set(tempVar, zero.id);
-  const initOps = ctx.ops;
-
-  ctx.ops = [];
-  const vLoad = ctx.emit('load', [tempVar], DYNAMIC, l);
-  const testOp = ctx.emit('lt', [vLoad.id, countExpr.id], BOOL, l);
-  const testOps = ctx.ops;
-
-  ctx.ops = [];
-  const one = ctx.emit('const', [1], I32, l);
-  const vLoad2 = ctx.emit('load', [tempVar], DYNAMIC, l);
-  const newV = ctx.emit('add', [vLoad2.id, one.id], I32, l);
-  ctx.emit('store', [tempVar, newV.id], VOID, l);
-  const updateOps = ctx.ops;
-
-  ctx.ops = [];
-  for (const s of node.body) lowerStmt_sf(ctx, s);
-  const body = ctx.ops;
-
-  ctx.ops = savedOps;
+  const initOps = captureOps(ctx, () => {
+    const zero = ctx.emit('const', [0], I32, l);
+    ctx.emit('store', [tempVar, zero.id], VOID, l);
+    ctx.symbols.set(tempVar, zero.id);
+  });
+  let testOp = null;
+  const testOps = captureOps(ctx, () => {
+    const vLoad = ctx.emit('load', [tempVar], DYNAMIC, l);
+    testOp = ctx.emit('lt', [vLoad.id, countExpr.id], BOOL, l);
+  });
+  const updateOps = captureOps(ctx, () => {
+    const one = ctx.emit('const', [1], I32, l);
+    const vLoad2 = ctx.emit('load', [tempVar], DYNAMIC, l);
+    const newV = ctx.emit('add', [vLoad2.id, one.id], I32, l);
+    ctx.emit('store', [tempVar, newV.id], VOID, l);
+  });
+  const body = captureOps(ctx, () => {
+    for (const s of node.body) lowerStmt_sf(ctx, s);
+  });
 
   return ctx.emit('for_region', [], VOID, l, {
     init: initOps, test: testOps, test_val: testOp.id,
@@ -4234,13 +4231,11 @@ function lowerAssume(ctx, node) {
   const cond = lowerExpr_sf(ctx, node.cond);
   const truthy = emitSoftCall(ctx, 'truthy', [cond], l, BOOL);
 
-  const savedOps = ctx.ops;
-  ctx.ops = [];
-  const msg = node.message ? lowerExpr_sf(ctx, node.message)
-    : ctx.emit('const', ['assumption failed'], STRING, l);
-  ctx.emit('throw', [msg.id], VOID, l);
-  const thenBody = ctx.ops;
-  ctx.ops = savedOps;
+  const thenBody = captureOps(ctx, () => {
+    const msg = node.message ? lowerExpr_sf(ctx, node.message)
+      : ctx.emit('const', ['assumption failed'], STRING, l);
+    ctx.emit('throw', [msg.id], VOID, l);
+  });
 
   const notTruthy = ctx.emit('logical_not', [truthy.id], BOOL, l);
   ctx.emit('if_region', [notTruthy.id], VOID, l, {
