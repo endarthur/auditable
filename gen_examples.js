@@ -96,6 +96,7 @@ const categories = {
     'example_vfs.txt',
     'example_soft.txt',
     'example_soft_ptbr.txt',
+    'example_air_ir.txt',
   ],
 
   // adder — Python interpreter: adder cells, adder/mpy tag, cross-language DAG

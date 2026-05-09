@@ -339,9 +339,15 @@ function lowerStatement(ctx, node) {
       // Wrappers like lowerIf/lowerFor/etc. don't need to set this themselves;
       // their bodies are always either a BlockStatement (handled here) or a
       // single statement (which can't host let/const/class declarations).
+      // Push a fresh ctx.symbols frame so block-scoped lets don't leak.
+      // Function bodies don't enter this case — they bypass it by iterating
+      // node.body.body directly in lowerFuncDecl/Expr (which push their own
+      // frame).
       const savedTopLevel = ctx.topLevel;
       ctx.topLevel = false;
+      ctx.symbols = ctx.symbols.push();
       for (const s of node.body) lowerStatement(ctx, s);
+      ctx.symbols = ctx.symbols.pop();
       ctx.topLevel = savedTopLevel;
       return null;
     }
@@ -573,7 +579,12 @@ function lowerFor(ctx, node) {
   const l = ctx.loc(node);
   const savedOps = ctx.ops;
 
-  // init — for-header let/const are block-scoped, not top-level defines
+  // for-header let/const are block-scoped — push a fresh ctx.symbols frame
+  // so `for (let i …)` doesn't leak `i` into the outer scope, where outer
+  // type-prop would then read the loop var's last-iteration ssa id.
+  ctx.symbols = ctx.symbols.push();
+
+  // init
   ctx.ops = [];
   const savedTopLevel = ctx.topLevel;
   ctx.topLevel = false;
@@ -599,6 +610,7 @@ function lowerFor(ctx, node) {
   lowerStatement(ctx, node.body);
   const bodyOps = ctx.ops;
 
+  ctx.symbols = ctx.symbols.pop();
   ctx.ops = savedOps;
 
   return ctx.emit('for_region', [], VOID, l, {
@@ -616,6 +628,7 @@ function lowerForIn(ctx, node) {
   const iter = lowerExpr(ctx, node.right);
   const savedOps = ctx.ops;
   ctx.ops = [];
+  ctx.symbols = ctx.symbols.push();
 
   // Declare the iteration variable (block-scoped, not top-level)
   if (node.left.type === 'VariableDeclaration') {
@@ -627,6 +640,7 @@ function lowerForIn(ctx, node) {
 
   lowerStatement(ctx, node.body);
   const bodyOps = ctx.ops;
+  ctx.symbols = ctx.symbols.pop();
   ctx.ops = savedOps;
 
   return ctx.emit('for_in_region', [iter.id], VOID, l, { body: bodyOps, phis: [] });
@@ -649,6 +663,7 @@ function lowerForOf(ctx, node) {
   const iter = lowerExpr(ctx, node.right);
   const savedOps = ctx.ops;
   ctx.ops = [];
+  ctx.symbols = ctx.symbols.push();
 
   // Capture the loop variable's name so the emitter can use it instead of
   // falling back to a synthetic `_v`. References inside the body (`s.x`,
@@ -667,6 +682,7 @@ function lowerForOf(ctx, node) {
 
   lowerStatement(ctx, node.body);
   const bodyOps = ctx.ops;
+  ctx.symbols = ctx.symbols.pop();
   ctx.ops = savedOps;
 
   return ctx.emit('for_of_region', [iter.id], VOID, l, {
@@ -741,26 +757,35 @@ function lowerTry(ctx, node) {
   const l = ctx.loc(node);
   const savedOps = ctx.ops;
 
+  // try / catch / finally blocks are each their own block scope. Push
+  // around each so let-bindings (and the catch param) don't leak.
   ctx.ops = [];
+  ctx.symbols = ctx.symbols.push();
   lowerStatement(ctx, node.block);
   const tryBody = ctx.ops;
+  ctx.symbols = ctx.symbols.pop();
 
   let catchParam = null;
   let catchBody = [];
   if (node.handler) {
     ctx.ops = [];
+    ctx.symbols = ctx.symbols.push();
     if (node.handler.param?.type === 'Identifier') {
       catchParam = node.handler.param.name;
+      ctx.symbols.set(catchParam, null);
     }
     lowerStatement(ctx, node.handler.body);
     catchBody = ctx.ops;
+    ctx.symbols = ctx.symbols.pop();
   }
 
   let finallyBody = [];
   if (node.finalizer) {
     ctx.ops = [];
+    ctx.symbols = ctx.symbols.push();
     lowerStatement(ctx, node.finalizer);
     finallyBody = ctx.ops;
+    ctx.symbols = ctx.symbols.pop();
   }
 
   ctx.ops = savedOps;

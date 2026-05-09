@@ -28,7 +28,7 @@ import {
   AirValidationError,
 } from '../ext/air/src/validate.js';
 
-import { prettyPrint } from '../ext/air/src/text.js';
+import { prettyPrint, parseText } from '../ext/air/src/text.js';
 import { ScopeChain } from '../ext/air/src/scope.js';
 
 import { lowerJS } from '../ext/air/src/lower/js.js';
@@ -481,6 +481,36 @@ describe('ctx.symbols — function-scope shadowing', () => {
     assert.equal(m.defines.has('inner'), false);
     assert.equal(m.defines.has('f'), true);
   });
+
+  it('for-loop init does not leak to outer scope', () => {
+    // for (let i = 0; …) is block-scoped — `i` should not be in outer
+    // exports nor clobber an outer-scoped `i`.
+    const m = lowerOnly(`
+      const i: i32 = 100;
+      for (let i = 0; i < 10; i++) {}
+    `);
+    // Outer i should still be exported as i32 (the for's i didn't clobber it).
+    assert.equal(m.exports.get('i').type.kind, 'i32');
+  });
+
+  it('catch param does not leak to outer scope', () => {
+    const m = lowerOnly(`
+      const e: bool = true;
+      try { f(); } catch (e) { handle(e); }
+    `);
+    assert.equal(m.exports.get('e').type.kind, 'bool');
+  });
+
+  it('nested block scope does not leak', () => {
+    const m = lowerOnly(`
+      const x: i32 = 1;
+      { const x = "inner"; }
+    `);
+    // Top-level `const x: i32 = 1` adds x to defines/symbols. The
+    // nested `{ const x = ... }` is block-scoped — it should not be in
+    // the outer ctx.symbols binding.
+    assert.equal(m.exports.get('x').type.kind, 'i32');
+  });
 });
 
 // =============================================================================
@@ -542,6 +572,77 @@ const SAMPLE_CELLS = [
   // nullish coalesce
   'const v = a ?? b ?? c;',
 ];
+
+// =============================================================================
+// §6.45 — parseText round-trip
+// =============================================================================
+//
+// We don't require structural identity for the round-trip — pretty-print
+// elides ssa-id continuity for inlinable values, omits empty regions,
+// and drops some default extras. What we DO require: parse(print(m)) is
+// itself a valid module that re-renders to the same text. That's the
+// useful round-trip for golden-file testing and on-disk IR snapshots.
+
+describe('parseText round-trip', () => {
+  function roundtrip(jsCode) {
+    const m = lowerJsCode(jsCode);
+    const text1 = prettyPrint(m);
+    const m2 = parseText(text1);
+    const text2 = prettyPrint(m2);
+    return { text1, text2 };
+  }
+
+  it('const + add', () => {
+    const { text1, text2 } = roundtrip('const x = 1 + 2;');
+    assert.equal(text1, text2,
+      `round-trip diverged:\n--- pass1 ---\n${text1}\n--- pass2 ---\n${text2}`);
+  });
+
+  it('typed annotation', () => {
+    const { text1, text2 } = roundtrip('const n: i32 = 42; const r = n * 2;');
+    assert.equal(text1, text2);
+  });
+
+  it('object literal with spread', () => {
+    const { text1, text2 } = roundtrip('const a = { x: 1 }; const b = { ...a, y: 2 };');
+    assert.equal(text1, text2);
+  });
+
+  it('typed array', () => {
+    const { text1, text2 } = roundtrip('const buf = new Float64Array(100);');
+    assert.equal(text1, text2);
+  });
+
+  it('method call', () => {
+    const { text1, text2 } = roundtrip('const xs = []; xs.push(1, 2, 3);');
+    assert.equal(text1, text2);
+  });
+
+  it('if/else', () => {
+    const { text1, text2 } = roundtrip('let y = 0; if (x > 0) { y = 1; } else { y = -1; }');
+    assert.equal(text1, text2);
+  });
+
+  it('for loop', () => {
+    const { text1, text2 } = roundtrip('for (let i = 0; i < 10; i++) { sum = sum + i; }');
+    assert.equal(text1, text2);
+  });
+
+  it('for-of with target_name', () => {
+    const { text1, text2 } = roundtrip('for (const x of xs) { total = total + x; }');
+    assert.equal(text1, text2);
+  });
+
+  it('rejects unknown ops', () => {
+    assert.throws(() => parseText(`module { %0 = frobnicate }`),
+      /unknown op 'frobnicate'/);
+  });
+
+  it('rejects malformed input', () => {
+    assert.throws(() => parseText(`module { %0 = const`),
+      /AirParseError|expected/i);
+  });
+});
 
 // =============================================================================
 // §6.5 — ScopeChain

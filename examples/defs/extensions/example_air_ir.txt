@@ -1,0 +1,99 @@
+/// auditable
+/// title: AIR — textual IR
+
+/// md
+# Auditable Intermediate Representation
+
+`@gcu/air` is the compiler infrastructure that powers Auditable's reactive cell engine. Every JS, Python (`@gcu/adder`), or Soft (`@gcu/soft`) cell goes through AIR: parse → lower to a structured SSA IR → run optimization passes → emit V8-friendly JavaScript (or, in the future, WebAssembly via `@atra`).
+
+This notebook lets you peek at AIR's IR directly. Type JavaScript on the left, see the lowered IR on the right.
+
+`window._airAnalyzer(code)` is what the runtime calls for every cell. `window._airPrettyPrint(module)` is the human-readable renderer (added in v0.3 for debugging).
+
+/// html
+<div style="display:flex;gap:1rem;align-items:flex-start">
+  <div style="flex:1">
+    <label style="font-size:0.85em;color:var(--muted)">source</label>
+    <audit-text-input name="src" rows="14" value="const n: i32 = 10;
+let total: i32 = 0;
+for (let i = 0; i < n; i++) {
+  total = total + i * 2;
+}"></audit-text-input>
+  </div>
+</div>
+
+/// code
+// Lower whatever the user typed and pretty-print the AIR.
+//
+// `_airAnalyzer` parses + lowers + runs passes + extracts defines/uses.
+// On parse error it returns null (graceful — the textbox might be mid-edit).
+const result = window._airAnalyzer ? window._airAnalyzer(src) : null;
+
+if (!result) {
+  ui.display(std.el('pre', { style: 'color:var(--err)' },
+    'parse failed — fix the syntax in the box above'));
+} else {
+  const { defines, uses, air } = result;
+
+  ui.display(std.el('div', { style: 'display:flex;gap:1rem;flex-wrap:wrap;font-family:monospace;font-size:0.85em' },
+    std.el('div', null, std.el('strong', null, 'defines: '), [...defines].sort().join(', ') || '(none)'),
+    std.el('div', null, std.el('strong', null, 'uses: '), [...uses].sort().join(', ') || '(none)'),
+  ));
+
+  // Pretty-print the AIR. Each op is one line for simple cases; region
+  // ops (for_region, if_region, func_region, etc.) expand into nested
+  // blocks so the structure is visible.
+  const irText = window._airPrettyPrint(air);
+  ui.display(std.el('pre', {
+    style: 'background:var(--code-bg,#111);padding:0.75rem;border-radius:0.25rem;overflow-x:auto;font-size:0.8em;line-height:1.4'
+  }, irText));
+}
+
+/// md
+## what to look for
+
+- **`%N`** — SSA value ids. Each op produces a value with a unique id; downstream ops reference it by name.
+- **`const 10` / `add %0, %1`** — primitive ops. Most of the IR is value ops; control flow lives in regions.
+- **`for_region { init: [...], test: [...], update: [...], body: [...] }`** — structured control flow, not flat goto. Loops and conditionals nest naturally; the lowerer doesn't break them up.
+- **types after each op** — if you wrote `: i32` annotations or AIR could infer numeric types, you'll see them propagated. Type annotations are optional performance hints, never errors.
+- **`opaque "..."`** — the relief valve for things AIR doesn't model (regex, `with` blocks, exotic destructuring patterns). The original source text is preserved verbatim and emitted as-is.
+
+Try editing the source above:
+
+- Add a function: `function f(x: f64): f64 { return x * x; }`
+- Add a class with a method
+- Use `await fetch(...)` to see how async ops are tagged
+- Trigger a fallback with `with (Math) { sin(0.5); }` — that whole `with` becomes one `opaque` op
+
+/// md
+## why
+
+The textual format isn't just for curiosity. AIR's validator (also new in v0.3, gated behind `?airdebug=1` in the URL) uses it for error messages — when a lowerer produces a malformed op, the error includes the rendered IR so you can scan to the offending line. The same format will be the round-trip target for the future `parseText` parser, enabling on-disk IR snapshots and golden-file testing.
+
+The schema (`OP_SCHEMA`) and pass pipeline (`PASSES`) are introspectable too:
+
+/// code
+// Walk the schema and report what each op contributes.
+const OP_SCHEMA = window._airOpSchema || null;
+if (OP_SCHEMA) {
+  const rows = Object.entries(OP_SCHEMA).slice(0, 12);
+  ui.display(std.el('table', { style: 'font-family:monospace;font-size:0.85em;border-collapse:collapse' },
+    std.el('thead', null, std.el('tr', null,
+      ...['op', 'arity', 'result', 'side fx', 'async'].map(h =>
+        std.el('th', { style: 'text-align:left;padding:0.2rem 0.6rem;border-bottom:1px solid var(--muted)' }, h))
+    )),
+    std.el('tbody', null,
+      ...rows.map(([name, s]) => std.el('tr', null,
+        std.el('td', { style: 'padding:0.1rem 0.6rem' }, name),
+        std.el('td', { style: 'padding:0.1rem 0.6rem' }, s.arity),
+        std.el('td', { style: 'padding:0.1rem 0.6rem' }, s.result),
+        std.el('td', { style: 'padding:0.1rem 0.6rem' }, String(s.side_effecting)),
+        std.el('td', { style: 'padding:0.1rem 0.6rem' }, String(s.can_be_async)),
+      ))
+    )
+  ));
+  ui.display(std.el('div', { style: 'font-size:0.85em;color:var(--muted);margin-top:0.5rem' },
+    `(showing first 12 of ${Object.keys(OP_SCHEMA).length} op types)`));
+} else {
+  ui.display('OP_SCHEMA not exposed on window');
+}

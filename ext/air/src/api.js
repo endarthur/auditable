@@ -5,8 +5,8 @@ import { lowerJS } from './lower/js.js';
 import { runPasses, extractDependencies, PASSES } from './passes.js';
 import { emitJS, needsAsync } from './emit-js.js';
 import { validateModule, validateOrThrow, AirValidationError } from './validate.js';
-import { prettyPrint } from './text.js';
-import { computeStats } from './schema.js';
+import { prettyPrint, parseText, AirParseError } from './text.js';
+import { computeStats, OP_SCHEMA } from './schema.js';
 
 // ── Lowerer registry ───────────────────────────────────────────────
 // Languages other than JS register themselves here. AIR self-registers
@@ -299,7 +299,7 @@ export function extractExportTypes(module) {
 }
 
 export { lowerJS, runPasses, extractDependencies, PASSES, emitJS, needsAsync };
-export { validateModule, validateOrThrow, AirValidationError, prettyPrint };
+export { validateModule, validateOrThrow, AirValidationError, prettyPrint, parseText, AirParseError };
 
 // --- Browser init: register AIR on window ---
 // When loaded in the browser with Acorn available, create the parser
@@ -326,6 +326,9 @@ if (typeof window !== 'undefined' && window.Acorn) {
   } catch { /* file:// or other non-URL contexts — ignore */ }
   window._airValidateModule = validateModule;
   window._airPrettyPrint = prettyPrint;
+  // Schema introspection — used by the example_air_ir notebook + any
+  // tooling that wants to enumerate op types at runtime.
+  window._airOpSchema = OP_SCHEMA;
 
   // Lowerer registry — frontends register their own lowerers here.
   window._airRegisterLowerer = registerLowerer;
