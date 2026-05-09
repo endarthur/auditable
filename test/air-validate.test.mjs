@@ -723,6 +723,41 @@ describe('lowerer SDK', () => {
   });
 });
 
+// =============================================================================
+// §6.42 — Specialization registry
+// =============================================================================
+
+import { registerSpecializations, getSpecializations } from '../ext/air/src/passes.js';
+
+describe('specialization registry', () => {
+  it('registerSpecializations + getSpecializations round-trip', () => {
+    registerSpecializations('_test', {
+      foo: { op: 'foo_air', check: () => true, resultType: () => null },
+    });
+    const specs = getSpecializations('_test');
+    assert.ok(specs);
+    assert.equal(specs.foo.op, 'foo_air');
+  });
+
+  it('getSpecializations returns null for unregistered namespaces', () => {
+    assert.equal(getSpecializations('_doesnotexist'), null);
+  });
+
+  it('repeated registrations merge', () => {
+    registerSpecializations('_test_merge', { a: { op: 'a_air' } });
+    registerSpecializations('_test_merge', { b: { op: 'b_air' } });
+    const specs = getSpecializations('_test_merge');
+    assert.equal(specs.a.op, 'a_air');
+    assert.equal(specs.b.op, 'b_air');
+  });
+
+  it('repeated registrations on same key override', () => {
+    registerSpecializations('_test_override', { x: { op: 'first' } });
+    registerSpecializations('_test_override', { x: { op: 'second' } });
+    assert.equal(getSpecializations('_test_override').x.op, 'second');
+  });
+});
+
 describe('parseText round-trip', () => {
   function roundtrip(jsCode) {
     const m = lowerJsCode(jsCode);

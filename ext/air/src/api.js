@@ -2,7 +2,7 @@
 // Clean interface matching existing parseNames/findUses output shapes
 
 import { lowerJS } from './lower/js.js';
-import { runPasses, extractDependencies, PASSES } from './passes.js';
+import { runPasses, extractDependencies, PASSES, registerSpecializations, getSpecializations } from './passes.js';
 import { emitJS, needsAsync } from './emit-js.js';
 import { validateModule, validateOrThrow, AirValidationError } from './validate.js';
 import { prettyPrint, parseText, AirParseError } from './text.js';
@@ -299,6 +299,7 @@ export function extractExportTypes(module) {
 }
 
 export { lowerJS, runPasses, extractDependencies, PASSES, emitJS, needsAsync };
+export { registerSpecializations, getSpecializations };
 export { validateModule, validateOrThrow, AirValidationError, prettyPrint, parseText, AirParseError };
 
 // --- Browser init: register AIR on window ---
@@ -329,6 +330,12 @@ if (typeof window !== 'undefined' && window.Acorn) {
   // Schema introspection — used by the example_air_ir notebook + any
   // tooling that wants to enumerate op types at runtime.
   window._airOpSchema = OP_SCHEMA;
+
+  // Specialization registry hooks. Frontend bundles (adder, soft) have
+  // their imports stripped at build time, so they fall back to these
+  // window globals to register their helper-call specializations.
+  window._airRegisterSpecializations = registerSpecializations;
+  window._airGetSpecializations = getSpecializations;
 
   // Lowerer registry — frontends register their own lowerers here.
   window._airRegisterLowerer = registerLowerer;

@@ -570,73 +570,49 @@ export function insertHints(module, typeMap) {
 // This is the big win for typed numeric loops in adder/Soft — instead of
 // `_py.add(a, b)` → `a + b` directly.
 
-// Helper method name → { op, resultType, check(lt, rt) }
-// check() returns true if the operands' types allow this specialization.
-const PY_SPECIALIZATIONS = {
-  add: {
-    op: 'add',
-    // Numbers: same-type addition. Strings: concat. Mixed: skip.
-    check: (lt, rt) => {
-      if (isNumeric(lt) && isNumeric(rt)) return true;
-      if (lt.kind === 'string' && rt.kind === 'string') return true;
-      return false;
-    },
-    resultType: (lt, rt) => {
-      if (isNumeric(lt) && isNumeric(rt)) return arithmeticResult(lt, rt);
-      return STRING;
-    },
-  },
-  sub: { op: 'sub', check: bothNumeric, resultType: arithmeticResult },
-  mul: { op: 'mul', check: bothNumeric, resultType: arithmeticResult },
-  // div/mod/floordiv stay in helpers: Python raises ZeroDivisionError, JS returns Infinity/NaN
-  pow: { op: 'exp', check: bothNumeric, resultType: arithmeticResult },
-  eq: {
-    op: 'eq',
-    check: (lt, rt) => isNumeric(lt) && isNumeric(rt),
-    resultType: () => BOOL,
-  },
-  neq: {
-    op: 'neq',
-    check: (lt, rt) => isNumeric(lt) && isNumeric(rt),
-    resultType: () => BOOL,
-  },
-  lt:  { op: 'lt',  check: bothNumeric, resultType: () => BOOL },
-  lte: { op: 'lte', check: bothNumeric, resultType: () => BOOL },
-  gt:  { op: 'gt',  check: bothNumeric, resultType: () => BOOL },
-  gte: { op: 'gte', check: bothNumeric, resultType: () => BOOL },
-  neg: {
-    op: 'neg',
-    arity: 1,
-    check: (t) => isNumeric(t),
-    resultType: (t) => t,
-  },
-  truthy: {
-    // _py.truthy(true) → just the value (already bool)
-    // _py.truthy(x) where x is numeric → x !== 0 (handled via coerce)
-    op: null, arity: 1, // handled specially below
-    check: (t) => t.kind === 'bool',
-    resultType: () => BOOL,
-    // For bool input, the helper call is redundant; inline the arg.
-    passthrough: true,
-  },
-};
+// Specialization registry. Each frontend (adder, soft, hypothetical
+// future ones) ships its own table and registers it via
+// `registerSpecializations(namespace, specs)` at module-init time. The
+// dependency direction is now correct: passes.js doesn't need to know
+// what frontends exist — frontends opt in to the specialization pass by
+// declaring their tables.
+//
+// Schema of a spec entry:
+//   { op, arity?, check, resultType, passthrough?, customEmit? }
+//
+//   op          — AIR op name to rewrite to, or null for special handling
+//   arity       — operand count (default 2)
+//   check(...)  — predicate over operand types, returns true if specialization fires
+//   resultType  — function or value: result type of the rewritten op
+//   passthrough — when true, the op is replaced by its sole arg (e.g. _py.truthy(bool) → bool)
+//   customEmit  — when true, specializeRuntimeHelpers does op-specific
+//                 rewriting (e.g. between → (v >= lo) && (v <= hi))
+const _specsByNamespace = new Map();
 
-// Soft specializations — very similar semantics to Python for numeric ops
-const SOFT_SPECIALIZATIONS = {
-  // Note: Soft's _soft.eq is case-insensitive for strings, so only specialize for numbers.
-  eq:  { op: 'eq',  check: bothNumeric, resultType: () => BOOL },
-  neq: { op: 'neq', check: bothNumeric, resultType: () => BOOL },
-  between: {
-    op: null, arity: 3,
-    check: (v, lo, hi) => isNumeric(v) && isNumeric(lo) && isNumeric(hi),
-    resultType: () => BOOL,
-    // Will be handled as: (v >= lo) && (v <= hi). Custom emit.
-    customEmit: true,
-  },
-};
+/**
+ * Register specializations for a runtime helper namespace. Each frontend
+ * calls this at module-init time:
+ *
+ *   registerSpecializations('_py', {
+ *     add: { op: 'add', check: bothNumeric, resultType: arithmeticResult },
+ *     // ...
+ *   });
+ *
+ * Multiple calls merge — the same namespace can be registered with new
+ * methods (e.g. an extension package adding more specializations to
+ * `_py`). Later registrations override earlier ones for the same method.
+ */
+export function registerSpecializations(namespace, specs) {
+  const existing = _specsByNamespace.get(namespace) || {};
+  _specsByNamespace.set(namespace, { ...existing, ...specs });
+}
 
-function bothNumeric(lt, rt) {
-  return isNumeric(lt) && isNumeric(rt);
+/**
+ * Look up the specs for a namespace. Returns null when no frontend has
+ * registered that namespace; specializeRuntimeHelpers skips silently.
+ */
+export function getSpecializations(namespace) {
+  return _specsByNamespace.get(namespace) || null;
 }
 
 // Detect sequences like:
@@ -727,8 +703,7 @@ export function specializeRuntimeHelpers(module, types) {
       if (!rtOp || rtOp.op !== 'load') continue;
 
       const rtName = rtOp.args[0];
-      const specs = rtName === '_py' ? PY_SPECIALIZATIONS :
-                    rtName === '_soft' ? SOFT_SPECIALIZATIONS : null;
+      const specs = getSpecializations(rtName);
       if (!specs) continue;
 
       const method = calleeOp.args[1];

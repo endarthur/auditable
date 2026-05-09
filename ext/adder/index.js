@@ -5530,6 +5530,70 @@ function pythonCompletions(prefix) {
 // so all frontends share one definition; the marker `_airFallback: true`
 // is the load-bearing contract that AIR's wrapper checks.
 
+// ── _py runtime helper specializations ─────────────────────────────
+//
+// When the type-prop pass can prove operand types, these rewrites
+// replace `_py.method(args)` calls with raw AIR ops — emitted as
+// native JS operators, skipping the helper round-trip. The big win
+// for typed numeric loops in adder cells.
+//
+// Used to live in passes.js (hardcoded for both _py and _soft), now
+// lives alongside the lowerer that emits the helper calls in the first
+// place. Same pattern soft uses for _soft.
+
+const _bothNumeric = (lt, rt) => isNumeric(lt) && isNumeric(rt);
+
+const PY_SPECIALIZATIONS = {
+  add: {
+    op: 'add',
+    // Numbers: same-type addition. Strings: concat. Mixed: skip.
+    check: (lt, rt) => {
+      if (isNumeric(lt) && isNumeric(rt)) return true;
+      if (lt.kind === 'string' && rt.kind === 'string') return true;
+      return false;
+    },
+    resultType: (lt, rt) => {
+      if (isNumeric(lt) && isNumeric(rt)) return arithmeticResult(lt, rt);
+      return STRING;
+    },
+  },
+  sub: { op: 'sub', check: _bothNumeric, resultType: arithmeticResult },
+  mul: { op: 'mul', check: _bothNumeric, resultType: arithmeticResult },
+  // div/mod/floordiv stay in helpers: Python raises ZeroDivisionError, JS returns Infinity/NaN
+  pow: { op: 'exp', check: _bothNumeric, resultType: arithmeticResult },
+  eq:  { op: 'eq',  check: _bothNumeric, resultType: () => BOOL },
+  neq: { op: 'neq', check: _bothNumeric, resultType: () => BOOL },
+  lt:  { op: 'lt',  check: _bothNumeric, resultType: () => BOOL },
+  lte: { op: 'lte', check: _bothNumeric, resultType: () => BOOL },
+  gt:  { op: 'gt',  check: _bothNumeric, resultType: () => BOOL },
+  gte: { op: 'gte', check: _bothNumeric, resultType: () => BOOL },
+  neg: {
+    op: 'neg',
+    arity: 1,
+    check: (t) => isNumeric(t),
+    resultType: (t) => t,
+  },
+  truthy: {
+    // _py.truthy(true) → just the value (already bool)
+    // _py.truthy(x) where x is numeric → x !== 0 (handled via coerce)
+    op: null, arity: 1,
+    check: (t) => t.kind === 'bool',
+    resultType: () => BOOL,
+    passthrough: true,
+  },
+};
+
+// Register at module-init. Two paths:
+//   1. Dev/Node (tests): the import above resolves; registerSpecializations
+//      is the function from passes.js. Call it directly.
+//   2. Browser bundle: imports get stripped at build time, so
+//      `registerSpecializations` is undeclared. Fall back to the window
+//      hook AIR exposes at runtime.
+const _doRegisterPy = (typeof registerSpecializations === 'function')
+  ? registerSpecializations
+  : (typeof window !== 'undefined' ? window._airRegisterSpecializations : null);
+if (_doRegisterPy) _doRegisterPy('_py', PY_SPECIALIZATIONS);
+
 // ── adder annotation resolver ──
 //
 // Maps adder type annotations (whatever's after `:` or `->`) to AIR types.

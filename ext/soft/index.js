@@ -3699,6 +3699,34 @@ function softCompletions(prefix) {
 
 
 
+// ── _soft runtime helper specializations ───────────────────────────
+//
+// Soft has narrower specialization opportunities than _py because Soft's
+// helpers preserve case-insensitive string semantics (`_soft.eq` for
+// strings folds case). Only fold to native ops when both operands are
+// proven numeric; string compares stay in helper-land.
+
+const _bothNumericSf = (lt, rt) => isNumeric(lt) && isNumeric(rt);
+
+const SOFT_SPECIALIZATIONS = {
+  eq:  { op: 'eq',  check: _bothNumericSf, resultType: () => BOOL },
+  neq: { op: 'neq', check: _bothNumericSf, resultType: () => BOOL },
+  between: {
+    op: null, arity: 3,
+    check: (v, lo, hi) => isNumeric(v) && isNumeric(lo) && isNumeric(hi),
+    resultType: () => BOOL,
+    // Will be handled as: (v >= lo) && (v <= hi). Custom emit in
+    // specializeRuntimeHelpers.
+    customEmit: true,
+  },
+};
+
+// See adder/air-lower.js for the dual-path registration explanation.
+const _doRegisterSoft = (typeof registerSpecializations === 'function')
+  ? registerSpecializations
+  : (typeof window !== 'undefined' ? window._airRegisterSpecializations : null);
+if (_doRegisterSoft) _doRegisterSoft('_soft', SOFT_SPECIALIZATIONS);
+
 // Soft historically used SoftLowerError as the in-frontend name; both
 // it and AirLowerError now alias to the base class so the
 // `_airFallback: true` contract is consistent across frontends.
