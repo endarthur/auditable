@@ -13,4 +13,5 @@ import './validate.js';
 import './lower/js.js';
 import './passes.js';
 import './emit-js.js';
+import './interp.js';
 import './api.js';

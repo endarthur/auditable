@@ -7,6 +7,7 @@ import { emitJS, needsAsync } from './emit-js.js';
 import { validateModule, validateOrThrow, AirValidationError } from './validate.js';
 import { prettyPrint, parseText, AirParseError } from './text.js';
 import { computeStats, OP_SCHEMA } from './schema.js';
+import { Interpreter, interpret, AirInterpError } from './interp.js';
 
 // ── Lowerer registry ───────────────────────────────────────────────
 // Languages other than JS register themselves here. AIR self-registers
@@ -301,6 +302,7 @@ export function extractExportTypes(module) {
 export { lowerJS, runPasses, extractDependencies, PASSES, emitJS, needsAsync };
 export { registerSpecializations, getSpecializations };
 export { validateModule, validateOrThrow, AirValidationError, prettyPrint, parseText, AirParseError };
+export { Interpreter, interpret, AirInterpError };
 
 // --- Browser init: register AIR on window ---
 // When loaded in the browser with Acorn available, create the parser
@@ -336,6 +338,12 @@ if (typeof window !== 'undefined' && window.Acorn) {
   // window globals to register their helper-call specializations.
   window._airRegisterSpecializations = registerSpecializations;
   window._airGetSpecializations = getSpecializations;
+
+  // AIR interpreter (v0). Tree-walks AIR ops directly without eval.
+  // Mostly useful for tooling: sanity-check the JS emitter, foundation
+  // for a future step debugger, CSP-locked builds.
+  window._airInterpret = interpret;
+  window._airInterpreter = Interpreter;
 
   // Lowerer registry — frontends register their own lowerers here.
   window._airRegisterLowerer = registerLowerer;
