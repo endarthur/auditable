@@ -35,12 +35,21 @@ function stripModuleSyntax(src) {
 
 const chunks = [];
 
-// air-lower.js imports types from ext/air/src/types.js. Inline those types
-// up-front so the bundle is self-contained.
-const airTypesPath = path.join(__dirname, '..', 'air', 'src', 'types.js');
-if (fs.existsSync(airTypesPath)) {
-  const airTypesSrc = stripModuleSyntax(fs.readFileSync(airTypesPath, 'utf8'));
-  chunks.push(`// -- inlined: ../air/src/types.js (AIR type singletons) --\n\n${airTypesSrc}`);
+// air-lower.js imports types + ScopeChain + BaseLowerCtx from @gcu/air.
+// Inline each up-front so the bundle is self-contained — keeps @gcu/soft
+// usable without a hard runtime peer dependency on @gcu/air for npm
+// consumers. Order matters: types → scope → base.
+const airInlines = [
+  ['../air/src/types.js', 'AIR type singletons'],
+  ['../air/src/scope.js', 'AIR ScopeChain'],
+  ['../air/src/lower/base.js', 'AIR shared LowerCtx'],
+];
+for (const [rel, descr] of airInlines) {
+  const fullPath = path.join(__dirname, rel);
+  if (fs.existsSync(fullPath)) {
+    const src = stripModuleSyntax(fs.readFileSync(fullPath, 'utf8'));
+    chunks.push(`// -- inlined: ${rel} (${descr}) --\n\n${src}`);
+  }
 }
 
 for (const relPath of importPaths) {

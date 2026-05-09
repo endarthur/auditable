@@ -8,6 +8,7 @@ import {
   I8, U8, I16, U16, U32, I64, U64, F32,
   typedArray, isDynamic, func,
 } from '../../air/src/types.js';
+import { BaseLowerCtx } from '../../air/src/lower/base.js';
 
 export class AirLowerError extends Error {
   constructor(message) { super(message); this._airFallback = true; }
@@ -66,37 +67,23 @@ function resolveAdderAnnotation(node) {
 
 // ── SSA counter (shared across lowerer invocations via module state) ──
 
-let _adderNextId = 0;
-function _adderResetIds() { _adderNextId = 0; }
-function _adderMkOp(op, args, type, loc, extra) {
-  const id = '%' + (_adderNextId++);
-  const o = { id, op, args, type: type || DYNAMIC, loc };
-  if (extra) Object.assign(o, extra);
-  return o;
-}
-
 // ── Lowering context ──
+//
+// Adder-specific extras over BaseLowerCtx:
+//   declared       — names already emitted with `let` at top level (so
+//     repeat assignments emit as bare `name = …`, not redeclarations).
+//   syncFunctions  — populated by analyseSyncFunctions before any body
+//     is lowered. Calls to a name in this set skip the `await` wrapping
+//     that adder otherwise emits around every user call (Python's
+//     `f()` could yield a coroutine, JS's can't tell at call time).
+// loc() reads adder-AST nodes' `node.line` / `node.col` (different
+// shape from ESTree's `node.loc.start`).
 
-class AdderLowerCtx {
+class AdderLowerCtx extends BaseLowerCtx {
   constructor() {
-    this.ops = [];
-    this.symbols = new Map();   // name → SSA id of most recent value
-    this.types = new Map();     // SSA id → type
-    this.declared = new Set();  // names that have been emitted with `let` at top level
-    this.topLevel = true;
-    this.defines = new Set();   // names to export
-    this.imports = new Set();   // referenced undefined names
-    this.source = null;
-    this.syncFunctions = new Set(); // names of user-defined sync functions —
-                                    // populated by analyseSyncFunctions before
-                                    // any body is lowered. Calls to a name in
-                                    // this set skip the `await` wrapping.
-  }
-  emit(op, args, type, loc, extra) {
-    const o = _adderMkOp(op, args, type, loc, extra);
-    this.ops.push(o);
-    if (type) this.types.set(o.id, type);
-    return o;
+    super();
+    this.declared = new Set();
+    this.syncFunctions = new Set();
   }
   loc(node) {
     return node?.line != null ? { line: node.line, col: node.col || 0 } : null;
@@ -364,7 +351,8 @@ function emitAwaitedCall_ad(ctx, fnId, argIds, loc, type, opts) {
 // ── Main entry ──
 
 export function lowerAdder(ast, source) {
-  _adderResetIds();
+  // SSA id counter lives on the AdderLowerCtx instance now (via
+  // BaseLowerCtx's _idGen); no module-level reset.
   const ctx = new AdderLowerCtx();
   ctx.source = source || null;
 
@@ -431,7 +419,9 @@ export function lowerAdder(ast, source) {
 
   return {
     ops: ctx.ops,
-    symbol_table: new Map(ctx.symbols),
+    // ctx.symbols is a ScopeChain post-base-extraction; flatten to a Map
+    // for downstream consumers (validator, debug tools).
+    symbol_table: ctx.symbols.flatten(),
     exports,
     imports: new Set(ctx.imports),
     defines: new Set(ctx.defines),
@@ -1140,7 +1130,7 @@ function lowerWith(ctx, node) {
   for (let i = 0; i < node.items.length; i++) {
     const item = node.items[i];
     const mgr = lowerExpr_ad(ctx, item.contextExpr);
-    const mgrName = `__with_mgr_${_adderNextId}`;
+    const mgrName = `__with_mgr_${ctx._idGen.peek()}`;
     ctx.emit('store', [mgrName, mgr.id], VOID, l);
     ctx.symbols.set(mgrName, mgr.id);
     tempNames.push(mgrName);
@@ -1192,11 +1182,10 @@ function lowerClassDef(ctx, node) {
   // that assign to names. We collect them into an object we return.
   const savedOps = ctx.ops;
   const savedTopLevel = ctx.topLevel;
-  const savedSymbols = ctx.symbols;
 
   ctx.topLevel = false;
   ctx.ops = [];
-  ctx.symbols = new Map(savedSymbols);
+  ctx.symbols = ctx.symbols.push();
 
   // Run class body — method defs become locals, assignments become locals
   for (const stmt of node.body) lowerStmt_ad(ctx, stmt);
@@ -1226,7 +1215,7 @@ function lowerClassDef(ctx, node) {
   const body = ctx.ops;
   ctx.ops = savedOps;
   ctx.topLevel = savedTopLevel;
-  ctx.symbols = savedSymbols;
+  ctx.symbols = ctx.symbols.pop();
 
   // Wrap body in a function: async () => { ...body; return {...} }
   const bodyFn = ctx.emit('func_region', [null], DYNAMIC, l, {
@@ -1402,7 +1391,7 @@ function lowerFor_ad(ctx, node) {
 
   // Tuple/List target: use a synthetic temp variable, unpack in body
   if (node.target.type === 'Tuple' || node.target.type === 'List') {
-    const tempName = `__forv_${_adderNextId}`;
+    const tempName = `__forv_${ctx._idGen.peek()}`;
     // Pre-declare each target element at module scope if top-level
     _preDeclareTargetNames(ctx, node.target, l);
 
@@ -1612,14 +1601,15 @@ function lowerFuncDef(ctx, node) {
   // Lower decorators (evaluated at def time, applied bottom-up after def)
   const decorators = (node.decorators || []).map(d => lowerExpr_ad(ctx, d));
 
-  // Lower body in nested scope
+  // Lower body in nested scope. The save-and-Map-clone idiom we used to
+  // run is replaced by ScopeChain push/pop now that ctx.symbols extends
+  // BaseLowerCtx — same semantics, less ceremony.
   const savedTopLevel = ctx.topLevel;
   const savedOps = ctx.ops;
-  const savedSymbols = ctx.symbols;
 
   ctx.topLevel = false;
   ctx.ops = [];
-  ctx.symbols = new Map(savedSymbols);
+  ctx.symbols = ctx.symbols.push();
 
   // Build parameter binding (prologue + JS params)
   const { params, prologueOps, isSimple } = _buildParamBinding(ctx, node, l);
@@ -1639,7 +1629,7 @@ function lowerFuncDef(ctx, node) {
 
   ctx.ops = savedOps;
   ctx.topLevel = savedTopLevel;
-  ctx.symbols = savedSymbols;
+  ctx.symbols = ctx.symbols.pop();
 
   // Return type from `-> Type` annotation, if present.
   const retType = node.returns ? resolveAdderAnnotation(node.returns) : DYNAMIC;
@@ -1692,11 +1682,10 @@ function lowerLambda(ctx, node) {
   const l = ctx.loc(node);
   const savedTopLevel = ctx.topLevel;
   const savedOps = ctx.ops;
-  const savedSymbols = ctx.symbols;
 
   ctx.topLevel = false;
   ctx.ops = [];
-  ctx.symbols = new Map(savedSymbols);
+  ctx.symbols = ctx.symbols.push();
 
   // Reuse the function param binding logic
   const { params, prologueOps } = _buildParamBinding(ctx, node, l);
@@ -1708,7 +1697,7 @@ function lowerLambda(ctx, node) {
 
   ctx.ops = savedOps;
   ctx.topLevel = savedTopLevel;
-  ctx.symbols = savedSymbols;
+  ctx.symbols = ctx.symbols.pop();
 
   return ctx.emit('func_region', [null], DYNAMIC, l, {
     name: null, params, body, ret_type: DYNAMIC,
@@ -1757,17 +1746,17 @@ function lowerComprehension(ctx, node) {
   let tempName, initOp;
   if (kind === 'ListComp' || kind === 'GeneratorExp') {
     initOp = ctx.emit('array_new', [], DYNAMIC, l);
-    tempName = '__comp_' + _adderNextId;
+    tempName = `__comp_${ctx._idGen.peek()}`;
   } else if (kind === 'SetComp') {
     const arr = ctx.emit('array_new', [], DYNAMIC, l);
     initOp = emitPyCall(ctx, 'makeSet', [arr], l);
-    tempName = '__setc_' + _adderNextId;
+    tempName = `__setc_${ctx._idGen.peek()}`;
   } else {
     // DictComp — use a Map
     const empty1 = ctx.emit('array_new', [], DYNAMIC, l);
     const empty2 = ctx.emit('array_new', [], DYNAMIC, l);
     initOp = emitPyCall(ctx, 'makeDict', [empty1, empty2], l);
-    tempName = '__dictc_' + _adderNextId;
+    tempName = `__dictc_${ctx._idGen.peek()}`;
   }
   ctx.emit('store', [tempName, initOp.id], VOID, l);
   ctx.symbols.set(tempName, initOp.id);
@@ -1803,7 +1792,7 @@ function lowerComprehension(ctx, node) {
       targetName = gen.target.id;
       ctx.symbols.set(targetName, null);
     } else if (gen.target.type === 'Tuple' || gen.target.type === 'List') {
-      targetName = `__gen_${_adderNextId}`;
+      targetName = `__gen_${ctx._idGen.peek()}`;
       _preDeclareTargetNames(ctx, gen.target, l);
       // Unpack inside the loop body
       const tempLoad = ctx.emit('load', [targetName], DYNAMIC, l);

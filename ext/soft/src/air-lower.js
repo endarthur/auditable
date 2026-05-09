@@ -3,36 +3,17 @@
 // no dunder methods, no classes. Result: fewer _soft helper calls than _py needed.
 
 import { I32, F64, BOOL, STRING, VOID, DYNAMIC } from '../../air/src/types.js';
+import { BaseLowerCtx } from '../../air/src/lower/base.js';
 
 export class SoftLowerError extends Error {
   constructor(message) { super(message); this._airFallback = true; }
 }
 
-let _softNextId = 0;
-function _softResetIds() { _softNextId = 0; }
-function _softMkOp(op, args, type, loc, extra) {
-  const id = '%' + (_softNextId++);
-  const o = { id, op, args, type: type || DYNAMIC, loc };
-  if (extra) Object.assign(o, extra);
-  return o;
-}
-
-class SoftLowerCtx {
-  constructor() {
-    this.ops = [];
-    this.symbols = new Map();
-    this.types = new Map();
-    this.topLevel = true;
-    this.defines = new Set();
-    this.imports = new Set();
-    this.source = null;
-  }
-  emit(op, args, type, loc, extra) {
-    const o = _softMkOp(op, args, type, loc, extra);
-    this.ops.push(o);
-    if (type) this.types.set(o.id, type);
-    return o;
-  }
+// SoftLowerCtx is just BaseLowerCtx with a Soft-specific loc(): Soft AST
+// nodes carry `node.line` but no column. The shared base provides ops /
+// symbols / types / topLevel / defines / imports / source / emit / id
+// generation.
+class SoftLowerCtx extends BaseLowerCtx {
   loc(node) {
     return node?.line != null ? { line: node.line, col: 0 } : null;
   }
@@ -81,7 +62,8 @@ function collectDefines_sf(body, defines) {
 }
 
 export function lowerSoft(ast, source) {
-  _softResetIds();
+  // SSA id counter lives on SoftLowerCtx instance via BaseLowerCtx's
+  // _idGen; no module-level reset.
   const ctx = new SoftLowerCtx();
   ctx.source = source || null;
 
@@ -115,7 +97,7 @@ export function lowerSoft(ast, source) {
 
   return {
     ops: ctx.ops,
-    symbol_table: new Map(ctx.symbols),
+    symbol_table: ctx.symbols.flatten(),
     exports,
     imports: new Set(ctx.imports),
     defines: new Set(ctx.defines),
@@ -544,11 +526,10 @@ function lowerDefine(ctx, node) {
 
   const savedTopLevel = ctx.topLevel;
   const savedOps = ctx.ops;
-  const savedSymbols = ctx.symbols;
 
   ctx.topLevel = false;
   ctx.ops = [];
-  ctx.symbols = new Map(savedSymbols);
+  ctx.symbols = ctx.symbols.push();
   for (const p of params) {
     const pname = p.name.replace(/^\.\.\./, '');
     ctx.symbols.set(pname, null);
@@ -561,7 +542,7 @@ function lowerDefine(ctx, node) {
 
   ctx.ops = savedOps;
   ctx.topLevel = savedTopLevel;
-  ctx.symbols = savedSymbols;
+  ctx.symbols = ctx.symbols.pop();
 
   const op = ctx.emit('func_region', [name], DYNAMIC, l, {
     name, params, body, ret_type: DYNAMIC,
@@ -695,7 +676,7 @@ function lowerRepeat(ctx, node) {
   const l = ctx.loc(node);
   // repeat N times: body → for-loop 0..N
   const countExpr = lowerExpr_sf(ctx, node.count);
-  const tempVar = `__rep_${_softNextId}`;
+  const tempVar = `__rep_${ctx._idGen.peek()}`;
 
   const savedOps = ctx.ops;
 

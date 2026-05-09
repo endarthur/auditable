@@ -194,6 +194,238 @@ function typeEq(a, b) {
   return true;
 }
 
+// -- inlined: ../air/src/scope.js (AIR ScopeChain) --
+
+// @gcu/air — ScopeChain (v0.3 §3.3)
+//
+// Single shared lexical-scope abstraction for everything in AIR that
+// tracks names → values across nested scopes. Today three places do
+// this independently:
+//
+//   1. lower/js.js findMutableCaptured — closure-detection scope walker
+//      using a `scopes` array of Sets directly.
+//   2. emit-js.js Scope — `let` declaration tracker (Set-of-names with
+//      a parent pointer).
+//   3. lower/js.js ctx.symbols — flat Map<name, ssaId>. Doesn't pop at
+//      scope exit, leading to silent type-prop wrongness when an inner
+//      scope shadows an outer name (the spec's §2.3 latent bug).
+//
+// This class is the abstraction the first two migrate to in v0.3. The
+// ctx.symbols migration is its own session — adding push/pop semantics
+// to a previously-flat lookup is a real behavior change, not a rename.
+//
+// Design: name → any value (ssa id, boolean, type, …). Each layer is a
+// Map so a name can be set to falsy values (null, 0, false). `has`
+// distinguishes "name exists with value undefined" from "name not bound".
+
+class ScopeChain {
+  /**
+   * @param {ScopeChain | null} parent
+   */
+  constructor(parent = null) {
+    this.parent = parent;
+    this.bindings = new Map();
+  }
+
+  /**
+   * Bind a name in THIS scope (does not propagate up).
+   */
+  set(name, value) {
+    this.bindings.set(name, value);
+    return this;
+  }
+
+  /**
+   * Look up a name. Returns the binding from the innermost scope where
+   * it exists, or undefined if unbound at every level.
+   */
+  get(name) {
+    if (this.bindings.has(name)) return this.bindings.get(name);
+    return this.parent ? this.parent.get(name) : undefined;
+  }
+
+  /**
+   * True if the name is bound at this scope or any enclosing scope.
+   */
+  has(name) {
+    if (this.bindings.has(name)) return true;
+    return this.parent ? this.parent.has(name) : false;
+  }
+
+  /**
+   * True if the name is bound in any enclosing scope, but NOT in this
+   * scope. Used by closure-detection: "is this name visible from outer
+   * lexical context, such that an assignment captures it?"
+   */
+  hasInOuter(name) {
+    return this.parent ? this.parent.has(name) : false;
+  }
+
+  /**
+   * Remove a binding. Walks up the chain and deletes from the innermost
+   * scope where the name is bound. Returns true if a binding was removed,
+   * false if the name wasn't bound anywhere visible.
+   *
+   * Used by emit-js's `ctx.exprs` consume semantics — when a single-use
+   * SSA value is inlined at its consumer, the entry is deleted from
+   * whichever frame registered it.
+   */
+  delete(name) {
+    if (this.bindings.has(name)) { this.bindings.delete(name); return true; }
+    return this.parent ? this.parent.delete(name) : false;
+  }
+
+  /**
+   * Return a new child scope with `this` as parent. Caller is responsible
+   * for assigning the result somewhere — e.g. `chain = chain.push()`.
+   */
+  push() {
+    return new ScopeChain(this);
+  }
+
+  /**
+   * Return the parent scope, dropping `this`. Throws if at root.
+   */
+  pop() {
+    if (!this.parent) {
+      throw new Error('ScopeChain: cannot pop the root scope');
+    }
+    return this.parent;
+  }
+
+  /**
+   * Snapshot every binding visible from this scope, with the innermost
+   * value winning for shadowed names. Useful for debugging and for
+   * code that needs a flat Map (legacy callers like lower/js.js's
+   * `symbol_table: new Map(ctx.symbols)` snapshot).
+   */
+  flatten() {
+    const out = new Map();
+    // Walk from root → leaf so inner shadows the outer naturally
+    const chain = [];
+    for (let s = this; s; s = s.parent) chain.push(s);
+    for (let i = chain.length - 1; i >= 0; i--) {
+      for (const [k, v] of chain[i].bindings) out.set(k, v);
+    }
+    return out;
+  }
+
+  /**
+   * Iterate every binding visible from this scope (innermost wins).
+   * Yields [name, value] pairs.
+   */
+  *entries() {
+    yield* this.flatten();
+  }
+
+  /**
+   * Depth from root. Root is 0, first child is 1, etc.
+   */
+  depth() {
+    let d = 0;
+    for (let s = this.parent; s; s = s.parent) d++;
+    return d;
+  }
+}
+
+// -- inlined: ../air/src/lower/base.js (AIR shared LowerCtx) --
+
+// @gcu/air — Shared lowering scaffolding
+//
+// First step of the lowerer-frontend extraction (spec_inbox/lang/
+// air-lowerer-frontend-spec.md). Three lowerers (JS / adder / soft)
+// each had their own LowerCtx, mkOp, and id-counter — identical fields
+// and methods, divergent only in language-specific extras (mutable-
+// capture analysis for JS, sync-function detection for adder, etc.).
+//
+// This module hosts the common parts; each lowerer extends `BaseLowerCtx`
+// with whatever it needs on top. Cross-package consumers (adder, soft)
+// inline this file at build time the same way they already inline
+// types.js — see their build.js scripts.
+//
+// Subsequent extraction sessions can lift more shared scaffolding here:
+// BinOp dispatch tables (BINARY_OP_MAP), control-flow lowering helpers,
+// class-lowering primitives. Today's scope is just the context object.
+
+
+
+/**
+ * Per-instance SSA-id generator. Each lowering invocation gets its own,
+ * so cell A's ids don't collide with cell B's even when both lowerers
+ * share this module.
+ */
+function makeIdGen() {
+  let n = 0;
+  return {
+    next: () => '%' + (n++),
+    reset: () => { n = 0; },
+    peek: () => n,
+  };
+}
+
+/**
+ * Build an op record. Mirror of the per-language mkOp helpers each
+ * lowerer used to keep — identical except for the type default. We
+ * default to DYNAMIC across the board, matching adder/soft's prior
+ * behavior; JS's lowerer used to leave type undefined for some ops,
+ * but downstream `if (type) types.set(...)` checks make the difference
+ * unobservable.
+ */
+function mkOp(id, op, args, type, loc, extra) {
+  const o = { id, op, args, type: type || DYNAMIC, loc };
+  if (extra) Object.assign(o, extra);
+  return o;
+}
+
+/**
+ * Shared lowering context. Each lowerer subclasses this to add
+ * language-specific fields (mutable-capture set, sync-function set,
+ * adder-specific declared tracker, etc.) and provides a per-language
+ * `loc(node)` because AST shapes differ.
+ *
+ * Fields:
+ *   ops      — flat list of ops emitted into the current region. Region
+ *              lowering swaps ops to a sub-list, lowers the body, and
+ *              restores ops to the parent list (regions hold their body
+ *              in their own ops array).
+ *   symbols  — ScopeChain<name, ssa_id>. Push at function/block
+ *              boundaries to scope inner-fn shadows correctly (see F's
+ *              ctx.symbols migration). Adder/soft have not yet added
+ *              push/pop discipline; today they treat the chain as a
+ *              flat root frame.
+ *   types    — Map<ssa_id, Type> for value tracking inside the lowerer
+ *              (passes do their own; this is the lowerer's local view).
+ *   topLevel — true when emitting at the cell's root scope (so let/const
+ *              declarations register as cell exports). Each region
+ *              lowering toggles to false.
+ *   defines  — set of names this cell exports.
+ *   imports  — set of free names this cell references but doesn't define
+ *              (cross-cell deps).
+ *   source   — original source string, for the opaque escape hatch.
+ */
+class BaseLowerCtx {
+  constructor() {
+    this.ops = [];
+    this.symbols = new ScopeChain();
+    this.types = new Map();
+    this.topLevel = true;
+    this.defines = new Set();
+    this.imports = new Set();
+    this.source = null;
+    this._idGen = makeIdGen();
+  }
+
+  emit(op, args, type, loc, extra) {
+    const o = mkOp(this._idGen.next(), op, args, type, loc, extra);
+    this.ops.push(o);
+    if (type) this.types.set(o.id, type);
+    return o;
+  }
+
+  // Subclasses override to provide language-specific node→{line, col}.
+  loc(_node) { return null; }
+}
+
 // -- tokenize.js --
 
 // soft — tokenizer
@@ -3268,35 +3500,16 @@ function softCompletions(prefix) {
 // no dunder methods, no classes. Result: fewer _soft helper calls than _py needed.
 
 
+
 class SoftLowerError extends Error {
   constructor(message) { super(message); this._airFallback = true; }
 }
 
-let _softNextId = 0;
-function _softResetIds() { _softNextId = 0; }
-function _softMkOp(op, args, type, loc, extra) {
-  const id = '%' + (_softNextId++);
-  const o = { id, op, args, type: type || DYNAMIC, loc };
-  if (extra) Object.assign(o, extra);
-  return o;
-}
-
-class SoftLowerCtx {
-  constructor() {
-    this.ops = [];
-    this.symbols = new Map();
-    this.types = new Map();
-    this.topLevel = true;
-    this.defines = new Set();
-    this.imports = new Set();
-    this.source = null;
-  }
-  emit(op, args, type, loc, extra) {
-    const o = _softMkOp(op, args, type, loc, extra);
-    this.ops.push(o);
-    if (type) this.types.set(o.id, type);
-    return o;
-  }
+// SoftLowerCtx is just BaseLowerCtx with a Soft-specific loc(): Soft AST
+// nodes carry `node.line` but no column. The shared base provides ops /
+// symbols / types / topLevel / defines / imports / source / emit / id
+// generation.
+class SoftLowerCtx extends BaseLowerCtx {
   loc(node) {
     return node?.line != null ? { line: node.line, col: 0 } : null;
   }
@@ -3345,7 +3558,8 @@ function collectDefines_sf(body, defines) {
 }
 
 function lowerSoft(ast, source) {
-  _softResetIds();
+  // SSA id counter lives on SoftLowerCtx instance via BaseLowerCtx's
+  // _idGen; no module-level reset.
   const ctx = new SoftLowerCtx();
   ctx.source = source || null;
 
@@ -3379,7 +3593,7 @@ function lowerSoft(ast, source) {
 
   return {
     ops: ctx.ops,
-    symbol_table: new Map(ctx.symbols),
+    symbol_table: ctx.symbols.flatten(),
     exports,
     imports: new Set(ctx.imports),
     defines: new Set(ctx.defines),
@@ -3808,11 +4022,10 @@ function lowerDefine(ctx, node) {
 
   const savedTopLevel = ctx.topLevel;
   const savedOps = ctx.ops;
-  const savedSymbols = ctx.symbols;
 
   ctx.topLevel = false;
   ctx.ops = [];
-  ctx.symbols = new Map(savedSymbols);
+  ctx.symbols = ctx.symbols.push();
   for (const p of params) {
     const pname = p.name.replace(/^\.\.\./, '');
     ctx.symbols.set(pname, null);
@@ -3825,7 +4038,7 @@ function lowerDefine(ctx, node) {
 
   ctx.ops = savedOps;
   ctx.topLevel = savedTopLevel;
-  ctx.symbols = savedSymbols;
+  ctx.symbols = ctx.symbols.pop();
 
   const op = ctx.emit('func_region', [name], DYNAMIC, l, {
     name, params, body, ret_type: DYNAMIC,
@@ -3959,7 +4172,7 @@ function lowerRepeat(ctx, node) {
   const l = ctx.loc(node);
   // repeat N times: body → for-loop 0..N
   const countExpr = lowerExpr_sf(ctx, node.count);
-  const tempVar = `__rep_${_softNextId}`;
+  const tempVar = `__rep_${ctx._idGen.peek()}`;
 
   const savedOps = ctx.ops;
 

@@ -7,19 +7,13 @@ import {
   resolveAnnotation, isDynamic,
 } from '../types.js';
 import { ScopeChain } from '../scope.js';
+import { BaseLowerCtx } from './base.js';
 
-// --- Op constructors ---
-
-let _nextId = 0;
-
-function resetIds() { _nextId = 0; }
-
-function mkOp(op, args, type, loc, extra) {
-  const id = '%' + (_nextId++);
-  const o = { id, op, args, type, loc };
-  if (extra) Object.assign(o, extra);
-  return o;
-}
+// SSA id allocation + the op record builder live on BaseLowerCtx now
+// (`ctx._idGen.next()` for ids; `ctx.emit(op, args, type, loc, extra)`
+// for everything else). The legacy module-level `_nextId` / `mkOp`
+// were dropped during the lowerer-frontend extraction so all three
+// in-tree lowerers share one source of truth.
 
 // --- Mutable capture pre-pass (spec §3.3, §7.3) ---
 
@@ -208,30 +202,20 @@ const CTOR_TO_ELEMENT = {
 };
 
 // --- Lowering context ---
+//
+// JS-specific extras over BaseLowerCtx:
+//   mutableCaptured — names mutated inside an inner function but declared
+//     in an outer scope (closures need slot allocation, not bare lets).
+//   slots           — name → SSA id of the slot (closure cell) for each
+//     name in mutableCaptured.
+// loc() picks line/col from ESTree's `node.loc.start` (other lowerers'
+// AST shapes differ).
 
-class LowerCtx {
+class LowerCtx extends BaseLowerCtx {
   constructor(mutableCaptured) {
-    this.ops = [];
-    // Lexical-scope name → current SSA id. Backed by ScopeChain (v0.3
-    // §3.3) — push/pop wraps function-body lowering so inner-fn shadows
-    // don't leak to outer reads (the spec §2.3 latent type-prop bug).
-    // Block-level scoping (for-loop init, catch param, nested blocks)
-    // is a future refinement; today's chain only pushes at function
-    // boundaries.
-    this.symbols = new ScopeChain();
-    this.types = new Map();   // SSA id → type
+    super();
     this.mutableCaptured = mutableCaptured;
-    this.slots = new Map();   // name → slot SSA id
-    this.topLevel = true;     // are we at cell top-level scope?
-    this.defines = new Set(); // top-level definitions (for cell_export)
-    this.imports = new Set(); // names referenced but not defined (cell_import candidates)
-  }
-
-  emit(op, args, type, loc, extra) {
-    const o = mkOp(op, args, type, loc, extra);
-    this.ops.push(o);
-    if (type) this.types.set(o.id, type);
-    return o;
+    this.slots = new Map();
   }
 
   loc(node) {
@@ -242,7 +226,8 @@ class LowerCtx {
 // --- Main lowering entry point ---
 
 export function lowerJS(ast, source) {
-  resetIds();
+  // SSA id counter lives on the LowerCtx instance now (via BaseLowerCtx's
+  // `_idGen`); no module-level reset needed.
 
   const mutableCaptured = findMutableCaptured(ast);
   const ctx = new LowerCtx(mutableCaptured);

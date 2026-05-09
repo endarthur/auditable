@@ -887,6 +887,104 @@ class ScopeChain {
   }
 }
 
+// -- lower_base.js --
+
+// @gcu/air — Shared lowering scaffolding
+//
+// First step of the lowerer-frontend extraction (spec_inbox/lang/
+// air-lowerer-frontend-spec.md). Three lowerers (JS / adder / soft)
+// each had their own LowerCtx, mkOp, and id-counter — identical fields
+// and methods, divergent only in language-specific extras (mutable-
+// capture analysis for JS, sync-function detection for adder, etc.).
+//
+// This module hosts the common parts; each lowerer extends `BaseLowerCtx`
+// with whatever it needs on top. Cross-package consumers (adder, soft)
+// inline this file at build time the same way they already inline
+// types.js — see their build.js scripts.
+//
+// Subsequent extraction sessions can lift more shared scaffolding here:
+// BinOp dispatch tables (BINARY_OP_MAP), control-flow lowering helpers,
+// class-lowering primitives. Today's scope is just the context object.
+
+
+
+/**
+ * Per-instance SSA-id generator. Each lowering invocation gets its own,
+ * so cell A's ids don't collide with cell B's even when both lowerers
+ * share this module.
+ */
+function makeIdGen() {
+  let n = 0;
+  return {
+    next: () => '%' + (n++),
+    reset: () => { n = 0; },
+    peek: () => n,
+  };
+}
+
+/**
+ * Build an op record. Mirror of the per-language mkOp helpers each
+ * lowerer used to keep — identical except for the type default. We
+ * default to DYNAMIC across the board, matching adder/soft's prior
+ * behavior; JS's lowerer used to leave type undefined for some ops,
+ * but downstream `if (type) types.set(...)` checks make the difference
+ * unobservable.
+ */
+function mkOp(id, op, args, type, loc, extra) {
+  const o = { id, op, args, type: type || DYNAMIC, loc };
+  if (extra) Object.assign(o, extra);
+  return o;
+}
+
+/**
+ * Shared lowering context. Each lowerer subclasses this to add
+ * language-specific fields (mutable-capture set, sync-function set,
+ * adder-specific declared tracker, etc.) and provides a per-language
+ * `loc(node)` because AST shapes differ.
+ *
+ * Fields:
+ *   ops      — flat list of ops emitted into the current region. Region
+ *              lowering swaps ops to a sub-list, lowers the body, and
+ *              restores ops to the parent list (regions hold their body
+ *              in their own ops array).
+ *   symbols  — ScopeChain<name, ssa_id>. Push at function/block
+ *              boundaries to scope inner-fn shadows correctly (see F's
+ *              ctx.symbols migration). Adder/soft have not yet added
+ *              push/pop discipline; today they treat the chain as a
+ *              flat root frame.
+ *   types    — Map<ssa_id, Type> for value tracking inside the lowerer
+ *              (passes do their own; this is the lowerer's local view).
+ *   topLevel — true when emitting at the cell's root scope (so let/const
+ *              declarations register as cell exports). Each region
+ *              lowering toggles to false.
+ *   defines  — set of names this cell exports.
+ *   imports  — set of free names this cell references but doesn't define
+ *              (cross-cell deps).
+ *   source   — original source string, for the opaque escape hatch.
+ */
+class BaseLowerCtx {
+  constructor() {
+    this.ops = [];
+    this.symbols = new ScopeChain();
+    this.types = new Map();
+    this.topLevel = true;
+    this.defines = new Set();
+    this.imports = new Set();
+    this.source = null;
+    this._idGen = makeIdGen();
+  }
+
+  emit(op, args, type, loc, extra) {
+    const o = mkOp(this._idGen.next(), op, args, type, loc, extra);
+    this.ops.push(o);
+    if (type) this.types.set(o.id, type);
+    return o;
+  }
+
+  // Subclasses override to provide language-specific node→{line, col}.
+  loc(_node) { return null; }
+}
+
 // -- text.js --
 
 // @gcu/air — Textual IR pretty-printer + parser (v0.3 §3.4 + §3.10)
@@ -1790,18 +1888,11 @@ function _describe(v) {
 // Spec §7: Lowering ESTree → AIR
 
 
-// --- Op constructors ---
-
-let _nextId = 0;
-
-function resetIds() { _nextId = 0; }
-
-function mkOp(op, args, type, loc, extra) {
-  const id = '%' + (_nextId++);
-  const o = { id, op, args, type, loc };
-  if (extra) Object.assign(o, extra);
-  return o;
-}
+// SSA id allocation + the op record builder live on BaseLowerCtx now
+// (`ctx._idGen.next()` for ids; `ctx.emit(op, args, type, loc, extra)`
+// for everything else). The legacy module-level `_nextId` / `mkOp`
+// were dropped during the lowerer-frontend extraction so all three
+// in-tree lowerers share one source of truth.
 
 // --- Mutable capture pre-pass (spec §3.3, §7.3) ---
 
@@ -1990,30 +2081,20 @@ const CTOR_TO_ELEMENT = {
 };
 
 // --- Lowering context ---
+//
+// JS-specific extras over BaseLowerCtx:
+//   mutableCaptured — names mutated inside an inner function but declared
+//     in an outer scope (closures need slot allocation, not bare lets).
+//   slots           — name → SSA id of the slot (closure cell) for each
+//     name in mutableCaptured.
+// loc() picks line/col from ESTree's `node.loc.start` (other lowerers'
+// AST shapes differ).
 
-class LowerCtx {
+class LowerCtx extends BaseLowerCtx {
   constructor(mutableCaptured) {
-    this.ops = [];
-    // Lexical-scope name → current SSA id. Backed by ScopeChain (v0.3
-    // §3.3) — push/pop wraps function-body lowering so inner-fn shadows
-    // don't leak to outer reads (the spec §2.3 latent type-prop bug).
-    // Block-level scoping (for-loop init, catch param, nested blocks)
-    // is a future refinement; today's chain only pushes at function
-    // boundaries.
-    this.symbols = new ScopeChain();
-    this.types = new Map();   // SSA id → type
+    super();
     this.mutableCaptured = mutableCaptured;
-    this.slots = new Map();   // name → slot SSA id
-    this.topLevel = true;     // are we at cell top-level scope?
-    this.defines = new Set(); // top-level definitions (for cell_export)
-    this.imports = new Set(); // names referenced but not defined (cell_import candidates)
-  }
-
-  emit(op, args, type, loc, extra) {
-    const o = mkOp(op, args, type, loc, extra);
-    this.ops.push(o);
-    if (type) this.types.set(o.id, type);
-    return o;
+    this.slots = new Map();
   }
 
   loc(node) {
@@ -2024,7 +2105,8 @@ class LowerCtx {
 // --- Main lowering entry point ---
 
 function lowerJS(ast, source) {
-  resetIds();
+  // SSA id counter lives on the LowerCtx instance now (via BaseLowerCtx's
+  // `_idGen`); no module-level reset needed.
 
   const mutableCaptured = findMutableCaptured(ast);
   const ctx = new LowerCtx(mutableCaptured);
