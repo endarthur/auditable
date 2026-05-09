@@ -350,6 +350,24 @@ class ScopeChain {
 
 
 /**
+ * Lowering failure that the wrapper at ext/air/src/api.js treats as
+ * "fall back to the tree-walker / opaque path" rather than "real bug,
+ * propagate." The `_airFallback: true` marker is the load-bearing
+ * contract — every frontend's lowerer should throw this (or a subclass
+ * of it) for nodes it can't handle.
+ *
+ * Lifted to base.js so all frontends share one definition; previously
+ * adder + soft each defined their own identical class.
+ */
+class AirLowerError extends Error {
+  constructor(message) {
+    super(message);
+    this._airFallback = true;
+    this.name = 'AirLowerError';
+  }
+}
+
+/**
  * Per-instance SSA-id generator. Each lowering invocation gets its own,
  * so cell A's ids don't collide with cell B's even when both lowerers
  * share this module.
@@ -424,6 +442,80 @@ class BaseLowerCtx {
 
   // Subclasses override to provide language-specific node→{line, col}.
   loc(_node) { return null; }
+
+  /**
+   * Synthesize a unique-per-cell identifier with a readable prefix.
+   * Used wherever a lowering needs a temporary name visible in emitted
+   * JS — e.g. comprehensions' result accumulator, with-block managers,
+   * for-of unpacking targets, repeat-loop counters.
+   *
+   *   ctx.makeTempName('rep')      → '__rep_42'
+   *   ctx.makeTempName('with_mgr') → '__with_mgr_43'
+   *
+   * Convention: `__` prefix marks synthetic names so user code can't
+   * accidentally shadow them; the trailing `_N` ties the name to
+   * lowering progress and stays stable across re-emits.
+   */
+  makeTempName(prefix) {
+    return `__${prefix}_${this._idGen.peek()}`;
+  }
+
+  /**
+   * Emit a runtime-helper call: `<namespace>.<method>(<args>)`. Each
+   * frontend dispatches differently to its runtime — adder uses
+   * `_py.add(a, b)` for dunder semantics, soft uses `_soft.eq(a, b)`
+   * for case-insensitive string compare, etc. — but the AIR shape is
+   * identical:
+   *
+   *   load(namespace) → object_get(method) → call(method_id, …args)
+   *
+   * Frontends keep thin wrappers (e.g. `emitPyCall = (ctx, m, a, l, t) =>
+   * ctx.emitNamespacedCall('_py', m, a, l, t)`) for ergonomics, but
+   * the canonical path lives here.
+   *
+   * @param {string} namespace - the runtime helper's variable name
+   * @param {string} method    - method to call on the namespace
+   * @param {Array<{id: string}>} args - SSA-typed argument ops
+   * @param {object|null} loc  - source location
+   * @param {object|null} type - result type hint, defaults to DYNAMIC
+   */
+  emitNamespacedCall(namespace, method, args, loc, type) {
+    const ns = this.emit('load', [namespace], DYNAMIC, loc);
+    const methodGet = this.emit('object_get', [ns.id, method], DYNAMIC, loc);
+    return this.emit(
+      'call',
+      [methodGet.id, ...args.map(a => a.id)],
+      type || DYNAMIC,
+      loc,
+    );
+  }
+}
+
+/**
+ * The "two branches, pick a value via phi" pattern that shows up in
+ * every ternary-ish construct: JS `cond ? a : b`, adder `a if c else b`,
+ * adder `a and b` / `a or b`, soft `X if cond otherwise Y`, etc.
+ *
+ * Caller provides:
+ *   - condId  - SSA id of the (already-truthy-coerced) condition
+ *   - thenFn  - callback that lowers the then-branch and returns its
+ *               value op; called inside captureOps so its emits become
+ *               then_body
+ *   - elseFn  - same for else-branch
+ *
+ * Returns the if_region op, with phi wired so downstream consumers
+ * can reference it as a single value.
+ */
+function emitPhiSelect(ctx, condId, thenFn, elseFn, loc, type) {
+  let thenVal = null;
+  let elseVal = null;
+  const thenBody = captureOps(ctx, () => { thenVal = thenFn(); });
+  const elseBody = captureOps(ctx, () => { elseVal = elseFn(); });
+  return ctx.emit('if_region', [condId], type || DYNAMIC, loc, {
+    then_body: thenBody,
+    else_body: elseBody,
+    phis: [{ then_val: thenVal.id, else_val: elseVal.id }],
+  });
 }
 
 /**
@@ -5362,9 +5454,9 @@ function pythonCompletions(prefix) {
 // triggering fallback to the tree-walker.
 
 
-class AirLowerError extends Error {
-  constructor(message) { super(message); this._airFallback = true; }
-}
+// Re-export AirLowerError from @gcu/air. Lifted to ext/air/src/lower/base.js
+// so all frontends share one definition; the marker `_airFallback: true`
+// is the load-bearing contract that AIR's wrapper checks.
 
 // ── adder annotation resolver ──
 //
@@ -5682,11 +5774,13 @@ function analyseSyncFunctions(moduleStmts) {
 }
 
 // ── Helper: call a _py runtime method (sync, no await needed) ──
+//
+// Thin wrapper over BaseLowerCtx.emitNamespacedCall — keeps the existing
+// callsite ergonomics while sharing the AIR-shape implementation with
+// soft (and any future frontend with a namespaced runtime).
 
 function emitPyCall(ctx, method, args, loc, type) {
-  const pyLoad = ctx.emit('load', ['_py'], DYNAMIC, loc);
-  const methodGet = ctx.emit('object_get', [pyLoad.id, method], DYNAMIC, loc);
-  return ctx.emit('call', [methodGet.id, ...args.map(a => a.id)], type || DYNAMIC, loc);
+  return ctx.emitNamespacedCall('_py', method, args, loc, type);
 }
 
 // User-facing calls (Python funcs / adder builtins) may be async — await them.
@@ -5958,14 +6052,10 @@ function lowerExpr_ad(ctx, node) {
       // a if cond else b — ternary
       const cond = lowerExpr_ad(ctx, node.test);
       const truthy = emitPyCall(ctx, 'truthy', [cond], l, BOOL);
-      let thenVal = null, elseVal = null;
-      const thenBody = captureOps(ctx, () => { thenVal = lowerExpr_ad(ctx, node.body); });
-      const elseBody = captureOps(ctx, () => { elseVal = lowerExpr_ad(ctx, node.orelse); });
-      return ctx.emit('if_region', [truthy.id], DYNAMIC, l, {
-        then_body: thenBody,
-        else_body: elseBody,
-        phis: [{ then_val: thenVal.id, else_val: elseVal.id }],
-      });
+      return emitPhiSelect(ctx, truthy.id,
+        () => lowerExpr_ad(ctx, node.body),
+        () => lowerExpr_ad(ctx, node.orelse),
+        l, DYNAMIC);
     }
 
     case 'JoinedStr': {
@@ -6087,24 +6177,16 @@ function lowerBoolOp(ctx, node) {
   let result = lowerExpr_ad(ctx, node.values[0]);
   for (let i = 1; i < node.values.length; i++) {
     const truthy = emitPyCall(ctx, 'truthy', [result], l, BOOL);
-    let next = null;
-    const nextBody = captureOps(ctx, () => { next = lowerExpr_ad(ctx, node.values[i]); });
-
-    if (node.op === 'and') {
-      // if truthy(prev): next else: prev
-      result = ctx.emit('if_region', [truthy.id], DYNAMIC, l, {
-        then_body: nextBody,
-        else_body: [],
-        phis: [{ then_val: next.id, else_val: result.id }],
-      });
-    } else {
-      // or: if truthy(prev): prev else: next
-      result = ctx.emit('if_region', [truthy.id], DYNAMIC, l, {
-        then_body: [],
-        else_body: nextBody,
-        phis: [{ then_val: result.id, else_val: next.id }],
-      });
-    }
+    // and: if truthy(prev) → next else → prev
+    // or:  if truthy(prev) → prev else → next
+    // The "identity" branch returns prev without emitting anything;
+    // emitPhiSelect runs both callbacks inside captureOps so the
+    // non-identity branch's lowerExpr_ad becomes its body.
+    const prev = result;
+    result = emitPhiSelect(ctx, truthy.id,
+      node.op === 'and' ? () => lowerExpr_ad(ctx, node.values[i]) : () => prev,
+      node.op === 'and' ? () => prev : () => lowerExpr_ad(ctx, node.values[i]),
+      l, DYNAMIC);
   }
   return result;
 }
@@ -6451,7 +6533,7 @@ function lowerWith(ctx, node) {
   for (let i = 0; i < node.items.length; i++) {
     const item = node.items[i];
     const mgr = lowerExpr_ad(ctx, item.contextExpr);
-    const mgrName = `__with_mgr_${ctx._idGen.peek()}`;
+    const mgrName = ctx.makeTempName('with_mgr');
     ctx.emit('store', [mgrName, mgr.id], VOID, l);
     ctx.symbols.set(mgrName, mgr.id);
     tempNames.push(mgrName);
@@ -6697,7 +6779,7 @@ function lowerFor_ad(ctx, node) {
 
   // Tuple/List target: use a synthetic temp variable, unpack in body
   if (node.target.type === 'Tuple' || node.target.type === 'List') {
-    const tempName = `__forv_${ctx._idGen.peek()}`;
+    const tempName = ctx.makeTempName('forv');
     // Pre-declare each target element at module scope if top-level
     _preDeclareTargetNames(ctx, node.target, l);
 
@@ -7041,17 +7123,17 @@ function lowerComprehension(ctx, node) {
   let tempName, initOp;
   if (kind === 'ListComp' || kind === 'GeneratorExp') {
     initOp = ctx.emit('array_new', [], DYNAMIC, l);
-    tempName = `__comp_${ctx._idGen.peek()}`;
+    tempName = ctx.makeTempName('comp');
   } else if (kind === 'SetComp') {
     const arr = ctx.emit('array_new', [], DYNAMIC, l);
     initOp = emitPyCall(ctx, 'makeSet', [arr], l);
-    tempName = `__setc_${ctx._idGen.peek()}`;
+    tempName = ctx.makeTempName('setc');
   } else {
     // DictComp — use a Map
     const empty1 = ctx.emit('array_new', [], DYNAMIC, l);
     const empty2 = ctx.emit('array_new', [], DYNAMIC, l);
     initOp = emitPyCall(ctx, 'makeDict', [empty1, empty2], l);
-    tempName = `__dictc_${ctx._idGen.peek()}`;
+    tempName = ctx.makeTempName('dictc');
   }
   ctx.emit('store', [tempName, initOp.id], VOID, l);
   ctx.symbols.set(tempName, initOp.id);
@@ -7085,7 +7167,7 @@ function lowerComprehension(ctx, node) {
         targetName = gen.target.id;
         ctx.symbols.set(targetName, null);
       } else if (gen.target.type === 'Tuple' || gen.target.type === 'List') {
-        targetName = `__gen_${ctx._idGen.peek()}`;
+        targetName = ctx.makeTempName('gen');
         _preDeclareTargetNames(ctx, gen.target, l);
         // Unpack inside the loop body
         const tempLoad = ctx.emit('load', [targetName], DYNAMIC, l);

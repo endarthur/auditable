@@ -30,6 +30,9 @@ import {
 
 import { prettyPrint, parseText } from '../ext/air/src/text.js';
 import { ScopeChain } from '../ext/air/src/scope.js';
+import {
+  BaseLowerCtx, captureOps, emitPhiSelect, AirLowerError,
+} from '../ext/air/src/lower/base.js';
 
 import { lowerJS } from '../ext/air/src/lower/js.js';
 import { runPasses, PASSES } from '../ext/air/src/passes.js';
@@ -582,6 +585,87 @@ const SAMPLE_CELLS = [
 // and drops some default extras. What we DO require: parse(print(m)) is
 // itself a valid module that re-renders to the same text. That's the
 // useful round-trip for golden-file testing and on-disk IR snapshots.
+
+// =============================================================================
+// §6.4 — Lowerer SDK helpers
+// =============================================================================
+
+describe('lowerer SDK', () => {
+  it('AirLowerError carries the _airFallback marker', () => {
+    const e = new AirLowerError('test');
+    assert.equal(e._airFallback, true);
+    assert.equal(e.message, 'test');
+    assert.ok(e instanceof Error);
+  });
+
+  it('makeTempName returns a unique-per-cell synthetic identifier', () => {
+    const ctx = new BaseLowerCtx();
+    const a = ctx.makeTempName('rep');
+    ctx.emit('const', [1], null, null);  // bumps _idGen
+    const b = ctx.makeTempName('rep');
+    assert.match(a, /^__rep_\d+$/);
+    assert.notEqual(a, b);  // distinct because counter advanced
+  });
+
+  it('makeTempName respects the prefix', () => {
+    const ctx = new BaseLowerCtx();
+    assert.match(ctx.makeTempName('with_mgr'), /^__with_mgr_\d+$/);
+    assert.match(ctx.makeTempName('forv'), /^__forv_\d+$/);
+  });
+
+  it('emitNamespacedCall builds load → object_get → call', () => {
+    const ctx = new BaseLowerCtx();
+    const arg = ctx.emit('const', [42], null, null);
+    const result = ctx.emitNamespacedCall('_py', 'add', [arg, arg], null, null);
+    // Three ops added beyond the const: load, object_get, call
+    assert.equal(ctx.ops.length, 4);
+    assert.equal(ctx.ops[1].op, 'load');
+    assert.equal(ctx.ops[1].args[0], '_py');
+    assert.equal(ctx.ops[2].op, 'object_get');
+    assert.equal(ctx.ops[2].args[1], 'add');
+    assert.equal(ctx.ops[3].op, 'call');
+    assert.equal(result, ctx.ops[3]);
+  });
+
+  it('emitPhiSelect wires both branches through if_region with phis', () => {
+    const ctx = new BaseLowerCtx();
+    const cond = ctx.emit('const', [true], null, null);
+    const result = emitPhiSelect(ctx, cond.id,
+      () => ctx.emit('const', [1], null, null),
+      () => ctx.emit('const', [2], null, null),
+      null, null);
+    assert.equal(result.op, 'if_region');
+    assert.equal(result.then_body.length, 1);
+    assert.equal(result.else_body.length, 1);
+    assert.equal(result.phis.length, 1);
+    assert.equal(result.phis[0].then_val, result.then_body[0].id);
+    assert.equal(result.phis[0].else_val, result.else_body[0].id);
+  });
+
+  it('emitPhiSelect supports identity branches (and/or short-circuit)', () => {
+    // The pattern adder/soft `and`/`or` lowering uses: one side captures
+    // the prior value without emitting anything new.
+    const ctx = new BaseLowerCtx();
+    const prev = ctx.emit('const', [10], null, null);
+    const cond = ctx.emit('const', [true], null, null);
+    const result = emitPhiSelect(ctx, cond.id,
+      () => prev,                                  // identity branch — no emit
+      () => ctx.emit('const', [99], null, null),
+      null, null);
+    assert.equal(result.then_body.length, 0);
+    assert.equal(result.else_body.length, 1);
+    assert.equal(result.phis[0].then_val, prev.id);
+    assert.equal(result.phis[0].else_val, result.else_body[0].id);
+  });
+
+  it('captureOps restores ctx.ops even on throw', () => {
+    const ctx = new BaseLowerCtx();
+    ctx.emit('const', [1], null, null);
+    const before = ctx.ops;
+    assert.throws(() => captureOps(ctx, () => { throw new Error('boom'); }), /boom/);
+    assert.equal(ctx.ops, before, 'ctx.ops must be restored after throw');
+  });
+});
 
 describe('parseText round-trip', () => {
   function roundtrip(jsCode) {

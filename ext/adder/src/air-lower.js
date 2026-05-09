@@ -8,11 +8,12 @@ import {
   I8, U8, I16, U16, U32, I64, U64, F32,
   typedArray, isDynamic, func,
 } from '../../air/src/types.js';
-import { BaseLowerCtx, captureOps } from '../../air/src/lower/base.js';
+import { BaseLowerCtx, captureOps, emitPhiSelect, AirLowerError } from '../../air/src/lower/base.js';
 
-export class AirLowerError extends Error {
-  constructor(message) { super(message); this._airFallback = true; }
-}
+// Re-export AirLowerError from @gcu/air. Lifted to ext/air/src/lower/base.js
+// so all frontends share one definition; the marker `_airFallback: true`
+// is the load-bearing contract that AIR's wrapper checks.
+export { AirLowerError };
 
 // ── adder annotation resolver ──
 //
@@ -330,11 +331,13 @@ function analyseSyncFunctions(moduleStmts) {
 }
 
 // ── Helper: call a _py runtime method (sync, no await needed) ──
+//
+// Thin wrapper over BaseLowerCtx.emitNamespacedCall — keeps the existing
+// callsite ergonomics while sharing the AIR-shape implementation with
+// soft (and any future frontend with a namespaced runtime).
 
 function emitPyCall(ctx, method, args, loc, type) {
-  const pyLoad = ctx.emit('load', ['_py'], DYNAMIC, loc);
-  const methodGet = ctx.emit('object_get', [pyLoad.id, method], DYNAMIC, loc);
-  return ctx.emit('call', [methodGet.id, ...args.map(a => a.id)], type || DYNAMIC, loc);
+  return ctx.emitNamespacedCall('_py', method, args, loc, type);
 }
 
 // User-facing calls (Python funcs / adder builtins) may be async — await them.
@@ -606,14 +609,10 @@ function lowerExpr_ad(ctx, node) {
       // a if cond else b — ternary
       const cond = lowerExpr_ad(ctx, node.test);
       const truthy = emitPyCall(ctx, 'truthy', [cond], l, BOOL);
-      let thenVal = null, elseVal = null;
-      const thenBody = captureOps(ctx, () => { thenVal = lowerExpr_ad(ctx, node.body); });
-      const elseBody = captureOps(ctx, () => { elseVal = lowerExpr_ad(ctx, node.orelse); });
-      return ctx.emit('if_region', [truthy.id], DYNAMIC, l, {
-        then_body: thenBody,
-        else_body: elseBody,
-        phis: [{ then_val: thenVal.id, else_val: elseVal.id }],
-      });
+      return emitPhiSelect(ctx, truthy.id,
+        () => lowerExpr_ad(ctx, node.body),
+        () => lowerExpr_ad(ctx, node.orelse),
+        l, DYNAMIC);
     }
 
     case 'JoinedStr': {
@@ -735,24 +734,16 @@ function lowerBoolOp(ctx, node) {
   let result = lowerExpr_ad(ctx, node.values[0]);
   for (let i = 1; i < node.values.length; i++) {
     const truthy = emitPyCall(ctx, 'truthy', [result], l, BOOL);
-    let next = null;
-    const nextBody = captureOps(ctx, () => { next = lowerExpr_ad(ctx, node.values[i]); });
-
-    if (node.op === 'and') {
-      // if truthy(prev): next else: prev
-      result = ctx.emit('if_region', [truthy.id], DYNAMIC, l, {
-        then_body: nextBody,
-        else_body: [],
-        phis: [{ then_val: next.id, else_val: result.id }],
-      });
-    } else {
-      // or: if truthy(prev): prev else: next
-      result = ctx.emit('if_region', [truthy.id], DYNAMIC, l, {
-        then_body: [],
-        else_body: nextBody,
-        phis: [{ then_val: result.id, else_val: next.id }],
-      });
-    }
+    // and: if truthy(prev) → next else → prev
+    // or:  if truthy(prev) → prev else → next
+    // The "identity" branch returns prev without emitting anything;
+    // emitPhiSelect runs both callbacks inside captureOps so the
+    // non-identity branch's lowerExpr_ad becomes its body.
+    const prev = result;
+    result = emitPhiSelect(ctx, truthy.id,
+      node.op === 'and' ? () => lowerExpr_ad(ctx, node.values[i]) : () => prev,
+      node.op === 'and' ? () => prev : () => lowerExpr_ad(ctx, node.values[i]),
+      l, DYNAMIC);
   }
   return result;
 }
@@ -1099,7 +1090,7 @@ function lowerWith(ctx, node) {
   for (let i = 0; i < node.items.length; i++) {
     const item = node.items[i];
     const mgr = lowerExpr_ad(ctx, item.contextExpr);
-    const mgrName = `__with_mgr_${ctx._idGen.peek()}`;
+    const mgrName = ctx.makeTempName('with_mgr');
     ctx.emit('store', [mgrName, mgr.id], VOID, l);
     ctx.symbols.set(mgrName, mgr.id);
     tempNames.push(mgrName);
@@ -1345,7 +1336,7 @@ function lowerFor_ad(ctx, node) {
 
   // Tuple/List target: use a synthetic temp variable, unpack in body
   if (node.target.type === 'Tuple' || node.target.type === 'List') {
-    const tempName = `__forv_${ctx._idGen.peek()}`;
+    const tempName = ctx.makeTempName('forv');
     // Pre-declare each target element at module scope if top-level
     _preDeclareTargetNames(ctx, node.target, l);
 
@@ -1689,17 +1680,17 @@ function lowerComprehension(ctx, node) {
   let tempName, initOp;
   if (kind === 'ListComp' || kind === 'GeneratorExp') {
     initOp = ctx.emit('array_new', [], DYNAMIC, l);
-    tempName = `__comp_${ctx._idGen.peek()}`;
+    tempName = ctx.makeTempName('comp');
   } else if (kind === 'SetComp') {
     const arr = ctx.emit('array_new', [], DYNAMIC, l);
     initOp = emitPyCall(ctx, 'makeSet', [arr], l);
-    tempName = `__setc_${ctx._idGen.peek()}`;
+    tempName = ctx.makeTempName('setc');
   } else {
     // DictComp — use a Map
     const empty1 = ctx.emit('array_new', [], DYNAMIC, l);
     const empty2 = ctx.emit('array_new', [], DYNAMIC, l);
     initOp = emitPyCall(ctx, 'makeDict', [empty1, empty2], l);
-    tempName = `__dictc_${ctx._idGen.peek()}`;
+    tempName = ctx.makeTempName('dictc');
   }
   ctx.emit('store', [tempName, initOp.id], VOID, l);
   ctx.symbols.set(tempName, initOp.id);
@@ -1733,7 +1724,7 @@ function lowerComprehension(ctx, node) {
         targetName = gen.target.id;
         ctx.symbols.set(targetName, null);
       } else if (gen.target.type === 'Tuple' || gen.target.type === 'List') {
-        targetName = `__gen_${ctx._idGen.peek()}`;
+        targetName = ctx.makeTempName('gen');
         _preDeclareTargetNames(ctx, gen.target, l);
         // Unpack inside the loop body
         const tempLoad = ctx.emit('load', [targetName], DYNAMIC, l);

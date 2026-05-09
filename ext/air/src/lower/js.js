@@ -7,7 +7,7 @@ import {
   resolveAnnotation, isDynamic,
 } from '../types.js';
 import { ScopeChain } from '../scope.js';
-import { BaseLowerCtx, captureOps } from './base.js';
+import { BaseLowerCtx, captureOps, emitPhiSelect } from './base.js';
 
 // SSA id allocation + the op record builder live on BaseLowerCtx now
 // (`ctx._idGen.next()` for ids; `ctx.emit(op, args, type, loc, extra)`
@@ -1244,14 +1244,10 @@ function lowerObjectExpr(ctx, node) {
 function lowerConditional(ctx, node) {
   const l = ctx.loc(node);
   const cond = lowerExpr(ctx, node.test);
-  let thenVal = null, elseVal = null;
-  const thenBody = captureOps(ctx, () => { thenVal = lowerExpr(ctx, node.consequent); });
-  const elseBody = captureOps(ctx, () => { elseVal = lowerExpr(ctx, node.alternate); });
-  return ctx.emit('if_region', [cond.id], DYNAMIC, l, {
-    then_body: thenBody,
-    else_body: elseBody,
-    phis: [{ then_val: thenVal.id, else_val: elseVal.id }],
-  });
+  return emitPhiSelect(ctx, cond.id,
+    () => lowerExpr(ctx, node.consequent),
+    () => lowerExpr(ctx, node.alternate),
+    l, DYNAMIC);
 }
 
 // --- Template literals ---

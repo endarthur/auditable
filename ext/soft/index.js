@@ -350,6 +350,24 @@ class ScopeChain {
 
 
 /**
+ * Lowering failure that the wrapper at ext/air/src/api.js treats as
+ * "fall back to the tree-walker / opaque path" rather than "real bug,
+ * propagate." The `_airFallback: true` marker is the load-bearing
+ * contract — every frontend's lowerer should throw this (or a subclass
+ * of it) for nodes it can't handle.
+ *
+ * Lifted to base.js so all frontends share one definition; previously
+ * adder + soft each defined their own identical class.
+ */
+class AirLowerError extends Error {
+  constructor(message) {
+    super(message);
+    this._airFallback = true;
+    this.name = 'AirLowerError';
+  }
+}
+
+/**
  * Per-instance SSA-id generator. Each lowering invocation gets its own,
  * so cell A's ids don't collide with cell B's even when both lowerers
  * share this module.
@@ -424,6 +442,80 @@ class BaseLowerCtx {
 
   // Subclasses override to provide language-specific node→{line, col}.
   loc(_node) { return null; }
+
+  /**
+   * Synthesize a unique-per-cell identifier with a readable prefix.
+   * Used wherever a lowering needs a temporary name visible in emitted
+   * JS — e.g. comprehensions' result accumulator, with-block managers,
+   * for-of unpacking targets, repeat-loop counters.
+   *
+   *   ctx.makeTempName('rep')      → '__rep_42'
+   *   ctx.makeTempName('with_mgr') → '__with_mgr_43'
+   *
+   * Convention: `__` prefix marks synthetic names so user code can't
+   * accidentally shadow them; the trailing `_N` ties the name to
+   * lowering progress and stays stable across re-emits.
+   */
+  makeTempName(prefix) {
+    return `__${prefix}_${this._idGen.peek()}`;
+  }
+
+  /**
+   * Emit a runtime-helper call: `<namespace>.<method>(<args>)`. Each
+   * frontend dispatches differently to its runtime — adder uses
+   * `_py.add(a, b)` for dunder semantics, soft uses `_soft.eq(a, b)`
+   * for case-insensitive string compare, etc. — but the AIR shape is
+   * identical:
+   *
+   *   load(namespace) → object_get(method) → call(method_id, …args)
+   *
+   * Frontends keep thin wrappers (e.g. `emitPyCall = (ctx, m, a, l, t) =>
+   * ctx.emitNamespacedCall('_py', m, a, l, t)`) for ergonomics, but
+   * the canonical path lives here.
+   *
+   * @param {string} namespace - the runtime helper's variable name
+   * @param {string} method    - method to call on the namespace
+   * @param {Array<{id: string}>} args - SSA-typed argument ops
+   * @param {object|null} loc  - source location
+   * @param {object|null} type - result type hint, defaults to DYNAMIC
+   */
+  emitNamespacedCall(namespace, method, args, loc, type) {
+    const ns = this.emit('load', [namespace], DYNAMIC, loc);
+    const methodGet = this.emit('object_get', [ns.id, method], DYNAMIC, loc);
+    return this.emit(
+      'call',
+      [methodGet.id, ...args.map(a => a.id)],
+      type || DYNAMIC,
+      loc,
+    );
+  }
+}
+
+/**
+ * The "two branches, pick a value via phi" pattern that shows up in
+ * every ternary-ish construct: JS `cond ? a : b`, adder `a if c else b`,
+ * adder `a and b` / `a or b`, soft `X if cond otherwise Y`, etc.
+ *
+ * Caller provides:
+ *   - condId  - SSA id of the (already-truthy-coerced) condition
+ *   - thenFn  - callback that lowers the then-branch and returns its
+ *               value op; called inside captureOps so its emits become
+ *               then_body
+ *   - elseFn  - same for else-branch
+ *
+ * Returns the if_region op, with phi wired so downstream consumers
+ * can reference it as a single value.
+ */
+function emitPhiSelect(ctx, condId, thenFn, elseFn, loc, type) {
+  let thenVal = null;
+  let elseVal = null;
+  const thenBody = captureOps(ctx, () => { thenVal = thenFn(); });
+  const elseBody = captureOps(ctx, () => { elseVal = elseFn(); });
+  return ctx.emit('if_region', [condId], type || DYNAMIC, loc, {
+    then_body: thenBody,
+    else_body: elseBody,
+    phis: [{ then_val: thenVal.id, else_val: elseVal.id }],
+  });
 }
 
 /**
@@ -3536,9 +3628,11 @@ function softCompletions(prefix) {
 
 
 
-class SoftLowerError extends Error {
-  constructor(message) { super(message); this._airFallback = true; }
-}
+// Soft historically used SoftLowerError as the in-frontend name; both
+// it and AirLowerError now alias to the base class so the
+// `_airFallback: true` contract is consistent across frontends.
+
+const SoftLowerError = AirLowerError;
 
 // SoftLowerCtx is just BaseLowerCtx with a Soft-specific loc(): Soft AST
 // nodes carry `node.line` but no column. The shared base provides ops /
@@ -3550,11 +3644,9 @@ class SoftLowerCtx extends BaseLowerCtx {
   }
 }
 
-// _soft.XYZ call
+// _soft.XYZ call — thin wrapper over the shared emitNamespacedCall.
 function emitSoftCall(ctx, method, args, loc, type) {
-  const softLoad = ctx.emit('load', ['_soft'], DYNAMIC, loc);
-  const methodGet = ctx.emit('object_get', [softLoad.id, method], DYNAMIC, loc);
-  return ctx.emit('call', [methodGet.id, ...args.map(a => a.id)], type || DYNAMIC, loc);
+  return ctx.emitNamespacedCall('_soft', method, args, loc, type);
 }
 
 function emitAwaitedCall_sf(ctx, fnId, argIds, loc, type) {
@@ -3895,22 +3987,12 @@ function lowerLogic(ctx, node) {
   // a or b  → truthy(a) ? a : b
   const left = lowerExpr_sf(ctx, node.left);
   const truthy = emitSoftCall(ctx, 'truthy', [left], l, BOOL);
-  let right = null;
-  const rightBody = captureOps(ctx, () => { right = lowerExpr_sf(ctx, node.right); });
-
-  if (node.op === 'and') {
-    return ctx.emit('if_region', [truthy.id], DYNAMIC, l, {
-      then_body: rightBody,
-      else_body: [],
-      phis: [{ then_val: right.id, else_val: left.id }],
-    });
-  }
-  // or
-  return ctx.emit('if_region', [truthy.id], DYNAMIC, l, {
-    then_body: [],
-    else_body: rightBody,
-    phis: [{ then_val: left.id, else_val: right.id }],
-  });
+  // and: if truthy(left) → right else → left
+  // or:  if truthy(left) → left else → right
+  return emitPhiSelect(ctx, truthy.id,
+    node.op === 'and' ? () => lowerExpr_sf(ctx, node.right) : () => left,
+    node.op === 'and' ? () => left : () => lowerExpr_sf(ctx, node.right),
+    l, DYNAMIC);
 }
 
 function lowerBetween(ctx, node) {
@@ -3933,14 +4015,10 @@ function lowerTernary(ctx, node) {
   // X if cond otherwise Y → _soft.truthy(cond) ? X : Y
   const cond = lowerExpr_sf(ctx, node.cond);
   const truthy = emitSoftCall(ctx, 'truthy', [cond], l, BOOL);
-  let thenVal = null, elseVal = null;
-  const thenBody = captureOps(ctx, () => { thenVal = lowerExpr_sf(ctx, node.ifTrue); });
-  const elseBody = captureOps(ctx, () => { elseVal = lowerExpr_sf(ctx, node.ifFalse); });
-  return ctx.emit('if_region', [truthy.id], DYNAMIC, l, {
-    then_body: thenBody,
-    else_body: elseBody,
-    phis: [{ then_val: thenVal.id, else_val: elseVal.id }],
-  });
+  return emitPhiSelect(ctx, truthy.id,
+    () => lowerExpr_sf(ctx, node.ifTrue),
+    () => lowerExpr_sf(ctx, node.ifFalse),
+    l, DYNAMIC);
 }
 
 // ── Of: x of y → y.x (with null-safety) ──
@@ -4175,7 +4253,7 @@ function lowerRepeat(ctx, node) {
   const l = ctx.loc(node);
   // repeat N times: body → for-loop 0..N
   const countExpr = lowerExpr_sf(ctx, node.count);
-  const tempVar = `__rep_${ctx._idGen.peek()}`;
+  const tempVar = ctx.makeTempName('rep');
 
   const initOps = captureOps(ctx, () => {
     const zero = ctx.emit('const', [0], I32, l);
