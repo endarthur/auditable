@@ -379,21 +379,45 @@ end
 
 ! C := alpha * A * B + beta * C  (general matrix-matrix multiply)
 ! A is m x k, B is k x n, C is m x n
+!
+! Uses (i, p, j) loop order so the inner loop becomes a daxpy-style update
+! `c[i, j] += t * b[p, j]`. Both reads and the write are stride-1 in j —
+! cache-friendly (each row of B and C streams sequentially through L1) and
+! V8/wasm-JIT can vectorize the inner loop. The textbook (i, j, k) order
+! reads b[p, j] with stride n and is ~2-3× slower at the same LOC.
+!
+! beta is handled in a prologue (scale C, or zero it) so the inner loop is
+! a pure accumulation.
 subroutine alas.dgemm(
   a: array f64; b: array f64; c: array f64;
   m, n, k: i32; alpha, beta: f64
 )
 var
   i, j, p: i32
-  s: f64
+  t: f64
 begin
-  for i := 0, m
-    for j := 0, n
-      s := 0.0
-      for p := 0, k
-        s := s + a[i, k, p] * b[p, n, j]
+  ! Phase 1: prepare C.
+  if (beta == 0.0) then
+    for i := 0, m
+      for j := 0, n
+        c[i, n, j] := 0.0
       end for
-      c[i, n, j] := alpha * s + beta * c[i, n, j]
+    end for
+  else if (beta /= 1.0) then
+    for i := 0, m
+      for j := 0, n
+        c[i, n, j] := beta * c[i, n, j]
+      end for
+    end for
+  end if
+
+  ! Phase 2: C += alpha * A * B in (i, p, j) order.
+  for i := 0, m
+    for p := 0, k
+      t := alpha * a[i, k, p]
+      for j := 0, n
+        c[i, n, j] := c[i, n, j] + t * b[p, n, j]
+      end for
     end for
   end for
 end
