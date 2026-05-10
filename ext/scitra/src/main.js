@@ -9,6 +9,8 @@ import {
 } from './stats/descriptives.js';
 import { normal_score_transform } from './stats/transform.js';
 import { gaussian_kde } from './stats/kde.js';
+import { cdist, pdist, squareform } from './spatial/distance.js';
+import { KDTree } from './spatial/kdtree.js';
 import { erf, erfc, erfinv, ndtri, lgamma, gamma, lbeta } from './util/special.js';
 import { mulberry32, makeRng, makeNormalSampler } from './util/random.js';
 
@@ -24,6 +26,15 @@ export const stats = {
   normal_score_transform,
   // kde
   gaussian_kde,
+};
+
+export const spatial = {
+  // distance
+  cdist, pdist, squareform,
+  distance: { cdist, pdist, squareform },
+  // kdtree
+  KDTree,
+  kdtree: { KDTree },
 };
 
 export const special = {
@@ -46,5 +57,6 @@ export {
 };
 export { normal_score_transform };
 export { gaussian_kde };
+export { cdist, pdist, squareform, KDTree };
 export { erf, erfc, erfinv, ndtri, lgamma, gamma, lbeta };
 export { mulberry32, makeRng, makeNormalSampler };
