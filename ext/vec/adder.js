@@ -9,7 +9,7 @@
 // Users alias at import time: `import vec as np` (Auditable's convention is
 // to register modules under their package name; aliasing is the user's job).
 
-import * as vec from './src/index.js';
+import * as vec from './index.js';
 
 // ---------- helpers ----------
 
