@@ -15,10 +15,10 @@
 //   workload                       vec      plain f64    natra      numpy ST
 //   10K vector add                 0.032    0.005        0.045       0.002
 //   100K vector add                0.186    0.056        1.856       0.091
-//   1M vector add                  1.319    0.626        skip*       1.205
+//   1M vector add                  1.319    0.626        TBD         1.205
 //   10K sum                        0.007    0.007        0.010       0.002
 //   100K sum                       0.060    0.062        0.062       0.015
-//   1M sum                         0.686    0.645        skip*       0.193
+//   1M sum                         0.686    0.645        TBD         0.193
 //   10K dot                        0.008    0.007        0.005       0.001
 //   100K dot                       0.068    0.074        0.034       0.012
 //   50×50 matmul                   0.127    —            1.385       0.004
@@ -33,9 +33,10 @@
 //   20×20 eigSym                   0.111    —            0.314       0.030
 //
 // All numbers in ms/run.
-// * natra hits a wasm out-of-bounds error at 1M elements even with maxPages
-//   bumped to 65536 (4GB). Looks like an i32-pointer issue inside the
-//   compiled add kernel — not a knob the caller can fix.
+// 1M natra numbers TBD — pending refresh after switching benchmarks to the
+// scope-discard pattern (earlier "wasm OOB" was a downstream symptom of
+// scope-promotion accumulating ~8MB/iter into perm; see ext/natra/README.md
+// "Memory model" section).
 //
 // Takeaways:
 // (1) vec.eigSym3 (closed-form Cardano) is **faster than numpy** for 3×3
@@ -52,11 +53,10 @@
 import * as vec from '../ext/vec/index.js';
 import { natra } from '../ext/natra/index.js';
 
-// Initial 1024 pages (64MB). Bump maxPages from default 16384 (1GB) to 65536
-// (4GB, the wasm limit) so 1M-element ops don't hit the cap when scope arenas
-// accumulate memory across many iterations. natra grows but never shrinks
-// wasm memory; the cap is per-process.
-const ctx = await natra({ pages: 1024, maxPages: 65536 });
+// natra arenas reclaim correctly when scopes don't return arrays — we use
+// the braced `scope(s => { ... })` pattern below to discard intermediate
+// results, so memory stays flat across iterations.
+const ctx = await natra({ pages: 1024 });
 
 async function time(label, runs, fn) {
   for (let i = 0; i < Math.min(3, runs); i++) await fn();
@@ -90,18 +90,11 @@ for (const N of [10_000, 100_000, 1_000_000]) {
   const vb = vec.from(jb, [N]);
   await time('vec.add (allocates result)', runs, () => { vec.add(va, vb); });
 
-  // natra: skip 1M — its wasm kernels hit out-of-bounds errors at this size
-  // even with maxPages bumped to 65536 (4GB). Likely an i32-pointer issue
-  // inside the compiled add kernel; needs natra-side investigation.
-  if (N <= 100_000) {
-    const na = ctx.arange(0, N);
-    const nb = ctx.arange(0, N);
-    await time('natra (op only, in scope)', runs, () => {
-      ctx.scope(s => s.add(na, nb));
-    });
-  } else {
-    console.log('  natra (op only, in scope)               : skipped (wasm OOB at 1M)');
-  }
+  const na = ctx.arange(0, N);
+  const nb = ctx.arange(0, N);
+  await time('natra (op only, in scope)', runs, () => {
+    ctx.scope(s => { s.add(na, nb); });
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -123,14 +116,10 @@ for (const N of [10_000, 100_000, 1_000_000]) {
   const va = vec.from(ja, [N]);
   await time('vec.sum', runs, () => { vec.sum(va); });
 
-  if (N <= 100_000) {
-    const na = ctx.arange(0, N);
-    await time('natra (op only, in scope)', runs, () => {
-      ctx.scope(s => s.sum(na));
-    });
-  } else {
-    console.log('  natra (op only, in scope)               : skipped (wasm OOB at 1M)');
-  }
+  const na = ctx.arange(0, N);
+  await time('natra (op only, in scope)', runs, () => {
+    ctx.scope(s => { s.sum(na); });
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -156,7 +145,7 @@ for (const N of [10_000, 100_000]) {
   const na = ctx.arange(0, N);
   const nb = ctx.arange(0, N);
   await time('natra (op only, in scope)', 1000, () => {
-    ctx.scope(s => s.dot(na, nb));
+    ctx.scope(s => { s.dot(na, nb); });
   });
 }
 
@@ -193,7 +182,7 @@ for (const N of [50, 100, 200, 500]) {
   const nB = ctx.array(Array.from({ length: N }, (_, i) =>
     Array.from({ length: N }, (_, j) => data2[i * N + j])));
   await time(`natra (alpack dgemm)`, runs, () => {
-    ctx.scope(s => s.matmul(nA, nB));
+    ctx.scope(s => { s.matmul(nA, nB); });
   });
 }
 
@@ -234,7 +223,7 @@ for (const N of [50, 100, 200]) {
     Array.from({ length: N }, (_, j) => Adata[i * N + j])));
   const nb = ctx.array(Array.from({ length: N }, (_, i) => bData[i]));
   await time(`natra (alpack LU)`, runs, () => {
-    ctx.scope(s => s.solve(nA, nb));
+    ctx.scope(s => { s.solve(nA, nb); });
   });
 }
 
@@ -263,7 +252,7 @@ const nSym = ctx.array([
   [0, 1, 6],
 ]);
 await time('natra.eigh (alpack syevd)', 10000, () => {
-  ctx.scope(s => s.eigh(nSym));
+  ctx.scope(s => { s.eigh(nSym); });
 });
 
 // ─────────────────────────────────────────────────────────────────────
@@ -293,7 +282,7 @@ await time('vec.eigSym (Jacobi)', 200, () => { vec.eigSym(vSym20); });
 const nSym20 = ctx.array(Array.from({ length: symN }, (_, i) =>
   Array.from({ length: symN }, (_, j) => symData[i * symN + j])));
 await time('natra.eigh (alpack syevd)', 200, () => {
-  ctx.scope(s => s.eigh(nSym20));
+  ctx.scope(s => { s.eigh(nSym20); });
 });
 
 console.log(`\n(Run test/perf_vec_numpy.py separately for numpy reference numbers.)`);

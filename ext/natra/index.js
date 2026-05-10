@@ -515,7 +515,18 @@ function ensureMemory(memory, needed, maxPages) {
       if (totalPages > maxPages)
         throw new Error(`Memory limit exceeded: need ${totalPages} pages, max is ${maxPages} (${(maxPages * 64 / 1024).toFixed(0)} MB)`);
     }
-    memory.grow(pages);
+    // memory.grow returns -1 when the runtime / OS refuses (typical at high
+    // page counts on memory-constrained or 32-bit-virtual-address platforms,
+    // even when below the configured maxPages). Propagate that as a clear
+    // error instead of silently returning an unmapped pointer that crashes
+    // a downstream kernel with "memory access out of bounds".
+    const prevPages = memory.grow(pages);
+    if (prevPages === -1) {
+      const havePages = have / PAGE_SIZE;
+      throw new Error(
+        `WebAssembly.Memory.grow refused: have ${havePages} pages (${(have / 1024 / 1024).toFixed(0)} MB), requested +${pages} pages — runtime denied (try lowering pages, freeing scopes, or splitting work into chunks)`
+      );
+    }
   }
 }
 
