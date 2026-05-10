@@ -1,0 +1,49 @@
+{
+  "name": "@gcu/scitra",
+  "version": "0.1.0",
+  "description": "scipy-shaped scientific-computing primitives for the browser. Statistical distributions, KDE, spatial indices, optimization, interpolation, integration, image processing, FFT. Pure JS + atra-compiled wasm kernels where it pays. Companion to @gcu/natra (numpy) and @gcu/vec (small dense linear algebra).",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./stats": "./index.js",
+    "./spatial": "./index.js",
+    "./optimize": "./index.js",
+    "./interpolate": "./index.js",
+    "./integrate": "./index.js",
+    "./ndimage": "./index.js",
+    "./fft": "./index.js",
+    "./sample": "./index.js",
+    "./adder": "./adder.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "adder.js",
+    "src/",
+    "SPEC.md",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@gcu/natra": "^0.2.0",
+    "@gcu/vec": "^0.1.0",
+    "@gcu/adder": "^0.3.0"
+  },
+  "peerDependenciesMeta": {
+    "@gcu/natra": { "optional": true },
+    "@gcu/vec": { "optional": true },
+    "@gcu/adder": { "optional": true }
+  },
+  "keywords": ["scipy", "scientific-computing", "statistics", "distributions", "kde", "kdtree", "optimization", "least-squares", "interpolation", "fft", "ndimage", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/scitra"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/scitra",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}
