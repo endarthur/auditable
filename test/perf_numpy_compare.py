@@ -12,9 +12,13 @@ import json
 import numpy as np
 
 mode = sys.argv[1]
-sizes = [int(s) for s in sys.argv[2].split(',')]
+# Parse sizes lazily — pca uses "NxP" tokens, others use plain integers
+sizes_raw = sys.argv[2]
 
 results = {}
+
+if mode != 'pca':
+    sizes = [int(s) for s in sizes_raw.split(',')]
 
 if mode == 'matmul':
     for N in sizes:
@@ -64,6 +68,35 @@ elif mode == 'ddot':
             ts.append((time.perf_counter() - t0) / inner * 1e6)
         ts.sort()
         results[f'{n}_f32'] = ts[10]
+
+elif mode == 'pca':
+    # sizes argv is comma-separated "NxP" specs
+    cases = [tuple(map(int, s.split('x'))) for s in sizes_raw.split(',')]
+    for N, P in cases:
+        rng = np.random.default_rng(0)
+        X = rng.standard_normal((N, P))
+        Xc = X - X.mean(axis=0)
+        for _ in range(3): np.linalg.svd(Xc, full_matrices=False)
+        inner = max(1, min(10, 50_000_000 // (N * P * P + 1)))
+        ts = []
+        for _ in range(10):
+            t0 = time.perf_counter()
+            for _ in range(inner): np.linalg.svd(Xc, full_matrices=False)
+            ts.append((time.perf_counter() - t0) / inner * 1000)
+        ts.sort()
+        results[f'{N}x{P}_svd'] = ts[5]
+        def cov_pca():
+            C = (Xc.T @ Xc) / (N - 1)
+            return np.linalg.eigh(C)
+        for _ in range(3): cov_pca()
+        ts = []
+        for _ in range(10):
+            t0 = time.perf_counter()
+            for _ in range(inner): cov_pca()
+            ts.append((time.perf_counter() - t0) / inner * 1000)
+        ts.sort()
+        results[f'{N}x{P}_cov'] = ts[5]
+    print(json.dumps(results)); sys.exit(0)
 
 elif mode == 'svd':
     for N in sizes:
