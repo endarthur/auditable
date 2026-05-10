@@ -550,30 +550,30 @@ end
 ! C := alpha * A * B + beta * C  (general matrix-matrix multiply)
 ! A is m x k, B is k x n, C is m x n
 !
-! Uses (i, p, j) loop order so the inner loop becomes a daxpy-style update
-! `c[i, j] += t * b[p, j]`. Vectorized with f64x2 + relaxed_madd over the
-! j axis: each iteration computes 2 elements with a single fused-multiply-
-! add. Byte-offset SIMD addressing (v128.load_at) handles odd column count
-! n cleanly — no per-shape branching.
+! 2x2 register-blocked microkernel: for each (i, j) tile of 2 rows × 4
+! cols of C, the 4 f64x2 accumulators (covering the 2x4 block) are kept
+! in xmm registers across the entire p-loop. V8's allocator pins them
+! to xmm0..xmm3 typically. This eliminates ~k C-load+store pairs per
+! tile, giving ~2× over the simple SIMD daxpy form on 200×200+.
 !
-! beta is handled in a prologue (scale C, or zero it) so the inner loop is
-! a pure accumulation.
+! Edge cases (m % 2, n % 4): trailing rows/cols processed with the same
+! SIMD daxpy form as the previous dgemm — code at the end of the routine.
 !
-! Note: tried naive cache blocking on (jj, pp) with 64-element blocks —
-! no measurable speedup at 500×500 and a slight regression in some runs.
-! Real cache-friendly dgemm requires packing A/B into block-shaped arrays
-! before the inner kernel, plus three-level blocking sized for L1/L2/L3.
-! That's a substantial separate effort; deferred.
+! beta is handled in a prologue: zero or scale C. The microkernel then
+! loads the (already-scaled) C into accumulators, adds alpha*A*B, and
+! writes back. Common path beta=0 is essentially free.
 subroutine alas.dgemm(
   a: array f64; b: array f64; c: array f64;
   m, n, k: i32; alpha, beta: f64
 )
 var
-  i, j, p, n2, c_row, b_row, joff: i32
-  t: f64
+  i, j, p, m_main, n_main, n2: i32
+  c_row0, c_row1, b_row, joff: i32
+  t, a0, a1: f64
+  av0, av1, vb0, vb1, c00, c01, c10, c11: f64x2
   tv, vb, vc: f64x2
 begin
-  ! Phase 1: prepare C.
+  ! Prologue: scale C by beta (or zero if beta == 0).
   if (beta == 0.0) then
     for i := 0, m
       for j := 0, n
@@ -588,22 +588,92 @@ begin
     end for
   end if
 
-  ! Phase 2: C += alpha * A * B with SIMD inner loop.
+  m_main := (m / 2) * 2     ! largest even <= m
+  n_main := (n / 4) * 4     ! largest multiple of 4 <= n
+
+  ! ── Microkernel: 2x2 tiles over [0, m_main) × [0, n_main) ──
+  for i := 0, m_main, 2
+    c_row0 := i * n * 8
+    c_row1 := (i + 1) * n * 8
+    for j := 0, n_main, 4
+      ! Load existing C tile into accumulators (so beta*C contribution
+      ! stays). For the common beta=0 path the prologue zero'd it; the
+      ! load is still cheap because C row is hot in cache.
+      c00 := v128.load_at(c, c_row0 + j * 8)
+      c01 := v128.load_at(c, c_row0 + j * 8 + 16)
+      c10 := v128.load_at(c, c_row1 + j * 8)
+      c11 := v128.load_at(c, c_row1 + j * 8 + 16)
+
+      for p := 0, k
+        a0 := alpha * a[i, k, p]
+        a1 := alpha * a[i + 1, k, p]
+        av0 := f64x2.splat(a0)
+        av1 := f64x2.splat(a1)
+        b_row := p * n * 8
+        vb0 := v128.load_at(b, b_row + j * 8)
+        vb1 := v128.load_at(b, b_row + j * 8 + 16)
+        c00 := f64x2.relaxed_madd(av0, vb0, c00)
+        c01 := f64x2.relaxed_madd(av0, vb1, c01)
+        c10 := f64x2.relaxed_madd(av1, vb0, c10)
+        c11 := f64x2.relaxed_madd(av1, vb1, c11)
+      end for
+
+      call v128.store_at(c, c_row0 + j * 8, c00)
+      call v128.store_at(c, c_row0 + j * 8 + 16, c01)
+      call v128.store_at(c, c_row1 + j * 8, c10)
+      call v128.store_at(c, c_row1 + j * 8 + 16, c11)
+    end for
+  end for
+
+  ! ── Tail 1: trailing columns [n_main, n) within [0, m_main) ──
+  ! Process two rows at a time with scalar+SIMD daxpy.
+  if (n_main < n) then
+    n2 := (n - n_main) / 2
+    for i := 0, m_main, 2
+      c_row0 := i * n * 8
+      c_row1 := (i + 1) * n * 8
+      for p := 0, k
+        a0 := alpha * a[i, k, p]
+        a1 := alpha * a[i + 1, k, p]
+        av0 := f64x2.splat(a0)
+        av1 := f64x2.splat(a1)
+        b_row := p * n * 8
+        for j := 0, n2
+          joff := n_main * 8 + j * 16
+          vb0 := v128.load_at(b, b_row + joff)
+          c00 := v128.load_at(c, c_row0 + joff)
+          c10 := v128.load_at(c, c_row1 + joff)
+          c00 := f64x2.relaxed_madd(av0, vb0, c00)
+          c10 := f64x2.relaxed_madd(av1, vb0, c10)
+          call v128.store_at(c, c_row0 + joff, c00)
+          call v128.store_at(c, c_row1 + joff, c10)
+        end for
+        ! scalar 1-element tail when (n - n_main) is odd
+        if (n_main + n2 * 2 < n) then
+          j := n_main + n2 * 2
+          c[i, n, j] := c[i, n, j] + a0 * b[p, n, j]
+          c[i + 1, n, j] := c[i + 1, n, j] + a1 * b[p, n, j]
+        end if
+      end for
+    end for
+  end if
+
+  ! ── Tail 2: trailing rows [m_main, m), full column range ──
+  ! Single-row daxpy form (the previous baseline dgemm).
   n2 := n / 2
-  for i := 0, m
-    c_row := i * n * 8         ! byte offset of row i in C
+  for i := m_main, m
+    c_row0 := i * n * 8
     for p := 0, k
       t := alpha * a[i, k, p]
       tv := f64x2.splat(t)
-      b_row := p * n * 8       ! byte offset of row p in B
+      b_row := p * n * 8
       for j := 0, n2
         joff := j * 16
         vb := v128.load_at(b, b_row + joff)
-        vc := v128.load_at(c, c_row + joff)
+        vc := v128.load_at(c, c_row0 + joff)
         vc := f64x2.relaxed_madd(tv, vb, vc)
-        call v128.store_at(c, c_row + joff, vc)
+        call v128.store_at(c, c_row0 + joff, vc)
       end for
-      ! scalar tail for odd n
       if (n2 * 2 < n) then
         j := n2 * 2
         c[i, n, j] := c[i, n, j] + t * b[p, n, j]
@@ -612,104 +682,6 @@ begin
   end for
 end
 
-! ── dgemm with (ii, jj) cache blocking + B-column packing ──────────
-!
-! EXPERIMENTAL — NO MEASURABLE SPEEDUP over plain SIMD dgemm on AMD
-! Ryzen AI 9 HX 370 (within 5% across N = 50..500). Kept in source for
-! future investigators building on it (e.g. adding a register-blocked
-! microkernel to extract instruction-level parallelism).
-!
-! Why naive blocking doesn't help: the SIMD inner loop already streams
-! rows of B sequentially with stride-1 reads, which is exactly what
-! the hardware prefetcher predicts. Packing converts stride-n reads
-! across the p loop to stride-1 reads through `pack`, but the original
-! stride-n was already amortized across many SIMD iterations within a
-! single row. The L2/L3 prefetcher handles it.
-!
-! What WOULD help: a register-blocked microkernel processing e.g. 4×4
-! blocks of C with partial sums kept in 8 f64x2 accumulators across
-! multiple p iterations. V8 should allocate those to xmm registers and
-! avoid the load/store traffic to C between iterations. That's a
-! meaningfully different optimization than "block and pack" alone.
-!
-! Scratch buffer requirement: k × 32 f64 (= 128 KB at k=500). Caller
-! (natra) allocates from its scope arena and passes via `pack`.
-subroutine alas.dgemm_packed(
-  a: array f64; b: array f64; c: array f64;
-  m, n, k: i32; alpha, beta: f64;
-  pack: array f64
-)
-var
-  i, j, p, jj, kk, ii: i32
-  jbound, kbound, ibound, nblock, kblock: i32
-  c_row, pack_row, joff, n2: i32
-  t: f64
-  tv, vb, vc: f64x2
-begin
-  ! Phase 1: prepare C
-  if (beta == 0.0) then
-    for i := 0, m
-      for j := 0, n
-        c[i, n, j] := 0.0
-      end for
-    end for
-  else if (beta /= 1.0) then
-    for i := 0, m
-      for j := 0, n
-        c[i, n, j] := beta * c[i, n, j]
-      end for
-    end for
-  end if
-
-  ! Phase 2: (ii, jj) tile blocking — process a 32×32 tile of C at a time
-  ! so the tile stays hot in L1 across the full k contraction. B's panel
-  ! [0:k, jj:jj+32] is packed once per (ii, jj) so reads are stride-1.
-  for jj := 0, n, 32
-    jbound := jj + 32
-    if (jbound > n) then
-      jbound := n
-    end if
-    nblock := jbound - jj
-    n2 := nblock / 2
-
-    ! Pack B[:, jj:jj+nblock] (full k rows × nblock cols) into pack, row-major.
-    ! Buffer size: k * nblock f64. Caller provides pack of size >= k * 32.
-    for p := 0, k
-      for j := 0, nblock
-        pack[p * 32 + j] := b[p, n, jj + j]
-      end for
-    end for
-
-    for ii := 0, m, 32
-      ibound := ii + 32
-      if (ibound > m) then
-        ibound := m
-      end if
-
-      ! Inner kernel: process tile C[ii:ibound, jj:jj+nblock]. Within the
-      ! tile, each row i of C is touched k times (once per p). Pack provides
-      ! stride-1 reads for B.
-      for i := ii, ibound
-        c_row := (i * n + jj) * 8
-        for p := 0, k
-          t := alpha * a[i, k, p]
-          tv := f64x2.splat(t)
-          pack_row := p * 32 * 8
-          for j := 0, n2
-            joff := j * 16
-            vb := v128.load_at(pack, pack_row + joff)
-            vc := v128.load_at(c, c_row + joff)
-            vc := f64x2.relaxed_madd(tv, vb, vc)
-            call v128.store_at(c, c_row + joff, vc)
-          end for
-          for j := n2 * 2, nblock
-            c[i, n, jj + j] := c[i, n, jj + j] + t * pack[p * 32 + j]
-          end for
-        end for
-      end for
-    end for
-  end for
-end
 
 ! ══════════════════════════════════════════════════════════════════════
 ! ALPACK — factorizations, solvers, eigendecomposition
@@ -1619,13 +1591,16 @@ end
 
 ! ── ALAS Level 3 (f32) ────────────────────────────────────────────────
 
+! 2x2 register-blocked microkernel (4 f32x4 accumulators = 2 rows × 8 cols).
 subroutine alas.sgemm(
   a: array f32; b: array f32; c: array f32;
   m, n, k: i32; alpha, beta: f32
 )
 var
-  i, j, p, n4, c_row, b_row, joff: i32
-  t: f32
+  i, j, p, m_main, n_main, n4: i32
+  c_row0, c_row1, b_row, joff: i32
+  t, a0, a1: f32
+  av0, av1, vb0, vb1, c00, c01, c10, c11: f32x4
   tv, vb, vc: f32x4
 begin
   if (beta == 0.0) then
@@ -1642,9 +1617,74 @@ begin
     end for
   end if
 
+  m_main := (m / 2) * 2
+  n_main := (n / 8) * 8
+
+  ! Microkernel: 2 rows × 8 cols (2 f32x4 col-pairs per row → 4 accumulators)
+  for i := 0, m_main, 2
+    c_row0 := i * n * 4
+    c_row1 := (i + 1) * n * 4
+    for j := 0, n_main, 8
+      c00 := v128.load_at(c, c_row0 + j * 4)
+      c01 := v128.load_at(c, c_row0 + j * 4 + 16)
+      c10 := v128.load_at(c, c_row1 + j * 4)
+      c11 := v128.load_at(c, c_row1 + j * 4 + 16)
+
+      for p := 0, k
+        a0 := alpha * a[i, k, p]
+        a1 := alpha * a[i + 1, k, p]
+        av0 := f32x4.splat(a0)
+        av1 := f32x4.splat(a1)
+        b_row := p * n * 4
+        vb0 := v128.load_at(b, b_row + j * 4)
+        vb1 := v128.load_at(b, b_row + j * 4 + 16)
+        c00 := f32x4.relaxed_madd(av0, vb0, c00)
+        c01 := f32x4.relaxed_madd(av0, vb1, c01)
+        c10 := f32x4.relaxed_madd(av1, vb0, c10)
+        c11 := f32x4.relaxed_madd(av1, vb1, c11)
+      end for
+
+      call v128.store_at(c, c_row0 + j * 4, c00)
+      call v128.store_at(c, c_row0 + j * 4 + 16, c01)
+      call v128.store_at(c, c_row1 + j * 4, c10)
+      call v128.store_at(c, c_row1 + j * 4 + 16, c11)
+    end for
+  end for
+
+  ! Tail 1: trailing cols [n_main, n) within [0, m_main)
+  if (n_main < n) then
+    n4 := (n - n_main) / 4
+    for i := 0, m_main, 2
+      c_row0 := i * n * 4
+      c_row1 := (i + 1) * n * 4
+      for p := 0, k
+        a0 := alpha * a[i, k, p]
+        a1 := alpha * a[i + 1, k, p]
+        av0 := f32x4.splat(a0)
+        av1 := f32x4.splat(a1)
+        b_row := p * n * 4
+        for j := 0, n4
+          joff := n_main * 4 + j * 16
+          vb0 := v128.load_at(b, b_row + joff)
+          c00 := v128.load_at(c, c_row0 + joff)
+          c10 := v128.load_at(c, c_row1 + joff)
+          c00 := f32x4.relaxed_madd(av0, vb0, c00)
+          c10 := f32x4.relaxed_madd(av1, vb0, c10)
+          call v128.store_at(c, c_row0 + joff, c00)
+          call v128.store_at(c, c_row1 + joff, c10)
+        end for
+        for j := n_main + n4 * 4, n
+          c[i, n, j] := c[i, n, j] + a0 * b[p, n, j]
+          c[i + 1, n, j] := c[i + 1, n, j] + a1 * b[p, n, j]
+        end for
+      end for
+    end for
+  end if
+
+  ! Tail 2: trailing rows [m_main, m), full column range
   n4 := n / 4
-  for i := 0, m
-    c_row := i * n * 4
+  for i := m_main, m
+    c_row0 := i * n * 4
     for p := 0, k
       t := alpha * a[i, k, p]
       tv := f32x4.splat(t)
@@ -1652,9 +1692,9 @@ begin
       for j := 0, n4
         joff := j * 16
         vb := v128.load_at(b, b_row + joff)
-        vc := v128.load_at(c, c_row + joff)
+        vc := v128.load_at(c, c_row0 + joff)
         vc := f32x4.relaxed_madd(tv, vb, vc)
-        call v128.store_at(c, c_row + joff, vc)
+        call v128.store_at(c, c_row0 + joff, vc)
       end for
       for j := n4 * 4, n
         c[i, n, j] := c[i, n, j] + t * b[p, n, j]

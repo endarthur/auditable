@@ -33,7 +33,6 @@ const ctx = await natra({ pages: 1024 });
 const sgemmMemory = new WebAssembly.Memory({ initial: 2048, maximum: 16384 });
 const alpackMod = atra({ __memory: sgemmMemory })`${alpackSrc}`;
 const sgemm = alpackMod.alas.sgemm;
-const dgemm_packed = alpackMod.alas.dgemm_packed;
 const f32mem = new Float32Array(sgemmMemory.buffer);
 const f64mem = new Float64Array(sgemmMemory.buffer);
 
@@ -69,20 +68,8 @@ for (const N of [50, 100, 200, 500]) {
     ctx.scope(s => { s.matmul(nA, nB); });
   });
 
-  // alpack dgemm_packed — cache-blocked + B-panel-packed (f64)
-  // Layout: aPtr | bPtr | cPtr | packPtr — all in sgemmMemory
-  const aPtr64 = 0;
-  const bPtr64 = N * N * 8;
-  const cPtr64 = N * N * 16;
-  const packPtr64 = N * N * 24;
-  for (let i = 0; i < N * N; i++) f64mem[(aPtr64 >> 3) + i] = A_f64[i];
-  for (let i = 0; i < N * N; i++) f64mem[(bPtr64 >> 3) + i] = B_f64[i];
-  await time(`alpack.dgemm_packed (f64, blocked + packed)`, runs, () => {
-    dgemm_packed(aPtr64, bPtr64, cPtr64, N, N, N, 1.0, 0.0, packPtr64);
-  });
-
   // atra f32 sgemm — same algorithm shape, f32x4 SIMD (4-wide vs f64x2's 2-wide)
-  const aPtr = N * N * 32;  // place after f64 buffers
+  const aPtr = 0;
   const bPtr = aPtr + N * N * 4;
   const cPtr = bPtr + N * N * 4;
   for (let i = 0; i < N * N; i++) f32mem[(aPtr >> 2) + i] = A_f64[i];
