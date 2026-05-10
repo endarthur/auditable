@@ -2609,10 +2609,10 @@ function codegen(ast, interpValues, userImports) {
               return prefix;
             }
             if (prefix === 'v128') {
-              // v128.and/or/xor/not/load return v128 — infer from first arg
-              if (method === 'load') return inferExprType(expr.args[0]) || 'f64x2'; // default to f64x2
+              // v128.and/or/xor/not/load/load_at return v128 — infer from first arg
+              if (method === 'load' || method === 'load_at') return inferExprType(expr.args[0]) || 'f64x2'; // default to f64x2
               if (['and','or','xor','not'].includes(method)) return inferExprType(expr.args[0]);
-              if (method === 'store') return 'i32'; // store is a statement, but type doesn't matter much
+              if (method === 'store' || method === 'store_at') return 'i32'; // statements
             }
             if (prefix === 'wasm') {
               // wasm.* builtins: most return the type of their first arg
@@ -3327,6 +3327,8 @@ function codegen(ast, interpValues, userImports) {
       }
 
       // v128.load(arr, i) — load 16 bytes from memory at arr + i * 16
+      // Convenience form for the common case of iterating an f64x2-aligned
+      // 1D buffer; index `i` is the f64x2 lane index.
       if (prefix === 'v128' && method === 'load') {
         // Compute address: arr + i * 16
         emitExpr(expr.args[0], 'i32'); // base pointer
@@ -3350,6 +3352,30 @@ function codegen(ast, interpValues, userImports) {
         const vt = inferExprType(expr.args[2]);
         emitExpr(expr.args[2], vt);
         emitSimd(SIMD_OPS['v128.store']); bw.u32(4); bw.u32(0);
+        return;
+      }
+
+      // v128.load_at(arr, bytes) — load 16 bytes from memory at arr + bytes
+      // (byte-offset addressing for arbitrary 2D / strided access patterns).
+      // align hint is 8 since f64 arrays are always 8-byte aligned; runtime
+      // takes the fast path automatically when 16-byte alignment lines up
+      // and the slow path otherwise — both correct.
+      if (prefix === 'v128' && method === 'load_at') {
+        emitExpr(expr.args[0], 'i32'); // base pointer
+        emitExpr(expr.args[1], 'i32'); // byte offset
+        bw.byte(OP_I32_ADD);
+        emitSimd(SIMD_OPS['v128.load']); bw.u32(3); bw.u32(0); // align=8
+        return;
+      }
+
+      // v128.store_at(arr, bytes, v) — store 16 bytes to memory at arr + bytes
+      if (prefix === 'v128' && method === 'store_at') {
+        emitExpr(expr.args[0], 'i32');
+        emitExpr(expr.args[1], 'i32');
+        bw.byte(OP_I32_ADD);
+        const vt = inferExprType(expr.args[2]);
+        emitExpr(expr.args[2], vt);
+        emitSimd(SIMD_OPS['v128.store']); bw.u32(3); bw.u32(0); // align=8
         return;
       }
 

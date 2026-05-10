@@ -1404,12 +1404,25 @@ result := v128.not(mask)
 
 ### Memory operations
 
-Load/store 16 bytes at once. Address = `base + index * 16`:
+Load/store 16 bytes at once. Two forms — index-based for the common case
+of iterating an aligned 1D buffer, byte-based for arbitrary 2D / strided
+access:
 
 ```
 v := v128.load(arr, i)        ! load 16 bytes from arr + i*16
 call v128.store(arr, i, v)    ! store 16 bytes to arr + i*16
+
+v := v128.load_at(arr, b)     ! load 16 bytes from arr + b (byte offset)
+call v128.store_at(arr, b, v) ! store 16 bytes to arr + b
 ```
+
+Use `load`/`store` with f64x2 lane indices when the access pattern is
+naturally 16-byte aligned (1D arrays, even-N rows of 2D arrays). Use
+`load_at`/`store_at` when byte offsets are computed (e.g. iterating
+rows of a 2D matrix with odd column count, or arbitrary strided access).
+The byte-offset forms emit an alignment-8 hint, which lets the Wasm
+runtime use the fast aligned path automatically when offsets do happen
+to land on 16-byte boundaries.
 
 Array subscript syntax (`arr[i]`) also works with vector-typed arrays — the element size is 16 bytes.
 
