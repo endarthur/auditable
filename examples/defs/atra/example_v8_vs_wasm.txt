@@ -1,0 +1,218 @@
+/// auditable
+/// title: V8 JS vs Wasm SIMD — BLAS-1
+/// module: ./ext/atra/index.js ext/atra/index.js
+/// module: ./ext/atra/lib/alpack.src.js ext/atra/lib/alpack.src.js
+/// module: ./ext/natra/index.js ext/natra/index.js
+
+/// md
+# V8 JS vs Wasm SIMD — BLAS-1
+
+A surprising performance finding from `test/scitra-v8-vs-wasm-vs-tfjs.mjs`: hand-tuned JavaScript over `Float64Array` with manual 4× loop unrolling **beats** alpack's Wasm SIMD for `ddot` and `nrm2` at most sizes — and ties or wins at memory-bandwidth-bound sizes.
+
+The reason: V8 auto-vectorizes simple TypedArray reduction loops to **AVX f64x4** (4-wide). WebAssembly's SIMD spec is **f64x2** (2-wide). At compute-bound sizes JS is literally running 2× wider SIMD; at memory-bound sizes both saturate the bus equally.
+
+This notebook re-runs the comparison in the browser to verify auditable's runtime wrapping (AsyncFunction, scope-passing, AIR analysis) doesn't change the conclusion. Click **run** on the manual cells below to execute the benchmarks.
+
+> **Caveats:** browser perf is sensitive to background load, devtools attached, throttling, etc. Close other tabs and run a few times to get stable numbers. The node bench (run from a clean shell, no devtools) shows the cleanest separation — these in-browser numbers should be in the same ballpark.
+
+/// code collapsed
+const { natra } = await load("./ext/natra/index.js");
+const nat = await natra({ pages: 1024 });
+ui.display("natra ready");
+
+/// md
+## hand-tuned JS variants
+
+Each function operates on plain `Float64Array` / `Float32Array` slices. The `unrolled4` form keeps four parallel accumulators so V8 can vectorize across them; the `naive` form is the obvious one-loop write — V8 may or may not vectorize it depending on heuristics.
+
+/// code collapsed
+function ddot_naive(x, y, n) {
+  let s = 0;
+  for (let i = 0; i < n; i++) s += x[i] * y[i];
+  return s;
+}
+
+function ddot_unrolled4(x, y, n) {
+  let s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+  const n4 = n - (n & 3);
+  let i = 0;
+  for (; i < n4; i += 4) {
+    s0 += x[i  ] * y[i  ];
+    s1 += x[i+1] * y[i+1];
+    s2 += x[i+2] * y[i+2];
+    s3 += x[i+3] * y[i+3];
+  }
+  let s = (s0 + s1) + (s2 + s3);
+  for (; i < n; i++) s += x[i] * y[i];
+  return s;
+}
+
+function nrm2_naive(x, n) {
+  let s = 0;
+  for (let i = 0; i < n; i++) s += x[i] * x[i];
+  return Math.sqrt(s);
+}
+
+function nrm2_unrolled4(x, n) {
+  let s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+  const n4 = n - (n & 3);
+  let i = 0;
+  for (; i < n4; i += 4) {
+    s0 += x[i  ] * x[i  ];
+    s1 += x[i+1] * x[i+1];
+    s2 += x[i+2] * x[i+2];
+    s3 += x[i+3] * x[i+3];
+  }
+  let s = (s0 + s1) + (s2 + s3);
+  for (; i < n; i++) s += x[i] * x[i];
+  return Math.sqrt(s);
+}
+
+/// code collapsed
+function bench(fn, innerRepeats = 100, outerSamples = 30) {
+  fn(); fn();
+  const ts = [];
+  for (let r = 0; r < outerSamples; r++) {
+    const t0 = performance.now();
+    for (let k = 0; k < innerRepeats; k++) fn();
+    ts.push((performance.now() - t0) / innerRepeats);
+  }
+  ts.sort((a, b) => a - b);
+  return ts[Math.floor(ts.length / 2)];
+}
+
+/// code collapsed
+const SIZES = [8, 32, 128, 512, 2048, 8192, 32768];
+const NMAX = SIZES[SIZES.length - 1];
+const xData64 = new Float64Array(NMAX);
+const yData64 = new Float64Array(NMAX);
+const xData32 = new Float32Array(NMAX);
+const yData32 = new Float32Array(NMAX);
+for (let i = 0; i < NMAX; i++) {
+  const v = Math.sin(i * 0.1), w = Math.cos(i * 0.1);
+  xData64[i] = v; yData64[i] = w;
+  xData32[i] = v; yData32[i] = w;
+}
+ui.display(`generated test arrays up to n=${NMAX}`);
+
+/// md
+## ddot — dot product
+
+Median μs per call across 30 samples × 100 inner repeats. Lower is better.
+
+The "u4 / w-f64" column shows the speedup of JS unrolled-4 over alpack f64. **Numbers below 1.00 mean JS is faster.**
+
+/// code
+// %manual
+(async () => {
+  const rows = [];
+  let sink = 0;
+  for (const n of SIZES) {
+    const xs = xData64.subarray(0, n);
+    const ys = yData64.subarray(0, n);
+    const xs32 = xData32.subarray(0, n);
+    const ys32 = yData32.subarray(0, n);
+    const X64 = nat.array(xs, { shape: [n], dtype: 'f64' });
+    const Y64 = nat.array(ys, { shape: [n], dtype: 'f64' });
+    const X32 = nat.array(xs32, { shape: [n], dtype: 'f32' });
+    const Y32 = nat.array(ys32, { shape: [n], dtype: 'f32' });
+
+    const tNaive = bench(() => { sink += ddot_naive(xs, ys, n); }) * 1000;
+    const tU4    = bench(() => { sink += ddot_unrolled4(xs, ys, n); }) * 1000;
+    const tWf64  = bench(() => { sink += nat.scope(s => s.dot(X64, Y64)); }) * 1000;
+    const tWf32  = bench(() => { sink += nat.scope(s => s.dot(X32, Y32)); }) * 1000;
+
+    rows.push({
+      n,
+      'js naive':   tNaive.toFixed(2),
+      'js u4':      tU4.toFixed(2),
+      'alpack f64': tWf64.toFixed(2),
+      'alpack f32': tWf32.toFixed(2),
+      'u4 / w-f64': (tU4 / tWf64).toFixed(2),
+      winner: [
+        { name: 'js naive', t: tNaive },
+        { name: 'js u4', t: tU4 },
+        { name: 'alpack f64', t: tWf64 },
+        { name: 'alpack f32', t: tWf32 },
+      ].sort((a, b) => a.t - b.t)[0].name,
+    });
+  }
+  ui.display('ddot — μs per call (median of 30 samples), sink = ' + sink.toFixed(2));
+  ui.table(rows);
+})();
+
+/// md
+## nrm2 — L2 norm (sqrt of sum of squares)
+
+The node bench showed JS f64 unrolled-4 winning at *every* size for `nrm2` — alpack's `dnrm2` and `snrm2` never beat it.
+
+/// code
+// %manual
+(async () => {
+  const rows = [];
+  let sink = 0;
+  for (const n of SIZES) {
+    const xs = xData64.subarray(0, n);
+    const xs32 = xData32.subarray(0, n);
+    const X64 = nat.array(xs, { shape: [n], dtype: 'f64' });
+    const X32 = nat.array(xs32, { shape: [n], dtype: 'f32' });
+
+    const tNaive = bench(() => { sink += nrm2_naive(xs, n); }) * 1000;
+    const tU4    = bench(() => { sink += nrm2_unrolled4(xs, n); }) * 1000;
+    const tWf64  = bench(() => { sink += nat.scope(s => s.norm(X64)); }) * 1000;
+    const tWf32  = bench(() => { sink += nat.scope(s => s.norm(X32)); }) * 1000;
+
+    rows.push({
+      n,
+      'js naive':   tNaive.toFixed(2),
+      'js u4':      tU4.toFixed(2),
+      'alpack f64': tWf64.toFixed(2),
+      'alpack f32': tWf32.toFixed(2),
+      'u4 / w-f64': (tU4 / tWf64).toFixed(2),
+      winner: [
+        { name: 'js naive', t: tNaive },
+        { name: 'js u4', t: tU4 },
+        { name: 'alpack f64', t: tWf64 },
+        { name: 'alpack f32', t: tWf32 },
+      ].sort((a, b) => a.t - b.t)[0].name,
+    });
+  }
+  ui.display('nrm2 — μs per call (median of 30 samples), sink = ' + sink.toFixed(2));
+  ui.table(rows);
+})();
+
+/// md
+## bandwidth check
+
+At the largest size, are we hitting memory-bus saturation? DDR4-3200 dual-channel theoretical peak is ~51 GB/s. If both JS and Wasm hit similar values around there, the bottleneck is RAM not compute, and the path that transfers fewer bytes (f32) wins by virtue of bandwidth alone.
+
+/// code
+// %manual
+(() => {
+  const xs = xData64;
+  const t = bench(() => { ddot_unrolled4(xs, xs, NMAX); }) * 1000;
+  const flops = 2 * NMAX;
+  const bytes = NMAX * 16;
+  ui.display(`n = ${NMAX}, time = ${t.toFixed(2)} μs`);
+  ui.display(`compute  = ${(flops / (t * 1e3)).toFixed(2)} GFLOP/s`);
+  ui.display(`bandwidth = ${(bytes / (t * 1e3)).toFixed(2)} GB/s`);
+})();
+
+/// md
+## what to expect
+
+| n     | expected ddot winner | expected nrm2 winner |
+|-------|----------------------|----------------------|
+|     8 | js u4 (FFI overhead) | js u4 |
+|   128 | js u4 | js u4 |
+|  2048 | js u4 (~2× over wasm) | js u4 |
+|  8192 | alpack f32 (memory bandwidth) | js u4 |
+| 32768 | alpack f32 (~2× over js) | js u4 |
+
+If your numbers diverge significantly from this pattern, possible causes:
+- **CPU frequency scaling** — laptop on battery throttles. Plug in.
+- **Devtools open** — Chrome's profiler instruments code paths and can shift numbers by 2-3×.
+- **Background tabs** — close other heavy tabs.
+- **AIR transformation** — auditable's compiler analyzes JS cells before execution. If it's emitting different code than the source for these specific functions, the JS variants might be slower (or faster!) than expected. The functions are simple enough that AIR should pass them through cleanly, but worth knowing as a possibility.
+
+If the conclusion still holds (JS u4 ≤ alpack f64 at small/medium n), auditable's runtime preserves the perf characteristic — and AIR could legitimately add unrolled-4 emission for hot reduction loops, giving every adder/Soft cell a free 1.5-2× speedup on dot-product-shaped math.

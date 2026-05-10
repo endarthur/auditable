@@ -52,6 +52,7 @@ const categories = {
     'example_atra_multi_memory.txt',
     'example_atra_strings.txt',
     'example_natra.txt',
+    'example_v8_vs_wasm.txt',
   ],
 
   // calque — spreadsheet language and sheet widget
