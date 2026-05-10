@@ -612,6 +612,105 @@ begin
   end for
 end
 
+! ── dgemm with (ii, jj) cache blocking + B-column packing ──────────
+!
+! EXPERIMENTAL — NO MEASURABLE SPEEDUP over plain SIMD dgemm on AMD
+! Ryzen AI 9 HX 370 (within 5% across N = 50..500). Kept in source for
+! future investigators building on it (e.g. adding a register-blocked
+! microkernel to extract instruction-level parallelism).
+!
+! Why naive blocking doesn't help: the SIMD inner loop already streams
+! rows of B sequentially with stride-1 reads, which is exactly what
+! the hardware prefetcher predicts. Packing converts stride-n reads
+! across the p loop to stride-1 reads through `pack`, but the original
+! stride-n was already amortized across many SIMD iterations within a
+! single row. The L2/L3 prefetcher handles it.
+!
+! What WOULD help: a register-blocked microkernel processing e.g. 4×4
+! blocks of C with partial sums kept in 8 f64x2 accumulators across
+! multiple p iterations. V8 should allocate those to xmm registers and
+! avoid the load/store traffic to C between iterations. That's a
+! meaningfully different optimization than "block and pack" alone.
+!
+! Scratch buffer requirement: k × 32 f64 (= 128 KB at k=500). Caller
+! (natra) allocates from its scope arena and passes via `pack`.
+subroutine alas.dgemm_packed(
+  a: array f64; b: array f64; c: array f64;
+  m, n, k: i32; alpha, beta: f64;
+  pack: array f64
+)
+var
+  i, j, p, jj, kk, ii: i32
+  jbound, kbound, ibound, nblock, kblock: i32
+  c_row, pack_row, joff, n2: i32
+  t: f64
+  tv, vb, vc: f64x2
+begin
+  ! Phase 1: prepare C
+  if (beta == 0.0) then
+    for i := 0, m
+      for j := 0, n
+        c[i, n, j] := 0.0
+      end for
+    end for
+  else if (beta /= 1.0) then
+    for i := 0, m
+      for j := 0, n
+        c[i, n, j] := beta * c[i, n, j]
+      end for
+    end for
+  end if
+
+  ! Phase 2: (ii, jj) tile blocking — process a 32×32 tile of C at a time
+  ! so the tile stays hot in L1 across the full k contraction. B's panel
+  ! [0:k, jj:jj+32] is packed once per (ii, jj) so reads are stride-1.
+  for jj := 0, n, 32
+    jbound := jj + 32
+    if (jbound > n) then
+      jbound := n
+    end if
+    nblock := jbound - jj
+    n2 := nblock / 2
+
+    ! Pack B[:, jj:jj+nblock] (full k rows × nblock cols) into pack, row-major.
+    ! Buffer size: k * nblock f64. Caller provides pack of size >= k * 32.
+    for p := 0, k
+      for j := 0, nblock
+        pack[p * 32 + j] := b[p, n, jj + j]
+      end for
+    end for
+
+    for ii := 0, m, 32
+      ibound := ii + 32
+      if (ibound > m) then
+        ibound := m
+      end if
+
+      ! Inner kernel: process tile C[ii:ibound, jj:jj+nblock]. Within the
+      ! tile, each row i of C is touched k times (once per p). Pack provides
+      ! stride-1 reads for B.
+      for i := ii, ibound
+        c_row := (i * n + jj) * 8
+        for p := 0, k
+          t := alpha * a[i, k, p]
+          tv := f64x2.splat(t)
+          pack_row := p * 32 * 8
+          for j := 0, n2
+            joff := j * 16
+            vb := v128.load_at(pack, pack_row + joff)
+            vc := v128.load_at(c, c_row + joff)
+            vc := f64x2.relaxed_madd(tv, vb, vc)
+            call v128.store_at(c, c_row + joff, vc)
+          end for
+          for j := n2 * 2, nblock
+            c[i, n, jj + j] := c[i, n, jj + j] + t * pack[p * 32 + j]
+          end for
+        end for
+      end for
+    end for
+  end for
+end
+
 ! ══════════════════════════════════════════════════════════════════════
 ! ALPACK — factorizations, solvers, eigendecomposition
 ! ══════════════════════════════════════════════════════════════════════
