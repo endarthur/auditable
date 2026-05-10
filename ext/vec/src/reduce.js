@@ -235,3 +235,130 @@ export function dot(a, b) {
   }
   throw new RangeError(`dot: unsupported ndim combination (${a.ndim}, ${b.ndim})`);
 }
+
+// ---------- prod ----------
+
+export function prod(a, opts) {
+  if (opts && opts.axis !== undefined) {
+    return _reduceAxis(a, opts.axis, 1, (x, y) => x * y, (x) => x);
+  }
+  let acc = 1;
+  const d = a.data;
+  for (let i = 0; i < a.size; i++) acc *= d[i];
+  return acc;
+}
+
+// ---------- cumsum / cumprod ----------
+// With axis: returns array of same shape with running sum/product along that axis.
+// Without axis: numpy convention — flatten, return 1D running result.
+
+function _cumAxis(arr, axis, init, combine) {
+  axis = _normalizeAxis(axis, arr.ndim);
+  const reduceSize = arr.shape[axis];
+  let outerSize = 1;
+  for (let i = 0; i < axis; i++) outerSize *= arr.shape[i];
+  let innerSize = 1;
+  for (let i = axis + 1; i < arr.ndim; i++) innerSize *= arr.shape[i];
+  const out = new Float64Array(arr.size);
+  const d = arr.data;
+  for (let outer = 0; outer < outerSize; outer++) {
+    const outerOff = outer * reduceSize * innerSize;
+    for (let inner = 0; inner < innerSize; inner++) {
+      let acc = init;
+      for (let r = 0; r < reduceSize; r++) {
+        const idx = outerOff + r * innerSize + inner;
+        acc = combine(acc, d[idx]);
+        out[idx] = acc;
+      }
+    }
+  }
+  return new NdArray(out, arr.shape);
+}
+
+export function cumsum(a, opts) {
+  if (opts && opts.axis !== undefined) return _cumAxis(a, opts.axis, 0, (x, y) => x + y);
+  const out = new Float64Array(a.size);
+  const d = a.data;
+  let acc = 0;
+  for (let i = 0; i < a.size; i++) { acc += d[i]; out[i] = acc; }
+  return new NdArray(out, [a.size]);
+}
+
+export function cumprod(a, opts) {
+  if (opts && opts.axis !== undefined) return _cumAxis(a, opts.axis, 1, (x, y) => x * y);
+  const out = new Float64Array(a.size);
+  const d = a.data;
+  let acc = 1;
+  for (let i = 0; i < a.size; i++) { acc *= d[i]; out[i] = acc; }
+  return new NdArray(out, [a.size]);
+}
+
+// ---------- argmin / argmax ----------
+// Without axis: scalar (flat index).
+// With axis: NdArray of indices with that axis removed.
+
+function _argAxis(arr, axis, mode) {
+  axis = _normalizeAxis(axis, arr.ndim);
+  const reduceSize = arr.shape[axis];
+  let outerSize = 1;
+  for (let i = 0; i < axis; i++) outerSize *= arr.shape[i];
+  let innerSize = 1;
+  for (let i = axis + 1; i < arr.ndim; i++) innerSize *= arr.shape[i];
+  const outShape = arr.shape.slice(0, axis).concat(arr.shape.slice(axis + 1));
+  const out = new Float64Array(outerSize * innerSize);
+  const d = arr.data;
+  for (let outer = 0; outer < outerSize; outer++) {
+    const outerOff = outer * reduceSize * innerSize;
+    for (let inner = 0; inner < innerSize; inner++) {
+      const baseOff = outerOff + inner;
+      let bestIdx = 0;
+      let bestVal = d[baseOff];
+      if (mode === 'min') {
+        for (let r = 1; r < reduceSize; r++) {
+          const v = d[baseOff + r * innerSize];
+          if (v < bestVal) { bestVal = v; bestIdx = r; }
+        }
+      } else {
+        for (let r = 1; r < reduceSize; r++) {
+          const v = d[baseOff + r * innerSize];
+          if (v > bestVal) { bestVal = v; bestIdx = r; }
+        }
+      }
+      out[outer * innerSize + inner] = bestIdx;
+    }
+  }
+  return new NdArray(out, outShape);
+}
+
+export function argmin(a, opts) {
+  if (opts && opts.axis !== undefined) return _argAxis(a, opts.axis, 'min');
+  if (a.size === 0) throw new RangeError('argmin of empty array');
+  let mi = 0;
+  const d = a.data;
+  for (let i = 1; i < a.size; i++) if (d[i] < d[mi]) mi = i;
+  return mi;
+}
+
+export function argmax(a, opts) {
+  if (opts && opts.axis !== undefined) return _argAxis(a, opts.axis, 'max');
+  if (a.size === 0) throw new RangeError('argmax of empty array');
+  let mi = 0;
+  const d = a.data;
+  for (let i = 1; i < a.size; i++) if (d[i] > d[mi]) mi = i;
+  return mi;
+}
+
+// ---------- trace ----------
+// Sum of the diagonal of a 2D matrix (square or rectangular).
+
+export function trace(A) {
+  if (A.ndim !== 2) {
+    throw new RangeError(`trace requires 2D array, got ${A.ndim}D`);
+  }
+  const m = A.shape[0], n = A.shape[1];
+  const k = Math.min(m, n);
+  let s = 0;
+  const d = A.data;
+  for (let i = 0; i < k; i++) s += d[i * n + i];
+  return s;
+}

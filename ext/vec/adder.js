@@ -181,6 +181,12 @@ class VecArray {
   max(opts)   { return _wrap(_v().max (this._arr, _axisOpts(opts))); }
   std(opts)   { return _wrap(_v().std (this._arr, _axisOpts(opts))); }
   var(opts)   { return _wrap(_v().variance(this._arr, _axisOpts(opts))); }
+  prod(opts)  { return _wrap(_v().prod(this._arr, _axisOpts(opts))); }
+  argmin(opts){ return _wrap(_v().argmin(this._arr, _axisOpts(opts))); }
+  argmax(opts){ return _wrap(_v().argmax(this._arr, _axisOpts(opts))); }
+  cumsum(opts){ return new VecArray(_v().cumsum(this._arr, _axisOpts(opts))); }
+  cumprod(opts){ return new VecArray(_v().cumprod(this._arr, _axisOpts(opts))); }
+  clip(lo, hi){ return new VecArray(_v().clip(this._arr, lo, hi)); }
   norm()      { return _v().norm(this._arr); }
 
   reshape(...shapeArgs) {
@@ -333,6 +339,31 @@ const _module = {
   sin:  (a) => _isVa(a) ? new VecArray(_v().sin (a._arr)) : Math.sin(a),
   cos:  (a) => _isVa(a) ? new VecArray(_v().cos (a._arr)) : Math.cos(a),
   tan:  (a) => _isVa(a) ? new VecArray(_v().tan (a._arr)) : Math.tan(a),
+  asin: (a) => _isVa(a) ? new VecArray(_v().asin(a._arr)) : Math.asin(a),
+  acos: (a) => _isVa(a) ? new VecArray(_v().acos(a._arr)) : Math.acos(a),
+  atan: (a) => _isVa(a) ? new VecArray(_v().atan(a._arr)) : Math.atan(a),
+  floor:(a) => _isVa(a) ? new VecArray(_v().floor(a._arr)) : Math.floor(a),
+  ceil: (a) => _isVa(a) ? new VecArray(_v().ceil(a._arr)) : Math.ceil(a),
+  round:(a) => _isVa(a) ? new VecArray(_v().round(a._arr)) : Math.round(a),
+  sign: (a) => _isVa(a) ? new VecArray(_v().sign(a._arr)) : Math.sign(a),
+  isnan:    (a) => _isVa(a) ? new VecArray(_v().isnan(a._arr))    : (Number.isNaN(a) ? 1 : 0),
+  isfinite: (a) => _isVa(a) ? new VecArray(_v().isfinite(a._arr)) : (Number.isFinite(a) ? 1 : 0),
+
+  // binary element-wise
+  atan2:   (y, x) => new VecArray(_v().atan2(_unwrap(y), _unwrap(x))),
+  hypot:   (a, b) => new VecArray(_v().hypot(_unwrap(a), _unwrap(b))),
+  maximum: (a, b) => new VecArray(_v().maximum(_unwrap(a), _unwrap(b))),
+  minimum: (a, b) => new VecArray(_v().minimum(_unwrap(a), _unwrap(b))),
+  eq: (a, b) => new VecArray(_v().eq(_unwrap(a), _unwrap(b))),
+  ne: (a, b) => new VecArray(_v().ne(_unwrap(a), _unwrap(b))),
+  lt: (a, b) => new VecArray(_v().lt(_unwrap(a), _unwrap(b))),
+  le: (a, b) => new VecArray(_v().le(_unwrap(a), _unwrap(b))),
+  gt: (a, b) => new VecArray(_v().gt(_unwrap(a), _unwrap(b))),
+  ge: (a, b) => new VecArray(_v().ge(_unwrap(a), _unwrap(b))),
+
+  // selection
+  where: (cond, a, b) => new VecArray(_v().where(_unwrap(cond), _unwrap(a), _unwrap(b))),
+  clip:  (a, lo, hi)  => new VecArray(_v().clip(_unwrap(a), lo, hi)),
 
   sum:  (a, opts) => _wrap(_v().sum (_unwrap(a), _axisOpts(opts))),
   mean: (a, opts) => _wrap(_v().mean(_unwrap(a), _axisOpts(opts))),
@@ -340,6 +371,12 @@ const _module = {
   max:  (a, opts) => _wrap(_v().max (_unwrap(a), _axisOpts(opts))),
   std:  (a, opts) => _wrap(_v().std (_unwrap(a), _axisOpts(opts))),
   var:  (a, opts) => _wrap(_v().variance(_unwrap(a), _axisOpts(opts))),
+  prod: (a, opts) => _wrap(_v().prod(_unwrap(a), _axisOpts(opts))),
+  cumsum:  (a, opts) => new VecArray(_v().cumsum(_unwrap(a), _axisOpts(opts))),
+  cumprod: (a, opts) => new VecArray(_v().cumprod(_unwrap(a), _axisOpts(opts))),
+  argmin:  (a, opts) => _wrap(_v().argmin(_unwrap(a), _axisOpts(opts))),
+  argmax:  (a, opts) => _wrap(_v().argmax(_unwrap(a), _axisOpts(opts))),
+  trace:   (A) => _v().trace(_unwrap(A)),
 
   dot:    (a, b) => _wrap(_v().dot(_unwrap(a), _unwrap(b))),
   matmul: (a, b) => new VecArray(_v().matmul(_unwrap(a), _unwrap(b))),
@@ -351,6 +388,12 @@ const _module = {
   transpose: (a) => new VecArray(_v().transpose(_unwrap(a))),
   flatten:   (a) => new VecArray(_v().flatten(_unwrap(a))),
   copy:      (a) => new VecArray(_v().copy(_unwrap(a))),
+  diag:      (a, k) => new VecArray(_v().diag(_unwrap(a), k ?? 0)),
+  outer:     (a, b) => new VecArray(_v().outer(_unwrap(a), _unwrap(b))),
+  tril:      (A, k) => new VecArray(_v().tril(_unwrap(A), k ?? 0)),
+  triu:      (A, k) => new VecArray(_v().triu(_unwrap(A), k ?? 0)),
+  concat:    (arrays, axis) => new VecArray(_v().concat(arrays.map(_unwrap), axis ?? 0)),
+  stack:     (arrays, axis) => new VecArray(_v().stack(arrays.map(_unwrap), axis ?? 0)),
 
   linalg: {
     solve:    (A, b) => new VecArray(_v().solve(_unwrap(A), _unwrap(b))),
@@ -386,7 +429,7 @@ if (typeof window !== 'undefined') {
   if (register) {
     register({
       name: '@gcu/vec',
-      version: '0.1.0',
+      version: '0.1.1',
       description: 'TypedArray-based numerical library — adder bridge',
       exports: { vec: _module },
     });

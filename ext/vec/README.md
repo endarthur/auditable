@@ -152,11 +152,33 @@ Examples:
 ### Element-wise unary
 
 ```js
-vec.neg(a)
-vec.abs(a)
-vec.sqrt(a)
-vec.log(a)   vec.exp(a)
-vec.sin(a)   vec.cos(a)   vec.tan(a)
+vec.neg(a)         vec.abs(a)        vec.sqrt(a)
+vec.log(a)         vec.exp(a)
+vec.sin(a)         vec.cos(a)        vec.tan(a)
+vec.asin(a)        vec.acos(a)       vec.atan(a)
+vec.floor(a)       vec.ceil(a)       vec.round(a)
+vec.sign(a)
+vec.isnan(a)       vec.isfinite(a)   // return 0/1 masks
+```
+
+Element-wise binary helpers (with broadcasting):
+
+```js
+vec.atan2(y, x)    // angle from x-axis
+vec.hypot(a, b)    // sqrt(a² + b²) without overflow
+vec.maximum(a, b)  vec.minimum(a, b)   // element-wise (not reduction)
+vec.eq(a, b)       vec.ne(a, b)        // 0/1 masks
+vec.lt(a, b)       vec.le(a, b)
+vec.gt(a, b)       vec.ge(a, b)
+```
+
+### Selection
+
+```js
+vec.where(cond, a, b)   // out[i] = cond[i] ? a[i] : b[i]
+                        // cond is NdArray; a/b are NdArray (matching shape)
+                        // or scalar. No broadcasting between cond/a/b in v1.
+vec.clip(a, lo, hi)     // clamp each element to [lo, hi]
 ```
 
 ### Reductions
@@ -165,17 +187,22 @@ Without `axis`: returns a scalar number.
 With `{ axis: i }`: returns an NdArray with that axis removed.
 
 ```js
-vec.sum(a)
-vec.sum(a, { axis: 0 })
+vec.sum(a, opts?)        vec.prod(a, opts?)
 vec.mean(a, opts?)
-vec.max(a, opts?)    vec.min(a, opts?)
-vec.std(a, opts?)    vec.variance(a, opts?)   // var_ alias also exported
-vec.norm(a)                                    // L2 norm of all elements
+vec.max(a, opts?)        vec.min(a, opts?)
+vec.std(a, opts?)        vec.variance(a, opts?)   // var_ alias also exported
+vec.argmin(a, opts?)     vec.argmax(a, opts?)     // indices
+vec.norm(a)                                       // L2 norm of all elements
+vec.trace(A)                                      // sum of diagonal (2D)
 vec.dot(a, b)
   // - 1D · 1D = scalar
   // - 2D · 1D = matrix-vector (1D NdArray)
   // - 1D · 2D = vector-matrix (1D NdArray)
   // - 2D · 2D = matmul (2D NdArray)
+
+vec.cumsum(a, opts?)     vec.cumprod(a, opts?)    // running totals
+  // No axis: flatten to 1D, return running total of size a.size.
+  // With axis: same shape as a, accumulate along that axis.
 ```
 
 `std` and `variance` accept `{ ddof: 0 | 1 }` (population vs sample
@@ -207,6 +234,14 @@ vec.eigSym(A, opts?)          // N×N via Jacobi rotations
 // Closed-form fast paths
 vec.det2(A) / vec.det3(A) / vec.det4(A)
 vec.inv2(A) / vec.inv3(A) / vec.inv4(A)
+
+// Matrix shape helpers
+vec.diag(a, k=0)
+  // 1D input → 2D matrix with `a` on the k-th diagonal
+  // 2D input → 1D vector of the k-th diagonal
+vec.outer(a, b)        // outer product (1D × 1D → 2D)
+vec.tril(A, k=0)       // keep on/below k-th diagonal, zero rest
+vec.triu(A, k=0)       // keep on/above k-th diagonal, zero rest
 ```
 
 `eigSym3` and `eigSym` return `{ values, vectors }` where:
@@ -225,6 +260,11 @@ vec.slice(a, ranges)
   //                                 end defaults to axis size (or 0 if step<0),
   //                                 step defaults to 1.
 vec.copy(a)
+
+vec.concat(arrays, axis=0)   // join along existing axis (shapes must match
+                             // except along that axis)
+vec.stack(arrays, axis=0)    // introduce a NEW axis (all shapes must match
+                             // exactly; result has ndim+1)
 ```
 
 Negative indices in `slice` are interpreted Python-style.

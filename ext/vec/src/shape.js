@@ -162,3 +162,93 @@ export function shapesEqual(a, b) {
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
   return true;
 }
+
+// concat(arrays, axis = 0) — joins arrays along an existing axis. Shapes must
+// match exactly except along `axis`.
+
+export function concat(arrays, axis = 0) {
+  if (!Array.isArray(arrays) || arrays.length === 0) {
+    throw new TypeError('concat requires a non-empty array of NdArrays');
+  }
+  const ndim = arrays[0].ndim;
+  if (axis < 0) axis = ndim + axis;
+  if (axis < 0 || axis >= ndim) {
+    throw new RangeError(`axis ${axis} out of bounds for ndim ${ndim}`);
+  }
+  const baseShape = arrays[0].shape;
+  let totalAxis = 0;
+  for (const arr of arrays) {
+    if (arr.ndim !== ndim) {
+      throw new RangeError(`concat: ndim mismatch (${arr.ndim} vs ${ndim})`);
+    }
+    for (let i = 0; i < ndim; i++) {
+      if (i === axis) continue;
+      if (arr.shape[i] !== baseShape[i]) {
+        throw new RangeError(
+          `concat: shape mismatch on axis ${i} (${arr.shape[i]} vs ${baseShape[i]})`
+        );
+      }
+    }
+    totalAxis += arr.shape[axis];
+  }
+  const outShape = baseShape.slice();
+  outShape[axis] = totalAxis;
+  const outSize = shapeProduct(outShape);
+  const out = new Float64Array(outSize);
+
+  let outerSize = 1;
+  for (let i = 0; i < axis; i++) outerSize *= outShape[i];
+  let innerSize = 1;
+  for (let i = axis + 1; i < ndim; i++) innerSize *= outShape[i];
+
+  for (let outer = 0; outer < outerSize; outer++) {
+    let outAxisOff = 0;
+    for (const arr of arrays) {
+      const arrAxis = arr.shape[axis];
+      const arrOff = outer * arrAxis * innerSize;
+      const outOff = outer * totalAxis * innerSize + outAxisOff * innerSize;
+      const span = arrAxis * innerSize;
+      for (let i = 0; i < span; i++) out[outOff + i] = arr.data[arrOff + i];
+      outAxisOff += arrAxis;
+    }
+  }
+  return new NdArray(out, outShape);
+}
+
+// stack(arrays, axis = 0) — joins arrays along a NEW axis. All input shapes
+// must match exactly. Result has ndim+1 dimensions.
+
+export function stack(arrays, axis = 0) {
+  if (!Array.isArray(arrays) || arrays.length === 0) {
+    throw new TypeError('stack requires a non-empty array of NdArrays');
+  }
+  const ndim = arrays[0].ndim;
+  for (const arr of arrays) {
+    if (!shapesEqual(arr.shape, arrays[0].shape)) {
+      throw new RangeError(`stack: all arrays must have the same shape`);
+    }
+  }
+  const targetNdim = ndim + 1;
+  if (axis < 0) axis = targetNdim + axis;
+  if (axis < 0 || axis > ndim) {
+    throw new RangeError(`stack axis ${axis} out of bounds for ndim+1=${targetNdim}`);
+  }
+  const newShape = arrays[0].shape.slice();
+  newShape.splice(axis, 0, arrays.length);
+  const out = new Float64Array(shapeProduct(newShape));
+
+  let outerSize = 1;
+  for (let i = 0; i < axis; i++) outerSize *= newShape[i];
+  let innerSize = 1;
+  for (let i = axis + 1; i < newShape.length; i++) innerSize *= newShape[i];
+  const k = arrays.length;
+
+  for (let outer = 0; outer < outerSize; outer++) {
+    for (let kk = 0; kk < k; kk++) {
+      const srcOff = outer * innerSize;
+      const dstOff = outer * k * innerSize + kk * innerSize;
+      for (let i = 0; i < innerSize; i++) out[dstOff + i] = arrays[kk].data[srcOff + i];
+    }
+  }
+  return new NdArray(out, newShape);
+}

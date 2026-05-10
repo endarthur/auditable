@@ -182,3 +182,106 @@ export function tan(a) {
   for (let i = 0; i < a.size; i++) out[i] = Math.tan(d[i]);
   return new NdArray(out, a.shape);
 }
+
+export function asin(a) {
+  const out = new Float64Array(a.size);
+  const d = a.data;
+  for (let i = 0; i < a.size; i++) out[i] = Math.asin(d[i]);
+  return new NdArray(out, a.shape);
+}
+
+export function acos(a) {
+  const out = new Float64Array(a.size);
+  const d = a.data;
+  for (let i = 0; i < a.size; i++) out[i] = Math.acos(d[i]);
+  return new NdArray(out, a.shape);
+}
+
+export function atan(a) {
+  const out = new Float64Array(a.size);
+  const d = a.data;
+  for (let i = 0; i < a.size; i++) out[i] = Math.atan(d[i]);
+  return new NdArray(out, a.shape);
+}
+
+export function floor(a) {
+  const out = new Float64Array(a.size);
+  const d = a.data;
+  for (let i = 0; i < a.size; i++) out[i] = Math.floor(d[i]);
+  return new NdArray(out, a.shape);
+}
+
+export function ceil(a) {
+  const out = new Float64Array(a.size);
+  const d = a.data;
+  for (let i = 0; i < a.size; i++) out[i] = Math.ceil(d[i]);
+  return new NdArray(out, a.shape);
+}
+
+export function round(a) {
+  const out = new Float64Array(a.size);
+  const d = a.data;
+  for (let i = 0; i < a.size; i++) out[i] = Math.round(d[i]);
+  return new NdArray(out, a.shape);
+}
+
+export function sign(a) {
+  const out = new Float64Array(a.size);
+  const d = a.data;
+  for (let i = 0; i < a.size; i++) out[i] = Math.sign(d[i]);
+  return new NdArray(out, a.shape);
+}
+
+export function isnan(a) {
+  const out = new Float64Array(a.size);
+  const d = a.data;
+  for (let i = 0; i < a.size; i++) out[i] = Number.isNaN(d[i]) ? 1 : 0;
+  return new NdArray(out, a.shape);
+}
+
+export function isfinite(a) {
+  const out = new Float64Array(a.size);
+  const d = a.data;
+  for (let i = 0; i < a.size; i++) out[i] = Number.isFinite(d[i]) ? 1 : 0;
+  return new NdArray(out, a.shape);
+}
+
+// ===== additional binary ops =====
+//
+// These use a helper with three-arm dispatch (scalar / shape-equal / broadcast).
+// V8 inlines small monomorphic callbacks for the helper; vec's hottest binary
+// ops (add, sub, mul, div, pow above) stay written out explicitly.
+
+function _binary(a, b, fn) {
+  if (typeof b === 'number') {
+    const out = new Float64Array(a.size);
+    const d = a.data;
+    for (let i = 0; i < a.size; i++) out[i] = fn(d[i], b);
+    return new NdArray(out, a.shape);
+  }
+  if (typeof a === 'number') {
+    const out = new Float64Array(b.size);
+    const d = b.data;
+    for (let i = 0; i < b.size; i++) out[i] = fn(a, d[i]);
+    return new NdArray(out, b.shape);
+  }
+  if (shapesEqual(a.shape, b.shape)) {
+    const out = new Float64Array(a.size);
+    const ad = a.data, bd = b.data;
+    for (let i = 0; i < a.size; i++) out[i] = fn(ad[i], bd[i]);
+    return new NdArray(out, a.shape);
+  }
+  return broadcastBinary(a, b, fn);
+}
+
+export function atan2(y, x)   { return _binary(y, x, Math.atan2); }
+export function hypot(a, b)   { return _binary(a, b, Math.hypot); }
+export function maximum(a, b) { return _binary(a, b, (x, y) => x > y ? x : y); }
+export function minimum(a, b) { return _binary(a, b, (x, y) => x < y ? x : y); }
+
+export function eq(a, b) { return _binary(a, b, (x, y) => x === y ? 1 : 0); }
+export function ne(a, b) { return _binary(a, b, (x, y) => x !== y ? 1 : 0); }
+export function lt(a, b) { return _binary(a, b, (x, y) => x <  y ? 1 : 0); }
+export function le(a, b) { return _binary(a, b, (x, y) => x <= y ? 1 : 0); }
+export function gt(a, b) { return _binary(a, b, (x, y) => x >  y ? 1 : 0); }
+export function ge(a, b) { return _binary(a, b, (x, y) => x >= y ? 1 : 0); }

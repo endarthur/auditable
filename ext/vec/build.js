@@ -18,6 +18,7 @@ const files = [
   'shape.js',
   'creation.js',
   'ops.js',
+  'selection.js',
   'reduce.js',
   'linalg-mul.js',
   'linalg-solve.js',
@@ -66,19 +67,28 @@ export {
   // ndarray
   NdArray, shapeProduct, computeStrides,
   // shape
-  reshape, flatten, copy, slice,
+  reshape, flatten, copy, slice, concat, stack,
   broadcastShapes, broadcastStrides, broadcastBinary, shapesEqual,
   // creation
   zeros, ones, full, range, linspace, eye, from,
-  // ops
+  // ops (binary + unary)
   add, sub, mul, div, pow,
   neg, abs, sqrt, log, exp, sin, cos, tan,
+  asin, acos, atan,
+  floor, ceil, round, sign,
+  isnan, isfinite,
+  atan2, hypot, maximum, minimum,
+  eq, ne, lt, le, gt, ge,
+  // selection
+  where, clip,
   // reduce
   sum, mean, max, min, std, variance, variance as var_, norm, dot,
+  prod, cumsum, cumprod, argmin, argmax, trace,
   // linalg-mul
   matmul, transpose,
   det2, det3, det4,
   inv2, inv3, inv4,
+  diag, outer, tril, triu,
   // linalg-solve
   solve, det, inv, cholesky, solveCholesky,
   // linalg-lstsq

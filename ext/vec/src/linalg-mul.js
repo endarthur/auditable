@@ -148,6 +148,86 @@ export function inv3(A) {
   return new NdArray(out, [3, 3]);
 }
 
+// ---------- diag / outer / tril / triu ----------
+
+// diag(a, k = 0):
+//   1D input → 2D matrix with `a` placed on the k-th diagonal (k>0 above
+//   the main diagonal, k<0 below). Off-diagonal entries are zero.
+//   2D input → 1D vector of the k-th diagonal.
+
+export function diag(a, k = 0) {
+  if (a.ndim === 1) {
+    const n = a.size + Math.abs(k);
+    const out = new Float64Array(n * n);
+    for (let i = 0; i < a.size; i++) {
+      const row = k >= 0 ? i : i - k;
+      const col = k >= 0 ? i + k : i;
+      out[row * n + col] = a.data[i];
+    }
+    return new NdArray(out, [n, n]);
+  }
+  if (a.ndim === 2) {
+    const m = a.shape[0], n = a.shape[1];
+    const len = k >= 0 ? Math.min(m, n - k) : Math.min(m + k, n);
+    if (len <= 0) return new NdArray(new Float64Array(0), [0]);
+    const out = new Float64Array(len);
+    for (let i = 0; i < len; i++) {
+      const row = k >= 0 ? i : i - k;
+      const col = k >= 0 ? i + k : i;
+      out[i] = a.data[row * n + col];
+    }
+    return new NdArray(out, [len]);
+  }
+  throw new RangeError(`diag requires 1D or 2D, got ${a.ndim}D`);
+}
+
+// outer(a, b) — outer product of two 1D vectors. out[i, j] = a[i] * b[j].
+
+export function outer(a, b) {
+  if (a.ndim !== 1 || b.ndim !== 1) {
+    throw new RangeError(`outer requires two 1D vectors, got ${a.ndim}D × ${b.ndim}D`);
+  }
+  const m = a.size, n = b.size;
+  const out = new Float64Array(m * n);
+  const ad = a.data, bd = b.data;
+  for (let i = 0; i < m; i++) {
+    const ai = ad[i];
+    for (let j = 0; j < n; j++) out[i * n + j] = ai * bd[j];
+  }
+  return new NdArray(out, [m, n]);
+}
+
+// tril(A, k = 0) — keep entries on/below the k-th diagonal, zero the rest.
+// k > 0 keeps additional bands above; k < 0 zeroes bands at and above main.
+
+export function tril(A, k = 0) {
+  if (A.ndim !== 2) throw new RangeError(`tril requires 2D, got ${A.ndim}D`);
+  const m = A.shape[0], n = A.shape[1];
+  const out = new Float64Array(m * n);
+  const d = A.data;
+  for (let i = 0; i < m; i++) {
+    for (let j = 0; j < n; j++) {
+      if (j - i <= k) out[i * n + j] = d[i * n + j];
+    }
+  }
+  return new NdArray(out, [m, n]);
+}
+
+// triu(A, k = 0) — keep entries on/above the k-th diagonal, zero the rest.
+
+export function triu(A, k = 0) {
+  if (A.ndim !== 2) throw new RangeError(`triu requires 2D, got ${A.ndim}D`);
+  const m = A.shape[0], n = A.shape[1];
+  const out = new Float64Array(m * n);
+  const d = A.data;
+  for (let i = 0; i < m; i++) {
+    for (let j = 0; j < n; j++) {
+      if (j - i >= k) out[i * n + j] = d[i * n + j];
+    }
+  }
+  return new NdArray(out, [m, n]);
+}
+
 export function inv4(A) {
   _checkSquare(A, 4, 'inv4');
   const d = A.data;

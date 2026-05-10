@@ -8,18 +8,26 @@ export {
 export {
   add, sub, mul, div, pow,
   neg, abs, sqrt, log, exp, sin, cos, tan,
+  asin, acos, atan,
+  floor, ceil, round, sign,
+  isnan, isfinite,
+  atan2, hypot, maximum, minimum,
+  eq, ne, lt, le, gt, ge,
 } from './ops.js';
 export {
-  reshape, flatten, copy, slice,
+  reshape, flatten, copy, slice, concat, stack,
   broadcastShapes, broadcastStrides, broadcastBinary, shapesEqual,
 } from './shape.js';
+export { where, clip } from './selection.js';
 export {
   sum, mean, max, min, std, variance, var_, norm, dot,
+  prod, cumsum, cumprod, argmin, argmax, trace,
 } from './reduce.js';
 export {
   matmul, transpose,
   det2, det3, det4,
   inv2, inv3, inv4,
+  diag, outer, tril, triu,
 } from './linalg-mul.js';
 export {
   solve, det, inv, cholesky, solveCholesky,

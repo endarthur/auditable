@@ -338,6 +338,96 @@ function shapesEqual(a, b) {
   return true;
 }
 
+// concat(arrays, axis = 0) — joins arrays along an existing axis. Shapes must
+// match exactly except along `axis`.
+
+function concat(arrays, axis = 0) {
+  if (!Array.isArray(arrays) || arrays.length === 0) {
+    throw new TypeError('concat requires a non-empty array of NdArrays');
+  }
+  const ndim = arrays[0].ndim;
+  if (axis < 0) axis = ndim + axis;
+  if (axis < 0 || axis >= ndim) {
+    throw new RangeError(`axis ${axis} out of bounds for ndim ${ndim}`);
+  }
+  const baseShape = arrays[0].shape;
+  let totalAxis = 0;
+  for (const arr of arrays) {
+    if (arr.ndim !== ndim) {
+      throw new RangeError(`concat: ndim mismatch (${arr.ndim} vs ${ndim})`);
+    }
+    for (let i = 0; i < ndim; i++) {
+      if (i === axis) continue;
+      if (arr.shape[i] !== baseShape[i]) {
+        throw new RangeError(
+          `concat: shape mismatch on axis ${i} (${arr.shape[i]} vs ${baseShape[i]})`
+        );
+      }
+    }
+    totalAxis += arr.shape[axis];
+  }
+  const outShape = baseShape.slice();
+  outShape[axis] = totalAxis;
+  const outSize = shapeProduct(outShape);
+  const out = new Float64Array(outSize);
+
+  let outerSize = 1;
+  for (let i = 0; i < axis; i++) outerSize *= outShape[i];
+  let innerSize = 1;
+  for (let i = axis + 1; i < ndim; i++) innerSize *= outShape[i];
+
+  for (let outer = 0; outer < outerSize; outer++) {
+    let outAxisOff = 0;
+    for (const arr of arrays) {
+      const arrAxis = arr.shape[axis];
+      const arrOff = outer * arrAxis * innerSize;
+      const outOff = outer * totalAxis * innerSize + outAxisOff * innerSize;
+      const span = arrAxis * innerSize;
+      for (let i = 0; i < span; i++) out[outOff + i] = arr.data[arrOff + i];
+      outAxisOff += arrAxis;
+    }
+  }
+  return new NdArray(out, outShape);
+}
+
+// stack(arrays, axis = 0) — joins arrays along a NEW axis. All input shapes
+// must match exactly. Result has ndim+1 dimensions.
+
+function stack(arrays, axis = 0) {
+  if (!Array.isArray(arrays) || arrays.length === 0) {
+    throw new TypeError('stack requires a non-empty array of NdArrays');
+  }
+  const ndim = arrays[0].ndim;
+  for (const arr of arrays) {
+    if (!shapesEqual(arr.shape, arrays[0].shape)) {
+      throw new RangeError(`stack: all arrays must have the same shape`);
+    }
+  }
+  const targetNdim = ndim + 1;
+  if (axis < 0) axis = targetNdim + axis;
+  if (axis < 0 || axis > ndim) {
+    throw new RangeError(`stack axis ${axis} out of bounds for ndim+1=${targetNdim}`);
+  }
+  const newShape = arrays[0].shape.slice();
+  newShape.splice(axis, 0, arrays.length);
+  const out = new Float64Array(shapeProduct(newShape));
+
+  let outerSize = 1;
+  for (let i = 0; i < axis; i++) outerSize *= newShape[i];
+  let innerSize = 1;
+  for (let i = axis + 1; i < newShape.length; i++) innerSize *= newShape[i];
+  const k = arrays.length;
+
+  for (let outer = 0; outer < outerSize; outer++) {
+    for (let kk = 0; kk < k; kk++) {
+      const srcOff = outer * innerSize;
+      const dstOff = outer * k * innerSize + kk * innerSize;
+      for (let i = 0; i < innerSize; i++) out[dstOff + i] = arrays[kk].data[srcOff + i];
+    }
+  }
+  return new NdArray(out, newShape);
+}
+
 // ── creation.js ──
 
 // Creation helpers — every function returns a freshly-allocated NdArray.
@@ -660,6 +750,173 @@ function tan(a) {
   return new NdArray(out, a.shape);
 }
 
+function asin(a) {
+  const out = new Float64Array(a.size);
+  const d = a.data;
+  for (let i = 0; i < a.size; i++) out[i] = Math.asin(d[i]);
+  return new NdArray(out, a.shape);
+}
+
+function acos(a) {
+  const out = new Float64Array(a.size);
+  const d = a.data;
+  for (let i = 0; i < a.size; i++) out[i] = Math.acos(d[i]);
+  return new NdArray(out, a.shape);
+}
+
+function atan(a) {
+  const out = new Float64Array(a.size);
+  const d = a.data;
+  for (let i = 0; i < a.size; i++) out[i] = Math.atan(d[i]);
+  return new NdArray(out, a.shape);
+}
+
+function floor(a) {
+  const out = new Float64Array(a.size);
+  const d = a.data;
+  for (let i = 0; i < a.size; i++) out[i] = Math.floor(d[i]);
+  return new NdArray(out, a.shape);
+}
+
+function ceil(a) {
+  const out = new Float64Array(a.size);
+  const d = a.data;
+  for (let i = 0; i < a.size; i++) out[i] = Math.ceil(d[i]);
+  return new NdArray(out, a.shape);
+}
+
+function round(a) {
+  const out = new Float64Array(a.size);
+  const d = a.data;
+  for (let i = 0; i < a.size; i++) out[i] = Math.round(d[i]);
+  return new NdArray(out, a.shape);
+}
+
+function sign(a) {
+  const out = new Float64Array(a.size);
+  const d = a.data;
+  for (let i = 0; i < a.size; i++) out[i] = Math.sign(d[i]);
+  return new NdArray(out, a.shape);
+}
+
+function isnan(a) {
+  const out = new Float64Array(a.size);
+  const d = a.data;
+  for (let i = 0; i < a.size; i++) out[i] = Number.isNaN(d[i]) ? 1 : 0;
+  return new NdArray(out, a.shape);
+}
+
+function isfinite(a) {
+  const out = new Float64Array(a.size);
+  const d = a.data;
+  for (let i = 0; i < a.size; i++) out[i] = Number.isFinite(d[i]) ? 1 : 0;
+  return new NdArray(out, a.shape);
+}
+
+// ===== additional binary ops =====
+//
+// These use a helper with three-arm dispatch (scalar / shape-equal / broadcast).
+// V8 inlines small monomorphic callbacks for the helper; vec's hottest binary
+// ops (add, sub, mul, div, pow above) stay written out explicitly.
+
+function _binary(a, b, fn) {
+  if (typeof b === 'number') {
+    const out = new Float64Array(a.size);
+    const d = a.data;
+    for (let i = 0; i < a.size; i++) out[i] = fn(d[i], b);
+    return new NdArray(out, a.shape);
+  }
+  if (typeof a === 'number') {
+    const out = new Float64Array(b.size);
+    const d = b.data;
+    for (let i = 0; i < b.size; i++) out[i] = fn(a, d[i]);
+    return new NdArray(out, b.shape);
+  }
+  if (shapesEqual(a.shape, b.shape)) {
+    const out = new Float64Array(a.size);
+    const ad = a.data, bd = b.data;
+    for (let i = 0; i < a.size; i++) out[i] = fn(ad[i], bd[i]);
+    return new NdArray(out, a.shape);
+  }
+  return broadcastBinary(a, b, fn);
+}
+
+function atan2(y, x)   { return _binary(y, x, Math.atan2); }
+function hypot(a, b)   { return _binary(a, b, Math.hypot); }
+function maximum(a, b) { return _binary(a, b, (x, y) => x > y ? x : y); }
+function minimum(a, b) { return _binary(a, b, (x, y) => x < y ? x : y); }
+
+function eq(a, b) { return _binary(a, b, (x, y) => x === y ? 1 : 0); }
+function ne(a, b) { return _binary(a, b, (x, y) => x !== y ? 1 : 0); }
+function lt(a, b) { return _binary(a, b, (x, y) => x <  y ? 1 : 0); }
+function le(a, b) { return _binary(a, b, (x, y) => x <= y ? 1 : 0); }
+function gt(a, b) { return _binary(a, b, (x, y) => x >  y ? 1 : 0); }
+function ge(a, b) { return _binary(a, b, (x, y) => x >= y ? 1 : 0); }
+
+// ── selection.js ──
+
+// Selection helpers — where (element-wise ternary), clip (clamp to range).
+
+
+
+// where(cond, a, b) — out[i] = cond[i] ? a[i] : b[i].
+//
+// `cond` must be an NdArray; truthiness is the standard JS rule (non-zero,
+// non-NaN). `a` and `b` may be either NdArrays with the same shape as cond,
+// or scalars. Full broadcasting between cond/a/b is not supported in v1;
+// shape-equal or scalar arguments only.
+
+function where(cond, a, b) {
+  if (!(cond instanceof NdArray)) {
+    throw new TypeError('where: cond must be an NdArray');
+  }
+  const aIsScalar = typeof a === 'number';
+  const bIsScalar = typeof b === 'number';
+  if (!aIsScalar && !(a instanceof NdArray)) {
+    throw new TypeError('where: a must be NdArray or number');
+  }
+  if (!bIsScalar && !(b instanceof NdArray)) {
+    throw new TypeError('where: b must be NdArray or number');
+  }
+  if (!aIsScalar && !shapesEqual(cond.shape, a.shape)) {
+    throw new RangeError(
+      `where: a shape [${a.shape.join(',')}] must match cond shape [${cond.shape.join(',')}]`
+    );
+  }
+  if (!bIsScalar && !shapesEqual(cond.shape, b.shape)) {
+    throw new RangeError(
+      `where: b shape [${b.shape.join(',')}] must match cond shape [${cond.shape.join(',')}]`
+    );
+  }
+  const out = new Float64Array(cond.size);
+  const cd = cond.data;
+  const ad = aIsScalar ? null : a.data;
+  const bd = bIsScalar ? null : b.data;
+  for (let i = 0; i < cond.size; i++) {
+    out[i] = cd[i] ? (aIsScalar ? a : ad[i]) : (bIsScalar ? b : bd[i]);
+  }
+  return new NdArray(out, cond.shape);
+}
+
+// clip(a, lo, hi) — clamp each element to the range [lo, hi].
+// lo and hi are scalars in v1.
+
+function clip(a, lo, hi) {
+  if (!(a instanceof NdArray)) {
+    throw new TypeError('clip: a must be an NdArray');
+  }
+  if (typeof lo !== 'number' || typeof hi !== 'number') {
+    throw new TypeError('clip: lo and hi must be numbers');
+  }
+  const out = new Float64Array(a.size);
+  const d = a.data;
+  for (let i = 0; i < a.size; i++) {
+    const v = d[i];
+    out[i] = v < lo ? lo : v > hi ? hi : v;
+  }
+  return new NdArray(out, a.shape);
+}
+
 // ── reduce.js ──
 
 // Reductions — sum/mean/max/min/std/var with optional axis,
@@ -898,6 +1155,133 @@ function dot(a, b) {
   throw new RangeError(`dot: unsupported ndim combination (${a.ndim}, ${b.ndim})`);
 }
 
+// ---------- prod ----------
+
+function prod(a, opts) {
+  if (opts && opts.axis !== undefined) {
+    return _reduceAxis(a, opts.axis, 1, (x, y) => x * y, (x) => x);
+  }
+  let acc = 1;
+  const d = a.data;
+  for (let i = 0; i < a.size; i++) acc *= d[i];
+  return acc;
+}
+
+// ---------- cumsum / cumprod ----------
+// With axis: returns array of same shape with running sum/product along that axis.
+// Without axis: numpy convention — flatten, return 1D running result.
+
+function _cumAxis(arr, axis, init, combine) {
+  axis = _normalizeAxis(axis, arr.ndim);
+  const reduceSize = arr.shape[axis];
+  let outerSize = 1;
+  for (let i = 0; i < axis; i++) outerSize *= arr.shape[i];
+  let innerSize = 1;
+  for (let i = axis + 1; i < arr.ndim; i++) innerSize *= arr.shape[i];
+  const out = new Float64Array(arr.size);
+  const d = arr.data;
+  for (let outer = 0; outer < outerSize; outer++) {
+    const outerOff = outer * reduceSize * innerSize;
+    for (let inner = 0; inner < innerSize; inner++) {
+      let acc = init;
+      for (let r = 0; r < reduceSize; r++) {
+        const idx = outerOff + r * innerSize + inner;
+        acc = combine(acc, d[idx]);
+        out[idx] = acc;
+      }
+    }
+  }
+  return new NdArray(out, arr.shape);
+}
+
+function cumsum(a, opts) {
+  if (opts && opts.axis !== undefined) return _cumAxis(a, opts.axis, 0, (x, y) => x + y);
+  const out = new Float64Array(a.size);
+  const d = a.data;
+  let acc = 0;
+  for (let i = 0; i < a.size; i++) { acc += d[i]; out[i] = acc; }
+  return new NdArray(out, [a.size]);
+}
+
+function cumprod(a, opts) {
+  if (opts && opts.axis !== undefined) return _cumAxis(a, opts.axis, 1, (x, y) => x * y);
+  const out = new Float64Array(a.size);
+  const d = a.data;
+  let acc = 1;
+  for (let i = 0; i < a.size; i++) { acc *= d[i]; out[i] = acc; }
+  return new NdArray(out, [a.size]);
+}
+
+// ---------- argmin / argmax ----------
+// Without axis: scalar (flat index).
+// With axis: NdArray of indices with that axis removed.
+
+function _argAxis(arr, axis, mode) {
+  axis = _normalizeAxis(axis, arr.ndim);
+  const reduceSize = arr.shape[axis];
+  let outerSize = 1;
+  for (let i = 0; i < axis; i++) outerSize *= arr.shape[i];
+  let innerSize = 1;
+  for (let i = axis + 1; i < arr.ndim; i++) innerSize *= arr.shape[i];
+  const outShape = arr.shape.slice(0, axis).concat(arr.shape.slice(axis + 1));
+  const out = new Float64Array(outerSize * innerSize);
+  const d = arr.data;
+  for (let outer = 0; outer < outerSize; outer++) {
+    const outerOff = outer * reduceSize * innerSize;
+    for (let inner = 0; inner < innerSize; inner++) {
+      const baseOff = outerOff + inner;
+      let bestIdx = 0;
+      let bestVal = d[baseOff];
+      if (mode === 'min') {
+        for (let r = 1; r < reduceSize; r++) {
+          const v = d[baseOff + r * innerSize];
+          if (v < bestVal) { bestVal = v; bestIdx = r; }
+        }
+      } else {
+        for (let r = 1; r < reduceSize; r++) {
+          const v = d[baseOff + r * innerSize];
+          if (v > bestVal) { bestVal = v; bestIdx = r; }
+        }
+      }
+      out[outer * innerSize + inner] = bestIdx;
+    }
+  }
+  return new NdArray(out, outShape);
+}
+
+function argmin(a, opts) {
+  if (opts && opts.axis !== undefined) return _argAxis(a, opts.axis, 'min');
+  if (a.size === 0) throw new RangeError('argmin of empty array');
+  let mi = 0;
+  const d = a.data;
+  for (let i = 1; i < a.size; i++) if (d[i] < d[mi]) mi = i;
+  return mi;
+}
+
+function argmax(a, opts) {
+  if (opts && opts.axis !== undefined) return _argAxis(a, opts.axis, 'max');
+  if (a.size === 0) throw new RangeError('argmax of empty array');
+  let mi = 0;
+  const d = a.data;
+  for (let i = 1; i < a.size; i++) if (d[i] > d[mi]) mi = i;
+  return mi;
+}
+
+// ---------- trace ----------
+// Sum of the diagonal of a 2D matrix (square or rectangular).
+
+function trace(A) {
+  if (A.ndim !== 2) {
+    throw new RangeError(`trace requires 2D array, got ${A.ndim}D`);
+  }
+  const m = A.shape[0], n = A.shape[1];
+  const k = Math.min(m, n);
+  let s = 0;
+  const d = A.data;
+  for (let i = 0; i < k; i++) s += d[i * n + i];
+  return s;
+}
+
 // ── linalg-mul.js ──
 
 // Matrix multiplication, transpose, and closed-form det/inv for 2×2, 3×3, 4×4.
@@ -1047,6 +1431,86 @@ function inv3(A) {
   out[3] = c01 * k; out[4] = c11 * k; out[5] = c21 * k;
   out[6] = c02 * k; out[7] = c12 * k; out[8] = c22 * k;
   return new NdArray(out, [3, 3]);
+}
+
+// ---------- diag / outer / tril / triu ----------
+
+// diag(a, k = 0):
+//   1D input → 2D matrix with `a` placed on the k-th diagonal (k>0 above
+//   the main diagonal, k<0 below). Off-diagonal entries are zero.
+//   2D input → 1D vector of the k-th diagonal.
+
+function diag(a, k = 0) {
+  if (a.ndim === 1) {
+    const n = a.size + Math.abs(k);
+    const out = new Float64Array(n * n);
+    for (let i = 0; i < a.size; i++) {
+      const row = k >= 0 ? i : i - k;
+      const col = k >= 0 ? i + k : i;
+      out[row * n + col] = a.data[i];
+    }
+    return new NdArray(out, [n, n]);
+  }
+  if (a.ndim === 2) {
+    const m = a.shape[0], n = a.shape[1];
+    const len = k >= 0 ? Math.min(m, n - k) : Math.min(m + k, n);
+    if (len <= 0) return new NdArray(new Float64Array(0), [0]);
+    const out = new Float64Array(len);
+    for (let i = 0; i < len; i++) {
+      const row = k >= 0 ? i : i - k;
+      const col = k >= 0 ? i + k : i;
+      out[i] = a.data[row * n + col];
+    }
+    return new NdArray(out, [len]);
+  }
+  throw new RangeError(`diag requires 1D or 2D, got ${a.ndim}D`);
+}
+
+// outer(a, b) — outer product of two 1D vectors. out[i, j] = a[i] * b[j].
+
+function outer(a, b) {
+  if (a.ndim !== 1 || b.ndim !== 1) {
+    throw new RangeError(`outer requires two 1D vectors, got ${a.ndim}D × ${b.ndim}D`);
+  }
+  const m = a.size, n = b.size;
+  const out = new Float64Array(m * n);
+  const ad = a.data, bd = b.data;
+  for (let i = 0; i < m; i++) {
+    const ai = ad[i];
+    for (let j = 0; j < n; j++) out[i * n + j] = ai * bd[j];
+  }
+  return new NdArray(out, [m, n]);
+}
+
+// tril(A, k = 0) — keep entries on/below the k-th diagonal, zero the rest.
+// k > 0 keeps additional bands above; k < 0 zeroes bands at and above main.
+
+function tril(A, k = 0) {
+  if (A.ndim !== 2) throw new RangeError(`tril requires 2D, got ${A.ndim}D`);
+  const m = A.shape[0], n = A.shape[1];
+  const out = new Float64Array(m * n);
+  const d = A.data;
+  for (let i = 0; i < m; i++) {
+    for (let j = 0; j < n; j++) {
+      if (j - i <= k) out[i * n + j] = d[i * n + j];
+    }
+  }
+  return new NdArray(out, [m, n]);
+}
+
+// triu(A, k = 0) — keep entries on/above the k-th diagonal, zero the rest.
+
+function triu(A, k = 0) {
+  if (A.ndim !== 2) throw new RangeError(`triu requires 2D, got ${A.ndim}D`);
+  const m = A.shape[0], n = A.shape[1];
+  const out = new Float64Array(m * n);
+  const d = A.data;
+  for (let i = 0; i < m; i++) {
+    for (let j = 0; j < n; j++) {
+      if (j - i >= k) out[i * n + j] = d[i * n + j];
+    }
+  }
+  return new NdArray(out, [m, n]);
 }
 
 function inv4(A) {
@@ -1615,19 +2079,28 @@ export {
   // ndarray
   NdArray, shapeProduct, computeStrides,
   // shape
-  reshape, flatten, copy, slice,
+  reshape, flatten, copy, slice, concat, stack,
   broadcastShapes, broadcastStrides, broadcastBinary, shapesEqual,
   // creation
   zeros, ones, full, range, linspace, eye, from,
-  // ops
+  // ops (binary + unary)
   add, sub, mul, div, pow,
   neg, abs, sqrt, log, exp, sin, cos, tan,
+  asin, acos, atan,
+  floor, ceil, round, sign,
+  isnan, isfinite,
+  atan2, hypot, maximum, minimum,
+  eq, ne, lt, le, gt, ge,
+  // selection
+  where, clip,
   // reduce
   sum, mean, max, min, std, variance, variance as var_, norm, dot,
+  prod, cumsum, cumprod, argmin, argmax, trace,
   // linalg-mul
   matmul, transpose,
   det2, det3, det4,
   inv2, inv3, inv4,
+  diag, outer, tril, triu,
   // linalg-solve
   solve, det, inv, cholesky, solveCholesky,
   // linalg-lstsq
