@@ -82,17 +82,17 @@ async function getAlpackAll() {
 
 // ── Strided kernel generation helpers ────────────────────────────────
 
-function genStridedEwise(name, op, ranks) {
+function genStridedEwise(name, op, ranks, dt) {
   let src = '';
   for (const r of ranks) {
     const params = [];
     const vars = [];
     const loopVars = 'ijklmn'.slice(0, r).split('');
-    params.push('a: array f64');
+    params.push(`a: array ${dt}`);
     for (let d = 0; d < r; d++) params.push(`sa${d}: i32`);
-    params.push('b: array f64');
+    params.push(`b: array ${dt}`);
     for (let d = 0; d < r; d++) params.push(`sb${d}: i32`);
-    params.push('out: array f64');
+    params.push(`out: array ${dt}`);
     for (let d = 0; d < r; d++) params.push(`so${d}: i32`);
     for (let d = 0; d < r; d++) params.push(`n${d}: i32`);
     vars.push(...loopVars.map(v => `${v}: i32`));
@@ -104,20 +104,20 @@ function genStridedEwise(name, op, ranks) {
     for (let d = r - 1; d >= 0; d--) {
       loops = `for ${loopVars[d]} := 0, n${d}\n    ${'  '.repeat(r - 1 - d)}${loops}\n  ${'  '.repeat(r - 1 - d)}end for`;
     }
-    src += `\nsubroutine ewise.${name}.s${r}.f64(${params.join('; ')})\nvar ${vars.join(', ')}\nbegin\n  ${loops}\nend\n`;
+    src += `\nsubroutine ewise.${name}.s${r}.${dt}(${params.join('; ')})\nvar ${vars.join(', ')}\nbegin\n  ${loops}\nend\n`;
   }
   return src;
 }
 
-function genStridedNeg(ranks) {
+function genStridedNeg(ranks, dt) {
   let src = '';
   for (const r of ranks) {
     const params = [];
     const vars = [];
     const loopVars = 'ijklmn'.slice(0, r).split('');
-    params.push('a: array f64');
+    params.push(`a: array ${dt}`);
     for (let d = 0; d < r; d++) params.push(`sa${d}: i32`);
-    params.push('out: array f64');
+    params.push(`out: array ${dt}`);
     for (let d = 0; d < r; d++) params.push(`so${d}: i32`);
     for (let d = 0; d < r; d++) params.push(`n${d}: i32`);
     vars.push(...loopVars.map(v => `${v}: i32`));
@@ -128,23 +128,23 @@ function genStridedNeg(ranks) {
     for (let d = r - 1; d >= 0; d--) {
       loops = `for ${loopVars[d]} := 0, n${d}\n    ${'  '.repeat(r - 1 - d)}${loops}\n  ${'  '.repeat(r - 1 - d)}end for`;
     }
-    src += `\nsubroutine ewise.neg.s${r}.f64(${params.join('; ')})\nvar ${vars.join(', ')}\nbegin\n  ${loops}\nend\n`;
+    src += `\nsubroutine ewise.neg.s${r}.${dt}(${params.join('; ')})\nvar ${vars.join(', ')}\nbegin\n  ${loops}\nend\n`;
   }
   return src;
 }
 
-function genStridedScalar(name, op, ranks) {
+function genStridedScalar(name, op, ranks, dt) {
   let src = '';
   for (const r of ranks) {
     const params = [];
     const vars = [];
     const loopVars = 'ijklmn'.slice(0, r).split('');
-    params.push('a: array f64');
+    params.push(`a: array ${dt}`);
     for (let d = 0; d < r; d++) params.push(`sa${d}: i32`);
-    params.push('out: array f64');
+    params.push(`out: array ${dt}`);
     for (let d = 0; d < r; d++) params.push(`so${d}: i32`);
     for (let d = 0; d < r; d++) params.push(`n${d}: i32`);
-    params.push('s: f64');
+    params.push(`s: ${dt}`);
     vars.push(...loopVars.map(v => `${v}: i32`));
     const aIdx = loopVars.map((v, d) => `${v} * sa${d}`).join(' + ');
     const oIdx = loopVars.map((v, d) => `${v} * so${d}`).join(' + ');
@@ -153,50 +153,63 @@ function genStridedScalar(name, op, ranks) {
     for (let d = r - 1; d >= 0; d--) {
       loops = `for ${loopVars[d]} := 0, n${d}\n    ${'  '.repeat(r - 1 - d)}${loops}\n  ${'  '.repeat(r - 1 - d)}end for`;
     }
-    src += `\nsubroutine ewise.${name}.s${r}.f64(${params.join('; ')})\nvar ${vars.join(', ')}\nbegin\n  ${loops}\nend\n`;
+    src += `\nsubroutine ewise.${name}.s${r}.${dt}(${params.join('; ')})\nvar ${vars.join(', ')}\nbegin\n  ${loops}\nend\n`;
   }
   return src;
 }
 
-function genStridedReduce(name, accumExpr, initExpr, ranks) {
+function genStridedReduce(name, accumExpr, initExpr, ranks, dt) {
   let src = '';
   for (const r of ranks) {
     const params = [];
     const vars = [];
     const loopVars = 'ijklmn'.slice(0, r).split('');
-    params.push('a: array f64');
+    params.push(`a: array ${dt}`);
     for (let d = 0; d < r; d++) params.push(`sa${d}: i32`);
     for (let d = 0; d < r; d++) params.push(`n${d}: i32`);
     vars.push(...loopVars.map(v => `${v}: i32`));
-    vars.push('acc: f64', 'v: f64');
+    vars.push(`acc: ${dt}`, `v: ${dt}`);
     const aIdx = loopVars.map((v, d) => `${v} * sa${d}`).join(' + ');
     let body = `v := a[${aIdx}]\n      ${'  '.repeat(r - 1)}${accumExpr}`;
     let loops = body;
     for (let d = r - 1; d >= 0; d--) {
       loops = `for ${loopVars[d]} := 0, n${d}\n    ${'  '.repeat(r - 1 - d)}${loops}\n  ${'  '.repeat(r - 1 - d)}end for`;
     }
-    src += `\nfunction reduce.${name}.s${r}.f64(${params.join('; ')}): f64\nvar ${vars.join('; ')}\nbegin\n  acc := ${initExpr}\n  ${loops}\n  reduce.${name}.s${r}.f64 := acc\nend\n`;
+    src += `\nfunction reduce.${name}.s${r}.${dt}(${params.join('; ')}): ${dt}\nvar ${vars.join('; ')}\nbegin\n  acc := ${initExpr}\n  ${loops}\n  reduce.${name}.s${r}.${dt} := acc\nend\n`;
   }
   return src;
 }
 
+function genStridedKernelsForDtype(dt) {
+  return [
+    genStridedEwise('add', '+', [1,2,3], dt),
+    genStridedEwise('sub', '-', [1,2,3], dt),
+    genStridedEwise('mul', '*', [1,2,3], dt),
+    genStridedEwise('div', '/', [1,2,3], dt),
+    genStridedNeg([1,2,3], dt),
+    genStridedScalar('adds', '+', [1,2,3], dt),
+    genStridedScalar('muls', '*', [1,2,3], dt),
+    genStridedReduce('sum', 'acc := acc + v', '0.0', [1,2,3], dt),
+    genStridedReduce('min', 'if (v < acc) then\n        acc := v\n      end if', 'a[0]', [1,2,3], dt),
+    genStridedReduce('max', 'if (v > acc) then\n        acc := v\n      end if', 'a[0]', [1,2,3], dt),
+    genStridedReduce('prod', 'acc := acc * v', '1.0', [1,2,3], dt),
+  ].join('\n');
+}
+
 const STRIDED_KERNELS = [
-  genStridedEwise('add', '+', [1,2,3]),
-  genStridedEwise('sub', '-', [1,2,3]),
-  genStridedEwise('mul', '*', [1,2,3]),
-  genStridedEwise('div', '/', [1,2,3]),
-  genStridedNeg([1,2,3]),
-  genStridedScalar('adds', '+', [1,2,3]),
-  genStridedScalar('muls', '*', [1,2,3]),
-  genStridedReduce('sum', 'acc := acc + v', '0.0', [1,2,3]),
-  genStridedReduce('min', 'if (v < acc) then\n        acc := v\n      end if', 'a[0]', [1,2,3]),
-  genStridedReduce('max', 'if (v > acc) then\n        acc := v\n      end if', 'a[0]', [1,2,3]),
-  genStridedReduce('prod', 'acc := acc * v', '1.0', [1,2,3]),
+  genStridedKernelsForDtype('f64'),
+  genStridedKernelsForDtype('f32'),
 ].join('\n');
 
 // ── Kernel source (atra) ─────────────────────────────────────────────
+//
+// The contiguous f64 kernels are written out below as a literal source
+// string. The f32 contiguous kernels are derived by a textual swap
+// ('f64' → 'f32') applied AFTER stripping fill.zero (which is i32-typed
+// and doesn't need an f32 variant). Strided kernels are generated
+// dynamically for both dtypes by genStridedKernelsForDtype above.
 
-const KERNEL_SRC = `
+const F64_CONTIG_SRC = `
 ! ── elementwise (contiguous f64) ──────────────────────────────
 
 subroutine ewise.add.f64(a: array f64; b: array f64; out: array f64; n: i32)
@@ -473,6 +486,21 @@ begin
   end for
 end
 
+`;
+
+// f32 contiguous kernels: textually substitute f64 → f32 in F64_CONTIG_SRC.
+// The kernels in F64_CONTIG_SRC are simple scalar atra source — no f64x2
+// SIMD references — so this is mechanical and correct. Note the colon
+// regex doesn't require a leading word boundary — function return types
+// `): f64` have a non-word char before the colon and need to match too.
+const F32_CONTIG_SRC = F64_CONTIG_SRC
+  .replace(/\.f64\b/g, '.f32')
+  .replace(/\barray f64\b/g, 'array f32')
+  .replace(/: f64\b/g, ': f32')
+  .replace(/\(contiguous f64\)/g, '(contiguous f32)');
+
+// fill.zero is i32-typed (used for byte-zeroing, dtype-agnostic).
+const FILL_ZERO_SRC = `
 subroutine fill.zero(a: array i32; nbytes: i32)
 var i, n: i32
 begin
@@ -481,14 +509,15 @@ begin
     a[i] := 0
   end for
 end
-
-${STRIDED_KERNELS}
 `;
+
+const KERNEL_SRC = F64_CONTIG_SRC + F32_CONTIG_SRC + FILL_ZERO_SRC + STRIDED_KERNELS;
 
 // ── Constants ────────────────────────────────────────────────────────
 
 const ALIGN = 16; // 16-byte alignment for SIMD compat
 const ITEMSIZE_F64 = 8;
+const ITEMSIZE_F32 = 4;
 const PAGE_SIZE = 65536; // WebAssembly page = 64KB
 
 // ── Dead-array detection ──────────────────────────────────────────────
@@ -812,7 +841,7 @@ function stridedScalarOp(memory, aPtr, aStrides, outPtr, outStrides, outShape, s
 function makeArray(ptr, dtype, shape, strides, memory, arena) {
   const ndim = shape.length;
   const length = shape.reduce((a, b) => a * b, 1);
-  const itemsize = ITEMSIZE_F64; // f64 only for now
+  const itemsize = dtype === 'f32' ? ITEMSIZE_F32 : ITEMSIZE_F64;
   const nbytes = length * itemsize;
   const frozenShape = Object.freeze([...shape]);
   const frozenStrides = Object.freeze([...strides]);
@@ -1092,28 +1121,58 @@ async function natra(opts = {}) {
     return allocPerm(memory, permPtr, nbytes, maxPages);
   }
 
-  function _makeNd(ptr, shape, arena) {
-    const strides = contiguousStrides(shape);
-    const arr = makeArray(ptr, 'f64', shape, strides, memory, arena);
+  function _makeNd(ptr, shape, arena, dtype = 'f64') {
+    // contiguousStrides assumes f64 (8-byte stride). For f32, recompute.
+    const itemsize = dtype === 'f32' ? ITEMSIZE_F32 : ITEMSIZE_F64;
+    const ndim = shape.length;
+    const strides = new Array(ndim);
+    let stride = itemsize;
+    for (let i = ndim - 1; i >= 0; i--) {
+      strides[i] = stride;
+      stride *= shape[i];
+    }
+    const arr = makeArray(ptr, dtype, shape, strides, memory, arena);
     if (arena) arena.track(arr);
     return arr;
   }
 
-  function _allocArray(shape, arena) {
+  function _allocArray(shape, arena, dtype = 'f64') {
     const length = shape.reduce((a, b) => a * b, 1);
-    const nbytes = length * ITEMSIZE_F64;
+    const itemsize = dtype === 'f32' ? ITEMSIZE_F32 : ITEMSIZE_F64;
+    const nbytes = length * itemsize;
     const ptr = _alloc(nbytes, arena);
-    return _makeNd(ptr, shape, arena);
+    return _makeNd(ptr, shape, arena, dtype);
+  }
+
+  // Throw if any op input is f32 — we don't have full f32 element-wise
+  // dispatch yet, just BLAS-level (matmul/dot/solve etc.). Use this on
+  // ops that haven't been dtype-routed.
+  function _requireF64(opName, ...arrs) {
+    for (const a of arrs) {
+      if (a && a.dtype && a.dtype !== 'f64') {
+        throw new Error(
+          `${opName}: f32 inputs not yet supported (only matmul/dot/solve are dtype-aware in v0.2.0). Convert via toF64() or wait for v0.2.x.`
+        );
+      }
+    }
   }
 
   // ── Array creation ───────────────────────────────────────────────
 
   function array(data, opts) {
     const shape = (opts && opts.shape) ? opts.shape : inferShape(data);
+    const dtype = (opts && opts.dtype) || 'f64';
+    if (dtype !== 'f64' && dtype !== 'f32') {
+      throw new Error(`array: unsupported dtype "${dtype}" (only f64 and f32)`);
+    }
     const length = shape.reduce((a, b) => a * b, 1);
-    const nbytes = length * ITEMSIZE_F64;
+    const itemsize = dtype === 'f32' ? ITEMSIZE_F32 : ITEMSIZE_F64;
+    const nbytes = length * itemsize;
     const ptr = allocPerm(memory, permPtr, nbytes, maxPages);
-    const f64 = new Float64Array(memory.buffer, ptr, length);
+    const view = dtype === 'f32'
+      ? new Float32Array(memory.buffer, ptr, length)
+      : new Float64Array(memory.buffer, ptr, length);
+    const shift = dtype === 'f32' ? 2 : 3;  // unused below — view.set handles it
     if (Array.isArray(data)) {
       if (Array.isArray(data[0]) || (opts && opts.shape)) {
         // Nested or flat with explicit shape
@@ -1124,21 +1183,21 @@ async function natra(opts = {}) {
         } else {
           for (let i = 0; i < length; i++) flat[i] = data[i];
         }
-        f64.set(flat);
+        view.set(flat);
       } else {
-        f64.set(data);
+        view.set(data);
       }
     } else if (ArrayBuffer.isView(data)) {
-      f64.set(data);
+      view.set(data);
     }
     // Sync heapPtr to stay ahead of permPtr
     if (heapPtr.value < permPtr.value) heapPtr.value = permPtr.value;
-    const strides = contiguousStrides(shape);
-    return makeArray(ptr, 'f64', shape, strides, memory, null);
+    return _makeNd(ptr, shape, null, dtype);
   }
 
-  function zeros(shape) {
-    const arr = _allocArray(shape, null);
+  function zeros(shape, opts) {
+    const dtype = (opts && opts.dtype) || 'f64';
+    const arr = _allocArray(shape, null, dtype);
     K.fill.zero(arr.ptr, arr.nbytes);
     if (heapPtr.value < permPtr.value) heapPtr.value = permPtr.value;
     return arr;
@@ -1357,11 +1416,19 @@ async function natra(opts = {}) {
   // ── Scope operations ─────────────────────────────────────────────
 
   function makeScopeOps(arena) {
-    function allocScoped(shape) {
+    function allocScoped(shape, dtype = 'f64') {
       const length = shape.reduce((a, b) => a * b, 1);
-      const nbytes = length * ITEMSIZE_F64;
+      const itemsize = dtype === 'f32' ? ITEMSIZE_F32 : ITEMSIZE_F64;
+      const nbytes = length * itemsize;
       const ptr = arena.alloc(nbytes);
-      const arr = makeArray(ptr, 'f64', shape, contiguousStrides(shape), memory, arena);
+      // contiguousStrides is f64-only; recompute for f32.
+      const strides = new Array(shape.length);
+      let stride = itemsize;
+      for (let i = shape.length - 1; i >= 0; i--) {
+        strides[i] = stride;
+        stride *= shape[i];
+      }
+      const arr = makeArray(ptr, dtype, shape, strides, memory, arena);
       arena.track(arr);
       return arr;
     }
@@ -1641,20 +1708,23 @@ async function natra(opts = {}) {
     // Copy ndarray to contiguous scratch. If already contiguous, copies data.
     // Returns a new contiguous scoped ndarray.
     function copyToScoped(a) {
-      const out = allocScoped(a.shape);
+      const out = allocScoped(a.shape, a.dtype);
       if (isContiguous(a)) {
         new Uint8Array(memory.buffer, out.ptr, a.nbytes).set(
           new Uint8Array(memory.buffer, a.ptr, a.nbytes));
       } else {
-        // Strided copy element by element
-        const f64src = new Float64Array(memory.buffer);
-        const f64dst = new Float64Array(memory.buffer);
+        // Strided copy element by element — use the right typed view for dtype.
+        const isF32 = a.dtype === 'f32';
+        const src = isF32 ? new Float32Array(memory.buffer) : new Float64Array(memory.buffer);
+        const dst = isF32 ? new Float32Array(memory.buffer) : new Float64Array(memory.buffer);
+        const itemsize = isF32 ? ITEMSIZE_F32 : ITEMSIZE_F64;
+        const shift = isF32 ? 2 : 3;
         const ndim = a.ndim;
         const indices = new Array(ndim).fill(0);
         for (let flat = 0; flat < a.length; flat++) {
           let srcOff = a.ptr;
           for (let d = 0; d < ndim; d++) srcOff += indices[d] * a.strides[d];
-          f64dst[(out.ptr + flat * ITEMSIZE_F64) >> 3] = f64src[srcOff >> 3];
+          dst[(out.ptr + flat * itemsize) >> shift] = src[srcOff >> shift];
           for (let d = ndim - 1; d >= 0; d--) {
             if (++indices[d] < a.shape[d]) break;
             indices[d] = 0;
@@ -1709,10 +1779,10 @@ async function natra(opts = {}) {
     }
 
     const s = {
-      add(a, b) { return binaryOp(a, b, K.ewise.add.f64, K.ewise.adds.f64, false, JS_ADD, stridedAA.add, stridedScalarK.adds); },
-      sub(a, b) { return binaryOp(a, b, K.ewise.sub.f64, K.ewise.adds.f64, 'negate', JS_SUB, stridedAA.sub, stridedScalarK.adds); },
-      mul(a, b) { return binaryOp(a, b, K.ewise.mul.f64, K.ewise.muls.f64, false, JS_MUL, stridedAA.mul, stridedScalarK.muls); },
-      div(a, b) { return binaryOp(a, b, K.ewise.div.f64, K.ewise.muls.f64, 'reciprocal', JS_DIV, stridedAA.div, stridedScalarK.muls); },
+      add(a, b) { _requireF64('add', a, b); return binaryOp(a, b, K.ewise.add.f64, K.ewise.adds.f64, false, JS_ADD, stridedAA.add, stridedScalarK.adds); },
+      sub(a, b) { _requireF64('sub', a, b); return binaryOp(a, b, K.ewise.sub.f64, K.ewise.adds.f64, 'negate', JS_SUB, stridedAA.sub, stridedScalarK.adds); },
+      mul(a, b) { _requireF64('mul', a, b); return binaryOp(a, b, K.ewise.mul.f64, K.ewise.muls.f64, false, JS_MUL, stridedAA.mul, stridedScalarK.muls); },
+      div(a, b) { _requireF64('div', a, b); return binaryOp(a, b, K.ewise.div.f64, K.ewise.muls.f64, 'reciprocal', JS_DIV, stridedAA.div, stridedScalarK.muls); },
 
       neg(a) {
         if (isContiguous(a)) {
@@ -1827,6 +1897,7 @@ async function natra(opts = {}) {
         if (a.ndim !== 2) throw new Error('matmul: a must be 2D');
         const matvec = b.ndim === 1;
         if (!matvec && b.ndim !== 2) throw new Error('matmul: b must be 1D or 2D');
+        if (a.dtype !== b.dtype) throw new Error(`matmul: dtype mismatch (${a.dtype} vs ${b.dtype})`);
 
         const m = a.shape[0], ka = a.shape[1];
         const kb = matvec ? b.shape[0] : b.shape[0];
@@ -1837,14 +1908,20 @@ async function natra(opts = {}) {
         const ac = isContiguous(a) ? a : copyToScoped(a);
         const bc = isContiguous(b) ? b : copyToScoped(b);
 
-        const out = allocScoped([m, n]);
-        // zero output (dgemm uses beta*C + alpha*A*B, with beta=0 we need C initialized)
+        const dtype = a.dtype;
+        const out = allocScoped([m, n], dtype);
+        // zero output (gemm uses beta*C + alpha*A*B, with beta=0 we need C initialized)
         K.fill.zero(out.ptr, out.nbytes);
-        K.alas.dgemm(ac.ptr, bc.ptr, out.ptr, m, n, ka, 1.0, 0.0);
+        if (dtype === 'f32') {
+          K.alas.sgemm(ac.ptr, bc.ptr, out.ptr, m, n, ka, 1.0, 0.0);
+        } else {
+          K.alas.dgemm(ac.ptr, bc.ptr, out.ptr, m, n, ka, 1.0, 0.0);
+        }
 
         if (matvec) {
           // Return [m] not [m,1] — reinterpret same allocation
-          const vec = makeArray(out.ptr, 'f64', [m], [ITEMSIZE_F64], memory, arena);
+          const itemsize = dtype === 'f32' ? ITEMSIZE_F32 : ITEMSIZE_F64;
+          const vec = makeArray(out.ptr, dtype, [m], [itemsize], memory, arena);
           arena.track(vec);
           return vec;
         }
@@ -1854,8 +1931,10 @@ async function natra(opts = {}) {
       dot(a, b) {
         if (a.ndim !== 1 || b.ndim !== 1) throw new Error('dot: both must be 1D');
         if (a.shape[0] !== b.shape[0]) throw new Error(`dot: length mismatch: ${a.shape[0]} vs ${b.shape[0]}`);
+        if (a.dtype !== b.dtype) throw new Error(`dot: dtype mismatch (${a.dtype} vs ${b.dtype})`);
         const ac = isContiguous(a) ? a : copyToScoped(a);
         const bc = isContiguous(b) ? b : copyToScoped(b);
+        if (a.dtype === 'f32') return K.alas.sdot(ac.ptr, bc.ptr, a.shape[0]);
         return K.alas.ddot(ac.ptr, bc.ptr, a.shape[0]);
       },
 

@@ -25,6 +25,21 @@ nx.sum(a);             // 10
 nx.reshape(nx.arange(12), [3, 4]);
 ```
 
+### f32 (single-precision) arrays
+
+Pass `dtype: 'f32'` when creating arrays. f32 routes through alpack's
+sgemm/sdot for ~2× speedup on large matmul + dot. f32 element-wise ops
+are not yet routed (v0.2.0 partial dispatch); they throw a clear error.
+
+```js
+const A = nx.array([[1, 2], [3, 4]], { dtype: 'f32' });
+const B = nx.array([[5, 6], [7, 8]], { dtype: 'f32' });
+nx.scope(s => s.matmul(A, B));      // routes to alas.sgemm — 2× faster than dgemm
+nx.scope(s => s.dot(a32, b32));     // routes to alas.sdot
+```
+
+Dtype mismatch throws (no auto-upcast). Convert manually if needed.
+
 ### Adder integration (numpy-style)
 
 ```js
