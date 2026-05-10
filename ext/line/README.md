@@ -1,16 +1,24 @@
 # @gcu/line
 
-A lightweight, TypedArray-based numerical library for JavaScript — the
-NumPy-shaped piece that's been missing from the JS ecosystem.
+Linear algebra for JavaScript — the NumPy-shaped piece that's been
+missing from the JS ecosystem.
 
 - N-dimensional arrays backed by `Float64Array`
 - NumPy-style broadcasting (right-aligned axes; size-1 broadcasts)
 - Element-wise math, reductions with optional axis
-- Small dense linear algebra: solve, cholesky, lstsq, eigSym, eigSym3
-- Closed-form fast paths for 2×2 / 3×3 / 4×4 matrices
+- **BLAS-1** — `sum`, `dot`, `norm`, `mean`, `std`, `var` with V8-winked
+  unrolled-4 accumulators that auto-vectorize to AVX f64x4 — **beat
+  Wasm SIMD on the same machine**
+- **Decompositions** — `qr`, `svd`, `cholesky`, `eigSym`, `eigSym3`
+- **Solvers** — `solve`, `lstsq` (qr/normal/svd methods), `pinv`,
+  `solve_triangular`
+- **Norms** — vector L1/L2/L∞/p-norm, matrix Frobenius/induced/nuclear
+- **Utilities** — `cross`, `kron`, `matrix_power`, `matrix_rank`,
+  closed-form det/inv for 2×2/3×3/4×4
+- **Register-tiled 4×4 matmul** — ties alpack's wasm SIMD at large N
 - Pure JS — no wasm, no native dependencies
 - Works in Node, modern browsers, Deno, Bun
-- ~50 KB unminified, single ES module
+- ~90 KB unminified, single ES module, zero runtime deps
 
 `@gcu/line` is part of the [Auditable](https://github.com/endarthur/auditable)
 ecosystem and ships with a Python (adder) bridge, but the core library
@@ -212,7 +220,7 @@ variance; default 0).
 
 ```js
 // Multiplication
-line.matmul(A, B)              // 2D × 2D → 2D (loop-reordered i,k,j)
+line.matmul(A, B)              // 2D × 2D → 2D (4×4 register-tiled)
 line.transpose(A)              // 2D axes swap (copy)
 
 // Linear systems (LU + partial pivoting)
@@ -224,12 +232,35 @@ line.inv(A)                    // matrix inverse
 line.cholesky(A)               // returns L (lower triangular)
 line.solveCholesky(L, b)       // forward + back-substitute given precomputed L
 
-// Least squares (normal equations + Cholesky)
-line.lstsq(A, b)               // x = (A^T A)^-1 A^T b
+// Triangular solve (forward / back substitution)
+line.solve_triangular(T, b, { lower: true })
+
+// Decompositions
+line.qr(A, { mode: 'thin' | 'full' })   // Householder QR
+line.svd(A)                              // one-sided Jacobi SVD, thin
+                                         // returns { U, s, V }: A = U·diag(s)·Vᵀ
+line.pinv(A, { rcond })                  // Moore-Penrose pseudoinverse via SVD
+line.matrix_rank(A)                      // numerical rank via SVD
+
+// Least squares (three methods)
+line.lstsq(A, b)                         // default: QR (κ(A), stable)
+line.lstsq(A, b, { method: 'normal' })   // AᵀA via Cholesky (fastest, κ(A)²)
+line.lstsq(A, b, { method: 'svd' })      // most robust; handles rank-deficient A
 
 // Symmetric eigendecomposition
 line.eigSym3(A)                // 3×3 via Smith/Cardano closed-form
 line.eigSym(A, opts?)          // N×N via Jacobi rotations
+
+// Matrix powers
+line.matrix_power(A, k)        // A^k via exp-by-squaring; k=0→I, k<0→inv
+
+// Norms
+line.vecNorm(x, ord=2)         // ord: 1, 2, Infinity, -Infinity, or p>0
+line.matNorm(A, ord='fro')     // 'fro', 'nuc', 1, ±Infinity, ±2
+
+// Products
+line.cross(a, b)               // 3D cross product (1D × 1D → 1D)
+line.kron(A, B)                // Kronecker product (also 1D × 1D)
 
 // Closed-form fast paths
 line.det2(A) / line.det3(A) / line.det4(A)
@@ -247,6 +278,40 @@ line.triu(A, k=0)       // keep on/above k-th diagonal, zero rest
 `eigSym3` and `eigSym` return `{ values, vectors }` where:
 - `values`: 1D NdArray of eigenvalues, sorted **descending**
 - `vectors`: 2D NdArray with eigenvectors as columns, orthonormal
+
+`svd` returns `{ U, s, V }` with `A = U · diag(s) · Vᵀ` (thin SVD):
+- `U`: m×k orthonormal columns
+- `s`: 1D length k, descending
+- `V`: n×k orthonormal columns
+- where `k = min(m, n)`
+
+#### Quick PCA example
+
+For PCA of P variables on N samples, the cov+eig path is dramatically
+cheaper than direct SVD when N >> P (the typical case):
+
+```js
+import { from, matmul, transpose, eigSym, sum } from '@gcu/line';
+
+function pca(X) {  // X: N × P
+  const N = X.shape[0], P = X.shape[1];
+  // Center columns
+  const means = new Float64Array(P);
+  for (let i = 0; i < N; i++)
+    for (let j = 0; j < P; j++) means[j] += X.data[i * P + j];
+  for (let j = 0; j < P; j++) means[j] /= N;
+  const Xc = new Float64Array(N * P);
+  for (let i = 0; i < N; i++)
+    for (let j = 0; j < P; j++) Xc[i * P + j] = X.data[i * P + j] - means[j];
+  const Xcn = from(Xc, [N, P]);
+  // Covariance (P × P) — much smaller than X
+  const Cov = matmul(transpose(Xcn), Xcn);
+  for (let i = 0; i < P * P; i++) Cov.data[i] /= (N - 1);
+  // Symmetric eigendecomposition
+  return eigSym(Cov);  // { values, vectors } — vectors are the principal directions
+}
+// PCA of 100 variables on 10,000 samples runs in ~66 ms.
+```
 
 ### Shape ops
 
@@ -433,19 +498,25 @@ extension points:
   not supported. Pull data out via `slice`, modify, write back.
 - **Linear algebra is small dense direct methods.**
   - `solve`, `inv`, `det`, `cholesky`, `lstsq`, `matmul`: O(n³); good
-    up to ~200×200 in pure JS.
+    up to ~500×500 in pure JS at interactive speeds.
   - `eigSym`: Jacobi iterations; good up to ~100×100.
-  - No general (non-symmetric) eigendecomposition.
-  - No SVD.
+  - `svd`: one-sided Jacobi; competitive vs LAPACK at N ≤ 16, gets
+    slow at N ≥ 64. Use natra's wasm path for big SVD when available.
+  - **No general (non-symmetric) eigendecomposition** — only `eigSym`
+    / `eigSym3` for symmetric matrices.
+  - No matrix functions (`expm`, `logm`).
   - No sparse / iterative solvers.
-- **Least squares uses normal equations.** Stable for well-conditioned
-  problems (typical regression / plane-fitting / kriging). Ill-
-  conditioned A produces inaccurate results because the condition
-  number of `A^T A` is the square of `A`'s — use natra+alpack QR/SVD
-  for those.
-- **`matmul` is loop-reordered naive O(n³).** ~2-3× faster than the
-  textbook (i,j,k) form, but at large sizes wasm SIMD wins by 10-20×.
-  v2 may add a tiled implementation.
+- **Least squares defaults to QR.** Condition number κ(A) — numerically
+  stable. Pass `{ method: 'normal' }` for the AᵀA-Cholesky fast path
+  (faster but κ(A)² — unstable for ill-conditioned A). Pass
+  `{ method: 'svd' }` for the most robust path (handles rank-deficient
+  A by truncating tiny singular values).
+- **`matmul` is 4×4 register-tiled.** V8 auto-vectorizes the tile
+  structure to AVX f64x4 — ties alpack's wasm SIMD at N≥1024 and
+  beats wasm's f64x2 at very large N (memory bandwidth bound).
+  Hand-tuned wasm with cache blocking (TF.js xnnpack, native LAPACK)
+  is still 5-10× ahead at large N — for that regime, use natra+alpack
+  via the GCU registry.
 
 ## Versioning
 
