@@ -1,7 +1,7 @@
 {
   "name": "@gcu/alpack",
-  "version": "0.1.0",
-  "description": "Dense linear algebra for the browser, compiled to WebAssembly. ALAS (BLAS equivalent: ddot, daxpy, dgemv, dgemm, ...) + ALPACK (LAPACK equivalent: dpotrf, dgesv, dsyev, ...). Runs in any Wasm runtime.",
+  "version": "0.2.0",
+  "description": "Dense linear algebra for the browser, compiled to WebAssembly. ALAS (BLAS equivalent: ddot, daxpy, dgemv, dgemm, sgemm, ...) + ALPACK (LAPACK equivalent: dpotrf, dgesv, dsyev, sgetrf, ...). Both f64 and f32 routines with f64x2/f32x4 SIMD + FMA + register-blocked microkernels. Runs in any Wasm runtime.",
   "type": "module",
   "main": "index.js",
   "exports": {

@@ -1,6 +1,6 @@
 {
   "name": "@gcu/natra",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "ndarray operations backed by atra-compiled Wasm kernels. NumPy-compatible element-wise ops, reductions, broadcasting, strided views. Designed to pair with @gcu/adder (Python) for numpy-style code; standalone JS API also available.",
   "type": "module",
   "main": "index.js",
