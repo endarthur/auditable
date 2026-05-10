@@ -18,6 +18,13 @@
 //   pdist(X)    → Float64Array of length nX*(nX-1)/2 (upper triangle,
 //                  scipy-compatible packed form)
 //   squareform(d) → expand pdist to full nX×nX matrix and back
+//
+// Acceleration: when nX*nY ≥ GEMM_NM_THRESHOLD and natra is registered
+// as a backend, euclidean/sqeuclidean dispatch through the gemm trick
+// (D² = ‖X‖² + ‖Y‖² − 2XYᵀ) for a 5-10× speedup. Opt-out via
+// opts.backend = 'inline'.
+
+import { getNatra, GEMM_NM_THRESHOLD } from '../util/backend.js';
 
 function _normalize(X, opts) {
   if (X instanceof Float64Array) {
@@ -191,6 +198,98 @@ function _resolveMetric(metric) {
   }
 }
 
+// Gemm-accelerated euclidean / sqeuclidean. Uses ‖X−Y‖² = ‖X‖² + ‖Y‖² − 2XYᵀ.
+// Returns Float64Array of length n*m, or null if dispatch failed.
+//
+// Centering: ‖X−Y‖² is invariant under translation, so we shift both X
+// and Y by the centroid of their union before the gemm trick. This kills
+// the catastrophic cancellation that hits when input magnitudes are large
+// (e.g. UTM coordinates). Cost is O(nd + md), negligible vs the O(nmd)
+// main work.
+function _cdistEuclideanGemm(Xn, Yn, natra, squared) {
+  try {
+    // Compute joint centroid across X and Y per axis.
+    const d = Xn.d;
+    const c = new Float64Array(d);
+    const total = Xn.n + Yn.n;
+    for (let i = 0; i < Xn.n; i++) {
+      const base = i * d;
+      for (let k = 0; k < d; k++) c[k] += Xn.data[base + k];
+    }
+    for (let j = 0; j < Yn.n; j++) {
+      const base = j * d;
+      for (let k = 0; k < d; k++) c[k] += Yn.data[base + k];
+    }
+    for (let k = 0; k < d; k++) c[k] /= total;
+
+    // Build centered copies (in JS — natra.array() will copy them into wasm).
+    const Xc = new Float64Array(Xn.n * d);
+    for (let i = 0; i < Xn.n; i++) {
+      const base = i * d;
+      for (let k = 0; k < d; k++) Xc[base + k] = Xn.data[base + k] - c[k];
+    }
+    const Yc = new Float64Array(Yn.n * d);
+    for (let j = 0; j < Yn.n; j++) {
+      const base = j * d;
+      for (let k = 0; k < d; k++) Yc[base + k] = Yn.data[base + k] - c[k];
+    }
+
+    return natra.scope((s) => {
+      const X = natra.array(Xc, { shape: [Xn.n, d] });
+      const Y = natra.array(Yc, { shape: [Yn.n, d] });
+      const XYt = s.matmul(X, Y.T);  // n × m
+      const xy = natra.toTypedArray(XYt);
+      // Row norms ‖Xᶜ[i]‖²
+      const xnorm = new Float64Array(Xn.n);
+      for (let i = 0; i < Xn.n; i++) {
+        let sm = 0;
+        const base = i * d;
+        for (let k = 0; k < d; k++) {
+          const v = Xc[base + k];
+          sm += v * v;
+        }
+        xnorm[i] = sm;
+      }
+      // Col norms ‖Yᶜ[j]‖²
+      const ynorm = new Float64Array(Yn.n);
+      for (let j = 0; j < Yn.n; j++) {
+        let sm = 0;
+        const base = j * d;
+        for (let k = 0; k < d; k++) {
+          const v = Yc[base + k];
+          sm += v * v;
+        }
+        ynorm[j] = sm;
+      }
+      const out = new Float64Array(Xn.n * Yn.n);
+      if (squared) {
+        for (let i = 0; i < Xn.n; i++) {
+          const xi = xnorm[i];
+          const baseRow = i * Yn.n;
+          for (let j = 0; j < Yn.n; j++) {
+            let v = xi + ynorm[j] - 2 * xy[baseRow + j];
+            if (v < 0) v = 0;  // numerical noise — squared distances are non-negative
+            out[baseRow + j] = v;
+          }
+        }
+      } else {
+        for (let i = 0; i < Xn.n; i++) {
+          const xi = xnorm[i];
+          const baseRow = i * Yn.n;
+          for (let j = 0; j < Yn.n; j++) {
+            let v = xi + ynorm[j] - 2 * xy[baseRow + j];
+            if (v < 0) v = 0;
+            out[baseRow + j] = Math.sqrt(v);
+          }
+        }
+      }
+      return out;
+    });
+  } catch (e) {
+    return null;
+  }
+}
+
 export function cdist(X, Y, opts = {}) {
   const metric = opts.metric || 'euclidean';
   const { fn, kind } = _resolveMetric(metric);
@@ -198,6 +297,21 @@ export function cdist(X, Y, opts = {}) {
   const Yn = _normalize(Y, opts);
   if (Xn.d !== Yn.d) {
     throw new RangeError(`dim mismatch: X.d=${Xn.d}, Y.d=${Yn.d}`);
+  }
+  // Try gemm acceleration on the cheap-to-decompose metrics. Skip if the
+  // user explicitly forced inline, or if weights are present (gemm trick
+  // doesn't compose cleanly with per-axis weights — would need a scaled
+  // inner product instead).
+  const canGemm = (metric === 'euclidean' || metric === 'sqeuclidean')
+    && !opts.w
+    && opts.backend !== 'inline'
+    && Xn.n * Yn.n >= GEMM_NM_THRESHOLD;
+  if (canGemm) {
+    const natra = getNatra();
+    if (natra) {
+      const result = _cdistEuclideanGemm(Xn, Yn, natra, metric === 'sqeuclidean');
+      if (result) return result;
+    }
   }
   const d = Xn.d;
   const out = new Float64Array(Xn.n * Yn.n);

@@ -13,6 +13,7 @@ const srcDir = path.join(__dirname, 'src');
 const files = [
   'util/special.js',
   'util/random.js',
+  'util/backend.js',
   'stats/distributions.js',
   'stats/descriptives.js',
   'stats/transform.js',
@@ -88,6 +89,8 @@ export {
   erf, erfc, erfinv, ndtri, lgamma, gamma, lbeta,
   // util/random
   mulberry32, makeRng, makeNormalSampler,
+  // util/backend
+  setBackend, clearBackend, getNatra, GEMM_NM_THRESHOLD,
   // stats/distributions
   norm, lognorm,
   // stats/descriptives

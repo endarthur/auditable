@@ -14,6 +14,7 @@ import { KDTree } from './spatial/kdtree.js';
 import { least_squares, curve_fit } from './optimize/lstsq.js';
 import { erf, erfc, erfinv, ndtri, lgamma, gamma, lbeta } from './util/special.js';
 import { mulberry32, makeRng, makeNormalSampler } from './util/random.js';
+import { setBackend, clearBackend, getNatra, GEMM_NM_THRESHOLD } from './util/backend.js';
 
 export const stats = {
   // distributions
@@ -65,5 +66,6 @@ export { normal_score_transform };
 export { gaussian_kde };
 export { cdist, pdist, squareform, KDTree };
 export { least_squares, curve_fit };
+export { setBackend, clearBackend, getNatra, GEMM_NM_THRESHOLD };
 export { erf, erfc, erfinv, ndtri, lgamma, gamma, lbeta };
 export { mulberry32, makeRng, makeNormalSampler };
