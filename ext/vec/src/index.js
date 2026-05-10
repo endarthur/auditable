@@ -21,3 +21,8 @@ export {
   det2, det3, det4,
   inv2, inv3, inv4,
 } from './linalg-mul.js';
+export {
+  solve, det, inv, cholesky, solveCholesky,
+} from './linalg-solve.js';
+export { lstsq } from './linalg-lstsq.js';
+export { eigSym3, eigSym } from './linalg-eigen.js';
