@@ -45,7 +45,7 @@ async function time(label, runs, fn) {
   return elapsed / runs;
 }
 
-for (const N of [50, 100, 200, 500]) {
+for (const N of [50, 100, 200, 500, 1000]) {
   console.log(`\n=== ${N}×${N} matmul ===`);
 
   // natra (f64 dgemm via alpack)
@@ -62,7 +62,7 @@ for (const N of [50, 100, 200, 500]) {
     Array.from({ length: N }, (_, j) => A_f64[i * N + j])));
   const nB = ctx.array(Array.from({ length: N }, (_, i) =>
     Array.from({ length: N }, (_, j) => B_f64[i * N + j])));
-  const runs = N <= 100 ? 200 : N <= 200 ? 50 : 20;
+  const runs = N <= 100 ? 200 : N <= 200 ? 50 : N <= 500 ? 20 : 5;
 
   await time(`natra f64 (alpack dgemm)`, runs, () => {
     ctx.scope(s => { s.matmul(nA, nB); });
