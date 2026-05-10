@@ -423,6 +423,12 @@ end
 !
 ! beta is handled in a prologue (scale C, or zero it) so the inner loop is
 ! a pure accumulation.
+!
+! Note: tried naive cache blocking on (jj, pp) with 64-element blocks —
+! no measurable speedup at 500×500 and a slight regression in some runs.
+! Real cache-friendly dgemm requires packing A/B into block-shaped arrays
+! before the inner kernel, plus three-level blocking sized for L1/L2/L3.
+! That's a substantial separate effort; deferred.
 subroutine alas.dgemm(
   a: array f64; b: array f64; c: array f64;
   m, n, k: i32; alpha, beta: f64
