@@ -429,7 +429,7 @@ if (typeof window !== 'undefined') {
   if (register) {
     register({
       name: '@gcu/line',
-      version: '0.2.0',
+      version: '0.3.0',
       description: 'Linear algebra for JS — adder bridge',
       exports: { line: _module },
     });

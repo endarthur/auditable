@@ -421,7 +421,18 @@ The pre-announcement internals cleanup is documented in `spec_inbox/auditable-in
 - **AIR ctx.exprs region scoping.** emit-js's inline-consume cache is now ScopeChain-backed; pop-time invariant catches cross-region single-use refs under `?airdebug=1`.
 - **Lowerer-frontend extraction.** Shared `BaseLowerCtx` + `captureOps` + `emitPhiSelect` + `lowerIfRegion` + `lowerLoopRegion` + `ctx.truthy` hook + `ctx.makeTempName` + `ctx.emitNamespacedCall` in `ext/air/src/lower/base.js`. Adder + soft each shed ~150 LOC of boilerplate; `_py.add → +` and `_soft.eq → ===` specializations registered via the new `registerSpecializations` API.
 - **AIR interpreter v0.** `ext/air/src/interp.js` (~570 LOC). Tree-walks AIR ops directly (no eval/Function). Used to sanity-check the JS emitter (35-cell test bank verifies emit-js and interp produce same results). Foundation for a future step-debugger, CSP-locked builds, AIR semantics reference.
-- **`@gcu/line` v0.2.0 shipped (was `@gcu/vec` through 0.1.2).** Pure-JS linear-algebra library; lightweight NumPy alternative. NdArray + NumPy-style broadcasting, ~50 element-wise ops, reductions with axis, small dense linear algebra (LU solve, Cholesky, lstsq, eigSym3 via Cardano closed-form, eigSym via Jacobi), shape ops (concat/stack/diag/outer/tril/triu/slice). 0.2.0 renames `vec`→`line` AND applies V8-winked unrolled-4 accumulators to sum/norm/dot — these now beat alpack's Wasm SIMD (AVX f64x4 in JS vs f64x2 spec ceiling in Wasm). Adder bridge wraps NdArray as VecArray with Python dunder methods (registers as `line`). 181 tests, zero runtime deps. Ships at `ext/line/` with own package.json, ready to `npm publish`.
+- **`@gcu/line` v0.3.0 shipped (was `@gcu/vec` through 0.1.2).** Pure-JS linear-algebra library; lightweight NumPy alternative. Now covers ~95% of common numpy.linalg use cases:
+  - **NdArray** with NumPy-style broadcasting, ~50 element-wise ops, reductions with axis
+  - **Decompositions** — `qr` (Householder), `svd` (one-sided Jacobi), `cholesky`, `eigSym`, `eigSym3`
+  - **Solvers** — `solve` (LU+partial pivot), `lstsq` (three methods: qr default, normal, svd), `solveCholesky`, `solve_triangular`, `pinv`
+  - **Norms** — `vecNorm` (L1/L2/L∞/p-norm), `matNorm` (Frobenius/induced/nuclear)
+  - **Utilities** — `cross`, `kron`, `matrix_power`, `matrix_rank`, `diag`, `outer`, `tril`, `triu`, closed-form det/inv for 2×2/3×3/4×4
+  - **Matmul** — 4×4 register-tiled microkernel; ties alpack's Wasm SIMD at N≥1024 (V8 auto-vectorizes the tile structure to AVX f64x4 vs Wasm's f64x2 spec ceiling)
+  - **V8-winked BLAS-1** — `sum`, `dot`, `norm` use unrolled-4 parallel accumulators; **beat** alpack's wasm SIMD on the same machine (3-6× faster), within 3× of numpy
+  - **Adder bridge** registers as `line` (was `vec`); class is `LineArray`
+  - 89 KB unminified, single ES module, zero runtime deps
+  - 233 tests
+  - Ships at `ext/line/` with own package.json, ready to `npm publish`
 
 **Remaining (not blocking; all in `spec_inbox/lang/` for future):**
 - **G — cell-field namespacing** (deferred): `cell._inputs` → `cell.widgets.inputs`, etc.

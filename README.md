@@ -232,6 +232,7 @@ the `examples/` directory contains 46 self-contained notebooks organized by cate
 
 | file | what it shows |
 |------|---------------|
+| `example_line` | `@gcu/line` -- pure-JS linear algebra (ndarray, broadcasting, SVD, QR, solve, eigSym) |
 | `example_synth` | web audio synthesizer with keyboard UI |
 
 ## saved file format

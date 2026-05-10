@@ -26,7 +26,7 @@
   ],
   "peerDependencies": {
     "@gcu/natra": "^0.2.0",
-    "@gcu/line": "^0.2.0",
+    "@gcu/line": "^0.3.0",
     "@gcu/adder": "^0.3.0"
   },
   "peerDependenciesMeta": {
