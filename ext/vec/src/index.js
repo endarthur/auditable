@@ -13,3 +13,11 @@ export {
   reshape, flatten, copy, slice,
   broadcastShapes, broadcastStrides, broadcastBinary, shapesEqual,
 } from './shape.js';
+export {
+  sum, mean, max, min, std, variance, var_, norm, dot,
+} from './reduce.js';
+export {
+  matmul, transpose,
+  det2, det3, det4,
+  inv2, inv3, inv4,
+} from './linalg-mul.js';
