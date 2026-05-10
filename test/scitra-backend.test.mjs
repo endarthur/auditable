@@ -37,31 +37,96 @@ test('setBackend rejects non-object input gracefully', () => {
   assert.equal(getNatra(), null);
 });
 
-test('getNatra rejects backend without required methods', () => {
+test('getNatra: explicit setBackend is unconditional (caller trusted)', () => {
   clearBackend();
+  // setBackend doesn't validate — the caller is opting in by passing it.
+  // Method-shape validation only applies to registry-discovered providers.
   setBackend({ natra: { scope: () => null /* missing array, toTypedArray */ } });
-  // After setBackend, _backend.natra is set explicitly so getNatra returns it
-  // even if methods are missing (we trust user input). Detection via
-  // globalThis is what filters incomplete backends.
-  // This test documents that explicit setBackend is unconditional.
   assert.ok(getNatra() !== null);
   clearBackend();
 });
 
-test('getNatra auto-detects from globalThis.__scitraBackend__', () => {
+test('getNatra auto-detects from __gcu__.providers (registry v1)', () => {
   clearBackend();
-  globalThis.__scitraBackend__ = {
-    natra: { scope: () => null, array: () => null, toTypedArray: () => null },
+  // Save any pre-existing registry so we don't trample real test setup
+  const prev = globalThis.__gcu__;
+  globalThis.__gcu__ = {
+    version: 1,
+    providers: {
+      natra: { scope: () => null, array: () => null, toTypedArray: () => null },
+    },
   };
   const detected = getNatra();
-  assert.ok(detected, 'expected auto-detection from globalThis');
-  delete globalThis.__scitraBackend__;
+  assert.ok(detected, 'expected auto-detection from __gcu__ registry');
+  globalThis.__gcu__ = prev;
+  clearBackend();
+});
+
+test('getNatra rejects registry entries missing required methods', () => {
+  clearBackend();
+  const prev = globalThis.__gcu__;
+  globalThis.__gcu__ = {
+    version: 1,
+    providers: { natra: { scope: () => null /* missing array, toTypedArray */ } },
+  };
+  assert.equal(getNatra(), null,
+    'incomplete registry entry should be rejected');
+  globalThis.__gcu__ = prev;
+});
+
+test('getNatra ignores registry with mismatched version', () => {
+  clearBackend();
+  const prev = globalThis.__gcu__;
+  globalThis.__gcu__ = {
+    version: 999,
+    providers: {
+      natra: { scope: () => null, array: () => null, toTypedArray: () => null },
+    },
+  };
+  assert.equal(getNatra(), null,
+    'version mismatch should fall through to null');
+  globalThis.__gcu__ = prev;
+});
+
+test('explicit setBackend overrides registry', () => {
+  clearBackend();
+  const prev = globalThis.__gcu__;
+  const fromRegistry = { scope: () => null, array: () => null, toTypedArray: () => null, _tag: 'registry' };
+  const fromExplicit = { scope: () => null, array: () => null, toTypedArray: () => null, _tag: 'explicit' };
+  globalThis.__gcu__ = { version: 1, providers: { natra: fromRegistry } };
+  setBackend({ natra: fromExplicit });
+  assert.equal(getNatra()._tag, 'explicit');
+  // After clearing explicit, registry takes over again.
+  clearBackend();
+  assert.equal(getNatra()._tag, 'registry');
+  globalThis.__gcu__ = prev;
   clearBackend();
 });
 
 test('GEMM_NM_THRESHOLD is exposed and reasonable', () => {
   assert.equal(typeof GEMM_NM_THRESHOLD, 'number');
   assert.ok(GEMM_NM_THRESHOLD >= 1000 && GEMM_NM_THRESHOLD <= 10_000_000);
+});
+
+test('natra self-registers on factory completion', async () => {
+  // Save any pre-existing registry first
+  const prev = globalThis.__gcu__;
+  delete globalThis.__gcu__;
+
+  await natra({ pages: 32 });
+  // Registry should now exist with natra in it.
+  assert.ok(globalThis.__gcu__, 'expected __gcu__ to exist after natra()');
+  assert.equal(globalThis.__gcu__.version, 1);
+  assert.ok(globalThis.__gcu__.providers.natra,
+    'expected natra to be registered');
+  // Public API shape sanity-check
+  const reg = globalThis.__gcu__.providers.natra;
+  assert.equal(typeof reg.scope, 'function');
+  assert.equal(typeof reg.array, 'function');
+  assert.equal(typeof reg.toTypedArray, 'function');
+
+  // Restore
+  globalThis.__gcu__ = prev;
 });
 
 // ── numerical equivalence: gemm vs inline ────────────────────────────

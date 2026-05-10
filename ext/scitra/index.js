@@ -231,42 +231,48 @@ function makeNormalSampler(random_state) {
 //
 // scitra is zero-deps by default. When natra is loaded (which brings
 // alpack-compiled BLAS via Wasm SIMD), specific hot paths can dispatch
-// through it for a 5-10× speedup on large matmuls. The user opts in
-// either explicitly via `setBackend({ natra: <natra-instance> })` or
-// implicitly by registering the natra instance on globalThis under
-// `__scitraBackend__` (which auditable's natra extension can do at
-// init time so notebooks "just work").
+// through it for a 5-10× speedup on large matmuls. Discovery uses the
+// shared @gcu/registry protocol — see ext/gcu-registry/SPEC.md for the
+// full convention. Summary:
+//
+//   • Provider (natra) self-registers at the end of its factory:
+//       globalThis.__gcu__.providers.natra = instance
+//   • Consumer (scitra, here) does a lazy lookup at the call site,
+//       falling through to its inline path if the registry is empty.
+//   • Tests and node scripts can override via setBackend({ natra }),
+//       which wins over the registry.
 //
 // All public scitra functions stay synchronous; backend lookups happen
 // lazily at the call site, so this module never blocks the bundle.
 
-let _backend_backend = { natra: undefined };
+let _explicit_backend = { natra: undefined };
 
 function setBackend(b) {
   if (b && typeof b === 'object') {
-    Object.assign(_backend_backend, b);
+    Object.assign(_explicit_backend, b);
   }
 }
 
 function clearBackend() {
-  _backend_backend = { natra: undefined };
+  _explicit_backend = { natra: undefined };
 }
 
-// Returns the configured natra instance (must have .scope/.array/.toTypedArray)
-// or null if no backend is available. Probes globalThis.__scitraBackend__ on
-// first call so notebooks don't need explicit setup.
+// Returns a configured natra instance — must expose .scope/.array/.toTypedArray.
+// Resolution order:
+//   1. Explicit setBackend({ natra }) — wins over everything.
+//   2. globalThis.__gcu__.providers.natra (registry, version 1).
+//   3. null (no backend; consumers fall back to inline).
 function getNatra() {
-  if (_backend_backend.natra !== undefined) return _backend_backend.natra;
-  if (typeof globalThis !== 'undefined' && globalThis.__scitraBackend__) {
-    const candidate = globalThis.__scitraBackend__.natra;
-    if (candidate && typeof candidate.scope === 'function'
-        && typeof candidate.array === 'function'
-        && typeof candidate.toTypedArray === 'function') {
-      _backend_backend.natra = candidate;
-      return candidate;
-    }
+  if (_explicit_backend.natra !== undefined) return _explicit_backend.natra;
+  const root = globalThis.__gcu__;
+  if (!root || root.version !== 1) return null;
+  const candidate = root.providers?.natra;
+  if (candidate
+      && typeof candidate.scope === 'function'
+      && typeof candidate.array === 'function'
+      && typeof candidate.toTypedArray === 'function') {
+    return candidate;
   }
-  _backend_backend.natra = null;
   return null;
 }
 

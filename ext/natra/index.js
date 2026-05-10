@@ -2300,7 +2300,7 @@ async function natra(opts = {}) {
 
   // ── Public API ───────────────────────────────────────────────────
 
-  return {
+  const instance = {
     memory,
     array, zeros, ones, full, eye, linspace, arange,
     random, randn, seed,
@@ -2354,6 +2354,16 @@ async function natra(opts = {}) {
       return lines.join('\n');
     },
   };
+
+  // Register on the @gcu/registry shared namespace so consumers like
+  // @gcu/scitra can opportunistically dispatch through us. See
+  // ext/gcu-registry/SPEC.md for the full protocol.
+  try {
+    const root = (globalThis.__gcu__ ??= { providers: {}, version: 1 });
+    root.providers.natra = instance;
+  } catch { /* frozen global (worker / CSP) — silent no-op */ }
+
+  return instance;
 }
 
 export { natra };

@@ -192,3 +192,15 @@ ctx.scope(s => {
 - **alpack** — LAPACK routines (dgetrf, dgetrs, dpotrf, dsyev, dsyev3, dsyev3v, dsyevv) as atra source
 
 All three are compiled together into a single Wasm module at `natra()` init time.
+
+## Registry
+
+natra self-registers as a *provider* on the shared `@gcu/registry` namespace
+when its factory finishes:
+
+```js
+globalThis.__gcu__.providers.natra = instance;
+```
+
+This lets opportunistic consumers like `@gcu/scitra` discover natra without
+hard-depending on it. See `ext/gcu-registry/SPEC.md` for the protocol.
