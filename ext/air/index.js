@@ -5507,28 +5507,28 @@ function emitOpaque(ctx, op) {
 // v0 scope:
 //   - JS cells lowered via lower/js.js (pure JS host, no _py/_soft runtime)
 //   - All standard control flow: if/for/while/loop/switch/try/labeled
-//   - Functions, closures, classes (basic — no instance fields)
+//   - Functions, closures, methods (`this` binding from JS receiver)
+//   - Logical operators (&&/||/??) — short-circuit correct via phi-select
+//     lowering (JS lowerer commit 7229363) so emit-js and interp agree
 //   - Async/await: every execOp is async, so awaits chain naturally
 //   - Schema-driven dispatch via the same OP_SCHEMA the validator uses
 //
 // v0 NOT supported:
-//   - opaque ops (CSP-friendly mode default; throws AirInterpError)
+//   - opaque ops (CSP-friendly mode default; throws AirInterpError. Pass
+//     options.allowOpaque=true to fall through to eval())
 //   - yield / yield_delegate (generators)
-//   - Class instance fields
+//   - Class constructors with state (`new asyncFn()` returns a Promise,
+//     not the instance — fix needs a sync/async dispatch split). Classes
+//     without an explicit constructor or with default empty ones do work.
+//   - Class instance fields (would need constructor wrapping)
+//   - Arrow `this` binding — arrows currently see the call-site receiver
+//     instead of lexical `this`. Most arrows don't reference `this`.
 //   - Adder/Soft runtime (_py/_soft) — JS frontend only
 //
-// Known divergence from emit-js:
-//   - logical_and / logical_or / nullish_coalesce: JS lowerer emits these
-//     as flat ops with both operands eagerly evaluated. emit-js relies on
-//     ctx.exprs inlining to recover JS short-circuit semantics; the
-//     interpreter executes ops in declaration order, so the RHS runs even
-//     when LHS short-circuits the result. Pure RHS works fine; impure RHS
-//     (side-effecting calls inside `&&`/`||`) diverges. Fix is a JS-lowerer
-//     refactor to use phi-select for logical ops, matching adder/soft —
-//     deferred.
-//
-// Performance: ~50× slower than emit-js. Acceptable for tooling; not a
-// production execution path.
+// Performance: 6-1000× slower than emit-js depending on workload (see
+// test/interp-perf.mjs). Tight arithmetic loops are worst-case; cells
+// dominated by JS-native work (array methods, typed arrays) are closer
+// to emit-js. Acceptable for tooling; not a production execution path.
 
 
 
