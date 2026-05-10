@@ -2122,10 +2122,19 @@ function _describe(v) {
 function findMutableCaptured(ast) {
   const captured = new Set();
   // Scope stack uses ScopeChain (v0.3 §3.3): names declared in this scope
-  // hold value `true`. `chain.hasInOuter(name)` is the closure-detection
-  // primitive — "is name visible from any enclosing scope but not THIS
-  // one, so an assignment captures it?".
+  // hold value `true`. We track two chains:
+  //   chain        — current lexical scope (pushed for fns AND blocks)
+  //   outerFnChain — chain at the boundary of the current function. A
+  //                  reassignment is a capture iff the target name is
+  //                  declared *in or above* this chain (i.e. outside the
+  //                  innermost enclosing function). At module top, this
+  //                  chain is null.
+  // Without the outerFnChain split, a `s += ...` inside a `for` block of
+  // a function looked like a capture (the `for`-block's parent is the
+  // function body), and AIR allocated a slot for the local — costing
+  // an order of magnitude on hot numeric loops.
   let chain = new ScopeChain();
+  let outerFnChain = null;
 
   function declare(name) { chain.set(name, true); }
 
@@ -2176,6 +2185,13 @@ function findMutableCaptured(ast) {
                  node.type === 'ArrowFunctionExpression';
 
     if (isFn) {
+      // Snapshot the current chain as the "outer-of-this-function" chain.
+      // Capture detection inside this function checks against this snapshot
+      // (not the current evolving `chain`), so reassignments to function-
+      // local lets — even those declared in an outer block of the same
+      // function — don't get flagged as captures.
+      const savedOuterFn = outerFnChain;
+      outerFnChain = chain;
       chain = chain.push();
       // Params live in the function's outer scope. The body's BlockStatement
       // gets its own scope below (via the isBlock branch), which collects
@@ -2187,6 +2203,7 @@ function findMutableCaptured(ast) {
       }
       walk(node.body, true);
       chain = chain.pop();
+      outerFnChain = savedOuterFn;
       return;
     }
 
@@ -2216,13 +2233,16 @@ function findMutableCaptured(ast) {
       return;
     }
 
-    // Check assignments to outer-scope variables inside functions
-    if (inFunction) {
+    // Check assignments to variables declared OUTSIDE the current function.
+    // A reassignment is a capture iff the target name is in scope from a
+    // chain frame at or above the function boundary — not just any outer
+    // block within the same function.
+    if (inFunction && outerFnChain) {
       if (node.type === 'AssignmentExpression' && node.left?.type === 'Identifier') {
-        if (chain.hasInOuter(node.left.name)) captured.add(node.left.name);
+        if (outerFnChain.has(node.left.name)) captured.add(node.left.name);
       }
       if (node.type === 'UpdateExpression' && node.argument?.type === 'Identifier') {
-        if (chain.hasInOuter(node.argument.name)) captured.add(node.argument.name);
+        if (outerFnChain.has(node.argument.name)) captured.add(node.argument.name);
       }
     }
 
@@ -3114,6 +3134,24 @@ const BINARY_OP_MAP = {
   '**': 'exp', 'in': 'in', 'instanceof': 'instanceof',
 };
 
+// Result type for a binary op given operand types. Shared by lowerBinary
+// and the compound-assignment desugaring in lowerAssign so that
+// `s += x[i] * y[i]` types consistently with `s = s + (x[i] * y[i])`.
+// Without sharing, compound assignment used the LHS's type unconditionally,
+// which forced f64-arithmetic-into-an-i32-accumulator paths to be typed
+// i32 — causing emit-js to wrap them in `| 0` (i32 truncation).
+function binaryResultType(opName, lt, rt) {
+  if (opName === 'in' || opName === 'instanceof') return BOOL;
+  if (opName === 'eq' || opName === 'neq' || opName === 'lt' || opName === 'lte' ||
+      opName === 'gt' || opName === 'gte') return BOOL;
+  if (opName === 'bitwise_or' || opName === 'bitwise_and' || opName === 'bitwise_xor' ||
+      opName === 'shift_left' || opName === 'shift_right' || opName === 'ushift_right') return I32;
+  if (opName === 'exp') return arithmeticResultFn(lt, rt);
+  if (isDynamic(lt) || isDynamic(rt)) return DYNAMIC;
+  if (opName === 'add' && (lt.kind === 'string' || rt.kind === 'string')) return STRING;
+  return arithmeticResultFn(lt, rt);
+}
+
 function lowerBinary(ctx, node) {
   const l = ctx.loc(node);
   const opName = BINARY_OP_MAP[node.operator];
@@ -3126,24 +3164,7 @@ function lowerBinary(ctx, node) {
   const lt = ctx.types.get(lhs.id) || DYNAMIC;
   const rt = ctx.types.get(rhs.id) || DYNAMIC;
 
-  let resultType;
-  if (opName === 'in' || opName === 'instanceof') {
-    resultType = BOOL;
-  } else if (opName === 'eq' || opName === 'neq' || opName === 'lt' || opName === 'lte' ||
-      opName === 'gt' || opName === 'gte') {
-    resultType = BOOL;
-  } else if (opName === 'bitwise_or' || opName === 'bitwise_and' || opName === 'bitwise_xor' ||
-             opName === 'shift_left' || opName === 'shift_right' || opName === 'ushift_right') {
-    resultType = I32;
-  } else if (opName === 'exp') {
-    resultType = arithmeticResultFn(lt, rt);
-  } else {
-    resultType = isDynamic(lt) || isDynamic(rt) ? DYNAMIC :
-      (opName === 'add' && (lt.kind === 'string' || rt.kind === 'string')) ? STRING :
-      arithmeticResultFn(lt, rt);
-  }
-
-  return ctx.emit(opName, [lhs.id, rhs.id], resultType, l);
+  return ctx.emit(opName, [lhs.id, rhs.id], binaryResultType(opName, lt, rt), l);
 }
 
 // --- Logical operations ---
@@ -3273,7 +3294,12 @@ function lowerAssignment(ctx, node) {
     if (node.operator === '=') {
       val = lowerExpr(ctx, node.right);
     } else {
-      // Compound assignment: +=, -=, etc.
+      // Compound assignment: +=, -=, etc. Desugars to `lhs = lhs <op> rhs`,
+      // so the result type follows the same rules as the equivalent binary
+      // operation — NOT the LHS type unconditionally. Otherwise
+      // `let s = 0; s += x[i] * y[i]` (i32 + DYNAMIC) would type as i32
+      // and emit-js would wrap it in `| 0` (i32 truncation), corrupting
+      // f64 accumulation.
       const current = lowerIdentifier(ctx, node.left);
       const rhs = lowerExpr(ctx, node.right);
       const opMap = { '+=': 'add', '-=': 'sub', '*=': 'mul', '/=': 'div', '%=': 'mod',
@@ -3281,7 +3307,9 @@ function lowerAssignment(ctx, node) {
                       '<<=': 'shift_left', '>>=': 'shift_right', '>>>=': 'ushift_right' };
       const opName = opMap[node.operator];
       if (!opName) return lowerOpaque(ctx, node);
-      val = ctx.emit(opName, [current.id, rhs.id], ctx.types.get(current.id) || DYNAMIC, l);
+      const lt = ctx.types.get(current.id) || DYNAMIC;
+      const rt = ctx.types.get(rhs.id) || DYNAMIC;
+      val = ctx.emit(opName, [current.id, rhs.id], binaryResultType(opName, lt, rt), l);
     }
 
     if (ctx.mutableCaptured.has(name)) {
@@ -3627,9 +3655,17 @@ function propagateTypes(module, opts = {}) {
         case 'add': case 'sub': case 'mul': case 'div': case 'mod': case 'exp': {
           const lt = typeOf(op.args[0]);
           const rt = typeOf(op.args[1]);
+          // Always recompute op.type from current operand types — a passes
+          // round may have refined operand types beyond what the lowerer
+          // saw (e.g. a load whose stored value was re-typed across a
+          // for-loop boundary). Without this, an op originally typed i32
+          // by the lowerer can stay i32 even when its operands are now
+          // DYNAMIC, causing emit-js to wrap an f64 sum in `| 0`.
           if (op.op === 'add' && (lt.kind === 'string' || rt.kind === 'string')) {
             op.type = STRING;
-          } else if (!isDynamic(lt) && !isDynamic(rt) && isNumeric(lt) && isNumeric(rt)) {
+          } else if (isDynamic(lt) || isDynamic(rt)) {
+            op.type = DYNAMIC;
+          } else if (isNumeric(lt) && isNumeric(rt)) {
             op.type = arithmeticResult(lt, rt);
           }
           types.set(op.id, op.type);

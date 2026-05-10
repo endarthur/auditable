@@ -124,9 +124,17 @@ export function propagateTypes(module, opts = {}) {
         case 'add': case 'sub': case 'mul': case 'div': case 'mod': case 'exp': {
           const lt = typeOf(op.args[0]);
           const rt = typeOf(op.args[1]);
+          // Always recompute op.type from current operand types — a passes
+          // round may have refined operand types beyond what the lowerer
+          // saw (e.g. a load whose stored value was re-typed across a
+          // for-loop boundary). Without this, an op originally typed i32
+          // by the lowerer can stay i32 even when its operands are now
+          // DYNAMIC, causing emit-js to wrap an f64 sum in `| 0`.
           if (op.op === 'add' && (lt.kind === 'string' || rt.kind === 'string')) {
             op.type = STRING;
-          } else if (!isDynamic(lt) && !isDynamic(rt) && isNumeric(lt) && isNumeric(rt)) {
+          } else if (isDynamic(lt) || isDynamic(rt)) {
+            op.type = DYNAMIC;
+          } else if (isNumeric(lt) && isNumeric(rt)) {
             op.type = arithmeticResult(lt, rt);
           }
           types.set(op.id, op.type);
