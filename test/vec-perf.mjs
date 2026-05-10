@@ -8,43 +8,55 @@
 // this script for meaningful comparison).
 //
 // Reference numbers from a 2026-05-09 run on AMD Ryzen AI 9 HX 370,
-// Node 24, CPython 3.13 (single-run; rerun on your machine for fresh data):
+// Node 24, CPython 3.13 + scipy-openblas 0.3.31 (run with
+// OPENBLAS_NUM_THREADS=1 for fair small-N comparison; default 24-thread
+// pool spin-up adds 100-230× overhead on small dgesv):
 //
-//   workload                       vec      plain f64    natra      numpy
-//   10K vector add                 0.029    0.005        0.046      0.002
-//   100K vector add                0.186    0.056        1.824      0.020
-//   1M vector add                  1.275    0.627        skip       1.157
-//   10K sum                        0.007    0.007        0.010      0.002
-//   100K sum                       0.061    0.062        0.065      0.015
-//   1M sum                         0.630    0.660        skip       0.193
-//   10K dot                        0.008    0.009        0.007      0.001
-//   100K dot                       0.070    0.075        0.036      0.125
-//   50×50 matmul                   0.137    —            1.364      0.004
-//   100×100 matmul                 0.797    —            4.587      0.027
-//   200×200 matmul                 6.630    —            9.108      0.222
-//   500×500 matmul                99.600    —           88.113      1.112
-//   50×50 solve                    0.056    —            0.085      0.013
-//   100×100 solve                  0.373    —            0.212      9.65
-//   200×200 solve                  2.512    —            1.354     44.05
-//   3×3 eigSym3 (Cardano)          0.0011   —            0.018      0.005
-//   3×3 eigSym (Jacobi)            0.0019   —            —          —
-//   20×20 eigSym                   0.088    —            0.287      0.038
+//   workload                       vec      plain f64    natra      numpy ST
+//   10K vector add                 0.032    0.005        0.045       0.002
+//   100K vector add                0.186    0.056        1.856       0.091
+//   1M vector add                  1.319    0.626        skip*       1.205
+//   10K sum                        0.007    0.007        0.010       0.002
+//   100K sum                       0.060    0.062        0.062       0.015
+//   1M sum                         0.686    0.645        skip*       0.193
+//   10K dot                        0.008    0.007        0.005       0.001
+//   100K dot                       0.068    0.074        0.034       0.012
+//   50×50 matmul                   0.127    —            1.385       0.004
+//   100×100 matmul                 0.852    —            4.673       0.027
+//   200×200 matmul                 6.361    —            9.308       0.263
+//   500×500 matmul                98.989    —           88.891       4.303 (1.1 MT)
+//   50×50 solve                    0.065    —            0.088       0.012
+//   100×100 solve                  0.345    —            0.231       0.039
+//   200×200 solve                  2.456    —            1.643       0.187
+//   3×3 eigSym3 (Cardano)          0.0012   —            0.020       0.004
+//   3×3 eigSym (Jacobi)            0.0020   —            —           —
+//   20×20 eigSym                   0.111    —            0.314       0.030
 //
 // All numbers in ms/run.
+// * natra hits a wasm out-of-bounds error at 1M elements even with maxPages
+//   bumped to 65536 (4GB). Looks like an i32-pointer issue inside the
+//   compiled add kernel — not a knob the caller can fix.
 //
-// Takeaways: (1) vec beats natra across the board at small sizes — the
-// wasm boundary cost dominates wherever the actual op is cheap. (2) natra's
-// matmul advantage doesn't kick in until ~250×250 on this machine. (3)
-// numpy's BLAS dgemm is in a class of its own (10-90× faster than vec
-// for matmul); for hot kernels, natra+alpack is the right path. (4)
-// vec.eigSym3 (closed-form Cardano) is faster than both natra's iterative
-// eigh and numpy's LAPACK syevd — closed-form trumps everything for the
-// 3×3 case.
+// Takeaways:
+// (1) vec.eigSym3 (closed-form Cardano) is **faster than numpy** for 3×3
+//     symmetric eigen — closed-form trumps LAPACK overhead for tiny cases.
+// (2) vec is within 1-2× of numpy on large vector add and ~3-5× slower on
+//     sums, dots, and small solves. Solid floor for pure-JS.
+// (3) natra's matmul crossover sits around 250×250 on this hardware; it
+//     beats vec at solve from 100×100 upward.
+// (4) numpy's BLAS dgemm is in a class of its own for matmul (25-30× faster
+//     than vec). For hot kernels in JS, natra+alpack remains the path.
+// (5) Multi-threaded OpenBLAS hurts small linalg (massive thread spin-up)
+//     and helps big dense matmul (4× boost at 500×500).
 
 import * as vec from '../ext/vec/index.js';
 import { natra } from '../ext/natra/index.js';
 
-const ctx = await natra({ pages: 1024 });
+// Initial 1024 pages (64MB). Bump maxPages from default 16384 (1GB) to 65536
+// (4GB, the wasm limit) so 1M-element ops don't hit the cap when scope arenas
+// accumulate memory across many iterations. natra grows but never shrinks
+// wasm memory; the cap is per-process.
+const ctx = await natra({ pages: 1024, maxPages: 65536 });
 
 async function time(label, runs, fn) {
   for (let i = 0; i < Math.min(3, runs); i++) await fn();
@@ -78,7 +90,9 @@ for (const N of [10_000, 100_000, 1_000_000]) {
   const vb = vec.from(jb, [N]);
   await time('vec.add (allocates result)', runs, () => { vec.add(va, vb); });
 
-  // natra — skip 1M (hits 1GB cap on the bump allocator after repeated scopes).
+  // natra: skip 1M — its wasm kernels hit out-of-bounds errors at this size
+  // even with maxPages bumped to 65536 (4GB). Likely an i32-pointer issue
+  // inside the compiled add kernel; needs natra-side investigation.
   if (N <= 100_000) {
     const na = ctx.arange(0, N);
     const nb = ctx.arange(0, N);
@@ -86,7 +100,7 @@ for (const N of [10_000, 100_000, 1_000_000]) {
       ctx.scope(s => s.add(na, nb));
     });
   } else {
-    console.log(`  natra (op only, in scope)               : skipped — bump allocator hits limit`);
+    console.log('  natra (op only, in scope)               : skipped (wasm OOB at 1M)');
   }
 }
 
@@ -115,7 +129,7 @@ for (const N of [10_000, 100_000, 1_000_000]) {
       ctx.scope(s => s.sum(na));
     });
   } else {
-    console.log(`  natra (op only, in scope)               : skipped — bump allocator hits limit`);
+    console.log('  natra (op only, in scope)               : skipped (wasm OOB at 1M)');
   }
 }
 

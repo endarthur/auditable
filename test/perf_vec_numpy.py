@@ -5,6 +5,15 @@ Run separately on the same machine that runs vec-perf.mjs:
 
     python test/perf_vec_numpy.py
 
+For sizes ≤ 500 (matmul) or ≤ 200 (solve), prefer single-threaded OpenBLAS:
+
+    OPENBLAS_NUM_THREADS=1 python test/perf_vec_numpy.py
+
+OpenBLAS's thread pool spin-up dominates over actual LAPACK work at small N
+on multi-core machines (e.g. 24 threads × 200×200 dgesv = 45ms vs 0.2ms
+single-threaded — a 230× hit just from thread coordination overhead).
+For big matmul (≥500×500), multi-threaded is faster.
+
 Mirrors the JS workloads exactly so the numbers can be compared apples-to-apples.
 """
 import time

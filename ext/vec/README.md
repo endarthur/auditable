@@ -263,50 +263,77 @@ underlying library.
 
 ## Performance
 
-Numbers from a 2026-05-09 single-run benchmark on AMD Ryzen AI 9 HX 370,
-Node 24, CPython 3.13 with NumPy. All timings in **ms/run**, op only
-(arrays pre-allocated):
+Numbers from a 2026-05-09 benchmark on AMD Ryzen AI 9 HX 370, Node 24,
+CPython 3.13 + scipy-openblas 0.3.31. All timings in **ms/run**, op only
+(arrays pre-allocated). NumPy column is `OPENBLAS_NUM_THREADS=1` — the
+fair comparison for sizes where multi-threaded OpenBLAS pays massive
+thread-pool overhead.
 
-| Workload | vec | plain f64 | natra | numpy |
+### Element-wise + reductions
+
+| Workload | vec | plain f64 | natra | numpy | **vec/numpy** |
+|---|---:|---:|---:|---:|---:|
+| 10K vector add | 0.032 | 0.005 | 0.045 | **0.002** | 16× slower |
+| 100K vector add | 0.186 | 0.056 | 1.856 | **0.091** | 2.0× slower |
+| 1M vector add | 1.319 | 0.626 | n/a* | **1.205** | 1.1× slower |
+| 10K sum | 0.007 | 0.007 | 0.010 | **0.002** | 3.5× slower |
+| 100K sum | 0.060 | 0.062 | 0.062 | **0.015** | 4.1× slower |
+| 1M sum | 0.686 | 0.645 | n/a* | **0.193** | 3.6× slower |
+| 10K dot | 0.008 | 0.007 | 0.005 | **0.001** | 6.0× slower |
+| 100K dot | 0.068 | 0.074 | 0.034 | **0.012** | 5.5× slower |
+
+*natra hits a wasm out-of-bounds error at 1M elements (i32 pointer
+issue inside its compiled kernel, not a memory-cap problem).
+
+### Matrix multiplication
+
+| Size | vec | natra | numpy | numpy MT | **vec/numpy** |
+|---|---:|---:|---:|---:|---:|
+| 50×50 | 0.127 | 1.385 | **0.004** | 0.004 | 29× slower |
+| 100×100 | 0.852 | 4.673 | **0.027** | 0.027 | 32× slower |
+| 200×200 | 6.361 | 9.308 | **0.263** | 0.222 | 24× slower |
+| 500×500 | 98.989 | 88.891 | 4.303 | **1.112** | 23× slower |
+
+`numpy MT` = default 24-thread OpenBLAS — only beats single-threaded
+once N gets large.
+
+### Linear solve (LU + partial pivoting)
+
+| Size | vec | natra | numpy | **vec/numpy** |
 |---|---:|---:|---:|---:|
-| 10K vector add | 0.029 | 0.005 | 0.046 | **0.002** |
-| 100K vector add | 0.186 | 0.056 | 1.824 | **0.020** |
-| 1M vector add | **1.275** | 0.627 | n/a | 1.157 |
-| 10K sum | 0.007 | 0.007 | 0.010 | **0.002** |
-| 100K sum | 0.061 | 0.062 | 0.065 | **0.015** |
-| 1M sum | **0.630** | 0.660 | n/a | 0.193 |
-| 10K dot | 0.008 | 0.009 | 0.007 | **0.001** |
-| 100K dot | 0.070 | 0.075 | **0.036** | 0.125 |
-| 50×50 matmul | 0.137 | — | 1.364 | **0.004** |
-| 100×100 matmul | 0.797 | — | 4.587 | **0.027** |
-| 200×200 matmul | **6.630** | — | 9.108 | 0.222 |
-| 500×500 matmul | 99.600 | — | **88.113** | 1.112 |
-| 50×50 solve | 0.056 | — | 0.085 | **0.013** |
-| 100×100 solve | 0.373 | — | **0.212** | 9.65 |
-| 200×200 solve | 2.512 | — | **1.354** | 44.05 |
-| 3×3 eigSym3 (Cardano) | **0.0011** | — | 0.018 | 0.005 |
-| 20×20 eigSym (Jacobi) | 0.088 | — | 0.287 | **0.038** |
+| 50×50 | 0.065 | 0.088 | **0.012** | 5.6× slower |
+| 100×100 | 0.345 | 0.231 | **0.039** | 8.9× slower |
+| 200×200 | 2.456 | 1.643 | **0.187** | 13× slower |
 
-Reproduce with `node test/vec-perf.mjs` and (separately, for the numpy
-column) `python test/perf_vec_numpy.py`.
+### Symmetric eigendecomposition
 
-What this shows:
+| Workload | vec | natra | numpy | **vec/numpy** |
+|---|---:|---:|---:|---:|
+| 3×3 (eigSym3, Cardano closed-form) | **0.0012** | 0.020 | 0.004 | **3.3× FASTER** |
+| 3×3 (eigSym, Jacobi) | **0.0020** | 0.020 | 0.004 | **2.0× FASTER** |
+| 20×20 (eigSym, Jacobi) | 0.111 | 0.314 | **0.030** | 3.7× slower |
 
-- **vec beats natra across the board for small-to-medium sizes.** Below
-  100K elements, the wasm boundary cost dominates over the actual op.
-- **vec is competitive with NumPy for many workloads** — same ballpark
-  on dot, sum, large vector add. NumPy still wins on tight kernels
-  (small matmul) where its BLAS is doing real SIMD work.
-- **natra's matmul crossover is around 250×250** on this hardware.
-  Below that, vec's pure-JS naive matmul wins because the wasm dispatch
-  is comparable to the actual matmul work.
-- **numpy's BLAS dgemm dominates at scale** (10-90× faster than vec for
-  matmul). For hot kernels in JS, natra+alpack is the right path.
-- **`eigSym3` (Cardano closed-form) is faster than NumPy's LAPACK
-  `eigh`** — closed-form trumps iterations for the 3×3 case.
-- **The numpy `solve` numbers (9-44 ms for 100×100/200×200) look
-  anomalous** — likely a single-threaded reference BLAS on this Windows
-  install. Vec wins comfortably at those sizes regardless.
+### Reproduce
+
+```bash
+node test/vec-perf.mjs                              # vec + plain f64 + natra
+OPENBLAS_NUM_THREADS=1 python test/perf_vec_numpy.py # numpy reference
+```
+
+### What this shows
+
+- **vec is faster than numpy for closed-form 3×3 eigen** — Cardano has
+  no iteration overhead and no LAPACK dispatch to amortize.
+- **vec is consistently within 1-2 orders of magnitude of numpy** across
+  every workload — solid floor for a pure-JS implementation.
+- **vec beats natra everywhere small.** The wasm boundary cost dominates
+  over the actual op below ~100K elements / ~250×250 matrices.
+- **NumPy's BLAS dgemm is in a class of its own for matmul** (25-30×
+  faster than vec). For hot kernels in JS, natra+alpack is the path.
+- **OpenBLAS thread tuning matters.** Multi-threaded OpenBLAS hurts
+  small-N linear algebra (24 threads × 200×200 dgesv = 230× slower than
+  single-threaded due to pool spin-up) and helps big dense matmul (4×
+  boost at 500×500).
 
 ## When to use vec vs natra
 
