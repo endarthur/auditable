@@ -285,4 +285,38 @@ await time('natra.eigh (alpack syevd)', 200, () => {
   ctx.scope(s => { s.eigh(nSym20); });
 });
 
+// ─────────────────────────────────────────────────────────────────────
+// Workload 8: Cholesky factorization (SPD, exercises dpotrf)
+// ─────────────────────────────────────────────────────────────────────
+//
+// natra.cholesky internally copies A into the scoped arena and then
+// runs dpotrf in place (factorization overwrites the input). The op
+// timing reflects the in-place factorization plus a copy; vec
+// allocates a fresh L. Both pay roughly equivalent overhead, so this
+// is a fair head-to-head.
+
+for (const N of [50, 100, 200]) {
+  console.log(`\n=== ${N}×${N} cholesky factorization (SPD) ===`);
+
+  // Build A = M^T M for a random M, ensuring SPD.
+  const Mdata = new Float64Array(N * N);
+  let cseed = 31 + N;
+  for (let i = 0; i < N * N; i++) {
+    cseed = (cseed * 16807) % 2147483647;
+    Mdata[i] = (cseed - 1) / 2147483646 - 0.5;
+  }
+  const Mvec = new vec.NdArray(Mdata, [N, N]);
+  const Avec = vec.matmul(vec.transpose(Mvec), Mvec);
+
+  const runs = N <= 100 ? 200 : 50;
+  await time(`vec.cholesky`, runs, () => { vec.cholesky(Avec); });
+
+  const Anested = Array.from({ length: N }, (_, i) =>
+    Array.from({ length: N }, (_, j) => Avec.data[i * N + j]));
+  const nA = ctx.array(Anested);
+  await time(`natra.cholesky (alpack dpotrf)`, runs, () => {
+    ctx.scope(s => { s.cholesky(nA); });
+  });
+}
+
 console.log(`\n(Run test/perf_vec_numpy.py separately for numpy reference numbers.)`);

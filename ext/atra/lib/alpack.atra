@@ -479,25 +479,56 @@ end
 
 ! A = L * L^T  (in-place, lower triangle overwritten with L)
 ! info[0] = 0 on success, k > 0 if not positive-definite at column k
+!
+! Both inner loops are reductions over k in [0, j) with stride-1 reads
+! along rows of A. SIMD'd with v128 accumulator + scalar tail. Single-
+! accumulator pattern → separate mul+add (no FMA) per ddot rationale.
 subroutine alpack.dpotrf(a: array f64; n: i32; info: array i32)
-var i, j, k: i32; s: f64
+var
+  i, j, k, j2, ai_base, aj_base, koff: i32
+  s: f64
+  acc, va, vj: f64x2
 begin
   info[0] := 0
   for j := 0, n
+    ! diagonal: s := a[j,j] - sum_{k<j} a[j,k]^2
     s := a[j, n, j]
-    for k := 0, j
-      s := s - a[j, n, k] * a[j, n, k]
+    j2 := j / 2
+    acc := f64x2.splat(0.0)
+    aj_base := j * n * 8
+    for k := 0, j2
+      koff := k * 16
+      vj := v128.load_at(a, aj_base + koff)
+      acc := acc + vj * vj
     end for
+    s := s - f64x2.extract_lane(acc, 0) - f64x2.extract_lane(acc, 1)
+    if (j2 * 2 < j) then
+      k := j2 * 2
+      s := s - a[j, n, k] * a[j, n, k]
+    end if
+
     if (s <= 0.0) then
       info[0] := j + 1
       call return()
     end if
     a[j, n, j] := sqrt(s)
+
+    ! off-diagonal: s := a[i,j] - sum_{k<j} a[i,k] * a[j,k]
     for i := j + 1, n
       s := a[i, n, j]
-      for k := 0, j
-        s := s - a[i, n, k] * a[j, n, k]
+      acc := f64x2.splat(0.0)
+      ai_base := i * n * 8
+      for k := 0, j2
+        koff := k * 16
+        va := v128.load_at(a, ai_base + koff)
+        vj := v128.load_at(a, aj_base + koff)
+        acc := acc + va * vj
       end for
+      s := s - f64x2.extract_lane(acc, 0) - f64x2.extract_lane(acc, 1)
+      if (j2 * 2 < j) then
+        k := j2 * 2
+        s := s - a[i, n, k] * a[j, n, k]
+      end if
       a[i, n, j] := s / a[j, n, j]
     end for
   end for
@@ -505,13 +536,50 @@ end
 
 ! solve A*X = B given Cholesky factor L from dpotrf
 ! B is overwritten with X.  B is n x nrhs (each column is an RHS)
+!
+! Forward sub (L y = b) reads l[i,j] stride-1 in j → SIMD'd for nrhs=1.
+! Back sub (L^T x = y) reads l[j,i] stride-n in j (column traversal of L)
+! — kept scalar; SIMD would require an on-the-fly transpose.
 subroutine alpack.dpotrs(
   l: array f64; b: array f64;
   n, nrhs: i32
 )
-var rhs, i, j: i32; s: f64
+var
+  rhs, i, j, j2, l_row, joff: i32
+  s: f64
+  acc, vl, vb: f64x2
 begin
   for rhs := 0, nrhs
+    if (nrhs == 1) then
+      ! forward substitution (SIMD nrhs=1 path)
+      for i := 0, n
+        s := b[i]
+        j2 := i / 2
+        acc := f64x2.splat(0.0)
+        l_row := i * n * 8
+        for j := 0, j2
+          joff := j * 16
+          vl := v128.load_at(l, l_row + joff)
+          vb := v128.load(b, j)
+          acc := acc + vl * vb
+        end for
+        s := s - f64x2.extract_lane(acc, 0) - f64x2.extract_lane(acc, 1)
+        if (j2 * 2 < i) then
+          j := j2 * 2
+          s := s - l[i, n, j] * b[j]
+        end if
+        b[i] := s / l[i, n, i]
+      end for
+      ! back substitution: column-major access on L → scalar
+      for i := n - 1, -1, -1
+        s := b[i]
+        for j := i + 1, n
+          s := s - l[j, n, i] * b[j]
+        end for
+        b[i] := s / l[i, n, i]
+      end for
+    else
+    ! Multi-RHS scalar path
     ! forward substitution: L * y = b
     for i := 0, n
       s := b[i, nrhs, rhs]
@@ -528,6 +596,7 @@ begin
       end for
       b[i, nrhs, rhs] := s / l[i, n, i]
     end for
+    end if
   end for
 end
 
@@ -601,11 +670,20 @@ end
 
 ! solve A*X = B given LU factorization from dgetrf
 ! B is n x nrhs, overwritten with X
+!
+! For nrhs = 1 (the common case for natra.solve), b is effectively 1D
+! and both lu[i,j] and b[j] are stride-1 in j — the inner reduction can
+! be SIMD'd via a v128 accumulator. For multi-RHS, b accesses are
+! stride-nrhs and the scalar path is used. Same mul+add pattern as ddot
+! (single recurrence-dependent accumulator → no FMA).
 subroutine alpack.dgetrs(
   lu: array f64; ipiv: array i32;
   b: array f64; n, nrhs: i32
 )
-var rhs, i, j, p: i32; s, t: f64
+var
+  rhs, i, j, p, j2, lu_row, joff: i32
+  s, t: f64
+  acc, vlu, vb: f64x2
 begin
   for rhs := 0, nrhs
     ! apply row permutation
@@ -617,22 +695,65 @@ begin
         b[p, nrhs, rhs] := t
       end if
     end for
-    ! forward substitution (L with unit diagonal)
-    for i := 1, n
-      s := b[i, nrhs, rhs]
-      for j := 0, i
-        s := s - lu[i, n, j] * b[j, nrhs, rhs]
+
+    if (nrhs == 1) then
+      ! SIMD fast path — b stride-1 in j
+      ! forward substitution: s := b[i] - sum_{j<i} lu[i,j] * b[j]
+      for i := 1, n
+        s := b[i]
+        j2 := i / 2
+        acc := f64x2.splat(0.0)
+        lu_row := i * n * 8
+        for j := 0, j2
+          joff := j * 16
+          vlu := v128.load_at(lu, lu_row + joff)
+          vb := v128.load(b, j)
+          acc := acc + vlu * vb
+        end for
+        s := s - f64x2.extract_lane(acc, 0) - f64x2.extract_lane(acc, 1)
+        if (j2 * 2 < i) then
+          j := j2 * 2
+          s := s - lu[i, n, j] * b[j]
+        end if
+        b[i] := s
       end for
-      b[i, nrhs, rhs] := s
-    end for
-    ! back substitution (U)
-    for i := n - 1, -1, -1
-      s := b[i, nrhs, rhs]
-      for j := i + 1, n
-        s := s - lu[i, n, j] * b[j, nrhs, rhs]
+      ! back substitution
+      for i := n - 1, -1, -1
+        s := b[i]
+        ! reduce over j in [i+1, n)
+        j2 := (n - i - 1) / 2
+        acc := f64x2.splat(0.0)
+        lu_row := (i * n + i + 1) * 8
+        for j := 0, j2
+          joff := j * 16
+          vlu := v128.load_at(lu, lu_row + joff)
+          vb := v128.load_at(b, (i + 1) * 8 + joff)
+          acc := acc + vlu * vb
+        end for
+        s := s - f64x2.extract_lane(acc, 0) - f64x2.extract_lane(acc, 1)
+        if (j2 * 2 < n - i - 1) then
+          j := i + 1 + j2 * 2
+          s := s - lu[i, n, j] * b[j]
+        end if
+        b[i] := s / lu[i, n, i]
       end for
-      b[i, nrhs, rhs] := s / lu[i, n, i]
-    end for
+    else
+      ! Multi-RHS: scalar path (b stride-nrhs in j)
+      for i := 1, n
+        s := b[i, nrhs, rhs]
+        for j := 0, i
+          s := s - lu[i, n, j] * b[j, nrhs, rhs]
+        end for
+        b[i, nrhs, rhs] := s
+      end for
+      for i := n - 1, -1, -1
+        s := b[i, nrhs, rhs]
+        for j := i + 1, n
+          s := s - lu[i, n, j] * b[j, nrhs, rhs]
+        end for
+        b[i, nrhs, rhs] := s / lu[i, n, i]
+      end for
+    end if
   end for
 end
 
