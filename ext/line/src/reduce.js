@@ -5,6 +5,7 @@
 // With { axis: i }: returns an NdArray with that axis removed.
 
 import { NdArray } from './ndarray.js';
+import { matmul } from './linalg-mul.js';
 
 function _normalizeAxis(axis, ndim) {
   if (axis < 0) axis = ndim + axis;
@@ -290,27 +291,8 @@ export function dot(a, b) {
     return new NdArray(out, [n]);
   }
   if (a.ndim === 2 && b.ndim === 2) {
-    // Avoid circular import — inline a small matmul here. Same loop-reorder
-    // as linalg-mul.js. 2D × 2D dot is exactly matmul.
-    const M = a.shape[0], K = a.shape[1];
-    const Kb = b.shape[0], N = b.shape[1];
-    if (K !== Kb) {
-      throw new RangeError(`dot: 2D inner dim mismatch ${K} vs ${Kb}`);
-    }
-    const out = new Float64Array(M * N);
-    const ad = a.data, bd = b.data;
-    for (let i = 0; i < M; i++) {
-      const aRow = i * K;
-      const oRow = i * N;
-      for (let k = 0; k < K; k++) {
-        const aik = ad[aRow + k];
-        const bRow = k * N;
-        for (let j = 0; j < N; j++) {
-          out[oRow + j] += aik * bd[bRow + j];
-        }
-      }
-    }
-    return new NdArray(out, [M, N]);
+    // 2D · 2D dot is matmul — delegate to the register-tiled kernel.
+    return matmul(a, b);
   }
   throw new RangeError(`dot: unsupported ndim combination (${a.ndim}, ${b.ndim})`);
 }
