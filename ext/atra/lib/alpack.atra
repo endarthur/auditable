@@ -1361,3 +1361,353 @@ begin
   end for
   info[0] := 1
 end
+! ══════════════════════════════════════════════════════════════════════
+! f32 (single-precision) variants — s-prefixed BLAS naming
+!
+! Mirror the d* routines with f32x4 SIMD (4 lanes per 128-bit) instead of
+! f64x2 (2 lanes). Each scalar/vector type is f32 instead of f64; byte
+! offsets use 4 instead of 8. Per-cycle throughput is approximately 2x
+! higher than the f64 versions on the same hardware.
+!
+! Implemented subset: saxpy, sdot, snrm2, scopy, sscal, sgemv, sger,
+! sgemm, sgetrf, sgetrs, sgesv. Other f32 BLAS/LAPACK routines (spotrf,
+! spotrs, etc.) can be added as needed; the porting is mechanical.
+! ══════════════════════════════════════════════════════════════════════
+
+! ── ALAS Level 1 (f32) ────────────────────────────────────────────────
+
+subroutine alas.sscal(x: array f32; n: i32; alpha: f32)
+var
+  i, n4: i32
+  va, vx: f32x4
+begin
+  va := f32x4.splat(alpha)
+  n4 := n / 4
+  for i := 0, n4
+    vx := v128.load(x, i)
+    vx := va * vx
+    call v128.store(x, i, vx)
+  end for
+  for i := n4 * 4, n
+    x[i] := alpha * x[i]
+  end for
+end
+
+subroutine alas.scopy(x: array f32; y: array f32; n: i32)
+var
+  i, n4: i32
+  vx: f32x4
+begin
+  n4 := n / 4
+  for i := 0, n4
+    vx := v128.load(x, i)
+    call v128.store(y, i, vx)
+  end for
+  for i := n4 * 4, n
+    y[i] := x[i]
+  end for
+end
+
+subroutine alas.saxpy(x: array f32; y: array f32; n: i32; alpha: f32)
+var
+  i, n4: i32
+  va, vx, vy: f32x4
+begin
+  va := f32x4.splat(alpha)
+  n4 := n / 4
+  for i := 0, n4
+    vx := v128.load(x, i)
+    vy := v128.load(y, i)
+    vy := f32x4.relaxed_madd(va, vx, vy)
+    call v128.store(y, i, vy)
+  end for
+  for i := n4 * 4, n
+    y[i] := alpha * x[i] + y[i]
+  end for
+end
+
+function alas.sdot(x: array f32; y: array f32; n: i32): f32
+var
+  i, n4: i32
+  vx, vy, vs: f32x4
+begin
+  vs := f32x4.splat(0.0)
+  n4 := n / 4
+  for i := 0, n4
+    vx := v128.load(x, i)
+    vy := v128.load(y, i)
+    vs := vs + vx * vy
+  end for
+  alas.sdot := f32x4.extract_lane(vs, 0) + f32x4.extract_lane(vs, 1) + f32x4.extract_lane(vs, 2) + f32x4.extract_lane(vs, 3)
+  for i := n4 * 4, n
+    alas.sdot := alas.sdot + x[i] * y[i]
+  end for
+end
+
+function alas.snrm2(x: array f32; n: i32): f32
+var
+  i, n4: i32
+  vx, vs: f32x4
+begin
+  vs := f32x4.splat(0.0)
+  n4 := n / 4
+  for i := 0, n4
+    vx := v128.load(x, i)
+    vs := vs + vx * vx
+  end for
+  alas.snrm2 := f32x4.extract_lane(vs, 0) + f32x4.extract_lane(vs, 1) + f32x4.extract_lane(vs, 2) + f32x4.extract_lane(vs, 3)
+  for i := n4 * 4, n
+    alas.snrm2 := alas.snrm2 + x[i] * x[i]
+  end for
+  alas.snrm2 := sqrt(alas.snrm2)
+end
+
+! ── ALAS Level 2 (f32) ────────────────────────────────────────────────
+
+subroutine alas.sgemv(
+  a: array f32; x: array f32; y: array f32;
+  m, n: i32; alpha, beta: f32
+)
+var
+  i, j, n4, a_row, joff: i32
+  s: f32
+  vs, va, vx: f32x4
+begin
+  n4 := n / 4
+  for i := 0, m
+    vs := f32x4.splat(0.0)
+    a_row := i * n * 4
+    for j := 0, n4
+      joff := j * 16
+      va := v128.load_at(a, a_row + joff)
+      vx := v128.load(x, j)
+      vs := vs + va * vx
+    end for
+    s := f32x4.extract_lane(vs, 0) + f32x4.extract_lane(vs, 1) + f32x4.extract_lane(vs, 2) + f32x4.extract_lane(vs, 3)
+    for j := n4 * 4, n
+      s := s + a[i, n, j] * x[j]
+    end for
+    y[i] := alpha * s + beta * y[i]
+  end for
+end
+
+subroutine alas.sger(
+  a: array f32; x: array f32; y: array f32;
+  m, n: i32; alpha: f32
+)
+var
+  i, j, n4, a_row, joff: i32
+  t: f32
+  tv, vy, va: f32x4
+begin
+  n4 := n / 4
+  for i := 0, m
+    t := alpha * x[i]
+    tv := f32x4.splat(t)
+    a_row := i * n * 4
+    for j := 0, n4
+      joff := j * 16
+      vy := v128.load(y, j)
+      va := v128.load_at(a, a_row + joff)
+      va := f32x4.relaxed_madd(tv, vy, va)
+      call v128.store_at(a, a_row + joff, va)
+    end for
+    for j := n4 * 4, n
+      a[i, n, j] := a[i, n, j] + t * y[j]
+    end for
+  end for
+end
+
+! ── ALAS Level 3 (f32) ────────────────────────────────────────────────
+
+subroutine alas.sgemm(
+  a: array f32; b: array f32; c: array f32;
+  m, n, k: i32; alpha, beta: f32
+)
+var
+  i, j, p, n4, c_row, b_row, joff: i32
+  t: f32
+  tv, vb, vc: f32x4
+begin
+  if (beta == 0.0) then
+    for i := 0, m
+      for j := 0, n
+        c[i, n, j] := 0.0
+      end for
+    end for
+  else if (beta /= 1.0) then
+    for i := 0, m
+      for j := 0, n
+        c[i, n, j] := beta * c[i, n, j]
+      end for
+    end for
+  end if
+
+  n4 := n / 4
+  for i := 0, m
+    c_row := i * n * 4
+    for p := 0, k
+      t := alpha * a[i, k, p]
+      tv := f32x4.splat(t)
+      b_row := p * n * 4
+      for j := 0, n4
+        joff := j * 16
+        vb := v128.load_at(b, b_row + joff)
+        vc := v128.load_at(c, c_row + joff)
+        vc := f32x4.relaxed_madd(tv, vb, vc)
+        call v128.store_at(c, c_row + joff, vc)
+      end for
+      for j := n4 * 4, n
+        c[i, n, j] := c[i, n, j] + t * b[p, n, j]
+      end for
+    end for
+  end for
+end
+
+! ── ALPACK (f32) ──────────────────────────────────────────────────────
+
+subroutine alpack.sgetrf(
+  a: array f32; n: i32;
+  ipiv: array i32; info: array i32
+)
+var
+  i, j, k, pivot, nrem, nrem4, ai_base, ak_base, joff: i32
+  t, inv, m, v: f32
+  mv, vk, vi: f32x4
+begin
+  info[0] := 0
+  for k := 0, n
+    pivot := k
+    v := a[k, n, k]
+    t := abs(v)
+    for i := k + 1, n
+      v := a[i, n, k]
+      v := abs(v)
+      if (v > t) then
+        pivot := i
+        t := v
+      end if
+    end for
+    ipiv[k] := pivot
+
+    if (pivot /= k) then
+      for j := 0, n
+        t := a[k, n, j]
+        a[k, n, j] := a[pivot, n, j]
+        a[pivot, n, j] := t
+      end for
+    end if
+
+    if (a[k, n, k] == 0.0) then
+      info[0] := k + 1
+      call return()
+    end if
+
+    inv := 1.0 / a[k, n, k]
+    nrem := n - k - 1
+    nrem4 := nrem / 4
+    ak_base := (k * n + k + 1) * 4
+    for i := k + 1, n
+      m := a[i, n, k] * inv
+      a[i, n, k] := m
+      mv := f32x4.splat(m)
+      ai_base := (i * n + k + 1) * 4
+      for j := 0, nrem4
+        joff := j * 16
+        vk := v128.load_at(a, ak_base + joff)
+        vi := v128.load_at(a, ai_base + joff)
+        vi := f32x4.relaxed_nmadd(mv, vk, vi)
+        call v128.store_at(a, ai_base + joff, vi)
+      end for
+      for j := k + 1 + nrem4 * 4, n
+        a[i, n, j] := a[i, n, j] - m * a[k, n, j]
+      end for
+    end for
+  end for
+end
+
+subroutine alpack.sgetrs(
+  lu: array f32; ipiv: array i32;
+  b: array f32; n, nrhs: i32
+)
+var
+  rhs, i, j, p, j4, lu_row, joff: i32
+  s, t: f32
+  acc, vlu, vb: f32x4
+begin
+  for rhs := 0, nrhs
+    for i := 0, n
+      p := ipiv[i]
+      if (p /= i) then
+        t := b[i, nrhs, rhs]
+        b[i, nrhs, rhs] := b[p, nrhs, rhs]
+        b[p, nrhs, rhs] := t
+      end if
+    end for
+
+    if (nrhs == 1) then
+      for i := 1, n
+        s := b[i]
+        j4 := i / 4
+        acc := f32x4.splat(0.0)
+        lu_row := i * n * 4
+        for j := 0, j4
+          joff := j * 16
+          vlu := v128.load_at(lu, lu_row + joff)
+          vb := v128.load(b, j)
+          acc := acc + vlu * vb
+        end for
+        s := s - f32x4.extract_lane(acc, 0) - f32x4.extract_lane(acc, 1) - f32x4.extract_lane(acc, 2) - f32x4.extract_lane(acc, 3)
+        for j := j4 * 4, i
+          s := s - lu[i, n, j] * b[j]
+        end for
+        b[i] := s
+      end for
+      for i := n - 1, -1, -1
+        s := b[i]
+        j4 := (n - i - 1) / 4
+        acc := f32x4.splat(0.0)
+        lu_row := (i * n + i + 1) * 4
+        for j := 0, j4
+          joff := j * 16
+          vlu := v128.load_at(lu, lu_row + joff)
+          vb := v128.load_at(b, (i + 1) * 4 + joff)
+          acc := acc + vlu * vb
+        end for
+        s := s - f32x4.extract_lane(acc, 0) - f32x4.extract_lane(acc, 1) - f32x4.extract_lane(acc, 2) - f32x4.extract_lane(acc, 3)
+        for j := i + 1 + j4 * 4, n
+          s := s - lu[i, n, j] * b[j]
+        end for
+        b[i] := s / lu[i, n, i]
+      end for
+    else
+      for i := 1, n
+        s := b[i, nrhs, rhs]
+        for j := 0, i
+          s := s - lu[i, n, j] * b[j, nrhs, rhs]
+        end for
+        b[i, nrhs, rhs] := s
+      end for
+      for i := n - 1, -1, -1
+        s := b[i, nrhs, rhs]
+        for j := i + 1, n
+          s := s - lu[i, n, j] * b[j, nrhs, rhs]
+        end for
+        b[i, nrhs, rhs] := s / lu[i, n, i]
+      end for
+    end if
+  end for
+end
+
+subroutine alpack.sgesv(
+  a: array f32; b: array f32;
+  n, nrhs: i32;
+  ipiv: array i32; info: array i32
+)
+begin
+  call alpack.sgetrf(a, n, ipiv, info)
+  if (info[0] /= 0) then
+    call return()
+  end if
+  call alpack.sgetrs(a, ipiv, b, n, nrhs)
+end

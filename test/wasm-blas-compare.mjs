@@ -15,6 +15,7 @@
 
 import { natra } from '../ext/natra/index.js';
 import { atra } from '../ext/atra/index.js';
+import { all as alpackSrc } from '../ext/alpack/src.js';
 import * as tfNs from '@tensorflow/tfjs-core';
 import * as tfWasm from '@tensorflow/tfjs-backend-wasm';
 
@@ -28,60 +29,10 @@ console.log();
 
 const ctx = await natra({ pages: 1024 });
 
-// ── Build a f32 sgemm in atra to compare against TF.js apples-to-apples ──
-//
-// Same algorithm shape as alpack.dgemm: (i, p, j) loop order, f32x4 SIMD
-// inner loop with relaxed_madd. f32x4 processes 4 elements per SIMD op
-// vs f64x2's 2 — should be ~2× faster than the f64 dgemm at scale.
-
-const sgemmMemory = new WebAssembly.Memory({ initial: 256, maximum: 16384 });
-const sgemmMod = atra({ __memory: sgemmMemory })`
-  subroutine sgemm(
-    a: array f32; b: array f32; c: array f32;
-    m, n, k: i32; alpha, beta: f32
-  )
-  var
-    i, j, p, n4, c_row, b_row, joff: i32
-    t: f32
-    tv, vb, vc: f32x4
-  begin
-    if (beta == 0.0) then
-      for i := 0, m
-        for j := 0, n
-          c[i, n, j] := 0.0
-        end for
-      end for
-    else if (beta /= 1.0) then
-      for i := 0, m
-        for j := 0, n
-          c[i, n, j] := beta * c[i, n, j]
-        end for
-      end for
-    end if
-
-    n4 := n / 4
-    for i := 0, m
-      c_row := i * n * 4         ! byte offset of row i (f32 = 4 bytes)
-      for p := 0, k
-        t := alpha * a[i, k, p]
-        tv := f32x4.splat(t)
-        b_row := p * n * 4
-        for j := 0, n4
-          joff := j * 16
-          vb := v128.load_at(b, b_row + joff)
-          vc := v128.load_at(c, c_row + joff)
-          vc := f32x4.relaxed_madd(tv, vb, vc)
-          call v128.store_at(c, c_row + joff, vc)
-        end for
-        ! scalar tail
-        for j := n4 * 4, n
-          c[i, n, j] := c[i, n, j] + t * b[p, n, j]
-        end for
-      end for
-    end for
-  end
-`;
-const sgemm = sgemmMod.sgemm;
+// Compile alpack with all f32 routines included for the s* comparison.
+const sgemmMemory = new WebAssembly.Memory({ initial: 1024, maximum: 16384 });
+const alpackMod = atra({ __memory: sgemmMemory })`${alpackSrc}`;
+const sgemm = alpackMod.alas.sgemm;
 const f32mem = new Float32Array(sgemmMemory.buffer);
 
 async function time(label, runs, fn) {
@@ -122,7 +73,7 @@ for (const N of [50, 100, 200, 500]) {
   const cPtr = N * N * 8;
   for (let i = 0; i < N * N; i++) f32mem[(aPtr >> 2) + i] = A_f64[i];
   for (let i = 0; i < N * N; i++) f32mem[(bPtr >> 2) + i] = B_f64[i];
-  await time(`atra f32 sgemm (hand-written)`, runs, () => {
+  await time(`alpack.sgemm (f32, in-tree)`, runs, () => {
     sgemm(aPtr, bPtr, cPtr, N, N, N, 1.0, 0.0);
   });
 
