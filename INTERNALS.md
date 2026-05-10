@@ -142,6 +142,14 @@ These are callable services rather than pubsub events. Set on `window.*`:
 | `window._airGetLowerer(language)` | look up a registered lowerer (wrapped with fallback handling) | same |
 | `window._airRePropagate(air, opts)` | re-run passes (for cross-cell type flow) | same |
 | `window._airDebug` | toggle AIR fallback warnings | same |
+| `window._airValidate` | when truthy (e.g. `?airdebug=1`), run validator after each lowering | same |
+| `window._airValidateModule(module)` | manually validate an AIR module against the schema | same |
+| `window._airPrettyPrint(module)` | render an AIR module to human-readable text | same |
+| `window._airOpSchema` | the OP_SCHEMA table (introspection: arity / args / regions / extras / can_be_async / side_effecting) | same |
+| `window._airRegisterSpecializations(namespace, specs)` | register runtime-helper specializations (frontend bundles call this at init) | same |
+| `window._airGetSpecializations(namespace)` | look up registered specializations | same |
+| `window._airInterpret(module, opts)` | run an AIR module via the tree-walker interpreter (no eval/Function — for sanity-check, debugger, CSP-locked) | same |
+| `window._airInterpreter` | the `Interpreter` class itself (for debugger UX needing access to internal state) | same |
 | `window._notebookVFS` | the live VFS instance | `globals.js` |
 | `window._installedModules` | runtime cache of installed modules (URL → entry) | various |
 | `window._taggedLanguages` | runtime tagged-language registry (read-only consumer) | `cell-types.js` |
@@ -397,17 +405,26 @@ The Playwright smoke is the integration gate. It opens every example, waits for 
 
 ---
 
-## 8. Roadmap status (as of 2026-05-08)
+## 8. Roadmap status (as of 2026-05-09)
 
-The pre-announcement internals cleanup is documented in `spec_inbox/auditable-internals-roadmap.md`. Five tracks shipped:
+The pre-announcement internals cleanup is documented in `spec_inbox/auditable-internals-roadmap.md`. **All six tracks (A-F) shipped:**
 
 - **A — AIR lowerer extraction.** `@gcu/air` exposes `registerLowerer`; adder + soft lowerers extracted to their own packages.
 - **B — Hook bus.** Single `auditable.hooks` event bus replaces 11 ad-hoc lifecycle slots.
 - **C — Extension API.** Single `registerExtension(manifest)` API replaces 4–6 per-extension registries.
 - **D — Cell-builtins split.** `exec.js` 1462 → 224 lines; builtins live under `cell-builtins/`.
 - **E — Persistence.** VFS-unified; single AUDITABLE-VFS save block; legacy 4-block format auto-imports.
+- **F — AIR v0.3 self-describing IR.** OP_SCHEMA table, opt-in validator, textual IR pretty-printer (`prettyPrint` + `parseText`), ScopeChain with push/pop semantics, PASSES metadata, full `ctx.symbols` migration with proper function-scope shadowing fix. See `ext/air/SPEC.md`.
 
-Remaining (not blocking announcement):
-- **F — AIR v2** (parallel track): op schema, validator, ScopeChain, textual IR, declarative pass pipeline.
+**Post-F shipped (also 2026-05-09):**
+
+- **AIR ctx.exprs region scoping.** emit-js's inline-consume cache is now ScopeChain-backed; pop-time invariant catches cross-region single-use refs under `?airdebug=1`.
+- **Lowerer-frontend extraction.** Shared `BaseLowerCtx` + `captureOps` + `emitPhiSelect` + `lowerIfRegion` + `lowerLoopRegion` + `ctx.truthy` hook + `ctx.makeTempName` + `ctx.emitNamespacedCall` in `ext/air/src/lower/base.js`. Adder + soft each shed ~150 LOC of boilerplate; `_py.add → +` and `_soft.eq → ===` specializations registered via the new `registerSpecializations` API.
+- **AIR interpreter v0.** `ext/air/src/interp.js` (~570 LOC). Tree-walks AIR ops directly (no eval/Function). Used to sanity-check the JS emitter (35-cell test bank verifies emit-js and interp produce same results). Foundation for a future step-debugger, CSP-locked builds, AIR semantics reference.
+
+**Remaining (not blocking; all in `spec_inbox/lang/` for future):**
 - **G — cell-field namespacing** (deferred): `cell._inputs` → `cell.widgets.inputs`, etc.
 - **`tools/*` menubar migration** (`spec_inbox/ui-integration-spec.md`).
+- **`@gcu/vec`** — TypedArray-based numerical library, lightweight NumPy alternative for JS. Spec at `spec_inbox/gcu-vec-spec.md`. Designed to ship as standalone npm package independent of Auditable.
+- **AIR decompiler** (`spec_inbox/lang/air-decompiler-spec.md`): AIR → AST → source for cross-language transpilation.
+- **AIR symbolic execution** (`spec_inbox/lang/air-symbolic-execution-spec.md`): static analysis, range refinement, cell-purity classification.
