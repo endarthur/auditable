@@ -120,6 +120,7 @@ const categories = {
     'example_resource_estimation.txt',
     'example_synth.txt',
     'example_threejs.txt',
+    'example_vec.txt',
   ],
 };
 

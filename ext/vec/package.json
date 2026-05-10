@@ -4,14 +4,20 @@
   "description": "TypedArray-based numerical library for JS. Lightweight NumPy alternative — ndarray with NumPy-style broadcasting, element-wise ops, reductions, small dense linear algebra (solve, cholesky, lstsq, eigSym). Pure JS, no wasm, no dependencies.",
   "type": "module",
   "main": "index.js",
+  "types": "types.d.ts",
   "exports": {
-    ".": "./index.js",
+    ".": {
+      "types": "./types.d.ts",
+      "import": "./index.js",
+      "default": "./index.js"
+    },
     "./adder": "./adder.js",
     "./package.json": "./package.json"
   },
   "files": [
     "index.js",
     "adder.js",
+    "types.d.ts",
     "src/",
     "SPEC.md",
     "README.md"
