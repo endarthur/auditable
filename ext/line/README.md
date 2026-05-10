@@ -1,4 +1,4 @@
-# @gcu/vec
+# @gcu/line
 
 A lightweight, TypedArray-based numerical library for JavaScript — the
 NumPy-shaped piece that's been missing from the JS ecosystem.
@@ -12,7 +12,7 @@ NumPy-shaped piece that's been missing from the JS ecosystem.
 - Works in Node, modern browsers, Deno, Bun
 - ~50 KB unminified, single ES module
 
-`@gcu/vec` is part of the [Auditable](https://github.com/endarthur/auditable)
+`@gcu/line` is part of the [Auditable](https://github.com/endarthur/auditable)
 ecosystem and ships with a Python (adder) bridge, but the core library
 is fully usable as a standalone npm package.
 
@@ -32,45 +32,45 @@ V8's JIT inlines and autovectorizes tight typed-array loops to
 near-C performance. The wasm boundary cost and the Python-C boundary
 cost both dominate over the actual numerical work at this size.
 
-`@gcu/vec` provides an ergonomic NumPy-flavored API on top of the same
+`@gcu/line` provides an ergonomic NumPy-flavored API on top of the same
 fast `Float64Array` loops, with proper broadcasting, ndarrays, and a
 small but useful linear algebra subset.
 
 ## Installation
 
 ```bash
-npm install @gcu/vec
+npm install @gcu/line
 ```
 
 ## Quickstart
 
 ```js
-import * as vec from '@gcu/vec';
+import * as line from '@gcu/line';
 
 // Creation
-const a = vec.from([1, 2, 3, 4]);
-const m = vec.from([[1, 2, 3], [4, 5, 6]]);
-const z = vec.zeros([3, 3]);
-const I = vec.eye(4);
-const xs = vec.linspace(0, 1, 11);
+const a = line.from([1, 2, 3, 4]);
+const m = line.from([[1, 2, 3], [4, 5, 6]]);
+const z = line.zeros([3, 3]);
+const I = line.eye(4);
+const xs = line.linspace(0, 1, 11);
 
 // Element-wise math (with broadcasting)
-const c = vec.add(a, 10);                       // [11, 12, 13, 14]
-const r = vec.mul(m, vec.from([10, 20, 30]));   // broadcast row vector
+const c = line.add(a, 10);                       // [11, 12, 13, 14]
+const r = line.mul(m, line.from([10, 20, 30]));   // broadcast row vector
 
 // Reductions
-vec.sum(a);                  // 10
-vec.sum(m, { axis: 0 });     // NdArray [3]
-vec.mean(m, { axis: 1 });    // NdArray [2]
+line.sum(a);                  // 10
+line.sum(m, { axis: 0 });     // NdArray [3]
+line.mean(m, { axis: 1 });    // NdArray [2]
 
 // Linear algebra
-const A = vec.from([[2, 1], [5, 7]]);
-const b = vec.from([11, 13]);
-const x = vec.solve(A, b);   // x = A^-1 b
+const A = line.from([[2, 1], [5, 7]]);
+const b = line.from([11, 13]);
+const x = line.solve(A, b);   // x = A^-1 b
 
 // Symmetric eigendecomposition
-const sigma = vec.from([[10, 2, 0], [2, 8, 1], [0, 1, 6]]);
-const { values, vectors } = vec.eigSym3(sigma);
+const sigma = line.from([[10, 2, 0], [2, 8, 1], [0, 1, 6]]);
+const { values, vectors } = line.eigSym3(sigma);
 // values: descending eigenvalues, vectors: orthonormal columns
 
 // Conversion
@@ -107,13 +107,13 @@ a.toString()           // human-readable
 ### Creation
 
 ```js
-vec.zeros(shape)              // shape: number or array
-vec.ones(shape)
-vec.full(shape, value)
-vec.range(start, end?, step?)  // Python-style; vec.range(5) = [0,1,2,3,4]
-vec.linspace(a, b, n)          // n equally-spaced
-vec.eye(n)                     // n×n identity matrix
-vec.from(source, shape?)
+line.zeros(shape)              // shape: number or array
+line.ones(shape)
+line.full(shape, value)
+line.range(start, end?, step?)  // Python-style; line.range(5) = [0,1,2,3,4]
+line.linspace(a, b, n)          // n equally-spaced
+line.eye(n)                     // n×n identity matrix
+line.from(source, shape?)
   // - from(nestedArray)        → auto-detect shape
   // - from(flatArray, shape)   → reshape flat data
   // - from(otherNdArray)       → copy
@@ -129,11 +129,11 @@ Three dispatch arms inside each op:
 3. **Broadcast** (compatible different shapes): stride-iterated path.
 
 ```js
-vec.add(a, b)
-vec.sub(a, b)
-vec.mul(a, b)
-vec.div(a, b)
-vec.pow(a, b)
+line.add(a, b)
+line.sub(a, b)
+line.mul(a, b)
+line.div(a, b)
+line.pow(a, b)
 ```
 
 **Broadcasting rules** (NumPy-style):
@@ -152,33 +152,33 @@ Examples:
 ### Element-wise unary
 
 ```js
-vec.neg(a)         vec.abs(a)        vec.sqrt(a)
-vec.log(a)         vec.exp(a)
-vec.sin(a)         vec.cos(a)        vec.tan(a)
-vec.asin(a)        vec.acos(a)       vec.atan(a)
-vec.floor(a)       vec.ceil(a)       vec.round(a)
-vec.sign(a)
-vec.isnan(a)       vec.isfinite(a)   // return 0/1 masks
+line.neg(a)         line.abs(a)        line.sqrt(a)
+line.log(a)         line.exp(a)
+line.sin(a)         line.cos(a)        line.tan(a)
+line.asin(a)        line.acos(a)       line.atan(a)
+line.floor(a)       line.ceil(a)       line.round(a)
+line.sign(a)
+line.isnan(a)       line.isfinite(a)   // return 0/1 masks
 ```
 
 Element-wise binary helpers (with broadcasting):
 
 ```js
-vec.atan2(y, x)    // angle from x-axis
-vec.hypot(a, b)    // sqrt(a² + b²) without overflow
-vec.maximum(a, b)  vec.minimum(a, b)   // element-wise (not reduction)
-vec.eq(a, b)       vec.ne(a, b)        // 0/1 masks
-vec.lt(a, b)       vec.le(a, b)
-vec.gt(a, b)       vec.ge(a, b)
+line.atan2(y, x)    // angle from x-axis
+line.hypot(a, b)    // sqrt(a² + b²) without overflow
+line.maximum(a, b)  line.minimum(a, b)   // element-wise (not reduction)
+line.eq(a, b)       line.ne(a, b)        // 0/1 masks
+line.lt(a, b)       line.le(a, b)
+line.gt(a, b)       line.ge(a, b)
 ```
 
 ### Selection
 
 ```js
-vec.where(cond, a, b)   // out[i] = cond[i] ? a[i] : b[i]
+line.where(cond, a, b)   // out[i] = cond[i] ? a[i] : b[i]
                         // cond is NdArray; a/b are NdArray (matching shape)
                         // or scalar. No broadcasting between cond/a/b in v1.
-vec.clip(a, lo, hi)     // clamp each element to [lo, hi]
+line.clip(a, lo, hi)     // clamp each element to [lo, hi]
 ```
 
 ### Reductions
@@ -187,20 +187,20 @@ Without `axis`: returns a scalar number.
 With `{ axis: i }`: returns an NdArray with that axis removed.
 
 ```js
-vec.sum(a, opts?)        vec.prod(a, opts?)
-vec.mean(a, opts?)
-vec.max(a, opts?)        vec.min(a, opts?)
-vec.std(a, opts?)        vec.variance(a, opts?)   // var_ alias also exported
-vec.argmin(a, opts?)     vec.argmax(a, opts?)     // indices
-vec.norm(a)                                       // L2 norm of all elements
-vec.trace(A)                                      // sum of diagonal (2D)
-vec.dot(a, b)
+line.sum(a, opts?)        line.prod(a, opts?)
+line.mean(a, opts?)
+line.max(a, opts?)        line.min(a, opts?)
+line.std(a, opts?)        line.variance(a, opts?)   // var_ alias also exported
+line.argmin(a, opts?)     line.argmax(a, opts?)     // indices
+line.norm(a)                                       // L2 norm of all elements
+line.trace(A)                                      // sum of diagonal (2D)
+line.dot(a, b)
   // - 1D · 1D = scalar
   // - 2D · 1D = matrix-vector (1D NdArray)
   // - 1D · 2D = vector-matrix (1D NdArray)
   // - 2D · 2D = matmul (2D NdArray)
 
-vec.cumsum(a, opts?)     vec.cumprod(a, opts?)    // running totals
+line.cumsum(a, opts?)     line.cumprod(a, opts?)    // running totals
   // No axis: flatten to 1D, return running total of size a.size.
   // With axis: same shape as a, accumulate along that axis.
 ```
@@ -212,36 +212,36 @@ variance; default 0).
 
 ```js
 // Multiplication
-vec.matmul(A, B)              // 2D × 2D → 2D (loop-reordered i,k,j)
-vec.transpose(A)              // 2D axes swap (copy)
+line.matmul(A, B)              // 2D × 2D → 2D (loop-reordered i,k,j)
+line.transpose(A)              // 2D axes swap (copy)
 
 // Linear systems (LU + partial pivoting)
-vec.solve(A, b)               // returns x; b can be 1D or 2D (multi-rhs)
-vec.det(A)                    // determinant
-vec.inv(A)                    // matrix inverse
+line.solve(A, b)               // returns x; b can be 1D or 2D (multi-rhs)
+line.det(A)                    // determinant
+line.inv(A)                    // matrix inverse
 
 // SPD systems (Cholesky)
-vec.cholesky(A)               // returns L (lower triangular)
-vec.solveCholesky(L, b)       // forward + back-substitute given precomputed L
+line.cholesky(A)               // returns L (lower triangular)
+line.solveCholesky(L, b)       // forward + back-substitute given precomputed L
 
 // Least squares (normal equations + Cholesky)
-vec.lstsq(A, b)               // x = (A^T A)^-1 A^T b
+line.lstsq(A, b)               // x = (A^T A)^-1 A^T b
 
 // Symmetric eigendecomposition
-vec.eigSym3(A)                // 3×3 via Smith/Cardano closed-form
-vec.eigSym(A, opts?)          // N×N via Jacobi rotations
+line.eigSym3(A)                // 3×3 via Smith/Cardano closed-form
+line.eigSym(A, opts?)          // N×N via Jacobi rotations
 
 // Closed-form fast paths
-vec.det2(A) / vec.det3(A) / vec.det4(A)
-vec.inv2(A) / vec.inv3(A) / vec.inv4(A)
+line.det2(A) / line.det3(A) / line.det4(A)
+line.inv2(A) / line.inv3(A) / line.inv4(A)
 
 // Matrix shape helpers
-vec.diag(a, k=0)
+line.diag(a, k=0)
   // 1D input → 2D matrix with `a` on the k-th diagonal
   // 2D input → 1D vector of the k-th diagonal
-vec.outer(a, b)        // outer product (1D × 1D → 2D)
-vec.tril(A, k=0)       // keep on/below k-th diagonal, zero rest
-vec.triu(A, k=0)       // keep on/above k-th diagonal, zero rest
+line.outer(a, b)        // outer product (1D × 1D → 2D)
+line.tril(A, k=0)       // keep on/below k-th diagonal, zero rest
+line.triu(A, k=0)       // keep on/above k-th diagonal, zero rest
 ```
 
 `eigSym3` and `eigSym` return `{ values, vectors }` where:
@@ -251,31 +251,31 @@ vec.triu(A, k=0)       // keep on/above k-th diagonal, zero rest
 ### Shape ops
 
 ```js
-vec.reshape(a, newShape)
-vec.flatten(a)
-vec.slice(a, ranges)
+line.reshape(a, newShape)
+line.flatten(a)
+line.slice(a, ranges)
   // ranges is an array of per-axis slice specs:
   //   null / undefined / missing → full axis
   //   { start?, end?, step? }    → start defaults to 0 (or end if step<0),
   //                                 end defaults to axis size (or 0 if step<0),
   //                                 step defaults to 1.
-vec.copy(a)
+line.copy(a)
 
-vec.concat(arrays, axis=0)   // join along existing axis (shapes must match
+line.concat(arrays, axis=0)   // join along existing axis (shapes must match
                              // except along that axis)
-vec.stack(arrays, axis=0)    // introduce a NEW axis (all shapes must match
+line.stack(arrays, axis=0)    // introduce a NEW axis (all shapes must match
                              // exactly; result has ndim+1)
 ```
 
 Negative indices in `slice` are interpreted Python-style.
 
-## Adder bridge — using `@gcu/vec` from Python
+## Adder bridge — using `@gcu/line` from Python
 
-Auditable's adder cells (Python dialect) can use `@gcu/vec` via the
+Auditable's adder cells (Python dialect) can use `@gcu/line` via the
 included bridge:
 
 ```python
-import vec as np                           # alias to whatever you like
+import line as np                           # alias to whatever you like
 
 a = np.array([1, 2, 3, 4, 5])
 b = np.array([10, 20, 30, 40, 50])
@@ -292,13 +292,13 @@ x = np.linalg.solve(A, np.array([1, 2, 3]))
 
 # Iteration
 total = 0
-for row in m:                              # 2D iteration yields rows as VecArrays
+for row in m:                              # 2D iteration yields rows as LineArrays
     total = total + row.sum()
 ```
 
-The bridge wraps each NdArray in a `VecArray` instance with Python
+The bridge wraps each NdArray in a `LineArray` instance with Python
 dunder methods (`__add__`, `__getitem__`, `__iter__`, etc.). Operations
-return new `VecArray` instances. Slicing copies, consistent with the
+return new `LineArray` instances. Slicing copies, consistent with the
 underlying library.
 
 ## Performance
@@ -311,10 +311,10 @@ thread-pool overhead.
 
 ### Element-wise + reductions
 
-| Workload | vec | plain f64 | natra | numpy | **vec/numpy** |
+| Workload | line | plain f64 | natra | numpy | **line/numpy** |
 |---|---:|---:|---:|---:|---:|
 | 10K vector add | 0.030 | 0.003 | 0.007 | **0.002** | 15× slower |
-| 100K vector add | 0.168 | 0.050 | 0.030 | **0.091** | **vec 1.8× FASTER** |
+| 100K vector add | 0.168 | 0.050 | 0.030 | **0.091** | **line 1.8× FASTER** |
 | 1M vector add | 1.205 | 0.573 | 0.438 | **1.205** | 1.0× (tied) |
 | 10K sum | 0.006 | 0.006 | 0.009 | **0.002** | 3.0× slower |
 | 100K sum | 0.063 | 0.059 | 0.062 | **0.015** | 4.2× slower |
@@ -324,7 +324,7 @@ thread-pool overhead.
 
 ### Matrix multiplication
 
-| Size | vec | natra | numpy | numpy MT | **vec/numpy** |
+| Size | line | natra | numpy | numpy MT | **line/numpy** |
 |---|---:|---:|---:|---:|---:|
 | 50×50 | 0.093 | 0.048 | **0.004** | 0.004 | 23× slower |
 | 100×100 | 0.612 | 0.346 | **0.027** | 0.027 | 23× slower |
@@ -336,7 +336,7 @@ once N gets large.
 
 ### Linear solve (LU + partial pivoting)
 
-| Size | vec | natra | numpy | **vec/numpy** |
+| Size | line | natra | numpy | **line/numpy** |
 |---|---:|---:|---:|---:|
 | 50×50 | 0.076 | 0.040 | **0.012** | 6.3× slower |
 | 100×100 | 0.447 | 0.199 | **0.039** | 11× slower |
@@ -344,37 +344,37 @@ once N gets large.
 
 ### Symmetric eigendecomposition
 
-| Workload | vec | natra | numpy | **vec/numpy** |
+| Workload | line | natra | numpy | **line/numpy** |
 |---|---:|---:|---:|---:|
-| 3×3 (eigSym3, Cardano closed-form) | **0.0023** | 0.011 | 0.004 | **vec 1.7× FASTER** |
-| 3×3 (eigSym, Jacobi) | **0.0030** | 0.011 | 0.004 | **vec 1.3× FASTER** |
+| 3×3 (eigSym3, Cardano closed-form) | **0.0023** | 0.011 | 0.004 | **line 1.7× FASTER** |
+| 3×3 (eigSym, Jacobi) | **0.0030** | 0.011 | 0.004 | **line 1.3× FASTER** |
 | 20×20 (eigSym, Jacobi) | 0.118 | **0.088** | 0.030 | 3.9× slower |
 
 ### Reproduce
 
 ```bash
-node test/vec-perf.mjs                              # vec + plain f64 + natra
-OPENBLAS_NUM_THREADS=1 python test/perf_vec_numpy.py # numpy reference
+node test/line-perf.mjs                              # line + plain f64 + natra
+OPENBLAS_NUM_THREADS=1 python test/perf_line_numpy.py # numpy reference
 ```
 
 ### What this shows
 
-- **vec is faster than numpy on 3×3 symmetric eigen.** Cardano has no
+- **line is faster than numpy on 3×3 symmetric eigen.** Cardano has no
   iteration overhead and no LAPACK dispatch to amortize.
-- **vec is faster than numpy on 100K vector add** on this machine —
-  surprising, but consistent. Looks like vec's flat Float64Array loop +
+- **line is faster than numpy on 100K vector add** on this machine —
+  surprising, but consistent. Looks like line's flat Float64Array loop +
   fresh allocation actually outpaces numpy's allocate-result-as-PyObject
   path at this size.
-- **vec is consistently within 1-2 orders of magnitude of numpy** across
+- **line is consistently within 1-2 orders of magnitude of numpy** across
   every workload — solid floor for a pure-JS implementation.
-- **natra and vec are competitive across the small-to-medium regime.**
+- **natra and line are competitive across the small-to-medium regime.**
   natra wins on element-wise ops once arrays exceed ~50K elements
-  (wasm SIMD pulls ahead), and on solve / 20×20 eigen. vec wins on the
+  (wasm SIMD pulls ahead), and on solve / 20×20 eigen. line wins on the
   3×3 eigen closed-form. They're roughly tied on matmul up to ~500×500
   in pure compute (numpy BLAS still dominates there absolutely).
 - **NumPy's BLAS dgemm is in a class of its own for matmul** (~20-25×
-  faster than either vec or natra). For hot kernels in JS, natra+alpack
-  is the path; for daily-driver linalg under that bar, vec is fine.
+  faster than either line or natra). For hot kernels in JS, natra+alpack
+  is the path; for daily-driver linalg under that bar, line is fine.
 - **OpenBLAS thread tuning matters.** Multi-threaded OpenBLAS hurts
   small-N linear algebra (24 threads × 200×200 dgesv = 230× slower than
   single-threaded due to pool spin-up) and helps big dense matmul (4×
@@ -385,13 +385,13 @@ OPENBLAS_NUM_THREADS=1 python test/perf_vec_numpy.py # numpy reference
   form leaks into permanent memory, which made earlier versions of
   this benchmark show natra ~30× slower than reality.
 
-## When to use vec vs natra
+## When to use line vs natra
 
 [natra](https://github.com/endarthur/auditable/tree/main/ext/natra) is a
 sibling library backed by atra-compiled Wasm with BLAS-style kernels.
 Both can coexist; pick per-task:
 
-| Concern | `@gcu/vec` | natra |
+| Concern | `@gcu/line` | natra |
 |---|---|---|
 | Backing store | `Float64Array` | wasm linear memory |
 | Memory mgmt | JS GC | bump allocator + scope |
@@ -403,7 +403,7 @@ Both can coexist; pick per-task:
 | Linear algebra | small dense direct | alpack BLAS via @atra |
 | dtype support | f64 only (v1) | i8/u8/i16/u16/i32/u32/f32/f64 |
 
-**Use vec when:**
+**Use line when:**
 - Arrays under ~50K elements
 - Small dense linear algebra (matrices ≤ 200×200)
 - You don't want a wasm dependency

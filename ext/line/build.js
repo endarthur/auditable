@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Bundle ext/vec/src/ into ext/vec/index.js as a single ES module.
+// Bundle ext/line/src/ into ext/line/index.js as a single ES module.
 
 import fs from 'fs';
 import path from 'path';
@@ -47,8 +47,8 @@ for (const file of files) {
   chunks.push(`// ── ${file} ──\n\n${strip(text)}`);
 }
 
-const header = `// @gcu/vec — TypedArray-based numerical library.
-// Auto-generated from ext/vec/src/ — do not edit directly.
+const header = `// @gcu/line — Linear algebra for JS (TypedArray-based ndarray + BLAS-1/2 + small dense linalg).
+// Auto-generated from ext/line/src/ — do not edit directly.
 //
 // API surface (named exports below at file end):
 //   NdArray, shapeProduct, computeStrides

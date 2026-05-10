@@ -1,5 +1,5 @@
-// @gcu/vec — TypedArray-based numerical library.
-// Auto-generated from ext/vec/src/ — do not edit directly.
+// @gcu/line — Linear algebra for JS (TypedArray-based ndarray + BLAS-1/2 + small dense linalg).
+// Auto-generated from ext/line/src/ — do not edit directly.
 //
 // API surface (named exports below at file end):
 //   NdArray, shapeProduct, computeStrides

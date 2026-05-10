@@ -7,7 +7,7 @@ document is its only specification.
 
 ## Why
 
-The GCU packages (`@gcu/natra`, `@gcu/vec`, `@gcu/alpack`, `@gcu/scitra`,
+The GCU packages (`@gcu/natra`, `@gcu/line`, `@gcu/alpack`, `@gcu/scitra`,
 `@gcu/sadpan`, `@gcu/plot`, ...) are designed to compose without forcing
 users to install the whole stack. Most of them work fully on their own.
 But some pairings have real performance wins when both halves are
@@ -16,7 +16,7 @@ present:
 | Consumer | Provider | What it gets |
 |---|---|---|
 | `@gcu/scitra` | `@gcu/natra` | SIMD-accelerated `cdist` for n*m ≥ 250k |
-| `@gcu/sadpan` | `@gcu/vec`   | small-matrix eigendecomposition for stereonets |
+| `@gcu/sadpan` | `@gcu/line`  | small-matrix eigendecomposition for stereonets |
 | `@gcu/plot`   | `@gcu/natra` | zero-copy raster paths for big arrays |
 
 Wiring those up via explicit `setBackend()` calls works, but in a
@@ -54,7 +54,7 @@ consumers that only read `providers` are unaffected.
 
 A *provider* is any GCU package that registers itself for use by other
 packages. The provider key in `providers` is the last segment of the
-package name (`@gcu/natra` → `natra`, `@gcu/vec` → `vec`).
+package name (`@gcu/natra` → `natra`, `@gcu/line` → `line`).
 
 Provider responsibilities:
 

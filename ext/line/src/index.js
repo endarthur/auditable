@@ -1,5 +1,5 @@
-// @gcu/vec — TypedArray-based numerical library.
-// Public entry: re-exports the entire vec namespace.
+// @gcu/line — Linear algebra for JS (TypedArray ndarray + BLAS-1/2 + small dense linalg).
+// Public entry: re-exports the entire line namespace.
 
 export { NdArray, shapeProduct, computeStrides } from './ndarray.js';
 export {

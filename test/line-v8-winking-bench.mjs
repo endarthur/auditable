@@ -13,7 +13,7 @@
 // For each: naive (vec's current shape), unrolled-4, unrolled-8, alpack.
 // Sizes: 8, 64, 512, 4096, 32768, 262144.
 
-import * as vec from '../ext/vec/index.js';
+import * as vec from '../ext/line/index.js';
 import { natra } from '../ext/natra/index.js';
 
 const nat = await natra({ pages: 2048 });

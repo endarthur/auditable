@@ -9,7 +9,7 @@ import {
   matmul, transpose,
   det2, det3, det4,
   inv2, inv3, inv4,
-} from '../ext/vec/src/index.js';
+} from '../ext/line/src/index.js';
 
 const close = (a, b, tol = 1e-10) => Math.abs(a - b) <= tol;
 const arrClose = (a, b, tol = 1e-10) => {

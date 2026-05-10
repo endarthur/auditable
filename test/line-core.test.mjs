@@ -10,7 +10,7 @@ import {
   neg, abs, sqrt, log, exp, sin, cos, tan,
   reshape, flatten, copy, slice,
   broadcastShapes, shapesEqual,
-} from '../ext/vec/src/index.js';
+} from '../ext/line/src/index.js';
 
 const close = (a, b, tol = 1e-12) => Math.abs(a - b) <= tol;
 const arrClose = (a, b, tol = 1e-12) => {

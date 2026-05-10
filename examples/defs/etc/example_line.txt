@@ -1,23 +1,23 @@
 /// auditable
-/// title: vec — TypedArray-based numerical library
+/// title: line — TypedArray-based numerical library
 /// module: @gcu/adder ext/adder/index.js
-/// module: ./ext/vec/index.js ext/vec/index.js
-/// module: ./ext/vec/adder.js ext/vec/adder.js
+/// module: ./ext/line/index.js ext/line/index.js
+/// module: ./ext/line/adder.js ext/line/adder.js
 
 /// md
-# `@gcu/vec`
+# `@gcu/line`
 
 A pure-JS NumPy-equivalent for the regime where the wasm boundary cost dominates over the actual numerical work — typically arrays under ~50K elements and matrices ≤ 200×200.
 
-`vec` is `Float64Array` and tight `for` loops, all the way down. V8's JIT inlines and autovectorizes them to near-C performance. No wasm, no scope discipline, no allocation contexts — JS GC handles lifetimes.
+`line` is `Float64Array` and tight `for` loops, all the way down. V8's JIT inlines and autovectorizes them to near-C performance. No wasm, no scope discipline, no allocation contexts — JS GC handles lifetimes.
 
-This notebook shows vec in both **JS cells** (direct API) and **adder cells** (Python with operator overloading via the bridge).
+This notebook shows line in both **JS cells** (direct API) and **adder cells** (Python with operator overloading via the bridge).
 
 /// code collapsed
 // %collapsed
-const vec = await load("./ext/vec/index.js")
+const line = await load("./ext/line/index.js")
 await load("@gcu/adder")
-await load("./ext/vec/adder.js")
+await load("./ext/line/adder.js")
 
 /// md
 ## creation
@@ -25,12 +25,12 @@ await load("./ext/vec/adder.js")
 Standard NumPy-flavored constructors. `from` auto-detects shape from nested arrays:
 
 /// code
-const a = vec.from([1, 2, 3, 4, 5])
-const m = vec.from([[1, 2, 3], [4, 5, 6]])
-const z = vec.zeros([3, 3])
-const I = vec.eye(4)
-const xs = vec.linspace(0, 1, 11)
-const r = vec.range(10)
+const a = line.from([1, 2, 3, 4, 5])
+const m = line.from([[1, 2, 3], [4, 5, 6]])
+const z = line.zeros([3, 3])
+const I = line.eye(4)
+const xs = line.linspace(0, 1, 11)
+const r = line.range(10)
 
 ui.display(`a       = ${a}`)
 ui.display(`m       = ${m}`)
@@ -43,20 +43,20 @@ ui.display(`xs      = ${xs}`)
 Three dispatch arms inside each binary op — scalar, shape-equal, and broadcast. The first two are tight flat loops V8 vectorizes; broadcast is stride-iterated:
 
 /// code
-const v = vec.from([1, 2, 3])
-const M = vec.from([[10, 20, 30], [40, 50, 60]])
+const v = line.from([1, 2, 3])
+const M = line.from([[10, 20, 30], [40, 50, 60]])
 
 // Scalar broadcast.
-const c1 = vec.add(v, 100)
+const c1 = line.add(v, 100)
 ui.display(`v + 100 = ${c1}`)
 
 // Row vector broadcast across rows of a matrix.
-const c2 = vec.add(M, v)
+const c2 = line.add(M, v)
 ui.display(`M + v   = ${c2}`)
 
 // Column vector tiled across columns.
-const col = vec.from([100, 200], [2, 1])
-const c3 = vec.add(M, col)
+const col = line.from([100, 200], [2, 1])
+const c3 = line.add(M, col)
 ui.display(`M + col = ${c3}`)
 
 /// md
@@ -65,13 +65,13 @@ ui.display(`M + col = ${c3}`)
 Without `axis`: scalar. With `{ axis: i }`: NdArray with that axis dropped.
 
 /// code
-const m2 = vec.from([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
+const m2 = line.from([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
 
-ui.display(`sum(all)        = ${vec.sum(m2)}`)
-ui.display(`sum(axis=0)     = ${vec.sum(m2, { axis: 0 })}`)
-ui.display(`sum(axis=1)     = ${vec.sum(m2, { axis: 1 })}`)
-ui.display(`mean(axis=0)    = ${vec.mean(m2, { axis: 0 })}`)
-ui.display(`std(axis=1)     = ${vec.std(m2, { axis: 1 })}`)
+ui.display(`sum(all)        = ${line.sum(m2)}`)
+ui.display(`sum(axis=0)     = ${line.sum(m2, { axis: 0 })}`)
+ui.display(`sum(axis=1)     = ${line.sum(m2, { axis: 1 })}`)
+ui.display(`mean(axis=0)    = ${line.mean(m2, { axis: 0 })}`)
+ui.display(`std(axis=1)     = ${line.std(m2, { axis: 1 })}`)
 
 /// md
 ## linear regression via `lstsq`
@@ -81,7 +81,7 @@ Fit `y = m·x + b` to noisy points using normal equations + Cholesky. Build the 
 /// code
 // Synthesize: y = 2x + 3 + noise.
 const N = 50
-const xs2 = vec.range(N)
+const xs2 = line.range(N)
 const ysData = new Float64Array(N)
 let seed = 1
 for (let i = 0; i < N; i++) {
@@ -89,16 +89,16 @@ for (let i = 0; i < N; i++) {
   const noise = ((seed - 1) / 2147483646 - 0.5) * 0.5
   ysData[i] = 2 * i + 3 + noise
 }
-const ys = new vec.NdArray(ysData, [N])
+const ys = new line.NdArray(ysData, [N])
 
 // Design matrix.
-const A = vec.zeros([N, 2])
+const A = line.zeros([N, 2])
 for (let i = 0; i < N; i++) {
   A.set(i, 0, i)
   A.set(i, 1, 1)
 }
 
-const beta = vec.lstsq(A, ys)
+const beta = line.lstsq(A, ys)
 ui.display(`fitted slope     = ${beta.data[0].toFixed(4)} (true: 2)`)
 ui.display(`fitted intercept = ${beta.data[1].toFixed(4)} (true: 3)`)
 
@@ -108,34 +108,34 @@ ui.display(`fitted intercept = ${beta.data[1].toFixed(4)} (true: 3)`)
 Solve a 5×5 system. LU + partial pivoting; numerically stable for well-conditioned matrices:
 
 /// code
-const K = vec.from([
+const K = line.from([
   [4, 1, 0, 0, 1],
   [1, 4, 1, 0, 0],
   [0, 1, 4, 1, 0],
   [0, 0, 1, 4, 1],
   [1, 0, 0, 1, 4],
 ])
-const rhs = vec.from([1, 0, 0, 0, 0])
-const x = vec.solve(K, rhs)
+const rhs = line.from([1, 0, 0, 0, 0])
+const x = line.solve(K, rhs)
 
 // Verify K x ≈ rhs.
-const Kx = vec.dot(K, x)
+const Kx = line.dot(K, x)
 ui.display(`x       = ${x}`)
 ui.display(`K · x   = ${Kx}`)
 
 /// md
 ## stress-tensor eigendecomposition (`eigSym3`)
 
-For a symmetric 3×3 matrix, vec uses the closed-form Smith/Cardano algorithm — no iterations, instant. Returns eigenvalues sorted descending and orthonormal eigenvectors as columns. Geologically relevant for principal stresses, structural fabric, moment-of-inertia tensors:
+For a symmetric 3×3 matrix, line uses the closed-form Smith/Cardano algorithm — no iterations, instant. Returns eigenvalues sorted descending and orthonormal eigenvectors as columns. Geologically relevant for principal stresses, structural fabric, moment-of-inertia tensors:
 
 /// code
-const sigma = vec.from([
+const sigma = line.from([
   [10, 2, 0],
   [2, 8, 1],
   [0, 1, 6],
 ])
 
-const { values, vectors } = vec.eigSym3(sigma)
+const { values, vectors } = line.eigSym3(sigma)
 
 ui.display(`σ₁ (max)   = ${values.data[0].toFixed(4)}`)
 ui.display(`σ₂         = ${values.data[1].toFixed(4)}`)
@@ -144,14 +144,14 @@ ui.display(`eigenvecs (columns) =\n${vectors}`)
 
 // Verify: sigma · v_i = λ_i · v_i for each i.
 for (let i = 0; i < 3; i++) {
-  const v_i = vec.from([
+  const v_i = line.from([
     vectors.data[0 * 3 + i],
     vectors.data[1 * 3 + i],
     vectors.data[2 * 3 + i],
   ])
-  const lhs = vec.dot(sigma, v_i)
-  const rhs = vec.mul(v_i, values.data[i])
-  const residual = vec.norm(vec.sub(lhs, rhs))
+  const lhs = line.dot(sigma, v_i)
+  const rhs = line.mul(v_i, values.data[i])
+  const residual = line.norm(line.sub(lhs, rhs))
   ui.display(`||σ·v${i+1} − λ${i+1}·v${i+1}|| = ${residual.toExponential(2)}`)
 }
 
@@ -168,17 +168,17 @@ for (let i = 0; i < 36; i++) {
   s = (s * 16807) % 2147483647
   Mdata[i] = (s - 1) / 2147483646 - 0.5
 }
-const Mrand = new vec.NdArray(Mdata, [6, 6])
-const Asym = vec.matmul(vec.transpose(Mrand), Mrand)
+const Mrand = new line.NdArray(Mdata, [6, 6])
+const Asym = line.matmul(line.transpose(Mrand), Mrand)
 
-const eig = vec.eigSym(Asym)
+const eig = line.eigSym(Asym)
 ui.display(`eigenvalues (descending): ${eig.values.data.map(v => v.toFixed(4)).join(', ')}`)
 
 // Reconstruct A = V D V^T and check.
-const D6 = vec.zeros([6, 6])
+const D6 = line.zeros([6, 6])
 for (let i = 0; i < 6; i++) D6.set(i, i, eig.values.data[i])
-const recon = vec.matmul(vec.matmul(eig.vectors, D6), vec.transpose(eig.vectors))
-const err = vec.norm(vec.sub(Asym, recon))
+const recon = line.matmul(line.matmul(eig.vectors, D6), line.transpose(eig.vectors))
+const err = line.norm(line.sub(Asym, recon))
 ui.display(`||A − V D Vᵀ|| = ${err.toExponential(2)}`)
 
 /// md
@@ -186,10 +186,10 @@ ui.display(`||A − V D Vᵀ|| = ${err.toExponential(2)}`)
 
 The bridge wraps each `NdArray` in a `VecArray` with Python dunder methods. Operators (`+`, `-`, `*`, `/`, `@`, `**`) work via `__add__`/`__radd__`/etc.; iteration yields scalars (1D) or rows (2D); slicing produces copies.
 
-Convention: extension registers as its package name (`vec`); user aliases:
+Convention: extension registers as its package name (`line`); user aliases:
 
 /// adder
-import vec as np
+import line as np
 
 a = np.array([1, 2, 3, 4, 5])
 b = np.array([10, 20, 30, 40, 50])
@@ -212,10 +212,10 @@ print(f"sum(a+b) = {total}, mean = {mn}")
 /// md
 ## adder — linear algebra
 
-Same `np.linalg` namespace as you'd use with NumPy, just backed by vec's pure-JS implementations:
+Same `np.linalg` namespace as you'd use with NumPy, just backed by line's pure-JS implementations:
 
 /// adder
-import vec as np
+import line as np
 
 # Stress tensor — same example, idiomatic Python.
 sigma = np.array([
@@ -239,7 +239,7 @@ print(VVt)
 ## adder — solve and lstsq
 
 /// adder
-import vec as np
+import line as np
 
 # Solve a 3×3 system.
 A = np.array([[4, 1, 2], [1, 5, 1], [2, 1, 3]])
@@ -260,11 +260,11 @@ print(f"slope = {beta[0]:.4f}  (true: 1.5)")
 print(f"intercept = {beta[1]:.4f}  (true: 0.5)")
 
 /// md
-## when to use `vec` vs `natra`
+## when to use `line` vs `natra`
 
 Both ship with Auditable, both register adder bridges. Pick per-task:
 
-| | `@gcu/vec` | `@gcu/natra` |
+| | `@gcu/line` | `@gcu/natra` |
 |---|---|---|
 | Backing | `Float64Array` (pure JS) | wasm linear memory |
 | Op cost (small) | very fast (V8 JIT) | wasm dispatch overhead |
@@ -273,4 +273,4 @@ Both ship with Auditable, both register adder bridges. Pick per-task:
 | dtype | f64 only | i8/u8/i16/u16/i32/u32/f32/f64 |
 | When to reach for it | daily-driver work | hot kernels, big arrays |
 
-Rule of thumb: `vec` for "I just want to add two arrays and sum them"; `natra` for "I'm doing real linear algebra on a 1M-cell block model."
+Rule of thumb: `line` for "I just want to add two arrays and sum them"; `natra` for "I'm doing real linear algebra on a 1M-cell block model."

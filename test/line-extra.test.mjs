@@ -20,7 +20,7 @@ import {
   stack, concat,
   // linalg helpers
   diag, outer, tril, triu, matmul,
-} from '../ext/vec/src/index.js';
+} from '../ext/line/src/index.js';
 
 const close = (a, b, tol = 1e-12) => Math.abs(a - b) <= tol;
 const arrClose = (a, b, tol = 1e-12) => {

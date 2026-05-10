@@ -1,5 +1,5 @@
 // vec adapter tests — drive Python code through pythonExecute and verify
-// VecArray operations end-to-end.
+// LineArray operations end-to-end.
 
 import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
@@ -24,7 +24,7 @@ globalThis.window = globalThis;
 globalThis.CSS = { escape: s => s };
 
 const { pythonExecute } = await import('../ext/adder/src/cell.js');
-await import('../ext/vec/adder.js');  // triggers registration on _auditableExtensions
+await import('../ext/line/adder.js');  // triggers registration on _auditableExtensions
 
 async function pyEval(code) {
   return pythonExecute(code, {}, { id: 'test' });
@@ -41,14 +41,14 @@ const arrClose = (a, b, tol = 1e-9) => {
 // Registration
 // ═════════════════════════════════════════════════════════════════════
 
-describe('vec adder registration', () => {
+describe('line adder registration', () => {
   it('registers on window._auditableExtensions', () => {
-    assert.ok(window._auditableExtensions.vec);
+    assert.ok(window._auditableExtensions.line);
   });
 
-  it('import vec as np works', async () => {
+  it('import line as np works', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 a = np.array([1, 2, 3])
 result = a.tolist()
 `);
@@ -63,7 +63,7 @@ result = a.tolist()
 describe('array creation', () => {
   it('np.array from nested list (2D)', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 a = np.array([[1, 2], [3, 4]])
 result = a.shape
 `);
@@ -72,7 +72,7 @@ result = a.shape
 
   it('np.zeros with list shape', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 a = np.zeros([3])
 result = a.tolist()
 `);
@@ -81,7 +81,7 @@ result = a.tolist()
 
   it('np.ones / np.full', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 a = np.ones([2, 2]).tolist()
 b = np.full([3], 7.0).tolist()
 result = (a, b)
@@ -91,7 +91,7 @@ result = (a, b)
 
   it('np.eye(n)', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 result = np.eye(3).tolist()
 `);
     assert.deepStrictEqual(r.defines.result, [[1, 0, 0], [0, 1, 0], [0, 0, 1]]);
@@ -99,7 +99,7 @@ result = np.eye(3).tolist()
 
   it('np.arange and np.linspace', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 a = np.arange(5).tolist()
 b = np.arange(2, 7).tolist()
 c = np.linspace(0, 1, 5).tolist()
@@ -118,7 +118,7 @@ result = (a, b, c)
 describe('operator overloads', () => {
   it('a + b with two arrays', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 a = np.array([1, 2, 3])
 b = np.array([10, 20, 30])
 result = (a + b).tolist()
@@ -128,7 +128,7 @@ result = (a + b).tolist()
 
   it('scalar + array (rdunder)', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 a = np.array([1, 2, 3])
 result = (10 + a).tolist()
 `);
@@ -137,7 +137,7 @@ result = (10 + a).tolist()
 
   it('array - scalar', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 a = np.array([5, 10, 15])
 result = (a - 1).tolist()
 `);
@@ -146,7 +146,7 @@ result = (a - 1).tolist()
 
   it('array * array', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 a = np.array([2, 3, 4])
 b = np.array([5, 6, 7])
 result = (a * b).tolist()
@@ -156,7 +156,7 @@ result = (a * b).tolist()
 
   it('array / scalar', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 a = np.array([10, 20, 30])
 result = (a / 2).tolist()
 `);
@@ -165,7 +165,7 @@ result = (a / 2).tolist()
 
   it('-a (neg)', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 a = np.array([1, -2, 3])
 result = (-a).tolist()
 `);
@@ -174,7 +174,7 @@ result = (-a).tolist()
 
   it('a ** 2 (pow scalar)', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 a = np.array([1, 2, 3, 4])
 result = (a ** 2).tolist()
 `);
@@ -183,7 +183,7 @@ result = (a ** 2).tolist()
 
   it('A @ B (matmul)', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 A = np.array([[1, 2], [3, 4]])
 B = np.array([[5, 6], [7, 8]])
 result = (A @ B).tolist()
@@ -193,7 +193,7 @@ result = (A @ B).tolist()
 
   it('broadcast: row vec + matrix', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 m = np.array([[1, 2, 3], [4, 5, 6]])
 v = np.array([10, 20, 30])
 result = (m + v).tolist()
@@ -209,7 +209,7 @@ result = (m + v).tolist()
 describe('indexing', () => {
   it('1D integer indexing', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 a = np.array([10, 20, 30, 40])
 result = (a[0], a[-1], a[2])
 `);
@@ -218,16 +218,16 @@ result = (a[0], a[-1], a[2])
 
   it('1D slice', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 a = np.array([10, 20, 30, 40, 50])
 result = a[1:4].tolist()
 `);
     assert.deepStrictEqual(r.defines.result, [20, 30, 40]);
   });
 
-  it('2D row indexing returns VecArray', async () => {
+  it('2D row indexing returns LineArray', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 m = np.array([[1, 2, 3], [4, 5, 6]])
 row = m[1]
 result = row.tolist()
@@ -240,7 +240,7 @@ result = row.tolist()
     // chained `m[i][j]` is the supported idiom. (vec's adapter still accepts
     // array-tuple keys for callers that construct them explicitly.)
     const r = await pyEval(`
-import vec as np
+import line as np
 m = np.array([[1, 2, 3], [4, 5, 6]])
 result = m[1][2]
 `);
@@ -249,7 +249,7 @@ result = m[1][2]
 
   it('2D slice on a single axis', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 m = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
 result = m[1:3].tolist()
 `);
@@ -258,7 +258,7 @@ result = m[1:3].tolist()
 
   it('1D setitem', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 a = np.array([1, 2, 3])
 a[1] = 99
 result = a.tolist()
@@ -266,9 +266,9 @@ result = a.tolist()
     assert.deepStrictEqual(r.defines.result, [1, 99, 3]);
   });
 
-  it('2D row setitem with VecArray', async () => {
+  it('2D row setitem with LineArray', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 m = np.zeros([2, 3])
 v = np.array([1, 2, 3])
 m[0] = v
@@ -285,7 +285,7 @@ result = m.tolist()
 describe('methods and reductions', () => {
   it('a.sum() / np.sum(a)', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 a = np.array([1, 2, 3, 4])
 result = (a.sum(), np.sum(a))
 `);
@@ -294,7 +294,7 @@ result = (a.sum(), np.sum(a))
 
   it('a.mean() / a.max() / a.min()', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 a = np.array([3, 1, 4, 1, 5, 9, 2, 6])
 result = (a.mean(), a.max(), a.min())
 `);
@@ -306,7 +306,7 @@ result = (a.mean(), a.max(), a.min())
 
   it('axis-aware sum', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 m = np.array([[1, 2, 3], [4, 5, 6]])
 result = (m.sum(0).tolist(), m.sum(1).tolist())
 `);
@@ -315,7 +315,7 @@ result = (m.sum(0).tolist(), m.sum(1).tolist())
 
   it('a.dot(b) and np.dot', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 a = np.array([1, 2, 3])
 b = np.array([4, 5, 6])
 result = (a.dot(b), np.dot(a, b))
@@ -325,7 +325,7 @@ result = (a.dot(b), np.dot(a, b))
 
   it('a.T (transpose property)', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 m = np.array([[1, 2, 3], [4, 5, 6]])
 result = m.T.tolist()
 `);
@@ -334,7 +334,7 @@ result = m.T.tolist()
 
   it('reshape and flatten', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 a = np.arange(6)
 m = a.reshape([2, 3])
 f = m.flatten()
@@ -345,7 +345,7 @@ result = (m.tolist(), f.tolist())
 
   it('np.sqrt / np.exp / np.sin element-wise', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 a = np.array([1, 4, 9])
 result = np.sqrt(a).tolist()
 `);
@@ -360,7 +360,7 @@ result = np.sqrt(a).tolist()
 describe('iteration', () => {
   it('for x in 1D array yields scalars', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 a = np.array([10, 20, 30])
 total = 0
 for x in a:
@@ -370,9 +370,9 @@ result = total
     assert.equal(r.defines.result, 60);
   });
 
-  it('for row in 2D array yields VecArrays', async () => {
+  it('for row in 2D array yields LineArrays', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 m = np.array([[1, 2, 3], [4, 5, 6]])
 sums = []
 for row in m:
@@ -390,7 +390,7 @@ result = sums
 describe('np.linalg', () => {
   it('np.linalg.solve', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 A = np.array([[2, 1], [5, 7]])
 b = np.array([11, 13])
 x = np.linalg.solve(A, b)
@@ -401,7 +401,7 @@ result = x.tolist()
 
   it('np.linalg.inv round-trip', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 A = np.array([[4, 7], [2, 6]])
 Ai = np.linalg.inv(A)
 I = A @ Ai
@@ -414,7 +414,7 @@ result = I.tolist()
 
   it('np.linalg.det', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 A = np.array([[1, 2], [3, 4]])
 result = np.linalg.det(A)
 `);
@@ -423,7 +423,7 @@ result = np.linalg.det(A)
 
   it('np.linalg.cholesky', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 A = np.array([[4, 2], [2, 3]])
 L = np.linalg.cholesky(A)
 recon = L @ L.T
@@ -436,7 +436,7 @@ result = recon.tolist()
 
   it('np.linalg.eigh3 returns [values, vectors]', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 A = np.array([[4, 1, 2], [1, 5, 1], [2, 1, 3]])
 res = np.linalg.eigh3(A)
 vals = res[0].tolist()
@@ -452,7 +452,7 @@ result = (vals, vecs_shape)
 
   it('np.linalg.lstsq recovers regression coefficients', async () => {
     const r = await pyEval(`
-import vec as np
+import line as np
 # Fit y = 2x + 3 to 5 noiseless points.
 A = np.array([[0, 1], [1, 1], [2, 1], [3, 1], [4, 1]])
 b = np.array([3, 5, 7, 9, 11])

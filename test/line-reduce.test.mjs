@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {
   from, range, ones, zeros,
   sum, mean, max, min, std, variance, norm, dot,
-} from '../ext/vec/src/index.js';
+} from '../ext/line/src/index.js';
 
 const close = (a, b, tol = 1e-12) => Math.abs(a - b) <= tol;
 const arrClose = (a, b, tol = 1e-12) => {

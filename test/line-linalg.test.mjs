@@ -12,7 +12,7 @@ import {
   solve, det, inv, cholesky, solveCholesky,
   lstsq,
   eigSym3, eigSym,
-} from '../ext/vec/src/index.js';
+} from '../ext/line/src/index.js';
 
 const close = (a, b, tol = 1e-9) => Math.abs(a - b) <= tol;
 const arrClose = (a, b, tol = 1e-9) => {

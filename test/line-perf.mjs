@@ -50,7 +50,7 @@
 // (5) Multi-threaded OpenBLAS hurts small linalg (massive thread spin-up)
 //     and helps big dense matmul (4× boost at 500×500).
 
-import * as vec from '../ext/vec/index.js';
+import * as vec from '../ext/line/index.js';
 import { natra } from '../ext/natra/index.js';
 
 // natra arenas reclaim correctly when scopes don't return arrays — we use
