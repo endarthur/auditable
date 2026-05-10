@@ -22,6 +22,9 @@ const files = [
   'reduce.js',
   'linalg-mul.js',
   'linalg-solve.js',
+  'linalg-qr.js',
+  'linalg-svd.js',
+  'linalg-norms.js',
   'linalg-lstsq.js',
   'linalg-eigen.js',
 ];
@@ -91,6 +94,12 @@ export {
   diag, outer, tril, triu,
   // linalg-solve
   solve, det, inv, cholesky, solveCholesky,
+  // linalg-qr
+  qr,
+  // linalg-svd
+  svd, pinv, matrix_rank,
+  // linalg-norms
+  vecNorm, matNorm, cross, kron, matrix_power, solve_triangular,
   // linalg-lstsq
   lstsq,
   // linalg-eigen

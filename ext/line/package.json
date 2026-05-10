@@ -1,6 +1,6 @@
 {
   "name": "@gcu/line",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Linear algebra for JS — TypedArray-based ndarray with NumPy-style broadcasting, element-wise ops, reductions, dense BLAS-1/2 + small dense linear algebra (solve, cholesky, lstsq, eigSym). Pure JS, no wasm, no dependencies. Hand-tuned hot paths beat Wasm SIMD on BLAS-1 reductions via V8 AVX f64x4 auto-vectorization.",
   "type": "module",
   "main": "index.js",

@@ -32,5 +32,10 @@ export {
 export {
   solve, det, inv, cholesky, solveCholesky,
 } from './linalg-solve.js';
+export { qr } from './linalg-qr.js';
+export { svd, pinv, matrix_rank } from './linalg-svd.js';
+export {
+  vecNorm, matNorm, cross, kron, matrix_power, solve_triangular,
+} from './linalg-norms.js';
 export { lstsq } from './linalg-lstsq.js';
 export { eigSym3, eigSym } from './linalg-eigen.js';
