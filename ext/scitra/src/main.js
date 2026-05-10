@@ -2,6 +2,13 @@
 // Re-exports the API surface organized by scipy-shaped namespace.
 
 import { norm, lognorm } from './stats/distributions.js';
+import {
+  weighted_mean, weighted_var, weighted_std,
+  weighted_percentile, weighted_median,
+  ecdf, histogram, moments,
+} from './stats/descriptives.js';
+import { normal_score_transform } from './stats/transform.js';
+import { gaussian_kde } from './stats/kde.js';
 import { erf, erfc, erfinv, ndtri, lgamma, gamma, lbeta } from './util/special.js';
 import { mulberry32, makeRng, makeNormalSampler } from './util/random.js';
 
@@ -9,6 +16,14 @@ export const stats = {
   // distributions
   norm,
   lognorm,
+  // descriptives
+  weighted_mean, weighted_var, weighted_std,
+  weighted_percentile, weighted_median,
+  ecdf, histogram, moments,
+  // transforms
+  normal_score_transform,
+  // kde
+  gaussian_kde,
 };
 
 export const special = {
@@ -24,5 +39,12 @@ export const random = {
 
 // Direct re-exports for tree-shaking convenience.
 export { norm, lognorm };
+export {
+  weighted_mean, weighted_var, weighted_std,
+  weighted_percentile, weighted_median,
+  ecdf, histogram, moments,
+};
+export { normal_score_transform };
+export { gaussian_kde };
 export { erf, erfc, erfinv, ndtri, lgamma, gamma, lbeta };
 export { mulberry32, makeRng, makeNormalSampler };
