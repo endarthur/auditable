@@ -65,4 +65,28 @@ elif mode == 'ddot':
         ts.sort()
         results[f'{n}_f32'] = ts[10]
 
+elif mode == 'svd':
+    for N in sizes:
+        # Square N×N. Both numpy.linalg.svd (LAPACK gesdd) and float32 path.
+        A = np.random.rand(N, N).astype(np.float64)
+        A32 = A.astype(np.float32)
+        for _ in range(3):
+            np.linalg.svd(A, full_matrices=False)
+            np.linalg.svd(A32, full_matrices=False)
+        inner = max(1, min(20, 5_000_000 // (N * N * N + 1)))
+        ts = []
+        for _ in range(15):
+            t0 = time.perf_counter()
+            for _ in range(inner): np.linalg.svd(A, full_matrices=False)
+            ts.append((time.perf_counter() - t0) / inner * 1e6)
+        ts.sort()
+        results[f'{N}_f64'] = ts[7]
+        ts = []
+        for _ in range(15):
+            t0 = time.perf_counter()
+            for _ in range(inner): np.linalg.svd(A32, full_matrices=False)
+            ts.append((time.perf_counter() - t0) / inner * 1e6)
+        ts.sort()
+        results[f'{N}_f32'] = ts[7]
+
 print(json.dumps(results))
