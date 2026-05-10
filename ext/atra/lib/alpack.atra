@@ -44,7 +44,7 @@ begin
   for i := 0, n2
     vx := v128.load(x, i)
     vy := v128.load(y, i)
-    vy := va * vx + vy
+    vy := f64x2.relaxed_madd(va, vx, vy)
     call v128.store(y, i, vy)
   end for
   ! scalar tail for odd element
@@ -65,6 +65,13 @@ begin
   !   for i := 0, n
   !     alas.ddot := alas.ddot + x[i] * y[i]
   !   end for
+  ! NOTE: this loop uses separate mul + add rather than f64x2.relaxed_madd.
+  ! The reduction has a single accumulator vs that's recurrence-dependent
+  ! (vs[k] = vs[k-1] + ...); FMA serializes this dependency chain at FMA
+  ! latency, while separate mul+add lets the CPU overlap multiplication
+  ! with the previous iteration's add. Empirically ~30% faster than FMA
+  ! at 10K-100K on AMD Ryzen AI 9 HX 370. dgemm/dger/dgemv use FMA because
+  ! their inner loops have m×n parallel accumulators (no serialization).
   vs := f64x2.splat(0.0)
   n2 := n / 2
   for i := 0, n2
@@ -86,6 +93,7 @@ var
   i, n2: i32
   vx, vs: f64x2
 begin
+  ! Same single-accumulator caveat as ddot — see note there.
   vs := f64x2.splat(0.0)
   n2 := n / 2
   for i := 0, n2
@@ -173,13 +181,26 @@ subroutine alas.dgemv(
   a: array f64; x: array f64; y: array f64;
   m, n: i32; alpha, beta: f64
 )
-var i, j: i32; s: f64
+var
+  i, j, n2, a_row, joff: i32
+  s: f64
+  vs, va, vx: f64x2
 begin
+  n2 := n / 2
   for i := 0, m
-    s := 0.0
-    for j := 0, n
-      s := s + a[i, n, j] * x[j]
+    vs := f64x2.splat(0.0)
+    a_row := i * n * 8
+    for j := 0, n2
+      joff := j * 16
+      va := v128.load_at(a, a_row + joff)
+      vx := v128.load(x, j)
+      vs := f64x2.relaxed_madd(va, vx, vs)
     end for
+    s := f64x2.extract_lane(vs, 0) + f64x2.extract_lane(vs, 1)
+    if (n2 * 2 < n) then
+      j := n2 * 2
+      s := s + a[i, n, j] * x[j]
+    end if
     y[i] := alpha * s + beta * y[i]
   end for
 end
@@ -239,13 +260,27 @@ subroutine alas.dger(
   a: array f64; x: array f64; y: array f64;
   m, n: i32; alpha: f64
 )
-var i, j: i32; t: f64
+var
+  i, j, n2, a_row, joff: i32
+  t: f64
+  tv, vy, va: f64x2
 begin
+  n2 := n / 2
   for i := 0, m
     t := alpha * x[i]
-    for j := 0, n
-      a[i, n, j] := a[i, n, j] + t * y[j]
+    tv := f64x2.splat(t)
+    a_row := i * n * 8
+    for j := 0, n2
+      joff := j * 16
+      vy := v128.load(y, j)
+      va := v128.load_at(a, a_row + joff)
+      va := f64x2.relaxed_madd(tv, vy, va)
+      call v128.store_at(a, a_row + joff, va)
     end for
+    if (n2 * 2 < n) then
+      j := n2 * 2
+      a[i, n, j] := a[i, n, j] + t * y[j]
+    end if
   end for
 end
 
@@ -381,10 +416,10 @@ end
 ! A is m x k, B is k x n, C is m x n
 !
 ! Uses (i, p, j) loop order so the inner loop becomes a daxpy-style update
-! `c[i, j] += t * b[p, j]`. Both reads and the write are stride-1 in j —
-! cache-friendly (each row of B and C streams sequentially through L1) and
-! V8/wasm-JIT can vectorize the inner loop. The textbook (i, j, k) order
-! reads b[p, j] with stride n and is ~2-3× slower at the same LOC.
+! `c[i, j] += t * b[p, j]`. Vectorized with f64x2 + relaxed_madd over the
+! j axis: each iteration computes 2 elements with a single fused-multiply-
+! add. Byte-offset SIMD addressing (v128.load_at) handles odd column count
+! n cleanly — no per-shape branching.
 !
 ! beta is handled in a prologue (scale C, or zero it) so the inner loop is
 ! a pure accumulation.
@@ -393,8 +428,9 @@ subroutine alas.dgemm(
   m, n, k: i32; alpha, beta: f64
 )
 var
-  i, j, p: i32
+  i, j, p, n2, c_row, b_row, joff: i32
   t: f64
+  tv, vb, vc: f64x2
 begin
   ! Phase 1: prepare C.
   if (beta == 0.0) then
@@ -411,13 +447,26 @@ begin
     end for
   end if
 
-  ! Phase 2: C += alpha * A * B in (i, p, j) order.
+  ! Phase 2: C += alpha * A * B with SIMD inner loop.
+  n2 := n / 2
   for i := 0, m
+    c_row := i * n * 8         ! byte offset of row i in C
     for p := 0, k
       t := alpha * a[i, k, p]
-      for j := 0, n
-        c[i, n, j] := c[i, n, j] + t * b[p, n, j]
+      tv := f64x2.splat(t)
+      b_row := p * n * 8       ! byte offset of row p in B
+      for j := 0, n2
+        joff := j * 16
+        vb := v128.load_at(b, b_row + joff)
+        vc := v128.load_at(c, c_row + joff)
+        vc := f64x2.relaxed_madd(tv, vb, vc)
+        call v128.store_at(c, c_row + joff, vc)
       end for
+      ! scalar tail for odd n
+      if (n2 * 2 < n) then
+        j := n2 * 2
+        c[i, n, j] := c[i, n, j] + t * b[p, n, j]
+      end if
     end for
   end for
 end
@@ -491,12 +540,14 @@ subroutine alpack.dgetrf(
   a: array f64; n: i32;
   ipiv: array i32; info: array i32
 )
-var i, j, k, pivot: i32; t, inv: f64
+var
+  i, j, k, pivot, nrem, nrem2, ai_base, ak_base, joff: i32
+  t, inv, m: f64
+  mv, vk, vi: f64x2
 begin
   info[0] := 0
   for k := 0, n
     ! find pivot in column k from row k..n-1
-    ! use inline search (idamax operates on contiguous vector)
     pivot := k
     t := abs(a[k, n, k])
     for i := k + 1, n
@@ -521,13 +572,29 @@ begin
       call return()
     end if
 
-    ! eliminate below diagonal
+    ! eliminate below diagonal: rank-1 update of the trailing (n-k-1)×(n-k-1)
+    ! submatrix using the daxpy/nmadd pattern over the inner j loop.
     inv := 1.0 / a[k, n, k]
+    nrem := n - k - 1
+    nrem2 := nrem / 2
+    ak_base := (k * n + k + 1) * 8
     for i := k + 1, n
-      a[i, n, k] := a[i, n, k] * inv
-      for j := k + 1, n
-        a[i, n, j] := a[i, n, j] - a[i, n, k] * a[k, n, j]
+      m := a[i, n, k] * inv
+      a[i, n, k] := m
+      mv := f64x2.splat(m)
+      ai_base := (i * n + k + 1) * 8
+      for j := 0, nrem2
+        joff := j * 16
+        vk := v128.load_at(a, ak_base + joff)
+        vi := v128.load_at(a, ai_base + joff)
+        vi := f64x2.relaxed_nmadd(mv, vk, vi)
+        call v128.store_at(a, ai_base + joff, vi)
       end for
+      ! scalar tail when nrem is odd
+      if (nrem2 * 2 < nrem) then
+        j := k + 1 + nrem2 * 2
+        a[i, n, j] := a[i, n, j] - m * a[k, n, j]
+      end if
     end for
   end for
 end
