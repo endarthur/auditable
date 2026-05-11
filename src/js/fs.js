@@ -3,8 +3,10 @@
 // Files are base64-encoded (gzip-compressed when beneficial) in an AUDITABLE-FS comment block.
 // API lives at notebook.fs — available in every code cell.
 
-// Dirty signaling flows through the hook bus (window.auditable.hooks)
-// to avoid importing editor.js (which pulls in cm6.js and the full editor chain).
+// Dirty signaling flows through the hook bus (direct hooks import — the
+// window.auditable.hooks wrapper isn't ready at module-eval time since
+// globals.js loads after this module).
+import * as hooks from './hooks.js';
 
 // ── MIME / TYPE HELPERS ──
 
@@ -104,9 +106,8 @@ export function base64ToUint8(b64) {
 // debounce on their side.
 
 function notifyFsDirty() {
-  if (typeof window === 'undefined' || !window.auditable?.hooks) return;
-  window.auditable.hooks.emit('notebook:dirty');
-  window.auditable.hooks.emit('fs:changed');
+  hooks.emit('notebook:dirty');
+  hooks.emit('fs:changed');
 }
 
 // ── FS MAP ──
@@ -1035,17 +1036,16 @@ if (typeof window !== 'undefined') {
     ]);
   };
 
-  // fs:changed bus subscriber — debounces 150ms before refreshing the panel
-  // (replaces the legacy window._fsPanelRefresh callable).
+  // fs:changed bus subscriber — debounces 150ms before refreshing the panel.
+  // Subscribes via the direct hooks import; the window.auditable.hooks
+  // surface isn't wired until globals.js evaluates (after this module).
   let _panelRefreshTimer = null;
-  if (typeof window !== 'undefined' && window.auditable?.hooks) {
-    window.auditable.hooks.on('fs:changed', () => {
-      if (!_fsState.visible) return;
-      clearTimeout(_panelRefreshTimer);
-      _panelRefreshTimer = setTimeout(() => {
-        _fsState.cache.clear();
-        refreshFsPanel();
-      }, 150);
-    });
-  }
+  hooks.on('fs:changed', () => {
+    if (!_fsState.visible) return;
+    clearTimeout(_panelRefreshTimer);
+    _panelRefreshTimer = setTimeout(() => {
+      _fsState.cache.clear();
+      refreshFsPanel();
+    }, 150);
+  });
 }

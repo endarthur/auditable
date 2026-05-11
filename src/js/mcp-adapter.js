@@ -9,6 +9,7 @@
 //   - // %private: hard opt-out, overrides everything (invisible unless %mcp describe)
 
 import { S } from './state.js';
+import * as hooks from './hooks.js';
 import { buildDAG, isManual, isNorun, parseCellName, isPrivate, isMcp, isMcpRw, parseMcpDescribe, isMcpManifest, parseMcpFs } from './dag.js';
 import { runDAG, runAll, renderMdCell, renderHtmlCell } from './exec.js';
 import { addCell } from './cell-ops.js';
@@ -1526,38 +1527,37 @@ if (window.__auditable_mcp) {
 // ── Execution completion notification ──
 // Subscribes to dag:complete on the hook bus (replaces window._mcpNotifyExecComplete).
 
-if (window.auditable?.hooks) {
-  window.auditable.hooks.on('dag:complete', () => {
-    const mcp = window.__auditable_mcp;
-    if (!mcp || mcp.state !== 'connected') return;
-    mcp.notify('execution/complete', {
-      errors: _mcpCollectErrors(),
-      cellCount: S.cells.length,
-      timestamp: new Date().toISOString(),
-    });
-    _mcpRefreshPanel(); // refresh audit log in panel
+// Subscribe via the direct hooks import — window.auditable.hooks is wired
+// at globals.js's module-eval time, which runs *after* this module, so the
+// window-surface check would silently skip the subscription.
+hooks.on('dag:complete', () => {
+  const mcp = window.__auditable_mcp;
+  if (!mcp || mcp.state !== 'connected') return;
+  mcp.notify('execution/complete', {
+    errors: _mcpCollectErrors(),
+    cellCount: S.cells.length,
+    timestamp: new Date().toISOString(),
   });
-}
+  _mcpRefreshPanel(); // refresh audit log in panel
+});
 
 // Export audit log for UI panel access
 window._mcpAuditLog = _mcpAuditLog;
 
 // ── Re-lock / unlock hooks (subscribed via the auditable hook bus) ──
 
-if (window.auditable?.hooks) {
-  window.auditable.hooks.on('crypto:locked', () => {
-    _mcpAuditLog.length = 0;
-    _mcpAutoAccept.clear();
-    _mcpRefreshPanel();
-    if (navigator.modelContext && navigator.modelContext.notifyToolsChanged) {
-      navigator.modelContext.notifyToolsChanged();
-    }
-  });
+hooks.on('crypto:locked', () => {
+  _mcpAuditLog.length = 0;
+  _mcpAutoAccept.clear();
+  _mcpRefreshPanel();
+  if (navigator.modelContext && navigator.modelContext.notifyToolsChanged) {
+    navigator.modelContext.notifyToolsChanged();
+  }
+});
 
-  window.auditable.hooks.on('crypto:unlocked', () => {
-    _mcpRefreshPanel();
-    if (navigator.modelContext && navigator.modelContext.notifyToolsChanged) {
-      navigator.modelContext.notifyToolsChanged();
-    }
-  });
-}
+hooks.on('crypto:unlocked', () => {
+  _mcpRefreshPanel();
+  if (navigator.modelContext && navigator.modelContext.notifyToolsChanged) {
+    navigator.modelContext.notifyToolsChanged();
+  }
+});
