@@ -3539,11 +3539,22 @@ function scanIdentifiers(ctx, node) {
 // Spec §8: Type propagation, constant folding, DCE, dependency extraction
 
 
-// Helper: take union of two types. Identical → that type. Otherwise DYNAMIC.
+// Helper: take union of two types — the widest concrete type that can
+// represent both. For numeric pairs, delegates to arithmeticResult which
+// follows the JS numeric promotion hierarchy (f64 > f32 > i64 > i32 > i16
+// > i8, float wins over int at same rank). Without this, loop variables
+// initialized as i32 then assigned float in the body would degrade to
+// DYNAMIC and lose all type hints downstream — the smart union keeps the
+// f64 inference, letting emit-js drop the wrong `| 0` coercion while
+// preserving useful info elsewhere.
 function unionType(a, b) {
   if (!a) return b || DYNAMIC;
   if (!b) return a;
   if (typeEq(a, b)) return a;
+  // Both concrete numeric → widen via JS arithmetic promotion rules.
+  if (isConcrete(a) && isConcrete(b) && isNumeric(a) && isNumeric(b)) {
+    return arithmeticResult(a, b);
+  }
   return DYNAMIC;
 }
 
