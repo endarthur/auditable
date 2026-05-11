@@ -425,7 +425,25 @@ export function propagateTypes(module, opts = {}) {
             const elT = inferIterableElementType(op.args[0], module.ops);
             if (elT) nameTypes.set(op.target_name, elT);
           }
-          if (op.body) propagate(op.body);
+          // Type-fixed-point — same shape as for_region. The loop body runs
+          // multiple times at runtime; a variable widened by a body
+          // assignment (`total = total + x * 0.5`) needs every read to
+          // see the widened type, not just reads after the first assign.
+          const writtenNames = new Set();
+          collectWrittenNames(op.body || [], writtenNames);
+          for (let iter = 0; iter < 4; iter++) {
+            const before = new Map();
+            for (const name of writtenNames) before.set(name, nameTypes.get(name));
+            if (op.body) propagate(op.body);
+            let stable = true;
+            for (const name of writtenNames) {
+              const prev = before.get(name);
+              const u = unionType(prev, nameTypes.get(name));
+              if (!prev || !typeEq(u, prev)) stable = false;
+              nameTypes.set(name, u);
+            }
+            if (stable) break;
+          }
           types.set(op.id, VOID);
           break;
         }
@@ -445,10 +463,32 @@ export function propagateTypes(module, opts = {}) {
         }
 
         case 'switch_region': {
+          // Walk each case with a fresh copy of the entry-time types
+          // (cases don't fall through type-info-wise even with fall-through
+          // statement semantics — every case starts from the same value
+          // env conceptually), then union writes across all cases. Mirrors
+          // the if_region branch-merge pattern.
           if (op.cases) {
+            const saved = new Map(nameTypes);
+            const writtenAcross = new Set();
+            const perCaseAfter = [];
             for (const c of op.cases) {
+              nameTypes.clear();
+              for (const [k, v] of saved) nameTypes.set(k, v);
               if (c.test_ops) propagate(c.test_ops);
               if (c.body) propagate(c.body);
+              perCaseAfter.push(new Map(nameTypes));
+              if (c.body) collectWrittenNames(c.body, writtenAcross);
+            }
+            nameTypes.clear();
+            for (const [k, v] of saved) nameTypes.set(k, v);
+            for (const name of writtenAcross) {
+              let merged = saved.get(name);
+              for (const after of perCaseAfter) {
+                const t = after.has(name) ? after.get(name) : saved.get(name);
+                merged = unionType(merged, t);
+              }
+              nameTypes.set(name, merged);
             }
           }
           types.set(op.id, VOID);

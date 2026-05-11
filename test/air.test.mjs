@@ -923,6 +923,51 @@ describe('AIR passes — loop type fixed-point (regression)', () => {
   });
 });
 
+describe('AIR passes — for-of / for-in fix-point + switch branch merge', () => {
+  // Audit follow-up: same loop-body type propagation issue affects for_of /
+  // for_in regions, and a related cross-case write-merge issue affects
+  // switch. Pin the fixes so they don't regress.
+
+  function emit(src) {
+    const m = lower(src);
+    runPasses(m);
+    return { m, js: emitJS(m, [], [], { hinted: true, cellId: 't' }) };
+  }
+
+  it('for-of body widens a loop-invariant accumulator', () => {
+    // Use a Float64Array so the loop var x is inferred as f64. Without
+    // typed-array element inference, `for (const x of [1,2,3])` leaves x
+    // as DYNAMIC and arithmetic stays dynamic, so this becomes a test of
+    // the typed-array inference path more than the fix-point per se.
+    const { m } = emit(`
+      const arr = new Float64Array(3);
+      let total = 0;
+      for (const x of arr) {
+        total = total + x;
+      }
+    `);
+    const types = extractExportTypes(m);
+    assert.equal(types.get('total').kind, 'f64',
+      'total should widen to f64 via fix-point — body adds f64 element');
+  });
+
+  it('switch with cross-case different types unions writes', () => {
+    // Each case writes y with a different type; after switch, y should be
+    // the union (f64 here, since both cases are numeric).
+    const { m } = emit(`
+      const x = 1;
+      let y = 0;
+      switch (x) {
+        case 1: y = 1; break;
+        case 2: y = 1.5; break;
+      }
+    `);
+    const types = extractExportTypes(m);
+    assert.equal(types.get('y').kind, 'f64',
+      'union(i32, f64) across switch cases should be f64');
+  });
+});
+
 describe('AIR types — unionType numeric widening (via observable behavior)', () => {
   // unionType lives in passes.js (not exported), but its behavior surfaces
   // through propagateTypes: a variable assigned i32 then f64 in different
