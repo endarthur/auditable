@@ -779,6 +779,20 @@ if (saveMod) {
   );
 }
 
+// Note: Switchboard font BINARIES are not bundled into the runtime —
+// they're fetched from Google Fonts on user opt-in (toggle in Settings)
+// and cached in localStorage. See save.js's fetchSwitchboardFonts().
+// We DO bundle the OFL.txt license string, since it must accompany any
+// embedded font payload and is small (~4.5 KB → ~1 KB gzipped).
+const oflPath = path.join(__dirname, 'ext/switchboard/fonts/OFL.txt');
+const oflText = fs.existsSync(oflPath) ? fs.readFileSync(oflPath, 'utf8') : '';
+if (saveMod) {
+  saveMod.source = saveMod.source.replace(
+    "const __SWITCHBOARD_OFL__ = '';",
+    () => 'const __SWITCHBOARD_OFL__ = ' + JSON.stringify(oflText) + ';'
+  );
+}
+
 // 5. Assemble final HTML
 function assemble(jsCode) {
   return `<!DOCTYPE html>
@@ -790,11 +804,23 @@ function assemble(jsCode) {
   Raw file access bypasses the notebook's governance model.
 -->
 <!-- https://github.com/endarthur/auditable — MIT license -->
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Auditable</title>
+<script data-theme-init>
+// First-paint theme: honor explicit data-theme attribute (saved notebooks
+// embed their chosen theme), otherwise OS preference, falling back to dark.
+// Runs before <style> so styles paint with the right swatches from frame 0.
+// data-theme-init attribute keeps the runtime-compression regex from
+// matching this script instead of the main runtime block.
+(function(){try{
+  if(document.documentElement.hasAttribute('data-theme'))return;
+  var prefersLight=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches;
+  document.documentElement.setAttribute('data-theme',prefersLight?'light':'dark');
+}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();
+</script>
 <style id="auditable-app-css">
 ${appCss}
 </style>

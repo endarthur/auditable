@@ -9,7 +9,7 @@ import { registerExtension, _ctUninstallPlugin, getExtension, getCellType, getTa
 import { registerProvider } from './stdlib.js';
 import { convertCell, moveCell } from './cell-ops.js';
 import { toggleAutorun } from './editor.js';
-import { toggleSettings, togglePresent, applyTheme, applyFontSize, applyWidth, applyLineNumbers, applyHeader, applyExecMode, applyRunOnLoad, applyShowToggle, applyGlobalExecMode, applyGlobalRunOnLoad, applyEditorView } from './settings.js';
+import { toggleSettings, togglePresent, applyTheme, applyFontSize, applyWidth, applyLineNumbers, applyHeader, applyExecMode, applyRunOnLoad, applyShowToggle, applyGlobalExecMode, applyGlobalRunOnLoad, applyEditorView, applyEmbedFonts } from './settings.js';
 import { toggleUpdate, checkForUpdate, applyOnlineUpdate, proceedUpdate, cancelUpdate, updateFromFile } from './update.js';
 import { saveNotebook, savePackedNotebook, setSaveMode, toggleSaveTray, exportAsTxt, showExportDialog, doExportApp, closeExportDialog } from './save.js';
 import { insertAt, getPreferredCodeType, setPreferredCodeType, setPreferredAndInsert, toggleCodeTray, updateToolbarCodeBtn } from './ui.js';
@@ -66,6 +66,7 @@ window.applyShowToggle = applyShowToggle;
 window.applyGlobalExecMode = applyGlobalExecMode;
 window.applyGlobalRunOnLoad = applyGlobalRunOnLoad;
 window.applyEditorView = applyEditorView;
+window.applyEmbedFonts = applyEmbedFonts;
 
 // update
 window.toggleUpdate = toggleUpdate;

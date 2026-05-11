@@ -86,6 +86,13 @@
       <option value="light">light</option>
     </select>
   </div>
+  <div class="settings-row">
+    <label title="embed Barlow + Space Mono fonts into the saved notebook (~140 KB)">embed fonts</label>
+    <select id="setEmbedFonts" onchange="applyEmbedFonts(this.value === 'on')">
+      <option value="off">off</option>
+      <option value="on">on</option>
+    </select>
+  </div>
 
   <h2>editor</h2>
   <div class="settings-row">

@@ -1,6 +1,7 @@
 import { S, $ } from './state.js';
 import { updateStatus, setMsg, setPreferredCodeType, getRawPreferredCodeType } from './ui.js';
 import { updateAllEditorThemes, updateAllEditorLineNumbers, updateAllEditorReadOnly } from './cm6.js';
+import { hasSwitchboardFonts, fetchSwitchboardFonts } from './save.js';
 import * as hooks from './hooks.js';
 
 // ── SETTINGS ──
@@ -132,6 +133,36 @@ export function applyEditorView(val) {
 
 export function getEditorViewSetting() { return _editorView; }
 
+let _embedFonts = false;
+
+export async function applyEmbedFonts(val) {
+  const next = val === true || val === 'true' || val === 'on';
+  const el = $('#setEmbedFonts');
+  // If turning ON for the first time, fetch fonts from Google Fonts
+  // (cached in localStorage). save.js imports from settings.js but the
+  // circular reference resolves at call time, not module-init time.
+  if (next && !_embedFonts) {
+    if (!hasSwitchboardFonts()) {
+      if (el) el.disabled = true;
+      setMsg('fetching Switchboard fonts…', 'info');
+      try {
+        await fetchSwitchboardFonts();
+        setMsg('fonts loaded — will embed in next save', 'ok');
+      } catch (e) {
+        setMsg('font fetch failed: ' + e.message, 'err');
+        if (el) { el.value = 'off'; el.disabled = false; }
+        return;
+      }
+      if (el) el.disabled = false;
+    }
+  }
+  _embedFonts = next;
+  if (el) el.value = _embedFonts ? 'on' : 'off';
+  hooks.emit("notebook:dirty");
+}
+
+export function getEmbedFontsSetting() { return _embedFonts; }
+
 export function getSettings() {
   const s = {
     theme: document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark',
@@ -148,6 +179,7 @@ export function getSettings() {
   if (rawPref && rawPref !== 'code') s.preferredCodeType = rawPref;
   if (window._sizeCompare) s.sizeCompare = true;
   if (window._sizeCompareRef === 'content') s.sizeCompareRef = 'content';
+  if (_embedFonts) s.embedFonts = true;
   return s;
 }
 
@@ -162,6 +194,7 @@ export function applySettings(s) {
   if (s.runOnLoad) applyRunOnLoad(s.runOnLoad);
   if (s.showToggle) applyShowToggle(s.showToggle);
   if (s.editorView) applyEditorView(s.editorView);
+  if (s.embedFonts !== undefined) applyEmbedFonts(s.embedFonts);
   if (s.preferredCodeType) setPreferredCodeType(s.preferredCodeType);
   // optional: size-compare.js (typeof guards for --lean builds without it)
   if (s.sizeCompare !== undefined && typeof applySizeCompare === 'function') applySizeCompare(s.sizeCompare);

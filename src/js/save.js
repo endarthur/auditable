@@ -16,6 +16,106 @@ export { encodeModules, decodeModules };
 // Injected at build time — contains the minimal JS bundle for exported apps.
 const __APP_RUNTIME__ = '';
 
+// ── SWITCHBOARD FONTS (on-demand fetch + localStorage cache) ──
+// Per spec_inbox/auditable-theme-spec.md §4.3, fonts are NOT bundled in
+// the runtime — fetched from Google Fonts when the user opts in via
+// Settings → "embed fonts". Cached in localStorage; emitted as @font-face
+// in saved notebooks when the per-notebook embedFonts setting is on.
+const __SWITCHBOARD_OFL__ = '';  // injected at build time from ext/switchboard/fonts/OFL.txt
+const _SW_FONTS_LS_KEY = 'auditable.switchboardFonts.v1';
+
+// Roman/italic + weight matrix the notebook needs. Order = canonical face order.
+const _SW_FONT_FACES = [
+  { family: 'Barlow',     weight: 400, style: 'normal', key: 'barlow400' },
+  { family: 'Barlow',     weight: 500, style: 'normal', key: 'barlow500' },
+  { family: 'Barlow',     weight: 600, style: 'normal', key: 'barlow600' },
+  { family: 'Barlow',     weight: 700, style: 'normal', key: 'barlow700' },
+  { family: 'Space Mono', weight: 400, style: 'normal', key: 'spaceMono400' },
+  { family: 'Space Mono', weight: 700, style: 'normal', key: 'spaceMono700' },
+  { family: 'Space Mono', weight: 400, style: 'italic', key: 'spaceMono400i' },
+];
+
+let _switchboardFonts = null;  // loaded lazily from localStorage on first read
+
+function _loadFontsFromCache() {
+  if (_switchboardFonts !== null) return _switchboardFonts;
+  try {
+    const raw = localStorage.getItem(_SW_FONTS_LS_KEY);
+    if (raw) _switchboardFonts = JSON.parse(raw);
+  } catch (e) { /* localStorage unavailable */ }
+  if (!_switchboardFonts) _switchboardFonts = {};
+  return _switchboardFonts;
+}
+
+function _saveFontsToCache(fonts) {
+  _switchboardFonts = fonts;
+  try { localStorage.setItem(_SW_FONTS_LS_KEY, JSON.stringify(fonts)); }
+  catch (e) { /* quota or disabled */ }
+}
+
+export function hasSwitchboardFonts() {
+  const f = _loadFontsFromCache();
+  return _SW_FONT_FACES.every(face => f[face.key]);
+}
+
+// Fetch Barlow + Space Mono from Google Fonts. Pulls the CSS, parses the
+// per-subset @font-face blocks, picks the latin (U+0000-00FF) subset for
+// each face, fetches the woff2 binaries, base64-encodes them, and caches
+// the result in localStorage. Returns the populated fonts object.
+export async function fetchSwitchboardFonts() {
+  const cssUrl = 'https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap';
+  const cssResp = await fetch(cssUrl, { headers: { 'Accept': 'text/css' } });
+  if (!cssResp.ok) throw new Error('Failed to fetch font CSS: ' + cssResp.status);
+  const css = await cssResp.text();
+
+  // Parse all @font-face blocks, pick latin subset for each requested face.
+  const blocks = [...css.matchAll(/@font-face\s*\{([^}]+)\}/g)].map(m => m[1]);
+  const urls = {};
+  for (const block of blocks) {
+    if (!/U\+0000-00FF/.test(block)) continue;  // skip non-latin subsets
+    const family = (block.match(/font-family:\s*['"]([^'"]+)['"]/) || [])[1];
+    const weight = parseInt((block.match(/font-weight:\s*(\d+)/) || [])[1], 10);
+    const style = (block.match(/font-style:\s*(\w+)/) || [])[1] || 'normal';
+    const url = (block.match(/url\((https:\/\/fonts\.gstatic\.com\/[^)]+\.woff2)\)/) || [])[1];
+    if (!family || !url) continue;
+    const face = _SW_FONT_FACES.find(f => f.family === family && f.weight === weight && f.style === style);
+    if (face) urls[face.key] = url;
+  }
+
+  const missing = _SW_FONT_FACES.filter(f => !urls[f.key]);
+  if (missing.length) throw new Error('Missing font face URLs: ' + missing.map(f => `${f.family} ${f.weight}${f.style === 'italic' ? 'i' : ''}`).join(', '));
+
+  // Fetch each woff2, base64-encode.
+  const fonts = {};
+  for (const face of _SW_FONT_FACES) {
+    const r = await fetch(urls[face.key]);
+    if (!r.ok) throw new Error('Failed to fetch ' + face.family + ' ' + face.weight + ': ' + r.status);
+    const buf = await r.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let bin = '';
+    for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    fonts[face.key] = btoa(bin);
+  }
+  _saveFontsToCache(fonts);
+  return fonts;
+}
+
+function buildFontEmbedBlock() {
+  const f = _loadFontsFromCache();
+  if (!f || !Object.keys(f).length) return { style: '', license: '' };
+  const faces = _SW_FONT_FACES
+    .filter(face => f[face.key])
+    .map(face => `@font-face{font-family:'${face.family}';font-weight:${face.weight};font-style:${face.style};font-display:swap;src:url(data:font/woff2;base64,${f[face.key]}) format('woff2');}`)
+    .join('\n');
+  if (!faces) return { style: '', license: '' };
+  return {
+    style: `<style id="auditable-fonts">\n${faces}\n</style>`,
+    license: __SWITCHBOARD_OFL__
+      ? `<!--AUDITABLE-FONTS-LICENSE\n${__SWITCHBOARD_OFL__.trim()}\nAUDITABLE-FONTS-LICENSE-->`
+      : '',
+  };
+}
+
 // (Legacy sync surfaces — initLiveSync, syncData, syncDataDebounced,
 // syncSettings, syncModules, syncFs — removed in spec E. Persistence is
 // write-on-save-only via the Persister; dirty notifications flow through
@@ -90,7 +190,8 @@ async function buildNotebookHtml(opts = {}) {
   const styles = fallbackStyleEl ? fallbackStyleEl.textContent : (appStyles + '\n' + editorStyles);
 
   // get the script — compress runtime by default for smaller saved notebooks
-  const scriptEl = document.querySelector('script');
+  // Find the runtime <script>, not the inline data-theme-init helper in <head>.
+  const scriptEl = document.querySelector('script:not([data-theme-init])');
   const script = scriptEl.textContent;
   const compress = opts.compress !== false;
   const scriptBlock = compress
@@ -237,6 +338,8 @@ async function buildNotebookHtml(opts = {}) {
     ? `<style id="auditable-app-css">\n${appStyles}\n</style>\n<style id="auditable-editor-css">\n${editorStyles}\n</style>`
     : `<style id="auditable-css">\n${styles}\n</style>`;
   const themeAttr = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+  // optional embedded fonts (per-notebook setting; data lives in __SWITCHBOARD_FONTS__)
+  const fontEmbed = getSettings().embedFonts ? buildFontEmbedBlock() : { style: '', license: '' };
 
   // data blocks: VFS-unified single block (AUDITABLE-VFS or AUDITABLE-CRYPTO).
   // Persistence flow per spec_inbox/shipped/auditable-persistence-spec.md.
@@ -264,12 +367,12 @@ async function buildNotebookHtml(opts = {}) {
   }
 
   return `<!DOCTYPE html>
-<html lang="en" data-theme="${themeAttr}">
+${fontEmbed.license ? fontEmbed.license + '\n' : ''}<html lang="en" data-theme="${themeAttr}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Auditable \u2014 ${effectiveTitle}</title>
-${styleBlock}
+${fontEmbed.style ? fontEmbed.style + '\n' : ''}${styleBlock}
 </head>
 <body>
 
