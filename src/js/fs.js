@@ -576,7 +576,7 @@ function renderBreadcrumb() {
     if (crumbPath !== root) {
       btn.onclick = () => navigateTo(crumbPath);
     } else {
-      btn.style.color = 'var(--fg-bright)';
+      btn.style.color = 'var(--au-fg)';
       btn.style.cursor = 'default';
     }
     el.appendChild(btn);
@@ -764,7 +764,7 @@ function refreshFsPanelLegacy() {
   const fs = getFs();
 
   if (!fs.size) {
-    body.innerHTML = '<div style="color:var(--fg-dim);padding:12px 0;">no files</div>';
+    body.innerHTML = '<div style="color:var(--au-fg-soft);padding:12px 0;">no files</div>';
     updateFsSummary();
     return;
   }

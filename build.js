@@ -667,6 +667,14 @@ if (fs.existsSync(sideactPath)) {
   modules.unshift({ name: 'sideact', source: sideactSrc });
 }
 
+// Add @gcu/menu bundle as a module entry (ES module with named exports)
+const menuPath = path.join(__dirname, 'ext/menu/index.js');
+if (fs.existsSync(menuPath)) {
+  let menuSrc = fs.readFileSync(menuPath, 'utf8');
+  menuSrc = menuSrc.replace(/^\n+/, '').replace(/\n+$/, '');
+  modules.unshift({ name: 'menu', source: menuSrc });
+}
+
 // Read CM6 bundle (classic IIFE, not an ES module — sets window.CM6 via var)
 const cm6Path = path.join(__dirname, 'ext/cm6/cm6.min.js');
 const cm6Src = fs.existsSync(cm6Path) ? fs.readFileSync(cm6Path, 'utf8') : '';
@@ -693,8 +701,22 @@ const template = fs.readFileSync(path.join(srcDir, 'template.html'), 'utf8');
 // 3b. Split CSS on marker into app and editor sections
 const cssMarker = '/* \u2550\u2550 APP CSS ABOVE \u2550\u2550\u2550 EDITOR CSS BELOW \u2550\u2550 */';
 const cssParts = cssRaw.split(cssMarker);
-const appCss = cssParts[0].trimEnd();
+let appCss = cssParts[0].trimEnd();
 const editorCss = cssParts.length > 1 ? cssParts[1].trimStart() : '';
+
+// 3c. Append @gcu/menu structural CSS + decorative rules. The decorative file
+// ships with its own :root defaults — strip those so auditable's palette
+// (mapped to --ui-* in src/style.css) isn't overridden.
+const menuCssPath = path.join(__dirname, 'ext/menu/menu.css');
+const menuDefaultCssPath = path.join(__dirname, 'ext/menu/menu-default.css');
+if (fs.existsSync(menuCssPath)) {
+  appCss += '\n\n' + fs.readFileSync(menuCssPath, 'utf8').trimEnd();
+}
+if (fs.existsSync(menuDefaultCssPath)) {
+  let menuDefault = fs.readFileSync(menuDefaultCssPath, 'utf8');
+  menuDefault = menuDefault.replace(/:root\s*\{[\s\S]*?\}\s*/m, '');
+  appCss += '\n\n' + menuDefault.trimEnd();
+}
 
 // 4. Inject build-time constants into module sources
 // These placeholders get replaced with environment or computed values.

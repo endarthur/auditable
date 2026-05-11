@@ -101,7 +101,7 @@ export function makeUi(cell, ctx, runDAG) {
       filterInput = document.createElement('input');
       filterInput.type = 'text';
       filterInput.placeholder = 'Filter…';
-      filterInput.style.cssText = 'width:200px;margin:2px 0 4px;padding:2px 6px;background:var(--bg);color:var(--fg);border:1px solid var(--border);font:11px var(--mono);border-radius:2px;';
+      filterInput.style.cssText = 'width:200px;margin:2px 0 4px;padding:2px 6px;background:var(--au-surface);color:var(--au-fg-muted);border:1px solid var(--au-border);font:11px var(--au-font-mono);border-radius:2px;';
       wrap.appendChild(filterInput);
     }
 

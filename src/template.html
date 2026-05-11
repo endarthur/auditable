@@ -333,14 +333,12 @@
   <span class="toolbar-title">auditable</span>
   <span class="toolbar-badges" id="toolbarBadges"></span>
   <span class="toolbar-sep"></span>
+  <span class="menubar" id="menubar"></span>
+  <span class="toolbar-sep"></span>
   <span class="toolbar-filename">
     <input type="text" id="docTitle" value="untitled" spellcheck="false">
   </span>
   <span class="toolbar-status" id="toolbarStatus"></span>
-  <span class="code-split" id="toolbarCodeCombo"><button class="toolbar-add" onclick="addCellWithUndo(getPreferredCodeType(),'',S.selectedId)">+ js</button><button class="toolbar-add code-caret" style="display:none" onclick="toggleCodeTray(this)">&#x25be;</button><div class="code-tray"></div></span>
-  <button class="toolbar-add" onclick="addCellWithUndo('md','',S.selectedId)">+ md</button>
-  <button class="toolbar-secondary" onclick="addCellWithUndo('css','',S.selectedId)">+ css</button>
-  <button class="toolbar-secondary" onclick="addCellWithUndo('html','',S.selectedId)">+ html</button>
   <span class="toolbar-sep"></span>
   <span class="transport">
     <button onclick="runSelectedCell()" title="run cell + advance (Shift+Enter)">&#x23f5;</button>
@@ -357,22 +355,6 @@
         <button onclick="showExportDialog();toggleSaveTray()">export app</button>
       </div>
     </span>
-    <div class="toolbar-overflow">
-      <button onclick="toggleToolbarMenu()" title="more">&#x22ef;</button>
-      <div class="toolbar-overflow-tray">
-        <button onclick="newNotebook();toggleToolbarMenu()">new</button>
-        <button onclick="collapseAll();toggleToolbarMenu()">collapse all</button>
-        <button onclick="expandAll();toggleToolbarMenu()">expand all</button>
-        <button onclick="$('#helpOverlay').classList.toggle('visible');toggleToolbarMenu()">help (F1)</button>
-        <button onclick="toggleSettings();toggleToolbarMenu()">settings</button>
-        <button class="toolbar-update-btn" onclick="toggleUpdate();toggleToolbarMenu()">update</button>
-        <button onclick="togglePresent();toggleToolbarMenu()">present</button>
-        <button onclick="toggleSplitView();toggleToolbarMenu()">editor view</button>
-        <button onclick="toggleFs();toggleToolbarMenu()">files</button>
-        <button onclick="toggleMcpPanel();toggleToolbarMenu()">mcp</button>
-        <button onclick="openFind(false);toggleToolbarMenu()">find (Ctrl+F)</button>
-      </div>
-    </div>
   </span>
 </div>
 

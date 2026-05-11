@@ -43,7 +43,7 @@ export function makeFileIo(cell, ctx, runDAG) {
     a.href = url;
     a.download = filename;
     a.textContent = label;
-    a.style.cssText = 'display:inline-block;padding:6px 14px;background:var(--accent);color:#111;border-radius:3px;text-decoration:none;font-weight:600;font-family:var(--mono);font-size:12px;cursor:pointer;';
+    a.style.cssText = 'display:inline-block;padding:6px 14px;background:var(--au-action);color:#111;border-radius:3px;text-decoration:none;font-weight:600;font-family:var(--au-font-mono);font-size:12px;cursor:pointer;';
     outputEl.appendChild(a);
     return a;
   };
@@ -59,20 +59,20 @@ export function makeFileIo(cell, ctx, runDAG) {
 
     const wrap = document.createElement('span');
     wrap.dataset.widgetKey = key;
-    wrap.style.cssText = 'display:flex;align-items:center;gap:8px;padding:2px 0;font-size:12px;color:var(--fg-dim);';
+    wrap.style.cssText = 'display:flex;align-items:center;gap:8px;padding:2px 0;font-size:12px;color:var(--au-fg-soft);';
 
     const lbl = document.createElement('span');
     lbl.textContent = label;
-    lbl.style.cssText = 'min-width:80px;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--fg-dim);';
+    lbl.style.cssText = 'min-width:80px;font-size:10px;letter-spacing:1px;text-transform:uppercase;color:var(--au-fg-soft);';
     wrap.appendChild(lbl);
 
     const btn = document.createElement('button');
     btn.textContent = 'choose file';
-    btn.style.cssText = 'padding:3px 10px;background:var(--bg2);border:1px solid var(--border);color:var(--fg-bright);font-family:var(--mono);font-size:11px;cursor:pointer;border-radius:2px;';
+    btn.style.cssText = 'padding:3px 10px;background:var(--au-surface-bright);border:1px solid var(--au-border);color:var(--au-fg);font-family:var(--au-font-mono);font-size:11px;cursor:pointer;border-radius:2px;';
     wrap.appendChild(btn);
 
     const nameSpan = document.createElement('span');
-    nameSpan.style.cssText = 'font-size:11px;color:var(--fg-dim);';
+    nameSpan.style.cssText = 'font-size:11px;color:var(--au-fg-soft);';
     wrap.appendChild(nameSpan);
 
     const input = document.createElement('input');
@@ -111,7 +111,7 @@ export function makeFileIo(cell, ctx, runDAG) {
 
     const zone = document.createElement('div');
     zone.dataset.widgetKey = key;
-    zone.style.cssText = 'display:flex;align-items:center;justify-content:center;padding:12px 16px;border:2px dashed var(--border-hi);border-radius:4px;color:var(--fg-dim);font-family:var(--mono);font-size:11px;cursor:pointer;min-height:48px;transition:border-color 0.15s;';
+    zone.style.cssText = 'display:flex;align-items:center;justify-content:center;padding:12px 16px;border:2px dashed var(--au-rule);border-radius:4px;color:var(--au-fg-soft);font-family:var(--au-font-mono);font-size:11px;cursor:pointer;min-height:48px;transition:border-color 0.15s;';
     zone.textContent = label;
 
     const input = document.createElement('input');
@@ -125,7 +125,7 @@ export function makeFileIo(cell, ctx, runDAG) {
       const result = { name: file.name, data, size: file.size, type: file.type };
       cell._inputs[key] = result;
       zone.textContent = file.name;
-      zone.style.borderColor = 'var(--accent)';
+      zone.style.borderColor = 'var(--au-action)';
       zone.appendChild(input);
       const cb = cell._callbacks[key];
       if (cb?.onChange) cb.onChange(result);
@@ -135,11 +135,11 @@ export function makeFileIo(cell, ctx, runDAG) {
     zone.onclick = () => input.click();
     input.onchange = () => { if (input.files[0]) handleFile(input.files[0]); };
 
-    zone.ondragover = (e) => { e.preventDefault(); zone.style.borderColor = 'var(--accent)'; };
-    zone.ondragleave = () => { zone.style.borderColor = cell._inputs[key] ? 'var(--accent)' : 'var(--border-hi)'; };
+    zone.ondragover = (e) => { e.preventDefault(); zone.style.borderColor = 'var(--au-action)'; };
+    zone.ondragleave = () => { zone.style.borderColor = cell._inputs[key] ? 'var(--au-action)' : 'var(--au-rule)'; };
     zone.ondrop = (e) => {
       e.preventDefault();
-      zone.style.borderColor = 'var(--border-hi)';
+      zone.style.borderColor = 'var(--au-rule)';
       const file = e.dataTransfer.files[0];
       if (file) handleFile(file);
     };

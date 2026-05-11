@@ -35,6 +35,7 @@ import './find.js';
 import './split.js';
 import './complete.js';
 import './keyboard.js';
+import './menubar.js';
 import './goto.js'; // @optional
 import './size-compare.js'; // @optional
 import './shim.js';
