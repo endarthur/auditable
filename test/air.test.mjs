@@ -795,6 +795,185 @@ describe('AIR lowerer — tagged templates (regression)', () => {
   });
 });
 
+describe('AIR passes — loop type fixed-point (regression)', () => {
+  // Regression: propagateTypes used to walk a for_region / loop_region body
+  // exactly once with whatever nameTypes were live at loop entry. A variable
+  // declared `let x = 0` (i32-from-literal) then reassigned to a float
+  // expression *inside* the body stayed inferred as i32 for the WHOLE body,
+  // including the reads *before* the reassign. Result: emitJS saw x*x as
+  // i32*i32 and emitted `((x * x)) | 0`, integer-truncating the math.
+  //
+  // For mandelbrot's `tmp = x*x - y*y + x0; x = tmp` pattern (where x0 is
+  // float), the inner-loop math lost all sub-integer precision, rendering
+  // the fractal as 4×4 blocks. Pre-existing — reproduces at commit e21cf68.
+  //
+  // Fix: for_region / loop_region now iterate body propagation up to 4
+  // times, taking unionType(prev, after-body) for each written name.
+  // unionType(i32, f64) → f64 (smart numeric widening, post-a89198f) so the
+  // emitter no longer applies an i32 hint to the widened variable.
+
+  function emit(src) {
+    const m = lower(src);
+    runPasses(m);
+    return { m, js: emitJS(m, [], [], { hinted: true, cellId: 't' }) };
+  }
+
+  it('for-loop var initialized i32, assigned f64 in body, widens to f64', () => {
+    const { m } = emit(`
+      let x = 0;
+      for (let i = 0; i < 10; i++) {
+        x = x * 0.5 + 1.5;
+      }
+    `);
+    const types = extractExportTypes(m);
+    assert.equal(types.get('x').kind, 'f64',
+      'x should widen to f64 after assignment with float-typed expression in loop body');
+  });
+
+  it('while-loop (loop_region) widens too', () => {
+    const { m } = emit(`
+      let x = 0;
+      while (x < 10) {
+        x = x * 0.5 + 1.5;
+      }
+    `);
+    const types = extractExportTypes(m);
+    assert.equal(types.get('x').kind, 'f64',
+      'loop_region must also iterate body to fixed-point');
+  });
+
+  it('pure-i32 loop var stays i32 (control — perf hint preserved)', () => {
+    const { m } = emit(`
+      let acc = 0;
+      for (let i = 0; i < 10; i++) {
+        acc = acc + i;
+      }
+    `);
+    const types = extractExportTypes(m);
+    assert.equal(types.get('acc').kind, 'i32',
+      'integer-only accumulator must keep its i32 type for | 0 hint');
+  });
+
+  it('pure-f64 loop var stays f64 (control)', () => {
+    const { m } = emit(`
+      let x = 0.5;
+      for (let i = 0; i < 10; i++) {
+        x = x * 2.0;
+      }
+    `);
+    const types = extractExportTypes(m);
+    assert.equal(types.get('x').kind, 'f64');
+  });
+
+  it('transitive widening converges via fixed-point iteration', () => {
+    // y depends on x, x depends on y — one body walk isn't enough; both
+    // must widen to f64 once x picks up the float and the next iteration
+    // propagates through y.
+    const { m } = emit(`
+      let x = 0;
+      let y = 0;
+      for (let i = 0; i < 10; i++) {
+        x = y * 0.5;
+        y = x + 1.0;
+      }
+    `);
+    const types = extractExportTypes(m);
+    assert.equal(types.get('x').kind, 'f64', 'x widens through chain');
+    assert.equal(types.get('y').kind, 'f64', 'y widens through chain');
+  });
+
+  it('mandelbrot inner-loop pattern: x*x in widened var is NOT i32-coerced', () => {
+    // The exact shape that caused the original visual bug. After the
+    // fix-point, x and y are f64; the emitter must not apply `| 0` to
+    // their multiplications.
+    const { js } = emit(`
+      const x0 = 0.5, y0 = -0.3;
+      const maxIter = 100;
+      let total = 0;
+      for (let py = 0; py < 100; py++) {
+        let x = 0, y = 0, i = 0;
+        while (x * x + y * y <= 4 && i < maxIter) {
+          const tmp = x * x - y * y + x0;
+          y = 2 * x * y + y0;
+          x = tmp;
+          i++;
+        }
+        total += i;
+      }
+    `);
+    // Compact whitespace so the regex is robust to formatting changes.
+    const compact = js.replace(/\s+/g, ' ');
+    assert.ok(!/\(x \* x\)\) \| 0/.test(compact),
+      'x*x must not be coerced with | 0 — x is widened to f64 by loop fixpoint');
+    assert.ok(!/\(y \* y\)\) \| 0/.test(compact),
+      'y*y must not be coerced with | 0 — y is widened to f64 by loop fixpoint');
+  });
+
+  it('loop_region body emits no | 0 on widened multiplications', () => {
+    // Mirror of the mandelbrot test for while loops specifically.
+    const { js } = emit(`
+      let x = 0;
+      while (x < 100) {
+        x = x * x + 0.5;
+      }
+    `);
+    const compact = js.replace(/\s+/g, ' ');
+    assert.ok(!/\(x \* x\)\) \| 0/.test(compact),
+      'while-loop should also not coerce widened x*x to i32');
+  });
+});
+
+describe('AIR types — unionType numeric widening (via observable behavior)', () => {
+  // unionType lives in passes.js (not exported), but its behavior surfaces
+  // through propagateTypes: a variable assigned i32 then f64 in different
+  // branches/iterations should end up as f64 (the wider numeric), not
+  // DYNAMIC (the conservative fallback that was in place before a89198f).
+
+  function emit(src) {
+    const m = lower(src);
+    runPasses(m);
+    return m;
+  }
+
+  it('union(i32, f64) → f64 across loop iterations', () => {
+    // After the loop, x has been assigned both i32 (initial 0) and f64
+    // values. unionType(i32, f64) must return f64 — not DYNAMIC.
+    const m = emit(`
+      let x = 0;
+      for (let i = 0; i < 10; i++) {
+        x = 1.5;
+      }
+    `);
+    const t = extractExportTypes(m).get('x');
+    assert.equal(t.kind, 'f64', 'union of i32 and f64 should be f64, not dynamic');
+  });
+
+  it('union of non-numeric pair → DYNAMIC (string + i32) — no i32 hints downstream', () => {
+    // The smart union only widens numerics; mixing string with i32 still
+    // degrades to DYNAMIC. extractExportTypes can't observe DYNAMIC
+    // directly (it preserves the lowered-from-initializer type when the
+    // inferred type is dynamic), so we check the structural emission:
+    // after the loop, downstream reads of x should NOT carry an i32 hint.
+    const src = `
+      let x = 0;
+      for (let i = 0; i < 10; i++) {
+        x = "hello";
+      }
+      const result = x;
+    `;
+    const m = lower(src);
+    runPasses(m);
+    const js = emitJS(m, [], [], { hinted: true, cellId: 't' });
+    // After the loop, `const result = x` should NOT see x as i32 (which
+    // would carry the type forward to result and emit `| 0` on its uses).
+    // The cleanest check: the loop's `x = "hello"` line should not have
+    // any | 0 coercion on the string operand.
+    const compact = js.replace(/\s+/g, ' ');
+    assert.ok(!/"hello"\s*\)?\s*\|\s*0/.test(compact),
+      'string assignment should not be coerced via | 0');
+  });
+});
+
 describe('AIR lowerer — functions', () => {
   it('arrow function expression', () => {
     const m = lower('const f = (x) => x + 1');

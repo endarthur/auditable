@@ -1,3 +1,28 @@
+// Module load order matters. Don't reorder these without verifying:
+//
+//   1. Modules that subscribe to the hook bus at module-eval time
+//      (editor, fs, mcp-adapter, init, …) use a direct `import * as hooks
+//      from './hooks.js'` and call `hooks.on(...)`. NOT `window.auditable.
+//      hooks.on(...)` — globals.js wires that wrapper at *its* own eval
+//      time (line 43 below), so anything earlier sees `undefined` and the
+//      subscription silently no-ops. See commit e086f5d for the cleanup
+//      of three modules that hit this exact bug.
+//
+//   2. shim.js (line 41) must load BEFORE mcp-adapter.js (line 42).
+//      mcp-adapter wraps `window.__auditable_mcp.onStateChange` at eval
+//      time; shim.js installs the object.
+//
+//   3. AIR (added to the registry by build.js at the END, after this
+//      manifest) loads LAST. Modules that read `window._airAnalyzer` /
+//      `_airEmit` / `_airRegisterLowerer` etc. only do so inside function
+//      bodies (dag.js, exec.js, cell-types.js, adder, soft), which run
+//      well after AIR's browser-init block has populated those slots.
+//
+//   4. complete.js binds `window.CM6.ViewPlugin.define(...)` at eval time
+//      (line 36 below). CM6 is prepended to the bundle as a classic IIFE
+//      by build.js, so it's set up before *any* module runs — but the
+//      prepend ordering is a build-side invariant; don't break it.
+
 import './state.js';
 import './hooks.js';
 import './cell-types.js';
