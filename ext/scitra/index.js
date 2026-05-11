@@ -1857,7 +1857,13 @@ function _normalize_kdtree(X) {
 function _quickselect_kdtree(perm, lo, hi, k, data, d, axis) {
   while (lo < hi - 1) {
     // Pivot via median-of-three to avoid worst case on sorted input.
-    const mid = (lo + (hi - lo - 1) >> 1);
+    // Note: `>>` has LOWER precedence than `+` in JS — the parens around
+    // the shift operand are REQUIRED. Without them this becomes
+    // `(lo + (hi - lo - 1)) >> 1`, which can land OUTSIDE [lo, hi) and
+    // corrupts perm at positions outside the active range when the
+    // pivot-swap happens. Caused a subtle but serious kNN bug where
+    // points ended up in the wrong subtree.
+    const mid = lo + ((hi - lo - 1) >>> 1);
     const a = data[perm[lo] * d + axis];
     const b = data[perm[mid] * d + axis];
     const c = data[perm[hi - 1] * d + axis];
@@ -2086,6 +2092,68 @@ class KDTree {
       for (let i = 0; i < drained.dist.length; i++) drained.dist[i] = Math.sqrt(drained.dist[i]);
     }
     return drained;
+  }
+
+  // Batch kNN — run a query for each of m points, return flat result arrays.
+  // points: m×d, accepted as Array<Array<number>>, ndarray { data, shape },
+  // or flat Float64Array + opts.m + opts.d.
+  // Returns { dist, idx } where each is m*k flat (row-major, m rows of k each).
+  queryBatch(points, kArg = 1, opts = {}) {
+    let pts, m, d;
+    if (points instanceof Float64Array) {
+      if (opts.m === undefined || opts.d === undefined) {
+        throw new TypeError('queryBatch: flat Float64Array requires opts.m and opts.d');
+      }
+      pts = points; m = opts.m; d = opts.d;
+    } else if (points && points.data instanceof Float64Array && Array.isArray(points.shape)) {
+      if (points.shape.length !== 2) {
+        throw new RangeError('queryBatch: expected 2D ndarray');
+      }
+      pts = points.data; m = points.shape[0]; d = points.shape[1];
+    } else if (Array.isArray(points)) {
+      m = points.length;
+      d = m > 0 ? points[0].length : this._d;
+      pts = new Float64Array(m * d);
+      for (let i = 0; i < m; i++) {
+        const row = points[i];
+        for (let j = 0; j < d; j++) pts[i * d + j] = row[j];
+      }
+    } else {
+      throw new TypeError('queryBatch: expected ndarray, flat Float64Array, or array of arrays');
+    }
+    if (d !== this._d) {
+      throw new RangeError(`queryBatch: dim ${d} != tree dim ${this._d}`);
+    }
+    const k = Math.min(kArg, this._n);
+    const outDist = new Float64Array(m * k);
+    const outIdx = new Int32Array(m * k);
+    if (k === 0) return { dist: outDist, idx: outIdx };
+    // Reusable buffers — one query at a time so we don't blow scratch
+    const q = new Float64Array(d);
+    const heap = new _MaxHeap_kdtree(k);
+    const p = opts.p ?? 2;
+    for (let i = 0; i < m; i++) {
+      // Copy row i into q
+      const base = i * d;
+      for (let j = 0; j < d; j++) q[j] = pts[base + j];
+      // Reset heap state — reuse arrays in place
+      heap.size = 0;
+      this._knn(this._root, q, heap, opts.distance_upper_bound);
+      const drained = heap.drain();
+      const outBase = i * k;
+      if (p === 2) {
+        for (let j = 0; j < drained.dist.length; j++) {
+          outDist[outBase + j] = Math.sqrt(drained.dist[j]);
+          outIdx[outBase + j] = drained.idx[j];
+        }
+      } else {
+        for (let j = 0; j < drained.dist.length; j++) {
+          outDist[outBase + j] = drained.dist[j];
+          outIdx[outBase + j] = drained.idx[j];
+        }
+      }
+    }
+    return { dist: outDist, idx: outIdx };
   }
 
   _knn(nodeId, q, heap, distUpper) {

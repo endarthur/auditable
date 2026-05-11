@@ -1,16 +1,30 @@
-// scitra KDTree vs scipy.spatial.KDTree — correctness + performance.
+// scitra KDTree vs scipy.spatial.KDTree — same data, correctness + perf.
 //
-// Correctness: brute-force-compute kNN/ball-query for small N, verify
-// scitra matches. (scipy's tests do the same thing — both implementations
-// solve the same well-defined math problem, so brute-force is the right
-// reference for any correct implementation.)
-//
-// Performance: scipy times come from test/perf_scipy_kdtree.py (numpy
-// single-threaded BLAS, scipy native KDTree). scitra runs side-by-side
-// on independently generated data of the same shape.
+// scipy script writes points + queries to .bin files and reference
+// results (indices, distances) to results.json. This script reads those
+// EXACT same data and verifies scitra matches index-for-index.
 
 import { execSync } from 'node:child_process';
-import { KDTree, cdist } from '../ext/scitra/index.js';
+import { readFileSync, existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { KDTree } from '../ext/scitra/index.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const BENCH_DIR = path.join(__dirname, '..', '.kdtree-bench-data');
+
+console.log('Running scipy reference to generate datasets…');
+try {
+  execSync('python test/perf_scipy_kdtree.py', {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  console.log('  scipy ready\n');
+} catch (e) {
+  console.error('  scipy FAILED:', e.message.slice(0, 200));
+  process.exit(1);
+}
+
+const scipy = JSON.parse(readFileSync(path.join(BENCH_DIR, 'results.json'), 'utf8'));
 
 function bench(fn, warmup = 2, samples = 10) {
   for (let i = 0; i < warmup; i++) fn();
@@ -24,144 +38,129 @@ function bench(fn, warmup = 2, samples = 10) {
   return ts[Math.floor(ts.length / 2)];
 }
 
-// ── correctness via brute-force on small N ────────────────────────────
-
-function bruteKnn(points, query, k) {
-  // points: array of arrays, query: array, k: int
-  const distSq = points.map((p, i) => {
-    let s = 0;
-    for (let j = 0; j < p.length; j++) {
-      const d = p[j] - query[j];
-      s += d * d;
-    }
-    return { i, sq: s };
-  });
-  distSq.sort((a, b) => a.sq - b.sq);
-  return {
-    idx: distSq.slice(0, k).map(x => x.i),
-    dist: distSq.slice(0, k).map(x => Math.sqrt(x.sq)),
-  };
+function loadBin(filePath) {
+  const buf = readFileSync(filePath);
+  // Use a subarray so we don't share buffer over an aligned chunk
+  return new Float64Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
 }
 
-function bruteBall(points, query, r) {
-  const r2 = r * r;
-  const idx = [];
-  for (let i = 0; i < points.length; i++) {
-    let s = 0;
-    for (let j = 0; j < points[i].length; j++) {
-      const d = points[i][j] - query[j];
-      s += d * d;
-    }
-    if (s <= r2) idx.push(i);
+const K = scipy.k;
+const NUM_BATCH = scipy.num_batch;
+
+// ── correctness check on each case ──────────────────────────────────
+
+console.log('## Correctness — scitra vs scipy on identical data\n');
+console.log('| n      | d  | single idx | single dist | batch idx     | ball | pairs |');
+console.log('|--------|----|------------|-------------|---------------|------|-------|');
+
+const issues = [];
+
+for (const c of scipy.cases) {
+  const { n, d } = c;
+  const ptsFlat = loadBin(path.join(BENCH_DIR, `pts_${n}x${d}.bin`));
+  const qFlat = loadBin(path.join(BENCH_DIR, `queries_${n}x${d}.bin`));
+  if (ptsFlat.length !== n * d) {
+    throw new Error(`points file size mismatch for n=${n} d=${d}: expected ${n*d}, got ${ptsFlat.length}`);
   }
-  return idx.sort((a, b) => a - b);
-}
-
-function makeRng(seed) {
-  let s = (seed | 0) || 1;
-  return () => {
-    s = (s + 0x6D2B79F5) | 0;
-    let t = s;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function makePoints(n, d, seed) {
-  const rng = makeRng(seed);
-  const pts = [];
-  for (let i = 0; i < n; i++) {
-    const row = [];
-    for (let j = 0; j < d; j++) row.push(rng() * 100);
-    pts.push(row);
+  if (qFlat.length !== NUM_BATCH * d) {
+    throw new Error(`queries file size mismatch for n=${n} d=${d}`);
   }
-  return pts;
-}
 
-console.log('## Correctness checks vs brute-force\n');
-
-let allPassed = true;
-const correctnessCases = [
-  { n: 50,  d: 2,  k: 10 },
-  { n: 100, d: 3,  k: 5  },
-  { n: 200, d: 5,  k: 7  },
-  { n: 500, d: 10, k: 20 },
-];
-
-for (const { n, d, k } of correctnessCases) {
-  const pts = makePoints(n, d, 1 + n + d);
+  // Build tree from same data
+  const pts = { data: ptsFlat, shape: [n, d] };
   const tree = new KDTree(pts);
-  const query = pts[Math.floor(n / 2)].map(v => v + 1.234);  // off-center
 
-  const sciRes = tree.query(query, k);
-  const bruteRes = bruteKnn(pts, query, k);
+  // Single query
+  const q1 = qFlat.slice(0, d);
+  const r1 = tree.query(q1, K);
 
-  // Indices must match (same distances ⇒ same neighbors, deterministic when no ties)
-  let idxMatch = true;
-  for (let i = 0; i < k; i++) {
-    if (sciRes.idx[i] !== bruteRes.idx[i]) { idxMatch = false; break; }
+  // Compare indices
+  let sameIdxSingle = true;
+  for (let i = 0; i < K; i++) {
+    if (r1.idx[i] !== c.idxs_single[i]) { sameIdxSingle = false; break; }
   }
-  // Distances must match to high precision
-  let maxDistErr = 0;
-  for (let i = 0; i < k; i++) {
-    const e = Math.abs(sciRes.dist[i] - bruteRes.dist[i]);
-    if (e > maxDistErr) maxDistErr = e;
+  // Compare distances within tolerance
+  let maxDistErrSingle = 0;
+  for (let i = 0; i < K; i++) {
+    const e = Math.abs(r1.dist[i] - c.dists_single[i]);
+    if (e > maxDistErrSingle) maxDistErrSingle = e;
+  }
+
+  // Batch query — use the new queryBatch API
+  const bRes = tree.queryBatch({ data: qFlat, shape: [NUM_BATCH, d] }, K);
+  let sameIdxBatch = true;
+  let firstBatchDiff = -1;
+  for (let i = 0; i < NUM_BATCH * K; i++) {
+    if (bRes.idx[i] !== c.idxs_batch_flat[i]) {
+      sameIdxBatch = false;
+      if (firstBatchDiff < 0) firstBatchDiff = i;
+      // keep scanning
+    }
+  }
+  let maxDistErrBatch = 0;
+  for (let i = 0; i < NUM_BATCH * K; i++) {
+    const e = Math.abs(bRes.dist[i] - c.dists_batch_flat[i]);
+    if (e > maxDistErrBatch) maxDistErrBatch = e;
   }
 
   // Ball query
-  const r = 15;
-  const sciBall = Array.from(tree.query_ball_point(query, r)).sort((a, b) => a - b);
-  const bruteBallRes = bruteBall(pts, query, r);
-  let ballMatch = sciBall.length === bruteBallRes.length;
-  for (let i = 0; i < sciBall.length && ballMatch; i++) {
-    if (sciBall[i] !== bruteBallRes[i]) ballMatch = false;
+  const ballRes = Array.from(tree.query_ball_point(q1, c.r_ball)).sort((a, b) => a - b);
+  const sameBall = ballRes.length === c.ball_single.length
+    && ballRes.every((v, i) => v === c.ball_single[i]);
+
+  // Pairs (count only — full list could be huge)
+  let pairsTag = '–';
+  if (c.pairs_count != null) {
+    const pairs = tree.query_pairs(c.r_pair);
+    const samePairsCount = pairs.length === c.pairs_count;
+    if (samePairsCount) {
+      // Verify first 20 pairs match (sorted)
+      const sortedPairs = pairs.map(p => p[0] < p[1] ? p : [p[1], p[0]])
+        .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+      let allMatch = true;
+      for (let i = 0; i < Math.min(20, c.pairs_sample.length); i++) {
+        if (sortedPairs[i][0] !== c.pairs_sample[i][0] || sortedPairs[i][1] !== c.pairs_sample[i][1]) {
+          allMatch = false; break;
+        }
+      }
+      pairsTag = allMatch ? `✓ ${pairs.length}` : `✗ count ok but sample mismatch`;
+    } else {
+      pairsTag = `✗ ${pairs.length} vs ${c.pairs_count}`;
+    }
   }
 
-  const tag = idxMatch && maxDistErr < 1e-10 && ballMatch ? '✓' : '✗';
-  if (tag === '✗') allPassed = false;
-  console.log(`  ${tag} n=${n} d=${d} k=${k}: kNN ${idxMatch ? 'OK' : 'FAIL'}, dist err ${maxDistErr.toExponential(2)}, ball |brute|=${bruteBallRes.length} |scitra|=${sciBall.length} ${ballMatch ? 'OK' : 'FAIL'}`);
-}
-console.log(allPassed ? '\n  All correctness checks passed.\n' : '\n  ✗ Some failed.\n');
+  const tag = (ok) => ok ? '✓' : '✗';
+  console.log(
+    `| ${String(n).padStart(6)} | ${String(d).padStart(2)} | ${tag(sameIdxSingle).padEnd(10)} | ${maxDistErrSingle.toExponential(1).padStart(11)} | ${tag(sameIdxBatch)} (${maxDistErrBatch.toExponential(1)}) | ${tag(sameBall).padStart(4)} | ${pairsTag.padStart(5)} |`
+  );
 
-// ── perf bench ────────────────────────────────────────────────────────
-
-console.log('Running scipy reference (single-thread)…');
-let scipy;
-try {
-  const out = execSync('python test/perf_scipy_kdtree.py', {
-    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  scipy = JSON.parse(out.trim());
-  console.log('  scipy ready\n');
-} catch (e) {
-  console.log('  scipy unavailable:', e.message.slice(0, 100));
-  scipy = null;
+  if (!sameIdxSingle || !sameIdxBatch || !sameBall || maxDistErrSingle > 1e-9 || maxDistErrBatch > 1e-9) {
+    issues.push({ n, d, sameIdxSingle, maxDistErrSingle, sameIdxBatch, firstBatchDiff, maxDistErrBatch, sameBall, pairsTag });
+  }
 }
 
-const K = scipy ? scipy.k : 10;
-const NUM_BATCH = scipy ? scipy.num_batch : 100;
+if (issues.length === 0) {
+  console.log('\n  ✓ ALL correctness checks pass — scitra matches scipy index-for-index.\n');
+} else {
+  console.log(`\n  ✗ ${issues.length} cases with discrepancies:\n`);
+  for (const x of issues) console.log('  ', JSON.stringify(x));
+  console.log();
+}
 
-const cases = scipy ? scipy.cases : [
-  { n: 100, d: 2 }, { n: 1000, d: 3 }, { n: 10000, d: 3 },
-];
+// ── perf bench on same data ─────────────────────────────────────────
 
-console.log(`## kNN k=${K}, batch=${NUM_BATCH} — ms/call, median\n`);
-console.log('| n      | d  | build (sci/sct) | kNN 1 (sci/sct) | kNN batch (sci/sct) | ball (sci/sct) | pairs (sci/sct) |');
-console.log('|--------|----|-----------------|-----------------|---------------------|----------------|-----------------|');
+console.log(`## Performance — same data, ${NUM_BATCH} batch queries, k=${K}\n`);
+console.log('| n      | d  | build (sci/sct) | kNN single  | kNN batch    | ball single | pairs        |');
+console.log('|--------|----|-----------------|-------------|--------------|-------------|--------------|');
 
 let sink = 0;
-for (const c of cases) {
+for (const c of scipy.cases) {
   const { n, d } = c;
-  const pts = makePoints(n, d, 1 + n + d);
-  const queryRng = makeRng(99 + n + d);
-  const queries = [];
-  for (let i = 0; i < NUM_BATCH; i++) {
-    const row = [];
-    for (let j = 0; j < d; j++) row.push(queryRng() * 100);
-    queries.push(row);
-  }
-  const singleQ = queries[0];
+  const ptsFlat = loadBin(path.join(BENCH_DIR, `pts_${n}x${d}.bin`));
+  const qFlat = loadBin(path.join(BENCH_DIR, `queries_${n}x${d}.bin`));
+  const pts = { data: ptsFlat, shape: [n, d] };
+  const queriesNda = { data: qFlat, shape: [NUM_BATCH, d] };
+  const q1 = qFlat.slice(0, d);
 
   const tBuild = bench(() => {
     const t = new KDTree(pts);
@@ -171,20 +170,17 @@ for (const c of cases) {
   const tree = new KDTree(pts);
 
   const tQuery1 = bench(() => {
-    const r = tree.query(singleQ, K);
+    const r = tree.query(q1, K);
     sink += r.idx[0];
   }, 2, 30);
 
   const tQueryBatch = bench(() => {
-    for (const q of queries) {
-      const r = tree.query(q, K);
-      sink += r.idx[0];
-    }
+    const r = tree.queryBatch(queriesNda, K);
+    sink += r.idx[0];
   }, 1, 10);
 
-  const r_ball = c.r_ball ?? 5;
   const tBall1 = bench(() => {
-    const r = tree.query_ball_point(singleQ, r_ball);
+    const r = tree.query_ball_point(q1, c.r_ball);
     sink += r.length;
   }, 2, 30);
 
@@ -196,10 +192,11 @@ for (const c of cases) {
     }, 1, 5);
   }
 
-  const f = (v) => v == null ? '   n/a   ' : v.toFixed(3).padStart(9);
-  const pair = (a, b) => `${f(a)} / ${f(b)}`;
+  const f = (v) => v == null ? '   n/a   ' : v.toFixed(3).padStart(8);
+  const ratio = (sci, sct) => (sci == null || sct == null) ? '' : `${(sct/sci).toFixed(2)}×`;
+  const pair = (sci, sct) => `${f(sci)} / ${f(sct)} ${ratio(sci, sct).padStart(6)}`;
 
-  console.log(`| ${String(n).padStart(6)} | ${String(d).padStart(2)} | ${pair(c.build_ms, tBuild)} | ${pair(c.query1_ms, tQuery1)} | ${pair(c.query_batch_ms, tQueryBatch)}    | ${pair(c.ball1_ms, tBall1)} | ${pair(c.pairs_ms, tPairs)} |`);
+  console.log(`| ${String(n).padStart(6)} | ${String(d).padStart(2)} | ${pair(c.build_ms, tBuild)} | ${pair(c.query1_ms, tQuery1)} | ${pair(c.query_batch_ms, tQueryBatch)} | ${pair(c.ball1_ms, tBall1)} | ${pair(c.pairs_ms, tPairs)} |`);
 }
 
 console.log('\nsink:', sink);
