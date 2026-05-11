@@ -1,4 +1,5 @@
 import { S } from './state.js';
+import * as hooks from './hooks.js';
 import { loadFromEmbed, saveNotebook, setSaveMode } from './save.js';
 import { addCell } from './cell-ops.js';
 import { _ctIsExecutable } from './cell-types.js';
@@ -183,6 +184,9 @@ async function _resumeAfterUnlock(payload) {
   const lockScreen = document.getElementById('lockScreen');
   if (lockScreen) lockScreen.style.display = 'none';
 
+  // Apply user theme from VFS now that decrypted contents are mounted
+  await loadUserTheme();
+
   // Notify subscribers (MCP) via the hook bus
   if (window.auditable?.hooks) window.auditable.hooks.emit('crypto:unlocked');
 
@@ -347,6 +351,60 @@ export function _updateCryptoSettingsUI() {
   }
 }
 
+// ── USER THEME (VFS) ──
+// Per spec_inbox/auditable-theme-spec.md §6.2: a CSS file at
+// /home/nb/theme.css is auto-injected after the built-in theme so it
+// can override --au-* tokens (or even --sw-* swatches for a full
+// re-skin). Reapplies on fs:changed; removes the style element if the
+// file is deleted.
+
+const USER_THEME_PATH = '/home/nb/theme.css';
+
+async function loadUserTheme() {
+  const vfs = window._notebookVFS;
+  if (!vfs) return;
+  let css = '';
+  try {
+    if (await vfs.exists(USER_THEME_PATH)) {
+      css = await vfs.readFile(USER_THEME_PATH, 'text');
+    }
+  } catch (e) { /* file missing or unreadable — drop styles */ }
+  let styleEl = document.getElementById('user-theme');
+  if (!css) {
+    if (styleEl) styleEl.remove();
+    return;
+  }
+  if (!styleEl) {
+    styleEl = document.createElement('style');
+    styleEl.id = 'user-theme';
+    // Inject after auditable-editor-css so the user theme overrides
+    // both the app and editor stylesheets.
+    const editorCss = document.getElementById('auditable-editor-css');
+    if (editorCss && editorCss.nextSibling) {
+      editorCss.parentNode.insertBefore(styleEl, editorCss.nextSibling);
+    } else {
+      document.head.appendChild(styleEl);
+    }
+  }
+  styleEl.textContent = css;
+}
+
+// Debounced re-apply on fs:changed (any VFS write may have touched
+// /home/nb/theme.css — we just re-check rather than tracking paths).
+// Subscribe via the direct hooks-module import rather than
+// window.auditable.hooks — globals.js wires the latter at *its* own
+// module-eval time, and depending on import order it's not always
+// ready when init.js runs. The direct import is the canonical channel.
+let _userThemeReloadTimer = null;
+function scheduleUserThemeReload() {
+  if (_userThemeReloadTimer) return;
+  _userThemeReloadTimer = setTimeout(() => {
+    _userThemeReloadTimer = null;
+    loadUserTheme().catch(() => {});
+  }, 150);
+}
+hooks.on('fs:changed', scheduleUserThemeReload);
+
 // ── INIT ──
 // Deferred to next macrotask so all module bodies (in particular globals.js's
 // VFS setup) complete before init runs. globals.js imports from this module
@@ -378,6 +436,9 @@ setTimeout(async function init() {
     addCell('md', '');
     addCell('code', '');
   }
+  // Apply user theme from /home/nb/theme.css (if any) — runs after the
+  // VFS is hydrated so saved notebooks pick up their bundled theme on load.
+  await loadUserTheme();
   // configure CM6 autocomplete for all code cells
   configureAllAutocomplete();
   S.initialized = true;
