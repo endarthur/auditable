@@ -30,7 +30,7 @@ for (let i = 0; i < n; i++) {
 const result = window._airAnalyzer ? window._airAnalyzer(source) : null;
 
 if (!result) {
-  ui.display(std.el('pre', { style: 'color:var(--err)' },
+  ui.display(std.el('pre', { style: 'color:var(--au-error)' },
     'parse failed — fix the syntax in the box above'));
 } else {
   const { defines, uses, air } = result;

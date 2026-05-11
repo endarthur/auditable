@@ -21,21 +21,21 @@ this example uses `// %bare` and defines its own visual style — a light theme 
   --accent: #1a8a7d;
   --accent2: #e05540;
   --border: #d5d0c8;
-  color: var(--fg);
+  color: var(--au-fg-muted);
   font: 13px/1.6 'Inter', 'Segoe UI', system-ui, sans-serif;
 }
 .app *, .app *::before, .app *::after { box-sizing: border-box; }
 .app h1, .app h2, .app h3 {
-  color: var(--accent); font-weight: 600; margin: 0;
+  color: var(--au-action); font-weight: 600; margin: 0;
 }
 .app h1 { font-size: 22px; margin-bottom: 4px; }
 .app h3 { font-size: 13px; }
-.app hr { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+.app hr { border: none; border-top: 1px solid var(--au-border); margin: 16px 0; }
 .app code {
   background: rgba(26,138,125,0.08); padding: 1px 5px; border-radius: 3px;
   font-family: 'JetBrains Mono', monospace; font-size: 12px;
 }
-.app strong { color: var(--accent); }
+.app strong { color: var(--au-action); }
 .app ol { padding-left: 20px; }
 .app ol li { margin: 2px 0; }
 .app audit-slider, .app audit-dropdown, .app audit-checkbox, .app audit-text-input {
@@ -43,15 +43,15 @@ this example uses `// %bare` and defines its own visual style — a light theme 
 }
 .app .audit-widget-label {
   min-width: 90px; font-size: 11px; font-weight: 500;
-  letter-spacing: 0.5px; color: var(--fg-dim);
+  letter-spacing: 0.5px; color: var(--au-fg-soft);
 }
 .app .audit-widget-val {
   min-width: 36px; text-align: right; font-size: 12px;
-  font-family: 'JetBrains Mono', monospace; color: var(--accent);
+  font-family: 'JetBrains Mono', monospace; color: var(--au-action);
 }
-.app audit-slider input[type="range"] { flex: 1; accent-color: var(--accent); }
+.app audit-slider input[type="range"] { flex: 1; accent-color: var(--au-action); }
 .app audit-dropdown select, .app audit-text-input input {
-  background: var(--bg2); color: var(--fg); border: 1px solid var(--border);
+  background: var(--au-surface-bright); color: var(--au-fg-muted); border: 1px solid var(--au-border);
   padding: 4px 8px; font: inherit; border-radius: 4px;
 }
 .app .app-layout {
@@ -62,8 +62,8 @@ this example uses `// %bare` and defines its own visual style — a light theme 
 }
 .app .app-panel {
   padding: 20px;
-  border: 1px solid var(--border);
-  background: var(--bg2);
+  border: 1px solid var(--au-border);
+  background: var(--au-surface-bright);
   border-radius: 8px;
   box-shadow: 0 1px 3px rgba(0,0,0,0.06);
 }
@@ -71,13 +71,13 @@ this example uses `// %bare` and defines its own visual style — a light theme 
   font-size: 11px;
   letter-spacing: 1.5px;
   text-transform: uppercase;
-  color: var(--fg-dim);
+  color: var(--au-fg-soft);
   margin-bottom: 12px;
   font-weight: 500;
 }
 .app .metric {
   font-size: 32px;
-  color: var(--accent);
+  color: var(--au-action);
   font-weight: 700;
   letter-spacing: -0.5px;
 }
@@ -85,13 +85,13 @@ this example uses `// %bare` and defines its own visual style — a light theme 
   font-size: 10px;
   letter-spacing: 1.5px;
   text-transform: uppercase;
-  color: var(--fg-dim);
+  color: var(--au-fg-soft);
   font-weight: 500;
 }
 .app .range-text {
   margin-top: 12px;
   font-size: 12px;
-  color: var(--fg-dim);
+  color: var(--au-fg-soft);
   font-family: 'JetBrains Mono', monospace;
 }
 @media (max-width: 600px) {
@@ -100,7 +100,7 @@ this example uses `// %bare` and defines its own visual style — a light theme 
 
 /// html
 <div class="app">
-<div class="app-panel" style="border-left: 3px solid var(--accent)">
+<div class="app-panel" style="border-left: 3px solid var(--au-action)">
   <h3>parameters</h3>
   <audit-slider name="samples" label="samples" min="10" max="200" step="10" value="100"></audit-slider>
   <audit-slider name="spread" label="spread" min="1" max="50" step="1" value="10"></audit-slider>

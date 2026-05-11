@@ -790,7 +790,7 @@ function assemble(jsCode) {
   Raw file access bypasses the notebook's governance model.
 -->
 <!-- https://github.com/endarthur/auditable — MIT license -->
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -858,7 +858,7 @@ if (compress) {
   const gz = zlib.gzipSync(html, { level: 9 });
   const b64 = gz.toString('base64');
   const packed = '<!DOCTYPE html>\n'
-    + '<html lang="en"><head><meta charset="UTF-8">'
+    + '<html lang="en" data-theme="dark"><head><meta charset="UTF-8">'
     + '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
     + '<title>Auditable</title>'
     + '<style>html{background:#1a1a1a}'

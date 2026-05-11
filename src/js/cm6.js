@@ -557,7 +557,7 @@ function getLangExtension(cellType) {
 }
 
 export function createEditor(container, cellId, initialCode, cellType, onChange) {
-  const isDark = !document.documentElement.classList.contains('light');
+  const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
   const showLines = !document.documentElement.classList.contains('hide-line-numbers');
   const isPresenting = document.body.classList.contains('presenting');
 

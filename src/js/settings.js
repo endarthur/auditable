@@ -23,11 +23,7 @@ export function toggleSettings() {
 }
 
 export function applyTheme(theme) {
-  if (theme === 'light') {
-    document.documentElement.classList.add('light');
-  } else {
-    document.documentElement.classList.remove('light');
-  }
+  document.documentElement.setAttribute('data-theme', theme === 'light' ? 'light' : 'dark');
   $('#setTheme').value = theme;
   updateAllEditorThemes(theme !== 'light');
   hooks.emit("notebook:dirty");
@@ -138,7 +134,7 @@ export function getEditorViewSetting() { return _editorView; }
 
 export function getSettings() {
   const s = {
-    theme: document.documentElement.classList.contains('light') ? 'light' : 'dark',
+    theme: document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark',
     fontSize: parseInt($('#setFontSize').value),
     width: $('#setWidth').value,
     header: $('#setHeader').value,

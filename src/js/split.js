@@ -626,7 +626,7 @@ function splitCompletionSource(context) {
 }
 
 function createSplitEditor(container, initialCode) {
-  const isDark = !document.documentElement.classList.contains('light');
+  const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
 
   const extensions = [
     isDark ? splitThemeDark : splitThemeLight,

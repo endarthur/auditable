@@ -91,7 +91,7 @@ ui.checkbox("cutaway (hide front half)", cutaway, { onInput: v => { cutaway = v;
 // evaluate button
 const btnEval = document.createElement('button');
 btnEval.textContent = 'evaluate';
-btnEval.style.cssText = 'margin:6px 0;padding:4px 16px;background:var(--accent);color:#111;border:none;border-radius:3px;font:12px var(--mono);cursor:pointer';
+btnEval.style.cssText = 'margin:6px 0;padding:4px 16px;background:var(--au-action);color:#111;border:none;border-radius:3px;font:12px var(--au-font-mono);cursor:pointer';
 ui.display(btnEval);
 
 // status + canvas

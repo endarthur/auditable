@@ -21,8 +21,8 @@ of the screen.`
 participate in the DAG — they’re static side
 effects that apply globally.
 
-Use CSS variables like \`var(--accent)\` and
-\`var(--border)\` to stay consistent with the
+Use CSS variables like \`var(--au-action)\` and
+\`var(--au-border)\` to stay consistent with the
 notebook theme. The dashboard stat cards are styled
 entirely via the CSS cell.`
   },
@@ -78,20 +78,20 @@ demonstrates **css cells** for custom styling, **html cells** for reactive templ
   display: inline-block;
   padding: 8px 16px;
   margin: 4px;
-  border: 1px solid var(--border);
-  background: var(--bg2);
+  border: 1px solid var(--au-border);
+  background: var(--au-surface-bright);
   min-width: 120px;
   text-align: center;
 }
 .dashboard-stat .value {
   font-size: 20px;
-  color: var(--accent);
+  color: var(--au-action);
 }
 .dashboard-stat .label {
   font-size: 9px;
   letter-spacing: 2px;
   text-transform: uppercase;
-  color: var(--fg-dim);
+  color: var(--au-fg-soft);
 }
 
 /// code

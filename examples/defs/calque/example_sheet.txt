@@ -69,5 +69,5 @@ const a = document.createElement("a");
 a.href = URL.createObjectURL(blob);
 a.download = "planets.xlsx";
 a.textContent = "⬇ download planets.xlsx";
-a.style.cssText = "color:var(--accent);cursor:pointer";
+a.style.cssText = "color:var(--au-action);cursor:pointer";
 ui.display(a);

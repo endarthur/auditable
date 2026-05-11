@@ -236,6 +236,7 @@ async function buildNotebookHtml(opts = {}) {
   const styleBlock = appStyleEl
     ? `<style id="auditable-app-css">\n${appStyles}\n</style>\n<style id="auditable-editor-css">\n${editorStyles}\n</style>`
     : `<style id="auditable-css">\n${styles}\n</style>`;
+  const themeAttr = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
 
   // data blocks: VFS-unified single block (AUDITABLE-VFS or AUDITABLE-CRYPTO).
   // Persistence flow per spec_inbox/shipped/auditable-persistence-spec.md.
@@ -263,7 +264,7 @@ async function buildNotebookHtml(opts = {}) {
   }
 
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="${themeAttr}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -365,7 +366,7 @@ export async function savePackedNotebook() {
 <!-- packed auditable notebook -->
 <!-- the full notebook is gzip-compressed and base64-encoded in the <pre> block below. -->
 <!-- on load, the script decodes and decompresses it, then replaces the page contents. -->
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -543,8 +544,9 @@ audit-slider, audit-dropdown, audit-checkbox, audit-text-input {
     ? '<!--AUDITABLE-MODULES\n' + encodeModules(window._installedModules) + '\nAUDITABLE-MODULES-->'
     : '';
 
+  const appThemeAttr = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
   const html = `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="${appThemeAttr}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
