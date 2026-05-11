@@ -353,26 +353,56 @@ export function propagateTypes(module, opts = {}) {
         }
 
         case 'for_region': {
-          // Variables written in the loop become dynamic (could be any iteration's type)
+          if (op.init) propagate(op.init);
+
+          // Type-fixed-point for loop variables. Without this, a variable
+          // declared `let x = 0` (i32) and then reassigned `x = expr_f64`
+          // inside the body stays inferred as i32 for the *whole* body —
+          // including the first iteration's reads — because we only walk
+          // the body once. Re-walking with the unioned type seeded lets
+          // every read see the widened type. Mandelbrot's `tmp = x*x +
+          // x0_f64; x = tmp` regressed without this.
           const writtenNames = new Set();
-          collectWrittenNames(op.init || [], writtenNames);
           collectWrittenNames(op.body || [], writtenNames);
           collectWrittenNames(op.update || [], writtenNames);
 
-          if (op.init) propagate(op.init);
-          if (op.test) propagate(op.test);
-          if (op.update) propagate(op.update);
-          if (op.body) propagate(op.body);
-
-          // After the loop, loop-variable types may differ from the pre-loop state.
-          // Leave current nameTypes as-is (last iteration's types).
+          for (let iter = 0; iter < 4; iter++) {
+            const before = new Map();
+            for (const name of writtenNames) before.set(name, nameTypes.get(name));
+            if (op.test) propagate(op.test);
+            if (op.body) propagate(op.body);
+            if (op.update) propagate(op.update);
+            let stable = true;
+            for (const name of writtenNames) {
+              const prev = before.get(name);
+              const u = unionType(prev, nameTypes.get(name));
+              if (!prev || !typeEq(u, prev)) stable = false;
+              nameTypes.set(name, u);
+            }
+            if (stable) break;
+          }
           types.set(op.id, VOID);
           break;
         }
 
         case 'loop_region': {
-          if (op.test) propagate(op.test);
-          if (op.body) propagate(op.body);
+          // Type-fixed-point (see for_region above for rationale).
+          const writtenNames = new Set();
+          collectWrittenNames(op.body || [], writtenNames);
+          for (let iter = 0; iter < 4; iter++) {
+            const before = new Map();
+            for (const name of writtenNames) before.set(name, nameTypes.get(name));
+            if (op.test) propagate(op.test);
+            if (op.body) propagate(op.body);
+            let stable = true;
+            for (const name of writtenNames) {
+              const prev = before.get(name);
+              const u = unionType(prev, nameTypes.get(name));
+              if (!prev || !typeEq(u, prev)) stable = false;
+              nameTypes.set(name, u);
+            }
+            if (stable) break;
+          }
           types.set(op.id, VOID);
           break;
         }
