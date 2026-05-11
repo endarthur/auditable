@@ -648,7 +648,7 @@ audit-text-input input[type="text"] {
 }
 .fs-context-menu button:hover {
   background: var(--au-action);
-  color: #111;
+  color: #fff;
 }
 
 .fs-breadcrumb {
@@ -782,7 +782,7 @@ audit-text-input input[type="text"] {
 }
 .mcp-confirm-body .mcp-diff-add { color: var(--au-success); }
 .mcp-confirm-body .mcp-diff-del { color: var(--au-error); }
-.cm-mcp-highlight { background: rgba(200, 155, 60, 0.12); }
+.cm-mcp-highlight { background: color-mix(in srgb, var(--au-info) 18%, transparent); }
 
 /* ── MCP PANEL ── */
 .mcp-panel {
@@ -1199,12 +1199,12 @@ body.locked .present-exit { display: none !important; }
 }
 .transport button:last-child { border-right: none; }
 .transport button.autorun-on {
-  background: #33aa77;
-  color: #111;
+  background: var(--au-success);
+  color: #fff;
 }
 .transport button.autorun-off {
-  background: #dd4444;
-  color: #111;
+  background: var(--au-error);
+  color: #fff;
 }
 
 .toolbar-right {
@@ -1341,7 +1341,7 @@ body.locked .present-exit { display: none !important; }
   border-left-color: var(--au-rule);
 }
 .cell.selected {
-  border-left-color: var(--au-action);
+  border-left-color: var(--au-selected);
 }
 .cell.selected .cell-header {
   opacity: 1;
@@ -1386,9 +1386,9 @@ body.locked .present-exit { display: none !important; }
   text-transform: uppercase;
   color: var(--au-fg-soft);
 }
-.cell[data-type="code"] .cell-type { color: #7aabcf; }
-.cell[data-type="css"]  .cell-type { color: #d4955a; }
-.cell[data-type="html"] .cell-type { color: #6dbfb8; }
+.cell[data-type="code"] .cell-type { color: var(--au-info); }
+.cell[data-type="css"]  .cell-type { color: var(--au-warn); }
+.cell[data-type="html"] .cell-type { color: var(--au-fg-muted); }
 .cell[data-type="md"]   .cell-type { color: var(--au-fg-soft); }
 
 .cell-btn {
@@ -1424,25 +1424,25 @@ body.locked .present-exit { display: none !important; }
 }
 
 /* syntax tokens */
-.hl-kw { color: #7a9ec7; }
+.hl-kw { color: var(--au-selected); }
 .hl-str { color: var(--au-action); }
-.hl-num { color: #8cb878; }
-.hl-cmt { color: #555; font-style: italic; }
-.hl-fn { color: #c4a6d0; }
-.hl-const { color: #d09870; }
-.hl-op { color: #888; }
-.hl-punc { color: #666; }
+.hl-num { color: var(--au-warn); }
+.hl-cmt { color: var(--au-fg-soft); font-style: italic; }
+.hl-fn { color: var(--au-info); }
+.hl-const { color: var(--au-warn); }
+.hl-op { color: var(--au-fg-muted); }
+.hl-punc { color: var(--au-fg-soft); }
 
 /* CSS syntax tokens */
-.hl-atrule { color: #7aabcf; }
-.hl-prop { color: #7aabcf; }
-.hl-sel { color: #d4955a; }
+.hl-atrule { color: var(--au-info); }
+.hl-prop { color: var(--au-info); }
+.hl-sel { color: var(--au-warn); }
 .hl-color { color: var(--au-action); }
-.hl-important { color: #d4555a; font-weight: bold; }
+.hl-important { color: var(--au-error); font-weight: bold; }
 
 /* HTML syntax tokens */
-.hl-tag { color: #6dbfb8; }
-.hl-attr { color: #7aabcf; }
+.hl-tag { color: var(--au-info); }
+.hl-attr { color: var(--au-selected); }
 .hl-expr { color: var(--au-action); }
 
 .hl-swatch {
@@ -2076,7 +2076,7 @@ html.hide-run-toggle #autorunBtnMobile { display: none; }
 }
 /* ── UPDATE BUTTON IN OVERFLOW TRAY ── */
 .toolbar-update-btn {
-  color: var(--au-action) !important;
+  color: var(--au-warn) !important;
 }
 
 .settings-about {
@@ -2178,14 +2178,14 @@ body.presenting .find-bar { display: none !important; }
   position: relative;
 }
 .search-match {
-  background: rgba(200,155,60,0.25);
+  background: color-mix(in srgb, var(--au-warn) 25%, transparent);
 }
 /* search overlay (md cells): hide text color, show only marks */
 .search-overlay .search-match {
   color: transparent;
 }
 .search-match-current {
-  background: rgba(200,155,60,0.5);
+  background: color-mix(in srgb, var(--au-action) 50%, transparent);
   outline: 1px solid var(--au-action);
 }
 
@@ -2340,13 +2340,13 @@ body.presenting .find-bar { display: none !important; }
   .action-bar > div > button:active { background: var(--au-surface-bright); }
   .action-bar > button.autorun-on,
   .action-bar > div > button.autorun-on {
-    background: #33aa77;
-    color: #111;
+    background: var(--au-success);
+    color: #fff;
   }
   .action-bar > button.autorun-off,
   .action-bar > div > button.autorun-off {
-    background: #dd4444;
-    color: #111;
+    background: var(--au-error);
+    color: #fff;
   }
 
   .find-bar { max-width: 100%; float: none; }
