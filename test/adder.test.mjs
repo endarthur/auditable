@@ -525,6 +525,28 @@ describe('slice assignment', () => {
   });
 });
 
+describe('negative-index assignment', () => {
+  it('arr[-1] = v writes to last slot', async () => {
+    const r = await pyExec('x = [10, 20, 30]\nx[-1] = 99');
+    assert.deepEqual(r.get('x'), [10, 20, 99]);
+  });
+
+  it('arr[-2] = v writes correctly', async () => {
+    const r = await pyExec('x = [10, 20, 30, 40]\nx[-2] = 99');
+    assert.deepEqual(r.get('x'), [10, 20, 99, 40]);
+  });
+
+  it('swap idiom: arr[i], arr[-j] = arr[-j], arr[i]', async () => {
+    const r = await pyExec('x = [0, 1, 2, 3]\nj = 1\nx[2], x[-j] = x[-j], x[2]');
+    assert.deepEqual(r.get('x'), [0, 1, 3, 2]);
+  });
+
+  it('del arr[-1] removes last element', async () => {
+    const r = await pyExec('x = [10, 20, 30]\ndel x[-1]');
+    assert.deepEqual(r.get('x'), [10, 20]);
+  });
+});
+
 describe('slice deletion', () => {
   it('simple slice delete', async () => {
     const r = await pyExec('x = [10, 20, 30, 40]\ndel x[1:3]');

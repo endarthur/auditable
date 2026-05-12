@@ -330,6 +330,14 @@ async function _assignTarget(target, value, scope) {
       const key = await adderEval(target.slice, scope);
       if (obj instanceof Map) obj.set(key, value);
       else if (typeof obj?.__setitem__ === 'function') obj.__setitem__(key, value);
+      else if (Array.isArray(obj) || obj instanceof Uint8Array) {
+        // Python-style negative indexing on write: arr[-1] is the last
+        // element. Without the translation JS just stores a string-keyed
+        // '-1' property and the positional slot is left untouched —
+        // silently breaks `arr[i], arr[-j] = arr[-j], arr[i]` swaps.
+        const idx = key < 0 ? obj.length + key : key;
+        obj[idx] = value;
+      }
       else obj[key] = value;
       break;
     }
@@ -379,7 +387,10 @@ async function _deleteTarget(target, scope) {
     }
     const key = await adderEval(target.slice, scope);
     if (obj instanceof Map) obj.delete(key);
-    else if (Array.isArray(obj)) obj.splice(key, 1);
+    else if (Array.isArray(obj)) {
+      const idx = key < 0 ? obj.length + key : key;
+      obj.splice(idx, 1);
+    }
     else delete obj[key];
     return;
   }
