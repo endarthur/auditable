@@ -1,0 +1,28 @@
+{
+  "name": "@gcu/lfm",
+  "version": "0.1.0",
+  "description": "Reader and writer for Leapfrog Model files (.lfm) — Leapfrog Geo / Edge triangulated geological domain mesh exports.",
+  "type": "module",
+  "main": "./lfm.js",
+  "exports": {
+    ".": "./lfm.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lfm.js",
+    "index.js",
+    "README.md"
+  ],
+  "keywords": ["lfm", "leapfrog", "geology", "mesh", "mining", "geostatistics", "auditable", "gcu"],
+  "license": "BSD-3-Clause",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/lfm"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/lfm",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}
