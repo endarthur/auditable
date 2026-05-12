@@ -60,7 +60,7 @@ output += `
 // ── exports ──
 export {
   create,
-  colorMap, categoricalMap, colorBar,
+  colorMap, categoricalMap, colorBar, floorRenderColor,
   addBlockModelLayer, addSectionLayer, addPointsLayer,
   addDrillholeLayer, addSurfaceLayer, addPolylinesLayer, addClipPlane,
   desurvey, interpolatePath,

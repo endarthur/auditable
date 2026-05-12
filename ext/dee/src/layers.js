@@ -405,12 +405,26 @@ export function addSurfaceLayer(dee, name, opts = {}) {
     side: opts.doubleSided !== false ? THREE.DoubleSide : THREE.FrontSide,
     wireframe: !!opts.wireframe,
     clippingPlanes: opts.clippingPlanes || dee.clippingPlanes,
+    // Polygon offset for adjacent meshes sharing contact surfaces (e.g.
+    // nested geological domains). Caller passes an integer rank; smaller
+    // rank wins at contacts, matching Leapfrog's "cutting unit owns the
+    // contact" convention. `opts.polygonOffset` of 0 still enables the
+    // mechanism, which is the right thing — explicit "I want this on"
+    // without bias relative to others at rank 0.
+    polygonOffset: opts.polygonOffset != null,
+    polygonOffsetFactor: opts.polygonOffset != null ? 1 : 0,
+    polygonOffsetUnits: opts.polygonOffset != null ? opts.polygonOffset * 2 : 0,
   });
 
   const surfGroup = new THREE.Group();
   surfGroup.position.set(-dee.origin[0], -dee.origin[1], -dee.origin[2]);
   const mesh = new THREE.Mesh(geom, mat);
   mesh.name = name;
+  // Three.js sorts transparent renderables by renderOrder ascending —
+  // larger objects should be rendered first (negative renderOrder) so
+  // inner volumes blend on top. The caller knows the ordering criterion
+  // (e.g. mesh volume for nested geological domains); we just plumb it.
+  if (opts.renderOrder != null) mesh.renderOrder = opts.renderOrder;
   if (opts.pickable === false) mesh._noPick = true;
   surfGroup.add(mesh);
   dee.scene.add(surfGroup);

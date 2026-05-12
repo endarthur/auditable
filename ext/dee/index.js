@@ -183,6 +183,40 @@ function colorBar(cmap, opts = {}) {
   return bar;
 }
 
+// ── render-color floor for dark stored colours ──
+//
+// File formats (Leapfrog `.lfm`, sometimes others) store some classes as
+// pure black `(0,0,0)`. Under a shaded material on a dark background
+// that disappears entirely. Keep the file's stored RGB for swatches /
+// labels / round-trip exports, but substitute a slight-tinted charcoal
+// at render time when the luminance falls below a threshold.
+//
+// `rgb` accepts {r,g,b} 0-255, [r,g,b] 0-255, or a number 0xRRGGBB.
+// Returns the same shape it received. Luminance uses Rec. 601 weights
+// (perceptually closer to human vision than a flat average).
+function floorRenderColor(rgb, opts = {}) {
+  const threshold = opts.threshold ?? 40;
+  const substitute = opts.substitute ?? [82, 82, 92]; // slight blue tint
+  let r, g, b, returnShape;
+  if (typeof rgb === 'number') {
+    r = (rgb >> 16) & 0xff; g = (rgb >> 8) & 0xff; b = rgb & 0xff;
+    returnShape = 'number';
+  } else if (Array.isArray(rgb)) {
+    [r, g, b] = rgb;
+    returnShape = 'array';
+  } else {
+    r = rgb.r; g = rgb.g; b = rgb.b;
+    returnShape = 'object';
+  }
+  const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+  if (lum < threshold) {
+    [r, g, b] = substitute;
+  }
+  if (returnShape === 'number') return ((r & 0xff) << 16) | ((g & 0xff) << 8) | (b & 0xff);
+  if (returnShape === 'array') return [r, g, b];
+  return { r, g, b };
+}
+
 // ── layers.js ──
 
 // @gcu/dee — layer implementations: block model, points, drillholes, surface, polylines, section
@@ -592,12 +626,26 @@ function addSurfaceLayer(dee, name, opts = {}) {
     side: opts.doubleSided !== false ? THREE.DoubleSide : THREE.FrontSide,
     wireframe: !!opts.wireframe,
     clippingPlanes: opts.clippingPlanes || dee.clippingPlanes,
+    // Polygon offset for adjacent meshes sharing contact surfaces (e.g.
+    // nested geological domains). Caller passes an integer rank; smaller
+    // rank wins at contacts, matching Leapfrog's "cutting unit owns the
+    // contact" convention. `opts.polygonOffset` of 0 still enables the
+    // mechanism, which is the right thing — explicit "I want this on"
+    // without bias relative to others at rank 0.
+    polygonOffset: opts.polygonOffset != null,
+    polygonOffsetFactor: opts.polygonOffset != null ? 1 : 0,
+    polygonOffsetUnits: opts.polygonOffset != null ? opts.polygonOffset * 2 : 0,
   });
 
   const surfGroup = new THREE.Group();
   surfGroup.position.set(-dee.origin[0], -dee.origin[1], -dee.origin[2]);
   const mesh = new THREE.Mesh(geom, mat);
   mesh.name = name;
+  // Three.js sorts transparent renderables by renderOrder ascending —
+  // larger objects should be rendered first (negative renderOrder) so
+  // inner volumes blend on top. The caller knows the ordering criterion
+  // (e.g. mesh volume for nested geological domains); we just plumb it.
+  if (opts.renderOrder != null) mesh.renderOrder = opts.renderOrder;
   if (opts.pickable === false) mesh._noPick = true;
   surfGroup.add(mesh);
   dee.scene.add(surfGroup);
@@ -1357,8 +1405,37 @@ function create(container, opts = {}) {
     renderer.render(scene, _activeCamera);
   }
 
-  // controls change → dirty
-  controls._controls.addEventListener('change', () => markDirty());
+  // controls change → dirty + adaptive frustum recompute
+  controls._controls.addEventListener('change', () => {
+    _updateFrustum();
+    markDirty();
+  });
+
+  // Adaptive near/far based on current orbit radius. A 24-bit depth
+  // buffer at perspective projection gives precision ~ (far² / (near ·
+  // 2²⁴)) at the far plane — with a hardcoded (0.1, 100000) and a
+  // ~1km scene, you get metre-scale z-fighting at far distances.
+  // Recompute on every camera change keeps depth precision at roughly
+  // centimetre at the far end across all zoom levels.
+  //
+  // Orbit radius = distance(camera, target). Floor at 1 so a target-
+  // coincident camera doesn't collapse the frustum.
+  function _updateFrustum() {
+    const r = Math.max(1, _activeCamera.position.distanceTo(controls._controls.target));
+    const near = Math.max(0.1, r * 0.01);
+    const far = r * 100;
+    if (camera.near !== near || camera.far !== far) {
+      camera.near = near; camera.far = far;
+      camera.updateProjectionMatrix();
+    }
+    if (_orthoCamera.near !== near || _orthoCamera.far !== far) {
+      _orthoCamera.near = near; _orthoCamera.far = far;
+      _orthoCamera.updateProjectionMatrix();
+    }
+  }
+  // Initial pass after construction; fitAll() etc. will retrigger via
+  // the 'change' listener above.
+  _updateFrustum();
 
   // resize
   const _resizeObs = new ResizeObserver(() => {
@@ -1611,7 +1688,7 @@ function _addClipPlane(dee, opts) { return addClipPlane(dee, opts); }
 // ── exports ──
 export {
   create,
-  colorMap, categoricalMap, colorBar,
+  colorMap, categoricalMap, colorBar, floorRenderColor,
   addBlockModelLayer, addSectionLayer, addPointsLayer,
   addDrillholeLayer, addSurfaceLayer, addPolylinesLayer, addClipPlane,
   desurvey, interpolatePath,

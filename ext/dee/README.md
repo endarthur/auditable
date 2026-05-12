@@ -4,7 +4,18 @@
 
 ## Status
 
-Working: scene setup, coordinate recentering, camera controls (orbit/pan/zoom, plan/section presets), block model rendering (via @gcu/voxmesh), drillhole rendering (minimum curvature desurvey), point clouds, surfaces, polylines, color maps (continuous/categorical), colorbar, clipping planes, HUD (bounding box, north arrow, scale bar), on-demand rendering, screenshot.
+Working: scene setup, coordinate recentering, camera controls (orbit/pan/zoom, plan/section presets), block model rendering (via @gcu/voxmesh), drillhole rendering (minimum curvature desurvey), point clouds, surfaces, polylines, color maps (continuous/categorical), colorbar, clipping planes, HUD (bounding box, north arrow, scale bar), on-demand rendering, screenshot, adaptive frustum (camera near/far recomputed per orbit-radius — keeps depth precision sane across zoom levels).
+
+### addSurface options
+
+`addSurface(name, opts)` accepts the standard mesh options (`positions`, `indices`, `color`, `opacity`, `doubleSided`, `wireframe`, …) plus two ordering hints used by nested-domain renderers like `@gcu/lfm`:
+
+- `renderOrder: number` — sets `mesh.renderOrder`. Three.js sorts transparent renderables ascending; pass negative numbers for "draw first" (larger / outer / containing meshes).
+- `polygonOffset: number` — when present, enables polygon offset on the material with `polygonOffsetFactor: 1` and `polygonOffsetUnits: N * 2`. Smaller rank wins at shared contact surfaces — useful for nested geological domains where the intrusion should own the contact rather than the host.
+
+### floorRenderColor
+
+`floorRenderColor(rgb, { threshold = 40, substitute = [82, 82, 92] })` — substitutes a slight-blue charcoal for any stored colour below Rec.601 luminance `threshold`. Use at render time to keep pure-black classes visible against a dark background; keep the original stored RGB for swatches / round-trip exports. Accepts and returns `{r,g,b}`, `[r,g,b]`, or `0xRRGGBB`.
 
 ## Picking — current state
 

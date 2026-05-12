@@ -78,8 +78,37 @@ export function create(container, opts = {}) {
     renderer.render(scene, _activeCamera);
   }
 
-  // controls change → dirty
-  controls._controls.addEventListener('change', () => markDirty());
+  // controls change → dirty + adaptive frustum recompute
+  controls._controls.addEventListener('change', () => {
+    _updateFrustum();
+    markDirty();
+  });
+
+  // Adaptive near/far based on current orbit radius. A 24-bit depth
+  // buffer at perspective projection gives precision ~ (far² / (near ·
+  // 2²⁴)) at the far plane — with a hardcoded (0.1, 100000) and a
+  // ~1km scene, you get metre-scale z-fighting at far distances.
+  // Recompute on every camera change keeps depth precision at roughly
+  // centimetre at the far end across all zoom levels.
+  //
+  // Orbit radius = distance(camera, target). Floor at 1 so a target-
+  // coincident camera doesn't collapse the frustum.
+  function _updateFrustum() {
+    const r = Math.max(1, _activeCamera.position.distanceTo(controls._controls.target));
+    const near = Math.max(0.1, r * 0.01);
+    const far = r * 100;
+    if (camera.near !== near || camera.far !== far) {
+      camera.near = near; camera.far = far;
+      camera.updateProjectionMatrix();
+    }
+    if (_orthoCamera.near !== near || _orthoCamera.far !== far) {
+      _orthoCamera.near = near; _orthoCamera.far = far;
+      _orthoCamera.updateProjectionMatrix();
+    }
+  }
+  // Initial pass after construction; fitAll() etc. will retrigger via
+  // the 'change' listener above.
+  _updateFrustum();
 
   // resize
   const _resizeObs = new ResizeObserver(() => {
