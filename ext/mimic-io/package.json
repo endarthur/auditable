@@ -1,0 +1,32 @@
+{
+  "name": "@gcu/mimic-io",
+  "version": "0.1.0",
+  "description": "JSON serialization format for sklearn-shaped fitted estimators. Human-readable, language-independent, security-bounded via closed class registry, signable byte-for-byte via canonical serialization.",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./src": "./src/main.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["mimic-io", "sklearn", "serialization", "json", "machine-learning", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/mimic-io"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/mimic-io",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}
