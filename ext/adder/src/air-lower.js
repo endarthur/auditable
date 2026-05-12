@@ -1018,7 +1018,11 @@ function lowerAssignTarget(ctx, target, value, l) {
   if (target.type === 'Subscript') {
     const obj = lowerExpr_ad(ctx, target.value);
     if (target.slice.type === 'Slice') {
-      throw new AirLowerError('slice assignment not yet supported');
+      const lower = target.slice.lower ? lowerExpr_ad(ctx, target.slice.lower) : ctx.emit('const', [null], VOID, l);
+      const upper = target.slice.upper ? lowerExpr_ad(ctx, target.slice.upper) : ctx.emit('const', [null], VOID, l);
+      const step = target.slice.step ? lowerExpr_ad(ctx, target.slice.step) : ctx.emit('const', [null], VOID, l);
+      emitPyCall(ctx, 'setslice', [obj, lower, upper, step, value], l, VOID);
+      return;
     }
     const key = lowerExpr_ad(ctx, target.slice);
     emitPyCall(ctx, 'setitem', [obj, key, value], l, VOID);
@@ -1040,8 +1044,15 @@ function lowerAugAssign(ctx, node) {
     current = emitPyCall(ctx, 'getattr', [obj, name], l);
   } else if (node.target.type === 'Subscript') {
     const obj = lowerExpr_ad(ctx, node.target.value);
-    const key = lowerExpr_ad(ctx, node.target.slice);
-    current = emitPyCall(ctx, 'getitem', [obj, key], l);
+    if (node.target.slice.type === 'Slice') {
+      const lower = node.target.slice.lower ? lowerExpr_ad(ctx, node.target.slice.lower) : ctx.emit('const', [null], VOID, l);
+      const upper = node.target.slice.upper ? lowerExpr_ad(ctx, node.target.slice.upper) : ctx.emit('const', [null], VOID, l);
+      const step = node.target.slice.step ? lowerExpr_ad(ctx, node.target.slice.step) : ctx.emit('const', [null], VOID, l);
+      current = emitPyCall(ctx, 'slice', [obj, lower, upper, step], l);
+    } else {
+      const key = lowerExpr_ad(ctx, node.target.slice);
+      current = emitPyCall(ctx, 'getitem', [obj, key], l);
+    }
   } else {
     throw new AirLowerError(`unsupported augassign target: ${node.target.type}`);
   }
@@ -1351,8 +1362,15 @@ function lowerDelete(ctx, node) {
       ctx.symbols.set(target.id, undef.id);
     } else if (target.type === 'Subscript') {
       const obj = lowerExpr_ad(ctx, target.value);
-      const key = lowerExpr_ad(ctx, target.slice);
-      emitPyCall(ctx, 'delitem', [obj, key], l, VOID);
+      if (target.slice.type === 'Slice') {
+        const lower = target.slice.lower ? lowerExpr_ad(ctx, target.slice.lower) : ctx.emit('const', [null], VOID, l);
+        const upper = target.slice.upper ? lowerExpr_ad(ctx, target.slice.upper) : ctx.emit('const', [null], VOID, l);
+        const step = target.slice.step ? lowerExpr_ad(ctx, target.slice.step) : ctx.emit('const', [null], VOID, l);
+        emitPyCall(ctx, 'delslice', [obj, lower, upper, step], l, VOID);
+      } else {
+        const key = lowerExpr_ad(ctx, target.slice);
+        emitPyCall(ctx, 'delitem', [obj, key], l, VOID);
+      }
     } else if (target.type === 'Attribute') {
       const obj = lowerExpr_ad(ctx, target.value);
       const name = ctx.emit('const', [target.attr], STRING, l);

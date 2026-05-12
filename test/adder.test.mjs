@@ -452,6 +452,108 @@ describe('arithmetic type safety', () => {
   });
 });
 
+describe('slice assignment', () => {
+  it('simple slice replace, same length', async () => {
+    const r = await pyExec('x = [10, 20, 30, 40]\nx[1:3] = [98, 99]');
+    assert.deepEqual(r.get('x'), [10, 98, 99, 40]);
+  });
+
+  it('simple slice replace, shrink', async () => {
+    const r = await pyExec('x = [10, 20, 30, 40]\nx[1:3] = [99]');
+    assert.deepEqual(r.get('x'), [10, 99, 40]);
+  });
+
+  it('simple slice replace, grow', async () => {
+    const r = await pyExec('x = [10, 20, 30, 40]\nx[1:3] = [98, 99, 100]');
+    assert.deepEqual(r.get('x'), [10, 98, 99, 100, 40]);
+  });
+
+  it('empty-slice insert', async () => {
+    const r = await pyExec('x = [10, 20, 30]\nx[2:2] = [98, 99]');
+    assert.deepEqual(r.get('x'), [10, 20, 98, 99, 30]);
+  });
+
+  it('full-replace via x[:]', async () => {
+    const r = await pyExec('x = [10, 20, 30]\nx[:] = [1, 2, 3, 4]');
+    assert.deepEqual(r.get('x'), [1, 2, 3, 4]);
+  });
+
+  it('negative bounds', async () => {
+    const r = await pyExec('x = [10, 20, 30, 40]\nx[-2:] = [98, 99, 100]');
+    assert.deepEqual(r.get('x'), [10, 20, 98, 99, 100]);
+  });
+
+  it('out-of-bounds upper clamps', async () => {
+    const r = await pyExec('x = [10, 20, 30]\nx[10:20] = [99]');
+    assert.deepEqual(r.get('x'), [10, 20, 30, 99]);
+  });
+
+  it('extended slice with step', async () => {
+    const r = await pyExec('x = [10, 20, 30, 40, 50]\nx[::2] = [98, 99, 100]');
+    assert.deepEqual(r.get('x'), [98, 20, 99, 40, 100]);
+  });
+
+  it('extended slice size mismatch raises ValueError', async () => {
+    await assert.rejects(
+      () => pyExec('x = [10, 20, 30, 40, 50]\nx[::2] = [98, 99]'),
+      (e) => e.pyType === 'ValueError',
+    );
+  });
+
+  it('step zero raises ValueError', async () => {
+    await assert.rejects(
+      () => pyExec('x = [1, 2, 3]\nx[::0] = [9]'),
+      (e) => e.pyType === 'ValueError',
+    );
+  });
+
+  it('string slice assignment raises TypeError', async () => {
+    await assert.rejects(
+      () => pyExec('s = "hello"\ns[1:3] = "x"'),
+      (e) => e.pyType === 'TypeError',
+    );
+  });
+
+  it('fannkuch reverse-in-place idiom', async () => {
+    const r = await pyExec('p = [1, 2, 3, 4, 5]\np[:3] = p[2::-1]');
+    assert.deepEqual(r.get('p'), [3, 2, 1, 4, 5]);
+  });
+
+  it('augmented slice assignment', async () => {
+    const r = await pyExec('x = [10, 20, 30, 40]\nx[1:3] += [98]');
+    assert.deepEqual(r.get('x'), [10, 20, 30, 98, 40]);
+  });
+});
+
+describe('slice deletion', () => {
+  it('simple slice delete', async () => {
+    const r = await pyExec('x = [10, 20, 30, 40]\ndel x[1:3]');
+    assert.deepEqual(r.get('x'), [10, 40]);
+  });
+
+  it('full delete via x[:]', async () => {
+    const r = await pyExec('x = [10, 20, 30]\ndel x[:]');
+    assert.deepEqual(r.get('x'), []);
+  });
+
+  it('extended slice delete', async () => {
+    const r = await pyExec('x = [10, 20, 30, 40, 50]\ndel x[::2]');
+    assert.deepEqual(r.get('x'), [20, 40]);
+  });
+
+  it('reverse extended slice delete', async () => {
+    const r = await pyExec('x = [10, 20, 30, 40, 50]\ndel x[::-2]');
+    assert.deepEqual(r.get('x'), [20, 40]);
+  });
+
+  it('string slice delete raises TypeError', async () => {
+    await assert.rejects(
+      () => pyExec('s = "hello"\ndel s[1:3]'),
+      (e) => e.pyType === 'TypeError',
+    );
+  });
+});
+
 if (VFS) {
 
 describe('open() builtin', () => {

@@ -219,6 +219,72 @@ describe('adder transpile — collections', () => {
   });
 });
 
+describe('adder transpile — slice assignment', () => {
+  it('replace same length', async () => {
+    const r = await runTranspile('x = [10, 20, 30, 40]\nx[1:3] = [98, 99]\nprint(x)');
+    assert.equal(r.output, '[10, 98, 99, 40]');
+  });
+  it('shrink', async () => {
+    const r = await runTranspile('x = [10, 20, 30, 40]\nx[1:3] = [99]\nprint(x)');
+    assert.equal(r.output, '[10, 99, 40]');
+  });
+  it('grow', async () => {
+    const r = await runTranspile('x = [10, 20, 30, 40]\nx[1:3] = [98, 99, 100]\nprint(x)');
+    assert.equal(r.output, '[10, 98, 99, 100, 40]');
+  });
+  it('full replace via x[:]', async () => {
+    const r = await runTranspile('x = [10, 20, 30]\nx[:] = [1, 2, 3, 4]\nprint(x)');
+    assert.equal(r.output, '[1, 2, 3, 4]');
+  });
+  it('extended step', async () => {
+    const r = await runTranspile('x = [10, 20, 30, 40, 50]\nx[::2] = [98, 99, 100]\nprint(x)');
+    assert.equal(r.output, '[98, 20, 99, 40, 100]');
+  });
+  it('fannkuch reverse-in-place idiom', async () => {
+    const r = await runTranspile('p = [1, 2, 3, 4, 5]\np[:3] = p[2::-1]\nprint(p)');
+    assert.equal(r.output, '[3, 2, 1, 4, 5]');
+  });
+  it('extended slice size mismatch raises ValueError', async () => {
+    await assert.rejects(
+      () => runTranspile('x = [10, 20, 30, 40, 50]\nx[::2] = [98, 99]'),
+      (e) => e.pyType === 'ValueError',
+    );
+  });
+  it('string slice assign raises TypeError', async () => {
+    await assert.rejects(
+      () => runTranspile('s = "hi"\ns[0:1] = "x"'),
+      (e) => e.pyType === 'TypeError',
+    );
+  });
+  it('augmented slice += list', async () => {
+    const r = await runTranspile('x = [10, 20, 30, 40]\nx[1:3] += [98]\nprint(x)');
+    assert.equal(r.output, '[10, 20, 30, 98, 40]');
+  });
+  it('augmented slice *= int (list repetition)', async () => {
+    const r = await runTranspile('x = [10, 20, 30, 40]\nx[1:3] *= 2\nprint(x)');
+    assert.equal(r.output, '[10, 20, 30, 20, 30, 40]');
+  });
+  it('augmented slice x[:] += [..]', async () => {
+    const r = await runTranspile('x = [10, 20, 30]\nx[:] += [40, 50]\nprint(x)');
+    assert.equal(r.output, '[10, 20, 30, 40, 50]');
+  });
+});
+
+describe('adder transpile — slice deletion', () => {
+  it('simple delete', async () => {
+    const r = await runTranspile('x = [10, 20, 30, 40]\ndel x[1:3]\nprint(x)');
+    assert.equal(r.output, '[10, 40]');
+  });
+  it('extended step delete', async () => {
+    const r = await runTranspile('x = [10, 20, 30, 40, 50]\ndel x[::2]\nprint(x)');
+    assert.equal(r.output, '[20, 40]');
+  });
+  it('delete all via x[:]', async () => {
+    const r = await runTranspile('x = [1, 2, 3]\ndel x[:]\nprint(x)');
+    assert.equal(r.output, '[]');
+  });
+});
+
 describe('adder transpile — full coverage', () => {
   // Most Python features now lower successfully. This suite runs them end-to-end.
   it('default arguments', async () => {

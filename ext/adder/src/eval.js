@@ -316,7 +316,18 @@ async function _assignTarget(target, value, scope) {
     }
     case 'Subscript': {
       const obj = await adderEval(target.value, scope);
-      const key = target.slice.type === 'Slice' ? await adderEval(target.slice, scope) : await adderEval(target.slice, scope);
+      if (target.slice.type === 'Slice') {
+        const lower = target.slice.lower ? await adderEval(target.slice.lower, scope) : null;
+        const upper = target.slice.upper ? await adderEval(target.slice.upper, scope) : null;
+        const step = target.slice.step ? await adderEval(target.slice.step, scope) : null;
+        if (typeof obj?.__setitem__ === 'function') {
+          await obj.__setitem__({ _slice: true, lower, upper, step }, value);
+        } else {
+          _applySliceAssign(obj, lower, upper, step, value, target.line);
+        }
+        break;
+      }
+      const key = await adderEval(target.slice, scope);
       if (obj instanceof Map) obj.set(key, value);
       else if (typeof obj?.__setitem__ === 'function') obj.__setitem__(key, value);
       else obj[key] = value;
@@ -355,6 +366,17 @@ async function _deleteTarget(target, scope) {
   if (target.type === 'Attribute') { const obj = await adderEval(target.value, scope); delete obj[target.attr]; return; }
   if (target.type === 'Subscript') {
     const obj = await adderEval(target.value, scope);
+    if (target.slice.type === 'Slice') {
+      const lower = target.slice.lower ? await adderEval(target.slice.lower, scope) : null;
+      const upper = target.slice.upper ? await adderEval(target.slice.upper, scope) : null;
+      const step = target.slice.step ? await adderEval(target.slice.step, scope) : null;
+      if (typeof obj?.__delitem__ === 'function') {
+        await obj.__delitem__({ _slice: true, lower, upper, step });
+      } else {
+        _applySliceDelete(obj, lower, upper, step, target.line);
+      }
+      return;
+    }
     const key = await adderEval(target.slice, scope);
     if (obj instanceof Map) obj.delete(key);
     else if (Array.isArray(obj)) obj.splice(key, 1);
@@ -542,6 +564,82 @@ function _applySlice(obj, lower, upper, step) {
     return typeof obj === 'string' ? result.join('') : result;
   }
   throw new AdderError('TypeError', `'${pyTypeName(obj)}' object does not support slicing`);
+}
+
+// Compute the index positions a slice covers, in iteration order. Mirrors
+// _applySlice's clamping. Returns [] when the slice is empty.
+function _sliceIndices(len, lower, upper, step) {
+  step = step ?? 1;
+  if (step === 0) throw new AdderError('ValueError', 'slice step cannot be zero');
+  let start, stop;
+  if (step > 0) {
+    start = lower == null ? 0 : lower < 0 ? Math.max(0, len + lower) : Math.min(lower, len);
+    stop = upper == null ? len : upper < 0 ? Math.max(0, len + upper) : Math.min(upper, len);
+  } else {
+    start = lower == null ? len - 1 : lower < 0 ? Math.max(-1, len + lower) : Math.min(lower, len - 1);
+    stop = upper == null ? -1 : upper < 0 ? Math.max(-1, len + upper) : upper;
+  }
+  const out = [];
+  if (step > 0) { for (let i = start; i < stop; i += step) out.push(i); }
+  else { for (let i = start; i > stop; i += step) out.push(i); }
+  return out;
+}
+
+function _applySliceAssign(obj, lower, upper, step, value, line) {
+  if (typeof obj === 'string') {
+    throw new AdderError('TypeError', "'str' object does not support item assignment", line);
+  }
+  if (obj instanceof Uint8Array) {
+    throw new AdderError('TypeError', "'bytes' object does not support item assignment", line);
+  }
+  if (!Array.isArray(obj)) {
+    throw new AdderError('TypeError', `'${pyTypeName(obj)}' object does not support slice assignment`, line);
+  }
+  const rhs = [...pyIter(value)];
+  const effectiveStep = step ?? 1;
+  if (effectiveStep === 1) {
+    // Simple slice — splice handles length changes (shrink / grow / insert).
+    const len = obj.length;
+    const l = lower == null ? 0 : lower < 0 ? Math.max(0, len + lower) : Math.min(lower, len);
+    const u = upper == null ? len : upper < 0 ? Math.max(0, len + upper) : Math.min(upper, len);
+    const removeCount = Math.max(0, u - l);
+    obj.splice(l, removeCount, ...rhs);
+    return;
+  }
+  // Extended slice — same-length requirement.
+  const indices = _sliceIndices(obj.length, lower, upper, step);
+  if (rhs.length !== indices.length) {
+    throw new AdderError(
+      'ValueError',
+      `attempt to assign sequence of size ${rhs.length} to extended slice of size ${indices.length}`,
+      line,
+    );
+  }
+  for (let k = 0; k < indices.length; k++) obj[indices[k]] = rhs[k];
+}
+
+function _applySliceDelete(obj, lower, upper, step, line) {
+  if (typeof obj === 'string') {
+    throw new AdderError('TypeError', "'str' object doesn't support item deletion", line);
+  }
+  if (obj instanceof Uint8Array) {
+    throw new AdderError('TypeError', "'bytes' object doesn't support item deletion", line);
+  }
+  if (!Array.isArray(obj)) {
+    throw new AdderError('TypeError', `'${pyTypeName(obj)}' object doesn't support slice deletion`, line);
+  }
+  const effectiveStep = step ?? 1;
+  if (effectiveStep === 1) {
+    const len = obj.length;
+    const l = lower == null ? 0 : lower < 0 ? Math.max(0, len + lower) : Math.min(lower, len);
+    const u = upper == null ? len : upper < 0 ? Math.max(0, len + upper) : Math.min(upper, len);
+    if (u > l) obj.splice(l, u - l);
+    return;
+  }
+  const indices = _sliceIndices(obj.length, lower, upper, step);
+  // Sort descending so each splice doesn't shift the remaining indices.
+  indices.sort((a, b) => b - a);
+  for (const i of indices) obj.splice(i, 1);
 }
 
 // ── function call ──

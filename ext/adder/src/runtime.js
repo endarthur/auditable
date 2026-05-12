@@ -194,6 +194,84 @@ function _slice(obj, lower, upper, step) {
   throw new AdderError('TypeError', `'${pyTypeName(obj)}' object is not subscriptable`);
 }
 
+function _sliceIndices(len, lower, upper, step) {
+  let start, stop;
+  if (step > 0) {
+    start = lower == null ? 0 : lower < 0 ? Math.max(0, len + lower) : Math.min(lower, len);
+    stop = upper == null ? len : upper < 0 ? Math.max(0, len + upper) : Math.min(upper, len);
+  } else {
+    start = lower == null ? len - 1 : lower < 0 ? Math.max(-1, len + lower) : Math.min(lower, len - 1);
+    stop = upper == null ? -1 : upper < 0 ? Math.max(-1, len + upper) : upper;
+  }
+  const out = [];
+  if (step > 0) { for (let i = start; i < stop; i += step) out.push(i); }
+  else { for (let i = start; i > stop; i += step) out.push(i); }
+  return out;
+}
+
+function _setslice(obj, lower, upper, step, value) {
+  if (typeof obj === 'string') {
+    throw new AdderError('TypeError', "'str' object does not support item assignment");
+  }
+  if (obj instanceof Uint8Array) {
+    throw new AdderError('TypeError', "'bytes' object does not support item assignment");
+  }
+  if (typeof obj?.__setitem__ === 'function') {
+    obj.__setitem__({ _slice: true, lower, upper, step }, value);
+    return;
+  }
+  if (!Array.isArray(obj)) {
+    throw new AdderError('TypeError', `'${pyTypeName(obj)}' object does not support slice assignment`);
+  }
+  const rhs = [...pyIter(value)];
+  const effectiveStep = step ?? 1;
+  if (effectiveStep === 0) throw new AdderError('ValueError', 'slice step cannot be zero');
+  if (effectiveStep === 1) {
+    const len = obj.length;
+    const l = lower == null ? 0 : lower < 0 ? Math.max(0, len + lower) : Math.min(lower, len);
+    const u = upper == null ? len : upper < 0 ? Math.max(0, len + upper) : Math.min(upper, len);
+    const removeCount = Math.max(0, u - l);
+    obj.splice(l, removeCount, ...rhs);
+    return;
+  }
+  const indices = _sliceIndices(obj.length, lower, upper, effectiveStep);
+  if (rhs.length !== indices.length) {
+    throw new AdderError(
+      'ValueError',
+      `attempt to assign sequence of size ${rhs.length} to extended slice of size ${indices.length}`,
+    );
+  }
+  for (let k = 0; k < indices.length; k++) obj[indices[k]] = rhs[k];
+}
+
+function _delslice(obj, lower, upper, step) {
+  if (typeof obj === 'string') {
+    throw new AdderError('TypeError', "'str' object doesn't support item deletion");
+  }
+  if (obj instanceof Uint8Array) {
+    throw new AdderError('TypeError', "'bytes' object doesn't support item deletion");
+  }
+  if (typeof obj?.__delitem__ === 'function') {
+    obj.__delitem__({ _slice: true, lower, upper, step });
+    return;
+  }
+  if (!Array.isArray(obj)) {
+    throw new AdderError('TypeError', `'${pyTypeName(obj)}' object doesn't support slice deletion`);
+  }
+  const effectiveStep = step ?? 1;
+  if (effectiveStep === 0) throw new AdderError('ValueError', 'slice step cannot be zero');
+  if (effectiveStep === 1) {
+    const len = obj.length;
+    const l = lower == null ? 0 : lower < 0 ? Math.max(0, len + lower) : Math.min(lower, len);
+    const u = upper == null ? len : upper < 0 ? Math.max(0, len + upper) : Math.min(upper, len);
+    if (u > l) obj.splice(l, u - l);
+    return;
+  }
+  const indices = _sliceIndices(obj.length, lower, upper, effectiveStep);
+  indices.sort((a, b) => b - a);
+  for (const i of indices) obj.splice(i, 1);
+}
+
 // ── Attribute access ──
 
 function _getattr(obj, name) {
@@ -521,6 +599,7 @@ export const _py = {
   contains: _contains,
   // subscript
   getitem: _getitem, setitem: _setitem, slice: _slice,
+  setslice: _setslice, delslice: _delslice,
   // attribute
   getattr: _getattr, setattr: _setattr,
   delitem: _delitem, delattr: _delattr,
