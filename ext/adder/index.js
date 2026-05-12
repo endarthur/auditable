@@ -5244,7 +5244,12 @@ function _delslice(obj, lower, upper, step) {
 const _PIC_SIZE = 4;
 const _PIC = [];
 
-async function _callMethod(obj, name, siteId, ...args) {
+// Sync function — the underlying method may be sync OR async, and JS
+// `return` preserves that polarity. Wrapping this helper in `async`
+// would wrap every return in `Promise.resolve()` even when the method
+// is sync, paying the Promise allocation on every method call.
+// The caller's `await _py.callMethod(...)` handles both shapes.
+function _callMethod(obj, name, siteId, ...args) {
   // Fast path: scan the cache for a matching __adderType__.
   const t = (obj !== null && obj !== undefined) ? obj.__adderType__ : undefined;
   const cache = _PIC[siteId];
