@@ -6,13 +6,21 @@
   "main": "./lfm.js",
   "exports": {
     ".": "./lfm.js",
+    "./dee-adapter": "./dee-adapter.js",
     "./package.json": "./package.json"
   },
   "files": [
     "lfm.js",
     "index.js",
+    "dee-adapter.js",
     "README.md"
   ],
+  "peerDependencies": {
+    "@gcu/dee": "*"
+  },
+  "peerDependenciesMeta": {
+    "@gcu/dee": { "optional": true }
+  },
   "keywords": ["lfm", "leapfrog", "geology", "mesh", "mining", "geostatistics", "auditable", "gcu"],
   "license": "BSD-3-Clause",
   "author": "Arthur Endlein Correia",

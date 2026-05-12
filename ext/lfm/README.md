@@ -30,6 +30,33 @@ Returned coordinates are unmodified — in the file's native CRS (typically a UT
 
 `writeLFM` runs the same invariants before emitting bytes.
 
+## Rendering with @gcu/dee
+
+If you also use `@gcu/dee` (a Three.js scene layer), there's a thin adapter:
+
+```js
+import { readLFM } from '@gcu/lfm';
+import { addLFMtoDee, lfmCentroid } from '@gcu/lfm/dee-adapter';
+import * as dee from '@gcu/dee';
+
+const result = await readLFM(arrayBuffer);
+const scene = dee.create(container, {
+  origin: lfmCentroid(result),  // recentres coordinates for f32 precision
+  THREE,
+});
+const layers = addLFMtoDee(scene, result, { opacity: 0.7 });
+// layers[i]._meta = { storedColour, attributes, volume, vCount, tCount }
+```
+
+The adapter handles four conventions specific to nested geological domain rendering:
+
+- **Coordinate recentring**: vertices are subtracted by `dee.origin` in F64 *before* the f32 downcast, so f32 storage holds local-scale values instead of UTM-scale ones (~0.5 m quantisation at 5M northing → cm precision at scene extents).
+- **`renderOrder = -volume`**: largest containing meshes draw first under transparency.
+- **`polygonOffset` rank by ascending volume**: smallest (cutting) mesh wins at shared contact surfaces, matching Leapfrog's convention.
+- **`floorRenderColor`**: black-coded classes substitute a slight-tinted charcoal at render time. The file's stored RGB stays on `layer._meta.storedColour` for swatches and round-trip exports.
+
+`@gcu/dee` is an optional peer dep — if you only need the parser/writer, you can ignore this entirely.
+
 ## Status
 
 v0.1. Validated end-to-end against a real Wolfpass dataset; round-trip tested on synthetic data. Currently supports v1.0 mesh-collection format (`<collectionOfMeshes>` under `<leapfrogObject>`). Block models, point sets, and other Leapfrog object types are out of scope here — they belong in sibling packages.

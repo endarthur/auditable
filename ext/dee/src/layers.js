@@ -417,7 +417,16 @@ export function addSurfaceLayer(dee, name, opts = {}) {
   });
 
   const surfGroup = new THREE.Group();
-  surfGroup.position.set(-dee.origin[0], -dee.origin[1], -dee.origin[2]);
+  // localCoords: caller has already subtracted dee.origin (or its own
+  // centroid) from the vertices in F64 — skipping the group transform
+  // preserves the f32 downcast precision they paid for. Without this
+  // option, addSurface assumes absolute world coordinates and recentres
+  // here via group translation; the f32 storage then quantises at the
+  // raw scale (~0.5m at 5M-northing UTM). LFM/OMF adapters set
+  // localCoords: true after recentring in F64.
+  if (!opts.localCoords) {
+    surfGroup.position.set(-dee.origin[0], -dee.origin[1], -dee.origin[2]);
+  }
   const mesh = new THREE.Mesh(geom, mat);
   mesh.name = name;
   // Three.js sorts transparent renderables by renderOrder ascending —
