@@ -1010,11 +1010,22 @@ async function _evalClass(node, scope) {
   // build class
   const classVars = Object.fromEntries(classScope.vars);
 
+  // Detect `class X(list): …` — adder represents Python list/tuple as
+  // JS Array, and instances need to BE an Array for native list methods
+  // (`append`/`pop`/indexing) to dispatch via adderGetAttr's Array branch.
+  // `_pyContainerType` is set on the builtin `list` factory so a base
+  // class comparison stays internal (no name-string matching).
+  const listBase = bases.find(b => b && b._pyContainerType === 'list');
+
   // constructor function
   const cls = function (...args) {
-    const instance = Object.create(cls.prototype);
-    instance.__adderClass__ = node.name;
-    instance.__adderType__ = cls;
+    const instance = listBase
+      ? Object.assign(args.length > 0 ? [...pyIter(args[0])] : [], { __adderClass__: node.name, __adderType__: cls })
+      : Object.create(cls.prototype);
+    if (!listBase) {
+      instance.__adderClass__ = node.name;
+      instance.__adderType__ = cls;
+    }
     // copy class variables (non-function, non-property)
     for (const [k, v] of Object.entries(classVars)) {
       if (typeof v !== 'function' && !(v && (v.__property__ || v.__staticmethod__ || v.__classmethod__))) instance[k] = v;

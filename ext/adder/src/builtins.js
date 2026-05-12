@@ -1402,7 +1402,10 @@ export function adderBuiltins(printFn) {
     float: (x) => { if (x === undefined) return 0.0; if (typeof x === 'string') { const s = x.trim().toLowerCase(); if (s === 'inf' || s === '+inf' || s === 'infinity') return Infinity; if (s === '-inf' || s === '-infinity') return -Infinity; if (s === 'nan') return NaN; if (s === '') throw new AdderError('ValueError', `could not convert string to float: ${pyRepr(x)}`); const n = Number(x); if (isNaN(n)) throw new AdderError('ValueError', `could not convert string to float: ${pyRepr(x)}`); return n; } return Number(x); },
     str: (x) => x === undefined ? '' : pyStr(x),
     bool: (x) => x === undefined ? false : pyBool(x),
-    list: async (x) => x === undefined ? [] : await pyCollect(x),
+    list: Object.assign(
+      async (x) => x === undefined ? [] : await pyCollect(x),
+      { _pyContainerType: 'list' },
+    ),
     tuple: async (x) => x === undefined ? [] : await pyCollect(x),
     dict: async (x) => {
       if (x === undefined) return {};

@@ -3146,7 +3146,10 @@ function adderBuiltins(printFn) {
     float: (x) => { if (x === undefined) return 0.0; if (typeof x === 'string') { const s = x.trim().toLowerCase(); if (s === 'inf' || s === '+inf' || s === 'infinity') return Infinity; if (s === '-inf' || s === '-infinity') return -Infinity; if (s === 'nan') return NaN; if (s === '') throw new AdderError('ValueError', `could not convert string to float: ${pyRepr(x)}`); const n = Number(x); if (isNaN(n)) throw new AdderError('ValueError', `could not convert string to float: ${pyRepr(x)}`); return n; } return Number(x); },
     str: (x) => x === undefined ? '' : pyStr(x),
     bool: (x) => x === undefined ? false : pyBool(x),
-    list: async (x) => x === undefined ? [] : await pyCollect(x),
+    list: Object.assign(
+      async (x) => x === undefined ? [] : await pyCollect(x),
+      { _pyContainerType: 'list' },
+    ),
     tuple: async (x) => x === undefined ? [] : await pyCollect(x),
     dict: async (x) => {
       if (x === undefined) return {};
@@ -4361,11 +4364,22 @@ async function _evalClass(node, scope) {
   // build class
   const classVars = Object.fromEntries(classScope.vars);
 
+  // Detect `class X(list): …` — adder represents Python list/tuple as
+  // JS Array, and instances need to BE an Array for native list methods
+  // (`append`/`pop`/indexing) to dispatch via adderGetAttr's Array branch.
+  // `_pyContainerType` is set on the builtin `list` factory so a base
+  // class comparison stays internal (no name-string matching).
+  const listBase = bases.find(b => b && b._pyContainerType === 'list');
+
   // constructor function
   const cls = function (...args) {
-    const instance = Object.create(cls.prototype);
-    instance.__adderClass__ = node.name;
-    instance.__adderType__ = cls;
+    const instance = listBase
+      ? Object.assign(args.length > 0 ? [...pyIter(args[0])] : [], { __adderClass__: node.name, __adderType__: cls })
+      : Object.create(cls.prototype);
+    if (!listBase) {
+      instance.__adderClass__ = node.name;
+      instance.__adderType__ = cls;
+    }
     // copy class variables (non-function, non-property)
     for (const [k, v] of Object.entries(classVars)) {
       if (typeof v !== 'function' && !(v && (v.__property__ || v.__staticmethod__ || v.__classmethod__))) instance[k] = v;
@@ -5216,7 +5230,13 @@ function _getattr(obj, name) {
 }
 
 function _setattr(obj, name, value) {
-  if (obj !== null && typeof obj === 'object') obj[name] = value;
+  // typeof check accepts both 'object' (instances) and 'function' (adder
+  // classes — class-attribute assignment patterns like
+  // `Strength.REQUIRED = Strength(0)` deltablue uses for module-level
+  // singletons set after the class body has evaluated).
+  if (obj !== null && (typeof obj === 'object' || typeof obj === 'function')) {
+    obj[name] = value;
+  }
 }
 
 function _delitem(obj, key) {
@@ -5320,10 +5340,18 @@ function _rtComputeMRO(cls) {
 }
 
 function _createClass(name, bases, members) {
+  // `class X(list): …` — instance must BE an Array so native list methods
+  // (append/pop/indexing) dispatch via adderGetAttr's Array branch. See
+  // _evalClass for the mirror-image logic on the tree-walker side.
+  const listBase = (bases || []).find(b => b && b._pyContainerType === 'list');
   const cls = function (...args) {
-    const instance = Object.create(cls.prototype);
-    instance.__adderClass__ = name;
-    instance.__adderType__ = cls;
+    const instance = listBase
+      ? Object.assign(args.length > 0 ? [...pyIter(args[0])] : [], { __adderClass__: name, __adderType__: cls })
+      : Object.create(cls.prototype);
+    if (!listBase) {
+      instance.__adderClass__ = name;
+      instance.__adderType__ = cls;
+    }
     for (const [k, v] of Object.entries(members)) {
       if (typeof v !== 'function' && !(v && (v.__property__ || v.__staticmethod__ || v.__classmethod__))) {
         instance[k] = v;

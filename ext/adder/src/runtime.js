@@ -279,7 +279,13 @@ function _getattr(obj, name) {
 }
 
 function _setattr(obj, name, value) {
-  if (obj !== null && typeof obj === 'object') obj[name] = value;
+  // typeof check accepts both 'object' (instances) and 'function' (adder
+  // classes — class-attribute assignment patterns like
+  // `Strength.REQUIRED = Strength(0)` deltablue uses for module-level
+  // singletons set after the class body has evaluated).
+  if (obj !== null && (typeof obj === 'object' || typeof obj === 'function')) {
+    obj[name] = value;
+  }
 }
 
 function _delitem(obj, key) {
@@ -383,10 +389,18 @@ function _rtComputeMRO(cls) {
 }
 
 function _createClass(name, bases, members) {
+  // `class X(list): …` — instance must BE an Array so native list methods
+  // (append/pop/indexing) dispatch via adderGetAttr's Array branch. See
+  // _evalClass for the mirror-image logic on the tree-walker side.
+  const listBase = (bases || []).find(b => b && b._pyContainerType === 'list');
   const cls = function (...args) {
-    const instance = Object.create(cls.prototype);
-    instance.__adderClass__ = name;
-    instance.__adderType__ = cls;
+    const instance = listBase
+      ? Object.assign(args.length > 0 ? [...pyIter(args[0])] : [], { __adderClass__: name, __adderType__: cls })
+      : Object.create(cls.prototype);
+    if (!listBase) {
+      instance.__adderClass__ = name;
+      instance.__adderType__ = cls;
+    }
     for (const [k, v] of Object.entries(members)) {
       if (typeof v !== 'function' && !(v && (v.__property__ || v.__staticmethod__ || v.__classmethod__))) {
         instance[k] = v;

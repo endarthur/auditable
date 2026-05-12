@@ -270,6 +270,36 @@ describe('adder transpile — slice assignment', () => {
   });
 });
 
+describe('adder transpile — list subclass + class-attr assign', () => {
+  it('class Sub(list): pass — instance is array-like', async () => {
+    const r = await runTranspile(`
+class OC(list):
+    pass
+
+c = OC()
+c.append(1)
+c.append(2)
+print([len(c), list(c)])
+`);
+    assert.equal(r.output, '[2, [1, 2]]');
+  });
+
+  it('class-attr assignment after class body', async () => {
+    // deltablue idiom: declare placeholders, then assign instances later.
+    const r = await runTranspile(`
+class Strength:
+    REQUIRED = None
+
+    def __init__(self, s):
+        self.strength = s
+
+Strength.REQUIRED = Strength(7)
+print(Strength.REQUIRED.strength)
+`);
+    assert.equal(r.output, '7');
+  });
+});
+
 describe('adder transpile — async generator iteration', () => {
   it('iterate gen that yields awaited values', async () => {
     // Generator body uses `tuple(genexp)` which materialises async,
