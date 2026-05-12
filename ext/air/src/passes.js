@@ -27,6 +27,19 @@ function unionType(a, b) {
   return DYNAMIC;
 }
 
+// Python dict-protocol method names. When `_py.getattr(plainObj, name)` is
+// rewritten to a direct property access, these names must be excluded — a
+// literal `{}` in JS doesn't have native `.values`/`.keys`/`.items`/etc, so
+// dropping the helper would produce `undefined is not a function` at call
+// time. Keeping the helper lets `adderGetAttr`'s `_objDictMethods` dispatch
+// route them correctly. User-data that shadows these names (e.g.
+// `d = {"values": [1,2]}`) still wins because `adderGetAttr` checks
+// `attr in obj` before the dict-protocol table.
+const _DICT_PROTOCOL_NAMES = new Set([
+  'keys', 'values', 'items',
+  'get', 'pop', 'popitem', 'setdefault', 'update', 'clear', 'copy', 'fromkeys',
+]);
+
 // Infer the element type from an iterable's SSA id.
 // Handles: `range(...)` → i32, `_py.iter(range(...))` → i32,
 //          Float64Array-typed arrays → f64, etc.
@@ -807,10 +820,14 @@ export function specializeRuntimeHelpers(module, types) {
           const attrName = nameOp.args[0];
           const objOp = traceOp(objId);
           // Plain object literal → direct dot access (no class dispatch needed)
+          // EXCEPT for Python dict-protocol names: a literal {} has no native
+          // .values/.keys/.items/.get/etc, so we must keep the helper call so
+          // adderGetAttr's _objDictMethods dispatch kicks in.
           // Typed/plain array .length → direct (very common)
           const isPlainObject = objOp && objOp.op === 'object_new';
+          const isDictMethodName = isPlainObject && _DICT_PROTOCOL_NAMES.has(attrName);
           const isArrayLength = (objOp?.op === 'array_new' || objOp?.op === 'ta_new') && attrName === 'length';
-          if (isPlainObject || isArrayLength) {
+          if ((isPlainObject && !isDictMethodName) || isArrayLength) {
             op.op = 'object_get';
             op.args = [objId, attrName];
             op.type = isArrayLength ? I32 : DYNAMIC;
