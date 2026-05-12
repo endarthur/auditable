@@ -1065,6 +1065,14 @@ async function _evalClass(node, scope) {
       const originalFn = value;
       cls.prototype[name] = function (...args) { return originalFn(this, ...args); };
       cls.prototype[name]._pyName = `${node.name}.${name}`;
+      // Python unbound-method access: `ClassName.method(instance, ...args)`
+      // should forward to originalFn(instance, ...args). Arrow form is
+      // intentional — adderGetAttr's `.bind(obj)` on a regular fn would
+      // pin `this` to the class; an arrow ignores `.bind`, so call
+      // semantics stay (instance, ...args). Inherited methods still
+      // resolve via the prototype chain on instance access; explicit
+      // unbound access uses the own-class binding above.
+      cls[name] = (...args) => originalFn(...args);
     }
   }
 
@@ -1075,11 +1083,16 @@ async function _evalClass(node, scope) {
     }
   }
 
-  // inherit static/class methods from base constructors
+  // inherit static/class methods (and unbound regular methods) from base
+  // constructors. Walk MRO furthest-first so closer bases override deeper
+  // ones, and skip any key this class already owns — own definitions in
+  // classVars were assigned to `cls[key]` above; overwriting them here
+  // would silently route `Subclass.method` to the parent's implementation.
   for (let i = mro.length - 1; i >= 1; i--) {
     const base = mro[i];
     if (!base._pyOwnMembers) continue;
     for (const key of base._pyOwnMembers) {
+      if (Object.prototype.hasOwnProperty.call(cls, key)) continue;
       if (key in base && typeof base[key] === 'function') cls[key] = base[key];
     }
   }

@@ -444,6 +444,10 @@ function _createClass(name, bases, members) {
       const originalFn = value;
       cls.prototype[mName] = function (...args) { return originalFn(this, ...args); };
       cls.prototype[mName]._pyName = `${name}.${mName}`;
+      // Python unbound-method access (`ClassName.method(instance, ...)`).
+      // Arrow form so adderGetAttr's `.bind(obj)` doesn't pin `this` to
+      // the class. Mirror of the tree-walker's _evalClass branch.
+      cls[mName] = (...args) => originalFn(...args);
     }
   }
 
@@ -453,10 +457,15 @@ function _createClass(name, bases, members) {
     }
   }
 
+  // Inherit class-level method bindings from MRO bases. Walk furthest-
+  // first so closer bases win, and skip keys this class already owns —
+  // without the hasOwnProperty guard the parent's binding would silently
+  // overwrite the child's own definition.
   for (let i = mro.length - 1; i >= 1; i--) {
     const base = mro[i];
     if (!base._pyOwnMembers) continue;
     for (const key of base._pyOwnMembers) {
+      if (Object.prototype.hasOwnProperty.call(cls, key)) continue;
       if (key in base && typeof base[key] === 'function') cls[key] = base[key];
     }
   }

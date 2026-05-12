@@ -776,6 +776,43 @@ function emitLoop(ctx, op) {
   }
 }
 
+// Python-style function-local hoisting: any name `store`d anywhere in the
+// body (including inside if-branches, loops, try/finally, etc.) becomes a
+// function-local binding. Pre-declare them all at function scope so an
+// in-region store emits a bare assignment, matching Python semantics
+// where `if x: y = 1; return y` doesn't NameError on the `return y` path
+// (it returns undefined, like Python would for a path that didn't run if
+// y was assigned — Python raises UnboundLocalError on missing path; AIR
+// returns undefined, an acceptable transpile-mode trade-off for common
+// `if/else assigns both branches` patterns like richards' `runTask`).
+//
+// Names already declared by an `opaque(_markDeclared=N)` prologue line
+// (adder's param/varargs unpacking) are skipped — those will emit their
+// own `let N = …;` declaration, and JS forbids redeclaration of let.
+//
+// Walk skips into nested func_region / class_region — those have their
+// own scope and their own hoist pass when they emit.
+function _hoistFunctionLocals(ctx, body) {
+  if (!body || !body.length) return;
+  const stored = new Set();
+  const prologueDeclared = new Set();
+  const walk = (ops) => {
+    for (const op of ops) {
+      if (op.op === 'store' && typeof op.args[0] === 'string') stored.add(op.args[0]);
+      if (op.op === 'opaque' && op._markDeclared) prologueDeclared.add(op._markDeclared);
+      if (op.op === 'func_region' || op.op === 'class_region') continue;
+      forEachRegion(op, (_n, rops) => walk(rops));
+    }
+  };
+  walk(body);
+  for (const name of stored) {
+    if (prologueDeclared.has(name)) continue;
+    if (ctx.scope.has(name)) continue;
+    ctx.line(`let ${name};`);
+    ctx.scope.declare(name);
+  }
+}
+
 function emitFunc(ctx, op) {
   // Method func_regions are emitted by emitClassMember, not here
   if (op.is_method) return;
@@ -802,6 +839,7 @@ function emitFunc(ctx, op) {
     // inside the body emits as `p = …` rather than re-declaring.
     ctx.pushScope();
     for (const p of (op.params || [])) ctx.scope.declare(p.name);
+    _hoistFunctionLocals(ctx, op.body);
     if (op.body) emitOps(ctx, op.body);
     ctx.popScope();
     ctx.pop();
@@ -818,6 +856,7 @@ function emitFunc(ctx, op) {
     ctx.push();
     ctx.pushScope();
     for (const p of (op.params || [])) ctx.scope.declare(p.name);
+    _hoistFunctionLocals(ctx, op.body);
     if (op.body) emitOps(ctx, op.body);
     ctx.popScope();
     ctx.pop();
