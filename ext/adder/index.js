@@ -7245,7 +7245,7 @@ function _buildParamBinding(ctx, node, l) {
   const prologueOps = captureOps(ctx, () => {
   // _kwObj = (last arg has _kw marker) ? args.pop() : null
   // const _kwObj = (__args.length > 0 && __args[__args.length-1]?._kw) ? __args.pop() : null;
-  emitRaw(ctx, `let __kw = null;`);
+  emitRaw(ctx, `let __kw = null;`, '__kw');
   emitRaw(ctx, `if (__args.length > 0 && __args[__args.length-1] && __args[__args.length-1]._kw) __kw = __args.pop();`);
 
   // Track parameter names used (for **kwargs exclusion)
@@ -7258,16 +7258,16 @@ function _buildParamBinding(ctx, node, l) {
     if (p.default) {
       // Evaluate default in case not provided
       const defVal = lowerExpr_ad(ctx, p.default);
-      emitRaw(ctx, `let ${p.name} = (__args.length > ${i}) ? __args[${i}] : (__kw && '${p.name}' in __kw ? __kw['${p.name}'] : ${_refExpr(ctx, defVal.id)});`);
+      emitRaw(ctx, `let ${p.name} = (__args.length > ${i}) ? __args[${i}] : (__kw && '${p.name}' in __kw ? __kw['${p.name}'] : ${_refExpr(ctx, defVal.id)});`, p.name);
     } else {
-      emitRaw(ctx, `let ${p.name} = (__args.length > ${i}) ? __args[${i}] : (__kw && '${p.name}' in __kw ? __kw['${p.name}'] : (() => { throw new Error("${node.name || '<fn>'}() missing required argument: '${p.name}'"); })());`);
+      emitRaw(ctx, `let ${p.name} = (__args.length > ${i}) ? __args[${i}] : (__kw && '${p.name}' in __kw ? __kw['${p.name}'] : (() => { throw new Error("${node.name || '<fn>'}() missing required argument: '${p.name}'"); })());`, p.name);
     }
     ctx.symbols.set(p.name, null);
   }
 
   // *args — vararg
   if (vararg) {
-    emitRaw(ctx, `let ${vararg} = __args.slice(${positionalParams.length});`);
+    emitRaw(ctx, `let ${vararg} = __args.slice(${positionalParams.length});`, vararg);
     ctx.symbols.set(vararg, null);
     usedNames.push(vararg);
   }
@@ -7277,9 +7277,9 @@ function _buildParamBinding(ctx, node, l) {
     usedNames.push(p.name);
     if (p.default) {
       const defVal = lowerExpr_ad(ctx, p.default);
-      emitRaw(ctx, `let ${p.name} = (__kw && '${p.name}' in __kw) ? __kw['${p.name}'] : ${_refExpr(ctx, defVal.id)};`);
+      emitRaw(ctx, `let ${p.name} = (__kw && '${p.name}' in __kw) ? __kw['${p.name}'] : ${_refExpr(ctx, defVal.id)};`, p.name);
     } else {
-      emitRaw(ctx, `let ${p.name} = (__kw && '${p.name}' in __kw) ? __kw['${p.name}'] : (() => { throw new Error("${node.name || '<fn>'}() missing keyword argument: '${p.name}'"); })();`);
+      emitRaw(ctx, `let ${p.name} = (__kw && '${p.name}' in __kw) ? __kw['${p.name}'] : (() => { throw new Error("${node.name || '<fn>'}() missing keyword argument: '${p.name}'"); })();`, p.name);
     }
     ctx.symbols.set(p.name, null);
   }
@@ -7287,7 +7287,7 @@ function _buildParamBinding(ctx, node, l) {
   // **kwargs — collect remaining
   if (kwarg) {
     const excludeList = [...usedNames, '_kw'].map(n => `'${n}'`).join(',');
-    emitRaw(ctx, `let ${kwarg} = {}; if (__kw) { const __used = new Set([${excludeList}]); for (const __k in __kw) if (!__used.has(__k)) ${kwarg}[__k] = __kw[__k]; }`);
+    emitRaw(ctx, `let ${kwarg} = {}; if (__kw) { const __used = new Set([${excludeList}]); for (const __k in __kw) if (!__used.has(__k)) ${kwarg}[__k] = __kw[__k]; }`, kwarg);
     ctx.symbols.set(kwarg, null);
   }
   });
@@ -7296,8 +7296,13 @@ function _buildParamBinding(ctx, node, l) {
 }
 
 // Helper: emit a raw JS line via an 'opaque' op (statement-level)
-function emitRaw(ctx, jsLine) {
-  ctx.emit('opaque', [jsLine], VOID, null);
+function emitRaw(ctx, jsLine, declaredName = null) {
+  const op = ctx.emit('opaque', [jsLine], VOID, null);
+  // When the raw line declares a name (`let X = ...;`), record it on the
+  // op so the emitter pushes X into the current scope chain. Without this
+  // hook, downstream `store X` ops re-emit `let X = ...` and trigger a
+  // temporal-dead-zone shadow (V8: "Cannot access 'X' before initialization").
+  if (declaredName) op._markDeclared = declaredName;
 }
 
 // Helper: stringify SSA id into a ref that the emitter will resolve.

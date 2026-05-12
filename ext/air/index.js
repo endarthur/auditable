@@ -5615,12 +5615,12 @@ function emitOpaque(ctx, op) {
   const src = op.args[0] || '(void 0)';
   const uses = ctx.useCounts.get(op.id) || 0;
   // Side signal: mark a name as already declared in the current scope
-  // (used by adder/Soft for `nonlocal` / `global` markers — subsequent
-  // stores in this scope should bare-assign rather than `let`-redeclare).
+  // (used by adder/Soft for `nonlocal` / `global` markers AND by adder's
+  // function-param prologue where the raw line IS `let X = …;` and X
+  // needs to be in scope for later stores). Always emit the line —
+  // pure-marker uses produce harmless `/* nonlocal x */` comments.
   if (op._markDeclared) ctx.scope.declare(op._markDeclared);
   if (uses === 0) {
-    // Statement-level: emit as a line (skip the marker comment itself)
-    if (op._markDeclared) return;
     ctx.line(src);
   } else {
     register(ctx, op, src);
