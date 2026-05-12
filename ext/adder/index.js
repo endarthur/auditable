@@ -5223,6 +5223,67 @@ function _delslice(obj, lower, upper, step) {
   for (const i of indices) obj.splice(i, 1);
 }
 
+// ── Method-call PIC (polymorphic inline cache) ──
+//
+// `obj.method(args)` in adder lowers to `await _py.callMethod(obj, name,
+// siteId, ...args)`. Each call site has a unique siteId allocated by the
+// lowerer; the helper keeps a tiny (type → unbound_method) cache keyed
+// off siteId. On hit, skip adderGetAttr's type-dispatch chain entirely
+// and skip the bound-method closure allocation.
+//
+// Layout: _PIC[siteId] = { types, methods, next } — arrays of length
+// 0..PIC_SIZE. FIFO eviction once full so a 5-way polymorphic site
+// (e.g. richards' task-table) cycles instead of going megamorphic.
+//
+// Class-instance fast path only. Primitives (string, array, Map, …) and
+// modules fall through to adderGetAttr because their per-type method
+// tables (`_strMethod`, `_listMethod`, etc.) build a fresh closure per
+// call — caching one would alias the receiver across instances. The
+// adderGetAttr slow path already returns the right closure for these.
+
+const _PIC_SIZE = 4;
+const _PIC = [];
+
+async function _callMethod(obj, name, siteId, ...args) {
+  // Fast path: scan the cache for a matching __adderType__.
+  const t = (obj !== null && obj !== undefined) ? obj.__adderType__ : undefined;
+  const cache = _PIC[siteId];
+  if (cache && t !== undefined) {
+    const types = cache.types;
+    for (let i = 0; i < types.length; i++) {
+      if (types[i] === t) return cache.methods[i].call(obj, ...args);
+    }
+  }
+  // Slow path: full adderGetAttr lookup + call.
+  const fn = adderGetAttr(obj, name);
+  const result = fn(...args);
+
+  // Populate the cache for class-instance receivers. We cache the
+  // wrapper on `t.prototype[name]` (a non-_pyFunc function whose `this`
+  // gets bound to the receiver at call time via `.call(obj, ...)`).
+  // Skip caching for primitives / dicts / modules — adderGetAttr there
+  // returns receiver-bound closures whose identity changes per call.
+  if (t !== undefined && t.prototype && typeof t.prototype[name] === 'function') {
+    let c = cache;
+    if (!c) {
+      c = { types: [], methods: [], next: 0 };
+      _PIC[siteId] = c;
+    }
+    if (c.types.length < _PIC_SIZE) {
+      c.types.push(t);
+      c.methods.push(t.prototype[name]);
+    } else {
+      // FIFO eviction so a 5-way polymorphic site cycles instead of
+      // pinning to the first 4 types it ever saw.
+      const idx = c.next;
+      c.types[idx] = t;
+      c.methods[idx] = t.prototype[name];
+      c.next = (idx + 1) % _PIC_SIZE;
+    }
+  }
+  return result;
+}
+
 // ── Attribute access ──
 
 function _getattr(obj, name) {
@@ -5585,6 +5646,7 @@ const _py = {
   setslice: _setslice, delslice: _delslice,
   // attribute
   getattr: _getattr, setattr: _setattr,
+  callMethod: _callMethod,
   delitem: _delitem, delattr: _delattr,
   // dict/set construction
   makeDict: _makeDict, makeSet: _makeSet,
@@ -5937,7 +5999,14 @@ class AdderLowerCtx extends BaseLowerCtx {
     super();
     this.declared = new Set();
     this.syncFunctions = new Set();
+    // Per-cell counter for `_py.callMethod` polymorphic-inline-cache site IDs.
+    // Each `obj.method(...)` call site gets a distinct ID; the runtime helper
+    // keys its small (type → method) cache off it. Counter is per-cell, not
+    // global, so cache rebuilds when the cell re-runs (intentional — class
+    // identities don't survive a re-lower anyway).
+    this._callSiteId = 0;
   }
+  nextCallSiteId() { return this._callSiteId++; }
   loc(node) {
     return node?.line != null ? { line: node.line, col: node.col || 0 } : null;
   }
@@ -6734,11 +6803,18 @@ function lowerCall_ad(ctx, node) {
   // analyseSyncFunctions classified as sync — that's the path that makes
   // recursive integer-only functions (fib, ackermann, etc.) actually fast.
   if (node.func.type === 'Attribute') {
+    // Fused method call via PIC: `_py.callMethod(obj, name, siteId, ...args)`
+    // skips the getattr → bound-method closure → call dance that the legacy
+    // emit used. siteId is per-call-site so the runtime cache stays
+    // monomorphic for sites that always see the same receiver type.
     const obj = lowerExpr_ad(ctx, node.func.value);
-    const name = ctx.emit('const', [node.func.attr], STRING, l);
-    const method = emitPyCall(ctx, 'getattr', [obj, name], l);
-    const finalArgs = kwObjId ? [...argIds, kwObjId] : argIds;
-    return emitAwaitedCall_ad(ctx, method.id, finalArgs, l);
+    const nameOp = ctx.emit('const', [node.func.attr], STRING, l);
+    const siteIdOp = ctx.emit('const', [ctx.nextCallSiteId()], I32, l);
+    const callArgs = [obj, nameOp, siteIdOp];
+    for (const id of argIds) callArgs.push({ id });
+    if (kwObjId) callArgs.push({ id: kwObjId });
+    const call = emitPyCall(ctx, 'callMethod', callArgs, l);
+    return ctx.emit('await', [call.id], DYNAMIC, l);
   }
 
   const isSyncCallee =

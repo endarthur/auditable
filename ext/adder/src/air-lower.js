@@ -153,7 +153,14 @@ class AdderLowerCtx extends BaseLowerCtx {
     super();
     this.declared = new Set();
     this.syncFunctions = new Set();
+    // Per-cell counter for `_py.callMethod` polymorphic-inline-cache site IDs.
+    // Each `obj.method(...)` call site gets a distinct ID; the runtime helper
+    // keys its small (type → method) cache off it. Counter is per-cell, not
+    // global, so cache rebuilds when the cell re-runs (intentional — class
+    // identities don't survive a re-lower anyway).
+    this._callSiteId = 0;
   }
+  nextCallSiteId() { return this._callSiteId++; }
   loc(node) {
     return node?.line != null ? { line: node.line, col: node.col || 0 } : null;
   }
@@ -950,11 +957,18 @@ function lowerCall_ad(ctx, node) {
   // analyseSyncFunctions classified as sync — that's the path that makes
   // recursive integer-only functions (fib, ackermann, etc.) actually fast.
   if (node.func.type === 'Attribute') {
+    // Fused method call via PIC: `_py.callMethod(obj, name, siteId, ...args)`
+    // skips the getattr → bound-method closure → call dance that the legacy
+    // emit used. siteId is per-call-site so the runtime cache stays
+    // monomorphic for sites that always see the same receiver type.
     const obj = lowerExpr_ad(ctx, node.func.value);
-    const name = ctx.emit('const', [node.func.attr], STRING, l);
-    const method = emitPyCall(ctx, 'getattr', [obj, name], l);
-    const finalArgs = kwObjId ? [...argIds, kwObjId] : argIds;
-    return emitAwaitedCall_ad(ctx, method.id, finalArgs, l);
+    const nameOp = ctx.emit('const', [node.func.attr], STRING, l);
+    const siteIdOp = ctx.emit('const', [ctx.nextCallSiteId()], I32, l);
+    const callArgs = [obj, nameOp, siteIdOp];
+    for (const id of argIds) callArgs.push({ id });
+    if (kwObjId) callArgs.push({ id: kwObjId });
+    const call = emitPyCall(ctx, 'callMethod', callArgs, l);
+    return ctx.emit('await', [call.id], DYNAMIC, l);
   }
 
   const isSyncCallee =

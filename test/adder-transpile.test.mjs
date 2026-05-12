@@ -270,6 +270,78 @@ describe('adder transpile — slice assignment', () => {
   });
 });
 
+describe('adder transpile — method-call PIC', () => {
+  it('class instance method via the fused callMethod path', async () => {
+    const r = await runTranspile(`
+class C:
+    def __init__(self, n):
+        self.n = n
+    def double(self):
+        return self.n * 2
+
+c = C(7)
+print(c.double())
+`);
+    assert.equal(r.output, '14');
+  });
+
+  it('inherited method via callMethod (subclass instance)', async () => {
+    const r = await runTranspile(`
+class Base:
+    def greet(self, who):
+        return "hi " + who
+
+class Child(Base):
+    pass
+
+c = Child()
+print(c.greet("there"))
+`);
+    assert.equal(r.output, 'hi there');
+  });
+
+  it('polymorphic call site sees 5+ types and still produces correct results', async () => {
+    // Exercises the FIFO eviction path: the same call site walks through
+    // five distinct receiver types, exceeding the 4-slot PIC capacity.
+    const r = await runTranspile(`
+class A:
+    def label(self): return "A"
+class B:
+    def label(self): return "B"
+class C:
+    def label(self): return "C"
+class D:
+    def label(self): return "D"
+class E:
+    def label(self): return "E"
+
+# Same call site, 5 different types, repeated 3 times
+out = []
+for _ in range(3):
+    for obj in [A(), B(), C(), D(), E()]:
+        out.append(obj.label())
+print(out)
+`);
+    assert.equal(
+      r.output,
+      "['A', 'B', 'C', 'D', 'E', 'A', 'B', 'C', 'D', 'E', 'A', 'B', 'C', 'D', 'E']",
+    );
+  });
+
+  it('method call with keyword arguments', async () => {
+    const r = await runTranspile(`
+class C:
+    def add(self, a, b=10):
+        return a + b
+c = C()
+print(c.add(5))
+print(c.add(5, b=20))
+print(c.add(a=3, b=4))
+`);
+    assert.equal(r.output, '15\n25\n7');
+  });
+});
+
 describe('adder transpile — list subclass + class-attr assign', () => {
   it('class Sub(list): pass — instance is array-like', async () => {
     const r = await runTranspile(`
