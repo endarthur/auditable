@@ -6229,7 +6229,13 @@ function lowerStmt_ad(ctx, node) {
 
   switch (node.type) {
     case 'Pass': return null;
-    case 'Break': ctx.emit('break', [], VOID, l); return null;
+    case 'Break':
+      // for/else and while/else desugaring: when an enclosing loop with
+      // an `else` clause registered a breakHook, fire it before the break
+      // so the orelse block is skipped on this exit path.
+      if (ctx.breakHook) ctx.breakHook(l);
+      ctx.emit('break', [], VOID, l);
+      return null;
     case 'Continue': ctx.emit('continue', [], VOID, l); return null;
     case 'Expr': return lowerExpr_ad(ctx, node.value);
 
@@ -7109,9 +7115,22 @@ function lowerFor_ad(ctx, node) {
   // for target in iter: body (target may be Name or Tuple/List)
   const l = ctx.loc(node);
   if (node.orelse && node.orelse.length) {
-    throw new AirLowerError('for/else not yet supported');
+    // for/else desugar via _lowerLoopWithElse, mirroring while/else.
+    return _lowerLoopWithElse(ctx, node, l, () => _lowerForLoopBody(ctx, node, l));
   }
+  // Any loop is a fresh `break` target — null the outer breakHook for the
+  // body so a `break` inside this loop only ends THIS loop, not the outer
+  // loop with an else clause.
+  return _withClearedBreakHook(ctx, () => _lowerForLoopBody(ctx, node, l));
+}
 
+function _withClearedBreakHook(ctx, fn) {
+  const prev = ctx.breakHook;
+  ctx.breakHook = null;
+  try { return fn(); } finally { ctx.breakHook = prev; }
+}
+
+function _lowerForLoopBody(ctx, node, l) {
   const iter = lowerExpr_ad(ctx, node.iter);
   const iterArr = emitPyCall(ctx, 'iter', [iter], l);
 
@@ -7174,13 +7193,53 @@ function _preDeclareTargetNames(ctx, target, l) {
 }
 
 function lowerWhile_ad(ctx, node) {
-  if (node.orelse && node.orelse.length) {
-    throw new AirLowerError('while/else not yet supported');
+  const l = ctx.loc(node);
+  const hasElse = node.orelse && node.orelse.length;
+  if (!hasElse) {
+    return _withClearedBreakHook(ctx, () => lowerLoopRegion(ctx,
+      () => lowerExpr_ad(ctx, node.test),
+      () => { for (const s of node.body) lowerStmt_ad(ctx, s); },
+      l, 'while'));
   }
-  return lowerLoopRegion(ctx,
-    () => lowerExpr_ad(ctx, node.test),
-    () => { for (const s of node.body) lowerStmt_ad(ctx, s); },
-    ctx.loc(node), 'while');
+
+  // while/else desugar: `__broken = False; while test: body (with break →
+  // __broken = True; break); if not __broken: orelse`. Inner loops save/
+  // restore breakHook via the try/finally so a nested break doesn't fire
+  // the outer loop's hook.
+  return _lowerLoopWithElse(ctx, node, l, () => {
+    lowerLoopRegion(ctx,
+      () => lowerExpr_ad(ctx, node.test),
+      () => { for (const s of node.body) lowerStmt_ad(ctx, s); },
+      l, 'while');
+  });
+}
+
+function _lowerLoopWithElse(ctx, node, l, lowerLoopFn) {
+  const brokenName = ctx.makeTempName('broken');
+  const falseVal = ctx.emit('const', [false], BOOL, l);
+  ctx.emit('store', [brokenName, falseVal.id], VOID, l);
+
+  const prevHook = ctx.breakHook;
+  ctx.breakHook = (brkLoc) => {
+    const trueVal = ctx.emit('const', [true], BOOL, l);
+    ctx.emit('store', [brokenName, trueVal.id], VOID, brkLoc || l);
+  };
+  try {
+    lowerLoopFn();
+  } finally {
+    ctx.breakHook = prevHook;
+  }
+
+  // if (not __broken) { orelse }
+  const loadBroken = ctx.emit('load', [brokenName], BOOL, l);
+  const notBroken = ctx.emit('logical_not', [loadBroken.id], BOOL, l);
+  const orelseBody = captureOps(ctx, () => {
+    for (const s of node.orelse) lowerStmt_ad(ctx, s);
+  });
+  ctx.emit('if_region', [notBroken.id], VOID, l, {
+    then_body: orelseBody, else_body: [], phis: [],
+  });
+  return null;
 }
 
 // ── Functions and lambdas ──

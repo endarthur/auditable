@@ -270,6 +270,40 @@ describe('adder transpile — slice assignment', () => {
   });
 });
 
+describe('adder transpile — loop/else clauses', () => {
+  it('while/else, no break: else runs', async () => {
+    const r = await runTranspile('i = 0\nwhile i < 3:\n    i += 1\nelse:\n    print("ran")');
+    assert.equal(r.output, 'ran');
+  });
+  it('while/else with break: else skipped', async () => {
+    const r = await runTranspile('i = 0\nwhile i < 10:\n    if i == 3:\n        print("broke")\n        break\n    i += 1\nelse:\n    print("else")');
+    assert.equal(r.output, 'broke');
+  });
+  it('for/else, no break: else runs', async () => {
+    const r = await runTranspile('for i in range(5):\n    pass\nelse:\n    print("done")');
+    assert.equal(r.output, 'done');
+  });
+  it('for/else with break: else skipped', async () => {
+    const r = await runTranspile('for i in range(10):\n    if i == 4:\n        print("stop")\n        break\nelse:\n    print("else")');
+    assert.equal(r.output, 'stop');
+  });
+  it('nested: inner break does not fire outer else', async () => {
+    const r = await runTranspile(`
+log = []
+for outer in range(2):
+    for inner in range(5):
+        if inner == 2:
+            log.append("inner-break")
+            break
+    log.append("outer-iter")
+else:
+    log.append("outer-else")
+print(log)
+`);
+    assert.equal(r.output, "['inner-break', 'outer-iter', 'inner-break', 'outer-iter', 'outer-else']");
+  });
+});
+
 describe('adder transpile — slice deletion', () => {
   it('simple delete', async () => {
     const r = await runTranspile('x = [10, 20, 30, 40]\ndel x[1:3]\nprint(x)');
