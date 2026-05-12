@@ -415,6 +415,28 @@ function emitPyCall(ctx, method, args, loc, type) {
   return ctx.emitNamespacedCall('_py', method, args, loc, type);
 }
 
+// Emit `_py.iter(src)`, with an `await` when the source value might be an
+// async iterable. _iterArray (the runtime helper) returns a Promise<Array>
+// for async iterables and a sync iterable otherwise; the await is correct
+// for both shapes but forces the enclosing JS function to `async`, which
+// would defeat the lowerer's syncFunctions optimization for the common
+// case `for x in some_array` / `for x in nums` (varargs).
+//
+// Heuristic: only insert the await when `src` was itself an awaited call
+// (a function call result — could be an async generator). Bare loads,
+// constants, list/tuple/set literals, slices, etc. can't be async
+// iterables in adder, so the sync path stays sync. Conservative on the
+// safe side: if we miss an async-yielding case (e.g. value flowed through
+// a Name binding), `for of` on the result iterates to zero items rather
+// than crashing — debuggable but not catastrophic.
+function emitPyIter(ctx, src, loc, type) {
+  const call = emitPyCall(ctx, 'iter', [src], loc, type);
+  if (src && src.op === 'await') {
+    return ctx.emit('await', [call.id], type || DYNAMIC, loc);
+  }
+  return call;
+}
+
 // User-facing calls (Python funcs / adder builtins) may be async — await them.
 // Pass `sync: true` when the callee is statically known to be sync (e.g. a
 // user FunctionDef that analyseSyncFunctions classified as sync); the await
@@ -967,7 +989,7 @@ function lowerAssignTarget(ctx, target, value, l) {
   if (target.type === 'Tuple' || target.type === 'List') {
     // Tuple/list unpacking: a, b = value, or a, *rest = value
     // First ensure value is an array-like via _py.iter
-    const iterArr = emitPyCall(ctx, 'iter', [value], l);
+    const iterArr = emitPyIter(ctx, value, l);
     // Find starred index (if any) — only one allowed
     let starredIdx = -1;
     for (let i = 0; i < target.elts.length; i++) {
@@ -1419,7 +1441,7 @@ function _withClearedBreakHook(ctx, fn) {
 
 function _lowerForLoopBody(ctx, node, l) {
   const iter = lowerExpr_ad(ctx, node.iter);
-  const iterArr = emitPyCall(ctx, 'iter', [iter], l);
+  const iterArr = emitPyIter(ctx, iter, l);
 
   // Simple case: target is an Identifier
   if (node.target.type === 'Name') {
@@ -1849,7 +1871,7 @@ function lowerComprehension(ctx, node) {
     }
     const gen = node.generators[genIdx];
     const iter = lowerExpr_ad(ctx, gen.iter);
-    const iterArr = emitPyCall(ctx, 'iter', [iter], l);
+    const iterArr = emitPyIter(ctx, iter, l);
 
     let targetName;
     const body = captureOps(ctx, () => {

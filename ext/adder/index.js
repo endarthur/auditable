@@ -3681,6 +3681,14 @@ async function _assignTarget(target, value, scope) {
       const key = await adderEval(target.slice, scope);
       if (obj instanceof Map) obj.set(key, value);
       else if (typeof obj?.__setitem__ === 'function') obj.__setitem__(key, value);
+      else if (Array.isArray(obj) || obj instanceof Uint8Array) {
+        // Python-style negative indexing on write: arr[-1] is the last
+        // element. Without the translation JS just stores a string-keyed
+        // '-1' property and the positional slot is left untouched —
+        // silently breaks `arr[i], arr[-j] = arr[-j], arr[i]` swaps.
+        const idx = key < 0 ? obj.length + key : key;
+        obj[idx] = value;
+      }
       else obj[key] = value;
       break;
     }
@@ -3730,7 +3738,10 @@ async function _deleteTarget(target, scope) {
     }
     const key = await adderEval(target.slice, scope);
     if (obj instanceof Map) obj.delete(key);
-    else if (Array.isArray(obj)) obj.splice(key, 1);
+    else if (Array.isArray(obj)) {
+      const idx = key < 0 ? obj.length + key : key;
+      obj.splice(idx, 1);
+    }
     else delete obj[key];
     return;
   }
@@ -5506,6 +5517,16 @@ function _call(fn, args, kwargs) {
 function _iterArray(obj) {
   if (Array.isArray(obj)) return obj;
   if (typeof obj === 'string') return obj;  // strings iterate char-by-char in JS for...of
+  // Async iterables can't be materialised synchronously — return a Promise
+  // and let the call site `await` it. Returning a sync iterable on the
+  // common path keeps that fast path free of microtasks.
+  if (obj && typeof obj[Symbol.asyncIterator] === 'function') {
+    return (async () => {
+      const out = [];
+      for await (const v of obj) out.push(v);
+      return out;
+    })();
+  }
   return [...pyIter(obj)];
 }
 
@@ -6150,6 +6171,28 @@ function emitPyCall(ctx, method, args, loc, type) {
   return ctx.emitNamespacedCall('_py', method, args, loc, type);
 }
 
+// Emit `_py.iter(src)`, with an `await` when the source value might be an
+// async iterable. _iterArray (the runtime helper) returns a Promise<Array>
+// for async iterables and a sync iterable otherwise; the await is correct
+// for both shapes but forces the enclosing JS function to `async`, which
+// would defeat the lowerer's syncFunctions optimization for the common
+// case `for x in some_array` / `for x in nums` (varargs).
+//
+// Heuristic: only insert the await when `src` was itself an awaited call
+// (a function call result — could be an async generator). Bare loads,
+// constants, list/tuple/set literals, slices, etc. can't be async
+// iterables in adder, so the sync path stays sync. Conservative on the
+// safe side: if we miss an async-yielding case (e.g. value flowed through
+// a Name binding), `for of` on the result iterates to zero items rather
+// than crashing — debuggable but not catastrophic.
+function emitPyIter(ctx, src, loc, type) {
+  const call = emitPyCall(ctx, 'iter', [src], loc, type);
+  if (src && src.op === 'await') {
+    return ctx.emit('await', [call.id], type || DYNAMIC, loc);
+  }
+  return call;
+}
+
 // User-facing calls (Python funcs / adder builtins) may be async — await them.
 // Pass `sync: true` when the callee is statically known to be sync (e.g. a
 // user FunctionDef that analyseSyncFunctions classified as sync); the await
@@ -6702,7 +6745,7 @@ function lowerAssignTarget(ctx, target, value, l) {
   if (target.type === 'Tuple' || target.type === 'List') {
     // Tuple/list unpacking: a, b = value, or a, *rest = value
     // First ensure value is an array-like via _py.iter
-    const iterArr = emitPyCall(ctx, 'iter', [value], l);
+    const iterArr = emitPyIter(ctx, value, l);
     // Find starred index (if any) — only one allowed
     let starredIdx = -1;
     for (let i = 0; i < target.elts.length; i++) {
@@ -7154,7 +7197,7 @@ function _withClearedBreakHook(ctx, fn) {
 
 function _lowerForLoopBody(ctx, node, l) {
   const iter = lowerExpr_ad(ctx, node.iter);
-  const iterArr = emitPyCall(ctx, 'iter', [iter], l);
+  const iterArr = emitPyIter(ctx, iter, l);
 
   // Simple case: target is an Identifier
   if (node.target.type === 'Name') {
@@ -7584,7 +7627,7 @@ function lowerComprehension(ctx, node) {
     }
     const gen = node.generators[genIdx];
     const iter = lowerExpr_ad(ctx, gen.iter);
-    const iterArr = emitPyCall(ctx, 'iter', [iter], l);
+    const iterArr = emitPyIter(ctx, iter, l);
 
     let targetName;
     const body = captureOps(ctx, () => {

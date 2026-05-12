@@ -270,6 +270,43 @@ describe('adder transpile — slice assignment', () => {
   });
 });
 
+describe('adder transpile — async generator iteration', () => {
+  it('iterate gen that yields awaited values', async () => {
+    // Generator body uses `tuple(genexp)` which materialises async,
+    // so the gen becomes an `async function*`. Caller iterates via
+    // `for vec in gen()` — must materialise the async iter before
+    // for-of. Mirrors the nqueens permutations pattern.
+    const r = await runTranspile(`
+def gen():
+    for i in range(3):
+        yield tuple(j for j in range(i + 1))
+
+out = []
+for vec in gen():
+    out.append(vec)
+print(out)
+`);
+    // adder prints tuples as lists (tuple===Array in the data model)
+    assert.equal(r.output, '[[0], [0, 1], [0, 1, 2]]');
+  });
+
+  it('nested gen-in-gen with chained-eq inside (nqueens-shaped)', async () => {
+    const r = await runTranspile(`
+def perms(n):
+    for i in range(n):
+        yield (i,)
+
+def filter_perms(n):
+    for vec in perms(n):
+        if vec[0] == vec[0] == vec[0]:
+            yield vec
+
+print(len(list(filter_perms(5))))
+`);
+    assert.equal(r.output, '5');
+  });
+});
+
 describe('adder transpile — loop/else clauses', () => {
   it('while/else, no break: else runs', async () => {
     const r = await runTranspile('i = 0\nwhile i < 3:\n    i += 1\nelse:\n    print("ran")');

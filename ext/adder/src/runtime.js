@@ -581,6 +581,16 @@ function _call(fn, args, kwargs) {
 function _iterArray(obj) {
   if (Array.isArray(obj)) return obj;
   if (typeof obj === 'string') return obj;  // strings iterate char-by-char in JS for...of
+  // Async iterables can't be materialised synchronously — return a Promise
+  // and let the call site `await` it. Returning a sync iterable on the
+  // common path keeps that fast path free of microtasks.
+  if (obj && typeof obj[Symbol.asyncIterator] === 'function') {
+    return (async () => {
+      const out = [];
+      for await (const v of obj) out.push(v);
+      return out;
+    })();
+  }
   return [...pyIter(obj)];
 }
 

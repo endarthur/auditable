@@ -776,6 +776,28 @@ function emitLoop(ctx, op) {
   }
 }
 
+// Body-level await check — does this op list contain an EXPLICIT `await`
+// op? Used to promote `function*` to `async function*` (JS rejects await
+// inside a sync generator). Conservative: only triggers on explicit
+// awaits, not on every `can_be_async` op (calls are can_be_async too, but
+// the lowerer's syncFunctions analysis means many calls aren't actually
+// awaited — over-promoting here would turn every fib/fact recursion into
+// a Promise-returning function and break sync callers).
+//
+// Doesn't recurse into nested func/class regions — they manage their own
+// async-ness.
+function _bodyHasAwait(body) {
+  if (!body || !body.length) return false;
+  for (const op of body) {
+    if (op.op === 'await') return true;
+    if (op.op === 'func_region' || op.op === 'class_region') continue;
+    let found = false;
+    forEachRegion(op, (_n, rops) => { if (!found && _bodyHasAwait(rops)) found = true; });
+    if (found) return true;
+  }
+  return false;
+}
+
 // Python-style function-local hoisting: any name `store`d anywhere in the
 // body (including inside if-branches, loops, try/finally, etc.) becomes a
 // function-local binding. Pre-declare them all at function scope so an
@@ -819,7 +841,15 @@ function emitFunc(ctx, op) {
 
   const name = op.name || '';
   const params = (op.params || []).map(p => p.name).join(', ');
-  const asyncPrefix = op.is_async ? 'async ' : '';
+  // Sync generator functions can't use `await` in their body — JS rejects
+  // `function* foo() { … await x … }` as a syntax error and requires
+  // `async function*` instead. The adder lowerer marks `def gen` as
+  // is_generator without is_async, but the lowered body may still emit
+  // `await tuple(...)` etc. from runtime-helper calls. Promote to async
+  // whenever the body contains any can_be_async op (calls, awaits, etc.)
+  // so generator-with-helper-calls compiles.
+  const needsAsyncBody = !op.is_async && _bodyHasAwait(op.body);
+  const asyncPrefix = (op.is_async || needsAsyncBody) ? 'async ' : '';
   const star = op.is_generator ? '*' : '';
 
   // Check if this function is stored to a top-level name
