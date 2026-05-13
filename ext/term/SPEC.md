@@ -383,6 +383,28 @@ reverse index at the scroll top scrolls it down.
 `IL` (insert lines) and `DL` (delete lines) only operate when the cursor
 is inside the scroll region.
 
+### Scrollback
+
+Rows that scroll off the top of the **primary** buffer's full-screen
+scroll region (`scrollTop === 0 && scrollBottom === rows - 1`) are
+pushed onto `term.scrollback` (oldest first). Capped at
+`term.maxScrollback` (default 1000; configurable via the `Terminal`
+constructor's third options argument: `new Terminal(80, 24,
+{ maxScrollback: 5000 })`).
+
+Three deliberate exclusions:
+
+1. **Alt-screen never feeds scrollback.** Apps that use the alt screen
+   (vim, less, htop) own their own scrollback and would double-up if we
+   captured rows there too.
+2. **DECSTBM-shrunk regions don't push.** A status-bar-style app that
+   carves a scroll region within the screen and scrolls inside it is
+   doing app-driven layout work, not producing history.
+3. **Hard reset (RIS) clears scrollback** along with everything else.
+
+The `DomRenderer` reads `term.scrollback` to compose the viewport when
+its `scrollOffset` is non-zero (see §10).
+
 ### Modes
 
 A `modes` object holds boolean and integer toggles. The relevant ones:
@@ -717,6 +739,26 @@ that. When the real font swaps in, every cell is rendered at a slightly
 different pixel width, making cursor positioning and mouse hit-testing
 off across the whole screen until the host reloads. Production embedders
 **must** `await document.fonts.ready` before instantiating the renderer.
+
+### Viewport + scrollback rendering
+
+When `term.scrollback` is non-empty and `renderer.scrollOffset > 0`,
+the renderer composes the viewport from a tail of `scrollback` followed
+by a leading slice of the active buffer. `scrollOffset = N` means N
+rows of scrollback are visible above the active buffer's contents; the
+last `rows - N` rows of the active buffer are visible below. Clamped
+each frame against the current scrollback length (which can shrink
+under `maxScrollback` eviction).
+
+While `scrollOffset > 0`, the cursor overlay is hidden if its logical
+y position would land below the visible viewport. This avoids the
+illusion that an active typing position is somewhere in your history.
+
+`renderer.scrollBy(delta)` adjusts the offset (negative = scroll up
+into history, positive = scroll down toward live). `renderer.scrollToBottom()`
+snaps back. The `Input` layer wires both to mouse wheel (when no app
+mouse tracking) and to Shift+PgUp / Shift+PgDn — bare PgUp/PgDn still
+go to the host so vim and friends keep working.
 
 ### Theme integration
 
@@ -1138,8 +1180,6 @@ roadmap entries (§15); some are forever-skip.
 
 - **Fixed dimensions.** `Terminal(cols, rows)` sets dimensions at
   construction and they cannot change. A `resize` method is planned.
-- **No scrollback.** Lines that scroll off the top are lost. A
-  scrollback ring buffer with mouse-wheel access is planned.
 - **No reflow.** Even after `resize` is added, lines that wrapped at
   the old width will not re-wrap at the new width.
 
@@ -1197,8 +1237,9 @@ roadmap entries (§15); some are forever-skip.
 
 - **Module packaging.** Already in place (ES module). Add a `package.json`
   with `exports` map and minified `dist/` build.
-- **Scrollback** ring buffer with mouse-wheel scroll when no app mouse
-  tracking is active, PgUp/PgDn when no app, and a search API.
+- **Scrollback search API.** The ring buffer + viewport scrolling shipped
+  in v0.2; v1.0 adds a `term.scrollback.search(query)` method returning
+  `{ row, col }` matches that the renderer can highlight.
 - **DEC line drawing charsets** (G0/G1 with `SI`/`SO` and `ESC ( 0` /
   `ESC ( B` switching). Necessary for mc, ncurses dialogs, older TUIs.
 - **Tests**: a corpus of byte-stream fixtures recorded from real

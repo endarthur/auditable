@@ -258,12 +258,18 @@ function defaultModes() {
 }
 
 export class Terminal {
-  constructor(cols = 80, rows = 24) {
+  constructor(cols = 80, rows = 24, opts = {}) {
     this.cols = cols;
     this.rows = rows;
     this.buffer = makeBuffer(cols, rows);
     this.altBuffer = null;
     this.usingAlt = false;
+    // Scrollback: rows that scroll off the top of the primary buffer are
+    // pushed here (oldest first). Trimmed at maxScrollback. Only the
+    // primary buffer feeds scrollback — apps using the alt screen (vim,
+    // less, htop) own their own scrollback. Default 1000 rows.
+    this.maxScrollback = opts.maxScrollback ?? 1000;
+    this.scrollback = [];
     this.cursor = { x: 0, y: 0 };
     this.savedCursor = { x: 0, y: 0, fg: DEFAULT_FG, bg: DEFAULT_BG, flags: 0 };
     this.pendingWrap = false;     // DECAWM "phantom column"
@@ -359,6 +365,7 @@ export class Terminal {
     this.titleListeners = [];
     this.buffer = null;
     this.altBuffer = null;
+    this.scrollback = [];
   }
 
   /* ---------- buffer helpers ---------- */
@@ -374,8 +381,20 @@ export class Terminal {
   }
   _scrollUp(n = 1) {
     const buf = this._curBuf();
+    // Capture scrolled-off rows into scrollback when the primary buffer
+    // scrolls in its full-screen scroll region. DECSTBM-shrunk regions
+    // are app-driven (status-bar style) and don't push to scrollback.
+    const captureToScrollback = !this.usingAlt
+      && this.scrollTop === 0
+      && this.scrollBottom === this.rows - 1;
     for (let i = 0; i < n; i++) {
-      buf.splice(this.scrollTop, 1);
+      const removed = buf.splice(this.scrollTop, 1)[0];
+      if (captureToScrollback && removed) {
+        this.scrollback.push(removed);
+        if (this.scrollback.length > this.maxScrollback) {
+          this.scrollback.splice(0, this.scrollback.length - this.maxScrollback);
+        }
+      }
       buf.splice(this.scrollBottom, 0, this._newRow());
     }
   }
@@ -685,6 +704,7 @@ export class Terminal {
     this.buffer = makeBuffer(this.cols, this.rows);
     this.altBuffer = null;
     this.usingAlt = false;
+    this.scrollback = [];   // RIS clears scrollback too
     this.cursor = {x:0,y:0};
     this.attrs = { fg: DEFAULT_FG, bg: DEFAULT_BG, flags: 0 };
     this.scrollTop = 0; this.scrollBottom = this.rows - 1;
@@ -759,6 +779,10 @@ export class DomRenderer {
     this.rows = [];          // div elements
     this.rowHTML = [];       // last-rendered HTML per row (for diffing)
     this.cursorOn = true;
+    // Viewport offset: number of rows up from "live bottom" the user is
+    // currently looking at. 0 = live (active buffer pinned at the bottom).
+    // Bounded by [0, term.scrollback.length] at render time.
+    this.scrollOffset = 0;
     this._buildRows();
     this._measure();
 
@@ -766,6 +790,30 @@ export class DomRenderer {
     this.cursorEl = document.createElement('div');
     this.cursorEl.className = 'cur';
     container.appendChild(this.cursorEl);
+  }
+
+  /**
+   * Adjust the viewport. Negative delta scrolls up into scrollback;
+   * positive delta scrolls down toward live. Clamped to
+   * [0, term.scrollback.length]. No-op when viewing the alt screen
+   * (apps own their own scrollback there).
+   */
+  scrollBy(delta) {
+    if (this.term.usingAlt) return;
+    const max = this.term.scrollback.length;
+    const next = Math.max(0, Math.min(max, this.scrollOffset - delta));
+    if (next !== this.scrollOffset) {
+      this.scrollOffset = next;
+      this.term.dirty = true;
+    }
+  }
+
+  /** Snap viewport back to live (bottom). */
+  scrollToBottom() {
+    if (this.scrollOffset !== 0) {
+      this.scrollOffset = 0;
+      this.term.dirty = true;
+    }
   }
 
   /** Hot-swap the theme. Forces a full re-render on next tick. */
@@ -811,8 +859,22 @@ export class DomRenderer {
   render() {
     const t = this.term;
     const buf = t._curBuf();
+    // Clamp scrollOffset against current scrollback length each frame
+    // (scrollback can shrink under maxScrollback eviction).
+    const sb = t.usingAlt ? null : t.scrollback;
+    const maxOff = sb ? sb.length : 0;
+    if (this.scrollOffset > maxOff) this.scrollOffset = maxOff;
+    const off = this.scrollOffset;
     for (let y = 0; y < t.rows; y++) {
-      const html = this._renderRow(buf[y]);
+      // Row source: first `off` rows of viewport come from the tail of
+      // scrollback; the rest come from the active buffer (offset by `off`).
+      let row;
+      if (off > 0 && y < off) {
+        row = sb[sb.length - off + y];
+      } else {
+        row = buf[y - off];
+      }
+      const html = this._renderRow(row);
       if (this.rowHTML[y] !== html) {
         this.rows[y].innerHTML = html;
         this.rowHTML[y] = html;
@@ -902,13 +964,19 @@ export class DomRenderer {
 
   _updateCursor() {
     const t = this.term;
-    if (!t.modes.cursorVisible || !this.cursorOn) {
+    // Hide the cursor when the viewport is scrolled into history or the
+    // cursor's logical row would land outside the visible viewport — the
+    // cursor is anchored to the active buffer, not to the scrollback row
+    // currently shown at that y position.
+    const off = this.scrollOffset;
+    const cursorVisibleInViewport = (t.cursor.y + off < t.rows);
+    if (!t.modes.cursorVisible || !this.cursorOn || !cursorVisibleInViewport) {
       this.cursorEl.style.display = 'none';
       return;
     }
     this.cursorEl.style.display = '';
     this.cursorEl.style.left   = (t.cursor.x * this.cellW) + 'px';
-    this.cursorEl.style.top    = (t.cursor.y * this.cellH) + 'px';
+    this.cursorEl.style.top    = ((t.cursor.y + off) * this.cellH) + 'px';
     this.cursorEl.style.width  = this.cellW + 'px';
     this.cursorEl.style.height = this.cellH + 'px';
   }
@@ -1020,6 +1088,20 @@ export class Input {
     const t = this.term;
     const ctrl = e.ctrlKey, alt = e.altKey, shift = e.shiftKey, meta = e.metaKey;
     const send = s => { t._send(s); e.preventDefault(); };
+
+    // Shift+PgUp / Shift+PgDn always scroll the viewport (when scrollback
+    // exists and we're not in alt-screen). Same convention as xterm: bare
+    // PgUp/PgDn go to the host so apps like vim can use them.
+    if (shift && !ctrl && !alt && !meta && !t.usingAlt) {
+      if (e.key === 'PageUp')   { this.renderer.scrollBy(-Math.max(1, t.rows - 1)); e.preventDefault(); return; }
+      if (e.key === 'PageDown') { this.renderer.scrollBy( Math.max(1, t.rows - 1)); e.preventDefault(); return; }
+    }
+    // Any printable key while scrolled-up snaps back to live so the user
+    // sees their typing land. Apps usually want this — typing is an
+    // intent to interact with the live terminal, not the history view.
+    if (this.renderer.scrollOffset > 0 && e.key.length === 1 && !ctrl && !meta) {
+      this.renderer.scrollToBottom();
+    }
 
     // Copy: if there's a non-empty document selection, let the browser handle it.
     // Otherwise fall through (Ctrl+C will send ETX).
@@ -1205,12 +1287,24 @@ export class Input {
 
   _onWheel(e) {
     const t = this.term;
-    if (!t.modes.mouseProto) return;
-    e.preventDefault();
-    const { col, row } = this._cellFromEvent(e);
-    const btn = e.deltaY < 0 ? 64 : 65;
-    if (t.modes.mouseEncoding === 1006) {
-      t._send(`\x1b[<${btn};${col + 1};${row + 1}M`);
+    // App mouse tracking on the primary screen yields wheel events to the
+    // app via the wire encoding. Same on alt-screen — apps like less /
+    // vim handle their own scroll. Shift bypass forces local scroll.
+    if (t.modes.mouseProto && !e.shiftKey) {
+      e.preventDefault();
+      const { col, row } = this._cellFromEvent(e);
+      const btn = e.deltaY < 0 ? 64 : 65;
+      if (t.modes.mouseEncoding === 1006) {
+        t._send(`\x1b[<${btn};${col + 1};${row + 1}M`);
+      }
+      return;
     }
+    // No app tracking and not in alt-screen: scroll the viewport.
+    if (t.usingAlt) return;
+    e.preventDefault();
+    // Three rows per notch is comfortable; deltaMode=0 is pixels but we
+    // round the sign and step by line-units rather than tracking pixels.
+    const step = e.deltaY < 0 ? 3 : -3;
+    this.renderer.scrollBy(step);
   }
 }

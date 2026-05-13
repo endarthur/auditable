@@ -303,6 +303,70 @@ describe('Terminal listeners', () => {
 // dispose
 // ────────────────────────────────────────────────────────────────────
 
+// ────────────────────────────────────────────────────────────────────
+// scrollback
+// ────────────────────────────────────────────────────────────────────
+
+describe('Terminal scrollback', () => {
+  test('default maxScrollback is 1000', () => {
+    const t = new Terminal(10, 3);
+    assert.equal(t.maxScrollback, 1000);
+    assert.deepEqual(t.scrollback, []);
+  });
+
+  test('rows scrolling off the primary buffer push to scrollback', () => {
+    const t = new Terminal(10, 3);
+    // Fill 3 rows then add 2 more — top 2 should land in scrollback
+    t.write('a\r\nb\r\nc\r\nd\r\ne');
+    assert.equal(t.scrollback.length, 2);
+    assert.equal(rowText(t, 0), 'c');
+    assert.equal(rowText(t, 1), 'd');
+    assert.equal(rowText(t, 2), 'e');
+    // Oldest scrollback row is 'a'
+    assert.equal(String.fromCodePoint(t.scrollback[0][0].ch), 'a');
+    assert.equal(String.fromCodePoint(t.scrollback[1][0].ch), 'b');
+  });
+
+  test('alt-screen does not feed scrollback', () => {
+    const t = new Terminal(10, 3);
+    t.write('\x1b[?1049h');     // enter alt
+    t.write('a\r\nb\r\nc\r\nd');  // scrolls in alt; should NOT push to scrollback
+    assert.equal(t.scrollback.length, 0);
+    t.write('\x1b[?1049l');     // back to primary
+    assert.equal(t.scrollback.length, 0);
+  });
+
+  test('scrollback respects maxScrollback', () => {
+    const t = new Terminal(10, 3, { maxScrollback: 4 });
+    let s = '';
+    for (let i = 0; i < 10; i++) s += 'r' + i + '\r\n';
+    t.write(s);
+    // 10 rows written, 3 visible → 7 should have scrolled off, but
+    // capped to 4
+    assert.equal(t.scrollback.length, 4);
+  });
+
+  test('hard reset clears scrollback', () => {
+    const t = new Terminal(10, 3);
+    t.write('a\r\nb\r\nc\r\nd\r\ne');
+    assert.equal(t.scrollback.length, 2);
+    t.write('\x1bc');  // RIS
+    assert.equal(t.scrollback.length, 0);
+  });
+
+  test('partial-region scroll (DECSTBM) does NOT push to scrollback', () => {
+    // A status-bar-style app sets a scroll region within the screen and
+    // scrolls there. Those scroll-offs are app-driven, not user output —
+    // capturing them as history would be confusing.
+    const t = new Terminal(10, 5);
+    t.write('\x1b[2;4r');  // scroll region rows 2-4
+    t.write('\x1b[2;1Ha\r\nb\r\nc\r\nd\r\ne');
+    // No row from outside the region scrolled off the primary screen;
+    // scrollback stays empty.
+    assert.equal(t.scrollback.length, 0);
+  });
+});
+
 describe('Terminal dispose', () => {
   test('write after dispose is a no-op', () => {
     const t = new Terminal(10, 3);

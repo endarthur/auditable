@@ -142,9 +142,10 @@
 
 <h2>3. log viewer (output-only stream)</h2>
 <p>
-  Streams synthetic log lines at 5 Hz. Cursor hidden, no input wired.
-  Useful as a baseline for "I just want to dump bytes into the screen
-  and have them render correctly." Pause to inspect; resume to follow.
+  Streams synthetic log lines at 5 Hz. Cursor hidden. Mouse-wheel
+  scrolls the viewport into scrollback (default 1000 rows); Shift+PgUp
+  / Shift+PgDn scroll by page; clicking the terminal and typing snaps
+  back to live. Pause to inspect; resume to follow.
 </p>
 <div class="demo-row">
   <div class="termhost">
@@ -153,6 +154,8 @@
   </div>
   <div class="controls">
     <button id="d3-toggle">pause</button>
+    <button id="d3-scroll-up">scroll up 10</button>
+    <button id="d3-scroll-bottom">snap to live</button>
     <button id="d3-dispose">dispose</button>
     <div class="status" id="d3-status">running</div>
   </div>
@@ -366,10 +369,25 @@ function setStatus(id, text) { document.getElementById(id).textContent = text; }
     term.write(`\x1b[2m${ts}\x1b[0m \x1b[${lv.color}m${lv.name.padEnd(5)}\x1b[0m #${counter++} ${msg}\r\n`);
   }, 200);
 
+  function updateStatus() {
+    const sb = term.scrollback.length;
+    const off = renderer.scrollOffset;
+    const live = (off === 0);
+    const tag = live ? 'LIVE' : `↑ ${off}/${sb}`;
+    setStatus('d3-status', `${paused ? 'paused' : 'running'} — ${tag} (scrollback ${sb})`);
+  }
+  setInterval(updateStatus, 250);
+
   document.getElementById('d3-toggle').onclick = (e) => {
     paused = !paused;
     e.target.textContent = paused ? 'resume' : 'pause';
-    setStatus('d3-status', paused ? 'paused' : 'running');
+    updateStatus();
+  };
+  document.getElementById('d3-scroll-up').onclick = () => {
+    renderer.scrollBy(-10);
+  };
+  document.getElementById('d3-scroll-bottom').onclick = () => {
+    renderer.scrollToBottom();
   };
   document.getElementById('d3-dispose').onclick = (e) => {
     clearInterval(interval);
@@ -379,6 +397,8 @@ function setStatus(id, text) { document.getElementById(id).textContent = text; }
     term.dispose();
     e.target.disabled = true;
     document.getElementById('d3-toggle').disabled = true;
+    document.getElementById('d3-scroll-up').disabled = true;
+    document.getElementById('d3-scroll-bottom').disabled = true;
     setStatus('d3-status', 'disposed');
   };
 })();
