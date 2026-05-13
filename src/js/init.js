@@ -229,15 +229,78 @@ function _showCryptoError() {
 
 // ── Encryption settings UI handlers ──
 
-export async function enableEncryption() {
-  const p1 = document.getElementById('cryptoPassphrase')?.value;
-  const p2 = document.getElementById('cryptoPassphraseConfirm')?.value;
-  if (!p1 || !p2) { setMsg('enter passphrase', 'err'); return; }
-  if (p1 !== p2) { setMsg('passphrases do not match', 'err'); return; }
+// Shared passphrase form: two password inputs + a live strength meter on
+// the first one. Resolves with { passphrase } on accept, null on cancel.
+// Used by enableEncryption (mode='enable') and changePassphrase (mode='change').
+async function _showPassphraseDialog(mode) {
+  const isEnable = mode === 'enable';
+  return new Dialog({
+    title: isEnable ? 'enable encryption' : 'change passphrase',
+    width: 420,
+    render(body, ctx) {
+      if (isEnable) {
+        const desc = document.createElement('div');
+        desc.className = 'settings-desc';
+        desc.textContent =
+          'use 4+ random words for a strong passphrase. a recovery key will ' +
+          'be generated as backup.';
+        body.appendChild(desc);
+      }
 
+      const p1 = document.createElement('input');
+      p1.type = 'password';
+      p1.className = 'crypto-input';
+      p1.placeholder = isEnable ? 'passphrase' : 'new passphrase';
+      p1.autocomplete = 'off';
+      const strength = document.createElement('div');
+      strength.className = 'crypto-strength';
+      p1.addEventListener('input', () => {
+        const { level, label } = cryptoPassphraseStrength(p1.value);
+        strength.textContent = label;
+        strength.className = 'crypto-strength crypto-strength-' + level;
+      });
+
+      const p2 = document.createElement('input');
+      p2.type = 'password';
+      p2.className = 'crypto-input';
+      p2.placeholder = 'confirm passphrase';
+      p2.autocomplete = 'off';
+
+      const error = document.createElement('div');
+      error.className = 'crypto-strength crypto-strength-weak';
+      error.style.minHeight = '14px';
+
+      const actions = document.createElement('div');
+      actions.className = 'export-actions';
+      const cancelBtn = document.createElement('button');
+      cancelBtn.textContent = 'cancel';
+      cancelBtn.onclick = () => ctx.close(null);
+      const okBtn = document.createElement('button');
+      okBtn.className = 'accent';
+      okBtn.textContent = isEnable ? 'enable' : 'change';
+      okBtn.dataset.default = 'true';
+      okBtn.onclick = () => {
+        if (!p1.value || !p2.value) { error.textContent = 'enter passphrase'; return; }
+        if (p1.value !== p2.value) { error.textContent = 'passphrases do not match'; return; }
+        ctx.close({ passphrase: p1.value });
+      };
+      // Enter in either input submits.
+      const submit = (e) => { if (e.key === 'Enter') { e.preventDefault(); okBtn.click(); } };
+      p1.addEventListener('keydown', submit);
+      p2.addEventListener('keydown', submit);
+
+      actions.append(cancelBtn, okBtn);
+      body.append(p1, strength, p2, error, actions);
+      setTimeout(() => p1.focus(), 0);
+    },
+  }).show();
+}
+
+export async function enableEncryption() {
+  const result = await _showPassphraseDialog('enable');
+  if (!result) return;
   try {
-    const recoveryHex = await cryptoEnable(p1);
-    // Show recovery key modal
+    const recoveryHex = await cryptoEnable(result.passphrase);
     _showRecoveryModal(recoveryHex);
     _showCryptoStatus();
     _updateCryptoSettingsUI();
@@ -247,7 +310,33 @@ export async function enableEncryption() {
   }
 }
 
-export function disableEncryption() {
+export async function disableEncryption() {
+  const ok = await new Dialog({
+    title: 'disable encryption',
+    width: 380,
+    render(body, ctx) {
+      const msg = document.createElement('div');
+      msg.className = 'gcu-dialog-message';
+      msg.textContent =
+        'this will remove encryption from the notebook. the next save will ' +
+        'write cleartext data blocks. continue?';
+
+      const actions = document.createElement('div');
+      actions.className = 'export-actions';
+      const cancelBtn = document.createElement('button');
+      cancelBtn.textContent = 'cancel';
+      cancelBtn.onclick = () => ctx.close(false);
+      const okBtn = document.createElement('button');
+      okBtn.className = 'accent';
+      okBtn.textContent = 'disable';
+      okBtn.dataset.default = 'true';
+      okBtn.onclick = () => ctx.close(true);
+      actions.append(cancelBtn, okBtn);
+
+      body.append(msg, actions);
+    },
+  }).show();
+  if (!ok) return;
   cryptoDisable();
   _updateCryptoSettingsUI();
   const el = document.getElementById('statusCrypto');
@@ -256,14 +345,10 @@ export function disableEncryption() {
 }
 
 export async function changePassphrase() {
-  const p1 = document.getElementById('cryptoNewPassphrase')?.value;
-  const p2 = document.getElementById('cryptoNewPassphraseConfirm')?.value;
-  if (!p1 || !p2) { setMsg('enter new passphrase', 'err'); return; }
-  if (p1 !== p2) { setMsg('passphrases do not match', 'err'); return; }
+  const result = await _showPassphraseDialog('change');
+  if (!result) return;
   try {
-    await cryptoChangePassphrase(p1);
-    document.getElementById('cryptoNewPassphrase').value = '';
-    document.getElementById('cryptoNewPassphraseConfirm').value = '';
+    await cryptoChangePassphrase(result.passphrase);
     setMsg('passphrase changed', 'ok');
   } catch (e) {
     setMsg('failed: ' + e.message, 'err');
@@ -284,15 +369,6 @@ export function lockNotebook() {
   cryptoLock();
   // Reload the page to show lock screen
   location.reload();
-}
-
-export function updateStrengthFeedback() {
-  const el = document.getElementById('cryptoStrength');
-  const input = document.getElementById('cryptoPassphrase');
-  if (!el || !input) return;
-  const { level, label } = cryptoPassphraseStrength(input.value);
-  el.textContent = label;
-  el.className = 'crypto-strength crypto-strength-' + level;
 }
 
 function _showRecoveryModal(hex) {

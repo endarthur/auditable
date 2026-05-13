@@ -218,13 +218,6 @@ async function buildNotebookHtml(opts = {}) {
   if (cryptoEnable) cryptoEnable.style.display = '';
   const cryptoManage = settingsPanEl.querySelector('#cryptoManageSection');
   if (cryptoManage) cryptoManage.style.display = 'none';
-  // clear passphrase inputs
-  ['cryptoPassphrase', 'cryptoPassphraseConfirm', 'cryptoNewPassphrase', 'cryptoNewPassphraseConfirm'].forEach(id => {
-    const el = settingsPanEl.querySelector('#' + id);
-    if (el) el.setAttribute('value', '');
-  });
-  const cryptoStrength = settingsPanEl.querySelector('#cryptoStrength');
-  if (cryptoStrength) cryptoStrength.textContent = '';
   const settingsPanHTML = settingsPanEl.outerHTML.replace(/display:\s*block;?/, '');
   const updateOvHTML = $('#updateOverlay').outerHTML.replace(/\bvisible\b/, '').replace(/class="\s*"/, 'class=""');
   const updatePanEl = $('#updatePanel').cloneNode(true);

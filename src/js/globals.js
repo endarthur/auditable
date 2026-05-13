@@ -20,7 +20,7 @@ import { runAll, runDAG } from './exec.js';
 import { createEditor } from './cm6.js';
 import { toggleSplitView } from './split.js';
 import { addCellWithUndo, deleteCellWithUndo, runSelectedCell, toggleToolbarMenu, toggleAddTray, toggleMoreTray, showInsertPicker, toggleTypePicker, collapseAll, expandAll, newNotebook } from './keyboard.js';
-import { enableEncryption, disableEncryption, changePassphrase, regenerateRecovery, lockNotebook, updateStrengthFeedback } from './init.js';
+import { enableEncryption, disableEncryption, changePassphrase, regenerateRecovery, lockNotebook } from './init.js';
 import { refreshPluginList, refreshModuleList } from './settings.js';
 import { VFS, CommentBackend, MemoryBackend, path } from './vfs.js';
 
@@ -136,7 +136,6 @@ window.disableEncryption = disableEncryption;
 window.changePassphrase = changePassphrase;
 window.regenerateRecovery = regenerateRecovery;
 window.lockNotebook = lockNotebook;
-window.updateStrengthFeedback = updateStrengthFeedback;
 
 // cell types / plugins — public surface lives on window.auditable.* (see top
 // of file). _ctUninstallPlugin stays exposed because the settings panel UI

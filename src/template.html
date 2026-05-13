@@ -185,22 +185,13 @@
     <span id="cryptoStatus">not encrypted</span>
   </div>
   <div id="cryptoEnableSection">
-    <div class="settings-row"><label>passphrase</label></div>
-    <input type="password" id="cryptoPassphrase" class="crypto-input" placeholder="passphrase" autocomplete="off" oninput="updateStrengthFeedback()">
-    <div class="crypto-strength" id="cryptoStrength"></div>
-    <input type="password" id="cryptoPassphraseConfirm" class="crypto-input" placeholder="confirm passphrase" autocomplete="off">
-    <div class="settings-desc">use 4+ random words for a strong passphrase. a recovery key will be generated as backup.</div>
+    <div class="settings-desc">protect this notebook with a passphrase. the data is encrypted with AES-256-GCM; the runtime stays cleartext.</div>
     <button class="accent" onclick="enableEncryption()">enable encryption</button>
   </div>
   <div id="cryptoManageSection" style="display:none">
-    <div class="settings-row"><label>change passphrase</label></div>
-    <input type="password" id="cryptoNewPassphrase" class="crypto-input" placeholder="new passphrase" autocomplete="off">
-    <input type="password" id="cryptoNewPassphraseConfirm" class="crypto-input" placeholder="confirm" autocomplete="off">
     <button onclick="changePassphrase()">change passphrase</button>
-    <div class="settings-row" style="margin-top:8px"><label>recovery key</label></div>
-    <button onclick="regenerateRecovery()">regenerate recovery key</button>
-    <div class="settings-row" style="margin-top:8px"></div>
-    <button onclick="disableEncryption()">disable encryption</button>
+    <button onclick="regenerateRecovery()" style="margin-top:4px">regenerate recovery key</button>
+    <button onclick="disableEncryption()" style="margin-top:8px">disable encryption</button>
     <button onclick="lockNotebook()" style="margin-top:4px">lock now</button>
   </div>
 
