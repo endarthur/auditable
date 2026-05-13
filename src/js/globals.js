@@ -11,7 +11,7 @@ import { convertCell, moveCell } from './cell-ops.js';
 import { toggleAutorun } from './editor.js';
 import { toggleSettings, togglePresent, applyTheme, applyFontSize, applyWidth, applyLineNumbers, applyHeader, applyExecMode, applyRunOnLoad, applyShowToggle, applyGlobalExecMode, applyGlobalRunOnLoad, applyEditorView, applyEmbedFonts } from './settings.js';
 import { toggleUpdate, checkForUpdate, applyOnlineUpdate, proceedUpdate, cancelUpdate, updateFromFile } from './update.js';
-import { saveNotebook, savePackedNotebook, setSaveMode, toggleSaveTray, exportAsTxt, showExportDialog, doExportApp, closeExportDialog } from './save.js';
+import { saveNotebook, savePackedNotebook, setSaveMode, toggleSaveTray, exportAsTxt, showExportDialog } from './save.js';
 import { insertAt, getPreferredCodeType, setPreferredCodeType, setPreferredAndInsert, toggleCodeTray, updateToolbarCodeBtn } from './ui.js';
 import { toggleFs, fsImport } from './fs.js';
 import { toggleMcpPanel, mcpConnect } from './mcp-adapter.js';
@@ -83,8 +83,6 @@ window.setSaveMode = setSaveMode;
 window.toggleSaveTray = toggleSaveTray;
 window.exportAsTxt = exportAsTxt;
 window.showExportDialog = showExportDialog;
-window.doExportApp = doExportApp;
-window.closeExportDialog = closeExportDialog;
 
 // exec
 window.runAll = runAll;

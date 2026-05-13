@@ -277,30 +277,6 @@
   <div class="mcp-panel-log" id="mcpPanelLog"><span class="dim">no tool calls yet</span></div>
 </div>
 
-<div class="export-overlay" id="mcpConfirmOverlay" style="display:none">
-  <div class="export-panel mcp-confirm-panel">
-    <h3 id="mcpConfirmTitle">MCP tool confirmation</h3>
-    <pre class="mcp-confirm-body" id="mcpConfirmBody"></pre>
-    <div class="export-actions">
-      <button class="accent" id="mcpConfirmAccept">accept</button>
-      <button id="mcpConfirmAcceptAll">accept all</button>
-      <button id="mcpConfirmReject">reject</button>
-    </div>
-  </div>
-</div>
-
-<div class="export-overlay" id="exportOverlay" style="display:none">
-  <div class="export-panel">
-    <h3>export as app</h3>
-    <label>title <input id="exportTitle" type="text" spellcheck="false"></label>
-    <label><input id="exportBaseStyles" type="checkbox" checked> include base styles</label>
-    <div class="export-actions">
-      <button class="accent" onclick="doExportApp()">export</button>
-      <button onclick="closeExportDialog()">cancel</button>
-    </div>
-  </div>
-</div>
-
 <div class="lock-screen" id="lockScreen" style="display:none">
   <div class="lock-panel">
     <div class="lock-logo">auditable</div>
@@ -315,23 +291,6 @@
         <textarea id="lockRecoveryInput" class="lock-input" placeholder="A7B4 767C &#x2026;" rows="2" spellcheck="false"></textarea>
         <button class="accent" id="lockRecoveryBtn">unlock with recovery key</button>
       </div>
-    </div>
-  </div>
-</div>
-
-<div class="export-overlay" id="recoveryOverlay" style="display:none">
-  <div class="export-panel recovery-panel">
-    <h3>recovery key</h3>
-    <p class="recovery-desc">save this key somewhere safe. it is the only way to recover your data if you forget your passphrase.</p>
-    <pre class="recovery-key" id="recoveryKey"></pre>
-    <div class="export-actions">
-      <button class="accent" id="recoveryCopyBtn">copy</button>
-      <button id="recoveryDownloadBtn">download .txt</button>
-    </div>
-    <div class="recovery-copy-note" id="recoveryCopyNote" style="display:none">copied &#x2014; clear your clipboard when done</div>
-    <label class="recovery-saved"><input type="checkbox" id="recoverySavedCheck"> I have saved my recovery key</label>
-    <div class="export-actions">
-      <button class="accent" id="recoveryDoneBtn" disabled>done</button>
     </div>
   </div>
 </div>

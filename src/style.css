@@ -706,35 +706,11 @@ audit-text-input input[type="text"] {
 .fs-dir-row:hover { color: var(--au-action); }
 .fs-dir-toggle { display: inline-block; width: 14px; text-align: center; }
 
-/* ── EXPORT DIALOG ── */
-.export-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.5);
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.export-panel {
-  background: var(--au-surface-raised);
-  border: 1px solid var(--au-border);
-  padding: 20px;
-  min-width: 280px;
-  max-width: 90vw;
-  font-family: var(--au-font-mono);
-  font-size: 12px;
-  color: var(--au-fg-muted);
-}
-.export-panel h3 {
-  color: var(--au-action);
-  font-size: 11px;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  margin: 0 0 12px 0;
-  font-weight: normal;
-}
-.export-panel label {
+/* ── DIALOG BODIES (in-app forms inside @gcu/dialog renders) ── */
+/* Custom-rendered Dialog content (export, recovery, mcp confirm). The
+   library handles header/backdrop/focus; we style the body's form
+   primitives so they read as auditable rather than browser-default. */
+.gcu-dialog-body label {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -742,7 +718,7 @@ audit-text-input input[type="text"] {
   color: var(--au-fg-soft);
   font-size: 11px;
 }
-.export-panel input[type="text"] {
+.gcu-dialog-body input[type="text"] {
   background: var(--au-surface-bright);
   border: 1px solid var(--au-border);
   color: var(--au-fg);
@@ -752,10 +728,10 @@ audit-text-input input[type="text"] {
   outline: none;
   flex: 1;
 }
-.export-panel input[type="text"]:focus {
+.gcu-dialog-body input[type="text"]:focus {
   border-color: var(--au-rule);
 }
-.export-panel input[type="checkbox"] {
+.gcu-dialog-body input[type="checkbox"] {
   accent-color: var(--au-action);
 }
 .export-actions {
@@ -766,7 +742,6 @@ audit-text-input input[type="text"] {
 .export-actions button {
   padding: 6px 16px;
 }
-.mcp-confirm-panel { max-width: 600px; }
 .mcp-confirm-body {
   background: var(--au-surface);
   border: 1px solid var(--au-border);
@@ -1029,8 +1004,6 @@ body.locked .present-exit { display: none !important; }
 .crypto-strength-3 { color: var(--au-success); }
 
 /* ── RECOVERY KEY MODAL ── */
-#recoveryOverlay { z-index: 1100; background: rgba(0,0,0,0.85); }
-.recovery-panel { max-width: 560px; width: 90vw; }
 .recovery-desc {
   color: var(--au-fg-soft);
   font-size: 11px;

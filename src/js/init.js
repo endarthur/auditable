@@ -13,6 +13,7 @@ import { cryptoDetect, cryptoUnlock, cryptoUnlockRecovery, cryptoSetLocked, cryp
 import { decodeModules, encodeModules, parseNotebookTxt, hydrateVfs } from './serialize.js';
 import { hydrateModulesFromVfs, flushPendingDirty } from './persist.js';
 import { getSettings } from './settings.js';
+import { Dialog } from '#dialog';
 import { runAll } from './exec.js';
 
 // ── LOCK SCREEN ──
@@ -295,44 +296,74 @@ export function updateStrengthFeedback() {
 }
 
 function _showRecoveryModal(hex) {
-  const overlay = document.getElementById('recoveryOverlay');
-  if (!overlay) return;
-  overlay.style.display = '';
-  const pre = document.getElementById('recoveryKey');
-  if (pre) pre.textContent = hex;
+  // closable=false + backdropDismiss=false so the user must explicitly
+  // confirm "I have saved my recovery key" before the dialog goes away.
+  // Without this guard the secret could be dismissed unsaved.
+  new Dialog({
+    title: 'recovery key',
+    width: 480,
+    closable: false,
+    backdropDismiss: false,
+    render(body, ctx) {
+      const desc = document.createElement('p');
+      desc.className = 'recovery-desc';
+      desc.textContent =
+        'save this key somewhere safe. it is the only way to recover your data ' +
+        'if you forget your passphrase.';
 
-  const copyBtn = document.getElementById('recoveryCopyBtn');
-  const copyNote = document.getElementById('recoveryCopyNote');
-  const checkbox = document.getElementById('recoverySavedCheck');
-  const doneBtn = document.getElementById('recoveryDoneBtn');
-  const downloadBtn = document.getElementById('recoveryDownloadBtn');
+      const pre = document.createElement('pre');
+      pre.className = 'recovery-key';
+      pre.textContent = hex;
 
-  if (doneBtn) doneBtn.disabled = true;
-  if (checkbox) {
-    checkbox.checked = false;
-    checkbox.onchange = () => { if (doneBtn) doneBtn.disabled = !checkbox.checked; };
-  }
-  if (copyBtn) {
-    copyBtn.onclick = () => {
-      navigator.clipboard?.writeText(hex);
-      if (copyNote) copyNote.style.display = '';
-    };
-  }
-  if (downloadBtn) {
-    downloadBtn.onclick = () => {
-      const title = document.getElementById('docTitle')?.value || 'untitled';
-      const blob = new Blob([hex], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = title.replace(/[^a-zA-Z0-9_-]/g, '_') + '-recovery-key.txt';
-      a.click();
-      URL.revokeObjectURL(url);
-    };
-  }
-  if (doneBtn) {
-    doneBtn.onclick = () => { overlay.style.display = 'none'; };
-  }
+      const copyRow = document.createElement('div');
+      copyRow.className = 'export-actions';
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'accent';
+      copyBtn.textContent = 'copy';
+      const downloadBtn = document.createElement('button');
+      downloadBtn.textContent = 'download .txt';
+      copyRow.append(copyBtn, downloadBtn);
+
+      const copyNote = document.createElement('div');
+      copyNote.className = 'recovery-copy-note';
+      copyNote.style.display = 'none';
+      copyNote.textContent = 'copied — clear your clipboard when done';
+
+      const savedLabel = document.createElement('label');
+      savedLabel.className = 'recovery-saved';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      savedLabel.append(checkbox, document.createTextNode(' I have saved my recovery key'));
+
+      const doneRow = document.createElement('div');
+      doneRow.className = 'export-actions';
+      const doneBtn = document.createElement('button');
+      doneBtn.className = 'accent';
+      doneBtn.textContent = 'done';
+      doneBtn.disabled = true;
+      doneBtn.dataset.default = 'true';
+      doneRow.append(doneBtn);
+
+      checkbox.onchange = () => { doneBtn.disabled = !checkbox.checked; };
+      copyBtn.onclick = () => {
+        navigator.clipboard?.writeText(hex);
+        copyNote.style.display = '';
+      };
+      downloadBtn.onclick = () => {
+        const title = document.getElementById('docTitle')?.value || 'untitled';
+        const blob = new Blob([hex], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = title.replace(/[^a-zA-Z0-9_-]/g, '_') + '-recovery-key.txt';
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+      doneBtn.onclick = () => ctx.close(true);
+
+      body.append(desc, pre, copyRow, copyNote, savedLabel, doneRow);
+    },
+  }).show();
 }
 
 export function _updateCryptoSettingsUI() {

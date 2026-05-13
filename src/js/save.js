@@ -8,6 +8,7 @@ import { setMsg } from './ui.js';
 import { cryptoIsEncrypted, cryptoIsLocked, cryptoBuildBlock, cryptoDetect } from './crypto.js';
 import { serializeCells, encodeModules, decodeModules, esc as _esc, buildTxtExport, serializeVfs, hydrateVfs, parseNotebookTxt } from './serialize.js';
 import { flushPendingDirty, hydrateModulesFromVfs, isLegacyFormat, importLegacyFormat } from './persist.js';
+import { Dialog } from '#dialog';
 
 // re-export for backward compatibility (init.js, update.js import from save.js)
 export { encodeModules, decodeModules };
@@ -263,10 +264,7 @@ async function buildNotebookHtml(opts = {}) {
     clone.style.display = 'none';
     return clone.outerHTML;
   }
-  const mcpConfirmHTML = captureOverlay('mcpConfirmOverlay');
-  const exportOverlayHTML = captureOverlay('exportOverlay');
   const lockScreenHTML = captureOverlay('lockScreen');
-  const recoveryHTML = captureOverlay('recoveryOverlay');
 
   // capture MCP panel (reset to default)
   const mcpPanEl = document.getElementById('mcpPanel');
@@ -388,11 +386,7 @@ ${fsPanHTML}
 
 ${mcpPanHTML}
 
-${mcpConfirmHTML}
-${exportOverlayHTML}
-
 ${lockScreenHTML}
-${recoveryHTML}
 
 ${toolbarHTML}
 
@@ -679,28 +673,47 @@ ${__APP_RUNTIME__}
   setMsg('exported app (' + kb + ' KB)', 'ok');
 }
 
-export function showExportDialog() {
-  // check if any cell has %bare directive
-  const hasBare = S.cells.some(c => isBare(c.code));
-
-  const overlay = document.getElementById('exportOverlay');
-  const titleInput = document.getElementById('exportTitle');
-  const baseCheck = document.getElementById('exportBaseStyles');
-
-  if (titleInput) titleInput.value = $('#docTitle').value || 'untitled';
-  if (baseCheck) baseCheck.checked = !hasBare;
-  if (overlay) overlay.style.display = '';
-}
-
-export function doExportApp() {
+export async function showExportDialog() {
   if (cryptoIsLocked()) { setMsg('unlock first', 'err'); return; }
-  const title = document.getElementById('exportTitle').value;
-  const includeBase = document.getElementById('exportBaseStyles').checked;
-  closeExportDialog();
-  exportAsApp({ title, includeBaseStyles: includeBase });
-}
+  const hasBare = S.cells.some(c => isBare(c.code));
+  const defaultTitle = $('#docTitle').value || 'untitled';
 
-export function closeExportDialog() {
-  const overlay = document.getElementById('exportOverlay');
-  if (overlay) overlay.style.display = 'none';
+  const result = await new Dialog({
+    title: 'export as app',
+    width: 420,
+    render(body, ctx) {
+      const titleLabel = document.createElement('label');
+      titleLabel.append(document.createTextNode('title '));
+      const titleInput = document.createElement('input');
+      titleInput.type = 'text';
+      titleInput.spellcheck = false;
+      titleInput.value = defaultTitle;
+      titleLabel.appendChild(titleInput);
+
+      const baseLabel = document.createElement('label');
+      const baseCheck = document.createElement('input');
+      baseCheck.type = 'checkbox';
+      baseCheck.checked = !hasBare;
+      baseLabel.append(baseCheck, document.createTextNode(' include base styles'));
+
+      const actions = document.createElement('div');
+      actions.className = 'export-actions';
+      const exportBtn = document.createElement('button');
+      exportBtn.className = 'accent';
+      exportBtn.textContent = 'export';
+      exportBtn.dataset.default = 'true';
+      exportBtn.onclick = () => ctx.close({
+        title: titleInput.value,
+        includeBaseStyles: baseCheck.checked,
+      });
+      const cancelBtn = document.createElement('button');
+      cancelBtn.textContent = 'cancel';
+      cancelBtn.onclick = () => ctx.close(null);
+      actions.append(exportBtn, cancelBtn);
+
+      body.append(titleLabel, baseLabel, actions);
+    },
+  }).show();
+
+  if (result) exportAsApp(result);
 }

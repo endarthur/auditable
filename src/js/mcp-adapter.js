@@ -21,6 +21,7 @@ import { fsWrite, fsRead, validatePath } from './fs.js';
 import { setCellCode } from './cell-ops.js';
 import { cryptoIsLocked } from './crypto.js';
 import { BUILTIN_HELP } from './complete.js';
+import { Dialog } from '#dialog';
 
 // ── Locked notebook gating ──
 
@@ -38,36 +39,47 @@ const _mcpAutoAccept = new Set();
 function _mcpConfirm(title, body, category) {
   if (_mcpAutoAccept.has(category)) return Promise.resolve(true);
 
-  return new Promise((resolve) => {
-    const overlay = document.getElementById('mcpConfirmOverlay');
-    const titleEl = document.getElementById('mcpConfirmTitle');
-    const bodyEl = document.getElementById('mcpConfirmBody');
-    const acceptBtn = document.getElementById('mcpConfirmAccept');
-    const acceptAllBtn = document.getElementById('mcpConfirmAcceptAll');
-    const rejectBtn = document.getElementById('mcpConfirmReject');
-    if (!overlay) { resolve(true); return; } // fallback if DOM not ready
+  return new Dialog({
+    title,
+    width: 560,
+    closable: true,
+    backdropDismiss: false,  // explicit reject required
+    render(rootBody, ctx) {
+      const pre = document.createElement('pre');
+      pre.className = 'mcp-confirm-body';
+      if (typeof body === 'string') {
+        pre.textContent = body;
+      } else {
+        // DOM fragment (for diff display)
+        pre.appendChild(body);
+      }
+      const actions = document.createElement('div');
+      actions.className = 'export-actions';
 
-    titleEl.textContent = title;
-    if (typeof body === 'string') {
-      bodyEl.textContent = body;
-    } else {
-      // body is a DOM fragment (for diff display)
-      bodyEl.textContent = '';
-      bodyEl.appendChild(body);
-    }
-    // Show which category "accept all" applies to
-    acceptAllBtn.textContent = category ? `accept all ${category}` : 'accept all';
-    overlay.style.display = '';
+      const acceptBtn = document.createElement('button');
+      acceptBtn.className = 'accent';
+      acceptBtn.textContent = 'accept';
+      acceptBtn.dataset.default = 'true';
+      acceptBtn.onclick = () => ctx.close('accept');
 
-    function cleanup() {
-      overlay.style.display = 'none';
-      acceptBtn.onclick = null;
-      acceptAllBtn.onclick = null;
-      rejectBtn.onclick = null;
+      const acceptAllBtn = document.createElement('button');
+      acceptAllBtn.textContent = category ? `accept all ${category}` : 'accept all';
+      acceptAllBtn.onclick = () => ctx.close('accept-all');
+
+      const rejectBtn = document.createElement('button');
+      rejectBtn.textContent = 'reject';
+      rejectBtn.onclick = () => ctx.close('reject');
+
+      actions.append(acceptBtn, acceptAllBtn, rejectBtn);
+      rootBody.append(pre, actions);
+    },
+  }).show().then((result) => {
+    if (result === 'accept') return true;
+    if (result === 'accept-all') {
+      if (category) _mcpAutoAccept.add(category);
+      return true;
     }
-    acceptBtn.onclick = () => { cleanup(); resolve(true); };
-    acceptAllBtn.onclick = () => { cleanup(); if (category) _mcpAutoAccept.add(category); resolve(true); };
-    rejectBtn.onclick = () => { cleanup(); resolve(false); };
+    return false;  // 'reject' or null (Esc / × dismiss)
   });
 }
 
