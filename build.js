@@ -63,6 +63,43 @@ if (target === 'works') {
   // 1. Process Works modules
   let worksJs = processModules(path.join(worksJsDir, 'main.js'), worksJsDir);
 
+  // 1a. Prepend @gcu/menu + @gcu/dialog as IIFE-style globals.
+  // Works uses concat-style processModules (not the import-map registry that
+  // auditable uses), so we strip module-level imports/exports from menu.js
+  // and dialog.js and let their top-level identifiers (Menu, MenuBar, Dialog,
+  // dialogConfirm, dialogPrompt, dialogAlert) live at script scope.
+  // Renames `confirm`/`prompt`/`alert` to dialog* so they don't shadow the
+  // native window.* equivalents.
+  function bundleExtForWorks(extPath, renames = {}) {
+    if (!fs.existsSync(extPath)) return '';
+    let src = fs.readFileSync(extPath, 'utf8');
+    src = src.replace(/^import\b[\s\S]*?from\s+['"][^'"]*['"];?\s*$/gm, '');
+    src = src.replace(/^import\s+['"][^'"]*['"];?\s*$/gm, '');
+    src = src.replace(/^export function /gm, 'function ');
+    src = src.replace(/^export async function /gm, 'async function ');
+    src = src.replace(/^export const /gm, 'const ');
+    src = src.replace(/^export let /gm, 'let ');
+    src = src.replace(/^export class /gm, 'class ');
+    src = src.replace(/^export\s*\{[\s\S]*?\}\s*;?\s*$/gm, '');
+    src = src.replace(/^export\s+default\s+.*$/gm, '');
+    for (const [from, to] of Object.entries(renames)) {
+      // Conservative: rename function declarations and bare-identifier RHS
+      // assignments only. Avoids clobbering string literals like
+      // setAttribute('role', 'alert').
+      src = src.replace(new RegExp(`^function ${from}\\b`, 'gm'), `function ${to}`);
+      src = src.replace(new RegExp(`= ${from};`, 'g'), `= ${to};`);
+    }
+    return src.replace(/^\n+/, '').replace(/\n+$/, '');
+  }
+  const menuSrc = bundleExtForWorks(path.join(__dirname, 'ext/menu/index.js'));
+  const dialogSrc = bundleExtForWorks(path.join(__dirname, 'ext/dialog/index.js'), {
+    confirm: 'dialogConfirm',
+    prompt:  'dialogPrompt',
+    alert:   'dialogAlert',
+  });
+  if (menuSrc)   worksJs = '// -- @gcu/menu --\n\n'   + menuSrc   + '\n\n' + worksJs;
+  if (dialogSrc) worksJs = '// -- @gcu/dialog --\n\n' + dialogSrc + '\n\n' + worksJs;
+
   // 2. Read the already-built auditable.html and embed as template literal
   const auditablePath = path.join(__dirname, 'auditable.html');
   if (!fs.existsSync(auditablePath)) {
@@ -73,8 +110,21 @@ if (target === 'works') {
   const escaped = auditableHtml.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${').replace(/<\/script>/gi, '<\\/script>');
   worksJs = `const __AUDITABLE_RUNTIME__ = \`${escaped}\`;\n\n` + worksJs;
 
-  // 3. Read Works CSS and template
-  const worksCss = fs.readFileSync(path.join(worksDir, 'style.css'), 'utf8');
+  // 3. Read Works CSS and template, append menu + dialog CSS
+  let worksCss = fs.readFileSync(path.join(worksDir, 'style.css'), 'utf8');
+  for (const cssPath of [
+    'ext/menu/menu.css', 'ext/menu/menu-default.css',
+    'ext/dialog/dialog.css', 'ext/dialog/dialog-default.css',
+  ]) {
+    const fullPath = path.join(__dirname, cssPath);
+    if (!fs.existsSync(fullPath)) continue;
+    let css = fs.readFileSync(fullPath, 'utf8');
+    // Strip :root swatches so works' own palette wins (mirror auditable bundling).
+    if (cssPath.endsWith('default.css')) {
+      css = css.replace(/:root\s*\{[\s\S]*?\}\s*/m, '');
+    }
+    worksCss += '\n\n' + css.trimEnd();
+  }
   const worksTemplate = fs.readFileSync(path.join(worksDir, 'template.html'), 'utf8');
 
   // 4. Assemble works.html

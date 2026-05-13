@@ -14,7 +14,6 @@ const WKS = {
   tabId: 0,
   sidebarWidth: 240,
   hasFSAA: typeof showDirectoryPicker === 'function',
-  contextMenu: null,  // currently open context menu element
   db: null,           // IndexedDB reference
   treeOpen: {},       // expanded state: { "r0": true, "r0:src": true, ... }
 };

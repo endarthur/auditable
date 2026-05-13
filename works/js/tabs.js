@@ -148,12 +148,12 @@ function showIframe(tabId) {
   }
 }
 
-function closeTab(tabId) {
+async function closeTab(tabId) {
   const idx = WKS.tabs.findIndex(t => t.id === tabId);
   if (idx < 0) return;
   const tab = WKS.tabs[idx];
 
-  if (tab.dirty && !confirm('unsaved changes in ' + tab.title + '. close anyway?')) return;
+  if (tab.dirty && !await dialogConfirm('unsaved changes in ' + tab.title + '. close anyway?', { okLabel: 'close', danger: true })) return;
 
   // cleanup
   if (tab.blobUrl) URL.revokeObjectURL(tab.blobUrl);

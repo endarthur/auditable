@@ -126,7 +126,7 @@ async function addFolder() {
 }
 
 async function addBox() {
-  const name = prompt('box name:', 'scratch');
+  const name = await dialogPrompt('box name:', { defaultValue: 'scratch' });
   if (!name) return;
   const box = await boxCreate(name);
   WKS.roots.push({ type: 'box', name, boxId: box.id });

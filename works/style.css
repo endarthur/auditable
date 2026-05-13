@@ -331,41 +331,10 @@ html, body {
 .tree-dir .tree-dir .tree-file { padding-left: 44px; }
 .tree-dir .tree-dir .tree-dir .tree-file { padding-left: 56px; }
 
-/* ── CONTEXT MENU ── */
-.works-context-menu {
-  position: fixed;
-  z-index: 1000;
-  background: var(--bg1);
-  border: 1px solid var(--border-hi);
-  min-width: 140px;
-  padding: 4px 0;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-}
-.works-context-menu button {
-  display: block;
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: none;
-  color: var(--fg);
-  font-family: var(--mono);
-  font-size: 12px;
-  padding: 4px 12px;
-  cursor: pointer;
-}
-.works-context-menu button:hover {
-  background: var(--bg2);
-  color: var(--fg-bright);
-}
-.works-context-menu button:disabled {
-  color: var(--fg-dim);
-  cursor: default;
-}
-.works-ctx-sep {
-  height: 1px;
-  background: var(--border);
-  margin: 4px 0;
-}
+/* Context menus and modal dialogs in Works render through @gcu/menu and
+   @gcu/dialog (bundled by build.js for the works target). Their structural
+   + default themes ship with the libraries and are appended to this CSS
+   at build time — no Works-side overrides needed. */
 
 /* ── STATUSBAR ── */
 .works-statusbar {

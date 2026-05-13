@@ -98,40 +98,13 @@ function renderEntries(parent, entries, rootIndex) {
 }
 
 // ── CONTEXT MENUS ──
+// Items keep the { label, action: fn() } shape they had under the bespoke
+// renderer. @gcu/menu's Menu.show resolves with whatever `action` was set to;
+// since we set it to a function, the awaited value IS the function — invoke it.
 
-function closeContextMenu() {
-  if (WKS.contextMenu) {
-    WKS.contextMenu.remove();
-    WKS.contextMenu = null;
-  }
-}
-
-function createContextMenu(x, y, items) {
-  closeContextMenu();
-  const menu = document.createElement('div');
-  menu.className = 'works-context-menu';
-  for (const item of items) {
-    if (item === '---') {
-      const sep = document.createElement('div');
-      sep.className = 'works-ctx-sep';
-      menu.appendChild(sep);
-      continue;
-    }
-    const btn = document.createElement('button');
-    btn.textContent = item.label;
-    if (item.disabled) btn.disabled = true;
-    btn.addEventListener('click', () => { closeContextMenu(); item.action(); });
-    menu.appendChild(btn);
-  }
-  menu.style.left = x + 'px';
-  menu.style.top = y + 'px';
-  document.body.appendChild(menu);
-  WKS.contextMenu = menu;
-
-  // close on outside click
-  setTimeout(() => {
-    document.addEventListener('click', closeContextMenu, { once: true });
-  }, 0);
+async function showContextMenu(x, y, items) {
+  const action = await Menu.show(items, { x, y });
+  if (typeof action === 'function') action();
 }
 
 function showRootContextMenu(e, rootIndex) {
@@ -160,7 +133,7 @@ function showRootContextMenu(e, rootIndex) {
     action: () => removeRoot(rootIndex),
   });
 
-  createContextMenu(e.clientX, e.clientY, items);
+  showContextMenu(e.clientX, e.clientY, items);
 }
 
 function showEntryContextMenu(e, rootIndex, entry, isDir) {
@@ -206,13 +179,13 @@ function showEntryContextMenu(e, rootIndex, entry, isDir) {
     action: () => promptDelete(rootIndex, entry),
   });
 
-  createContextMenu(e.clientX, e.clientY, items);
+  showContextMenu(e.clientX, e.clientY, items);
 }
 
 // ── ACTIONS (context menu) ──
 
 async function promptNewNotebook(rootIndex, parentPath) {
-  const name = prompt('notebook name:', 'untitled.html');
+  const name = await dialogPrompt('notebook name:', { defaultValue: 'untitled.html' });
   if (!name) return;
   const finalName = (name.endsWith('.html') || name.endsWith('.txt')) ? name : name + '.html';
   const root = WKS.roots[rootIndex];
@@ -239,7 +212,7 @@ async function promptNewNotebook(rootIndex, parentPath) {
 async function promptRenameBox(rootIndex) {
   const root = WKS.roots[rootIndex];
   if (root.type !== 'box') return;
-  const newName = prompt('rename box:', root.name);
+  const newName = await dialogPrompt('rename box:', { defaultValue: root.name });
   if (!newName || newName === root.name) return;
   root.name = newName;
   const box = await boxGet(root.boxId);
@@ -250,7 +223,7 @@ async function promptRenameBox(rootIndex) {
 
 async function promptRename(rootIndex, entry) {
   const root = WKS.roots[rootIndex];
-  const newName = prompt('rename:', entry.name);
+  const newName = await dialogPrompt('rename:', { defaultValue: entry.name });
   if (!newName || newName === entry.name) return;
 
   if (root.type === 'box') {
@@ -287,7 +260,7 @@ async function promptRename(rootIndex, entry) {
 }
 
 async function promptDelete(rootIndex, entry) {
-  if (!confirm('delete ' + entry.name + '?')) return;
+  if (!await dialogConfirm('delete ' + entry.name + '?', { okLabel: 'delete', danger: true })) return;
 
   // close any open tabs for this file
   const tabsToClose = WKS.tabs.filter(t =>
