@@ -418,6 +418,81 @@ describe('cross_validate', () => {
   });
 });
 
+// SPEC §5.4 — the only sklearn-API divergence in @gcu/learn: score a
+// frozen pre-trained estimator across CV folds without retraining.
+describe('cross_val_score refit=false', () => {
+  test('skips clone+fit, scores frozen estimator on each fold', () => {
+    const X = makeX(20, 2);
+    const y = Float64Array.from({ length: 20 }, (_, i) => i);
+    // Pre-fit on a separate "training" portion (the whole X here for
+    // simplicity); under refit=false the same fitted state is used on
+    // every fold's test set.
+    const est = new MeanRegressor().fit(X, y);
+    const frozen_mean = est.mean_;
+
+    const scores = cross_val_score(est, X, y, {
+      cv: 4,
+      refit: false,
+      scoring: (est, X, y) => -mean_squared_error(y, est.predict(X)),
+    });
+    assert.equal(scores.length, 4);
+    for (const s of scores) assert.ok(Number.isFinite(s));
+    // Estimator state should not have been mutated.
+    assert.equal(est.mean_, frozen_mean);
+  });
+
+  test('refit=false rejects unfitted estimators', () => {
+    const X = makeX(10, 2);
+    const y = Float64Array.from({ length: 10 }, (_, i) => i);
+    const est = new MeanRegressor();  // never fitted
+    assert.throws(
+      () => cross_val_score(est, X, y, { cv: 3, refit: false }),
+      /requires a fitted estimator/,
+    );
+  });
+
+  test('cross_validate refit=false: fit_time is 0, train scores still computed', () => {
+    const X = makeX(20, 2);
+    const y = Float64Array.from({ length: 20 }, (_, i) => i);
+    const est = new MeanRegressor().fit(X, y);
+    const out = cross_validate(est, X, y, {
+      cv: 4,
+      refit: false,
+      return_train_score: true,
+      scoring: { mse: (est, X, y) => mean_squared_error(y, est.predict(X)) },
+    });
+    assert.ok(out.test_mse instanceof Float64Array);
+    assert.equal(out.test_mse.length, 4);
+    assert.ok(out.train_mse instanceof Float64Array);
+    for (const t of out.fit_time) assert.equal(t, 0);
+  });
+
+  test('frozen vs refit gives different scores when distribution shifts', () => {
+    // Train on first half, test refit on full data — refit=true should
+    // adapt to each fold (lower per-fold MSE in this setup); refit=false
+    // uses the fixed train-on-first-half mean.
+    const X = makeX(40, 1);
+    const y = Float64Array.from({ length: 40 }, (_, i) => i < 20 ? 0 : 100);
+    const frozen = new MeanRegressor().fit(X, y.slice(0, 20));  // mean ≈ 0
+    const fresh = new MeanRegressor();
+
+    const scoresRefit = cross_val_score(fresh, X, y, {
+      cv: 4, scoring: (e, X, y) => -mean_squared_error(y, e.predict(X)),
+    });
+    const scoresFrozen = cross_val_score(frozen, X, y, {
+      cv: 4, refit: false,
+      scoring: (e, X, y) => -mean_squared_error(y, e.predict(X)),
+    });
+    // Refit should win on average (per-fold mean adapts to fold). Frozen
+    // pays a heavy cost on the second half where actual mean is 100 but
+    // frozen estimator predicts ~0.
+    let sumRefit = 0; for (const s of scoresRefit) sumRefit += s;
+    let sumFrozen = 0; for (const s of scoresFrozen) sumFrozen += s;
+    assert.ok(sumRefit > sumFrozen,
+      `expected refit (${sumRefit}) > frozen (${sumFrozen})`);
+  });
+});
+
 // Sanity: StandardScaler still works after the new modules ship.
 describe('preprocessing post-integration', () => {
   test('StandardScaler still passes its smoke test', () => {

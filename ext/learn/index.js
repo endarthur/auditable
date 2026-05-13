@@ -2416,6 +2416,11 @@ class SpatialKFold {
  *   opts.sample_weight (1D array, optional) — split alongside X/y
  *   opts.split_opts    (object, optional) — passed through to cv.split
  *                       (e.g. { groups, xyz } for GroupKFold/SpatialKFold)
+ *   opts.refit         (bool, default true) — when false, skip clone+fit and
+ *                       score the already-fitted estimator on each fold's
+ *                       test set. The only sklearn-API divergence in @gcu/learn
+ *                       (SPEC §5.4): useful for honest k-fold scoring of a
+ *                       bonsai-edited tree or any pre-trained model from disk.
  *
  * Returns Float64Array of length n_splits.
  */
@@ -2430,6 +2435,9 @@ function cross_val_score(estimator, X, y, opts = {}) {
  *   opts.cv, opts.scoring, opts.sample_weight, opts.split_opts as above
  *   opts.scoring may be { name: fn, ... } for multiple metrics
  *   opts.return_train_score (bool, default false)
+ *   opts.refit (bool, default true) — see cross_val_score. When false,
+ *     fit_time is 0 for every fold and train_<name> equals the score on
+ *     the full training fold (no in-fold retraining occurred).
  *
  * Returns { test_score | test_<name>, [train_score | train_<name>],
  *           fit_time, score_time, n_dropped (when SpatialKFold) }.
@@ -2457,6 +2465,18 @@ function _cvLoop_model_selection(estimator, X, y, opts, multi) {
   const splitOpts = opts.split_opts ?? {};
   const scoringDict = _resolveScoring_model_selection(opts.scoring, multi);
   const returnTrain = opts.return_train_score ?? false;
+  const refit = opts.refit ?? true;
+
+  // refit=false requires a fitted estimator since we won't retrain. Fail
+  // fast with a clear error rather than letting predict throw downstream.
+  if (!refit) {
+    try {
+      check_is_fitted(estimator);
+    } catch (_) {
+      throw new ValidationError(
+        'cross_val: refit=false requires a fitted estimator; got an unfitted one.');
+    }
+  }
 
   const X_envelope = { data: Xd, shape };
   const fold_results = [];
@@ -2470,10 +2490,20 @@ function _cvLoop_model_selection(estimator, X, y, opts, multi) {
     const y_train = yv == null ? null : _gatherValues_model_selection(yv, train_idx);
     const y_test = yv == null ? null : _gatherValues_model_selection(yv, test_idx);
 
-    const est = clone(estimator);
-    const t_fit = _now_model_selection();
-    est.fit(X_train, y_train);
-    const fit_time = _now_model_selection() - t_fit;
+    let est, fit_time;
+    if (refit) {
+      est = clone(estimator);
+      const t_fit = _now_model_selection();
+      est.fit(X_train, y_train);
+      fit_time = _now_model_selection() - t_fit;
+    } else {
+      // Use the as-passed (fitted) estimator. fit_time is 0 since no fit
+      // happened. The estimator's frozen state is the same on every fold —
+      // we're scoring it on the test partition only, which is exactly the
+      // refit=false contract (SPEC §5.4).
+      est = estimator;
+      fit_time = 0;
+    }
 
     const t_score = _now_model_selection();
     const test_scores = {};
