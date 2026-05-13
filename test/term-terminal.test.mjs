@@ -546,6 +546,43 @@ function makeBareRenderer(theme = null, cssVars = null) {
   return r;
 }
 
+describe('DomRenderer.scrollBy semantics', () => {
+  test('negative delta scrolls UP into history (offset increases)', () => {
+    const term = new Terminal(10, 3);
+    // Generate scrollback
+    for (let i = 0; i < 5; i++) term.write(`row ${i}\r\n`);
+    assert.ok(term.scrollback.length >= 1);
+    const r = Object.create(DomRenderer.prototype);
+    r.term = term;
+    r.scrollOffset = 0;
+    r.scrollBy(-3);
+    assert.ok(r.scrollOffset > 0, 'wheel-up (negative delta) should increase offset');
+  });
+
+  test('positive delta scrolls DOWN toward live (offset decreases)', () => {
+    const term = new Terminal(10, 3);
+    for (let i = 0; i < 5; i++) term.write(`row ${i}\r\n`);
+    const r = Object.create(DomRenderer.prototype);
+    r.term = term;
+    r.scrollOffset = term.scrollback.length;  // fully up
+    r.scrollBy(3);
+    assert.ok(r.scrollOffset < term.scrollback.length);
+  });
+
+  test('clamped at 0 (live) and at scrollback.length (top)', () => {
+    const term = new Terminal(10, 3);
+    for (let i = 0; i < 5; i++) term.write(`row ${i}\r\n`);
+    const max = term.scrollback.length;
+    const r = Object.create(DomRenderer.prototype);
+    r.term = term;
+    r.scrollOffset = 0;
+    r.scrollBy(99);             // try to scroll down past live
+    assert.equal(r.scrollOffset, 0);
+    r.scrollBy(-9999);          // try to scroll up past top
+    assert.equal(r.scrollOffset, max);
+  });
+});
+
 describe('DomRenderer color resolution', () => {
   test('default cell with no theme → null (inherit from CSS)', () => {
     const r = makeBareRenderer();

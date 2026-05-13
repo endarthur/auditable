@@ -1295,7 +1295,16 @@ export class Input {
     this._onMouseMove   = this._onMouseMove.bind(this);
     this._onMouseUp     = this._onMouseUp.bind(this);
     this._onWheel       = this._onWheel.bind(this);
-    this._onContext     = (e) => e.preventDefault();
+    // Allow the browser's native context menu when the user has a text
+    // selection — so right-click → "Copy" works as an escape hatch from
+    // the Ctrl+Shift+C / Cmd+C keyboard chord (Ctrl+Shift+C collides with
+    // dev tools in Chrome/Firefox). Otherwise suppress so app right-click
+    // events can flow to the term via mouse-tracking when enabled.
+    this._onContext = (e) => {
+      const sel = document.getSelection?.();
+      if (sel && sel.toString().length > 0) return;  // let browser show Copy menu
+      e.preventDefault();
+    };
 
     hidden.addEventListener('keydown', this._onKey);
     hidden.addEventListener('paste',   this._onPaste);
@@ -1368,18 +1377,27 @@ export class Input {
       this.renderer.scrollToBottom();
     }
 
-    // Copy: if there's a non-empty document selection, let the browser handle it.
-    // Otherwise fall through (Ctrl+C will send ETX).
+    // Copy: if there's a non-empty document selection, let the browser
+    // handle it natively. Recognized chords:
+    //   Mac:    Cmd+C
+    //   Win/Linux: Ctrl+Shift+C (gnome-terminal convention; collides with
+    //             dev-tools in some browsers) OR Ctrl+Insert (legacy
+    //             convention; conflict-free)
+    // Bare Ctrl+C is reserved for sending ETX (SIGINT).
     const copyCombo = (this.isMac && meta && !ctrl && !alt && e.key.toLowerCase() === 'c')
-                   || (!this.isMac && ctrl && shift && e.key.toLowerCase() === 'c');
+                   || (!this.isMac && ctrl && shift && e.key.toLowerCase() === 'c')
+                   || (!this.isMac && ctrl && !shift && !alt && e.key === 'Insert');
     if (copyCombo) {
       const sel = document.getSelection?.();
       if (sel && sel.toString().length > 0) return;  // browser copies natively
     }
-    // Paste: let the browser fire 'paste' on the textarea
+    // Paste: let the browser fire 'paste' on the textarea. Recognized chords:
+    //   Mac:    Cmd+V
+    //   Win/Linux: Ctrl+V or Ctrl+Shift+V or Shift+Insert (legacy)
     const pasteCombo = (this.isMac && meta && !ctrl && !alt && e.key.toLowerCase() === 'v')
                     || (!this.isMac && ctrl && shift && e.key.toLowerCase() === 'v')
-                    || (!this.isMac && ctrl && !shift && !alt && e.key.toLowerCase() === 'v');
+                    || (!this.isMac && ctrl && !shift && !alt && e.key.toLowerCase() === 'v')
+                    || (!this.isMac && shift && !ctrl && !alt && e.key === 'Insert');
     if (pasteCombo) return;
 
     const arrow = (letter) => (t.modes.appCursor ? "\x1bO" : "\x1b[") + letter;
@@ -1567,9 +1585,10 @@ export class Input {
     // No app tracking and not in alt-screen: scroll the viewport.
     if (t.usingAlt) return;
     e.preventDefault();
-    // Three rows per notch is comfortable; deltaMode=0 is pixels but we
-    // round the sign and step by line-units rather than tracking pixels.
-    const step = e.deltaY < 0 ? 3 : -3;
+    // Wheel up (deltaY < 0) → scroll INTO history (scrollOffset increases).
+    // scrollBy uses negative delta for "scroll up into history", so wheel-up
+    // becomes scrollBy(-3). Three rows per notch is comfortable.
+    const step = e.deltaY < 0 ? -3 : 3;
     this.renderer.scrollBy(step);
   }
 }

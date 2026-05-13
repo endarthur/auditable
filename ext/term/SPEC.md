@@ -938,13 +938,23 @@ native selection-start.
 
 For each `keydown` event on the textarea:
 
-1. **Copy chord** (Cmd+C on Mac, Ctrl+Shift+C otherwise): if there is a
-   non-empty document selection, the handler returns without
-   `preventDefault`, allowing the browser to copy natively.
-2. **Paste chord** (Cmd+V on Mac, Ctrl+V or Ctrl+Shift+V otherwise): the
-   handler returns without `preventDefault`. The browser's native paste
-   then fires a `paste` event on the textarea, which the handler
-   processes (see Paste below).
+1. **Copy chord**: when there is a non-empty document selection, the
+   handler returns without `preventDefault`, allowing the browser to
+   copy natively. Recognized chords:
+   - Mac: **Cmd+C**
+   - Win/Linux: **Ctrl+Shift+C** (gnome-terminal convention; note this
+     collides with the inspect-element shortcut in Chrome / Firefox
+     dev tools) OR **Ctrl+Insert** (legacy, conflict-free)
+   Bare Ctrl+C is reserved for sending ETX (SIGINT) — not a copy chord.
+   Right-clicking on a selection also surfaces the browser's "Copy"
+   context menu (the contextmenu handler only suppresses when there is
+   no selection).
+2. **Paste chord**: handler returns without `preventDefault`; the
+   browser's native paste fires a `paste` event on the textarea, which
+   the handler processes (see Paste below). Recognized chords:
+   - Mac: **Cmd+V**
+   - Win/Linux: **Ctrl+V**, **Ctrl+Shift+V**, or **Shift+Insert**
+     (legacy)
 3. **Named special keys** (Enter, Backspace, Tab, Escape, Arrows, Home,
    End, PageUp, PageDown, Delete, Insert, F1–F12): mapped to their
    standard byte sequences. Arrows use the `ESC [` prefix in normal

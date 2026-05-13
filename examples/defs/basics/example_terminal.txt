@@ -49,8 +49,15 @@ a real read-eval-print loop. type into the terminal, press Enter to evaluate the
 
 const term = ui.terminal({ cols: 80, rows: 14 });
 
+// Enable bracketed paste (DECSET 2004) so multi-line pastes arrive as
+// a single block instead of submitting on every \n inside the paste.
+// Try Cmd+V (Mac) / Ctrl+V (Win/Linux), or right-click → Paste.
+term.write('\x1b[?2004h');
+
 term.write('\x1b[33mauditable terminal — type a JS expression, press Enter\x1b[0m\r\n');
-term.write('try: 2+2, [1,2,3].reverse(), Math.sqrt(2)\r\n\r\n');
+term.write('try: 2+2, [1,2,3].reverse(), Math.sqrt(2)\r\n');
+term.write('\x1b[2mcopy: select with mouse + Cmd+C / Ctrl+Insert / right-click → Copy\x1b[0m\r\n');
+term.write('\x1b[2mpaste: Cmd+V / Ctrl+V / Shift+Insert\x1b[0m\r\n\r\n');
 
 const lb = term.lineBuffer({
   prompt: '\x1b[32m> \x1b[0m',
