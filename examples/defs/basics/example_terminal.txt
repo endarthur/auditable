@@ -1,0 +1,132 @@
+/// auditable
+/// title: terminal cells
+
+/// md
+# terminal cells
+
+`ui.terminal({...})` mounts a full VT/ANSI terminal emulator (@gcu/term) inside the cell's output. The returned object is the Terminal — call `.write(bytes_or_string)` to push output in; `.onText(cb)` to react to keystrokes; `.lineBuffer({prompt, onSubmit})` to wire a REPL with the standard line-discipline keys (^A/^E, arrows, history, kill ops).
+
+terminals auto-dispose when the cell re-runs.
+
+/// md
+## 1. ANSI palette + cursor
+
+a static greeting with SGR colors. drag the slider to change the message.
+
+/// code
+const greeting = ui.dropdown("greeting", ["hello", "olá", "konnichiwa", "ciao"], "hello");
+
+/// code
+const term = ui.terminal({ cols: 60, rows: 8 });
+
+term.write('\x1b[33m@gcu/term\x1b[0m — terminal cell #1\r\n\r\n');
+term.write(`\x1b[36m${greeting}\x1b[0m, world.\r\n\r\n`);
+
+// 16-color rainbow
+let line = '';
+for (let i = 0; i < 16; i++) line += \`\\x1b[48;5;\${i}m  \\x1b[0m\`;
+term.write(line + '\r\n');
+
+// truecolor gradient
+let grad = '';
+for (let i = 0; i < 60; i++) {
+  const r = Math.round(255 * i / 60);
+  grad += \`\\x1b[48;2;\${r};80;\${255-r}m \\x1b[0m\`;
+}
+term.write(grad + '\r\n');
+
+/// md
+## 2. tiny REPL via LineBuffer
+
+a real read-eval-print loop. type into the terminal, press Enter to evaluate the expression as JavaScript and print the result. **try the line-discipline keys**: ^A jumps to start, ^E to end, arrows move, ^P / ^N navigate history, ^U kills the line, ^W kills a word back, ^L clears.
+
+(this is also where you'd plug in `adder.evalLine` for a Python REPL, or a websocket bridge for a real shell.)
+
+/// code
+// %manual
+// "manual" because we don't want this terminal re-mounting on every keystroke
+// in upstream cells.
+
+const term = ui.terminal({ cols: 80, rows: 14 });
+
+term.write('\x1b[33mauditable terminal — type a JS expression, press Enter\x1b[0m\r\n');
+term.write('try: 2+2, [1,2,3].reverse(), Math.sqrt(2)\r\n\r\n');
+
+const lb = term.lineBuffer({
+  prompt: '\x1b[32m> \x1b[0m',
+  onSubmit: (line) => {
+    if (!line) { lb.prompt(); return; }
+    try {
+      // eval is fine here — it's the user's own cell
+      const result = eval(line);
+      const repr = (typeof result === 'string')
+        ? \`'\${result}'\`
+        : JSON.stringify(result);
+      term.write(\`\\x1b[36m\${repr}\\x1b[0m\\r\\n\`);
+    } catch (e) {
+      term.write(\`\\x1b[31m\${e.name}: \${e.message}\\x1b[0m\\r\\n\`);
+    }
+    lb.prompt();
+  },
+});
+lb.start();
+
+/// md
+## 3. log viewer + scrollback
+
+streams synthetic log lines for 10 seconds. **mouse-wheel** scrolls the viewport into history; **Shift+PgUp / Shift+PgDn** scroll by page; clicking and typing snaps back to live.
+
+/// code
+const term = ui.terminal({ cols: 90, rows: 12, maxScrollback: 500 });
+term.modes.cursorVisible = false;
+
+term.write('\x1b[33mstreaming logs at 10 Hz for 10 seconds...\x1b[0m\r\n');
+term.write('use mouse-wheel / Shift+PgUp to scroll into history.\r\n\r\n');
+
+const levels = [
+  { name: 'INFO',  color: '32' },
+  { name: 'WARN',  color: '33' },
+  { name: 'ERROR', color: '31' },
+  { name: 'DEBUG', color: '36' },
+];
+const messages = [
+  'request received',
+  'cache hit for key=foo',
+  'connection pool refilled',
+  'slow query: 1024ms',
+  'rate limit reached',
+  'background job complete',
+  'config reloaded',
+];
+let counter = 1;
+
+const interval = setInterval(() => {
+  const lv = levels[Math.floor(Math.random() * levels.length)];
+  const msg = messages[Math.floor(Math.random() * messages.length)];
+  const ts = new Date().toLocaleTimeString();
+  term.write(\`\\x1b[2m\${ts}\\x1b[0m \\x1b[\${lv.color}m\${lv.name.padEnd(5)}\\x1b[0m #\${counter++} \${msg}\\r\\n\`);
+  if (counter > 100) {
+    clearInterval(interval);
+    term.write('\r\n\x1b[33mstream complete.\x1b[0m scroll up to see earlier lines.\r\n');
+  }
+}, 100);
+
+// stop on cell re-run
+invalidation.then(() => clearInterval(interval));
+
+/// md
+## 4. DEC line-drawing box
+
+the @gcu/term parser implements the DEC Special Graphics charset, so old curses-based TUIs (mc, dialog) render their box drawings correctly. \`ESC ( 0\` switches G0 to DEC graphics; \`ESC ( B\` switches back to USASCII.
+
+/// code
+const term = ui.terminal({ cols: 40, rows: 8 });
+term.modes.cursorVisible = false;
+
+term.write('\x1b(0');                          // G0 = DEC special
+term.write('lqqqqqqqqqqqqqqqqqqqqqqqqk\r\n');  // top edge
+for (let i = 0; i < 4; i++) {
+  term.write('x                        x\r\n'); // sides
+}
+term.write('mqqqqqqqqqqqqqqqqqqqqqqqqj');      // bottom edge
+term.write('\x1b(B');                          // back to USASCII

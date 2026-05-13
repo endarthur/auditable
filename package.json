@@ -10,7 +10,8 @@
   },
   "imports": {
     "#dialog": "./ext/dialog/index.js",
-    "#menu": "./ext/menu/index.js"
+    "#menu": "./ext/menu/index.js",
+    "#term": "./ext/term/src/index.js"
   },
   "scripts": {
     "build": "node build.js",

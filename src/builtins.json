@@ -55,6 +55,10 @@
     "sig": "await ui.dialog({title?, width?, render(body, ctx), persistent?})",
     "desc": "custom modal \u2014 render builds the body, ctx.close(value) resolves the promise. Auto-dismisses on cell re-run unless persistent"
   },
+  "ui.terminal": {
+    "sig": "ui.terminal({cols?, rows?, cssVarTheme?, maxScrollback?, onData?}?)",
+    "desc": "VT/ANSI terminal emulator (@gcu/term) mounted in cell output. Returns the Terminal: term.write(), .onText(), .onBell(), .lineBuffer({prompt, onSubmit}), etc. Auto-disposed on cell re-run"
+  },
   "std.csv": {
     "sig": "std.csv(text, {separator?, typed?}?)",
     "desc": "parse CSV text to array of objects"

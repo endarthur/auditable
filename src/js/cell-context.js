@@ -30,6 +30,7 @@ import { makeNotebookApi } from './cell-builtins/notebook-api.js';
 import { makeWorkshop } from './cell-builtins/workshop.js';
 import { makeModuleLoaders } from './cell-builtins/modules.js';
 import { makeDialog } from './cell-builtins/dialog.js';
+import { makeTerminal } from './cell-builtins/terminal.js';
 
 export function createCellContext(cell) {
   // fire invalidation promise from previous run (cleanup resources)
@@ -106,6 +107,10 @@ export function createCellContext(cell) {
   // open dialogs on cell invalidation unless { persistent: true }.
   const dialogApi = makeDialog(cell, ctx);
 
+  // Terminal — VT/ANSI emulator + DOM grid + input layer (per-cell mount).
+  // Auto-disposed on cell re-run via invalidation.
+  const terminal = makeTerminal(cell, ctx);
+
   const ui = {
     display, print: display, html: displayHtml,
     canvas: uiCore.canvas, table: uiCore.table,
@@ -114,6 +119,7 @@ export function createCellContext(cell) {
     download: fileIo.download, upload: fileIo.upload, drop: fileIo.drop,
     confirm: dialogApi.confirm, prompt: dialogApi.prompt,
     alert: dialogApi.alert, dialog: dialogApi.dialog,
+    terminal,
   };
 
   // Tagged template builtins

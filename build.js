@@ -733,6 +733,14 @@ if (fs.existsSync(dialogPath)) {
   modules.unshift({ name: 'dialog', source: dialogSrc });
 }
 
+// Add @gcu/term bundle as a module entry (ES module with named exports)
+const termPath = path.join(__dirname, 'ext/term/index.js');
+if (fs.existsSync(termPath)) {
+  let termSrc = fs.readFileSync(termPath, 'utf8');
+  termSrc = termSrc.replace(/^\n+/, '').replace(/\n+$/, '');
+  modules.unshift({ name: 'term', source: termSrc });
+}
+
 // Read CM6 bundle (classic IIFE, not an ES module — sets window.CM6 via var)
 const cm6Path = path.join(__dirname, 'ext/cm6/cm6.min.js');
 const cm6Src = fs.existsSync(cm6Path) ? fs.readFileSync(cm6Path, 'utf8') : '';
@@ -787,6 +795,19 @@ if (fs.existsSync(dialogDefaultCssPath)) {
   let dialogDefault = fs.readFileSync(dialogDefaultCssPath, 'utf8');
   dialogDefault = dialogDefault.replace(/:root\s*\{[\s\S]*?\}\s*/m, '');
   appCss += '\n\n' + dialogDefault.trimEnd();
+}
+
+// 3e. Append @gcu/term structural + decorative CSS. term-default.css uses
+// .screen rather than :root so no swatches need stripping; the
+// --gcu-term-* custom properties live there and become the cssVarTheme
+// defaults for ui.terminal() cells.
+const termCssPath = path.join(__dirname, 'ext/term/term.css');
+const termDefaultCssPath = path.join(__dirname, 'ext/term/term-default.css');
+if (fs.existsSync(termCssPath)) {
+  appCss += '\n\n' + fs.readFileSync(termCssPath, 'utf8').trimEnd();
+}
+if (fs.existsSync(termDefaultCssPath)) {
+  appCss += '\n\n' + fs.readFileSync(termDefaultCssPath, 'utf8').trimEnd();
 }
 
 // 4. Inject build-time constants into module sources
