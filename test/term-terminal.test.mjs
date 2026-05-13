@@ -367,6 +367,237 @@ describe('Terminal scrollback', () => {
   });
 });
 
+// ────────────────────────────────────────────────────────────────────
+// resize
+// ────────────────────────────────────────────────────────────────────
+
+describe('Terminal resize', () => {
+  test('width grows: rows pad with empty cells', () => {
+    const t = new Terminal(10, 3);
+    t.write('hi');
+    t.resize(20, 3);
+    assert.equal(t.cols, 20);
+    assert.equal(t.buffer[0].length, 20);
+    // First two cells unchanged
+    assert.equal(String.fromCodePoint(t.buffer[0][0].ch), 'h');
+    assert.equal(String.fromCodePoint(t.buffer[0][1].ch), 'i');
+    // Padded cells are spaces
+    assert.equal(t.buffer[0][19].ch, 0x20);
+  });
+
+  test('width shrinks: rows truncate', () => {
+    const t = new Terminal(10, 3);
+    t.write('helloworld');
+    t.resize(5, 3);
+    assert.equal(t.cols, 5);
+    assert.equal(t.buffer[0].length, 5);
+    assert.equal(rowText(t, 0), 'hello');
+  });
+
+  test('height grows: empty rows added at the bottom', () => {
+    const t = new Terminal(10, 2);
+    t.write('a');
+    t.resize(10, 5);
+    assert.equal(t.rows, 5);
+    assert.equal(t.buffer.length, 5);
+    assert.equal(rowText(t, 0), 'a');
+    assert.equal(rowText(t, 4), '');
+  });
+
+  test('height shrinks on primary buffer: top rows go to scrollback', () => {
+    const t = new Terminal(10, 5);
+    t.write('a\r\nb\r\nc\r\nd\r\ne');
+    t.resize(10, 3);
+    assert.equal(t.rows, 3);
+    assert.equal(t.scrollback.length, 2);
+    assert.equal(String.fromCodePoint(t.scrollback[0][0].ch), 'a');
+    assert.equal(String.fromCodePoint(t.scrollback[1][0].ch), 'b');
+  });
+
+  test('height shrinks on alt buffer: top rows are discarded (not scrollback)', () => {
+    const t = new Terminal(10, 5);
+    t.write('\x1b[?1049h');
+    t.write('a\r\nb\r\nc\r\nd\r\ne');
+    assert.equal(t.scrollback.length, 0);
+    t.resize(10, 3);
+    assert.equal(t.scrollback.length, 0);  // still empty
+    assert.equal(t.altBuffer.length, 3);
+  });
+
+  test('cursor clamps into the new bounds', () => {
+    const t = new Terminal(10, 5);
+    t.write('aaaaaaaaaa\r\nbbbbb');  // cursor lands somewhere far right
+    t.resize(3, 2);
+    assert.ok(t.cursor.x < 3);
+    assert.ok(t.cursor.y < 2);
+  });
+
+  test('scroll region resets to full screen', () => {
+    const t = new Terminal(10, 5);
+    t.write('\x1b[2;4r');  // region rows 2-4
+    t.resize(10, 8);
+    assert.equal(t.scrollTop, 0);
+    assert.equal(t.scrollBottom, 7);
+  });
+
+  test('1×1 minimum dimensions', () => {
+    const t = new Terminal(10, 5);
+    assert.doesNotThrow(() => t.resize(1, 1));
+    assert.equal(t.cols, 1);
+    assert.equal(t.rows, 1);
+  });
+
+  test('zero / negative dims throw RangeError', () => {
+    const t = new Terminal(10, 5);
+    assert.throws(() => t.resize(0, 5), RangeError);
+    assert.throws(() => t.resize(10, -1), RangeError);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// LineBuffer
+// ────────────────────────────────────────────────────────────────────
+
+import { LineBuffer } from '../ext/term/src/index.js';
+
+function makeRepl() {
+  // Capture all writes to the term for inspection. We don't run the
+  // renderer — LineBuffer talks via term.onText(...) which fires from
+  // term._send() (driven by our manual sends below).
+  const t = new Terminal(80, 24);
+  const writes = [];
+  const origWrite = t.write.bind(t);
+  t.write = (s) => { writes.push(s); origWrite(s); };
+  let submitted = null;
+  const lb = new LineBuffer(t, {
+    prompt: '> ',
+    onSubmit: (line) => { submitted = line; },
+  });
+  lb.start();
+  return {
+    t, lb, writes,
+    submitted: () => submitted,
+    type: (s) => { t._send(s); },
+    lastWrite: () => writes[writes.length - 1],
+  };
+}
+
+describe('LineBuffer line discipline', () => {
+  test('start prints the prompt', () => {
+    const r = makeRepl();
+    assert.equal(r.writes[0], '> ');
+  });
+
+  test('printable chars accumulate into value and redraw', () => {
+    const r = makeRepl();
+    r.type('h'); r.type('i');
+    assert.equal(r.lb.value, 'hi');
+    assert.equal(r.lb.cursor, 2);
+  });
+
+  test('Backspace deletes left of cursor', () => {
+    const r = makeRepl();
+    r.type('hello');
+    r.type('\x7f\x7f');
+    assert.equal(r.lb.value, 'hel');
+    assert.equal(r.lb.cursor, 3);
+  });
+
+  test('Enter calls onSubmit with the line and clears value', () => {
+    const r = makeRepl();
+    r.type('print(42)\r');
+    assert.equal(r.submitted(), 'print(42)');
+    assert.equal(r.lb.value, '');
+    assert.equal(r.lb.cursor, 0);
+  });
+
+  test('^A jumps to start, ^E to end', () => {
+    const r = makeRepl();
+    r.type('hello');
+    r.type('\x01');  // ^A
+    assert.equal(r.lb.cursor, 0);
+    r.type('\x05');  // ^E
+    assert.equal(r.lb.cursor, 5);
+  });
+
+  test('arrows: left and right move cursor', () => {
+    const r = makeRepl();
+    r.type('hello');
+    r.type('\x1b[D');  // Left
+    r.type('\x1b[D');
+    assert.equal(r.lb.cursor, 3);
+    r.type('\x1b[C');  // Right
+    assert.equal(r.lb.cursor, 4);
+  });
+
+  test('insert at cursor (not at end)', () => {
+    const r = makeRepl();
+    r.type('hllo');
+    r.type('\x01');     // ^A — start
+    r.type('\x1b[C');   // Right — between h and l
+    r.type('e');
+    assert.equal(r.lb.value, 'hello');
+  });
+
+  test('^U kills the whole line', () => {
+    const r = makeRepl();
+    r.type('something');
+    r.type('\x15');  // ^U
+    assert.equal(r.lb.value, '');
+    assert.equal(r.lb.cursor, 0);
+  });
+
+  test('^W kills the previous word', () => {
+    const r = makeRepl();
+    r.type('foo bar baz');
+    r.type('\x17');  // ^W
+    assert.equal(r.lb.value, 'foo bar ');
+  });
+
+  test('^P / ^N navigate history (after a submit)', () => {
+    const r = makeRepl();
+    r.type('first\r');
+    r.type('second\r');
+    r.type('\x10');  // ^P — most recent ('second')
+    assert.equal(r.lb.value, 'second');
+    r.type('\x10');  // ^P — older ('first')
+    assert.equal(r.lb.value, 'first');
+    r.type('\x0E');  // ^N — back toward live
+    assert.equal(r.lb.value, 'second');
+    r.type('\x0E');  // ^N — back to live (empty)
+    assert.equal(r.lb.value, '');
+  });
+
+  test('^C cancels the line and reprompts', () => {
+    const r = makeRepl();
+    r.type('working on this');
+    r.type('\x03');  // ^C
+    assert.equal(r.lb.value, '');
+    assert.equal(r.lb.cursor, 0);
+  });
+
+  test('bracketed paste inserts verbatim', () => {
+    const r = makeRepl();
+    r.type('\x1b[200~hello\nworld\x1b[201~');
+    assert.equal(r.lb.value, 'hello\nworld');
+  });
+
+  test('dispose stops further input handling', () => {
+    const r = makeRepl();
+    r.type('a');
+    r.lb.dispose();
+    r.type('b');
+    assert.equal(r.lb.value, 'a');  // 'b' ignored
+  });
+
+  test('history dedupes consecutive identical submits', () => {
+    const r = makeRepl();
+    r.type('same\r');
+    r.type('same\r');
+    assert.equal(r.lb.history.length, 1);
+  });
+});
+
 describe('Terminal dispose', () => {
   test('write after dispose is a no-op', () => {
     const t = new Terminal(10, 3);

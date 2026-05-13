@@ -121,10 +121,13 @@
 <h2>2. tiny REPL (echo + line buffer)</h2>
 <p>
   Type into the terminal — it edits a local line buffer, prints
-  characters as you type, and on Enter "evaluates" by sending the line
-  back as a colored response. Backspace works. Demonstrates the
-  byte-stream contract and shows where a real REPL host would call
-  <code>adder.evalLine()</code> or similar.
+  characters as you type, and on Enter "evaluates" by echoing the line.
+  Uses the <code>LineBuffer</code> helper, which handles the standard
+  shell line discipline: cursor movement (^A/^E/^B/^F + arrows),
+  history (^P/^N + arrows), kill operations (^U/^K/^W), bracketed
+  paste, ^L to clear, ^C to cancel. Demonstrates where a real REPL
+  host would call <code>adder.evalLine()</code> instead of just
+  echoing.
 </p>
 <div class="demo-row">
   <div class="termhost">
@@ -162,7 +165,7 @@
 </div>
 
 <script type="module">
-import { Terminal, DomRenderer, Input } from './src/index.js';
+import { Terminal, DomRenderer, Input, LineBuffer } from './src/index.js';
 
 // Wait for the chosen monospace font to load — otherwise cellW is
 // measured in the fallback font and stays stale forever (per SPEC §10).
@@ -274,51 +277,25 @@ function setStatus(id, text) { document.getElementById(id).textContent = text; }
   const input = new Input(term, screen, hidden, renderer);
   const stopTick = startTickLoop(term, renderer);
 
-  let lineBuf = '';
-  function prompt() { term.write('\x1b[32m$ \x1b[0m'); }
+  term.write('\x1b[33m@gcu/term REPL with LineBuffer.\x1b[0m\r\n');
+  term.write('Try: ^A / ^E (home/end), arrows, ^P/^N (history), ^U (kill line),\r\n');
+  term.write('     ^W (kill word), ^L (clear), ^C (cancel).\r\n\r\n');
 
-  term.write('\x1b[33m@gcu/term tiny REPL.\x1b[0m\r\n');
-  term.write('Type something and press Enter. Backspace works.\r\n\r\n');
-  prompt();
-
-  // onText is the convenience subscription — strings, not bytes.
-  const off = term.onText((s) => {
-    for (const ch of s) {
-      if (ch === '\r') {
-        term.write('\r\n');
-        if (lineBuf) {
-          term.write(`\x1b[36m→ \x1b[0m${lineBuf}\r\n`);
-        }
-        lineBuf = '';
-        prompt();
-      } else if (ch === '\x7f') {
-        if (lineBuf) {
-          lineBuf = lineBuf.slice(0, -1);
-          term.write('\b \b');
-        }
-      } else if (ch === '\x03') {
-        // Ctrl+C
-        term.write('^C\r\n');
-        lineBuf = '';
-        prompt();
-      } else if (ch >= ' ') {
-        lineBuf += ch;
-        term.write(ch);
-      }
-    }
+  const lb = new LineBuffer(term, {
+    prompt: '\x1b[32m$ \x1b[0m',
+    onSubmit: (line) => {
+      if (line) term.write(`\x1b[36m→ \x1b[0m${line}\r\n`);
+      lb.prompt();
+    },
   });
+  lb.start();
 
   document.getElementById('d2-paste').onclick = () => {
-    // Simulate paste by writing into the hidden textarea and dispatching.
-    // (For real paste, the user does Ctrl+V into the focused terminal.)
-    hidden.focus();
-    document.execCommand?.('insertText', false, 'console.log("hello")');
-    // The hidden textarea swallows input; inject directly via _send to
-    // preserve the demo's intent.
+    // Inject a line via the byte-stream — same path as a paste.
     term._send('console.log("hello")');
   };
   document.getElementById('d2-dispose').onclick = (e) => {
-    off();
+    lb.dispose();
     stopTick();
     input.dispose();
     renderer.dispose();

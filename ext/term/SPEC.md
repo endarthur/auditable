@@ -347,9 +347,16 @@ The terminal maintains a 2D array of cells: `buffer[row][col]` where row
 0 is the top. A separate `altBuffer` is allocated on demand when an app
 switches to the alternate screen (DECSET 1049 or 47/1047).
 
-Buffer dimensions are fixed at construction (`new Terminal(cols, rows)`)
-and not yet resizable in this version. See §14 (Known limitations) and
-§15 (Roadmap).
+`term.resize(cols, rows)` adjusts dimensions in place WITHOUT reflowing
+previously-wrapped lines (that's the genuinely hard case, on the v1.0
+roadmap). Width changes pad / truncate every row in both buffers and
+in scrollback. Height growth appends empty rows; height shrink drops
+rows from the top — pushing them to scrollback ONLY for the primary
+buffer when not currently in alt-screen. Cursor clamps; scroll region
+resets to full-screen.
+
+Hosts call `term.resize(cols, rows)` then `renderer.resize()` so the
+row `<div>`s and the container's pixel dimensions update together.
 
 ### Cursor
 
@@ -1178,10 +1185,10 @@ roadmap entries (§15); some are forever-skip.
 
 ### Layout limits, will be addressed (see Roadmap)
 
-- **Fixed dimensions.** `Terminal(cols, rows)` sets dimensions at
-  construction and they cannot change. A `resize` method is planned.
-- **No reflow.** Even after `resize` is added, lines that wrapped at
-  the old width will not re-wrap at the new width.
+- **No reflow.** `resize()` ships in v0.2 but lines that wrapped at the
+  old width will not re-wrap at the new width — they stay padded /
+  truncated. Reflow needs a soft-wrap flag on the cell to know which
+  line breaks were soft vs. hard, and is genuinely hard. v1.0+.
 
 ### Display model limits, partially mitigated by DOM
 
@@ -1221,17 +1228,24 @@ roadmap entries (§15); some are forever-skip.
 
 ## 15. Roadmap
 
-### v0.1 → v0.2
+### v0.1 → v0.2 (in flight)
 
-- **Theme integration.** The constructor / `setTheme()` palette + default
-  color hooks shipped in v0.1 are sufficient for static themes. v0.2
-  adds CSS-custom-property hooks (`--gcu-term-bg`, `--gcu-term-fg`,
-  `--gcu-term-cursor`, `--gcu-term-palette-N`) so theme switches can be
-  driven by purely-CSS theme toggling without re-instantiating the
-  renderer.
-- **`resize(cols, rows)`** method without reflow. Container `ResizeObserver`
-  wiring lives in the host, not the library, but a clean resize API is
-  needed before terminals can live in responsive containers.
+Shipped in v0.2:
+- ~~**Scrollback ring buffer** with mouse-wheel + Shift+PgUp/PgDn.~~
+- ~~**`resize(cols, rows)`** without reflow + matching `renderer.resize()`.~~
+- ~~**`LineBuffer` helper** for REPL hosts.~~
+- ~~Lifecycle: `Terminal.dispose()`, `DomRenderer.dispose()`, `Input.dispose()`.~~
+- ~~Convenience callbacks: `onText`, `onBell`, `onTitleChange`.~~
+
+Still pending in v0.2:
+- **Theme integration via CSS custom properties.** The constructor /
+  `setTheme()` palette + default color hooks shipped in v0.1 are
+  sufficient for static themes. v0.2 adds CSS-custom-property hooks
+  (`--gcu-term-bg`, `--gcu-term-fg`, `--gcu-term-cursor`,
+  `--gcu-term-palette-N`) so theme switches can happen by toggling a
+  CSS class on a parent without re-instantiating the renderer.
+- **DEC line drawing charsets** (G0/G1 with `SI`/`SO` and `ESC ( 0` /
+  `ESC ( B` switching). Necessary for mc, ncurses dialogs, older TUIs.
 
 ### v0.2 → v1.0
 
@@ -1240,11 +1254,10 @@ roadmap entries (§15); some are forever-skip.
 - **Scrollback search API.** The ring buffer + viewport scrolling shipped
   in v0.2; v1.0 adds a `term.scrollback.search(query)` method returning
   `{ row, col }` matches that the renderer can highlight.
-- **DEC line drawing charsets** (G0/G1 with `SI`/`SO` and `ESC ( 0` /
-  `ESC ( B` switching). Necessary for mc, ncurses dialogs, older TUIs.
-- **Tests**: a corpus of byte-stream fixtures recorded from real
-  programs (vim, htop, tmux), replayed with expected buffer-state
-  snapshots; property tests on the parser.
+- **Real-program test fixtures.** v0.2 ships hand-crafted parser /
+  Terminal tests; v1.0 adds a corpus of byte-stream fixtures recorded
+  from real programs (vim, htop, tmux), replayed with expected
+  buffer-state snapshots, plus property tests on the parser.
 
 ### v1.0+ (production-ready)
 
@@ -1355,9 +1368,10 @@ may drop frames; this is where a canvas + glyph atlas backend would win.
 ```js
 // Classes
 export class Parser
-export class Terminal       // onData / onText / onBell / onTitleChange / dispose
-export class DomRenderer    // constructor accepts { theme }; setTheme(), dispose()
+export class Terminal       // onData / onText / onBell / onTitleChange / resize / dispose
+export class DomRenderer    // constructor { theme }, setTheme, scrollBy, scrollToBottom, resize, dispose
 export class Input          // dispose() to detach all listeners
+export class LineBuffer     // optional REPL helper; line discipline + history
 
 // Color tables
 export const PALETTE       // 16-color base

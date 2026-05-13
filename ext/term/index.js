@@ -699,6 +699,91 @@ export class Terminal {
     this.attrs.bg = this.savedCursor.bg;
     this.attrs.flags = this.savedCursor.flags;
   }
+  /**
+   * Resize the terminal to new dimensions WITHOUT reflowing previously-
+   * wrapped lines (the genuinely hard case is on the v1.0 roadmap).
+   *
+   * Width changes: each row is padded with empty cells (when growing)
+   * or truncated (when shrinking).
+   * Height growth: empty rows appended at the bottom.
+   * Height shrink: rows dropped from the TOP. On the primary buffer the
+   *   dropped rows go to scrollback so they're recoverable; on alt-screen
+   *   they're discarded.
+   *
+   * Cursor position is clamped to the new bounds. Scroll region resets
+   * to full-screen (the previous region's intent doesn't survive a
+   * dimension change cleanly).
+   *
+   * The DomRenderer is NOT automatically rebuilt — the host should call
+   * renderer.resize() after term.resize() so the row <div>s and the
+   * container's pixel dimensions update together.
+   */
+  resize(cols, rows) {
+    if (this._disposed) return;
+    if (cols < 1 || rows < 1) {
+      throw new RangeError('Terminal.resize: cols and rows must be >= 1');
+    }
+    if (cols === this.cols && rows === this.rows) return;
+
+    const oldCols = this.cols;
+    const oldRows = this.rows;
+
+    // Width adjustment: pad / truncate each row in both buffers and
+    // every scrollback row.
+    const adjustWidth = (row) => {
+      if (cols > oldCols) {
+        for (let x = oldCols; x < cols; x++) {
+          row.push(makeCell());
+        }
+      } else if (cols < oldCols) {
+        row.length = cols;
+      }
+    };
+
+    if (this.buffer)    for (const r of this.buffer)    adjustWidth(r);
+    if (this.altBuffer) for (const r of this.altBuffer) adjustWidth(r);
+    for (const r of this.scrollback) adjustWidth(r);
+
+    // Height adjustment per buffer. pushToScrollback is true only for the
+    // primary buffer when we're not currently using alt-screen — during
+    // alt-screen, the primary is suspended state, and dropped rows are
+    // "the lines of primary I'm not showing", not scrolled-off output.
+    const adjustHeight = (buf, pushToScrollback) => {
+      if (!buf) return buf;
+      if (rows > oldRows) {
+        for (let i = oldRows; i < rows; i++) {
+          const row = new Array(cols);
+          for (let x = 0; x < cols; x++) row[x] = makeCell();
+          buf.push(row);
+        }
+      } else if (rows < oldRows) {
+        const drop = oldRows - rows;
+        const removed = buf.splice(0, drop);
+        if (pushToScrollback) {
+          for (const r of removed) {
+            this.scrollback.push(r);
+            if (this.scrollback.length > this.maxScrollback) {
+              this.scrollback.splice(0, this.scrollback.length - this.maxScrollback);
+            }
+          }
+        }
+      }
+      return buf;
+    };
+
+    adjustHeight(this.buffer,    /* pushToScrollback */ !this.usingAlt);
+    adjustHeight(this.altBuffer, /* pushToScrollback */ false);
+
+    this.cols = cols;
+    this.rows = rows;
+    this.scrollTop = 0;
+    this.scrollBottom = rows - 1;
+    this.cursor.x = Math.min(this.cursor.x, cols - 1);
+    this.cursor.y = Math.min(this.cursor.y, rows - 1);
+    this.pendingWrap = false;
+    this.dirty = true;
+  }
+
   _reset() {
     this.parser.reset();
     this.buffer = makeBuffer(this.cols, this.rows);
@@ -979,6 +1064,59 @@ export class DomRenderer {
     this.cursorEl.style.top    = ((t.cursor.y + off) * this.cellH) + 'px';
     this.cursorEl.style.width  = this.cellW + 'px';
     this.cursorEl.style.height = this.cellH + 'px';
+  }
+
+  /**
+   * Pick up new dimensions from the bound Terminal: rebuild the row
+   * <div>s to match `term.rows`, re-lock the container's pixel width
+   * to `cellW * term.cols` and height to `cellH * term.rows`.
+   *
+   * Cell dimensions (cellW, cellH) are NOT re-measured — they're tied
+   * to the font that was loaded at construction. If the host has
+   * actually changed the font, recreate the renderer instead.
+   *
+   * Called by the host after `term.resize(cols, rows)`. Safe no-op
+   * when current row count already matches.
+   */
+  resize() {
+    if (this._disposed) return;
+    const t = this.term;
+    if (this.rows.length === t.rows) {
+      // Width or buffer-content change only — pin container size, force
+      // a redraw, done.
+      this.container.style.width = (this.cellW * t.cols) + 'px';
+      this.container.style.height = (this.cellH * t.rows) + 'px';
+      for (let i = 0; i < this.rowHTML.length; i++) this.rowHTML[i] = '';
+      t.dirty = true;
+      return;
+    }
+    // Row count changed: add or remove row <div>s. Cursor overlay stays
+    // (it's a separate sibling, not in the row list).
+    const cur = this.rows.length;
+    if (t.rows > cur) {
+      const frag = document.createDocumentFragment();
+      for (let i = cur; i < t.rows; i++) {
+        const row = document.createElement('div');
+        row.className = 'row';
+        this.rows.push(row);
+        this.rowHTML.push('');
+        frag.appendChild(row);
+      }
+      // Insert before the cursor overlay so it stays last.
+      this.container.insertBefore(frag, this.cursorEl);
+    } else {
+      for (let i = cur - 1; i >= t.rows; i--) {
+        this.rows[i].remove();
+      }
+      this.rows.length = t.rows;
+      this.rowHTML.length = t.rows;
+    }
+    this.container.style.width = (this.cellW * t.cols) + 'px';
+    this.container.style.height = (this.cellH * t.rows) + 'px';
+    // Force a full redraw — leftover row HTML caches no longer line up
+    // with the new buffer indices.
+    for (let i = 0; i < this.rowHTML.length; i++) this.rowHTML[i] = '';
+    t.dirty = true;
   }
 
   /**
@@ -1306,5 +1444,282 @@ export class Input {
     // round the sign and step by line-units rather than tracking pixels.
     const step = e.deltaY < 0 ? 3 : -3;
     this.renderer.scrollBy(step);
+  }
+}
+
+/* ============================================================
+ * 5.  LINE BUFFER (optional helper for REPL hosts)
+ *     Eats the byte stream coming back from the terminal,
+ *     maintains a single-line edit buffer with cursor + history,
+ *     and writes the rendered line back to the terminal. On
+ *     Enter, calls onSubmit(line) and waits for the host to
+ *     write the response + reprompt.
+ *
+ *     Handles:
+ *       ^A / Home               cursor to start
+ *       ^E / End                cursor to end
+ *       ^B / Left               cursor left
+ *       ^F / Right              cursor right
+ *       ^H / Backspace          delete left
+ *       ^D                      delete right (when buffer non-empty)
+ *       ^K                      kill to end of line
+ *       ^U                      kill whole line
+ *       ^W                      kill word back
+ *       ^P / Up                 history previous
+ *       ^N / Down               history next
+ *       ^L                      clear screen + reprompt
+ *       Enter                   submit
+ *       Bracketed paste         insert verbatim
+ *       Tab                     onTab(prefix) hook (host-supplied), default insert tab
+ *
+ *     What it deliberately does NOT do:
+ *       - Multi-line editing (one logical line per submit)
+ *       - Syntax highlighting (host can do its own pass before submit)
+ *       - Tab completion (provide onTab to handle)
+ *
+ *     The host owns the prompt string, the eval, and the response
+ *     formatting. LineBuffer just runs the line discipline.
+ * ============================================================ */
+
+export class LineBuffer {
+  /**
+   * @param {Terminal} term
+   * @param {object} opts
+   * @param {string} [opts.prompt='> '] — printed before each line
+   * @param {(line: string) => void | Promise<void>} opts.onSubmit
+   *   — called on Enter with the completed line. Host writes the
+   *   response and reprompts via `lb.prompt()` (or just lb.start()
+   *   on a fresh buffer).
+   * @param {(prefix: string) => void} [opts.onTab] — called on Tab.
+   *   Receives the buffer up to the cursor; host handles completion
+   *   (e.g. by writing replacement text via lb.replaceLine).
+   * @param {number} [opts.maxHistory=200] — history depth
+   */
+  constructor(term, opts = {}) {
+    this.term = term;
+    this.promptStr = opts.prompt ?? '> ';
+    this.onSubmit = opts.onSubmit ?? (() => {});
+    this.onTab = opts.onTab ?? null;
+    this.maxHistory = opts.maxHistory ?? 200;
+    this.value = '';
+    this.cursor = 0;          // position within value
+    this.history = [];        // most recent first
+    this.historyIdx = -1;     // -1 = editing the live buffer
+    this.savedLive = '';      // value before stepping into history
+    this._inPaste = false;    // bracketed paste accumulator
+    this._pasteBuf = '';
+    this._unsubscribe = null;
+    this._disposed = false;
+  }
+
+  /** Begin: print the prompt and attach the input listener. */
+  start() {
+    if (this._disposed) return;
+    this.term.write(this.promptStr);
+    if (!this._unsubscribe) {
+      this._unsubscribe = this.term.onText((s) => this._consume(s));
+    }
+  }
+
+  /** Print a fresh prompt (host calls after rendering its eval result). */
+  prompt() {
+    this.value = '';
+    this.cursor = 0;
+    this.historyIdx = -1;
+    this.term.write(this.promptStr);
+  }
+
+  /** Replace the current line buffer (used by onTab handlers). */
+  replaceLine(newValue, cursor = newValue.length) {
+    this.value = newValue;
+    this.cursor = Math.max(0, Math.min(newValue.length, cursor));
+    this._redraw();
+  }
+
+  /** Detach the listener. Idempotent. */
+  dispose() {
+    if (this._disposed) return;
+    this._disposed = true;
+    if (this._unsubscribe) { this._unsubscribe(); this._unsubscribe = null; }
+  }
+
+  // ── Internal ────────────────────────────────────────────────────────
+
+  _consume(s) {
+    if (this._disposed) return;
+    let i = 0;
+    while (i < s.length) {
+      // Bracketed paste: anything between ESC[200~ and ESC[201~ is
+      // inserted verbatim (no special-key interpretation).
+      if (this._inPaste) {
+        const end = s.indexOf('\x1b[201~', i);
+        if (end >= 0) {
+          this._pasteBuf += s.slice(i, end);
+          this._insertText(this._pasteBuf);
+          this._pasteBuf = '';
+          this._inPaste = false;
+          i = end + 6;
+          continue;
+        } else {
+          this._pasteBuf += s.slice(i);
+          return;
+        }
+      }
+      if (s.startsWith('\x1b[200~', i)) {
+        this._inPaste = true;
+        this._pasteBuf = '';
+        i += 6;
+        continue;
+      }
+      // Arrow keys etc. — multi-byte sequences. Handle a few; skip the rest.
+      if (s.startsWith('\x1b[', i) || s.startsWith('\x1bO', i)) {
+        const final = s[i + 2];
+        if (final === 'A') { this._historyPrev(); i += 3; continue; }
+        if (final === 'B') { this._historyNext(); i += 3; continue; }
+        if (final === 'C') { this._cursorRight(); i += 3; continue; }
+        if (final === 'D') { this._cursorLeft();  i += 3; continue; }
+        if (final === 'H') { this._cursorHome();  i += 3; continue; }
+        if (final === 'F') { this._cursorEnd();   i += 3; continue; }
+        // Any other ESC sequence — try to skip a 3-byte CSI; otherwise advance 1.
+        i += 1;
+        continue;
+      }
+      const ch = s[i];
+      const code = ch.charCodeAt(0);
+      if (code === 0x0D || code === 0x0A) { this._submit(); i++; continue; } // Enter
+      if (code === 0x7F || code === 0x08) { this._backspace();  i++; continue; }
+      if (code === 0x01) { this._cursorHome();  i++; continue; }   // ^A
+      if (code === 0x05) { this._cursorEnd();   i++; continue; }   // ^E
+      if (code === 0x02) { this._cursorLeft();  i++; continue; }   // ^B
+      if (code === 0x06) { this._cursorRight(); i++; continue; }   // ^F
+      if (code === 0x04) { this._deleteRight(); i++; continue; }   // ^D
+      if (code === 0x0B) { this._killToEnd();   i++; continue; }   // ^K
+      if (code === 0x15) { this._killLine();    i++; continue; }   // ^U
+      if (code === 0x17) { this._killWordBack();i++; continue; }   // ^W
+      if (code === 0x10) { this._historyPrev(); i++; continue; }   // ^P
+      if (code === 0x0E) { this._historyNext(); i++; continue; }   // ^N
+      if (code === 0x0C) { this._clearScreen(); i++; continue; }   // ^L
+      if (code === 0x09) {                                          // Tab
+        if (this.onTab) {
+          this.onTab(this.value.slice(0, this.cursor));
+        } else {
+          this._insertText('\t');
+        }
+        i++; continue;
+      }
+      if (code === 0x03) {                                          // ^C
+        this.term.write('^C\r\n');
+        this.value = '';
+        this.cursor = 0;
+        this.historyIdx = -1;
+        this.term.write(this.promptStr);
+        i++; continue;
+      }
+      if (code < 0x20) { i++; continue; }   // unrecognized control — drop
+      this._insertText(ch);
+      i++;
+    }
+  }
+
+  _insertText(text) {
+    if (!text) return;
+    this.value = this.value.slice(0, this.cursor) + text + this.value.slice(this.cursor);
+    this.cursor += text.length;
+    this._redraw();
+  }
+
+  _backspace() {
+    if (this.cursor === 0) return;
+    this.value = this.value.slice(0, this.cursor - 1) + this.value.slice(this.cursor);
+    this.cursor -= 1;
+    this._redraw();
+  }
+
+  _deleteRight() {
+    if (this.cursor >= this.value.length) return;
+    this.value = this.value.slice(0, this.cursor) + this.value.slice(this.cursor + 1);
+    this._redraw();
+  }
+
+  _cursorLeft()  { if (this.cursor > 0) { this.cursor--; this._redraw(); } }
+  _cursorRight() { if (this.cursor < this.value.length) { this.cursor++; this._redraw(); } }
+  _cursorHome()  { if (this.cursor !== 0) { this.cursor = 0; this._redraw(); } }
+  _cursorEnd()   { if (this.cursor !== this.value.length) { this.cursor = this.value.length; this._redraw(); } }
+
+  _killToEnd() {
+    if (this.cursor >= this.value.length) return;
+    this.value = this.value.slice(0, this.cursor);
+    this._redraw();
+  }
+  _killLine() {
+    if (!this.value) return;
+    this.value = '';
+    this.cursor = 0;
+    this._redraw();
+  }
+  _killWordBack() {
+    if (this.cursor === 0) return;
+    let i = this.cursor;
+    while (i > 0 && /\s/.test(this.value[i - 1])) i--;
+    while (i > 0 && /\S/.test(this.value[i - 1])) i--;
+    this.value = this.value.slice(0, i) + this.value.slice(this.cursor);
+    this.cursor = i;
+    this._redraw();
+  }
+
+  _historyPrev() {
+    if (this.history.length === 0) return;
+    if (this.historyIdx === -1) this.savedLive = this.value;
+    if (this.historyIdx < this.history.length - 1) {
+      this.historyIdx++;
+      this.value = this.history[this.historyIdx];
+      this.cursor = this.value.length;
+      this._redraw();
+    }
+  }
+  _historyNext() {
+    if (this.historyIdx === -1) return;
+    this.historyIdx--;
+    this.value = this.historyIdx === -1 ? this.savedLive : this.history[this.historyIdx];
+    this.cursor = this.value.length;
+    this._redraw();
+  }
+
+  _clearScreen() {
+    // CSI 2 J + CUP home, then reprint prompt + current value, place cursor.
+    this.term.write('\x1b[2J\x1b[H' + this.promptStr + this.value);
+    if (this.cursor !== this.value.length) {
+      const back = this.value.length - this.cursor;
+      if (back > 0) this.term.write(`\x1b[${back}D`);
+    }
+  }
+
+  _submit() {
+    const line = this.value;
+    this.term.write('\r\n');
+    if (line) {
+      // Push to history; dedupe consecutive identical entries.
+      if (this.history[0] !== line) this.history.unshift(line);
+      if (this.history.length > this.maxHistory) {
+        this.history.length = this.maxHistory;
+      }
+    }
+    this.value = '';
+    this.cursor = 0;
+    this.historyIdx = -1;
+    // Host's onSubmit is responsible for writing the response (if any)
+    // and calling lb.prompt() to start the next line.
+    this.onSubmit(line);
+  }
+
+  // Repaint the current input line: CR, clear-EOL, prompt, value, then
+  // walk the cursor back to its logical position. Single write to keep
+  // it atomic against intervening output (the host shouldn't be writing
+  // mid-edit anyway, but defense in depth).
+  _redraw() {
+    const back = this.value.length - this.cursor;
+    let s = '\r\x1b[K' + this.promptStr + this.value;
+    if (back > 0) s += `\x1b[${back}D`;
+    this.term.write(s);
   }
 }
