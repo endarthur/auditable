@@ -1,0 +1,74 @@
+{
+  "name": "@gcu/learn",
+  "version": "0.1.0",
+  "description": "Classical machine learning for the browser, sklearn-API compatible. DecisionTree, KMeans, PCA, scalers, encoders, KFold, SpatialKFold, CLR/ILR/ALR compositional transforms. Pure JS hot loops, alpack-routed matrix decompositions, mimic-io JSON serialization. No pyodide, no server, runs from file://.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./base": "./index.js",
+    "./tree": "./index.js",
+    "./cluster": "./index.js",
+    "./decomposition": "./index.js",
+    "./preprocessing": "./index.js",
+    "./compositional": "./index.js",
+    "./impute": "./index.js",
+    "./model_selection": "./index.js",
+    "./metrics": "./index.js",
+    "./pipeline": "./index.js",
+    "./serialize": "./index.js",
+    "./adder": "./adder.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "adder.js",
+    "src/",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@gcu/mimic-io": "^0.1.0",
+    "@gcu/natra": "^0.2.0",
+    "@gcu/line": "^0.3.0",
+    "@gcu/alpack": "^0.1.0",
+    "@gcu/adder": "^0.3.0",
+    "@gcu/sadpan": "^0.1.0"
+  },
+  "peerDependenciesMeta": {
+    "@gcu/mimic-io": { "optional": false },
+    "@gcu/natra": { "optional": true },
+    "@gcu/line": { "optional": true },
+    "@gcu/alpack": { "optional": true },
+    "@gcu/adder": { "optional": true },
+    "@gcu/sadpan": { "optional": true }
+  },
+  "keywords": [
+    "machine-learning",
+    "sklearn",
+    "scikit-learn",
+    "decision-tree",
+    "random-forest",
+    "kmeans",
+    "pca",
+    "preprocessing",
+    "cross-validation",
+    "spatial-kfold",
+    "compositional-data",
+    "geoscience",
+    "geometallurgy",
+    "mimic-io",
+    "auditable",
+    "gcu"
+  ],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/learn"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/learn",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}
