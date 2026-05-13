@@ -1,0 +1,21 @@
+/*
+ * @gcu/term — default decorative theme
+ * Optional: replace any of these declarations to retheme the terminal.
+ * The structural rules in term.css are not overridable; everything below
+ * is.
+ */
+
+.screen {
+  font-family: "JetBrains Mono", "Berkeley Mono", "IBM Plex Mono",
+               "Space Mono", ui-monospace, monospace;
+  font-size: 14px;
+  line-height: 1.35;
+  color: #c8cdd4;
+  background: #0a0c10;
+}
+.screen .row {
+  height: 1.35em;
+}
+.screen .cur {
+  background: #d9a85f;
+}

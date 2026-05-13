@@ -1,0 +1,54 @@
+/*
+ * @gcu/term — structural CSS
+ * Required for the renderer to behave correctly. The position,
+ * pointer-events, mix-blend-mode, contain, and user-select declarations
+ * encode the rendering contract; do not override them. Decorative styling
+ * (font, colors, cursor color) lives in term-default.css and is intended
+ * to be replaced by the host.
+ */
+
+.screen {
+  position: relative;
+  display: block;
+  white-space: pre;
+  overflow: hidden;
+  user-select: text;
+  cursor: text;
+}
+.screen .row {
+  display: block;
+  white-space: pre;
+  contain: layout style;
+}
+.screen .cur {
+  position: absolute;
+  mix-blend-mode: difference;
+  pointer-events: none;
+  z-index: 2;
+}
+.screen.app-mouse {
+  user-select: none;
+  cursor: default;
+}
+
+.termhost {
+  position: relative;
+  display: inline-block;
+  line-height: 0;
+}
+
+.termhost > textarea {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  margin: 0; padding: 0; border: 0; outline: 0;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  font: inherit;
+  pointer-events: none;
+  z-index: 1;
+  resize: none;
+  overflow: hidden;
+  white-space: pre;
+}

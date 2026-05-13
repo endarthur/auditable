@@ -1,0 +1,44 @@
+{
+  "name": "@gcu/term",
+  "version": "0.1.0",
+  "description": "Browser-native VT/ANSI terminal emulator with a generic byte-stream interface. Williams-parser core, DOM renderer, no dependencies, single file. Designed for embedded REPLs and log viewers — not a replacement for xterm.js at scale.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./bundled": "./index.js",
+    "./term.css": "./term.css",
+    "./term-default.css": "./term-default.css",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "term.css",
+    "term-default.css",
+    "SPEC.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": [
+    "terminal",
+    "vt100",
+    "ansi",
+    "xterm",
+    "emulator",
+    "tty",
+    "console",
+    "repl",
+    "browser"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/term",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/term"
+  }
+}
