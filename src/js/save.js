@@ -219,13 +219,6 @@ async function buildNotebookHtml(opts = {}) {
   const cryptoManage = settingsPanEl.querySelector('#cryptoManageSection');
   if (cryptoManage) cryptoManage.style.display = 'none';
   const settingsPanHTML = settingsPanEl.outerHTML.replace(/display:\s*block;?/, '');
-  const updateOvHTML = $('#updateOverlay').outerHTML.replace(/\bvisible\b/, '').replace(/class="\s*"/, 'class=""');
-  const updatePanEl = $('#updatePanel').cloneNode(true);
-  updatePanEl.style.display = '';
-  // reset update status and dynamic text
-  const uStatus = updatePanEl.querySelector('#updateStatus');
-  if (uStatus) { uStatus.innerHTML = ''; uStatus.className = 'update-status'; }
-  const updatePanHTML = updatePanEl.outerHTML.replace(/display:\s*block;?/, '');
   // FS panel — reset to empty state
   const fsPanEl = document.getElementById('fsPanel');
   let fsPanHTML = '';
@@ -371,9 +364,6 @@ ${helpHTML}
 
 ${settingsOvHTML}
 ${settingsPanHTML}
-
-${updateOvHTML}
-${updatePanHTML}
 
 ${fsPanHTML}
 

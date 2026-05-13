@@ -1955,46 +1955,24 @@ html.hide-run-toggle #autorunBtnMobile { display: none; }
   line-height: 1;
 }
 
-/* ── UPDATE PANEL ── */
-.update-overlay {
-  display: none;
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.5);
-  z-index: 1000;
-}
-.update-overlay.visible { display: block; }
-.update-panel {
-  display: none;
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 280px;
-  max-width: 90vw;
-  background: var(--au-surface-raised);
-  border-left: 1px solid var(--au-border);
-  padding: 20px;
-  overflow-y: auto;
-  z-index: 1001;
-  font-family: var(--au-font-mono);
-  font-size: 12px;
-  color: var(--au-fg-muted);
-}
-.update-panel h2 {
-  color: var(--au-action);
-  font-size: 11px;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  margin: 0 0 12px 0;
-}
-.update-panel .settings-row {
+/* ── UPDATE DIALOG (rendered via @gcu/dialog) ── */
+/* The .update-* classes live inside a custom Dialog body. Settings-row
+   layout is shared across multiple dialog bodies (export, recovery,
+   update) so it's scoped to .gcu-dialog-body. */
+.gcu-dialog-body .settings-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 6px 0;
 }
-.update-panel .settings-row label { color: var(--au-fg-soft); font-size: 11px; }
+.gcu-dialog-body .settings-row > label {
+  color: var(--au-fg-soft);
+  font-size: 11px;
+  /* settings-row label is a static label (not wrapping an input), so the
+     flex:1 in the global form-input rule shouldn't apply. */
+  padding: 0;
+  flex: 0;
+}
 .update-actions {
   display: flex;
   flex-direction: column;

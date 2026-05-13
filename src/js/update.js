@@ -3,22 +3,19 @@ import { setMsg } from './ui.js';
 import { getSettings, __AUDITABLE_VERSION__, __AUDITABLE_RELEASE__ } from './settings.js';
 import { renderMd } from './markdown.js';
 import { encodeModules } from './save.js';
-
-// ── UPDATE PANEL ──
-
-export function toggleUpdate() {
-  const overlay = $('#updateOverlay');
-  const panel = $('#updatePanel');
-  const open = !overlay.classList.contains('visible');
-  overlay.classList.toggle('visible');
-  panel.style.display = open ? 'block' : 'none';
-}
+import { Dialog } from '#dialog';
 
 // ── SELF-UPDATE SYSTEM ──
 
 const __AUDITABLE_PUBLIC_KEY__ = '';
 const __AUDITABLE_REPO__ = 'endarthur/auditable';
 const __AUDITABLE_PAGES_URL__ = 'https://endarthur.github.io/auditable';
+
+// Cached result of the load-time signature self-verification (sets the
+// toolbar badge as a side effect; surfaced inside the update dialog when
+// it opens). Form: { text, cls } — text shows in the dialog, cls maps to
+// .update-{ok,warn,err} classes.
+let _verifySelfResult = null;
 
 // ── SIGNATURE EXTRACTION ──
 
@@ -48,7 +45,7 @@ function extractData(html) {
     data: data ? data[0] : null,
     settings: settings ? settings[0] : null,
     modules: modules ? modules[0] : null,
-    title: title ? title[1].replace(/^Auditable\s*\u2014\s*/, '') : 'untitled',
+    title: title ? title[1].replace(/^Auditable\s*—\s*/, '') : 'untitled',
   };
 }
 
@@ -122,7 +119,7 @@ function reassemble(newHtml, oldData) {
 
   // Update title
   if (oldData.title && oldData.title !== 'untitled') {
-    html = html.replace(/<title>[^<]*<\/title>/, '<title>Auditable \u2014 ' + escHtml(oldData.title) + '</title>');
+    html = html.replace(/<title>[^<]*<\/title>/, '<title>Auditable — ' + escHtml(oldData.title) + '</title>');
     // Also update the docTitle input value
     html = html.replace(/(<input[^>]*id="docTitle"[^>]*value=")[^"]*"/, '$1' + escHtml(oldData.title) + '"');
   }
@@ -168,148 +165,12 @@ export function setBadge(id, label, cls) {
   if (cls) el.className = 'toolbar-badge ' + cls;
 }
 
-// ── UPDATE STATUS UI ──
+// ── REASSEMBLE + DOWNLOAD (shared by online + from-file paths) ──
 
-function setUpdateStatus(html, cls) {
-  const el = $('#updateStatus');
-  if (el) {
-    el.innerHTML = html;
-    el.className = 'update-status' + (cls ? ' update-' + cls : '');
-  }
-}
-
-// ── CHECK FOR UPDATE (GitHub API) ──
-
-export async function checkForUpdate() {
-  const btn = $('#updateCheckBtn');
-  if (btn) btn.disabled = true;
-  setUpdateStatus('checking...', '');
-
-  try {
-    // Fetch version.json from GitHub Pages (CORS-friendly)
-    const vResp = await fetch(__AUDITABLE_PAGES_URL__ + '/version.json');
-    if (!vResp.ok) throw new Error('version check failed: ' + vResp.status);
-    const vData = await vResp.json();
-    const remoteVersion = vData.version || '';
-    const currentRelease = $('#updateRelease')?.textContent || 'dev';
-
-    if (currentRelease === 'dev') {
-      // Dev builds always offer the latest release
-    } else if (compareVersions(currentRelease, remoteVersion) >= 0) {
-      setUpdateStatus('up to date (' + currentRelease + ')', 'ok');
-      if (btn) btn.disabled = false;
-      return;
-    }
-
-    const notes = vData.notes || '';
-    const notesHtml = notes
-      ? '<div class="update-notes">' + renderMd(notes) + '</div>'
-      : '';
-
-    setUpdateStatus(
-      '<strong>' + remoteVersion + '</strong> available'
-      + notesHtml
-      + '<button id="updateApplyBtn" onclick="applyOnlineUpdate()">update</button>',
-      'available'
-    );
-
-    window._updateVersion = remoteVersion;
-  } catch (e) {
-    setUpdateStatus('error: ' + escHtml(e.message), 'err');
-  }
-  if (btn) btn.disabled = false;
-}
-
-// ── APPLY ONLINE UPDATE ──
-
-export async function applyOnlineUpdate() {
-  setUpdateStatus('downloading...', '');
-
-  try {
-    // Download signed build from GitHub Pages (CORS-friendly)
-    const resp = await fetch(__AUDITABLE_PAGES_URL__ + '/auditable.html');
-    if (!resp.ok) throw new Error('download failed: ' + resp.status);
-    const newHtml = await resp.text();
-    await applyUpdate(newHtml, window._updateVersion);
-  } catch (e) {
-    setUpdateStatus('error: ' + escHtml(e.message), 'err');
-  }
-}
-
-// ── APPLY UPDATE (verify + reassemble + download) ──
-
-async function applyUpdate(newHtml, version) {
-  setUpdateStatus('verifying signature...', '');
-
-  const result = await verifySignature(newHtml);
-
-  if (result.status === 'invalid') {
-    setUpdateStatus('signature verification FAILED \u2014 update rejected', 'err');
-    return;
-  }
-
-  const warnMessages = {
-    'unsigned': 'this file is not signed',
-    'no-key': 'no public key configured \u2014 cannot verify signature',
-    'wrong-key': 'signed with an unknown key',
-  };
-  if (warnMessages[result.status]) {
-    setUpdateStatus(
-      'warning: ' + warnMessages[result.status]
-      + '<div class="update-confirm">'
-      + '<button onclick="proceedUpdate()">proceed anyway</button>'
-      + '<button onclick="cancelUpdate()">cancel</button>'
-      + '</div>',
-      'warn'
-    );
-    window._pendingUpdateHtml = newHtml;
-    window._pendingUpdateVersion = version;
-    return;
-  }
-
-  if (result.status === 'unsupported') {
-    setUpdateStatus(
-      result.message
-      + '<div class="update-confirm">'
-      + '<button onclick="proceedUpdate()">proceed without verification</button>'
-      + '<button onclick="cancelUpdate()">cancel</button>'
-      + '</div>',
-      'warn'
-    );
-    window._pendingUpdateHtml = newHtml;
-    window._pendingUpdateVersion = version;
-    return;
-  }
-
-  if (result.status === 'error') {
-    setUpdateStatus('verification error: ' + escHtml(result.message), 'err');
-    return;
-  }
-
-  // Valid signature — proceed
-  finishUpdate(newHtml, version);
-}
-
-export function proceedUpdate() {
-  if (window._pendingUpdateHtml) {
-    finishUpdate(window._pendingUpdateHtml, window._pendingUpdateVersion);
-    delete window._pendingUpdateHtml;
-    delete window._pendingUpdateVersion;
-  }
-}
-
-export function cancelUpdate() {
-  delete window._pendingUpdateHtml;
-  delete window._pendingUpdateVersion;
-  setUpdateStatus('update cancelled', '');
-}
-
-function finishUpdate(newHtml, version) {
-  setUpdateStatus('reassembling...', '');
+function finishUpdate(newHtml, version, setStatus) {
+  setStatus('reassembling...', '');
 
   // Extract current document as HTML to get data comments
-  const currentHtml = document.documentElement.outerHTML;
-  // But the data comments are in the body innerHTML at load time; grab from live source
   const bodyHtml = document.body.innerHTML;
   const fullHtml = '<!DOCTYPE html>\n<html>' + document.head.outerHTML + '<body>' + bodyHtml + '</body></html>';
 
@@ -345,71 +206,231 @@ function finishUpdate(newHtml, version) {
   URL.revokeObjectURL(url);
 
   const vLabel = version ? ' to ' + version : '';
-  setUpdateStatus('updated' + vLabel + ' \u2014 saved as ' + a.download, 'ok');
+  setStatus('updated' + vLabel + ' — saved as ' + a.download, 'ok');
   setMsg('updated' + vLabel, 'ok');
 }
 
-// ── UPDATE FROM FILE ──
+// ── UPDATE DIALOG (single entry point) ──
 
-export function updateFromFile() {
-  const input = document.createElement('input');
-  input.type = 'file';
-  input.accept = '.html';
-  input.onchange = async () => {
-    const file = input.files[0];
-    if (!file) return;
-    setUpdateStatus('reading file...', '');
-    const text = await file.text();
+// Closure state lives in the render: pending update bytes for "proceed
+// anyway" warnings, latest setStatus impl. No window.* slots needed.
+function openUpdateDialog() {
+  return new Dialog({
+    title: 'update',
+    width: 480,
+    render(body, ctx) {
+      // ── Header info rows ──
+      const sigInfo = _verifySelfResult ?? { text: 'checking...', cls: 'warn' };
+      const releaseCls = __AUDITABLE_RELEASE__ === 'dev' ? 'update-warn' : '';
+      const pubKeyText = __AUDITABLE_PUBLIC_KEY__
+        ? __AUDITABLE_PUBLIC_KEY__.slice(0, 8) + '...'
+        : 'not configured';
+      const pubKeyCls = __AUDITABLE_PUBLIC_KEY__ ? '' : 'update-warn';
 
-    // Try to extract version from the file
-    const vMatch = text.match(/__AUDITABLE_VERSION__\s*=\s*'([^']+)'/);
-    const version = vMatch ? 'v' + vMatch[1] : null;
+      const info = document.createElement('div');
+      info.innerHTML =
+        `<div class="settings-row"><label>version</label><span>v${escHtml(__AUDITABLE_VERSION__)}</span></div>` +
+        `<div class="settings-row"><label>release</label><span class="${releaseCls}">${escHtml(__AUDITABLE_RELEASE__)}</span></div>` +
+        `<div class="settings-row"><label>signature</label><span class="update-sig update-${sigInfo.cls}">${escHtml(sigInfo.text)}</span></div>` +
+        `<div class="settings-row"><label>public key</label><span class="update-sig ${pubKeyCls}" data-pubkey>${escHtml(pubKeyText)}</span></div>`;
+      body.appendChild(info);
 
-    await applyUpdate(text, version);
-  };
-  input.click();
+      // Click pubkey to expand/collapse the full base64.
+      const pubKeyEl = info.querySelector('[data-pubkey]');
+      if (pubKeyEl && __AUDITABLE_PUBLIC_KEY__) {
+        pubKeyEl.classList.add('update-key-truncated');
+        pubKeyEl.style.cursor = 'pointer';
+        pubKeyEl.onclick = () => {
+          if (pubKeyEl.classList.toggle('update-key-expanded')) {
+            pubKeyEl.classList.remove('update-key-truncated');
+            pubKeyEl.textContent = __AUDITABLE_PUBLIC_KEY__;
+          } else {
+            pubKeyEl.classList.add('update-key-truncated');
+            pubKeyEl.textContent = __AUDITABLE_PUBLIC_KEY__.slice(0, 8) + '...';
+          }
+        };
+      }
+
+      // ── Live status area ──
+      const statusEl = document.createElement('div');
+      statusEl.className = 'update-status';
+      body.appendChild(statusEl);
+
+      const setStatus = (html, cls) => {
+        statusEl.innerHTML = html;
+        statusEl.className = 'update-status' + (cls ? ' update-' + cls : '');
+      };
+
+      // ── Action buttons ──
+      const actions = document.createElement('div');
+      actions.className = 'update-actions';
+
+      const checkBtn = document.createElement('button');
+      checkBtn.textContent = 'check for updates';
+      checkBtn.onclick = async () => {
+        checkBtn.disabled = true;
+        setStatus('checking...', '');
+        try {
+          const vResp = await fetch(__AUDITABLE_PAGES_URL__ + '/version.json');
+          if (!vResp.ok) throw new Error('version check failed: ' + vResp.status);
+          const vData = await vResp.json();
+          const remoteVersion = vData.version || '';
+
+          if (__AUDITABLE_RELEASE__ === 'dev') {
+            // Dev builds always offer the latest release.
+          } else if (compareVersions(__AUDITABLE_RELEASE__, remoteVersion) >= 0) {
+            setStatus('up to date (' + escHtml(__AUDITABLE_RELEASE__) + ')', 'ok');
+            checkBtn.disabled = false;
+            return;
+          }
+
+          const notes = vData.notes || '';
+          const notesHtml = notes
+            ? '<div class="update-notes">' + renderMd(notes) + '</div>'
+            : '';
+
+          setStatus(
+            '<strong>' + escHtml(remoteVersion) + '</strong> available' + notesHtml,
+            'available'
+          );
+          // Inject an "update" button under the status.
+          const applyBtn = document.createElement('button');
+          applyBtn.className = 'accent';
+          applyBtn.textContent = 'update';
+          applyBtn.style.marginTop = '8px';
+          applyBtn.onclick = () => applyOnline(remoteVersion);
+          statusEl.appendChild(applyBtn);
+        } catch (e) {
+          setStatus('error: ' + escHtml(e.message), 'err');
+        }
+        checkBtn.disabled = false;
+      };
+
+      const fileBtn = document.createElement('button');
+      fileBtn.textContent = 'update from file';
+      fileBtn.onclick = () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.html';
+        input.onchange = async () => {
+          const file = input.files[0];
+          if (!file) return;
+          setStatus('reading file...', '');
+          const text = await file.text();
+          const vMatch = text.match(/__AUDITABLE_VERSION__\s*=\s*'([^']+)'/);
+          const version = vMatch ? 'v' + vMatch[1] : null;
+          await applyUpdate(text, version);
+        };
+        input.click();
+      };
+
+      actions.append(checkBtn, fileBtn);
+      body.appendChild(actions);
+
+      // ── Internal apply paths ──
+
+      async function applyOnline(version) {
+        setStatus('downloading...', '');
+        try {
+          const resp = await fetch(__AUDITABLE_PAGES_URL__ + '/auditable.html');
+          if (!resp.ok) throw new Error('download failed: ' + resp.status);
+          const newHtml = await resp.text();
+          await applyUpdate(newHtml, version);
+        } catch (e) {
+          setStatus('error: ' + escHtml(e.message), 'err');
+        }
+      }
+
+      async function applyUpdate(newHtml, version) {
+        setStatus('verifying signature...', '');
+        const result = await verifySignature(newHtml);
+
+        if (result.status === 'invalid') {
+          setStatus('signature verification FAILED — update rejected', 'err');
+          return;
+        }
+
+        const warnMessages = {
+          'unsigned': 'this file is not signed',
+          'no-key': 'no public key configured — cannot verify signature',
+          'wrong-key': 'signed with an unknown key',
+          'unsupported': result.message,
+        };
+        if (warnMessages[result.status]) {
+          renderConfirm(warnMessages[result.status], () => finishUpdate(newHtml, version, setStatus));
+          return;
+        }
+
+        if (result.status === 'error') {
+          setStatus('verification error: ' + escHtml(result.message), 'err');
+          return;
+        }
+
+        // Valid signature — proceed
+        finishUpdate(newHtml, version, setStatus);
+      }
+
+      function renderConfirm(message, onProceed) {
+        statusEl.innerHTML = '';
+        statusEl.className = 'update-status update-warn';
+
+        const msg = document.createElement('div');
+        msg.textContent = 'warning: ' + message;
+        statusEl.appendChild(msg);
+
+        const row = document.createElement('div');
+        row.className = 'update-confirm';
+        const proceedBtn = document.createElement('button');
+        proceedBtn.textContent = 'proceed anyway';
+        proceedBtn.onclick = onProceed;
+        const cancelBtn = document.createElement('button');
+        cancelBtn.textContent = 'cancel';
+        cancelBtn.onclick = () => setStatus('update cancelled', '');
+        row.append(proceedBtn, cancelBtn);
+        statusEl.appendChild(row);
+      }
+    },
+  }).show();
 }
 
-// ── VERIFY CURRENT DOCUMENT ──
+// Public entry. Name kept for backward-compat with toolbar / menubar callers
+// (they call window.toggleUpdate). Returns the dialog promise.
+export function toggleUpdate() {
+  return openUpdateDialog();
+}
+
+// ── VERIFY CURRENT DOCUMENT (load-time, sets toolbar badge + caches result) ──
 
 async function verifySelf() {
-  const el = $('#updateSigStatus');
-  if (!el) return;
-
   // Reconstruct from live DOM
   const styleEl = document.querySelector('style');
   const scriptEl = document.querySelector('script');
   if (!styleEl || !scriptEl) {
-    el.textContent = 'error: no style/script';
-    el.className = 'update-sig update-err';
+    _verifySelfResult = { text: 'error: no style/script', cls: 'err' };
     return;
   }
 
   const raw = document.body.innerHTML;
   const sigMatch = raw.match(/<!--AUDITABLE-SIGNATURE\n([\s\S]*?)\nAUDITABLE-SIGNATURE-->/);
   if (!sigMatch) {
-    el.textContent = 'unsigned';
-    el.className = 'update-sig update-warn';
+    _verifySelfResult = { text: 'unsigned', cls: 'warn' };
     return;
   }
 
   let sig;
   try { sig = JSON.parse(sigMatch[1]); } catch {
-    el.textContent = 'invalid signature format';
-    el.className = 'update-sig update-err';
+    _verifySelfResult = { text: 'invalid signature format', cls: 'err' };
     return;
   }
 
   const pubKeyB64 = __AUDITABLE_PUBLIC_KEY__;
   if (!pubKeyB64) {
-    el.textContent = 'no public key configured';
-    el.className = 'update-sig update-warn';
+    _verifySelfResult = { text: 'no public key configured', cls: 'warn' };
     return;
   }
 
   if (sig.pub !== pubKeyB64) {
-    el.textContent = 'signed with unknown key';
-    el.className = 'update-sig update-warn';
+    _verifySelfResult = { text: 'signed with unknown key', cls: 'warn' };
     return;
   }
 
@@ -424,55 +445,23 @@ async function verifySelf() {
     const msgBytes = new TextEncoder().encode(content);
     const valid = await crypto.subtle.verify('Ed25519', key, sigBytes, msgBytes);
     if (valid) {
-      el.textContent = 'signed \u2713';
-      el.className = 'update-sig update-ok';
+      _verifySelfResult = { text: 'signed ✓', cls: 'ok' };
       setBadge('signed', 'signed', 'toolbar-badge toolbar-badge-signed');
     } else {
-      el.textContent = 'signature invalid';
-      el.className = 'update-sig update-err';
+      _verifySelfResult = { text: 'signature invalid', cls: 'err' };
     }
   } catch (e) {
     if (e.name === 'NotSupportedError') {
-      el.textContent = 'Ed25519 not supported';
-      el.className = 'update-sig update-warn';
+      _verifySelfResult = { text: 'Ed25519 not supported', cls: 'warn' };
     } else {
-      el.textContent = 'error: ' + e.message;
-      el.className = 'update-sig update-err';
+      _verifySelfResult = { text: 'error: ' + e.message, cls: 'err' };
     }
   }
 }
 
 // ── INIT ──
 (function() {
-  const ver = $('#updateCurrentVer');
-  if (ver) ver.textContent = 'v' + __AUDITABLE_VERSION__;
-  const rel = $('#updateRelease');
-  if (rel) {
-    rel.textContent = __AUDITABLE_RELEASE__;
-    if (__AUDITABLE_RELEASE__ === 'dev') rel.className = 'update-sig update-warn';
-  }
-  // Show public key status
-  const keyEl = $('#updatePubKey');
-  if (keyEl) {
-    if (__AUDITABLE_PUBLIC_KEY__) {
-      keyEl.textContent = __AUDITABLE_PUBLIC_KEY__.slice(0, 8) + '...';
-      keyEl.className = 'update-sig update-key-truncated';
-      keyEl.onclick = () => {
-        if (keyEl.classList.contains('update-key-expanded')) {
-          keyEl.textContent = __AUDITABLE_PUBLIC_KEY__.slice(0, 8) + '...';
-          keyEl.classList.remove('update-key-expanded');
-          keyEl.classList.add('update-key-truncated');
-        } else {
-          keyEl.textContent = __AUDITABLE_PUBLIC_KEY__;
-          keyEl.classList.remove('update-key-truncated');
-          keyEl.classList.add('update-key-expanded');
-        }
-      };
-    } else {
-      keyEl.textContent = 'not configured';
-      keyEl.className = 'update-sig update-warn';
-    }
-  }
-  // Run self-verification on load
+  // Run self-verification on load (sets toolbar badge as a side effect,
+  // caches result for the next openUpdateDialog() call).
   verifySelf();
 })();

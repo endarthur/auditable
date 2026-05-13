@@ -215,33 +215,6 @@
   </div>
 </div>
 
-<div class="update-overlay" id="updateOverlay" onclick="if(event.target===this)toggleUpdate()"></div>
-<div class="update-panel" id="updatePanel">
-  <button class="settings-close" onclick="toggleUpdate()">&#x00d7;</button>
-  <h2>update</h2>
-  <div class="settings-row">
-    <label>version</label>
-    <span id="updateCurrentVer">v0.0.0</span>
-  </div>
-  <div class="settings-row">
-    <label>release</label>
-    <span id="updateRelease">dev</span>
-  </div>
-  <div class="settings-row">
-    <label>signature</label>
-    <span id="updateSigStatus" class="update-sig">checking...</span>
-  </div>
-  <div class="settings-row">
-    <label>public key</label>
-    <span id="updatePubKey" class="update-sig">-</span>
-  </div>
-  <div id="updateStatus" class="update-status"></div>
-  <div class="update-actions">
-    <button id="updateCheckBtn" onclick="checkForUpdate()">check for updates</button>
-    <button onclick="updateFromFile()">update from file</button>
-  </div>
-</div>
-
 <div class="fs-panel" id="fsPanel">
   <button class="settings-close" onclick="toggleFs()">&#x00d7;</button>
   <h2>files <span class="fs-summary" id="fsSummary">empty</span></h2>

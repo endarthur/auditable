@@ -10,7 +10,7 @@ import { registerProvider } from './stdlib.js';
 import { convertCell, moveCell } from './cell-ops.js';
 import { toggleAutorun } from './editor.js';
 import { toggleSettings, togglePresent, applyTheme, applyFontSize, applyWidth, applyLineNumbers, applyHeader, applyExecMode, applyRunOnLoad, applyShowToggle, applyGlobalExecMode, applyGlobalRunOnLoad, applyEditorView, applyEmbedFonts } from './settings.js';
-import { toggleUpdate, checkForUpdate, applyOnlineUpdate, proceedUpdate, cancelUpdate, updateFromFile } from './update.js';
+import { toggleUpdate } from './update.js';
 import { saveNotebook, savePackedNotebook, setSaveMode, toggleSaveTray, exportAsTxt, showExportDialog } from './save.js';
 import { insertAt, getPreferredCodeType, setPreferredCodeType, setPreferredAndInsert, toggleCodeTray, updateToolbarCodeBtn } from './ui.js';
 import { toggleFs, fsImport } from './fs.js';
@@ -70,11 +70,6 @@ window.applyEmbedFonts = applyEmbedFonts;
 
 // update
 window.toggleUpdate = toggleUpdate;
-window.checkForUpdate = checkForUpdate;
-window.applyOnlineUpdate = applyOnlineUpdate;
-window.proceedUpdate = proceedUpdate;
-window.cancelUpdate = cancelUpdate;
-window.updateFromFile = updateFromFile;
 
 // save
 window.saveNotebook = saveNotebook;
