@@ -675,6 +675,14 @@ if (fs.existsSync(menuPath)) {
   modules.unshift({ name: 'menu', source: menuSrc });
 }
 
+// Add @gcu/dialog bundle as a module entry (ES module with named exports)
+const dialogPath = path.join(__dirname, 'ext/dialog/index.js');
+if (fs.existsSync(dialogPath)) {
+  let dialogSrc = fs.readFileSync(dialogPath, 'utf8');
+  dialogSrc = dialogSrc.replace(/^\n+/, '').replace(/\n+$/, '');
+  modules.unshift({ name: 'dialog', source: dialogSrc });
+}
+
 // Read CM6 bundle (classic IIFE, not an ES module — sets window.CM6 via var)
 const cm6Path = path.join(__dirname, 'ext/cm6/cm6.min.js');
 const cm6Src = fs.existsSync(cm6Path) ? fs.readFileSync(cm6Path, 'utf8') : '';
@@ -716,6 +724,19 @@ if (fs.existsSync(menuDefaultCssPath)) {
   let menuDefault = fs.readFileSync(menuDefaultCssPath, 'utf8');
   menuDefault = menuDefault.replace(/:root\s*\{[\s\S]*?\}\s*/m, '');
   appCss += '\n\n' + menuDefault.trimEnd();
+}
+
+// 3d. Append @gcu/dialog structural CSS + decorative rules. Same :root strip
+// as menu — auditable's palette already maps to --ui-* in src/style.css.
+const dialogCssPath = path.join(__dirname, 'ext/dialog/dialog.css');
+const dialogDefaultCssPath = path.join(__dirname, 'ext/dialog/dialog-default.css');
+if (fs.existsSync(dialogCssPath)) {
+  appCss += '\n\n' + fs.readFileSync(dialogCssPath, 'utf8').trimEnd();
+}
+if (fs.existsSync(dialogDefaultCssPath)) {
+  let dialogDefault = fs.readFileSync(dialogDefaultCssPath, 'utf8');
+  dialogDefault = dialogDefault.replace(/:root\s*\{[\s\S]*?\}\s*/m, '');
+  appCss += '\n\n' + dialogDefault.trimEnd();
 }
 
 // 4. Inject build-time constants into module sources
