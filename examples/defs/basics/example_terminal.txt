@@ -24,14 +24,14 @@ term.write(`\x1b[36m${greeting}\x1b[0m, world.\r\n\r\n`);
 
 // 16-color rainbow
 let line = '';
-for (let i = 0; i < 16; i++) line += \`\\x1b[48;5;\${i}m  \\x1b[0m\`;
+for (let i = 0; i < 16; i++) line += `\x1b[48;5;${i}m  \x1b[0m`;
 term.write(line + '\r\n');
 
 // truecolor gradient
 let grad = '';
 for (let i = 0; i < 60; i++) {
   const r = Math.round(255 * i / 60);
-  grad += \`\\x1b[48;2;\${r};80;\${255-r}m \\x1b[0m\`;
+  grad += `\x1b[48;2;${r};80;${255-r}m \x1b[0m`;
 }
 term.write(grad + '\r\n');
 
@@ -60,11 +60,11 @@ const lb = term.lineBuffer({
       // eval is fine here — it's the user's own cell
       const result = eval(line);
       const repr = (typeof result === 'string')
-        ? \`'\${result}'\`
+        ? `'${result}'`
         : JSON.stringify(result);
-      term.write(\`\\x1b[36m\${repr}\\x1b[0m\\r\\n\`);
+      term.write(`\x1b[36m${repr}\x1b[0m\r\n`);
     } catch (e) {
-      term.write(\`\\x1b[31m\${e.name}: \${e.message}\\x1b[0m\\r\\n\`);
+      term.write(`\x1b[31m${e.name}: ${e.message}\x1b[0m\r\n`);
     }
     lb.prompt();
   },
@@ -104,7 +104,7 @@ const interval = setInterval(() => {
   const lv = levels[Math.floor(Math.random() * levels.length)];
   const msg = messages[Math.floor(Math.random() * messages.length)];
   const ts = new Date().toLocaleTimeString();
-  term.write(\`\\x1b[2m\${ts}\\x1b[0m \\x1b[\${lv.color}m\${lv.name.padEnd(5)}\\x1b[0m #\${counter++} \${msg}\\r\\n\`);
+  term.write(`\x1b[2m${ts}\x1b[0m \x1b[${lv.color}m${lv.name.padEnd(5)}\x1b[0m #${counter++} ${msg}\r\n`);
   if (counter > 100) {
     clearInterval(interval);
     term.write('\r\n\x1b[33mstream complete.\x1b[0m scroll up to see earlier lines.\r\n');
@@ -117,7 +117,7 @@ invalidation.then(() => clearInterval(interval));
 /// md
 ## 4. DEC line-drawing box
 
-the @gcu/term parser implements the DEC Special Graphics charset, so old curses-based TUIs (mc, dialog) render their box drawings correctly. \`ESC ( 0\` switches G0 to DEC graphics; \`ESC ( B\` switches back to USASCII.
+the @gcu/term parser implements the DEC Special Graphics charset, so old curses-based TUIs (mc, dialog) render their box drawings correctly. `ESC ( 0` switches G0 to DEC graphics; `ESC ( B` switches back to USASCII.
 
 /// code
 const term = ui.terminal({ cols: 40, rows: 8 });
