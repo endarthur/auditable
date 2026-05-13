@@ -826,6 +826,19 @@ export class KBinsDiscretizer extends BaseEstimator {
     return this;
   }
 
+  /**
+   * Output feature names: same as input (ordinal encoding preserves columns).
+   * Falls back to `feature_names_in_` when input_features is null.
+   */
+  get_feature_names_out(input_features = null) {
+    if (this.bin_edges_ == null) throw new ValidationError('KBinsDiscretizer: not fitted');
+    const names = input_features ?? this.feature_names_in_;
+    if (names) return names.slice();
+    const out = new Array(this.n_features_in_);
+    for (let j = 0; j < this.n_features_in_; j++) out[j] = `x${j}`;
+    return out;
+  }
+
   transform(X) {
     if (this.bin_edges_ == null) throw new ValidationError('KBinsDiscretizer: not fitted');
     const { data, shape } = asMatrix(X);

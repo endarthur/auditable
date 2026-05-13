@@ -16,7 +16,7 @@
 // match the "perfect" interpretation, or NaN to surface the missing
 // signal.
 
-import { ValidationError } from './util/checks.js';
+import { ValidationError, asMatrix } from './util/checks.js';
 
 // ────────────────────────────────────────────────────────────────────
 // Classification
@@ -460,6 +460,123 @@ export function explained_variance_score(y_true, y_pred, opts = {}) {
   }
   if (var_y === 0) return var_res === 0 ? 1 : 0;
   return 1 - var_res / var_y;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Clustering
+// ────────────────────────────────────────────────────────────────────
+
+/**
+ * Mean silhouette coefficient over all samples — the canonical default
+ * scorer for clusterers (sklearn convention, SPEC §3.6).
+ *
+ * For each sample i:
+ *   a(i) = mean distance to other samples in the same cluster
+ *   b(i) = min over other clusters of (mean distance to samples in that cluster)
+ *   s(i) = (b(i) - a(i)) / max(a(i), b(i))
+ *
+ * Returns NaN when fewer than 2 clusters are present or when fewer than
+ * 2 valid samples remain after filtering noise/singleton clusters.
+ *
+ *   opts.metric  (string, default 'euclidean') — only 'euclidean' supported
+ *
+ * Noise labels of -1 (DBSCAN convention) are excluded before scoring.
+ *
+ * Complexity: O(n² × m). Pre-allocates a single n×n distance matrix; for
+ * the in-browser scale this is fine up to ~10K samples.
+ */
+export function silhouette_score(X, labels, opts = {}) {
+  const samples = silhouette_samples(X, labels, opts);
+  if (samples.length === 0) return NaN;
+  let s = 0;
+  for (let i = 0; i < samples.length; i++) s += samples[i];
+  return s / samples.length;
+}
+
+/**
+ * Per-sample silhouette coefficients in the same order as the input
+ * (after filtering noise labels of -1). Returns Float64Array of length
+ * (n - n_noise).
+ */
+export function silhouette_samples(X, labels, opts = {}) {
+  const metric = opts.metric ?? 'euclidean';
+  if (metric !== 'euclidean') {
+    throw new ValidationError(
+      `silhouette_samples: metric='${metric}' — only 'euclidean' supported in v0.2`);
+  }
+  const { data, shape } = asMatrix(X);
+  const [n_full, m] = shape;
+  const labels_full = _asArr(labels, 'labels');
+  if (labels_full.length !== n_full) {
+    throw new ValidationError(
+      `silhouette_samples: labels length ${labels_full.length} != n_samples ${n_full}`);
+  }
+
+  // Drop noise samples (label -1, DBSCAN convention). Build compacted
+  // row-major view.
+  const keep = [];
+  for (let i = 0; i < n_full; i++) {
+    if (labels_full[i] !== -1) keep.push(i);
+  }
+  const n = keep.length;
+  if (n < 2) return new Float64Array(0);
+
+  const lab = new Int32Array(n);
+  const pts = new Float64Array(n * m);
+  for (let i = 0; i < n; i++) {
+    lab[i] = labels_full[keep[i]] | 0;
+    const off = keep[i] * m;
+    for (let j = 0; j < m; j++) pts[i * m + j] = data[off + j];
+  }
+
+  // Unique labels and per-cluster sizes.
+  const labelSet = new Map();  // label → cluster index in [0, K)
+  const sizes = [];
+  for (let i = 0; i < n; i++) {
+    if (!labelSet.has(lab[i])) {
+      labelSet.set(lab[i], labelSet.size);
+      sizes.push(0);
+    }
+    sizes[labelSet.get(lab[i])]++;
+  }
+  const K = sizes.length;
+  if (K < 2) return new Float64Array(0);
+
+  // Per-sample cluster index.
+  const ci = new Int32Array(n);
+  for (let i = 0; i < n; i++) ci[i] = labelSet.get(lab[i]);
+
+  // Sum of distances from each sample to each cluster (n × K).
+  const sumDist = new Float64Array(n * K);
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      let s = 0;
+      for (let k = 0; k < m; k++) {
+        const d = pts[i * m + k] - pts[j * m + k];
+        s += d * d;
+      }
+      const d = Math.sqrt(s);
+      sumDist[i * K + ci[j]] += d;
+      sumDist[j * K + ci[i]] += d;
+    }
+  }
+
+  const out = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const own = ci[i];
+    const ownSize = sizes[own];
+    if (ownSize <= 1) { out[i] = 0; continue; }  // singleton — undefined, sklearn returns 0
+    const a = sumDist[i * K + own] / (ownSize - 1);
+    let b = Infinity;
+    for (let c = 0; c < K; c++) {
+      if (c === own) continue;
+      const meanD = sumDist[i * K + c] / sizes[c];
+      if (meanD < b) b = meanD;
+    }
+    const denom = Math.max(a, b);
+    out[i] = denom === 0 ? 0 : (b - a) / denom;
+  }
+  return out;
 }
 
 // ────────────────────────────────────────────────────────────────────

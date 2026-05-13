@@ -1,3 +1,5 @@
+import { silhouette_score } from './metrics.js';
+
 // BaseEstimator + mixins + clone + check_is_fitted.
 //
 // Mirrors scikit-learn's `sklearn.base` to the letter, modulo the four
@@ -218,6 +220,20 @@ export const ClassifierMixin = {
     const yhat = this.predict(X);
     return _accuracy(asArray1d(y), asArray1d(yhat), opts?.sample_weight);
   },
+  /**
+   * log of predict_proba, clipped to avoid -Infinity on zero-probability cells.
+   * Subclasses with a more accurate log-domain pathway (e.g. GMM via
+   * log-responsibilities) override; the default works for any classifier
+   * that exposes predict_proba.
+   */
+  predict_log_proba(X) {
+    if (typeof this.predict_proba !== 'function') {
+      throw new Error(
+        `${this.constructor.name}.predict_log_proba: predict_proba not implemented`);
+    }
+    const proba = this.predict_proba(X);
+    return _logProbaInPlace(proba);
+  },
   __sklearn_tags__() {
     const base = BaseEstimator.prototype.__sklearn_tags__.call(this);
     return { ...base, requires_y: true, estimator_type: 'classifier' };
@@ -254,8 +270,25 @@ export const TransformerMixin = {
 export const ClusterMixin = {
   /**
    * Default scorer for clusterers is silhouette over the fitted labels.
-   * Implementations override when a non-silhouette default makes sense.
+   * Implementations override when a non-silhouette default makes sense
+   * (GaussianMixture overrides with average log-likelihood).
+   *
+   * Returns NaN when fewer than 2 distinct clusters survive noise filtering
+   * (sklearn behaviour: silhouette is undefined for a single-cluster
+   * partition). y is ignored — silhouette is unsupervised.
    */
+  score(X, _y, _opts) {
+    if (this.labels_ == null) {
+      throw new Error(`${this.constructor.name}.score: not fitted`);
+    }
+    // Use fresh predictions for X if predict is available (e.g. KMeans on
+    // held-out data). For partition-only clusterers (Agglomerative, DBSCAN)
+    // the score is over fit_predict, which is the labels we already have.
+    const labels = typeof this.predict === 'function'
+      ? this.predict(X)
+      : this.labels_;
+    return silhouette_score(X, labels);
+  },
   fit_predict(X, y, opts) {
     return this.fit(X, y, opts).labels_;
   },
@@ -395,6 +428,18 @@ function _accuracy(y_true, y_pred, weights) {
     if (y_true[i] === y_pred[i]) num += w;
   }
   return den === 0 ? 0 : num / den;
+}
+
+// log of a row-major Float64Array with .shape, clipped at 1e-12 to avoid
+// -Infinity. Returns a fresh Float64Array with the same shape.
+function _logProbaInPlace(proba) {
+  const out = new Float64Array(proba.length);
+  for (let i = 0; i < proba.length; i++) {
+    const p = proba[i];
+    out[i] = p < 1e-12 ? Math.log(1e-12) : Math.log(p);
+  }
+  if (proba.shape) out.shape = proba.shape.slice();
+  return out;
 }
 
 function _r2(y_true, y_pred, weights) {

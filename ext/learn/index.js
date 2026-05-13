@@ -559,6 +559,20 @@ const ClassifierMixin = {
     const yhat = this.predict(X);
     return _accuracy_base(asArray1d(y), asArray1d(yhat), opts?.sample_weight);
   },
+  /**
+   * log of predict_proba, clipped to avoid -Infinity on zero-probability cells.
+   * Subclasses with a more accurate log-domain pathway (e.g. GMM via
+   * log-responsibilities) override; the default works for any classifier
+   * that exposes predict_proba.
+   */
+  predict_log_proba(X) {
+    if (typeof this.predict_proba !== 'function') {
+      throw new Error(
+        `${this.constructor.name}.predict_log_proba: predict_proba not implemented`);
+    }
+    const proba = this.predict_proba(X);
+    return _logProbaInPlace_base(proba);
+  },
   __sklearn_tags__() {
     const base = BaseEstimator.prototype.__sklearn_tags__.call(this);
     return { ...base, requires_y: true, estimator_type: 'classifier' };
@@ -595,8 +609,25 @@ const TransformerMixin = {
 const ClusterMixin = {
   /**
    * Default scorer for clusterers is silhouette over the fitted labels.
-   * Implementations override when a non-silhouette default makes sense.
+   * Implementations override when a non-silhouette default makes sense
+   * (GaussianMixture overrides with average log-likelihood).
+   *
+   * Returns NaN when fewer than 2 distinct clusters survive noise filtering
+   * (sklearn behaviour: silhouette is undefined for a single-cluster
+   * partition). y is ignored — silhouette is unsupervised.
    */
+  score(X, _y, _opts) {
+    if (this.labels_ == null) {
+      throw new Error(`${this.constructor.name}.score: not fitted`);
+    }
+    // Use fresh predictions for X if predict is available (e.g. KMeans on
+    // held-out data). For partition-only clusterers (Agglomerative, DBSCAN)
+    // the score is over fit_predict, which is the labels we already have.
+    const labels = typeof this.predict === 'function'
+      ? this.predict(X)
+      : this.labels_;
+    return silhouette_score(X, labels);
+  },
   fit_predict(X, y, opts) {
     return this.fit(X, y, opts).labels_;
   },
@@ -736,6 +767,18 @@ function _accuracy_base(y_true, y_pred, weights) {
     if (y_true[i] === y_pred[i]) num += w;
   }
   return den === 0 ? 0 : num / den;
+}
+
+// log of a row-major Float64Array with .shape, clipped at 1e-12 to avoid
+// -Infinity. Returns a fresh Float64Array with the same shape.
+function _logProbaInPlace_base(proba) {
+  const out = new Float64Array(proba.length);
+  for (let i = 0; i < proba.length; i++) {
+    const p = proba[i];
+    out[i] = p < 1e-12 ? Math.log(1e-12) : Math.log(p);
+  }
+  if (proba.shape) out.shape = proba.shape.slice();
+  return out;
 }
 
 function _r2_base(y_true, y_pred, weights) {
@@ -1698,6 +1741,123 @@ function explained_variance_score(y_true, y_pred, opts = {}) {
   }
   if (var_y === 0) return var_res === 0 ? 1 : 0;
   return 1 - var_res / var_y;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Clustering
+// ────────────────────────────────────────────────────────────────────
+
+/**
+ * Mean silhouette coefficient over all samples — the canonical default
+ * scorer for clusterers (sklearn convention, SPEC §3.6).
+ *
+ * For each sample i:
+ *   a(i) = mean distance to other samples in the same cluster
+ *   b(i) = min over other clusters of (mean distance to samples in that cluster)
+ *   s(i) = (b(i) - a(i)) / max(a(i), b(i))
+ *
+ * Returns NaN when fewer than 2 clusters are present or when fewer than
+ * 2 valid samples remain after filtering noise/singleton clusters.
+ *
+ *   opts.metric  (string, default 'euclidean') — only 'euclidean' supported
+ *
+ * Noise labels of -1 (DBSCAN convention) are excluded before scoring.
+ *
+ * Complexity: O(n² × m). Pre-allocates a single n×n distance matrix; for
+ * the in-browser scale this is fine up to ~10K samples.
+ */
+function silhouette_score(X, labels, opts = {}) {
+  const samples = silhouette_samples(X, labels, opts);
+  if (samples.length === 0) return NaN;
+  let s = 0;
+  for (let i = 0; i < samples.length; i++) s += samples[i];
+  return s / samples.length;
+}
+
+/**
+ * Per-sample silhouette coefficients in the same order as the input
+ * (after filtering noise labels of -1). Returns Float64Array of length
+ * (n - n_noise).
+ */
+function silhouette_samples(X, labels, opts = {}) {
+  const metric = opts.metric ?? 'euclidean';
+  if (metric !== 'euclidean') {
+    throw new ValidationError(
+      `silhouette_samples: metric='${metric}' — only 'euclidean' supported in v0.2`);
+  }
+  const { data, shape } = asMatrix(X);
+  const [n_full, m] = shape;
+  const labels_full = _asArr_metrics(labels, 'labels');
+  if (labels_full.length !== n_full) {
+    throw new ValidationError(
+      `silhouette_samples: labels length ${labels_full.length} != n_samples ${n_full}`);
+  }
+
+  // Drop noise samples (label -1, DBSCAN convention). Build compacted
+  // row-major view.
+  const keep = [];
+  for (let i = 0; i < n_full; i++) {
+    if (labels_full[i] !== -1) keep.push(i);
+  }
+  const n = keep.length;
+  if (n < 2) return new Float64Array(0);
+
+  const lab = new Int32Array(n);
+  const pts = new Float64Array(n * m);
+  for (let i = 0; i < n; i++) {
+    lab[i] = labels_full[keep[i]] | 0;
+    const off = keep[i] * m;
+    for (let j = 0; j < m; j++) pts[i * m + j] = data[off + j];
+  }
+
+  // Unique labels and per-cluster sizes.
+  const labelSet = new Map();  // label → cluster index in [0, K)
+  const sizes = [];
+  for (let i = 0; i < n; i++) {
+    if (!labelSet.has(lab[i])) {
+      labelSet.set(lab[i], labelSet.size);
+      sizes.push(0);
+    }
+    sizes[labelSet.get(lab[i])]++;
+  }
+  const K = sizes.length;
+  if (K < 2) return new Float64Array(0);
+
+  // Per-sample cluster index.
+  const ci = new Int32Array(n);
+  for (let i = 0; i < n; i++) ci[i] = labelSet.get(lab[i]);
+
+  // Sum of distances from each sample to each cluster (n × K).
+  const sumDist = new Float64Array(n * K);
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      let s = 0;
+      for (let k = 0; k < m; k++) {
+        const d = pts[i * m + k] - pts[j * m + k];
+        s += d * d;
+      }
+      const d = Math.sqrt(s);
+      sumDist[i * K + ci[j]] += d;
+      sumDist[j * K + ci[i]] += d;
+    }
+  }
+
+  const out = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const own = ci[i];
+    const ownSize = sizes[own];
+    if (ownSize <= 1) { out[i] = 0; continue; }  // singleton — undefined, sklearn returns 0
+    const a = sumDist[i * K + own] / (ownSize - 1);
+    let b = Infinity;
+    for (let c = 0; c < K; c++) {
+      if (c === own) continue;
+      const meanD = sumDist[i * K + c] / sizes[c];
+      if (meanD < b) b = meanD;
+    }
+    const denom = Math.max(a, b);
+    out[i] = denom === 0 ? 0 : (b - a) / denom;
+  }
+  return out;
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -3478,6 +3638,19 @@ class KBinsDiscretizer extends BaseEstimator {
     return this;
   }
 
+  /**
+   * Output feature names: same as input (ordinal encoding preserves columns).
+   * Falls back to `feature_names_in_` when input_features is null.
+   */
+  get_feature_names_out(input_features = null) {
+    if (this.bin_edges_ == null) throw new ValidationError('KBinsDiscretizer: not fitted');
+    const names = input_features ?? this.feature_names_in_;
+    if (names) return names.slice();
+    const out = new Array(this.n_features_in_);
+    for (let j = 0; j < this.n_features_in_; j++) out[j] = `x${j}`;
+    return out;
+  }
+
   transform(X) {
     if (this.bin_edges_ == null) throw new ValidationError('KBinsDiscretizer: not fitted');
     const { data, shape } = asMatrix(X);
@@ -5046,6 +5219,32 @@ class Pipeline extends BaseEstimator {
     return last.predict_proba(Xt);
   }
 
+  predict_log_proba(X) {
+    let Xt = X;
+    for (let i = 0; i < this.steps.length - 1; i++) {
+      Xt = this.steps[i][1].transform(Xt);
+    }
+    const last = this.steps[this.steps.length - 1][1];
+    if (typeof last.predict_log_proba !== 'function') {
+      throw new ValidationError(
+        `Pipeline.predict_log_proba: final step '${this.steps.at(-1)[0]}' has no .predict_log_proba`);
+    }
+    return last.predict_log_proba(Xt);
+  }
+
+  decision_function(X) {
+    let Xt = X;
+    for (let i = 0; i < this.steps.length - 1; i++) {
+      Xt = this.steps[i][1].transform(Xt);
+    }
+    const last = this.steps[this.steps.length - 1][1];
+    if (typeof last.decision_function !== 'function') {
+      throw new ValidationError(
+        `Pipeline.decision_function: final step '${this.steps.at(-1)[0]}' has no .decision_function`);
+    }
+    return last.decision_function(Xt);
+  }
+
   score(X, y, opts) {
     let Xt = X;
     for (let i = 0; i < this.steps.length - 1; i++) {
@@ -5313,6 +5512,39 @@ class ColumnTransformer extends BaseEstimator {
       blocks.push(_gatherColsNumeric_pipeline(X, shape, this._remainder_cols_));
     }
     return _hstack_pipeline(blocks, shape[0]);
+  }
+
+  /**
+   * Output feature names: each transformer's `get_feature_names_out` (or a
+   * synthesized `name__x0`, `name__x1`, ... fallback for transformers without
+   * one) prefixed by `<transformer_name>__`. Remainder columns use their
+   * input names if available, else `remainder__x<j>`.
+   */
+  get_feature_names_out(input_features = null) {
+    if (this.n_features_in_ === undefined) {
+      throw new ValidationError('ColumnTransformer: not fitted');
+    }
+    const x_names = input_features ?? this.feature_names_in_;
+    const inputNameOf = (j) => x_names?.[j] ?? `x${j}`;
+    const out = [];
+    for (const [name, t, cols] of this.transformers) {
+      let sub_names;
+      if (typeof t.get_feature_names_out === 'function') {
+        const sub_in = cols.map(inputNameOf);
+        sub_names = t.get_feature_names_out(sub_in);
+      } else {
+        // No get_feature_names_out — fall back to passthrough-shaped names
+        // using the slice's input names.
+        sub_names = cols.map(inputNameOf);
+      }
+      for (const sn of sub_names) out.push(`${name}__${sn}`);
+    }
+    if (this.remainder === 'passthrough' && this._remainder_cols_?.length) {
+      for (const j of this._remainder_cols_) {
+        out.push(`remainder__${inputNameOf(j)}`);
+      }
+    }
+    return out;
   }
 
   fit_transform(X, y, opts) {
@@ -6306,6 +6538,15 @@ class PCA extends BaseEstimator {
       }
     }
     out.shape = [n, m];
+    return out;
+  }
+
+  /** Output feature names: "pc0", "pc1", ... — input_features ignored. */
+  get_feature_names_out(_input_features = null) {
+    if (this.components_ == null) throw new ValidationError('PCA: not fitted');
+    const k = this.n_components_;
+    const out = new Array(k);
+    for (let i = 0; i < k; i++) out[i] = `pc${i}`;
     return out;
   }
 
@@ -9450,6 +9691,19 @@ class GaussianMixture extends BaseEstimator {
     return out;
   }
 
+  /** log-responsibilities directly — more accurate than log(predict_proba). */
+  predict_log_proba(X) {
+    if (this.weights_ == null) throw new ValidationError('GaussianMixture: not fitted');
+    const { data, shape } = asMatrix(X);
+    checkNFeatures(this, shape, { name: 'X' });
+    const [n, m] = shape;
+    const k = this.n_components;
+    const log_resp = _computeLogResp_mixture(
+      data, n, m, k, this.weights_, this.means_, this.precisions_cholesky_);
+    log_resp.shape = [n, k];
+    return log_resp;
+  }
+
   score_samples(X) {
     if (this.weights_ == null) throw new ValidationError('GaussianMixture: not fitted');
     const { data, shape } = asMatrix(X);
@@ -9467,9 +9721,12 @@ class GaussianMixture extends BaseEstimator {
 
 }
 
+const _gmmScore_mixture = GaussianMixture.prototype.score;
 Object.assign(GaussianMixture.prototype, ClusterMixin);
-// Override after the mixin: ClusterMixin's fit_predict returns
-// this.labels_, but GaussianMixture computes labels via predict().
+// Override after the mixin: GMM's default scorer is average log-likelihood,
+// not silhouette (ClusterMixin's default). And ClusterMixin's fit_predict
+// returns this.labels_, but GaussianMixture computes labels via predict().
+GaussianMixture.prototype.score = _gmmScore_mixture;
 GaussianMixture.prototype.fit_predict = function (X, y, opts) {
   return this.fit(X, y, opts).predict(X);
 };

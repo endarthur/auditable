@@ -106,6 +106,19 @@ export class GaussianMixture extends BaseEstimator {
     return out;
   }
 
+  /** log-responsibilities directly — more accurate than log(predict_proba). */
+  predict_log_proba(X) {
+    if (this.weights_ == null) throw new ValidationError('GaussianMixture: not fitted');
+    const { data, shape } = asMatrix(X);
+    checkNFeatures(this, shape, { name: 'X' });
+    const [n, m] = shape;
+    const k = this.n_components;
+    const log_resp = _computeLogResp(
+      data, n, m, k, this.weights_, this.means_, this.precisions_cholesky_);
+    log_resp.shape = [n, k];
+    return log_resp;
+  }
+
   score_samples(X) {
     if (this.weights_ == null) throw new ValidationError('GaussianMixture: not fitted');
     const { data, shape } = asMatrix(X);
@@ -123,9 +136,12 @@ export class GaussianMixture extends BaseEstimator {
 
 }
 
+const _gmmScore = GaussianMixture.prototype.score;
 Object.assign(GaussianMixture.prototype, ClusterMixin);
-// Override after the mixin: ClusterMixin's fit_predict returns
-// this.labels_, but GaussianMixture computes labels via predict().
+// Override after the mixin: GMM's default scorer is average log-likelihood,
+// not silhouette (ClusterMixin's default). And ClusterMixin's fit_predict
+// returns this.labels_, but GaussianMixture computes labels via predict().
+GaussianMixture.prototype.score = _gmmScore;
 GaussianMixture.prototype.fit_predict = function (X, y, opts) {
   return this.fit(X, y, opts).predict(X);
 };

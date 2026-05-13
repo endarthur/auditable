@@ -190,6 +190,32 @@ export class Pipeline extends BaseEstimator {
     return last.predict_proba(Xt);
   }
 
+  predict_log_proba(X) {
+    let Xt = X;
+    for (let i = 0; i < this.steps.length - 1; i++) {
+      Xt = this.steps[i][1].transform(Xt);
+    }
+    const last = this.steps[this.steps.length - 1][1];
+    if (typeof last.predict_log_proba !== 'function') {
+      throw new ValidationError(
+        `Pipeline.predict_log_proba: final step '${this.steps.at(-1)[0]}' has no .predict_log_proba`);
+    }
+    return last.predict_log_proba(Xt);
+  }
+
+  decision_function(X) {
+    let Xt = X;
+    for (let i = 0; i < this.steps.length - 1; i++) {
+      Xt = this.steps[i][1].transform(Xt);
+    }
+    const last = this.steps[this.steps.length - 1][1];
+    if (typeof last.decision_function !== 'function') {
+      throw new ValidationError(
+        `Pipeline.decision_function: final step '${this.steps.at(-1)[0]}' has no .decision_function`);
+    }
+    return last.decision_function(Xt);
+  }
+
   score(X, y, opts) {
     let Xt = X;
     for (let i = 0; i < this.steps.length - 1; i++) {
@@ -457,6 +483,39 @@ export class ColumnTransformer extends BaseEstimator {
       blocks.push(_gatherColsNumeric(X, shape, this._remainder_cols_));
     }
     return _hstack(blocks, shape[0]);
+  }
+
+  /**
+   * Output feature names: each transformer's `get_feature_names_out` (or a
+   * synthesized `name__x0`, `name__x1`, ... fallback for transformers without
+   * one) prefixed by `<transformer_name>__`. Remainder columns use their
+   * input names if available, else `remainder__x<j>`.
+   */
+  get_feature_names_out(input_features = null) {
+    if (this.n_features_in_ === undefined) {
+      throw new ValidationError('ColumnTransformer: not fitted');
+    }
+    const x_names = input_features ?? this.feature_names_in_;
+    const inputNameOf = (j) => x_names?.[j] ?? `x${j}`;
+    const out = [];
+    for (const [name, t, cols] of this.transformers) {
+      let sub_names;
+      if (typeof t.get_feature_names_out === 'function') {
+        const sub_in = cols.map(inputNameOf);
+        sub_names = t.get_feature_names_out(sub_in);
+      } else {
+        // No get_feature_names_out — fall back to passthrough-shaped names
+        // using the slice's input names.
+        sub_names = cols.map(inputNameOf);
+      }
+      for (const sn of sub_names) out.push(`${name}__${sn}`);
+    }
+    if (this.remainder === 'passthrough' && this._remainder_cols_?.length) {
+      for (const j of this._remainder_cols_) {
+        out.push(`remainder__${inputNameOf(j)}`);
+      }
+    }
+    return out;
   }
 
   fit_transform(X, y, opts) {

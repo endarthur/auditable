@@ -201,6 +201,15 @@ export class PCA extends BaseEstimator {
     return out;
   }
 
+  /** Output feature names: "pc0", "pc1", ... — input_features ignored. */
+  get_feature_names_out(_input_features = null) {
+    if (this.components_ == null) throw new ValidationError('PCA: not fitted');
+    const k = this.n_components_;
+    const out = new Array(k);
+    for (let i = 0; i < k; i++) out[i] = `pc${i}`;
+    return out;
+  }
+
   /** Total log-likelihood of X under the fitted Gaussian model. (Diagnostic.) */
   score_samples(X) {
     // Sklearn implements this via the probabilistic-PCA formula. For v0.1

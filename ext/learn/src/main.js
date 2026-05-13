@@ -23,6 +23,7 @@ import {
   r2_score, mean_squared_error, root_mean_squared_error,
   mean_absolute_error, mean_absolute_percentage_error,
   explained_variance_score,
+  silhouette_score, silhouette_samples,
 } from './metrics.js';
 import {
   train_test_split, KFold, StratifiedKFold, GroupKFold, SpatialKFold,
@@ -81,6 +82,7 @@ export {
   r2_score, mean_squared_error, root_mean_squared_error,
   mean_absolute_error, mean_absolute_percentage_error,
   explained_variance_score,
+  silhouette_score, silhouette_samples,
   // model_selection
   train_test_split, KFold, StratifiedKFold, GroupKFold, SpatialKFold,
   cross_val_score, cross_validate, from_table,
@@ -177,6 +179,7 @@ export const metrics = {
   r2_score, mean_squared_error, root_mean_squared_error,
   mean_absolute_error, mean_absolute_percentage_error,
   explained_variance_score,
+  silhouette_score, silhouette_samples,
 };
 
 export const model_selection = {
