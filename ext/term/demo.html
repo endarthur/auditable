@@ -142,6 +142,59 @@
   </div>
 </div>
 
+<!-- ────────────────── DEMO 4: cssVarTheme toggle ────────────────── -->
+
+<h2>4. cssVarTheme — hot theme swap via CSS class</h2>
+<p>
+  This terminal is constructed with <code>{ cssVarTheme: true }</code>
+  and reads its palette from <code>--gcu-term-*</code> custom
+  properties on each render frame. The "switch theme" button toggles a
+  CSS class on the host that swaps the variables. No JS-side renderer
+  reconstruction; the next frame just picks up the new colors.
+</p>
+<style>
+  .screen.theme-amber {
+    --gcu-term-fg: #ffb86c;
+    --gcu-term-bg: #1a1410;
+    --gcu-term-color-0: #1a1410;
+    --gcu-term-color-1: #ff5555;
+    --gcu-term-color-2: #50fa7b;
+    --gcu-term-color-3: #ffb86c;
+    --gcu-term-color-4: #8be9fd;
+    --gcu-term-color-5: #ff79c6;
+    --gcu-term-color-6: #8be9fd;
+    --gcu-term-color-7: #f8f8f2;
+    --gcu-term-cursor: #ffb86c;
+  }
+  .screen.theme-mono {
+    --gcu-term-fg: #d4d4d4;
+    --gcu-term-bg: #1e1e1e;
+    --gcu-term-color-0: #1e1e1e;
+    --gcu-term-color-1: #d4d4d4;
+    --gcu-term-color-2: #d4d4d4;
+    --gcu-term-color-3: #d4d4d4;
+    --gcu-term-color-4: #d4d4d4;
+    --gcu-term-color-5: #d4d4d4;
+    --gcu-term-color-6: #d4d4d4;
+    --gcu-term-color-7: #d4d4d4;
+    --gcu-term-cursor: #d4d4d4;
+  }
+</style>
+<div class="demo-row">
+  <div class="termhost">
+    <div class="screen" id="screen4" role="log" aria-live="polite" aria-atomic="false"></div>
+    <textarea id="hidden4" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
+  </div>
+  <div class="controls">
+    <button id="d4-default">default theme</button>
+    <button id="d4-amber">amber theme</button>
+    <button id="d4-mono">monochrome theme</button>
+    <button id="d4-write">write rainbow</button>
+    <button id="d4-dispose">dispose</button>
+    <div class="status" id="d4-status">default theme</div>
+  </div>
+</div>
+
 <!-- ────────────────── DEMO 3: log viewer ────────────────── -->
 
 <h2>3. log viewer (output-only stream)</h2>
@@ -308,6 +361,53 @@ function setStatus(id, text) { document.getElementById(id).textContent = text; }
     e.target.disabled = true;
     document.getElementById('d2-paste').disabled = true;
     setStatus('d2-status', 'disposed');
+  };
+})();
+
+// ──────────────────────────────────────────────────────────────────
+// Demo 4 — cssVarTheme: hot theme swap by toggling a CSS class
+// ──────────────────────────────────────────────────────────────────
+
+(function demo4() {
+  const term = new Terminal(80, 8);
+  const screen = document.getElementById('screen4');
+  const hidden = document.getElementById('hidden4');
+  // Note: cssVarTheme tells the renderer to re-read --gcu-term-* on
+  // every frame. The defaults shipped in term-default.css apply when
+  // no theme class is set on .screen.
+  const renderer = new DomRenderer(term, screen, { cssVarTheme: true });
+  const input = new Input(term, screen, hidden, renderer);
+  const stopTick = startTickLoop(term, renderer);
+
+  function writeRainbow() {
+    let line = '';
+    for (let i = 0; i < 16; i++) line += `\x1b[3${i % 8}m█\x1b[0m`;
+    line += '  ';
+    for (let i = 0; i < 16; i++) line += `\x1b[9${i % 8}m█\x1b[0m`;
+    term.write(line + '\r\n');
+  }
+  term.write('\x1b[33mthemed terminal — try the buttons →\x1b[0m\r\n');
+  writeRainbow();
+
+  function applyTheme(name) {
+    screen.classList.remove('theme-amber', 'theme-mono');
+    if (name) screen.classList.add(name);
+    setStatus('d4-status', name ? `${name.replace('theme-','')} theme` : 'default theme');
+  }
+  document.getElementById('d4-default').onclick = () => applyTheme(null);
+  document.getElementById('d4-amber').onclick   = () => applyTheme('theme-amber');
+  document.getElementById('d4-mono').onclick    = () => applyTheme('theme-mono');
+  document.getElementById('d4-write').onclick   = writeRainbow;
+  document.getElementById('d4-dispose').onclick = (e) => {
+    stopTick();
+    input.dispose();
+    renderer.dispose();
+    term.dispose();
+    e.target.disabled = true;
+    for (const id of ['d4-default','d4-amber','d4-mono','d4-write']) {
+      document.getElementById(id).disabled = true;
+    }
+    setStatus('d4-status', 'disposed');
   };
 })();
 

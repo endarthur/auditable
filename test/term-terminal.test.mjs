@@ -530,6 +530,86 @@ describe('Terminal DEC line-drawing charset', () => {
 });
 
 // ────────────────────────────────────────────────────────────────────
+// DomRenderer color resolution (no DOM — mock _cssVars directly)
+// ────────────────────────────────────────────────────────────────────
+
+import { DomRenderer, PAL256 } from '../ext/term/src/index.js';
+
+// Build a barebones renderer that skips the DOM-touching ctor steps.
+// Just enough to exercise _color / _defaultColor.
+function makeBareRenderer(theme = null, cssVars = null) {
+  const term = new Terminal(10, 3);
+  const r = Object.create(DomRenderer.prototype);
+  r.term = term;
+  r.theme = theme;
+  r._cssVars = cssVars;
+  return r;
+}
+
+describe('DomRenderer color resolution', () => {
+  test('default cell with no theme → null (inherit from CSS)', () => {
+    const r = makeBareRenderer();
+    assert.equal(r._color({ t: 'd' }, 'fg'), null);
+  });
+
+  test('default cell with constructor theme defaultFg', () => {
+    const r = makeBareRenderer({ defaultFg: '#abc', defaultBg: '#def' });
+    assert.equal(r._color({ t: 'd' }, 'fg'), '#abc');
+    assert.equal(r._color({ t: 'd' }, 'bg'), '#def');
+  });
+
+  test('palette index uses constructor theme palette array first', () => {
+    const r = makeBareRenderer({ palette: ['#000','#100','#200','#300','#400','#500','#600','#700','#800','#900','#a00','#b00','#c00','#d00','#e00','#f00'] });
+    assert.equal(r._color({ t: 'p', i: 3 }, 'fg'), '#300');
+    // Index outside the array falls back to PAL256
+    assert.equal(r._color({ t: 'p', i: 200 }, 'fg'), PAL256[200]);
+  });
+
+  test('palette function gets called with (idx, layer)', () => {
+    const calls = [];
+    const r = makeBareRenderer({
+      palette: (idx, layer) => { calls.push([idx, layer]); return idx === 3 ? '#xyz' : null; },
+    });
+    assert.equal(r._color({ t: 'p', i: 3 }, 'bg'), '#xyz');
+    assert.deepEqual(calls.at(-1), [3, 'bg']);
+    // Returning null falls through to CSS vars / PAL256
+    assert.equal(r._color({ t: 'p', i: 100 }, 'fg'), PAL256[100]);
+  });
+
+  test('CSS vars are consulted for indices 0-15 when no constructor theme', () => {
+    const palette = new Array(16).fill(null);
+    palette[5] = 'rebeccapurple';
+    const r = makeBareRenderer(null, { fg: '#ff0', bg: null, palette });
+    assert.equal(r._color({ t: 'p', i: 5 }, 'fg'), 'rebeccapurple');
+    // Default cell picks up CSS-var fg
+    assert.equal(r._color({ t: 'd' }, 'fg'), '#ff0');
+    // Bg unset → falls through to null
+    assert.equal(r._color({ t: 'd' }, 'bg'), null);
+  });
+
+  test('constructor theme wins over CSS vars', () => {
+    const palette = new Array(16).fill(null);
+    palette[2] = '#cssvar';
+    const r = makeBareRenderer(
+      { palette: ['c0','c1','#thwins','c3','c4','c5','c6','c7','c8','c9','ca','cb','cc','cd','ce','cf'] },
+      { fg: null, bg: null, palette },
+    );
+    assert.equal(r._color({ t: 'p', i: 2 }, 'fg'), '#thwins');
+  });
+
+  test('truecolor passes through always', () => {
+    const r = makeBareRenderer({ palette: ['z'] }, { palette: new Array(16).fill('z') });
+    assert.equal(r._color({ t: 'r', r: 10, g: 20, b: 30 }, 'fg'), 'rgb(10,20,30)');
+  });
+
+  test('CSS vars index >=16 falls back to PAL256', () => {
+    const palette = new Array(16).fill('overridden');
+    const r = makeBareRenderer(null, { fg: null, bg: null, palette });
+    assert.equal(r._color({ t: 'p', i: 200 }, 'fg'), PAL256[200]);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
 // LineBuffer
 // ────────────────────────────────────────────────────────────────────
 

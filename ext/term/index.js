@@ -911,7 +911,7 @@ export class DomRenderer {
    * @param {Terminal} term
    * @param {HTMLElement} container — host element to render into
    * @param {object} [opts]
-   * @param {object} [opts.theme] — optional partial theme. Recognized keys:
+   * @param {object} [opts.theme] — optional static theme. Recognized keys:
    *   - `palette`: 16-color array OR a function
    *       `(idx, layer) => string` returning a CSS color for index 0-255
    *       (`layer` is `'fg'` | `'bg'`). Lets the host bridge to its own
@@ -919,11 +919,21 @@ export class DomRenderer {
    *   - `defaultFg` / `defaultBg`: CSS colors used when a cell carries the
    *       DEFAULT sentinel. If omitted, the renderer falls back to the
    *       cell-style "no color emitted" rule and inherits from CSS.
+   * @param {boolean} [opts.cssVarTheme=false] — read theme from CSS custom
+   *   properties on the host element each frame. Recognized variables:
+   *     --gcu-term-bg          default background
+   *     --gcu-term-fg          default foreground
+   *     --gcu-term-color-{0..15}  basic 16-color palette overrides
+   *   When set, hot theme switches happen by toggling a CSS class on a
+   *   parent — no JS-side reconstruction needed. The constructor theme
+   *   still wins when both supply the same color (use one or the other).
    */
   constructor(term, container, opts = {}) {
     this.term = term;
     this.container = container;
     this.theme = opts.theme || null;
+    this.cssVarTheme = !!opts.cssVarTheme;
+    this._cssVars = null;    // read once per render() when cssVarTheme is on
     this.rows = [];          // div elements
     this.rowHTML = [];       // last-rendered HTML per row (for diffing)
     this.cursorOn = true;
@@ -1007,6 +1017,22 @@ export class DomRenderer {
   render() {
     const t = this.term;
     const buf = t._curBuf();
+    // Snapshot CSS-var theme at the start of the frame so every cell in
+    // this render reads consistent values. getComputedStyle is cheap once
+    // per frame; we avoid calling it per cell.
+    if (this.cssVarTheme) {
+      this._cssVars = this._readCssVars();
+      // Force a full repaint when vars changed since last frame so a CSS
+      // theme swap (e.g. dark→light class toggle on a parent) actually
+      // re-renders rather than waiting for content to differ.
+      const sig = this._cssVarsSignature();
+      if (sig !== this._lastCssVarSig) {
+        for (let i = 0; i < this.rowHTML.length; i++) this.rowHTML[i] = '';
+        this._lastCssVarSig = sig;
+      }
+    } else {
+      this._cssVars = null;
+    }
     // Clamp scrollOffset against current scrollback length each frame
     // (scrollback can shrink under maxScrollback eviction).
     const sb = t.usingAlt ? null : t.scrollback;
@@ -1090,14 +1116,20 @@ export class DomRenderer {
     if (!c || c.t === 'd') return this._defaultColor(layer);
     if (c.t === 'r') return `rgb(${c.r},${c.g},${c.b})`;
     if (c.t === 'p') {
+      // Constructor theme wins (explicit beats implicit). Falls back to
+      // CSS-var theme for the basic 16 palette indices. Anything outside
+      // both falls back to the built-in PAL256.
       const theme = this.theme;
       if (theme) {
         if (typeof theme.palette === 'function') {
-          return theme.palette(c.i, layer) ?? PAL256[c.i];
-        }
-        if (Array.isArray(theme.palette) && c.i < theme.palette.length) {
+          const v = theme.palette(c.i, layer);
+          if (v != null) return v;
+        } else if (Array.isArray(theme.palette) && c.i < theme.palette.length) {
           return theme.palette[c.i];
         }
+      }
+      if (this._cssVars && c.i < 16 && this._cssVars.palette[c.i]) {
+        return this._cssVars.palette[c.i];
       }
       return PAL256[c.i];
     }
@@ -1106,8 +1138,40 @@ export class DomRenderer {
 
   _defaultColor(layer) {
     const theme = this.theme;
-    if (!theme) return null;
-    return (layer === 'fg' ? theme.defaultFg : theme.defaultBg) ?? null;
+    if (theme) {
+      const v = layer === 'fg' ? theme.defaultFg : theme.defaultBg;
+      if (v) return v;
+    }
+    if (this._cssVars) {
+      const v = layer === 'fg' ? this._cssVars.fg : this._cssVars.bg;
+      if (v) return v;
+    }
+    return null;
+  }
+
+  // Read every recognized --gcu-term-* custom property from the container's
+  // computed style. Empty strings (var not set) → null so callers can
+  // fall through to other theme sources.
+  _readCssVars() {
+    const cs = getComputedStyle(this.container);
+    const out = {
+      fg: cs.getPropertyValue('--gcu-term-fg').trim() || null,
+      bg: cs.getPropertyValue('--gcu-term-bg').trim() || null,
+      palette: new Array(16).fill(null),
+    };
+    for (let i = 0; i < 16; i++) {
+      const v = cs.getPropertyValue(`--gcu-term-color-${i}`).trim();
+      if (v) out.palette[i] = v;
+    }
+    return out;
+  }
+
+  // Cheap "did anything change since last frame" signature for the
+  // CSS-var snapshot, so a theme swap forces a full repaint.
+  _cssVarsSignature() {
+    if (!this._cssVars) return '';
+    const v = this._cssVars;
+    return [v.fg || '', v.bg || '', ...v.palette.map(c => c || '')].join('|');
   }
 
   _updateCursor() {

@@ -806,8 +806,9 @@ go to the host so vim and friends keep working.
 
 ### Theme integration
 
-The renderer accepts an optional `theme` object via the constructor
-options or `setTheme(theme)`:
+Two layered mechanisms — use whichever fits the host.
+
+**1. Constructor `theme` (static or programmatic).**
 
 ```js
 new DomRenderer(term, container, { theme: {
@@ -824,17 +825,52 @@ new DomRenderer(term, container, { theme: {
 Recognized keys:
 
 - `palette`: either a 16-color array or a `(idx, layer) => string | null`
-  function. Returning `null` falls back to the built-in `PAL256`. Lets
-  the host bridge to its own token system (e.g. Auditable's `--au-*`
-  swatches) so terminal colors track theme switches without needing to
-  pre-populate a 256-entry array.
+  function. Returning `null` falls through to the next theme source.
 - `defaultFg` / `defaultBg`: CSS colors used when a cell carries the
-  DEFAULT sentinel. Without these, the renderer emits no `color` /
-  `background` declarations for default cells and the browser inherits
-  from the screen's CSS.
+  DEFAULT sentinel.
 
-`renderer.setTheme(theme)` hot-swaps and forces a full re-render on the
-next `render()` call. The previous palette / defaults are dropped.
+`renderer.setTheme(theme)` hot-swaps and forces a full re-render. The
+previous palette / defaults are dropped.
+
+**2. CSS custom properties (opt in via `{ cssVarTheme: true }`).**
+
+```js
+const renderer = new DomRenderer(term, screen, { cssVarTheme: true });
+```
+
+Then in CSS, override variables on the host element (or any ancestor):
+
+```css
+.screen { --gcu-term-fg: #c8cdd4; --gcu-term-bg: #0a0c10; }
+.screen.theme-amber {
+  --gcu-term-fg: #ffb86c;
+  --gcu-term-bg: #1a1410;
+  --gcu-term-color-3: #ffb86c;
+  ...
+}
+```
+
+Recognized variables:
+- `--gcu-term-bg` / `--gcu-term-fg` — default cell colors
+- `--gcu-term-color-{0..15}` — basic 16-color palette overrides
+- `--gcu-term-cursor` — cursor color (read by CSS, not by JS)
+
+The renderer reads these via `getComputedStyle` once per frame and
+detects changes via a signature comparison so a CSS theme swap (toggling
+a class on the host) forces a full repaint on the next frame. Indices
+16-255 still come from the built-in `PAL256`; cell 0-15 overrides are
+what the standard ANSI 16-color terminal output uses.
+
+**Resolution order**, when both mechanisms are present:
+
+1. Constructor theme palette / defaultFg / defaultBg (if non-null)
+2. CSS custom property (if set and cssVarTheme is on)
+3. Built-in `PAL256` (palette only, indices 0-255)
+4. `null` — emits no color declaration; browser inherits from CSS
+
+Use one or the other, not both, unless you specifically want the
+constructor-theme override semantics (e.g. an "always-amber-on-error"
+view that wins over the host theme).
 
 ### What the renderer does *not* do
 
@@ -1271,17 +1307,16 @@ Shipped in v0.2:
 - ~~Lifecycle: `Terminal.dispose()`, `DomRenderer.dispose()`, `Input.dispose()`.~~
 - ~~Convenience callbacks: `onText`, `onBell`, `onTitleChange`.~~
 
-Still pending in v0.2:
-- **Theme integration via CSS custom properties.** The constructor /
-  `setTheme()` palette + default color hooks shipped in v0.1 are
-  sufficient for static themes. v0.2 adds CSS-custom-property hooks
-  (`--gcu-term-bg`, `--gcu-term-fg`, `--gcu-term-cursor`,
-  `--gcu-term-palette-N`) so theme switches can happen by toggling a
-  CSS class on a parent without re-instantiating the renderer.
-
 Shipped in v0.2:
+- ~~**Theme integration via CSS custom properties.** Renderer constructor
+  takes `{ cssVarTheme: true }`; reads `--gcu-term-fg`, `--gcu-term-bg`,
+  `--gcu-term-color-{0..15}` per frame. Toggle a CSS class on a parent
+  to retheme — no JS-side reconstruction.~~
 - ~~**DEC line drawing charsets** (G0/G1 with `SI`/`SO` and `ESC ( 0` /
   `ESC ( B` switching). Necessary for mc, ncurses dialogs, older TUIs.~~
+
+v0.2 is now feature-complete; v1.0 is gated on packaging + scrollback
+search + recorded test fixtures (see below).
 
 ### v0.2 → v1.0
 
