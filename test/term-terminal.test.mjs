@@ -455,6 +455,81 @@ describe('Terminal resize', () => {
 });
 
 // ────────────────────────────────────────────────────────────────────
+// DEC line-drawing charset (G0/G1 + SO/SI + ESC ( 0 / ESC ( B)
+// ────────────────────────────────────────────────────────────────────
+
+describe('Terminal DEC line-drawing charset', () => {
+  test('default G0/G1 are USASCII; printable text passes through', () => {
+    const t = new Terminal(20, 3);
+    assert.equal(t.charsets.g0, 'B');
+    assert.equal(t.charsets.g1, 'B');
+    assert.equal(t.glSlot, 'g0');
+    t.write('lqk');
+    assert.equal(rowText(t, 0), 'lqk');
+  });
+
+  test('ESC ( 0 designates G0 = DEC special; "lqk" → corner row', () => {
+    const t = new Terminal(20, 3);
+    t.write('\x1b(0lqk');
+    // l=┌ (U+250C), q=─ (U+2500), k=┐ (U+2510)
+    assert.equal(t.buffer[0][0].ch, 0x250C);
+    assert.equal(t.buffer[0][1].ch, 0x2500);
+    assert.equal(t.buffer[0][2].ch, 0x2510);
+  });
+
+  test('ESC ( B switches G0 back to USASCII', () => {
+    const t = new Terminal(20, 3);
+    t.write('\x1b(0l\x1b(Bl');
+    assert.equal(t.buffer[0][0].ch, 0x250C);  // first l → ┌
+    assert.equal(t.buffer[0][1].ch, 0x6C);    // second l → 'l' literal
+  });
+
+  test('SO (0x0E) selects G1; SI (0x0F) selects G0', () => {
+    const t = new Terminal(20, 3);
+    // Designate G1 = DEC special; G0 stays USASCII
+    t.write('\x1b)0');
+    t.write('A');           // G0 active → 'A'
+    t.write('\x0E');        // SO → switch to G1
+    t.write('q');           // G1 active = DEC special → ─
+    t.write('\x0F');        // SI → switch back to G0
+    t.write('B');           // G0 active → 'B'
+    assert.equal(t.buffer[0][0].ch, 0x41);
+    assert.equal(t.buffer[0][1].ch, 0x2500);
+    assert.equal(t.buffer[0][2].ch, 0x42);
+  });
+
+  test('codepoints outside 0x60-0x7E pass through unchanged in DEC charset', () => {
+    const t = new Terminal(20, 3);
+    t.write('\x1b(0A1');  // 0x41 and 0x31 — not in the table
+    assert.equal(t.buffer[0][0].ch, 0x41);
+    assert.equal(t.buffer[0][1].ch, 0x31);
+  });
+
+  test('hard reset returns charsets to USASCII / G0 active', () => {
+    const t = new Terminal(20, 3);
+    t.write('\x1b(0\x0E');   // G0 = DEC, GL = G1
+    t.write('\x1bc');        // RIS
+    assert.equal(t.charsets.g0, 'B');
+    assert.equal(t.charsets.g1, 'B');
+    assert.equal(t.glSlot, 'g0');
+  });
+
+  test('a small mc-shaped box renders correctly', () => {
+    // ┌──┐
+    // │  │
+    // └──┘
+    const t = new Terminal(10, 5);
+    t.write('\x1b(0lqqk\r\nx  x\r\nmqqj');
+    const row0 = t.buffer[0].slice(0, 4).map(c => String.fromCodePoint(c.ch)).join('');
+    const row1 = t.buffer[1].slice(0, 4).map(c => String.fromCodePoint(c.ch)).join('');
+    const row2 = t.buffer[2].slice(0, 4).map(c => String.fromCodePoint(c.ch)).join('');
+    assert.equal(row0, '┌──┐');
+    assert.equal(row1, '│  │');
+    assert.equal(row2, '└──┘');
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
 // LineBuffer
 // ────────────────────────────────────────────────────────────────────
 

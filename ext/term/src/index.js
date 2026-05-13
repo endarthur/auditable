@@ -57,6 +57,45 @@ function _logListenerError(err) {
   catch (_) { /* host has no console — swallow */ }
 }
 
+// DEC Special Graphics character set. Maps ASCII 0x60-0x7E to the
+// Unicode line-drawing / math glyphs the original VT100 emitted there.
+// Used when the active charset slot is '0' (designated by ESC ( 0 or
+// ESC ) 0). Outside the 0x60-0x7E range the codepoint passes through
+// unchanged.
+const DEC_SPECIAL_GRAPHICS = {
+  0x60: 0x25C6,  // ◆
+  0x61: 0x2592,  // ▒
+  0x62: 0x2409,  // HT
+  0x63: 0x240C,  // FF
+  0x64: 0x240D,  // CR
+  0x65: 0x240A,  // LF
+  0x66: 0x00B0,  // °
+  0x67: 0x00B1,  // ±
+  0x68: 0x2424,  // NL
+  0x69: 0x240B,  // VT
+  0x6A: 0x2518,  // ┘
+  0x6B: 0x2510,  // ┐
+  0x6C: 0x250C,  // ┌
+  0x6D: 0x2514,  // └
+  0x6E: 0x253C,  // ┼
+  0x6F: 0x23BA,  // ⎺
+  0x70: 0x23BB,  // ⎻
+  0x71: 0x2500,  // ─
+  0x72: 0x23BC,  // ⎼
+  0x73: 0x23BD,  // ⎽
+  0x74: 0x251C,  // ├
+  0x75: 0x2524,  // ┤
+  0x76: 0x2534,  // ┴
+  0x77: 0x252C,  // ┬
+  0x78: 0x2502,  // │
+  0x79: 0x2264,  // ≤
+  0x7A: 0x2265,  // ≥
+  0x7B: 0x03C0,  // π
+  0x7C: 0x2260,  // ≠
+  0x7D: 0x00A3,  // £
+  0x7E: 0x00B7,  // ·
+};
+
 export class Parser {
   constructor(handler) {
     this.h = handler;
@@ -270,6 +309,11 @@ export class Terminal {
     // less, htop) own their own scrollback. Default 1000 rows.
     this.maxScrollback = opts.maxScrollback ?? 1000;
     this.scrollback = [];
+    // Charset state: G0 / G1 each hold a designator ('B' = USASCII default,
+    // '0' = DEC Special Graphics). glSlot picks which is active for the
+    // print path. SO (0x0E) selects G1; SI (0x0F) selects G0.
+    this.charsets = { g0: 'B', g1: 'B' };
+    this.glSlot = 'g0';
     this.cursor = { x: 0, y: 0 };
     this.savedCursor = { x: 0, y: 0, fg: DEFAULT_FG, bg: DEFAULT_BG, flags: 0 };
     this.pendingWrap = false;     // DECAWM "phantom column"
@@ -421,6 +465,12 @@ export class Terminal {
       this._lineFeed();
     }
     this.pendingWrap = false;
+    // Charset translation: when the active GL slot designates DEC Special
+    // Graphics ('0'), map ASCII 0x60-0x7E through the table. Other ranges
+    // and other charsets pass through unchanged.
+    if (this.charsets[this.glSlot] === '0' && cp >= 0x60 && cp <= 0x7E) {
+      cp = DEC_SPECIAL_GRAPHICS[cp];
+    }
     const buf = this._curBuf();
     const cell = buf[this.cursor.y][this.cursor.x];
     cell.ch = cp;
@@ -454,10 +504,21 @@ export class Terminal {
       this.pendingWrap = false;
       return;
     case 0x0D: /* CR */ this._carriageReturn(); return;
+    case 0x0E: /* SO  - shift out, select G1 */ this.glSlot = 'g1'; return;
+    case 0x0F: /* SI  - shift in,  select G0 */ this.glSlot = 'g0'; return;
     }
   }
 
   esc(intermediates, final) {
+    // Charset designation: ESC ( c selects c into G0; ESC ) c into G1.
+    // Only 'B' (USASCII) and '0' (DEC Special Graphics) are recognized;
+    // other designators are silently kept verbatim (consumers can read
+    // the slot if they want, but the print path only branches on '0').
+    if (intermediates === '(' || intermediates === ')') {
+      const slot = intermediates === '(' ? 'g0' : 'g1';
+      this.charsets[slot] = String.fromCharCode(final);
+      return;
+    }
     switch (final) {
     case 0x37: /* '7' */ this._saveCursor(); return;
     case 0x38: /* '8' */ this._restoreCursor(); return;
@@ -794,6 +855,8 @@ export class Terminal {
     this.attrs = { fg: DEFAULT_FG, bg: DEFAULT_BG, flags: 0 };
     this.scrollTop = 0; this.scrollBottom = this.rows - 1;
     this.pendingWrap = false;
+    this.charsets = { g0: 'B', g1: 'B' };
+    this.glSlot = 'g0';
     // Reset every mode to its constructor default. Using defaultModes()
     // (rather than `for (k in modes) modes[k] = false`) preserves the
     // boolean / integer typing — mouseProto stays 0, not false.

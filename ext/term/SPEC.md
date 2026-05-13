@@ -480,6 +480,11 @@ Sequences not listed are silently consumed without effect.
 | `ESC M` | RI | Reverse Index (cursor up, scrolling at top) |
 | `ESC =` | DECPAM | Application keypad mode on |
 | `ESC >` | DECPNM | Application keypad mode off |
+| `ESC ( c` | SCS G0 | Designate character set `c` into G0 |
+| `ESC ) c` | SCS G1 | Designate character set `c` into G1 |
+
+`SO` (`0x0E`) selects G1 as the active charset; `SI` (`0x0F`) selects
+G0. See §10.5 for the supported charset designators.
 
 ### CSI sequences
 
@@ -641,6 +646,38 @@ clears the others. `1006` is independent and controls the *encoding*
 of the report.
 
 ---
+
+## 8a. Character sets (G0 / G1)
+
+The terminal maintains two charset slots, `G0` and `G1`, each holding
+a designator character. The active GL slot (G0 by default) is consulted
+by `print(cp)` to translate codepoints in the 0x60-0x7E range.
+
+| Designator | Character set |
+|---|---|
+| `B` | USASCII (default; pass-through) |
+| `0` | DEC Special Graphics — line drawing + math glyphs |
+
+The DEC Special Graphics map (used when the active slot is `0`):
+
+| ASCII | Glyph | Codepoint |
+|---|---|---|
+| `j` `k` `l` `m` | `┘` `┐` `┌` `└` | corners |
+| `q` `x` | `─` `│` | horizontal / vertical |
+| `t` `u` `v` `w` `n` | `├` `┤` `┴` `┬` `┼` | tee + cross |
+| `f` `g` `y` `z` `{` `\|` `}` `~` | `°` `±` `≤` `≥` `π` `≠` `£` `·` | math + currency |
+| `_` `a` | `◆` `▒` | filled glyphs |
+
+Other designators are kept verbatim in the slot but the print path
+only branches on `0`. UK (`A`), DEC technical (`>`), and various
+national replacement charsets are out of scope.
+
+`SI`/`SO` (`0x0F` / `0x0E`) toggle the active slot at runtime — apps
+typically designate G1 once with `ESC ) 0` and then SO/SI in and out
+of line-drawing mode for box rendering. `ESC ( 0` / `ESC ( B` rebind
+G0 instead and are simpler when only one charset is needed.
+
+Hard reset (`RIS`) returns both slots to `B` and the active slot to G0.
 
 ## 9. OSC commands
 
@@ -1199,9 +1236,6 @@ roadmap entries (§15); some are forever-skip.
   positioning and selection use the cell model and will be off by one.
   Similarly, CJK wide characters render at their natural width but
   collide with the next cell's content.
-- **No DEC line drawing character set.** Older curses-based applications
-  (mc, dialog) that use `ESC ( 0` to enter line-drawing mode will see
-  garbled box drawings. ASCII-only TUIs (vim, htop, less) are unaffected.
 
 ### Mode coverage limits
 
@@ -1244,8 +1278,10 @@ Still pending in v0.2:
   (`--gcu-term-bg`, `--gcu-term-fg`, `--gcu-term-cursor`,
   `--gcu-term-palette-N`) so theme switches can happen by toggling a
   CSS class on a parent without re-instantiating the renderer.
-- **DEC line drawing charsets** (G0/G1 with `SI`/`SO` and `ESC ( 0` /
-  `ESC ( B` switching). Necessary for mc, ncurses dialogs, older TUIs.
+
+Shipped in v0.2:
+- ~~**DEC line drawing charsets** (G0/G1 with `SI`/`SO` and `ESC ( 0` /
+  `ESC ( B` switching). Necessary for mc, ncurses dialogs, older TUIs.~~
 
 ### v0.2 → v1.0
 

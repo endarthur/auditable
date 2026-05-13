@@ -106,6 +106,7 @@
     <button id="d1-colors">16-color rainbow</button>
     <button id="d1-truecolor">truecolor gradient</button>
     <button id="d1-attrs">bold / italic / underline</button>
+    <button id="d1-box">DEC line-drawing box</button>
     <button id="d1-clear">clear (CSI 2 J)</button>
     <button id="d1-alt-on">enter alt-screen</button>
     <button id="d1-alt-off">exit alt-screen</button>
@@ -236,6 +237,10 @@ function setStatus(id, text) { document.getElementById(id).textContent = text; }
   document.getElementById('d1-attrs').onclick = () => {
     term.write('\x1b[1mbold\x1b[0m  \x1b[3mitalic\x1b[0m  \x1b[4munderline\x1b[0m  \x1b[7mreverse\x1b[0m\r\n');
   };
+  document.getElementById('d1-box').onclick = () => {
+    // ESC ( 0 designates G0 = DEC special; lqqqqqqqk = ┌──────┐
+    term.write('\x1b(0lqqqqqqqk\r\nx       x\r\nmqqqqqqqj\x1b(B\r\n');
+  };
   document.getElementById('d1-clear').onclick = () => {
     term.write('\x1b[2J\x1b[H');
   };
@@ -259,7 +264,7 @@ function setStatus(id, text) { document.getElementById(id).textContent = text; }
     e.target.disabled = true;
     setStatus('d1-status', 'disposed — DOM removed, listeners detached');
     // Disable the other buttons too
-    for (const id of ['d1-write','d1-colors','d1-truecolor','d1-attrs','d1-clear','d1-alt-on','d1-alt-off','d1-bell','d1-title']) {
+    for (const id of ['d1-write','d1-colors','d1-truecolor','d1-attrs','d1-box','d1-clear','d1-alt-on','d1-alt-off','d1-bell','d1-title']) {
       document.getElementById(id).disabled = true;
     }
   };
