@@ -1,0 +1,139 @@
+/// auditable
+/// title: modal dialogs
+
+/// md
+# modal dialogs
+
+`ui.confirm`, `ui.prompt`, `ui.alert`, and `ui.dialog` open modal overlays from inside a cell. unlike sliders and dropdowns, these are **transient**: ask the user once, await the answer, move on.
+
+every dialog spawned by a cell auto-dismisses if the cell re-runs (e.g. an upstream slider changes). pass `{ persistent: true }` to keep it open across re-runs.
+
+/// md
+## ui.confirm
+
+modal yes/no. returns `true` on ok, `false` on cancel/Esc/×. pass `danger: true` for destructive actions (red ok button).
+
+/// code
+const askDelete = ui.checkbox("ask delete", false);
+
+/// code
+if (askDelete) {
+  const ok = await ui.confirm("delete the dataset?", {
+    title: "confirm",
+    okLabel: "delete",
+    cancelLabel: "keep",
+    danger: true,
+  });
+  ui.display(ok ? "→ deleted" : "→ kept");
+}
+
+/// md
+## ui.prompt
+
+modal text input. returns the string on ok, `null` on cancel/Esc/×. supports `defaultValue` and `placeholder`.
+
+/// code
+const askName = ui.checkbox("ask name", false);
+
+/// code
+if (askName) {
+  const name = await ui.prompt("what's the column name?", {
+    defaultValue: "ore_grade",
+    placeholder: "e.g. au_ppm",
+  });
+  if (name == null) ui.display("→ cancelled");
+  else ui.display(`→ got: ${name}`);
+}
+
+/// md
+## ui.alert
+
+modal notice with one ok button. resolves when dismissed.
+
+/// code
+const askAlert = ui.checkbox("show alert", false);
+
+/// code
+if (askAlert) {
+  await ui.alert("computation finished — 1,247 rows processed.", {
+    title: "done",
+  });
+  ui.display("→ user acknowledged");
+}
+
+/// md
+## ui.dialog — custom render
+
+build any modal you want. \`render(body, ctx)\` populates the body element; call \`ctx.close(value)\` to resolve the promise with that value.
+
+useful for parameter forms, multi-input choosers, anything beyond confirm/prompt/alert.
+
+/// code
+const askFormat = ui.checkbox("choose export format", false);
+
+/// code
+if (askFormat) {
+  const result = await ui.dialog({
+    title: "export options",
+    width: 360,
+    render(body, ctx) {
+      const formatLabel = document.createElement("label");
+      formatLabel.append(document.createTextNode("format "));
+      const select = document.createElement("select");
+      for (const opt of ["csv", "json", "parquet", "geojson"]) {
+        const o = document.createElement("option");
+        o.value = opt; o.textContent = opt;
+        select.appendChild(o);
+      }
+      formatLabel.appendChild(select);
+
+      const headerLabel = document.createElement("label");
+      const headerCheck = document.createElement("input");
+      headerCheck.type = "checkbox";
+      headerCheck.checked = true;
+      headerLabel.append(headerCheck, document.createTextNode(" include header"));
+
+      const buttons = document.createElement("div");
+      buttons.className = "gcu-dialog-buttons";
+      const cancelBtn = document.createElement("button");
+      cancelBtn.className = "gcu-dialog-button";
+      cancelBtn.textContent = "cancel";
+      cancelBtn.onclick = () => ctx.close(null);
+      const exportBtn = document.createElement("button");
+      exportBtn.className = "gcu-dialog-button accent";
+      exportBtn.textContent = "export";
+      exportBtn.dataset.default = "true";
+      exportBtn.onclick = () => ctx.close({
+        format: select.value,
+        header: headerCheck.checked,
+      });
+      buttons.append(cancelBtn, exportBtn);
+
+      body.append(formatLabel, headerLabel, buttons);
+    },
+  });
+  if (result == null) ui.display("→ cancelled");
+  else ui.display(`→ ${result.format} with header=${result.header}`);
+}
+
+/// md
+## auto-dismiss on re-run
+
+drag the slider below while the dialog is open. the dialog closes automatically because the cell re-runs and its open dialogs are invalidated.
+
+if you actually want the dialog to outlive cell re-runs (e.g. a long-form notification), pass `{ persistent: true }`.
+
+/// code
+const tick = ui.slider("re-run trigger", 0, {min: 0, max: 100, step: 1});
+const showSticky = ui.checkbox("test auto-dismiss", false);
+
+/// code
+if (showSticky) {
+  // This dialog will auto-close when `tick` changes.
+  await ui.confirm(`current tick = ${tick} — drag the slider to dismiss`, {
+    title: "auto-dismiss demo",
+    okLabel: "I dismissed manually",
+    cancelLabel: "still open",
+  });
+  ui.display("→ done (manual or auto)");
+}

@@ -31,6 +31,7 @@ const categories = {
     'example_modules.txt',
     'example_python.txt',
     'example_widgets.txt',
+    'example_dialog.txt',
     'example_app_export.txt',
     'example_md_interpolation.txt',
     'example_workers.txt',

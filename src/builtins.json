@@ -39,6 +39,22 @@
     "sig": "ui.drop(label, {accept, as, onChange}?)",
     "desc": "drop zone + file picker \u2014 returns {name, data, size, type} or null"
   },
+  "ui.confirm": {
+    "sig": "await ui.confirm(message, {title?, okLabel?, cancelLabel?, danger?, persistent?}?)",
+    "desc": "modal yes/no \u2014 returns true on ok, false on cancel/Esc. Auto-dismisses on cell re-run unless persistent"
+  },
+  "ui.prompt": {
+    "sig": "await ui.prompt(message, {defaultValue?, placeholder?, title?, okLabel?, cancelLabel?, persistent?}?)",
+    "desc": "modal text input \u2014 returns string on ok, null on cancel/Esc. Auto-dismisses on cell re-run unless persistent"
+  },
+  "ui.alert": {
+    "sig": "await ui.alert(message, {title?, okLabel?, persistent?}?)",
+    "desc": "modal notice with single ok button. Auto-dismisses on cell re-run unless persistent"
+  },
+  "ui.dialog": {
+    "sig": "await ui.dialog({title?, width?, render(body, ctx), persistent?})",
+    "desc": "custom modal \u2014 render builds the body, ctx.close(value) resolves the promise. Auto-dismisses on cell re-run unless persistent"
+  },
   "std.csv": {
     "sig": "std.csv(text, {separator?, typed?}?)",
     "desc": "parse CSV text to array of objects"

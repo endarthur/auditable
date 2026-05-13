@@ -29,6 +29,7 @@ import { makeWorker, makeWorkerPool } from './cell-builtins/workers.js';
 import { makeNotebookApi } from './cell-builtins/notebook-api.js';
 import { makeWorkshop } from './cell-builtins/workshop.js';
 import { makeModuleLoaders } from './cell-builtins/modules.js';
+import { makeDialog } from './cell-builtins/dialog.js';
 
 export function createCellContext(cell) {
   // fire invalidation promise from previous run (cleanup resources)
@@ -101,12 +102,18 @@ export function createCellContext(cell) {
   // Notebook API — programmatic notebook control
   const notebook = makeNotebookApi(runDAG);
 
+  // Modal dialogs — confirm/prompt/alert + custom render. Auto-dismiss
+  // open dialogs on cell invalidation unless { persistent: true }.
+  const dialogApi = makeDialog(cell, ctx);
+
   const ui = {
     display, print: display, html: displayHtml,
     canvas: uiCore.canvas, table: uiCore.table,
     slider: uiCore.slider, dropdown: uiCore.dropdown,
     checkbox: uiCore.checkbox, textInput: uiCore.textInput,
     download: fileIo.download, upload: fileIo.upload, drop: fileIo.drop,
+    confirm: dialogApi.confirm, prompt: dialogApi.prompt,
+    alert: dialogApi.alert, dialog: dialogApi.dialog,
   };
 
   // Tagged template builtins
