@@ -707,9 +707,10 @@ audit-text-input input[type="text"] {
 .fs-dir-toggle { display: inline-block; width: 14px; text-align: center; }
 
 /* ── DIALOG BODIES (in-app forms inside @gcu/dialog renders) ── */
-/* Custom-rendered Dialog content (export, recovery, mcp confirm). The
-   library handles header/backdrop/focus; we style the body's form
-   primitives so they read as auditable rather than browser-default. */
+/* Custom-rendered Dialog content (export, recovery, mcp confirm, plus
+   user notebooks via ui.dialog). The library handles header/backdrop/
+   focus; we style the body's form primitives so they read as auditable
+   rather than browser-default. */
 .gcu-dialog-body label {
   display: flex;
   align-items: center;
@@ -718,7 +719,14 @@ audit-text-input input[type="text"] {
   color: var(--au-fg-soft);
   font-size: 11px;
 }
-.gcu-dialog-body input[type="text"] {
+.gcu-dialog-body input[type="text"],
+.gcu-dialog-body input[type="number"],
+.gcu-dialog-body input[type="password"],
+.gcu-dialog-body input[type="email"],
+.gcu-dialog-body input[type="search"],
+.gcu-dialog-body input[type="url"],
+.gcu-dialog-body select,
+.gcu-dialog-body textarea {
   background: var(--au-surface-bright);
   border: 1px solid var(--au-border);
   color: var(--au-fg);
@@ -728,11 +736,15 @@ audit-text-input input[type="text"] {
   outline: none;
   flex: 1;
 }
-.gcu-dialog-body input[type="text"]:focus {
+.gcu-dialog-body input:focus,
+.gcu-dialog-body select:focus,
+.gcu-dialog-body textarea:focus {
   border-color: var(--au-rule);
 }
-.gcu-dialog-body input[type="checkbox"] {
+.gcu-dialog-body input[type="checkbox"],
+.gcu-dialog-body input[type="radio"] {
   accent-color: var(--au-action);
+  flex: 0;
 }
 .export-actions {
   display: flex;
