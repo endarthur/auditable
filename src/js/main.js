@@ -45,6 +45,7 @@ import './cell-builtins/modules.js';
 import './cell-builtins/workers.js';
 import './cell-builtins/notebook-api.js';
 import './cell-builtins/workshop.js';
+import './cell-builtins/dialog.js';
 import './cell-render.js';
 import './cell-context.js';
 import './exec.js';
