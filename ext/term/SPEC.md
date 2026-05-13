@@ -949,6 +949,10 @@ For each `keydown` event on the textarea:
    Right-clicking on a selection also surfaces the browser's "Copy"
    context menu (the contextmenu handler only suppresses when there is
    no selection).
+   With `Input` constructed with `{ copyOnSelect: true }` (the
+   Windows-Terminal / iTerm2 pattern), a completed drag /
+   double-click / triple-click selection writes its text to the system
+   clipboard automatically — no chord needed.
 2. **Paste chord**: handler returns without `preventDefault`; the
    browser's native paste fires a `paste` event on the textarea, which
    the handler processes (see Paste below). Recognized chords:

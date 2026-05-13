@@ -56,7 +56,7 @@ term.write('\x1b[?2004h');
 
 term.write('\x1b[33mauditable terminal — type a JS expression, press Enter\x1b[0m\r\n');
 term.write('try: 2+2, [1,2,3].reverse(), Math.sqrt(2)\r\n');
-term.write('\x1b[2mcopy: select with mouse + Cmd+C / Ctrl+Insert / right-click → Copy\x1b[0m\r\n');
+term.write('\x1b[2mcopy: drag-select auto-copies. or Cmd+C / Ctrl+Insert / right-click → Copy\x1b[0m\r\n');
 term.write('\x1b[2mpaste: Cmd+V / Ctrl+V / Shift+Insert\x1b[0m\r\n\r\n');
 
 const lb = term.lineBuffer({

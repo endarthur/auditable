@@ -1271,11 +1271,25 @@ export class DomRenderer {
  * ============================================================ */
 
 export class Input {
-  constructor(term, screen, hidden, renderer) {
+  /**
+   * @param {Terminal} term
+   * @param {HTMLElement} screen — the .screen container the renderer mounted in
+   * @param {HTMLTextAreaElement} hidden — the focus-target textarea
+   * @param {DomRenderer} renderer — used to translate mouse coords to cells
+   * @param {object} [opts]
+   * @param {boolean} [opts.copyOnSelect=false] — when true, completed
+   *   drag / double-click / triple-click selections write the selection
+   *   text to the clipboard via navigator.clipboard.writeText. The
+   *   "Windows Terminal / iTerm2 select-to-copy" pattern. Off by default
+   *   in the library (auto-clobbering the clipboard is surprising); turn
+   *   it on for friendlier embedded use cases.
+   */
+  constructor(term, screen, hidden, renderer, opts = {}) {
     this.term = term;
     this.screen = screen;
     this.hidden = hidden;
     this.renderer = renderer;
+    this.copyOnSelect = !!opts.copyOnSelect;
     this.composing = false;
     this.isMac = (typeof navigator !== 'undefined') &&
                  /Mac|iPod|iPhone|iPad/.test(navigator.platform);
@@ -1507,10 +1521,12 @@ export class Input {
       sel.modify('move',   'backward', 'word');
       sel.modify('extend', 'forward',  'word');
       this._selecting = false;     // already complete; no drag needed
+      this._maybeCopySelection();
     } else if (e.detail >= 3 && sel.modify) {
       sel.modify('move',   'backward', 'lineboundary');
       sel.modify('extend', 'forward',  'lineboundary');
       this._selecting = false;
+      this._maybeCopySelection();
     }
   }
 
@@ -1537,6 +1553,7 @@ export class Input {
   _onMouseUp(e) {
     if (this._selecting) {
       this._selecting = false;
+      this._maybeCopySelection();
       return;
     }
     const t = this.term;
@@ -1544,6 +1561,21 @@ export class Input {
       const { col, row } = this._cellFromEvent(e);
       this._sendMouse(e, 'up', col + 1, row + 1);
     }
+  }
+
+  // Windows-Terminal / iTerm2 select-to-copy: when copyOnSelect is on,
+  // a completed drag / double / triple click that produced a non-empty
+  // selection writes that text to the system clipboard. Failures are
+  // swallowed (clipboard API can fail in iframes without permission, on
+  // file:// origins, etc.) — the user can still Cmd+C / right-click manually.
+  _maybeCopySelection() {
+    if (!this.copyOnSelect) return;
+    const sel = document.getSelection?.();
+    if (!sel) return;
+    const text = sel.toString();
+    if (!text) return;
+    try { navigator.clipboard?.writeText(text); }
+    catch (_) { /* permission, no-clipboard, etc. — silent */ }
   }
 
   _sendMouse(e, kind, col, row) {

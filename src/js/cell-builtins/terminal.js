@@ -19,6 +19,10 @@ export function makeTerminal(cell, ctx) {
     const rows = opts.rows ?? 24;
     const cssVarTheme = opts.cssVarTheme ?? true;
     const maxScrollback = opts.maxScrollback ?? 1000;
+    // Default ON in the cell builtin (off in the underlying library).
+    // Notebook authors get the friendlier Windows-Terminal / iTerm2 UX
+    // without thinking about it; explicit { copyOnSelect: false } opts out.
+    const copyOnSelect = opts.copyOnSelect ?? true;
 
     // Mount the host markup the renderer + input need. The container
     // class names match what term.css selects on (.termhost, .screen,
@@ -40,7 +44,7 @@ export function makeTerminal(cell, ctx) {
 
     const term = new Terminal(cols, rows, { maxScrollback });
     const renderer = new DomRenderer(term, screen, { cssVarTheme });
-    const input = new Input(term, screen, hidden, renderer);
+    const input = new Input(term, screen, hidden, renderer, { copyOnSelect });
 
     // Cursor blink + dirty-frame loop. One requestAnimationFrame per
     // terminal — cheap, and stops on dispose. ~530ms is the standard
