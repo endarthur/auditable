@@ -17,7 +17,7 @@
 //     variant is the right answer (deferred until a workflow demands it).
 
 import { BaseEstimator, ClusterMixin } from './base.js';
-import { asMatrix, checkNFeatures, ValidationError } from './util/checks.js';
+import { asMatrix, checkNFeatures, captureFeatureNames, ValidationError } from './util/checks.js';
 import { mulberry32 } from './util/random.js';
 import { learnRegistry } from './serialize.js';
 // Cross-package: scitra's KDTree for the eps-radius queries DBSCAN needs.
@@ -42,7 +42,8 @@ export class KMeans extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (n < this.n_clusters) {
       throw new ValidationError(
@@ -68,6 +69,7 @@ export class KMeans extends BaseEstimator {
     this.inertia_ = best.inertia;
     this.n_iter_ = best.n_iter;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -282,7 +284,8 @@ export class AgglomerativeClustering extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (n < this.n_clusters) {
       throw new ValidationError(
@@ -301,6 +304,7 @@ export class AgglomerativeClustering extends BaseEstimator {
     this.n_clusters_ = this.n_clusters;
     this.n_leaves_ = n;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 }
@@ -440,7 +444,8 @@ export class DBSCAN extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (this.metric !== 'euclidean') {
       throw new ValidationError(
@@ -504,6 +509,7 @@ export class DBSCAN extends BaseEstimator {
     this.core_sample_indices_ = core_indices;
     this.components_ = components;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 }

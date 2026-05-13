@@ -14,7 +14,9 @@
 //   - All transformers self-register on import for mimic-io load.
 
 import { BaseEstimator, TransformerMixin } from './base.js';
-import { asMatrix, asVector, checkNFeatures, ValidationError } from './util/checks.js';
+import { asMatrix, asVector, checkNFeatures, captureFeatureNames,
+         detectTable, tableColumns, tableColumn, tableNumRows,
+         ValidationError } from './util/checks.js';
 import { learnRegistry } from './serialize.js';
 
 const MODULE_ID_PREPROCESSING = '@gcu/learn.preprocessing';
@@ -54,7 +56,8 @@ export class StandardScaler extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (n < 1) throw new ValidationError('StandardScaler.fit: X has 0 samples');
 
@@ -93,6 +96,7 @@ export class StandardScaler extends BaseEstimator {
     this.var_ = variance;
     this.n_samples_seen_ = n;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -172,7 +176,8 @@ export class MinMaxScaler extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (n < 1) throw new ValidationError('MinMaxScaler.fit: X has 0 samples');
     const [r_lo, r_hi] = this.feature_range;
@@ -207,6 +212,7 @@ export class MinMaxScaler extends BaseEstimator {
     this.min_ = min_;
     this.n_samples_seen_ = n;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -262,7 +268,8 @@ export class MaxAbsScaler extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     const max_abs = new Float64Array(m);
     for (let i = 0; i < n; i++) {
@@ -278,6 +285,7 @@ export class MaxAbsScaler extends BaseEstimator {
     this.scale_ = scale;
     this.n_samples_seen_ = n;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -337,7 +345,8 @@ export class RobustScaler extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (n < 1) throw new ValidationError('RobustScaler.fit: X has 0 samples');
     const [q_lo, q_hi] = this.quantile_range;
@@ -364,6 +373,7 @@ export class RobustScaler extends BaseEstimator {
     this.center_ = center;
     this.scale_ = scale;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -515,6 +525,8 @@ export class OrdinalEncoder extends BaseEstimator {
     }
     this.categories_ = categories;
     this.n_features_in_ = cols.length;
+    const names = _columnNamesOf(X);
+    if (names) this.feature_names_in_ = names;
     return this;
   }
 
@@ -629,6 +641,8 @@ export class OneHotEncoder extends BaseEstimator {
     this.drop_idx_ = drop_idx;
     this.n_features_in_ = cols.length;
     this.n_features_out_ = n_out;
+    const names = _columnNamesOf(X);
+    if (names) this.feature_names_in_ = names;
     return this;
   }
 
@@ -762,7 +776,8 @@ export class KBinsDiscretizer extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (this.encode !== 'ordinal') {
       throw new ValidationError(
@@ -807,6 +822,7 @@ export class KBinsDiscretizer extends BaseEstimator {
     this.bin_edges_ = bin_edges;
     this.n_bins_ = actual_bins;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -866,7 +882,8 @@ export class PowerTransformer extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (this.method !== 'yeo-johnson') {
       throw new ValidationError(
@@ -880,6 +897,7 @@ export class PowerTransformer extends BaseEstimator {
     }
     this.lambdas_ = lambdas;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     if (this.standardize) {
       // Apply transform once, then fit a StandardScaler on the result.
       const Xt = this._yeoJohnsonForward(data, n, m);
@@ -994,10 +1012,17 @@ function _uniqueSorted(arr) {
   return u;
 }
 
-// Convert input X (2D nested array, Float64Array.shape, or {data,shape}) to
-// per-column JS arrays. Preserves arbitrary value types — encoders work
-// on strings/ints/floats uniformly.
+// Convert input X to per-column JS arrays. Preserves arbitrary value
+// types — encoders work on strings/ints/floats uniformly.
+// Accepts: 2D nested array, Float64Array.shape, {data,shape}, sadpan
+// Table, sadpan DataFrame, plain {col: array} object.
 function _columnsToArrays(X) {
+  // Table-shaped (Table / DataFrame / named columns): preserve raw types.
+  const kind = detectTable(X);
+  if (kind) {
+    const names = tableColumns(X, kind);
+    return names.map(n => Array.from(tableColumn(X, kind, n)));
+  }
   if (Array.isArray(X) && X.length > 0 && Array.isArray(X[0])) {
     const n = X.length;
     const m = X[0].length;
@@ -1015,6 +1040,14 @@ function _columnsToArrays(X) {
     for (let j = 0; j < m; j++) cols[j][i] = data[i * m + j];
   }
   return cols;
+}
+
+// Extract column names from an X input, or null if X doesn't carry them.
+function _columnNamesOf(X) {
+  const kind = detectTable(X);
+  if (kind) return tableColumns(X, kind).slice();
+  if (X && X.feature_names) return X.feature_names.slice();
+  return null;
 }
 
 function _resolveNBins(spec, m) {

@@ -30,6 +30,7 @@ predict tier for the tree family. 459 tests across 20 files; bundle ~355 KB.
 - [x] PLSRegression (PLS1 via NIPALS — chemometrics workhorse for collinear X)
 - [x] GradientBoosting{Classifier,Regressor} (stagewise additive boosting; squared-error regression + log-loss multinomial; the "hardest piece of v0.2")
 - [x] `.compile()` predict for the tree family (DecisionTree*, RandomForest*, ExtraTrees*, GradientBoostingRegressor; pragmatic JS-string emit + `new Function` rather than going through AIR's lower→emit pipeline; emits a single nested-ternary `return` expression to keep V8's inliner happy)
+- [x] sadpan integration (`from_table` adapter for X/y/groups/xyz tuples with auto string-label encoding; asMatrix accepts sadpan Table / DataFrame / plain `{col: array}` at the estimator boundary; **every estimator** auto-populates `feature_names_in_` from input column names — round-trips through dump/load)
 
 ### When to use `.compile()`
 

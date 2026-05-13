@@ -11,7 +11,7 @@
 // data, mixing them produces statistically wrong downstream estimates.
 
 import { BaseEstimator, TransformerMixin } from './base.js';
-import { asMatrix, checkNFeatures, ValidationError } from './util/checks.js';
+import { asMatrix, checkNFeatures, captureFeatureNames, ValidationError } from './util/checks.js';
 import { learnRegistry } from './serialize.js';
 // Cross-package: scitra's ndtri (inverse normal CDF) for lognormal ROS.
 import { ndtri } from '../../scitra/index.js';
@@ -47,7 +47,8 @@ export class SimpleImputer extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X, { allow_nan: true });
+    const X_info = asMatrix(X, { allow_nan: true });
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (n < 1) throw new ValidationError('SimpleImputer.fit: X has 0 samples');
     const isMissingNaN = Number.isNaN(this.missing_values);
@@ -95,6 +96,7 @@ export class SimpleImputer extends BaseEstimator {
     this.statistics_ = stats;
     this.n_features_in_ = m;
     this.n_samples_seen_ = n;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -163,7 +165,8 @@ export class KNNImputer extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X, { allow_nan: true });
+    const X_info = asMatrix(X, { allow_nan: true });
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (n < 1) throw new ValidationError('KNNImputer.fit: X has 0 samples');
     const isMissingNaN = Number.isNaN(this.missing_values);
@@ -178,6 +181,7 @@ export class KNNImputer extends BaseEstimator {
     this.fit_X_ = new Float64Array(data);  // copy to detach from caller
     this.mask_fit_X_ = mask;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -321,12 +325,14 @@ export class BDLImputer extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X, { allow_nan: false });
+    const X_info = asMatrix(X, { allow_nan: false });
+    const { data, shape } = X_info;
     const [n, m] = shape;
     const dl = _resolveDLArray(this.detection_limits, m);
     this.detection_limits_ = dl;
     this.n_features_in_ = m;
     this.n_samples_seen_ = n;
+    captureFeatureNames(this, X_info);
     if (this.strategy === 'lognormal_ros') {
       // Fit lognormal MLE per column to above-detection values.
       this.lognormal_params_ = new Array(m);

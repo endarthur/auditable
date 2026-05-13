@@ -72,12 +72,91 @@ class ValidationError extends Error {
   constructor(msg) { super(msg); this.name = 'ValidationError'; }
 }
 
+/**
+ * Capture sklearn's `feature_names_in_` attribute on a fitted estimator
+ * when the asMatrix result carries column names (input was a sadpan
+ * Table, DataFrame, or named-column object). No-op otherwise.
+ *
+ * Estimators call this at end-of-fit, after validation, to thread the
+ * column names from the boundary to the fitted state. Cheap and
+ * idempotent; dump/load preserves it through mimic-io's default codec.
+ */
+function captureFeatureNames(est, X_info) {
+  if (X_info && X_info.feature_names) {
+    est.feature_names_in_ = X_info.feature_names.slice();
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Table-shaped input helpers (used by asMatrix and from_table)
+// ────────────────────────────────────────────────────────────────────
+
+/**
+ * Detect what kind of table-shaped input `df` is. Returns one of:
+ *   'table'  — sadpan Table (numRows + array + columnNames)
+ *   'df'     — sadpan DataFrame (columns array + __getitem__ + .shape)
+ *   'plain'  — plain JS object with named array-like columns
+ *   null     — none of the above
+ */
+function detectTable(df) {
+  if (df == null || typeof df !== 'object') return null;
+  if (Array.isArray(df) || ArrayBuffer.isView(df)) return null;
+  if (typeof df.numRows === 'function'
+      && typeof df.array === 'function'
+      && typeof df.columnNames === 'function') return 'table';
+  if (Array.isArray(df.columns)
+      && typeof df.__getitem__ === 'function'
+      && Array.isArray(df.shape) && df.shape.length === 2) return 'df';
+  // Plain object: same heuristic as asMatrix's _looksLikeNamedColumns_checks.
+  const keys = Object.keys(df);
+  if (keys.length === 0) return null;
+  if (keys.includes('data') && keys.includes('shape')) return null;
+  const first = df[keys[0]];
+  if (first == null || typeof first.length !== 'number') return null;
+  return 'plain';
+}
+
+/** Get the list of column names for a table-shaped input. */
+function tableColumns(df, kind) {
+  if (kind === 'table') return df.columnNames();
+  if (kind === 'df') return df.columns;
+  return Object.keys(df);
+}
+
+/** Get the row count of a table-shaped input. */
+function tableNumRows(df, kind) {
+  if (kind === 'table') return df.numRows();
+  if (kind === 'df') return df.shape[0];
+  // plain
+  const keys = Object.keys(df);
+  return df[keys[0]].length;
+}
+
+/**
+ * Extract a single column by name. Returns the raw column data (any
+ * array-like). Caller decides whether to coerce to numeric or treat
+ * as labels.
+ */
+function tableColumn(df, kind, name) {
+  if (kind === 'table') return df.array(name);
+  if (kind === 'df') {
+    const series = df.__getitem__(name);
+    return series.values;
+  }
+  return df[name];
+}
+
 // Coerce X to a 2D Float64Array view. Accepts:
 //   - Float64Array with `.shape` set (natra-shaped): pass through
 //   - 2D Array of Arrays of numbers: flatten + record shape
 //   - { data: TypedArray, shape: [n, m] }: pass through with shape
-// Returns { data: Float64Array, shape: [n, m] }. Does not copy when the
-// input is already a Float64Array of correct shape.
+//   - sadpan Table (numRows + array + columnNames): stack columns
+//   - sadpan DataFrame (shape + columns + __getitem__):  stack columns
+//   - plain JS object with named numeric-array columns ({a: [...], b: [...]}):
+//     stack in declaration order
+// Returns { data: Float64Array, shape: [n, m], feature_names? }.
+// `feature_names` is set only when input carried column names — estimators
+// pick it up to populate sklearn's `feature_names_in_` attribute.
 function asMatrix(X, { name = 'X', allow_nan = false } = {}) {
   if (X == null) {
     throw new ValidationError(`${name}: input is ${X}`);
@@ -85,7 +164,9 @@ function asMatrix(X, { name = 'X', allow_nan = false } = {}) {
   // Already in our normalized form.
   if (X instanceof Float64Array && Array.isArray(X.shape) && X.shape.length === 2) {
     if (!allow_nan) _checkFiniteFlat_checks(X, name);
-    return { data: X, shape: X.shape };
+    const out = { data: X, shape: X.shape };
+    if (X.feature_names) out.feature_names = X.feature_names;
+    return out;
   }
   // { data, shape } shape (natra-style ndarray with extra fields).
   if (typeof X === 'object' && X.data instanceof Float64Array
@@ -96,7 +177,27 @@ function asMatrix(X, { name = 'X', allow_nan = false } = {}) {
         `${name}: data length ${X.data.length} < shape product ${total}`);
     }
     if (!allow_nan) _checkFiniteFlat_checks(X.data, name, total);
-    return { data: X.data, shape: [X.shape[0], X.shape[1]] };
+    const out = { data: X.data, shape: [X.shape[0], X.shape[1]] };
+    if (X.feature_names) out.feature_names = X.feature_names;
+    return out;
+  }
+  // sadpan Table — duck-type: numRows() + array(name) + columnNames().
+  if (typeof X === 'object'
+      && typeof X.numRows === 'function'
+      && typeof X.array === 'function'
+      && typeof X.columnNames === 'function') {
+    const cols = X.columnNames();
+    return _stackNamedColumns_checks(name, cols, c => X.array(c), X.numRows(), allow_nan);
+  }
+  // sadpan DataFrame — duck-type: .columns array + __getitem__(name) →
+  // Series w/ .values, plus .shape array.
+  if (typeof X === 'object'
+      && Array.isArray(X.columns)
+      && typeof X.__getitem__ === 'function'
+      && Array.isArray(X.shape) && X.shape.length === 2) {
+    const cols = X.columns;
+    return _stackNamedColumns_checks(name, cols,
+      c => X.__getitem__(c).values, X.shape[0], allow_nan);
   }
   // 2D nested array (rows of columns).
   if (Array.isArray(X) && X.length > 0 && Array.isArray(X[0])) {
@@ -119,6 +220,18 @@ function asMatrix(X, { name = 'X', allow_nan = false } = {}) {
     }
     return { data: out, shape: [n, m] };
   }
+  // Plain JS object with named columns: { col1: [...], col2: [...] }.
+  // Skip for {data, shape} which is handled above. Detect by: not an
+  // array, not a typed array, has at least one own property whose value
+  // is an array of numbers.
+  if (typeof X === 'object'
+      && !ArrayBuffer.isView(X)
+      && !Array.isArray(X)
+      && _looksLikeNamedColumns_checks(X)) {
+    const cols = Object.keys(X);
+    const n = X[cols[0]].length;
+    return _stackNamedColumns_checks(name, cols, c => X[c], n, allow_nan);
+  }
   // 1D array fallback — sklearn raises here, recommending reshape(-1, 1).
   if (Array.isArray(X) || (X.constructor && X.constructor.name.endsWith('Array'))) {
     throw new ValidationError(
@@ -128,8 +241,52 @@ function asMatrix(X, { name = 'X', allow_nan = false } = {}) {
   throw new ValidationError(`${name}: unrecognized shape (${typeof X})`);
 }
 
+function _looksLikeNamedColumns_checks(obj) {
+  const keys = Object.keys(obj);
+  if (keys.length === 0) return false;
+  // First column must be array-like with a length.
+  const first = obj[keys[0]];
+  if (first == null) return false;
+  if (typeof first.length !== 'number') return false;
+  // Reject if it looks like {data, shape} (handled earlier) — keys would be
+  // exactly 'data' and 'shape'. Also reject Series (already detected via
+  // duck-type elsewhere).
+  if (keys.includes('data') && keys.includes('shape')) return false;
+  return true;
+}
+
+// Stack named columns into a row-major Float64Array. `getCol(name)` returns
+// the column data (any array-like). Validates that all columns share the
+// same length and that values are finite (when allow_nan=false).
+function _stackNamedColumns_checks(name, cols, getCol, n, allow_nan) {
+  const m = cols.length;
+  if (m === 0) {
+    throw new ValidationError(`${name}: input has no columns`);
+  }
+  const out = new Float64Array(n * m);
+  for (let j = 0; j < m; j++) {
+    const col = getCol(cols[j]);
+    if (col == null || typeof col.length !== 'number') {
+      throw new ValidationError(`${name}: column '${cols[j]}' is not array-like`);
+    }
+    if (col.length !== n) {
+      throw new ValidationError(
+        `${name}: column '${cols[j]}' has length ${col.length}, expected ${n}`);
+    }
+    for (let i = 0; i < n; i++) {
+      const v = +col[i];
+      if (!allow_nan && !Number.isFinite(v)) {
+        throw new ValidationError(
+          `${name}: non-finite value in column '${cols[j]}' at row ${i}`);
+      }
+      out[i * m + j] = v;
+    }
+  }
+  return { data: out, shape: [n, m], feature_names: cols.slice() };
+}
+
 // Coerce y to a 1D Float64Array. Accepts plain Array, Float64Array,
-// Int32Array, etc.
+// Int32Array, sadpan Series (anything with .values), etc.
 function asVector(y, { name = 'y', allow_nan = false } = {}) {
   if (y == null) throw new ValidationError(`${name}: input is ${y}`);
   if (y instanceof Float64Array) {
@@ -152,6 +309,11 @@ function asVector(y, { name = 'y', allow_nan = false } = {}) {
       out[i] = v;
     }
     return out;
+  }
+  // sadpan Series duck-type: anything carrying a .values array. Catches
+  // both DataFrame.__getitem__ output and explicit Series instances.
+  if (typeof y === 'object' && Array.isArray(y.values)) {
+    return asVector(y.values, { name, allow_nan });
   }
   throw new ValidationError(`${name}: unrecognized shape (${typeof y})`);
 }
@@ -2352,6 +2514,143 @@ function _now_model_selection() {
     : Date.now() / 1000;
 }
 
+// ────────────────────────────────────────────────────────────────────
+// from_table — extract sklearn-shape inputs from a sadpan/DataFrame-like
+// ────────────────────────────────────────────────────────────────────
+
+/**
+ * Build (X, y, groups, xyz) tuples from a table-shaped input. Per
+ * SPEC-learn §3.5.
+ *
+ * @param {object} df  — sadpan Table, sadpan DataFrame, or plain
+ *                       JS object with named array-like columns
+ * @param {object} opts
+ * @param {string|null}    [opts.target]   — column name for y
+ * @param {string[]|null}  [opts.features] — column names for X (default:
+ *                       all columns except target/group/xyz)
+ * @param {string|null}    [opts.group]    — column name for groups
+ * @param {string[]|null}  [opts.xyz]      — column names for spatial coords
+ *
+ * @returns {object}
+ *   X            { data, shape, feature_names } — same shape asMatrix returns
+ *   y            Float64Array (or null) — int-encoded when target was string-typed
+ *   groups       Array of raw group values (or null)
+ *   xyz          { data, shape } 2D — or null
+ *   feature_names string[] — actual feature column names
+ *   classes      string[] — original class labels in encoded order, when
+ *                target was string-typed; null otherwise
+ */
+function from_table(df, opts = {}) {
+  const kind = detectTable(df);
+  if (kind == null) {
+    throw new ValidationError(
+      'from_table: input is not a sadpan Table, DataFrame, or named-column object');
+  }
+  const all_cols = tableColumns(df, kind);
+  const n = tableNumRows(df, kind);
+  const target = opts.target ?? null;
+  const group = opts.group ?? null;
+  const xyz_cols = opts.xyz ?? null;
+
+  // Default features: all columns except target / group / xyz.
+  let features = opts.features ?? null;
+  if (features == null) {
+    const exclude = new Set();
+    if (target) exclude.add(target);
+    if (group) exclude.add(group);
+    if (Array.isArray(xyz_cols)) for (const c of xyz_cols) exclude.add(c);
+    features = all_cols.filter(c => !exclude.has(c));
+  }
+  for (const c of features) {
+    if (!all_cols.includes(c)) {
+      throw new ValidationError(`from_table: feature '${c}' not in input columns`);
+    }
+  }
+
+  // Build X by stacking feature columns numerically.
+  const X_data = new Float64Array(n * features.length);
+  for (let j = 0; j < features.length; j++) {
+    const col = tableColumn(df, kind, features[j]);
+    for (let i = 0; i < n; i++) {
+      const v = +col[i];
+      if (!Number.isFinite(v)) {
+        throw new ValidationError(
+          `from_table: non-finite value in feature '${features[j]}' at row ${i}`);
+      }
+      X_data[i * features.length + j] = v;
+    }
+  }
+  X_data.shape = [n, features.length];
+  const X = { data: X_data, shape: [n, features.length], feature_names: features.slice() };
+
+  // y: extract target, auto-encode if string-typed.
+  let y = null;
+  let classes = null;
+  if (target != null) {
+    if (!all_cols.includes(target)) {
+      throw new ValidationError(`from_table: target '${target}' not in input columns`);
+    }
+    const raw = tableColumn(df, kind, target);
+    const isString = raw.length > 0 && typeof raw[0] === 'string';
+    if (isString) {
+      const seen = new Map();
+      const order = [];
+      for (let i = 0; i < n; i++) {
+        const v = raw[i];
+        if (!seen.has(v)) { seen.set(v, true); order.push(v); }
+      }
+      order.sort();
+      const idx = new Map();
+      for (let c = 0; c < order.length; c++) idx.set(order[c], c);
+      const enc = new Float64Array(n);
+      for (let i = 0; i < n; i++) enc[i] = idx.get(raw[i]);
+      y = enc;
+      classes = order;
+    } else {
+      const out = new Float64Array(n);
+      for (let i = 0; i < n; i++) out[i] = +raw[i];
+      y = out;
+    }
+  }
+
+  // groups: raw values (splitter compares with === / Map keys).
+  let groups = null;
+  if (group != null) {
+    if (!all_cols.includes(group)) {
+      throw new ValidationError(`from_table: group '${group}' not in input columns`);
+    }
+    const raw = tableColumn(df, kind, group);
+    groups = Array.from(raw);
+  }
+
+  // xyz: stack 1-3 columns.
+  let xyz = null;
+  if (Array.isArray(xyz_cols)) {
+    if (xyz_cols.length < 1 || xyz_cols.length > 3) {
+      throw new ValidationError(
+        `from_table: xyz must list 1-3 columns; got ${xyz_cols.length}`);
+    }
+    for (const c of xyz_cols) {
+      if (!all_cols.includes(c)) {
+        throw new ValidationError(`from_table: xyz column '${c}' not in input columns`);
+      }
+    }
+    const xyz_data = new Float64Array(n * xyz_cols.length);
+    for (let j = 0; j < xyz_cols.length; j++) {
+      const col = tableColumn(df, kind, xyz_cols[j]);
+      for (let i = 0; i < n; i++) xyz_data[i * xyz_cols.length + j] = +col[i];
+    }
+    xyz_data.shape = [n, xyz_cols.length];
+    xyz = { data: xyz_data, shape: [n, xyz_cols.length] };
+  }
+
+  return {
+    X, y, groups, xyz,
+    feature_names: features.slice(),
+    classes,
+  };
+}
+
 // ── preprocessing.js ──
 
 // Preprocessing: feature scaling, encoding, discretization, power
@@ -2409,7 +2708,8 @@ class StandardScaler extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (n < 1) throw new ValidationError('StandardScaler.fit: X has 0 samples');
 
@@ -2448,6 +2748,7 @@ class StandardScaler extends BaseEstimator {
     this.var_ = variance;
     this.n_samples_seen_ = n;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -2527,7 +2828,8 @@ class MinMaxScaler extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (n < 1) throw new ValidationError('MinMaxScaler.fit: X has 0 samples');
     const [r_lo, r_hi] = this.feature_range;
@@ -2562,6 +2864,7 @@ class MinMaxScaler extends BaseEstimator {
     this.min_ = min_;
     this.n_samples_seen_ = n;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -2617,7 +2920,8 @@ class MaxAbsScaler extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     const max_abs = new Float64Array(m);
     for (let i = 0; i < n; i++) {
@@ -2633,6 +2937,7 @@ class MaxAbsScaler extends BaseEstimator {
     this.scale_ = scale;
     this.n_samples_seen_ = n;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -2692,7 +2997,8 @@ class RobustScaler extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (n < 1) throw new ValidationError('RobustScaler.fit: X has 0 samples');
     const [q_lo, q_hi] = this.quantile_range;
@@ -2719,6 +3025,7 @@ class RobustScaler extends BaseEstimator {
     this.center_ = center;
     this.scale_ = scale;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -2870,6 +3177,8 @@ class OrdinalEncoder extends BaseEstimator {
     }
     this.categories_ = categories;
     this.n_features_in_ = cols.length;
+    const names = _columnNamesOf_preprocessing(X);
+    if (names) this.feature_names_in_ = names;
     return this;
   }
 
@@ -2984,6 +3293,8 @@ class OneHotEncoder extends BaseEstimator {
     this.drop_idx_ = drop_idx;
     this.n_features_in_ = cols.length;
     this.n_features_out_ = n_out;
+    const names = _columnNamesOf_preprocessing(X);
+    if (names) this.feature_names_in_ = names;
     return this;
   }
 
@@ -3117,7 +3428,8 @@ class KBinsDiscretizer extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (this.encode !== 'ordinal') {
       throw new ValidationError(
@@ -3162,6 +3474,7 @@ class KBinsDiscretizer extends BaseEstimator {
     this.bin_edges_ = bin_edges;
     this.n_bins_ = actual_bins;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -3221,7 +3534,8 @@ class PowerTransformer extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (this.method !== 'yeo-johnson') {
       throw new ValidationError(
@@ -3235,6 +3549,7 @@ class PowerTransformer extends BaseEstimator {
     }
     this.lambdas_ = lambdas;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     if (this.standardize) {
       // Apply transform once, then fit a StandardScaler on the result.
       const Xt = this._yeoJohnsonForward(data, n, m);
@@ -3349,10 +3664,17 @@ function _uniqueSorted_preprocessing(arr) {
   return u;
 }
 
-// Convert input X (2D nested array, Float64Array.shape, or {data,shape}) to
-// per-column JS arrays. Preserves arbitrary value types — encoders work
-// on strings/ints/floats uniformly.
+// Convert input X to per-column JS arrays. Preserves arbitrary value
+// types — encoders work on strings/ints/floats uniformly.
+// Accepts: 2D nested array, Float64Array.shape, {data,shape}, sadpan
+// Table, sadpan DataFrame, plain {col: array} object.
 function _columnsToArrays_preprocessing(X) {
+  // Table-shaped (Table / DataFrame / named columns): preserve raw types.
+  const kind = detectTable(X);
+  if (kind) {
+    const names = tableColumns(X, kind);
+    return names.map(n => Array.from(tableColumn(X, kind, n)));
+  }
   if (Array.isArray(X) && X.length > 0 && Array.isArray(X[0])) {
     const n = X.length;
     const m = X[0].length;
@@ -3370,6 +3692,14 @@ function _columnsToArrays_preprocessing(X) {
     for (let j = 0; j < m; j++) cols[j][i] = data[i * m + j];
   }
   return cols;
+}
+
+// Extract column names from an X input, or null if X doesn't carry them.
+function _columnNamesOf_preprocessing(X) {
+  const kind = detectTable(X);
+  if (kind) return tableColumns(X, kind).slice();
+  if (X && X.feature_names) return X.feature_names.slice();
+  return null;
 }
 
 function _resolveNBins_preprocessing(spec, m) {
@@ -3525,7 +3855,8 @@ class DecisionTreeClassifier extends BaseEstimator {
   }
 
   fit(X, y, _opts) {
-    const { data: Xd, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data: Xd, shape } = X_info;
     const yv = asVector(y);
     if (yv.length !== shape[0]) {
       throw new ValidationError(
@@ -3540,6 +3871,7 @@ class DecisionTreeClassifier extends BaseEstimator {
     this.classes_ = classes;
     this.n_classes_ = classes.length;
     this.n_features_in_ = shape[1];
+    captureFeatureNames(this, X_info);
 
     const tree = _buildTree_tree(Xd, encoded, shape[0], shape[1], this.n_classes_, {
       mode: 'classifier',
@@ -3618,7 +3950,8 @@ class DecisionTreeRegressor extends BaseEstimator {
   }
 
   fit(X, y, _opts) {
-    const { data: Xd, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data: Xd, shape } = X_info;
     const yv = asVector(y);
     if (yv.length !== shape[0]) {
       throw new ValidationError(
@@ -3629,6 +3962,7 @@ class DecisionTreeRegressor extends BaseEstimator {
         `DecisionTreeRegressor: criterion='${this.criterion}' not supported in v0.1 (use 'squared_error')`);
     }
     this.n_features_in_ = shape[1];
+    captureFeatureNames(this, X_info);
 
     const tree = _buildTree_tree(Xd, yv, shape[0], shape[1], 1, {
       mode: 'regressor',
@@ -4154,11 +4488,13 @@ class CLR extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { shape } = asMatrix(X, { allow_nan: false });
+    const X_info = asMatrix(X, { allow_nan: false });
+    const { shape } = X_info;
     this.n_features_in_ = shape[1];
     this.n_features_out_ = shape[1];
     this.detection_limit_ = _resolveDetectionLimit_compositional(
       this.detection_limit, shape[1]);
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -4229,7 +4565,8 @@ class ILR extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { shape } = asMatrix(X, { allow_nan: false });
+    const X_info = asMatrix(X, { allow_nan: false });
+    const { shape } = X_info;
     if (shape[1] < 2) {
       throw new ValidationError(
         `ILR.fit: needs at least 2 features (got ${shape[1]})`);
@@ -4240,6 +4577,7 @@ class ILR extends BaseEstimator {
       this.detection_limit, shape[1]);
     // Precompute Helmert basis V of shape (D-1) × D.
     this.helmert_ = _helmertBasis_compositional(shape[1]);
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -4333,7 +4671,8 @@ class ALR extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { shape } = asMatrix(X, { allow_nan: false });
+    const X_info = asMatrix(X, { allow_nan: false });
+    const { shape } = X_info;
     if (shape[1] < 2) {
       throw new ValidationError(
         `ALR.fit: needs at least 2 features (got ${shape[1]})`);
@@ -4349,6 +4688,7 @@ class ALR extends BaseEstimator {
     this.denominator_ = d;
     this.detection_limit_ = _resolveDetectionLimit_compositional(
       this.detection_limit, shape[1]);
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -4647,6 +4987,21 @@ class Pipeline extends BaseEstimator {
     last.fit(Xt, y, opts);
     // Mark fitted with at least one trailing-underscore attr.
     this.n_features_in_ = _firstFeatureCount_pipeline(X);
+    // Inherit feature_names_in_ from the raw X first (covers Tables /
+    // DataFrames / plain named-column objects). Fall back to the first
+    // step's feature_names_in_ if the first step captured them but X
+    // itself didn't carry names directly. sklearn convention:
+    // pipeline-level feature_names_in_ mirrors the input column names,
+    // not the post-transform ones.
+    const x_names = _firstFeatureNames_pipeline(X);
+    if (x_names) {
+      this.feature_names_in_ = x_names;
+    } else {
+      const first = this.steps[0][1];
+      if (first?.feature_names_in_) {
+        this.feature_names_in_ = first.feature_names_in_.slice();
+      }
+    }
     return this;
   }
 
@@ -4765,10 +5120,13 @@ class Pipeline extends BaseEstimator {
       module: this._module,
       params: { steps: stepsEncoded },
     };
-    // Pipeline's own fitted state is just n_features_in_; everything
-    // load-bearing lives in the encoded children.
+    // Pipeline's own fitted state is n_features_in_ + feature_names_in_;
+    // everything else load-bearing lives in the encoded children.
     if (this.n_features_in_ !== undefined) {
       out.fitted = { n_features_in_: this.n_features_in_ };
+      if (this.feature_names_in_) {
+        out.fitted.feature_names_in_ = this.feature_names_in_.slice();
+      }
     } else {
       out.fitted = null;
     }
@@ -4789,6 +5147,9 @@ class Pipeline extends BaseEstimator {
     const pipe = new Pipeline({ steps });
     if (json.fitted?.n_features_in_ !== undefined) {
       pipe.n_features_in_ = json.fitted.n_features_in_;
+    }
+    if (json.fitted?.feature_names_in_) {
+      pipe.feature_names_in_ = json.fitted.feature_names_in_.slice();
     }
     return pipe;
   }
@@ -4855,7 +5216,21 @@ function _firstFeatureCount_pipeline(X) {
   if (Array.isArray(X.shape) && X.shape.length === 2) return X.shape[1];
   if (X.data instanceof Float64Array && Array.isArray(X.shape)) return X.shape[1];
   if (Array.isArray(X) && X.length > 0 && Array.isArray(X[0])) return X[0].length;
+  // sadpan Table / DataFrame / plain named-column object.
+  const kind = detectTable(X);
+  if (kind) return tableColumns(X, kind).length;
   return undefined;
+}
+
+// Same trio for "first column names" — used by Pipeline to inherit
+// feature_names_in_ from the input when the first step doesn't set it.
+function _firstFeatureNames_pipeline(X) {
+  if (X == null) return null;
+  if (X.feature_names) return X.feature_names.slice();
+  if (X instanceof Float64Array && X.feature_names) return X.feature_names.slice();
+  const kind = detectTable(X);
+  if (kind) return tableColumns(X, kind).slice();
+  return null;
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -4907,6 +5282,8 @@ class ColumnTransformer extends BaseEstimator {
     _validateColumnTransformers_pipeline(this.transformers);
     const shape = _shapeOf_pipeline(X);
     this.n_features_in_ = shape[1];
+    const x_names = _firstFeatureNames_pipeline(X);
+    if (x_names) this.feature_names_in_ = x_names;
     const used = new Set();
     for (const [name, t, cols] of this.transformers) {
       _validateCols_pipeline(cols, shape[1], name);
@@ -4942,6 +5319,8 @@ class ColumnTransformer extends BaseEstimator {
     _validateColumnTransformers_pipeline(this.transformers);
     const shape = _shapeOf_pipeline(X);
     this.n_features_in_ = shape[1];
+    const x_names = _firstFeatureNames_pipeline(X);
+    if (x_names) this.feature_names_in_ = x_names;
     const used = new Set();
     const blocks = [];
     for (const [name, t, cols] of this.transformers) {
@@ -4997,6 +5376,9 @@ class ColumnTransformer extends BaseEstimator {
         n_features_in_: this.n_features_in_,
         _remainder_cols_: this._remainder_cols_ ?? null,
       };
+      if (this.feature_names_in_) {
+        out.fitted.feature_names_in_ = this.feature_names_in_.slice();
+      }
     } else {
       out.fitted = null;
     }
@@ -5014,6 +5396,9 @@ class ColumnTransformer extends BaseEstimator {
     if (json.fitted?.n_features_in_ !== undefined) {
       ct.n_features_in_ = json.fitted.n_features_in_;
       if (json.fitted._remainder_cols_) ct._remainder_cols_ = json.fitted._remainder_cols_;
+    }
+    if (json.fitted?.feature_names_in_) {
+      ct.feature_names_in_ = json.fitted.feature_names_in_.slice();
     }
     return ct;
   }
@@ -5096,8 +5481,11 @@ function _shapeOf_pipeline(X) {
   if (Array.isArray(X) && X.length > 0 && Array.isArray(X[0])) {
     return [X.length, X[0].length];
   }
+  // sadpan Table / DataFrame / plain named-column object.
+  const kind = detectTable(X);
+  if (kind) return [tableNumRows(X, kind), tableColumns(X, kind).length];
   throw new ValidationError(
-    `ColumnTransformer: X must be a 2D nested array or Float64Array with .shape`);
+    `ColumnTransformer: X must be a 2D nested array, Float64Array with .shape, or a sadpan Table/DataFrame`);
 }
 
 // Slice columns. Preserves arbitrary value types when X is a 2D nested
@@ -5115,6 +5503,18 @@ function _gatherCols_pipeline(X, shape, cols) {
     }
     return out;
   }
+  // Sadpan tables: extract by column-name, preserving raw types.
+  const kind = detectTable(X);
+  if (kind) {
+    const names = tableColumns(X, kind);
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) out[i] = new Array(k);
+    for (let c = 0; c < k; c++) {
+      const col = tableColumn(X, kind, names[cols[c]]);
+      for (let i = 0; i < n; i++) out[i][c] = col[i];
+    }
+    return out;
+  }
   return _gatherColsNumeric_pipeline(X, shape, cols);
 }
 
@@ -5128,6 +5528,13 @@ function _gatherColsNumeric_pipeline(X, shape, cols) {
   if (Array.isArray(X) && Array.isArray(X[0])) {
     for (let i = 0; i < n; i++) {
       for (let c = 0; c < k; c++) out[i * k + c] = +X[i][cols[c]];
+    }
+  } else if (detectTable(X)) {
+    const kind = detectTable(X);
+    const names = tableColumns(X, kind);
+    for (let c = 0; c < k; c++) {
+      const col = tableColumn(X, kind, names[cols[c]]);
+      for (let i = 0; i < n; i++) out[i * k + c] = +col[i];
     }
   } else {
     const data = X.data ?? X;
@@ -5215,7 +5622,8 @@ class KMeans extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (n < this.n_clusters) {
       throw new ValidationError(
@@ -5241,6 +5649,7 @@ class KMeans extends BaseEstimator {
     this.inertia_ = best.inertia;
     this.n_iter_ = best.n_iter;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -5455,7 +5864,8 @@ class AgglomerativeClustering extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (n < this.n_clusters) {
       throw new ValidationError(
@@ -5474,6 +5884,7 @@ class AgglomerativeClustering extends BaseEstimator {
     this.n_clusters_ = this.n_clusters;
     this.n_leaves_ = n;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 }
@@ -5613,7 +6024,8 @@ class DBSCAN extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (this.metric !== 'euclidean') {
       throw new ValidationError(
@@ -5677,6 +6089,7 @@ class DBSCAN extends BaseEstimator {
     this.core_sample_indices_ = core_indices;
     this.components_ = components;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 }
@@ -5752,7 +6165,8 @@ class PCA extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (n < 2) {
       throw new ValidationError(
@@ -5833,6 +6247,7 @@ class PCA extends BaseEstimator {
     this.n_components_ = k_use;
     this.n_features_in_ = m;
     this.n_samples_ = n;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -5951,7 +6366,8 @@ class TruncatedSVD extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (n < 2) throw new ValidationError('TruncatedSVD: n_samples must be >= 2');
     const k_max = Math.min(n, m);
@@ -6000,6 +6416,7 @@ class TruncatedSVD extends BaseEstimator {
     this.n_components_ = k_use;
     this.n_features_in_ = m;
     this.n_samples_ = n;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -6101,7 +6518,8 @@ class NMF extends BaseEstimator {
   }
 
   fit_transform(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     // Validate non-negativity at the boundary.
     for (let i = 0; i < data.length; i++) {
@@ -6155,6 +6573,7 @@ class NMF extends BaseEstimator {
     this.n_iter_ = iter;
     this.reconstruction_err_ = err;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     W.shape = [n, k];
     return W;
   }
@@ -6397,7 +6816,8 @@ class LinearRegression extends BaseEstimator {
   }
 
   fit(X, y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const yv = asVector(y);
     const [n, m] = shape;
     if (yv.length !== n) {
@@ -6431,6 +6851,7 @@ class LinearRegression extends BaseEstimator {
     }
     this.n_features_in_ = m;
     this.n_samples_seen_ = n;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -6480,7 +6901,8 @@ class Ridge extends BaseEstimator {
   }
 
   fit(X, y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const yv = asVector(y);
     const [n, m] = shape;
     if (yv.length !== n) {
@@ -6551,6 +6973,7 @@ class Ridge extends BaseEstimator {
     }
     this.n_features_in_ = m;
     this.n_samples_seen_ = n;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -6709,7 +7132,8 @@ class LogisticRegression extends BaseEstimator {
   }
 
   fit(X, y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const yv = asVector(y);
     const [n, m] = shape;
     if (yv.length !== n) {
@@ -6756,6 +7180,7 @@ class LogisticRegression extends BaseEstimator {
       this.n_iter_ = n_iter;
     }
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -6841,7 +7266,8 @@ LogisticRegression._estimator_type = 'classifier';
 
 // Shared coordinate-descent fit for Lasso/ElasticNet. l1 = l1_ratio.
 function _fitElasticNet_linear_model(est, X, y, alpha, l1) {
-  const { data, shape } = asMatrix(X);
+  const X_info = asMatrix(X);
+  const { data, shape } = X_info;
   const yv = asVector(y);
   const [n, m] = shape;
   if (yv.length !== n) {
@@ -6935,6 +7361,7 @@ function _fitElasticNet_linear_model(est, X, y, alpha, l1) {
   est.n_iter_ = n_iter;
   est.n_features_in_ = m;
   est.n_samples_seen_ = n;
+  captureFeatureNames(est, X_info);
   return est;
 }
 
@@ -7232,7 +7659,8 @@ function _unionClasses_ensemble(estimators) {
 // ────────────────────────────────────────────────────────────────────
 
 function _fitForest_ensemble(est, X, y, opts) {
-  const { data: Xd, shape } = asMatrix(X);
+  const X_info = asMatrix(X);
+  const { data: Xd, shape } = X_info;
   const yv = y == null ? null : asVector(y);
   const [n, m] = shape;
   if (yv != null && yv.length !== n) {
@@ -7265,6 +7693,7 @@ function _fitForest_ensemble(est, X, y, opts) {
   }
   est.estimators_ = estimators;
   est.n_features_in_ = m;
+  captureFeatureNames(est, X_info);
   if (opts.classifier) {
     est.classes_ = _unionClasses_ensemble(estimators);
     est.n_classes_ = est.classes_.length;
@@ -7807,7 +8236,8 @@ class GradientBoostingRegressor extends BaseEstimator {
       throw new ValidationError(
         `GradientBoostingRegressor: loss='${this.loss}' not supported in v0.2 (use 'squared_error')`);
     }
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const yv = asVector(y);
     const [n, m] = shape;
     if (yv.length !== n) {
@@ -7859,6 +8289,7 @@ class GradientBoostingRegressor extends BaseEstimator {
     this.init_value_ = init_value;
     this.train_score_ = train_score;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -7936,7 +8367,8 @@ class GradientBoostingClassifier extends BaseEstimator {
       throw new ValidationError(
         `GradientBoostingClassifier: loss='${this.loss}' not supported in v0.2 (use 'log_loss')`);
     }
-    const { shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { shape } = X_info;
     const yv = asVector(y);
     const [n, m] = shape;
     if (yv.length !== n) {
@@ -8011,6 +8443,7 @@ class GradientBoostingClassifier extends BaseEstimator {
     this.n_classes_ = K;
     this.init_value_ = init_value;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -8216,7 +8649,8 @@ class SimpleImputer extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X, { allow_nan: true });
+    const X_info = asMatrix(X, { allow_nan: true });
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (n < 1) throw new ValidationError('SimpleImputer.fit: X has 0 samples');
     const isMissingNaN = Number.isNaN(this.missing_values);
@@ -8264,6 +8698,7 @@ class SimpleImputer extends BaseEstimator {
     this.statistics_ = stats;
     this.n_features_in_ = m;
     this.n_samples_seen_ = n;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -8332,7 +8767,8 @@ class KNNImputer extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X, { allow_nan: true });
+    const X_info = asMatrix(X, { allow_nan: true });
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (n < 1) throw new ValidationError('KNNImputer.fit: X has 0 samples');
     const isMissingNaN = Number.isNaN(this.missing_values);
@@ -8347,6 +8783,7 @@ class KNNImputer extends BaseEstimator {
     this.fit_X_ = new Float64Array(data);  // copy to detach from caller
     this.mask_fit_X_ = mask;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -8490,12 +8927,14 @@ class BDLImputer extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X, { allow_nan: false });
+    const X_info = asMatrix(X, { allow_nan: false });
+    const { data, shape } = X_info;
     const [n, m] = shape;
     const dl = _resolveDLArray_impute(this.detection_limits, m);
     this.detection_limits_ = dl;
     this.n_features_in_ = m;
     this.n_samples_seen_ = n;
+    captureFeatureNames(this, X_info);
     if (this.strategy === 'lognormal_ros') {
       // Fit lognormal MLE per column to above-detection values.
       this.lognormal_params_ = new Array(m);
@@ -8669,7 +9108,8 @@ class KNeighborsClassifier extends BaseEstimator {
   }
 
   fit(X, y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const yv = asVector(y);
     const [n, m] = shape;
     if (yv.length !== n) {
@@ -8682,6 +9122,7 @@ class KNeighborsClassifier extends BaseEstimator {
     this.classes_ = classes;
     this.n_features_in_ = m;
     this._kdtree = _buildKDTree_neighbors(this.fit_X_, n, m);
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -8758,7 +9199,8 @@ class KNeighborsRegressor extends BaseEstimator {
   }
 
   fit(X, y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const yv = asVector(y);
     const [n, m] = shape;
     if (yv.length !== n) {
@@ -8769,6 +9211,7 @@ class KNeighborsRegressor extends BaseEstimator {
     this.fit_y_ = new Float64Array(yv);
     this.n_features_in_ = m;
     this._kdtree = _buildKDTree_neighbors(this.fit_X_, n, m);
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -8940,7 +9383,8 @@ class GaussianMixture extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (this.covariance_type !== 'full') {
       throw new ValidationError(
@@ -8970,6 +9414,7 @@ class GaussianMixture extends BaseEstimator {
     this.n_iter_ = best.n_iter;
     this.lower_bound_ = best.lower_bound;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -9375,7 +9820,8 @@ class PLSRegression extends BaseEstimator {
   }
 
   fit(X, y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const yv = asVector(y);
     const [n, m] = shape;
     if (yv.length !== n) {
@@ -9553,6 +9999,7 @@ class PLSRegression extends BaseEstimator {
     this.y_std_ = y_std;
     this.n_features_in_ = m;
     this.n_components_ = k_use;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -9990,7 +10437,7 @@ const pipeline = { Pipeline, make_pipeline };
 const compose = { ColumnTransformer, make_column_transformer };
 const model_selection = {
   train_test_split, KFold, StratifiedKFold, GroupKFold, SpatialKFold,
-  cross_val_score, cross_validate,
+  cross_val_score, cross_validate, from_table,
 };
 const metrics = {
   accuracy_score, balanced_accuracy_score,
@@ -10047,7 +10494,7 @@ export {
   explained_variance_score,
   // model_selection
   train_test_split, KFold, StratifiedKFold, GroupKFold, SpatialKFold,
-  cross_val_score, cross_validate,
+  cross_val_score, cross_validate, from_table,
   // preprocessing
   StandardScaler, MinMaxScaler, MaxAbsScaler, RobustScaler,
   LabelEncoder, OrdinalEncoder, OneHotEncoder,

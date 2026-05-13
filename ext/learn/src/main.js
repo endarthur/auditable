@@ -26,7 +26,7 @@ import {
 } from './metrics.js';
 import {
   train_test_split, KFold, StratifiedKFold, GroupKFold, SpatialKFold,
-  cross_val_score, cross_validate,
+  cross_val_score, cross_validate, from_table,
 } from './model_selection.js';
 import {
   StandardScaler, MinMaxScaler, MaxAbsScaler, RobustScaler,
@@ -83,7 +83,7 @@ export {
   explained_variance_score,
   // model_selection
   train_test_split, KFold, StratifiedKFold, GroupKFold, SpatialKFold,
-  cross_val_score, cross_validate,
+  cross_val_score, cross_validate, from_table,
   StandardScaler, MinMaxScaler, MaxAbsScaler, RobustScaler,
   LabelEncoder, OrdinalEncoder, OneHotEncoder,
   KBinsDiscretizer, PowerTransformer,
@@ -181,7 +181,7 @@ export const metrics = {
 
 export const model_selection = {
   train_test_split, KFold, StratifiedKFold, GroupKFold, SpatialKFold,
-  cross_val_score, cross_validate,
+  cross_val_score, cross_validate, from_table,
 };
 
 export const utils = {

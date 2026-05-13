@@ -17,7 +17,7 @@
 // matches sklearn's parameterization.
 
 import { BaseEstimator, RegressorMixin, ClassifierMixin } from './base.js';
-import { asMatrix, asVector, checkNFeatures, ValidationError } from './util/checks.js';
+import { asMatrix, asVector, checkNFeatures, captureFeatureNames, ValidationError } from './util/checks.js';
 import { mulberry32 } from './util/random.js';
 import { learnRegistry } from './serialize.js';
 // Cross-package import — build.js rewrites to '../line/index.js'.
@@ -53,7 +53,8 @@ export class LinearRegression extends BaseEstimator {
   }
 
   fit(X, y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const yv = asVector(y);
     const [n, m] = shape;
     if (yv.length !== n) {
@@ -87,6 +88,7 @@ export class LinearRegression extends BaseEstimator {
     }
     this.n_features_in_ = m;
     this.n_samples_seen_ = n;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -136,7 +138,8 @@ export class Ridge extends BaseEstimator {
   }
 
   fit(X, y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const yv = asVector(y);
     const [n, m] = shape;
     if (yv.length !== n) {
@@ -207,6 +210,7 @@ export class Ridge extends BaseEstimator {
     }
     this.n_features_in_ = m;
     this.n_samples_seen_ = n;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -365,7 +369,8 @@ export class LogisticRegression extends BaseEstimator {
   }
 
   fit(X, y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const yv = asVector(y);
     const [n, m] = shape;
     if (yv.length !== n) {
@@ -412,6 +417,7 @@ export class LogisticRegression extends BaseEstimator {
       this.n_iter_ = n_iter;
     }
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -497,7 +503,8 @@ LogisticRegression._estimator_type = 'classifier';
 
 // Shared coordinate-descent fit for Lasso/ElasticNet. l1 = l1_ratio.
 function _fitElasticNet(est, X, y, alpha, l1) {
-  const { data, shape } = asMatrix(X);
+  const X_info = asMatrix(X);
+  const { data, shape } = X_info;
   const yv = asVector(y);
   const [n, m] = shape;
   if (yv.length !== n) {
@@ -591,6 +598,7 @@ function _fitElasticNet(est, X, y, alpha, l1) {
   est.n_iter_ = n_iter;
   est.n_features_in_ = m;
   est.n_samples_seen_ = n;
+  captureFeatureNames(est, X_info);
   return est;
 }
 

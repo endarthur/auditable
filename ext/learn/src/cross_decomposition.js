@@ -11,7 +11,7 @@
 // yet have anywhere else) lands together with that — deferred.
 
 import { BaseEstimator, RegressorMixin } from './base.js';
-import { asMatrix, asVector, checkNFeatures, ValidationError } from './util/checks.js';
+import { asMatrix, asVector, checkNFeatures, captureFeatureNames, ValidationError } from './util/checks.js';
 import { learnRegistry } from './serialize.js';
 
 const MODULE_ID_CROSS_DECOMP = '@gcu/learn.cross_decomposition';
@@ -61,7 +61,8 @@ export class PLSRegression extends BaseEstimator {
   }
 
   fit(X, y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const yv = asVector(y);
     const [n, m] = shape;
     if (yv.length !== n) {
@@ -239,6 +240,7 @@ export class PLSRegression extends BaseEstimator {
     this.y_std_ = y_std;
     this.n_features_in_ = m;
     this.n_components_ = k_use;
+    captureFeatureNames(this, X_info);
     return this;
   }
 

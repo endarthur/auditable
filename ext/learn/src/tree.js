@@ -30,7 +30,7 @@
 //     min_impurity_decrease, ccp_alpha, monotonic_cst.
 
 import { BaseEstimator, ClassifierMixin, RegressorMixin } from './base.js';
-import { asMatrix, asVector, checkNFeatures, ValidationError } from './util/checks.js';
+import { asMatrix, asVector, checkNFeatures, captureFeatureNames, ValidationError } from './util/checks.js';
 import { mulberry32 } from './util/random.js';
 import { learnRegistry } from './serialize.js';
 
@@ -54,7 +54,8 @@ export class DecisionTreeClassifier extends BaseEstimator {
   }
 
   fit(X, y, _opts) {
-    const { data: Xd, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data: Xd, shape } = X_info;
     const yv = asVector(y);
     if (yv.length !== shape[0]) {
       throw new ValidationError(
@@ -69,6 +70,7 @@ export class DecisionTreeClassifier extends BaseEstimator {
     this.classes_ = classes;
     this.n_classes_ = classes.length;
     this.n_features_in_ = shape[1];
+    captureFeatureNames(this, X_info);
 
     const tree = _buildTree(Xd, encoded, shape[0], shape[1], this.n_classes_, {
       mode: 'classifier',
@@ -147,7 +149,8 @@ export class DecisionTreeRegressor extends BaseEstimator {
   }
 
   fit(X, y, _opts) {
-    const { data: Xd, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data: Xd, shape } = X_info;
     const yv = asVector(y);
     if (yv.length !== shape[0]) {
       throw new ValidationError(
@@ -158,6 +161,7 @@ export class DecisionTreeRegressor extends BaseEstimator {
         `DecisionTreeRegressor: criterion='${this.criterion}' not supported in v0.1 (use 'squared_error')`);
     }
     this.n_features_in_ = shape[1];
+    captureFeatureNames(this, X_info);
 
     const tree = _buildTree(Xd, yv, shape[0], shape[1], 1, {
       mode: 'regressor',

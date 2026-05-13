@@ -26,7 +26,7 @@
 // on order statistics) lands in v0.2 with BDLImputer.
 
 import { BaseEstimator, TransformerMixin } from './base.js';
-import { asMatrix, checkNFeatures, ValidationError } from './util/checks.js';
+import { asMatrix, checkNFeatures, captureFeatureNames, ValidationError } from './util/checks.js';
 import { learnRegistry } from './serialize.js';
 
 const MODULE_ID_COMPOSITIONAL = '@gcu/learn.compositional';
@@ -44,11 +44,13 @@ export class CLR extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { shape } = asMatrix(X, { allow_nan: false });
+    const X_info = asMatrix(X, { allow_nan: false });
+    const { shape } = X_info;
     this.n_features_in_ = shape[1];
     this.n_features_out_ = shape[1];
     this.detection_limit_ = _resolveDetectionLimit(
       this.detection_limit, shape[1]);
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -119,7 +121,8 @@ export class ILR extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { shape } = asMatrix(X, { allow_nan: false });
+    const X_info = asMatrix(X, { allow_nan: false });
+    const { shape } = X_info;
     if (shape[1] < 2) {
       throw new ValidationError(
         `ILR.fit: needs at least 2 features (got ${shape[1]})`);
@@ -130,6 +133,7 @@ export class ILR extends BaseEstimator {
       this.detection_limit, shape[1]);
     // Precompute Helmert basis V of shape (D-1) × D.
     this.helmert_ = _helmertBasis(shape[1]);
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -223,7 +227,8 @@ export class ALR extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { shape } = asMatrix(X, { allow_nan: false });
+    const X_info = asMatrix(X, { allow_nan: false });
+    const { shape } = X_info;
     if (shape[1] < 2) {
       throw new ValidationError(
         `ALR.fit: needs at least 2 features (got ${shape[1]})`);
@@ -239,6 +244,7 @@ export class ALR extends BaseEstimator {
     this.denominator_ = d;
     this.detection_limit_ = _resolveDetectionLimit(
       this.detection_limit, shape[1]);
+    captureFeatureNames(this, X_info);
     return this;
   }
 

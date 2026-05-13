@@ -10,7 +10,7 @@
 // default since 0.20.
 
 import { BaseEstimator, TransformerMixin } from './base.js';
-import { asMatrix, checkNFeatures, ValidationError } from './util/checks.js';
+import { asMatrix, checkNFeatures, captureFeatureNames, ValidationError } from './util/checks.js';
 import { mulberry32 } from './util/random.js';
 import { learnRegistry } from './serialize.js';
 // Import @gcu/line for SVD. Cross-package relative path; build.js
@@ -57,7 +57,8 @@ export class PCA extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (n < 2) {
       throw new ValidationError(
@@ -138,6 +139,7 @@ export class PCA extends BaseEstimator {
     this.n_components_ = k_use;
     this.n_features_in_ = m;
     this.n_samples_ = n;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -256,7 +258,8 @@ export class TruncatedSVD extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (n < 2) throw new ValidationError('TruncatedSVD: n_samples must be >= 2');
     const k_max = Math.min(n, m);
@@ -305,6 +308,7 @@ export class TruncatedSVD extends BaseEstimator {
     this.n_components_ = k_use;
     this.n_features_in_ = m;
     this.n_samples_ = n;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -406,7 +410,8 @@ export class NMF extends BaseEstimator {
   }
 
   fit_transform(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     // Validate non-negativity at the boundary.
     for (let i = 0; i < data.length; i++) {
@@ -460,6 +465,7 @@ export class NMF extends BaseEstimator {
     this.n_iter_ = iter;
     this.reconstruction_err_ = err;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     W.shape = [n, k];
     return W;
   }

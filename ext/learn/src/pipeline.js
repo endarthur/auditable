@@ -19,7 +19,8 @@ import { BaseEstimator } from './base.js';
 // build, so we use the unrenamed names. They resolve to serialize.js's
 // dump/load in both ESM dev and the bundled build.
 import { dump, load, learnRegistry } from './serialize.js';
-import { asMatrix, ValidationError } from './util/checks.js';
+import { asMatrix, ValidationError,
+         detectTable, tableColumns, tableNumRows, tableColumn } from './util/checks.js';
 
 const MODULE_ID_PIPELINE = '@gcu/learn.pipeline';
 const MODULE_ID_COMPOSE = '@gcu/learn.compose';
@@ -130,6 +131,21 @@ export class Pipeline extends BaseEstimator {
     last.fit(Xt, y, opts);
     // Mark fitted with at least one trailing-underscore attr.
     this.n_features_in_ = _firstFeatureCount(X);
+    // Inherit feature_names_in_ from the raw X first (covers Tables /
+    // DataFrames / plain named-column objects). Fall back to the first
+    // step's feature_names_in_ if the first step captured them but X
+    // itself didn't carry names directly. sklearn convention:
+    // pipeline-level feature_names_in_ mirrors the input column names,
+    // not the post-transform ones.
+    const x_names = _firstFeatureNames(X);
+    if (x_names) {
+      this.feature_names_in_ = x_names;
+    } else {
+      const first = this.steps[0][1];
+      if (first?.feature_names_in_) {
+        this.feature_names_in_ = first.feature_names_in_.slice();
+      }
+    }
     return this;
   }
 
@@ -248,10 +264,13 @@ export class Pipeline extends BaseEstimator {
       module: this._module,
       params: { steps: stepsEncoded },
     };
-    // Pipeline's own fitted state is just n_features_in_; everything
-    // load-bearing lives in the encoded children.
+    // Pipeline's own fitted state is n_features_in_ + feature_names_in_;
+    // everything else load-bearing lives in the encoded children.
     if (this.n_features_in_ !== undefined) {
       out.fitted = { n_features_in_: this.n_features_in_ };
+      if (this.feature_names_in_) {
+        out.fitted.feature_names_in_ = this.feature_names_in_.slice();
+      }
     } else {
       out.fitted = null;
     }
@@ -272,6 +291,9 @@ export class Pipeline extends BaseEstimator {
     const pipe = new Pipeline({ steps });
     if (json.fitted?.n_features_in_ !== undefined) {
       pipe.n_features_in_ = json.fitted.n_features_in_;
+    }
+    if (json.fitted?.feature_names_in_) {
+      pipe.feature_names_in_ = json.fitted.feature_names_in_.slice();
     }
     return pipe;
   }
@@ -338,7 +360,21 @@ function _firstFeatureCount(X) {
   if (Array.isArray(X.shape) && X.shape.length === 2) return X.shape[1];
   if (X.data instanceof Float64Array && Array.isArray(X.shape)) return X.shape[1];
   if (Array.isArray(X) && X.length > 0 && Array.isArray(X[0])) return X[0].length;
+  // sadpan Table / DataFrame / plain named-column object.
+  const kind = detectTable(X);
+  if (kind) return tableColumns(X, kind).length;
   return undefined;
+}
+
+// Same trio for "first column names" — used by Pipeline to inherit
+// feature_names_in_ from the input when the first step doesn't set it.
+function _firstFeatureNames(X) {
+  if (X == null) return null;
+  if (X.feature_names) return X.feature_names.slice();
+  if (X instanceof Float64Array && X.feature_names) return X.feature_names.slice();
+  const kind = detectTable(X);
+  if (kind) return tableColumns(X, kind).slice();
+  return null;
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -390,6 +426,8 @@ export class ColumnTransformer extends BaseEstimator {
     _validateColumnTransformers(this.transformers);
     const shape = _shapeOf(X);
     this.n_features_in_ = shape[1];
+    const x_names = _firstFeatureNames(X);
+    if (x_names) this.feature_names_in_ = x_names;
     const used = new Set();
     for (const [name, t, cols] of this.transformers) {
       _validateCols(cols, shape[1], name);
@@ -425,6 +463,8 @@ export class ColumnTransformer extends BaseEstimator {
     _validateColumnTransformers(this.transformers);
     const shape = _shapeOf(X);
     this.n_features_in_ = shape[1];
+    const x_names = _firstFeatureNames(X);
+    if (x_names) this.feature_names_in_ = x_names;
     const used = new Set();
     const blocks = [];
     for (const [name, t, cols] of this.transformers) {
@@ -480,6 +520,9 @@ export class ColumnTransformer extends BaseEstimator {
         n_features_in_: this.n_features_in_,
         _remainder_cols_: this._remainder_cols_ ?? null,
       };
+      if (this.feature_names_in_) {
+        out.fitted.feature_names_in_ = this.feature_names_in_.slice();
+      }
     } else {
       out.fitted = null;
     }
@@ -497,6 +540,9 @@ export class ColumnTransformer extends BaseEstimator {
     if (json.fitted?.n_features_in_ !== undefined) {
       ct.n_features_in_ = json.fitted.n_features_in_;
       if (json.fitted._remainder_cols_) ct._remainder_cols_ = json.fitted._remainder_cols_;
+    }
+    if (json.fitted?.feature_names_in_) {
+      ct.feature_names_in_ = json.fitted.feature_names_in_.slice();
     }
     return ct;
   }
@@ -579,8 +625,11 @@ function _shapeOf(X) {
   if (Array.isArray(X) && X.length > 0 && Array.isArray(X[0])) {
     return [X.length, X[0].length];
   }
+  // sadpan Table / DataFrame / plain named-column object.
+  const kind = detectTable(X);
+  if (kind) return [tableNumRows(X, kind), tableColumns(X, kind).length];
   throw new ValidationError(
-    `ColumnTransformer: X must be a 2D nested array or Float64Array with .shape`);
+    `ColumnTransformer: X must be a 2D nested array, Float64Array with .shape, or a sadpan Table/DataFrame`);
 }
 
 // Slice columns. Preserves arbitrary value types when X is a 2D nested
@@ -598,6 +647,18 @@ function _gatherCols(X, shape, cols) {
     }
     return out;
   }
+  // Sadpan tables: extract by column-name, preserving raw types.
+  const kind = detectTable(X);
+  if (kind) {
+    const names = tableColumns(X, kind);
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) out[i] = new Array(k);
+    for (let c = 0; c < k; c++) {
+      const col = tableColumn(X, kind, names[cols[c]]);
+      for (let i = 0; i < n; i++) out[i][c] = col[i];
+    }
+    return out;
+  }
   return _gatherColsNumeric(X, shape, cols);
 }
 
@@ -611,6 +672,13 @@ function _gatherColsNumeric(X, shape, cols) {
   if (Array.isArray(X) && Array.isArray(X[0])) {
     for (let i = 0; i < n; i++) {
       for (let c = 0; c < k; c++) out[i * k + c] = +X[i][cols[c]];
+    }
+  } else if (detectTable(X)) {
+    const kind = detectTable(X);
+    const names = tableColumns(X, kind);
+    for (let c = 0; c < k; c++) {
+      const col = tableColumn(X, kind, names[cols[c]]);
+      for (let i = 0; i < n; i++) out[i * k + c] = +col[i];
     }
   } else {
     const data = X.data ?? X;

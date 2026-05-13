@@ -11,7 +11,8 @@
 // spatial. New splitters land by implementing the same shape.
 
 import { clone } from './base.js';
-import { asMatrix, asVector, ValidationError } from './util/checks.js';
+import { asMatrix, asVector, ValidationError,
+         detectTable, tableColumns, tableNumRows, tableColumn } from './util/checks.js';
 import { mulberry32 } from './util/random.js';
 
 // ────────────────────────────────────────────────────────────────────
@@ -650,4 +651,141 @@ function _now() {
   return typeof performance !== 'undefined' && performance.now
     ? performance.now() / 1000  // sklearn returns seconds
     : Date.now() / 1000;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// from_table — extract sklearn-shape inputs from a sadpan/DataFrame-like
+// ────────────────────────────────────────────────────────────────────
+
+/**
+ * Build (X, y, groups, xyz) tuples from a table-shaped input. Per
+ * SPEC-learn §3.5.
+ *
+ * @param {object} df  — sadpan Table, sadpan DataFrame, or plain
+ *                       JS object with named array-like columns
+ * @param {object} opts
+ * @param {string|null}    [opts.target]   — column name for y
+ * @param {string[]|null}  [opts.features] — column names for X (default:
+ *                       all columns except target/group/xyz)
+ * @param {string|null}    [opts.group]    — column name for groups
+ * @param {string[]|null}  [opts.xyz]      — column names for spatial coords
+ *
+ * @returns {object}
+ *   X            { data, shape, feature_names } — same shape asMatrix returns
+ *   y            Float64Array (or null) — int-encoded when target was string-typed
+ *   groups       Array of raw group values (or null)
+ *   xyz          { data, shape } 2D — or null
+ *   feature_names string[] — actual feature column names
+ *   classes      string[] — original class labels in encoded order, when
+ *                target was string-typed; null otherwise
+ */
+export function from_table(df, opts = {}) {
+  const kind = detectTable(df);
+  if (kind == null) {
+    throw new ValidationError(
+      'from_table: input is not a sadpan Table, DataFrame, or named-column object');
+  }
+  const all_cols = tableColumns(df, kind);
+  const n = tableNumRows(df, kind);
+  const target = opts.target ?? null;
+  const group = opts.group ?? null;
+  const xyz_cols = opts.xyz ?? null;
+
+  // Default features: all columns except target / group / xyz.
+  let features = opts.features ?? null;
+  if (features == null) {
+    const exclude = new Set();
+    if (target) exclude.add(target);
+    if (group) exclude.add(group);
+    if (Array.isArray(xyz_cols)) for (const c of xyz_cols) exclude.add(c);
+    features = all_cols.filter(c => !exclude.has(c));
+  }
+  for (const c of features) {
+    if (!all_cols.includes(c)) {
+      throw new ValidationError(`from_table: feature '${c}' not in input columns`);
+    }
+  }
+
+  // Build X by stacking feature columns numerically.
+  const X_data = new Float64Array(n * features.length);
+  for (let j = 0; j < features.length; j++) {
+    const col = tableColumn(df, kind, features[j]);
+    for (let i = 0; i < n; i++) {
+      const v = +col[i];
+      if (!Number.isFinite(v)) {
+        throw new ValidationError(
+          `from_table: non-finite value in feature '${features[j]}' at row ${i}`);
+      }
+      X_data[i * features.length + j] = v;
+    }
+  }
+  X_data.shape = [n, features.length];
+  const X = { data: X_data, shape: [n, features.length], feature_names: features.slice() };
+
+  // y: extract target, auto-encode if string-typed.
+  let y = null;
+  let classes = null;
+  if (target != null) {
+    if (!all_cols.includes(target)) {
+      throw new ValidationError(`from_table: target '${target}' not in input columns`);
+    }
+    const raw = tableColumn(df, kind, target);
+    const isString = raw.length > 0 && typeof raw[0] === 'string';
+    if (isString) {
+      const seen = new Map();
+      const order = [];
+      for (let i = 0; i < n; i++) {
+        const v = raw[i];
+        if (!seen.has(v)) { seen.set(v, true); order.push(v); }
+      }
+      order.sort();
+      const idx = new Map();
+      for (let c = 0; c < order.length; c++) idx.set(order[c], c);
+      const enc = new Float64Array(n);
+      for (let i = 0; i < n; i++) enc[i] = idx.get(raw[i]);
+      y = enc;
+      classes = order;
+    } else {
+      const out = new Float64Array(n);
+      for (let i = 0; i < n; i++) out[i] = +raw[i];
+      y = out;
+    }
+  }
+
+  // groups: raw values (splitter compares with === / Map keys).
+  let groups = null;
+  if (group != null) {
+    if (!all_cols.includes(group)) {
+      throw new ValidationError(`from_table: group '${group}' not in input columns`);
+    }
+    const raw = tableColumn(df, kind, group);
+    groups = Array.from(raw);
+  }
+
+  // xyz: stack 1-3 columns.
+  let xyz = null;
+  if (Array.isArray(xyz_cols)) {
+    if (xyz_cols.length < 1 || xyz_cols.length > 3) {
+      throw new ValidationError(
+        `from_table: xyz must list 1-3 columns; got ${xyz_cols.length}`);
+    }
+    for (const c of xyz_cols) {
+      if (!all_cols.includes(c)) {
+        throw new ValidationError(`from_table: xyz column '${c}' not in input columns`);
+      }
+    }
+    const xyz_data = new Float64Array(n * xyz_cols.length);
+    for (let j = 0; j < xyz_cols.length; j++) {
+      const col = tableColumn(df, kind, xyz_cols[j]);
+      for (let i = 0; i < n; i++) xyz_data[i * xyz_cols.length + j] = +col[i];
+    }
+    xyz_data.shape = [n, xyz_cols.length];
+    xyz = { data: xyz_data, shape: [n, xyz_cols.length] };
+  }
+
+  return {
+    X, y, groups, xyz,
+    feature_names: features.slice(),
+    classes,
+  };
 }

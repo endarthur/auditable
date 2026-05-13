@@ -16,7 +16,7 @@
 
 import { BaseEstimator, ClassifierMixin, RegressorMixin } from './base.js';
 import { dump, load, learnRegistry } from './serialize.js';
-import { asMatrix, asVector, checkNFeatures, ValidationError } from './util/checks.js';
+import { asMatrix, asVector, checkNFeatures, captureFeatureNames, ValidationError } from './util/checks.js';
 import { mulberry32 } from './util/random.js';
 import { DecisionTreeClassifier, DecisionTreeRegressor } from './tree.js';
 
@@ -95,7 +95,8 @@ function _unionClasses(estimators) {
 // ────────────────────────────────────────────────────────────────────
 
 function _fitForest(est, X, y, opts) {
-  const { data: Xd, shape } = asMatrix(X);
+  const X_info = asMatrix(X);
+  const { data: Xd, shape } = X_info;
   const yv = y == null ? null : asVector(y);
   const [n, m] = shape;
   if (yv != null && yv.length !== n) {
@@ -128,6 +129,7 @@ function _fitForest(est, X, y, opts) {
   }
   est.estimators_ = estimators;
   est.n_features_in_ = m;
+  captureFeatureNames(est, X_info);
   if (opts.classifier) {
     est.classes_ = _unionClasses(estimators);
     est.n_classes_ = est.classes_.length;
@@ -670,7 +672,8 @@ export class GradientBoostingRegressor extends BaseEstimator {
       throw new ValidationError(
         `GradientBoostingRegressor: loss='${this.loss}' not supported in v0.2 (use 'squared_error')`);
     }
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const yv = asVector(y);
     const [n, m] = shape;
     if (yv.length !== n) {
@@ -722,6 +725,7 @@ export class GradientBoostingRegressor extends BaseEstimator {
     this.init_value_ = init_value;
     this.train_score_ = train_score;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -799,7 +803,8 @@ export class GradientBoostingClassifier extends BaseEstimator {
       throw new ValidationError(
         `GradientBoostingClassifier: loss='${this.loss}' not supported in v0.2 (use 'log_loss')`);
     }
-    const { shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { shape } = X_info;
     const yv = asVector(y);
     const [n, m] = shape;
     if (yv.length !== n) {
@@ -874,6 +879,7 @@ export class GradientBoostingClassifier extends BaseEstimator {
     this.n_classes_ = K;
     this.init_value_ = init_value;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 

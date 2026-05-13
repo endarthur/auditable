@@ -12,7 +12,7 @@
 // which avoids ever forming Σ⁻¹ explicitly and gives cheap log-density.
 
 import { BaseEstimator, ClusterMixin } from './base.js';
-import { asMatrix, checkNFeatures, ValidationError } from './util/checks.js';
+import { asMatrix, checkNFeatures, captureFeatureNames, ValidationError } from './util/checks.js';
 import { mulberry32 } from './util/random.js';
 import { learnRegistry } from './serialize.js';
 // Cross-package: line.cholesky for the precision factor.
@@ -39,7 +39,8 @@ export class GaussianMixture extends BaseEstimator {
   }
 
   fit(X, _y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const [n, m] = shape;
     if (this.covariance_type !== 'full') {
       throw new ValidationError(
@@ -69,6 +70,7 @@ export class GaussianMixture extends BaseEstimator {
     this.n_iter_ = best.n_iter;
     this.lower_bound_ = best.lower_bound;
     this.n_features_in_ = m;
+    captureFeatureNames(this, X_info);
     return this;
   }
 

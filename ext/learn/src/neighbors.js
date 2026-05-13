@@ -11,7 +11,7 @@
 
 import { BaseEstimator, ClassifierMixin, RegressorMixin } from './base.js';
 import { dump, load, learnRegistry } from './serialize.js';
-import { asMatrix, asVector, checkNFeatures, ValidationError } from './util/checks.js';
+import { asMatrix, asVector, checkNFeatures, captureFeatureNames, ValidationError } from './util/checks.js';
 // Cross-package: scitra's KDTree.
 import { KDTree } from '../../scitra/index.js';
 
@@ -44,7 +44,8 @@ export class KNeighborsClassifier extends BaseEstimator {
   }
 
   fit(X, y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const yv = asVector(y);
     const [n, m] = shape;
     if (yv.length !== n) {
@@ -57,6 +58,7 @@ export class KNeighborsClassifier extends BaseEstimator {
     this.classes_ = classes;
     this.n_features_in_ = m;
     this._kdtree = _buildKDTree(this.fit_X_, n, m);
+    captureFeatureNames(this, X_info);
     return this;
   }
 
@@ -133,7 +135,8 @@ export class KNeighborsRegressor extends BaseEstimator {
   }
 
   fit(X, y, _opts) {
-    const { data, shape } = asMatrix(X);
+    const X_info = asMatrix(X);
+    const { data, shape } = X_info;
     const yv = asVector(y);
     const [n, m] = shape;
     if (yv.length !== n) {
@@ -144,6 +147,7 @@ export class KNeighborsRegressor extends BaseEstimator {
     this.fit_y_ = new Float64Array(yv);
     this.n_features_in_ = m;
     this._kdtree = _buildKDTree(this.fit_X_, n, m);
+    captureFeatureNames(this, X_info);
     return this;
   }
 

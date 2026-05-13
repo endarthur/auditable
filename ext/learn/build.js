@@ -154,7 +154,7 @@ const pipeline = { Pipeline, make_pipeline };
 const compose = { ColumnTransformer, make_column_transformer };
 const model_selection = {
   train_test_split, KFold, StratifiedKFold, GroupKFold, SpatialKFold,
-  cross_val_score, cross_validate,
+  cross_val_score, cross_validate, from_table,
 };
 const metrics = {
   accuracy_score, balanced_accuracy_score,
@@ -211,7 +211,7 @@ export {
   explained_variance_score,
   // model_selection
   train_test_split, KFold, StratifiedKFold, GroupKFold, SpatialKFold,
-  cross_val_score, cross_validate,
+  cross_val_score, cross_validate, from_table,
   // preprocessing
   StandardScaler, MinMaxScaler, MaxAbsScaler, RobustScaler,
   LabelEncoder, OrdinalEncoder, OneHotEncoder,
