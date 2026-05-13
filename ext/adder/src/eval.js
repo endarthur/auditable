@@ -1404,7 +1404,25 @@ async function _evalCompIter(node, scope, result, kind, genIdx) {
 
 export function _resolveModule(name) {
   if (adderModules[name]) return adderModules[name];
-  if (typeof window !== 'undefined' && window._auditableExtensions?.[name]) return window._auditableExtensions[name];
+  if (typeof window !== 'undefined') {
+    if (window._auditableExtensions?.[name]) return window._auditableExtensions[name];
+    // Walk dotted path through namespace objects so `from learn.tree
+    // import X` resolves via `_auditableExtensions['learn'].tree`. Lets
+    // extensions following the sklearn-shaped namespace-object pattern
+    // (learn, scitra, sadpan, …) expose submodules without registering
+    // each one separately.
+    const dot = name.indexOf('.');
+    if (dot !== -1) {
+      const root = name.slice(0, dot);
+      const rest = name.slice(dot + 1).split('.');
+      let mod = window._auditableExtensions?.[root];
+      for (const part of rest) {
+        if (mod == null || typeof mod !== 'object') return null;
+        mod = mod[part];
+      }
+      if (mod && typeof mod === 'object') return mod;
+    }
+  }
   return null;
 }
 
