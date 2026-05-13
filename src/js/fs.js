@@ -7,6 +7,7 @@
 // window.auditable.hooks wrapper isn't ready at module-eval time since
 // globals.js loads after this module).
 import * as hooks from './hooks.js';
+import { prompt as dialogPrompt } from '#dialog';
 
 // ── MIME / TYPE HELPERS ──
 
@@ -921,7 +922,7 @@ function contextFile(event, absPath, dirPath) {
   if (writable && !isMountRoot) {
     items.push({ label: 'rename', action: async () => {
       const name = absPath.split('/').pop();
-      const newName = prompt('new name:', name);
+      const newName = await dialogPrompt('new name:', { defaultValue: name });
       if (!newName || newName === name) return;
       const newPath = dirPath === '/' ? '/' + newName : dirPath + '/' + newName;
       if (isNb && newPath.startsWith(NB_PREFIX)) {
@@ -976,7 +977,7 @@ function contextDir(event, absPath, isMountPoint) {
   if (writable && !isMountPoint) {
     items.push({ label: 'rename folder', action: async () => {
       const name = absPath.split('/').pop();
-      const newName = prompt('new folder name:', name);
+      const newName = await dialogPrompt('new folder name:', { defaultValue: name });
       if (!newName || newName === name) return;
       const parent = absPath.slice(0, absPath.lastIndexOf('/')) || '/';
       const newPath = parent === '/' ? '/' + newName : parent + '/' + newName;
@@ -1015,7 +1016,7 @@ if (typeof window !== 'undefined') {
       { label: 'copy read command', action: () => copyText(`await notebook.fs.read("${path}")`) },
       { label: 'copy path', action: () => copyText(path) },
       { label: 'rename', action: async () => {
-        const newPath = prompt('new path:', path);
+        const newPath = await dialogPrompt('new path:', { defaultValue: path });
         if (newPath && newPath !== path) { await rename(path, newPath); refreshFsPanel(); }
       }},
       { label: 'download', action: () => export_(path) },
@@ -1029,7 +1030,7 @@ if (typeof window !== 'undefined') {
       { label: 'download as zip', action: () => export_(prefix) },
       { label: 'import into folder', action: () => import_({ prefix: prefix + '/' }).then(() => refreshFsPanel()).catch(() => {}) },
       { label: 'rename folder', action: async () => {
-        const newPrefix = prompt('new folder name:', prefix);
+        const newPrefix = await dialogPrompt('new folder name:', { defaultValue: prefix });
         if (newPrefix && newPrefix !== prefix) { await rename(prefix, newPrefix); refreshFsPanel(); }
       }},
       { label: 'delete folder', action: async () => { await delete_(prefix, { recursive: true }); refreshFsPanel(); } },

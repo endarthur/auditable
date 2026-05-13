@@ -49,10 +49,14 @@ describe('auditable.html build output', () => {
     }
   });
 
-  it('has export dialog HTML', () => {
-    assert.ok(html.includes('id="exportOverlay"'));
-    assert.ok(html.includes('id="exportTitle"'));
-    assert.ok(html.includes('id="exportBaseStyles"'));
+  it('has export dialog wired through @gcu/dialog', () => {
+    // Post-migration: the export form is built dynamically by showExportDialog()
+    // via @gcu/dialog rather than living as static markup. Verify the entry
+    // point is present and the dialog library is bundled.
+    assert.ok(html.includes('showExportDialog'),
+      'showExportDialog entry point should be in the bundle');
+    assert.ok(html.includes('"dialog"') || html.includes("'dialog'"),
+      'the @gcu/dialog module should be in the registry');
   });
 
   it('has export app button in save tray', () => {

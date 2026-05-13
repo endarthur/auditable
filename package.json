@@ -8,6 +8,10 @@
   "bin": {
     "atrac": "./ext/atra/atrac.js"
   },
+  "imports": {
+    "#dialog": "./ext/dialog/index.js",
+    "#menu": "./ext/menu/index.js"
+  },
   "scripts": {
     "build": "node build.js",
     "build:works": "node build.js && node build.js --target=works",

@@ -10,6 +10,7 @@ import { toggleMdComment, autoResize, cssSummary } from './cell-dom.js';
 import { openFind, closeFind } from './find.js';
 import { getEditor, setCm6Callbacks } from './cm6.js';
 import { toggleSplitView } from './split.js';
+import { confirm as dialogConfirm } from '#dialog';
 
 // ── KEYBOARD / SELECTION ──
 
@@ -268,8 +269,8 @@ export function expandAll() {
   setMsg('expanded all', 'ok');
 }
 
-export function newNotebook() {
-  if (!confirm('Clear all cells?')) return;
+export async function newNotebook() {
+  if (!await dialogConfirm('Clear all cells?', { okLabel: 'clear', danger: true })) return;
   while (S.cells.length) {
     const cell = S.cells[0];
     if (cell._styleEl) { cell._styleEl.remove(); cell._styleEl = null; }
