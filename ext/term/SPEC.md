@@ -166,6 +166,42 @@ of the chain or the in-progress CSI handler that triggered the send.
 Hosts that need stricter error propagation should wrap their listener
 body in their own error-handling logic.
 
+### `term.onText(callback)`
+
+Convenience subscription: same semantics as `onData`, but the callback
+receives an already-decoded `string` instead of a `Uint8Array`. Most
+consumers want the string form. Internally this uses a single shared
+`TextDecoder` (one decoder per Terminal, not one per fanout). Returns
+an unsubscribe function.
+
+### `term.onBell(callback)`
+
+Subscribe to BEL (`0x07`). The callback receives no arguments — fire is
+the signal. Hosts decide what to do (sound, screen flash, status badge,
+ignore). Returns an unsubscribe function.
+
+### `term.onTitleChange(callback)`
+
+Subscribe to OSC 0/1/2 window-title changes. The callback receives the
+new title `string`. The library does **not** mutate `document.title` on
+its own — mirroring to the document title is an opt-in side effect the
+host configures explicitly:
+
+```js
+term.onTitleChange(t => document.title = `MyApp — ${t}`);
+```
+
+Returns an unsubscribe function.
+
+### Lifecycle: `term.dispose()`
+
+Detach all listeners (data / bell / title), drop both cell buffers, and
+mark the terminal inert. Subsequent `write()` and `_send()` are no-ops.
+Idempotent. Hosts call this when the terminal is no longer needed (cell
+re-run, tab close) so the cell buffers and listener closures can be
+collected. Use alongside `Input.dispose()` and `DomRenderer.dispose()`
+— the three layers each own their own resources.
+
 ### Symmetry
 
 This is the same contract on both sides. A host program writes bytes to
@@ -721,6 +757,13 @@ next `render()` call. The previous palette / defaults are dropped.
 - It does not implement selection; the browser does.
 - It does not blink the cursor on its own; an external tick must call it.
 
+### Lifecycle: `renderer.dispose()`
+
+Removes every DOM node the renderer created (rows + cursor overlay) and
+drops the references. Idempotent. Hosts call this when the host element
+is being torn down so the renderer's row arrays can be collected. Use
+alongside `Input.dispose()` and `Terminal.dispose()`.
+
 ---
 
 ## 11. Input handler
@@ -1271,8 +1314,8 @@ may drop frames; this is where a canvas + glyph atlas backend would win.
 ```js
 // Classes
 export class Parser
-export class Terminal
-export class DomRenderer    // constructor accepts { theme }; setTheme() to swap
+export class Terminal       // onData / onText / onBell / onTitleChange / dispose
+export class DomRenderer    // constructor accepts { theme }; setTheme(), dispose()
 export class Input          // dispose() to detach all listeners
 
 // Color tables

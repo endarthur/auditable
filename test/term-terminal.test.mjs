@@ -1,0 +1,331 @@
+// @gcu/term Terminal state-model tests.
+//
+// Drives the Terminal via write() with realistic byte sequences and
+// inspects the cell buffer / cursor / mode state. Focus is on the
+// observable contract: what does buffer[y][x] hold after a given input?
+//
+// These tests run pure-Node — no DOM. The DomRenderer + Input layers
+// are exercised via the demo page, not here.
+
+import { test, describe } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  Terminal, FLAG_BOLD, FLAG_ITALIC, FLAG_UNDER, FLAG_REVERSE,
+  DEFAULT_FG, DEFAULT_BG,
+} from '../ext/term/src/index.js';
+
+function ch(cell) { return String.fromCodePoint(cell.ch); }
+function rowText(t, y) {
+  const row = t._curBuf()[y];
+  let s = '';
+  for (const c of row) s += ch(c);
+  return s.replace(/ +$/, '');
+}
+
+// ────────────────────────────────────────────────────────────────────
+// printing + cursor advancement
+// ────────────────────────────────────────────────────────────────────
+
+describe('Terminal print / cursor', () => {
+  test('prints text starting at top-left', () => {
+    const t = new Terminal(20, 5);
+    t.write('hello');
+    assert.equal(rowText(t, 0), 'hello');
+    assert.deepEqual(t.cursor, { x: 5, y: 0 });
+  });
+
+  test('CR returns cursor to column 0', () => {
+    const t = new Terminal(20, 5);
+    t.write('hello\rworld');
+    assert.equal(rowText(t, 0), 'world');
+    assert.equal(t.cursor.x, 5);
+  });
+
+  test('CRLF advances row, scrolling at bottom', () => {
+    // LF alone advances the row but does NOT return to column 0 — that
+    // matches real terminal behavior. Tests use CR+LF (the universal
+    // newline) so the cursor lands at column 0 of the next row.
+    const t = new Terminal(20, 3);
+    t.write('a\r\nb\r\nc');
+    assert.equal(rowText(t, 0), 'a');
+    assert.equal(rowText(t, 1), 'b');
+    assert.equal(rowText(t, 2), 'c');
+
+    // Now scroll
+    t.write('\r\nd');
+    assert.equal(rowText(t, 0), 'b');
+    assert.equal(rowText(t, 1), 'c');
+    assert.equal(rowText(t, 2), 'd');
+  });
+
+  test('DECAWM phantom column: cursor stays at last col after print', () => {
+    const t = new Terminal(5, 3);
+    t.write('abcde');
+    assert.equal(rowText(t, 0), 'abcde');
+    assert.equal(t.cursor.x, 4);  // still at last col
+    assert.equal(t.pendingWrap, true);
+
+    // Next print wraps first
+    t.write('f');
+    assert.equal(rowText(t, 1), 'f');
+    assert.equal(t.cursor.y, 1);
+    assert.equal(t.cursor.x, 1);
+  });
+
+  test('cursor-movement CSI clears pending wrap', () => {
+    const t = new Terminal(5, 3);
+    t.write('abcde');
+    assert.equal(t.pendingWrap, true);
+    t.write('\x1b[A');  // CUU
+    assert.equal(t.pendingWrap, false);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// erase ops
+// ────────────────────────────────────────────────────────────────────
+
+describe('Terminal erase', () => {
+  test('ED 2 (erase all) clears the screen', () => {
+    const t = new Terminal(10, 3);
+    t.write('hello\nworld');
+    t.write('\x1b[2J');
+    assert.equal(rowText(t, 0), '');
+    assert.equal(rowText(t, 1), '');
+  });
+
+  test('EL 0 (erase to end of line) clears from cursor', () => {
+    const t = new Terminal(10, 3);
+    t.write('hello world');  // wraps
+    // cursor is somewhere after the wrap; move to start and erase to end
+    t.write('\x1b[H');  // home
+    t.write('\x1b[K');  // EL 0
+    assert.equal(rowText(t, 0), '');
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// SGR
+// ────────────────────────────────────────────────────────────────────
+
+describe('Terminal SGR', () => {
+  test('basic 16-color foreground', () => {
+    const t = new Terminal(10, 3);
+    t.write('\x1b[31mred\x1b[0m');
+    const cell = t.buffer[0][0];
+    assert.deepEqual(cell.fg, { t: 'p', i: 1 });
+    assert.equal(cell.flags, 0);
+    // After reset, cursor attrs are back to default
+    t.write('a');
+    assert.equal(t.buffer[0][3].fg, DEFAULT_FG);
+  });
+
+  test('bold + italic + underline accumulate', () => {
+    const t = new Terminal(10, 3);
+    t.write('\x1b[1;3;4mtext');
+    const cell = t.buffer[0][0];
+    assert.equal(cell.flags & FLAG_BOLD, FLAG_BOLD);
+    assert.equal(cell.flags & FLAG_ITALIC, FLAG_ITALIC);
+    assert.equal(cell.flags & FLAG_UNDER, FLAG_UNDER);
+  });
+
+  test('256-color foreground via 38;5;N', () => {
+    const t = new Terminal(10, 3);
+    t.write('\x1b[38;5;215mx');
+    assert.deepEqual(t.buffer[0][0].fg, { t: 'p', i: 215 });
+  });
+
+  test('truecolor foreground via 38;2;R;G;B', () => {
+    const t = new Terminal(10, 3);
+    t.write('\x1b[38;2;255;128;0mx');
+    assert.deepEqual(t.buffer[0][0].fg, { t: 'r', r: 255, g: 128, b: 0 });
+  });
+
+  test('CSI m (no params) resets', () => {
+    const t = new Terminal(10, 3);
+    t.write('\x1b[1;31mfoo\x1b[mbar');
+    assert.equal(t.buffer[0][3].flags, 0);
+    assert.equal(t.buffer[0][3].fg, DEFAULT_FG);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// alt-screen
+// ────────────────────────────────────────────────────────────────────
+
+describe('Terminal alt screen', () => {
+  test('DECSET 1049 enters alt screen, DECRST 1049 exits', () => {
+    const t = new Terminal(10, 3);
+    t.write('primary');
+    t.write('\x1b[?1049h');
+    assert.equal(t.usingAlt, true);
+    t.write('alt');
+    assert.equal(rowText(t, 0), 'alt');
+
+    t.write('\x1b[?1049l');
+    assert.equal(t.usingAlt, false);
+    assert.equal(rowText(t, 0), 'primary');
+  });
+
+  test('DECSET 1049 saves cursor on enter, DECRST 1049 restores', () => {
+    const t = new Terminal(10, 3);
+    t.write('hello');  // cursor at (5, 0)
+    t.write('\x1b[?1049h');  // save + alt
+    t.write('\x1b[5;5H');    // move cursor in alt
+    t.write('\x1b[?1049l');  // restore
+    assert.equal(t.cursor.x, 5);
+    assert.equal(t.cursor.y, 0);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// DEC private modes
+// ────────────────────────────────────────────────────────────────────
+
+describe('Terminal DEC private modes', () => {
+  test('DECSET 25 toggles cursor visibility', () => {
+    const t = new Terminal(10, 3);
+    assert.equal(t.modes.cursorVisible, true);
+    t.write('\x1b[?25l');
+    assert.equal(t.modes.cursorVisible, false);
+    t.write('\x1b[?25h');
+    assert.equal(t.modes.cursorVisible, true);
+  });
+
+  test('DECSET 1 toggles application cursor mode', () => {
+    const t = new Terminal(10, 3);
+    assert.equal(t.modes.appCursor, false);
+    t.write('\x1b[?1h');
+    assert.equal(t.modes.appCursor, true);
+  });
+
+  test('mouse tracking 1000 sets mouseProto = 1000', () => {
+    const t = new Terminal(10, 3);
+    t.write('\x1b[?1000h');
+    assert.equal(t.modes.mouseProto, 1000);
+    t.write('\x1b[?1000l');
+    assert.equal(t.modes.mouseProto, 0);
+  });
+
+  test('hard reset preserves integer typing on mouseProto', () => {
+    const t = new Terminal(10, 3);
+    t.write('\x1b[?1000h');
+    assert.equal(t.modes.mouseProto, 1000);
+    t.write('\x1bc');  // RIS
+    assert.equal(t.modes.mouseProto, 0);
+    assert.equal(typeof t.modes.mouseProto, 'number');
+    assert.equal(t.modes.wrap, true);            // default true survives reset
+    assert.equal(t.modes.cursorVisible, true);   // default true survives reset
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// onData / onText / onBell / onTitleChange
+// ────────────────────────────────────────────────────────────────────
+
+describe('Terminal listeners', () => {
+  test('onData receives Uint8Array bytes', () => {
+    const t = new Terminal(10, 3);
+    let bytes = null;
+    t.onData(b => { bytes = b; });
+    t._send('hi');
+    assert.ok(bytes instanceof Uint8Array);
+    assert.equal(bytes.length, 2);
+  });
+
+  test('onText receives the decoded string', () => {
+    const t = new Terminal(10, 3);
+    let text = null;
+    t.onText(s => { text = s; });
+    t._send('hello');
+    assert.equal(text, 'hello');
+  });
+
+  test('multiple listeners fire in subscription order', () => {
+    const t = new Terminal(10, 3);
+    const order = [];
+    t.onData(() => order.push('a'));
+    t.onData(() => order.push('b'));
+    t._send('x');
+    assert.deepEqual(order, ['a', 'b']);
+  });
+
+  test('listener exceptions are caught, not propagated', () => {
+    const t = new Terminal(10, 3);
+    let secondFired = false;
+    t.onData(() => { throw new Error('intentional'); });
+    t.onData(() => { secondFired = true; });
+    // Should not throw
+    t._send('x');
+    assert.ok(secondFired);
+  });
+
+  test('unsubscribe stops further fires', () => {
+    const t = new Terminal(10, 3);
+    let count = 0;
+    const off = t.onData(() => count++);
+    t._send('x');
+    off();
+    t._send('y');
+    assert.equal(count, 1);
+  });
+
+  test('onBell fires per BEL (0x07)', () => {
+    const t = new Terminal(10, 3);
+    let bells = 0;
+    t.onBell(() => bells++);
+    t.write('a\x07b\x07c\x07');
+    assert.equal(bells, 3);
+  });
+
+  test('onTitleChange receives title string from OSC 0/1/2', () => {
+    const t = new Terminal(10, 3);
+    const titles = [];
+    t.onTitleChange(s => titles.push(s));
+    t.write('\x1b]0;first\x07');
+    t.write('\x1b]2;second\x07');
+    assert.deepEqual(titles, ['first', 'second']);
+    assert.equal(t.title, 'second');
+  });
+
+  test('OSC does NOT mutate document.title (no implicit side effect)', () => {
+    const t = new Terminal(10, 3);
+    const before = (typeof document !== 'undefined') ? document.title : null;
+    t.write('\x1b]0;changed\x07');
+    if (typeof document !== 'undefined') {
+      assert.equal(document.title, before);
+    }
+    assert.equal(t.title, 'changed');
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────
+// dispose
+// ────────────────────────────────────────────────────────────────────
+
+describe('Terminal dispose', () => {
+  test('write after dispose is a no-op', () => {
+    const t = new Terminal(10, 3);
+    t.write('hello');
+    t.dispose();
+    // Buffer is dropped; further write must not throw
+    t.write('more');
+    assert.equal(t.buffer, null);
+  });
+
+  test('_send after dispose is a no-op (no listener fires)', () => {
+    const t = new Terminal(10, 3);
+    let count = 0;
+    t.onData(() => count++);
+    t.dispose();
+    t._send('x');
+    assert.equal(count, 0);
+  });
+
+  test('double dispose is safe', () => {
+    const t = new Terminal(10, 3);
+    t.dispose();
+    t.dispose();  // should not throw
+    assert.equal(t._disposed, true);
+  });
+});

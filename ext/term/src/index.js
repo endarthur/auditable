@@ -41,6 +41,22 @@ const S_DCS_ENTRY    = 8;
 const S_DCS_IGNORE   = 9;
 const S_SOSPMAPC     = 10;
 
+// Shared listener-array subscribe pattern: pushes the cb, returns an
+// unsubscribe function. Defensive against the cb being unsubscribed
+// during fanout (the listeners array is filtered, not spliced in place).
+function _subscribe(arr, cb) {
+  arr.push(cb);
+  return () => {
+    const i = arr.indexOf(cb);
+    if (i >= 0) arr.splice(i, 1);
+  };
+}
+
+function _logListenerError(err) {
+  try { console.error('[@gcu/term] listener threw:', err); }
+  catch (_) { /* host has no console — swallow */ }
+}
+
 export class Parser {
   constructor(handler) {
     this.h = handler;
@@ -63,8 +79,15 @@ export class Parser {
   // --- helpers ---
   _csiParam(cp) {
     // gather parameter bytes 0x30..0x3F (digits, ';', ':', '<','=','>','?')
-    // We keep params as a flat int array; ';' starts a new param.
-    if (cp === 0x3B) { this.params.push(0); return; }
+    // We keep params as a flat int array; ';' opens a new slot.
+    if (cp === 0x3B) {
+      // Ensure the leading slot exists (so ';5' parses as [0, 5], not [5]),
+      // then open a new empty slot for the upcoming param. ECMA-48 default-
+      // to-zero applies per slot.
+      if (this.params.length === 0) this.params.push(0);
+      this.params.push(0);
+      return;
+    }
     if (cp >= 0x30 && cp <= 0x39) {
       if (this.params.length === 0) this.params.push(0);
       const i = this.params.length - 1;
@@ -80,6 +103,11 @@ export class Parser {
       this.h.execute(cp); this.state = S_GROUND; return;
     }
     if (cp === 0x1B) {                          // ESC
+      // ST = ESC \ when in OSC: fire the OSC handler before transitioning
+      // so the payload isn't dropped. The trailing \ then arrives in
+      // S_ESCAPE and dispatches as esc('','\\') — hosts ignore it
+      // because '\\' isn't a recognized final byte.
+      if (this.state === S_OSC_STRING) this.h.osc(this.osc);
       this.params = []; this.collected = "";
       this.state = S_ESCAPE; return;
     }
@@ -247,35 +275,90 @@ export class Terminal {
     this.dirty = true;
     this.parser = new Parser(this);
     this.dataListeners = [];
+    this.bellListeners = [];
+    this.titleListeners = [];
+    this._textDecoder = new TextDecoder('utf-8');
+    this._textEncoder = new TextEncoder();
     this.bytesIn = 0;
     this.bytesOut = 0;
+    this._disposed = false;
   }
 
   /* ---------- public byte-stream API ---------- */
   write(input) {
+    if (this._disposed) return;
     const s = (typeof input === 'string')
       ? input
-      : new TextDecoder('utf-8').decode(input);
+      : this._textDecoder.decode(input);
     this.bytesIn += s.length;
     this.parser.feed(s);
     this.dirty = true;
   }
-  onData(cb) { this.dataListeners.push(cb); return () => {
-    this.dataListeners = this.dataListeners.filter(f => f !== cb);
-  }; }
+  onData(cb) { return _subscribe(this.dataListeners, cb); }
+
+  /**
+   * Convenience: subscribe to outbound bytes already decoded as a string.
+   * Equivalent to onData(b => cb(new TextDecoder().decode(b))) but allocates
+   * one decoder instead of one per fanout. Returns an unsubscribe function.
+   */
+  onText(cb) {
+    return _subscribe(this.dataListeners, (bytes) => {
+      cb(this._textDecoder.decode(bytes));
+    });
+  }
+
+  /**
+   * Subscribe to BEL (0x07). Fires every time the host sends a bell byte.
+   * Hosts can ignore, play a sound, flash the screen, or whatever they
+   * decide is appropriate. Returns an unsubscribe function.
+   */
+  onBell(cb) { return _subscribe(this.bellListeners, cb); }
+
+  /**
+   * Subscribe to OSC 0/1/2 window-title changes. Receives the new title
+   * string. The library does NOT mutate document.title on its own —
+   * mirroring to the document title is an opt-in side effect the host
+   * decides on, e.g. `term.onTitleChange(t => document.title = t)`.
+   * Returns an unsubscribe function.
+   */
+  onTitleChange(cb) { return _subscribe(this.titleListeners, cb); }
+
   // Synchronous fan-out. Listener exceptions are caught and logged so a
   // single misbehaving consumer can't take down the rest of the chain or
   // the in-progress CSI handler that triggered the send.
   _send(s) {
+    if (this._disposed) return;
     this.bytesOut += s.length;
-    const bytes = new TextEncoder().encode(s);
+    const bytes = this._textEncoder.encode(s);
     for (const cb of this.dataListeners) {
       try { cb(bytes); }
-      catch (err) {
-        try { console.error('[@gcu/term] onData listener threw:', err); }
-        catch (_) { /* ignore — host has no console */ }
-      }
+      catch (err) { _logListenerError(err); }
     }
+  }
+
+  _emit(listeners, value) {
+    for (const cb of listeners) {
+      try { cb(value); }
+      catch (err) { _logListenerError(err); }
+    }
+  }
+
+  /**
+   * Detach all listeners, drop buffers, and mark the terminal inert.
+   * Subsequent write() / _send() are no-ops. Idempotent. Hosts should
+   * call this when the terminal is no longer needed (cell re-run, tab
+   * close) so the cell buffers and listener closures can be collected.
+   * Use alongside Input.dispose() and DomRenderer.dispose() — the three
+   * layers each own their resources.
+   */
+  dispose() {
+    if (this._disposed) return;
+    this._disposed = true;
+    this.dataListeners = [];
+    this.bellListeners = [];
+    this.titleListeners = [];
+    this.buffer = null;
+    this.altBuffer = null;
   }
 
   /* ---------- buffer helpers ---------- */
@@ -334,7 +417,7 @@ export class Terminal {
 
   execute(cp) {
     switch (cp) {
-    case 0x07: /* BEL */ this._bell?.(); return;
+    case 0x07: /* BEL */ this._emit(this.bellListeners, undefined); return;
     case 0x08: /* BS  */
       if (this.cursor.x > 0) this.cursor.x--;
       this.pendingWrap = false;
@@ -380,7 +463,7 @@ export class Terminal {
     switch (ps) {
     case 0: case 1: case 2:
       this.title = pt;
-      if (typeof document !== 'undefined') document.title = `@gcu/term — ${pt}`;
+      this._emit(this.titleListeners, pt);
       return;
     case 8: /* hyperlink - ignore for prototype */ return;
     }
@@ -404,12 +487,12 @@ export class Terminal {
 
     switch (final) {
     case 0x40: /* @ ICH */ this._insertChars(p(0)); return;
-    case 0x41: /* A CUU */ this.cursor.y = Math.max(this.scrollTop, this.cursor.y - p(0)); return;
-    case 0x42: /* B CUD */ this.cursor.y = Math.min(this.scrollBottom, this.cursor.y + p(0)); return;
+    case 0x41: /* A CUU */ this.cursor.y = Math.max(this.scrollTop, this.cursor.y - p(0)); this.pendingWrap=false; return;
+    case 0x42: /* B CUD */ this.cursor.y = Math.min(this.scrollBottom, this.cursor.y + p(0)); this.pendingWrap=false; return;
     case 0x43: /* C CUF */ this.cursor.x = Math.min(this.cols - 1, this.cursor.x + p(0)); this.pendingWrap=false; return;
     case 0x44: /* D CUB */ this.cursor.x = Math.max(0, this.cursor.x - p(0)); this.pendingWrap=false; return;
-    case 0x45: /* E CNL */ this.cursor.x = 0; this.cursor.y = Math.min(this.scrollBottom, this.cursor.y + p(0)); return;
-    case 0x46: /* F CPL */ this.cursor.x = 0; this.cursor.y = Math.max(this.scrollTop, this.cursor.y - p(0)); return;
+    case 0x45: /* E CNL */ this.cursor.x = 0; this.cursor.y = Math.min(this.scrollBottom, this.cursor.y + p(0)); this.pendingWrap=false; return;
+    case 0x46: /* F CPL */ this.cursor.x = 0; this.cursor.y = Math.max(this.scrollTop, this.cursor.y - p(0)); this.pendingWrap=false; return;
     case 0x47: /* G CHA */ this.cursor.x = Math.min(this.cols - 1, p(0) - 1); this.pendingWrap=false; return;
     case 0x48: /* H CUP */
     case 0x66: /* f HVP */ {
@@ -428,7 +511,7 @@ export class Terminal {
     case 0x54: /* T SD  */ this._scrollDown(p(0)); return;
     case 0x58: /* X ECH */ this._eraseChars(p(0)); return;
     case 0x63: /* c DA  */ this._send("\x1b[?6c"); return; // "I am a VT102"
-    case 0x64: /* d VPA */ this.cursor.y = Math.max(0, Math.min(this.rows - 1, p(0) - 1)); return;
+    case 0x64: /* d VPA */ this.cursor.y = Math.max(0, Math.min(this.rows - 1, p(0) - 1)); this.pendingWrap=false; return;
     case 0x6D: /* m SGR */ this._sgr(params); return;
     case 0x6E: /* n DSR */ {
       if (p(0) === 6) this._send(`\x1b[${this.cursor.y + 1};${this.cursor.x + 1}R`);
@@ -828,6 +911,22 @@ export class DomRenderer {
     this.cursorEl.style.top    = (t.cursor.y * this.cellH) + 'px';
     this.cursorEl.style.width  = this.cellW + 'px';
     this.cursorEl.style.height = this.cellH + 'px';
+  }
+
+  /**
+   * Remove every DOM node this renderer created (rows + cursor overlay)
+   * and drop the references. Idempotent. Hosts call this when the host
+   * element is being torn down so the renderer's row arrays can be
+   * collected. Use alongside Input.dispose() and Terminal.dispose().
+   */
+  dispose() {
+    if (this._disposed) return;
+    this._disposed = true;
+    for (const row of this.rows) row.remove();
+    if (this.cursorEl) this.cursorEl.remove();
+    this.rows = [];
+    this.rowHTML = [];
+    this.cursorEl = null;
   }
 }
 

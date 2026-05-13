@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>@gcu/term — demo</title>
+<link rel="stylesheet" href="./term.css">
+<link rel="stylesheet" href="./term-default.css">
+<style>
+  body {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    background: #181b21;
+    color: #c8cdd4;
+    padding: 24px;
+    max-width: 1100px;
+    margin: 0 auto;
+    line-height: 1.5;
+  }
+  h1 {
+    color: #e6bf66;
+    font-weight: 500;
+    margin: 0 0 8px;
+    letter-spacing: 0.04em;
+    font-size: 24px;
+  }
+  h2 {
+    color: #d9a85f;
+    font-weight: 500;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin: 32px 0 6px;
+    border-top: 1px solid #2a303a;
+    padding-top: 24px;
+  }
+  p { margin: 4px 0 12px; color: #8a93a3; font-size: 13px; }
+  .demo-row {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .controls {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 180px;
+  }
+  button {
+    background: #1d2128;
+    color: #c8cdd4;
+    border: 1px solid #2a303a;
+    border-radius: 3px;
+    padding: 6px 12px;
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    text-align: left;
+  }
+  button:hover { background: #2a303a; border-color: #4a8fb8; color: #e6e9ee; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  .status {
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
+    color: #6cb1d8;
+    min-height: 16px;
+  }
+  .pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: #2a303a;
+    color: #d9a85f;
+    font-size: 11px;
+    font-family: ui-monospace, monospace;
+  }
+</style>
+</head>
+<body>
+
+<h1>@gcu/term — interactive demo</h1>
+<p>
+  Three live terminals exercising the v0.1 surface — basic ANSI output,
+  REPL-style line discipline, and a streaming log viewer. Each example
+  has a <span class="pill">dispose</span> button that tears the terminal
+  down (kills its DOM, drops its listeners, calls
+  <code>dispose()</code> on Input + Terminal + DomRenderer). After
+  dispose, further interaction is inert.
+</p>
+
+<!-- ────────────────── DEMO 1: ANSI output, basic ────────────────── -->
+
+<h2>1. ANSI palette + cursor + alt-screen</h2>
+<p>
+  Demonstrates SGR colors (16-color, 256-color, truecolor), bold /
+  italic / underline, the cursor blink, and an alt-screen toggle. Click
+  the buttons to see how they translate to byte streams the terminal
+  consumes.
+</p>
+<div class="demo-row">
+  <div class="termhost">
+    <div class="screen" id="screen1" role="log" aria-live="polite" aria-atomic="false"></div>
+    <textarea id="hidden1" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
+  </div>
+  <div class="controls">
+    <button id="d1-write">write greeting</button>
+    <button id="d1-colors">16-color rainbow</button>
+    <button id="d1-truecolor">truecolor gradient</button>
+    <button id="d1-attrs">bold / italic / underline</button>
+    <button id="d1-clear">clear (CSI 2 J)</button>
+    <button id="d1-alt-on">enter alt-screen</button>
+    <button id="d1-alt-off">exit alt-screen</button>
+    <button id="d1-bell">send BEL (0x07)</button>
+    <button id="d1-title">set title (OSC 0)</button>
+    <button id="d1-dispose">dispose</button>
+    <div class="status" id="d1-status">ready</div>
+  </div>
+</div>
+
+<!-- ────────────────── DEMO 2: REPL ────────────────── -->
+
+<h2>2. tiny REPL (echo + line buffer)</h2>
+<p>
+  Type into the terminal — it edits a local line buffer, prints
+  characters as you type, and on Enter "evaluates" by sending the line
+  back as a colored response. Backspace works. Demonstrates the
+  byte-stream contract and shows where a real REPL host would call
+  <code>adder.evalLine()</code> or similar.
+</p>
+<div class="demo-row">
+  <div class="termhost">
+    <div class="screen" id="screen2" role="log" aria-live="polite" aria-atomic="false"></div>
+    <textarea id="hidden2" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
+  </div>
+  <div class="controls">
+    <button id="d2-paste">paste sample text</button>
+    <button id="d2-dispose">dispose</button>
+    <div class="status" id="d2-status">ready — focus the terminal and type</div>
+  </div>
+</div>
+
+<!-- ────────────────── DEMO 3: log viewer ────────────────── -->
+
+<h2>3. log viewer (output-only stream)</h2>
+<p>
+  Streams synthetic log lines at 5 Hz. Cursor hidden, no input wired.
+  Useful as a baseline for "I just want to dump bytes into the screen
+  and have them render correctly." Pause to inspect; resume to follow.
+</p>
+<div class="demo-row">
+  <div class="termhost">
+    <div class="screen" id="screen3" role="log" aria-live="polite" aria-atomic="false"></div>
+    <textarea id="hidden3" autocapitalize="off" autocorrect="off" spellcheck="false"></textarea>
+  </div>
+  <div class="controls">
+    <button id="d3-toggle">pause</button>
+    <button id="d3-dispose">dispose</button>
+    <div class="status" id="d3-status">running</div>
+  </div>
+</div>
+
+<script type="module">
+import { Terminal, DomRenderer, Input } from './src/index.js';
+
+// Wait for the chosen monospace font to load — otherwise cellW is
+// measured in the fallback font and stays stale forever (per SPEC §10).
+await document.fonts.ready;
+
+// ──────────────────────────────────────────────────────────────────
+// shared render-loop builder (one tick per term, cursor blink at 530ms)
+// ──────────────────────────────────────────────────────────────────
+
+function startTickLoop(term, renderer) {
+  let lastBlink = performance.now();
+  let stopped = false;
+  function tick(now) {
+    if (stopped) return;
+    if (now - lastBlink > 530) {
+      renderer.cursorOn = !renderer.cursorOn;
+      lastBlink = now;
+      term.dirty = true;
+    }
+    if (term.dirty) {
+      try { renderer.render(); } catch { stopped = true; return; }
+      term.dirty = false;
+    }
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+  return () => { stopped = true; };
+}
+
+function setStatus(id, text) { document.getElementById(id).textContent = text; }
+
+// ──────────────────────────────────────────────────────────────────
+// Demo 1 — ANSI / cursor / alt-screen
+// ──────────────────────────────────────────────────────────────────
+
+(function demo1() {
+  const term = new Terminal(80, 18);
+  const screen = document.getElementById('screen1');
+  const hidden = document.getElementById('hidden1');
+  const renderer = new DomRenderer(term, screen);
+  const input = new Input(term, screen, hidden, renderer);
+  const stopTick = startTickLoop(term, renderer);
+
+  term.onTitleChange((t) => setStatus('d1-status', `title set to: ${t}`));
+  term.onBell(() => setStatus('d1-status', `BEL received at ${new Date().toLocaleTimeString()}`));
+
+  // initial banner
+  term.write('\x1b[1;33mWelcome to @gcu/term\x1b[0m\r\n');
+  term.write('try the buttons →\r\n');
+
+  document.getElementById('d1-write').onclick = () => {
+    term.write('\x1b[36mhello \x1b[1;33mworld\x1b[0m\r\n');
+  };
+  document.getElementById('d1-colors').onclick = () => {
+    let line = '';
+    for (let i = 0; i < 16; i++) line += `\x1b[48;5;${i}m  \x1b[0m`;
+    term.write(line + '\r\n');
+  };
+  document.getElementById('d1-truecolor').onclick = () => {
+    let line = '';
+    for (let i = 0; i < 60; i++) {
+      const r = Math.round(255 * i / 60);
+      const b = 255 - r;
+      line += `\x1b[48;2;${r};80;${b}m \x1b[0m`;
+    }
+    term.write(line + '\r\n');
+  };
+  document.getElementById('d1-attrs').onclick = () => {
+    term.write('\x1b[1mbold\x1b[0m  \x1b[3mitalic\x1b[0m  \x1b[4munderline\x1b[0m  \x1b[7mreverse\x1b[0m\r\n');
+  };
+  document.getElementById('d1-clear').onclick = () => {
+    term.write('\x1b[2J\x1b[H');
+  };
+  document.getElementById('d1-alt-on').onclick = () => {
+    term.write('\x1b[?1049h\x1b[1;33mAlt screen — original is preserved.\x1b[0m\r\nClick "exit" to return.');
+  };
+  document.getElementById('d1-alt-off').onclick = () => {
+    term.write('\x1b[?1049l');
+  };
+  document.getElementById('d1-bell').onclick = () => {
+    term.write('\x07');
+  };
+  document.getElementById('d1-title').onclick = () => {
+    term.write('\x1b]0;hello from terminal 1\x07');
+  };
+  document.getElementById('d1-dispose').onclick = (e) => {
+    stopTick();
+    input.dispose();
+    renderer.dispose();
+    term.dispose();
+    e.target.disabled = true;
+    setStatus('d1-status', 'disposed — DOM removed, listeners detached');
+    // Disable the other buttons too
+    for (const id of ['d1-write','d1-colors','d1-truecolor','d1-attrs','d1-clear','d1-alt-on','d1-alt-off','d1-bell','d1-title']) {
+      document.getElementById(id).disabled = true;
+    }
+  };
+})();
+
+// ──────────────────────────────────────────────────────────────────
+// Demo 2 — tiny REPL
+// ──────────────────────────────────────────────────────────────────
+
+(function demo2() {
+  const term = new Terminal(80, 12);
+  const screen = document.getElementById('screen2');
+  const hidden = document.getElementById('hidden2');
+  const renderer = new DomRenderer(term, screen);
+  const input = new Input(term, screen, hidden, renderer);
+  const stopTick = startTickLoop(term, renderer);
+
+  let lineBuf = '';
+  function prompt() { term.write('\x1b[32m$ \x1b[0m'); }
+
+  term.write('\x1b[33m@gcu/term tiny REPL.\x1b[0m\r\n');
+  term.write('Type something and press Enter. Backspace works.\r\n\r\n');
+  prompt();
+
+  // onText is the convenience subscription — strings, not bytes.
+  const off = term.onText((s) => {
+    for (const ch of s) {
+      if (ch === '\r') {
+        term.write('\r\n');
+        if (lineBuf) {
+          term.write(`\x1b[36m→ \x1b[0m${lineBuf}\r\n`);
+        }
+        lineBuf = '';
+        prompt();
+      } else if (ch === '\x7f') {
+        if (lineBuf) {
+          lineBuf = lineBuf.slice(0, -1);
+          term.write('\b \b');
+        }
+      } else if (ch === '\x03') {
+        // Ctrl+C
+        term.write('^C\r\n');
+        lineBuf = '';
+        prompt();
+      } else if (ch >= ' ') {
+        lineBuf += ch;
+        term.write(ch);
+      }
+    }
+  });
+
+  document.getElementById('d2-paste').onclick = () => {
+    // Simulate paste by writing into the hidden textarea and dispatching.
+    // (For real paste, the user does Ctrl+V into the focused terminal.)
+    hidden.focus();
+    document.execCommand?.('insertText', false, 'console.log("hello")');
+    // The hidden textarea swallows input; inject directly via _send to
+    // preserve the demo's intent.
+    term._send('console.log("hello")');
+  };
+  document.getElementById('d2-dispose').onclick = (e) => {
+    off();
+    stopTick();
+    input.dispose();
+    renderer.dispose();
+    term.dispose();
+    e.target.disabled = true;
+    document.getElementById('d2-paste').disabled = true;
+    setStatus('d2-status', 'disposed');
+  };
+})();
+
+// ──────────────────────────────────────────────────────────────────
+// Demo 3 — log viewer (one-way stream)
+// ──────────────────────────────────────────────────────────────────
+
+(function demo3() {
+  const term = new Terminal(100, 16);
+  const screen = document.getElementById('screen3');
+  const hidden = document.getElementById('hidden3');
+  const renderer = new DomRenderer(term, screen);
+  const input = new Input(term, screen, hidden, renderer);
+  const stopTick = startTickLoop(term, renderer);
+
+  term.modes.cursorVisible = false;  // log viewers don't need a cursor
+  term.write('\x1b[33mstreaming logs at 5 Hz...\x1b[0m\r\n\r\n');
+
+  const levels = [
+    { name: 'INFO',  color: '32' },
+    { name: 'WARN',  color: '33' },
+    { name: 'ERROR', color: '31' },
+    { name: 'DEBUG', color: '36' },
+  ];
+  const messages = [
+    'request received',
+    'cache hit for key=foo',
+    'connection pool refilled',
+    'slow query: 1024ms',
+    'rate limit reached',
+    'background job complete',
+  ];
+  let counter = 1;
+  let paused = false;
+
+  const interval = setInterval(() => {
+    if (paused) return;
+    const lv = levels[Math.floor(Math.random() * levels.length)];
+    const msg = messages[Math.floor(Math.random() * messages.length)];
+    const ts = new Date().toLocaleTimeString();
+    term.write(`\x1b[2m${ts}\x1b[0m \x1b[${lv.color}m${lv.name.padEnd(5)}\x1b[0m #${counter++} ${msg}\r\n`);
+  }, 200);
+
+  document.getElementById('d3-toggle').onclick = (e) => {
+    paused = !paused;
+    e.target.textContent = paused ? 'resume' : 'pause';
+    setStatus('d3-status', paused ? 'paused' : 'running');
+  };
+  document.getElementById('d3-dispose').onclick = (e) => {
+    clearInterval(interval);
+    stopTick();
+    input.dispose();
+    renderer.dispose();
+    term.dispose();
+    e.target.disabled = true;
+    document.getElementById('d3-toggle').disabled = true;
+    setStatus('d3-status', 'disposed');
+  };
+})();
+</script>
+</body>
+</html>
