@@ -31,12 +31,20 @@ export { cellErrorLine, renderMdCell, renderHtmlCell };
 
 function _airCompile(cell, scopeKeys, defNames) {
   if (!window._airEmit || !cell._air) return null;
+  if (window._airBypass || (typeof location !== 'undefined' && location.search.includes('airbypass=1'))) {
+    return null;
+  }
   try {
     const emittedJS = window._airEmit(cell._air, scopeKeys, INJECTED_NAMES, {
       hinted: true,
       cellId: cell.id,
       cellName: parseCellName(cell.code),
     });
+    // DEBUG: dump emitted JS to console when ?airdebug=1.
+    if (typeof location !== 'undefined' && location.search.includes('airdebug=1')) {
+      console.log('[AIR] cell ' + cell.id + ' (' + (parseCellName(cell.code) || 'unnamed') +
+        ') scope=[' + scopeKeys.join(',') + ']\n' + emittedJS);
+    }
     const isAsync = window._airNeedsAsync ? window._airNeedsAsync(cell._air) : true;
     const Ctor = isAsync
       ? Object.getPrototypeOf(async function(){}).constructor

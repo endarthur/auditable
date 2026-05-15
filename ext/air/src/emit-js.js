@@ -109,11 +109,32 @@ class EmitCtx {
 
     this.lines = [];
     this.indent = 0;
+
+    // Loop-context stack for `continue` rewriting. Each entry is either:
+    //   - a string label: `continue` should emit `break <label>;` (used by
+    //     the for-loop fallback path where update must run before re-check)
+    //   - null: `continue` should emit plain `continue;` (native JS loops
+    //     handle continue correctly: while/do-while/for-in/for-of, plus
+    //     the compact for-loop path)
+    // pushLoop/popLoop are called by each loop emitter when entering and
+    // leaving its body. The top of the stack is consulted by the 'continue'
+    // case in emitOps.
+    this.loopStack = [];
+    this._forLabelCount = 0;
   }
 
   line(s) { this.lines.push('  '.repeat(this.indent) + s); }
   push() { this.indent++; }
   pop() { this.indent--; }
+
+  pushLoop(contLabel) { this.loopStack.push(contLabel); }
+  popLoop() { this.loopStack.pop(); }
+  currentLoopCont() {
+    return this.loopStack.length > 0
+      ? this.loopStack[this.loopStack.length - 1]
+      : null;
+  }
+  freshForLabel() { return `_forCont${++this._forLabelCount}`; }
 
   pushScope() {
     this.scope = new Scope(this.scope);
@@ -281,7 +302,11 @@ function emitOp(ctx, op) {
     case 'debugger': ctx.line('debugger;'); return;
     case 'return': return emitReturn(ctx, op);
     case 'break': ctx.line('break;'); return;
-    case 'continue': ctx.line('continue;'); return;
+    case 'continue': {
+      const lbl = ctx.currentLoopCont();
+      ctx.line(lbl ? `break ${lbl};` : 'continue;');
+      return;
+    }
     case 'if_region': return emitIf(ctx, op);
     case 'for_region': return emitFor(ctx, op);
     case 'for_in_region': return emitForIn(ctx, op);
@@ -683,15 +708,23 @@ function emitFor(ctx, op) {
     if (compact) {
       ctx.line(`for (${initStr}; ${testExpr}; ${updateStr}) {`);
       ctx.push();
+      ctx.pushLoop(null);  // native for: `continue;` works correctly
       if (op.body) emitOps(ctx, op.body);
+      ctx.popLoop();
       ctx.pop();
       ctx.line('}');
       return;
     }
 
-    // Fallback: desugar to `{ init; while (true) { test; body; update } }`.
-    // `continue` inside body skips the update — acceptable trade-off because
-    // the compact path covers the common case.
+    // Fallback: desugar to `{ init; while (true) { test; <labeled-block>;
+    // update } }`. The labeled block around the body lets `continue` inside
+    // the body emit `break <label>;` — which exits only the inner block,
+    // allowing `update` to run before the next iteration. Without the
+    // label, a `continue` would skip the update entirely (causing an
+    // infinite loop if the rest of the body depends on the update advancing).
+    // The outer `break;` still works as expected: it targets the innermost
+    // *loop*, which is the surrounding `while (true)`, terminating the for.
+    const contLabel = ctx.freshForLabel();
     ctx.line('{');
     ctx.push();
     for (const l of initLines) ctx.lines.push(l);
@@ -699,7 +732,13 @@ function emitFor(ctx, op) {
     ctx.push();
     for (const l of testLines) ctx.lines.push(l);
     if (testExpr) ctx.line(`if (!(${testExpr})) break;`);
+    ctx.line(`${contLabel}: {`);
+    ctx.push();
+    ctx.pushLoop(contLabel);
     if (op.body) emitOps(ctx, op.body);
+    ctx.popLoop();
+    ctx.pop();
+    ctx.line('}');
     for (const l of updateLines) ctx.lines.push(l);
     ctx.pop();
     ctx.line('}');
@@ -715,7 +754,9 @@ function emitForIn(ctx, op) {
   ctx.line(`for (const _k in ${iter}) {`);
   ctx.push();
   ctx.pushScope();
+  ctx.pushLoop(null);
   if (op.body) emitOps(ctx, op.body);
+  ctx.popLoop();
   ctx.popScope();
   ctx.pop();
   ctx.line('}');
@@ -740,7 +781,9 @@ function emitForOf(ctx, op) {
     }
     ctx.line(`for (${kind}${target} of ${iter}) {`);
     ctx.push();
+    ctx.pushLoop(null);
     if (op.body) emitOps(ctx, op.body);
+    ctx.popLoop();
     ctx.pop();
     ctx.line('}');
   } finally {
@@ -753,7 +796,9 @@ function emitLoop(ctx, op) {
     ctx.line('do {');
     ctx.push();
     ctx.pushScope();
+    ctx.pushLoop(null);
     if (op.body) emitOps(ctx, op.body);
+    ctx.popLoop();
     ctx.popScope();
     ctx.pop();
     if (op.test) emitOps(ctx, op.test);
@@ -764,12 +809,14 @@ function emitLoop(ctx, op) {
     ctx.line('while (true) {');
     ctx.push();
     ctx.pushScope();
+    ctx.pushLoop(null);
     if (op.test) emitOps(ctx, op.test);
     if (op.test_val) {
       const testExpr = ctx.ref(op.test_val);
       ctx.line(`if (!(${testExpr})) break;`);
     }
     if (op.body) emitOps(ctx, op.body);
+    ctx.popLoop();
     ctx.popScope();
     ctx.pop();
     ctx.line('}');
