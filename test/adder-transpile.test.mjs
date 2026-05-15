@@ -524,4 +524,47 @@ describe('adder transpile — full coverage', () => {
     const r = await runTranspile('a, *rest = [1, 2, 3, 4]\nprint(a)\nprint(rest)');
     assert.equal(r.output, '1\n[2, 3, 4]');
   });
+  it('list += extends in place (__iadd__ semantics)', async () => {
+    // Python: `lst += [..]` calls lst.__iadd__, which mutates in place.
+    // Another reference to the same list should observe the update.
+    const r = await runTranspile(
+      'a = [1, 2]\nb = a\na += [3, 4]\nprint(a)\nprint(b)\nprint(a is b)'
+    );
+    assert.equal(r.output, '[1, 2, 3, 4]\n[1, 2, 3, 4]\nTrue');
+  });
+  it('custom __iadd__ dispatches', async () => {
+    const r = await runTranspile(
+      'class Bag:\n    def __init__(self):\n        self.n = 0\n    def __iadd__(self, x):\n        self.n += x\n        return self\nb = Bag()\nb += 5\nb += 3\nprint(b.n)'
+    );
+    assert.equal(r.output, '8');
+  });
+  it('int += rebinds (immutable fallback)', async () => {
+    const r = await runTranspile('x = 5\nx += 3\nprint(x)');
+    assert.equal(r.output, '8');
+  });
+  it('with statement: normal exit calls __exit__(None,None,None)', async () => {
+    const r = await runTranspile(
+      'class CM:\n    def __enter__(self):\n        print("enter")\n        return self\n    def __exit__(self, t, e, tb):\n        print("exit", t is None, e is None)\nwith CM():\n    print("body")'
+    );
+    assert.equal(r.output, 'enter\nbody\nexit True True');
+  });
+  it('with statement: __exit__ returning True suppresses exception', async () => {
+    const r = await runTranspile(
+      'class CM:\n    def __enter__(self):\n        return self\n    def __exit__(self, t, e, tb):\n        print("got", e)\n        return True\nwith CM():\n    raise ValueError("boom")\nprint("after")'
+    );
+    assert.ok(/got/.test(r.output));
+    assert.ok(/after/.test(r.output));
+  });
+  it('with statement: __exit__ returning False re-raises', async () => {
+    let threw = false;
+    try {
+      await runTranspile(
+        'class CM:\n    def __enter__(self):\n        return self\n    def __exit__(self, t, e, tb):\n        return False\nwith CM():\n    raise ValueError("boom")'
+      );
+    } catch (e) {
+      threw = true;
+      assert.ok(/boom/.test(e.message || e.pyMessage || ''));
+    }
+    assert.ok(threw, 'expected exception to re-raise');
+  });
 });

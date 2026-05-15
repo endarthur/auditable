@@ -1073,8 +1073,21 @@ function lowerAssignTarget(ctx, target, value, l) {
   throw new AirLowerError(`unsupported assign target: ${target.type}`);
 }
 
+// Compound-assign helpers (used by lowerAugAssign). `+=` routes to `iadd`
+// which dispatches __iadd__ and handles list-extend in-place; other
+// compound ops route to their plain binary helpers — Python's __isub__,
+// __imul__, etc. are rare on user types and the immutable-rebind behavior
+// is the right default. Add entries here as real cases come up.
+const IBINOP_HELPER = {
+  '+': 'iadd',
+};
+
 function lowerAugAssign(ctx, node) {
-  // x += y → x = x + y (simplified — no __iadd__ dispatch for now)
+  // x op= y → x = _py.iop(x, y) for ops with in-place semantics (just `+`
+  // for now); falls through to the binary helper for ops without a custom
+  // in-place variant. The surrounding assignment to `x` is always emitted
+  // because Python's `+=` rebinds the name even when __iadd__ mutates in
+  // place (the dunder typically returns self).
   const l = ctx.loc(node);
   // Load current value
   let current;
@@ -1108,9 +1121,17 @@ function lowerAugAssign(ctx, node) {
   else if (op === '<<') result = ctx.emit('shift_left', [current.id, rhs.id], I32, l);
   else if (op === '>>') result = ctx.emit('shift_right', [current.id, rhs.id], I32, l);
   else {
-    const helper = BINOP_HELPER[op];
+    const inPlace = IBINOP_HELPER[op];
+    const helper = inPlace || BINOP_HELPER[op];
     if (!helper) throw new AirLowerError(`unsupported augassign op: ${op}`);
-    result = emitPyCall(ctx, helper, [current, rhs], l);
+    const call = emitPyCall(ctx, helper, [current, rhs], l);
+    // In-place helpers (`_py.iadd`) dispatch to `__iadd__` which can be an
+    // async adder-class method returning a Promise. Wrap with await so the
+    // assigned value is always the resolved instance, not a pending Promise
+    // that would break the next `+=` (operating on the Promise instead of
+    // the instance). For sync paths (numbers, lists, etc.) the await on a
+    // non-Promise is a no-op modulo the microtask hop.
+    result = inPlace ? ctx.emit('await', [call.id], DYNAMIC, l) : call;
   }
 
   lowerAssignTarget(ctx, node.target, result, l);
@@ -1207,22 +1228,37 @@ function lowerTry_ad(ctx, node) {
 }
 
 function lowerWith(ctx, node) {
-  // with ctx1 as a, ctx2 as b: body
-  // → Lower as try/finally with __enter__/__exit__ calls.
-  // For simplicity, just emit a sequence of enters, then the body, then exits in reverse.
-  // This misses __exit__ exception suppression semantics — acceptable for v1.
+  // `with mgr as x: body` lowers to (matching CPython's PEP 343 expansion):
+  //     __mgr = mgr
+  //     x = await __mgr.__enter__()
+  //     try:
+  //         body
+  //         await _py.exitWith(__mgr, None)  # normal-exit: returns ignored
+  //     except BaseException as __e:
+  //         if not (await _py.exitWith(__mgr, __e)):
+  //             raise
+  //
+  // For multiple managers `with a, b: body`, each manager wraps the next
+  // in its own try (equivalent to nested `with` statements). Built
+  // recursively so an inner manager's __exit__ suppression propagates
+  // correctly — outer managers see no exception if an inner one suppressed.
+  // _py.exitWith returns the (possibly awaited) suppression flag from
+  // __exit__; the catch checks it and only re-raises on falsy.
   const l = ctx.loc(node);
 
-  // Enter each context manager; record (mgr, exit) pairs as synthetic locals
-  const tempNames = [];
-  for (let i = 0; i < node.items.length; i++) {
-    const item = node.items[i];
+  // Recursive lower: items[idx..] wrapping `body`.
+  const lowerOne = (idx) => {
+    if (idx >= node.items.length) {
+      for (const s of node.body) lowerStmt_ad(ctx, s);
+      return;
+    }
+    const item = node.items[idx];
+
+    // __mgr = <expr>;  x = await __mgr.__enter__()
     const mgr = lowerExpr_ad(ctx, item.contextExpr);
     const mgrName = ctx.makeTempName('with_mgr');
     ctx.emit('store', [mgrName, mgr.id], VOID, l);
     ctx.symbols.set(mgrName, mgr.id);
-    tempNames.push(mgrName);
-    // enter = _py.getattr(mgr, '__enter__')(); then bind to optionalVar
     const mgrLoad = ctx.emit('load', [mgrName], DYNAMIC, l);
     const enterName = ctx.emit('const', ['__enter__'], STRING, l);
     const enterFn = emitPyCall(ctx, 'getattr', [mgrLoad, enterName], l);
@@ -1230,28 +1266,47 @@ function lowerWith(ctx, node) {
     if (item.optionalVar) {
       lowerAssignTarget(ctx, item.optionalVar, enterCall, l);
     }
-  }
 
-  // try { body } finally { for each manager in reverse: __exit__(None, None, None) }
-  const tryBody = captureOps(ctx, () => {
-    for (const s of node.body) lowerStmt_ad(ctx, s);
-  });
-  const finallyBody = captureOps(ctx, () => {
-    for (let i = tempNames.length - 1; i >= 0; i--) {
-      const mgrLoad = ctx.emit('load', [tempNames[i]], DYNAMIC, l);
-      const exitName = ctx.emit('const', ['__exit__'], STRING, l);
-      const exitFn = emitPyCall(ctx, 'getattr', [mgrLoad, exitName], l);
+    // try-body: recurse for next manager (or emit body), then call
+    // _py.exitWith(__mgr, null) for the normal-exit path. exitWith may be
+    // async (user __exit__ is async-wrapped); await the result.
+    const tryBody = captureOps(ctx, () => {
+      lowerOne(idx + 1);
+      const mgrLoadEx = ctx.emit('load', [mgrName], DYNAMIC, l);
       const noneVal = ctx.emit('const', [null], VOID, l);
-      emitAwaitedCall_ad(ctx, exitFn.id, [noneVal.id, noneVal.id, noneVal.id], l);
-    }
-  });
+      const exitCall = emitPyCall(ctx, 'exitWith', [mgrLoadEx, noneVal], l);
+      ctx.emit('await', [exitCall.id], DYNAMIC, l);
+    });
 
-  return ctx.emit('try_region', [], VOID, l, {
-    try_body: tryBody,
-    catch_param: null,
-    catch_body: [],
-    finally_body: finallyBody,
-  });
+    // catch: call exitWith(__mgr, e); await; if not truthy, re-raise.
+    const catchParam = ctx.makeTempName('with_exc');
+    const catchBody = captureOps(ctx, () => {
+      const mgrLoadEx = ctx.emit('load', [mgrName], DYNAMIC, l);
+      const eLoad = ctx.emit('load', [catchParam], DYNAMIC, l);
+      const exitCall = emitPyCall(ctx, 'exitWith', [mgrLoadEx, eLoad], l);
+      const suppress = ctx.emit('await', [exitCall.id], DYNAMIC, l);
+      const truthy = emitPyCall(ctx, 'truthy', [suppress], l, BOOL);
+      const negated = ctx.emit('logical_not', [truthy.id], BOOL, l);
+      const raiseBody = captureOps(ctx, () => {
+        const eLoad2 = ctx.emit('load', [catchParam], DYNAMIC, l);
+        emitPyCall(ctx, 'raise', [eLoad2], l, VOID);
+      });
+      ctx.emit('if_region', [negated.id], VOID, l, {
+        then_body: raiseBody,
+        else_body: [],
+      });
+    });
+
+    ctx.emit('try_region', [], VOID, l, {
+      try_body: tryBody,
+      catch_param: catchParam,
+      catch_body: catchBody,
+      finally_body: [],
+    });
+  };
+
+  lowerOne(0);
+  return null;
 }
 
 function lowerClassDef(ctx, node) {

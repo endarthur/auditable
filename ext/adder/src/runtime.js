@@ -20,6 +20,28 @@ function _add(a, b) {
   throw new AdderError('TypeError', `unsupported operand type(s) for +: '${pyTypeName(a)}' and '${pyTypeName(b)}'`);
 }
 
+// In-place add used by `+=`. Python semantics: try __iadd__ first; if the
+// LHS is a mutable container (list, set), extend it in-place; otherwise
+// fall through to _add (creates a new value, caller rebinds via the
+// surrounding assignment). Always returns the value to rebind.
+function _iadd(a, b) {
+  if (a !== null && typeof a === 'object' && typeof a.__iadd__ === 'function') {
+    return a.__iadd__(b);
+  }
+  if (Array.isArray(a)) {
+    // list += iterable — Python list.__iadd__ accepts any iterable.
+    if (Array.isArray(b)) {
+      for (const x of b) a.push(x);
+    } else if (typeof b === 'string') {
+      for (const ch of b) a.push(ch);
+    } else if (b !== null && b !== undefined) {
+      for (const x of pyIter(b)) a.push(x);
+    }
+    return a;
+  }
+  return _add(a, b);
+}
+
 function _sub(a, b) {
   if (typeof a === 'number' && typeof b === 'number') return a - b;
   if (a !== null && typeof a === 'object' && typeof a.__sub__ === 'function') return a.__sub__(b);
@@ -336,6 +358,34 @@ function _callMethod(obj, name, siteId, ...args) {
     }
   }
   return result;
+}
+
+// ── Context manager __exit__ ──
+
+// Called by `with` lowering. When the body completes normally, `exc` is
+// null and __exit__ is called with (None, None, None); the return value
+// is ignored. When the body raised, `exc` is the error and __exit__ is
+// called with (type, exc, None); a truthy return value indicates the
+// exception is suppressed (the lowerer checks and only re-raises on
+// falsy). __exit__ may be async — the lowered call site awaits.
+function _exitWith(mgr, exc) {
+  if (mgr === null || mgr === undefined || typeof mgr.__exit__ !== 'function') {
+    throw new AdderError(
+      'AttributeError',
+      `'${pyTypeName(mgr)}' object has no attribute '__exit__'`,
+    );
+  }
+  if (exc === null || exc === undefined) {
+    // Normal-exit path: discard return; CPython does likewise here.
+    mgr.__exit__(null, null, null);
+    return false;
+  }
+  // Exception path: pass (type, value, None) and return suppression flag.
+  const excType =
+    (exc !== null && typeof exc === 'object' && exc.__class__) ||
+    (exc && exc.constructor) ||
+    null;
+  return mgr.__exit__(excType, exc, null);
 }
 
 // ── Attribute access ──
@@ -689,6 +739,8 @@ export const _py = {
   // arithmetic
   add: _add, sub: _sub, mul: _mul, div: _div,
   floordiv: _floordiv, mod: _mod, pow: _pow,
+  // in-place: __iadd__ dispatch + list extend semantics for `+=`
+  iadd: _iadd,
   // bitwise (with dunder fallback for masks/sets/etc.)
   and_: _and_, or_: _or_, xor: _xor,
   // unary
@@ -699,6 +751,8 @@ export const _py = {
   // subscript
   getitem: _getitem, setitem: _setitem, slice: _slice,
   setslice: _setslice, delslice: _delslice,
+  // context manager __exit__ (with statement)
+  exitWith: _exitWith,
   // attribute
   getattr: _getattr, setattr: _setattr,
   callMethod: _callMethod,
