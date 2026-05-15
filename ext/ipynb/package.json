@@ -1,0 +1,32 @@
+{
+  "name": "@gcu/ipynb",
+  "version": "0.1.0",
+  "description": "Jupyter .ipynb bridge for Auditable. Import/export with automatic substitution of Python scientific imports (numpy→natra, pandas→sadpan, scipy→scitra, sklearn→learn, matplotlib.pyplot→plot). Bring your existing Jupyter work to Auditable without rewriting; export back to share with colleagues.",
+  "type": "module",
+  "main": "src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["jupyter", "ipynb", "notebook", "bridge", "import", "export", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/ipynb"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/ipynb",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}
