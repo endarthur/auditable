@@ -30,7 +30,7 @@
     "@gcu/mimic-io": "^0.1.0",
     "@gcu/natra": "^0.2.0",
     "@gcu/line": "^0.3.0",
-    "@gcu/alpack": "^0.1.0",
+    "@gcu/alpack": "^0.2.0",
     "@gcu/adder": "^0.3.0",
     "@gcu/sadpan": "^0.1.0"
   },

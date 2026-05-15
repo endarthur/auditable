@@ -17,7 +17,7 @@
   ],
   "peerDependencies": {
     "@gcu/atra": "^0.1.0",
-    "@gcu/adder": "^0.1.0"
+    "@gcu/adder": "^0.3.0"
   },
   "peerDependenciesMeta": {
     "@gcu/atra": {
