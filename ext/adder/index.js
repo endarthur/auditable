@@ -5163,7 +5163,7 @@ function _slice(obj, lower, upper, step) {
   throw new AdderError('TypeError', `'${pyTypeName(obj)}' object is not subscriptable`);
 }
 
-function _sliceIndices(len, lower, upper, step) {
+function _rtSliceIndices(len, lower, upper, step) {
   let start, stop;
   if (step > 0) {
     start = lower == null ? 0 : lower < 0 ? Math.max(0, len + lower) : Math.min(lower, len);
@@ -5203,7 +5203,7 @@ function _setslice(obj, lower, upper, step, value) {
     obj.splice(l, removeCount, ...rhs);
     return;
   }
-  const indices = _sliceIndices(obj.length, lower, upper, effectiveStep);
+  const indices = _rtSliceIndices(obj.length, lower, upper, effectiveStep);
   if (rhs.length !== indices.length) {
     throw new AdderError(
       'ValueError',
@@ -5236,7 +5236,7 @@ function _delslice(obj, lower, upper, step) {
     if (u > l) obj.splice(l, u - l);
     return;
   }
-  const indices = _sliceIndices(obj.length, lower, upper, effectiveStep);
+  const indices = _rtSliceIndices(obj.length, lower, upper, effectiveStep);
   indices.sort((a, b) => b - a);
   for (const i of indices) obj.splice(i, 1);
 }
