@@ -40,7 +40,11 @@ export function applyFontSize(size) {
 
 export function applyWidth(w) {
   const nb = $('#notebook');
-  nb.style.maxWidth = w;
+  // Bare numeric values are px; percentage / keyword values pass through.
+  // Without this, `nb.style.maxWidth = "860"` is rejected as invalid CSS
+  // and the previous valid value (e.g. "100%" from "full") sticks.
+  const cssVal = /^\d+$/.test(w) ? w + 'px' : w;
+  nb.style.maxWidth = cssVal;
   $('#setWidth').value = w;
   hooks.emit("notebook:dirty");
 }
