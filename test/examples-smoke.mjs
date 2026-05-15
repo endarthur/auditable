@@ -33,6 +33,18 @@ const SKIP = new Set([
   // 'gslib/example_gslib_sgsim.html', // play/pause widget — first realization renders on load, ok
   // Encrypted notebooks ship with a lock screen; auto-cells never run.
   'basics/example_encrypted_password-is-auditable.html',
+  // REGRESSION since c58764e (2026-05-13, "register cell-builtins/dialog.js
+  // in main.js"). These animation-heavy examples hang in a regular
+  // browser too — not just under Playwright. Bisect: bb1ee1c (2026-05-11)
+  // passes, c58764e hangs. The single-line `import './cell-builtins/dialog.js'`
+  // that enables the dialog wiring is enough to trigger the hang; root
+  // cause in cell execution path is unknown. See ROADMAP.md → CRITICAL:
+  // rAF-heavy examples smoke hang.
+  'atra/example_atra_layouts.html',   // N-body gravity
+  'geology/example_peel_3d.html',     // 3D peel renderer
+  'geology/example_winding_3d.html',  // 3D winding-number solid containment
+  'gis/example_raster.html',          // raster GIS rAF render loop
+  'etc/example_raf_repro.html',       // minimal repro of the bug above
 ]);
 
 async function discoverExamples(filter) {

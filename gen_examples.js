@@ -125,6 +125,7 @@ const categories = {
     'example_synth.txt',
     'example_threejs.txt',
     'example_line.txt',
+    'example_raf_repro.txt',
   ],
 };
 
