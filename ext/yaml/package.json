@@ -1,0 +1,37 @@
+{
+  "name": "@gcu/yaml",
+  "version": "0.1.0",
+  "description": "A strict, auditable subset of YAML 1.2 for hand-authored configuration. Tag-free conforming documents round-trip identically through vanilla YAML parsers. Tags are opaque metadata; no parse-time resolution, no RCE surface.",
+  "type": "module",
+  "main": "src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "gcu-yaml": "./cli/gcu-yaml.js"
+  },
+  "files": [
+    "src",
+    "cli",
+    "index.js",
+    "README.md",
+    "SPEC.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["yaml", "parser", "strict", "config", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/yaml"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/yaml",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}

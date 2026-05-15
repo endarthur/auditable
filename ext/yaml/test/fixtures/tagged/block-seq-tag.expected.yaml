@@ -1,0 +1,3 @@
+allowed_hosts: !sorted
+  - "alpha.example"
+  - "beta.example"

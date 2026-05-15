@@ -1,0 +1,7 @@
+flags:
+  - name: "--input"
+    type: "path"
+    required: true
+  - name: "--format"
+    type: "string"
+    required: false

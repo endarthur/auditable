@@ -1,0 +1,8 @@
+{
+  "newline": "line one\nline two",
+  "tab": "col1\tcol2",
+  "quote": "she said \"hello\"",
+  "backslash": "C:\\Users\\name",
+  "unicode": "snowman ☃",
+  "mixed": "tab\there, newline\nthere"
+}

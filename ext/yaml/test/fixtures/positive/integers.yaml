@@ -1,0 +1,9 @@
+decimal: 42
+negative: -7
+positive: +1
+million: 1_000_000
+hex: 0xff
+hex_sep: 0xff_ff
+octal: 0o755
+binary: 0b1010_0101
+zero: 0

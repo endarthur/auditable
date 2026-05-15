@@ -1,0 +1,259 @@
+/// auditable
+/// title: @gcu/yaml — strict YAML loader
+/// module: ./ext/yaml/index.js ext/yaml/index.js
+
+/// md
+# @gcu/yaml
+
+A strict, auditable subset of YAML 1.2 for hand-authored configuration.
+
+- No implicit typing — strings are strings because they're quoted.
+- No anchors, aliases, global tags, or folded scalars. The features that enable billion-laughs and `!!python/object/apply`-style RCE are excluded by construction.
+- Local tags are opaque — `!secret`, `!include`, `!datetime` are surfaced as metadata, never resolved at parse time.
+- Tag-free conforming docs cross-parse identically under `js-yaml` and `ruamel.yaml` (`YAML(typ='safe')`).
+
+This notebook demonstrates the loader/writer/checker.
+
+/// code
+const yaml = await load("./ext/yaml/index.js");
+const { parse, emit, check, format, YamlParseError } = yaml;
+ui.display("loaded: " + Object.keys(yaml).join(", "));
+
+/// md
+## Parsing a config file
+
+Hand-authored YAML with comments, indentation, block scalars, dotted keys, and various scalar types. Parsing produces an AST that preserves source order, tags, and comments.
+
+/// code
+const source = `# bearing manifest — geology orientation tool
+name: "bearing"
+version: "0.4.2"
+description: |
+  Computes orientation statistics from structural
+  geology field measurements: strike/dip, plunge/trend.
+
+  See https://gcu.example/bearing for full docs.
+
+exit_codes:
+  ok: 0
+  usage_error: 2
+  input_not_found: 3
+
+flags:
+  - name: "--input"
+    type: "path"
+    required: true
+  - name: "--format"
+    type: "string"
+    enum:
+      - "json"
+      - "csv"
+      - "stereonet"
+
+limits:
+  max_input_size: 64_000_000  # 64 MB
+  hex_threshold: 0xff_ff
+  default_mode: 0o644
+
+http_headers:
+  "Content-Type": "application/json"
+  "X-Bearing-Version": "0.4.2"
+
+stereonet.colors.fault: "#c0533d"
+stereonet.colors.fold: "#4a8fb8"
+
+keywords: []
+`;
+
+ui.display(source);
+
+/// md
+## parse → JS values
+
+`parse(text)` returns an AST. To pull the plain data out, walk it:
+
+/// code
+function astToValue(node) {
+  if (node.kind === "scalar") return node.value;
+  if (node.kind === "map") {
+    const o = {};
+    for (const e of node.entries) o[e.key.value] = astToValue(e.value);
+    return o;
+  }
+  if (node.kind === "seq") return node.items.map(astToValue);
+}
+
+const ast = parse(source);
+const data = astToValue(ast);
+
+ui.display(JSON.stringify(data, null, 2));
+
+/// md
+Notice `1_000_000`-style underscores in `max_input_size`, hex `0xff_ff`, octal `0o644`, and the dotted bare keys (`stereonet.colors.fault`) — all parse to their typed values. The dotted keys stay as literal strings (no TOML-style splitting).
+
+## emit — canonical form
+
+`emit(ast)` produces canonical-form bytes. `parse → emit → parse → emit` is byte-identical from the second emit on.
+
+/// code
+const canonical = emit(ast);
+ui.display(canonical);
+
+/// md
+The canonical form differs from the source mostly in whitespace and comment positions. Underscored integers re-emit with grouping. Hex/octal/binary forms are preserved via the `radix` hint on int AST nodes.
+
+## Round-trip property
+
+Round-trip identity is enforced: `emit(parse(emit(parse(x))))` equals `emit(parse(x))` byte-for-byte.
+
+/// code
+const e1 = emit(parse(source));
+const e2 = emit(parse(e1));
+ui.display(`emit1 == emit2: ${e1 === e2}`);
+ui.display(`length: ${e1.length} bytes`);
+
+/// md
+## check — non-throwing validation
+
+`check(text)` returns `null` if conforming, or a `YamlParseError` with `{rule, line, column, message}`.
+
+/// code
+const bad = [
+  'enabled: yes\n',                 // 6.2 — booleans must be true/false
+  'mode: 0755\n',                   // 6.3 — leading-zero decimal
+  'config: { key: val }\n',         // 8.3 — non-empty flow not permitted
+  'message: Hello world\n',         // 6.5 — plain (unquoted) scalar
+  'data: !!python/object "x"\n',    // 9.2 — !!-prefixed tag
+  'name: "first"\nname: "second"\n', // 7.2 — duplicate key
+  'desc: >\n  folded\n',            // 6.6 — folded block scalar
+];
+
+for (const src of bad) {
+  const err = check(src);
+  ui.display(`${src.replace(/\n/g, " ⏎ ").padEnd(45)}→ rule ${err.rule}, line ${err.line}, col ${err.column}`);
+}
+
+/// md
+Each error names the rule (the section of `SPEC.md`), the line, and the column. No silent coercion, no guessing.
+
+## Norway problem
+
+The classic YAML footgun: `country: NO` parses as boolean `false` in YAML 1.1, breaking any list of country codes. `@gcu/yaml` rejects bare booleans entirely.
+
+/// code
+const norway = [
+  'country: NO',
+  'switch: yes',
+  'flag: Y',
+  'enabled: ON',
+];
+
+for (const src of norway) {
+  const err = check(src);
+  ui.display(err
+    ? `✗ ${src.padEnd(20)} — rule ${err.rule} (rejected)`
+    : `✓ ${src} — ACCEPTED (shouldn't happen!)`);
+}
+
+/// md
+The fix is to quote: `country: "NO"` parses as the literal string.
+
+## Tags — opaque metadata
+
+Tags are surfaced on AST nodes; the parser never resolves them. This kills `!!python/object/apply:os.system`-style RCE by construction, while still allowing legitimate extensibility like Home Assistant's `!secret` / `!include`.
+
+/// code
+const tagged = `api_key: !secret "vault-key-prod"
+include: !include "./config.yaml"
+allowed_hosts: !sorted
+  - "alpha.example"
+  - "beta.example"
+description: !markdown |
+  Multi-paragraph prose with
+  *consumer-interpreted* formatting.
+`;
+
+const t = parse(tagged);
+
+// Walk the AST and pull out (path, tag, type, value) for each tagged node.
+function walkTags(node, path = "$") {
+  const rows = [];
+  if (node.tag) {
+    rows.push({ path, tag: "!" + node.tag, kind: node.kind, value: node.kind === "scalar" ? node.value : "..." });
+  }
+  if (node.kind === "map") {
+    for (const e of node.entries) {
+      rows.push(...walkTags(e.value, path + "." + e.key.value));
+    }
+  } else if (node.kind === "seq") {
+    for (let i = 0; i < node.items.length; i++) {
+      rows.push(...walkTags(node.items[i], path + "[" + i + "]"));
+    }
+  }
+  return rows;
+}
+
+ui.table(walkTags(t));
+
+/// md
+Tags survive the round-trip — `emit(parse(tagged))` re-writes them in canonical form:
+
+/// code
+ui.display(emit(parse(tagged)));
+
+/// md
+## format — one-shot canonicalization
+
+`format(text)` is `parse + emit` in one call. Useful for `gcu-yaml fmt` style normalization.
+
+/// code
+// Source with non-canonical formatting that should still parse.
+const messy = `
+# pre-comment
+
+name:    "test"
+version: "0.1.0"
+limits:
+  max:  1_000
+  hex:  0xff
+
+
+# trailing
+`;
+
+ui.display("--- before ---");
+ui.display(messy);
+ui.display("--- after ---");
+ui.display(format(messy));
+
+/// md
+## error reporting in detail
+
+`YamlParseError` is structured. Useful for editor integrations: jump to line/column, show the rule reference, look it up in `SPEC.md`.
+
+/// code
+const broken = `name: "ok"
+version: "1.0"
+items:
+  - "first"
+  - >
+    folded block scalar
+`;
+
+const err = check(broken);
+ui.display(`rule:    ${err.rule}`);
+ui.display(`line:    ${err.line}`);
+ui.display(`column:  ${err.column}`);
+ui.display(`message: ${err.message}`);
+
+/// md
+## Summary
+
+@gcu/yaml gives you:
+
+- **parse(text) → AST** — strict reader, throws on non-conforming input
+- **emit(ast) → string** — canonical writer, pure function
+- **check(text) → null | error** — non-throwing validator
+- **format(text) → string** — parse + emit one-shot
+
+The strict gate at authoring time + the cross-parser invariant downstream means you can hand-author config files and trust that every reader (js-yaml, ruamel.yaml, yaml.v3, this loader) sees the same data structure.

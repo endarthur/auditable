@@ -1,0 +1,4 @@
+app.host: "localhost"
+app.port: 8080
+stereonet.colors.fault: "#c0533d"
+stereonet.colors.fold: "#4a8fb8"

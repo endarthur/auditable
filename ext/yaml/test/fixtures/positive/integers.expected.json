@@ -1,0 +1,11 @@
+{
+  "decimal": 42,
+  "negative": -7,
+  "positive": 1,
+  "million": 1000000,
+  "hex": 255,
+  "hex_sep": 65535,
+  "octal": 493,
+  "binary": 165,
+  "zero": 0
+}

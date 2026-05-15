@@ -1,0 +1,6 @@
+{
+  "backslashes": "C:\\path\\to\\file",
+  "embedded_json": "{\"key\": \"value\"}",
+  "apostrophe": "don't",
+  "regex": "\\d+\\.\\d+"
+}
