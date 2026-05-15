@@ -56,8 +56,8 @@
     "desc": "custom modal \u2014 render builds the body, ctx.close(value) resolves the promise. Auto-dismisses on cell re-run unless persistent"
   },
   "ui.terminal": {
-    "sig": "ui.terminal({cols?, rows?, cssVarTheme?, maxScrollback?, copyOnSelect?, onData?}?)",
-    "desc": "VT/ANSI terminal emulator (@gcu/term) mounted in cell output. Returns the Terminal: term.write(), .onText(), .onBell(), .lineBuffer({prompt, onSubmit}), etc. Drag-select copies to clipboard automatically (copyOnSelect default true). Auto-disposed on cell re-run"
+    "sig": "ui.terminal({cols?, rows?, cssVarTheme?, maxScrollback?, copyOnSelect?, onData?, backend?}?)",
+    "desc": "VT/ANSI terminal emulator mounted in cell output. Backend-pluggable: default is @gcu/term; canonical handle methods (write, onInput, onResize, focus, clear, reset, resize, dispose) are backend-portable, while backend-specific features (lineBuffer, onText, modes.* for @gcu/term) fall through via the handle's proxy. Drag-select copies to clipboard automatically. Auto-disposed on cell re-run"
   },
   "std.csv": {
     "sig": "std.csv(text, {separator?, typed?}?)",

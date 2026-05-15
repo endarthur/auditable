@@ -46,6 +46,8 @@ import './cell-builtins/workers.js';
 import './cell-builtins/notebook-api.js';
 import './cell-builtins/workshop.js';
 import './cell-builtins/dialog.js';
+import './cell-builtins/terminal-backend.js';
+import './cell-builtins/terminal-backend-gcu.js';
 import './cell-builtins/terminal.js';
 import './cell-render.js';
 import './cell-context.js';
