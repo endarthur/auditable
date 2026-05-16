@@ -69,5 +69,6 @@ import './goto.js'; // @optional
 import './size-compare.js'; // @optional
 import './shim.js';
 import './mcp-adapter.js';
+import './ipynb-bridge.js';
 import './globals.js';
 import './init.js';

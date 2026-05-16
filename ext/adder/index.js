@@ -8229,6 +8229,7 @@ async function pythonExecute(code, scopeIn, cell) {
     // output already rendered to DOM via display() — show last expression too
     if (lastExpr !== undefined && lastExpr !== null) {
       if (typeof lastExpr === 'object' && typeof lastExpr._repr_html_ === 'function') cell._ctx.display(lastExpr);
+      else if (typeof lastExpr === 'object' && typeof lastExpr.nodeType === 'number') cell._ctx.display(lastExpr);
       else cell._ctx.display(pyRepr(lastExpr));
     }
     return { defines };

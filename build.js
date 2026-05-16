@@ -741,6 +741,14 @@ if (fs.existsSync(termPath)) {
   modules.unshift({ name: 'term', source: termSrc });
 }
 
+// Add @gcu/ipynb bundle as a module entry (Jupyter import/export bridge)
+const ipynbPath = path.join(__dirname, 'ext/ipynb/index.js');
+if (fs.existsSync(ipynbPath)) {
+  let ipynbSrc = fs.readFileSync(ipynbPath, 'utf8');
+  ipynbSrc = ipynbSrc.replace(/^\n+/, '').replace(/\n+$/, '');
+  modules.unshift({ name: 'ipynb', source: ipynbSrc });
+}
+
 // Read CM6 bundle (classic IIFE, not an ES module — sets window.CM6 via var)
 const cm6Path = path.join(__dirname, 'ext/cm6/cm6.min.js');
 const cm6Src = fs.existsSync(cm6Path) ? fs.readFileSync(cm6Path, 'utf8') : '';

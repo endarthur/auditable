@@ -37,10 +37,12 @@ export const SUBSTITUTIONS = {
 
   // Plotting. matplotlib.pyplot is the entry point users actually call
   // (`plt.plot(...)`, `plt.show()`); we map the full dotted form, not
-  // bare 'matplotlib'. plot's API isn't 1:1 with pyplot's, but a `plt`
-  // alias is the right starting point — gap-signals fall out as
-  // attribute errors on specific calls.
-  'matplotlib.pyplot': 'plot',
+  // bare 'matplotlib'. @gcu/plot registers under the name `plt` in
+  // adder's extension table, so we map directly to `plt`. After the
+  // `as plt` alias is preserved, `import matplotlib.pyplot as plt`
+  // becomes `import plt as plt` (effectively `import plt`), giving the
+  // user the same `plt.plot(...)` handle they'd write in Jupyter.
+  'matplotlib.pyplot': 'plt',
 };
 
 // Rewrite all import lines in a Python source string. Returns the

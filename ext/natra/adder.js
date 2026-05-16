@@ -292,14 +292,21 @@ function _registerHook() {
   });
 }
 
+// Numpy parity: np.zeros(3) accepts a scalar (= 1D shape of length 3).
+// natra's underlying ctx expects an array; wrap scalars before passing
+// through. Applied to zeros/ones/full and any other shape-taking constructor.
+function _normShape(shape) {
+  return typeof shape === 'number' ? [shape] : shape;
+}
+
 // ── Module API ──
 
 const _module = {
   // array creation (sync permPtr before perm alloc to avoid overwriting arena scratch)
   async array(data) { const ctx = await _ensureCtx(); ctx._syncPerm(); return _makeNd(ctx.array(data)); },
-  async zeros(shape) { const ctx = await _ensureCtx(); ctx._syncPerm(); return _makeNd(ctx.zeros(shape)); },
-  async ones(shape) { const ctx = await _ensureCtx(); ctx._syncPerm(); return _makeNd(ctx.ones(shape)); },
-  async full(shape, v) { const ctx = await _ensureCtx(); ctx._syncPerm(); return _makeNd(ctx.full(shape, v)); },
+  async zeros(shape) { const ctx = await _ensureCtx(); ctx._syncPerm(); return _makeNd(ctx.zeros(_normShape(shape))); },
+  async ones(shape) { const ctx = await _ensureCtx(); ctx._syncPerm(); return _makeNd(ctx.ones(_normShape(shape))); },
+  async full(shape, v) { const ctx = await _ensureCtx(); ctx._syncPerm(); return _makeNd(ctx.full(_normShape(shape), v)); },
   async eye(n) { const ctx = await _ensureCtx(); ctx._syncPerm(); return _makeNd(ctx.eye(n)); },
   async linspace(start, stop, num) {
     if (num?._kw) num = num.num ?? 50;

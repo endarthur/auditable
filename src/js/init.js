@@ -15,6 +15,7 @@ import { hydrateModulesFromVfs, flushPendingDirty } from './persist.js';
 import { getSettings } from './settings.js';
 import { Dialog } from '#dialog';
 import { runAll } from './exec.js';
+import { installIpynbDragDrop } from './ipynb-bridge.js';
 
 // ── LOCK SCREEN ──
 
@@ -548,6 +549,8 @@ setTimeout(async function init() {
   await loadUserTheme();
   // configure CM6 autocomplete for all code cells
   configureAllAutocomplete();
+  // wire global drag-drop for .ipynb files (importIpynbText handles confirm)
+  installIpynbDragDrop();
   S.initialized = true;
 
   // enter editor view if notebook setting requests it

@@ -41,8 +41,10 @@ test('substitutions: from numpy.linalg import inv', () => {
 });
 
 test('substitutions: matplotlib.pyplot is an exact key', () => {
+  // @gcu/plot registers in adder as `plt` (not `plot`), so the mapping
+  // is matplotlib.pyplot → plt. The `as plt` alias survives.
   const { rewritten } = rewriteImportLine('import matplotlib.pyplot as plt');
-  assert.equal(rewritten, 'import plot as plt');
+  assert.equal(rewritten, 'import plt as plt');
 });
 
 test('substitutions: pandas, scipy, sklearn', () => {
@@ -93,7 +95,7 @@ test('inverse: rewriteImportsBack reverses the table', () => {
 test('inverse: matplotlib.pyplot round-trips', () => {
   const original = 'import matplotlib.pyplot as plt';
   const { rewritten } = rewriteImportLine(original);
-  assert.equal(rewritten, 'import plot as plt');
+  assert.equal(rewritten, 'import plt as plt');
   const back = rewriteImportsBack(rewritten);
   assert.equal(back, original);
 });
@@ -140,7 +142,7 @@ test('parse: line magic is commented', () => {
   const ipynb = { cells: [{ cell_type: 'code', source: '%matplotlib inline\nimport matplotlib.pyplot as plt' }] };
   const { cells, warnings } = parseIpynb(ipynb);
   assert.match(cells[0].code, /^# %matplotlib inline/);
-  assert.match(cells[0].code, /import plot as plt/);
+  assert.match(cells[0].code, /import plt as plt/);
   assert.ok(warnings.some(w => /dropped line magic/.test(w)));
 });
 

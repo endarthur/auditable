@@ -31,7 +31,10 @@ function sections() {
       { label: 'Save', action: 'file:save', shortcut: 'Ctrl+S' },
       { label: 'Save Packed', action: 'file:save-packed' },
       '---',
+      { label: 'Open .ipynb…', action: 'file:open-ipynb' },
+      '---',
       { label: 'Export .txt', action: 'file:export-txt' },
+      { label: 'Export .ipynb', action: 'file:export-ipynb' },
       { label: 'Export App…', action: 'file:export-app' },
       '---',
       { label: 'Files…', action: 'file:files' },
@@ -96,8 +99,10 @@ function dispatch(action) {
     case 'file:new':         window.newNotebook(); break;
     case 'file:save':        window.setSaveMode('normal'); window.saveNotebook(); break;
     case 'file:save-packed': window.setSaveMode('packed'); window.saveNotebook(); break;
-    case 'file:export-txt':  window.exportAsTxt(); break;
-    case 'file:export-app':  window.showExportDialog(); break;
+    case 'file:open-ipynb':   window.openIpynbDialog(); break;
+    case 'file:export-txt':   window.exportAsTxt(); break;
+    case 'file:export-ipynb': window.exportAsIpynb(); break;
+    case 'file:export-app':   window.showExportDialog(); break;
     case 'file:files':       window.toggleFs(); break;
     case 'file:settings':    window.toggleSettings(); break;
     case 'file:lock':        window.lockNotebook(); break;

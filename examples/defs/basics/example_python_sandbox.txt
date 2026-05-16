@@ -1,0 +1,78 @@
+/// auditable
+/// title: Python sandbox — drop your .ipynb here
+/// settings: {"execMode":"manual"}
+/// module: @gcu/adder ext/adder/index.js
+/// module: ./ext/atra/index.js ext/atra/index.js
+/// module: ./ext/atra/lib/alpack.src.js ext/atra/lib/alpack.src.js
+/// module: ./ext/natra/index.js ext/natra/index.js
+/// module: ./ext/natra/adder.js ext/natra/adder.js
+/// module: @gcu/sadpan ext/sadpan/index.js
+/// module: @gcu/plot ext/plot/index.js
+
+/// md
+# Python sandbox
+
+A base notebook with the GCU replacement libraries for the Python scientific stack pre-loaded. **Drop a `.ipynb` file** onto the page (or use **File → Open .ipynb…**) and its imports get auto-rewritten via `@gcu/ipynb`:
+
+| Jupyter | Auditable | adder import | status |
+|---|---|---|---|
+| `numpy` / `np` | natra | `import natra as np` | ✓ loaded |
+| `pandas` / `pd` | sadpan | `import sadpan as pd` | ✓ loaded |
+| `matplotlib.pyplot` / `plt` | plt | `import plt` | ✓ loaded |
+| `sklearn` | learn | `import learn` | needs blob-URL relative-path fix (see ROADMAP) |
+| `scipy` | scitra | `import scitra` | no adder.js adapter yet (see ROADMAP) |
+
+The libs without ✓ status get rewritten on import but fail at runtime. That's intentional — the failing import is the honest signal for which adapter to wire next.
+
+This notebook ships in **manual execution mode** (cells only run on Ctrl+Enter or Run All) so you don't get a Jupyter notebook chain-firing on every slider drag.
+
+/// code collapsed
+// %collapsed
+await load("@gcu/adder")
+await load("./ext/natra/index.js")
+await load("./ext/natra/adder.js")
+await load("@gcu/sadpan")
+await load("@gcu/plot")
+
+/// md
+## smoke test — verify each library loaded
+
+/// adder
+import natra as np
+import sadpan as pd
+
+# natra: a few primitives
+x = np.linspace(0, 10, 5)
+print("natra x:", x)
+# Scalar shape works too — numpy parity: zeros(3) ≡ zeros([3]).
+print("natra zeros:", np.zeros(3))
+
+# sadpan: small DataFrame
+df = pd.DataFrame({
+    "city": ["São Paulo", "Belo Horizonte", "Rio"],
+    "pop_m": [12.3, 2.5, 6.7],
+})
+df
+
+/// adder
+import plt
+
+# plt: line plot of a sine wave (natra has np.sin).
+# fig.show() returns the rendered canvas — `fig` alone shows the JSON state.
+# In Jupyter matplotlib, `fig` would auto-render via plt's inline backend;
+# here that's an explicit .show() call.
+fig, ax = plt.subplots()
+xs = np.linspace(0, 6.28, 100)
+ys = np.sin(xs)
+ax.plot(xs.tolist(), ys.tolist())
+fig.show()
+
+/// md
+## what to do next
+
+1. **Import a Jupyter notebook**: File → Open .ipynb…, or drag the file onto the page.
+2. The bridge replaces this notebook (after confirmation). Imports get rewritten; the import banner shows what changed.
+3. Hit **Run All** (or Ctrl+Enter per cell) — Jupyter notebooks don't expect reactive execution.
+4. Anything that doesn't work? The failing import is your next library gap. File it.
+
+Settings panel has an **on .ipynb import** option if you want to keep reactive mode when importing (default is "switch to manual" for the Jupyter-friendly behavior).

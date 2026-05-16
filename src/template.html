@@ -152,6 +152,13 @@
     </select>
   </div>
   <div class="settings-row">
+    <label>on .ipynb import</label>
+    <select id="setIpynbReactive">
+      <option value="manual" selected>switch to manual</option>
+      <option value="reactive">keep current mode</option>
+    </select>
+  </div>
+  <div class="settings-row">
     <label>show run toggle</label>
     <select id="setShowToggle" onchange="applyShowToggle(this.value)">
       <option value="yes">yes</option>

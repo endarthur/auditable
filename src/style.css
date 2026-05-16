@@ -69,19 +69,29 @@
   --au-radius-lg:      var(--sw-radius-lg);
 
   /* ── Layer 3 — third-party library adapters ── */
+  --ui-bg:           var(--au-surface);
   --ui-bg-raised:    var(--au-surface-raised);
   --ui-bg-hover:     var(--au-surface-bright);
   --ui-bg-selected:  var(--au-selected-soft);
   --ui-fg:           var(--au-fg);
   --ui-fg-muted:     var(--au-fg-soft);
   --ui-fg-error:     var(--au-error);
+  --ui-fg-accent:    var(--au-action);
   --ui-border:       var(--au-border);
   --ui-border-focus: var(--au-action);
   --ui-border-radius: var(--au-radius);
   --ui-shadow:       0 4px 16px rgba(0, 0, 0, 0.6);
   --ui-z-dropdown:   9000;
+  --ui-z-dialog:     9100;
   --ui-font:         var(--au-font-mono);
   --ui-font-size:    12px;
+  --ui-padding:      16px;
+  --ui-padding-sm:   8px;
+  --ui-duration:     120ms;
+  --ui-easing:       ease-out;
+  --ui-backdrop:     rgba(0, 0, 0, 0.4);
+  --ui-dialog-max-w: 90vw;
+  --ui-dialog-max-h: 80vh;
   --ui-accent:       var(--au-action);
 }
 
@@ -711,6 +721,7 @@ audit-text-input input[type="text"] {
    user notebooks via ui.dialog). The library handles header/backdrop/
    focus; we style the body's form primitives so they read as auditable
    rather than browser-default. */
+
 .gcu-dialog-body label {
   display: flex;
   align-items: center;

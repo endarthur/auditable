@@ -10,6 +10,7 @@
   },
   "imports": {
     "#dialog": "./ext/dialog/index.js",
+    "#ipynb": "./ext/ipynb/index.js",
     "#menu": "./ext/menu/index.js",
     "#term": "./ext/term/src/index.js"
   },

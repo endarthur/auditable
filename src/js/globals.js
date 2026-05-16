@@ -12,6 +12,7 @@ import { toggleAutorun } from './editor.js';
 import { toggleSettings, togglePresent, applyTheme, applyFontSize, applyWidth, applyLineNumbers, applyHeader, applyExecMode, applyRunOnLoad, applyShowToggle, applyGlobalExecMode, applyGlobalRunOnLoad, applyEditorView, applyEmbedFonts } from './settings.js';
 import { toggleUpdate } from './update.js';
 import { saveNotebook, savePackedNotebook, setSaveMode, toggleSaveTray, exportAsTxt, showExportDialog } from './save.js';
+import { openIpynbDialog, exportAsIpynb } from './ipynb-bridge.js';
 import { insertAt, getPreferredCodeType, setPreferredCodeType, setPreferredAndInsert, toggleCodeTray, updateToolbarCodeBtn } from './ui.js';
 import { toggleFs, fsImport } from './fs.js';
 import { toggleMcpPanel, mcpConnect } from './mcp-adapter.js';
@@ -78,6 +79,8 @@ window.setSaveMode = setSaveMode;
 window.toggleSaveTray = toggleSaveTray;
 window.exportAsTxt = exportAsTxt;
 window.showExportDialog = showExportDialog;
+window.openIpynbDialog = openIpynbDialog;
+window.exportAsIpynb = exportAsIpynb;
 
 // exec
 window.runAll = runAll;
