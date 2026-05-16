@@ -14,25 +14,9 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-// ── DOM shim (browser-like globals) ──
-globalThis.document = {
-  querySelector: () => null,
-  querySelectorAll: () => [],
-  createElement: (tag) => ({
-    tagName: tag.toUpperCase(), className: '', dataset: {}, style: {},
-    innerHTML: '', textContent: '', children: [],
-    src: '', width: 0, height: 0, alt: '',
-    appendChild(c) { this.children.push(c); return c; },
-    remove() {},
-    querySelector: () => null,
-    querySelectorAll: () => [],
-    addEventListener: () => {},
-    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
-  }),
-  createTreeWalker: () => ({ nextNode: () => null, currentNode: null }),
-};
-globalThis.window = globalThis;
-globalThis.CSS = { escape: s => s };
+// ── DOM shim (browser-like globals with no-op Canvas 2D context) ──
+import { installDomShim } from './helpers/dom-shim.mjs';
+installDomShim();
 
 // Order matters: each `import` triggers a side-effect registration
 // (window._auditableExtensions). natra needs its own load + adapter
@@ -163,6 +147,20 @@ describe('scitra: scipy.stats basics', () => {
 });
 
 // ── Pyrcz-shape: the actual failing cell ──
+
+describe('plt: hist with ndarray bins', () => {
+  test('plt.hist(y, bins=ndarray, color=, edgecolor=, alpha=, zorder=)', async () => {
+    // Matches the Pyrcz Central Tendency plot cell line 11.
+    const { scope } = await runCell([
+      'import natra as np',
+      'import plt',
+      'y = np.exp(np.random.normal(loc=2.0, scale=1.0, size=1000))',
+      'bins = np.logspace(start=np.log10(0.01), stop=np.log10(10000), num=100)',
+      'h = plt.hist(y, bins=bins, color="darkorange", edgecolor="black", alpha=1.0, zorder=10)',
+    ].join('\n'));
+    assert.ok(scope.h !== undefined);
+  });
+});
 
 describe('Pyrcz Central Tendency notebook — synthesized', () => {
   test('whole cell runs end-to-end', async () => {

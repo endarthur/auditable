@@ -211,6 +211,32 @@ function dashArray(linestyle) {
 
 const _defaultColors = ['#c89b3c', '#5ba3b5', '#e07050', '#7a8b99', '#b5854b', '#5bb58b'];
 
+// Coerce inputs from various ndarray libraries (natra's WASM-arena
+// descriptor, vec's data-backed shape, plain TypedArrays, native JS
+// arrays, lists from adder) into a JS array we can iterate, spread,
+// and Math.min/.max over. Used at every trace ingress so plt.hist /
+// plt.plot / plt.bar etc. don't have to care about input shape.
+function _toArr(x) {
+  if (Array.isArray(x)) return x;
+  if (x == null) return [];
+  // natra adder wrapper: {_nd: true, _arr: <descriptor>}
+  if (x._nd && x._arr) {
+    const a = x._arr;
+    if (a.memory && a.memory.buffer && a.dtype === 'f64' && typeof a.ptr === 'number') {
+      return Array.from(new Float64Array(a.memory.buffer, a.ptr, a.length));
+    }
+    if (a.data) return Array.from(a.data.subarray ? a.data.subarray(0, a.length) : a.data);
+  }
+  // data-backed ndarray (vec / numpy-like)
+  if (x.data && (x.data.buffer || ArrayBuffer.isView(x.data))) {
+    return Array.from(x.data.length != null ? x.data.subarray ? x.data.subarray(0, x.length || x.data.length) : x.data : x.data);
+  }
+  // TypedArray / iterable
+  if (ArrayBuffer.isView(x)) return Array.from(x);
+  if (typeof x[Symbol.iterator] === 'function') return Array.from(x);
+  return [x];
+}
+
 class Axes {
   constructor() {
     this._traces = [];
@@ -270,7 +296,11 @@ class Axes {
   hist(data, opts) {
     const o = { ...opts };
     if (!o.color) o.color = this._nextColor();
-    this._traces.push({ type: 'hist', data, opts: o });
+    // Normalize data + bins to JS arrays so ndarray inputs (natra,
+    // vec, TypedArrays) work the same as native lists.
+    const dataArr = _toArr(data);
+    if (o.bins != null && typeof o.bins !== 'number') o.bins = _toArr(o.bins);
+    this._traces.push({ type: 'hist', data: dataArr, opts: o });
     return this;
   }
 
@@ -291,6 +321,31 @@ class Axes {
     return this;
   }
 
+  // vlines(x, ymin, ymax) — vertical line segments. x can be scalar or
+  // array. Implemented as line traces (x=[x_i,x_i] y=[ymin,ymax]) so no
+  // new trace type is needed.
+  vlines(x, ymin, ymax, opts) {
+    const xs = _toArr(x);
+    const o = { ...opts };
+    if (!o.color && o.colors) o.color = Array.isArray(o.colors) ? o.colors[0] : o.colors;
+    if (!o.color) o.color = this._nextColor();
+    for (const xv of xs) {
+      this._traces.push({ type: 'line', x: [xv, xv], y: [ymin, ymax], opts: { ...o } });
+    }
+    return this;
+  }
+
+  hlines(y, xmin, xmax, opts) {
+    const ys = _toArr(y);
+    const o = { ...opts };
+    if (!o.color && o.colors) o.color = Array.isArray(o.colors) ? o.colors[0] : o.colors;
+    if (!o.color) o.color = this._nextColor();
+    for (const yv of ys) {
+      this._traces.push({ type: 'line', x: [xmin, xmax], y: [yv, yv], opts: { ...o } });
+    }
+    return this;
+  }
+
   text(x, y, text, opts) {
     this._traces.push({ type: 'text', x, y, text, opts: { color: '#ccc', fontsize: 11, ...opts } });
     return this;
@@ -299,9 +354,25 @@ class Axes {
   set_title(text, opts) { this._title = { text, opts }; return this; }
   set_xlabel(text, opts) { this._xlabel = { text, opts }; return this; }
   set_ylabel(text, opts) { this._ylabel = { text, opts }; return this; }
-  set_xlim(lo, hi) { this._xlim = [lo, hi]; return this; }
-  set_ylim(lo, hi) { this._ylim = [lo, hi]; return this; }
+  set_xlim(lo, hi) {
+    // matplotlib's set_xlim accepts either set_xlim(lo, hi) or set_xlim([lo, hi]).
+    if (Array.isArray(lo) && hi === undefined) { hi = lo[1]; lo = lo[0]; }
+    this._xlim = [lo, hi]; return this;
+  }
+  set_ylim(lo, hi) {
+    if (Array.isArray(lo) && hi === undefined) { hi = lo[1]; lo = lo[0]; }
+    this._ylim = [lo, hi]; return this;
+  }
+  set_xscale(scale) { this._xscale = scale; return this; }
+  set_yscale(scale) { this._yscale = scale; return this; }
+  set_zorder(_n) { /* z-order is per-trace; axes-level ordering not modelled */ return this; }
   set_aspect(aspect) { this._aspect = aspect; return this; }
+  // twinx() — return a twin axes that shares the x scale. Proper impl
+  // would render an overlay with its own y-axis on the right side; for
+  // now we return self so chained calls (.plot, .set_ylim) compose.
+  // Visual fidelity gap — see ROADMAP "plt: twinx proper overlay".
+  twinx() { return this; }
+  twiny() { return this; }
 
   legend(opts) { this._legend = true; this._legendOpts = opts || {}; return this; }
 
@@ -962,15 +1033,30 @@ class Figure {
 
 
 
+// matplotlib stateful interface — plt.xlabel/.ylim/.legend/etc. all
+// operate on a global "current axes". subplots() and the _quick()
+// wrappers update it. Cells running in sequence share the same
+// _currentAx so a stateful sequence like
+//   plt.hist(...)        # creates an axes, becomes current
+//   plt.xlabel('x')      # sets xlabel on that axes
+//   plt.vlines(...)      # adds vertical lines to that axes
+// works the same as matplotlib.
+let _currentFig = null;
+let _currentAx = null;
+
+function _setCurrent(fig, ax) { _currentFig = fig; _currentAx = ax; return ax; }
+
 function subplots(nrows, ncols, opts) {
   const nr = nrows || 1;
   const nc = ncols || 1;
   const fig = new Figure(nr, nc, opts);
 
   if (nr === 1 && nc === 1) {
+    _setCurrent(fig, fig.axes[0]);
     // array for adder tuple unpacking, named props for JS destructuring
     return Object.assign([fig, fig.axes[0]], { fig, ax: fig.axes[0] });
   }
+  _setCurrent(fig, fig.axes[0]);
   return Object.assign([fig, fig.axes], { fig, axes: fig.axes });
 }
 
@@ -979,6 +1065,7 @@ function _quick(fn) {
   return function (...args) {
     const { fig, ax } = subplots();
     fn(ax, ...args);
+    _setCurrent(fig, ax);
     return fig.show();
   };
 }
@@ -986,9 +1073,27 @@ function _quick(fn) {
 const plot = _quick((ax, x, y, fmtOrOpts, opts) => ax.plot(x, y, fmtOrOpts, opts));
 const scatter = _quick((ax, x, y, opts) => ax.scatter(x, y, opts));
 const imshow = _quick((ax, data, nx, ny, opts) => ax.imshow(data, nx, ny, opts));
-const hist = _quick((ax, data, opts) => ax.hist(data, opts));
 const bar = _quick((ax, x, heights, opts) => ax.bar(x, heights, opts));
 const cmap = getCmap;
+
+// plt.hist — matplotlib returns (counts, edges, patches). Adder cells
+// destructure as `n, bins, patches = plt.hist(...)` or index as
+// `result = plt.hist(...); n = result[0]`. We return an array-like
+// with both index access and named getters (.counts/.edges/.canvas)
+// so JS-side use is also ergonomic.
+function hist(data, opts) {
+  const { fig, ax } = subplots();
+  ax.hist(data, opts);
+  // Compute the actual counts + edges that the trace will render with,
+  // so the caller sees real values matching the drawn bars.
+  const trace = ax._traces[ax._traces.length - 1];
+  const { bins: edges } = ax._computeHistBins(trace);
+  const counts = ax._computeHistCounts(trace);
+  const canvas = fig.show();
+  return Object.assign([counts, edges, canvas], {
+    counts, edges, canvas,
+  });
+}
 
 // matplotlib parity stubs — these are no-ops today but nearly every
 // Jupyter notebook calls them at the top of cell 1 to configure global
@@ -1019,11 +1124,45 @@ function show() { /* no-op */ }
 // We hold no figure registry, so no-op.
 function close(_fig) { /* no-op */ }
 
+// matplotlib stateful interface — module-level helpers that delegate to
+// the current axes. Each lazily creates an axes if none exists yet, so
+// `plt.title("x")` as the very first call still works (matches mpl).
+function _ax() {
+  if (!_currentAx) subplots();
+  return _currentAx;
+}
+function gca() { return _ax(); }
+function gcf() { if (!_currentFig) subplots(); return _currentFig; }
+function xlabel(text, opts) { _ax().set_xlabel(text, opts); }
+function ylabel(text, opts) { _ax().set_ylabel(text, opts); }
+function title(text, opts) { _ax().set_title(text, opts); }
+function xlim(lo, hi) { _ax().set_xlim(lo, hi); }
+function ylim(lo, hi) { _ax().set_ylim(lo, hi); }
+function xscale(scale) { _ax().set_xscale(scale); }
+function yscale(scale) { _ax().set_yscale(scale); }
+function legend(opts) { _ax().legend(opts); }
+function grid(on, opts) { _ax().grid(on, opts); }
+function vlines(x, ymin, ymax, opts) { _ax().vlines(x, ymin, ymax, opts); }
+function hlines(y, xmin, xmax, opts) { _ax().hlines(y, xmin, xmax, opts); }
+function axhline(y, opts) { _ax().axhline(y, opts); }
+function axvline(x, opts) { _ax().axvline(x, opts); }
+function text(x, y, s, opts) { _ax().text(x, y, s, opts); }
+// matplotlib subplots_adjust controls figure margins (left/right/top/bottom/wspace/hspace).
+// Canvas layout isn't margin-driven the same way; accept and discard.
+function subplots_adjust(_opts) { /* no-op */ }
+function tight_layout(_opts) { /* no-op */ }
+function savefig(filename) { return _currentFig && _currentFig.savefig(filename); }
+function clf() { _currentFig = null; _currentAx = null; }
+function cla() { _currentAx = null; }
+
 // register as auditable extension for adder `import plt`
 if (typeof window !== 'undefined') {
   const _plt = {
     subplots, figure, Figure, cmap, plot, scatter, imshow, hist, bar,
     rc, rcParams, style, show, close,
+    gca, gcf, xlabel, ylabel, title, xlim, ylim, xscale, yscale,
+    legend, grid, vlines, hlines, axhline, axvline, text,
+    subplots_adjust, tight_layout, savefig, clf, cla,
   };
   const register = window.auditable?.registerExtension;
   if (register) {

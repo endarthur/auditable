@@ -6,6 +6,32 @@ import { parseFormat, dashArray } from './format.js';
 
 const _defaultColors = ['#c89b3c', '#5ba3b5', '#e07050', '#7a8b99', '#b5854b', '#5bb58b'];
 
+// Coerce inputs from various ndarray libraries (natra's WASM-arena
+// descriptor, vec's data-backed shape, plain TypedArrays, native JS
+// arrays, lists from adder) into a JS array we can iterate, spread,
+// and Math.min/.max over. Used at every trace ingress so plt.hist /
+// plt.plot / plt.bar etc. don't have to care about input shape.
+function _toArr(x) {
+  if (Array.isArray(x)) return x;
+  if (x == null) return [];
+  // natra adder wrapper: {_nd: true, _arr: <descriptor>}
+  if (x._nd && x._arr) {
+    const a = x._arr;
+    if (a.memory && a.memory.buffer && a.dtype === 'f64' && typeof a.ptr === 'number') {
+      return Array.from(new Float64Array(a.memory.buffer, a.ptr, a.length));
+    }
+    if (a.data) return Array.from(a.data.subarray ? a.data.subarray(0, a.length) : a.data);
+  }
+  // data-backed ndarray (vec / numpy-like)
+  if (x.data && (x.data.buffer || ArrayBuffer.isView(x.data))) {
+    return Array.from(x.data.length != null ? x.data.subarray ? x.data.subarray(0, x.length || x.data.length) : x.data : x.data);
+  }
+  // TypedArray / iterable
+  if (ArrayBuffer.isView(x)) return Array.from(x);
+  if (typeof x[Symbol.iterator] === 'function') return Array.from(x);
+  return [x];
+}
+
 export class Axes {
   constructor() {
     this._traces = [];
@@ -65,7 +91,11 @@ export class Axes {
   hist(data, opts) {
     const o = { ...opts };
     if (!o.color) o.color = this._nextColor();
-    this._traces.push({ type: 'hist', data, opts: o });
+    // Normalize data + bins to JS arrays so ndarray inputs (natra,
+    // vec, TypedArrays) work the same as native lists.
+    const dataArr = _toArr(data);
+    if (o.bins != null && typeof o.bins !== 'number') o.bins = _toArr(o.bins);
+    this._traces.push({ type: 'hist', data: dataArr, opts: o });
     return this;
   }
 
@@ -86,6 +116,31 @@ export class Axes {
     return this;
   }
 
+  // vlines(x, ymin, ymax) — vertical line segments. x can be scalar or
+  // array. Implemented as line traces (x=[x_i,x_i] y=[ymin,ymax]) so no
+  // new trace type is needed.
+  vlines(x, ymin, ymax, opts) {
+    const xs = _toArr(x);
+    const o = { ...opts };
+    if (!o.color && o.colors) o.color = Array.isArray(o.colors) ? o.colors[0] : o.colors;
+    if (!o.color) o.color = this._nextColor();
+    for (const xv of xs) {
+      this._traces.push({ type: 'line', x: [xv, xv], y: [ymin, ymax], opts: { ...o } });
+    }
+    return this;
+  }
+
+  hlines(y, xmin, xmax, opts) {
+    const ys = _toArr(y);
+    const o = { ...opts };
+    if (!o.color && o.colors) o.color = Array.isArray(o.colors) ? o.colors[0] : o.colors;
+    if (!o.color) o.color = this._nextColor();
+    for (const yv of ys) {
+      this._traces.push({ type: 'line', x: [xmin, xmax], y: [yv, yv], opts: { ...o } });
+    }
+    return this;
+  }
+
   text(x, y, text, opts) {
     this._traces.push({ type: 'text', x, y, text, opts: { color: '#ccc', fontsize: 11, ...opts } });
     return this;
@@ -94,9 +149,25 @@ export class Axes {
   set_title(text, opts) { this._title = { text, opts }; return this; }
   set_xlabel(text, opts) { this._xlabel = { text, opts }; return this; }
   set_ylabel(text, opts) { this._ylabel = { text, opts }; return this; }
-  set_xlim(lo, hi) { this._xlim = [lo, hi]; return this; }
-  set_ylim(lo, hi) { this._ylim = [lo, hi]; return this; }
+  set_xlim(lo, hi) {
+    // matplotlib's set_xlim accepts either set_xlim(lo, hi) or set_xlim([lo, hi]).
+    if (Array.isArray(lo) && hi === undefined) { hi = lo[1]; lo = lo[0]; }
+    this._xlim = [lo, hi]; return this;
+  }
+  set_ylim(lo, hi) {
+    if (Array.isArray(lo) && hi === undefined) { hi = lo[1]; lo = lo[0]; }
+    this._ylim = [lo, hi]; return this;
+  }
+  set_xscale(scale) { this._xscale = scale; return this; }
+  set_yscale(scale) { this._yscale = scale; return this; }
+  set_zorder(_n) { /* z-order is per-trace; axes-level ordering not modelled */ return this; }
   set_aspect(aspect) { this._aspect = aspect; return this; }
+  // twinx() — return a twin axes that shares the x scale. Proper impl
+  // would render an overlay with its own y-axis on the right side; for
+  // now we return self so chained calls (.plot, .set_ylim) compose.
+  // Visual fidelity gap — see ROADMAP "plt: twinx proper overlay".
+  twinx() { return this; }
+  twiny() { return this; }
 
   legend(opts) { this._legend = true; this._legendOpts = opts || {}; return this; }
 

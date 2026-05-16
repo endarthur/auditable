@@ -104,6 +104,8 @@ await import('../ext/scitra/adder.js');
 
 await import('../ext/plot/index.js');
 
+await import('../ext/sadpan/index.js');
+
 const _learn = await import('../ext/learn/index.js');
 window._importCache['@gcu/learn'] = _learn;
 await import('../ext/learn/adder.js');
