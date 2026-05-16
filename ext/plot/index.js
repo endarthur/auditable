@@ -990,9 +990,41 @@ const hist = _quick((ax, data, opts) => ax.hist(data, opts));
 const bar = _quick((ax, x, heights, opts) => ax.bar(x, heights, opts));
 const cmap = getCmap;
 
+// matplotlib parity stubs — these are no-ops today but nearly every
+// Jupyter notebook calls them at the top of cell 1 to configure global
+// style. Stubbing keeps the import path running so notebooks proceed
+// to the real plotting calls; actual rcParams threading through Figure
+// construction is on the ROADMAP.
+//
+// plt.rc(group, **kwargs) — `plt.rc('font', size=14)`
+function rc(_group, _opts) { /* no-op */ }
+// plt.rcParams — dict-like assignable bag. `plt.rcParams['figure.figsize'] = (8, 6)`
+const rcParams = {};
+rcParams.update = function (obj) {
+  if (obj && typeof obj === 'object') for (const k of Object.keys(obj)) rcParams[k] = obj[k];
+};
+// plt.style.use(name) — no-op
+const style = { use(_name) { /* no-op */ }, available: [] };
+// plt.figure(...) — return a fresh Figure (matplotlib's figure() takes
+// figsize=(w,h) and other kwargs; we accept and ignore unsupported ones).
+function figure(opts) {
+  const o = (opts && typeof opts === 'object') ? opts : {};
+  return new Figure(1, 1, o);
+}
+// plt.show() — matplotlib renders all pending figures. In auditable, each
+// Figure's .show() returns its canvas explicitly, so there's nothing pending.
+// No-op keeps notebooks that end cells with `plt.show()` from erroring.
+function show() { /* no-op */ }
+// plt.close(fig?) — close a figure (matplotlib reclaims its handle).
+// We hold no figure registry, so no-op.
+function close(_fig) { /* no-op */ }
+
 // register as auditable extension for adder `import plt`
 if (typeof window !== 'undefined') {
-  const _plt = { subplots, Figure, cmap, plot, scatter, imshow, hist, bar };
+  const _plt = {
+    subplots, figure, Figure, cmap, plot, scatter, imshow, hist, bar,
+    rc, rcParams, style, show, close,
+  };
   const register = window.auditable?.registerExtension;
   if (register) {
     register({

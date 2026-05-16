@@ -33,6 +33,16 @@ async function _ensureCtx() {
     }
     _ctx = await _natraFn();
     _registerHook();
+    // The cell hook only fires from cell N+1 onward — the current
+    // cell already passed `before()` while _ctx was still null, so
+    // _activeOps wasn't set. Open a scope inline so this cell can
+    // complete. The after-hook for this cell is a no-op (its hookState
+    // was null), so the arena just lingers until the next cell's
+    // `before` starts a fresh one. Minor leak, acceptable bootstrap.
+    if (!_activeOps) {
+      const { ops } = _ctx._beginCellScope();
+      _activeOps = ops;
+    }
     return _ctx;
   })();
   return _initPromise;
@@ -350,6 +360,82 @@ const _module = {
     return typeof r === 'number' ? r : _makeNd(r);
   },
 
+  // numpy-shaped extras commonly hit by ported notebooks
+  // np.average(a, axis=None, weights=None) — weighted mean. Without
+  // weights it's equivalent to np.mean.
+  average(a, axisOrKw, weights) {
+    let axis = axisOrKw, w = weights;
+    if (axisOrKw?._kw) { axis = axisOrKw.axis; w = axisOrKw.weights; }
+    const raw = _raw(a);
+    if (w === undefined || w === null) {
+      const r = _ops().mean(raw, axis);
+      return typeof r === 'number' ? r : _makeNd(r);
+    }
+    const wRaw = _raw(w);
+    const num = _ops().sum(_ops().mul(raw, wRaw), axis);
+    const den = _ops().sum(wRaw, axis);
+    if (typeof num === 'number' && typeof den === 'number') return num / den;
+    return _makeNd(_ops().div(num, den));
+  },
+  // np.percentile(a, q) — q in [0,100]. Returns scalar (q scalar) or
+  // array (q list). Linear interpolation, matches numpy's default.
+  async percentile(a, q) {
+    const raw = _raw(a);
+    const ctx = await _ensureCtx();
+    const flat = typeof ctx.toArray === 'function' ? ctx.toArray(raw).flat() : Array.from(raw);
+    flat.sort((x, y) => x - y);
+    const _pick = (qq) => {
+      const idx = (qq / 100) * (flat.length - 1);
+      const lo = Math.floor(idx), hi = Math.ceil(idx);
+      if (lo === hi) return flat[lo];
+      return flat[lo] + (flat[hi] - flat[lo]) * (idx - lo);
+    };
+    if (Array.isArray(q)) return q.map(_pick);
+    return _pick(q);
+  },
+  // np.median(a) — equivalent to percentile(a, 50)
+  median(a) { return this.percentile(a, 50); },
+  // np.sort(a) — ascending, returns new ndarray
+  async sort(a) {
+    const raw = _raw(a);
+    // natra's raw arr is a WASM-arena descriptor — use toArray to read.
+    const ctx = await _ensureCtx();
+    const flat = typeof ctx.toArray === 'function' ? ctx.toArray(raw).flat() : Array.from(raw);
+    flat.sort((x, y) => x - y);
+    return _makeNd(ctx.array(flat));
+  },
+  // np.log10(a)
+  log10(a) {
+    return _isNd(a) ? _makeNd(_ops().map(a._arr, Math.log10)) : Math.log10(a);
+  },
+  // np.logspace(start, stop, num=50, base=10) — log-spaced points between
+  // base**start and base**stop inclusive.
+  async logspace(start, stop, num, base) {
+    if (start?._kw) {
+      const kw = start;
+      start = kw.start; stop = kw.stop;
+      num = kw.num ?? 50; base = kw.base ?? 10;
+    }
+    num = num ?? 50; base = base ?? 10;
+    const ctx = await _ensureCtx(); ctx._syncPerm();
+    const lin = ctx.linspace(start, stop, num);
+    return _makeNd(_ops().map(lin, (v) => Math.pow(base, v)));
+  },
+  // np.var(a, axis=None) / np.std(a, axis=None)
+  var(a, axis) {
+    const raw = _raw(a);
+    const m = _ops().mean(raw, axis);
+    const diff = _ops().sub(raw, m);
+    const sq = _ops().mul(diff, diff);
+    const r = _ops().mean(sq, axis);
+    return typeof r === 'number' ? r : _makeNd(r);
+  },
+  std(a, axis) {
+    const v = this.var(a, axis);
+    if (typeof v === 'number') return Math.sqrt(v);
+    return _makeNd(_ops().map(v._arr, Math.sqrt));
+  },
+
   // linear algebra helpers
   dot(a, b) {
     const r = _ops().dot(_raw(a), _raw(b));
@@ -377,7 +463,7 @@ const _module = {
     async uniform(low, high, shape) {
       if (low?._kw) { shape = low.size; high = low.high ?? 1; low = low.low ?? 0; }
       const ctx = await _ensureCtx();
-      const arr = ctx.random(shape || [1]);
+      const arr = ctx.random(_normShape(shape || [1]));
       // scale: low + arr * (high - low)
       const ops = _ops();
       const scaled = ops.add(ops.mul(arr, high - low), low);
@@ -386,9 +472,18 @@ const _module = {
     async normal(loc, scale, shape) {
       if (loc?._kw) { shape = loc.size; scale = loc.scale ?? 1; loc = loc.loc ?? 0; }
       const ctx = await _ensureCtx();
-      const arr = ctx.randn(shape || [1]);
+      const arr = ctx.randn(_normShape(shape || [1]));
       const ops = _ops();
       const scaled = ops.add(ops.mul(arr, scale ?? 1), loc ?? 0);
+      return _makeNd(scaled);
+    },
+    async lognormal(mean, sigma, shape) {
+      if (mean?._kw) { shape = mean.size; sigma = mean.sigma ?? 1; mean = mean.mean ?? 0; }
+      const ctx = await _ensureCtx();
+      const arr = ctx.randn(_normShape(shape || [1]));
+      const ops = _ops();
+      // exp(mean + sigma * z) where z ~ N(0,1)
+      const scaled = ops.exp(ops.add(ops.mul(arr, sigma ?? 1), mean ?? 0));
       return _makeNd(scaled);
     },
   },

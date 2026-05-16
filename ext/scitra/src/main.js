@@ -6,6 +6,7 @@ import {
   weighted_mean, weighted_var, weighted_std,
   weighted_percentile, weighted_median,
   ecdf, histogram, moments,
+  gmean, hmean,
 } from './stats/descriptives.js';
 import { normal_score_transform } from './stats/transform.js';
 import { gaussian_kde } from './stats/kde.js';
@@ -24,6 +25,7 @@ export const stats = {
   weighted_mean, weighted_var, weighted_std,
   weighted_percentile, weighted_median,
   ecdf, histogram, moments,
+  gmean, hmean,
   // transforms
   normal_score_transform,
   // kde
@@ -61,6 +63,7 @@ export {
   weighted_mean, weighted_var, weighted_std,
   weighted_percentile, weighted_median,
   ecdf, histogram, moments,
+  gmean, hmean,
 };
 export { normal_score_transform };
 export { gaussian_kde };

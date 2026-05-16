@@ -32,10 +32,69 @@ describe('renderMd', () => {
     assert.ok(result.includes('<a href="https://example.com">text</a>'));
   });
 
-  it('escapes HTML entities', () => {
+  it('strips dangerous tags entirely', () => {
+    // renderMd now passes safe HTML through verbatim but strips a
+    // blacklist of dangerous tags (script, iframe, style, etc.).
     const result = renderMd('<script>alert("xss")</script>');
     assert.ok(!result.includes('<script>'));
-    assert.ok(result.includes('&lt;script&gt;'));
+    assert.ok(!result.includes('alert'));  // body of script tag also gone
+  });
+
+  it('passes safe inline HTML through', () => {
+    // Centered images and other inline HTML (common in imported notebooks)
+    // should render rather than appear as escaped text.
+    const result = renderMd('<p align="center"><img src="logo.png" /></p>');
+    assert.ok(result.includes('<img src="logo.png"'));
+    assert.ok(result.includes('align="center"'));
+  });
+
+  it('renders h4, h5, h6', () => {
+    assert.ok(renderMd('#### four').includes('<h4>four</h4>'));
+    assert.ok(renderMd('##### five').includes('<h5>five</h5>'));
+    assert.ok(renderMd('###### six').includes('<h6>six</h6>'));
+  });
+
+  it('renders image syntax', () => {
+    const result = renderMd('![alt text](img.png)');
+    assert.ok(result.includes('<img src="img.png"'));
+    assert.ok(result.includes('alt="alt text"'));
+  });
+
+  it('rejects javascript: URLs in images', () => {
+    const result = renderMd('![alt](javascript:alert(1))');
+    assert.ok(!result.includes('<img'));
+    assert.ok(result.includes('alt'));  // alt text remains as plain text
+  });
+
+  it('allows data:image URLs (inline images)', () => {
+    const result = renderMd('![chart](data:image/png;base64,iVBOR)');
+    assert.ok(result.includes('<img src="data:image/png;base64,iVBOR"'));
+  });
+
+  it('renders unordered lists', () => {
+    const result = renderMd('- one\n- two\n- three');
+    assert.ok(result.includes('<ul>'));
+    assert.ok(result.includes('<li>one</li>'));
+    assert.ok(result.includes('<li>three</li>'));
+  });
+
+  it('renders ordered lists', () => {
+    const result = renderMd('1. first\n2. second');
+    assert.ok(result.includes('<ol>'));
+    assert.ok(result.includes('<li>first</li>'));
+  });
+
+  it('renders fenced code blocks', () => {
+    const result = renderMd('```js\nconst x = 1;\n```');
+    assert.ok(result.includes('<pre><code class="language-js">'));
+    assert.ok(result.includes('const x = 1;'));
+  });
+
+  it('strips on*= event handlers', () => {
+    const result = renderMd('<a href="x" onclick="evil()">link</a>');
+    assert.ok(!result.includes('onclick'));
+    assert.ok(!result.includes('evil'));
+    assert.ok(result.includes('href="x"'));
   });
 
   it('wraps plain text in paragraphs', () => {
@@ -45,7 +104,12 @@ describe('renderMd', () => {
 
   it('handles paragraph breaks', () => {
     const result = renderMd('first\n\nsecond');
-    assert.ok(result.includes('</p><p>'));
+    // Each paragraph wrapped individually now (joined by '\n'), not glued
+    // with </p><p>. Check for two separate <p>...</p> blocks instead.
+    const matches = result.match(/<p>[^<]*<\/p>/g) || [];
+    assert.ok(matches.length >= 2);
+    assert.ok(result.includes('first'));
+    assert.ok(result.includes('second'));
   });
 
   it('handles empty string', () => {

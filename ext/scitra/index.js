@@ -537,6 +537,18 @@ lognorm.fit    = (samples, opts) => _lnormFit_distributions(samples, opts);
 function _toF64_descriptives(x) {
   if (x instanceof Float64Array) return x;
   if (x && x.data instanceof Float64Array) return x.data;
+  // natra's adder wrapper: {_nd: true, _arr: <descriptor>}. The descriptor
+  // shape varies — WASM-arena (memory + ptr + length + dtype) or plain
+  // data-backed (data: Float64Array). Handle both.
+  if (x && x._nd && x._arr) {
+    const a = x._arr;
+    if (a.memory && a.memory.buffer && a.dtype === 'f64' && typeof a.ptr === 'number') {
+      return new Float64Array(a.memory.buffer, a.ptr, a.length);
+    }
+    if (a.data instanceof Float64Array) {
+      return a.length != null ? a.data.subarray(0, a.length) : a.data;
+    }
+  }
   if (Array.isArray(x) || ArrayBuffer.isView(x)) return Float64Array.from(x);
   throw new TypeError('expected array, Float64Array, or ndarray');
 }
@@ -836,6 +848,32 @@ function moments(x, opts) {
     skewness: std === 0 ? 0 : m3 / (std * std * std),
     kurtosis: m2 === 0 ? 0 : m4 / (m2 * m2) - 3,
   };
+}
+
+// scipy.stats.gmean(a) — geometric mean = exp(mean(log(a))). All values
+// must be positive (returns NaN if any are ≤ 0).
+function gmean(x) {
+  const xa = _toF64_descriptives(x);
+  if (xa.length === 0) return NaN;
+  let s = 0;
+  for (let i = 0; i < xa.length; i++) {
+    if (xa[i] <= 0) return NaN;
+    s += Math.log(xa[i]);
+  }
+  return Math.exp(s / xa.length);
+}
+
+// scipy.stats.hmean(a) — harmonic mean = n / sum(1/a). All values must
+// be positive (returns NaN if any are ≤ 0).
+function hmean(x) {
+  const xa = _toF64_descriptives(x);
+  if (xa.length === 0) return NaN;
+  let s = 0;
+  for (let i = 0; i < xa.length; i++) {
+    if (xa[i] <= 0) return NaN;
+    s += 1 / xa[i];
+  }
+  return xa.length / s;
 }
 
 // ── stats/transform.js ──
@@ -2596,6 +2634,7 @@ export {
   weighted_mean, weighted_var, weighted_std,
   weighted_percentile, weighted_median,
   ecdf, histogram, moments,
+  gmean, hmean,
   // stats/transform
   normal_score_transform,
   // stats/kde
@@ -2614,6 +2653,7 @@ export const stats = {
   weighted_mean, weighted_var, weighted_std,
   weighted_percentile, weighted_median,
   ecdf, histogram, moments,
+  gmean, hmean,
   normal_score_transform,
   gaussian_kde,
 };

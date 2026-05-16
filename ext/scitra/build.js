@@ -97,6 +97,7 @@ export {
   weighted_mean, weighted_var, weighted_std,
   weighted_percentile, weighted_median,
   ecdf, histogram, moments,
+  gmean, hmean,
   // stats/transform
   normal_score_transform,
   // stats/kde
@@ -115,6 +116,7 @@ export const stats = {
   weighted_mean, weighted_var, weighted_std,
   weighted_percentile, weighted_median,
   ecdf, histogram, moments,
+  gmean, hmean,
   normal_score_transform,
   gaussian_kde,
 };
