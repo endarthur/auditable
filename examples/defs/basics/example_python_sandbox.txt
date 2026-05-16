@@ -11,6 +11,7 @@
 /// module: @gcu/line ext/line/index.js
 /// module: @gcu/mimic-io ext/mimic-io/index.js
 /// module: @gcu/scitra ext/scitra/index.js
+/// module: ./ext/scitra/adder.js ext/scitra/adder.js
 /// module: @gcu/learn ext/learn/index.js
 /// module: ./ext/learn/adder.js ext/learn/adder.js
 
@@ -25,7 +26,7 @@ A base notebook with the GCU replacement libraries for the Python scientific sta
 | `pandas` / `pd` | sadpan | `import sadpan as pd` | ✓ loaded |
 | `matplotlib.pyplot` / `plt` | plt | `import plt` | ✓ loaded |
 | `sklearn` | learn | `import learn` | ✓ loaded |
-| `scipy` | scitra | `import scitra` | no adder.js adapter yet (see ROADMAP) |
+| `scipy` | scitra | `import scitra` | ✓ loaded |
 
 The libs without ✓ status get rewritten on import but fail at runtime. That's intentional — the failing import is the honest signal for which adapter to wire next.
 
@@ -41,6 +42,7 @@ await load("@gcu/plot")
 await load("@gcu/line")
 await load("@gcu/mimic-io")
 await load("@gcu/scitra")
+await load("./ext/scitra/adder.js")
 await load("@gcu/learn")
 await load("./ext/learn/adder.js")
 
@@ -87,6 +89,14 @@ y = [0, 1, 1, 0]
 clf = DecisionTreeClassifier(random_state=0)
 clf.fit(X, y)
 print("XOR predictions:", clf.predict([[0, 0], [1, 1], [0, 1]]))
+
+/// adder
+# scitra: normal CDF + special functions
+from scitra.stats import norm
+from scitra.special import erf
+
+print("norm(0,1).cdf(1.96) =", norm(0, 1).cdf(1.96))
+print("erf(1.0)             =", erf(1.0))
 
 /// md
 ## what to do next
