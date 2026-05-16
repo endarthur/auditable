@@ -1,0 +1,21 @@
+{
+  "name": "@gcu/ipython-adapter",
+  "version": "0.1.0",
+  "description": "Shim that exposes the IPython.display API surface (HTML, Markdown, Image, SVG, Latex, Math, JSON, display, clear_output, get_ipython) inside adder cells. Lets Jupyter notebooks that import IPython run unmodified after the @gcu/ipynb import rewrite.",
+  "type": "module",
+  "main": "adder.js",
+  "exports": {
+    ".": "./adder.js",
+    "./adder": "./adder.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "adder.js",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@gcu/adder": "^0.3.0"
+  },
+  "keywords": ["ipython", "jupyter", "adapter", "auditable", "adder"],
+  "license": "MIT"
+}

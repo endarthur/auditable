@@ -5,6 +5,8 @@
 
 import { $, S } from './state.js';
 import * as hooks from './hooks.js';
+import { renderMd } from './markdown.js';
+import { TaggedContent } from './engine.js';
 import { registerExtension, _ctUninstallPlugin, getExtension, getCellType, getTaggedLanguage, getExports, hasExports, listExtensions } from './cell-types.js';
 import { registerProvider } from './stdlib.js';
 import { convertCell, moveCell } from './cell-ops.js';
@@ -49,6 +51,10 @@ window.auditable.getCellType = getCellType;
 window.auditable.getTaggedLanguage = getTaggedLanguage;
 window.auditable.getExports = getExports;
 window.auditable.hasExports = hasExports;
+// Display utilities — exposed so extensions can construct rich output
+// without importing through the build's #-prefixed module map.
+window.auditable.renderMd = renderMd;
+window.auditable.TaggedContent = TaggedContent;
 
 // editor
 window.toggleAutorun = toggleAutorun;

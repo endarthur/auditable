@@ -14,6 +14,7 @@
 /// module: ./ext/scitra/adder.js ext/scitra/adder.js
 /// module: @gcu/learn ext/learn/index.js
 /// module: ./ext/learn/adder.js ext/learn/adder.js
+/// module: ./ext/ipython-adapter/adder.js ext/ipython-adapter/adder.js
 
 /// md
 # Python sandbox
@@ -27,6 +28,7 @@ A base notebook with the GCU replacement libraries for the Python scientific sta
 | `matplotlib.pyplot` / `plt` | plt | `import plt` | ✓ loaded |
 | `sklearn` | learn | `import learn` | ✓ loaded |
 | `scipy` | scitra | `import scitra` | ✓ loaded |
+| `IPython.display` | IPython | `import IPython` | ✓ loaded (HTML / Markdown / Image / display / clear_output / …) |
 
 The libs without ✓ status get rewritten on import but fail at runtime. That's intentional — the failing import is the honest signal for which adapter to wire next.
 
@@ -45,6 +47,7 @@ await load("@gcu/scitra")
 await load("./ext/scitra/adder.js")
 await load("@gcu/learn")
 await load("./ext/learn/adder.js")
+await load("./ext/ipython-adapter/adder.js")
 
 /// md
 ## smoke test — verify each library loaded
@@ -97,6 +100,13 @@ from scitra.special import erf
 
 print("norm(0,1).cdf(1.96) =", norm(0, 1).cdf(1.96))
 print("erf(1.0)             =", erf(1.0))
+
+/// adder
+# IPython.display: rich output wrappers — what most Jupyter notebooks use
+from IPython.display import display, HTML, Markdown
+
+display(HTML("<b style='color: var(--au-action);'>HTML wrapper works.</b>"))
+display(Markdown("**Markdown** wrapper renders through auditable's md pipeline:\n\n- list item 1\n- list item 2"))
 
 /// md
 ## what to do next

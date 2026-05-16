@@ -98,6 +98,13 @@ export function makeModuleLoaders(cell, ctx, deps) {
   // rewriting other modules' scoped imports. Stable means: same URL is
   // reused on re-load so the JS module map deduplicates the import.
   if (!window._moduleBlobUrls) window._moduleBlobUrls = {};
+  // _importPromises: url → in-flight import Promise. Concurrent load()
+  // calls for the same URL share the same Promise so the module body
+  // only runs once. Necessary because some registrations (e.g. cell
+  // types) trigger `_ctActivatePendingCells → runAll` synchronously,
+  // re-entering load() before the outer `await import()` has populated
+  // `_importCache[url]`.
+  if (!window._importPromises) window._importPromises = {};
 
   // Materialise an installed-module entry into a blob URL whose source
   // has all `@scope/pkg` bare specifiers rewritten to stable per-spec
@@ -180,6 +187,9 @@ export function makeModuleLoaders(cell, ctx, deps) {
     }
 
     if (window._importCache[url]) return window._importCache[url];
+    // In-flight: another caller is already importing — share the promise
+    // so the module body only runs once.
+    if (window._importPromises[url]) return await window._importPromises[url];
 
     // binary assets — return blob URL
     if (window._installedModules[url]?.binary) {
@@ -190,14 +200,21 @@ export function makeModuleLoaders(cell, ctx, deps) {
 
     const langsBefore = window._taggedLanguages ? Object.keys(window._taggedLanguages).length : 0;
 
+    const loadPromise = (async () => {
+      let mod;
+      if (window._installedModules[url]) {
+        const blobUrl = await _materializeInstalled(url);
+        mod = await import(blobUrl);
+      } else {
+        mod = await import(url);
+      }
+      window._importCache[url] = mod;
+      return mod;
+    })();
+    window._importPromises[url] = loadPromise;
     let mod;
-    if (window._installedModules[url]) {
-      const blobUrl = await _materializeInstalled(url);
-      mod = await import(blobUrl);
-    } else {
-      mod = await import(url);
-    }
-    window._importCache[url] = mod;
+    try { mod = await loadPromise; }
+    finally { delete window._importPromises[url]; }
 
     const langsAfter = window._taggedLanguages ? Object.keys(window._taggedLanguages).length : 0;
     if (langsAfter > langsBefore) refreshTaggedLanguages();
@@ -208,6 +225,7 @@ export function makeModuleLoaders(cell, ctx, deps) {
   const install = async (url) => {
     const storeKey = url;
     if (window._importCache[storeKey]) return window._importCache[storeKey];
+    if (window._importPromises[storeKey]) return await window._importPromises[storeKey];
 
     const existing = window._installedModules[storeKey];
     if (existing && !existing.binary) {
