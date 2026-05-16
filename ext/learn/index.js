@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: MIT
 // Auto-generated — do not edit; edit src/ and rerun build.js.
 
-import { NdArray, cholesky, lstsq, solveCholesky, svd } from '../line/index.js';
-import { MimicIOUnsupportedClass, createRegistry, dump as _mioDump, isV1, load as _mioLoad, normalizeV1 } from '../mimic-io/index.js';
-import { KDTree, ndtri } from '../scitra/index.js';
+import { NdArray, cholesky, lstsq, solveCholesky, svd } from '@gcu/line';
+import { MimicIOUnsupportedClass, createRegistry, dump as _mioDump, isV1, load as _mioLoad, normalizeV1 } from '@gcu/mimic-io';
+import { KDTree, ndtri } from '@gcu/scitra';
 
 // ── util/random.js ──
 

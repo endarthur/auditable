@@ -68,12 +68,69 @@ const LEGACY_ALIASES = {
   '@plan':     '@gcu/plan',
 };
 
+// Find every `@scope/pkg` bare specifier referenced by a module source's
+// static or dynamic imports. Used to pre-load and rewrite cross-package
+// deps before a blob-URL-hosted module tries to resolve them itself.
+function _findScopedSpecifiers(source) {
+  const re = /(?:from|import)\s*\(?\s*["'](@[\w.-]+\/[\w.-]+)["']/g;
+  const specs = new Set();
+  let m;
+  while ((m = re.exec(source)) !== null) specs.add(m[1]);
+  return specs;
+}
+
+// Rewrite every occurrence of `bareSpec` in import/from positions to the
+// supplied URL. Used after a dependency has been materialised so the
+// rewritten source can be wrapped in a blob URL and resolve correctly.
+function _rewriteSpecifier(source, bareSpec, replacementUrl) {
+  const esc = bareSpec.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return source.replace(new RegExp(`(["'])${esc}(["'])`, 'g'),
+                        '$1' + replacementUrl + '$2');
+}
+
 export function makeModuleLoaders(cell, ctx, deps) {
   const { display } = ctx;
   const { std, python, zenOfPython, fsRead, refreshTaggedLanguages, notifyDirty } = deps;
 
   if (!window._importCache) window._importCache = {};
   if (!window._installedModules) window._installedModules = {};
+  // _moduleBlobUrls: url → stable blob (or absolute dev) URL used when
+  // rewriting other modules' scoped imports. Stable means: same URL is
+  // reused on re-load so the JS module map deduplicates the import.
+  if (!window._moduleBlobUrls) window._moduleBlobUrls = {};
+
+  // Materialise an installed-module entry into a blob URL whose source
+  // has all `@scope/pkg` bare specifiers rewritten to stable per-spec
+  // URLs (blob or absolute). Blob URLs aren't hierarchical, so a bundle
+  // like @gcu/learn that imports @gcu/line cannot resolve that bare
+  // specifier on its own — the resolution has to happen ahead of time
+  // by recursively load()-ing each dep and rewriting the source.
+  //
+  // Idempotent — re-materialising the same URL returns the cached blob.
+  async function _materializeInstalled(url) {
+    if (window._moduleBlobUrls[url]) return window._moduleBlobUrls[url];
+    const entry = window._installedModules[url];
+    if (!entry || entry.binary) return null;
+
+    const decoded = await decodeModuleEntry(entry);
+    let src = decoded.source;
+    try { src = resolveModulePaths(src, url); } catch {}
+
+    // Pre-resolve scoped imports — each spec triggers a recursive
+    // load() which handles dev/installed/CDN paths uniformly and
+    // populates _moduleBlobUrls[spec] with the stable URL we rewrite to.
+    for (const spec of _findScopedSpecifiers(src)) {
+      if (spec === url) continue;
+      try { await load(spec); } catch { continue; }
+      const depUrl = window._moduleBlobUrls[spec];
+      if (depUrl) src = _rewriteSpecifier(src, spec, depUrl);
+    }
+
+    const blob = new Blob([src], { type: 'application/javascript' });
+    const blobUrl = URL.createObjectURL(blob);
+    window._moduleBlobUrls[url] = blobUrl;
+    return blobUrl;
+  }
 
   const load = async (url) => {
     // virtual modules
@@ -103,14 +160,19 @@ export function makeModuleLoaders(cell, ctx, deps) {
       }
     }
 
-    // Legacy alias + @scope/name dev-mode fallback
+    // Legacy alias + @scope/name dev-mode fallback. Record the resolved
+    // absolute URL in _moduleBlobUrls so other modules' scoped imports
+    // can rewrite to it instead of failing on a relative path from a
+    // blob URL host.
     const resolved = LEGACY_ALIASES[url] || url;
     const scopedMatch = /^@[\w.-]+\/([\w.-]+)$/.exec(resolved);
     if (scopedMatch && !resolved.startsWith('@atra/')
         && !window._importCache[url] && !window._installedModules[url]) {
       try {
-        const mod = await import('./ext/' + scopedMatch[1] + '/index.js');
+        const devUrl = new URL('./ext/' + scopedMatch[1] + '/index.js', document.baseURI).href;
+        const mod = await import(devUrl);
         window._importCache[url] = mod;
+        window._moduleBlobUrls[url] = devUrl;
         return mod;
       } catch {
         // dev path not available; fall through
@@ -130,11 +192,7 @@ export function makeModuleLoaders(cell, ctx, deps) {
 
     let mod;
     if (window._installedModules[url]) {
-      const decoded = await decodeModuleEntry(window._installedModules[url]);
-      let src = decoded.source;
-      try { src = resolveModulePaths(src, url); } catch {}
-      const blob = new Blob([src], { type: 'application/javascript' });
-      const blobUrl = URL.createObjectURL(blob);
+      const blobUrl = await _materializeInstalled(url);
       mod = await import(blobUrl);
     } else {
       mod = await import(url);
@@ -153,13 +211,12 @@ export function makeModuleLoaders(cell, ctx, deps) {
 
     const existing = window._installedModules[storeKey];
     if (existing && !existing.binary) {
-      const decoded = await decodeModuleEntry(existing);
-      const src = decoded.source;
-      const blob = new Blob([src], { type: 'application/javascript' });
-      const blobUrl = URL.createObjectURL(blob);
+      // Use the shared materialiser so scoped imports get rewritten.
+      const blobUrl = await _materializeInstalled(storeKey);
       const mod = await import(blobUrl);
       window._importCache[storeKey] = mod;
-      display(`loaded ${storeKey} from cache (${(src.length / 1024).toFixed(1)} KB)`);
+      const decoded = await decodeModuleEntry(existing);
+      display(`loaded ${storeKey} from cache (${(decoded.source.length / 1024).toFixed(1)} KB)`);
       return mod;
     }
 
@@ -224,8 +281,8 @@ export function makeModuleLoaders(cell, ctx, deps) {
     const compressedSrc = await compressText(source);
     window._installedModules[storeKey] = { source: compressedSrc, compressed: true, cellId: cell.id };
     notifyDirty();
-    const blob = new Blob([source], { type: 'application/javascript' });
-    const blobUrl = URL.createObjectURL(blob);
+    // Use the shared materialiser so scoped imports get rewritten.
+    const blobUrl = await _materializeInstalled(storeKey);
     const mod = await import(blobUrl);
     window._importCache[storeKey] = mod;
     display(`installed ${storeKey} (${(source.length / 1024).toFixed(1)} KB → ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);

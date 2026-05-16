@@ -8,6 +8,11 @@
 /// module: ./ext/natra/adder.js ext/natra/adder.js
 /// module: @gcu/sadpan ext/sadpan/index.js
 /// module: @gcu/plot ext/plot/index.js
+/// module: @gcu/line ext/line/index.js
+/// module: @gcu/mimic-io ext/mimic-io/index.js
+/// module: @gcu/scitra ext/scitra/index.js
+/// module: @gcu/learn ext/learn/index.js
+/// module: ./ext/learn/adder.js ext/learn/adder.js
 
 /// md
 # Python sandbox
@@ -19,7 +24,7 @@ A base notebook with the GCU replacement libraries for the Python scientific sta
 | `numpy` / `np` | natra | `import natra as np` | ✓ loaded |
 | `pandas` / `pd` | sadpan | `import sadpan as pd` | ✓ loaded |
 | `matplotlib.pyplot` / `plt` | plt | `import plt` | ✓ loaded |
-| `sklearn` | learn | `import learn` | needs blob-URL relative-path fix (see ROADMAP) |
+| `sklearn` | learn | `import learn` | ✓ loaded |
 | `scipy` | scitra | `import scitra` | no adder.js adapter yet (see ROADMAP) |
 
 The libs without ✓ status get rewritten on import but fail at runtime. That's intentional — the failing import is the honest signal for which adapter to wire next.
@@ -33,6 +38,11 @@ await load("./ext/natra/index.js")
 await load("./ext/natra/adder.js")
 await load("@gcu/sadpan")
 await load("@gcu/plot")
+await load("@gcu/line")
+await load("@gcu/mimic-io")
+await load("@gcu/scitra")
+await load("@gcu/learn")
+await load("./ext/learn/adder.js")
 
 /// md
 ## smoke test — verify each library loaded
@@ -66,6 +76,17 @@ xs = np.linspace(0, 6.28, 100)
 ys = np.sin(xs)
 ax.plot(xs.tolist(), ys.tolist())
 fig.show()
+
+/// adder
+# learn: fit a decision tree on a tiny dataset and predict
+from learn.tree import DecisionTreeClassifier
+
+X = [[0, 0], [0, 1], [1, 0], [1, 1]]
+y = [0, 1, 1, 0]
+
+clf = DecisionTreeClassifier(random_state=0)
+clf.fit(X, y)
+print("XOR predictions:", clf.predict([[0, 0], [1, 1], [0, 1]]))
 
 /// md
 ## what to do next

@@ -55,9 +55,27 @@ output += '// Auto-generated — do not edit; edit src/ and rerun build.js.\n\n'
 // otherwise multiple files importing different symbols from line/index.js
 // would emit duplicate `NdArray`-style declarations and the bundle won't
 // parse.
+//
+// Cross-package sibling imports (`../../line/index.js`) get translated to
+// `@gcu/<pkg>` bare specifiers — blob URLs aren't hierarchical, so
+// `../line/index.js` in the bundle fails when learn is loaded from a blob.
+// auditable's module loader resolves `@gcu/<pkg>` against _installedModules
+// (or dev-mode fallback) and rewrites to stable blob URLs.
 const importsByPath = new Map();   // path → Set of named bindings (raw text like "x", "x as y")
 
 const isExternalPath = (p) => !p.startsWith('.') || p.startsWith('../../');
+
+// Translate a relative cross-package path into its @gcu/<pkg> bare
+// specifier so the runtime loader can resolve it through the module
+// registry instead of relying on the bundle's host URL being hierarchical.
+function translateExternalPath(p) {
+  if (p.startsWith('../../')) {
+    const m = p.match(/^\.\.\/\.\.\/([\w-]+)\/index\.js$/);
+    if (m) return '@gcu/' + m[1];
+    return p.slice(3);
+  }
+  return p;
+}
 
 for (const mod of modules) {
   let src = readFileSync(join(srcDir, mod), 'utf8');
@@ -65,7 +83,7 @@ for (const mod of modules) {
     /^import\s+\{([^}]*)\}\s+from\s+['"]([^'"]+)['"];?\s*$/gm,
     (_line, named, path) => {
       if (!isExternalPath(path)) return '';
-      const finalPath = path.startsWith('../../') ? path.slice(3) : path;
+      const finalPath = translateExternalPath(path);
       if (!importsByPath.has(finalPath)) importsByPath.set(finalPath, new Set());
       const bindings = importsByPath.get(finalPath);
       for (const b of named.split(',')) {
@@ -81,7 +99,7 @@ for (const mod of modules) {
     /^import\s+(?:\*\s+as\s+\w+|\w+)\s+from\s+['"]([^'"]+)['"];?\s*$/gm,
     (line, path) => {
       if (isExternalPath(path)) {
-        const finalPath = path.startsWith('../../') ? path.slice(3) : path;
+        const finalPath = translateExternalPath(path);
         const rewritten = line.replace(path, finalPath);
         if (!importsByPath.has(finalPath)) importsByPath.set(finalPath, new Set());
         importsByPath.get(finalPath).add(`__RAW__${rewritten.trim()}`);

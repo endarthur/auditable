@@ -14,8 +14,23 @@
 // objects (preprocessing, tree, …) which are plain JS objects. No
 // __getattr__ trick needed because every submodule is exposed directly
 // as a property.
+//
+// No static `import * as _learn from './index.js'` — in the browser this
+// module is hosted at a blob URL where relative imports can't resolve.
+// Mirrors the natra/adder.js pattern: in browser, pick up the bundle
+// from window._importCache (must be load()-ed first); in Node tests,
+// fall back to a dynamic relative import.
 
-import * as _learn from './index.js';
+let _learn;
+if (typeof window !== 'undefined' && window._importCache) {
+  _learn = window._importCache['@gcu/learn']
+    || Object.values(window._importCache).find(m => m && m.BaseEstimator && m.Pipeline);
+  if (!_learn) {
+    throw new Error('@gcu/learn not loaded — call load("@gcu/learn") first');
+  }
+} else {
+  _learn = await import('./index.js');
+}
 
 const _module = {
   // ── submodules (sklearn-shape namespaces) ──
