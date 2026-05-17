@@ -441,10 +441,43 @@ class Axes {
     return this;
   }
 
-  // matshow == imshow for a 2D matrix. matplotlib's Axes.matshow has
-  // a few extras (auto-aspect, no x-axis-on-bottom) but the common case
-  // — `ax.matshow(corr_matrix)` — works identically.
-  matshow(data, opts) { return this.imshow(data, undefined, undefined, opts); }
+  // matshow — render a 2D matrix as a heatmap. Accepts diverse inputs:
+  // a sadpan DataFrame (uses .to_numpy()), a natra ndarray, a
+  // Float64Array with .shape, a nested JS array, or already-flat data
+  // with shape. Extracts flat data + nx + ny + passes through to imshow.
+  matshow(data, opts) {
+    const o = _resolveAliases({ ...opts });
+    let flat, nx, ny;
+    // sadpan DataFrame
+    if (data && data._tbl && typeof data.to_numpy === 'function') {
+      const arr2d = data.to_numpy();
+      ny = arr2d.shape[0];
+      nx = arr2d.shape[1];
+      flat = arr2d.data instanceof Float64Array ? arr2d.data : Float64Array.from([].concat(...arr2d.tolist()));
+    } else if (data instanceof Float64Array && Array.isArray(data.shape) && data.shape.length === 2) {
+      ny = data.shape[0]; nx = data.shape[1]; flat = data;
+    } else if (data && data.data instanceof Float64Array && Array.isArray(data.shape) && data.shape.length === 2) {
+      ny = data.shape[0]; nx = data.shape[1]; flat = data.data;
+    } else if (data && data._nd && data._arr && data._arr.ndim === 2) {
+      const a = data._arr;
+      ny = a.shape[0]; nx = a.shape[1];
+      flat = new Float64Array(a.memory.buffer, a.ptr, ny * nx);
+    } else if (Array.isArray(data) && Array.isArray(data[0])) {
+      ny = data.length;
+      nx = data[0].length;
+      flat = new Float64Array(ny * nx);
+      for (let i = 0; i < ny; i++) for (let j = 0; j < nx; j++) flat[i * nx + j] = data[i][j];
+    } else {
+      // Fall back to imshow as-is and let it complain.
+      return this.imshow(data, undefined, undefined, opts);
+    }
+    // matshow defaults to 'upper' origin (row 0 at top) — opposite of
+    // imshow's default. honor unless caller explicitly set otherwise.
+    if (!o.origin) o.origin = 'upper';
+    // Aspect equal so cells render as squares.
+    if (this._aspect === 'auto') this._aspect = 'equal';
+    return this.imshow(flat, nx, ny, o);
+  }
 
   imshow(data, nx, ny, opts) {
     this._traces.push({ type: 'imshow', data, nx, ny, opts: _resolveAliases({ ...opts }) });
