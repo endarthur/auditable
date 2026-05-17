@@ -1138,11 +1138,77 @@ const op = {
 // ── DataFrame wrapper (for adder pandas API) ──
 
 class DataFrame {
-  constructor(data) {
+  constructor(data, columns, _index) {
+    // pandas signature: DataFrame(data=None, index=None, columns=None, ...)
+    // Adder calls it as:
+    //   pd.DataFrame({...})                            → positional dict
+    //   pd.DataFrame([{}, {}])                         → list of records
+    //   pd.DataFrame(data=arr, columns=[...])          → kwargs only
+    //   pd.DataFrame(arr, columns=[...])               → mixed
+    // adder lands kwargs as a trailing {_kw: true, …} obj — could be in
+    // any param slot depending on how the user typed it.
+    let kw = null;
+    for (const arg of [data, columns, _index]) {
+      if (arg && typeof arg === 'object' && arg._kw) { kw = arg; break; }
+    }
+    if (kw) {
+      data = kw.data !== undefined ? kw.data : data;
+      columns = kw.columns !== undefined ? kw.columns : columns;
+    }
+    // Pull data out of natra ndarray / Float64Array with shape
+    if (data && Array.isArray(data.shape) && data.shape.length === 2) {
+      const nrows = data.shape[0];
+      const ncols = data.shape[1];
+      // Get a flat row-major Float64Array view (or null for unsupported)
+      let flat = null;
+      if (data instanceof Float64Array) flat = data;
+      else if (data.data instanceof Float64Array) flat = data.data;
+      else if (data._nd && data._arr) {
+        // natra wrapper — read from WASM arena
+        const a = data._arr;
+        if (a.memory && a.memory.buffer && a.dtype === 'f64' && typeof a.ptr === 'number') {
+          flat = new Float64Array(a.memory.buffer, a.ptr, nrows * ncols);
+        } else if (a.data instanceof Float64Array) {
+          flat = a.data;
+        }
+      } else if (typeof data.tolist === 'function') {
+        // Last-resort: nested array via tolist
+        const rows = data.tolist();
+        if (Array.isArray(rows) && Array.isArray(rows[0])) {
+          flat = new Float64Array(nrows * ncols);
+          for (let i = 0; i < nrows; i++) {
+            for (let j = 0; j < ncols; j++) flat[i * ncols + j] = rows[i][j];
+          }
+        }
+      }
+      if (flat) {
+        const names = Array.isArray(columns) && columns.length === ncols
+          ? columns.slice()
+          : Array.from({ length: ncols }, (_, i) => String(i));
+        const cols = {};
+        for (let j = 0; j < ncols; j++) {
+          const col = new Array(nrows);
+          for (let i = 0; i < nrows; i++) col[i] = flat[i * ncols + j];
+          cols[names[j]] = col;
+        }
+        this._tbl = new Table(cols, names);
+        this.__adderClass__ = 'DataFrame';
+        return;
+      }
+    }
     if (!data) this._tbl = new Table({}, []);
     else if (data instanceof Table) this._tbl = data;
     else if (Array.isArray(data)) this._tbl = from(data);
     else if (typeof data === 'object') this._tbl = table(data);
+    // If columns is provided (and we built from a dict), rename to honor it.
+    if (Array.isArray(columns) && data && !Array.isArray(data)
+        && !(data instanceof Table)
+        && Object.keys(data).length === columns.length) {
+      const oldNames = this._tbl.columnNames();
+      const map = {};
+      for (let i = 0; i < columns.length; i++) map[oldNames[i]] = columns[i];
+      this._tbl = this._tbl.rename(map);
+    }
     this.__adderClass__ = 'DataFrame';
   }
 
