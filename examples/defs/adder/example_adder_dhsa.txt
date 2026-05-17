@@ -116,17 +116,20 @@ vmax = max(truth)
 
 mapW = min(220, int((js.window.innerWidth - 40) / nCols))
 fig, axes = plt.subplots(2, nCols, figsize=[nCols * mapW, 2 * (mapW + 20)])
+# subplots(R, C) returns a nested 2D array when both >1 (matplotlib
+# shape); flatten to row-major for linear iteration over the grid.
+cells = [a for row in axes for a in row]
 
-axes[0].imshow(truth, gridN, gridN, cmap="viridis", vmin=vmin, vmax=vmax)
-axes[0].set_title("truth")
+cells[0].imshow(truth, gridN, gridN, cmap="viridis", vmin=vmin, vmax=vmax)
+cells[0].set_title("truth")
 
 for k in range(len(show)):
     r = show[k]
-    axes[k + 1].imshow(r["est"], gridN, gridN, cmap="viridis", vmin=vmin, vmax=vmax, nodata=-999)
+    cells[k + 1].imshow(r["est"], gridN, gridN, cmap="viridis", vmin=vmin, vmax=vmax, nodata=-999)
     sx = [s[0] for s in r["samples"]]
     sy = [s[1] for s in r["samples"]]
-    axes[k + 1].scatter(sx, sy, c="white", s=2)
-    axes[k + 1].set_title(f"s={r['spacing']} r={r['corr']:.2f}")
+    cells[k + 1].scatter(sx, sy, c="white", s=2)
+    cells[k + 1].set_title(f"s={r['spacing']} r={r['corr']:.2f}")
 
 display(fig.show())
 

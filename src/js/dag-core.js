@@ -200,17 +200,34 @@ export function parseNames(code) {
 }
 
 export function findUses(code, allDefined, selfDefined) {
-  // selfDefined accepted for backward compat but ignored — re-bound
-  // names (`x = x + 1` where x is upstream) MUST appear in uses or
-  // exec.js's `upstream = {names from cell.uses}` construction omits
-  // them, leaving the cell to NameError on its own RHS read. Self-
-  // edges in the dep graph are deduped by topoSort's needsRun set.
+  // Self-defined names are excluded from uses. In JS, bare assignment
+  // `x = ...` is NOT a declaration (only const/let/var is), so a JS
+  // re-bind like `let counter = 0; counter += 1` works without taking
+  // upstream — counter is a local. Cross-cell re-binds like cell A:
+  // `let counter = 0`, cell B: `counter = counter + 1` are fine too
+  // because B's parseNames doesn't catch the bare assignment, so
+  // counter isn't in B's selfDefined and findUses includes it normally.
+  //
+  // Excluding self-defined avoids the destructured-import collision:
+  //   const { range, enumerate, ... } = await load("@python")
+  // parseNames extracts `range` etc. as defines. Without this
+  // exclusion, findUses then sees `range` in the cell source (in the
+  // LHS pattern) and adds it to uses → exec.js wires `range` as a
+  // function parameter → the cell's own `const { range, ... }` throws
+  // "Identifier 'range' has already been declared" at compile time.
+  //
+  // The Python-side bug that motivated removing this exclusion (b5b7699)
+  // is handled separately in pythonFindUses — Python has no const/let/var
+  // so `df = df.rename(...)` IS a declaration there.
   const uses = new Set();
   const stripped = stripCommentsAndStrings(code);
   const idRe = /\b([a-zA-Z_$]\w*)\b/g;
   let m;
   while ((m = idRe.exec(stripped))) {
-    if (allDefined.has(m[1])) uses.add(m[1]);
+    const name = m[1];
+    if (!allDefined.has(name)) continue;
+    if (selfDefined && selfDefined.has(name)) continue;
+    uses.add(name);
   }
   return uses;
 }

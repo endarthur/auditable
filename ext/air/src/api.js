@@ -157,13 +157,23 @@ export function analyzeModule(code, parser, allDefined) {
     // names that appear in it (Auditable's cell-scope semantics); when not,
     // we count every free name that isn't a JS global.
     //
-    // Note: names in `defines` are NOT excluded — re-bound patterns like
-    // `x = x + 1` need x in both uses (so the cell takes it from upstream)
-    // and defines (so the cell exports its new value). Without it,
-    // auditable's exec.js never wires the upstream value through.
+    // Names in `defines` are excluded: a cell's local declarations don't
+    // need an upstream value, and including them would wire the local
+    // name as a function parameter — colliding with the cell's own
+    // declaration ("Identifier X has already been declared" at compile
+    // time). Bare assignment `x = ...` in JS is NOT a declaration (only
+    // const/let/var is), so cross-cell re-binds aren't affected by this
+    // exclusion — they aren't in this cell's `defines` to begin with.
+    //
+    // This also covers the self-referencing closure case where
+    // `const lb = term.lineBuffer({ onSubmit: (line) => lb.prompt() })`
+    // would otherwise see `lb` as a free reference inside the inner
+    // arrow function (the lowerer hasn't recorded `lb` in symbols yet
+    // by the time it walks the init expression).
     const uses = new Set();
     for (const name of module.imports) {
       if (JS_GLOBALS.has(name)) continue;
+      if (defines.has(name)) continue;
       if (!allDefined || allDefined.has(name)) uses.add(name);
     }
 

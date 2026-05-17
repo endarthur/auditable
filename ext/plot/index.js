@@ -1575,6 +1575,16 @@ function subplots(nrows, ncols, opts) {
       for (let c = 0; c < nc; c++) row.push(fig.axes[r * nc + c]);
       axesShape.push(row);
     }
+    // matplotlib's ndarray exposes `.flat` for row-major flat iteration
+    // alongside the nested [r][c] view. We mirror that so callers can
+    // do `axes.flat[k]` without manually computing row/col from k.
+    // Non-enumerable so it doesn't show up in JSON / for..of.
+    Object.defineProperty(axesShape, 'flat', {
+      value: fig.axes.slice(),
+      writable: false,
+      enumerable: false,
+      configurable: true,
+    });
   }
   return Object.assign([fig, axesShape], { fig, axes: axesShape });
 }

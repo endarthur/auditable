@@ -291,15 +291,35 @@ describe('findUses', () => {
     assert.ok(!uses.has('z'));
   });
 
-  it('includes re-bound names that are also defined upstream', () => {
-    // `const x = 1` alone with x in allDefined still counts x as a use
-    // — engine.js builds the cell's upstream scope from cell.uses, and
-    // omitting upstream-defined names breaks `df = df.rename(...)` style
-    // rebinds. Self-edges in the dep graph are deduped by topoSort's
-    // needsRun set, so cycles aren't a hazard.
+  it('excludes self-defined names when selfDefined is provided', () => {
+    // A cell declaring `const x = 1` doesn't need an upstream x — it's
+    // a pure local. Including it in uses would wire x as a function
+    // parameter, colliding with the cell's own `const x` declaration at
+    // compile time ("Identifier 'x' has already been declared").
+    //
+    // In JS, bare assignment `x = ...` is NOT a declaration (only
+    // const/let/var is), so cross-cell re-binds like cell A:
+    // `let counter = 0`, cell B: `counter = counter + 1` aren't affected
+    // — B's parseNames doesn't catch the bare assignment, so counter
+    // isn't in B's selfDefined and findUses includes it normally.
     const allDefined = new Set(['x']);
-    const uses = findUses('const x = 1;', allDefined);
-    assert.ok(uses.has('x'));
+    const selfDefined = new Set(['x']);
+    const uses = findUses('const x = 1;', allDefined, selfDefined);
+    assert.ok(!uses.has('x'));
+  });
+
+  it('excludes destructured-import names (const { range } = await load(...))', () => {
+    // Regression test for the common pattern that loads Python builtins
+    // or extension exports via destructuring. parseNames extracts
+    // `range` etc. as defines. Without self-exclusion, findUses sees
+    // `range` in the LHS pattern and adds it to uses, which becomes a
+    // function parameter — then the cell's own `const { range, ... }`
+    // throws "Identifier 'range' has already been declared".
+    const allDefined = new Set(['range', 'enumerate', 'sorted', 'len']);
+    const selfDefined = new Set(['range', 'enumerate', 'sorted', 'len']);
+    const code = 'const { range, enumerate, sorted, len } = await load("@python");';
+    const uses = findUses(code, allDefined, selfDefined);
+    assert.equal(uses.size, 0);
   });
 
   it('ignores names in strings', () => {

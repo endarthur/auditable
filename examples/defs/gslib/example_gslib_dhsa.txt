@@ -88,15 +88,18 @@ for (let i = 0; i < truth.length; i++) { if (truth[i] < vmin) vmin = truth[i]; i
 
 const mapW = Math.min(220, Math.floor((window.innerWidth - 40) / nCols));
 const {fig, axes} = plot.subplots(2, nCols, {figsize: [nCols * mapW, 2 * (mapW + 20)]});
+// subplots(R, C) returns a nested 2D array when both >1 (matplotlib
+// shape); use axes.flat for row-major flat iteration.
+const cells = axes.flat;
 
-axes[0].imshow(truth, gridN, gridN, {cmap: 'viridis', vmin, vmax});
-axes[0].set_title('truth');
+cells[0].imshow(truth, gridN, gridN, {cmap: 'viridis', vmin, vmax});
+cells[0].set_title('truth');
 
 for (let k = 0; k < show.length; k++) {
   const r = show[k];
-  axes[k + 1].imshow(r.est, gridN, gridN, {cmap: 'viridis', vmin, vmax, nodata: -999});
-  axes[k + 1].scatter(r.samples.map(s => s[0]), r.samples.map(s => s[1]), {c: 'white', s: 2});
-  axes[k + 1].set_title(`s=${r.spacing} r=${r.corr.toFixed(2)}`);
+  cells[k + 1].imshow(r.est, gridN, gridN, {cmap: 'viridis', vmin, vmax, nodata: -999});
+  cells[k + 1].scatter(r.samples.map(s => s[0]), r.samples.map(s => s[1]), {c: 'white', s: 2});
+  cells[k + 1].set_title(`s=${r.spacing} r=${r.corr.toFixed(2)}`);
 }
 display(fig.show());
 
