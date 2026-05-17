@@ -24,6 +24,18 @@ through unchanged — the user will see a normal `ModuleNotFoundError` at
 runtime, which is the honest signal for "this dependency isn't in the
 GCU stack yet."
 
+### Side effect: matplotlib theme inject
+
+When the forward rewriter sees `import matplotlib.pyplot`, it appends
+`plt.style.use('default')  # auditable: ipynb-theme-inject` on the next
+line (indent preserved). Notebook authors saw matplotlib's light palette
+in Jupyter; this opts the .ipynb-loaded notebook into that palette
+without changing the auditable-native dark default for cells that don't
+import matplotlib. The sentinel comment lets `exportNotebook` strip the
+line cleanly on the inverse pass, so the round-trip doesn't leak our
+injection into the user's source — delete the comment if you want the
+call preserved as your own style choice.
+
 ## Usage
 
 ```js

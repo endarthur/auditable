@@ -119,7 +119,7 @@ This means:
 - `return`
 - `try` / `except` / `else` / `finally` — except can catch by type, with `as` binding
 - `raise` — raises `AdderError` or re-raises
-- `with` / `as` — context managers via `__enter__`/`__exit__` (or `enter`/`exit`)
+- `with` / `as` — context managers via `__enter__`/`__exit__` (or `enter`/`exit`). Both dunders may be async; the tree-walker (`eval.js _evalWith`) awaits them directly, and the AIR transpile path lowers the suite to `await _py.exitWith(__mgr, exc)` — which awaits internally — so a file opened in `"w"` mode flushes its `await vfs.writeFile(...)` before the cell's own function returns. Implicit contract: any new caller of `_py.exitWith` MUST be at an `await`.
 - `assert test, msg`
 - `async for`, `async with`
 
