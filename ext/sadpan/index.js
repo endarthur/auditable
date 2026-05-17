@@ -31,6 +31,8 @@ class Series {
     }
     this._values = values;
     this._name = name || null;
+    // Surface as `<class 'Series'>` to adder's type() / str(type(x))
+    this.__adderClass__ = 'Series';
   }
   get values() { return this._values; }
   get name() { return this._name; }
@@ -1141,6 +1143,7 @@ class DataFrame {
     else if (data instanceof Table) this._tbl = data;
     else if (Array.isArray(data)) this._tbl = from(data);
     else if (typeof data === 'object') this._tbl = table(data);
+    this.__adderClass__ = 'DataFrame';
   }
 
   // dunders for adder
@@ -1596,6 +1599,9 @@ class _NumpyLikeArray2D {
     this.ndim = 2;
     this.size = rows.length * ncols;
     this.dtype = 'object';
+    // Python-side `type(x)` reads __adderClass__ from adder's
+    // pyTypeName helper; without it every JS class shows as 'object'.
+    this.__adderClass__ = 'ndarray';
   }
 
   __getitem__(key) {

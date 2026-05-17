@@ -77,6 +77,10 @@ function _makeNd(arr) {
   const nd = {
     _nd: true,
     _arr: arr,
+    // Surface as `<class 'ndarray'>` to adder's type() builtin —
+    // matches numpy's reporting closely enough for the common
+    // `print(type(x))` debugging pattern.
+    __adderClass__: 'ndarray',
     get shape() { return [...arr.shape]; },
     get ndim() { return arr.ndim; },
     get dtype() { return arr.dtype; },

@@ -25,6 +25,8 @@ class Series {
     }
     this._values = values;
     this._name = name || null;
+    // Surface as `<class 'Series'>` to adder's type() / str(type(x))
+    this.__adderClass__ = 'Series';
   }
   get values() { return this._values; }
   get name() { return this._name; }
