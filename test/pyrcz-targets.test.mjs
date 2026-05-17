@@ -150,6 +150,72 @@ describe('scitra: scipy.stats basics', () => {
 
 // ── Pyrcz-shape: the actual failing cell ──
 
+describe('sadpan: drop() row + column', () => {
+  test('df.drop("a", axis=1) removes the column', async () => {
+    const { scope } = await runCell([
+      'import sadpan as pd',
+      'df = pd.DataFrame({"a":[1,2,3], "b":[10,20,30]})',
+      'df2 = df.drop("a", axis=1)',
+      'cols = df2.columns',
+      'n = df2.shape[0]',
+    ].join('\n'));
+    assert.deepEqual(scope.cols, ['b']);
+    assert.equal(scope.n, 3);
+  });
+
+  test('df.drop(2, axis=0) drops a row by index', async () => {
+    const { scope } = await runCell([
+      'import sadpan as pd',
+      'df = pd.DataFrame({"a":[10,20,30,40], "b":[1,2,3,4]})',
+      'df2 = df.drop(2, axis=0)',
+      'shape = df2.shape',
+      'first_a = df2.iloc[0, 0]',
+      'last_a = df2.iloc[-1, 0]',
+    ].join('\n'));
+    assert.deepEqual(scope.shape, [3, 2]);
+    assert.equal(scope.first_a, 10);
+    assert.equal(scope.last_a, 40);   // row 2 (value 30) gone
+  });
+
+  test('df.drop([0, 2], axis=0) drops multiple rows', async () => {
+    const { scope } = await runCell([
+      'import sadpan as pd',
+      'df = pd.DataFrame({"a":[10,20,30,40]})',
+      'df2 = df.drop([0, 2], axis=0)',
+      'shape = df2.shape',
+      'first = df2.iloc[0, 0]',
+      'second = df2.iloc[1, 0]',
+    ].join('\n'));
+    assert.deepEqual(scope.shape, [2, 1]);
+    assert.equal(scope.first, 20);
+    assert.equal(scope.second, 40);
+  });
+
+  test('df.drop(columns=["a"]) infers axis=1', async () => {
+    const { scope } = await runCell([
+      'import sadpan as pd',
+      'df = pd.DataFrame({"a":[1,2], "b":[10,20]})',
+      'df2 = df.drop(columns=["a"])',
+      'cols = df2.columns',
+    ].join('\n'));
+    assert.deepEqual(scope.cols, ['b']);
+  });
+
+  test('df.drop(index=[1]) infers axis=0', async () => {
+    const { scope } = await runCell([
+      'import sadpan as pd',
+      'df = pd.DataFrame({"a":[10,20,30]})',
+      'df2 = df.drop(index=[1])',
+      'shape = df2.shape',
+      'first = df2.iloc[0, 0]',
+      'second = df2.iloc[1, 0]',
+    ].join('\n'));
+    assert.deepEqual(scope.shape, [2, 1]);
+    assert.equal(scope.first, 10);
+    assert.equal(scope.second, 30);
+  });
+});
+
 describe('sadpan: iloc / loc / at / iat accessors', () => {
   test('df.iloc[r, c] scalar', async () => {
     const { scope } = await runCell([
