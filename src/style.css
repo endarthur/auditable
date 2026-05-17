@@ -268,6 +268,12 @@ button.accent:hover {
 
 .cell-output canvas {
   max-width: 100%;
+  /* keep the canvas's aspect ratio when max-width clamps the width —
+     without `height: auto` the browser shrinks the width but preserves
+     the inline style.height, distorting the drawing buffer's aspect
+     (visible as horizontally squished text on wide subplot grids that
+     overflow their cell output container) */
+  height: auto;
   display: block;
   margin: 4px 0;
 }
