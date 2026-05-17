@@ -62,6 +62,13 @@ function _raw(v) {
   if (_ctx && v && typeof v.tolist === 'function' && Array.isArray(v.shape)) {
     return _ctx.array(v.tolist());
   }
+  // Float64Array (or TypedArray) carrying an own `.shape` — common
+  // when learn's transformers return a flat ndarray with shape tacked
+  // on. Preserve the shape via ctx.array's opts.shape so matmul / dot
+  // operate on the correct 2D form instead of seeing a flat 1D vector.
+  if (_ctx && ArrayBuffer.isView(v) && Array.isArray(v.shape) && v.shape.length > 1) {
+    return _ctx.array(Array.from(v), { shape: v.shape.slice() });
+  }
   // Coerce plain JS arrays / TypedArrays into a natra ndarray so the
   // reduction ops (max/min/sum/mean/etc.) work on lists from outside
   // natra (e.g. plt.hist counts, user-built lists). Requires _ctx to
@@ -587,7 +594,20 @@ const _module = {
 
   // linear algebra helpers
   dot(a, b) {
-    const r = _ops().dot(_raw(a), _raw(b));
+    // numpy.dot is overloaded by ndim:
+    //   1D × 1D → inner product (scalar)
+    //   2D × 2D → matrix multiply
+    //   N-D × 1-D → sum-product over last axis
+    // For our common case (2D × 2D from sklearn outputs) we dispatch
+    // to matmul; 1D × 1D goes to ops.dot (the inner-product fast path).
+    const ra = _raw(a);
+    const rb = _raw(b);
+    const an = ra && Array.isArray(ra.shape) ? ra.shape.length : 1;
+    const bn = rb && Array.isArray(rb.shape) ? rb.shape.length : 1;
+    if (an === 2 && bn === 2) return _makeNd(_ops().matmul(ra, rb));
+    if (an === 2 && bn === 1) return _makeNd(_ops().matmul(ra, rb));
+    if (an === 1 && bn === 2) return _makeNd(_ops().matmul(ra, rb));
+    const r = _ops().dot(ra, rb);
     return typeof r === 'number' ? r : _makeNd(r);
   },
   matmul(a, b) { return _makeNd(_ops().matmul(_raw(a), _raw(b))); },

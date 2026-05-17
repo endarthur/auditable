@@ -258,12 +258,81 @@ function _setitem(obj, key, value) {
     obj[idx] = value;
     return;
   }
+  // 2D ndarray with tuple key (`x_trans[:, 1] = 0.0`). Mirrors the
+  // getitem path — accepts `{data: Float64Array, shape}` wrappers and
+  // bare Float64Arrays-with-shape. Value can be a scalar (broadcast)
+  // or an iterable (must match the assigned slice length).
+  if (Array.isArray(key) && _looksLikeNdarray(obj)) {
+    _ndarrayTupleSet(obj, key, value);
+    return;
+  }
   if (typeof obj === 'object' && obj !== null) {
     if (typeof obj.__setitem__ === 'function') { obj.__setitem__(key, value); return; }
     obj[key] = value;
     return;
   }
   throw new AdderError('TypeError', `'${pyTypeName(obj)}' object does not support item assignment`);
+}
+
+function _ndarrayTupleSet(obj, key, value) {
+  const [n, m] = obj.shape;
+  const d = _ndarrayData(obj);
+  const rk = key[0], ck = key[1];
+  const _broadcast = (write, len) => {
+    if (value != null && typeof value !== 'string'
+        && typeof value[Symbol.iterator] === 'function') {
+      const flat = [...value];
+      if (flat.length !== len) {
+        throw new AdderError('ValueError', `cannot broadcast ${flat.length} values to ${len} positions`);
+      }
+      for (let i = 0; i < len; i++) write(i, flat[i]);
+    } else {
+      for (let i = 0; i < len; i++) write(i, value);
+    }
+  };
+
+  // scalar + scalar — single cell
+  if (typeof rk === 'number' && typeof ck === 'number') {
+    const i = rk < 0 ? n + rk : rk;
+    const j = ck < 0 ? m + ck : ck;
+    d[i * m + j] = value;
+    return;
+  }
+  // slice row + scalar col → column slice
+  if (rk && rk._slice && typeof ck === 'number') {
+    const lo = rk.lower != null ? rk.lower : 0;
+    const hi = rk.upper != null ? Math.min(rk.upper, n) : n;
+    const j = ck < 0 ? m + ck : ck;
+    _broadcast((i, v) => { d[(lo + i) * m + j] = v; }, hi - lo);
+    return;
+  }
+  // scalar row + slice col → row slice
+  if (typeof rk === 'number' && ck && ck._slice) {
+    const i = rk < 0 ? n + rk : rk;
+    const lo = ck.lower != null ? ck.lower : 0;
+    const hi = ck.upper != null ? Math.min(ck.upper, m) : m;
+    _broadcast((k, v) => { d[i * m + lo + k] = v; }, hi - lo);
+    return;
+  }
+  // slice + slice → 2D sub-block
+  if (rk && rk._slice && ck && ck._slice) {
+    const r0 = rk.lower != null ? rk.lower : 0;
+    const r1 = rk.upper != null ? Math.min(rk.upper, n) : n;
+    const c0 = ck.lower != null ? ck.lower : 0;
+    const c1 = ck.upper != null ? Math.min(ck.upper, m) : m;
+    const rows = r1 - r0, cols = c1 - c0;
+    // Scalar value → fill block
+    if (value == null || typeof value === 'number'
+        || typeof value === 'string'
+        || typeof value[Symbol.iterator] !== 'function') {
+      for (let i = 0; i < rows; i++) {
+        for (let j = 0; j < cols; j++) d[(r0 + i) * m + (c0 + j)] = value;
+      }
+      return;
+    }
+    throw new AdderError('TypeError', 'ndarray block assignment from iterable not yet supported');
+  }
+  throw new AdderError('TypeError', `ndarray: unsupported tuple subscript shape`);
 }
 
 function _slice(obj, lower, upper, step) {

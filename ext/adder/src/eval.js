@@ -332,11 +332,52 @@ async function _assignTarget(target, value, scope) {
         for (const elt of target.slice.elts) {
           key.push(await _evalSliceElt(elt, scope));
         }
-        if (obj && typeof obj.__setitem__ === 'function') await obj.__setitem__(key, value);
-        else throw new AdderError('TypeError',
+        if (obj && typeof obj.__setitem__ === 'function') {
+          await obj.__setitem__(key, value);
+          break;
+        }
+        // Generic 2D-ndarray-shape tuple setitem — same shape support
+        // as the read path. Lets learn / scitra outputs accept
+        // `x[:, 1] = 0.0` etc. without per-library setters.
+        if (obj && Array.isArray(obj.shape) && obj.shape.length === 2
+            && (obj.data instanceof Float64Array || obj instanceof Float64Array)) {
+          const [n, m] = obj.shape;
+          const d = obj instanceof Float64Array ? obj : obj.data;
+          const rk = key[0], ck = key[1];
+          const _bcast = (write, len) => {
+            if (value != null && typeof value !== 'string'
+                && typeof value[Symbol.iterator] === 'function') {
+              const flat = [...value];
+              if (flat.length !== len) {
+                throw new AdderError('ValueError', `cannot broadcast ${flat.length} values to ${len} positions`);
+              }
+              for (let i = 0; i < len; i++) write(i, flat[i]);
+            } else {
+              for (let i = 0; i < len; i++) write(i, value);
+            }
+          };
+          if (typeof rk === 'number' && typeof ck === 'number') {
+            d[(rk < 0 ? n + rk : rk) * m + (ck < 0 ? m + ck : ck)] = value;
+            break;
+          }
+          if (rk && rk._slice && typeof ck === 'number') {
+            const lo = rk.lower != null ? rk.lower : 0;
+            const hi = rk.upper != null ? Math.min(rk.upper, n) : n;
+            const j = ck < 0 ? m + ck : ck;
+            _bcast((i, v) => { d[(lo + i) * m + j] = v; }, hi - lo);
+            break;
+          }
+          if (typeof rk === 'number' && ck && ck._slice) {
+            const i = rk < 0 ? n + rk : rk;
+            const lo = ck.lower != null ? ck.lower : 0;
+            const hi = ck.upper != null ? Math.min(ck.upper, m) : m;
+            _bcast((k, v) => { d[i * m + lo + k] = v; }, hi - lo);
+            break;
+          }
+        }
+        throw new AdderError('TypeError',
           `'${pyTypeName(obj)}' object does not support tuple item assignment`,
           target.line);
-        break;
       }
       const key = await adderEval(target.slice, scope);
       if (obj instanceof Map) obj.set(key, value);
@@ -599,6 +640,19 @@ async function _evalSubscript(node, scope) {
         const out = new Float64Array(hi - lo);
         for (let i = 0; i < hi - lo; i++) out[i] = d[(lo + i) * m + j];
         out.shape = [out.length];
+        return out;
+      }
+      if (rk && rk._slice && ck && ck._slice) {
+        const r0 = rk.lower != null ? rk.lower : 0;
+        const r1 = rk.upper != null ? Math.min(rk.upper, n) : n;
+        const c0 = ck.lower != null ? ck.lower : 0;
+        const c1 = ck.upper != null ? Math.min(ck.upper, m) : m;
+        const rows = r1 - r0, cols = c1 - c0;
+        const out = new Float64Array(rows * cols);
+        for (let i = 0; i < rows; i++) {
+          for (let j = 0; j < cols; j++) out[i * cols + j] = d[(r0 + i) * m + (c0 + j)];
+        }
+        out.shape = [rows, cols];
         return out;
       }
     }

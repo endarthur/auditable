@@ -2076,6 +2076,15 @@ function adderGetAttr(obj, attr) {
   if (obj instanceof Map) return _mapMethod(obj, attr);
   // set methods
   if (obj instanceof Set) return _setMethod(obj, attr);
+  // numpy-shape Float64Array — common when learn/scitra return a
+  // flat ndarray with `.shape` tacked on. Expose the numpy methods
+  // (.mean, .var, .std, .sum, .min, .max) and dunder-like shape/ndim/
+  // size properties so `x.mean(axis=0)` works on these without each
+  // library having to ship its own wrapper class.
+  if (obj instanceof Float64Array && Array.isArray(obj.shape)) {
+    const v = _ndarrayProp(obj, attr);
+    if (v !== undefined) return v;
+  }
   // range
   if (obj instanceof AdderRange) {
     if (attr === 'start') return obj.start;
@@ -2204,6 +2213,128 @@ function _strFormat(s, args) {
     else val = args[0]?.[key];
     return fmt ? pyFormatValue(val, fmt) : pyStr(val);
   });
+}
+
+// 2D ndarray-shape methods (Float64Array + .shape). Each axis-aware
+// reduction returns either a scalar (axis=None) or a Float64Array
+// per-column (axis=0) / per-row (axis=1) with `.shape` attached.
+function _ndarrayProp(obj, attr) {
+  // Properties
+  if (attr === 'shape') return obj.shape.slice();
+  if (attr === 'ndim') return obj.shape.length;
+  if (attr === 'size') return obj.length;
+  if (attr === 'dtype') return 'float64';
+  if (attr === 'T') return _ndarrayTranspose(obj);
+  if (attr === 'tolist') {
+    const fn = () => _ndarrayToList(obj);
+    fn._pyName = 'tolist';
+    return fn;
+  }
+  // Reductions
+  const _reduce = (axisRedScalar) => {
+    const fn = (axisOrKw) => {
+      let axis = axisOrKw;
+      if (axisOrKw && typeof axisOrKw === 'object' && axisOrKw._kw) {
+        axis = axisOrKw.axis;
+      }
+      return _ndarrayReduce(obj, axis, axisRedScalar);
+    };
+    fn._pyName = `ndarray.${attr}`;
+    return fn;
+  };
+  switch (attr) {
+    case 'mean':
+      return _reduce(_R_MEAN);
+    case 'sum':
+      return _reduce(_R_SUM);
+    case 'var':
+      return _reduce(_R_VAR);
+    case 'std':
+      return _reduce(_R_STD);
+    case 'min':
+      return _reduce(_R_MIN);
+    case 'max':
+      return _reduce(_R_MAX);
+  }
+  return undefined;
+}
+
+// Reduction "kinds" — small closures (init, step, finalize).
+const _R_SUM  = { init: 0,         step: (s, v) => s + v,                                  fin: (s, n) => s };
+const _R_MEAN = { init: 0,         step: (s, v) => s + v,                                  fin: (s, n) => n ? s / n : NaN };
+const _R_MIN  = { init: Infinity,  step: (s, v) => v < s ? v : s,                          fin: (s, n) => n ? s : NaN };
+const _R_MAX  = { init: -Infinity, step: (s, v) => v > s ? v : s,                          fin: (s, n) => n ? s : NaN };
+const _R_VAR  = { mean: true,      step: (m, v) => (v - m) * (v - m),                      fin: (s, n) => n ? s / n : NaN };
+const _R_STD  = { mean: true,      step: (m, v) => (v - m) * (v - m),                      fin: (s, n) => n ? Math.sqrt(s / n) : NaN };
+
+function _ndarrayReduce(arr, axis, kind) {
+  if (arr.shape.length === 1) {
+    return _reduce1D(arr, 0, arr.length, kind);
+  }
+  const [n, m] = arr.shape;
+  if (axis == null) {
+    // Reduce over everything → scalar
+    return _reduce1D(arr, 0, n * m, kind);
+  }
+  if (axis === 0) {
+    // Per-column (m results)
+    const out = new Float64Array(m);
+    for (let j = 0; j < m; j++) {
+      const slice = new Float64Array(n);
+      for (let i = 0; i < n; i++) slice[i] = arr[i * m + j];
+      out[j] = _reduce1D(slice, 0, n, kind);
+    }
+    out.shape = [m];
+    return out;
+  }
+  if (axis === 1) {
+    // Per-row (n results)
+    const out = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      out[i] = _reduce1D(arr, i * m, m, kind);
+    }
+    out.shape = [n];
+    return out;
+  }
+  throw new AdderError('ValueError', `unsupported axis ${axis}`);
+}
+
+function _reduce1D(data, start, len, kind) {
+  if (kind.mean) {
+    // Two-pass for variance / std — need the mean first.
+    let s = 0;
+    for (let i = 0; i < len; i++) s += data[start + i];
+    const m = len ? s / len : 0;
+    let v = 0;
+    for (let i = 0; i < len; i++) v += kind.step(m, data[start + i]);
+    return kind.fin(v, len);
+  }
+  let acc = kind.init;
+  for (let i = 0; i < len; i++) acc = kind.step(acc, data[start + i]);
+  return kind.fin(acc, len);
+}
+
+function _ndarrayTranspose(arr) {
+  if (arr.shape.length === 1) return arr;
+  const [n, m] = arr.shape;
+  const out = new Float64Array(n * m);
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < m; j++) out[j * n + i] = arr[i * m + j];
+  }
+  out.shape = [m, n];
+  return out;
+}
+
+function _ndarrayToList(arr) {
+  if (arr.shape.length === 1) return Array.from(arr);
+  const [n, m] = arr.shape;
+  const out = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const row = new Array(m);
+    for (let j = 0; j < m; j++) row[j] = arr[i * m + j];
+    out[i] = row;
+  }
+  return out;
 }
 
 function _listMethod(arr, attr) {
@@ -3711,11 +3842,52 @@ async function _assignTarget(target, value, scope) {
         for (const elt of target.slice.elts) {
           key.push(await _evalSliceElt(elt, scope));
         }
-        if (obj && typeof obj.__setitem__ === 'function') await obj.__setitem__(key, value);
-        else throw new AdderError('TypeError',
+        if (obj && typeof obj.__setitem__ === 'function') {
+          await obj.__setitem__(key, value);
+          break;
+        }
+        // Generic 2D-ndarray-shape tuple setitem — same shape support
+        // as the read path. Lets learn / scitra outputs accept
+        // `x[:, 1] = 0.0` etc. without per-library setters.
+        if (obj && Array.isArray(obj.shape) && obj.shape.length === 2
+            && (obj.data instanceof Float64Array || obj instanceof Float64Array)) {
+          const [n, m] = obj.shape;
+          const d = obj instanceof Float64Array ? obj : obj.data;
+          const rk = key[0], ck = key[1];
+          const _bcast = (write, len) => {
+            if (value != null && typeof value !== 'string'
+                && typeof value[Symbol.iterator] === 'function') {
+              const flat = [...value];
+              if (flat.length !== len) {
+                throw new AdderError('ValueError', `cannot broadcast ${flat.length} values to ${len} positions`);
+              }
+              for (let i = 0; i < len; i++) write(i, flat[i]);
+            } else {
+              for (let i = 0; i < len; i++) write(i, value);
+            }
+          };
+          if (typeof rk === 'number' && typeof ck === 'number') {
+            d[(rk < 0 ? n + rk : rk) * m + (ck < 0 ? m + ck : ck)] = value;
+            break;
+          }
+          if (rk && rk._slice && typeof ck === 'number') {
+            const lo = rk.lower != null ? rk.lower : 0;
+            const hi = rk.upper != null ? Math.min(rk.upper, n) : n;
+            const j = ck < 0 ? m + ck : ck;
+            _bcast((i, v) => { d[(lo + i) * m + j] = v; }, hi - lo);
+            break;
+          }
+          if (typeof rk === 'number' && ck && ck._slice) {
+            const i = rk < 0 ? n + rk : rk;
+            const lo = ck.lower != null ? ck.lower : 0;
+            const hi = ck.upper != null ? Math.min(ck.upper, m) : m;
+            _bcast((k, v) => { d[i * m + lo + k] = v; }, hi - lo);
+            break;
+          }
+        }
+        throw new AdderError('TypeError',
           `'${pyTypeName(obj)}' object does not support tuple item assignment`,
           target.line);
-        break;
       }
       const key = await adderEval(target.slice, scope);
       if (obj instanceof Map) obj.set(key, value);
@@ -3978,6 +4150,19 @@ async function _evalSubscript(node, scope) {
         const out = new Float64Array(hi - lo);
         for (let i = 0; i < hi - lo; i++) out[i] = d[(lo + i) * m + j];
         out.shape = [out.length];
+        return out;
+      }
+      if (rk && rk._slice && ck && ck._slice) {
+        const r0 = rk.lower != null ? rk.lower : 0;
+        const r1 = rk.upper != null ? Math.min(rk.upper, n) : n;
+        const c0 = ck.lower != null ? ck.lower : 0;
+        const c1 = ck.upper != null ? Math.min(ck.upper, m) : m;
+        const rows = r1 - r0, cols = c1 - c0;
+        const out = new Float64Array(rows * cols);
+        for (let i = 0; i < rows; i++) {
+          for (let j = 0; j < cols; j++) out[i * cols + j] = d[(r0 + i) * m + (c0 + j)];
+        }
+        out.shape = [rows, cols];
         return out;
       }
     }
@@ -5326,12 +5511,81 @@ function _setitem(obj, key, value) {
     obj[idx] = value;
     return;
   }
+  // 2D ndarray with tuple key (`x_trans[:, 1] = 0.0`). Mirrors the
+  // getitem path — accepts `{data: Float64Array, shape}` wrappers and
+  // bare Float64Arrays-with-shape. Value can be a scalar (broadcast)
+  // or an iterable (must match the assigned slice length).
+  if (Array.isArray(key) && _looksLikeNdarray(obj)) {
+    _ndarrayTupleSet(obj, key, value);
+    return;
+  }
   if (typeof obj === 'object' && obj !== null) {
     if (typeof obj.__setitem__ === 'function') { obj.__setitem__(key, value); return; }
     obj[key] = value;
     return;
   }
   throw new AdderError('TypeError', `'${pyTypeName(obj)}' object does not support item assignment`);
+}
+
+function _ndarrayTupleSet(obj, key, value) {
+  const [n, m] = obj.shape;
+  const d = _ndarrayData(obj);
+  const rk = key[0], ck = key[1];
+  const _broadcast = (write, len) => {
+    if (value != null && typeof value !== 'string'
+        && typeof value[Symbol.iterator] === 'function') {
+      const flat = [...value];
+      if (flat.length !== len) {
+        throw new AdderError('ValueError', `cannot broadcast ${flat.length} values to ${len} positions`);
+      }
+      for (let i = 0; i < len; i++) write(i, flat[i]);
+    } else {
+      for (let i = 0; i < len; i++) write(i, value);
+    }
+  };
+
+  // scalar + scalar — single cell
+  if (typeof rk === 'number' && typeof ck === 'number') {
+    const i = rk < 0 ? n + rk : rk;
+    const j = ck < 0 ? m + ck : ck;
+    d[i * m + j] = value;
+    return;
+  }
+  // slice row + scalar col → column slice
+  if (rk && rk._slice && typeof ck === 'number') {
+    const lo = rk.lower != null ? rk.lower : 0;
+    const hi = rk.upper != null ? Math.min(rk.upper, n) : n;
+    const j = ck < 0 ? m + ck : ck;
+    _broadcast((i, v) => { d[(lo + i) * m + j] = v; }, hi - lo);
+    return;
+  }
+  // scalar row + slice col → row slice
+  if (typeof rk === 'number' && ck && ck._slice) {
+    const i = rk < 0 ? n + rk : rk;
+    const lo = ck.lower != null ? ck.lower : 0;
+    const hi = ck.upper != null ? Math.min(ck.upper, m) : m;
+    _broadcast((k, v) => { d[i * m + lo + k] = v; }, hi - lo);
+    return;
+  }
+  // slice + slice → 2D sub-block
+  if (rk && rk._slice && ck && ck._slice) {
+    const r0 = rk.lower != null ? rk.lower : 0;
+    const r1 = rk.upper != null ? Math.min(rk.upper, n) : n;
+    const c0 = ck.lower != null ? ck.lower : 0;
+    const c1 = ck.upper != null ? Math.min(ck.upper, m) : m;
+    const rows = r1 - r0, cols = c1 - c0;
+    // Scalar value → fill block
+    if (value == null || typeof value === 'number'
+        || typeof value === 'string'
+        || typeof value[Symbol.iterator] !== 'function') {
+      for (let i = 0; i < rows; i++) {
+        for (let j = 0; j < cols; j++) d[(r0 + i) * m + (c0 + j)] = value;
+      }
+      return;
+    }
+    throw new AdderError('TypeError', 'ndarray block assignment from iterable not yet supported');
+  }
+  throw new AdderError('TypeError', `ndarray: unsupported tuple subscript shape`);
 }
 
 function _slice(obj, lower, upper, step) {

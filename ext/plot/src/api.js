@@ -38,7 +38,25 @@ export function subplots(nrows, ncols, opts) {
     return Object.assign([fig, fig.axes[0]], { fig, ax: fig.axes[0] });
   }
   _setCurrent(fig, fig.axes[0]);
-  return Object.assign([fig, fig.axes], { fig, axes: fig.axes });
+  // matplotlib's subplots returns axes as:
+  //   nrows=1, ncols=K → flat 1D array [ax1, …, axK]
+  //   nrows=R, ncols=1 → flat 1D array [ax1, …, axR]
+  //   nrows=R, ncols=K → nested 2D array [[ax1,…,axK], [ax(K+1),…], …]
+  // Adder code often destructures the 2D shape literally:
+  //   f, ((a, b), (c, d), (e, f)) = plt.subplots(3, 2)
+  // so flat-only would break those notebooks.
+  let axesShape;
+  if (nr === 1 || nc === 1) {
+    axesShape = fig.axes.slice();
+  } else {
+    axesShape = [];
+    for (let r = 0; r < nr; r++) {
+      const row = [];
+      for (let c = 0; c < nc; c++) row.push(fig.axes[r * nc + c]);
+      axesShape.push(row);
+    }
+  }
+  return Object.assign([fig, axesShape], { fig, axes: axesShape });
 }
 
 // quick one-liners — create figure, add trace, return canvas
@@ -203,6 +221,12 @@ export function yticks(_ticks, _labels) { /* no-op; ROADMAPed */ }
 // rendering is opt-in via ax.colorbar(). No-op here; the visual is
 // missing but cell completes.
 export function colorbar(_im, _opts) { return null; }
+// plt.suptitle — sets the figure-level title above all subplots.
+// Delegates to the current figure's suptitle method.
+export function suptitle(text, opts) {
+  const fig = gcf();
+  return fig && fig.suptitle ? fig.suptitle(text, opts) : null;
+}
 
 // register as auditable extension for adder `import plt`
 if (typeof window !== 'undefined') {
@@ -212,7 +236,7 @@ if (typeof window !== 'undefined') {
     gca, gcf, xlabel, ylabel, title, xlim, ylim, xscale, yscale,
     legend, grid, vlines, hlines, axhline, axvline, text,
     subplots_adjust, tight_layout, savefig, clf, cla,
-    xticks, yticks, colorbar,
+    xticks, yticks, colorbar, suptitle,
   };
   const register = window.auditable?.registerExtension;
   if (register) {
