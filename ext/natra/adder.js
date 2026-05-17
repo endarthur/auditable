@@ -57,6 +57,11 @@ function _ops() {
 
 function _raw(v) {
   if (v && v._nd) return v._arr;
+  // sadpan's _NumpyLikeArray2D (from df.values / df.to_numpy) — convert
+  // via tolist() into nested JS array, then promote through ctx.array.
+  if (_ctx && v && typeof v.tolist === 'function' && Array.isArray(v.shape)) {
+    return _ctx.array(v.tolist());
+  }
   // Coerce plain JS arrays / TypedArrays into a natra ndarray so the
   // reduction ops (max/min/sum/mean/etc.) work on lists from outside
   // natra (e.g. plt.hist counts, user-built lists). Requires _ctx to
@@ -316,6 +321,19 @@ function _registerHook() {
 // Numpy parity: np.zeros(3) accepts a scalar (= 1D shape of length 3).
 // natra's underlying ctx expects an array; wrap scalars before passing
 // through. Applied to zeros/ones/full and any other shape-taking constructor.
+// Transpose a 2D array-of-arrays (used by corrcoef's rowvar=False path).
+function _transposeRows(rows) {
+  if (rows.length === 0) return [];
+  const ncols = rows[0].length;
+  const out = [];
+  for (let j = 0; j < ncols; j++) {
+    const col = [];
+    for (let i = 0; i < rows.length; i++) col.push(rows[i][j]);
+    out.push(col);
+  }
+  return out;
+}
+
 function _normShape(shape) {
   return typeof shape === 'number' ? [shape] : shape;
 }
@@ -359,23 +377,34 @@ const _module = {
   cos(a) { return _isNd(a) ? _makeNd(_ops().map(a._arr, Math.cos)) : Math.cos(a); },
   tan(a) { return _isNd(a) ? _makeNd(_ops().map(a._arr, Math.tan)) : Math.tan(a); },
 
-  // reductions
-  sum(a, axis) {
+  // reductions — async so we can ensure the natra ctx is initialized
+  // before any _ops() call. The natra cell hook only sets _activeOps
+  // when _ctx already exists; cells that hit a reduction first (e.g.
+  // `np.mean(df.values)` after a sadpan-only workflow) would otherwise
+  // throw `no active cell scope` because nothing triggered the lazy
+  // ctx init. The await pulls in _ensureCtx, which both initializes
+  // _ctx AND (via its bootstrap branch) installs _activeOps for the
+  // current cell.
+  async sum(a, axis) {
+    await _ensureCtx();
     const ax = axis?._kw ? axis.axis : axis;
     const r = _ops().sum(_raw(a), ax);
     return typeof r === 'number' ? r : _makeNd(r);
   },
-  mean(a, axis) {
+  async mean(a, axis) {
+    await _ensureCtx();
     const ax = axis?._kw ? axis.axis : axis;
     const r = _ops().mean(_raw(a), ax);
     return typeof r === 'number' ? r : _makeNd(r);
   },
-  min(a, axis) {
+  async min(a, axis) {
+    await _ensureCtx();
     const ax = axis?._kw ? axis.axis : axis;
     const r = _ops().min(_raw(a), ax);
     return typeof r === 'number' ? r : _makeNd(r);
   },
-  max(a, axis) {
+  async max(a, axis) {
+    await _ensureCtx();
     const ax = axis?._kw ? axis.axis : axis;
     const r = _ops().max(_raw(a), ax);
     return typeof r === 'number' ? r : _makeNd(r);
@@ -462,6 +491,10 @@ const _module = {
     if (_isNd(x)) return _makeNd(_ops().map(x._arr, (v) => Math.pow(v, _isNd(y) ? y : y)));
     return Math.pow(x, y);
   },
+  // numpy spells the rounding function `np.around` AND `np.round_`
+  // (both aliases for round). Provide both.
+  around(a, decimals) { return this.round(a, decimals); },
+  round_(a, decimals) { return this.round(a, decimals); },
   // np.round(a, decimals=0) — element-wise round, optionally to N decimal places.
   round(a, decimals) {
     if (decimals && decimals._kw) decimals = decimals.decimals;
@@ -471,40 +504,85 @@ const _module = {
     if (Array.isArray(a)) return a.map(v => Math.round(v * f) / f);
     return Math.round(a * f) / f;
   },
-  // np.corrcoef(x, y=None) — Pearson correlation. Common case is two
-  // 1D vectors → returns a 2×2 correlation matrix where [0,1] = [1,0]
-  // is the Pearson r. With a single 2D matrix, returns the full n×n
-  // matrix; we cover the common 2-vector case here and leave the n-D
-  // path for the ROADMAP.
-  corrcoef(x, y) {
-    const _toJs = (v) => {
-      if (Array.isArray(v)) return v;
-      if (_isNd(v)) {
-        const r = v._arr;
-        if (r.memory && r.memory.buffer && r.dtype === 'f64') {
-          return Array.from(new Float64Array(r.memory.buffer, r.ptr, r.length));
+  // np.corrcoef(x, y=None, rowvar=True) — Pearson correlation matrix.
+  // Three input shapes (mirroring numpy):
+  //   x=2D ndarray, rowvar=True (default)  → each row is a variable
+  //   x=2D ndarray, rowvar=False           → each column is a variable
+  //                                           (sadpan DataFrame → numpy
+  //                                           convention)
+  //   x=1D, y=1D                            → 2×2 matrix
+  // DataFrame inputs are also accepted (auto-converts to 2D via
+  // _toNested). Result is a JS array of arrays (n×n).
+  corrcoef(x, y, opts) {
+    // Adder kwargs may land in y or opts position.
+    let rowvar = true;
+    if (y != null && typeof y === 'object' && y._kw) {
+      if (y.rowvar != null) rowvar = y.rowvar;
+      if (y.y != null) y = y.y;
+      else y = null;
+    } else if (opts != null && opts._kw) {
+      if (opts.rowvar != null) rowvar = opts.rowvar;
+    }
+
+    // Coerce input to 2D array-of-arrays
+    let rows;
+    if (Array.isArray(x) && Array.isArray(x[0])) {
+      rows = x;  // already 2D nested
+    } else if (x && x._tbl && typeof x.to_numpy === 'function') {
+      // sadpan DataFrame → returns _NumpyLikeArray2D wrapper. Use
+      // tolist() to get a plain nested-array form.
+      const arr2d = x.to_numpy();
+      rows = arr2d && typeof arr2d.tolist === 'function' ? arr2d.tolist() : arr2d;
+    } else if (x && typeof x.tolist === 'function' && Array.isArray(x.tolist())) {
+      // _NumpyLikeArray2D passed directly
+      rows = x.tolist();
+    } else if (_isNd(x) && x.ndim === 2) {
+      // natra 2D — convert via toArray
+      const ctx2 = _ctx;
+      if (ctx2 && typeof ctx2.toArray === 'function') rows = ctx2.toArray(x._arr);
+      else throw new Error('np.corrcoef: cannot convert natra 2D');
+    } else {
+      // 1D path — two vectors
+      const _toJs = (v) => {
+        if (Array.isArray(v)) return v;
+        if (_isNd(v)) return Array.from(new Float64Array(v._arr.memory.buffer, v._arr.ptr, v._arr.length));
+        if (ArrayBuffer.isView(v)) return Array.from(v);
+        return v;
+      };
+      const xs = _toJs(x);
+      const ys = _toJs(y);
+      if (!Array.isArray(ys)) throw new Error('np.corrcoef: pass 2D matrix or two 1D vectors');
+      rows = [xs, ys];
+      rowvar = true;
+    }
+
+    // After rowvar handling, `vars` is an array where each element is
+    // the values of one variable (length = #observations).
+    const vars = rowvar ? rows : _transposeRows(rows);
+    const n = vars.length;
+    const _r = (a, b) => {
+      let sa = 0, sb = 0, k = 0;
+      for (let i = 0; i < a.length; i++) {
+        if (a[i] === a[i] && b[i] === b[i]) { sa += a[i]; sb += b[i]; k++; }
+      }
+      if (k === 0) return NaN;
+      const ma = sa / k, mb = sb / k;
+      let num = 0, da2 = 0, db2 = 0;
+      for (let i = 0; i < a.length; i++) {
+        if (a[i] === a[i] && b[i] === b[i]) {
+          const da = a[i] - ma, db = b[i] - mb;
+          num += da * db; da2 += da * da; db2 += db * db;
         }
       }
-      if (ArrayBuffer.isView(v)) return Array.from(v);
-      return v;
+      return num / Math.sqrt(da2 * db2);
     };
-    const xs = _toJs(x);
-    const ys = _toJs(y);
-    if (!Array.isArray(ys)) {
-      // 2D-input case not yet implemented
-      throw new Error('np.corrcoef: 2D matrix input not yet supported — pass two vectors');
-    }
-    const n = xs.length;
-    let sx = 0, sy = 0;
-    for (let i = 0; i < n; i++) { sx += xs[i]; sy += ys[i]; }
-    const mx = sx / n, my = sy / n;
-    let num = 0, dx2 = 0, dy2 = 0;
+    const out = [];
     for (let i = 0; i < n; i++) {
-      const dx = xs[i] - mx, dy = ys[i] - my;
-      num += dx * dy; dx2 += dx * dx; dy2 += dy * dy;
+      const row = [];
+      for (let j = 0; j < n; j++) row.push(i === j ? 1 : _r(vars[i], vars[j]));
+      out.push(row);
     }
-    const r = num / Math.sqrt(dx2 * dy2);
-    return [[1, r], [r, 1]];
+    return out;
   },
 
   // linear algebra helpers

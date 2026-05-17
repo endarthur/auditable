@@ -28,6 +28,9 @@ const args = process.argv.slice(2);
 const verbose = args.includes('--verbose') || args.includes('-v');
 const failFast = args.includes('--fail-fast');
 const lenientImports = args.includes('--lenient-imports');
+const prefetchUrls = args
+  .filter(a => a.startsWith('--prefetch='))
+  .map(a => a.slice('--prefetch='.length));
 const filtered = args.filter(a => !a.startsWith('-'));
 const nbPath = filtered[0];
 if (!nbPath) {
@@ -153,6 +156,19 @@ await import('../ext/ipython-adapter/adder.js');
 
 const { importNotebook } = await import('../ext/ipynb/index.js');
 const { pythonExecute } = await import('../ext/adder/src/cell.js');
+
+// Pre-fetch any --prefetch=URL files into /home/nb/<basename>. Lets
+// notebooks that load data via `pd.read_csv("foo.csv")` find the file
+// without a manual setup step.
+for (const url of prefetchUrls) {
+  const name = url.split('/').pop() || 'fetched';
+  const dst = '/home/nb/' + name;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`prefetch: HTTP ${resp.status} fetching ${url}`);
+  const text = await resp.text();
+  await _notebookVFS.writeFile(dst, text);
+  console.log(`prefetched ${url} → ${dst} (${text.length} bytes)`);
+}
 
 // ── Parse the notebook + rewrite imports ──
 const raw = readFileSync(resolve(nbPath), 'utf8');

@@ -524,6 +524,58 @@ class DataFrame {
   }
   get T() { return this.transpose(); }
 
+  // pandas internal — return a DataFrame with only the numeric columns.
+  // sklearn / pandas code uses this to filter object / string columns
+  // before fitting; pandas itself uses it for many built-in reductions.
+  _get_numeric_data() {
+    const numCols = this._tbl.columnNames().filter(n => {
+      const arr = this._tbl.array(n);
+      return arr.some(v => typeof v === 'number');
+    });
+    return new DataFrame(this._tbl.select(...numCols));
+  }
+
+  // pandas.DataFrame.corr(method='pearson') — pairwise Pearson
+  // correlation between numeric columns. Returns a DataFrame indexed
+  // by column name with the correlation matrix.
+  corr(opts) {
+    const _method = (opts && opts._kw && opts.method) || (typeof opts === 'string' ? opts : 'pearson');
+    if (_method !== 'pearson') throw new Error('df.corr: only pearson is supported');
+    // Numeric-only columns
+    const numCols = this._tbl.columnNames().filter(n => {
+      const arr = this._tbl.array(n);
+      return arr.some(v => typeof v === 'number');
+    });
+    const colArrs = numCols.map(n => this._tbl.array(n).map(v => typeof v === 'number' ? v : NaN));
+    const n = colArrs.length;
+    // Pairwise Pearson r — n×n grid.
+    const _r = (a, b) => {
+      let sa = 0, sb = 0, k = 0;
+      for (let i = 0; i < a.length; i++) {
+        if (a[i] === a[i] && b[i] === b[i]) { sa += a[i]; sb += b[i]; k++; }
+      }
+      if (k === 0) return NaN;
+      const ma = sa / k, mb = sb / k;
+      let num = 0, da2 = 0, db2 = 0;
+      for (let i = 0; i < a.length; i++) {
+        if (a[i] === a[i] && b[i] === b[i]) {
+          const da = a[i] - ma, db = b[i] - mb;
+          num += da * db; da2 += da * da; db2 += db * db;
+        }
+      }
+      return num / Math.sqrt(da2 * db2);
+    };
+    const cols = {};
+    for (let i = 0; i < n; i++) {
+      const colName = numCols[i];
+      cols[colName] = [];
+      for (let j = 0; j < n; j++) cols[colName].push(i === j ? 1 : _r(colArrs[i], colArrs[j]));
+    }
+    const out = new DataFrame(new Table(cols, numCols));
+    out._index = new _Index(numCols);
+    return out;
+  }
+
   // pandas null detection — `isnull()` and `notna()` return a same-shape
   // DataFrame of booleans. `isnull().sum()` then yields per-column counts
   // (Series), and `.sum().sum()` reduces to a scalar.
@@ -614,6 +666,26 @@ class _NumpyLikeArray2D {
     // Python-side `type(x)` reads __adderClass__ from adder's
     // pyTypeName helper; without it every JS class shows as 'object'.
     this.__adderClass__ = 'ndarray';
+    // Flat row-major Float64 view so learn / natra / scitra's input
+    // dispatchers recognize this as a numpy-ndarray-shape object (they
+    // check for `.data instanceof Float64Array && .shape`). Without it
+    // these libraries fall through to "named-columns object" and treat
+    // `_rows` as a feature name, which fails validation.
+    let allNumeric = true;
+    for (const row of rows) {
+      for (const v of row) { if (typeof v !== 'number') { allNumeric = false; break; } }
+      if (!allNumeric) break;
+    }
+    if (allNumeric) {
+      const flat = new Float64Array(rows.length * ncols);
+      for (let i = 0; i < rows.length; i++) {
+        for (let j = 0; j < ncols; j++) flat[i * ncols + j] = rows[i][j];
+      }
+      // Hide internal _rows from key-iteration so sklearn-style probing
+      // doesn't see it as a feature column.
+      Object.defineProperty(this, '_rows', { value: rows, enumerable: false });
+      Object.defineProperty(this, 'data', { value: flat, enumerable: false });
+    }
   }
 
   __getitem__(key) {
@@ -829,6 +901,24 @@ function read_csv(source, opts) {
         return new DataFrame(csv(text, opts));
       })();
     }
+    // Bare filename — looks like a file path, not CSV text. Treat as
+    // a VFS lookup under /home/nb/. Heuristic: single line, no commas
+    // / tabs / semicolons, ends with a CSV-ish extension. Otherwise
+    // assume the user passed inline CSV text and let csv() parse it.
+    if (!trimmed.includes('\n') && !trimmed.includes(',')
+        && !trimmed.includes('\t') && !trimmed.includes(';')
+        && /\.(csv|tsv|txt)$/i.test(trimmed)
+        && typeof window !== 'undefined' && window._notebookVFS) {
+      return (async () => {
+        const abs = '/home/nb/' + trimmed;
+        try {
+          const text = await window._notebookVFS.readFile(abs, 'text');
+          return new DataFrame(csv(text, opts));
+        } catch (e) {
+          throw new Error(`read_csv: could not read '${trimmed}' from ${abs} — drop the file into the notebook's filesystem first`);
+        }
+      })();
+    }
   }
   return new DataFrame(csv(source, opts));
 }
@@ -844,12 +934,43 @@ function where(mask, a, b) {
 
 // ── registration ──
 
+// pandas.plotting submodule — used as `import pandas.plotting as pd_plot`.
+// Currently exposes scatter_matrix (pairwise scatter + diagonal hist),
+// the only one Pyrcz-style notebooks reach for in practice.
+const plotting = {
+  scatter_matrix(df, opts) {
+    const kw = (opts && opts._kw) ? opts : (opts || {});
+    const plt = _findPlt();
+    if (!plt) throw new Error('scatter_matrix: plt not loaded — call load("@gcu/plot") first');
+    if (!df || !df._tbl) throw new Error('scatter_matrix: expected a DataFrame');
+    const numCols = df._tbl.columnNames().filter(n => {
+      const a = df._tbl.array(n);
+      return a.some(v => typeof v === 'number');
+    });
+    const n = numCols.length;
+    const sub = plt.subplots(n, n, { figsize: kw.figsize });
+    const axes = sub.axes || (Array.isArray(sub) ? sub[1] : []);
+    for (let i = 0; i < n; i++) {
+      for (let j = 0; j < n; j++) {
+        const ax = Array.isArray(axes[i]) ? axes[i][j] : axes[i * n + j];
+        if (!ax) continue;
+        if (i === j) ax.hist(df._tbl.array(numCols[i]), { color: kw.color || '#4488ff' });
+        else ax.scatter(df._tbl.array(numCols[j]), df._tbl.array(numCols[i]),
+          { alpha: kw.alpha, color: kw.color || '#4488ff' });
+      }
+    }
+    return (sub.fig || sub[0]).show();
+  },
+};
+
 const sadpanModule = {
   // JS API
   table, from, csv, series, concat, merge, semijoin, antijoin, op,
   Table, Series, BooleanMask, GroupBy,
   // DataFrame wrapper API (for adder)
   DataFrame, read_csv, where, WrapperSeries, WrapperGroupBy,
+  // pandas.plotting submodule
+  plotting,
   // pandas-shape constants and helpers
   NaN: Number.NaN,
   NA: Number.NaN,   // pandas's NA marker — same scalar value for our purposes

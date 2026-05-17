@@ -3941,12 +3941,46 @@ async function _evalSubscript(node, scope) {
   // Tuple subscript — numpy / pandas multi-dim access. `arr[i, j]` is
   // sugar for `arr[(i, j)]`; pass the array of evaluated items to
   // __getitem__ and let the target (ndarray, DataFrame, etc.) handle.
+  // Falls back to a generic 2D ndarray-shape path (`{data, shape}`)
+  // when __getitem__ isn't defined — covers learn / scitra outputs.
   if (node.slice.type === 'Tuple') {
     const key = [];
     for (const elt of node.slice.elts) {
       key.push(await _evalSliceElt(elt, scope));
     }
     if (obj && typeof obj.__getitem__ === 'function') return obj.__getitem__(key);
+    // Generic 2D-ndarray-shape tuple subscript — accepts either a
+    // wrapper `{data: Float64Array, shape}` or a bare Float64Array
+    // with `.shape` tacked on (learn's transformer outputs).
+    if (obj && Array.isArray(obj.shape) && obj.shape.length === 2
+        && (obj.data instanceof Float64Array || obj instanceof Float64Array)) {
+      const [n, m] = obj.shape;
+      const d = obj instanceof Float64Array ? obj : obj.data;
+      const rk = key[0], ck = key[1];
+      if (typeof rk === 'number' && typeof ck === 'number') {
+        const i = rk < 0 ? n + rk : rk;
+        const j = ck < 0 ? m + ck : ck;
+        return d[i * m + j];
+      }
+      if (typeof rk === 'number' && ck && ck._slice) {
+        const i = rk < 0 ? n + rk : rk;
+        const lo = ck.lower != null ? ck.lower : 0;
+        const hi = ck.upper != null ? Math.min(ck.upper, m) : m;
+        const out = new Float64Array(hi - lo);
+        for (let k = 0; k < hi - lo; k++) out[k] = d[i * m + lo + k];
+        out.shape = [out.length];
+        return out;
+      }
+      if (rk && rk._slice && typeof ck === 'number') {
+        const lo = rk.lower != null ? rk.lower : 0;
+        const hi = rk.upper != null ? Math.min(rk.upper, n) : n;
+        const j = ck < 0 ? m + ck : ck;
+        const out = new Float64Array(hi - lo);
+        for (let i = 0; i < hi - lo; i++) out[i] = d[(lo + i) * m + j];
+        out.shape = [out.length];
+        return out;
+      }
+    }
     throw new AdderError('TypeError',
       `'${pyTypeName(obj)}' object is not subscriptable with tuple`,
       node.line);
@@ -5190,9 +5224,83 @@ function _contains(container, value) {
 
 // ── Subscript ──
 
+// 2D ndarray-shape tuple subscript — accepts any object with
+// `data: Float64Array` + `shape: [n, m]`. Returns scalar / row /
+// column / sub-matrix depending on the key shape. Used by both
+// `_py.getitem` and `_py.setitem` so libraries (learn, scitra) that
+// return `{data, shape}` are subscriptable with tuple keys without
+// each one having to ship its own `__getitem__`.
+function _ndarrayTupleGet(obj, key) {
+  const [n, m] = obj.shape;
+  const d = _ndarrayData(obj);
+  const rk = key[0], ck = key[1];
+  // scalar + scalar → value
+  if (typeof rk === 'number' && typeof ck === 'number') {
+    const i = rk < 0 ? n + rk : rk;
+    const j = ck < 0 ? m + ck : ck;
+    return d[i * m + j];
+  }
+  // scalar row + slice col → row vector (m or sub)
+  if (typeof rk === 'number' && rk._slice == null && ck && ck._slice) {
+    const i = rk < 0 ? n + rk : rk;
+    const lo = ck.lower != null ? ck.lower : 0;
+    const hi = ck.upper != null ? Math.min(ck.upper, m) : m;
+    const out = new Float64Array(hi - lo);
+    for (let k = 0; k < hi - lo; k++) out[k] = d[i * m + lo + k];
+    out.shape = [out.length];
+    return out;
+  }
+  // slice row + scalar col → column vector
+  if (rk && rk._slice && typeof ck === 'number') {
+    const lo = rk.lower != null ? rk.lower : 0;
+    const hi = rk.upper != null ? Math.min(rk.upper, n) : n;
+    const j = ck < 0 ? m + ck : ck;
+    const out = new Float64Array(hi - lo);
+    for (let i = 0; i < hi - lo; i++) out[i] = d[(lo + i) * m + j];
+    out.shape = [out.length];
+    return out;
+  }
+  // slice + slice → 2D sub-matrix
+  if (rk && rk._slice && ck && ck._slice) {
+    const r0 = rk.lower != null ? rk.lower : 0;
+    const r1 = rk.upper != null ? Math.min(rk.upper, n) : n;
+    const c0 = ck.lower != null ? ck.lower : 0;
+    const c1 = ck.upper != null ? Math.min(ck.upper, m) : m;
+    const rows = r1 - r0;
+    const cols = c1 - c0;
+    const out = new Float64Array(rows * cols);
+    for (let i = 0; i < rows; i++) {
+      for (let j = 0; j < cols; j++) out[i * cols + j] = d[(r0 + i) * m + (c0 + j)];
+    }
+    out.shape = [rows, cols];
+    return out;
+  }
+  throw new AdderError('TypeError', `ndarray: unsupported tuple subscript shape`);
+}
+
+function _looksLikeNdarray(obj) {
+  if (!obj || !Array.isArray(obj.shape) || obj.shape.length !== 2) return false;
+  if (obj.data instanceof Float64Array) return true;
+  // learn's transformers return a Float64Array directly with `.shape`
+  // tacked on as an own property — no wrapping object.
+  if (obj instanceof Float64Array) return true;
+  return false;
+}
+
+function _ndarrayData(obj) {
+  return obj instanceof Float64Array ? obj : obj.data;
+}
+
 function _getitem(obj, key) {
   if (obj === null || obj === undefined) {
     throw new AdderError('TypeError', `'NoneType' object is not subscriptable`);
+  }
+  // 2D ndarray with tuple subscript — handle natively so libraries
+  // returning `{data: Float64Array, shape: [n, m]}` (learn's transform
+  // outputs, etc.) support `x[i, j]` / `x[:, 0]` without needing their
+  // own __getitem__.
+  if (Array.isArray(key) && _looksLikeNdarray(obj)) {
+    return _ndarrayTupleGet(obj, key);
   }
   if (obj instanceof Map) {
     if (!obj.has(key)) throw new AdderError('KeyError', pyRepr(key));

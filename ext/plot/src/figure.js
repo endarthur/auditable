@@ -25,6 +25,14 @@ export class Figure {
     return this;
   }
 
+  // matplotlib's Figure.subplots_adjust(left, right, top, bottom,
+  // wspace, hspace) — adjusts margins between subplots. We don't
+  // currently honor these (our subplot layout uses fixed gaps); accept
+  // and discard so notebooks that call `fig.subplots_adjust(wspace=0.7)`
+  // proceed instead of erroring with no-attribute.
+  subplots_adjust(_opts) { return this; }
+  tight_layout(_opts) { return this; }
+
   show() {
     const dpr = (typeof window !== 'undefined' ? window.devicePixelRatio : 1) || 1;
     const canvas = (typeof document !== 'undefined') ? document.createElement('canvas') : null;

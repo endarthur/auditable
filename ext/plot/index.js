@@ -441,6 +441,11 @@ class Axes {
     return this;
   }
 
+  // matshow == imshow for a 2D matrix. matplotlib's Axes.matshow has
+  // a few extras (auto-aspect, no x-axis-on-bottom) but the common case
+  // — `ax.matshow(corr_matrix)` — works identically.
+  matshow(data, opts) { return this.imshow(data, undefined, undefined, opts); }
+
   imshow(data, nx, ny, opts) {
     this._traces.push({ type: 'imshow', data, nx, ny, opts: _resolveAliases({ ...opts }) });
     // default to equal aspect for grid data (matches matplotlib)
@@ -1192,6 +1197,14 @@ class Figure {
     return this;
   }
 
+  // matplotlib's Figure.subplots_adjust(left, right, top, bottom,
+  // wspace, hspace) — adjusts margins between subplots. We don't
+  // currently honor these (our subplot layout uses fixed gaps); accept
+  // and discard so notebooks that call `fig.subplots_adjust(wspace=0.7)`
+  // proceed instead of erroring with no-attribute.
+  subplots_adjust(_opts) { return this; }
+  tight_layout(_opts) { return this; }
+
   show() {
     const dpr = (typeof window !== 'undefined' ? window.devicePixelRatio : 1) || 1;
     const canvas = (typeof document !== 'undefined') ? document.createElement('canvas') : null;
@@ -1274,6 +1287,17 @@ let _currentAx = null;
 function _setCurrent(fig, ax) { _currentFig = fig; _currentAx = ax; return ax; }
 
 function subplots(nrows, ncols, opts) {
+  // Adder kwarg shapes that arrive here:
+  //   plt.subplots()                          → ()
+  //   plt.subplots(2, 3)                      → (2, 3)
+  //   plt.subplots(figsize=(8,6))             → ({_kw, figsize}) — kwargs in arg 0
+  //   plt.subplots(2, 3, figsize=(8,6))       → (2, 3, {_kw, figsize})
+  //   plt.subplots(2, 3, sharex=True)         → (2, 3, {_kw, sharex})
+  if (nrows && typeof nrows === 'object' && nrows._kw) {
+    opts = nrows; nrows = undefined; ncols = undefined;
+  } else if (ncols && typeof ncols === 'object' && ncols._kw) {
+    opts = ncols; ncols = undefined;
+  }
   const nr = nrows || 1;
   const nc = ncols || 1;
   const fig = new Figure(nr, nc, opts);
@@ -1302,6 +1326,10 @@ const scatter = _quick((ax, x, y, opts) => ax.scatter(x, y, opts));
 const imshow = _quick((ax, data, nx, ny, opts) => ax.imshow(data, nx, ny, opts));
 const bar = _quick((ax, x, heights, opts) => ax.bar(x, heights, opts));
 const cmap = getCmap;
+// matplotlib's matshow renders a 2D matrix as an image with no axes
+// inversion — effectively imshow with origin='upper'. We alias for
+// the common df.corr().matshow pattern.
+const matshow = _quick((ax, data, nx, ny, opts) => ax.imshow(data, nx, ny, opts));
 
 // plt.hist — matplotlib returns (counts, edges, patches). Adder cells
 // destructure as `n, bins, patches = plt.hist(...)` or index as
@@ -1432,14 +1460,29 @@ function savefig(filename) { return _currentFig && _currentFig.savefig(filename)
 function clf() { _currentFig = null; _currentAx = null; }
 function cla() { _currentAx = null; }
 
+// matplotlib's plt.xticks(ticks, labels) / yticks set tick positions
+// and labels on the current axes. Our scale.ticks() drives ticks
+// automatically — we accept and discard these calls (visual result
+// uses our auto-ticks) so notebooks that call them don't error out.
+// Real custom-tick support is on the ROADMAP.
+function xticks(_ticks, _labels) { /* no-op; ROADMAPed */ }
+function yticks(_ticks, _labels) { /* no-op; ROADMAPed */ }
+
+// plt.colorbar(im, ...) — attach a colorbar to the figure. We don't
+// model colorbars as standalone artists; the current axes' colorbar
+// rendering is opt-in via ax.colorbar(). No-op here; the visual is
+// missing but cell completes.
+function colorbar(_im, _opts) { return null; }
+
 // register as auditable extension for adder `import plt`
 if (typeof window !== 'undefined') {
   const _plt = {
-    subplots, subplot, figure, Figure, cmap, cm, plot, scatter, imshow, hist, bar,
+    subplots, subplot, figure, Figure, cmap, cm, plot, scatter, imshow, matshow, hist, bar,
     rc, rcParams, style, show, close,
     gca, gcf, xlabel, ylabel, title, xlim, ylim, xscale, yscale,
     legend, grid, vlines, hlines, axhline, axvline, text,
     subplots_adjust, tight_layout, savefig, clf, cla,
+    xticks, yticks, colorbar,
   };
   const register = window.auditable?.registerExtension;
   if (register) {

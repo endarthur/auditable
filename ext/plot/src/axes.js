@@ -121,6 +121,11 @@ export class Axes {
     return this;
   }
 
+  // matshow == imshow for a 2D matrix. matplotlib's Axes.matshow has
+  // a few extras (auto-aspect, no x-axis-on-bottom) but the common case
+  // — `ax.matshow(corr_matrix)` — works identically.
+  matshow(data, opts) { return this.imshow(data, undefined, undefined, opts); }
+
   imshow(data, nx, ny, opts) {
     this._traces.push({ type: 'imshow', data, nx, ny, opts: _resolveAliases({ ...opts }) });
     // default to equal aspect for grid data (matches matplotlib)

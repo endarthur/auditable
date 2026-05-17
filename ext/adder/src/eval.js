@@ -562,12 +562,46 @@ async function _evalSubscript(node, scope) {
   // Tuple subscript — numpy / pandas multi-dim access. `arr[i, j]` is
   // sugar for `arr[(i, j)]`; pass the array of evaluated items to
   // __getitem__ and let the target (ndarray, DataFrame, etc.) handle.
+  // Falls back to a generic 2D ndarray-shape path (`{data, shape}`)
+  // when __getitem__ isn't defined — covers learn / scitra outputs.
   if (node.slice.type === 'Tuple') {
     const key = [];
     for (const elt of node.slice.elts) {
       key.push(await _evalSliceElt(elt, scope));
     }
     if (obj && typeof obj.__getitem__ === 'function') return obj.__getitem__(key);
+    // Generic 2D-ndarray-shape tuple subscript — accepts either a
+    // wrapper `{data: Float64Array, shape}` or a bare Float64Array
+    // with `.shape` tacked on (learn's transformer outputs).
+    if (obj && Array.isArray(obj.shape) && obj.shape.length === 2
+        && (obj.data instanceof Float64Array || obj instanceof Float64Array)) {
+      const [n, m] = obj.shape;
+      const d = obj instanceof Float64Array ? obj : obj.data;
+      const rk = key[0], ck = key[1];
+      if (typeof rk === 'number' && typeof ck === 'number') {
+        const i = rk < 0 ? n + rk : rk;
+        const j = ck < 0 ? m + ck : ck;
+        return d[i * m + j];
+      }
+      if (typeof rk === 'number' && ck && ck._slice) {
+        const i = rk < 0 ? n + rk : rk;
+        const lo = ck.lower != null ? ck.lower : 0;
+        const hi = ck.upper != null ? Math.min(ck.upper, m) : m;
+        const out = new Float64Array(hi - lo);
+        for (let k = 0; k < hi - lo; k++) out[k] = d[i * m + lo + k];
+        out.shape = [out.length];
+        return out;
+      }
+      if (rk && rk._slice && typeof ck === 'number') {
+        const lo = rk.lower != null ? rk.lower : 0;
+        const hi = rk.upper != null ? Math.min(rk.upper, n) : n;
+        const j = ck < 0 ? m + ck : ck;
+        const out = new Float64Array(hi - lo);
+        for (let i = 0; i < hi - lo; i++) out[i] = d[(lo + i) * m + j];
+        out.shape = [out.length];
+        return out;
+      }
+    }
     throw new AdderError('TypeError',
       `'${pyTypeName(obj)}' object is not subscriptable with tuple`,
       node.line);
