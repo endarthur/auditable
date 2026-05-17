@@ -327,6 +327,17 @@ async function _assignTarget(target, value, scope) {
         }
         break;
       }
+      if (target.slice.type === 'Tuple') {
+        const key = [];
+        for (const elt of target.slice.elts) {
+          key.push(await _evalSliceElt(elt, scope));
+        }
+        if (obj && typeof obj.__setitem__ === 'function') await obj.__setitem__(key, value);
+        else throw new AdderError('TypeError',
+          `'${pyTypeName(obj)}' object does not support tuple item assignment`,
+          target.line);
+        break;
+      }
       const key = await adderEval(target.slice, scope);
       if (obj instanceof Map) obj.set(key, value);
       else if (typeof obj?.__setitem__ === 'function') obj.__setitem__(key, value);
@@ -520,6 +531,22 @@ function _pyIn(container, value) {
 
 // ── subscript ──
 
+// Evaluate one element of a tuple subscript. A Slice element produces
+// the `{_slice: true, lower, upper, step}` marker object that
+// __getitem__/__setitem__ already recognize; everything else evaluates
+// as a normal expression. Used by both the read and write paths.
+async function _evalSliceElt(elt, scope) {
+  if (elt && elt.type === 'Slice') {
+    return {
+      _slice: true,
+      lower: elt.lower ? await adderEval(elt.lower, scope) : null,
+      upper: elt.upper ? await adderEval(elt.upper, scope) : null,
+      step: elt.step ? await adderEval(elt.step, scope) : null,
+    };
+  }
+  return await adderEval(elt, scope);
+}
+
 async function _evalSubscript(node, scope) {
   const obj = await adderEval(node.value, scope);
   if (node.slice.type === 'Slice') {
@@ -531,6 +558,19 @@ async function _evalSubscript(node, scope) {
     if (typeof obj?.__getitem__ === 'function')
       return obj.__getitem__({ _slice: true, lower, upper, step });
     return _applySlice(obj, lower, upper, step);
+  }
+  // Tuple subscript — numpy / pandas multi-dim access. `arr[i, j]` is
+  // sugar for `arr[(i, j)]`; pass the array of evaluated items to
+  // __getitem__ and let the target (ndarray, DataFrame, etc.) handle.
+  if (node.slice.type === 'Tuple') {
+    const key = [];
+    for (const elt of node.slice.elts) {
+      key.push(await _evalSliceElt(elt, scope));
+    }
+    if (obj && typeof obj.__getitem__ === 'function') return obj.__getitem__(key);
+    throw new AdderError('TypeError',
+      `'${pyTypeName(obj)}' object is not subscriptable with tuple`,
+      node.line);
   }
   const key = await adderEval(node.slice, scope);
   if (obj instanceof Map) {

@@ -148,6 +148,48 @@ describe('scitra: scipy.stats basics', () => {
 
 // ── Pyrcz-shape: the actual failing cell ──
 
+describe('adder: multi-dim subscript (arr[i, j])', () => {
+  test('read: scalar 2D index on natra ndarray', async () => {
+    const { scope } = await runCell([
+      'import natra as np',
+      'a = np.zeros([3, 4])',
+      'a[1, 2] = 42.0',
+      'v = a[1, 2]',
+      'z = a[0, 0]',
+    ].join('\n'));
+    assert.equal(scope.v, 42);
+    assert.equal(scope.z, 0);
+  });
+
+  test('read: slice + scalar (arr[:, 0])', async () => {
+    const { scope } = await runCell([
+      'import natra as np',
+      'a = np.zeros([3, 4])',
+      'a[0, 0] = 1.0',
+      'a[1, 0] = 2.0',
+      'a[2, 0] = 3.0',
+      'col0 = a[:, 0]',
+      'sum0 = float(np.sum(col0))',
+    ].join('\n'));
+    assert.equal(scope.sum0, 6);
+  });
+
+  test('Pyrcz-shape: arr[i, j] in for-loop body', async () => {
+    // Same shape as Bootstrap.ipynb cell that broke before:
+    // draw[isample, ireal] = rand.choice(data)
+    const { scope } = await runCell([
+      'import natra as np',
+      'n = 3',
+      'a = np.zeros([n, n])',
+      'for i in range(n):',
+      '    for j in range(n):',
+      '        a[i, j] = float(i * n + j)',
+      'last = a[n-1, n-1]',
+    ].join('\n'));
+    assert.equal(scope.last, 8);  // 2*3+2
+  });
+});
+
 describe('plt: hist counts + np.max round-trip', () => {
   test('bins[0] from plt.hist is iterable for np.max', async () => {
     const { scope } = await runCell([

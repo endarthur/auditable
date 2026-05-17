@@ -893,10 +893,27 @@ class _Parser {
   }
 
   _parseSlice() {
-    let lower = null, isSlice = false;
-    if (!this.at('OP', ':') && !this.at('OP', ']')) lower = this.parseExpr();
+    // Parse the first slice or expression. If a comma follows, parse
+    // additional items and wrap the whole thing in a Tuple — numpy /
+    // pandas style `arr[i, j]`, `df.iloc[0:5, :]` semantics. Python
+    // sugar for `arr[(i, j)]` — the runtime forwards the tuple to
+    // __getitem__/__setitem__ which the target object (DataFrame, nd-
+    // array, etc.) interprets as multi-dim access.
+    const first = this._parseSliceItem();
+    if (!this.at('OP', ',')) return first;
+    const elts = [first];
+    while (this.eat('OP', ',')) {
+      // Trailing comma allowed (`arr[i,]`) — just stop before the `]`.
+      if (this.at('OP', ']')) break;
+      elts.push(this._parseSliceItem());
+    }
+    return { type: 'Tuple', elts, line: first?.line || 0, col: 0 };
+  }
+
+  _parseSliceItem() {
+    let lower = null;
+    if (!this.at('OP', ':') && !this.at('OP', ']') && !this.at('OP', ',')) lower = this.parseExpr();
     if (this.eat('OP', ':')) {
-      isSlice = true;
       let upper = null, step = null;
       if (!this.at('OP', ':') && !this.at('OP', ']') && !this.at('OP', ',')) upper = this.parseExpr();
       if (this.eat('OP', ':')) {

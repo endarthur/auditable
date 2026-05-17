@@ -751,6 +751,10 @@ export const _py = {
   // subscript
   getitem: _getitem, setitem: _setitem, slice: _slice,
   setslice: _setslice, delslice: _delslice,
+  // Marker object for slice elements inside a tuple subscript
+  // (`arr[i:j, k]` lowers to `getitem(obj, [makeSlice(i,j,null), k])`
+  // — the consumer's __getitem__ destructures via `_slice` flag).
+  makeSlice: (lower, upper, step) => ({ _slice: true, lower, upper, step }),
   // context manager __exit__ (with statement)
   exitWith: _exitWith,
   // attribute

@@ -906,8 +906,29 @@ function lowerSubscript(ctx, node) {
     const step = node.slice.step ? lowerExpr_ad(ctx, node.slice.step) : ctx.emit('const', [null], VOID, l);
     return emitPyCall(ctx, 'slice', [obj, lower, upper, step], l);
   }
+  if (node.slice.type === 'Tuple') {
+    // numpy / pandas multi-dim subscript — build an array of evaluated
+    // items (Slice elements become `_py.makeSlice(lo, hi, step)` marker
+    // objects) and pass it to `_py.getitem`. The target __getitem__
+    // (natra ndarray, DataFrame, etc.) interprets the array as a tuple.
+    const elts = node.slice.elts.map(elt => _lowerSliceElt(ctx, elt, l));
+    const tupleKey = ctx.emit('array_new', elts.map(e => e.id), DYNAMIC, l);
+    return emitPyCall(ctx, 'getitem', [obj, tupleKey], l);
+  }
   const key = lowerExpr_ad(ctx, node.slice);
   return emitPyCall(ctx, 'getitem', [obj, key], l);
+}
+
+// Lower one element of a tuple subscript: a Slice becomes a runtime
+// `_py.makeSlice` call; anything else lowers as a normal expression.
+function _lowerSliceElt(ctx, elt, l) {
+  if (elt && elt.type === 'Slice') {
+    const lower = elt.lower ? lowerExpr_ad(ctx, elt.lower) : ctx.emit('const', [null], VOID, l);
+    const upper = elt.upper ? lowerExpr_ad(ctx, elt.upper) : ctx.emit('const', [null], VOID, l);
+    const step = elt.step ? lowerExpr_ad(ctx, elt.step) : ctx.emit('const', [null], VOID, l);
+    return emitPyCall(ctx, 'makeSlice', [lower, upper, step], l);
+  }
+  return lowerExpr_ad(ctx, elt);
 }
 
 // ── Call ──
@@ -1064,6 +1085,12 @@ function lowerAssignTarget(ctx, target, value, l) {
       const upper = target.slice.upper ? lowerExpr_ad(ctx, target.slice.upper) : ctx.emit('const', [null], VOID, l);
       const step = target.slice.step ? lowerExpr_ad(ctx, target.slice.step) : ctx.emit('const', [null], VOID, l);
       emitPyCall(ctx, 'setslice', [obj, lower, upper, step, value], l, VOID);
+      return;
+    }
+    if (target.slice.type === 'Tuple') {
+      const elts = target.slice.elts.map(elt => _lowerSliceElt(ctx, elt, l));
+      const tupleKey = ctx.emit('array_new', elts.map(e => e.id), DYNAMIC, l);
+      emitPyCall(ctx, 'setitem', [obj, tupleKey, value], l, VOID);
       return;
     }
     const key = lowerExpr_ad(ctx, target.slice);

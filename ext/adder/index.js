@@ -1546,10 +1546,27 @@ class _Parser {
   }
 
   _parseSlice() {
-    let lower = null, isSlice = false;
-    if (!this.at('OP', ':') && !this.at('OP', ']')) lower = this.parseExpr();
+    // Parse the first slice or expression. If a comma follows, parse
+    // additional items and wrap the whole thing in a Tuple — numpy /
+    // pandas style `arr[i, j]`, `df.iloc[0:5, :]` semantics. Python
+    // sugar for `arr[(i, j)]` — the runtime forwards the tuple to
+    // __getitem__/__setitem__ which the target object (DataFrame, nd-
+    // array, etc.) interprets as multi-dim access.
+    const first = this._parseSliceItem();
+    if (!this.at('OP', ',')) return first;
+    const elts = [first];
+    while (this.eat('OP', ',')) {
+      // Trailing comma allowed (`arr[i,]`) — just stop before the `]`.
+      if (this.at('OP', ']')) break;
+      elts.push(this._parseSliceItem());
+    }
+    return { type: 'Tuple', elts, line: first?.line || 0, col: 0 };
+  }
+
+  _parseSliceItem() {
+    let lower = null;
+    if (!this.at('OP', ':') && !this.at('OP', ']') && !this.at('OP', ',')) lower = this.parseExpr();
     if (this.eat('OP', ':')) {
-      isSlice = true;
       let upper = null, step = null;
       if (!this.at('OP', ':') && !this.at('OP', ']') && !this.at('OP', ',')) upper = this.parseExpr();
       if (this.eat('OP', ':')) {
@@ -3681,6 +3698,17 @@ async function _assignTarget(target, value, scope) {
         }
         break;
       }
+      if (target.slice.type === 'Tuple') {
+        const key = [];
+        for (const elt of target.slice.elts) {
+          key.push(await _evalSliceElt(elt, scope));
+        }
+        if (obj && typeof obj.__setitem__ === 'function') await obj.__setitem__(key, value);
+        else throw new AdderError('TypeError',
+          `'${pyTypeName(obj)}' object does not support tuple item assignment`,
+          target.line);
+        break;
+      }
       const key = await adderEval(target.slice, scope);
       if (obj instanceof Map) obj.set(key, value);
       else if (typeof obj?.__setitem__ === 'function') obj.__setitem__(key, value);
@@ -3874,6 +3902,22 @@ function _pyIn(container, value) {
 
 // ── subscript ──
 
+// Evaluate one element of a tuple subscript. A Slice element produces
+// the `{_slice: true, lower, upper, step}` marker object that
+// __getitem__/__setitem__ already recognize; everything else evaluates
+// as a normal expression. Used by both the read and write paths.
+async function _evalSliceElt(elt, scope) {
+  if (elt && elt.type === 'Slice') {
+    return {
+      _slice: true,
+      lower: elt.lower ? await adderEval(elt.lower, scope) : null,
+      upper: elt.upper ? await adderEval(elt.upper, scope) : null,
+      step: elt.step ? await adderEval(elt.step, scope) : null,
+    };
+  }
+  return await adderEval(elt, scope);
+}
+
 async function _evalSubscript(node, scope) {
   const obj = await adderEval(node.value, scope);
   if (node.slice.type === 'Slice') {
@@ -3885,6 +3929,19 @@ async function _evalSubscript(node, scope) {
     if (typeof obj?.__getitem__ === 'function')
       return obj.__getitem__({ _slice: true, lower, upper, step });
     return _applySlice(obj, lower, upper, step);
+  }
+  // Tuple subscript — numpy / pandas multi-dim access. `arr[i, j]` is
+  // sugar for `arr[(i, j)]`; pass the array of evaluated items to
+  // __getitem__ and let the target (ndarray, DataFrame, etc.) handle.
+  if (node.slice.type === 'Tuple') {
+    const key = [];
+    for (const elt of node.slice.elts) {
+      key.push(await _evalSliceElt(elt, scope));
+    }
+    if (obj && typeof obj.__getitem__ === 'function') return obj.__getitem__(key);
+    throw new AdderError('TypeError',
+      `'${pyTypeName(obj)}' object is not subscriptable with tuple`,
+      node.line);
   }
   const key = await adderEval(node.slice, scope);
   if (obj instanceof Map) {
@@ -5719,6 +5776,10 @@ const _py = {
   // subscript
   getitem: _getitem, setitem: _setitem, slice: _slice,
   setslice: _setslice, delslice: _delslice,
+  // Marker object for slice elements inside a tuple subscript
+  // (`arr[i:j, k]` lowers to `getitem(obj, [makeSlice(i,j,null), k])`
+  // — the consumer's __getitem__ destructures via `_slice` flag).
+  makeSlice: (lower, upper, step) => ({ _slice: true, lower, upper, step }),
   // context manager __exit__ (with statement)
   exitWith: _exitWith,
   // attribute
@@ -6829,8 +6890,29 @@ function lowerSubscript(ctx, node) {
     const step = node.slice.step ? lowerExpr_ad(ctx, node.slice.step) : ctx.emit('const', [null], VOID, l);
     return emitPyCall(ctx, 'slice', [obj, lower, upper, step], l);
   }
+  if (node.slice.type === 'Tuple') {
+    // numpy / pandas multi-dim subscript — build an array of evaluated
+    // items (Slice elements become `_py.makeSlice(lo, hi, step)` marker
+    // objects) and pass it to `_py.getitem`. The target __getitem__
+    // (natra ndarray, DataFrame, etc.) interprets the array as a tuple.
+    const elts = node.slice.elts.map(elt => _lowerSliceElt(ctx, elt, l));
+    const tupleKey = ctx.emit('array_new', elts.map(e => e.id), DYNAMIC, l);
+    return emitPyCall(ctx, 'getitem', [obj, tupleKey], l);
+  }
   const key = lowerExpr_ad(ctx, node.slice);
   return emitPyCall(ctx, 'getitem', [obj, key], l);
+}
+
+// Lower one element of a tuple subscript: a Slice becomes a runtime
+// `_py.makeSlice` call; anything else lowers as a normal expression.
+function _lowerSliceElt(ctx, elt, l) {
+  if (elt && elt.type === 'Slice') {
+    const lower = elt.lower ? lowerExpr_ad(ctx, elt.lower) : ctx.emit('const', [null], VOID, l);
+    const upper = elt.upper ? lowerExpr_ad(ctx, elt.upper) : ctx.emit('const', [null], VOID, l);
+    const step = elt.step ? lowerExpr_ad(ctx, elt.step) : ctx.emit('const', [null], VOID, l);
+    return emitPyCall(ctx, 'makeSlice', [lower, upper, step], l);
+  }
+  return lowerExpr_ad(ctx, elt);
 }
 
 // ── Call ──
@@ -6987,6 +7069,12 @@ function lowerAssignTarget(ctx, target, value, l) {
       const upper = target.slice.upper ? lowerExpr_ad(ctx, target.slice.upper) : ctx.emit('const', [null], VOID, l);
       const step = target.slice.step ? lowerExpr_ad(ctx, target.slice.step) : ctx.emit('const', [null], VOID, l);
       emitPyCall(ctx, 'setslice', [obj, lower, upper, step, value], l, VOID);
+      return;
+    }
+    if (target.slice.type === 'Tuple') {
+      const elts = target.slice.elts.map(elt => _lowerSliceElt(ctx, elt, l));
+      const tupleKey = ctx.emit('array_new', elts.map(e => e.id), DYNAMIC, l);
+      emitPyCall(ctx, 'setitem', [obj, tupleKey, value], l, VOID);
       return;
     }
     const key = lowerExpr_ad(ctx, target.slice);
