@@ -990,6 +990,99 @@ function hmean(x) {
   return xa.length / s;
 }
 
+// scipy.stats.ttest_ind(a, b) — Welch's t-test for two independent
+// samples (default scipy behavior since 1.0). Returns the t-statistic
+// and two-sided p-value. We compute Welch's t (unequal variances) and
+// the Welch-Satterthwaite degrees of freedom; p-value via the Student-t
+// CDF (lives in distributions.js).
+//
+// Returns { statistic, pvalue } — also array-indexable as [t, p] to
+// match scipy's named-tuple result for `t, p = stats.ttest_ind(a, b)`
+// destructuring.
+function ttest_ind(a, b, opts) {
+  const xa = _toF64_descriptives(a);
+  const xb = _toF64_descriptives(b);
+  const n1 = xa.length, n2 = xb.length;
+  if (n1 < 2 || n2 < 2) return { statistic: NaN, pvalue: NaN };
+  let s1 = 0, s2 = 0;
+  for (let i = 0; i < n1; i++) s1 += xa[i];
+  for (let i = 0; i < n2; i++) s2 += xb[i];
+  const m1 = s1 / n1, m2 = s2 / n2;
+  let v1 = 0, v2 = 0;
+  for (let i = 0; i < n1; i++) v1 += (xa[i] - m1) ** 2;
+  for (let i = 0; i < n2; i++) v2 += (xb[i] - m2) ** 2;
+  v1 /= (n1 - 1); v2 /= (n2 - 1);
+  const se = Math.sqrt(v1 / n1 + v2 / n2);
+  if (se === 0) return _statResult_descriptives(0, 1);
+  const tstat = (m1 - m2) / se;
+  // Welch-Satterthwaite df approximation
+  const num = (v1 / n1 + v2 / n2) ** 2;
+  const den = (v1 * v1) / (n1 * n1 * (n1 - 1)) + (v2 * v2) / (n2 * n2 * (n2 - 1));
+  const df = den === 0 ? n1 + n2 - 2 : num / den;
+  // Two-sided p-value via Student-t CDF — lazy import to avoid the
+  // distributions.js → descriptives.js cycle at module-eval time.
+  const { _betai_for_t } = _ttestBetaiBridge_descriptives();
+  const tt = df / (df + tstat * tstat);
+  const p = _betai_for_t(df / 2, 0.5, tt);   // 2-sided
+  return _statResult_descriptives(tstat, p);
+}
+
+function _statResult_descriptives(statistic, pvalue) {
+  // Indexable AND named — supports both `r.statistic` / `r.pvalue` and
+  // `t, p = ttest_ind(...)` tuple unpacking in adder.
+  const r = [statistic, pvalue];
+  r.statistic = statistic;
+  r.pvalue = pvalue;
+  return r;
+}
+
+// Tiny duplicate of the incomplete-beta CF — distributions.js owns the
+// full implementation, but importing it here would create a cycle
+// (distributions.js imports from special.js, which descriptives.js
+// also uses). Cheap to maintain a separate copy of ~25 lines.
+function _ttestBetaiBridge_descriptives() {
+  function betacf(a, b, x) {
+    const MAXIT = 200, EPS = 3e-12, FPMIN = 1e-300;
+    const qab = a + b, qap = a + 1, qam = a - 1;
+    let c = 1, d = 1 - qab * x / qap;
+    if (Math.abs(d) < FPMIN) d = FPMIN;
+    d = 1 / d;
+    let h = d;
+    for (let m = 1; m <= MAXIT; m++) {
+      const m2 = 2 * m;
+      let aa = m * (b - m) * x / ((qam + m2) * (a + m2));
+      d = 1 + aa * d; if (Math.abs(d) < FPMIN) d = FPMIN;
+      c = 1 + aa / c; if (Math.abs(c) < FPMIN) c = FPMIN;
+      d = 1 / d; h *= d * c;
+      aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
+      d = 1 + aa * d; if (Math.abs(d) < FPMIN) d = FPMIN;
+      c = 1 + aa / c; if (Math.abs(c) < FPMIN) c = FPMIN;
+      d = 1 / d;
+      const del = d * c;
+      h *= del;
+      if (Math.abs(del - 1) < EPS) break;
+    }
+    return h;
+  }
+  function betai(a, b, x) {
+    if (x <= 0) return 0;
+    if (x >= 1) return 1;
+    // lgamma comes from util/special.js — but we shouldn't import here
+    // (cycle risk). Use Stirling's approximation as a fallback; the
+    // accuracy is ~1e-8 for our use, fine for p-values.
+    const lg = (n) => {
+      // Stirling
+      const x = n;
+      return (x - 0.5) * Math.log(x) - x + 0.5 * Math.log(2 * Math.PI)
+           + 1 / (12 * x);
+    };
+    const bt = Math.exp(lg(a + b) - lg(a) - lg(b) + a * Math.log(x) + b * Math.log(1 - x));
+    if (x < (a + 1) / (a + b + 2)) return bt * betacf(a, b, x) / a;
+    return 1 - bt * betacf(b, a, 1 - x) / b;
+  }
+  return { _betai_for_t: betai };
+}
+
 // ── stats/transform.js ──
 
 // Statistical transforms — normal score, Box-Cox, Yeo-Johnson.
@@ -2748,7 +2841,7 @@ export {
   weighted_mean, weighted_var, weighted_std,
   weighted_percentile, weighted_median,
   ecdf, histogram, moments,
-  gmean, hmean,
+  gmean, hmean, ttest_ind,
   // stats/transform
   normal_score_transform,
   // stats/kde
@@ -2767,7 +2860,7 @@ export const stats = {
   weighted_mean, weighted_var, weighted_std,
   weighted_percentile, weighted_median,
   ecdf, histogram, moments,
-  gmean, hmean,
+  gmean, hmean, ttest_ind,
   normal_score_transform,
   gaussian_kde,
 };

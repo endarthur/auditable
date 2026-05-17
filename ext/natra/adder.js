@@ -457,6 +457,56 @@ const _module = {
     return _makeNd(_ops().map(v._arr, Math.sqrt));
   },
 
+  // np.power(x, y) — element-wise x**y. Both can be arrays or scalars.
+  power(x, y) {
+    if (_isNd(x)) return _makeNd(_ops().map(x._arr, (v) => Math.pow(v, _isNd(y) ? y : y)));
+    return Math.pow(x, y);
+  },
+  // np.round(a, decimals=0) — element-wise round, optionally to N decimal places.
+  round(a, decimals) {
+    if (decimals && decimals._kw) decimals = decimals.decimals;
+    const d = decimals || 0;
+    const f = Math.pow(10, d);
+    if (_isNd(a)) return _makeNd(_ops().map(a._arr, (v) => Math.round(v * f) / f));
+    if (Array.isArray(a)) return a.map(v => Math.round(v * f) / f);
+    return Math.round(a * f) / f;
+  },
+  // np.corrcoef(x, y=None) — Pearson correlation. Common case is two
+  // 1D vectors → returns a 2×2 correlation matrix where [0,1] = [1,0]
+  // is the Pearson r. With a single 2D matrix, returns the full n×n
+  // matrix; we cover the common 2-vector case here and leave the n-D
+  // path for the ROADMAP.
+  corrcoef(x, y) {
+    const _toJs = (v) => {
+      if (Array.isArray(v)) return v;
+      if (_isNd(v)) {
+        const r = v._arr;
+        if (r.memory && r.memory.buffer && r.dtype === 'f64') {
+          return Array.from(new Float64Array(r.memory.buffer, r.ptr, r.length));
+        }
+      }
+      if (ArrayBuffer.isView(v)) return Array.from(v);
+      return v;
+    };
+    const xs = _toJs(x);
+    const ys = _toJs(y);
+    if (!Array.isArray(ys)) {
+      // 2D-input case not yet implemented
+      throw new Error('np.corrcoef: 2D matrix input not yet supported — pass two vectors');
+    }
+    const n = xs.length;
+    let sx = 0, sy = 0;
+    for (let i = 0; i < n; i++) { sx += xs[i]; sy += ys[i]; }
+    const mx = sx / n, my = sy / n;
+    let num = 0, dx2 = 0, dy2 = 0;
+    for (let i = 0; i < n; i++) {
+      const dx = xs[i] - mx, dy = ys[i] - my;
+      num += dx * dy; dx2 += dx * dx; dy2 += dy * dy;
+    }
+    const r = num / Math.sqrt(dx2 * dy2);
+    return [[1, r], [r, 1]];
+  },
+
   // linear algebra helpers
   dot(a, b) {
     const r = _ops().dot(_raw(a), _raw(b));

@@ -15,6 +15,16 @@ function _cmap(rC, gC, bC) {
   };
 }
 
+// Direct-function colormaps for the easy ones — jet, gray, hot, cool
+// are well-defined by closed-form ramps. Polynomial fits used only
+// for perceptual maps (viridis/plasma/etc.) where the curve is
+// non-trivial. Approximate fits — visual fidelity is "close enough"
+// for notebook plots, not pixel-perfect against matplotlib.
+function _rgb(r, g, b) {
+  const cl = (v) => Math.max(0, Math.min(255, Math.round(v * 255)));
+  return `rgb(${cl(r)},${cl(g)},${cl(b)})`;
+}
+
 const _cmaps = {
   viridis: _cmap(
     [0.267, 0.004, 5.294, -14.05, 8.5],
@@ -31,6 +41,55 @@ const _cmaps = {
     [0.08, 3.54, -8.42, 5.79],
     [0.58, -2.58, 7.52, -11.42, 6.88]
   ),
+  // perceptual maps — single-color-family approximations
+  plasma: _cmap(
+    [0.05, 2.1, 0.9, -2.6, 1.5],
+    [0.03, 0.0, 1.2, 0.4, -0.6],
+    [0.53, -1.3, 0.6, 0.0, 0.0]
+  ),
+  inferno: _cmap(
+    [0.0, 0.4, 4.0, -4.0, 1.0],
+    [0.0, -0.6, 3.0, -1.5, 0.0],
+    [0.0, 1.0, -3.0, 4.0, -1.4]
+  ),
+  magma: _cmap(
+    [0.0, 0.4, 3.5, -3.5, 1.2],
+    [0.0, -0.3, 1.8, -0.5, 0.0],
+    [0.0, 1.6, -2.5, 1.0, 0.4]
+  ),
+  cividis: _cmap(
+    [0.0, 0.3, 2.5, -2.5, 1.2],
+    [0.13, 0.6, 1.5, -1.5, 0.5],
+    [0.32, 1.1, -2.5, 0.5, 0.7]
+  ),
+  // direct-function ramps
+  jet: (t) => {
+    t = Math.max(0, Math.min(1, t));
+    let r, g, b;
+    if (t < 0.25) { r = 0; g = t * 4; b = 1; }
+    else if (t < 0.5) { r = 0; g = 1; b = 1 - (t - 0.25) * 4; }
+    else if (t < 0.75) { r = (t - 0.5) * 4; g = 1; b = 0; }
+    else { r = 1; g = 1 - (t - 0.75) * 4; b = 0; }
+    return _rgb(r, g, b);
+  },
+  gray: (t) => { t = Math.max(0, Math.min(1, t)); return _rgb(t, t, t); },
+  Greys: (t) => { t = Math.max(0, Math.min(1, t)); return _rgb(1 - t, 1 - t, 1 - t); },
+  hot: (t) => {
+    t = Math.max(0, Math.min(1, t));
+    return _rgb(Math.min(1, t * 3), Math.max(0, t * 3 - 1), Math.max(0, t * 3 - 2));
+  },
+  cool: (t) => { t = Math.max(0, Math.min(1, t)); return _rgb(t, 1 - t, 1); },
+  spring: (t) => { t = Math.max(0, Math.min(1, t)); return _rgb(1, t, 1 - t); },
+  summer: (t) => { t = Math.max(0, Math.min(1, t)); return _rgb(t, 0.5 + t * 0.5, 0.4); },
+  autumn: (t) => { t = Math.max(0, Math.min(1, t)); return _rgb(1, t, 0); },
+  winter: (t) => { t = Math.max(0, Math.min(1, t)); return _rgb(0, t, 1 - 0.5 * t); },
+  // Named reversed variants — matplotlib's `_r` suffix convention
+  viridis_r: (t) => _cmaps.viridis(1 - t),
+  plasma_r: (t) => _cmaps.plasma(1 - t),
+  inferno_r: (t) => _cmaps.inferno(1 - t),
+  magma_r: (t) => _cmaps.magma(1 - t),
+  jet_r: (t) => _cmaps.jet(1 - t),
+  gray_r: (t) => _cmaps.gray(1 - t),
 };
 
 export function getCmap(name) {

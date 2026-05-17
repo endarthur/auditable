@@ -106,11 +106,20 @@ export function rewriteImportLine(line) {
       const segMatch = seg.match(/^([\w.]+)(\s+as\s+\w+)?$/);
       if (!segMatch) { newSegs.push(seg); continue; }
       const pkg = segMatch[1];
-      const asPart = segMatch[2] || '';
+      let asPart = segMatch[2] || '';
       const replacement = substitutePackage(pkg);
       if (replacement === null) {
         newSegs.push(seg);
         continue;
+      }
+      // Preserve the user's original name binding when no `as` alias
+      // was provided. `import scipy` rewritten to `import scitra` would
+      // lose the `scipy` name in scope, breaking later code that
+      // references `scipy.linalg.lu(...)`. Adding `as scipy` keeps the
+      // user's reference name working — only applies to bare (non-
+      // dotted) module names since `as foo.bar` isn't valid syntax.
+      if (!asPart && !pkg.includes('.')) {
+        asPart = ` as ${pkg}`;
       }
       newSegs.push(`${replacement}${asPart}`);
       applied.push({ original: pkg, rewritten: replacement, type: 'import' });

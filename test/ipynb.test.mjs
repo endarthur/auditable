@@ -18,7 +18,7 @@ import {
 
 test('substitutions: bare import numpy', () => {
   const { rewritten } = rewriteImportLine('import numpy');
-  assert.equal(rewritten, 'import natra');
+  assert.equal(rewritten, 'import natra as numpy');
 });
 
 test('substitutions: import numpy as np', () => {
@@ -49,14 +49,30 @@ test('substitutions: matplotlib.pyplot is an exact key', () => {
 
 test('substitutions: pandas, scipy, sklearn', () => {
   assert.equal(rewriteImportLine('import pandas as pd').rewritten, 'import sadpan as pd');
-  assert.equal(rewriteImportLine('import scipy').rewritten, 'import scitra');
+  // Bare `import scipy` becomes `import scitra as scipy` to preserve
+  // the user's reference name — later code that does `scipy.linalg.X`
+  // would break if the alias were dropped.
+  assert.equal(rewriteImportLine('import scipy').rewritten, 'import scitra as scipy');
   assert.equal(rewriteImportLine('from sklearn.tree import DecisionTreeClassifier').rewritten,
     'from learn.tree import DecisionTreeClassifier');
 });
 
+test('substitutions: bare imports get an as-alias to preserve name', () => {
+  assert.equal(rewriteImportLine('import numpy').rewritten, 'import natra as numpy');
+  assert.equal(rewriteImportLine('import sklearn').rewritten, 'import learn as sklearn');
+});
+
+test('substitutions: explicit alias survives', () => {
+  // User-provided `as` shouldn't be clobbered by the auto-alias.
+  assert.equal(rewriteImportLine('import numpy as foo').rewritten, 'import natra as foo');
+});
+
 test('substitutions: comma-separated import', () => {
+  // Bare `numpy` gets `as numpy` to preserve the name; `pandas as pd`
+  // already had an alias so it survives; `json` isn't in the table so
+  // it stays unchanged.
   const { rewritten } = rewriteImportLine('import numpy, pandas as pd, json');
-  assert.equal(rewritten, 'import natra, sadpan as pd, json');
+  assert.equal(rewritten, 'import natra as numpy, sadpan as pd, json');
 });
 
 test('substitutions: unknown package passes through', () => {

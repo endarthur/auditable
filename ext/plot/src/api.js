@@ -128,7 +128,13 @@ export function subplot(...args) {
 // getCmap; unknown / dunder access returns undefined so adder's
 // attribute probing (__adderClass__, __iter__, etc.) doesn't get
 // fooled into thinking every name is a cmap.
-const _CMAP_NAMES = ['viridis', 'coolwarm', 'turbo'];
+const _CMAP_NAMES = [
+  'viridis', 'coolwarm', 'turbo',
+  'plasma', 'inferno', 'magma', 'cividis',
+  'jet', 'gray', 'Greys', 'hot', 'cool',
+  'spring', 'summer', 'autumn', 'winter',
+  'viridis_r', 'plasma_r', 'inferno_r', 'magma_r', 'jet_r', 'gray_r',
+];
 export const cm = {};
 for (const n of _CMAP_NAMES) {
   Object.defineProperty(cm, n, {
