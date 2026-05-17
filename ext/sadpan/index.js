@@ -2055,9 +2055,18 @@ const plotting = {
       for (let j = 0; j < n; j++) {
         const ax = Array.isArray(axes[i]) ? axes[i][j] : axes[i * n + j];
         if (!ax) continue;
+        // matplotlib's scatter_matrix hides inner tick labels — only
+        // bottom row keeps x ticks, only left col keeps y ticks. Same
+        // here so small per-subplot rects (an n×n grid in a few hundred
+        // px) don't have labels eating the data.
+        if (i !== n - 1) ax._hideXTicks = true;
+        if (j !== 0) ax._hideYTicks = true;
+        // Label edges with the variable name (matplotlib does this too).
+        if (j === 0) ax.set_ylabel(numCols[i]);
+        if (i === n - 1) ax.set_xlabel(numCols[j]);
         if (i === j) ax.hist(df._tbl.array(numCols[i]), { color: kw.color || '#4488ff' });
         else ax.scatter(df._tbl.array(numCols[j]), df._tbl.array(numCols[i]),
-          { alpha: kw.alpha, color: kw.color || '#4488ff' });
+          { alpha: kw.alpha != null ? kw.alpha : 0.5, color: kw.color || '#4488ff' });
       }
     }
     return (sub.fig || sub[0]).show();

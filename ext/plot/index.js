@@ -574,17 +574,27 @@ class Axes {
   // --- rendering ---
 
   _render(ctx, rect) {
-    const textColor = '#ccc';
+    // Color theme — defaults to matplotlib-like (white plot bg, dark
+    // text) so notebooks that use color='black' / default colors render
+    // visibly. Originally we used a dark plot bg matching auditable's
+    // dark UI, but that made `plt.plot(x, y)` (default black line)
+    // invisible. Each Axes can override via ._bgcolor / ._textColor.
+    const bgcolor   = this._bgcolor   || '#ffffff';
+    const textColor = this._textColor || '#333333';
+    const gridColor = this._gridColor || '#cccccc';
+    const frameColor = this._frameColor || '#666666';
     const font = '11px monospace';
     const smallFont = '10px monospace';
 
-    // compute margins
-    let ml = this._ylabel ? 55 : 42;
+    // compute margins (smaller when tick labels are hidden — caller
+    // sets _hideXTicks / _hideYTicks for compact grids like
+    // scatter_matrix where inner subplots don't show ticks)
+    let ml = this._hideYTicks ? 6 : (this._ylabel ? 55 : 42);
     let mr = this._colorbar ? 70 : 12;
     // Right-side twin axis needs space for its tick labels (+ optional ylabel).
     if (this._twin) mr = Math.max(mr, this._twin._ylabel ? 55 : 42);
     let mt = this._title ? 24 : 8;
-    let mb = this._xlabel ? 38 : 26;
+    let mb = this._hideXTicks ? 6 : (this._xlabel ? 38 : 26);
 
     const plotX = rect.x + ml;
     const plotY = rect.y + mt;
@@ -635,12 +645,12 @@ class Axes {
     const yScale = new _yScaleCls([yloS, yhiS], [plotY + plotH, plotY]); // y flipped
 
     // axes background
-    ctx.fillStyle = '#1a1a1a';
+    ctx.fillStyle = bgcolor;
     ctx.fillRect(plotX, plotY, plotW, plotH);
 
     // grid
     if (this._grid) {
-      ctx.strokeStyle = this._gridOpts.color || '#333';
+      ctx.strokeStyle = this._gridOpts.color || gridColor;
       ctx.lineWidth = 0.5;
       ctx.globalAlpha = this._gridOpts.alpha || 0.8;
       const xticks = xScale.ticks();
@@ -665,7 +675,7 @@ class Axes {
     }
 
     // axes frame
-    ctx.strokeStyle = '#666';
+    ctx.strokeStyle = frameColor;
     ctx.lineWidth = 1;
     ctx.strokeRect(plotX, plotY, plotW, plotH);
 
@@ -677,20 +687,24 @@ class Axes {
     const xFmt = xScale.tickFormat();
     const yFmt = yScale.tickFormat();
 
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    for (const v of xTicks) {
-      const px = xScale.transform(v);
-      ctx.beginPath(); ctx.moveTo(px, plotY + plotH); ctx.lineTo(px, plotY + plotH + 4); ctx.strokeStyle = '#666'; ctx.stroke();
-      ctx.fillText(xFmt(v), px, plotY + plotH + 5);
+    if (!this._hideXTicks) {
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      for (const v of xTicks) {
+        const px = xScale.transform(v);
+        ctx.beginPath(); ctx.moveTo(px, plotY + plotH); ctx.lineTo(px, plotY + plotH + 4); ctx.strokeStyle = frameColor; ctx.stroke();
+        ctx.fillText(xFmt(v), px, plotY + plotH + 5);
+      }
     }
 
-    ctx.textAlign = 'right';
-    ctx.textBaseline = 'middle';
-    for (const v of yTicks) {
-      const py = yScale.transform(v);
-      ctx.beginPath(); ctx.moveTo(plotX - 4, py); ctx.lineTo(plotX, py); ctx.strokeStyle = '#666'; ctx.stroke();
-      ctx.fillText(yFmt(v), plotX - 6, py);
+    if (!this._hideYTicks) {
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      for (const v of yTicks) {
+        const py = yScale.transform(v);
+        ctx.beginPath(); ctx.moveTo(plotX - 4, py); ctx.lineTo(plotX, py); ctx.strokeStyle = frameColor; ctx.stroke();
+        ctx.fillText(yFmt(v), plotX - 6, py);
+      }
     }
 
     // title
@@ -800,7 +814,7 @@ class Axes {
     this._renderTraces(ctx, parentXScale, yScale, plotX, plotY, plotW, plotH);
 
     // Right-edge y-axis: ticks + tick labels, drawn outside the plot rect.
-    ctx.fillStyle = '#ccc';
+    ctx.fillStyle = this._textColor || '#333333';
     ctx.font = '10px monospace';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
@@ -808,7 +822,7 @@ class Axes {
     const yFmt = yScale.tickFormat();
     for (const v of yTicks) {
       const py = yScale.transform(v);
-      ctx.strokeStyle = '#666';
+      ctx.strokeStyle = this._frameColor || '#666666';
       ctx.beginPath();
       ctx.moveTo(plotX + plotW, py);
       ctx.lineTo(plotX + plotW + 4, py);
