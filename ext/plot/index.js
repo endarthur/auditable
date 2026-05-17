@@ -1179,9 +1179,19 @@ class Figure {
     this.nrows = nrows || 1;
     this.ncols = ncols || 1;
     const o = opts || {};
-    const figsize = o.figsize || [400, 300];
-    this.width = figsize[0];
-    this.height = figsize[1];
+    // matplotlib's figsize is in INCHES; the canvas pixel size is
+    // figsize * dpi. Default dpi 100. Notebooks like Pyrcz's pass
+    // figsize=(7, 7) expecting a 700×700 canvas — without this scale
+    // we'd produce a 7×7 px (effectively invisible) canvas.
+    //
+    // Heuristic: if both dims are ≤ 50, assume inches and scale by
+    // dpi. If either is > 50, assume already-pixels (back-compat with
+    // JS-side callers that pass pixel values directly).
+    const rawSize = o.figsize || [4, 3];
+    const dpi = o.dpi || 100;
+    const inchesShape = rawSize[0] <= 50 && rawSize[1] <= 50;
+    this.width = inchesShape ? rawSize[0] * dpi : rawSize[0];
+    this.height = inchesShape ? rawSize[1] * dpi : rawSize[1];
     this.facecolor = o.facecolor || 'transparent';
     this._suptitle = null;
 
