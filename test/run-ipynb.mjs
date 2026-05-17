@@ -93,6 +93,19 @@ globalThis.window = globalThis;
 globalThis.CSS = { escape: s => s };
 window._importCache = {};
 
+// ── VFS — adder needs window._notebookVFS / window._vfsPath wired in
+// order to register `os`, `os.path`, `pathlib`, `shutil`, `glob`. The
+// sandbox does this in globals.js; replicate here so `import os` works
+// in headless notebooks.
+const { VFS, MemoryBackend, path: vfsPath } = await import('../ext/vfs/index.js');
+const _notebookVFS = new VFS();
+_notebookVFS._mounts.set('/home/nb', new MemoryBackend());
+_notebookVFS._mounts.set('/var', new MemoryBackend());
+_notebookVFS._mounts.set('/tmp', new MemoryBackend());
+_notebookVFS._mounts.set('/usr/lib/python', new MemoryBackend());
+window._notebookVFS = _notebookVFS;
+window._vfsPath = vfsPath;
+
 // ── Load adapters in the same order the sandbox does ──
 const _natra = await import('../ext/natra/index.js');
 window._importCache['../ext/natra/index.js'] = _natra;
