@@ -1510,7 +1510,33 @@ class DataFrame {
     for (const c of this._tbl.columnNames()) result[c] = this._tbl.array(c).slice();
     return result;
   }
-  to_csv(opts) { return this._tbl.toCSV(opts && opts._kw ? opts : {}); }
+  // pandas signatures:
+  //   df.to_csv()                  → return CSV text (sync)
+  //   df.to_csv("path.csv")        → write to VFS, return Promise<null>
+  //   df.to_csv("path.csv", sep=';', index=False) → as above with kwargs
+  //   df.to_csv(sep=';')           → return CSV text with custom sep
+  // Relative paths land under /home/nb/ (the notebook's home mount);
+  // absolute paths (starting with /) are passed through verbatim.
+  to_csv(pathOrOpts, opts) {
+    let path = null;
+    let kw = {};
+    if (pathOrOpts != null && typeof pathOrOpts === 'object' && pathOrOpts._kw) {
+      kw = pathOrOpts;
+    } else {
+      path = pathOrOpts;
+      if (opts && opts._kw) kw = opts;
+    }
+    const text = this._tbl.toCSV(kw);
+    if (path == null || path === '') return text;
+    if (typeof path !== 'string') {
+      throw new TypeError(`to_csv: expected path string, got ${typeof path}`);
+    }
+    if (typeof window === 'undefined' || !window._notebookVFS) {
+      throw new Error('to_csv: VFS not available (no window._notebookVFS)');
+    }
+    const abs = path.startsWith('/') ? path : '/home/nb/' + path;
+    return window._notebookVFS.writeFile(abs, text).then(() => null);
+  }
 
   // pandas null detection — `isnull()` and `notna()` return a same-shape
   // DataFrame of booleans. `isnull().sum()` then yields per-column counts

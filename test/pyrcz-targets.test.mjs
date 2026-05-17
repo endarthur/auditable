@@ -18,6 +18,16 @@ import assert from 'node:assert/strict';
 import { installDomShim } from './helpers/dom-shim.mjs';
 installDomShim();
 
+// VFS — adder's os/path/etc and sadpan's to_csv-to-path need this.
+const { VFS, MemoryBackend, path: vfsPath } = await import('../ext/vfs/index.js');
+const _vfs = new VFS();
+_vfs._mounts.set('/home/nb', new MemoryBackend());
+_vfs._mounts.set('/var', new MemoryBackend());
+_vfs._mounts.set('/tmp', new MemoryBackend());
+_vfs._mounts.set('/usr/lib/python', new MemoryBackend());
+window._notebookVFS = _vfs;
+window._vfsPath = vfsPath;
+
 // Order matters: each `import` triggers a side-effect registration
 // (window._auditableExtensions). natra needs its own load + adapter
 // step, scitra and plt self-register from their bundles, IPython
@@ -149,6 +159,45 @@ describe('scitra: scipy.stats basics', () => {
 });
 
 // ── Pyrcz-shape: the actual failing cell ──
+
+describe('sadpan: to_csv path vs string', () => {
+  test('df.to_csv() returns the CSV text', async () => {
+    const { scope } = await runCell([
+      'import sadpan as pd',
+      'df = pd.DataFrame({"a":[1,2], "b":[10,20]})',
+      'text = df.to_csv()',
+    ].join('\n'));
+    assert.ok(typeof scope.text === 'string');
+    assert.ok(scope.text.includes('a,b'));
+    assert.ok(scope.text.includes('1,10'));
+  });
+
+  test('df.to_csv("/home/nb/out.csv") writes to VFS', async () => {
+    const { scope } = await runCell([
+      'import sadpan as pd',
+      'df = pd.DataFrame({"a":[1,2], "b":[10,20]})',
+      'result = df.to_csv("/home/nb/out.csv")',
+    ].join('\n'));
+    // pandas returns None on file write
+    assert.equal(scope.result, null);
+    // File should be readable via VFS
+    const text = await window._notebookVFS.readFile('/home/nb/out.csv', 'text');
+    assert.ok(text.includes('a,b'));
+    assert.ok(text.includes('1,10'));
+  });
+
+  test('df.to_csv("relative.csv") writes under /home/nb/', async () => {
+    const { scope } = await runCell([
+      'import sadpan as pd',
+      'df = pd.DataFrame({"x":[7]})',
+      'result = df.to_csv("relative.csv")',
+    ].join('\n'));
+    assert.equal(scope.result, null);
+    const text = await window._notebookVFS.readFile('/home/nb/relative.csv', 'text');
+    assert.ok(text.includes('x'));
+    assert.ok(text.includes('7'));
+  });
+});
 
 describe('sadpan: drop() row + column', () => {
   test('df.drop("a", axis=1) removes the column', async () => {
