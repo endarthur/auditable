@@ -5763,8 +5763,10 @@ function _callMethod(obj, name, siteId, ...args) {
 // is ignored. When the body raised, `exc` is the error and __exit__ is
 // called with (type, exc, None); a truthy return value indicates the
 // exception is suppressed (the lowerer checks and only re-raises on
-// falsy). __exit__ may be async — the lowered call site awaits.
-function _exitWith(mgr, exc) {
+// falsy). __exit__ may be async — we must AWAIT it so the lowered call
+// site's `await _py.exitWith(...)` actually waits for side effects
+// (e.g. a file open(..., "w") that flushes to the VFS on close).
+async function _exitWith(mgr, exc) {
   if (mgr === null || mgr === undefined || typeof mgr.__exit__ !== 'function') {
     throw new AdderError(
       'AttributeError',
@@ -5773,7 +5775,7 @@ function _exitWith(mgr, exc) {
   }
   if (exc === null || exc === undefined) {
     // Normal-exit path: discard return; CPython does likewise here.
-    mgr.__exit__(null, null, null);
+    await mgr.__exit__(null, null, null);
     return false;
   }
   // Exception path: pass (type, value, None) and return suppression flag.
@@ -5781,7 +5783,7 @@ function _exitWith(mgr, exc) {
     (exc !== null && typeof exc === 'object' && exc.__class__) ||
     (exc && exc.constructor) ||
     null;
-  return mgr.__exit__(excType, exc, null);
+  return await mgr.__exit__(excType, exc, null);
 }
 
 // ── Attribute access ──
