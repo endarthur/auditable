@@ -12,6 +12,17 @@ class BooleanMask {
 
 class Series {
   constructor(values, name) {
+    // Coerce non-Array iterables (natra ndarrays, TypedArrays, Sets…)
+    // into a plain JS Array so the .map / .filter / .reduce surface
+    // on Series works regardless of input shape. Cheap; Series sizes
+    // in notebook workloads are nowhere near hot-loop hot.
+    if (values != null
+        && !Array.isArray(values)
+        && typeof values !== 'string'
+        && typeof values === 'object'
+        && typeof values[Symbol.iterator] === 'function') {
+      values = Array.from(values);
+    }
     this._values = values;
     this._name = name || null;
   }

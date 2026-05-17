@@ -18,6 +18,17 @@ class BooleanMask {
 
 class Series {
   constructor(values, name) {
+    // Coerce non-Array iterables (natra ndarrays, TypedArrays, Sets…)
+    // into a plain JS Array so the .map / .filter / .reduce surface
+    // on Series works regardless of input shape. Cheap; Series sizes
+    // in notebook workloads are nowhere near hot-loop hot.
+    if (values != null
+        && !Array.isArray(values)
+        && typeof values !== 'string'
+        && typeof values === 'object'
+        && typeof values[Symbol.iterator] === 'function') {
+      values = Array.from(values);
+    }
     this._values = values;
     this._name = name || null;
   }
@@ -1151,7 +1162,18 @@ class DataFrame {
 
   __setitem__(key, value) {
     if (value instanceof Series) value = value._values;
-    if (!Array.isArray(value)) value = new Array(this._tbl.numRows()).fill(value);
+    // Coerce any iterable that isn't a JS Array (TypedArray, natra
+    // ndarray, etc.) to a plain Array via Array.from. Scalars and
+    // strings broadcast to fill every row. Without the coercion, a
+    // natra-backed Series passed in would land as the WHOLE object
+    // repeated nrows times — every cell rendering as [object Object].
+    if (value != null
+        && typeof value !== 'string'
+        && typeof value[Symbol.iterator] === 'function') {
+      if (!Array.isArray(value)) value = Array.from(value);
+    } else {
+      value = new Array(this._tbl.numRows()).fill(value);
+    }
     this._tbl = this._tbl.assign({ [key]: value });
   }
 
