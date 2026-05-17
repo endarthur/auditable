@@ -2,6 +2,7 @@
 
 import { Figure } from './figure.js';
 import { getCmap } from './color.js';
+import { setStyle } from './style.js';
 
 // matplotlib stateful interface — plt.xlabel/.ylim/.legend/etc. all
 // operate on a global "current axes". subplots() and the _quick()
@@ -111,8 +112,16 @@ export const rcParams = {};
 rcParams.update = function (obj) {
   if (obj && typeof obj === 'object') for (const k of Object.keys(obj)) rcParams[k] = obj[k];
 };
-// plt.style.use(name) — no-op
-export const style = { use(_name) { /* no-op */ }, available: [] };
+// plt.style.use(name) — switches the shared palette. Auditable-native
+// default is dark; `plt.style.use('default')` (or 'classic' / a few
+// common matplotlib-style names) flips to a light palette. Notebooks
+// loaded from a .ipynb through @gcu/ipynb get this call injected
+// automatically after `import matplotlib.pyplot as plt`.
+export const style = {
+  use(name) { setStyle(name); },
+  available: ['default', 'classic', 'matplotlib', 'dark_background',
+              'seaborn', 'seaborn-whitegrid', 'ggplot', 'bmh'],
+};
 // plt.figure(...) — return a fresh Figure (matplotlib's figure() takes
 // figsize=(w,h) and other kwargs; we accept and ignore unsupported ones).
 export function figure(opts) {
@@ -216,11 +225,27 @@ export function cla() { _currentAx = null; }
 export function xticks(_ticks, _labels) { /* no-op; ROADMAPed */ }
 export function yticks(_ticks, _labels) { /* no-op; ROADMAPed */ }
 
-// plt.colorbar(im, ...) — attach a colorbar to the figure. We don't
-// model colorbars as standalone artists; the current axes' colorbar
-// rendering is opt-in via ax.colorbar(). No-op here; the visual is
-// missing but cell completes.
-export function colorbar(_im, _opts) { return null; }
+// plt.colorbar(im, ax=None, **kwargs) — attach a colorbar to the axes
+// that holds `im`. matplotlib's `im` is an AxesImage; since our
+// ax.matshow/.imshow return the Axes itself (for chaining), `im` will
+// usually BE the axes. We accept:
+//   - an opts.ax kwarg pointing at a specific Axes
+//   - any object with a `.colorbar` method (an Axes)
+//   - any object with `.axes` pointing at an Axes (matplotlib-shape)
+//   - falls back to the current axes
+// Returns the axes (matplotlib returns a Colorbar object, but no
+// caller in the GCU stack uses it as anything other than a side-
+// effect call).
+export function colorbar(im, opts) {
+  // Adder kwargs land in the trailing arg; pull `ax` out.
+  let ax = null;
+  if (opts && typeof opts === 'object' && opts.ax) ax = opts.ax;
+  else if (im && typeof im === 'object' && typeof im.colorbar === 'function') ax = im;
+  else if (im && im.axes && typeof im.axes.colorbar === 'function') ax = im.axes;
+  else ax = _ax();
+  ax.colorbar(opts && typeof opts === 'object' ? opts : {});
+  return ax;
+}
 // plt.suptitle — sets the figure-level title above all subplots.
 // Delegates to the current figure's suptitle method.
 export function suptitle(text, opts) {

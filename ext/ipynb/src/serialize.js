@@ -31,7 +31,13 @@ function inverseSubs() {
 // prefix too) is cleanest as a separate dedicated pass.
 export function rewriteImportsBack(source) {
   const inv = inverseSubs();
-  const lines = source.split('\n');
+  // Strip the auto-injected theme line on export. Matches lines whose
+  // trailing comment is the `auditable: ipynb-theme-inject` sentinel
+  // we wrote when forward-rewriting `import matplotlib.pyplot`. Users
+  // who want to keep the call need only remove the sentinel comment.
+  const lines = source.split('\n').filter(
+    l => !/#\s*auditable:\s*ipynb-theme-inject\b/.test(l),
+  );
   const out = [];
   for (const line of lines) {
     out.push(rewriteImportLineBack(line, inv));

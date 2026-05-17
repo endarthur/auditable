@@ -2,6 +2,77 @@
 // @gcu/plot — Canvas 2D plotting library for Auditable
 // Line, scatter, bar, histogram, imshow. GCU dark theme.
 
+// -- style.js --
+
+// Style palette — auditable-native dark by default. Mutated in place
+// by `plt.style.use(name)` so all subsequent renders pick up the new
+// palette. Per-Axes overrides (`_bgcolor`, `_textColor`, `_gridColor`,
+// `_frameColor`) still win; this just changes the fallback colors used
+// when an Axes doesn't override.
+//
+// Notebooks loaded from a .ipynb through @gcu/ipynb get an automatic
+// `plt.style.use('default')` injected right after their
+// `import matplotlib.pyplot` line, so they render with matplotlib's
+// light defaults (matching what their authors saw in Jupyter). Native
+// auditable cells keep the dark default unless they call style.use
+// themselves.
+
+const _style = {
+  bgcolor: '#1a1a1a',
+  textColor: '#ccc',
+  gridColor: '#333',
+  frameColor: '#666',
+  // figure-level background. Transparent on dark so the notebook's
+  // dark bg shows through; an opaque off-white on the light palette so
+  // dark text on the figure surface contrasts properly even when the
+  // surrounding notebook is dark.
+  figureFacecolor: 'transparent',
+  // legend background (rgba for semi-transparent overlay)
+  legendBg: 'rgba(30,30,30,0.85)',
+  legendBorder: '#555',
+};
+
+const _DARK = {
+  bgcolor: '#1a1a1a',
+  textColor: '#ccc',
+  gridColor: '#333',
+  frameColor: '#666',
+  figureFacecolor: 'transparent',
+  legendBg: 'rgba(30,30,30,0.85)',
+  legendBorder: '#555',
+};
+
+const _LIGHT = {
+  bgcolor: '#ffffff',
+  textColor: '#333333',
+  gridColor: '#cccccc',
+  frameColor: '#666666',
+  // matplotlib's default figure facecolor is white; the surrounding
+  // notebook bg is dark, so we make the figure an opaque card.
+  figureFacecolor: '#fafafa',
+  legendBg: 'rgba(255,255,255,0.9)',
+  legendBorder: '#999999',
+};
+
+// matplotlib's style.use accepts a name (or list of names). We honor a
+// small set: 'default' / 'classic' / 'matplotlib' → light palette;
+// 'dark_background' → dark palette. Anything else is silently ignored
+// (matplotlib itself ignores names it doesn't know in some contexts).
+function setStyle(name) {
+  const names = Array.isArray(name) ? name : [name];
+  for (const n of names) {
+    const key = String(n || '').toLowerCase();
+    if (key === 'default' || key === 'classic' || key === 'matplotlib' ||
+        key === 'seaborn' || key === 'seaborn-whitegrid' ||
+        key === 'ggplot' || key === 'bmh') {
+      Object.assign(_style, _LIGHT);
+    } else if (key === 'dark_background') {
+      Object.assign(_style, _DARK);
+    }
+    // unknown style names: leave palette alone
+  }
+}
+
 // -- scale.js --
 
 // Linear scale with Heckbert nice-number tick generation
@@ -324,6 +395,7 @@ function dashArray(linestyle) {
 
 
 
+
 const _defaultColors = ['#c89b3c', '#5ba3b5', '#e07050', '#7a8b99', '#b5854b', '#5bb58b'];
 
 // matplotlib short-form aliases — `c` for color, `ls` for linestyle,
@@ -338,6 +410,12 @@ const _ALIASES = {
   mec: 'markeredgecolor',
   mfc: 'markerfacecolor',
   mew: 'markeredgewidth',
+  // matplotlib's scatter() takes plural `edgecolors` / `linewidths`
+  // (because it can color edges per-point); the rest of our renderer
+  // reads singular. Alias both forms so user code that types plural
+  // doesn't silently lose the edge.
+  edgecolors: 'edgecolor',
+  linewidths: 'linewidth',
 };
 function _resolveAliases(o) {
   if (!o) return o;
@@ -405,28 +483,35 @@ class Axes {
     }
     _resolveAliases(o);
     if (!o.color) o.color = this._nextColor();
-    this._traces.push({ type: 'line', x, y, opts: o });
+    // Coerce series-shaped inputs (sadpan WrapperSeries, natra ndarray,
+    // TypedArray, etc.) to plain JS arrays so the renderer's .length
+    // and [i] reads work. Without this, `plt.plot(df['x'], df['y'])`
+    // silently rendered nothing (WrapperSeries has no .length).
+    this._traces.push({ type: 'line', x: _toArr(x), y: _toArr(y), opts: o });
     return this;
   }
 
   scatter(x, y, opts) {
     const o = _resolveAliases({ ...opts });
     if (!o.color) o.color = this._nextColor();
-    this._traces.push({ type: 'scatter', x, y, opts: o });
+    // Same Series-coercion contract as plot(): a sadpan WrapperSeries
+    // has no .length, so without _toArr the dot-render loop did
+    // nothing and the axes auto-extent fell back to 0..1.
+    this._traces.push({ type: 'scatter', x: _toArr(x), y: _toArr(y), opts: o });
     return this;
   }
 
   bar(x, heights, opts) {
     const o = _resolveAliases({ ...opts });
     if (!o.color) o.color = this._nextColor();
-    this._traces.push({ type: 'bar', x, heights, opts: o });
+    this._traces.push({ type: 'bar', x: _toArr(x), heights: _toArr(heights), opts: o });
     return this;
   }
 
   barh(y, widths, opts) {
     const o = _resolveAliases({ ...opts });
     if (!o.color) o.color = this._nextColor();
-    this._traces.push({ type: 'barh', y, widths, opts: o });
+    this._traces.push({ type: 'barh', y: _toArr(y), widths: _toArr(widths), opts: o });
     return this;
   }
 
@@ -574,33 +659,51 @@ class Axes {
   // --- rendering ---
 
   _render(ctx, rect) {
-    // Color theme — defaults to matplotlib-like (white plot bg, dark
-    // text) so notebooks that use color='black' / default colors render
-    // visibly. Originally we used a dark plot bg matching auditable's
-    // dark UI, but that made `plt.plot(x, y)` (default black line)
-    // invisible. Each Axes can override via ._bgcolor / ._textColor.
-    const bgcolor   = this._bgcolor   || '#ffffff';
-    const textColor = this._textColor || '#333333';
-    const gridColor = this._gridColor || '#cccccc';
-    const frameColor = this._frameColor || '#666666';
+    // Color theme — defaults come from the shared `_style` palette
+    // (auditable-native dark unless `plt.style.use('default')` has
+    // switched it). Per-Axes overrides (`_bgcolor`, `_textColor`,
+    // `_gridColor`, `_frameColor`) still win for callers that want a
+    // specific cell to render with custom colors.
+    const bgcolor   = this._bgcolor   || _style.bgcolor;
+    const textColor = this._textColor || _style.textColor;
+    const gridColor = this._gridColor || _style.gridColor;
+    const frameColor = this._frameColor || _style.frameColor;
     const font = '11px monospace';
     const smallFont = '10px monospace';
 
     // compute margins (smaller when tick labels are hidden — caller
     // sets _hideXTicks / _hideYTicks for compact grids like
-    // scatter_matrix where inner subplots don't show ticks)
-    let ml = this._hideYTicks ? 6 : (this._ylabel ? 55 : 42);
-    let mr = this._colorbar ? 70 : 12;
-    // Right-side twin axis needs space for its tick labels (+ optional ylabel).
-    if (this._twin) mr = Math.max(mr, this._twin._ylabel ? 55 : 42);
-    let mt = this._title ? 24 : 8;
-    let mb = this._hideXTicks ? 6 : (this._xlabel ? 38 : 26);
+    // scatter_matrix where inner subplots don't show ticks). Callers
+    // that want all subplots in a grid to share a uniform plot area
+    // (so cells line up regardless of which one carries the label)
+    // pass `_margins = { left, right, top, bottom }` and bypass the
+    // label/tick-driven computation.
+    let ml, mr, mt, mb;
+    if (this._margins) {
+      ml = this._margins.left   ?? 42;
+      mr = this._margins.right  ?? 12;
+      mt = this._margins.top    ?? 8;
+      mb = this._margins.bottom ?? 26;
+    } else {
+      ml = this._hideYTicks ? 6 : (this._ylabel ? 55 : 42);
+      mr = this._colorbar ? 70 : 12;
+      // Right-side twin axis needs space for its tick labels (+ optional ylabel).
+      if (this._twin) mr = Math.max(mr, this._twin._ylabel ? 55 : 42);
+      mt = this._title ? 24 : 8;
+      mb = this._hideXTicks ? 6 : (this._xlabel ? 38 : 26);
+    }
 
-    const plotX = rect.x + ml;
-    const plotY = rect.y + mt;
-    const plotW = rect.x + rect.w - mr - plotX;
-    const plotH = rect.y + rect.h - mb - plotY;
+    let plotX = rect.x + ml;
+    let plotY = rect.y + mt;
+    let plotW = rect.x + rect.w - mr - plotX;
+    let plotH = rect.y + rect.h - mb - plotY;
     if (plotW <= 0 || plotH <= 0) return;
+
+    // Save the pre-aspect plot rect so colorbars and other "use the
+    // full reserved height" annotations don't shrink along with the
+    // shrunken plot area below.
+    const fullPlotY = plotY;
+    const fullPlotH = plotH;
 
     // compute data ranges
     let [xlo, xhi] = this._xlim || this._dataExtent('x');
@@ -608,13 +711,29 @@ class Axes {
     if (xlo === xhi) { xlo -= 0.5; xhi += 0.5; }
     if (ylo === yhi) { ylo -= 0.5; yhi += 0.5; }
 
-    // aspect ratio adjustment
+    // aspect ratio adjustment.
+    // - For an imshow-dominated axes (matshow, correlation matrix, etc.)
+    //   "equal" means the cells should be square — we SHRINK the plot
+    //   rect to match data aspect, leaving figure bg around it. The old
+    //   behavior (expand data range) painted bg-color stripes through
+    //   the data area, which looks wrong for matrix plots.
+    // - For scatter/line with aspect='equal', expanding the data range
+    //   matches matplotlib's behavior (more breathing room around data).
     if (this._aspect === 'equal') {
       const dataW = xhi - xlo;
       const dataH = yhi - ylo;
       const scaleX = plotW / dataW;
       const scaleY = plotH / dataH;
-      if (scaleX < scaleY) {
+      const hasImshow = this._traces.some(t => t.type === 'imshow');
+      if (hasImshow) {
+        const scale = Math.min(scaleX, scaleY);
+        const newW = dataW * scale;
+        const newH = dataH * scale;
+        plotX += (plotW - newW) / 2;
+        plotY += (plotH - newH) / 2;
+        plotW = newW;
+        plotH = newH;
+      } else if (scaleX < scaleY) {
         const center = (ylo + yhi) / 2;
         const half = (plotH / scaleX) / 2;
         ylo = center - half;
@@ -743,10 +862,13 @@ class Axes {
       this._renderLegend(ctx, plotX, plotY, plotW, plotH);
     }
 
-    // colorbar
+    // colorbar — pinned to the right edge of the cell rect (so it
+    // stays on the figure's right side even when the plot rect itself
+    // shrinks for aspect='equal'+imshow) and uses the full pre-aspect
+    // plot height (so it doesn't shrink with the data area).
     if (this._colorbar && lastCmapTrace) {
-      const cbX = plotX + plotW + 8;
       const cbW = 12;
+      const cbX = rect.x + rect.w - mr + 10;
       let vmin, vmax, cmap;
       if (lastCmapTrace.type === 'imshow') {
         const d = lastCmapTrace.data;
@@ -761,7 +883,7 @@ class Axes {
         vmax = lastCmapTrace.opts.vmax != null ? lastCmapTrace.opts.vmax : Math.max(...c);
         cmap = lastCmapTrace.opts.cmap || 'viridis';
       }
-      renderColorbar(ctx, cbX, plotY, cbW, plotH, cmap, vmin, vmax, {
+      renderColorbar(ctx, cbX, fullPlotY, cbW, fullPlotH, cmap, vmin, vmax, {
         textColor, font: smallFont, label: this._colorbarOpts.label,
       });
     }
@@ -814,7 +936,7 @@ class Axes {
     this._renderTraces(ctx, parentXScale, yScale, plotX, plotY, plotW, plotH);
 
     // Right-edge y-axis: ticks + tick labels, drawn outside the plot rect.
-    ctx.fillStyle = this._textColor || '#333333';
+    ctx.fillStyle = this._textColor || _style.textColor;
     ctx.font = '10px monospace';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
@@ -822,7 +944,7 @@ class Axes {
     const yFmt = yScale.tickFormat();
     for (const v of yTicks) {
       const py = yScale.transform(v);
-      ctx.strokeStyle = this._frameColor || '#666666';
+      ctx.strokeStyle = this._frameColor || _style.frameColor;
       ctx.beginPath();
       ctx.moveTo(plotX + plotW, py);
       ctx.lineTo(plotX + plotW + 4, py);
@@ -834,7 +956,7 @@ class Axes {
     // so the text reads bottom-to-top on the right edge.
     if (this._ylabel) {
       ctx.save();
-      ctx.fillStyle = '#ccc';
+      ctx.fillStyle = this._textColor || _style.textColor;
       ctx.font = '11px monospace';
       ctx.translate(plotX + plotW + 38, plotY + plotH / 2);
       ctx.rotate(Math.PI / 2);
@@ -983,7 +1105,12 @@ class Axes {
       cMax = opts.vmax != null ? opts.vmax : Math.max(...opts.c);
     }
     const sArray = Array.isArray(opts.s);
-    const defaultSize = typeof opts.s === 'number' ? opts.s : 4;
+    // matplotlib's scatter default is s=20 (markersize in points²).
+    // Our previous default (s=4) rendered ~4px-wide dots that were
+    // hard to see at typical alpha values; bumping to 20 matches
+    // matplotlib density and gives `scatter(x, y, alpha=0.2)` enough
+    // pixel surface to be visible against a light figure bg.
+    const defaultSize = typeof opts.s === 'number' ? opts.s : 20;
     const alpha = opts.alpha != null ? opts.alpha : 1;
 
     for (let i = 0; i < x.length; i++) {
@@ -1165,9 +1292,9 @@ class Axes {
     else if (loc.includes('lower') || loc.includes('bottom')) ly = plotY + plotH - boxH - 6;
     else ly = plotY + (plotH - boxH) / 2;
 
-    ctx.fillStyle = 'rgba(30,30,30,0.85)';
+    ctx.fillStyle = _style.legendBg;
     ctx.fillRect(lx, ly, boxW, boxH);
-    ctx.strokeStyle = '#555';
+    ctx.strokeStyle = _style.legendBorder;
     ctx.lineWidth = 0.5;
     ctx.strokeRect(lx, ly, boxW, boxH);
 
@@ -1181,7 +1308,7 @@ class Axes {
       } else {
         ctx.fillRect(lx + padding, ey - 1, 14, 2);
       }
-      ctx.fillStyle = '#ccc';
+      ctx.fillStyle = _style.textColor;
       ctx.fillText(entries[i].label, lx + padding + 18, ey);
     }
   }
@@ -1221,6 +1348,7 @@ class Axes {
 // Figure — canvas management, subplot grid, DPI handling
 
 
+
 class Figure {
   constructor(nrows, ncols, opts) {
     this.nrows = nrows || 1;
@@ -1239,8 +1367,26 @@ class Figure {
     const inchesShape = rawSize[0] <= 50 && rawSize[1] <= 50;
     this.width = inchesShape ? rawSize[0] * dpi : rawSize[0];
     this.height = inchesShape ? rawSize[1] * dpi : rawSize[1];
-    this.facecolor = o.facecolor || 'transparent';
+    // Figure facecolor — pulled from the style palette unless explicitly
+    // overridden. Dark palette uses 'transparent' (notebook bg shows
+    // through); light palette uses an opaque off-white card so dark
+    // tick text contrasts even on a dark notebook bg.
+    this.facecolor = o.facecolor || _style.figureFacecolor;
     this._suptitle = null;
+    // Inter-subplot gap in pixels. Callers that want a tight grid
+    // (e.g. sadpan's scatter_matrix on a small figure) pass `gap` (or
+    // matplotlib's wspace/hspace) in opts. wspace/hspace land in pixels
+    // here; matplotlib's fraction-of-axis-width semantics aren't worth
+    // emulating for our flat-layout use case.
+    this._gapX = (o.wspace ?? o.gap ?? 10);
+    this._gapY = (o.hspace ?? o.gap ?? 10);
+    // Figure-level row/col labels — drawn OUTSIDE the subplot grid
+    // (to the left of each row and below each column). Used by
+    // matrix-shaped plots like sadpan's scatter_matrix where the
+    // column names belong on the figure edges, not duplicated as
+    // per-cell axis labels.
+    this._rowLabels = null;
+    this._colLabels = null;
 
     // create axes grid
     this.axes = [];
@@ -1284,30 +1430,76 @@ class Figure {
     const supH = this._suptitle ? 24 : 0;
 
     if (this._suptitle) {
-      ctx.fillStyle = '#ccc';
+      ctx.fillStyle = _style.textColor;
       ctx.font = '14px monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'top';
       ctx.fillText(this._suptitle.text, this.width / 2, 4);
     }
 
-    // subplot layout
-    const gapX = 10;
-    const gapY = 10;
-    const cellW = (this.width - gapX * (this.ncols - 1)) / this.ncols;
-    const cellH = (this.height - supH - gapY * (this.nrows - 1)) / this.nrows;
+    // Figure-level row/col label gutters. Reserve space outside the
+    // subplot grid for these labels so the grid itself shrinks rather
+    // than overlapping the labels.
+    const rowLabelW = this._rowLabels ? 28 : 0;
+    const colLabelH = this._colLabels ? 18 : 0;
+
+    // subplot layout — grid origin shifted by the row-label gutter
+    const gapX = this._gapX;
+    const gapY = this._gapY;
+    const gridX = rowLabelW;
+    const gridY = supH;
+    const gridW = this.width - rowLabelW;
+    const gridH = this.height - supH - colLabelH;
+    const cellW = (gridW - gapX * (this.ncols - 1)) / this.ncols;
+    const cellH = (gridH - gapY * (this.nrows - 1)) / this.nrows;
 
     for (let r = 0; r < this.nrows; r++) {
       for (let c = 0; c < this.ncols; c++) {
         const idx = r * this.ncols + c;
         const ax = this.axes[idx];
         const rect = {
-          x: c * (cellW + gapX),
-          y: supH + r * (cellH + gapY),
+          x: gridX + c * (cellW + gapX),
+          y: gridY + r * (cellH + gapY),
           w: cellW,
           h: cellH,
         };
         ax._render(ctx, rect);
+      }
+    }
+
+    // Figure-level edge labels — drawn after subplots so they sit on
+    // top of any background fill. Row labels rotate -90° (read bottom-
+    // to-top), centered vertically on each row. Col labels read flat,
+    // centered horizontally under each column.
+    if (this._rowLabels) {
+      ctx.save();
+      ctx.fillStyle = _style.textColor;
+      ctx.font = '11px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (let r = 0; r < this.nrows; r++) {
+        const label = this._rowLabels[r];
+        if (!label) continue;
+        const cy = gridY + r * (cellH + gapY) + cellH / 2;
+        ctx.save();
+        ctx.translate(rowLabelW / 2, cy);
+        ctx.rotate(-Math.PI / 2);
+        ctx.fillText(label, 0, 0);
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+    if (this._colLabels) {
+      ctx.fillStyle = _style.textColor;
+      ctx.font = '11px monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      for (let c = 0; c < this.ncols; c++) {
+        const label = this._colLabels[c];
+        if (!label) continue;
+        const cx = gridX + c * (cellW + gapX) + cellW / 2;
+        const cy = gridY + gridH + colLabelH / 2;
+        ctx.fillText(label, cx, cy);
       }
     }
 
@@ -1327,6 +1519,7 @@ class Figure {
 // -- api.js --
 
 // Public API — subplots() factory, quick one-liners, plt extension registration
+
 
 
 
@@ -1438,8 +1631,16 @@ const rcParams = {};
 rcParams.update = function (obj) {
   if (obj && typeof obj === 'object') for (const k of Object.keys(obj)) rcParams[k] = obj[k];
 };
-// plt.style.use(name) — no-op
-const style = { use(_name) { /* no-op */ }, available: [] };
+// plt.style.use(name) — switches the shared palette. Auditable-native
+// default is dark; `plt.style.use('default')` (or 'classic' / a few
+// common matplotlib-style names) flips to a light palette. Notebooks
+// loaded from a .ipynb through @gcu/ipynb get this call injected
+// automatically after `import matplotlib.pyplot as plt`.
+const style = {
+  use(name) { setStyle(name); },
+  available: ['default', 'classic', 'matplotlib', 'dark_background',
+              'seaborn', 'seaborn-whitegrid', 'ggplot', 'bmh'],
+};
 // plt.figure(...) — return a fresh Figure (matplotlib's figure() takes
 // figsize=(w,h) and other kwargs; we accept and ignore unsupported ones).
 function figure(opts) {
@@ -1543,11 +1744,27 @@ function cla() { _currentAx = null; }
 function xticks(_ticks, _labels) { /* no-op; ROADMAPed */ }
 function yticks(_ticks, _labels) { /* no-op; ROADMAPed */ }
 
-// plt.colorbar(im, ...) — attach a colorbar to the figure. We don't
-// model colorbars as standalone artists; the current axes' colorbar
-// rendering is opt-in via ax.colorbar(). No-op here; the visual is
-// missing but cell completes.
-function colorbar(_im, _opts) { return null; }
+// plt.colorbar(im, ax=None, **kwargs) — attach a colorbar to the axes
+// that holds `im`. matplotlib's `im` is an AxesImage; since our
+// ax.matshow/.imshow return the Axes itself (for chaining), `im` will
+// usually BE the axes. We accept:
+//   - an opts.ax kwarg pointing at a specific Axes
+//   - any object with a `.colorbar` method (an Axes)
+//   - any object with `.axes` pointing at an Axes (matplotlib-shape)
+//   - falls back to the current axes
+// Returns the axes (matplotlib returns a Colorbar object, but no
+// caller in the GCU stack uses it as anything other than a side-
+// effect call).
+function colorbar(im, opts) {
+  // Adder kwargs land in the trailing arg; pull `ax` out.
+  let ax = null;
+  if (opts && typeof opts === 'object' && opts.ax) ax = opts.ax;
+  else if (im && typeof im === 'object' && typeof im.colorbar === 'function') ax = im;
+  else if (im && im.axes && typeof im.axes.colorbar === 'function') ax = im.axes;
+  else ax = _ax();
+  ax.colorbar(opts && typeof opts === 'object' ? opts : {});
+  return ax;
+}
 // plt.suptitle — sets the figure-level title above all subplots.
 // Delegates to the current figure's suptitle method.
 function suptitle(text, opts) {

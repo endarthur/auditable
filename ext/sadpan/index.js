@@ -2049,27 +2049,40 @@ const plotting = {
       return a.some(v => typeof v === 'number');
     });
     const n = numCols.length;
-    const sub = plt.subplots(n, n, { figsize: kw.figsize });
+    // Touching cells (gap 1px so the frames don't visually merge into
+    // a single thick line) — matches pandas' scatter_matrix density.
+    const sub = plt.subplots(n, n, { figsize: kw.figsize, gap: 1 });
     const axes = sub.axes || (Array.isArray(sub) ? sub[1] : []);
+    // Per-edge margins (NOT uniform) so the plot area fills the cell:
+    // only the left col reserves space for y-tick labels, only the
+    // bottom row reserves space for x-tick labels, inner cells get
+    // tight zero-margin rendering and span their full cell. The figure
+    // itself carries the column names (set via _rowLabels/_colLabels
+    // below) so per-cell axis labels aren't needed.
     for (let i = 0; i < n; i++) {
       for (let j = 0; j < n; j++) {
         const ax = Array.isArray(axes[i]) ? axes[i][j] : axes[i * n + j];
         if (!ax) continue;
-        // matplotlib's scatter_matrix hides inner tick labels — only
-        // bottom row keeps x ticks, only left col keeps y ticks. Same
-        // here so small per-subplot rects (an n×n grid in a few hundred
-        // px) don't have labels eating the data.
+        ax._margins = {
+          left:   j === 0       ? 22 : 0,
+          right:  0,
+          top:    0,
+          bottom: i === n - 1   ? 18 : 0,
+        };
         if (i !== n - 1) ax._hideXTicks = true;
         if (j !== 0) ax._hideYTicks = true;
-        // Label edges with the variable name (matplotlib does this too).
-        if (j === 0) ax.set_ylabel(numCols[i]);
-        if (i === n - 1) ax.set_xlabel(numCols[j]);
         if (i === j) ax.hist(df._tbl.array(numCols[i]), { color: kw.color || '#4488ff' });
         else ax.scatter(df._tbl.array(numCols[j]), df._tbl.array(numCols[i]),
           { alpha: kw.alpha != null ? kw.alpha : 0.5, color: kw.color || '#4488ff' });
       }
     }
-    return (sub.fig || sub[0]).show();
+    // Column names live OUTSIDE the n×n grid (figure edges), matching
+    // pandas: one column name per row on the left, one per column
+    // along the bottom — never duplicated as per-cell axis labels.
+    const fig = sub.fig || sub[0];
+    fig._rowLabels = numCols.slice();
+    fig._colLabels = numCols.slice();
+    return fig.show();
   },
 };
 

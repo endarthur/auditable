@@ -445,9 +445,16 @@ describe('subplots', () => {
     assert.equal(result.axes.length, 2);
   });
 
-  it('2x2 returns { fig, axes }', () => {
+  it('2x2 returns nested 2D axes array (matches matplotlib)', () => {
+    // Matplotlib: subplots(R, C) with R>1 AND C>1 returns a nested
+    // (rows × cols) array so adder code can destructure literally:
+    //   f, ((a, b), (c, d)) = plt.subplots(2, 2)
     const result = subplots(2, 2);
-    assert.equal(result.axes.length, 4);
+    assert.equal(result.axes.length, 2);
+    assert.equal(result.axes[0].length, 2);
+    assert.equal(result.axes[1].length, 2);
+    // Underlying figure still has all four axes flat in fig.axes
+    assert.equal(result.fig.axes.length, 4);
   });
 
   it('passes opts to Figure', () => {
@@ -485,5 +492,237 @@ describe('extension registration', () => {
     assert.ok(window._auditableExtensions);
     assert.ok(window._auditableExtensions['plt']);
     assert.equal(typeof window._auditableExtensions['plt'].subplots, 'function');
+  });
+});
+
+// ==================== Margin overrides & figure gap ====================
+
+describe('axes margin override', () => {
+  it('honors _margins when set (uniform-grid pattern)', () => {
+    // Two cells with very different decorations should produce the SAME
+    // plot area when both pin the same _margins. Sanity-test via the
+    // background fillRect — `fillRect(plotX, plotY, plotW, plotH)`.
+    function _captureBg(ax) {
+      const captured = [];
+      const ctx = {
+        _fillStyle: null,
+        save() {}, restore() {}, beginPath() {}, moveTo() {}, lineTo() {},
+        stroke() {}, fill() {}, clip() {}, rect() {}, arc() {}, fillText() {},
+        strokeRect() {}, measureText() { return { width: 0 }; },
+        setLineDash() {}, translate() {}, rotate() {},
+        get fillStyle() { return this._fillStyle; },
+        set fillStyle(v) { this._fillStyle = v; },
+        fillRect(x, y, w, h) { if (captured.length === 0) captured.push({ x, y, w, h }); },
+        get globalAlpha() { return 1; }, set globalAlpha(_) {},
+      };
+      ax._render(ctx, { x: 0, y: 0, w: 200, h: 200 });
+      return captured[0];
+    }
+    const a = new Axes();
+    a.plot([0, 1, 2], [0, 1, 4]);
+    a.set_xlabel('x'); a.set_ylabel('y'); // would expand margins
+    a._margins = { left: 50, right: 4, top: 4, bottom: 36 };
+    const b = new Axes();
+    b.plot([0, 1, 2], [0, 1, 4]);
+    b._hideXTicks = true; b._hideYTicks = true; // would shrink margins
+    b._margins = { left: 50, right: 4, top: 4, bottom: 36 };
+    const ra = _captureBg(a);
+    const rb = _captureBg(b);
+    assert.deepEqual({ x: rb.x, y: rb.y, w: rb.w, h: rb.h },
+                     { x: ra.x, y: ra.y, w: ra.w, h: ra.h });
+  });
+});
+
+describe('figure gap override', () => {
+  it('opts.gap overrides default inter-subplot gap', () => {
+    const f = new Figure(1, 2, { gap: 2 });
+    assert.equal(f._gapX, 2);
+    assert.equal(f._gapY, 2);
+  });
+  it('opts.wspace/hspace override independently', () => {
+    const f = new Figure(2, 2, { wspace: 4, hspace: 8 });
+    assert.equal(f._gapX, 4);
+    assert.equal(f._gapY, 8);
+  });
+  it('defaults to 10', () => {
+    const f = new Figure(2, 2);
+    assert.equal(f._gapX, 10);
+    assert.equal(f._gapY, 10);
+  });
+});
+
+describe('figure-level edge labels', () => {
+  it("rowLabels / colLabels default null (no gutter reserved)", () => {
+    const f = new Figure(2, 2);
+    assert.equal(f._rowLabels, null);
+    assert.equal(f._colLabels, null);
+  });
+});
+
+describe('matshow aspect=equal shrinks plot rect to square', () => {
+  // The old behavior expanded the data range to fit the plot rect,
+  // which painted bg stripes through the data area. The new behavior
+  // shrinks the plot rect so cells render as squares.
+  it('square data + non-square cell → square plot rect', () => {
+    const ax = new Axes();
+    ax.imshow(new Float64Array([1, 2, 3, 4]), 2, 2);
+    // Capture first plot-area fillRect (the bgcolor fill).
+    const captured = [];
+    const ctx = {
+      _fillStyle: null,
+      save() {}, restore() {}, beginPath() {}, moveTo() {}, lineTo() {},
+      stroke() {}, fill() {}, clip() {}, rect() {}, arc() {}, fillText() {},
+      strokeRect() {}, measureText() { return { width: 0 }; },
+      setLineDash() {}, translate() {}, rotate() {},
+      get fillStyle() { return this._fillStyle; },
+      set fillStyle(v) { this._fillStyle = v; },
+      fillRect(x, y, w, h) { if (captured.length === 0) captured.push({ x, y, w, h }); },
+      get globalAlpha() { return 1; }, set globalAlpha(_) {},
+    };
+    // 300x200 cell with square 2x2 data — plot rect should be square,
+    // not stretched to fill the 300x200 minus margins.
+    ax._render(ctx, { x: 0, y: 0, w: 300, h: 200 });
+    const r = captured[0];
+    // After margins (42 left, 12 right, 8 top, 26 bottom):
+    // available rect = 246 × 166. Square = 166 × 166.
+    assert.equal(r.w, r.h, 'plot rect should be square');
+  });
+});
+
+// ==================== Series-shaped input coercion ====================
+
+describe('scatter/plot/bar accept Series-shaped inputs', () => {
+  // A sadpan WrapperSeries has no .length — it only iterates via
+  // Symbol.iterator. The renderer reads .length and indexes [i], so
+  // without coercion at trace ingress the dot loop did nothing.
+  function fakeSeries(values) {
+    // Mimic the surface of sadpan WrapperSeries that _toArr cares
+    // about: iterable, no .length, not a TypedArray.
+    return {
+      [Symbol.iterator]() { return values[Symbol.iterator](); },
+    };
+  }
+  it('scatter coerces iterable-without-length to array', () => {
+    const ax = new Axes();
+    const series = fakeSeries([1, 2, 3, 4]);
+    ax.scatter(series, series);
+    const trace = ax._traces[0];
+    assert.ok(Array.isArray(trace.x));
+    assert.equal(trace.x.length, 4);
+    assert.equal(trace.y[3], 4);
+  });
+  it('plot coerces iterable-without-length', () => {
+    const ax = new Axes();
+    ax.plot(fakeSeries([10, 20]), fakeSeries([1, 2]));
+    const trace = ax._traces[0];
+    assert.equal(trace.x.length, 2);
+    assert.equal(trace.x[0], 10);
+  });
+  it('bar coerces iterable-without-length', () => {
+    const ax = new Axes();
+    ax.bar(fakeSeries([0, 1, 2]), fakeSeries([5, 4, 3]));
+    const trace = ax._traces[0];
+    assert.equal(trace.heights[1], 4);
+  });
+  it('scatter still accepts plain JS arrays', () => {
+    const ax = new Axes();
+    ax.scatter([1, 2, 3], [4, 5, 6]);
+    assert.equal(ax._traces[0].x.length, 3);
+  });
+  it('edgecolors plural alias resolves to edgecolor', () => {
+    const ax = new Axes();
+    ax.scatter([1], [1], { edgecolors: 'black' });
+    assert.equal(ax._traces[0].opts.edgecolor, 'black');
+  });
+});
+
+// ==================== plt.colorbar ====================
+
+describe('plt.colorbar', () => {
+  it('sets _colorbar on the axes returned from ax.matshow', () => {
+    // ax.matshow returns the axes (for chaining); plt.colorbar(im)
+    // recognizes this and toggles _colorbar on that axes.
+    const { ax } = apiModule.subplots();
+    const im = ax.matshow([[1, 2], [3, 4]]);
+    apiModule.colorbar(im);
+    assert.equal(ax._colorbar, true);
+  });
+
+  it("honors opts.ax kwarg", () => {
+    const { ax: a1 } = apiModule.subplots();
+    const { ax: a2 } = apiModule.subplots();
+    a2.imshow(new Float64Array([1, 2, 3, 4]), 2, 2);
+    apiModule.colorbar(null, { ax: a2 });
+    assert.equal(a2._colorbar, true);
+    assert.equal(a1._colorbar, false);
+  });
+
+  it('falls back to current axes when im is missing', () => {
+    const { ax } = apiModule.subplots();
+    ax.imshow(new Float64Array([1, 2, 3, 4]), 2, 2);
+    apiModule.colorbar();
+    assert.equal(ax._colorbar, true);
+  });
+});
+
+// ==================== Style palette ====================
+
+const styleModule = await import('../ext/plot/src/style.js');
+const { _style, setStyle } = styleModule;
+
+describe('style palette', () => {
+  it('starts dark (auditable-native)', () => {
+    // Reset in case earlier tests mutated. Default is dark.
+    setStyle('dark_background');
+    assert.equal(_style.bgcolor, '#1a1a1a');
+    assert.equal(_style.textColor, '#ccc');
+  });
+
+  it("style.use('default') switches to a light palette", () => {
+    setStyle('default');
+    assert.equal(_style.bgcolor, '#ffffff');
+    assert.equal(_style.textColor, '#333333');
+    // restore for following tests
+    setStyle('dark_background');
+  });
+
+  it("style.use('classic') is treated as light", () => {
+    setStyle('classic');
+    assert.equal(_style.bgcolor, '#ffffff');
+    setStyle('dark_background');
+  });
+
+  it('unknown style names leave the palette alone', () => {
+    setStyle('default');
+    setStyle('some-unknown-style');
+    assert.equal(_style.bgcolor, '#ffffff'); // unchanged
+    setStyle('dark_background');
+  });
+
+  it('Axes._render reads from the shared palette by default', () => {
+    setStyle('default');
+    const ax = new Axes();
+    ax.plot([0, 1, 2], [0, 1, 4]);
+    // Render to a stub ctx that captures the bg fillStyle.
+    let bgFill = null;
+    const ctx = {
+      _fillStyle: null,
+      save() {}, restore() {}, beginPath() {}, moveTo() {}, lineTo() {},
+      stroke() {}, fill() {}, clip() {}, rect() {}, arc() {}, fillText() {},
+      strokeRect() {}, measureText() { return { width: 0 }; },
+      setLineDash() {},
+      get fillStyle() { return this._fillStyle; },
+      set fillStyle(v) {
+        // First fillRect call paints the plot bg; capture the fill set
+        // immediately before. Simpler: capture every set; assert at end.
+        this._fillStyle = v;
+      },
+      fillRect(x, y, w, h) {
+        if (bgFill === null) bgFill = this._fillStyle;
+      },
+    };
+    ax._render(ctx, { x: 0, y: 0, w: 100, h: 100 });
+    assert.equal(bgFill, '#ffffff'); // light palette
+    setStyle('dark_background');
   });
 });

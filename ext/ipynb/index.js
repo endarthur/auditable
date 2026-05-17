@@ -54,6 +54,15 @@ const SUBSTITUTIONS = {
 // rewritten source plus a list of {original, rewritten, type} records
 // for any substitution that fired (used by callers that want to surface
 // the rewrites — e.g. a banner cell on import).
+//
+// Side effect: when an `import matplotlib.pyplot` line is rewritten,
+// we append `plt.style.use('default')` on the next line — matching the
+// indent of the import. Notebook authors saw matplotlib's light palette
+// in Jupyter; this opts the .ipynb-loaded notebook into that palette
+// without changing the auditable-native dark default for cells that
+// don't import matplotlib. The injection only fires when the rewrite
+// actually mapped `matplotlib.pyplot` → `plt`, so a notebook that uses
+// our @gcu/plot directly stays on whatever palette is current.
 function rewriteImports(source) {
   const lines = source.split('\n');
   const rewrites = [];
@@ -62,6 +71,15 @@ function rewriteImports(source) {
     const { rewritten, applied } = rewriteImportLine(line);
     out.push(rewritten);
     if (applied) rewrites.push(...applied);
+    if (applied && applied.some(a => a.original === 'matplotlib.pyplot')) {
+      const indentMatch = rewritten.match(/^(\s*)/);
+      const indent = indentMatch ? indentMatch[1] : '';
+      // Sentinel comment lets the inverse pass strip this line cleanly
+      // on .ipynb export, so the round-trip doesn't leak our injection
+      // into the user's source. The user can delete the comment if they
+      // want the line preserved as their own style call.
+      out.push(`${indent}plt.style.use('default')  # auditable: ipynb-theme-inject`);
+    }
   }
   return { source: out.join('\n'), rewrites };
 }
@@ -338,7 +356,13 @@ function inverseSubs() {
 // prefix too) is cleanest as a separate dedicated pass.
 function rewriteImportsBack(source) {
   const inv = inverseSubs();
-  const lines = source.split('\n');
+  // Strip the auto-injected theme line on export. Matches lines whose
+  // trailing comment is the `auditable: ipynb-theme-inject` sentinel
+  // we wrote when forward-rewriting `import matplotlib.pyplot`. Users
+  // who want to keep the call need only remove the sentinel comment.
+  const lines = source.split('\n').filter(
+    l => !/#\s*auditable:\s*ipynb-theme-inject\b/.test(l),
+  );
   const out = [];
   for (const line of lines) {
     out.push(rewriteImportLineBack(line, inv));

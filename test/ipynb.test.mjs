@@ -116,6 +116,55 @@ test('inverse: matplotlib.pyplot round-trips', () => {
   assert.equal(back, original);
 });
 
+test('rewriteImports: matplotlib.pyplot import gets a plt.style.use injection', () => {
+  // Notebooks loaded via .ipynb should automatically switch to a light
+  // matplotlib-shaped palette, since that's what the author saw in
+  // Jupyter. We inject the call right after the import; the sentinel
+  // comment lets the inverse pass strip it cleanly on export.
+  const src = 'import matplotlib.pyplot as plt\nplt.plot([1,2,3])';
+  const { source } = rewriteImports(src);
+  const lines = source.split('\n');
+  assert.equal(lines[0], 'import plt as plt');
+  assert.match(lines[1], /^plt\.style\.use\('default'\)/);
+  assert.match(lines[1], /# auditable: ipynb-theme-inject/);
+  assert.equal(lines[2], 'plt.plot([1,2,3])');
+});
+
+test('rewriteImports: pyplot injection preserves indent', () => {
+  // Indented import (inside a function) keeps the injected line at the
+  // same indent so Python parsing stays valid.
+  const src = '    import matplotlib.pyplot as plt';
+  const { source } = rewriteImports(src);
+  const lines = source.split('\n');
+  assert.equal(lines[0], '    import plt as plt');
+  assert.match(lines[1], /^    plt\.style\.use\('default'\)/);
+});
+
+test('rewriteImports: non-matplotlib imports do NOT trigger injection', () => {
+  // Only matplotlib.pyplot specifically gets the style.use injection.
+  // Other rewrites (numpy, pandas, etc.) leave the source flat.
+  const src = 'import numpy as np\nimport pandas as pd';
+  const { source } = rewriteImports(src);
+  assert.equal(source, 'import natra as np\nimport sadpan as pd');
+});
+
+test('rewriteImportsBack: strips the injected plt.style.use line', () => {
+  // Round-trip: forward injects, back strips. User sees their original
+  // import line on .ipynb export, not our adaptation.
+  const src = 'import matplotlib.pyplot as plt\nplt.plot([1,2,3])';
+  const forward = rewriteImports(src).source;
+  const back = rewriteImportsBack(forward);
+  assert.equal(back, 'import matplotlib.pyplot as plt\nplt.plot([1,2,3])');
+});
+
+test('rewriteImportsBack: keeps a manually-written plt.style.use', () => {
+  // A plt.style.use call without our sentinel comment is treated as
+  // user code and survives the round-trip.
+  const src = "import plt as plt\nplt.style.use('seaborn')\nplt.plot([1])";
+  const back = rewriteImportsBack(src);
+  assert.match(back, /plt\.style\.use\('seaborn'\)/);
+});
+
 test('parse: minimal notebook with one code cell', () => {
   const ipynb = {
     cells: [

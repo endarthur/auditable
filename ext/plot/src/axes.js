@@ -3,6 +3,7 @@
 import { LinearScale, LogScale } from './scale.js';
 import { getCmap, renderColorbar } from './color.js';
 import { parseFormat, dashArray } from './format.js';
+import { _style } from './style.js';
 
 const _defaultColors = ['#c89b3c', '#5ba3b5', '#e07050', '#7a8b99', '#b5854b', '#5bb58b'];
 
@@ -18,6 +19,12 @@ const _ALIASES = {
   mec: 'markeredgecolor',
   mfc: 'markerfacecolor',
   mew: 'markeredgewidth',
+  // matplotlib's scatter() takes plural `edgecolors` / `linewidths`
+  // (because it can color edges per-point); the rest of our renderer
+  // reads singular. Alias both forms so user code that types plural
+  // doesn't silently lose the edge.
+  edgecolors: 'edgecolor',
+  linewidths: 'linewidth',
 };
 function _resolveAliases(o) {
   if (!o) return o;
@@ -85,28 +92,35 @@ export class Axes {
     }
     _resolveAliases(o);
     if (!o.color) o.color = this._nextColor();
-    this._traces.push({ type: 'line', x, y, opts: o });
+    // Coerce series-shaped inputs (sadpan WrapperSeries, natra ndarray,
+    // TypedArray, etc.) to plain JS arrays so the renderer's .length
+    // and [i] reads work. Without this, `plt.plot(df['x'], df['y'])`
+    // silently rendered nothing (WrapperSeries has no .length).
+    this._traces.push({ type: 'line', x: _toArr(x), y: _toArr(y), opts: o });
     return this;
   }
 
   scatter(x, y, opts) {
     const o = _resolveAliases({ ...opts });
     if (!o.color) o.color = this._nextColor();
-    this._traces.push({ type: 'scatter', x, y, opts: o });
+    // Same Series-coercion contract as plot(): a sadpan WrapperSeries
+    // has no .length, so without _toArr the dot-render loop did
+    // nothing and the axes auto-extent fell back to 0..1.
+    this._traces.push({ type: 'scatter', x: _toArr(x), y: _toArr(y), opts: o });
     return this;
   }
 
   bar(x, heights, opts) {
     const o = _resolveAliases({ ...opts });
     if (!o.color) o.color = this._nextColor();
-    this._traces.push({ type: 'bar', x, heights, opts: o });
+    this._traces.push({ type: 'bar', x: _toArr(x), heights: _toArr(heights), opts: o });
     return this;
   }
 
   barh(y, widths, opts) {
     const o = _resolveAliases({ ...opts });
     if (!o.color) o.color = this._nextColor();
-    this._traces.push({ type: 'barh', y, widths, opts: o });
+    this._traces.push({ type: 'barh', y: _toArr(y), widths: _toArr(widths), opts: o });
     return this;
   }
 
@@ -254,33 +268,51 @@ export class Axes {
   // --- rendering ---
 
   _render(ctx, rect) {
-    // Color theme — defaults to matplotlib-like (white plot bg, dark
-    // text) so notebooks that use color='black' / default colors render
-    // visibly. Originally we used a dark plot bg matching auditable's
-    // dark UI, but that made `plt.plot(x, y)` (default black line)
-    // invisible. Each Axes can override via ._bgcolor / ._textColor.
-    const bgcolor   = this._bgcolor   || '#ffffff';
-    const textColor = this._textColor || '#333333';
-    const gridColor = this._gridColor || '#cccccc';
-    const frameColor = this._frameColor || '#666666';
+    // Color theme — defaults come from the shared `_style` palette
+    // (auditable-native dark unless `plt.style.use('default')` has
+    // switched it). Per-Axes overrides (`_bgcolor`, `_textColor`,
+    // `_gridColor`, `_frameColor`) still win for callers that want a
+    // specific cell to render with custom colors.
+    const bgcolor   = this._bgcolor   || _style.bgcolor;
+    const textColor = this._textColor || _style.textColor;
+    const gridColor = this._gridColor || _style.gridColor;
+    const frameColor = this._frameColor || _style.frameColor;
     const font = '11px monospace';
     const smallFont = '10px monospace';
 
     // compute margins (smaller when tick labels are hidden — caller
     // sets _hideXTicks / _hideYTicks for compact grids like
-    // scatter_matrix where inner subplots don't show ticks)
-    let ml = this._hideYTicks ? 6 : (this._ylabel ? 55 : 42);
-    let mr = this._colorbar ? 70 : 12;
-    // Right-side twin axis needs space for its tick labels (+ optional ylabel).
-    if (this._twin) mr = Math.max(mr, this._twin._ylabel ? 55 : 42);
-    let mt = this._title ? 24 : 8;
-    let mb = this._hideXTicks ? 6 : (this._xlabel ? 38 : 26);
+    // scatter_matrix where inner subplots don't show ticks). Callers
+    // that want all subplots in a grid to share a uniform plot area
+    // (so cells line up regardless of which one carries the label)
+    // pass `_margins = { left, right, top, bottom }` and bypass the
+    // label/tick-driven computation.
+    let ml, mr, mt, mb;
+    if (this._margins) {
+      ml = this._margins.left   ?? 42;
+      mr = this._margins.right  ?? 12;
+      mt = this._margins.top    ?? 8;
+      mb = this._margins.bottom ?? 26;
+    } else {
+      ml = this._hideYTicks ? 6 : (this._ylabel ? 55 : 42);
+      mr = this._colorbar ? 70 : 12;
+      // Right-side twin axis needs space for its tick labels (+ optional ylabel).
+      if (this._twin) mr = Math.max(mr, this._twin._ylabel ? 55 : 42);
+      mt = this._title ? 24 : 8;
+      mb = this._hideXTicks ? 6 : (this._xlabel ? 38 : 26);
+    }
 
-    const plotX = rect.x + ml;
-    const plotY = rect.y + mt;
-    const plotW = rect.x + rect.w - mr - plotX;
-    const plotH = rect.y + rect.h - mb - plotY;
+    let plotX = rect.x + ml;
+    let plotY = rect.y + mt;
+    let plotW = rect.x + rect.w - mr - plotX;
+    let plotH = rect.y + rect.h - mb - plotY;
     if (plotW <= 0 || plotH <= 0) return;
+
+    // Save the pre-aspect plot rect so colorbars and other "use the
+    // full reserved height" annotations don't shrink along with the
+    // shrunken plot area below.
+    const fullPlotY = plotY;
+    const fullPlotH = plotH;
 
     // compute data ranges
     let [xlo, xhi] = this._xlim || this._dataExtent('x');
@@ -288,13 +320,29 @@ export class Axes {
     if (xlo === xhi) { xlo -= 0.5; xhi += 0.5; }
     if (ylo === yhi) { ylo -= 0.5; yhi += 0.5; }
 
-    // aspect ratio adjustment
+    // aspect ratio adjustment.
+    // - For an imshow-dominated axes (matshow, correlation matrix, etc.)
+    //   "equal" means the cells should be square — we SHRINK the plot
+    //   rect to match data aspect, leaving figure bg around it. The old
+    //   behavior (expand data range) painted bg-color stripes through
+    //   the data area, which looks wrong for matrix plots.
+    // - For scatter/line with aspect='equal', expanding the data range
+    //   matches matplotlib's behavior (more breathing room around data).
     if (this._aspect === 'equal') {
       const dataW = xhi - xlo;
       const dataH = yhi - ylo;
       const scaleX = plotW / dataW;
       const scaleY = plotH / dataH;
-      if (scaleX < scaleY) {
+      const hasImshow = this._traces.some(t => t.type === 'imshow');
+      if (hasImshow) {
+        const scale = Math.min(scaleX, scaleY);
+        const newW = dataW * scale;
+        const newH = dataH * scale;
+        plotX += (plotW - newW) / 2;
+        plotY += (plotH - newH) / 2;
+        plotW = newW;
+        plotH = newH;
+      } else if (scaleX < scaleY) {
         const center = (ylo + yhi) / 2;
         const half = (plotH / scaleX) / 2;
         ylo = center - half;
@@ -423,10 +471,13 @@ export class Axes {
       this._renderLegend(ctx, plotX, plotY, plotW, plotH);
     }
 
-    // colorbar
+    // colorbar — pinned to the right edge of the cell rect (so it
+    // stays on the figure's right side even when the plot rect itself
+    // shrinks for aspect='equal'+imshow) and uses the full pre-aspect
+    // plot height (so it doesn't shrink with the data area).
     if (this._colorbar && lastCmapTrace) {
-      const cbX = plotX + plotW + 8;
       const cbW = 12;
+      const cbX = rect.x + rect.w - mr + 10;
       let vmin, vmax, cmap;
       if (lastCmapTrace.type === 'imshow') {
         const d = lastCmapTrace.data;
@@ -441,7 +492,7 @@ export class Axes {
         vmax = lastCmapTrace.opts.vmax != null ? lastCmapTrace.opts.vmax : Math.max(...c);
         cmap = lastCmapTrace.opts.cmap || 'viridis';
       }
-      renderColorbar(ctx, cbX, plotY, cbW, plotH, cmap, vmin, vmax, {
+      renderColorbar(ctx, cbX, fullPlotY, cbW, fullPlotH, cmap, vmin, vmax, {
         textColor, font: smallFont, label: this._colorbarOpts.label,
       });
     }
@@ -494,7 +545,7 @@ export class Axes {
     this._renderTraces(ctx, parentXScale, yScale, plotX, plotY, plotW, plotH);
 
     // Right-edge y-axis: ticks + tick labels, drawn outside the plot rect.
-    ctx.fillStyle = this._textColor || '#333333';
+    ctx.fillStyle = this._textColor || _style.textColor;
     ctx.font = '10px monospace';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
@@ -502,7 +553,7 @@ export class Axes {
     const yFmt = yScale.tickFormat();
     for (const v of yTicks) {
       const py = yScale.transform(v);
-      ctx.strokeStyle = this._frameColor || '#666666';
+      ctx.strokeStyle = this._frameColor || _style.frameColor;
       ctx.beginPath();
       ctx.moveTo(plotX + plotW, py);
       ctx.lineTo(plotX + plotW + 4, py);
@@ -514,7 +565,7 @@ export class Axes {
     // so the text reads bottom-to-top on the right edge.
     if (this._ylabel) {
       ctx.save();
-      ctx.fillStyle = '#ccc';
+      ctx.fillStyle = this._textColor || _style.textColor;
       ctx.font = '11px monospace';
       ctx.translate(plotX + plotW + 38, plotY + plotH / 2);
       ctx.rotate(Math.PI / 2);
@@ -663,7 +714,12 @@ export class Axes {
       cMax = opts.vmax != null ? opts.vmax : Math.max(...opts.c);
     }
     const sArray = Array.isArray(opts.s);
-    const defaultSize = typeof opts.s === 'number' ? opts.s : 4;
+    // matplotlib's scatter default is s=20 (markersize in points²).
+    // Our previous default (s=4) rendered ~4px-wide dots that were
+    // hard to see at typical alpha values; bumping to 20 matches
+    // matplotlib density and gives `scatter(x, y, alpha=0.2)` enough
+    // pixel surface to be visible against a light figure bg.
+    const defaultSize = typeof opts.s === 'number' ? opts.s : 20;
     const alpha = opts.alpha != null ? opts.alpha : 1;
 
     for (let i = 0; i < x.length; i++) {
@@ -845,9 +901,9 @@ export class Axes {
     else if (loc.includes('lower') || loc.includes('bottom')) ly = plotY + plotH - boxH - 6;
     else ly = plotY + (plotH - boxH) / 2;
 
-    ctx.fillStyle = 'rgba(30,30,30,0.85)';
+    ctx.fillStyle = _style.legendBg;
     ctx.fillRect(lx, ly, boxW, boxH);
-    ctx.strokeStyle = '#555';
+    ctx.strokeStyle = _style.legendBorder;
     ctx.lineWidth = 0.5;
     ctx.strokeRect(lx, ly, boxW, boxH);
 
@@ -861,7 +917,7 @@ export class Axes {
       } else {
         ctx.fillRect(lx + padding, ey - 1, 14, 2);
       }
-      ctx.fillStyle = '#ccc';
+      ctx.fillStyle = _style.textColor;
       ctx.fillText(entries[i].label, lx + padding + 18, ey);
     }
   }

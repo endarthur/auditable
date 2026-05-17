@@ -1,4 +1,5 @@
 // @gcu/plot — ES module entry point (import order doubles as build manifest)
+import './style.js';
 import './scale.js';
 import './color.js';
 import './format.js';
