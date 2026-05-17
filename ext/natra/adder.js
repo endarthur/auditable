@@ -502,14 +502,25 @@ const _module = {
   // (both aliases for round). Provide both.
   around(a, decimals) { return this.round(a, decimals); },
   round_(a, decimals) { return this.round(a, decimals); },
-  // np.round(a, decimals=0) — element-wise round, optionally to N decimal places.
+  // np.round(a, decimals=0) — element-wise round, optionally to N decimal
+  // places. Recurses into nested arrays so a 2D corr matrix from
+  // np.corrcoef stays 2D after rounding.
   round(a, decimals) {
     if (decimals && decimals._kw) decimals = decimals.decimals;
     const d = decimals || 0;
     const f = Math.pow(10, d);
+    const _r = (x) => {
+      if (typeof x === 'number') return Math.round(x * f) / f;
+      if (Array.isArray(x)) return x.map(_r);
+      if (ArrayBuffer.isView(x)) {
+        const out = Array.from(x, v => Math.round(v * f) / f);
+        if (Array.isArray(x.shape)) out.shape = x.shape.slice();
+        return out;
+      }
+      return x;
+    };
     if (_isNd(a)) return _makeNd(_ops().map(a._arr, (v) => Math.round(v * f) / f));
-    if (Array.isArray(a)) return a.map(v => Math.round(v * f) / f);
-    return Math.round(a * f) / f;
+    return _r(a);
   },
   // np.corrcoef(x, y=None, rowvar=True) — Pearson correlation matrix.
   // Three input shapes (mirroring numpy):
