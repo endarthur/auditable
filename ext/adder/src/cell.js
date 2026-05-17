@@ -154,27 +154,33 @@ function _isPyKeyword(name) { return _pyKeywords.has(name); }
 // ── findUses: walk the AST for Name nodes ──
 
 export function pythonFindUses(code, allDefined) {
-  const selfDefines = pythonParseNames(code);
   const uses = new Set();
   try {
     const ast = adderParse(code);
-    _collectNames(ast, allDefined, selfDefines, uses);
+    _collectNames(ast, allDefined, uses);
   } catch {
     // parse error — fall back to regex scan (better than no DAG wiring)
     for (const name of allDefined) {
-      if (!selfDefines.has(name) && new RegExp('\\b' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(code)) uses.add(name);
+      if (new RegExp('\\b' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(code)) uses.add(name);
     }
   }
   return uses;
 }
 
-function _collectNames(node, allDefined, selfDefines, uses) {
+// Note: re-bound names (`df = df.rename(...)`) are intentionally
+// included as uses even though they're also in the cell's defines.
+// Excluding self-defined names breaks the read-before-write pattern —
+// auditable's exec.js builds the cell's upstream scope from cell.uses,
+// so if `df` isn't in uses, the cell never sees the upstream value
+// even though it reads it on the RHS. Self-cycles in the dep graph
+// are deduped by topoSort's needsRun set, so no infinite-loop risk.
+function _collectNames(node, allDefined, uses) {
   if (!node || typeof node !== 'object') return;
-  if (node.type === 'Name' && allDefined.has(node.id) && !selfDefines.has(node.id)) uses.add(node.id);
+  if (node.type === 'Name' && allDefined.has(node.id)) uses.add(node.id);
   for (const key of Object.keys(node)) {
     const val = node[key];
-    if (Array.isArray(val)) { for (const item of val) _collectNames(item, allDefined, selfDefines, uses); }
-    else if (val && typeof val === 'object' && val.type) _collectNames(val, allDefined, selfDefines, uses);
+    if (Array.isArray(val)) { for (const item of val) _collectNames(item, allDefined, uses); }
+    else if (val && typeof val === 'object' && val.type) _collectNames(val, allDefined, uses);
   }
 }
 

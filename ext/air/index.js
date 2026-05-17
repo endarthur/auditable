@@ -6520,9 +6520,14 @@ function analyzeModule(code, parser, allDefined) {
     // Filter imports to a "uses" set. When allDefined is provided we only count
     // names that appear in it (Auditable's cell-scope semantics); when not,
     // we count every free name that isn't a JS global.
+    //
+    // Note: names in `defines` are NOT excluded — re-bound patterns like
+    // `x = x + 1` need x in both uses (so the cell takes it from upstream)
+    // and defines (so the cell exports its new value). Without it,
+    // auditable's exec.js never wires the upstream value through.
     const uses = new Set();
     for (const name of module.imports) {
-      if (defines.has(name) || JS_GLOBALS.has(name)) continue;
+      if (JS_GLOBALS.has(name)) continue;
       if (!allDefined || allDefined.has(name)) uses.add(name);
     }
 

@@ -291,10 +291,15 @@ describe('findUses', () => {
     assert.ok(!uses.has('z'));
   });
 
-  it('does not include self-defined names', () => {
+  it('includes re-bound names that are also defined upstream', () => {
+    // `const x = 1` alone with x in allDefined still counts x as a use
+    // — engine.js builds the cell's upstream scope from cell.uses, and
+    // omitting upstream-defined names breaks `df = df.rename(...)` style
+    // rebinds. Self-edges in the dep graph are deduped by topoSort's
+    // needsRun set, so cycles aren't a hazard.
     const allDefined = new Set(['x']);
     const uses = findUses('const x = 1;', allDefined);
-    assert.ok(!uses.has('x'));
+    assert.ok(uses.has('x'));
   });
 
   it('ignores names in strings', () => {

@@ -200,13 +200,17 @@ export function parseNames(code) {
 }
 
 export function findUses(code, allDefined, selfDefined) {
+  // selfDefined accepted for backward compat but ignored — re-bound
+  // names (`x = x + 1` where x is upstream) MUST appear in uses or
+  // exec.js's `upstream = {names from cell.uses}` construction omits
+  // them, leaving the cell to NameError on its own RHS read. Self-
+  // edges in the dep graph are deduped by topoSort's needsRun set.
   const uses = new Set();
   const stripped = stripCommentsAndStrings(code);
-  if (!selfDefined) selfDefined = parseNames(code).defines;
   const idRe = /\b([a-zA-Z_$]\w*)\b/g;
   let m;
   while ((m = idRe.exec(stripped))) {
-    if (allDefined.has(m[1]) && !selfDefined.has(m[1])) uses.add(m[1]);
+    if (allDefined.has(m[1])) uses.add(m[1]);
   }
   return uses;
 }

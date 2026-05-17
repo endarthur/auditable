@@ -158,12 +158,18 @@ describe('pythonFindUses', () => {
     assert.ok(!uses.has('z'));
   });
 
-  it('excludes self-defines', () => {
+  it('includes re-bound names that are also defined upstream', () => {
+    // `x = 42; y = x + 1` — if x is also in allDefined (defined by an
+    // upstream cell), the RHS read `x + 1` IS a use even though `x = 42`
+    // also defines x locally. Excluding self-defines here breaks the
+    // `df = df.rename(...)` rebind pattern because auditable's exec
+    // builds the cell's upstream scope from cell.uses — omitting x
+    // means the cell never receives the upstream value.
     const code = 'x = 42\ny = x + 1';
     const allDefined = new Set(['x', 'other']);
     const uses = pythonFindUses(code, allDefined);
-    assert.ok(!uses.has('x')); // x is self-defined
-    assert.ok(!uses.has('other'));
+    assert.ok(uses.has('x'), 'x is read on RHS AND in allDefined → use');
+    assert.ok(!uses.has('other'), 'other never appears in code');
   });
 
   it('ignores names in strings', () => {
