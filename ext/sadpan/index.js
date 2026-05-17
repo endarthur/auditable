@@ -1416,12 +1416,41 @@ class DataFrame {
 
   select(...cols) { return new DataFrame(this._tbl.select(...cols)); }
 
-  drop(opts) {
-    let columns = null;
-    if (opts && opts._kw) columns = opts.columns;
-    else if (Array.isArray(opts)) columns = opts;
-    else columns = [opts];
-    return new DataFrame(this._tbl.drop(...columns));
+  drop(labels, opts) {
+    // pandas signatures we support:
+    //   df.drop('col')                    → axis=1 default (columns)
+    //   df.drop(['c1','c2'])
+    //   df.drop('col', axis=1)
+    //   df.drop(columns=['c1','c2'])      → infers axis=1
+    //   df.drop(3, axis=0)                → drop row by label (RangeIndex → position)
+    //   df.drop(index=[0,1])              → infers axis=0
+    let axis = 1;
+    let toRemove = labels;
+    // Adder kwargs may arrive as the first arg (drop(columns=...)) or
+    // as a trailing arg (drop('col', axis=1)).
+    const kw = (opts && opts._kw) ? opts
+             : (labels && typeof labels === 'object' && labels._kw) ? labels
+             : null;
+    if (kw) {
+      if (kw.axis != null) axis = kw.axis;
+      if (kw.columns != null) { axis = 1; toRemove = kw.columns; }
+      else if (kw.index != null) { axis = 0; toRemove = kw.index; }
+      else if (kw === labels && kw.labels != null) { toRemove = kw.labels; }
+    }
+
+    if (axis === 0) {
+      // Drop rows. With default RangeIndex (labels 0..n-1) labels and
+      // positions coincide; for custom indices we'd look up via _index.
+      const rows = new Set(Array.isArray(toRemove) ? toRemove : [toRemove]);
+      const keep = [];
+      for (let i = 0; i < this._tbl.numRows(); i++) {
+        if (!rows.has(i)) keep.push(i);
+      }
+      return new DataFrame(this._tbl._take(keep));
+    }
+    // axis === 1 — drop columns
+    const cols = Array.isArray(toRemove) ? toRemove : [toRemove];
+    return new DataFrame(this._tbl.drop(...cols));
   }
 
   rename(opts) {
