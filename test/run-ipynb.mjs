@@ -27,11 +27,37 @@ import { resolve, basename } from 'node:path';
 const args = process.argv.slice(2);
 const verbose = args.includes('--verbose') || args.includes('-v');
 const failFast = args.includes('--fail-fast');
+const lenientImports = args.includes('--lenient-imports');
 const filtered = args.filter(a => !a.startsWith('-'));
 const nbPath = filtered[0];
 if (!nbPath) {
-  console.error('Usage: node test/run-ipynb.mjs <notebook.ipynb> [--verbose] [--fail-fast]');
+  console.error('Usage: node test/run-ipynb.mjs <notebook.ipynb> [--verbose] [--fail-fast] [--lenient-imports]');
   process.exit(2);
+}
+
+// --lenient-imports: wrap each single-line `import X` / `from X import Y`
+// statement in `try: ... except (ImportError, ModuleNotFoundError): pass`
+// so a single missing dep doesn't kill the whole cell. Helps survey
+// real-world notebooks where one of N imports is unavailable. Later
+// code that uses the missing module fails with NameError — still a
+// clear error. Multi-line imports with parens are left alone.
+function _lenientWrapImports(code) {
+  const lines = code.split('\n');
+  const out = [];
+  for (const line of lines) {
+    const stripped = line.replace(/^\s+/, '');
+    const indent = line.slice(0, line.length - stripped.length);
+    if (/^(import\s|from\s+\S+\s+import\s)/.test(stripped)
+        && !stripped.includes('(')) {
+      out.push(`${indent}try:`);
+      out.push(`${indent}    ${stripped}`);
+      out.push(`${indent}except (ImportError, ModuleNotFoundError):`);
+      out.push(`${indent}    pass`);
+    } else {
+      out.push(line);
+    }
+  }
+  return out.join('\n');
 }
 
 // ── Browser-shaped global shims (matches our test harness pattern) ──
@@ -185,7 +211,8 @@ for (let i = 0; i < cells.length; i++) {
 
   const cell = { id: `c${i + 1}`, _ctx: makeCellCtx(i + 1) };
   try {
-    const result = await pythonExecute(c.code, scope, cell);
+    const src = lenientImports ? _lenientWrapImports(c.code) : c.code;
+    const result = await pythonExecute(src, scope, cell);
     // Merge defines into scope so downstream cells see them.
     if (result?.defines) Object.assign(scope, result.defines);
     const outLine = cell._ctx.output.length

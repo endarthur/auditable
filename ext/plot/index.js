@@ -1298,6 +1298,44 @@ function show() {
 // We hold no figure registry, so no-op.
 function close(_fig) { /* no-op */ }
 
+// plt.subplot(nrows, ncols, index) — matplotlib's per-axes shortcut.
+// Also accepts the 3-digit form `plt.subplot(311)` (sugar for 3,1,1).
+// Returns the indexed axes and sets it as current. Distinct from
+// `subplots(nrows, ncols)` which returns the full grid.
+function subplot(...args) {
+  let nrows, ncols, index;
+  if (args.length === 1 && typeof args[0] === 'number' && args[0] >= 111 && args[0] < 1000) {
+    const n = args[0];
+    nrows = Math.floor(n / 100);
+    ncols = Math.floor((n / 10) % 10);
+    index = n % 10;
+  } else {
+    nrows = args[0] || 1;
+    ncols = args[1] || 1;
+    index = args[2] || 1;
+  }
+  const sub = subplots(nrows, ncols);
+  const ax = (sub.axes && sub.axes.length) ? sub.axes[index - 1] : sub.ax;
+  _setCurrent(sub.fig, ax);
+  return ax;
+}
+
+// plt.cm — matplotlib's colormap namespace. Each public name is a
+// colormap function `(t in [0,1]) → 'rgb(r,g,b)'`. Notebooks reference
+// these as `cmap = plt.cm.viridis`. We mirror the names we have in
+// getCmap; unknown / dunder access returns undefined so adder's
+// attribute probing (__adderClass__, __iter__, etc.) doesn't get
+// fooled into thinking every name is a cmap.
+const _CMAP_NAMES = ['viridis', 'coolwarm', 'turbo'];
+const cm = {};
+for (const n of _CMAP_NAMES) {
+  Object.defineProperty(cm, n, {
+    get() { return getCmap(n); },
+    enumerable: true,
+  });
+}
+cm.get_cmap = getCmap;
+
 // matplotlib stateful interface — module-level helpers that delegate to
 // the current axes. Each lazily creates an axes if none exists yet, so
 // `plt.title("x")` as the very first call still works (matches mpl).
@@ -1332,7 +1370,7 @@ function cla() { _currentAx = null; }
 // register as auditable extension for adder `import plt`
 if (typeof window !== 'undefined') {
   const _plt = {
-    subplots, figure, Figure, cmap, plot, scatter, imshow, hist, bar,
+    subplots, subplot, figure, Figure, cmap, cm, plot, scatter, imshow, hist, bar,
     rc, rcParams, style, show, close,
     gca, gcf, xlabel, ylabel, title, xlim, ylim, xscale, yscale,
     legend, grid, vlines, hlines, axhline, axvline, text,

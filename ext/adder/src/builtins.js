@@ -334,7 +334,15 @@ export function adderGetAttr(obj, attr) {
         fn._pyName = `${attr}`;
         return fn;
       }
-      const fn = obj[attr].bind(obj);
+      const original = obj[attr];
+      const fn = original.bind(obj);
+      // Function.prototype.bind drops custom properties off the original
+      // (`t.cdf`, `t.pdf` etc. — scipy-style "callable namespace" pattern).
+      // Copy them over so dotted access (`stats.t.cdf`) still resolves.
+      for (const k of Object.getOwnPropertyNames(original)) {
+        if (k === 'length' || k === 'name' || k === 'prototype') continue;
+        try { fn[k] = original[k]; } catch {}
+      }
       fn._pyName = attr;
       return fn;
     }

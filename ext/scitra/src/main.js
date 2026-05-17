@@ -1,7 +1,7 @@
 // @gcu/scitra — top-level barrel.
 // Re-exports the API surface organized by scipy-shaped namespace.
 
-import { norm, lognorm } from './stats/distributions.js';
+import { norm, lognorm, t } from './stats/distributions.js';
 import {
   weighted_mean, weighted_var, weighted_std,
   weighted_percentile, weighted_median,
@@ -21,6 +21,7 @@ export const stats = {
   // distributions
   norm,
   lognorm,
+  t,
   // descriptives
   weighted_mean, weighted_var, weighted_std,
   weighted_percentile, weighted_median,
@@ -58,7 +59,7 @@ export const random = {
 };
 
 // Direct re-exports for tree-shaking convenience.
-export { norm, lognorm };
+export { norm, lognorm, t };
 export {
   weighted_mean, weighted_var, weighted_std,
   weighted_percentile, weighted_median,

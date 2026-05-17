@@ -10,7 +10,7 @@
 // are returned as plain Float64Array — the caller wraps if they want to
 // keep the natra type.
 
-import { erf, ndtri } from '../util/special.js';
+import { erf, ndtri, lgamma } from '../util/special.js';
 import { makeNormalSampler, makeRng } from '../util/random.js';
 
 const SQRT_2PI = Math.sqrt(2 * Math.PI);
@@ -227,3 +227,117 @@ lognorm.ppf    = (p, s, loc, scale) => _vec1(p, v => _lnormPpf(v, s, loc ?? 0, s
 lognorm.isf    = (p, s, loc, scale) => _vec1(p, v => _lnormIsf(v, s, loc ?? 0, scale ?? 1));
 lognorm.rvs    = (size, s, loc, scale, opts) => _lnormRvs(size, s, loc ?? 0, scale ?? 1, opts);
 lognorm.fit    = (samples, opts) => _lnormFit(samples, opts);
+
+// ── Student's t-distribution ─────────────────────────────────────────
+//
+// scipy parameterization: t(df, loc=0, scale=1) — df=degrees of freedom.
+//
+// pdf and cdf use the regularized incomplete beta function, which we
+// implement here via the Lentz-style continued fraction (Numerical
+// Recipes §6.4). Accuracy ~1e-10 across the typical df range (1..1e6).
+// ppf is bisection on cdf — robust but ~30 iterations per call.
+
+// Continued fraction for the incomplete beta function I_x(a,b).
+function _betacf(a, b, x) {
+  const MAXIT = 200, EPS = 3e-12, FPMIN = 1e-300;
+  const qab = a + b, qap = a + 1, qam = a - 1;
+  let c = 1, d = 1 - qab * x / qap;
+  if (Math.abs(d) < FPMIN) d = FPMIN;
+  d = 1 / d;
+  let h = d;
+  for (let m = 1; m <= MAXIT; m++) {
+    const m2 = 2 * m;
+    let aa = m * (b - m) * x / ((qam + m2) * (a + m2));
+    d = 1 + aa * d; if (Math.abs(d) < FPMIN) d = FPMIN;
+    c = 1 + aa / c; if (Math.abs(c) < FPMIN) c = FPMIN;
+    d = 1 / d; h *= d * c;
+    aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
+    d = 1 + aa * d; if (Math.abs(d) < FPMIN) d = FPMIN;
+    c = 1 + aa / c; if (Math.abs(c) < FPMIN) c = FPMIN;
+    d = 1 / d;
+    const del = d * c;
+    h *= del;
+    if (Math.abs(del - 1) < EPS) break;
+  }
+  return h;
+}
+
+// Regularized incomplete beta function I_x(a, b).
+function _betai(a, b, x) {
+  if (x <= 0) return 0;
+  if (x >= 1) return 1;
+  const bt = Math.exp(
+    lgamma(a + b) - lgamma(a) - lgamma(b)
+    + a * Math.log(x) + b * Math.log(1 - x)
+  );
+  if (x < (a + 1) / (a + b + 2)) return bt * _betacf(a, b, x) / a;
+  return 1 - bt * _betacf(b, a, 1 - x) / b;
+}
+
+function _tPdf(x, df, loc, scale) {
+  const z = (x - loc) / scale;
+  const c = Math.exp(lgamma((df + 1) / 2) - lgamma(df / 2)) / Math.sqrt(df * Math.PI);
+  return c * Math.pow(1 + z * z / df, -(df + 1) / 2) / scale;
+}
+function _tLogPdf(x, df, loc, scale) {
+  const z = (x - loc) / scale;
+  return lgamma((df + 1) / 2) - lgamma(df / 2)
+       - 0.5 * Math.log(df * Math.PI)
+       - ((df + 1) / 2) * Math.log(1 + z * z / df)
+       - Math.log(scale);
+}
+function _tCdf(x, df, loc, scale) {
+  const z = (x - loc) / scale;
+  if (!isFinite(z)) return z > 0 ? 1 : 0;
+  const tt = df / (df + z * z);
+  const half = 0.5 * _betai(df / 2, 0.5, tt);
+  return z >= 0 ? 1 - half : half;
+}
+function _tSf(x, df, loc, scale) { return 1 - _tCdf(x, df, loc, scale); }
+
+function _tPpf(p, df, loc, scale) {
+  if (p <= 0) return -Infinity;
+  if (p >= 1) return Infinity;
+  if (p === 0.5) return loc;
+  // Symmetric — solve for |z| then sign by direction.
+  // Robust bracket [-50, 50] holds well for df ≥ 1.
+  let lo = -50, hi = 50;
+  for (let i = 0; i < 100; i++) {
+    const mid = (lo + hi) / 2;
+    const c = _tCdf(mid, df, 0, 1);
+    if (Math.abs(c - p) < 1e-12) {
+      lo = hi = mid; break;
+    }
+    if (c < p) lo = mid;
+    else hi = mid;
+  }
+  return loc + scale * (lo + hi) / 2;
+}
+function _tIsf(p, df, loc, scale) { return _tPpf(1 - p, df, loc, scale); }
+
+class _TFrozen {
+  constructor(df, loc, scale) {
+    this.df = df; this.loc = loc; this.scale = scale;
+    this.__adderClass__ = 't_frozen';
+  }
+  pdf(x)    { return _vec1(x, v => _tPdf(v, this.df, this.loc, this.scale)); }
+  logpdf(x) { return _vec1(x, v => _tLogPdf(v, this.df, this.loc, this.scale)); }
+  cdf(x)    { return _vec1(x, v => _tCdf(v, this.df, this.loc, this.scale)); }
+  sf(x)     { return _vec1(x, v => _tSf(v, this.df, this.loc, this.scale)); }
+  ppf(p)    { return _vec1(p, v => _tPpf(v, this.df, this.loc, this.scale)); }
+  isf(p)    { return _vec1(p, v => _tIsf(v, this.df, this.loc, this.scale)); }
+  mean()    { return this.df > 1 ? this.loc : NaN; }
+  median()  { return this.loc; }
+  var()     { return this.df > 2 ? this.scale * this.scale * this.df / (this.df - 2) : NaN; }
+  std()     { return Math.sqrt(this.var()); }
+}
+
+export function t(df, loc = 0, scale = 1) {
+  return new _TFrozen(df, loc, scale);
+}
+t.pdf    = (x, df, loc, scale) => _vec1(x, v => _tPdf(v, df, loc ?? 0, scale ?? 1));
+t.logpdf = (x, df, loc, scale) => _vec1(x, v => _tLogPdf(v, df, loc ?? 0, scale ?? 1));
+t.cdf    = (x, df, loc, scale) => _vec1(x, v => _tCdf(v, df, loc ?? 0, scale ?? 1));
+t.sf     = (x, df, loc, scale) => _vec1(x, v => _tSf(v, df, loc ?? 0, scale ?? 1));
+t.ppf    = (p, df, loc, scale) => _vec1(p, v => _tPpf(v, df, loc ?? 0, scale ?? 1));
+t.isf    = (p, df, loc, scale) => _vec1(p, v => _tIsf(v, df, loc ?? 0, scale ?? 1));

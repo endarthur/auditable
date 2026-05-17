@@ -160,6 +160,64 @@ describe('scitra: scipy.stats basics', () => {
 
 // ── Pyrcz-shape: the actual failing cell ──
 
+describe('plt + scitra + sadpan: sweep-surfaced gaps', () => {
+  test('plt.subplot(1,1,1) returns axes', async () => {
+    const { scope } = await runCell([
+      'import plt',
+      'ax = plt.subplot(1, 1, 1)',
+      'has_plot = hasattr(ax, "plot")',
+    ].join('\n'));
+    assert.equal(scope.has_plot, true);
+  });
+
+  test('plt.cm.viridis is a colormap function', async () => {
+    const { scope } = await runCell([
+      'import plt',
+      'cmap = plt.cm.viridis',
+      'color = cmap(0.5)',
+    ].join('\n'));
+    assert.ok(typeof scope.color === 'string');
+    assert.ok(scope.color.startsWith('rgb('));
+  });
+
+  test('df.transpose() swaps rows + cols', async () => {
+    const { scope } = await runCell([
+      'import sadpan as pd',
+      'df = pd.DataFrame({"a":[1,2,3], "b":[10,20,30]})',
+      't = df.transpose()',
+      'shape = t.shape',
+    ].join('\n'));
+    // Original was 3×2 (3 rows, 2 cols) → transposed is 2×3
+    assert.deepEqual(scope.shape, [2, 3]);
+  });
+
+  test('df.T property is transpose', async () => {
+    const { scope } = await runCell([
+      'import sadpan as pd',
+      'df = pd.DataFrame({"a":[1,2], "b":[10,20], "c":[100,200]})',
+      'shape = df.T.shape',
+    ].join('\n'));
+    assert.deepEqual(scope.shape, [3, 2]);  // 2 rows → 2 cols, 3 cols → 3 rows
+  });
+
+  test('scitra.stats.t.cdf(0, 10) is ~0.5', async () => {
+    const { scope } = await runCell([
+      'from scitra import stats',
+      'p = stats.t.cdf(0, 10)',
+    ].join('\n'));
+    assert.ok(Math.abs(scope.p - 0.5) < 1e-9);
+  });
+
+  test('scitra.stats.t(df).ppf(0.975) for df=10 is ~2.228', async () => {
+    const { scope } = await runCell([
+      'from scitra import stats',
+      'crit = stats.t(10).ppf(0.975)',
+    ].join('\n'));
+    // R: qt(0.975, 10) = 2.228139
+    assert.ok(Math.abs(scope.crit - 2.228139) < 0.001);
+  });
+});
+
 describe('sadpan: to_csv path vs string', () => {
   test('df.to_csv() returns the CSV text', async () => {
     const { scope } = await runCell([

@@ -503,6 +503,27 @@ class DataFrame {
     return window._notebookVFS.writeFile(abs, text).then(() => null);
   }
 
+  // Transpose — swap rows and columns. Column names become the row
+  // index (we don't have a real index yet, so they map to integer-
+  // labelled columns 0..nrows-1; the ORIGINAL column names get
+  // collected and exposed via the result's `.index`). pandas's
+  // df.T is the same operation.
+  transpose() {
+    const tbl = this._tbl;
+    const names = tbl.columnNames();
+    const nrows = tbl.numRows();
+    const newColNames = [];
+    for (let i = 0; i < nrows; i++) newColNames.push(String(i));
+    const newCols = {};
+    for (let i = 0; i < nrows; i++) {
+      newCols[newColNames[i]] = names.map(n => tbl._columns[n][i]);
+    }
+    const out = new DataFrame(new Table(newCols, newColNames));
+    out._index = new _Index(names);
+    return out;
+  }
+  get T() { return this.transpose(); }
+
   // pandas null detection — `isnull()` and `notna()` return a same-shape
   // DataFrame of booleans. `isnull().sum()` then yields per-column counts
   // (Series), and `.sum().sum()` reduces to a scalar.

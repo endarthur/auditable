@@ -92,7 +92,7 @@ export {
   // util/backend
   setBackend, clearBackend, getNatra, GEMM_NM_THRESHOLD,
   // stats/distributions
-  norm, lognorm,
+  norm, lognorm, t,
   // stats/descriptives
   weighted_mean, weighted_var, weighted_std,
   weighted_percentile, weighted_median,
@@ -112,7 +112,7 @@ export {
 
 // Namespaced barrel for scipy-style imports.
 export const stats = {
-  norm, lognorm,
+  norm, lognorm, t,
   weighted_mean, weighted_var, weighted_std,
   weighted_percentile, weighted_median,
   ecdf, histogram, moments,
