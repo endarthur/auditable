@@ -79,7 +79,9 @@ class Series {
     return new Series(ascending ? sorted : sorted.reverse(), this._name);
   }
   isna() { return new BooleanMask(this._values.map(v => v == null || v !== v)); }
+  isnull() { return this.isna(); }   // pandas exposes both names
   notna() { return new BooleanMask(this._values.map(v => v != null && v === v)); }
+  notnull() { return this.notna(); }
   isin(vals) { const s = new Set(vals); return new BooleanMask(this._values.map(v => s.has(v))); }
   astype(type) {
     if (type === 'number' || type === 'float') return new Series(this._values.map(Number), this._name);
@@ -565,6 +567,462 @@ function toCSV(table, opts = {}) {
   return table.toCSV(opts);
 }
 
+// -- accessors.js --
+
+// accessors.js — pandas-shape indexers (iloc, loc, at, iat) + RangeIndex.
+//
+// Pandas exposes four indexer accessors on DataFrames and Series. Each
+// has slightly different semantics — they're kept as separate classes
+// here rather than one indexer-with-modes so the resolution rules read
+// straight off each class. All accessors return:
+//
+//   scalar row + scalar col  → scalar value
+//   scalar row + plural col  → Series (row vector)
+//   plural row + scalar col  → Series (column vector)
+//   plural row + plural col  → DataFrame
+//
+// "Plural" = slice or list. The `_Selector` shape captures both the
+// resolved index list and whether the original key was scalar — needed
+// to decide return shape after resolution.
+//
+// iloc / iat treat keys as integer positions (negative = from end);
+// loc / at treat keys as labels. With sadpan's default RangeIndex
+// (rows labelled 0..n-1) the two collapse for row indexing; they diverge
+// for columns where iloc takes integer position and loc takes column
+// name. at / iat are scalar-only specialisations that raise on slices
+// or lists — same as pandas.
+//
+// Importers: api.js wires `get iloc()` / `get loc()` etc. on DataFrame
+// and Series; series.js needs only a subset (no column dimension).
+
+// ── Internal selector shape ──
+//
+// _Selector = { indices: number[], scalar: boolean }
+//   - indices: resolved positions in the underlying dimension
+//   - scalar:  true iff the key was a single value (informs return type)
+
+function _isSlice(k) { return k != null && k._slice === true; }
+function _isPyKwargs(k) { return k != null && typeof k === 'object' && k._kw === true; }
+
+function _resolveSliceToIndices(slice, n) {
+  // Python-style slice with clamping: `arr[2:7]` on a 5-element array
+  // yields indices [2, 3, 4] (not [2,3,4,5,6]). Both bounds clip to
+  // [0, n] (or [-1, n-1] when step<0).
+  const step = slice.step != null ? slice.step : 1;
+  if (step === 0) throw new Error('slice step cannot be zero');
+  let lo, hi;
+  if (step > 0) {
+    lo = slice.lower != null ? (slice.lower < 0 ? n + slice.lower : slice.lower) : 0;
+    hi = slice.upper != null ? (slice.upper < 0 ? n + slice.upper : slice.upper) : n;
+    if (lo < 0) lo = 0;
+    if (hi > n) hi = n;
+  } else {
+    lo = slice.lower != null ? (slice.lower < 0 ? n + slice.lower : slice.lower) : n - 1;
+    hi = slice.upper != null ? (slice.upper < 0 ? n + slice.upper : slice.upper) : -1;
+    if (lo > n - 1) lo = n - 1;
+    if (hi < -1) hi = -1;
+  }
+  const out = [];
+  if (step > 0) for (let i = lo; i < hi; i += step) out.push(i);
+  else for (let i = lo; i > hi; i += step) out.push(i);
+  return out;
+}
+
+// ── iloc / iat — integer-position resolution ──
+
+function _resolveByPosition(key, n) {
+  if (typeof key === 'number') {
+    const i = key < 0 ? n + key : key;
+    if (i < 0 || i >= n) throw new Error(`positional index ${key} out of bounds for axis of length ${n}`);
+    return { indices: [i], scalar: true };
+  }
+  if (_isSlice(key)) {
+    return { indices: _resolveSliceToIndices(key, n), scalar: false };
+  }
+  if (Array.isArray(key)) {
+    const idx = key.map(k => {
+      if (typeof k !== 'number') throw new Error(`iloc list must contain integers, got ${typeof k}`);
+      return k < 0 ? n + k : k;
+    });
+    return { indices: idx, scalar: false };
+  }
+  throw new Error(`unsupported iloc key type: ${typeof key}`);
+}
+
+// ── loc / at — label-based column resolution; row index lookup ──
+
+function _resolveColByLabel(key, names) {
+  if (typeof key === 'string') {
+    const i = names.indexOf(key);
+    if (i < 0) throw new Error(`column '${key}' not in DataFrame`);
+    return { indices: [i], scalar: true };
+  }
+  if (_isSlice(key)) {
+    // Pandas treats loc slices as INCLUSIVE on both ends, by label.
+    // With default RangeIndex columns are anonymous → fall back to
+    // integer positions when bounds are numeric, otherwise to label
+    // lookup (find name → use that index).
+    const lo = key.lower != null ? _labelToPos(key.lower, names) : 0;
+    const hi = key.upper != null ? _labelToPos(key.upper, names) : names.length - 1;
+    const step = key.step != null ? key.step : 1;
+    const indices = [];
+    if (step > 0) for (let i = lo; i <= hi; i += step) indices.push(i);
+    else for (let i = lo; i >= hi; i += step) indices.push(i);
+    return { indices, scalar: false };
+  }
+  if (Array.isArray(key)) {
+    return {
+      indices: key.map(k => _labelToPos(k, names)),
+      scalar: false,
+    };
+  }
+  throw new Error(`unsupported loc col key type: ${typeof key}`);
+}
+
+function _labelToPos(label, names) {
+  if (typeof label === 'number') {
+    const i = label < 0 ? names.length + label : label;
+    if (i < 0 || i >= names.length) throw new Error(`column position ${label} out of bounds`);
+    return i;
+  }
+  const i = names.indexOf(label);
+  if (i < 0) throw new Error(`column '${label}' not in DataFrame`);
+  return i;
+}
+
+// BooleanMask / boolean-array detection — accepts sadpan's BooleanMask
+// shape ({_values: boolean[]}) or a plain JS array of booleans.
+function _isBoolMask(key) {
+  if (key && key._values && Array.isArray(key._values)
+      && key._values.length > 0
+      && typeof key._values[0] === 'boolean') return true;
+  if (Array.isArray(key) && key.length > 0 && typeof key[0] === 'boolean') return true;
+  return false;
+}
+function _maskToIndices(key) {
+  const vals = key._values || key;
+  const out = [];
+  for (let i = 0; i < vals.length; i++) if (vals[i]) out.push(i);
+  return out;
+}
+
+// Row resolution for loc: with default RangeIndex (rows 0..n-1) this is
+// the same as positional resolution. When sadpan grows a real Index
+// type with custom labels, this is the layer that needs to look up
+// the label → position mapping.
+function _resolveRowByLabel(key, n, index) {
+  if (_isBoolMask(key)) {
+    return { indices: _maskToIndices(key), scalar: false };
+  }
+  if (index && index._isRangeIndex !== true) {
+    // Custom index — look up label
+    if (typeof key === 'number' || typeof key === 'string') {
+      const i = index._lookup(key);
+      if (i < 0) throw new Error(`row label '${key}' not in index`);
+      return { indices: [i], scalar: true };
+    }
+    if (Array.isArray(key)) {
+      return {
+        indices: key.map(k => {
+          const i = index._lookup(k);
+          if (i < 0) throw new Error(`row label '${k}' not in index`);
+          return i;
+        }),
+        scalar: false,
+      };
+    }
+    if (_isSlice(key)) {
+      // Inclusive label slice — map to positions then iterate
+      const lo = key.lower != null ? index._lookup(key.lower) : 0;
+      const hi = key.upper != null ? index._lookup(key.upper) : n - 1;
+      const step = key.step != null ? key.step : 1;
+      const indices = [];
+      if (step > 0) for (let i = lo; i <= hi; i += step) indices.push(i);
+      else for (let i = lo; i >= hi; i += step) indices.push(i);
+      return { indices, scalar: false };
+    }
+  }
+  // Default RangeIndex — fall through to positional, but loc slices are
+  // INCLUSIVE on both ends (pandas semantic).
+  if (_isSlice(key)) {
+    const lo = key.lower != null ? (key.lower < 0 ? n + key.lower : key.lower) : 0;
+    const hi = key.upper != null ? (key.upper < 0 ? n + key.upper : key.upper) : n - 1;
+    const step = key.step != null ? key.step : 1;
+    const indices = [];
+    if (step > 0) for (let i = lo; i <= hi; i += step) indices.push(i);
+    else for (let i = lo; i >= hi; i += step) indices.push(i);
+    return { indices, scalar: false };
+  }
+  return _resolveByPosition(key, n);
+}
+
+// ── DataFrame indexers ──
+//
+// All four follow the same shape: __getitem__(key) resolves into row
+// and column selectors, then `_project(rows, cols)` materialises.
+
+class _DfIndexer {
+  constructor(df, resolveRow, resolveCol, scalarOnly) {
+    this._df = df;
+    this._resolveRow = resolveRow;
+    this._resolveCol = resolveCol;
+    this._scalarOnly = !!scalarOnly;
+  }
+
+  __getitem__(key) {
+    const tbl = this._df._tbl;
+    const names = tbl.columnNames();
+    const nrows = tbl.numRows();
+    const rowKey = Array.isArray(key) && key.length === 2 ? key[0] : key;
+    const colKey = Array.isArray(key) && key.length === 2 ? key[1] : null;
+
+    const rowSel = this._resolveRow(rowKey, nrows, this._df._index);
+    // _resolveCol signatures differ: position-based takes a length,
+    // label-based takes the names array (it needs the names to look up
+    // labels). Branch on which resolver was wired in.
+    const colSel = colKey != null
+      ? this._resolveColInternal(colKey, names)
+      : { indices: names.map((_, i) => i), scalar: false };
+
+    if (this._scalarOnly && (!rowSel.scalar || !colSel.scalar)) {
+      throw new Error('at/iat only accept scalar keys');
+    }
+
+    return this._project(rowSel, colSel);
+  }
+
+  _resolveColInternal(key, names) {
+    // Integer-position resolvers want a length; label resolvers want
+    // the names array. Detect by reference equality (the factories
+    // wire either _resolveByPosition or _resolveColByLabel).
+    if (this._resolveCol === _resolveByPosition) return this._resolveCol(key, names.length);
+    return this._resolveCol(key, names);
+  }
+
+  __setitem__(key, value) {
+    const tbl = this._df._tbl;
+    const names = tbl.columnNames();
+    const nrows = tbl.numRows();
+    const rowKey = Array.isArray(key) && key.length === 2 ? key[0] : key;
+    const colKey = Array.isArray(key) && key.length === 2 ? key[1] : null;
+
+    const rowSel = this._resolveRow(rowKey, nrows, this._df._index);
+    const colSel = colKey != null
+      ? this._resolveColInternal(colKey, names)
+      : { indices: names.map((_, i) => i), scalar: false };
+
+    // Broadcast value to the selection. Scalar value → fill every
+    // selected cell; iterable → must match selection cardinality.
+    const isIterable = value != null
+      && typeof value !== 'string'
+      && typeof value[Symbol.iterator] === 'function';
+
+    if (!isIterable) {
+      for (const ri of rowSel.indices) {
+        for (const ci of colSel.indices) {
+          const colName = names[ci];
+          tbl._columns[colName][ri] = value;
+        }
+      }
+      return;
+    }
+
+    const flat = [...value];
+    // Single-column case: flat values map to rows
+    if (colSel.indices.length === 1) {
+      const colName = names[colSel.indices[0]];
+      if (flat.length !== rowSel.indices.length) {
+        throw new Error(`length mismatch: assigning ${flat.length} values to ${rowSel.indices.length} rows`);
+      }
+      for (let i = 0; i < flat.length; i++) {
+        tbl._columns[colName][rowSel.indices[i]] = flat[i];
+      }
+      return;
+    }
+    // Single-row case: flat values map to cols
+    if (rowSel.indices.length === 1) {
+      if (flat.length !== colSel.indices.length) {
+        throw new Error(`length mismatch: assigning ${flat.length} values to ${colSel.indices.length} columns`);
+      }
+      for (let i = 0; i < flat.length; i++) {
+        const colName = names[colSel.indices[i]];
+        tbl._columns[colName][rowSel.indices[0]] = flat[i];
+      }
+      return;
+    }
+    throw new Error('multi-row multi-col assignment from iterable not supported — pass a scalar instead');
+  }
+
+  // Materialise the selection. Return type depends on scalarness:
+  //   scalar+scalar → value
+  //   scalar+plural → Series (row vector, one element per selected col)
+  //   plural+scalar → Series (column vector)
+  //   plural+plural → DataFrame
+  _project(rowSel, colSel) {
+    const tbl = this._df._tbl;
+    const names = tbl.columnNames();
+
+    if (rowSel.scalar && colSel.scalar) {
+      const ri = rowSel.indices[0];
+      const ci = colSel.indices[0];
+      return tbl._columns[names[ci]][ri];
+    }
+
+    if (rowSel.scalar) {
+      // Row vector across selected columns → Series indexed by col name
+      const ri = rowSel.indices[0];
+      const values = colSel.indices.map(ci => tbl._columns[names[ci]][ri]);
+      return this._df._makeSeriesLike(values, colSel.indices.map(ci => names[ci]));
+    }
+
+    if (colSel.scalar) {
+      // Column vector → Series with the column name
+      const ci = colSel.indices[0];
+      const colName = names[ci];
+      const values = rowSel.indices.map(ri => tbl._columns[colName][ri]);
+      return this._df._makeSeriesLike(values, null, colName);
+    }
+
+    // Both plural → DataFrame
+    const outCols = {};
+    const outNames = [];
+    for (const ci of colSel.indices) {
+      const colName = names[ci];
+      outNames.push(colName);
+      outCols[colName] = rowSel.indices.map(ri => tbl._columns[colName][ri]);
+    }
+    return this._df._makeFrameLike(outCols, outNames);
+  }
+}
+
+// ── Series indexers (one-dim) ──
+//
+// Series.iloc[i], Series.iloc[i:j], Series.iloc[[i, j]]. loc differs
+// only when the series has a custom index; with default RangeIndex
+// it's positional.
+
+class _SeriesIndexer {
+  constructor(series, resolve, scalarOnly) {
+    this._s = series;
+    this._resolve = resolve;
+    this._scalarOnly = !!scalarOnly;
+  }
+
+  __getitem__(key) {
+    const values = this._s._values;
+    const sel = this._resolve(key, values.length, this._s._index);
+    if (this._scalarOnly && !sel.scalar) {
+      throw new Error('at/iat only accept scalar keys');
+    }
+    if (sel.scalar) return values[sel.indices[0]];
+    return this._s._makeLike(sel.indices.map(i => values[i]));
+  }
+
+  __setitem__(key, value) {
+    const values = this._s._values;
+    const sel = this._resolve(key, values.length, this._s._index);
+    if (this._scalarOnly && !sel.scalar) {
+      throw new Error('at/iat only accept scalar keys');
+    }
+    const isIterable = value != null
+      && typeof value !== 'string'
+      && typeof value[Symbol.iterator] === 'function';
+    if (!isIterable) {
+      for (const i of sel.indices) values[i] = value;
+      return;
+    }
+    const flat = [...value];
+    if (flat.length !== sel.indices.length) {
+      throw new Error(`length mismatch: assigning ${flat.length} values to ${sel.indices.length} positions`);
+    }
+    for (let i = 0; i < flat.length; i++) values[sel.indices[i]] = flat[i];
+  }
+}
+
+// ── RangeIndex / labelled Index ──
+
+class _RangeIndex {
+  constructor(n) { this._n = n; this._isRangeIndex = true; }
+  get name() { return null; }
+  get size() { return this._n; }
+  get values() { return this.tolist(); }
+  __len__() { return this._n; }
+  __getitem__(key) {
+    if (typeof key === 'number') {
+      const i = key < 0 ? this._n + key : key;
+      if (i < 0 || i >= this._n) throw new Error(`index ${key} out of bounds`);
+      return i;
+    }
+    if (_isSlice(key)) {
+      return _resolveSliceToIndices(key, this._n);
+    }
+    throw new Error(`unsupported index key: ${typeof key}`);
+  }
+  __iter__() { return this[Symbol.iterator](); }
+  *[Symbol.iterator]() { for (let i = 0; i < this._n; i++) yield i; }
+  tolist() { const a = new Array(this._n); for (let i = 0; i < this._n; i++) a[i] = i; return a; }
+  toString() { return `RangeIndex(start=0, stop=${this._n}, step=1)`; }
+}
+
+// Labelled index — kept for when sadpan gets explicit row labels.
+// _lookup(label) returns the position or -1.
+class _Index {
+  constructor(labels, name) {
+    this._labels = Array.isArray(labels) ? labels.slice() : [...labels];
+    this._name = name || null;
+    this._lut = new Map();
+    for (let i = 0; i < this._labels.length; i++) this._lut.set(this._labels[i], i);
+  }
+  get name() { return this._name; }
+  get size() { return this._labels.length; }
+  get values() { return this._labels.slice(); }
+  __len__() { return this._labels.length; }
+  __getitem__(key) {
+    if (typeof key === 'number') {
+      const i = key < 0 ? this._labels.length + key : key;
+      return this._labels[i];
+    }
+    if (_isSlice(key)) {
+      return _resolveSliceToIndices(key, this._labels.length).map(i => this._labels[i]);
+    }
+    throw new Error(`unsupported index key: ${typeof key}`);
+  }
+  _lookup(label) {
+    return this._lut.has(label) ? this._lut.get(label) : -1;
+  }
+  *[Symbol.iterator]() { yield* this._labels; }
+  tolist() { return this._labels.slice(); }
+  toString() { return `Index(${this._labels.length} labels)`; }
+}
+
+// ── Factory functions — wire up the indexers for a given DataFrame ──
+
+function makeIloc(df) {
+  return new _DfIndexer(df, _resolveByPosition, _resolveByPosition, false);
+}
+function makeLoc(df) {
+  return new _DfIndexer(df, _resolveRowByLabel, _resolveColByLabel, false);
+}
+function makeAt(df) {
+  return new _DfIndexer(df, _resolveRowByLabel, _resolveColByLabel, true);
+}
+function makeIat(df) {
+  return new _DfIndexer(df, _resolveByPosition, _resolveByPosition, true);
+}
+
+function makeSeriesIloc(series) {
+  return new _SeriesIndexer(series, _resolveByPosition, false);
+}
+function makeSeriesLoc(series) {
+  return new _SeriesIndexer(series, _resolveRowByLabel, false);
+}
+function makeSeriesAt(series) {
+  return new _SeriesIndexer(series, _resolveRowByLabel, true);
+}
+function makeSeriesIat(series) {
+  return new _SeriesIndexer(series, _resolveByPosition, true);
+}
+
 // -- api.js --
 
 // api.js — factories, op helpers, DataFrame wrapper, registration
@@ -573,6 +1031,23 @@ function toCSV(table, opts = {}) {
 
 
 
+
+
+// ── plt lookup ──
+//
+// `df.plot(...)` proxies to plt without taking a hard dep on @gcu/plot.
+// We probe window._auditableExtensions['plt'] (the adder extension slot)
+// and fall back to window._importCache for direct module instances.
+function _findPlt() {
+  if (typeof window === 'undefined') return null;
+  if (window._auditableExtensions?.plt) return window._auditableExtensions.plt;
+  if (window._importCache) {
+    for (const mod of Object.values(window._importCache)) {
+      if (mod && typeof mod.subplots === 'function' && typeof mod.plot === 'function') return mod;
+    }
+  }
+  return null;
+}
 
 // ── html helpers ──
 
@@ -710,10 +1185,117 @@ class DataFrame {
   // properties (JS getters — work in both JS and adder)
   get shape() { return [this._tbl.numRows(), this._tbl.numCols()]; }
   get columns() { return this._tbl.columnNames(); }
+  get ndim() { return 2; }
+  get size() { return this._tbl.numRows() * this._tbl.numCols(); }
+  get empty() { return this._tbl.numRows() === 0; }
+  get dtypes() {
+    // Best-effort dtype inference per column from the first non-null
+    // sample — matches pandas's `df.dtypes` quick scan well enough
+    // for `df.dtypes` printouts. Returns a Series of dtype strings.
+    const names = this._tbl.columnNames();
+    const types = names.map(c => {
+      const arr = this._tbl.array(c);
+      for (const v of arr) {
+        if (v == null) continue;
+        if (typeof v === 'number') return Number.isInteger(v) ? 'int64' : 'float64';
+        if (typeof v === 'boolean') return 'bool';
+        return 'object';
+      }
+      return 'object';
+    });
+    return new WrapperSeries(types, 'dtype');
+  }
+  get index() {
+    if (!this._index) this._index = new _RangeIndex(this._tbl.numRows());
+    return this._index;
+  }
+  // pandas exposes `.values` AND `.to_numpy()` (the latter is the
+  // preferred name post-1.0). Same data shape: 2D nested list when
+  // columns mix types, flat-typed otherwise. Returning a JS array of
+  // arrays keeps consumers (natra.array, plt, sklearn) happy.
+  get values() { return this._toNested(); }
+  to_numpy(opts) {
+    // opts.dtype / opts.copy are matplotlib-side hints; not honored here.
+    return this._toNested();
+  }
+  _toNested() {
+    const tbl = this._tbl;
+    const names = tbl.columnNames();
+    const nrows = tbl.numRows();
+    const rows = new Array(nrows);
+    for (let i = 0; i < nrows; i++) {
+      const r = new Array(names.length);
+      for (let j = 0; j < names.length; j++) r[j] = tbl._columns[names[j]][i];
+      rows[i] = r;
+    }
+    return new _NumpyLikeArray2D(rows, names.length);
+  }
+  // pandas-shape indexers — lazy single-instance per DataFrame.
+  get iloc() { if (!this._iloc) this._iloc = makeIloc(this); return this._iloc; }
+  get loc()  { if (!this._loc)  this._loc  = makeLoc(this);  return this._loc;  }
+  get at()   { if (!this._at)   this._at   = makeAt(this);   return this._at;   }
+  get iat()  { if (!this._iat)  this._iat  = makeIat(this);  return this._iat;  }
+
+  // Construction helpers used by the indexers — kept on the DataFrame
+  // so the accessors don't need to import api.js (would be circular).
+  _makeSeriesLike(values, indexLabels, name) {
+    const s = new WrapperSeries(values, name || null);
+    if (indexLabels) s._index = new _Index(indexLabels);
+    return s;
+  }
+  _makeFrameLike(columns, names) {
+    return new DataFrame(new Table(columns, names));
+  }
+
+  // Minimal `.plot()` — proxies to plt when available. Real matplotlib's
+  // df.plot has dozens of kwargs (kind, ax, x, y, secondary_y, …); we
+  // cover the common shapes (x=col, y=col, kind='line'|'scatter'|'bar')
+  // and let users drop to plt directly for anything else.
+  plot(opts) {
+    const kw = (opts && opts._kw) ? opts : (opts || {});
+    const kind = kw.kind || 'line';
+    const xCol = kw.x;
+    const yCol = kw.y;
+    const plt = _findPlt();
+    if (!plt) throw new Error('plt extension not loaded — call load("@gcu/plot") first');
+
+    const tbl = this._tbl;
+    const x = xCol ? tbl.array(xCol) : Array.from({ length: tbl.numRows() }, (_, i) => i);
+
+    if (kind === 'scatter') {
+      if (!yCol) throw new Error("df.plot(kind='scatter') requires y=");
+      return plt.scatter(x, tbl.array(yCol), kw);
+    }
+    if (kind === 'bar') {
+      const cols = yCol ? (Array.isArray(yCol) ? yCol : [yCol]) : tbl.columnNames().filter(n => n !== xCol);
+      // Single bar series only for now — matplotlib's grouped bar is fiddly.
+      return plt.bar(x, tbl.array(cols[0]), kw);
+    }
+    if (kind === 'hist') {
+      const cols = yCol ? (Array.isArray(yCol) ? yCol : [yCol]) : tbl.columnNames();
+      return plt.hist(tbl.array(cols[0]), kw);
+    }
+    // default: line plot — one column or many
+    const cols = yCol ? (Array.isArray(yCol) ? yCol : [yCol]) : tbl.columnNames().filter(n => n !== xCol);
+    if (cols.length === 1) return plt.plot(x, tbl.array(cols[0]), kw);
+    // multiple columns → add each as a separate trace on a shared axes
+    const sub = plt.subplots();
+    const ax = sub.ax || sub[1];
+    for (const c of cols) ax.plot(x, tbl.array(c), { ...kw, label: c });
+    return (sub.fig || sub[0]).show();
+  }
 
   // methods
-  head(n = 5) { return new DataFrame(this._tbl.slice(0, n)); }
-  tail(n = 5) { return new DataFrame(this._tbl.slice(-n)); }
+  head(n) {
+    if (n && typeof n === 'object' && n._kw) n = n.n;
+    if (n == null) n = 5;
+    return new DataFrame(this._tbl.slice(0, n));
+  }
+  tail(n) {
+    if (n && typeof n === 'object' && n._kw) n = n.n;
+    if (n == null) n = 5;
+    return new DataFrame(this._tbl.slice(-n));
+  }
 
   sort_values(by, opts) {
     let ascending = true;
@@ -858,7 +1440,15 @@ class DataFrame {
   }
 
   pipe(fn, ...args) { return fn(this, ...args); }
-  copy() { return new DataFrame(this._tbl); }
+  copy(opts) {
+    // pandas's `deep` defaults to True; we always deep-copy because our
+    // Table stores plain arrays per column and shallow-sharing them is
+    // a footgun (mutations leak between "copies"). The `deep` kwarg is
+    // accepted but ignored.
+    const cols = {};
+    for (const n of this._tbl.columnNames()) cols[n] = this._tbl.array(n).slice();
+    return new DataFrame(new Table(cols, this._tbl.columnNames()));
+  }
   to_records() { return this._tbl.objects(); }
   to_dict(orient) {
     if (orient === 'records') return this.to_records();
@@ -867,14 +1457,247 @@ class DataFrame {
     return result;
   }
   to_csv(opts) { return this._tbl.toCSV(opts && opts._kw ? opts : {}); }
+
+  // pandas null detection — `isnull()` and `notna()` return a same-shape
+  // DataFrame of booleans. `isnull().sum()` then yields per-column counts
+  // (Series), and `.sum().sum()` reduces to a scalar.
+  isnull() {
+    const cols = {};
+    for (const c of this._tbl.columnNames()) {
+      cols[c] = this._tbl.array(c).map(v => v == null || (typeof v === 'number' && v !== v));
+    }
+    return new DataFrame(new Table(cols, this._tbl.columnNames()));
+  }
+  isna() { return this.isnull(); }
+  notnull() {
+    const cols = {};
+    for (const c of this._tbl.columnNames()) {
+      cols[c] = this._tbl.array(c).map(v => !(v == null || (typeof v === 'number' && v !== v)));
+    }
+    return new DataFrame(new Table(cols, this._tbl.columnNames()));
+  }
+  notna() { return this.notnull(); }
+
+  // sum / mean / min / max / count along axis. axis=0 (default) reduces
+  // each column → Series indexed by column name; axis=1 reduces each row
+  // → Series of length nrows. Matches pandas default behavior.
+  sum(axis) {
+    if (axis && axis._kw) axis = axis.axis;
+    axis = axis == null ? 0 : axis;
+    if (axis === 0) {
+      const out = [];
+      for (const c of this._tbl.columnNames()) {
+        out.push(this._tbl.array(c).reduce((s, v) => s + (v != null && typeof v !== 'boolean' ? v : v === true ? 1 : 0), 0));
+      }
+      const s = new WrapperSeries(out, null);
+      s._index = new _Index(this._tbl.columnNames());
+      return s;
+    }
+    if (axis === 1) {
+      const out = [];
+      const names = this._tbl.columnNames();
+      for (let i = 0; i < this._tbl.numRows(); i++) {
+        let s = 0;
+        for (const c of names) {
+          const v = this._tbl._columns[c][i];
+          s += v != null && typeof v !== 'boolean' ? v : v === true ? 1 : 0;
+        }
+        out.push(s);
+      }
+      return new WrapperSeries(out, null);
+    }
+    throw new Error(`unsupported axis: ${axis}`);
+  }
+  mean(axis) {
+    if (axis && axis._kw) axis = axis.axis;
+    axis = axis == null ? 0 : axis;
+    if (axis === 0) {
+      const out = [];
+      for (const c of this._tbl.columnNames()) {
+        const arr = this._tbl.array(c);
+        const nums = arr.filter(v => v != null && typeof v === 'number');
+        out.push(nums.length ? nums.reduce((s, v) => s + v, 0) / nums.length : NaN);
+      }
+      const s = new WrapperSeries(out, null);
+      s._index = new _Index(this._tbl.columnNames());
+      return s;
+    }
+    throw new Error(`unsupported axis: ${axis}`);
+  }
 }
 
-// ── WrapperSeries — extends Series with extra pandas-style methods ──
+// ── _NumpyLikeArray2D — minimal numpy.ndarray stand-in for DataFrame.values
+//                       / DataFrame.to_numpy() output ──
+//
+// Returns from df.values / df.to_numpy(). Provides the `.shape`, `.ndim`,
+// `.size`, `.dtype` attributes that pandas's values/to_numpy promise (so
+// downstream `arr.shape[0]` works) plus integer-position __getitem__ /
+// __setitem__ that handle both single-axis and 2D tuple subscripts.
+//
+// Not a real ndarray — for proper numpy ops, callers should still pass
+// this to `np.array(...)` to convert. We're matching the duck-shape for
+// the common print-and-inspect patterns in scientific notebooks.
+
+class _NumpyLikeArray2D {
+  constructor(rows, ncols) {
+    this._rows = rows;
+    this.shape = [rows.length, ncols];
+    this.ndim = 2;
+    this.size = rows.length * ncols;
+    this.dtype = 'object';
+  }
+
+  __getitem__(key) {
+    const nrows = this._rows.length;
+    const ncols = this.shape[1];
+    if (Array.isArray(key) && key.length === 2) {
+      const [rk, ck] = key;
+      // scalar [i, j] — return the cell
+      if (typeof rk === 'number' && typeof ck === 'number') {
+        const r = rk < 0 ? nrows + rk : rk;
+        const c = ck < 0 ? ncols + ck : ck;
+        return this._rows[r][c];
+      }
+      // scalar row + slice/list col → row vector
+      if (typeof rk === 'number' && ck && ck._slice) {
+        const r = rk < 0 ? nrows + rk : rk;
+        const lo = ck.lower != null ? ck.lower : 0;
+        const hi = ck.upper != null ? Math.min(ck.upper, ncols) : ncols;
+        return this._rows[r].slice(lo, hi);
+      }
+      // slice row + scalar col → column vector
+      if (rk && rk._slice && typeof ck === 'number') {
+        const lo = rk.lower != null ? rk.lower : 0;
+        const hi = rk.upper != null ? Math.min(rk.upper, nrows) : nrows;
+        const c = ck < 0 ? ncols + ck : ck;
+        const out = [];
+        for (let i = lo; i < hi; i++) out.push(this._rows[i][c]);
+        return out;
+      }
+      // slice row + slice col → 2D sub-array
+      if (rk && rk._slice && ck && ck._slice) {
+        const r0 = rk.lower != null ? rk.lower : 0;
+        const r1 = rk.upper != null ? Math.min(rk.upper, nrows) : nrows;
+        const c0 = ck.lower != null ? ck.lower : 0;
+        const c1 = ck.upper != null ? Math.min(ck.upper, ncols) : ncols;
+        const out = [];
+        for (let i = r0; i < r1; i++) out.push(this._rows[i].slice(c0, c1));
+        return new _NumpyLikeArray2D(out, c1 - c0);
+      }
+      throw new Error('unsupported tuple subscript shape on numpy-like array');
+    }
+    if (typeof key === 'number') {
+      return this._rows[key < 0 ? nrows + key : key];
+    }
+    if (key && key._slice) {
+      const lo = key.lower != null ? key.lower : 0;
+      const hi = key.upper != null ? Math.min(key.upper, nrows) : nrows;
+      const out = this._rows.slice(lo, hi);
+      return new _NumpyLikeArray2D(out, ncols);
+    }
+    throw new Error(`unsupported key type on numpy-like array: ${typeof key}`);
+  }
+
+  __setitem__(key, value) {
+    if (Array.isArray(key) && key.length === 2 && typeof key[0] === 'number' && typeof key[1] === 'number') {
+      const r = key[0] < 0 ? this._rows.length + key[0] : key[0];
+      const c = key[1] < 0 ? this.shape[1] + key[1] : key[1];
+      this._rows[r][c] = value;
+      return;
+    }
+    throw new Error('unsupported setitem on numpy-like array');
+  }
+
+  __len__() { return this._rows.length; }
+  *[Symbol.iterator]() { yield* this._rows; }
+  tolist() { return this._rows.map(r => r.slice()); }
+  __repr__() { return `array(${JSON.stringify(this._rows.slice(0, 5))}${this._rows.length > 5 ? ', ...' : ''})`; }
+  __str__() { return this.__repr__(); }
+  toString() { return this.__repr__(); }
+}
+
+// ── WrapperSeries — extends Series with pandas-shape API ──
+//
+// Indexers and properties (.iloc / .loc / .at / .iat / .index / .size /
+// .ndim / .to_numpy) live on the wrapper rather than the base Series
+// so the bare query-style Series stays minimal. plot() also routes
+// here via _findPlt.
 
 class WrapperSeries extends Series {
   constructor(values, name) { super(values, name); }
   sort_values(ascending = true) { return this.sort(ascending); }
   value_counts() { return this.valueCounts(); }
+
+  get ndim() { return 1; }
+  get size() { return this._values.length; }
+  get empty() { return this._values.length === 0; }
+  get dtype() {
+    for (const v of this._values) {
+      if (v == null) continue;
+      if (typeof v === 'number') return Number.isInteger(v) ? 'int64' : 'float64';
+      if (typeof v === 'boolean') return 'bool';
+      return 'object';
+    }
+    return 'object';
+  }
+  get shape() { return [this._values.length]; }
+  get index() {
+    if (!this._index) this._index = new _RangeIndex(this._values.length);
+    return this._index;
+  }
+  to_numpy(_opts) { return this._values.slice(); }
+
+  get iloc() { if (!this._iloc) this._iloc = makeSeriesIloc(this); return this._iloc; }
+  get loc()  { if (!this._loc)  this._loc  = makeSeriesLoc(this);  return this._loc;  }
+  get at()   { if (!this._at)   this._at   = makeSeriesAt(this);   return this._at;   }
+  get iat()  { if (!this._iat)  this._iat  = makeSeriesIat(this);  return this._iat;  }
+
+  // Used by Series-side indexers when projecting a sub-Series.
+  _makeLike(values) { return new WrapperSeries(values, this._name); }
+
+  // pandas-shape __getitem__ — supports:
+  //   s[i]                 → scalar by position (default RangeIndex)
+  //   s[label]             → scalar by label (custom Index)
+  //   s[slice]             → sub-Series
+  //   s[boolean_mask]      → filtered sub-Series
+  //   s[[i1, i2, ...]]     → fancy indexing → sub-Series
+  __getitem__(key) {
+    if (key instanceof BooleanMask) {
+      const out = [];
+      for (let i = 0; i < this._values.length; i++) if (key._values[i]) out.push(this._values[i]);
+      return this._makeLike(out);
+    }
+    if (key && key._slice) return this.iloc.__getitem__(key);
+    if (Array.isArray(key)) return this.iloc.__getitem__(key);
+    if (this._index && this._index._isRangeIndex !== true && typeof key !== 'number') {
+      // Custom-indexed series: lookup by label
+      return this.loc.__getitem__(key);
+    }
+    return this._values[key < 0 ? this._values.length + key : key];
+  }
+
+  __setitem__(key, value) {
+    if (key && key._slice) return this.iloc.__setitem__(key, value);
+    if (Array.isArray(key)) return this.iloc.__setitem__(key, value);
+    if (this._index && this._index._isRangeIndex !== true && typeof key !== 'number') {
+      return this.loc.__setitem__(key, value);
+    }
+    this._values[key < 0 ? this._values.length + key : key] = value;
+  }
+
+  plot(opts) {
+    const kw = (opts && opts._kw) ? opts : (opts || {});
+    const plt = _findPlt();
+    if (!plt) throw new Error('plt extension not loaded — call load("@gcu/plot") first');
+    const x = this._index && this._index._isRangeIndex !== true
+      ? this._index.tolist()
+      : Array.from({ length: this._values.length }, (_, i) => i);
+    const kind = kw.kind || 'line';
+    if (kind === 'bar') return plt.bar(x, this._values, kw);
+    if (kind === 'hist') return plt.hist(this._values, kw);
+    if (kind === 'scatter') return plt.scatter(x, this._values, kw);
+    return plt.plot(x, this._values, kw);
+  }
 }
 
 // ── WrapperGroupBy ──
@@ -915,7 +1738,31 @@ class WrapperGroupBy {
 
 // ── top-level wrapper functions ──
 
-function read_csv(text, opts) { return new DataFrame(csv(text, opts)); }
+// pandas.read_csv accepts a path/URL/file-like and reads the CSV text.
+// Conditionally async — returns a Promise only when we actually need
+// to fetch (http/https URL) or read VFS (absolute path). Inline CSV
+// text returns a DataFrame synchronously so existing JS callers don't
+// need to await. Adder users always await and get the right thing
+// either way.
+function read_csv(source, opts) {
+  if (typeof source === 'string') {
+    const trimmed = source.trim();
+    if (/^https?:\/\//i.test(trimmed)) {
+      return (async () => {
+        const resp = await fetch(trimmed);
+        if (!resp.ok) throw new Error(`read_csv: HTTP ${resp.status} fetching ${trimmed}`);
+        return new DataFrame(csv(await resp.text(), opts));
+      })();
+    }
+    if (trimmed.startsWith('/') && typeof window !== 'undefined' && window._notebookVFS) {
+      return (async () => {
+        const text = await window._notebookVFS.readFile(trimmed, 'text');
+        return new DataFrame(csv(text, opts));
+      })();
+    }
+  }
+  return new DataFrame(csv(source, opts));
+}
 
 function where(mask, a, b) {
   if (!(mask instanceof BooleanMask)) return mask ? a : b;
@@ -934,6 +1781,14 @@ const sadpanModule = {
   Table, Series, BooleanMask, GroupBy,
   // DataFrame wrapper API (for adder)
   DataFrame, read_csv, where, WrapperSeries, WrapperGroupBy,
+  // pandas-shape constants and helpers
+  NaN: Number.NaN,
+  NA: Number.NaN,   // pandas's NA marker — same scalar value for our purposes
+  Index: _Index,
+  RangeIndex: _RangeIndex,
+  // pd.isna / pd.notna helpers
+  isna: (v) => v == null || (typeof v === 'number' && v !== v),
+  notna: (v) => !(v == null || (typeof v === 'number' && v !== v)),
 };
 
 if (typeof window !== 'undefined') {

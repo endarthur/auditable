@@ -4,4 +4,5 @@ import './table.js';
 import './groupby.js';
 import './join.js';
 import './io.js';
+import './accessors.js';
 export { table, from, csv, series, concat, merge, semijoin, antijoin, op, Table, Series, BooleanMask, GroupBy, DataFrame, read_csv, where } from './api.js';

@@ -319,6 +319,16 @@ function _normShape(shape) {
 // ── Module API ──
 
 const _module = {
+  // numpy scalar constants
+  NaN: Number.NaN,
+  nan: Number.NaN,   // numpy exposes both spellings
+  Inf: Number.POSITIVE_INFINITY,
+  inf: Number.POSITIVE_INFINITY,
+  NINF: Number.NEGATIVE_INFINITY,
+  pi: Math.PI,
+  e: Math.E,
+  newaxis: null,     // numpy.newaxis is None; used as a placeholder in slicing
+
   // array creation (sync permPtr before perm alloc to avoid overwriting arena scratch)
   async array(data) { const ctx = await _ensureCtx(); ctx._syncPerm(); return _makeNd(ctx.array(data)); },
   async zeros(shape) { const ctx = await _ensureCtx(); ctx._syncPerm(); return _makeNd(ctx.zeros(_normShape(shape))); },
@@ -449,7 +459,32 @@ const _module = {
     return typeof r === 'number' ? r : _makeNd(r);
   },
   matmul(a, b) { return _makeNd(_ops().matmul(_raw(a), _raw(b))); },
-  where(cond, a, b) { return _makeNd(_ops().where(_raw(cond), _raw(a), _raw(b))); },
+  where(cond, a, b) {
+    // Three input shapes commonly arrive here:
+    //   - natra ndarray condition → use the native op (vectorized)
+    //   - sadpan BooleanMask / Series / plain JS array → element-wise loop
+    //     in JS (cheap for the array sizes scientific notebooks pass in)
+    //   - scalar bool → just pick a or b
+    if (typeof cond === 'boolean') return cond ? a : b;
+    if (_isNd(cond)) return _makeNd(_ops().where(cond._arr, _raw(a), _raw(b)));
+
+    const condArr = (cond && cond._values) ? cond._values
+                  : (Array.isArray(cond) ? cond
+                  : null);
+    if (!condArr) throw new Error(`np.where: unsupported condition type ${typeof cond}`);
+
+    const getElt = (v) => {
+      if (v == null) return () => v;
+      if (v._values) return (i) => v._values[i];
+      if (Array.isArray(v)) return (i) => v[i];
+      return () => v;
+    };
+    const fa = getElt(a);
+    const fb = getElt(b);
+    const out = new Array(condArr.length);
+    for (let i = 0; i < condArr.length; i++) out[i] = condArr[i] ? fa(i) : fb(i);
+    return out;
+  },
 
   // linalg namespace
   linalg: {

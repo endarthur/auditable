@@ -33,6 +33,8 @@ await import('../ext/scitra/adder.js');
 
 await import('../ext/plot/index.js');
 
+await import('../ext/sadpan/index.js');
+
 await import('../ext/ipython-adapter/adder.js');
 
 const { pythonExecute } = await import('../ext/adder/src/cell.js');
@@ -147,6 +149,110 @@ describe('scitra: scipy.stats basics', () => {
 });
 
 // ── Pyrcz-shape: the actual failing cell ──
+
+describe('sadpan: iloc / loc / at / iat accessors', () => {
+  test('df.iloc[r, c] scalar', async () => {
+    const { scope } = await runCell([
+      'import sadpan as pd',
+      'df = pd.DataFrame({"a": [10, 20, 30], "b": [1, 2, 3]})',
+      'v = df.iloc[1, 0]',
+    ].join('\n'));
+    assert.equal(scope.v, 20);
+  });
+
+  test('df.iloc[:, 0] returns Series', async () => {
+    const { scope } = await runCell([
+      'import sadpan as pd',
+      'df = pd.DataFrame({"a": [10, 20, 30], "b": [1, 2, 3]})',
+      'col = df.iloc[:, 0]',
+      'first = col[0]',
+      'n = len(col)',
+    ].join('\n'));
+    assert.equal(scope.first, 10);
+    assert.equal(scope.n, 3);
+  });
+
+  test('df.iloc[0:2] slice returns DataFrame', async () => {
+    const { scope } = await runCell([
+      'import sadpan as pd',
+      'df = pd.DataFrame({"a": [10, 20, 30], "b": [1, 2, 3]})',
+      'sub = df.iloc[0:2]',
+      'nrows = sub.shape[0]',
+    ].join('\n'));
+    assert.equal(scope.nrows, 2);
+  });
+
+  test('df.loc[:, "a"] by column name returns Series', async () => {
+    const { scope } = await runCell([
+      'import sadpan as pd',
+      'df = pd.DataFrame({"a": [10, 20, 30], "b": [1, 2, 3]})',
+      'col = df.loc[:, "a"]',
+      'first = col[0]',
+    ].join('\n'));
+    assert.equal(scope.first, 10);
+  });
+
+  test('df.at[1, "b"] scalar by label', async () => {
+    const { scope } = await runCell([
+      'import sadpan as pd',
+      'df = pd.DataFrame({"a": [10, 20, 30], "b": [1, 2, 3]})',
+      'v = df.at[1, "b"]',
+    ].join('\n'));
+    assert.equal(scope.v, 2);
+  });
+
+  test('df.iat[2, 1] scalar by position', async () => {
+    const { scope } = await runCell([
+      'import sadpan as pd',
+      'df = pd.DataFrame({"a": [10, 20, 30], "b": [1, 2, 3]})',
+      'v = df.iat[2, 1]',
+    ].join('\n'));
+    assert.equal(scope.v, 3);
+  });
+
+  test('df.iloc[0, 0] = value assignment', async () => {
+    const { scope } = await runCell([
+      'import sadpan as pd',
+      'df = pd.DataFrame({"a": [10, 20, 30]})',
+      'df.iloc[0, 0] = 99',
+      'v = df.iloc[0, 0]',
+    ].join('\n'));
+    assert.equal(scope.v, 99);
+  });
+
+  test('df.index is a RangeIndex', async () => {
+    const { scope } = await runCell([
+      'import sadpan as pd',
+      'df = pd.DataFrame({"a": [10, 20, 30]})',
+      'idx = df.index',
+      'n = len(idx)',
+      'first = idx[0]',
+    ].join('\n'));
+    assert.equal(scope.n, 3);
+    assert.equal(scope.first, 0);
+  });
+
+  test('df.to_numpy() returns 2D nested list', async () => {
+    const { scope } = await runCell([
+      'import sadpan as pd',
+      'df = pd.DataFrame({"a": [10, 20], "b": [1, 2]})',
+      'arr = df.to_numpy()',
+      'first = arr[0][0]',
+      'last = arr[1][1]',
+    ].join('\n'));
+    assert.equal(scope.first, 10);
+    assert.equal(scope.last, 2);
+  });
+
+  test('pd.NaN is a NaN value', async () => {
+    const { scope } = await runCell([
+      'import sadpan as pd',
+      'x = pd.NaN',
+      'is_nan = x != x',  // standard NaN check
+    ].join('\n'));
+    assert.equal(scope.is_nan, true);
+  });
+});
 
 describe('adder: multi-dim subscript (arr[i, j])', () => {
   test('read: scalar 2D index on natra ndarray', async () => {

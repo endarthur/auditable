@@ -73,7 +73,9 @@ class Series {
     return new Series(ascending ? sorted : sorted.reverse(), this._name);
   }
   isna() { return new BooleanMask(this._values.map(v => v == null || v !== v)); }
+  isnull() { return this.isna(); }   // pandas exposes both names
   notna() { return new BooleanMask(this._values.map(v => v != null && v === v)); }
+  notnull() { return this.notna(); }
   isin(vals) { const s = new Set(vals); return new BooleanMask(this._values.map(v => s.has(v))); }
   astype(type) {
     if (type === 'number' || type === 'float') return new Series(this._values.map(Number), this._name);
