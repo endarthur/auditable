@@ -86,10 +86,16 @@ export function figure(opts) {
   const o = (opts && typeof opts === 'object') ? opts : {};
   return new Figure(1, 1, o);
 }
-// plt.show() — matplotlib renders all pending figures. In auditable, each
-// Figure's .show() returns its canvas explicitly, so there's nothing pending.
-// No-op keeps notebooks that end cells with `plt.show()` from erroring.
-export function show() { /* no-op */ }
+// plt.show() — renders the current figure to a canvas and returns it.
+// When `plt.show()` is the last expression of an adder cell, adder's
+// display path picks up the canvas (via nodeType check) and renders.
+// Matplotlib's pyplot also renders implicitly after each cell in
+// %matplotlib inline; for now we require an explicit `plt.show()` as
+// the trailing statement.
+export function show() {
+  if (!_currentFig) return null;
+  return _currentFig.show();
+}
 // plt.close(fig?) — close a figure (matplotlib reclaims its handle).
 // We hold no figure registry, so no-op.
 export function close(_fig) { /* no-op */ }

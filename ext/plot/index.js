@@ -73,6 +73,62 @@ class LinearScale {
   }
 }
 
+// Log10 scale — matplotlib's `set_xscale('log')` equivalent. Domain
+// must be strictly positive; callers should clamp lo before passing.
+// Ticks are integer powers of 10 within the domain.
+class LogScale {
+  constructor(domain, range) {
+    // Clamp lo to a tiny positive value if non-positive (defensive).
+    const [d0, d1] = domain;
+    this.domain = [d0 > 0 ? d0 : 1e-300, d1 > 0 ? d1 : 1];
+    this.range = range;
+  }
+
+  transform(v) {
+    const [d0, d1] = this.domain;
+    const [r0, r1] = this.range;
+    if (v <= 0) return r0;
+    const l0 = Math.log10(d0);
+    const l1 = Math.log10(d1);
+    const dr = l1 - l0;
+    if (dr === 0) return (r0 + r1) / 2;
+    return r0 + (Math.log10(v) - l0) / dr * (r1 - r0);
+  }
+
+  inverse(px) {
+    const [d0, d1] = this.domain;
+    const [r0, r1] = this.range;
+    const rr = r1 - r0;
+    const l0 = Math.log10(d0);
+    const l1 = Math.log10(d1);
+    if (rr === 0) return Math.pow(10, (l0 + l1) / 2);
+    return Math.pow(10, l0 + (px - r0) / rr * (l1 - l0));
+  }
+
+  ticks() {
+    const [lo, hi] = this.domain;
+    const loE = Math.ceil(Math.log10(lo));
+    const hiE = Math.floor(Math.log10(hi));
+    const ticks = [];
+    // Limit decade-count so degenerate domains don't blow up.
+    if (hiE - loE > 30) return [lo, hi];
+    for (let e = loE; e <= hiE; e++) ticks.push(Math.pow(10, e));
+    return ticks;
+  }
+
+  tickFormat() {
+    return (v) => {
+      const e = Math.round(Math.log10(v));
+      // Pretty-print integer powers as 10^N.
+      if (Math.abs(Math.pow(10, e) - v) / v < 1e-6) {
+        if (e >= -3 && e <= 4) return Math.pow(10, e).toString();
+        return '10^' + e;
+      }
+      return v.toExponential(1);
+    };
+  }
+}
+
 // -- color.js --
 
 // Colormaps — polynomial approximation (same as stdlib.js)
@@ -211,6 +267,27 @@ function dashArray(linestyle) {
 
 const _defaultColors = ['#c89b3c', '#5ba3b5', '#e07050', '#7a8b99', '#b5854b', '#5bb58b'];
 
+// matplotlib short-form aliases — `c` for color, `ls` for linestyle,
+// `lw` for linewidth, etc. We accept both, callers in the wild use
+// either. Resolve into canonical names at trace ingress so renderers
+// can read a single key.
+const _ALIASES = {
+  c: 'color',
+  ls: 'linestyle',
+  lw: 'linewidth',
+  ms: 'markersize',
+  mec: 'markeredgecolor',
+  mfc: 'markerfacecolor',
+  mew: 'markeredgewidth',
+};
+function _resolveAliases(o) {
+  if (!o) return o;
+  for (const [a, k] of Object.entries(_ALIASES)) {
+    if (o[a] !== undefined && o[k] === undefined) o[k] = o[a];
+  }
+  return o;
+}
+
 // Coerce inputs from various ndarray libraries (natra's WASM-arena
 // descriptor, vec's data-backed shape, plain TypedArrays, native JS
 // arrays, lists from adder) into a JS array we can iterate, spread,
@@ -264,37 +341,38 @@ class Axes {
     if (typeof fmtOrOpts === 'string') {
       o = { ...parseFormat(fmtOrOpts), ...opts };
     } else if (fmtOrOpts) {
-      o = fmtOrOpts;
+      o = { ...fmtOrOpts };
       if (o.fmt) Object.assign(o, parseFormat(o.fmt));
     }
+    _resolveAliases(o);
     if (!o.color) o.color = this._nextColor();
     this._traces.push({ type: 'line', x, y, opts: o });
     return this;
   }
 
   scatter(x, y, opts) {
-    const o = { ...opts };
-    if (!o.color && !o.c) o.color = this._nextColor();
+    const o = _resolveAliases({ ...opts });
+    if (!o.color) o.color = this._nextColor();
     this._traces.push({ type: 'scatter', x, y, opts: o });
     return this;
   }
 
   bar(x, heights, opts) {
-    const o = { ...opts };
+    const o = _resolveAliases({ ...opts });
     if (!o.color) o.color = this._nextColor();
     this._traces.push({ type: 'bar', x, heights, opts: o });
     return this;
   }
 
   barh(y, widths, opts) {
-    const o = { ...opts };
+    const o = _resolveAliases({ ...opts });
     if (!o.color) o.color = this._nextColor();
     this._traces.push({ type: 'barh', y, widths, opts: o });
     return this;
   }
 
   hist(data, opts) {
-    const o = { ...opts };
+    const o = _resolveAliases({ ...opts });
     if (!o.color) o.color = this._nextColor();
     // Normalize data + bins to JS arrays so ndarray inputs (natra,
     // vec, TypedArrays) work the same as native lists.
@@ -305,19 +383,19 @@ class Axes {
   }
 
   imshow(data, nx, ny, opts) {
-    this._traces.push({ type: 'imshow', data, nx, ny, opts: { ...opts } });
+    this._traces.push({ type: 'imshow', data, nx, ny, opts: _resolveAliases({ ...opts }) });
     // default to equal aspect for grid data (matches matplotlib)
     if (this._aspect === 'auto') this._aspect = 'equal';
     return this;
   }
 
   axhline(y, opts) {
-    this._traces.push({ type: 'hline', y, opts: { color: '#888', linewidth: 1, ...opts } });
+    this._traces.push({ type: 'hline', y, opts: _resolveAliases({ color: '#888', linewidth: 1, ...opts }) });
     return this;
   }
 
   axvline(x, opts) {
-    this._traces.push({ type: 'vline', x, opts: { color: '#888', linewidth: 1, ...opts } });
+    this._traces.push({ type: 'vline', x, opts: _resolveAliases({ color: '#888', linewidth: 1, ...opts }) });
     return this;
   }
 
@@ -326,7 +404,7 @@ class Axes {
   // new trace type is needed.
   vlines(x, ymin, ymax, opts) {
     const xs = _toArr(x);
-    const o = { ...opts };
+    const o = _resolveAliases({ ...opts });
     if (!o.color && o.colors) o.color = Array.isArray(o.colors) ? o.colors[0] : o.colors;
     if (!o.color) o.color = this._nextColor();
     for (const xv of xs) {
@@ -337,7 +415,7 @@ class Axes {
 
   hlines(y, xmin, xmax, opts) {
     const ys = _toArr(y);
-    const o = { ...opts };
+    const o = _resolveAliases({ ...opts });
     if (!o.color && o.colors) o.color = Array.isArray(o.colors) ? o.colors[0] : o.colors;
     if (!o.color) o.color = this._nextColor();
     for (const yv of ys) {
@@ -347,7 +425,7 @@ class Axes {
   }
 
   text(x, y, text, opts) {
-    this._traces.push({ type: 'text', x, y, text, opts: { color: '#ccc', fontsize: 11, ...opts } });
+    this._traces.push({ type: 'text', x, y, text, opts: _resolveAliases({ color: '#ccc', fontsize: 11, ...opts }) });
     return this;
   }
 
@@ -367,12 +445,24 @@ class Axes {
   set_yscale(scale) { this._yscale = scale; return this; }
   set_zorder(_n) { /* z-order is per-trace; axes-level ordering not modelled */ return this; }
   set_aspect(aspect) { this._aspect = aspect; return this; }
-  // twinx() — return a twin axes that shares the x scale. Proper impl
-  // would render an overlay with its own y-axis on the right side; for
-  // now we return self so chained calls (.plot, .set_ylim) compose.
-  // Visual fidelity gap — see ROADMAP "plt: twinx proper overlay".
-  twinx() { return this; }
-  twiny() { return this; }
+  // twinx() — return a sister axes that shares this one's x-scale, has
+  // its own y-scale, and renders overlaid in the same rect with its
+  // y-axis on the right edge. Matches matplotlib's pyplot twinx for
+  // dual-y plots (e.g. histogram on left axis, CDF on right axis).
+  // The twin is NOT added to the figure's axes grid — its parent
+  // renders it as part of its own _render pass.
+  twinx() {
+    const t = new Axes();
+    t._twinOf = this;
+    // Inherit x-scale settings so they stay in sync.
+    t._xscale = this._xscale;
+    t._xlim = this._xlim;
+    this._twin = t;
+    return t;
+  }
+  // twiny() in matplotlib shares y not x. Rare in practice; alias to
+  // twinx for the common-case "I want two y-axes" intent.
+  twiny() { return this.twinx(); }
 
   legend(opts) { this._legend = true; this._legendOpts = opts || {}; return this; }
 
@@ -394,6 +484,8 @@ class Axes {
     // compute margins
     let ml = this._ylabel ? 55 : 42;
     let mr = this._colorbar ? 70 : 12;
+    // Right-side twin axis needs space for its tick labels (+ optional ylabel).
+    if (this._twin) mr = Math.max(mr, this._twin._ylabel ? 55 : 42);
     let mt = this._title ? 24 : 8;
     let mb = this._xlabel ? 38 : 26;
 
@@ -428,8 +520,22 @@ class Axes {
       }
     }
 
-    const xScale = new LinearScale([xlo, xhi], [plotX, plotX + plotW]);
-    const yScale = new LinearScale([ylo, yhi], [plotY + plotH, plotY]); // y flipped
+    // Log scale needs strictly-positive bounds; clamp lo to the
+    // smallest positive value present in the data (falling back to
+    // hi/10 or 1e-9) so set_xscale('log') with auto-extent works on
+    // lognormal-shaped data.
+    function _logBounds(lo, hi) {
+      let l = lo, h = hi;
+      if (l <= 0) l = h > 0 ? h / 1e6 : 1e-9;
+      if (h <= l) h = l * 10;
+      return [l, h];
+    }
+    const _xScaleCls = this._xscale === 'log' ? LogScale : LinearScale;
+    const _yScaleCls = this._yscale === 'log' ? LogScale : LinearScale;
+    const [xloS, xhiS] = this._xscale === 'log' ? _logBounds(xlo, xhi) : [xlo, xhi];
+    const [yloS, yhiS] = this._yscale === 'log' ? _logBounds(ylo, yhi) : [ylo, yhi];
+    const xScale = new _xScaleCls([xloS, xhiS], [plotX, plotX + plotW]);
+    const yScale = new _yScaleCls([yloS, yhiS], [plotY + plotH, plotY]); // y flipped
 
     // axes background
     ctx.fillStyle = '#1a1a1a';
@@ -453,29 +559,13 @@ class Axes {
       ctx.globalAlpha = 1;
     }
 
-    // clip plot area for traces
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(plotX, plotY, plotW, plotH);
-    ctx.clip();
+    // render own traces (clipped to plot area)
+    const lastCmapTrace = this._renderTraces(ctx, xScale, yScale, plotX, plotY, plotW, plotH);
 
-    // render traces
-    let lastCmapTrace = null;
-    for (const trace of this._traces) {
-      switch (trace.type) {
-        case 'imshow': this._renderImshow(ctx, trace, xScale, yScale, plotX, plotY, plotW, plotH); lastCmapTrace = trace; break;
-        case 'line': this._renderLine(ctx, trace, xScale, yScale); break;
-        case 'scatter': this._renderScatter(ctx, trace, xScale, yScale); if (trace.opts.c && Array.isArray(trace.opts.c)) lastCmapTrace = trace; break;
-        case 'bar': this._renderBar(ctx, trace, xScale, yScale, plotY + plotH); break;
-        case 'barh': this._renderBarh(ctx, trace, xScale, yScale, plotX); break;
-        case 'hist': this._renderHist(ctx, trace, xScale, yScale, plotY + plotH); break;
-        case 'hline': this._renderHline(ctx, trace, xScale, yScale, plotX, plotW); break;
-        case 'vline': this._renderVline(ctx, trace, xScale, yScale, plotY, plotH); break;
-        case 'text': this._renderText(ctx, trace, xScale, yScale); break;
-      }
+    // render twin overlay (own traces + right-side y-axis), if present
+    if (this._twin) {
+      this._twin._renderAsTwin(ctx, xScale, plotX, plotY, plotW, plotH);
     }
-
-    ctx.restore(); // unclip
 
     // axes frame
     ctx.strokeStyle = '#666';
@@ -563,6 +653,84 @@ class Axes {
       renderColorbar(ctx, cbX, plotY, cbW, plotH, cmap, vmin, vmax, {
         textColor, font: smallFont, label: this._colorbarOpts.label,
       });
+    }
+  }
+
+  // Render this axes' traces into the given plot rect, clipped. Returns
+  // the last trace that contributed a colormap (for colorbar rendering).
+  // Extracted from _render so it can be shared with the twin overlay path.
+  _renderTraces(ctx, xScale, yScale, plotX, plotY, plotW, plotH) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(plotX, plotY, plotW, plotH);
+    ctx.clip();
+    let lastCmapTrace = null;
+    for (const trace of this._traces) {
+      switch (trace.type) {
+        case 'imshow': this._renderImshow(ctx, trace, xScale, yScale, plotX, plotY, plotW, plotH); lastCmapTrace = trace; break;
+        case 'line': this._renderLine(ctx, trace, xScale, yScale); break;
+        case 'scatter': this._renderScatter(ctx, trace, xScale, yScale); if (trace.opts.c && Array.isArray(trace.opts.c)) lastCmapTrace = trace; break;
+        case 'bar': this._renderBar(ctx, trace, xScale, yScale, plotY + plotH); break;
+        case 'barh': this._renderBarh(ctx, trace, xScale, yScale, plotX); break;
+        case 'hist': this._renderHist(ctx, trace, xScale, yScale, plotY + plotH); break;
+        case 'hline': this._renderHline(ctx, trace, xScale, yScale, plotX, plotW); break;
+        case 'vline': this._renderVline(ctx, trace, xScale, yScale, plotY, plotH); break;
+        case 'text': this._renderText(ctx, trace, xScale, yScale); break;
+      }
+    }
+    ctx.restore();
+    return lastCmapTrace;
+  }
+
+  // Render as a twin overlay — shares the parent's xScale, uses own
+  // y-scale, draws the y-axis ticks/label on the right edge of the rect.
+  // Title/xlabel/legend belong to parent; only y-state matters here.
+  _renderAsTwin(ctx, parentXScale, plotX, plotY, plotW, plotH) {
+    // Compute own y-scale (matches the path in _render but for the
+    // overlay context — no aspect-ratio adjustment, no grid).
+    let [ylo, yhi] = this._ylim || this._dataExtent('y');
+    if (!isFinite(ylo) || !isFinite(yhi)) return;
+    if (ylo === yhi) { ylo -= 0.5; yhi += 0.5; }
+    let yloS = ylo, yhiS = yhi;
+    if (this._yscale === 'log') {
+      if (yloS <= 0) yloS = yhiS > 0 ? yhiS / 1e6 : 1e-9;
+      if (yhiS <= yloS) yhiS = yloS * 10;
+    }
+    const _yScaleCls = this._yscale === 'log' ? LogScale : LinearScale;
+    const yScale = new _yScaleCls([yloS, yhiS], [plotY + plotH, plotY]);
+
+    // Render traces with parent's x-scale + own y-scale.
+    this._renderTraces(ctx, parentXScale, yScale, plotX, plotY, plotW, plotH);
+
+    // Right-edge y-axis: ticks + tick labels, drawn outside the plot rect.
+    ctx.fillStyle = '#ccc';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    const yTicks = yScale.ticks();
+    const yFmt = yScale.tickFormat();
+    for (const v of yTicks) {
+      const py = yScale.transform(v);
+      ctx.strokeStyle = '#666';
+      ctx.beginPath();
+      ctx.moveTo(plotX + plotW, py);
+      ctx.lineTo(plotX + plotW + 4, py);
+      ctx.stroke();
+      ctx.fillText(yFmt(v), plotX + plotW + 6, py);
+    }
+
+    // Right ylabel — rotated +90° (mirror of left ylabel's -90°)
+    // so the text reads bottom-to-top on the right edge.
+    if (this._ylabel) {
+      ctx.save();
+      ctx.fillStyle = '#ccc';
+      ctx.font = '11px monospace';
+      ctx.translate(plotX + plotW + 38, plotY + plotH / 2);
+      ctx.rotate(Math.PI / 2);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(this._ylabel.text, 0, 0);
+      ctx.restore();
     }
   }
 
@@ -1116,10 +1284,16 @@ function figure(opts) {
   const o = (opts && typeof opts === 'object') ? opts : {};
   return new Figure(1, 1, o);
 }
-// plt.show() — matplotlib renders all pending figures. In auditable, each
-// Figure's .show() returns its canvas explicitly, so there's nothing pending.
-// No-op keeps notebooks that end cells with `plt.show()` from erroring.
-function show() { /* no-op */ }
+// plt.show() — renders the current figure to a canvas and returns it.
+// When `plt.show()` is the last expression of an adder cell, adder's
+// display path picks up the canvas (via nodeType check) and renders.
+// Matplotlib's pyplot also renders implicitly after each cell in
+// %matplotlib inline; for now we require an explicit `plt.show()` as
+// the trailing statement.
+function show() {
+  if (!_currentFig) return null;
+  return _currentFig.show();
+}
 // plt.close(fig?) — close a figure (matplotlib reclaims its handle).
 // We hold no figure registry, so no-op.
 function close(_fig) { /* no-op */ }

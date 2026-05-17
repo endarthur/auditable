@@ -148,6 +148,26 @@ describe('scitra: scipy.stats basics', () => {
 
 // ── Pyrcz-shape: the actual failing cell ──
 
+describe('plt: hist counts + np.max round-trip', () => {
+  test('bins[0] from plt.hist is iterable for np.max', async () => {
+    const { scope } = await runCell([
+      'import natra as np',
+      'import plt',
+      'y = np.exp(np.random.normal(loc=2.0, scale=1.0, size=10000))',
+      'bins_edges = np.logspace(start=np.log10(0.01), stop=np.log10(10000), num=100)',
+      'result = plt.hist(y, bins=bins_edges)',
+      'counts = result[0]',
+      'top = np.max(counts) * 1.1',
+    ].join('\n'));
+    // Should land somewhere between 100 and 2000 (10000 samples spread
+    // over 100 log-spaced bins, lognormal — bulk in 10ish bins → ~500-1500).
+    assert.ok(typeof scope.top === 'number',
+      `expected number, got ${typeof scope.top}: ${scope.top}`);
+    assert.ok(scope.top > 50 && scope.top < 5000,
+      `np.max(counts)*1.1 = ${scope.top}, expected somewhere in [50, 5000]`);
+  });
+});
+
 describe('plt: hist with ndarray bins', () => {
   test('plt.hist(y, bins=ndarray, color=, edgecolor=, alpha=, zorder=)', async () => {
     // Matches the Pyrcz Central Tendency plot cell line 11.

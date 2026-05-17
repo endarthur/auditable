@@ -57,6 +57,13 @@ function _ops() {
 
 function _raw(v) {
   if (v && v._nd) return v._arr;
+  // Coerce plain JS arrays / TypedArrays into a natra ndarray so the
+  // reduction ops (max/min/sum/mean/etc.) work on lists from outside
+  // natra (e.g. plt.hist counts, user-built lists). Requires _ctx to
+  // already exist — if it doesn't, return as-is and let the op fail.
+  if (_ctx && (Array.isArray(v) || ArrayBuffer.isView(v))) {
+    return _ctx.array(Array.isArray(v) ? v : Array.from(v));
+  }
   return v;
 }
 
