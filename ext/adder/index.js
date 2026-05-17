@@ -6639,8 +6639,14 @@ function lowerExpr_ad(ctx, node) {
       if (name === 'True') return ctx.emit('const', [true], BOOL, l);
       if (name === 'False') return ctx.emit('const', [false], BOOL, l);
       if (name === 'None') return ctx.emit('const', [null], DYNAMIC, l);
-      // Not an import if: already assigned (in symbols), or a module-level define
-      if (!ctx.symbols.has(name) && !ctx.defines.has(name)) ctx.imports.add(name);
+      // Decide whether this Name needs to come from upstream scope:
+      //   - already assigned in this scope (ctx.symbols.has)  → load local
+      //   - inside a function/class body referencing a name defined
+      //     later at module level (forward ref) → load via closure, no import
+      //   - at module level and not yet assigned                → import from
+      //     upstream (covers `df = df.rename(...)` re-bind pattern)
+      const isForwardRef = !ctx.topLevel && ctx.defines.has(name);
+      if (!ctx.symbols.has(name) && !isForwardRef) ctx.imports.add(name);
       return ctx.emit('load', [name], DYNAMIC, l);
     }
 

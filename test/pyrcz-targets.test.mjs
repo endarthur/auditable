@@ -254,6 +254,46 @@ describe('sadpan: iloc / loc / at / iat accessors', () => {
   });
 });
 
+describe('adder: rebind self pattern (x = x.method(...))', () => {
+  test('df = df.rename(...) reads upstream df, then rebinds', async () => {
+    // Set up df in scope (simulates upstream cell).
+    const { scope: s1 } = await runCell([
+      'import sadpan as pd',
+      'df = pd.DataFrame({"a":[1,2,3]})',
+    ].join('\n'));
+    // Then a cell that rebinds: must see upstream df on RHS.
+    const cell2 = { id: 'rebind', _ctx: null };
+    const { defines } = await import('../ext/adder/src/cell.js').then(m => m.pythonExecute(
+      'import sadpan as pd\ndf = df.rename(columns={"a":"b"})\n',
+      s1, cell2,
+    ));
+    assert.ok(defines.df, 'df should be defined post-cell');
+    assert.deepEqual(defines.df.columns, ['b']);
+  });
+
+  test('y = x + 1 with x upstream + y self-defined', async () => {
+    const { scope: s1 } = await runCell('x = 5');
+    const cell2 = { id: 'arith', _ctx: null };
+    const { defines } = await import('../ext/adder/src/cell.js').then(m => m.pythonExecute(
+      'y = x + 1\n', s1, cell2,
+    ));
+    assert.equal(defines.y, 6);
+  });
+
+  test('forward-ref inside function body still works', async () => {
+    // outer() references inner() before inner is defined at module
+    // level — adder must NOT try to import inner from upstream.
+    const { scope } = await runCell([
+      'def outer():',
+      '    return inner()',
+      'def inner():',
+      '    return 42',
+      'v = outer()',
+    ].join('\n'));
+    assert.equal(scope.v, 42);
+  });
+});
+
 describe('adder: multi-dim subscript (arr[i, j])', () => {
   test('read: scalar 2D index on natra ndarray', async () => {
     const { scope } = await runCell([
