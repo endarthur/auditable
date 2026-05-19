@@ -81,10 +81,17 @@ async function _exec(node, ctx) {
 
 async function _execProgram(node, ctx) {
   let exitCode = 0;
-  for (const cmd of node.commands) {
-    const r = await _exec(cmd, ctx);
-    exitCode = r.exitCode;
-    ctx.lastStatus = exitCode;
+  try {
+    for (const cmd of node.commands) {
+      const r = await _exec(cmd, ctx);
+      exitCode = r.exitCode;
+      ctx.lastStatus = exitCode;
+    }
+  } catch (e) {
+    // `exit` builtin throws { exitCode, _exit: true }; catch here to stop
+    // running subsequent top-level commands.
+    if (e && e._exit) return { exitCode: e.exitCode };
+    throw e;
   }
   return { exitCode };
 }
@@ -157,15 +164,25 @@ async function _execSimpleCommand(node, ctx) {
     return { exitCode: 0 };
   }
 
-  // 2. Set up redirects (modifies a sub-context's stdin/stdout/stderr).
-  const subCtx = { ...ctx };
-  // Per-command assignments: temporarily set in subCtx.env (a shallow copy
-  // so we don't mutate the parent's env mid-command).
-  if (assignmentBindings.length > 0) {
-    subCtx.env = new Map(ctx.env);
-    for (const [n, v] of assignmentBindings) subCtx.env.set(n, v);
+  // 2. Set up sub-context for per-command assignments + redirects.
+  //    Only create a fresh subCtx when we actually need isolation —
+  //    otherwise pass the parent ctx through directly so builtins that
+  //    mutate state (cd → ctx.cwd, exit → throws) see the right object.
+  //    POSIX: per-command assignments scope only to that command; redirects
+  //    only affect that command's stdio. Plain builtins with no
+  //    assignments/redirects can (and should) mutate the parent ctx.
+  let subCtx = ctx;
+  const needsScope =
+    assignmentBindings.length > 0 ||
+    (node.redirects && node.redirects.length > 0);
+  if (needsScope) {
+    subCtx = { ...ctx };
+    if (assignmentBindings.length > 0) {
+      subCtx.env = new Map(ctx.env);
+      for (const [n, v] of assignmentBindings) subCtx.env.set(n, v);
+    }
+    await _applyRedirects(node.redirects, subCtx);
   }
-  await _applyRedirects(node.redirects, subCtx);
 
   // 3. Expand command name + args.
   const argv = [];
@@ -192,8 +209,11 @@ async function _execSimpleCommand(node, ctx) {
       exitCode = await ctx.onCommand(cmdName, argv, subCtx);
     }
   } catch (e) {
-    // Builtins may set their exit code by throwing { exitCode }. Anything
-    // else propagates as an executor error.
+    // The `exit` builtin throws { exitCode, _exit: true } to signal full
+    // script termination — re-throw so _execProgram catches it instead of
+    // smoothing it over into a normal exit code. Plain { exitCode } throws
+    // (no _exit marker) are treated as the command's exit code.
+    if (e && e._exit) throw e;
     if (e && typeof e.exitCode === 'number') exitCode = e.exitCode;
     else throw e;
   }

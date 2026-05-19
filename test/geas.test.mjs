@@ -10,6 +10,29 @@ import { parseWordParts } from '../ext/geas/src/word-parts.js';
 import { execute } from '../ext/geas/src/executor.js';
 import { NODE } from '../ext/geas/src/ast-nodes.js';
 import { createHeadlessAdapter } from '../ext/geas/src/adapters/headless.js';
+import { createShell, defaultBuiltins } from '../ext/geas/src/api.js';
+import { VFS, MemoryBackend } from '../ext/vfs/index.js';
+
+// Build a fresh VFS + shell pair for tests that exercise filesystem builtins.
+function _testShell(opts = {}) {
+  const vfs = new VFS();
+  vfs._mounts.set('/', new MemoryBackend());
+  const stdoutBuf = [];
+  const stderrBuf = [];
+  const shell = createShell({
+    vfs,
+    env: opts.env || { HOME: '/home', PATH: '/bin' },
+    cwd: opts.cwd || '/',
+    stdout: (t) => stdoutBuf.push(String(t)),
+    stderr: (t) => stderrBuf.push(String(t)),
+  });
+  return {
+    shell, vfs,
+    output: () => stdoutBuf.join(''),
+    errOutput: () => stderrBuf.join(''),
+    clear: () => { stdoutBuf.length = 0; stderrBuf.length = 0; },
+  };
+}
 
 // ── exec test harness ──
 // Build a minimal context with a captured stdout/stderr and a small set of
@@ -780,10 +803,6 @@ describe('headless adapter — input + resize', () => {
 });
 
 // ══════════════════════════════════════════════════════════
-// WORD PARTS (structured decomposition)
-// ══════════════════════════════════════════════════════════
-
-// ══════════════════════════════════════════════════════════
 // EXECUTOR
 // ══════════════════════════════════════════════════════════
 
@@ -991,6 +1010,221 @@ describe('executor — here-docs', () => {
   it("quoted heredoc <<'END' is literal", async () => {
     const r = await run("cat <<'END'\nhi $name\nEND\n", { env: { name: 'arthur' } });
     assert.equal(r.stdout, 'hi $name\n');
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+// BUILT-INS + createShell
+// ══════════════════════════════════════════════════════════
+
+describe('createShell — basic shape', () => {
+  it('returns an object with exec, env, cwd, lastStatus, builtins, functions', () => {
+    const t = _testShell();
+    assert.equal(typeof t.shell.exec, 'function');
+    assert.ok(t.shell.env instanceof Map);
+    assert.equal(typeof t.shell.cwd, 'string');
+    assert.equal(typeof t.shell.lastStatus, 'number');
+    assert.ok(t.shell.builtins instanceof Map);
+    assert.ok(t.shell.functions instanceof Map);
+  });
+
+  it('ships with default builtins pre-loaded', () => {
+    const t = _testShell();
+    for (const name of ['echo', 'cat', 'pwd', 'cd', 'ls', 'env', 'true', 'false', 'test', '[', ':', 'export', 'exit']) {
+      assert.ok(t.shell.builtins.has(name), `missing builtin ${name}`);
+    }
+  });
+
+  it('exec returns {exitCode}', async () => {
+    const t = _testShell();
+    const r = await t.shell.exec('echo hi');
+    assert.equal(r.exitCode, 0);
+    assert.equal(t.output(), 'hi\n');
+  });
+
+  it('env persists across exec calls', async () => {
+    const t = _testShell();
+    await t.shell.exec('x=value');
+    await t.shell.exec('echo $x');
+    assert.equal(t.output(), 'value\n');
+  });
+});
+
+describe('builtins — echo / true / false / : / exit', () => {
+  it(': is a no-op exit 0', async () => {
+    const t = _testShell();
+    const r = await t.shell.exec(':');
+    assert.equal(r.exitCode, 0);
+  });
+  it('exit with code', async () => {
+    const t = _testShell();
+    const r = await t.shell.exec('exit 7');
+    assert.equal(r.exitCode, 7);
+  });
+  it('exit stops subsequent commands', async () => {
+    const t = _testShell();
+    await t.shell.exec('echo before; exit 3; echo after');
+    assert.equal(t.output(), 'before\n');
+  });
+});
+
+describe('builtins — pwd / cd', () => {
+  it('pwd prints cwd', async () => {
+    const t = _testShell({ cwd: '/home' });
+    await t.shell.exec('pwd');
+    assert.equal(t.output(), '/home\n');
+  });
+  it('cd changes cwd', async () => {
+    const t = _testShell({ cwd: '/' });
+    await t.vfs.mkdir('/etc', { recursive: true });
+    await t.shell.exec('cd /etc; pwd');
+    assert.equal(t.output(), '/etc\n');
+  });
+  it('cd ~ goes to HOME', async () => {
+    const t = _testShell({ cwd: '/' });
+    await t.vfs.mkdir('/home', { recursive: true });
+    await t.shell.exec('cd ~; pwd');
+    assert.equal(t.output(), '/home\n');
+  });
+  it('cd to non-existent fails', async () => {
+    const t = _testShell({ cwd: '/' });
+    const r = await t.shell.exec('cd /nosuch');
+    assert.equal(r.exitCode, 1);
+    assert.match(t.errOutput(), /no such directory/);
+  });
+});
+
+describe('builtins — env / export', () => {
+  it('env lists current environment', async () => {
+    const t = _testShell({ env: { A: '1', B: '2' } });
+    await t.shell.exec('env');
+    const lines = t.output().trim().split('\n').sort();
+    assert.deepEqual(lines, ['A=1', 'B=2']);
+  });
+  it('export NAME=value adds to env', async () => {
+    const t = _testShell();
+    await t.shell.exec('export FOO=bar; echo $FOO');
+    assert.equal(t.output(), 'bar\n');
+  });
+});
+
+describe('builtins — cat', () => {
+  it('cat with no args echoes stdin', async () => {
+    const t = _testShell();
+    await t.shell.exec('echo hello | cat');
+    assert.equal(t.output(), 'hello\n');
+  });
+  it('cat reads files from VFS', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/data.txt', 'file content\n');
+    await t.shell.exec('cat /data.txt');
+    assert.equal(t.output(), 'file content\n');
+  });
+  it('cat missing file → exit 1, stderr message', async () => {
+    const t = _testShell();
+    const r = await t.shell.exec('cat /nosuch.txt');
+    assert.equal(r.exitCode, 1);
+    assert.match(t.errOutput(), /cat: .*nosuch/);
+  });
+});
+
+describe('builtins — ls', () => {
+  it('ls lists VFS directory entries', async () => {
+    const t = _testShell();
+    await t.vfs.mkdir('/dir', { recursive: true });
+    await t.vfs.writeFile('/dir/a.txt', 'a');
+    await t.vfs.writeFile('/dir/b.txt', 'b');
+    await t.shell.exec('ls /dir');
+    assert.equal(t.output(), 'a.txt\nb.txt\n');
+  });
+  it("ls -a includes dot files", async () => {
+    const t = _testShell();
+    await t.vfs.mkdir('/dir', { recursive: true });
+    await t.vfs.writeFile('/dir/.hidden', 'h');
+    await t.vfs.writeFile('/dir/visible', 'v');
+    await t.shell.exec('ls -a /dir');
+    const lines = t.output().trim().split('\n').sort();
+    assert.deepEqual(lines, ['.hidden', 'visible']);
+  });
+  it('ls -l includes file info', async () => {
+    const t = _testShell();
+    await t.vfs.mkdir('/dir', { recursive: true });
+    await t.vfs.writeFile('/dir/file.txt', 'hello world');
+    await t.shell.exec('ls -l /dir');
+    assert.match(t.output(), /file\.txt/);
+  });
+});
+
+describe('builtins — test / [', () => {
+  it('test -z empty / -n non-empty', async () => {
+    const t = _testShell();
+    assert.equal((await t.shell.exec('test -z ""')).exitCode, 0);
+    assert.equal((await t.shell.exec('test -z hi')).exitCode, 1);
+    assert.equal((await t.shell.exec('test -n hi')).exitCode, 0);
+    assert.equal((await t.shell.exec('test -n ""')).exitCode, 1);
+  });
+  it('[ A = B ] / != ]', async () => {
+    const t = _testShell();
+    assert.equal((await t.shell.exec('[ a = a ]')).exitCode, 0);
+    assert.equal((await t.shell.exec('[ a = b ]')).exitCode, 1);
+    assert.equal((await t.shell.exec('[ a != b ]')).exitCode, 0);
+  });
+  it('integer comparison -eq -lt -gt', async () => {
+    const t = _testShell();
+    assert.equal((await t.shell.exec('test 5 -eq 5')).exitCode, 0);
+    assert.equal((await t.shell.exec('test 5 -lt 10')).exitCode, 0);
+    assert.equal((await t.shell.exec('test 10 -gt 5')).exitCode, 0);
+    assert.equal((await t.shell.exec('test 5 -gt 10')).exitCode, 1);
+  });
+  it('file tests -e -f -d', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/x.txt', 'x');
+    await t.vfs.mkdir('/dir');
+    assert.equal((await t.shell.exec('test -e /x.txt')).exitCode, 0);
+    assert.equal((await t.shell.exec('test -f /x.txt')).exitCode, 0);
+    assert.equal((await t.shell.exec('test -d /x.txt')).exitCode, 1);
+    assert.equal((await t.shell.exec('test -d /dir')).exitCode, 0);
+    assert.equal((await t.shell.exec('test -e /nope')).exitCode, 1);
+  });
+  it('[ in a real conditional', async () => {
+    const t = _testShell();
+    await t.shell.exec('if [ 1 -eq 1 ]; then echo yes; fi');
+    assert.equal(t.output(), 'yes\n');
+  });
+});
+
+describe('builtins — redirects with VFS', () => {
+  it('echo > file writes through VFS', async () => {
+    const t = _testShell();
+    await t.shell.exec('echo content > /out.txt');
+    const text = await t.vfs.readFile('/out.txt', 'text');
+    assert.equal(text, 'content\n');
+  });
+  it('cat < file reads through VFS', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/in.txt', 'from-file');
+    await t.shell.exec('cat < /in.txt');
+    assert.equal(t.output(), 'from-file');
+  });
+  it('append >> on existing file', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/log.txt', 'first\n');
+    await t.shell.exec('echo second >> /log.txt');
+    const text = await t.vfs.readFile('/log.txt', 'text');
+    assert.equal(text, 'first\nsecond\n');
+  });
+});
+
+describe('builtins — composed script', () => {
+  it('write, then read back with pipeline', async () => {
+    const t = _testShell();
+    await t.shell.exec(`
+echo line1 > /file.txt
+echo line2 >> /file.txt
+echo line3 >> /file.txt
+cat /file.txt | cat | cat
+`);
+    assert.equal(t.output(), 'line1\nline2\nline3\n');
   });
 });
 

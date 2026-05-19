@@ -14,5 +14,55 @@ import { parseWordParts } from './word-parts.js';
 import { execute } from './executor.js';
 import { NODE } from './ast-nodes.js';
 import { createHeadlessAdapter } from './adapters/headless.js';
+import { defaultBuiltins } from './builtins.js';
 
-export { tokenize, parse, parseWordParts, execute, NODE, createHeadlessAdapter };
+// createShell({vfs, env, cwd, stdout, stderr, builtins, onCommand})
+//
+// Convenience factory that builds a long-lived shell context with the
+// default geas built-ins pre-loaded (echo / pwd / cd / env / cat / ls /
+// test / [ / true / false / : / export / exit). The returned object has:
+//
+//   .exec(source)      — parse + execute a script, return {exitCode,...}
+//   .env               — Map (mutable; survives across exec calls)
+//   .cwd               — string (mutable via cd builtin)
+//   .lastStatus        — number, $? after the most recent command
+//   .builtins          — Map (add/override entries before/between execs)
+//   .functions         — Map of user-defined functions (populated by `name()`)
+//
+// Caller-supplied stdout/stderr/onCommand/extra builtins overlay the
+// defaults. Pass a VFS instance to enable filesystem builtins + redirects.
+export function createShell(opts = {}) {
+  const ctx = {
+    vfs:        opts.vfs ?? null,
+    env:        opts.env instanceof Map ? opts.env : new Map(Object.entries(opts.env || {})),
+    cwd:        opts.cwd ?? '/',
+    stdin:      '',
+    stdout:     opts.stdout ?? (() => { throw new Error('createShell: stdout required'); }),
+    stderr:     opts.stderr ?? opts.stdout ?? (() => { throw new Error('createShell: stderr required'); }),
+    builtins:   _mergeBuiltins(opts.builtins),
+    onCommand:  opts.onCommand ?? (async () => 127),
+    functions:  new Map(),
+    lastStatus: 0,
+  };
+  return {
+    get env()        { return ctx.env; },
+    get cwd()        { return ctx.cwd; },
+    get lastStatus() { return ctx.lastStatus; },
+    get builtins()   { return ctx.builtins; },
+    get functions()  { return ctx.functions; },
+    async exec(source) {
+      const ast = parse(source);
+      return await execute(ast, ctx);
+    },
+  };
+}
+
+function _mergeBuiltins(extra) {
+  const base = defaultBuiltins();
+  if (!extra) return base;
+  const it = extra instanceof Map ? extra.entries() : Object.entries(extra);
+  for (const [k, v] of it) base.set(k, v);
+  return base;
+}
+
+export { tokenize, parse, parseWordParts, execute, NODE, createHeadlessAdapter, defaultBuiltins };
