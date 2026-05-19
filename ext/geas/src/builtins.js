@@ -65,6 +65,13 @@ export function defaultBuiltins() {
     cut:      _cut,
     tee:      _tee,
     xargs:    _xargs,
+    tr:       _tr,
+    // Disk / hash / encoding
+    du:       _du,
+    df:       _df,
+    base64:   _base64,
+    md5sum:   _md5sum,
+    sha256sum: _sha256sum,
   }));
 }
 
@@ -2321,6 +2328,371 @@ function _formatDate(d, fmt) {
 function _dayOfYear(d) {
   const start = new Date(d.getFullYear(), 0, 0);
   return Math.floor((d - start) / 86400000);
+}
+
+// ── tr — character translate / delete ──
+//
+// tr SET1 SET2        translate each SET1 char to the corresponding SET2 char
+// tr -d SET           delete every SET char from input
+// tr -s SET           squeeze runs of SET chars into one
+// tr -c SET1 SET2     complement (operate on chars NOT in SET1)
+//
+// SET supports character ranges via `-` (e.g. `a-z`, `0-9`) and POSIX
+// classes via `[:class:]` (alpha, digit, lower, upper, space, alnum,
+// punct, xdigit). Anything more elaborate (escapes, [=eq=]) is v0-future.
+async function _tr(argv, ctx) {
+  const { opts, positionals } = _bParseArgs(argv, {
+    d: { short: 'd' }, s: { short: 's' }, c: { short: 'c' },
+  });
+  if (positionals.length === 0) {
+    await ctx.stderr('tr: missing operand\n');
+    return 1;
+  }
+  let set1 = _trExpandSet(positionals[0]);
+  if (opts.c) {
+    // Complement: build the "set of chars NOT in set1" lazily via a predicate.
+    const inSet1 = new Set(set1);
+    set1 = null; // signal "complement mode" downstream
+    var inSet = (ch) => !inSet1.has(ch);
+  } else {
+    const s1 = new Set(set1);
+    var inSet = (ch) => s1.has(ch);
+  }
+  const text = await _bReadInput([], ctx);
+  let out = '';
+  if (opts.d) {
+    // Delete chars in set.
+    for (const ch of text) if (!inSet(ch)) out += ch;
+  } else if (positionals.length >= 2) {
+    // Translate set1 → set2.
+    const set2 = _trExpandSet(positionals[1]);
+    const last2 = set2[set2.length - 1] || '';
+    const set1Arr = set1 || []; // complement+translate uncommon; skip
+    const map = new Map();
+    if (set1Arr.length > 0) {
+      for (let k = 0; k < set1Arr.length; k++) {
+        map.set(set1Arr[k], set2[k] ?? last2);
+      }
+    }
+    for (const ch of text) {
+      if (inSet(ch)) {
+        // In complement mode, any out-of-set char maps to the last char of set2.
+        out += set1 ? (map.get(ch) ?? ch) : last2;
+      } else {
+        out += ch;
+      }
+    }
+  } else if (opts.s) {
+    // Squeeze runs of set chars.
+    let prev = '';
+    for (const ch of text) {
+      if (inSet(ch) && ch === prev) continue;
+      out += ch;
+      prev = ch;
+    }
+  } else {
+    await ctx.stderr('tr: need SET2 unless -d or -s\n');
+    return 1;
+  }
+  // Optional squeeze pass after translate.
+  if (opts.s && positionals.length >= 2 && !opts.d) {
+    let squeezed = '';
+    let prev = '';
+    const set2 = _trExpandSet(positionals[1]);
+    const sq = new Set(set2);
+    for (const ch of out) {
+      if (sq.has(ch) && ch === prev) continue;
+      squeezed += ch;
+      prev = ch;
+    }
+    out = squeezed;
+  }
+  await ctx.stdout(out);
+  return 0;
+}
+
+const _TR_CLASSES = {
+  alpha: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz',
+  alnum: 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789',
+  digit: '0123456789',
+  lower: 'abcdefghijklmnopqrstuvwxyz',
+  upper: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+  space: ' \t\n\r\v\f',
+  punct: '!"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~',
+  xdigit: '0123456789ABCDEFabcdef',
+};
+
+function _trExpandSet(spec) {
+  // Expand POSIX classes first, then ranges. Returns an array of chars.
+  let s = spec;
+  s = s.replace(/\[:(\w+):\]/g, (_, cls) => _TR_CLASSES[cls] || '');
+  const out = [];
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '\\' && i + 1 < s.length) {
+      // Common escapes.
+      const next = s[i + 1];
+      if (next === 'n') out.push('\n');
+      else if (next === 't') out.push('\t');
+      else if (next === 'r') out.push('\r');
+      else if (next === '\\') out.push('\\');
+      else out.push(next);
+      i++;
+      continue;
+    }
+    if (i + 2 < s.length && s[i + 1] === '-') {
+      // Range a-z.
+      const from = s.charCodeAt(i);
+      const to = s.charCodeAt(i + 2);
+      if (to >= from) {
+        for (let cc = from; cc <= to; cc++) out.push(String.fromCharCode(cc));
+        i += 2;
+        continue;
+      }
+    }
+    out.push(s[i]);
+  }
+  return out;
+}
+
+// ── du / df — disk usage ──
+//
+// du [-s] [-h] [PATH...]     total bytes per PATH (recursive); -s = summary
+// df [-h]                    per-mount usage; size from VFS where exposed
+//
+// We don't have real block sizes — just sum file sizes from stat. -h
+// (human) formats with K/M/G/T suffixes. df enumerates VFS mounts;
+// without a real "total" / "used" surface from the VFS, we just report
+// what we can walk.
+async function _du(argv, ctx) {
+  if (!ctx.vfs) { await ctx.stderr('du: no VFS configured\n'); return 1; }
+  const { opts, positionals } = _bParseArgs(argv, {
+    s: { short: 's' }, h: { short: 'h' },
+  });
+  const paths = positionals.length > 0 ? positionals : ['.'];
+  let anyError = 0;
+  for (const p of paths) {
+    try {
+      const abs = _bResolvePath(p, ctx);
+      const total = await _duWalk(ctx, abs, opts);
+      const size = opts.h ? _humanSize(total) : String(total);
+      await ctx.stdout(`${size.padEnd(8)}${p}\n`);
+    } catch (e) {
+      await ctx.stderr(`du: ${p}: ${e.message || 'cannot access'}\n`);
+      anyError = 1;
+    }
+  }
+  return anyError;
+}
+
+async function _duWalk(ctx, path, opts) {
+  const st = await ctx.vfs.stat(path);
+  if (st.type !== 'directory') return st.size ?? 0;
+  let total = 0;
+  let entries;
+  try { entries = await ctx.vfs.readdir(path); } catch { return 0; }
+  for (const e of entries) {
+    const name = typeof e === 'string' ? e : e.name;
+    const child = path.endsWith('/') ? path + name : path + '/' + name;
+    let cst;
+    try { cst = await ctx.vfs.stat(child); } catch { continue; }
+    if (cst.type === 'directory') {
+      const sub = await _duWalk(ctx, child, opts);
+      total += sub;
+      if (!opts.s) {
+        const sizeStr = opts.h ? _humanSize(sub) : String(sub);
+        await ctx.stdout(`${sizeStr.padEnd(8)}${child}\n`);
+      }
+    } else {
+      total += cst.size ?? 0;
+    }
+  }
+  return total;
+}
+
+async function _df(argv, ctx) {
+  if (!ctx.vfs) { await ctx.stderr('df: no VFS configured\n'); return 1; }
+  const { opts } = _bParseArgs(argv, { h: { short: 'h' } });
+  const mounts = (ctx.vfs._mounts && typeof ctx.vfs._mounts.entries === 'function')
+    ? [...ctx.vfs._mounts.entries()]
+    : [['/', null]];
+  await ctx.stdout('Mount     Used    \n');
+  for (const [path /*, backend */] of mounts) {
+    let used = 0;
+    try { used = await _duWalk(ctx, path, { s: true }); } catch { /* ignore */ }
+    const usedStr = opts.h ? _humanSize(used) : String(used);
+    await ctx.stdout(`${String(path).padEnd(9)} ${usedStr.padEnd(8)}\n`);
+  }
+  return 0;
+}
+
+function _humanSize(n) {
+  if (n < 1024) return `${n}`;
+  const units = ['K', 'M', 'G', 'T', 'P'];
+  let v = n / 1024;
+  let i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return (v < 10 ? v.toFixed(1) : Math.round(v)) + units[i];
+}
+
+// ── base64 / md5sum / sha256sum — encoding & hashing ──
+//
+// base64 [-d]           encode (default) or decode stdin/file
+// md5sum [FILE...]      MD5 hash via Web Crypto (when available; fallback
+//                       to a pure-JS minimal impl)
+// sha256sum [FILE...]   SHA-256 via Web Crypto (always-available in Node 16+
+//                       and modern browsers)
+async function _base64(argv, ctx) {
+  const { opts, positionals } = _bParseArgs(argv, { d: { short: 'd' } });
+  const text = await _bReadInput(positionals, ctx);
+  if (opts.d) {
+    // Decode.
+    let result;
+    try {
+      const stripped = text.replace(/\s+/g, '');
+      if (typeof atob === 'function') {
+        result = atob(stripped);
+      } else {
+        result = Buffer.from(stripped, 'base64').toString('binary');
+      }
+    } catch (e) {
+      await ctx.stderr(`base64: decode error: ${e.message}\n`);
+      return 1;
+    }
+    await ctx.stdout(result);
+    return 0;
+  }
+  // Encode.
+  let encoded;
+  if (typeof btoa === 'function') {
+    encoded = btoa(text);
+  } else {
+    encoded = Buffer.from(text, 'binary').toString('base64');
+  }
+  // Wrap at 76 chars per RFC; bash's base64 does this by default.
+  const lines = [];
+  for (let i = 0; i < encoded.length; i += 76) lines.push(encoded.slice(i, i + 76));
+  await ctx.stdout(lines.join('\n') + '\n');
+  return 0;
+}
+
+async function _md5sum(argv, ctx) {
+  return await _hashCmd('md5', argv, ctx);
+}
+
+async function _sha256sum(argv, ctx) {
+  return await _hashCmd('sha256', argv, ctx);
+}
+
+async function _hashCmd(algorithm, argv, ctx) {
+  // Multiple files: each line shows `<hex>  <name>`. Stdin: `<hex>  -`.
+  const files = argv.slice(1);
+  if (files.length === 0) {
+    const text = await _bReadInput([], ctx);
+    const hex = await _hashHex(algorithm, text);
+    await ctx.stdout(`${hex}  -\n`);
+    return 0;
+  }
+  let anyError = 0;
+  for (const f of files) {
+    try {
+      const text = await ctx.vfs.readFile(_bResolvePath(f, ctx), 'text');
+      const hex = await _hashHex(algorithm, text);
+      await ctx.stdout(`${hex}  ${f}\n`);
+    } catch (e) {
+      await ctx.stderr(`${algorithm}sum: ${f}: ${e.message || 'cannot read'}\n`);
+      anyError = 1;
+    }
+  }
+  return anyError;
+}
+
+async function _hashHex(algorithm, text) {
+  // Web Crypto: SHA-256 always works in modern Node + browsers. MD5
+  // isn't supported by Web Crypto (deprecated for security), so for
+  // md5 we use a pure-JS implementation inline. SHA-1 / SHA-512 would
+  // route to Web Crypto if added later.
+  if (algorithm === 'md5') return _md5Hex(text);
+  const algoName = algorithm === 'sha256' ? 'SHA-256'
+                 : algorithm === 'sha1'   ? 'SHA-1'
+                 : 'SHA-512';
+  const enc = new TextEncoder();
+  const buf = await crypto.subtle.digest(algoName, enc.encode(text));
+  const bytes = new Uint8Array(buf);
+  let hex = '';
+  for (const b of bytes) hex += b.toString(16).padStart(2, '0');
+  return hex;
+}
+
+// Minimal pure-JS MD5 — RFC 1321. Not cryptographically safe; we ship
+// it because md5sum is common in scripts as a checksum (not a cipher).
+function _md5Hex(text) {
+  // Convert string to UTF-8 bytes.
+  const enc = new TextEncoder();
+  const bytes = enc.encode(text);
+  const len = bytes.length;
+  // Pad: append 0x80, then zeros until length ≡ 56 mod 64, then 64-bit length.
+  const padLen = (len % 64 < 56 ? 56 : 120) - (len % 64);
+  const total = len + padLen + 8;
+  const buf = new Uint8Array(total);
+  buf.set(bytes, 0);
+  buf[len] = 0x80;
+  // Length in BITS, little-endian, 64 bits (high 32 bits zero — we won't
+  // hash >4GB strings).
+  const bitLen = len * 8;
+  buf[total - 8] = bitLen & 0xff;
+  buf[total - 7] = (bitLen >>> 8) & 0xff;
+  buf[total - 6] = (bitLen >>> 16) & 0xff;
+  buf[total - 5] = (bitLen >>> 24) & 0xff;
+  // Process 64-byte blocks.
+  let a = 0x67452301, b = 0xefcdab89, c = 0x98badcfe, d = 0x10325476;
+  const k = [
+    0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
+    0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821,
+    0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
+    0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed, 0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a,
+    0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c, 0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70,
+    0x289b7ec6, 0xeaa127fa, 0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665,
+    0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
+    0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391,
+  ];
+  const s = [
+    7,12,17,22, 7,12,17,22, 7,12,17,22, 7,12,17,22,
+    5, 9,14,20, 5, 9,14,20, 5, 9,14,20, 5, 9,14,20,
+    4,11,16,23, 4,11,16,23, 4,11,16,23, 4,11,16,23,
+    6,10,15,21, 6,10,15,21, 6,10,15,21, 6,10,15,21,
+  ];
+  const rotl = (x, n) => (x << n) | (x >>> (32 - n));
+  const F = (x, y, z) => (x & y) | (~x & z);
+  const G = (x, y, z) => (x & z) | (y & ~z);
+  const H = (x, y, z) => x ^ y ^ z;
+  const I = (x, y, z) => y ^ (x | ~z);
+  for (let i = 0; i < total; i += 64) {
+    const m = new Array(16);
+    for (let j = 0; j < 16; j++) {
+      const off = i + j * 4;
+      m[j] = (buf[off]) | (buf[off + 1] << 8) | (buf[off + 2] << 16) | (buf[off + 3] << 24);
+    }
+    let A = a, B = b, C = c, D = d;
+    for (let j = 0; j < 64; j++) {
+      let f, g;
+      if      (j < 16) { f = F(B, C, D); g = j; }
+      else if (j < 32) { f = G(B, C, D); g = (5 * j + 1) % 16; }
+      else if (j < 48) { f = H(B, C, D); g = (3 * j + 5) % 16; }
+      else             { f = I(B, C, D); g = (7 * j) % 16; }
+      const tmp = D;
+      D = C;
+      C = B;
+      B = (B + rotl((A + f + k[j] + m[g]) | 0, s[j])) | 0;
+      A = tmp;
+    }
+    a = (a + A) | 0; b = (b + B) | 0; c = (c + C) | 0; d = (d + D) | 0;
+  }
+  const toHexLE = (n) => {
+    let h = '';
+    for (let i = 0; i < 4; i++) h += ((n >>> (i * 8)) & 0xff).toString(16).padStart(2, '0');
+    return h;
+  };
+  return toHexLE(a) + toHexLE(b) + toHexLE(c) + toHexLE(d);
 }
 
 // xargs: build commands from stdin tokens. v0 supports -n (batch size)

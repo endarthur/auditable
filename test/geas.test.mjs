@@ -2919,6 +2919,170 @@ describe('getopts', () => {
   });
 });
 
+// ── stage 18: tr / du / df / base64 / md5sum / sha256sum / ** glob ──
+
+describe('tr', () => {
+  it('translates a single char', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo hello | tr l L\n');
+    assert.equal(output(), 'heLLo\n');
+  });
+
+  it('translates a range to uppercase', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo hello | tr a-z A-Z\n');
+    assert.equal(output(), 'HELLO\n');
+  });
+
+  it('-d deletes chars', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo hello | tr -d l\n');
+    assert.equal(output(), 'heo\n');
+  });
+
+  it('-d with class', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo "abc 123" | tr -d "[:digit:]"\n');
+    assert.equal(output(), 'abc \n');
+  });
+
+  it('-s squeezes runs', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo aaabbbcccc | tr -s abc\n');
+    assert.equal(output(), 'abc\n');
+  });
+
+  it('-c (complement) deletes chars NOT in set', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo "abc123" | tr -cd "[:digit:]"\n');
+    assert.equal(output(), '123');
+  });
+
+  it('class [:upper:] works', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo Hello | tr "[:upper:]" "[:lower:]"\n');
+    assert.equal(output(), 'hello\n');
+  });
+});
+
+describe('du', () => {
+  it('sums sizes recursively', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.mkdir('/p/sub', { recursive: true });
+    await vfs.writeFile('/p/a', 'AAAA');       // 4 bytes
+    await vfs.writeFile('/p/sub/b', 'BBBBBBB'); // 7 bytes
+    await shell.exec('du -s /p\n');
+    assert.match(output(), /^11\s+\/p\n/);
+  });
+
+  it('-h prints human-readable sizes', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.mkdir('/p', { recursive: true });
+    await vfs.writeFile('/p/big', 'x'.repeat(2048));
+    await shell.exec('du -sh /p\n');
+    assert.match(output(), /2\.0K\s+\/p/);
+  });
+
+  it('without -s emits subdirectory lines too', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.mkdir('/p/sub', { recursive: true });
+    await vfs.writeFile('/p/sub/x', 'hello');
+    await shell.exec('du /p\n');
+    // Both /p/sub and /p should appear.
+    assert.match(output(), /\/p\/sub/);
+    assert.match(output(), /\/p\n/);
+  });
+});
+
+describe('df', () => {
+  it('lists mounts and their sizes', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.writeFile('/f', 'hello');
+    await shell.exec('df\n');
+    // First line is the header. Second is the / mount.
+    assert.match(output(), /^Mount/);
+    assert.match(output(), /\/\s+5/);
+  });
+});
+
+describe('base64', () => {
+  it('encodes', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('printf hello | base64\n');
+    // 'hello' → 'aGVsbG8='
+    assert.match(output(), /aGVsbG8=/);
+  });
+
+  it('-d decodes', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo aGVsbG8= | base64 -d\n');
+    assert.equal(output(), 'hello');
+  });
+
+  it('roundtrips', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('printf "GCU" | base64 | base64 -d\n');
+    assert.equal(output(), 'GCU');
+  });
+
+  it('encodes file content', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.writeFile('/f', 'world');
+    await shell.exec('base64 /f\n');
+    assert.match(output(), /d29ybGQ=/);
+  });
+});
+
+describe('md5sum / sha256sum', () => {
+  it('md5sum hashes stdin', async () => {
+    const { shell, output } = _testShell();
+    // md5("hello") = 5d41402abc4b2a76b9719d911017c592
+    await shell.exec('printf hello | md5sum\n');
+    assert.match(output(), /^5d41402abc4b2a76b9719d911017c592\s+-/);
+  });
+
+  it('sha256sum hashes stdin', async () => {
+    const { shell, output } = _testShell();
+    // sha256("hello") = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+    await shell.exec('printf hello | sha256sum\n');
+    assert.match(output(), /^2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\s+-/);
+  });
+
+  it('md5sum hashes files with the filename in the second column', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.writeFile('/f.txt', 'hello');
+    await shell.exec('md5sum /f.txt\n');
+    assert.match(output(), /^5d41402abc4b2a76b9719d911017c592\s+\/f\.txt/);
+  });
+
+  it('hash composes with cut for use in scripts', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('printf hello | sha256sum | cut -d " " -f 1\n');
+    // Just the hex, no '  -'
+    const hex = output().trim();
+    assert.equal(hex, '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824');
+  });
+});
+
+describe('** recursive glob', () => {
+  it('** matches files at any depth via vfs.glob', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.mkdir('/p/a/b/c', { recursive: true });
+    await vfs.writeFile('/p/x.txt', '');
+    await vfs.writeFile('/p/a/y.txt', '');
+    await vfs.writeFile('/p/a/b/z.txt', '');
+    await vfs.writeFile('/p/a/b/c/w.txt', '');
+    // Use ls + for to surface what the glob expands to.
+    await shell.exec('for f in /p/**/*.txt; do echo $f; done\n');
+    const lines = output().split('\n').filter(Boolean).sort();
+    // Should hit at least the deep file and the surface one.
+    assert.ok(lines.some(l => l.endsWith('/p/x.txt')) || lines.some(l => l.endsWith('/x.txt')),
+      `expected /p/x.txt in glob results: ${JSON.stringify(lines)}`);
+    assert.ok(lines.some(l => l.endsWith('/c/w.txt')),
+      `expected deep /p/a/b/c/w.txt in results: ${JSON.stringify(lines)}`);
+  });
+});
+
 // ── stage 14: cp / mv / stat ──
 
 // ── stage 15: interactive read plumbing ──
