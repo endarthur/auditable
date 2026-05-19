@@ -996,6 +996,111 @@ describe('executor — assignments', () => {
   });
 });
 
+describe('executor — field splitting (IFS)', () => {
+  it('unquoted $VAR splits on whitespace', async () => {
+    const r = await run('echo $list', { env: { list: 'a b c' } });
+    // echo sees three argv entries; joins with single space
+    assert.equal(r.stdout, 'a b c\n');
+  });
+
+  it('quoted "$VAR" stays one field', async () => {
+    // Use a builtin that counts argv to disambiguate.
+    const r = await run('count "$list"', {
+      env: { list: 'a b c' },
+      builtins: { count: async (argv, ctx) => { await ctx.stdout(String(argv.length - 1)); return 0; } },
+    });
+    assert.equal(r.stdout, '1');
+  });
+
+  it('unquoted $VAR yields multiple argv entries', async () => {
+    const r = await run('count $list', {
+      env: { list: 'a b c' },
+      builtins: { count: async (argv, ctx) => { await ctx.stdout(String(argv.length - 1)); return 0; } },
+    });
+    assert.equal(r.stdout, '3');
+  });
+
+  it('multiple whitespace runs collapse', async () => {
+    const r = await run('count $x', {
+      env: { x: '  a   b\tc  ' },
+      builtins: { count: async (argv, ctx) => { await ctx.stdout(String(argv.length - 1)); return 0; } },
+    });
+    assert.equal(r.stdout, '3');
+  });
+
+  it('unquoted $EMPTY produces no field', async () => {
+    const r = await run('count $missing one', {
+      builtins: { count: async (argv, ctx) => { await ctx.stdout(argv.slice(1).join('|')); return 0; } },
+    });
+    assert.equal(r.stdout, 'one');
+  });
+
+  it('quoted "$EMPTY" produces one empty field', async () => {
+    const r = await run('count "$missing" one', {
+      builtins: { count: async (argv, ctx) => { await ctx.stdout(argv.slice(1).join('|')); return 0; } },
+    });
+    assert.equal(r.stdout, '|one');
+  });
+
+  it('IFS=":" splits on colons', async () => {
+    const r = await run('count $path', {
+      env: { IFS: ':', path: 'a:b:c' },
+      builtins: { count: async (argv, ctx) => { await ctx.stdout(argv.slice(1).join('|')); return 0; } },
+    });
+    assert.equal(r.stdout, 'a|b|c');
+  });
+
+  it('for-loop iterates expanded fields', async () => {
+    const r = await run('for x in $list; do echo $x; done', { env: { list: 'a b c' } });
+    assert.equal(r.stdout, 'a\nb\nc\n');
+  });
+});
+
+describe('executor — globbing', () => {
+  // These need a VFS — use the _testShell harness defined below.
+  it('* expands matching files in the cwd', async () => {
+    const t = _testShell({ cwd: '/' });
+    await t.vfs.mkdir('/dir', { recursive: true });
+    await t.vfs.writeFile('/dir/a.txt', 'a');
+    await t.vfs.writeFile('/dir/b.txt', 'b');
+    await t.vfs.writeFile('/dir/c.csv', 'c');
+    await t.shell.exec('echo /dir/*.txt');
+    assert.equal(t.output(), '/dir/a.txt /dir/b.txt\n');
+  });
+
+  it('no-match glob stays literal (POSIX)', async () => {
+    const t = _testShell({ cwd: '/' });
+    await t.shell.exec('echo /nothing/*.csv');
+    assert.equal(t.output(), '/nothing/*.csv\n');
+  });
+
+  it('relative glob uses cwd', async () => {
+    const t = _testShell({ cwd: '/data' });
+    await t.vfs.mkdir('/data', { recursive: true });
+    await t.vfs.writeFile('/data/x.txt', 'x');
+    await t.vfs.writeFile('/data/y.txt', 'y');
+    await t.shell.exec('echo *.txt');
+    assert.equal(t.output(), 'x.txt y.txt\n');
+  });
+
+  it('quoted glob does NOT expand', async () => {
+    const t = _testShell({ cwd: '/' });
+    await t.vfs.mkdir('/dir', { recursive: true });
+    await t.vfs.writeFile('/dir/a.txt', 'a');
+    await t.shell.exec('echo "/dir/*.txt"');
+    assert.equal(t.output(), '/dir/*.txt\n');
+  });
+
+  it('for-loop over glob iterates each match', async () => {
+    const t = _testShell({ cwd: '/' });
+    await t.vfs.mkdir('/d', { recursive: true });
+    await t.vfs.writeFile('/d/1.txt', '1');
+    await t.vfs.writeFile('/d/2.txt', '2');
+    await t.shell.exec('for f in /d/*.txt; do echo $f; done');
+    assert.equal(t.output(), '/d/1.txt\n/d/2.txt\n');
+  });
+});
+
 describe('executor — here-docs', () => {
   it('<<EOF body is fed as stdin', async () => {
     const r = await run('cat <<EOF\nhello\nworld\nEOF\n');

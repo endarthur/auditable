@@ -1646,12 +1646,18 @@ async function _execSimpleCommand(node, ctx) {
     await _applyRedirects(node.redirects, subCtx);
   }
 
-  // 3. Expand command name + args.
+  // 3. Expand command name + args. Argv expansion (unlike redirect targets)
+  //    is subject to field splitting on $IFS and pathname (glob) expansion,
+  //    so a single Word can produce zero, one, or many argv entries.
   const argv = [];
   for (const w of node.words) {
-    const expanded = await _expandWord(w, subCtx);
-    argv.push(expanded);
+    const fields = await _expandWordToFields(w, subCtx);
+    for (const f of fields) argv.push(f);
   }
+  // POSIX: if all words expand to nothing (e.g. `$EMPTY $UNDEFINED`),
+  // there's no command to run — exit 0 (assignments + redirects above
+  // are the side effect).
+  if (argv.length === 0) return { exitCode: 0 };
   const cmdName = argv[0];
 
   // 4. Dispatch.
@@ -1700,9 +1706,17 @@ async function _execFor(node, ctx) {
   // POSIX: `for x` (no `in`) iterates over "$@" — the positional params.
   // v0 doesn't have positional params plumbed through; treat as no-op
   // iteration in that case.
-  const values = node.words
-    ? await Promise.all(node.words.map(w => _expandWord(w, ctx)))
-    : [];
+  //
+  // Field expansion: each word can yield multiple values via $list-splitting
+  // or glob expansion (`for f in *.csv`), so flatten with the splitting
+  // surface rather than the single-string one.
+  const values = [];
+  if (node.words) {
+    for (const w of node.words) {
+      const fields = await _expandWordToFields(w, ctx);
+      for (const f of fields) values.push(f);
+    }
+  }
   let exitCode = 0;
   for (const v of values) {
     ctx.env.set(node.name, v);
@@ -1902,6 +1916,17 @@ function _resolvePath(p, ctx) {
 }
 
 // ── word expansion ──
+//
+// Two surfaces:
+//   _expandWord(word, ctx) → string
+//     Concatenates parts, NO field splitting or globbing. Used for
+//     redirect targets, case patterns, heredoc delimiters — anywhere
+//     POSIX says expansion produces a single field.
+//
+//   _expandWordToFields(word, ctx) → string[]
+//     Full POSIX expansion: substitution → field splitting on $IFS →
+//     pathname expansion (glob). Used for argv positions (command name
+//     + args) and `for ... in` lists, where one word can yield 0-N fields.
 
 async function _expandWord(word, ctx) {
   if (!word || !word.parts) return word?.value ?? '';
@@ -1910,6 +1935,162 @@ async function _expandWord(word, ctx) {
     out += await _expandPart(part, ctx);
   }
   return out;
+}
+
+// Field-aware expansion. Walks parts producing "fragments" — pairs of
+// (text, splittable?) — then runs IFS-based field splitting only at
+// splittable boundaries. Literal/quoted text never splits, even if it
+// contains spaces. Finally glob-expands each resulting field against
+// ctx.vfs when the field contains pattern metacharacters.
+async function _expandWordToFields(word, ctx) {
+  if (!word || !word.parts) {
+    return word?.value !== undefined ? [word.value] : [];
+  }
+  const frags = [];
+  for (const part of word.parts) await _expandPartToFrags(part, ctx, frags, /*inQuote*/ false);
+  // Pair each field with a "had any quoted contribution" flag so we know
+  // whether to attempt glob expansion. POSIX: glob chars introduced via
+  // quoted text are LITERAL (`"/a/*.txt"` doesn't expand). v0 simplifies
+  // to per-field rather than per-character — if any contributing fragment
+  // was quoted, skip globbing for that whole field. The common cases
+  // (`*.txt` unquoted, `"/dir/*.txt"` quoted) work; the mixed case
+  // (`"/dir"/*.txt`) errs on the safe side of not-globbing.
+  const fieldsWithMeta = _splitFieldsWithMeta(frags, _getIFS(ctx));
+  if (!ctx.vfs) return fieldsWithMeta.map(f => f.text);
+  const out = [];
+  for (const f of fieldsWithMeta) {
+    if (f.anyQuoted || !_hasGlobChars(f.text)) { out.push(f.text); continue; }
+    const matches = await _globExpand(f.text, ctx);
+    if (matches.length === 0) out.push(f.text);
+    else for (const m of matches) out.push(m);
+  }
+  return out;
+}
+
+// Fragment shape: { t: text, s: splittable, q: quoted-source }
+// - s (splittable): true iff IFS-splitting should happen across this frag's chars
+// - q (quoted-source): true iff this frag contributed by a quoted (dq/sq/escape)
+//                     source; used downstream to suppress globbing on the
+//                     resulting field.
+async function _expandPartToFrags(part, ctx, frags, inQuote) {
+  switch (part.kind) {
+    case 'lit':    frags.push({ t: part.value, s: false, q: inQuote });            return;
+    case 'sq':     frags.push({ t: part.value, s: false, q: true });               return;
+    case 'escape': frags.push({ t: part.value, s: false, q: true });               return;
+    case 'dq': {
+      // Everything inside dq is quoted + non-splittable. Empty `""` still
+      // contributes a sentinel frag so `cat ""` keeps its empty argv slot.
+      const before = frags.length;
+      for (const p of part.parts) await _expandPartToFrags(p, ctx, frags, /*inQuote*/ true);
+      if (frags.length === before) frags.push({ t: '', s: false, q: true });
+      return;
+    }
+    case 'var':    frags.push({ t: _lookupVar(part.name, ctx),        s: !inQuote, q: inQuote }); return;
+    case 'param':  frags.push({ t: await _expandParam(part, ctx),     s: !inQuote, q: inQuote }); return;
+    case 'cmd':    frags.push({ t: await _runCmdSub(part.body, ctx),  s: !inQuote, q: inQuote }); return;
+    case 'arith':  frags.push({ t: _evalArith(part.body, ctx),        s: !inQuote, q: inQuote }); return;
+  }
+}
+
+// Field-split fragments on IFS. Whitespace IFS chars (' ', '\t', '\n')
+// are POSIX "whitespace IFS" — runs of them treat as one separator and
+// leading/trailing runs are stripped. Non-whitespace IFS chars each
+// separate one field (allowing empty fields). For v0 we honour both.
+// Variant that returns [{text, anyQuoted}] so the caller knows whether to
+// glob-expand each field. Per-field, anyQuoted is the OR of contributing
+// fragments' q flag — once a quoted source has touched the field, glob
+// chars in that field are treated as literal.
+function _splitFieldsWithMeta(frags, ifs) {
+  if (frags.length === 0) return [];
+  // Build a marker-tagged string: '' marks where a splittable run
+  // began, '' where it ended. Then walk, splitting only between
+  // markers' contents on IFS chars.
+  //
+  // Simpler approach: produce fields by streaming. Maintain `cur` string
+  // accumulator + emit when a splittable fragment yields an IFS char that
+  // closes the current field.
+  const wsIFS = new Set();
+  const otherIFS = new Set();
+  for (const c of ifs) {
+    if (c === ' ' || c === '\t' || c === '\n') wsIFS.add(c);
+    else otherIFS.add(c);
+  }
+  const out = [];
+  let cur = '';
+  let curAnyQuoted = false;
+  let curHasContent = false;
+  let seenSplittable = false;
+  let pendingWsBoundary = false;
+  const emit = () => {
+    out.push({ text: cur, anyQuoted: curAnyQuoted });
+    cur = ''; curAnyQuoted = false; curHasContent = false;
+  };
+  for (const frag of frags) {
+    if (!frag.s) {
+      if (pendingWsBoundary && curHasContent) emit();
+      pendingWsBoundary = false;
+      cur += frag.t;
+      if (frag.t.length > 0) curHasContent = true;
+      if (frag.q) curAnyQuoted = true;
+      continue;
+    }
+    seenSplittable = true;
+    for (const ch of frag.t) {
+      if (wsIFS.has(ch)) {
+        if (curHasContent) pendingWsBoundary = true;
+        continue;
+      }
+      if (otherIFS.has(ch)) {
+        if (curHasContent || !pendingWsBoundary) emit();
+        else { cur = ''; curAnyQuoted = false; curHasContent = false; }
+        pendingWsBoundary = false;
+        continue;
+      }
+      if (pendingWsBoundary && curHasContent) emit();
+      pendingWsBoundary = false;
+      cur += ch;
+      curHasContent = true;
+      // splittable frag → unquoted-sourced; do NOT set curAnyQuoted
+    }
+  }
+  if (curHasContent) emit();
+  // Edge case (same as before): a Word with only non-splittable empty
+  // frags (e.g. `""`) must still produce one empty field.
+  if (out.length === 0 && !seenSplittable) {
+    return [{ text: cur, anyQuoted: curAnyQuoted }];
+  }
+  return out;
+}
+
+function _getIFS(ctx) {
+  return ctx.env.get('IFS') ?? ' \t\n';
+}
+
+// ── pathname expansion (glob) ──
+
+function _hasGlobChars(s) {
+  return /[*?\[]/.test(s);
+}
+
+async function _globExpand(pattern, ctx) {
+  // VFS.glob handles absolute patterns natively. For relative, resolve
+  // against ctx.cwd first, then strip the cwd prefix back off the results
+  // so the returned fields stay relative — matching shell convention.
+  const isRel = !pattern.startsWith('/');
+  const fullPattern = isRel
+    ? (ctx.cwd.endsWith('/') ? ctx.cwd : ctx.cwd + '/') + pattern
+    : pattern;
+  let matches = [];
+  try {
+    matches = await ctx.vfs.glob(fullPattern);
+  } catch {
+    return [];
+  }
+  if (isRel) {
+    const prefix = ctx.cwd.endsWith('/') ? ctx.cwd : ctx.cwd + '/';
+    matches = matches.map(p => p.startsWith(prefix) ? p.slice(prefix.length) : p);
+  }
+  return matches.sort();
 }
 
 async function _expandPart(part, ctx) {
