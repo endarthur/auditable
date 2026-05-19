@@ -1855,8 +1855,22 @@ async function _execPipeline(node, ctx) {
     const isLast  = i === stages.length - 1;
     const inQueue  = isFirst ? null : queues[i - 1];
     const outQueue = isLast  ? null : queues[i];
+    // POSIX: each pipeline stage runs in a subshell-like environment.
+    // Clone the mutable containers (env, functions, options, positional)
+    // so a stage's `cd` / `FOO=bar` / `set -e` / `set --` mutations stay
+    // inside that stage instead of leaking sideways into siblings or up
+    // into the parent. Local frames reset too — `local NAME` inside a
+    // pipeline stage shadowed-binding mechanics don't make sense
+    // outside an enclosing function, and we're starting a fresh nesting.
     const subCtx = {
       ...ctx,
+      env:        new Map(ctx.env),
+      functions:  new Map(ctx.functions),
+      options:    { ...ctx.options },
+      positional: [...(ctx.positional || [])],
+      _localFrames:  [],
+      _inCondition:  false,
+      _redirectFlush: null,
       stdin: inQueue ?? ctx.stdin,
       stdout: isLast ? ctx.stdout : async (value) => {
         await outQueue.push(value);
@@ -1984,6 +1998,14 @@ async function _execSimpleCommand(node, ctx) {
   // are the side effect).
   if (argv.length === 0) return { exitCode: 0 };
   const cmdName = argv[0];
+
+  // 3b. xtrace (`set -x`). Print the fully-expanded command line to
+  // stderr before dispatch, prefixed by $PS4 (default '+ '). POSIX
+  // doesn't trace compound constructs in v0 — only simple commands.
+  if (subCtx.options && subCtx.options.xtrace) {
+    const ps4 = subCtx.env.get('PS4') || '+ ';
+    try { await subCtx.stderr(ps4 + argv.join(' ') + '\n'); } catch { /* ignore */ }
+  }
 
   // 4. Dispatch.
   let exitCode = 127;

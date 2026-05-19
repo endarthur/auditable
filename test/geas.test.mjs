@@ -2693,6 +2693,78 @@ describe('plot', () => {
   });
 });
 
+// ── stage 16: per-stage env isolation + xtrace ──
+
+describe('pipeline subshell isolation', () => {
+  it('cd in a pipeline stage does not change parent cwd', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.mkdir('/elsewhere', { recursive: true });
+    await shell.exec('cd /elsewhere | true\npwd\n');
+    assert.equal(output(), '/\n');
+  });
+
+  it('variable assignment in a pipeline stage does not leak', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('X=outer\necho start | { X=changed; cat; }\necho got=$X\n');
+    assert.equal(output(), 'start\ngot=outer\n');
+  });
+
+  it('set -e inside a pipeline stage does not enable errexit outside', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('(set -e) | true\nfalse\necho after\n');
+    assert.equal(output(), 'after\n');
+  });
+
+  it('positional mutations in a pipeline stage do not leak', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('set -- a b c\necho hi | { set -- z; echo inside=$1; }\necho outside=$1\n');
+    assert.equal(output(), 'inside=z\noutside=a\n');
+  });
+
+  it('parent env is visible inside the stage (clone, not erase)', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('FOO=bar\necho hi | { echo got=$FOO; }\n');
+    assert.equal(output(), 'got=bar\n');
+  });
+});
+
+describe('set -x (xtrace)', () => {
+  it('prints expanded commands to stderr', async () => {
+    const { shell, errOutput } = _testShell();
+    await shell.exec('set -x\necho hello\n');
+    assert.match(errOutput(), /\+ echo hello/);
+  });
+
+  it('shows the values after expansion, not the source', async () => {
+    const { shell, errOutput } = _testShell();
+    await shell.exec('set -x\nname=alice\necho hi $name\n');
+    // After expansion, $name → alice.
+    assert.match(errOutput(), /\+ echo hi alice/);
+  });
+
+  it('respects $PS4 for the prefix', async () => {
+    const { shell, errOutput } = _testShell();
+    await shell.exec('PS4="DEBUG: "\nset -x\necho marker\n');
+    assert.match(errOutput(), /DEBUG: echo marker/);
+  });
+
+  it('set +x turns tracing off', async () => {
+    const { shell, errOutput } = _testShell();
+    await shell.exec('set -x\necho on\nset +x\necho off\n');
+    // The "set +x" line itself traces, but subsequent "echo off" should not.
+    const errs = errOutput();
+    assert.match(errs, /\+ echo on/);
+    assert.match(errs, /\+ set \+x/);
+    assert.ok(!errs.includes('+ echo off'), 'echo off should NOT be traced');
+  });
+
+  it('tracing does not pollute stdout', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('set -x\necho stdout-only\n');
+    assert.equal(output(), 'stdout-only\n');
+  });
+});
+
 // ── stage 14: cp / mv / stat ──
 
 // ── stage 15: interactive read plumbing ──
