@@ -102,8 +102,12 @@ export function mkRedirect(fd, op, target, pos) {
   return { type: NODE.REDIRECT, fd, op, target, pos };
 }
 
-export function mkWord(value, pos) {
-  // Opaque string value for v0. The lexer preserves quoting so the executor
-  // can later decide expansion semantics; the parser doesn't introspect.
-  return { type: NODE.WORD, value, pos };
+export function mkWord(value, pos, parts) {
+  // `value` is the raw lexer text (preserved verbatim — quotes, expansions,
+  // escapes all intact for round-trip / error reporting).
+  // `parts` is the structured decomposition for the executor — array of
+  // shapes documented in word-parts.js. Parser callers should pass parts
+  // from `parseWordParts(value)`; older callers can omit and get parts
+  // computed lazily on first access.
+  return { type: NODE.WORD, value, parts: parts ?? null, pos };
 }

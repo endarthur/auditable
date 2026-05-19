@@ -35,6 +35,14 @@ import {
   mkAssignment, mkRedirect, mkWord,
 } from './ast-nodes.js';
 import { tokenize } from './lexer.js';
+import { parseWordParts } from './word-parts.js';
+
+// All parser-side Word constructions go through _word so the structured
+// parts get computed once at parse time. mkWord (in ast-nodes.js) accepts
+// an optional `parts` arg and uses it verbatim when provided.
+function _word(value, pos) {
+  return mkWord(value, pos, parseWordParts(value));
+}
 
 // Reserved words and word-operators recognised at command position.
 const COMPOUND_START_WORDS = new Set(['if', 'for', 'while', 'until', 'case', '{']);
@@ -333,7 +341,7 @@ function parseSimpleCommand(ctx) {
     }
     if (_wordIsAssignment(t)) {
       const m = t.value.match(_ASSIGN_RE);
-      assignments.push(mkAssignment(m[1], mkWord(m[2], t.pos), t.pos));
+      assignments.push(mkAssignment(m[1], _word(m[2], t.pos), t.pos));
       _consume(ctx);
       continue;
     }
@@ -343,7 +351,7 @@ function parseSimpleCommand(ctx) {
   // Command name + suffix. POSIX rule 7b: after the command name, subsequent
   // tokens that look like `NAME=value` are arguments, not assignments.
   if (_at(ctx, 'WORD')) {
-    words.push(mkWord(_consume(ctx).value, ctx.tokens[ctx.i - 1].pos));
+    words.push(_word(_consume(ctx).value, ctx.tokens[ctx.i - 1].pos));
     while (true) {
       const t = ctx.tokens[ctx.i];
       if (!t) break;
@@ -359,7 +367,7 @@ function parseSimpleCommand(ctx) {
         // arg, not a do-group terminator. The enclosing list's call to
         // _canStartCommand handles keyword-as-terminator at the right time
         // (when deciding whether to start the next command in the list).
-        words.push(mkWord(t.value, t.pos));
+        words.push(_word(t.value, t.pos));
         _consume(ctx);
         continue;
       }
@@ -389,7 +397,7 @@ function parseRedirect(ctx) {
   if (targetTok.type !== 'WORD') {
     throw new ParseError(`expected redirection target word`, targetTok);
   }
-  const redir = mkRedirect(fd, opTok.value, mkWord(targetTok.value, targetTok.pos),
+  const redir = mkRedirect(fd, opTok.value, _word(targetTok.value, targetTok.pos),
                            { start: startPos, end: targetTok.pos.end });
   // Here-doc redirects expect a body to be attached when the next NEWLINE
   // fires (the lexer queues bodies in declaration order and emits them just
@@ -484,7 +492,7 @@ function parseFor(ctx) {
     words = [];
     while (_at(ctx, 'WORD') && !_isListTerminatorKeyword(ctx) && !_atKeyword(ctx, 'do')) {
       const w = _consume(ctx);
-      words.push(mkWord(w.value, w.pos));
+      words.push(_word(w.value, w.pos));
     }
     // Optional ; or newline before do
     if (_at(ctx, 'OPERATOR', ';')) _consume(ctx);
@@ -540,7 +548,7 @@ function parseCase(ctx) {
   const startPos = ctx.tokens[ctx.i].pos.start;
   _expectKeyword(ctx, 'case');
   const wTok = _expect(ctx, 'WORD');
-  const word = mkWord(wTok.value, wTok.pos);
+  const word = _word(wTok.value, wTok.pos);
   _skipNL(ctx);
   _expectKeyword(ctx, 'in');
   _skipNL(ctx);
@@ -556,11 +564,11 @@ function parseCase(ctx) {
       throw new ParseError('expected case pattern', ctx.tokens[ctx.i]);
     }
     const p0 = _consume(ctx);
-    patterns.push(mkWord(p0.value, p0.pos));
+    patterns.push(_word(p0.value, p0.pos));
     while (_at(ctx, 'OPERATOR', '|')) {
       _consume(ctx);
       const pn = _expect(ctx, 'WORD');
-      patterns.push(mkWord(pn.value, pn.pos));
+      patterns.push(_word(pn.value, pn.pos));
     }
     _expect(ctx, 'OPERATOR', ')');
     _skipNL(ctx);

@@ -10,7 +10,8 @@
 
 import { tokenize } from './lexer.js';
 import { parse } from './parser.js';
+import { parseWordParts } from './word-parts.js';
 import { NODE } from './ast-nodes.js';
 import { createHeadlessAdapter } from './adapters/headless.js';
 
-export { tokenize, parse, NODE, createHeadlessAdapter };
+export { tokenize, parse, parseWordParts, NODE, createHeadlessAdapter };

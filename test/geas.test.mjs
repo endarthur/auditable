@@ -6,6 +6,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { tokenize } from '../ext/geas/src/lexer.js';
 import { parse } from '../ext/geas/src/parser.js';
+import { parseWordParts } from '../ext/geas/src/word-parts.js';
 import { NODE } from '../ext/geas/src/ast-nodes.js';
 import { createHeadlessAdapter } from '../ext/geas/src/adapters/headless.js';
 
@@ -730,6 +731,206 @@ describe('headless adapter — input + resize', () => {
   it('default size is 80x24', () => {
     const t = createHeadlessAdapter();
     assert.deepEqual(t.size(), { cols: 80, rows: 24 });
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+// WORD PARTS (structured decomposition)
+// ══════════════════════════════════════════════════════════
+
+describe('word-parts — literals', () => {
+  it('plain literal', () => {
+    const p = parseWordParts('hello');
+    assert.deepEqual(p, [{ kind: 'lit', value: 'hello' }]);
+  });
+
+  it('empty string', () => {
+    assert.deepEqual(parseWordParts(''), []);
+  });
+
+  it('backslash escape becomes an escape part', () => {
+    const p = parseWordParts('a\\$b');
+    assert.deepEqual(p, [
+      { kind: 'lit', value: 'a' },
+      { kind: 'escape', value: '$' },
+      { kind: 'lit', value: 'b' },
+    ]);
+  });
+});
+
+describe('word-parts — quoting', () => {
+  it("single quotes produce a 'sq' part with literal contents", () => {
+    const p = parseWordParts("'hello $world'");
+    assert.deepEqual(p, [{ kind: 'sq', value: 'hello $world' }]);
+  });
+
+  it('double quotes produce a "dq" wrapper with inner parts', () => {
+    const p = parseWordParts('"hello"');
+    assert.equal(p.length, 1);
+    assert.equal(p[0].kind, 'dq');
+    assert.deepEqual(p[0].parts, [{ kind: 'lit', value: 'hello' }]);
+  });
+
+  it('double quotes preserve $ expansions as inner parts', () => {
+    const p = parseWordParts('"hi $USER!"');
+    assert.equal(p[0].kind, 'dq');
+    const inner = p[0].parts;
+    assert.equal(inner.length, 3);
+    assert.deepEqual(inner[0], { kind: 'lit', value: 'hi ' });
+    assert.deepEqual(inner[1], { kind: 'var', name: 'USER' });
+    assert.deepEqual(inner[2], { kind: 'lit', value: '!' });
+  });
+
+  it('inside double quotes, only $ ` " \\ are escapable; other \\X stays literal', () => {
+    const p = parseWordParts('"a \\n b"');
+    // \n is NOT a POSIX-recognised escape inside dquote, so backslash stays.
+    assert.equal(p[0].kind, 'dq');
+    assert.deepEqual(p[0].parts, [{ kind: 'lit', value: 'a \\n b' }]);
+  });
+
+  it('mixed unquoted + quoted segments', () => {
+    const p = parseWordParts('foo"bar"baz');
+    assert.equal(p.length, 3);
+    assert.equal(p[0].kind, 'lit'); assert.equal(p[0].value, 'foo');
+    assert.equal(p[1].kind, 'dq');
+    assert.equal(p[2].kind, 'lit'); assert.equal(p[2].value, 'baz');
+  });
+});
+
+describe('word-parts — variable references', () => {
+  it('$NAME — simple identifier', () => {
+    const p = parseWordParts('$HOME');
+    assert.deepEqual(p, [{ kind: 'var', name: 'HOME' }]);
+  });
+
+  it('$0..9, $?, $#, $@, $* — special parameters', () => {
+    for (const name of ['?', '#', '@', '*', '0', '1', '9', '!', '$', '-']) {
+      const p = parseWordParts('$' + name);
+      assert.deepEqual(p, [{ kind: 'var', name }], `for $${name}`);
+    }
+  });
+
+  it('${NAME} — braced reference', () => {
+    const p = parseWordParts('${HOME}');
+    assert.deepEqual(p, [{ kind: 'var', name: 'HOME' }]);
+  });
+
+  it("${name:-default} — param with op", () => {
+    const p = parseWordParts('${name:-arthur}');
+    assert.equal(p[0].kind, 'param');
+    assert.equal(p[0].name, 'name');
+    assert.equal(p[0].op, ':-');
+    assert.deepEqual(p[0].word.parts, [{ kind: 'lit', value: 'arthur' }]);
+  });
+
+  it("${name:+alt} — colon-plus op", () => {
+    const p = parseWordParts('${name:+set}');
+    assert.equal(p[0].op, ':+');
+  });
+
+  it('${#name} — length op', () => {
+    const p = parseWordParts('${#name}');
+    assert.deepEqual(p, [{ kind: 'param', name: 'name', op: '#', word: null }]);
+  });
+
+  it('${name##pattern} — longest-prefix removal', () => {
+    const p = parseWordParts('${path##*/}');
+    assert.equal(p[0].op, '##');
+    assert.equal(p[0].name, 'path');
+  });
+
+  it('${name%suffix} — suffix removal', () => {
+    const p = parseWordParts('${name%.txt}');
+    assert.equal(p[0].op, '%');
+  });
+
+  it('bare $ followed by nothing recognisable stays literal', () => {
+    const p = parseWordParts('$');
+    assert.deepEqual(p, [{ kind: 'lit', value: '$' }]);
+  });
+});
+
+describe('word-parts — command + arith substitution', () => {
+  it('$(cmd) — command substitution', () => {
+    const p = parseWordParts('$(date)');
+    assert.deepEqual(p, [{ kind: 'cmd', body: 'date' }]);
+  });
+
+  it('`cmd` — backtick command substitution', () => {
+    const p = parseWordParts('`date`');
+    assert.deepEqual(p, [{ kind: 'cmd', body: 'date' }]);
+  });
+
+  it('nested $(...) keeps balance', () => {
+    const p = parseWordParts('$(echo $(date))');
+    assert.equal(p[0].kind, 'cmd');
+    assert.equal(p[0].body, 'echo $(date)');
+  });
+
+  it('$((arith)) — arithmetic substitution', () => {
+    const p = parseWordParts('$((1 + 2))');
+    assert.deepEqual(p, [{ kind: 'arith', body: '1 + 2' }]);
+  });
+
+  it('arith with nested parens', () => {
+    const p = parseWordParts('$((1 + (2 * 3)))');
+    assert.equal(p[0].kind, 'arith');
+    assert.equal(p[0].body, '1 + (2 * 3)');
+  });
+});
+
+describe('word-parts — composite words', () => {
+  it('mixed lit + var + lit', () => {
+    const p = parseWordParts('prefix_$VAR_suffix');
+    // POSIX greedy identifier: $VAR_suffix reads as $VAR_suffix (one name)
+    assert.equal(p.length, 2);
+    assert.deepEqual(p[0], { kind: 'lit', value: 'prefix_' });
+    assert.deepEqual(p[1], { kind: 'var', name: 'VAR_suffix' });
+  });
+
+  it("mixed lit + var (use \${}) + lit to disambiguate", () => {
+    const p = parseWordParts('prefix_${VAR}_suffix');
+    assert.equal(p.length, 3);
+    assert.deepEqual(p[0], { kind: 'lit', value: 'prefix_' });
+    assert.deepEqual(p[1], { kind: 'var', name: 'VAR' });
+    assert.deepEqual(p[2], { kind: 'lit', value: '_suffix' });
+  });
+
+  it('dq containing cmdsub', () => {
+    const p = parseWordParts('"today is $(date)"');
+    assert.equal(p[0].kind, 'dq');
+    const inner = p[0].parts;
+    assert.equal(inner.length, 2);
+    assert.deepEqual(inner[0], { kind: 'lit', value: 'today is ' });
+    assert.equal(inner[1].kind, 'cmd');
+  });
+
+  it('sq inside dq is literal text (single quotes lose meaning)', () => {
+    const p = parseWordParts(`"it's fine"`);
+    assert.equal(p[0].kind, 'dq');
+    assert.deepEqual(p[0].parts, [{ kind: 'lit', value: "it's fine" }]);
+  });
+});
+
+describe('parser — Word nodes carry .parts', () => {
+  it('a simple command name has structured parts', () => {
+    const ast = parse('echo hello');
+    const cmd = ast.commands[0];
+    assert.ok(Array.isArray(cmd.words[0].parts));
+    assert.deepEqual(cmd.words[0].parts, [{ kind: 'lit', value: 'echo' }]);
+  });
+
+  it("$HOME in an arg gets a var part", () => {
+    const ast = parse('cd $HOME');
+    const cmd = ast.commands[0];
+    assert.deepEqual(cmd.words[1].parts, [{ kind: 'var', name: 'HOME' }]);
+  });
+
+  it('redirect target words also carry parts', () => {
+    const ast = parse('cmd > "$logfile"');
+    const target = ast.commands[0].redirects[0].target;
+    assert.equal(target.parts[0].kind, 'dq');
+    assert.deepEqual(target.parts[0].parts, [{ kind: 'var', name: 'logfile' }]);
   });
 });
 
