@@ -1908,21 +1908,19 @@ async function _execSimpleCommand(node, ctx) {
         const r = await ctx.builtins.get(cmdName)(argv, subCtx);
         exitCode = typeof r === 'number' ? r : 0;
       } else if (ctx.functions.has(cmdName)) {
-        // Functions: execute the body in a context with $1..$N bound. v0
-        // doesn't do full call-frame isolation — just runs the body with
-        // positional params overlaid.
-        const fnBody = ctx.functions.get(cmdName).body;
-        const r = await _exec(fnBody, subCtx);
-        exitCode = r.exitCode;
+        const fnDef = ctx.functions.get(cmdName);
+        exitCode = await _callFunction(fnDef, argv.slice(1), subCtx);
       } else {
         exitCode = await ctx.onCommand(cmdName, argv, subCtx);
       }
     } catch (e) {
       // The `exit` builtin throws { exitCode, _exit: true } to signal full
       // script termination — re-throw so _execProgram catches it instead of
-      // smoothing it over into a normal exit code. Plain { exitCode } throws
-      // (no _exit marker) are treated as the command's exit code.
-      if (e && e._exit) throw e;
+      // smoothing it over into a normal exit code. `return` throws
+      // { exitCode, _return: true } to unwind to the function boundary —
+      // also re-throw so _callFunction sees it. Plain { exitCode } throws
+      // (no _exit/_return marker) are treated as the command's exit code.
+      if (e && (e._exit || e._return)) throw e;
       if (e && typeof e.exitCode === 'number') exitCode = e.exitCode;
       else throw e;
     }
@@ -2128,6 +2126,48 @@ function _execFunctionDef(node, ctx) {
   return { exitCode: 0 };
 }
 
+// ── function call frames ──
+//
+// Each call pushes a frame onto ctx._localFrames. The frame remembers
+// the prior values of any variable later declared `local` inside the
+// function, so we can restore them on return. Positional parameters
+// ($1..$N, $#, $@, $*) are similarly save-and-restored.
+//
+// Non-local variable assignments inside a function leak to the parent
+// (POSIX dynamic scoping). `local NAME[=val]` shadows the parent
+// binding for the frame's lifetime. `return [N]` exits the function
+// with status N; signalled via { _return: true } and caught here so
+// it never propagates past the call boundary.
+async function _callFunction(fnDef, args, ctx) {
+  const frame = { savedBindings: new Map() };
+  if (!ctx._localFrames) ctx._localFrames = [];
+  ctx._localFrames.push(frame);
+  const savedPositional = ctx.positional || [];
+  ctx.positional = args;
+  let exitCode = 0;
+  try {
+    const r = await _exec(fnDef.body, ctx);
+    exitCode = r.exitCode;
+  } catch (e) {
+    if (e && e._return) {
+      exitCode = e.exitCode;
+    } else {
+      // Re-throw _exit (which terminates the whole script) and any other
+      // non-return signal, but make sure the finally still runs to
+      // unwind locals and positional.
+      throw e;
+    }
+  } finally {
+    for (const [name, prior] of frame.savedBindings) {
+      if (prior === undefined) ctx.env.delete(name);
+      else ctx.env.set(name, prior);
+    }
+    ctx._localFrames.pop();
+    ctx.positional = savedPositional;
+  }
+  return exitCode;
+}
+
 // ── redirects ──
 
 async function _applyRedirects(redirects, ctx) {
@@ -2283,12 +2323,36 @@ async function _expandPartToFrags(part, ctx, frags, inQuote) {
     case 'dq': {
       // Everything inside dq is quoted + non-splittable. Empty `""` still
       // contributes a sentinel frag so `cat ""` keeps its empty argv slot.
+      // Exception: a dq containing only `"$@"` with no positional args
+      // legitimately produces ZERO fields (POSIX), so we don't emit the
+      // sentinel when the inside had content but resolved to no frags.
       const before = frags.length;
       for (const p of part.parts) await _expandPartToFrags(p, ctx, frags, /*inQuote*/ true);
-      if (frags.length === before) frags.push({ t: '', s: false, q: true });
+      if (part.parts.length === 0 && frags.length === before) {
+        frags.push({ t: '', s: false, q: true });
+      }
       return;
     }
-    case 'var':    frags.push({ t: _lookupVar(part.name, ctx),        s: !inQuote, q: inQuote }); return;
+    case 'var': {
+      // `$@` and `$*` are special: each positional becomes its own field.
+      // POSIX:
+      //   $@ unquoted   → each positional, then IFS-split each (rare)
+      //   "$@"          → each positional, NO splitting (the common case)
+      //   $* unquoted   → IFS-joined into one field, then IFS-split
+      //   "$*"          → IFS-joined into one field, NO splitting
+      // We use a splittable space frag between each positional to force
+      // field boundaries through the splitter regardless of quoting.
+      if (part.name === '@') {
+        const pos = ctx.positional || [];
+        for (let k = 0; k < pos.length; k++) {
+          if (k > 0) frags.push({ t: ' ', s: true, q: false }); // boundary
+          frags.push({ t: pos[k], s: false, q: inQuote });
+        }
+        return;
+      }
+      frags.push({ t: _lookupVar(part.name, ctx), s: !inQuote, q: inQuote });
+      return;
+    }
     case 'param':  frags.push({ t: await _expandParam(part, ctx),     s: !inQuote, q: inQuote }); return;
     case 'cmd':    frags.push({ t: await _runCmdSub(part.body, ctx),  s: !inQuote, q: inQuote }); return;
     case 'arith':  frags.push({ t: _evalArith(part.body, ctx),        s: !inQuote, q: inQuote }); return;
@@ -3061,6 +3125,9 @@ function defaultBuiltins() {
     read:     _read,
     which:    _which,
     command:  _command,
+    local:    _local,
+    return:   _return,
+    shift:    _shift,
     cat:      _cat,
     ls:       _ls,
     test:     _test,
@@ -4520,6 +4587,74 @@ function _readSplitFields(line, ifs, maxFields) {
   if (cur || out.length < maxFields) out.push(cur);
   while (out.length < maxFields) out.push('');
   return out;
+}
+
+// ── local / return / shift — function-frame builtins ──
+//
+// local NAME[=value] ... — only valid inside a function. Shadows any
+// caller binding of NAME for the duration of the current frame; on
+// frame pop, the executor restores the prior value (or deletes the
+// name if it was previously unset). `local NAME` without `=` keeps
+// the existing visible value but still marks it for shadowed
+// restoration (so the caller is insulated from later mutation).
+async function _local(argv, ctx) {
+  if (!ctx._localFrames || ctx._localFrames.length === 0) {
+    await ctx.stderr('local: can only be used inside a function\n');
+    return 1;
+  }
+  const frame = ctx._localFrames[ctx._localFrames.length - 1];
+  let anyError = 0;
+  for (const arg of argv.slice(1)) {
+    const eq = arg.indexOf('=');
+    const name = eq < 0 ? arg : arg.slice(0, eq);
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
+      await ctx.stderr(`local: ${name}: not a valid identifier\n`);
+      anyError = 1;
+      continue;
+    }
+    if (!frame.savedBindings.has(name)) {
+      frame.savedBindings.set(name, ctx.env.has(name) ? ctx.env.get(name) : undefined);
+    }
+    if (eq >= 0) {
+      ctx.env.set(name, arg.slice(eq + 1));
+    } else if (!ctx.env.has(name)) {
+      // `local NAME` with no = and no prior binding: initialize empty,
+      // matching bash/dash. (POSIX is silent; this is the consensus.)
+      ctx.env.set(name, '');
+    }
+  }
+  return anyError;
+}
+
+// return [N] — exit the current function with status N (defaults to
+// the last command's exit code). Outside a function, behaves as `exit`
+// would (POSIX leaves this undefined; we follow bash's pragmatic shape).
+async function _return(argv, ctx) {
+  const raw = argv[1];
+  const n = raw !== undefined ? Number(raw) : ctx.lastStatus;
+  const code = Number.isFinite(n) ? (n & 0xff) : 0;
+  // Outside any function frame, treat as exit (POSIX-undefined; bash
+  // says "error", but exit-shape is more useful in scripts that get
+  // sourced via `.`).
+  if (!ctx._localFrames || ctx._localFrames.length === 0) {
+    throw { exitCode: code, _exit: true };
+  }
+  throw { exitCode: code, _return: true };
+}
+
+// shift [N] — drop the first N positional parameters (default 1).
+// Returns 1 if N is larger than the current count (no shift performed),
+// matching POSIX. Useful with `local x=$1; shift` to consume args.
+async function _shift(argv, ctx) {
+  const n = argv[1] !== undefined ? parseInt(argv[1], 10) : 1;
+  if (!Number.isFinite(n) || n < 0) {
+    await ctx.stderr('shift: invalid count\n');
+    return 1;
+  }
+  const cur = ctx.positional || [];
+  if (n > cur.length) return 1;
+  ctx.positional = cur.slice(n);
+  return 0;
 }
 
 // ── which / command — name lookup ──

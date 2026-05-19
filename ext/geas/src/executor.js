@@ -303,21 +303,19 @@ async function _execSimpleCommand(node, ctx) {
         const r = await ctx.builtins.get(cmdName)(argv, subCtx);
         exitCode = typeof r === 'number' ? r : 0;
       } else if (ctx.functions.has(cmdName)) {
-        // Functions: execute the body in a context with $1..$N bound. v0
-        // doesn't do full call-frame isolation — just runs the body with
-        // positional params overlaid.
-        const fnBody = ctx.functions.get(cmdName).body;
-        const r = await _exec(fnBody, subCtx);
-        exitCode = r.exitCode;
+        const fnDef = ctx.functions.get(cmdName);
+        exitCode = await _callFunction(fnDef, argv.slice(1), subCtx);
       } else {
         exitCode = await ctx.onCommand(cmdName, argv, subCtx);
       }
     } catch (e) {
       // The `exit` builtin throws { exitCode, _exit: true } to signal full
       // script termination — re-throw so _execProgram catches it instead of
-      // smoothing it over into a normal exit code. Plain { exitCode } throws
-      // (no _exit marker) are treated as the command's exit code.
-      if (e && e._exit) throw e;
+      // smoothing it over into a normal exit code. `return` throws
+      // { exitCode, _return: true } to unwind to the function boundary —
+      // also re-throw so _callFunction sees it. Plain { exitCode } throws
+      // (no _exit/_return marker) are treated as the command's exit code.
+      if (e && (e._exit || e._return)) throw e;
       if (e && typeof e.exitCode === 'number') exitCode = e.exitCode;
       else throw e;
     }
@@ -523,6 +521,48 @@ function _execFunctionDef(node, ctx) {
   return { exitCode: 0 };
 }
 
+// ── function call frames ──
+//
+// Each call pushes a frame onto ctx._localFrames. The frame remembers
+// the prior values of any variable later declared `local` inside the
+// function, so we can restore them on return. Positional parameters
+// ($1..$N, $#, $@, $*) are similarly save-and-restored.
+//
+// Non-local variable assignments inside a function leak to the parent
+// (POSIX dynamic scoping). `local NAME[=val]` shadows the parent
+// binding for the frame's lifetime. `return [N]` exits the function
+// with status N; signalled via { _return: true } and caught here so
+// it never propagates past the call boundary.
+async function _callFunction(fnDef, args, ctx) {
+  const frame = { savedBindings: new Map() };
+  if (!ctx._localFrames) ctx._localFrames = [];
+  ctx._localFrames.push(frame);
+  const savedPositional = ctx.positional || [];
+  ctx.positional = args;
+  let exitCode = 0;
+  try {
+    const r = await _exec(fnDef.body, ctx);
+    exitCode = r.exitCode;
+  } catch (e) {
+    if (e && e._return) {
+      exitCode = e.exitCode;
+    } else {
+      // Re-throw _exit (which terminates the whole script) and any other
+      // non-return signal, but make sure the finally still runs to
+      // unwind locals and positional.
+      throw e;
+    }
+  } finally {
+    for (const [name, prior] of frame.savedBindings) {
+      if (prior === undefined) ctx.env.delete(name);
+      else ctx.env.set(name, prior);
+    }
+    ctx._localFrames.pop();
+    ctx.positional = savedPositional;
+  }
+  return exitCode;
+}
+
 // ── redirects ──
 
 async function _applyRedirects(redirects, ctx) {
@@ -678,12 +718,36 @@ async function _expandPartToFrags(part, ctx, frags, inQuote) {
     case 'dq': {
       // Everything inside dq is quoted + non-splittable. Empty `""` still
       // contributes a sentinel frag so `cat ""` keeps its empty argv slot.
+      // Exception: a dq containing only `"$@"` with no positional args
+      // legitimately produces ZERO fields (POSIX), so we don't emit the
+      // sentinel when the inside had content but resolved to no frags.
       const before = frags.length;
       for (const p of part.parts) await _expandPartToFrags(p, ctx, frags, /*inQuote*/ true);
-      if (frags.length === before) frags.push({ t: '', s: false, q: true });
+      if (part.parts.length === 0 && frags.length === before) {
+        frags.push({ t: '', s: false, q: true });
+      }
       return;
     }
-    case 'var':    frags.push({ t: _lookupVar(part.name, ctx),        s: !inQuote, q: inQuote }); return;
+    case 'var': {
+      // `$@` and `$*` are special: each positional becomes its own field.
+      // POSIX:
+      //   $@ unquoted   → each positional, then IFS-split each (rare)
+      //   "$@"          → each positional, NO splitting (the common case)
+      //   $* unquoted   → IFS-joined into one field, then IFS-split
+      //   "$*"          → IFS-joined into one field, NO splitting
+      // We use a splittable space frag between each positional to force
+      // field boundaries through the splitter regardless of quoting.
+      if (part.name === '@') {
+        const pos = ctx.positional || [];
+        for (let k = 0; k < pos.length; k++) {
+          if (k > 0) frags.push({ t: ' ', s: true, q: false }); // boundary
+          frags.push({ t: pos[k], s: false, q: inQuote });
+        }
+        return;
+      }
+      frags.push({ t: _lookupVar(part.name, ctx), s: !inQuote, q: inQuote });
+      return;
+    }
     case 'param':  frags.push({ t: await _expandParam(part, ctx),     s: !inQuote, q: inQuote }); return;
     case 'cmd':    frags.push({ t: await _runCmdSub(part.body, ctx),  s: !inQuote, q: inQuote }); return;
     case 'arith':  frags.push({ t: _evalArith(part.body, ctx),        s: !inQuote, q: inQuote }); return;

@@ -2971,6 +2971,200 @@ describe('redirect buffering (write-once at command end)', () => {
   });
 });
 
+// ── stage 9: function frames + local + return + shift ──
+
+describe('function positional parameters', () => {
+  it('$1, $2 inside a function are the function args', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('greet() { echo hello $1 and $2; }\ngreet alice bob\n');
+    assert.equal(output(), 'hello alice and bob\n');
+  });
+
+  it('$# inside a function reflects the function arg count', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('count() { echo got $#; }\ncount a b c d\n');
+    assert.equal(output(), 'got 4\n');
+  });
+
+  it('"$@" iterates the function args', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('show() { for x in "$@"; do echo $x; done; }\nshow one two three\n');
+    assert.equal(output(), 'one\ntwo\nthree\n');
+  });
+
+  it('positional restores after the function returns', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('set -- script-arg\nfn() { echo in: $1; }\nfn fn-arg\necho out: $1\n');
+    assert.equal(output(), 'in: fn-arg\nout: script-arg\n');
+  });
+
+  it('nested functions each see their own args', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec(
+      'inner() { echo inner: $1; }\n' +
+      'outer() { echo outer: $1; inner deep; echo outer-after: $1; }\n' +
+      'outer top\n'
+    );
+    assert.equal(output(), 'outer: top\ninner: deep\nouter-after: top\n');
+  });
+});
+
+describe('local', () => {
+  it('shadows the caller binding for the frame lifetime', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec(
+      'x=outer\n' +
+      'fn() { local x=inner; echo in: $x; }\n' +
+      'fn\necho out: $x\n'
+    );
+    assert.equal(output(), 'in: inner\nout: outer\n');
+  });
+
+  it('local NAME (no value) shadows existing value', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec(
+      'x=outer\n' +
+      'fn() { local x; x=changed; echo in: $x; }\n' +
+      'fn\necho out: $x\n'
+    );
+    assert.equal(output(), 'in: changed\nout: outer\n');
+  });
+
+  it('local for previously-unset name unbinds on return', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec(
+      'fn() { local y=temp; echo in: $y; }\n' +
+      'fn\necho "out: [$y]"\n'
+    );
+    assert.equal(output(), 'in: temp\nout: []\n');
+  });
+
+  it('non-local assignment in a function leaks to caller', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec(
+      'fn() { z=leaked; }\n' +
+      'fn\necho z=$z\n'
+    );
+    assert.equal(output(), 'z=leaked\n');
+  });
+
+  it('local outside a function fails', async () => {
+    const { shell, errOutput } = _testShell();
+    const r = await shell.exec('local x=5\n');
+    assert.equal(r.exitCode, 1);
+    assert.match(errOutput(), /only.*function/);
+  });
+
+  it('multiple locals in one declaration', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec(
+      'a=A b=B c=C\n' +
+      'fn() { local a=1 b=2 c=3; echo $a $b $c; }\n' +
+      'fn\necho $a $b $c\n'
+    );
+    assert.equal(output(), '1 2 3\nA B C\n');
+  });
+
+  it('nested functions get nested local frames', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec(
+      'x=top\n' +
+      'inner() { local x=in; echo inner-x=$x; }\n' +
+      'outer() { local x=out; inner; echo outer-x=$x; }\n' +
+      'outer\necho top-x=$x\n'
+    );
+    assert.equal(output(), 'inner-x=in\nouter-x=out\ntop-x=top\n');
+  });
+});
+
+describe('return', () => {
+  it('return N sets the function exit code', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec(
+      'fn() { return 42; }\n' +
+      'fn\necho exit=$?\n'
+    );
+    assert.equal(output(), 'exit=42\n');
+  });
+
+  it('return without args uses last command exit code', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec(
+      'fn() { false; return; }\n' +
+      'fn\necho exit=$?\n'
+    );
+    assert.equal(output(), 'exit=1\n');
+  });
+
+  it('return halts the function body', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec(
+      'fn() { echo before; return 0; echo unreachable; }\n' +
+      'fn\necho after\n'
+    );
+    assert.equal(output(), 'before\nafter\n');
+  });
+
+  it('return only unwinds to the function boundary, not the caller', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec(
+      'fn() { return 0; }\n' +
+      'fn\necho still-here\n'
+    );
+    assert.equal(output(), 'still-here\n');
+  });
+
+  it('return composes with if conditionals', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec(
+      'abs() { if [ $1 -lt 0 ]; then return 1; else return 0; fi; }\n' +
+      'abs -3; echo r1=$?\n' +
+      'abs 5;  echo r2=$?\n'
+    );
+    assert.equal(output(), 'r1=1\nr2=0\n');
+  });
+
+  it('return cleans up local bindings even on early exit', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec(
+      'x=top\n' +
+      'fn() { local x=local; return; }\n' +
+      'fn\necho $x\n'
+    );
+    assert.equal(output(), 'top\n');
+  });
+});
+
+describe('shift', () => {
+  it('drops the first positional', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('set -- a b c\nshift\necho $1 $2\n');
+    assert.equal(output(), 'b c\n');
+  });
+
+  it('shift N drops N positionals', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('set -- a b c d\nshift 2\necho $1\n');
+    assert.equal(output(), 'c\n');
+  });
+
+  it('shift past the end fails without altering positionals', async () => {
+    const { shell, output } = _testShell();
+    const r = await shell.exec('set -- a b\nshift 5\necho ec=$?\necho $1 $2\n');
+    assert.match(output(), /ec=1\na b\n/);
+  });
+
+  it('shift inside a function affects the function args only', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec(
+      'set -- s1 s2 s3\n' +
+      'fn() { shift; echo fn: $1; }\n' +
+      'fn a b c\necho script: $1\n'
+    );
+    assert.equal(output(), 'fn: b\nscript: s1\n');
+  });
+});
+
 describe('xargs -0', () => {
   it('reads NUL-separated tokens', async () => {
     const { shell, output } = _testShell();

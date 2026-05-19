@@ -31,6 +31,9 @@ export function defaultBuiltins() {
     read:     _read,
     which:    _which,
     command:  _command,
+    local:    _local,
+    return:   _return,
+    shift:    _shift,
     cat:      _cat,
     ls:       _ls,
     test:     _test,
@@ -1490,6 +1493,74 @@ function _readSplitFields(line, ifs, maxFields) {
   if (cur || out.length < maxFields) out.push(cur);
   while (out.length < maxFields) out.push('');
   return out;
+}
+
+// ── local / return / shift — function-frame builtins ──
+//
+// local NAME[=value] ... — only valid inside a function. Shadows any
+// caller binding of NAME for the duration of the current frame; on
+// frame pop, the executor restores the prior value (or deletes the
+// name if it was previously unset). `local NAME` without `=` keeps
+// the existing visible value but still marks it for shadowed
+// restoration (so the caller is insulated from later mutation).
+async function _local(argv, ctx) {
+  if (!ctx._localFrames || ctx._localFrames.length === 0) {
+    await ctx.stderr('local: can only be used inside a function\n');
+    return 1;
+  }
+  const frame = ctx._localFrames[ctx._localFrames.length - 1];
+  let anyError = 0;
+  for (const arg of argv.slice(1)) {
+    const eq = arg.indexOf('=');
+    const name = eq < 0 ? arg : arg.slice(0, eq);
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name)) {
+      await ctx.stderr(`local: ${name}: not a valid identifier\n`);
+      anyError = 1;
+      continue;
+    }
+    if (!frame.savedBindings.has(name)) {
+      frame.savedBindings.set(name, ctx.env.has(name) ? ctx.env.get(name) : undefined);
+    }
+    if (eq >= 0) {
+      ctx.env.set(name, arg.slice(eq + 1));
+    } else if (!ctx.env.has(name)) {
+      // `local NAME` with no = and no prior binding: initialize empty,
+      // matching bash/dash. (POSIX is silent; this is the consensus.)
+      ctx.env.set(name, '');
+    }
+  }
+  return anyError;
+}
+
+// return [N] — exit the current function with status N (defaults to
+// the last command's exit code). Outside a function, behaves as `exit`
+// would (POSIX leaves this undefined; we follow bash's pragmatic shape).
+async function _return(argv, ctx) {
+  const raw = argv[1];
+  const n = raw !== undefined ? Number(raw) : ctx.lastStatus;
+  const code = Number.isFinite(n) ? (n & 0xff) : 0;
+  // Outside any function frame, treat as exit (POSIX-undefined; bash
+  // says "error", but exit-shape is more useful in scripts that get
+  // sourced via `.`).
+  if (!ctx._localFrames || ctx._localFrames.length === 0) {
+    throw { exitCode: code, _exit: true };
+  }
+  throw { exitCode: code, _return: true };
+}
+
+// shift [N] — drop the first N positional parameters (default 1).
+// Returns 1 if N is larger than the current count (no shift performed),
+// matching POSIX. Useful with `local x=$1; shift` to consume args.
+async function _shift(argv, ctx) {
+  const n = argv[1] !== undefined ? parseInt(argv[1], 10) : 1;
+  if (!Number.isFinite(n) || n < 0) {
+    await ctx.stderr('shift: invalid count\n');
+    return 1;
+  }
+  const cur = ctx.positional || [];
+  if (n > cur.length) return 1;
+  ctx.positional = cur.slice(n);
+  return 0;
 }
 
 // ── which / command — name lookup ──
