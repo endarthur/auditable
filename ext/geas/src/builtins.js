@@ -35,6 +35,10 @@ export function defaultBuiltins() {
     local:    _local,
     return:   _return,
     shift:    _shift,
+    eval:     _eval,
+    source:   _source,
+    '.':      _source,
+    getopts:  _getopts,
     cat:      _cat,
     ls:       _ls,
     test:     _test,
@@ -1906,6 +1910,180 @@ function _readSplitFields(line, ifs, maxFields) {
   if (cur || out.length < maxFields) out.push(cur);
   while (out.length < maxFields) out.push('');
   return out;
+}
+
+// ── eval / source / getopts — script-time builtins ──
+//
+// `eval` joins its args with spaces and re-parses+executes that string
+// in the CURRENT shell context. Mutations to env / cwd / functions
+// leak to the caller — that's the whole point. Re-parsing means the
+// argument can contain pipes, redirects, control flow, etc.
+//
+// `source FILE [ARG...]` (and the POSIX `.` alias) reads FILE from
+// the VFS and runs its contents in the current scope. Optional args
+// after the filename become positional params for the duration of
+// the source, then restore on return (mirroring how a function call
+// scopes positional). Locals defined in the sourced file leak out
+// unless declared `local` inside a function in that file.
+async function _eval(argv, ctx) {
+  if (argv.length < 2) return 0;
+  const source = argv.slice(1).join(' ');
+  const { parse } = await import('./parser.js');
+  const { execute } = await import('./executor.js');
+  const savedPropagate = ctx._propagateExit;
+  ctx._propagateExit = true;
+  try {
+    const ast = parse(source);
+    const r = await execute(ast, ctx);
+    return r.exitCode;
+  } catch (e) {
+    if (e && e._exit) throw e;
+    if (e && e._return) throw e;
+    await ctx.stderr(`eval: ${e.message || e}\n`);
+    return 1;
+  } finally {
+    ctx._propagateExit = savedPropagate;
+  }
+}
+
+async function _source(argv, ctx) {
+  if (argv.length < 2) {
+    await ctx.stderr('source: filename required\n');
+    return 2;
+  }
+  if (!ctx.vfs) {
+    await ctx.stderr('source: no VFS configured\n');
+    return 1;
+  }
+  const file = argv[1];
+  const path = _bResolvePath(file, ctx);
+  let text;
+  try {
+    text = await ctx.vfs.readFile(path, 'text');
+  } catch (e) {
+    await ctx.stderr(`source: ${file}: ${e.message || 'cannot read'}\n`);
+    return 1;
+  }
+  // Args after the filename rebind $1..$N for the duration. Save the
+  // caller's positional, restore in finally so an early `return` or
+  // `exit` from the sourced file still unwinds cleanly.
+  const sourceArgs = argv.slice(2);
+  const savedPositional = ctx.positional;
+  const savedPropagate = ctx._propagateExit;
+  if (sourceArgs.length > 0) ctx.positional = sourceArgs;
+  ctx._propagateExit = true;
+  const { parse } = await import('./parser.js');
+  const { execute } = await import('./executor.js');
+  let exitCode = 0;
+  try {
+    const ast = parse(text);
+    const r = await execute(ast, ctx);
+    exitCode = r.exitCode;
+  } catch (e) {
+    if (e && e._exit) throw e;
+    if (e && e._return) {
+      exitCode = e.exitCode;
+    } else {
+      await ctx.stderr(`source: ${e.message || e}\n`);
+      exitCode = 1;
+    }
+  } finally {
+    ctx.positional = savedPositional;
+    ctx._propagateExit = savedPropagate;
+  }
+  return exitCode;
+}
+
+// getopts OPTSTRING NAME [ARG...]
+//
+// POSIX flag-parsing helper for shell scripts. OPTSTRING is a letter
+// per allowed flag (`a` = bare `-a`, `b:` = `-b ARG`). NAME receives
+// the current flag letter; $OPTARG receives the value (when required);
+// $OPTIND tracks the next position. Returns 0 while more options
+// remain, 1 when done. Typical usage:
+//
+//   while getopts "n:v" opt; do
+//     case "$opt" in
+//       n) name=$OPTARG ;;
+//       v) verbose=1 ;;
+//       *) echo bad; exit 2 ;;
+//     esac
+//   done
+//   shift $((OPTIND - 1))
+//
+// Args default to $@. State (OPTIND) persists in env between calls.
+async function _getopts(argv, ctx) {
+  if (argv.length < 3) {
+    await ctx.stderr('getopts: usage: getopts optstring name [arg...]\n');
+    return 2;
+  }
+  const optstring = argv[1];
+  const name = argv[2];
+  // Arg source: explicit > positional.
+  const args = argv.length > 3 ? argv.slice(3) : (ctx.positional || []);
+  // OPTIND is 1-based in POSIX.
+  let optind = parseInt(ctx.env.get('OPTIND') || '1', 10);
+  if (!Number.isFinite(optind) || optind < 1) optind = 1;
+  const argIdx = optind - 1;
+  if (argIdx >= args.length) return 1;
+  const cur = args[argIdx];
+  if (typeof cur !== 'string' || cur.length < 2 || cur[0] !== '-' || cur === '--') {
+    if (cur === '--') ctx.env.set('OPTIND', String(optind + 1));
+    return 1;
+  }
+  const ch = cur[1];
+  // Find ch in optstring; treat leading ':' as silent-error mode (we accept it
+  // but don't differentiate output styles).
+  const silent = optstring.startsWith(':');
+  const search = silent ? optstring.slice(1) : optstring;
+  const pos = search.indexOf(ch);
+  if (pos < 0 || ch === ':') {
+    ctx.env.set(name, '?');
+    ctx.env.set('OPTARG', ch);
+    if (!silent) await ctx.stderr(`getopts: illegal option -- ${ch}\n`);
+    ctx.env.set('OPTIND', String(optind + 1));
+    return 0;
+  }
+  const takesArg = search[pos + 1] === ':';
+  if (takesArg) {
+    // Value can be glued (-nVAL) or in the next argv slot.
+    if (cur.length > 2) {
+      ctx.env.set('OPTARG', cur.slice(2));
+      ctx.env.set(name, ch);
+      ctx.env.set('OPTIND', String(optind + 1));
+    } else if (argIdx + 1 < args.length) {
+      ctx.env.set('OPTARG', args[argIdx + 1]);
+      ctx.env.set(name, ch);
+      ctx.env.set('OPTIND', String(optind + 2));
+    } else {
+      // Missing required arg.
+      if (silent) {
+        ctx.env.set(name, ':');
+        ctx.env.set('OPTARG', ch);
+      } else {
+        await ctx.stderr(`getopts: option requires argument -- ${ch}\n`);
+        ctx.env.set(name, '?');
+        ctx.env.set('OPTARG', '');
+      }
+      ctx.env.set('OPTIND', String(optind + 1));
+    }
+    return 0;
+  }
+  // Bare flag. May be clustered (`-abc` = -a -b -c) but POSIX says each
+  // call returns ONE letter; we handle clustering by consuming chars
+  // from the same argv slot until exhausted, only advancing OPTIND
+  // when the slot is done.
+  if (cur.length > 2) {
+    // More flags in this slot — strip the first char and put the rest back.
+    args[argIdx] = '-' + cur.slice(2);
+    // Note: this mutates the args array. For ctx.positional that's fine
+    // (POSIX getopts canonically mutates the positional view).
+  } else {
+    ctx.env.set('OPTIND', String(optind + 1));
+  }
+  ctx.env.set(name, ch);
+  ctx.env.set('OPTARG', '');
+  return 0;
 }
 
 // ── local / return / shift — function-frame builtins ──

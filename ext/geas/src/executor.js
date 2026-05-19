@@ -63,6 +63,10 @@ function _normalize(ctx) {
     positional: ctx.positional ?? [],
     // Optional interactive-input hook used by `read` when stdin is empty.
     readLine:   typeof ctx.readLine === 'function' ? ctx.readLine : null,
+    // When true, _execProgram's catch re-throws an `exit` signal
+    // instead of converting it to a return value — needed by source
+    // and eval so an `exit` in their bodies halts the calling script.
+    _propagateExit: !!ctx._propagateExit,
     // Internal signal markers — thrown by `break`/`continue`/`return`/`exit`.
     // Exposed on ctx so builtins can throw them too.
     _BREAK:     ctx._BREAK ?? Symbol.for('geas:break'),
@@ -140,7 +144,13 @@ async function _execProgram(node, ctx) {
     // running subsequent top-level commands. The errexit path also throws
     // an _exit signal, which routes the same way. nounset (`set -u`)
     // tags its throw with `_unbound` so we can surface the variable name.
+    //
+    // `ctx._propagateExit` lets the source / eval builtins re-throw
+    // the exit signal past their inner `execute()` so it reaches the
+    // caller's _execProgram instead of being smoothed into a normal
+    // exit code (POSIX: exit inside a sourced file halts the script).
     if (e && e._exit) {
+      if (ctx._propagateExit) throw e;
       if (e._unbound) {
         try { await ctx.stderr(`geas: ${e._unbound}: unbound variable\n`); } catch {}
       }

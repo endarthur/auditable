@@ -2765,6 +2765,160 @@ describe('set -x (xtrace)', () => {
   });
 });
 
+// ── stage 17: eval, source, getopts ──
+
+describe('eval', () => {
+  it('parses and executes its joined args', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('eval echo hello\n');
+    assert.equal(output(), 'hello\n');
+  });
+
+  it('runs control flow', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec("eval 'for x in a b c; do echo $x; done'\n");
+    assert.equal(output(), 'a\nb\nc\n');
+  });
+
+  it('mutations leak to the caller', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec("eval 'X=set'\necho got=$X\n");
+    assert.equal(output(), 'got=set\n');
+  });
+
+  it('forwards exit code', async () => {
+    const { shell } = _testShell();
+    const r = await shell.exec("eval false\n");
+    assert.equal(r.exitCode, 1);
+  });
+
+  it('handles a pipeline inside the eval string', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec("eval 'echo a; echo b' | cat\n");
+    assert.equal(output(), 'a\nb\n');
+  });
+
+  it('no args is a no-op success', async () => {
+    const { shell } = _testShell();
+    const r = await shell.exec('eval\n');
+    assert.equal(r.exitCode, 0);
+  });
+});
+
+describe('source / .', () => {
+  it('runs file contents in the current scope', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.writeFile('/lib.sh', 'X=loaded\necho first\n');
+    await shell.exec('source /lib.sh\necho got=$X\n');
+    assert.equal(output(), 'first\ngot=loaded\n');
+  });
+
+  it('. is the POSIX alias', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.writeFile('/lib.sh', 'Y=alias-form\n');
+    await shell.exec('. /lib.sh\necho got=$Y\n');
+    assert.equal(output(), 'got=alias-form\n');
+  });
+
+  it('extra args become positional inside the sourced file', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.writeFile('/lib.sh', 'echo got: $1 and $2\n');
+    await shell.exec('set -- script-arg\nsource /lib.sh alice bob\necho outside: $1\n');
+    assert.equal(output(), 'got: alice and bob\noutside: script-arg\n');
+  });
+
+  it('functions defined in the file are usable after source', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.writeFile('/lib.sh', 'greet() { echo hi $1; }\n');
+    await shell.exec('source /lib.sh\ngreet world\n');
+    assert.equal(output(), 'hi world\n');
+  });
+
+  it('exit inside sourced file halts the calling script', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.writeFile('/lib.sh', 'echo before-exit\nexit 7\n');
+    const r = await shell.exec('source /lib.sh\necho unreachable\n');
+    assert.equal(r.exitCode, 7);
+    assert.equal(output(), 'before-exit\n');
+  });
+
+  it('missing file reports an error', async () => {
+    const { shell, errOutput } = _testShell();
+    const r = await shell.exec('source /nope.sh\n');
+    assert.notEqual(r.exitCode, 0);
+    assert.match(errOutput(), /nope/);
+  });
+});
+
+describe('getopts', () => {
+  it('parses a bare flag', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec(
+      'set -- -v\n' +
+      'while getopts "v" opt; do echo opt=$opt; done\n'
+    );
+    assert.equal(output(), 'opt=v\n');
+  });
+
+  it('parses a flag with required argument', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec(
+      'set -- -n alice\n' +
+      'while getopts "n:" opt; do echo name=$OPTARG; done\n'
+    );
+    assert.equal(output(), 'name=alice\n');
+  });
+
+  it('handles glued -nVAL form', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec(
+      'set -- -nbob\n' +
+      'while getopts "n:" opt; do echo name=$OPTARG; done\n'
+    );
+    assert.equal(output(), 'name=bob\n');
+  });
+
+  it('clusters bare flags into separate iterations', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec(
+      'set -- -abc\n' +
+      'while getopts "abc" opt; do echo opt=$opt; done\n'
+    );
+    assert.equal(output(), 'opt=a\nopt=b\nopt=c\n');
+  });
+
+  it('stops on first non-option and shift uses OPTIND', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec(
+      'set -- -v file1 file2\n' +
+      'verbose=0\n' +
+      'while getopts "v" opt; do if [ $opt = v ]; then verbose=1; fi; done\n' +
+      'shift $((OPTIND - 1))\n' +
+      'echo verbose=$verbose remaining=$#\n'
+    );
+    assert.equal(output(), 'verbose=1 remaining=2\n');
+  });
+
+  it('reports illegal option', async () => {
+    const { shell, output, errOutput } = _testShell();
+    await shell.exec(
+      'set -- -z\n' +
+      'while getopts "a" opt; do echo opt=$opt OPTARG=$OPTARG; done\n'
+    );
+    assert.match(output(), /opt=\? OPTARG=z/);
+    assert.match(errOutput(), /illegal option/);
+  });
+
+  it('reports missing required argument', async () => {
+    const { shell, errOutput } = _testShell();
+    await shell.exec(
+      'set -- -n\n' +
+      'while getopts "n:" opt; do :; done\n'
+    );
+    assert.match(errOutput(), /requires argument/);
+  });
+});
+
 // ── stage 14: cp / mv / stat ──
 
 // ── stage 15: interactive read plumbing ──
