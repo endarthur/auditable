@@ -2536,3 +2536,118 @@ describe('which / command', () => {
     assert.equal(output(), 'plain\n');
   });
 });
+
+// ── typed: from-json / to-json / display / plot ──
+
+describe('from-json / to-json', () => {
+  it('from-json on an array of flat objects → typed table', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.writeFile('/data.json', JSON.stringify([
+      { name: 'a', x: 1 }, { name: 'b', x: 2 },
+    ]));
+    await shell.exec('from-json /data.json | to-csv\n');
+    assert.equal(output(), 'name,x\na,1\nb,2\n');
+  });
+
+  it('from-json | where filters rows', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.writeFile('/data.json', JSON.stringify([
+      { name: 'a', x: 1 }, { name: 'b', x: 5 }, { name: 'c', x: 10 },
+    ]));
+    await shell.exec("from-json /data.json | where 'x > 3' | to-csv\n");
+    assert.equal(output(), 'name,x\nb,5\nc,10\n');
+  });
+
+  it('from-json | select projects columns', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.writeFile('/data.json', JSON.stringify([
+      { name: 'a', x: 1, y: 100 }, { name: 'b', x: 2, y: 200 },
+    ]));
+    await shell.exec('from-json /data.json | select name y | to-csv\n');
+    assert.equal(output(), 'name,y\na,100\nb,200\n');
+  });
+
+  it('from-csv | to-json round-trips through JSON', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.writeFile('/data.csv', 'k,v\nfoo,1\nbar,2\n');
+    await shell.exec('from-csv /data.csv | to-json\n');
+    const parsed = JSON.parse(output());
+    assert.deepEqual(parsed, [{ k: 'foo', v: '1' }, { k: 'bar', v: '2' }]);
+  });
+
+  it('to-json --pretty prints indented', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.writeFile('/data.csv', 'a\n1\n');
+    await shell.exec('from-csv /data.csv | to-json --pretty\n');
+    assert.match(output(), /\n {2}\{/);
+  });
+
+  it('from-json on top-level object emits typed object', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.writeFile('/data.json', JSON.stringify({ a: 1, b: 'hi' }));
+    await shell.exec('from-json /data.json | to-json\n');
+    assert.equal(JSON.parse(output()).a, 1);
+  });
+
+  it('from-json reports a parse error and exits non-zero', async () => {
+    const { shell, vfs, errOutput } = _testShell();
+    await vfs.writeFile('/bad.json', 'not json');
+    const r = await shell.exec('from-json /bad.json\n');
+    assert.notEqual(r.exitCode, 0);
+    assert.match(errOutput(), /parse error/);
+  });
+});
+
+describe('display', () => {
+  it('renders a typed table as fixed-width text', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.writeFile('/data.csv', 'name,x\na,1\nb,2\n');
+    await shell.exec('from-csv /data.csv | display\n');
+    // Expect header + separator + rows in a column layout
+    assert.match(output(), /name\s+x/);
+    assert.match(output(), /a\s+1/);
+    assert.match(output(), /─/);
+  });
+
+  it('renders a typed array as JSON', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.writeFile('/data.json', '[1, 2, 3]');
+    await shell.exec('from-json /data.json | display\n');
+    assert.match(output(), /\[\s*\n\s*1/);
+  });
+
+  it('passes plain text through unchanged', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo hello | display\n');
+    assert.equal(output(), 'hello\n');
+  });
+});
+
+describe('plot', () => {
+  it('emits typed plot descriptor with ascii sparkline fallback', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.writeFile('/data.csv', 'y\n1\n3\n5\n4\n2\n1\n');
+    await shell.exec('from-csv /data.csv | plot y\n');
+    // The output should contain the ASCII sparkline characters from the
+    // typed value's text fallback (via toString() — emitted to stdout
+    // through the final pipe stage when richBlocks=false).
+    assert.match(output(), /min=/);
+    assert.match(output(), /max=/);
+  });
+
+  it('--kind hist produces a histogram-shaped fallback', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.writeFile('/data.csv', 'y\n1\n2\n2\n3\n3\n3\n4\n');
+    await shell.exec('from-csv /data.csv | plot --kind hist y\n');
+    assert.match(output(), /hist y/);
+    assert.match(output(), /bins=/);
+  });
+
+  it('errors cleanly on unknown column', async () => {
+    const { shell, vfs, errOutput } = _testShell();
+    await vfs.writeFile('/data.csv', 'a\n1\n');
+    const r = await shell.exec('from-csv /data.csv | plot missing\n');
+    assert.notEqual(r.exitCode, 0);
+    assert.match(errOutput(), /no column/);
+  });
+});
