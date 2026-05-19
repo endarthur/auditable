@@ -32,6 +32,47 @@ metres. Recentring is a rendering concern, not a parsing one (WebGL
 typical of UTM, so renderers should subtract a centroid before
 uploading to a GPU buffer — see the [`@gcu/dee`](../dee/) layer).
 
+## Rendering with @gcu/dee
+
+If you also use `@gcu/dee` (a Three.js scene layer), there's a thin
+adapter:
+
+```js
+import { readMSH } from '@gcu/msh';
+import { addMSHtoDee, mshCentroid, mshUnionCentroid } from '@gcu/msh/dee-adapter';
+import * as dee from '@gcu/dee';
+
+// Single file
+const result = await readMSH(arrayBuffer);
+const scene = dee.create(container, {
+  origin: mshCentroid(result),   // recentre for f32 precision
+  THREE,
+});
+const layer = addMSHtoDee(scene, result, {
+  name: 'MacPass HG',
+  color: 0xc06030,
+  opacity: 0.7,
+});
+
+// Multiple .msh domains in one scene
+const results = await Promise.all([hgBuf, lgBuf, wasteBuf].map(readMSH));
+const scene2 = dee.create(container, {
+  origin: mshUnionCentroid(results),
+  THREE,
+});
+addMSHtoDee(scene2, results[0], { name: 'HG',    color: 0xc06030, renderOrder: -3 });
+addMSHtoDee(scene2, results[1], { name: 'LG',    color: 0x6080c0, renderOrder: -2 });
+addMSHtoDee(scene2, results[2], { name: 'Waste', color: 0x808080, renderOrder: -1, opacity: 0.4 });
+```
+
+Vertices get recentred in F64 before the f32 downcast (UTM-scale
+coordinates lose precision at f32). The adapter accepts colour as
+`0xRRGGBB` or `{r, g, b}` (0-255); low-luminance values get floored to
+a charcoal tint so black meshes stay visible against a dark background
+(pass `luminance: { threshold: 0 }` to disable). Each layer's `_meta`
+field carries the file's full `arrays` Map and `binarySignature` for
+round-trip workflows.
+
 ## The format
 
 The file is self-describing. The text header declares each binary

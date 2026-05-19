@@ -6,13 +6,21 @@
   "main": "./msh.js",
   "exports": {
     ".": "./msh.js",
+    "./dee-adapter": "./dee-adapter.js",
     "./package.json": "./package.json"
   },
   "files": [
     "msh.js",
     "index.js",
+    "dee-adapter.js",
     "README.md"
   ],
+  "peerDependencies": {
+    "@gcu/dee": "*"
+  },
+  "peerDependenciesMeta": {
+    "@gcu/dee": { "optional": true }
+  },
   "keywords": ["msh", "aranz", "leapfrog", "geology", "mesh", "mining", "geostatistics", "auditable", "gcu"],
   "license": "BSD-3-Clause",
   "author": "Arthur Endlein Correia",

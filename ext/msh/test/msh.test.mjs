@@ -4,6 +4,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { readMSH, writeMSH, MSHError } from '../msh.js';
+import { mshCentroid, mshUnionCentroid, addMSHtoDee } from '../dee-adapter.js';
 
 // Build a minimal valid .msh by hand. Used by every unit test that
 // doesn't need real-world data.
@@ -255,4 +256,139 @@ describe('readMSH — real-world files', () => {
       assert.equal(re[len - 1], original[len - 1], 'last byte matches');
     });
   }
+});
+
+// ── dee-adapter pure helpers (no Three.js required) ──
+
+describe('dee-adapter — mshCentroid', () => {
+  it('returns midpoint of axis-aligned bbox', async () => {
+    const r = await readMSH(makeMinimalMsh({
+      vertices: new Float64Array([0, 0, 0,   10, 20, 30,   -2, -4, -6]),
+      triangles: new Int32Array([0, 1, 2]),
+    }));
+    const [cx, cy, cz] = mshCentroid(r);
+    // min (-2,-4,-6) max (10,20,30) → mid (4,8,12).
+    assert.equal(cx, 4);
+    assert.equal(cy, 8);
+    assert.equal(cz, 12);
+  });
+
+  it('returns [0,0,0] for an empty result', () => {
+    assert.deepEqual(mshCentroid({ vertices: new Float64Array() }), [0, 0, 0]);
+    assert.deepEqual(mshCentroid({}), [0, 0, 0]);
+  });
+});
+
+describe('dee-adapter — mshUnionCentroid', () => {
+  it('spans the union bbox across multiple results', async () => {
+    const a = await readMSH(makeMinimalMsh({
+      vertices: new Float64Array([0, 0, 0, 1, 1, 1, 2, 2, 2]),
+      triangles: new Int32Array([0, 1, 2]),
+    }));
+    const b = await readMSH(makeMinimalMsh({
+      vertices: new Float64Array([10, 10, 10, 20, 20, 20, 30, 30, 30]),
+      triangles: new Int32Array([0, 1, 2]),
+    }));
+    // union min (0,0,0) max (30,30,30) → mid (15,15,15).
+    assert.deepEqual(mshUnionCentroid([a, b]), [15, 15, 15]);
+  });
+
+  it('skips empty inputs', async () => {
+    assert.deepEqual(mshUnionCentroid([]), [0, 0, 0]);
+    assert.deepEqual(mshUnionCentroid([{ vertices: new Float64Array() }]), [0, 0, 0]);
+  });
+});
+
+describe('dee-adapter — addMSHtoDee', () => {
+  // Fake `dee`: captures the addSurface call so we can assert on the
+  // positions / indices / color / metadata without pulling Three.js.
+  function makeFakeDee(origin) {
+    const calls = [];
+    return {
+      dee: {
+        origin,
+        addSurface(name, opts) {
+          const layer = { name, opts };
+          calls.push(layer);
+          return layer;
+        },
+      },
+      calls,
+    };
+  }
+
+  it('recentres positions in F64 relative to dee.origin', async () => {
+    const r = await readMSH(makeMinimalMsh({
+      vertices: new Float64Array([100, 200, 300, 101, 201, 301, 102, 202, 302]),
+      triangles: new Int32Array([0, 1, 2]),
+    }));
+    const { dee, calls } = makeFakeDee([100, 200, 300]);
+    addMSHtoDee(dee, r, { color: 0x123456 });
+    assert.equal(calls.length, 1);
+    const pos = calls[0].opts.positions;
+    assert.ok(pos instanceof Float64Array, 'positions stays F64 pre-downcast');
+    assert.deepEqual([...pos], [0, 0, 0,   1, 1, 1,   2, 2, 2]);
+  });
+
+  it('forwards color as 0xRRGGBB int', async () => {
+    const r = await readMSH(makeMinimalMsh());
+    const { dee, calls } = makeFakeDee([0, 0, 0]);
+    addMSHtoDee(dee, r, { color: 0xff8800 });
+    assert.equal(calls[0].opts.color, 0xff8800);
+  });
+
+  it('accepts {r,g,b} colour input', async () => {
+    const r = await readMSH(makeMinimalMsh());
+    const { dee, calls } = makeFakeDee([0, 0, 0]);
+    addMSHtoDee(dee, r, { color: { r: 0x33, g: 0x66, b: 0x99 } });
+    assert.equal(calls[0].opts.color, 0x336699);
+  });
+
+  it('floors low-luminance colours unless disabled', async () => {
+    const r = await readMSH(makeMinimalMsh());
+    const { dee: d1, calls: c1 } = makeFakeDee([0, 0, 0]);
+    addMSHtoDee(d1, r, { color: 0x000000 });
+    // Default substitute is the slight-blue charcoal (82,82,92).
+    assert.equal(c1[0].opts.color, ((82 << 16) | (82 << 8) | 92));
+    // With threshold:0 the floor is disabled.
+    const { dee: d2, calls: c2 } = makeFakeDee([0, 0, 0]);
+    addMSHtoDee(d2, r, { color: 0x000000, luminance: { threshold: 0 } });
+    assert.equal(c2[0].opts.color, 0x000000);
+  });
+
+  it('passes through opacity / wireframe / renderOrder / polygonOffset', async () => {
+    const r = await readMSH(makeMinimalMsh());
+    const { dee, calls } = makeFakeDee([0, 0, 0]);
+    addMSHtoDee(dee, r, {
+      name: 'HG',
+      opacity: 0.6,
+      wireframe: true,
+      renderOrder: -1000,
+      polygonOffset: 3,
+    });
+    const opts = calls[0].opts;
+    assert.equal(calls[0].name, 'HG');
+    assert.equal(opts.opacity, 0.6);
+    assert.equal(opts.wireframe, true);
+    assert.equal(opts.renderOrder, -1000);
+    assert.equal(opts.polygonOffset, 3);
+    assert.equal(opts.localCoords, true);
+  });
+
+  it('attaches _meta with arrays and binarySignature for round-trip', async () => {
+    const r = await readMSH(makeMinimalMsh());
+    const { dee } = makeFakeDee([0, 0, 0]);
+    const layer = addMSHtoDee(dee, r);
+    assert.ok(layer._meta);
+    assert.ok(layer._meta.arrays instanceof Map);
+    assert.equal(layer._meta.binarySignature.length, 12);
+    assert.equal(layer._meta.vCount, 3);
+    assert.equal(layer._meta.tCount, 1);
+  });
+
+  it('throws if vertices/triangles are missing', () => {
+    const fakeResult = { vertices: undefined, triangles: undefined };
+    const { dee } = makeFakeDee([0, 0, 0]);
+    assert.throws(() => addMSHtoDee(dee, fakeResult), /vertices/);
+  });
 });
