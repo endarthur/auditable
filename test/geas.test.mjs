@@ -2651,3 +2651,173 @@ describe('plot', () => {
     assert.match(errOutput(), /no column/);
   });
 });
+
+// ── find ──
+
+describe('find', () => {
+  // Helper: build a small directory tree for each test.
+  async function _seed() {
+    const t = _testShell();
+    await t.vfs.mkdir('/proj', { recursive: true });
+    await t.vfs.mkdir('/proj/src', { recursive: true });
+    await t.vfs.mkdir('/proj/src/sub', { recursive: true });
+    await t.vfs.writeFile('/proj/README.md', 'r');
+    await t.vfs.writeFile('/proj/src/a.js', 'aa');
+    await t.vfs.writeFile('/proj/src/b.js', 'bbb');
+    await t.vfs.writeFile('/proj/src/c.txt', 'cccc');
+    await t.vfs.writeFile('/proj/src/sub/d.js', 'dddddd');
+    await t.vfs.writeFile('/proj/src/sub/EMPTY', '');
+    return t;
+  }
+
+  function _lines(s) {
+    return s.split('\n').filter(Boolean).sort();
+  }
+
+  it('plain `find PATH` prints every entry pre-order', async () => {
+    const { shell, output } = await _seed();
+    await shell.exec('find /proj\n');
+    const out = _lines(output());
+    assert.deepEqual(out, [
+      '/proj',
+      '/proj/README.md',
+      '/proj/src',
+      '/proj/src/a.js',
+      '/proj/src/b.js',
+      '/proj/src/c.txt',
+      '/proj/src/sub',
+      '/proj/src/sub/EMPTY',
+      '/proj/src/sub/d.js',
+    ]);
+  });
+
+  it('-name with glob', async () => {
+    const { shell, output } = await _seed();
+    await shell.exec('find /proj -name "*.js"\n');
+    assert.deepEqual(_lines(output()), [
+      '/proj/src/a.js',
+      '/proj/src/b.js',
+      '/proj/src/sub/d.js',
+    ]);
+  });
+
+  it('-iname is case-insensitive', async () => {
+    const { shell, output } = await _seed();
+    await shell.exec('find /proj -iname "readme.md"\n');
+    assert.deepEqual(_lines(output()), ['/proj/README.md']);
+  });
+
+  it('-type d lists only directories', async () => {
+    const { shell, output } = await _seed();
+    await shell.exec('find /proj -type d\n');
+    assert.deepEqual(_lines(output()), ['/proj', '/proj/src', '/proj/src/sub']);
+  });
+
+  it('-type f lists only files', async () => {
+    const { shell, output } = await _seed();
+    await shell.exec('find /proj -type f -name "*.js"\n');
+    assert.deepEqual(_lines(output()), [
+      '/proj/src/a.js',
+      '/proj/src/b.js',
+      '/proj/src/sub/d.js',
+    ]);
+  });
+
+  it('-maxdepth limits descent', async () => {
+    const { shell, output } = await _seed();
+    await shell.exec('find /proj -maxdepth 1\n');
+    assert.deepEqual(_lines(output()), ['/proj', '/proj/README.md', '/proj/src']);
+  });
+
+  it('-mindepth skips shallow entries', async () => {
+    const { shell, output } = await _seed();
+    await shell.exec('find /proj -mindepth 2 -type f\n');
+    const out = _lines(output());
+    // anything at depth >=2: /proj/src/* and /proj/src/sub/*
+    assert.ok(out.includes('/proj/src/a.js'));
+    assert.ok(!out.includes('/proj/README.md'));
+  });
+
+  it('-size +N filters bigger files', async () => {
+    const { shell, output } = await _seed();
+    // d.js is 6 bytes, c.txt is 4, b.js is 3, a.js is 2, README.md is 1.
+    await shell.exec('find /proj -type f -size +3c\n');
+    assert.deepEqual(_lines(output()), ['/proj/src/c.txt', '/proj/src/sub/d.js']);
+  });
+
+  it('-size -N filters smaller files', async () => {
+    const { shell, output } = await _seed();
+    await shell.exec('find /proj -type f -size -2c\n');
+    // strictly less than 2 bytes: README.md (1) and EMPTY (0).
+    assert.deepEqual(_lines(output()), ['/proj/README.md', '/proj/src/sub/EMPTY']);
+  });
+
+  it('-empty matches zero-byte files', async () => {
+    const { shell, output } = await _seed();
+    await shell.exec('find /proj -type f -empty\n');
+    assert.deepEqual(_lines(output()), ['/proj/src/sub/EMPTY']);
+  });
+
+  it('-not inverts a predicate', async () => {
+    const { shell, output } = await _seed();
+    await shell.exec('find /proj -type f -not -name "*.js"\n');
+    assert.deepEqual(_lines(output()), [
+      '/proj/README.md',
+      '/proj/src/c.txt',
+      '/proj/src/sub/EMPTY',
+    ]);
+  });
+
+  it('! is an alias for -not', async () => {
+    const { shell, output } = await _seed();
+    await shell.exec('find /proj -type f ! -name "*.js"\n');
+    assert.deepEqual(_lines(output()), [
+      '/proj/README.md',
+      '/proj/src/c.txt',
+      '/proj/src/sub/EMPTY',
+    ]);
+  });
+
+  it('-or combines predicates', async () => {
+    const { shell, output } = await _seed();
+    await shell.exec('find /proj -name "*.md" -or -name "*.txt"\n');
+    assert.deepEqual(_lines(output()), ['/proj/README.md', '/proj/src/c.txt']);
+  });
+
+  it('parens group expressions', async () => {
+    const { shell, output } = await _seed();
+    await shell.exec('find /proj -type f "(" -name "*.md" -or -name "*.txt" ")"\n');
+    assert.deepEqual(_lines(output()), ['/proj/README.md', '/proj/src/c.txt']);
+  });
+
+  it('-path matches against the full display path', async () => {
+    const { shell, output } = await _seed();
+    await shell.exec('find /proj -path "*/sub/*"\n');
+    assert.deepEqual(_lines(output()), ['/proj/src/sub/EMPTY', '/proj/src/sub/d.js']);
+  });
+
+  it('-print0 uses null separator', async () => {
+    const { shell, output } = await _seed();
+    await shell.exec('find /proj -type d -print0\n');
+    assert.ok(output().includes('\0'));
+    assert.ok(!output().includes('\n'));
+  });
+
+  it('integrates with for-loops via command substitution', async () => {
+    const { shell, output } = await _seed();
+    await shell.exec('for f in $(find /proj -type f -name "*.js"); do echo got $f; done\n');
+    const out = _lines(output());
+    assert.deepEqual(out, [
+      'got /proj/src/a.js',
+      'got /proj/src/b.js',
+      'got /proj/src/sub/d.js',
+    ]);
+  });
+
+  it('rejects an unknown predicate', async () => {
+    const { shell, errOutput } = await _seed();
+    const r = await shell.exec('find /proj -bogus\n');
+    assert.notEqual(r.exitCode, 0);
+    assert.match(errOutput(), /unknown predicate/);
+  });
+});

@@ -3005,6 +3005,7 @@ function defaultBuiltins() {
     mkdir:    _mkdir,
     rm:       _rm,
     touch:    _touch,
+    find:     _find,
     // Text wranglers
     head:     _head,
     tail:     _tail,
@@ -3458,6 +3459,286 @@ async function _rmRecursive(vfs, dir) {
     else await vfs.unlink(child);
   }
   await vfs.rmdir(dir);
+}
+
+// ── find — recursive directory walk with predicates ──
+//
+// find [PATH...] [EXPR...]
+//
+// Walks each PATH (default: cwd), evaluates EXPR against every entry,
+// prints matches one per line. Supported predicates:
+//
+//   -name PAT       basename glob (* ? [...])
+//   -path PAT       full-path glob
+//   -iname PAT      case-insensitive -name
+//   -type f|d       file vs directory
+//   -maxdepth N     don't descend beyond N levels (PATH itself is depth 0)
+//   -mindepth N     skip entries shallower than N
+//   -size [+-]N[ckMG]  size comparison (c=bytes, k=KiB, M=MiB, G=GiB; default c)
+//   -empty          shorthand for `( -type f -size 0c ) -or ( -type d -empty-dir )`
+//                   (v0: only the file case; empty directories not detected)
+//   -print          explicit print (default action)
+//   -print0         null-separated output (-exec scripts love it)
+//
+// Logical combinators (precedence: ! > -and > -or; -and is implicit):
+//
+//   ! EXPR | -not EXPR
+//   EXPR -and EXPR | EXPR EXPR
+//   EXPR -or EXPR
+//   ( EXPR )       (each paren needs to be its own argv element)
+//
+// Notable v0 omissions: -exec, -execdir, -prune, -newer/-mtime, -user,
+// regex predicates beyond glob. These are sized-by-need additions.
+async function _find(argv, ctx) {
+  if (!ctx.vfs) { await ctx.stderr('find: no VFS configured\n'); return 1; }
+  // Split argv into start paths + predicate tokens. POSIX: paths come
+  // first, predicates start at the first arg beginning with `-`, `!`,
+  // `(`, or matching a known token. (We keep it simple — assume the
+  // first arg starting with `-`/`!`/`(`/`,` is the predicate start.)
+  const args = argv.slice(1);
+  const paths = [];
+  let predStart = 0;
+  while (predStart < args.length) {
+    const a = args[predStart];
+    if (a.startsWith('-') || a === '!' || a === '(' || a === ')' || a === ',') break;
+    paths.push(a);
+    predStart++;
+  }
+  if (paths.length === 0) paths.push('.');
+  const predTokens = args.slice(predStart);
+  let predicate;
+  try {
+    predicate = _findCompile(predTokens);
+  } catch (e) {
+    await ctx.stderr(`find: ${e.message}\n`);
+    return 1;
+  }
+  const sep = predicate.print0 ? '\0' : '\n';
+  let anyError = 0;
+  for (const startPath of paths) {
+    const abs = _bResolvePath(startPath, ctx);
+    try {
+      const st = await ctx.vfs.stat(abs);
+      await _findWalk({
+        absPath: abs,
+        displayPath: startPath,
+        type: st.type,
+        size: st.size ?? 0,
+        depth: 0,
+      }, predicate, ctx, sep);
+    } catch (e) {
+      await ctx.stderr(`find: ${startPath}: ${e.message || 'cannot access'}\n`);
+      anyError = 1;
+    }
+  }
+  return anyError;
+}
+
+async function _findWalk(entry, predicate, ctx, sep) {
+  // Apply predicate to this entry. The compiled predicate is a function:
+  //   (entry) => { match: bool, print: bool }
+  // When `print` is true (explicit -print/-print0 in the expr, or the
+  // default action because no print-equivalent appeared), we emit the
+  // path. We do this BEFORE descending so directory output matches
+  // POSIX find pre-order traversal.
+  if (entry.depth >= predicate.minDepth) {
+    const r = predicate.fn(entry);
+    if (r) {
+      await ctx.stdout(entry.displayPath + sep);
+    }
+  }
+  if (entry.type !== 'directory') return;
+  if (predicate.maxDepth >= 0 && entry.depth >= predicate.maxDepth) return;
+  let names;
+  try {
+    const entries = await ctx.vfs.readdir(entry.absPath);
+    names = entries.map(e => typeof e === 'string' ? e : e.name).sort();
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const childAbs = entry.absPath.endsWith('/') ? entry.absPath + name : entry.absPath + '/' + name;
+    const childDisp = entry.displayPath.endsWith('/') ? entry.displayPath + name : entry.displayPath + '/' + name;
+    let stat;
+    try { stat = await ctx.vfs.stat(childAbs); }
+    catch { continue; }
+    await _findWalk({
+      absPath: childAbs,
+      displayPath: childDisp,
+      type: stat.type,
+      size: stat.size ?? 0,
+      depth: entry.depth + 1,
+    }, predicate, ctx, sep);
+  }
+}
+
+// Compile a predicate-token list into { fn, maxDepth, minDepth, print0 }.
+// fn(entry) returns true iff the entry should be printed. maxDepth/
+// minDepth/print0 are pulled out of the token stream rather than
+// being encoded in fn — depth gates traversal, separators format output.
+// An empty token list matches everything (POSIX `find .` behaviour).
+function _findCompile(tokens) {
+  const state = { tokens, i: 0, maxDepth: -1, minDepth: 0, print0: false };
+  if (tokens.length === 0) {
+    return { fn: () => true, maxDepth: -1, minDepth: 0, print0: false };
+  }
+  const fn = _findParseOr(state);
+  if (state.i !== state.tokens.length) {
+    throw new Error(`unexpected token "${state.tokens[state.i]}"`);
+  }
+  return {
+    fn,
+    maxDepth: state.maxDepth,
+    minDepth: state.minDepth,
+    print0: state.print0,
+  };
+}
+
+// Grammar (recursive descent):
+//   or   := and ( -or and )*
+//   and  := not ( ( -and | <implicit> ) not )*
+//   not  := ( '!' | -not ) not | primary
+//   primary := '(' or ')' | predicate | action
+function _findParseOr(s) {
+  let left = _findParseAnd(s);
+  while (s.i < s.tokens.length && (s.tokens[s.i] === '-or' || s.tokens[s.i] === '-o')) {
+    s.i++;
+    const right = _findParseAnd(s);
+    const l = left, r = right;
+    left = (e) => l(e) || r(e);
+  }
+  return left;
+}
+
+function _findParseAnd(s) {
+  let left = _findParseNot(s);
+  while (s.i < s.tokens.length) {
+    const t = s.tokens[s.i];
+    if (t === '-or' || t === '-o' || t === ')' || t === ',') break;
+    if (t === '-and' || t === '-a') s.i++;
+    const right = _findParseNot(s);
+    const l = left, r = right;
+    left = (e) => l(e) && r(e);
+  }
+  return left;
+}
+
+function _findParseNot(s) {
+  const t = s.tokens[s.i];
+  if (t === '!' || t === '-not') {
+    s.i++;
+    const inner = _findParseNot(s);
+    return (e) => !inner(e);
+  }
+  return _findParsePrimary(s);
+}
+
+function _findParsePrimary(s) {
+  const t = s.tokens[s.i];
+  if (t === undefined) throw new Error('unexpected end of expression');
+  if (t === '(') {
+    s.i++;
+    const inner = _findParseOr(s);
+    if (s.tokens[s.i] !== ')') throw new Error("missing ')'");
+    s.i++;
+    return inner;
+  }
+  // Predicates & actions: each consumes its tokens and returns a
+  // matcher. Actions set s.hadPrint when relevant.
+  switch (t) {
+    case '-name': {
+      const pat = s.tokens[++s.i]; s.i++;
+      const re = _findGlobToRe(pat, false);
+      return (e) => re.test(_basename(e.displayPath));
+    }
+    case '-iname': {
+      const pat = s.tokens[++s.i]; s.i++;
+      const re = _findGlobToRe(pat, true);
+      return (e) => re.test(_basename(e.displayPath));
+    }
+    case '-path': case '-wholename': {
+      const pat = s.tokens[++s.i]; s.i++;
+      const re = _findGlobToRe(pat, false);
+      return (e) => re.test(e.displayPath);
+    }
+    case '-type': {
+      const tp = s.tokens[++s.i]; s.i++;
+      return (e) => (tp === 'f' && e.type === 'file') || (tp === 'd' && e.type === 'directory');
+    }
+    case '-size': {
+      const spec = s.tokens[++s.i]; s.i++;
+      const cmp = _findCompileSize(spec);
+      return (e) => cmp(e.size);
+    }
+    case '-empty': {
+      s.i++;
+      return (e) => e.type === 'file' && e.size === 0;
+    }
+    case '-maxdepth': {
+      s.maxDepth = parseInt(s.tokens[++s.i], 10); s.i++;
+      return () => true;
+    }
+    case '-mindepth': {
+      s.minDepth = parseInt(s.tokens[++s.i], 10); s.i++;
+      return () => true;
+    }
+    case '-print': {
+      s.i++;
+      return () => true;
+    }
+    case '-print0': {
+      s.i++;
+      s.print0 = true;
+      return () => true;
+    }
+    case '-true': { s.i++; return () => true; }
+    case '-false': { s.i++; return () => false; }
+    default:
+      throw new Error(`unknown predicate "${t}"`);
+  }
+}
+
+function _basename(p) {
+  const slash = p.lastIndexOf('/');
+  return slash < 0 ? p : p.slice(slash + 1);
+}
+
+function _findGlobToRe(pattern, ignoreCase) {
+  let re = '';
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === '*') re += '.*';
+    else if (ch === '?') re += '.';
+    else if (ch === '[') {
+      const close = pattern.indexOf(']', i + 1);
+      if (close < 0) { re += '\\['; }
+      else {
+        let cls = pattern.slice(i + 1, close);
+        if (cls.startsWith('!') || cls.startsWith('^')) cls = '^' + cls.slice(1);
+        re += '[' + cls + ']';
+        i = close;
+      }
+    }
+    else if ('.+^$(){}|\\'.includes(ch)) re += '\\' + ch;
+    else re += ch;
+  }
+  return new RegExp('^' + re + '$', ignoreCase ? 'i' : '');
+}
+
+function _findCompileSize(spec) {
+  // POSIX -size spec: [+-]N[bckwMG]. We honour c (bytes), k (KiB),
+  // M (MiB), G (GiB). Defaults to 512-byte blocks per POSIX, but we
+  // diverge: default unit is bytes — matches everyone's mental model.
+  const m = String(spec).match(/^([+-])?(\d+)([ckMG]?)$/);
+  if (!m) return () => false;
+  const sign = m[1];
+  const n = parseInt(m[2], 10);
+  const unit = m[3] || 'c';
+  const mult = unit === 'k' ? 1024 : unit === 'M' ? 1024 * 1024 : unit === 'G' ? 1024 * 1024 * 1024 : 1;
+  const threshold = n * mult;
+  if (sign === '+') return (sz) => sz > threshold;
+  if (sign === '-') return (sz) => sz < threshold;
+  return (sz) => sz === threshold;
 }
 
 async function _touch(argv, ctx) {
