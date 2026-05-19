@@ -3308,6 +3308,124 @@ describe('test / [ — multi-clause expressions', () => {
   });
 });
 
+// ── stage 12: arithmetic expansion ──
+
+describe('$((...)) arithmetic', () => {
+  it('basic integer arithmetic', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo $((1 + 2 * 3))\n');
+    assert.equal(output(), '7\n');
+  });
+
+  it('parens override precedence', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo $(((1 + 2) * 3))\n');
+    assert.equal(output(), '9\n');
+  });
+
+  it('variable expansion (bare name)', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('n=5\necho $((n * 2))\n');
+    assert.equal(output(), '10\n');
+  });
+
+  it('variable expansion ($name form)', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('n=5\necho $(($n + 1))\n');
+    assert.equal(output(), '6\n');
+  });
+
+  it('assignment inside $((...)) — was BLOCKED by old gated eval', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo $((x = 5))\necho after: $x\n');
+    assert.equal(output(), '5\nafter: 5\n');
+  });
+
+  it('compound assignment x += 3', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('x=10\necho $((x += 3))\necho x=$x\n');
+    assert.equal(output(), '13\nx=13\n');
+  });
+
+  it('integer division truncates toward zero', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo $((7 / 2))\necho $((-7 / 2))\n');
+    assert.equal(output(), '3\n-3\n');
+  });
+
+  it('modulo', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo $((17 % 5))\n');
+    assert.equal(output(), '2\n');
+  });
+
+  it('comparison returns 0 or 1', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo $((5 < 10)) $((5 > 10)) $((5 == 5))\n');
+    assert.equal(output(), '1 0 1\n');
+  });
+
+  it('logical && and ||', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo $((1 && 2)) $((0 || 3)) $((0 && 5))\n');
+    assert.equal(output(), '1 1 0\n');
+  });
+
+  it('bitwise operations', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo $((5 & 3)) $((5 | 3)) $((5 ^ 3)) $((~5))\n');
+    assert.equal(output(), '1 7 6 -6\n');
+  });
+
+  it('shift operators', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo $((1 << 4)) $((256 >> 2))\n');
+    assert.equal(output(), '16 64\n');
+  });
+
+  it('ternary conditional', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo $((5 > 3 ? 100 : 200))\necho $((1 == 2 ? 100 : 200))\n');
+    assert.equal(output(), '100\n200\n');
+  });
+
+  it('hex literals', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo $((0xff))\necho $((0x10 + 0xa))\n');
+    assert.equal(output(), '255\n26\n');
+  });
+
+  it('octal literals (leading zero)', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo $((0755))\n');
+    assert.equal(output(), '493\n');
+  });
+
+  it('unary minus, plus, not', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo $((-5)) $((+7)) $((!0)) $((!42))\n');
+    assert.equal(output(), '-5 7 1 0\n');
+  });
+
+  it('division by zero returns 0 (no crash)', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo $((10 / 0))\necho $((10 % 0))\n');
+    assert.equal(output(), '0\n0\n');
+  });
+
+  it('unbound variable acts as 0', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo $((undefined_var + 5))\n');
+    assert.equal(output(), '5\n');
+  });
+
+  it('use in for-loop counter idiom', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('i=0\nwhile [ $i -lt 3 ]; do echo i=$i; i=$((i + 1)); done\n');
+    assert.equal(output(), 'i=0\ni=1\ni=2\n');
+  });
+});
+
 describe('xargs -0', () => {
   it('reads NUL-separated tokens', async () => {
     const { shell, output } = _testShell();

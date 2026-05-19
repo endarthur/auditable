@@ -1005,18 +1005,306 @@ async function _runCmdSub(body, ctx) {
   return chunks.join('').replace(/\n+$/, '');
 }
 
+// ── arithmetic expansion ──
+//
+// Real recursive-descent parser over POSIX arith. Replaces the previous
+// `eval()`-after-substitution hack — the eval was gated by a strict
+// charset regex, but that regex blocked legitimate POSIX syntax like
+// `$((x = 5))` or `$((x ? a : b))`, and the eval itself was a code
+// smell even when gated.
+//
+// Precedence ladder (low → high): assignment, ternary, logical-or,
+// logical-and, bitwise-or, bitwise-xor, bitwise-and, equality,
+// comparison, shift, additive, multiplicative, unary, primary.
+//
+// All arithmetic is 32-bit integer (POSIX). Division truncates toward
+// zero. Division/modulo by zero → 0 (silent; POSIX-undefined). Variables
+// can be referenced bare (`x`) or with `$` (`$x`); both look up in
+// ctx.env. Unbound names treat as 0.
 function _evalArith(body, ctx) {
-  // v0: very basic. Substitute $vars and bare names → values, then eval as
-  // JS expression. POSIX arith is a separate sub-language; full impl later.
-  let src = body;
-  src = src.replace(/\$([a-zA-Z_]\w*)/g, (_, n) => ctx.env.get(n) ?? '0');
-  src = src.replace(/\b([a-zA-Z_]\w*)\b/g, (m, n) => {
-    // Bare names also get var-substituted in arith context.
-    return ctx.env.get(n) ?? '0';
-  });
-  // Restrict to digits / operators / parens / whitespace before eval'ing.
-  if (!/^[\d\s+\-*/%()<>=!&|^~]+$/.test(src)) return '0';
-  try { return String(Number(eval(src)) | 0); } catch { return '0'; }
+  let tokens;
+  try {
+    tokens = _arithTokenize(body);
+  } catch {
+    return '0';
+  }
+  const state = { tokens, i: 0 };
+  let val;
+  try {
+    val = _arithAssign(state, ctx);
+    if (state.i !== tokens.length) return '0';
+  } catch {
+    return '0';
+  }
+  return String(val | 0);
+}
+
+const _ARITH_OPS = [
+  // Longest-first so '<<=' beats '<<' beats '<'.
+  '<<=', '>>=',
+  '&&', '||', '<<', '>>', '<=', '>=', '==', '!=',
+  '+=', '-=', '*=', '/=', '%=', '|=', '&=', '^=',
+  '+', '-', '*', '/', '%', '!', '~', '&', '|', '^',
+  '<', '>', '=', '(', ')', '?', ':', ',',
+];
+
+function _arithTokenize(src) {
+  const tokens = [];
+  let i = 0;
+  while (i < src.length) {
+    const ch = src[i];
+    if (ch === ' ' || ch === '\t' || ch === '\n') { i++; continue; }
+    if (ch >= '0' && ch <= '9') {
+      let j = i, val;
+      if (ch === '0' && (src[i + 1] === 'x' || src[i + 1] === 'X')) {
+        j = i + 2;
+        while (j < src.length && /[0-9a-fA-F]/.test(src[j])) j++;
+        val = parseInt(src.slice(i, j), 16);
+      } else if (ch === '0' && /[0-7]/.test(src[i + 1] || '')) {
+        j = i;
+        while (j < src.length && /[0-7]/.test(src[j])) j++;
+        val = parseInt(src.slice(i, j), 8);
+      } else {
+        while (j < src.length && /\d/.test(src[j])) j++;
+        val = parseInt(src.slice(i, j), 10);
+      }
+      tokens.push({ type: 'num', val: Number.isFinite(val) ? val : 0 });
+      i = j;
+      continue;
+    }
+    if (/[a-zA-Z_]/.test(ch)) {
+      let j = i;
+      while (j < src.length && /[a-zA-Z0-9_]/.test(src[j])) j++;
+      tokens.push({ type: 'var', val: src.slice(i, j) });
+      i = j;
+      continue;
+    }
+    if (ch === '$') {
+      // POSIX: `$var` inside arith is just `var` — the $ is optional.
+      let j = i + 1;
+      while (j < src.length && /[a-zA-Z0-9_]/.test(src[j])) j++;
+      if (j === i + 1) throw new Error('arith: lone $');
+      tokens.push({ type: 'var', val: src.slice(i + 1, j) });
+      i = j;
+      continue;
+    }
+    let matched = null;
+    for (const op of _ARITH_OPS) {
+      if (src.startsWith(op, i)) { matched = op; break; }
+    }
+    if (matched) {
+      tokens.push({ type: 'op', val: matched });
+      i += matched.length;
+      continue;
+    }
+    throw new Error(`arith: unexpected char "${ch}"`);
+  }
+  return tokens;
+}
+
+function _arithLookup(name, ctx) {
+  if (!ctx.env.has(name)) return 0;
+  const v = ctx.env.get(name);
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? (n | 0) : 0;
+}
+
+const _ARITH_ASSIGN_OPS = new Set([
+  '=', '+=', '-=', '*=', '/=', '%=', '|=', '&=', '^=', '<<=', '>>=',
+]);
+
+// Assignment is right-associative. We peek for `var <assign-op>` and
+// take the assignment branch only when both fit; otherwise fall through
+// to the ternary level.
+function _arithAssign(state, ctx) {
+  const t = state.tokens[state.i];
+  const next = state.tokens[state.i + 1];
+  if (t && t.type === 'var' && next && next.type === 'op' && _ARITH_ASSIGN_OPS.has(next.val)) {
+    const name = t.val;
+    const op = next.val;
+    state.i += 2;
+    const rhs = _arithAssign(state, ctx);
+    let val;
+    if (op === '=') {
+      val = rhs;
+    } else {
+      const cur = _arithLookup(name, ctx);
+      switch (op) {
+        case '+=':  val = (cur + rhs) | 0; break;
+        case '-=':  val = (cur - rhs) | 0; break;
+        case '*=':  val = (cur * rhs) | 0; break;
+        case '/=':  val = rhs === 0 ? 0 : (Math.trunc(cur / rhs) | 0); break;
+        case '%=':  val = rhs === 0 ? 0 : (cur % rhs) | 0; break;
+        case '|=':  val = (cur | rhs) | 0; break;
+        case '&=':  val = (cur & rhs) | 0; break;
+        case '^=':  val = (cur ^ rhs) | 0; break;
+        case '<<=': val = (cur << rhs) | 0; break;
+        case '>>=': val = (cur >> rhs) | 0; break;
+      }
+    }
+    val = val | 0;
+    ctx.env.set(name, String(val));
+    return val;
+  }
+  return _arithTernary(state, ctx);
+}
+
+function _arithTernary(state, ctx) {
+  const cond = _arithLogicalOr(state, ctx);
+  const t = state.tokens[state.i];
+  if (t && t.val === '?') {
+    state.i++;
+    const ifTrue = _arithAssign(state, ctx);
+    const colon = state.tokens[state.i];
+    if (!colon || colon.val !== ':') throw new Error("arith: expected ':'");
+    state.i++;
+    const ifFalse = _arithAssign(state, ctx);
+    return cond !== 0 ? ifTrue : ifFalse;
+  }
+  return cond;
+}
+
+function _arithLogicalOr(state, ctx) {
+  let left = _arithLogicalAnd(state, ctx);
+  while (state.tokens[state.i] && state.tokens[state.i].val === '||') {
+    state.i++;
+    const right = _arithLogicalAnd(state, ctx);
+    left = (left !== 0 || right !== 0) ? 1 : 0;
+  }
+  return left;
+}
+
+function _arithLogicalAnd(state, ctx) {
+  let left = _arithBitOr(state, ctx);
+  while (state.tokens[state.i] && state.tokens[state.i].val === '&&') {
+    state.i++;
+    const right = _arithBitOr(state, ctx);
+    left = (left !== 0 && right !== 0) ? 1 : 0;
+  }
+  return left;
+}
+
+function _arithBitOr(state, ctx) {
+  let left = _arithBitXor(state, ctx);
+  while (state.tokens[state.i] && state.tokens[state.i].val === '|') {
+    state.i++;
+    left = (left | _arithBitXor(state, ctx)) | 0;
+  }
+  return left;
+}
+
+function _arithBitXor(state, ctx) {
+  let left = _arithBitAnd(state, ctx);
+  while (state.tokens[state.i] && state.tokens[state.i].val === '^') {
+    state.i++;
+    left = (left ^ _arithBitAnd(state, ctx)) | 0;
+  }
+  return left;
+}
+
+function _arithBitAnd(state, ctx) {
+  let left = _arithEq(state, ctx);
+  while (state.tokens[state.i] && state.tokens[state.i].val === '&') {
+    state.i++;
+    left = (left & _arithEq(state, ctx)) | 0;
+  }
+  return left;
+}
+
+function _arithEq(state, ctx) {
+  let left = _arithCmp(state, ctx);
+  while (state.tokens[state.i] && (state.tokens[state.i].val === '==' || state.tokens[state.i].val === '!=')) {
+    const op = state.tokens[state.i].val;
+    state.i++;
+    const right = _arithCmp(state, ctx);
+    left = (op === '==' ? left === right : left !== right) ? 1 : 0;
+  }
+  return left;
+}
+
+function _arithCmp(state, ctx) {
+  let left = _arithShift(state, ctx);
+  while (state.tokens[state.i] && ['<', '<=', '>', '>='].includes(state.tokens[state.i].val)) {
+    const op = state.tokens[state.i].val;
+    state.i++;
+    const right = _arithShift(state, ctx);
+    let r;
+    switch (op) {
+      case '<':  r = left <  right; break;
+      case '<=': r = left <= right; break;
+      case '>':  r = left >  right; break;
+      case '>=': r = left >= right; break;
+    }
+    left = r ? 1 : 0;
+  }
+  return left;
+}
+
+function _arithShift(state, ctx) {
+  let left = _arithAdd(state, ctx);
+  while (state.tokens[state.i] && (state.tokens[state.i].val === '<<' || state.tokens[state.i].val === '>>')) {
+    const op = state.tokens[state.i].val;
+    state.i++;
+    const right = _arithAdd(state, ctx);
+    left = (op === '<<' ? left << right : left >> right) | 0;
+  }
+  return left;
+}
+
+function _arithAdd(state, ctx) {
+  let left = _arithMul(state, ctx);
+  while (state.tokens[state.i] && (state.tokens[state.i].val === '+' || state.tokens[state.i].val === '-')) {
+    const op = state.tokens[state.i].val;
+    state.i++;
+    const right = _arithMul(state, ctx);
+    left = (op === '+' ? left + right : left - right) | 0;
+  }
+  return left;
+}
+
+function _arithMul(state, ctx) {
+  let left = _arithUnary(state, ctx);
+  while (state.tokens[state.i] && ['*', '/', '%'].includes(state.tokens[state.i].val)) {
+    const op = state.tokens[state.i].val;
+    state.i++;
+    const right = _arithUnary(state, ctx);
+    if ((op === '/' || op === '%') && right === 0) return 0;
+    let r;
+    switch (op) {
+      case '*': r = left * right; break;
+      case '/': r = Math.trunc(left / right); break;
+      case '%': r = left % right; break;
+    }
+    left = r | 0;
+  }
+  return left;
+}
+
+function _arithUnary(state, ctx) {
+  const t = state.tokens[state.i];
+  if (t && t.type === 'op') {
+    if (t.val === '-') { state.i++; return (-_arithUnary(state, ctx)) | 0; }
+    if (t.val === '+') { state.i++; return _arithUnary(state, ctx); }
+    if (t.val === '!') { state.i++; return _arithUnary(state, ctx) === 0 ? 1 : 0; }
+    if (t.val === '~') { state.i++; return (~_arithUnary(state, ctx)) | 0; }
+  }
+  return _arithPrimary(state, ctx);
+}
+
+function _arithPrimary(state, ctx) {
+  const t = state.tokens[state.i];
+  if (!t) throw new Error('arith: unexpected end');
+  if (t.type === 'num') { state.i++; return t.val | 0; }
+  if (t.type === 'var') { state.i++; return _arithLookup(t.val, ctx); }
+  if (t.type === 'op' && t.val === '(') {
+    state.i++;
+    const r = _arithAssign(state, ctx);
+    const close = state.tokens[state.i];
+    if (!close || close.val !== ')') throw new Error("arith: expected ')'");
+    state.i++;
+    return r;
+  }
+  throw new Error(`arith: unexpected token "${t.val}"`);
 }
 
 // Expand $vars and $(cmd) inside a raw string (for here-doc bodies that
