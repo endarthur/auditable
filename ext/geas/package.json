@@ -1,0 +1,36 @@
+{
+  "name": "@gcu/geas",
+  "version": "0.0.1",
+  "description": "geas — the GCU shell. POSIX-syntax baseline with typed-pipe extensions. Async-native, VFS-bound, terminal-frontend-agnostic, worker-runnable.",
+  "type": "module",
+  "main": "src/api.js",
+  "exports": {
+    ".": "./src/api.js",
+    "./lexer": "./src/lexer.js",
+    "./parser": "./src/parser.js",
+    "./ast-nodes": "./src/ast-nodes.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.js",
+    "test": "node --test ../../test/geas.test.mjs"
+  },
+  "keywords": ["shell", "posix", "sh", "geas", "vfs", "gcu", "coreutils"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/geas"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/geas",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}
