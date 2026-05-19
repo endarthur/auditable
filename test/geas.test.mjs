@@ -7,8 +7,53 @@ import assert from 'node:assert/strict';
 import { tokenize } from '../ext/geas/src/lexer.js';
 import { parse } from '../ext/geas/src/parser.js';
 import { parseWordParts } from '../ext/geas/src/word-parts.js';
+import { execute } from '../ext/geas/src/executor.js';
 import { NODE } from '../ext/geas/src/ast-nodes.js';
 import { createHeadlessAdapter } from '../ext/geas/src/adapters/headless.js';
+
+// ── exec test harness ──
+// Build a minimal context with a captured stdout/stderr and a small set of
+// reference builtins. Returns { exitCode, stdout, stderr } for assertions.
+async function run(source, opts = {}) {
+  const stdoutBuf = [];
+  const stderrBuf = [];
+  // Builtins MUST write through ctx.stdout (not the captured top-level
+  // buffer) so pipelines route correctly — the per-stage ctx.stdout
+  // captures into a pipe buffer when the stage isn't last.
+  const builtins = {
+    echo: async (argv, ctx) => {
+      const args = argv.slice(1);
+      let newline = true;
+      if (args[0] === '-n') { newline = false; args.shift(); }
+      await ctx.stdout(args.join(' ') + (newline ? '\n' : ''));
+      return 0;
+    },
+    true:  async () => 0,
+    false: async () => 1,
+    cat: async (_argv, ctx) => {
+      const s = typeof ctx.stdin === 'string' ? ctx.stdin : '';
+      await ctx.stdout(s);
+      return 0;
+    },
+    ...(opts.builtins || {}),
+  };
+  const ast = parse(source);
+  const ctx = {
+    env:        new Map(Object.entries(opts.env || {})),
+    cwd:        opts.cwd || '/',
+    stdin:      opts.stdin ?? '',
+    stdout:     (t) => stdoutBuf.push(String(t)),
+    stderr:     (t) => stderrBuf.push(String(t)),
+    builtins,
+    vfs:        opts.vfs,
+  };
+  const result = await execute(ast, ctx);
+  return {
+    exitCode: result.exitCode,
+    stdout:   stdoutBuf.join(''),
+    stderr:   stderrBuf.join(''),
+  };
+}
 
 // ── token helpers (test-side) ──
 
@@ -731,6 +776,221 @@ describe('headless adapter — input + resize', () => {
   it('default size is 80x24', () => {
     const t = createHeadlessAdapter();
     assert.deepEqual(t.size(), { cols: 80, rows: 24 });
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+// WORD PARTS (structured decomposition)
+// ══════════════════════════════════════════════════════════
+
+// ══════════════════════════════════════════════════════════
+// EXECUTOR
+// ══════════════════════════════════════════════════════════
+
+describe('executor — simple commands', () => {
+  it('echo prints args', async () => {
+    const r = await run('echo hello world');
+    assert.equal(r.exitCode, 0);
+    assert.equal(r.stdout, 'hello world\n');
+  });
+
+  it('echo -n suppresses trailing newline', async () => {
+    const r = await run('echo -n no-nl');
+    assert.equal(r.stdout, 'no-nl');
+  });
+
+  it('true / false exit codes', async () => {
+    assert.equal((await run('true')).exitCode, 0);
+    assert.equal((await run('false')).exitCode, 1);
+  });
+
+  it('unknown command exits 127', async () => {
+    const r = await run('nosuchcommand');
+    assert.equal(r.exitCode, 127);
+  });
+
+  it('multiple commands run in order', async () => {
+    const r = await run('echo one; echo two; echo three');
+    assert.equal(r.stdout, 'one\ntwo\nthree\n');
+  });
+});
+
+describe('executor — word expansion', () => {
+  it('$VAR is substituted', async () => {
+    const r = await run('echo $name', { env: { name: 'arthur' } });
+    assert.equal(r.stdout, 'arthur\n');
+  });
+
+  it('"$VAR" expands inside double quotes', async () => {
+    const r = await run('echo "hi $name"', { env: { name: 'arthur' } });
+    assert.equal(r.stdout, 'hi arthur\n');
+  });
+
+  it("'$VAR' stays literal inside single quotes", async () => {
+    const r = await run("echo '$name'", { env: { name: 'arthur' } });
+    assert.equal(r.stdout, '$name\n');
+  });
+
+  it('unset $VAR expands to empty string', async () => {
+    const r = await run('echo "<$missing>"');
+    assert.equal(r.stdout, '<>\n');
+  });
+
+  it('${VAR:-default} uses default when unset', async () => {
+    const r = await run('echo ${missing:-fallback}');
+    assert.equal(r.stdout, 'fallback\n');
+  });
+
+  it('${VAR:-default} keeps value when set', async () => {
+    const r = await run('echo ${name:-fallback}', { env: { name: 'real' } });
+    assert.equal(r.stdout, 'real\n');
+  });
+
+  it('${VAR:=default} assigns and uses default when unset', async () => {
+    const r = await run('echo ${x:=hello}; echo $x');
+    assert.equal(r.stdout, 'hello\nhello\n');
+  });
+
+  it('${#VAR} returns string length', async () => {
+    const r = await run('echo ${#name}', { env: { name: 'arthur' } });
+    assert.equal(r.stdout, '6\n');
+  });
+
+  it("$(cmd) substitutes command output (trailing newlines stripped)", async () => {
+    const r = await run('echo $(echo nested)');
+    assert.equal(r.stdout, 'nested\n');
+  });
+
+  it('$? is the previous command exit code', async () => {
+    const r = await run('false; echo $?');
+    assert.equal(r.stdout, '1\n');
+  });
+});
+
+describe('executor — pipelines', () => {
+  it('echo | cat — basic pipe', async () => {
+    const r = await run('echo hello | cat');
+    assert.equal(r.stdout, 'hello\n');
+  });
+
+  it('multi-stage pipe', async () => {
+    // Add a uppercase builtin so we can test multi-stage.
+    const upper = async (_argv, ctx) => {
+      const s = typeof ctx.stdin === 'string' ? ctx.stdin : '';
+      await ctx.stdout(s.toUpperCase());
+      return 0;
+    };
+    const r = await run('echo abc | cat | upper', { builtins: { upper } });
+    assert.equal(r.stdout, 'ABC\n');
+  });
+
+  it('pipeline exit code is the last command', async () => {
+    const r = await run('true | false');
+    assert.equal(r.exitCode, 1);
+    const r2 = await run('false | true');
+    assert.equal(r2.exitCode, 0);
+  });
+
+  it('negated pipeline inverts exit code', async () => {
+    assert.equal((await run('! true')).exitCode, 1);
+    assert.equal((await run('! false')).exitCode, 0);
+  });
+});
+
+describe('executor — and-or chains', () => {
+  it('&& runs right only when left succeeded', async () => {
+    const r = await run('true && echo yes');
+    assert.equal(r.stdout, 'yes\n');
+    const r2 = await run('false && echo yes');
+    assert.equal(r2.stdout, '');
+  });
+
+  it('|| runs right only when left failed', async () => {
+    const r = await run('false || echo backup');
+    assert.equal(r.stdout, 'backup\n');
+    const r2 = await run('true || echo backup');
+    assert.equal(r2.stdout, '');
+  });
+
+  it('chained: true && false || echo recover', async () => {
+    const r = await run('true && false || echo recover');
+    assert.equal(r.stdout, 'recover\n');
+  });
+});
+
+describe('executor — control flow', () => {
+  it('if/then/fi', async () => {
+    const r = await run('if true; then echo yes; fi');
+    assert.equal(r.stdout, 'yes\n');
+  });
+
+  it('if/then/else with false', async () => {
+    const r = await run('if false; then echo yes; else echo no; fi');
+    assert.equal(r.stdout, 'no\n');
+  });
+
+  it('if/elif/else', async () => {
+    const r = await run('if false; then echo a; elif true; then echo b; else echo c; fi');
+    assert.equal(r.stdout, 'b\n');
+  });
+
+  it('for x in list', async () => {
+    const r = await run('for x in a b c; do echo $x; done');
+    assert.equal(r.stdout, 'a\nb\nc\n');
+  });
+
+  it('while loop with counter (using arith)', async () => {
+    const r = await run('i=0; while [ "$i" != "3" ]; do echo $i; i=$((i + 1)); done', {
+      builtins: { '[': async (argv) => {
+        // crude: [ A != B ] → strip trailing ']' arg
+        if (argv[argv.length - 1] === ']') argv = argv.slice(0, -1);
+        const [, a, op, b] = argv;
+        if (op === '!=') return a !== b ? 0 : 1;
+        if (op === '=')  return a === b ? 0 : 1;
+        return 2;
+      }},
+    });
+    assert.equal(r.stdout, '0\n1\n2\n');
+  });
+
+  it('case with star pattern', async () => {
+    const r = await run('case foo in bar) echo no ;; *) echo wild ;; esac');
+    assert.equal(r.stdout, 'wild\n');
+  });
+
+  it('case with alternative patterns', async () => {
+    const r = await run('case b in a|b|c) echo match ;; *) echo nope ;; esac');
+    assert.equal(r.stdout, 'match\n');
+  });
+});
+
+describe('executor — assignments', () => {
+  it('top-level assignment persists in env', async () => {
+    const r = await run('x=hello; echo $x');
+    assert.equal(r.stdout, 'hello\n');
+  });
+
+  it('per-command assignment is scoped to that command', async () => {
+    const r = await run('TZ=UTC echo before; echo after-$TZ');
+    // Per-command TZ shouldn't leak after the echo.
+    assert.equal(r.stdout, 'before\nafter-\n');
+  });
+});
+
+describe('executor — here-docs', () => {
+  it('<<EOF body is fed as stdin', async () => {
+    const r = await run('cat <<EOF\nhello\nworld\nEOF\n');
+    assert.equal(r.stdout, 'hello\nworld\n');
+  });
+
+  it('unquoted heredoc expands $vars', async () => {
+    const r = await run('cat <<END\nhi $name\nEND\n', { env: { name: 'arthur' } });
+    assert.equal(r.stdout, 'hi arthur\n');
+  });
+
+  it("quoted heredoc <<'END' is literal", async () => {
+    const r = await run("cat <<'END'\nhi $name\nEND\n", { env: { name: 'arthur' } });
+    assert.equal(r.stdout, 'hi $name\n');
   });
 });
 

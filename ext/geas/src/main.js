@@ -9,5 +9,6 @@ import './ast-nodes.js';
 import './lexer.js';
 import './word-parts.js';
 import './parser.js';
+import './executor.js';
 import './adapters/headless.js';
-export { tokenize, parse, parseWordParts, NODE, createHeadlessAdapter } from './api.js';
+export { tokenize, parse, parseWordParts, execute, NODE, createHeadlessAdapter } from './api.js';
