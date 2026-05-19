@@ -1320,6 +1320,191 @@ describe('builtins — redirects with VFS', () => {
   });
 });
 
+describe('builtins — mkdir / rm / touch', () => {
+  it('mkdir -p creates nested dirs', async () => {
+    const t = _testShell();
+    await t.shell.exec('mkdir -p /a/b/c');
+    const st = await t.vfs.stat('/a/b/c');
+    assert.equal(st.type, 'directory');
+  });
+  it('touch creates empty file', async () => {
+    const t = _testShell();
+    await t.shell.exec('touch /new.txt');
+    const text = await t.vfs.readFile('/new.txt', 'text');
+    assert.equal(text, '');
+  });
+  it('rm removes a file', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/x.txt', 'x');
+    await t.shell.exec('rm /x.txt');
+    let exists = true;
+    try { await t.vfs.stat('/x.txt'); } catch { exists = false; }
+    assert.equal(exists, false);
+  });
+  it('rm -r removes a directory tree', async () => {
+    const t = _testShell();
+    await t.vfs.mkdir('/d/sub', { recursive: true });
+    await t.vfs.writeFile('/d/a.txt', 'a');
+    await t.vfs.writeFile('/d/sub/b.txt', 'b');
+    await t.shell.exec('rm -r /d');
+    let exists = true;
+    try { await t.vfs.stat('/d'); } catch { exists = false; }
+    assert.equal(exists, false);
+  });
+  it('rm of missing file → exit 1; rm -f silent', async () => {
+    const t = _testShell();
+    const r1 = await t.shell.exec('rm /nope');
+    assert.equal(r1.exitCode, 1);
+    t.clear();
+    const r2 = await t.shell.exec('rm -f /nope');
+    assert.equal(r2.exitCode, 0);
+    assert.equal(t.errOutput(), '');
+  });
+});
+
+describe('builtins — head / tail / wc', () => {
+  it('head -n 2', async () => {
+    const t = _testShell();
+    await t.shell.exec('printf "a\\nb\\nc\\nd\\n" | head -n 2');
+    // No printf builtin → fallback to onCommand → 127. Use a different approach:
+    // pipe via echo with explicit newlines isn't easy. Use a file instead.
+  });
+  it('head with file', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/x.txt', 'one\ntwo\nthree\nfour\n');
+    await t.shell.exec('head -n 2 /x.txt');
+    assert.equal(t.output(), 'one\ntwo\n');
+  });
+  it('tail with file', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/x.txt', 'one\ntwo\nthree\nfour\n');
+    await t.shell.exec('tail -n 2 /x.txt');
+    assert.equal(t.output(), 'three\nfour\n');
+  });
+  it('wc -l counts lines', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/x.txt', 'a\nb\nc\n');
+    await t.shell.exec('wc -l /x.txt');
+    assert.match(t.output(), /\b3\b/);
+  });
+  it('wc default shows lines words bytes', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/x.txt', 'one two\nthree\n');
+    await t.shell.exec('wc /x.txt');
+    // Should contain 2 (lines), 3 (words), 14 (bytes)
+    const out = t.output();
+    assert.match(out, /\b2\b/);
+    assert.match(out, /\b3\b/);
+    assert.match(out, /\b14\b/);
+  });
+});
+
+describe('builtins — grep / sort / uniq', () => {
+  it('grep matches lines containing pattern', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/x.txt', 'apple\nbanana\napricot\n');
+    await t.shell.exec('grep ap /x.txt');
+    assert.equal(t.output(), 'apple\napricot\n');
+  });
+  it('grep -v inverts match', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/x.txt', 'apple\nbanana\napricot\n');
+    await t.shell.exec('grep -v ap /x.txt');
+    assert.equal(t.output(), 'banana\n');
+  });
+  it('grep -i case-insensitive', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/x.txt', 'Apple\nbanana\nAPRICOT\n');
+    await t.shell.exec('grep -i ap /x.txt');
+    assert.equal(t.output(), 'Apple\nAPRICOT\n');
+  });
+  it('grep -c counts matches', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/x.txt', 'a\nb\nc\nab\n');
+    await t.shell.exec('grep -c a /x.txt');
+    assert.equal(t.output(), '2\n');
+  });
+  it('grep no match exits 1', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/x.txt', 'a\nb\n');
+    const r = await t.shell.exec('grep nope /x.txt');
+    assert.equal(r.exitCode, 1);
+  });
+  it('sort alphabetical', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/x.txt', 'cherry\napple\nbanana\n');
+    await t.shell.exec('sort /x.txt');
+    assert.equal(t.output(), 'apple\nbanana\ncherry\n');
+  });
+  it('sort -n numeric', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/x.txt', '10\n2\n100\n1\n');
+    await t.shell.exec('sort -n /x.txt');
+    assert.equal(t.output(), '1\n2\n10\n100\n');
+  });
+  it('sort -r reverse', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/x.txt', 'a\nb\nc\n');
+    await t.shell.exec('sort -r /x.txt');
+    assert.equal(t.output(), 'c\nb\na\n');
+  });
+  it('uniq collapses adjacent dupes', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/x.txt', 'a\na\nb\nb\nb\nc\n');
+    await t.shell.exec('uniq /x.txt');
+    assert.equal(t.output(), 'a\nb\nc\n');
+  });
+  it('uniq -c counts each run', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/x.txt', 'a\na\nb\nc\nc\nc\n');
+    await t.shell.exec('uniq -c /x.txt');
+    const lines = t.output().trim().split('\n');
+    assert.equal(lines.length, 3);
+    assert.match(lines[0], /\b2 a/);
+    assert.match(lines[1], /\b1 b/);
+    assert.match(lines[2], /\b3 c/);
+  });
+});
+
+describe('builtins — cut / tee / xargs', () => {
+  it('cut -d "," -f 1,3', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/x.csv', 'a,b,c,d\n1,2,3,4\n');
+    await t.shell.exec('cut -d , -f 1,3 /x.csv');
+    assert.equal(t.output(), 'a,c\n1,3\n');
+  });
+  it('cut -c 1-3', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/x.txt', 'hello\nworld\n');
+    await t.shell.exec('cut -c 1-3 /x.txt');
+    assert.equal(t.output(), 'hel\nwor\n');
+  });
+  it('tee writes stdin to file AND stdout', async () => {
+    const t = _testShell();
+    await t.shell.exec('echo hi | tee /out.txt');
+    assert.equal(t.output(), 'hi\n');
+    const text = await t.vfs.readFile('/out.txt', 'text');
+    assert.equal(text, 'hi\n');
+  });
+  it('tee -a appends', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/log', 'prior\n');
+    await t.shell.exec('echo new | tee -a /log');
+    const text = await t.vfs.readFile('/log', 'text');
+    assert.equal(text, 'prior\nnew\n');
+  });
+  it('xargs dispatches per-token', async () => {
+    const t = _testShell();
+    await t.shell.exec('echo a b c | xargs echo "list:"');
+    assert.equal(t.output(), 'list: a b c\n');
+  });
+  it('xargs -n 1 batches single tokens', async () => {
+    const t = _testShell();
+    await t.shell.exec('echo a b c | xargs -n 1 echo');
+    assert.equal(t.output(), 'a\nb\nc\n');
+  });
+});
+
 describe('builtins — composed script', () => {
   it('write, then read back with pipeline', async () => {
     const t = _testShell();

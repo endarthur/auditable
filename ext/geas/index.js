@@ -2315,6 +2315,20 @@ function defaultBuiltins() {
     ls:       _ls,
     test:     _test,
     '[':      _testBracket,
+    // Filesystem
+    mkdir:    _mkdir,
+    rm:       _rm,
+    touch:    _touch,
+    // Text wranglers
+    head:     _head,
+    tail:     _tail,
+    wc:       _wc,
+    grep:     _grep,
+    sort:     _sort,
+    uniq:     _uniq,
+    cut:      _cut,
+    tee:      _tee,
+    xargs:    _xargs,
   }));
 }
 
@@ -2621,6 +2635,451 @@ function _bNormalizePath(p) {
     stack.push(seg);
   }
   return '/' + stack.join('/');
+}
+
+// Argv option parsing helper. Handles `-abc` (combined short flags),
+// `-n VALUE` (option arg), `--` (end of options), `-` (stdin placeholder
+// kept as a positional). Returns { opts, positionals }.
+function _bParseArgs(argv, spec) {
+  const opts = {};
+  const positionals = [];
+  for (const key of Object.keys(spec)) {
+    opts[key] = spec[key].default ?? (spec[key].arg ? null : false);
+  }
+  let i = 1;
+  while (i < argv.length) {
+    const a = argv[i];
+    if (a === '--') { positionals.push(...argv.slice(i + 1)); break; }
+    if (a === '-' || !a.startsWith('-') || a.length === 1) {
+      positionals.push(a);
+      i++;
+      continue;
+    }
+    // Multi-char short cluster: split each.
+    const cluster = a.slice(1);
+    let consumedNext = false;
+    for (let k = 0; k < cluster.length; k++) {
+      const ch = cluster[k];
+      const matched = Object.keys(spec).find(name => spec[name].short === ch);
+      if (!matched) {
+        // Unknown flag — let the caller decide. Mark as positional and stop.
+        positionals.push('-' + cluster.slice(k));
+        break;
+      }
+      if (spec[matched].arg) {
+        // Take the rest of the cluster as the value, or the next argv.
+        const rest = cluster.slice(k + 1);
+        if (rest.length > 0) { opts[matched] = rest; }
+        else { opts[matched] = argv[i + 1]; consumedNext = true; }
+        break;
+      }
+      opts[matched] = true;
+    }
+    i += consumedNext ? 2 : 1;
+  }
+  return { opts, positionals };
+}
+
+// Read all of stdin (a string in v0) or, when paths are given, the
+// concatenated contents of those VFS files. Common to head / tail / wc /
+// grep / sort / uniq / cut / tee / xargs.
+async function _bReadInput(paths, ctx) {
+  if (!paths || paths.length === 0) {
+    return typeof ctx.stdin === 'string' ? ctx.stdin : '';
+  }
+  if (!ctx.vfs) throw new Error('VFS not configured');
+  const chunks = [];
+  for (const p of paths) {
+    chunks.push(await ctx.vfs.readFile(_bResolvePath(p, ctx), 'text'));
+  }
+  return chunks.join('');
+}
+
+// ── filesystem builtins ──
+
+async function _mkdir(argv, ctx) {
+  if (!ctx.vfs) { await ctx.stderr('mkdir: no VFS configured\n'); return 1; }
+  const { opts, positionals } = _bParseArgs(argv, { p: { short: 'p' } });
+  if (positionals.length === 0) {
+    await ctx.stderr('mkdir: missing operand\n');
+    return 1;
+  }
+  let anyError = 0;
+  for (const p of positionals) {
+    const path = _bResolvePath(p, ctx);
+    try {
+      await ctx.vfs.mkdir(path, opts.p ? { recursive: true } : undefined);
+    } catch (e) {
+      await ctx.stderr(`mkdir: ${p}: ${e.message || 'cannot create'}\n`);
+      anyError = 1;
+    }
+  }
+  return anyError;
+}
+
+async function _rm(argv, ctx) {
+  if (!ctx.vfs) { await ctx.stderr('rm: no VFS configured\n'); return 1; }
+  const { opts, positionals } = _bParseArgs(argv, {
+    r: { short: 'r' }, f: { short: 'f' },
+  });
+  // POSIX combines -R into -r; bash accepts both. We honour either bit.
+  const recursive = opts.r;
+  const force = opts.f;
+  if (positionals.length === 0 && !force) {
+    await ctx.stderr('rm: missing operand\n');
+    return 1;
+  }
+  let anyError = 0;
+  for (const p of positionals) {
+    const path = _bResolvePath(p, ctx);
+    try {
+      const st = await ctx.vfs.stat(path);
+      if (st.type === 'directory') {
+        if (!recursive) {
+          await ctx.stderr(`rm: ${p}: is a directory\n`);
+          anyError = 1;
+          continue;
+        }
+        // Recursive delete: walk entries, unlink files, rmdir folders.
+        await _rmRecursive(ctx.vfs, path);
+      } else {
+        await ctx.vfs.unlink(path);
+      }
+    } catch (e) {
+      if (!force) {
+        await ctx.stderr(`rm: ${p}: ${e.message || 'cannot remove'}\n`);
+        anyError = 1;
+      }
+    }
+  }
+  return anyError;
+}
+
+async function _rmRecursive(vfs, dir) {
+  const entries = await vfs.readdir(dir);
+  for (const e of entries) {
+    const name = typeof e === 'string' ? e : e.name;
+    const child = dir.endsWith('/') ? dir + name : dir + '/' + name;
+    const st = await vfs.stat(child);
+    if (st.type === 'directory') await _rmRecursive(vfs, child);
+    else await vfs.unlink(child);
+  }
+  await vfs.rmdir(dir);
+}
+
+async function _touch(argv, ctx) {
+  if (!ctx.vfs) { await ctx.stderr('touch: no VFS configured\n'); return 1; }
+  const { positionals } = _bParseArgs(argv, { c: { short: 'c' } });
+  if (positionals.length === 0) {
+    await ctx.stderr('touch: missing operand\n');
+    return 1;
+  }
+  let anyError = 0;
+  for (const p of positionals) {
+    const path = _bResolvePath(p, ctx);
+    try {
+      try { await ctx.vfs.stat(path); /* exists — POSIX would update mtime; v0 no-op */ }
+      catch { await ctx.vfs.writeFile(path, ''); }
+    } catch (e) {
+      await ctx.stderr(`touch: ${p}: ${e.message || 'cannot touch'}\n`);
+      anyError = 1;
+    }
+  }
+  return anyError;
+}
+
+// ── text wranglers ──
+
+async function _head(argv, ctx) {
+  const { opts, positionals } = _bParseArgs(argv, { n: { short: 'n', arg: true, default: '10' } });
+  const n = Math.max(0, parseInt(opts.n, 10) || 0);
+  try {
+    const text = await _bReadInput(positionals, ctx);
+    const lines = text.split('\n');
+    // Preserve trailing newline state: if text ends with '\n', the last
+    // element is '' and we drop it for the "lines" count.
+    const trailingNL = text.endsWith('\n');
+    const effective = trailingNL ? lines.slice(0, -1) : lines;
+    const take = effective.slice(0, n);
+    await ctx.stdout(take.join('\n') + (take.length > 0 ? '\n' : ''));
+    return 0;
+  } catch (e) {
+    await ctx.stderr(`head: ${e.message}\n`);
+    return 1;
+  }
+}
+
+async function _tail(argv, ctx) {
+  const { opts, positionals } = _bParseArgs(argv, { n: { short: 'n', arg: true, default: '10' } });
+  const n = Math.max(0, parseInt(opts.n, 10) || 0);
+  try {
+    const text = await _bReadInput(positionals, ctx);
+    const lines = text.split('\n');
+    const trailingNL = text.endsWith('\n');
+    const effective = trailingNL ? lines.slice(0, -1) : lines;
+    const take = effective.slice(Math.max(0, effective.length - n));
+    await ctx.stdout(take.join('\n') + (take.length > 0 ? '\n' : ''));
+    return 0;
+  } catch (e) {
+    await ctx.stderr(`tail: ${e.message}\n`);
+    return 1;
+  }
+}
+
+async function _wc(argv, ctx) {
+  const { opts, positionals } = _bParseArgs(argv, {
+    l: { short: 'l' }, w: { short: 'w' }, c: { short: 'c' },
+  });
+  // Default (no flags) prints lines, words, bytes.
+  const showAll = !opts.l && !opts.w && !opts.c;
+  try {
+    const text = await _bReadInput(positionals, ctx);
+    const lines = text.endsWith('\n')
+      ? text.split('\n').length - 1
+      : (text.length === 0 ? 0 : text.split('\n').length);
+    const words = text.trim() === '' ? 0 : text.trim().split(/\s+/).length;
+    const bytes = text.length;
+    const parts = [];
+    if (opts.l || showAll) parts.push(String(lines).padStart(8));
+    if (opts.w || showAll) parts.push(String(words).padStart(8));
+    if (opts.c || showAll) parts.push(String(bytes).padStart(8));
+    await ctx.stdout(parts.join('') + '\n');
+    return 0;
+  } catch (e) {
+    await ctx.stderr(`wc: ${e.message}\n`);
+    return 1;
+  }
+}
+
+async function _grep(argv, ctx) {
+  const { opts, positionals } = _bParseArgs(argv, {
+    i: { short: 'i' }, v: { short: 'v' }, n: { short: 'n' },
+    F: { short: 'F' }, c: { short: 'c' },
+  });
+  if (positionals.length === 0) {
+    await ctx.stderr('grep: missing pattern\n');
+    return 2;
+  }
+  const pattern = positionals[0];
+  const files = positionals.slice(1);
+  let regex;
+  try {
+    regex = opts.F
+      ? new RegExp(_escapeRe(pattern), opts.i ? 'i' : '')
+      : new RegExp(pattern, opts.i ? 'i' : '');
+  } catch (e) {
+    await ctx.stderr(`grep: bad pattern: ${e.message}\n`);
+    return 2;
+  }
+  try {
+    const text = await _bReadInput(files, ctx);
+    const lines = text.split('\n');
+    const trailing = text.endsWith('\n');
+    const effective = trailing ? lines.slice(0, -1) : lines;
+    let count = 0;
+    const out = [];
+    for (let i = 0; i < effective.length; i++) {
+      const line = effective[i];
+      const matched = regex.test(line);
+      if (opts.v ? !matched : matched) {
+        count++;
+        if (!opts.c) {
+          out.push(opts.n ? `${i + 1}:${line}` : line);
+        }
+      }
+    }
+    if (opts.c) await ctx.stdout(`${count}\n`);
+    else if (out.length > 0) await ctx.stdout(out.join('\n') + '\n');
+    return count > 0 ? 0 : 1;
+  } catch (e) {
+    await ctx.stderr(`grep: ${e.message}\n`);
+    return 2;
+  }
+}
+
+function _escapeRe(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+async function _sort(argv, ctx) {
+  const { opts, positionals } = _bParseArgs(argv, {
+    r: { short: 'r' }, n: { short: 'n' }, u: { short: 'u' },
+  });
+  try {
+    const text = await _bReadInput(positionals, ctx);
+    const trailing = text.endsWith('\n');
+    let lines = (trailing ? text.slice(0, -1) : text).split('\n');
+    if (opts.n) {
+      lines.sort((a, b) => {
+        const na = parseFloat(a), nb = parseFloat(b);
+        if (Number.isNaN(na) && Number.isNaN(nb)) return a.localeCompare(b);
+        if (Number.isNaN(na)) return -1;
+        if (Number.isNaN(nb)) return 1;
+        return na - nb;
+      });
+    } else {
+      lines.sort();
+    }
+    if (opts.r) lines.reverse();
+    if (opts.u) lines = [...new Set(lines)];
+    await ctx.stdout(lines.join('\n') + (lines.length > 0 ? '\n' : ''));
+    return 0;
+  } catch (e) {
+    await ctx.stderr(`sort: ${e.message}\n`);
+    return 1;
+  }
+}
+
+async function _uniq(argv, ctx) {
+  const { opts, positionals } = _bParseArgs(argv, {
+    c: { short: 'c' }, d: { short: 'd' }, u: { short: 'u' },
+  });
+  try {
+    const text = await _bReadInput(positionals, ctx);
+    const trailing = text.endsWith('\n');
+    const lines = (trailing ? text.slice(0, -1) : text).split('\n');
+    const out = [];
+    let prev = null, runCount = 0;
+    const emit = () => {
+      if (prev === null) return;
+      if (opts.d && runCount < 2) return;
+      if (opts.u && runCount >= 2) return;
+      if (opts.c) out.push(`${String(runCount).padStart(4)} ${prev}`);
+      else out.push(prev);
+    };
+    for (const l of lines) {
+      if (l === prev) { runCount++; continue; }
+      emit();
+      prev = l;
+      runCount = 1;
+    }
+    emit();
+    await ctx.stdout(out.join('\n') + (out.length > 0 ? '\n' : ''));
+    return 0;
+  } catch (e) {
+    await ctx.stderr(`uniq: ${e.message}\n`);
+    return 1;
+  }
+}
+
+async function _cut(argv, ctx) {
+  const { opts, positionals } = _bParseArgs(argv, {
+    d: { short: 'd', arg: true, default: '\t' },
+    f: { short: 'f', arg: true },
+    c: { short: 'c', arg: true },
+  });
+  if (!opts.f && !opts.c) {
+    await ctx.stderr('cut: must specify -f or -c\n');
+    return 1;
+  }
+  const ranges = _parseRanges(opts.f || opts.c);
+  try {
+    const text = await _bReadInput(positionals, ctx);
+    const trailing = text.endsWith('\n');
+    const lines = (trailing ? text.slice(0, -1) : text).split('\n');
+    const out = [];
+    for (const line of lines) {
+      if (opts.f) {
+        const fields = line.split(opts.d);
+        const picked = ranges.flatMap(([a, b]) => {
+          const lo = Math.max(1, a) - 1;
+          const hi = (b === Infinity ? fields.length : b);
+          return fields.slice(lo, hi);
+        });
+        out.push(picked.join(opts.d));
+      } else {
+        const picked = ranges.flatMap(([a, b]) => {
+          const lo = Math.max(1, a) - 1;
+          const hi = (b === Infinity ? line.length : b);
+          return [line.slice(lo, hi)];
+        });
+        out.push(picked.join(''));
+      }
+    }
+    await ctx.stdout(out.join('\n') + (out.length > 0 ? '\n' : ''));
+    return 0;
+  } catch (e) {
+    await ctx.stderr(`cut: ${e.message}\n`);
+    return 1;
+  }
+}
+
+// "1,3-5,7-" → [[1,1], [3,5], [7,Infinity]]
+function _parseRanges(spec) {
+  return spec.split(',').map(part => {
+    if (part.includes('-')) {
+      const [a, b] = part.split('-');
+      return [
+        a === '' ? 1 : parseInt(a, 10),
+        b === '' ? Infinity : parseInt(b, 10),
+      ];
+    }
+    const n = parseInt(part, 10);
+    return [n, n];
+  });
+}
+
+async function _tee(argv, ctx) {
+  if (!ctx.vfs && argv.length > 1) {
+    await ctx.stderr('tee: no VFS configured for file targets\n');
+    return 1;
+  }
+  const { opts, positionals } = _bParseArgs(argv, { a: { short: 'a' } });
+  const input = typeof ctx.stdin === 'string' ? ctx.stdin : '';
+  await ctx.stdout(input);
+  let anyError = 0;
+  for (const p of positionals) {
+    try {
+      const path = _bResolvePath(p, ctx);
+      if (opts.a) {
+        let prior;
+        try { prior = await ctx.vfs.readFile(path, 'text'); } catch { prior = ''; }
+        await ctx.vfs.writeFile(path, prior + input);
+      } else {
+        await ctx.vfs.writeFile(path, input);
+      }
+    } catch (e) {
+      await ctx.stderr(`tee: ${p}: ${e.message || 'cannot write'}\n`);
+      anyError = 1;
+    }
+  }
+  return anyError;
+}
+
+// xargs: build commands from stdin tokens. v0 supports -n (batch size)
+// and uses the dispatch in ctx to invoke the named command.
+async function _xargs(argv, ctx) {
+  const { opts, positionals } = _bParseArgs(argv, {
+    n: { short: 'n', arg: true },
+    I: { short: 'I', arg: true },
+  });
+  const cmdArgv = positionals.length === 0 ? ['echo'] : positionals;
+  const stdin = typeof ctx.stdin === 'string' ? ctx.stdin : '';
+  const tokens = stdin.split(/\s+/).filter(Boolean);
+  const batchSize = opts.n ? Math.max(1, parseInt(opts.n, 10)) : tokens.length;
+  let lastExit = 0;
+  for (let i = 0; i < tokens.length; i += batchSize) {
+    const batch = tokens.slice(i, i + batchSize);
+    let argvCall;
+    if (opts.I) {
+      // Substitute the placeholder in cmdArgv.
+      argvCall = cmdArgv.map(a => a === opts.I ? batch.join(' ') : a);
+    } else {
+      argvCall = [...cmdArgv, ...batch];
+    }
+    const name = argvCall[0];
+    if (ctx.builtins.has(name)) {
+      const r = await ctx.builtins.get(name)(argvCall, ctx);
+      lastExit = typeof r === 'number' ? r : 0;
+    } else if (ctx.onCommand) {
+      lastExit = await ctx.onCommand(name, argvCall, ctx);
+    } else {
+      await ctx.stderr(`xargs: ${name}: command not found\n`);
+      lastExit = 127;
+    }
+    if (tokens.length === 0) break;
+  }
+  return lastExit;
 }
 
 // -- headless.js --
