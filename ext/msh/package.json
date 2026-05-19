@@ -1,0 +1,28 @@
+{
+  "name": "@gcu/msh",
+  "version": "0.1.0",
+  "description": "Reader and writer for ARANZ-1.0 mesh files (.msh) — single triangulated mesh per file, the classic ARANZ Geo / Leapfrog export format.",
+  "type": "module",
+  "main": "./msh.js",
+  "exports": {
+    ".": "./msh.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "msh.js",
+    "index.js",
+    "README.md"
+  ],
+  "keywords": ["msh", "aranz", "leapfrog", "geology", "mesh", "mining", "geostatistics", "auditable", "gcu"],
+  "license": "BSD-3-Clause",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/msh"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/msh",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}
