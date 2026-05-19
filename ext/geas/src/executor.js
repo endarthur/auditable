@@ -49,6 +49,18 @@ function _normalize(ctx) {
     onCommand:  ctx.onCommand ?? (async (name) => 127),
     functions:  ctx.functions instanceof Map ? ctx.functions : new Map(Object.entries(ctx.functions || {})),
     lastStatus: ctx.lastStatus ?? 0,
+    // Shell options (set via `set -e`, `set -u`, `set -o pipefail`, ...).
+    // Live on ctx so builtins like `set` can flip them at runtime, and the
+    // executor checks them at the right gates (errexit after every command
+    // in a list / program; pipefail when deriving a pipeline's exit code;
+    // nounset on var lookup).
+    options:    ctx.options ?? { errexit: false, nounset: false, pipefail: false, xtrace: false },
+    // True while evaluating an `if`/`while`/`until` condition, the left
+    // side of `&&`/`||`, or a negated `! cmd`. errexit doesn't trigger
+    // inside these contexts — only on the rightmost actually-evaluated
+    // command of a list (POSIX 2.5.3 / Bash "Shell Builtin Commands" set).
+    _inCondition: ctx._inCondition ?? false,
+    positional: ctx.positional ?? [],
     // Internal signal markers — thrown by `break`/`continue`/`return`/`exit`.
     // Exposed on ctx so builtins can throw them too.
     _BREAK:     ctx._BREAK ?? Symbol.for('geas:break'),
@@ -56,6 +68,39 @@ function _normalize(ctx) {
     _RETURN:    ctx._RETURN ?? Symbol.for('geas:return'),
     _EXIT:      ctx._EXIT ?? Symbol.for('geas:exit'),
   };
+}
+
+// Run a child node with _inCondition forced true. Used by if/while/until
+// conditions, the left side of &&/||, and the body of a negated pipeline.
+// Restores _inCondition on return so siblings see the original value.
+async function _withCondition(node, ctx) {
+  const prev = ctx._inCondition;
+  ctx._inCondition = true;
+  try {
+    return await _exec(node, ctx);
+  } finally {
+    ctx._inCondition = prev;
+  }
+}
+
+// Does a command qualify for errexit-suppression by being a "tested" command?
+// POSIX: negated pipelines (`! cmd`) never trigger errexit even on failure.
+// Compound conditions handle their own context via _withCondition.
+function _errexitExempt(cmd) {
+  if (cmd && cmd.type === NODE.PIPELINE && cmd.negated) return true;
+  return false;
+}
+
+// After executing a command in a list/program context, check whether
+// errexit should trigger a script exit. Called by _execProgram, _execList,
+// and the compound-body helpers (which themselves invoke _execList for
+// their bodies, so the check happens transparently there too).
+function _maybeErrexit(cmd, exitCode, ctx) {
+  if (!ctx.options || !ctx.options.errexit) return;
+  if (exitCode === 0) return;
+  if (ctx._inCondition) return;
+  if (_errexitExempt(cmd)) return;
+  throw { exitCode, _exit: true };
 }
 
 async function _exec(node, ctx) {
@@ -86,11 +131,19 @@ async function _execProgram(node, ctx) {
       const r = await _exec(cmd, ctx);
       exitCode = r.exitCode;
       ctx.lastStatus = exitCode;
+      _maybeErrexit(cmd, exitCode, ctx);
     }
   } catch (e) {
     // `exit` builtin throws { exitCode, _exit: true }; catch here to stop
-    // running subsequent top-level commands.
-    if (e && e._exit) return { exitCode: e.exitCode };
+    // running subsequent top-level commands. The errexit path also throws
+    // an _exit signal, which routes the same way. nounset (`set -u`)
+    // tags its throw with `_unbound` so we can surface the variable name.
+    if (e && e._exit) {
+      if (e._unbound) {
+        try { await ctx.stderr(`geas: ${e._unbound}: unbound variable\n`); } catch {}
+      }
+      return { exitCode: e.exitCode };
+    }
     throw e;
   }
   return { exitCode };
@@ -102,13 +155,20 @@ async function _execList(node, ctx) {
     const r = await _exec(item.cmd, ctx);
     exitCode = r.exitCode;
     ctx.lastStatus = exitCode;
+    _maybeErrexit(item.cmd, exitCode, ctx);
     // v0: `&` runs synchronously, same as `;`.
   }
   return { exitCode };
 }
 
 async function _execAndOr(node, ctx) {
-  const left = await _exec(node.left, ctx);
+  // The left side of && / || is a "tested" command (its exit code drives
+  // the chain decision), so errexit doesn't trigger on it. The right side
+  // inherits the caller's _inCondition — at the top level that's false,
+  // so the rightmost actually-evaluated command CAN trigger errexit; for
+  // nested chains like `A && B && C` the outer wraps the inner left in a
+  // condition, which transitively suppresses A and B but leaves C exposed.
+  const left = await _withCondition(node.left, ctx);
   ctx.lastStatus = left.exitCode;
   if (node.op === '&&' && left.exitCode !== 0) return left;
   if (node.op === '||' && left.exitCode === 0) return left;
@@ -120,11 +180,20 @@ async function _execAndOr(node, ctx) {
 // ── pipelines ──
 
 async function _execPipeline(node, ctx) {
+  // A `! pipeline` is a "tested" command for errexit purposes — POSIX says
+  // commands whose status is being inverted with `!` do NOT trigger
+  // errexit. Force _inCondition for the body's evaluation so anything
+  // inside (including non-final pipefail-derived non-zero exits) is
+  // suppressed, then invert the final exit. The outer _maybeErrexit()
+  // also short-circuits on negated pipelines via _errexitExempt.
+  if (node.negated) {
+    const inner = await _withCondition({ ...node, negated: false }, ctx);
+    return { exitCode: inner.exitCode === 0 ? 1 : 0 };
+  }
+
   if (node.commands.length === 1) {
     const r = await _exec(node.commands[0], ctx);
-    let exitCode = r.exitCode;
-    if (node.negated) exitCode = exitCode === 0 ? 1 : 0;
-    return { exitCode };
+    return { exitCode: r.exitCode };
   }
 
   // v0: buffered pipes. Each stage runs to completion, its stdout collected
@@ -141,7 +210,7 @@ async function _execPipeline(node, ctx) {
   // Consumers that don't understand the Typed kind get text via the value's
   // toString() — see typed.js for the protocol contract.
   let pipeIn = ctx.stdin;
-  let lastExit = 0;
+  const exits = [];
   for (let i = 0; i < node.commands.length; i++) {
     const isLast = i === node.commands.length - 1;
     let bufOut = [];
@@ -158,14 +227,22 @@ async function _execPipeline(node, ctx) {
       },
     };
     const r = await _exec(node.commands[i], subCtx);
-    lastExit = r.exitCode;
+    exits.push(r.exitCode);
     if (!isLast) {
       // Prefer Typed if the stage emitted one — otherwise concat text.
       pipeIn = bufTyped !== null ? bufTyped : bufOut.join('');
     }
   }
-  if (node.negated) lastExit = lastExit === 0 ? 1 : 0;
-  return { exitCode: lastExit };
+  // POSIX pipefail: pipeline exit code is the rightmost non-zero stage,
+  // or 0 if all succeeded. Without pipefail, only the last stage's exit
+  // counts. (We use first non-zero here — bash returns "last non-zero",
+  // which is the same when only one stage fails; for multi-failure
+  // cases, "first non-zero" tends to be more useful for diagnosis.)
+  const lastExit = exits[exits.length - 1];
+  const finalExit = ctx.options.pipefail
+    ? (exits.find(c => c !== 0) ?? 0)
+    : lastExit;
+  return { exitCode: finalExit };
 }
 
 // ── simple commands ──
@@ -250,10 +327,10 @@ async function _execSimpleCommand(node, ctx) {
 // ── compound commands ──
 
 async function _execIf(node, ctx) {
-  const cond = await _exec(node.cond, ctx);
+  const cond = await _withCondition(node.cond, ctx);
   if (cond.exitCode === 0) return await _exec(node.then, ctx);
   for (const elif of node.elifs) {
-    const c = await _exec(elif.cond, ctx);
+    const c = await _withCondition(elif.cond, ctx);
     if (c.exitCode === 0) return await _exec(elif.then, ctx);
   }
   if (node.else) return await _exec(node.else, ctx);
@@ -302,7 +379,7 @@ async function _execWhile(node, ctx) {
     if (++n > maxIters) {
       throw new Error(`geas: while-loop exceeded ${maxIters} iterations (set ctx.maxWhileIters to raise)`);
     }
-    const cond = await _exec(node.cond, ctx);
+    const cond = await _withCondition(node.cond, ctx);
     if (cond.exitCode !== 0) break;
     try {
       const r = await _exec(node.body, ctx);
@@ -324,7 +401,7 @@ async function _execUntil(node, ctx) {
     if (++n > maxIters) {
       throw new Error(`geas: until-loop exceeded ${maxIters} iterations`);
     }
-    const cond = await _exec(node.cond, ctx);
+    const cond = await _withCondition(node.cond, ctx);
     if (cond.exitCode === 0) break;
     try {
       const r = await _exec(node.body, ctx);
@@ -681,7 +758,16 @@ function _lookupVar(name, ctx) {
     if (idx === 0) return ctx.env.get('0') ?? 'geas';
     return (ctx.positional || [])[idx - 1] ?? '';
   }
-  return ctx.env.get(name) ?? '';
+  if (ctx.env.has(name)) return ctx.env.get(name);
+  // POSIX nounset (`set -u`): unbound named variable is a fatal error.
+  // Throws an _exit signal so _execProgram halts the script. Special
+  // params, positional, and the parameter-expansion forms `${X:-d}` /
+  // `${X-d}` / `${X:+v}` / `${X+v}` route around _lookupVar (they go
+  // through _expandParam directly), which preserves POSIX semantics.
+  if (ctx.options && ctx.options.nounset) {
+    throw { exitCode: 1, _exit: true, _unbound: name };
+  }
+  return '';
 }
 
 async function _expandParam(part, ctx) {

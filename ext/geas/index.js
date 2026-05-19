@@ -1654,6 +1654,18 @@ function _normalize(ctx) {
     onCommand:  ctx.onCommand ?? (async (name) => 127),
     functions:  ctx.functions instanceof Map ? ctx.functions : new Map(Object.entries(ctx.functions || {})),
     lastStatus: ctx.lastStatus ?? 0,
+    // Shell options (set via `set -e`, `set -u`, `set -o pipefail`, ...).
+    // Live on ctx so builtins like `set` can flip them at runtime, and the
+    // executor checks them at the right gates (errexit after every command
+    // in a list / program; pipefail when deriving a pipeline's exit code;
+    // nounset on var lookup).
+    options:    ctx.options ?? { errexit: false, nounset: false, pipefail: false, xtrace: false },
+    // True while evaluating an `if`/`while`/`until` condition, the left
+    // side of `&&`/`||`, or a negated `! cmd`. errexit doesn't trigger
+    // inside these contexts — only on the rightmost actually-evaluated
+    // command of a list (POSIX 2.5.3 / Bash "Shell Builtin Commands" set).
+    _inCondition: ctx._inCondition ?? false,
+    positional: ctx.positional ?? [],
     // Internal signal markers — thrown by `break`/`continue`/`return`/`exit`.
     // Exposed on ctx so builtins can throw them too.
     _BREAK:     ctx._BREAK ?? Symbol.for('geas:break'),
@@ -1661,6 +1673,39 @@ function _normalize(ctx) {
     _RETURN:    ctx._RETURN ?? Symbol.for('geas:return'),
     _EXIT:      ctx._EXIT ?? Symbol.for('geas:exit'),
   };
+}
+
+// Run a child node with _inCondition forced true. Used by if/while/until
+// conditions, the left side of &&/||, and the body of a negated pipeline.
+// Restores _inCondition on return so siblings see the original value.
+async function _withCondition(node, ctx) {
+  const prev = ctx._inCondition;
+  ctx._inCondition = true;
+  try {
+    return await _exec(node, ctx);
+  } finally {
+    ctx._inCondition = prev;
+  }
+}
+
+// Does a command qualify for errexit-suppression by being a "tested" command?
+// POSIX: negated pipelines (`! cmd`) never trigger errexit even on failure.
+// Compound conditions handle their own context via _withCondition.
+function _errexitExempt(cmd) {
+  if (cmd && cmd.type === NODE.PIPELINE && cmd.negated) return true;
+  return false;
+}
+
+// After executing a command in a list/program context, check whether
+// errexit should trigger a script exit. Called by _execProgram, _execList,
+// and the compound-body helpers (which themselves invoke _execList for
+// their bodies, so the check happens transparently there too).
+function _maybeErrexit(cmd, exitCode, ctx) {
+  if (!ctx.options || !ctx.options.errexit) return;
+  if (exitCode === 0) return;
+  if (ctx._inCondition) return;
+  if (_errexitExempt(cmd)) return;
+  throw { exitCode, _exit: true };
 }
 
 async function _exec(node, ctx) {
@@ -1691,11 +1736,19 @@ async function _execProgram(node, ctx) {
       const r = await _exec(cmd, ctx);
       exitCode = r.exitCode;
       ctx.lastStatus = exitCode;
+      _maybeErrexit(cmd, exitCode, ctx);
     }
   } catch (e) {
     // `exit` builtin throws { exitCode, _exit: true }; catch here to stop
-    // running subsequent top-level commands.
-    if (e && e._exit) return { exitCode: e.exitCode };
+    // running subsequent top-level commands. The errexit path also throws
+    // an _exit signal, which routes the same way. nounset (`set -u`)
+    // tags its throw with `_unbound` so we can surface the variable name.
+    if (e && e._exit) {
+      if (e._unbound) {
+        try { await ctx.stderr(`geas: ${e._unbound}: unbound variable\n`); } catch {}
+      }
+      return { exitCode: e.exitCode };
+    }
     throw e;
   }
   return { exitCode };
@@ -1707,13 +1760,20 @@ async function _execList(node, ctx) {
     const r = await _exec(item.cmd, ctx);
     exitCode = r.exitCode;
     ctx.lastStatus = exitCode;
+    _maybeErrexit(item.cmd, exitCode, ctx);
     // v0: `&` runs synchronously, same as `;`.
   }
   return { exitCode };
 }
 
 async function _execAndOr(node, ctx) {
-  const left = await _exec(node.left, ctx);
+  // The left side of && / || is a "tested" command (its exit code drives
+  // the chain decision), so errexit doesn't trigger on it. The right side
+  // inherits the caller's _inCondition — at the top level that's false,
+  // so the rightmost actually-evaluated command CAN trigger errexit; for
+  // nested chains like `A && B && C` the outer wraps the inner left in a
+  // condition, which transitively suppresses A and B but leaves C exposed.
+  const left = await _withCondition(node.left, ctx);
   ctx.lastStatus = left.exitCode;
   if (node.op === '&&' && left.exitCode !== 0) return left;
   if (node.op === '||' && left.exitCode === 0) return left;
@@ -1725,11 +1785,20 @@ async function _execAndOr(node, ctx) {
 // ── pipelines ──
 
 async function _execPipeline(node, ctx) {
+  // A `! pipeline` is a "tested" command for errexit purposes — POSIX says
+  // commands whose status is being inverted with `!` do NOT trigger
+  // errexit. Force _inCondition for the body's evaluation so anything
+  // inside (including non-final pipefail-derived non-zero exits) is
+  // suppressed, then invert the final exit. The outer _maybeErrexit()
+  // also short-circuits on negated pipelines via _errexitExempt.
+  if (node.negated) {
+    const inner = await _withCondition({ ...node, negated: false }, ctx);
+    return { exitCode: inner.exitCode === 0 ? 1 : 0 };
+  }
+
   if (node.commands.length === 1) {
     const r = await _exec(node.commands[0], ctx);
-    let exitCode = r.exitCode;
-    if (node.negated) exitCode = exitCode === 0 ? 1 : 0;
-    return { exitCode };
+    return { exitCode: r.exitCode };
   }
 
   // v0: buffered pipes. Each stage runs to completion, its stdout collected
@@ -1746,7 +1815,7 @@ async function _execPipeline(node, ctx) {
   // Consumers that don't understand the Typed kind get text via the value's
   // toString() — see typed.js for the protocol contract.
   let pipeIn = ctx.stdin;
-  let lastExit = 0;
+  const exits = [];
   for (let i = 0; i < node.commands.length; i++) {
     const isLast = i === node.commands.length - 1;
     let bufOut = [];
@@ -1763,14 +1832,22 @@ async function _execPipeline(node, ctx) {
       },
     };
     const r = await _exec(node.commands[i], subCtx);
-    lastExit = r.exitCode;
+    exits.push(r.exitCode);
     if (!isLast) {
       // Prefer Typed if the stage emitted one — otherwise concat text.
       pipeIn = bufTyped !== null ? bufTyped : bufOut.join('');
     }
   }
-  if (node.negated) lastExit = lastExit === 0 ? 1 : 0;
-  return { exitCode: lastExit };
+  // POSIX pipefail: pipeline exit code is the rightmost non-zero stage,
+  // or 0 if all succeeded. Without pipefail, only the last stage's exit
+  // counts. (We use first non-zero here — bash returns "last non-zero",
+  // which is the same when only one stage fails; for multi-failure
+  // cases, "first non-zero" tends to be more useful for diagnosis.)
+  const lastExit = exits[exits.length - 1];
+  const finalExit = ctx.options.pipefail
+    ? (exits.find(c => c !== 0) ?? 0)
+    : lastExit;
+  return { exitCode: finalExit };
 }
 
 // ── simple commands ──
@@ -1855,10 +1932,10 @@ async function _execSimpleCommand(node, ctx) {
 // ── compound commands ──
 
 async function _execIf(node, ctx) {
-  const cond = await _exec(node.cond, ctx);
+  const cond = await _withCondition(node.cond, ctx);
   if (cond.exitCode === 0) return await _exec(node.then, ctx);
   for (const elif of node.elifs) {
-    const c = await _exec(elif.cond, ctx);
+    const c = await _withCondition(elif.cond, ctx);
     if (c.exitCode === 0) return await _exec(elif.then, ctx);
   }
   if (node.else) return await _exec(node.else, ctx);
@@ -1907,7 +1984,7 @@ async function _execWhile(node, ctx) {
     if (++n > maxIters) {
       throw new Error(`geas: while-loop exceeded ${maxIters} iterations (set ctx.maxWhileIters to raise)`);
     }
-    const cond = await _exec(node.cond, ctx);
+    const cond = await _withCondition(node.cond, ctx);
     if (cond.exitCode !== 0) break;
     try {
       const r = await _exec(node.body, ctx);
@@ -1929,7 +2006,7 @@ async function _execUntil(node, ctx) {
     if (++n > maxIters) {
       throw new Error(`geas: until-loop exceeded ${maxIters} iterations`);
     }
-    const cond = await _exec(node.cond, ctx);
+    const cond = await _withCondition(node.cond, ctx);
     if (cond.exitCode === 0) break;
     try {
       const r = await _exec(node.body, ctx);
@@ -2286,7 +2363,16 @@ function _lookupVar(name, ctx) {
     if (idx === 0) return ctx.env.get('0') ?? 'geas';
     return (ctx.positional || [])[idx - 1] ?? '';
   }
-  return ctx.env.get(name) ?? '';
+  if (ctx.env.has(name)) return ctx.env.get(name);
+  // POSIX nounset (`set -u`): unbound named variable is a fatal error.
+  // Throws an _exit signal so _execProgram halts the script. Special
+  // params, positional, and the parameter-expansion forms `${X:-d}` /
+  // `${X-d}` / `${X:+v}` / `${X+v}` route around _lookupVar (they go
+  // through _expandParam directly), which preserves POSIX semantics.
+  if (ctx.options && ctx.options.nounset) {
+    throw { exitCode: 1, _exit: true, _unbound: name };
+  }
+  return '';
 }
 
 async function _expandParam(part, ctx) {
@@ -2664,6 +2750,7 @@ function defaultBuiltins() {
     ...defaultTypedBuiltins(),
     ':':      _colon,
     echo:     _echo,
+    printf:   _printf,
     true:     _true,
     false:    _false,
     pwd:      _pwd,
@@ -2671,10 +2758,18 @@ function defaultBuiltins() {
     env:      _env,
     export:   _export,
     exit:     _exit,
+    set:      _set,
+    read:     _read,
+    which:    _which,
+    command:  _command,
     cat:      _cat,
     ls:       _ls,
     test:     _test,
     '[':      _testBracket,
+    // Generators
+    seq:      _seq,
+    sleep:    _sleep,
+    date:     _date,
     // Filesystem
     mkdir:    _mkdir,
     rm:       _rm,
@@ -3412,6 +3507,602 @@ async function _tee(argv, ctx) {
     }
   }
   return anyError;
+}
+
+// ── set — shell options ──
+//
+// POSIX set covers two responsibilities: flipping shell options (`-e` /
+// `-u` / `-o pipefail` / …) and rewriting the positional parameters
+// (`set -- a b c` makes `$1=a $2=b $3=c`). With no arguments, lists
+// environment variables (the POSIX behaviour; bash also includes shell
+// variables — close enough for v0).
+async function _set(argv, ctx) {
+  if (!ctx.options) ctx.options = { errexit: false, nounset: false, pipefail: false, xtrace: false };
+  const knownLong = { errexit: 'errexit', nounset: 'nounset', pipefail: 'pipefail', xtrace: 'xtrace' };
+  const knownShort = { e: 'errexit', u: 'nounset', x: 'xtrace' };
+  let i = 1;
+  let resetPositional = false;
+  while (i < argv.length) {
+    const a = argv[i];
+    if (a === '--') { i++; resetPositional = true; break; }
+    if (a === '-' || a === '+') { i++; continue; }
+    if (a.startsWith('-o') || a.startsWith('+o')) {
+      const off = a[0] === '+';
+      let opt = a.length > 2 ? a.slice(2) : (argv[++i] || '');
+      if (!opt) {
+        // List: `set -o` prints each shell option's state.
+        for (const k of Object.keys(knownLong)) {
+          await ctx.stdout(`${k.padEnd(12)} ${ctx.options[k] ? 'on' : 'off'}\n`);
+        }
+        i++;
+        continue;
+      }
+      if (!knownLong[opt]) {
+        await ctx.stderr(`set: ${opt}: invalid option name\n`);
+        return 2;
+      }
+      ctx.options[knownLong[opt]] = !off;
+      i++;
+      continue;
+    }
+    if ((a.startsWith('-') || a.startsWith('+')) && a.length > 1) {
+      const off = a[0] === '+';
+      for (let k = 1; k < a.length; k++) {
+        const ch = a[k];
+        if (!knownShort[ch]) {
+          await ctx.stderr(`set: -${ch}: unknown option\n`);
+          return 2;
+        }
+        ctx.options[knownShort[ch]] = !off;
+      }
+      i++;
+      continue;
+    }
+    // First non-option argument: stop parsing flags and treat the rest
+    // as positional parameters (POSIX-shape, even without an explicit `--`).
+    resetPositional = true;
+    break;
+  }
+  if (resetPositional) {
+    ctx.positional = argv.slice(i);
+    return 0;
+  }
+  if (argv.length === 1) {
+    const keys = [...ctx.env.keys()].sort();
+    for (const k of keys) await ctx.stdout(`${k}=${ctx.env.get(k)}\n`);
+  }
+  return 0;
+}
+
+// ── printf — POSIX format strings ──
+//
+// printf FORMAT [ARGS...]
+//
+// Supports %s %d %i %u %o %x %X %e %E %f %F %g %G %c %b %% — plus flags
+// (- + space # 0), width (number), precision (.N). The format string is
+// reused if there are extra args; if there are no specifiers in the
+// format, it's printed once. Backslash escapes in the format are
+// interpreted (\n \t \r \\ \a \b \f \v \xHH \0OOO).
+async function _printf(argv, ctx) {
+  if (argv.length < 2) {
+    await ctx.stderr('printf: usage: printf format [arguments]\n');
+    return 1;
+  }
+  const fmt = argv[1];
+  const args = argv.slice(2);
+  let out = '';
+  let argIdx = 0;
+  // Apply the format at least once. If specifiers consumed arguments and
+  // more remain, reapply (POSIX "reuse" semantics). Guard against
+  // formats with zero specifiers so we don't loop.
+  let pass = 0;
+  while (pass === 0 || argIdx < args.length) {
+    const result = _printfApply(fmt, args, argIdx);
+    out += result.text;
+    pass++;
+    if (result.consumed === 0) break;
+    argIdx += result.consumed;
+    if (pass > 10000) break; // belt-and-braces guard
+  }
+  await ctx.stdout(out);
+  return 0;
+}
+
+function _printfApply(fmt, args, startIdx) {
+  let out = '';
+  let consumed = 0;
+  let hadSpecifier = false;
+  let i = 0;
+  while (i < fmt.length) {
+    const c = fmt[i];
+    if (c === '\\' && i + 1 < fmt.length) {
+      const r = _printfReadEscape(fmt, i);
+      out += r.text;
+      i = r.next;
+      continue;
+    }
+    if (c === '%') {
+      const spec = _printfParseSpec(fmt, i);
+      if (spec.literal) { out += '%'; i = spec.end; continue; }
+      hadSpecifier = true;
+      const arg = args[startIdx + consumed];
+      consumed++;
+      out += _printfFormat(spec, arg);
+      i = spec.end;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return { text: out, consumed: hadSpecifier ? consumed : 0 };
+}
+
+function _printfReadEscape(fmt, i) {
+  const next = fmt[i + 1];
+  switch (next) {
+    case 'n': return { text: '\n', next: i + 2 };
+    case 't': return { text: '\t', next: i + 2 };
+    case 'r': return { text: '\r', next: i + 2 };
+    case '\\': return { text: '\\', next: i + 2 };
+    case '"': return { text: '"', next: i + 2 };
+    case "'": return { text: "'", next: i + 2 };
+    case 'a': return { text: '\x07', next: i + 2 };
+    case 'b': return { text: '\b', next: i + 2 };
+    case 'f': return { text: '\f', next: i + 2 };
+    case 'v': return { text: '\v', next: i + 2 };
+    case '0': {
+      let oct = '';
+      let j = i + 2;
+      while (oct.length < 3 && /[0-7]/.test(fmt[j] || '')) { oct += fmt[j]; j++; }
+      return { text: String.fromCharCode(parseInt(oct || '0', 8)), next: j };
+    }
+    case 'x': {
+      let hex = '';
+      let j = i + 2;
+      while (hex.length < 2 && /[0-9a-fA-F]/.test(fmt[j] || '')) { hex += fmt[j]; j++; }
+      if (hex.length === 0) return { text: '\\x', next: j };
+      return { text: String.fromCharCode(parseInt(hex, 16)), next: j };
+    }
+    default: return { text: '\\' + (next ?? ''), next: i + 2 };
+  }
+}
+
+function _printfParseSpec(fmt, start) {
+  let i = start + 1;
+  if (fmt[i] === '%') return { literal: true, end: i + 1 };
+  const flags = { left: false, plus: false, space: false, hash: false, zero: false };
+  while (i < fmt.length && '-+ #0'.includes(fmt[i])) {
+    if (fmt[i] === '-') flags.left = true;
+    else if (fmt[i] === '+') flags.plus = true;
+    else if (fmt[i] === ' ') flags.space = true;
+    else if (fmt[i] === '#') flags.hash = true;
+    else if (fmt[i] === '0') flags.zero = true;
+    i++;
+  }
+  let width = -1;
+  while (/[0-9]/.test(fmt[i] || '')) {
+    width = width < 0 ? 0 : width;
+    width = width * 10 + Number(fmt[i]);
+    i++;
+  }
+  let precision = -1;
+  if (fmt[i] === '.') {
+    i++;
+    precision = 0;
+    while (/[0-9]/.test(fmt[i] || '')) {
+      precision = precision * 10 + Number(fmt[i]);
+      i++;
+    }
+  }
+  const conv = fmt[i] || '';
+  i++;
+  return { literal: false, flags, width, precision, conv, end: i };
+}
+
+function _printfFormat(spec, rawArg) {
+  const { flags, width, precision, conv } = spec;
+  const arg = rawArg ?? '';
+  let s;
+  let isNumeric = true;
+  switch (conv) {
+    case 's': {
+      s = String(arg);
+      if (precision >= 0) s = s.slice(0, precision);
+      isNumeric = false;
+      break;
+    }
+    case 'b': {
+      s = _printfBackslashArg(String(arg));
+      if (precision >= 0) s = s.slice(0, precision);
+      isNumeric = false;
+      break;
+    }
+    case 'c': {
+      s = String(arg).charAt(0);
+      isNumeric = false;
+      break;
+    }
+    case 'd': case 'i': {
+      let n = parseInt(arg, 10);
+      if (Number.isNaN(n)) n = 0;
+      const neg = n < 0;
+      let v = String(Math.abs(n));
+      if (precision >= 0) v = v.padStart(precision, '0');
+      if (neg) s = '-' + v;
+      else if (flags.plus) s = '+' + v;
+      else if (flags.space) s = ' ' + v;
+      else s = v;
+      break;
+    }
+    case 'u': {
+      let n = parseInt(arg, 10);
+      if (!Number.isFinite(n) || n < 0) n = 0;
+      s = String(n);
+      if (precision >= 0) s = s.padStart(precision, '0');
+      break;
+    }
+    case 'o': {
+      let n = parseInt(arg, 10);
+      if (Number.isNaN(n)) n = 0;
+      s = n.toString(8);
+      if (flags.hash && s[0] !== '0') s = '0' + s;
+      if (precision >= 0) s = s.padStart(precision, '0');
+      break;
+    }
+    case 'x': case 'X': {
+      let n = parseInt(arg, 10);
+      if (Number.isNaN(n)) n = 0;
+      s = n.toString(16);
+      if (conv === 'X') s = s.toUpperCase();
+      if (precision >= 0) s = s.padStart(precision, '0');
+      if (flags.hash && n !== 0) s = (conv === 'X' ? '0X' : '0x') + s;
+      break;
+    }
+    case 'e': case 'E': {
+      let n = parseFloat(arg);
+      if (Number.isNaN(n)) n = 0;
+      const p = precision >= 0 ? precision : 6;
+      s = n.toExponential(p);
+      if (conv === 'E') s = s.toUpperCase();
+      if (flags.plus && n >= 0) s = '+' + s;
+      else if (flags.space && n >= 0) s = ' ' + s;
+      break;
+    }
+    case 'f': case 'F': {
+      let n = parseFloat(arg);
+      if (Number.isNaN(n)) n = 0;
+      const p = precision >= 0 ? precision : 6;
+      s = n.toFixed(p);
+      if (flags.plus && n >= 0) s = '+' + s;
+      else if (flags.space && n >= 0) s = ' ' + s;
+      break;
+    }
+    case 'g': case 'G': {
+      let n = parseFloat(arg);
+      if (Number.isNaN(n)) n = 0;
+      const p = precision >= 0 ? (precision === 0 ? 1 : precision) : 6;
+      s = n.toPrecision(p);
+      if (conv === 'G') s = s.toUpperCase();
+      break;
+    }
+    default: s = '%' + conv;
+  }
+  if (width > 0 && s.length < width) {
+    const padCh = (flags.zero && !flags.left && isNumeric) ? '0' : ' ';
+    if (flags.left) s = s.padEnd(width, ' ');
+    else if (padCh === '0' && (s[0] === '-' || s[0] === '+' || s[0] === ' ')) {
+      s = s[0] + s.slice(1).padStart(width - 1, '0');
+    } else {
+      s = s.padStart(width, padCh);
+    }
+  }
+  return s;
+}
+
+function _printfBackslashArg(s) {
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '\\' && i + 1 < s.length) {
+      const r = _printfReadEscape(s, i);
+      out += r.text;
+      i = r.next - 1;
+    } else {
+      out += s[i];
+    }
+  }
+  return out;
+}
+
+// ── read — line input ──
+//
+// read [-r] [-p prompt] [-d delim] [-n nchars] [-s] [-t timeout] [VAR...]
+//
+// v0 reads a single line from ctx.stdin, splits on $IFS, and binds the
+// resulting fields to the named variables (last var absorbs any trailing
+// content). Without VARs, reads into $REPLY. `-r` skips backslash
+// processing. `-p PROMPT` writes the prompt to stderr before reading.
+// `-s`/`-n`/`-t`/`-d` are accepted for compatibility but not all honoured
+// (they need an async input channel from the adapter — coming with the
+// worker-side interactive read protocol).
+async function _read(argv, ctx) {
+  let raw = false, prompt = '';
+  let i = 1;
+  while (i < argv.length && argv[i].startsWith('-') && argv[i] !== '--' && argv[i].length > 1) {
+    const flag = argv[i];
+    if (flag === '-r') { raw = true; i++; continue; }
+    if (flag === '-p') { prompt = argv[i + 1] ?? ''; i += 2; continue; }
+    if (flag.startsWith('-p') && flag.length > 2) { prompt = flag.slice(2); i++; continue; }
+    if (flag === '-s') { i++; continue; }
+    if (flag === '-n' || flag === '-d' || flag === '-t') { i += 2; continue; }
+    if (flag === '--') { i++; break; }
+    await ctx.stderr(`read: ${flag}: unknown option\n`);
+    return 2;
+  }
+  const vars = argv.slice(i);
+  const varNames = vars.length > 0 ? vars : ['REPLY'];
+  if (prompt) {
+    try { await ctx.stderr(prompt); } catch { /* ignore */ }
+  }
+  if (typeof ctx.stdin !== 'string' || ctx.stdin.length === 0) return 1;
+  // Consume one line from stdin. Mutate ctx.stdin so subsequent reads in
+  // the same command context (e.g. `while read; do ...; done < file`)
+  // continue from where we left off.
+  const nlIdx = ctx.stdin.indexOf('\n');
+  let line;
+  if (nlIdx < 0) {
+    line = ctx.stdin;
+    ctx.stdin = '';
+  } else {
+    line = ctx.stdin.slice(0, nlIdx);
+    ctx.stdin = ctx.stdin.slice(nlIdx + 1);
+  }
+  if (!raw) {
+    let processed = '';
+    for (let k = 0; k < line.length; k++) {
+      if (line[k] === '\\' && k + 1 < line.length) {
+        processed += line[k + 1];
+        k++;
+      } else {
+        processed += line[k];
+      }
+    }
+    line = processed;
+  }
+  const ifs = ctx.env.get('IFS') ?? ' \t\n';
+  if (varNames.length === 1) {
+    // Single var: get the whole line minus IFS-whitespace trimming.
+    const trimmed = _readTrimIfsWs(line, ifs);
+    ctx.env.set(varNames[0], trimmed);
+  } else {
+    const fields = _readSplitFields(line, ifs, varNames.length);
+    for (let k = 0; k < varNames.length; k++) {
+      ctx.env.set(varNames[k], fields[k] ?? '');
+    }
+  }
+  return 0;
+}
+
+function _readTrimIfsWs(line, ifs) {
+  const wsSet = new Set();
+  for (const c of ifs) if (c === ' ' || c === '\t' || c === '\n') wsSet.add(c);
+  if (wsSet.size === 0) return line;
+  let start = 0, end = line.length;
+  while (start < end && wsSet.has(line[start])) start++;
+  while (end > start && wsSet.has(line[end - 1])) end--;
+  return line.slice(start, end);
+}
+
+function _readSplitFields(line, ifs, maxFields) {
+  const wsSet = new Set(), otherSet = new Set();
+  for (const c of ifs) {
+    if (c === ' ' || c === '\t' || c === '\n') wsSet.add(c);
+    else otherSet.add(c);
+  }
+  const out = [];
+  let i = 0;
+  while (i < line.length && wsSet.has(line[i])) i++;
+  let cur = '';
+  while (i < line.length) {
+    if (out.length === maxFields - 1) {
+      cur = line.slice(i);
+      // Trim trailing whitespace-IFS from the last absorbed field (POSIX read).
+      if (wsSet.size > 0) {
+        let end = cur.length;
+        while (end > 0 && wsSet.has(cur[end - 1])) end--;
+        cur = cur.slice(0, end);
+      }
+      out.push(cur);
+      return out;
+    }
+    const c = line[i];
+    if (wsSet.has(c)) {
+      out.push(cur);
+      cur = '';
+      i++;
+      while (i < line.length && wsSet.has(line[i])) i++;
+      continue;
+    }
+    if (otherSet.has(c)) {
+      out.push(cur);
+      cur = '';
+      i++;
+      continue;
+    }
+    cur += c;
+    i++;
+  }
+  if (cur || out.length < maxFields) out.push(cur);
+  while (out.length < maxFields) out.push('');
+  return out;
+}
+
+// ── which / command — name lookup ──
+
+async function _which(argv, ctx) {
+  let anyError = 0;
+  for (const name of argv.slice(1)) {
+    if (ctx.builtins.has(name)) {
+      await ctx.stdout(`${name}: shell built-in\n`);
+    } else if (ctx.functions.has(name)) {
+      await ctx.stdout(`${name}: shell function\n`);
+    } else {
+      anyError = 1;
+    }
+  }
+  return anyError;
+}
+
+async function _command(argv, ctx) {
+  // command [-v|-V] NAME [args...] — runs NAME bypassing function lookup,
+  // or with -v/-V prints how the name would be resolved.
+  let mode = null;
+  let i = 1;
+  while (i < argv.length && argv[i].startsWith('-') && argv[i] !== '--' && argv[i].length > 1) {
+    if (argv[i] === '-v') { mode = 'v'; i++; continue; }
+    if (argv[i] === '-V') { mode = 'V'; i++; continue; }
+    if (argv[i] === '--') { i++; break; }
+    i++;
+  }
+  if (i >= argv.length) return 0;
+  const name = argv[i];
+  if (mode) {
+    if (ctx.builtins.has(name)) {
+      await ctx.stdout(mode === 'V' ? `${name} is a shell builtin\n` : `${name}\n`);
+      return 0;
+    }
+    if (ctx.functions.has(name)) {
+      await ctx.stdout(mode === 'V' ? `${name} is a shell function\n` : `${name}\n`);
+      return 0;
+    }
+    return 1;
+  }
+  const rest = argv.slice(i);
+  if (ctx.builtins.has(name)) {
+    return await ctx.builtins.get(name)(rest, ctx);
+  }
+  return await ctx.onCommand(name, rest, ctx);
+}
+
+// ── seq / sleep / date ──
+
+async function _seq(argv, ctx) {
+  const positional = [];
+  let sep = '\n';
+  let i = 1;
+  while (i < argv.length) {
+    if (argv[i] === '-s' && i + 1 < argv.length) { sep = argv[++i]; i++; continue; }
+    if (argv[i].startsWith('-s') && argv[i].length > 2) { sep = argv[i].slice(2); i++; continue; }
+    positional.push(argv[i]);
+    i++;
+  }
+  if (positional.length === 0) {
+    await ctx.stderr('seq: missing operand\n');
+    return 1;
+  }
+  let first = 1, increment = 1, last = 0;
+  if (positional.length === 1) { last = Number(positional[0]); }
+  else if (positional.length === 2) { first = Number(positional[0]); last = Number(positional[1]); }
+  else { first = Number(positional[0]); increment = Number(positional[1]); last = Number(positional[2]); }
+  if (!Number.isFinite(first) || !Number.isFinite(last) || !Number.isFinite(increment)) {
+    await ctx.stderr('seq: invalid number\n');
+    return 1;
+  }
+  if (increment === 0) {
+    await ctx.stderr('seq: increment must be non-zero\n');
+    return 1;
+  }
+  const out = [];
+  if (increment > 0) {
+    for (let n = first; n <= last + 1e-12; n += increment) out.push(_seqFormatNum(n));
+  } else {
+    for (let n = first; n >= last - 1e-12; n += increment) out.push(_seqFormatNum(n));
+  }
+  if (out.length === 0) return 0;
+  await ctx.stdout(out.join(sep) + '\n');
+  return 0;
+}
+
+function _seqFormatNum(n) {
+  if (Number.isInteger(n)) return String(n);
+  // Round to ~6 sig-figs for fractional sequences; trims runaway FP noise.
+  const r = Math.round(n * 1e6) / 1e6;
+  return String(r);
+}
+
+async function _sleep(argv, ctx) {
+  const arg = argv[1];
+  if (arg == null) {
+    await ctx.stderr('sleep: missing operand\n');
+    return 1;
+  }
+  const m = String(arg).match(/^(\d+(?:\.\d+)?)([smhd])?$/);
+  if (!m) {
+    await ctx.stderr(`sleep: invalid duration "${arg}"\n`);
+    return 1;
+  }
+  const n = parseFloat(m[1]);
+  const unit = m[2] || 's';
+  const mult = unit === 'm' ? 60 : unit === 'h' ? 3600 : unit === 'd' ? 86400 : 1;
+  await new Promise(r => setTimeout(r, n * mult * 1000));
+  return 0;
+}
+
+async function _date(argv, ctx) {
+  let fmt = '%a %b %e %T %Y'; // POSIX default
+  for (const a of argv.slice(1)) {
+    if (a.startsWith('+')) fmt = a.slice(1);
+  }
+  const d = new Date();
+  await ctx.stdout(_formatDate(d, fmt) + '\n');
+  return 0;
+}
+
+function _formatDate(d, fmt) {
+  const pad = (n, len = 2) => String(n).padStart(len, '0');
+  const dayShort = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const dayFull = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const monShort = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const monFull = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+  return fmt.replace(/%./g, (m) => {
+    switch (m) {
+      case '%Y': return String(d.getFullYear());
+      case '%y': return pad(d.getFullYear() % 100);
+      case '%m': return pad(d.getMonth() + 1);
+      case '%d': return pad(d.getDate());
+      case '%H': return pad(d.getHours());
+      case '%I': return pad(((d.getHours() + 11) % 12) + 1);
+      case '%M': return pad(d.getMinutes());
+      case '%S': return pad(d.getSeconds());
+      case '%p': return d.getHours() < 12 ? 'AM' : 'PM';
+      case '%a': return dayShort[d.getDay()];
+      case '%A': return dayFull[d.getDay()];
+      case '%b': case '%h': return monShort[d.getMonth()];
+      case '%B': return monFull[d.getMonth()];
+      case '%e': return String(d.getDate()).padStart(2, ' ');
+      case '%j': return pad(_dayOfYear(d), 3);
+      case '%T': return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+      case '%R': return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      case '%D': return `${pad(d.getMonth() + 1)}/${pad(d.getDate())}/${pad(d.getFullYear() % 100)}`;
+      case '%F': return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      case '%s': return String(Math.floor(d.getTime() / 1000));
+      case '%n': return '\n';
+      case '%t': return '\t';
+      case '%%': return '%';
+      case '%z': {
+        const off = -d.getTimezoneOffset();
+        const sign = off >= 0 ? '+' : '-';
+        const h = pad(Math.floor(Math.abs(off) / 60));
+        const mm = pad(Math.abs(off) % 60);
+        return `${sign}${h}${mm}`;
+      }
+      default: return m;
+    }
+  });
+}
+
+function _dayOfYear(d) {
+  const start = new Date(d.getFullYear(), 0, 0);
+  return Math.floor((d - start) / 86400000);
 }
 
 // xargs: build commands from stdin tokens. v0 supports -n (batch size)

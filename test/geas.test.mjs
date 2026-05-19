@@ -2185,3 +2185,354 @@ describe('parser — here-docs', () => {
     assert.equal(cat.redirects[0].body, '  line for $f\n');
   });
 });
+
+// ── shell options (set -e/-u/-o pipefail) ──
+
+describe('set -e (errexit)', () => {
+  it('halts on first failing command', async () => {
+    const { shell, output, errOutput } = _testShell();
+    const r = await shell.exec('set -e\nfalse\necho should-not-run\n');
+    assert.equal(r.exitCode, 1);
+    assert.equal(output(), '');
+  });
+
+  it('does not halt when failure is in an `if` condition', async () => {
+    const { shell, output } = _testShell();
+    const r = await shell.exec('set -e\nif false; then echo a; else echo b; fi\necho done\n');
+    assert.equal(r.exitCode, 0);
+    assert.equal(output(), 'b\ndone\n');
+  });
+
+  it('does not halt when failure is in a `while` condition (loop just exits)', async () => {
+    const { shell, output } = _testShell();
+    const r = await shell.exec('set -e\nwhile false; do echo body; done\necho done\n');
+    assert.equal(r.exitCode, 0);
+    assert.equal(output(), 'done\n');
+  });
+
+  it('does not halt on left of && (only rightmost can trigger)', async () => {
+    const { shell, output } = _testShell();
+    const r = await shell.exec('set -e\nfalse || echo recovered\necho done\n');
+    assert.equal(r.exitCode, 0);
+    assert.equal(output(), 'recovered\ndone\n');
+  });
+
+  it('does halt when rightmost of && fails', async () => {
+    const { shell, output } = _testShell();
+    const r = await shell.exec('set -e\ntrue && false\necho should-not-run\n');
+    assert.equal(r.exitCode, 1);
+    assert.equal(output(), '');
+  });
+
+  it('does not halt on negated pipeline', async () => {
+    const { shell, output } = _testShell();
+    const r = await shell.exec('set -e\n! true\necho ran\n');
+    // `! true` → exit 1, but errexit-exempt under POSIX rules.
+    assert.equal(r.exitCode, 0);
+    assert.equal(output(), 'ran\n');
+  });
+
+  it('can be toggled off with set +e', async () => {
+    const { shell, output } = _testShell();
+    const r = await shell.exec('set -e\nset +e\nfalse\necho after\n');
+    assert.equal(r.exitCode, 0);
+    assert.equal(output(), 'after\n');
+  });
+
+  it('set -o errexit is equivalent', async () => {
+    const { shell, output } = _testShell();
+    const r = await shell.exec('set -o errexit\nfalse\necho should-not-run\n');
+    assert.equal(r.exitCode, 1);
+    assert.equal(output(), '');
+  });
+});
+
+describe('set -u (nounset)', () => {
+  it('errors on bare $UNDEFINED', async () => {
+    const { shell, output, errOutput } = _testShell();
+    const r = await shell.exec('set -u\necho $MISSING\n');
+    assert.equal(r.exitCode, 1);
+    assert.match(errOutput(), /MISSING.*unbound/);
+    assert.equal(output(), '');
+  });
+
+  it('does not error when var is set', async () => {
+    const { shell, output } = _testShell();
+    const r = await shell.exec('set -u\nFOO=bar\necho $FOO\n');
+    assert.equal(r.exitCode, 0);
+    assert.equal(output(), 'bar\n');
+  });
+
+  it('does not error for ${X:-default}', async () => {
+    const { shell, output } = _testShell();
+    const r = await shell.exec('set -u\necho ${MISSING:-fallback}\n');
+    assert.equal(r.exitCode, 0);
+    assert.equal(output(), 'fallback\n');
+  });
+
+  it('does not error for ${X-default} when X is unset', async () => {
+    const { shell, output } = _testShell();
+    const r = await shell.exec('set -u\necho ${MISSING-fallback}\n');
+    assert.equal(r.exitCode, 0);
+    assert.equal(output(), 'fallback\n');
+  });
+});
+
+describe('set -o pipefail', () => {
+  it('without pipefail: pipeline exit = last stage', async () => {
+    const { shell } = _testShell();
+    const r = await shell.exec('false | true\n');
+    assert.equal(r.exitCode, 0);
+  });
+
+  it('with pipefail: pipeline exit = first non-zero stage', async () => {
+    const { shell } = _testShell();
+    const r = await shell.exec('set -o pipefail\nfalse | true\n');
+    assert.equal(r.exitCode, 1);
+  });
+
+  it('pipefail with all-success returns 0', async () => {
+    const { shell } = _testShell();
+    const r = await shell.exec('set -o pipefail\ntrue | true | true\n');
+    assert.equal(r.exitCode, 0);
+  });
+
+  it('pipefail composes with errexit', async () => {
+    const { shell, output } = _testShell();
+    const r = await shell.exec('set -e -o pipefail\nfalse | true\necho after\n');
+    assert.equal(r.exitCode, 1);
+    assert.equal(output(), '');
+  });
+
+  it('set +o pipefail turns it off', async () => {
+    const { shell } = _testShell();
+    const r = await shell.exec('set -o pipefail\nset +o pipefail\nfalse | true\n');
+    assert.equal(r.exitCode, 0);
+  });
+});
+
+describe('set -- (positional parameters)', () => {
+  it('rewrites positional params', async () => {
+    const { shell, output } = _testShell();
+    const r = await shell.exec('set -- a b c\necho $1 $2 $3\n');
+    assert.equal(r.exitCode, 0);
+    assert.equal(output(), 'a b c\n');
+  });
+
+  it('$# reflects the new count', async () => {
+    const { shell, output } = _testShell();
+    const r = await shell.exec('set -- one two\necho $#\n');
+    assert.equal(output(), '2\n');
+  });
+});
+
+// ── printf ──
+
+describe('printf', () => {
+  it('plain string', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec("printf hello\n");
+    assert.equal(output(), 'hello');
+  });
+
+  it('%s substitution', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('printf "%s\\n" world\n');
+    assert.equal(output(), 'world\n');
+  });
+
+  it('%d integer formatting', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('printf "%d\\n" 42\n');
+    assert.equal(output(), '42\n');
+  });
+
+  it('%-10s left-aligned width', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('printf "%-10s|" hi\n');
+    assert.equal(output(), 'hi        |');
+  });
+
+  it('%05d zero-padded width', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('printf "%05d\\n" 42\n');
+    assert.equal(output(), '00042\n');
+  });
+
+  it('%.2f precision on floats', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('printf "%.2f\\n" 3.14159\n');
+    assert.equal(output(), '3.14\n');
+  });
+
+  it('%x hex conversion', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('printf "%x\\n" 255\n');
+    assert.equal(output(), 'ff\n');
+  });
+
+  it('format string is reused when more args than specifiers', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('printf "%s " a b c\n');
+    assert.equal(output(), 'a b c ');
+  });
+
+  it('%% literal percent', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('printf "100%%\\n"\n');
+    assert.equal(output(), '100%\n');
+  });
+
+  it('backslash escapes in the format', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('printf "a\\tb\\n"\n');
+    assert.equal(output(), 'a\tb\n');
+  });
+});
+
+// ── read ──
+
+describe('read', () => {
+  it('reads a single line into a variable from heredoc', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec("read line <<EOF\nhello\nEOF\necho got=$line\n");
+    assert.equal(output(), 'got=hello\n');
+  });
+
+  it('splits on $IFS into multiple vars', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec("read a b c <<EOF\none two three\nEOF\necho a=$a b=$b c=$c\n");
+    assert.equal(output(), 'a=one b=two c=three\n');
+  });
+
+  it('last var absorbs trailing fields', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec("read a b <<EOF\none two three four\nEOF\necho a=$a b=$b\n");
+    assert.equal(output(), 'a=one b=two three four\n');
+  });
+
+  it('no var name → REPLY', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec("read <<EOF\nfoo bar\nEOF\necho REPLY=$REPLY\n");
+    assert.equal(output(), 'REPLY=foo bar\n');
+  });
+
+  it('returns 1 on EOF', async () => {
+    const { shell } = _testShell();
+    const r = await shell.exec("read line\n");
+    assert.equal(r.exitCode, 1);
+  });
+
+  it('-r skips backslash processing (vs default which would consume one level)', async () => {
+    // Use a *quoted* heredoc delimiter so the body reaches `read` raw —
+    // otherwise heredoc text expansion would eat backslashes first.
+    const { shell, output } = _testShell();
+    await shell.exec("read -r line <<'EOF'\nback\\\\slash\nEOF\necho \"$line\"\n");
+    assert.equal(output(), 'back\\\\slash\n');
+    // Same heredoc body without -r: read consumes one level of backslash.
+    const { shell: s2, output: o2 } = _testShell();
+    await s2.exec("read line <<'EOF'\nback\\\\slash\nEOF\necho \"$line\"\n");
+    assert.equal(o2(), 'back\\slash\n');
+  });
+});
+
+// ── seq / sleep / date / which / command ──
+
+describe('seq', () => {
+  it('seq N → 1..N', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('seq 4\n');
+    assert.equal(output(), '1\n2\n3\n4\n');
+  });
+
+  it('seq FIRST LAST', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('seq 3 6\n');
+    assert.equal(output(), '3\n4\n5\n6\n');
+  });
+
+  it('seq FIRST INCR LAST', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('seq 0 2 10\n');
+    assert.equal(output(), '0\n2\n4\n6\n8\n10\n');
+  });
+
+  it('seq with negative increment counts down', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('seq 3 -1 0\n');
+    assert.equal(output(), '3\n2\n1\n0\n');
+  });
+
+  it('seq -s custom separator', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('seq -s , 1 4\n');
+    assert.equal(output(), '1,2,3,4\n');
+  });
+
+  it('seq integrates with for-loops', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('for i in $(seq 3); do echo n=$i; done\n');
+    assert.equal(output(), 'n=1\nn=2\nn=3\n');
+  });
+});
+
+describe('sleep', () => {
+  it('returns 0 after sleeping', async () => {
+    const { shell } = _testShell();
+    const start = Date.now();
+    const r = await shell.exec('sleep 0.05\n');
+    const elapsed = Date.now() - start;
+    assert.equal(r.exitCode, 0);
+    assert.ok(elapsed >= 40, `expected ≥40ms, got ${elapsed}`);
+  });
+});
+
+describe('date', () => {
+  it('outputs a non-empty line by default', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('date\n');
+    assert.ok(output().length > 0);
+    assert.ok(output().endsWith('\n'));
+  });
+
+  it('date +%Y prints the current year', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('date +%Y\n');
+    const year = parseInt(output().trim(), 10);
+    assert.ok(year >= 2024 && year < 2100);
+  });
+
+  it('date +%F prints ISO date', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('date +%F\n');
+    assert.match(output().trim(), /^\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe('which / command', () => {
+  it('which recognises builtins', async () => {
+    const { shell, output } = _testShell();
+    const r = await shell.exec('which echo\n');
+    assert.equal(r.exitCode, 0);
+    assert.match(output(), /echo: shell built-in/);
+  });
+
+  it('which returns 1 on unknown name', async () => {
+    const { shell } = _testShell();
+    const r = await shell.exec('which definitely-not-a-thing\n');
+    assert.equal(r.exitCode, 1);
+  });
+
+  it('command -v finds a builtin', async () => {
+    const { shell, output } = _testShell();
+    const r = await shell.exec('command -v echo\n');
+    assert.equal(r.exitCode, 0);
+    assert.match(output(), /echo/);
+  });
+
+  it('command runs the builtin bypassing functions', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo() { printf "FN\\n"; }\ncommand echo plain\n');
+    assert.equal(output(), 'plain\n');
+  });
+});
