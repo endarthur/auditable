@@ -2821,3 +2821,170 @@ describe('find', () => {
     assert.match(errOutput(), /unknown predicate/);
   });
 });
+
+// ── stage 8: quick wins ──
+
+describe('echo -e', () => {
+  it('interprets backslash escapes when -e set', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec("echo -e 'a\\tb\\nc'\n");
+    assert.equal(output(), 'a\tb\nc\n');
+  });
+
+  it('default does NOT interpret', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec("echo 'a\\tb'\n");
+    assert.equal(output(), 'a\\tb\n');
+  });
+
+  it('-E reverts -e (last flag wins)', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec("echo -e -E 'a\\tb'\n");
+    assert.equal(output(), 'a\\tb\n');
+  });
+
+  it('-ne combines: no newline + interpret', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec("echo -ne 'x\\ty'\n");
+    assert.equal(output(), 'x\ty');
+  });
+});
+
+describe('subshell isolation', () => {
+  it('env mutation does not leak out', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('X=outer\n(X=inner; echo inside=$X)\necho outside=$X\n');
+    assert.equal(output(), 'inside=inner\noutside=outer\n');
+  });
+
+  it('cwd mutation does not leak out', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.mkdir('/here', { recursive: true });
+    await shell.exec('(cd /here; pwd)\npwd\n');
+    assert.equal(output(), '/here\n/\n');
+  });
+
+  it('function definitions are scoped to the subshell', async () => {
+    const { shell, output } = _testShell();
+    const r = await shell.exec('(greet() { echo hi; }; greet)\ngreet\n');
+    // First call (inside subshell) emits "hi"; second call (outside) finds
+    // no `greet` and falls through to onCommand which returns 127.
+    assert.equal(output(), 'hi\n');
+    assert.equal(r.exitCode, 127);
+  });
+
+  it('set -e inside a subshell does not enable errexit outside', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('(set -e; false; echo unreachable) || true\nfalse\necho after\n');
+    assert.equal(output(), 'after\n');
+  });
+});
+
+describe('${X#pat} / ${X##pat} / ${X%pat} / ${X%%pat} — glob matching', () => {
+  it('# shortest prefix with a wildcard', async () => {
+    const { shell, output } = _testShell();
+    // s = abcabc, pat = a*c; shortest a..c prefix is "abc"
+    await shell.exec('s=abcabc; echo "${s#a*c}"\n');
+    assert.equal(output(), 'abc\n');
+  });
+
+  it('## longest prefix with a wildcard', async () => {
+    const { shell, output } = _testShell();
+    // longest a..c prefix is the full "abcabc"
+    await shell.exec('s=abcabc; echo "${s##a*c}"\n');
+    assert.equal(output(), '\n');
+  });
+
+  it('% shortest suffix with a wildcard', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('s=abcabc; echo "${s%a*c}"\n');
+    assert.equal(output(), 'abc\n');
+  });
+
+  it('%% longest suffix with a wildcard', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('s=abcabc; echo "${s%%a*c}"\n');
+    assert.equal(output(), '\n');
+  });
+
+  it('# with char-class pattern', async () => {
+    const { shell, output } = _testShell();
+    // Strip a single leading vowel.
+    await shell.exec('s=apple; echo "${s#[aeiou]}"\n');
+    assert.equal(output(), 'pple\n');
+  });
+
+  it('% common case: file extension stripping', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('f=report.csv; echo "${f%.csv}"\n');
+    assert.equal(output(), 'report\n');
+  });
+});
+
+describe('redirect buffering (write-once at command end)', () => {
+  it('> file collects all stdout writes into a single VFS write', async () => {
+    const { shell, vfs } = _testShell();
+    await shell.exec('for i in 1 2 3; do echo line$i; done > /out.txt\n');
+    const content = await vfs.readFile('/out.txt', 'text');
+    // Without buffering, the second iteration's read+rewrite would
+    // truncate the file mid-loop and the result would only have "line3".
+    assert.equal(content, 'line1\nline2\nline3\n');
+  });
+
+  it('>> file appends a buffered command output to existing content', async () => {
+    const { shell, vfs } = _testShell();
+    await vfs.writeFile('/log.txt', 'header\n');
+    await shell.exec('for i in 1 2; do echo entry$i; done >> /log.txt\n');
+    const content = await vfs.readFile('/log.txt', 'text');
+    assert.equal(content, 'header\nentry1\nentry2\n');
+  });
+
+  it('> with zero output still creates/truncates the file', async () => {
+    const { shell, vfs } = _testShell();
+    await vfs.writeFile('/x.txt', 'old content');
+    await shell.exec('true > /x.txt\n');
+    const content = await vfs.readFile('/x.txt', 'text');
+    assert.equal(content, '');
+  });
+
+  it('2> file captures stderr', async () => {
+    const { shell, vfs, output, errOutput } = _testShell();
+    // First make sure non-redirected stderr reaches errOutput.
+    await shell.exec('ls /nonexistent 2> /err.log\n');
+    const content = await vfs.readFile('/err.log', 'text');
+    assert.match(content, /nonexistent/);
+    assert.equal(errOutput(), ''); // redirected, so the buf stayed empty
+  });
+
+  it('brace group redirect flushes at the group boundary', async () => {
+    const { shell, vfs } = _testShell();
+    await shell.exec('{ echo a; echo b; echo c; } > /grp.txt\n');
+    const content = await vfs.readFile('/grp.txt', 'text');
+    assert.equal(content, 'a\nb\nc\n');
+  });
+
+  it('subshell redirect flushes at the subshell boundary', async () => {
+    const { shell, vfs } = _testShell();
+    await shell.exec('(for i in 1 2 3; do echo $i; done) > /sub.txt\n');
+    const content = await vfs.readFile('/sub.txt', 'text');
+    assert.equal(content, '1\n2\n3\n');
+  });
+});
+
+describe('xargs -0', () => {
+  it('reads NUL-separated tokens', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec("printf 'a\\0b c\\0d' | xargs -0 echo\n");
+    // -0 splits only on NUL, so 'b c' stays as one token.
+    assert.equal(output(), 'a b c d\n');
+  });
+
+  it('pairs cleanly with find -print0', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.mkdir('/p', { recursive: true });
+    await vfs.writeFile('/p/a.txt', '');
+    await vfs.writeFile('/p/b.txt', '');
+    await shell.exec('find /p -type f -print0 | xargs -0 echo files:\n');
+    assert.match(output(), /files: \/p\/a\.txt \/p\/b\.txt/);
+  });
+});

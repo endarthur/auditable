@@ -64,13 +64,19 @@ async function _colon() { return 0; }
 async function _echo(argv, ctx) {
   const args = argv.slice(1);
   let newline = true;
-  // Support `-n` (no trailing newline) and `-e` (interpret backslash
-  // escapes — for v0 just accept and ignore, treat literally).
+  let interpret = false;
+  // `-n` no trailing newline; `-e` enable backslash interpretation
+  // (bash default off); `-E` explicitly off. Flag combos like `-ne`
+  // accepted. Anything else is treated as a positional argument.
   while (args.length && /^-[neE]+$/.test(args[0])) {
     if (args[0].includes('n')) newline = false;
+    if (args[0].includes('e')) interpret = true;
+    if (args[0].includes('E')) interpret = false;
     args.shift();
   }
-  await ctx.stdout(args.join(' ') + (newline ? '\n' : ''));
+  let text = args.join(' ');
+  if (interpret) text = _printfBackslashArg(text);
+  await ctx.stdout(text + (newline ? '\n' : ''));
   return 0;
 }
 
@@ -1661,10 +1667,16 @@ async function _xargs(argv, ctx) {
   const { opts, positionals } = _bParseArgs(argv, {
     n: { short: 'n', arg: true },
     I: { short: 'I', arg: true },
+    zero: { short: '0' },
   });
   const cmdArgv = positionals.length === 0 ? ['echo'] : positionals;
   const stdin = typeof ctx.stdin === 'string' ? ctx.stdin : '';
-  const tokens = stdin.split(/\s+/).filter(Boolean);
+  // `-0` reads NUL-separated input — the canonical pairing for
+  // `find -print0 | xargs -0`, which is the only safe way to pass
+  // filenames containing whitespace or quotes through xargs.
+  const tokens = opts.zero
+    ? stdin.split('\0').filter(Boolean)
+    : stdin.split(/\s+/).filter(Boolean);
   const batchSize = opts.n ? Math.max(1, parseInt(opts.n, 10)) : tokens.length;
   let lastExit = 0;
   for (let i = 0; i < tokens.length; i += batchSize) {

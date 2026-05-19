@@ -273,7 +273,7 @@ async function _execSimpleCommand(node, ctx) {
     assignmentBindings.length > 0 ||
     (node.redirects && node.redirects.length > 0);
   if (needsScope) {
-    subCtx = { ...ctx };
+    subCtx = { ...ctx, _redirectFlush: null };
     if (assignmentBindings.length > 0) {
       subCtx.env = new Map(ctx.env);
       for (const [n, v] of assignmentBindings) subCtx.env.set(n, v);
@@ -298,27 +298,34 @@ async function _execSimpleCommand(node, ctx) {
   // 4. Dispatch.
   let exitCode = 127;
   try {
-    if (ctx.builtins.has(cmdName)) {
-      const r = await ctx.builtins.get(cmdName)(argv, subCtx);
-      exitCode = typeof r === 'number' ? r : 0;
-    } else if (ctx.functions.has(cmdName)) {
-      // Functions: execute the body in a context with $1..$N bound. v0
-      // doesn't do full call-frame isolation — just runs the body with
-      // positional params overlaid.
-      const fnBody = ctx.functions.get(cmdName).body;
-      const r = await _exec(fnBody, subCtx);
-      exitCode = r.exitCode;
-    } else {
-      exitCode = await ctx.onCommand(cmdName, argv, subCtx);
+    try {
+      if (ctx.builtins.has(cmdName)) {
+        const r = await ctx.builtins.get(cmdName)(argv, subCtx);
+        exitCode = typeof r === 'number' ? r : 0;
+      } else if (ctx.functions.has(cmdName)) {
+        // Functions: execute the body in a context with $1..$N bound. v0
+        // doesn't do full call-frame isolation — just runs the body with
+        // positional params overlaid.
+        const fnBody = ctx.functions.get(cmdName).body;
+        const r = await _exec(fnBody, subCtx);
+        exitCode = r.exitCode;
+      } else {
+        exitCode = await ctx.onCommand(cmdName, argv, subCtx);
+      }
+    } catch (e) {
+      // The `exit` builtin throws { exitCode, _exit: true } to signal full
+      // script termination — re-throw so _execProgram catches it instead of
+      // smoothing it over into a normal exit code. Plain { exitCode } throws
+      // (no _exit marker) are treated as the command's exit code.
+      if (e && e._exit) throw e;
+      if (e && typeof e.exitCode === 'number') exitCode = e.exitCode;
+      else throw e;
     }
-  } catch (e) {
-    // The `exit` builtin throws { exitCode, _exit: true } to signal full
-    // script termination — re-throw so _execProgram catches it instead of
-    // smoothing it over into a normal exit code. Plain { exitCode } throws
-    // (no _exit marker) are treated as the command's exit code.
-    if (e && e._exit) throw e;
-    if (e && typeof e.exitCode === 'number') exitCode = e.exitCode;
-    else throw e;
+  } finally {
+    // Redirects buffered their writes; flush them now that the command
+    // has produced all its output. Runs even if the command exited via
+    // `_exit` or threw — `> file` should land its bytes either way.
+    if (subCtx !== ctx) await _flushRedirects(subCtx);
   }
   ctx.lastStatus = exitCode;
   return { exitCode };
@@ -326,126 +333,189 @@ async function _execSimpleCommand(node, ctx) {
 
 // ── compound commands ──
 
-async function _execIf(node, ctx) {
-  const cond = await _withCondition(node.cond, ctx);
-  if (cond.exitCode === 0) return await _exec(node.then, ctx);
-  for (const elif of node.elifs) {
-    const c = await _withCondition(elif.cond, ctx);
-    if (c.exitCode === 0) return await _exec(elif.then, ctx);
+// Wrap a compound clause's execution in its trailing-redirect scope.
+// POSIX allows `if/for/while/until/case ... done > file` to redirect
+// the whole compound's stdout. We isolate via a sub-ctx (same shape as
+// brace groups: shared env, separate redirect-flush queue), run the
+// caller-supplied body, and flush at the boundary.
+async function _withCompoundRedirects(node, ctx, body) {
+  if (!node.redirects || node.redirects.length === 0) return await body(ctx);
+  const subCtx = { ...ctx, _redirectFlush: null };
+  await _applyRedirects(node.redirects, subCtx);
+  try {
+    return await body(subCtx);
+  } finally {
+    await _flushRedirects(subCtx);
   }
-  if (node.else) return await _exec(node.else, ctx);
-  return { exitCode: 0 };
+}
+
+async function _execIf(node, ctx) {
+  return await _withCompoundRedirects(node, ctx, async (ctx) => {
+    const cond = await _withCondition(node.cond, ctx);
+    if (cond.exitCode === 0) return await _exec(node.then, ctx);
+    for (const elif of node.elifs) {
+      const c = await _withCondition(elif.cond, ctx);
+      if (c.exitCode === 0) return await _exec(elif.then, ctx);
+    }
+    if (node.else) return await _exec(node.else, ctx);
+    return { exitCode: 0 };
+  });
 }
 
 async function _execFor(node, ctx) {
-  // POSIX: `for x` (no `in`) iterates over "$@" — the positional params.
-  // v0 doesn't have positional params plumbed through; treat as no-op
-  // iteration in that case.
-  //
-  // Field expansion: each word can yield multiple values via $list-splitting
-  // or glob expansion (`for f in *.csv`), so flatten with the splitting
-  // surface rather than the single-string one.
-  const values = [];
-  if (node.words) {
-    for (const w of node.words) {
-      const fields = await _expandWordToFields(w, ctx);
-      for (const f of fields) values.push(f);
+  return await _withCompoundRedirects(node, ctx, async (ctx) => {
+    // POSIX: `for x` (no `in`) iterates over "$@" — the positional params.
+    // v0 doesn't have positional params plumbed through; treat as no-op
+    // iteration in that case.
+    //
+    // Field expansion: each word can yield multiple values via $list-splitting
+    // or glob expansion (`for f in *.csv`), so flatten with the splitting
+    // surface rather than the single-string one.
+    const values = [];
+    if (node.words) {
+      for (const w of node.words) {
+        const fields = await _expandWordToFields(w, ctx);
+        for (const f of fields) values.push(f);
+      }
     }
-  }
-  let exitCode = 0;
-  for (const v of values) {
-    ctx.env.set(node.name, v);
-    try {
-      const r = await _exec(node.body, ctx);
-      exitCode = r.exitCode;
-    } catch (e) {
-      if (e === ctx._BREAK) return { exitCode };
-      if (e === ctx._CONTINUE) continue;
-      throw e;
+    let exitCode = 0;
+    for (const v of values) {
+      ctx.env.set(node.name, v);
+      try {
+        const r = await _exec(node.body, ctx);
+        exitCode = r.exitCode;
+      } catch (e) {
+        if (e === ctx._BREAK) return { exitCode };
+        if (e === ctx._CONTINUE) continue;
+        throw e;
+      }
     }
-  }
-  return { exitCode };
+    return { exitCode };
+  });
 }
 
 async function _execWhile(node, ctx) {
-  let exitCode = 0;
-  // POSIX safety net: cap iterations to a large but bounded number so a
-  // pure infinite loop in a notebook cell doesn't hang the worker. Real
-  // shells don't do this; we choose to because we're running in someone's
-  // browser. Override by setting ctx.maxWhileIters.
-  const maxIters = ctx.maxWhileIters ?? 1_000_000;
-  let n = 0;
-  while (true) {
-    if (++n > maxIters) {
-      throw new Error(`geas: while-loop exceeded ${maxIters} iterations (set ctx.maxWhileIters to raise)`);
+  return await _withCompoundRedirects(node, ctx, async (ctx) => {
+    let exitCode = 0;
+    // POSIX safety net: cap iterations to a large but bounded number so a
+    // pure infinite loop in a notebook cell doesn't hang the worker. Real
+    // shells don't do this; we choose to because we're running in someone's
+    // browser. Override by setting ctx.maxWhileIters.
+    const maxIters = ctx.maxWhileIters ?? 1_000_000;
+    let n = 0;
+    while (true) {
+      if (++n > maxIters) {
+        throw new Error(`geas: while-loop exceeded ${maxIters} iterations (set ctx.maxWhileIters to raise)`);
+      }
+      const cond = await _withCondition(node.cond, ctx);
+      if (cond.exitCode !== 0) break;
+      try {
+        const r = await _exec(node.body, ctx);
+        exitCode = r.exitCode;
+      } catch (e) {
+        if (e === ctx._BREAK) break;
+        if (e === ctx._CONTINUE) continue;
+        throw e;
+      }
     }
-    const cond = await _withCondition(node.cond, ctx);
-    if (cond.exitCode !== 0) break;
-    try {
-      const r = await _exec(node.body, ctx);
-      exitCode = r.exitCode;
-    } catch (e) {
-      if (e === ctx._BREAK) break;
-      if (e === ctx._CONTINUE) continue;
-      throw e;
-    }
-  }
-  return { exitCode };
+    return { exitCode };
+  });
 }
 
 async function _execUntil(node, ctx) {
-  let exitCode = 0;
-  const maxIters = ctx.maxWhileIters ?? 1_000_000;
-  let n = 0;
-  while (true) {
-    if (++n > maxIters) {
-      throw new Error(`geas: until-loop exceeded ${maxIters} iterations`);
+  return await _withCompoundRedirects(node, ctx, async (ctx) => {
+    let exitCode = 0;
+    const maxIters = ctx.maxWhileIters ?? 1_000_000;
+    let n = 0;
+    while (true) {
+      if (++n > maxIters) {
+        throw new Error(`geas: until-loop exceeded ${maxIters} iterations`);
+      }
+      const cond = await _withCondition(node.cond, ctx);
+      if (cond.exitCode === 0) break;
+      try {
+        const r = await _exec(node.body, ctx);
+        exitCode = r.exitCode;
+      } catch (e) {
+        if (e === ctx._BREAK) break;
+        if (e === ctx._CONTINUE) continue;
+        throw e;
+      }
     }
-    const cond = await _withCondition(node.cond, ctx);
-    if (cond.exitCode === 0) break;
-    try {
-      const r = await _exec(node.body, ctx);
-      exitCode = r.exitCode;
-    } catch (e) {
-      if (e === ctx._BREAK) break;
-      if (e === ctx._CONTINUE) continue;
-      throw e;
-    }
-  }
-  return { exitCode };
+    return { exitCode };
+  });
 }
 
 async function _execCase(node, ctx) {
-  const word = await _expandWord(node.word, ctx);
-  for (const item of node.items) {
-    for (const pat of item.patterns) {
-      const patStr = await _expandWord(pat, ctx);
-      if (_globMatch(patStr, word)) {
-        if (item.body) {
-          const r = await _exec(item.body, ctx);
-          return r;
+  return await _withCompoundRedirects(node, ctx, async (ctx) => {
+    const word = await _expandWord(node.word, ctx);
+    for (const item of node.items) {
+      for (const pat of item.patterns) {
+        const patStr = await _expandWord(pat, ctx);
+        if (_globMatch(patStr, word)) {
+          if (item.body) {
+            const r = await _exec(item.body, ctx);
+            return r;
+          }
+          return { exitCode: 0 };
         }
-        return { exitCode: 0 };
       }
     }
-  }
-  return { exitCode: 0 };
+    return { exitCode: 0 };
+  });
 }
 
 async function _execBraceGroup(node, ctx) {
-  const subCtx = { ...ctx };
+  // Brace groups share the caller's scope (unlike subshells) — only
+  // redirects are scoped. We still need a fresh _redirectFlush queue
+  // so the group's redirects flush at the group boundary, not earlier.
+  const subCtx = { ...ctx, _redirectFlush: null };
   await _applyRedirects(node.redirects, subCtx);
-  return await _exec(node.body, subCtx);
+  let result;
+  try {
+    result = await _exec(node.body, subCtx);
+  } finally {
+    await _flushRedirects(subCtx);
+  }
+  return result;
 }
 
 async function _execSubshell(node, ctx) {
-  // POSIX: subshells run in a copy of the parent's environment so
-  // mutations don't leak out. v0 approximates by giving a shallow copy
-  // of env + cwd. Function definitions and lastStatus reset semantics
-  // are deferred until there's a need.
-  const subCtx = { ...ctx, env: new Map(ctx.env) };
+  // POSIX: subshells run in a copy of the parent's environment, so any
+  // mutation — env vars, cwd, function definitions, set-options, last
+  // status — stays inside. We clone every mutable container; `options`
+  // gets a shallow spread (it's a flat bool record). Positional params
+  // are immutable arrays so a reference-share is fine.
+  const subCtx = {
+    ...ctx,
+    env:       new Map(ctx.env),
+    functions: new Map(ctx.functions),
+    options:   { ...ctx.options },
+    lastStatus: ctx.lastStatus,
+    _redirectFlush: null,
+    // The subshell starts a fresh execution context — its body is at
+    // "top level" inside the subshell. Outer flags like `_inCondition`
+    // (set when the subshell is the left side of `||`, the test of
+    // an `if`, etc.) shouldn't suppress errexit inside.
+    _inCondition: false,
+  };
   await _applyRedirects(node.redirects, subCtx);
-  return await _exec(node.body, subCtx);
+  let result;
+  try {
+    try {
+      result = await _exec(node.body, subCtx);
+    } catch (e) {
+      // POSIX: an `exit` inside a subshell terminates only the subshell.
+      // errexit (`set -e`) inside the subshell similarly halts only the
+      // subshell. Both signal via `_exit` — convert to a regular exit
+      // code for the subshell as a whole so it doesn't propagate out.
+      if (e && e._exit) result = { exitCode: e.exitCode };
+      else throw e;
+    }
+  } finally {
+    await _flushRedirects(subCtx);
+  }
+  return result;
 }
 
 function _execFunctionDef(node, ctx) {
@@ -457,84 +527,77 @@ function _execFunctionDef(node, ctx) {
 
 async function _applyRedirects(redirects, ctx) {
   if (!redirects || redirects.length === 0) return;
+  // Each write redirect buffers its chunks into a local array; the
+  // single VFS write happens in `_flushRedirects` at the command (or
+  // brace/subshell) boundary. The previous per-call read+rewrite cost
+  // O(n²) for hot loops like `for i in ...; do echo $i >> file; done`.
+  const ensureFlushQueue = () => {
+    if (!ctx._redirectFlush) ctx._redirectFlush = [];
+    return ctx._redirectFlush;
+  };
   for (const r of redirects) {
     const target = await _expandWord(r.target, ctx);
-    switch (r.op) {
-      case '>':
-      case '>|': {
-        _requireVfs(ctx, 'redirect >');
-        const path = _resolvePath(target, ctx);
-        const chunks = [];
-        ctx.stdout = (text) => { chunks.push(String(text)); };
-        // Flush on next tick? No — POSIX: a write redirect truncates first
-        // then writes as the command produces. We can't easily intercept
-        // post-execution finalisation here, so buffer everything and write
-        // on the next applied redirect's overwrite. The caller is expected
-        // to await the command's completion before observing the file.
-        // v0 compromise: write everything at the end of the command via a
-        // commit hook. For now, we use a setter that writes immediately on
-        // each call, opening in truncate mode on first call:
-        let firstWrite = true;
-        ctx.stdout = async (text) => {
-          if (firstWrite) {
-            await ctx.vfs.writeFile(path, String(text));
-            firstWrite = false;
-          } else {
-            // Append. Real POSIX would keep the fd open; we read+rewrite.
-            // Inefficient but simple for v0.
-            let prior;
-            try { prior = await ctx.vfs.readFile(path, 'text'); } catch { prior = ''; }
-            await ctx.vfs.writeFile(path, prior + String(text));
-          }
-        };
-        break;
-      }
-      case '>>': {
-        _requireVfs(ctx, 'redirect >>');
-        const path = _resolvePath(target, ctx);
-        ctx.stdout = async (text) => {
-          let prior;
-          try { prior = await ctx.vfs.readFile(path, 'text'); } catch { prior = ''; }
-          await ctx.vfs.writeFile(path, prior + String(text));
-        };
-        break;
-      }
-      case '<': {
-        _requireVfs(ctx, 'redirect <');
-        const path = _resolvePath(target, ctx);
-        ctx.stdin = await ctx.vfs.readFile(path, 'text');
-        break;
-      }
-      case '<<':
-      case '<<-': {
-        // Here-doc body was attached at parse time.
-        let body = r.body ?? '';
-        if (!r.bodyQuoted) {
-          // Expand $vars and $(cmd) in body text.
-          body = await _expandTextString(body, ctx);
+    const isWrite = r.op === '>' || r.op === '>|' || r.op === '>>';
+    const fd = r.fd;
+    if (isWrite) {
+      _requireVfs(ctx, `redirect ${r.op}`);
+      const path = _resolvePath(target, ctx);
+      const buf = [];
+      const sink = (text) => {
+        buf.push(typeof text === 'string' ? text : String(text));
+      };
+      // POSIX defaults: `>` / `>|` route fd 1 (stdout) to the file;
+      // `2>` routes fd 2; other fd numbers are not modeled in v0.
+      if (fd === 2) ctx.stderr = sink;
+      else          ctx.stdout = sink;
+      const appendMode = r.op === '>>';
+      ensureFlushQueue().push(async () => {
+        const out = buf.join('');
+        if (appendMode) {
+          let prior = '';
+          try { prior = await ctx.vfs.readFile(path, 'text'); } catch { /* missing file → start fresh */ }
+          await ctx.vfs.writeFile(path, prior + out);
+        } else {
+          // `>` truncates: even with zero output, the file is created/emptied.
+          await ctx.vfs.writeFile(path, out);
         }
-        ctx.stdin = body;
-        break;
-      }
-      // For 2>, 2>&1, etc., fd-targeted redirects:
-      default: {
-        if (r.op === '>' && r.fd === 2) {
-          // (Handled above when r.fd is null; here for fd=2)
-        }
-        if (r.op === '>' || r.op === '>|') {
-          if (r.fd === 2) {
-            _requireVfs(ctx, 'redirect 2>');
-            const path = _resolvePath(target, ctx);
-            ctx.stderr = async (text) => { await ctx.vfs.writeFile(path, String(text)); };
-          }
-        }
-        if (r.op === '>&' || r.op === '<&') {
-          // Duplicate fd. `2>&1` is the common case (stderr → stdout).
-          if (r.fd === 2 && target === '1') ctx.stderr = ctx.stdout;
-          if (r.fd === 1 && target === '2') ctx.stdout = ctx.stderr;
-          // Other dup combinations are rare; skip for v0.
-        }
-      }
+      });
+      continue;
+    }
+    if (r.op === '<') {
+      _requireVfs(ctx, 'redirect <');
+      const path = _resolvePath(target, ctx);
+      ctx.stdin = await ctx.vfs.readFile(path, 'text');
+      continue;
+    }
+    if (r.op === '<<' || r.op === '<<-') {
+      // Here-doc body was attached at parse time.
+      let body = r.body ?? '';
+      if (!r.bodyQuoted) body = await _expandTextString(body, ctx);
+      ctx.stdin = body;
+      continue;
+    }
+    if (r.op === '>&' || r.op === '<&') {
+      // Duplicate fd. `2>&1` (stderr → stdout) and `1>&2` are the common cases.
+      if (fd === 2 && target === '1') ctx.stderr = ctx.stdout;
+      else if (fd === 1 && target === '2') ctx.stdout = ctx.stderr;
+      // Other dup combinations are rare; skip for v0.
+    }
+  }
+}
+
+// Drain a context's pending redirect-flush callbacks. Called at the
+// boundary of any scope that applied redirects (simple command, brace
+// group, subshell). Failures during flush emit a stderr diagnostic but
+// don't unwind further — the command's exit code is already decided.
+async function _flushRedirects(ctx) {
+  if (!ctx._redirectFlush || ctx._redirectFlush.length === 0) return;
+  const queue = ctx._redirectFlush;
+  ctx._redirectFlush = null;
+  for (const flush of queue) {
+    try { await flush(); }
+    catch (e) {
+      try { await ctx.stderr(`geas: redirect: ${e.message || e}\n`); } catch { /* ignore */ }
     }
   }
 }
@@ -775,7 +838,6 @@ async function _expandParam(part, ctx) {
   const val = set ? ctx.env.get(part.name) : '';
   const isNull = !val;
   switch (part.op) {
-    case '#':  return String(val.length);
     case ':-': return (!set || isNull) ? await _expandWord(part.word, ctx) : val;
     case '-':  return (!set)           ? await _expandWord(part.word, ctx) : val;
     case ':=': {
@@ -812,11 +874,14 @@ async function _expandParam(part, ctx) {
     }
     case ':+': return (set && !isNull) ? await _expandWord(part.word, ctx) : '';
     case '+':  return (set)             ? await _expandWord(part.word, ctx) : '';
-    // Prefix/suffix removal — v0 implements basic literal-only matching.
+    // `#` is overloaded: `${#name}` (parser emits word=null) is length;
+    // `${name#pat}` and friends are prefix/suffix removal using
+    // _patternRemove's scan-based glob matcher.
     case '#':
     case '##':
     case '%':
     case '%%': {
+      if (part.op === '#' && part.word == null) return String(val.length);
       const pat = part.word ? await _expandWord(part.word, ctx) : '';
       return _patternRemove(val, pat, part.op);
     }
@@ -825,35 +890,38 @@ async function _expandParam(part, ctx) {
 }
 
 function _patternRemove(s, pat, op) {
-  // Convert POSIX glob to regex anchored at start (# / ##) or end (% / %%).
+  // POSIX glob → regex via _globToRegExp. Match is scan-based rather
+  // than relying on regex backtracking: appending `?` to make a regex
+  // "lazy" only works for trailing quantifiers, and a bare `[abc]?`
+  // means "optional class" not "shortest match." Direct scanning gives
+  // unambiguous shortest/longest semantics for arbitrary glob shapes.
   const re = _globToRegExp(pat);
+  const anchored = new RegExp('^' + re.source + '$');
   if (op === '#') {
-    const m = s.match(new RegExp('^' + re.source));
-    if (!m) return s;
-    // Shortest match: try progressively longer until one fits, take the first.
-    // Simpler approach: lazy regex.
-    const lazy = new RegExp('^(' + re.source + '?)');
-    const mm = s.match(lazy);
-    return mm ? s.slice(mm[0].length) : s;
+    // Prefix shortest: empty prefix outward.
+    for (let i = 0; i <= s.length; i++) {
+      if (anchored.test(s.slice(0, i))) return s.slice(i);
+    }
+    return s;
   }
   if (op === '##') {
-    const greedy = new RegExp('^(' + re.source + ')');
-    const m = s.match(greedy);
-    return m ? s.slice(m[0].length) : s;
+    // Prefix longest: full-string inward.
+    for (let i = s.length; i >= 0; i--) {
+      if (anchored.test(s.slice(0, i))) return s.slice(i);
+    }
+    return s;
   }
   if (op === '%') {
-    // Suffix shortest: scan from end forward, find shortest match.
+    // Suffix shortest: empty suffix outward.
     for (let i = s.length; i >= 0; i--) {
-      const suffix = s.slice(i);
-      if (new RegExp('^' + re.source + '$').test(suffix)) return s.slice(0, i);
+      if (anchored.test(s.slice(i))) return s.slice(0, i);
     }
     return s;
   }
   if (op === '%%') {
-    // Suffix longest: scan from start, find longest match.
+    // Suffix longest: full-string inward.
     for (let i = 0; i <= s.length; i++) {
-      const suffix = s.slice(i);
-      if (new RegExp('^' + re.source + '$').test(suffix)) return s.slice(0, i);
+      if (anchored.test(s.slice(i))) return s.slice(0, i);
     }
     return s;
   }
