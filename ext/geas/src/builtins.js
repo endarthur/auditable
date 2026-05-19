@@ -11,6 +11,7 @@
 // any other channel — that's how pipeline routing reaches them.
 
 import { defaultTypedBuiltins } from './builtins-typed.js';
+import { drainInput } from './typed.js';
 
 // Construct a fresh map of the default builtins. Returns a new Map per call
 // so consumers can mutate (add/override) without affecting other shells.
@@ -507,14 +508,13 @@ function _bParseArgs(argv, spec) {
 // of those VFS files. Common to head / tail / wc / grep / sort / uniq /
 // cut / tee / xargs.
 //
-// Typed-pipe contract: if ctx.stdin is a Typed object, fall back to its
-// text rendering via toString(). Builtins that don't know about types
-// transparently get the canonical text representation.
+// Typed-pipe contract: if stdin drains to a Typed object, fall back to
+// its text rendering via toString(). Builtins that don't know about
+// types transparently get the canonical text representation.
 async function _bReadInput(paths, ctx) {
   if (!paths || paths.length === 0) {
-    if (ctx.stdin == null) return '';
-    if (typeof ctx.stdin === 'string') return ctx.stdin;
-    return String(ctx.stdin);
+    const v = await drainInput(ctx);
+    return typeof v === 'string' ? v : String(v);
   }
   if (!ctx.vfs) throw new Error('VFS not configured');
   const chunks = [];
@@ -900,13 +900,25 @@ async function _touch(argv, ctx) {
 // ── text wranglers ──
 
 async function _head(argv, ctx) {
-  const { opts, positionals } = _bParseArgs(argv, { n: { short: 'n', arg: true, default: '10' } });
+  // BSD/GNU shorthand: `head -N` means `head -n N`. _bParseArgs has no
+  // way to express "digit run is a flag value," so normalize first.
+  const normalized = argv.map(a => /^-\d+$/.test(a) ? ['-n', a.slice(1)] : [a]).flat();
+  const { opts, positionals } = _bParseArgs(normalized, { n: { short: 'n', arg: true, default: '10' } });
   const n = Math.max(0, parseInt(opts.n, 10) || 0);
+  // Streaming path when reading from a pipe queue: pull chunks, emit
+  // complete lines as they arrive, throw _pipeClosed back upstream once
+  // we have N. This is what makes `find /huge | head -1` early-return
+  // — upstream's next push sees a closed queue, bails, returns 0.
+  const stdinIsQueue = positionals.length === 0
+    && ctx.stdin
+    && typeof ctx.stdin === 'object'
+    && typeof ctx.stdin[Symbol.asyncIterator] === 'function';
+  if (stdinIsQueue) {
+    return await _headStream(ctx.stdin, n, ctx);
+  }
   try {
     const text = await _bReadInput(positionals, ctx);
     const lines = text.split('\n');
-    // Preserve trailing newline state: if text ends with '\n', the last
-    // element is '' and we drop it for the "lines" count.
     const trailingNL = text.endsWith('\n');
     const effective = trailingNL ? lines.slice(0, -1) : lines;
     const take = effective.slice(0, n);
@@ -918,8 +930,44 @@ async function _head(argv, ctx) {
   }
 }
 
+async function _headStream(queue, n, ctx) {
+  let leftover = '';
+  let emitted = 0;
+  const out = [];
+  try {
+    for await (const chunk of queue) {
+      const text = typeof chunk === 'string' ? chunk : String(chunk);
+      const combined = leftover + text;
+      const parts = combined.split('\n');
+      leftover = parts.pop(); // tail without trailing \n stays in leftover
+      for (const line of parts) {
+        out.push(line);
+        emitted++;
+        if (emitted >= n) break;
+      }
+      if (emitted >= n) {
+        // Close the queue so upstream's next push sees _pipeClosed.
+        if (typeof queue.close === 'function') queue.close();
+        break;
+      }
+    }
+    if (emitted < n && leftover.length > 0) {
+      out.push(leftover);
+      emitted++;
+    }
+  } catch (e) {
+    if (!e || !e._pipeClosed) {
+      await ctx.stderr(`head: ${e.message || e}\n`);
+      return 1;
+    }
+  }
+  if (out.length > 0) await ctx.stdout(out.join('\n') + '\n');
+  return 0;
+}
+
 async function _tail(argv, ctx) {
-  const { opts, positionals } = _bParseArgs(argv, { n: { short: 'n', arg: true, default: '10' } });
+  const normalized = argv.map(a => /^-\d+$/.test(a) ? ['-n', a.slice(1)] : [a]).flat();
+  const { opts, positionals } = _bParseArgs(normalized, { n: { short: 'n', arg: true, default: '10' } });
   const n = Math.max(0, parseInt(opts.n, 10) || 0);
   try {
     const text = await _bReadInput(positionals, ctx);
@@ -1510,7 +1558,15 @@ async function _read(argv, ctx) {
   if (prompt) {
     try { await ctx.stderr(prompt); } catch { /* ignore */ }
   }
-  if (typeof ctx.stdin !== 'string' || ctx.stdin.length === 0) return 1;
+  // `read` is line-oriented and needs to mutate the consumed stdin. If
+  // stdin arrived as a stream queue (from a pipeline), drain to text
+  // first; subsequent `read` calls in the same command keep slicing
+  // ctx.stdin string.
+  if (typeof ctx.stdin !== 'string') {
+    const v = await drainInput(ctx);
+    ctx.stdin = typeof v === 'string' ? v : String(v);
+  }
+  if (ctx.stdin.length === 0) return 1;
   // Consume one record from stdin. Mutate ctx.stdin so subsequent reads
   // in the same command context (e.g. `while read; do ...; done < file`)
   // continue from where we left off.
@@ -1860,7 +1916,10 @@ async function _xargs(argv, ctx) {
     zero: { short: '0' },
   });
   const cmdArgv = positionals.length === 0 ? ['echo'] : positionals;
-  const stdin = typeof ctx.stdin === 'string' ? ctx.stdin : '';
+  // Drain via the typed-aware helper — handles streaming-queue input
+  // (the common pipeline shape) plus plain string / typed values.
+  const stdinDrained = await drainInput(ctx);
+  const stdin = typeof stdinDrained === 'string' ? stdinDrained : String(stdinDrained);
   // `-0` reads NUL-separated input — the canonical pairing for
   // `find -print0 | xargs -0`, which is the only safe way to pass
   // filenames containing whitespace or quotes through xargs.

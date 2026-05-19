@@ -15,7 +15,7 @@
 // degrades gracefully (head reads the CSV text and slices the first 5
 // lines, ignoring that columns are involved).
 
-import { mkTyped, isTyped, parseCSV, serializeCSV, formatTable } from './typed.js';
+import { mkTyped, isTyped, parseCSV, serializeCSV, formatTable, drainInput } from './typed.js';
 
 export function defaultTypedBuiltins() {
   return {
@@ -46,10 +46,9 @@ async function _fromCsv(argv, ctx) {
         : (ctx.cwd.endsWith('/') ? ctx.cwd : ctx.cwd + '/') + path;
       text = await ctx.vfs.readFile(abs, 'text');
     } else {
-      // No path → read from stdin.
-      text = ctx.stdin == null ? ''
-        : typeof ctx.stdin === 'string' ? ctx.stdin
-        : String(ctx.stdin);
+      // No path → drain stdin (handles string, typed, async-iterable queue).
+      const v = await drainInput(ctx);
+      text = typeof v === 'string' ? v : String(v);
     }
   } catch (e) {
     await ctx.stderr(`from-csv: ${e.message}\n`);
@@ -62,7 +61,7 @@ async function _fromCsv(argv, ctx) {
 
 // Convert Typed table → CSV text. Idempotent on text input.
 async function _toCsv(_argv, ctx) {
-  const v = ctx.stdin;
+  const v = await drainInput(ctx);
   if (isTyped(v) && v.kind === 'table') {
     await ctx.stdout(serializeCSV(v.value));
     return 0;
@@ -138,20 +137,20 @@ async function _last(argv, ctx) {
   return 0;
 }
 
-// Common: pull a table out of ctx.stdin, parsing text if needed.
+// Common: pull a table out of ctx.stdin, parsing text if needed. Drains
+// a streaming-pipe queue down to a single value first (typed if any was
+// seen, else concatenated text).
 async function _consumeTable(ctx) {
-  if (isTyped(ctx.stdin) && ctx.stdin.kind === 'table') {
-    return ctx.stdin.value;
+  const v = await drainInput(ctx);
+  if (isTyped(v) && v.kind === 'table') return v.value;
+  if (isTyped(v) && v.kind === 'array'
+      && Array.isArray(v.value)
+      && v.value.length > 0
+      && typeof v.value[0] === 'object'
+      && !Array.isArray(v.value[0])) {
+    return _objectArrayToTable(v.value);
   }
-  // JSON-array of flat objects → table (GCU-shape; sadpan-friendly).
-  if (isTyped(ctx.stdin) && ctx.stdin.kind === 'array'
-      && Array.isArray(ctx.stdin.value)
-      && ctx.stdin.value.length > 0
-      && typeof ctx.stdin.value[0] === 'object'
-      && !Array.isArray(ctx.stdin.value[0])) {
-    return _objectArrayToTable(ctx.stdin.value);
-  }
-  const text = ctx.stdin == null ? '' : String(ctx.stdin);
+  const text = isTyped(v) ? String(v) : (typeof v === 'string' ? v : String(v));
   return parseCSV(text);
 }
 
@@ -180,9 +179,8 @@ async function _fromJson(argv, ctx) {
         : (ctx.cwd.endsWith('/') ? ctx.cwd : ctx.cwd + '/') + path;
       text = await ctx.vfs.readFile(abs, 'text');
     } else {
-      text = ctx.stdin == null ? ''
-        : typeof ctx.stdin === 'string' ? ctx.stdin
-        : String(ctx.stdin);
+      const v = await drainInput(ctx);
+      text = typeof v === 'string' ? v : String(v);
     }
   } catch (e) {
     await ctx.stderr(`from-json: ${e.message}\n`);
@@ -217,13 +215,12 @@ async function _fromJson(argv, ctx) {
 async function _toJson(argv, ctx) {
   const pretty = argv.slice(1).some(a => a === '--pretty' || a === '-p');
   const indent = pretty ? 2 : 0;
-  const v = ctx.stdin;
+  const v = await drainInput(ctx);
   let obj;
   if (isTyped(v)) {
     if (v.kind === 'table') obj = _tableToObjectArray(v.value);
     else obj = v.value;
   } else if (typeof v === 'string') {
-    // Best-effort: try to JSON-parse text input; otherwise emit as quoted string.
     try { obj = JSON.parse(v); }
     catch { obj = v; }
   } else if (v == null) {
@@ -267,8 +264,8 @@ function _tableToObjectArray(table) {
 // sparkline + summary (min/max/n), so degradation to terminal is
 // graceful.
 async function _display(_argv, ctx) {
-  const v = ctx.stdin;
-  if (v == null) return 0;
+  const v = await drainInput(ctx);
+  if (v == null || v === '') return 0;
   if (isTyped(v)) {
     if (v.kind === 'table') {
       await ctx.stdout(formatTable(v.value));

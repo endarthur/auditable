@@ -17,6 +17,7 @@ import { createLoopback } from '../ext/geas/src/worker/loopback.js';
 import { serveVFS, createVfsClient } from '../ext/geas/src/worker/vfs-proxy.js';
 import { createTermAdapter, adapterHooks } from '../ext/geas/src/adapters/term.js';
 import { createXtermAdapter } from '../ext/geas/src/adapters/xterm.js';
+import { drainInput } from '../ext/geas/src/typed.js';
 import { VFS, MemoryBackend } from '../ext/vfs/index.js';
 
 // Build a fresh VFS + shell pair for tests that exercise filesystem builtins.
@@ -60,8 +61,10 @@ async function run(source, opts = {}) {
     true:  async () => 0,
     false: async () => 1,
     cat: async (_argv, ctx) => {
-      const s = typeof ctx.stdin === 'string' ? ctx.stdin : '';
-      await ctx.stdout(s);
+      // Pipelines now hand stdin as a queue (concurrent dispatch);
+      // drainInput collapses string / typed / queue down to one value.
+      const v = await drainInput(ctx);
+      await ctx.stdout(typeof v === 'string' ? v : String(v));
       return 0;
     },
     ...(opts.builtins || {}),
@@ -901,7 +904,8 @@ describe('executor — pipelines', () => {
   it('multi-stage pipe', async () => {
     // Add a uppercase builtin so we can test multi-stage.
     const upper = async (_argv, ctx) => {
-      const s = typeof ctx.stdin === 'string' ? ctx.stdin : '';
+      const v = await drainInput(ctx);
+      const s = typeof v === 'string' ? v : String(v);
       await ctx.stdout(s.toUpperCase());
       return 0;
     };
@@ -3423,6 +3427,86 @@ describe('$((...)) arithmetic', () => {
     const { shell, output } = _testShell();
     await shell.exec('i=0\nwhile [ $i -lt 3 ]; do echo i=$i; i=$((i + 1)); done\n');
     assert.equal(output(), 'i=0\ni=1\ni=2\n');
+  });
+});
+
+// ── stage 13: streaming pipes ──
+
+describe('streaming pipes', () => {
+  it('basic pipe still works with concurrent dispatch', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo hello | cat\n');
+    assert.equal(output(), 'hello\n');
+  });
+
+  it('multi-stage pipe preserves order', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('echo abc | cat | cat | cat\n');
+    assert.equal(output(), 'abc\n');
+  });
+
+  it('typed pipe (from-csv | where | to-csv) survives the refactor', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.writeFile('/data.csv', 'k,v\nfoo,1\nbar,5\nbaz,10\n');
+    await shell.exec("from-csv /data.csv | where 'v > 4' | to-csv\n");
+    assert.equal(output(), 'k,v\nbar,5\nbaz,10\n');
+  });
+
+  it('head -N closes upstream early', async () => {
+    // Build a generator that counts pushes — when head -1 finishes, the
+    // generator's next emit should throw _pipeClosed and the stage
+    // returns clean.
+    const { shell, output } = _testShell();
+    let pushCount = 0;
+    shell.builtins.set('gen', async (argv, ctx) => {
+      const total = parseInt(argv[1], 10);
+      for (let i = 0; i < total; i++) {
+        pushCount++;
+        try { await ctx.stdout(`line${i}\n`); }
+        catch (e) { if (e && e._pipeClosed) return 0; throw e; }
+      }
+      return 0;
+    });
+    await shell.exec('gen 100000 | head -1\n');
+    assert.equal(output(), 'line0\n');
+    // Without early-close, pushCount would hit 100000. With early-close,
+    // it stops near the queue's high-water mark (64 by default) — well
+    // under the full count.
+    assert.ok(pushCount < 1000, `expected early termination, got ${pushCount} pushes`);
+  });
+
+  it('pipefail still reports first non-zero stage', async () => {
+    const { shell } = _testShell();
+    const r = await shell.exec('set -o pipefail\nfalse | true | true\n');
+    assert.equal(r.exitCode, 1);
+  });
+
+  it('exit code is last stage without pipefail', async () => {
+    const { shell } = _testShell();
+    const r = await shell.exec('false | true\n');
+    assert.equal(r.exitCode, 0);
+  });
+
+  it('large pipeline does not deadlock under backpressure', async () => {
+    // Push N items (> high-water-mark) through a 3-stage pipeline.
+    // If backpressure is broken, this would hang or OOM; if it works,
+    // it completes in normal time.
+    const { shell, output } = _testShell();
+    shell.builtins.set('gen', async (argv, ctx) => {
+      const total = parseInt(argv[1], 10);
+      for (let i = 0; i < total; i++) await ctx.stdout(`L${i}\n`);
+      return 0;
+    });
+    shell.builtins.set('count', async (_argv, ctx) => {
+      const { drainInput } = await import('../ext/geas/src/typed.js');
+      const v = await drainInput(ctx);
+      const s = typeof v === 'string' ? v : String(v);
+      const n = s.split('\n').filter(Boolean).length;
+      await ctx.stdout(`count=${n}\n`);
+      return 0;
+    });
+    await shell.exec('gen 500 | cat | count\n');
+    assert.equal(output(), 'count=500\n');
   });
 });
 

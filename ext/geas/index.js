@@ -1509,6 +1509,35 @@ function toText(v) {
   return String(v);
 }
 
+// Drain a pipe-stdin into a single value. Handles the four shapes
+// ctx.stdin can take after the streaming-pipes refactor:
+//   string             — passed through (initial stdin / heredoc body)
+//   Typed object       — passed through (single upstream push)
+//   async iterable     — drained: concatenate string items, keep the
+//                        last Typed pushed; if any Typed was seen,
+//                        return it (matching the prior "last typed
+//                        wins" rule); else return the joined text
+//   anything else      — String(...) fallback
+//
+// Builtins that want a string call this then `String(v)`; builtins
+// that understand typed values inspect the return.
+async function drainInput(ctx) {
+  const s = ctx.stdin;
+  if (s == null) return '';
+  if (typeof s === 'string') return s;
+  if (isTyped(s)) return s;
+  if (s && typeof s[Symbol.asyncIterator] === 'function') {
+    let typed = null;
+    let text = '';
+    for await (const v of s) {
+      if (isTyped(v)) typed = v;
+      else text += typeof v === 'string' ? v : String(v);
+    }
+    return typed != null ? typed : text;
+  }
+  return String(s);
+}
+
 // ── CSV helpers (minimal) ──
 //
 // v0 ships a compact CSV parser/serialiser inline so the typed-pipe demo
@@ -1801,43 +1830,54 @@ async function _execPipeline(node, ctx) {
     return { exitCode: r.exitCode };
   }
 
-  // v0: buffered pipes. Each stage runs to completion, its stdout collected
-  // and passed to the next stage as stdin. The buffer can be either string
-  // chunks (POSIX-shape) OR a single Typed value (GCU-shape typed pipe):
+  // Multi-stage pipeline: stages run as CONCURRENT tasks, connected by
+  // bounded async queues (one queue per inter-stage gap). Backpressure
+  // is built in — upstream's push awaits when the downstream queue is
+  // full. When a downstream stage finishes early (`head -1`), it closes
+  // its input queue, which makes upstream's next push throw _pipeClosed;
+  // upstream catches that as a clean early-return signal so the long
+  // walk (e.g. `find /huge`) doesn't run to completion uselessly.
   //
-  //   - If a stage emits a Typed value via ctx.stdout({__geas_typed, ...}),
-  //     the next stage's stdin is that Typed object directly.
-  //   - If a stage emits text, the next stage's stdin is the concatenated
-  //     string.
-  //   - If both happen in the same stage (mixed), text wins (Typed values
-  //     are dropped). Stages should emit either-or, not both.
-  //
-  // Consumers that don't understand the Typed kind get text via the value's
-  // toString() — see typed.js for the protocol contract.
-  let pipeIn = ctx.stdin;
-  const exits = [];
-  for (let i = 0; i < node.commands.length; i++) {
-    const isLast = i === node.commands.length - 1;
-    let bufOut = [];
-    let bufTyped = null;
+  // Typed-pipe protocol stays: a stage can push a Typed value (`from-csv`)
+  // or string chunks; the downstream's drain (_drainInput in builtins.js)
+  // collects items and returns either text or a Typed value, matching
+  // the previous semantics. The order rule (last typed wins, strings
+  // concat) is preserved by the drain helper, not by the queue itself.
+  const stages = node.commands;
+  const queues = [];
+  for (let i = 0; i < stages.length - 1; i++) queues.push(_makePipeQueue());
+  const exits = new Array(stages.length).fill(0);
+
+  await Promise.all(stages.map(async (cmd, i) => {
+    const isFirst = i === 0;
+    const isLast  = i === stages.length - 1;
+    const inQueue  = isFirst ? null : queues[i - 1];
+    const outQueue = isLast  ? null : queues[i];
     const subCtx = {
       ...ctx,
-      stdin: pipeIn,
-      stdout: isLast ? ctx.stdout : (value) => {
-        if (value && typeof value === 'object' && value.__geas_typed === true) {
-          bufTyped = value;
-        } else {
-          bufOut.push(typeof value === 'string' ? value : String(value));
-        }
+      stdin: inQueue ?? ctx.stdin,
+      stdout: isLast ? ctx.stdout : async (value) => {
+        await outQueue.push(value);
       },
     };
-    const r = await _exec(node.commands[i], subCtx);
-    exits.push(r.exitCode);
-    if (!isLast) {
-      // Prefer Typed if the stage emitted one — otherwise concat text.
-      pipeIn = bufTyped !== null ? bufTyped : bufOut.join('');
+    try {
+      const r = await _exec(cmd, subCtx);
+      exits[i] = r.exitCode;
+    } catch (e) {
+      if (e && e._pipeClosed) {
+        // Downstream went away — clean early termination.
+        exits[i] = 0;
+      } else {
+        // Propagate after closing our outgoing queue so other stages
+        // don't deadlock waiting for our writes.
+        if (outQueue) outQueue.close();
+        throw e;
+      }
+    } finally {
+      if (outQueue) outQueue.close();
     }
-  }
+  }));
+
   // POSIX pipefail: pipeline exit code is the rightmost non-zero stage,
   // or 0 if all succeeded. Without pipefail, only the last stage's exit
   // counts. (We use first non-zero here — bash returns "last non-zero",
@@ -1848,6 +1888,49 @@ async function _execPipeline(node, ctx) {
     ? (exits.find(c => c !== 0) ?? 0)
     : lastExit;
   return { exitCode: finalExit };
+}
+
+// Bounded async queue connecting two pipeline stages. push() waits when
+// the buffer hits the high-water mark (backpressure); iterating drains
+// in FIFO order. close() signals "no more writes coming" — readers exit
+// when buffer empties; pending writers wake and see the close so they
+// can throw _pipeClosed to their caller (which surfaces as the
+// "downstream went away" signal in the executor).
+function _makePipeQueue(highWaterMark = 64) {
+  let buffer = [];
+  let closed = false;
+  const readers = [];
+  const writers = [];
+  const wakeAll = (arr) => { while (arr.length) arr.shift()(); };
+  return {
+    async push(value) {
+      if (closed) throw { _pipeClosed: true };
+      buffer.push(value);
+      wakeAll(readers);
+      if (buffer.length >= highWaterMark) {
+        await new Promise(r => writers.push(r));
+        if (closed) throw { _pipeClosed: true };
+      }
+    },
+    close() {
+      closed = true;
+      wakeAll(readers);
+      wakeAll(writers);
+    },
+    async *[Symbol.asyncIterator]() {
+      while (true) {
+        if (buffer.length > 0) {
+          const v = buffer.shift();
+          wakeAll(writers);
+          yield v;
+          continue;
+        }
+        if (closed) return;
+        await new Promise(r => readers.push(r));
+      }
+    },
+    get _isPipeQueue() { return true; },
+  };
 }
 
 // ── simple commands ──
@@ -3000,10 +3083,9 @@ async function _fromCsv(argv, ctx) {
         : (ctx.cwd.endsWith('/') ? ctx.cwd : ctx.cwd + '/') + path;
       text = await ctx.vfs.readFile(abs, 'text');
     } else {
-      // No path → read from stdin.
-      text = ctx.stdin == null ? ''
-        : typeof ctx.stdin === 'string' ? ctx.stdin
-        : String(ctx.stdin);
+      // No path → drain stdin (handles string, typed, async-iterable queue).
+      const v = await drainInput(ctx);
+      text = typeof v === 'string' ? v : String(v);
     }
   } catch (e) {
     await ctx.stderr(`from-csv: ${e.message}\n`);
@@ -3016,7 +3098,7 @@ async function _fromCsv(argv, ctx) {
 
 // Convert Typed table → CSV text. Idempotent on text input.
 async function _toCsv(_argv, ctx) {
-  const v = ctx.stdin;
+  const v = await drainInput(ctx);
   if (isTyped(v) && v.kind === 'table') {
     await ctx.stdout(serializeCSV(v.value));
     return 0;
@@ -3092,20 +3174,20 @@ async function _last(argv, ctx) {
   return 0;
 }
 
-// Common: pull a table out of ctx.stdin, parsing text if needed.
+// Common: pull a table out of ctx.stdin, parsing text if needed. Drains
+// a streaming-pipe queue down to a single value first (typed if any was
+// seen, else concatenated text).
 async function _consumeTable(ctx) {
-  if (isTyped(ctx.stdin) && ctx.stdin.kind === 'table') {
-    return ctx.stdin.value;
+  const v = await drainInput(ctx);
+  if (isTyped(v) && v.kind === 'table') return v.value;
+  if (isTyped(v) && v.kind === 'array'
+      && Array.isArray(v.value)
+      && v.value.length > 0
+      && typeof v.value[0] === 'object'
+      && !Array.isArray(v.value[0])) {
+    return _objectArrayToTable(v.value);
   }
-  // JSON-array of flat objects → table (GCU-shape; sadpan-friendly).
-  if (isTyped(ctx.stdin) && ctx.stdin.kind === 'array'
-      && Array.isArray(ctx.stdin.value)
-      && ctx.stdin.value.length > 0
-      && typeof ctx.stdin.value[0] === 'object'
-      && !Array.isArray(ctx.stdin.value[0])) {
-    return _objectArrayToTable(ctx.stdin.value);
-  }
-  const text = ctx.stdin == null ? '' : String(ctx.stdin);
+  const text = isTyped(v) ? String(v) : (typeof v === 'string' ? v : String(v));
   return parseCSV(text);
 }
 
@@ -3134,9 +3216,8 @@ async function _fromJson(argv, ctx) {
         : (ctx.cwd.endsWith('/') ? ctx.cwd : ctx.cwd + '/') + path;
       text = await ctx.vfs.readFile(abs, 'text');
     } else {
-      text = ctx.stdin == null ? ''
-        : typeof ctx.stdin === 'string' ? ctx.stdin
-        : String(ctx.stdin);
+      const v = await drainInput(ctx);
+      text = typeof v === 'string' ? v : String(v);
     }
   } catch (e) {
     await ctx.stderr(`from-json: ${e.message}\n`);
@@ -3171,13 +3252,12 @@ async function _fromJson(argv, ctx) {
 async function _toJson(argv, ctx) {
   const pretty = argv.slice(1).some(a => a === '--pretty' || a === '-p');
   const indent = pretty ? 2 : 0;
-  const v = ctx.stdin;
+  const v = await drainInput(ctx);
   let obj;
   if (isTyped(v)) {
     if (v.kind === 'table') obj = _tableToObjectArray(v.value);
     else obj = v.value;
   } else if (typeof v === 'string') {
-    // Best-effort: try to JSON-parse text input; otherwise emit as quoted string.
     try { obj = JSON.parse(v); }
     catch { obj = v; }
   } else if (v == null) {
@@ -3221,8 +3301,8 @@ function _tableToObjectArray(table) {
 // sparkline + summary (min/max/n), so degradation to terminal is
 // graceful.
 async function _display(_argv, ctx) {
-  const v = ctx.stdin;
-  if (v == null) return 0;
+  const v = await drainInput(ctx);
+  if (v == null || v === '') return 0;
   if (isTyped(v)) {
     if (v.kind === 'table') {
       await ctx.stdout(formatTable(v.value));
@@ -3392,6 +3472,7 @@ function _compilePredicate(expr) {
 // Built-ins MUST read input from ctx.stdin (a string in v0) and write
 // output through `await ctx.stdout(...)` / `ctx.stderr(...)` rather than
 // any other channel — that's how pipeline routing reaches them.
+
 
 
 // Construct a fresh map of the default builtins. Returns a new Map per call
@@ -3889,14 +3970,13 @@ function _bParseArgs(argv, spec) {
 // of those VFS files. Common to head / tail / wc / grep / sort / uniq /
 // cut / tee / xargs.
 //
-// Typed-pipe contract: if ctx.stdin is a Typed object, fall back to its
-// text rendering via toString(). Builtins that don't know about types
-// transparently get the canonical text representation.
+// Typed-pipe contract: if stdin drains to a Typed object, fall back to
+// its text rendering via toString(). Builtins that don't know about
+// types transparently get the canonical text representation.
 async function _bReadInput(paths, ctx) {
   if (!paths || paths.length === 0) {
-    if (ctx.stdin == null) return '';
-    if (typeof ctx.stdin === 'string') return ctx.stdin;
-    return String(ctx.stdin);
+    const v = await drainInput(ctx);
+    return typeof v === 'string' ? v : String(v);
   }
   if (!ctx.vfs) throw new Error('VFS not configured');
   const chunks = [];
@@ -4282,13 +4362,25 @@ async function _touch(argv, ctx) {
 // ── text wranglers ──
 
 async function _head(argv, ctx) {
-  const { opts, positionals } = _bParseArgs(argv, { n: { short: 'n', arg: true, default: '10' } });
+  // BSD/GNU shorthand: `head -N` means `head -n N`. _bParseArgs has no
+  // way to express "digit run is a flag value," so normalize first.
+  const normalized = argv.map(a => /^-\d+$/.test(a) ? ['-n', a.slice(1)] : [a]).flat();
+  const { opts, positionals } = _bParseArgs(normalized, { n: { short: 'n', arg: true, default: '10' } });
   const n = Math.max(0, parseInt(opts.n, 10) || 0);
+  // Streaming path when reading from a pipe queue: pull chunks, emit
+  // complete lines as they arrive, throw _pipeClosed back upstream once
+  // we have N. This is what makes `find /huge | head -1` early-return
+  // — upstream's next push sees a closed queue, bails, returns 0.
+  const stdinIsQueue = positionals.length === 0
+    && ctx.stdin
+    && typeof ctx.stdin === 'object'
+    && typeof ctx.stdin[Symbol.asyncIterator] === 'function';
+  if (stdinIsQueue) {
+    return await _headStream(ctx.stdin, n, ctx);
+  }
   try {
     const text = await _bReadInput(positionals, ctx);
     const lines = text.split('\n');
-    // Preserve trailing newline state: if text ends with '\n', the last
-    // element is '' and we drop it for the "lines" count.
     const trailingNL = text.endsWith('\n');
     const effective = trailingNL ? lines.slice(0, -1) : lines;
     const take = effective.slice(0, n);
@@ -4300,8 +4392,44 @@ async function _head(argv, ctx) {
   }
 }
 
+async function _headStream(queue, n, ctx) {
+  let leftover = '';
+  let emitted = 0;
+  const out = [];
+  try {
+    for await (const chunk of queue) {
+      const text = typeof chunk === 'string' ? chunk : String(chunk);
+      const combined = leftover + text;
+      const parts = combined.split('\n');
+      leftover = parts.pop(); // tail without trailing \n stays in leftover
+      for (const line of parts) {
+        out.push(line);
+        emitted++;
+        if (emitted >= n) break;
+      }
+      if (emitted >= n) {
+        // Close the queue so upstream's next push sees _pipeClosed.
+        if (typeof queue.close === 'function') queue.close();
+        break;
+      }
+    }
+    if (emitted < n && leftover.length > 0) {
+      out.push(leftover);
+      emitted++;
+    }
+  } catch (e) {
+    if (!e || !e._pipeClosed) {
+      await ctx.stderr(`head: ${e.message || e}\n`);
+      return 1;
+    }
+  }
+  if (out.length > 0) await ctx.stdout(out.join('\n') + '\n');
+  return 0;
+}
+
 async function _tail(argv, ctx) {
-  const { opts, positionals } = _bParseArgs(argv, { n: { short: 'n', arg: true, default: '10' } });
+  const normalized = argv.map(a => /^-\d+$/.test(a) ? ['-n', a.slice(1)] : [a]).flat();
+  const { opts, positionals } = _bParseArgs(normalized, { n: { short: 'n', arg: true, default: '10' } });
   const n = Math.max(0, parseInt(opts.n, 10) || 0);
   try {
     const text = await _bReadInput(positionals, ctx);
@@ -4892,7 +5020,15 @@ async function _read(argv, ctx) {
   if (prompt) {
     try { await ctx.stderr(prompt); } catch { /* ignore */ }
   }
-  if (typeof ctx.stdin !== 'string' || ctx.stdin.length === 0) return 1;
+  // `read` is line-oriented and needs to mutate the consumed stdin. If
+  // stdin arrived as a stream queue (from a pipeline), drain to text
+  // first; subsequent `read` calls in the same command keep slicing
+  // ctx.stdin string.
+  if (typeof ctx.stdin !== 'string') {
+    const v = await drainInput(ctx);
+    ctx.stdin = typeof v === 'string' ? v : String(v);
+  }
+  if (ctx.stdin.length === 0) return 1;
   // Consume one record from stdin. Mutate ctx.stdin so subsequent reads
   // in the same command context (e.g. `while read; do ...; done < file`)
   // continue from where we left off.
@@ -5242,7 +5378,10 @@ async function _xargs(argv, ctx) {
     zero: { short: '0' },
   });
   const cmdArgv = positionals.length === 0 ? ['echo'] : positionals;
-  const stdin = typeof ctx.stdin === 'string' ? ctx.stdin : '';
+  // Drain via the typed-aware helper — handles streaming-queue input
+  // (the common pipeline shape) plus plain string / typed values.
+  const stdinDrained = await drainInput(ctx);
+  const stdin = typeof stdinDrained === 'string' ? stdinDrained : String(stdinDrained);
   // `-0` reads NUL-separated input — the canonical pairing for
   // `find -print0 | xargs -0`, which is the only safe way to pass
   // filenames containing whitespace or quotes through xargs.

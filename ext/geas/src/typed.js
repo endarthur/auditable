@@ -46,6 +46,35 @@ export function toText(v) {
   return String(v);
 }
 
+// Drain a pipe-stdin into a single value. Handles the four shapes
+// ctx.stdin can take after the streaming-pipes refactor:
+//   string             — passed through (initial stdin / heredoc body)
+//   Typed object       — passed through (single upstream push)
+//   async iterable     — drained: concatenate string items, keep the
+//                        last Typed pushed; if any Typed was seen,
+//                        return it (matching the prior "last typed
+//                        wins" rule); else return the joined text
+//   anything else      — String(...) fallback
+//
+// Builtins that want a string call this then `String(v)`; builtins
+// that understand typed values inspect the return.
+export async function drainInput(ctx) {
+  const s = ctx.stdin;
+  if (s == null) return '';
+  if (typeof s === 'string') return s;
+  if (isTyped(s)) return s;
+  if (s && typeof s[Symbol.asyncIterator] === 'function') {
+    let typed = null;
+    let text = '';
+    for await (const v of s) {
+      if (isTyped(v)) typed = v;
+      else text += typeof v === 'string' ? v : String(v);
+    }
+    return typed != null ? typed : text;
+  }
+  return String(s);
+}
+
 // ── CSV helpers (minimal) ──
 //
 // v0 ships a compact CSV parser/serialiser inline so the typed-pipe demo

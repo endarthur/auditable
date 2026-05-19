@@ -196,43 +196,54 @@ async function _execPipeline(node, ctx) {
     return { exitCode: r.exitCode };
   }
 
-  // v0: buffered pipes. Each stage runs to completion, its stdout collected
-  // and passed to the next stage as stdin. The buffer can be either string
-  // chunks (POSIX-shape) OR a single Typed value (GCU-shape typed pipe):
+  // Multi-stage pipeline: stages run as CONCURRENT tasks, connected by
+  // bounded async queues (one queue per inter-stage gap). Backpressure
+  // is built in — upstream's push awaits when the downstream queue is
+  // full. When a downstream stage finishes early (`head -1`), it closes
+  // its input queue, which makes upstream's next push throw _pipeClosed;
+  // upstream catches that as a clean early-return signal so the long
+  // walk (e.g. `find /huge`) doesn't run to completion uselessly.
   //
-  //   - If a stage emits a Typed value via ctx.stdout({__geas_typed, ...}),
-  //     the next stage's stdin is that Typed object directly.
-  //   - If a stage emits text, the next stage's stdin is the concatenated
-  //     string.
-  //   - If both happen in the same stage (mixed), text wins (Typed values
-  //     are dropped). Stages should emit either-or, not both.
-  //
-  // Consumers that don't understand the Typed kind get text via the value's
-  // toString() — see typed.js for the protocol contract.
-  let pipeIn = ctx.stdin;
-  const exits = [];
-  for (let i = 0; i < node.commands.length; i++) {
-    const isLast = i === node.commands.length - 1;
-    let bufOut = [];
-    let bufTyped = null;
+  // Typed-pipe protocol stays: a stage can push a Typed value (`from-csv`)
+  // or string chunks; the downstream's drain (_drainInput in builtins.js)
+  // collects items and returns either text or a Typed value, matching
+  // the previous semantics. The order rule (last typed wins, strings
+  // concat) is preserved by the drain helper, not by the queue itself.
+  const stages = node.commands;
+  const queues = [];
+  for (let i = 0; i < stages.length - 1; i++) queues.push(_makePipeQueue());
+  const exits = new Array(stages.length).fill(0);
+
+  await Promise.all(stages.map(async (cmd, i) => {
+    const isFirst = i === 0;
+    const isLast  = i === stages.length - 1;
+    const inQueue  = isFirst ? null : queues[i - 1];
+    const outQueue = isLast  ? null : queues[i];
     const subCtx = {
       ...ctx,
-      stdin: pipeIn,
-      stdout: isLast ? ctx.stdout : (value) => {
-        if (value && typeof value === 'object' && value.__geas_typed === true) {
-          bufTyped = value;
-        } else {
-          bufOut.push(typeof value === 'string' ? value : String(value));
-        }
+      stdin: inQueue ?? ctx.stdin,
+      stdout: isLast ? ctx.stdout : async (value) => {
+        await outQueue.push(value);
       },
     };
-    const r = await _exec(node.commands[i], subCtx);
-    exits.push(r.exitCode);
-    if (!isLast) {
-      // Prefer Typed if the stage emitted one — otherwise concat text.
-      pipeIn = bufTyped !== null ? bufTyped : bufOut.join('');
+    try {
+      const r = await _exec(cmd, subCtx);
+      exits[i] = r.exitCode;
+    } catch (e) {
+      if (e && e._pipeClosed) {
+        // Downstream went away — clean early termination.
+        exits[i] = 0;
+      } else {
+        // Propagate after closing our outgoing queue so other stages
+        // don't deadlock waiting for our writes.
+        if (outQueue) outQueue.close();
+        throw e;
+      }
+    } finally {
+      if (outQueue) outQueue.close();
     }
-  }
+  }));
+
   // POSIX pipefail: pipeline exit code is the rightmost non-zero stage,
   // or 0 if all succeeded. Without pipefail, only the last stage's exit
   // counts. (We use first non-zero here — bash returns "last non-zero",
@@ -243,6 +254,49 @@ async function _execPipeline(node, ctx) {
     ? (exits.find(c => c !== 0) ?? 0)
     : lastExit;
   return { exitCode: finalExit };
+}
+
+// Bounded async queue connecting two pipeline stages. push() waits when
+// the buffer hits the high-water mark (backpressure); iterating drains
+// in FIFO order. close() signals "no more writes coming" — readers exit
+// when buffer empties; pending writers wake and see the close so they
+// can throw _pipeClosed to their caller (which surfaces as the
+// "downstream went away" signal in the executor).
+function _makePipeQueue(highWaterMark = 64) {
+  let buffer = [];
+  let closed = false;
+  const readers = [];
+  const writers = [];
+  const wakeAll = (arr) => { while (arr.length) arr.shift()(); };
+  return {
+    async push(value) {
+      if (closed) throw { _pipeClosed: true };
+      buffer.push(value);
+      wakeAll(readers);
+      if (buffer.length >= highWaterMark) {
+        await new Promise(r => writers.push(r));
+        if (closed) throw { _pipeClosed: true };
+      }
+    },
+    close() {
+      closed = true;
+      wakeAll(readers);
+      wakeAll(writers);
+    },
+    async *[Symbol.asyncIterator]() {
+      while (true) {
+        if (buffer.length > 0) {
+          const v = buffer.shift();
+          wakeAll(writers);
+          yield v;
+          continue;
+        }
+        if (closed) return;
+        await new Promise(r => readers.push(r));
+      }
+    },
+    get _isPipeQueue() { return true; },
+  };
 }
 
 // ── simple commands ──
