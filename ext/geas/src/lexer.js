@@ -8,20 +8,27 @@
 // the executor own the expansion semantics.
 //
 // Token types:
-//   WORD       — anything that isn't an operator (preserves quoting verbatim)
-//   OPERATOR   — single- or multi-char shell operator (see OPERATORS table)
-//   IO_NUMBER  — digit run immediately followed by < or > (no space between)
-//   NEWLINE    — \n line terminator (token-significant in shell grammar)
-//   EOF        — end-of-input sentinel emitted once at the end
+//   WORD          — anything that isn't an operator (preserves quoting verbatim)
+//   OPERATOR      — single- or multi-char shell operator (see OPERATORS table)
+//   IO_NUMBER     — digit run immediately followed by < or > (no space between)
+//   NEWLINE       — \n line terminator (token-significant in shell grammar)
+//   HEREDOC_BODY  — body text of a `<<DELIM` / `<<-DELIM` here-doc, emitted
+//                   immediately after the operator's delimiter word. The
+//                   `quoted` flag tells the executor whether the delimiter
+//                   was quoted (POSIX: any quoting suppresses body expansion).
+//   EOF           — end-of-input sentinel emitted once at the end
 //
 // Line continuation (backslash-newline) between tokens is silently consumed.
 // Comments (# to end of line) are stripped before token emission.
 //
+// Here-doc handling: when `<<` or `<<-` is emitted, the immediately-following
+// word is consumed as the delimiter (`heredoc:` field on the operator token);
+// the body is captured on the next NEWLINE. Multiple heredocs on the same
+// line stack in queue order: `cat <<A <<B` captures A's body then B's body
+// after the trailing newline. The `<<-` variant strips leading TABS (not
+// spaces — POSIX-strict) from each body line and from the closing delimiter.
+//
 // Not yet implemented (TODOs):
-//   - Here-doc body capture. The `<<WORD` / `<<-WORD` operator is tokenized,
-//     but the body lines aren't extracted from the input stream — that requires
-//     lookahead past the next newline and coupling with the parser. Will land
-//     when the executor needs here-docs.
 //   - Aliases. POSIX has alias expansion as a lexer-time transform; geas can
 //     defer until aliases are a real feature.
 
@@ -40,6 +47,10 @@ export function tokenize(input) {
   const tokens = [];
   const src = String(input ?? '');
   let pos = 0;
+  // Queue of here-docs awaiting body capture. Each entry: { delim, quoted,
+  // stripTabs }. Filled when `<<` / `<<-` is emitted; drained when the next
+  // NEWLINE fires.
+  const heredocQueue = [];
 
   while (pos < src.length) {
     // Skip horizontal whitespace and line continuations.
@@ -55,20 +66,67 @@ export function tokenize(input) {
     }
 
     if (ch === '\n') {
-      tokens.push({ type: 'NEWLINE', value: '\n', pos: { start: pos, end: pos + 1 } });
-      pos++;
+      const nlStart = pos;
+      pos++; // consume the newline first — heredoc bodies start on the next char
+
+      // Drain any pending here-docs. Each captures lines until its delimiter.
+      while (heredocQueue.length > 0) {
+        const hd = heredocQueue.shift();
+        const cap = _captureHeredocBody(src, pos, hd.delim, hd.stripTabs);
+        tokens.push({
+          type: 'HEREDOC_BODY',
+          value: cap.body,
+          quoted: hd.quoted,
+          delim: hd.delim,
+          stripTabs: hd.stripTabs,
+          pos: { start: pos, end: cap.end },
+        });
+        pos = cap.end;
+      }
+
+      // Emit the NEWLINE at its ORIGINAL position (not adjusted for the body scan).
+      tokens.push({ type: 'NEWLINE', value: '\n', pos: { start: nlStart, end: nlStart + 1 } });
       continue;
     }
 
     // Operator (longest-match against OPERATORS table).
     const opLen = _matchOperator(src, pos);
     if (opLen > 0) {
+      const opVal = src.slice(pos, pos + opLen);
       tokens.push({
         type: 'OPERATOR',
-        value: src.slice(pos, pos + opLen),
+        value: opVal,
         pos: { start: pos, end: pos + opLen },
       });
       pos += opLen;
+
+      // If this was `<<` or `<<-`, the next word is the delimiter — consume
+      // it inline so we can queue the heredoc before any NEWLINE shows up.
+      if (opVal === '<<' || opVal === '<<-') {
+        pos = _skipWS(src, pos);
+        if (pos < src.length && src[pos] !== '\n') {
+          const delimStart = pos;
+          const delimEnd = _readWord(src, pos);
+          const delimRaw = src.slice(delimStart, delimEnd);
+          // Emit the delimiter as a WORD so the parser sees it normally.
+          tokens.push({
+            type: 'WORD',
+            value: delimRaw,
+            pos: { start: delimStart, end: delimEnd },
+          });
+          pos = delimEnd;
+          // Queue the heredoc. `delim` is the unquoted form (for matching).
+          // `quoted` records whether the original WORD had any quoting at all
+          // (POSIX: any quoting suppresses body expansion).
+          const unquoted = _unquoteDelim(delimRaw);
+          heredocQueue.push({
+            delim: unquoted,
+            quoted: unquoted !== delimRaw,
+            stripTabs: opVal === '<<-',
+          });
+        }
+        // If no delimiter followed (malformed input), let the parser raise.
+      }
       continue;
     }
 
@@ -97,6 +155,22 @@ export function tokenize(input) {
       pos: { start, end },
     });
     pos = end;
+  }
+
+  // If input ends without a trailing newline but heredocs are queued, drain
+  // them now — unterminated heredocs capture what they can up to EOF.
+  while (heredocQueue.length > 0) {
+    const hd = heredocQueue.shift();
+    const cap = _captureHeredocBody(src, pos, hd.delim, hd.stripTabs);
+    tokens.push({
+      type: 'HEREDOC_BODY',
+      value: cap.body,
+      quoted: hd.quoted,
+      delim: hd.delim,
+      stripTabs: hd.stripTabs,
+      pos: { start: pos, end: cap.end },
+    });
+    pos = cap.end;
   }
 
   tokens.push({ type: 'EOF', value: '', pos: { start: pos, end: pos } });
@@ -271,4 +345,78 @@ function _scanBacktick(src, openIdx) {
     else i++;
   }
   return i < src.length ? i + 1 : i;
+}
+
+// ── here-doc support ──
+
+// Scan from `pos` line-by-line, capturing body lines until a line matching
+// `delim` is found. POSIX: the closing delimiter must occupy its line by
+// itself (with leading TABS stripped if `stripTabs`). Lines and the closing
+// delimiter line itself are NOT included in the body.
+//
+// Returns { body, end } where `end` is the index just past the delimiter
+// line's trailing \n (or end of input if unterminated). `body` is joined
+// with '\n' and a trailing '\n' on each line (so the executor sees real
+// shell-shape line-terminated text).
+function _captureHeredocBody(src, pos, delim, stripTabs) {
+  const lines = [];
+  let i = pos;
+  while (i < src.length) {
+    const lineStart = i;
+    while (i < src.length && src[i] !== '\n') i++;
+    let line = src.slice(lineStart, i);
+    if (stripTabs) {
+      let k = 0;
+      while (k < line.length && line[k] === '\t') k++;
+      line = line.slice(k);
+    }
+    if (line === delim) {
+      // Closing delimiter — consume its trailing \n and stop.
+      const end = i < src.length ? i + 1 : i;
+      return { body: lines.length ? lines.join('\n') + '\n' : '', end };
+    }
+    lines.push(line);
+    if (i < src.length) i++; // step over the \n
+  }
+  // Unterminated. Return what we have; the executor / parser can choose to
+  // warn or accept as-is.
+  return { body: lines.length ? lines.join('\n') + '\n' : '', end: i };
+}
+
+// POSIX: a here-doc delimiter that contains any quoted or escaped character
+// is matched against the literal (unquoted) text, and the body is treated
+// as literal (no expansion). This helper strips quotes/escapes so the
+// matching delimiter is correct; the *caller* records whether quoting was
+// present (via the `quoted` flag on the HEREDOC_BODY token) so the executor
+// later knows whether to expand body content.
+function _unquoteDelim(word) {
+  let out = '';
+  let i = 0;
+  while (i < word.length) {
+    const ch = word[i];
+    if (ch === '\\' && i + 1 < word.length) {
+      out += word[i + 1];
+      i += 2;
+    } else if (ch === "'") {
+      i++;
+      while (i < word.length && word[i] !== "'") { out += word[i]; i++; }
+      if (i < word.length) i++;
+    } else if (ch === '"') {
+      i++;
+      while (i < word.length && word[i] !== '"') {
+        if (word[i] === '\\' && i + 1 < word.length) {
+          out += word[i + 1];
+          i += 2;
+        } else {
+          out += word[i];
+          i++;
+        }
+      }
+      if (i < word.length) i++;
+    } else {
+      out += ch;
+      i++;
+    }
+  }
+  return out;
 }

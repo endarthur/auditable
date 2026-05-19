@@ -8,4 +8,5 @@
 import './ast-nodes.js';
 import './lexer.js';
 import './parser.js';
-export { tokenize, parse, NODE } from './api.js';
+import './adapters/headless.js';
+export { tokenize, parse, NODE, createHeadlessAdapter } from './api.js';

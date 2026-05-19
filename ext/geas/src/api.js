@@ -11,5 +11,6 @@
 import { tokenize } from './lexer.js';
 import { parse } from './parser.js';
 import { NODE } from './ast-nodes.js';
+import { createHeadlessAdapter } from './adapters/headless.js';
 
-export { tokenize, parse, NODE };
+export { tokenize, parse, NODE, createHeadlessAdapter };

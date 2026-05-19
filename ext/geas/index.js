@@ -125,20 +125,27 @@ function mkWord(value, pos) {
 // the executor own the expansion semantics.
 //
 // Token types:
-//   WORD       — anything that isn't an operator (preserves quoting verbatim)
-//   OPERATOR   — single- or multi-char shell operator (see OPERATORS table)
-//   IO_NUMBER  — digit run immediately followed by < or > (no space between)
-//   NEWLINE    — \n line terminator (token-significant in shell grammar)
-//   EOF        — end-of-input sentinel emitted once at the end
+//   WORD          — anything that isn't an operator (preserves quoting verbatim)
+//   OPERATOR      — single- or multi-char shell operator (see OPERATORS table)
+//   IO_NUMBER     — digit run immediately followed by < or > (no space between)
+//   NEWLINE       — \n line terminator (token-significant in shell grammar)
+//   HEREDOC_BODY  — body text of a `<<DELIM` / `<<-DELIM` here-doc, emitted
+//                   immediately after the operator's delimiter word. The
+//                   `quoted` flag tells the executor whether the delimiter
+//                   was quoted (POSIX: any quoting suppresses body expansion).
+//   EOF           — end-of-input sentinel emitted once at the end
 //
 // Line continuation (backslash-newline) between tokens is silently consumed.
 // Comments (# to end of line) are stripped before token emission.
 //
+// Here-doc handling: when `<<` or `<<-` is emitted, the immediately-following
+// word is consumed as the delimiter (`heredoc:` field on the operator token);
+// the body is captured on the next NEWLINE. Multiple heredocs on the same
+// line stack in queue order: `cat <<A <<B` captures A's body then B's body
+// after the trailing newline. The `<<-` variant strips leading TABS (not
+// spaces — POSIX-strict) from each body line and from the closing delimiter.
+//
 // Not yet implemented (TODOs):
-//   - Here-doc body capture. The `<<WORD` / `<<-WORD` operator is tokenized,
-//     but the body lines aren't extracted from the input stream — that requires
-//     lookahead past the next newline and coupling with the parser. Will land
-//     when the executor needs here-docs.
 //   - Aliases. POSIX has alias expansion as a lexer-time transform; geas can
 //     defer until aliases are a real feature.
 
@@ -157,6 +164,10 @@ function tokenize(input) {
   const tokens = [];
   const src = String(input ?? '');
   let pos = 0;
+  // Queue of here-docs awaiting body capture. Each entry: { delim, quoted,
+  // stripTabs }. Filled when `<<` / `<<-` is emitted; drained when the next
+  // NEWLINE fires.
+  const heredocQueue = [];
 
   while (pos < src.length) {
     // Skip horizontal whitespace and line continuations.
@@ -172,20 +183,67 @@ function tokenize(input) {
     }
 
     if (ch === '\n') {
-      tokens.push({ type: 'NEWLINE', value: '\n', pos: { start: pos, end: pos + 1 } });
-      pos++;
+      const nlStart = pos;
+      pos++; // consume the newline first — heredoc bodies start on the next char
+
+      // Drain any pending here-docs. Each captures lines until its delimiter.
+      while (heredocQueue.length > 0) {
+        const hd = heredocQueue.shift();
+        const cap = _captureHeredocBody(src, pos, hd.delim, hd.stripTabs);
+        tokens.push({
+          type: 'HEREDOC_BODY',
+          value: cap.body,
+          quoted: hd.quoted,
+          delim: hd.delim,
+          stripTabs: hd.stripTabs,
+          pos: { start: pos, end: cap.end },
+        });
+        pos = cap.end;
+      }
+
+      // Emit the NEWLINE at its ORIGINAL position (not adjusted for the body scan).
+      tokens.push({ type: 'NEWLINE', value: '\n', pos: { start: nlStart, end: nlStart + 1 } });
       continue;
     }
 
     // Operator (longest-match against OPERATORS table).
     const opLen = _matchOperator(src, pos);
     if (opLen > 0) {
+      const opVal = src.slice(pos, pos + opLen);
       tokens.push({
         type: 'OPERATOR',
-        value: src.slice(pos, pos + opLen),
+        value: opVal,
         pos: { start: pos, end: pos + opLen },
       });
       pos += opLen;
+
+      // If this was `<<` or `<<-`, the next word is the delimiter — consume
+      // it inline so we can queue the heredoc before any NEWLINE shows up.
+      if (opVal === '<<' || opVal === '<<-') {
+        pos = _skipWS(src, pos);
+        if (pos < src.length && src[pos] !== '\n') {
+          const delimStart = pos;
+          const delimEnd = _readWord(src, pos);
+          const delimRaw = src.slice(delimStart, delimEnd);
+          // Emit the delimiter as a WORD so the parser sees it normally.
+          tokens.push({
+            type: 'WORD',
+            value: delimRaw,
+            pos: { start: delimStart, end: delimEnd },
+          });
+          pos = delimEnd;
+          // Queue the heredoc. `delim` is the unquoted form (for matching).
+          // `quoted` records whether the original WORD had any quoting at all
+          // (POSIX: any quoting suppresses body expansion).
+          const unquoted = _unquoteDelim(delimRaw);
+          heredocQueue.push({
+            delim: unquoted,
+            quoted: unquoted !== delimRaw,
+            stripTabs: opVal === '<<-',
+          });
+        }
+        // If no delimiter followed (malformed input), let the parser raise.
+      }
       continue;
     }
 
@@ -214,6 +272,22 @@ function tokenize(input) {
       pos: { start, end },
     });
     pos = end;
+  }
+
+  // If input ends without a trailing newline but heredocs are queued, drain
+  // them now — unterminated heredocs capture what they can up to EOF.
+  while (heredocQueue.length > 0) {
+    const hd = heredocQueue.shift();
+    const cap = _captureHeredocBody(src, pos, hd.delim, hd.stripTabs);
+    tokens.push({
+      type: 'HEREDOC_BODY',
+      value: cap.body,
+      quoted: hd.quoted,
+      delim: hd.delim,
+      stripTabs: hd.stripTabs,
+      pos: { start: pos, end: cap.end },
+    });
+    pos = cap.end;
   }
 
   tokens.push({ type: 'EOF', value: '', pos: { start: pos, end: pos } });
@@ -390,6 +464,80 @@ function _scanBacktick(src, openIdx) {
   return i < src.length ? i + 1 : i;
 }
 
+// ── here-doc support ──
+
+// Scan from `pos` line-by-line, capturing body lines until a line matching
+// `delim` is found. POSIX: the closing delimiter must occupy its line by
+// itself (with leading TABS stripped if `stripTabs`). Lines and the closing
+// delimiter line itself are NOT included in the body.
+//
+// Returns { body, end } where `end` is the index just past the delimiter
+// line's trailing \n (or end of input if unterminated). `body` is joined
+// with '\n' and a trailing '\n' on each line (so the executor sees real
+// shell-shape line-terminated text).
+function _captureHeredocBody(src, pos, delim, stripTabs) {
+  const lines = [];
+  let i = pos;
+  while (i < src.length) {
+    const lineStart = i;
+    while (i < src.length && src[i] !== '\n') i++;
+    let line = src.slice(lineStart, i);
+    if (stripTabs) {
+      let k = 0;
+      while (k < line.length && line[k] === '\t') k++;
+      line = line.slice(k);
+    }
+    if (line === delim) {
+      // Closing delimiter — consume its trailing \n and stop.
+      const end = i < src.length ? i + 1 : i;
+      return { body: lines.length ? lines.join('\n') + '\n' : '', end };
+    }
+    lines.push(line);
+    if (i < src.length) i++; // step over the \n
+  }
+  // Unterminated. Return what we have; the executor / parser can choose to
+  // warn or accept as-is.
+  return { body: lines.length ? lines.join('\n') + '\n' : '', end: i };
+}
+
+// POSIX: a here-doc delimiter that contains any quoted or escaped character
+// is matched against the literal (unquoted) text, and the body is treated
+// as literal (no expansion). This helper strips quotes/escapes so the
+// matching delimiter is correct; the *caller* records whether quoting was
+// present (via the `quoted` flag on the HEREDOC_BODY token) so the executor
+// later knows whether to expand body content.
+function _unquoteDelim(word) {
+  let out = '';
+  let i = 0;
+  while (i < word.length) {
+    const ch = word[i];
+    if (ch === '\\' && i + 1 < word.length) {
+      out += word[i + 1];
+      i += 2;
+    } else if (ch === "'") {
+      i++;
+      while (i < word.length && word[i] !== "'") { out += word[i]; i++; }
+      if (i < word.length) i++;
+    } else if (ch === '"') {
+      i++;
+      while (i < word.length && word[i] !== '"') {
+        if (word[i] === '\\' && i + 1 < word.length) {
+          out += word[i + 1];
+          i += 2;
+        } else {
+          out += word[i];
+          i++;
+        }
+      }
+      if (i < word.length) i++;
+    } else {
+      out += ch;
+      i++;
+    }
+  }
+  return out;
+}
+
 // -- parser.js --
 
 // Recursive-descent parser for the POSIX-shape geas grammar.
@@ -444,7 +592,10 @@ function _describeToken(t) {
 
 function parse(input) {
   const tokens = Array.isArray(input) ? input : tokenize(input);
-  const ctx = { tokens, i: 0 };
+  // pendingHeredocs: FIFO of Redirect nodes awaiting body attachment. Each
+  // `<<` / `<<-` parseRedirect pushes; HEREDOC_BODY tokens drain via
+  // _drainHeredocBodies (called as part of _skipNL).
+  const ctx = { tokens, i: 0, pendingHeredocs: [] };
   return parseProgram(ctx);
 }
 
@@ -488,8 +639,31 @@ function _expectKeyword(ctx, name) {
 }
 
 // Skip zero-or-more NEWLINE tokens. Used wherever POSIX `linebreak` appears.
+// HEREDOC_BODY tokens immediately preceding a NEWLINE are drained here too
+// — the lexer emits them right before the NEWLINE that triggered their
+// capture, so this is where they naturally get attached to their owning
+// redirects (in queue order).
 function _skipNL(ctx) {
-  while (_at(ctx, 'NEWLINE')) ctx.i++;
+  while (true) {
+    _drainHeredocBodies(ctx);
+    if (!_at(ctx, 'NEWLINE')) break;
+    ctx.i++;
+  }
+}
+
+function _drainHeredocBodies(ctx) {
+  while (_at(ctx, 'HEREDOC_BODY')) {
+    const t = _consume(ctx);
+    const redir = ctx.pendingHeredocs.shift();
+    if (redir) {
+      redir.body = t.value;
+      redir.bodyQuoted = t.quoted;
+    }
+    // If there's no pending redirect (shouldn't happen for well-formed input
+    // since the lexer only emits HEREDOC_BODY when it queued one at op-time),
+    // silently drop the body — better than throwing on a parser-internal
+    // accounting mismatch.
+  }
 }
 
 // ── top-level ──
@@ -505,6 +679,9 @@ function parseProgram(ctx) {
     const cmd = parseList(ctx);
     if (cmd) commands.push(cmd);
     _skipNL(ctx);
+    // Defensive: drain any HEREDOC_BODY tokens that ended up sitting at EOF
+    // (input that lacks a trailing newline after the last heredoc).
+    _drainHeredocBodies(ctx);
     // Failsafe: if we made no progress AND aren't at EOF, the current token
     // is something the parser doesn't know how to handle. Throw rather than
     // loop forever — much better feedback than a silent hang.
@@ -709,11 +886,13 @@ function parseSimpleCommand(ctx) {
         continue;
       }
       if (t.type === 'WORD') {
-        // A "compound terminator" keyword as a bare word ends the simple
-        // command — but only if it's at a position that could start something
-        // else. For a simple-command suffix, treat all WORDs as args
-        // EXCEPT the keywords that terminate enclosing constructs.
-        if (['then', 'elif', 'else', 'fi', 'do', 'done', 'esac', '}'].includes(t.value)) break;
+        // POSIX rule: reserved words are recognised ONLY at command-start
+        // position. Once we've started accumulating a simple command's
+        // suffix, subsequent WORDs are always arguments — including words
+        // spelled like reserved words. So `echo done` reads `done` as an
+        // arg, not a do-group terminator. The enclosing list's call to
+        // _canStartCommand handles keyword-as-terminator at the right time
+        // (when deciding whether to start the next command in the list).
         words.push(mkWord(t.value, t.pos));
         _consume(ctx);
         continue;
@@ -744,8 +923,18 @@ function parseRedirect(ctx) {
   if (targetTok.type !== 'WORD') {
     throw new ParseError(`expected redirection target word`, targetTok);
   }
-  return mkRedirect(fd, opTok.value, mkWord(targetTok.value, targetTok.pos),
-                    { start: startPos, end: targetTok.pos.end });
+  const redir = mkRedirect(fd, opTok.value, mkWord(targetTok.value, targetTok.pos),
+                           { start: startPos, end: targetTok.pos.end });
+  // Here-doc redirects expect a body to be attached when the next NEWLINE
+  // fires (the lexer queues bodies in declaration order and emits them just
+  // before the NEWLINE; _drainHeredocBodies pairs them with these). Bodies
+  // remain null on this node if the input is malformed or unterminated.
+  if (opTok.value === '<<' || opTok.value === '<<-') {
+    redir.body = null;
+    redir.bodyQuoted = false;
+    ctx.pendingHeredocs.push(redir);
+  }
+  return redir;
 }
 
 // ── compound commands ──
@@ -954,6 +1143,118 @@ function _parseTrailingRedirects(ctx) {
   return out;
 }
 
+// -- headless.js --
+
+// Headless terminal adapter — implements the GeasTerminal interface as a
+// pure in-memory buffer with simulated input. Used for:
+//   - Tests: drive the executor without spinning up a real DOM terminal,
+//     inspect captured output/blocks/input-callback registrations directly.
+//   - MCP bridge / scripting: when the consumer wants the shell's output as
+//     a string rather than rendering it.
+//   - Reference implementation: nails down the GeasTerminal contract for
+//     adapter authors writing @gcu/term and xterm.js bridges.
+//
+// Interface (all adapters MUST implement):
+//
+//   write(text)               — write a chunk of ANSI-bearing text
+//   writeBlock(block)         — (optional, caps.richBlocks=true) write a
+//                               structured Block (table, canvas, html, …)
+//   onInput(cb) → unsubscribe — register a keystroke/input handler
+//   size() → { cols, rows }   — current terminal dimensions
+//   onResize(cb) → unsubscribe — register a resize handler
+//   clear()                   — clear scrollback + any block region
+//   caps() → { richBlocks }   — capability negotiation; geas inspects this
+//                               at startup to decide whether to send Blocks
+//                               or auto-serialize to text
+//
+// The headless adapter additionally exposes inspection / simulation methods
+// for test use:
+//
+//   output()         → concatenated text written so far (string)
+//   capturedBlocks() → array of Block objects writeBlock has received
+//   sendInput(text)  → simulate the user typing `text`; fires onInput cbs
+//   setSize(c, r)    → simulate a resize; fires onResize cbs
+
+function createHeadlessAdapter(opts = {}) {
+  const buffer = [];
+  const blocks = [];
+  let inputSubs = new Set();
+  let resizeSubs = new Set();
+  let cols = opts.cols ?? 80;
+  let rows = opts.rows ?? 24;
+  // Whether structured blocks are accepted. Headless defaults to true so
+  // tests can assert the geas executor's typed-pipe output without needing
+  // a separate adapter; pass `richBlocks: false` to simulate a text-only
+  // terminal (e.g. xterm.js with no inline-block extension).
+  const richBlocks = opts.richBlocks ?? true;
+
+  return {
+    // ── GeasTerminal interface ──
+    write(text) {
+      if (text == null) return;
+      buffer.push(String(text));
+    },
+    writeBlock(block) {
+      if (!richBlocks) {
+        // Caller should check caps() first and serialize on their side, but
+        // be defensive: stringify the block as a JSON fallback if we get one.
+        try { buffer.push(JSON.stringify(block)); }
+        catch { buffer.push(String(block)); }
+        return;
+      }
+      blocks.push(block);
+    },
+    onInput(cb) {
+      inputSubs.add(cb);
+      return () => inputSubs.delete(cb);
+    },
+    size() {
+      return { cols, rows };
+    },
+    onResize(cb) {
+      resizeSubs.add(cb);
+      return () => resizeSubs.delete(cb);
+    },
+    clear() {
+      buffer.length = 0;
+      blocks.length = 0;
+    },
+    caps() {
+      return { richBlocks };
+    },
+
+    // ── headless-specific inspection / simulation ──
+    output() {
+      return buffer.join('');
+    },
+    capturedBlocks() {
+      return blocks.slice();
+    },
+    sendInput(text) {
+      const s = String(text ?? '');
+      for (const cb of inputSubs) {
+        try { cb(s); }
+        catch (e) { /* swallow handler errors so one bad sub doesn't break the rest */ }
+      }
+    },
+    setSize(newCols, newRows) {
+      cols = newCols;
+      rows = newRows;
+      const size = { cols, rows };
+      for (const cb of resizeSubs) {
+        try { cb(size); }
+        catch (e) { /* swallow */ }
+      }
+    },
+
+    // Number of currently-registered subscribers — useful for tests that
+    // verify unsubscribe semantics.
+    _subCounts() {
+      return { input: inputSubs.size, resize: resizeSubs.size };
+    },
+  };
+}
+
 // -- api.js --
 
 // Public API surface for @gcu/geas.
@@ -966,4 +1267,4 @@ function _parseTrailingRedirects(ctx) {
 // both lines and leave api.js's contribution empty in the bundle — the
 // footer in build.js then provides a single canonical export.
 
-export { tokenize, parse, NODE };
+export { tokenize, parse, NODE, createHeadlessAdapter };

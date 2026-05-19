@@ -58,7 +58,10 @@ function _describeToken(t) {
 
 export function parse(input) {
   const tokens = Array.isArray(input) ? input : tokenize(input);
-  const ctx = { tokens, i: 0 };
+  // pendingHeredocs: FIFO of Redirect nodes awaiting body attachment. Each
+  // `<<` / `<<-` parseRedirect pushes; HEREDOC_BODY tokens drain via
+  // _drainHeredocBodies (called as part of _skipNL).
+  const ctx = { tokens, i: 0, pendingHeredocs: [] };
   return parseProgram(ctx);
 }
 
@@ -102,8 +105,31 @@ function _expectKeyword(ctx, name) {
 }
 
 // Skip zero-or-more NEWLINE tokens. Used wherever POSIX `linebreak` appears.
+// HEREDOC_BODY tokens immediately preceding a NEWLINE are drained here too
+// — the lexer emits them right before the NEWLINE that triggered their
+// capture, so this is where they naturally get attached to their owning
+// redirects (in queue order).
 function _skipNL(ctx) {
-  while (_at(ctx, 'NEWLINE')) ctx.i++;
+  while (true) {
+    _drainHeredocBodies(ctx);
+    if (!_at(ctx, 'NEWLINE')) break;
+    ctx.i++;
+  }
+}
+
+function _drainHeredocBodies(ctx) {
+  while (_at(ctx, 'HEREDOC_BODY')) {
+    const t = _consume(ctx);
+    const redir = ctx.pendingHeredocs.shift();
+    if (redir) {
+      redir.body = t.value;
+      redir.bodyQuoted = t.quoted;
+    }
+    // If there's no pending redirect (shouldn't happen for well-formed input
+    // since the lexer only emits HEREDOC_BODY when it queued one at op-time),
+    // silently drop the body — better than throwing on a parser-internal
+    // accounting mismatch.
+  }
 }
 
 // ── top-level ──
@@ -119,6 +145,9 @@ function parseProgram(ctx) {
     const cmd = parseList(ctx);
     if (cmd) commands.push(cmd);
     _skipNL(ctx);
+    // Defensive: drain any HEREDOC_BODY tokens that ended up sitting at EOF
+    // (input that lacks a trailing newline after the last heredoc).
+    _drainHeredocBodies(ctx);
     // Failsafe: if we made no progress AND aren't at EOF, the current token
     // is something the parser doesn't know how to handle. Throw rather than
     // loop forever — much better feedback than a silent hang.
@@ -323,11 +352,13 @@ function parseSimpleCommand(ctx) {
         continue;
       }
       if (t.type === 'WORD') {
-        // A "compound terminator" keyword as a bare word ends the simple
-        // command — but only if it's at a position that could start something
-        // else. For a simple-command suffix, treat all WORDs as args
-        // EXCEPT the keywords that terminate enclosing constructs.
-        if (['then', 'elif', 'else', 'fi', 'do', 'done', 'esac', '}'].includes(t.value)) break;
+        // POSIX rule: reserved words are recognised ONLY at command-start
+        // position. Once we've started accumulating a simple command's
+        // suffix, subsequent WORDs are always arguments — including words
+        // spelled like reserved words. So `echo done` reads `done` as an
+        // arg, not a do-group terminator. The enclosing list's call to
+        // _canStartCommand handles keyword-as-terminator at the right time
+        // (when deciding whether to start the next command in the list).
         words.push(mkWord(t.value, t.pos));
         _consume(ctx);
         continue;
@@ -358,8 +389,18 @@ function parseRedirect(ctx) {
   if (targetTok.type !== 'WORD') {
     throw new ParseError(`expected redirection target word`, targetTok);
   }
-  return mkRedirect(fd, opTok.value, mkWord(targetTok.value, targetTok.pos),
-                    { start: startPos, end: targetTok.pos.end });
+  const redir = mkRedirect(fd, opTok.value, mkWord(targetTok.value, targetTok.pos),
+                           { start: startPos, end: targetTok.pos.end });
+  // Here-doc redirects expect a body to be attached when the next NEWLINE
+  // fires (the lexer queues bodies in declaration order and emits them just
+  // before the NEWLINE; _drainHeredocBodies pairs them with these). Bodies
+  // remain null on this node if the input is malformed or unterminated.
+  if (opTok.value === '<<' || opTok.value === '<<-') {
+    redir.body = null;
+    redir.bodyQuoted = false;
+    ctx.pendingHeredocs.push(redir);
+  }
+  return redir;
 }
 
 // ── compound commands ──

@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { tokenize } from '../ext/geas/src/lexer.js';
 import { parse } from '../ext/geas/src/parser.js';
 import { NODE } from '../ext/geas/src/ast-nodes.js';
+import { createHeadlessAdapter } from '../ext/geas/src/adapters/headless.js';
 
 // ── token helpers (test-side) ──
 
@@ -73,9 +74,12 @@ describe('lexer — operators', () => {
   });
 
   it('multi-char ops are longest-match', () => {
-    // `<<-` beats `<<` beats `<`
+    // `<<-` beats `<<` beats `<`. The trailing tokens after EOF here are
+    // an empty HEREDOC_BODY (since there's no closing delimiter) — we only
+    // assert the first three tokens to keep this test about operator-match
+    // semantics rather than heredoc capture.
     const ts = nonEOF(tokenize('cat <<- EOF'));
-    assert.deepEqual(valuesOf(ts), ['cat', '<<-', 'EOF']);
+    assert.deepEqual(valuesOf(ts).slice(0, 3), ['cat', '<<-', 'EOF']);
   });
 
   it('redirect operators', () => {
@@ -533,5 +537,260 @@ describe('parser — position info', () => {
     assert.equal(typeof cmd.pos.end, 'number');
     assert.equal(cmd.pos.start, 0);
     assert.equal(cmd.pos.end, 10);
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+// HERE-DOCS
+// ══════════════════════════════════════════════════════════
+
+describe('lexer — here-docs', () => {
+  it('basic <<EOF emits HEREDOC_BODY token after delimiter', () => {
+    const ts = nonEOF(tokenize('cat <<EOF\nhello\nworld\nEOF\n'));
+    // expect: WORD('cat'), OP('<<'), WORD('EOF'), HEREDOC_BODY, NEWLINE
+    assert.equal(ts.length, 5);
+    assert.equal(ts[3].type, 'HEREDOC_BODY');
+    assert.equal(ts[3].value, 'hello\nworld\n');
+    assert.equal(ts[3].quoted, false);
+    assert.equal(ts[3].delim, 'EOF');
+  });
+
+  it('<<-EOF strips ALL leading TABS from body lines and delimiter', () => {
+    // POSIX: `<<-` removes all leading tab characters from each body line
+    // and from the line containing the closing delimiter (so the delimiter
+    // can be aligned with surrounding indentation). Spaces are NOT stripped.
+    const src = "cat <<-END\n\thello\n\t\tworld\n\tEND\n";
+    const ts = nonEOF(tokenize(src));
+    const body = ts.find(t => t.type === 'HEREDOC_BODY');
+    assert.equal(body.value, 'hello\nworld\n');
+    assert.equal(body.stripTabs, true);
+  });
+
+  it('<<-EOF does NOT strip leading SPACES from body (POSIX-strict)', () => {
+    // The closing delimiter must still be reachable, so use TABS for it.
+    // Body lines with leading SPACES keep them — only TAB prefixes go.
+    const src = "cat <<-END\n    hello\n\tEND\n";
+    const ts = nonEOF(tokenize(src));
+    const body = ts.find(t => t.type === 'HEREDOC_BODY');
+    assert.equal(body.value, '    hello\n');
+  });
+
+  it("quoted delimiter <<'EOF' marks body as quoted (no expansion)", () => {
+    const ts = nonEOF(tokenize("cat <<'EOF'\nhello $USER\nEOF\n"));
+    const body = ts.find(t => t.type === 'HEREDOC_BODY');
+    assert.equal(body.quoted, true);
+    assert.equal(body.delim, 'EOF');
+    assert.equal(body.value, 'hello $USER\n');
+  });
+
+  it('double-quoted delimiter <<"EOF" also marks body as quoted', () => {
+    const ts = nonEOF(tokenize('cat <<"EOF"\ntest\nEOF\n'));
+    const body = ts.find(t => t.type === 'HEREDOC_BODY');
+    assert.equal(body.quoted, true);
+  });
+
+  it('multiple heredocs on one line capture in queue order', () => {
+    const src = "cat <<A <<B\nA_body\nA\nB_body\nB\n";
+    const ts = nonEOF(tokenize(src));
+    const bodies = ts.filter(t => t.type === 'HEREDOC_BODY');
+    assert.equal(bodies.length, 2);
+    assert.equal(bodies[0].delim, 'A');
+    assert.equal(bodies[0].value, 'A_body\n');
+    assert.equal(bodies[1].delim, 'B');
+    assert.equal(bodies[1].value, 'B_body\n');
+  });
+
+  it('empty heredoc body', () => {
+    const ts = nonEOF(tokenize('cat <<EOF\nEOF\n'));
+    const body = ts.find(t => t.type === 'HEREDOC_BODY');
+    assert.equal(body.value, '');
+  });
+
+  it('unterminated heredoc captures what it can up to EOF', () => {
+    const ts = nonEOF(tokenize('cat <<EOF\nhello\nworld\n'));
+    const body = ts.find(t => t.type === 'HEREDOC_BODY');
+    // Body capture continues until EOF since no closing EOF line ever appears.
+    assert.equal(body.value, 'hello\nworld\n');
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+// HEADLESS TERMINAL ADAPTER
+// ══════════════════════════════════════════════════════════
+
+describe('headless adapter — basic IO', () => {
+  it('write + output round-trip', () => {
+    const t = createHeadlessAdapter();
+    t.write('hello ');
+    t.write('world');
+    assert.equal(t.output(), 'hello world');
+  });
+
+  it('preserves ANSI escape sequences verbatim', () => {
+    const t = createHeadlessAdapter();
+    t.write('\x1b[31mred\x1b[0m');
+    assert.equal(t.output(), '\x1b[31mred\x1b[0m');
+  });
+
+  it('null/undefined writes are no-ops', () => {
+    const t = createHeadlessAdapter();
+    t.write(null);
+    t.write(undefined);
+    t.write('ok');
+    assert.equal(t.output(), 'ok');
+  });
+
+  it('non-string writes get stringified', () => {
+    const t = createHeadlessAdapter();
+    t.write(42);
+    assert.equal(t.output(), '42');
+  });
+
+  it('clear() empties buffer + blocks', () => {
+    const t = createHeadlessAdapter();
+    t.write('stuff');
+    t.writeBlock({ type: 'text', value: 'block' });
+    t.clear();
+    assert.equal(t.output(), '');
+    assert.equal(t.capturedBlocks().length, 0);
+  });
+});
+
+describe('headless adapter — caps + blocks', () => {
+  it('defaults to richBlocks=true so blocks are captured structurally', () => {
+    const t = createHeadlessAdapter();
+    assert.equal(t.caps().richBlocks, true);
+    t.writeBlock({ type: 'table', columns: ['a'], rows: [[1]] });
+    const blocks = t.capturedBlocks();
+    assert.equal(blocks.length, 1);
+    assert.equal(blocks[0].type, 'table');
+  });
+
+  it('richBlocks=false reports back and serializes block writes to text', () => {
+    const t = createHeadlessAdapter({ richBlocks: false });
+    assert.equal(t.caps().richBlocks, false);
+    t.writeBlock({ type: 'table', columns: ['a'], rows: [[1]] });
+    assert.equal(t.capturedBlocks().length, 0);
+    // JSON fallback for text-only terminals
+    assert.match(t.output(), /"type":"table"/);
+  });
+});
+
+describe('headless adapter — input + resize', () => {
+  it('onInput callback fires on sendInput', () => {
+    const t = createHeadlessAdapter();
+    const received = [];
+    t.onInput(text => received.push(text));
+    t.sendInput('hello');
+    t.sendInput('\n');
+    assert.deepEqual(received, ['hello', '\n']);
+  });
+
+  it('onInput returns an unsubscribe', () => {
+    const t = createHeadlessAdapter();
+    const received = [];
+    const unsub = t.onInput(text => received.push(text));
+    t.sendInput('one');
+    unsub();
+    t.sendInput('two');
+    assert.deepEqual(received, ['one']);
+    assert.equal(t._subCounts().input, 0);
+  });
+
+  it('multiple input subscribers all fire', () => {
+    const t = createHeadlessAdapter();
+    const a = [];
+    const b = [];
+    t.onInput(s => a.push(s));
+    t.onInput(s => b.push(s));
+    t.sendInput('x');
+    assert.deepEqual(a, ['x']);
+    assert.deepEqual(b, ['x']);
+  });
+
+  it('a throwing handler does not break other handlers', () => {
+    const t = createHeadlessAdapter();
+    const ok = [];
+    t.onInput(() => { throw new Error('boom'); });
+    t.onInput(s => ok.push(s));
+    t.sendInput('survived');
+    assert.deepEqual(ok, ['survived']);
+  });
+
+  it('size + setSize + onResize work together', () => {
+    const t = createHeadlessAdapter({ cols: 80, rows: 24 });
+    assert.deepEqual(t.size(), { cols: 80, rows: 24 });
+    const resizes = [];
+    t.onResize(s => resizes.push(s));
+    t.setSize(120, 40);
+    assert.deepEqual(t.size(), { cols: 120, rows: 40 });
+    assert.deepEqual(resizes, [{ cols: 120, rows: 40 }]);
+  });
+
+  it('default size is 80x24', () => {
+    const t = createHeadlessAdapter();
+    assert.deepEqual(t.size(), { cols: 80, rows: 24 });
+  });
+});
+
+describe('parser — here-docs', () => {
+  it('attaches body to << redirect', () => {
+    const ast = parse('cat <<EOF\nhello\nworld\nEOF\n');
+    const cmd = ast.commands[0];
+    assert.equal(cmd.type, NODE.SIMPLE_COMMAND);
+    const redir = cmd.redirects[0];
+    assert.equal(redir.op, '<<');
+    assert.equal(redir.target.value, 'EOF');
+    assert.equal(redir.body, 'hello\nworld\n');
+    assert.equal(redir.bodyQuoted, false);
+  });
+
+  it('attaches body to <<- redirect with stripped tabs', () => {
+    const src = "cat <<-END\n\thello\n\tEND\n";
+    const ast = parse(src);
+    const redir = ast.commands[0].redirects[0];
+    assert.equal(redir.op, '<<-');
+    assert.equal(redir.body, 'hello\n');
+  });
+
+  it("quoted delimiter records bodyQuoted=true", () => {
+    const ast = parse("cat <<'STOP'\nliteral $stuff\nSTOP\n");
+    const redir = ast.commands[0].redirects[0];
+    assert.equal(redir.bodyQuoted, true);
+    assert.equal(redir.body, 'literal $stuff\n');
+  });
+
+  it('multiple heredocs on one command pair in declaration order', () => {
+    const src = "cat <<A <<B\nfirst\nA\nsecond\nB\n";
+    const ast = parse(src);
+    const redirs = ast.commands[0].redirects;
+    assert.equal(redirs.length, 2);
+    assert.equal(redirs[0].body, 'first\n');
+    assert.equal(redirs[1].body, 'second\n');
+  });
+
+  it('heredoc followed by more code on the same line works', () => {
+    const src = "cat <<EOF; echo done\nbody\nEOF\n";
+    const ast = parse(src);
+    // It's a List: [cat<<EOF, echo done]
+    const list = ast.commands[0];
+    assert.equal(list.type, NODE.LIST);
+    const catCmd = list.items[0].cmd;
+    assert.equal(catCmd.redirects[0].body, 'body\n');
+    const echoCmd = list.items[1].cmd;
+    assert.equal(echoCmd.words[1].value, 'done');
+  });
+
+  it('heredoc inside a for-loop body', () => {
+    const src = "for f in a b; do\n  cat <<EOF\n  line for $f\nEOF\ndone\n";
+    const ast = parse(src);
+    assert.equal(ast.commands[0].type, NODE.FOR_CLAUSE);
+    // body of the for-loop should contain a simple_command with a heredoc.
+    // The for-loop body might be a List or a single SimpleCommand depending
+    // on collapsing — just verify *some* redirect's body got attached.
+    const body = ast.commands[0].body;
+    // Walk to find the cat command's redirect (may be inside a List).
+    const cat = body.type === NODE.LIST ? body.items[0].cmd : body;
+    assert.equal(cat.redirects[0].body, '  line for $f\n');
   });
 });

@@ -1,6 +1,6 @@
 {
   "name": "@gcu/geas",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "geas — the GCU shell. POSIX-syntax baseline with typed-pipe extensions. Async-native, VFS-bound, terminal-frontend-agnostic, worker-runnable.",
   "type": "module",
   "main": "src/api.js",
@@ -9,6 +9,7 @@
     "./lexer": "./src/lexer.js",
     "./parser": "./src/parser.js",
     "./ast-nodes": "./src/ast-nodes.js",
+    "./adapters/headless": "./src/adapters/headless.js",
     "./bundled": "./index.js",
     "./package.json": "./package.json"
   },

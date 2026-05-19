@@ -49,7 +49,7 @@ for (const relPath of importPaths) {
 const header = '// ⚠ GENERATED FILE — DO NOT EDIT. Source: ext/geas/src/  Build: node ext/geas/build.js\n'
   + '// @gcu/geas — the GCU shell. POSIX-syntax with typed-pipe extensions.\n';
 
-const output = header + '\n' + chunks.join('\n\n') + '\n\nexport { tokenize, parse, NODE };\n';
+const output = header + '\n' + chunks.join('\n\n') + '\n\nexport { tokenize, parse, NODE, createHeadlessAdapter };\n';
 
 const outPath = path.join(__dirname, 'index.js');
 fs.writeFileSync(outPath, output);
