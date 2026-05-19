@@ -16,6 +16,10 @@ import { NODE } from './ast-nodes.js';
 import { createHeadlessAdapter } from './adapters/headless.js';
 import { defaultBuiltins } from './builtins.js';
 import { mkTyped, isTyped } from './typed.js';
+import { createGeasClient } from './worker/client.js';
+import { setupGeasWorker } from './worker/worker-shim.js';
+import { serveVFS, createVfsClient } from './worker/vfs-proxy.js';
+import { createLoopback } from './worker/loopback.js';
 
 // createShell({vfs, env, cwd, stdout, stderr, builtins, onCommand})
 //
@@ -66,4 +70,8 @@ function _mergeBuiltins(extra) {
   return base;
 }
 
-export { tokenize, parse, parseWordParts, execute, NODE, createHeadlessAdapter, defaultBuiltins, mkTyped, isTyped };
+export {
+  tokenize, parse, parseWordParts, execute, NODE,
+  createHeadlessAdapter, defaultBuiltins, mkTyped, isTyped,
+  createGeasClient, setupGeasWorker, serveVFS, createVfsClient, createLoopback,
+};

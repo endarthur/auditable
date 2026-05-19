@@ -11,6 +11,10 @@ import { execute } from '../ext/geas/src/executor.js';
 import { NODE } from '../ext/geas/src/ast-nodes.js';
 import { createHeadlessAdapter } from '../ext/geas/src/adapters/headless.js';
 import { createShell, defaultBuiltins } from '../ext/geas/src/api.js';
+import { createGeasClient } from '../ext/geas/src/worker/client.js';
+import { setupGeasWorker } from '../ext/geas/src/worker/worker-shim.js';
+import { createLoopback } from '../ext/geas/src/worker/loopback.js';
+import { serveVFS, createVfsClient } from '../ext/geas/src/worker/vfs-proxy.js';
 import { VFS, MemoryBackend } from '../ext/vfs/index.js';
 
 // Build a fresh VFS + shell pair for tests that exercise filesystem builtins.
@@ -1502,6 +1506,155 @@ describe('builtins — cut / tee / xargs', () => {
     const t = _testShell();
     await t.shell.exec('echo a b c | xargs -n 1 echo');
     assert.equal(t.output(), 'a\nb\nc\n');
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+// WORKER HARNESS (loopback)
+// ══════════════════════════════════════════════════════════
+
+// Build a worker-hosted shell using the in-process loopback. Returns a
+// helper bundle: { client, vfs, output, errOutput, blocks, terminate }.
+async function _workerShell(opts = {}) {
+  const { mainSide, workerSide } = createLoopback();
+  const vfs = opts.vfs || (() => {
+    const v = new VFS();
+    v._mounts.set('/', new MemoryBackend());
+    return v;
+  })();
+  const stdoutBuf = [];
+  const stderrBuf = [];
+  const blocks = [];
+  // Worker side: load geas, set up shim.
+  setupGeasWorker(workerSide, { createShell });
+  // Main side: client.
+  const client = createGeasClient({
+    worker: mainSide, vfs,
+    env: opts.env || { HOME: '/home' },
+    cwd: opts.cwd || '/',
+    onStdout: (t) => stdoutBuf.push(t),
+    onStderr: (t) => stderrBuf.push(t),
+    onBlock:  (b) => blocks.push(b),
+  });
+  await client.ready();
+  return {
+    client, vfs,
+    output: () => stdoutBuf.join(''),
+    errOutput: () => stderrBuf.join(''),
+    blocks: () => blocks.slice(),
+    clear: () => { stdoutBuf.length = 0; stderrBuf.length = 0; blocks.length = 0; },
+    terminate: () => client.terminate(),
+  };
+}
+
+describe('worker harness — basics', () => {
+  it('init + ready resolves', async () => {
+    const t = await _workerShell();
+    // If we got here, ready() resolved.
+    assert.ok(true);
+    await t.terminate();
+  });
+
+  it('exec returns exit code', async () => {
+    const t = await _workerShell();
+    const r = await t.client.exec('true');
+    assert.equal(r.exitCode, 0);
+    const r2 = await t.client.exec('false');
+    assert.equal(r2.exitCode, 1);
+    await t.terminate();
+  });
+
+  it('stdout flows to onStdout', async () => {
+    const t = await _workerShell();
+    await t.client.exec('echo hello');
+    assert.equal(t.output(), 'hello\n');
+    await t.terminate();
+  });
+
+  it('stderr flows to onStderr', async () => {
+    const t = await _workerShell();
+    await t.client.exec('cat /nope');
+    assert.match(t.errOutput(), /no VFS|nope/);
+    await t.terminate();
+  });
+
+  it('env persists across exec calls', async () => {
+    const t = await _workerShell();
+    await t.client.exec('export FOO=bar');
+    await t.client.exec('echo $FOO');
+    assert.equal(t.output(), 'bar\n');
+    await t.terminate();
+  });
+
+  it('typed pipe output arrives as a block', async () => {
+    const t = await _workerShell();
+    await t.vfs.writeFile('/x.csv', 'name,age\nalice,30\n');
+    await t.client.exec('from-csv /x.csv');
+    const blocks = t.blocks();
+    assert.equal(blocks.length, 1);
+    assert.equal(blocks[0].kind, 'table');
+    assert.deepEqual(blocks[0].value.columns, ['name', 'age']);
+    await t.terminate();
+  });
+
+  it('VFS RPC: cat reads a file written from main', async () => {
+    const t = await _workerShell();
+    await t.vfs.writeFile('/greeting.txt', 'hello from main\n');
+    await t.client.exec('cat /greeting.txt');
+    assert.equal(t.output(), 'hello from main\n');
+    await t.terminate();
+  });
+
+  it('VFS RPC: shell can write through the proxy', async () => {
+    const t = await _workerShell();
+    await t.client.exec('echo persisted > /file.txt');
+    const text = await t.vfs.readFile('/file.txt', 'text');
+    assert.equal(text, 'persisted\n');
+    await t.terminate();
+  });
+
+  it('exec calls serialise (run one at a time)', async () => {
+    const t = await _workerShell();
+    // Two execs back-to-back; both should complete.
+    const p1 = t.client.exec('echo one');
+    const p2 = t.client.exec('echo two');
+    const [r1, r2] = await Promise.all([p1, p2]);
+    assert.equal(r1.exitCode, 0);
+    assert.equal(r2.exitCode, 0);
+    // Output should be ordered.
+    assert.equal(t.output(), 'one\ntwo\n');
+    await t.terminate();
+  });
+
+  it('pipeline + typed pipe inside a worker round-trips', async () => {
+    const t = await _workerShell();
+    await t.vfs.writeFile('/d.csv', 'a,b\n1,2\n3,4\n5,6\n');
+    await t.client.exec("from-csv /d.csv | where 'a > 2' | to-csv");
+    assert.equal(t.output(), 'a,b\n3,4\n5,6\n');
+    await t.terminate();
+  });
+
+  it('terminate rejects pending execs', async () => {
+    const t = await _workerShell();
+    // Start an exec but don't await; terminate immediately.
+    const pending = t.client.exec('echo will-be-cancelled').catch((e) => e);
+    await t.terminate();
+    const result = await pending;
+    // Either it completed cleanly (race won by exec) OR was rejected.
+    // We accept either — the contract is "no hangs."
+    assert.ok(result);
+  });
+});
+
+describe('worker harness — VFS RPC error propagation', () => {
+  it('VFS errors come back as rejected promises in the worker', async () => {
+    const t = await _workerShell();
+    // cat on a missing file — VFS readFile throws, cat catches, writes
+    // stderr + returns 1. Tests that the RPC error path works end-to-end.
+    const r = await t.client.exec('cat /nosuch.txt');
+    assert.equal(r.exitCode, 1);
+    assert.match(t.errOutput(), /nosuch/);
+    await t.terminate();
   });
 });
 

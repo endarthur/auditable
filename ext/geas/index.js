@@ -3562,6 +3562,444 @@ function createHeadlessAdapter(opts = {}) {
   };
 }
 
+// -- vfs-proxy.js --
+
+// VFS-RPC proxy: lets a worker run geas while the actual @gcu/vfs lives
+// on the main thread. Every vfs.X(...) call inside the worker round-trips
+// through postMessage. Symmetric API — `serveVFS(target, vfs)` on the
+// owning side, `createVfsClient(target)` on the consuming side. `target`
+// is any object with `postMessage(msg)` and either `addEventListener('message', cb)`
+// or settable `onmessage`.
+//
+// Why proxy (rather than move VFS into the worker): backends that need DOM
+// access (auditable's Comment backend reads/writes a comment node) only
+// work on the main thread. Proxying keeps a single VFS instance authoritative
+// and lets every worker talk to it.
+//
+// Message shapes:
+//
+//   client → server:  { type: 'vfs-call', id, method, args }
+//   server → client:  { type: 'vfs-reply', id, ok: true, value }
+//                  |  { type: 'vfs-reply', id, ok: false, error: string }
+//
+// IDs are private to each direction so VFS replies can't conflict with
+// other in-band messages (exec/done/stdout/etc.).
+
+// Methods we proxy. Limited to the surface geas builtins actually call;
+// add as needed.
+const VFS_METHODS = [
+  'readFile', 'writeFile', 'readdir', 'stat',
+  'mkdir', 'unlink', 'rmdir', 'rename',
+  'glob', 'exists', 'cp',
+];
+
+// Run on the side that OWNS the real VFS. Listens for vfs-call messages
+// and dispatches to the real vfs, sending back vfs-reply.
+//
+// Returns a `stop()` function that removes the listener.
+function serveVFS(target, vfs) {
+  const handler = async (e) => {
+    const msg = e && e.data !== undefined ? e.data : e;
+    if (!msg || msg.type !== 'vfs-call') return;
+    try {
+      if (typeof vfs[msg.method] !== 'function') {
+        throw new Error(`vfs: unknown method "${msg.method}"`);
+      }
+      const value = await vfs[msg.method](...(msg.args || []));
+      target.postMessage({ type: 'vfs-reply', id: msg.id, ok: true, value });
+    } catch (err) {
+      target.postMessage({
+        type: 'vfs-reply',
+        id: msg.id,
+        ok: false,
+        error: err && err.message ? err.message : String(err),
+      });
+    }
+  };
+  _vpAttach(target, handler);
+  return () => _vpDetach(target, handler);
+}
+
+// Run on the side that CONSUMES vfs through message-passing (typically
+// inside a worker). Returns a vfs-shaped proxy whose every call posts a
+// message and awaits its reply.
+function createVfsClient(target) {
+  let nextId = 0;
+  const pending = new Map();
+  _vpAttach(target, (e) => {
+    const msg = e && e.data !== undefined ? e.data : e;
+    if (!msg || msg.type !== 'vfs-reply') return;
+    const slot = pending.get(msg.id);
+    if (!slot) return;
+    pending.delete(msg.id);
+    if (msg.ok) slot.resolve(msg.value);
+    else slot.reject(new Error(msg.error));
+  });
+
+  const proxy = {};
+  for (const method of VFS_METHODS) {
+    proxy[method] = (...args) => {
+      const id = nextId++;
+      return new Promise((resolve, reject) => {
+        pending.set(id, { resolve, reject });
+        target.postMessage({ type: 'vfs-call', id, method, args });
+      });
+    };
+  }
+  return proxy;
+}
+
+// ── transport helpers ──
+// Web Workers use addEventListener('message', cb); Node worker_threads use
+// .on('message', cb). Our loopback target uses .addEventListener. Handle
+// both shapes transparently.
+function _vpAttach(target, handler) {
+  if (typeof target.addEventListener === 'function') {
+    target.addEventListener('message', handler);
+  } else if (typeof target.on === 'function') {
+    // Node worker_threads shape: payload arrives as the bare data, not an event.
+    target.on('message', (data) => handler({ data }));
+  } else if ('onmessage' in target) {
+    // Chain so we don't blow away an existing onmessage.
+    const prior = target.onmessage;
+    target.onmessage = (e) => { handler(e); if (prior) prior(e); };
+  } else {
+    throw new Error('vfs-proxy: target has no message-listener surface');
+  }
+}
+
+function _vpDetach(target, handler) {
+  if (typeof target.removeEventListener === 'function') {
+    target.removeEventListener('message', handler);
+  } else if (typeof target.off === 'function') {
+    target.off('message', handler);
+  }
+  // For onmessage-style we can't easily detach; the leak is small per worker.
+}
+
+// -- worker-shim.js --
+
+// Worker shim — run this inside the worker scope after geas is loaded.
+//
+// Sets up the message protocol that pairs with GeasClient on the main side.
+// Owns the long-lived shell instance for this worker; survives across exec
+// calls so env mutations / cwd / function definitions persist.
+//
+// Usage (real worker):
+//
+//   import { setupGeasWorker } from '@gcu/geas/worker/shim';
+//   setupGeasWorker(self);
+//
+// Usage (in-process / tests):
+//
+//   setupGeasWorker(loopback.workerSide);
+//
+// The shim doesn't import the geas API symbols directly here — they're
+// passed via the `opts.createShell` factory so the same shim works whether
+// geas was bundled or imported piecewise. (Inside the runnable worker
+// entry, you'd pass `createShell` from the bundle.)
+
+
+function setupGeasWorker(target, opts) {
+  const { createShell, isTyped } = opts;
+  if (typeof createShell !== 'function') {
+    throw new Error('setupGeasWorker: opts.createShell is required');
+  }
+  const vfs = createVfsClient(target);
+  let shell = null;
+
+  // Forward writes from the shell out to the main side. Typed values get
+  // their own message kind so the client can route them to writeBlock.
+  const stdoutFn = (v) => {
+    if (v && typeof v === 'object' && v.__geas_typed === true) {
+      target.postMessage({
+        type: 'block',
+        kind: v.kind,
+        value: v.value,
+        text: String(v),
+      });
+    } else {
+      target.postMessage({ type: 'stdout', text: typeof v === 'string' ? v : String(v ?? '') });
+    }
+  };
+  const stderrFn = (text) => {
+    target.postMessage({ type: 'stderr', text: typeof text === 'string' ? text : String(text ?? '') });
+  };
+
+  const handler = async (e) => {
+    const msg = e && e.data !== undefined ? e.data : e;
+    if (!msg || typeof msg.type !== 'string') return;
+    switch (msg.type) {
+      case 'init': {
+        shell = createShell({
+          vfs,
+          env: msg.env || {},
+          cwd: msg.cwd || '/',
+          stdout: stdoutFn,
+          stderr: stderrFn,
+        });
+        target.postMessage({ type: 'init-done' });
+        return;
+      }
+      case 'exec': {
+        if (!shell) {
+          target.postMessage({
+            type: 'done',
+            id: msg.id,
+            exitCode: 1,
+            error: 'shell not initialised',
+          });
+          return;
+        }
+        try {
+          const r = await shell.exec(msg.source);
+          target.postMessage({ type: 'done', id: msg.id, exitCode: r.exitCode ?? 0 });
+        } catch (err) {
+          target.postMessage({
+            type: 'done',
+            id: msg.id,
+            exitCode: 1,
+            error: err && err.message ? err.message : String(err),
+          });
+        }
+        return;
+      }
+      // input / resize are reserved for when a real interactive shell needs
+      // to feed line-edited input back into a running command. v0 doesn't
+      // have an interactive read builtin, so these are no-ops.
+      case 'input':
+      case 'resize':
+        return;
+    }
+  };
+  _wsAttach(target, handler);
+}
+
+function _wsAttach(target, handler) {
+  if (typeof target.addEventListener === 'function') {
+    target.addEventListener('message', handler);
+  } else if (typeof target.on === 'function') {
+    target.on('message', (data) => handler({ data }));
+  } else if ('onmessage' in target) {
+    const prior = target.onmessage;
+    target.onmessage = (e) => { handler(e); if (prior) prior(e); };
+  } else {
+    throw new Error('setupGeasWorker: target has no message-listener surface');
+  }
+}
+
+// -- client.js --
+
+// GeasClient — the main-thread facade around a worker-hosted shell.
+//
+//   const client = createGeasClient({
+//     worker,                          // Worker-like: postMessage + onmessage / addEventListener
+//     vfs,                             // @gcu/vfs instance (lives on main)
+//     env, cwd,                        // initial shell env / cwd
+//     onStdout, onStderr, onBlock,     // optional output sinks (defaults log to console)
+//   });
+//
+//   await client.ready();              // resolves once the worker has init-done'd
+//   const { exitCode } = await client.exec('ls /home | grep arthur');
+//   await client.terminate();          // tears the worker down
+//
+// The client owns the VFS service-side of the RPC. It manages exec IDs so
+// concurrent exec calls can be tracked (the worker serialises them one at
+// a time — concurrency is a future concern; for v0 a second exec() while
+// one's in flight queues client-side).
+
+
+function createGeasClient(opts) {
+  const {
+    worker,
+    vfs,
+    env = {},
+    cwd = '/',
+    onStdout = (t) => { /* default: drop */ },
+    onStderr = (t) => { /* default: drop */ },
+    onBlock  = (b) => { /* default: render text fallback */ onStdout(b.text); },
+  } = opts;
+  if (!worker) throw new Error('createGeasClient: opts.worker is required');
+
+  // Start serving VFS over the worker channel.
+  const stopServe = vfs ? serveVFS(worker, vfs) : (() => {});
+
+  // Track pending exec promises by id.
+  let nextExecId = 0;
+  const pendingExecs = new Map();
+  let initReady = null;
+  let initResolve = null;
+  let initPromise = new Promise((r) => { initResolve = r; });
+
+  const handler = (e) => {
+    const msg = e && e.data !== undefined ? e.data : e;
+    if (!msg || typeof msg.type !== 'string') return;
+    switch (msg.type) {
+      case 'init-done':
+        initReady = true;
+        initResolve();
+        return;
+      case 'stdout':
+        onStdout(msg.text || '');
+        return;
+      case 'stderr':
+        onStderr(msg.text || '');
+        return;
+      case 'block':
+        onBlock({ kind: msg.kind, value: msg.value, text: msg.text });
+        return;
+      case 'done': {
+        const slot = pendingExecs.get(msg.id);
+        if (!slot) return;
+        pendingExecs.delete(msg.id);
+        if (msg.error) slot.reject(new Error(msg.error));
+        else slot.resolve({ exitCode: msg.exitCode });
+        return;
+      }
+      // vfs-call is handled by serveVFS's own listener attached above.
+    }
+  };
+  _wcAttach(worker, handler);
+
+  // Kick off init.
+  worker.postMessage({ type: 'init', env, cwd });
+
+  // Serialise execs: queue them client-side so the worker only sees one at
+  // a time. Simpler than expecting the worker to maintain a queue.
+  let execChain = Promise.resolve({ exitCode: 0 });
+  let terminated = false;
+
+  return {
+    ready: () => initPromise,
+
+    exec(source) {
+      if (terminated) return Promise.reject(new Error('geas: client terminated'));
+      const next = execChain.then(async () => {
+        // Re-check after awaiting the prior exec — terminate may have fired
+        // while we were queued, in which case we should reject rather than
+        // post a message that nothing is listening for.
+        if (terminated) throw new Error('geas: client terminated');
+        await initPromise;
+        if (terminated) throw new Error('geas: client terminated');
+        const id = nextExecId++;
+        const p = new Promise((resolve, reject) => {
+          pendingExecs.set(id, { resolve, reject });
+        });
+        worker.postMessage({ type: 'exec', id, source });
+        return p;
+      });
+      // Chain so the next exec waits for this one to finish — but don't
+      // propagate errors through the chain (an individual failure shouldn't
+      // poison subsequent execs).
+      execChain = next.catch(() => ({ exitCode: 1 }));
+      return next;
+    },
+
+    input(text) { if (!terminated) worker.postMessage({ type: 'input', text }); },
+    resize(cols, rows) { if (!terminated) worker.postMessage({ type: 'resize', cols, rows }); },
+
+    async terminate() {
+      terminated = true;
+      stopServe();
+      _wcDetach(worker, handler);
+      if (typeof worker.terminate === 'function') {
+        try { await worker.terminate(); } catch { /* ignore */ }
+      }
+      // Reject any execs that have already registered themselves so callers
+      // don't hang waiting for a reply that will never arrive.
+      for (const [, slot] of pendingExecs) {
+        slot.reject(new Error('geas: client terminated'));
+      }
+      pendingExecs.clear();
+    },
+  };
+}
+
+// ── transport helpers (same shape as vfs-proxy.js) ──
+function _wcAttach(target, handler) {
+  if (typeof target.addEventListener === 'function') {
+    target.addEventListener('message', handler);
+  } else if (typeof target.on === 'function') {
+    target.on('message', (data) => handler({ data }));
+  } else if ('onmessage' in target) {
+    const prior = target.onmessage;
+    target.onmessage = (e) => { handler(e); if (prior) prior(e); };
+  } else {
+    throw new Error('createGeasClient: worker has no message-listener surface');
+  }
+}
+function _wcDetach(target, handler) {
+  if (typeof target.removeEventListener === 'function') {
+    target.removeEventListener('message', handler);
+  } else if (typeof target.off === 'function') {
+    target.off('message', handler);
+  }
+}
+
+// -- loopback.js --
+
+// Loopback "worker" — two paired endpoints that route postMessage calls to
+// each other's listeners via queueMicrotask. Used for in-process tests so
+// node --test can drive the worker harness without spawning real threads.
+//
+//   const { mainSide, workerSide } = createLoopback();
+//   setupGeasWorker(workerSide, { createShell });
+//   const client = createGeasClient({ worker: mainSide, vfs, ... });
+//
+// Both ends expose `addEventListener('message', cb)` / `removeEventListener`
+// and `postMessage(msg)`. Messages are structured-cloned via JSON to mirror
+// real Worker semantics (no shared refs across the boundary).
+
+function createLoopback() {
+  const mainListeners = new Set();
+  const workerListeners = new Set();
+
+  const main = {
+    postMessage(msg) {
+      const cloned = _clone(msg);
+      queueMicrotask(() => {
+        for (const cb of workerListeners) {
+          try { cb({ data: cloned }); } catch (e) { /* swallow per-listener */ }
+        }
+      });
+    },
+    addEventListener(type, cb) {
+      if (type === 'message') mainListeners.add(cb);
+    },
+    removeEventListener(type, cb) {
+      if (type === 'message') mainListeners.delete(cb);
+    },
+    terminate() { mainListeners.clear(); workerListeners.clear(); },
+  };
+  const worker = {
+    postMessage(msg) {
+      const cloned = _clone(msg);
+      queueMicrotask(() => {
+        for (const cb of mainListeners) {
+          try { cb({ data: cloned }); } catch (e) { /* swallow */ }
+        }
+      });
+    },
+    addEventListener(type, cb) {
+      if (type === 'message') workerListeners.add(cb);
+    },
+    removeEventListener(type, cb) {
+      if (type === 'message') workerListeners.delete(cb);
+    },
+    terminate() { mainListeners.clear(); workerListeners.clear(); },
+  };
+  return { mainSide: main, workerSide: worker };
+}
+
+// Mimic structured clone: anything JSON-safe round-trips identically;
+// anything not (functions, DOM nodes, …) errors at the boundary, matching
+// real postMessage semantics. ArrayBuffer / Map / Set get downgraded for v0
+// (real structured clone preserves them; loopback's v0 doesn't matter for
+// our message shapes which are plain JSON).
+function _clone(v) {
+  return JSON.parse(JSON.stringify(v));
+}
+
 // -- api.js --
 
 // Public API surface for @gcu/geas.
@@ -3573,6 +4011,10 @@ function createHeadlessAdapter(opts = {}) {
 // than `export { x } from './foo.js'` so the concat-style build can strip
 // both lines and leave api.js's contribution empty in the bundle — the
 // footer in build.js then provides a single canonical export.
+
+
+
+
 
 
 
@@ -3631,4 +4073,4 @@ function _mergeBuiltins(extra) {
   return base;
 }
 
-export { tokenize, parse, parseWordParts, execute, defaultBuiltins, createShell, mkTyped, isTyped, NODE, createHeadlessAdapter };
+export { tokenize, parse, parseWordParts, execute, defaultBuiltins, createShell, mkTyped, isTyped, NODE, createHeadlessAdapter, createGeasClient, setupGeasWorker, serveVFS, createVfsClient, createLoopback };
