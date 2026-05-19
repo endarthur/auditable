@@ -1505,6 +1505,70 @@ describe('builtins — cut / tee / xargs', () => {
   });
 });
 
+describe('typed pipes', () => {
+  it('from-csv | to-csv round-trips', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/x.csv', 'name,age\nalice,30\nbob,25\n');
+    await t.shell.exec('from-csv /x.csv | to-csv');
+    assert.equal(t.output(), 'name,age\nalice,30\nbob,25\n');
+  });
+
+  it('from-csv | where | to-csv filters rows', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/x.csv', 'name,age\nalice,30\nbob,25\ncarol,40\n');
+    await t.shell.exec("from-csv /x.csv | where 'age > 28' | to-csv");
+    assert.equal(t.output(), 'name,age\nalice,30\ncarol,40\n');
+  });
+
+  it('from-csv | select projects columns', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/x.csv', 'name,age,city\nalice,30,NYC\nbob,25,LA\n');
+    await t.shell.exec('from-csv /x.csv | select name city | to-csv');
+    assert.equal(t.output(), 'name,city\nalice,NYC\nbob,LA\n');
+  });
+
+  it('from-csv | first 2 | to-csv slices rows', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/x.csv', 'n\n1\n2\n3\n4\n5\n');
+    await t.shell.exec('from-csv /x.csv | first 2 | to-csv');
+    assert.equal(t.output(), 'n\n1\n2\n');
+  });
+
+  it('full pipeline: where + select + last', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/data.csv',
+      'name,age,city\nalice,30,NYC\nbob,25,LA\ncarol,40,NYC\ndave,22,LA\n');
+    await t.shell.exec(`
+from-csv /data.csv | where 'city == NYC' | select name age | to-csv
+`);
+    assert.equal(t.output(), 'name,age\nalice,30\ncarol,40\n');
+  });
+
+  it('typed value degrades gracefully through cat', async () => {
+    // cat doesn't understand typed values — falls back to toString() which
+    // returns the CSV text rendering. End result is identical CSV.
+    const t = _testShell();
+    await t.vfs.writeFile('/x.csv', 'a,b\n1,2\n');
+    await t.shell.exec('from-csv /x.csv | cat');
+    assert.equal(t.output(), 'a,b\n1,2\n');
+  });
+
+  it('typed value flows through grep (text fallback)', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/x.csv', 'name,age\nalice,30\nbob,25\n');
+    // grep gets the CSV text and matches lines.
+    await t.shell.exec('from-csv /x.csv | grep alice');
+    assert.equal(t.output(), 'alice,30\n');
+  });
+
+  it('typed pipe survives where with string ==', async () => {
+    const t = _testShell();
+    await t.vfs.writeFile('/x.csv', 'a,b\nx,1\ny,2\nx,3\n');
+    await t.shell.exec("from-csv /x.csv | where 'a == x' | to-csv");
+    assert.equal(t.output(), 'a,b\nx,1\nx,3\n');
+  });
+});
+
 describe('builtins — composed script', () => {
   it('write, then read back with pipeline', async () => {
     const t = _testShell();

@@ -15,6 +15,7 @@ import { execute } from './executor.js';
 import { NODE } from './ast-nodes.js';
 import { createHeadlessAdapter } from './adapters/headless.js';
 import { defaultBuiltins } from './builtins.js';
+import { mkTyped, isTyped } from './typed.js';
 
 // createShell({vfs, env, cwd, stdout, stderr, builtins, onCommand})
 //
@@ -65,4 +66,4 @@ function _mergeBuiltins(extra) {
   return base;
 }
 
-export { tokenize, parse, parseWordParts, execute, NODE, createHeadlessAdapter, defaultBuiltins };
+export { tokenize, parse, parseWordParts, execute, NODE, createHeadlessAdapter, defaultBuiltins, mkTyped, isTyped };

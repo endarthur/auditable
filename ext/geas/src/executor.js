@@ -128,21 +128,41 @@ async function _execPipeline(node, ctx) {
   }
 
   // v0: buffered pipes. Each stage runs to completion, its stdout collected
-  // into a string that becomes the next stage's stdin. Streaming pipes are
-  // a v1+ concern.
+  // and passed to the next stage as stdin. The buffer can be either string
+  // chunks (POSIX-shape) OR a single Typed value (GCU-shape typed pipe):
+  //
+  //   - If a stage emits a Typed value via ctx.stdout({__geas_typed, ...}),
+  //     the next stage's stdin is that Typed object directly.
+  //   - If a stage emits text, the next stage's stdin is the concatenated
+  //     string.
+  //   - If both happen in the same stage (mixed), text wins (Typed values
+  //     are dropped). Stages should emit either-or, not both.
+  //
+  // Consumers that don't understand the Typed kind get text via the value's
+  // toString() — see typed.js for the protocol contract.
   let pipeIn = ctx.stdin;
   let lastExit = 0;
   for (let i = 0; i < node.commands.length; i++) {
     const isLast = i === node.commands.length - 1;
     let bufOut = [];
+    let bufTyped = null;
     const subCtx = {
       ...ctx,
       stdin: pipeIn,
-      stdout: isLast ? ctx.stdout : (text) => { bufOut.push(text); },
+      stdout: isLast ? ctx.stdout : (value) => {
+        if (value && typeof value === 'object' && value.__geas_typed === true) {
+          bufTyped = value;
+        } else {
+          bufOut.push(typeof value === 'string' ? value : String(value));
+        }
+      },
     };
     const r = await _exec(node.commands[i], subCtx);
     lastExit = r.exitCode;
-    if (!isLast) pipeIn = bufOut.join('');
+    if (!isLast) {
+      // Prefer Typed if the stage emitted one — otherwise concat text.
+      pipeIn = bufTyped !== null ? bufTyped : bufOut.join('');
+    }
   }
   if (node.negated) lastExit = lastExit === 0 ? 1 : 0;
   return { exitCode: lastExit };

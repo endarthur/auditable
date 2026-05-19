@@ -10,12 +10,13 @@
 // output through `await ctx.stdout(...)` / `ctx.stderr(...)` rather than
 // any other channel — that's how pipeline routing reaches them.
 
-// (No imports — builtins are pure functions of (argv, ctx).)
+import { defaultTypedBuiltins } from './builtins-typed.js';
 
 // Construct a fresh map of the default builtins. Returns a new Map per call
 // so consumers can mutate (add/override) without affecting other shells.
 export function defaultBuiltins() {
   return new Map(Object.entries({
+    ...defaultTypedBuiltins(),
     ':':      _colon,
     echo:     _echo,
     true:     _true,
@@ -178,9 +179,10 @@ async function _exit(argv, _ctx) {
 async function _cat(argv, ctx) {
   const files = argv.slice(1);
   if (files.length === 0) {
-    // No args: pipe stdin through.
-    const s = typeof ctx.stdin === 'string' ? ctx.stdin : '';
-    await ctx.stdout(s);
+    // No args: pipe stdin through. _bReadInput handles both string stdin
+    // AND Typed stdin (via Typed.toString()), so a typed-pipe upstream
+    // degrades gracefully.
+    await ctx.stdout(await _bReadInput([], ctx));
     return 0;
   }
   if (!ctx.vfs) {
@@ -394,12 +396,18 @@ function _bParseArgs(argv, spec) {
   return { opts, positionals };
 }
 
-// Read all of stdin (a string in v0) or, when paths are given, the
-// concatenated contents of those VFS files. Common to head / tail / wc /
-// grep / sort / uniq / cut / tee / xargs.
+// Read all of stdin or, when paths are given, the concatenated contents
+// of those VFS files. Common to head / tail / wc / grep / sort / uniq /
+// cut / tee / xargs.
+//
+// Typed-pipe contract: if ctx.stdin is a Typed object, fall back to its
+// text rendering via toString(). Builtins that don't know about types
+// transparently get the canonical text representation.
 async function _bReadInput(paths, ctx) {
   if (!paths || paths.length === 0) {
-    return typeof ctx.stdin === 'string' ? ctx.stdin : '';
+    if (ctx.stdin == null) return '';
+    if (typeof ctx.stdin === 'string') return ctx.stdin;
+    return String(ctx.stdin);
   }
   if (!ctx.vfs) throw new Error('VFS not configured');
   const chunks = [];
@@ -739,7 +747,8 @@ async function _tee(argv, ctx) {
     return 1;
   }
   const { opts, positionals } = _bParseArgs(argv, { a: { short: 'a' } });
-  const input = typeof ctx.stdin === 'string' ? ctx.stdin : '';
+  // _bReadInput handles Typed stdin via toString fallback.
+  const input = await _bReadInput([], ctx);
   await ctx.stdout(input);
   let anyError = 0;
   for (const p of positionals) {

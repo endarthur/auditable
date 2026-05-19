@@ -1459,6 +1459,149 @@ function _parseTrailingRedirects(ctx) {
   return out;
 }
 
+// -- typed.js --
+
+// Typed pipe protocol — the GCU-distinctive feature.
+//
+// Pipes carry one of two payload shapes:
+//
+//   string       — POSIX-shape text (default)
+//   Typed object — { __geas_typed: true, kind, value, toString }
+//
+// When the previous stage's stdout is a Typed value, the next stage's ctx.stdin
+// is that Typed object. Stages that recognise its `kind` can read `.value`
+// directly without re-parsing. Stages that don't (cat, grep, head, etc.)
+// fall back to `String(stdin)` — the Typed object's `toString()` returns
+// its text rendering, so the pipe degrades gracefully to POSIX semantics.
+//
+// Capability negotiation is implicit: producers always emit Typed; consumers
+// inspect `__geas_typed`. No explicit handshake. The terminal adapter does
+// a separate negotiation via `caps()` for inline rich-block rendering of
+// the final pipe stage's typed output.
+
+// ── factory ──
+
+// Construct a Typed value. `text` is the canonical text rendering used by
+// downstream non-typed consumers and by terminal adapters without rich-block
+// support. Can be a string OR a function () => string for lazy rendering.
+function mkTyped(kind, value, text) {
+  const tv = {
+    __geas_typed: true,
+    kind,
+    value,
+    toString() { return typeof text === 'function' ? text() : text; },
+  };
+  // Make sure `'' + tv` / template literals invoke toString correctly.
+  // (Object stringification falls back to toString automatically.)
+  return tv;
+}
+
+function isTyped(v) {
+  return v != null && typeof v === 'object' && v.__geas_typed === true;
+}
+
+// Convert any pipe payload to text. Used by builtins that don't understand
+// the Typed kind — they read input through here and get a string.
+function toText(v) {
+  if (v == null) return '';
+  if (typeof v === 'string') return v;
+  if (isTyped(v)) return v.toString();
+  return String(v);
+}
+
+// ── CSV helpers (minimal) ──
+//
+// v0 ships a compact CSV parser/serialiser inline so the typed-pipe demo
+// works without dragging in sadpan. The format is small but POSIX-friendly:
+//
+//   parseCSV(text, opts)   → { columns: string[], rows: any[][] }
+//   serializeCSV(table)    → string (with trailing newline if rows > 0)
+//
+// Quoting: double-quote-wrapped fields with ""-doubled embedded quotes.
+// Delimiter: comma by default; opts.delim overrides.
+
+function parseCSV(text, opts = {}) {
+  const delim = opts.delim || ',';
+  if (!text || text.length === 0) return { columns: [], rows: [] };
+  const trimmed = text.endsWith('\n') ? text.slice(0, -1) : text;
+  const records = _parseCSVRecords(trimmed, delim);
+  if (records.length === 0) return { columns: [], rows: [] };
+  const columns = records[0];
+  const rows = records.slice(1);
+  return { columns, rows };
+}
+
+function _parseCSVRecords(text, delim) {
+  const out = [];
+  let row = [];
+  let field = '';
+  let inQuote = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuote) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQuote = false;
+      } else {
+        field += c;
+      }
+      continue;
+    }
+    if (c === '"') { inQuote = true; continue; }
+    if (c === delim) { row.push(field); field = ''; continue; }
+    if (c === '\n') { row.push(field); out.push(row); row = []; field = ''; continue; }
+    if (c === '\r') continue;
+    field += c;
+  }
+  // Last field / row.
+  row.push(field);
+  if (row.length > 1 || row[0] !== '') out.push(row);
+  return out;
+}
+
+function serializeCSV(table, opts = {}) {
+  const delim = opts.delim || ',';
+  const escape = (v) => {
+    const s = String(v ?? '');
+    if (s.includes(delim) || s.includes('"') || s.includes('\n')) {
+      return '"' + s.replace(/"/g, '""') + '"';
+    }
+    return s;
+  };
+  const lines = [];
+  if (table.columns && table.columns.length > 0) {
+    lines.push(table.columns.map(escape).join(delim));
+  }
+  for (const row of table.rows || []) {
+    lines.push(row.map(escape).join(delim));
+  }
+  return lines.length > 0 ? lines.join('\n') + '\n' : '';
+}
+
+// Pretty-format a table as a fixed-width text block, for tty fallback.
+// Used by Typed-table.toString() in the absence of structured rendering.
+function formatTable(table, opts = {}) {
+  const max = opts.maxRows ?? 50;
+  const cols = table.columns || [];
+  const rows = (table.rows || []).slice(0, max);
+  const widths = cols.map((c, i) => {
+    let w = String(c).length;
+    for (const r of rows) w = Math.max(w, String(r[i] ?? '').length);
+    return w;
+  });
+  const pad = (s, w) => String(s ?? '').padEnd(w);
+  const lines = [];
+  if (cols.length > 0) {
+    lines.push(cols.map((c, i) => pad(c, widths[i])).join('  '));
+    lines.push(widths.map(w => '─'.repeat(w)).join('  '));
+  }
+  for (const r of rows) lines.push(r.map((v, i) => pad(v, widths[i])).join('  '));
+  if ((table.rows?.length ?? 0) > max) {
+    lines.push(`… (${table.rows.length - max} more rows)`);
+  }
+  return lines.join('\n') + (lines.length > 0 ? '\n' : '');
+}
+
 // -- executor.js --
 
 // Executor — walks a parsed geas AST against a context, producing output
@@ -1590,21 +1733,41 @@ async function _execPipeline(node, ctx) {
   }
 
   // v0: buffered pipes. Each stage runs to completion, its stdout collected
-  // into a string that becomes the next stage's stdin. Streaming pipes are
-  // a v1+ concern.
+  // and passed to the next stage as stdin. The buffer can be either string
+  // chunks (POSIX-shape) OR a single Typed value (GCU-shape typed pipe):
+  //
+  //   - If a stage emits a Typed value via ctx.stdout({__geas_typed, ...}),
+  //     the next stage's stdin is that Typed object directly.
+  //   - If a stage emits text, the next stage's stdin is the concatenated
+  //     string.
+  //   - If both happen in the same stage (mixed), text wins (Typed values
+  //     are dropped). Stages should emit either-or, not both.
+  //
+  // Consumers that don't understand the Typed kind get text via the value's
+  // toString() — see typed.js for the protocol contract.
   let pipeIn = ctx.stdin;
   let lastExit = 0;
   for (let i = 0; i < node.commands.length; i++) {
     const isLast = i === node.commands.length - 1;
     let bufOut = [];
+    let bufTyped = null;
     const subCtx = {
       ...ctx,
       stdin: pipeIn,
-      stdout: isLast ? ctx.stdout : (text) => { bufOut.push(text); },
+      stdout: isLast ? ctx.stdout : (value) => {
+        if (value && typeof value === 'object' && value.__geas_typed === true) {
+          bufTyped = value;
+        } else {
+          bufOut.push(typeof value === 'string' ? value : String(value));
+        }
+      },
     };
     const r = await _exec(node.commands[i], subCtx);
     lastExit = r.exitCode;
-    if (!isLast) pipeIn = bufOut.join('');
+    if (!isLast) {
+      // Prefer Typed if the stage emitted one — otherwise concat text.
+      pipeIn = bufTyped !== null ? bufTyped : bufOut.join('');
+    }
   }
   if (node.negated) lastExit = lastExit === 0 ? 1 : 0;
   return { exitCode: lastExit };
@@ -2282,6 +2445,203 @@ function _globMatch(pattern, value) {
   return re.test(value);
 }
 
+// -- builtins-typed.js --
+
+// Typed-pipe-aware built-ins. These produce or consume Typed table values
+// instead of (or in addition to) text. The shell auto-registers them via
+// defaultBuiltins(); third-party builtins from the GCU stack (e.g. a
+// future sadpan-backed `read-csv`) can override.
+//
+// Demo surface for v0:
+//
+//   from-csv FILE | where 'COL > N' | select COL1 COL2 | to-csv
+//
+// `from-csv` produces a Typed table; `where` and `select` consume and
+// produce Typed tables (passing through unchanged when their input is text
+// — they parse the text as CSV on the fly); `to-csv` serialises back to
+// text. Mix-and-match with text builtins works because Typed.toString()
+// returns the canonical CSV text, so e.g. `from-csv f.csv | head -n 5`
+// degrades gracefully (head reads the CSV text and slices the first 5
+// lines, ignoring that columns are involved).
+
+
+function defaultTypedBuiltins() {
+  return {
+    'from-csv': _fromCsv,
+    'to-csv':   _toCsv,
+    where:      _where,
+    select:     _select,
+    'first':    _first,
+    'last':     _last,
+  };
+}
+
+// Read a CSV from file (or stdin) and emit a Typed table downstream.
+async function _fromCsv(argv, ctx) {
+  const path = argv[1];
+  let text;
+  try {
+    if (path) {
+      if (!ctx.vfs) {
+        await ctx.stderr('from-csv: no VFS configured\n');
+        return 1;
+      }
+      const abs = path.startsWith('/') ? path
+        : (ctx.cwd.endsWith('/') ? ctx.cwd : ctx.cwd + '/') + path;
+      text = await ctx.vfs.readFile(abs, 'text');
+    } else {
+      // No path → read from stdin.
+      text = ctx.stdin == null ? ''
+        : typeof ctx.stdin === 'string' ? ctx.stdin
+        : String(ctx.stdin);
+    }
+  } catch (e) {
+    await ctx.stderr(`from-csv: ${e.message}\n`);
+    return 1;
+  }
+  const table = parseCSV(text);
+  await ctx.stdout(mkTyped('table', table, () => serializeCSV(table)));
+  return 0;
+}
+
+// Convert Typed table → CSV text. Idempotent on text input.
+async function _toCsv(_argv, ctx) {
+  const v = ctx.stdin;
+  if (isTyped(v) && v.kind === 'table') {
+    await ctx.stdout(serializeCSV(v.value));
+    return 0;
+  }
+  // Already text — pass through.
+  await ctx.stdout(typeof v === 'string' ? v : String(v ?? ''));
+  return 0;
+}
+
+// where 'COL OP VALUE' — filter table rows. Operators: == != > < >= <=
+// VALUE may be a number (compared numerically) or a quoted-or-bare string.
+// On text input, parses as CSV first; on Typed input, operates directly.
+async function _where(argv, ctx) {
+  const expr = argv[1];
+  if (!expr) {
+    await ctx.stderr('where: missing expression\n');
+    return 2;
+  }
+  const pred = _compilePredicate(expr);
+  if (!pred) {
+    await ctx.stderr(`where: cannot parse expression "${expr}"\n`);
+    return 2;
+  }
+  const table = await _consumeTable(ctx);
+  const colIdx = table.columns.indexOf(pred.col);
+  if (colIdx < 0) {
+    await ctx.stderr(`where: no column "${pred.col}"\n`);
+    return 2;
+  }
+  const filtered = {
+    columns: table.columns,
+    rows: table.rows.filter(r => pred.test(r[colIdx])),
+  };
+  await ctx.stdout(mkTyped('table', filtered, () => serializeCSV(filtered)));
+  return 0;
+}
+
+// select COL1 COL2 ... — project columns by name. Unknown columns warned
+// on stderr; the result drops them but doesn't fail.
+async function _select(argv, ctx) {
+  const names = argv.slice(1);
+  if (names.length === 0) {
+    await ctx.stderr('select: missing column names\n');
+    return 2;
+  }
+  const table = await _consumeTable(ctx);
+  const indices = names.map(n => {
+    const i = table.columns.indexOf(n);
+    if (i < 0) ctx.stderr(`select: warning: no column "${n}"\n`);
+    return i;
+  }).filter(i => i >= 0);
+  const projected = {
+    columns: indices.map(i => table.columns[i]),
+    rows: table.rows.map(r => indices.map(i => r[i])),
+  };
+  await ctx.stdout(mkTyped('table', projected, () => serializeCSV(projected)));
+  return 0;
+}
+
+// first [N] / last [N] — slice first/last N rows. Defaults to 5.
+async function _first(argv, ctx) {
+  const n = argv[1] ? Math.max(0, parseInt(argv[1], 10)) : 5;
+  const table = await _consumeTable(ctx);
+  const sliced = { columns: table.columns, rows: table.rows.slice(0, n) };
+  await ctx.stdout(mkTyped('table', sliced, () => serializeCSV(sliced)));
+  return 0;
+}
+async function _last(argv, ctx) {
+  const n = argv[1] ? Math.max(0, parseInt(argv[1], 10)) : 5;
+  const table = await _consumeTable(ctx);
+  const sliced = { columns: table.columns, rows: table.rows.slice(-n) };
+  await ctx.stdout(mkTyped('table', sliced, () => serializeCSV(sliced)));
+  return 0;
+}
+
+// Common: pull a table out of ctx.stdin, parsing text if needed.
+async function _consumeTable(ctx) {
+  if (isTyped(ctx.stdin) && ctx.stdin.kind === 'table') {
+    return ctx.stdin.value;
+  }
+  const text = ctx.stdin == null ? '' : String(ctx.stdin);
+  return parseCSV(text);
+}
+
+// ── predicate parser for `where` ──
+//
+// Grammar (v0):
+//   COL OP RHS
+//   COL  := identifier or quoted string
+//   OP   := == | != | >= | <= | > | <
+//   RHS  := number | "quoted string" | 'quoted string' | bare identifier
+//
+// Returns { col, op, test: (cellValue) => bool } or null on parse failure.
+function _compilePredicate(expr) {
+  const m = expr.match(/^\s*([A-Za-z_][A-Za-z0-9_]*|"[^"]*"|'[^']*')\s*(==|!=|>=|<=|>|<)\s*(.+?)\s*$/);
+  if (!m) return null;
+  let col = m[1];
+  const op = m[2];
+  let rhs = m[3];
+  if ((col.startsWith('"') && col.endsWith('"')) ||
+      (col.startsWith("'") && col.endsWith("'"))) col = col.slice(1, -1);
+  // Unquote RHS if it's a quoted string; otherwise try numeric.
+  let rhsVal;
+  if ((rhs.startsWith('"') && rhs.endsWith('"')) ||
+      (rhs.startsWith("'") && rhs.endsWith("'"))) {
+    rhsVal = rhs.slice(1, -1);
+  } else if (/^-?\d+(?:\.\d+)?$/.test(rhs)) {
+    rhsVal = Number(rhs);
+  } else {
+    rhsVal = rhs;
+  }
+  const numericCompare = typeof rhsVal === 'number';
+  const test = (cell) => {
+    let a = cell;
+    let b = rhsVal;
+    if (numericCompare) {
+      a = Number(cell);
+      if (Number.isNaN(a)) return false;
+    } else {
+      a = String(cell ?? '');
+      b = String(b);
+    }
+    switch (op) {
+      case '==': return a === b;
+      case '!=': return a !== b;
+      case '>':  return a >  b;
+      case '<':  return a <  b;
+      case '>=': return a >= b;
+      case '<=': return a <= b;
+    }
+    return false;
+  };
+  return { col, op, test };
+}
+
 // -- builtins.js --
 
 // Default built-ins for geas. Each is `async (argv, ctx) => exitCode`.
@@ -2296,12 +2656,12 @@ function _globMatch(pattern, value) {
 // output through `await ctx.stdout(...)` / `ctx.stderr(...)` rather than
 // any other channel — that's how pipeline routing reaches them.
 
-// (No imports — builtins are pure functions of (argv, ctx).)
 
 // Construct a fresh map of the default builtins. Returns a new Map per call
 // so consumers can mutate (add/override) without affecting other shells.
 function defaultBuiltins() {
   return new Map(Object.entries({
+    ...defaultTypedBuiltins(),
     ':':      _colon,
     echo:     _echo,
     true:     _true,
@@ -2464,9 +2824,10 @@ async function _exit(argv, _ctx) {
 async function _cat(argv, ctx) {
   const files = argv.slice(1);
   if (files.length === 0) {
-    // No args: pipe stdin through.
-    const s = typeof ctx.stdin === 'string' ? ctx.stdin : '';
-    await ctx.stdout(s);
+    // No args: pipe stdin through. _bReadInput handles both string stdin
+    // AND Typed stdin (via Typed.toString()), so a typed-pipe upstream
+    // degrades gracefully.
+    await ctx.stdout(await _bReadInput([], ctx));
     return 0;
   }
   if (!ctx.vfs) {
@@ -2680,12 +3041,18 @@ function _bParseArgs(argv, spec) {
   return { opts, positionals };
 }
 
-// Read all of stdin (a string in v0) or, when paths are given, the
-// concatenated contents of those VFS files. Common to head / tail / wc /
-// grep / sort / uniq / cut / tee / xargs.
+// Read all of stdin or, when paths are given, the concatenated contents
+// of those VFS files. Common to head / tail / wc / grep / sort / uniq /
+// cut / tee / xargs.
+//
+// Typed-pipe contract: if ctx.stdin is a Typed object, fall back to its
+// text rendering via toString(). Builtins that don't know about types
+// transparently get the canonical text representation.
 async function _bReadInput(paths, ctx) {
   if (!paths || paths.length === 0) {
-    return typeof ctx.stdin === 'string' ? ctx.stdin : '';
+    if (ctx.stdin == null) return '';
+    if (typeof ctx.stdin === 'string') return ctx.stdin;
+    return String(ctx.stdin);
   }
   if (!ctx.vfs) throw new Error('VFS not configured');
   const chunks = [];
@@ -3025,7 +3392,8 @@ async function _tee(argv, ctx) {
     return 1;
   }
   const { opts, positionals } = _bParseArgs(argv, { a: { short: 'a' } });
-  const input = typeof ctx.stdin === 'string' ? ctx.stdin : '';
+  // _bReadInput handles Typed stdin via toString fallback.
+  const input = await _bReadInput([], ctx);
   await ctx.stdout(input);
   let anyError = 0;
   for (const p of positionals) {
@@ -3213,6 +3581,7 @@ function createHeadlessAdapter(opts = {}) {
 
 
 
+
 // createShell({vfs, env, cwd, stdout, stderr, builtins, onCommand})
 //
 // Convenience factory that builds a long-lived shell context with the
@@ -3262,4 +3631,4 @@ function _mergeBuiltins(extra) {
   return base;
 }
 
-export { tokenize, parse, parseWordParts, execute, defaultBuiltins, createShell, NODE, createHeadlessAdapter };
+export { tokenize, parse, parseWordParts, execute, defaultBuiltins, createShell, mkTyped, isTyped, NODE, createHeadlessAdapter };
