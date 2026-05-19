@@ -15,7 +15,7 @@ import { createGeasClient } from '../ext/geas/src/worker/client.js';
 import { setupGeasWorker } from '../ext/geas/src/worker/worker-shim.js';
 import { createLoopback } from '../ext/geas/src/worker/loopback.js';
 import { serveVFS, createVfsClient } from '../ext/geas/src/worker/vfs-proxy.js';
-import { createTermAdapter, adapterHooks } from '../ext/geas/src/adapters/term.js';
+import { createTermAdapter, adapterHooks, makeLineEditor } from '../ext/geas/src/adapters/term.js';
 import { createXtermAdapter } from '../ext/geas/src/adapters/xterm.js';
 import { drainInput } from '../ext/geas/src/typed.js';
 import { VFS, MemoryBackend } from '../ext/vfs/index.js';
@@ -2694,6 +2694,312 @@ describe('plot', () => {
 });
 
 // ── stage 14: cp / mv / stat ──
+
+// ── stage 15: interactive read plumbing ──
+
+describe('interactive read (in-process readLine hook)', () => {
+  function _shellWithLineQueue(lines) {
+    // Build a shell whose ctx.readLine returns successive elements
+    // from `lines` (string for a line, null for eof, {timeout: true}
+    // for timeout). Captures the most recent opts so tests can check
+    // that flags propagate.
+    const vfs = new VFS();
+    vfs._mounts.set('/', new MemoryBackend());
+    const stdoutBuf = [];
+    const stderrBuf = [];
+    const observedOpts = [];
+    let cursor = 0;
+    const shell = createShell({
+      vfs,
+      env: { HOME: '/home' },
+      cwd: '/',
+      stdout: (t) => stdoutBuf.push(String(t)),
+      stderr: (t) => stderrBuf.push(String(t)),
+      readLine: async (opts) => {
+        observedOpts.push(opts);
+        const next = lines[cursor++];
+        if (next == null) return { eof: true };
+        if (typeof next === 'object' && next.timeout) return { timeout: true };
+        return { line: next };
+      },
+    });
+    return {
+      shell,
+      output: () => stdoutBuf.join(''),
+      errOutput: () => stderrBuf.join(''),
+      observedOpts,
+    };
+  }
+
+  it('falls through to readLine when stdin is empty', async () => {
+    const t = _shellWithLineQueue(['alice']);
+    await t.shell.exec('read who\necho hi $who\n');
+    assert.equal(t.output(), 'hi alice\n');
+  });
+
+  it('readLine receives the prompt flag', async () => {
+    const t = _shellWithLineQueue(['x']);
+    await t.shell.exec('read -p "name? " name\n');
+    assert.equal(t.observedOpts[0].prompt, 'name? ');
+  });
+
+  it('readLine receives the silent flag', async () => {
+    const t = _shellWithLineQueue(['hunter2']);
+    await t.shell.exec('read -s pw\n');
+    assert.equal(t.observedOpts[0].silent, true);
+  });
+
+  it('readLine receives nChars, delim, timeout, raw', async () => {
+    const t = _shellWithLineQueue(['x']);
+    await t.shell.exec('read -r -n 5 -d "," -t 30 v\n');
+    const opts = t.observedOpts[0];
+    assert.equal(opts.nChars, 5);
+    assert.equal(opts.delim, ',');
+    assert.equal(opts.timeout, 30);
+    assert.equal(opts.raw, true);
+  });
+
+  it('eof from readLine → exit code 1', async () => {
+    const t = _shellWithLineQueue([null]); // first ask gets eof
+    const r = await t.shell.exec('read v\n');
+    assert.equal(r.exitCode, 1);
+  });
+
+  it('timeout from readLine → exit code 142', async () => {
+    const t = _shellWithLineQueue([{ timeout: true }]);
+    const r = await t.shell.exec('read -t 1 v\n');
+    assert.equal(r.exitCode, 142);
+  });
+
+  it('readLine result is IFS-split into multiple vars', async () => {
+    const t = _shellWithLineQueue(['one two three']);
+    await t.shell.exec('read a b c\necho a=$a b=$b c=$c\n');
+    assert.equal(t.output(), 'a=one b=two c=three\n');
+  });
+
+  it('heredoc stdin still works without invoking readLine', async () => {
+    const t = _shellWithLineQueue([]);
+    await t.shell.exec('read v <<EOF\nfrom-here\nEOF\necho got $v\n');
+    assert.equal(t.observedOpts.length, 0);
+    assert.equal(t.output(), 'got from-here\n');
+  });
+
+  it('without readLine, empty stdin still returns 1', async () => {
+    const vfs = new VFS();
+    vfs._mounts.set('/', new MemoryBackend());
+    const out = [];
+    const shell = createShell({
+      vfs, cwd: '/',
+      stdout: (t) => out.push(String(t)),
+      stderr: () => {},
+      // no readLine
+    });
+    const r = await shell.exec('read v\n');
+    assert.equal(r.exitCode, 1);
+  });
+});
+
+describe('makeLineEditor — adapter line editor', () => {
+  function _mockAdapter() {
+    const writes = [];
+    const inputSubs = [];
+    return {
+      adapter: {
+        write(t) { writes.push(t); },
+        onInput(cb) { inputSubs.push(cb); return () => { /* unsubscribe noop */ }; },
+        caps: () => ({ richBlocks: false }),
+      },
+      writes,
+      feed(text) { for (const cb of inputSubs) cb(text); },
+      written: () => writes.join(''),
+    };
+  }
+
+  it('Enter submits the buffered line and echoes it', async () => {
+    const m = _mockAdapter();
+    const edit = makeLineEditor(m.adapter);
+    const p = edit({});
+    m.feed('hello');
+    m.feed('\r');
+    const r = await p;
+    assert.equal(r.line, 'hello');
+    assert.match(m.written(), /hello/);
+    assert.match(m.written(), /\r\n/);
+  });
+
+  it('Backspace deletes the last char', async () => {
+    const m = _mockAdapter();
+    const edit = makeLineEditor(m.adapter);
+    const p = edit({});
+    m.feed('hellox');
+    m.feed('\x7f'); // DEL backspace — remove the stray x
+    m.feed('\r');
+    const r = await p;
+    assert.equal(r.line, 'hello');
+  });
+
+  it('silent mode does not echo characters', async () => {
+    const m = _mockAdapter();
+    const edit = makeLineEditor(m.adapter);
+    const p = edit({ silent: true });
+    m.feed('secret\r');
+    const r = await p;
+    assert.equal(r.line, 'secret');
+    // No 'secret' in the written stream, and no echoed Enter either.
+    assert.ok(!m.written().includes('secret'));
+  });
+
+  it('Ctrl+D on empty buffer returns eof', async () => {
+    const m = _mockAdapter();
+    const edit = makeLineEditor(m.adapter);
+    const p = edit({});
+    m.feed('\x04');
+    const r = await p;
+    assert.equal(r.eof, true);
+  });
+
+  it('Ctrl+D with chars in buffer is ignored', async () => {
+    const m = _mockAdapter();
+    const edit = makeLineEditor(m.adapter);
+    const p = edit({});
+    m.feed('keep');
+    m.feed('\x04'); // ignored
+    m.feed('\r');
+    const r = await p;
+    assert.equal(r.line, 'keep');
+  });
+
+  it('Ctrl+C cancels with eof and writes ^C', async () => {
+    const m = _mockAdapter();
+    const edit = makeLineEditor(m.adapter);
+    const p = edit({});
+    m.feed('abc');
+    m.feed('\x03');
+    const r = await p;
+    assert.equal(r.eof, true);
+    assert.match(m.written(), /\^C/);
+  });
+
+  it('nChars caps the line', async () => {
+    const m = _mockAdapter();
+    const edit = makeLineEditor(m.adapter);
+    const p = edit({ nChars: 3 });
+    m.feed('abcdef'); // captures 'abc' then resolves
+    const r = await p;
+    assert.equal(r.line, 'abc');
+  });
+
+  it('delim terminates the line (not included)', async () => {
+    const m = _mockAdapter();
+    const edit = makeLineEditor(m.adapter);
+    const p = edit({ delim: ',' });
+    m.feed('hello,more');
+    const r = await p;
+    assert.equal(r.line, 'hello');
+  });
+
+  it('prompt is written before reading', async () => {
+    const m = _mockAdapter();
+    const edit = makeLineEditor(m.adapter);
+    const p = edit({ prompt: 'name? ' });
+    m.feed('x\r');
+    await p;
+    assert.match(m.written(), /^name\? /);
+  });
+
+  it('timeout fires when no input arrives', async () => {
+    const m = _mockAdapter();
+    const edit = makeLineEditor(m.adapter);
+    const p = edit({ timeout: 0.05 });
+    const r = await p;
+    assert.equal(r.timeout, true);
+  });
+
+  it('escape chars (cursor keys) are filtered, not appended', async () => {
+    const m = _mockAdapter();
+    const edit = makeLineEditor(m.adapter);
+    const p = edit({});
+    m.feed('\x1b[A'); // up arrow — esc, [, A
+    m.feed('hi\r');
+    const r = await p;
+    assert.equal(r.line, '[Ahi'); // ESC and char < 0x20 dropped; the printable [, A stay
+  });
+});
+
+describe('worker + client interactive read', () => {
+  it('end-to-end: client.input pushes a line through to read', async () => {
+    const lo = createLoopback();
+    setupGeasWorker(lo.workerSide, { createShell });
+    const out = [];
+    const client = createGeasClient({
+      worker: lo.mainSide,
+      vfs: null,
+      env: {},
+      cwd: '/',
+      onStdout: (t) => out.push(t),
+    });
+    await client.ready();
+    // Pre-queue the line BEFORE exec — the worker's `input` handler
+    // pushes it into the ahead-buffer, so when `read` runs and asks
+    // for a line, it's already there. Without pre-queuing, the worker
+    // would post want-input first, and the no-onWantInput path on the
+    // client side would immediately respond with EOF.
+    client.input('alice');
+    const r = await client.exec('read v\necho got=$v\n');
+    assert.equal(r.exitCode, 0);
+    assert.equal(out.join(''), 'got=alice\n');
+    await client.terminate();
+  });
+
+  it('end-to-end: onWantInput line editor over a mock adapter', async () => {
+    const lo = createLoopback();
+    setupGeasWorker(lo.workerSide, { createShell });
+    const writes = [];
+    const inputSubs = [];
+    const adapter = {
+      write: (t) => writes.push(t),
+      onInput: (cb) => { inputSubs.push(cb); return () => {}; },
+      caps: () => ({ richBlocks: false }),
+    };
+    const out = [];
+    const client = createGeasClient({
+      worker: lo.mainSide,
+      vfs: null,
+      env: {},
+      cwd: '/',
+      onStdout: (t) => out.push(t),
+      onWantInput: makeLineEditor(adapter),
+    });
+    await client.ready();
+    const execPromise = client.exec('read -p "name? " who\necho hi $who\n');
+    // Let the worker request input, then simulate typing.
+    setTimeout(() => {
+      for (const cb of inputSubs) cb('bob\r');
+    }, 20);
+    const r = await execPromise;
+    assert.equal(r.exitCode, 0);
+    assert.equal(out.join(''), 'hi bob\n');
+    assert.match(writes.join(''), /name\? /); // prompt was written
+    assert.match(writes.join(''), /bob/);     // echo
+    await client.terminate();
+  });
+
+  it('end-to-end: no onWantInput → read returns 1 on empty stdin', async () => {
+    const lo = createLoopback();
+    setupGeasWorker(lo.workerSide, { createShell });
+    const client = createGeasClient({
+      worker: lo.mainSide,
+      vfs: null,
+      env: {},
+      cwd: '/',
+      // no onWantInput
+    });
+    await client.ready();
+    const r = await client.exec('read v\n');
+    assert.equal(r.exitCode, 1);
+    await client.terminate();
+  });
+});
 
 describe('cp', () => {
   it('copies a single file', async () => {

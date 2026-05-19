@@ -1716,13 +1716,15 @@ async function _read(argv, ctx) {
   let raw = false, prompt = '';
   let nChars = -1;        // -n N: read at most N chars (default: full line)
   let delim = '\n';       // -d D: terminate on first char of D (bash uses D[0])
+  let optS = false;       // -s: silent — passed to the interactive readLine hook
+  let optT = null;        // -t SECONDS: timeout, also handled by the hook
   let i = 1;
   while (i < argv.length && argv[i].startsWith('-') && argv[i] !== '--' && argv[i].length > 1) {
     const flag = argv[i];
     if (flag === '-r') { raw = true; i++; continue; }
     if (flag === '-p') { prompt = argv[i + 1] ?? ''; i += 2; continue; }
     if (flag.startsWith('-p') && flag.length > 2) { prompt = flag.slice(2); i++; continue; }
-    if (flag === '-s') { i++; continue; } // silent: no echo — only matters with interactive read plumbing
+    if (flag === '-s') { optS = true; i++; continue; }
     if (flag === '-n') {
       const n = parseInt(argv[i + 1], 10);
       if (!Number.isFinite(n) || n < 0) {
@@ -1734,23 +1736,26 @@ async function _read(argv, ctx) {
       continue;
     }
     if (flag === '-d') {
-      // bash: `-d ''` is valid and means "read until null/EOF". We
-      // model that by treating empty delim as "no delimiter — consume
-      // to EOF" below.
       delim = argv[i + 1] ?? '\n';
       i += 2;
       continue;
     }
-    if (flag === '-t') { i += 2; continue; } // timeout: needs adapter plumbing
+    if (flag === '-t') {
+      const t = parseFloat(argv[i + 1]);
+      if (!Number.isFinite(t) || t < 0) {
+        await ctx.stderr(`read: -t: invalid timeout\n`);
+        return 2;
+      }
+      optT = t;
+      i += 2;
+      continue;
+    }
     if (flag === '--') { i++; break; }
     await ctx.stderr(`read: ${flag}: unknown option\n`);
     return 2;
   }
   const vars = argv.slice(i);
   const varNames = vars.length > 0 ? vars : ['REPLY'];
-  if (prompt) {
-    try { await ctx.stderr(prompt); } catch { /* ignore */ }
-  }
   // `read` is line-oriented and needs to mutate the consumed stdin. If
   // stdin arrived as a stream queue (from a pipeline), drain to text
   // first; subsequent `read` calls in the same command keep slicing
@@ -1759,7 +1764,41 @@ async function _read(argv, ctx) {
     const v = await drainInput(ctx);
     ctx.stdin = typeof v === 'string' ? v : String(v);
   }
-  if (ctx.stdin.length === 0) return 1;
+  // No stdin queued? Fall through to the interactive `readLine` hook
+  // if the host wired one up — that's the path the worker shim uses
+  // to bridge to the adapter's line editor (prompt, echo, backspace).
+  // Without a hook, EOF is the only answer.
+  if (ctx.stdin.length === 0) {
+    if (typeof ctx.readLine !== 'function') {
+      // Show prompt before reporting EOF — matches bash's `read -p P`
+      // shape, which prints the prompt unconditionally.
+      if (prompt) {
+        try { await ctx.stderr(prompt); } catch { /* ignore */ }
+      }
+      return 1;
+    }
+    let res;
+    try {
+      res = await ctx.readLine({
+        prompt,
+        silent: optS,
+        nChars: nChars >= 0 ? nChars : null,
+        delim: delim === '\n' ? null : delim,
+        timeout: optT,
+        raw,
+      });
+    } catch (e) {
+      await ctx.stderr(`read: ${e.message || e}\n`);
+      return 1;
+    }
+    if (!res || res.eof) return 1;
+    if (res.timeout) return 142; // bash convention for -t timeout expiry
+    const lineFromHost = typeof res.line === 'string' ? res.line : '';
+    return await _readBindVars(lineFromHost, ctx, varNames, raw);
+  }
+  if (prompt) {
+    try { await ctx.stderr(prompt); } catch { /* ignore */ }
+  }
   // Consume one record from stdin. Mutate ctx.stdin so subsequent reads
   // in the same command context (e.g. `while read; do ...; done < file`)
   // continue from where we left off.
@@ -1783,6 +1822,13 @@ async function _read(argv, ctx) {
       ctx.stdin = ctx.stdin.slice(idx + 1);
     }
   }
+  return await _readBindVars(line, ctx, varNames, raw);
+}
+
+// Apply the post-acquire processing common to both stdin-slice and
+// interactive-readLine paths: optional backslash de-escape (skipped
+// under -r), then IFS-aware splitting into var bindings.
+async function _readBindVars(line, ctx, varNames, raw) {
   if (!raw) {
     let processed = '';
     for (let k = 0; k < line.length; k++) {
@@ -1797,7 +1843,6 @@ async function _read(argv, ctx) {
   }
   const ifs = ctx.env.get('IFS') ?? ' \t\n';
   if (varNames.length === 1) {
-    // Single var: get the whole line minus IFS-whitespace trimming.
     const trimmed = _readTrimIfsWs(line, ifs);
     ctx.env.set(varNames[0], trimmed);
   } else {

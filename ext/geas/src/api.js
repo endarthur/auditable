@@ -14,7 +14,7 @@ import { parseWordParts } from './word-parts.js';
 import { execute } from './executor.js';
 import { NODE } from './ast-nodes.js';
 import { createHeadlessAdapter } from './adapters/headless.js';
-import { createTermAdapter, adapterHooks } from './adapters/term.js';
+import { createTermAdapter, adapterHooks, makeLineEditor } from './adapters/term.js';
 import { createXtermAdapter } from './adapters/xterm.js';
 import { defaultBuiltins } from './builtins.js';
 import { mkTyped, isTyped } from './typed.js';
@@ -50,6 +50,12 @@ export function createShell(opts = {}) {
     onCommand:  opts.onCommand ?? (async () => 127),
     functions:  new Map(),
     lastStatus: 0,
+    // Interactive read hook. When `read` runs with no stdin available
+    // and this is set, it awaits a line from here instead of returning
+    // EOF. Shape: (opts) => Promise<{ line?, eof?, timeout? }>. opts
+    // carries prompt, silent, nChars, delim, timeout, raw — the read
+    // flags that affect line acquisition.
+    readLine:   typeof opts.readLine === 'function' ? opts.readLine : null,
   };
   return {
     get env()        { return ctx.env; },
@@ -74,7 +80,7 @@ function _mergeBuiltins(extra) {
 
 export {
   tokenize, parse, parseWordParts, execute, NODE,
-  createHeadlessAdapter, createTermAdapter, createXtermAdapter, adapterHooks,
+  createHeadlessAdapter, createTermAdapter, createXtermAdapter, adapterHooks, makeLineEditor,
   defaultBuiltins, mkTyped, isTyped,
   createGeasClient, setupGeasWorker, serveVFS, createVfsClient, createLoopback,
 };

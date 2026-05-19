@@ -1695,6 +1695,8 @@ function _normalize(ctx) {
     // command of a list (POSIX 2.5.3 / Bash "Shell Builtin Commands" set).
     _inCondition: ctx._inCondition ?? false,
     positional: ctx.positional ?? [],
+    // Optional interactive-input hook used by `read` when stdin is empty.
+    readLine:   typeof ctx.readLine === 'function' ? ctx.readLine : null,
     // Internal signal markers — thrown by `break`/`continue`/`return`/`exit`.
     // Exposed on ctx so builtins can throw them too.
     _BREAK:     ctx._BREAK ?? Symbol.for('geas:break'),
@@ -5178,13 +5180,15 @@ async function _read(argv, ctx) {
   let raw = false, prompt = '';
   let nChars = -1;        // -n N: read at most N chars (default: full line)
   let delim = '\n';       // -d D: terminate on first char of D (bash uses D[0])
+  let optS = false;       // -s: silent — passed to the interactive readLine hook
+  let optT = null;        // -t SECONDS: timeout, also handled by the hook
   let i = 1;
   while (i < argv.length && argv[i].startsWith('-') && argv[i] !== '--' && argv[i].length > 1) {
     const flag = argv[i];
     if (flag === '-r') { raw = true; i++; continue; }
     if (flag === '-p') { prompt = argv[i + 1] ?? ''; i += 2; continue; }
     if (flag.startsWith('-p') && flag.length > 2) { prompt = flag.slice(2); i++; continue; }
-    if (flag === '-s') { i++; continue; } // silent: no echo — only matters with interactive read plumbing
+    if (flag === '-s') { optS = true; i++; continue; }
     if (flag === '-n') {
       const n = parseInt(argv[i + 1], 10);
       if (!Number.isFinite(n) || n < 0) {
@@ -5196,23 +5200,26 @@ async function _read(argv, ctx) {
       continue;
     }
     if (flag === '-d') {
-      // bash: `-d ''` is valid and means "read until null/EOF". We
-      // model that by treating empty delim as "no delimiter — consume
-      // to EOF" below.
       delim = argv[i + 1] ?? '\n';
       i += 2;
       continue;
     }
-    if (flag === '-t') { i += 2; continue; } // timeout: needs adapter plumbing
+    if (flag === '-t') {
+      const t = parseFloat(argv[i + 1]);
+      if (!Number.isFinite(t) || t < 0) {
+        await ctx.stderr(`read: -t: invalid timeout\n`);
+        return 2;
+      }
+      optT = t;
+      i += 2;
+      continue;
+    }
     if (flag === '--') { i++; break; }
     await ctx.stderr(`read: ${flag}: unknown option\n`);
     return 2;
   }
   const vars = argv.slice(i);
   const varNames = vars.length > 0 ? vars : ['REPLY'];
-  if (prompt) {
-    try { await ctx.stderr(prompt); } catch { /* ignore */ }
-  }
   // `read` is line-oriented and needs to mutate the consumed stdin. If
   // stdin arrived as a stream queue (from a pipeline), drain to text
   // first; subsequent `read` calls in the same command keep slicing
@@ -5221,7 +5228,41 @@ async function _read(argv, ctx) {
     const v = await drainInput(ctx);
     ctx.stdin = typeof v === 'string' ? v : String(v);
   }
-  if (ctx.stdin.length === 0) return 1;
+  // No stdin queued? Fall through to the interactive `readLine` hook
+  // if the host wired one up — that's the path the worker shim uses
+  // to bridge to the adapter's line editor (prompt, echo, backspace).
+  // Without a hook, EOF is the only answer.
+  if (ctx.stdin.length === 0) {
+    if (typeof ctx.readLine !== 'function') {
+      // Show prompt before reporting EOF — matches bash's `read -p P`
+      // shape, which prints the prompt unconditionally.
+      if (prompt) {
+        try { await ctx.stderr(prompt); } catch { /* ignore */ }
+      }
+      return 1;
+    }
+    let res;
+    try {
+      res = await ctx.readLine({
+        prompt,
+        silent: optS,
+        nChars: nChars >= 0 ? nChars : null,
+        delim: delim === '\n' ? null : delim,
+        timeout: optT,
+        raw,
+      });
+    } catch (e) {
+      await ctx.stderr(`read: ${e.message || e}\n`);
+      return 1;
+    }
+    if (!res || res.eof) return 1;
+    if (res.timeout) return 142; // bash convention for -t timeout expiry
+    const lineFromHost = typeof res.line === 'string' ? res.line : '';
+    return await _readBindVars(lineFromHost, ctx, varNames, raw);
+  }
+  if (prompt) {
+    try { await ctx.stderr(prompt); } catch { /* ignore */ }
+  }
   // Consume one record from stdin. Mutate ctx.stdin so subsequent reads
   // in the same command context (e.g. `while read; do ...; done < file`)
   // continue from where we left off.
@@ -5245,6 +5286,13 @@ async function _read(argv, ctx) {
       ctx.stdin = ctx.stdin.slice(idx + 1);
     }
   }
+  return await _readBindVars(line, ctx, varNames, raw);
+}
+
+// Apply the post-acquire processing common to both stdin-slice and
+// interactive-readLine paths: optional backslash de-escape (skipped
+// under -r), then IFS-aware splitting into var bindings.
+async function _readBindVars(line, ctx, varNames, raw) {
   if (!raw) {
     let processed = '';
     for (let k = 0; k < line.length; k++) {
@@ -5259,7 +5307,6 @@ async function _read(argv, ctx) {
   }
   const ifs = ctx.env.get('IFS') ?? ' \t\n';
   if (varNames.length === 1) {
-    // Single var: get the whole line minus IFS-whitespace trimming.
     const trimmed = _readTrimIfsWs(line, ifs);
     ctx.env.set(varNames[0], trimmed);
   } else {
@@ -5802,9 +5849,9 @@ function createTermAdapter(opts) {
   };
 }
 
-// Wire an adapter to a GeasClient's stdout/stderr/block sinks. Convenience
-// so consumers don't have to spell out the same three callbacks at every
-// createGeasClient call.
+// Wire an adapter to a GeasClient's stdout/stderr/block sinks +
+// interactive-read hook. Convenience so consumers don't have to spell
+// out the same callbacks at every createGeasClient call.
 function adapterHooks(adapter) {
   return {
     onStdout: (text) => adapter.write(text),
@@ -5816,6 +5863,113 @@ function adapterHooks(adapter) {
         adapter.write(block.text || '');
       }
     },
+    onWantInput: makeLineEditor(adapter),
+  };
+}
+
+// Build a line-editor function bound to an adapter. The returned async
+// function matches the `onWantInput` shape: takes line options
+// ({prompt, silent, nChars, delim, timeout, raw}) and resolves to
+// {line} on Enter, {eof: true} on Ctrl+D with empty buffer, or
+// {timeout: true} on -t expiry.
+//
+// Editing controls (the lowest-common-denominator subset):
+//   Enter / \r / \n      submit current buffer
+//   Backspace / 0x7f     delete last char (echo \b \b)
+//   Ctrl+D / 0x04        EOF when buffer empty; otherwise ignored
+//   Ctrl+C / 0x03        cancel (resolves with eof — caller treats as
+//                        "read interrupted")
+//   printable chars      append to buffer + echo (unless silent)
+//
+// Multi-char input chunks (paste, control sequences) are processed
+// char-by-char in arrival order. Escape sequences (cursor keys,
+// function keys) are NOT interpreted — they get filtered as
+// "non-printable but not a command" and dropped. That's good enough
+// for `read VAR`; a full Readline would handle history / cursor /
+// kill-line / etc. and belongs in its own package.
+function makeLineEditor(adapter) {
+  if (!adapter || typeof adapter.onInput !== 'function') {
+    return null;
+  }
+  return function readLine(lineOpts = {}) {
+    const { prompt, silent, nChars, delim, timeout } = lineOpts;
+    return new Promise((resolve) => {
+      let buffer = '';
+      let done = false;
+      let timer = null;
+
+      const finish = (result) => {
+        if (done) return;
+        done = true;
+        if (timer) clearTimeout(timer);
+        try { unsub && unsub(); } catch { /* ignore */ }
+        if (!silent && (result.line != null || result.eof)) {
+          // Echo the line-terminating newline so the cursor moves down
+          // before whatever the program prints next.
+          try { adapter.write('\r\n'); } catch { /* ignore */ }
+        }
+        resolve(result);
+      };
+
+      const onChar = (text) => {
+        if (done || typeof text !== 'string') return;
+        for (const ch of text) {
+          if (done) return;
+          if (ch === '\r' || ch === '\n') {
+            finish({ line: buffer });
+            return;
+          }
+          if (ch === '\x7f' || ch === '\b') {
+            if (buffer.length > 0) {
+              buffer = buffer.slice(0, -1);
+              if (!silent) {
+                try { adapter.write('\b \b'); } catch { /* ignore */ }
+              }
+            }
+            continue;
+          }
+          if (ch === '\x04') {
+            // Ctrl+D: EOF only when buffer is empty (POSIX shape).
+            if (buffer.length === 0) { finish({ eof: true }); return; }
+            continue;
+          }
+          if (ch === '\x03') {
+            // Ctrl+C: cancel. Echo `^C` so the user sees feedback,
+            // then resolve as eof so `read` returns non-zero.
+            try { adapter.write('^C'); } catch { /* ignore */ }
+            finish({ eof: true });
+            return;
+          }
+          // Skip other control chars (escape sequences for arrow keys
+          // and so on — they're not part of a single Enter-terminated
+          // line in v0).
+          if (ch.charCodeAt(0) < 0x20) continue;
+          buffer += ch;
+          if (!silent) {
+            try { adapter.write(ch); } catch { /* ignore */ }
+          }
+          if (nChars != null && buffer.length >= nChars) {
+            finish({ line: buffer });
+            return;
+          }
+          if (delim && ch === delim[0]) {
+            // Match bash: the delim char is NOT included in the result.
+            finish({ line: buffer.slice(0, -1) });
+            return;
+          }
+        }
+      };
+
+      // Subscribe BEFORE writing the prompt so a fast typer can't race
+      // ahead of us.
+      const unsub = adapter.onInput(onChar);
+      if (prompt) {
+        try { adapter.write(prompt); } catch { /* ignore */ }
+      }
+      if (timeout != null && timeout > 0) {
+        timer = setTimeout(() => finish({ timeout: true }), timeout * 1000);
+      }
+    });
   };
 }
 
@@ -6032,6 +6186,25 @@ function setupGeasWorker(target, opts) {
   const vfs = createVfsClient(target);
   let shell = null;
 
+  // Interactive read state. Each pending read has a unique id; the
+  // main side answers with `input-line` / `input-eof` / `input-timeout`
+  // tagged by requestId. Lines that arrive ahead of any read request
+  // queue in `inputBuffer` (so `client.input("hello\n")` from a test
+  // harness or programmatic driver works without an adapter loop).
+  let nextReadId = 0;
+  const pendingReads = new Map();
+  const inputBuffer = [];
+  const readLine = (lineOpts) => {
+    if (inputBuffer.length > 0) {
+      return Promise.resolve({ line: inputBuffer.shift() });
+    }
+    const id = ++nextReadId;
+    return new Promise((resolve, reject) => {
+      pendingReads.set(id, { resolve, reject });
+      target.postMessage({ type: 'want-input', requestId: id, opts: lineOpts || {} });
+    });
+  };
+
   // Forward writes from the shell out to the main side. Typed values get
   // their own message kind so the client can route them to writeBlock.
   const stdoutFn = (v) => {
@@ -6061,6 +6234,7 @@ function setupGeasWorker(target, opts) {
           cwd: msg.cwd || '/',
           stdout: stdoutFn,
           stderr: stderrFn,
+          readLine,
         });
         target.postMessage({ type: 'init-done' });
         return;
@@ -6088,10 +6262,48 @@ function setupGeasWorker(target, opts) {
         }
         return;
       }
-      // input / resize are reserved for when a real interactive shell needs
-      // to feed line-edited input back into a running command. v0 doesn't
-      // have an interactive read builtin, so these are no-ops.
-      case 'input':
+      // Programmatic input: text becomes a "line." If a `read` is
+      // waiting, resolve the oldest one; otherwise queue ahead so the
+      // next `read` finds it.
+      case 'input': {
+        const text = typeof msg.text === 'string' ? msg.text : '';
+        if (pendingReads.size > 0) {
+          const firstId = pendingReads.keys().next().value;
+          const slot = pendingReads.get(firstId);
+          pendingReads.delete(firstId);
+          slot.resolve({ line: text });
+        } else {
+          inputBuffer.push(text);
+        }
+        return;
+      }
+      // Adapter-mediated input. Matches a specific pending read by id
+      // and resolves it. Three reply kinds: a successful line, EOF
+      // (Ctrl+D with empty buffer), or timeout (-t expiry).
+      case 'input-line': {
+        const slot = pendingReads.get(msg.requestId);
+        if (slot) {
+          pendingReads.delete(msg.requestId);
+          slot.resolve({ line: typeof msg.line === 'string' ? msg.line : '' });
+        }
+        return;
+      }
+      case 'input-eof': {
+        const slot = pendingReads.get(msg.requestId);
+        if (slot) {
+          pendingReads.delete(msg.requestId);
+          slot.resolve({ eof: true });
+        }
+        return;
+      }
+      case 'input-timeout': {
+        const slot = pendingReads.get(msg.requestId);
+        if (slot) {
+          pendingReads.delete(msg.requestId);
+          slot.resolve({ timeout: true });
+        }
+        return;
+      }
       case 'resize':
         return;
     }
@@ -6142,6 +6354,14 @@ function createGeasClient(opts) {
     onStdout = (t) => { /* default: drop */ },
     onStderr = (t) => { /* default: drop */ },
     onBlock  = (b) => { /* default: render text fallback */ onStdout(b.text); },
+    // Interactive read handler. Called when the worker requests input
+    // for a `read` builtin. Shape: ({prompt, silent, nChars, delim,
+    // timeout, raw}) => Promise<{line?, eof?, timeout?}>.
+    //
+    // If null, the client posts an EOF reply for every request so
+    // `read` returns 1 — matches "no terminal attached" semantics for
+    // pure-programmatic clients that haven't wired an adapter.
+    onWantInput = null,
   } = opts;
   if (!worker) throw new Error('createGeasClient: opts.worker is required');
 
@@ -6178,6 +6398,38 @@ function createGeasClient(opts) {
         pendingExecs.delete(msg.id);
         if (msg.error) slot.reject(new Error(msg.error));
         else slot.resolve({ exitCode: msg.exitCode });
+        return;
+      }
+      case 'want-input': {
+        // Route to the host's handler (typically a line editor over
+        // the terminal adapter). If no handler is wired, reply EOF so
+        // the worker's `read` falls back to "no input available."
+        const reqId = msg.requestId;
+        const lineOpts = msg.opts || {};
+        (async () => {
+          if (typeof onWantInput !== 'function') {
+            worker.postMessage({ type: 'input-eof', requestId: reqId });
+            return;
+          }
+          try {
+            const res = await onWantInput(lineOpts);
+            if (!res) {
+              worker.postMessage({ type: 'input-eof', requestId: reqId });
+            } else if (res.timeout) {
+              worker.postMessage({ type: 'input-timeout', requestId: reqId });
+            } else if (res.eof) {
+              worker.postMessage({ type: 'input-eof', requestId: reqId });
+            } else {
+              worker.postMessage({
+                type: 'input-line',
+                requestId: reqId,
+                line: typeof res.line === 'string' ? res.line : '',
+              });
+            }
+          } catch {
+            worker.postMessage({ type: 'input-eof', requestId: reqId });
+          }
+        })();
         return;
       }
       // vfs-call is handled by serveVFS's own listener attached above.
@@ -6377,6 +6629,12 @@ function createShell(opts = {}) {
     onCommand:  opts.onCommand ?? (async () => 127),
     functions:  new Map(),
     lastStatus: 0,
+    // Interactive read hook. When `read` runs with no stdin available
+    // and this is set, it awaits a line from here instead of returning
+    // EOF. Shape: (opts) => Promise<{ line?, eof?, timeout? }>. opts
+    // carries prompt, silent, nChars, delim, timeout, raw — the read
+    // flags that affect line acquisition.
+    readLine:   typeof opts.readLine === 'function' ? opts.readLine : null,
   };
   return {
     get env()        { return ctx.env; },
@@ -6399,4 +6657,4 @@ function _mergeBuiltins(extra) {
   return base;
 }
 
-export { tokenize, parse, parseWordParts, execute, defaultBuiltins, createShell, mkTyped, isTyped, NODE, createHeadlessAdapter, createTermAdapter, createXtermAdapter, adapterHooks, createGeasClient, setupGeasWorker, serveVFS, createVfsClient, createLoopback };
+export { tokenize, parse, parseWordParts, execute, defaultBuiltins, createShell, mkTyped, isTyped, NODE, createHeadlessAdapter, createTermAdapter, createXtermAdapter, adapterHooks, makeLineEditor, createGeasClient, setupGeasWorker, serveVFS, createVfsClient, createLoopback };

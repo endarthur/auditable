@@ -61,6 +61,8 @@ function _normalize(ctx) {
     // command of a list (POSIX 2.5.3 / Bash "Shell Builtin Commands" set).
     _inCondition: ctx._inCondition ?? false,
     positional: ctx.positional ?? [],
+    // Optional interactive-input hook used by `read` when stdin is empty.
+    readLine:   typeof ctx.readLine === 'function' ? ctx.readLine : null,
     // Internal signal markers — thrown by `break`/`continue`/`return`/`exit`.
     // Exposed on ctx so builtins can throw them too.
     _BREAK:     ctx._BREAK ?? Symbol.for('geas:break'),

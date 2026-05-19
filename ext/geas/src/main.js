@@ -20,4 +20,4 @@ import './worker/vfs-proxy.js';
 import './worker/worker-shim.js';
 import './worker/client.js';
 import './worker/loopback.js';
-export { tokenize, parse, parseWordParts, execute, defaultBuiltins, createShell, mkTyped, isTyped, NODE, createHeadlessAdapter, createTermAdapter, createXtermAdapter, adapterHooks, createGeasClient, setupGeasWorker, serveVFS, createVfsClient, createLoopback } from './api.js';
+export { tokenize, parse, parseWordParts, execute, defaultBuiltins, createShell, mkTyped, isTyped, NODE, createHeadlessAdapter, createTermAdapter, createXtermAdapter, adapterHooks, makeLineEditor, createGeasClient, setupGeasWorker, serveVFS, createVfsClient, createLoopback } from './api.js';

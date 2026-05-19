@@ -79,9 +79,9 @@ export function createTermAdapter(opts) {
   };
 }
 
-// Wire an adapter to a GeasClient's stdout/stderr/block sinks. Convenience
-// so consumers don't have to spell out the same three callbacks at every
-// createGeasClient call.
+// Wire an adapter to a GeasClient's stdout/stderr/block sinks +
+// interactive-read hook. Convenience so consumers don't have to spell
+// out the same callbacks at every createGeasClient call.
 export function adapterHooks(adapter) {
   return {
     onStdout: (text) => adapter.write(text),
@@ -93,5 +93,112 @@ export function adapterHooks(adapter) {
         adapter.write(block.text || '');
       }
     },
+    onWantInput: makeLineEditor(adapter),
+  };
+}
+
+// Build a line-editor function bound to an adapter. The returned async
+// function matches the `onWantInput` shape: takes line options
+// ({prompt, silent, nChars, delim, timeout, raw}) and resolves to
+// {line} on Enter, {eof: true} on Ctrl+D with empty buffer, or
+// {timeout: true} on -t expiry.
+//
+// Editing controls (the lowest-common-denominator subset):
+//   Enter / \r / \n      submit current buffer
+//   Backspace / 0x7f     delete last char (echo \b \b)
+//   Ctrl+D / 0x04        EOF when buffer empty; otherwise ignored
+//   Ctrl+C / 0x03        cancel (resolves with eof — caller treats as
+//                        "read interrupted")
+//   printable chars      append to buffer + echo (unless silent)
+//
+// Multi-char input chunks (paste, control sequences) are processed
+// char-by-char in arrival order. Escape sequences (cursor keys,
+// function keys) are NOT interpreted — they get filtered as
+// "non-printable but not a command" and dropped. That's good enough
+// for `read VAR`; a full Readline would handle history / cursor /
+// kill-line / etc. and belongs in its own package.
+export function makeLineEditor(adapter) {
+  if (!adapter || typeof adapter.onInput !== 'function') {
+    return null;
+  }
+  return function readLine(lineOpts = {}) {
+    const { prompt, silent, nChars, delim, timeout } = lineOpts;
+    return new Promise((resolve) => {
+      let buffer = '';
+      let done = false;
+      let timer = null;
+
+      const finish = (result) => {
+        if (done) return;
+        done = true;
+        if (timer) clearTimeout(timer);
+        try { unsub && unsub(); } catch { /* ignore */ }
+        if (!silent && (result.line != null || result.eof)) {
+          // Echo the line-terminating newline so the cursor moves down
+          // before whatever the program prints next.
+          try { adapter.write('\r\n'); } catch { /* ignore */ }
+        }
+        resolve(result);
+      };
+
+      const onChar = (text) => {
+        if (done || typeof text !== 'string') return;
+        for (const ch of text) {
+          if (done) return;
+          if (ch === '\r' || ch === '\n') {
+            finish({ line: buffer });
+            return;
+          }
+          if (ch === '\x7f' || ch === '\b') {
+            if (buffer.length > 0) {
+              buffer = buffer.slice(0, -1);
+              if (!silent) {
+                try { adapter.write('\b \b'); } catch { /* ignore */ }
+              }
+            }
+            continue;
+          }
+          if (ch === '\x04') {
+            // Ctrl+D: EOF only when buffer is empty (POSIX shape).
+            if (buffer.length === 0) { finish({ eof: true }); return; }
+            continue;
+          }
+          if (ch === '\x03') {
+            // Ctrl+C: cancel. Echo `^C` so the user sees feedback,
+            // then resolve as eof so `read` returns non-zero.
+            try { adapter.write('^C'); } catch { /* ignore */ }
+            finish({ eof: true });
+            return;
+          }
+          // Skip other control chars (escape sequences for arrow keys
+          // and so on — they're not part of a single Enter-terminated
+          // line in v0).
+          if (ch.charCodeAt(0) < 0x20) continue;
+          buffer += ch;
+          if (!silent) {
+            try { adapter.write(ch); } catch { /* ignore */ }
+          }
+          if (nChars != null && buffer.length >= nChars) {
+            finish({ line: buffer });
+            return;
+          }
+          if (delim && ch === delim[0]) {
+            // Match bash: the delim char is NOT included in the result.
+            finish({ line: buffer.slice(0, -1) });
+            return;
+          }
+        }
+      };
+
+      // Subscribe BEFORE writing the prompt so a fast typer can't race
+      // ahead of us.
+      const unsub = adapter.onInput(onChar);
+      if (prompt) {
+        try { adapter.write(prompt); } catch { /* ignore */ }
+      }
+      if (timeout != null && timeout > 0) {
+        timer = setTimeout(() => finish({ timeout: true }), timeout * 1000);
+      }
+    });
   };
 }

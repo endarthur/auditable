@@ -27,6 +27,14 @@ export function createGeasClient(opts) {
     onStdout = (t) => { /* default: drop */ },
     onStderr = (t) => { /* default: drop */ },
     onBlock  = (b) => { /* default: render text fallback */ onStdout(b.text); },
+    // Interactive read handler. Called when the worker requests input
+    // for a `read` builtin. Shape: ({prompt, silent, nChars, delim,
+    // timeout, raw}) => Promise<{line?, eof?, timeout?}>.
+    //
+    // If null, the client posts an EOF reply for every request so
+    // `read` returns 1 — matches "no terminal attached" semantics for
+    // pure-programmatic clients that haven't wired an adapter.
+    onWantInput = null,
   } = opts;
   if (!worker) throw new Error('createGeasClient: opts.worker is required');
 
@@ -63,6 +71,38 @@ export function createGeasClient(opts) {
         pendingExecs.delete(msg.id);
         if (msg.error) slot.reject(new Error(msg.error));
         else slot.resolve({ exitCode: msg.exitCode });
+        return;
+      }
+      case 'want-input': {
+        // Route to the host's handler (typically a line editor over
+        // the terminal adapter). If no handler is wired, reply EOF so
+        // the worker's `read` falls back to "no input available."
+        const reqId = msg.requestId;
+        const lineOpts = msg.opts || {};
+        (async () => {
+          if (typeof onWantInput !== 'function') {
+            worker.postMessage({ type: 'input-eof', requestId: reqId });
+            return;
+          }
+          try {
+            const res = await onWantInput(lineOpts);
+            if (!res) {
+              worker.postMessage({ type: 'input-eof', requestId: reqId });
+            } else if (res.timeout) {
+              worker.postMessage({ type: 'input-timeout', requestId: reqId });
+            } else if (res.eof) {
+              worker.postMessage({ type: 'input-eof', requestId: reqId });
+            } else {
+              worker.postMessage({
+                type: 'input-line',
+                requestId: reqId,
+                line: typeof res.line === 'string' ? res.line : '',
+              });
+            }
+          } catch {
+            worker.postMessage({ type: 'input-eof', requestId: reqId });
+          }
+        })();
         return;
       }
       // vfs-call is handled by serveVFS's own listener attached above.
