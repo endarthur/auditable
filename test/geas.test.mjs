@@ -3165,6 +3165,112 @@ describe('shift', () => {
   });
 });
 
+// ── stage 10: test / [ multi-clause ──
+
+describe('test / [ — multi-clause expressions', () => {
+  it('-a (and): both true', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('[ -n "x" -a -n "y" ] && echo both\n');
+    assert.equal(output(), 'both\n');
+  });
+
+  it('-a (and): one false', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('[ -n "x" -a -z "y" ] || echo not-both\n');
+    assert.equal(output(), 'not-both\n');
+  });
+
+  it('-o (or): one true', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('[ -z "x" -o -n "y" ] && echo either\n');
+    assert.equal(output(), 'either\n');
+  });
+
+  it('-o (or): both false', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('[ -z "x" -o -z "y" ] || echo neither\n');
+    assert.equal(output(), 'neither\n');
+  });
+
+  it('-a has higher precedence than -o', async () => {
+    const { shell, output } = _testShell();
+    // false -o true -a false → false -o (true && false) → false
+    await shell.exec('[ -z "x" -o -n "y" -a -z "z" ] || echo right\n');
+    assert.equal(output(), 'right\n');
+  });
+
+  it('parens override precedence', async () => {
+    const { shell, output } = _testShell();
+    // (false -o true) -a false → true -a false → false
+    await shell.exec('[ "(" -z "x" -o -n "y" ")" -a -z "z" ] || echo grouped\n');
+    assert.equal(output(), 'grouped\n');
+  });
+
+  it('! negates the whole expression', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('[ ! -z "x" ] && echo not-empty\n');
+    assert.equal(output(), 'not-empty\n');
+  });
+
+  it('! applies to a binary atom', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('[ ! 1 -eq 2 ] && echo true\n');
+    assert.equal(output(), 'true\n');
+  });
+
+  it('combines string + integer comparisons', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('[ "$USER" = "x" -o 1 -lt 5 ] && echo passed\n');
+    assert.equal(output(), 'passed\n');
+  });
+
+  it('file tests compose with -a / -o', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.writeFile('/a', 'A');
+    await vfs.writeFile('/b', 'B');
+    await shell.exec('[ -f /a -a -f /b ] && echo both-files\n');
+    assert.equal(output(), 'both-files\n');
+  });
+
+  it('nested parens', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('[ "(" "(" -n "x" ")" -a -n "y" ")" ] && echo nested\n');
+    assert.equal(output(), 'nested\n');
+  });
+
+  it('multiple ! stack', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('[ ! ! -n "x" ] && echo doubly-negated\n');
+    assert.equal(output(), 'doubly-negated\n');
+  });
+
+  it('missing right operand of binary op reports error', async () => {
+    const { shell, errOutput } = _testShell();
+    const r = await shell.exec('[ 1 -eq ]\n');
+    assert.equal(r.exitCode, 2);
+    assert.match(errOutput(), /missing/);
+  });
+
+  it('unbalanced paren reports error', async () => {
+    const { shell, errOutput } = _testShell();
+    const r = await shell.exec('[ "(" -n "x" ]\n');
+    assert.equal(r.exitCode, 2);
+    assert.match(errOutput(), /missing/);
+  });
+
+  it('1-arg fallback still works (non-empty)', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('[ "hello" ] && echo non-empty\n');
+    assert.equal(output(), 'non-empty\n');
+  });
+
+  it('1-arg fallback: empty string is false', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('[ "" ] || echo empty\n');
+    assert.equal(output(), 'empty\n');
+  });
+});
+
 describe('xargs -0', () => {
   it('reads NUL-separated tokens', async () => {
     const { shell, output } = _testShell();

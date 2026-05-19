@@ -3382,31 +3382,119 @@ async function _testBracket(argv, ctx) {
   return await _test(argv.slice(0, -1), ctx);
 }
 
+// POSIX test grammar (precedence low → high):
+//
+//   expr      := or-expr
+//   or-expr   := and-expr ( '-o' and-expr )*
+//   and-expr  := not-expr ( '-a' not-expr )*
+//   not-expr  := '!' not-expr | atom
+//   atom      := '(' expr ')' | unary-atom | binary-atom | nonempty-atom
+//
+// Recursive descent. The compiled predicate is a `(ctx) → Promise<bool>`
+// that the outer _test runs once, then translates bool → exit code
+// (0 = true, 1 = false, 2 = parse error).
+const _TEST_UNARY_OPS = new Set([
+  '-z', '-n', '-e', '-f', '-d', '-s', '-r', '-w', '-x',
+]);
+const _TEST_BINARY_OPS = new Set([
+  '=', '!=', '-eq', '-ne', '-lt', '-le', '-gt', '-ge',
+]);
+
 async function _test(argv, ctx) {
   const args = argv.slice(1);
-  // Zero-arg test → false
   if (args.length === 0) return 1;
-  // One-arg test: true iff non-empty
+  // 1-arg fast path: true iff non-empty. Skipping the parser here lets
+  // `[ ( ]` or `[ -a ]` etc. work as plain non-empty tests (POSIX-friendly
+  // — single-arg test never invokes operator parsing).
   if (args.length === 1) return args[0].length > 0 ? 0 : 1;
-
-  // Two-arg test: unary operator
-  if (args.length === 2) {
-    return await _testUnary(args[0], args[1], ctx);
+  let predicate;
+  try {
+    predicate = _testCompile(args);
+  } catch (e) {
+    await ctx.stderr(`test: ${e.message}\n`);
+    return 2;
   }
-
-  // Three-arg test: binary
-  if (args.length === 3) {
-    return await _testBinary(args[0], args[1], args[2], ctx);
+  try {
+    const r = await predicate(ctx);
+    return r ? 0 : 1;
+  } catch (e) {
+    await ctx.stderr(`test: ${e.message || e}\n`);
+    return 2;
   }
+}
 
-  // Four-arg: `! <three-arg>` or grouping not handled in v0.
-  if (args.length === 4 && args[0] === '!') {
-    const r = await _testBinary(args[1], args[2], args[3], ctx);
-    return r === 0 ? 1 : 0;
+function _testCompile(tokens) {
+  const state = { tokens, i: 0 };
+  const expr = _testParseOr(state);
+  if (state.i !== tokens.length) {
+    throw new Error(`unexpected token "${tokens[state.i]}"`);
   }
+  return expr;
+}
 
-  await ctx.stderr(`test: too many arguments (v0 limit)\n`);
-  return 2;
+function _testParseOr(state) {
+  let left = _testParseAnd(state);
+  while (state.tokens[state.i] === '-o') {
+    state.i++;
+    const right = _testParseAnd(state);
+    const l = left, r = right;
+    left = async (ctx) => (await l(ctx)) || (await r(ctx));
+  }
+  return left;
+}
+
+function _testParseAnd(state) {
+  let left = _testParseNot(state);
+  while (state.tokens[state.i] === '-a') {
+    state.i++;
+    const right = _testParseNot(state);
+    const l = left, r = right;
+    left = async (ctx) => (await l(ctx)) && (await r(ctx));
+  }
+  return left;
+}
+
+function _testParseNot(state) {
+  if (state.tokens[state.i] === '!') {
+    state.i++;
+    const inner = _testParseNot(state);
+    return async (ctx) => !(await inner(ctx));
+  }
+  return _testParseAtom(state);
+}
+
+function _testParseAtom(state) {
+  const t = state.tokens[state.i];
+  if (t === undefined) throw new Error('missing operand');
+  if (t === '(') {
+    state.i++;
+    const inner = _testParseOr(state);
+    if (state.tokens[state.i] !== ')') throw new Error("missing ')'");
+    state.i++;
+    return inner;
+  }
+  // 3-arg binary atom: lookahead at i+1.
+  const next = state.tokens[state.i + 1];
+  if (next !== undefined && _TEST_BINARY_OPS.has(next)) {
+    const a = state.tokens[state.i];
+    const op = state.tokens[state.i + 1];
+    const b = state.tokens[state.i + 2];
+    if (b === undefined) throw new Error(`${op}: missing right operand`);
+    state.i += 3;
+    return async (ctx) => (await _testBinary(a, op, b, ctx)) === 0;
+  }
+  // 2-arg unary atom.
+  if (_TEST_UNARY_OPS.has(t)) {
+    const op = state.tokens[state.i];
+    const val = state.tokens[state.i + 1];
+    if (val === undefined) throw new Error(`${op}: missing argument`);
+    state.i += 2;
+    return async (ctx) => (await _testUnary(op, val, ctx)) === 0;
+  }
+  // 1-arg atom: true iff non-empty. Consumes one token regardless of
+  // its content (so a bare `X` or `Y` inside a larger expr works).
+  state.i++;
+  return async () => t.length > 0;
 }
 
 async function _testUnary(op, val, ctx) {
