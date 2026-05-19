@@ -4567,14 +4567,34 @@ function _printfBackslashArg(s) {
 // worker-side interactive read protocol).
 async function _read(argv, ctx) {
   let raw = false, prompt = '';
+  let nChars = -1;        // -n N: read at most N chars (default: full line)
+  let delim = '\n';       // -d D: terminate on first char of D (bash uses D[0])
   let i = 1;
   while (i < argv.length && argv[i].startsWith('-') && argv[i] !== '--' && argv[i].length > 1) {
     const flag = argv[i];
     if (flag === '-r') { raw = true; i++; continue; }
     if (flag === '-p') { prompt = argv[i + 1] ?? ''; i += 2; continue; }
     if (flag.startsWith('-p') && flag.length > 2) { prompt = flag.slice(2); i++; continue; }
-    if (flag === '-s') { i++; continue; }
-    if (flag === '-n' || flag === '-d' || flag === '-t') { i += 2; continue; }
+    if (flag === '-s') { i++; continue; } // silent: no echo — only matters with interactive read plumbing
+    if (flag === '-n') {
+      const n = parseInt(argv[i + 1], 10);
+      if (!Number.isFinite(n) || n < 0) {
+        await ctx.stderr(`read: -n: invalid count\n`);
+        return 2;
+      }
+      nChars = n;
+      i += 2;
+      continue;
+    }
+    if (flag === '-d') {
+      // bash: `-d ''` is valid and means "read until null/EOF". We
+      // model that by treating empty delim as "no delimiter — consume
+      // to EOF" below.
+      delim = argv[i + 1] ?? '\n';
+      i += 2;
+      continue;
+    }
+    if (flag === '-t') { i += 2; continue; } // timeout: needs adapter plumbing
     if (flag === '--') { i++; break; }
     await ctx.stderr(`read: ${flag}: unknown option\n`);
     return 2;
@@ -4585,17 +4605,28 @@ async function _read(argv, ctx) {
     try { await ctx.stderr(prompt); } catch { /* ignore */ }
   }
   if (typeof ctx.stdin !== 'string' || ctx.stdin.length === 0) return 1;
-  // Consume one line from stdin. Mutate ctx.stdin so subsequent reads in
-  // the same command context (e.g. `while read; do ...; done < file`)
+  // Consume one record from stdin. Mutate ctx.stdin so subsequent reads
+  // in the same command context (e.g. `while read; do ...; done < file`)
   // continue from where we left off.
-  const nlIdx = ctx.stdin.indexOf('\n');
   let line;
-  if (nlIdx < 0) {
-    line = ctx.stdin;
-    ctx.stdin = '';
+  if (nChars >= 0) {
+    // -n: read up to N characters, ignoring delim. nChars=0 reads
+    // nothing but still returns 0 (consistent with bash).
+    const take = Math.min(nChars, ctx.stdin.length);
+    line = ctx.stdin.slice(0, take);
+    ctx.stdin = ctx.stdin.slice(take);
   } else {
-    line = ctx.stdin.slice(0, nlIdx);
-    ctx.stdin = ctx.stdin.slice(nlIdx + 1);
+    // -d (default '\n'): terminate on first occurrence of delim[0].
+    // Empty delim ('') means read everything until EOF.
+    const ch = delim.length > 0 ? delim[0] : '';
+    const idx = ch === '' ? -1 : ctx.stdin.indexOf(ch);
+    if (idx < 0) {
+      line = ctx.stdin;
+      ctx.stdin = '';
+    } else {
+      line = ctx.stdin.slice(0, idx);
+      ctx.stdin = ctx.stdin.slice(idx + 1);
+    }
   }
   if (!raw) {
     let processed = '';

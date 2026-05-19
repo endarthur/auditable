@@ -2423,6 +2423,43 @@ describe('read', () => {
     assert.equal(r.exitCode, 1);
   });
 
+  it('-n N reads exactly N characters', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec("read -n 3 part <<EOF\nabcdefg\nEOF\necho got=$part\n");
+    assert.equal(output(), 'got=abc\n');
+  });
+
+  it('-n N reads across newlines (no newline terminator like default read)', async () => {
+    const { shell, output } = _testShell();
+    // Heredoc body is "hi\nthere\n" (9 chars). -n 10 reads all of it.
+    await shell.exec('read -n 10 part <<EOF\nhi\nthere\nEOF\necho "got=$part"\n');
+    assert.equal(output(), 'got=hi\nthere\n');
+  });
+
+  it('-n N truncates when N is smaller than input', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('read -n 4 part <<EOF\nabcdefgh\nEOF\necho got=$part\n');
+    assert.equal(output(), 'got=abcd\n');
+  });
+
+  it('-n 0 reads nothing but still succeeds', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec("read -n 0 part <<EOF\nhello\nEOF\necho got=[$part]\n");
+    assert.equal(output(), 'got=[]\n');
+  });
+
+  it('-d uses an alternate terminator', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec("read -d ',' part <<EOF\nfirst,second\nEOF\necho got=$part\n");
+    assert.equal(output(), 'got=first\n');
+  });
+
+  it("-d '' reads everything to EOF", async () => {
+    const { shell, output } = _testShell();
+    await shell.exec("read -d '' all <<EOF\nline1\nline2\nline3\nEOF\necho \"got=[$all]\"\n");
+    assert.match(output(), /got=\[line1\nline2\nline3\n?\]/);
+  });
+
   it('-r skips backslash processing (vs default which would consume one level)', async () => {
     // Use a *quoted* heredoc delimiter so the body reaches `read` raw —
     // otherwise heredoc text expansion would eat backslashes first.
