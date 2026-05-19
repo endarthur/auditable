@@ -14,6 +14,8 @@ import { parseWordParts } from './word-parts.js';
 import { execute } from './executor.js';
 import { NODE } from './ast-nodes.js';
 import { createHeadlessAdapter } from './adapters/headless.js';
+import { createTermAdapter, adapterHooks } from './adapters/term.js';
+import { createXtermAdapter } from './adapters/xterm.js';
 import { defaultBuiltins } from './builtins.js';
 import { mkTyped, isTyped } from './typed.js';
 import { createGeasClient } from './worker/client.js';
@@ -72,6 +74,7 @@ function _mergeBuiltins(extra) {
 
 export {
   tokenize, parse, parseWordParts, execute, NODE,
-  createHeadlessAdapter, defaultBuiltins, mkTyped, isTyped,
+  createHeadlessAdapter, createTermAdapter, createXtermAdapter, adapterHooks,
+  defaultBuiltins, mkTyped, isTyped,
   createGeasClient, setupGeasWorker, serveVFS, createVfsClient, createLoopback,
 };

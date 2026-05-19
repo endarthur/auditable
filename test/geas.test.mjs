@@ -15,6 +15,8 @@ import { createGeasClient } from '../ext/geas/src/worker/client.js';
 import { setupGeasWorker } from '../ext/geas/src/worker/worker-shim.js';
 import { createLoopback } from '../ext/geas/src/worker/loopback.js';
 import { serveVFS, createVfsClient } from '../ext/geas/src/worker/vfs-proxy.js';
+import { createTermAdapter, adapterHooks } from '../ext/geas/src/adapters/term.js';
+import { createXtermAdapter } from '../ext/geas/src/adapters/xterm.js';
 import { VFS, MemoryBackend } from '../ext/vfs/index.js';
 
 // Build a fresh VFS + shell pair for tests that exercise filesystem builtins.
@@ -1506,6 +1508,193 @@ describe('builtins — cut / tee / xargs', () => {
     const t = _testShell();
     await t.shell.exec('echo a b c | xargs -n 1 echo');
     assert.equal(t.output(), 'a\nb\nc\n');
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+// TERMINAL ADAPTERS (with stub underlying terminals)
+// ══════════════════════════════════════════════════════════
+//
+// Tests use minimal stubs that quack like @gcu/term and xterm.js — just
+// the methods the adapter calls. Avoids pulling DOM / xterm.js into node
+// tests while still exercising the adapter contract.
+
+function _stubTerm(cols = 80, rows = 24) {
+  // Minimal @gcu/term-shaped stub: write captures, onText subscribes,
+  // unsubscribe via the returned function.
+  const buf = [];
+  let subs = new Set();
+  return {
+    cols, rows,
+    write(text) { buf.push(text); },
+    onText(cb) { subs.add(cb); return () => subs.delete(cb); },
+    // helpers for the test
+    _output() { return buf.join(''); },
+    _sendInput(text) { for (const cb of subs) cb(text); },
+    _subCount() { return subs.size; },
+  };
+}
+
+function _stubXterm(cols = 80, rows = 24) {
+  // Minimal xterm.js-shaped stub: onData returns a disposable, clear() works.
+  const buf = [];
+  let dataSubs = new Set();
+  let resizeSubs = new Set();
+  return {
+    cols, rows,
+    write(text) { buf.push(text); },
+    onData(cb) {
+      dataSubs.add(cb);
+      return { dispose: () => dataSubs.delete(cb) };
+    },
+    onResize(cb) {
+      resizeSubs.add(cb);
+      return { dispose: () => resizeSubs.delete(cb) };
+    },
+    clear() { buf.length = 0; },
+    _output() { return buf.join(''); },
+    _sendInput(text) { for (const cb of dataSubs) cb(text); },
+    _sendResize(cols, rows) { for (const cb of resizeSubs) cb({ cols, rows }); },
+  };
+}
+
+describe('@gcu/term adapter', () => {
+  it('write forwards to terminal.write', () => {
+    const t = _stubTerm();
+    const a = createTermAdapter({ terminal: t });
+    a.write('hello');
+    assert.equal(t._output(), 'hello');
+  });
+
+  it('writeBlock falls back to block.text', () => {
+    const t = _stubTerm();
+    const a = createTermAdapter({ terminal: t });
+    a.writeBlock({ kind: 'table', value: {}, text: 'rendered table\n' });
+    assert.equal(t._output(), 'rendered table\n');
+  });
+
+  it('onInput subscribes via terminal.onText and unsub works', () => {
+    const t = _stubTerm();
+    const a = createTermAdapter({ terminal: t });
+    const got = [];
+    const unsub = a.onInput((s) => got.push(s));
+    t._sendInput('x');
+    t._sendInput('y');
+    unsub();
+    t._sendInput('z');
+    assert.deepEqual(got, ['x', 'y']);
+    assert.equal(t._subCount(), 0);
+  });
+
+  it('size + onResize work', () => {
+    const t = _stubTerm(120, 40);
+    const a = createTermAdapter({ terminal: t });
+    assert.deepEqual(a.size(), { cols: 120, rows: 40 });
+    const sizes = [];
+    a.onResize((s) => sizes.push(s));
+    a.notifyResize(100, 30);
+    assert.deepEqual(sizes, [{ cols: 100, rows: 30 }]);
+  });
+
+  it('clear writes the ANSI clear sequence', () => {
+    const t = _stubTerm();
+    const a = createTermAdapter({ terminal: t });
+    a.clear();
+    assert.equal(t._output(), '\x1b[2J\x1b[H');
+  });
+
+  it('caps reports richBlocks=false in v0', () => {
+    const a = createTermAdapter({ terminal: _stubTerm() });
+    assert.equal(a.caps().richBlocks, false);
+  });
+
+  it('rejects missing terminal', () => {
+    assert.throws(() => createTermAdapter({}));
+  });
+});
+
+describe('xterm.js adapter', () => {
+  it('write forwards to terminal.write', () => {
+    const t = _stubXterm();
+    const a = createXtermAdapter({ terminal: t });
+    a.write('hello');
+    assert.equal(t._output(), 'hello');
+  });
+
+  it('writeBlock falls back to block.text', () => {
+    const t = _stubXterm();
+    const a = createXtermAdapter({ terminal: t });
+    a.writeBlock({ kind: 'table', text: 'csv,here\n' });
+    assert.equal(t._output(), 'csv,here\n');
+  });
+
+  it('onInput uses disposable; unsub disposes', () => {
+    const t = _stubXterm();
+    const a = createXtermAdapter({ terminal: t });
+    const got = [];
+    const unsub = a.onInput((s) => got.push(s));
+    t._sendInput('a');
+    unsub();
+    t._sendInput('b');
+    assert.deepEqual(got, ['a']);
+  });
+
+  it('onResize bridges to {cols, rows} payload', () => {
+    const t = _stubXterm();
+    const a = createXtermAdapter({ terminal: t });
+    const sizes = [];
+    a.onResize((s) => sizes.push(s));
+    t._sendResize(100, 30);
+    assert.deepEqual(sizes, [{ cols: 100, rows: 30 }]);
+  });
+
+  it('clear delegates to terminal.clear', () => {
+    const t = _stubXterm();
+    t.write('something');
+    const a = createXtermAdapter({ terminal: t });
+    a.clear();
+    assert.equal(t._output(), '');
+  });
+
+  it('caps reports richBlocks=false', () => {
+    assert.equal(createXtermAdapter({ terminal: _stubXterm() }).caps().richBlocks, false);
+  });
+});
+
+describe('adapter hooks (GeasClient wiring helper)', () => {
+  it('wires onStdout to adapter.write', async () => {
+    const t = _stubTerm();
+    const a = createTermAdapter({ terminal: t });
+    const hooks = adapterHooks(a);
+    hooks.onStdout('chunk1');
+    hooks.onStdout('chunk2');
+    assert.equal(t._output(), 'chunk1chunk2');
+  });
+
+  it('onBlock routes to adapter.write when richBlocks=false', () => {
+    const t = _stubTerm();
+    const a = createTermAdapter({ terminal: t });
+    const hooks = adapterHooks(a);
+    hooks.onBlock({ kind: 'table', text: 'fallback\n' });
+    assert.equal(t._output(), 'fallback\n');
+  });
+
+  it('full integration: GeasClient + term adapter end-to-end', async () => {
+    // Worker-hosted shell, output piped through the adapter into a stub terminal.
+    const t = _stubTerm();
+    const a = createTermAdapter({ terminal: t });
+    const vfs = new VFS();
+    vfs._mounts.set('/', new MemoryBackend());
+    const { mainSide, workerSide } = createLoopback();
+    setupGeasWorker(workerSide, { createShell });
+    const client = createGeasClient({
+      worker: mainSide, vfs, cwd: '/',
+      ...adapterHooks(a),
+    });
+    await client.ready();
+    await client.exec('echo hello');
+    assert.equal(t._output(), 'hello\n');
+    await client.terminate();
   });
 });
 
