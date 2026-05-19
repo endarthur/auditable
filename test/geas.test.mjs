@@ -2693,6 +2693,138 @@ describe('plot', () => {
   });
 });
 
+// ── stage 14: cp / mv / stat ──
+
+describe('cp', () => {
+  it('copies a single file', async () => {
+    const { shell, vfs } = _testShell();
+    await vfs.writeFile('/a.txt', 'hello');
+    const r = await shell.exec('cp /a.txt /b.txt\n');
+    assert.equal(r.exitCode, 0);
+    assert.equal(await vfs.readFile('/b.txt', 'text'), 'hello');
+    // Original survives.
+    assert.equal(await vfs.readFile('/a.txt', 'text'), 'hello');
+  });
+
+  it('overwrites the destination file', async () => {
+    const { shell, vfs } = _testShell();
+    await vfs.writeFile('/a.txt', 'new');
+    await vfs.writeFile('/b.txt', 'old');
+    await shell.exec('cp /a.txt /b.txt\n');
+    assert.equal(await vfs.readFile('/b.txt', 'text'), 'new');
+  });
+
+  it('copies multiple sources into a directory', async () => {
+    const { shell, vfs } = _testShell();
+    await vfs.mkdir('/dst', { recursive: true });
+    await vfs.writeFile('/a.txt', 'A');
+    await vfs.writeFile('/b.txt', 'B');
+    const r = await shell.exec('cp /a.txt /b.txt /dst\n');
+    assert.equal(r.exitCode, 0);
+    assert.equal(await vfs.readFile('/dst/a.txt', 'text'), 'A');
+    assert.equal(await vfs.readFile('/dst/b.txt', 'text'), 'B');
+  });
+
+  it('refuses to copy a directory without -r', async () => {
+    const { shell, vfs, errOutput } = _testShell();
+    await vfs.mkdir('/src', { recursive: true });
+    await vfs.writeFile('/src/x', '1');
+    const r = await shell.exec('cp /src /dst\n');
+    assert.notEqual(r.exitCode, 0);
+    assert.match(errOutput(), /directory/);
+  });
+
+  it('-r copies a tree', async () => {
+    const { shell, vfs } = _testShell();
+    await vfs.mkdir('/src/sub', { recursive: true });
+    await vfs.writeFile('/src/a', 'A');
+    await vfs.writeFile('/src/sub/b', 'B');
+    const r = await shell.exec('cp -r /src /dst\n');
+    assert.equal(r.exitCode, 0);
+    assert.equal(await vfs.readFile('/dst/a', 'text'), 'A');
+    assert.equal(await vfs.readFile('/dst/sub/b', 'text'), 'B');
+  });
+
+  it('errors with missing operands', async () => {
+    const { shell, errOutput } = _testShell();
+    const r = await shell.exec('cp /one\n');
+    assert.notEqual(r.exitCode, 0);
+    assert.match(errOutput(), /missing/);
+  });
+});
+
+describe('mv', () => {
+  it('renames a file', async () => {
+    const { shell, vfs } = _testShell();
+    await vfs.writeFile('/old.txt', 'data');
+    const r = await shell.exec('mv /old.txt /new.txt\n');
+    assert.equal(r.exitCode, 0);
+    assert.equal(await vfs.readFile('/new.txt', 'text'), 'data');
+    // Source is gone.
+    let gone = false;
+    try { await vfs.stat('/old.txt'); } catch { gone = true; }
+    assert.ok(gone, 'old.txt should be gone');
+  });
+
+  it('moves multiple files into a directory', async () => {
+    const { shell, vfs } = _testShell();
+    await vfs.mkdir('/dst', { recursive: true });
+    await vfs.writeFile('/a', 'A');
+    await vfs.writeFile('/b', 'B');
+    const r = await shell.exec('mv /a /b /dst\n');
+    assert.equal(r.exitCode, 0);
+    assert.equal(await vfs.readFile('/dst/a', 'text'), 'A');
+    assert.equal(await vfs.readFile('/dst/b', 'text'), 'B');
+  });
+
+  it('moves a directory', async () => {
+    const { shell, vfs } = _testShell();
+    await vfs.mkdir('/src/sub', { recursive: true });
+    await vfs.writeFile('/src/x', 'X');
+    const r = await shell.exec('mv /src /dst\n');
+    assert.equal(r.exitCode, 0);
+    assert.equal(await vfs.readFile('/dst/x', 'text'), 'X');
+  });
+});
+
+describe('stat', () => {
+  it('prints type + size for a file', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.writeFile('/f.txt', 'hello');
+    const r = await shell.exec('stat /f.txt\n');
+    assert.equal(r.exitCode, 0);
+    assert.match(output(), /file\s+\d+\s+\/f\.txt/);
+  });
+
+  it('prints directory type', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.mkdir('/d', { recursive: true });
+    await shell.exec('stat /d\n');
+    assert.match(output(), /directory/);
+  });
+
+  it('-c format extracts a single field', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.writeFile('/f.txt', 'hello');
+    await shell.exec('stat -c %s /f.txt\n');
+    assert.match(output(), /^5\n$/);
+  });
+
+  it('-c %F prints the type', async () => {
+    const { shell, vfs, output } = _testShell();
+    await vfs.writeFile('/f.txt', 'x');
+    await shell.exec('stat -c %F /f.txt\n');
+    assert.match(output(), /regular file/);
+  });
+
+  it('errors on missing path', async () => {
+    const { shell, errOutput } = _testShell();
+    const r = await shell.exec('stat /nope\n');
+    assert.notEqual(r.exitCode, 0);
+    assert.match(errOutput(), /stat: \/nope/);
+  });
+});
+
 // ── find ──
 
 describe('find', () => {

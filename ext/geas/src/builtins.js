@@ -47,6 +47,9 @@ export function defaultBuiltins() {
     mkdir:    _mkdir,
     rm:       _rm,
     touch:    _touch,
+    cp:       _cp,
+    mv:       _mv,
+    stat:     _stat,
     find:     _find,
     // Text wranglers
     head:     _head,
@@ -594,6 +597,196 @@ async function _rmRecursive(vfs, dir) {
     else await vfs.unlink(child);
   }
   await vfs.rmdir(dir);
+}
+
+// ── cp / mv / stat — thin wrappers over the VFS surface ──
+//
+// cp [-r] SRC... DST
+//   Single SRC, DST is file → copy SRC's bytes to DST (overwrite ok).
+//   Multiple SRC or DST is a directory → copy each SRC into DST/<basename>.
+//   -r recurses through directory sources, recreating the tree.
+//
+// mv SRC... DST
+//   Same destination rules as cp. Uses vfs.rename when source and dest
+//   resolve to the same backend; falls back to copy-then-unlink across
+//   backends (the VFS layer typically handles this transparently when
+//   you call rename, so we lean on that and fall back only on error).
+//
+// stat PATH...
+//   Prints type, size, and path. Default format is one line per file.
+async function _cp(argv, ctx) {
+  if (!ctx.vfs) { await ctx.stderr('cp: no VFS configured\n'); return 1; }
+  const { opts, positionals } = _bParseArgs(argv, {
+    r: { short: 'r' }, R: { short: 'R' }, f: { short: 'f' },
+  });
+  const recursive = opts.r || opts.R;
+  if (positionals.length < 2) {
+    await ctx.stderr('cp: missing operand (need SRC... DST)\n');
+    return 1;
+  }
+  const dst = positionals[positionals.length - 1];
+  const srcs = positionals.slice(0, -1);
+  const dstPath = _bResolvePath(dst, ctx);
+  let dstIsDir = false;
+  try {
+    const st = await ctx.vfs.stat(dstPath);
+    dstIsDir = st.type === 'directory';
+  } catch { /* dst doesn't exist; treat as a file target if single src */ }
+  if (srcs.length > 1 && !dstIsDir) {
+    await ctx.stderr(`cp: ${dst}: not a directory (need multi-source destination)\n`);
+    return 1;
+  }
+  let anyError = 0;
+  for (const src of srcs) {
+    const srcPath = _bResolvePath(src, ctx);
+    const target = dstIsDir
+      ? _bJoinPath(dstPath, _bBasename(srcPath))
+      : dstPath;
+    try {
+      await _cpEntry(ctx, srcPath, target, recursive);
+    } catch (e) {
+      await ctx.stderr(`cp: ${src}: ${e.message || 'cannot copy'}\n`);
+      anyError = 1;
+    }
+  }
+  return anyError;
+}
+
+async function _cpEntry(ctx, srcPath, dstPath, recursive) {
+  const st = await ctx.vfs.stat(srcPath);
+  if (st.type === 'directory') {
+    if (!recursive) throw new Error('is a directory (use -r)');
+    await ctx.vfs.mkdir(dstPath, { recursive: true });
+    const entries = await ctx.vfs.readdir(srcPath);
+    for (const e of entries) {
+      const name = typeof e === 'string' ? e : e.name;
+      await _cpEntry(ctx, _bJoinPath(srcPath, name), _bJoinPath(dstPath, name), recursive);
+    }
+    return;
+  }
+  // File: copy bytes. Try binary first, fall back to text if the
+  // backend doesn't support a raw binary read (some don't).
+  let content;
+  try {
+    content = await ctx.vfs.readFile(srcPath);
+  } catch {
+    content = await ctx.vfs.readFile(srcPath, 'text');
+  }
+  await ctx.vfs.writeFile(dstPath, content);
+}
+
+async function _mv(argv, ctx) {
+  if (!ctx.vfs) { await ctx.stderr('mv: no VFS configured\n'); return 1; }
+  const { positionals } = _bParseArgs(argv, {
+    f: { short: 'f' }, n: { short: 'n' },
+  });
+  if (positionals.length < 2) {
+    await ctx.stderr('mv: missing operand (need SRC... DST)\n');
+    return 1;
+  }
+  const dst = positionals[positionals.length - 1];
+  const srcs = positionals.slice(0, -1);
+  const dstPath = _bResolvePath(dst, ctx);
+  let dstIsDir = false;
+  try {
+    const st = await ctx.vfs.stat(dstPath);
+    dstIsDir = st.type === 'directory';
+  } catch { /* dst doesn't exist */ }
+  if (srcs.length > 1 && !dstIsDir) {
+    await ctx.stderr(`mv: ${dst}: not a directory (need multi-source destination)\n`);
+    return 1;
+  }
+  let anyError = 0;
+  for (const src of srcs) {
+    const srcPath = _bResolvePath(src, ctx);
+    const target = dstIsDir
+      ? _bJoinPath(dstPath, _bBasename(srcPath))
+      : dstPath;
+    try {
+      // VFS.rename handles same-backend moves natively and may also
+      // handle cross-backend (some implementations do copy+unlink
+      // internally). If it fails, fall back to recursive copy + remove.
+      try {
+        await ctx.vfs.rename(srcPath, target);
+        continue;
+      } catch { /* fall through to copy+unlink */ }
+      await _cpEntry(ctx, srcPath, target, /*recursive*/ true);
+      // Unlink source (recursive for directories).
+      const st = await ctx.vfs.stat(srcPath);
+      if (st.type === 'directory') await _rmRecursive(ctx.vfs, srcPath);
+      else await ctx.vfs.unlink(srcPath);
+    } catch (e) {
+      await ctx.stderr(`mv: ${src}: ${e.message || 'cannot move'}\n`);
+      anyError = 1;
+    }
+  }
+  return anyError;
+}
+
+async function _stat(argv, ctx) {
+  if (!ctx.vfs) { await ctx.stderr('stat: no VFS configured\n'); return 1; }
+  const { opts, positionals } = _bParseArgs(argv, {
+    c: { short: 'c', arg: true }, // -c FORMAT: a stripped-down strftime-like spec
+  });
+  if (positionals.length === 0) {
+    await ctx.stderr('stat: missing operand\n');
+    return 1;
+  }
+  let anyError = 0;
+  for (const p of positionals) {
+    const path = _bResolvePath(p, ctx);
+    try {
+      const st = await ctx.vfs.stat(path);
+      const line = opts.c
+        ? _statFormat(opts.c, st, p)
+        : _statDefault(st, p);
+      await ctx.stdout(line + '\n');
+    } catch (e) {
+      await ctx.stderr(`stat: ${p}: ${e.message || 'cannot stat'}\n`);
+      anyError = 1;
+    }
+  }
+  return anyError;
+}
+
+function _statDefault(st, displayPath) {
+  // GNU stat prints a multi-line block; we use a single-line shape
+  // that's friendlier to shell pipelines (still parseable). Format:
+  //   "<type> <size> <path>"
+  // type is one of 'file', 'directory', 'link' (when VFS exposes it).
+  const type = st.type || 'unknown';
+  const size = st.size ?? 0;
+  return `${type.padEnd(9)} ${String(size).padStart(10)}  ${displayPath}`;
+}
+
+function _statFormat(fmt, st, displayPath) {
+  // POSIX-ish format codes — a subset of GNU's `stat -c`:
+  //   %n  filename
+  //   %s  size in bytes
+  //   %F  type ("regular file", "directory", ...)
+  //   %y  mtime (when VFS exposes it; falls back to '-')
+  //   %%  literal %
+  return fmt.replace(/%./g, (m) => {
+    switch (m) {
+      case '%n': return displayPath;
+      case '%s': return String(st.size ?? 0);
+      case '%F': return st.type === 'directory' ? 'directory'
+                       : st.type === 'file'      ? 'regular file'
+                       : (st.type || 'unknown');
+      case '%y': return st.mtime ?? '-';
+      case '%%': return '%';
+      default:   return m;
+    }
+  });
+}
+
+function _bJoinPath(a, b) {
+  return a.endsWith('/') ? a + b : a + '/' + b;
+}
+
+function _bBasename(p) {
+  const i = p.lastIndexOf('/');
+  return i < 0 ? p : p.slice(i + 1);
 }
 
 // ── find — recursive directory walk with predicates ──
