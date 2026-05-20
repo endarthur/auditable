@@ -122,6 +122,45 @@ const tree = await page.evaluate(async () => {
   };
 });
 
+// ── Text editor surface ───────────────────────────────────────────────
+const textOpen = await page.evaluate(async () => {
+  const W = window.WKS;
+  await W.vfs.writeFile('/projects/notes.txt', 'hello world');
+  const tabId = await W.openPath('/projects/notes.txt');
+  const rec = W.surfaces.get(tabId);
+  const deadline = Date.now() + 10000;
+  while (rec && !rec.ready && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return rec
+    ? { tabId, uniqueName: rec.uniqueName, ready: rec.ready, title: rec.title }
+    : { ready: false };
+});
+
+// Reach into the surface's iframe: confirm it read the file, then edit it.
+const textFrame = page.frames().find((f) => f.url().includes('text.html'));
+let loadedContent = null;
+if (textFrame) {
+  loadedContent = await textFrame.evaluate(() => document.querySelector('textarea')?.value);
+  await textFrame.evaluate(() => {
+    const ta = document.querySelector('textarea');
+    ta.value = 'edited by smoke';
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
+// Flush the surface; confirm the buffer reached the workspace VFS.
+const textFlush = await page.evaluate(async (uniqueName) => {
+  const W = window.WKS;
+  try {
+    await W.worksBus.call(
+      { to: uniqueName, path: '/', interface: 'Surface', member: 'Flush' }, []);
+  } catch (e) { return { error: e.message }; }
+  let onDisk = null;
+  try { onDisk = await W.vfs.readFile('/projects/notes.txt', 'utf8'); } catch { /* */ }
+  return { onDisk };
+}, textOpen.uniqueName);
+
 const checks = {
   // Chunk 1
   'no page errors':            errors.length === 0,
@@ -144,9 +183,14 @@ const checks = {
   'openPath spawned a surface':       tree.surfaceOpened && tree.spawned === 1,
   'kind resolved from project.json':  tree.surfaceKind === 'stub',
   're-opening a path dedups':         tree.deduped,
+  // Text editor surface
+  'text surface opens a loose file':  textOpen.ready === true,
+  'text surface title is filename':   textOpen.title === 'notes.txt',
+  'text surface read file content':   loadedContent === 'hello world',
+  'Flush writes buffer to the VFS':   textFlush.onDisk === 'edited by smoke',
 };
 
-console.log('--- works.html (Chunk 1 + 2 + 3) ---');
+console.log('--- works.html (Chunks 1-3 + text editor) ---');
 let ok = true;
 for (const [name, pass] of Object.entries(checks)) {
   console.log((pass ? 'PASS' : 'FAIL') + ' — ' + name);

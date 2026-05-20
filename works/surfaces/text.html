@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>text editor</title>
+<style>
+  html, body { margin: 0; height: 100%; }
+  body { background: #14171a; }
+  textarea {
+    width: 100%; height: 100%;
+    box-sizing: border-box;
+    margin: 0; border: 0; padding: 10px 12px;
+    resize: none; outline: none;
+    background: #14171a; color: #c8ccd0;
+    font: 13px/1.55 ui-monospace, 'Space Mono', Menlo, monospace;
+    tab-size: 2;
+  }
+</style>
+</head>
+<body>
+<!--
+  A text editor surface for Auditable Works — opens a loose file from the
+  workspace, edits it, flushes it back through the `works` service. A real
+  surface: it exercises the whole §5.2 contract (Flush / CanClose / dirty
+  tracking / self-flush).
+-->
+<textarea id="editor" spellcheck="false" placeholder="loading…"></textarea>
+<script type="module">
+import { connect } from '../../ext/abus/index.js';
+
+const editor = document.getElementById('editor');
+const basename = (p) => p.split('/').filter(Boolean).pop() || p;
+
+window.addEventListener('message', async (ev) => {
+  // §7.1 — adopt the welcome port only from our own parent.
+  if (ev.source !== window.parent) return;
+  if (!ev.data || ev.data.type !== 'abus:welcome') return;
+  const { port, tab } = ev.data;
+
+  let filePath = tab.path;
+  let bus;
+  try {
+    bus = await connect(port, { client: 'text-surface' });
+  } catch (e) {
+    editor.value = 'connect failed: ' + e.message;
+    return;
+  }
+
+  // Read the file through the `works` VFS service.
+  let saved = '';
+  try {
+    saved = (await bus.call(
+      { to: 'works', path: '/', interface: 'VFS', member: 'Read' },
+      [filePath, 'utf8'])) || '';
+  } catch { saved = ''; }
+  editor.value = saved;
+  editor.placeholder = '';
+
+  let dirty = false;
+  let flushTimer = null;
+
+  const emit = (member, args) =>
+    bus.signal({ path: '/', interface: 'Surface', member }, args);
+
+  // Write the buffer back to the workspace VFS.
+  async function flush() {
+    clearTimeout(flushTimer);
+    if (editor.value === saved) return;
+    const content = editor.value;
+    await bus.call(
+      { to: 'works', path: '/', interface: 'VFS', member: 'Write' },
+      [filePath, content]);
+    saved = content;
+    if (dirty) { dirty = false; emit('DirtyChanged', [false]); }
+  }
+
+  editor.addEventListener('input', () => {
+    if (!dirty && editor.value !== saved) {
+      dirty = true;
+      emit('DirtyChanged', [true]);
+    }
+    // Self-flush on idle (spec §5.2).
+    clearTimeout(flushTimer);
+    flushTimer = setTimeout(flush, 1500);
+  });
+
+  // The §5.2 Surface contract.
+  bus.expose('/', {
+    Surface: {
+      methods: {
+        Flush:     () => flush(),
+        CanClose:  () => true,   // close flushes first — no data-loss veto needed
+        Relocated: (p) => { filePath = p; emit('TitleChanged', [basename(p)]); },
+      },
+      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
+    },
+  });
+
+  emit('TitleChanged', [basename(filePath)]);
+  emit('Ready', []);
+});
+</script>
+</body>
+</html>

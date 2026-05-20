@@ -18,7 +18,7 @@ export async function setupWorksService() {
     // The workspace filesystem (auditable-works-spec §9).
     VFS: {
       methods: {
-        Read:   (p) => vfs.readFile(p),
+        Read:   (p, encoding) => vfs.readFile(p, encoding),
         Write:  (p, content) => vfs.writeFile(p, content),
         List:   (p) => vfs.readdir(p),
         Stat:   (p) => vfs.stat(p),

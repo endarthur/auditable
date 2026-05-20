@@ -36,3 +36,12 @@ registerKind('stub', {
   icon:       '◈',
   extensions: [],
 });
+
+// The text editor — the loose-file surface. Opens any plain-text file.
+registerKind('text', {
+  url:        'works/surfaces/text.html',
+  label:      'Text file',
+  icon:       '▤',
+  extensions: ['.txt', '.md', '.json', '.js', '.css', '.html',
+               '.csv', '.log', '.xml', '.yaml', '.yml'],
+});
