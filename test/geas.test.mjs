@@ -2550,6 +2550,14 @@ describe('date', () => {
   });
 });
 
+describe('clear', () => {
+  it('emits the VT100 clear-screen + home sequence', async () => {
+    const { shell, output } = _testShell();
+    await shell.exec('clear\n');
+    assert.equal(output(), '\x1b[2J\x1b[H');
+  });
+});
+
 describe('which / command', () => {
   it('which recognises builtins', async () => {
     const { shell, output } = _testShell();
@@ -3305,14 +3313,44 @@ describe('makeLineEditor — adapter line editor', () => {
     assert.equal(r.timeout, true);
   });
 
-  it('escape chars (cursor keys) are filtered, not appended', async () => {
+  it('CSI escape sequences (cursor keys) are swallowed cleanly', async () => {
     const m = _mockAdapter();
     const edit = makeLineEditor(m.adapter);
     const p = edit({});
-    m.feed('\x1b[A'); // up arrow — esc, [, A
+    m.feed('\x1b[A');  // up arrow — fully consumed, no onHistory so no-op
+    m.feed('\x1b[C');  // right arrow — swallowed
     m.feed('hi\r');
     const r = await p;
-    assert.equal(r.line, '[Ahi'); // ESC and char < 0x20 dropped; the printable [, A stay
+    assert.equal(r.line, 'hi'); // arrow-key bytes never reach the buffer
+  });
+
+  it('up/down arrows recall history via onHistory', async () => {
+    const m = _mockAdapter();
+    const edit = makeLineEditor(m.adapter);
+    const ring = ['first', 'second', 'third'];
+    let pos = ring.length;
+    const onHistory = (dir) => {
+      pos = Math.max(0, Math.min(ring.length, pos + dir));
+      return pos < ring.length ? ring[pos] : '';
+    };
+    const p = edit({ onHistory });
+    m.feed('\x1b[A');  // up → 'third'
+    m.feed('\x1b[A');  // up → 'second'
+    m.feed('\r');
+    const r = await p;
+    assert.equal(r.line, 'second');
+  });
+
+  it('history recall replaces the current buffer', async () => {
+    const m = _mockAdapter();
+    const edit = makeLineEditor(m.adapter);
+    const onHistory = () => 'recalled';
+    const p = edit({ onHistory });
+    m.feed('typed');   // user typed something
+    m.feed('\x1b[A');  // up → replaces 'typed' with 'recalled'
+    m.feed('\r');
+    const r = await p;
+    assert.equal(r.line, 'recalled');
   });
 });
 

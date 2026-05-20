@@ -35,6 +35,7 @@ export function defaultBuiltins() {
     local:    _local,
     return:   _return,
     shift:    _shift,
+    clear:    _clear,
     eval:     _eval,
     source:   _source,
     '.':      _source,
@@ -2158,6 +2159,13 @@ async function _shift(argv, ctx) {
   const cur = ctx.positional || [];
   if (n > cur.length) return 1;
   ctx.positional = cur.slice(n);
+  return 0;
+}
+
+// clear — wipe the terminal. VT100: ESC[2J clears the screen, ESC[H
+// homes the cursor. Pure stdout — works on any terminal-shaped sink.
+async function _clear(_argv, ctx) {
+  await ctx.stdout('\x1b[2J\x1b[H');
   return 0;
 }
 

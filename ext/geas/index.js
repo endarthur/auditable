@@ -3548,6 +3548,7 @@ function defaultBuiltins() {
     local:    _local,
     return:   _return,
     shift:    _shift,
+    clear:    _clear,
     eval:     _eval,
     source:   _source,
     '.':      _source,
@@ -5674,6 +5675,13 @@ async function _shift(argv, ctx) {
   return 0;
 }
 
+// clear — wipe the terminal. VT100: ESC[2J clears the screen, ESC[H
+// homes the cursor. Pure stdout — works on any terminal-shaped sink.
+async function _clear(_argv, ctx) {
+  await ctx.stdout('\x1b[2J\x1b[H');
+  return 0;
+}
+
 // ── which / command — name lookup ──
 
 async function _which(argv, ctx) {
@@ -6468,9 +6476,9 @@ function adapterHooks(adapter) {
 
 // Build a line-editor function bound to an adapter. The returned async
 // function matches the `onWantInput` shape: takes line options
-// ({prompt, silent, nChars, delim, timeout, raw}) and resolves to
-// {line} on Enter, {eof: true} on Ctrl+D with empty buffer, or
-// {timeout: true} on -t expiry.
+// ({prompt, silent, nChars, delim, timeout, raw, onHistory}) and
+// resolves to {line} on Enter, {eof: true} on Ctrl+D with empty
+// buffer, or {timeout: true} on -t expiry.
 //
 // Editing controls (the lowest-common-denominator subset):
 //   Enter / \r / \n      submit current buffer
@@ -6478,20 +6486,22 @@ function adapterHooks(adapter) {
 //   Ctrl+D / 0x04        EOF when buffer empty; otherwise ignored
 //   Ctrl+C / 0x03        cancel (resolves with eof — caller treats as
 //                        "read interrupted")
+//   Up / Down arrow      history recall, IF the caller passes an
+//                        `onHistory(dir)` callback (dir: -1 older,
+//                        +1 newer) returning the line to show
 //   printable chars      append to buffer + echo (unless silent)
 //
-// Multi-char input chunks (paste, control sequences) are processed
-// char-by-char in arrival order. Escape sequences (cursor keys,
-// function keys) are NOT interpreted — they get filtered as
-// "non-printable but not a command" and dropped. That's good enough
-// for `read VAR`; a full Readline would handle history / cursor /
-// kill-line / etc. and belongs in its own package.
+// CSI escape sequences (cursor keys, function keys) are recognised and
+// swallowed cleanly — only Up/Down do anything, and only when
+// onHistory is supplied. The editor does NOT do mid-line cursor
+// movement, kill-ring, or reverse-search — that's @gcu/readline
+// territory. This is "good enough for `read VAR` and a REPL prompt."
 function makeLineEditor(adapter) {
   if (!adapter || typeof adapter.onInput !== 'function') {
     return null;
   }
   return function readLine(lineOpts = {}) {
-    const { prompt, silent, nChars, delim, timeout } = lineOpts;
+    const { prompt, silent, nChars, delim, timeout, onHistory } = lineOpts;
     return new Promise((resolve) => {
       let buffer = '';
       let done = false;
@@ -6510,10 +6520,41 @@ function makeLineEditor(adapter) {
         resolve(result);
       };
 
+      // Replace the visible buffer with `next` — erase the old chars
+      // with destructive backspaces, then echo the new text. Used by
+      // history recall.
+      const replaceBuffer = (next) => {
+        if (!silent && buffer.length > 0) {
+          try { adapter.write('\b \b'.repeat(buffer.length)); } catch { /* ignore */ }
+        }
+        buffer = next;
+        if (!silent && buffer.length > 0) {
+          try { adapter.write(buffer); } catch { /* ignore */ }
+        }
+      };
+
       const onChar = (text) => {
         if (done || typeof text !== 'string') return;
-        for (const ch of text) {
-          if (done) return;
+        let i = 0;
+        while (i < text.length && !done) {
+          const ch = text[i];
+          // CSI escape sequence: ESC '[' params final-byte. Parse the
+          // whole thing so its bytes don't leak into the buffer.
+          if (ch === '\x1b' && text[i + 1] === '[') {
+            let j = i + 2;
+            while (j < text.length && !/[A-Za-z~]/.test(text[j])) j++;
+            const finalByte = text[j]; // may be undefined if split chunk
+            i = j + 1;
+            if ((finalByte === 'A' || finalByte === 'B') && typeof onHistory === 'function') {
+              const recalled = onHistory(finalByte === 'A' ? -1 : 1);
+              if (typeof recalled === 'string') replaceBuffer(recalled);
+            }
+            // Other CSI sequences (left/right/home/end/delete) are
+            // swallowed silently — no mid-line editing in v0.
+            continue;
+          }
+          // Lone ESC (or an escape sequence we don't model) — skip it.
+          if (ch === '\x1b') { i++; continue; }
           if (ch === '\r' || ch === '\n') {
             finish({ line: buffer });
             return;
@@ -6525,11 +6566,13 @@ function makeLineEditor(adapter) {
                 try { adapter.write('\b \b'); } catch { /* ignore */ }
               }
             }
+            i++;
             continue;
           }
           if (ch === '\x04') {
             // Ctrl+D: EOF only when buffer is empty (POSIX shape).
             if (buffer.length === 0) { finish({ eof: true }); return; }
+            i++;
             continue;
           }
           if (ch === '\x03') {
@@ -6539,10 +6582,8 @@ function makeLineEditor(adapter) {
             finish({ eof: true });
             return;
           }
-          // Skip other control chars (escape sequences for arrow keys
-          // and so on — they're not part of a single Enter-terminated
-          // line in v0).
-          if (ch.charCodeAt(0) < 0x20) continue;
+          // Skip other control chars.
+          if (ch.charCodeAt(0) < 0x20) { i++; continue; }
           buffer += ch;
           if (!silent) {
             try { adapter.write(ch); } catch { /* ignore */ }
@@ -6556,6 +6597,7 @@ function makeLineEditor(adapter) {
             finish({ line: buffer.slice(0, -1) });
             return;
           }
+          i++;
         }
       };
 
