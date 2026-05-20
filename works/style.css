@@ -1,374 +1,103 @@
-:root {
-  --bg: #0a0a0a;
-  --bg1: #111;
-  --bg2: #1a1a1a;
-  --border: #222;
-  --border-hi: #333;
-  --fg: #aaa;
-  --fg-dim: #555;
-  --fg-bright: #ccc;
-  --accent: #c89b3c;
-  --accent-dim: #8a6c2a;
-  --err: #a33;
-  --ok: #3a7;
-  --mono: 'Courier New', Courier, monospace;
-  --sidebar-w: 240px;
-}
+/* Auditable Works — the GCU desktop shell.
+   Shell chrome only; @gcu/rails, @gcu/menu, @gcu/dialog self-theme via
+   their bundled :root defaults (appended after this sheet at build time). */
 
-* { margin: 0; padding: 0; box-sizing: border-box; }
-
-/* scrollbar */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: var(--bg); }
-::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 0; }
-::-webkit-scrollbar-thumb:hover { background: var(--fg-dim); }
-@supports (scrollbar-color: auto) {
-  * { scrollbar-color: var(--border-hi) var(--bg); scrollbar-width: thin; }
-}
-
-html, body {
-  background: var(--bg);
-  color: var(--fg);
-  font-family: var(--mono);
-  font-size: 13px;
-  line-height: 1.5;
-  height: 100%;
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font: 13px/1.5 'Barlow', system-ui, -apple-system, sans-serif;
+  background: #14171a;
+  color: #c8ccd0;
   overflow: hidden;
 }
 
-/* ── SHELL GRID ── */
-.works-shell {
-  display: grid;
-  grid-template-columns: var(--sidebar-w) 4px 1fr;
-  grid-template-rows: auto 1fr auto;
-  height: 100vh;
-  overflow: hidden;
-}
-
-/* ── TOOLBAR ── */
-.works-toolbar {
-  grid-column: 1 / -1;
-  grid-row: 1;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
-  z-index: 100;
-}
-
-.works-brand {
-  font-size: 11px;
-  letter-spacing: 3px;
-  text-transform: uppercase;
-  color: var(--accent);
-  opacity: 0.8;
-  user-select: none;
-  font-weight: bold;
-}
-
-.works-toolbar-sep {
-  width: 1px;
-  height: 16px;
-  background: var(--border);
-}
-
-.works-toolbar-spacer { flex: 1; }
-
-.works-toolbar button {
-  background: none;
-  border: 1px solid var(--border);
-  color: var(--fg);
-  font-family: var(--mono);
-  font-size: 11px;
-  padding: 3px 10px;
-  cursor: pointer;
-  border-radius: 0;
-}
-.works-toolbar button:hover {
-  border-color: var(--border-hi);
-  color: var(--fg-bright);
-}
-
-#works-save {
-  color: var(--accent);
-  border-color: var(--accent-dim);
-}
-#works-save:hover {
-  border-color: var(--accent);
-}
-
-/* ── SIDEBAR ── */
-.works-sidebar {
-  grid-column: 1;
-  grid-row: 2;
-  background: var(--bg1);
-  border-right: 1px solid var(--border);
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 4px 0;
-}
-
-/* ── RESIZE HANDLE ── */
-.works-resize {
-  grid-column: 2;
-  grid-row: 2;
-  cursor: col-resize;
-  background: transparent;
-  transition: background 0.15s;
-}
-.works-resize:hover {
-  background: var(--accent-dim);
-}
-
-/* ── MAIN AREA ── */
-.works-main {
-  grid-column: 3;
-  grid-row: 2;
+.works {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
-  background: var(--bg);
+  height: 100vh;
 }
 
-/* ── TAB BAR ── */
-.works-tabbar {
-  display: flex;
-  gap: 0;
-  background: var(--bg1);
-  border-bottom: 1px solid var(--border);
-  overflow-x: auto;
-  flex-shrink: 0;
-  min-height: 28px;
+.works-menubar {
+  flex: none;
+  border-bottom: 1px solid #2a2e33;
+  background: #1a1d21;
 }
 
-.works-tab {
+.works-body {
+  flex: 1;
   display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px 4px 12px;
+  min-height: 0;
+}
+
+.works-sidebar {
+  flex: none;
+  width: 232px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #2a2e33;
+  background: #16191c;
+}
+
+.works-sidebar-title {
+  flex: none;
+  padding: 8px 12px;
   font-size: 11px;
-  color: var(--fg-dim);
-  border-right: 1px solid var(--border);
-  cursor: pointer;
-  user-select: none;
-  white-space: nowrap;
-  max-width: 180px;
-}
-.works-tab:hover {
-  color: var(--fg);
-  background: var(--bg2);
-}
-.works-tab.active {
-  color: var(--fg-bright);
-  background: var(--bg);
-  border-bottom: 1px solid var(--bg); /* overlap main border */
-  margin-bottom: -1px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #8a9099;
+  border-bottom: 1px solid #2a2e33;
 }
 
-.works-tab-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
+.works-tree {
   flex: 1;
-}
-.works-tab.preview .works-tab-label {
-  font-style: italic;
-}
-.works-tab.dragging {
-  opacity: 0.4;
+  overflow: auto;
+  padding: 6px;
 }
 
-.works-tab-close {
-  background: none;
-  border: none;
-  color: var(--fg-dim);
+.works-tree-empty {
+  padding: 12px;
   font-size: 12px;
-  cursor: pointer;
-  padding: 0 2px;
-  line-height: 1;
-  font-family: var(--mono);
-}
-.works-tab-close:hover {
-  color: var(--err);
+  color: #6b7177;
 }
 
-/* ── VIEWPORT ── */
-.works-viewport {
+.works-rails {
   flex: 1;
+  min-width: 0;
   position: relative;
-  overflow: hidden;
+  background: #14171a;
 }
 
-.works-iframe {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  border: none;
-  background: var(--bg);
-  visibility: hidden;
-  pointer-events: none;
-}
-.works-iframe.active {
-  visibility: visible;
-  pointer-events: auto;
-}
-
-/* ── EMPTY STATE ── */
 .works-empty {
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   height: 100%;
+  gap: 4px;
+  color: #6b7177;
+}
+.works-empty p { margin: 0; }
+.works-empty-hint { font-size: 12px; }
+
+.works-panel-placeholder {
   display: flex;
   align-items: center;
   justify-content: center;
-}
-.works-empty-inner {
-  text-align: center;
-}
-.works-empty-title {
-  font-size: 18px;
-  letter-spacing: 4px;
-  text-transform: uppercase;
-  color: var(--accent);
-  opacity: 0.4;
-  margin-bottom: 8px;
-}
-.works-empty-hint {
-  font-size: 12px;
-  color: var(--fg-dim);
+  height: 100%;
+  color: #8a9099;
 }
 
-/* ── FILE TREE ── */
-.works-tree {
-  font-size: 12px;
-}
-
-.tree-empty {
-  padding: 16px;
-  text-align: center;
-  color: var(--fg-dim);
-  font-size: 11px;
-}
-
-.tree-root {
-  margin: 0;
-}
-.tree-root > summary {
-  padding: 6px 8px;
-  cursor: pointer;
-  user-select: none;
-  font-size: 12px;
-  color: var(--fg-bright);
-  font-weight: bold;
-  border-bottom: 1px solid var(--border);
-}
-.tree-root > summary {
-  display: flex;
-  align-items: center;
-}
-.tree-root-type {
-  margin-left: auto;
-  font-weight: normal;
-  font-size: 10px;
-  color: var(--fg-dim);
-  opacity: 0.6;
-}
-.tree-root > summary:hover {
-  background: var(--bg2);
-}
-.tree-root > summary::marker,
-.tree-root > summary::-webkit-details-marker {
-  color: var(--fg-dim);
-}
-
-.tree-dir {
-  margin: 0;
-}
-.tree-dir > summary {
-  padding: 3px 8px 3px 20px;
-  cursor: pointer;
-  user-select: none;
-  color: var(--fg);
-}
-.tree-dir > summary:hover {
-  background: var(--bg2);
-}
-.tree-dir > summary::marker,
-.tree-dir > summary::-webkit-details-marker {
-  color: var(--fg-dim);
-}
-
-/* indent nested dirs */
-.tree-dir .tree-dir > summary { padding-left: 32px; }
-.tree-dir .tree-dir .tree-dir > summary { padding-left: 44px; }
-.tree-dir .tree-dir .tree-dir .tree-dir > summary { padding-left: 56px; }
-
-.tree-file {
-  padding: 3px 8px 3px 20px;
-  cursor: default;
-  color: var(--fg-dim);
-  user-select: none;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.tree-file-html {
-  color: var(--fg);
-  cursor: pointer;
-}
-.tree-file-html:hover {
-  background: var(--bg2);
-  color: var(--fg-bright);
-}
-
-/* indent nested files */
-.tree-dir .tree-file { padding-left: 32px; }
-.tree-dir .tree-dir .tree-file { padding-left: 44px; }
-.tree-dir .tree-dir .tree-dir .tree-file { padding-left: 56px; }
-
-/* Context menus and modal dialogs in Works render through @gcu/menu and
-   @gcu/dialog (bundled by build.js for the works target). Their structural
-   + default themes ship with the libraries and are appended to this CSS
-   at build time — no Works-side overrides needed. */
-
-/* ── STATUSBAR ── */
 .works-statusbar {
-  grid-column: 1 / -1;
-  grid-row: 3;
+  flex: none;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   padding: 4px 12px;
-  background: var(--bg1);
-  border-top: 1px solid var(--border);
+  border-top: 1px solid #2a2e33;
+  background: #1a1d21;
   font-size: 11px;
-  color: var(--fg-dim);
+  color: #8a9099;
 }
-
-.works-status-path {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.works-status-msg {
-  color: var(--ok);
-}
-
-.works-status-attr {
-  display: flex;
-  gap: 6px;
-}
-.works-status-attr a {
-  color: var(--fg-dim);
-  text-decoration: none;
-}
-.works-status-attr a:hover {
-  color: var(--fg);
-}
+.works-statusbar-spacer { flex: 1; }
+.works-attr { color: #8a9099; text-decoration: none; }
+.works-attr:hover { color: #c8ccd0; }

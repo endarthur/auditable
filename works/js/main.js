@@ -1,8 +1,10 @@
+// Auditable Works — module manifest. Build-time only: this import order is
+// the registry/boot order, so init.js (the entry) must come last.
+
 import './state.js';
-import './fs.js';
-import './notebook.js';
+import './bus.js';
+import './workspace.js';
+import './layout.js';
+import './menubar.js';
 import './tree.js';
-import './tabs.js';
-import './bridge.js';
-import './persist.js';
 import './init.js';

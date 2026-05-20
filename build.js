@@ -57,80 +57,51 @@ function processModules(mainPath, moduleDir, opts = {}) {
 // ══════════════════════════════════════════════════
 
 if (target === 'works') {
+  // Auditable Works — the GCU desktop shell. Registry build: every shell
+  // module and every ext-library bundle gets its own ES-module scope via
+  // blob URLs + an import map — the machinery the auditable target uses.
   const worksDir = path.join(__dirname, 'works');
   const worksJsDir = path.join(worksDir, 'js');
 
-  // 1. Process Works modules
-  let worksJs = processModules(path.join(worksJsDir, 'main.js'), worksJsDir);
+  // Shell modules from works/js/main.js (relative imports → '#name').
+  const modules = processModulesAsRegistry(path.join(worksJsDir, 'main.js'), worksJsDir);
 
-  // 1a. Prepend @gcu/menu + @gcu/dialog as IIFE-style globals.
-  // Works uses concat-style processModules (not the import-map registry that
-  // auditable uses), so we strip module-level imports/exports from menu.js
-  // and dialog.js and let their top-level identifiers (Menu, MenuBar, Dialog,
-  // dialogConfirm, dialogPrompt, dialogAlert) live at script scope.
-  // Renames `confirm`/`prompt`/`alert` to dialog* so they don't shadow the
-  // native window.* equivalents.
-  function bundleExtForWorks(extPath, renames = {}) {
-    if (!fs.existsSync(extPath)) return '';
-    let src = fs.readFileSync(extPath, 'utf8');
-    src = src.replace(/^import\b[\s\S]*?from\s+['"][^'"]*['"];?\s*$/gm, '');
-    src = src.replace(/^import\s+['"][^'"]*['"];?\s*$/gm, '');
-    src = src.replace(/^export function /gm, 'function ');
-    src = src.replace(/^export async function /gm, 'async function ');
-    src = src.replace(/^export const /gm, 'const ');
-    src = src.replace(/^export let /gm, 'let ');
-    src = src.replace(/^export class /gm, 'class ');
-    src = src.replace(/^export\s*\{[\s\S]*?\}\s*;?\s*$/gm, '');
-    src = src.replace(/^export\s+default\s+.*$/gm, '');
-    for (const [from, to] of Object.entries(renames)) {
-      // Conservative: rename function declarations and bare-identifier RHS
-      // assignments only. Avoids clobbering string literals like
-      // setAttribute('role', 'alert').
-      src = src.replace(new RegExp(`^function ${from}\\b`, 'gm'), `function ${to}`);
-      src = src.replace(new RegExp(`= ${from};`, 'g'), `= ${to};`);
+  // Ext-library bundles as registry entries — shell code imports them as
+  // '#abus', '#vfs', '#rails', '#menu', '#dialog'.
+  for (const [name, rel] of [
+    ['abus',   'ext/abus/index.js'],
+    ['vfs',    'ext/vfs/index.js'],
+    ['rails',  'ext/rails/index.js'],
+    ['menu',   'ext/menu/index.js'],
+    ['dialog', 'ext/dialog/index.js'],
+  ]) {
+    const p = path.join(__dirname, rel);
+    if (!fs.existsSync(p)) {
+      console.error(`Error: ${rel} not found — build the ext package first.`);
+      process.exit(1);
     }
-    return src.replace(/^\n+/, '').replace(/\n+$/, '');
+    const src = fs.readFileSync(p, 'utf8').replace(/^\n+/, '').replace(/\n+$/, '');
+    modules.unshift({ name, source: src });
   }
-  const menuSrc = bundleExtForWorks(path.join(__dirname, 'ext/menu/index.js'));
-  const dialogSrc = bundleExtForWorks(path.join(__dirname, 'ext/dialog/index.js'), {
-    confirm: 'dialogConfirm',
-    prompt:  'dialogPrompt',
-    alert:   'dialogAlert',
-  });
-  if (menuSrc)   worksJs = '// -- @gcu/menu --\n\n'   + menuSrc   + '\n\n' + worksJs;
-  if (dialogSrc) worksJs = '// -- @gcu/dialog --\n\n' + dialogSrc + '\n\n' + worksJs;
 
-  // 2. Read the already-built auditable.html and embed as template literal
-  const auditablePath = path.join(__dirname, 'auditable.html');
-  if (!fs.existsSync(auditablePath)) {
-    console.error('Error: auditable.html not found. Run `node build.js` first.');
-    process.exit(1);
-  }
-  const auditableHtml = fs.readFileSync(auditablePath, 'utf8');
-  const escaped = auditableHtml.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${').replace(/<\/script>/gi, '<\\/script>');
-  worksJs = `const __AUDITABLE_RUNTIME__ = \`${escaped}\`;\n\n` + worksJs;
+  const worksJs = generateModuleBoot('', modules, '');
 
-  // 3. Read Works CSS and template, append menu + dialog CSS
+  // CSS: the shell's own stylesheet + the component theme sheets appended
+  // whole — the components self-theme via their bundled :root defaults.
   let worksCss = fs.readFileSync(path.join(worksDir, 'style.css'), 'utf8');
-  for (const cssPath of [
+  for (const cssRel of [
+    'ext/rails/rails.css', 'ext/rails/rails-default.css',
     'ext/menu/menu.css', 'ext/menu/menu-default.css',
     'ext/dialog/dialog.css', 'ext/dialog/dialog-default.css',
   ]) {
-    const fullPath = path.join(__dirname, cssPath);
-    if (!fs.existsSync(fullPath)) continue;
-    let css = fs.readFileSync(fullPath, 'utf8');
-    // Strip :root swatches so works' own palette wins (mirror auditable bundling).
-    if (cssPath.endsWith('default.css')) {
-      css = css.replace(/:root\s*\{[\s\S]*?\}\s*/m, '');
-    }
-    worksCss += '\n\n' + css.trimEnd();
+    const p = path.join(__dirname, cssRel);
+    if (fs.existsSync(p)) worksCss += '\n\n' + fs.readFileSync(p, 'utf8').trimEnd();
   }
+
   const worksTemplate = fs.readFileSync(path.join(worksDir, 'template.html'), 'utf8');
 
-  // 4. Assemble works.html
   const worksHtml = `<!DOCTYPE html>
-<!-- Auditable Works — multi-tab workspace shell for managing auditable notebooks -->
-<!-- hosts notebooks as iframes, communicates via postMessage bridge protocol -->
+<!-- Auditable Works — the GCU desktop -->
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -151,28 +122,7 @@ ${worksJs}
 </html>
 `;
 
-  const zlib = require('zlib');
-  const buildDir = path.join(__dirname, 'build');
-  if (!fs.existsSync(buildDir)) fs.mkdirSync(buildDir);
-  // uncompressed → build/ (for tests/signing)
-  fs.writeFileSync(path.join(buildDir, 'works.html'), worksHtml);
-  // compressed → root (for distribution)
-  const worksScript = worksHtml.match(/<script>([\s\S]*?)<\/script>/);
-  let worksDist = worksHtml;
-  if (worksScript) {
-    const compressed = zlib.gzipSync(Buffer.from(worksScript[1], 'utf8'));
-    const b64 = compressed.toString('base64').replace(/.{1,76}/g, '$&\n');
-    const loader =
-      '(function(){var me=document.scripts[document.scripts.length-1];(async function(){' +
-      "var b=document.getElementById('_rt').textContent.replace(/\\s/g,'');" +
-      'var d=Uint8Array.from(atob(b),function(c){return c.charCodeAt(0)});' +
-      "var s=await new Response(new Blob([d]).stream().pipeThrough(new DecompressionStream('gzip'))).text();" +
-      "me.textContent=s;document.getElementById('_rt').remove();" +
-      '(0,eval)(s)})()})()';
-    worksDist = worksHtml.replace(/<script>[\s\S]*?<\/script>/,
-      `<script type="text/plain" id="_rt">\n${b64}</script>\n<script>\n${loader}\n</script>`);
-  }
-  fs.writeFileSync(path.join(__dirname, 'works.html'), worksDist);
+  fs.writeFileSync(path.join(__dirname, 'works.html'), worksHtml);
   const worksSize = fs.statSync(path.join(__dirname, 'works.html')).size;
   console.log(`Built works.html (${(worksSize / 1024).toFixed(1)} KB)`);
   process.exit(0);

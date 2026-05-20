@@ -1,19 +1,16 @@
-// ═══════════════════════════════════════════════════
-// AUDITABLE WORKS — workspace shell
-// Geoscientific Chaos Union, 2025
-// ═══════════════════════════════════════════════════
+// Shared mutable state for the Works shell. One object, like auditable's `S`.
 
-const $ = s => document.querySelector(s);
-const $$ = s => [...document.querySelectorAll(s)];
-
-// ── STATE ──
-const WKS = {
-  roots: [],          // WorkspaceRoot[] — { type, name, dirHandle?, boxId? }
-  tabs: [],           // { id, path, rootIndex, blobUrl, iframe, dirty, title }
-  activeTabId: null,
-  tabId: 0,
-  sidebarWidth: 240,
-  hasFSAA: typeof showDirectoryPicker === 'function',
-  db: null,           // IndexedDB reference
-  treeOpen: {},       // expanded state: { "r0": true, "r0:src": true, ... }
+export const WKS = {
+  broker:  null,   // the A-Bus broker            (bus.js)
+  vfs:     null,   // the workspace VFS           (workspace.js)
+  rails:   null,   // the @gcu/rails instance     (layout.js)
+  menubar: null,   // the @gcu/menu MenuBar       (menubar.js)
 };
+
+export const $ = (sel) => document.querySelector(sel);
+
+// Write a message to the statusbar.
+export function setStatus(msg) {
+  const el = document.getElementById('works-status');
+  if (el) el.textContent = msg;
+}
