@@ -1671,8 +1671,25 @@ async function execute(ast, ctx) {
   return await _exec(ast, c);
 }
 
+// Normalize a raw context into the full executor-ready shape (env/
+// functions as Maps, options/positional/signal-symbols filled in,
+// _geasNormalized flag set). Exported so a long-lived shell can
+// normalize ONCE and reuse the same ctx across exec calls — that's
+// what makes `cd` and other cwd mutations persist between commands.
+function normalizeContext(ctx) {
+  return _normalize(ctx);
+}
+
 function _normalize(ctx) {
+  // Idempotent: an already-normalized ctx is returned as-is. This lets
+  // a long-lived shell (createShell) hold ONE normalized ctx and reuse
+  // it across exec calls — without this, every exec copied `cwd` (a
+  // string) into a fresh object, so `cd` never persisted between
+  // commands. Env / functions survived only because they're Maps
+  // (shared by reference); cwd, being a primitive, was silently lost.
+  if (ctx && ctx._geasNormalized) return ctx;
   return {
+    _geasNormalized: true,
     vfs:        ctx.vfs ?? null,
     env:        ctx.env instanceof Map ? ctx.env : new Map(Object.entries(ctx.env || {})),
     cwd:        ctx.cwd ?? '/',
@@ -6833,13 +6850,16 @@ function setupGeasWorker(target, opts) {
         }
         try {
           const r = await shell.exec(msg.source);
-          target.postMessage({ type: 'done', id: msg.id, exitCode: r.exitCode ?? 0 });
+          // Report the post-exec cwd so the client can render a
+          // working-directory-aware prompt without a separate query.
+          target.postMessage({ type: 'done', id: msg.id, exitCode: r.exitCode ?? 0, cwd: shell.cwd });
         } catch (err) {
           target.postMessage({
             type: 'done',
             id: msg.id,
             exitCode: 1,
             error: err && err.message ? err.message : String(err),
+            cwd: shell.cwd,
           });
         }
         return;
@@ -6956,6 +6976,10 @@ function createGeasClient(opts) {
   let initReady = null;
   let initResolve = null;
   let initPromise = new Promise((r) => { initResolve = r; });
+  // Last known working directory of the worker-hosted shell. Updated
+  // from every `done` message so a host REPL can render a cwd-aware
+  // prompt without round-tripping a `pwd`.
+  let lastCwd = cwd;
 
   const handler = (e) => {
     const msg = e && e.data !== undefined ? e.data : e;
@@ -6978,8 +7002,10 @@ function createGeasClient(opts) {
         const slot = pendingExecs.get(msg.id);
         if (!slot) return;
         pendingExecs.delete(msg.id);
+        // The worker reports cwd on both success and error paths.
+        if (typeof msg.cwd === 'string') lastCwd = msg.cwd;
         if (msg.error) slot.reject(new Error(msg.error));
-        else slot.resolve({ exitCode: msg.exitCode });
+        else slot.resolve({ exitCode: msg.exitCode, cwd: msg.cwd });
         return;
       }
       case 'want-input': {
@@ -7029,6 +7055,10 @@ function createGeasClient(opts) {
 
   return {
     ready: () => initPromise,
+
+    // Last-known working directory of the worker shell. Updated after
+    // every exec; a REPL host reads this to draw a cwd-aware prompt.
+    get cwd() { return lastCwd; },
 
     exec(source) {
       if (terminated) return Promise.reject(new Error('geas: client terminated'));
@@ -7200,7 +7230,11 @@ function _clone(v) {
 // Caller-supplied stdout/stderr/onCommand/extra builtins overlay the
 // defaults. Pass a VFS instance to enable filesystem builtins + redirects.
 function createShell(opts = {}) {
-  const ctx = {
+  // Normalize ONCE and hold the result — every exec reuses this same
+  // ctx, so cwd / env / functions / lastStatus all persist between
+  // commands (a fresh-normalize-per-exec would drop `cd`'s effect,
+  // since cwd is a primitive copied by value).
+  const ctx = normalizeContext({
     vfs:        opts.vfs ?? null,
     env:        opts.env instanceof Map ? opts.env : new Map(Object.entries(opts.env || {})),
     cwd:        opts.cwd ?? '/',
@@ -7217,7 +7251,7 @@ function createShell(opts = {}) {
     // carries prompt, silent, nChars, delim, timeout, raw — the read
     // flags that affect line acquisition.
     readLine:   typeof opts.readLine === 'function' ? opts.readLine : null,
-  };
+  });
   return {
     get env()        { return ctx.env; },
     get cwd()        { return ctx.cwd; },

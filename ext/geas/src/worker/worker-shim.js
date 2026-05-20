@@ -93,13 +93,16 @@ export function setupGeasWorker(target, opts) {
         }
         try {
           const r = await shell.exec(msg.source);
-          target.postMessage({ type: 'done', id: msg.id, exitCode: r.exitCode ?? 0 });
+          // Report the post-exec cwd so the client can render a
+          // working-directory-aware prompt without a separate query.
+          target.postMessage({ type: 'done', id: msg.id, exitCode: r.exitCode ?? 0, cwd: shell.cwd });
         } catch (err) {
           target.postMessage({
             type: 'done',
             id: msg.id,
             exitCode: 1,
             error: err && err.message ? err.message : String(err),
+            cwd: shell.cwd,
           });
         }
         return;

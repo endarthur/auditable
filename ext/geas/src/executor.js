@@ -37,8 +37,25 @@ export async function execute(ast, ctx) {
   return await _exec(ast, c);
 }
 
+// Normalize a raw context into the full executor-ready shape (env/
+// functions as Maps, options/positional/signal-symbols filled in,
+// _geasNormalized flag set). Exported so a long-lived shell can
+// normalize ONCE and reuse the same ctx across exec calls — that's
+// what makes `cd` and other cwd mutations persist between commands.
+export function normalizeContext(ctx) {
+  return _normalize(ctx);
+}
+
 function _normalize(ctx) {
+  // Idempotent: an already-normalized ctx is returned as-is. This lets
+  // a long-lived shell (createShell) hold ONE normalized ctx and reuse
+  // it across exec calls — without this, every exec copied `cwd` (a
+  // string) into a fresh object, so `cd` never persisted between
+  // commands. Env / functions survived only because they're Maps
+  // (shared by reference); cwd, being a primitive, was silently lost.
+  if (ctx && ctx._geasNormalized) return ctx;
   return {
+    _geasNormalized: true,
     vfs:        ctx.vfs ?? null,
     env:        ctx.env instanceof Map ? ctx.env : new Map(Object.entries(ctx.env || {})),
     cwd:        ctx.cwd ?? '/',

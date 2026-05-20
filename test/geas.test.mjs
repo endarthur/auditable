@@ -3391,6 +3391,50 @@ describe('worker + client interactive read', () => {
   });
 });
 
+describe('worker client — cwd reporting', () => {
+  it('client.cwd starts at the init cwd', async () => {
+    const lo = createLoopback();
+    setupGeasWorker(lo.workerSide, { createShell });
+    const client = createGeasClient({ worker: lo.mainSide, vfs: null, env: {}, cwd: '/' });
+    await client.ready();
+    assert.equal(client.cwd, '/');
+    await client.terminate();
+  });
+
+  it('client.cwd updates after a cd', async () => {
+    // Needs a VFS so `cd` can verify the target directory exists.
+    const { VFS, MemoryBackend } = await import('../ext/vfs/index.js');
+    const vfs = new VFS();
+    vfs._mounts.set('/', new MemoryBackend());
+    await vfs.mkdir('/home', { recursive: true });
+    const lo = createLoopback();
+    setupGeasWorker(lo.workerSide, { createShell });
+    const client = createGeasClient({ worker: lo.mainSide, vfs, env: {}, cwd: '/' });
+    await client.ready();
+    const r = await client.exec('cd /home\n');
+    assert.equal(r.exitCode, 0);
+    assert.equal(r.cwd, '/home');
+    assert.equal(client.cwd, '/home');
+    await client.terminate();
+  });
+
+  it('cwd is reported even when the command fails', async () => {
+    const { VFS, MemoryBackend } = await import('../ext/vfs/index.js');
+    const vfs = new VFS();
+    vfs._mounts.set('/', new MemoryBackend());
+    await vfs.mkdir('/data', { recursive: true });
+    const lo = createLoopback();
+    setupGeasWorker(lo.workerSide, { createShell });
+    const client = createGeasClient({ worker: lo.mainSide, vfs, env: {}, cwd: '/' });
+    await client.ready();
+    await client.exec('cd /data\n');
+    // A failing command shouldn't lose the cwd.
+    await client.exec('false\n');
+    assert.equal(client.cwd, '/data');
+    await client.terminate();
+  });
+});
+
 describe('cp', () => {
   it('copies a single file', async () => {
     const { shell, vfs } = _testShell();

@@ -47,6 +47,10 @@ export function createGeasClient(opts) {
   let initReady = null;
   let initResolve = null;
   let initPromise = new Promise((r) => { initResolve = r; });
+  // Last known working directory of the worker-hosted shell. Updated
+  // from every `done` message so a host REPL can render a cwd-aware
+  // prompt without round-tripping a `pwd`.
+  let lastCwd = cwd;
 
   const handler = (e) => {
     const msg = e && e.data !== undefined ? e.data : e;
@@ -69,8 +73,10 @@ export function createGeasClient(opts) {
         const slot = pendingExecs.get(msg.id);
         if (!slot) return;
         pendingExecs.delete(msg.id);
+        // The worker reports cwd on both success and error paths.
+        if (typeof msg.cwd === 'string') lastCwd = msg.cwd;
         if (msg.error) slot.reject(new Error(msg.error));
-        else slot.resolve({ exitCode: msg.exitCode });
+        else slot.resolve({ exitCode: msg.exitCode, cwd: msg.cwd });
         return;
       }
       case 'want-input': {
@@ -120,6 +126,10 @@ export function createGeasClient(opts) {
 
   return {
     ready: () => initPromise,
+
+    // Last-known working directory of the worker shell. Updated after
+    // every exec; a REPL host reads this to draw a cwd-aware prompt.
+    get cwd() { return lastCwd; },
 
     exec(source) {
       if (terminated) return Promise.reject(new Error('geas: client terminated'));

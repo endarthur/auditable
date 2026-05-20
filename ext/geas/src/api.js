@@ -11,7 +11,7 @@
 import { tokenize } from './lexer.js';
 import { parse } from './parser.js';
 import { parseWordParts } from './word-parts.js';
-import { execute } from './executor.js';
+import { execute, normalizeContext } from './executor.js';
 import { NODE } from './ast-nodes.js';
 import { createHeadlessAdapter } from './adapters/headless.js';
 import { createTermAdapter, adapterHooks, makeLineEditor } from './adapters/term.js';
@@ -39,7 +39,11 @@ import { createLoopback } from './worker/loopback.js';
 // Caller-supplied stdout/stderr/onCommand/extra builtins overlay the
 // defaults. Pass a VFS instance to enable filesystem builtins + redirects.
 export function createShell(opts = {}) {
-  const ctx = {
+  // Normalize ONCE and hold the result — every exec reuses this same
+  // ctx, so cwd / env / functions / lastStatus all persist between
+  // commands (a fresh-normalize-per-exec would drop `cd`'s effect,
+  // since cwd is a primitive copied by value).
+  const ctx = normalizeContext({
     vfs:        opts.vfs ?? null,
     env:        opts.env instanceof Map ? opts.env : new Map(Object.entries(opts.env || {})),
     cwd:        opts.cwd ?? '/',
@@ -56,7 +60,7 @@ export function createShell(opts = {}) {
     // carries prompt, silent, nChars, delim, timeout, raw — the read
     // flags that affect line acquisition.
     readLine:   typeof opts.readLine === 'function' ? opts.readLine : null,
-  };
+  });
   return {
     get env()        { return ctx.env; },
     get cwd()        { return ctx.cwd; },
