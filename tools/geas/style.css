@@ -1,0 +1,60 @@
+/* geas standalone tool — own styles.
+   @gcu/term's term.css (structural) + term-default.css (theme) are
+   prepended at build time and provide .screen / .termhost / .row / .cur. */
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #0a0c10;
+  color: #c8cdd4;
+  font-family: "Space Mono", ui-monospace, monospace;
+  overflow: hidden;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+#titlebar {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 14px;
+  background: #11141a;
+  border-bottom: 1px solid #1d2128;
+  flex: 0 0 auto;
+  user-select: none;
+}
+#titlebar .brand {
+  color: #e6bf66;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  font-size: 13px;
+}
+#titlebar .tag {
+  color: #5a6472;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+#titlebar .spacer { flex: 1; }
+#titlebar .status {
+  color: #6cb1d8;
+  font-size: 11px;
+}
+
+.termwrap {
+  flex: 1;
+  min-height: 0;
+  padding: 8px 10px;
+  overflow: auto;
+}
+
+/* The terminal grid is sized to the viewport in JS; this just keeps it
+   pinned top-left within the scrollable wrap. */
+.termhost {
+  display: inline-block;
+}

@@ -1,0 +1,17 @@
+{
+  "name": "geas — the GCU shell",
+  "short_name": "geas",
+  "description": "A Unix-shape shell running entirely in the browser — POSIX syntax, typed pipes, IndexedDB filesystem.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0a0c10",
+  "theme_color": "#0a0c10",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%230a0c10'/%3E%3Cpath d='M14 20l10 12-10 12' stroke='%23e6bf66' stroke-width='5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cline x1='30' y1='46' x2='48' y2='46' stroke='%236cb1d8' stroke-width='5' stroke-linecap='round'/%3E%3C/svg%3E",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

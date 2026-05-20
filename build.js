@@ -369,6 +369,71 @@ ${js}
 }
 
 // ══════════════════════════════════════════════════
+// TARGET: geas (standalone shell terminal PWA)
+// ══════════════════════════════════════════════════
+
+if (target === 'geas') {
+  const toolDir = path.join(__dirname, 'tools', 'geas');
+  const toolJsDir = path.join(toolDir, 'js');
+
+  // 1. Tool modules → one classic-script IIFE.
+  const toolJs = processModules(path.join(toolJsDir, 'main.js'), toolJsDir);
+
+  // 2. Embed the ESM bundles the tool blob-URLs at runtime:
+  //    - geas: dynamic-imported on the main thread for the client API,
+  //      and (with the setup call appended) inlined into the worker.
+  //    - term / vfs: dynamic-imported on the main thread.
+  const geasSrc = fs.readFileSync(path.join(__dirname, 'ext/geas/index.js'), 'utf8');
+  const termSrc = fs.readFileSync(path.join(__dirname, 'ext/term/index.js'), 'utf8');
+  const vfsSrc  = fs.readFileSync(path.join(__dirname, 'ext/vfs/index.js'), 'utf8');
+  const embeds =
+    'const GEAS_BUNDLE_SOURCE = ' + JSON.stringify(geasSrc) + ';\n' +
+    'const TERM_BUNDLE_SOURCE = ' + JSON.stringify(termSrc) + ';\n' +
+    'const VFS_BUNDLE_SOURCE = '  + JSON.stringify(vfsSrc)  + ';\n';
+
+  const js = embeds + '\n' + toolJs;
+
+  // 3. CSS: @gcu/term structural + default theme, then the tool's own.
+  const termCss = fs.readFileSync(path.join(__dirname, 'ext/term/term.css'), 'utf8');
+  const termDefaultCss = fs.readFileSync(path.join(__dirname, 'ext/term/term-default.css'), 'utf8');
+  const toolCss = fs.readFileSync(path.join(toolDir, 'style.css'), 'utf8');
+  const css = termCss + '\n' + termDefaultCss + '\n' + toolCss;
+
+  const toolTemplate = fs.readFileSync(path.join(toolDir, 'template.html'), 'utf8');
+
+  const html = `<!DOCTYPE html>
+<!-- geas — the GCU shell, standalone terminal -->
+<!-- Part of the Auditable project — https://github.com/endarthur/auditable -->
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#0a0c10">
+<title>geas</title>
+<style>
+${css}
+</style>
+</head>
+<body>
+
+${toolTemplate}
+
+<script>
+${js}
+</script>
+</body>
+</html>
+`;
+
+  const outPath = path.join(toolDir, 'index.html');
+  fs.writeFileSync(outPath, html);
+  const size = fs.statSync(outPath).size;
+  console.log(`Built tools/geas/index.html (${(size / 1024).toFixed(1)} KB)`);
+  process.exit(0);
+}
+
+// ══════════════════════════════════════════════════
 // TARGET: dee (3D block model viewer)
 // ══════════════════════════════════════════════════
 
