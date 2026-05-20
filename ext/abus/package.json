@@ -1,6 +1,6 @@
 {
   "name": "@gcu/abus",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A D-Bus-shaped coordination bus for in-browser workspaces: methods, signals, and an introspectable hierarchy of named peers over MessagePort transports. A pure synchronous broker plus a client. Zero dependencies.",
   "type": "module",
   "main": "./src/main.js",

@@ -156,6 +156,29 @@ test('call to an unowned name rejects with NameHasNoOwner', async () => {
   } finally { h.teardown(); }
 });
 
+test('a call can address a peer by its unique name', async () => {
+  const h = harness();
+  try {
+    const { bus: a } = await h.join();
+    const { bus: b } = await h.join();
+    a.expose('/calc', { Calc: { methods: { Add: (x, y) => x + y } } });
+    // `a` claims no well-known name — it is reachable only by unique name.
+    const sum = await b.call(
+      { to: a.uniqueName, path: '/calc', interface: 'Calc', member: 'Add' }, [6, 4]);
+    assert.equal(sum, 10);
+  } finally { h.teardown(); }
+});
+
+test('call to an unconnected unique name rejects with NameHasNoOwner', async () => {
+  const h = harness();
+  try {
+    const { bus: b } = await h.join();
+    await assert.rejects(
+      b.call({ to: ':9999', path: '/', interface: 'X', member: 'Y' }),
+      (e) => e.code === ERR.NameHasNoOwner);
+  } finally { h.teardown(); }
+});
+
 test('call to an unknown interface/member rejects accordingly', async () => {
   const h = harness();
   try {

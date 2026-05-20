@@ -97,9 +97,13 @@ export function createBroker() {
     switch (msg.type) {
       case 'call': {
         if (msg.to === BUS_NAME) { handleBusCall(fromUnique, msg); return; }
-        const target = owners.get(msg.to);
+        // `to` is either a unique name (':N', addressed directly) or a
+        // well-known name (resolved through the owner table).
+        const target = (typeof msg.to === 'string' && msg.to[0] === ':')
+          ? (ports.has(msg.to) ? msg.to : null)
+          : owners.get(msg.to);
         if (!target) {
-          replyErr(msg, fromUnique, ERR.NameHasNoOwner, `no owner for name '${msg.to}'`);
+          replyErr(msg, fromUnique, ERR.NameHasNoOwner, `no peer for '${msg.to}'`);
           return;
         }
         pendingCalls.set(`${fromUnique}|${msg.id}`, target);
