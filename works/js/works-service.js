@@ -37,6 +37,12 @@ export async function setupWorksService() {
         Download: () => {},    // Chunk 3+
       },
     },
+    // Broker introspection, for the A-Bus inspector surface.
+    Inspect: {
+      methods: {
+        Snapshot: () => WKS.broker.inspect(),
+      },
+    },
   });
 
   await bus.claim('works');

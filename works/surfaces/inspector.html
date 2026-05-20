@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>A-Bus inspector</title>
+<style>
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: #14171a; color: #c8ccd0;
+    font: 12px/1.5 ui-monospace, 'Space Mono', Menlo, monospace;
+    display: flex; flex-direction: column;
+  }
+  header {
+    flex: none; display: flex; align-items: center; gap: 10px;
+    padding: 6px 10px; border-bottom: 1px solid #2a2e33; background: #1a1d21;
+  }
+  header .title { font-weight: 600; color: #e8eaed; }
+  header .counts { color: #6b7177; }
+  header .spacer { flex: 1; }
+  button {
+    background: #21262b; color: #c8ccd0;
+    border: 1px solid #2a2e33; border-radius: 3px;
+    padding: 2px 10px; font: inherit; cursor: pointer;
+  }
+  button:hover { background: #2a3038; }
+  .body { flex: 1; display: flex; min-height: 0; }
+  .left {
+    flex: none; width: 320px; overflow: auto;
+    border-right: 1px solid #2a2e33;
+  }
+  .right { flex: 1; overflow: auto; padding: 4px 10px 12px; }
+  h2 {
+    font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: #6b7177; margin: 10px 10px 4px;
+  }
+  .row { padding: 3px 10px; }
+  .peer { cursor: pointer; }
+  .peer:hover, .peer.sel { background: #21262b; }
+  .uniq { color: #7ec8e0; }
+  .names { color: #d98a3a; }
+  .cid { color: #6b7177; }
+  .sub-from { color: #7ec8e0; }
+  .sub-filter { color: #8a9099; }
+  .obj { color: #6b7177; margin-top: 8px; }
+  .iface { color: #9ed47e; margin-top: 4px; }
+  .member { color: #8a9099; padding-left: 16px; }
+  .empty { color: #6b7177; padding: 10px; }
+</style>
+</head>
+<body>
+<!--
+  The A-Bus inspector surface — a diagnostic view of the bus: the peer
+  registry and subscription table (auto-refreshed), with each peer's
+  Describe() document on click. (auditable-works-spec §9.1, a-bus-spec §15.)
+-->
+<header>
+  <span class="title">A-Bus Inspector</span>
+  <span class="counts" id="counts"></span>
+  <span class="spacer"></span>
+  <button id="refresh">Refresh</button>
+</header>
+<div class="body">
+  <div class="left">
+    <h2>Peers</h2><div id="peers"></div>
+    <h2>Subscriptions</h2><div id="subs"></div>
+  </div>
+  <div class="right">
+    <h2>Describe</h2><div id="detail" class="empty">Select a peer.</div>
+  </div>
+</div>
+<script type="module">
+import { connect } from '../../ext/abus/index.js';
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>]/g,
+  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+let bus = null;
+let selected = null;
+let lastPeers = [];
+
+window.addEventListener('message', async (ev) => {
+  if (ev.source !== window.parent) return;             // §7.1
+  if (!ev.data || ev.data.type !== 'abus:welcome') return;
+
+  try { bus = await connect(ev.data.port, { client: 'inspector' }); }
+  catch (e) { $('detail').textContent = 'connect failed: ' + e.message; return; }
+
+  bus.expose('/', {
+    Surface: {
+      methods: { Flush: () => {}, CanClose: () => true, Relocated: () => {} },
+      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
+    },
+  });
+
+  $('refresh').addEventListener('click', refresh);
+  await refresh();
+
+  bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' },
+    ['A-Bus Inspector']);
+  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
+
+  setInterval(refresh, 2000);
+});
+
+async function refresh() {
+  let snap;
+  try {
+    snap = await bus.call(
+      { to: 'works', path: '/', interface: 'Inspect', member: 'Snapshot' }, []);
+  } catch {
+    $('counts').textContent = '(snapshot failed)';
+    return;
+  }
+  lastPeers = snap.peers || [];
+  renderPeers();
+  renderSubs(snap.subscriptions || []);
+  $('counts').textContent =
+    lastPeers.length + ' peers · ' + (snap.subscriptions || []).length + ' subs';
+}
+
+function renderPeers() {
+  const el = $('peers');
+  el.textContent = '';
+  for (const p of lastPeers) {
+    const row = document.createElement('div');
+    row.className = 'row peer' + (p.uniqueName === selected ? ' sel' : '');
+    row.innerHTML =
+      '<span class="uniq">' + esc(p.uniqueName) + '</span> ' +
+      (p.names.length ? '<span class="names">' + esc(p.names.join(' ')) + '</span> ' : '') +
+      (p.clientId ? '<span class="cid">' + esc(p.clientId) + '</span>' : '');
+    row.addEventListener('click', () => selectPeer(p.uniqueName));
+    el.appendChild(row);
+  }
+}
+
+function renderSubs(subs) {
+  const el = $('subs');
+  el.textContent = '';
+  if (!subs.length) { el.innerHTML = '<div class="empty">none</div>'; return; }
+  for (const s of subs) {
+    const f = s.filter || {};
+    const parts = [];
+    if (f.from) parts.push('from=' + f.from);
+    if (f.path) parts.push('path=' + f.path);
+    if (f.interface) parts.push(f.interface);
+    if (f.member) parts.push('.' + f.member);
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.innerHTML =
+      '<span class="sub-from">' + esc(s.subscriber) + '</span> ' +
+      '<span class="sub-filter">' + esc(parts.join(' ') || '(all signals)') + '</span>';
+    el.appendChild(row);
+  }
+}
+
+async function selectPeer(uniqueName) {
+  selected = uniqueName;
+  renderPeers();
+  const el = $('detail');
+  el.className = '';
+  el.textContent = 'describing ' + uniqueName + '…';
+  let doc;
+  try { doc = await bus.describe(uniqueName); }
+  catch (e) { el.textContent = 'describe failed: ' + e.message; return; }
+  renderDescribe(doc);
+}
+
+function renderDescribe(doc) {
+  const el = $('detail');
+  el.className = '';
+  el.textContent = '';
+  if (!doc) { el.textContent = 'no describe document'; return; }
+
+  const head = document.createElement('div');
+  head.className = 'obj';
+  head.textContent = 'service: ' + (doc.service || '(none)') + '  ·  ' + (doc.peer || '');
+  el.appendChild(head);
+
+  for (const obj of doc.objects || []) {
+    const o = document.createElement('div');
+    o.className = 'obj';
+    o.textContent = obj.path;
+    el.appendChild(o);
+    for (const ifaceName of obj.interfaces || []) {
+      const def = (doc.interfaces || {})[ifaceName] || {};
+      const i = document.createElement('div');
+      i.className = 'iface';
+      i.textContent = ifaceName;
+      el.appendChild(i);
+      for (const m of Object.keys(def.methods || {})) {
+        const row = document.createElement('div');
+        row.className = 'member';
+        row.textContent = m + '()';
+        el.appendChild(row);
+      }
+      for (const s of Object.keys(def.signals || {})) {
+        const row = document.createElement('div');
+        row.className = 'member';
+        row.textContent = '~ ' + s;
+        el.appendChild(row);
+      }
+    }
+  }
+}
+</script>
+</body>
+</html>

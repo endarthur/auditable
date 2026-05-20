@@ -161,6 +161,31 @@ const textFlush = await page.evaluate(async (uniqueName) => {
   return { onDisk };
 }, textOpen.uniqueName);
 
+// ── A-Bus inspector surface ───────────────────────────────────────────
+const inspectorOpen = await page.evaluate(async () => {
+  const W = window.WKS;
+  const snap = W.broker.inspect();
+  const tabId = W.spawnSurface('inspector', { title: 'A-Bus Inspector' });
+  const rec = W.surfaces.get(tabId);
+  const deadline = Date.now() + 10000;
+  while (rec && !rec.ready && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return {
+    brokerPeers: (snap.peers || []).length,
+    brokerHasSubs: Array.isArray(snap.subscriptions),
+    ready: rec ? rec.ready : false,
+  };
+});
+
+const inspectorFrame = page.frames().find((f) => f.url().includes('inspector.html'));
+let inspectorPeerRows = 0;
+if (inspectorFrame) {
+  await inspectorFrame.evaluate(() => new Promise((r) => setTimeout(r, 250)));
+  inspectorPeerRows = await inspectorFrame.evaluate(
+    () => document.querySelectorAll('#peers .peer').length);
+}
+
 const checks = {
   // Chunk 1
   'no page errors':            errors.length === 0,
@@ -188,9 +213,13 @@ const checks = {
   'text surface title is filename':   textOpen.title === 'notes.txt',
   'text surface read file content':   loadedContent === 'hello world',
   'Flush writes buffer to the VFS':   textFlush.onDisk === 'edited by smoke',
+  // A-Bus inspector surface
+  'broker.inspect() returns peers':   inspectorOpen.brokerPeers > 0 && inspectorOpen.brokerHasSubs,
+  'inspector surface opens':          inspectorOpen.ready === true,
+  'inspector renders the registry':   inspectorPeerRows > 0,
 };
 
-console.log('--- works.html (Chunks 1-3 + text editor) ---');
+console.log('--- works.html (Chunks 1-3 + text + inspector) ---');
 let ok = true;
 for (const [name, pass] of Object.entries(checks)) {
   console.log((pass ? 'PASS' : 'FAIL') + ' — ' + name);

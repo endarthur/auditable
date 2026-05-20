@@ -24,6 +24,7 @@ export function setupMenuBar() {
     ] },
     { label: 'Debug', items: () => [
       { label: 'New stub surface', action: 'debug:stub' },
+      { label: 'A-Bus inspector', action: 'debug:inspector' },
     ] },
     { label: 'Help', items: () => [
       { label: 'About Auditable Works', action: 'help:about' },
@@ -34,6 +35,10 @@ export function setupMenuBar() {
     if (action === 'project:new') { newProject('/projects'); return; }
     if (action === 'debug:stub') {
       spawnSurface('stub', { path: '/projects', title: 'Stub surface' });
+      return;
+    }
+    if (action === 'debug:inspector') {
+      spawnSurface('inspector', { title: 'A-Bus Inspector' });
       return;
     }
     setStatus(`menu: ${action}`);  // remaining items are Chunk 5 stubs

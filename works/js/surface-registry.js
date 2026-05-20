@@ -45,3 +45,12 @@ registerKind('text', {
   extensions: ['.txt', '.md', '.json', '.js', '.css', '.html',
                '.csv', '.log', '.xml', '.yaml', '.yml'],
 });
+
+// The A-Bus inspector — a diagnostic surface, spawned from the Debug menu
+// (not tied to a VFS path).
+registerKind('inspector', {
+  url:        'works/surfaces/inspector.html',
+  label:      'A-Bus Inspector',
+  icon:       '◉',
+  extensions: [],
+});
