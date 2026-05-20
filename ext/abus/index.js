@@ -362,7 +362,28 @@ function createBroker() {
     return { peers: ports.size, names: owners.size, subscriptions: subs.length };
   }
 
-  return { connect, disconnect, stats };
+  // Read-only snapshot of broker state — for an inspector and debug tools.
+  // Host-facing only; not exposed on the wire (a host chooses whether to).
+  function inspect() {
+    const namesByPeer = new Map();
+    for (const [name, owner] of owners) {
+      const list = namesByPeer.get(owner) || [];
+      list.push(name);
+      namesByPeer.set(owner, list);
+    }
+    return {
+      peers: [...ports.keys()].map((u) => ({
+        uniqueName: u,
+        clientId: clientIds.get(u) || '',
+        names: namesByPeer.get(u) || [],
+      })),
+      subscriptions: subs.map((s) => ({
+        subscriber: s.subscriber, subId: s.subId, filter: s.filter,
+      })),
+    };
+  }
+
+  return { connect, disconnect, stats, inspect };
 }
 
 // -- client.js --

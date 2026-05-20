@@ -179,6 +179,26 @@ test('call to an unconnected unique name rejects with NameHasNoOwner', async () 
   } finally { h.teardown(); }
 });
 
+test('broker.inspect() snapshots peers and subscriptions', async () => {
+  const h = harness();
+  try {
+    const { bus: a } = await h.join({ clientId: 'cid-a' });
+    const { bus: b } = await h.join();
+    await a.claim('alpha');
+    const unsub = b.subscribe({ interface: 'Selectable' }, () => {});
+    await unsub.ready;
+
+    const snap = h.broker.inspect();
+    assert.ok(snap.peers.length >= 2);
+    const pa = snap.peers.find((p) => p.uniqueName === a.uniqueName);
+    assert.ok(pa, 'peer a present');
+    assert.equal(pa.clientId, 'cid-a');
+    assert.ok(pa.names.includes('alpha'));
+    assert.ok(snap.subscriptions.some(
+      (s) => s.subscriber === b.uniqueName && s.filter.interface === 'Selectable'));
+  } finally { h.teardown(); }
+});
+
 test('call to an unknown interface/member rejects accordingly', async () => {
   const h = harness();
   try {
