@@ -1,0 +1,31 @@
+{
+  "name": "@gcu/abus",
+  "version": "0.1.0",
+  "description": "A D-Bus-shaped coordination bus for in-browser workspaces: methods, signals, and an introspectable hierarchy of named peers over MessagePort transports. A pure synchronous broker plus a client. Zero dependencies.",
+  "type": "module",
+  "main": "./src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["abus", "message-bus", "d-bus", "rpc", "postmessage", "ipc", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/abus"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/abus",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}

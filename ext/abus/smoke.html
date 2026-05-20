@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>@gcu/abus — browser smoke test</title>
+<style>
+  body { background:#1a1d21; color:#c8ccd0; margin:0; padding:2rem;
+         font:14px/1.6 ui-monospace, 'Space Mono', 'SFMono-Regular', Menlo, monospace; }
+  h1 { font-size:1rem; font-weight:600; color:#e8eaed; margin:0 0 .25rem; }
+  .sub { color:#8a9099; font-size:.85rem; margin-bottom:1rem; }
+  #summary { margin:1rem 0; padding:.5rem .75rem; border-radius:4px; font-weight:600; }
+  .pending { background:#2a2e33; color:#c8ccd0; }
+  .ok  { background:#1e3a24; color:#7ed492; }
+  .bad { background:#3a1e1e; color:#e08a8a; }
+  .row { padding:.3rem 0; border-bottom:1px solid #2a2e33; display:flex; gap:.75rem; }
+  .tag { width:3.2rem; flex:none; font-weight:600; }
+  .tag.p { color:#7ed492; }
+  .tag.f { color:#e08a8a; }
+  .detail { color:#e08a8a; }
+  .note { color:#8a9099; margin-top:1.25rem; font-size:.82rem; }
+  code { color:#d9b48a; }
+</style>
+</head>
+<body>
+<h1>@gcu/abus — browser smoke test</h1>
+<div class="sub">Exercises the real iframe and Web Worker port transports — the cross-realm paths the Node suite cannot reach.</div>
+<div id="summary" class="pending">running…</div>
+<div id="log"></div>
+<p class="note">
+  Serve the repo over HTTP — browsers block ES modules on <code>file://</code>.
+  From the repo root: <code>python -m http.server</code>, then open
+  <code>/ext/abus/smoke.html</code>.
+</p>
+
+<script type="module">
+import { createBroker, connect } from './src/main.js';
+
+const log = document.getElementById('log');
+const summary = document.getElementById('summary');
+let pass = 0, fail = 0;
+
+function row(name, ok, detail) {
+  const el = document.createElement('div');
+  el.className = 'row';
+  const tag = document.createElement('span');
+  tag.className = 'tag ' + (ok ? 'p' : 'f');
+  tag.textContent = ok ? 'PASS' : 'FAIL';
+  const label = document.createElement('span');
+  label.textContent = name;
+  el.append(tag, label);
+  if (detail) {
+    const d = document.createElement('span');
+    d.className = 'detail';
+    d.textContent = '— ' + detail;
+    el.append(d);
+  }
+  log.appendChild(el);
+  ok ? pass++ : fail++;
+}
+async function check(name, fn) {
+  try { await fn(); row(name, true); }
+  catch (e) { row(name, false, (e && e.message) || String(e)); }
+}
+function assert(cond, msg) { if (!cond) throw new Error(msg || 'assertion failed'); }
+
+// ── one broker, living in this page ──────────────────────────────────
+const broker = createBroker();
+
+// An in-page peer over a plain MessageChannel (same-realm transport).
+async function inPagePeer(opts) {
+  const ch = new MessageChannel();
+  broker.connect(ch.port1);
+  return connect(ch.port2, opts);
+}
+
+// Spawn the iframe peer and transfer it a bus port.
+async function spawnIframe() {
+  const iframe = document.createElement('iframe');
+  iframe.style.display = 'none';
+  iframe.src = './smoke-iframe.html';
+  const loaded = new Promise((res) => { iframe.onload = res; });
+  document.body.appendChild(iframe);
+  await loaded;
+
+  const ready = new Promise((res, rej) => {
+    const timer = setTimeout(() => rej(new Error('iframe peer never reported ready')), 4000);
+    window.addEventListener('message', function onReady(ev) {
+      if (ev.source === iframe.contentWindow && ev.data && ev.data.type === 'abus:peer-ready') {
+        clearTimeout(timer);
+        window.removeEventListener('message', onReady);
+        res();
+      }
+    });
+  });
+
+  const ch = new MessageChannel();
+  broker.connect(ch.port1);
+  iframe.contentWindow.postMessage({ type: 'abus:welcome', port: ch.port2 }, '*', [ch.port2]);
+  await ready;
+  return iframe;
+}
+
+// Spawn the worker peer and transfer it a bus port.
+async function spawnWorker() {
+  const worker = new Worker('./smoke-worker.js', { type: 'module' });
+  const ready = new Promise((res, rej) => {
+    const timer = setTimeout(() => rej(new Error('worker peer never reported ready')), 4000);
+    worker.addEventListener('message', function onReady(ev) {
+      if (ev.data && ev.data.type === 'abus:peer-ready') {
+        clearTimeout(timer);
+        worker.removeEventListener('message', onReady);
+        res();
+      }
+    });
+    worker.addEventListener('error', (e) => { clearTimeout(timer); rej(e.error || new Error(e.message)); });
+  });
+
+  const ch = new MessageChannel();
+  broker.connect(ch.port1);
+  worker.postMessage({ type: 'abus:welcome', port: ch.port2 }, [ch.port2]);
+  await ready;
+  return worker;
+}
+
+// ── the run ──────────────────────────────────────────────────────────
+async function run() {
+  let driver;
+
+  await check('in-page peer completes the handshake', async () => {
+    driver = await inPagePeer({ client: 'driver' });
+    assert(/^:\d+$/.test(driver.uniqueName), 'bad uniqueName: ' + driver.uniqueName);
+  });
+
+  await check('iframe peer joins over a transferred port', async () => {
+    await spawnIframe();
+    const owner = await driver.getNameOwner('iframe-peer');
+    assert(owner && owner.startsWith(':'), 'iframe-peer has no owner');
+  });
+
+  await check('call into the iframe peer returns correctly', async () => {
+    const sum = await driver.call(
+      { to: 'iframe-peer', path: '/calc', interface: 'Calc', member: 'Add' }, [2, 3]);
+    assert(sum === 5, 'expected 5, got ' + sum);
+  });
+
+  await check('a signal crosses the iframe realm boundary', async () => {
+    const got = new Promise((res, rej) => {
+      const timer = setTimeout(() => rej(new Error('signal not received')), 2000);
+      const unsub = driver.subscribe(
+        { from: 'iframe-peer', interface: 'Beacon', member: 'Tick' },
+        (msg) => { clearTimeout(timer); res(msg.args[0]); });
+      unsub.ready.then(() =>
+        driver.call({ to: 'iframe-peer', path: '/beacon', interface: 'Beacon', member: 'Emit' }));
+    });
+    assert((await got) === 'hello-from-iframe', 'unexpected signal payload');
+  });
+
+  await check('proxy + describe work across the iframe boundary', async () => {
+    const peer = await driver.proxy('iframe-peer');
+    const sum = await peer['/calc'].Calc.Add(10, 7);
+    assert(sum === 17, 'expected 17, got ' + sum);
+  });
+
+  await check('worker peer joins over a transferred port', async () => {
+    await spawnWorker();
+    const owner = await driver.getNameOwner('worker-peer');
+    assert(owner && owner.startsWith(':'), 'worker-peer has no owner');
+  });
+
+  await check('call into the worker peer returns correctly', async () => {
+    const product = await driver.call(
+      { to: 'worker-peer', path: '/calc', interface: 'Calc', member: 'Mul' }, [4, 5]);
+    assert(product === 20, 'expected 20, got ' + product);
+  });
+
+  summary.textContent = `${pass} passed, ${fail} failed`;
+  summary.className = fail ? 'bad' : 'ok';
+}
+
+run().catch((e) => {
+  summary.textContent = 'harness crashed: ' + ((e && e.message) || e);
+  summary.className = 'bad';
+});
+</script>
+</body>
+</html>

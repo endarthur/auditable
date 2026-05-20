@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>@gcu/abus — iframe peer</title></head>
+<body>
+<!--
+  An A-Bus peer that lives in an iframe. The parent (smoke.html) transfers a
+  MessagePort in via window.postMessage; this peer adopts it and joins the bus.
+-->
+<script type="module">
+import { connect } from './src/main.js';
+
+window.addEventListener('message', async (ev) => {
+  // Spec §7.1: the welcome port is a capability. Verify it came from our
+  // own parent before adopting it — a forged abus:welcome from elsewhere
+  // must be ignored.
+  if (ev.source !== window.parent) return;
+  if (!ev.data || ev.data.type !== 'abus:welcome') return;
+
+  const bus = await connect(ev.data.port, { client: 'iframe-peer' });
+
+  bus.expose('/calc', {
+    Calc: { methods: { Add: (a, b) => a + b } },
+  });
+  bus.expose('/beacon', {
+    Beacon: {
+      methods: {
+        Emit: () => {
+          bus.signal({ path: '/beacon', interface: 'Beacon', member: 'Tick' },
+            ['hello-from-iframe']);
+        },
+      },
+      signals: ['Tick'],
+    },
+  });
+
+  await bus.claim('iframe-peer');
+  window.parent.postMessage({ type: 'abus:peer-ready' }, '*');
+});
+</script>
+</body>
+</html>
