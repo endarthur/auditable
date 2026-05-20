@@ -1,10 +1,12 @@
 // Shared mutable state for the Works shell. One object, like auditable's `S`.
 
 export const WKS = {
-  broker:  null,   // the A-Bus broker            (bus.js)
-  vfs:     null,   // the workspace VFS           (workspace.js)
-  rails:   null,   // the @gcu/rails instance     (layout.js)
-  menubar: null,   // the @gcu/menu MenuBar       (menubar.js)
+  broker:   null,       // the A-Bus broker                          (bus.js)
+  vfs:      null,       // the workspace VFS                         (workspace.js)
+  rails:    null,       // the @gcu/rails instance                   (layout.js)
+  menubar:  null,       // the @gcu/menu MenuBar                     (menubar.js)
+  worksBus: null,       // the shell's A-Bus client (`works` service) (works-service.js)
+  surfaces: new Map(),  // tab id → surface record                   (surfaces.js)
 };
 
 export const $ = (sel) => document.querySelector(sel);

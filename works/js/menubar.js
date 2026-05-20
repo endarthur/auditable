@@ -1,9 +1,10 @@
-// The desktop menu bar — @gcu/menu's MenuBar. Chunk 1 wires the structure;
-// the actions are stubs until the file tree (Chunk 3) and persistence
-// (Chunk 5) give them something to do.
+// The desktop menu bar — @gcu/menu's MenuBar. The File/View actions are
+// stubs until persistence (Chunk 5); the Debug menu can spawn a stub
+// surface, which is how Chunk 2 is exercised by hand.
 
 import { MenuBar } from '#menu';
 import { WKS, setStatus } from './state.js';
+import { spawnSurface } from './surfaces.js';
 
 export function setupMenuBar() {
   const el = document.getElementById('works-menubar');
@@ -18,14 +19,20 @@ export function setupMenuBar() {
     { label: 'View', items: () => [
       { label: 'Toggle sidebar', action: 'view:sidebar' },
     ] },
+    { label: 'Debug', items: () => [
+      { label: 'New stub surface', action: 'debug:stub' },
+    ] },
     { label: 'Help', items: () => [
       { label: 'About Auditable Works', action: 'help:about' },
     ] },
   ]);
 
   bar.on('action', (action) => {
-    // Chunk 1: stubs — just acknowledge in the statusbar.
-    setStatus(`menu: ${action}`);
+    if (action === 'debug:stub') {
+      spawnSurface('stub', { path: '/projects', title: 'Stub surface' });
+      return;
+    }
+    setStatus(`menu: ${action}`);  // Chunk 1/2 stubs
   });
 
   WKS.menubar = bar;

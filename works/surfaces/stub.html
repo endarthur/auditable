@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>stub surface</title>
+<style>
+  html, body { margin: 0; height: 100%; }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    background: #1a1d21; color: #8a9099;
+    font: 13px/1.5 system-ui, sans-serif;
+  }
+</style>
+</head>
+<body>
+<!--
+  A trivial Auditable Works surface — proves the spawn → handshake →
+  contract path. Not a real surface; a test/reference fixture.
+-->
+<div id="status">stub surface — waiting for welcome…</div>
+<script type="module">
+import { connect } from '../../ext/abus/index.js';
+
+const statusEl = document.getElementById('status');
+
+window.addEventListener('message', async (ev) => {
+  // §7.1 — adopt the welcome port only from our own parent.
+  if (ev.source !== window.parent) return;
+  if (!ev.data || ev.data.type !== 'abus:welcome') return;
+  const { port, tab } = ev.data;
+
+  let bus;
+  try {
+    bus = await connect(port, { client: 'stub-surface' });
+  } catch (e) {
+    statusEl.textContent = 'connect failed: ' + e.message;
+    return;
+  }
+
+  // The §5.2 Surface contract.
+  bus.expose('/', {
+    Surface: {
+      methods: {
+        Flush:     () => {},
+        CanClose:  () => true,
+        Relocated: (_p) => { /* adopt the new working directory */ },
+      },
+      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
+    },
+  });
+
+  // Prove the surface → works → VFS path: write a probe file through the
+  // `works` service and read it back.
+  let vfsOk = false;
+  try {
+    const probe = '/projects/.stub-probe';
+    const payload = 'hello from ' + tab.id;
+    await bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Write' },
+      [probe, payload]);
+    const back = await bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Read' },
+      [probe]);
+    vfsOk = (back === payload);
+  } catch (e) {
+    statusEl.textContent = 'works/VFS call failed: ' + e.message;
+  }
+
+  bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' },
+    ['Stub ' + tab.id]);
+  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
+
+  statusEl.textContent = 'stub surface — ' + bus.uniqueName
+    + (vfsOk ? ' · works/VFS OK' : ' · works/VFS failed');
+});
+</script>
+</body>
+</html>

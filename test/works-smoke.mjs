@@ -1,7 +1,9 @@
-// Browser smoke test for works.html — the Auditable Works shell skeleton
-// (Chunk 1). Serves the repo over a loopback HTTP origin, boots works.html
-// in headless Chromium, and checks the shell stands up: A-Bus broker,
-// workspace VFS, rails host, menu bar.
+// Browser smoke test for works.html — the Auditable Works shell.
+// Serves the repo over a loopback HTTP origin, boots works.html in headless
+// Chromium, and checks:
+//   Chunk 1 — the shell stands up (broker, VFS, rails host, menu bar).
+//   Chunk 2 — a surface spawns, handshakes, honours the contract, and can
+//             reach the workspace VFS through the `works` service.
 //
 // Not part of `npm test` — a Playwright run. Run directly:
 //   node test/works-smoke.mjs
@@ -43,43 +45,74 @@ page.on('console', (m) => { if (m.type() === 'error') errors.push('console.error
 
 await page.goto(url);
 
-// The shell sets window.WKS at the end of boot.
 await page.waitForFunction(
   () => window.WKS && window.WKS.broker && window.WKS.vfs,
   { timeout: 15000 },
 ).catch(() => {});
 
-const report = await page.evaluate(async () => {
+// ── Chunk 1 — the shell skeleton ──────────────────────────────────────
+const shell = await page.evaluate(async () => {
   const W = window.WKS || {};
   let projectsExists = false;
   try { projectsExists = await W.vfs.exists('/projects'); } catch { /* */ }
   return {
-    hasWKS:      !!window.WKS,
-    broker:      !!W.broker,
-    vfs:         !!W.vfs,
-    rails:       !!W.rails,
-    menubar:     !!W.menubar,
+    hasWKS: !!window.WKS, broker: !!W.broker, vfs: !!W.vfs,
+    rails: !!W.rails, menubar: !!W.menubar, worksBus: !!W.worksBus,
     projectsExists,
-    status:      document.getElementById('works-status')?.textContent || '',
+    status: document.getElementById('works-status')?.textContent || '',
     menubarFilled: (document.getElementById('works-menubar')?.childElementCount || 0) > 0,
-    railsHost:   !!document.getElementById('works-rails'),
+  };
+});
+
+// ── Chunk 2 — spawn a surface, exercise the contract ──────────────────
+const surface = await page.evaluate(async () => {
+  const W = window.WKS;
+  const tabId = W.spawnSurface('stub', { path: '/projects', title: 'Stub' });
+  const rec = W.surfaces.get(tabId);
+
+  // Wait for the surface to handshake + emit Ready.
+  const deadline = Date.now() + 10000;
+  while (!rec.ready && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+
+  // Shell → surface call, addressed by the surface's A-Bus unique name.
+  let canClose = null;
+  try {
+    canClose = await W.worksBus.call(
+      { to: rec.uniqueName, path: '/', interface: 'Surface', member: 'CanClose' }, []);
+  } catch (e) { canClose = 'error: ' + e.message; }
+
+  // Did the surface's works/VFS write reach the real workspace VFS?
+  let probe = null;
+  try { probe = await W.vfs.readFile('/projects/.stub-probe'); } catch { /* */ }
+
+  return {
+    tabId, ready: rec.ready, title: rec.title,
+    uniqueName: rec.uniqueName, canClose, probe,
   };
 });
 
 const checks = {
+  // Chunk 1
   'no page errors':            errors.length === 0,
-  'window.WKS present':        report.hasWKS,
-  'A-Bus broker created':      report.broker,
-  'workspace VFS created':     report.vfs,
-  '/projects dir exists':      report.projectsExists,
-  'rails host created':        report.rails,
-  'rails host element in DOM': report.railsHost,
-  'menu bar created':          report.menubar,
-  'menu bar rendered':         report.menubarFilled,
-  'shell reports ready':       report.status === 'Auditable Works — ready',
+  'window.WKS present':        shell.hasWKS,
+  'A-Bus broker created':      shell.broker,
+  'workspace VFS created':     shell.vfs,
+  '/projects dir exists':      shell.projectsExists,
+  'rails host created':        shell.rails,
+  'menu bar rendered':         shell.menubarFilled,
+  'works service created':     shell.worksBus,
+  'shell reports ready':       shell.status === 'Auditable Works — ready',
+  // Chunk 2
+  'surface handshakes (Ready)':       surface.ready === true,
+  'surface unique name assigned':     /^:\d+$/.test(surface.uniqueName),
+  'TitleChanged reflected on tab':    surface.title === 'Stub ' + surface.tabId,
+  'shell→surface call (CanClose)':    surface.canClose === true,
+  'surface reached works/VFS':        surface.probe === 'hello from ' + surface.tabId,
 };
 
-console.log('--- works.html (Chunk 1 shell skeleton) ---');
+console.log('--- works.html (Chunk 1 + 2) ---');
 let ok = true;
 for (const [name, pass] of Object.entries(checks)) {
   console.log((pass ? 'PASS' : 'FAIL') + ' — ' + name);
@@ -89,7 +122,8 @@ if (errors.length) {
   console.log('--- page errors ---');
   for (const e of errors) console.log(e);
 }
-console.log('status line: ' + JSON.stringify(report.status));
+console.log('status: ' + JSON.stringify(shell.status)
+  + ' | surface: ' + JSON.stringify(surface));
 
 await browser.close();
 server.close();

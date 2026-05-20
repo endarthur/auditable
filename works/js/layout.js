@@ -1,5 +1,7 @@
 // The rails host — @gcu/rails arranges surface iframes as docked tabs and
-// floats. Empty in Chunk 1; surfaces become panels from Chunk 2 on.
+// floats. A surface tab's panel is the surface's iframe (created by
+// surfaces.js); rails never reparents it, so the iframe and its A-Bus
+// connection survive every drag.
 
 import { createRails } from '#rails';
 import { WKS } from './state.js';
@@ -10,16 +12,17 @@ export function setupLayout() {
   WKS.rails = createRails(el, {
     initialState: { rails: [], floats: [] },
 
-    // A tab's panel. Chunk 1 has no surfaces, so this is a placeholder;
-    // from Chunk 2 it returns the surface iframe.
     renderPanel(tab) {
+      if (tab.kind === 'surface') {
+        const rec = WKS.surfaces.get(tab.id);
+        if (rec) return rec.iframe;
+      }
       const d = document.createElement('div');
       d.className = 'works-panel-placeholder';
       d.textContent = tab.title || 'surface';
       return d;
     },
 
-    // Shown when no tabs are open.
     renderEmpty() {
       const d = document.createElement('div');
       d.className = 'works-empty';
