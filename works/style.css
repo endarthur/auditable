@@ -60,6 +60,24 @@ body {
   color: #6b7177;
 }
 
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
+  border-radius: 3px;
+}
+.tree-row:hover { background: #21262b; }
+.tree-icon { flex: none; width: 1em; text-align: center; color: #6b7177; }
+.tree-label { overflow: hidden; text-overflow: ellipsis; }
+.tree-project { cursor: pointer; }
+.tree-project .tree-icon { color: #d98a3a; }
+.tree-file .tree-label { color: #8a9099; }
+
 .works-rails {
   flex: 1;
   min-width: 0;

@@ -93,6 +93,35 @@ const surface = await page.evaluate(async () => {
   };
 });
 
+// ── Chunk 3 — the file tree + surface registry ────────────────────────
+const tree = await page.evaluate(async () => {
+  const W = window.WKS;
+  // Create a project the real way (mkdir + project.json), then dispatch.
+  const projPath = await W.newProject('/projects', 'Quad');
+  await W.refreshTree();
+  await new Promise((r) => setTimeout(r, 150));
+
+  const rows = [...document.querySelectorAll('#works-tree .tree-row')];
+  const projRow = rows.find((r) => r.dataset.path === projPath);
+  const treeShowsProject = !!projRow && projRow.classList.contains('tree-project');
+
+  const before = W.surfaces.size;
+  await W.openPath(projPath);
+  await new Promise((r) => setTimeout(r, 250));
+  let opened = null;
+  for (const rec of W.surfaces.values()) if (rec.path === projPath) opened = rec;
+  const afterOpen = W.surfaces.size;
+
+  await W.openPath(projPath);   // re-open the same path
+  const afterReopen = W.surfaces.size;
+
+  return {
+    projPath, treeShowsProject,
+    surfaceOpened: !!opened, surfaceKind: opened && opened.kind,
+    spawned: afterOpen - before, deduped: afterReopen === afterOpen,
+  };
+});
+
 const checks = {
   // Chunk 1
   'no page errors':            errors.length === 0,
@@ -110,9 +139,14 @@ const checks = {
   'TitleChanged reflected on tab':    surface.title === 'Stub ' + surface.tabId,
   'shell→surface call (CanClose)':    surface.canClose === true,
   'surface reached works/VFS':        surface.probe === 'hello from ' + surface.tabId,
+  // Chunk 3
+  'tree renders a created project':   tree.treeShowsProject,
+  'openPath spawned a surface':       tree.surfaceOpened && tree.spawned === 1,
+  'kind resolved from project.json':  tree.surfaceKind === 'stub',
+  're-opening a path dedups':         tree.deduped,
 };
 
-console.log('--- works.html (Chunk 1 + 2) ---');
+console.log('--- works.html (Chunk 1 + 2 + 3) ---');
 let ok = true;
 for (const [name, pass] of Object.entries(checks)) {
   console.log((pass ? 'PASS' : 'FAIL') + ' — ' + name);

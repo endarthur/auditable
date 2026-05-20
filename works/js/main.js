@@ -4,9 +4,10 @@
 import './state.js';
 import './bus.js';
 import './workspace.js';
+import './surface-registry.js';
 import './layout.js';
 import './surfaces.js';
 import './works-service.js';
-import './menubar.js';
 import './tree.js';
+import './menubar.js';
 import './init.js';

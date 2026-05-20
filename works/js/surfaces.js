@@ -2,26 +2,23 @@
 // implementing the §5.2 Surface contract. The shell keeps one A-Bus channel
 // per surface and addresses each by its unique name.
 
-import { WKS } from './state.js';
-
-// Minimal surface registry — kind → app URL. Chunk 3 replaces this with
-// project.json kind detection driven by the file tree.
-const REGISTRY = {
-  stub: 'works/surfaces/stub.html',
-};
+import { WKS, setStatus } from './state.js';
+import { kindDef, kindForExtension } from './surface-registry.js';
 
 let _seq = 0;
 const _byUnique = new Map();   // A-Bus unique name → tab id
 
+const basename = (p) => p.split('/').filter(Boolean).pop() || p;
+
 // Spawn a surface of `kind` into a new rails tab. Returns the tab id.
 export function spawnSurface(kind, opts = {}) {
-  const url = REGISTRY[kind];
-  if (!url) throw new Error('unknown surface kind: ' + kind);
+  const def = kindDef(kind);
+  if (!def) throw new Error('unknown surface kind: ' + kind);
 
   const tabId = 't' + (++_seq);
   const iframe = document.createElement('iframe');
   iframe.className = 'works-surface-frame';
-  iframe.src = url;
+  iframe.src = def.url;
 
   // One A-Bus channel per surface: the shell keeps port1 (broker side),
   // the surface receives port2 in its welcome.
@@ -31,13 +28,12 @@ export function spawnSurface(kind, opts = {}) {
 
   const rec = {
     tabId, kind, uniqueName, iframe,
-    path: opts.path || '/', title: opts.title || kind,
+    path: opts.path || '/', title: opts.title || def.label,
     ready: false, dirty: false,
   };
   WKS.surfaces.set(tabId, rec);
 
-  // Hand the surface its port + bootstrap once its document has loaded
-  // (so its message listener is already registered).
+  // Hand the surface its port + bootstrap once its document has loaded.
   iframe.addEventListener('load', () => {
     iframe.contentWindow.postMessage(
       {
@@ -53,10 +49,30 @@ export function spawnSurface(kind, opts = {}) {
   return tabId;
 }
 
-// Open a VFS path in a surface. Chunk 2 spawns a stub; Chunk 3 resolves the
-// path's kind via the surface registry.
-export function openPath(path) {
-  return spawnSurface('stub', { path, title: path });
+// Open a VFS path in a surface, resolving its kind via the registry. One
+// tab per path — re-opening an already-open path just activates its tab.
+export async function openPath(p) {
+  for (const rec of WKS.surfaces.values()) {
+    if (rec.path === p) { WKS.rails.activateTab(rec.tabId); return rec.tabId; }
+  }
+
+  let kind = null;
+  let title = basename(p);
+  try {
+    if (await WKS.vfs.exists(p + '/project.json')) {
+      const meta = JSON.parse(await WKS.vfs.readFile(p + '/project.json'));
+      kind = meta.kind;
+      title = meta.title || title;
+    } else {
+      kind = kindForExtension(basename(p));   // loose file → by extension
+    }
+  } catch { /* fall through to the no-surface case */ }
+
+  if (!kind || !kindDef(kind)) {
+    setStatus('No surface for ' + p);
+    return null;
+  }
+  return spawnSurface(kind, { path: p, title });
 }
 
 // Reflect a surface's Surface-interface signals onto its tab + record.

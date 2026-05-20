@@ -8,21 +8,26 @@ import { setupBus } from './bus.js';
 import { setupWorkspace } from './workspace.js';
 import { setupLayout } from './layout.js';
 import { setupMenuBar } from './menubar.js';
-import { setupTree } from './tree.js';
+import { setupTree, refreshTree, newProject } from './tree.js';
 import { setupWorksService } from './works-service.js';
-import { setupSurfaces, spawnSurface } from './surfaces.js';
+import { setupSurfaces, spawnSurface, openPath } from './surfaces.js';
 
 async function boot() {
   setupBus();                  // the A-Bus broker
   await setupWorkspace();      // the workspace VFS
   setupLayout();               // the rails surface host
   setupMenuBar();              // the desktop menu bar
-  setupTree();                 // the project tree (placeholder)
+  setupTree();                 // the file-tree explorer
   await setupWorksService();   // the `works` A-Bus service
   setupSurfaces();             // surface-signal tracking
 
-  WKS.spawnSurface = spawnSurface;  // debug + smoke-test handle
+  // Debug + smoke-test handles.
+  WKS.spawnSurface = spawnSurface;
+  WKS.openPath = openPath;
+  WKS.refreshTree = refreshTree;
+  WKS.newProject = newProject;
   window.WKS = WKS;
+
   setStatus('Auditable Works — ready');
 }
 
