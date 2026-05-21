@@ -6,7 +6,7 @@
 import { WKS, setStatus } from './state.js';
 import { setupBus } from './bus.js';
 import { setupWorkspace } from './workspace.js';
-import { setupLayout } from './layout.js';
+import { setupLayout, restoreLayout } from './layout.js';
 import { setupMenuBar } from './menubar.js';
 import { setupTree, refreshTree, newProject } from './tree.js';
 import { setupWorksService } from './works-service.js';
@@ -14,12 +14,13 @@ import { setupSurfaces, spawnSurface, openPath } from './surfaces.js';
 
 async function boot() {
   setupBus();                  // the A-Bus broker
-  await setupWorkspace();      // the workspace VFS
+  await setupWorkspace();      // the workspace VFS (IndexedDB-backed)
   setupLayout();               // the rails surface host
   setupMenuBar();              // the desktop menu bar
   setupTree();                 // the file-tree explorer
   await setupWorksService();   // the `works` A-Bus service
   setupSurfaces();             // surface-signal tracking
+  await restoreLayout();       // reopen the saved tabs
 
   // Debug + smoke-test handles.
   WKS.spawnSurface = spawnSurface;

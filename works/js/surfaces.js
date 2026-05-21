@@ -5,17 +5,18 @@
 import { WKS, setStatus } from './state.js';
 import { kindDef, kindForExtension } from './surface-registry.js';
 
-let _seq = 0;
 const _byUnique = new Map();   // A-Bus unique name → tab id
 
 const basename = (p) => p.split('/').filter(Boolean).pop() || p;
+const newTabId = () => 't' + Math.random().toString(36).slice(2, 10);
 
-// Spawn a surface of `kind` into a new rails tab. Returns the tab id.
-export function spawnSurface(kind, opts = {}) {
+// Create a surface (iframe + A-Bus channel + record) for a given tab id.
+// Used by spawnSurface for a brand-new tab, and by layout.js renderPanel
+// when a tab is being restored from a saved layout.
+export function createSurface(tabId, kind, opts = {}) {
   const def = kindDef(kind);
   if (!def) throw new Error('unknown surface kind: ' + kind);
 
-  const tabId = 't' + (++_seq);
   const iframe = document.createElement('iframe');
   iframe.className = 'works-surface-frame';
   iframe.src = def.url;
@@ -43,8 +44,19 @@ export function spawnSurface(kind, opts = {}) {
       },
       '*', [ch.port2]);
   });
+  return rec;
+}
 
-  WKS.rails.addTab({ id: tabId, title: rec.title, kind: 'surface' });
+// Spawn a surface of `kind` into a new rails tab. Returns the tab id.
+export function spawnSurface(kind, opts = {}) {
+  const tabId = newTabId();
+  const rec = createSurface(tabId, kind, opts);
+  WKS.rails.addTab({
+    id: tabId, title: rec.title, kind: 'surface',
+    // Consumer payload — serialized with the layout, read back by
+    // renderPanel to re-create the surface on restore.
+    surfaceKind: kind, path: rec.path,
+  });
   WKS.rails.activateTab(tabId);
   return tabId;
 }

@@ -5,22 +5,26 @@
 // ordinary directories; plus volatile MemoryBackend overlays at `/scratch`
 // and `/sys`.
 //
-// Chunk 1 uses a MemoryBackend storage home (fresh each load). The durable
-// backends — browser IndexedDB and a disk folder — arrive with persistence
-// (Chunk 5).
+// The storage home is IndexedDB-backed, so the workspace — projects, files,
+// the rails layout — survives a reload. The disk-folder (FSAA) storage
+// home and single-file export/import are the remaining persistence work.
 
-import { VFS, MemoryBackend } from '#vfs';
+import { VFS } from '#vfs';
 import { WKS } from './state.js';
 
 export async function setupWorkspace() {
-  const vfs = new VFS();
-  vfs._mounts.set('/', new MemoryBackend());          // storage home
-  vfs._mounts.set('/scratch', new MemoryBackend());   // volatile
-  vfs._mounts.set('/sys', new MemoryBackend());       // volatile
+  const vfs = await VFS.create({
+    backends: {
+      '/':        { type: 'idb', name: 'auditable-works' },  // persistent
+      '/scratch': { type: 'memory' },                        // volatile
+      '/sys':     { type: 'memory' },                        // volatile
+    },
+  });
 
-  // Standard top-level directories inside the storage home.
-  for (const dir of ['/projects', '/lib', '/home']) {
-    await vfs.mkdir(dir, { recursive: true });
+  // Standard directories inside the storage home (idempotent — they
+  // persist across reloads). /home/.works holds the shell's own state.
+  for (const dir of ['/projects', '/lib', '/home', '/home/.works']) {
+    try { await vfs.mkdir(dir, { recursive: true }); } catch { /* exists */ }
   }
 
   WKS.vfs = vfs;

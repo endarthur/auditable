@@ -186,6 +186,36 @@ if (inspectorFrame) {
     () => document.querySelectorAll('#peers .peer').length);
 }
 
+// ── Persistence across a reload (Chunk 5) ─────────────────────────────
+await page.evaluate(async () => {
+  const W = window.WKS;
+  await W.newProject('/projects', 'PersistMe');
+  await W.vfs.writeFile('/projects/persist-note.txt', 'survives reload');
+  await W.openPath('/projects/persist-note.txt');
+  await new Promise((r) => setTimeout(r, 500));   // open the surface + save the layout
+});
+
+await page.reload();
+await page.waitForFunction(
+  () => window.WKS && window.WKS.vfs && window.WKS.broker,
+  { timeout: 15000 },
+).catch(() => {});
+await page.waitForTimeout(700);   // let restore + the active surface settle
+
+const persist = await page.evaluate(async () => {
+  const W = window.WKS;
+  let projExists = false, note = null;
+  try { projExists = await W.vfs.exists('/projects/PersistMe'); } catch { /* */ }
+  try { note = await W.vfs.readFile('/projects/persist-note.txt', 'utf8'); } catch { /* */ }
+  await W.refreshTree();
+  await new Promise((r) => setTimeout(r, 150));
+  const treeHasProj = [...document.querySelectorAll('#works-tree .tree-row')]
+    .some((r) => r.dataset.path === '/projects/PersistMe');
+  // After a reload nothing calls spawnSurface — so any live surface came
+  // from restoreLayout → renderPanel re-creating it.
+  return { projExists, note, treeHasProj, tabsRestored: W.surfaces.size };
+});
+
 const checks = {
   // Chunk 1
   'no page errors':            errors.length === 0,
@@ -217,9 +247,13 @@ const checks = {
   'broker.inspect() returns peers':   inspectorOpen.brokerPeers > 0 && inspectorOpen.brokerHasSubs,
   'inspector surface opens':          inspectorOpen.ready === true,
   'inspector renders the registry':   inspectorPeerRows > 0,
+  // Persistence (Chunk 5)
+  'workspace survives a reload':      persist.projExists && persist.note === 'survives reload',
+  'tree shows projects after reload': persist.treeHasProj,
+  'tabs restore after reload':        persist.tabsRestored > 0,
 };
 
-console.log('--- works.html (Chunks 1-3 + text + inspector) ---');
+console.log('--- works.html (Works rebuild — Chunks 1-3, 5 + surfaces) ---');
 let ok = true;
 for (const [name, pass] of Object.entries(checks)) {
   console.log((pass ? 'PASS' : 'FAIL') + ' — ' + name);
