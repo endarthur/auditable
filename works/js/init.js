@@ -11,6 +11,7 @@ import { setupMenuBar } from './menubar.js';
 import { setupTree, refreshTree, newProject } from './tree.js';
 import { setupWorksService } from './works-service.js';
 import { setupSurfaces, spawnSurface, openPath } from './surfaces.js';
+import { serializeWorkspace, buildWorksHtml } from './persist.js';
 
 async function boot() {
   setupBus();                  // the A-Bus broker
@@ -27,6 +28,8 @@ async function boot() {
   WKS.openPath = openPath;
   WKS.refreshTree = refreshTree;
   WKS.newProject = newProject;
+  WKS.serializeWorkspace = serializeWorkspace;
+  WKS.buildWorksHtml = buildWorksHtml;
   window.WKS = WKS;
 
   setStatus('Auditable Works — ready');

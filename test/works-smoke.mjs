@@ -22,9 +22,16 @@ const MIME = {
   '.json': 'application/json', '.css': 'text/css',
 };
 
+let exportedHtml = null;   // set by the export round-trip test below
+
 const server = http.createServer((req, res) => {
   const p = req.url.split('?')[0];
   if (p === '/favicon.ico') { res.writeHead(204); res.end(); return; }
+  if (p === '/exported-workspace.html') {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end(exportedHtml || '<!doctype html>');
+    return;
+  }
   const file = path.join(root, p);
   if (!file.startsWith(root)) { res.writeHead(403); res.end('forbidden'); return; }
   fs.readFile(file, (err, data) => {
@@ -258,6 +265,27 @@ const nbFlush = await page.evaluate(async (uniqueName) => {
   return { onDisk };
 }, nbOpen.uniqueName);
 
+// ── Workspace export / import round-trip (Chunk 5b) ───────────────────
+// Serialize the live workspace, build a self-contained HTML, then open it —
+// it must boot the desktop over the embedded snapshot.
+exportedHtml = await page.evaluate(async () => {
+  const W = window.WKS;
+  return W.buildWorksHtml(await W.serializeWorkspace(W.vfs));
+});
+const exportLooksRight = /<!--WORKS-VFS/.test(exportedHtml) && /<\/html>/.test(exportedHtml);
+
+await page.goto(`http://127.0.0.1:${port}/exported-workspace.html`);
+await page.waitForFunction(
+  () => window.WKS && window.WKS.vfs, { timeout: 15000 }).catch(() => {});
+await page.waitForTimeout(600);
+const imported = await page.evaluate(async () => {
+  const W = window.WKS;
+  let nbExists = false, note = null;
+  try { nbExists = await W.vfs.exists('/projects/SmokeNB/notebook.txt'); } catch { /* */ }
+  try { note = await W.vfs.readFile('/projects/persist-note.txt', 'utf8'); } catch { /* */ }
+  return { home: W.home && W.home.kind, nbExists, note };
+});
+
 const checks = {
   // Chunk 1
   'no page errors':            errors.length === 0,
@@ -298,6 +326,11 @@ const checks = {
   'notebook surface kind resolved':   nbOpen.kind === 'notebook',
   'notebook hydrates cells from VFS': nbCells === 2,
   'notebook Flush round-trips':       !!nbFlush.onDisk && nbFlush.onDisk.includes('notebook surface smoke'),
+  // Workspace export / import (Chunk 5b)
+  'export builds a self-contained HTML':   exportLooksRight,
+  'imported workspace uses a memory home': imported.home === 'memory',
+  'imported workspace has its projects':   imported.nbExists,
+  'imported workspace keeps its files':    imported.note === 'survives reload',
 };
 
 console.log('--- works.html (Works rebuild — Chunks 1-3, 5 + surfaces) ---');

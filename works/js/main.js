@@ -2,6 +2,7 @@
 // the registry/boot order, so init.js (the entry) must come last.
 
 import './state.js';
+import './persist.js';
 import './bus.js';
 import './workspace.js';
 import './surface-registry.js';

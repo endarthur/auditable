@@ -5,6 +5,7 @@ import { WKS, setStatus } from './state.js';
 import { spawnSurface } from './surfaces.js';
 import { newProject } from './tree.js';
 import { openWorkspaceFolder, resetWorkspace } from './workspace.js';
+import { exportWorkspace, openWorkspaceFile, saveWorkspace } from './persist.js';
 import { confirm as dlgConfirm } from '#dialog';
 
 export function setupMenuBar() {
@@ -14,10 +15,12 @@ export function setupMenuBar() {
     { label: 'File', items: () => [
       { label: 'New project…', action: 'project:new' },
       '---',
-      { label: 'New workspace…', action: 'workspace:new' },
-      { label: 'Open folder…',   action: 'workspace:open' },
+      { label: 'New workspace…',       action: 'workspace:new' },
+      { label: 'Open folder…',         action: 'workspace:open' },
+      { label: 'Open workspace file…', action: 'workspace:openfile' },
       '---',
-      { label: 'Save', action: 'workspace:save', shortcut: 'Ctrl+S' },
+      { label: 'Save',              action: 'workspace:save', shortcut: 'Ctrl+S' },
+      { label: 'Export workspace…', action: 'workspace:export' },
     ] },
     { label: 'View', items: () => [
       { label: 'Toggle sidebar', action: 'view:sidebar' },
@@ -34,6 +37,9 @@ export function setupMenuBar() {
   bar.on('action', async (action) => {
     if (action === 'project:new') { newProject('/projects'); return; }
     if (action === 'workspace:open') { await openWorkspaceFolder(); return; }
+    if (action === 'workspace:openfile') { openWorkspaceFile(); return; }
+    if (action === 'workspace:save') { await saveWorkspace(); return; }
+    if (action === 'workspace:export') { await exportWorkspace(); return; }
     if (action === 'workspace:new') {
       if (await dlgConfirm('Discard the current workspace and start fresh?', { danger: true })) {
         await resetWorkspace();
@@ -49,6 +55,14 @@ export function setupMenuBar() {
       return;
     }
     setStatus(`menu: ${action}`);  // workspace:save lands with 5b
+  });
+
+  // Ctrl/Cmd+S → the Save flush barrier.
+  window.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+      e.preventDefault();
+      saveWorkspace();
+    }
   });
 
   WKS.menubar = bar;

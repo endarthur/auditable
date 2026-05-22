@@ -11,6 +11,7 @@
 
 import { VFS } from '#vfs';
 import { WKS } from './state.js';
+import { detectWorkspaceBlock, hydrateWorkspace } from './persist.js';
 
 // ── Shell metadata store ─────────────────────────────────────────────
 // A tiny IndexedDB keyval, separate from the workspace itself, holding the
@@ -87,6 +88,26 @@ function _reconnectGate(handle) {
 // ── Workspace setup ──────────────────────────────────────────────────
 
 export async function setupWorkspace() {
+  // An exported workspace HTML embeds its VFS — open it as a volatile
+  // snapshot (edits persist by re-exporting, or by adopting a disk folder).
+  const imported = detectWorkspaceBlock(document.body.innerHTML);
+  if (imported) {
+    const vfs = await VFS.create({
+      backends: {
+        '/':        { type: 'memory' },
+        '/scratch': { type: 'memory' },
+        '/sys':     { type: 'memory' },
+      },
+    });
+    for (const dir of ['/projects', '/lib', '/home', '/home/.works']) {
+      try { await vfs.mkdir(dir, { recursive: true }); } catch { /* exists */ }
+    }
+    await hydrateWorkspace(vfs, imported);
+    WKS.vfs = vfs;
+    WKS.home = { kind: 'memory' };
+    return;
+  }
+
   let home = null;   // { kind:'fsaa', handle } | { kind:'idb', name }
 
   // A saved disk-folder handle takes precedence — that folder *is* the
