@@ -1581,7 +1581,7 @@ class DataFrame {
   //   df.to_csv("path.csv")        → write to VFS, return Promise<null>
   //   df.to_csv("path.csv", sep=';', index=False) → as above with kwargs
   //   df.to_csv(sep=';')           → return CSV text with custom sep
-  // Relative paths land under /home/nb/ (the notebook's home mount);
+  // Relative paths land under /projects/self/ (the notebook's project dir);
   // absolute paths (starting with /) are passed through verbatim.
   to_csv(pathOrOpts, opts) {
     let path = null;
@@ -1600,7 +1600,7 @@ class DataFrame {
     if (typeof window === 'undefined' || !window._notebookVFS) {
       throw new Error('to_csv: VFS not available (no window._notebookVFS)');
     }
-    const abs = path.startsWith('/') ? path : '/home/nb/' + path;
+    const abs = path.startsWith('/') ? path : '/projects/self/' + path;
     return window._notebookVFS.writeFile(abs, text).then(() => null);
   }
 
@@ -2003,7 +2003,7 @@ function read_csv(source, opts) {
       })();
     }
     // Bare filename — looks like a file path, not CSV text. Treat as
-    // a VFS lookup under /home/nb/. Heuristic: single line, no commas
+    // a VFS lookup under /projects/self/. Heuristic: single line, no commas
     // / tabs / semicolons, ends with a CSV-ish extension. Otherwise
     // assume the user passed inline CSV text and let csv() parse it.
     if (!trimmed.includes('\n') && !trimmed.includes(',')
@@ -2011,7 +2011,7 @@ function read_csv(source, opts) {
         && /\.(csv|tsv|txt)$/i.test(trimmed)
         && typeof window !== 'undefined' && window._notebookVFS) {
       return (async () => {
-        const abs = '/home/nb/' + trimmed;
+        const abs = '/projects/self/' + trimmed;
         try {
           const text = await window._notebookVFS.readFile(abs, 'text');
           return new DataFrame(csv(text, opts));

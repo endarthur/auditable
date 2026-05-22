@@ -11,7 +11,7 @@ import { applySettings, getEditorViewSetting, resolveExecMode, resolveRunOnLoad 
 import { toggleSplitView } from './split.js';
 import { cryptoDetect, cryptoUnlock, cryptoUnlockRecovery, cryptoSetLocked, cryptoIsEncrypted, syncCryptoDebounced, cryptoPassphraseStrength, cryptoEnable, cryptoDisable, cryptoChangePassphrase, cryptoRegenerateRecovery, cryptoLock } from './crypto.js';
 import { decodeModules, encodeModules, parseNotebookTxt, hydrateVfs } from './serialize.js';
-import { hydrateModulesFromVfs, flushPendingDirty } from './persist.js';
+import { hydrateModulesFromVfs, flushPendingDirty, migrateLegacyDump } from './persist.js';
 import { getSettings } from './settings.js';
 import { Dialog } from '#dialog';
 import { runAll } from './exec.js';
@@ -137,7 +137,7 @@ async function _resumeAfterUnlock(payload) {
     }
   } else {
     // New format: payload IS the VFS dump.
-    if (vfs && payload) await hydrateVfs(vfs, payload);
+    if (vfs && payload) await hydrateVfs(vfs, migrateLegacyDump(payload));
 
     // Hydrate runtime state from VFS
     if (vfs) {
@@ -145,11 +145,11 @@ async function _resumeAfterUnlock(payload) {
       if (Object.keys(modules).length > 0) window._installedModules = modules;
     }
 
-    // Read /// txt notebook content from /var/notebook.txt
+    // Read /// txt notebook content from /projects/self/notebook.txt
     let parsed = null;
     if (vfs) {
       try {
-        const txt = await vfs.readFile('/var/notebook.txt', 'text');
+        const txt = await vfs.readFile('/projects/self/notebook.txt', 'text');
         parsed = parseNotebookTxt(txt);
       } catch { /* fresh notebook */ }
     }
@@ -461,12 +461,12 @@ export function _updateCryptoSettingsUI() {
 
 // ── USER THEME (VFS) ──
 // Per spec_inbox/auditable-theme-spec.md §6.2: a CSS file at
-// /home/nb/theme.css is auto-injected after the built-in theme so it
-// can override --au-* tokens (or even --sw-* swatches for a full
+// /projects/self/theme.css is auto-injected after the built-in theme so
+// it can override --au-* tokens (or even --sw-* swatches for a full
 // re-skin). Reapplies on fs:changed; removes the style element if the
 // file is deleted.
 
-const USER_THEME_PATH = '/home/nb/theme.css';
+const USER_THEME_PATH = '/projects/self/theme.css';
 
 async function loadUserTheme() {
   const vfs = window._notebookVFS;
@@ -498,7 +498,7 @@ async function loadUserTheme() {
 }
 
 // Debounced re-apply on fs:changed (any VFS write may have touched
-// /home/nb/theme.css — we just re-check rather than tracking paths).
+// /projects/self/theme.css — we just re-check rather than tracking paths).
 // Subscribe via the direct hooks-module import rather than
 // window.auditable.hooks — globals.js wires the latter at *its* own
 // module-eval time, and depending on import order it's not always
@@ -544,7 +544,7 @@ setTimeout(async function init() {
     addCell('md', '');
     addCell('code', '');
   }
-  // Apply user theme from /home/nb/theme.css (if any) — runs after the
+  // Apply user theme from /projects/self/theme.css (if any) — runs after the
   // VFS is hydrated so saved notebooks pick up their bundled theme on load.
   await loadUserTheme();
   // configure CM6 autocomplete for all code cells

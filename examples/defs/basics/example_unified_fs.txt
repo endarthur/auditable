@@ -5,13 +5,13 @@
 /// md
 # unified filesystem
 
-`notebook.fs` and `vfs` share the same storage. `notebook.fs` uses relative paths (rooted at `/home/nb`). `vfs` uses absolute paths with a full mount table. one filesystem, two API styles.
+`notebook.fs` and `vfs` share the same storage. `notebook.fs` uses relative paths (rooted at `/projects/self`). `vfs` uses absolute paths with a full mount table. one filesystem, two API styles.
 
 | API | path style | example |
 |-----|-----------|---------|
 | `notebook.fs` | relative | `notebook.fs.write('data.csv', ...)` |
-| `vfs` | absolute | `vfs.readFile('/home/nb/data.csv')` |
-| Python `open()` | relative (cwd = `/home/nb`) | `open('data.csv')` |
+| `vfs` | absolute | `vfs.readFile('/projects/self/data.csv')` |
+| Python `open()` | relative (cwd = `/projects/self`) | `open('data.csv')` |
 
 /// md
 ## write from notebook.fs, read from vfs
@@ -26,7 +26,7 @@ DDH02,0,15,55.0
 DDH02,15,30,62.8`)
 
 // vfs.readFile — same file at its absolute path
-const csv = await vfs.readFile("/home/nb/survey/drillholes.csv")
+const csv = await vfs.readFile("/projects/self/survey/drillholes.csv")
 display("read via vfs:")
 display(csv)
 
@@ -34,8 +34,8 @@ display(csv)
 ## write from vfs, read from notebook.fs
 
 /// code
-// vfs writes to /home/nb — appears in notebook.fs and the files panel
-await vfs.writeFile("/home/nb/survey/notes.txt", "field visit 2025-Q3: 5 holes completed")
+// vfs writes to /projects/self — appears in notebook.fs and the files panel
+await vfs.writeFile("/projects/self/survey/notes.txt", "field visit 2025-Q3: 5 holes completed")
 
 // notebook.fs reads the same file with a relative path
 const notes = await notebook.fs.read("survey/notes.txt")
@@ -56,7 +56,7 @@ display("(this file won't survive a save/reload)")
 /// md
 ## Python reads what JS wrote
 
-Python's `open()` resolves relative paths against `/home/nb` — the same directory notebook.fs writes to. no import or bridge needed.
+Python's `open()` resolves relative paths against `/projects/self` — the same directory notebook.fs writes to. no import or bridge needed.
 
 /// code collapsed
 // %collapsed
@@ -119,4 +119,4 @@ display(`vfs mounts: ${vfs.mounts().map(m => m.path).join(", ")}`)
 /// md
 ---
 
-all three APIs — `notebook.fs`, `vfs`, and Python `open()` — see the same files. persistent files live under `/home/nb` (saved in the notebook HTML). `/tmp` is volatile. open the **files** panel to browse.
+all three APIs — `notebook.fs`, `vfs`, and Python `open()` — see the same files. persistent files live under `/projects/self` (saved in the notebook HTML). `/tmp` is volatile. open the **files** panel to browse.

@@ -128,8 +128,8 @@ window._importCache = {};
 // in headless notebooks.
 const { VFS, MemoryBackend, path: vfsPath } = await import('../ext/vfs/index.js');
 const _notebookVFS = new VFS();
-_notebookVFS._mounts.set('/home/nb', new MemoryBackend());
-_notebookVFS._mounts.set('/var', new MemoryBackend());
+_notebookVFS._mounts.set('/projects/self', new MemoryBackend());
+_notebookVFS._mounts.set('/lib', new MemoryBackend());
 _notebookVFS._mounts.set('/tmp', new MemoryBackend());
 _notebookVFS._mounts.set('/usr/lib/python', new MemoryBackend());
 window._notebookVFS = _notebookVFS;
@@ -157,12 +157,12 @@ await import('../ext/ipython-adapter/adder.js');
 const { importNotebook } = await import('../ext/ipynb/index.js');
 const { pythonExecute } = await import('../ext/adder/src/cell.js');
 
-// Pre-fetch any --prefetch=URL files into /home/nb/<basename>. Lets
+// Pre-fetch any --prefetch=URL files into /projects/self/<basename>. Lets
 // notebooks that load data via `pd.read_csv("foo.csv")` find the file
 // without a manual setup step.
 for (const url of prefetchUrls) {
   const name = url.split('/').pop() || 'fetched';
-  const dst = '/home/nb/' + name;
+  const dst = '/projects/self/' + name;
   const resp = await fetch(url);
   if (!resp.ok) throw new Error(`prefetch: HTTP ${resp.status} fetching ${url}`);
   const text = await resp.text();

@@ -106,7 +106,7 @@ describe('notebook.fs core', () => {
     const backend = new CommentBackend({});
     Object.defineProperty(backend, '_map', { get: () => window._notebookFS, configurable: true });
     backend._syncComment = () => {};
-    testVfs._mounts.set('/home/nb', backend);
+    testVfs._mounts.set('/projects/self', backend);
     testVfs._mounts.set('/tmp', new MemoryBackend());
     window._notebookVFS = testVfs;
     fs = createNotebookFs();

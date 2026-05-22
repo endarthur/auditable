@@ -93,14 +93,14 @@ async function checkExample(browser, ex) {
     // source notebook claims.
     const cellCountCheck = await page.evaluate(async () => {
       const html = document.body.innerHTML;
-      // Source-of-truth cell count: try AUDITABLE-VFS (/var/notebook.txt /// form),
-      // then legacy AUDITABLE-DATA JSON.
+      // Source-of-truth cell count: try AUDITABLE-VFS (/projects/self/notebook.txt
+      // /// form), then legacy AUDITABLE-DATA JSON.
       const vfsMatch = html.match(/<!--AUDITABLE-VFS\n([\s\S]*?)\nAUDITABLE-VFS-->/);
       let expected = -1;
       if (vfsMatch) {
         try {
           const dump = JSON.parse(vfsMatch[1]);
-          const txt = dump['/var/notebook.txt']?.content;
+          const txt = dump['/projects/self/notebook.txt']?.content;
           if (typeof txt === 'string') {
             expected = (txt.match(/^\/\/\/ (?:code|md|css|html|[a-z][\w-]*)/gm) || []).length;
           }

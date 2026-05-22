@@ -87,74 +87,73 @@ describe('serializeNotebookTxt / parseNotebookTxt round-trip', () => {
 describe('serializeVfs / hydrateVfs round-trip', () => {
   async function makeVfsWithMounts() {
     const vfs = new VFS();
-    vfs._mounts.set('/var', new MemoryBackend());
-    vfs._mounts.set('/home/nb', new MemoryBackend());
+    vfs._mounts.set('/projects/self', new MemoryBackend());
+    vfs._mounts.set('/lib', new MemoryBackend());
     vfs._mounts.set('/tmp', new MemoryBackend());
     return vfs;
   }
 
-  it('walks /var and /home/nb but skips /tmp', async () => {
+  it('walks /projects and /lib but skips /tmp', async () => {
     const vfs = await makeVfsWithMounts();
-    await vfs.writeFile('/var/notebook.txt', 'cells go here');
-    await vfs.writeFile('/home/nb/data.csv', 'a,b,c\n1,2,3');
+    await vfs.writeFile('/projects/self/notebook.txt', 'cells go here');
+    await vfs.writeFile('/lib/mod.js', '// a module');
     await vfs.writeFile('/tmp/scratch.txt', 'volatile');
 
     const dump = await serializeVfs(vfs);
 
-    assert.ok(dump['/var/notebook.txt']);
-    assert.equal(dump['/var/notebook.txt'].content, 'cells go here');
-    assert.ok(dump['/home/nb/data.csv']);
-    assert.equal(dump['/home/nb/data.csv'].content, 'a,b,c\n1,2,3');
+    assert.ok(dump['/projects/self/notebook.txt']);
+    assert.equal(dump['/projects/self/notebook.txt'].content, 'cells go here');
+    assert.ok(dump['/lib/mod.js']);
+    assert.equal(dump['/lib/mod.js'].content, '// a module');
     assert.ok(!dump['/tmp/scratch.txt']);
   });
 
   it('round-trips text files', async () => {
     const v1 = await makeVfsWithMounts();
-    await v1.writeFile('/var/notebook.txt', '/// auditable\n/// code\nx');
-    await v1.writeFile('/home/nb/foo.json', '{"a":1}');
+    await v1.writeFile('/projects/self/notebook.txt', '/// auditable\n/// code\nx');
+    await v1.writeFile('/projects/self/foo.json', '{"a":1}');
 
     const dump = await serializeVfs(v1);
 
     const v2 = await makeVfsWithMounts();
     await hydrateVfs(v2, dump);
 
-    assert.equal(await v2.readFile('/var/notebook.txt', 'text'), '/// auditable\n/// code\nx');
-    assert.equal(await v2.readFile('/home/nb/foo.json', 'text'), '{"a":1}');
+    assert.equal(await v2.readFile('/projects/self/notebook.txt', 'text'), '/// auditable\n/// code\nx');
+    assert.equal(await v2.readFile('/projects/self/foo.json', 'text'), '{"a":1}');
   });
 
   it('round-trips binary content (base64 in dump)', async () => {
     const v1 = await makeVfsWithMounts();
     const bytes = new Uint8Array([0, 1, 2, 255, 254, 253, 0, 100]);
-    await v1.writeFile('/home/nb/blob.bin', bytes);
+    await v1.writeFile('/projects/self/blob.bin', bytes);
 
     const dump = await serializeVfs(v1);
 
     // The walker tries text first; for binary content readFile('text') often
     // returns garbage rather than throwing, so we don't assert kind here.
     // The round-trip must reconstruct the bytes either way.
-    assert.ok(dump['/home/nb/blob.bin']);
+    assert.ok(dump['/projects/self/blob.bin']);
 
     const v2 = await makeVfsWithMounts();
     await hydrateVfs(v2, dump);
-    const out = await v2.readFile('/home/nb/blob.bin', 'bytes');
+    const out = await v2.readFile('/projects/self/blob.bin', 'bytes');
     assert.deepEqual([...out], [...bytes]);
   });
 
   it('nested directories survive', async () => {
     const v1 = await makeVfsWithMounts();
-    await v1.mkdir('/var/modules', { recursive: true });
-    await v1.mkdir('/var/modules/lodash', { recursive: true });
-    await v1.writeFile('/var/modules/lodash/source', '// lodash source');
-    await v1.writeFile('/var/modules/lodash/meta.json', '{"compressed":false}');
+    await v1.mkdir('/lib/lodash', { recursive: true });
+    await v1.writeFile('/lib/lodash/source', '// lodash source');
+    await v1.writeFile('/lib/lodash/meta.json', '{"compressed":false}');
 
     const dump = await serializeVfs(v1);
-    assert.ok(dump['/var/modules/lodash/source']);
-    assert.ok(dump['/var/modules/lodash/meta.json']);
+    assert.ok(dump['/lib/lodash/source']);
+    assert.ok(dump['/lib/lodash/meta.json']);
 
     const v2 = await makeVfsWithMounts();
     await hydrateVfs(v2, dump);
-    assert.equal(await v2.readFile('/var/modules/lodash/source', 'text'), '// lodash source');
-    assert.equal(await v2.readFile('/var/modules/lodash/meta.json', 'text'), '{"compressed":false}');
+    assert.equal(await v2.readFile('/lib/lodash/source', 'text'), '// lodash source');
+    assert.equal(await v2.readFile('/lib/lodash/meta.json', 'text'), '{"compressed":false}');
   });
 
   it('empty mounts produce empty dump entries', async () => {

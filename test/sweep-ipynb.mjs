@@ -57,8 +57,8 @@ installDomShim();
 
 const { VFS, MemoryBackend, path: vfsPath } = await import('../ext/vfs/index.js');
 const _vfs = new VFS();
-_vfs._mounts.set('/home/nb', new MemoryBackend());
-_vfs._mounts.set('/var', new MemoryBackend());
+_vfs._mounts.set('/projects/self', new MemoryBackend());
+_vfs._mounts.set('/lib', new MemoryBackend());
 _vfs._mounts.set('/tmp', new MemoryBackend());
 _vfs._mounts.set('/usr/lib/python', new MemoryBackend());
 window._notebookVFS = _vfs;

@@ -21,8 +21,8 @@ installDomShim();
 // VFS — adder's os/path/etc and sadpan's to_csv-to-path need this.
 const { VFS, MemoryBackend, path: vfsPath } = await import('../ext/vfs/index.js');
 const _vfs = new VFS();
-_vfs._mounts.set('/home/nb', new MemoryBackend());
-_vfs._mounts.set('/var', new MemoryBackend());
+_vfs._mounts.set('/projects/self', new MemoryBackend());
+_vfs._mounts.set('/lib', new MemoryBackend());
 _vfs._mounts.set('/tmp', new MemoryBackend());
 _vfs._mounts.set('/usr/lib/python', new MemoryBackend());
 window._notebookVFS = _vfs;
@@ -230,28 +230,28 @@ describe('sadpan: to_csv path vs string', () => {
     assert.ok(scope.text.includes('1,10'));
   });
 
-  test('df.to_csv("/home/nb/out.csv") writes to VFS', async () => {
+  test('df.to_csv("/projects/self/out.csv") writes to VFS', async () => {
     const { scope } = await runCell([
       'import sadpan as pd',
       'df = pd.DataFrame({"a":[1,2], "b":[10,20]})',
-      'result = df.to_csv("/home/nb/out.csv")',
+      'result = df.to_csv("/projects/self/out.csv")',
     ].join('\n'));
     // pandas returns None on file write
     assert.equal(scope.result, null);
     // File should be readable via VFS
-    const text = await window._notebookVFS.readFile('/home/nb/out.csv', 'text');
+    const text = await window._notebookVFS.readFile('/projects/self/out.csv', 'text');
     assert.ok(text.includes('a,b'));
     assert.ok(text.includes('1,10'));
   });
 
-  test('df.to_csv("relative.csv") writes under /home/nb/', async () => {
+  test('df.to_csv("relative.csv") writes under /projects/self/', async () => {
     const { scope } = await runCell([
       'import sadpan as pd',
       'df = pd.DataFrame({"x":[7]})',
       'result = df.to_csv("relative.csv")',
     ].join('\n'));
     assert.equal(scope.result, null);
-    const text = await window._notebookVFS.readFile('/home/nb/relative.csv', 'text');
+    const text = await window._notebookVFS.readFile('/projects/self/relative.csv', 'text');
     assert.ok(text.includes('x'));
     assert.ok(text.includes('7'));
   });

@@ -1093,8 +1093,8 @@ We choose to write JavaScript. We choose to write JavaScript... We choose to wri
 
 // ── shared cwd + path resolution ──
 
-const _cwd = { value: '/home/nb' };
-const _HOME = '/home/nb';
+const _cwd = { value: '/projects/self' };
+const _HOME = '/projects/self';
 
 // Expand ~ and resolve relative paths against cwd. Used by open(), Path(), os._resolve().
 export function _resolvePath(p, pth) {

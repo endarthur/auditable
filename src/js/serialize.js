@@ -170,7 +170,7 @@ function _trimCell(s) {
 // Pure VFS → JSON dump and back. Used by persist.js for save/load.
 // Spec: spec_inbox/shipped/auditable-persistence-spec.md.
 
-const _DEFAULT_PERSISTENT_MOUNTS = ['/home/nb', '/var'];
+const _DEFAULT_PERSISTENT_MOUNTS = ['/projects/self', '/lib'];
 
 function _bytesToBase64(bytes) {
   let bin = '';
@@ -222,7 +222,7 @@ async function _walkMount(vfs, mountPath, dump) {
  * { path → entry } dump for persistence.
  *
  * @param {VFS} vfs - VFS instance
- * @param {string[]} [mounts] - persistent mount paths (defaults to ['/home/nb', '/var'])
+ * @param {string[]} [mounts] - persistent mount paths (defaults to ['/projects/self', '/lib'])
  */
 export async function serializeVfs(vfs, mounts) {
   const dump = {};

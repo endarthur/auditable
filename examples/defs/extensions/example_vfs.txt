@@ -4,7 +4,7 @@
 /// md
 # virtual filesystem
 
-`vfs` is the notebook's shared VFS instance (with `/home/nb`, `/tmp`, and `/usr/lib/python` pre-mounted). `std.VFS` is the class for creating custom standalone instances.
+`vfs` is the notebook's shared VFS instance (with `/projects`, `/lib`, `/tmp`, and `/usr/lib/python` pre-mounted). `std.VFS` is the class for creating custom standalone instances.
 
 `std.VFS.create()` creates a fresh VFS with a memory backend — useful for isolated scratch work.
 

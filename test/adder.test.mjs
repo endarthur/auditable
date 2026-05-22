@@ -365,7 +365,7 @@ async function pyExec(code) {
 // Helper: fresh VFS before each test group
 async function freshVFS() {
   const vfs = await VFS.create();
-  await vfs.mkdir('/home/nb', { recursive: true });
+  await vfs.mkdir('/projects/self', { recursive: true });
   await vfs.mkdir('/usr/lib/python', { recursive: true });
   await vfs.mkdir('/tmp');
   setAdderVFS(vfs, vfsPath);
@@ -768,8 +768,8 @@ describe('os module', () => {
   it('listdir', async () => {
     await freshVFS();
     const vfs = getAdderVFS();
-    await vfs.writeFile('/home/nb/a.txt', 'a');
-    await vfs.writeFile('/home/nb/b.txt', 'b');
+    await vfs.writeFile('/projects/self/a.txt', 'a');
+    await vfs.writeFile('/projects/self/b.txt', 'b');
     const r = await pyExec(`
 import os
 files = os.listdir('.')
@@ -862,7 +862,7 @@ after = os.getcwd()
 os.chdir('sub')
 nested = os.getcwd()
 `);
-    assert.strictEqual(r.get('initial'), '/home/nb');
+    assert.strictEqual(r.get('initial'), '/projects/self');
     assert.strictEqual(r.get('after'), '/work');
     assert.strictEqual(r.get('nested'), '/work/sub');
   });
@@ -1240,8 +1240,8 @@ describe('VFS imports', () => {
   it('import module from lib/', async () => {
     await freshVFS();
     const vfs = getAdderVFS();
-    await vfs.mkdir('/home/nb/lib', { recursive: true });
-    await vfs.writeFile('/home/nb/lib/myutil.py', `
+    await vfs.mkdir('/projects/self/lib', { recursive: true });
+    await vfs.writeFile('/projects/self/lib/myutil.py', `
 PI = 3.14159
 def double(x):
     return x * 2
@@ -1258,8 +1258,8 @@ d = myutil.double(21)
   it('from module import names', async () => {
     await freshVFS();
     const vfs = getAdderVFS();
-    await vfs.mkdir('/home/nb/lib', { recursive: true });
-    await vfs.writeFile('/home/nb/lib/helpers.py', `
+    await vfs.mkdir('/projects/self/lib', { recursive: true });
+    await vfs.writeFile('/projects/self/lib/helpers.py', `
 def greet(name):
     return "hello " + name
 
@@ -1277,7 +1277,7 @@ v = VERSION
   it('import from cwd (.) fallback', async () => {
     await freshVFS();
     const vfs = getAdderVFS();
-    await vfs.writeFile('/home/nb/cwdmod.py', `X = 99`);
+    await vfs.writeFile('/projects/self/cwdmod.py', `X = 99`);
     const r = await pyExec(`
 import cwdmod
 x = cwdmod.X
@@ -1299,8 +1299,8 @@ v = sysmod.VAL
   it('module cache (sys.modules)', async () => {
     await freshVFS();
     const vfs = getAdderVFS();
-    await vfs.mkdir('/home/nb/lib', { recursive: true });
-    await vfs.writeFile('/home/nb/lib/counter.py', `count = 0`);
+    await vfs.mkdir('/projects/self/lib', { recursive: true });
+    await vfs.writeFile('/projects/self/lib/counter.py', `count = 0`);
     const r = await pyExec(`
 import sys
 import counter
@@ -1315,15 +1315,15 @@ val = c2.count
   it('module has __name__ and __file__', async () => {
     await freshVFS();
     const vfs = getAdderVFS();
-    await vfs.mkdir('/home/nb/lib', { recursive: true });
-    await vfs.writeFile('/home/nb/lib/meta.py', `pass`);
+    await vfs.mkdir('/projects/self/lib', { recursive: true });
+    await vfs.writeFile('/projects/self/lib/meta.py', `pass`);
     const r = await pyExec(`
 import meta
 name = meta.__name__
 file = meta.__file__
 `);
     assert.strictEqual(r.get('name'), 'meta');
-    assert.strictEqual(r.get('file'), '/home/nb/lib/meta.py');
+    assert.strictEqual(r.get('file'), '/projects/self/lib/meta.py');
   });
 
   it('ModuleNotFoundError for missing module', async () => {
@@ -1337,9 +1337,9 @@ file = meta.__file__
   it('transitive VFS imports', async () => {
     await freshVFS();
     const vfs = getAdderVFS();
-    await vfs.mkdir('/home/nb/lib', { recursive: true });
-    await vfs.writeFile('/home/nb/lib/base.py', `BASE = 10`);
-    await vfs.writeFile('/home/nb/lib/derived.py', `
+    await vfs.mkdir('/projects/self/lib', { recursive: true });
+    await vfs.writeFile('/projects/self/lib/base.py', `BASE = 10`);
+    await vfs.writeFile('/projects/self/lib/derived.py', `
 import base
 VALUE = base.BASE * 2
 `);
@@ -1355,10 +1355,10 @@ describe('string-literal (path) imports', () => {
   it('import absolute VFS path as alias', async () => {
     await freshVFS();
     const vfs = getAdderVFS();
-    await vfs.mkdir('/home/nb/extras', { recursive: true });
-    await vfs.writeFile('/home/nb/extras/util.py', `Q = 7\ndef sq(x): return x * x`);
+    await vfs.mkdir('/projects/self/extras', { recursive: true });
+    await vfs.writeFile('/projects/self/extras/util.py', `Q = 7\ndef sq(x): return x * x`);
     const r = await pyExec(`
-import "/home/nb/extras/util.py" as util
+import "/projects/self/extras/util.py" as util
 q = util.Q
 sq3 = util.sq(3)
 `);
@@ -1369,10 +1369,10 @@ sq3 = util.sq(3)
   it('from absolute VFS path import names', async () => {
     await freshVFS();
     const vfs = getAdderVFS();
-    await vfs.mkdir('/home/nb/extras', { recursive: true });
-    await vfs.writeFile('/home/nb/extras/helpers.py', `A = 1\nB = 2`);
+    await vfs.mkdir('/projects/self/extras', { recursive: true });
+    await vfs.writeFile('/projects/self/extras/helpers.py', `A = 1\nB = 2`);
     const r = await pyExec(`
-from "/home/nb/extras/helpers.py" import A, B as beta
+from "/projects/self/extras/helpers.py" import A, B as beta
 a = A
 b = beta
 `);
@@ -1391,11 +1391,11 @@ b = beta
   it('path import cache: two imports of same path share module', async () => {
     await freshVFS();
     const vfs = getAdderVFS();
-    await vfs.writeFile('/home/nb/shared.py', `count = 0`);
+    await vfs.writeFile('/projects/self/shared.py', `count = 0`);
     const r = await pyExec(`
-import "/home/nb/shared.py" as m1
+import "/projects/self/shared.py" as m1
 m1.count = 42
-import "/home/nb/shared.py" as m2
+import "/projects/self/shared.py" as m2
 val = m2.count
 `);
     assert.strictEqual(r.get('val'), 42);

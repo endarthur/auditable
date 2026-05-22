@@ -163,10 +163,15 @@ _commentBackend._syncComment = () => {
   hooks.emit('notebook:dirty');
   hooks.emit('fs:changed');
 };
-_notebookVFS._mounts.set('/home/nb', _commentBackend);
-// /var — variable persistent state (notebook content + installed modules).
-// Per spec_inbox/shipped/auditable-persistence-spec.md.
-_notebookVFS._mounts.set('/var', new MemoryBackend());
+// /projects/self — the notebook's own project directory (project.json +
+// notebook.txt + readable data siblings). Standalone is a workspace-of-one, so
+// the project lives at this fixed mount point and notebook.fs is rooted here.
+// The CommentBackend gives transparent compression of binary files (fs.js
+// depends on it) and, with its root == the project root, keeps backend keys
+// notebook-relative — which fs.js's window._notebookFS access relies on.
+_notebookVFS._mounts.set('/projects/self', _commentBackend);
+// /lib — installed modules (content-addressed). Persistent.
+_notebookVFS._mounts.set('/lib', new MemoryBackend());
 // /tmp — volatile scratch space (MemoryBackend, not saved in notebook)
 _notebookVFS._mounts.set('/tmp', new MemoryBackend());
 // /usr/lib/python — system Python modules (extensions install here)

@@ -120,7 +120,10 @@ function getFs() {
 
 // ── VFS DELEGATION ──
 
-const NB_PREFIX = '/home/nb/';
+// The notebook's own project directory. Standalone is a workspace-of-one, so
+// this is the fixed literal /projects/self/; in Works the surface VFS resolves
+// `self` to the real project path. notebook.fs paths are relative to it.
+const NB_PREFIX = '/projects/self/';
 function toAbs(p) { return NB_PREFIX + p; }
 function getVfs() { return window._notebookVFS; }
 
@@ -525,8 +528,8 @@ export function createNotebookFs() {
 
 let _fsState = {
   visible: false,
-  cwd: '/home/nb',
-  root: '/home/nb',   // current view directory (breadcrumb navigates this)
+  cwd: '/projects/self',
+  root: '/projects/self',   // current view directory (breadcrumb navigates this)
   expanded: new Set(), // subdirs expanded within current root
   cache: new Map(),
 };
@@ -892,7 +895,7 @@ function copyText(text) {
 }
 
 function relPath(absPath) {
-  // convert absolute VFS path to relative notebook.fs path (for /home/nb files)
+  // convert absolute VFS path to relative notebook.fs path (for project files)
   if (absPath.startsWith(NB_PREFIX)) return absPath.slice(NB_PREFIX.length);
   return absPath;
 }
@@ -904,7 +907,7 @@ function contextFile(event, absPath, dirPath) {
 
   const items = [];
 
-  // copy read command — use relative path for /home/nb, vfs for others
+  // copy read command — use relative path for project files, vfs for others
   if (isNb) {
     items.push({ label: 'copy read command', action: () => copyText(`await notebook.fs.read("${relPath(absPath)}")`) });
   } else {

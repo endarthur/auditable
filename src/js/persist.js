@@ -1,11 +1,11 @@
 // VFS-unified persistence.
 //
 // Cells, settings, modules, and user files all live on the VFS. The Persister
-// serialises the contents of "persistent" mounts (/home/nb, /var) into a
+// serialises the contents of "persistent" mounts (/projects/self, /lib) into a
 // single AUDITABLE-VFS comment block on save; the EncryptedPersister wraps
 // that JSON in AUDITABLE-CRYPTO. Loading parses the block, hydrates the VFS,
-// then a separate hydrateNotebook() pass reads /var/notebook.txt to populate
-// S.cells + settings + module declarations.
+// then a separate hydrateNotebook() pass reads /projects/self/notebook.txt to
+// populate S.cells + settings + module declarations.
 //
 // Spec: spec_inbox/shipped/auditable-persistence-spec.md (roadmap step E).
 
@@ -83,14 +83,14 @@ export function getPersister() {
   return _activePersister;
 }
 
-// ── Module storage sync (window._installedModules ↔ /var/modules/) ──
+// ── Module storage sync (window._installedModules ↔ /lib/) ──
 //
 // Pre-1.0 cell-builtins/modules.js still reads/writes window._installedModules
 // directly (full migration is a follow-up). Here we sync the in-memory map
-// onto /var/modules/<url-encoded>/ at save time and back at load time, so
-// the on-disk format is VFS-uniform.
+// onto /lib/<url-encoded>/ at save time and back at load time, so the on-disk
+// format is VFS-uniform. (Content-addressed /lib per spec §15.4 is a later step.)
 
-const MODULES_DIR = '/var/modules';
+const MODULES_DIR = '/lib';
 const _enc = encodeURIComponent;
 const _dec = decodeURIComponent;
 
@@ -98,7 +98,7 @@ export async function syncModulesToVfs(vfs, installedModules) {
   if (!vfs) return;
   await vfs.mkdir(MODULES_DIR, { recursive: true }).catch(() => {});
 
-  // Wipe the existing /var/modules/ entries — easier than diffing.
+  // Wipe the existing /lib/ entries — easier than diffing.
   let existing = [];
   try { existing = await vfs.readdir(MODULES_DIR, { stat: true }); } catch {}
   for (const e of existing) {
@@ -129,11 +129,13 @@ export async function syncModulesToVfs(vfs, installedModules) {
 }
 
 /**
- * Write S.cells + current settings to /var/notebook.txt in /// form.
- * Called before serializeBlock() so the dump reflects current runtime state.
+ * Write S.cells + current settings to /projects/self/notebook.txt in /// form,
+ * and ensure /projects/self/project.json exists. Called before serializeBlock()
+ * so the dump reflects current runtime state.
  */
 export async function syncCellsToVfs(vfs, S, settings, title) {
-  await vfs.mkdir('/var', { recursive: true }).catch(() => {});
+  await vfs.mkdir(PROJECT_DIR, { recursive: true }).catch(() => {});
+  await ensureProjectJson(vfs, title);
   const cells = S.cells.map(c => ({
     type: c.type,
     code: c.code,
@@ -178,12 +180,39 @@ export async function hydrateModulesFromVfs(vfs) {
   return result;
 }
 
-// ── Notebook hydration (post-VFS-restore) ───────────────────────────
+// ── Project directory ───────────────────────────────────────────────
+//
+// Standalone is a workspace-of-one: the notebook's own project lives at the
+// fixed path /projects/self/. In Works the surface VFS resolves `self` to the
+// real project path via the A-Bus-proxy backend, so notebook code refers to
+// itself by this one literal in both modes.
 
-const NOTEBOOK_TXT_PATH = '/var/notebook.txt';
+export const PROJECT_DIR = '/projects/self';
+const NOTEBOOK_TXT_PATH = PROJECT_DIR + '/notebook.txt';
+const PROJECT_JSON_PATH = PROJECT_DIR + '/project.json';
 
 /**
- * After hydrateVfs has populated the VFS, read /var/notebook.txt and
+ * Ensure /projects/self/project.json exists with a stable random id. The id is
+ * minted once and preserved across saves; the title tracks the current document
+ * title. Returns the project metadata.
+ */
+export async function ensureProjectJson(vfs, title) {
+  let meta = null;
+  try { meta = JSON.parse(await vfs.readFile(PROJECT_JSON_PATH, 'text')); }
+  catch { /* not yet created */ }
+  const id = (meta && meta.id) || ('nb-' + crypto.randomUUID().slice(0, 8));
+  const next = { kind: 'notebook', id, title: title || 'untitled' };
+  if (!meta || meta.kind !== next.kind || meta.id !== next.id || meta.title !== next.title) {
+    await vfs.mkdir(PROJECT_DIR, { recursive: true }).catch(() => {});
+    await vfs.writeFile(PROJECT_JSON_PATH, JSON.stringify(next, null, 2));
+  }
+  return next;
+}
+
+// ── Notebook hydration (post-VFS-restore) ───────────────────────────
+
+/**
+ * After hydrateVfs has populated the VFS, read /projects/self/notebook.txt and
  * populate S.cells, settings, module declarations.
  */
 export async function hydrateNotebook(vfs) {
@@ -221,6 +250,34 @@ export async function hydrateNotebook(vfs) {
   }
 }
 
+// ── Legacy VFS-dump migration (pre-4a /var + /home/nb layout) ───────
+
+/**
+ * Remap an AUDITABLE-VFS dump saved under the pre-4a layout (/var/* and
+ * /home/nb/*) onto the current /projects/self/ + /lib/ layout. A no-op for
+ * dumps already in the new layout. Notebooks self-upgrade on next save.
+ */
+export function migrateLegacyDump(dump) {
+  if (!dump || typeof dump !== 'object') return dump;
+  const keys = Object.keys(dump);
+  const isOld = keys.some(k =>
+    k === '/var' || k.startsWith('/var/') ||
+    k === '/home/nb' || k.startsWith('/home/nb/'));
+  if (!isOld) return dump;
+  const out = {};
+  for (const [k, v] of Object.entries(dump)) {
+    let nk = k;
+    if (k === '/var/modules' || k === '/var/modules/') nk = '/lib';
+    else if (k.startsWith('/var/modules/')) nk = '/lib/' + k.slice('/var/modules/'.length);
+    else if (k === '/var' || k === '/var/') nk = '/projects/self';
+    else if (k.startsWith('/var/')) nk = '/projects/self/' + k.slice('/var/'.length);
+    else if (k === '/home/nb' || k === '/home/nb/') nk = '/projects/self';
+    else if (k.startsWith('/home/nb/')) nk = '/projects/self/' + k.slice('/home/nb/'.length);
+    out[nk] = v;
+  }
+  return out;
+}
+
 // ── Legacy 4-block import (back-compat for older saved notebooks) ───
 
 const LEGACY_DATA_RE     = /<!--AUDITABLE-DATA\n([\s\S]*?)\nAUDITABLE-DATA-->/;
@@ -243,7 +300,7 @@ export function isLegacyFormat(html) {
  * writes the new format on next save, so legacy notebooks self-upgrade.
  */
 export async function importLegacyFormat(vfs, html, decodeModules) {
-  // Cells + settings → /var/notebook.txt (the /// form)
+  // Cells + settings → /projects/self/notebook.txt (the /// form)
   const dataMatch = html.match(LEGACY_DATA_RE);
   const settingsMatch = html.match(LEGACY_SETTINGS_RE);
   const cells = dataMatch ? JSON.parse(dataMatch[1]) : [];
@@ -251,24 +308,27 @@ export async function importLegacyFormat(vfs, html, decodeModules) {
   const title = $('#docTitle')?.value || 'untitled';
 
   const txt = serializeNotebookTxt({ title, settings, cells, modules: [] });
-  await vfs.mkdir('/var', { recursive: true }).catch(() => {});
+  await vfs.mkdir(PROJECT_DIR, { recursive: true }).catch(() => {});
   await vfs.writeFile(NOTEBOOK_TXT_PATH, txt);
 
   // Modules → window._installedModules (kept in legacy shape for now;
   // cell-builtins/modules.js still reads from there. Migration to
-  // /var/modules/<url>/ is a follow-up.)
+  // /lib/<url>/ is a follow-up.)
   const modulesMatch = html.match(LEGACY_MODULES_RE);
   if (modulesMatch && decodeModules) {
     try { window._installedModules = decodeModules(modulesMatch[1]); }
     catch (e) { console.error('[persist] failed to import legacy modules:', e); }
   }
 
-  // FS → /home/nb (CommentBackend reads from window._notebookFS Map)
+  // FS → /projects/self/ (CommentBackend reads from window._notebookFS Map).
+  // Legacy 4-block FS keys were /home/nb-relative (bare, no prefix); under the
+  // /projects mount they must be re-keyed beneath self/.
   const fsMatch = html.match(LEGACY_FS_RE);
   if (fsMatch && decodeModules) {
     try {
       const decoded = decodeModules(fsMatch[1]);
-      window._notebookFS = new Map(Object.entries(decoded));
+      window._notebookFS = new Map(
+        Object.entries(decoded).map(([k, v]) => ['self/' + k, v]));
     } catch (e) { console.error('[persist] failed to import legacy FS:', e); }
   }
 }

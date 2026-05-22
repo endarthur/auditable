@@ -7,7 +7,7 @@ import { runAll } from './exec.js';
 import { setMsg } from './ui.js';
 import { cryptoIsEncrypted, cryptoIsLocked, cryptoBuildBlock, cryptoDetect } from './crypto.js';
 import { serializeCells, encodeModules, decodeModules, esc as _esc, buildTxtExport, serializeVfs, hydrateVfs, parseNotebookTxt } from './serialize.js';
-import { flushPendingDirty, hydrateModulesFromVfs, isLegacyFormat, importLegacyFormat } from './persist.js';
+import { flushPendingDirty, hydrateModulesFromVfs, isLegacyFormat, importLegacyFormat, migrateLegacyDump } from './persist.js';
 import { Dialog } from '#dialog';
 
 // re-export for backward compatibility (init.js, update.js import from save.js)
@@ -543,7 +543,7 @@ export async function loadFromEmbed() {
     if (vfs) await importLegacyFormat(vfs, raw, decodeModules);
   }
 
-  if (dump && vfs) await hydrateVfs(vfs, dump);
+  if (dump && vfs) await hydrateVfs(vfs, migrateLegacyDump(dump));
 
   if (vfs) {
     const modules = await hydrateModulesFromVfs(vfs);
@@ -553,7 +553,7 @@ export async function loadFromEmbed() {
   let parsed = null;
   if (vfs) {
     try {
-      const txt = await vfs.readFile('/var/notebook.txt', 'text');
+      const txt = await vfs.readFile('/projects/self/notebook.txt', 'text');
       parsed = parseNotebookTxt(txt);
       if (parsed.title) {
         const titleInput = document.getElementById('docTitle');

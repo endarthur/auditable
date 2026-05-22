@@ -7,7 +7,7 @@
 
 Adder provides `open()`, `os`, `os.path`, `pathlib`, `shutil`, and `glob` — standard Python filesystem operations backed by the notebook's embedded filesystem. Files written from Python are the same files visible in the **files** panel and accessible from JS via `notebook.fs`.
 
-The filesystem follows a Unix layout: cwd starts at `/home/nb`, `/tmp` is volatile scratch space, `/usr/lib/python` holds system modules. Relative paths just work — `open('data/x.csv')` in Python and `notebook.fs.read('data/x.csv')` in JS point to the same file.
+The filesystem follows a Unix layout: cwd starts at `/projects/self`, `/tmp` is volatile scratch space, `/usr/lib/python` holds system modules. Relative paths just work — `open('data/x.csv')` in Python and `notebook.fs.read('data/x.csv')` in JS point to the same file.
 
 /// code collapsed
 // %collapsed
@@ -16,10 +16,10 @@ await load("@gcu/adder")
 /// md
 ## open() — read and write files
 
-`open()` works like Python's built-in — modes `r`, `w`, `a`, `rb`, `wb`, `ab`. Context managers (`with`) auto-close. Paths are relative to cwd (`/home/nb`).
+`open()` works like Python's built-in — modes `r`, `w`, `a`, `rb`, `wb`, `ab`. Context managers (`with`) auto-close. Paths are relative to cwd (`/projects/self`).
 
 /// adder
-# write a CSV — relative path, lands in /home/nb/data/
+# write a CSV — relative path, lands in /projects/self/data/
 with open("data/samples.csv", "w") as f:
     f.write("hole,from,to,fe,au\n")
     f.write("DDH01,0,10,58.2,0.12\n")
@@ -74,7 +74,7 @@ print(f"total rows (including header): {len(lines)}")
 /// adder
 import os
 
-# cwd is /home/nb — relative paths resolve here
+# cwd is /projects/self — relative paths resolve here
 print(f"cwd: {os.getcwd()}")
 
 # directory listing
@@ -150,7 +150,7 @@ print(f"basename: {basename(result)}")
 /// md
 ## pathlib — object-oriented paths
 
-`Path` objects support the `/` operator, properties like `.name`, `.stem`, `.suffix`, `.parent`, and async I/O methods. `~` expands to `/home/nb`.
+`Path` objects support the `/` operator, properties like `.name`, `.stem`, `.suffix`, `.parent`, and async I/O methods. `~` expands to `/projects/self`.
 
 /// adder
 from pathlib import Path
@@ -173,7 +173,7 @@ out.write_text("Fe summary: DDH01=59.8, DDH02=53.65, DDH03=61.45")
 content = out.read_text()
 print(content)
 
-# ~ expands to /home/nb
+# ~ expands to /projects/self
 home = Path("~")
 print(f"home: {home}")
 
@@ -235,10 +235,10 @@ print("(this file won't survive a save/reload)")
 /// adder
 import glob
 
-csvs = glob.glob("/home/nb/**/*.csv")
+csvs = glob.glob("/projects/self/**/*.csv")
 print(f"all CSVs: {csvs}")
 
-txts = glob.glob("/home/nb/output/**/*.txt")
+txts = glob.glob("/projects/self/output/**/*.txt")
 print(f"output txts: {txts}")
 
 /// md
@@ -321,6 +321,6 @@ Files persist inside the notebook HTML — save, reload, and they're still there
 
 | path | backend | persists? |
 |------|---------|-----------|
-| `/home/nb/` (cwd) | CommentBackend → notebook.fs | yes |
+| `/projects/self/` (cwd) | CommentBackend → notebook.fs | yes |
 | `/tmp/` | MemoryBackend | no |
 | `/usr/lib/python/` | MemoryBackend | no |
