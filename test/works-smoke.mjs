@@ -414,6 +414,26 @@ const fileMode = await page.evaluate(async () => {
   return { booted: true, proto: location.protocol, surfaceReady: !!(rec && rec.ready) };
 });
 
+// A notebook surface must also boot from file:// — exercises the home-
+// delegation fallback (Chrome blocks IndexedDB inside a blob:file:// iframe
+// even when the shell's file:// page can use it).
+const fileNbOpen = await page.evaluate(async () => {
+  const W = window.WKS;
+  if (!W || !W.vfs) return { ready: false };
+  await W.vfs.mkdir('/projects/FileNB', { recursive: true });
+  await W.vfs.writeFile('/projects/FileNB/project.json',
+    JSON.stringify({ kind: 'notebook', id: 'nb-file', title: 'File NB' }));
+  await W.vfs.writeFile('/projects/FileNB/notebook.txt',
+    '/// auditable\n/// title: File NB\n\n/// code\ndisplay(2 + 3)\n');
+  const tabId = await W.openPath('/projects/FileNB');
+  const rec = W.surfaces.get(tabId);
+  const deadline = Date.now() + 25000;
+  while (rec && !rec.ready && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return { ready: !!(rec && rec.ready) };
+});
+
 const checks = {
   // Chunk 1
   'no page errors':            errors.length === 0,
@@ -478,6 +498,7 @@ const checks = {
   // file:// portability (§15.1)
   'works.html boots from file://':         fileMode.booted && fileMode.proto === 'file:',
   'a surface loads from file://':          fileMode.surfaceReady === true,
+  'notebook surface boots from file://':   fileNbOpen.ready === true,
 };
 
 console.log('--- works.html (Works rebuild — Chunks 1-3, 5 + surfaces) ---');

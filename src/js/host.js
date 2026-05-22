@@ -139,20 +139,40 @@ export function createWorksHost({ bus, projectPath, syncToVfs, home }) {
     ];
   }
 
+  // Delegated direct-I/O backends can fail to open in the surface even when
+  // the same backend works in the shell — most commonly, Chrome blocks
+  // IndexedDB inside a blob:file:// iframe even though file:// itself can use
+  // it, so a file://-opened works.html with an IDB home cannot delegate to
+  // the notebook surface. Fall back to the A-Bus relay proxy on any
+  // init failure; correctness wins over the delegation speed-up.
+  function _proxyFallback() {
+    return new AbusBackend({ bus, service: 'works', root: '' });
+  }
+
   async function backendFor(d) {
     switch (d.kind) {
       case 'local-copy': return _makeProjectBackend();
       case 'proxy':      return new AbusBackend({ bus, service: 'works', root: d.root || '' });
       case 'memory':     return new MemoryBackend();
       case 'handle': {   // a delegated FSAA disk folder — direct I/O, no relay
-        const b = new FSAABackend({ handle: d.handle });
-        await b.init();
-        return b;
+        try {
+          const b = new FSAABackend({ handle: d.handle });
+          await b.init();
+          return b;
+        } catch (e) {
+          console.warn('[host] FSAA delegation failed; routing via A-Bus proxy:', e.message);
+          return _proxyFallback();
+        }
       }
       case 'idb': {      // a delegated IndexedDB store — direct I/O, no relay
-        const b = new IDBBackend({ name: d.name });
-        await b.init();
-        return b;
+        try {
+          const b = new IDBBackend({ name: d.name });
+          await b.init();
+          return b;
+        } catch (e) {
+          console.warn('[host] IDB delegation failed; routing via A-Bus proxy:', e.message);
+          return _proxyFallback();
+        }
       }
       default: throw new Error('Works Host: unimplemented mount kind "' + d.kind + '"');
     }
