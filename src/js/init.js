@@ -1,18 +1,18 @@
 import { S } from './state.js';
 import * as hooks from './hooks.js';
-import { loadFromEmbed, saveNotebook, setSaveMode, buildNotebookHtml } from './save.js';
-import { createStandaloneHost, setHost, getHost } from './host.js';
+import { loadFromEmbed, setSaveMode, buildNotebookHtml } from './save.js';
+import { createStandaloneHost, createWorksHost, setHost, getHost } from './host.js';
+import { connectSurface, installSurfaceContract } from './surface.js';
 import { addCell } from './cell-ops.js';
 import { _ctIsExecutable } from './cell-types.js';
 import { setMsg } from './ui.js';
 import { setBadge } from './update.js';
-import { registerProvider } from './stdlib.js';
 import { configureAllAutocomplete, configurePluginAutocomplete } from './complete.js';
 import { applySettings, getEditorViewSetting, resolveExecMode, resolveRunOnLoad } from './settings.js';
 import { toggleSplitView } from './split.js';
 import { cryptoDetect, cryptoUnlock, cryptoUnlockRecovery, cryptoSetLocked, cryptoIsEncrypted, syncCryptoDebounced, cryptoPassphraseStrength, cryptoEnable, cryptoDisable, cryptoChangePassphrase, cryptoRegenerateRecovery, cryptoLock } from './crypto.js';
 import { decodeModules, encodeModules, parseNotebookTxt, hydrateVfs } from './serialize.js';
-import { hydrateModulesFromVfs, flushPendingDirty, migrateLegacyDump } from './persist.js';
+import { hydrateModulesFromVfs, hydrateNotebook, flushPendingDirty, migrateLegacyDump } from './persist.js';
 import { getSettings } from './settings.js';
 import { Dialog } from '#dialog';
 import { runAll } from './exec.js';
@@ -514,18 +514,10 @@ function scheduleUserThemeReload() {
 }
 hooks.on('fs:changed', scheduleUserThemeReload);
 
-// ── HOST ──
-// Install the Host and build the notebook's VFS at module-eval time, so
-// window._notebookVFS is ready synchronously — exactly as the pre-Host
-// globals.js setup was. Chunk 4c will pick standalone vs. Works here.
-setHost(createStandaloneHost({ buildHtml: buildNotebookHtml }));
-getHost().provideVFS();
-
-// ── INIT ──
-// Deferred to a macrotask so every module body finishes evaluating before
-// init runs (extensions self-register, AIR populates its window hooks, etc.).
-
-setTimeout(async function init() {
+// ── INIT (standalone) ──
+// The standalone boot: detect packed/encrypted, load the notebook from its
+// embedded AUDITABLE-VFS block, apply the user theme, run.
+async function init() {
   // detect packed format (meta tag injected by loader)
   const packedMeta = document.querySelector('meta[name="auditable-packed"]');
   if (packedMeta) {
@@ -563,81 +555,74 @@ setTimeout(async function init() {
   if (getEditorViewSetting() === 'yes') {
     setTimeout(toggleSplitView, 60);
   }
-}, 0);
+}
 
-// ── WORKS BRIDGE ──
-// When running inside Works shell (iframe), establish postMessage communication.
-// No-op when running standalone (window.parent === window).
-//
-// Message protocol (notebook <-> Works shell):
-//   works:ready          -> sent on init with { title }
-//   works:serialize      <- received to trigger saveNotebook()
-//   works:saved          <- received after save (shows "saved" status)
-//   works:setTitle       <- received to update docTitle input
-//   works:resize         <- received when iframe becomes visible (recalc textareas)
-//   works:titleChanged   -> sent when user edits the title
-//   works:fileRequest    -> sent to request file picker { id, accept }
-//   works:fileResult     <- received with picked file { id, file }
-//   works:download       -> sent to request download { data, filename, mimeType }
-//   works:dirty          -> sent when notebook has unsaved changes
+// ── WORKS SURFACE BOOT ──
+// Runs when the notebook is hosted as an Auditable Works surface. The Works
+// Host builds a VFS whose own project is a local working copy of the
+// workspace project and the rest is an A-Bus proxy; the notebook then loads
+// from that VFS the same way it would from a self-contained one.
+async function worksBoot(conn) {
+  const { bus, tab } = conn;
 
-(function worksBridge() {
-  if (window.parent === window) return;
-  window.__WORKS_BRIDGE__ = true;
+  // Write current cells/settings/modules into the VFS so the Host can flush
+  // them through to the shared workspace.
+  const syncToVfs = () => flushPendingDirty(
+    window._notebookVFS, S, getSettings(),
+    document.getElementById('docTitle')?.value || 'untitled');
 
-  // register Works-specific providers for file/download
-  registerProvider('file', (accept) => {
-    return new Promise((resolve) => {
-      const id = 'works_file_' + Date.now();
-      function handler(e) {
-        if (e.data?.type === 'works:fileResult' && e.data.payload?.id === id) {
-          window.removeEventListener('message', handler);
-          resolve(e.data.payload.file);
-        }
-      }
-      window.addEventListener('message', handler);
-      window.parent.postMessage({ type: 'works:fileRequest', payload: { id, accept } }, '*');
-    });
-  });
+  const host = createWorksHost({ bus, projectPath: tab.path, syncToVfs });
+  setHost(host);
 
-  registerProvider('download', (data, filename, mimeType) => {
-    const str = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
-    const mime = mimeType || (typeof data === 'string' ? 'text/plain' : 'application/json');
-    window.parent.postMessage({
-      type: 'works:download',
-      payload: { data: str, filename, mimeType: mime }
-    }, '*');
-  });
+  // Build the surface VFS and boot-load the project from the workspace.
+  const vfs = await host.provideVFS();
 
-  const title = document.getElementById('docTitle')?.value || 'untitled';
-  window.parent.postMessage({ type: 'works:ready', payload: { title } }, '*');
+  // Hydrate installed modules, then cells + settings — straight from the
+  // VFS, no embedded block.
+  const modules = await hydrateModulesFromVfs(vfs);
+  if (Object.keys(modules).length > 0) window._installedModules = modules;
+  await hydrateNotebook(vfs);
 
-  window.addEventListener('message', (e) => {
-    const msg = e.data;
-    if (!msg?.type) return;
-    if (msg.type === 'works:serialize') saveNotebook();
-    else if (msg.type === 'works:saved') setMsg('saved', 'ok');
-    else if (msg.type === 'works:setTitle') {
-      const input = document.getElementById('docTitle');
-      if (input && msg.payload?.title) input.value = msg.payload.title;
-    } else if (msg.type === 'works:resize') {
-      // recalculate editor sizes after becoming visible
-      document.querySelectorAll('.cm-editor').forEach(el => {
-        const view = el.cmView?.view;
-        if (view) view.requestMeasure();
-      });
-      // md textareas
-      document.querySelectorAll('.cell-md-edit textarea').forEach(ta => {
-        ta.style.height = 'auto';
-        ta.style.height = ta.scrollHeight + 'px';
-      });
+  await loadUserTheme();
+  configureAllAutocomplete();
+  installIpynbDragDrop();
+  S.initialized = true;
+
+  // The §5.2 Surface contract — methods, signals, self-flush, Ready.
+  installSurfaceContract({ bus, host });
+
+  if (getEditorViewSetting() === 'yes') {
+    setTimeout(toggleSplitView, 60);
+  }
+
+  // Run cells if configured.
+  if (resolveRunOnLoad() === 'yes' && getEditorViewSetting() !== 'yes'
+      && S.cells.some(c => _ctIsExecutable(c.type))) {
+    setTimeout(runAll, 50);
+  }
+}
+
+// ── BOOT ──
+// Standalone vs. Auditable Works surface. Standalone (the common case):
+// build the VFS synchronously, run init() on the next macrotask. Iframed:
+// listen for the shell's abus:welcome synchronously — so it can't race ahead
+// of the listener — then on the next macrotask run the Works boot, or fall
+// back to standalone if no welcome arrives.
+if (window.parent === window) {
+  setHost(createStandaloneHost({ buildHtml: buildNotebookHtml }));
+  getHost().provideVFS();
+  setTimeout(init, 0);
+} else {
+  const welcomeP = connectSurface(3000);
+  setTimeout(async () => {
+    const conn = await welcomeP;
+    if (conn) {
+      await worksBoot(conn);
+    } else {
+      // Iframed, but not by Works — boot standalone.
+      setHost(createStandaloneHost({ buildHtml: buildNotebookHtml }));
+      getHost().provideVFS();
+      await init();
     }
-  });
-
-  document.getElementById('docTitle')?.addEventListener('input', () => {
-    window.parent.postMessage({
-      type: 'works:titleChanged',
-      payload: { title: document.getElementById('docTitle').value }
-    }, '*');
-  });
-})();
+  }, 0);
+}

@@ -216,6 +216,48 @@ const persist = await page.evaluate(async () => {
   return { projExists, note, treeHasProj, tabsRestored: W.surfaces.size };
 });
 
+// ── Notebook surface ──────────────────────────────────────────────────
+// A notebook project opened as a surface: it boots auditable.html in the
+// iframe, hydrates its cells from the workspace over A-Bus, and flushes
+// back through the Works Host.
+const nbOpen = await page.evaluate(async () => {
+  const W = window.WKS;
+  await W.vfs.mkdir('/projects/SmokeNB', { recursive: true });
+  await W.vfs.writeFile('/projects/SmokeNB/project.json',
+    JSON.stringify({ kind: 'notebook', id: 'nb-smoke', title: 'Smoke NB' }));
+  await W.vfs.writeFile('/projects/SmokeNB/notebook.txt',
+    '/// auditable\n/// title: Smoke NB\n\n/// md\n# notebook surface smoke\n\n/// code\ndisplay(6 * 7)\n');
+
+  const tabId = await W.openPath('/projects/SmokeNB');
+  const rec = W.surfaces.get(tabId);
+  const deadline = Date.now() + 25000;
+  while (rec && !rec.ready && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return rec
+    ? { tabId, uniqueName: rec.uniqueName, ready: rec.ready, kind: rec.kind }
+    : { ready: false };
+});
+
+// Reach into the notebook iframe — did it hydrate cells from the workspace?
+const nbFrame = page.frames().find((f) => f.url().includes('auditable.html'));
+let nbCells = -1;
+if (nbFrame) {
+  nbCells = await nbFrame.evaluate(() => ((window.S && window.S.cells) || []).length);
+}
+
+// Flush the notebook; confirm its notebook.txt round-tripped to the workspace.
+const nbFlush = await page.evaluate(async (uniqueName) => {
+  const W = window.WKS;
+  try {
+    await W.worksBus.call(
+      { to: uniqueName, path: '/', interface: 'Surface', member: 'Flush' }, []);
+  } catch (e) { return { error: e.message }; }
+  let onDisk = null;
+  try { onDisk = await W.vfs.readFile('/projects/SmokeNB/notebook.txt', 'utf8'); } catch { /* */ }
+  return { onDisk };
+}, nbOpen.uniqueName);
+
 const checks = {
   // Chunk 1
   'no page errors':            errors.length === 0,
@@ -251,6 +293,11 @@ const checks = {
   'workspace survives a reload':      persist.projExists && persist.note === 'survives reload',
   'tree shows projects after reload': persist.treeHasProj,
   'tabs restore after reload':        persist.tabsRestored > 0,
+  // Notebook surface
+  'notebook surface opens':           nbOpen.ready === true,
+  'notebook surface kind resolved':   nbOpen.kind === 'notebook',
+  'notebook hydrates cells from VFS': nbCells === 2,
+  'notebook Flush round-trips':       !!nbFlush.onDisk && nbFlush.onDisk.includes('notebook surface smoke'),
 };
 
 console.log('--- works.html (Works rebuild — Chunks 1-3, 5 + surfaces) ---');

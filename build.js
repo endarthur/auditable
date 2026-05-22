@@ -724,6 +724,15 @@ if (fs.existsSync(vfsPath)) {
   modules.unshift({ name: 'vfs', source: vfsSrc });
 }
 
+// Add @gcu/abus bundle as a module entry (the A-Bus coordination layer —
+// used by the notebook's Works surface adapter)
+const abusPath = path.join(__dirname, 'ext/abus/index.js');
+if (fs.existsSync(abusPath)) {
+  let abusSrc = fs.readFileSync(abusPath, 'utf8');
+  abusSrc = abusSrc.replace(/^\n+/, '').replace(/\n+$/, '');
+  modules.unshift({ name: 'abus', source: abusSrc });
+}
+
 // Add sideact bundle as a module entry
 const sideactPath = path.join(__dirname, 'ext/sideact/index.js');
 if (fs.existsSync(sideactPath)) {
@@ -935,6 +944,24 @@ function assemble(jsCode) {
   var prefersLight=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches;
   document.documentElement.setAttribute('data-theme',prefersLight?'light':'dark');
 }catch(e){document.documentElement.setAttribute('data-theme','dark');}})();
+</script>
+<script data-abus-catch>
+// Buffer an Auditable Works abus:welcome that arrives before the async
+// runtime — and its surface adapter (surface.js) — has finished loading.
+// Runs synchronously during parse, so it is listening before the shell's
+// iframe-load welcome. The data-abus-catch attribute keeps the runtime-
+// compression regex off this script.
+(function(){
+  window.__abusWelcome = null;
+  window.__abusWelcomeCb = null;
+  window.addEventListener('message', function _c(e){
+    if (e.data && e.data.type === 'abus:welcome') {
+      window.removeEventListener('message', _c);
+      if (window.__abusWelcomeCb) window.__abusWelcomeCb(e);
+      else window.__abusWelcome = e;
+    }
+  });
+})();
 </script>
 <style id="auditable-app-css">
 ${appCss}

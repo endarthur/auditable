@@ -25,6 +25,7 @@ export async function setupWorksService() {
         MkDir:  (p) => vfs.mkdir(p, { recursive: true }),
         Exists: (p) => vfs.exists(p),
         Move:   (from, to) => vfs.rename(from, to),
+        Delete: (p) => vfs.rm(p, { recursive: true }),
       },
       signals: ['Changed'],
     },

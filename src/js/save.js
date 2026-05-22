@@ -407,23 +407,8 @@ export async function saveNotebook() {
     return;
   }
 
-  // Legacy Works bridge — removed in Chunk 4c. Posts the serialized HTML to
-  // the parent shell instead of persisting through the Host.
-  if (window.__WORKS_BRIDGE__) {
-    let html;
-    try {
-      html = await buildNotebookHtml();
-    } catch (e) {
-      console.error('save failed:', e);
-      setMsg('save failed: ' + e.message, 'err');
-      return;
-    }
-    window.parent.postMessage({ type: 'works:serialized', payload: { html } }, '*');
-    setMsg('saved', 'ok');
-    return;
-  }
-
-  // Standalone (and, from 4c, Works) persistence goes through the Host.
+  // Persistence goes through the Host — standalone downloads a .html, a
+  // Works surface flushes to the shared workspace.
   try {
     setMsg(await getHost().persist(), 'ok');
   } catch (e) {
@@ -518,17 +503,13 @@ export function exportAsTxt() {
   });
 
   // download
-  if (window.__WORKS_BRIDGE__) {
-    window.parent.postMessage({ type: 'works:download', payload: { data: txt, filename: title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.txt', mime: 'text/plain' } }, '*');
-  } else {
-    const blob = new Blob([txt], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.txt';
-    a.click();
-    URL.revokeObjectURL(url);
-  }
+  const blob = new Blob([txt], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.txt';
+  a.click();
+  URL.revokeObjectURL(url);
   setMsg('exported .txt', 'ok');
 }
 
@@ -652,11 +633,7 @@ ${__APP_RUNTIME__}
 </body>
 </html>`;
 
-  if (window.__WORKS_BRIDGE__) {
-    window.parent.postMessage({ type: 'works:download', payload: { data: html, filename: title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.html', mime: 'text/html' } }, '*');
-  } else {
-    downloadHtml(html, title);
-  }
+  downloadHtml(html, title);
 
   const kb = (html.length / 1024).toFixed(0);
   setMsg('exported app (' + kb + ' KB)', 'ok');

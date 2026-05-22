@@ -28,8 +28,18 @@ export function kindForExtension(filename) {
   return null;
 }
 
-// Built-in kinds. The Auditable notebook surface arrives in Chunk 4; until
-// then the stub surface stands in for the `stub` kind.
+// Built-in kinds.
+
+// The Auditable notebook — a project directory (project.json kind:'notebook'
+// + notebook.txt + data siblings). The same auditable.html that runs
+// standalone; it detects the Works iframe and boots as a surface.
+registerKind('notebook', {
+  url:        'auditable.html',
+  label:      'Notebook',
+  icon:       '▦',
+  extensions: [],
+});
+
 registerKind('stub', {
   url:        'works/surfaces/stub.html',
   label:      'Stub project',

@@ -154,24 +154,13 @@ export function exportAsIpynb() {
     return;
   }
 
-  if (window.__WORKS_BRIDGE__) {
-    window.parent.postMessage({
-      type: 'works:download',
-      payload: {
-        data: json,
-        filename: title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.ipynb',
-        mime: 'application/x-ipynb+json',
-      },
-    }, '*');
-  } else {
-    const blob = new Blob([json], { type: 'application/x-ipynb+json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.ipynb';
-    a.click();
-    URL.revokeObjectURL(url);
-  }
+  const blob = new Blob([json], { type: 'application/x-ipynb+json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = title.replace(/[^a-zA-Z0-9_-]/g, '_') + '.ipynb';
+  a.click();
+  URL.revokeObjectURL(url);
   setMsg('exported .ipynb', 'ok');
 }
 

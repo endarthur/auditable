@@ -6,17 +6,13 @@ import * as hooks from './hooks.js';
 
 // ── EDITING ──
 
-// notifyDirty: emit the bus event so subscribers (Works bridge, anything
-// else interested) know the notebook has been touched. Persistence is
-// write-on-save-only (per spec_inbox/shipped/auditable-persistence-spec.md);
-// nothing happens to the DOM or VFS until the user saves.
+// notifyDirty: emit the bus event so subscribers (the Works surface adapter,
+// editor sync, anything else interested) know the notebook has been touched.
+// Persistence is write-on-save-only (per spec_inbox/shipped/auditable-
+// persistence-spec.md); nothing happens to the DOM or VFS until save/flush.
 export function notifyDirty() {
   hooks.emit('notebook:dirty');
 }
-
-hooks.on('notebook:dirty', () => {
-  if (S.initialized && window.__WORKS_BRIDGE__) window.parent.postMessage({ type: 'works:dirty' }, '*');
-});
 
 export function toggleAutorun() {
   S.autorun = !S.autorun;
