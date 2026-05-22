@@ -25,7 +25,6 @@ import { toggleSplitView } from './split.js';
 import { addCellWithUndo, deleteCellWithUndo, runSelectedCell, toggleToolbarMenu, toggleAddTray, toggleMoreTray, showInsertPicker, toggleTypePicker, collapseAll, expandAll, newNotebook } from './keyboard.js';
 import { enableEncryption, disableEncryption, changePassphrase, regenerateRecovery, lockNotebook } from './init.js';
 import { refreshPluginList, refreshModuleList } from './settings.js';
-import { VFS, CommentBackend, MemoryBackend, path } from './vfs.js';
 
 // state
 window.$ = $;
@@ -148,42 +147,10 @@ window._ctUninstallPlugin = _ctUninstallPlugin;
 window._ctCreateEditor = createEditor;
 window._configurePluginAutocomplete = null; // set by complete.js init
 
-// Shared VFS instance — notebook.fs delegates here, adder/Python uses it directly
-const _notebookVFS = new VFS();
-const _commentBackend = new CommentBackend({});
-// Always read from the current _notebookFS Map (survives reassignment in init/crypto)
-Object.defineProperty(_commentBackend, '_map', {
-  get: () => {
-    if (!window._notebookFS) window._notebookFS = new Map();
-    return window._notebookFS;
-  },
-  configurable: true,
-});
-_commentBackend._syncComment = () => {
-  hooks.emit('notebook:dirty');
-  hooks.emit('fs:changed');
-};
-// /projects/self — the notebook's own project directory (project.json +
-// notebook.txt + readable data siblings). Standalone is a workspace-of-one, so
-// the project lives at this fixed mount point and notebook.fs is rooted here.
-// The CommentBackend gives transparent compression of binary files (fs.js
-// depends on it) and, with its root == the project root, keeps backend keys
-// notebook-relative — which fs.js's window._notebookFS access relies on.
-_notebookVFS._mounts.set('/projects/self', _commentBackend);
-// /lib — installed modules (content-addressed). Persistent.
-_notebookVFS._mounts.set('/lib', new MemoryBackend());
-// /tmp — volatile scratch space (MemoryBackend, not saved in notebook)
-_notebookVFS._mounts.set('/tmp', new MemoryBackend());
-// /usr/lib/python — system Python modules (extensions install here)
-_notebookVFS._mounts.set('/usr/lib/python', new MemoryBackend());
-window._notebookVFS = _notebookVFS;
-// VFS native events → fs:changed bus emission. Subscribers (save.js syncFs,
-// fs.js panel refresh) debounce on their side.
-_notebookVFS.on('write', () => hooks.emit('fs:changed'));
-_notebookVFS.on('delete', () => hooks.emit('fs:changed'));
-_notebookVFS.on('rename', () => hooks.emit('fs:changed'));
-// VFS path utils for adder fs modules
-window._vfsPath = path;
+// The notebook's VFS (window._notebookVFS / window._vfsPath) is built by the
+// Host's provideVFS() — see host.js — called at the start of init(). The Host
+// seam is what lets a standalone notebook and a Works surface differ only in
+// which backend sits under /projects/self.
 
 // late-bound helpers for cell-types.js (avoids circular dep)
 window._ctRunDAG = (...args) => runDAG(...args);

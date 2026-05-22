@@ -37,6 +37,7 @@ import './widgets.js';
 import './engine.js';
 import './serialize.js';
 import './persist.js';
+import './host.js';
 import './markdown.js';
 import './cell-builtins/text-compression.js';
 import './cell-builtins/ui.js';

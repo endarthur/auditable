@@ -8,6 +8,7 @@ import { setMsg } from './ui.js';
 import { cryptoIsEncrypted, cryptoIsLocked, cryptoBuildBlock, cryptoDetect } from './crypto.js';
 import { serializeCells, encodeModules, decodeModules, esc as _esc, buildTxtExport, serializeVfs, hydrateVfs, parseNotebookTxt } from './serialize.js';
 import { flushPendingDirty, hydrateModulesFromVfs, isLegacyFormat, importLegacyFormat, migrateLegacyDump } from './persist.js';
+import { getHost } from './host.js';
 import { Dialog } from '#dialog';
 
 // re-export for backward compatibility (init.js, update.js import from save.js)
@@ -175,7 +176,7 @@ async function compressRuntime(script) {
   return `<script type="text/plain" id="_rt">\n${b64}<\/script>\n<script>\n${loader}\n<\/script>`;
 }
 
-async function buildNotebookHtml(opts = {}) {
+export async function buildNotebookHtml(opts = {}) {
   // serialize current state back to a self-contained HTML file
   const title = $('#docTitle').value || 'untitled';
 
@@ -405,25 +406,30 @@ export async function saveNotebook() {
     savePackedNotebook();
     return;
   }
-  const title = $('#docTitle').value || 'untitled';
-  let html;
-  try {
-    html = await buildNotebookHtml();
-  } catch (e) {
-    console.error('save failed:', e);
-    setMsg('save failed: ' + e.message, 'err');
-    return;
-  }
 
-  // Works bridge: send serialized HTML to parent shell instead of downloading
+  // Legacy Works bridge — removed in Chunk 4c. Posts the serialized HTML to
+  // the parent shell instead of persisting through the Host.
   if (window.__WORKS_BRIDGE__) {
+    let html;
+    try {
+      html = await buildNotebookHtml();
+    } catch (e) {
+      console.error('save failed:', e);
+      setMsg('save failed: ' + e.message, 'err');
+      return;
+    }
     window.parent.postMessage({ type: 'works:serialized', payload: { html } }, '*');
     setMsg('saved', 'ok');
     return;
   }
 
-  const fn = downloadHtml(html, title);
-  setMsg('saved ' + fn, 'ok');
+  // Standalone (and, from 4c, Works) persistence goes through the Host.
+  try {
+    setMsg(await getHost().persist(), 'ok');
+  } catch (e) {
+    console.error('save failed:', e);
+    setMsg('save failed: ' + e.message, 'err');
+  }
 }
 
 export async function savePackedNotebook() {

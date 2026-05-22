@@ -1,6 +1,7 @@
 import { S } from './state.js';
 import * as hooks from './hooks.js';
-import { loadFromEmbed, saveNotebook, setSaveMode } from './save.js';
+import { loadFromEmbed, saveNotebook, setSaveMode, buildNotebookHtml } from './save.js';
+import { createStandaloneHost, setHost, getHost } from './host.js';
 import { addCell } from './cell-ops.js';
 import { _ctIsExecutable } from './cell-types.js';
 import { setMsg } from './ui.js';
@@ -513,11 +514,16 @@ function scheduleUserThemeReload() {
 }
 hooks.on('fs:changed', scheduleUserThemeReload);
 
+// ── HOST ──
+// Install the Host and build the notebook's VFS at module-eval time, so
+// window._notebookVFS is ready synchronously — exactly as the pre-Host
+// globals.js setup was. Chunk 4c will pick standalone vs. Works here.
+setHost(createStandaloneHost({ buildHtml: buildNotebookHtml }));
+getHost().provideVFS();
+
 // ── INIT ──
-// Deferred to next macrotask so all module bodies (in particular globals.js's
-// VFS setup) complete before init runs. globals.js imports from this module
-// for window.enableEncryption etc., so without the defer, init's IIFE would
-// fire mid-globals-evaluation and see window._notebookVFS still undefined.
+// Deferred to a macrotask so every module body finishes evaluating before
+// init runs (extensions self-register, AIR populates its window hooks, etc.).
 
 setTimeout(async function init() {
   // detect packed format (meta tag injected by loader)
