@@ -1,11 +1,11 @@
-// The desktop menu bar — @gcu/menu's MenuBar. New project is wired (Chunk
-// 3); workspace new/open/save are stubs until persistence (Chunk 5); the
-// Debug menu spawns a stub surface.
+// The desktop menu bar — @gcu/menu's MenuBar.
 
 import { MenuBar } from '#menu';
 import { WKS, setStatus } from './state.js';
 import { spawnSurface } from './surfaces.js';
 import { newProject } from './tree.js';
+import { openWorkspaceFolder, resetWorkspace } from './workspace.js';
+import { confirm as dlgConfirm } from '#dialog';
 
 export function setupMenuBar() {
   const el = document.getElementById('works-menubar');
@@ -31,8 +31,15 @@ export function setupMenuBar() {
     ] },
   ]);
 
-  bar.on('action', (action) => {
+  bar.on('action', async (action) => {
     if (action === 'project:new') { newProject('/projects'); return; }
+    if (action === 'workspace:open') { await openWorkspaceFolder(); return; }
+    if (action === 'workspace:new') {
+      if (await dlgConfirm('Discard the current workspace and start fresh?', { danger: true })) {
+        await resetWorkspace();
+      }
+      return;
+    }
     if (action === 'debug:stub') {
       spawnSurface('stub', { path: '/projects', title: 'Stub surface' });
       return;
@@ -41,7 +48,7 @@ export function setupMenuBar() {
       spawnSurface('inspector', { title: 'A-Bus Inspector' });
       return;
     }
-    setStatus(`menu: ${action}`);  // remaining items are Chunk 5 stubs
+    setStatus(`menu: ${action}`);  // workspace:save lands with 5b
   });
 
   WKS.menubar = bar;

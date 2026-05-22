@@ -3,6 +3,7 @@
 export const WKS = {
   broker:   null,       // the A-Bus broker                          (bus.js)
   vfs:      null,       // the workspace VFS                         (workspace.js)
+  home:     null,       // the storage-home descriptor {kind,…}      (workspace.js)
   rails:    null,       // the @gcu/rails instance                   (layout.js)
   menubar:  null,       // the @gcu/menu MenuBar                     (menubar.js)
   worksBus: null,       // the shell's A-Bus client (`works` service) (works-service.js)
