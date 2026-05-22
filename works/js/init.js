@@ -13,6 +13,7 @@ import { setupWorksService } from './works-service.js';
 import { setupSurfaces, spawnSurface, openPath } from './surfaces.js';
 import { decompressSurfaces } from './surface-registry.js';
 import { serializeWorkspace, buildWorksHtml } from './persist.js';
+import { importNotebook } from './import.js';
 
 async function boot() {
   setupBus();                  // the A-Bus broker
@@ -30,6 +31,7 @@ async function boot() {
   WKS.openPath = openPath;
   WKS.refreshTree = refreshTree;
   WKS.newProject = newProject;
+  WKS.importNotebook = importNotebook;
   WKS.serializeWorkspace = serializeWorkspace;
   WKS.buildWorksHtml = buildWorksHtml;
   window.WKS = WKS;

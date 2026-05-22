@@ -275,6 +275,104 @@ const nbFlush = await page.evaluate(async (uniqueName) => {
   return { onDisk };
 }, nbOpen.uniqueName);
 
+// ── Import notebook (.txt + .html, current + legacy formats) ──────────
+// File → Import notebook…: a .txt source file or a standalone .html
+// becomes a /projects/<name> directory that opens as a notebook surface.
+const exampleHtml = fs.readFileSync(
+  path.join(root, 'examples/basics/example_app_export.html'), 'utf8');
+
+const importResult = await page.evaluate(async (exampleHtml) => {
+  const W = window.WKS;
+
+  // .txt — the source form lands as notebook.txt verbatim.
+  const txt = '/// auditable\n/// title: Imported TXT\n\n/// md\n# txt\n\n/// code\ndisplay(2)\n';
+  const txtPath = await W.importNotebook(txt, 'whatever.txt');
+  const txtMeta = JSON.parse(await W.vfs.readFile(txtPath + '/project.json', 'utf8'));
+  const txtNb = await W.vfs.readFile(txtPath + '/notebook.txt', 'utf8');
+
+  // .html, current format — an AUDITABLE-VFS dump is unpacked, data
+  // siblings and all.
+  const dump = {
+    '/projects/self/notebook.txt': { type: 'file', kind: 'text',
+      content: '/// auditable\n/// title: Imported VFS\n\n/// code\ndisplay(1 + 1)\n' },
+    '/projects/self/data.csv': { type: 'file', kind: 'text', content: 'a,b\n1,2\n' },
+  };
+  const vfsHtml = '<!DOCTYPE html><html><head><title>Auditable — Imported VFS</title>'
+    + '</head><body><!--AUDITABLE-VFS\n' + JSON.stringify(dump) + '\nAUDITABLE-VFS-->'
+    + '</body></html>';
+  const vfsPath = await W.importNotebook(vfsHtml, 'export.html');
+  const vfsNb = await W.vfs.readFile(vfsPath + '/notebook.txt', 'utf8');
+  const vfsData = await W.vfs.readFile(vfsPath + '/data.csv', 'utf8');
+
+  // .html, legacy format — AUDITABLE-DATA/MODULES/SETTINGS converted to a
+  // project: cells → notebook.txt, module source → the shared /lib store.
+  const legacyHtml = '<!DOCTYPE html><!--AUDITABLE-NOTEBOOK-->'
+    + '<html><head><title>Auditable — Legacy NB</title></head><body>'
+    + '<!--AUDITABLE-DATA\n' + JSON.stringify([
+        { type: 'md', code: '# legacy' }, { type: 'code', code: 'display(3)' }])
+    + '\nAUDITABLE-DATA-->\n'
+    + '<!--AUDITABLE-MODULES\n' + JSON.stringify({
+        '@test/mod': { source: 'export const x = 1;', cellId: 'c1' } })
+    + '\nAUDITABLE-MODULES-->\n'
+    + '<!--AUDITABLE-SETTINGS\n{"theme":"dark","fontSize":13,"width":"860"}\nAUDITABLE-SETTINGS-->'
+    + '</body></html>';
+  const legacyPath = await W.importNotebook(legacyHtml, 'legacy.html');
+  const legacyNb = await W.vfs.readFile(legacyPath + '/notebook.txt', 'utf8');
+  let legacyModSource = null;
+  try {
+    legacyModSource = await W.vfs.readFile(
+      '/lib/' + encodeURIComponent('@test/mod') + '/source', 'utf8');
+  } catch { /* */ }
+
+  // a real examples/ notebook (legacy format) imports cleanly.
+  const realPath = await W.importNotebook(exampleHtml, 'example_app_export.html');
+  const realNb = await W.vfs.readFile(realPath + '/notebook.txt', 'utf8');
+
+  // an encrypted notebook is refused, not silently mangled.
+  let cryptoRefused = false;
+  try {
+    await W.importNotebook(
+      '<html><head><title>Auditable — Encrypted</title></head><body>'
+      + '<!--AUDITABLE-CRYPTO\n{}\nAUDITABLE-CRYPTO-->\n</body></html>', 'locked.html');
+  } catch { cryptoRefused = true; }
+
+  // the imported legacy notebook opens as a notebook surface.
+  await W.openPath(legacyPath);
+  await new Promise((r) => setTimeout(r, 250));
+  let opened = null;
+  for (const rec of W.surfaces.values()) if (rec.path === legacyPath) opened = rec;
+
+  return {
+    txtPath, txtKind: txtMeta.kind, txtTitle: txtMeta.title, txtNbMatches: txtNb === txt,
+    vfsPath, vfsNbHasCell: vfsNb.includes('display(1 + 1)'),
+    vfsDataMatches: vfsData === 'a,b\n1,2\n',
+    legacyPath, legacyNbOk: legacyNb.includes('# legacy') && legacyNb.includes('display(3)'),
+    legacyModSource,
+    realPath, realNbOk: realNb.startsWith('/// auditable') && /\/\/\/ (code|md)/.test(realNb),
+    cryptoRefused,
+    opened: !!opened, openedKind: opened && opened.kind,
+  };
+}, exampleHtml);
+
+// The imported real example must boot as a notebook surface and hydrate
+// its cells — the actual "open the examples in Works" goal.
+const realOpen = await page.evaluate(async (realPath) => {
+  const W = window.WKS;
+  const tabId = await W.openPath(realPath);
+  const rec = W.surfaces.get(tabId);
+  const deadline = Date.now() + 25000;
+  while (rec && !rec.ready && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return rec ? { tabId, ready: rec.ready } : { ready: false };
+}, importResult.realPath);
+
+const realFrame = await surfaceFrame(realOpen.tabId);
+let realCells = -1;
+if (realFrame) {
+  realCells = await realFrame.evaluate(() => ((window.S && window.S.cells) || []).length);
+}
+
 // ── Workspace export / import round-trip (Chunk 5b) ───────────────────
 // Serialize the live workspace, build a self-contained HTML, then open it —
 // it must boot the desktop over the embedded snapshot.
@@ -356,6 +454,22 @@ const checks = {
   'notebook surface kind resolved':   nbOpen.kind === 'notebook',
   'notebook hydrates cells from VFS': nbCells === 2,
   'notebook Flush round-trips':       !!nbFlush.onDisk && nbFlush.onDisk.includes('notebook surface smoke'),
+  // Import notebook (.txt + .html, current + legacy formats)
+  'import .txt creates a notebook project': importResult.txtPath === '/projects/Imported TXT'
+      && importResult.txtKind === 'notebook' && importResult.txtTitle === 'Imported TXT',
+  'import .txt keeps the source verbatim':  importResult.txtNbMatches,
+  'import .html (VFS) unpacks the dump':    importResult.vfsPath === '/projects/Imported VFS'
+      && importResult.vfsNbHasCell,
+  'import .html (VFS) restores data files': importResult.vfsDataMatches,
+  'import .html (legacy) converts cells':   importResult.legacyPath === '/projects/Legacy NB'
+      && importResult.legacyNbOk,
+  'import .html (legacy) writes modules':   importResult.legacyModSource === 'export const x = 1;',
+  'import a real examples/ notebook':       importResult.realNbOk
+      && importResult.realPath.startsWith('/projects/'),
+  'import refuses an encrypted notebook':   importResult.cryptoRefused,
+  'imported notebook opens as a surface':   importResult.opened
+      && importResult.openedKind === 'notebook',
+  'imported example boots + hydrates':      realOpen.ready === true && realCells > 0,
   // Workspace export / import (Chunk 5b)
   'export builds a self-contained HTML':   exportLooksRight,
   'imported workspace uses a memory home': imported.home === 'memory',

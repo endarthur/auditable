@@ -10,5 +10,6 @@ import './layout.js';
 import './surfaces.js';
 import './works-service.js';
 import './tree.js';
+import './import.js';
 import './menubar.js';
 import './init.js';

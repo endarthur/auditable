@@ -74,6 +74,9 @@ if (target === 'works') {
     ['rails',  'ext/rails/index.js'],
     ['menu',   'ext/menu/index.js'],
     ['dialog', 'ext/dialog/index.js'],
+    // The notebook's pure serializer — shared so the shell can import a
+    // standalone notebook into a project (works/js/import.js).
+    ['serialize', 'src/js/serialize.js'],
   ]) {
     const p = path.join(__dirname, rel);
     if (!fs.existsSync(p)) {
