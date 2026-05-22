@@ -12,7 +12,7 @@ import { chromium } from 'playwright';
 import http from 'http';
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
@@ -49,6 +49,15 @@ const page = await browser.newPage();
 const errors = [];
 page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
 page.on('console', (m) => { if (m.type() === 'error') errors.push('console.error: ' + m.text()); });
+
+// Find a surface's iframe Frame by its tab id. Surfaces load from blob URLs
+// (§15.1 embedded payloads), so they can't be matched by file name.
+async function surfaceFrame(tabId) {
+  const handle = await page.evaluateHandle(
+    (id) => (window.WKS.surfaces.get(id) || {}).iframe, tabId);
+  const el = handle.asElement();
+  return el ? await el.contentFrame() : null;
+}
 
 await page.goto(url);
 
@@ -145,7 +154,7 @@ const textOpen = await page.evaluate(async () => {
 });
 
 // Reach into the surface's iframe: confirm it read the file, then edit it.
-const textFrame = page.frames().find((f) => f.url().includes('text.html'));
+const textFrame = await surfaceFrame(textOpen.tabId);
 let loadedContent = null;
 if (textFrame) {
   loadedContent = await textFrame.evaluate(() => document.querySelector('textarea')?.value);
@@ -179,13 +188,14 @@ const inspectorOpen = await page.evaluate(async () => {
     await new Promise((r) => setTimeout(r, 50));
   }
   return {
+    tabId,
     brokerPeers: (snap.peers || []).length,
     brokerHasSubs: Array.isArray(snap.subscriptions),
     ready: rec ? rec.ready : false,
   };
 });
 
-const inspectorFrame = page.frames().find((f) => f.url().includes('inspector.html'));
+const inspectorFrame = await surfaceFrame(inspectorOpen.tabId);
 let inspectorPeerRows = 0;
 if (inspectorFrame) {
   await inspectorFrame.evaluate(() => new Promise((r) => setTimeout(r, 250)));
@@ -247,7 +257,7 @@ const nbOpen = await page.evaluate(async () => {
 });
 
 // Reach into the notebook iframe — did it hydrate cells from the workspace?
-const nbFrame = page.frames().find((f) => f.url().includes('auditable.html'));
+const nbFrame = await surfaceFrame(nbOpen.tabId);
 let nbCells = -1;
 if (nbFrame) {
   nbCells = await nbFrame.evaluate(() => ((window.S && window.S.cells) || []).length);
@@ -284,6 +294,26 @@ const imported = await page.evaluate(async () => {
   try { nbExists = await W.vfs.exists('/projects/SmokeNB/notebook.txt'); } catch { /* */ }
   try { note = await W.vfs.readFile('/projects/persist-note.txt', 'utf8'); } catch { /* */ }
   return { home: W.home && W.home.kind, nbExists, note };
+});
+
+// ── file:// portability (§15.1) ───────────────────────────────────────
+// works.html must run from file:// — every surface is an embedded payload,
+// blob-URL'd on spawn, so it loads same-origin with the shell. The rest of
+// this smoke runs over HTTP, which never exercises this.
+await page.goto(pathToFileURL(path.join(root, 'works.html')).href);
+await page.waitForFunction(
+  () => window.WKS && window.WKS.vfs && window.WKS.broker,
+  { timeout: 15000 }).catch(() => {});
+const fileMode = await page.evaluate(async () => {
+  const W = window.WKS;
+  if (!W || !W.vfs) return { booted: false, proto: location.protocol };
+  const tabId = W.spawnSurface('stub', { path: '/projects', title: 'Stub' });
+  const rec = W.surfaces.get(tabId);
+  const deadline = Date.now() + 12000;
+  while (rec && !rec.ready && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return { booted: true, proto: location.protocol, surfaceReady: !!(rec && rec.ready) };
 });
 
 const checks = {
@@ -331,6 +361,9 @@ const checks = {
   'imported workspace uses a memory home': imported.home === 'memory',
   'imported workspace has its projects':   imported.nbExists,
   'imported workspace keeps its files':    imported.note === 'survives reload',
+  // file:// portability (§15.1)
+  'works.html boots from file://':         fileMode.booted && fileMode.proto === 'file:',
+  'a surface loads from file://':          fileMode.surfaceReady === true,
 };
 
 console.log('--- works.html (Works rebuild — Chunks 1-3, 5 + surfaces) ---');

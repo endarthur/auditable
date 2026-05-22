@@ -3,7 +3,7 @@
 // per surface and addresses each by its unique name.
 
 import { WKS, setStatus } from './state.js';
-import { kindDef, kindForExtension } from './surface-registry.js';
+import { kindDef, kindForExtension, surfaceUrl } from './surface-registry.js';
 
 const _byUnique = new Map();   // A-Bus unique name → tab id
 
@@ -19,7 +19,10 @@ export function createSurface(tabId, kind, opts = {}) {
 
   const iframe = document.createElement('iframe');
   iframe.className = 'works-surface-frame';
-  iframe.src = def.url;
+  // The surface's embedded payload (§15.1), decompressed to a blob URL at
+  // boot. Set before the iframe enters the DOM, so its one and only load is
+  // the real surface — no about:blank phase, no double-fired welcome.
+  iframe.src = surfaceUrl(kind);
 
   // One A-Bus channel per surface: the shell keeps port1 (broker side),
   // the surface receives port2 in its welcome.
@@ -45,6 +48,7 @@ export function createSurface(tabId, kind, opts = {}) {
       },
       '*', [ch.port2]);
   });
+
   return rec;
 }
 

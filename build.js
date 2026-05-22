@@ -100,6 +100,53 @@ if (target === 'works') {
 
   const worksTemplate = fs.readFileSync(path.join(worksDir, 'template.html'), 'utf8');
 
+  // ── Surface payloads (auditable-works-spec §15.1) ──
+  // Every surface is embedded as a gzip+base64 payload; the shell decompresses
+  // it to a blob URL on first spawn. A blob URL is same-origin with the shell,
+  // so works.html runs from file://, not only over HTTP — that is what makes
+  // it a true single file. (The notebook payload makes works.html ~1.5 MB —
+  // the §15.1 duplication cost; §15.2 dynamic linking dedups it later.)
+  const worksZlib = require('zlib');
+
+  function inlineSurfaceAbus(html, name) {
+    // The small surfaces import @gcu/abus and nothing else — inline it so
+    // each is fully self-contained (no cross-file imports, which file://
+    // would CORS-block).
+    const imports = html.match(/^\s*import\s[^\n]*$/gm) || [];
+    const stray = imports.filter((i) => !/ext\/abus\/index\.js/.test(i));
+    if (stray.length) {
+      console.error(`Error: surface ${name} has imports beyond @gcu/abus — cannot embed:\n  `
+        + stray.join('\n  '));
+      process.exit(1);
+    }
+    const abusSrc = fs.readFileSync(path.join(__dirname, 'ext/abus/index.js'), 'utf8')
+      .replace(/^export\s*\{[\s\S]*?\};\s*$/m, '');
+    return html.replace(
+      /import\s*\{[^}]*\}\s*from\s*['"][^'"]*ext\/abus\/index\.js['"];?/,
+      '/* @gcu/abus — inlined for a self-contained surface */\n' + abusSrc);
+  }
+
+  const surfaceParts = [];
+  for (const s of [
+    { kind: 'stub',      file: 'works/surfaces/stub.html',      inline: true },
+    { kind: 'text',      file: 'works/surfaces/text.html',      inline: true },
+    { kind: 'inspector', file: 'works/surfaces/inspector.html', inline: true },
+    { kind: 'notebook',  file: 'auditable.html',                inline: false },
+  ]) {
+    const sp = path.join(__dirname, s.file);
+    if (!fs.existsSync(sp)) {
+      console.error(`Error: surface source ${s.file} not found`
+        + (s.kind === 'notebook' ? ' — build auditable.html first (node build.js).' : '.'));
+      process.exit(1);
+    }
+    let surfaceHtml = fs.readFileSync(sp, 'utf8');
+    if (s.inline) surfaceHtml = inlineSurfaceAbus(surfaceHtml, s.kind);
+    const gz = worksZlib.gzipSync(Buffer.from(surfaceHtml, 'utf8'));
+    const b64 = gz.toString('base64').replace(/.{1,76}/g, '$&\n');
+    surfaceParts.push(`<script type="text/plain" id="surface-${s.kind}">\n${b64}\n</script>`);
+  }
+  const surfacePayloads = surfaceParts.join('\n');
+
   const worksHtml = `<!DOCTYPE html>
 <!-- Auditable Works — the GCU desktop -->
 <html lang="en">
@@ -114,6 +161,9 @@ ${worksCss}
 <body>
 
 ${worksTemplate}
+
+<!-- Auditable Works surfaces — embedded payloads, blob-URL'd on spawn (§15.1) -->
+${surfacePayloads}
 
 <script>
 ${worksJs}

@@ -11,11 +11,13 @@ import { setupMenuBar } from './menubar.js';
 import { setupTree, refreshTree, newProject } from './tree.js';
 import { setupWorksService } from './works-service.js';
 import { setupSurfaces, spawnSurface, openPath } from './surfaces.js';
+import { decompressSurfaces } from './surface-registry.js';
 import { serializeWorkspace, buildWorksHtml } from './persist.js';
 
 async function boot() {
   setupBus();                  // the A-Bus broker
-  await setupWorkspace();      // the workspace VFS (IndexedDB-backed)
+  await setupWorkspace();      // the workspace VFS (storage home)
+  await decompressSurfaces();  // embedded surface payloads → blob URLs
   setupLayout();               // the rails surface host
   setupMenuBar();              // the desktop menu bar
   setupTree();                 // the file-tree explorer
