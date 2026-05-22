@@ -1,7 +1,9 @@
-// The file-tree explorer over /projects/. Renders projects (directories
-// with a project.json marker), organizing folders, and loose files.
-// Double-click opens a project/file as a surface; right-click is a context
-// menu for new / rename / delete.
+// The file-tree explorer over the workspace VFS. Rooted at `/` — the whole
+// filesystem is navigable: /projects is expanded by default (the user's
+// work, front and centre), with /lib, /home, /scratch, /sys and any mounted
+// folders collapsed but one click away. Projects are directories with a
+// project.json marker; double-click opens a project or file as a surface;
+// right-click is a context menu for new / rename / delete.
 
 import { WKS, setStatus } from './state.js';
 import { Menu } from '#menu';
@@ -9,14 +11,16 @@ import { prompt as dlgPrompt, confirm as dlgConfirm } from '#dialog';
 import { kindDef } from './surface-registry.js';
 import { openPath } from './surfaces.js';
 
-const ROOT = '/projects';
-const expanded = new Set([ROOT]);
+const ROOT = '/';
+// /projects open by default; the rest of the VFS is there, collapsed.
+const expanded = new Set(['/', '/projects']);
 
 let _treeEl = null;
 let _refreshTimer = null;
 
 const basename = (p) => p.split('/').filter(Boolean).pop() || p;
-const parentOf = (p) => { const i = p.lastIndexOf('/'); return i > 0 ? p.slice(0, i) : ROOT; };
+const parentOf = (p) => { const i = p.lastIndexOf('/'); return i > 0 ? p.slice(0, i) : '/'; };
+const join = (dir, name) => (dir === '/' ? '/' : dir + '/') + name;
 const sanitize = (s) => String(s).trim().replace(/[/\\]+/g, '-');
 const rid = () => Math.random().toString(36).slice(2, 10);
 
@@ -31,11 +35,12 @@ export function setupTree() {
   };
   for (const ev of ['write', 'delete', 'rename', 'mkdir']) WKS.vfs.on(ev, bump);
 
-  // Right-click on empty tree space → create at the root.
+  // Right-click empty tree space → create in /projects (the natural home
+  // for a new notebook).
   _treeEl.addEventListener('contextmenu', (e) => {
     if (e.target.closest('.tree-row')) return;   // a row handles its own
     e.preventDefault();
-    showMenu(e, ROOT, 'folder');
+    showMenu(e, '/projects', 'folder');
   });
 
   refreshTree();
@@ -51,21 +56,18 @@ export async function refreshTree() {
     return;
   }
   _treeEl.textContent = '';
-  if (!nodes.length) {
-    _treeEl.innerHTML = '<div class="works-tree-empty">No projects yet.</div>';
-    return;
-  }
   for (const n of nodes) renderNode(n, 0);
 }
 
 // Build the tree model under `dir`. A directory with a project.json is a
 // project (a leaf — its insides are the surface's concern, not the tree's);
-// any other directory is an organizing folder we recurse into.
+// any other directory is a folder. Lazy: only expanded folders are read, so
+// /lib and mounted folders cost nothing until opened.
 async function walk(dir) {
   const entries = await WKS.vfs.readdir(dir, { stat: true });
   const nodes = [];
   for (const e of entries) {
-    const p = dir + '/' + e.name;
+    const p = join(dir, e.name);
     if (e.type === 'directory') {
       let meta = null;
       try {
@@ -137,14 +139,15 @@ function renderNode(node, depth) {
 }
 
 async function showMenu(e, path, type) {
-  // A folder (or the root) can be created inside; for a project/file the
-  // target is its parent directory.
+  // A folder is created inside; for a project/file the target is its parent.
   const dir = type === 'folder' ? path : parentOf(path);
   const items = [
     { label: 'New notebook…', action: 'new-project' },
     { label: 'New folder…', action: 'new-folder' },
   ];
-  if (path !== ROOT) {
+  // `/` and the mount roots (/projects, /lib, /home, /scratch, /sys) are the
+  // workspace's fixed structure — not renamable or deletable.
+  if (path !== '/' && parentOf(path) !== '/') {
     items.push('---');
     if (type === 'project') items.push({ label: 'Open', action: 'open' });
     items.push({ label: 'Rename…', action: 'rename' });
@@ -164,7 +167,7 @@ async function showMenu(e, path, type) {
 export async function newProject(dir, name, kind = 'notebook') {
   if (name == null) name = await dlgPrompt('New notebook name:');
   if (!name) return null;
-  const p = dir + '/' + sanitize(name);
+  const p = join(dir, sanitize(name));
   try {
     await WKS.vfs.mkdir(p, { recursive: true });
     await WKS.vfs.writeFile(p + '/project.json',
@@ -187,7 +190,7 @@ export async function newProject(dir, name, kind = 'notebook') {
 export async function newFolder(dir, name) {
   if (name == null) name = await dlgPrompt('New folder name:');
   if (!name) return null;
-  const p = dir + '/' + sanitize(name);
+  const p = join(dir, sanitize(name));
   try {
     await WKS.vfs.mkdir(p, { recursive: true });
     expanded.add(dir);
@@ -202,7 +205,7 @@ async function renameEntry(path) {
   const name = await dlgPrompt('Rename to:');
   if (!name) return;
   try {
-    await WKS.vfs.rename(path, parentOf(path) + '/' + sanitize(name));
+    await WKS.vfs.rename(path, join(parentOf(path), sanitize(name)));
   } catch (e) {
     setStatus('rename failed: ' + e.message);
   }
