@@ -336,7 +336,7 @@ const checks = {
   // Chunk 3
   'tree renders a created project':   tree.treeShowsProject,
   'openPath spawned a surface':       tree.surfaceOpened && tree.spawned === 1,
-  'kind resolved from project.json':  tree.surfaceKind === 'stub',
+  'kind resolved from project.json':  tree.surfaceKind === 'notebook',
   're-opening a path dedups':         tree.deduped,
   // Text editor surface
   'text surface opens a loose file':  textOpen.ready === true,

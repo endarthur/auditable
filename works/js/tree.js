@@ -141,7 +141,7 @@ async function showMenu(e, path, type) {
   // target is its parent directory.
   const dir = type === 'folder' ? path : parentOf(path);
   const items = [
-    { label: 'New project…', action: 'new-project' },
+    { label: 'New notebook…', action: 'new-project' },
     { label: 'New folder…', action: 'new-folder' },
   ];
   if (path !== ROOT) {
@@ -158,18 +158,25 @@ async function showMenu(e, path, type) {
   else if (action === 'delete') deleteEntry(path, type);
 }
 
-// Create a project. `name` may be passed to skip the prompt (programmatic
+// Create a project. Defaults to a notebook — the project kind a user
+// actually creates. `name` may be passed to skip the prompt (programmatic
 // use / tests); omitted, it is asked for.
-export async function newProject(dir, name) {
-  if (name == null) name = await dlgPrompt('New project name:');
+export async function newProject(dir, name, kind = 'notebook') {
+  if (name == null) name = await dlgPrompt('New notebook name:');
   if (!name) return null;
   const p = dir + '/' + sanitize(name);
   try {
     await WKS.vfs.mkdir(p, { recursive: true });
     await WKS.vfs.writeFile(p + '/project.json',
-      JSON.stringify({ kind: 'stub', id: 'p-' + rid(), title: name }, null, 2));
+      JSON.stringify({ kind, id: 'p-' + rid(), title: name }, null, 2));
+    if (kind === 'notebook') {
+      // A starter notebook.txt (the /// form) — a title cell + an empty
+      // code cell. The notebook surface reads this on open.
+      await WKS.vfs.writeFile(p + '/notebook.txt',
+        '/// auditable\n/// title: ' + name + '\n\n/// md\n# ' + name + '\n\n/// code\n');
+    }
     expanded.add(dir);
-    setStatus('created project ' + name);
+    setStatus('created ' + name);
     return p;
   } catch (e) {
     setStatus('create failed: ' + e.message);

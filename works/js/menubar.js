@@ -13,7 +13,7 @@ export function setupMenuBar() {
 
   const bar = new MenuBar(el, () => [
     { label: 'File', items: () => [
-      { label: 'New project…', action: 'project:new' },
+      { label: 'New notebook…', action: 'project:new' },
       '---',
       { label: 'New workspace…',       action: 'workspace:new' },
       { label: 'Open folder…',         action: 'workspace:open' },
