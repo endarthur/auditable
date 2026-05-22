@@ -12,7 +12,7 @@
 // working copy and the rest is an A-Bus proxy onto the shared workspace,
 // and a save that flushes the copy back to that workspace.
 
-import { VFS, CommentBackend, MemoryBackend, AbusBackend, path } from './vfs.js';
+import { VFS, CommentBackend, MemoryBackend, AbusBackend, FSAABackend, IDBBackend, path } from './vfs.js';
 import * as hooks from './hooks.js';
 
 let _host = null;
@@ -114,55 +114,73 @@ export function createStandaloneHost({ buildHtml }) {
  * @param {() => Promise<void>} deps.syncToVfs - writes current notebook state
  *   (cells, settings, modules) into the VFS. Injected to keep host.js free of
  *   a persist.js/state.js import web.
+ * @param {object} [deps.home] - the workspace storage-home descriptor; a
+ *   delegatable home (fsaa/idb) is mounted directly, else / is the relay proxy.
  */
-export function createWorksHost({ bus, projectPath, syncToVfs }) {
-  const _call = (member, args) =>
-    bus.call({ to: 'works', path: '/', interface: 'VFS', member }, args);
+export function createWorksHost({ bus, projectPath, syncToVfs, home }) {
+  // The `/` mount: a direct backend when the workspace home is delegatable —
+  // a disk folder, or an IndexedDB store a same-origin surface can open
+  // itself — else the A-Bus relay proxy.
+  function rootDescriptor() {
+    if (home && home.kind === 'fsaa') return { kind: 'handle', mount: '/', handle: home.handle };
+    if (home && home.kind === 'idb')  return { kind: 'idb',    mount: '/', name: home.name };
+    return { kind: 'proxy', mount: '/', root: '' };
+  }
 
-  // The surface VFS mount descriptors. 4c implements the local-copy / proxy /
-  // memory kinds; the handle / idb kinds — direct delegation of an FSAA disk
-  // folder or an IndexedDB store, so huge mounts stream without a relay — are
-  // part of the protocol but land with the disk-folder storage home.
+  // The surface VFS mount descriptors. /projects/self is always the local
+  // working copy (so notebook.fs stays synchronous); the / mount is direct
+  // or relayed per the home.
   function descriptors() {
     return [
       { kind: 'local-copy', mount: '/projects/self', source: projectPath },
-      { kind: 'proxy',      mount: '/',              root: '' },
-      { kind: 'memory',     mount: '/tmp' },
-      { kind: 'memory',     mount: '/usr/lib/python' },
+      rootDescriptor(),
+      { kind: 'memory', mount: '/tmp' },
+      { kind: 'memory', mount: '/usr/lib/python' },
     ];
   }
 
-  function backendFor(d) {
+  async function backendFor(d) {
     switch (d.kind) {
       case 'local-copy': return _makeProjectBackend();
       case 'proxy':      return new AbusBackend({ bus, service: 'works', root: d.root || '' });
       case 'memory':     return new MemoryBackend();
+      case 'handle': {   // a delegated FSAA disk folder — direct I/O, no relay
+        const b = new FSAABackend({ handle: d.handle });
+        await b.init();
+        return b;
+      }
+      case 'idb': {      // a delegated IndexedDB store — direct I/O, no relay
+        const b = new IDBBackend({ name: d.name });
+        await b.init();
+        return b;
+      }
       default: throw new Error('Works Host: unimplemented mount kind "' + d.kind + '"');
     }
   }
 
-  // Pull a workspace subtree into a local mount (the local-copy boot-load).
+  // Boot-load / write-back copy between the /projects/self local copy and the
+  // workspace project (reached via the / mount) — going through the surface
+  // VFS, so they are transparent to whether / is a relay proxy or a direct
+  // delegated mount. Write-back is write-all; orphan pruning is a follow-up.
   async function bootLoad(vfs, remoteBase, localBase) {
     let names;
-    try { names = await _call('List', [remoteBase]); }
+    try { names = await vfs.readdir(remoteBase); }
     catch { return; }   // not created yet — a fresh project
     for (const name of names) {
       const r = remoteBase + '/' + name;
       const l = localBase + '/' + name;
-      const st = await _call('Stat', [r]);
+      const st = await vfs.stat(r);
       if (st && st.type === 'directory') {
         await vfs.mkdir(l, { recursive: true }).catch(() => {});
         await bootLoad(vfs, r, l);
       } else {
-        await vfs.writeFile(l, await _call('Read', [r, 'bytes']));
+        await vfs.writeFile(l, await vfs.readFile(r, 'bytes'));
       }
     }
   }
 
-  // Push a local mount back to its workspace subtree. Write-all — orphan
-  // pruning (deletions) is a follow-up.
   async function writeBack(vfs, localBase, remoteBase) {
-    await _call('MkDir', [remoteBase]);
+    await vfs.mkdir(remoteBase, { recursive: true }).catch(() => {});
     const entries = await vfs.readdir(localBase, { stat: true });
     for (const e of entries) {
       const l = localBase + '/' + e.name;
@@ -170,7 +188,7 @@ export function createWorksHost({ bus, projectPath, syncToVfs }) {
       if (e.type === 'directory') {
         await writeBack(vfs, l, r);
       } else {
-        await _call('Write', [r, await vfs.readFile(l, 'bytes')]);
+        await vfs.writeFile(r, await vfs.readFile(l, 'bytes'));
       }
     }
   }
@@ -182,7 +200,7 @@ export function createWorksHost({ bus, projectPath, syncToVfs }) {
     async provideVFS() {
       const vfs = new VFS();
       const ds = descriptors();
-      for (const d of ds) vfs._mounts.set(d.mount, backendFor(d));
+      for (const d of ds) vfs._mounts.set(d.mount, await backendFor(d));
       _wireVfsEvents(vfs);
       window._notebookVFS = vfs;
       window._vfsPath = path;

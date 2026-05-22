@@ -49,7 +49,7 @@ for (const relPath of importPaths) {
 const header = '// \u26a0 GENERATED FILE \u2014 DO NOT EDIT. Source: ext/vfs/src/  Build: node ext/vfs/build.js\n'
   + '// @gcu/vfs \u2014 Virtual filesystem with pluggable backends and mount table\n';
 
-const output = header + '\n' + chunks.join('\n\n') + '\n\nexport { VFS, VFSError, CommentBackend, MemoryBackend, AbusBackend, path };\n';
+const output = header + '\n' + chunks.join('\n\n') + '\n\nexport { VFS, VFSError, CommentBackend, MemoryBackend, AbusBackend, FSAABackend, IDBBackend, path };\n';
 
 const outPath = path.join(__dirname, 'index.js');
 fs.writeFileSync(outPath, output);

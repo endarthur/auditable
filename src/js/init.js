@@ -563,7 +563,7 @@ async function init() {
 // workspace project and the rest is an A-Bus proxy; the notebook then loads
 // from that VFS the same way it would from a self-contained one.
 async function worksBoot(conn) {
-  const { bus, tab } = conn;
+  const { bus, tab, home } = conn;
 
   // Write current cells/settings/modules into the VFS so the Host can flush
   // them through to the shared workspace.
@@ -571,7 +571,7 @@ async function worksBoot(conn) {
     window._notebookVFS, S, getSettings(),
     document.getElementById('docTitle')?.value || 'untitled');
 
-  const host = createWorksHost({ bus, projectPath: tab.path, syncToVfs });
+  const host = createWorksHost({ bus, projectPath: tab.path, syncToVfs, home });
   setHost(host);
 
   // Build the surface VFS and boot-load the project from the workspace.

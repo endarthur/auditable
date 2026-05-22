@@ -41,6 +41,7 @@ export function createSurface(tabId, kind, opts = {}) {
         type: 'abus:welcome',
         port: ch.port2,
         tab: { id: tabId, path: rec.path, kind },
+        home: WKS.home,   // the storage-home descriptor — surfaces may mount it directly
       },
       '*', [ch.port2]);
   });

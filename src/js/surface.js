@@ -35,10 +35,10 @@ export function connectSurface(timeoutMs) {
     async function handle(ev) {
       // §7.1 — adopt the welcome only from our own parent.
       if (!ev || ev.source !== window.parent || !ev.data) { finish(null); return; }
-      const { port, tab } = ev.data;
+      const { port, tab, home } = ev.data;
       try {
         const bus = await connect(port, { client: 'auditable-notebook' });
-        finish({ bus, tab });
+        finish({ bus, tab, home });
       } catch (e) {
         console.error('[surface] A-Bus connect failed:', e);
         finish(null);
