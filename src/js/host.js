@@ -129,13 +129,16 @@ export function createWorksHost({ bus, projectPath, syncToVfs, home }) {
 
   // The surface VFS mount descriptors. /projects/self is always the local
   // working copy (so notebook.fs stays synchronous); the / mount is direct
-  // or relayed per the home.
+  // or relayed per the home. /usr/lib is *always* relayed — it's the
+  // shell's volatile MemoryBackend (builtins like @gcu/xterm), not part of
+  // the storage home, so a delegated IDB/FSAA root would miss it.
   function descriptors() {
     return [
       { kind: 'local-copy', mount: '/projects/self', source: projectPath },
       rootDescriptor(),
       { kind: 'memory', mount: '/tmp' },
       { kind: 'memory', mount: '/usr/lib/python' },
+      { kind: 'proxy',  mount: '/usr/lib', root: '/usr/lib' },
     ];
   }
 

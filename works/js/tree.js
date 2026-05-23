@@ -80,8 +80,9 @@ export async function refreshTree() {
 async function walk(dir) {
   const entries = await WKS.vfs.readdir(dir, { stat: true });
   const nodes = [];
-  // Inside /lib, names are URL-encoded module URLs — show them decoded.
-  const decode = (dir === '/lib');
+  // Inside /lib and /usr/lib, names are URL-encoded module URLs (e.g.
+  // %40gcu%2Fxterm for @gcu/xterm); show them decoded for the user.
+  const decode = (dir === '/lib' || dir === '/usr/lib');
   for (const e of entries) {
     const p = join(dir, e.name);
     const label = decode ? safeDecode(e.name) : e.name;

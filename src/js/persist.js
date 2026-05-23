@@ -91,6 +91,11 @@ export function getPersister() {
 // format is VFS-uniform. (Content-addressed /lib per spec §15.4 is a later step.)
 
 const MODULES_DIR = '/lib';
+// In Works, the shell also exposes its bundled libs at /usr/lib (Unix-style
+// "system-provided"); hydrateModulesFromVfs reads both directories with
+// /lib shadowing /usr/lib so a user-installed module wins over a builtin
+// of the same URL. Standalone notebooks just see /lib (no /usr/lib mount).
+const BUILTIN_MODULES_DIR = '/usr/lib';
 const _enc = encodeURIComponent;
 const _dec = decodeURIComponent;
 
@@ -111,6 +116,10 @@ export async function syncModulesToVfs(vfs, installedModules) {
 
   if (!installedModules) return;
   for (const [url, entry] of Object.entries(installedModules)) {
+    // Skip builtins — they live at /usr/lib (volatile, repopulated by the
+    // shell at boot). Writing them to /lib would persist them in workspace
+    // exports and shadow future shell-provided versions.
+    if (entry && typeof entry === 'object' && entry.builtin) continue;
     const dir = MODULES_DIR + '/' + _enc(url);
     await vfs.mkdir(dir, { recursive: true }).catch(() => {});
     if (typeof entry === 'string') {
@@ -157,24 +166,27 @@ export async function flushPendingDirty(vfs, S, settings, title) {
 
 export async function hydrateModulesFromVfs(vfs) {
   if (!vfs) return {};
-  let entries;
-  try { entries = await vfs.readdir(MODULES_DIR, { stat: true }); }
-  catch { return {}; }
   const result = {};
-  for (const e of entries) {
-    if (e.type !== 'directory') continue;
-    const url = _dec(e.name);
-    const dir = MODULES_DIR + '/' + e.name;
-    let meta = {};
-    let source = null;
-    try { meta = JSON.parse(await vfs.readFile(dir + '/meta.json', 'text')); } catch {}
-    try { source = await vfs.readFile(dir + '/source', 'text'); } catch {}
-    if (meta.legacy && source !== null) {
-      result[url] = source;
-    } else if (source !== null) {
-      result[url] = { ...meta, source };
-    } else if (Object.keys(meta).length > 0) {
-      result[url] = meta;
+  // /usr/lib first — its entries are the floor; /lib overlays them so a
+  // user-installed module of the same URL shadows a shell-provided one.
+  for (const dir of [BUILTIN_MODULES_DIR, MODULES_DIR]) {
+    let entries;
+    try { entries = await vfs.readdir(dir, { stat: true }); } catch { continue; }
+    for (const e of entries) {
+      if (e.type !== 'directory') continue;
+      const url = _dec(e.name);
+      const entryDir = dir + '/' + e.name;
+      let meta = {};
+      let source = null;
+      try { meta = JSON.parse(await vfs.readFile(entryDir + '/meta.json', 'text')); } catch {}
+      try { source = await vfs.readFile(entryDir + '/source', 'text'); } catch {}
+      if (meta.legacy && source !== null) {
+        result[url] = source;
+      } else if (source !== null) {
+        result[url] = { ...meta, source };
+      } else if (Object.keys(meta).length > 0) {
+        result[url] = meta;
+      }
     }
   }
   return result;

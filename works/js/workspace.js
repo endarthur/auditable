@@ -64,9 +64,10 @@ export async function setupWorkspace() {
         '/':        { type: 'memory' },
         '/scratch': { type: 'memory' },
         '/sys':     { type: 'memory' },
+        '/usr':     { type: 'memory' },   // shell builtins (§Unix: /usr/lib)
       },
     });
-    for (const dir of ['/projects', '/lib', '/home', '/home/.works', '/mnt']) {
+    for (const dir of ['/projects', '/lib', '/home', '/home/.works', '/mnt', '/usr/lib']) {
       try { await vfs.mkdir(dir, { recursive: true }); } catch { /* exists */ }
     }
     await hydrateWorkspace(vfs, imported);
@@ -101,12 +102,13 @@ export async function setupWorkspace() {
       '/':        homeBackend,        // persistent — the storage home
       '/scratch': { type: 'memory' }, // volatile
       '/sys':     { type: 'memory' }, // volatile
+      '/usr':     { type: 'memory' }, // volatile — shell builtins (/usr/lib)
     },
   });
 
   // Standard directories inside the storage home (idempotent — they persist
   // across reloads). /home/.works holds the shell's own state.
-  for (const dir of ['/projects', '/lib', '/home', '/home/.works', '/mnt']) {
+  for (const dir of ['/projects', '/lib', '/home', '/home/.works', '/mnt', '/usr/lib']) {
     try { await vfs.mkdir(dir, { recursive: true }); } catch { /* exists */ }
   }
 

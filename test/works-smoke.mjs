@@ -300,6 +300,22 @@ if (nbFrame) {
   nbCells = await nbFrame.evaluate(() => ((window.S && window.S.cells) || []).length);
 }
 
+// Notebook surface sees the shell's /usr/lib builtins as @gcu/* modules
+// in its _installedModules — `await load('@gcu/xterm')` works natively.
+let nbBuiltins = null;
+if (nbFrame) {
+  nbBuiltins = await nbFrame.evaluate(() => {
+    const m = window._installedModules || {};
+    return {
+      hasXterm: !!m['@gcu/xterm'],
+      hasGeas:  !!m['@gcu/geas'],
+      hasVfs:   !!m['@gcu/vfs'],
+      hasAbus:  !!m['@gcu/abus'],
+      xtermBuiltinFlag: !!(m['@gcu/xterm'] && m['@gcu/xterm'].builtin),
+    };
+  });
+}
+
 // Flush the notebook; confirm its notebook.txt round-tripped to the workspace.
 const nbFlush = await page.evaluate(async (uniqueName) => {
   const W = window.WKS;
@@ -661,6 +677,11 @@ const checks = {
   'notebook surface kind resolved':   nbOpen.kind === 'notebook',
   'notebook hydrates cells from VFS': nbCells === 2,
   'notebook Flush round-trips':       !!nbFlush.onDisk && nbFlush.onDisk.includes('notebook surface smoke'),
+  // Notebook sees /usr/lib builtins as @gcu/* modules
+  'notebook sees /usr/lib builtins':  nbBuiltins
+      && nbBuiltins.hasXterm && nbBuiltins.hasGeas
+      && nbBuiltins.hasVfs && nbBuiltins.hasAbus,
+  'builtin flag preserved':           nbBuiltins && nbBuiltins.xtermBuiltinFlag,
   // Import notebook (.txt + .html, current + legacy formats)
   'import .txt creates a notebook project': importResult.txtPath === '/projects/Imported TXT'
       && importResult.txtKind === 'notebook' && importResult.txtTitle === 'Imported TXT',
