@@ -134,6 +134,13 @@ function _makeProxyBackend(BackendCls) {
   let intReceived = false;
   let _workerVfs = null;
   let _workerTty = null;          // Phase C: ctx.tty proxy (service modes only)
+  let _workerPm = null;           // Phase D: ctx.pm proxy (service-mode-only)
+
+  // Phase D: ctx.pm wire state. Reply correlation map and pid → waiter
+  // queue (we may have multiple awaiters for the same remote process).
+  let _pmNextRpcId = 0;
+  const _pmPending = new Map();     // id → {res, rej}
+  const _pmWaitWaiters = new Map(); // pid → array of resolvers
   const _ttyKeyQueue = [];        // backlog for keys() iterator
   const _ttyKeyWaiters = [];      // pending promise resolvers
   const _ttyMouseQueue = [];
@@ -193,6 +200,11 @@ function _makeProxyBackend(BackendCls) {
         if (msg.ttySize) _ttySize = msg.ttySize;
         _workerTty = buildWorkerTty();
       }
+      // Phase D: build ctx.pm. Always available in service-mode workers
+      // so they can spawn / manage host-side processes via RPC. No host
+      // opt-in flag — the proxy doesn't itself do anything; the host's
+      // Process simply rejects the RPC if no manager is set.
+      _workerPm = buildWorkerPm();
       await dispatchInit(msg);
       return;
     }
@@ -207,6 +219,27 @@ function _makeProxyBackend(BackendCls) {
         if (msg.error && msg.error.code) err.code = msg.error.code;
         if (msg.error && msg.error.path) err.path = msg.error.path;
         slot.rej(err);
+      }
+      return;
+    }
+    // Phase D: ctx.pm RPC replies.
+    if (msg.type === '_proc_pm_reply') {
+      const slot = _pmPending.get(msg.id);
+      if (!slot) return;
+      _pmPending.delete(msg.id);
+      if (msg.ok) slot.res(msg.value);
+      else slot.rej(new Error((msg.error && msg.error.message) || 'pm proxy: unknown error'));
+      return;
+    }
+    if (msg.type === '_proc_pm_exit') {
+      // A remote process the worker is waiting on has exited. Fan out to
+      // all queued waiters for that pid.
+      const waiters = _pmWaitWaiters.get(msg.pid);
+      if (waiters) {
+        _pmWaitWaiters.delete(msg.pid);
+        for (const r of waiters) {
+          try { r(msg.exitCode); } catch (_) {}
+        }
       }
       return;
     }
@@ -329,6 +362,50 @@ function _makeProxyBackend(BackendCls) {
     };
   }
 
+  // Phase D: worker-side ProcessManager proxy. Sends _proc_pm_* RPCs to
+  // the host, gets back replies or exit-notifications. Spawns return a
+  // RemoteProcess stand-in with pid + wait() + kill().
+  function buildWorkerPm() {
+    const rpc = (method, args) => {
+      const id = _pmNextRpcId++;
+      const promise = new Promise((res, rej) => _pmPending.set(id, { res, rej }));
+      _post({ type: '_proc_pm_call', id, method, args: args || [] });
+      return promise;
+    };
+    const makeRemoteProc = (pid) => ({
+      pid,
+      wait() {
+        return new Promise((resolve) => {
+          let arr = _pmWaitWaiters.get(pid);
+          if (!arr) { arr = []; _pmWaitWaiters.set(pid, arr); }
+          arr.push(resolve);
+          // Also nudge the host: it might already be exited.
+          _post({ type: '_proc_pm_call', id: _pmNextRpcId++, method: 'subscribeExit', args: [pid] });
+        });
+      },
+      kill(signal) {
+        _post({ type: '_proc_pm_call', id: _pmNextRpcId++, method: 'kill', args: [pid, signal || 'INT'] });
+      },
+    });
+    return {
+      // payload: a string (shell command) or a function (serialized).
+      // opts: { args?, shell?, vfs?, tty? } passed through to host pm.spawn.
+      async spawn(payload, opts) {
+        const result = await rpc('spawn', [
+          // Serialize the payload — strings go as-is, fns as source.
+          typeof payload === 'function' ? { __fn__: payload.toString() } : payload,
+          opts || {},
+        ]);
+        // result = { pid }
+        return makeRemoteProc(result.pid);
+      },
+      async list() { return rpc('list', []); },
+      kill(pid, signal) {
+        return rpc('kill', [pid, signal || 'INT']);
+      },
+    };
+  }
+
   function makeServiceCtx() {
     return {
       signal: ABORT.signal,
@@ -336,6 +413,7 @@ function _makeProxyBackend(BackendCls) {
       stderr: ctxStderr,
       vfs: _workerVfs,
       tty: _workerTty,
+      pm:  _workerPm,
       send: (data, transfer) => {
         _post({ type: '_proc_msg', data }, transfer || autoTransfer(data));
       },
@@ -379,6 +457,128 @@ function _makeProxyBackend(BackendCls) {
         exit(1);
       }
     }
+  }
+
+  // Phase D: shell-service mode. Loads a shell library (inlined or URL),
+  // instantiates a shell instance via the named factory, and either runs
+  // one command (oneShot) or sits in a loop dispatching exec messages
+  // from the host. The shell's stdout/stderr are wired to ctx.stdout /
+  // ctx.stderr so the host's onStdout/onStderr callbacks see the output.
+  async function dispatchShellInit(msg) {
+    // Resolve the shell library. Either inlined ahead of the bootstrap
+    // (manager passed shellBundleSource → top-level symbols available)
+    // or imported by URL.
+    let factory = null;
+    const factoryName = msg.shellFactoryName || 'createShell';
+    // Three resolution paths:
+    //   1. globalThis[name] — classic-worker top-level fns attach here.
+    //   2. Direct eval(name) — module-mode workers (Node ESM) keep
+    //      top-level function declarations module-scoped; direct eval
+    //      can still resolve names that are reachable from the calling
+    //      scope, which includes the enclosing module body.
+    //   3. await import(url) — explicit URL-mode delivery.
+    if (typeof globalThis !== 'undefined' && typeof globalThis[factoryName] === 'function') {
+      factory = globalThis[factoryName];
+    } else {
+      try {
+        // eslint-disable-next-line no-eval
+        const candidate = eval(factoryName);
+        if (typeof candidate === 'function') factory = candidate;
+      } catch (_) { /* name not in lexical scope */ }
+    }
+    if (!factory && msg.shellModuleUrl) {
+      const mod = await import(msg.shellModuleUrl);
+      factory = mod[factoryName];
+    }
+    if (typeof factory !== 'function') {
+      throw new Error('proc: shell factory "' + factoryName + '" not found (provide shellBundleSource or shellModuleUrl)');
+    }
+
+    // Build the shell. Inject the proc-side bits (vfs, tty, pm, stdout,
+    // stderr) on top of factoryOpts. The shell library is free to ignore
+    // unknown keys; the contract here is "the shell uses what it needs."
+    const collectedStdout = [];
+    const collectedStderr = [];
+    const captureStdout = (text) => {
+      const s = typeof text === 'string' ? text : String(text == null ? '' : text);
+      collectedStdout.push(s);
+      ctxStdout(s);
+    };
+    const captureStderr = (text) => {
+      const s = typeof text === 'string' ? text : String(text == null ? '' : text);
+      collectedStderr.push(s);
+      ctxStderr(s);
+    };
+    const factoryOpts = Object.assign({}, msg.shellFactoryOpts || {}, {
+      vfs:    _workerVfs,
+      tty:    _workerTty,
+      pm:     _workerPm,
+      stdout: captureStdout,
+      stderr: captureStderr,
+    });
+
+    let shell;
+    try { shell = factory(factoryOpts); }
+    catch (err) {
+      _post({ type: '_proc_error', error: { message: 'shell factory threw: ' + (err && err.message || err), stack: err && err.stack } });
+      exit(1);
+      return;
+    }
+    if (!shell || typeof shell.exec !== 'function') {
+      _post({ type: '_proc_error', error: { message: 'proc: shell factory must return an object with .exec(command)' } });
+      exit(1);
+      return;
+    }
+
+    // Helper: run a single command, collect output, return the
+    // {exitCode, stdout, stderr} triple.
+    const runOne = async (source) => {
+      collectedStdout.length = 0;
+      collectedStderr.length = 0;
+      let exitCode = 0;
+      try {
+        const r = await shell.exec(source);
+        exitCode = (r && typeof r.exitCode === 'number') ? r.exitCode : 0;
+      } catch (err) {
+        if (!collectedStderr.length) captureStderr((err && err.message || String(err)) + '\\n');
+        exitCode = 1;
+      }
+      return { exitCode, stdout: collectedStdout.join(''), stderr: collectedStderr.join('') };
+    };
+
+    if (msg.shellOneShot) {
+      // One-shot: pm.spawn(string) — run the command, post result,
+      // terminate. Result is the shape {exitCode, stdout, stderr}; host's
+      // proc.result picks it up via the existing _proc_result message.
+      const result = await runOne(msg.shellCommand);
+      _post({ type: '_proc_result', value: result });
+      exit(result.exitCode === 0 ? 0 : (intReceived ? 130 : 1));
+      return;
+    }
+
+    // Long-running (pm.shell): if shellCommand was supplied for the
+    // initial exec, run it first (most uses don't set it). Then dispatch
+    // shell:exec messages from the host.
+    if (msg.shellCommand) {
+      const result = await runOne(msg.shellCommand);
+      _post({ type: '_proc_msg', data: { type: 'shell:done', id: 0, ...result } });
+    }
+    // Park on incoming exec messages. Custom-channel dispatch via ctx.on.
+    const ctx = makeServiceCtx();
+    ctx.on(async (msg2) => {
+      if (!msg2 || typeof msg2 !== 'object') return;
+      if (msg2.type === 'shell:exec') {
+        const result = await runOne(msg2.source || '');
+        ctx.send({ type: 'shell:done', id: msg2.id, ...result });
+        return;
+      }
+    });
+    // Live until killed.
+    await new Promise((resolve) => {
+      if (ctx.signal.aborted) resolve();
+      else ctx.signal.addEventListener('abort', resolve);
+    });
+    if (!exited) exit(intReceived ? 130 : 0);
   }
 
   async function dispatchInit(msg) {
@@ -431,6 +631,10 @@ function _makeProxyBackend(BackendCls) {
           )),
         ]);
         await runServiceEntry(_procInlineEntry);
+        return;
+      }
+      if (msg.mode === 'shell-service') {
+        await dispatchShellInit(msg);
         return;
       }
       throw new Error('proc: unknown mode "' + msg.mode + '"');

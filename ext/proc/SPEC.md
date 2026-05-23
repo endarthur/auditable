@@ -1,10 +1,10 @@
 # @gcu/proc — specification
 
-a process model for the browser. spawn Web Workers as PID-tracked processes with proper lifecycle, I/O channels, pools, signal handling, a `@gcu/vfs` proxy, and a TTY proxy for interactive TUI workers. zero hard dependencies; `@gcu/vfs` is an optional peer.
+a process model for the browser. spawn Web Workers as PID-tracked processes with proper lifecycle, I/O channels, pools, signal handling, a `@gcu/vfs` proxy, a TTY proxy for interactive TUI workers, and shell-mode execution with worker-side `ctx.pm` for sub-process spawning. zero hard dependencies; `@gcu/vfs` is an optional peer.
 
-This document specifies the surface of **0.3.0** — Phase A (the standalone core: function, module-call, module-service, inline-service) + Phase B (the VFS proxy: mixed direct-replicated and proxied backends, VFS injection into all four modes) + Phase C (the TTY proxy: caller-provided terminal forwarded into service-mode workers). Daemons + service registry, shell-mode integration with `@gcu/coreutils`, and remote/mesh execution remain in §11 — Roadmap.
+This document specifies the surface of **0.4.0** — Phase A (the standalone core: function, module-call, module-service, inline-service modes) + Phase B (the VFS proxy: mixed direct-replicated and proxied backends, VFS injection into all four modes) + Phase C (the TTY proxy: caller-provided terminal forwarded into service-mode workers) + Phase D (shell-mode execution: `pm.exec` / `pm.shell` / `pm.spawn(string, { shell })` plus `ctx.pm` worker-side ProcessManager proxy for sub-process spawning). Daemons + service registry and remote/mesh execution remain in §11 — Roadmap.
 
-The full multi-phase design lives in `spec_inbox/os/proc-spec.md`. This document is the authoritative spec for what ships in 0.3.x.
+The full multi-phase design lives in `spec_inbox/os/proc-spec.md`. This document is the authoritative spec for what ships in 0.4.x.
 
 ## 1. Motivation
 
@@ -223,6 +223,68 @@ export default async function(ctx) {
 
 **Lifecycle.** Process subscriptions to the host tty are cleaned up in `_finish` (worker exited, killed, errored, or timed out). The host tty itself is never modified — proc only reads via the `on*` hooks and writes via `tty.write`.
 
+### 3.7 Shell-service mode + ctx.pm (0.4.0)
+
+A fifth mode (`shell-service`) wraps a caller-supplied shell library so command strings can be spawned as worker processes. The shell library is anything that exposes a factory returning `{ exec(source) → Promise<{exitCode, …}> }`. Geas is the obvious choice but proc is shell-agnostic.
+
+```js
+// host
+const pm = new ProcessManager();
+
+// One-shot — spawn, exec, terminate.
+const { exitCode, stdout, stderr } = await pm.exec('ls /home', {
+  shell: {
+    bundleSource: GEAS_SOURCE,           // OR moduleUrl
+    factoryName:  'createShell',         // optional, defaults to 'createShell'
+    factoryOpts:  { env: { HOME: '/home' } },
+  },
+});
+
+// Long-running — keeps shell state across exec calls.
+const shell = await pm.shell({
+  shell: { bundleSource: GEAS_SOURCE },
+});
+await shell.exec('cd /tmp');
+const r = await shell.exec('pwd');      // r.stdout === '/tmp' — state persists
+shell.kill();
+
+// Streaming output (useful when piping into a terminal).
+await shell.execStream('long-running-cmd', {
+  onStdout: (chunk) => terminal.write(chunk),
+  onStderr: (chunk) => terminal.write('\x1b[2m' + chunk + '\x1b[0m'),
+});
+
+// String-as-payload spawn — same as pm.exec but returns a Process you
+// can inspect / kill before it finishes.
+const proc = await pm.spawn('grep Fe /data/big.csv', { shell: {...} });
+await proc.wait();
+console.log(proc.result);   // { exitCode, stdout, stderr }
+```
+
+**Shell-library contract.** The factory is called with `factoryOpts` merged with proc-injected bits: `vfs` (from Phase B if configured), `tty` (from Phase C if passed), `pm` (the worker-side proc proxy, see below), `stdout`, `stderr` (callbacks that pipe to `ctx.stdout` / `ctx.stderr`). Library is free to ignore any keys it doesn't need.
+
+The returned shell instance only needs to implement `async exec(source) → { exitCode, ... }`. Output is collected via the `stdout` / `stderr` callbacks (so the shell can stream rather than batch) and bundled into the `{ exitCode, stdout, stderr }` triple by the bootstrap.
+
+**ctx.pm — worker-side ProcessManager proxy.** Service-mode workers (any service mode, including `shell-service`) get `ctx.pm`, an RPC proxy to the host's `ProcessManager`:
+
+```js
+// Inside a service-mode worker entry (or a shell library):
+const sub = await ctx.pm.spawn('sort /data/big.csv', { shell: {...} });
+sub.pid;                       // host-side PID
+const code = await sub.wait(); // resolves when the remote process exits
+sub.kill('INT');               // signals the remote process
+
+const procs = await ctx.pm.list();  // host's process table
+ctx.pm.kill(somePid, 'INT');        // kill by PID
+```
+
+This is what unlocks `&` / `jobs` / `fg` / `bg` in shell consumers: when geas sees `cmd &`, its shell can call `ctx.pm.spawn(cmd, ...)` to background a sub-process; `jobs` becomes `ctx.pm.list()`.
+
+**Limitations in 0.4.0:**
+- `ctx.pm.spawn(fn, ...)` (function payloads) throws — function source can't be reconstructed across the worker boundary cleanly. String commands (`pm.exec`/`pm.spawn(string)`) and module-mode payloads (`{module, mode}`) work.
+- The remote-Process stand-in (returned by `ctx.pm.spawn`) doesn't proxy `stdout` / `stderr` back to the spawning worker — output goes to the host's `onStdout` / `onStderr` callbacks. Adequate for backgrounding; a future point release can add stream-back via dedicated MessagePorts.
+- The shell library must run in a single worker (no built-in distribution). For parallel workloads, the shell can use `ctx.pm.spawn` to fan out — each sub-process is its own worker.
+
 ## 4. Wire protocol
 
 All messages between host and worker use a plain object with a `type` field. Lifecycle messages use the reserved prefix `_proc_`. Custom messages (the user's protocol) ride on `_proc_msg`.
@@ -239,6 +301,8 @@ All messages between host and worker use a plain object with a `type` field. Lif
 | `_proc_tty_key` | `{ key }` | Phase C: a key event from the host's TTY. Worker delivers it to the next `ctx.tty.keys()` pull (or queues). |
 | `_proc_tty_mouse` | `{ event }` | Phase C: a mouse event. Same buffering as keys. |
 | `_proc_tty_resize` | `{ rows, cols }` | Phase C: terminal resized. Worker updates the cached `ctx.tty.size()` and fans out to `onResize(cb)` subscribers. |
+| `_proc_pm_reply` | `{ id, ok, value? \| error? }` | Phase D: reply to a previously-sent `_proc_pm_call` (`ctx.pm.spawn` / `list` / `kill` / `subscribeExit`). |
+| `_proc_pm_exit` | `{ pid, exitCode }` | Phase D: a remote process the worker was awaiting (via `ctx.pm.spawn(...).wait()`) has exited. Worker's wait-promise resolves with the exit code. |
 
 ### 4.2 Worker → Host
 
@@ -253,6 +317,7 @@ All messages between host and worker use a plain object with a `type` field. Lif
 | `_proc_msg` | `{ data }` | `ctx.send(data)` from inside the worker (module-service mode). |
 | `_proc_vfs_call` | `{ id, mountPath, method, args }` | Worker's `ProxyBackend` invoking a backend method on the host. Host dispatches to the relevant mount's backend and posts `_proc_vfs_reply` with the matching `id`. |
 | `_proc_tty_write` | `{ data }` | Phase C: fire-and-forget. Host invokes `hostTty.write(data)` directly. No reply. |
+| `_proc_pm_call` | `{ id, method, args }` | Phase D: `ctx.pm` RPC. `method` is `spawn` / `list` / `kill` / `subscribeExit`. Host dispatches to the local `ProcessManager` and posts `_proc_pm_reply`. |
 
 ### 4.3 Custom message wrapping
 
@@ -486,9 +551,8 @@ Tests use the `@gcu/proc/node` shim. No browser harness needed for the Phase A o
 
 ## 11. Roadmap
 
-Phases A (0.1.x), B (0.2.x), and C (0.3.x) have shipped. The remaining phases sit in `spec_inbox/os/proc-spec.md` for design reference; here are the headlines:
+Phases A (0.1.x), B (0.2.x), C (0.3.x), and D (0.4.x) have shipped. The remaining phases sit in `spec_inbox/os/proc-spec.md` for design reference; here are the headlines:
 
-- **Phase D — Shell-mode integration**: `{ coreutils }` enables `pm.spawn("awk -F, ...")`. Replaces geas's worker-shim execution path. Real `&` / `jobs` / `fg` / `bg` in geas via the process table.
 - **Phase E — Daemons + service registry**: `pm.daemon(name, handler, opts)`. Long-running named services with request/response (`pm.request(name, msg)`), restart policies (`never` / `on-crash` / `always`), exponential backoff. Builds on module-service mode.
 - **Phase F — Remote / mesh execution**: `{ remote: { peer, via: mesh } }` in spawn options. Same Process surface, different execution backend.
 
@@ -498,23 +562,24 @@ Phases A (0.1.x), B (0.2.x), and C (0.3.x) have shipped. The remaining phases si
 - Streaming reads (`createReadStream` over the RPC) — useful for piping large files into worker processing without buffering the whole file in the proxy protocol.
 - VFS-path module loading — `spawn({ module: '/scripts/x.js', fn: 'run' })` reads the module source through the host VFS, hands it to the worker bootstrap. Currently throws because the dynamic-import-from-VFS plumbing isn't in 0.2.0.
 
-## 12. Out of scope for 0.3.x
+## 12. Out of scope for 0.4.x
 
-These are explicitly NOT in 0.3.0 and should produce hard errors (not silent stubs) if invoked:
+These are explicitly NOT in 0.4.0 and should produce hard errors (not silent stubs) if invoked:
 
-- `{ coreutils }` → throws "shell mode requires @gcu/proc Phase D."
-- `pm.spawn(string)` (shell mode) → throws "shell mode requires @gcu/proc Phase D."
 - `pm.daemon(...)` → throws "daemons require @gcu/proc Phase E."
 - `{ tty }` in function or module-call mode → throws (TTY is service-mode only).
 - `{ tty }` without `write`/`size`/`onKey` methods → throws shape-validation error.
 - `{ remote }` in spawn options → throws "remote execution requires @gcu/proc Phase F."
 - `module-call` with a VFS path (not a URL) → throws "VFS-path modules not supported yet" (deferred to a 0.2.x point release, see §11).
+- `pm.spawn(string)` without `opts.shell` → throws (shell config is required for the string-payload path).
+- `pm.exec` without `opts.shell` → same.
+- `ctx.pm.spawn(fn, ...)` (function payloads from a worker) → throws "not supported in Phase D"; pass a string or `{module, mode}` instead.
 
 Each error mentions the phase that would unlock it.
 
 ## 13. Versioning
 
-Pre-1.0. Wire protocol (`_proc_*` namespace, message shapes) and public API (`ProcessManager`, `Process`, `Pool`) may shift before 1.0. Tag history: `0.1.x` = Phase A, `0.2.x` = A + B, `0.3.x` = A + B + C. Point releases under each minor add follow-ups without breaking the constructor or wire protocol. Phase D onward will land in `0.4.x` and may break the constructor signature if needed.
+Pre-1.0. Wire protocol (`_proc_*` namespace, message shapes) and public API (`ProcessManager`, `Process`, `Pool`) may shift before 1.0. Tag history: `0.1.x` = Phase A, `0.2.x` = A + B, `0.3.x` = A + B + C, `0.4.x` = A + B + C + D. Point releases under each minor add follow-ups without breaking the constructor or wire protocol. Phase E onward will land in `0.5.x` and may break the constructor signature if needed.
 
 ## 14. License
 

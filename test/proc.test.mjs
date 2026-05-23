@@ -454,9 +454,9 @@ describe('out-of-scope features fail loud (no silent stubs)', () => {
     );
   });
 
-  it('string payload throws Phase D', () => {
+  it('string payload without opts.shell throws', () => {
     const pm = makePm();
-    assert.throws(() => pm.spawn('ls /tmp'), /Phase D/);
+    assert.throws(() => pm.spawn('ls /tmp'), /opts\.shell is required/);
     pm.shutdown();
   });
 
@@ -788,6 +788,140 @@ describe('tty proxy (Phase C)', () => {
     // should not deliver to a dead worker (no observable effect because
     // the worker isn't listening anymore).
     assert.doesNotThrow(() => tty.emitKey({ name: 'z' }));
+    pm.shutdown();
+  });
+});
+
+// ── Shell mode (Phase D) ────────────────────────────────────────────
+
+describe('shell mode (Phase D)', () => {
+  // Inline-able fake shell library: createShell(opts) returns
+  // { exec(source) -> {exitCode} } where exec inspects source for the
+  // sentinel ":fail" to return non-zero, ":out hello" to emit stdout, etc.
+  // The library is concatenated into the worker blob via shell.bundleSource,
+  // so the worker can call createShell() directly.
+  const fakeShellSource = `
+    function createShell(opts) {
+      const stdout = opts.stdout || (() => {});
+      const stderr = opts.stderr || (() => {});
+      const env = { ...(opts.env || {}) };
+      let cwd = opts.cwd || '/';
+      return {
+        async exec(source) {
+          if (typeof source !== 'string') return { exitCode: 1 };
+          if (source.startsWith(':out ')) { stdout(source.slice(5)); return { exitCode: 0 }; }
+          if (source === ':fail') { stderr('boom'); return { exitCode: 7 }; }
+          if (source.startsWith(':cd ')) { cwd = source.slice(4).trim(); return { exitCode: 0 }; }
+          if (source === ':pwd') { stdout(cwd); return { exitCode: 0 }; }
+          if (source.startsWith(':env ')) { env[source.slice(5).trim()] = '1'; return { exitCode: 0 }; }
+          if (source.startsWith(':env? ')) { stdout(String(env[source.slice(6).trim()] || '')); return { exitCode: 0 }; }
+          stderr('unknown: ' + source);
+          return { exitCode: 1 };
+        },
+      };
+    }
+  `;
+
+  it('pm.exec runs one command and returns {exitCode, stdout, stderr}', async () => {
+    const pm = makePm();
+    const r = await pm.exec(':out hello', { shell: { bundleSource: fakeShellSource } });
+    assert.equal(r.exitCode, 0);
+    assert.equal(r.stdout, 'hello');
+    assert.equal(r.stderr, '');
+    pm.shutdown();
+  });
+
+  it('pm.exec propagates non-zero exit codes', async () => {
+    const pm = makePm();
+    const r = await pm.exec(':fail', { shell: { bundleSource: fakeShellSource } });
+    assert.equal(r.exitCode, 7);
+    assert.equal(r.stderr, 'boom');
+    pm.shutdown();
+  });
+
+  it('pm.shell keeps state across exec calls', async () => {
+    const pm = makePm();
+    const shell = await pm.shell({ shell: { bundleSource: fakeShellSource } });
+
+    const r1 = await shell.exec(':cd /tmp');
+    assert.equal(r1.exitCode, 0);
+
+    const r2 = await shell.exec(':pwd');
+    assert.equal(r2.stdout, '/tmp');
+
+    const r3 = await shell.exec(':env FOO');
+    assert.equal(r3.exitCode, 0);
+
+    const r4 = await shell.exec(':env? FOO');
+    assert.equal(r4.stdout, '1');
+
+    shell.kill();
+    await shell.wait();
+    pm.shutdown();
+  });
+
+  it('pm.shell execStream callbacks fire as data arrives', async () => {
+    const pm = makePm();
+    const shell = await pm.shell({ shell: { bundleSource: fakeShellSource } });
+    let outBuf = '';
+    const code = await shell.execStream(':out streamed', { onStdout: (d) => { outBuf += d; } });
+    assert.equal(code, 0);
+    assert.equal(outBuf, 'streamed');
+    shell.kill();
+    await shell.wait();
+    pm.shutdown();
+  });
+
+  it('pm.spawn(string) returns a Process whose result is the triple', async () => {
+    const pm = makePm();
+    const proc = await pm.spawn(':out via-spawn', { shell: { bundleSource: fakeShellSource } });
+    await proc.wait();
+    assert.equal(proc.result.exitCode, 0);
+    assert.equal(proc.result.stdout, 'via-spawn');
+    pm.shutdown();
+  });
+
+  it('ctx.pm.spawn lets a worker fork another process', async () => {
+    const pm = makePm();
+    const url = fixture('pmspawn', `
+      export default async function(ctx) {
+        const sub = await ctx.pm.spawn(':out subprocess-out', { shell: { bundleSource: ` + JSON.stringify(fakeShellSource) + ` } });
+        const code = await sub.wait();
+        ctx.send({ type: 'r', subPid: sub.pid, code });
+        ctx.exit(0);
+      }
+    `);
+    const proc = await pm.spawn({ module: url, mode: 'service' });
+    let result = null;
+    proc.on(m => { if (m.type === 'r') result = m; });
+    await proc.wait();
+    assert.ok(result.subPid > 0);
+    assert.equal(result.code, 0);
+    pm.shutdown();
+  });
+
+  it('ctx.pm.list sees host-side process table', async () => {
+    const pm = makePm();
+    const url = fixture('pmlist', `
+      export default async function(ctx) {
+        const list = await ctx.pm.list();
+        ctx.send({ type: 'list', count: list.length });
+        ctx.exit(0);
+      }
+    `);
+    const proc = await pm.spawn({ module: url, mode: 'service' });
+    let result = null;
+    proc.on(m => { if (m.type === 'list') result = m; });
+    await proc.wait();
+    // pm.list() should at minimum show this very process (still running
+    // at the moment of the call, since exit hasn't propagated yet).
+    assert.ok(result.count >= 1);
+    pm.shutdown();
+  });
+
+  it('string payload without opts.shell throws', () => {
+    const pm = makePm();
+    assert.throws(() => pm.spawn('ls /tmp'), /opts\.shell is required/);
     pm.shutdown();
   });
 });

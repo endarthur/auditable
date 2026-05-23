@@ -11,7 +11,7 @@ import {
 import { ReadablePort, WritablePort } from './channel.js';
 
 export class Process {
-  constructor({ pid, mode, worker, cleanup, command, vfs, tty }) {
+  constructor({ pid, mode, worker, cleanup, command, vfs, tty, manager }) {
     this.pid = pid;
     this.mode = mode;
     this.command = command || '';
@@ -27,6 +27,7 @@ export class Process {
     this._vfs = vfs || null;        // host VFS for _proc_vfs_call dispatch
     this._tty = tty || null;        // host tty for _proc_tty_* event forwarding
     this._ttyUnsubs = [];           // event-subscription cleanup fns
+    this._manager = manager || null; // host ProcessManager for _proc_pm_call dispatch (Phase D)
     this._exitWaiters = [];
     this._msgHandlers = new Set();
     this._readySignal = null;          // resolved by READY message
@@ -79,10 +80,10 @@ export class Process {
   }
 
   // Send a custom-protocol message to the worker. Available in any
-  // service-flavored mode (module-service or inline-service).
+  // service-flavored mode (module-service, inline-service, shell-service).
   send(data, transfer) {
-    if (this.mode !== MODE.SERVICE && this.mode !== MODE.INLINE_SERVICE) {
-      throw new Error('proc.send() requires a service mode (module-service or inline-service)');
+    if (this.mode !== MODE.SERVICE && this.mode !== MODE.INLINE_SERVICE && this.mode !== MODE.SHELL) {
+      throw new Error('proc.send() requires a service mode (module-service, inline-service, or shell-service)');
     }
     this._post({ type: MSG.MSG, data }, transfer);
   }
@@ -183,10 +184,83 @@ export class Process {
           try { this._tty.write(msg.data); } catch { /* swallow */ }
         }
         return;
+      case '_proc_pm_call':
+        // Phase D: worker is asking the host ProcessManager to do
+        // something (spawn, list, kill, subscribeExit). Dispatch async,
+        // reply with the result or a serialized error.
+        this._handlePmCall(msg);
+        return;
       default:
         // Unknown lifecycle messages are ignored — gives the protocol
         // room to grow.
         return;
+    }
+  }
+
+  async _handlePmCall(msg) {
+    const reply = (payload) => {
+      try { this._post({ type: '_proc_pm_reply', id: msg.id, ...payload }); }
+      catch (_) { /* worker may already be gone */ }
+    };
+    if (!this._manager) {
+      reply({ ok: false, error: { message: 'proc: process has no host ProcessManager configured' } });
+      return;
+    }
+    const method = typeof msg.method === 'string' ? msg.method : '';
+    const args = Array.isArray(msg.args) ? msg.args : [];
+    try {
+      if (method === 'spawn') {
+        let [payload, opts] = args;
+        // Function payloads come over the wire as { __fn__: source }; we
+        // can't reconstruct an actual function here (we'd need eval, and
+        // the function's closures wouldn't survive anyway). Reject with
+        // a helpful error — string commands (the geas `&` case) are the
+        // supported path for Phase D.
+        if (payload && typeof payload === 'object' && typeof payload.__fn__ === 'string') {
+          reply({ ok: false, error: { message: 'proc: ctx.pm.spawn(fn) is not supported in Phase D — pass a string command (with opts.shell) or a {module, mode} object' } });
+          return;
+        }
+        // Need shellConfig inherited from this Process's spawn so the
+        // sub-process can find a shell. Caller can also override via opts.
+        const subProc = await this._manager.spawn(payload, opts || {});
+        reply({ ok: true, value: { pid: subProc.pid } });
+        return;
+      }
+      if (method === 'list') {
+        reply({ ok: true, value: this._manager.list() });
+        return;
+      }
+      if (method === 'kill') {
+        const [pid, signal] = args;
+        this._manager.kill(pid, signal || 'INT');
+        reply({ ok: true, value: null });
+        return;
+      }
+      if (method === 'subscribeExit') {
+        // Worker is awaiting a sub-process. When the target Process exits,
+        // we send _proc_pm_exit so the worker's wait() resolves.
+        const pid = args[0];
+        const target = this._manager.get(pid);
+        if (!target) {
+          reply({ ok: true, value: null });
+          // Fire an immediate exit event so the worker doesn't hang.
+          try { this._post({ type: '_proc_pm_exit', pid, exitCode: -1 }); } catch (_) {}
+          return;
+        }
+        if (target.state !== STATE.RUNNING) {
+          reply({ ok: true, value: null });
+          try { this._post({ type: '_proc_pm_exit', pid, exitCode: target.exitCode }); } catch (_) {}
+          return;
+        }
+        target.wait().then((exitCode) => {
+          try { this._post({ type: '_proc_pm_exit', pid, exitCode }); } catch (_) {}
+        });
+        reply({ ok: true, value: null });
+        return;
+      }
+      reply({ ok: false, error: { message: 'proc: unknown ctx.pm method "' + method + '"' } });
+    } catch (err) {
+      reply({ ok: false, error: { message: err && err.message ? err.message : String(err) } });
     }
   }
 

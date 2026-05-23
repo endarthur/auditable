@@ -109,12 +109,11 @@ export class ProcessManager {
     }
 
     // Hard errors for out-of-scope inputs.
-    if (typeof payload === 'string') {
-      throw new Error('proc: shell mode (string command) requires @gcu/proc Phase D (not in 0.3.x)');
-    }
     if (opts.remote !== undefined) {
-      throw new Error('proc: { remote } requires @gcu/proc Phase F (not in 0.3.x)');
+      throw new Error('proc: { remote } requires @gcu/proc Phase F (not in 0.4.x)');
     }
+    // String payload now routes to shell-service mode (Phase D, 0.4.0+).
+    // Validation happens in _buildInitMessage.
 
     // Phase C TTY proxy: only honored in service modes (module-service /
     // inline-service) — function/module-call modes return a value and
@@ -165,6 +164,76 @@ export class ProcessManager {
     if (this._shutdown) throw new Error('proc: manager is shut down');
     const size = n || this._maxProcesses;
     return new Pool(this, size);
+  }
+
+  // Phase D: long-running shell process. Sugar over service-mode spawn
+  // with the shell-service entry pre-wired. opts:
+  //   - shell: { bundleSource | moduleUrl, factoryName, factoryOpts }
+  //   - tty?, vfs? — forwarded into spawn
+  // Returns a Process with extra .exec(cmd) and .execStream(cmd, {onStdout,
+  // onStderr}) methods.
+  async shell(opts = {}) {
+    if (!opts.shell) throw new TypeError('pm.shell: opts.shell is required ({ bundleSource | moduleUrl, factoryName })');
+    const initPayload = { shellCommand: '' };
+    // Long-running: not one-shot. The bootstrap parks on incoming
+    // shell:exec messages instead of running a single command.
+    const proc = await this.spawn(initPayload, {
+      ...opts,
+      shellOneShot: false,
+    });
+    // Attach .exec / .execStream sugar.
+    let nextId = 0;
+    const pending = new Map();
+    proc.on((data) => {
+      if (!data || typeof data !== 'object') return;
+      if (data.type === 'shell:done') {
+        const slot = pending.get(data.id);
+        if (!slot) return;
+        pending.delete(data.id);
+        slot.resolve({ exitCode: data.exitCode, stdout: data.stdout, stderr: data.stderr });
+      }
+    });
+    proc.exec = (command) => {
+      if (proc.state !== STATE.RUNNING) return Promise.reject(new Error('pm.shell: process ' + proc.state));
+      const id = ++nextId;
+      const promise = new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+      proc.send({ type: 'shell:exec', id, source: command });
+      return promise;
+    };
+    proc.execStream = async (command, { onStdout, onStderr } = {}) => {
+      // Subscribe to the proc's own stdout/stderr (the bootstrap pipes
+      // the shell's captured output through ctx.stdout/ctx.stderr too).
+      // Note: outputs from concurrent .exec calls are interleaved on the
+      // shared ctx — execStream is best used one-command-at-a-time.
+      const unsubs = [];
+      if (typeof onStdout === 'function') unsubs.push(proc.stdout.onData(onStdout));
+      if (typeof onStderr === 'function') unsubs.push(proc.stderr.onData(onStderr));
+      try {
+        const r = await proc.exec(command);
+        return r.exitCode;
+      } finally {
+        for (const u of unsubs) try { u(); } catch (_) {}
+      }
+    };
+    return proc;
+  }
+
+  // Phase D: one-shot command execution. Spawns a shell, runs ONE
+  // command, terminates the shell, returns { exitCode, stdout, stderr }.
+  // Heavy worker-spawn cost per call (~tens of ms) — use pm.shell for
+  // anything that runs many commands.
+  async exec(command, opts = {}) {
+    if (typeof command !== 'string') throw new TypeError('pm.exec(command, opts): command must be a string');
+    if (!opts.shell) throw new TypeError('pm.exec: opts.shell is required');
+    const proc = await this.spawn(command, { ...opts, shellOneShot: true });
+    const code = await proc.wait();
+    if (code !== EXIT.OK && proc.error) {
+      // Shell returned non-zero AND threw — propagate the error.
+      throw proc.error;
+    }
+    // proc.result is the {exitCode, stdout, stderr} triple posted by
+    // the bootstrap's runOne.
+    return proc.result || { exitCode: code, stdout: '', stderr: '' };
   }
 
   list() {
@@ -269,6 +338,40 @@ export class ProcessManager {
       };
     }
 
+    // Shell-service mode: string payload OR { shellCommand, shell, ... }
+    // object payload. Caller must supply opts.shell with bundleSource|
+    // moduleUrl + factoryName (e.g. 'createShell'). The worker imports the
+    // shell library, calls factoryName with factoryOpts merged with the
+    // injected ctx (vfs / tty), and runs the exec protocol.
+    if (typeof payload === 'string' || (payload && typeof payload === 'object' && typeof payload.shellCommand === 'string')) {
+      const shellCfg = opts.shell;
+      if (!shellCfg || typeof shellCfg !== 'object') {
+        throw new TypeError('proc.spawn(string): opts.shell is required ({ bundleSource | moduleUrl, factoryName, factoryOpts? })');
+      }
+      if (!shellCfg.bundleSource && !shellCfg.moduleUrl) {
+        throw new TypeError('proc.spawn(string): opts.shell needs either bundleSource (inline) or moduleUrl (URL)');
+      }
+      const command = typeof payload === 'string' ? payload : payload.shellCommand;
+      const oneShot = opts.shellOneShot !== false;   // default: spawn-and-exec-and-exit
+      return {
+        wire: {
+          type: MSG.INIT,
+          mode: MODE.SHELL,
+          shellModuleUrl:    shellCfg.moduleUrl || undefined,
+          shellFactoryName:  shellCfg.factoryName || 'createShell',
+          shellFactoryOpts:  shellCfg.factoryOpts || {},
+          shellCommand:      command,
+          shellOneShot:      oneShot,
+          ...vfsExtras,
+          ...ttyExtras,
+        },
+        transfer: [],
+        mode: MODE.SHELL,
+        command: '$ ' + command.slice(0, 60),
+        shellBundleSource: shellCfg.bundleSource || null,
+      };
+    }
+
     if (payload && typeof payload === 'object' && typeof payload.module === 'string') {
       const explicitMode = payload.mode || opts.mode;
       // Default: module + fn → module-call. module alone → service.
@@ -361,6 +464,13 @@ export class ProcessManager {
       const stripped = this._vfsBundleSource.replace(/export\s*\{[^}]*\};?\s*$/, '');
       bootstrap += stripped + '\n;\n';
     }
+    if (initMsg.shellBundleSource) {
+      // Phase D: inline a shell library (e.g. the geas bundle). Same
+      // strip-the-export-footer treatment so the library's symbols land
+      // at top level.
+      const stripped = initMsg.shellBundleSource.replace(/export\s*\{[^}]*\};?\s*$/, '');
+      bootstrap += stripped + '\n;\n';
+    }
     bootstrap += BOOTSTRAP_SOURCE;
     if (initMsg.inlineSource) {
       bootstrap += '\n;\n' + initMsg.inlineSource + '\n';
@@ -375,6 +485,7 @@ export class ProcessManager {
       command: initMsg.command,
       vfs: this._vfs,                // for _proc_vfs_call dispatch (Phase B)
       tty: opts.tty || null,         // for _proc_tty_* event forwarding (Phase C)
+      manager: this,                 // for _proc_pm_call dispatch (Phase D)
     });
     proc._killGrace = opts.killGrace || this._killGrace;
 

@@ -34,6 +34,7 @@ export const MODE = Object.freeze({
   MODULE_CALL:     'module-call',
   SERVICE:         'module-service',
   INLINE_SERVICE:  'inline-service',
+  SHELL:           'shell-service',
 });
 
 export const STATE = Object.freeze({
