@@ -72,6 +72,18 @@ registerKind('stub', { label: 'Stub project', icon: '◈', extensions: [] });
 // running a geas shell with the workspace VFS proxied in.
 registerKind('terminal', { label: 'Terminal', icon: '▶', extensions: [] });
 
+// The data-preview surface — read-only viewer for structured file types
+// (CSV table, JSON tree, rendered markdown, image, PDF). Registered
+// BEFORE text so it wins for the rich extensions; text still claims the
+// rest. kindForExtension returns the first match, so order matters.
+registerKind('preview', {
+  label:      'Preview',
+  icon:       '◳',
+  extensions: ['.csv', '.tsv', '.json', '.geojson', '.md', '.markdown',
+               '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp',
+               '.ico', '.avif', '.pdf'],
+});
+
 // The text editor — the loose-file surface. Opens any plain-text file.
 registerKind('text', {
   label:      'Text file',

@@ -189,6 +189,7 @@ if (target === 'works') {
   for (const s of [
     { kind: 'stub',      file: 'works/surfaces/stub.html',      deps: ['abus'] },
     { kind: 'text',      file: 'works/surfaces/text.html',      deps: ['abus'] },
+    { kind: 'preview',   file: 'works/surfaces/preview.html',   deps: ['abus'] },
     { kind: 'inspector', file: 'works/surfaces/inspector.html', deps: ['abus'] },
     { kind: 'terminal',  file: 'works/surfaces/terminal.html',
       deps: ['abus', 'vfs', 'xterm', 'geas'], extras: 'terminal' },

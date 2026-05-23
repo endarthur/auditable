@@ -498,6 +498,48 @@ const ctx = await page.evaluate(async () => {
   };
 });
 
+// ── Preview surface — CSV / JSON / Markdown / image ───────────────────
+// Drop a file of each kind at the workspace and openPath it; the
+// surface registry should dispatch to 'preview', the surface reads the
+// file through the works VFS service, and renders.
+const previewSetup = await page.evaluate(async () => {
+  const W = window.WKS;
+  await W.vfs.writeFile('/projects/sample.csv',
+    'id,name,value,date\n1,alpha,3.14,2024-01-15\n2,beta,2.72,2024-02-20\n3,gamma,1.41,2024-03-10\n');
+  await W.vfs.writeFile('/projects/sample.json',
+    JSON.stringify({ name: 'preview-test', tags: ['a', 'b', 'c'],
+      nested: { count: 42, flag: true } }, null, 2));
+  await W.vfs.writeFile('/projects/sample.md',
+    '# Preview Test\n\nThis is a **paragraph** with `inline code`.\n\n## Section\n\n- list item\n');
+  return {};
+});
+
+async function openAndRead(path) {
+  const tabId = await page.evaluate(async (p) => {
+    const W = window.WKS;
+    const id = await W.openPath(p);
+    const rec = W.surfaces.get(id);
+    const deadline = Date.now() + 15000;
+    while (rec && !rec.ready && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 80));
+    }
+    return rec && rec.ready ? id : null;
+  }, path);
+  if (!tabId) return { ready: false };
+  const frame = await surfaceFrame(tabId);
+  if (!frame) return { ready: true, html: null };
+  // Wait one more tick for renderer to attach the DOM after Ready.
+  await frame.evaluate(() => new Promise((r) => setTimeout(r, 100)));
+  const html = await frame.evaluate(() => document.getElementById('root').innerHTML);
+  const kind = await page.evaluate(
+    (id) => window.WKS.surfaces.get(id).kind, tabId);
+  return { ready: true, html, kind };
+}
+
+const csvPv  = await openAndRead('/projects/sample.csv');
+const jsonPv = await openAndRead('/projects/sample.json');
+const mdPv   = await openAndRead('/projects/sample.md');
+
 // ── Workspace export / import round-trip (Chunk 5b) ───────────────────
 // Serialize the live workspace, build a self-contained HTML, then open it —
 // it must boot the desktop over the embedded snapshot.
@@ -650,6 +692,15 @@ const checks = {
       && ctx.rtDataMatches,
   'tree: Import file (right-click) works':  ctx.fromFilePath === '/projects/From File'
       && ctx.fromFileTitle === 'From File',
+  // Preview surface
+  'preview: CSV opens as a table':    csvPv.kind === 'preview' && csvPv.html
+      && /<table class="csv"/.test(csvPv.html) && csvPv.html.includes('alpha')
+      && csvPv.html.includes('data-type="number"'),
+  'preview: JSON opens as a tree':    jsonPv.kind === 'preview' && jsonPv.html
+      && jsonPv.html.includes('<details') && jsonPv.html.includes('preview-test'),
+  'preview: Markdown renders':        mdPv.kind === 'preview' && mdPv.html
+      && /<h1>/.test(mdPv.html) && mdPv.html.includes('Preview Test')
+      && /<strong>/.test(mdPv.html),
   // Workspace export / import (Chunk 5b)
   'export builds a self-contained HTML':   exportLooksRight,
   'imported workspace uses a memory home': imported.home === 'memory',
