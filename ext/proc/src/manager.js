@@ -71,6 +71,12 @@ export class ProcessManager {
     this._processes = new Map();    // pid → Process
     this._queue = [];                // queued spawns waiting on slot
     this._shutdown = false;
+
+    // Phase E: service registry. Each entry: {
+    //   name, opts, process, restartCount, lastStartTime, restartTimer,
+    //   stopped, failed,
+    // }
+    this._services = new Map();
   }
 
   // Walk the configured VFS's mount table and produce a serializable
@@ -218,6 +224,178 @@ export class ProcessManager {
     return proc;
   }
 
+  // ── Phase E: daemons + service registry ────────────────────────────
+
+  // Register (or adopt) a named long-running service. The payload follows
+  // the normal pm.spawn shape but must be a service-mode payload
+  // (module/inline/shell). On exit, the daemon is auto-restarted per
+  // opts.restart (default 'on-crash'). Re-registering an already-alive
+  // daemon silently returns the existing one.
+  async daemon(name, opts = {}) {
+    if (this._shutdown) throw new Error('proc: manager is shut down');
+    if (typeof name !== 'string' || !name) throw new TypeError('pm.daemon(name, opts): name must be a non-empty string');
+
+    // If a healthy service with this name exists, adopt it.
+    const existing = this._services.get(name);
+    if (existing && existing.process && existing.process.state === STATE.RUNNING) {
+      return existing.process;
+    }
+
+    const policy = opts.restart || 'on-crash';
+    if (policy !== 'never' && policy !== 'on-crash' && policy !== 'always') {
+      throw new TypeError('pm.daemon: opts.restart must be one of "never" | "on-crash" | "always"');
+    }
+    const maxRestarts   = (opts.maxRestarts   == null) ? 5     : opts.maxRestarts;
+    const restartWindow = (opts.restartWindow == null) ? 60000 : opts.restartWindow;
+
+    const record = existing || { name, opts, process: null, restartCount: 0, lastStartTime: 0, restartTimer: null, stopped: false, failed: false };
+    record.opts = opts;
+    record.policy = policy;
+    record.maxRestarts = maxRestarts;
+    record.restartWindow = restartWindow;
+    record.stopped = false;
+    record.failed = false;
+    this._services.set(name, record);
+
+    await this._startService(record);
+    return record.process;
+  }
+
+  // Snapshot of registered services.
+  services() {
+    const now = Date.now();
+    const out = [];
+    for (const r of this._services.values()) {
+      const p = r.process;
+      const state = r.stopped ? 'stopped'
+        : r.failed ? 'failed'
+        : (p ? p.state : 'pending');
+      out.push({
+        name: r.name,
+        pid: p ? p.pid : null,
+        state,
+        uptime: (p && r.lastStartTime) ? (now - r.lastStartTime) : 0,
+        restarts: r.restartCount,
+      });
+    }
+    return out;
+  }
+
+  service(name) {
+    const r = this._services.get(name);
+    return r ? (r.process || null) : null;
+  }
+
+  // Permanently stop a service: kill the running instance and exclude
+  // from auto-restart. Subsequent pm.daemon(name, opts) calls re-start.
+  async stopService(name) {
+    const r = this._services.get(name);
+    if (!r) return;
+    r.stopped = true;
+    if (r.restartTimer) { clearTimeout(r.restartTimer); r.restartTimer = null; }
+    if (r.process && r.process.state === STATE.RUNNING) {
+      r.process.kill('INT');
+    }
+  }
+
+  // Send a request to a named daemon and await its reply. Uses proc.send
+  // / proc.on with a {type:'request'|'reply', id, ...} convention layered
+  // on _proc_msg. Daemon must be running; throws if it isn't.
+  async request(name, message, opts = {}) {
+    const proc = this.service(name);
+    if (!proc) throw new Error('pm.request: no service named "' + name + '"');
+    if (proc.state !== STATE.RUNNING) throw new Error('pm.request: service "' + name + '" is ' + proc.state);
+    // Cache the next-id counter + pending map on the Process so multiple
+    // concurrent requests against the same daemon don't collide.
+    if (!proc._daemonNextId) {
+      proc._daemonNextId = 0;
+      proc._daemonPending = new Map();
+      proc.on((data) => {
+        if (!data || typeof data !== 'object' || data.type !== 'reply') return;
+        const slot = proc._daemonPending.get(data.id);
+        if (!slot) return;
+        proc._daemonPending.delete(data.id);
+        if (data.ok) slot.resolve(data.value);
+        else slot.reject(new Error((data.error && data.error.message) || 'daemon error'));
+      });
+    }
+    const id = ++proc._daemonNextId;
+    const timeoutMs = opts.timeout || 0;
+    const promise = new Promise((resolve, reject) => {
+      proc._daemonPending.set(id, { resolve, reject });
+      if (timeoutMs > 0) {
+        setTimeout(() => {
+          if (proc._daemonPending.has(id)) {
+            proc._daemonPending.delete(id);
+            reject(new Error('pm.request: timeout after ' + timeoutMs + 'ms'));
+          }
+        }, timeoutMs);
+      }
+    });
+    proc.send({ type: 'request', id, req: message });
+    return promise;
+  }
+
+  // ── Internals — service supervisor ──
+
+  async _startService(record) {
+    record.lastStartTime = Date.now();
+    // Strip our daemon-specific opts before delegating to spawn.
+    const spawnOpts = { ...record.opts };
+    delete spawnOpts.restart;
+    delete spawnOpts.maxRestarts;
+    delete spawnOpts.restartWindow;
+
+    // Construct the payload. Daemon opts can supply either a separate
+    // `payload` field (preferred) or have the spawn shape merged into opts.
+    const payload = record.opts.payload != null ? record.opts.payload : record.opts;
+
+    try {
+      const proc = await this.spawn(payload, spawnOpts);
+      record.process = proc;
+      // Watch for exit so we can decide whether to restart.
+      proc.wait().then((code) => this._onServiceExit(record, code));
+    } catch (err) {
+      record.failed = true;
+      throw err;
+    }
+  }
+
+  _onServiceExit(record, exitCode) {
+    if (record.stopped || this._shutdown) return;
+
+    const cleanExit = exitCode === EXIT.OK;
+    const policy = record.policy;
+    let shouldRestart = false;
+    if (policy === 'never') shouldRestart = false;
+    else if (policy === 'always') shouldRestart = true;
+    else if (policy === 'on-crash') shouldRestart = !cleanExit;
+
+    if (!shouldRestart) return;
+
+    // Reset the restart counter if the service ran for > restartWindow.
+    const uptime = Date.now() - record.lastStartTime;
+    if (uptime > record.restartWindow) {
+      record.restartCount = 0;
+    }
+    record.restartCount += 1;
+
+    if (record.restartCount > record.maxRestarts) {
+      record.failed = true;
+      return;
+    }
+
+    // Exponential backoff: 100ms × 2^(n-1), capped at 30s.
+    const backoff = Math.min(30000, 100 * Math.pow(2, record.restartCount - 1));
+    record.restartTimer = setTimeout(() => {
+      record.restartTimer = null;
+      if (record.stopped || this._shutdown) return;
+      this._startService(record).catch(() => {
+        // _startService already marked failed=true on spawn error.
+      });
+    }, backoff);
+  }
+
   // Phase D: one-shot command execution. Spawns a shell, runs ONE
   // command, terminates the shell, returns { exitCode, stdout, stderr }.
   // Heavy worker-spawn cost per call (~tens of ms) — use pm.shell for
@@ -278,6 +456,11 @@ export class ProcessManager {
       try { q.reject(new Error('proc: manager is shut down')); } catch (_) {}
     }
     this._queue.length = 0;
+    // Cancel any pending daemon restart timers.
+    for (const r of this._services.values()) {
+      if (r.restartTimer) { clearTimeout(r.restartTimer); r.restartTimer = null; }
+      r.stopped = true;
+    }
     this.killAll('KILL');
   }
 

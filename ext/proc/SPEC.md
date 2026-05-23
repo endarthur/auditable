@@ -1,10 +1,10 @@
 # @gcu/proc — specification
 
-a process model for the browser. spawn Web Workers as PID-tracked processes with proper lifecycle, I/O channels, pools, signal handling, a `@gcu/vfs` proxy, a TTY proxy for interactive TUI workers, and shell-mode execution with worker-side `ctx.pm` for sub-process spawning. zero hard dependencies; `@gcu/vfs` is an optional peer.
+a process model for the browser. spawn Web Workers as PID-tracked processes with proper lifecycle, I/O channels, pools, signal handling, a `@gcu/vfs` proxy, a TTY proxy for interactive TUI workers, shell-mode execution with worker-side `ctx.pm` for sub-process spawning, and supervised named daemons. zero hard dependencies; `@gcu/vfs` is an optional peer.
 
-This document specifies the surface of **0.4.0** — Phase A (the standalone core: function, module-call, module-service, inline-service modes) + Phase B (the VFS proxy: mixed direct-replicated and proxied backends, VFS injection into all four modes) + Phase C (the TTY proxy: caller-provided terminal forwarded into service-mode workers) + Phase D (shell-mode execution: `pm.exec` / `pm.shell` / `pm.spawn(string, { shell })` plus `ctx.pm` worker-side ProcessManager proxy for sub-process spawning). Daemons + service registry and remote/mesh execution remain in §11 — Roadmap.
+This document specifies the surface of **0.5.0** — Phase A (the standalone core: function, module-call, module-service, inline-service modes) + Phase B (the VFS proxy: mixed direct-replicated and proxied backends, VFS injection into all four modes) + Phase C (the TTY proxy: caller-provided terminal forwarded into service-mode workers) + Phase D (shell-mode execution: `pm.exec` / `pm.shell` / `pm.spawn(string, { shell })` plus `ctx.pm` worker-side ProcessManager proxy for sub-process spawning) + Phase E (named daemons with auto-restart and `pm.request` / `ctx.onRequest`). Remote/mesh execution remains in §11 — Roadmap.
 
-The full multi-phase design lives in `spec_inbox/os/proc-spec.md`. This document is the authoritative spec for what ships in 0.4.x.
+The full multi-phase design lives in `spec_inbox/os/proc-spec.md`. This document is the authoritative spec for what ships in 0.5.x.
 
 ## 1. Motivation
 
@@ -285,6 +285,68 @@ This is what unlocks `&` / `jobs` / `fg` / `bg` in shell consumers: when geas se
 - The remote-Process stand-in (returned by `ctx.pm.spawn`) doesn't proxy `stdout` / `stderr` back to the spawning worker — output goes to the host's `onStdout` / `onStderr` callbacks. Adequate for backgrounding; a future point release can add stream-back via dedicated MessagePorts.
 - The shell library must run in a single worker (no built-in distribution). For parallel workloads, the shell can use `ctx.pm.spawn` to fan out — each sub-process is its own worker.
 
+### 3.8 Daemons + service registry (0.5.0)
+
+A daemon is a long-running named service: `pm.daemon(name, opts)` registers (or adopts) it, the supervisor restarts it per policy, and `pm.request(name, msg)` lets any caller send a request and await a reply.
+
+```js
+// Register a daemon (any service-mode payload works as the body).
+const indexd = await pm.daemon('indexd', {
+  module: '/services/indexd.js',
+  mode:   'service',
+  vfs:    true,                  // Phase B injection
+  restart:       'on-crash',     // 'never' | 'on-crash' (default) | 'always'
+  maxRestarts:   5,              // default 5
+  restartWindow: 60_000,         // default 60s — uptime that resets the restart counter
+});
+
+// Call it from anywhere — works across cells, surfaces, sub-processes.
+const hits = await pm.request('indexd', { type: 'search', q: 'magnetite' });
+
+// Service registry queries.
+pm.services();          // [{ name, pid, state, uptime, restarts }]
+pm.service('indexd');   // → the Process (or null)
+await pm.stopService('indexd');  // permanent stop; subsequent pm.daemon('indexd', ...) starts fresh
+```
+
+**Daemon-side request handler.** `ctx.onRequest(handler)` is sugar over `ctx.on` that handles `{type:'request', id, req}` messages by calling `handler(req)` and posting `{type:'reply', id, ok, value|error}` back.
+
+```js
+// inside the daemon's service-mode entry
+export default async function(ctx) {
+  const index = new Map();
+  ctx.vfs.on('write', ({ path }) => { /* update index */ });
+
+  ctx.onRequest(async (req) => {
+    if (req.type === 'search') return { hits: searchIndex(index, req.q) };
+    if (req.type === 'reindex') { await reindex(index, ctx.vfs); return { ok: true }; }
+    throw new Error('unknown request: ' + req.type);
+  });
+
+  // Daemons typically park forever — supervisor restarts them on crash.
+  await new Promise((r) => ctx.signal.addEventListener('abort', r));
+}
+```
+
+**Restart-policy decision rules.**
+
+| `restart` | clean exit (code 0) | crash (code ≠ 0 or thrown error) |
+|---|---|---|
+| `'never'`     | leave dead       | leave dead       |
+| `'on-crash'`  | leave dead       | restart with backoff |
+| `'always'`    | restart with backoff | restart with backoff |
+
+**Backoff and restart-counter reset.** Backoff is `100ms × 2^(n-1)` capped at 30 s. The counter resets to zero once a daemon has run uninterrupted for `restartWindow` (default 60 s). If `maxRestarts` (default 5) is exceeded within that window, the service is marked `'failed'` and stays dead until the caller invokes `pm.daemon(name, opts)` again to start fresh.
+
+**Name-collision behavior.** Re-registering an already-alive daemon silently returns the existing `Process` — `pm.daemon('indexd', …)` from a re-running cell adopts the existing instance rather than spawning a sibling. Re-registering a dead/failed/stopped daemon starts fresh with the new opts. This is intentional: daemons survive cell re-runs.
+
+**Lifetime caveats worth flagging in any consumer doc:**
+- A daemon outlives the cell/scope that created it — it persists until `pm.stopService(name)` is called or the `ProcessManager` shuts down (typically: tab close).
+- A daemon's in-memory state vanishes with the worker. Daemons that need durability must write to VFS (Phase B) explicitly.
+- Daemons that auto-restart can mask intermittent bugs — the service "just works" while logs are full of crashes. Watch `pm.services()[i].restarts > 0` in production.
+
+**Security note.** A daemon listening on `pm.request` can be called by any cell. If the daemon writes to VFS paths a calling cell wouldn't be allowed to write directly, it's effectively a privilege-escalation surface. The principal-based VFS sandbox follow-up (see §11) becomes more urgent once daemons are in the mix — until it lands, treat daemons as fully-trusted.
+
 ## 4. Wire protocol
 
 All messages between host and worker use a plain object with a `type` field. Lifecycle messages use the reserved prefix `_proc_`. Custom messages (the user's protocol) ride on `_proc_msg`.
@@ -551,10 +613,13 @@ Tests use the `@gcu/proc/node` shim. No browser harness needed for the Phase A o
 
 ## 11. Roadmap
 
-Phases A (0.1.x), B (0.2.x), C (0.3.x), and D (0.4.x) have shipped. The remaining phases sit in `spec_inbox/os/proc-spec.md` for design reference; here are the headlines:
+Phases A (0.1.x), B (0.2.x), C (0.3.x), D (0.4.x), and E (0.5.x) have shipped. One more phase remains; here are the headlines:
 
-- **Phase E — Daemons + service registry**: `pm.daemon(name, handler, opts)`. Long-running named services with request/response (`pm.request(name, msg)`), restart policies (`never` / `on-crash` / `always`), exponential backoff. Builds on module-service mode.
 - **Phase F — Remote / mesh execution**: `{ remote: { peer, via: mesh } }` in spawn options. Same Process surface, different execution backend.
+
+**Urgent-now 0.2.x point-release follow-up (more urgent post-Phase-E):**
+
+- **Principal-based VFS sandbox.** With daemons in the mix, any cell that can `pm.request` a daemon now has whatever capabilities the daemon was constructed with. Today daemons are fully-trusted. Principal carrying lets the spawning context's permissions ride along into the daemon's VFS calls, and the host re-validates on every proxy call (defense in depth). Same machinery applies to shell-service workers' `ctx.vfs` access. This is now the most impactful next change before Phase F.
 
 **Phase B follow-ups (0.2.x point releases as consumers ask for them):**
 
@@ -562,11 +627,10 @@ Phases A (0.1.x), B (0.2.x), C (0.3.x), and D (0.4.x) have shipped. The remainin
 - Streaming reads (`createReadStream` over the RPC) — useful for piping large files into worker processing without buffering the whole file in the proxy protocol.
 - VFS-path module loading — `spawn({ module: '/scripts/x.js', fn: 'run' })` reads the module source through the host VFS, hands it to the worker bootstrap. Currently throws because the dynamic-import-from-VFS plumbing isn't in 0.2.0.
 
-## 12. Out of scope for 0.4.x
+## 12. Out of scope for 0.5.x
 
-These are explicitly NOT in 0.4.0 and should produce hard errors (not silent stubs) if invoked:
+These are explicitly NOT in 0.5.0 and should produce hard errors (not silent stubs) if invoked:
 
-- `pm.daemon(...)` → throws "daemons require @gcu/proc Phase E."
 - `{ tty }` in function or module-call mode → throws (TTY is service-mode only).
 - `{ tty }` without `write`/`size`/`onKey` methods → throws shape-validation error.
 - `{ remote }` in spawn options → throws "remote execution requires @gcu/proc Phase F."
@@ -574,12 +638,14 @@ These are explicitly NOT in 0.4.0 and should produce hard errors (not silent stu
 - `pm.spawn(string)` without `opts.shell` → throws (shell config is required for the string-payload path).
 - `pm.exec` without `opts.shell` → same.
 - `ctx.pm.spawn(fn, ...)` (function payloads from a worker) → throws "not supported in Phase D"; pass a string or `{module, mode}` instead.
+- `pm.daemon(name, opts)` with `opts.restart` outside `'never' | 'on-crash' | 'always'` → throws.
+- `pm.request(name, ...)` when the daemon is not running → throws.
 
 Each error mentions the phase that would unlock it.
 
 ## 13. Versioning
 
-Pre-1.0. Wire protocol (`_proc_*` namespace, message shapes) and public API (`ProcessManager`, `Process`, `Pool`) may shift before 1.0. Tag history: `0.1.x` = Phase A, `0.2.x` = A + B, `0.3.x` = A + B + C, `0.4.x` = A + B + C + D. Point releases under each minor add follow-ups without breaking the constructor or wire protocol. Phase E onward will land in `0.5.x` and may break the constructor signature if needed.
+Pre-1.0. Wire protocol (`_proc_*` namespace, message shapes) and public API (`ProcessManager`, `Process`, `Pool`) may shift before 1.0. Tag history: `0.1.x` = Phase A, `0.2.x` = A + B, `0.3.x` = A + B + C, `0.4.x` = A + B + C + D, `0.5.x` = A + B + C + D + E. Point releases under each minor add follow-ups without breaking the constructor or wire protocol. Phase F onward will land in `0.6.x` and may break the constructor signature if needed.
 
 ## 14. License
 

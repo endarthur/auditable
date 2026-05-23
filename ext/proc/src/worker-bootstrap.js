@@ -428,6 +428,30 @@ function _makeProxyBackend(BackendCls) {
           if (i >= 0) SERVICE_HANDLERS.splice(i, 1);
         };
       },
+      // Phase E: sugar over ctx.on for the request/reply pattern that
+      // pm.request uses. Handler receives the request body; whatever it
+      // returns (or its thrown error) gets sent back as the reply.
+      onRequest: (handler) => {
+        const sub = (data) => {
+          if (!data || typeof data !== 'object' || data.type !== 'request') return;
+          const id = data.id;
+          Promise.resolve()
+            .then(() => handler(data.req))
+            .then(
+              (value) => _post({ type: '_proc_msg', data: { type: 'reply', id, ok: true, value } }),
+              (err) => _post({ type: '_proc_msg', data: { type: 'reply', id, ok: false, error: { message: err && err.message || String(err) } } })
+            );
+        };
+        SERVICE_HANDLERS.push(sub);
+        while (SERVICE_BUFFER.length) {
+          const d = SERVICE_BUFFER.shift();
+          try { sub(d); } catch (_) {}
+        }
+        return () => {
+          const i = SERVICE_HANDLERS.indexOf(sub);
+          if (i >= 0) SERVICE_HANDLERS.splice(i, 1);
+        };
+      },
       stdin: {
         async read() {
           if (STDIN_BUFFER.length) return STDIN_BUFFER.shift();

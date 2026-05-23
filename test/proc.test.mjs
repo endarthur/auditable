@@ -925,3 +925,200 @@ describe('shell mode (Phase D)', () => {
     pm.shutdown();
   });
 });
+
+// ── Daemons (Phase E) ───────────────────────────────────────────────
+
+describe('daemons (Phase E)', () => {
+  it('pm.daemon registers a named service + pm.services lists it', async () => {
+    const url = fixture('daemon-basic', `
+      export default async function(ctx) {
+        ctx.onRequest((req) => ({ echo: req }));
+        await new Promise(r => ctx.signal.addEventListener('abort', r));
+      }
+    `);
+    const pm = makePm();
+    const proc = await pm.daemon('echo', { module: url, mode: 'service' });
+    assert.ok(proc.pid > 0);
+    const list = pm.services();
+    assert.equal(list.length, 1);
+    assert.equal(list[0].name, 'echo');
+    assert.equal(list[0].state, STATE.RUNNING);
+    pm.shutdown();
+  });
+
+  it('re-registering an alive daemon silently adopts', async () => {
+    const url = fixture('daemon-adopt', `
+      export default async function(ctx) {
+        await new Promise(r => ctx.signal.addEventListener('abort', r));
+      }
+    `);
+    const pm = makePm();
+    const p1 = await pm.daemon('svc', { module: url, mode: 'service' });
+    const p2 = await pm.daemon('svc', { module: url, mode: 'service' });
+    assert.equal(p1.pid, p2.pid);
+    assert.equal(p1, p2);
+    pm.shutdown();
+  });
+
+  it('pm.request round-trips through ctx.onRequest', async () => {
+    const url = fixture('daemon-req', `
+      export default async function(ctx) {
+        ctx.onRequest(async (req) => {
+          if (req.op === 'add') return { sum: req.a + req.b };
+          if (req.op === 'fail') throw new Error('handler boom');
+          return { unknown: true };
+        });
+        await new Promise(r => ctx.signal.addEventListener('abort', r));
+      }
+    `);
+    const pm = makePm();
+    await pm.daemon('math', { module: url, mode: 'service' });
+
+    const r1 = await pm.request('math', { op: 'add', a: 3, b: 4 });
+    assert.deepEqual(r1, { sum: 7 });
+
+    await assert.rejects(
+      pm.request('math', { op: 'fail' }),
+      /handler boom/,
+    );
+
+    pm.shutdown();
+  });
+
+  it('on-crash policy restarts a daemon that errors out', async () => {
+    // Daemon increments a VFS-backed counter on each start and exits with
+    // an error the first two times. Third start it sits idle.
+    const vfs = await (async () => {
+      const v = new VFS();
+      const m = new MemoryBackend(); await m.init();
+      v._mounts.set('/', m);
+      await v.writeFile('/count', '0');
+      return v;
+    })();
+    const url = fixture('daemon-crash', `
+      export default async function(ctx) {
+        const cur = parseInt(await ctx.vfs.readFile('/count', 'utf8'), 10);
+        const next = cur + 1;
+        await ctx.vfs.writeFile('/count', String(next));
+        if (next < 3) {
+          throw new Error('crash #' + next);
+        }
+        ctx.send({ type: 'alive', startNum: next });
+        await new Promise(r => ctx.signal.addEventListener('abort', r));
+      }
+    `);
+    const pm = new ProcessManager({
+      createWorker: createNodeWorker,
+      vfs, vfsModuleUrl,
+    });
+    await pm.daemon('crashy', {
+      module: url, mode: 'service',
+      restart: 'on-crash',
+      maxRestarts: 5,
+    });
+
+    // Wait for restart chain to settle: starts × 3, with 100ms + 200ms
+    // backoff between attempts. 500ms is comfortably enough.
+    await new Promise(r => setTimeout(r, 600));
+    const final = await vfs.readFile('/count', 'utf8');
+    assert.equal(parseInt(final, 10), 3);
+    const svc = pm.services()[0];
+    assert.equal(svc.state, STATE.RUNNING);
+    assert.equal(svc.restarts, 2);   // two restarts before the third start succeeded
+    pm.shutdown();
+  });
+
+  it('maxRestarts exhausted leaves service "failed"', async () => {
+    const url = fixture('daemon-fail', `
+      export default async function(ctx) {
+        throw new Error('always crash');
+      }
+    `);
+    const pm = makePm();
+    await pm.daemon('keepfail', {
+      module: url, mode: 'service',
+      restart: 'on-crash',
+      maxRestarts: 2,
+    });
+    // 100ms + 200ms = 300ms of backoff between three attempts; wait
+    // enough to let the supervisor give up.
+    await new Promise(r => setTimeout(r, 1000));
+    const svc = pm.services()[0];
+    assert.equal(svc.state, 'failed');
+    pm.shutdown();
+  });
+
+  it('never policy does not restart on clean exit', async () => {
+    const url = fixture('daemon-never', `
+      export default async function(ctx) {
+        ctx.exit(0);
+      }
+    `);
+    const pm = makePm();
+    await pm.daemon('once', {
+      module: url, mode: 'service',
+      restart: 'never',
+    });
+    await new Promise(r => setTimeout(r, 100));
+    const svc = pm.services()[0];
+    // Process exited cleanly; 'never' means no restart, service stays
+    // dead. State should be DONE (not 'failed' — failed means restarts
+    // exhausted, not "intentionally stopped").
+    assert.equal(svc.state, STATE.DONE);
+    assert.equal(svc.restarts, 0);
+    pm.shutdown();
+  });
+
+  it('always policy restarts even on clean exit', async () => {
+    const url = fixture('daemon-always', `
+      export default async function(ctx) {
+        ctx.send({ type: 'started' });
+        // Exit cleanly after a short tick.
+        setTimeout(() => ctx.exit(0), 10);
+        await new Promise(r => ctx.signal.addEventListener('abort', r));
+      }
+    `);
+    const pm = makePm();
+    let startedCount = 0;
+    const proc = await pm.daemon('runner', {
+      module: url, mode: 'service',
+      restart: 'always',
+      maxRestarts: 3,
+    });
+    proc.on(m => { if (m.type === 'started') startedCount++; });
+    // Wait long enough for 3 starts: 100ms + 200ms backoff between, plus
+    // 10ms per start.
+    await new Promise(r => setTimeout(r, 700));
+    // Service may have shifted between proc instances on restart — we
+    // really care that startedCount tracks the first instance's start,
+    // and the supervisor saw enough restarts.
+    assert.ok(startedCount >= 1);
+    const svc = pm.services()[0];
+    assert.ok(svc.restarts >= 1);
+    pm.shutdown();
+  });
+
+  it('stopService prevents restart and kills the running instance', async () => {
+    const url = fixture('daemon-stop', `
+      export default async function(ctx) {
+        await new Promise(r => ctx.signal.addEventListener('abort', r));
+      }
+    `);
+    const pm = makePm();
+    const proc = await pm.daemon('stoppable', { module: url, mode: 'service' });
+    await pm.stopService('stoppable');
+    await proc.wait();
+    const svc = pm.services()[0];
+    assert.equal(svc.state, 'stopped');
+    pm.shutdown();
+  });
+
+  it('pm.request throws when service does not exist', async () => {
+    const pm = makePm();
+    await assert.rejects(
+      pm.request('nope', { hi: 1 }),
+      /no service named/,
+    );
+    pm.shutdown();
+  });
+});
