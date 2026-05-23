@@ -1,58 +1,43 @@
 // worker(fn) / workerPool(fn, n) — offload pure computation to Web Workers.
-// Function is serialized as source (closures stripped); zero-copy transfer
-// of TypedArray buffers in arguments and results.
+//
+// Backed by @gcu/proc Phase A. The public API surface is unchanged: closures
+// are stripped (function source is serialized), TypedArray buffers in args
+// and return values are transferred zero-copy, and workers auto-terminate on
+// cell re-run via the invalidation hook.
+
+import { ProcessManager } from '#proc';
+
+// One shared manager across all cells. createPool() inside the manager
+// gives each worker()/workerPool() call its own keepalive worker set; the
+// shared manager just owns the process table and applies maxProcesses
+// globally if anyone sets it.
+let _sharedManager = null;
+function getManager() {
+  if (!_sharedManager) _sharedManager = new ProcessManager();
+  return _sharedManager;
+}
 
 export function makeWorker(cell, ctx) {
   const { invalidation } = ctx;
 
   return function worker(fn) {
-    const src = `"use strict";\nconst __fn__ = ${fn.toString()};\nonmessage = async (e) => {\n  try {\n    const result = await __fn__(...e.data.args);\n    const transfer = [];\n    if (result instanceof ArrayBuffer) transfer.push(result);\n    else if (result?.buffer instanceof ArrayBuffer) transfer.push(result.buffer);\n    postMessage({ result }, transfer);\n  } catch (err) { postMessage({ error: err.message }); }\n};`;
-    const blob = new Blob([src], { type: 'application/javascript' });
-    const url = URL.createObjectURL(blob);
-    const w = new Worker(url);
-    URL.revokeObjectURL(url);
-    invalidation.then(() => w.terminate());
-
-    const call = (...args) => new Promise((resolve, reject) => {
-      w.onmessage = (e) => e.data.error ? reject(new Error(e.data.error)) : resolve(e.data.result);
-      w.onerror = (e) => reject(new Error(e.message));
-      const transfer = [];
-      for (const a of args) {
-        if (a instanceof ArrayBuffer) transfer.push(a);
-        else if (a?.buffer instanceof ArrayBuffer) transfer.push(a.buffer);
-      }
-      w.postMessage({ args }, transfer);
-    });
-    call.terminate = () => w.terminate();
+    // worker(fn) is a pool-of-1 with keepalive semantics: one worker stays
+    // alive across calls, calls queue if a previous call is in flight.
+    const pool = getManager().createPool(1);
+    const call = pool.asCallable(fn);
+    invalidation.then(() => { try { call.terminate(); } catch (_) {} });
     return call;
   };
 }
 
 export function makeWorkerPool(cell, ctx) {
-  const worker = makeWorker(cell, ctx);
+  const { invalidation } = ctx;
 
-  return function workerPool(fn, n = navigator.hardwareConcurrency || 4) {
-    const workers = Array.from({ length: n }, () => worker(fn));
-    const free = [...workers];
-    const queue = [];
-
-    const dispatch = () => {
-      while (queue.length && free.length) {
-        const { args, resolve, reject } = queue.shift();
-        const w = free.shift();
-        w(...args).then(
-          r => { free.push(w); resolve(r); dispatch(); },
-          e => { free.push(w); reject(e); dispatch(); }
-        );
-      }
-    };
-
-    const pool = (...args) => new Promise((resolve, reject) => {
-      queue.push({ args, resolve, reject });
-      dispatch();
-    });
-    pool.map = (arr, ...extra) => Promise.all(arr.map(item => pool(item, ...extra)));
-    pool.terminate = () => workers.forEach(w => w.terminate());
-    return pool;
+  return function workerPool(fn, n) {
+    const size = n || (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
+    const pool = getManager().createPool(size);
+    const call = pool.asCallable(fn);
+    invalidation.then(() => { try { call.terminate(); } catch (_) {} });
+    return call;
   };
 }

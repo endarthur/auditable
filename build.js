@@ -854,6 +854,16 @@ if (fs.existsSync(sideactPath)) {
   modules.unshift({ name: 'sideact', source: sideactSrc });
 }
 
+// Add @gcu/proc bundle as a module entry (Phase A: function / module-call /
+// module-service modes — the substrate for worker()/workerPool() builtins
+// and eventually geas's worker harness).
+const procPath = path.join(__dirname, 'ext/proc/index.js');
+if (fs.existsSync(procPath)) {
+  let procSrc = fs.readFileSync(procPath, 'utf8');
+  procSrc = procSrc.replace(/^\n+/, '').replace(/\n+$/, '');
+  modules.unshift({ name: 'proc', source: procSrc });
+}
+
 // Add @gcu/menu bundle as a module entry (ES module with named exports)
 const menuPath = path.join(__dirname, 'ext/menu/index.js');
 if (fs.existsSync(menuPath)) {

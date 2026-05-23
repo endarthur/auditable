@@ -1,0 +1,32 @@
+{
+  "name": "@gcu/proc",
+  "version": "0.1.0",
+  "description": "A process model for the browser: spawn Web Workers as PID-tracked processes with lifecycle, I/O channels, pools, and signal handling. Phase A — function, module-call, and module-service modes, zero dependencies.",
+  "type": "module",
+  "main": "./src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./bundled": "./index.js",
+    "./node": "./src/node-worker-shim.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["proc", "process", "worker", "web-worker", "ipc", "pool", "compute", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/proc"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/proc",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}
