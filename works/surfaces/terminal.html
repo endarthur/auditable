@@ -16,23 +16,26 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden;
 </head>
 <body>
 <div id="term"></div>
-<!-- Worker payload — gzip+base64 of the geas bundle + a setupGeasWorker
-     wrapper. Decompressed at boot to a blob URL the surface spawns as a
-     classic Web Worker. -->
-<!-- @worker-payload -->
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
 import { VFS, AbusBackend, MemoryBackend } from '../../ext/vfs/index.js';
 import { Terminal, FitAddon, WebglAddon } from '../../ext/xterm/index.js';
 import { createGeasClient, createXtermAdapter, makeLineEditor } from '../../ext/geas/index.js';
 
-// Decompress the embedded worker payload to a blob URL.
-async function workerBlobUrl() {
-  const b64 = document.getElementById('worker-payload').textContent.replace(/\s/g, '');
-  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
-  const src = await new Response(
-    new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
-  return URL.createObjectURL(new Blob([src], { type: 'application/javascript' }));
+// Build the geas worker source from the inlined-lib-geas script the shell
+// adds at decompress time. Classic worker (the worker's geas bundle had
+// its exports rewritten to locals for the surface module; for the worker
+// we strip the trailing `export { ... }` and append the setupGeasWorker
+// tail). Cross-blob-URL ES module imports don't work from blob:file:// in
+// Chromium, so the surface and the worker each get their own copy of
+// geas — fine memory-wise, and works in every origin.
+function spawnGeasWorker() {
+  const raw = document.getElementById('inlined-lib-geas')?.textContent;
+  if (!raw) throw new Error('terminal: no inlined geas source for the worker');
+  const stripped = raw.replace(/export\s*\{[^}]*\};?\s*$/, '');
+  const src = stripped + '\nsetupGeasWorker(self, { createShell, isTyped });\n';
+  return new Worker(
+    URL.createObjectURL(new Blob([src], { type: 'application/javascript' })));
 }
 
 function showError(msg) {
@@ -98,7 +101,7 @@ window.addEventListener('message', async (ev) => {
   // Spawn the worker + the geas client.
   let worker, client;
   try {
-    worker = new Worker(await workerBlobUrl());
+    worker = spawnGeasWorker();
     client = createGeasClient({
       worker,
       vfs,

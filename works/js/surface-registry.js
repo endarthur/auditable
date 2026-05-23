@@ -7,6 +7,7 @@
 
 const KINDS = new Map();          // kind → { label, icon, extensions }
 const _surfaceBlobs = new Map();  // kind → blob URL (decompressed once)
+const _libSources = new Map();    // lib name → raw bundle source (string)
 
 export function registerKind(kind, def) {
   KINDS.set(kind, {
@@ -31,21 +32,88 @@ export function kindForExtension(filename) {
   return null;
 }
 
+async function _decompressEl(el) {
+  const bytes = Uint8Array.from(
+    atob(el.textContent.replace(/\s/g, '')), (c) => c.charCodeAt(0));
+  return new Response(
+    new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+}
+
+// Decompress every embedded shared-library payload into a source string.
+// Run once at shell boot, BEFORE decompressSurfaces() — surfaces inline
+// these sources at the bare-import sites (the disk dedup of §15.2 without
+// the cross-blob-URL imports it would also want, which Chromium blocks on
+// blob:null/* origins from file://).
+export async function decompressLibs() {
+  for (const el of document.querySelectorAll('script[type="text/plain"][id^="lib-"]')) {
+    const name = el.id.slice('lib-'.length);
+    _libSources.set(name, await _decompressEl(el));
+  }
+}
+
+// Rewrite an ESM bundle's trailing `export { ... }` to top-level
+// `const X = Y;` aliases so the inlined code's exported names land as
+// locals in the surface module. Necessary for terser-mangled bundles
+// (xterm: `export{mn as FitAddon}`); concat bundles whose exports are
+// already top-level (geas/vfs/abus) produce harmless no-op `;`.
+function _rewriteExportToConsts(src) {
+  return src.replace(/export\s*\{([^}]+)\};?\s*$/, (_, body) => {
+    const aliases = body.split(',').map((s) => s.trim()).filter(Boolean)
+      .map((decl) => {
+        const m = decl.match(/^(\S+)\s+as\s+(\S+)$/);
+        return m ? `const ${m[2]} = ${m[1]};` : ';';
+      }).join('\n');
+    return '\n' + aliases + '\n';
+  });
+}
+
+function _inlineLibsIntoSurface(text, kind) {
+  // The import map is decorative once we're inlining.
+  text = text.replace(/<script type="importmap">[\s\S]*?<\/script>\s*/, '');
+  // For each lib imported by bare specifier in this surface, inline the
+  // bundle (with its exports rewritten to locals).
+  let inlinedGeas = false;
+  for (const [name, src] of _libSources) {
+    const re = new RegExp(
+      `import\\s*\\{([^}]*)\\}\\s*from\\s*['"]@gcu/${name}['"];?`);
+    if (!re.test(text)) continue;
+    if (name === 'geas') inlinedGeas = true;
+    const inlined = _rewriteExportToConsts(src);
+    text = text.replace(re,
+      () => `\n/* @gcu/${name} — inlined from the works lib store */\n${inlined}\n`);
+  }
+  // The terminal builds its worker source from the geas TEXT (not its
+  // symbols). After inlining, the bundle text is no longer directly
+  // accessible from the surface — provide it as a hidden script tag.
+  if (inlinedGeas) {
+    const geasSrc = _libSources.get('geas');
+    // FUNCTION replacement (not a string template) — String.prototype.replace
+    // interprets $&, $', $`, etc. in a *string* replacement as backref
+    // tokens, and the geas source contains literal `$'` (a `'$'` regex char
+    // class in a string literal). Function replacements use their return
+    // value verbatim.
+    const tag = `<script type="text/plain" id="inlined-lib-geas">\n${
+      geasSrc.replace(/<\/script>/g, '<\\/script>')
+    }\n</script>\n</body>`;
+    text = text.replace('</body>', () => tag);
+  }
+  return text;
+}
+
 // Decompress every embedded surface payload to a blob URL. Run once at shell
-// boot. Eager rather than lazy-per-spawn (spec §15.1 says "lazy") because the
-// blob URL must be ready *synchronously* when a surface iframe is created — a
-// src-less iframe loads about:blank first, which double-fires the welcome and
-// neuters the transferred port, and an about:blank guard is not robust from
-// file://. The payloads decompress in ~tens of ms total, so boot stays light.
+// boot, AFTER decompressLibs(). Eager rather than lazy-per-spawn (spec §15.1
+// says "lazy") because the blob URL must be ready *synchronously* when a
+// surface iframe is created — a src-less iframe loads about:blank first,
+// which double-fires the welcome and neuters the transferred port, and an
+// about:blank guard is not robust from file://. The payloads decompress in
+// ~tens of ms total, so boot stays light.
 export async function decompressSurfaces() {
   for (const kind of KINDS.keys()) {
     const el = document.getElementById('surface-' + kind);
     if (!el) { console.warn('[works] no embedded payload for surface:', kind); continue; }
-    const bytes = Uint8Array.from(
-      atob(el.textContent.replace(/\s/g, '')), (c) => c.charCodeAt(0));
-    const html = await new Response(
-      new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
-    _surfaceBlobs.set(kind, URL.createObjectURL(new Blob([html], { type: 'text/html' })));
+    let text = await _decompressEl(el);
+    text = _inlineLibsIntoSurface(text, kind);
+    _surfaceBlobs.set(kind, URL.createObjectURL(new Blob([text], { type: 'text/html' })));
   }
 }
 

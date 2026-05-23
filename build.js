@@ -103,20 +103,36 @@ if (target === 'works') {
 
   const worksTemplate = fs.readFileSync(path.join(worksDir, 'template.html'), 'utf8');
 
-  // ── Surface payloads (auditable-works-spec §15.1) ──
-  // Every surface is embedded as a gzip+base64 payload; the shell decompresses
-  // it to a blob URL on first spawn. A blob URL is same-origin with the shell,
-  // so works.html runs from file://, not only over HTTP — that is what makes
-  // it a true single file. (The notebook payload makes works.html ~1.5 MB —
-  // the §15.1 duplication cost; §15.2 dynamic linking dedups it later.)
+  // ── Shared libraries + surface payloads (auditable-works-spec §15) ──
+  //
+  // §15.2 dynamic linking: deps the small surfaces share (abus, vfs, xterm,
+  // geas) are embedded ONCE at the top of works.html as gzipped payloads.
+  // Each surface that uses a dep imports it via bare specifier ('@gcu/abus');
+  // build-time injects an import map per surface with `##LIB_<name>##`
+  // placeholders; the shell decompresses lib payloads to blob URLs at boot
+  // and substitutes the placeholders before each surface gets blob-URL'd.
+  //
+  // Bytes win: the geas bundle (250 KB) was previously inlined twice in
+  // the terminal surface alone (main thread + worker payload); abus was
+  // inlined in five surfaces. Both collapse to one copy each.
+  //
+  // §15.1 static linking is still the auditable.html notebook surface's
+  // path (embedded whole) — its own runtime resolves its own imports
+  // internally, doesn't need to participate in this map.
   const worksZlib = require('zlib');
 
-  function inlineSurfaceImports(html, name, allowDeps) {
-    // Inline the surface's ESM imports into the page so it is fully
-    // self-contained — no cross-file imports, which file:// would CORS-
-    // block. Each surface declares its allow-list of `ext/<dep>/index.js`
-    // dependencies; any stray import errors out the build.
-    const imports = html.match(/^\s*import\s[^\n]*$/gm) || [];
+  const SHARED_LIBS = ['abus', 'vfs', 'xterm', 'geas'];
+
+  function rewriteSurfaceToDynamic(html, name, allowDeps) {
+    // Rewrite each `ext/<dep>/index.js` import to a bare specifier
+    // '@gcu/<dep>' and inject a placeholder import map at the top of
+    // <head>. Stray imports (not in the allow-list) error out.
+    //
+    // Strip template literals before scanning — the terminal surface
+    // builds its worker source via a backtick string containing an
+    // `import` statement; that's text, not a real top-level import.
+    const scan = html.replace(/`[^`]*`/g, '``');
+    const imports = scan.match(/^\s*import\s[^\n]*$/gm) || [];
     const stray = imports.filter((i) =>
       !allowDeps.some((d) => i.includes(`ext/${d}/index.js`)));
     if (stray.length) {
@@ -126,63 +142,41 @@ if (target === 'works') {
     }
     let out = html;
     for (const dep of allowDeps) {
-      const depPath = path.join(__dirname, 'ext', dep, 'index.js');
-      if (!fs.existsSync(depPath)) {
-        console.error(`Error: ext/${dep}/index.js not found — build it first`);
-        process.exit(1);
-      }
-      // Rewrite the bundle's trailing named-export list to local consts so
-      // the surface module can use the exported names. Necessary for
-      // terser-mangled ESM bundles (xterm: `export{mn as FitAddon}`); a
-      // plain strip would lose those names. For concat bundles whose
-      // exports are already top-level (geas/vfs/abus), `as`-less entries
-      // become harmless no-op `const Foo = Foo;` (redundant but valid).
-      const src = fs.readFileSync(depPath, 'utf8')
-        .replace(/export\s*\{([^}]+)\};?\s*$/, (_, body) => {
-          const aliases = body.split(',').map((s) => s.trim()).filter(Boolean)
-            .map((decl) => {
-              const m = decl.match(/^(\S+)\s+as\s+(\S+)$/);
-              return m ? `const ${m[2]} = ${m[1]};` : `;`;   // already top-level
-            }).join('\n');
-          return '\n' + aliases + '\n';
-        });
-      const re = new RegExp(
-        `import\\s*\\{[^}]*\\}\\s*from\\s*['"][^'"]*ext/${dep}/index\\.js['"];?`);
-      // Replacement function (not string) — String.prototype.replace treats
-      // $&, $', $`, etc. in a *string* replacement as special tokens. The
-      // vfs bundle contains literal `'$'` (a regex anchor in a string), so
-      // a string replacement would have `$'` re-interpreted as "after-match
-      // text" and corrupt the inlined output. A function replacement gets
-      // its return value used verbatim.
-      const banner = `/* @gcu/${dep} — inlined for a self-contained surface */\n`;
-      out = out.replace(re, () => banner + src);
+      const re = new RegExp(`(['"])[^'"]*ext/${dep}/index\\.js\\1`, 'g');
+      out = out.replace(re, () => `'@gcu/${dep}'`);
     }
-    return out;
+    const imports2 = Object.fromEntries(
+      allowDeps.map((d) => [`@gcu/${d}`, `##LIB_${d}##`]));
+    const importMap = '<script type="importmap">\n'
+      + JSON.stringify({ imports: imports2 }, null, 2) + '\n</script>';
+    // Insert the importmap as the very first child of <head> so the
+    // browser sees it before any <script type="module"> is parsed.
+    return out.replace(/<head>/, '<head>\n' + importMap);
   }
 
-  // Terminal-specific build extras: inline xterm.css into the <style> tag
-  // and embed the geas worker payload (geas bundle + setupGeasWorker
-  // wrapper) as a gzip+base64 <script type="text/plain"> the surface
-  // decompresses to a blob URL on boot.
-  function buildTerminalSurfaceExtras(html) {
-    const css = fs.readFileSync(path.join(__dirname, 'ext/xterm/xterm.css'), 'utf8');
-    html = html.replace('/* @xterm-css */', css);
-
-    const geasPath = path.join(__dirname, 'ext/geas/index.js');
-    if (!fs.existsSync(geasPath)) {
-      console.error('Error: ext/geas/index.js not found — build geas first');
-      process.exit(1);
+  function buildLibPayloads() {
+    const parts = [];
+    for (const name of SHARED_LIBS) {
+      const p = path.join(__dirname, 'ext', name, 'index.js');
+      if (!fs.existsSync(p)) {
+        console.error(`Error: ext/${name}/index.js not found — build it first`);
+        process.exit(1);
+      }
+      const src = fs.readFileSync(p, 'utf8');
+      const gz = worksZlib.gzipSync(Buffer.from(src, 'utf8'));
+      const b64 = gz.toString('base64').replace(/.{1,76}/g, '$&\n');
+      parts.push(`<script type="text/plain" id="lib-${name}">\n${b64}\n</script>`);
     }
-    const geasSrc = fs.readFileSync(geasPath, 'utf8')
-      .replace(/export\s*\{[^}]*\};?\s*$/, '');   // worker has no consumer
-    // — strip is fine; createShell/isTyped are top-level in the bundle.
-    // Inside the worker, createShell + isTyped are top-level after the
-    // export line is stripped. The wrapper hands them to setupGeasWorker.
-    const workerSrc = geasSrc + '\nsetupGeasWorker(self, { createShell, isTyped });\n';
-    const gz = worksZlib.gzipSync(Buffer.from(workerSrc, 'utf8'));
-    const b64 = gz.toString('base64').replace(/.{1,76}/g, '$&\n');
-    return html.replace('<!-- @worker-payload -->',
-      `<script type="text/plain" id="worker-payload">\n${b64}\n</script>`);
+    return parts.join('\n');
+  }
+
+  // Terminal-specific: inline xterm.css. The geas-worker payload that used
+  // to live here is gone — the terminal now spawns its worker via the geas
+  // blob URL discovered in its own import map (§15.2 sharing extends to
+  // module workers).
+  function buildTerminalSurfaceCss(html) {
+    const css = fs.readFileSync(path.join(__dirname, 'ext/xterm/xterm.css'), 'utf8');
+    return html.replace('/* @xterm-css */', css);
   }
 
   const surfaceParts = [];
@@ -202,13 +196,14 @@ if (target === 'works') {
       process.exit(1);
     }
     let surfaceHtml = fs.readFileSync(sp, 'utf8');
-    if (s.deps) surfaceHtml = inlineSurfaceImports(surfaceHtml, s.kind, s.deps);
-    if (s.extras === 'terminal') surfaceHtml = buildTerminalSurfaceExtras(surfaceHtml);
+    if (s.deps) surfaceHtml = rewriteSurfaceToDynamic(surfaceHtml, s.kind, s.deps);
+    if (s.extras === 'terminal') surfaceHtml = buildTerminalSurfaceCss(surfaceHtml);
     const gz = worksZlib.gzipSync(Buffer.from(surfaceHtml, 'utf8'));
     const b64 = gz.toString('base64').replace(/.{1,76}/g, '$&\n');
     surfaceParts.push(`<script type="text/plain" id="surface-${s.kind}">\n${b64}\n</script>`);
   }
   const surfacePayloads = surfaceParts.join('\n');
+  const libPayloads = buildLibPayloads();
 
   const worksHtml = `<!DOCTYPE html>
 <!-- Auditable Works — the GCU desktop -->
@@ -224,6 +219,11 @@ ${worksCss}
 <body>
 
 ${worksTemplate}
+
+<!-- Auditable Works shared libraries — gzipped; the shell decompresses each
+     to a blob URL at boot and substitutes ##LIB_<name>## in surface payloads
+     (§15.2 dynamic linking). -->
+${libPayloads}
 
 <!-- Auditable Works surfaces — embedded payloads, blob-URL'd on spawn (§15.1) -->
 ${surfacePayloads}
