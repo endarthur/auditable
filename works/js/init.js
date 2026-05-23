@@ -8,7 +8,7 @@ import { setupBus } from './bus.js';
 import { setupWorkspace } from './workspace.js';
 import { setupLayout, restoreLayout } from './layout.js';
 import { setupMenuBar } from './menubar.js';
-import { setupTree, refreshTree, newProject, newFile } from './tree.js';
+import { setupTree, refreshTree, newProject, newFile, duplicateProject } from './tree.js';
 import { setupWorksService } from './works-service.js';
 import { setupSurfaces, spawnSurface, openPath } from './surfaces.js';
 import { decompressLibs, decompressSurfaces, installSharedLibsToVfs } from './surface-registry.js';
@@ -36,6 +36,7 @@ async function boot() {
   WKS.openPath = openPath;
   WKS.refreshTree = refreshTree;
   WKS.newProject = newProject;
+  WKS.duplicateProject = duplicateProject;
   WKS.importNotebook = importNotebook;
   WKS.importFileAsNotebook = importFileAsNotebook;
   WKS.buildProjectExportHtml = buildProjectExportHtml;

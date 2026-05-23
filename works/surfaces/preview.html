@@ -20,7 +20,9 @@ table.csv { border-collapse: collapse; min-width: 100%;
 table.csv th, table.csv td { border: 1px solid #2a2e34; padding: 4px 10px;
   text-align: left; vertical-align: top; white-space: nowrap; }
 table.csv th { background: #1c1f24; position: sticky; top: 0;
-  color: #e0e4ea; font-weight: 600; }
+  color: #e0e4ea; font-weight: 600; cursor: pointer; user-select: none; }
+table.csv th:hover { background: #232830; }
+table.csv th .sort-ind { color: #80c0c0; margin-left: 6px; }
 table.csv th[data-type="number"], table.csv td[data-type="number"] {
   text-align: right; font-variant-numeric: tabular-nums; }
 table.csv tr:hover td { background: #1a1d22; }
@@ -199,30 +201,68 @@ function renderCsv(text, delim) {
   const types = headers.map((_, c) => detectType(data.map((r) => r[c])));
 
   const MAX_ROWS = 5000;   // beyond this, large tables stall the renderer
-  const shown = data.slice(0, MAX_ROWS);
   const truncated = data.length > MAX_ROWS;
+  // Slice for display — sort applies to all rows but render is capped.
+  let display = data.slice(0, MAX_ROWS);
+  let sortCol = -1, sortDir = 1;   // 1 = asc, -1 = desc
 
-  const html = [
+  function renderHeader() {
+    const parts = ['<tr>'];
+    for (let c = 0; c < headers.length; c++) {
+      const ind = c === sortCol
+        ? `<span class="sort-ind">${sortDir === 1 ? '▲' : '▼'}</span>` : '';
+      parts.push(`<th data-type="${types[c]}" data-col="${c}">${esc(headers[c])}`
+        + `<span class="col-type">${esc(types[c])}</span>${ind}</th>`);
+    }
+    parts.push('</tr>');
+    return parts.join('');
+  }
+
+  function renderBody() {
+    const parts = [];
+    for (const r of display) {
+      parts.push('<tr>');
+      for (let c = 0; c < headers.length; c++) {
+        const v = r[c] != null ? r[c] : '';
+        parts.push(`<td data-type="${types[c]}">${esc(v)}</td>`);
+      }
+      parts.push('</tr>');
+    }
+    return parts.join('');
+  }
+
+  root.innerHTML = [
     '<div class="csv-info">', esc(`${data.length} rows × ${headers.length} columns`),
     truncated ? esc(` — showing first ${MAX_ROWS}`) : '',
     '</div>',
-    '<div class="csv-wrap"><table class="csv"><thead><tr>'
-  ];
-  for (let c = 0; c < headers.length; c++) {
-    html.push(`<th data-type="${types[c]}">${esc(headers[c])}`
-      + `<span class="col-type">${esc(types[c])}</span></th>`);
-  }
-  html.push('</tr></thead><tbody>');
-  for (const r of shown) {
-    html.push('<tr>');
-    for (let c = 0; c < headers.length; c++) {
-      const v = r[c] != null ? r[c] : '';
-      html.push(`<td data-type="${types[c]}">${esc(v)}</td>`);
-    }
-    html.push('</tr>');
-  }
-  html.push('</tbody></table></div>');
-  root.innerHTML = html.join('');
+    '<div class="csv-wrap"><table class="csv"><thead>', renderHeader(),
+    '</thead><tbody>', renderBody(), '</tbody></table></div>',
+  ].join('');
+
+  // Sort on header click. Same column twice → reverse; new column → asc.
+  // Sort applies to the FULL data array (so the first MAX_ROWS reshuffle);
+  // empty cells go to the end regardless of direction.
+  root.querySelector('table.csv thead').addEventListener('click', (ev) => {
+    const th = ev.target.closest('th'); if (!th) return;
+    const col = Number(th.dataset.col);
+    if (sortCol === col) sortDir = -sortDir; else { sortCol = col; sortDir = 1; }
+    const type = types[col];
+    data.sort((a, b) => {
+      const av = (a[col] || '').trim();
+      const bv = (b[col] || '').trim();
+      if (av === '' && bv === '') return 0;
+      if (av === '') return 1;             // empties to the end
+      if (bv === '') return -1;
+      let cmp;
+      if (type === 'number') cmp = parseFloat(av) - parseFloat(bv);
+      else if (type === 'date') cmp = Date.parse(av) - Date.parse(bv);
+      else cmp = av.localeCompare(bv);
+      return cmp * sortDir;
+    });
+    display = data.slice(0, MAX_ROWS);
+    root.querySelector('table.csv thead').innerHTML = renderHeader();
+    root.querySelector('table.csv tbody').innerHTML = renderBody();
+  });
 }
 
 // ── JSON ────────────────────────────────────────────────────────────

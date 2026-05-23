@@ -171,6 +171,8 @@ async function showMenu(e, path, type) {
   if (type === 'project') extras.push({ label: 'Open',                  action: 'open' });
   extras.push(                          { label: 'Copy path',           action: 'copy-path' });
   if (type === 'folder')  extras.push({ label: 'Open terminal here',    action: 'terminal-here' });
+  if (type === 'folder')  extras.push({ label: 'Refresh',               action: 'refresh' });
+  if (type === 'project') extras.push({ label: 'Duplicate…',            action: 'duplicate' });
   if (type === 'project') extras.push({ label: 'Export as notebook…',   action: 'export' });
   if (type === 'file' && IMPORTABLE_RE.test(basename(path)))
     extras.push(                        { label: 'Import as notebook',  action: 'import-file' });
@@ -198,6 +200,8 @@ async function showMenu(e, path, type) {
   else if (action === 'copy-path')   copyPath(path);
   else if (action === 'terminal-here') spawnSurface('terminal',
     { path, title: 'Terminal — ' + basename(path) });
+  else if (action === 'refresh')     refreshTree();
+  else if (action === 'duplicate')   duplicateProject(path);
   else if (action === 'export')      exportProject(path);
   else if (action === 'import-file') importFileAsNotebook(path);
   else if (action === 'rename')      renameEntry(path, type);
@@ -211,6 +215,64 @@ async function copyPath(path) {
     setStatus('copied ' + path);
   } catch {
     setStatus('clipboard unavailable');
+  }
+}
+
+// Right-click → Duplicate… on a project. Recursive VFS copy + fresh id +
+// updated title in project.json. The duplicate lands next to the original
+// at /projects/<title>-2 (-3, …) — auto-deduped against existing names.
+export async function duplicateProject(srcPath, name) {
+  if (!srcPath.startsWith('/projects/')) {
+    setStatus('only /projects/* projects can be duplicated'); return null;
+  }
+  let title = basename(srcPath);
+  try {
+    const meta = JSON.parse(await WKS.vfs.readFile(srcPath + '/project.json', 'utf8'));
+    if (meta.title) title = meta.title;
+  } catch { /* no marker — use basename */ }
+  const defaultName = title + ' copy';
+  if (name == null) name = await dlgPrompt('Duplicate as:', defaultName);
+  if (!name) return null;
+  const dst = await uniqueProjectPath(name);
+  try {
+    await _copyDir(srcPath, dst);
+    // Mint a fresh id and the new title in the copy's project.json.
+    try {
+      const meta = JSON.parse(await WKS.vfs.readFile(dst + '/project.json', 'utf8'));
+      meta.id = 'p-' + rid();
+      meta.title = name;
+      await WKS.vfs.writeFile(dst + '/project.json', JSON.stringify(meta, null, 2));
+    } catch {
+      // No marker in source — write a minimal one for the copy.
+      await WKS.vfs.writeFile(dst + '/project.json',
+        JSON.stringify({ kind: 'notebook', id: 'p-' + rid(), title: name }, null, 2));
+    }
+    setStatus('duplicated to ' + dst);
+    return dst;
+  } catch (e) {
+    setStatus('duplicate failed: ' + (e.message || e));
+    return null;
+  }
+}
+
+// A free /projects/<name> path — appends ' 2', ' 3', … on collision.
+async function uniqueProjectPath(name) {
+  const base = '/projects/' + sanitize(name);
+  if (!(await WKS.vfs.exists(base))) return base;
+  for (let n = 2; ; n++) {
+    const p = base + ' ' + n;
+    if (!(await WKS.vfs.exists(p))) return p;
+  }
+}
+
+async function _copyDir(src, dst) {
+  await WKS.vfs.mkdir(dst, { recursive: true });
+  const entries = await WKS.vfs.readdir(src, { stat: true });
+  for (const e of entries) {
+    const s = src + '/' + e.name;
+    const d = dst + '/' + e.name;
+    if (e.type === 'directory') await _copyDir(s, d);
+    else await WKS.vfs.writeFile(d, await WKS.vfs.readFile(s, 'bytes'));
   }
 }
 

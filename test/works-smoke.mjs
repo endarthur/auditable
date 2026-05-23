@@ -556,6 +556,56 @@ const csvPv  = await openAndRead('/projects/sample.csv');
 const jsonPv = await openAndRead('/projects/sample.json');
 const mdPv   = await openAndRead('/projects/sample.md');
 
+// CSV header click → rows sort by that column. Verify the value column
+// (descending) reorders the rows so the first data row is `gamma 1.41`
+// (smallest) — column 2 is "value", numeric.
+const csvSort = await page.evaluate(async () => {
+  const W = window.WKS;
+  // The sample.csv preview surface is already open from the test above;
+  // find its tab and reach into its frame.
+  let tabId = null;
+  for (const [id, rec] of W.surfaces) if (rec.path === '/projects/sample.csv') tabId = id;
+  return { tabId };
+});
+let csvSorted = null;
+if (csvSort.tabId) {
+  const frame = await surfaceFrame(csvSort.tabId);
+  if (frame) {
+    csvSorted = await frame.evaluate(async () => {
+      // Click the "value" header (column 2) twice to sort descending. Re-
+      // query the th each time — innerHTML re-renders the thead, so the
+      // old node is detached and a stale ref won't bubble events.
+      const clickValueHeader = async () => {
+        document.querySelectorAll('table.csv thead th')[2].click();
+        await new Promise((r) => setTimeout(r, 50));
+      };
+      await clickValueHeader();
+      await clickValueHeader();
+      const firstRow = [...document.querySelectorAll('table.csv tbody tr')[0]
+        .querySelectorAll('td')].map((c) => c.textContent);
+      const indicatorOnValue = !!document.querySelectorAll('table.csv thead th')[2]
+        .querySelector('.sort-ind');
+      return { firstRow, indicatorOnValue };
+    });
+  }
+}
+
+// ── Tree: Duplicate project ───────────────────────────────────────────
+const dup = await page.evaluate(async () => {
+  const W = window.WKS;
+  const dst = await W.duplicateProject('/projects/Quad', 'Quad duplicated');
+  if (!dst) return { dst };
+  const meta = JSON.parse(await W.vfs.readFile(dst + '/project.json', 'utf8'));
+  const origMeta = JSON.parse(
+    await W.vfs.readFile('/projects/Quad/project.json', 'utf8'));
+  const dstNb = await W.vfs.readFile(dst + '/notebook.txt', 'utf8');
+  const origNb = await W.vfs.readFile('/projects/Quad/notebook.txt', 'utf8');
+  return {
+    dst, dstId: meta.id, dstTitle: meta.title, origId: origMeta.id,
+    contentMatches: dstNb === origNb,
+  };
+});
+
 // ── Workspace export / import round-trip (Chunk 5b) ───────────────────
 // Serialize the live workspace, build a self-contained HTML, then open it —
 // it must boot the desktop over the embedded snapshot.
@@ -722,6 +772,13 @@ const checks = {
   'preview: Markdown renders':        mdPv.kind === 'preview' && mdPv.html
       && /<h1>/.test(mdPv.html) && mdPv.html.includes('Preview Test')
       && /<strong>/.test(mdPv.html),
+  'preview: CSV header sorts column': csvSorted && csvSorted.indicatorOnValue
+      && csvSorted.firstRow && csvSorted.firstRow[1] === 'alpha',
+  // Tree context — Duplicate project
+  'tree: Duplicate clones the project': dup.dst === '/projects/Quad duplicated'
+      && dup.dstTitle === 'Quad duplicated' && dup.contentMatches,
+  'tree: Duplicate mints a fresh id':   dup.dstId && dup.origId
+      && dup.dstId !== dup.origId,
   // Workspace export / import (Chunk 5b)
   'export builds a self-contained HTML':   exportLooksRight,
   'imported workspace uses a memory home': imported.home === 'memory',
