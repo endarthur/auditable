@@ -24,6 +24,13 @@ const join = (dir, name) => (dir === '/' ? '/' : dir + '/') + name;
 const sanitize = (s) => String(s).trim().replace(/[/\\]+/g, '-');
 const rid = () => Math.random().toString(36).slice(2, 10);
 
+// /lib entries are URL-encoded module names ('%40gcu%2Fadder' for the dir
+// holding the @gcu/adder source — persist.js's syncModulesToVfs layout).
+// Decode them for display so the tree shows the real module name.
+function safeDecode(s) {
+  try { return decodeURIComponent(s); } catch { return s; }
+}
+
 export function setupTree() {
   _treeEl = document.getElementById('works-tree');
   if (!_treeEl) return;
@@ -66,8 +73,11 @@ export async function refreshTree() {
 async function walk(dir) {
   const entries = await WKS.vfs.readdir(dir, { stat: true });
   const nodes = [];
+  // Inside /lib, names are URL-encoded module URLs — show them decoded.
+  const decode = (dir === '/lib');
   for (const e of entries) {
     const p = join(dir, e.name);
+    const label = decode ? safeDecode(e.name) : e.name;
     if (e.type === 'directory') {
       let meta = null;
       try {
@@ -76,18 +86,19 @@ async function walk(dir) {
         }
       } catch { /* unreadable marker → treat as a plain folder */ }
       if (meta) {
-        nodes.push({ name: e.name, path: p, type: 'project',
-          kind: meta.kind, title: meta.title || e.name });
+        nodes.push({ name: e.name, label, path: p, type: 'project',
+          kind: meta.kind, title: meta.title || label });
       } else {
-        nodes.push({ name: e.name, path: p, type: 'folder',
+        nodes.push({ name: e.name, label, path: p, type: 'folder',
           children: expanded.has(p) ? await walk(p) : null });
       }
     } else {
-      nodes.push({ name: e.name, path: p, type: 'file' });
+      nodes.push({ name: e.name, label, path: p, type: 'file' });
     }
   }
   const rank = { folder: 0, project: 1, file: 2 };
-  nodes.sort((a, b) => (rank[a.type] - rank[b.type]) || a.name.localeCompare(b.name));
+  nodes.sort((a, b) => (rank[a.type] - rank[b.type])
+    || (a.label || a.name).localeCompare(b.label || b.name));
   return nodes;
 }
 
@@ -100,13 +111,13 @@ function renderNode(node, depth) {
   let icon, label;
   if (node.type === 'folder') {
     icon = expanded.has(node.path) ? '▾' : '▸';
-    label = node.name;
+    label = node.label || node.name;
   } else if (node.type === 'project') {
     icon = (kindDef(node.kind) || {}).icon || '■';
     label = node.title;
   } else {
     icon = '·';
-    label = node.name;
+    label = node.label || node.name;
   }
 
   const iconEl = document.createElement('span');
