@@ -133,6 +133,13 @@ function _makeProxyBackend(BackendCls) {
   let exited = false;
   let intReceived = false;
   let _workerVfs = null;
+  let _workerTty = null;          // Phase C: ctx.tty proxy (service modes only)
+  const _ttyKeyQueue = [];        // backlog for keys() iterator
+  const _ttyKeyWaiters = [];      // pending promise resolvers
+  const _ttyMouseQueue = [];
+  const _ttyMouseWaiters = [];
+  const _ttyResizeListeners = [];
+  let _ttySize = { rows: 24, cols: 80 };
 
   function exit(code = 0) {
     if (exited) return;
@@ -180,6 +187,12 @@ function _makeProxyBackend(BackendCls) {
           return;
         }
       }
+      // Phase C: seed initial size + build the ctx.tty proxy before
+      // dispatchInit so the entry sees ctx.tty if requested.
+      if (msg.tty) {
+        if (msg.ttySize) _ttySize = msg.ttySize;
+        _workerTty = buildWorkerTty();
+      }
       await dispatchInit(msg);
       return;
     }
@@ -213,6 +226,32 @@ function _makeProxyBackend(BackendCls) {
         w({ value: msg.data, done: !!msg.eof });
       } else {
         STDIN_BUFFER.push({ value: msg.data, done: !!msg.eof });
+      }
+      return;
+    }
+    // Phase C TTY proxy: host forwards keystrokes, mouse events, and
+    // resize notifications. Each becomes an async-iterable item (keys /
+    // mouse) or a subscriber callback fanout (resize).
+    if (msg.type === '_proc_tty_key') {
+      if (_ttyKeyWaiters.length) {
+        _ttyKeyWaiters.shift()(msg.key);
+      } else {
+        _ttyKeyQueue.push(msg.key);
+      }
+      return;
+    }
+    if (msg.type === '_proc_tty_mouse') {
+      if (_ttyMouseWaiters.length) {
+        _ttyMouseWaiters.shift()(msg.event);
+      } else {
+        _ttyMouseQueue.push(msg.event);
+      }
+      return;
+    }
+    if (msg.type === '_proc_tty_resize') {
+      _ttySize = { rows: msg.rows || 24, cols: msg.cols || 80 };
+      for (const cb of _ttyResizeListeners) {
+        try { cb(_ttySize); } catch (_) {}
       }
       return;
     }
@@ -260,12 +299,43 @@ function _makeProxyBackend(BackendCls) {
     _workerVfs = vfs;
   }
 
+  // Build the worker-side tty proxy. Caller-provided host tty events
+  // (key, mouse, resize) arrive via _proc_tty_* messages and are drained
+  // into the queues + waiter callbacks above; .write() posts a
+  // _proc_tty_write back to the host. Size is cached, no round-trip.
+  function buildWorkerTty() {
+    async function* makeIter(queue, waiters) {
+      while (true) {
+        if (queue.length) {
+          yield queue.shift();
+        } else {
+          yield await new Promise((r) => waiters.push(r));
+        }
+      }
+    }
+    return {
+      write(data) { _post({ type: '_proc_tty_write', data }); },
+      size() { return { rows: _ttySize.rows, cols: _ttySize.cols }; },
+      keys() { return makeIter(_ttyKeyQueue, _ttyKeyWaiters); },
+      mouse() { return makeIter(_ttyMouseQueue, _ttyMouseWaiters); },
+      onResize(cb) {
+        if (typeof cb !== 'function') return () => {};
+        _ttyResizeListeners.push(cb);
+        return () => {
+          const i = _ttyResizeListeners.indexOf(cb);
+          if (i >= 0) _ttyResizeListeners.splice(i, 1);
+        };
+      },
+    };
+  }
+
   function makeServiceCtx() {
     return {
       signal: ABORT.signal,
       stdout: ctxStdout,
       stderr: ctxStderr,
       vfs: _workerVfs,
+      tty: _workerTty,
       send: (data, transfer) => {
         _post({ type: '_proc_msg', data }, transfer || autoTransfer(data));
       },

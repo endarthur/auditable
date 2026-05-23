@@ -11,7 +11,7 @@ import {
 import { ReadablePort, WritablePort } from './channel.js';
 
 export class Process {
-  constructor({ pid, mode, worker, cleanup, command, vfs }) {
+  constructor({ pid, mode, worker, cleanup, command, vfs, tty }) {
     this.pid = pid;
     this.mode = mode;
     this.command = command || '';
@@ -25,6 +25,8 @@ export class Process {
     this._worker = worker;
     this._cleanup = cleanup || (() => {});
     this._vfs = vfs || null;        // host VFS for _proc_vfs_call dispatch
+    this._tty = tty || null;        // host tty for _proc_tty_* event forwarding
+    this._ttyUnsubs = [];           // event-subscription cleanup fns
     this._exitWaiters = [];
     this._msgHandlers = new Set();
     this._readySignal = null;          // resolved by READY message
@@ -42,6 +44,37 @@ export class Process {
       worker.addEventListener('error', (e) => this._onWorkerError(e));
     } else if (typeof worker.on === 'function') {
       worker.on('error', (e) => this._onWorkerError(e));
+    }
+
+    // Phase C TTY proxy: if a host tty was supplied, subscribe to its
+    // input events and forward them to the worker as _proc_tty_* messages.
+    // Worker→host writes are handled in _onMessage's _proc_tty_write case.
+    if (this._tty) this._wireTty(this._tty);
+  }
+
+  _wireTty(tty) {
+    const post = (m) => this._post(m);
+    if (typeof tty.onKey === 'function') {
+      try {
+        const u = tty.onKey((key) => post({ type: '_proc_tty_key', key }));
+        if (typeof u === 'function') this._ttyUnsubs.push(u);
+      } catch (_) { /* host onKey threw — skip */ }
+    }
+    if (typeof tty.onMouse === 'function') {
+      try {
+        const u = tty.onMouse((event) => post({ type: '_proc_tty_mouse', event }));
+        if (typeof u === 'function') this._ttyUnsubs.push(u);
+      } catch (_) {}
+    }
+    if (typeof tty.onResize === 'function') {
+      try {
+        const u = tty.onResize((sz) => {
+          const rows = (sz && sz.rows) || 24;
+          const cols = (sz && sz.cols) || 80;
+          post({ type: '_proc_tty_resize', rows, cols });
+        });
+        if (typeof u === 'function') this._ttyUnsubs.push(u);
+      } catch (_) {}
     }
   }
 
@@ -143,6 +176,13 @@ export class Process {
         // a serialized error.
         this._handleVfsCall(msg);
         return;
+      case '_proc_tty_write':
+        // Phase C TTY proxy: worker is asking the host tty to render data
+        // (bytes, escape sequences, etc). Fire-and-forget; no reply.
+        if (this._tty && typeof this._tty.write === 'function') {
+          try { this._tty.write(msg.data); } catch { /* swallow */ }
+        }
+        return;
       default:
         // Unknown lifecycle messages are ignored — gives the protocol
         // room to grow.
@@ -219,6 +259,13 @@ export class Process {
 
     if (this._killTimer) { clearTimeout(this._killTimer); this._killTimer = null; }
     if (this._timeoutTimer) { clearTimeout(this._timeoutTimer); this._timeoutTimer = null; }
+
+    // Phase C: drop our tty event subscriptions so the host tty doesn't
+    // keep firing into a dead Process.
+    for (const u of this._ttyUnsubs) {
+      try { u(); } catch { /* swallow */ }
+    }
+    this._ttyUnsubs = [];
 
     if (this._detachMessage) {
       try { this._detachMessage(); } catch { /* ignore */ }

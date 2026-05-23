@@ -460,9 +460,18 @@ describe('out-of-scope features fail loud (no silent stubs)', () => {
     pm.shutdown();
   });
 
-  it('{ tty } throws Phase C', () => {
+  it('{ tty } in function mode throws (service-only)', () => {
     const pm = makePm();
-    assert.throws(() => pm.spawn(() => 1, { tty: {} }), /Phase C/);
+    const fakeTty = { write() {}, size() { return { rows: 24, cols: 80 }; }, onKey() { return () => {}; } };
+    assert.throws(() => pm.spawn(() => 1, { tty: fakeTty }), /not supported in function mode/);
+    pm.shutdown();
+  });
+
+  it('{ tty } missing required methods throws', () => {
+    const pm = makePm();
+    const url = 'data:text/javascript,export default async (c)=>{c.exit(0)}';
+    assert.throws(() => pm.spawn({ module: url, mode: 'service' }, { tty: {} }),
+      /must implement write\(data\), size\(\), and onKey/);
     pm.shutdown();
   });
 
@@ -631,6 +640,154 @@ describe('vfs in workers (Phase B)', () => {
     await proc.wait();
     assert.equal(got.proxied, 'ok');
     assert.equal(got.hasApiMount, true);
+    pm.shutdown();
+  });
+});
+
+// ── TTY proxy (Phase C) ─────────────────────────────────────────────
+
+describe('tty proxy (Phase C)', () => {
+  // A minimal host-side tty: collects writes, dispatches synthetic key /
+  // mouse / resize events to its subscribers.
+  function makeFakeTty(initSize) {
+    const writes = [];
+    const keyListeners = [];
+    const mouseListeners = [];
+    const resizeListeners = [];
+    let size = initSize || { rows: 24, cols: 80 };
+    return {
+      writes,
+      write(d) { writes.push(d); },
+      size() { return { ...size }; },
+      onKey(cb)    { keyListeners.push(cb);    return () => { const i = keyListeners.indexOf(cb);    if (i >= 0) keyListeners.splice(i, 1); }; },
+      onMouse(cb)  { mouseListeners.push(cb);  return () => { const i = mouseListeners.indexOf(cb);  if (i >= 0) mouseListeners.splice(i, 1); }; },
+      onResize(cb) { resizeListeners.push(cb); return () => { const i = resizeListeners.indexOf(cb); if (i >= 0) resizeListeners.splice(i, 1); }; },
+      // Test helpers — fire events into the listeners
+      emitKey(k)    { for (const cb of keyListeners)    cb(k); },
+      emitMouse(e)  { for (const cb of mouseListeners)  cb(e); },
+      emitResize(s) { size = s; for (const cb of resizeListeners) cb(s); },
+    };
+  }
+
+  it('worker ctx.tty.write → host tty.write', async () => {
+    const tty = makeFakeTty();
+    const pm = makePm();
+    const url = fixture('ttywrite', `
+      export default async function(ctx) {
+        ctx.tty.write('hello');
+        ctx.tty.write('\\x1b[2J');
+        ctx.exit(0);
+      }
+    `);
+    const proc = await pm.spawn({ module: url, mode: 'service' }, { tty });
+    await proc.wait();
+    assert.deepEqual(tty.writes, ['hello', '\x1b[2J']);
+    pm.shutdown();
+  });
+
+  it('worker ctx.tty.size() reflects initial host size', async () => {
+    const tty = makeFakeTty({ rows: 30, cols: 100 });
+    const pm = makePm();
+    const url = fixture('ttysize', `
+      export default async function(ctx) {
+        const s = ctx.tty.size();
+        ctx.send({ type: 's', rows: s.rows, cols: s.cols });
+        ctx.exit(0);
+      }
+    `);
+    const proc = await pm.spawn({ module: url, mode: 'service' }, { tty });
+    let got = null;
+    proc.on(m => { if (m.type === 's') got = m; });
+    await proc.wait();
+    assert.equal(got.rows, 30);
+    assert.equal(got.cols, 100);
+    pm.shutdown();
+  });
+
+  it('host emits keys → worker observes via ctx.tty.keys()', async () => {
+    const tty = makeFakeTty();
+    const pm = makePm();
+    const url = fixture('ttykeys', `
+      export default async function(ctx) {
+        const it = ctx.tty.keys();
+        // Pull three keys then exit.
+        const collected = [];
+        for (let i = 0; i < 3; i++) {
+          const { value } = await it.next();
+          collected.push(value);
+        }
+        ctx.send({ type: 'keys', collected });
+        ctx.exit(0);
+      }
+    `);
+    const proc = await pm.spawn({ module: url, mode: 'service' }, { tty });
+    let collected = null;
+    proc.on(m => { if (m.type === 'keys') collected = m.collected; });
+    // Give the worker a tick to set up its iterator, then fire keys.
+    await new Promise(r => setTimeout(r, 50));
+    tty.emitKey({ name: 'a' });
+    tty.emitKey({ name: 'b' });
+    tty.emitKey({ name: 'c' });
+    await proc.wait();
+    assert.deepEqual(collected.map(k => k.name), ['a', 'b', 'c']);
+    pm.shutdown();
+  });
+
+  it('host emits resize → worker onResize fires, size() updates', async () => {
+    const tty = makeFakeTty({ rows: 24, cols: 80 });
+    const pm = makePm();
+    const url = fixture('ttyresize', `
+      export default async function(ctx) {
+        const sizes = [ctx.tty.size()];
+        ctx.tty.onResize((s) => {
+          sizes.push(s);
+          if (sizes.length === 2) {
+            ctx.send({ type: 'sizes', sizes });
+            ctx.exit(0);
+          }
+        });
+        await new Promise(r => ctx.signal.addEventListener('abort', r));
+      }
+    `);
+    const proc = await pm.spawn({ module: url, mode: 'service' }, { tty });
+    let result = null;
+    proc.on(m => { if (m.type === 'sizes') result = m.sizes; });
+    await new Promise(r => setTimeout(r, 50));
+    tty.emitResize({ rows: 40, cols: 120 });
+    await proc.wait();
+    assert.equal(result.length, 2);
+    assert.deepEqual(result[0], { rows: 24, cols: 80 });
+    assert.deepEqual(result[1], { rows: 40, cols: 120 });
+    pm.shutdown();
+  });
+
+  it('tty also works in inline-service mode', async () => {
+    const tty = makeFakeTty();
+    const pm = makePm();
+    const inlineSource = `
+      _procRegisterEntry(async function(ctx) {
+        ctx.tty.write('inline-tty-test');
+        ctx.exit(0);
+      });
+    `;
+    const proc = await pm.spawn({ inlineSource }, { tty });
+    await proc.wait();
+    assert.deepEqual(tty.writes, ['inline-tty-test']);
+    pm.shutdown();
+  });
+
+  it('tty events stop firing after process exits', async () => {
+    const tty = makeFakeTty();
+    const pm = makePm();
+    const url = fixture('ttycleanup', `
+      export default async function(ctx) { ctx.exit(0); }
+    `);
+    const proc = await pm.spawn({ module: url, mode: 'service' }, { tty });
+    await proc.wait();
+    // Fire an event after the process exited — should not throw and
+    // should not deliver to a dead worker (no observable effect because
+    // the worker isn't listening anymore).
+    assert.doesNotThrow(() => tty.emitKey({ name: 'z' }));
     pm.shutdown();
   });
 });

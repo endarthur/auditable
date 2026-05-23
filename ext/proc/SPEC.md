@@ -1,10 +1,10 @@
 # @gcu/proc — specification
 
-a process model for the browser. spawn Web Workers as PID-tracked processes with proper lifecycle, I/O channels, pools, signal handling, and a `@gcu/vfs` proxy. zero hard dependencies; `@gcu/vfs` is an optional peer.
+a process model for the browser. spawn Web Workers as PID-tracked processes with proper lifecycle, I/O channels, pools, signal handling, a `@gcu/vfs` proxy, and a TTY proxy for interactive TUI workers. zero hard dependencies; `@gcu/vfs` is an optional peer.
 
-This document specifies the surface of **0.2.0** — Phase A (the standalone core: function, module-call, module-service, inline-service) plus Phase B (the VFS proxy: mixed direct-replicated and proxied backends, with VFS injection into all four modes). TTY proxy, daemons + service registry, shell-mode integration with `@gcu/coreutils`, and remote/mesh execution remain in §11 — Roadmap.
+This document specifies the surface of **0.3.0** — Phase A (the standalone core: function, module-call, module-service, inline-service) + Phase B (the VFS proxy: mixed direct-replicated and proxied backends, VFS injection into all four modes) + Phase C (the TTY proxy: caller-provided terminal forwarded into service-mode workers). Daemons + service registry, shell-mode integration with `@gcu/coreutils`, and remote/mesh execution remain in §11 — Roadmap.
 
-The full multi-phase design lives in `spec_inbox/os/proc-spec.md`. This document is the authoritative spec for what ships in 0.2.x.
+The full multi-phase design lives in `spec_inbox/os/proc-spec.md`. This document is the authoritative spec for what ships in 0.3.x.
 
 ## 1. Motivation
 
@@ -178,6 +178,51 @@ The bootstrap detects which is present and either uses the pre-inlined symbols (
 - Principal-based sandboxing isn't wired yet (see §11 — Phase B+).
 - VFS-path module loading (`spawn({ module: '/scripts/x.js', fn: 'run' })`) still throws — the dynamic-import-from-VFS plumbing isn't in 0.2.0.
 
+### 3.6 TTY proxy (0.3.0)
+
+Service-mode workers (`module-service` and `inline-service`) can receive a TTY from the host so they can run interactive UI — pagers, line editors, TUI apps — without freezing the main thread. The proxy is shape-agnostic: caller provides any object that satisfies the host-side shape; proc exposes a worker-side proxy with the same shape.
+
+```js
+// host: provide any object that quacks like a terminal
+const tty = {
+  write(data) { xterm.write(data); },                     // bytes / escapes
+  size() { return { rows: xterm.rows, cols: xterm.cols }; },
+  onKey(cb)    { xterm.onKey(({ key }) => cb(key)); return () => /* unsub */ {}; },
+  onMouse(cb)  { /* optional */ return () => {}; },
+  onResize(cb) { /* optional */ return () => {}; },
+};
+
+const proc = await pm.spawn({ module: workerUrl, mode: 'service' }, { tty });
+
+// inside the worker (module-service entry):
+export default async function(ctx) {
+  ctx.tty.write('Press a key to continue...\\r\\n');
+  for await (const key of ctx.tty.keys()) {
+    if (key.name === 'q') break;
+    ctx.tty.write('You pressed: ' + (key.name || key.raw) + '\\r\\n');
+  }
+  ctx.exit(0);
+}
+```
+
+**Service-mode only.** Function and module-call modes throw if `{ tty }` is passed — those modes are for compute, not interactive UI. (`ctx` isn't exposed there anyway.)
+
+**Required host shape.** At minimum: `write(data)`, `size()`, `onKey(cb)`. Optional: `onMouse(cb)`, `onResize(cb)`. Each `on*` returns an unsubscribe function (called by proc on process exit so listeners don't leak).
+
+**Worker-side `ctx.tty` shape.**
+
+| API | Behavior |
+|---|---|
+| `tty.write(data)` | Fire-and-forget: posts `_proc_tty_write` to host, which calls `hostTty.write(data)`. No round-trip. |
+| `tty.size()` | Returns `{rows, cols}` from a cached copy. The initial value rides on the init message; subsequent resize events update the cache. No round-trip. |
+| `tty.keys()` | Async iterator yielding key events as they arrive from the host. Pulls drain a per-process queue; misses get buffered. |
+| `tty.mouse()` | Async iterator for mouse events. Same shape as keys. |
+| `tty.onResize(cb)` | Subscribe to resize events. Returns an unsubscribe. Cached size is updated before the callback fires. |
+
+**Latency.** PostMessage round-trip is sub-millisecond. TUI applications redraw on input events, not at 60fps, so the proxy hop is imperceptible for typical interactive use. The only case where it matters is rapid bulk output — but that's `ctx.tty.write(largeBuffer)`, already a single message regardless.
+
+**Lifecycle.** Process subscriptions to the host tty are cleaned up in `_finish` (worker exited, killed, errored, or timed out). The host tty itself is never modified — proc only reads via the `on*` hooks and writes via `tty.write`.
+
 ## 4. Wire protocol
 
 All messages between host and worker use a plain object with a `type` field. Lifecycle messages use the reserved prefix `_proc_`. Custom messages (the user's protocol) ride on `_proc_msg`.
@@ -191,6 +236,9 @@ All messages between host and worker use a plain object with a `type` field. Lif
 | `_proc_kill` | `{ signal: "INT" \| "TERM" }` | Cooperative kill — fires worker's AbortController. `KILL` is not on the wire; it's a `worker.terminate()`. |
 | `_proc_msg` | `{ data }` | Custom protocol message from `proc.send(data)`. Bootstrap delivers `data` to `ctx.on` handlers in module-service mode. |
 | `_proc_vfs_reply` | `{ id, ok, value? \| error? }` | Reply to a previously-sent `_proc_vfs_call`. Host dispatches the call to the relevant backend and posts the result (or a serialized error with `{ message, code?, path? }`). |
+| `_proc_tty_key` | `{ key }` | Phase C: a key event from the host's TTY. Worker delivers it to the next `ctx.tty.keys()` pull (or queues). |
+| `_proc_tty_mouse` | `{ event }` | Phase C: a mouse event. Same buffering as keys. |
+| `_proc_tty_resize` | `{ rows, cols }` | Phase C: terminal resized. Worker updates the cached `ctx.tty.size()` and fans out to `onResize(cb)` subscribers. |
 
 ### 4.2 Worker → Host
 
@@ -204,6 +252,7 @@ All messages between host and worker use a plain object with a `type` field. Lif
 | `_proc_stderr` | `{ data }` | `ctx.stderr(text)` from inside the worker. |
 | `_proc_msg` | `{ data }` | `ctx.send(data)` from inside the worker (module-service mode). |
 | `_proc_vfs_call` | `{ id, mountPath, method, args }` | Worker's `ProxyBackend` invoking a backend method on the host. Host dispatches to the relevant mount's backend and posts `_proc_vfs_reply` with the matching `id`. |
+| `_proc_tty_write` | `{ data }` | Phase C: fire-and-forget. Host invokes `hostTty.write(data)` directly. No reply. |
 
 ### 4.3 Custom message wrapping
 
@@ -437,9 +486,8 @@ Tests use the `@gcu/proc/node` shim. No browser harness needed for the Phase A o
 
 ## 11. Roadmap
 
-Phases A (0.1.x) and B (0.2.x) have shipped. The remaining phases sit in `spec_inbox/os/proc-spec.md` for design reference; here are the headlines:
+Phases A (0.1.x), B (0.2.x), and C (0.3.x) have shipped. The remaining phases sit in `spec_inbox/os/proc-spec.md` for design reference; here are the headlines:
 
-- **Phase C — TTY proxy**: `{ tty }` in spawn options forwards `@gcu/term` input/output between main thread and worker. Lets TUI apps (pagers, editors) run in a worker without freezing the UI.
 - **Phase D — Shell-mode integration**: `{ coreutils }` enables `pm.spawn("awk -F, ...")`. Replaces geas's worker-shim execution path. Real `&` / `jobs` / `fg` / `bg` in geas via the process table.
 - **Phase E — Daemons + service registry**: `pm.daemon(name, handler, opts)`. Long-running named services with request/response (`pm.request(name, msg)`), restart policies (`never` / `on-crash` / `always`), exponential backoff. Builds on module-service mode.
 - **Phase F — Remote / mesh execution**: `{ remote: { peer, via: mesh } }` in spawn options. Same Process surface, different execution backend.
@@ -450,14 +498,15 @@ Phases A (0.1.x) and B (0.2.x) have shipped. The remaining phases sit in `spec_i
 - Streaming reads (`createReadStream` over the RPC) — useful for piping large files into worker processing without buffering the whole file in the proxy protocol.
 - VFS-path module loading — `spawn({ module: '/scripts/x.js', fn: 'run' })` reads the module source through the host VFS, hands it to the worker bootstrap. Currently throws because the dynamic-import-from-VFS plumbing isn't in 0.2.0.
 
-## 12. Out of scope for 0.2.x
+## 12. Out of scope for 0.3.x
 
-These are explicitly NOT in 0.2.0 and should produce hard errors (not silent stubs) if invoked:
+These are explicitly NOT in 0.3.0 and should produce hard errors (not silent stubs) if invoked:
 
 - `{ coreutils }` → throws "shell mode requires @gcu/proc Phase D."
 - `pm.spawn(string)` (shell mode) → throws "shell mode requires @gcu/proc Phase D."
 - `pm.daemon(...)` → throws "daemons require @gcu/proc Phase E."
-- `{ tty }` in spawn options → throws "tty proxy requires @gcu/proc Phase C."
+- `{ tty }` in function or module-call mode → throws (TTY is service-mode only).
+- `{ tty }` without `write`/`size`/`onKey` methods → throws shape-validation error.
 - `{ remote }` in spawn options → throws "remote execution requires @gcu/proc Phase F."
 - `module-call` with a VFS path (not a URL) → throws "VFS-path modules not supported yet" (deferred to a 0.2.x point release, see §11).
 
@@ -465,7 +514,7 @@ Each error mentions the phase that would unlock it.
 
 ## 13. Versioning
 
-Pre-1.0. Wire protocol (`_proc_*` namespace, message shapes) and public API (`ProcessManager`, `Process`, `Pool`) may shift before 1.0. Tag `0.1.x` covered Phase A; `0.2.x` is Phase A + Phase B. Point releases under `0.2.x` add Phase B follow-ups (see §11) without breaking the constructor or wire protocol. Phase C onward will land in `0.3.x` and may break the constructor signature if needed.
+Pre-1.0. Wire protocol (`_proc_*` namespace, message shapes) and public API (`ProcessManager`, `Process`, `Pool`) may shift before 1.0. Tag history: `0.1.x` = Phase A, `0.2.x` = A + B, `0.3.x` = A + B + C. Point releases under each minor add follow-ups without breaking the constructor or wire protocol. Phase D onward will land in `0.4.x` and may break the constructor signature if needed.
 
 ## 14. License
 

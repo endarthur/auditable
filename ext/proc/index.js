@@ -392,6 +392,13 @@ function _makeProxyBackend(BackendCls) {
   let exited = false;
   let intReceived = false;
   let _workerVfs = null;
+  let _workerTty = null;          // Phase C: ctx.tty proxy (service modes only)
+  const _ttyKeyQueue = [];        // backlog for keys() iterator
+  const _ttyKeyWaiters = [];      // pending promise resolvers
+  const _ttyMouseQueue = [];
+  const _ttyMouseWaiters = [];
+  const _ttyResizeListeners = [];
+  let _ttySize = { rows: 24, cols: 80 };
 
   function exit(code = 0) {
     if (exited) return;
@@ -439,6 +446,12 @@ function _makeProxyBackend(BackendCls) {
           return;
         }
       }
+      // Phase C: seed initial size + build the ctx.tty proxy before
+      // dispatchInit so the entry sees ctx.tty if requested.
+      if (msg.tty) {
+        if (msg.ttySize) _ttySize = msg.ttySize;
+        _workerTty = buildWorkerTty();
+      }
       await dispatchInit(msg);
       return;
     }
@@ -472,6 +485,32 @@ function _makeProxyBackend(BackendCls) {
         w({ value: msg.data, done: !!msg.eof });
       } else {
         STDIN_BUFFER.push({ value: msg.data, done: !!msg.eof });
+      }
+      return;
+    }
+    // Phase C TTY proxy: host forwards keystrokes, mouse events, and
+    // resize notifications. Each becomes an async-iterable item (keys /
+    // mouse) or a subscriber callback fanout (resize).
+    if (msg.type === '_proc_tty_key') {
+      if (_ttyKeyWaiters.length) {
+        _ttyKeyWaiters.shift()(msg.key);
+      } else {
+        _ttyKeyQueue.push(msg.key);
+      }
+      return;
+    }
+    if (msg.type === '_proc_tty_mouse') {
+      if (_ttyMouseWaiters.length) {
+        _ttyMouseWaiters.shift()(msg.event);
+      } else {
+        _ttyMouseQueue.push(msg.event);
+      }
+      return;
+    }
+    if (msg.type === '_proc_tty_resize') {
+      _ttySize = { rows: msg.rows || 24, cols: msg.cols || 80 };
+      for (const cb of _ttyResizeListeners) {
+        try { cb(_ttySize); } catch (_) {}
       }
       return;
     }
@@ -519,12 +558,43 @@ function _makeProxyBackend(BackendCls) {
     _workerVfs = vfs;
   }
 
+  // Build the worker-side tty proxy. Caller-provided host tty events
+  // (key, mouse, resize) arrive via _proc_tty_* messages and are drained
+  // into the queues + waiter callbacks above; .write() posts a
+  // _proc_tty_write back to the host. Size is cached, no round-trip.
+  function buildWorkerTty() {
+    async function* makeIter(queue, waiters) {
+      while (true) {
+        if (queue.length) {
+          yield queue.shift();
+        } else {
+          yield await new Promise((r) => waiters.push(r));
+        }
+      }
+    }
+    return {
+      write(data) { _post({ type: '_proc_tty_write', data }); },
+      size() { return { rows: _ttySize.rows, cols: _ttySize.cols }; },
+      keys() { return makeIter(_ttyKeyQueue, _ttyKeyWaiters); },
+      mouse() { return makeIter(_ttyMouseQueue, _ttyMouseWaiters); },
+      onResize(cb) {
+        if (typeof cb !== 'function') return () => {};
+        _ttyResizeListeners.push(cb);
+        return () => {
+          const i = _ttyResizeListeners.indexOf(cb);
+          if (i >= 0) _ttyResizeListeners.splice(i, 1);
+        };
+      },
+    };
+  }
+
   function makeServiceCtx() {
     return {
       signal: ABORT.signal,
       stdout: ctxStdout,
       stderr: ctxStderr,
       vfs: _workerVfs,
+      tty: _workerTty,
       send: (data, transfer) => {
         _post({ type: '_proc_msg', data }, transfer || autoTransfer(data));
       },
@@ -643,7 +713,7 @@ function _makeProxyBackend(BackendCls) {
 
 
 class Process {
-  constructor({ pid, mode, worker, cleanup, command, vfs }) {
+  constructor({ pid, mode, worker, cleanup, command, vfs, tty }) {
     this.pid = pid;
     this.mode = mode;
     this.command = command || '';
@@ -657,6 +727,8 @@ class Process {
     this._worker = worker;
     this._cleanup = cleanup || (() => {});
     this._vfs = vfs || null;        // host VFS for _proc_vfs_call dispatch
+    this._tty = tty || null;        // host tty for _proc_tty_* event forwarding
+    this._ttyUnsubs = [];           // event-subscription cleanup fns
     this._exitWaiters = [];
     this._msgHandlers = new Set();
     this._readySignal = null;          // resolved by READY message
@@ -674,6 +746,37 @@ class Process {
       worker.addEventListener('error', (e) => this._onWorkerError(e));
     } else if (typeof worker.on === 'function') {
       worker.on('error', (e) => this._onWorkerError(e));
+    }
+
+    // Phase C TTY proxy: if a host tty was supplied, subscribe to its
+    // input events and forward them to the worker as _proc_tty_* messages.
+    // Worker→host writes are handled in _onMessage's _proc_tty_write case.
+    if (this._tty) this._wireTty(this._tty);
+  }
+
+  _wireTty(tty) {
+    const post = (m) => this._post(m);
+    if (typeof tty.onKey === 'function') {
+      try {
+        const u = tty.onKey((key) => post({ type: '_proc_tty_key', key }));
+        if (typeof u === 'function') this._ttyUnsubs.push(u);
+      } catch (_) { /* host onKey threw — skip */ }
+    }
+    if (typeof tty.onMouse === 'function') {
+      try {
+        const u = tty.onMouse((event) => post({ type: '_proc_tty_mouse', event }));
+        if (typeof u === 'function') this._ttyUnsubs.push(u);
+      } catch (_) {}
+    }
+    if (typeof tty.onResize === 'function') {
+      try {
+        const u = tty.onResize((sz) => {
+          const rows = (sz && sz.rows) || 24;
+          const cols = (sz && sz.cols) || 80;
+          post({ type: '_proc_tty_resize', rows, cols });
+        });
+        if (typeof u === 'function') this._ttyUnsubs.push(u);
+      } catch (_) {}
     }
   }
 
@@ -775,6 +878,13 @@ class Process {
         // a serialized error.
         this._handleVfsCall(msg);
         return;
+      case '_proc_tty_write':
+        // Phase C TTY proxy: worker is asking the host tty to render data
+        // (bytes, escape sequences, etc). Fire-and-forget; no reply.
+        if (this._tty && typeof this._tty.write === 'function') {
+          try { this._tty.write(msg.data); } catch { /* swallow */ }
+        }
+        return;
       default:
         // Unknown lifecycle messages are ignored — gives the protocol
         // room to grow.
@@ -851,6 +961,13 @@ class Process {
 
     if (this._killTimer) { clearTimeout(this._killTimer); this._killTimer = null; }
     if (this._timeoutTimer) { clearTimeout(this._timeoutTimer); this._timeoutTimer = null; }
+
+    // Phase C: drop our tty event subscriptions so the host tty doesn't
+    // keep firing into a dead Process.
+    for (const u of this._ttyUnsubs) {
+      try { u(); } catch { /* swallow */ }
+    }
+    this._ttyUnsubs = [];
 
     if (this._detachMessage) {
       try { this._detachMessage(); } catch { /* ignore */ }
@@ -1197,15 +1314,31 @@ class ProcessManager {
       return Promise.reject(new Error('proc: manager is shut down'));
     }
 
-    // Hard errors for Phase A out-of-scope inputs.
+    // Hard errors for out-of-scope inputs.
     if (typeof payload === 'string') {
-      throw new Error('proc: shell mode (string command) requires @gcu/proc Phase D (not in 0.1.x)');
-    }
-    if (opts.tty !== undefined) {
-      throw new Error('proc: { tty } requires @gcu/proc Phase C (not in 0.1.x)');
+      throw new Error('proc: shell mode (string command) requires @gcu/proc Phase D (not in 0.3.x)');
     }
     if (opts.remote !== undefined) {
-      throw new Error('proc: { remote } requires @gcu/proc Phase F (not in 0.1.x)');
+      throw new Error('proc: { remote } requires @gcu/proc Phase F (not in 0.3.x)');
+    }
+
+    // Phase C TTY proxy: only honored in service modes (module-service /
+    // inline-service) — function/module-call modes return a value and
+    // terminate; interactive TUI semantics don't apply there.
+    if (opts.tty !== undefined) {
+      if (typeof payload === 'function') {
+        throw new Error('proc: { tty } is not supported in function mode — use module-service or inline-service');
+      }
+      if (payload && typeof payload === 'object' && payload.module && payload.fn) {
+        throw new Error('proc: { tty } is not supported in module-call mode — use module-service or inline-service');
+      }
+      // Sanity-check the shape — caller-provided host tty must at least
+      // have write, size, and onKey.
+      if (typeof opts.tty.write !== 'function' ||
+          typeof opts.tty.size !== 'function' ||
+          typeof opts.tty.onKey !== 'function') {
+        throw new TypeError('proc: opts.tty must implement write(data), size(), and onKey(cb)');
+      }
     }
 
     const initMsg = this._buildInitMessage(payload, opts);
@@ -1316,6 +1449,16 @@ class ProcessManager {
         }
       : {};
 
+    // TTY proxy: caller-provided host tty. Embed the initial size in the
+    // init message so the worker's ctx.tty.size() has a value before any
+    // resize event arrives.
+    const ttyExtras = opts.tty
+      ? { tty: true, ttySize: (() => {
+          try { return opts.tty.size() || { rows: 24, cols: 80 }; }
+          catch (_) { return { rows: 24, cols: 80 }; }
+        })() }
+      : {};
+
     if (typeof payload === 'function') {
       return {
         wire: {
@@ -1371,6 +1514,7 @@ class ProcessManager {
           mode: MODE.SERVICE,
           url: payload.module,
           ...vfsExtras,
+          ...ttyExtras,
         },
         transfer: [],
         mode: MODE.SERVICE,
@@ -1394,6 +1538,7 @@ class ProcessManager {
           type: MSG.INIT,
           mode: MODE.INLINE_SERVICE,
           ...vfsExtras,
+          ...ttyExtras,
         },
         transfer: [],
         mode: MODE.INLINE_SERVICE,
@@ -1435,6 +1580,7 @@ class ProcessManager {
       cleanup,
       command: initMsg.command,
       vfs: this._vfs,                // for _proc_vfs_call dispatch (Phase B)
+      tty: opts.tty || null,         // for _proc_tty_* event forwarding (Phase C)
     });
     proc._killGrace = opts.killGrace || this._killGrace;
 

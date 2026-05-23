@@ -108,15 +108,31 @@ export class ProcessManager {
       return Promise.reject(new Error('proc: manager is shut down'));
     }
 
-    // Hard errors for Phase A out-of-scope inputs.
+    // Hard errors for out-of-scope inputs.
     if (typeof payload === 'string') {
-      throw new Error('proc: shell mode (string command) requires @gcu/proc Phase D (not in 0.1.x)');
-    }
-    if (opts.tty !== undefined) {
-      throw new Error('proc: { tty } requires @gcu/proc Phase C (not in 0.1.x)');
+      throw new Error('proc: shell mode (string command) requires @gcu/proc Phase D (not in 0.3.x)');
     }
     if (opts.remote !== undefined) {
-      throw new Error('proc: { remote } requires @gcu/proc Phase F (not in 0.1.x)');
+      throw new Error('proc: { remote } requires @gcu/proc Phase F (not in 0.3.x)');
+    }
+
+    // Phase C TTY proxy: only honored in service modes (module-service /
+    // inline-service) — function/module-call modes return a value and
+    // terminate; interactive TUI semantics don't apply there.
+    if (opts.tty !== undefined) {
+      if (typeof payload === 'function') {
+        throw new Error('proc: { tty } is not supported in function mode — use module-service or inline-service');
+      }
+      if (payload && typeof payload === 'object' && payload.module && payload.fn) {
+        throw new Error('proc: { tty } is not supported in module-call mode — use module-service or inline-service');
+      }
+      // Sanity-check the shape — caller-provided host tty must at least
+      // have write, size, and onKey.
+      if (typeof opts.tty.write !== 'function' ||
+          typeof opts.tty.size !== 'function' ||
+          typeof opts.tty.onKey !== 'function') {
+        throw new TypeError('proc: opts.tty must implement write(data), size(), and onKey(cb)');
+      }
     }
 
     const initMsg = this._buildInitMessage(payload, opts);
@@ -227,6 +243,16 @@ export class ProcessManager {
         }
       : {};
 
+    // TTY proxy: caller-provided host tty. Embed the initial size in the
+    // init message so the worker's ctx.tty.size() has a value before any
+    // resize event arrives.
+    const ttyExtras = opts.tty
+      ? { tty: true, ttySize: (() => {
+          try { return opts.tty.size() || { rows: 24, cols: 80 }; }
+          catch (_) { return { rows: 24, cols: 80 }; }
+        })() }
+      : {};
+
     if (typeof payload === 'function') {
       return {
         wire: {
@@ -282,6 +308,7 @@ export class ProcessManager {
           mode: MODE.SERVICE,
           url: payload.module,
           ...vfsExtras,
+          ...ttyExtras,
         },
         transfer: [],
         mode: MODE.SERVICE,
@@ -305,6 +332,7 @@ export class ProcessManager {
           type: MSG.INIT,
           mode: MODE.INLINE_SERVICE,
           ...vfsExtras,
+          ...ttyExtras,
         },
         transfer: [],
         mode: MODE.INLINE_SERVICE,
@@ -346,6 +374,7 @@ export class ProcessManager {
       cleanup,
       command: initMsg.command,
       vfs: this._vfs,                // for _proc_vfs_call dispatch (Phase B)
+      tty: opts.tty || null,         // for _proc_tty_* event forwarding (Phase C)
     });
     proc._killGrace = opts.killGrace || this._killGrace;
 
