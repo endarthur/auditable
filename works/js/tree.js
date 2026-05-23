@@ -9,7 +9,7 @@ import { WKS, setStatus } from './state.js';
 import { Menu } from '#menu';
 import { prompt as dlgPrompt, confirm as dlgConfirm } from '#dialog';
 import { kindDef } from './surface-registry.js';
-import { openPath } from './surfaces.js';
+import { openPath, spawnSurface } from './surfaces.js';
 import { unmountAt } from './mount.js';
 import { importFileAsNotebook } from './import.js';
 import { exportProject } from './project-export.js';
@@ -169,6 +169,7 @@ async function showMenu(e, path, type) {
   const extras = [];
   if (type === 'project') extras.push({ label: 'Open',                  action: 'open' });
   extras.push(                          { label: 'Copy path',           action: 'copy-path' });
+  if (type === 'folder')  extras.push({ label: 'Open terminal here',    action: 'terminal-here' });
   if (type === 'project') extras.push({ label: 'Export as notebook…',   action: 'export' });
   if (type === 'file' && IMPORTABLE_RE.test(basename(path)))
     extras.push(                        { label: 'Import as notebook',  action: 'import-file' });
@@ -194,6 +195,8 @@ async function showMenu(e, path, type) {
   else if (action === 'new-folder')  newFolder(dir);
   else if (action === 'new-file')    newFile(dir);
   else if (action === 'copy-path')   copyPath(path);
+  else if (action === 'terminal-here') spawnSurface('terminal',
+    { path, title: 'Terminal — ' + basename(path) });
   else if (action === 'export')      exportProject(path);
   else if (action === 'import-file') importFileAsNotebook(path);
   else if (action === 'rename')      renameEntry(path, type);

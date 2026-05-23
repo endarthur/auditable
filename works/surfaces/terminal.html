@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Terminal</title>
+<style>
+/* xterm.css — inlined at build */
+/* @xterm-css */
+
+html, body { margin: 0; padding: 0; height: 100%; overflow: hidden;
+  background: #0a0a0a; color: #e0e0e0;
+  font: 13px Menlo, Consolas, "Courier New", monospace; }
+#term { width: 100%; height: 100%; padding: 4px; box-sizing: border-box; }
+.term-error { padding: 12px; color: #f88; font: 12px Menlo, Consolas, monospace; }
+</style>
+</head>
+<body>
+<div id="term"></div>
+<!-- Worker payload — gzip+base64 of the geas bundle + a setupGeasWorker
+     wrapper. Decompressed at boot to a blob URL the surface spawns as a
+     classic Web Worker. -->
+<!-- @worker-payload -->
+<script type="module">
+import { connect } from '../../ext/abus/index.js';
+import { VFS, AbusBackend, MemoryBackend } from '../../ext/vfs/index.js';
+import { Terminal, FitAddon } from '../../ext/xterm/index.js';
+import { createGeasClient, createXtermAdapter, makeLineEditor } from '../../ext/geas/index.js';
+
+// Decompress the embedded worker payload to a blob URL.
+async function workerBlobUrl() {
+  const b64 = document.getElementById('worker-payload').textContent.replace(/\s/g, '');
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  const src = await new Response(
+    new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).text();
+  return URL.createObjectURL(new Blob([src], { type: 'application/javascript' }));
+}
+
+function showError(msg) {
+  document.body.innerHTML = '<div class="term-error">terminal error: '
+    + String(msg).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+    + '</div>';
+}
+
+// Wait for the shell's abus:welcome.
+window.addEventListener('message', async (ev) => {
+  if (ev.source !== window.parent || !ev.data) return;
+  if (ev.data.type !== 'abus:welcome') return;
+
+  let bus;
+  try { bus = await connect(ev.data.port, { client: 'terminal' }); }
+  catch (e) { showError('A-Bus connect failed: ' + e.message); return; }
+
+  const tab = ev.data.tab || {};
+  const startCwd = tab.path && tab.path !== '/' ? tab.path : '/home';
+
+  // xterm.js Terminal with a fit addon — match the GCU dark palette.
+  const term = new Terminal({
+    fontSize: 13,
+    fontFamily: 'Menlo, Consolas, "Courier New", monospace',
+    cursorBlink: true,
+    convertEol: true,
+    theme: {
+      background: '#0a0a0a', foreground: '#e0e0e0', cursor: '#e0e0e0',
+      black: '#0a0a0a', red: '#e06060', green: '#80c080', yellow: '#e0c060',
+      blue: '#7090e0', magenta: '#c080c0', cyan: '#60c0c0', white: '#e0e0e0',
+      brightBlack: '#606060', brightRed: '#ff8080', brightGreen: '#a0e0a0',
+      brightYellow: '#ffe080', brightBlue: '#90b0ff', brightMagenta: '#e0a0e0',
+      brightCyan: '#80e0e0', brightWhite: '#ffffff',
+    },
+  });
+  const fit = new FitAddon();
+  term.loadAddon(fit);
+  term.open(document.getElementById('term'));
+  fit.fit();
+  window.addEventListener('resize', () => { try { fit.fit(); } catch { /* */ } });
+
+  const adapter = createXtermAdapter({ terminal: term });
+  const readLine = makeLineEditor(adapter);
+
+  // Surface-side VFS: A-Bus proxy to the workspace, plus a volatile /tmp.
+  // The geas worker reaches files through this via serveVFS, which
+  // createGeasClient wires up internally.
+  const vfs = new VFS();
+  vfs._mounts.set('/', new AbusBackend({ bus, service: 'works' }));
+  vfs._mounts.set('/tmp', new MemoryBackend());
+
+  // Spawn the worker + the geas client.
+  let worker, client;
+  try {
+    worker = new Worker(await workerBlobUrl());
+    client = createGeasClient({
+      worker,
+      vfs,
+      env: { HOME: '/home', PS1: '$ ' },
+      cwd: startCwd,
+      onStdout: adapter.write,
+      onStderr: adapter.write,
+      onBlock:  adapter.writeBlock,
+      onWantInput: readLine,
+    });
+    await client.ready();
+  } catch (e) {
+    showError('geas init failed: ' + (e.message || e));
+    return;
+  }
+
+  // The REPL — calls into the worker through client.exec, prints the prompt
+  // between commands. makeLineEditor handles echo + history + line edits;
+  // readLine is serialised (REPL awaits exec; exec may itself await readLine
+  // mid-script via onWantInput; no concurrent subscribers).
+  (async () => {
+    adapter.write('\x1b[2mwelcome to geas. cwd ' + startCwd + '\x1b[0m\r\n');
+    for (;;) {
+      let r;
+      try { r = await readLine({ prompt: '$ ' }); }
+      catch (e) { adapter.write('\r\n[readline error: ' + (e.message || e) + ']\r\n'); break; }
+      if (r.eof) break;
+      const line = (r.line || '').trim();
+      if (!line) continue;
+      try { await client.exec(line); }
+      catch (e) { adapter.write('\r\nerror: ' + (e.message || e) + '\r\n'); }
+    }
+  })();
+
+  // §5.2 Surface contract.
+  bus.expose('/', {
+    Surface: {
+      methods: {
+        Flush:     () => { /* terminals have no document to flush */ },
+        CanClose:  () => true,
+        Relocated: () => { /* nothing to do — geas's cwd is independent */ },
+      },
+      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
+    },
+  });
+  const basename = (p) => p.split('/').filter(Boolean).pop() || p;
+  const title = startCwd === '/home' ? 'Terminal' : 'Terminal — ' + basename(startCwd);
+  bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, [title]);
+  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
+
+  // Test hooks — surface-internal, only intended for works-smoke.
+  window._term = term;
+  window._geasClient = client;
+
+  term.focus();
+});
+</script>
+</body>
+</html>

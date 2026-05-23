@@ -29,6 +29,9 @@ export function setupMenuBar() {
     { label: 'View', items: () => [
       { label: 'Toggle sidebar', action: 'view:sidebar' },
     ] },
+    { label: 'Tools', items: () => [
+      { label: 'Terminal', action: 'tools:terminal' },
+    ] },
     { label: 'Debug', items: () => [
       { label: 'New stub surface', action: 'debug:stub' },
       { label: 'A-Bus inspector', action: 'debug:inspector' },
@@ -50,6 +53,10 @@ export function setupMenuBar() {
       if (await dlgConfirm('Discard the current workspace and start fresh?', { danger: true })) {
         await resetWorkspace();
       }
+      return;
+    }
+    if (action === 'tools:terminal') {
+      spawnSurface('terminal', { title: 'Terminal' });
       return;
     }
     if (action === 'debug:stub') {

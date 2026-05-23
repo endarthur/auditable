@@ -67,6 +67,11 @@ registerKind('notebook', { label: 'Notebook', icon: '▦', extensions: [] });
 
 registerKind('stub', { label: 'Stub project', icon: '◈', extensions: [] });
 
+// A geas terminal — multi-instance, path-less, spawned from Tools → Terminal
+// or right-click-folder → Open terminal here. Each tab is its own Web Worker
+// running a geas shell with the workspace VFS proxied in.
+registerKind('terminal', { label: 'Terminal', icon: '▶', extensions: [] });
+
 // The text editor — the loose-file surface. Opens any plain-text file.
 registerKind('text', {
   label:      'Text file',

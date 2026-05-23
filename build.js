@@ -111,30 +111,88 @@ if (target === 'works') {
   // the §15.1 duplication cost; §15.2 dynamic linking dedups it later.)
   const worksZlib = require('zlib');
 
-  function inlineSurfaceAbus(html, name) {
-    // The small surfaces import @gcu/abus and nothing else — inline it so
-    // each is fully self-contained (no cross-file imports, which file://
-    // would CORS-block).
+  function inlineSurfaceImports(html, name, allowDeps) {
+    // Inline the surface's ESM imports into the page so it is fully
+    // self-contained — no cross-file imports, which file:// would CORS-
+    // block. Each surface declares its allow-list of `ext/<dep>/index.js`
+    // dependencies; any stray import errors out the build.
     const imports = html.match(/^\s*import\s[^\n]*$/gm) || [];
-    const stray = imports.filter((i) => !/ext\/abus\/index\.js/.test(i));
+    const stray = imports.filter((i) =>
+      !allowDeps.some((d) => i.includes(`ext/${d}/index.js`)));
     if (stray.length) {
-      console.error(`Error: surface ${name} has imports beyond @gcu/abus — cannot embed:\n  `
-        + stray.join('\n  '));
+      console.error(`Error: surface ${name} has stray imports — allow-list is `
+        + `[${allowDeps.join(', ')}]:\n  ` + stray.join('\n  '));
       process.exit(1);
     }
-    const abusSrc = fs.readFileSync(path.join(__dirname, 'ext/abus/index.js'), 'utf8')
-      .replace(/^export\s*\{[\s\S]*?\};\s*$/m, '');
-    return html.replace(
-      /import\s*\{[^}]*\}\s*from\s*['"][^'"]*ext\/abus\/index\.js['"];?/,
-      '/* @gcu/abus — inlined for a self-contained surface */\n' + abusSrc);
+    let out = html;
+    for (const dep of allowDeps) {
+      const depPath = path.join(__dirname, 'ext', dep, 'index.js');
+      if (!fs.existsSync(depPath)) {
+        console.error(`Error: ext/${dep}/index.js not found — build it first`);
+        process.exit(1);
+      }
+      // Rewrite the bundle's trailing named-export list to local consts so
+      // the surface module can use the exported names. Necessary for
+      // terser-mangled ESM bundles (xterm: `export{mn as FitAddon}`); a
+      // plain strip would lose those names. For concat bundles whose
+      // exports are already top-level (geas/vfs/abus), `as`-less entries
+      // become harmless no-op `const Foo = Foo;` (redundant but valid).
+      const src = fs.readFileSync(depPath, 'utf8')
+        .replace(/export\s*\{([^}]+)\};?\s*$/, (_, body) => {
+          const aliases = body.split(',').map((s) => s.trim()).filter(Boolean)
+            .map((decl) => {
+              const m = decl.match(/^(\S+)\s+as\s+(\S+)$/);
+              return m ? `const ${m[2]} = ${m[1]};` : `;`;   // already top-level
+            }).join('\n');
+          return '\n' + aliases + '\n';
+        });
+      const re = new RegExp(
+        `import\\s*\\{[^}]*\\}\\s*from\\s*['"][^'"]*ext/${dep}/index\\.js['"];?`);
+      // Replacement function (not string) — String.prototype.replace treats
+      // $&, $', $`, etc. in a *string* replacement as special tokens. The
+      // vfs bundle contains literal `'$'` (a regex anchor in a string), so
+      // a string replacement would have `$'` re-interpreted as "after-match
+      // text" and corrupt the inlined output. A function replacement gets
+      // its return value used verbatim.
+      const banner = `/* @gcu/${dep} — inlined for a self-contained surface */\n`;
+      out = out.replace(re, () => banner + src);
+    }
+    return out;
+  }
+
+  // Terminal-specific build extras: inline xterm.css into the <style> tag
+  // and embed the geas worker payload (geas bundle + setupGeasWorker
+  // wrapper) as a gzip+base64 <script type="text/plain"> the surface
+  // decompresses to a blob URL on boot.
+  function buildTerminalSurfaceExtras(html) {
+    const css = fs.readFileSync(path.join(__dirname, 'ext/xterm/xterm.css'), 'utf8');
+    html = html.replace('/* @xterm-css */', css);
+
+    const geasPath = path.join(__dirname, 'ext/geas/index.js');
+    if (!fs.existsSync(geasPath)) {
+      console.error('Error: ext/geas/index.js not found — build geas first');
+      process.exit(1);
+    }
+    const geasSrc = fs.readFileSync(geasPath, 'utf8')
+      .replace(/export\s*\{[^}]*\};?\s*$/, '');   // worker has no consumer
+    // — strip is fine; createShell/isTyped are top-level in the bundle.
+    // Inside the worker, createShell + isTyped are top-level after the
+    // export line is stripped. The wrapper hands them to setupGeasWorker.
+    const workerSrc = geasSrc + '\nsetupGeasWorker(self, { createShell, isTyped });\n';
+    const gz = worksZlib.gzipSync(Buffer.from(workerSrc, 'utf8'));
+    const b64 = gz.toString('base64').replace(/.{1,76}/g, '$&\n');
+    return html.replace('<!-- @worker-payload -->',
+      `<script type="text/plain" id="worker-payload">\n${b64}\n</script>`);
   }
 
   const surfaceParts = [];
   for (const s of [
-    { kind: 'stub',      file: 'works/surfaces/stub.html',      inline: true },
-    { kind: 'text',      file: 'works/surfaces/text.html',      inline: true },
-    { kind: 'inspector', file: 'works/surfaces/inspector.html', inline: true },
-    { kind: 'notebook',  file: 'auditable.html',                inline: false },
+    { kind: 'stub',      file: 'works/surfaces/stub.html',      deps: ['abus'] },
+    { kind: 'text',      file: 'works/surfaces/text.html',      deps: ['abus'] },
+    { kind: 'inspector', file: 'works/surfaces/inspector.html', deps: ['abus'] },
+    { kind: 'terminal',  file: 'works/surfaces/terminal.html',
+      deps: ['abus', 'vfs', 'xterm', 'geas'], extras: 'terminal' },
+    { kind: 'notebook',  file: 'auditable.html',                deps: null },
   ]) {
     const sp = path.join(__dirname, s.file);
     if (!fs.existsSync(sp)) {
@@ -143,7 +201,8 @@ if (target === 'works') {
       process.exit(1);
     }
     let surfaceHtml = fs.readFileSync(sp, 'utf8');
-    if (s.inline) surfaceHtml = inlineSurfaceAbus(surfaceHtml, s.kind);
+    if (s.deps) surfaceHtml = inlineSurfaceImports(surfaceHtml, s.kind, s.deps);
+    if (s.extras === 'terminal') surfaceHtml = buildTerminalSurfaceExtras(surfaceHtml);
     const gz = worksZlib.gzipSync(Buffer.from(surfaceHtml, 'utf8'));
     const b64 = gz.toString('base64').replace(/.{1,76}/g, '$&\n');
     surfaceParts.push(`<script type="text/plain" id="surface-${s.kind}">\n${b64}\n</script>`);

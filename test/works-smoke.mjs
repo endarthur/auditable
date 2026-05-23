@@ -410,6 +410,49 @@ if (realFrame) {
   realCells = await realFrame.evaluate(() => ((window.S && window.S.cells) || []).length);
 }
 
+// ── Terminal surface — geas in a worker, xterm.js display ─────────────
+// Spawn the terminal, wait for Ready (worker boot + geas init), then drive
+// `echo` and `ls /projects` through the client and confirm both the
+// builtin output and a VFS-proxied readdir reach the xterm buffer.
+const termOpen = await page.evaluate(async () => {
+  const W = window.WKS;
+  const tabId = W.spawnSurface('terminal', { title: 'Terminal' });
+  const rec = W.surfaces.get(tabId);
+  const deadline = Date.now() + 30000;
+  while (rec && !rec.ready && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return { tabId, ready: !!(rec && rec.ready) };
+});
+
+const termFrame = await surfaceFrame(termOpen.tabId);
+let termRun = { error: 'no frame' };
+if (termFrame) {
+  termRun = await termFrame.evaluate(async () => {
+    const client = window._geasClient;
+    const term = window._term;
+    if (!client || !term) return { error: 'no test hook' };
+    const snapshot = () => {
+      const buf = term.buffer.active;
+      let text = '';
+      for (let i = 0; i < buf.length; i++) {
+        text += buf.getLine(i).translateToString(true) + '\n';
+      }
+      return text;
+    };
+    try { await client.exec('echo hello-from-smoke'); }
+    catch (e) { return { error: 'echo failed: ' + e.message }; }
+    await new Promise((r) => setTimeout(r, 150));   // let stdout flush
+
+    // ls /projects exercises the surface VFS → A-Bus → workspace path.
+    try { await client.exec('ls /projects'); }
+    catch (e) { return { error: 'ls failed: ' + e.message }; }
+    await new Promise((r) => setTimeout(r, 150));
+
+    return { text: snapshot() };
+  });
+}
+
 // ── Tree context actions — New file / Export project / Import file ────
 const ctx = await page.evaluate(async () => {
   const W = window.WKS;
@@ -487,6 +530,21 @@ const fileMode = await page.evaluate(async () => {
     await new Promise((r) => setTimeout(r, 50));
   }
   return { booted: true, proto: location.protocol, surfaceReady: !!(rec && rec.ready) };
+});
+
+// A terminal surface must also boot from file:// — the geas Worker is
+// spawned from a blob URL the surface decompresses, which has its own
+// blob:file:// origin caveats.
+const fileTermOpen = await page.evaluate(async () => {
+  const W = window.WKS;
+  if (!W || !W.vfs) return { ready: false };
+  const tabId = W.spawnSurface('terminal', { title: 'Terminal' });
+  const rec = W.surfaces.get(tabId);
+  const deadline = Date.now() + 25000;
+  while (rec && !rec.ready && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return { ready: !!(rec && rec.ready) };
 });
 
 // A notebook surface must also boot from file:// — exercises the home-
@@ -570,6 +628,11 @@ const checks = {
   'imported notebook opens as a surface':   importResult.opened
       && importResult.openedKind === 'notebook',
   'imported example boots + hydrates':      realOpen.ready === true && realCells > 0,
+  // Terminal surface
+  'terminal: surface boots':          termOpen.ready === true,
+  'terminal: echo writes to xterm':   termRun.text && termRun.text.includes('hello-from-smoke'),
+  'terminal: ls hits the workspace':  termRun.text
+      && (termRun.text.includes('SmokeNB') || termRun.text.includes('Quad')),
   // Tree context actions
   'tree: New file… creates the file':       ctx.newFileExists
       && ctx.newFilePath === '/projects/ctx-test.csv',
@@ -587,6 +650,7 @@ const checks = {
   'works.html boots from file://':         fileMode.booted && fileMode.proto === 'file:',
   'a surface loads from file://':          fileMode.surfaceReady === true,
   'notebook surface boots from file://':   fileNbOpen.ready === true,
+  'terminal surface boots from file://':   fileTermOpen.ready === true,
 };
 
 console.log('--- works.html (Works rebuild — Chunks 1-3, 5 + surfaces) ---');

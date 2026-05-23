@@ -28,6 +28,8 @@
     "@codemirror/lang-python": "^6.2.1",
     "@rollup/plugin-node-resolve": "^16.0.3",
     "@rollup/plugin-terser": "^1.0.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "js-yaml": "^4.1.1",
     "ol": "^10.8.0",
     "playwright": "^1.59.1",
