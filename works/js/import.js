@@ -165,6 +165,25 @@ export async function importNotebook(content, filename) {
   throw new Error('unsupported file type "' + (ext || filename) + '" — expected .txt or .html');
 }
 
+/**
+ * Right-click → Import as notebook: read an existing VFS file (e.g. an .html
+ * in a mounted folder) and import it as a project, then open it.
+ */
+export async function importFileAsNotebook(path) {
+  try {
+    const last = path.split('/').filter(Boolean).pop() || 'notebook';
+    const content = await WKS.vfs.readFile(path, 'utf8');
+    const projPath = await importNotebook(content, last);
+    setStatus('imported ' + last);
+    await openPath(projPath);
+    return projPath;
+  } catch (e) {
+    console.error('[works] import failed:', e);
+    setStatus('import failed: ' + (e.message || e));
+    return null;
+  }
+}
+
 /** File → Import notebook… — pick a file, import it, open it as a surface. */
 export function importNotebookViaPicker() {
   const input = document.createElement('input');

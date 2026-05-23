@@ -410,6 +410,44 @@ if (realFrame) {
   realCells = await realFrame.evaluate(() => ((window.S && window.S.cells) || []).length);
 }
 
+// ── Tree context actions — New file / Export project / Import file ────
+const ctx = await page.evaluate(async () => {
+  const W = window.WKS;
+
+  // New file… — creates an empty file at a folder path.
+  const newFilePath = await W.newFile('/projects', 'ctx-test.csv');
+  const newFileExists = await W.vfs.exists(newFilePath);
+
+  // Export project → a standalone notebook .html. Pack a project with a
+  // data sibling, then verify the export contains the data block + title,
+  // and round-trips back through importNotebook.
+  await W.newProject('/projects', 'Export Test');
+  await W.vfs.writeFile('/projects/Export Test/data.csv', 'a,b\n1,2\n');
+  const exportedHtml = await W.buildProjectExportHtml('/projects/Export Test');
+  const hasBlock = exportedHtml.includes('<!--AUDITABLE-VFS');
+  const hasTitle = exportedHtml.includes('<title>Auditable — Export Test</title>');
+
+  // Round-trip: re-import the exported HTML as a new project — its data
+  // sibling must come back intact.
+  const rtPath = await W.importNotebook(exportedHtml, 'Export Test.html');
+  const rtData = await W.vfs.readFile(rtPath + '/data.csv', 'utf8');
+
+  // Import as notebook — feed a VFS file (the right-click case for a file
+  // sitting under a mounted folder) through the importer.
+  await W.vfs.writeFile('/home/inline.txt',
+    '/// auditable\n/// title: From File\n\n/// code\ndisplay(42)\n');
+  const fromFilePath = await W.importFileAsNotebook('/home/inline.txt');
+  const fromFileMeta = JSON.parse(
+    await W.vfs.readFile(fromFilePath + '/project.json', 'utf8'));
+
+  return {
+    newFilePath, newFileExists,
+    exportPath: '/projects/Export Test',
+    hasBlock, hasTitle, rtPath, rtDataMatches: rtData === 'a,b\n1,2\n',
+    fromFilePath, fromFileTitle: fromFileMeta.title,
+  };
+});
+
 // ── Workspace export / import round-trip (Chunk 5b) ───────────────────
 // Serialize the live workspace, build a self-contained HTML, then open it —
 // it must boot the desktop over the embedded snapshot.
@@ -532,6 +570,14 @@ const checks = {
   'imported notebook opens as a surface':   importResult.opened
       && importResult.openedKind === 'notebook',
   'imported example boots + hydrates':      realOpen.ready === true && realCells > 0,
+  // Tree context actions
+  'tree: New file… creates the file':       ctx.newFileExists
+      && ctx.newFilePath === '/projects/ctx-test.csv',
+  'tree: Export project builds an .html':   ctx.hasBlock && ctx.hasTitle,
+  'tree: exported .html round-trips':       ctx.rtPath === '/projects/Export Test-2'
+      && ctx.rtDataMatches,
+  'tree: Import file (right-click) works':  ctx.fromFilePath === '/projects/From File'
+      && ctx.fromFileTitle === 'From File',
   // Workspace export / import (Chunk 5b)
   'export builds a self-contained HTML':   exportLooksRight,
   'imported workspace uses a memory home': imported.home === 'memory',

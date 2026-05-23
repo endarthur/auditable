@@ -11,6 +11,10 @@ import { prompt as dlgPrompt, confirm as dlgConfirm } from '#dialog';
 import { kindDef } from './surface-registry.js';
 import { openPath } from './surfaces.js';
 import { unmountAt } from './mount.js';
+import { importFileAsNotebook } from './import.js';
+import { exportProject } from './project-export.js';
+
+const IMPORTABLE_RE = /\.(html?|txt)$/i;
 
 const ROOT = '/';
 // /projects open by default; the rest of the VFS is there, collapsed.
@@ -157,31 +161,72 @@ async function showMenu(e, path, type) {
   const dir = type === 'folder' ? path : parentOf(path);
   const items = [
     { label: 'New notebook…', action: 'new-project' },
-    { label: 'New folder…', action: 'new-folder' },
+    { label: 'New folder…',   action: 'new-folder' },
+    { label: 'New file…',     action: 'new-file' },
   ];
-  // `/` and the mount roots (/projects, /lib, /home, /scratch, /sys, /mnt)
-  // are the workspace's fixed structure — not renamable or deletable. A
-  // /mnt/<name> entry is a disk-folder mount: its action is Unmount (which
-  // leaves the disk content alone), not Rename / Delete (which would touch
-  // the disk).
+
+  // Path-specific actions — open / copy path / per-type extras.
+  const extras = [];
+  if (type === 'project') extras.push({ label: 'Open',                  action: 'open' });
+  extras.push(                          { label: 'Copy path',           action: 'copy-path' });
+  if (type === 'project') extras.push({ label: 'Export as notebook…',   action: 'export' });
+  if (type === 'file' && IMPORTABLE_RE.test(basename(path)))
+    extras.push(                        { label: 'Import as notebook',  action: 'import-file' });
+  if (extras.length) items.push('---', ...extras);
+
+  // Rename / Delete / Unmount — not for `/` or the top-level mount roots.
+  // A /mnt/<name> entry is a disk-folder mount: its action is Unmount (which
+  // leaves the disk content alone), not Delete (which would touch the disk).
   const isMountedFolder = parentOf(path) === '/mnt';
   if (path !== '/' && parentOf(path) !== '/') {
     items.push('---');
-    if (type === 'project') items.push({ label: 'Open', action: 'open' });
     if (isMountedFolder) {
       items.push({ label: 'Unmount', action: 'unmount' });
     } else {
       items.push({ label: 'Rename…', action: 'rename' });
-      items.push({ label: 'Delete', action: 'delete', danger: true });
+      items.push({ label: 'Delete',  action: 'delete', danger: true });
     }
   }
+
   const action = await Menu.show(items, { x: e.clientX, y: e.clientY });
   if (action === 'open') openPath(path);
   else if (action === 'new-project') newProject(dir);
-  else if (action === 'new-folder') newFolder(dir);
-  else if (action === 'rename') renameEntry(path, type);
-  else if (action === 'delete') deleteEntry(path, type);
-  else if (action === 'unmount') unmountEntry(path);
+  else if (action === 'new-folder')  newFolder(dir);
+  else if (action === 'new-file')    newFile(dir);
+  else if (action === 'copy-path')   copyPath(path);
+  else if (action === 'export')      exportProject(path);
+  else if (action === 'import-file') importFileAsNotebook(path);
+  else if (action === 'rename')      renameEntry(path, type);
+  else if (action === 'delete')      deleteEntry(path, type);
+  else if (action === 'unmount')     unmountEntry(path);
+}
+
+async function copyPath(path) {
+  try {
+    await navigator.clipboard.writeText(path);
+    setStatus('copied ' + path);
+  } catch {
+    setStatus('clipboard unavailable');
+  }
+}
+
+export async function newFile(dir, name) {
+  if (name == null) name = await dlgPrompt('New file name:');
+  if (!name) return null;
+  const p = join(dir, sanitize(name));
+  if (await WKS.vfs.exists(p)) {
+    setStatus('already exists: ' + p);
+    return null;
+  }
+  try {
+    await WKS.vfs.mkdir(dir, { recursive: true }).catch(() => {});
+    await WKS.vfs.writeFile(p, '');
+    expanded.add(dir);
+    return p;
+  } catch (e) {
+    setStatus('create failed: ' + e.message);
+    return null;
+  }
 }
 
 async function unmountEntry(path) {

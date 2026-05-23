@@ -8,12 +8,13 @@ import { setupBus } from './bus.js';
 import { setupWorkspace } from './workspace.js';
 import { setupLayout, restoreLayout } from './layout.js';
 import { setupMenuBar } from './menubar.js';
-import { setupTree, refreshTree, newProject } from './tree.js';
+import { setupTree, refreshTree, newProject, newFile } from './tree.js';
 import { setupWorksService } from './works-service.js';
 import { setupSurfaces, spawnSurface, openPath } from './surfaces.js';
 import { decompressSurfaces } from './surface-registry.js';
 import { serializeWorkspace, buildWorksHtml } from './persist.js';
-import { importNotebook } from './import.js';
+import { importNotebook, importFileAsNotebook } from './import.js';
+import { buildProjectExportHtml, exportProject } from './project-export.js';
 import { mountHandle, unmountAt, restoreMounts } from './mount.js';
 
 async function boot() {
@@ -34,6 +35,10 @@ async function boot() {
   WKS.refreshTree = refreshTree;
   WKS.newProject = newProject;
   WKS.importNotebook = importNotebook;
+  WKS.importFileAsNotebook = importFileAsNotebook;
+  WKS.buildProjectExportHtml = buildProjectExportHtml;
+  WKS.exportProject = exportProject;
+  WKS.newFile = newFile;
   WKS.mountHandle = mountHandle;
   WKS.unmountAt = unmountAt;
   WKS.serializeWorkspace = serializeWorkspace;
