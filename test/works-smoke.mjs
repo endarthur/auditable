@@ -449,6 +449,13 @@ if (termFrame) {
     catch (e) { return { error: 'ls failed: ' + e.message }; }
     await new Promise((r) => setTimeout(r, 150));
 
+    // An unknown command must print "name: command not found" — silent
+    // failures are user-hostile (POSIX 2.5.2). Fix is in createShell's
+    // default onCommand.
+    try { await client.exec('does-not-exist-cmd'); }
+    catch (e) { return { error: 'unknown-cmd path threw: ' + e.message }; }
+    await new Promise((r) => setTimeout(r, 150));
+
     return { text: snapshot() };
   });
 }
@@ -633,6 +640,8 @@ const checks = {
   'terminal: echo writes to xterm':   termRun.text && termRun.text.includes('hello-from-smoke'),
   'terminal: ls hits the workspace':  termRun.text
       && (termRun.text.includes('SmokeNB') || termRun.text.includes('Quad')),
+  'terminal: unknown cmd warns':      termRun.text
+      && termRun.text.includes('does-not-exist-cmd: command not found'),
   // Tree context actions
   'tree: New file… creates the file':       ctx.newFileExists
       && ctx.newFilePath === '/projects/ctx-test.csv',

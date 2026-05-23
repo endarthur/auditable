@@ -7284,7 +7284,14 @@ function createShell(opts = {}) {
     stdout:     opts.stdout ?? (() => { throw new Error('createShell: stdout required'); }),
     stderr:     opts.stderr ?? opts.stdout ?? (() => { throw new Error('createShell: stderr required'); }),
     builtins:   _mergeBuiltins(opts.builtins),
-    onCommand:  opts.onCommand ?? (async () => 127),
+    // POSIX shell convention: an unrecognised command prints
+    // "{name}: command not found" to stderr and exits 127. The executor's
+    // bare default just returns 127; createShell is the user-facing
+    // factory, so this is the right place for the matching stderr write.
+    onCommand:  opts.onCommand ?? (async (name, _argv, subCtx) => {
+      await subCtx.stderr(`${name}: command not found\n`);
+      return 127;
+    }),
     functions:  new Map(),
     lastStatus: 0,
     // Interactive read hook. When `read` runs with no stdin available
