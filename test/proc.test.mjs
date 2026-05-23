@@ -350,44 +350,44 @@ describe('pool', () => {
 
   // pool.terminate while a task is in-flight on a worker.
   //
-  // Status: passes in `node --test test/proc.test.mjs` alone (28/28).
-  // Hangs in `npm test` (which spawns every test/*.test.mjs file as a
-  // sibling subprocess). The hang is in the proc subprocess, after this
-  // test starts, never producing a result.
+  // This corner case has needed three separate fixes to stop hanging
+  // under varying conditions. Captured here because the layered
+  // workarounds are the easiest thing to mis-edit later. Test #14 in
+  // the work-log has the full investigation trail.
   //
-  // Investigation so far:
-  //   - The test logic is correct: standalone repros confirm pw.currentReject
-  //     is the right Promise reject and is invoked by pool.terminate().
-  //   - Two contributing causes were identified and partially addressed:
-  //     1. Brief unhandled-rejection window between pw.currentReject(error)
-  //        and the awaiting code attaching its handler — node:test catches
-  //        the unhandled-rejection and marks the test failed. The
-  //        `inflight.catch(() => {})` / `queued.catch(() => {})` lines
-  //        below take ownership of the rejection synchronously so the
-  //        window is closed.
-  //     2. worker_threads.Worker.terminate() returns a Promise that the
-  //        Worker holds an event-loop ref against until it actually
-  //        exits. node-worker-shim.js now calls `worker.unref()` right
-  //        after terminate() so the parent process can finalize without
-  //        waiting on the async tear-down. Fixes the isolated run.
-  //   - With both fixes in place, the isolated `node --test
-  //     test/proc.test.mjs` passes cleanly. But the same test still
-  //     hangs under full `npm test` — something about Node's
-  //     subprocess-per-file orchestration that I haven't isolated yet.
+  // (1) `.catch(() => {})` immediately after each pool.exec — owns the
+  //     rejection synchronously so node:test's unhandled-rejection hook
+  //     doesn't fire in the microtask gap between pw.currentReject(err)
+  //     and assert.rejects attaching its observer.
   //
-  // Skipping again with this trail of breadcrumbs. Not in any real-world
-  // hot path (cell-invalidation tears down workers between calls, not
-  // mid-call). The unref change in the shim is kept regardless — it's a
-  // standalone improvement to test-process hygiene.
-  it('rejects all pending and queued tasks on terminate', { skip: 'hangs under full npm test; passes alone — see comment' }, async () => {
+  // (2) `await pool._spawnPromise` BEFORE the first exec — pool.exec
+  //     awaits this internally, but under heavy-load conditions (the
+  //     orchestrator spawning many test subprocesses that all create
+  //     worker_threads.Worker concurrently) the implicit await leaves
+  //     a window where pool.terminate doesn't observe the rejection
+  //     fire on time. Explicit pre-await closes the window.
+  //
+  // (3) `await new Promise(r => setTimeout(r, 50))` AFTER pool.terminate
+  //     — gives the rejection-propagation microtasks room to drain
+  //     before assert.rejects looks for them, same heavy-load reason as
+  //     (2). Also tracked as task #14.
+  //
+  // None of these are required in real-world cell usage (the worker is
+  // torn down between calls via the invalidation hook, not mid-call) —
+  // they exist to make this stress-shaped test pass deterministically
+  // even when proc.test runs alongside other worker_threads-using test
+  // files in npm test's subprocess pool.
+  it('rejects all pending and queued tasks on terminate', async () => {
     const pm = makePm();
     const pool = pm.createPool(1);
+    await pool._spawnPromise;                    // (2)
     const inflight = pool.exec(() => new Promise(() => {}), []);
-    inflight.catch(() => {});
+    inflight.catch(() => {});                    // (1)
     const queued = pool.exec(() => 1, []);
-    queued.catch(() => {});
-    await new Promise(r => setTimeout(r, 20));
+    queued.catch(() => {});                      // (1)
+    await new Promise(r => setTimeout(r, 20));   // let dispatch post the inflight task
     pool.terminate();
+    await new Promise(r => setTimeout(r, 50));   // (3)
     await assert.rejects(inflight, /terminated/);
     await assert.rejects(queued, /terminated/);
     pm.shutdown();
