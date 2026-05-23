@@ -1,10 +1,10 @@
-# @gcu/proc — Phase A specification
+# @gcu/proc — specification
 
-a process model for the browser. spawn Web Workers as PID-tracked processes with proper lifecycle, I/O channels, pools, and signal handling. zero dependencies.
+a process model for the browser. spawn Web Workers as PID-tracked processes with proper lifecycle, I/O channels, pools, signal handling, and a `@gcu/vfs` proxy. zero hard dependencies; `@gcu/vfs` is an optional peer.
 
-This document specifies **Phase A only**: the standalone core (function, module-call, and module-service modes). VFS proxy, TTY proxy, daemons + service registry, shell-mode integration with `@gcu/coreutils`, and remote/mesh execution are deferred to later phases. They are listed under §11 — Roadmap.
+This document specifies the surface of **0.2.0** — Phase A (the standalone core: function, module-call, module-service, inline-service) plus Phase B (the VFS proxy: mixed direct-replicated and proxied backends, with VFS injection into all four modes). TTY proxy, daemons + service registry, shell-mode integration with `@gcu/coreutils`, and remote/mesh execution remain in §11 — Roadmap.
 
-The full multi-phase design lives in `spec_inbox/os/proc-spec.md`. This document is the authoritative spec for what ships in 0.1.0.
+The full multi-phase design lives in `spec_inbox/os/proc-spec.md`. This document is the authoritative spec for what ships in 0.2.x.
 
 ## 1. Motivation
 
@@ -129,6 +129,55 @@ The user-facing `mode` is still `"service"`; the inline path is selected by pass
 
 In 0.1.x, only the service shape is inline-able. Inline + module-call (`{ inlineSource, fn }`) is not implemented — would mean "the inlined module exports a function the bootstrap calls"; deferred until a real consumer wants it.
 
+### 3.5 VFS proxy (0.2.0)
+
+When `ProcessManager` is constructed with a `vfs` instance, spawned workers can read and write through it. The wiring varies by mode:
+
+```js
+// host
+import { VFS, MemoryBackend, IDBBackend } from '@gcu/vfs';
+
+const vfs = new VFS();
+vfs._mounts.set('/data', new IDBBackend({ name: 'mydata' }));    // worker-capable
+vfs._mounts.set('/mem',  new MemoryBackend());                   // proxy-only
+
+const pm = new ProcessManager({
+  vfs,
+  vfsBundleSource: GCU_VFS_SOURCE,  // OR vfsModuleUrl: 'https://…/vfs.js'
+});
+
+// function mode — opt in per-spawn, vfs is the last arg
+const lines = await pm.compute(
+  async (path, vfs) => (await vfs.readFile(path, 'utf8')).split('\n').length,
+  ['/data/big.csv'],
+  { vfs: true },
+);
+
+// module-service mode — ctx.vfs is set unconditionally when manager has vfs
+const proc = await pm.spawn({ module: workerUrl, mode: 'service' });
+// inside the entry:  await ctx.vfs.writeFile('/mem/log.txt', '…');
+```
+
+**Hybrid backend strategy.** At spawn time, the manager walks `vfs._mounts` and asks each backend for a `toConfig()`. If it returns a structured-cloneable `{ type, ...opts }`, the mount is flagged **direct** — the worker instantiates the same `Backend` subclass with the same config, talking to the underlying storage (IDB DB, OPFS root, fetch URL) without round-tripping. If `toConfig()` returns `null` (the base `Backend` default), the mount is flagged **proxy** — every operation RPCs back to the main thread via `_proc_vfs_call` / `_proc_vfs_reply` and runs against the host's backend instance.
+
+Today's direct-replicable backends in `@gcu/vfs`: `IDBBackend`, `OPFSBackend`, `FetchBackend`, `RESTBackend`. Always-proxied: `MemoryBackend` (lives in main thread's heap), `CommentBackend` (DOM-bound), `FSAABackend` (permission handle), `AbusBackend` (broker-bound), any custom backend that doesn't override `toConfig()`. `FetchBackend` and `RESTBackend` flip to proxy when their `headers` config is a function rather than a plain object (functions don't structured-clone).
+
+**VFS bundle delivery.** The worker needs `@gcu/vfs` to be in scope before it can instantiate backends. Caller picks the deployment shape (same trade-off as URL vs. inline service mode in §3.4):
+
+- `vfsBundleSource`: inlined into the worker blob ahead of the bootstrap. `file://` friendly; consumer is responsible for reading the bundle source from disk or template.
+- `vfsModuleUrl`: dynamically imported by the worker via `await import(url)`. HTTP friendly; smaller worker blob; doesn't work on `file://` because of cross-blob-origin restrictions.
+
+The bootstrap detects which is present and either uses the pre-inlined symbols (`VFS`, `Backend`, `BACKEND_TYPES`) or imports them from the URL. Both yield the same `Backend` superclass that `ProxyBackend` extends — so the proxy machinery is module-source agnostic.
+
+**Argument injection.** In function and module-call modes, VFS is appended as the *last* arg only when the caller passes `{ vfs: true }` to `spawn()`. Module-service and inline-service modes always set `ctx.vfs` when the manager has a vfs configured.
+
+**Errors round-trip.** Host-side `VFSError` instances are serialized to `{ message, code, path }` and reconstructed as a regular `Error` on the worker side with the same fields. Consumer-facing behavior: `try { await vfs.readFile('/nope') } catch (e) { e.code === 'ENOENT' }` works the same in worker and host.
+
+**Limits / TODO for 0.2.x or later.**
+- Streaming reads (`createReadStream` over RPC) are not implemented — backends call the default `null` shim. A future point release can add a dedicated channel.
+- Principal-based sandboxing isn't wired yet (see §11 — Phase B+).
+- VFS-path module loading (`spawn({ module: '/scripts/x.js', fn: 'run' })`) still throws — the dynamic-import-from-VFS plumbing isn't in 0.2.0.
+
 ## 4. Wire protocol
 
 All messages between host and worker use a plain object with a `type` field. Lifecycle messages use the reserved prefix `_proc_`. Custom messages (the user's protocol) ride on `_proc_msg`.
@@ -141,6 +190,7 @@ All messages between host and worker use a plain object with a `type` field. Lif
 | `_proc_stdin` | `{ data, eof? }` | Host writes to process's stdin (Phase A: not heavily exercised). |
 | `_proc_kill` | `{ signal: "INT" \| "TERM" }` | Cooperative kill — fires worker's AbortController. `KILL` is not on the wire; it's a `worker.terminate()`. |
 | `_proc_msg` | `{ data }` | Custom protocol message from `proc.send(data)`. Bootstrap delivers `data` to `ctx.on` handlers in module-service mode. |
+| `_proc_vfs_reply` | `{ id, ok, value? \| error? }` | Reply to a previously-sent `_proc_vfs_call`. Host dispatches the call to the relevant backend and posts the result (or a serialized error with `{ message, code?, path? }`). |
 
 ### 4.2 Worker → Host
 
@@ -153,6 +203,7 @@ All messages between host and worker use a plain object with a `type` field. Lif
 | `_proc_stdout` | `{ data }` | `ctx.stdout(text)` from inside the worker. |
 | `_proc_stderr` | `{ data }` | `ctx.stderr(text)` from inside the worker. |
 | `_proc_msg` | `{ data }` | `ctx.send(data)` from inside the worker (module-service mode). |
+| `_proc_vfs_call` | `{ id, mountPath, method, args }` | Worker's `ProxyBackend` invoking a backend method on the host. Host dispatches to the relevant mount's backend and posts `_proc_vfs_reply` with the matching `id`. |
 
 ### 4.3 Custom message wrapping
 
@@ -170,6 +221,11 @@ import { ProcessManager } from "@gcu/proc";
 const pm = new ProcessManager({
   maxProcesses: 8,         // optional, defaults to navigator.hardwareConcurrency || 4
   createWorker,            // optional, environment hook (see §7)
+  // VFS (Phase B / 0.2.0): the worker can read/write through this
+  // VFS instance. Provide exactly one of vfsBundleSource or vfsModuleUrl.
+  vfs,                     // optional, a @gcu/vfs VFS instance
+  vfsBundleSource,         // string — @gcu/vfs source, inlined into the worker blob
+  vfsModuleUrl,            // string — URL the worker imports for @gcu/vfs
 });
 
 pm.spawn(payload, opts?);  // returns Promise<Process> (resolves when worker is ready)
@@ -377,35 +433,39 @@ Coverage:
 9. **Process table** — pm.list, pm.get, pm.killAll.
 10. **Limits** — maxProcesses queues spawns beyond cap.
 
-Tests use the `@gcu/proc/node` shim. No browser harness needed for Phase A.
+Tests use the `@gcu/proc/node` shim. No browser harness needed for the Phase A or B unit tests.
 
 ## 11. Roadmap
 
-Phase A ships function / module-call / module-service modes. Phases B-E remain in `spec_inbox/os/proc-spec.md` for design reference; here are the headlines:
+Phases A (0.1.x) and B (0.2.x) have shipped. The remaining phases sit in `spec_inbox/os/proc-spec.md` for design reference; here are the headlines:
 
-- **Phase B — VFS proxy**: `{ vfs }` in ProcessManager constructor enables workers to access `@gcu/vfs` instances. Hybrid strategy: backends that work in workers (IDB, OPFS, fetch) get replicated; backends that don't (Memory, Comment, FSAA) get proxied via postMessage. Principal carries across into the worker.
 - **Phase C — TTY proxy**: `{ tty }` in spawn options forwards `@gcu/term` input/output between main thread and worker. Lets TUI apps (pagers, editors) run in a worker without freezing the UI.
 - **Phase D — Shell-mode integration**: `{ coreutils }` enables `pm.spawn("awk -F, ...")`. Replaces geas's worker-shim execution path. Real `&` / `jobs` / `fg` / `bg` in geas via the process table.
 - **Phase E — Daemons + service registry**: `pm.daemon(name, handler, opts)`. Long-running named services with request/response (`pm.request(name, msg)`), restart policies (`never` / `on-crash` / `always`), exponential backoff. Builds on module-service mode.
 - **Phase F — Remote / mesh execution**: `{ remote: { peer, via: mesh } }` in spawn options. Same Process surface, different execution backend.
 
-## 12. Out of scope for Phase A
+**Phase B follow-ups (0.2.x point releases as consumers ask for them):**
 
-These are explicitly NOT in 0.1.0 and should produce hard errors (not silent stubs) if invoked:
+- Principal-based VFS sandbox enforcement — serialize a principal into the spawn init message; both worker-side VFS and host-side proxy server enforce it. Host re-validates on every proxy call (defense in depth).
+- Streaming reads (`createReadStream` over the RPC) — useful for piping large files into worker processing without buffering the whole file in the proxy protocol.
+- VFS-path module loading — `spawn({ module: '/scripts/x.js', fn: 'run' })` reads the module source through the host VFS, hands it to the worker bootstrap. Currently throws because the dynamic-import-from-VFS plumbing isn't in 0.2.0.
 
-- `{ vfs }` in ProcessManager constructor → throws "vfs requires @gcu/proc Phase B."
+## 12. Out of scope for 0.2.x
+
+These are explicitly NOT in 0.2.0 and should produce hard errors (not silent stubs) if invoked:
+
 - `{ coreutils }` → throws "shell mode requires @gcu/proc Phase D."
 - `pm.spawn(string)` (shell mode) → throws "shell mode requires @gcu/proc Phase D."
 - `pm.daemon(...)` → throws "daemons require @gcu/proc Phase E."
 - `{ tty }` in spawn options → throws "tty proxy requires @gcu/proc Phase C."
 - `{ remote }` in spawn options → throws "remote execution requires @gcu/proc Phase F."
-- `module-call` with a VFS path (not a URL) → throws "VFS-path modules require @gcu/proc Phase B."
+- `module-call` with a VFS path (not a URL) → throws "VFS-path modules not supported yet" (deferred to a 0.2.x point release, see §11).
 
 Each error mentions the phase that would unlock it.
 
 ## 13. Versioning
 
-Pre-1.0. Wire protocol (`_proc_*` namespace, message shapes) and public API (`ProcessManager`, `Process`, `Pool`) may shift before 1.0. Tag `0.1.x` covers Phase A; `0.2.x` is reserved for Phase B (VFS proxy) and may break the constructor signature if needed.
+Pre-1.0. Wire protocol (`_proc_*` namespace, message shapes) and public API (`ProcessManager`, `Process`, `Pool`) may shift before 1.0. Tag `0.1.x` covered Phase A; `0.2.x` is Phase A + Phase B. Point releases under `0.2.x` add Phase B follow-ups (see §11) without breaking the constructor or wire protocol. Phase C onward will land in `0.3.x` and may break the constructor signature if needed.
 
 ## 14. License
 

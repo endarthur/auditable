@@ -35,12 +35,32 @@ function defaultCreateWorker(source) {
 export class ProcessManager {
   constructor(opts = {}) {
     // Hard errors for not-yet-implemented features. See SPEC.md §12.
-    if (opts.vfs !== undefined) {
-      throw new Error('proc: { vfs } requires @gcu/proc Phase B (not in 0.1.x)');
-    }
     if (opts.coreutils !== undefined) {
-      throw new Error('proc: { coreutils } requires @gcu/proc Phase D (not in 0.1.x)');
+      throw new Error('proc: { coreutils } requires @gcu/proc Phase D (not in 0.2.x)');
     }
+
+    // VFS proxy (Phase B, since 0.2.0). When a VFS instance is provided,
+    // spawned workers can access it: function/module-call modes get vfs
+    // as the last arg when opts.vfs is true at spawn-time; module-service
+    // mode always sees ctx.vfs. The worker needs to load @gcu/vfs to
+    // instantiate the worker-side VFS — caller picks the deployment shape:
+    //   - vfsBundleSource: inlined into the worker blob (file:// friendly).
+    //   - vfsModuleUrl:    awaited via import(url) in the worker (HTTP).
+    // Exactly one of the two must be supplied with vfs.
+    if (opts.vfs !== undefined) {
+      if (!opts.vfsBundleSource && !opts.vfsModuleUrl) {
+        throw new Error('proc: { vfs } requires either { vfsBundleSource } (inline) or { vfsModuleUrl } (URL) so the worker can load @gcu/vfs');
+      }
+      if (opts.vfsBundleSource && opts.vfsModuleUrl) {
+        throw new Error('proc: pass either vfsBundleSource OR vfsModuleUrl, not both');
+      }
+      if (!opts.vfs._mounts || typeof opts.vfs._mounts.entries !== 'function') {
+        throw new Error('proc: { vfs } must be a @gcu/vfs VFS instance (with _mounts)');
+      }
+    }
+    this._vfs = opts.vfs || null;
+    this._vfsBundleSource = opts.vfsBundleSource || null;
+    this._vfsModuleUrl = opts.vfsModuleUrl || null;
 
     this._createWorker = opts.createWorker || defaultCreateWorker;
     this._maxProcesses = opts.maxProcesses || (
@@ -51,6 +71,29 @@ export class ProcessManager {
     this._processes = new Map();    // pid → Process
     this._queue = [];                // queued spawns waiting on slot
     this._shutdown = false;
+  }
+
+  // Walk the configured VFS's mount table and produce a serializable
+  // description the worker can use to reconstruct a peer VFS:
+  //   [{ path, mode: 'direct', config }, { path, mode: 'proxy' }, ...]
+  // Backends that override toConfig() to return a {type, ...opts} object
+  // get the 'direct' treatment — the worker instantiates the same class
+  // pointing at the same underlying storage. Backends whose toConfig()
+  // returns null get 'proxy' — every operation RPCs to the main thread.
+  _buildVfsMountTable() {
+    if (!this._vfs) return null;
+    const out = [];
+    for (const [mountPath, backend] of this._vfs._mounts) {
+      let config = null;
+      try { config = backend.toConfig && backend.toConfig(); }
+      catch (_) { config = null; }
+      if (config && typeof config === 'object' && typeof config.type === 'string') {
+        out.push({ path: mountPath, mode: 'direct', config });
+      } else {
+        out.push({ path: mountPath, mode: 'proxy' });
+      }
+    }
+    return out;
   }
 
   // Spawn a process. Returns Promise<Process> that resolves once the
@@ -168,6 +211,22 @@ export class ProcessManager {
       ? opts.transfer
       : detectTransfer(opts.args || []);
 
+    // VFS injection: callers opt in per-spawn with opts.vfs === true. Only
+    // legal when the manager was constructed with a vfs. Module-service
+    // mode always gets ctx.vfs regardless of opts.vfs (handled in the
+    // bootstrap, not gated here).
+    const vfsRequested = opts.vfs === true;
+    if (vfsRequested && !this._vfs) {
+      throw new Error('proc.spawn: opts.vfs is true but ProcessManager was constructed without a vfs');
+    }
+    const vfsExtras = this._vfs
+      ? {
+          vfs: vfsRequested,                                // arg-injection for fn/module-call
+          vfsConfig: this._buildVfsMountTable(),            // mount table description
+          vfsModuleUrl: this._vfsModuleUrl || undefined,    // where to import @gcu/vfs from in the worker
+        }
+      : {};
+
     if (typeof payload === 'function') {
       return {
         wire: {
@@ -176,6 +235,7 @@ export class ProcessManager {
           source: payload.toString(),
           args: opts.args || [],
           keepalive: !!opts.keepalive,
+          ...vfsExtras,
         },
         transfer,
         mode: MODE.FUNCTION,
@@ -191,10 +251,11 @@ export class ProcessManager {
         : (payload.fn ? MODE.MODULE_CALL : MODE.SERVICE);
 
       if (mode === MODE.MODULE_CALL) {
-        // Phase A: URL modules only. Anything that looks like a VFS path
-        // (starts with '/') is rejected with a Phase B pointer.
+        // VFS-path module loading is a future feature (would require a
+        // VFS-RPC import that doesn't exist yet — could land later in
+        // 0.2.x). Keep rejecting for now.
         if (payload.module.startsWith('/')) {
-          throw new Error('proc: VFS-path modules require @gcu/proc Phase B (not in 0.1.x). Use a URL or data: URI for now.');
+          throw new Error('proc: VFS-path modules not supported yet — pass a URL or data: URI for the module.');
         }
         return {
           wire: {
@@ -203,6 +264,7 @@ export class ProcessManager {
             url: payload.module,
             fn: payload.fn || 'default',
             args: payload.args || opts.args || [],
+            ...vfsExtras,
           },
           transfer,
           mode: MODE.MODULE_CALL,
@@ -212,13 +274,14 @@ export class ProcessManager {
 
       // service mode
       if (payload.module.startsWith('/')) {
-        throw new Error('proc: VFS-path modules require @gcu/proc Phase B (not in 0.1.x). Use a URL or data: URI for now.');
+        throw new Error('proc: VFS-path modules not supported yet — pass a URL or data: URI for the module.');
       }
       return {
         wire: {
           type: MSG.INIT,
           mode: MODE.SERVICE,
           url: payload.module,
+          ...vfsExtras,
         },
         transfer: [],
         mode: MODE.SERVICE,
@@ -241,6 +304,7 @@ export class ProcessManager {
         wire: {
           type: MSG.INIT,
           mode: MODE.INLINE_SERVICE,
+          ...vfsExtras,
         },
         transfer: [],
         mode: MODE.INLINE_SERVICE,
@@ -254,11 +318,25 @@ export class ProcessManager {
 
   async _actuallySpawn(initMsg, opts, payload) {
     const pid = this._nextPid();
-    // For inline-service mode, concatenate user code into the bootstrap
-    // so there's no cross-blob import. See SPEC.md §3.4.
-    const bootstrap = initMsg.inlineSource
-      ? BOOTSTRAP_SOURCE + '\n;\n' + initMsg.inlineSource + '\n'
-      : BOOTSTRAP_SOURCE;
+    // Build the worker source. Three things can get concatenated onto the
+    // bootstrap, in this order:
+    //   1. The @gcu/vfs bundle source — needed if the manager was created
+    //      with { vfs, vfsBundleSource }. Concatenated FIRST so its
+    //      classes are top-level by the time the bootstrap and user code
+    //      reference them.
+    //   2. The bootstrap itself.
+    //   3. The user's inline-service source, if any.
+    let bootstrap = '';
+    if (this._vfsBundleSource) {
+      // Strip any trailing `export { ... }` from the bundle — it'd be a
+      // syntax error in a classic worker.
+      const stripped = this._vfsBundleSource.replace(/export\s*\{[^}]*\};?\s*$/, '');
+      bootstrap += stripped + '\n;\n';
+    }
+    bootstrap += BOOTSTRAP_SOURCE;
+    if (initMsg.inlineSource) {
+      bootstrap += '\n;\n' + initMsg.inlineSource + '\n';
+    }
     const { worker, cleanup } = this._createWorker(bootstrap);
 
     const proc = new Process({
@@ -267,6 +345,7 @@ export class ProcessManager {
       worker,
       cleanup,
       command: initMsg.command,
+      vfs: this._vfs,                // for _proc_vfs_call dispatch (Phase B)
     });
     proc._killGrace = opts.killGrace || this._killGrace;
 

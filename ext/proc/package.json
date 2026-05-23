@@ -1,7 +1,7 @@
 {
   "name": "@gcu/proc",
-  "version": "0.1.0",
-  "description": "A process model for the browser: spawn Web Workers as PID-tracked processes with lifecycle, I/O channels, pools, and signal handling. Phase A — function, module-call, and module-service modes, zero dependencies.",
+  "version": "0.2.0",
+  "description": "A process model for the browser: spawn Web Workers as PID-tracked processes with lifecycle, I/O channels, pools, signal handling, and VFS proxy. Phase A modes (function, module-call, module-service, inline-service) + Phase B VFS proxy with mixed direct-replicated and proxied backends. Zero hard dependencies; @gcu/vfs is an optional peer.",
   "type": "module",
   "main": "./src/main.js",
   "exports": {

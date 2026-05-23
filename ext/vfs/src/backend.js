@@ -101,6 +101,22 @@ class Backend {
   createReadStream() { return null; }
   createWriter() { return null; }
 
+  // Worker-replication: return a structured-cloneable config that a worker
+  // can pass back to the constructor (alongside the type string from
+  // BACKEND_TYPES) to instantiate a peer backend that talks to the same
+  // underlying storage. Return null (the default) to indicate this backend
+  // CANNOT be replicated in a worker — @gcu/proc will fall back to RPC.
+  //
+  // Backends that override should restrict themselves to JSON-cloneable
+  // config (no closures, no DOM handles, no callbacks). E.g. IDBBackend
+  // returns { type: 'idb', name }; MemoryBackend / CommentBackend /
+  // FSAABackend / AbusBackend all keep the null default because their state
+  // either lives on the main thread (Memory) or requires DOM (Comment) or
+  // requires a single permission-bound handle (FSAA) or is broker-bound
+  // (Abus). FetchBackend / RESTBackend override only when their headers
+  // config is a plain object — function-typed headers are non-serializable.
+  toConfig() { return null; }
+
   get readonly() { return false; }
   get persistent() { return false; }
   get streamable() { return false; }

@@ -10,6 +10,16 @@ class OPFSBackend extends HandleBackend {
     this._fallback = null;
   }
 
+  toConfig() {
+    // Real OPFS replicates fine: the worker gets its own origin-private
+    // directory from navigator.storage.getDirectory() — same handle as
+    // the main thread. When running in fallback mode (no OPFS available
+    // in this context), we can't replicate because the fallback could
+    // itself be non-replicable; let proc proxy instead.
+    if (this._fallback) return null;
+    return { type: 'opfs' };
+  }
+
   async init() {
     if (typeof navigator !== 'undefined' && navigator.storage && navigator.storage.getDirectory) {
       this._root = await navigator.storage.getDirectory();

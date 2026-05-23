@@ -49,7 +49,10 @@ for (const relPath of importPaths) {
 const header = '// \u26a0 GENERATED FILE \u2014 DO NOT EDIT. Source: ext/vfs/src/  Build: node ext/vfs/build.js\n'
   + '// @gcu/vfs \u2014 Virtual filesystem with pluggable backends and mount table\n';
 
-const output = header + '\n' + chunks.join('\n\n') + '\n\nexport { VFS, VFSError, CommentBackend, MemoryBackend, AbusBackend, FSAABackend, IDBBackend, path };\n';
+// Backend classes + BACKEND_TYPES registry are exported so @gcu/proc (and
+// any other downstream that needs to replicate backends in a worker) can
+// reconstruct a Backend from a serialized {type, ...opts} config.
+const output = header + '\n' + chunks.join('\n\n') + '\n\nexport { VFS, VFSError, Backend, BACKEND_TYPES, CommentBackend, MemoryBackend, AbusBackend, FSAABackend, IDBBackend, OPFSBackend, FetchBackend, RESTBackend, OverlayBackend, CacheBackend, path };\n';
 
 const outPath = path.join(__dirname, 'index.js');
 fs.writeFileSync(outPath, output);

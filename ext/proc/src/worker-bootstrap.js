@@ -24,6 +24,15 @@
 // globalThis._procRegisterEntry(fn) at top level, and the bootstrap
 // awaits that registration before running.
 //
+// VFS (Phase B / 0.2.0): when the init message carries vfsConfig, the
+// bootstrap builds a worker-side VFS from the supplied mount table and
+// either injects it as the last fn arg (function/module-call modes with
+// opts.vfs === true) or hangs it off ctx.vfs (service modes). Mounts
+// flagged 'direct' get a real backend instance (e.g. IDBBackend) talking
+// to the same storage; mounts flagged 'proxy' get a ProxyBackend that
+// RPCs every operation back to the main thread via _proc_vfs_call /
+// _proc_vfs_reply messages.
+//
 // The bootstrap also uses string-MSG-types directly (rather than
 // importing protocol.js) because workers can't reach the registry's
 // import map — and even if they could, embedding the constants by hand
@@ -56,6 +65,55 @@ if (typeof globalThis !== 'undefined') {
   globalThis._procRegisterEntry = _procRegisterEntry;
 }
 
+// ── VFS-RPC state ──
+// Outgoing _proc_vfs_call messages are correlated to their replies by id.
+// _vfsPending holds {resolve, reject} per inflight RPC. Filled by
+// ProxyBackend instances when they make a call; drained by the
+// _proc_vfs_reply handler in the dispatcher loop below.
+let _vfsNextId = 0;
+const _vfsPending = new Map();
+
+// Factory: returns a ProxyBackend class bound to the given Backend
+// superclass. We can't reference Backend at the top of the bootstrap
+// because it isn't in scope until @gcu/vfs is either inlined ahead of
+// this script or dynamically imported (vfsModuleUrl). So we defer
+// instantiation to buildWorkerVfs, which calls the factory at the right
+// point in time.
+function _makeProxyBackend(BackendCls) {
+  return class ProxyBackend extends BackendCls {
+    constructor(mountPath, send) {
+      super();
+      this._mountPath = mountPath;
+      this._send = send;
+    }
+    _call(method, args) {
+      const id = _vfsNextId++;
+      const promise = new Promise((res, rej) => _vfsPending.set(id, { res, rej }));
+      this._send({
+        type: '_proc_vfs_call',
+        id,
+        mountPath: this._mountPath,
+        method,
+        args: args || [],
+      });
+      return promise;
+    }
+    readFile(...a)  { return this._call('readFile',  a); }
+    writeFile(...a) { return this._call('writeFile', a); }
+    readdir(...a)   { return this._call('readdir',   a); }
+    stat(...a)      { return this._call('stat',      a); }
+    mkdir(...a)     { return this._call('mkdir',     a); }
+    unlink(...a)    { return this._call('unlink',    a); }
+    rmdir(...a)     { return this._call('rmdir',     a); }
+    rename(...a)    { return this._call('rename',    a); }
+    glob(...a)      { return this._call('glob',      a); }
+    exists(...a)    { return this._call('exists',    a); }
+    cp(...a)        { return this._call('cp',        a); }
+    lstat(...a)     { return this._call('lstat',     a); }
+    touch(...a)     { return this._call('touch',     a); }
+  };
+}
+
 (async () => {
   // ── runtime detection ──
   let _post, _onMsg;
@@ -74,6 +132,7 @@ if (typeof globalThis !== 'undefined') {
   const ABORT = new AbortController();
   let exited = false;
   let intReceived = false;
+  let _workerVfs = null;
 
   function exit(code = 0) {
     if (exited) return;
@@ -110,7 +169,32 @@ if (typeof globalThis !== 'undefined') {
       return;
     }
     if (msg.type === '_proc_init') {
+      // VFS construction happens BEFORE dispatchInit so the entry point
+      // sees a fully-wired _workerVfs.
+      if (msg.vfsConfig) {
+        try {
+          await buildWorkerVfs(msg);
+        } catch (err) {
+          _post({ type: '_proc_error', error: { message: 'proc: VFS init failed: ' + (err && err.message || String(err)), stack: err && err.stack } });
+          exit(1);
+          return;
+        }
+      }
       await dispatchInit(msg);
+      return;
+    }
+    if (msg.type === '_proc_vfs_reply') {
+      const slot = _vfsPending.get(msg.id);
+      if (!slot) return;
+      _vfsPending.delete(msg.id);
+      if (msg.ok) {
+        slot.res(msg.value);
+      } else {
+        const err = new Error((msg.error && msg.error.message) || 'vfs proxy: unknown error');
+        if (msg.error && msg.error.code) err.code = msg.error.code;
+        if (msg.error && msg.error.path) err.path = msg.error.path;
+        slot.rej(err);
+      }
       return;
     }
     if (msg.type === '_proc_msg') {
@@ -134,11 +218,54 @@ if (typeof globalThis !== 'undefined') {
     }
   });
 
+  // Build the worker-side VFS from the mount table description the
+  // ProcessManager serialized at spawn time. Source of @gcu/vfs is one of:
+  //   - already in scope (manager passed vfsBundleSource, concatenated
+  //     ahead of this bootstrap by _actuallySpawn);
+  //   - dynamically imported (manager passed vfsModuleUrl).
+  async function buildWorkerVfs(initMsg) {
+    let vfsMod;
+    if (typeof VFS === 'function' && typeof BACKEND_TYPES === 'object') {
+      // Inline mode — top-level bindings exist (the bundle was prepended).
+      vfsMod = {
+        VFS,
+        Backend,
+        BACKEND_TYPES,
+      };
+    } else if (initMsg.vfsModuleUrl) {
+      vfsMod = await import(initMsg.vfsModuleUrl);
+      if (!vfsMod.VFS) throw new Error('proc: vfsModuleUrl did not export VFS');
+      if (!vfsMod.Backend) throw new Error('proc: vfsModuleUrl did not export Backend');
+      if (!vfsMod.BACKEND_TYPES) throw new Error('proc: vfsModuleUrl did not export BACKEND_TYPES');
+    } else {
+      throw new Error('proc: vfsConfig present but neither inlined VFS nor vfsModuleUrl available');
+    }
+
+    const ProxyBackend = _makeProxyBackend(vfsMod.Backend);
+    const vfs = new vfsMod.VFS();
+    for (const mount of initMsg.vfsConfig) {
+      let backend;
+      if (mount.mode === 'direct') {
+        const type = mount.config && mount.config.type;
+        const Cls = type && vfsMod.BACKEND_TYPES[type];
+        if (!Cls) throw new Error('proc: unknown backend type "' + type + '" — register it in @gcu/vfs BACKEND_TYPES');
+        backend = new Cls(mount.config);
+        if (typeof backend.init === 'function') await backend.init();
+      } else {
+        // 'proxy' (default for unknown modes)
+        backend = new ProxyBackend(mount.path, _post);
+      }
+      vfs._mounts.set(mount.path, backend);
+    }
+    _workerVfs = vfs;
+  }
+
   function makeServiceCtx() {
     return {
       signal: ABORT.signal,
       stdout: ctxStdout,
       stderr: ctxStderr,
+      vfs: _workerVfs,
       send: (data, transfer) => {
         _post({ type: '_proc_msg', data }, transfer || autoTransfer(data));
       },
@@ -189,7 +316,8 @@ if (typeof globalThis !== 'undefined') {
       if (msg.mode === 'function') {
         const src = msg.source;
         const fn = (0, eval)('(' + src + ')');
-        const args = Array.isArray(msg.args) ? msg.args : [];
+        const args = Array.isArray(msg.args) ? msg.args.slice() : [];
+        if (msg.vfs && _workerVfs) args.push(_workerVfs);
         const result = await fn.apply(null, args);
         const t = autoTransfer(result);
         _post({ type: '_proc_result', value: result }, t);
@@ -204,7 +332,8 @@ if (typeof globalThis !== 'undefined') {
         if (typeof fn !== 'function') {
           throw new Error('proc: module ' + msg.url + ' has no exported function "' + fnName + '"');
         }
-        const args = Array.isArray(msg.args) ? msg.args : [];
+        const args = Array.isArray(msg.args) ? msg.args.slice() : [];
+        if (msg.vfs && _workerVfs) args.push(_workerVfs);
         const result = await fn.apply(null, args);
         const t = autoTransfer(result);
         _post({ type: '_proc_result', value: result }, t);

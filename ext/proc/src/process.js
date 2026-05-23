@@ -11,7 +11,7 @@ import {
 import { ReadablePort, WritablePort } from './channel.js';
 
 export class Process {
-  constructor({ pid, mode, worker, cleanup, command }) {
+  constructor({ pid, mode, worker, cleanup, command, vfs }) {
     this.pid = pid;
     this.mode = mode;
     this.command = command || '';
@@ -24,6 +24,7 @@ export class Process {
 
     this._worker = worker;
     this._cleanup = cleanup || (() => {});
+    this._vfs = vfs || null;        // host VFS for _proc_vfs_call dispatch
     this._exitWaiters = [];
     this._msgHandlers = new Set();
     this._readySignal = null;          // resolved by READY message
@@ -136,10 +137,49 @@ export class Process {
         }
         return;
       }
+      case '_proc_vfs_call':
+        // Phase B VFS proxy: the worker is asking us to run a method on
+        // a host-side backend. Dispatch async; reply with the result or
+        // a serialized error.
+        this._handleVfsCall(msg);
+        return;
       default:
         // Unknown lifecycle messages are ignored — gives the protocol
         // room to grow.
         return;
+    }
+  }
+
+  async _handleVfsCall(msg) {
+    const reply = (payload) => {
+      try { this._post({ type: '_proc_vfs_reply', id: msg.id, ...payload }); }
+      catch (_) { /* worker may already be gone */ }
+    };
+    if (!this._vfs || !this._vfs._mounts) {
+      reply({ ok: false, error: { message: 'proc: process has no host VFS configured' } });
+      return;
+    }
+    const backend = this._vfs._mounts.get(msg.mountPath);
+    if (!backend) {
+      reply({ ok: false, error: { message: 'proc: no mount at "' + msg.mountPath + '"', code: 'ENOENT', path: msg.mountPath } });
+      return;
+    }
+    const method = typeof msg.method === 'string' ? msg.method : '';
+    if (typeof backend[method] !== 'function') {
+      reply({ ok: false, error: { message: 'proc: backend has no method "' + method + '"', code: 'ENOTSUP', path: msg.mountPath } });
+      return;
+    }
+    try {
+      const args = Array.isArray(msg.args) ? msg.args : [];
+      const value = await backend[method](...args);
+      reply({ ok: true, value });
+    } catch (err) {
+      const errPayload = {
+        message: err && err.message ? err.message : String(err),
+      };
+      if (err && err.code) errPayload.code = err.code;
+      if (err && err.path) errPayload.path = err.path;
+      reply({ ok: false, error: errPayload });
     }
   }
 

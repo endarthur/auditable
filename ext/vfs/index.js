@@ -284,6 +284,22 @@ class Backend {
   createReadStream() { return null; }
   createWriter() { return null; }
 
+  // Worker-replication: return a structured-cloneable config that a worker
+  // can pass back to the constructor (alongside the type string from
+  // BACKEND_TYPES) to instantiate a peer backend that talks to the same
+  // underlying storage. Return null (the default) to indicate this backend
+  // CANNOT be replicated in a worker — @gcu/proc will fall back to RPC.
+  //
+  // Backends that override should restrict themselves to JSON-cloneable
+  // config (no closures, no DOM handles, no callbacks). E.g. IDBBackend
+  // returns { type: 'idb', name }; MemoryBackend / CommentBackend /
+  // FSAABackend / AbusBackend all keep the null default because their state
+  // either lives on the main thread (Memory) or requires DOM (Comment) or
+  // requires a single permission-bound handle (FSAA) or is broker-bound
+  // (Abus). FetchBackend / RESTBackend override only when their headers
+  // config is a plain object — function-typed headers are non-serializable.
+  toConfig() { return null; }
+
   get readonly() { return false; }
   get persistent() { return false; }
   get streamable() { return false; }
@@ -566,6 +582,10 @@ class IDBBackend extends Backend {
     super();
     this._dbName = (config && config.name) || 'gcu-vfs';
     this._db = null;
+  }
+
+  toConfig() {
+    return { type: 'idb', name: this._dbName };
   }
 
   async init() {
@@ -1428,6 +1448,16 @@ class OPFSBackend extends HandleBackend {
     this._fallback = null;
   }
 
+  toConfig() {
+    // Real OPFS replicates fine: the worker gets its own origin-private
+    // directory from navigator.storage.getDirectory() — same handle as
+    // the main thread. When running in fallback mode (no OPFS available
+    // in this context), we can't replicate because the fallback could
+    // itself be non-replicable; let proc proxy instead.
+    if (this._fallback) return null;
+    return { type: 'opfs' };
+  }
+
   async init() {
     if (typeof navigator !== 'undefined' && navigator.storage && navigator.storage.getDirectory) {
       this._root = await navigator.storage.getDirectory();
@@ -1599,6 +1629,19 @@ class FetchBackend extends Backend {
     this._credentials = config && config.credentials;
   }
 
+  toConfig() {
+    // Function-shaped headers (a callback that computes auth tokens
+    // dynamically) can't be cloned across the worker boundary; force the
+    // proxy path in that case so the main-thread callback still runs.
+    if (typeof this._headersCfg === 'function') return null;
+    const out = { type: 'fetch' };
+    if (this._base) out.base = this._base;
+    if (this._index !== undefined) out.index = this._index;
+    if (this._headersCfg) out.headers = this._headersCfg;
+    if (this._credentials) out.credentials = this._credentials;
+    return out;
+  }
+
   async _fetch(p, opts) {
     const url = _httpUrl(this._base, p);
     const headers = await _httpHeaders(this._headersCfg);
@@ -1691,6 +1734,15 @@ class RESTBackend extends Backend {
     this._base = (config && config.base) || '';
     this._headersCfg = config && config.headers;
     this._credentials = config && config.credentials;
+  }
+
+  toConfig() {
+    if (typeof this._headersCfg === 'function') return null;
+    const out = { type: 'rest' };
+    if (this._base) out.base = this._base;
+    if (this._headersCfg) out.headers = this._headersCfg;
+    if (this._credentials) out.credentials = this._credentials;
+    return out;
   }
 
   async _fetch(p, opts) {
@@ -3007,4 +3059,4 @@ function fromPicker(vfs, destPath, opts) {
 // @gcu/vfs — integrated into the base image
 // No plugin registration needed — VFS is available as a builtin.
 
-export { VFS, VFSError, CommentBackend, MemoryBackend, AbusBackend, FSAABackend, IDBBackend, path };
+export { VFS, VFSError, Backend, BACKEND_TYPES, CommentBackend, MemoryBackend, AbusBackend, FSAABackend, IDBBackend, OPFSBackend, FetchBackend, RESTBackend, OverlayBackend, CacheBackend, path };

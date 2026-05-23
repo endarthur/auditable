@@ -18,6 +18,11 @@ import {
   ProcessManager, MODE, STATE, EXIT,
 } from '../ext/proc/index.js';
 import { createNodeWorker } from '../ext/proc/src/node-worker-shim.js';
+import { VFS, MemoryBackend, FetchBackend } from '../ext/vfs/index.js';
+
+// vfsModuleUrl pointing at the built @gcu/vfs bundle on disk — the worker
+// will `await import(url)` to get VFS / Backend / BACKEND_TYPES.
+const vfsModuleUrl = new URL('../ext/vfs/index.js', import.meta.url).href;
 
 // ── fixture helpers ──
 
@@ -127,11 +132,11 @@ describe('module-call mode', () => {
     pm.shutdown();
   });
 
-  it('rejects VFS-path modules with a Phase B pointer', async () => {
+  it('rejects VFS-path modules — URL or data: only', async () => {
     const pm = makePm();
     assert.throws(
       () => pm.spawn({ module: '/local/path.js', fn: 'x' }),
-      /Phase B/,
+      /VFS-path modules not supported/,
     );
     pm.shutdown();
   });
@@ -409,10 +414,36 @@ describe('process table', () => {
 // ── out-of-scope phase rejection ──
 
 describe('out-of-scope features fail loud (no silent stubs)', () => {
-  it('{ vfs } throws Phase B', () => {
+  it('{ vfs } without vfsBundleSource/vfsModuleUrl throws', () => {
     assert.throws(
-      () => new ProcessManager({ vfs: {}, createWorker: createNodeWorker }),
-      /Phase B/,
+      () => new ProcessManager({
+        vfs: { _mounts: new Map() },
+        createWorker: createNodeWorker,
+      }),
+      /vfsBundleSource.*vfsModuleUrl/,
+    );
+  });
+
+  it('{ vfs } with both bundle and url throws', () => {
+    assert.throws(
+      () => new ProcessManager({
+        vfs: { _mounts: new Map() },
+        vfsBundleSource: '/* x */',
+        vfsModuleUrl: 'data:text/javascript,',
+        createWorker: createNodeWorker,
+      }),
+      /not both/,
+    );
+  });
+
+  it('{ vfs } without _mounts throws', () => {
+    assert.throws(
+      () => new ProcessManager({
+        vfs: {},
+        vfsBundleSource: '/* x */',
+        createWorker: createNodeWorker,
+      }),
+      /must be a @gcu\/vfs VFS instance/,
     );
   });
 
@@ -438,6 +469,168 @@ describe('out-of-scope features fail loud (no silent stubs)', () => {
   it('{ remote } throws Phase F', () => {
     const pm = makePm();
     assert.throws(() => pm.spawn(() => 1, { remote: {} }), /Phase F/);
+    pm.shutdown();
+  });
+});
+
+// ── VFS proxy (Phase B) ─────────────────────────────────────────────
+
+describe('vfs in workers (Phase B)', () => {
+  async function makeHostVfs() {
+    const v = new VFS();
+    const mem = new MemoryBackend();
+    await mem.init();
+    v._mounts.set('/', mem);
+    return v;
+  }
+
+  it('ctx.vfs reads a file via proxy backend (module-service mode)', async () => {
+    const vfs = await makeHostVfs();
+    await vfs.writeFile('/hello.txt', 'world');
+    const pm = new ProcessManager({
+      vfs, vfsModuleUrl, createWorker: createNodeWorker,
+    });
+    const url = fixture('vfsread', `
+      export default async function(ctx) {
+        const text = await ctx.vfs.readFile('/hello.txt', 'utf8');
+        ctx.send({ type: 'read', text });
+        ctx.exit(0);
+      }
+    `);
+    const proc = await pm.spawn({ module: url, mode: 'service' });
+    let got = null;
+    proc.on(msg => { if (msg.type === 'read') got = msg.text; });
+    const code = await proc.wait();
+    assert.equal(code, EXIT.OK);
+    assert.equal(got, 'world');
+    pm.shutdown();
+  });
+
+  it('ctx.vfs writes propagate back to the host VFS', async () => {
+    const vfs = await makeHostVfs();
+    const pm = new ProcessManager({
+      vfs, vfsModuleUrl, createWorker: createNodeWorker,
+    });
+    const url = fixture('vfswrite', `
+      export default async function(ctx) {
+        await ctx.vfs.writeFile('/from-worker.txt', 'hi from worker');
+        ctx.exit(0);
+      }
+    `);
+    const proc = await pm.spawn({ module: url, mode: 'service' });
+    await proc.wait();
+    const text = await vfs.readFile('/from-worker.txt', 'utf8');
+    assert.equal(text, 'hi from worker');
+    pm.shutdown();
+  });
+
+  it('ENOENT propagates from host backend to worker', async () => {
+    const vfs = await makeHostVfs();
+    const pm = new ProcessManager({
+      vfs, vfsModuleUrl, createWorker: createNodeWorker,
+    });
+    const url = fixture('vfserror', `
+      export default async function(ctx) {
+        try {
+          await ctx.vfs.readFile('/nope.txt', 'utf8');
+          ctx.send({ type: 'read', ok: true });
+        } catch (e) {
+          ctx.send({ type: 'read', ok: false, code: e.code, message: e.message });
+        }
+        ctx.exit(0);
+      }
+    `);
+    const proc = await pm.spawn({ module: url, mode: 'service' });
+    let result = null;
+    proc.on(msg => { if (msg.type === 'read') result = msg; });
+    await proc.wait();
+    assert.equal(result.ok, false);
+    assert.equal(result.code, 'ENOENT');
+    pm.shutdown();
+  });
+
+  it('function mode: vfs passed as last arg with opts.vfs=true', async () => {
+    const vfs = await makeHostVfs();
+    await vfs.writeFile('/counter.txt', '7');
+    const pm = new ProcessManager({
+      vfs, vfsModuleUrl, createWorker: createNodeWorker,
+    });
+    const result = await pm.compute(
+      async (incr, vfs) => {
+        const cur = parseInt(await vfs.readFile('/counter.txt', 'utf8'), 10);
+        return cur + incr;
+      },
+      [3],
+      { vfs: true },
+    );
+    assert.equal(result, 10);
+    pm.shutdown();
+  });
+
+  it('function mode: omitting opts.vfs leaves vfs out of args', async () => {
+    const vfs = await makeHostVfs();
+    const pm = new ProcessManager({
+      vfs, vfsModuleUrl, createWorker: createNodeWorker,
+    });
+    const argCount = await pm.compute(function (a, b) { return arguments.length; }, [1, 2]);
+    assert.equal(argCount, 2);   // exactly two args, no injected vfs
+    pm.shutdown();
+  });
+
+  it('compute rejects when opts.vfs=true but manager has no vfs', async () => {
+    const pm = makePm();
+    await assert.rejects(
+      pm.compute(() => 1, [], { vfs: true }),
+      /ProcessManager was constructed without a vfs/,
+    );
+    pm.shutdown();
+  });
+
+  it('module-call mode: vfs passed as last arg', async () => {
+    const vfs = await makeHostVfs();
+    await vfs.writeFile('/n.txt', '5');
+    const pm = new ProcessManager({
+      vfs, vfsModuleUrl, createWorker: createNodeWorker,
+    });
+    const modUrl = fixture('vfscall', `
+      export async function readN(name, vfs) {
+        const text = await vfs.readFile('/' + name, 'utf8');
+        return parseInt(text, 10) * 2;
+      }
+    `);
+    const proc = await pm.spawn(
+      { module: modUrl, fn: 'readN', args: ['n.txt'] },
+      { vfs: true },
+    );
+    await proc.wait();
+    assert.equal(proc.result, 10);
+    pm.shutdown();
+  });
+
+  it('direct-replicated backend constructs in the worker (smoke)', async () => {
+    const vfs = new VFS();
+    const mem = new MemoryBackend();
+    await mem.init();
+    vfs._mounts.set('/', mem);
+    vfs._mounts.set('/api', new FetchBackend({ base: 'http://127.0.0.1:0/' }));
+    await vfs.writeFile('/sentinel.txt', 'ok');
+
+    const pm = new ProcessManager({
+      vfs, vfsModuleUrl, createWorker: createNodeWorker,
+    });
+    const url = fixture('vfsdirect', `
+      export default async function(ctx) {
+        const proxied = await ctx.vfs.readFile('/sentinel.txt', 'utf8');
+        ctx.send({ type: 'r', proxied, hasApiMount: ctx.vfs._mounts.has('/api') });
+        ctx.exit(0);
+      }
+    `);
+    const proc = await pm.spawn({ module: url, mode: 'service' });
+    let got = null;
+    proc.on(msg => { if (msg.type === 'r') got = msg; });
+    await proc.wait();
+    assert.equal(got.proxied, 'ok');
+    assert.equal(got.hasApiMount, true);
     pm.shutdown();
   });
 });

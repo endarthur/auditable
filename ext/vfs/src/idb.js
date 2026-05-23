@@ -11,6 +11,10 @@ class IDBBackend extends Backend {
     this._db = null;
   }
 
+  toConfig() {
+    return { type: 'idb', name: this._dbName };
+  }
+
   async init() {
     this._db = await new Promise((resolve, reject) => {
       const req = indexedDB.open(this._dbName, 1);

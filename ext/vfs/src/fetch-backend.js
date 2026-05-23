@@ -42,6 +42,19 @@ class FetchBackend extends Backend {
     this._credentials = config && config.credentials;
   }
 
+  toConfig() {
+    // Function-shaped headers (a callback that computes auth tokens
+    // dynamically) can't be cloned across the worker boundary; force the
+    // proxy path in that case so the main-thread callback still runs.
+    if (typeof this._headersCfg === 'function') return null;
+    const out = { type: 'fetch' };
+    if (this._base) out.base = this._base;
+    if (this._index !== undefined) out.index = this._index;
+    if (this._headersCfg) out.headers = this._headersCfg;
+    if (this._credentials) out.credentials = this._credentials;
+    return out;
+  }
+
   async _fetch(p, opts) {
     const url = _httpUrl(this._base, p);
     const headers = await _httpHeaders(this._headersCfg);
