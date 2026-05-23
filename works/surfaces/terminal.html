@@ -23,7 +23,7 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden;
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
 import { VFS, AbusBackend, MemoryBackend } from '../../ext/vfs/index.js';
-import { Terminal, FitAddon } from '../../ext/xterm/index.js';
+import { Terminal, FitAddon, WebglAddon } from '../../ext/xterm/index.js';
 import { createGeasClient, createXtermAdapter, makeLineEditor } from '../../ext/geas/index.js';
 
 // Decompress the embedded worker payload to a blob URL.
@@ -71,6 +71,17 @@ window.addEventListener('message', async (ev) => {
   const fit = new FitAddon();
   term.loadAddon(fit);
   term.open(document.getElementById('term'));
+  // The WebGL renderer renders box-drawing / powerline glyphs as proper
+  // connected lines (the canvas renderer can leave a hairline gap at
+  // intersections). loadAddon AFTER open() per xterm.js's docs. If the
+  // GL context is ever lost, drop the addon — xterm falls back to canvas.
+  try {
+    const webgl = new WebglAddon();
+    webgl.onContextLoss(() => { try { webgl.dispose(); } catch { /* */ } });
+    term.loadAddon(webgl);
+  } catch (e) {
+    console.warn('[terminal] WebGL renderer unavailable, falling back to canvas:', e.message);
+  }
   fit.fit();
   window.addEventListener('resize', () => { try { fit.fit(); } catch { /* */ } });
 
