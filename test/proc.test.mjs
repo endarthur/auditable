@@ -202,6 +202,64 @@ describe('module-service mode', () => {
   });
 });
 
+// ── inline-service mode ──
+
+describe('inline-service mode', () => {
+  it('runs inlined user code that registered an entry', async () => {
+    const inlineSource = `
+      _procRegisterEntry(async function(ctx) {
+        ctx.on(msg => {
+          if (msg.type === 'hello') ctx.send({ type: 'world', got: msg.payload });
+          if (msg.type === 'bye') ctx.exit(0);
+        });
+        await new Promise(r => ctx.signal.addEventListener('abort', r));
+      });
+    `;
+    const pm = makePm();
+    const proc = await pm.spawn({ inlineSource });
+    assert.equal(proc.mode, MODE.INLINE_SERVICE);
+
+    const replies = [];
+    proc.on(msg => replies.push(msg));
+    proc.send({ type: 'hello', payload: 42 });
+    for (let i = 0; i < 100 && replies.length === 0; i++) {
+      await new Promise(r => setTimeout(r, 10));
+    }
+    assert.deepEqual(replies[0], { type: 'world', got: 42 });
+
+    proc.send({ type: 'bye' });
+    const code = await proc.wait();
+    assert.equal(code, EXIT.OK);
+    pm.shutdown();
+  });
+
+  it('times out if user code never registers an entry', async () => {
+    // Pass an inlineSource that does NOT call _procRegisterEntry. The
+    // bootstrap should give up after 5s with a helpful error.
+    // Override killGrace so we don't wait the full default after
+    // the bootstrap reports its error.
+    const inlineSource = `
+      // Intentionally empty — never registers an entry.
+      // The bootstrap's 5s timeout will fire.
+    `;
+    const pm = makePm({ killGrace: 100 });
+    const proc = await pm.spawn({ inlineSource });
+    const code = await proc.wait();
+    assert.notEqual(code, EXIT.OK);
+    assert.match(proc.error?.message || '', /_procRegisterEntry/);
+    pm.shutdown();
+  });
+
+  it('inlineSource with mode other than "service" throws', () => {
+    const pm = makePm();
+    assert.throws(
+      () => pm.spawn({ inlineSource: '/* */', mode: 'call' }),
+      /only supported with mode: "service"/,
+    );
+    pm.shutdown();
+  });
+});
+
 // ── signals ──
 
 describe('signals', () => {

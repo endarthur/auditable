@@ -3,7 +3,12 @@
 // Pure module: zero imports, safe in any JS environment (browser, worker,
 // Node). All other proc modules build on this.
 
-export const PROTOCOL_VERSION = '0.1';
+// Wire-protocol version. Kept module-internal (not exported via the package
+// footer) because @gcu/abus also has a top-level PROTOCOL_VERSION; the works
+// build inlines both libs into the terminal surface and a top-level identifier
+// collision was a SyntaxError. If a downstream needs to read this, expose it
+// under a namespaced name later (e.g. PROC_PROTOCOL_VERSION).
+const PROC_PROTOCOL_VERSION = '0.1';
 
 // Reserved namespace for proc lifecycle messages. User-protocol messages
 // ride on MSG.MSG (wrapped via proc.send/ctx.send) so they can never
@@ -25,9 +30,10 @@ export const MSG = Object.freeze({
 });
 
 export const MODE = Object.freeze({
-  FUNCTION:    'function',
-  MODULE_CALL: 'module-call',
-  SERVICE:     'module-service',
+  FUNCTION:        'function',
+  MODULE_CALL:     'module-call',
+  SERVICE:         'module-service',
+  INLINE_SERVICE:  'inline-service',
 });
 
 export const STATE = Object.freeze({

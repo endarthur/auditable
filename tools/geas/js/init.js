@@ -1,14 +1,16 @@
-// Bootstrap. Wires the three ESM bundles (geas / @gcu/term / @gcu/vfs)
-// the build embedded as source strings into a running shell:
+// Bootstrap. Wires the four ESM bundles (geas / @gcu/term / @gcu/vfs /
+// @gcu/proc) the build embedded as source strings into a running shell:
 //
-//   - term + vfs are dynamic-imported on the main thread
+//   - term + vfs + proc are dynamic-imported on the main thread
 //   - geas is dynamic-imported on the main thread (for the client API)
-//     AND inlined into a module Worker (for the executor side)
+//     AND inlined into a proc module-service worker (for the executor side)
 //   - the VFS lives on the main thread; the worker reaches it over the
 //     RPC proxy that createGeasClient sets up
+//   - proc owns the worker's process lifecycle (PID, signals, kill); the
+//     geas client talks to it through procToWorker's Worker-shaped adapter
 //
-// GEAS_BUNDLE_SOURCE / TERM_BUNDLE_SOURCE / VFS_BUNDLE_SOURCE are
-// injected by build.js (target=geas).
+// GEAS_BUNDLE_SOURCE / TERM_BUNDLE_SOURCE / VFS_BUNDLE_SOURCE /
+// PROC_BUNDLE_SOURCE are injected by build.js (target=geas).
 
 function _setStatus(text) {
   const el = document.getElementById('status');
@@ -28,16 +30,24 @@ async function boot() {
       await document.fonts.ready;
     }
 
-    // Dynamic-import the three bundles off blob URLs.
+    // Dynamic-import the four bundles off blob URLs.
     const termMod = await import(_blobUrl(TERM_BUNDLE_SOURCE));
     const vfsMod  = await import(_blobUrl(VFS_BUNDLE_SOURCE));
+    const procMod = await import(_blobUrl(PROC_BUNDLE_SOURCE));
     const geas    = await import(_blobUrl(GEAS_BUNDLE_SOURCE));
 
-    // The worker: the geas bundle inlined verbatim, then the setup call.
-    // No cross-blob import — the worker is fully self-contained.
+    // The worker module: the geas bundle inlined verbatim, then a default
+    // export that runs setupGeasWorker over a proc-ctx-derived target. No
+    // cross-blob import — the worker is fully self-contained.
     _setStatus('spawning worker…');
-    const workerSource = GEAS_BUNDLE_SOURCE + '\n;setupGeasWorker(self, { createShell });\n';
-    const worker = new Worker(_blobUrl(workerSource), { type: 'module' });
+    const workerSource =
+      GEAS_BUNDLE_SOURCE +
+      '\nexport default geasProcEntry({ createShell, isTyped, setupGeasWorker });\n';
+    const workerUrl = _blobUrl(workerSource);
+
+    const pm = new procMod.ProcessManager();
+    const proc = await pm.spawn({ module: workerUrl, mode: 'service' });
+    const worker = geas.procToWorker(proc);
 
     // Filesystem (IndexedDB), seeded on first run.
     _setStatus('mounting filesystem…');
@@ -63,6 +73,8 @@ async function boot() {
       onWantInput: geas.makeLineEditor(adapter),
     });
     GS.client = client;
+    GS.proc = proc;
+    GS.pm = pm;
     await client.ready();
 
     _setStatus('ready');

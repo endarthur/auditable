@@ -20,22 +20,26 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden;
 import { connect } from '../../ext/abus/index.js';
 import { VFS, AbusBackend, MemoryBackend } from '../../ext/vfs/index.js';
 import { Terminal, FitAddon, WebglAddon } from '../../ext/xterm/index.js';
-import { createGeasClient, createXtermAdapter, makeLineEditor } from '../../ext/geas/index.js';
+import { createGeasClient, createXtermAdapter, makeLineEditor, procToWorker } from '../../ext/geas/index.js';
+import { ProcessManager } from '../../ext/proc/index.js';
 
 // Build the geas worker source from the inlined-lib-geas script the shell
-// adds at decompress time. Classic worker (the worker's geas bundle had
-// its exports rewritten to locals for the surface module; for the worker
-// we strip the trailing `export { ... }` and append the setupGeasWorker
-// tail). Cross-blob-URL ES module imports don't work from blob:file:// in
-// Chromium, so the surface and the worker each get their own copy of
-// geas — fine memory-wise, and works in every origin.
-function spawnGeasWorker() {
+// adds at decompress time. We use proc's inline-service mode: the user
+// code is concatenated into proc's bootstrap blob so there's no cross-
+// blob dynamic import — Chromium under file:// gives each blob URL its
+// own unique opaque origin and module-mode workers can't import another
+// blob URL. Inline mode keeps bootstrap + user code in a single blob.
+async function spawnGeasProc(pm) {
   const raw = document.getElementById('inlined-lib-geas')?.textContent;
   if (!raw) throw new Error('terminal: no inlined geas source for the worker');
+  // Strip the trailing `export { ... }` so the geas bundle's symbols
+  // (createShell, isTyped, setupGeasWorker, geasProcEntry) land as
+  // top-level bindings in the worker module. Then append the
+  // _procRegisterEntry call.
   const stripped = raw.replace(/export\s*\{[^}]*\};?\s*$/, '');
-  const src = stripped + '\nsetupGeasWorker(self, { createShell, isTyped });\n';
-  return new Worker(
-    URL.createObjectURL(new Blob([src], { type: 'application/javascript' })));
+  const inlineSource = stripped +
+    '\n_procRegisterEntry(geasProcEntry({ createShell, isTyped, setupGeasWorker }));\n';
+  return await pm.spawn({ inlineSource, command: 'geas-shell' });
 }
 
 function showError(msg) {
@@ -98,10 +102,14 @@ window.addEventListener('message', async (ev) => {
   vfs._mounts.set('/', new AbusBackend({ bus, service: 'works' }));
   vfs._mounts.set('/tmp', new MemoryBackend());
 
-  // Spawn the worker + the geas client.
-  let worker, client;
+  // Spawn the worker + the geas client. proc owns the worker lifecycle
+  // (PID, signals, kill); procToWorker wraps the Process as a Worker-
+  // shaped object so createGeasClient can stay protocol-agnostic.
+  let pm, proc, worker, client;
   try {
-    worker = spawnGeasWorker();
+    pm = new ProcessManager();
+    proc = await spawnGeasProc(pm);
+    worker = procToWorker(proc);
     client = createGeasClient({
       worker,
       vfs,

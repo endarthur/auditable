@@ -50,7 +50,7 @@ const header = '// ⚠ GENERATED FILE — DO NOT EDIT. Source: ext/geas/src/  Bu
   + '// @gcu/geas — the GCU shell. POSIX-syntax with typed-pipe extensions.\n';
 
 const output = header + '\n' + chunks.join('\n\n')
-  + '\n\nexport { tokenize, parse, parseWordParts, execute, defaultBuiltins, createShell, mkTyped, isTyped, NODE, createHeadlessAdapter, createTermAdapter, createXtermAdapter, adapterHooks, makeLineEditor, createGeasClient, setupGeasWorker, serveVFS, createVfsClient, createLoopback };\n';
+  + '\n\nexport { tokenize, parse, parseWordParts, execute, defaultBuiltins, createShell, mkTyped, isTyped, NODE, createHeadlessAdapter, createTermAdapter, createXtermAdapter, adapterHooks, makeLineEditor, createGeasClient, setupGeasWorker, serveVFS, createVfsClient, createLoopback, procToWorker, geasProcEntry };\n';
 
 const outPath = path.join(__dirname, 'index.js');
 fs.writeFileSync(outPath, output);

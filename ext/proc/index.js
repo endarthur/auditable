@@ -8,7 +8,12 @@
 // Pure module: zero imports, safe in any JS environment (browser, worker,
 // Node). All other proc modules build on this.
 
-const PROTOCOL_VERSION = '0.1';
+// Wire-protocol version. Kept module-internal (not exported via the package
+// footer) because @gcu/abus also has a top-level PROTOCOL_VERSION; the works
+// build inlines both libs into the terminal surface and a top-level identifier
+// collision was a SyntaxError. If a downstream needs to read this, expose it
+// under a namespaced name later (e.g. PROC_PROTOCOL_VERSION).
+const PROC_PROTOCOL_VERSION = '0.1';
 
 // Reserved namespace for proc lifecycle messages. User-protocol messages
 // ride on MSG.MSG (wrapped via proc.send/ctx.send) so they can never
@@ -30,9 +35,10 @@ const MSG = Object.freeze({
 });
 
 const MODE = Object.freeze({
-  FUNCTION:    'function',
-  MODULE_CALL: 'module-call',
-  SERVICE:     'module-service',
+  FUNCTION:        'function',
+  MODULE_CALL:     'module-call',
+  SERVICE:         'module-service',
+  INLINE_SERVICE:  'inline-service',
 });
 
 const STATE = Object.freeze({
@@ -262,9 +268,20 @@ class WritablePort {
 // string and inline it. It works in both browser workers and Node
 // worker_threads via a small runtime detect at the top.
 //
-// Why a string-template and not a separate file? Because Phase A is a
-// concat-build like the other ext/* packages. Writing the bootstrap as a
-// string in source means the build doesn't need a separate emit step.
+// Modes the bootstrap dispatches:
+//   - function:        eval the serialized fn source, run, terminate.
+//   - module-call:     await import(url), call exports[fn], terminate.
+//   - module-service:  await import(url), call default(ctx), keep alive.
+//   - inline-service:  wait for the inlined user code to call
+//                      _procRegisterEntry(fn), then run fn(ctx).
+//
+// The inline-service mode exists for environments that block cross-blob
+// dynamic imports — primarily Chromium under `file://`, where every blob
+// URL gets a unique opaque origin and module-mode workers can't
+// import(anotherBlobUrl). Manager concatenates the user's module source
+// into the same blob as the bootstrap; inlined user code calls
+// globalThis._procRegisterEntry(fn) at top level, and the bootstrap
+// awaits that registration before running.
 //
 // The bootstrap also uses string-MSG-types directly (rather than
 // importing protocol.js) because workers can't reach the registry's
@@ -273,6 +290,31 @@ class WritablePort {
 
 const BOOTSTRAP_SOURCE = `
 // @gcu/proc bootstrap — runs inside every spawned worker
+
+// ── inline-service registration hook ──
+// Exposed at globalThis (and at the module's top-level binding via the
+// concatenation) so inlined user code can register its entrypoint before
+// the bootstrap dispatches the init message. Resolves the readiness
+// promise the dispatcher awaits.
+let _procInlineEntry = null;
+let _procResolveInlineReady;
+const _procInlineReady = new Promise((r) => { _procResolveInlineReady = r; });
+function _procRegisterEntry(fn) {
+  if (typeof fn !== 'function') {
+    throw new TypeError('_procRegisterEntry(fn): fn must be a function');
+  }
+  _procInlineEntry = fn;
+  if (_procResolveInlineReady) {
+    _procResolveInlineReady();
+    _procResolveInlineReady = null;
+  }
+}
+// Expose on globalThis too so the inlined user code can call it as either
+// _procRegisterEntry (top-level binding) or globalThis._procRegisterEntry.
+if (typeof globalThis !== 'undefined') {
+  globalThis._procRegisterEntry = _procRegisterEntry;
+}
+
 (async () => {
   // ── runtime detection ──
   let _post, _onMsg;
@@ -296,8 +338,6 @@ const BOOTSTRAP_SOURCE = `
     if (exited) return;
     exited = true;
     _post({ type: '_proc_exit', code });
-    // Best-effort close. In Node worker_threads, returning from the top
-    // module is enough — the worker_threads runtime closes the worker.
     if (typeof close === 'function') {
       try { close(); } catch (_) {}
     }
@@ -306,7 +346,6 @@ const BOOTSTRAP_SOURCE = `
   function ctxStdout(text) { _post({ type: '_proc_stdout', data: String(text) }); }
   function ctxStderr(text) { _post({ type: '_proc_stderr', data: String(text) }); }
 
-  // ── transfer auto-detection ──
   function autoTransfer(value) {
     if (value instanceof ArrayBuffer) return [value];
     if (value && typeof value === 'object' && value.buffer instanceof ArrayBuffer) {
@@ -315,16 +354,18 @@ const BOOTSTRAP_SOURCE = `
     return [];
   }
 
-  // ── INT handling: kill messages fire the AbortController ──
+  // Service-mode handler registry (filled when service entrypoint calls
+  // ctx.on()). Buffer for messages that arrive before subscription.
+  const SERVICE_HANDLERS = [];
+  const SERVICE_BUFFER = [];
+  const STDIN_WAITERS = [];
+  const STDIN_BUFFER = [];
+
   _onMsg(async (msg) => {
     if (!msg || typeof msg !== 'object') return;
     if (msg.type === '_proc_kill') {
       intReceived = true;
       try { ABORT.abort(); } catch (_) {}
-      // Function and module-call modes don't observe the signal; they're
-      // synchronous-ish from the bootstrap's POV. If they're done already
-      // this is a no-op; if they're still running, they'll be torn down by
-      // the host's KILL escalation after the grace period.
       return;
     }
     if (msg.type === '_proc_init') {
@@ -332,9 +373,7 @@ const BOOTSTRAP_SOURCE = `
       return;
     }
     if (msg.type === '_proc_msg') {
-      // Routed to service-mode handlers via the per-mode dispatcher.
       if (SERVICE_HANDLERS.length === 0) {
-        // Buffer until the service handler subscribes.
         SERVICE_BUFFER.push(msg.data);
       } else {
         for (const h of SERVICE_HANDLERS) {
@@ -344,7 +383,6 @@ const BOOTSTRAP_SOURCE = `
       return;
     }
     if (msg.type === '_proc_stdin') {
-      // Buffered for service-mode ctx.stdin consumers.
       if (STDIN_WAITERS.length) {
         const w = STDIN_WAITERS.shift();
         w({ value: msg.data, done: !!msg.eof });
@@ -354,13 +392,6 @@ const BOOTSTRAP_SOURCE = `
       return;
     }
   });
-
-  // Service-mode handler registry (filled when service entrypoint calls
-  // ctx.on()). Buffer for messages that arrive before subscription.
-  const SERVICE_HANDLERS = [];
-  const SERVICE_BUFFER = [];
-  const STDIN_WAITERS = [];
-  const STDIN_BUFFER = [];
 
   function makeServiceCtx() {
     return {
@@ -372,8 +403,6 @@ const BOOTSTRAP_SOURCE = `
       },
       on: (handler) => {
         SERVICE_HANDLERS.push(handler);
-        // Replay buffered messages so subscribers don't miss anything
-        // that arrived before subscription.
         while (SERVICE_BUFFER.length) {
           const d = SERVICE_BUFFER.shift();
           try { handler(d); } catch (_) {}
@@ -401,24 +430,29 @@ const BOOTSTRAP_SOURCE = `
     };
   }
 
-  // ── mode dispatch ──
+  async function runServiceEntry(entry) {
+    const ctx = makeServiceCtx();
+    try {
+      await entry(ctx);
+      if (!exited) exit(intReceived ? 130 : 0);
+    } catch (err) {
+      if (!exited) {
+        _post({ type: '_proc_error', error: { message: err && err.message || String(err), stack: err && err.stack, name: err && err.name } });
+        exit(1);
+      }
+    }
+  }
+
   async function dispatchInit(msg) {
     try {
       if (msg.mode === 'function') {
-        // Reconstruct the function from its serialized source.
-        // The expression form is wrapped in parens so 'function(){...}'
-        // parses as an expression, not a statement.
         const src = msg.source;
         const fn = (0, eval)('(' + src + ')');
         const args = Array.isArray(msg.args) ? msg.args : [];
         const result = await fn.apply(null, args);
-        // Auto-transfer ArrayBuffer / TypedArray results.
         const t = autoTransfer(result);
         _post({ type: '_proc_result', value: result }, t);
-        if (msg.keepalive) {
-          // Pool worker — stay alive, wait for next init.
-          return;
-        }
+        if (msg.keepalive) return;
         exit(0);
         return;
       }
@@ -442,18 +476,21 @@ const BOOTSTRAP_SOURCE = `
         if (typeof entry !== 'function') {
           throw new Error('proc: module ' + msg.url + ' has no default export entrypoint');
         }
-        const ctx = makeServiceCtx();
-        try {
-          await entry(ctx);
-          // Honor cooperative-INT exit code (130) if a kill was received
-          // while the entry was running, otherwise a clean 0.
-          if (!exited) exit(intReceived ? 130 : 0);
-        } catch (err) {
-          if (!exited) {
-            _post({ type: '_proc_error', error: { message: err && err.message || String(err), stack: err && err.stack, name: err && err.name } });
-            exit(1);
-          }
-        }
+        await runServiceEntry(entry);
+        return;
+      }
+      if (msg.mode === 'inline-service') {
+        // Inlined user code calls _procRegisterEntry(fn) at module top
+        // level; we wait briefly for that registration. If it never
+        // happens, the worker bailed: surface a helpful error.
+        await Promise.race([
+          _procInlineReady,
+          new Promise((_, rej) => setTimeout(
+            () => rej(new Error('proc: inline-service worker did not call _procRegisterEntry(fn) within 5000ms')),
+            5000,
+          )),
+        ]);
+        await runServiceEntry(_procInlineEntry);
         return;
       }
       throw new Error('proc: unknown mode "' + msg.mode + '"');
@@ -463,7 +500,6 @@ const BOOTSTRAP_SOURCE = `
     }
   }
 
-  // Announce we're alive and waiting for init.
   _post({ type: '_proc_ready' });
 })();
 `;
@@ -511,10 +547,11 @@ class Process {
     }
   }
 
-  // Send a custom-protocol message to the worker (service mode).
+  // Send a custom-protocol message to the worker. Available in any
+  // service-flavored mode (module-service or inline-service).
   send(data, transfer) {
-    if (this.mode !== MODE.SERVICE) {
-      throw new Error('proc.send() requires module-service mode');
+    if (this.mode !== MODE.SERVICE && this.mode !== MODE.INLINE_SERVICE) {
+      throw new Error('proc.send() requires a service mode (module-service or inline-service)');
     }
     this._post({ type: MSG.MSG, data }, transfer);
   }
@@ -891,14 +928,24 @@ class Pool {
 
 
 
-// Default browser worker creation — blob URL + new Worker(url, { type: 'module' }).
+// Default browser worker creation — blob URL + new Worker(url).
+//
+// Classic worker (no { type: 'module' }) so we can spawn from blob:file://
+// origins. Chromium blocks module-mode workers loaded from blob URLs that
+// originate on file:// — the surface iframes in Auditable Works run from
+// blob:file://*/uuid, and a module worker there fails to load entirely.
+//
+// The bootstrap source is structured to work as a classic script: no
+// top-level await, no top-level import statements, no export — runtime
+// detection and any user-module imports happen inside an async IIFE,
+// where dynamic import() is supported in both classic and module workers.
 function defaultCreateWorker(source) {
   if (typeof Worker === 'undefined' || typeof Blob === 'undefined' || typeof URL === 'undefined') {
     throw new Error('proc: no Worker/Blob/URL globals — pass opts.createWorker (e.g. createNodeWorker)');
   }
   const blob = new Blob([source], { type: 'application/javascript' });
   const url = URL.createObjectURL(blob);
-  const worker = new Worker(url, { type: 'module' });
+  const worker = new Worker(url);
   return {
     worker,
     cleanup: () => { try { URL.revokeObjectURL(url); } catch (_) {} },
@@ -1099,12 +1146,40 @@ class ProcessManager {
       };
     }
 
-    throw new TypeError('proc.spawn: payload must be a function or { module, ... } object');
+    // Inline-source mode: caller hands us the worker module source as a
+    // string. We concatenate it into the bootstrap blob so there is no
+    // cross-blob import — needed for Chromium under file:// where every
+    // blob URL has a unique opaque origin and module-mode workers can't
+    // import(anotherBlobUrl). Wire mode: 'inline-service'. The inlined
+    // user code must call _procRegisterEntry(fn) at module top level.
+    if (payload && typeof payload === 'object' && typeof payload.inlineSource === 'string') {
+      const explicitMode = payload.mode || opts.mode;
+      if (explicitMode && explicitMode !== 'service') {
+        throw new Error('proc: inlineSource is only supported with mode: "service" in 0.1.x');
+      }
+      return {
+        wire: {
+          type: MSG.INIT,
+          mode: MODE.INLINE_SERVICE,
+        },
+        transfer: [],
+        mode: MODE.INLINE_SERVICE,
+        command: payload.command || '<inline>',
+        inlineSource: payload.inlineSource,
+      };
+    }
+
+    throw new TypeError('proc.spawn: payload must be a function, { module, ... } object, or { inlineSource, ... } object');
   }
 
   async _actuallySpawn(initMsg, opts, payload) {
     const pid = this._nextPid();
-    const { worker, cleanup } = this._createWorker(BOOTSTRAP_SOURCE);
+    // For inline-service mode, concatenate user code into the bootstrap
+    // so there's no cross-blob import. See SPEC.md §3.4.
+    const bootstrap = initMsg.inlineSource
+      ? BOOTSTRAP_SOURCE + '\n;\n' + initMsg.inlineSource + '\n'
+      : BOOTSTRAP_SOURCE;
+    const { worker, cleanup } = this._createWorker(bootstrap);
 
     const proc = new Process({
       pid,
@@ -1173,7 +1248,6 @@ class ProcessManager {
 }
 export {
   // protocol.js
-  PROTOCOL_VERSION,
   MSG,
   MODE,
   STATE,

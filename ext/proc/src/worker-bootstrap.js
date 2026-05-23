@@ -9,9 +9,20 @@
 // string and inline it. It works in both browser workers and Node
 // worker_threads via a small runtime detect at the top.
 //
-// Why a string-template and not a separate file? Because Phase A is a
-// concat-build like the other ext/* packages. Writing the bootstrap as a
-// string in source means the build doesn't need a separate emit step.
+// Modes the bootstrap dispatches:
+//   - function:        eval the serialized fn source, run, terminate.
+//   - module-call:     await import(url), call exports[fn], terminate.
+//   - module-service:  await import(url), call default(ctx), keep alive.
+//   - inline-service:  wait for the inlined user code to call
+//                      _procRegisterEntry(fn), then run fn(ctx).
+//
+// The inline-service mode exists for environments that block cross-blob
+// dynamic imports — primarily Chromium under `file://`, where every blob
+// URL gets a unique opaque origin and module-mode workers can't
+// import(anotherBlobUrl). Manager concatenates the user's module source
+// into the same blob as the bootstrap; inlined user code calls
+// globalThis._procRegisterEntry(fn) at top level, and the bootstrap
+// awaits that registration before running.
 //
 // The bootstrap also uses string-MSG-types directly (rather than
 // importing protocol.js) because workers can't reach the registry's
@@ -20,6 +31,31 @@
 
 export const BOOTSTRAP_SOURCE = `
 // @gcu/proc bootstrap — runs inside every spawned worker
+
+// ── inline-service registration hook ──
+// Exposed at globalThis (and at the module's top-level binding via the
+// concatenation) so inlined user code can register its entrypoint before
+// the bootstrap dispatches the init message. Resolves the readiness
+// promise the dispatcher awaits.
+let _procInlineEntry = null;
+let _procResolveInlineReady;
+const _procInlineReady = new Promise((r) => { _procResolveInlineReady = r; });
+function _procRegisterEntry(fn) {
+  if (typeof fn !== 'function') {
+    throw new TypeError('_procRegisterEntry(fn): fn must be a function');
+  }
+  _procInlineEntry = fn;
+  if (_procResolveInlineReady) {
+    _procResolveInlineReady();
+    _procResolveInlineReady = null;
+  }
+}
+// Expose on globalThis too so the inlined user code can call it as either
+// _procRegisterEntry (top-level binding) or globalThis._procRegisterEntry.
+if (typeof globalThis !== 'undefined') {
+  globalThis._procRegisterEntry = _procRegisterEntry;
+}
+
 (async () => {
   // ── runtime detection ──
   let _post, _onMsg;
@@ -43,8 +79,6 @@ export const BOOTSTRAP_SOURCE = `
     if (exited) return;
     exited = true;
     _post({ type: '_proc_exit', code });
-    // Best-effort close. In Node worker_threads, returning from the top
-    // module is enough — the worker_threads runtime closes the worker.
     if (typeof close === 'function') {
       try { close(); } catch (_) {}
     }
@@ -53,7 +87,6 @@ export const BOOTSTRAP_SOURCE = `
   function ctxStdout(text) { _post({ type: '_proc_stdout', data: String(text) }); }
   function ctxStderr(text) { _post({ type: '_proc_stderr', data: String(text) }); }
 
-  // ── transfer auto-detection ──
   function autoTransfer(value) {
     if (value instanceof ArrayBuffer) return [value];
     if (value && typeof value === 'object' && value.buffer instanceof ArrayBuffer) {
@@ -62,16 +95,18 @@ export const BOOTSTRAP_SOURCE = `
     return [];
   }
 
-  // ── INT handling: kill messages fire the AbortController ──
+  // Service-mode handler registry (filled when service entrypoint calls
+  // ctx.on()). Buffer for messages that arrive before subscription.
+  const SERVICE_HANDLERS = [];
+  const SERVICE_BUFFER = [];
+  const STDIN_WAITERS = [];
+  const STDIN_BUFFER = [];
+
   _onMsg(async (msg) => {
     if (!msg || typeof msg !== 'object') return;
     if (msg.type === '_proc_kill') {
       intReceived = true;
       try { ABORT.abort(); } catch (_) {}
-      // Function and module-call modes don't observe the signal; they're
-      // synchronous-ish from the bootstrap's POV. If they're done already
-      // this is a no-op; if they're still running, they'll be torn down by
-      // the host's KILL escalation after the grace period.
       return;
     }
     if (msg.type === '_proc_init') {
@@ -79,9 +114,7 @@ export const BOOTSTRAP_SOURCE = `
       return;
     }
     if (msg.type === '_proc_msg') {
-      // Routed to service-mode handlers via the per-mode dispatcher.
       if (SERVICE_HANDLERS.length === 0) {
-        // Buffer until the service handler subscribes.
         SERVICE_BUFFER.push(msg.data);
       } else {
         for (const h of SERVICE_HANDLERS) {
@@ -91,7 +124,6 @@ export const BOOTSTRAP_SOURCE = `
       return;
     }
     if (msg.type === '_proc_stdin') {
-      // Buffered for service-mode ctx.stdin consumers.
       if (STDIN_WAITERS.length) {
         const w = STDIN_WAITERS.shift();
         w({ value: msg.data, done: !!msg.eof });
@@ -101,13 +133,6 @@ export const BOOTSTRAP_SOURCE = `
       return;
     }
   });
-
-  // Service-mode handler registry (filled when service entrypoint calls
-  // ctx.on()). Buffer for messages that arrive before subscription.
-  const SERVICE_HANDLERS = [];
-  const SERVICE_BUFFER = [];
-  const STDIN_WAITERS = [];
-  const STDIN_BUFFER = [];
 
   function makeServiceCtx() {
     return {
@@ -119,8 +144,6 @@ export const BOOTSTRAP_SOURCE = `
       },
       on: (handler) => {
         SERVICE_HANDLERS.push(handler);
-        // Replay buffered messages so subscribers don't miss anything
-        // that arrived before subscription.
         while (SERVICE_BUFFER.length) {
           const d = SERVICE_BUFFER.shift();
           try { handler(d); } catch (_) {}
@@ -148,24 +171,29 @@ export const BOOTSTRAP_SOURCE = `
     };
   }
 
-  // ── mode dispatch ──
+  async function runServiceEntry(entry) {
+    const ctx = makeServiceCtx();
+    try {
+      await entry(ctx);
+      if (!exited) exit(intReceived ? 130 : 0);
+    } catch (err) {
+      if (!exited) {
+        _post({ type: '_proc_error', error: { message: err && err.message || String(err), stack: err && err.stack, name: err && err.name } });
+        exit(1);
+      }
+    }
+  }
+
   async function dispatchInit(msg) {
     try {
       if (msg.mode === 'function') {
-        // Reconstruct the function from its serialized source.
-        // The expression form is wrapped in parens so 'function(){...}'
-        // parses as an expression, not a statement.
         const src = msg.source;
         const fn = (0, eval)('(' + src + ')');
         const args = Array.isArray(msg.args) ? msg.args : [];
         const result = await fn.apply(null, args);
-        // Auto-transfer ArrayBuffer / TypedArray results.
         const t = autoTransfer(result);
         _post({ type: '_proc_result', value: result }, t);
-        if (msg.keepalive) {
-          // Pool worker — stay alive, wait for next init.
-          return;
-        }
+        if (msg.keepalive) return;
         exit(0);
         return;
       }
@@ -189,18 +217,21 @@ export const BOOTSTRAP_SOURCE = `
         if (typeof entry !== 'function') {
           throw new Error('proc: module ' + msg.url + ' has no default export entrypoint');
         }
-        const ctx = makeServiceCtx();
-        try {
-          await entry(ctx);
-          // Honor cooperative-INT exit code (130) if a kill was received
-          // while the entry was running, otherwise a clean 0.
-          if (!exited) exit(intReceived ? 130 : 0);
-        } catch (err) {
-          if (!exited) {
-            _post({ type: '_proc_error', error: { message: err && err.message || String(err), stack: err && err.stack, name: err && err.name } });
-            exit(1);
-          }
-        }
+        await runServiceEntry(entry);
+        return;
+      }
+      if (msg.mode === 'inline-service') {
+        // Inlined user code calls _procRegisterEntry(fn) at module top
+        // level; we wait briefly for that registration. If it never
+        // happens, the worker bailed: surface a helpful error.
+        await Promise.race([
+          _procInlineReady,
+          new Promise((_, rej) => setTimeout(
+            () => rej(new Error('proc: inline-service worker did not call _procRegisterEntry(fn) within 5000ms')),
+            5000,
+          )),
+        ]);
+        await runServiceEntry(_procInlineEntry);
         return;
       }
       throw new Error('proc: unknown mode "' + msg.mode + '"');
@@ -210,7 +241,6 @@ export const BOOTSTRAP_SOURCE = `
     }
   }
 
-  // Announce we're alive and waiting for init.
   _post({ type: '_proc_ready' });
 })();
 `;

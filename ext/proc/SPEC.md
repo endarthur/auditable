@@ -104,6 +104,31 @@ The worker exits cleanly when `ctx.signal` fires (INT) or the entrypoint resolve
 
 `{module, fn}` defaults to `mode: "call"`. `{module}` without `fn` defaults to `mode: "service"`. Callers can be explicit with `mode: "call" | "service"`.
 
+### 3.4 inline-service mode
+
+Same shape as module-service but the user code is **concatenated into the bootstrap blob** instead of loaded via a URL import. The inlined code calls `_procRegisterEntry(fn)` at module top level, and the bootstrap awaits that registration before running.
+
+```js
+// host
+const proc = await pm.spawn({
+  inlineSource: workerSourceString,    // ESM source, will be concatenated
+});
+
+// the workerSourceString, after concatenation, runs at module top level:
+_procRegisterEntry(async function(ctx) {
+  ctx.on(msg => { /* … */ });
+  await new Promise(r => ctx.signal.addEventListener("abort", r));
+});
+```
+
+**When to use:** module-service mode does `import(workerBlobUrl)` from inside the bootstrap blob, which is fine over HTTP but blocked by Chromium when the page is loaded from `file://` (each blob URL gets a unique opaque origin and module-mode workers can't import another blob URL). Inline mode sidesteps this by putting the bootstrap and the user code in the *same* blob — no cross-blob import.
+
+The user-facing `mode` is still `"service"`; the inline path is selected by passing `inlineSource` instead of `module`. Wire-level, the bootstrap dispatches on `mode: "inline-service"`.
+
+`_procRegisterEntry(fn)` is exposed as a top-level binding in the worker module *and* on `globalThis`. Inlined user code can call either form. If the inlined code doesn't register an entry within 5 seconds, the bootstrap fails with a diagnostic error and exits non-zero — no silent hang.
+
+In 0.1.x, only the service shape is inline-able. Inline + module-call (`{ inlineSource, fn }`) is not implemented — would mean "the inlined module exports a function the bootstrap calls"; deferred until a real consumer wants it.
+
 ## 4. Wire protocol
 
 All messages between host and worker use a plain object with a `type` field. Lifecycle messages use the reserved prefix `_proc_`. Custom messages (the user's protocol) ride on `_proc_msg`.
@@ -112,7 +137,7 @@ All messages between host and worker use a plain object with a `type` field. Lif
 
 | Type | Payload | Sent when |
 |---|---|---|
-| `_proc_init` | `{ mode, source?, args?, transfer?, url?, fn? }` | First message after worker boots. Bootstrap dispatches by `mode`. |
+| `_proc_init` | `{ mode, source?, args?, transfer?, url?, fn? }` | First message after worker boots. Bootstrap dispatches by `mode` (`function` / `module-call` / `module-service` / `inline-service`). For inline-service the manager has concatenated the user source into the bootstrap blob; the bootstrap waits for `_procRegisterEntry(fn)` to fire before running. |
 | `_proc_stdin` | `{ data, eof? }` | Host writes to process's stdin (Phase A: not heavily exercised). |
 | `_proc_kill` | `{ signal: "INT" \| "TERM" }` | Cooperative kill — fires worker's AbortController. `KILL` is not on the wire; it's a `worker.terminate()`. |
 | `_proc_msg` | `{ data }` | Custom protocol message from `proc.send(data)`. Bootstrap delivers `data` to `ctx.on` handlers in module-service mode. |

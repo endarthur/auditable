@@ -48,7 +48,6 @@ const header = `// @gcu/proc — process model for the browser (Phase A: functio
 const footer = `
 export {
   // protocol.js
-  PROTOCOL_VERSION,
   MSG,
   MODE,
   STATE,

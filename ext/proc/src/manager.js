@@ -8,14 +8,24 @@ import { Process } from './process.js';
 import { Pool } from './pool.js';
 import { BOOTSTRAP_SOURCE } from './worker-bootstrap.js';
 
-// Default browser worker creation — blob URL + new Worker(url, { type: 'module' }).
+// Default browser worker creation — blob URL + new Worker(url).
+//
+// Classic worker (no { type: 'module' }) so we can spawn from blob:file://
+// origins. Chromium blocks module-mode workers loaded from blob URLs that
+// originate on file:// — the surface iframes in Auditable Works run from
+// blob:file://*/uuid, and a module worker there fails to load entirely.
+//
+// The bootstrap source is structured to work as a classic script: no
+// top-level await, no top-level import statements, no export — runtime
+// detection and any user-module imports happen inside an async IIFE,
+// where dynamic import() is supported in both classic and module workers.
 function defaultCreateWorker(source) {
   if (typeof Worker === 'undefined' || typeof Blob === 'undefined' || typeof URL === 'undefined') {
     throw new Error('proc: no Worker/Blob/URL globals — pass opts.createWorker (e.g. createNodeWorker)');
   }
   const blob = new Blob([source], { type: 'application/javascript' });
   const url = URL.createObjectURL(blob);
-  const worker = new Worker(url, { type: 'module' });
+  const worker = new Worker(url);
   return {
     worker,
     cleanup: () => { try { URL.revokeObjectURL(url); } catch (_) {} },
@@ -216,12 +226,40 @@ export class ProcessManager {
       };
     }
 
-    throw new TypeError('proc.spawn: payload must be a function or { module, ... } object');
+    // Inline-source mode: caller hands us the worker module source as a
+    // string. We concatenate it into the bootstrap blob so there is no
+    // cross-blob import — needed for Chromium under file:// where every
+    // blob URL has a unique opaque origin and module-mode workers can't
+    // import(anotherBlobUrl). Wire mode: 'inline-service'. The inlined
+    // user code must call _procRegisterEntry(fn) at module top level.
+    if (payload && typeof payload === 'object' && typeof payload.inlineSource === 'string') {
+      const explicitMode = payload.mode || opts.mode;
+      if (explicitMode && explicitMode !== 'service') {
+        throw new Error('proc: inlineSource is only supported with mode: "service" in 0.1.x');
+      }
+      return {
+        wire: {
+          type: MSG.INIT,
+          mode: MODE.INLINE_SERVICE,
+        },
+        transfer: [],
+        mode: MODE.INLINE_SERVICE,
+        command: payload.command || '<inline>',
+        inlineSource: payload.inlineSource,
+      };
+    }
+
+    throw new TypeError('proc.spawn: payload must be a function, { module, ... } object, or { inlineSource, ... } object');
   }
 
   async _actuallySpawn(initMsg, opts, payload) {
     const pid = this._nextPid();
-    const { worker, cleanup } = this._createWorker(BOOTSTRAP_SOURCE);
+    // For inline-service mode, concatenate user code into the bootstrap
+    // so there's no cross-blob import. See SPEC.md §3.4.
+    const bootstrap = initMsg.inlineSource
+      ? BOOTSTRAP_SOURCE + '\n;\n' + initMsg.inlineSource + '\n'
+      : BOOTSTRAP_SOURCE;
+    const { worker, cleanup } = this._createWorker(bootstrap);
 
     const proc = new Process({
       pid,

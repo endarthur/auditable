@@ -22,6 +22,7 @@ import { createGeasClient } from './worker/client.js';
 import { setupGeasWorker } from './worker/worker-shim.js';
 import { serveVFS, createVfsClient } from './worker/vfs-proxy.js';
 import { createLoopback } from './worker/loopback.js';
+import { procToWorker, geasProcEntry } from './worker/proc-adapter.js';
 
 // createShell({vfs, env, cwd, stdout, stderr, builtins, onCommand})
 //
@@ -94,4 +95,5 @@ export {
   createHeadlessAdapter, createTermAdapter, createXtermAdapter, adapterHooks, makeLineEditor,
   defaultBuiltins, mkTyped, isTyped,
   createGeasClient, setupGeasWorker, serveVFS, createVfsClient, createLoopback,
+  procToWorker, geasProcEntry,
 };

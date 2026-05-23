@@ -44,10 +44,11 @@ export class Process {
     }
   }
 
-  // Send a custom-protocol message to the worker (service mode).
+  // Send a custom-protocol message to the worker. Available in any
+  // service-flavored mode (module-service or inline-service).
   send(data, transfer) {
-    if (this.mode !== MODE.SERVICE) {
-      throw new Error('proc.send() requires module-service mode');
+    if (this.mode !== MODE.SERVICE && this.mode !== MODE.INLINE_SERVICE) {
+      throw new Error('proc.send() requires a service mode (module-service or inline-service)');
     }
     this._post({ type: MSG.MSG, data }, transfer);
   }

@@ -121,7 +121,7 @@ if (target === 'works') {
   // internally, doesn't need to participate in this map.
   const worksZlib = require('zlib');
 
-  const SHARED_LIBS = ['abus', 'vfs', 'xterm', 'geas'];
+  const SHARED_LIBS = ['abus', 'vfs', 'xterm', 'geas', 'proc'];
 
   function rewriteSurfaceToDynamic(html, name, allowDeps) {
     // Rewrite each `ext/<dep>/index.js` import to a bare specifier
@@ -186,7 +186,7 @@ if (target === 'works') {
     { kind: 'preview',   file: 'works/surfaces/preview.html',   deps: ['abus'] },
     { kind: 'inspector', file: 'works/surfaces/inspector.html', deps: ['abus'] },
     { kind: 'terminal',  file: 'works/surfaces/terminal.html',
-      deps: ['abus', 'vfs', 'xterm', 'geas'], extras: 'terminal' },
+      deps: ['abus', 'vfs', 'xterm', 'geas', 'proc'], extras: 'terminal' },
     { kind: 'notebook',  file: 'auditable.html',                deps: null },
   ]) {
     const sp = path.join(__dirname, s.file);
@@ -444,15 +444,17 @@ if (target === 'geas') {
 
   // 2. Embed the ESM bundles the tool blob-URLs at runtime:
   //    - geas: dynamic-imported on the main thread for the client API,
-  //      and (with the setup call appended) inlined into the worker.
-  //    - term / vfs: dynamic-imported on the main thread.
+  //      and (with the proc-entry tail appended) inlined into the worker.
+  //    - term / vfs / proc: dynamic-imported on the main thread.
   const geasSrc = fs.readFileSync(path.join(__dirname, 'ext/geas/index.js'), 'utf8');
   const termSrc = fs.readFileSync(path.join(__dirname, 'ext/term/index.js'), 'utf8');
   const vfsSrc  = fs.readFileSync(path.join(__dirname, 'ext/vfs/index.js'), 'utf8');
+  const procSrc = fs.readFileSync(path.join(__dirname, 'ext/proc/index.js'), 'utf8');
   const embeds =
     'const GEAS_BUNDLE_SOURCE = ' + JSON.stringify(geasSrc) + ';\n' +
     'const TERM_BUNDLE_SOURCE = ' + JSON.stringify(termSrc) + ';\n' +
-    'const VFS_BUNDLE_SOURCE = '  + JSON.stringify(vfsSrc)  + ';\n';
+    'const VFS_BUNDLE_SOURCE = '  + JSON.stringify(vfsSrc)  + ';\n' +
+    'const PROC_BUNDLE_SOURCE = ' + JSON.stringify(procSrc) + ';\n';
 
   const js = embeds + '\n' + toolJs;
 
