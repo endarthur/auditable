@@ -12,43 +12,10 @@
 import { VFS } from '#vfs';
 import { WKS } from './state.js';
 import { detectWorkspaceBlock, hydrateWorkspace } from './persist.js';
+import { metaGet, metaSet } from './meta.js';
+import { clearSavedMounts } from './mount.js';
 
-// ── Shell metadata store ─────────────────────────────────────────────
-// A tiny IndexedDB keyval, separate from the workspace itself, holding the
-// saved workspace-folder handle. (FileSystemHandle objects are structured-
-// cloneable, so IndexedDB can store them.)
-
-const META_DB = 'auditable-works-meta';
 const HANDLE_KEY = 'workspace-handle';
-
-function _metaDb() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(META_DB, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore('kv');
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function _metaGet(key) {
-  const db = await _metaDb();
-  return new Promise((resolve, reject) => {
-    const req = db.transaction('kv', 'readonly').objectStore('kv').get(key);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function _metaSet(key, value) {
-  const db = await _metaDb();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('kv', 'readwrite');
-    if (value === undefined) tx.objectStore('kv').delete(key);
-    else tx.objectStore('kv').put(value, key);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
 
 // ── Reconnect gate ───────────────────────────────────────────────────
 // On reload, a saved folder handle's permission is often back to 'prompt';
@@ -99,7 +66,7 @@ export async function setupWorkspace() {
         '/sys':     { type: 'memory' },
       },
     });
-    for (const dir of ['/projects', '/lib', '/home', '/home/.works']) {
+    for (const dir of ['/projects', '/lib', '/home', '/home/.works', '/mnt']) {
       try { await vfs.mkdir(dir, { recursive: true }); } catch { /* exists */ }
     }
     await hydrateWorkspace(vfs, imported);
@@ -113,13 +80,13 @@ export async function setupWorkspace() {
   // A saved disk-folder handle takes precedence — that folder *is* the
   // workspace.
   let handle = null;
-  try { handle = await _metaGet(HANDLE_KEY); } catch { /* no meta db yet */ }
+  try { handle = await metaGet(HANDLE_KEY); } catch { /* no meta db yet */ }
   if (handle) {
     let perm = 'denied';
     try { perm = await handle.queryPermission({ mode: 'readwrite' }); } catch { /* */ }
     if (perm !== 'granted' && await _reconnectGate(handle)) perm = 'granted';
     if (perm === 'granted') home = { kind: 'fsaa', handle };
-    else await _metaSet(HANDLE_KEY, undefined).catch(() => {});   // dismissed
+    else await metaSet(HANDLE_KEY, undefined).catch(() => {});   // dismissed
   }
 
   // Default: browser-resident (IndexedDB).
@@ -139,7 +106,7 @@ export async function setupWorkspace() {
 
   // Standard directories inside the storage home (idempotent — they persist
   // across reloads). /home/.works holds the shell's own state.
-  for (const dir of ['/projects', '/lib', '/home', '/home/.works']) {
+  for (const dir of ['/projects', '/lib', '/home', '/home/.works', '/mnt']) {
     try { await vfs.mkdir(dir, { recursive: true }); } catch { /* exists */ }
   }
 
@@ -156,13 +123,14 @@ export async function openWorkspaceFolder() {
   try {
     handle = await window.showDirectoryPicker({ id: 'auditable-works', mode: 'readwrite' });
   } catch { return; }   // the user cancelled the picker
-  await _metaSet(HANDLE_KEY, handle);
+  await metaSet(HANDLE_KEY, handle);
   location.reload();
 }
 
 // Discard the current workspace and start fresh on a clean IndexedDB home.
 export async function resetWorkspace() {
-  await _metaSet(HANDLE_KEY, undefined).catch(() => {});
+  await metaSet(HANDLE_KEY, undefined).catch(() => {});
+  await clearSavedMounts().catch(() => {});
   await new Promise((resolve) => {
     const req = indexedDB.deleteDatabase('auditable-works');
     req.onsuccess = req.onerror = req.onblocked = () => resolve();

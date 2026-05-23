@@ -14,10 +14,12 @@ import { setupSurfaces, spawnSurface, openPath } from './surfaces.js';
 import { decompressSurfaces } from './surface-registry.js';
 import { serializeWorkspace, buildWorksHtml } from './persist.js';
 import { importNotebook } from './import.js';
+import { mountHandle, unmountAt, restoreMounts } from './mount.js';
 
 async function boot() {
   setupBus();                  // the A-Bus broker
   await setupWorkspace();      // the workspace VFS (storage home)
+  await restoreMounts();       // reconnect saved /mnt/* disk-folder mounts
   await decompressSurfaces();  // embedded surface payloads → blob URLs
   setupLayout();               // the rails surface host
   setupMenuBar();              // the desktop menu bar
@@ -32,6 +34,8 @@ async function boot() {
   WKS.refreshTree = refreshTree;
   WKS.newProject = newProject;
   WKS.importNotebook = importNotebook;
+  WKS.mountHandle = mountHandle;
+  WKS.unmountAt = unmountAt;
   WKS.serializeWorkspace = serializeWorkspace;
   WKS.buildWorksHtml = buildWorksHtml;
   window.WKS = WKS;

@@ -5,6 +5,7 @@ import { WKS, setStatus } from './state.js';
 import { spawnSurface } from './surfaces.js';
 import { newProject } from './tree.js';
 import { importNotebookViaPicker } from './import.js';
+import { mountFolder } from './mount.js';
 import { openWorkspaceFolder, resetWorkspace } from './workspace.js';
 import { exportWorkspace, openWorkspaceFile, saveWorkspace } from './persist.js';
 import { confirm as dlgConfirm } from '#dialog';
@@ -19,6 +20,7 @@ export function setupMenuBar() {
       '---',
       { label: 'New workspace…',       action: 'workspace:new' },
       { label: 'Open folder…',         action: 'workspace:open' },
+      { label: 'Mount folder…',        action: 'workspace:mount' },
       { label: 'Open workspace file…', action: 'workspace:openfile' },
       '---',
       { label: 'Save',              action: 'workspace:save', shortcut: 'Ctrl+S' },
@@ -40,6 +42,7 @@ export function setupMenuBar() {
     if (action === 'project:new') { newProject('/projects'); return; }
     if (action === 'project:import') { importNotebookViaPicker(); return; }
     if (action === 'workspace:open') { await openWorkspaceFolder(); return; }
+    if (action === 'workspace:mount') { await mountFolder(); return; }
     if (action === 'workspace:openfile') { openWorkspaceFile(); return; }
     if (action === 'workspace:save') { await saveWorkspace(); return; }
     if (action === 'workspace:export') { await exportWorkspace(); return; }

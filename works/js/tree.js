@@ -10,6 +10,7 @@ import { Menu } from '#menu';
 import { prompt as dlgPrompt, confirm as dlgConfirm } from '#dialog';
 import { kindDef } from './surface-registry.js';
 import { openPath } from './surfaces.js';
+import { unmountAt } from './mount.js';
 
 const ROOT = '/';
 // /projects open by default; the rest of the VFS is there, collapsed.
@@ -40,7 +41,9 @@ export function setupTree() {
     clearTimeout(_refreshTimer);
     _refreshTimer = setTimeout(refreshTree, 80);
   };
-  for (const ev of ['write', 'delete', 'rename', 'mkdir']) WKS.vfs.on(ev, bump);
+  for (const ev of ['write', 'delete', 'rename', 'mkdir', 'mount', 'unmount']) {
+    WKS.vfs.on(ev, bump);
+  }
 
   // Right-click empty tree space → create in /projects (the natural home
   // for a new notebook).
@@ -156,13 +159,21 @@ async function showMenu(e, path, type) {
     { label: 'New notebook…', action: 'new-project' },
     { label: 'New folder…', action: 'new-folder' },
   ];
-  // `/` and the mount roots (/projects, /lib, /home, /scratch, /sys) are the
-  // workspace's fixed structure — not renamable or deletable.
+  // `/` and the mount roots (/projects, /lib, /home, /scratch, /sys, /mnt)
+  // are the workspace's fixed structure — not renamable or deletable. A
+  // /mnt/<name> entry is a disk-folder mount: its action is Unmount (which
+  // leaves the disk content alone), not Rename / Delete (which would touch
+  // the disk).
+  const isMountedFolder = parentOf(path) === '/mnt';
   if (path !== '/' && parentOf(path) !== '/') {
     items.push('---');
     if (type === 'project') items.push({ label: 'Open', action: 'open' });
-    items.push({ label: 'Rename…', action: 'rename' });
-    items.push({ label: 'Delete', action: 'delete', danger: true });
+    if (isMountedFolder) {
+      items.push({ label: 'Unmount', action: 'unmount' });
+    } else {
+      items.push({ label: 'Rename…', action: 'rename' });
+      items.push({ label: 'Delete', action: 'delete', danger: true });
+    }
   }
   const action = await Menu.show(items, { x: e.clientX, y: e.clientY });
   if (action === 'open') openPath(path);
@@ -170,6 +181,14 @@ async function showMenu(e, path, type) {
   else if (action === 'new-folder') newFolder(dir);
   else if (action === 'rename') renameEntry(path, type);
   else if (action === 'delete') deleteEntry(path, type);
+  else if (action === 'unmount') unmountEntry(path);
+}
+
+async function unmountEntry(path) {
+  const ok = await dlgConfirm(
+    'Unmount "' + basename(path) + '"? The folder on disk will not be deleted.');
+  if (!ok) return;
+  await unmountAt(path);
 }
 
 // Create a project. Defaults to a notebook — the project kind a user

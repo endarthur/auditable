@@ -209,6 +209,18 @@ await page.evaluate(async () => {
   await W.newProject('/projects', 'PersistMe');
   await W.vfs.writeFile('/projects/persist-note.txt', 'survives reload');
   await W.openPath('/projects/persist-note.txt');
+
+  // Mount an OPFS folder at /mnt/smoke-mount; OPFS gives us a real
+  // FileSystemDirectoryHandle without a picker, and it persists in the
+  // meta IDB across the reload below.
+  const opfsRoot = await navigator.storage.getDirectory();
+  const dir = await opfsRoot.getDirectoryHandle('smoke-mount', { create: true });
+  const fh = await dir.getFileHandle('hello.txt', { create: true });
+  const w = await fh.createWritable();
+  await w.write('from disk');
+  await w.close();
+  await W.mountHandle(dir, 'smoke-mount');
+
   await new Promise((r) => setTimeout(r, 500));   // open the surface + save the layout
 });
 
@@ -228,9 +240,34 @@ const persist = await page.evaluate(async () => {
   await new Promise((r) => setTimeout(r, 150));
   const treeHasProj = [...document.querySelectorAll('#works-tree .tree-row')]
     .some((r) => r.dataset.path === '/projects/PersistMe');
+
+  // The /mnt/smoke-mount mount must have reconnected from the saved
+  // handle, and its file must read through.
+  const mountActive = [...W.vfs._mounts.keys()].includes('/mnt/smoke-mount');
+  let mountContent = null;
+  try { mountContent = await W.vfs.readFile('/mnt/smoke-mount/hello.txt', 'utf8'); }
+  catch { /* */ }
+
   // After a reload nothing calls spawnSurface — so any live surface came
   // from restoreLayout → renderPanel re-creating it.
-  return { projExists, note, treeHasProj, tabsRestored: W.surfaces.size };
+  return { projExists, note, treeHasProj, tabsRestored: W.surfaces.size,
+    mountActive, mountContent };
+});
+
+// Standalone unmount check — the mount goes away, the disk content stays.
+const mountTeardown = await page.evaluate(async () => {
+  const W = window.WKS;
+  const opfsRoot = await navigator.storage.getDirectory();
+  const dir = await opfsRoot.getDirectoryHandle('smoke-mount');   // already exists
+  await W.unmountAt('/mnt/smoke-mount');
+  const mountGone = ![...W.vfs._mounts.keys()].includes('/mnt/smoke-mount');
+  // Read the file directly via the OPFS handle — it must still be there.
+  let diskStillThere = false;
+  try {
+    const fh = await dir.getFileHandle('hello.txt');
+    diskStillThere = (await (await fh.getFile()).text()) === 'from disk';
+  } catch { /* */ }
+  return { mountGone, diskStillThere };
 });
 
 // ── Notebook surface ──────────────────────────────────────────────────
@@ -469,6 +506,11 @@ const checks = {
   'workspace survives a reload':      persist.projExists && persist.note === 'survives reload',
   'tree shows projects after reload': persist.treeHasProj,
   'tabs restore after reload':        persist.tabsRestored > 0,
+  // Mount folder (/mnt/<name>)
+  'mount reconnects after reload':    persist.mountActive,
+  'mount: file readable through VFS': persist.mountContent === 'from disk',
+  'unmount: drops from active set':   mountTeardown.mountGone,
+  'unmount: leaves disk intact':      mountTeardown.diskStillThere,
   // Notebook surface
   'notebook surface opens':           nbOpen.ready === true,
   'notebook surface kind resolved':   nbOpen.kind === 'notebook',
