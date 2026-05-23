@@ -65,6 +65,13 @@ export function createNodeWorker(source) {
     },
     terminate() {
       try { nodeWorker.terminate(); } catch (_) { /* ignore */ }
+      // worker_threads.Worker.terminate() returns a Promise that resolves
+      // when the worker actually exits — until then the worker holds an
+      // event loop ref and the parent process can't exit. unref() drops
+      // that ref so node:test (and any other host) can finalize without
+      // waiting on the async tear-down. Safe because we're already done
+      // with the worker by the time terminate() is called.
+      try { nodeWorker.unref(); } catch (_) { /* ignore */ }
     },
   };
 

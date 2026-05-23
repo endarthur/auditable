@@ -348,31 +348,48 @@ describe('pool', () => {
     pm.shutdown();
   });
 
-  // Skipped: pool.terminate while a task is in-flight on a worker.
+  // pool.terminate while a task is in-flight on a worker.
   //
-  // Standalone (no node:test) repro of identical logic passes — Q's reject
-  // fires and inflight rejects with "pool: terminated". Under node:test the
-  // rejection never propagates to the awaiting test, even though pw.currentReject
-  // is the correct reject ref. Likely an interaction between worker_threads
-  // Worker.terminate() (async) and node:test's task tracking. Real-world
-  // usage (terminate-on-cell-reinvalidation) hits the worker between calls,
-  // not mid-call, so this corner-case test isn't critical. Re-enable after
-  // a focused investigation.
-  it('rejects all pending and queued tasks on terminate', { skip: 'see comment above' }, async () => {
+  // Status: passes in `node --test test/proc.test.mjs` alone (28/28).
+  // Hangs in `npm test` (which spawns every test/*.test.mjs file as a
+  // sibling subprocess). The hang is in the proc subprocess, after this
+  // test starts, never producing a result.
+  //
+  // Investigation so far:
+  //   - The test logic is correct: standalone repros confirm pw.currentReject
+  //     is the right Promise reject and is invoked by pool.terminate().
+  //   - Two contributing causes were identified and partially addressed:
+  //     1. Brief unhandled-rejection window between pw.currentReject(error)
+  //        and the awaiting code attaching its handler — node:test catches
+  //        the unhandled-rejection and marks the test failed. The
+  //        `inflight.catch(() => {})` / `queued.catch(() => {})` lines
+  //        below take ownership of the rejection synchronously so the
+  //        window is closed.
+  //     2. worker_threads.Worker.terminate() returns a Promise that the
+  //        Worker holds an event-loop ref against until it actually
+  //        exits. node-worker-shim.js now calls `worker.unref()` right
+  //        after terminate() so the parent process can finalize without
+  //        waiting on the async tear-down. Fixes the isolated run.
+  //   - With both fixes in place, the isolated `node --test
+  //     test/proc.test.mjs` passes cleanly. But the same test still
+  //     hangs under full `npm test` — something about Node's
+  //     subprocess-per-file orchestration that I haven't isolated yet.
+  //
+  // Skipping again with this trail of breadcrumbs. Not in any real-world
+  // hot path (cell-invalidation tears down workers between calls, not
+  // mid-call). The unref change in the shim is kept regardless — it's a
+  // standalone improvement to test-process hygiene.
+  it('rejects all pending and queued tasks on terminate', { skip: 'hangs under full npm test; passes alone — see comment' }, async () => {
     const pm = makePm();
     const pool = pm.createPool(1);
     const inflight = pool.exec(() => new Promise(() => {}), []);
-    const queued = pool.exec(() => 1, []);
     inflight.catch(() => {});
+    const queued = pool.exec(() => 1, []);
     queued.catch(() => {});
     await new Promise(r => setTimeout(r, 20));
     pool.terminate();
-    let inflightErr = null;
-    let queuedErr = null;
-    try { await inflight; } catch (e) { inflightErr = e; }
-    try { await queued; } catch (e) { queuedErr = e; }
-    assert.match(inflightErr?.message || '', /terminated/);
-    assert.match(queuedErr?.message || '', /terminated/);
+    await assert.rejects(inflight, /terminated/);
+    await assert.rejects(queued, /terminated/);
     pm.shutdown();
   });
 });
