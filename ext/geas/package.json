@@ -1,6 +1,6 @@
 {
   "name": "@gcu/geas",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "geas — the GCU shell. POSIX-syntax baseline with typed-pipe extensions. Async-native, VFS-bound, terminal-frontend-agnostic, worker-runnable.",
   "type": "module",
   "main": "src/api.js",
