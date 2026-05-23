@@ -350,44 +350,23 @@ describe('pool', () => {
 
   // pool.terminate while a task is in-flight on a worker.
   //
-  // This corner case has needed three separate fixes to stop hanging
-  // under varying conditions. Captured here because the layered
-  // workarounds are the easiest thing to mis-edit later. Test #14 in
-  // the work-log has the full investigation trail.
-  //
-  // (1) `.catch(() => {})` immediately after each pool.exec — owns the
-  //     rejection synchronously so node:test's unhandled-rejection hook
-  //     doesn't fire in the microtask gap between pw.currentReject(err)
-  //     and assert.rejects attaching its observer.
-  //
-  // (2) `await pool._spawnPromise` BEFORE the first exec — pool.exec
-  //     awaits this internally, but under heavy-load conditions (the
-  //     orchestrator spawning many test subprocesses that all create
-  //     worker_threads.Worker concurrently) the implicit await leaves
-  //     a window where pool.terminate doesn't observe the rejection
-  //     fire on time. Explicit pre-await closes the window.
-  //
-  // (3) `await new Promise(r => setTimeout(r, 50))` AFTER pool.terminate
-  //     — gives the rejection-propagation microtasks room to drain
-  //     before assert.rejects looks for them, same heavy-load reason as
-  //     (2). Also tracked as task #14.
-  //
-  // None of these are required in real-world cell usage (the worker is
-  // torn down between calls via the invalidation hook, not mid-call) —
-  // they exist to make this stress-shaped test pass deterministically
-  // even when proc.test runs alongside other worker_threads-using test
-  // files in npm test's subprocess pool.
+  // The explicit `await pool._spawnPromise` matters: pool.exec awaits
+  // it internally too, but under heavy-load conditions (npm test
+  // spawning many subprocesses that all create worker_threads.Worker
+  // concurrently) the implicit await leaves a window where
+  // pool.terminate fires before the dispatch is fully observable —
+  // assert.rejects then hangs waiting for a rejection that's already
+  // happened. The explicit pre-await closes that window. Confirmed
+  // load-bearing by bisect; no other defensive .catch/sleep needed
+  // alongside.
   it('rejects all pending and queued tasks on terminate', async () => {
     const pm = makePm();
     const pool = pm.createPool(1);
-    await pool._spawnPromise;                    // (2)
+    await pool._spawnPromise;
     const inflight = pool.exec(() => new Promise(() => {}), []);
-    inflight.catch(() => {});                    // (1)
     const queued = pool.exec(() => 1, []);
-    queued.catch(() => {});                      // (1)
     await new Promise(r => setTimeout(r, 20));   // let dispatch post the inflight task
     pool.terminate();
-    await new Promise(r => setTimeout(r, 50));   // (3)
     await assert.rejects(inflight, /terminated/);
     await assert.rejects(queued, /terminated/);
     pm.shutdown();
