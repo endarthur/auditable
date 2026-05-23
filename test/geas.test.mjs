@@ -1270,6 +1270,53 @@ describe('builtins — ls', () => {
   });
 });
 
+describe('builtins — tree', () => {
+  it('tree walks recursively with box-drawing', async () => {
+    const t = _testShell();
+    await t.vfs.mkdir('/r/sub', { recursive: true });
+    await t.vfs.writeFile('/r/a.txt', 'a');
+    await t.vfs.writeFile('/r/sub/b.txt', 'b');
+    const r = await t.shell.exec('tree /r');
+    assert.equal(r.exitCode, 0);
+    const out = t.output();
+    assert.match(out, /^\/r\n/);
+    assert.match(out, /├── a\.txt/);
+    assert.match(out, /└── sub\//);
+    assert.match(out, /    └── b\.txt/);   // continuation under last entry
+    assert.match(out, /1 directory, 2 files/);
+  });
+  it('tree -L limits depth', async () => {
+    const t = _testShell();
+    await t.vfs.mkdir('/r/a/b', { recursive: true });
+    await t.vfs.writeFile('/r/a/b/deep.txt', 'd');
+    await t.shell.exec('tree -L 1 /r');
+    const out = t.output();
+    assert.match(out, /a\//);
+    assert.doesNotMatch(out, /deep\.txt/);
+  });
+  it('tree -d shows directories only', async () => {
+    const t = _testShell();
+    await t.vfs.mkdir('/r/sub', { recursive: true });
+    await t.vfs.writeFile('/r/a.txt', 'a');
+    await t.shell.exec('tree -d /r');
+    const out = t.output();
+    assert.match(out, /sub\//);
+    assert.doesNotMatch(out, /a\.txt/);
+  });
+  it('tree --noreport drops the summary', async () => {
+    const t = _testShell();
+    await t.vfs.mkdir('/r', { recursive: true });
+    await t.shell.exec('tree --noreport /r');
+    assert.doesNotMatch(t.output(), /director(y|ies)/);
+  });
+  it('tree on a missing path errors to stderr', async () => {
+    const t = _testShell();
+    const r = await t.shell.exec('tree /nope');
+    assert.equal(r.exitCode, 1);
+    assert.match(t.errOutput(), /tree: .*nope/);
+  });
+});
+
 describe('builtins — test / [', () => {
   it('test -z empty / -n non-empty', async () => {
     const t = _testShell();

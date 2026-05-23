@@ -56,6 +56,7 @@ export function defaultBuiltins() {
     mv:       _mv,
     stat:     _stat,
     find:     _find,
+    tree:     _tree,
     // Text wranglers
     head:     _head,
     tail:     _tail,
@@ -1079,6 +1080,96 @@ function _findCompileSize(spec) {
   if (sign === '+') return (sz) => sz > threshold;
   if (sign === '-') return (sz) => sz < threshold;
   return (sz) => sz === threshold;
+}
+
+// tree — list contents of a directory in a tree-like, box-drawn format.
+// Flags: `-L N` depth limit, `-a` show dotfiles, `-d` directories only,
+// `--noreport` suppress the trailing summary. Multiple roots are walked
+// in turn. The summary counts only directories *encountered while walking*
+// (excludes the root, matching real `tree`).
+async function _tree(argv, ctx) {
+  if (!ctx.vfs) { await ctx.stderr('tree: no VFS configured\n'); return 1; }
+
+  let maxDepth = Infinity, showHidden = false, dirsOnly = false, noReport = false;
+  const paths = [];
+  const args = argv.slice(1);
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '-L' || a === '--level') {
+      const n = parseInt(args[++i], 10);
+      if (!Number.isFinite(n) || n < 1) {
+        await ctx.stderr(`tree: invalid level: ${args[i]}\n`);
+        return 1;
+      }
+      maxDepth = n;
+    } else if (a === '--noreport') {
+      noReport = true;
+    } else if (a.startsWith('-') && a.length > 1 && !a.startsWith('--')) {
+      // Short flag cluster: -a, -d, -da, -ad, etc.
+      for (const ch of a.slice(1)) {
+        if (ch === 'a') showHidden = true;
+        else if (ch === 'd') dirsOnly = true;
+        else {
+          await ctx.stderr(`tree: unknown option: -${ch}\n`);
+          return 1;
+        }
+      }
+    } else {
+      paths.push(a);
+    }
+  }
+  if (paths.length === 0) paths.push('.');
+
+  let dirCount = 0, fileCount = 0;
+
+  async function walk(dir, prefix, depth) {
+    if (depth > maxDepth) return;
+    let entries;
+    try { entries = await ctx.vfs.readdir(dir, { stat: true }); }
+    catch (e) {
+      await ctx.stderr(`tree: ${dir}: ${e.message || 'cannot read'}\n`);
+      return;
+    }
+    entries = entries
+      .map((e) => typeof e === 'string' ? { name: e, type: 'file' } : e)
+      .filter((e) => showHidden || !e.name.startsWith('.'))
+      .filter((e) => !dirsOnly || e.type === 'directory')
+      .sort((a, b) => a.name.localeCompare(b.name));
+    for (let i = 0; i < entries.length; i++) {
+      const e = entries[i];
+      const last = (i === entries.length - 1);
+      const branch = last ? '└── ' : '├── ';
+      const slash = e.type === 'directory' ? '/' : '';
+      await ctx.stdout(prefix + branch + e.name + slash + '\n');
+      if (e.type === 'directory') {
+        dirCount++;
+        const childPath = dir === '/' ? '/' + e.name : dir + '/' + e.name;
+        await walk(childPath, prefix + (last ? '    ' : '│   '), depth + 1);
+      } else {
+        fileCount++;
+      }
+    }
+  }
+
+  for (const p of paths) {
+    const abs = _bResolvePath(p, ctx);
+    try {
+      const st = await ctx.vfs.stat(abs);
+      await ctx.stdout(p + '\n');
+      if (st.type === 'directory') await walk(abs, '', 1);
+      else fileCount++;
+    } catch (e) {
+      await ctx.stderr(`tree: ${p}: ${e.message || 'cannot access'}\n`);
+      return 1;
+    }
+  }
+
+  if (!noReport) {
+    const dPlural = dirCount === 1 ? 'directory' : 'directories';
+    const fPlural = fileCount === 1 ? 'file' : 'files';
+    await ctx.stdout(`\n${dirCount} ${dPlural}, ${fileCount} ${fPlural}\n`);
+  }
+  return 0;
 }
 
 async function _touch(argv, ctx) {
