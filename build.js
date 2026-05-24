@@ -121,7 +121,7 @@ if (target === 'works') {
   // internally, doesn't need to participate in this map.
   const worksZlib = require('zlib');
 
-  const SHARED_LIBS = ['abus', 'vfs', 'xterm', 'geas', 'proc'];
+  const SHARED_LIBS = ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline'];
 
   function rewriteSurfaceToDynamic(html, name, allowDeps) {
     // Rewrite each `ext/<dep>/index.js` import to a bare specifier
@@ -186,7 +186,7 @@ if (target === 'works') {
     { kind: 'preview',   file: 'works/surfaces/preview.html',   deps: ['abus'] },
     { kind: 'inspector', file: 'works/surfaces/inspector.html', deps: ['abus'] },
     { kind: 'terminal',  file: 'works/surfaces/terminal.html',
-      deps: ['abus', 'vfs', 'xterm', 'geas', 'proc'], extras: 'terminal' },
+      deps: ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline'], extras: 'terminal' },
     { kind: 'notebook',  file: 'auditable.html',                deps: null },
   ]) {
     const sp = path.join(__dirname, s.file);

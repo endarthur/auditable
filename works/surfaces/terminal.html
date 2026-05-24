@@ -20,8 +20,9 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden;
 import { connect } from '../../ext/abus/index.js';
 import { VFS, AbusBackend, MemoryBackend } from '../../ext/vfs/index.js';
 import { Terminal, FitAddon, WebglAddon } from '../../ext/xterm/index.js';
-import { createGeasClient, createXtermAdapter, makeLineEditor, procToWorker } from '../../ext/geas/index.js';
+import { createGeasClient, createXtermAdapter, makeLineEditor, procToWorker, tokenize } from '../../ext/geas/index.js';
 import { ProcessManager } from '../../ext/proc/index.js';
+import { createReadline } from '../../ext/readline/index.js';
 
 // Build the geas worker source from the inlined-lib-geas script the shell
 // adds at decompress time. We use proc's inline-service mode: the user
@@ -93,7 +94,80 @@ window.addEventListener('message', async (ev) => {
   window.addEventListener('resize', () => { try { fit.fit(); } catch { /* */ } });
 
   const adapter = createXtermAdapter({ terminal: term });
-  const readLine = makeLineEditor(adapter);
+
+  // @gcu/readline line editor — replaces @gcu/geas's makeLineEditor.
+  // Adds mid-line cursor, kill-ring, fish-style autosuggest, tab
+  // completion, syntax highlighting, and bracketed-paste. History is
+  // an in-memory array shared with the REPL loop below (still session-
+  // scoped; persistence comes later).
+  const history = [];
+  // Geas builtins → reachable in-process via tokenize but the builtin
+  // names live in defaultBuiltins(); we cache the list once.
+  const BUILTINS = [
+    'cd', 'pwd', 'ls', 'cat', 'echo', 'export', 'env', 'exit', 'set',
+    'read', 'which', 'command', 'local', 'return', 'shift', 'clear',
+    'eval', 'source', 'getopts', 'test', 'true', 'false', 'seq', 'sleep',
+    'date', 'mkdir', 'rm', 'touch', 'cp', 'mv', 'stat', 'find', 'tree',
+    'head', 'tail', 'wc', 'grep', 'sort', 'uniq', 'cut', 'tee', 'xargs',
+    'tr', 'du', 'df', 'base64', 'md5sum', 'sha256sum', 'pkg',
+  ];
+  const KEYWORDS = new Set([
+    'if', 'then', 'else', 'elif', 'fi', 'for', 'in', 'do', 'done',
+    'while', 'until', 'case', 'esac', 'function', 'select', 'time',
+  ]);
+
+  // ANSI colours via 256-colour palette — works under both light + dark
+  // xterm.js themes without needing truecolor.
+  const C_KEYWORD = '\x1b[38;5;215m';   // amber
+  const C_BUILTIN = '\x1b[38;5;81m';    // teal
+  const C_OPERATOR = '\x1b[38;5;208m';  // orange
+  const C_STRING = '\x1b[38;5;114m';    // green
+  const C_FLAG = '\x1b[38;5;245m';      // grey
+
+  function highlight(line) {
+    let tokens;
+    try { tokens = tokenize(line); } catch { return []; }
+    const spans = [];
+    for (const t of tokens) {
+      if (!t.pos) continue;
+      const { start, end } = t.pos;
+      if (start >= end) continue;
+      const val = t.value;
+      let ansi = null;
+      if (t.type === 'OPERATOR') ansi = C_OPERATOR;
+      else if (t.type === 'WORD') {
+        if (KEYWORDS.has(val)) ansi = C_KEYWORD;
+        else if (BUILTINS.includes(val)) ansi = C_BUILTIN;
+        else if (typeof val === 'string' && val.startsWith('-')) ansi = C_FLAG;
+        else if (typeof val === 'string' && /^["']/.test(val)) ansi = C_STRING;
+      } else if (t.type === 'HEREDOC_BODY') ansi = C_STRING;
+      if (ansi) spans.push({ start, end, ansi });
+    }
+    return spans;
+  }
+
+  function complete(line, cursor) {
+    // Tokenise the slice up to the cursor and look at the last token.
+    // If the cursor is in the FIRST word position, complete command
+    // names. Otherwise complete VFS paths.
+    const head = line.slice(0, cursor);
+    let prefixStart = cursor;
+    while (prefixStart > 0 && /\S/.test(line[prefixStart - 1])) prefixStart--;
+    const prefix = line.slice(prefixStart, cursor);
+    const beforePrefix = line.slice(0, prefixStart);
+    // First word if everything before is whitespace.
+    const isFirstWord = /^\s*$/.test(beforePrefix);
+    if (isFirstWord) {
+      const matches = BUILTINS.filter((b) => b.startsWith(prefix)).sort();
+      return matches;
+    }
+    // VFS path completion — synchronous fail-soft. The complete callback
+    // is sync today; an async upgrade would need a redesign. For now
+    // we return no path-matches and let the bell ring.
+    return [];
+  }
+
+  const readLine = createReadline(adapter, { history, highlight, complete });
 
   // Surface-side VFS: A-Bus proxy to the workspace, plus a volatile /tmp.
   // The geas worker reaches files through this via serveVFS, which
@@ -126,34 +200,19 @@ window.addEventListener('message', async (ev) => {
     return;
   }
 
-  // The REPL — calls into the worker through client.exec, prints the prompt
-  // between commands. makeLineEditor handles echo + history + line edits;
-  // readLine is serialised (REPL awaits exec; exec may itself await readLine
-  // mid-script via onWantInput; no concurrent subscribers).
-  // Up/Down arrow history. Stored in-memory only for now; persisting to
-  // shell meta is straightforward but doesn't earn its complexity until
-  // we add cross-tab sharing. The editor only fires onHistory in
-  // response to those keys, so this is a no-op for typed chars.
-  const history = [];
-  let historyCursor = -1;   // -1 = "live buffer", 0..N-1 = past lines
-  const onHistory = (dir) => {
-    if (history.length === 0) return undefined;
-    if (historyCursor === -1) historyCursor = history.length;
-    historyCursor = Math.max(0, Math.min(history.length, historyCursor + dir));
-    return historyCursor < history.length ? history[historyCursor] : '';
-  };
-
+  // The REPL — calls into the worker through client.exec, prints the
+  // prompt between commands. Readline owns echo, history, kill-ring,
+  // completion, highlight; readLine is serialised (REPL awaits exec;
+  // exec may itself await readLine mid-script via onWantInput).
   (async () => {
     adapter.write('\x1b[2mwelcome to geas. cwd ' + startCwd + '\x1b[0m\r\n');
     for (;;) {
-      historyCursor = -1;   // reset for each fresh prompt
       let r;
-      try { r = await readLine({ prompt: '$ ', onHistory }); }
+      try { r = await readLine({ prompt: '$ ' }); }
       catch (e) { adapter.write('\r\n[readline error: ' + (e.message || e) + ']\r\n'); break; }
       if (r.eof) break;
       const line = (r.line || '').trim();
       if (!line) continue;
-      if (history[history.length - 1] !== line) history.push(line);
       try { await client.exec(line); }
       catch (e) { adapter.write('\r\nerror: ' + (e.message || e) + '\r\n'); }
     }
