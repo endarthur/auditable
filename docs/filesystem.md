@@ -159,7 +159,28 @@ The files panel (accessible from the toolbar) provides a visual file manager:
 
 ## Persistence
 
-Files are stored in an `AUDITABLE-FS` comment block inside the notebook HTML. They save with the notebook and survive copy/paste, email, or any other way you move the HTML file. When encryption is enabled, the filesystem is included in the encrypted payload — no cleartext `AUDITABLE-FS` block is written.
+Files are stored in an `AUDITABLE-VFS` comment block inside the notebook HTML (the unified-VFS save format introduced in 2026). They save with the notebook and survive copy/paste, email, or any other way you move the HTML file. When encryption is enabled, the filesystem is included in the encrypted payload — no cleartext `AUDITABLE-VFS` block is written.
+
+Legacy notebooks (the older 4-block `AUDITABLE-FS` + `AUDITABLE-DATA` + `AUDITABLE-SETTINGS` + `AUDITABLE-MODULES` format) auto-import on load — the runtime detects the legacy blocks, rehydrates the VFS, and writes the new single-block format on the next save. The migration is transparent.
+
+---
+
+## VFS layout
+
+`notebook.fs` is the user-facing API; behind it sits a [@gcu/vfs](https://github.com/endarthur/auditable/tree/main/ext/vfs) instance with several mounts:
+
+| Mount | Persistent? | Contents |
+|---|---|---|
+| `/home/nb/` | yes | User files — what `notebook.fs.write(path, data)` writes to |
+| `/var/` | yes | Notebook state — cells, settings, installed modules. Internal. |
+| `/tmp/` | no | Volatile scratch — cleared on reload |
+| `/usr/lib/python/` | no | Python stdlib (adder repopulates on load) |
+
+The `notebook.fs.write('foo.txt', ...)` call writes to `/home/nb/foo.txt`. Paths without a leading slash are relative to `/home/nb/`; absolute paths address the unified VFS directly.
+
+In [Auditable Works](works.md), the workspace VFS has a different layout (`/home`, `/mnt/<name>`, `/tmp`, `/usr/lib`) — Works surfaces talk to the *workspace* VFS over A-Bus, not the per-notebook `notebook.fs`. Inside a Works-hosted notebook, `notebook.fs` still works (it operates on the notebook's own `/home/nb/`), but the broader workspace is also reachable via the workspace VFS API.
+
+---
 
 ---
 

@@ -1,143 +1,208 @@
 # Auditable Works
 
-Auditable Works is a tabbed workspace shell for managing multiple
-notebooks, similar to JupyterLab. It hosts auditable notebooks as iframes and
-provides a file tree, tab management, and persistent storage.
+**A single-file GCU desktop.** Auditable Works is a document-agnostic workspace shell — a tabbed layout host with a workspace filesystem, a coordination bus, and a set of iframe surfaces (notebook, terminal, docs reader, file preview, inspector) that compose into something between an IDE and a workstation.
 
-## Building
-
-Works requires the base `auditable.html` to exist first, since it embeds the
-notebook runtime as a template literal.
-
-```bash
-node build.js                   # build auditable.html
-node build.js --target=works    # build works.html (embeds auditable.html)
+```
+node build.js --target=works
 ```
 
-The output is a single self-contained `works.html` file.
+produces `works.html` — open it, get a shell. No install, no server, no dependencies.
 
-## Features
+## What Works is
 
-### File Tree
+Works started as "a tabbed notebook manager" (the old version is what the legacy `Works Notebook Format` was for). The current version is broader: the shell hosts **surfaces** — iframe apps that implement a small contract — and the surfaces are document-agnostic. The notebook is one surface; the terminal is another; documentation, file preview, A-Bus inspector, settings, are others. New kinds of surface (a diagram editor, a 3D viewer, a spreadsheet) are a single HTML file plus three lines of registry config.
 
-The sidebar displays a file tree with folders and notebooks. Interact with it
-using the context menu (right-click) to create, rename, delete, or move files.
+Three commitments:
 
-### Tab Management
+1. **The browser is the kernel; Works is the userland.** A filesystem (`@gcu/vfs`), a message bus (`@gcu/abus`), a layout manager (`@gcu/rails`), UI chrome (`@gcu/menu`, `@gcu/dialog`), a desktop shell, and apps. All running in one browser tab.
+2. **The VFS is the workspace.** No separate "project files" concept beyond a directory of files marked by a `project.json`. Surfaces read and write the workspace VFS; nothing else has durable state.
+3. **Single-file deployable.** Works ships as one HTML file (~2.5 MB) that runs from disk (`file://`). No build step required on the consumer side.
 
-| Action | Behavior |
-|--------|----------|
-| Single-click a file | Opens a **preview tab** (italic title, replaced by next preview) |
-| Double-click a file | Opens a **permanent tab** |
-| Edit a previewed notebook | Automatically promotes to permanent |
-| Drag a tab | Reorder tabs |
-| Middle-click or close button | Close tab |
+## Storage model
 
-### Save Integration
+The workspace is a tree of files and directories — the **workspace VFS**, a [@gcu/vfs](https://www.npmjs.com/package/@gcu/vfs) instance the shell owns. Four mounts:
 
-**Ctrl+S** inside a notebook iframe sends the serialized HTML back to the
-workspace via postMessage. The workspace writes it to the active storage
-backend.
+| Mount | Persistent? | Backend | Contents |
+|---|---|---|---|
+| `/home` | yes | IDB (default) or FSAA disk folder | User files — projects, notebooks, scratch work |
+| `/mnt/<name>` | yes (handles in shell meta IDB) | FSAA disk-folder mounts | Disk folders mounted explicitly via *File → Mount folder…* |
+| `/tmp` | no | Memory | Volatile scratch space (shared across surfaces) |
+| `/usr/lib` | no | Memory | Shell-bundled libraries (`@gcu/{abus,vfs,xterm,geas}`) — `load()`-able from notebooks |
 
-### Persistence
+Storage homes are chosen at workspace creation: **IndexedDB** (the default — works everywhere) or **File System Access API** (Chromium-only; mounts a disk folder as `/home`).
 
-Works restores workspace state on reload:
+### Mount delegation
 
-- Open directory roots (FSAA) and boxes
-- Active tabs and their order
-- Sidebar width
-- Last selected tab
+When the storage home is an FSAA folder, file reads inside a notebook surface go *directly* to the OS via the mount-delegation protocol — the shell doesn't proxy individual reads through A-Bus. For IDB-backed homes (and cross-realm mount targets), reads fall back to the A-Bus proxy path. Either way, the API is the same from the surface's perspective.
 
-## Storage Backends
+### `project.json` and the project boundary
 
-Works supports two storage backends that can be used simultaneously.
+A directory containing a `project.json` is a *project*. Project-level operations (export to a standalone .html, set defaults, attach metadata) anchor on it. Without `project.json`, the directory is just a directory. Most workspaces start with a single project at `/home/<name>/`.
 
-### FSAA (File System Access API)
+## Surfaces
 
-!!! info "Browser support"
-    FSAA requires a Chromium-based browser (Chrome, Edge, Brave, Opera).
-    Firefox and Safari do not support `showDirectoryPicker()`.
+A **surface** is an iframe app that implements the §5.2 *Surface* contract (three methods + three signals) over A-Bus. The shell hosts surfaces in tabs; surfaces own no durable state — the workspace VFS is the single source of truth.
 
-Opens real filesystem directories via `showDirectoryPicker()`. Changes are
-written directly to disk. The browser will prompt for permission on first
-access and after restart.
+Built-in surface kinds (Works 0.1):
 
-- Full read/write access to the selected directory tree
-- Notebooks are stored as standard `.html` files
-- Works with version control (git)
+| Kind | File | Purpose |
+|---|---|---|
+| `notebook` | `auditable.html` embedded whole | Runs an auditable notebook. The primary surface for code/data work. |
+| `terminal` | `surfaces/terminal.html` | The `geas` shell — pkg, ed, readline, plus everything geas ships. |
+| `docs` | `surfaces/docs.html` | In-tool documentation reader; Ctrl+K full-text search via [@gcu/librarian](https://www.npmjs.com/package/@gcu/librarian). |
+| `text` | `surfaces/text.html` | Plain-text editor for `.txt`, `.md`, `.json`, etc. |
+| `preview` | `surfaces/preview.html` | Read-only render for CSV, JSON, Markdown, images, PDF. |
+| `inspector` | `surfaces/inspector.html` | A-Bus inspector — every message on the bus, live. Debug tool. |
+| `settings` | `surfaces/settings.html` | Workspace settings (theme, fonts, mount management). |
+| `stub` | `surfaces/stub.html` | Smoke target — minimal "I connected" surface. |
 
-### Box (IndexedDB)
+A new surface kind is a single HTML file in `works/surfaces/` plus three lines in `works/js/surface-registry.js`. The contract is documented in [works/SURFACES.md](https://github.com/endarthur/auditable/blob/main/works/SURFACES.md) — practical authoring guide with patterns, gotchas, and reference implementations.
 
-A virtual filesystem stored entirely in the browser's IndexedDB. Works in all
-modern browsers, no filesystem permissions needed.
+## Layout
 
-- Portable: export a box as a self-contained `works.html` file
-- Import: drop a box-exported `works.html` to restore it
-- Data persists until browser storage is cleared
+[@gcu/rails](https://github.com/endarthur/auditable/tree/main/ext/rails) is the docked-tab layout engine. Three primitives:
 
-!!! warning "Box durability"
-    IndexedDB storage can be cleared by the browser under storage pressure.
-    Export important boxes regularly or use FSAA for critical work.
+- **Tab** — a hosted surface.
+- **Stack** — a group of tabs, with a tab bar; one tab visible at a time.
+- **Float / Dock** — multiple stacks arranged horizontally or vertically, with draggable splitters.
 
-## Lightweight Notebook Format
+Tabs are draggable between stacks. Stacks are draggable into new dock positions. The layout persists in shell-meta IDB (a separate key-value store from the workspace VFS) so it survives reloads.
 
-Notebooks stored inside Works boxes use a compact JSON format instead of full
-self-contained HTML:
+## Menus and operations
+
+Top menu bar (the `@gcu/menu` MenuBar). Items:
+
+### File
+
+| Item | Effect |
+|---|---|
+| New notebook… | Creates a new `.html` notebook under the current project, opens it in a notebook surface. |
+| Import notebook… | Imports a `.html` / `.txt` notebook into the workspace (paste path, drop file, or pick). |
+| New workspace… | Creates a fresh workspace (with IDB home; FSAA optional). Replaces the current one. |
+| Open folder… | Opens a disk folder as the workspace's `/home` (FSAA; Chromium-only). |
+| Mount folder… | Mounts a disk folder at `/mnt/<name>` (FSAA; persists the handle). |
+| Open workspace file… | Imports a `.html` workspace export. |
+| Save | Persists the current workspace + all open surfaces (Ctrl+S). |
+| Export workspace… | Bundles the workspace into a single self-contained `.html`. |
+
+### View
+
+| Item | Effect |
+|---|---|
+| Toggle sidebar | Show/hide the file tree. |
+
+### Tools
+
+| Item | Effect |
+|---|---|
+| Terminal | Spawn a `geas` terminal surface. |
+| Settings… | Open the workspace settings surface. |
+
+### Debug
+
+| Item | Effect |
+|---|---|
+| New stub surface | Smoke-test the surface plumbing. |
+| A-Bus inspector | Live monitor of every message on the bus. |
+
+### Help
+
+| Item | Effect |
+|---|---|
+| Documentation (F1) | Open the docs surface — full Ctrl+K search across this site + every `ext/*/SPEC.md` + every `ext/*/README.md`. |
+| About Auditable Works | Version, build date, Ed25519 key, links. |
+
+## Saving and exporting
+
+**Save** (Ctrl+S) persists the workspace VFS in place — IDB writes for the default backend, disk writes for FSAA-backed homes. Surfaces with pending edits flush via `Surface.Flush()` before the persist; surfaces with `Surface.CanClose() === false` block close until they're ready.
+
+**Export workspace** (File → Export workspace…) produces a single self-contained `.html` — a complete copy of the workspace VFS embedded in a loader that, when opened, rehydrates into an IDB-backed workspace. The output is `file://`-openable, single-file, includes every notebook + every mounted file + every shell setting. Use case: "send this whole project to a colleague," "archive a finished workspace," "back up to a USB stick."
+
+## A-Bus — the coordination layer
+
+The shell hosts the A-Bus broker; every surface is a peer. Surfaces address each other (and the shell) over A-Bus method calls and signals — see [@gcu/abus/SPEC.md](https://github.com/endarthur/auditable/blob/main/ext/abus/SPEC.md). The shell exposes a `works` service at `/` with three interfaces:
+
+- `VFS` — `Read`, `Write`, `MkDir`, `Stat`, `List`, `Move`, `Delete`. Surfaces use this to read/write workspace files.
+- `Shell` — `OpenSurface`, `SpawnSurface`, layout management.
+- `Inspect` — surface lifecycle hooks for the inspector.
+
+The A-Bus inspector surface (Debug → A-Bus inspector) shows every call, return, signal, and subscription on the bus in real time. Useful when wiring a new surface.
+
+## Settings
+
+The settings surface (Tools → Settings…) edits `/etc/works.json` — the workspace's persistent configuration:
 
 ```json
 {
-  "format": "auditable-notebook",
-  "v": 1,
-  "title": "my notebook",
-  "cells": [
-    {"type": "code", "code": "const x = 1", "collapsed": true},
-    {"type": "md", "code": "# Hello"}
-  ],
-  "settings": {"theme": "dark", "width": "860"},
-  "modules": {
-    "lodash": {"ref": "a1b2c3d4e5f6..."}
-  }
+  "theme": "dark",
+  "font": {
+    "monospace": "ui-monospace, Space Mono, monospace",
+    "sans": "ui-sans-serif, Barlow, system-ui, sans-serif"
+  },
+  "fonts": "bundled",   // or "system"
+  "mounts": [ ... ]      // persistent /mnt/* mount handles
 }
 ```
 
-The `ref` values are SHA-256 hashes pointing to the Works content-addressed blob store in IndexedDB.
+Settings propagate via A-Bus signals to all open surfaces — theme changes apply live without reload.
 
-### Content-Addressed Module Storage
+## Bundled libraries — `/usr/lib`
 
-Modules and binaries are stored separately in the Works blob store, keyed by
-content hash. This provides deduplication across notebooks — if ten notebooks
-use the same library, only one copy is stored.
+The shell bundles four `@gcu/*` libraries and exposes them via the `/usr/lib/` mount:
 
-| Operation | What happens |
-|-----------|-------------|
-| Open notebook | Works hydrates JSON into the runtime template (injects data blocks into iframe `srcdoc`) |
-| Save notebook | Works dehydrates: extracts cells/settings, stores each module by content hash, replaces inline data with refs |
-| Drop `.html` into box | Auto-converts: extracts data blocks, deduplicates modules into blob store, stores lightweight JSON |
-| Export from box | Produces a full standalone `auditable.html` with all modules inlined |
-
-## Bridge Protocol
-
-Works and notebook iframes communicate via `postMessage`. The protocol handles
-save workflows, UI state sync, file operations, and layout coordination.
-
-```
-Works Shell                       Notebook Iframe
-───────────                       ───────────────
-         ◄── works:ready          (iframe loaded)
-works:serialize ──►
-         ◄── works:serialized     (full HTML)
-         ◄── works:dirty          (unsaved changes)
-         ◄── works:titleChanged   (title updated)
-works:storage ──►
-         ◄── works:saved
-         ◄── works:fileRequest    (file picker proxy)
-works:fileResult ──►
-         ◄── works:download       (download proxy)
-works:resize ──►
-works:setTitle ──►
+```js
+const { connect } = await load('@gcu/abus');        // resolves to /usr/lib/@gcu/abus/index.js
+const { VFS }     = await load('@gcu/vfs');
+const { Terminal} = await load('@gcu/xterm');
+const { geas }    = await load('@gcu/geas');
 ```
 
-!!! note "Works bridge detection"
-    When a notebook detects it is running inside a Works iframe, it sets
-    `window.__WORKS_BRIDGE__ = true` and routes save/file/download operations
-    through the bridge instead of using browser-native APIs.
+Notebook surfaces can `load()` these as if they were any other module. The shell bundles the source once and inlines it into each surface's HTML at decompress time (file:// blob URLs get unique opaque origins, so each iframe needs its own copy — but the on-disk storage is deduplicated).
+
+## Building Works
+
+```bash
+node build.js                  # build auditable.html (required first — Works embeds it)
+node build.js --target=works   # build works.html
+```
+
+The Works build embeds:
+
+- The full `auditable.html` runtime (as the notebook surface).
+- The shell modules (`works/js/*`).
+- Five static surfaces (`stub`, `text`, `preview`, `inspector`, `terminal`, `docs`, `settings`).
+- Four `@gcu/*` bundled libs (`abus`, `vfs`, `xterm`, `geas`) — gzipped, base64-inlined.
+- The full docs corpus (gzipped, base64-inlined; ~600 KB).
+
+Total: ~2.5 MB.
+
+## Testing
+
+`test/works-smoke.mjs` — a Playwright headless test that:
+
+1. Boots Works in Chromium.
+2. Spawns a stub surface.
+3. Verifies A-Bus connect + Surface contract.
+4. Repeats from `file://` (separate from the HTTP loopback path).
+
+Not part of `npm test` (Playwright dependency); run with `node test/works-smoke.mjs`.
+
+## Status
+
+Phase 1 (shell + notebook surface + workspace persistence + mount delegation) and Phase 2 (geas terminal surface) shipped. Phase 3+ (more surfaces, surface-to-surface protocols, customization) ongoing.
+
+The legacy `works:*` postMessage bridge and the lightweight-JSON notebook format are **retired** — replaced by A-Bus and the VFS-is-the-workspace model. Old workspaces / notebooks that use the legacy formats won't open in current Works without conversion.
+
+## What Works is NOT
+
+- **A web app.** No server. The whole thing is one HTML file that opens from disk.
+- **A package manager.** That's `pkg`, which lives in geas. Works hosts a geas terminal surface; pkg is invoked from there.
+- **A notebook.** The *notebook surface* is an Auditable notebook. Works is the shell around it (plus everything else).
+- **A general-purpose IDE.** Works hosts surfaces; an IDE-grade editor surface (code intelligence, multi-cursor, LSP) is plausible but doesn't exist today.
+
+## See also
+
+- [SURFACES.md](https://github.com/endarthur/auditable/blob/main/works/SURFACES.md) — how to author a new surface kind.
+- [@gcu/abus SPEC](https://github.com/endarthur/auditable/blob/main/ext/abus/SPEC.md) — the IPC backbone.
+- [@gcu/vfs](https://github.com/endarthur/auditable/tree/main/ext/vfs) — the workspace filesystem.
+- [@gcu/rails](https://github.com/endarthur/auditable/tree/main/ext/rails) — the layout engine.

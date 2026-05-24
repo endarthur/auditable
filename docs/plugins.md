@@ -1,181 +1,207 @@
 # Plugins
 
-Auditable supports custom cell types beyond the built-in js, md, css, and html. Plugins
-register new cell types that integrate with the reactive DAG, the editor, and the cell
-type picker.
+Auditable supports custom cell types and tagged languages beyond the built-in js / md / css / html. Plugins register through a single API — `auditable.registerExtension(manifest)` — and integrate with the reactive DAG, the editor, the cell type picker, the AIR compiler, and the cell context.
 
-## Registering a Cell Type
+## The unified extension API
+
+Everything an extension contributes (cell types, tagged languages, AIR lowerers, cross-language exports, cell-context hooks, plugin metadata) goes through one call:
 
 ```js
-registerCellType("myLang", {
-  label: "My Language",
-  color: "#e06c75",
-
-  execute: async (code, scope, cell) => {
-    const result = evaluate(code);
-    return { defines: { answer: result } };
-  },
-
-  parseNames: (code) => new Set(["answer"]),
-  findUses: (code, allDefined) => new Set(),
-
-  tokenize: (code) => [
-    { from: 0, to: 5, type: "keyword" }
-  ],
+auditable.registerExtension({
+  name: 'mylang',
+  version: '0.1.0',
+  cellType: { /* ... */ },
+  taggedLanguage: { /* ... */ },
+  airLowerer: { /* ... */ },
+  contextHook: { /* ... */ },
+  exports: { /* ... */ },
 });
 ```
 
-After registration, the new type appears in the cell type picker and cells of that type
-become fully reactive DAG participants.
+The manifest is validated at registration: required `name` + semver `version`, capability declarations imply matching methods, built-in cell type names (`code`, `md`, `css`, `html`) cannot be shadowed.
+
+A small plugin registering a new cell type is just:
+
+```js
+auditable.registerExtension({
+  name: 'mylang',
+  version: '0.1.0',
+  description: 'My custom cell language',
+  cellType: {
+    name: 'mylang',
+    label: 'My Language',
+    color: '#e06c75',
+    capabilities: { executable: true, definesScope: true, hasOutput: true, hasEditor: true },
+    execute: async (code, scope, cell) => {
+      const result = evaluate(code);
+      return { defines: { answer: result } };
+    },
+    parseNames: (code) => new Set(['answer']),
+    findUses: (code, allDefined) => new Set(),
+    tokenize: (code) => [ /* ... */ ],
+  },
+});
+```
+
+After registration, the new type appears in the cell type picker and cells of that type become full reactive DAG participants.
 
 ---
 
-## Handler Interface
+## Manifest reference
 
-| Property | Type | Description |
-|----------|------|-------------|
-| `label` | `string` | Display name in the type picker |
-| `color` | `string` | Hex color for the cell header label |
-| `shortcut` | `string` | Single key for cycling through cell types |
-| `execute` | `async (code, scope, cell) -> { defines?, output? }` | Run the cell code, return defined variables |
-| `parseNames` | `(code) -> Set<string>` | Extract variable names this cell defines |
-| `findUses` | `(code, allDefined) -> Set<string>` | Find cross-cell variable references |
-| `tokenize` | `(code) -> token[]` | Token stream for syntax highlighting |
-| `completions` | `(prefix) -> string[]` | Autocomplete suggestions |
-| `syntaxCheck` | `(code) -> boolean` | Fast syntax validation for live error indicators |
-| `createEditor` | `(cell, onChange) -> { el, destroy? }` | Custom editor element (optional — defaults to CodeMirror) |
-| `editDebounce` | `number` | Debounce delay in ms before re-execution (default: 300) |
+| Top-level key | Type | Purpose |
+|---|---|---|
+| `name` | `string` | Unique extension name; used as the registry key (required) |
+| `version` | `string` | Semver `MAJOR.MINOR.PATCH` (required) |
+| `description` | `string` | Surfaced in the settings panel and `listExtensions()` |
+| `pluginUrl` | `string` | Source URL for install/uninstall tracking (optional) |
+| `cellType` | `object` | Cell-type contribution (see below) |
+| `taggedLanguage` | `object` | Single tagged-language contribution |
+| `taggedLanguages` | `object[]` | Multiple tagged-language contributions |
+| `airLowerer` | `object` | AIR lowerer contribution (for transpile-to-AIR languages) |
+| `contextHook` | `object` | Cell-context hook (see below) |
+| `exports` | `object` | Named exports accessible via `getExtension(name)` |
+| `globals` | `object` | Window globals to set (use sparingly) |
+| `onActivate` | `function` | Called once at registration |
 
-All properties except `label` are optional. At minimum, provide `execute` for a
-runnable cell type.
+### `cellType`
 
-!!! tip
-    If your handler provides `tokenize` but not `createEditor`, the default CodeMirror
-    editor is used with your tokenizer for syntax highlighting.
+| Key | Type | Description |
+|---|---|---|
+| `name` | `string` | Cell-type identifier (`'adder'`, `'mylang'`); required, can't shadow built-ins |
+| `label` | `string` | Display name in the type picker (defaults to `name`) |
+| `color` | `string` | Hex accent for the cell header label |
+| `shortcut` | `string` | Single key for cycling through cell types in command mode |
+| `editDebounce` | `number` | ms before re-execution after editor change (default 300) |
+| `capabilities` | `object` | `{ executable, definesScope, hasOutput, hasEditor, builtin }` — declares contract; required |
+| `execute` | `async (code, scope, cell) => { defines?, output? }` | Run the cell; required if `executable: true` |
+| `parseNames` | `(code) => Set<string>` | Top-level names this cell defines; required if `definesScope: true` |
+| `findUses` | `(code, allDefined) => Set<string>` | Names this cell uses from other cells |
+| `tokenize` | `(code) => Token[]` | Tokens for syntax highlighting |
+| `completions` | `(prefix) => string[]` | Autocomplete suggestions |
+| `syntaxCheck` | `(code) => boolean` | Fast validation for live error indicators |
+| `createEditor` | `(cell, onChange) => { el, destroy? }` | Custom editor element (optional — defaults to CodeMirror) |
+
+The `capabilities` object tells the runtime what your cell type does without it having to introspect handlers. Capability queries via `auditable.getCellType(name)` use these declarations directly.
+
+### `taggedLanguage`
+
+For tagged-template languages (`` shader`...` ``, `` sql`...` ``):
+
+| Key | Type | Description |
+|---|---|---|
+| `name` | `string` | Tag function name |
+| `tokenize` | `(code) => Token[]` | Required |
+| `completions` | `(prefix) => string[]` | Optional |
+| `sigHint` | `(code, pos) => string` | Optional signature hint |
+| `indent` | `(code, line) => number` | Optional indent helper |
+
+### `airLowerer`
+
+For languages compiled to AIR (the internal SSA IR — adder, soft, future custom languages):
+
+```js
+airLowerer: {
+  language: 'mylang',
+  fn: lowerMylangToAir,   // (ast, ctx) => AIR module
+}
+```
+
+Registered with AIR via `window._airRegisterLowerer` at extension activation.
+
+### `contextHook`
+
+Lifecycle callbacks that fire before/after cell execution:
+
+```js
+contextHook: {
+  setup: (ctx, cell) => { /* ... */ },
+  before: (scope, cell) => { /* ... */ },
+  after: (scope, cell, output) => { /* ... */ },
+}
+```
+
+Useful for languages that need per-cell setup (e.g. adder needs to track the active cell context for `display()` to work).
 
 ---
 
-## Execute Function
+## Lookup API
+
+Read-side counterparts to `registerExtension`:
+
+| Function | Returns |
+|---|---|
+| `auditable.getExtension(name)` | The manifest for a registered extension |
+| `auditable.listExtensions()` | All registered manifests (includes built-ins) |
+| `auditable.getCellType(name)` | The cell-type contribution for `name`, or undefined |
+| `auditable.getTaggedLanguage(name)` | The tagged-language contribution for `name`, or undefined |
+| `auditable.getExports(name)` | The `exports` object for an extension |
+| `auditable.hasExports(name)` | `true` if extension has named exports |
+
+Built-in cell types (`code`, `md`, `css`, `html`) are auto-registered as manifests with `capabilities.builtin = true` — they appear in `listExtensions()` just like third-party extensions.
+
+---
+
+## Execute function
 
 The `execute` function receives three arguments:
 
 | Argument | Description |
-|----------|-------------|
-| `code` | The cell's source code as a string |
+|---|---|
+| `code` | The cell's source code |
 | `scope` | Object containing upstream variable values (only names from `findUses`) |
-| `cell` | The cell object — access `cell._ctx` for display, widgets, and invalidation |
+| `cell` | The cell object — access `cell._ctx` for display, widgets, invalidation, load, install, etc. |
 
-The cell context (`cell._ctx`) is created before each execution and provides the same
-builtins available to code cells: `ui`, `std`, `load`, `install`, `display`,
-`invalidation`, `worker`, `workerPool`, `notebook`, `vfs`, and more.
+`cell._ctx` is the per-cell context created before each execution — same builtins available to code cells: `ui`, `std`, `load`, `install`, `display`, `invalidation`, `worker`, `workerPool`, `notebook`, `vfs`, etc.
 
-Return an object with:
+Return:
 
-- **`defines`** — object of `{ name: value }` pairs to inject into downstream scope
-- **`output`** — optional DOM element or string to render in the output area
+- `defines` — `{ name: value }` map of variables to inject into downstream scope
+- `output` — DOM element or string to render in the output area (optional; cells can also call `ctx.display(...)` directly)
 
 ```js
 execute: async (code, scope, cell) => {
   const ctx = cell._ctx;
-  ctx.display("Running...");
-  const result = myInterpreter(code, scope);
+  ctx.display('Running…');
+  const result = await myInterpreter(code, scope);
   return { defines: result.vars, output: result.html };
 }
 ```
 
 ---
 
-## DAG Integration
+## DAG integration
 
-For a plugin cell type to participate in the reactive dependency graph, provide
-`parseNames` and `findUses`:
+For a cell type to participate in the reactive dependency graph:
 
-- **`parseNames(code)`** — returns a `Set` of variable names that the cell defines.
-  The DAG uses this to know what downstream cells can depend on.
+- **`parseNames(code)`** — return a `Set` of variable names the cell defines. The DAG uses this to know what downstream cells can depend on.
+- **`findUses(code, allDefined)`** — return a `Set` of names from `allDefined` the cell references. The DAG uses this to determine upstream dependencies.
 
-- **`findUses(code, allDefined)`** — returns a `Set` of names from `allDefined` that
-  the cell references. The DAG uses this to determine upstream dependencies.
-
-If these are not provided, the cell can still execute but won't define scope variables
-or react to upstream changes.
-
-!!! warning
-    `parseNames` and `findUses` must be synchronous and fast — they run on every
-    keystroke during DAG rebuilds.
+Both must be synchronous and fast — they run on every keystroke during DAG rebuilds. If you don't provide them, the cell can still execute but won't define scope variables or react to upstream changes (set `capabilities.definesScope: false` to make the declaration honest).
 
 ---
 
-## Module Registration
+## Plugin lifecycle
 
-Plugins can register importable modules accessible from other cells:
+1. **Before plugin loads:** cells of the plugin type render as fallback — grayed-out label, textarea editor, not executable.
+2. **On `registerExtension`:** pending cells activate — the editor replaces the textarea, the DAG rebuilds, cells execute.
+3. **On uninstall:** cells revert to fallback state, plugin editors destroy, the DAG rebuilds without those cells.
 
-```js
-registerExtension("myLib", { someFunction, anotherFunction });
+Plugins uninstalled via `_ctUninstallPlugin(url)` remove the cell type, revert all affected cells, and clean up the module cache.
 
-// Other cells can then:
-const { someFunction } = await load("myLib");
-```
-
-Use `hasExtension(name)` and `getExtension(name)` to query registered extensions at
-runtime.
-
----
-
-## Plugin Registration
-
-Track plugin metadata for the settings panel with `registerPlugin`:
-
-```js
-registerPlugin("https://example.com/my-plugin.js", {
-  name: "My Plugin",
-  description: "A custom cell type for my language",
-  types: ["myLang"]
-});
-```
-
-The URL is used as the plugin identifier for install/uninstall tracking.
+!!! info "Reference implementations"
+    - [adder](adder/index.md) — Python dialect. Reference for cell types + AIR lowerers + context hooks. See `ext/adder/src/register.js`.
+    - [@gcu/soft](https://github.com/endarthur/auditable/tree/main/ext/soft) — English-keyword language. Reference for simpler cell types.
+    - [@gcu/sql](https://www.npmjs.com/package/@gcu/sql) — tagged-template only (no cell type). Reference for `taggedLanguage` contributions.
 
 ---
 
-## Plugin Lifecycle
+## Built-in cell types
 
-1. **Before plugin loads:** Cells of the plugin type show as fallback — grayed-out
-   label, textarea editor, not executable
-2. **On `registerCellType`:** Pending cells activate — the editor replaces the textarea,
-   the DAG rebuilds, and cells execute
-3. **On plugin uninstall:** Cells revert to fallback state, plugin editors are destroyed,
-   the DAG rebuilds without those cells
-
-Uninstall is handled by `_ctUninstallPlugin(url)`, which removes the cell type,
-reverts all affected cells, and cleans up the module cache.
-
-!!! info "Reference implementation"
-    Adder (the Python dialect) is the reference plugin. See [adder](adder/index.md) for a
-    working example, and `ext/adder/src/register.js` for the registration code.
-
----
-
-## Capability Queries
-
-The cell type system exposes query helpers for checking what a type supports:
-
-| Function | Returns `true` when |
-|----------|-------------|
-| `_ctIsExecutable(type)` | Cell can be run (has `execute` handler) |
-| `_ctDefinesScope(type)` | Cell defines scope variables (has `parseNames`) |
-| `_ctHasOutput(type)` | Cell has an output area |
-| `_ctHasEditor(type)` | Cell has a CM6 editor (has `createEditor` or `tokenize`) |
-| `_ctIsPlugin(type)` | Type is a registered plugin (not built-in) |
-| `_ctIsBuiltin(type)` | Type is one of the four built-in types |
-
----
-
-## Built-in Types
-
-These types are always available and cannot be overridden by plugins:
+These are always available; they register themselves at startup with `capabilities.builtin = true`:
 
 | Type | Label | Description |
-|------|-------|-------------|
+|---|---|---|
 | `code` | js | JavaScript — reactive, defines scope variables |
 | `md` | md | Markdown — rendered, can use `${expr}` bindings |
 | `css` | css | CSS — applied as a `<style>` element |

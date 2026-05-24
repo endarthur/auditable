@@ -11,10 +11,20 @@ own configuration.
 | Setting | Options | Default |
 |---------|---------|---------|
 | Color scheme | `dark`, `light` | dark |
+| Embed fonts | `system`, `bundled` | system |
 
-The dark theme is the default — amber accent on dark background. Light mode uses a light
-background with adjusted contrast. The selected theme is applied to both the UI and the
-CodeMirror editors.
+The theme follows the [Switchboard](switchboard.md) design system — dark uses the **basalt** surface palette; light uses **equipment gray**. Either way the accent palette is the canonical six (orange action, teal info, green go, amber caution, red fault, indigo selected). The selected theme applies to both the UI chrome and the CodeMirror editors.
+
+**Embed fonts** controls whether the notebook uses system-fallback fonts (Space Mono / Barlow → system monospace / sans, the default) or fetches the canonical Space Mono + Barlow from Google Fonts and caches them in localStorage (slightly larger first load; canonical look on any machine). In [Auditable Works](works.md), bundled fonts are the workspace default — Works is the "GCU desktop" and the canonical type is the right baseline.
+
+User theme overrides go in `/home/nb/theme.css` inside the notebook's VFS — drop CSS variable overrides there and they apply on next load:
+
+```css
+:root { --au-bg: #181818; }
+[data-theme="dark"] { --au-action: #ffa540; }
+```
+
+See [Switchboard](switchboard.md) for the full token reference.
 
 ---
 

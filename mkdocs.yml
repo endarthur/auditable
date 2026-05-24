@@ -79,9 +79,14 @@ nav:
   - Export: export.md
   - Settings: settings.md
   - Keyboard Shortcuts: keyboard.md
-  - Auditable Works: works.md
+  - Auditable Works:
+    - Overview: works.md
+    - geas (Terminal): geas.md
+  - Design:
+    - Switchboard: switchboard.md
   - Advanced:
     - Scope Model: advanced/scope-model.md
     - Save Format: advanced/save-format.md
+    - Docs Style Guide: advanced/docs-style.md
 
 copyright: "&copy; Geoscientific Chaos Union — MIT License"

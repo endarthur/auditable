@@ -230,6 +230,50 @@ HTML works offline without any network requests.
 
 ---
 
+## `@gcu/*` namespace
+
+GCU-org packages resolve through a small in-runtime resolver. `load('@gcu/<name>')` checks three places in order:
+
+1. `_installedModules` — the per-notebook cache (filled by `install()` or a `/// module:` directive).
+2. **In Auditable Works:** the `/usr/lib/` mount, which holds shell-bundled libraries (`@gcu/abus`, `@gcu/vfs`, `@gcu/xterm`, `@gcu/geas`). Auto-installed; no fetch needed.
+3. The dev fallback path (relative `./ext/<name>/index.js`) for development; or an `install()` from the npm registry for production.
+
+This lets a notebook running inside Works use the workspace's bundled libs for free:
+
+```js
+// Inside a notebook surface in Works — these resolve to /usr/lib/ via the workspace
+const { connect } = await load('@gcu/abus');
+const { VFS }     = await load('@gcu/vfs');
+```
+
+The same `load('@gcu/abus')` call in a standalone `auditable.html` falls back to the dev path (during development) or fails with a "module not installed" error (in a saved notebook). For broad portability, prefer explicit `install('@gcu/abus')` calls inside the notebook.
+
+---
+
+## `pkg install` — workspace package manager
+
+Inside [Auditable Works](works.md), the `pkg` builtin in the [geas](geas.md) terminal handles "install a library into this workspace so every notebook can use it":
+
+```bash
+pkg install npm:leaflet                # npm package
+pkg install jsr:@std/csv               # JSR
+pkg install @gcu/yaml                  # GCU registry
+```
+
+Installed modules live at `/lib/<source>/<name>/` and are `load()`-able from any notebook in the workspace:
+
+```js
+const L = await load('npm:leaflet');
+```
+
+The workspace lockfile `/lib/.gcu-lock.json` records resolved URLs + SHA-256 integrity hashes. Workspace export inlines `/lib/` so the recipient gets every installed module without re-fetching.
+
+`pkg` is workspace-scoped — different workspaces have different `/lib/` trees. Per-notebook installs (`install()` from a cell) remain notebook-scoped.
+
+See [geas](geas.md#pkg-workspace-package-manager) for the full pkg reference.
+
+---
+
 ## Examples
 
 ```js
@@ -249,4 +293,10 @@ const alpack = await load("@atra/alpack");
 
 // python compat
 const { range, zip, enumerate } = await load("@python");
+
+// GCU library bundled into Works (if running inside a Works surface)
+const { connect } = await load("@gcu/abus");
+
+// pkg-installed library (from a Works workspace's /lib/ tree)
+const L = await load("npm:leaflet");
 ```

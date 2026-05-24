@@ -1,11 +1,21 @@
 # Getting Started
 
+## Two flavors
+
+Auditable ships as two files. Pick whichever fits the work you're starting.
+
+| File | When to use |
+|---|---|
+| **`auditable.html`** | One notebook. Open it, work, save. Email the file. Best for self-contained reports and standalone documents. |
+| **`works.html`** | A workspace shell. Hosts notebooks plus a terminal, docs reader, file preview, and settings in tabs. Best for sustained projects with multiple notebooks and files. See [Auditable Works](works.md). |
+
+Both are single HTML files — no install, no server, no dependencies.
+
 ## Download
 
-Get the latest `auditable.html` from the
+Get the latest `auditable.html` and `works.html` from the
 [GitHub releases page](https://github.com/endarthur/auditable/releases) or directly
 from [endarthur.github.io/auditable](https://endarthur.github.io/auditable/auditable.html).
-It is a single HTML file — no installation required.
 
 ## Opening auditable
 
@@ -136,6 +146,18 @@ Auditable uses a modal editing model inspired by Vim. Press **Escape** to enter 
 
 See [Keyboard Shortcuts](keyboard.md) for the full reference.
 
+## Or, try Auditable Works
+
+If you're starting a project rather than a one-off, open `works.html` instead. Works is a tabbed workspace shell that hosts notebooks alongside a terminal, file preview, and other surfaces — see [Auditable Works](works.md).
+
+A typical Works flow:
+
+1. Open `works.html` in a Chromium-based browser (Chrome, Edge, Brave) for the full disk-folder integration; or any modern browser for the IndexedDB-backed default.
+2. **File → New workspace…** to start (or **File → Open folder…** to mount a disk directory as your workspace home).
+3. **File → New notebook…** creates a new notebook surface in the current project. Edit it the same way as a standalone `auditable.html`.
+4. **Tools → Terminal** for a `geas` shell with `pkg` (package manager), `ed`, and the GCU coreutils.
+5. **Help → Documentation (F1)** opens the docs surface with Ctrl+K search.
+
 ## Next steps
 
 - [Cells](cells.md) — cell types, directives (`%manual`, `%norun`, `%hide`), and execution model
@@ -144,3 +166,4 @@ See [Keyboard Shortcuts](keyboard.md) for the full reference.
 - [Widgets](widgets.md) — slider, dropdown, checkbox, text input in code and HTML cells
 - [Settings](settings.md) — theme, editor, execution mode, and presentation configuration
 - [Export](export.md) — save modes, packed export, app export, and signatures
+- [Auditable Works](works.md) — the workspace shell, surfaces, and how the docs surface works

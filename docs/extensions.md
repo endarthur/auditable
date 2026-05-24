@@ -181,6 +181,6 @@ the same token types used by the JavaScript highlighter.
 
 Beyond tagged templates, auditable supports full **plugin cell types** that appear in the cell type picker alongside js, md, css, and html.
 
-Plugins register via `registerCellType(name, handler)` and can provide custom parsing, execution, highlighting, and completions. Adder is the reference implementation — after `load("@gcu/adder")`, an "adder" option appears in the type picker.
+Plugins register via the unified `auditable.registerExtension(manifest)` API — see [Plugins](plugins.md). Adder is the reference implementation — after `load("@gcu/adder")`, an "adder" option appears in the type picker.
 
 See [Plugins](plugins.md) for the registration API and handler interface.

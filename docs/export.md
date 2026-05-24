@@ -26,11 +26,13 @@ my_notebook.html  (~200–500 KB typical)
 ```
 
 !!! info "Data format"
-    Cell data, settings, and modules are stored as JSON inside HTML comments:
-    `<!--AUDITABLE-DATA\n[...]\nAUDITABLE-DATA-->`. This keeps them invisible
-    to the browser while making the file fully self-contained. Notebooks with
-    embedded files include an additional `<!--AUDITABLE-FS\n{...}\nAUDITABLE-FS-->`
-    block.
+    Cell data, settings, modules, and the embedded filesystem are stored as
+    a single JSON dump of the notebook's VFS, inside an HTML comment:
+    `<!--AUDITABLE-VFS\n{...}\nAUDITABLE-VFS-->`. This keeps the data
+    invisible to the browser while making the file fully self-contained.
+    Older notebooks used a four-block split (DATA / SETTINGS / MODULES / FS);
+    those auto-import on load and re-save in the new format. See [Save
+    Format](advanced/save-format.md) for the full reference.
 
 !!! info "Encrypted notebooks"
     When encryption is enabled, all data blocks are replaced by a single
@@ -208,9 +210,6 @@ settings, and installed modules.
 
 ## Works Workspace Integration
 
-When a notebook runs inside an [Auditable Works workspace](works.md), saving works differently — instead
-of downloading a file, the serialized HTML is sent to the Works shell via `postMessage`
-(`works:serialized`). The Works shell handles persistence to its storage backend (File System
-Access API or IndexedDB box).
+When a notebook runs inside an [Auditable Works workspace](works.md), saving works differently — instead of downloading a file, the notebook surface flushes via the [@gcu/abus](https://github.com/endarthur/auditable/tree/main/ext/abus) `Surface.Flush()` method, and the shell writes the result to the workspace VFS at the notebook's path. The Works shell then persists the workspace using its configured backend (IndexedDB or File System Access API).
 
-The notebook detects the Works parent automatically. No user configuration is needed.
+The notebook detects the Works parent automatically — when the surface receives an `abus:welcome` from the shell, it switches save behavior to the A-Bus flush path. No user configuration needed. The legacy `works:*` postMessage bridge is retired.
