@@ -24,6 +24,7 @@ import { WKS, setStatus } from './state.js';
 import { hydrateWorkspace } from './persist.js';
 import { openPath } from './surfaces.js';
 import { parseNotebookHtml, serializeNotebookTxt } from '#serialize';
+import { importNotebook as importIpynbCells } from '#ipynb';
 
 const SELF = '/projects/self';
 const rid = () => Math.random().toString(36).slice(2, 10);
@@ -80,6 +81,42 @@ async function importTxt(content, fallbackName) {
   const projPath = await uniqueProjectPath(title);
   await writeMarker(projPath, title);
   await WKS.vfs.writeFile(projPath + '/notebook.txt', content);
+  return projPath;
+}
+
+// .ipynb — Jupyter notebook. @gcu/ipynb's importNotebook does the
+// substitution + cell conversion (numpy→natra, pandas→sadpan,
+// sklearn→learn, etc.); we serialize the resulting cells to the ///
+// txt form and treat the rest like a .txt import.
+async function importIpynb(content, fallbackName) {
+  let result;
+  try { result = importIpynbCells(content); }
+  catch (e) { throw new Error('.ipynb parse failed: ' + (e.message || e)); }
+
+  // .ipynb names usually look like "analysis.ipynb" — the filename minus
+  // extension is the closest thing to a title the file carries.
+  const title = fallbackName.replace(/\.ipynb$/i, '') || 'notebook';
+
+  // Jupyter notebooks are written for manual execution. Match the
+  // notebook-side import setting so a slider drag in cell 4 doesn't
+  // trigger cell 12.
+  const settings = { autorun: 'manual' };
+
+  const txt = serializeNotebookTxt({
+    title,
+    settings,
+    cells: result.cells,
+    modules: [],
+  });
+
+  const projPath = await uniqueProjectPath(title);
+  await writeMarker(projPath, title);
+  await WKS.vfs.writeFile(projPath + '/notebook.txt', txt);
+  // Surface conversion warnings (dropped magics, non-Python kernels,
+  // etc.) in the status line — non-fatal, just informational.
+  if (result.warnings && result.warnings.length) {
+    setStatus(`imported ${fallbackName} (${result.warnings.length} warning${result.warnings.length === 1 ? '' : 's'})`);
+  }
   return projPath;
 }
 
@@ -162,7 +199,8 @@ export async function importNotebook(content, filename) {
   const fallbackName = (dot >= 0 ? filename.slice(0, dot) : filename) || 'notebook';
   if (ext === '.txt') return importTxt(content, fallbackName);
   if (ext === '.html' || ext === '.htm') return importHtml(content, fallbackName);
-  throw new Error('unsupported file type "' + (ext || filename) + '" — expected .txt or .html');
+  if (ext === '.ipynb') return importIpynb(content, fallbackName);
+  throw new Error('unsupported file type "' + (ext || filename) + '" — expected .txt, .html, or .ipynb');
 }
 
 /**
@@ -188,7 +226,7 @@ export async function importFileAsNotebook(path) {
 export function importNotebookViaPicker() {
   const input = document.createElement('input');
   input.type = 'file';
-  input.accept = '.txt,.html,.htm,text/plain,text/html';
+  input.accept = '.txt,.html,.htm,.ipynb,text/plain,text/html,application/json';
   input.onchange = async () => {
     const file = input.files && input.files[0];
     if (!file) return;

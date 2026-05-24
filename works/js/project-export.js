@@ -8,7 +8,8 @@
 // and patched with the dump block + the project's title.
 
 import { WKS, setStatus } from './state.js';
-import { serializeVfs, esc } from '#serialize';
+import { serializeVfs, esc, parseNotebookTxt } from '#serialize';
+import { exportNotebook as exportIpynb } from '#ipynb';
 import { surfaceUrl } from './surface-registry.js';
 
 const SELF = '/projects/self';
@@ -82,3 +83,28 @@ export async function exportProject(projPath) {
     setStatus('export failed: ' + (e.message || e));
   }
 }
+
+/** Right-click → Export as .ipynb: project's notebook.txt → Jupyter file.
+ *  @gcu/ipynb runs the inverse substitution (natra → numpy, sadpan →
+ *  pandas, etc.) so the .ipynb opens cleanly in Jupyter. */
+export async function exportProjectAsIpynb(projPath) {
+  try {
+    const title = await _readProjectTitle(projPath);
+    let txt;
+    try { txt = await WKS.vfs.readFile(projPath + '/notebook.txt', 'utf8'); }
+    catch { throw new Error('this project has no notebook.txt'); }
+    const parsed = parseNotebookTxt(txt);
+    const ipynbJson = exportIpynb(parsed.cells || []);
+    const blob = new Blob([ipynbJson], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = safeFilename(title) + '.ipynb';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    setStatus('exported ' + a.download);
+  } catch (e) {
+    console.error('[works] ipynb export failed:', e);
+    setStatus('ipynb export failed: ' + (e.message || e));
+  }
+}
+

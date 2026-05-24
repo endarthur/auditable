@@ -74,6 +74,10 @@ if (target === 'works' || target === 'works-all') {
     ['rails',  'ext/rails/index.js'],
     ['menu',   'ext/menu/index.js'],
     ['dialog', 'ext/dialog/index.js'],
+    // Jupyter .ipynb ⇄ Auditable bridge — used by works/js/import.js for
+    // File → Import notebook… and the tree's right-click → Import as
+    // notebook on .ipynb files.
+    ['ipynb',  'ext/ipynb/index.js'],
     // The notebook's pure serializer — shared so the shell can import a
     // standalone notebook into a project (works/js/import.js).
     ['serialize', 'src/js/serialize.js'],
@@ -177,7 +181,7 @@ if (target === 'works' || target === 'works-all') {
   const worksZlib = require('zlib');
 
   const isWorksAll = (target === 'works-all');
-  const SHARED_LIBS_BASE = ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline', 'markdown', 'librarian'];
+  const SHARED_LIBS_BASE = ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline', 'markdown', 'librarian', 'ipynb'];
   // For --target=works-all: bundle every ext/<name>/index.js that's a real
   // bundle (skip the re-export shims under ~1 KB — they break the
   // single-file SHARED_LIBS pattern because they import from sibling files).

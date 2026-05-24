@@ -12,9 +12,9 @@ import { kindDef } from './surface-registry.js';
 import { openPath, spawnSurface } from './surfaces.js';
 import { unmountAt } from './mount.js';
 import { importFileAsNotebook } from './import.js';
-import { exportProject } from './project-export.js';
+import { exportProject, exportProjectAsIpynb } from './project-export.js';
 
-const IMPORTABLE_RE = /\.(html?|txt)$/i;
+const IMPORTABLE_RE = /\.(html?|txt|ipynb)$/i;
 
 const ROOT = '/';
 // /projects open by default; the rest of the VFS is there, collapsed.
@@ -175,6 +175,7 @@ async function showMenu(e, path, type) {
   if (type === 'folder')  extras.push({ label: 'Refresh',               action: 'refresh' });
   if (type === 'project') extras.push({ label: 'Duplicate…',            action: 'duplicate' });
   if (type === 'project') extras.push({ label: 'Export as notebook…',   action: 'export' });
+  if (type === 'project') extras.push({ label: 'Export as .ipynb',      action: 'export-ipynb' });
   if (type === 'file' && IMPORTABLE_RE.test(basename(path)))
     extras.push(                        { label: 'Import as notebook',  action: 'import-file' });
   if (extras.length) items.push('---', ...extras);
@@ -204,6 +205,7 @@ async function showMenu(e, path, type) {
   else if (action === 'refresh')     refreshTree();
   else if (action === 'duplicate')   duplicateProject(path);
   else if (action === 'export')      exportProject(path);
+  else if (action === 'export-ipynb') exportProjectAsIpynb(path);
   else if (action === 'import-file') importFileAsNotebook(path);
   else if (action === 'rename')      renameEntry(path, type);
   else if (action === 'delete')      deleteEntry(path, type);
