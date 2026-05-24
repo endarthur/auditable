@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Documentation</title>
+<style>
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: #14171a; color: #c8ccd0;
+    font: 13px/1.6 'Barlow', system-ui, sans-serif;
+    display: flex; flex-direction: column;
+  }
+  /* Custom scrollbars — GCU aesthetic. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #2a3038 #14171a;
+  }
+  *::-webkit-scrollbar { width: 8px; height: 8px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  *::-webkit-scrollbar-thumb { background: #2a3038; border-radius: 4px; }
+  *::-webkit-scrollbar-thumb:hover { background: #3a4048; }
+  *::-webkit-scrollbar-corner { background: transparent; }
+
+  header {
+    flex: none; display: flex; align-items: center; gap: 10px;
+    padding: 6px 12px; border-bottom: 1px solid #2a2e33; background: #1a1d21;
+    position: relative; z-index: 30;
+  }
+  header .title { font-weight: 600; color: #e8eaed;
+    font-family: ui-monospace, 'Space Mono', monospace; font-size: 12px;
+    letter-spacing: 2px; text-transform: uppercase; }
+  header .crumbs { color: #6b7177; font-size: 12px; }
+  header .spacer { flex: 1; }
+  header .toggle {
+    background: none; border: 1px solid #2a2e33; border-radius: 3px;
+    color: #c8ccd0; cursor: pointer; padding: 2px 8px;
+    font: inherit;
+  }
+  header .toggle:hover { background: #21262b; }
+
+  .body { flex: 1; display: flex; min-height: 0; position: relative; }
+  .backdrop {
+    position: absolute; inset: 0; background: rgba(0,0,0,0.4);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.15s;
+    z-index: 10;
+  }
+  body.nav-open .backdrop { opacity: 1; pointer-events: auto; }
+  .sidebar {
+    position: absolute; top: 0; left: 0; bottom: 0; width: 280px;
+    overflow: auto;
+    border-right: 1px solid #2a2e33; background: #161a1e;
+    font-family: ui-monospace, 'Space Mono', monospace; font-size: 11px;
+    padding: 8px 0;
+    transform: translateX(-100%);
+    transition: transform 0.18s ease-out;
+    z-index: 20;
+  }
+  body.nav-open .sidebar { transform: translateX(0); }
+  .sidebar h3 {
+    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: #d97a3c; margin: 12px 12px 4px; font-weight: 600;
+  }
+  .sidebar .item {
+    padding: 4px 16px; cursor: pointer; color: #8a9099;
+    border-left: 2px solid transparent;
+  }
+  .sidebar .item:hover { background: #21262b; color: #c8ccd0; }
+  .sidebar .item.active {
+    color: #e8eaed; border-left-color: #d97a3c; background: #1a1d21;
+  }
+  .sidebar .item.nested { padding-left: 28px; }
+  .content {
+    flex: 1; overflow: auto; padding: 24px 40px;
+    max-width: 860px; margin: 0 auto;
+  }
+  .content h1, .content h2, .content h3, .content h4 {
+    font-family: ui-monospace, 'Space Mono', monospace;
+    color: #e8eaed;
+  }
+  .content h1 {
+    font-size: 22px; letter-spacing: 1px; margin: 0 0 16px;
+    color: #d97a3c;
+  }
+  .content h2 {
+    font-size: 16px; letter-spacing: 1px; margin: 32px 0 12px;
+    border-bottom: 1px solid #2a2e33; padding-bottom: 4px;
+  }
+  .content h3 { font-size: 14px; margin: 24px 0 8px; }
+  .content h4 { font-size: 13px; margin: 16px 0 4px; color: #c8ccd0; }
+  .content p { margin: 0 0 12px; }
+  .content code {
+    font-family: ui-monospace, 'Space Mono', monospace;
+    background: #21262b; color: #d2c0a3;
+    padding: 1px 5px; border-radius: 2px;
+    font-size: 0.92em;
+  }
+  .content pre {
+    background: #1a1d21; border: 1px solid #2a2e33; border-radius: 3px;
+    padding: 10px 14px; overflow-x: auto;
+    font-family: ui-monospace, 'Space Mono', monospace;
+    font-size: 12px; line-height: 1.5;
+  }
+  .content pre code { background: none; padding: 0; color: inherit; }
+  .content a { color: #7ec8e0; text-decoration: none; }
+  .content a:hover { text-decoration: underline; }
+  .content ul, .content ol { padding-left: 24px; margin: 0 0 12px; }
+  .content li { margin: 2px 0; }
+  .content blockquote {
+    border-left: 3px solid #2a2e33; padding-left: 12px;
+    color: #8a9099; margin: 12px 0;
+  }
+  .content table {
+    border-collapse: collapse; margin: 12px 0;
+    font-size: 12px; font-family: ui-monospace, 'Space Mono', monospace;
+  }
+  .content th, .content td {
+    border: 1px solid #2a2e33; padding: 4px 10px; text-align: left;
+  }
+  .content th { background: #1a1d21; color: #c8ccd0; }
+  .empty { color: #6b7177; padding: 8px 16px; font-style: italic; }
+  .err { color: #f88; padding: 20px; }
+</style>
+</head>
+<body>
+<header>
+  <button class="toggle" id="navToggle" title="Toggle navigation (Ctrl+\)">☰</button>
+  <span class="title">Documentation</span>
+  <span class="crumbs" id="crumbs"></span>
+  <span class="spacer"></span>
+</header>
+<div class="body">
+  <div class="backdrop" id="backdrop"></div>
+  <div class="sidebar" id="sidebar"></div>
+  <div class="content" id="content"></div>
+</div>
+<script type="module">
+import { connect } from '../../ext/abus/index.js';
+import { renderMd } from '../../src/js/markdown.js';
+
+const $ = (id) => document.getElementById(id);
+
+let bus = null;
+let manifest = null;
+const fileCache = new Map();
+let current = null;
+
+function setNavOpen(open) {
+  document.body.classList.toggle('nav-open', open);
+}
+
+async function loadFile(relPath, label) {
+  current = relPath;
+  $('crumbs').textContent = label || relPath;
+  // Mark active in sidebar.
+  for (const el of document.querySelectorAll('.sidebar .item')) {
+    el.classList.toggle('active', el.dataset.path === relPath);
+  }
+  let md = fileCache.get(relPath);
+  if (md == null) {
+    try {
+      md = await bus.call(
+        { to: 'works', path: '/', interface: 'VFS', member: 'Read' },
+        ['/usr/share/doc/' + relPath, 'utf8']);
+    } catch (e) {
+      $('content').innerHTML = '<div class="err">failed to load '
+        + relPath + ': ' + (e.message || e) + '</div>';
+      return;
+    }
+    fileCache.set(relPath, md);
+  }
+  $('content').innerHTML = renderMd(md);
+  $('content').scrollTop = 0;
+  // Intercept internal links to other docs.
+  for (const a of $('content').querySelectorAll('a[href]')) {
+    const href = a.getAttribute('href');
+    if (!href || /^https?:/.test(href) || href.startsWith('#')) continue;
+    // Relative .md links — resolve against current dir.
+    if (href.endsWith('.md')) {
+      const dir = relPath.includes('/') ? relPath.slice(0, relPath.lastIndexOf('/')) : '';
+      const resolved = dir ? dir + '/' + href : href;
+      a.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        loadFile(resolved, href);
+      });
+    }
+  }
+}
+
+function renderSidebar() {
+  const sb = $('sidebar');
+  sb.innerHTML = '';
+
+  function addItem(label, relPath, nested) {
+    const div = document.createElement('div');
+    div.className = 'item' + (nested ? ' nested' : '');
+    div.textContent = label;
+    div.dataset.path = relPath;
+    div.addEventListener('click', () => {
+      loadFile(relPath, label);
+      setNavOpen(false);   // auto-dismiss after selection
+    });
+    sb.appendChild(div);
+  }
+
+  function walkNav(list, nested) {
+    for (const item of list) {
+      if (item.file) {
+        addItem(item.label, 'docs/' + item.file, nested);
+      } else if (item.children) {
+        const h = document.createElement('h3');
+        h.textContent = item.label;
+        sb.appendChild(h);
+        walkNav(item.children, true);
+      }
+    }
+  }
+
+  if (manifest && manifest.nav && manifest.nav.length) {
+    walkNav(manifest.nav, false);
+  }
+
+  // Extensions section.
+  const exts = manifest && manifest.extensions || [];
+  if (exts.length) {
+    const grouped = new Map();
+    for (const e of exts) {
+      if (!grouped.has(e.pkg)) grouped.set(e.pkg, []);
+      grouped.get(e.pkg).push(e);
+    }
+    const h = document.createElement('h3');
+    h.textContent = 'Extensions';
+    sb.appendChild(h);
+    for (const [pkg, entries] of [...grouped].sort((a, b) => a[0].localeCompare(b[0]))) {
+      // Show the package name once; if both SPEC + README, show both as nested.
+      if (entries.length === 1) {
+        addItem(pkg, entries[0].file, true);
+      } else {
+        const div = document.createElement('div');
+        div.className = 'item';
+        div.style.cursor = 'default';
+        div.textContent = pkg;
+        sb.appendChild(div);
+        for (const e of entries) {
+          addItem(e.kind, e.file, true);
+        }
+      }
+    }
+  }
+}
+
+window.addEventListener('message', async (ev) => {
+  if (ev.source !== window.parent) return;
+  if (!ev.data || ev.data.type !== 'abus:welcome') return;
+
+  try { bus = await connect(ev.data.port, { client: 'docs-surface' }); }
+  catch (e) {
+    document.body.innerHTML = '<div class="err">connect failed: ' + (e.message || e) + '</div>';
+    return;
+  }
+
+  bus.expose('/', {
+    Surface: {
+      methods: { Flush: () => {}, CanClose: () => true, Relocated: () => {} },
+      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
+    },
+  });
+
+  // Load the manifest first; everything else hangs off it.
+  try {
+    const json = await bus.call(
+      { to: 'works', path: '/', interface: 'VFS', member: 'Read' },
+      ['/usr/share/doc/manifest.json', 'utf8']);
+    manifest = JSON.parse(json);
+  } catch (e) {
+    document.body.innerHTML = '<div class="err">no docs payload — '
+      + (e.message || e) + '</div>';
+    return;
+  }
+
+  renderSidebar();
+
+  // Toggle + dismiss handlers.
+  document.getElementById('navToggle').addEventListener('click', () => {
+    setNavOpen(!document.body.classList.contains('nav-open'));
+  });
+  document.getElementById('backdrop').addEventListener('click', () => setNavOpen(false));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && document.body.classList.contains('nav-open')) {
+      setNavOpen(false);
+    } else if (e.key === '\\' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      setNavOpen(!document.body.classList.contains('nav-open'));
+    }
+  });
+
+  // Open index.md by default if it's in the nav.
+  const findIndex = (list) => {
+    for (const it of list) {
+      if (it.file === 'index.md') return 'docs/index.md';
+      if (it.children) { const r = findIndex(it.children); if (r) return r; }
+    }
+    return null;
+  };
+  const start = (manifest.nav && findIndex(manifest.nav))
+    || (manifest.nav && manifest.nav[0] && manifest.nav[0].file && 'docs/' + manifest.nav[0].file)
+    || null;
+  if (start) await loadFile(start, 'Home');
+
+  bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, ['Documentation']);
+  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
+});
+</script>
+</body>
+</html>

@@ -39,6 +39,8 @@ export function setupMenuBar() {
       { label: 'A-Bus inspector', action: 'debug:inspector' },
     ] },
     { label: 'Help', items: () => [
+      { label: 'Documentation',        action: 'help:docs', shortcut: 'F1' },
+      '---',
       { label: 'About Auditable Works', action: 'help:about' },
     ] },
   ]);
@@ -77,6 +79,14 @@ export function setupMenuBar() {
       spawnSurface('inspector', { title: 'A-Bus Inspector' });
       return;
     }
+    if (action === 'help:docs') {
+      // Single-instance: focus existing docs tab if any.
+      for (const rec of WKS.surfaces.values()) {
+        if (rec.kind === 'docs') { WKS.rails.activateTab(rec.tabId); return; }
+      }
+      spawnSurface('docs', { title: 'Documentation' });
+      return;
+    }
     if (action === 'help:about') { await showAbout(); return; }
     setStatus(`menu: ${action}`);  // workspace:save lands with 5b
   });
@@ -86,6 +96,14 @@ export function setupMenuBar() {
     if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
       e.preventDefault();
       saveWorkspace();
+    }
+    // F1 → docs surface (Help → Documentation accelerator).
+    if (e.key === 'F1' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      e.preventDefault();
+      for (const rec of WKS.surfaces.values()) {
+        if (rec.kind === 'docs') { WKS.rails.activateTab(rec.tabId); return; }
+      }
+      spawnSurface('docs', { title: 'Documentation' });
     }
   });
 

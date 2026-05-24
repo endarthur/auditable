@@ -176,7 +176,26 @@ if (target === 'works') {
   // internally, doesn't need to participate in this map.
   const worksZlib = require('zlib');
 
-  const SHARED_LIBS = ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline'];
+  const SHARED_LIBS = ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline', 'markdown'];
+
+  // markdown comes from src/js/ rather than ext/<name>/index.js — same
+  // file used by the notebook's md cells. buildLibPayloads reads via
+  // _libSourcePath which checks this map first.
+  const SHARED_LIB_SOURCE_OVERRIDES = {
+    markdown: 'src/js/markdown.js',
+  };
+
+  // For SHARED_LIB_SOURCE_OVERRIDES entries (like 'markdown' from
+  // src/js/markdown.js) the import path doesn't follow the
+  // `ext/<dep>/index.js` convention. The rewrite logic accepts either
+  // the conventional path OR the explicit override path for those deps.
+  function _depImportPaths(dep) {
+    const paths = [`ext/${dep}/index.js`];
+    if (SHARED_LIB_SOURCE_OVERRIDES[dep]) {
+      paths.push(SHARED_LIB_SOURCE_OVERRIDES[dep]);
+    }
+    return paths;
+  }
 
   function rewriteSurfaceToDynamic(html, name, allowDeps) {
     // Rewrite each `ext/<dep>/index.js` import to a bare specifier
@@ -189,7 +208,7 @@ if (target === 'works') {
     const scan = html.replace(/`[^`]*`/g, '``');
     const imports = scan.match(/^\s*import\s[^\n]*$/gm) || [];
     const stray = imports.filter((i) =>
-      !allowDeps.some((d) => i.includes(`ext/${d}/index.js`)));
+      !allowDeps.some((d) => _depImportPaths(d).some((p) => i.includes(p))));
     if (stray.length) {
       console.error(`Error: surface ${name} has stray imports — allow-list is `
         + `[${allowDeps.join(', ')}]:\n  ` + stray.join('\n  '));
@@ -197,8 +216,11 @@ if (target === 'works') {
     }
     let out = html;
     for (const dep of allowDeps) {
-      const re = new RegExp(`(['"])[^'"]*ext/${dep}/index\\.js\\1`, 'g');
-      out = out.replace(re, () => `'@gcu/${dep}'`);
+      for (const depPath of _depImportPaths(dep)) {
+        const escaped = depPath.replace(/[/.]/g, (c) => '\\' + c);
+        const re = new RegExp(`(['"])[^'"]*${escaped}\\1`, 'g');
+        out = out.replace(re, () => `'@gcu/${dep}'`);
+      }
     }
     const imports2 = Object.fromEntries(
       allowDeps.map((d) => [`@gcu/${d}`, `##LIB_${d}##`]));
@@ -212,9 +234,10 @@ if (target === 'works') {
   function buildLibPayloads() {
     const parts = [];
     for (const name of SHARED_LIBS) {
-      const p = path.join(__dirname, 'ext', name, 'index.js');
+      const rel = SHARED_LIB_SOURCE_OVERRIDES[name] || `ext/${name}/index.js`;
+      const p = path.join(__dirname, rel);
       if (!fs.existsSync(p)) {
-        console.error(`Error: ext/${name}/index.js not found — build it first`);
+        console.error(`Error: ${rel} not found — build it first`);
         process.exit(1);
       }
       const src = fs.readFileSync(p, 'utf8');
@@ -224,6 +247,91 @@ if (target === 'works') {
     }
     return parts.join('\n');
   }
+
+  // ── Documentation bundle ────────────────────────────────────────────
+  // Read docs/*.md (the mkdocs source, nav from mkdocs.yml) plus every
+  // ext/<pkg>/SPEC.md and ext/<pkg>/README.md. Gzip+base64 the whole
+  // thing into a single payload; the shell decompresses it into the
+  // workspace VFS at /usr/share/doc/ at boot. The docs surface reads
+  // from there.
+  function _parseMkdocsNav() {
+    const ymlPath = path.join(__dirname, 'mkdocs.yml');
+    if (!fs.existsSync(ymlPath)) return [];
+    const text = fs.readFileSync(ymlPath, 'utf8');
+    const lines = text.split('\n');
+    const navStart = lines.findIndex((l) => /^nav:/.test(l));
+    if (navStart < 0) return [];
+    const out = [];
+    const stack = [{ indent: -1, list: out }];
+    for (let i = navStart + 1; i < lines.length; i++) {
+      const line = lines[i];
+      if (!/^\s*-/.test(line)) {
+        if (line.trim() === '' || /^[a-zA-Z]/.test(line)) break;
+        continue;
+      }
+      const m = line.match(/^(\s*)-\s*(.+)$/);
+      if (!m) continue;
+      const indent = m[1].length;
+      const body = m[2];
+      while (stack[stack.length - 1].indent >= indent) stack.pop();
+      const parent = stack[stack.length - 1].list;
+      // Two forms: "Label: file.md"  (leaf)  or  "Label:"  (group → next lines are children)
+      const leaf = body.match(/^([^:]+):\s*(.+\.md)\s*$/);
+      const group = body.match(/^([^:]+):\s*$/);
+      if (leaf) {
+        parent.push({ label: leaf[1].trim(), file: leaf[2].trim() });
+      } else if (group) {
+        const node = { label: group[1].trim(), children: [] };
+        parent.push(node);
+        stack.push({ indent, list: node.children });
+      }
+    }
+    return out;
+  }
+
+  function buildDocsPayload() {
+    const docs = {};   // path → content
+    // docs/*.md (mkdocs source, walked via the nav)
+    function walkNav(list) {
+      for (const item of list) {
+        if (item.file) {
+          const p = path.join(__dirname, 'docs', item.file);
+          if (fs.existsSync(p)) {
+            docs['docs/' + item.file] = fs.readFileSync(p, 'utf8');
+          }
+        }
+        if (item.children) walkNav(item.children);
+      }
+    }
+    const nav = _parseMkdocsNav();
+    walkNav(nav);
+    // ext/<pkg>/SPEC.md + README.md
+    const extDir = path.join(__dirname, 'ext');
+    const extPkgs = fs.readdirSync(extDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory()).map((e) => e.name).sort();
+    const extEntries = [];
+    for (const pkg of extPkgs) {
+      const spec = path.join(extDir, pkg, 'SPEC.md');
+      const readme = path.join(extDir, pkg, 'README.md');
+      if (fs.existsSync(spec)) {
+        const rel = `ext/${pkg}/SPEC.md`;
+        docs[rel] = fs.readFileSync(spec, 'utf8');
+        extEntries.push({ pkg, file: rel, kind: 'SPEC' });
+      }
+      if (fs.existsSync(readme)) {
+        const rel = `ext/${pkg}/README.md`;
+        docs[rel] = fs.readFileSync(readme, 'utf8');
+        extEntries.push({ pkg, file: rel, kind: 'README' });
+      }
+    }
+    const manifest = { nav, extensions: extEntries };
+    const payload = { version: 1, manifest, docs };
+    const json = JSON.stringify(payload);
+    const gz = worksZlib.gzipSync(Buffer.from(json, 'utf8'));
+    const b64 = gz.toString('base64').replace(/.{1,76}/g, '$&\n');
+    return `<script type="text/plain" id="docs-payload">\n${b64}\n</script>`;
+  }
+  const docsPayload = buildDocsPayload();
 
   // Terminal-specific: inline xterm.css. The geas-worker payload that used
   // to live here is gone — the terminal now spawns its worker via the geas
@@ -241,6 +349,8 @@ if (target === 'works') {
     { kind: 'preview',   file: 'works/surfaces/preview.html',   deps: ['abus'] },
     { kind: 'inspector', file: 'works/surfaces/inspector.html', deps: ['abus'] },
     { kind: 'settings',  file: 'works/surfaces/settings.html',  deps: ['abus'] },
+    { kind: 'docs',      file: 'works/surfaces/docs.html',
+      deps: ['abus', 'markdown'] },
     { kind: 'terminal',  file: 'works/surfaces/terminal.html',
       deps: ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline'], extras: 'terminal' },
     { kind: 'notebook',  file: 'auditable.html',                deps: null },
@@ -283,6 +393,11 @@ ${libPayloads}
 
 <!-- Auditable Works surfaces — embedded payloads, blob-URL'd on spawn (§15.1) -->
 ${surfacePayloads}
+
+<!-- Auditable Works documentation — docs/ + ext/*/SPEC.md + ext/*/README.md.
+     Decompressed at boot into the workspace VFS at /usr/share/doc/ for the
+     docs surface to read. -->
+${docsPayload}
 
 <script>
 ${worksJs}

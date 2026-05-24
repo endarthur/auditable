@@ -98,7 +98,13 @@ function _inlineLibsIntoSurface(text, kind) {
       `import\\s*\\{([^}]*)\\}\\s*from\\s*['"]@gcu/${name}['"];?`);
     if (!re.test(text)) continue;
     if (name === 'geas') inlinedGeas = true;
-    const inlined = _rewriteExportToConsts(src);
+    // Inlined source lives inside the surface's <script type="module">
+    // tag; any literal `</script>` in the source (even inside a JS //
+    // comment) would terminate the surrounding script tag early and
+    // dump the rest as HTML text. Escape it. (markdown.js has a
+    // `<script>foo</script>` reference inside a comment that hit this.)
+    const inlined = _rewriteExportToConsts(src)
+      .replace(/<\/script>/g, '<\\/script>');
     text = text.replace(re,
       () => `\n/* @gcu/${name} — inlined from the works lib store */\n${inlined}\n`);
   }
@@ -187,3 +193,8 @@ registerKind('inspector', { label: 'A-Bus Inspector', icon: '◉', extensions: [
 // Workspace settings — appearance, mounts, storage home. Single-instance
 // (the spawner re-uses the open tab if one exists). Tools → Settings…
 registerKind('settings', { label: 'Settings', icon: '⚙', extensions: [] });
+
+// Documentation reader — reads from /usr/share/doc/ (populated by
+// docs-loader at boot from the build-embedded payload). Single-instance.
+// Help → Documentation, or F1.
+registerKind('docs', { label: 'Documentation', icon: '?', extensions: [] });

@@ -12,6 +12,7 @@ import { setupTree, refreshTree, newProject, newFile, duplicateProject } from '.
 import { setupWorksService } from './works-service.js';
 import { setupSurfaces, spawnSurface, openPath } from './surfaces.js';
 import { decompressLibs, decompressSurfaces, installSharedLibsToVfs } from './surface-registry.js';
+import { installDocsToVfs } from './docs-loader.js';
 import { serializeWorkspace, buildWorksHtml } from './persist.js';
 import { importNotebook, importFileAsNotebook } from './import.js';
 import { buildProjectExportHtml, exportProject } from './project-export.js';
@@ -23,6 +24,7 @@ async function boot() {
   await restoreMounts();       // reconnect saved /mnt/* disk-folder mounts
   await decompressLibs();      // shared library payloads → source strings
   await installSharedLibsToVfs(WKS.vfs);   // expose them at /usr/lib as @gcu/*
+  await installDocsToVfs(WKS.vfs);         // /usr/share/doc/ for the docs surface
   await decompressSurfaces();  // embedded surface payloads → blob URLs
   setupLayout();               // the rails surface host
   setupMenuBar();              // the desktop menu bar
