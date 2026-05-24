@@ -93,26 +93,96 @@ window.addEventListener('message', async (ev) => {
   fit.fit();
   window.addEventListener('resize', () => { try { fit.fit(); } catch { /* */ } });
 
-  // Select-to-copy: every selection change copies to the clipboard
-  // (Linux-feeling; matches xterm's classic behaviour). On modern
-  // browsers navigator.clipboard.writeText needs a user-gesture
-  // context, which a mouse selection counts as. Errors swallowed — a
-  // clipboard write failing is not worth interrupting the user.
-  term.onSelectionChange(() => {
-    const sel = term.getSelection();
-    if (!sel) return;
-    navigator.clipboard.writeText(sel).catch(() => { /* */ });
+  // Tell xterm.js to NOT intercept Ctrl+V (and Ctrl+Shift+V / Ctrl+Insert) —
+  // by default it treats them as terminal control bytes (\x16) and
+  // preventDefaults the keydown, which suppresses the browser's paste
+  // event. Returning false from this handler lets the keystroke through
+  // to the browser, which then fires the `paste` event our listener
+  // below catches and routes via term.paste(). Similarly for Ctrl+C
+  // when there's a selection — we let the browser copy natively (xterm
+  // would otherwise send SIGINT via \x03).
+  term.attachCustomKeyEventHandler((e) => {
+    if (e.type !== 'keydown') return true;
+    if (e.ctrlKey && !e.altKey && (e.key === 'v' || e.key === 'V')) return false;
+    if (e.ctrlKey && e.shiftKey && (e.key === 'V' || e.key === 'v')) return false;
+    if (e.ctrlKey && e.key === 'Insert') return false;
+    if (e.ctrlKey && !e.altKey && (e.key === 'c' || e.key === 'C')
+        && term.hasSelection()) return false;
+    return true;
   });
 
-  // Right-click to paste — bypass the browser's default context menu
-  // and stream the clipboard through xterm.paste, which honours
-  // bracketed-paste mode (so readline sees one atomic insert).
-  document.getElementById('term').addEventListener('contextmenu', async (e) => {
+  // Mouse-driven clipboard: copy on selection-end (mouseup with text
+  // selected), paste on middle-click. Linux X11-feel; right-click is
+  // intentionally left alone so the browser's native context menu —
+  // including DevTools' "Inspect" — keeps working.
+  //
+  // navigator.clipboard.writeText/readText is the modern API but it's
+  // undefined on file:// (not a secure context in Chrome). Fall back
+  // to document.execCommand('copy') via a hidden textarea — deprecated
+  // but still functional on file://. Paste from clipboard on file://
+  // can't be done programmatically; users fall back to Ctrl+V which
+  // xterm.js handles natively via the browser's paste event.
+  function copyToClipboard(text) {
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+    } else {
+      fallbackCopy(text);
+    }
+  }
+  function fallbackCopy(text) {
+    // The textarea trick steals focus; save and restore it so xterm's
+    // hidden textarea (which captures browser paste events for Ctrl+V)
+    // keeps the keyboard.
+    const prevFocus = document.activeElement;
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;left:-10000px;top:-10000px;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch { /* */ }
+    document.body.removeChild(ta);
+    if (prevFocus && typeof prevFocus.focus === 'function') {
+      try { prevFocus.focus(); } catch { /* */ }
+    }
+    // xterm also has a focus() method that re-focuses its hidden
+    // textarea explicitly — belt and braces.
+    try { term.focus(); } catch { /* */ }
+  }
+
+  const termEl = document.getElementById('term');
+
+  // Explicit paste listener — catches Ctrl+V via the browser's `paste`
+  // event regardless of which child element xterm's hidden textarea
+  // lands focus on. clipboardData is available on the event even on
+  // file:// (it's not gated like navigator.clipboard.readText). Routed
+  // through term.paste so bracketed-paste mode wraps it cleanly.
+  termEl.addEventListener('paste', (e) => {
+    const text = e.clipboardData?.getData('text/plain');
+    if (text) {
+      e.preventDefault();
+      term.paste(text);
+    }
+  });
+
+  termEl.addEventListener('mouseup', (e) => {
+    if (e.button !== 0) return;   // only the primary (left) button
+    const sel = term.getSelection();
+    if (!sel) return;
+    copyToClipboard(sel);
+  });
+  termEl.addEventListener('mousedown', async (e) => {
+    if (e.button !== 1) return;   // middle button — paste
     e.preventDefault();
+    if (!navigator.clipboard?.readText) return;   // file://: use Ctrl+V instead
     try {
       const text = await navigator.clipboard.readText();
       if (text) term.paste(text);
-    } catch { /* clipboard denied; user can fall back to Ctrl-Shift-V */ }
+    } catch { /* */ }
+  });
+  // Disable the default middle-click autoscroll cursor that some
+  // browsers show inside the terminal area.
+  termEl.addEventListener('auxclick', (e) => {
+    if (e.button === 1) e.preventDefault();
   });
 
   const adapter = createXtermAdapter({ terminal: term });
