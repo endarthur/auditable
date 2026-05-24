@@ -107,26 +107,34 @@ const BUILTIN_MODULES_DIR = '/usr/lib';
 const _enc = encodeURIComponent;
 const _dec = decodeURIComponent;
 
-async function _sha256Short(s) {
-  const bytes = new TextEncoder().encode(s);
-  const buf = await crypto.subtle.digest('SHA-256', bytes);
-  return [...new Uint8Array(buf, 0, 8)].map(b => b.toString(16).padStart(2, '0')).join('');
+// Path slug: pure-JS FNV-1a 32-bit hex. Crypto-grade SHA-256 isn't
+// required for paths (they aren't security-sensitive), and the geas
+// worker that mirrors keyToLibPath in pkg-cmd.js may not have
+// crypto.subtle when its blob-URL context isn't secure (file:// parents
+// are the usual cause). Same hash everywhere for portability.
+function _shortSlug(s) {
+  let hash = 2166136261;
+  for (let i = 0; i < s.length; i++) {
+    hash ^= s.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
 // Map a user-facing key (alias or URL) to its on-disk /lib subpath.
-export async function keyToLibPath(key, root = MODULES_DIR) {
+export function keyToLibPath(key, root = MODULES_DIR) {
   if (key.startsWith('npm:'))    return root + '/npm/'    + key.slice('npm:'.length);
   if (key.startsWith('jsr:'))    return root + '/jsr/'    + key.slice('jsr:'.length);
   if (key.startsWith('gh:'))     return root + '/gh/'     + key.slice('gh:'.length);
-  if (key.startsWith('local:'))  return root + '/local/'  + await _sha256Short(key);
+  if (key.startsWith('local:'))  return root + '/local/'  + _shortSlug(key);
   if (key.startsWith('http://') || key.startsWith('https://'))
-                                 return root + '/url/'    + await _sha256Short(key);
+                                 return root + '/url/'    + _shortSlug(key);
   // Scoped packages — @gcu/foo, @atra/foo, @anyscope/foo. The scope dir
   // (which already starts with @) acts as the source namespace; no extra
   // prefix needed.
   if (/^@[\w.-]+\/[\w.-]+$/.test(key)) return root + '/' + key;
   // Anything else (bare name without prefix) — treat as a URL hash. Rare.
-  return root + '/url/' + await _sha256Short(key);
+  return root + '/url/' + _shortSlug(key);
 }
 
 // Reverse: a path under /lib (as segments after the /lib prefix) + the

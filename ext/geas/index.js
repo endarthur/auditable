@@ -3547,24 +3547,35 @@ function _aliasToUrl(key) {
 }
 
 // pkg-spec §3.1 key → /lib path. Duplicated from src/js/persist.js.
-async function _sha256Short(s) {
-  const bytes = new TextEncoder().encode(s);
-  const buf = await crypto.subtle.digest('SHA-256', bytes);
-  return [...new Uint8Array(buf, 0, 8)].map(b => b.toString(16).padStart(2, '0')).join('');
+//
+// Path slug is FNV-1a 32-bit hex — pure JS, deterministic, low-collision
+// for the volumes we care about. Crypto-grade SHA-256 isn't required
+// here (paths aren't security-sensitive), and pkg runs inside a geas
+// worker which may not have crypto.subtle when the worker's blob URL
+// inherits a non-secure context (file:// parents are the usual cause).
+function _shortSlug(s) {
+  let hash = 2166136261;   // FNV offset basis (32-bit)
+  for (let i = 0; i < s.length; i++) {
+    hash ^= s.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
-async function _keyToLibPath(key) {
+function _keyToLibPath(key) {
   if (key.startsWith('npm:'))    return LIB_ROOT + '/npm/'    + key.slice('npm:'.length);
   if (key.startsWith('jsr:'))    return LIB_ROOT + '/jsr/'    + key.slice('jsr:'.length);
   if (key.startsWith('gh:'))     return LIB_ROOT + '/gh/'     + key.slice('gh:'.length);
-  if (key.startsWith('local:'))  return LIB_ROOT + '/local/'  + await _sha256Short(key);
+  if (key.startsWith('local:'))  return LIB_ROOT + '/local/'  + _shortSlug(key);
   if (key.startsWith('http://') || key.startsWith('https://'))
-                                 return LIB_ROOT + '/url/'    + await _sha256Short(key);
+                                 return LIB_ROOT + '/url/'    + _shortSlug(key);
   if (/^@[\w.-]+\/[\w.-]+$/.test(key)) return LIB_ROOT + '/' + key;
-  return LIB_ROOT + '/url/' + await _sha256Short(key);
+  return LIB_ROOT + '/url/' + _shortSlug(key);
 }
 
-// SRI hash over the un-compressed bytes. pkg-spec §4.1.
+// SRI hash over the un-compressed bytes. pkg-spec §4.1. Optional — when
+// the worker's context lacks crypto.subtle (blob:file:// origins),
+// returns null and pkg records the install without an integrity field.
 function _toBase64(bytes) {
   let bin = '';
   for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
@@ -3572,6 +3583,7 @@ function _toBase64(bytes) {
 }
 
 async function _sha256SRI(bytes) {
+  if (!globalThis.crypto || !globalThis.crypto.subtle) return null;
   const buf = await crypto.subtle.digest('SHA-256', bytes);
   return 'sha256-' + _toBase64(new Uint8Array(buf));
 }
@@ -3620,7 +3632,7 @@ async function _installOne(ctx, alias) {
     let source;
     try { source = await vfs.readFile(fsPath, 'utf8'); }
     catch (e) { await ctx.stderr(`pkg: cannot read ${fsPath}: ${e.message}\n`); return 1; }
-    const dir = await _keyToLibPath(alias);
+    const dir = _keyToLibPath(alias);
     await vfs.mkdir(dir, { recursive: true }).catch(() => {});
     await vfs.writeFile(dir + '/source', source);
     const meta = { alias, url: alias, kind: 'local',
@@ -3658,11 +3670,12 @@ async function _installOne(ctx, alias) {
   const sourceBytes = new TextEncoder().encode(source);
   const integrity = await _sha256SRI(sourceBytes);
 
-  const dir = await _keyToLibPath(alias);
+  const dir = _keyToLibPath(alias);
   await vfs.mkdir(dir, { recursive: true }).catch(() => {});
   await vfs.writeFile(dir + '/source', source);
-  const meta = { alias, url: finalUrl, integrity, kind: 'js',
+  const meta = { alias, url: finalUrl, kind: 'js',
     installedAt: new Date().toISOString(), size: sourceBytes.length };
+  if (integrity) meta.integrity = integrity;
   await vfs.writeFile(dir + '/meta.json', JSON.stringify(meta));
 
   const lockfile = await _readLockfile(vfs);
@@ -3723,7 +3736,7 @@ async function _remove(ctx, alias) {
     await ctx.stderr(`pkg: ${alias} not installed\n`);
     return 1;
   }
-  const dir = await _keyToLibPath(alias);
+  const dir = _keyToLibPath(alias);
   try { await vfs.rm(dir, { recursive: true }); }
   catch (e) { /* directory may not exist if lockfile drifted */ }
   delete lockfile.modules[alias];
