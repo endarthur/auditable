@@ -2859,7 +2859,8 @@ body.presenting .find-bar { display: none !important; }
 .in-works .toolbar-right,
 .in-works .toolbar-sep,
 .in-works .toolbar-badges,
-.in-works .toolbar-status {
+.in-works .toolbar-status,
+.in-works [data-works-hide] {
   display: none !important;
 }
 /* Push transport to the far right; menubar naturally anchors at the
@@ -3067,15 +3068,15 @@ body.presenting .find-bar { display: none !important; }
 <div class="settings-overlay" id="settingsOverlay" onclick="if(event.target===this)toggleSettings()"></div>
 <div class="settings-panel" id="settingsPanel">
   <button class="settings-close" onclick="toggleSettings()">&#x00d7;</button>
-  <h2>theme</h2>
-  <div class="settings-row">
+  <h2 data-works-hide>theme</h2>
+  <div class="settings-row" data-works-hide>
     <label>color scheme</label>
     <select id="setTheme" onchange="applyTheme(this.value)">
       <option value="dark">dark</option>
       <option value="light">light</option>
     </select>
   </div>
-  <div class="settings-row">
+  <div class="settings-row" data-works-hide>
     <label title="embed Barlow + Space Mono fonts into the saved notebook (~140 KB)">embed fonts</label>
     <select id="setEmbedFonts" onchange="applyEmbedFonts(this.value === 'on')">
       <option value="off">off</option>
@@ -3084,7 +3085,7 @@ body.presenting .find-bar { display: none !important; }
   </div>
 
   <h2>editor</h2>
-  <div class="settings-row">
+  <div class="settings-row" data-works-hide>
     <label>font size</label>
     <input type="range" id="setFontSize" min="10" max="20" value="13" oninput="applyFontSize(this.value)">
     <span class="settings-val" id="setFontSizeVal">13</span>

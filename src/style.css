@@ -2283,7 +2283,8 @@ body.presenting .find-bar { display: none !important; }
 .in-works .toolbar-right,
 .in-works .toolbar-sep,
 .in-works .toolbar-badges,
-.in-works .toolbar-status {
+.in-works .toolbar-status,
+.in-works [data-works-hide] {
   display: none !important;
 }
 /* Push transport to the far right; menubar naturally anchors at the
