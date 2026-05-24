@@ -8,21 +8,26 @@ Part of the [GCU](https://github.com/endarthur/auditable) stack.
 
 ## Status
 
-**v0.0.2** — Lexer + parser + here-docs + headless adapter. No executor yet. The AST is reachable and round-tripable through fixtures, useful for tooling (syntax highlighting, completion, static analysis) even without execution.
+**v0.0.4** — Full POSIX-shape shell: lexer + parser + executor + 100+ builtins + three terminal adapters + worker harness + typed pipes + pkg + ed.
 
 What's here:
 
-- **Lexer** — POSIX-shape tokenizer. Words preserve quoting and expansions verbatim (the executor will own expansion semantics). Token types: `WORD`, `OPERATOR`, `IO_NUMBER`, `NEWLINE`, `HEREDOC_BODY`, `EOF`. Comments, line continuations, quoting (single/double), `$var`, `${var}`, `$(cmd)`, `` `cmd` `` all handled. Here-doc bodies are captured at the next newline (queue order for stacked `<<A <<B` heredocs); `<<-` strips leading tabs; quoted delimiters mark bodies for no-expansion via a `quoted` flag.
-- **Parser** — Recursive-descent over a simplified POSIX shell grammar. Simple commands (assignments + words + redirects), pipelines (`|`), and-or chains (`&&`/`||`), lists (`;`/`&`/newline), brace groups (`{ ... }`), subshells (`( ... )`), `if`/`elif`/`else`/`fi`, `for ... do ... done`, `while`/`until`, `case ... esac`, function definitions (`name() body`), trailing redirects on compound commands. Here-doc bodies attach to their owning `<<` / `<<-` Redirect nodes with `body` + `bodyQuoted` fields.
-- **Headless terminal adapter** — pure in-memory implementation of the GeasTerminal interface. Used for tests, MCP scripting, and as the reference implementation for adapter authors. Methods: `write`, `writeBlock`, `onInput`, `size`, `onResize`, `clear`, `caps` (interface), plus `output`, `capturedBlocks`, `sendInput`, `setSize` (inspection / simulation).
+- **Lexer** — POSIX-shape tokenizer. Words preserve quoting and expansions verbatim. Token types: `WORD`, `OPERATOR`, `IO_NUMBER`, `NEWLINE`, `HEREDOC_BODY`, `EOF`. Comments, line continuations, quoting (single/double), `$var`, `${var}`, `$(cmd)`, `` `cmd` `` all handled. Here-doc bodies are captured at the next newline; `<<-` strips leading tabs; quoted delimiters mark bodies for no-expansion.
+- **Parser** — Recursive-descent over a simplified POSIX shell grammar. Simple commands (assignments + words + redirects), pipelines (`|`), and-or chains (`&&`/`||`), lists (`;`/`&`/newline), brace groups, subshells, `if`/`elif`/`else`/`fi`, `for`/`while`/`until`/`case`, function definitions, trailing redirects on compound commands.
+- **Executor** — interprets the AST against a context (VFS, env, stdin/stdout/stderr). Implements: pipelines, redirections (`>`, `>>`, `<`, `2>&1`, `<<EOF`), command substitution, parameter expansion (`${var:-default}`, `${var:offset:length}`, `${var/pat/sub}`, `${#var}`), arithmetic (`$(())`), conditionals (`[ ]`, `[[ ]]`, `test`), all control-flow constructs, `set -e` / `set -o pipefail` / `set -u` / `set -x`, exit-code propagation, error-trap handling.
+- **Builtins** — 100+ commands across coreutils-shape categories: filesystem (`cd`, `ls`, `cat`, `cp`, `mv`, `rm`, `mkdir`, `find`, `chmod`), text (`grep`, `sed`, `awk`-subset, `cut`, `head`, `tail`, `wc`, `sort`, `uniq`, `tr`), shell (`echo`, `printf`, `test`, `set`, `export`, `unset`, `local`, `readonly`, `which`, `type`, `history`), pkg (workspace package manager), ed (POSIX line editor).
+- **Three terminal adapters** — `createHeadlessAdapter()` (in-memory, for tests + MCP), `createTermAdapter()` (for [@gcu/term](https://github.com/endarthur/auditable/tree/main/ext/term)), `createXtermAdapter()` (for xterm.js — the Works default).
+- **Worker harness** — `setupGeasWorker()` + `createGeasClient()` for running geas inside a Web Worker with main-thread proxying. VFS proxy via `serveVFS()` / `createVfsClient()` so the worker sees the same workspace VFS the main thread does.
+- **Typed pipes** — opt-in extension over POSIX: builtins can produce *typed* values (sadpan Table, natra ndarray, JSON object) and pipes preserve the structure across the next builtin if it also opts in. Untyped builtins see raw bytes.
 
 What's deferred:
 
-- Executor (interprets the AST against a context — VFS, env, stdin/stdout, etc.)
-- Built-ins (cat, ls, echo, etc.) — will live in `@gcu/coreutils`, dispatched by geas
-- Terminal adapters for `@gcu/term` and `xterm.js` (small wrappers around the same GeasTerminal interface the headless adapter implements)
-- Worker harness (run geas in a worker; spawn sub-workers for heavy commands)
-- Typed-pipe protocol (geas + adapter-aware built-ins for sadpan Tables, natra ndarrays)
+- **Job control.** `&` parses but runs synchronously (v0); needs to route through `ctx.pm.spawn` to actually background. `fg` / `bg` / `jobs` / `wait` / `disown` builtins TBD. `SIGTSTP` (++ctrl+z++) → `SIGCONT` cycle TBD. [@gcu/proc](https://github.com/endarthur/auditable/tree/main/ext/proc) supplies the process model; the wiring is the work.
+- **`top` / `htop`** — process-table builtin against `ctx.pm`. Designed alongside job control. Numbers we can surface: PID, parent PID, command, mode (function / service / shell), status, uptime, message count, channel-bytes-in/out, and workspace-level totals (JS heap on Chrome, active workers vs `navigator.hardwareConcurrency`, VFS-quota usage per mount).
+- **`@gcu/coreutils` extraction.** Builtins live inside geas today. Promoting them to their own package would let other shells reuse them and would deduplicate the alias prefixes that pkg also carries.
+- **`!` history expansion** (`!!`, `!$`, `!42`) — bash/zsh shape; not in POSIX. Low priority.
+- **Bash-specific arrays** (`${arr[@]}`, `${arr[*]}`) — deliberately not implemented; geas targets the portable POSIX subset.
+- **Subshell process isolation.** `( cmd )` runs in the same JS context with the env restored after; a true subshell would `pm.spawn` a fresh worker. Cosmetic difference until someone writes `( exec 1>>log )` in production.
 
 ## Usage
 
