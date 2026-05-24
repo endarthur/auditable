@@ -128,6 +128,34 @@ if (target === 'works') {
     if (fs.existsSync(p)) worksCss += '\n\n' + fs.readFileSync(p, 'utf8').trimEnd();
   }
 
+  // Bundle the Switchboard fonts (Barlow + Space Mono) directly into
+  // works.html so the workspace UI gets them offline + first paint.
+  // No size-stingyness here — Works is a desktop bundle, not a single-
+  // notebook artefact; ~50 KB for proper typography is rounding error.
+  const fontsDir = path.join(__dirname, 'ext/switchboard/fonts');
+  const fontFaces = [
+    { file: 'barlow-400.woff2',       family: 'Barlow',     weight: 400, style: 'normal' },
+    { file: 'barlow-500.woff2',       family: 'Barlow',     weight: 500, style: 'normal' },
+    { file: 'barlow-600.woff2',       family: 'Barlow',     weight: 600, style: 'normal' },
+    { file: 'barlow-700.woff2',       family: 'Barlow',     weight: 700, style: 'normal' },
+    { file: 'space-mono-400.woff2',   family: 'Space Mono', weight: 400, style: 'normal' },
+    { file: 'space-mono-400i.woff2',  family: 'Space Mono', weight: 400, style: 'italic' },
+    { file: 'space-mono-700.woff2',   family: 'Space Mono', weight: 700, style: 'normal' },
+  ];
+  const fontFaceBlocks = [];
+  for (const f of fontFaces) {
+    const p = path.join(fontsDir, f.file);
+    if (!fs.existsSync(p)) continue;
+    const b64 = fs.readFileSync(p).toString('base64');
+    fontFaceBlocks.push(
+      `@font-face{font-family:'${f.family}';font-weight:${f.weight};`
+      + `font-style:${f.style};font-display:swap;`
+      + `src:url(data:font/woff2;base64,${b64}) format('woff2');}`);
+  }
+  if (fontFaceBlocks.length > 0) {
+    worksCss = fontFaceBlocks.join('\n') + '\n\n' + worksCss;
+  }
+
   const worksTemplate = fs.readFileSync(path.join(worksDir, 'template.html'), 'utf8');
 
   // ── Shared libraries + surface payloads (auditable-works-spec §15) ──
@@ -212,6 +240,7 @@ if (target === 'works') {
     { kind: 'text',      file: 'works/surfaces/text.html',      deps: ['abus'] },
     { kind: 'preview',   file: 'works/surfaces/preview.html',   deps: ['abus'] },
     { kind: 'inspector', file: 'works/surfaces/inspector.html', deps: ['abus'] },
+    { kind: 'settings',  file: 'works/surfaces/settings.html',  deps: ['abus'] },
     { kind: 'terminal',  file: 'works/surfaces/terminal.html',
       deps: ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline'], extras: 'terminal' },
     { kind: 'notebook',  file: 'auditable.html',                deps: null },

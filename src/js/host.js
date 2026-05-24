@@ -15,6 +15,7 @@
 import { VFS, CommentBackend, MemoryBackend, AbusBackend, FSAABackend, IDBBackend, path } from './vfs.js';
 import * as hooks from './hooks.js';
 import { hydrateModulesFromVfs } from './persist.js';
+import { applyTheme, applyFontSize } from './settings.js';
 
 let _host = null;
 
@@ -271,6 +272,25 @@ export function createWorksHost({ bus, projectPath, syncToVfs, home }) {
       } catch (e) {
         console.warn('[host] ListMounts failed:', e.message);
       }
+
+      // Workspace settings: apply the shell's /etc/works.json at boot
+      // and on every Shell.SettingsChanged signal. The notebook's own
+      // settings panel hides its appearance section in Works (workspace
+      // wins for theme/font); see settings.js's Works guards.
+      function _applyWorkspaceSettings(s) {
+        if (!s || !s.appearance) return;
+        if (s.appearance.theme) applyTheme(s.appearance.theme);
+        if (typeof s.appearance.fontSize === 'number') applyFontSize(s.appearance.fontSize);
+      }
+      try {
+        const initial = await bus.call(
+          { to: 'works', path: '/', interface: 'Settings', member: 'Get' }, []);
+        _applyWorkspaceSettings(initial);
+      } catch (e) {
+        console.warn('[host] Settings.Get failed:', e.message);
+      }
+      bus.subscribe({ interface: 'Shell', member: 'SettingsChanged', from: 'works' },
+        (msg) => { _applyWorkspaceSettings(msg.args && msg.args[0]); });
 
       // pkg auto-rehydrate: when /lib/* changes anywhere in the workspace
       // (e.g. a geas `pkg install` from another tab), re-walk the lib

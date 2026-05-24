@@ -31,7 +31,8 @@ export function setupMenuBar() {
       { label: 'Toggle sidebar', action: 'view:sidebar' },
     ] },
     { label: 'Tools', items: () => [
-      { label: 'Terminal', action: 'tools:terminal' },
+      { label: 'Terminal',  action: 'tools:terminal' },
+      { label: 'Settings…', action: 'tools:settings' },
     ] },
     { label: 'Debug', items: () => [
       { label: 'New stub surface', action: 'debug:stub' },
@@ -58,6 +59,14 @@ export function setupMenuBar() {
     }
     if (action === 'tools:terminal') {
       spawnSurface('terminal', { title: 'Terminal' });
+      return;
+    }
+    if (action === 'tools:settings') {
+      // Single-instance: focus the existing settings tab if any.
+      for (const rec of WKS.surfaces.values()) {
+        if (rec.kind === 'settings') { WKS.rails.activateTab(rec.tabId); return; }
+      }
+      spawnSurface('settings', { title: 'Settings' });
       return;
     }
     if (action === 'debug:stub') {

@@ -7,6 +7,7 @@ import './persist.js';
 import './bus.js';
 import './mount.js';
 import './workspace.js';
+import './settings-store.js';
 import './surface-registry.js';
 import './layout.js';
 import './surfaces.js';

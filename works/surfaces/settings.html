@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Settings</title>
+<style>
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: #14171a; color: #c8ccd0;
+    font: 12px/1.5 ui-monospace, 'Space Mono', Menlo, monospace;
+    display: flex; flex-direction: column;
+  }
+  header {
+    flex: none; display: flex; align-items: center; gap: 10px;
+    padding: 6px 12px; border-bottom: 1px solid #2a2e33; background: #1a1d21;
+  }
+  header .title { font-weight: 600; color: #e8eaed; }
+  header .spacer { flex: 1; }
+  header .saved { color: #6b7177; font-size: 11px; }
+  .scroll { flex: 1; overflow: auto; padding: 16px 20px; max-width: 640px; }
+  h2 {
+    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: #d97a3c; margin: 24px 0 8px;
+  }
+  h2:first-child { margin-top: 0; }
+  .row {
+    display: grid; grid-template-columns: 140px 1fr; gap: 12px;
+    align-items: center; padding: 6px 0;
+  }
+  .row label { color: #8a9099; }
+  .row select, .row input[type="number"] {
+    background: #21262b; color: #c8ccd0;
+    border: 1px solid #2a2e33; border-radius: 3px;
+    padding: 4px 8px; font: inherit;
+    min-width: 180px;
+  }
+  .row input[type="checkbox"] { accent-color: #d97a3c; }
+  button {
+    background: #21262b; color: #c8ccd0;
+    border: 1px solid #2a2e33; border-radius: 3px;
+    padding: 4px 12px; font: inherit; cursor: pointer;
+  }
+  button:hover { background: #2a3038; }
+  button.danger { color: #d97a3c; }
+  .mounts-list {
+    border: 1px solid #2a2e33; border-radius: 3px;
+    padding: 4px 8px; margin: 6px 0; background: #1a1d21;
+  }
+  .mount-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 4px 0; border-bottom: 1px solid #21262b;
+  }
+  .mount-row:last-child { border-bottom: none; }
+  .mount-row .path { flex: 1; color: #7ec8e0; }
+  .mount-row .type { color: #6b7177; font-size: 11px; }
+  .empty { color: #6b7177; padding: 4px 0; font-style: italic; }
+  .hint { color: #6b7177; font-size: 11px; margin-top: 4px; }
+  .actions { display: flex; gap: 8px; padding: 6px 0; }
+</style>
+</head>
+<body>
+<header>
+  <span class="title">Workspace Settings</span>
+  <span class="spacer"></span>
+  <span class="saved" id="savedHint"></span>
+</header>
+<div class="scroll">
+  <h2>Appearance</h2>
+  <div class="row">
+    <label for="theme">Theme</label>
+    <select id="theme">
+      <option value="dark">Dark</option>
+      <option value="light">Light</option>
+      <option value="system">System</option>
+    </select>
+  </div>
+  <div class="row">
+    <label for="fontSize">Font size</label>
+    <input type="number" id="fontSize" min="9" max="24" step="1">
+  </div>
+
+  <h2>Mounts</h2>
+  <div class="mounts-list" id="mountsList"></div>
+  <div class="actions">
+    <button id="addMount">Mount folder…</button>
+  </div>
+  <div class="hint">
+    Disk folders are mounted at <code>/mnt/&lt;name&gt;</code>.
+    Mounts are per-machine and don't travel with workspace export.
+  </div>
+
+  <h2>About</h2>
+  <div class="actions">
+    <button id="aboutBtn">About Auditable Works…</button>
+  </div>
+</div>
+<script type="module">
+import { connect } from '../../ext/abus/index.js';
+
+const $ = (id) => document.getElementById(id);
+
+let bus = null;
+let settings = null;
+let savedTimer = null;
+
+function flashSaved(text) {
+  const el = $('savedHint');
+  el.textContent = text;
+  el.style.color = '#9ed47e';
+  if (savedTimer) clearTimeout(savedTimer);
+  savedTimer = setTimeout(() => {
+    el.textContent = '';
+  }, 1500);
+}
+
+async function loadSettings() {
+  settings = await bus.call(
+    { to: 'works', path: '/', interface: 'Settings', member: 'Get' }, []);
+  $('theme').value = settings.appearance?.theme || 'dark';
+  $('fontSize').value = settings.appearance?.fontSize || 13;
+}
+
+async function saveSettings() {
+  if (!settings) return;
+  settings.appearance = {
+    ...(settings.appearance || {}),
+    theme: $('theme').value,
+    fontSize: parseInt($('fontSize').value, 10) || 13,
+  };
+  await bus.call(
+    { to: 'works', path: '/', interface: 'Settings', member: 'Set' }, [settings]);
+  flashSaved('saved');
+}
+
+async function loadMounts() {
+  const list = await bus.call(
+    { to: 'works', path: '/', interface: 'Shell', member: 'ListMounts' }, []);
+  // Show only /mnt/* — system mounts (/, /tmp, /usr, /sys) aren't managed
+  // through this UI.
+  const userMounts = (list || []).filter((m) => m.path.startsWith('/mnt/'));
+  const el = $('mountsList');
+  el.innerHTML = '';
+  if (userMounts.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'No mounts. Use Mount folder… to attach a disk folder.';
+    el.appendChild(empty);
+    return;
+  }
+  for (const m of userMounts) {
+    const row = document.createElement('div');
+    row.className = 'mount-row';
+    const path = document.createElement('span');
+    path.className = 'path';
+    path.textContent = m.path;
+    const type = document.createElement('span');
+    type.className = 'type';
+    type.textContent = m.type;
+    const btn = document.createElement('button');
+    btn.className = 'danger';
+    btn.textContent = 'Unmount';
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        await bus.call(
+          { to: 'works', path: '/', interface: 'Shell', member: 'UnmountAt' },
+          [m.path]);
+        await loadMounts();
+      } catch (e) {
+        btn.disabled = false;
+        alert('Unmount failed: ' + (e.message || e));
+      }
+    });
+    row.append(path, type, btn);
+    el.appendChild(row);
+  }
+}
+
+window.addEventListener('message', async (ev) => {
+  if (ev.source !== window.parent) return;
+  if (!ev.data || ev.data.type !== 'abus:welcome') return;
+
+  try { bus = await connect(ev.data.port, { client: 'settings-surface' }); }
+  catch (e) {
+    document.body.innerHTML = '<div style="padding:20px;color:#f88">'
+      + 'settings surface failed: ' + (e.message || e) + '</div>';
+    return;
+  }
+
+  bus.expose('/', {
+    Surface: {
+      methods: {
+        Flush:     () => {},
+        CanClose:  () => true,
+        Relocated: () => {},
+      },
+      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
+    },
+  });
+
+  await loadSettings();
+  await loadMounts();
+
+  // Auto-save on every change.
+  $('theme').addEventListener('change', saveSettings);
+  $('fontSize').addEventListener('change', saveSettings);
+
+  $('addMount').addEventListener('click', async () => {
+    try {
+      await bus.call(
+        { to: 'works', path: '/', interface: 'Shell', member: 'MountFolder' },
+        []);
+      await loadMounts();
+    } catch (e) {
+      alert('Mount failed: ' + (e.message || e));
+    }
+  });
+
+  $('aboutBtn').addEventListener('click', () => {
+    bus.call({ to: 'works', path: '/', interface: 'Shell', member: 'OpenAbout' }, [])
+      .catch(() => { /* */ });
+  });
+
+  bus.subscribe({ interface: 'Shell', member: 'MountChanged', from: 'works' },
+    () => loadMounts());
+
+  bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, ['Settings']);
+  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
+});
+</script>
+</body>
+</html>

@@ -5,6 +5,9 @@
 import { connect } from '#abus';
 import { WKS } from './state.js';
 import { openPath } from './surfaces.js';
+import { mountFolder, unmountAt } from './mount.js';
+import { applyWorkspaceSettings, readSettings, writeSettings } from './settings-store.js';
+import { showAbout } from './about.js';
 
 export async function setupWorksService() {
   const ch = new MessageChannel();
@@ -44,8 +47,29 @@ export async function setupWorksService() {
           path,
           type: backend?.constructor?.type || 'custom',
         })),
+        // Trigger the disk-folder picker on the shell side (must be
+        // called from a user-gesture context — A-Bus relays the click
+        // through so the picker opens in the shell's own page). Used
+        // by the settings surface's "Mount folder…" button.
+        MountFolder: () => mountFolder(),
+        UnmountAt:   (path) => unmountAt(path),
+        OpenAbout:   () => { showAbout(); },
       },
-      signals: ['MountChanged'],
+      signals: ['MountChanged', 'SettingsChanged'],
+    },
+    // Workspace-level settings (theme, font, …) stored at /etc/works.json.
+    // The settings surface owns the UI; any other surface (notebook in
+    // particular) subscribes to SettingsChanged to react.
+    Settings: {
+      methods: {
+        Get: async () => await readSettings(vfs),
+        Set: async (next) => {
+          await writeSettings(vfs, next);
+          applyWorkspaceSettings(next);
+          bus.signal({ path: '/', interface: 'Shell', member: 'SettingsChanged' }, [next]);
+          return next;
+        },
+      },
     },
     // Broker introspection, for the A-Bus inspector surface.
     Inspect: {
