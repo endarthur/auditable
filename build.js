@@ -56,7 +56,7 @@ function processModules(mainPath, moduleDir, opts = {}) {
 // TARGET: works
 // ══════════════════════════════════════════════════
 
-if (target === 'works') {
+if (target === 'works' || target === 'works-all') {
   // Auditable Works — the GCU desktop shell. Registry build: every shell
   // module and every ext-library bundle gets its own ES-module scope via
   // blob URLs + an import map — the machinery the auditable target uses.
@@ -176,7 +176,31 @@ if (target === 'works') {
   // internally, doesn't need to participate in this map.
   const worksZlib = require('zlib');
 
-  const SHARED_LIBS = ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline', 'markdown', 'librarian'];
+  const isWorksAll = (target === 'works-all');
+  const SHARED_LIBS_BASE = ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline', 'markdown', 'librarian'];
+  // For --target=works-all: bundle every ext/<name>/index.js that's a real
+  // bundle (skip the re-export shims under ~1 KB — they break the
+  // single-file SHARED_LIBS pattern because they import from sibling files).
+  function _allExtBundles() {
+    const base = new Set(SHARED_LIBS_BASE);
+    const extra = [];
+    const extDir = path.join(__dirname, 'ext');
+    for (const entry of fs.readdirSync(extDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const idx = path.join(extDir, entry.name, 'index.js');
+      if (!fs.existsSync(idx)) continue;
+      const size = fs.statSync(idx).size;
+      if (size < 1024) continue;                    // re-export shim (lfm, msh)
+      if (base.has(entry.name)) continue;           // already in base
+      extra.push(entry.name);
+    }
+    extra.sort();
+    return [...SHARED_LIBS_BASE, ...extra];
+  }
+  const SHARED_LIBS = isWorksAll ? _allExtBundles() : SHARED_LIBS_BASE;
+  if (isWorksAll) {
+    console.log(`works-all: bundling ${SHARED_LIBS.length} libraries (${SHARED_LIBS.join(', ')})`);
+  }
 
   // markdown comes from src/js/ rather than ext/<name>/index.js — same
   // file used by the notebook's md cells. buildLibPayloads reads via
@@ -333,6 +357,89 @@ if (target === 'works') {
   }
   const docsPayload = buildDocsPayload();
 
+  // ── Examples payload (works-all only) ──────────────────────────────
+  // Walk examples/defs/<category>/*.txt; bundle as { 'category/name.txt':
+  // content } JSON, gzip+base64. The shell decompresses into
+  // /usr/share/examples/ in the workspace VFS on first boot.
+  // Rewrite an example .txt so its module references resolve under
+  // works-all's runtime, where extensions live at /usr/lib/@gcu/<name>/
+  // rather than at relative ./ext/ paths.
+  //
+  // Rewrites applied:
+  //   ./ext/<name>/index.js          → @gcu/<name>
+  //   ./ext/<name>/<sub>.js          → @gcu/<name>/<sub>
+  //   @plan                          → @gcu/plan (legacy alias used by a few defs)
+  //
+  // What stays broken (no clean home in /usr/lib):
+  //   @atra/<lib>  (atra libraries — pre-compiled .src.js)
+  //   @demo/<name> (per-example data — sherlock, aesop, etc.)
+  //
+  // Returns { source, unresolvable: ['@atra/alpack', ...] } so the
+  // manifest can flag examples whose pickered version won't fully run.
+  function _rewriteExampleForWorks(src) {
+    let out = src
+      // Module directive: /// module: <url> <build-time-path>
+      .replace(/^(\/\/\/ module: )\.\/ext\/([\w-]+)\/index\.js( .*)$/gm,
+               '$1@gcu/$2$3')
+      .replace(/^(\/\/\/ module: )\.\/ext\/([\w-]+)\/([\w-]+)\.js( .*)$/gm,
+               '$1@gcu/$2/$3$4')
+      .replace(/^(\/\/\/ module: )@plan( .*)$/gm,
+               '$1@gcu/plan$2')
+      // load()/install() calls in code cells
+      .replace(/(load|install|installBinary)\((['"`])\.\/ext\/([\w-]+)\/index\.js\2\)/g,
+               '$1($2@gcu/$3$2)')
+      .replace(/(load|install|installBinary)\((['"`])\.\/ext\/([\w-]+)\/([\w-]+)\.js\2\)/g,
+               '$1($2@gcu/$3/$4$2)')
+      .replace(/(load|install|installBinary)\((['"`])@plan\2\)/g,
+               '$1($2@gcu/plan$2)');
+
+    // Detect remaining unresolvable references.
+    const unresolvable = new Set();
+    for (const m of out.matchAll(/@atra\/[\w-]+/g)) unresolvable.add(m[0]);
+    for (const m of out.matchAll(/@demo\/[\w-]+/g)) unresolvable.add(m[0]);
+    for (const m of out.matchAll(/\.\/ext\/[\w-]+/g)) unresolvable.add(m[0]);
+
+    return { source: out, unresolvable: [...unresolvable] };
+  }
+
+  function buildExamplesPayload() {
+    if (!isWorksAll) return '';
+    const examplesRoot = path.join(__dirname, 'examples', 'defs');
+    if (!fs.existsSync(examplesRoot)) return '';
+    const defs = {};
+    const manifest = { categories: {} };
+    let rewroteCount = 0;
+    let unresolvedCount = 0;
+    for (const cat of fs.readdirSync(examplesRoot, { withFileTypes: true })) {
+      if (!cat.isDirectory()) continue;
+      if (cat.name === 'data-corpora') continue;     // raw Gutenberg dumps + builder
+      const catPath = path.join(examplesRoot, cat.name);
+      const files = fs.readdirSync(catPath).filter((f) => f.endsWith('.txt')).sort();
+      if (files.length === 0) continue;
+      manifest.categories[cat.name] = [];
+      for (const f of files) {
+        const rel = cat.name + '/' + f;
+        const raw = fs.readFileSync(path.join(catPath, f), 'utf8');
+        const { source, unresolvable } = _rewriteExampleForWorks(raw);
+        defs[rel] = source;
+        if (source !== raw) rewroteCount++;
+        if (unresolvable.length > 0) unresolvedCount++;
+        const titleMatch = source.match(/^\/\/\/\s*title:\s*(.+?)\s*$/m);
+        const title = titleMatch ? titleMatch[1] : f.replace(/^example_/, '').replace(/\.txt$/, '').replace(/_/g, ' ');
+        const entry = { file: rel, name: f, title };
+        if (unresolvable.length > 0) entry.unresolvable = unresolvable;
+        manifest.categories[cat.name].push(entry);
+      }
+    }
+    console.log(`works-all examples: rewrote ${rewroteCount} defs, ${unresolvedCount} still have unresolvable refs (@atra/* / @demo/* / leftover ./ext/*)`);
+    const payload = { version: 1, manifest, defs };
+    const json = JSON.stringify(payload);
+    const gz = worksZlib.gzipSync(Buffer.from(json, 'utf8'));
+    const b64 = gz.toString('base64').replace(/.{1,76}/g, '$&\n');
+    return `<script type="text/plain" id="examples-payload">\n${b64}\n</script>`;
+  }
+  const examplesPayload = buildExamplesPayload();
+
   // Terminal-specific: inline xterm.css. The geas-worker payload that used
   // to live here is gone — the terminal now spawns its worker via the geas
   // blob URL discovered in its own import map (§15.2 sharing extends to
@@ -400,6 +507,11 @@ ${surfacePayloads}
      docs surface to read. -->
 ${docsPayload}
 
+<!-- Auditable Works examples (works-all build only) — examples/defs/*.txt
+     bundled as a gzipped JSON map. Decompressed at boot into the workspace
+     VFS at /usr/share/examples/ for the Help → Open example… picker. -->
+${examplesPayload}
+
 <script>
 ${worksJs}
 </script>
@@ -407,9 +519,10 @@ ${worksJs}
 </html>
 `;
 
-  fs.writeFileSync(path.join(__dirname, 'works.html'), worksHtml);
-  const worksSize = fs.statSync(path.join(__dirname, 'works.html')).size;
-  console.log(`Built works.html (${(worksSize / 1024).toFixed(1)} KB)`);
+  const outFile = isWorksAll ? 'works-all.html' : 'works.html';
+  fs.writeFileSync(path.join(__dirname, outFile), worksHtml);
+  const worksSize = fs.statSync(path.join(__dirname, outFile)).size;
+  console.log(`Built ${outFile} (${(worksSize / 1024).toFixed(1)} KB)`);
   process.exit(0);
 }
 

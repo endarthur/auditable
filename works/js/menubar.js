@@ -4,12 +4,13 @@ import { MenuBar } from '#menu';
 import { WKS, setStatus } from './state.js';
 import { spawnSurface } from './surfaces.js';
 import { newProject } from './tree.js';
-import { importNotebookViaPicker } from './import.js';
+import { importNotebookViaPicker, importFileAsNotebook } from './import.js';
 import { mountFolder } from './mount.js';
 import { openWorkspaceFolder, resetWorkspace } from './workspace.js';
 import { exportWorkspace, openWorkspaceFile, saveWorkspace } from './persist.js';
-import { confirm as dlgConfirm } from '#dialog';
+import { confirm as dlgConfirm, Dialog } from '#dialog';
 import { showAbout } from './about.js';
+import { hasExamples, getExamplesManifest } from './examples-loader.js';
 
 export function setupMenuBar() {
   const el = document.getElementById('works-menubar');
@@ -38,11 +39,17 @@ export function setupMenuBar() {
       { label: 'New stub surface', action: 'debug:stub' },
       { label: 'A-Bus inspector', action: 'debug:inspector' },
     ] },
-    { label: 'Help', items: () => [
-      { label: 'Documentation',        action: 'help:docs', shortcut: 'F1' },
-      '---',
-      { label: 'About Auditable Works', action: 'help:about' },
-    ] },
+    { label: 'Help', items: () => {
+      const items = [
+        { label: 'Documentation',        action: 'help:docs', shortcut: 'F1' },
+      ];
+      if (hasExamples()) {
+        items.push({ label: 'Open example…',           action: 'help:openexample' });
+      }
+      items.push('---');
+      items.push({ label: 'About Auditable Works', action: 'help:about' });
+      return items;
+    } },
   ]);
 
   bar.on('action', async (action) => {
@@ -87,6 +94,7 @@ export function setupMenuBar() {
       spawnSurface('docs', { title: 'Documentation' });
       return;
     }
+    if (action === 'help:openexample') { await openExamplePicker(); return; }
     if (action === 'help:about') { await showAbout(); return; }
     setStatus(`menu: ${action}`);  // workspace:save lands with 5b
   });
@@ -108,4 +116,92 @@ export function setupMenuBar() {
   });
 
   WKS.menubar = bar;
+}
+
+// Help → Open example… — picker over /usr/share/examples/ (works-all
+// only; the menu item is hidden when the examples payload is absent).
+// Each row imports its def as a new project under /projects and opens
+// it in a notebook surface.
+async function openExamplePicker() {
+  const manifest = getExamplesManifest();
+  if (!manifest) return;
+  const categories = manifest.categories || {};
+  const catNames = Object.keys(categories).sort();
+
+  const dlg = new Dialog({
+    title: 'Open example',
+    width: 540,
+    render: (body, ctx) => {
+      const root = document.createElement('div');
+      root.style.cssText = 'max-height:60vh;overflow:auto;padding:8px 12px;font:13px/1.5 var(--sw-sans,sans-serif)';
+      body.appendChild(root);
+
+      if (catNames.length === 0) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'padding:16px;color:var(--sw-text-soft);font-style:italic';
+        empty.textContent = 'No examples bundled.';
+        root.appendChild(empty);
+        return;
+      }
+
+      for (const cat of catNames) {
+        const sect = document.createElement('section');
+        sect.style.cssText = 'margin-bottom:14px';
+
+        const h = document.createElement('h4');
+        h.textContent = cat;
+        h.style.cssText = 'font:600 11px/1.4 var(--sw-mono,ui-monospace);'
+          + 'letter-spacing:0.14em;text-transform:uppercase;'
+          + 'color:var(--sw-orange,#d97a3c);margin:0 0 6px;'
+          + 'padding-bottom:3px;border-bottom:1px solid var(--sw-border-soft,#2a2e33)';
+        sect.appendChild(h);
+
+        for (const entry of categories[cat]) {
+          const row = document.createElement('div');
+          row.style.cssText = 'padding:5px 8px;cursor:pointer;border-radius:3px;'
+            + 'display:flex;justify-content:space-between;gap:12px;color:var(--sw-text)';
+          row.tabIndex = 0;
+          row.onmouseenter = () => row.style.background = 'var(--sw-bg-bright,#21262b)';
+          row.onmouseleave = () => row.style.background = '';
+          row.onfocus    = () => row.style.background = 'var(--sw-bg-bright,#21262b)';
+          row.onblur     = () => row.style.background = '';
+
+          const title = document.createElement('span');
+          title.textContent = entry.title;
+          title.style.fontWeight = '500';
+          if (entry.unresolvable && entry.unresolvable.length) {
+            // Picker still shows it — the example MAY run partially —
+            // but the user gets a hint that something inside the def
+            // can't resolve in this workspace.
+            const note = document.createElement('span');
+            note.textContent = ' ⚠';
+            note.title = 'Uses ' + entry.unresolvable.join(', ')
+              + ' — not bundled in works-all; cell may error at load.';
+            note.style.color = 'var(--sw-amber,#c89b3c)';
+            title.appendChild(note);
+          }
+
+          const file = document.createElement('span');
+          file.textContent = entry.name;
+          file.style.cssText = 'color:var(--sw-text-soft);font:11px/1.5 var(--sw-mono,ui-monospace)';
+
+          row.appendChild(title);
+          row.appendChild(file);
+          row.onclick = () => ctx.close(entry.file);
+          row.onkeydown = (e) => { if (e.key === 'Enter') ctx.close(entry.file); };
+          sect.appendChild(row);
+        }
+        root.appendChild(sect);
+      }
+    },
+  });
+
+  const picked = await dlg.show();
+  if (!picked) return;
+  const vfsPath = '/usr/share/examples/' + picked;
+  try {
+    await importFileAsNotebook(vfsPath);
+  } catch (e) {
+    setStatus('open example failed: ' + (e.message || e));
+  }
 }

@@ -9,6 +9,7 @@ import './mount.js';
 import './workspace.js';
 import './settings-store.js';
 import './docs-loader.js';
+import './examples-loader.js';
 import './surface-registry.js';
 import './layout.js';
 import './surfaces.js';
