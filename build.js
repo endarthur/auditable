@@ -1076,7 +1076,13 @@ function assemble(jsCode) {
 // Runs synchronously during parse, so it is listening before the shell's
 // iframe-load welcome. The data-abus-catch attribute keeps the runtime-
 // compression regex off this script.
+//
+// Also: speculatively mark documentElement as in-works when we're iframed,
+// so CSS can skip the mobile-mode media query before first paint instead
+// of flashing it briefly between paint and init. If we turn out NOT to
+// be in a Works frame (no welcome arrives), init.js strips the class.
 (function(){
+  if (window.parent !== window) document.documentElement.classList.add('in-works');
   window.__abusWelcome = null;
   window.__abusWelcomeCb = null;
   window.addEventListener('message', function _c(e){

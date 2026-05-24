@@ -13,6 +13,16 @@ const BUILTIN_INSERT = [
   { label: 'Insert HTML Cell', type: 'html', shortcut: 'T' },
 ];
 
+// Same per-type metadata, just used by the Convert submenu rather than
+// the insert action — text is shorter since the parent menu label
+// ("Convert…") already disambiguates.
+const BUILTIN_CONVERT = [
+  { label: 'JS',   type: 'code' },
+  { label: 'MD',   type: 'md' },
+  { label: 'CSS',  type: 'css' },
+  { label: 'HTML', type: 'html' },
+];
+
 function pluginInsertItems() {
   const all = Object.entries(window._cellTypes || {});
   return all
@@ -23,9 +33,57 @@ function pluginInsertItems() {
     }));
 }
 
+function convertItems() {
+  const items = BUILTIN_CONVERT.map(b => ({
+    label: b.label, action: `edit:convert:${b.type}`,
+  }));
+  const plugins = Object.entries(window._cellTypes || {})
+    .filter(([, h]) => !h?.capabilities?.builtin)
+    .map(([name, h]) => ({
+      label: h.label || name,
+      action: `edit:convert:${name}`,
+    }));
+  if (plugins.length) items.push('---', ...plugins);
+  return items;
+}
+
+function _inWorks() {
+  return typeof document !== 'undefined' && document.body
+    && document.body.classList.contains('in-works');
+}
+
+// Filter out items Works owns. The menubar's `items` factory runs on
+// every menu-open, so the filter naturally re-evaluates if the host
+// changes (which it doesn't today — but it's free correctness).
+function _stripWorksOwned(items) {
+  if (!_inWorks()) return items;
+  const WORKS_OWNED = new Set([
+    'file:new',           // Works has New Notebook in its own File menu
+    'file:save-packed',   // Works does workspace-save instead
+    'file:open-ipynb',    // Works's Import Notebook flow
+    'file:settings',      // workspace settings live in Works's surface
+    'help:update',        // Works owns auto-update
+  ]);
+  const out = [];
+  let prevSep = false;
+  for (const it of items) {
+    if (typeof it === 'object' && it && WORKS_OWNED.has(it.action)) continue;
+    if (it === '---') {
+      if (prevSep || out.length === 0) continue;   // collapse consecutive separators
+      prevSep = true;
+    } else {
+      prevSep = false;
+    }
+    out.push(it);
+  }
+  // Drop trailing separator if the last useful item got stripped.
+  while (out.length && out[out.length - 1] === '---') out.pop();
+  return out;
+}
+
 function sections() {
   return [
-    { label: 'File', items: () => [
+    { label: 'File', items: () => _stripWorksOwned([
       { label: 'New', action: 'file:new' },
       '---',
       { label: 'Save', action: 'file:save', shortcut: 'Ctrl+S' },
@@ -41,7 +99,7 @@ function sections() {
       { label: 'Settings…', action: 'file:settings' },
       '---',
       { label: 'Lock Notebook', action: 'file:lock' },
-    ]},
+    ])},
 
     { label: 'Edit', items: () => {
       const items = [
@@ -55,6 +113,7 @@ function sections() {
       if (plugins.length) {
         items.push('---', ...plugins);
       }
+      items.push('---', { label: 'Convert…', children: convertItems() });
       return items;
     }},
 
@@ -77,11 +136,11 @@ function sections() {
       { label: 'MCP…', action: 'tools:mcp' },
     ]},
 
-    { label: 'Help', items: () => [
+    { label: 'Help', items: () => _stripWorksOwned([
       { label: 'Documentation', action: 'help:docs', shortcut: 'F1' },
       '---',
       { label: 'Check for Updates…', action: 'help:update' },
-    ]},
+    ])},
   ];
 }
 
@@ -92,6 +151,14 @@ function dispatch(action) {
   if (action.startsWith('edit:insert:')) {
     const type = action.slice('edit:insert:'.length);
     window.addCellWithUndo(type, '', S.selectedId);
+    return;
+  }
+
+  // Convert current cell to another type
+  if (action.startsWith('edit:convert:')) {
+    const type = action.slice('edit:convert:'.length);
+    if (S.selectedId == null) return;
+    window.convertCell(S.selectedId, type);
     return;
   }
 

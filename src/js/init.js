@@ -565,6 +565,11 @@ async function init() {
 async function worksBoot(conn) {
   const { bus, tab, home } = conn;
 
+  // The inline head script speculatively added .in-works to
+  // documentElement when iframed; we make it persistent here (CSS uses
+  // :root:not(.in-works) for mobile-mode + standalone-only chrome).
+  document.documentElement.classList.add('in-works');
+
   // Write current cells/settings/modules into the VFS so the Host can flush
   // them through to the shared workspace.
   const syncToVfs = () => flushPendingDirty(
@@ -613,13 +618,17 @@ if (window.parent === window) {
   getHost().provideVFS();
   setTimeout(init, 0);
 } else {
+  // Speculative .in-works on documentElement was added by the head's
+  // inline data-abus-catch script (so first paint already reflects
+  // Works chrome and skips mobile @media). If the welcome never
+  // arrives, strip it before booting standalone.
   const welcomeP = connectSurface(3000);
   setTimeout(async () => {
     const conn = await welcomeP;
     if (conn) {
       await worksBoot(conn);
     } else {
-      // Iframed, but not by Works — boot standalone.
+      document.documentElement.classList.remove('in-works');
       setHost(createStandaloneHost({ buildHtml: buildNotebookHtml }));
       getHost().provideVFS();
       await init();

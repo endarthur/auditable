@@ -1295,9 +1295,12 @@ body.locked .present-exit { display: none !important; }
 .action-more-tray button:hover { background: var(--au-surface-bright); color: var(--au-fg); }
 .action-more-tray button.active-mode { color: var(--au-action); }
 
-/* ── CELL INSERT / CONVERT BUTTONS (touch only) ── */
+/* ── CELL INSERT (touch only) ── */
+/* On desktop the insert-bars between cells handle inserting; the
+   per-cell +↑ / +↓ buttons are touch-only. Convert is shown
+   everywhere — it's the only path to changing an existing cell's
+   type, and the cell-header already only appears on hover/focus. */
 .cell-insert { display: none; }
-.cell-convert { display: none; }
 
 /* ── CELL TYPE PICKER ── */
 .cell-type-picker {
@@ -2268,21 +2271,75 @@ body.presenting .find-bar { display: none !important; }
 }
 
 /* ── RESPONSIVE ── */
+/* ── WORKS-EMBEDDED MODE ── */
+/* The notebook surface in Works hides chrome that Works's shell owns
+   (the document-title input — tab title carries it; the save button —
+   Ctrl+S routes through the File menu's Save). The menubar STAYS but
+   its items are filtered to drop workspace-owned actions (see
+   _stripWorksOwned in menubar.js). The "AUDITABLE" brand, cell-count
+   badge, and transport buttons are notebook-scoped and stay too. */
+.in-works .toolbar-filename,
+.in-works .save-split,
+.in-works .toolbar-right,
+.in-works .toolbar-sep,
+.in-works .toolbar-badges,
+.in-works .toolbar-status {
+  display: none !important;
+}
+/* Push transport to the far right; menubar naturally anchors at the
+   left now that the separators between are gone. */
+.in-works .transport {
+  margin-left: auto;
+}
+
+/* Statusbar in Works: keep notebook-state icons (encryption lock, MCP)
+   + the status message ("ran all cells", error counts, etc.). Drop
+   size/cell-count (workspace-meta level) and the author/org/GitHub
+   attribution (Works has its own About). */
+.in-works .statusbar .status-size,
+.in-works .statusbar .status-cells,
+.in-works .statusbar .status-attr {
+  display: none !important;
+}
+
+/* Hide the toolbar's AUDITABLE brand in Works (the menubar is right
+   next to it; the brand is duplicated chrome). Surface it on the
+   statusbar instead so the bottom bar has visible content / holds
+   height, and the brand stays present somewhere. */
+.in-works .toolbar-title {
+  display: none !important;
+}
+.in-works .statusbar::before {
+  content: 'AUDITABLE';
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: var(--au-fg-soft);
+  padding-right: 8px;
+}
+
+/* The mobile-mode breakpoint below is desirable for narrow phone
+   viewports but fires spuriously when DevTools docks sideways in a
+   Works iframe. Scope it to standalone notebooks via :not(.in-works). */
+
 @media (max-width: 640px) {
-  /* slim top toolbar: filename + cell count only */
-  .toolbar {
+  /* All rules below are scoped to `:root:not(.in-works)` so the Works-
+     embedded notebook surface ignores the breakpoint entirely — Works
+     hosts the notebook at desktop dimensions even when the surrounding
+     window is narrow (DevTools, side panel, etc.). */
+  :root:not(.in-works) .toolbar {
     flex-wrap: nowrap;
     gap: 4px;
     padding: 6px 8px;
   }
-  .toolbar-title { display: none; }
-  .toolbar-sep { display: none; }
-  .toolbar .toolbar-add, .toolbar .toolbar-secondary { display: none; }
-  .transport { display: none; }
-  .toolbar-right { display: none; }
-  .toolbar-filename { flex: 1; }
-  .toolbar-filename input { width: 100%; }
-  .toolbar-status {
+  :root:not(.in-works) .toolbar-title { display: none; }
+  :root:not(.in-works) .toolbar-sep { display: none; }
+  :root:not(.in-works) .toolbar .toolbar-add,
+  :root:not(.in-works) .toolbar .toolbar-secondary { display: none; }
+  :root:not(.in-works) .transport { display: none; }
+  :root:not(.in-works) .toolbar-right { display: none; }
+  :root:not(.in-works) .toolbar-filename { flex: 1; }
+  :root:not(.in-works) .toolbar-filename input { width: 100%; }
+  :root:not(.in-works) .toolbar-status {
     display: inline;
     font-size: 10px;
     color: var(--au-fg-soft);
@@ -2290,32 +2347,29 @@ body.presenting .find-bar { display: none !important; }
     letter-spacing: 1px;
   }
 
-  /* bottom action bar replaces statusbar */
-  .statusbar {
+  :root:not(.in-works) .statusbar {
     display: block;
     padding: 0;
     height: 48px;
   }
-  .statusbar .status-size,
-  .statusbar .status-cells,
-  .statusbar .status-msg,
-  .statusbar .status-attr { display: none; }
-  .action-bar {
+  :root:not(.in-works) .statusbar .status-size,
+  :root:not(.in-works) .statusbar .status-cells,
+  :root:not(.in-works) .statusbar .status-msg,
+  :root:not(.in-works) .statusbar .status-attr { display: none; }
+  :root:not(.in-works) .action-bar {
     display: grid;
     grid-template-columns: repeat(5, 1fr);
     height: 48px;
   }
-  /* wrapper divs for tray positioning must fill their grid cell */
-  .action-bar > div {
+  :root:not(.in-works) .action-bar > div {
     position: relative;
     display: flex;
   }
-  .action-bar > div > button {
+  :root:not(.in-works) .action-bar > div > button {
     flex: 1;
   }
-  /* style only the 5 action buttons, not tray buttons */
-  .action-bar > button,
-  .action-bar > div > button {
+  :root:not(.in-works) .action-bar > button,
+  :root:not(.in-works) .action-bar > div > button {
     min-height: 48px;
     border: none;
     border-right: 1px solid var(--au-border);
@@ -2327,28 +2381,28 @@ body.presenting .find-bar { display: none !important; }
     letter-spacing: 0;
     text-transform: none;
   }
-  .action-bar > :last-child > button,
-  .action-bar > button:last-child { border-right: none; }
-  .action-bar > button:active,
-  .action-bar > div > button:active { background: var(--au-surface-bright); }
-  .action-bar > button.autorun-on,
-  .action-bar > div > button.autorun-on {
+  :root:not(.in-works) .action-bar > :last-child > button,
+  :root:not(.in-works) .action-bar > button:last-child { border-right: none; }
+  :root:not(.in-works) .action-bar > button:active,
+  :root:not(.in-works) .action-bar > div > button:active { background: var(--au-surface-bright); }
+  :root:not(.in-works) .action-bar > button.autorun-on,
+  :root:not(.in-works) .action-bar > div > button.autorun-on {
     background: var(--au-success);
     color: #fff;
   }
-  .action-bar > button.autorun-off,
-  .action-bar > div > button.autorun-off {
+  :root:not(.in-works) .action-bar > button.autorun-off,
+  :root:not(.in-works) .action-bar > div > button.autorun-off {
     background: var(--au-error);
     color: #fff;
   }
 
-  .find-bar { max-width: 100%; float: none; }
-  .notebook { padding: 8px 6px 100px; }
-  .cell-header { padding: 2px 4px; }
-  .settings-close { width: 44px; height: 44px; font-size: 22px; }
-  .settings-row { padding: 10px 0; }
-  .settings-row select { min-height: 44px; font-size: 14px; padding: 4px 8px; }
-  .settings-row input[type="range"] { height: 44px; }
-  .help-overlay { padding: 20px 12px; }
-  .settings-panel { width: 260px; }
+  :root:not(.in-works) .find-bar { max-width: 100%; float: none; }
+  :root:not(.in-works) .notebook { padding: 8px 6px 100px; }
+  :root:not(.in-works) .cell-header { padding: 2px 4px; }
+  :root:not(.in-works) .settings-close { width: 44px; height: 44px; font-size: 22px; }
+  :root:not(.in-works) .settings-row { padding: 10px 0; }
+  :root:not(.in-works) .settings-row select { min-height: 44px; font-size: 14px; padding: 4px 8px; }
+  :root:not(.in-works) .settings-row input[type="range"] { height: 44px; }
+  :root:not(.in-works) .help-overlay { padding: 20px 12px; }
+  :root:not(.in-works) .settings-panel { width: 260px; }
 }
