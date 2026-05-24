@@ -1542,6 +1542,56 @@ body.split-view .present-exit { display: none; }
 }
 .split-handle:hover { background: var(--au-action); }
 
+/* Source-only / Output-only split modes. The toggle bar above the
+   container picks which panes are visible. */
+body.split-mode-source .split-right,
+body.split-mode-source .split-handle { display: none; }
+body.split-mode-source .split-left { width: 100% !important; flex: 1; }
+
+body.split-mode-output .split-left,
+body.split-mode-output .split-handle { display: none; }
+body.split-mode-output .split-right { width: 100% !important; flex: 1; }
+
+.split-modes {
+  flex: none;
+  display: flex;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--au-bg-raised);
+  border-bottom: 1px solid var(--au-border);
+  align-items: center;
+  font: 11px/1 ui-monospace, 'Space Mono', monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--au-fg-soft);
+}
+.split-modes button {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--au-fg-soft);
+  padding: 3px 10px;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 2px;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+.split-modes button:hover {
+  background: var(--au-bg-bright);
+  color: var(--au-fg);
+}
+.split-modes button.active {
+  background: var(--au-bg-bright);
+  color: var(--au-action);
+  border-color: var(--au-action);
+}
+.split-modes-label {
+  color: var(--au-fg-soft);
+  margin-right: 4px;
+}
+
+/* Adjust container height to account for the modes bar (~26px). */
+body.split-view .split-container { height: calc(100vh - 42px - 28px - 28px); }
+
 .split-right {
   flex: 1;
   min-width: 200px;

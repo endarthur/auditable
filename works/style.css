@@ -37,6 +37,7 @@ body {
   border-right: 1px solid #2a2e33;
   background: #16191c;
 }
+.works-sidebar.hidden { display: none; }
 
 .works-sidebar-title {
   flex: none;
@@ -229,4 +230,22 @@ body {
   text-decoration: none;
 }
 .about-author a:hover { color: var(--gcu-action, #d97a3c); }
+
+/* GCU thin scrollbar — applies to every scrollable element in the
+   shell (file tree, dialogs, picker, …). Surfaces have their own
+   iframe origins and style themselves independently. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--gcu-border, #2a3038) transparent;
+}
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--gcu-border, #2a3038);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--gcu-fg-soft, #6e6c68);
+}
+*::-webkit-scrollbar-corner { background: transparent; }
 

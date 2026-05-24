@@ -66,6 +66,10 @@ export function setupMenuBar() {
       }
       return;
     }
+    if (action === 'view:sidebar') {
+      document.querySelector('.works-sidebar')?.classList.toggle('hidden');
+      return;
+    }
     if (action === 'tools:terminal') {
       spawnSurface('terminal', { title: 'Terminal' });
       return;

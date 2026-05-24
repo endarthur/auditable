@@ -83,11 +83,12 @@ export function toTxt() {
     lines.push('/// title: ' + title);
   }
 
-  // include module directives so they survive round-trip
-  const mods = window._installedModules || {};
-  for (const url of Object.keys(mods)) {
-    lines.push('/// module: ' + url);
-  }
+  // No `/// module:` lines in the split view. These are build-time
+  // directives (gen_examples / future CLI packers) — users don't author
+  // them by hand. The split view is a cell-editing surface; install
+  // state belongs in the Settings panel and in install() / pkg cells.
+  // parseTxt already ignores `/// module:` on the read side; emitting
+  // them on the write side was asymmetric and noisy.
 
   for (const cell of S.cells) {
     lines.push('');
@@ -857,6 +858,20 @@ export function toggleSplitView() {
   }
 }
 
+// Switch between source-only / split / output-only when split view is
+// active. Body classes drive the CSS that hides one pane.
+export function setSplitMode(mode) {
+  if (!S.splitView) return;
+  document.body.classList.remove('split-mode-source', 'split-mode-split', 'split-mode-output');
+  document.body.classList.add('split-mode-' + mode);
+  const bar = document.getElementById('splitModes');
+  if (bar) {
+    for (const b of bar.querySelectorAll('button[data-mode]')) {
+      b.classList.toggle('active', b.dataset.mode === mode);
+    }
+  }
+}
+
 // ── RESIZE HANDLE ──
 
 function onResizeStart(e) {
@@ -918,8 +933,23 @@ function enterSplitView() {
   container.appendChild(handle);
   container.appendChild(right);
 
+  // Mode-toggle bar — sits above the container, cycles source/split/output.
+  const modes = document.createElement('div');
+  modes.className = 'split-modes';
+  modes.id = 'splitModes';
+  modes.innerHTML = `<span class="split-modes-label">view</span>
+    <button data-mode="source">source</button>
+    <button data-mode="split" class="active">split</button>
+    <button data-mode="output">output</button>`;
+  modes.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('button[data-mode]');
+    if (!btn) return;
+    setSplitMode(btn.dataset.mode);
+  });
+
   // insert after toolbar / find bar, before notebook
   const nb = $('#notebook');
+  nb.before(modes);
   nb.before(container);
 
   // build output panel (swaps cell.el references)
@@ -950,14 +980,17 @@ function exitSplitView() {
     ed.destroy();
   }
 
-  // remove split container
+  // remove split container + the mode toggle bar
   const container = $('#splitContainer');
   if (container) container.remove();
+  const modes = $('#splitModes');
+  if (modes) modes.remove();
 
   S.splitView = false;
   S._splitSetCode = null;
   applyEditorView('no');
-  document.body.classList.remove('split-view');
+  document.body.classList.remove('split-view',
+    'split-mode-source', 'split-mode-split', 'split-mode-output');
 
   // sync cell editors with current code
   for (const cell of S.cells) {

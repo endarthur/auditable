@@ -232,7 +232,13 @@ export async function syncCellsToVfs(vfs, S, settings, title) {
     code: c.code,
     collapsed: c.collapsed || undefined,
   }));
-  const modules = Object.keys(window._installedModules || {}).map(url => ({ url }));
+  // Skip builtins (hydrated from /usr/lib by works-all et al.) — they're
+  // system-provided, not part of this notebook's own dependencies. Same
+  // filter the lockfile write applies above.
+  const allMods = window._installedModules || {};
+  const modules = Object.keys(allMods)
+    .filter(url => !(allMods[url] && typeof allMods[url] === 'object' && allMods[url].builtin))
+    .map(url => ({ url }));
   const txt = serializeNotebookTxt({ title, settings, cells, modules });
   await vfs.writeFile(NOTEBOOK_TXT_PATH, txt);
 }

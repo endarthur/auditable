@@ -495,11 +495,18 @@ export const esc = _esc;
 export function exportAsTxt() {
   if (cryptoIsLocked()) { setMsg('unlock first', 'err'); return; }
   const title = $('#docTitle').value || 'untitled';
+  // Skip builtins (hydrated from /usr/lib by Works); they're system-
+  // provided, not part of this notebook's own dependency list.
+  const _mods = window._installedModules || {};
+  const moduleUrls = Object.keys(_mods).filter((url) => {
+    const e = _mods[url];
+    return !(e && typeof e === 'object' && e.builtin);
+  });
   const txt = buildTxtExport({
     title,
     cells: serializeCells(S.cells),
     settings: getSettings(),
-    moduleUrls: Object.keys(window._installedModules || {}),
+    moduleUrls,
   });
 
   // download
