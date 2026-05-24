@@ -2,7 +2,7 @@
 
 ndarray operations for JavaScript, backed by [atra](https://www.npmjs.com/package/@gcu/atra)-compiled Wasm kernels. NumPy-compatible element-wise ops, reductions (sum, min, max, prod, nan-variants), broadcasting, strided views. Designed to pair with [adder](https://www.npmjs.com/package/@gcu/adder) for numpy-style Python code; standalone JS API also available.
 
-Part of [Auditable](https://github.com/endarthur/auditable). Architecture notes at [NATRA.md](./NATRA.md).
+Part of [Auditable](https://github.com/endarthur/auditable). Architecture notes at [SPEC.md](./SPEC.md).
 
 Pre-1.0 — APIs may break on minor version bumps.
 

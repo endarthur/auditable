@@ -188,5 +188,5 @@ different patterns (event bus, registry on `window.auditable`, etc.).
 
 - `ext/scitra/src/util/backend.js` — first consumer
 - `ext/natra/index.js` — first provider
-- `ext/scitra/SCITRA.md` — talks about which scitra paths are
+- `ext/scitra/SPEC.md` — talks about which scitra paths are
   accelerated when natra is in the registry
