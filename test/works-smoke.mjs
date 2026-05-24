@@ -682,9 +682,25 @@ const ctx = await page.evaluate(async () => {
   // and round-trips back through importNotebook.
   await W.newProject('/projects', 'Export Test');
   await W.vfs.writeFile('/projects/Export Test/data.csv', 'a,b\n1,2\n');
+
+  // pkg-spec §7: workspace /lib modules are inlined into the export so
+  // the standalone notebook can resolve load() calls without re-fetching.
+  // Stage a fake pkg-installed module before exporting and verify the
+  // dump carries its bytes.
+  await W.vfs.mkdir('/lib/npm/export-probe', { recursive: true });
+  await W.vfs.writeFile('/lib/npm/export-probe/source',
+    'export const tag = () => "exported";');
+  await W.vfs.writeFile('/lib/npm/export-probe/meta.json',
+    JSON.stringify({ alias: 'npm:export-probe', kind: 'js',
+      url: 'https://esm.sh/export-probe', size: 35 }));
+
   const exportedHtml = await W.buildProjectExportHtml('/projects/Export Test');
   const hasBlock = exportedHtml.includes('<!--AUDITABLE-VFS');
   const hasTitle = exportedHtml.includes('<title>Auditable — Export Test</title>');
+  // The dump is JSON.stringify'd into the AUDITABLE-VFS block; the source
+  // text's `"exported"` becomes the JSON-escaped `\"exported\"`.
+  const hasModule = exportedHtml.includes('/lib/npm/export-probe/source')
+                 && exportedHtml.includes('export const tag = () => \\"exported\\"');
 
   // Round-trip: re-import the exported HTML as a new project — its data
   // sibling must come back intact.
@@ -702,7 +718,8 @@ const ctx = await page.evaluate(async () => {
   return {
     newFilePath, newFileExists,
     exportPath: '/projects/Export Test',
-    hasBlock, hasTitle, rtPath, rtDataMatches: rtData === 'a,b\n1,2\n',
+    hasBlock, hasTitle, hasModule,
+    rtPath, rtDataMatches: rtData === 'a,b\n1,2\n',
     fromFilePath, fromFileTitle: fromFileMeta.title,
   };
 });
@@ -976,6 +993,8 @@ const checks = {
   'tree: New file… creates the file':       ctx.newFileExists
       && ctx.newFilePath === '/projects/ctx-test.csv',
   'tree: Export project builds an .html':   ctx.hasBlock && ctx.hasTitle,
+  // pkg-spec §7: workspace /lib modules inlined into the export
+  'tree: Export inlines workspace /lib':    ctx.hasModule,
   'tree: exported .html round-trips':       ctx.rtPath === '/projects/Export Test-2'
       && ctx.rtDataMatches,
   'tree: Import file (right-click) works':  ctx.fromFilePath === '/projects/From File'
