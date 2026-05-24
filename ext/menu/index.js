@@ -919,6 +919,19 @@ class MenuBar {
   }
 
   _handleDocKey(e) {
+    // Self-heal: if the bar thinks it's active but focus has moved off it
+    // (typically after click-outside dismissal of a menu), deactivate and
+    // let this key pass through to whatever is actually focused. Without
+    // this, space/down/enter from a focused input would re-open the menu.
+    if (this._activeIdx < 0 && this._barActive) {
+      const focusOnBar = this._buttons.some(b => b === document.activeElement);
+      if (!focusOnBar) {
+        this._barActive = false;
+        for (const b of this._buttons) b.classList.remove('gcu-menubar-focused');
+        return;
+      }
+    }
+
     // Activate menubar on Alt or F10 (when no menu open and bar inactive).
     if (this._activeIdx < 0 && !this._barActive) {
       if (e.key === 'F10' || (e.key === 'Alt' && !e.repeat)) {
