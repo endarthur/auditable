@@ -14,6 +14,7 @@
 
 import { VFS, CommentBackend, MemoryBackend, AbusBackend, FSAABackend, IDBBackend, path } from './vfs.js';
 import * as hooks from './hooks.js';
+import { hydrateModulesFromVfs } from './persist.js';
 
 let _host = null;
 
@@ -267,6 +268,34 @@ export function createWorksHost({ bus, projectPath, syncToVfs, home }) {
       } catch (e) {
         console.warn('[host] ListMounts failed:', e.message);
       }
+
+      // pkg auto-rehydrate: when /lib/* changes anywhere in the workspace
+      // (e.g. a geas `pkg install` from another tab), re-walk the lib
+      // tree and merge into window._installedModules. Debounced because
+      // one install fires several VFS.Changed events (source + meta +
+      // lockfile). Additive only — pkg remove doesn't propagate to open
+      // surfaces until reload; v1 tradeoff.
+      let _rehydrateTimer = null;
+      bus.subscribe({ interface: 'VFS', member: 'Changed', from: 'works' },
+        (msg) => {
+          const [changedPath] = msg.args;
+          if (!changedPath || (!changedPath.startsWith('/lib/')
+                            && changedPath !== '/lib')) return;
+          if (_rehydrateTimer) clearTimeout(_rehydrateTimer);
+          _rehydrateTimer = setTimeout(async () => {
+            _rehydrateTimer = null;
+            try {
+              const fromDisk = await hydrateModulesFromVfs(vfs);
+              if (!window._installedModules) window._installedModules = {};
+              for (const [k, v] of Object.entries(fromDisk)) {
+                window._installedModules[k] = v;
+              }
+              hooks.emit('modules:changed');
+            } catch (e) {
+              console.warn('[host] pkg rehydrate failed:', e.message);
+            }
+          }, 200);
+        });
 
       return vfs;
     },

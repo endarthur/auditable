@@ -363,6 +363,29 @@ if (nbFrame) {
   });
 }
 
+// pkg auto-rehydrate. Write a fake module + meta straight into the
+// workspace /lib from the shell side (simulates `pkg install` from
+// somewhere else without going through geas). The notebook surface,
+// already open, should see the new key in _installedModules without a
+// reload.
+let nbAutoRehydrate = null;
+if (nbFrame) {
+  await page.evaluate(async () => {
+    const W = window.WKS;
+    await W.vfs.mkdir('/lib/npm/rehydrate-probe', { recursive: true });
+    await W.vfs.writeFile('/lib/npm/rehydrate-probe/source',
+      'export const probe = () => "ok";');
+    await W.vfs.writeFile('/lib/npm/rehydrate-probe/meta.json',
+      JSON.stringify({ alias: 'npm:rehydrate-probe', kind: 'js',
+        url: 'https://esm.sh/rehydrate-probe', size: 33 }));
+  });
+  await page.waitForTimeout(400);   // debounce + signal hop + rehydrate
+  nbAutoRehydrate = await nbFrame.evaluate(() => ({
+    hasEntry: !!(window._installedModules
+      && window._installedModules['npm:rehydrate-probe']),
+  }));
+}
+
 // Shell cells (`!cmd` → notebook.shell + display). Opens a dedicated
 // notebook with a `!`-cell that autorun-on-load fires, then reaches into
 // the surface iframe and reads the cell's output area. Exercises the
@@ -911,6 +934,8 @@ const checks = {
   'notebook reads through proxy':         nbMirroredMount && nbMirroredMount.mountContent === 'from disk',
   'notebook mirrors /mnt mount (signal)': nbLiveMount && nbLiveMount.hasMirror,
   'notebook reads new mount via signal':  nbLiveMount && nbLiveMount.content === 'live',
+  // pkg auto-rehydrate — /lib write reaches _installedModules without reload
+  'notebook auto-rehydrates /lib writes': nbAutoRehydrate && nbAutoRehydrate.hasEntry,
   // !cmd cell → notebook.shell → geas worker → captured stdout
   'shell cell prints stdout':             nbShellOutput && nbShellOutput.out
                                             && nbShellOutput.out.includes('hi from geas')
