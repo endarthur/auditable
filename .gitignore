@@ -167,3 +167,8 @@ experiments/
 ext/rv/ref/mini-rv32ima.exe
 ext/rv/ref/our.dtb
 .kdtree-bench-data/
+
+# Project Gutenberg source dumps for the librarian demo — re-fetched
+# by examples/defs/data-corpora/build.js. The generated corpus modules
+# at examples/data/{sherlock,aesop}.js ARE committed.
+examples/defs/data-corpora/*.raw.txt

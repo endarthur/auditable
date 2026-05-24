@@ -1,0 +1,120 @@
+/// auditable
+/// title: @gcu/librarian — text search demo
+/// settings: {"theme":"dark"}
+/// module: @gcu/librarian ext/librarian/index.js
+/// module: @demo/sherlock examples/data/sherlock.js
+/// module: @demo/aesop examples/data/aesop.js
+
+/// md
+# @gcu/librarian — BM25F text search
+
+A tiny in-process text search engine: inverted index, **BM25F** scoring with field boosts, **Damerau-Levenshtein** fuzzy expansion, synonym dictionary, prefix matching, snippet generation, and did-you-mean suggestions.
+
+This demo indexes two public-domain corpora from Project Gutenberg:
+
+- **Sherlock Holmes** — *The Adventures of Sherlock Holmes* (12 stories, long-form prose). Rewards entity searches like `Watson`, `Baker Street`, `Irene Adler`, and exercises proximity scoring.
+- **Aesop's Fables** — Vernon Jones translation (284 micro-stories). Rewards thematic queries (`fox`, `wolf`, `pride`) and exercises the document-count statistics.
+
+Pick a corpus, type a query, and watch the ranking shift. The fuzzy slider widens the tolerated edit distance — try `Wattson` or `Bakker`. Toggle synonyms to see expansion in action (`fox` → `foxes`, `pride` → `proud · vanity · vain`).
+
+/// code
+const { Librarian } = await load("@gcu/librarian");
+const { sherlock } = await load("@demo/sherlock");
+const { aesop } = await load("@demo/aesop");
+
+/// html
+<div style="display:grid;grid-template-columns:auto auto auto 1fr;gap:14px;align-items:center;font-size:13px;margin:8px 0 16px">
+  <label style="display:flex;align-items:center;gap:6px">
+    Corpus
+    <audit-dropdown name="corpus" options='["Holmes","Aesop","Both"]' value="Holmes"></audit-dropdown>
+  </label>
+  <label style="display:flex;align-items:center;gap:6px">
+    Fuzzy
+    <audit-slider name="fuzzy" min="0" max="2" step="1" value="1"></audit-slider>
+  </label>
+  <label style="display:flex;align-items:center;gap:6px">
+    <audit-checkbox name="syns" checked></audit-checkbox>
+    Synonyms
+  </label>
+  <audit-text-input name="query" placeholder="e.g. Watson, Baker Street, fox, pride" value="Watson"></audit-text-input>
+</div>
+
+/// code
+// A demo-grade synonym dictionary — toggled by the "Synonyms" checkbox.
+// Real-world synonyms would come from a curated taxonomy.
+const SYN = {
+  fox:   ['foxes'],          wolf:  ['wolves'],
+  dog:   ['dogs', 'hound'],   lion:  ['lions'],
+  hare:  ['hares', 'rabbit'], crow:  ['crows'],
+  goose: ['geese'],           mouse: ['mice'],
+  king:  ['monarch'],         queen: ['monarch'],
+  pride: ['proud', 'vanity', 'vain'],
+  greed: ['greedy', 'avarice'],
+  wise:  ['wisdom', 'clever', 'cleverness'],
+  watson:['john', 'doctor'],
+  holmes:['sherlock'],
+};
+
+function docsFor(which) {
+  const h = sherlock.map(s => ({ id: s.id, title: s.title, body: s.body, source: 'Holmes' }));
+  const a = aesop.map(f => ({ id: f.id, title: f.title, body: f.body, source: 'Aesop' }));
+  if (which === 'Holmes') return h;
+  if (which === 'Aesop')  return a;
+  return [...h, ...a];
+}
+
+const index = Librarian.index({
+  docs: docsFor(corpus),
+  fields: { title: { boost: 4 }, body: { boost: 1 } },
+  synonyms: syns ? SYN : {},
+});
+
+/// code
+// Live search — runs whenever query / fuzzy / syns / corpus changes.
+const q = query.trim();
+const hits = q ? Librarian.search(index, q, { fuzzy, limit: 20 }) : [];
+const sug = (hits.length === 0 && q) ? Librarian.suggest(index, q) : null;
+
+const summary = !q
+  ? 'type a query above'
+  : hits.length === 0
+    ? (sug && sug.toLowerCase() !== q.toLowerCase()
+       ? `no matches. did you mean "${sug}"?`
+       : 'no matches.')
+    : `${hits.length} of ${index.stats.totalDocs} docs match  ·  avg doc length ${Math.round(index.stats.avgLen)} tokens`;
+
+ui.display(
+  std.el('div', { style: 'font-family:ui-monospace,monospace' }, [
+    std.el('div', { style: 'color:#8a9099;font-size:12px;margin-bottom:10px' }, summary),
+    ...hits.map((h, i) => std.el('div', {
+      style: 'padding:8px 12px;margin:6px 0;background:#1a1d21;border-left:3px solid #d97a3c;border-radius:0 3px 3px 0;line-height:1.5',
+    }, [
+      std.el('div', { style: 'color:#6b7177;font-size:11px' },
+        `#${String(i+1).padStart(2,'0')}  ·  ${h.doc.source}  ·  score ${h.score.toFixed(2)}`),
+      std.el('div', { style: 'color:#e8eaed;font-weight:600;font-size:14px;margin:1px 0 4px' },
+        h.doc.title),
+      h.snippet ? std.el('div', { style: 'color:#c8ccd0;font-size:12.5px', innerHTML: h.snippet }) : null,
+    ].filter(Boolean))),
+  ])
+);
+
+/// md
+## Try these
+
+- **`Watson`** — heavyweight entity, hits all 12 Holmes stories
+- **`Baker Street`** — proximity bonus rewards adjacent terms
+- **`Irene Adler`** — appears in one story only; high precision
+- **`Wattson`** — misspelt; needs fuzzy ≥ 1
+- **`fox`** — Aesop bonanza; with synonyms also catches `foxes`
+- **`pride`** — synonyms pick up `proud`, `vanity`, `vain`
+- **`Moriarty`** — not in *Adventures*; did-you-mean fires the closest term
+
+## How it works
+
+`Librarian.index({ docs, fields, synonyms })` builds an inverted index keyed by token, with per-doc positions stored per field. Each entry in `docs` is `{ id, title, body, … }` — the field names match the `fields` config, which assigns a BM25F boost (`title: { boost: 4 }` means a hit in the title scores 4× a hit in the body).
+
+`Librarian.search(index, query, opts)` tokenises the query, expands each token via synonyms + fuzzy + prefix matching, scores BM25F across fields, adds a proximity bonus for close-by hits within a doc, and returns ranked `{ doc, score, snippet, hits }` objects.
+
+`Librarian.suggest(index, query)` finds the closest in-vocabulary terms when search hits zero — the did-you-mean fallback.
+
+The whole engine is ~18 KB unminified, zero dependencies. See `ext/librarian/` for the source.
