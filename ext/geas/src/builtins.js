@@ -13,6 +13,7 @@
 import { defaultTypedBuiltins } from './builtins-typed.js';
 import { drainInput } from './typed.js';
 import { _pkg } from './pkg-cmd.js';
+import { runEd } from '../../ed/src/api.js';
 
 // Construct a fresh map of the default builtins. Returns a new Map per call
 // so consumers can mutate (add/override) without affecting other shells.
@@ -77,6 +78,8 @@ export function defaultBuiltins() {
     sha256sum: _sha256sum,
     // pkg-spec §5: install / list / freeze / remove modules into /lib.
     pkg:      _pkg,
+    // "ed is the standard text editor." POSIX-ish, GNU-sanded defaults.
+    ed:       runEd,
   }));
 }
 

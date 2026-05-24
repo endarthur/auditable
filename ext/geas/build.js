@@ -12,18 +12,27 @@ const srcDir = path.join(__dirname, 'src');
 const mainPath = path.join(srcDir, 'main.js');
 const mainSrc = fs.readFileSync(mainPath, 'utf8');
 
-// Extract module paths from main.js (imports and re-exports)
-const importPaths = [];
+// Extract module paths from main.js. Two forms:
+//   './foo.js'              — relative inside ext/geas/src
+//   '../../<pkg>/src/foo.js' — cross-package source (concatenated alongside
+//                              geas's own sources so a single bundle gets
+//                              both — used to surface @gcu/ed as a geas
+//                              builtin without inlining its source twice).
+const importEntries = [];
 for (const line of mainSrc.split('\n')) {
-  const m = line.match(/^(?:import|export)\s+.*['"]\.\/(.+?)['"];?\s*(?:\/\/.*)?$/);
-  if (m) importPaths.push(m[1]);
+  let m = line.match(/^(?:import|export)\s+.*['"]\.\/(.+?)['"];?\s*(?:\/\/.*)?$/);
+  if (m) { importEntries.push({ rel: m[1], cross: null }); continue; }
+  m = line.match(/^(?:import|export)\s+.*['"](\.\.\/\.\.\/[^/'"]+\/src\/[^'"]+?)['"];?\s*(?:\/\/.*)?$/);
+  if (m) { importEntries.push({ rel: null, cross: m[1] }); continue; }
 }
 
 const chunks = [];
-for (const relPath of importPaths) {
-  const filePath = path.join(srcDir, relPath);
+for (const entry of importEntries) {
+  const filePath = entry.rel
+    ? path.join(srcDir, entry.rel)
+    : path.resolve(srcDir, entry.cross);
   let src = fs.readFileSync(filePath, 'utf8');
-  const basename = path.basename(relPath);
+  const basename = path.basename(entry.rel || entry.cross);
 
   // Strip import lines (single-line and multi-line)
   src = src.replace(/^import\s+.*['"].*['"];?\s*$/gm, '');
