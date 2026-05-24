@@ -93,6 +93,28 @@ window.addEventListener('message', async (ev) => {
   fit.fit();
   window.addEventListener('resize', () => { try { fit.fit(); } catch { /* */ } });
 
+  // Select-to-copy: every selection change copies to the clipboard
+  // (Linux-feeling; matches xterm's classic behaviour). On modern
+  // browsers navigator.clipboard.writeText needs a user-gesture
+  // context, which a mouse selection counts as. Errors swallowed — a
+  // clipboard write failing is not worth interrupting the user.
+  term.onSelectionChange(() => {
+    const sel = term.getSelection();
+    if (!sel) return;
+    navigator.clipboard.writeText(sel).catch(() => { /* */ });
+  });
+
+  // Right-click to paste — bypass the browser's default context menu
+  // and stream the clipboard through xterm.paste, which honours
+  // bracketed-paste mode (so readline sees one atomic insert).
+  document.getElementById('term').addEventListener('contextmenu', async (e) => {
+    e.preventDefault();
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) term.paste(text);
+    } catch { /* clipboard denied; user can fall back to Ctrl-Shift-V */ }
+  });
+
   const adapter = createXtermAdapter({ terminal: term });
 
   // Surface-side VFS first — readline's path-completer + persistent

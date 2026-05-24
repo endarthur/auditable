@@ -651,15 +651,21 @@ const termPkg = termFrame ? await termFrame.evaluate(async () => {
   try { lockfile = JSON.parse(await vfs.readFile('/lib/.gcu-lock.json', 'utf8')); }
   catch (e) { /* */ }
 
-  // 5. pkg remove
+  // 5. pkg remove — poll for the lockfile-entry-gone state instead of
+  // a fixed wait. A-Bus VFS.Write fires after the worker reports done,
+  // but the message-loop hop to the shell can lag on busy runs; this
+  // was the source of an intermittent FAIL.
   try { await client.exec('pkg remove local:/tmp/pkg-test-mod.js'); }
   catch (e) { return { error: 'pkg remove failed: ' + e.message }; }
-  await new Promise((r) => setTimeout(r, 200));
-
-  // 6. Final lockfile state after remove.
   let lockfileAfter = null;
-  try { lockfileAfter = JSON.parse(await vfs.readFile('/lib/.gcu-lock.json', 'utf8')); }
-  catch (e) { /* */ }
+  const removeDeadline = Date.now() + 2000;
+  while (Date.now() < removeDeadline) {
+    await new Promise((r) => setTimeout(r, 50));
+    try {
+      lockfileAfter = JSON.parse(await vfs.readFile('/lib/.gcu-lock.json', 'utf8'));
+      if (!lockfileAfter.modules['local:/tmp/pkg-test-mod.js']) break;
+    } catch { /* */ }
+  }
 
   return {
     lockfileHasEntry: !!(lockfile && lockfile.modules
