@@ -303,15 +303,15 @@ For complex multi-file work — the terminal needs `ls`, `cat`, `cd`,
 pipes, redirections — build a proper VFS in the surface:
 
 ```js
-import { VFS, AbusBackend, MemoryBackend } from '@gcu/vfs';
+import { VFS, AbusBackend } from '@gcu/vfs';
 
 const vfs = new VFS();
 vfs._mounts.set('/', new AbusBackend({ bus, service: 'works', root: '' }));
-vfs._mounts.set('/tmp', new MemoryBackend());
 ```
 
-`/` proxies the entire workspace VFS through A-Bus. `/tmp` (and friends)
-are local volatile memory.
+`/` proxies the entire workspace VFS through A-Bus — `/tmp` (volatile
+scratch space, workspace-wide), `/projects`, `/home`, `/lib`, `/mnt/*`
+all come through it.
 
 **Cost**: `@gcu/vfs` is ~90 KB compressed (the works lib store has it
 once; your surface's `deps` opt-in to it costing nothing extra on disk).
@@ -339,7 +339,7 @@ proxy. This is the Chunk 5c speedup: large reads bypass the relay.
 
 **Consequence**: the surface's `/` mount only sees what's on disk in the
 storage home — `home/lib/mnt/projects`. It does **not** see the shell's
-volatile mounts (`/scratch`, `/sys`, `/usr`). Those mounts only exist in
+volatile mounts (`/tmp`, `/sys`, `/usr`). Those mounts only exist in
 the shell's full VFS.
 
 A surface that needs to read a volatile mount **must** add it as an
@@ -350,7 +350,8 @@ explicit proxy in its descriptor list:
 ```
 
 The notebook's host.js does this for `/usr/lib`. Other surfaces that
-need `/scratch` or `/sys` would do the same.
+need `/tmp` or `/sys` would do the same (and also fall back to the
+A-Bus proxy via `/` when the workspace home isn't delegated).
 
 Loose-file and tool surfaces that go through `bus.call` directly don't
 hit this — `bus.call` is the relay path, and the works service's VFS is

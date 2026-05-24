@@ -137,7 +137,10 @@ export function createWorksHost({ bus, projectPath, syncToVfs, home }) {
     return [
       { kind: 'local-copy', mount: '/projects/self', source: projectPath },
       rootDescriptor(),
-      { kind: 'memory', mount: '/tmp' },
+      // /tmp deliberately NOT mounted per-surface — it falls through to
+      // the workspace's /tmp (volatile MemoryBackend) via the / proxy,
+      // so writes from any surface are visible to every other surface
+      // and to the file tree. Matches POSIX /tmp semantics.
       { kind: 'memory', mount: '/usr/lib/python' },
       { kind: 'proxy',  mount: '/usr/lib', root: '/usr/lib' },
     ];

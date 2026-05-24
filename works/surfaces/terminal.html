@@ -18,7 +18,7 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden;
 <div id="term"></div>
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
-import { VFS, AbusBackend, MemoryBackend } from '../../ext/vfs/index.js';
+import { VFS, AbusBackend } from '../../ext/vfs/index.js';
 import { Terminal, FitAddon, WebglAddon } from '../../ext/xterm/index.js';
 import { createGeasClient, createXtermAdapter, makeLineEditor, procToWorker, tokenize } from '../../ext/geas/index.js';
 import { ProcessManager } from '../../ext/proc/index.js';
@@ -188,10 +188,11 @@ window.addEventListener('message', async (ev) => {
   const adapter = createXtermAdapter({ terminal: term });
 
   // Surface-side VFS first — readline's path-completer + persistent
-  // history both reach through it.
+  // history both reach through it. /tmp comes through the / proxy from
+  // the workspace's shared volatile mount (POSIX-shape, visible to all
+  // surfaces + the file tree).
   const vfs = new VFS();
   vfs._mounts.set('/', new AbusBackend({ bus, service: 'works' }));
-  vfs._mounts.set('/tmp', new MemoryBackend());
 
   // @gcu/readline line editor — replaces @gcu/geas's makeLineEditor.
   // Adds mid-line cursor, kill-ring, fish-style autosuggest, tab

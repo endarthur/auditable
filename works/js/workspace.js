@@ -2,7 +2,9 @@
 //
 // Three mounts (auditable-works-spec §7.2): one persistent backend at `/` —
 // the storage home — inside which `projects/`, `lib/`, `home/` are ordinary
-// directories; plus volatile MemoryBackend overlays at `/scratch` and `/sys`.
+// directories; plus volatile MemoryBackend overlays at `/tmp` (POSIX-shape
+// scratch space, workspace-wide; surfaces see it through the / proxy) and
+// `/sys`.
 //
 // The storage home is one of two kinds (§12.1): a **disk folder** (File
 // System Access API) or **browser-resident** (IndexedDB). IndexedDB is the
@@ -62,7 +64,7 @@ export async function setupWorkspace() {
     const vfs = await VFS.create({
       backends: {
         '/':        { type: 'memory' },
-        '/scratch': { type: 'memory' },
+        '/tmp':     { type: 'memory' },
         '/sys':     { type: 'memory' },
         '/usr':     { type: 'memory' },   // shell builtins (§Unix: /usr/lib)
       },
@@ -100,7 +102,7 @@ export async function setupWorkspace() {
   const vfs = await VFS.create({
     backends: {
       '/':        homeBackend,        // persistent — the storage home
-      '/scratch': { type: 'memory' }, // volatile
+      '/tmp':     { type: 'memory' }, // volatile — POSIX-shape scratch
       '/sys':     { type: 'memory' }, // volatile
       '/usr':     { type: 'memory' }, // volatile — shell builtins (/usr/lib)
     },

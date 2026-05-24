@@ -1,6 +1,6 @@
 // The file-tree explorer over the workspace VFS. Rooted at `/` — the whole
 // filesystem is navigable: /projects is expanded by default (the user's
-// work, front and centre), with /lib, /home, /scratch, /sys and any mounted
+// work, front and centre), with /lib, /home, /tmp, /sys and any mounted
 // folders collapsed but one click away. Projects are directories with a
 // project.json marker; double-click opens a project or file as a surface;
 // right-click is a context menu for new / rename / delete.
