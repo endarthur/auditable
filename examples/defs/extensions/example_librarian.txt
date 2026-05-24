@@ -26,7 +26,7 @@ const { aesop } = await load("@demo/aesop");
 <div style="display:grid;grid-template-columns:auto auto auto 1fr;gap:14px;align-items:center;font-size:13px;margin:8px 0 16px">
   <label style="display:flex;align-items:center;gap:6px">
     Corpus
-    <audit-dropdown name="corpus" options='["Holmes","Aesop","Both"]' value="Holmes"></audit-dropdown>
+    <audit-dropdown name="corpus" options="Holmes,Aesop,Both" value="Holmes"></audit-dropdown>
   </label>
   <label style="display:flex;align-items:center;gap:6px">
     Fuzzy
@@ -83,20 +83,28 @@ const summary = !q
        : 'no matches.')
     : `${hits.length} of ${index.stats.totalDocs} docs match  ·  avg doc length ${Math.round(index.stats.avgLen)} tokens`;
 
-ui.display(
-  std.el('div', { style: 'font-family:ui-monospace,monospace' }, [
-    std.el('div', { style: 'color:#8a9099;font-size:12px;margin-bottom:10px' }, summary),
-    ...hits.map((h, i) => std.el('div', {
-      style: 'padding:8px 12px;margin:6px 0;background:#1a1d21;border-left:3px solid #d97a3c;border-radius:0 3px 3px 0;line-height:1.5',
-    }, [
-      std.el('div', { style: 'color:#6b7177;font-size:11px' },
-        `#${String(i+1).padStart(2,'0')}  ·  ${h.doc.source}  ·  score ${h.score.toFixed(2)}`),
-      std.el('div', { style: 'color:#e8eaed;font-weight:600;font-size:14px;margin:1px 0 4px' },
-        h.doc.title),
-      h.snippet ? std.el('div', { style: 'color:#c8ccd0;font-size:12.5px', innerHTML: h.snippet }) : null,
-    ].filter(Boolean))),
-  ])
-);
+// Build each hit as a Node, then spread them as children — std.el
+// uses (...children) varargs, so passing an array stringifies it.
+function hitEl(h, i) {
+  const card = std.el('div', {
+    style: 'padding:8px 12px;margin:6px 0;background:#1a1d21;border-left:3px solid #d97a3c;border-radius:0 3px 3px 0;line-height:1.5',
+  });
+  card.appendChild(std.el('div', { style: 'color:#6b7177;font-size:11px' },
+    `#${String(i+1).padStart(2,'0')}  ·  ${h.doc.source}  ·  score ${h.score.toFixed(2)}`));
+  card.appendChild(std.el('div', { style: 'color:#e8eaed;font-weight:600;font-size:14px;margin:1px 0 4px' },
+    h.doc.title));
+  if (h.snippet) {
+    const sn = std.el('div', { style: 'color:#c8ccd0;font-size:12.5px' });
+    sn.innerHTML = h.snippet;
+    card.appendChild(sn);
+  }
+  return card;
+}
+
+ui.display(std.el('div', { style: 'font-family:ui-monospace,monospace' },
+  std.el('div', { style: 'color:#8a9099;font-size:12px;margin-bottom:10px' }, summary),
+  ...hits.map(hitEl),
+));
 
 /// md
 ## Try these
