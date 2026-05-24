@@ -12,6 +12,7 @@
 
 import { defaultTypedBuiltins } from './builtins-typed.js';
 import { drainInput } from './typed.js';
+import { _pkg } from './pkg-cmd.js';
 
 // Construct a fresh map of the default builtins. Returns a new Map per call
 // so consumers can mutate (add/override) without affecting other shells.
@@ -74,6 +75,8 @@ export function defaultBuiltins() {
     base64:   _base64,
     md5sum:   _md5sum,
     sha256sum: _sha256sum,
+    // pkg-spec §5: install / list / freeze / remove modules into /lib.
+    pkg:      _pkg,
   }));
 }
 

@@ -163,6 +163,7 @@ window.addEventListener('message', async (ev) => {
   // Test hooks — surface-internal, only intended for works-smoke.
   window._term = term;
   window._geasClient = client;
+  window._surfaceVfs = vfs;   // smoke-test hook (write to /tmp before pkg install)
 
   term.focus();
 });

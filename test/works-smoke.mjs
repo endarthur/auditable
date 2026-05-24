@@ -590,6 +590,62 @@ if (termFrame) {
   });
 }
 
+// ── pkg CLI (pkg-spec chunk 4) — install local: + list + freeze + remove
+const termPkg = termFrame ? await termFrame.evaluate(async () => {
+  const client = window._geasClient;
+  const term = window._term;
+  if (!client || !term) return { error: 'no test hook' };
+  const snapshot = (start = 0) => {
+    const buf = term.buffer.active;
+    let text = '';
+    for (let i = start; i < buf.length; i++) {
+      text += buf.getLine(i).translateToString(true) + '\n';
+    }
+    return text;
+  };
+  const startLine = term.buffer.active.length;
+
+  // 1. Write a tiny JS module to /tmp on the surface VFS — the geas
+  //    worker's vfs is the same VFS via serveVFS, so this lands at /tmp
+  //    in the worker's view.
+  const vfs = window._surfaceVfs || window._notebookVFS;
+  if (!vfs) return { error: 'no VFS handle' };
+  await vfs.writeFile('/tmp/pkg-test-mod.js',
+    'export const ping = () => "pong";');
+
+  // 2. pkg install local:/tmp/pkg-test-mod.js
+  try { await client.exec('pkg install local:/tmp/pkg-test-mod.js'); }
+  catch (e) { return { error: 'pkg install failed: ' + e.message }; }
+  await new Promise((r) => setTimeout(r, 200));
+
+  // 3. pkg list — should mention the alias
+  try { await client.exec('pkg list'); }
+  catch (e) { return { error: 'pkg list failed: ' + e.message }; }
+  await new Promise((r) => setTimeout(r, 200));
+
+  // 4. Confirm the lockfile entry directly via VFS read.
+  let lockfile = null;
+  try { lockfile = JSON.parse(await vfs.readFile('/lib/.gcu-lock.json', 'utf8')); }
+  catch (e) { /* */ }
+
+  // 5. pkg remove
+  try { await client.exec('pkg remove local:/tmp/pkg-test-mod.js'); }
+  catch (e) { return { error: 'pkg remove failed: ' + e.message }; }
+  await new Promise((r) => setTimeout(r, 200));
+
+  // 6. Final lockfile state after remove.
+  let lockfileAfter = null;
+  try { lockfileAfter = JSON.parse(await vfs.readFile('/lib/.gcu-lock.json', 'utf8')); }
+  catch (e) { /* */ }
+
+  return {
+    lockfileHasEntry: !!(lockfile && lockfile.modules
+      && lockfile.modules['local:/tmp/pkg-test-mod.js']),
+    lockfileAfterRemove: !!(lockfileAfter && lockfileAfter.modules
+      && !lockfileAfter.modules['local:/tmp/pkg-test-mod.js']),
+  };
+}) : { error: 'no term frame' };
+
 // ── Tree context actions — New file / Export project / Import file ────
 const ctx = await page.evaluate(async () => {
   const W = window.WKS;
@@ -881,6 +937,12 @@ const checks = {
   // Terminal surface
   'terminal: surface boots':          termOpen.ready === true,
   'terminal: echo writes to xterm':   termRun.text && termRun.text.includes('hello-from-smoke'),
+  // pkg-spec chunk 4 — pkg CLI from a geas terminal. We verify the
+  // structural side (lockfile shape) rather than xterm text since the
+  // buffer may have scrolled. End-to-end: geas → @gcu/proc worker →
+  // VFS via serveVFS → workspace /lib via A-Bus proxy → shell vfs write.
+  'pkg writes to /lib/.gcu-lock.json': termPkg.lockfileHasEntry,
+  'pkg remove drops lockfile entry':   termPkg.lockfileAfterRemove,
   'terminal: ls hits the workspace':  termRun.text
       && (termRun.text.includes('SmokeNB') || termRun.text.includes('Quad')),
   'terminal: unknown cmd warns':      termRun.text

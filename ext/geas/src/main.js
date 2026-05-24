@@ -12,6 +12,7 @@ import './parser.js';
 import './typed.js';
 import './executor.js';
 import './builtins-typed.js';
+import './pkg-cmd.js';
 import './builtins.js';
 import './adapters/headless.js';
 import './adapters/term.js';
