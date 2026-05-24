@@ -172,6 +172,12 @@ export async function syncModulesToVfs(vfs, installedModules) {
   }
 
   if (!installedModules) return;
+
+  // pkg-spec §4: aggregate every (non-builtin) entry's meta into the
+  // workspace lockfile at /lib/.gcu-lock.json. Built as we walk the
+  // entries so we don't iterate twice.
+  const lockfile = { version: 1, modules: {} };
+
   for (const [key, entry] of Object.entries(installedModules)) {
     // Skip builtins — they live at /usr/lib (volatile, repopulated by the
     // shell at boot). Writing them to /lib would persist them in workspace
@@ -183,6 +189,7 @@ export async function syncModulesToVfs(vfs, installedModules) {
       // legacy: bare source string
       await vfs.writeFile(dir + '/source', entry);
       await vfs.writeFile(dir + '/meta.json', JSON.stringify({ alias: key, legacy: true }));
+      lockfile.modules[key] = { alias: key, legacy: true };
       continue;
     }
     if (entry && typeof entry === 'object') {
@@ -192,8 +199,16 @@ export async function syncModulesToVfs(vfs, installedModules) {
       if (!meta.alias) meta.alias = key;
       await vfs.writeFile(dir + '/meta.json', JSON.stringify(meta));
       if (typeof source === 'string') await vfs.writeFile(dir + '/source', source);
+      // Lockfile entry mirrors meta.json minus source-data fields (cellId
+      // is in-memory provenance; source is in the leaf dir already).
+      const { cellId, ...lockEntry } = meta;
+      lockfile.modules[key] = lockEntry;
     }
   }
+
+  // pkg-spec §4 workspace lockfile. Pretty-printed for diff-friendliness.
+  await vfs.writeFile(MODULES_DIR + '/.gcu-lock.json',
+    JSON.stringify(lockfile, null, 2));
 }
 
 /**

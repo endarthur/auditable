@@ -12,6 +12,14 @@
 
 import { compressText, decompressText, uint8ToBase64 } from './text-compression.js';
 
+// SRI-shaped integrity hash. Computed over the un-compressed source bytes
+// (matches what a browser would do for a <script integrity="..."> tag).
+// pkg-spec §4.1 — fetch + verify before extraction.
+async function _sha256SRI(bytes) {
+  const buf = await crypto.subtle.digest('SHA-256', bytes);
+  return 'sha256-' + uint8ToBase64(new Uint8Array(buf));
+}
+
 /**
  * Decode an _installedModules[url] entry into runtime form. Returns:
  *   - { kind: 'text', source: string }                          for JS modules
@@ -293,6 +301,8 @@ export function makeModuleLoaders(cell, ctx, deps) {
       window._installedModules[storeKey] = {
         source: compressedSrc, compressed: true, cellId: cell.id,
         alias: storeKey, url: storeKey, kind: 'local',
+        installedAt: new Date().toISOString(),
+        size: source.length,
       };
       notifyDirty();
       const blob = new Blob([source], { type: 'application/javascript' });
@@ -312,8 +322,15 @@ export function makeModuleLoaders(cell, ctx, deps) {
       const resp = await fetch(realUrl);
       if (!resp.ok) throw new Error(`Failed to fetch ${realUrl}: ${resp.status}`);
       const source = await resp.text();
+      const sourceBytes = new TextEncoder().encode(source);
+      const integrity = await _sha256SRI(sourceBytes);
       const compressedSrc = await compressText(source);
-      window._installedModules[storeKey] = { source: compressedSrc, compressed: true, cellId: cell.id };
+      window._installedModules[storeKey] = {
+        source: compressedSrc, compressed: true, cellId: cell.id,
+        alias: storeKey, url: resp.url, integrity, kind: 'js',
+        installedAt: new Date().toISOString(),
+        size: sourceBytes.length,
+      };
       notifyDirty();
       const blob = new Blob([source], { type: 'application/javascript' });
       const blobUrl = URL.createObjectURL(blob);
@@ -355,13 +372,17 @@ export function makeModuleLoaders(cell, ctx, deps) {
     if (!result.ok) throw new Error(`Failed to fetch ${esmUrl}: ${result.status}`);
 
     let source = resolveModulePaths(result.source, result.finalUrl);
+    // pkg-spec §4.1: integrity is computed over the FINAL response body
+    // (post-redirect, post-path-rewrite), and the resolved URL is what
+    // lands in the lockfile entry. Reproducibility pins both.
+    const sourceBytes = new TextEncoder().encode(source);
+    const integrity = await _sha256SRI(sourceBytes);
     const compressedSrc = await compressText(source);
-    // alias + url stamp the entry so /lib/<source>/<name>/meta.json carries
-    // the user-facing name and the resolved (post-redirect) URL. The
-    // lockfile (chunk 3) will read these directly.
     window._installedModules[storeKey] = {
       source: compressedSrc, compressed: true, cellId: cell.id,
-      alias: storeKey, url: result.finalUrl,
+      alias: storeKey, url: result.finalUrl, integrity, kind: 'js',
+      installedAt: new Date().toISOString(),
+      size: sourceBytes.length,
     };
     notifyDirty();
     // Use the shared materialiser so scoped imports get rewritten.
@@ -390,7 +411,13 @@ export function makeModuleLoaders(cell, ctx, deps) {
     } else {
       stored = uint8ToBase64(raw);
     }
-    window._installedModules[url] = { source: stored, cellId: cell.id, binary: true, compressed: isCompressed, type: contentType };
+    const integrity = await _sha256SRI(raw);
+    window._installedModules[url] = {
+      source: stored, cellId: cell.id, binary: true, compressed: isCompressed, type: contentType,
+      alias: url, url: resp.url, integrity, kind: 'binary',
+      installedAt: new Date().toISOString(),
+      size: raw.length,
+    };
     notifyDirty();
     const ratio = isCompressed ? ` → ${(stored.length / 1024).toFixed(1)} KB compressed` : '';
     display(`installed binary ${url} (${(buf.byteLength / 1024).toFixed(1)} KB${ratio})`);

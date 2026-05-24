@@ -431,7 +431,15 @@ const nbFlush = await page.evaluate(async (uniqueName) => {
   } catch (e) { return { error: e.message }; }
   let onDisk = null;
   try { onDisk = await W.vfs.readFile('/projects/SmokeNB/notebook.txt', 'utf8'); } catch { /* */ }
-  return { onDisk };
+  // pkg-spec §4: lockfile written at /lib/.gcu-lock.json after every Flush.
+  // SmokeNB doesn't install anything so modules: {} is expected; we just
+  // want to confirm the file shape lands on disk.
+  let lockfile = null;
+  try {
+    const raw = await W.vfs.readFile('/lib/.gcu-lock.json', 'utf8');
+    lockfile = JSON.parse(raw);
+  } catch { /* */ }
+  return { onDisk, lockfile };
 }, nbOpen.uniqueName);
 
 // ── Import notebook (.txt + .html, current + legacy formats) ──────────
@@ -833,6 +841,10 @@ const checks = {
   'notebook surface kind resolved':   nbOpen.kind === 'notebook',
   'notebook hydrates cells from VFS': nbCells === 2,
   'notebook Flush round-trips':       !!nbFlush.onDisk && nbFlush.onDisk.includes('notebook surface smoke'),
+  // pkg-spec §4 lockfile written at /lib/.gcu-lock.json on every Flush
+  'Flush writes /lib/.gcu-lock.json': nbFlush.lockfile
+                                        && nbFlush.lockfile.version === 1
+                                        && typeof nbFlush.lockfile.modules === 'object',
   // Notebook sees /usr/lib builtins as @gcu/* modules
   'notebook sees /usr/lib builtins':  nbBuiltins
       && nbBuiltins.hasXterm && nbBuiltins.hasGeas
