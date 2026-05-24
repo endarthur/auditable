@@ -262,17 +262,14 @@ window.addEventListener('message', async (ev) => {
     return spans;
   }
 
-  // Resolve a possibly-relative path against the worker's last-known
-  // cwd. createGeasClient tracks cwd internally; we fetch it via the
-  // exec(`pwd`) round-trip lazily — for completion we need it
-  // synchronously available, so cache it from each onDone-equivalent.
-  // For now use HOME as the default cwd until a better hook lands.
-  let cachedCwd = startCwd;
-
+  // Resolve a possibly-relative path against the worker's current
+  // cwd. createGeasClient maintains client.cwd, updated from each
+  // `done` message — `cd /tmp` then Tab now completes against /tmp,
+  // not the boot-time startCwd.
   function _resolvePath(p) {
     if (p.startsWith('/')) return p;
-    // Strip trailing slash from cwd, then join.
-    const base = cachedCwd.endsWith('/') ? cachedCwd.slice(0, -1) : cachedCwd;
+    const cwd = (client && client.cwd) || startCwd;
+    const base = cwd.endsWith('/') ? cwd.slice(0, -1) : cwd;
     return base + '/' + p;
   }
 

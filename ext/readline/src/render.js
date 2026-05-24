@@ -25,12 +25,52 @@ const CLEAR_TO_END = ESC + '[K';
 const DIM_FG = ESC + '[38;5;240m';   // grey, readable on dark + light
 const RESET = ESC + '[0m';
 
-// Compute the visual cell width of a string. v1: every char = 1 cell.
-// Wide / emoji / combining chars are wrong but not catastrophic in a
-// shell context.
-function _cellWidth(s) {
-  return s.length;
+// Compute the visual cell width of a string. Cheap range-based table
+// covering the common cases — ASCII = 1, CJK + main emoji ranges = 2,
+// combining marks + variation selectors = 0. Doesn't handle ZWJ
+// sequences (👨‍💻 measures as 4 instead of 2); for that we'd need
+// Intl.Segmenter to walk graphemes — deferred until someone reaches
+// for it. xterm.js renders all of these correctly; only our cursor
+// positioning math needs the width.
+function _codepointWidth(cp) {
+  // Zero-width: combining marks, zero-width joiners/spaces, variation
+  // selectors (incl. the supplementary VS-17..256 range).
+  if (cp >= 0x0300 && cp <= 0x036F) return 0;
+  if (cp >= 0x200B && cp <= 0x200F) return 0;
+  if (cp >= 0xFE00 && cp <= 0xFE0F) return 0;
+  if (cp >= 0xE0100 && cp <= 0xE01EF) return 0;
+  // Wide: Hangul + CJK + main emoji + fullwidth.
+  if (cp >= 0x1100 && cp <= 0x115F) return 2;     // Hangul Jamo
+  if (cp >= 0x2E80 && cp <= 0x303E) return 2;     // CJK Radicals, Kangxi, …
+  if (cp >= 0x3041 && cp <= 0x33FF) return 2;     // Hiragana, Katakana, CJK Symbols
+  if (cp >= 0x3400 && cp <= 0x4DBF) return 2;     // CJK Extension A
+  if (cp >= 0x4E00 && cp <= 0x9FFF) return 2;     // CJK Unified Ideographs
+  if (cp >= 0xA000 && cp <= 0xA4CF) return 2;     // Yi
+  if (cp >= 0xAC00 && cp <= 0xD7A3) return 2;     // Hangul Syllables
+  if (cp >= 0xF900 && cp <= 0xFAFF) return 2;     // CJK Compatibility Ideographs
+  if (cp >= 0xFE30 && cp <= 0xFE4F) return 2;     // CJK Compatibility Forms
+  if (cp >= 0xFF00 && cp <= 0xFF60) return 2;     // Fullwidth Forms
+  if (cp >= 0xFFE0 && cp <= 0xFFE6) return 2;     // Fullwidth Signs
+  if (cp >= 0x1F300 && cp <= 0x1F64F) return 2;   // Misc Symbols + main emoji
+  if (cp >= 0x1F680 && cp <= 0x1F9FF) return 2;   // Transport + supplemental emoji
+  if (cp >= 0x20000 && cp <= 0x2FFFD) return 2;   // CJK Extensions B–F
+  if (cp >= 0x30000 && cp <= 0x3FFFD) return 2;   // CJK Extension G
+  return 1;
 }
+
+function _cellWidth(s) {
+  let w = 0;
+  for (let i = 0; i < s.length;) {
+    const cp = s.codePointAt(i);
+    w += _codepointWidth(cp);
+    i += cp > 0xFFFF ? 2 : 1;
+  }
+  return w;
+}
+
+// Exposed for tests.
+export const cellWidth = _cellWidth;
+export const codepointWidth = _codepointWidth;
 
 // Apply a list of `{start, end, ansi}` highlight spans to `text`.
 // Spans must be sorted, non-overlapping, in [0, text.length].

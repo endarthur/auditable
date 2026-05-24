@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 
 import { parseKeys } from '../ext/readline/src/keys.js';
 import * as ed from '../ext/readline/src/editor.js';
+import { cellWidth } from '../ext/readline/src/render.js';
 
 function parse(chunk, state = { pasting: false, pasteBuf: '' }) {
   return parseKeys(chunk, state);
@@ -221,6 +222,40 @@ describe('editor: edits', () => {
     ed.yank(e);
     assert.equal(e.buffer, 'a bc');
     assert.equal(e.cursor, 3);
+  });
+});
+
+describe('render: cellWidth', () => {
+  it('ASCII counts as 1 each', () => {
+    assert.equal(cellWidth('hello'), 5);
+    assert.equal(cellWidth(''), 0);
+  });
+  it('CJK is double-width', () => {
+    assert.equal(cellWidth('你好'), 4);
+    assert.equal(cellWidth('ab你'), 4);
+  });
+  it('Hiragana / Katakana is double-width', () => {
+    assert.equal(cellWidth('あいう'), 6);
+    assert.equal(cellWidth('カタカナ'), 8);
+  });
+  it('Hangul is double-width', () => {
+    assert.equal(cellWidth('한글'), 4);
+  });
+  it('emoji is double-width (single codepoint)', () => {
+    // Single emoji codepoint U+1F600 — measured as 2.
+    assert.equal(cellWidth('😀'), 2);
+    assert.equal(cellWidth('a😀b'), 4);
+  });
+  it('combining marks add zero width', () => {
+    // 'e' + combining acute accent (U+0301) — measures as 1, not 2.
+    assert.equal(cellWidth('é'), 1);
+  });
+  it('variation selector adds zero width', () => {
+    // Heart + VS-16 (emoji presentation) — still 1, since base is narrow.
+    assert.equal(cellWidth('❤️'), 1);
+  });
+  it('zero-width joiner / space', () => {
+    assert.equal(cellWidth('a​b'), 2);
   });
 });
 
