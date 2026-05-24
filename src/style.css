@@ -265,6 +265,19 @@ button.accent:hover {
 .cell-output.error {
   color: var(--au-error);
 }
+.cell-output pre.au-shell-out,
+.cell-output pre.au-shell-err {
+  font-family: var(--au-font-mono);
+  font-size: 12px;
+  margin: 0;
+  padding: 0;
+  white-space: pre-wrap;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+.cell-output pre.au-shell-err {
+  color: var(--au-error);
+}
 
 .cell-output canvas {
   max-width: 100%;

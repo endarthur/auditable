@@ -5,10 +5,12 @@ import { S } from '../state.js';
 import { addCell } from '../cell-ops.js';
 import { createNotebookFs } from '../fs.js';
 import { getEditor } from '../cm6.js';
+import { makeShell } from './shell.js';
 
-export function makeNotebookApi(runDAG) {
+export function makeNotebookApi(cell, ctx, runDAG) {
   return {
     fs: createNotebookFs(),
+    shell: makeShell(cell, ctx),
     get cells() { return S.cells.map(c => ({ id: c.id, type: c.type, code: c.code })); },
     get scope() { return { ...S.scope }; },
     addCell: (type, code, afterId) => addCell(type, code, afterId),

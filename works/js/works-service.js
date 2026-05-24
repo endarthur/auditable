@@ -36,7 +36,16 @@ export async function setupWorksService() {
         Reveal:   () => {},    // Chunk 3 — the file tree
         PickFile: () => null,  // Chunk 3+
         Download: () => {},    // Chunk 3+
+        // Workspace mount table — the full list of (path, type) pairs from
+        // the shell's VFS. A surface diffs this against its own descriptor
+        // set and proxies anything missing through this same service. Paired
+        // with the MountChanged signal for live updates.
+        ListMounts: () => [...vfs._mounts.entries()].map(([path, backend]) => ({
+          path,
+          type: backend?.constructor?.type || 'custom',
+        })),
       },
+      signals: ['MountChanged'],
     },
     // Broker introspection, for the A-Bus inspector surface.
     Inspect: {
@@ -54,4 +63,15 @@ export async function setupWorksService() {
   vfs.on('write',  emit('modify'));
   vfs.on('delete', emit('delete'));
   vfs.on('rename', emit('move'));
+
+  // Mount-table changes → Shell.MountChanged. Lets surfaces mirror new
+  // /mnt/<name> mounts as A-Bus proxy backends in their own surface VFS
+  // (a surface that was spawned before the mount existed wouldn't otherwise
+  // see it through a delegated direct-I/O root mount).
+  vfs.on('mount',   (ev) => bus.signal(
+    { path: '/', interface: 'Shell', member: 'MountChanged' },
+    [ev.path, 'mount', ev.type || 'custom']));
+  vfs.on('unmount', (ev) => bus.signal(
+    { path: '/', interface: 'Shell', member: 'MountChanged' },
+    [ev.path, 'unmount']));
 }

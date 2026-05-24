@@ -40,6 +40,39 @@ export function parseMcpFs(code) {
   return { prefix, readOnly };
 }
 
+// ── shell cell (Jupyter-style `!cmd`) ──
+//
+// A code cell whose first non-blank, non-comment line starts with `!` is
+// a shell cell. The whole cell body (minus directives) is passed to
+// notebook.shell() as a single geas script. defines/uses are empty (the
+// rewritten code uses notebook + display, both injected). No new cell
+// type — exec.js + compileCellCode pre-rewrite via rewriteShellCell.
+
+export function isShellCell(code) {
+  for (const line of code.split('\n')) {
+    const t = line.trim();
+    if (t === '' || t.startsWith('//') || t.startsWith('#')) continue;
+    return t.startsWith('!');
+  }
+  return false;
+}
+
+export function rewriteShellCell(code) {
+  if (!isShellCell(code)) return null;
+  const lines = code.split('\n');
+  let i = 0;
+  while (i < lines.length) {
+    const t = lines[i].trim();
+    if (t === '' || t.startsWith('//') || t.startsWith('#')) { i++; continue; }
+    break;
+  }
+  const head = lines[i].replace(/^\s*!\s?/, '');
+  const script = [head, ...lines.slice(i + 1)].join('\n').replace(/\s+$/, '');
+  return `const _sh = await notebook.shell(${JSON.stringify(script)});\n`
+       + `display(_sh);\n`
+       + `if (_sh.error) throw _sh.error;\n`;
+}
+
 // ── code analysis ──
 
 function stripCommentsAndStrings(code) {
@@ -271,19 +304,31 @@ export function buildDAG(cells, cellTypes, analyzer, rePropagate) {
   for (const c of cells) {
     if (c.type === 'code') {
       if (c.code !== c._parsedCode) {
-        // Try AIR analysis first, fall back to regex
-        let airResult = null;
-        if (analyzer) {
-          try { airResult = analyzer(c.code, null); } catch (e) { /* fallback */ }
-        }
-        if (airResult) {
-          c.defines = airResult.defines;
-          c._air = airResult.air;
-          c._airAnalyzed = true;
-        } else {
-          c.defines = parseNames(c.code).defines;
+        // Shell cells (Jupyter-style `!cmd`) define nothing, use nothing —
+        // their compiled body calls notebook.shell + display, both injected.
+        // Skip both AIR + regex so neither chokes on the `!`-prefixed source.
+        if (isShellCell(c.code)) {
+          c.defines = new Set();
           c._air = null;
           c._airAnalyzed = false;
+          c._isShell = true;
+        } else {
+          // Try AIR analysis first, fall back to regex
+          let airResult = null;
+          if (analyzer) {
+            try { airResult = analyzer(c.code, null); } catch (e) { /* fallback */ }
+          }
+          if (airResult) {
+            c.defines = airResult.defines;
+            c._air = airResult.air;
+            c._airAnalyzed = true;
+            c._isShell = false;
+          } else {
+            c.defines = parseNames(c.code).defines;
+            c._air = null;
+            c._airAnalyzed = false;
+            c._isShell = false;
+          }
         }
         c._parsedCode = c.code;
       }
@@ -310,8 +355,10 @@ export function buildDAG(cells, cellTypes, analyzer, rePropagate) {
   for (const c of cells) {
     if (c.type === 'code') {
       if (c.code !== c._usesCode || c._definedKey !== definedKey) {
-        // If AIR analyzed this cell, re-analyze with full allDefined for accurate uses
-        if (analyzer && c._airAnalyzed) {
+        if (c._isShell) {
+          c.uses = new Set();
+        } else if (analyzer && c._airAnalyzed) {
+          // If AIR analyzed this cell, re-analyze with full allDefined for accurate uses
           const airResult = analyzer(c.code, definedNames);
           if (airResult) {
             c.uses = airResult.uses;

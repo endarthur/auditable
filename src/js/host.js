@@ -216,6 +216,18 @@ export function createWorksHost({ bus, projectPath, syncToVfs, home }) {
     }
   }
 
+  // Mirror a shell-side mount path through the A-Bus proxy. Used both at
+  // boot (Shell.ListMounts seed) and on the MountChanged signal. v1 always
+  // proxies — every read crosses the bridge. A future revision can pass
+  // direct disk handles (FSAA) through A-Bus for zero-bridge I/O on hot
+  // mounts; out of scope here because handle transfer needs bus + worker
+  // postMessage plumbing that doesn't exist yet.
+  async function _mirrorShellMount(vfs, mountPath, baseMountPaths) {
+    if (baseMountPaths.has(mountPath)) return;     // surface owns this path
+    if (vfs._mounts.has(mountPath)) return;        // already mirrored
+    await vfs.mount(mountPath, new AbusBackend({ bus, service: 'works', root: mountPath }));
+  }
+
   return {
     // Build the surface VFS from the mount descriptors, then boot-load every
     // local-copy mount from the workspace. Async — the boot-load awaits the
@@ -230,6 +242,32 @@ export function createWorksHost({ bus, projectPath, syncToVfs, home }) {
       for (const d of ds) {
         if (d.kind === 'local-copy') await bootLoad(vfs, d.source, d.mount);
       }
+
+      // Mirror shell-side mounts (today: /mnt/<name> disk folders). Subscribe
+      // BEFORE listing so we don't drop a mount that fires between the two
+      // calls — _mirrorShellMount is idempotent.
+      const baseMountPaths = new Set(ds.map(d => d.mount));
+      bus.subscribe({ interface: 'Shell', member: 'MountChanged', from: 'works' },
+        async (msg) => {
+          const [mountPath, action] = msg.args;
+          if (action === 'mount') {
+            await _mirrorShellMount(vfs, mountPath, baseMountPaths).catch((e) =>
+              console.warn('[host] mirror mount failed:', mountPath, e.message));
+          } else if (action === 'unmount') {
+            if (baseMountPaths.has(mountPath)) return;
+            await vfs.unmount(mountPath).catch(() => {});
+          }
+        });
+      try {
+        const mounts = await bus.call(
+          { to: 'works', path: '/', interface: 'Shell', member: 'ListMounts' }, []);
+        for (const { path: mp } of mounts || []) {
+          await _mirrorShellMount(vfs, mp, baseMountPaths);
+        }
+      } catch (e) {
+        console.warn('[host] ListMounts failed:', e.message);
+      }
+
       return vfs;
     },
 

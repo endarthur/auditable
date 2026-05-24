@@ -3,7 +3,7 @@
 // Extracted from exec.js to enable headless execution in Node.js.
 // exec.js becomes a thin DOM wrapper calling these functions.
 
-import { isManual as _isManual, isNorun as _isNorun } from './dag-core.js';
+import { isManual as _isManual, isNorun as _isNorun, rewriteShellCell } from './dag-core.js';
 
 // ── ERROR LINE EXTRACTION ──
 // AsyncFunction wraps cell code with a header (function signature + blank line +
@@ -63,9 +63,10 @@ export function compileCellCode(code, scopeKeys, defineNames, cellId, cellName) 
   const slug = cellName
     ? '-' + cellName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')
     : '';
+  const body = rewriteShellCell(code) || code;
   return new AF(
     ...scopeKeys, ...INJECTED_NAMES,
-    `"use strict";\n${code}\n\nreturn { ${defineNames} };\n` +
+    `"use strict";\n${body}\n\nreturn { ${defineNames} };\n` +
     `//# sourceURL=auditable://cell-${cellId}${slug}.js`
   );
 }

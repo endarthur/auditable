@@ -100,8 +100,8 @@ export function createCellContext(cell) {
   // Workshop overlay (singleton DOM, persisted page state via cell._inputs)
   const workshop = makeWorkshop(cell, ctx);
 
-  // Notebook API — programmatic notebook control
-  const notebook = makeNotebookApi(runDAG);
+  // Notebook API — programmatic notebook control (fs, shell, cells, …)
+  const notebook = makeNotebookApi(cell, ctx, runDAG);
 
   // Modal dialogs — confirm/prompt/alert + custom render. Auto-dismiss
   // open dialogs on cell invalidation unless { persistent: true }.

@@ -276,6 +276,12 @@ const mountTeardown = await page.evaluate(async () => {
 // back through the Works Host.
 const nbOpen = await page.evaluate(async () => {
   const W = window.WKS;
+  // Re-mount the OPFS folder so the notebook surface's Shell.ListMounts
+  // boot path sees a /mnt entry. (The earlier mountTeardown block
+  // intentionally unmounted it to verify Unmount; we restore for this test.)
+  const opfsRoot = await navigator.storage.getDirectory();
+  const dir = await opfsRoot.getDirectoryHandle('smoke-mount');
+  await W.mountHandle(dir, 'smoke-mount');
   await W.vfs.mkdir('/projects/SmokeNB', { recursive: true });
   await W.vfs.writeFile('/projects/SmokeNB/project.json',
     JSON.stringify({ kind: 'notebook', id: 'nb-smoke', title: 'Smoke NB' }));
@@ -313,6 +319,85 @@ if (nbFrame) {
       hasAbus:  !!m['@gcu/abus'],
       xtermBuiltinFlag: !!(m['@gcu/xterm'] && m['@gcu/xterm'].builtin),
     };
+  });
+}
+
+// Notebook surface mirrors shell-side /mnt mounts through the A-Bus proxy
+// so workspace-absolute reads (notebook.fs.readFile('/mnt/.../x')) resolve
+// even when the surface's `/` is a delegated direct-I/O backend that
+// wouldn't otherwise see the shell's mount overlays.
+let nbMirroredMount = null;
+let nbLiveMount = null;
+if (nbFrame) {
+  // Boot-time mirror — Shell.ListMounts at provideVFS() seeds /mnt/<name>.
+  nbMirroredMount = await nbFrame.evaluate(async () => {
+    let mountContent = null;
+    try { mountContent = await window._notebookVFS.readFile('/mnt/smoke-mount/hello.txt', 'utf8'); }
+    catch { /* */ }
+    return {
+      hasMirror: window._notebookVFS._mounts.has('/mnt/smoke-mount'),
+      mountContent,
+    };
+  });
+
+  // Live-signal path — mount after the surface is up, surface auto-mirrors
+  // via Shell.MountChanged.
+  await page.evaluate(async () => {
+    const W = window.WKS;
+    const opfsRoot = await navigator.storage.getDirectory();
+    const dir = await opfsRoot.getDirectoryHandle('smoke-mount-live', { create: true });
+    const fh = await dir.getFileHandle('live.txt', { create: true });
+    const w = await fh.createWritable();
+    await w.write('live'); await w.close();
+    await W.mountHandle(dir, 'smoke-mount-live');
+  });
+  await page.waitForTimeout(200);   // signal hop + mirror mount + AbusBackend init
+  nbLiveMount = await nbFrame.evaluate(async () => {
+    let content = null;
+    try { content = await window._notebookVFS.readFile('/mnt/smoke-mount-live/live.txt', 'utf8'); }
+    catch { /* */ }
+    return {
+      hasMirror: window._notebookVFS._mounts.has('/mnt/smoke-mount-live'),
+      content,
+    };
+  });
+}
+
+// Shell cells (`!cmd` → notebook.shell + display). Opens a dedicated
+// notebook with a `!`-cell that autorun-on-load fires, then reaches into
+// the surface iframe and reads the cell's output area. Exercises the
+// full Geas + @gcu/proc stack from inside a notebook surface in Works.
+const nbShellTab = await page.evaluate(async () => {
+  const W = window.WKS;
+  await W.vfs.mkdir('/projects/SmokeShell', { recursive: true });
+  await W.vfs.writeFile('/projects/SmokeShell/project.json',
+    JSON.stringify({ kind: 'notebook', id: 'nb-smokeshell', title: 'Smoke Shell' }));
+  await W.vfs.writeFile('/projects/SmokeShell/notebook.txt',
+    '/// auditable\n/// title: Smoke Shell\n/// runOnLoad: yes\n\n/// code\n!echo hi from geas\necho second line\n');
+  const tabId = await W.openPath('/projects/SmokeShell');
+  const rec = W.surfaces.get(tabId);
+  const deadline = Date.now() + 25000;
+  while (rec && !rec.ready && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return rec ? { tabId, ready: rec.ready } : { ready: false };
+});
+
+const nbShellFrame = nbShellTab.ready ? await surfaceFrame(nbShellTab.tabId) : null;
+let nbShellOutput = null;
+if (nbShellFrame) {
+  nbShellOutput = await nbShellFrame.evaluate(async () => {
+    // Autorun fires the !-cell during boot. Poll the cell's output area
+    // for up to 10s (geas worker spawn + exec).
+    const deadline = Date.now() + 10000;
+    let out = '';
+    while (Date.now() < deadline) {
+      const cell = window.S?.cells?.find((c) => c.type === 'code');
+      out = (cell && cell.el?.querySelector('.cell-output')?.textContent) || '';
+      if (out.includes('hi from geas')) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return { out };
   });
 }
 
@@ -732,6 +817,15 @@ const checks = {
       && nbBuiltins.hasXterm && nbBuiltins.hasGeas
       && nbBuiltins.hasVfs && nbBuiltins.hasAbus,
   'builtin flag preserved':           nbBuiltins && nbBuiltins.xtermBuiltinFlag,
+  // Shell-side /mnt mounts mirror into the notebook surface VFS
+  'notebook mirrors /mnt mount (boot)':   nbMirroredMount && nbMirroredMount.hasMirror,
+  'notebook reads through proxy':         nbMirroredMount && nbMirroredMount.mountContent === 'from disk',
+  'notebook mirrors /mnt mount (signal)': nbLiveMount && nbLiveMount.hasMirror,
+  'notebook reads new mount via signal':  nbLiveMount && nbLiveMount.content === 'live',
+  // !cmd cell → notebook.shell → geas worker → captured stdout
+  'shell cell prints stdout':             nbShellOutput && nbShellOutput.out
+                                            && nbShellOutput.out.includes('hi from geas')
+                                            && nbShellOutput.out.includes('second line'),
   // Import notebook (.txt + .html, current + legacy formats)
   'import .txt creates a notebook project': importResult.txtPath === '/projects/Imported TXT'
       && importResult.txtKind === 'notebook' && importResult.txtTitle === 'Imported TXT',
