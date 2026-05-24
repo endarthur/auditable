@@ -1,8 +1,8 @@
 /// auditable
 /// title: line — TypedArray-based numerical library
 /// module: @gcu/adder ext/adder/index.js
-/// module: ./ext/line/index.js ext/line/index.js
-/// module: ./ext/line/adder.js ext/line/adder.js
+/// module: @gcu/line ext/line/index.js
+/// module: @gcu/line/adder ext/line/adder.js
 
 /// md
 # `@gcu/line`
@@ -15,9 +15,9 @@ This notebook shows line in both **JS cells** (direct API) and **adder cells** (
 
 /// code collapsed
 // %collapsed
-const line = await load("./ext/line/index.js")
+const line = await load("@gcu/line")
 await load("@gcu/adder")
-await load("./ext/line/adder.js")
+await load("@gcu/line/adder")
 
 /// md
 ## creation

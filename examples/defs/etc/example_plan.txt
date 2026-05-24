@@ -1,7 +1,7 @@
 /// auditable
 /// title: @plan — project scheduling
 /// settings: {"theme":"dark","fontSize":13,"width":"860","editorView":"yes"}
-/// module: @plan ext/plan/index.js
+/// module: @gcu/plan ext/plan/index.js
 
 /// md
 # @plan — project scheduling
@@ -14,7 +14,7 @@ a forward/backward pass to find the critical path and float. Monte Carlo
 simulation samples PERT distributions to produce completion date probabilities.
 
 /// code collapsed
-const plan = await load("@plan");
+const plan = await load("@gcu/plan");
 
 /// md
 ## define a project

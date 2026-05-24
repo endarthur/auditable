@@ -1,7 +1,7 @@
 /// auditable
 /// title: @plan — .plan files
 /// settings: {"theme":"dark","fontSize":13,"width":"860","editorView":"yes"}
-/// module: @plan ext/plan/index.js
+/// module: @gcu/plan ext/plan/index.js
 
 /// md
 # @plan — working with .plan files
@@ -10,7 +10,7 @@ Load, analyze, modify, and save `.plan` project files directly from a notebook.
 The same format used by the standalone Plan tool — edit in either interface.
 
 /// code collapsed
-const plan = await load("@plan");
+const plan = await load("@gcu/plan");
 
 /// md
 ## sample project (inline)

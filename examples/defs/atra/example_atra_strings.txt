@@ -1,6 +1,6 @@
 /// auditable
 /// title: atra — character literals & data segments
-/// module: ./ext/atra/index.js ext/atra/index.js
+/// module: @gcu/atra ext/atra/index.js
 
 /// md
 # atra — character literals & data segments
@@ -8,7 +8,7 @@
 atra supports **character literals** (`'A'`, `'\n'`) and **data segments** (`data ptr, len = "text"`). character literals desugar to i32 constants at the lexer level. data segments place UTF-8 bytes into linear memory at compile time and bind two compile-time constants (pointer and length).
 
 /// code
-const { atra } = await load("./ext/atra/index.js");
+const { atra } = await load("@gcu/atra");
 
 /// code
 const mem = new WebAssembly.Memory({ initial: 1 });

@@ -1,8 +1,8 @@
 /// auditable
 /// title: natra — ndarray for the browser
-/// module: ./ext/atra/index.js ext/atra/index.js
+/// module: @gcu/atra ext/atra/index.js
 /// module: ./ext/atra/lib/alpack.src.js ext/atra/lib/alpack.src.js
-/// module: ./ext/natra/index.js ext/natra/index.js
+/// module: @gcu/natra ext/natra/index.js
 
 /// md
 # natra — ndarray for the browser
@@ -10,7 +10,7 @@
 bump-allocated f64 arrays over shared WebAssembly.Memory. atra compiles numerical kernels to Wasm at context creation; all elementwise ops and reductions run in compiled code. JS manages shape metadata and a scope/arena memory model.
 
 /// code collapsed
-const { natra } = await load("./ext/natra/index.js");
+const { natra } = await load("@gcu/natra");
 const ctx = await natra({ pages: 16 });
 
 /// md

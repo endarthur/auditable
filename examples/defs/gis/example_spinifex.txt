@@ -1,7 +1,7 @@
 /// auditable
 /// title: web GIS
 /// settings: {"theme":"dark","fontSize":13,"width":"860","editorView":"yes"}
-/// module: ./ext/spinifex/index.js ext/spinifex/index.js
+/// module: @gcu/spinifex ext/spinifex/index.js
 
 /// md
 # web GIS with spinifex
@@ -11,7 +11,7 @@ interactive map with **SRTM elevation data**, drawing tools, and elevation profi
 this example loads a single SRTM tile over the **Quadrilátero Ferrífero** (Iron Quadrangle) in Minas Gerais, Brazil.
 
 /// code
-const { spx } = await load("./ext/spinifex/index.js");
+const { spx } = await load("@gcu/spinifex");
 
 /// html
 <div id="map" style="width:100%;height:500px"></div>

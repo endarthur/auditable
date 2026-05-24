@@ -15,25 +15,35 @@ page.on('console', (msg) => {
 await page.goto(pathToFileURL(join(root, 'works-all.html')).href);
 await page.waitForFunction(() => window.WKS && window.WKS.vfs, { timeout: 10000 });
 
-// Verify /usr/lib/@gcu/<name>/source exists for a sampling of libs.
+// Verify /usr/lib/@gcu/<name>/source exists for a sampling of libs,
+// plus /usr/lib/@atra/<name>/source for the atra libraries.
 const libCheck = await page.evaluate(async () => {
-  const libs = ['adder', 'spinifex', 'learn', 'line', 'scitra'];
+  const paths = [
+    ['adder',     '/usr/lib/@gcu/adder/source'],
+    ['spinifex',  '/usr/lib/@gcu/spinifex/source'],
+    ['learn',     '/usr/lib/@gcu/learn/source'],
+    ['line',      '/usr/lib/@gcu/line/source'],
+    ['scitra',    '/usr/lib/@gcu/scitra/source'],
+    ['@atra/alpack', '/usr/lib/@atra/alpack/source'],
+    ['@atra/gslib',  '/usr/lib/@atra/gslib/source'],
+    ['@atra/raster', '/usr/lib/@atra/raster/source'],
+  ];
   const results = {};
-  for (const name of libs) {
-    const path = `/usr/lib/@gcu/${name}/source`;
+  for (const [label, path] of paths) {
     try {
       const src = await window.WKS.vfs.readFile(path, 'utf8');
-      results[name] = src.length;
+      results[label] = src.length;
     } catch (e) {
-      results[name] = 'MISSING: ' + (e.message || e);
+      results[label] = 'MISSING: ' + (e.message || e);
     }
   }
   return results;
 });
 
 console.log('Lib unpack check:');
-for (const [name, len] of Object.entries(libCheck)) {
-  console.log(`  /usr/lib/@gcu/${name}/source — ${typeof len === 'number' ? (len/1024).toFixed(1) + ' KB' : len}`);
+for (const [label, len] of Object.entries(libCheck)) {
+  const path = label.startsWith('@') ? `/usr/lib/${label}/source` : `/usr/lib/@gcu/${label}/source`;
+  console.log(`  ${path} — ${typeof len === 'number' ? (len/1024).toFixed(1) + ' KB' : len}`);
 }
 
 // Verify examples bundle unpacks.

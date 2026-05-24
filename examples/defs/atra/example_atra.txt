@@ -1,6 +1,6 @@
 /// auditable
 /// title: atra — Wasm kernels
-/// module: ./ext/atra/index.js ext/atra/index.js
+/// module: @gcu/atra ext/atra/index.js
 
 /// md
 # atra — WebAssembly numerical kernels
@@ -10,7 +10,7 @@
 this notebook computes three **variogram models** (spherical, gaussian, exponential) and uses `call_indirect` to pass the selected model as a function reference to a grid evaluator — the hot loop runs entirely in Wasm, calling the chosen model through a function pointer.
 
 /// code
-const { atra } = await load("./ext/atra/index.js");
+const { atra } = await load("@gcu/atra");
 
 /// code
 // three variogram models + indirect-call grid evaluator

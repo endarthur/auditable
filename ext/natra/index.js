@@ -5,7 +5,7 @@
 // Blob URLs have no base path, so relative `import` fails inside embedded notebooks.
 // See CLAUDE.md "inter-module imports in embedded/blob context" for the longer story.
 let _atra;
-const ATRA_KEYS = ['./ext/atra/index.js', '@atra', '../atra/index.js'];
+const ATRA_KEYS = ['@gcu/atra', './ext/atra/index.js', '@atra', '../atra/index.js'];
 async function getAtra() {
   if (_atra) return _atra;
   if (typeof window !== 'undefined') {
@@ -45,7 +45,7 @@ async function getAtra() {
 
 // Resolve alpack source distribution (same resolution pattern as atra)
 let _alpackAll;
-const ALPACK_KEYS = ['./ext/atra/lib/alpack.src.js', '../atra/lib/alpack.src.js'];
+const ALPACK_KEYS = ['@atra/alpack', './ext/atra/lib/alpack.src.js', '../atra/lib/alpack.src.js'];
 async function getAlpackAll() {
   if (_alpackAll) return _alpackAll;
   if (typeof window !== 'undefined') {

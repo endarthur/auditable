@@ -1,7 +1,7 @@
 /// auditable
 /// title: @plan — project analysis
 /// settings: {"theme":"dark","fontSize":13,"width":"860","editorView":"yes"}
-/// module: @plan ext/plan/index.js
+/// module: @gcu/plan ext/plan/index.js
 
 /// md
 # @plan — project analysis
@@ -10,7 +10,7 @@ Schedule analysis, resource risk, what-if scenarios, sensitivity, burndown,
 and project health — built on top of the scheduling and Monte Carlo engines.
 
 /// code collapsed
-const plan = await load("@plan");
+const plan = await load("@gcu/plan");
 
 /// md
 ## project setup

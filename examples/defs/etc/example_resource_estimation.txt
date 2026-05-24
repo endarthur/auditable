@@ -1,7 +1,7 @@
 /// auditable
 /// title: resource estimation — 3 deposits
 /// settings: {"theme":"dark","fontSize":13,"width":"960","editorView":"yes"}
-/// module: @plan ext/plan/index.js
+/// module: @gcu/plan ext/plan/index.js
 
 /// md
 # resource estimation — 3 deposits
@@ -15,7 +15,7 @@ Schedule and risk analysis for three deposits with staggered deadlines.
 | C | 2026-06-30 | High (greenfield) |
 
 /// code collapsed
-const plan = await load("@plan");
+const plan = await load("@gcu/plan");
 const fmt = d => d.toISOString().slice(0, 10);
 
 /// md

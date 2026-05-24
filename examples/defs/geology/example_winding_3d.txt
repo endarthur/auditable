@@ -1,7 +1,7 @@
 /// auditable
 /// title: winding number — 3D block model (three.js)
 /// settings: {"theme":"dark","fontSize":13,"width":"860","editorView":"yes"}
-/// module: ./ext/winding/index.js ext/winding/index.js
+/// module: @gcu/winding ext/winding/index.js
 
 /// md
 # generalized winding number — 3D view
@@ -68,7 +68,7 @@ function planeMesh(x0, y0, x1, y1, z, angle) {
 
 const THREE = await load("https://esm.sh/three@0.170.0");
 const { OrbitControls } = await load("https://esm.sh/three@0.170.0/examples/jsm/controls/OrbitControls.js");
-const { Winding } = await load("./ext/winding/index.js");
+const { Winding } = await load("@gcu/winding");
 
 // state
 const meshNames = ["sphere (r=2)", "box (2×2×2)", "tilted plane (30°)"];

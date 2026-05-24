@@ -1,6 +1,6 @@
 /// auditable
 /// title: spreadsheet IO
-/// module: ./ext/sheet/index.js ext/sheet/index.js
+/// module: @gcu/sheet ext/sheet/index.js
 
 /// md
 # spreadsheet IO
@@ -10,7 +10,7 @@ read and write **xlsx** files directly in the browser — no server, no dependen
 write a workbook with values and formulas, read it back to verify, and download the result. open the downloaded file in Excel or Google Sheets to see live formulas.
 
 /// code
-const { sheet } = await load("./ext/sheet/index.js");
+const { sheet } = await load("@gcu/sheet");
 
 /// code
 // build a dataset with computed columns

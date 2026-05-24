@@ -1,7 +1,7 @@
 /// auditable
 /// title: calque — advanced features
-/// module: ./ext/calque/index.js ext/calque/index.js
-/// module: ./ext/sheet/index.js ext/sheet/index.js
+/// module: @gcu/calque ext/calque/index.js
+/// module: @gcu/sheet ext/sheet/index.js
 
 /// md
 # calque — advanced features
@@ -9,8 +9,8 @@
 sort, unique, rolling windows, lookup, import, template strings, nested reductions, and date/math functions.
 
 /// code
-const { calque } = await load("./ext/calque/index.js");
-const { sheet } = await load("./ext/sheet/index.js");
+const { calque } = await load("@gcu/calque");
+const { sheet } = await load("@gcu/sheet");
 
 /// md
 ## import

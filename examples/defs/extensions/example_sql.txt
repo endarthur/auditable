@@ -1,6 +1,6 @@
 /// auditable
 /// title: SQL notebook
-/// module: ./ext/sql/index.js ext/sql/index.js
+/// module: @gcu/sql ext/sql/index.js
 
 /// code collapsed
 // %collapsed
@@ -66,7 +66,7 @@ SQLite running entirely in the browser via **sql.js** (WebAssembly). the `sql` l
 create tables, insert data, and query it — all reactive. change the filter and downstream cells re-run.
 
 /// code
-const { sql } = await load("./ext/sql/index.js");
+const { sql } = await load("@gcu/sql");
 const wasmUrl = await installBinary("https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.12.0/sql-wasm.wasm");
 const wasmBinary = new Uint8Array(await fetch(wasmUrl).then(r => r.arrayBuffer()));
 const initSqlJs = await load("https://esm.sh/sql.js@1.12.0");

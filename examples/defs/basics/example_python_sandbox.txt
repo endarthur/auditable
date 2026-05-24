@@ -2,19 +2,19 @@
 /// title: Python sandbox — drop your .ipynb here
 /// settings: {"execMode":"manual"}
 /// module: @gcu/adder ext/adder/index.js
-/// module: ./ext/atra/index.js ext/atra/index.js
+/// module: @gcu/atra ext/atra/index.js
 /// module: ./ext/atra/lib/alpack.src.js ext/atra/lib/alpack.src.js
-/// module: ./ext/natra/index.js ext/natra/index.js
-/// module: ./ext/natra/adder.js ext/natra/adder.js
+/// module: @gcu/natra ext/natra/index.js
+/// module: @gcu/natra/adder ext/natra/adder.js
 /// module: @gcu/sadpan ext/sadpan/index.js
 /// module: @gcu/plot ext/plot/index.js
 /// module: @gcu/line ext/line/index.js
 /// module: @gcu/mimic-io ext/mimic-io/index.js
 /// module: @gcu/scitra ext/scitra/index.js
-/// module: ./ext/scitra/adder.js ext/scitra/adder.js
+/// module: @gcu/scitra/adder ext/scitra/adder.js
 /// module: @gcu/learn ext/learn/index.js
-/// module: ./ext/learn/adder.js ext/learn/adder.js
-/// module: ./ext/ipython-adapter/adder.js ext/ipython-adapter/adder.js
+/// module: @gcu/learn/adder ext/learn/adder.js
+/// module: @gcu/ipython-adapter/adder ext/ipython-adapter/adder.js
 
 /// md
 # Python sandbox
@@ -37,17 +37,17 @@ This notebook ships in **manual execution mode** (cells only run on Ctrl+Enter o
 /// code collapsed
 // %collapsed
 await load("@gcu/adder")
-await load("./ext/natra/index.js")
-await load("./ext/natra/adder.js")
+await load("@gcu/natra")
+await load("@gcu/natra/adder")
 await load("@gcu/sadpan")
 await load("@gcu/plot")
 await load("@gcu/line")
 await load("@gcu/mimic-io")
 await load("@gcu/scitra")
-await load("./ext/scitra/adder.js")
+await load("@gcu/scitra/adder")
 await load("@gcu/learn")
-await load("./ext/learn/adder.js")
-await load("./ext/ipython-adapter/adder.js")
+await load("@gcu/learn/adder")
+await load("@gcu/ipython-adapter/adder")
 
 /// md
 ## smoke test — verify each library loaded

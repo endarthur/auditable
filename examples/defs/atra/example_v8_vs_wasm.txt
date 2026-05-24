@@ -1,8 +1,8 @@
 /// auditable
 /// title: V8 JS vs Wasm SIMD — BLAS-1
-/// module: ./ext/atra/index.js ext/atra/index.js
+/// module: @gcu/atra ext/atra/index.js
 /// module: ./ext/atra/lib/alpack.src.js ext/atra/lib/alpack.src.js
-/// module: ./ext/natra/index.js ext/natra/index.js
+/// module: @gcu/natra ext/natra/index.js
 
 /// md
 # V8 JS vs Wasm SIMD — BLAS-1
@@ -16,7 +16,7 @@ This notebook re-runs the comparison in the browser to verify auditable's runtim
 > **Caveats:** browser perf is sensitive to background load, devtools attached, throttling, etc. Close other tabs and run a few times to get stable numbers. The node bench (run from a clean shell, no devtools) shows the cleanest separation — these in-browser numbers should be in the same ballpark.
 
 /// code collapsed
-const { natra } = await load("./ext/natra/index.js");
+const { natra } = await load("@gcu/natra");
 const nat = await natra({ pages: 1024 });
 ui.display("natra ready");
 

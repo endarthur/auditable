@@ -1,7 +1,7 @@
 /// auditable
 /// title: iso 9660
 /// settings: {"theme":"dark","fontSize":13,"width":"860","editorView":"yes"}
-/// module: ./ext/iso9660/index.js ext/iso9660/index.js
+/// module: @gcu/iso9660 ext/iso9660/index.js
 
 /// md
 # iso 9660
@@ -45,7 +45,7 @@ create ISO 9660 disc images in the browser — no server, no dependencies. add t
 
 /// code collapsed
 // %manual
-const { ISOWriter } = await load("./ext/iso9660/index.js");
+const { ISOWriter } = await load("@gcu/iso9660");
 
 // state
 const files = [];

@@ -1,6 +1,6 @@
 /// auditable
 /// title: atra + ALPACK — all-Wasm interpolation
-/// module: ./ext/atra/index.js ext/atra/index.js
+/// module: @gcu/atra ext/atra/index.js
 /// module: ./ext/atra/lib/alpack.src.js ext/atra/lib/alpack.src.js
 
 /// md
@@ -11,7 +11,7 @@ atra functions call each other with zero overhead — they compile to Wasm `call
 the key pattern: `rbf.solve` calls `alpack.dgetrf` and `alpack.dgetrs`. library routines are just regular functions in the same compilation unit — no FFI, no glue code, no overhead. `std.include()` resolves dependencies and `${}` splices the source in at compile time.
 
 /// code
-const { atra } = await load("./ext/atra/index.js");
+const { atra } = await load("@gcu/atra");
 const alpack = await load("./ext/atra/lib/alpack.src.js");
 
 const nPts = ui.slider("samples", 25, {min: 5, max: 60, step: 1});

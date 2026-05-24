@@ -1,7 +1,7 @@
 /// auditable
 /// title: calque — spreadsheet language
-/// module: ./ext/calque/index.js ext/calque/index.js
-/// module: ./ext/sheet/index.js ext/sheet/index.js
+/// module: @gcu/calque ext/calque/index.js
+/// module: @gcu/sheet ext/sheet/index.js
 
 /// md
 # calque — spreadsheet language
@@ -9,8 +9,8 @@
 a minimal, array-oriented language for spreadsheet computations. calque expressions compile 1:1 to xlsx formulas. this example shows the full pipeline: evaluate, display with `calque.grid()`, and export to xlsx via `sheet.write()`.
 
 /// code
-const { calque } = await load("./ext/calque/index.js");
-const { sheet } = await load("./ext/sheet/index.js");
+const { calque } = await load("@gcu/calque");
+const { sheet } = await load("@gcu/sheet");
 
 /// md
 ## sheet blocks and cross-references

@@ -198,8 +198,31 @@ if (target === 'works' || target === 'works-all') {
     return [...SHARED_LIBS_BASE, ...extra];
   }
   const SHARED_LIBS = isWorksAll ? _allExtBundles() : SHARED_LIBS_BASE;
+
+  // works-all also bundles the atra libraries (pre-compiled JS+Wasm
+  // distributions) under /usr/lib/@atra/<name>/. These are what
+  // `load('@atra/alpack')` resolves to (vs the .src.js source-form
+  // exports that load('./ext/atra/lib/<name>.src.js') returns).
+  function _allAtraLibs() {
+    if (!isWorksAll) return [];
+    const libDir = path.join(__dirname, 'ext', 'atra', 'lib');
+    if (!fs.existsSync(libDir)) return [];
+    const out = [];
+    for (const f of fs.readdirSync(libDir).sort()) {
+      // Bundled distribution (alpack.js, gslib.js, raster.js); skip the
+      // .src.js source-form variants and .atra source.
+      if (!f.endsWith('.js') || f.endsWith('.src.js')) continue;
+      const name = f.slice(0, -'.js'.length);
+      out.push({ name, file: path.join(libDir, f) });
+    }
+    return out;
+  }
+  const ATRA_LIBS = _allAtraLibs();
   if (isWorksAll) {
     console.log(`works-all: bundling ${SHARED_LIBS.length} libraries (${SHARED_LIBS.join(', ')})`);
+    if (ATRA_LIBS.length) {
+      console.log(`works-all: bundling ${ATRA_LIBS.length} atra libs (${ATRA_LIBS.map(l => '@atra/' + l.name).join(', ')})`);
+    }
   }
 
   // markdown comes from src/js/ rather than ext/<name>/index.js — same
@@ -268,6 +291,15 @@ if (target === 'works' || target === 'works-all') {
       const gz = worksZlib.gzipSync(Buffer.from(src, 'utf8'));
       const b64 = gz.toString('base64').replace(/.{1,76}/g, '$&\n');
       parts.push(`<script type="text/plain" id="lib-${name}">\n${b64}\n</script>`);
+    }
+    // Atra libraries — separate id namespace (atralib-) so the shell
+    // can route them to /usr/lib/@atra/<name>/ rather than the default
+    // /usr/lib/@gcu/<name>/ that the lib- prefix implies.
+    for (const lib of ATRA_LIBS) {
+      const src = fs.readFileSync(lib.file, 'utf8');
+      const gz = worksZlib.gzipSync(Buffer.from(src, 'utf8'));
+      const b64 = gz.toString('base64').replace(/.{1,76}/g, '$&\n');
+      parts.push(`<script type="text/plain" id="atralib-${lib.name}">\n${b64}\n</script>`);
     }
     return parts.join('\n');
   }
@@ -393,11 +425,20 @@ if (target === 'works' || target === 'works-all') {
       .replace(/(load|install|installBinary)\((['"`])@plan\2\)/g,
                '$1($2@gcu/plan$2)');
 
-    // Detect remaining unresolvable references.
+    // Detect remaining unresolvable references. @atra/* IS resolvable in
+    // works-all (we bundle the libraries under /usr/lib/@atra/), so it's
+    // not flagged. @demo/* (per-example data) and the .src.js variants of
+    // atra libraries (different export shape from @atra/*) stay flagged.
     const unresolvable = new Set();
-    for (const m of out.matchAll(/@atra\/[\w-]+/g)) unresolvable.add(m[0]);
     for (const m of out.matchAll(/@demo\/[\w-]+/g)) unresolvable.add(m[0]);
-    for (const m of out.matchAll(/\.\/ext\/[\w-]+/g)) unresolvable.add(m[0]);
+    for (const m of out.matchAll(/\.\/ext\/atra\/lib\/[\w-]+\.src\.js/g)) {
+      unresolvable.add(m[0]);
+    }
+    // Leftover ./ext/* refs not caught by the rewrite (multi-segment
+    // paths). Skip atra/lib (handled separately above).
+    for (const m of out.matchAll(/\.\/ext\/(?!atra\/lib)[\w-]+(?:\/[\w-]+)*/g)) {
+      unresolvable.add(m[0]);
+    }
 
     return { source: out, unresolvable: [...unresolvable] };
   }

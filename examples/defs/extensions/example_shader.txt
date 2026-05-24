@@ -1,6 +1,6 @@
 /// auditable
 /// title: shader playground
-/// module: ./ext/shader/index.js ext/shader/index.js
+/// module: @gcu/shader ext/shader/index.js
 
 /// code collapsed
 // %collapsed
@@ -63,7 +63,7 @@ the sliders use `onInput` callbacks to update custom uniforms in real time, with
 
 /// code
 // %manual
-const { shader, glsl } = await load("./ext/shader/index.js");
+const { shader, glsl } = await load("@gcu/shader");
 
 const c = ui.canvas(600, 400);
 const col = [0.78, 0.61, 0.24];

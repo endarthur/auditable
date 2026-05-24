@@ -8,6 +8,7 @@
 const KINDS = new Map();          // kind → { label, icon, extensions }
 const _surfaceBlobs = new Map();  // kind → blob URL (decompressed once)
 const _libSources = new Map();    // lib name → raw bundle source (string)
+const _atraLibSources = new Map();   // atra-lib name → raw .src.js source
 
 export function registerKind(kind, def) {
   KINDS.set(kind, {
@@ -49,6 +50,11 @@ export async function decompressLibs() {
     const name = el.id.slice('lib-'.length);
     _libSources.set(name, await _decompressEl(el));
   }
+  // works-all only: atra libraries under a separate prefix.
+  for (const el of document.querySelectorAll('script[type="text/plain"][id^="atralib-"]')) {
+    const name = el.id.slice('atralib-'.length);
+    _atraLibSources.set(name, await _decompressEl(el));
+  }
 }
 
 // Write each shared library into the workspace's /usr/lib as a module
@@ -68,6 +74,20 @@ export async function installSharedLibsToVfs(vfs) {
     await vfs.writeFile(dir + '/source', src);
     await vfs.writeFile(dir + '/meta.json',
       JSON.stringify({ alias, builtin: true, kind: 'gcu-lib' }));
+  }
+  // works-all atra libs at /usr/lib/@atra/<name>/. The notebook runtime's
+  // hydrateModulesFromVfs picks up @atra/* the same way it picks up
+  // @gcu/* (keyToLibPath already handles arbitrary @scope/name).
+  if (_atraLibSources.size > 0) {
+    await vfs.mkdir('/usr/lib/@atra', { recursive: true }).catch(() => {});
+    for (const [name, src] of _atraLibSources) {
+      const alias = '@atra/' + name;
+      const dir = '/usr/lib/@atra/' + name;
+      await vfs.mkdir(dir, { recursive: true }).catch(() => {});
+      await vfs.writeFile(dir + '/source', src);
+      await vfs.writeFile(dir + '/meta.json',
+        JSON.stringify({ alias, builtin: true, kind: 'atra-lib' }));
+    }
   }
 }
 

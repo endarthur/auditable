@@ -1,6 +1,6 @@
 /// auditable
 /// title: @gcu/yaml — strict YAML loader
-/// module: ./ext/yaml/index.js ext/yaml/index.js
+/// module: @gcu/yaml ext/yaml/index.js
 
 /// md
 # @gcu/yaml
@@ -15,7 +15,7 @@ A strict, auditable subset of YAML 1.2 for hand-authored configuration.
 This notebook demonstrates the loader/writer/checker.
 
 /// code
-const yaml = await load("./ext/yaml/index.js");
+const yaml = await load("@gcu/yaml");
 const { parse, emit, check, format, YamlParseError } = yaml;
 ui.display("loaded: " + Object.keys(yaml).join(", "));
 

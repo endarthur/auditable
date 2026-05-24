@@ -1,6 +1,6 @@
 /// auditable
 /// title: atra multi-memory — columnar block model
-/// module: ./ext/atra/index.js ext/atra/index.js
+/// module: @gcu/atra ext/atra/index.js
 
 /// md
 # atra multi-memory — columnar block model
@@ -10,7 +10,7 @@ WebAssembly's single linear memory caps at 4 GB (i32 addressing). large datasets
 this notebook uses separate memory banks for spatial coordinates, grade values, and scratch space — a natural columnar layout for geostatistical data.
 
 /// code
-const { atra } = await load("./ext/atra/index.js");
+const { atra } = await load("@gcu/atra");
 
 /// code
 const N = ui.slider("blocks", 5000, {min: 1000, max: 50000, step: 1000});

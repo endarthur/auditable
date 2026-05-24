@@ -1,6 +1,6 @@
 /// auditable
 /// title: rAF hang repro — verbatim copy of atra_layouts (see ROADMAP)
-/// module: ./ext/atra/index.js ext/atra/index.js
+/// module: @gcu/atra ext/atra/index.js
 
 /// md
 # atra layouts — N-body gravity
@@ -8,7 +8,7 @@
 **layouts** define struct-like memory layouts that both JS and atra agree on. field offsets are computed at compile time — zero Wasm instructions, zero runtime cost. this notebook simulates N-body gravitational attraction using a `Body` layout with position, velocity, and mass fields.
 
 /// code
-const { atra } = await load("./ext/atra/index.js");
+const { atra } = await load("@gcu/atra");
 
 /// code
 const N = ui.slider("bodies", 80, {min: 10, max: 300, step: 5});

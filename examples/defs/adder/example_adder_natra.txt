@@ -1,10 +1,10 @@
 /// auditable
 /// title: adder × natra — numpy for Python cells
 /// module: @gcu/adder ext/adder/index.js
-/// module: ./ext/atra/index.js ext/atra/index.js
+/// module: @gcu/atra ext/atra/index.js
 /// module: ./ext/atra/lib/alpack.src.js ext/atra/lib/alpack.src.js
-/// module: ./ext/natra/index.js ext/natra/index.js
-/// module: ./ext/natra/adder.js ext/natra/adder.js
+/// module: @gcu/natra ext/natra/index.js
+/// module: @gcu/natra/adder ext/natra/adder.js
 
 /// md
 # adder × natra
@@ -14,8 +14,8 @@ Write `import natra as np` in adder cells and get numpy-like syntax — operator
 /// code collapsed
 // %collapsed
 await load("@gcu/adder")
-await load("./ext/natra/index.js")
-await load("./ext/natra/adder.js")
+await load("@gcu/natra")
+await load("@gcu/natra/adder")
 
 /// adder
 import natra as np

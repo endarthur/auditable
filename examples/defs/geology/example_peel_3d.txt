@@ -1,7 +1,7 @@
 /// auditable
 /// title: depth peeling — 3D block model (three.js)
 /// settings: {"theme":"dark","fontSize":13,"width":"860","editorView":"yes"}
-/// module: ./ext/peel/index.js ext/peel/index.js
+/// module: @gcu/peel ext/peel/index.js
 
 /// md
 # depth peeling — 3D view
@@ -70,7 +70,7 @@ function planeMesh(x0, y0, x1, y1, z, angle) {
 
 const THREE = await load("https://esm.sh/three@0.170.0");
 const { OrbitControls } = await load("https://esm.sh/three@0.170.0/examples/jsm/controls/OrbitControls.js");
-const { Peel } = await load("./ext/peel/index.js");
+const { Peel } = await load("@gcu/peel");
 
 // state
 const meshNames = ["sphere (r=2)", "box (2×2×2)", "tilted plane (30°)"];

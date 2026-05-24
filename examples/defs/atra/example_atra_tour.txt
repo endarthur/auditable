@@ -1,6 +1,6 @@
 /// auditable
 /// title: atra — language tour
-/// module: ./ext/atra/index.js ext/atra/index.js
+/// module: @gcu/atra ext/atra/index.js
 
 /// md
 # atra language tour — Newton fractal
@@ -8,7 +8,7 @@
 a [Newton fractal](https://en.wikipedia.org/wiki/Newton%27s_method) colors each pixel by which root of z³ − 1 = 0 the Newton-Raphson method converges to. three roots in the complex plane, three colors. the algorithm exercises many atra features: **SIMD** (f64x2 for complex numbers), **dotted names**, **tailcall**, **call return()**, **if-expression**, **type conversions**, **arrays**, and **for loops**.
 
 /// code
-const { atra } = await load("./ext/atra/index.js");
+const { atra } = await load("@gcu/atra");
 const maxIter = ui.slider("max iterations", 40, {min: 5, max: 120, step: 1});
 const res = ui.slider("resolution", 200, {min: 50, max: 500, step: 10});
 
