@@ -31,12 +31,68 @@
     letter-spacing: 2px; text-transform: uppercase; }
   header .crumbs { color: #6b7177; font-size: 12px; }
   header .spacer { flex: 1; }
-  header .toggle {
+  header .toggle, header .search-btn {
     background: none; border: 1px solid #2a2e33; border-radius: 3px;
     color: #c8ccd0; cursor: pointer; padding: 2px 8px;
     font: inherit;
   }
-  header .toggle:hover { background: #21262b; }
+  header .toggle:hover, header .search-btn:hover { background: #21262b; }
+  header .search-btn .kbd {
+    color: #6b7177; font-size: 10px; margin-left: 6px;
+  }
+
+  /* Ctrl+K search overlay. */
+  .search-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+    display: none; align-items: flex-start; justify-content: center;
+    padding-top: 60px; z-index: 100;
+  }
+  .search-overlay.open { display: flex; }
+  .search-box {
+    width: min(640px, 90vw); background: #1a1d21;
+    border: 1px solid #2a2e33; border-radius: 6px;
+    box-shadow: 0 12px 48px rgba(0,0,0,0.6);
+    display: flex; flex-direction: column; max-height: 70vh;
+  }
+  .search-input {
+    background: none; border: none; outline: none;
+    color: #e8eaed; font: 14px/1.4 ui-monospace, 'Space Mono', monospace;
+    padding: 14px 16px; border-bottom: 1px solid #2a2e33;
+  }
+  .search-results {
+    overflow: auto; padding: 4px 0;
+  }
+  .search-results .empty {
+    padding: 12px 16px; color: #6b7177; font-style: italic;
+  }
+  .search-hit {
+    padding: 8px 16px; cursor: pointer; border-left: 2px solid transparent;
+  }
+  .search-hit:hover, .search-hit.active {
+    background: #21262b; border-left-color: #d97a3c;
+  }
+  .search-hit .crumb {
+    font-size: 11px; color: #6b7177;
+    font-family: ui-monospace, 'Space Mono', monospace;
+    margin-bottom: 2px;
+  }
+  .search-hit .title {
+    color: #e8eaed; font-size: 13px; font-weight: 500;
+  }
+  .search-hit .snippet {
+    color: #8a9099; font-size: 12px; margin-top: 2px;
+    font-family: ui-monospace, 'Space Mono', monospace;
+  }
+  .search-hit .snippet mark {
+    background: rgba(217, 122, 60, 0.3); color: #ffe080;
+    padding: 0 2px; border-radius: 2px;
+  }
+  .search-suggest {
+    padding: 8px 16px; color: #8a9099; font-size: 12px;
+    border-top: 1px solid #2a2e33;
+  }
+  .search-suggest .term { color: #d97a3c; cursor: pointer; }
+  .search-suggest .term:hover { text-decoration: underline; }
 
   .body { flex: 1; display: flex; min-height: 0; position: relative; }
   .backdrop {
@@ -120,6 +176,117 @@
   .content th { background: #1a1d21; color: #c8ccd0; }
   .empty { color: #6b7177; padding: 8px 16px; font-style: italic; }
   .err { color: #f88; padding: 20px; }
+
+  /* Right-side TOC. */
+  .toc {
+    position: fixed; right: 16px; top: 56px;
+    max-height: calc(100vh - 80px);
+    width: 200px; padding: 8px 0 8px 14px;
+    overflow: auto;
+    font: 11px/1.5 ui-monospace, 'Space Mono', monospace;
+    color: #6b7177;
+    border-left: 1px solid #2a2e33;
+    z-index: 5;
+  }
+  .toc.empty-toc { display: none; }
+  .toc h4 {
+    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: #d97a3c; margin: 0 0 6px; font-weight: 600;
+  }
+  .toc a {
+    display: block; padding: 2px 0 2px 8px;
+    color: #8a9099; text-decoration: none;
+    border-left: 2px solid transparent;
+    margin-left: -10px; padding-left: 8px;
+    transition: color 0.1s, border-color 0.1s;
+  }
+  .toc a:hover { color: #c8ccd0; }
+  .toc a.active { color: #e8eaed; border-left-color: #d97a3c; }
+  .toc a.lvl3 { padding-left: 20px; font-size: 10.5px; color: #6b7177; }
+  .toc a.lvl3.active { color: #c8ccd0; }
+  @media (max-width: 1140px) { .toc { display: none; } }
+
+  /* Heading anchor links — show a § on hover for deep-linking. */
+  .content h1, .content h2, .content h3 { scroll-margin-top: 60px; position: relative; }
+  .content h1 .anchor-link, .content h2 .anchor-link, .content h3 .anchor-link {
+    position: absolute; left: -22px; top: 0; bottom: 0;
+    display: flex; align-items: center;
+    color: #2a2e33; text-decoration: none;
+    opacity: 0; transition: opacity 0.1s, color 0.1s;
+    font-weight: normal; padding: 0 6px;
+  }
+  .content h1:hover .anchor-link, .content h2:hover .anchor-link, .content h3:hover .anchor-link {
+    opacity: 1;
+  }
+  .content .anchor-link:hover { color: #d97a3c !important; }
+
+  /* Sidebar collapsible groups. */
+  .sidebar h3 {
+    cursor: pointer; user-select: none;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .sidebar h3::before {
+    content: '▾'; font-size: 8px; color: #6b7177;
+    transition: transform 0.15s;
+    display: inline-block; width: 8px; text-align: center;
+  }
+  .sidebar h3.collapsed::before { transform: rotate(-90deg); }
+  .sidebar .group-items.hidden { display: none; }
+
+  /* Admonitions (MkDocs Material style). */
+  .content .admonition {
+    border-left: 3px solid #d97a3c;
+    background: #1a1d21;
+    padding: 10px 14px 8px;
+    margin: 16px 0;
+    border-radius: 0 3px 3px 0;
+  }
+  .content .admonition .admonition-title {
+    font-family: ui-monospace, 'Space Mono', monospace;
+    font-weight: 600; color: #d97a3c;
+    margin-bottom: 6px;
+    font-size: 11px; letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+  .content .admonition p:last-child { margin-bottom: 0; }
+  .content .admonition > p:first-of-type { margin-top: 0; }
+  /* Per-type accents. */
+  .content .adm-tip       { border-left-color: #6cc674; }
+  .content .adm-tip       .admonition-title { color: #6cc674; }
+  .content .adm-note      { border-left-color: #7ec8e0; }
+  .content .adm-note      .admonition-title { color: #7ec8e0; }
+  .content .adm-info      { border-left-color: #7ec8e0; }
+  .content .adm-info      .admonition-title { color: #7ec8e0; }
+  .content .adm-warning   { border-left-color: #e8c87c; }
+  .content .adm-warning   .admonition-title { color: #e8c87c; }
+  .content .adm-danger    { border-left-color: #f88c8c; }
+  .content .adm-danger    .admonition-title { color: #f88c8c; }
+  .content .adm-abstract  { border-left-color: #c8a0e8; }
+  .content .adm-abstract  .admonition-title { color: #c8a0e8; }
+
+  /* Keyboard pills (++ctrl+enter++ → <kbd>ctrl</kbd>+<kbd>enter</kbd>). */
+  .content kbd {
+    display: inline-block;
+    background: #21262b; color: #e8eaed;
+    border: 1px solid #2a3038;
+    border-bottom-width: 2px;
+    border-radius: 3px;
+    padding: 0 6px;
+    font-family: ui-monospace, 'Space Mono', monospace;
+    font-size: 11px; line-height: 1.5;
+    vertical-align: baseline;
+    margin: 0 1px;
+  }
+
+  /* Syntax highlighting tokens. */
+  .content .tok-comment  { color: #6a6e74; font-style: italic; }
+  .content .tok-string   { color: #b8e6b8; }
+  .content .tok-number   { color: #e8c87c; }
+  .content .tok-keyword  { color: #7ec8e0; }
+  .content .tok-builtin  { color: #d2c0a3; }
+  .content .tok-tag      { color: #f0a0a0; }
+  .content .tok-attr     { color: #e8c87c; }
+  .content .tok-punct    { color: #8a9099; }
 </style>
 </head>
 <body>
@@ -128,15 +295,28 @@
   <span class="title">Documentation</span>
   <span class="crumbs" id="crumbs"></span>
   <span class="spacer"></span>
+  <button class="search-btn" id="searchBtn" title="Search (Ctrl+K)">
+    Search<span class="kbd">Ctrl+K</span>
+  </button>
 </header>
+
+<div class="search-overlay" id="searchOverlay">
+  <div class="search-box">
+    <input class="search-input" id="searchInput" type="text"
+      placeholder="Search docs…  (Esc to close)" spellcheck="false" autocomplete="off">
+    <div class="search-results" id="searchResults"></div>
+  </div>
+</div>
 <div class="body">
   <div class="backdrop" id="backdrop"></div>
   <div class="sidebar" id="sidebar"></div>
   <div class="content" id="content"></div>
+  <aside class="toc empty-toc" id="toc"></aside>
 </div>
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
-import { renderMd } from '../../src/js/markdown.js';
+import { renderMd, slugify } from '../../src/js/markdown.js';
+import { Librarian } from '../../ext/librarian/index.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -144,18 +324,412 @@ let bus = null;
 let manifest = null;
 const fileCache = new Map();
 let current = null;
+let docsIndex = null;
+let activeHitIdx = 0;
+
+const STATE_PATH = '/home/.works/docs-state.json';
+let _saveTimer = null;
+async function saveState() {
+  if (!current || !bus) return;
+  const state = {
+    current,
+    scrollTop: document.getElementById('content')?.scrollTop || 0,
+    groupStates,
+  };
+  try {
+    await bus.call(
+      { to: 'works', path: '/', interface: 'VFS', member: 'MkDir' }, ['/home/.works']);
+    await bus.call(
+      { to: 'works', path: '/', interface: 'VFS', member: 'Write' },
+      [STATE_PATH, JSON.stringify(state)]);
+  } catch (e) { /* state write failures aren't worth surfacing */ }
+}
+function scheduleSave() {
+  if (_saveTimer) clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(saveState, 500);
+}
+async function readState() {
+  try {
+    const txt = await bus.call(
+      { to: 'works', path: '/', interface: 'VFS', member: 'Read' },
+      [STATE_PATH, 'utf8']);
+    return JSON.parse(txt);
+  } catch { return null; }
+}
+
+// Split a markdown document into heading-anchored sections. Each
+// section becomes an indexable "document" for librarian. Anchors are
+// computed via the renderer's own slugify so search hits jump to a
+// matching `id` in the rendered DOM.
+function splitByHeadings(md, filePath, fileTitle) {
+  const lines = md.split('\n');
+  const sections = [];
+  let cur = { heading: fileTitle, level: 1, anchor: '', body: [] };
+  for (const line of lines) {
+    const m = line.match(/^(#{1,6})\s+(.+?)\s*$/);
+    if (m && m[1].length <= 3) {
+      if (cur.body.length > 0 || cur.heading) sections.push(cur);
+      const heading = m[2].replace(/[*`_]/g, '').trim();
+      cur = { heading, level: m[1].length, anchor: slugify(m[2]), body: [] };
+    } else {
+      cur.body.push(line);
+    }
+  }
+  if (cur.body.length > 0 || cur.heading) sections.push(cur);
+  return sections.map((s, i) => ({
+    id: filePath + (s.anchor ? '#' + s.anchor : ''),
+    file: filePath,
+    anchor: s.anchor,
+    fileTitle,
+    heading: s.heading,
+    title: s.heading,
+    body: s.body.join('\n').trim(),
+  }));
+}
+
+// Build the librarian index from the manifest's docs + extension entries.
+async function buildSearchIndex() {
+  const docs = [];
+  async function readFile(relPath) {
+    try {
+      return await bus.call(
+        { to: 'works', path: '/', interface: 'VFS', member: 'Read' },
+        ['/usr/share/doc/' + relPath, 'utf8']);
+    } catch { return ''; }
+  }
+  function navLabel(file) {
+    function walk(list) {
+      for (const item of list) {
+        if (item.file && 'docs/' + item.file === file) return item.label;
+        if (item.children) { const r = walk(item.children); if (r) return r; }
+      }
+      return null;
+    }
+    return walk(manifest.nav || []) || file.split('/').pop().replace(/\.md$/, '');
+  }
+  // mkdocs nav docs.
+  function collectNav(list, out) {
+    for (const item of list) {
+      if (item.file) out.push('docs/' + item.file);
+      if (item.children) collectNav(item.children, out);
+    }
+  }
+  const navFiles = [];
+  collectNav(manifest.nav || [], navFiles);
+  for (const file of navFiles) {
+    const md = await readFile(file);
+    if (!md) continue;
+    const label = navLabel(file);
+    const sections = splitByHeadings(md, file, label);
+    for (const s of sections) docs.push(s);
+  }
+  // Extension SPECs + READMEs.
+  for (const ext of manifest.extensions || []) {
+    const md = await readFile(ext.file);
+    if (!md) continue;
+    const title = '@gcu/' + ext.pkg + ' ' + ext.kind;
+    const sections = splitByHeadings(md, ext.file, title);
+    for (const s of sections) docs.push(s);
+  }
+
+  docsIndex = Librarian.index({
+    docs,
+    fields: {
+      heading: { boost: 4 },
+      fileTitle: { boost: 2 },
+      body: { boost: 1 },
+    },
+    synonyms: {
+      'vfs': ['filesystem'],
+      'dag': ['reactivity', 'reactive'],
+      'cell': ['block', 'cells'],
+      'mcp': ['agent', 'model-context'],
+    },
+  });
+}
+
+function openSearch() {
+  document.getElementById('searchOverlay').classList.add('open');
+  const input = document.getElementById('searchInput');
+  input.value = '';
+  input.focus();
+  document.getElementById('searchResults').innerHTML = '';
+  activeHitIdx = 0;
+}
+function closeSearch() {
+  document.getElementById('searchOverlay').classList.remove('open');
+}
+
+function renderResults(hits, query) {
+  const box = document.getElementById('searchResults');
+  box.innerHTML = '';
+  if (hits.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'no matches.';
+    box.appendChild(empty);
+    // Did-you-mean suggestion.
+    if (docsIndex && query.trim()) {
+      const sug = Librarian.suggest(docsIndex, query);
+      if (sug && sug !== query.toLowerCase().trim()) {
+        const div = document.createElement('div');
+        div.className = 'search-suggest';
+        const span = document.createElement('span');
+        span.className = 'term';
+        span.textContent = sug;
+        span.addEventListener('click', () => {
+          document.getElementById('searchInput').value = sug;
+          runSearch();
+        });
+        div.appendChild(document.createTextNode('did you mean: '));
+        div.appendChild(span);
+        div.appendChild(document.createTextNode(' ?'));
+        box.appendChild(div);
+      }
+    }
+    return;
+  }
+  hits.forEach((h, i) => {
+    const row = document.createElement('div');
+    row.className = 'search-hit' + (i === activeHitIdx ? ' active' : '');
+    row.dataset.idx = i;
+    const crumb = document.createElement('div');
+    crumb.className = 'crumb';
+    crumb.textContent = h.doc.fileTitle + (h.doc.heading && h.doc.heading !== h.doc.fileTitle
+      ? '  ›  ' + h.doc.heading : '');
+    const title = document.createElement('div');
+    title.className = 'title';
+    title.textContent = h.doc.heading || h.doc.fileTitle;
+    row.appendChild(crumb);
+    row.appendChild(title);
+    if (h.snippet) {
+      const sn = document.createElement('div');
+      sn.className = 'snippet';
+      sn.innerHTML = h.snippet;
+      row.appendChild(sn);
+    }
+    row.addEventListener('click', () => activateHit(h));
+    row.addEventListener('mouseenter', () => {
+      activeHitIdx = i;
+      for (const r of box.querySelectorAll('.search-hit')) r.classList.remove('active');
+      row.classList.add('active');
+    });
+    box.appendChild(row);
+  });
+}
+
+function runSearch() {
+  if (!docsIndex) return;
+  const q = document.getElementById('searchInput').value;
+  if (!q.trim()) {
+    document.getElementById('searchResults').innerHTML = '';
+    return;
+  }
+  const hits = Librarian.search(docsIndex, q, { fuzzy: 1, limit: 20 });
+  activeHitIdx = 0;
+  renderResults(hits, q);
+}
+
+async function activateHit(hit) {
+  closeSearch();
+  await loadFile(hit.doc.file, hit.doc.fileTitle, hit.doc.anchor);
+}
+
+// Scroll to a heading by id (rendered by markdown.js's slug). Flashes
+// the heading in the accent colour briefly so the user can spot it.
+function scrollToAnchor(anchor) {
+  if (!anchor) return false;
+  const h = document.getElementById(anchor);
+  if (!h) return false;
+  h.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  h.style.transition = 'color 0.3s';
+  const prev = h.style.color;
+  h.style.color = '#d97a3c';
+  setTimeout(() => { h.style.color = prev; }, 1200);
+  return true;
+}
 
 function setNavOpen(open) {
   document.body.classList.toggle('nav-open', open);
 }
 
-async function loadFile(relPath, label) {
+// ── Right-side TOC ──────────────────────────────────────────────────
+// Built from h2/h3 in the rendered doc. Active item tracks the
+// topmost heading whose top has crossed the viewport trigger line.
+
+let _tocItems = [];   // [{ id, link, heading }]
+
+function buildToc() {
+  const toc = $('toc');
+  toc.innerHTML = '';
+  _tocItems = [];
+  const headings = $('content').querySelectorAll('h2[id], h3[id]');
+  if (headings.length < 2) {
+    toc.classList.add('empty-toc');
+    return;
+  }
+  toc.classList.remove('empty-toc');
+  const h4 = document.createElement('h4');
+  h4.textContent = 'On this page';
+  toc.appendChild(h4);
+  for (const h of headings) {
+    const a = document.createElement('a');
+    a.href = '#' + h.id;
+    a.textContent = (h.textContent || '').replace(/^§\s*/, '').trim();
+    a.className = h.tagName === 'H3' ? 'lvl3' : 'lvl2';
+    a.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      scrollToAnchor(h.id);
+    });
+    toc.appendChild(a);
+    _tocItems.push({ id: h.id, link: a, heading: h });
+  }
+  updateActiveToc();
+}
+
+function updateActiveToc() {
+  if (_tocItems.length === 0) return;
+  const content = $('content');
+  const threshold = content.getBoundingClientRect().top + 80;
+  let activeIdx = 0;
+  for (let i = 0; i < _tocItems.length; i++) {
+    const rect = _tocItems[i].heading.getBoundingClientRect();
+    if (rect.top <= threshold) activeIdx = i;
+    else break;
+  }
+  _tocItems.forEach((it, i) => it.link.classList.toggle('active', i === activeIdx));
+}
+
+// ── Syntax highlighting ─────────────────────────────────────────────
+// Minimal regex-tokenizer for fenced code blocks. Covers js/py/json/sh
+// via a shared identifier/comment/string/number scan; html via a
+// separate tag-and-comment pass.
+
+const _SYNTAX = {
+  js: {
+    keywords: new Set('const let var function return if else for while do switch case break continue new class extends import export from as async await try catch finally throw of in typeof instanceof delete null undefined true false default static this super yield void debugger'.split(' ')),
+    line: '//', block: ['/*', '*/'],
+    strings: { '"': '"', "'": "'", '`': '`' },
+  },
+  py: {
+    keywords: new Set('def class if elif else for while break continue return yield import from as pass raise try except finally with lambda global nonlocal True False None and or not in is async await match case del assert'.split(' ')),
+    line: '#', block: null,
+    strings: { '"""': '"""', "'''": "'''", '"': '"', "'": "'" },
+  },
+  json: {
+    keywords: new Set(['true', 'false', 'null']),
+    line: null, block: null,
+    strings: { '"': '"' },
+  },
+  sh: {
+    keywords: new Set('if then else elif fi for in do done while until case esac function return exit export local readonly'.split(' ')),
+    builtins: new Set('cd ls cat echo pwd grep sed awk find chmod chown mv cp rm mkdir rmdir touch'.split(' ')),
+    line: '#', block: null,
+    strings: { '"': '"', "'": "'" },
+  },
+};
+_SYNTAX.javascript = _SYNTAX.js;
+_SYNTAX.python = _SYNTAX.py;
+_SYNTAX.bash = _SYNTAX.sh;
+
+function _escTok(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function _reEscTok(s) { return s.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&'); }
+
+function _tokenize(code, lang) {
+  const spec = _SYNTAX[lang];
+  if (!spec) return _escTok(code);
+  const parts = [];
+  if (spec.block) {
+    parts.push({ type: 'comment',
+      re: _reEscTok(spec.block[0]) + '[\\s\\S]*?' + _reEscTok(spec.block[1]) });
+  }
+  if (spec.line) {
+    parts.push({ type: 'comment', re: _reEscTok(spec.line) + '[^\\n]*' });
+  }
+  if (spec.strings) {
+    // Longest delimiters first (so `"""` wins over `"`).
+    const delims = Object.keys(spec.strings).sort((a, b) => b.length - a.length);
+    for (const d of delims) {
+      const dE = _reEscTok(d);
+      if (d.length === 3) {
+        parts.push({ type: 'string', re: dE + '[\\s\\S]*?' + dE });
+      } else if (d === '`') {
+        parts.push({ type: 'string', re: '`(?:[^`\\\\]|\\\\.)*`' });
+      } else {
+        parts.push({ type: 'string',
+          re: dE + '(?:[^' + dE + '\\\\\\n]|\\\\.)*' + dE });
+      }
+    }
+  }
+  parts.push({ type: 'number', re: '\\b\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b' });
+  parts.push({ type: 'identifier', re: '[a-zA-Z_$][\\w$]*' });
+
+  const combined = new RegExp(parts.map(p => `(${p.re})`).join('|'), 'g');
+  let out = '', last = 0, m;
+  while ((m = combined.exec(code)) !== null) {
+    if (m.index > last) out += _escTok(code.slice(last, m.index));
+    let part = null;
+    for (let i = 1; i <= parts.length; i++) {
+      if (m[i] !== undefined) { part = parts[i - 1]; break; }
+    }
+    const text = m[0];
+    if (part.type === 'identifier') {
+      if (spec.keywords && spec.keywords.has(text)) {
+        out += `<span class="tok-keyword">${_escTok(text)}</span>`;
+      } else if (spec.builtins && spec.builtins.has(text)) {
+        out += `<span class="tok-builtin">${_escTok(text)}</span>`;
+      } else {
+        out += _escTok(text);
+      }
+    } else {
+      out += `<span class="tok-${part.type}">${_escTok(text)}</span>`;
+    }
+    last = m.index + text.length;
+  }
+  if (last < code.length) out += _escTok(code.slice(last));
+  return out;
+}
+
+function _tokenizeHtml(code) {
+  const re = /<!--[\s\S]*?-->|<\/?[a-zA-Z][^>]*>/g;
+  let out = '', last = 0, m;
+  while ((m = re.exec(code)) !== null) {
+    if (m.index > last) out += _escTok(code.slice(last, m.index));
+    const cls = m[0].startsWith('<!--') ? 'comment' : 'tag';
+    out += `<span class="tok-${cls}">${_escTok(m[0])}</span>`;
+    last = m.index + m[0].length;
+  }
+  if (last < code.length) out += _escTok(code.slice(last));
+  return out;
+}
+
+function highlightCode(root) {
+  for (const code of root.querySelectorAll('pre code[class*="language-"]')) {
+    const lang = (code.className.match(/language-([\w-]+)/) || [])[1];
+    if (!lang) continue;
+    const raw = code.textContent;
+    if (lang === 'html' || lang === 'xml' || lang === 'svg') {
+      code.innerHTML = _tokenizeHtml(raw);
+    } else if (_SYNTAX[lang]) {
+      code.innerHTML = _tokenize(raw, lang);
+    }
+  }
+}
+
+async function loadFile(relPath, label, anchor) {
   current = relPath;
   $('crumbs').textContent = label || relPath;
-  // Mark active in sidebar.
+  // Mark active in sidebar and scroll it into view.
+  let activeItem = null;
   for (const el of document.querySelectorAll('.sidebar .item')) {
-    el.classList.toggle('active', el.dataset.path === relPath);
+    const on = el.dataset.path === relPath;
+    el.classList.toggle('active', on);
+    if (on) activeItem = el;
   }
+  if (activeItem) activeItem.scrollIntoView({ block: 'nearest' });
+
   let md = fileCache.get(relPath);
   if (md == null) {
     try {
@@ -170,28 +744,110 @@ async function loadFile(relPath, label) {
     fileCache.set(relPath, md);
   }
   $('content').innerHTML = renderMd(md);
-  $('content').scrollTop = 0;
-  // Intercept internal links to other docs.
+  decorateHeadings();
+  highlightCode($('content'));
+  rewireLinks(relPath);
+  buildToc();
+  if (anchor && scrollToAnchor(anchor)) {
+    // anchor scroll wins over scroll-to-top
+  } else {
+    $('content').scrollTop = 0;
+  }
+  scheduleSave();
+}
+
+// Add a § anchor next to each heading so users can copy a deep-link.
+function decorateHeadings() {
+  for (const h of $('content').querySelectorAll('h1[id], h2[id], h3[id]')) {
+    if (h.querySelector('.anchor-link')) continue;
+    const a = document.createElement('a');
+    a.className = 'anchor-link';
+    a.textContent = '§';
+    a.href = '#' + h.id;
+    a.title = 'Copy link to this section';
+    a.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      scrollToAnchor(h.id);
+      // Best-effort clipboard copy; ignore failures (e.g. on file://).
+      const link = current + '#' + h.id;
+      try { navigator.clipboard?.writeText(link); } catch {}
+    });
+    h.insertBefore(a, h.firstChild);
+  }
+}
+
+// Resolve and rewire <a href> elements: external links open in a new
+// tab; internal .md (with optional #anchor) load through loadFile;
+// bare #anchor scrolls within the current doc.
+function rewireLinks(relPath) {
   for (const a of $('content').querySelectorAll('a[href]')) {
+    if (a.classList.contains('anchor-link')) continue;
     const href = a.getAttribute('href');
-    if (!href || /^https?:/.test(href) || href.startsWith('#')) continue;
-    // Relative .md links — resolve against current dir.
-    if (href.endsWith('.md')) {
-      const dir = relPath.includes('/') ? relPath.slice(0, relPath.lastIndexOf('/')) : '';
-      const resolved = dir ? dir + '/' + href : href;
+    if (!href) continue;
+    if (/^https?:/i.test(href) || /^mailto:/i.test(href)) {
+      a.setAttribute('target', '_blank');
+      a.setAttribute('rel', 'noopener noreferrer');
+      continue;
+    }
+    if (href.startsWith('#')) {
       a.addEventListener('click', (ev) => {
         ev.preventDefault();
-        loadFile(resolved, href);
+        scrollToAnchor(href.slice(1));
+      });
+      continue;
+    }
+    const [pathPart, anchorPart] = href.split('#');
+    if (pathPart && (pathPart.endsWith('.md') || pathPart.endsWith('/'))) {
+      const dir = relPath.includes('/') ? relPath.slice(0, relPath.lastIndexOf('/')) : '';
+      let resolved = dir ? dir + '/' + pathPart : pathPart;
+      // Normalise ../ segments.
+      const parts = resolved.split('/');
+      const out = [];
+      for (const p of parts) {
+        if (p === '..') out.pop();
+        else if (p && p !== '.') out.push(p);
+      }
+      resolved = out.join('/');
+      a.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        loadFile(resolved, pathPart, anchorPart || null);
       });
     }
   }
+}
+
+// Per-group collapsed state, keyed by group label. Persisted via
+// docs-state.json so the user's choice survives reloads.
+let groupStates = {};
+
+function startGroup(sb, label) {
+  const h = document.createElement('h3');
+  h.textContent = label;
+  h.dataset.group = label;
+  const items = document.createElement('div');
+  items.className = 'group-items';
+  items.dataset.group = label;
+  if (groupStates[label] === 'collapsed') {
+    h.classList.add('collapsed');
+    items.classList.add('hidden');
+  }
+  h.addEventListener('click', () => {
+    const collapsed = !h.classList.contains('collapsed');
+    h.classList.toggle('collapsed', collapsed);
+    items.classList.toggle('hidden', collapsed);
+    groupStates[label] = collapsed ? 'collapsed' : 'open';
+    scheduleSave();
+  });
+  sb.appendChild(h);
+  sb.appendChild(items);
+  return items;
 }
 
 function renderSidebar() {
   const sb = $('sidebar');
   sb.innerHTML = '';
 
-  function addItem(label, relPath, nested) {
+  function addItem(parent, label, relPath, nested) {
     const div = document.createElement('div');
     div.className = 'item' + (nested ? ' nested' : '');
     div.textContent = label;
@@ -200,24 +856,29 @@ function renderSidebar() {
       loadFile(relPath, label);
       setNavOpen(false);   // auto-dismiss after selection
     });
-    sb.appendChild(div);
+    parent.appendChild(div);
   }
 
-  function walkNav(list, nested) {
+  // Walk the mkdocs nav. Top-level entries with `children` become
+  // collapsible groups; bare files go in a top-level "Docs" group.
+  let rootGroup = null;
+  function walkNav(list, target) {
     for (const item of list) {
       if (item.file) {
-        addItem(item.label, 'docs/' + item.file, nested);
+        if (!target) {
+          rootGroup = rootGroup || startGroup(sb, 'Docs');
+          target = rootGroup;
+        }
+        addItem(target, item.label, 'docs/' + item.file, target !== rootGroup);
       } else if (item.children) {
-        const h = document.createElement('h3');
-        h.textContent = item.label;
-        sb.appendChild(h);
-        walkNav(item.children, true);
+        const items = startGroup(sb, item.label);
+        walkNav(item.children, items);
       }
     }
   }
 
   if (manifest && manifest.nav && manifest.nav.length) {
-    walkNav(manifest.nav, false);
+    walkNav(manifest.nav, null);
   }
 
   // Extensions section.
@@ -228,22 +889,17 @@ function renderSidebar() {
       if (!grouped.has(e.pkg)) grouped.set(e.pkg, []);
       grouped.get(e.pkg).push(e);
     }
-    const h = document.createElement('h3');
-    h.textContent = 'Extensions';
-    sb.appendChild(h);
+    const items = startGroup(sb, 'Extensions');
     for (const [pkg, entries] of [...grouped].sort((a, b) => a[0].localeCompare(b[0]))) {
-      // Show the package name once; if both SPEC + README, show both as nested.
       if (entries.length === 1) {
-        addItem(pkg, entries[0].file, true);
+        addItem(items, pkg, entries[0].file, true);
       } else {
         const div = document.createElement('div');
         div.className = 'item';
         div.style.cursor = 'default';
         div.textContent = pkg;
-        sb.appendChild(div);
-        for (const e of entries) {
-          addItem(e.kind, e.file, true);
-        }
+        items.appendChild(div);
+        for (const e of entries) addItem(items, e.kind, e.file, true);
       }
     }
   }
@@ -278,14 +934,61 @@ window.addEventListener('message', async (ev) => {
     return;
   }
 
+  // Read persisted state before rendering the sidebar so collapsed-group
+  // state is applied during initial render.
+  const saved = await readState();
+  groupStates = (saved && saved.groupStates) || {};
   renderSidebar();
+  // Build the search index in the background so opening Ctrl+K is instant.
+  buildSearchIndex().catch((e) => console.warn('search index build failed:', e));
 
   // Toggle + dismiss handlers.
   document.getElementById('navToggle').addEventListener('click', () => {
     setNavOpen(!document.body.classList.contains('nav-open'));
   });
   document.getElementById('backdrop').addEventListener('click', () => setNavOpen(false));
+  document.getElementById('searchBtn').addEventListener('click', openSearch);
+  document.getElementById('searchInput').addEventListener('input', runSearch);
+  document.getElementById('searchOverlay').addEventListener('click', (e) => {
+    if (e.target.id === 'searchOverlay') closeSearch();
+  });
   document.addEventListener('keydown', (e) => {
+    const inSearch = document.body.contains(document.getElementById('searchOverlay'))
+      && document.getElementById('searchOverlay').classList.contains('open');
+    if (e.key === 'k' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      openSearch();
+      return;
+    }
+    if (inSearch) {
+      if (e.key === 'Escape') { closeSearch(); return; }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        const rows = document.querySelectorAll('#searchResults .search-hit');
+        if (rows.length === 0) return;
+        activeHitIdx = Math.min(activeHitIdx + 1, rows.length - 1);
+        for (const r of rows) r.classList.remove('active');
+        rows[activeHitIdx].classList.add('active');
+        rows[activeHitIdx].scrollIntoView({ block: 'nearest' });
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        const rows = document.querySelectorAll('#searchResults .search-hit');
+        if (rows.length === 0) return;
+        activeHitIdx = Math.max(activeHitIdx - 1, 0);
+        for (const r of rows) r.classList.remove('active');
+        rows[activeHitIdx].classList.add('active');
+        rows[activeHitIdx].scrollIntoView({ block: 'nearest' });
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const rows = document.querySelectorAll('#searchResults .search-hit');
+        if (rows.length > 0 && rows[activeHitIdx]) rows[activeHitIdx].click();
+        return;
+      }
+    }
     if (e.key === 'Escape' && document.body.classList.contains('nav-open')) {
       setNavOpen(false);
     } else if (e.key === '\\' && (e.ctrlKey || e.metaKey)) {
@@ -294,7 +997,7 @@ window.addEventListener('message', async (ev) => {
     }
   });
 
-  // Open index.md by default if it's in the nav.
+  // Restore the last-viewed doc + scroll position; fall back to index.md.
   const findIndex = (list) => {
     for (const it of list) {
       if (it.file === 'index.md') return 'docs/index.md';
@@ -302,10 +1005,32 @@ window.addEventListener('message', async (ev) => {
     }
     return null;
   };
-  const start = (manifest.nav && findIndex(manifest.nav))
+  const fallback = (manifest.nav && findIndex(manifest.nav))
     || (manifest.nav && manifest.nav[0] && manifest.nav[0].file && 'docs/' + manifest.nav[0].file)
     || null;
-  if (start) await loadFile(start, 'Home');
+  const start = saved?.current || fallback;
+  if (start) {
+    await loadFile(start, '');
+    if (saved?.current === start && typeof saved.scrollTop === 'number') {
+      // Restore scroll AFTER the render has settled, then sync the TOC.
+      requestAnimationFrame(() => {
+        document.getElementById('content').scrollTop = saved.scrollTop;
+        updateActiveToc();
+      });
+    }
+  }
+
+  // On scroll: update the TOC active item (rAF-coalesced) and persist
+  // the position (debounced via scheduleSave).
+  let _scrollRaf = 0;
+  document.getElementById('content').addEventListener('scroll', () => {
+    if (_scrollRaf) return;
+    _scrollRaf = requestAnimationFrame(() => {
+      _scrollRaf = 0;
+      updateActiveToc();
+    });
+    scheduleSave();
+  });
 
   bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, ['Documentation']);
   bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);

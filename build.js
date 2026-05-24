@@ -176,7 +176,7 @@ if (target === 'works') {
   // internally, doesn't need to participate in this map.
   const worksZlib = require('zlib');
 
-  const SHARED_LIBS = ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline', 'markdown'];
+  const SHARED_LIBS = ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline', 'markdown', 'librarian'];
 
   // markdown comes from src/js/ rather than ext/<name>/index.js — same
   // file used by the notebook's md cells. buildLibPayloads reads via
@@ -350,7 +350,7 @@ if (target === 'works') {
     { kind: 'inspector', file: 'works/surfaces/inspector.html', deps: ['abus'] },
     { kind: 'settings',  file: 'works/surfaces/settings.html',  deps: ['abus'] },
     { kind: 'docs',      file: 'works/surfaces/docs.html',
-      deps: ['abus', 'markdown'] },
+      deps: ['abus', 'markdown', 'librarian'] },
     { kind: 'terminal',  file: 'works/surfaces/terminal.html',
       deps: ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline'], extras: 'terminal' },
     { kind: 'notebook',  file: 'auditable.html',                deps: null },
@@ -378,6 +378,7 @@ if (target === 'works') {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Auditable Works</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='2' width='7' height='28' fill='%238a9099'/%3E%3Crect x='10' y='2' width='20' height='19' fill='%23d97a3c'/%3E%3Crect x='10' y='22' width='20' height='8' fill='%238a9099'/%3E%3C/svg%3E">
 <style>
 ${worksCss}
 </style>
@@ -1229,6 +1230,7 @@ function assemble(jsCode) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Auditable</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='2' width='28' height='8' fill='%238a9099'/%3E%3Crect x='2' y='12' width='28' height='8' fill='%23d97a3c'/%3E%3Crect x='2' y='22' width='28' height='8' fill='%238a9099'/%3E%3C/svg%3E">
 <script data-theme-init>
 // First-paint theme: honor explicit data-theme attribute (saved notebooks
 // embed their chosen theme), otherwise OS preference, falling back to dark.
@@ -1331,6 +1333,7 @@ if (compress) {
     + '<html lang="en" data-theme="dark"><head><meta charset="UTF-8">'
     + '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
     + '<title>Auditable</title>'
+    + `<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='2' width='28' height='8' fill='%238a9099'/%3E%3Crect x='2' y='12' width='28' height='8' fill='%23d97a3c'/%3E%3Crect x='2' y='22' width='28' height='8' fill='%238a9099'/%3E%3C/svg%3E">`
     + '<style>html{background:#1a1a1a}'
     + 'body{color:#999;font:14px/1.5 monospace;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}'
     + '</style></head><body>'
