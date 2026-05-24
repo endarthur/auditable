@@ -39,9 +39,11 @@ export function isTextType(mime) {
 
 export function validatePath(path) {
   if (!path || typeof path !== 'string') throw new Error('fs: path must be a non-empty string');
-  if (path.startsWith('/')) throw new Error('fs: path must not start with /');
   if (path.includes('..')) throw new Error('fs: path must not contain ..');
-  const segments = path.split('/');
+  // POSIX-ish: leading / is workspace-absolute (escapes project sandbox);
+  // no leading / is project-relative. The leading slash legitimately produces
+  // a leading empty segment, so don't reject it as an "empty segment".
+  const segments = path.startsWith('/') ? path.slice(1).split('/') : path.split('/');
   if (segments.some(s => s === '')) throw new Error('fs: path must not contain empty segments');
   return path;
 }
@@ -122,9 +124,11 @@ function getFs() {
 
 // The notebook's own project directory. Standalone is a workspace-of-one, so
 // this is the fixed literal /projects/self/; in Works the surface VFS resolves
-// `self` to the real project path. notebook.fs paths are relative to it.
+// `self` to the real project path. notebook.fs paths without a leading / are
+// project-relative; paths starting with / are workspace-absolute and bypass
+// the prefix entirely — used in Works to reach /mnt/<name>, /home/<user>, etc.
 const NB_PREFIX = '/projects/self/';
-function toAbs(p) { return NB_PREFIX + p; }
+function toAbs(p) { return p.startsWith('/') ? p : NB_PREFIX + p; }
 function getVfs() { return window._notebookVFS; }
 
 // ── API ──
@@ -201,28 +205,38 @@ async function write(path, content, opts = {}) {
 }
 
 async function read(path, format) {
-  const fs = getFs();
-  const entry = fs.get(path);
-  if (!entry) throw new Error(`fs.read: file not found: ${path}`);
-
-  // delegate to VFS if available — readFile returns decompressed bytes
   const vfs = getVfs();
   let bytes;
+  let mime;
+
   if (vfs) {
-    bytes = await vfs.readFile(toAbs(path), 'bytes');
+    // VFS is source of truth — skip the project-scoped local Map gate so
+    // workspace-absolute paths (/mnt/<name>, /home/<user>, …) resolve too.
+    // Local Map entry, if present, contributes its MIME type; otherwise
+    // infer from the extension.
+    try {
+      bytes = await vfs.readFile(toAbs(path), 'bytes');
+    } catch (e) {
+      throw new Error(`fs.read: file not found: ${path}`);
+    }
+    const entry = getFs().get(path);
+    mime = entry ? entry.type : mimeFromExt(path);
   } else {
+    const entry = getFs().get(path);
+    if (!entry) throw new Error(`fs.read: file not found: ${path}`);
     bytes = base64ToUint8(entry.data);
     if (entry.compressed) bytes = await gzipDecompress(bytes);
+    mime = entry.type;
   }
 
-  const fmt = format || (isTextType(entry.type) ? 'text' : 'binary');
+  const fmt = format || (isTextType(mime) ? 'text' : 'binary');
 
   switch (fmt) {
     case 'text': return new TextDecoder().decode(bytes);
     case 'binary': return bytes;
     case 'json': return JSON.parse(new TextDecoder().decode(bytes));
-    case 'blob': return new Blob([bytes], { type: entry.type });
-    case 'url': return URL.createObjectURL(new Blob([bytes], { type: entry.type }));
+    case 'blob': return new Blob([bytes], { type: mime });
+    case 'url': return URL.createObjectURL(new Blob([bytes], { type: mime }));
     default: throw new Error(`fs.read: unknown format: ${fmt}`);
   }
 }

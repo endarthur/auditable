@@ -53,7 +53,8 @@ describe('isTextType', () => {
 describe('validatePath', () => {
   it('valid simple path', () => assert.equal(validatePath('file.txt'), 'file.txt'));
   it('valid nested path', () => assert.equal(validatePath('data/input.csv'), 'data/input.csv'));
-  it('reject leading /', () => assert.throws(() => validatePath('/file.txt'), /must not start with/));
+  it('accept leading / (workspace-absolute)', () => assert.equal(validatePath('/mnt/x.csv'), '/mnt/x.csv'));
+  it('accept lone /home prefix', () => assert.equal(validatePath('/home/data.csv'), '/home/data.csv'));
   it('reject ..', () => assert.throws(() => validatePath('data/../file.txt'), /must not contain \.\./));
   it('reject empty', () => assert.throws(() => validatePath(''), /non-empty/));
   it('reject null', () => assert.throws(() => validatePath(null), /non-empty/));
