@@ -130,15 +130,30 @@ window.addEventListener('message', async (ev) => {
   // between commands. makeLineEditor handles echo + history + line edits;
   // readLine is serialised (REPL awaits exec; exec may itself await readLine
   // mid-script via onWantInput; no concurrent subscribers).
+  // Up/Down arrow history. Stored in-memory only for now; persisting to
+  // shell meta is straightforward but doesn't earn its complexity until
+  // we add cross-tab sharing. The editor only fires onHistory in
+  // response to those keys, so this is a no-op for typed chars.
+  const history = [];
+  let historyCursor = -1;   // -1 = "live buffer", 0..N-1 = past lines
+  const onHistory = (dir) => {
+    if (history.length === 0) return undefined;
+    if (historyCursor === -1) historyCursor = history.length;
+    historyCursor = Math.max(0, Math.min(history.length, historyCursor + dir));
+    return historyCursor < history.length ? history[historyCursor] : '';
+  };
+
   (async () => {
     adapter.write('\x1b[2mwelcome to geas. cwd ' + startCwd + '\x1b[0m\r\n');
     for (;;) {
+      historyCursor = -1;   // reset for each fresh prompt
       let r;
-      try { r = await readLine({ prompt: '$ ' }); }
+      try { r = await readLine({ prompt: '$ ', onHistory }); }
       catch (e) { adapter.write('\r\n[readline error: ' + (e.message || e) + ']\r\n'); break; }
       if (r.eof) break;
       const line = (r.line || '').trim();
       if (!line) continue;
+      if (history[history.length - 1] !== line) history.push(line);
       try { await client.exec(line); }
       catch (e) { adapter.write('\r\nerror: ' + (e.message || e) + '\r\n'); }
     }
