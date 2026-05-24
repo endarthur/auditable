@@ -611,7 +611,7 @@ function createReadline(adapter, opts = {}) {
 
       const bell = () => { try { adapter.write('\x07'); } catch { /* */ } };
 
-      const doTab = () => {
+      const doTab = async () => {
         if (typeof config.complete !== 'function') { bell(); return; }
         const isContinuation = completionMatches != null
           && completionAnchor === state.cursor;
@@ -624,7 +624,11 @@ function createReadline(adapter, opts = {}) {
           completionAnchor = state.cursor;
           return;
         }
-        const result = config.complete(state.buffer, state.cursor);
+        // complete() may return matches directly or a Promise — both
+        // shapes accepted so callers can do async VFS lookups.
+        let result;
+        try { result = await config.complete(state.buffer, state.cursor); }
+        catch (e) { bell(); return; }
         if (!result || (Array.isArray(result) && result.length === 0)) {
           bell();
           return;
@@ -749,7 +753,11 @@ function createReadline(adapter, opts = {}) {
               redraw();
               break;
             case 'Ctrl-b':          moveLeft(state); redraw(); break;
-            case 'Tab':             doTab(); redraw(); break;
+            case 'Tab':
+              // doTab is async (VFS-backed completers); kick it off
+              // and redraw after it settles.
+              doTab().then(redraw, redraw);
+              break;
             case 'Ctrl-d':
               if (state.buffer.length === 0) { finish({ eof: true }); return; }
               deleteRight(state);

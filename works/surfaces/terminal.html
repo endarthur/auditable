@@ -95,12 +95,36 @@ window.addEventListener('message', async (ev) => {
 
   const adapter = createXtermAdapter({ terminal: term });
 
+  // Surface-side VFS first — readline's path-completer + persistent
+  // history both reach through it.
+  const vfs = new VFS();
+  vfs._mounts.set('/', new AbusBackend({ bus, service: 'works' }));
+  vfs._mounts.set('/tmp', new MemoryBackend());
+
   // @gcu/readline line editor — replaces @gcu/geas's makeLineEditor.
   // Adds mid-line cursor, kill-ring, fish-style autosuggest, tab
-  // completion, syntax highlighting, and bracketed-paste. History is
-  // an in-memory array shared with the REPL loop below (still session-
-  // scoped; persistence comes later).
-  const history = [];
+  // completion, syntax highlighting, bracketed-paste, and persistent
+  // history. History lives at /home/.gcu_history in the workspace; all
+  // terminal surfaces in the same workspace share it across reloads.
+  const HISTORY_PATH = '/home/.gcu_history';
+  const HISTORY_MAX = 1000;
+  let history = [];
+  try {
+    const raw = await vfs.readFile(HISTORY_PATH, 'utf8');
+    history = raw.split('\n').filter((s) => s.length > 0);
+    if (history.length > HISTORY_MAX) history = history.slice(-HISTORY_MAX);
+  } catch { /* fresh workspace — no history file yet */ }
+  async function persistHistory(line) {
+    try {
+      // Append-only; trim happens on next load. Cheap on every commit.
+      const prev = history.slice(0, -1).join('\n');   // exclude just-pushed
+      const body = (prev ? prev + '\n' : '') + line + '\n';
+      await vfs.writeFile(HISTORY_PATH, body);
+    } catch (e) {
+      // Non-fatal — history doesn't write but the terminal keeps working.
+      console.warn('[terminal] history write failed:', e.message);
+    }
+  }
   // Geas builtins → reachable in-process via tokenize but the builtin
   // names live in defaultBuiltins(); we cache the list once.
   const BUILTINS = [
@@ -146,35 +170,61 @@ window.addEventListener('message', async (ev) => {
     return spans;
   }
 
-  function complete(line, cursor) {
-    // Tokenise the slice up to the cursor and look at the last token.
-    // If the cursor is in the FIRST word position, complete command
-    // names. Otherwise complete VFS paths.
-    const head = line.slice(0, cursor);
+  // Resolve a possibly-relative path against the worker's last-known
+  // cwd. createGeasClient tracks cwd internally; we fetch it via the
+  // exec(`pwd`) round-trip lazily — for completion we need it
+  // synchronously available, so cache it from each onDone-equivalent.
+  // For now use HOME as the default cwd until a better hook lands.
+  let cachedCwd = startCwd;
+
+  function _resolvePath(p) {
+    if (p.startsWith('/')) return p;
+    // Strip trailing slash from cwd, then join.
+    const base = cachedCwd.endsWith('/') ? cachedCwd.slice(0, -1) : cachedCwd;
+    return base + '/' + p;
+  }
+
+  async function complete(line, cursor) {
+    // Find the word under / left of the cursor.
     let prefixStart = cursor;
     while (prefixStart > 0 && /\S/.test(line[prefixStart - 1])) prefixStart--;
     const prefix = line.slice(prefixStart, cursor);
     const beforePrefix = line.slice(0, prefixStart);
-    // First word if everything before is whitespace.
     const isFirstWord = /^\s*$/.test(beforePrefix);
+
     if (isFirstWord) {
-      const matches = BUILTINS.filter((b) => b.startsWith(prefix)).sort();
-      return matches;
+      return BUILTINS.filter((b) => b.startsWith(prefix)).sort();
     }
-    // VFS path completion — synchronous fail-soft. The complete callback
-    // is sync today; an async upgrade would need a redesign. For now
-    // we return no path-matches and let the bell ring.
-    return [];
+
+    // Path completion. Split the prefix at the last slash:
+    //   dir/   →  parent='dir',  partial=''
+    //   dir/x  →  parent='dir',  partial='x'
+    //   x      →  parent='',     partial='x'
+    const slash = prefix.lastIndexOf('/');
+    const partial = slash === -1 ? prefix : prefix.slice(slash + 1);
+    const parentPath = slash === -1 ? '' : prefix.slice(0, slash + 1);
+    const fsBase = _resolvePath(parentPath || '.');
+
+    let entries;
+    try { entries = await vfs.readdir(fsBase, { stat: true }); }
+    catch { return []; }
+
+    // Match entries; append `/` for directories so a second Tab dives in.
+    const matches = [];
+    for (const e of entries) {
+      if (!e.name.startsWith(partial)) continue;
+      const suffix = e.type === 'directory' ? '/' : '';
+      matches.push(parentPath + e.name + suffix);
+    }
+    matches.sort();
+    // Return shape with anchor so readline replaces from the right spot.
+    return { matches, anchor: prefixStart };
   }
 
-  const readLine = createReadline(adapter, { history, highlight, complete });
-
-  // Surface-side VFS: A-Bus proxy to the workspace, plus a volatile /tmp.
-  // The geas worker reaches files through this via serveVFS, which
-  // createGeasClient wires up internally.
-  const vfs = new VFS();
-  vfs._mounts.set('/', new AbusBackend({ bus, service: 'works' }));
-  vfs._mounts.set('/tmp', new MemoryBackend());
+  const readLine = createReadline(adapter, {
+    history, highlight, complete,
+    onPersistHistory: persistHistory,
+  });
 
   // Spawn the worker + the geas client. proc owns the worker lifecycle
   // (PID, signals, kill); procToWorker wraps the Process as a Worker-
