@@ -175,8 +175,64 @@ The bootstrap detects which is present and either uses the pre-inlined symbols (
 
 **Limits / TODO for 0.2.x or later.**
 - Streaming reads (`createReadStream` over RPC) are not implemented — backends call the default `null` shim. A future point release can add a dedicated channel.
-- Principal-based sandboxing isn't wired yet (see §11 — Phase B+).
 - VFS-path module loading (`spawn({ module: '/scripts/x.js', fn: 'run' })`) still throws — the dynamic-import-from-VFS plumbing isn't in 0.2.0.
+
+#### 3.5.1 Principal-based sandbox (0.5.1)
+
+Opt-in enforcement layer over the VFS proxy. ProcessManager accepts a `vfsCheckPermission` function in its constructor; spawn-style methods accept `opts.principal`. Before forwarding each `_proc_vfs_call` from a worker to the backend, the host's `Process._handleVfsCall` runs `vfsCheckPermission(method, fullPath, principal)`. If it throws (typically a `VFSError` with `EACCES`), the worker sees the rejection rather than the operation succeeding.
+
+```js
+import { VFS, MemoryBackend, checkPermission } from '@gcu/vfs';
+
+const vfs = new VFS();
+vfs._mounts.set('/', new MemoryBackend());
+
+const pm = new ProcessManager({
+  vfs,
+  vfsBundleSource: GCU_VFS_SOURCE,
+  vfsCheckPermission: checkPermission,   // ← supply the enforcer
+});
+
+const proc = await pm.spawn({ module: workerUrl, mode: 'service' }, {
+  principal: {
+    prefixes:         ['/home', '/tmp'],   // read + write
+    readOnlyPrefixes: ['/sys'],            // read only
+  },
+});
+
+// Inside the worker:
+//   await ctx.vfs.readFile('/home/x.txt');       // ✓ allowed
+//   await ctx.vfs.writeFile('/sys/x.txt', '…'); // ✗ EACCES — read-only prefix
+//   await ctx.vfs.readFile('/var/secret.txt');  // ✗ EACCES — not in any prefix
+```
+
+**Loud-failure default.** Passing `opts.principal` to spawn-style methods when the manager has no `vfsCheckPermission` throws at spawn time. Silent no-enforcement was rejected as a footgun — easy to think you're sandboxed when you aren't.
+
+**No principal = no enforcement.** Back-compat: if a process is spawned without a principal, the VFS dispatcher doesn't call the checker. Existing code that didn't know about principals keeps working.
+
+**Sub-process inheritance.** When a sandboxed worker spawns a child via `ctx.pm.spawn`, the child inherits the parent's principal unless the caller explicitly passes `opts.principal`. Keeps sandbox boundaries from leaking when a worker forks.
+
+**`ctx.principal`.** Service-mode workers can inspect their own principal via `ctx.principal` (read-only). The daemon use case: a service that wants to apply additional checks beyond what proc enforces (e.g. "even within /home, this daemon only touches files under /home/.cache").
+
+**`pm.request` envelope carries caller principal.** When `pm.request(name, msg, { principal: callerPrincipal })` is called, the caller's principal rides in the request envelope. The daemon's `ctx.onRequest(handler)` receives it as the second handler argument:
+
+```js
+ctx.onRequest((req, meta) => {
+  if (req.type === 'reindex' && meta.principal) {
+    // Re-validate that the caller is allowed to reindex this path.
+    checkPermission('readFile', req.path, meta.principal);
+  }
+  // … perform request …
+});
+```
+
+This is the **confused-deputy mitigation**: without it, any cell that can `pm.request` a daemon inherits the daemon's full capabilities. With it, the daemon can opt to re-check operations against the caller's permissions before acting.
+
+**Two-path operations.** `rename` and `cp` get both `src` and `dst` checked against the principal. Single-path methods (`readFile`, `writeFile`, `mkdir`, etc.) check `args[0]`.
+
+**Path normalization.** The worker sees mount-relative paths; the host checks against the full path (`mountPath + subpath`). The principal is always scoped to the host's full path namespace.
+
+**Principal shape.** The shape is whatever `vfsCheckPermission` understands. With `@gcu/vfs`'s `checkPermission`, that's `{ prefixes?: string[], readOnlyPrefixes?: string[] }` — see `ext/vfs/src/permissions.js`. Custom check functions can use any shape.
 
 ### 3.6 TTY proxy (0.3.0)
 
@@ -617,9 +673,11 @@ Phases A (0.1.x), B (0.2.x), C (0.3.x), D (0.4.x), and E (0.5.x) have shipped. O
 
 - **Phase F — Remote / mesh execution**: `{ remote: { peer, via: mesh } }` in spawn options. Same Process surface, different execution backend.
 
-**Urgent-now 0.2.x point-release follow-up (more urgent post-Phase-E):**
+**0.2.x point-release follow-ups (shipped/pending):**
 
-- **Principal-based VFS sandbox.** With daemons in the mix, any cell that can `pm.request` a daemon now has whatever capabilities the daemon was constructed with. Today daemons are fully-trusted. Principal carrying lets the spawning context's permissions ride along into the daemon's VFS calls, and the host re-validates on every proxy call (defense in depth). Same machinery applies to shell-service workers' `ctx.vfs` access. This is now the most impactful next change before Phase F.
+- ✅ **Principal-based VFS sandbox** (shipped in 0.5.1 — see §3.5.1). Caller passes `opts.principal` to spawn-style methods; the host's VFS dispatcher invokes `vfsCheckPermission` before forwarding each call. Sub-processes inherit by default. `pm.request` envelope carries the caller's principal for confused-deputy mitigation.
+- Streaming reads (`createReadStream` over RPC) — still pending; no immediate consumer.
+- VFS-path module loading (`spawn({ module: '/scripts/x.js', fn: 'run' })`) — still pending; the dynamic-import-from-VFS plumbing isn't in any release.
 
 **Phase B follow-ups (0.2.x point releases as consumers ask for them):**
 
@@ -645,7 +703,7 @@ Each error mentions the phase that would unlock it.
 
 ## 13. Versioning
 
-Pre-1.0. Wire protocol (`_proc_*` namespace, message shapes) and public API (`ProcessManager`, `Process`, `Pool`) may shift before 1.0. Tag history: `0.1.x` = Phase A, `0.2.x` = A + B, `0.3.x` = A + B + C, `0.4.x` = A + B + C + D, `0.5.x` = A + B + C + D + E. Point releases under each minor add follow-ups without breaking the constructor or wire protocol. Phase F onward will land in `0.6.x` and may break the constructor signature if needed.
+Pre-1.0. Wire protocol (`_proc_*` namespace, message shapes) and public API (`ProcessManager`, `Process`, `Pool`) may shift before 1.0. Tag history: `0.1.x` = Phase A, `0.2.x` = A + B, `0.3.x` = A + B + C, `0.4.x` = A + B + C + D, `0.5.x` = A + B + C + D + E. `0.5.1` adds the principal sandbox (additive — opt-in `vfsCheckPermission` + `opts.principal`). Point releases under each minor add follow-ups without breaking the constructor or wire protocol. Phase F onward will land in `0.6.x` and may break the constructor signature if needed.
 
 ## 14. License
 

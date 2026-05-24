@@ -3059,4 +3059,4 @@ function fromPicker(vfs, destPath, opts) {
 // @gcu/vfs — integrated into the base image
 // No plugin registration needed — VFS is available as a builtin.
 
-export { VFS, VFSError, Backend, BACKEND_TYPES, CommentBackend, MemoryBackend, AbusBackend, FSAABackend, IDBBackend, OPFSBackend, FetchBackend, RESTBackend, OverlayBackend, CacheBackend, path };
+export { VFS, VFSError, Backend, BACKEND_TYPES, CommentBackend, MemoryBackend, AbusBackend, FSAABackend, IDBBackend, OPFSBackend, FetchBackend, RESTBackend, OverlayBackend, CacheBackend, checkPermission, path };

@@ -135,6 +135,7 @@ function _makeProxyBackend(BackendCls) {
   let _workerVfs = null;
   let _workerTty = null;          // Phase C: ctx.tty proxy (service modes only)
   let _workerPm = null;           // Phase D: ctx.pm proxy (service-mode-only)
+  let _workerPrincipal = null;    // 0.5.1+: principal sandbox metadata for inspection
 
   // Phase D: ctx.pm wire state. Reply correlation map and pid → waiter
   // queue (we may have multiple awaiters for the same remote process).
@@ -205,6 +206,10 @@ function _makeProxyBackend(BackendCls) {
       // opt-in flag — the proxy doesn't itself do anything; the host's
       // Process simply rejects the RPC if no manager is set.
       _workerPm = buildWorkerPm();
+      // 0.5.1+: principal sandbox metadata. Host enforces; this is
+      // just exposed via ctx.principal for daemons that want to
+      // re-check requests against the caller's principal.
+      if (msg.principal != null) _workerPrincipal = msg.principal;
       await dispatchInit(msg);
       return;
     }
@@ -414,6 +419,7 @@ function _makeProxyBackend(BackendCls) {
       vfs: _workerVfs,
       tty: _workerTty,
       pm:  _workerPm,
+      principal: _workerPrincipal,    // read-only inspect; host enforces
       send: (data, transfer) => {
         _post({ type: '_proc_msg', data }, transfer || autoTransfer(data));
       },
@@ -435,8 +441,12 @@ function _makeProxyBackend(BackendCls) {
         const sub = (data) => {
           if (!data || typeof data !== 'object' || data.type !== 'request') return;
           const id = data.id;
+          // Second arg gives daemons the caller's metadata (so far just
+          // principal). Keeps the primary req shape clean while letting
+          // daemons re-check operations against the caller's permissions.
+          const meta = data.principal != null ? { principal: data.principal } : {};
           Promise.resolve()
-            .then(() => handler(data.req))
+            .then(() => handler(data.req, meta))
             .then(
               (value) => _post({ type: '_proc_msg', data: { type: 'reply', id, ok: true, value } }),
               (err) => _post({ type: '_proc_msg', data: { type: 'reply', id, ok: false, error: { message: err && err.message || String(err) } } })

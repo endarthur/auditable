@@ -1,7 +1,7 @@
 {
   "name": "@gcu/proc",
-  "version": "0.5.0",
-  "description": "A process model for the browser: spawn Web Workers as PID-tracked processes with lifecycle, I/O channels, pools, signal handling, VFS proxy, TTY proxy, shell-service mode with worker-side ProcessManager proxy, and supervised named daemons. Phase A modes (function, module-call, module-service, inline-service) + Phase B VFS proxy + Phase C TTY proxy + Phase D shell mode with ctx.pm + Phase E daemons with restart policies, exponential backoff, and request/reply via pm.request / ctx.onRequest. Zero hard dependencies.",
+  "version": "0.5.1",
+  "description": "A process model for the browser: spawn Web Workers as PID-tracked processes with lifecycle, I/O channels, pools, signal handling, VFS proxy, TTY proxy, shell-service mode with worker-side ProcessManager proxy, supervised named daemons, and principal-based VFS sandboxing. Phase A modes (function, module-call, module-service, inline-service) + Phase B VFS proxy + Phase C TTY proxy + Phase D shell mode with ctx.pm + Phase E daemons with restart policies, exponential backoff, and request/reply via pm.request / ctx.onRequest, plus opt-in principal enforcement at the host-side VFS dispatcher. Zero hard dependencies.",
   "type": "module",
   "main": "./src/main.js",
   "exports": {

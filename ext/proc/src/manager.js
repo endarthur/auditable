@@ -62,6 +62,14 @@ export class ProcessManager {
     this._vfsBundleSource = opts.vfsBundleSource || null;
     this._vfsModuleUrl = opts.vfsModuleUrl || null;
 
+    // Principal sandbox (0.5.1+). If consumers pass opts.principal to
+    // spawn-style methods, the host-side VFS dispatcher invokes this
+    // function before forwarding each VFS call to the backend. Throws
+    // typically come from @gcu/vfs's checkPermission (exported by the
+    // bundle since 0.2.x.) Function signature: (operation, path,
+    // principal) → void on allow, throws VFSError on deny.
+    this._vfsCheckPermission = opts.vfsCheckPermission || null;
+
     this._createWorker = opts.createWorker || defaultCreateWorker;
     this._maxProcesses = opts.maxProcesses || (
       typeof navigator !== 'undefined' && navigator.hardwareConcurrency
@@ -332,7 +340,12 @@ export class ProcessManager {
         }, timeoutMs);
       }
     });
-    proc.send({ type: 'request', id, req: message });
+    const envelope = { type: 'request', id, req: message };
+    // 0.5.1+: caller's principal rides in the envelope so the daemon's
+    // ctx.onRequest handler can re-check operations against it. Defeats
+    // the confused-deputy problem if the daemon actually enforces.
+    if (opts.principal != null) envelope.principal = opts.principal;
+    proc.send(envelope);
     return promise;
   }
 
@@ -505,6 +518,18 @@ export class ProcessManager {
         })() }
       : {};
 
+    // Principal sandbox: when a principal is passed, the manager must
+    // also have a vfsCheckPermission function — otherwise the principal
+    // would be silently ignored (worst case: false sense of security).
+    // Loud failure is better than silent permissiveness.
+    if (opts.principal != null && !this._vfsCheckPermission) {
+      throw new Error('proc.spawn: opts.principal requires the manager to be constructed with vfsCheckPermission');
+    }
+    // Worker init carries the principal so ctx.principal can inspect it
+    // (useful for daemons that want to re-check requests against the
+    // caller's principal). Enforcement is host-side; this is metadata.
+    const principalExtras = opts.principal != null ? { principal: opts.principal } : {};
+
     if (typeof payload === 'function') {
       return {
         wire: {
@@ -514,6 +539,7 @@ export class ProcessManager {
           args: opts.args || [],
           keepalive: !!opts.keepalive,
           ...vfsExtras,
+          ...principalExtras,
         },
         transfer,
         mode: MODE.FUNCTION,
@@ -547,6 +573,7 @@ export class ProcessManager {
           shellOneShot:      oneShot,
           ...vfsExtras,
           ...ttyExtras,
+          ...principalExtras,
         },
         transfer: [],
         mode: MODE.SHELL,
@@ -577,6 +604,7 @@ export class ProcessManager {
             fn: payload.fn || 'default',
             args: payload.args || opts.args || [],
             ...vfsExtras,
+            ...principalExtras,
           },
           transfer,
           mode: MODE.MODULE_CALL,
@@ -595,6 +623,7 @@ export class ProcessManager {
           url: payload.module,
           ...vfsExtras,
           ...ttyExtras,
+          ...principalExtras,
         },
         transfer: [],
         mode: MODE.SERVICE,
@@ -619,6 +648,7 @@ export class ProcessManager {
           mode: MODE.INLINE_SERVICE,
           ...vfsExtras,
           ...ttyExtras,
+          ...principalExtras,
         },
         transfer: [],
         mode: MODE.INLINE_SERVICE,
@@ -669,6 +699,8 @@ export class ProcessManager {
       vfs: this._vfs,                // for _proc_vfs_call dispatch (Phase B)
       tty: opts.tty || null,         // for _proc_tty_* event forwarding (Phase C)
       manager: this,                 // for _proc_pm_call dispatch (Phase D)
+      principal: opts.principal || null,           // principal sandbox (0.5.1+)
+      vfsCheckPermission: this._vfsCheckPermission, // enforced in _handleVfsCall
     });
     proc._killGrace = opts.killGrace || this._killGrace;
 

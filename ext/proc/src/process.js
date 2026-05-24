@@ -11,7 +11,7 @@ import {
 import { ReadablePort, WritablePort } from './channel.js';
 
 export class Process {
-  constructor({ pid, mode, worker, cleanup, command, vfs, tty, manager }) {
+  constructor({ pid, mode, worker, cleanup, command, vfs, tty, manager, principal, vfsCheckPermission }) {
     this.pid = pid;
     this.mode = mode;
     this.command = command || '';
@@ -28,6 +28,8 @@ export class Process {
     this._tty = tty || null;        // host tty for _proc_tty_* event forwarding
     this._ttyUnsubs = [];           // event-subscription cleanup fns
     this._manager = manager || null; // host ProcessManager for _proc_pm_call dispatch (Phase D)
+    this._principal = principal || null;         // principal sandbox (0.5.1+)
+    this._vfsCheckPermission = vfsCheckPermission || null;
     this._exitWaiters = [];
     this._msgHandlers = new Set();
     this._readySignal = null;          // resolved by READY message
@@ -220,9 +222,15 @@ export class Process {
           reply({ ok: false, error: { message: 'proc: ctx.pm.spawn(fn) is not supported in Phase D — pass a string command (with opts.shell) or a {module, mode} object' } });
           return;
         }
-        // Need shellConfig inherited from this Process's spawn so the
-        // sub-process can find a shell. Caller can also override via opts.
-        const subProc = await this._manager.spawn(payload, opts || {});
+        // Principal inheritance (0.5.1+): sub-process picks up the
+        // parent's principal unless the caller explicitly overrode via
+        // opts.principal. This is what keeps sandbox boundaries from
+        // leaking when a sandboxed worker spawns a child.
+        const childOpts = { ...(opts || {}) };
+        if (childOpts.principal == null && this._principal != null) {
+          childOpts.principal = this._principal;
+        }
+        const subProc = await this._manager.spawn(payload, childOpts);
         reply({ ok: true, value: { pid: subProc.pid } });
         return;
       }
@@ -285,6 +293,21 @@ export class Process {
     }
     try {
       const args = Array.isArray(msg.args) ? msg.args : [];
+      // Principal sandbox check (0.5.1+). VFS methods take the path as
+      // first arg; for two-path methods like rename / cp, check both.
+      if (this._principal && this._vfsCheckPermission) {
+        const checkPaths = (method === 'rename' || method === 'cp')
+          ? [args[0], args[1]]                       // src + dst both checked
+          : [args[0]];
+        for (const p of checkPaths) {
+          if (typeof p === 'string') {
+            // Re-anchor: the worker's path is relative to the mount; the
+            // host check needs the full path the principal was scoped to.
+            const fullPath = msg.mountPath === '/' ? p : (msg.mountPath.replace(/\/$/, '') + p);
+            this._vfsCheckPermission(method, fullPath, this._principal);
+          }
+        }
+      }
       const value = await backend[method](...args);
       reply({ ok: true, value });
     } catch (err) {
