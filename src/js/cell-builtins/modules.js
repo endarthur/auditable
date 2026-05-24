@@ -68,6 +68,36 @@ const LEGACY_ALIASES = {
   '@plan':     '@gcu/plan',
 };
 
+// pkg-spec §3.3: alias prefixes that rewrite to URLs at install time. The
+// alias remains the user-facing key (stored in _installedModules and the
+// lockfile); the URL is what fetch resolves. Returns { url, fallback? } or
+// null for keys that aren't aliases.
+//
+// NOTE: @gcu/* still routes through esm.sh today; the spec calls for
+// gentropic.org/lib/<name>.js once that's hosting. Migration is a
+// one-line change here when the origin is live.
+function _aliasToUrl(key) {
+  if (key.startsWith('npm:')) {
+    return { url: 'https://esm.sh/' + key.slice(4) };
+  }
+  if (key.startsWith('jsr:')) {
+    return { url: 'https://esm.sh/jsr/' + key.slice(4) };
+  }
+  if (key.startsWith('gh:')) {
+    return { url: 'https://esm.sh/gh/' + key.slice(3) };
+  }
+  // @gcu/* — bundled-first (deps inlined), fallback to plain.
+  if (key.startsWith('@gcu/')) {
+    return { url: 'https://esm.sh/' + key + '/bundled',
+             fallback: 'https://esm.sh/' + key };
+  }
+  // Other @scope/name — esm.sh passthrough.
+  if (/^@[\w.-]+\/[\w.-]+$/.test(key)) {
+    return { url: 'https://esm.sh/' + key };
+  }
+  return null;
+}
+
 // Find every `@scope/pkg` bare specifier referenced by a module source's
 // static or dynamic imports. Used to pre-load and rewrite cross-package
 // deps before a blob-URL-hosted module tries to resolve them itself.
@@ -157,6 +187,20 @@ export function makeModuleLoaders(cell, ctx, deps) {
       return window._importCache[url];
     }
 
+    // local: scheme — dev iteration. Reads the VFS every call (no
+    // _importCache hit), so editing /scratch/mymod.js + re-running a cell
+    // picks up the new bytes immediately. pkg-spec §3.4.
+    if (url.startsWith('local:')) {
+      const fsPath = url.slice('local:'.length);
+      const vfs = window._notebookVFS;
+      if (!vfs) throw new Error(`load(${url}): no VFS to read from`);
+      const source = await vfs.readFile(fsPath, 'utf8');
+      const blob = new Blob([source], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      try { return await import(blobUrl); }
+      finally { URL.revokeObjectURL(blobUrl); }
+    }
+
     // @atra/<name> — dev-mode fallback to atra library binary distributions
     if (url.startsWith('@atra/')) {
       if (!window._importCache[url] && !window._installedModules[url]) {
@@ -238,6 +282,27 @@ export function makeModuleLoaders(cell, ctx, deps) {
       return mod;
     }
 
+    // local: — read straight from the surface VFS, store with kind:'local'
+    // and no integrity. pkg-spec §3.4.
+    if (url.startsWith('local:')) {
+      const fsPath = url.slice('local:'.length);
+      const vfs = window._notebookVFS;
+      if (!vfs) throw new Error(`install(${url}): no VFS to read from`);
+      const source = await vfs.readFile(fsPath, 'utf8');
+      const compressedSrc = await compressText(source);
+      window._installedModules[storeKey] = {
+        source: compressedSrc, compressed: true, cellId: cell.id,
+        alias: storeKey, url: storeKey, kind: 'local',
+      };
+      notifyDirty();
+      const blob = new Blob([source], { type: 'application/javascript' });
+      const blobUrl = URL.createObjectURL(blob);
+      const mod = await import(blobUrl);
+      window._importCache[storeKey] = mod;
+      display(`installed ${storeKey} from VFS (${(source.length / 1024).toFixed(1)} KB)`);
+      return mod;
+    }
+
     const resolved = LEGACY_ALIASES[url] || url;
 
     // @atra/<name> — atra library distributions from Pages origin
@@ -258,18 +323,12 @@ export function makeModuleLoaders(cell, ctx, deps) {
       return mod;
     }
 
-    // @scope/name → esm.sh, with /bundled preferred for @gcu/*
-    const isScoped = /^@[\w.-]+\/[\w.-]+$/.test(resolved);
-    let esmUrl = resolved;
-    let esmFallbackUrl = null;
-    if (isScoped) {
-      if (resolved.startsWith('@gcu/')) {
-        esmUrl = 'https://esm.sh/' + resolved + '/bundled';
-        esmFallbackUrl = 'https://esm.sh/' + resolved;
-      } else {
-        esmUrl = 'https://esm.sh/' + resolved;
-      }
-    } else if (esmUrl.includes('esm.sh') && !esmUrl.includes('?bundle') && !esmUrl.includes('&bundle')) {
+    // pkg-spec §3.3 alias prefixes: npm:/jsr:/gh:/@gcu/*/@scope/name → URL.
+    // _aliasToUrl returns null for non-alias inputs (bare URLs).
+    const alias = _aliasToUrl(resolved);
+    let esmUrl = alias ? alias.url : resolved;
+    let esmFallbackUrl = alias ? (alias.fallback || null) : null;
+    if (!alias && esmUrl.includes('esm.sh') && !esmUrl.includes('?bundle') && !esmUrl.includes('&bundle')) {
       esmUrl += (esmUrl.includes('?') ? '&' : '?') + 'bundle';
     }
 
@@ -297,7 +356,13 @@ export function makeModuleLoaders(cell, ctx, deps) {
 
     let source = resolveModulePaths(result.source, result.finalUrl);
     const compressedSrc = await compressText(source);
-    window._installedModules[storeKey] = { source: compressedSrc, compressed: true, cellId: cell.id };
+    // alias + url stamp the entry so /lib/<source>/<name>/meta.json carries
+    // the user-facing name and the resolved (post-redirect) URL. The
+    // lockfile (chunk 3) will read these directly.
+    window._installedModules[storeKey] = {
+      source: compressedSrc, compressed: true, cellId: cell.id,
+      alias: storeKey, url: result.finalUrl,
+    };
     notifyDirty();
     // Use the shared materialiser so scoped imports get rewritten.
     const blobUrl = await _materializeInstalled(storeKey);

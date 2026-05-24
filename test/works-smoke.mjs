@@ -372,8 +372,16 @@ const nbShellTab = await page.evaluate(async () => {
   await W.vfs.mkdir('/projects/SmokeShell', { recursive: true });
   await W.vfs.writeFile('/projects/SmokeShell/project.json',
     JSON.stringify({ kind: 'notebook', id: 'nb-smokeshell', title: 'Smoke Shell' }));
+  // Three cells: the !-cell (shell-cmd test), the local:-cell (pkg-spec
+  // §3.4 test), and a final display so the local-cell output is easy to
+  // spot in the test's poll.
   await W.vfs.writeFile('/projects/SmokeShell/notebook.txt',
-    '/// auditable\n/// title: Smoke Shell\n/// runOnLoad: yes\n\n/// code\n!echo hi from geas\necho second line\n');
+    '/// auditable\n/// title: Smoke Shell\n/// runOnLoad: yes\n\n'
+    + '/// code\n!echo hi from geas\necho second line\n\n'
+    + "/// code\nconst _ws = '/tmp/local-smoke-mod.js';\n"
+    + "await notebook.fs.write(_ws, 'export const answer = () => 42;');\n"
+    + "const _mod = await load('local:' + _ws);\n"
+    + "display('local-loaded: ' + _mod.answer());\n");
   const tabId = await W.openPath('/projects/SmokeShell');
   const rec = W.surfaces.get(tabId);
   const deadline = Date.now() + 25000;
@@ -385,16 +393,29 @@ const nbShellTab = await page.evaluate(async () => {
 
 const nbShellFrame = nbShellTab.ready ? await surfaceFrame(nbShellTab.tabId) : null;
 let nbShellOutput = null;
+let nbLocalLoad = null;
 if (nbShellFrame) {
   nbShellOutput = await nbShellFrame.evaluate(async () => {
-    // Autorun fires the !-cell during boot. Poll the cell's output area
-    // for up to 10s (geas worker spawn + exec).
+    // Autorun fires the !-cell during boot. Poll the FIRST code cell's
+    // output for up to 10s (geas worker spawn + exec).
     const deadline = Date.now() + 10000;
     let out = '';
     while (Date.now() < deadline) {
-      const cell = window.S?.cells?.find((c) => c.type === 'code');
+      const cell = window.S?.cells?.filter((c) => c.type === 'code')[0];
       out = (cell && cell.el?.querySelector('.cell-output')?.textContent) || '';
       if (out.includes('hi from geas')) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return { out };
+  });
+  nbLocalLoad = await nbShellFrame.evaluate(async () => {
+    // The second code cell exercises load('local:/tmp/...').
+    const deadline = Date.now() + 5000;
+    let out = '';
+    while (Date.now() < deadline) {
+      const cell = window.S?.cells?.filter((c) => c.type === 'code')[1];
+      out = (cell && cell.el?.querySelector('.cell-output')?.textContent) || '';
+      if (out.includes('local-loaded')) break;
       await new Promise((r) => setTimeout(r, 100));
     }
     return { out };
@@ -826,6 +847,9 @@ const checks = {
   'shell cell prints stdout':             nbShellOutput && nbShellOutput.out
                                             && nbShellOutput.out.includes('hi from geas')
                                             && nbShellOutput.out.includes('second line'),
+  // local: scheme — load a JS module straight from the surface VFS
+  'local: scheme loads from VFS':         nbLocalLoad && nbLocalLoad.out
+                                            && nbLocalLoad.out.includes('local-loaded: 42'),
   // Import notebook (.txt + .html, current + legacy formats)
   'import .txt creates a notebook project': importResult.txtPath === '/projects/Imported TXT'
       && importResult.txtKind === 'notebook' && importResult.txtTitle === 'Imported TXT',
