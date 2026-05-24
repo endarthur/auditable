@@ -3,16 +3,49 @@ import assert from 'node:assert/strict';
 import { renderMd } from '../src/js/markdown.js';
 
 describe('renderMd', () => {
-  it('renders h1', () => {
-    assert.ok(renderMd('# Hello').includes('<h1>Hello</h1>'));
+  it('renders h1 with slug id', () => {
+    assert.ok(renderMd('# Hello').includes('<h1 id="hello">Hello</h1>'));
   });
 
-  it('renders h2', () => {
-    assert.ok(renderMd('## World').includes('<h2>World</h2>'));
+  it('renders h2 with slug id', () => {
+    assert.ok(renderMd('## World').includes('<h2 id="world">World</h2>'));
   });
 
-  it('renders h3', () => {
-    assert.ok(renderMd('### Sub').includes('<h3>Sub</h3>'));
+  it('renders h3 with slug id', () => {
+    assert.ok(renderMd('### Sub').includes('<h3 id="sub">Sub</h3>'));
+  });
+
+  it('h1/h2/h3 slug includes inline-code content', () => {
+    // `data` is extracted as an ICODE placeholder, but the slug expander
+    // brings the original text back so the heading anchors on "data".
+    const out = renderMd('## Save `data` format!');
+    assert.ok(out.includes('id="save-data-format"'), out);
+  });
+
+  it('admonitions render as labelled callouts', () => {
+    const out = renderMd('!!! tip\n\n    quick body');
+    assert.ok(out.includes('class="admonition adm-tip"'), out);
+    assert.ok(out.includes('<div class="admonition-title">Tip</div>'), out);
+    assert.ok(out.includes('quick body'), out);
+  });
+
+  it('admonitions accept "title" override', () => {
+    const out = renderMd('!!! warning "Heads up"\n\n    careful');
+    assert.ok(out.includes('class="admonition adm-warning"'), out);
+    assert.ok(out.includes('>Heads up</div>'), out);
+  });
+
+  it('++keys++ render as kbd pills joined by +', () => {
+    const out = renderMd('press ++ctrl+enter++');
+    assert.ok(out.includes('<kbd>ctrl</kbd>+<kbd>enter</kbd>'), out);
+  });
+
+  it('~~strike~~ renders as <del>', () => {
+    assert.ok(renderMd('~~gone~~').includes('<del>gone</del>'));
+  });
+
+  it('h4-h6 stay anchor-less', () => {
+    assert.ok(renderMd('#### deep').includes('<h4>deep</h4>'));
   });
 
   it('renders bold', () => {
