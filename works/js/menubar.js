@@ -9,6 +9,7 @@ import { mountFolder } from './mount.js';
 import { openWorkspaceFolder, resetWorkspace } from './workspace.js';
 import { exportWorkspace, openWorkspaceFile, saveWorkspace } from './persist.js';
 import { confirm as dlgConfirm } from '#dialog';
+import { showAbout } from './about.js';
 
 export function setupMenuBar() {
   const el = document.getElementById('works-menubar');
@@ -67,6 +68,7 @@ export function setupMenuBar() {
       spawnSurface('inspector', { title: 'A-Bus Inspector' });
       return;
     }
+    if (action === 'help:about') { await showAbout(); return; }
     setStatus(`menu: ${action}`);  // workspace:save lands with 5b
   });
 

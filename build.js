@@ -87,6 +87,33 @@ if (target === 'works') {
     modules.unshift({ name, source: src });
   }
 
+  // Build-time placeholders (version / build date / public key etc.) for
+  // the About modal and any future module that needs them. Same shape as
+  // the auditable target's injection loop further down — modules opt in
+  // by declaring a const with the matching placeholder value.
+  const worksPkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
+  const worksBuildDate = new Date().toISOString().slice(0, 10);
+  const worksRelease = process.env.AUDITABLE_RELEASE || 'dev';
+  const worksPubKey = process.env.AUDITABLE_PUBLIC_KEY || '';
+  const worksRepo = process.env.AUDITABLE_REPO || 'endarthur/auditable';
+  for (const mod of modules) {
+    mod.source = mod.source.replace(
+      "const __AUDITABLE_VERSION__ = '0.0.0';",
+      `const __AUDITABLE_VERSION__ = '${worksPkg.version || '0.0.0'}';`);
+    mod.source = mod.source.replace(
+      "const __AUDITABLE_BUILD_DATE__ = 'dev';",
+      `const __AUDITABLE_BUILD_DATE__ = '${worksBuildDate}';`);
+    mod.source = mod.source.replace(
+      "const __AUDITABLE_RELEASE__ = 'dev';",
+      `const __AUDITABLE_RELEASE__ = '${worksRelease}';`);
+    mod.source = mod.source.replace(
+      "const __AUDITABLE_PUBLIC_KEY__ = '';",
+      `const __AUDITABLE_PUBLIC_KEY__ = '${worksPubKey}';`);
+    mod.source = mod.source.replace(
+      "const __AUDITABLE_REPO__ = 'endarthur/auditable';",
+      `const __AUDITABLE_REPO__ = '${worksRepo}';`);
+  }
+
   const worksJs = generateModuleBoot('', modules, '');
 
   // CSS: the shell's own stylesheet + the component theme sheets appended

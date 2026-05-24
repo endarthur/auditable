@@ -14,5 +14,6 @@ import './works-service.js';
 import './import.js';
 import './project-export.js';
 import './tree.js';
+import './about.js';
 import './menubar.js';
 import './init.js';
