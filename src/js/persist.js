@@ -85,25 +85,82 @@ export function getPersister() {
 
 // ── Module storage sync (window._installedModules ↔ /lib/) ──
 //
-// Pre-1.0 cell-builtins/modules.js still reads/writes window._installedModules
-// directly (full migration is a follow-up). Here we sync the in-memory map
-// onto /lib/<url-encoded>/ at save time and back at load time, so the on-disk
-// format is VFS-uniform. (Content-addressed /lib per spec §15.4 is a later step.)
+// pkg-spec §3.1 layout: /lib/ is sub-namespaced by source.
+//   /lib/@gcu/spinifex/         gentropic.org-hosted
+//   /lib/npm/leaflet/           npm via esm.sh
+//   /lib/jsr/@hono/hono/        jsr.io via esm.sh
+//   /lib/gh/user/repo/          GitHub via esm.sh
+//   /lib/local/<hash>/          local: dev installs (hash of VFS path)
+//   /lib/url/<hash>/            raw URL, no matching prefix
+// Each leaf has source + meta.json; meta.json records the user-facing alias
+// and the resolved URL. window._installedModules keys remain user-facing
+// (alias or URL) — keyToLibPath turns them into paths, libPathToKey reverses.
+//
+// Legacy layout was /lib/<encodeURIComponent(url)>/ (flat). Hydrate still
+// reads it; sync only writes the new layout — saved notebooks self-upgrade.
 
 const MODULES_DIR = '/lib';
-// In Works, the shell also exposes its bundled libs at /usr/lib (Unix-style
-// "system-provided"); hydrateModulesFromVfs reads both directories with
-// /lib shadowing /usr/lib so a user-installed module wins over a builtin
-// of the same URL. Standalone notebooks just see /lib (no /usr/lib mount).
+// In Works, the shell exposes bundled libs at /usr/lib (Unix-style
+// "system-provided"); hydrate reads both, /lib shadows /usr/lib so a user
+// install wins over a builtin. Standalone notebooks see /lib only.
 const BUILTIN_MODULES_DIR = '/usr/lib';
 const _enc = encodeURIComponent;
 const _dec = decodeURIComponent;
+
+async function _sha256Short(s) {
+  const bytes = new TextEncoder().encode(s);
+  const buf = await crypto.subtle.digest('SHA-256', bytes);
+  return [...new Uint8Array(buf, 0, 8)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Map a user-facing key (alias or URL) to its on-disk /lib subpath.
+export async function keyToLibPath(key, root = MODULES_DIR) {
+  if (key.startsWith('npm:'))    return root + '/npm/'    + key.slice('npm:'.length);
+  if (key.startsWith('jsr:'))    return root + '/jsr/'    + key.slice('jsr:'.length);
+  if (key.startsWith('gh:'))     return root + '/gh/'     + key.slice('gh:'.length);
+  if (key.startsWith('local:'))  return root + '/local/'  + await _sha256Short(key);
+  if (key.startsWith('http://') || key.startsWith('https://'))
+                                 return root + '/url/'    + await _sha256Short(key);
+  // Scoped packages — @gcu/foo, @atra/foo, @anyscope/foo. The scope dir
+  // (which already starts with @) acts as the source namespace; no extra
+  // prefix needed.
+  if (/^@[\w.-]+\/[\w.-]+$/.test(key)) return root + '/' + key;
+  // Anything else (bare name without prefix) — treat as a URL hash. Rare.
+  return root + '/url/' + await _sha256Short(key);
+}
+
+// Reverse: a path under /lib (as segments after the /lib prefix) + the
+// hydrated meta.json → the user-facing key. Returns null when we can't
+// determine the key (e.g. /url/<hash> without an `alias` field in meta).
+export function libPathToKey(segments, meta) {
+  if (!segments || segments.length === 0) return null;
+  const [first, ...rest] = segments;
+
+  // Legacy single-segment <url-encoded>/ — flat layout from before pkg-spec.
+  if (segments.length === 1 && first.includes('%')) {
+    try { return _dec(first); } catch { return null; }
+  }
+
+  if (first === 'npm' || first === 'jsr' || first === 'gh') {
+    return rest.length ? first + ':' + rest.join('/') : null;
+  }
+  if (first === 'url' || first === 'local') {
+    return meta?.alias || meta?.url || null;
+  }
+  // Scoped: first starts with @, the rest is the package name (one or more
+  // segments — jsr could nest @scope/name).
+  if (first.startsWith('@') && rest.length) {
+    return first + '/' + rest.join('/');
+  }
+  return null;
+}
 
 export async function syncModulesToVfs(vfs, installedModules) {
   if (!vfs) return;
   await vfs.mkdir(MODULES_DIR, { recursive: true }).catch(() => {});
 
-  // Wipe the existing /lib/ entries — easier than diffing.
+  // Wipe the existing /lib/ tree — easier than diffing. rm -r on each
+  // top-level entry handles both new (sub-namespaced) and legacy (flat) layouts.
   let existing = [];
   try { existing = await vfs.readdir(MODULES_DIR, { stat: true }); } catch {}
   for (const e of existing) {
@@ -115,22 +172,24 @@ export async function syncModulesToVfs(vfs, installedModules) {
   }
 
   if (!installedModules) return;
-  for (const [url, entry] of Object.entries(installedModules)) {
+  for (const [key, entry] of Object.entries(installedModules)) {
     // Skip builtins — they live at /usr/lib (volatile, repopulated by the
     // shell at boot). Writing them to /lib would persist them in workspace
     // exports and shadow future shell-provided versions.
     if (entry && typeof entry === 'object' && entry.builtin) continue;
-    const dir = MODULES_DIR + '/' + _enc(url);
+    const dir = await keyToLibPath(key);
     await vfs.mkdir(dir, { recursive: true }).catch(() => {});
     if (typeof entry === 'string') {
       // legacy: bare source string
       await vfs.writeFile(dir + '/source', entry);
-      await vfs.writeFile(dir + '/meta.json', JSON.stringify({ legacy: true }));
+      await vfs.writeFile(dir + '/meta.json', JSON.stringify({ alias: key, legacy: true }));
       continue;
     }
     if (entry && typeof entry === 'object') {
-      // metadata sans `source`
+      // metadata sans `source`; always stamp the alias so url/local hashes
+      // can be reversed.
       const { source, ...meta } = entry;
+      if (!meta.alias) meta.alias = key;
       await vfs.writeFile(dir + '/meta.json', JSON.stringify(meta));
       if (typeof source === 'string') await vfs.writeFile(dir + '/source', source);
     }
@@ -164,30 +223,41 @@ export async function flushPendingDirty(vfs, S, settings, title) {
   await syncModulesToVfs(vfs, window._installedModules || {});
 }
 
+async function _walkLibLeaves(vfs, base, segments, result) {
+  let entries;
+  try { entries = await vfs.readdir(base, { stat: true }); } catch { return; }
+
+  // Leaf: a directory holding `source` and/or `meta.json` files.
+  const isLeaf = entries.some(e => e.type !== 'directory'
+    && (e.name === 'source' || e.name === 'meta.json'));
+  if (isLeaf && segments.length > 0) {
+    let meta = {};
+    let source = null;
+    try { meta = JSON.parse(await vfs.readFile(base + '/meta.json', 'text')); } catch {}
+    try { source = await vfs.readFile(base + '/source', 'text'); } catch {}
+    const key = libPathToKey(segments, meta);
+    if (key !== null) {
+      if (meta.legacy && source !== null) result[key] = source;
+      else if (source !== null) result[key] = { ...meta, source };
+      else if (Object.keys(meta).length > 0) result[key] = meta;
+    }
+    return;
+  }
+
+  // Recurse into subdirectories — discovers nested @scope/name namespaces.
+  for (const e of entries) {
+    if (e.type !== 'directory') continue;
+    await _walkLibLeaves(vfs, base + '/' + e.name, [...segments, e.name], result);
+  }
+}
+
 export async function hydrateModulesFromVfs(vfs) {
   if (!vfs) return {};
   const result = {};
   // /usr/lib first — its entries are the floor; /lib overlays them so a
-  // user-installed module of the same URL shadows a shell-provided one.
+  // user install of the same key shadows a shell-provided one.
   for (const dir of [BUILTIN_MODULES_DIR, MODULES_DIR]) {
-    let entries;
-    try { entries = await vfs.readdir(dir, { stat: true }); } catch { continue; }
-    for (const e of entries) {
-      if (e.type !== 'directory') continue;
-      const url = _dec(e.name);
-      const entryDir = dir + '/' + e.name;
-      let meta = {};
-      let source = null;
-      try { meta = JSON.parse(await vfs.readFile(entryDir + '/meta.json', 'text')); } catch {}
-      try { source = await vfs.readFile(entryDir + '/source', 'text'); } catch {}
-      if (meta.legacy && source !== null) {
-        result[url] = source;
-      } else if (source !== null) {
-        result[url] = { ...meta, source };
-      } else if (Object.keys(meta).length > 0) {
-        result[url] = meta;
-      }
-    }
+    await _walkLibLeaves(vfs, dir, [], result);
   }
   return result;
 }

@@ -80,12 +80,13 @@ export async function refreshTree() {
 async function walk(dir) {
   const entries = await WKS.vfs.readdir(dir, { stat: true });
   const nodes = [];
-  // Inside /lib and /usr/lib, names are URL-encoded module URLs (e.g.
-  // %40gcu%2Fxterm for @gcu/xterm); show them decoded for the user.
+  // Legacy: pre-pkg-spec /lib used flat URL-encoded names (%40gcu%2Fxterm
+  // for @gcu/xterm). New layout is sub-namespaced (@gcu/xterm is a real
+  // directory tree), so this only matters for not-yet-resaved notebooks.
   const decode = (dir === '/lib' || dir === '/usr/lib');
   for (const e of entries) {
     const p = join(dir, e.name);
-    const label = decode ? safeDecode(e.name) : e.name;
+    const label = decode && e.name.includes('%') ? safeDecode(e.name) : e.name;
     if (e.type === 'directory') {
       let meta = null;
       try {

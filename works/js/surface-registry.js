@@ -53,20 +53,21 @@ export async function decompressLibs() {
 
 // Write each shared library into the workspace's /usr/lib as a module
 // directory — the same layout the notebook's hydrateModulesFromVfs reads
-// from /lib, so a notebook can `load("@gcu/<name>")` natively. /usr/lib
-// is a volatile MemoryBackend (workspace.js): the shell repopulates it
-// on every boot, builtins never leak into workspace exports, and a user
-// install of the same URL into /lib shadows the builtin (Unix-style).
+// from /lib (pkg-spec §3.1: sub-namespaced by source). A notebook can
+// `load("@gcu/<name>")` natively. /usr/lib is a volatile MemoryBackend
+// (workspace.js): the shell repopulates it on every boot, builtins never
+// leak into workspace exports, and a user install of the same alias into
+// /lib shadows the builtin (Unix-style).
 export async function installSharedLibsToVfs(vfs) {
   if (!vfs) return;
-  await vfs.mkdir('/usr/lib', { recursive: true }).catch(() => {});
+  await vfs.mkdir('/usr/lib/@gcu', { recursive: true }).catch(() => {});
   for (const [name, src] of _libSources) {
-    const url = '@gcu/' + name;
-    const dir = '/usr/lib/' + encodeURIComponent(url);
+    const alias = '@gcu/' + name;
+    const dir = '/usr/lib/@gcu/' + name;
     await vfs.mkdir(dir, { recursive: true }).catch(() => {});
     await vfs.writeFile(dir + '/source', src);
     await vfs.writeFile(dir + '/meta.json',
-      JSON.stringify({ builtin: true, kind: 'gcu-lib' }));
+      JSON.stringify({ alias, builtin: true, kind: 'gcu-lib' }));
   }
 }
 
