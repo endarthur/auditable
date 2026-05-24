@@ -20,8 +20,8 @@ theme:
         icon: material/brightness-7
         name: Switch to dark mode
   font:
-    text: Inter
-    code: JetBrains Mono
+    text: Barlow
+    code: Space Mono
   features:
     - navigation.sections
     - navigation.expand

@@ -1,116 +1,474 @@
-/* GCU Theme — geological color tokens from GCU Design System v5 */
+/* ──────────────────────────────────────────────────────────────────
+   Switchboard for mkdocs-material.
 
-/* ── dark mode (slate) ── */
-[data-md-color-scheme="slate"] {
-  /* surfaces */
-  --md-default-bg-color: #181a1c;          /* Basalt */
-  --md-code-bg-color: #22252a;             /* Gabbro */
+   Overrides Material's CSS custom properties with the canonical
+   Switchboard token values. Layer 1 (Switchboard swatches) → Layer 2
+   (Material's --md-* tokens). Component CSS (the Material theme) reads
+   --md-*, which now resolves to Switchboard.
 
-  /* header */
-  --md-primary-fg-color: #c08028;          /* Copper (warm accent) */
-  --md-primary-bg-color: #1e2024;          /* Schist */
+   Spec: ext/switchboard/SPEC.md.
+   ────────────────────────────────────────────────────────────────── */
 
-  /* accents */
-  --md-accent-fg-color: #c08028;           /* Copper */
-  --md-typeset-a-color: #c08028;           /* Copper for links */
+/* ── Layer 1: Switchboard token swatches ────────────────────────── */
 
-  /* text */
-  --md-default-fg-color: #e8e4e0;          /* Calcite */
-  --md-default-fg-color--light: #b0aaa0;   /* Limestone */
-  --md-default-fg-color--lighter: #707068; /* Slate */
-  --md-default-fg-color--lightest: #383a40;
-
-  /* code */
-  --md-code-fg-color: #e8e4e0;
-  --md-code-hl-color: rgba(192, 128, 40, 0.15);
-
-  /* footer */
-  --md-footer-bg-color: #1e2024;
-  --md-footer-bg-color--dark: #181a1c;
-
-  /* admonitions — Azurite for info tones */
-  --md-admonition-fg-color: #e8e4e0;
-  --md-admonition-bg-color: #22252a;
-}
-
-/* ── light mode (default) ── */
+/* Light mode (equipment gray). */
 [data-md-color-scheme="default"] {
-  /* surfaces */
-  --md-default-bg-color: #f8f6f2;          /* Chalk */
-  --md-code-bg-color: #f0ece4;             /* warm paper */
+  --sw-bg-deep:     #C2C1BE;
+  --sw-bg:          #D2D1CE;
+  --sw-bg-raised:   #E4E3E1;
+  --sw-bg-bright:   #EDECEB;
+  --sw-text:        #232322;
+  --sw-text-mid:    #504F4C;
+  --sw-text-soft:   #7A7875;
+  --sw-border:      #B3B1AD;
+  --sw-border-soft: #C6C4C1;
+  --sw-rule:        #A5A3A0;
 
-  /* header */
-  --md-primary-fg-color: #f8f6f2;          /* light text on dark header */
-  --md-primary-bg-color: #2a2c30;          /* dark header bar */
-
-  /* accents — darker Copper for contrast on white */
-  --md-accent-fg-color: #96601c;
-  --md-typeset-a-color: #96601c;
-
-  /* text */
-  --md-default-fg-color: #2a2c30;
-  --md-default-fg-color--light: #505050;
-  --md-default-fg-color--lighter: #909090;
-
-  /* code */
-  --md-code-fg-color: #2a2c30;
-  --md-code-hl-color: rgba(192, 128, 40, 0.1);
+  --sw-orange:      #B54E1A;  --sw-orange-soft: #E8D8CF;
+  --sw-teal:        #1B6B72;  --sw-teal-soft:   #CEE2E4;
+  --sw-green:       #3D7340;  --sw-green-soft:  #D2E4D4;
+  --sw-amber:       #8E6518;  --sw-amber-soft:  #E4DCCC;
+  --sw-red:         #A8312A;  --sw-red-soft:    #E8D6D4;
+  --sw-indigo:      #4E5580;  --sw-indigo-soft: #D8D9E2;
 }
 
-/* ── shared overrides ── */
+/* Dark mode (basalt). */
+[data-md-color-scheme="slate"] {
+  --sw-bg-deep:     #0E1012;
+  --sw-bg:          #15171A;
+  --sw-bg-raised:   #1D2024;
+  --sw-bg-bright:   #25282D;
+  --sw-text:        #DDDCDA;
+  --sw-text-mid:    #9E9C98;
+  --sw-text-soft:   #6E6C68;
+  --sw-border:      #2F3338;
+  --sw-border-soft: #24272B;
+  --sw-rule:        #3A3E44;
 
-/* nav sidebar active/hover */
+  --sw-orange:      #D4672E;  --sw-orange-soft: #2E1F18;
+  --sw-teal:        #3A9BA3;  --sw-teal-soft:   #16272A;
+  --sw-green:       #5A9B5E;  --sw-green-soft:  #18261A;
+  --sw-amber:       #C49540;  --sw-amber-soft:  #2A2316;
+  --sw-red:         #D05048;  --sw-red-soft:    #2C1A18;
+  --sw-indigo:      #7E86B8;  --sw-indigo-soft: #1E2030;
+}
+
+/* ── Layer 2: map Switchboard → Material tokens ─────────────────── */
+
+[data-md-color-scheme="default"],
+[data-md-color-scheme="slate"] {
+  /* Surfaces */
+  --md-default-bg-color:           var(--sw-bg);
+  --md-default-bg-color--light:    var(--sw-bg-raised);
+  --md-default-bg-color--lighter:  var(--sw-bg-bright);
+
+  --md-code-bg-color:              var(--sw-bg-deep);
+  --md-code-fg-color:              var(--sw-text);
+
+  /* Text */
+  --md-default-fg-color:           var(--sw-text);
+  --md-default-fg-color--light:    var(--sw-text-mid);
+  --md-default-fg-color--lighter:  var(--sw-text-soft);
+  --md-default-fg-color--lightest: var(--sw-border);
+
+  /* Header */
+  --md-primary-fg-color:           var(--sw-bg-bright);
+  --md-primary-fg-color--light:    var(--sw-bg-raised);
+  --md-primary-fg-color--dark:     var(--sw-bg-deep);
+  --md-primary-bg-color:           var(--sw-text);
+  --md-primary-bg-color--light:    var(--sw-text-mid);
+
+  /* Accent — orange (action) */
+  --md-accent-fg-color:            var(--sw-orange);
+  --md-accent-fg-color--transparent: var(--sw-orange-soft);
+  --md-accent-bg-color:            var(--sw-bg);
+
+  /* Links — teal (info) */
+  --md-typeset-a-color:            var(--sw-teal);
+
+  /* Code highlight */
+  --md-code-hl-color:              var(--sw-orange-soft);
+
+  /* Footer */
+  --md-footer-bg-color:            var(--sw-bg-raised);
+  --md-footer-bg-color--dark:      var(--sw-bg-deep);
+  --md-footer-fg-color:            var(--sw-text);
+  --md-footer-fg-color--light:     var(--sw-text-mid);
+  --md-footer-fg-color--lighter:   var(--sw-text-soft);
+}
+
+/* Dark-mode primary header tweak — slate's default looks washed out
+   against basalt. Use --sw-bg-raised as the header (one step up from
+   the page) so it reads as chrome. */
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color:           var(--sw-bg-bright);
+  --md-primary-bg-color:           var(--sw-text);
+}
+
+/* ── Typography ──────────────────────────────────────────────────── */
+
+:root {
+  --md-text-font-family: 'Barlow', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --md-code-font-family: 'Space Mono', ui-monospace, 'JetBrains Mono', Consolas, monospace;
+}
+
+.md-typeset {
+  font-family: var(--md-text-font-family);
+}
+
+.md-typeset code,
+.md-typeset kbd,
+.md-typeset pre {
+  font-family: var(--md-code-font-family);
+}
+
+/* Section labels (panel headers, section headings in chrome) in
+   Switchboard tradition: Space Mono, uppercase, tracked. Apply to the
+   nav-section headings so the sidebar feels like equipment. */
+.md-nav__title {
+  font-family: var(--md-code-font-family);
+  font-size: 0.68rem !important;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--sw-orange) !important;
+}
+
+/* Page H1 — Switchboard "Display" style. */
+.md-typeset h1 {
+  font-family: var(--md-code-font-family);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--sw-orange);
+}
+
+/* ── Component overrides — bring the rest in line ───────────────── */
+
+/* Inline code — bright surface (well), keep the warm tint. */
+.md-typeset code {
+  background: var(--sw-bg-bright);
+  color: var(--sw-orange);
+  padding: 0.05em 0.4em;
+  border-radius: 3px;
+  font-size: 0.92em;
+}
+.md-typeset h1 code,
+.md-typeset h2 code,
+.md-typeset h3 code,
+.md-typeset h4 code {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+/* Fenced code blocks — deep surface, no border. */
+.md-typeset pre > code {
+  background: var(--sw-bg-deep);
+  color: var(--sw-text);
+  border: 1px solid var(--sw-border-soft);
+  border-radius: 4px;
+}
+
+/* Links in body content — teal, no underline by default, underline on
+   hover. */
+.md-typeset a {
+  color: var(--md-typeset-a-color);
+  text-decoration: none;
+}
+.md-typeset a:hover {
+  color: var(--sw-orange);
+  text-decoration: underline;
+}
+
+/* Nav sidebar: hover + active = orange. */
 .md-nav__link--active,
 .md-nav__link:is(:focus, :hover) {
-  color: var(--md-accent-fg-color);
+  color: var(--sw-orange);
 }
 
-/* TOC sidebar active */
+/* TOC sidebar (secondary nav) */
 .md-nav--secondary .md-nav__link--active {
-  color: var(--md-accent-fg-color);
+  color: var(--sw-orange);
+  border-left-color: var(--sw-orange);
 }
 
-/* search highlight */
+/* Search */
 .md-search-result mark {
-  color: var(--md-accent-fg-color);
-  background: transparent;
+  color: var(--sw-orange);
+  background: var(--sw-orange-soft);
+}
+.md-search__input {
+  background: var(--sw-bg-bright);
+  color: var(--sw-text);
+}
+.md-search__input::placeholder {
+  color: var(--sw-text-soft);
 }
 
-/* inline code styling */
-.md-typeset code {
+/* Tables — section-rule borders, no zebra. */
+.md-typeset table:not([class]) {
+  border: 1px solid var(--sw-border);
+}
+.md-typeset table:not([class]) th {
+  background: var(--sw-bg-bright);
+  font-family: var(--md-code-font-family);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--sw-text);
+}
+.md-typeset table:not([class]) td {
+  background: var(--sw-bg);
+}
+.md-typeset table:not([class]) tr:hover td {
+  background: var(--sw-bg-raised);
+}
+
+/* Blockquotes — left rule in teal (info-coloured). */
+.md-typeset blockquote {
+  border-left: 3px solid var(--sw-teal);
+  color: var(--sw-text-mid);
+  padding-left: 1rem;
+}
+
+/* ── Admonitions — six-accent semantic mapping ──────────────────── */
+/* Switchboard mapping: info/note → teal, tip → green, warning → amber,
+   danger/failure/error → red, abstract/summary → indigo, example →
+   orange. Material has more admonition types than Switchboard has
+   accents; the rest fold onto the closest fit. */
+
+.md-typeset .admonition,
+.md-typeset details {
+  border-radius: 4px;
+  border-width: 1px;
+  border-style: solid;
+}
+
+/* info / note / abstract-info shapes → teal */
+.md-typeset .admonition.note,
+.md-typeset details.note,
+.md-typeset .admonition.info,
+.md-typeset details.info {
+  border-color: var(--sw-teal);
+  background: var(--sw-bg-raised);
+}
+.md-typeset .note > .admonition-title,
+.md-typeset .note > summary,
+.md-typeset .info > .admonition-title,
+.md-typeset .info > summary {
+  background: var(--sw-teal-soft);
+  color: var(--sw-teal);
+}
+.md-typeset .note > .admonition-title::before,
+.md-typeset .note > summary::before,
+.md-typeset .info > .admonition-title::before,
+.md-typeset .info > summary::before {
+  background-color: var(--sw-teal);
+}
+
+/* tip / success / hint → green */
+.md-typeset .admonition.tip,
+.md-typeset details.tip,
+.md-typeset .admonition.success,
+.md-typeset details.success,
+.md-typeset .admonition.hint,
+.md-typeset details.hint {
+  border-color: var(--sw-green);
+  background: var(--sw-bg-raised);
+}
+.md-typeset .tip > .admonition-title,
+.md-typeset .tip > summary,
+.md-typeset .success > .admonition-title,
+.md-typeset .success > summary,
+.md-typeset .hint > .admonition-title,
+.md-typeset .hint > summary {
+  background: var(--sw-green-soft);
+  color: var(--sw-green);
+}
+.md-typeset .tip > .admonition-title::before,
+.md-typeset .tip > summary::before,
+.md-typeset .success > .admonition-title::before,
+.md-typeset .success > summary::before,
+.md-typeset .hint > .admonition-title::before,
+.md-typeset .hint > summary::before {
+  background-color: var(--sw-green);
+}
+
+/* warning / caution / attention → amber */
+.md-typeset .admonition.warning,
+.md-typeset details.warning,
+.md-typeset .admonition.caution,
+.md-typeset details.caution,
+.md-typeset .admonition.attention,
+.md-typeset details.attention {
+  border-color: var(--sw-amber);
+  background: var(--sw-bg-raised);
+}
+.md-typeset .warning > .admonition-title,
+.md-typeset .warning > summary,
+.md-typeset .caution > .admonition-title,
+.md-typeset .caution > summary,
+.md-typeset .attention > .admonition-title,
+.md-typeset .attention > summary {
+  background: var(--sw-amber-soft);
+  color: var(--sw-amber);
+}
+.md-typeset .warning > .admonition-title::before,
+.md-typeset .warning > summary::before,
+.md-typeset .caution > .admonition-title::before,
+.md-typeset .caution > summary::before,
+.md-typeset .attention > .admonition-title::before,
+.md-typeset .attention > summary::before {
+  background-color: var(--sw-amber);
+}
+
+/* danger / failure / error / bug → red */
+.md-typeset .admonition.danger,
+.md-typeset details.danger,
+.md-typeset .admonition.failure,
+.md-typeset details.failure,
+.md-typeset .admonition.error,
+.md-typeset details.error,
+.md-typeset .admonition.bug,
+.md-typeset details.bug {
+  border-color: var(--sw-red);
+  background: var(--sw-bg-raised);
+}
+.md-typeset .danger > .admonition-title,
+.md-typeset .danger > summary,
+.md-typeset .failure > .admonition-title,
+.md-typeset .failure > summary,
+.md-typeset .error > .admonition-title,
+.md-typeset .error > summary,
+.md-typeset .bug > .admonition-title,
+.md-typeset .bug > summary {
+  background: var(--sw-red-soft);
+  color: var(--sw-red);
+}
+.md-typeset .danger > .admonition-title::before,
+.md-typeset .danger > summary::before,
+.md-typeset .failure > .admonition-title::before,
+.md-typeset .failure > summary::before,
+.md-typeset .error > .admonition-title::before,
+.md-typeset .error > summary::before,
+.md-typeset .bug > .admonition-title::before,
+.md-typeset .bug > summary::before {
+  background-color: var(--sw-red);
+}
+
+/* abstract / summary / tldr → indigo */
+.md-typeset .admonition.abstract,
+.md-typeset details.abstract,
+.md-typeset .admonition.summary,
+.md-typeset details.summary,
+.md-typeset .admonition.tldr,
+.md-typeset details.tldr {
+  border-color: var(--sw-indigo);
+  background: var(--sw-bg-raised);
+}
+.md-typeset .abstract > .admonition-title,
+.md-typeset .abstract > summary,
+.md-typeset .summary > .admonition-title,
+.md-typeset .summary > summary,
+.md-typeset .tldr > .admonition-title,
+.md-typeset .tldr > summary {
+  background: var(--sw-indigo-soft);
+  color: var(--sw-indigo);
+}
+.md-typeset .abstract > .admonition-title::before,
+.md-typeset .abstract > summary::before,
+.md-typeset .summary > .admonition-title::before,
+.md-typeset .summary > summary::before,
+.md-typeset .tldr > .admonition-title::before,
+.md-typeset .tldr > summary::before {
+  background-color: var(--sw-indigo);
+}
+
+/* example / quote → orange */
+.md-typeset .admonition.example,
+.md-typeset details.example,
+.md-typeset .admonition.quote,
+.md-typeset details.quote {
+  border-color: var(--sw-orange);
+  background: var(--sw-bg-raised);
+}
+.md-typeset .example > .admonition-title,
+.md-typeset .example > summary,
+.md-typeset .quote > .admonition-title,
+.md-typeset .quote > summary {
+  background: var(--sw-orange-soft);
+  color: var(--sw-orange);
+}
+.md-typeset .example > .admonition-title::before,
+.md-typeset .example > summary::before,
+.md-typeset .quote > .admonition-title::before,
+.md-typeset .quote > summary::before {
+  background-color: var(--sw-orange);
+}
+
+/* Buttons — instrument-button styling. */
+.md-typeset .md-button {
+  font-family: var(--md-code-font-family);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  border-radius: 3px;
+  border: 1px solid var(--sw-orange);
+  color: var(--sw-orange);
+  background: var(--sw-bg);
+}
+.md-typeset .md-button:hover {
+  background: var(--sw-orange-soft);
+  color: var(--sw-orange);
+}
+.md-typeset .md-button--primary {
+  background: var(--sw-orange);
+  color: var(--sw-bg);
+}
+.md-typeset .md-button--primary:hover {
+  background: var(--sw-orange-soft);
+  color: var(--sw-orange);
+}
+
+/* Scrollbars — basalt-friendly thin scrollbars. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--sw-border) transparent;
+}
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--sw-border);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--sw-rule); }
+
+/* Header search box: rectangular not pill. */
+.md-search__form {
   border-radius: 3px;
 }
 
-/* admonition info/tip use Azurite accent */
-.md-typeset .admonition.info,
-.md-typeset details.info,
-.md-typeset .admonition.tip,
-.md-typeset details.tip {
-  border-color: #5090b0;  /* Azurite */
-}
-.md-typeset .info > .admonition-title,
-.md-typeset .info > summary,
-.md-typeset .tip > .admonition-title,
-.md-typeset .tip > summary {
-  background-color: rgba(80, 144, 176, 0.12);
-}
-.md-typeset .info > .admonition-title::before,
-.md-typeset .info > summary::before,
-.md-typeset .tip > .admonition-title::before,
-.md-typeset .tip > summary::before {
-  color: #5090b0;
+/* Tabs (when enabled) — section-label styling. */
+.md-tabs__link {
+  font-family: var(--md-code-font-family);
+  font-size: 0.68rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
 }
 
-/* admonition warning uses Copper */
-.md-typeset .admonition.warning,
-.md-typeset details.warning {
-  border-color: #c08028;  /* Copper */
-}
-.md-typeset .warning > .admonition-title,
-.md-typeset .warning > summary {
-  background-color: rgba(192, 128, 40, 0.12);
-}
-.md-typeset .warning > .admonition-title::before,
-.md-typeset .warning > summary::before {
-  color: #c08028;
+/* "kbd" elements — Switchboard equipment-key look. */
+.md-typeset kbd {
+  display: inline-block;
+  background: var(--sw-bg-bright);
+  color: var(--sw-text);
+  border: 1px solid var(--sw-border);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  padding: 0.05em 0.5em;
+  font-family: var(--md-code-font-family);
+  font-size: 0.85em;
+  line-height: 1.4;
+  vertical-align: baseline;
+  box-shadow: none;
 }

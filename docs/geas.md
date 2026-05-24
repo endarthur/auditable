@@ -216,7 +216,7 @@ The `vfs` parameter is any [@gcu/vfs](https://github.com/endarthur/auditable/tre
 
 - **Not bash.** POSIX is the shape, but extensions are deliberately scoped: no bash-specific arrays (`${arr[@]}`), no parameter-expansion arithmetic (`${var:offset:len}` is supported; `${var//pat/sub}` is partial). geas targets the well-portable POSIX subset, plus typed pipes.
 - **Not zsh.** No globbing extensions, no autoload, no completion DSL. Tab completion is built-in and contextual but not user-programmable.
-- **Not a job control shell.** Single foreground job at a time. `&`-backgrounding works (jobs run in geas worker children), but no `fg` / `bg` / `jobs` interactive job control.
+- **Not a job control shell (yet).** [@gcu/proc](https://github.com/endarthur/auditable/tree/main/ext/proc) gave geas a real process model — PID tracking, lifecycle, signals, channels — and it's what `worker()` / `workerPool()` ride on. But the shell's `&`-backgrounding currently parses and runs synchronously (v0); wiring `&` through to `pm.spawn` plus adding `fg` / `bg` / `jobs` builtins is the obvious next step, not done yet.
 - **Not a system shell.** geas runs in the browser, against the workspace VFS. It doesn't escape to the operating system; `!` doesn't shell out; `mkfs` would be a category error.
 
 ## See also
