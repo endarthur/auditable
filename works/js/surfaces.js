@@ -109,4 +109,18 @@ export function setupSurfaces() {
       rec.dirty = !!arg;
     }
   });
+
+  // When a tab is genuinely closed (not just moved between stacks), drop
+  // the surface record + broker uniqueName mapping. Without this, openPath
+  // sees the stale record on a later request for the same path, calls
+  // WKS.rails.activateTab on a tab id rails has already discarded, and the
+  // user sees nothing happen. That broke "close preview surface → recreate
+  // the underlying file → reopen" workflows for volatile paths like /sys/*.
+  WKS.rails.on('tab:close', ({ tab, preserved }) => {
+    if (preserved || !tab) return;          // dnd move between stacks
+    const rec = WKS.surfaces.get(tab.id);
+    if (!rec) return;
+    if (rec.uniqueName) _byUnique.delete(rec.uniqueName);
+    WKS.surfaces.delete(tab.id);
+  });
 }

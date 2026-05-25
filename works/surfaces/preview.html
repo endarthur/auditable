@@ -71,6 +71,51 @@ table.csv .col-type { color: #666; font-size: 10px; font-weight: 400;
 
 /* PDF */
 .pdf { width: 100%; height: 100vh; border: 0; }
+
+/* Archive tree */
+.archive-wrap { padding: 0; }
+.archive-header { padding: 12px 16px; border-bottom: 1px solid #2a2e34;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.archive-header .name { font-weight: 600; color: #e0e4ea; flex: 0 0 auto; }
+.archive-header .stats { color: #6b7177; font-size: 11px; flex: 1 1 auto; }
+.archive-header .actions { display: flex; gap: 6px; }
+.archive-header button {
+  background: #1c1f24; color: #c8ccd0; border: 1px solid #2a2e33;
+  border-radius: 3px; padding: 4px 10px; cursor: pointer; font: inherit;
+}
+.archive-header button:hover { background: #2a3038; }
+.archive-header button.primary { background: #2a3038; border-color: #3a4048; }
+.archive-tree { padding: 6px 0; font-family: ui-monospace, 'Space Mono', Menlo, monospace; font-size: 12px; }
+.archive-tree details { margin-left: 16px; }
+.archive-tree summary { cursor: pointer; user-select: none; padding: 2px 8px; color: #c8ccd0; }
+.archive-tree summary:hover { background: #1a1d22; }
+.archive-tree summary::marker { color: #6b7177; }
+.archive-tree .archive-leaf { padding: 2px 8px; margin-left: 16px; cursor: pointer;
+  display: flex; align-items: center; gap: 10px; color: #c8ccd0; }
+.archive-tree .archive-leaf:hover { background: #1a1d22; }
+.archive-tree .archive-leaf .icon { color: #6b7177; flex: 0 0 14px; }
+.archive-tree .archive-leaf .name { flex: 1 1 auto; }
+.archive-tree .archive-leaf .size { color: #6b7177; font-size: 11px; flex: 0 0 auto; }
+.archive-tree .archive-dir-icon { color: #6b7177; margin-right: 6px; }
+
+/* Inline-viewer back bar (shown above an inline-rendered archive entry) */
+.archive-back { padding: 8px 12px; border-bottom: 1px solid #2a2e34;
+  display: flex; align-items: center; gap: 10px; background: #0a0a0a; }
+.archive-back button {
+  background: #1c1f24; color: #c8ccd0; border: 1px solid #2a2e33;
+  border-radius: 3px; padding: 3px 10px; cursor: pointer; font: inherit; font-size: 11px;
+}
+.archive-back button:hover { background: #2a3038; }
+.archive-back .crumb { color: #6b7177; font-size: 11px; flex: 1 1 auto; }
+
+/* GCU thin scrollbar — surfaces are sandboxed iframes; mirrors the works
+   shell pattern in works/style.css. */
+* { scrollbar-width: thin; scrollbar-color: #2a3038 transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: #2a3038; border-radius: 4px; }
+*::-webkit-scrollbar-thumb:hover { background: #6e6c68; }
+*::-webkit-scrollbar-corner { background: transparent; }
 </style>
 </head>
 <body>
@@ -96,9 +141,26 @@ const MIME = {
   '.pdf':'application/pdf',
 };
 
+// Recognized archive extensions — files matching these route through the
+// archive tree renderer instead of a per-type renderer. Format detection
+// happens server-side (Archive.Detect via A-Bus); this is just the gate.
+const ARCHIVE_EXTS = ['.zip','.tar','.tar.gz','.tgz','.tar.zst','.tzst',
+                      '.tar.xz','.txz','.tar.bz2','.tbz2','.gz','.zst'];
+function archiveExtMatches(name) {
+  const lower = name.toLowerCase();
+  return ARCHIVE_EXTS.some((e) => lower.endsWith(e));
+}
+
 // Track blob URLs so they're revoked on unload (image / pdf paths).
 const blobUrls = [];
 window.addEventListener('unload', () => blobUrls.forEach((u) => URL.revokeObjectURL(u)));
+
+// Set by the message handler — the archive renderer references these so
+// it can call Archive.List / Read / Extract via A-Bus and so the inline-
+// entry "Back" button can re-render the archive's top-level tree.
+let currentBus = null;
+let currentSourcePath = null;
+let cachedEntries = null;   // memoize the entry list within a session
 
 window.addEventListener('message', async (ev) => {
   if (ev.source !== window.parent || !ev.data || ev.data.type !== 'abus:welcome') return;
@@ -116,8 +178,15 @@ window.addEventListener('message', async (ev) => {
   const readBytes = () => bus.call(
     { to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [path]);
 
+  // Expose bus so the archive renderer (called later) can also invoke
+  // Archive.List / Archive.Read / Archive.Extract.
+  currentBus = bus;
+  currentSourcePath = path;
+
   try {
-    if (ext === '.csv' || ext === '.tsv') {
+    if (archiveExtMatches(name)) {
+      await renderArchive(path);
+    } else if (ext === '.csv' || ext === '.tsv') {
       renderCsv(await readText(), ext === '.tsv' ? '\t' : ',');
     } else if (ext === '.json' || ext === '.geojson') {
       renderJson(await readText());
@@ -367,6 +436,307 @@ function renderPdf(bytes) {
   const url = URL.createObjectURL(blob);
   blobUrls.push(url);
   root.innerHTML = `<embed src="${url}" type="application/pdf" class="pdf">`;
+}
+
+// ── Archive ─────────────────────────────────────────────────────────
+// Two modes:
+//   tree view  — collapsible directory tree of entries; click an entry
+//                to open it
+//   inline view — selected entry rendered through the same per-format
+//                 dispatcher used for top-level files. Back button restores
+//                 the tree view from `cachedEntries`.
+//
+// All bytes go through Archive.* on the works shell — preview is sandboxed
+// and doesn't bundle @gcu/archive itself.
+
+async function renderArchive(path) {
+  if (!currentBus) { showError('archive: no bus'); return; }
+  // Pretty status while we ask the shell to list the archive — large .zips
+  // can take a moment.
+  root.innerHTML = '<div id="loading">Reading archive…</div>';
+  let entries;
+  try {
+    entries = await currentBus.call(
+      { to: 'works', path: '/', interface: 'Archive', member: 'List' }, [path]);
+  } catch (e) {
+    showError('archive: list failed — ' + (e.message || e)); return;
+  }
+  cachedEntries = entries;
+  _renderArchiveTree(path, entries);
+}
+
+function _fmtBytes(n) {
+  if (n == null) return '';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+  return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+}
+
+// Build a nested directory tree from a flat entry list. Each node:
+//   { name, type, size?, path, children? (sorted: dirs first, then files) }
+function _buildTree(entries) {
+  const root = { name: '', type: 'directory', path: '', children: new Map() };
+  for (const e of entries) {
+    const parts = e.path.split('/').filter(Boolean);
+    if (parts.length === 0) continue;
+    let cur = root;
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      const last = i === parts.length - 1 && !e.path.endsWith('/');
+      if (!cur.children.has(part)) {
+        cur.children.set(part, {
+          name: part,
+          type: last ? 'file' : 'directory',
+          path: parts.slice(0, i + 1).join('/') + (last ? '' : '/'),
+          size: last ? e.size : null,
+          children: last ? null : new Map(),
+        });
+      }
+      cur = cur.children.get(part);
+    }
+  }
+  // Convert maps → sorted arrays (dirs first, then files, both alpha).
+  const finalize = (node) => {
+    if (!node.children) return;
+    const arr = [...node.children.values()];
+    arr.sort((a, b) =>
+      (a.type === b.type ? a.name.localeCompare(b.name)
+                          : (a.type === 'directory' ? -1 : 1)));
+    node.children = arr;
+    for (const c of arr) finalize(c);
+  };
+  finalize(root);
+  return root.children;
+}
+
+function _renderArchiveTree(archivePath, entries) {
+  const name = basename(archivePath);
+  let fileCount = 0, totalSize = 0;
+  for (const e of entries) {
+    if (e.type === 'file') { fileCount++; totalSize += e.size || 0; }
+  }
+
+  const tree = _buildTree(entries);
+
+  // Render. The tree itself is plain HTML + a single click handler bubbled
+  // off the container — keeps the DOM small even for large archives.
+  const wrap = document.createElement('div');
+  wrap.className = 'archive-wrap';
+
+  const header = document.createElement('div');
+  header.className = 'archive-header';
+  header.innerHTML =
+    '<span class="name">' + esc(name) + '</span>' +
+    '<span class="stats">' + fileCount + ' files · ' + _fmtBytes(totalSize) + '</span>' +
+    '<span class="actions">' +
+      '<button class="primary" data-act="extract-here">Extract here</button>' +
+      '<button data-act="extract-all">Extract to a sibling dir</button>' +
+    '</span>';
+  wrap.appendChild(header);
+
+  const treeEl = document.createElement('div');
+  treeEl.className = 'archive-tree';
+  treeEl.innerHTML = _renderTreeNodes(tree);
+  wrap.appendChild(treeEl);
+
+  root.innerHTML = '';
+  root.appendChild(wrap);
+
+  // Single delegated click handler.
+  wrap.addEventListener('click', async (ev) => {
+    const leaf = ev.target.closest('.archive-leaf');
+    if (leaf && leaf.dataset.path) {
+      ev.preventDefault();
+      const innerPath = leaf.dataset.path;
+      await _renderArchiveEntry(archivePath, innerPath);
+      return;
+    }
+    const btn = ev.target.closest('button[data-act]');
+    if (btn) {
+      ev.preventDefault();
+      const act = btn.dataset.act;
+      if (act === 'extract-here')  await _extractArchive(archivePath, 'here');
+      else if (act === 'extract-all') await _extractArchive(archivePath, 'pick');
+    }
+  });
+}
+
+function _renderTreeNodes(nodes) {
+  const parts = [];
+  for (const node of nodes) {
+    if (node.type === 'directory') {
+      parts.push(
+        '<details open><summary>' +
+          '<span class="archive-dir-icon">▸</span>' +
+          esc(node.name) + '/' +
+        '</summary>' +
+        _renderTreeNodes(node.children || []) +
+        '</details>');
+    } else {
+      parts.push(
+        '<div class="archive-leaf" data-path="' + esc(node.path) + '">' +
+          '<span class="icon">·</span>' +
+          '<span class="name">' + esc(node.name) + '</span>' +
+          '<span class="size">' + _fmtBytes(node.size) + '</span>' +
+        '</div>');
+    }
+  }
+  return parts.join('');
+}
+
+async function _renderArchiveEntry(archivePath, innerPath) {
+  root.innerHTML = '<div id="loading">Extracting ' + esc(innerPath) + '…</div>';
+  let bytes;
+  try {
+    bytes = await currentBus.call(
+      { to: 'works', path: '/', interface: 'Archive', member: 'Read' },
+      [archivePath, innerPath]);
+  } catch (e) {
+    showError('archive: read failed — ' + (e.message || e)); return;
+  }
+  if (!bytes) { showError('archive: entry not found — ' + innerPath); return; }
+  // Bytes may come back across A-Bus as a Uint8Array or ArrayBuffer
+  // depending on transport. Normalize.
+  if (bytes instanceof ArrayBuffer) bytes = new Uint8Array(bytes);
+  else if (!(bytes instanceof Uint8Array) && bytes && bytes.buffer) {
+    bytes = new Uint8Array(bytes.buffer, bytes.byteOffset || 0, bytes.byteLength);
+  }
+
+  // Render the entry through the existing per-format dispatcher. Above the
+  // rendered content, a back bar with breadcrumb + "Back to archive" button.
+  // We render the dispatcher's output into root first, then prepend the bar
+  // so renderers that do `root.innerHTML = ...` don't clobber it.
+  const innerExt = extOf(innerPath);
+  let renderedSomething = true;
+  try {
+    if (innerExt === '.csv' || innerExt === '.tsv') {
+      renderCsv(new TextDecoder().decode(bytes), innerExt === '.tsv' ? '\t' : ',');
+    } else if (innerExt === '.json' || innerExt === '.geojson') {
+      renderJson(new TextDecoder().decode(bytes));
+    } else if (innerExt === '.md' || innerExt === '.markdown') {
+      renderMarkdown(new TextDecoder().decode(bytes));
+    } else if (IMAGE_EXTS.includes(innerExt)) {
+      renderImage(bytes, innerExt);
+    } else if (innerExt === '.pdf') {
+      renderPdf(bytes);
+    } else if (innerExt === '' || innerExt === '.txt' || innerExt === '.log'
+            || /^[\x09\x0a\x0d\x20-\x7e -￿]*$/.test(
+                 new TextDecoder('utf-8', { fatal: false }).decode(bytes.subarray(0, 4096)))) {
+      // No extension or text-like — render as plain text.
+      const text = new TextDecoder().decode(bytes);
+      root.innerHTML = '<pre style="padding:12px 16px;color:#c8ccd0;font:12px/1.5 ui-monospace,Menlo,monospace;white-space:pre-wrap;word-break:break-word;">'
+        + esc(text) + '</pre>';
+    } else {
+      showError('No preview available for ' + (innerExt || basename(innerPath))
+        + ' (' + _fmtBytes(bytes.length) + ')');
+      renderedSomething = false;
+    }
+  } catch (e) {
+    showError('preview failed: ' + (e.message || e));
+    renderedSomething = false;
+  }
+
+  // Back bar — prepend so it sits above whatever the dispatcher rendered.
+  const bar = document.createElement('div');
+  bar.className = 'archive-back';
+  bar.innerHTML =
+    '<button data-back>← Back to archive</button>' +
+    '<span class="crumb">' + esc(basename(archivePath)) + ' / ' + esc(innerPath) + '</span>';
+  bar.addEventListener('click', (ev) => {
+    if (ev.target.closest('[data-back]')) {
+      ev.preventDefault();
+      _renderArchiveTree(archivePath, cachedEntries);
+    }
+  });
+  root.prepend(bar);
+}
+
+// Resolve a destination directory for "Extract here". Mirrors the tree
+// logic but stays surface-side: ask the shell for a unique path under the
+// sibling-of-the-archive directory, named after the archive minus its
+// extension. The Extract call uses overwrite='rename' so any residual
+// collision is handled at the entry level too.
+async function _extractArchive(archivePath, mode) {
+  if (mode === 'here') {
+    const slash = archivePath.lastIndexOf('/');
+    const parent = slash <= 0 ? '/' : archivePath.slice(0, slash);
+    const stem = basename(archivePath).replace(/\.(zip|tar|tar\.gz|tgz|tar\.zst|tzst|tar\.xz|txz|tar\.bz2|tbz2|gz|zst)$/i, '');
+    const dest = parent === '/' ? '/' + stem : parent + '/' + stem;
+    // Probe for the first unused dir name.
+    const uniqueDest = await _uniqueDest(dest);
+    try {
+      await currentBus.call(
+        { to: 'works', path: '/', interface: 'Archive', member: 'Extract' },
+        [archivePath, uniqueDest, { overwrite: 'rename' }]);
+      _flashBanner('Extracted to ' + uniqueDest);
+    } catch (e) {
+      _flashBanner('Extract failed: ' + (e.message || e), 'error');
+    }
+    return;
+  }
+  if (mode === 'pick') {
+    // No surface-side folder picker yet — show a prompt. Future: route
+    // through a Shell.PickFolder A-Bus method on the shell so the surface
+    // gets the same picker (with + New folder support) that tree.js uses.
+    // For now: prompt() inside the sandbox. The extract sink auto-creates
+    // parent directories recursively, so typing a path that doesn't exist
+    // yet is the supported way to create a new destination — the message
+    // calls that out.
+    const slash = archivePath.lastIndexOf('/');
+    const parent = slash <= 0 ? '/' : archivePath.slice(0, slash);
+    const stem = basename(archivePath).replace(
+      /\.(zip|tar|tar\.gz|tgz|tar\.zst|tzst|tar\.xz|txz|tar\.bz2|tbz2|gz|zst)$/i, '');
+    const seed = parent === '/' ? '/' + stem : parent + '/' + stem;
+    const dest = window.prompt(
+      'Extract to (absolute VFS path — typed path is created if it doesn\'t exist):',
+      seed);
+    if (!dest) return;
+    try {
+      // Ensure the destination exists so the post-extract refresh shows it
+      // immediately. Archive.Extract would auto-create on first write, but
+      // that races with empty-archive edge cases.
+      try {
+        await currentBus.call(
+          { to: 'works', path: '/', interface: 'VFS', member: 'MkDir' }, [dest]);
+      } catch { /* MkDir is idempotent enough; ignore EEXIST */ }
+      await currentBus.call(
+        { to: 'works', path: '/', interface: 'Archive', member: 'Extract' },
+        [archivePath, dest, { overwrite: 'rename' }]);
+      _flashBanner('Extracted to ' + dest);
+    } catch (e) {
+      _flashBanner('Extract failed: ' + (e.message || e), 'error');
+    }
+  }
+}
+
+async function _uniqueDest(path) {
+  // Probe via VFS.Exists on the shell. If unavailable, just return path
+  // (extract's overwrite='rename' will dedupe at the entry level).
+  try {
+    const exists = await currentBus.call(
+      { to: 'works', path: '/', interface: 'VFS', member: 'Exists' }, [path]);
+    if (!exists) return path;
+  } catch { return path; }
+  for (let i = 2; i < 1000; i++) {
+    const candidate = path + ' (' + i + ')';
+    try {
+      const exists = await currentBus.call(
+        { to: 'works', path: '/', interface: 'VFS', member: 'Exists' }, [candidate]);
+      if (!exists) return candidate;
+    } catch { return candidate; }
+  }
+  return path;
+}
+
+function _flashBanner(msg, kind) {
+  const el = document.createElement('div');
+  el.style.cssText = 'padding: 8px 16px; font-size: 12px; '
+    + (kind === 'error' ? 'background: #3a1a1a; color: #ffaaaa;' : 'background: #1a2a1a; color: #aaffaa;')
+    + ' position: sticky; top: 0; z-index: 10;';
+  el.textContent = msg;
+  root.prepend(el);
+  setTimeout(() => el.remove(), 3000);
 }
 </script>
 </body>

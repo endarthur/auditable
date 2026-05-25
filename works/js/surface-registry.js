@@ -213,7 +213,12 @@ registerKind('preview', {
   icon:       '◳',
   extensions: ['.csv', '.tsv', '.json', '.geojson', '.md', '.markdown',
                '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp',
-               '.ico', '.avif', '.pdf'],
+               '.ico', '.avif', '.pdf',
+               // Archives — the preview surface knows how to render a
+               // collapsible entry tree and click-through to inline file
+               // rendering (see works/surfaces/preview.html's renderArchive).
+               '.zip', '.tar', '.tar.gz', '.tgz', '.tar.zst', '.tzst',
+               '.tar.xz', '.txz', '.tar.bz2', '.tbz2', '.gz', '.zst'],
 });
 
 // The text editor — the loose-file surface. Opens any plain-text file.

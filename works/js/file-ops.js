@@ -136,6 +136,45 @@ async function pickFolder(title, srcPath) {
       width: 460,
       render: (body, ctx) => {
         body.style.cssText = 'padding: 8px 12px;';
+
+        // "+ New folder…" — opens a sub-prompt for an absolute VFS path,
+        // creates it (recursively), then closes the picker with that path.
+        // Lets the user create a fresh destination without bouncing out to
+        // the tree first. Sits at the top of the list as a sticky row.
+        const newRow = document.createElement('div');
+        newRow.tabIndex = 0;
+        newRow.style.cssText = 'padding: 4px 8px; cursor: pointer; '
+          + 'border-radius: 2px; color: var(--gcu-accent, #d97a3c); '
+          + 'border-bottom: 1px solid var(--gcu-border, #2a2e33); '
+          + 'margin-bottom: 4px;';
+        newRow.textContent = '+ New folder…';
+        newRow.onmouseenter = () => newRow.style.background = 'var(--gcu-bg-bright, #21262b)';
+        newRow.onmouseleave = () => newRow.style.background = '';
+        newRow.onfocus = () => newRow.style.background = 'var(--gcu-bg-bright, #21262b)';
+        newRow.onblur = () => newRow.style.background = '';
+        const newFolderFlow = async () => {
+          // Default to the source's parent directory + a placeholder name
+          // so the user only has to type the new leaf in the common case.
+          const seed = (srcDir === '/' ? '' : srcDir) + '/new-folder';
+          const newPath = await dlgPrompt('Create a new folder', {
+            title: 'New folder',
+            defaultValue: seed,
+            placeholder: '/projects/my-extract',
+          });
+          if (!newPath) return;  // user cancelled
+          try {
+            await WKS.vfs.mkdir(newPath, { recursive: true });
+            ctx.close(newPath);
+          } catch (e) {
+            // Re-prompt with the error visible. For simplicity here we just
+            // surface it via alert + leave the picker open for retry.
+            setStatus('mkdir failed: ' + (e.message || e));
+          }
+        };
+        newRow.onclick = newFolderFlow;
+        newRow.onkeydown = (e) => { if (e.key === 'Enter') newFolderFlow(); };
+        body.appendChild(newRow);
+
         const list = document.createElement('div');
         list.style.cssText = 'max-height: 50vh; overflow: auto; '
           + 'font: 12px ui-monospace, monospace;';
