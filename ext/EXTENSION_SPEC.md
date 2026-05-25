@@ -1,0 +1,774 @@
+# Auditable Extension Specification
+
+**The contract every `@gcu/*` extension implements.**
+
+This document is the source of truth for what an Auditable / Works extension is, how it registers, what surfaces it can contribute to, how it packages, and how it ships — whether built in-tree under `ext/` or developed entirely outside this monorepo.
+
+Status: **pre-1.0**. The manifest API is stable enough that ~20 in-tree extensions ride on it; the version field is enforced as semver; capability axes are well-defined. But the project is pre-1.0 and breaking changes ship without deprecation windows. Anchor your extension to a specific auditable build until 1.0.
+
+Audience: anyone writing an extension. In-tree authors get to add files to `ext/<name>/`; out-of-tree authors get to publish a package and have users `install()` it from a CDN URL. The contract is the same either way.
+
+---
+
+## 1. What an extension is
+
+An extension is **one ES module** that runs in the page, declares one manifest, and contributes to zero or more of six surfaces:
+
+| Surface | What you contribute | Where it lands |
+|---|---|---|
+| Cell type | A new kind of notebook cell (executable or not) | DAG + editor + execution pipeline |
+| Tagged language | Highlighting + completions + tokenizer for a `` ` `` template tag | Editor (cm6) and tagged blocks |
+| Cell-context hook | Augments every cell's `ctx` (the thing that becomes `ui`, `std`, …) | `cell-context.js` injection sites |
+| AIR lowerer | Translates a language's AST to AIR for V8-hinted JS emission | `@gcu/air` compile pipeline |
+| Exports | Named JS objects callable from cells (`load("@gcu/foo")` / cross-language adapters) | `window._auditableExtensions` |
+| Globals | Plain `window.*` bindings | `window` |
+
+You contribute as little or as much as you need. `@gcu/sql` is just a tagged language (`sql\`SELECT * …\``). `@gcu/adder` is a cell type + tagged language + AIR lowerer + cross-language adapters all in one. `@gcu/natra` exports a numpy-shaped object and registers an adder cell-context hook (the arena lifecycle). All of these are handled by the same manifest contract — there's no "extension type." There are only capabilities.
+
+What an extension is **not**:
+
+- It is **not a plugin loader** — there's no `getExports("foo")` API for extensions to discover one another. Cross-extension communication happens through the exports surface (`load()` or dotted-import resolution) and through global bus mechanisms (`window.auditable.hooks`, A-Bus for Works surfaces).
+- It is **not sandboxed** — your code runs with full access to `window`, the cell scope, the VFS, everything. Auditable is open-source code written in front of the user; the trust model is "the user pressed install on this URL."
+- It is **not bundled by auditable** — you ship your own `index.js` and own your build. The host just `import`s it.
+
+---
+
+## 2. The manifest contract
+
+You register exactly once, at module evaluation time, by calling the platform's `registerExtension(manifest)`:
+
+```js
+const register = window.auditable?.registerExtension;
+if (register) {
+  register({
+    name: '@gcu/example',
+    version: '0.1.0',
+    description: 'one-sentence summary that shows up in the plugins panel',
+    // contributions follow…
+  });
+}
+```
+
+Skip the call gracefully when `window.auditable` is undefined — you may be loaded by a node test harness, a bundler probe, or a non-Auditable page. Don't throw.
+
+### 2.1 Required fields
+
+```ts
+{
+  name:    string,                          // unique; conventionally @gcu/<slug>
+  version: string,                          // strict semver: /^\d+\.\d+\.\d+(?:[-+].*)?$/
+}
+```
+
+Validation is enforced at registration; invalid versions throw immediately.
+
+### 2.2 Optional fields
+
+```ts
+{
+  description?:  string,                    // one-line plugin-panel summary
+  pluginUrl?:    string,                    // import URL (set by install()), used as the registry key
+  requires?:     { [name]: string },        // §2.4 — cross-extension dependencies
+  onActivate?:   () => void,                // called once after successful register
+  onDeactivate?: () => void,                // called by uninstall
+
+  // ── Capabilities (each is independently optional) ──
+  cellType?:        CellType,               // §3.1
+  taggedLanguage?:  TaggedLanguage,         // §3.2
+  taggedLanguages?: TaggedLanguage[],       //   (multi form — for ext shipping >1 tag)
+  contextHook?:     { setup: ContextHookFn }, // §3.3
+  airLowerer?:      { language, fn },       // §3.4
+  exports?:         { [name]: any },        // §3.5
+  globals?:         { [name]: any },        // §3.6
+}
+```
+
+### 2.3 What registration does
+
+In order, when validation passes:
+
+1. Checks `requires` against already-registered manifests (§2.4); throws if any dep is missing or out-of-range.
+2. Replaces any previous manifest with the same `name` (warns to console).
+3. Wires the cell type into `window._cellTypes` (skipping built-ins).
+4. Wires every tagged language into `window._taggedLanguages`.
+5. Calls `window._airRegisterLowerer(language, fn)` if an AIR lowerer is present.
+6. Merges every entry of `exports` into `window._auditableExtensions`.
+7. Merges every entry of `globals` into `window`.
+8. Appends `contextHook` to `window._cellContextHooks`.
+9. Records `description` + `pluginUrl` in `window._auditablePlugins`.
+10. Fires `onActivate()`.
+
+The underlying registries (`_cellTypes`, `_taggedLanguages`, `_auditableExtensions`, `_cellContextHooks`, `_auditablePlugins`) are kept as the storage layer — hot-path consumers in `src/js/` still read from them directly. The manifest API is the **canonical write path**. Reads should prefer the lookup helpers (`getExtension(name)`, `listExtensions()`, `getCellType(name)`, `getTaggedLanguage(name)`, `getExports(name)`, `hasExports(name)`) on `window.auditable.*`.
+
+### 2.4 Cross-extension dependencies (`manifest.requires`)
+
+An extension may depend on another being registered first. The `requires` field declares those dependencies:
+
+```js
+register({
+  name:    '@gcu/natra',
+  version: '0.1.0',
+  requires: {
+    '@gcu/adder': '>=1.0.0',          // arena hook lives in adder
+  },
+  // …
+});
+```
+
+Each entry maps an extension `name` to a **semver range**. The host validates at registration:
+
+- If a required name has no registered manifest → **throws**.
+- If the registered version doesn't satisfy the range → **throws**.
+- If `requires` is missing or empty → no check.
+
+**Supported range syntax** (intentionally a small subset of node-semver):
+
+| Range | Meaning |
+|---|---|
+| `1.2.3` | Exactly this version |
+| `>=1.2.3` | This version or higher |
+| `>1.2.3` | Strictly higher |
+| `^1.2.3` | Compatible with — `>=1.2.3 <2.0.0` (locked major) |
+| `~1.2.3` | Approximately — `>=1.2.3 <1.3.0` (locked minor) |
+| `*` | Any version |
+
+Disjunctions (`||`) and AND-combinations are deliberately not supported. If you find yourself needing them, your extension is too coupled to its deps — refactor.
+
+**Failure mode is fail-fast.** A missing or wrong-version dep produces a thrown error at register time, surfaced via the standard plugin-panel error UI. Silent missing-dep behavior is what makes plugin ecosystems hard to debug; we don't ship it.
+
+**Loading order is your problem, not the host's.** The host validates that dependencies have *already registered* — it does not auto-load them. In-tree, control order via `main.js` import order or `SHARED_LIBS` position in `build.js`. Out-of-tree, the user installs deps first. A `.gcupkg` (§6.1) declares the same range set in its `requires` metadata so install tooling can warn early.
+
+For optional features ("works better if X is also installed"), do **not** put X in `requires` — check `window.auditable?.getExtension('X')` at runtime instead and degrade gracefully. `requires` is for hard dependencies your registration cannot complete without.
+
+---
+
+## 3. The six capability surfaces in detail
+
+### 3.1 Cell types (`manifest.cellType`)
+
+A cell type is a row in the notebook. The DAG calls into your `execute()` and `parseNames()`; the editor calls into your `createEditor()` and `completions()`; the toolbar uses `label`, `color`, `shortcut`.
+
+```ts
+cellType: {
+  name:          string,        // unique among cell types ('code', 'md', 'css', 'html' are reserved)
+  label?:        string,        // toolbar label; defaults to name
+  color?:        string,        // CSS color token (semantic, e.g. var(--au-action))
+  shortcut?:     string,        // single keyboard letter
+  editDebounce?: number,        // ms debounce on autorun after edit (default ~250)
+
+  capabilities: {
+    executable:    boolean,     // can run during DAG execution
+    definesScope:  boolean,     // contributes names to downstream cells
+    hasOutput:     boolean,     // has an output element
+    hasEditor:     boolean,     // has a CM6 source editor
+    builtin?:      boolean,     // reserved for code/md/css/html; extensions must NOT set this
+  },
+
+  // Required when capabilities.executable === true
+  execute?(cell, scope, ctx): Promise<void> | void,
+  // Required when capabilities.definesScope === true
+  parseNames?(code): string[] | Set<string>,
+  // Optional but typical
+  findUses?(code, allDefined, selfDefined?): string[] | Set<string>,
+  createEditor?(cell, onChange): { el: HTMLElement, destroy?(): void },
+  tokenize?(code): Token[],
+  completions?(code, cursor): Completion[],
+  syntaxCheck?(code): boolean,
+  indent?(line, before): string,
+  indentUnit?: string,
+}
+```
+
+The four built-in types (`code`, `md`, `css`, `html`) self-register with `capabilities.builtin = true` and are dispatched by hardcoded paths in `exec.js` — they exist in `_cellTypes` only for uniform queries. Third-party types are dispatched through their manifest functions.
+
+**Validation:**
+- `cellType.name` cannot be one of `code`/`md`/`css`/`html` (cannot shadow built-ins).
+- `executable: true` + no `execute()` → throws.
+- `definesScope: true` + no `parseNames()` → throws.
+
+**Reference implementations:** `ext/adder/src/register.js`, `ext/soft/src/register.js`.
+
+### 3.2 Tagged languages (`manifest.taggedLanguage` or `manifest.taggedLanguages`)
+
+A tagged language is a tag-template language available inside any code cell:
+
+```js
+const q = sql`SELECT * FROM things WHERE id = ${id}`;
+const program = atra`func add(a: i32, b: i32) -> i32 { a + b }`;
+```
+
+Editor highlighting, completions, and signature hints route through your `tokenize()`, `completions()`, `sigHint()`.
+
+```ts
+taggedLanguage: {
+  name:        string,                       // the tag identifier (e.g. 'sql', 'atra', 'glsl')
+  tokenize(code): Token[],                   // required
+  completions?(code, cursor): Completion[], // optional
+  sigHint?(name, pos): SigHint,             // optional
+  indent?(line, before): string,            // optional
+}
+```
+
+A single extension may ship multiple tagged languages — use the `taggedLanguages: TaggedLanguage[]` array form.
+
+**Reference implementations:** `ext/sql/index.js`, `ext/shader/index.js`, `ext/atra/index.js`.
+
+### 3.3 Cell-context hooks (`manifest.contextHook`)
+
+A cell-context hook augments the per-cell `ctx` object before execution. The `ctx` is what gets injected into a cell as the `std`, `ui`, `notebook`, etc. namespaces.
+
+```ts
+contextHook: {
+  setup(cell, ctx): void | (() => void),     // optional teardown callback
+}
+```
+
+Use this when your extension needs a per-cell lifecycle — for instance, opening a per-cell logger, a per-cell canvas pool, a per-cell event subscription.
+
+**Note — adder-specific hook:** `@gcu/natra` does NOT use this slot. It uses `window._adderCellHooks` — an adder-internal arena lifecycle hook with a `{ before(scope, cell), after(arena, defines, scope) }` shape, because natra arenas are an adder-specific runtime concern (the JS host has no GC pressure to manage). The `contextHook` manifest slot is for *generic* cell-context augmentation that any cell type may consume.
+
+### 3.4 AIR lowerers (`manifest.airLowerer`)
+
+If your extension is a compile-to-AIR language (a Python-like, an English-keyword DSL, a small numeric DSL), register a lowerer:
+
+```ts
+airLowerer: {
+  language: string,            // tag the host uses ('adder', 'soft', 'js' built-in, …)
+  fn(ast, parser, allDefined): AirModule,
+}
+```
+
+The lowerer takes your language AST and returns an AIR module (SSA IR with op codes — see `ext/air/SPEC.md` for the IR shape). AIR's emit-js pass then produces V8-hinted JS for execution. Fallback semantics are mandatory: if your lowerer throws `AirLowerError`, AIR returns null and the runtime falls back to your interpreter or tree-walker.
+
+The full lowering surface — `BaseLowerCtx`, `captureOps`, `emitPhiSelect`, `lowerIfRegion`, `lowerLoopRegion`, the specialization registry — is documented in `ext/air/SPEC.md`. Your `fn` is expected to extend `BaseLowerCtx` and call its helpers.
+
+**Specialization registration is separate from lowerer registration.** Runtime-helper specializations (`_py.add → +` when both operands are typed numbers) are registered via `registerSpecializations(namespace, table)`. Each language owns its own namespace (`_py` for adder, `_soft` for soft, etc.). See `ext/adder/src/air-lower.js:75–84` for the dual-path (Node + browser) registration pattern.
+
+**Reference implementations:** `ext/adder/src/air-lower.js`, `ext/soft/src/air-lower.js`.
+
+### 3.5 Exports (`manifest.exports`)
+
+Exports are how cross-language adapters surface Python-shaped (or any-shaped) namespaces to other extensions.
+
+```ts
+exports: {
+  [name]: any,                  // each key → window._auditableExtensions[key]
+}
+```
+
+Once exported, downstream consumers (e.g. adder cells) can resolve dotted imports against the registry. The adder `_resolveModule` walks dotted paths through `_auditableExtensions`, so:
+
+```python
+from learn.tree import DecisionTreeClassifier
+```
+
+resolves by: `_auditableExtensions['learn'] → .tree → .DecisionTreeClassifier`. Your extension exports `{ learn: _module }` and the import surface is automatic.
+
+This is the foundation of the **cross-language adapter pattern** — see §4.
+
+**Reference implementations:** `ext/natra/adder.js:730–740`, `ext/learn/adder.js:84–96`, `ext/line/adder.js:428–`, `ext/sadpan/src/api.js:1073–`, `ext/plot/src/api.js:276–`, `ext/scitra/adder.js:54–`.
+
+### 3.6 Globals (`manifest.globals`)
+
+A backdoor for cases where you really do need a `window.foo` (debugging surface, HTML event handler, legacy DOM integration). Avoid unless you have a specific reason; cells should consume named imports via `load()` and `_auditableExtensions`, not globals.
+
+### 3.7 MCP tools (status: not yet manifested)
+
+Auditable ships an MCP (Model Context Protocol) bridge — `webmcp_bridge.js` + `src/js/shim.js` + `src/js/mcp-adapter.js` — that lets a client (Claude Code, …) read cells, run cells, edit sources, etc. Tools are registered via the polyfilled `navigator.modelContext.registerTool({ … })`.
+
+**Today, this is not surfaced through the manifest.** An extension that wants to register MCP tools (e.g. `@gcu/spinifex` exposing a `mapSnapshot` tool, `@gcu/learn` exposing a `predictBatch` tool) does so by calling `navigator.modelContext.registerTool(…)` directly in `onActivate`:
+
+```js
+register({
+  name: '@gcu/example',
+  version: '0.1.0',
+  onActivate() {
+    if (navigator.modelContext) {
+      navigator.modelContext.registerTool({
+        name: 'example:compute',
+        description: '…',
+        inputSchema: { /* JSON Schema */ },
+        execute(args) { /* … */ },
+      });
+    }
+  },
+});
+```
+
+This works, but skips:
+
+- Re-registration on `crypto:unlocked` (the host clears tools when the notebook re-locks and needs to re-add them on unlock).
+- Access-control gating consistent with the `// %mcp` cell directives.
+- Audit-log integration (tool calls land in `_mcpAuditLog`).
+
+**Planned: `manifest.mcpTools`.** A future field — `mcpTools: [{ name, description, inputSchema, execute, requiresUnlock?, audit? }]` — will let the host take over re-registration, gating, and audit logging. Open issue, not yet implemented; this section will get rewritten when it lands.
+
+For now: if your extension wants MCP tools, register them imperatively in `onActivate` and subscribe to `crypto:unlocked` via `window.auditable.hooks.on('crypto:unlocked', …)` to re-register. See `src/js/mcp-adapter.js:349–375` for the manifest-driven re-registration pattern used by the host's own tools.
+
+---
+
+## 4. Cross-language adapters
+
+The natra / sadpan / scitra / plot / learn / line family is **the same pattern repeated** — each library wraps an underlying JS-native engine with a Python-shaped surface and registers it through `manifest.exports`. Together with `@gcu/ipynb`'s import-substitution table they make round-trip `.ipynb` portability possible: `import numpy as np` in a notebook landing inside auditable is rewritten to `import natra as np`, and `natra` is what the `exports` registered.
+
+### 4.1 Anatomy of an adapter
+
+The convention is to have **one file per host language** under your extension root:
+
+```
+ext/<name>/
+  index.js              — pure JS surface (the underlying engine)
+  adder.js              — Python-shaped wrapper, registers via exports
+  src/                  — sources
+```
+
+`adder.js` (sometimes inlined into `index.js`) is the adapter. It:
+
+1. Imports / receives the underlying JS engine.
+2. Constructs a Python-shaped namespace object (`{ array, zeros, ones, mean, …, tree: { … }, linalg: { … } }`).
+3. Registers it as `exports: { <name>: _module }`.
+
+The exact pattern from `ext/learn/adder.js`:
+
+```js
+if (typeof window !== 'undefined') {
+  const register = window.auditable?.registerExtension;
+  if (register) {
+    register({
+      name: '@gcu/learn',
+      version: '0.1.0',
+      description: 'sklearn-compatible classical ML for adder cells',
+      exports: { learn: _module },
+    });
+  } else {
+    window._auditableExtensions = window._auditableExtensions || {};
+    window._auditableExtensions['learn'] = _module;
+  }
+}
+```
+
+The `else` branch is a defensive fallback for early-init paths where `window.auditable` is not yet bound. It bypasses validation, but the underlying registry is the same — production paths always take the manifest branch.
+
+### 4.2 The substitution table
+
+Round-trip with the upstream Python ecosystem happens via `@gcu/ipynb`'s substitution table:
+
+| Upstream import | Substituted to | Adapter ext |
+|---|---|---|
+| `numpy` | `natra` | `@gcu/natra` |
+| `pandas` | `sadpan` | `@gcu/sadpan` |
+| `scipy` | `scitra` | `@gcu/scitra` |
+| `sklearn` | `learn` | `@gcu/learn` |
+| `matplotlib.pyplot` | `plt` (auto-injected `plt.style.use('default')` for ipynb-imported notebooks) | `@gcu/plot` |
+
+Substitutions go both ways — exported `.ipynb` files get the JS-native imports rewritten back to upstream names so they open cleanly in JupyterLab. This is **translation, not emulation** — adapters share *source syntax* with their upstream, but they're JS-native at the value layer, and they only implement what gets exercised. The substitution table is the user-facing portability bridge; the manifest `exports` is the runtime hookup.
+
+To add a new adapter:
+
+1. Decide your namespace (`@gcu/<name>`) and import name (`<name>`).
+2. Build your JS-native engine.
+3. Build a thin Python-shaped wrapper.
+4. Register `exports: { <name>: wrapper }` via the manifest.
+5. (Optional) Submit a substitution entry to `@gcu/ipynb`'s `substitutions.js` if you want round-trip with an upstream Python library.
+
+No further integration is needed. Adder's import resolver does the rest.
+
+### 4.3 What adapters do *not* do
+
+- Adapters do not bridge to native code. If a JS-native engine doesn't exist for the upstream library, the adapter doesn't exist either; we don't ship a "WASM-wrapped scipy."
+- Adapters do not extend through monkey-patching. `np.array` is a property of `natra`, not assigned at runtime.
+- Adapters do not own the runtime — adder's interpreter owns it. The adapter is just a callable wrapper.
+
+---
+
+## 5. Package layout and build conventions
+
+Auditable extensions are **plain ES modules**. There is no required build system, no required bundler, no required directory layout. The conventions below are what the in-tree extensions follow because they work cleanly with the rest of the toolchain.
+
+### 5.1 Layout
+
+```
+ext/<name>/                   — or wherever you keep it outside the monorepo
+  src/                        — sources (one ES module per file, freely import each other)
+    main.js                   — entry; build.js reads its imports as the concat order
+    api.js                    — public surface
+    …
+  vendor/                     — vendored libraries (if any), with their LICENSE
+  index.js                    — BUILD OUTPUT (concat of src/)
+  build.js                    — concat script (see §5.2)
+  package.json                — see §5.3
+  README.md
+  SPEC.md                     — optional; recommended for non-trivial extensions
+  LICENSE
+```
+
+If your extension is small enough to be a single file, skip `src/` and `build.js` — ship one `index.js`.
+
+### 5.2 Build script (recommended pattern)
+
+The in-tree extensions use a uniform concat build that strips `import`/`export` and produces a single-scope `index.js`:
+
+```js
+// ext/<name>/build.js (canonical pattern)
+import fs from 'fs';
+import path from 'path';
+
+const files = ['types.js', 'core.js', 'api.js'];  // concat order
+const chunks = [];
+for (const file of files) {
+  let src = fs.readFileSync(`src/${file}`, 'utf8');
+  src = src.replace(/^import\s.*$/gm, '');
+  src = src.replace(/^export\s+(function|const|let|class|async function)\s/gm, '$1 ');
+  src = src.replace(/^export\s*\{[\s\S]*?\};?\s*$/gm, '');
+  chunks.push(`// -- ${file} --\n${src}`);
+}
+fs.writeFileSync('index.js', chunks.join('\n\n') + '\n\nexport { /* … */ };');
+```
+
+References: `ext/adder/build.js`, `ext/plot/build.js`, `ext/licenses/build.js`.
+
+Why concat over rollup: the host inserts your module into a registry via an import map; rollup's runtime helpers are dead weight at that point. Concat is also debugger-friendly — line numbers in `index.js` are preserved from the source files.
+
+### 5.3 `package.json`
+
+A minimal manifest for npm-publishability and `pkg` integration:
+
+```json
+{
+  "name": "@gcu/example",
+  "version": "0.1.0",
+  "description": "...",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/<owner>/<repo>.git"
+  }
+}
+```
+
+For pkg / @gcu/licenses integration, the `license` field is non-optional in practice — `aggregateLicenses` falls back to fingerprint inference (see `ext/licenses/src/infer.js`), but the explicit SPDX id is faster and more reliable.
+
+### 5.4 Host build integration (in-tree only)
+
+When your extension lives under `ext/<name>/` in this monorepo:
+
+- `build.js` (root) discovers `ext/<name>/index.js` automatically for the `works-all` target.
+- For `auditable.html` and `works.html`, add your extension explicitly to the `SHARED_LIBS` table in `build.js` (around line 120) with `['<name>', 'ext/<name>/index.js']`.
+- Add a line to the **Build checklist** section in `CLAUDE.md` so future-you remembers to rebuild after touching `src/`.
+
+When your extension lives outside the monorepo, the user installs it via `install("https://…/index.js")` or via `pkg install <package>` (which fetches and stores under `/lib/<source>/<pkg>@<ver>/`).
+
+---
+
+## 6. Distribution
+
+Today an extension ships as either:
+
+- An `index.js` URL the user `install()`s (one-shot, no metadata, license fetched separately by @gcu/licenses).
+- A `pkg`-managed package (npm / jsr / gh / @gcu/local) — installed via the `pkg` CLI, stored under `/lib/<source>/<pkg>@<ver>/` with its `package.json` + LICENSE alongside.
+- A build-time bundled entry in the `auditable.html` / `works.html` registry.
+
+That works, but it leaves users to find the URL and the host to fetch metadata. For a more "drop this on your desktop and it installs" experience, the proposed `.gcupkg` format below offers a single-file bundle with everything the runtime needs.
+
+### 6.1 The `.gcupkg` format (proposal)
+
+**Status: proposal, not implemented.** Drafted here so we have a target to aim at when the install UX warrants the cost.
+
+A `.gcupkg` is a **`.zip` archive** with a defined internal layout:
+
+```
+example@0.1.0.gcupkg                   ← archive filename: <name>@<version>.gcupkg
+├── package.json                       ← required; same shape as §5.3
+├── index.js                           ← required; the ES module entry point
+├── LICENSE                            ← required; raw license text (any commonly-named file)
+├── README.md                          ← optional; rendered in the plugin-panel detail view
+├── SPEC.md                            ← optional; rendered next to README in plugin-panel
+├── docs/                              ← optional; markdown surfaced via the docs surface (§6.2)
+│   ├── index.md                       ← entry page if present
+│   └── *.md                           ← additional pages, flat
+├── examples/                          ← optional; .txt cell-defs surfaced via Help → Open example (§6.3)
+│   ├── *.txt                          ← cell-def files (FORMAT.md style)
+│   └── manifest.json                  ← optional, names + descriptions for the picker
+├── vendor-licenses/                   ← optional; LICENSE files for vendored deps
+└── .gcupkg-meta.json                  ← required; bundle metadata (see below)
+```
+
+The `.gcupkg-meta.json` is what makes it a "wheel" rather than a generic zip — it commits to a schema:
+
+```json
+{
+  "gcupkgVersion": 1,
+  "name": "@gcu/example",
+  "version": "0.1.0",
+  "spdx": "MIT",
+  "homepage": "https://...",
+  "requires": {
+    "auditable": ">=0.x",
+    "@gcu/air": ">=0.3.0",
+    "@gcu/adder": "^1.0.0"
+  },
+  "contributes": ["taggedLanguage", "exports"],
+  "bundles": {
+    "docs": true,
+    "examples": 4,
+    "vendorLicenses": 2
+  },
+  "size": { "index.js": 12345, "total": 23456 },
+  "integrity": "sha256-..."
+}
+```
+
+`requires` mirrors the manifest field of the same name (§2.4) plus an optional `auditable` entry for host-version pinning. `bundles` is a summary the host uses to decide which surfaces to wire up post-install (skip docs-surface registration if `docs: false`, etc.) — it's a *hint*, the real source of truth is the archive contents.
+
+Why bundle:
+
+- **One install action.** Drag a `.gcupkg` onto Works → extracted to `/lib/local/<name>@<ver>/`, registered, ready. No URL, no `pkg install`, no separate LICENSE fetch.
+- **Self-contained metadata.** SPDX, version, homepage, integrity hash — all in the same archive, no second fetch for the licenses tab.
+- **Capability declarations.** `contributes: [...]` lets the host audit what a package will register *before* importing it.
+- **Reproducible install.** SHA-256 in the meta is verifiable; users can compare against a publisher's hash.
+- **Native @gcu/archive support.** We already ship a ZIP reader/writer in `@gcu/archive`; a `.gcupkg` install is a 50-line operation.
+
+Why **not** bundle (the deliberate gaps versus Python wheels):
+
+- **No platform / ABI tags.** Auditable is one platform (the browser). No `cp39-linux_x86_64` filename nonsense.
+- **No build isolation.** You build the `.gcupkg` once, you ship it; there's no `pip wheel`-style on-install rebuild step. The format is artifact distribution, not source distribution.
+- **No native compilation.** If you need Wasm, ship the `.wasm` inside the gcupkg as a `vendor/` asset; that's it. There's no pre/post-install hooks.
+- **No dependency resolution at install time.** `requires` is a declaration the host can warn about; it does not auto-fetch dependencies. The user is expected to install dependencies as `.gcupkg`s themselves or via `pkg install`.
+
+The format is intentionally small. Pythonic wheels accumulated a lot of complexity because pip resolves trees, builds from sdists, handles ABI matching, runs install scripts. None of that applies to "drop an ES module into the browser's import map" — so the `.gcupkg` is just "the smallest thing that lets the host know what it has before running it."
+
+**Implementation sketch** (when we do this):
+
+1. Add `pkg build` subcommand that reads `package.json` + `index.js` + `LICENSE` and produces `<name>@<ver>.gcupkg` via `@gcu/archive`'s `createWriter`.
+2. Add Works tree action: drop-zone for `.gcupkg` → extract under `/lib/local/<name>@<ver>/` → trigger import.
+3. Add `install("file.gcupkg")` shorthand in cells.
+
+This is not in the queue for v1.0. It's a north-star format to design *toward* so we don't lock ourselves out by accident.
+
+### 6.2 Bundled documentation
+
+When a `.gcupkg` contains a `docs/` directory, the host wires each `.md` file into the Works docs surface (`works/surfaces/docs.html`) under a per-extension section. The convention:
+
+- `docs/index.md` is the entry page (the link in the docs surface sidebar lands here).
+- Other `*.md` files are siblings in the sidebar, alphabetically ordered.
+- Markdown is rendered with the same renderer the host uses for its own docs (admonitions, code-fence syntax highlighting, anchor links).
+- A docs-only extension is legal — `index.js` can be a no-op manifest declaration. Useful for shipping reference packs that don't add code.
+
+The README and SPEC at the gcupkg root are treated differently — they're shown inline in the **plugin-panel detail view** (the popup that opens when the user clicks an installed extension), not in the docs surface. README is the "what is this" text; the docs/ directory is the "how do I use it" reference.
+
+On install, the host writes `docs/` into the VFS at:
+
+```
+/usr/share/docs/<extension-name>/
+  index.md
+  *.md
+```
+
+— available to the docs surface, to `cat` in geas, and to any other surface that wants to render extension docs. Uninstall removes the directory.
+
+### 6.3 Bundled examples
+
+When a `.gcupkg` contains an `examples/` directory, the host installs each `.txt` cell-def into the workspace's example pool, where it shows up in **Help → Open example…** alongside the host's built-in examples.
+
+Each `.txt` follows the `examples/defs/FORMAT.md` spec (one `///`-delimited cell-def per file). An optional `examples/manifest.json` lets the extension control the picker entries:
+
+```json
+{
+  "examples": [
+    {
+      "file": "kriging-basics.txt",
+      "title": "Kriging basics",
+      "category": "gslib",
+      "description": "OK + SK on a small block model"
+    },
+    {
+      "file": "variogram-fit.txt",
+      "title": "Variogram fitting"
+    }
+  ]
+}
+```
+
+Without the manifest, the host falls back to filename-derived titles and a `<extension-name>` category. With the manifest, the extension controls categorization and display order.
+
+On install, examples land at:
+
+```
+/usr/share/examples/<extension-name>/
+  *.txt
+  manifest.json
+```
+
+— the same pool the built-in examples write to (see `gen_examples.js`), so the existing picker (`works/js/menubar.js openExamplePicker`) discovers them with no special-casing. Uninstall removes the directory.
+
+Bundled examples are the **fastest way to teach a new user what your extension does** — better than docs, because they run. An extension that ships 3-5 working examples will see substantially more activation than one that ships only API reference.
+
+---
+
+## 7. Versioning and stability
+
+**The platform is pre-1.0.** Concretely:
+
+- Anything in `src/js/` that an extension touches (`registerExtension`, `_cellTypes`, `_taggedLanguages`, `_auditableExtensions`, `_airRegisterLowerer`, `window.auditable.hooks`, cell-context shape, builtin signatures) may change between minor versions without a deprecation window.
+- AIR's IR shape (op codes, schema, validator) may grow new ops freely. Existing op semantics will not change once shipped.
+- `package.json` shape is npm-standard and stable.
+- The cross-language adapter convention (`exports: { <name>: module }`) is intentionally narrow — it's a directory lookup, hard to break.
+
+**What we do not break, ever:**
+
+- `name` / `version` as required manifest fields.
+- The fact that an extension is a plain ES module.
+- The fact that `registerExtension` is the entry point.
+
+**What we may break before 1.0:**
+
+- Field names inside capability objects (`cellType.parseNames` could become `cellType.parse_names`, etc. — though we have no plans).
+- The shape of `ctx` injected into cells.
+- Specific specialization-table keys (`_py`/`_soft` namespaces).
+- The AIR lowerer return shape (currently a structured IR — could grow new required fields).
+- The `requires` semver subset (could grow to include `||` or AND-combinations if real demand surfaces).
+
+For an out-of-tree extension, pin to a specific auditable build (commit hash or release tag) and test against that build. We will publish a 1.0 stability declaration when the platform stabilizes; until then, every minor release is potentially breaking.
+
+If your extension targets multiple auditable versions, the conventional pattern is to feature-detect rather than version-check:
+
+```js
+const register = window.auditable?.registerExtension;
+if (!register) return;            // not in auditable, or pre-manifest-API build
+
+const hooks = window.auditable?.hooks;
+if (hooks) hooks.on('dag:complete', …);   // optional event subscription
+```
+
+---
+
+## 8. Testing
+
+For in-tree extensions, follow the pattern in `test/<name>.test.mjs`:
+
+- Use Node's built-in test runner (`node --test`).
+- Pure-logic tests run against `ext/<name>/src/api.js` (or `main.js`) directly — no DOM shim needed for non-DOM code.
+- DOM-touching tests shim `globalThis.document = { querySelector: () => null, querySelectorAll: () => [] }` before importing.
+
+For out-of-tree extensions:
+
+- Same setup. Your `package.json` `"test": "node --test"` is enough.
+- Integration with auditable runtime is exercised by loading your built `index.js` in a real browser session — use `npm run test:examples` (Playwright sweep over `examples/**/*.html`) or build a minimal harness page if your extension affects DAG correctness.
+
+The `examples/defs/<category>/<name>.txt` system is the host's smoke-test corpus. If your extension is in-tree, contribute one or two `.txt` definitions exercising your surface — `gen_examples.js` will pick them up and the smoke test will hit them on every release.
+
+---
+
+## 9. Open questions / future work
+
+- **MCP tools as a manifest field.** See §3.7. `manifest.mcpTools` will replace the imperative `navigator.modelContext.registerTool` pattern with re-registration + audit-log + access-control baked in.
+- **Settings / preferences.** An extension contributing UI configuration (default themes for a language tag, API keys, feature toggles) has no convention today. Likely shape: `manifest.settings: { schema, defaults }` auto-populating a per-extension Settings panel tab. Pre-design.
+- **Works surface contributions.** The Works shell's surface kinds (`works/js/surface-registry.js`) are shell-side today — an extension cannot ship a new surface. Once the surface-authoring spec stabilizes (`works/SURFACES.md`), extensions should be able to register them through the same manifest. Pre-design.
+- **Asset bundling in `.gcupkg`.** A tagged language wanting to ship a custom CM6 theme, an icon for the cell-type chip, or a font has no current slot. Likely path: `assets/` directory in the gcupkg, written to `/usr/share/assets/<extension>/`. Out of scope for v1 of the gcupkg format.
+- **Naming convention.** `@gcu/<slug>` is conventional but not enforced. Lowercase, no whitespace, semver-tag friendly — but the validator accepts anything that's a string. A linter pass would help here but isn't a runtime concern.
+- **Permissions / capability gating.** Extensions today have full window access. A capability-token model would let users audit what an extension touches (FS / DOM / network / clipboard / …) before approving install. Pre-design; no implementation plan.
+- **Extension marketplace / discovery.** Currently extensions are URL-installed or pkg-installed. A curated registry (signed metadata, version range queries) is an obvious follow-up but not on the near roadmap.
+- **`.gcupkg` actual implementation.** See §6.1.
+- **Versioned manifest schema.** When 1.0 ships, a `manifestVersion: 1` field will become required. We'll auto-treat legacy manifests as version 0.
+- **Localization.** `@gcu/soft` ships a pt-BR locale today as a soft-internal concern. If localization becomes a recurring need (UI strings in tagged-language errors, completions), a `manifest.locales` field would surface it. Pre-design.
+
+---
+
+## 10. Hello world
+
+The smallest useful extension is a tagged-language registration. The full template:
+
+**`package.json`:**
+
+```json
+{
+  "name": "@gcu/hello",
+  "version": "0.1.0",
+  "description": "A minimal Auditable extension — registers a hello tagged-template tag.",
+  "type": "module",
+  "main": "index.js",
+  "license": "MIT"
+}
+```
+
+**`index.js`:**
+
+```js
+// One file, one ES module, runs at evaluation time.
+
+function tokenize(code) {
+  // Minimal — one token for the whole body. Real implementations split
+  // into keywords / strings / comments for syntax highlighting.
+  return [{ type: 'text', value: code, start: 0, end: code.length }];
+}
+
+function completions(_code, _cursor) {
+  return [
+    { label: 'hello', detail: 'greeting' },
+    { label: 'world', detail: 'audience' },
+  ];
+}
+
+const register = window.auditable?.registerExtension;
+if (register) {
+  register({
+    name: '@gcu/hello',
+    version: '0.1.0',
+    description: 'A minimal hello tagged template',
+    taggedLanguage: {
+      name: 'hello',
+      tokenize,
+      completions,
+    },
+    onActivate() {
+      console.log('[@gcu/hello] activated');
+    },
+  });
+}
+```
+
+**Try it.** From any auditable code cell:
+
+```js
+await install('https://your-host/hello/index.js');
+// Now in any cell:
+const greeting = hello`hello world`;
+// → '<minimally tokenized template>'
+```
+
+That's the entire contract. From here:
+
+- Add `execute()` + `parseNames()` and a `cellType` block to make it a full cell type (§3.1).
+- Add an `airLowerer` to compile your language to V8-hinted JS (§3.4).
+- Add `exports` to surface a Python-shaped namespace to adder cells (§3.5).
+- Add a `build.js` and a `src/` directory once you outgrow one file (§5.2).
+- Wrap in a `.gcupkg` once you want drag-drop installs with bundled docs and examples (§6.1).
+
+Each step is independent. Ship the smallest thing that works; add capabilities as users ask for them.
+
+---
+
+## 11. Reference
+
+| Concern | Source |
+|---|---|
+| Manifest validation + apply pipeline | `src/js/cell-types.js:40–129` |
+| Built-in cell-type registrations | `src/js/cell-types.js:292–327` |
+| Capability lookup helpers | `src/js/cell-types.js` (exported on `window.auditable`) |
+| AIR lowerer registration (adder) | `ext/adder/src/air-lower.js:75–84` |
+| AIR lowerer registration (soft) | `ext/soft/src/air-lower.js:34–38` |
+| Cross-lang adapter pattern (learn) | `ext/learn/adder.js:80–96` |
+| Cross-lang adapter pattern (natra) | `ext/natra/adder.js:730–740` |
+| Adder cell-arena hook (NOT contextHook) | `ext/natra/adder.js:296–326` |
+| ipynb substitution table | `ext/ipynb/src/substitutions.js` |
+| Example picker (consumes `/usr/share/examples/`) | `works/js/menubar.js openExamplePicker` |
+| Cell-def format (used by `examples/*.txt`) | `examples/defs/FORMAT.md` |
+| Docs surface (consumes `/usr/share/docs/`) | `works/surfaces/docs.html` |
+| Hook bus (intra-notebook events) | `src/js/hooks.js`, CLAUDE.md "hook bus" section |
+| A-Bus (cross-iframe events, Works) | `ext/abus/SPEC.md`, `spec_inbox/a-bus-spec.md` |
+| Build concat patterns | `ext/adder/build.js`, `ext/plot/build.js`, `ext/licenses/build.js` |
