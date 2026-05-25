@@ -21,6 +21,7 @@ import { detectFormat, magicForFormat } from './detect.js';
 import { normalizeSource } from './source.js';
 import { normalizeSink } from './sink.js';
 import { listZip, readZip, extractZip } from './zip.js';
+import { listTar, readTar, extractTar } from './tar.js';
 
 async function _resolveSourceFormat(src) {
   const bytes = await src.bytes();
@@ -35,15 +36,15 @@ async function _resolveSourceFormat(src) {
 
 function _explainUnsupported(format) {
   switch (format) {
-    case 'tar':
     case 'tar.gz':
     case 'tar.zst':
+      return `archive: ${format} requires the gz/zst decompression layer (not yet wired — coming with gz.js + zst.js)`;
     case 'tar.xz':
     case 'tar.bz2':
-      return `archive: tar / tar.* support not yet wired (foundation ships ZIP only)`;
+      return `archive: ${format} requires a lazy-loaded Wasm decoder (not yet wired)`;
     case 'gz':
     case 'zst':
-      return `archive: single-file ${format} helpers not yet wired (foundation ships ZIP only)`;
+      return `archive: single-file ${format} helpers not yet wired (gz/zst handlers coming next)`;
     case 'xz':
     case 'bz2':
       return `archive: ${format} requires a lazy-loaded Wasm decoder (not yet wired)`;
@@ -66,6 +67,7 @@ export const archive = {
     const src = normalizeSource(source);
     const { bytes, format } = await _resolveSourceFormat(src);
     if (format === 'zip') return listZip(bytes);
+    if (format === 'tar') return listTar(bytes);
     throw new Error(_explainUnsupported(format));
   },
 
@@ -76,6 +78,7 @@ export const archive = {
     const src = normalizeSource(source);
     const { bytes, format } = await _resolveSourceFormat(src);
     if (format === 'zip') return readZip(bytes, innerPath);
+    if (format === 'tar') return readTar(bytes, innerPath);
     throw new Error(_explainUnsupported(format));
   },
 
@@ -83,12 +86,12 @@ export const archive = {
     const src = normalizeSource(source);
     const dst = normalizeSink(sink);
     const { bytes, format } = await _resolveSourceFormat(src);
-    if (format === 'zip') {
-      const r = await extractZip(bytes, dst, opts);
-      // For memory sinks, surface the result map directly — caller convenience.
-      if (dst.kind === 'memory') return dst.result();
-      return r;
-    }
-    throw new Error(_explainUnsupported(format));
+    let result;
+    if (format === 'zip')      result = await extractZip(bytes, dst, opts);
+    else if (format === 'tar') result = await extractTar(bytes, dst, opts);
+    else throw new Error(_explainUnsupported(format));
+    // For memory sinks, surface the result map directly — caller convenience.
+    if (dst.kind === 'memory') return dst.result();
+    return result;
   },
 };

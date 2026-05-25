@@ -15,7 +15,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const srcDir = path.join(__dirname, 'src');
 const vendorDir = path.join(__dirname, 'vendor');
 
-const files = ['detect.js', 'source.js', 'sink.js', 'zip.js', 'api.js'];
+const files = ['detect.js', 'source.js', 'sink.js', 'zip.js', 'tar.js', 'api.js'];
 
 const chunks = [];
 
@@ -67,6 +67,7 @@ export {
   detectFormat, magicForFormat,
   normalizeSource, normalizeSink,
   listZip, readZip,
+  listTar, readTar, writeTar,
   archive,
 };
 `;
