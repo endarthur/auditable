@@ -1,0 +1,32 @@
+{
+  "name": "@gcu/licenses",
+  "version": "0.1.0",
+  "description": "Third-party license attribution for the GCU stack. Track, surface, and travel SPDX license info for runtime-installed ESM modules, pkg-managed dependencies, and build-time-vendored libraries. Make MIT/BSD/Apache attribution automatic; surface copyleft prominently.",
+  "type": "module",
+  "main": "src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["spdx", "license", "compliance", "attribution", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/licenses"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/licenses",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}
