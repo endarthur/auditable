@@ -1,17 +1,18 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <title>text editor</title>
 <style>
+  /* @theme-tokens */
   html, body { margin: 0; height: 100%; }
-  body { background: #14171a; }
+  body { background: var(--au-surface); }
   textarea {
     width: 100%; height: 100%;
     box-sizing: border-box;
     margin: 0; border: 0; padding: 10px 12px;
     resize: none; outline: none;
-    background: #14171a; color: #c8ccd0;
+    background: var(--au-surface-deep); color: var(--au-fg);
     font: 13px/1.55 ui-monospace, 'Space Mono', Menlo, monospace;
     tab-size: 2;
   }
@@ -27,6 +28,8 @@
 <textarea id="editor" spellcheck="false" placeholder="loading…"></textarea>
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
+
+/* @theme-init */
 
 const editor = document.getElementById('editor');
 const basename = (p) => p.split('/').filter(Boolean).pop() || p;
@@ -45,6 +48,7 @@ window.addEventListener('message', async (ev) => {
     editor.value = 'connect failed: ' + e.message;
     return;
   }
+  installThemeSubscription(bus);
 
   // Read the file through the `works` VFS service.
   let saved = '';

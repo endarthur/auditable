@@ -1,13 +1,147 @@
 /* Auditable Works — the GCU desktop shell.
-   Shell chrome only; @gcu/rails, @gcu/menu, @gcu/dialog self-theme via
-   their bundled :root defaults (appended after this sheet at build time). */
+   Theme is the 3-layer Switchboard cascade (see ext/switchboard/SPEC.md):
+     1. --sw-* swatches at :root (light is default; dark overrides via
+        [data-theme="dark"])
+     2. --au-* semantic tokens map onto --sw-* values
+     3. --ui-* and --rails-* aliases for the bundled @gcu/menu /
+        @gcu/dialog / @gcu/rails components — works build strips those
+        components' own :root blocks so this file owns the token values.
+   Shell chrome reads ONLY through --au-* / --ui-* / --rails-* tokens. */
+
+:root {
+  /* ── Switchboard swatches — LIGHT default (paper basalt) ── */
+  --sw-bg-deep:     #C2C1BE;
+  --sw-bg:          #D2D1CE;
+  --sw-bg-raised:   #E4E3E1;
+  --sw-bg-bright:   #EDECEB;
+  --sw-text:        #232322;
+  --sw-text-mid:    #504F4C;
+  --sw-text-soft:   #7A7875;
+  --sw-border:      #B3B1AD;
+  --sw-border-soft: #C6C4C1;
+  --sw-rule:        #A5A3A0;
+  --sw-orange:      #B54E1A;  --sw-orange-soft: #E8D8CF;
+  --sw-teal:        #1B6B72;  --sw-teal-soft:   #CEE2E4;
+  --sw-green:       #3D7340;  --sw-green-soft:  #D2E4D4;
+  --sw-amber:       #8E6518;  --sw-amber-soft:  #E4DCCC;
+  --sw-red:         #A8312A;  --sw-red-soft:    #E8D6D4;
+  --sw-indigo:      #4E5580;  --sw-indigo-soft: #D8D9E2;
+  --sw-mono:        'Space Mono', 'JetBrains Mono', 'Consolas', monospace;
+  --sw-sans:        'Barlow', system-ui, sans-serif;
+  --sw-radius:      3px;
+  --sw-radius-lg:   4px;
+
+  /* ── Auditable semantic tokens (--au-*) — shell chrome reads these ── */
+  --au-surface-deep:   var(--sw-bg-deep);
+  --au-surface:        var(--sw-bg);
+  --au-surface-raised: var(--sw-bg-raised);
+  --au-surface-bright: var(--sw-bg-bright);
+  --au-fg:             var(--sw-text);
+  --au-fg-muted:       var(--sw-text-mid);
+  --au-fg-soft:        var(--sw-text-soft);
+  --au-border:         var(--sw-border);
+  --au-border-soft:    var(--sw-border-soft);
+  --au-rule:           var(--sw-rule);
+  --au-action:         var(--sw-orange);
+  --au-action-soft:    var(--sw-orange-soft);
+  --au-info:           var(--sw-teal);
+  --au-info-soft:      var(--sw-teal-soft);
+  --au-success:        var(--sw-green);
+  --au-success-soft:   var(--sw-green-soft);
+  --au-warn:           var(--sw-amber);
+  --au-warn-soft:      var(--sw-amber-soft);
+  --au-error:          var(--sw-red);
+  --au-error-soft:     var(--sw-red-soft);
+  --au-selected:       var(--sw-indigo);
+  --au-selected-soft:  var(--sw-indigo-soft);
+  --au-font-sans:      var(--sw-sans);
+  --au-font-mono:      var(--sw-mono);
+
+  /* ── Component token aliases — populated above the bundled defaults,
+        which get their own :root blocks stripped at build time so these
+        values are what menu/dialog/rails see at runtime. ── */
+  --ui-bg-raised:     var(--au-surface-raised);
+  --ui-bg:            var(--au-surface);
+  --ui-bg-hover:      var(--au-surface-bright);
+  --ui-bg-selected:   var(--au-selected-soft);
+  --ui-fg:            var(--au-fg);
+  --ui-fg-muted:      var(--au-fg-muted);
+  --ui-fg-error:      var(--au-error);
+  --ui-fg-accent:     var(--au-action);
+  --ui-border:        var(--au-border);
+  --ui-border-focus:  var(--au-action);
+  --ui-border-radius: var(--sw-radius);
+  --ui-shadow:        0 6px 20px rgba(0, 0, 0, 0.15);
+  --ui-font:          var(--au-font-mono);
+  --ui-font-size:     12px;
+  --ui-padding:       8px;
+
+  --rails-bg:            var(--au-surface-deep);
+  --rails-surface:       var(--au-surface-raised);
+  --rails-chrome:        var(--au-surface);
+  --rails-border:        var(--au-border);
+  --rails-border-strong: var(--au-rule);
+  --rails-text:          var(--au-fg);
+  --rails-text-dim:      var(--au-fg-muted);
+  --rails-text-faint:    var(--au-fg-soft);
+  --rails-accent:        var(--au-action);
+  --rails-accent-bg:     var(--au-action-soft);
+  --rails-danger:        var(--au-error);
+  --rails-font-mono:     var(--au-font-mono);
+
+  /* ── Legacy --gcu-* aliases — the About modal section + a couple of
+        worker shims reference them. Kept as aliases so a partial migration
+        doesn't break. New code should use --au-* directly. ── */
+  --gcu-action:    var(--au-action);
+  --gcu-fg:        var(--au-fg);
+  --gcu-fg-soft:   var(--au-fg-soft);
+  --gcu-border:    var(--au-border);
+  --gcu-bg-bright: var(--au-surface-bright);
+  --gcu-font-mono: var(--au-font-mono);
+
+  font-family: var(--au-font-sans);
+}
+
+/* ── Switchboard dark theme (basalt) — overrides --sw-* swatches only.
+      --au-* / --ui-* / --rails-* / --gcu-* mappings above all auto-resolve
+      through the reassigned --sw-* values.
+
+      Accents are works-specific: brighter than Switchboard's basalt
+      defaults, matching the works palette that predates the cascade
+      migration. The muted basalt accents (Switchboard canon) read fine
+      in auditable notebooks where badges + accent colors are sparse, but
+      works's chrome leans on accents harder (mount paths, license
+      badges, action buttons) — keep the brighter values so widgets
+      retain visual punch. ── */
+[data-theme="dark"] {
+  --sw-bg-deep:     #0E1012;
+  --sw-bg:          #15171A;
+  --sw-bg-raised:   #1D2024;
+  --sw-bg-bright:   #25282D;
+  --sw-text:        #DDDCDA;
+  --sw-text-mid:    #9E9C98;
+  --sw-text-soft:   #6E6C68;
+  --sw-border:      #2F3338;
+  --sw-border-soft: #24272B;
+  --sw-rule:        #3A3E44;
+  --sw-orange:      #D97A3C;  --sw-orange-soft: #2E1F18;
+  --sw-teal:        #7EC8E0;  --sw-teal-soft:   #16272A;
+  --sw-green:       #9ED47E;  --sw-green-soft:  #18261A;
+  --sw-amber:       #E0C060;  --sw-amber-soft:  #2A2316;
+  --sw-red:         #F88C8C;  --sw-red-soft:    #2C1A18;
+  --sw-indigo:      #C080C0;  --sw-indigo-soft: #1E2030;
+  /* Dark-only shadow strength bump — light theme's shadows are already faint. */
+  --ui-shadow:      0 6px 20px rgba(0, 0, 0, 0.5);
+}
+
+/* ── Shell layout ── */
 
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body {
-  font: 13px/1.5 'Barlow', system-ui, -apple-system, sans-serif;
-  background: #14171a;
-  color: #c8ccd0;
+  font: 13px/1.5 var(--au-font-sans);
+  background: var(--au-surface);
+  color: var(--au-fg);
   overflow: hidden;
 }
 
@@ -19,8 +153,8 @@ body {
 
 .works-menubar {
   flex: none;
-  border-bottom: 1px solid #2a2e33;
-  background: #1a1d21;
+  border-bottom: 1px solid var(--au-border);
+  background: var(--au-surface-raised);
 }
 
 .works-body {
@@ -34,8 +168,8 @@ body {
   width: 232px;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid #2a2e33;
-  background: #16191c;
+  border-right: 1px solid var(--au-border);
+  background: var(--au-surface);
 }
 .works-sidebar.hidden { display: none; }
 
@@ -45,8 +179,8 @@ body {
   font-size: 11px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: #8a9099;
-  border-bottom: 1px solid #2a2e33;
+  color: var(--au-fg-muted);
+  border-bottom: 1px solid var(--au-border);
 }
 
 .works-tree {
@@ -58,7 +192,7 @@ body {
 .works-tree-empty {
   padding: 12px;
   font-size: 12px;
-  color: #6b7177;
+  color: var(--au-fg-soft);
 }
 
 .tree-row {
@@ -72,18 +206,18 @@ body {
   user-select: none;
   border-radius: 3px;
 }
-.tree-row:hover { background: #21262b; }
-.tree-icon { flex: none; width: 1em; text-align: center; color: #6b7177; }
+.tree-row:hover { background: var(--au-surface-bright); }
+.tree-icon { flex: none; width: 1em; text-align: center; color: var(--au-fg-soft); }
 .tree-label { overflow: hidden; text-overflow: ellipsis; }
 .tree-project { cursor: pointer; }
-.tree-project .tree-icon { color: #d98a3a; }
-.tree-file .tree-label { color: #8a9099; }
+.tree-project .tree-icon { color: var(--au-action); }
+.tree-file .tree-label { color: var(--au-fg-muted); }
 
 .works-rails {
   flex: 1;
   min-width: 0;
   position: relative;
-  background: #14171a;
+  background: var(--au-surface);
 }
 
 .works-empty {
@@ -93,7 +227,7 @@ body {
   justify-content: center;
   height: 100%;
   gap: 4px;
-  color: #6b7177;
+  color: var(--au-fg-soft);
 }
 .works-empty p { margin: 0; }
 .works-empty-hint { font-size: 12px; }
@@ -103,10 +237,11 @@ body {
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: #8a9099;
+  color: var(--au-fg-muted);
 }
 
-/* A surface iframe fills its rails panel. */
+/* A surface iframe fills its rails panel. The iframe itself shows through
+   while its content is loading; matches the workspace background colour. */
 .works-surface-frame {
   flex: 1;
   min-height: 0;
@@ -114,7 +249,7 @@ body {
   height: 100%;
   border: 0;
   display: block;
-  background: #14171a;
+  background: var(--au-surface);
 }
 
 .works-statusbar {
@@ -123,14 +258,14 @@ body {
   align-items: center;
   gap: 10px;
   padding: 4px 12px;
-  border-top: 1px solid #2a2e33;
-  background: #1a1d21;
+  border-top: 1px solid var(--au-border);
+  background: var(--au-surface-raised);
   font-size: 11px;
-  color: #8a9099;
+  color: var(--au-fg-muted);
 }
 .works-statusbar-spacer { flex: 1; }
-.works-attr { color: #8a9099; text-decoration: none; }
-.works-attr:hover { color: #c8ccd0; }
+.works-attr { color: var(--au-fg-muted); text-decoration: none; }
+.works-attr:hover { color: var(--au-fg); }
 
 /* Reconnect gate — shown on boot when a saved workspace folder needs its
    File System Access permission re-granted. */
@@ -141,24 +276,24 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(10, 12, 14, 0.85);
+  background: color-mix(in srgb, var(--au-surface-deep) 85%, transparent);
 }
 .works-reconnect-card {
-  background: #1a1d21;
-  border: 1px solid #2a2e33;
+  background: var(--au-surface-raised);
+  border: 1px solid var(--au-border);
   border-radius: 6px;
   padding: 24px 28px;
   max-width: 380px;
   text-align: center;
 }
-.works-reconnect-title { font-size: 15px; color: #c8ccd0; margin-bottom: 10px; }
+.works-reconnect-title { font-size: 15px; color: var(--au-fg); margin-bottom: 10px; }
 .works-reconnect-msg {
   font-size: 12px;
   line-height: 1.6;
-  color: #8a9099;
+  color: var(--au-fg-muted);
   margin-bottom: 18px;
 }
-.works-reconnect-msg b { color: #c8ccd0; }
+.works-reconnect-msg b { color: var(--au-fg); }
 .works-reconnect-actions { display: flex; gap: 8px; justify-content: center; }
 .works-reconnect-actions button {
   font: inherit;
@@ -166,31 +301,31 @@ body {
   padding: 6px 14px;
   border-radius: 4px;
   cursor: pointer;
-  border: 1px solid #2a2e33;
-  background: #14171a;
-  color: #c8ccd0;
+  border: 1px solid var(--au-border);
+  background: var(--au-surface);
+  color: var(--au-fg);
 }
 .works-reconnect-go {
-  border-color: #d97a3c;
-  background: #d97a3c;
-  color: #14171a;
+  border-color: var(--au-action);
+  background: var(--au-action);
+  color: var(--au-surface-deep);
 }
 
 /* ── ABOUT MODAL ── */
 .about-modal {
   min-width: 320px;
   padding: 4px 0;
-  font-family: var(--gcu-font-mono, ui-monospace, Menlo, Consolas, monospace);
+  font-family: var(--au-font-mono);
 }
 .about-brand {
   font-size: 14px;
   letter-spacing: 4px;
-  color: var(--gcu-action, #d97a3c);
+  color: var(--au-action);
   margin-bottom: 4px;
 }
 .about-tag {
   font-size: 11px;
-  color: var(--gcu-fg-soft, #888);
+  color: var(--au-fg-soft);
   margin-bottom: 16px;
 }
 .about-rows {
@@ -201,51 +336,50 @@ body {
   margin: 0 0 16px;
 }
 .about-rows dt {
-  color: var(--gcu-fg-soft, #888);
+  color: var(--au-fg-soft);
   text-align: right;
   letter-spacing: 1px;
 }
 .about-rows dd {
   margin: 0;
-  color: var(--gcu-fg, #e0e0e0);
+  color: var(--au-fg);
 }
 .about-rows dd code {
   font-family: inherit;
   font-size: 11px;
-  color: var(--gcu-fg-soft, #888);
+  color: var(--au-fg-soft);
 }
 .about-rows dd a {
-  color: var(--gcu-action, #d97a3c);
+  color: var(--au-action);
   text-decoration: none;
 }
 .about-rows dd a:hover { text-decoration: underline; }
 .about-author {
   font-size: 11px;
-  color: var(--gcu-fg-soft, #888);
-  border-top: 1px solid var(--gcu-border, #222);
+  color: var(--au-fg-soft);
+  border-top: 1px solid var(--au-border);
   padding-top: 12px;
 }
 .about-author a {
   color: inherit;
   text-decoration: none;
 }
-.about-author a:hover { color: var(--gcu-action, #d97a3c); }
+.about-author a:hover { color: var(--au-action); }
 
 /* GCU thin scrollbar — applies to every scrollable element in the
    shell (file tree, dialogs, picker, …). Surfaces have their own
    iframe origins and style themselves independently. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--gcu-border, #2a3038) transparent;
+  scrollbar-color: var(--au-border) transparent;
 }
 *::-webkit-scrollbar { width: 8px; height: 8px; }
 *::-webkit-scrollbar-track { background: transparent; }
 *::-webkit-scrollbar-thumb {
-  background: var(--gcu-border, #2a3038);
+  background: var(--au-border);
   border-radius: 4px;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: var(--gcu-fg-soft, #6e6c68);
+  background: var(--au-fg-soft);
 }
 *::-webkit-scrollbar-corner { background: transparent; }
-

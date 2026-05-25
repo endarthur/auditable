@@ -1,98 +1,99 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <title>Settings</title>
 <style>
+  /* @theme-tokens */
   html, body { margin: 0; height: 100%; }
   body {
-    background: #14171a; color: #c8ccd0;
+    background: var(--au-surface); color: var(--au-fg);
     font: 12px/1.5 ui-monospace, 'Space Mono', Menlo, monospace;
     display: flex; flex-direction: column;
   }
   header {
     flex: none; display: flex; align-items: center; gap: 10px;
-    padding: 6px 12px; border-bottom: 1px solid #2a2e33; background: #1a1d21;
+    padding: 6px 12px; border-bottom: 1px solid var(--au-border); background: var(--au-surface-raised);
   }
-  header .title { font-weight: 600; color: #e8eaed; }
+  header .title { font-weight: 600; color: var(--au-fg); }
   header .spacer { flex: 1; }
-  header .saved { color: #6b7177; font-size: 11px; }
+  header .saved { color: var(--au-fg-soft); font-size: 11px; }
   .scroll { flex: 1; overflow: auto; padding: 16px 20px; max-width: 640px; }
   h2 {
     font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
-    color: #d97a3c; margin: 24px 0 8px;
+    color: var(--au-action); margin: 24px 0 8px;
   }
   h2:first-child { margin-top: 0; }
   .row {
     display: grid; grid-template-columns: 140px 1fr; gap: 12px;
     align-items: center; padding: 6px 0;
   }
-  .row label { color: #8a9099; }
+  .row label { color: var(--au-fg-muted); }
   .row select, .row input[type="number"] {
-    background: #21262b; color: #c8ccd0;
-    border: 1px solid #2a2e33; border-radius: 3px;
+    background: var(--au-surface-bright); color: var(--au-fg);
+    border: 1px solid var(--au-border); border-radius: 3px;
     padding: 4px 8px; font: inherit;
     min-width: 180px;
   }
-  .row input[type="checkbox"] { accent-color: #d97a3c; }
+  .row input[type="checkbox"] { accent-color: var(--au-action); }
   button {
-    background: #21262b; color: #c8ccd0;
-    border: 1px solid #2a2e33; border-radius: 3px;
+    background: var(--au-surface-bright); color: var(--au-fg);
+    border: 1px solid var(--au-border); border-radius: 3px;
     padding: 4px 12px; font: inherit; cursor: pointer;
   }
-  button:hover { background: #2a3038; }
-  button.danger { color: #d97a3c; }
+  button:hover { background: var(--au-surface-bright); filter: brightness(1.1); }
+  button.danger { color: var(--au-action); }
   .mounts-list {
-    border: 1px solid #2a2e33; border-radius: 3px;
-    padding: 4px 8px; margin: 6px 0; background: #1a1d21;
+    border: 1px solid var(--au-border); border-radius: 3px;
+    padding: 4px 8px; margin: 6px 0; background: var(--au-surface-raised);
   }
   .mount-row {
     display: flex; align-items: center; gap: 10px;
-    padding: 4px 0; border-bottom: 1px solid #21262b;
+    padding: 4px 0; border-bottom: 1px solid var(--au-border-soft);
   }
   .mount-row:last-child { border-bottom: none; }
-  .mount-row .path { flex: 1; color: #7ec8e0; }
-  .mount-row .type { color: #6b7177; font-size: 11px; }
-  .empty { color: #6b7177; padding: 4px 0; font-style: italic; }
-  .hint { color: #6b7177; font-size: 11px; margin-top: 4px; }
+  .mount-row .path { flex: 1; color: var(--au-info); }
+  .mount-row .type { color: var(--au-fg-soft); font-size: 11px; }
+  .empty { color: var(--au-fg-soft); padding: 4px 0; font-style: italic; }
+  .hint { color: var(--au-fg-soft); font-size: 11px; margin-top: 4px; }
   .actions { display: flex; gap: 8px; padding: 6px 0; }
   /* GCU thin scrollbar — surfaces are sandboxed iframes, each styles its
      own scrollbars (mirrors works/style.css's pattern). */
-  * { scrollbar-width: thin; scrollbar-color: #2a3038 transparent; }
+  * { scrollbar-width: thin; scrollbar-color: var(--au-border) transparent; }
   *::-webkit-scrollbar { width: 8px; height: 8px; }
   *::-webkit-scrollbar-track { background: transparent; }
-  *::-webkit-scrollbar-thumb { background: #2a3038; border-radius: 4px; }
-  *::-webkit-scrollbar-thumb:hover { background: #6e6c68; }
+  *::-webkit-scrollbar-thumb { background: var(--au-border); border-radius: 4px; }
+  *::-webkit-scrollbar-thumb:hover { background: var(--au-fg-soft); }
   *::-webkit-scrollbar-corner { background: transparent; }
   .licenses-list {
-    border: 1px solid #2a2e33; border-radius: 3px;
-    padding: 4px 8px; margin: 6px 0; background: #1a1d21;
+    border: 1px solid var(--au-border); border-radius: 3px;
+    padding: 4px 8px; margin: 6px 0; background: var(--au-surface-raised);
   }
   .lic-row {
-    padding: 6px 0; border-bottom: 1px solid #21262b;
+    padding: 6px 0; border-bottom: 1px solid var(--au-border-soft);
     cursor: pointer;
   }
   .lic-row:last-child { border-bottom: none; }
-  .lic-row:hover { background: #21262b; }
+  .lic-row:hover { background: var(--au-surface-bright); }
   .lic-row .head { display: flex; align-items: center; gap: 10px; }
-  .lic-row .name { flex: 1; color: #c8ccd0; }
+  .lic-row .name { flex: 1; color: var(--au-fg); }
   .lic-row .badge {
     padding: 1px 6px; border-radius: 3px; font-size: 11px; letter-spacing: 0.5px;
   }
-  .badge-permissive    { color: #9ed47e; background: rgba(110,180,90,0.10); border: 1px solid rgba(110,180,90,0.30); }
-  .badge-weak-copyleft { color: #e5b65a; background: rgba(220,160,40,0.10); border: 1px solid rgba(220,160,40,0.30); }
-  .badge-strong-copyleft { color: #e08070; background: rgba(220,90,70,0.10); border: 1px solid rgba(220,90,70,0.30); }
-  .badge-unknown       { color: #8a9099; background: rgba(140,140,140,0.10); border: 1px solid rgba(140,140,140,0.30); }
-  .lic-row .version { color: #6b7177; font-size: 11px; }
-  .lic-row .desc { color: #6b7177; font-size: 11px; margin-top: 4px; }
+  .badge-permissive    { color: var(--au-success); background: var(--au-success-soft); border: 1px solid var(--au-success); }
+  .badge-weak-copyleft { color: var(--au-warn);    background: var(--au-warn-soft);    border: 1px solid var(--au-warn); }
+  .badge-strong-copyleft { color: var(--au-error); background: var(--au-error-soft);   border: 1px solid var(--au-error); }
+  .badge-unknown       { color: var(--au-fg-muted); background: var(--au-surface-bright); border: 1px solid var(--au-border); }
+  .lic-row .version { color: var(--au-fg-soft); font-size: 11px; }
+  .lic-row .desc { color: var(--au-fg-soft); font-size: 11px; margin-top: 4px; }
   .lic-row .text {
     display: none; margin-top: 8px; padding: 8px 10px;
-    background: #14171a; border: 1px solid #2a2e33; border-radius: 3px;
+    background: var(--au-surface-deep); border: 1px solid var(--au-border); border-radius: 3px;
     font-family: 'Space Mono', ui-monospace, monospace; font-size: 11px;
     white-space: pre-wrap; max-height: 320px; overflow: auto;
   }
   .lic-row.open .text { display: block; }
-  .lic-row a { color: #7ec8e0; }
+  .lic-row a { color: var(--au-info); }
 </style>
 </head>
 <body>
@@ -143,6 +144,8 @@
 </div>
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
+
+/* @theme-init */
 
 const $ = (id) => document.getElementById(id);
 
@@ -309,10 +312,11 @@ window.addEventListener('message', async (ev) => {
 
   try { bus = await connect(ev.data.port, { client: 'settings-surface' }); }
   catch (e) {
-    document.body.innerHTML = '<div style="padding:20px;color:#f88">'
+    document.body.innerHTML = '<div style="padding:20px;color:var(--au-error)">'
       + 'settings surface failed: ' + (e.message || e) + '</div>';
     return;
   }
+  installThemeSubscription(bus);
 
   bus.expose('/', {
     Surface: {

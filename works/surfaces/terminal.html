@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <title>Terminal</title>
@@ -7,11 +7,13 @@
 /* xterm.css — inlined at build */
 /* @xterm-css */
 
+/* @theme-tokens */
+
 html, body { margin: 0; padding: 0; height: 100%; overflow: hidden;
-  background: #0a0a0a; color: #e0e0e0;
+  background: var(--au-surface); color: var(--au-fg);
   font: 13px Menlo, Consolas, "Courier New", monospace; }
 #term { width: 100%; height: 100%; padding: 4px; box-sizing: border-box; }
-.term-error { padding: 12px; color: #f88; font: 12px Menlo, Consolas, monospace; }
+.term-error { padding: 12px; color: var(--au-error); font: 12px Menlo, Consolas, monospace; }
 </style>
 </head>
 <body>
@@ -19,6 +21,8 @@ html, body { margin: 0; padding: 0; height: 100%; overflow: hidden;
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
 import { VFS, AbusBackend } from '../../ext/vfs/index.js';
+
+/* @theme-init */
 import { Terminal, FitAddon, WebglAddon } from '../../ext/xterm/index.js';
 import { createGeasClient, createXtermAdapter, makeLineEditor, procToWorker, tokenize } from '../../ext/geas/index.js';
 import { ProcessManager } from '../../ext/proc/index.js';
@@ -57,6 +61,7 @@ window.addEventListener('message', async (ev) => {
   let bus;
   try { bus = await connect(ev.data.port, { client: 'terminal' }); }
   catch (e) { showError('A-Bus connect failed: ' + e.message); return; }
+  installThemeSubscription(bus);
 
   const tab = ev.data.tab || {};
   const startCwd = tab.path && tab.path !== '/' ? tab.path : '/home';

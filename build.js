@@ -180,8 +180,13 @@ if (target === 'works' || target === 'works-all') {
 
   const worksJs = generateModuleBoot('', modules, '');
 
-  // CSS: the shell's own stylesheet + the component theme sheets appended
-  // whole — the components self-theme via their bundled :root defaults.
+  // CSS: the shell's own stylesheet + the component theme sheets. The
+  // structural sheets (rails.css / menu.css / dialog.css) are appended
+  // verbatim — they don't define any tokens. The decorative *-default.css
+  // sheets get their :root blocks STRIPPED so works/style.css's own :root
+  // is what populates --ui-* / --rails-* — same pattern auditable uses.
+  // Without this, the component defaults' dark-only tokens would clobber
+  // works/style.css's light-defaults + dark-override cascade.
   let worksCss = fs.readFileSync(path.join(worksDir, 'style.css'), 'utf8');
   for (const cssRel of [
     'ext/rails/rails.css', 'ext/rails/rails-default.css',
@@ -189,7 +194,12 @@ if (target === 'works' || target === 'works-all') {
     'ext/dialog/dialog.css', 'ext/dialog/dialog-default.css',
   ]) {
     const p = path.join(__dirname, cssRel);
-    if (fs.existsSync(p)) worksCss += '\n\n' + fs.readFileSync(p, 'utf8').trimEnd();
+    if (!fs.existsSync(p)) continue;
+    let src = fs.readFileSync(p, 'utf8');
+    if (cssRel.endsWith('-default.css')) {
+      src = src.replace(/:root\s*\{[\s\S]*?\}\s*/m, '');
+    }
+    worksCss += '\n\n' + src.trimEnd();
   }
 
   // Bundle the Switchboard fonts (Barlow + Space Mono) directly into
@@ -554,6 +564,23 @@ if (target === 'works' || target === 'works-all') {
     return html.replace('/* @xterm-css */', css);
   }
 
+  // Shared theme tokens + theme-init JS — surfaces opt in by including the
+  // `/* @theme-tokens */` placeholder in their <style> block and the
+  // `/* @theme-init */` placeholder in their <script> block. Each surface
+  // is a sandboxed iframe so the tokens have to land in each one
+  // independently; centralizing here keeps the cascade in one place.
+  const _themeCss = fs.readFileSync(path.join(worksDir, 'surfaces', '_theme.css'), 'utf8');
+  const _themeJs  = fs.readFileSync(path.join(worksDir, 'surfaces', '_theme-init.js'), 'utf8');
+  function injectSharedTheme(html) {
+    if (html.includes('/* @theme-tokens */')) {
+      html = html.replace('/* @theme-tokens */', _themeCss);
+    }
+    if (html.includes('/* @theme-init */')) {
+      html = html.replace('/* @theme-init */', _themeJs);
+    }
+    return html;
+  }
+
   const surfaceParts = [];
   for (const s of [
     { kind: 'stub',      file: 'works/surfaces/stub.html',      deps: ['abus'] },
@@ -576,6 +603,8 @@ if (target === 'works' || target === 'works-all') {
     let surfaceHtml = fs.readFileSync(sp, 'utf8');
     if (s.deps) surfaceHtml = rewriteSurfaceToDynamic(surfaceHtml, s.kind, s.deps);
     if (s.extras === 'terminal') surfaceHtml = buildTerminalSurfaceCss(surfaceHtml);
+    // Notebook is auditable.html — uses its own theme cascade, skip injection.
+    if (s.kind !== 'notebook') surfaceHtml = injectSharedTheme(surfaceHtml);
     const gz = worksZlib.gzipSync(Buffer.from(surfaceHtml, 'utf8'));
     const b64 = gz.toString('base64').replace(/.{1,76}/g, '$&\n');
     surfaceParts.push(`<script type="text/plain" id="surface-${s.kind}">\n${b64}\n</script>`);
@@ -585,7 +614,7 @@ if (target === 'works' || target === 'works-all') {
 
   const worksHtml = `<!DOCTYPE html>
 <!-- Auditable Works — the GCU desktop -->
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">

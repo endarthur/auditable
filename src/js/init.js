@@ -570,6 +570,30 @@ async function worksBoot(conn) {
   // :root:not(.in-works) for mobile-mode + standalone-only chrome).
   document.documentElement.classList.add('in-works');
 
+  // Theme propagation — the workspace owns the theme choice (Workspace
+  // Settings → Theme). Subscribe to Shell.SettingsChanged so a flip on the
+  // shell side reaches the embedded notebook too. The notebook's own
+  // Settings → Theme stays functional for standalone use; in works the
+  // workspace setting overrides on every load.
+  const _applyTheme = (theme) => {
+    const root = document.documentElement;
+    if (!theme || theme === 'system') root.removeAttribute('data-theme');
+    else root.setAttribute('data-theme', theme);
+  };
+  try {
+    const settings = await bus.call(
+      { to: 'works', path: '/', interface: 'Settings', member: 'Get' }, []);
+    _applyTheme(settings && settings.appearance && settings.appearance.theme);
+  } catch { /* workspace settings unavailable — keep current */ }
+  try {
+    bus.subscribe(
+      { interface: 'Shell', member: 'SettingsChanged', from: 'works' },
+      (msg) => {
+        const next = msg && msg.args && msg.args[0];
+        _applyTheme(next && next.appearance && next.appearance.theme);
+      });
+  } catch { /* */ }
+
   // Write current cells/settings/modules into the VFS so the Host can flush
   // them through to the shared workspace.
   const syncToVfs = () => flushPendingDirty(
