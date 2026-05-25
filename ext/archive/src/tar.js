@@ -1,3 +1,5 @@
+import { autoRename } from './sink.js';
+
 // POSIX ustar reader + writer. ~150 LOC inline implementation — the format
 // is simple enough that vendoring a library would add more bytes than the
 // implementation itself.
@@ -172,7 +174,7 @@ export async function extractTar(bytes, sink, opts) {
       if (await sink.exists(target)) {
         if (overwrite === 'error')     throw new Error(`extract: destination exists — ${hdr.path}`);
         else if (overwrite === 'skip') { off += BLOCK * (1 + dataBlocks); continue; }
-        else if (overwrite === 'rename') target = await _autoRename(sink, hdr.path);
+        else if (overwrite === 'rename') target = await autoRename(sink, hdr.path);
       }
       const data = bytes.subarray(off + BLOCK, off + BLOCK + hdr.size);
       await sink.writeFile(target, data);
@@ -186,19 +188,6 @@ export async function extractTar(bytes, sink, opts) {
     off += BLOCK * (1 + dataBlocks);
   }
   return { count: paths.length, paths };
-}
-
-async function _autoRename(sink, name) {
-  const dot = name.lastIndexOf('.');
-  const slash = name.lastIndexOf('/');
-  // Don't split on a dot that's inside a parent dir name.
-  const stem = (dot > slash) ? name.slice(0, dot) : name;
-  const ext  = (dot > slash) ? name.slice(dot)    : '';
-  for (let i = 2; i < 1000; i++) {
-    const candidate = `${stem} (${i})${ext}`;
-    if (!(await sink.exists(candidate))) return candidate;
-  }
-  throw new Error('extract: too many rename collisions');
 }
 
 // ── Public write API ────────────────────────────────────────────────────

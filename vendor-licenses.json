@@ -52,6 +52,20 @@
       "homepage": "https://fonts.google.com/",
       "description": "Sans-serif (Barlow) and monospace (Space Mono) font families used in the GCU typography stack. Only bundled when works.html is built or when the user opts in to 'embed fonts' in auditable.html.",
       "licenseFile": "ext/switchboard/fonts/OFL.txt"
+    },
+    "fflate": {
+      "spdx": "MIT",
+      "version": "0.8.2",
+      "homepage": "https://github.com/101arrowz/fflate",
+      "description": "DEFLATE / ZIP / gzip / zlib codec used by @gcu/archive for ZIP read/write and as the underlying compressor for archive.compress's deflate paths. Vendored at ext/archive/vendor/fflate.module.mjs — only ships in builds that bundle @gcu/archive.",
+      "licenseFile": "ext/archive/vendor/LICENSE-fflate"
+    },
+    "fzstd": {
+      "spdx": "MIT",
+      "version": "0.1.1",
+      "homepage": "https://github.com/101arrowz/fzstd",
+      "description": "Zstandard decoder used by @gcu/archive for .zst / .tar.zst read. Decode-only; encode is a separate larger package that we don't ship yet. Vendored at ext/archive/vendor/fzstd.module.mjs.",
+      "licenseFile": "ext/archive/vendor/LICENSE-fzstd"
     }
   }
 }

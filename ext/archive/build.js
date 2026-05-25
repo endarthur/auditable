@@ -15,32 +15,82 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const srcDir = path.join(__dirname, 'src');
 const vendorDir = path.join(__dirname, 'vendor');
 
-const files = ['detect.js', 'source.js', 'sink.js', 'zip.js', 'tar.js', 'gz.js', 'api.js'];
+const files = ['detect.js', 'source.js', 'sink.js', 'zip.js', 'tar.js', 'gz.js', 'zst.js', 'api.js'];
 
 const chunks = [];
 
-// ── Vendor: fflate ────────────────────────────────────────────────────
-// Prepended before our own code. The vendored copy is the prebuilt ESM
-// bundle from npm — pinned by version + sha tracked in vendor-licenses.json.
-// Strip its `export ` keywords so the consts/functions land in the same
-// scope our src/zip.js will reference them from.
-const fflatePath = path.join(vendorDir, 'fflate.module.mjs');
-if (fs.existsSync(fflatePath)) {
-  let src = fs.readFileSync(fflatePath, 'utf8');
-  // fflate's ESM build does `export {a, b, c, ...}` at the end and uses
-  // `export function`/`export const` throughout. Same strip rules as ours.
+// ── Vendor: fflate + fzstd ────────────────────────────────────────────
+// Each vendored copy is the prebuilt ESM bundle from npm, wrapped in an
+// IIFE that exposes a namespaced surface. The IIFE isolation matters
+// because fflate and fzstd are by the same author and BOTH export
+// `decompress` + `Decompress` — naive concat would silently shadow
+// fflate's with fzstd's (or vice versa, depending on order). Below the
+// IIFEs we alias the symbols our src/ files actually import; src/zip.js
+// imports `unzipSync` from the fflate file, src/zst.js imports
+// `decompress as fzstd_decompress` from the fzstd file. At dev/test time
+// (Node --test) those imports resolve directly through ESM; at build time
+// they're stripped and the references hit the aliases declared below.
+//
+// Versions pinned in vendor-licenses.json (fflate 0.8.2, fzstd 0.1.1).
+
+function _stripVendorExports(src) {
   src = src.replace(/^export\s*\{[\s\S]*?\};?\s*$/gm, '');
   src = src.replace(/^export function /gm, 'function ');
   src = src.replace(/^export async function /gm, 'async function ');
   src = src.replace(/^export const /gm, 'const ');
   src = src.replace(/^export let /gm, 'let ');
   src = src.replace(/^export class /gm, 'class ');
-  src = src.replace(/^export default /gm, 'const __fflate_default__ = ');
-  src = src.replace(/^\n+/, '').replace(/\n+$/, '');
-  chunks.push(`// -- vendor/fflate.module.mjs (MIT, see ext/archive/vendor/LICENSE-fflate) --\n\n${src}`);
-} else {
-  console.warn('archive: vendor/fflate.module.mjs not found — zip support will not work in the bundle');
+  src = src.replace(/^export var /gm, 'var ');
+  src = src.replace(/^export default /gm, 'const __vendor_default__ = ');
+  return src.replace(/^\n+/, '').replace(/\n+$/, '');
 }
+
+// Names re-exported from each vendored IIFE. Keep tight — only the symbols
+// our src/ files actually consume. Easy to extend when we want more of
+// fflate's surface (e.g. Unzip streaming class for archive.stream).
+const VENDORED_EXPORTS = {
+  fflate: ['unzipSync', 'zipSync', 'gzipSync', 'gunzipSync',
+           'Unzip', 'UnzipInflate', 'UnzipPassThrough',
+           'Zip', 'ZipDeflate', 'ZipPassThrough'],
+  fzstd:  ['decompress', 'Decompress', 'ZstdErrorCode'],
+};
+
+for (const [vname, vfile] of [
+  ['fflate', 'fflate.module.mjs'],
+  ['fzstd',  'fzstd.module.mjs'],
+]) {
+  const p = path.join(vendorDir, vfile);
+  if (!fs.existsSync(p)) {
+    console.warn(`archive: vendor/${vfile} not found — ${vname}-dependent formats won't work in the bundle`);
+    continue;
+  }
+  const stripped = _stripVendorExports(fs.readFileSync(p, 'utf8'));
+  const exportList = VENDORED_EXPORTS[vname].join(', ');
+  const wrapped =
+    `const ${vname} = (() => {\n${stripped}\nreturn { ${exportList} };\n})();`;
+  chunks.push(`// -- vendor/${vfile} (MIT, see ext/archive/vendor/LICENSE-${vname}) --\n\n${wrapped}`);
+}
+
+// Alias bindings — let src/ code refer to the symbols it imported by name
+// at dev time. fzstd's `decompress` and `Decompress` shadow fflate's by
+// design (we want the zstd ones in our zst.js), so they get explicit
+// _fzstd-prefixed names; the fflate counterparts stay unprefixed.
+chunks.push(`// -- vendor alias bindings (collision-safe namespacing) --
+
+const unzipSync = fflate.unzipSync;
+const zipSync = fflate.zipSync;
+const gzipSync_fflate = fflate.gzipSync;
+const gunzipSync_fflate = fflate.gunzipSync;
+const Unzip = fflate.Unzip;
+const UnzipInflate = fflate.UnzipInflate;
+const UnzipPassThrough = fflate.UnzipPassThrough;
+const Zip = fflate.Zip;
+const ZipDeflate = fflate.ZipDeflate;
+const ZipPassThrough = fflate.ZipPassThrough;
+const fzstd_decompress = fzstd.decompress;
+const fzstd_Decompress = fzstd.Decompress;
+const fzstd_ZstdErrorCode = fzstd.ZstdErrorCode;
+`);
 
 for (const file of files) {
   let src = fs.readFileSync(path.join(srcDir, file), 'utf8');
@@ -69,6 +119,7 @@ export {
   listZip, readZip,
   listTar, readTar, writeTar,
   gunzipBytes, gzipBytes,
+  unzstdBytes, zstdBytes,
   archive,
 };
 `;

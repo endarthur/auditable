@@ -19,10 +19,11 @@
 
 import { detectFormat, magicForFormat } from './detect.js';
 import { normalizeSource } from './source.js';
-import { normalizeSink } from './sink.js';
+import { normalizeSink, autoRename } from './sink.js';
 import { listZip, readZip, extractZip } from './zip.js';
 import { listTar, readTar, extractTar } from './tar.js';
 import { gunzipBytes, gzipBytes, _gzInnerName } from './gz.js';
+import { unzstdBytes, zstdBytes, _zstInnerName } from './zst.js';
 
 async function _resolveSourceFormat(src) {
   const bytes = await src.bytes();
@@ -44,16 +45,48 @@ async function _unwrapGz(bytes, name) {
   const innerFormat = detectFormat(inner);
   const innerName = _gzInnerName(name);
   if (innerFormat) return { bytes: inner, format: innerFormat, name: innerName };
-  // Single-file gzip — report as a synthetic 'gz' container holding one
-  // entry whose path is the derived inner name.
   return { bytes: inner, format: 'gz-single', name: innerName, innerName };
+}
+
+// Same shape as _unwrapGz but for zstd. Single-file .zst payloads land
+// as `zst-single`; .tar.zst unwraps to tar.
+async function _unwrapZst(bytes, name) {
+  const inner = await unzstdBytes(bytes);
+  const innerFormat = detectFormat(inner);
+  const innerName = _zstInnerName(name);
+  if (innerFormat) return { bytes: inner, format: innerFormat, name: innerName };
+  return { bytes: inner, format: 'zst-single', name: innerName, innerName };
+}
+
+// Resolve a source to bytes + format, peeling off any outer gz/zst wrapper
+// so the caller can dispatch on the inner archive format uniformly.
+async function _peelCompression(src) {
+  const resolved = await _resolveSourceFormat(src);
+  if (resolved.format === 'gz' || resolved.format === 'tar.gz') {
+    return _unwrapGz(resolved.bytes, resolved.name);
+  }
+  if (resolved.format === 'zst' || resolved.format === 'tar.zst') {
+    return _unwrapZst(resolved.bytes, resolved.name);
+  }
+  return resolved;
+}
+
+// Write a single decompressed payload into a directory-shaped sink, applying
+// the overwrite policy. Shared by gz-single and zst-single extract paths.
+async function _extractSingle(dst, innerName, bytes, opts) {
+  const overwrite = (opts && opts.overwrite) || 'error';
+  let target = innerName;
+  if (await dst.exists(target)) {
+    if (overwrite === 'error') throw new Error(`extract: destination exists — ${target}`);
+    if (overwrite === 'skip')  return { count: 0, paths: [] };
+    if (overwrite === 'rename') target = await autoRename(dst, target);
+  }
+  await dst.writeFile(target, bytes);
+  return { count: 1, paths: [target] };
 }
 
 function _explainUnsupported(format) {
   switch (format) {
-    case 'tar.zst':
-    case 'zst':
-      return `archive: zst not yet wired (zst.js coming next chunk)`;
     case 'tar.xz':
     case 'tar.bz2':
     case 'xz':
@@ -76,15 +109,11 @@ export const archive = {
 
   async list(source) {
     const src = normalizeSource(source);
-    let resolved = await _resolveSourceFormat(src);
-    if (resolved.format === 'gz' || resolved.format === 'tar.gz') {
-      resolved = await _unwrapGz(resolved.bytes, resolved.name);
-    }
+    const resolved = await _peelCompression(src);
     const { bytes, format } = resolved;
     if (format === 'zip') return listZip(bytes);
     if (format === 'tar') return listTar(bytes);
-    if (format === 'gz-single') {
-      // Single-file gzip → 1-entry archive shape.
+    if (format === 'gz-single' || format === 'zst-single') {
       return [{ path: resolved.innerName, type: 'file', size: bytes.length }];
     }
     throw new Error(_explainUnsupported(format));
@@ -95,14 +124,11 @@ export const archive = {
       throw new TypeError('archive.read: innerPath must be a non-empty string');
     }
     const src = normalizeSource(source);
-    let resolved = await _resolveSourceFormat(src);
-    if (resolved.format === 'gz' || resolved.format === 'tar.gz') {
-      resolved = await _unwrapGz(resolved.bytes, resolved.name);
-    }
+    const resolved = await _peelCompression(src);
     const { bytes, format } = resolved;
     if (format === 'zip') return readZip(bytes, innerPath);
     if (format === 'tar') return readTar(bytes, innerPath);
-    if (format === 'gz-single') {
+    if (format === 'gz-single' || format === 'zst-single') {
       return innerPath === resolved.innerName ? bytes : null;
     }
     throw new Error(_explainUnsupported(format));
@@ -111,30 +137,15 @@ export const archive = {
   async extract(source, sink, opts) {
     const src = normalizeSource(source);
     const dst = normalizeSink(sink);
-    let resolved = await _resolveSourceFormat(src);
-    if (resolved.format === 'gz' || resolved.format === 'tar.gz') {
-      resolved = await _unwrapGz(resolved.bytes, resolved.name);
-    }
+    const resolved = await _peelCompression(src);
     const { bytes, format } = resolved;
     let result;
     if (format === 'zip')      result = await extractZip(bytes, dst, opts);
     else if (format === 'tar') result = await extractTar(bytes, dst, opts);
-    else if (format === 'gz-single') {
-      // Write the single decompressed payload at its derived inner name.
-      const overwrite = (opts && opts.overwrite) || 'error';
-      let target = resolved.innerName;
-      if (await dst.exists(target)) {
-        if (overwrite === 'error') throw new Error(`extract: destination exists — ${target}`);
-        else if (overwrite === 'skip') { result = { count: 0, paths: [] }; }
-        else if (overwrite === 'rename') target = await _autoRename(dst, target);
-      }
-      if (!result) {
-        await dst.writeFile(target, bytes);
-        result = { count: 1, paths: [target] };
-      }
+    else if (format === 'gz-single' || format === 'zst-single') {
+      result = await _extractSingle(dst, resolved.innerName, bytes, opts);
     }
     else throw new Error(_explainUnsupported(format));
-    // For memory sinks, surface the result map directly — caller convenience.
     if (dst.kind === 'memory') return dst.result();
     return result;
   },
@@ -156,6 +167,22 @@ export const archive = {
     const inner = await gunzipBytes(bytes);
     return _writeSingle(sink, inner, _gzInnerName(src.name));
   },
+
+  // Single-file zstd helpers. Encode path throws — fzstd is decode-only.
+  // (When the encoder gets vendored, zstdBytes lights up and this works.)
+  async zstd(source, sink) {
+    const src = normalizeSource(source);
+    const bytes = await src.bytes();
+    const compressed = await zstdBytes(bytes);
+    return _writeSingle(sink, compressed, (src.name || 'data') + '.zst');
+  },
+
+  async unzstd(source, sink) {
+    const src = normalizeSource(source);
+    const bytes = await src.bytes();
+    const inner = await unzstdBytes(bytes);
+    return _writeSingle(sink, inner, _zstInnerName(src.name));
+  },
 };
 
 // Write a single byte stream to whatever shape of sink the caller passed.
@@ -175,14 +202,3 @@ async function _writeSingle(sink, bytes, defaultName) {
   throw new TypeError('sink: single-file helpers expect { vfs, path: <file> } or "memory"');
 }
 
-async function _autoRename(sink, name) {
-  const dot = name.lastIndexOf('.');
-  const slash = name.lastIndexOf('/');
-  const stem = (dot > slash) ? name.slice(0, dot) : name;
-  const ext  = (dot > slash) ? name.slice(dot)    : '';
-  for (let i = 2; i < 1000; i++) {
-    const candidate = `${stem} (${i})${ext}`;
-    if (!(await sink.exists(candidate))) return candidate;
-  }
-  throw new Error('extract: too many rename collisions');
-}

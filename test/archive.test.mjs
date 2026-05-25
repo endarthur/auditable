@@ -4,6 +4,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import zlib from 'node:zlib';   // for building .zst test fixtures (Node 22+ native zstd)
 
 import {
   detectFormat, magicForFormat,
@@ -11,6 +12,7 @@ import {
   listZip, readZip,
   listTar, readTar, writeTar,
   gunzipBytes, gzipBytes,
+  unzstdBytes, zstdBytes,
   archive,
 } from '../ext/archive/src/main.js';
 
@@ -303,10 +305,11 @@ test('archive.extract: filter callback excludes entries', async () => {
   assert.ok(!r.has('README.md'));
 });
 
-test('archive.list: zst reports not-yet-wired', async () => {
-  await assert.rejects(
-    () => archive.list(new Uint8Array([0x28, 0xb5, 0x2f, 0xfd])),
-    /not yet wired/);
+test('archive.list: xz / bz2 still report needs-Wasm', async () => {
+  // xz magic bytes — we recognize the format but the lazy Wasm decoder
+  // isn't wired yet.
+  const xzMagic = new Uint8Array([0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00]);
+  await assert.rejects(() => archive.list(xzMagic), /lazy-loaded Wasm/);
 });
 
 // ── tar fixtures ────────────────────────────────────────────────────────
@@ -612,6 +615,115 @@ test('archive.gunzip: memory sink', async () => {
   assert.equal(result.size, 1);
   const [, bytes] = [...result.entries()][0];
   assert.deepEqual(bytes, src);
+});
+
+// ── zst layer: unzstdBytes / decode ─────────────────────────────────────
+
+// Build fixtures with Node's native zstd — Node 22+ supports it via zlib.
+// fzstd is decode-only, so we can't use our own code to produce inputs.
+const _zstdFromBytes = (u8) => new Uint8Array(zlib.zstdCompressSync(u8));
+
+test('unzstdBytes: decode round-trips data compressed with native zstd', async () => {
+  const payload = enc('zstd is decode-only in this build; native zstd writes the fixture');
+  const compressed = _zstdFromBytes(payload);
+  // Magic bytes 28 b5 2f fd.
+  assert.equal(compressed[0], 0x28);
+  assert.equal(compressed[1], 0xb5);
+  assert.equal(compressed[2], 0x2f);
+  assert.equal(compressed[3], 0xfd);
+  const back = await unzstdBytes(compressed);
+  assert.deepEqual(back, payload);
+});
+
+test('zstdBytes: throws the decode-only error', async () => {
+  await assert.rejects(() => zstdBytes(enc('x')), /decode-only/);
+});
+
+test('unzstdBytes: rejects non-Uint8Array', async () => {
+  await assert.rejects(() => unzstdBytes('hi'), /Uint8Array/);
+});
+
+// ── tar.zst end-to-end via archive.* ────────────────────────────────────
+
+function makeTarZstFixture() {
+  return _zstdFromBytes(makeTarFixture());
+}
+
+test('archive.detect: tar.zst reports zst (outer layer)', async () => {
+  assert.equal(await archive.detect(makeTarZstFixture()), 'zst');
+});
+
+test('archive.list: tar.zst transparently unwraps zstd → tar', async () => {
+  const entries = await archive.list(makeTarZstFixture());
+  const files = entries.filter((e) => e.type === 'file').map((e) => e.path).sort();
+  assert.deepEqual(files, ['README.md', 'data/notes.txt', 'data/sample.csv']);
+});
+
+test('archive.read: tar.zst extracts one entry', async () => {
+  const bytes = await archive.read(makeTarZstFixture(), 'data/notes.txt');
+  assert.equal(new TextDecoder().decode(bytes), 'lorem ipsum');
+});
+
+test('archive.extract: tar.zst into memory sink', async () => {
+  const result = await archive.extract(makeTarZstFixture(), 'memory');
+  assert.equal(new TextDecoder().decode(result.get('README.md')), '# hello\n');
+});
+
+// ── single-file .zst (no inner archive) ─────────────────────────────────
+
+test('archive.list: single-file .zst reports 1-entry synthetic archive', async () => {
+  const csv = enc('a,b,c\n1,2,3\n');
+  const zst = _zstdFromBytes(csv);
+  const entries = await archive.list({ vfs: { readFile: () => zst }, path: '/data.csv.zst' });
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].path, 'data.csv');
+  assert.equal(entries[0].size, csv.length);
+});
+
+test('archive.read: single-file .zst returns decompressed bytes', async () => {
+  const csv = enc('a,b,c\n1,2,3\n');
+  const zst = _zstdFromBytes(csv);
+  const bytes = await archive.read({ vfs: { readFile: () => zst }, path: '/data.csv.zst' }, 'data.csv');
+  assert.deepEqual(bytes, csv);
+});
+
+test('archive.extract: single-file .zst writes decompressed payload', async () => {
+  const csv = enc('a,b,c\n');
+  const zst = _zstdFromBytes(csv);
+  const written = new Map();
+  const vfs = {
+    readFile: () => zst,
+    writeFile: async (p, b) => written.set(p, b),
+    mkdir: async () => {},
+    exists: async () => false,
+  };
+  await archive.extract({ vfs, path: '/data.csv.zst' }, { vfs, path: '/out' });
+  assert.ok(written.has('/out/data.csv'));
+  assert.deepEqual(written.get('/out/data.csv'), csv);
+});
+
+// ── single-file zstd / unzstd helpers ───────────────────────────────────
+
+test('archive.unzstd: VFS source → VFS destination (file path)', async () => {
+  const payload = enc('decompressed');
+  const zst = _zstdFromBytes(payload);
+  const written = new Map();
+  const vfs = {
+    readFile:  () => zst,
+    writeFile: async (p, b) => written.set(p, b),
+  };
+  await archive.unzstd(
+    { vfs, path: '/data.csv.zst' },
+    { vfs, path: '/data.csv' }
+  );
+  assert.deepEqual(written.get('/data.csv'), payload);
+});
+
+test('archive.zstd: throws the decode-only error', async () => {
+  await assert.rejects(
+    () => archive.zstd(enc('hi'), 'memory'),
+    /decode-only/
+  );
 });
 
 test('archive.list: unrecognized format throws', async () => {

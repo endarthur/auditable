@@ -12,6 +12,7 @@
 // ends with '/'; we translate those into type: 'directory'.
 
 import { unzipSync } from '../vendor/fflate.module.mjs';
+import { autoRename } from './sink.js';
 
 // listZip(bytes) → entries[]
 // fflate's unzipSync decompresses everything into a `{ name: Uint8Array }`
@@ -81,7 +82,7 @@ export async function extractZip(bytes, sink, opts) {
     if (await sink.exists(targetName)) {
       if (overwrite === 'error')     throw new Error(`extract: destination exists — ${name}`);
       else if (overwrite === 'skip') continue;
-      else if (overwrite === 'rename') targetName = await _autoRename(sink, name);
+      else if (overwrite === 'rename') targetName = await autoRename(sink, name);
       // 'overwrite' falls through and clobbers.
     }
     await sink.writeFile(targetName, data);
@@ -92,14 +93,3 @@ export async function extractZip(bytes, sink, opts) {
   return { count: paths.length, paths };
 }
 
-// Finder-style rename: file.csv -> file (2).csv -> file (3).csv ...
-async function _autoRename(sink, name) {
-  const dot = name.lastIndexOf('.');
-  const stem = dot > 0 ? name.slice(0, dot) : name;
-  const ext  = dot > 0 ? name.slice(dot)    : '';
-  for (let i = 2; i < 1000; i++) {
-    const candidate = `${stem} (${i})${ext}`;
-    if (!(await sink.exists(candidate))) return candidate;
-  }
-  throw new Error('extract: too many rename collisions');
-}

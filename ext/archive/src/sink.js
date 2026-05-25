@@ -24,6 +24,23 @@ const parentOf = (p) => {
   return p.slice(0, i);
 };
 
+// Finder-style auto-rename: file.csv → file (2).csv → file (3).csv ...
+// Shared by the per-format extract paths (zip / tar / single-file) so the
+// behaviour is identical regardless of source format. Bounded at 1000 to
+// surface bugs rather than spin forever; real archives never hit this.
+export async function autoRename(sink, name) {
+  const dot = name.lastIndexOf('.');
+  const slash = name.lastIndexOf('/');
+  // Don't split on a dot that's inside a parent dir name.
+  const stem = (dot > slash) ? name.slice(0, dot) : name;
+  const ext  = (dot > slash) ? name.slice(dot)    : '';
+  for (let i = 2; i < 1000; i++) {
+    const candidate = `${stem} (${i})${ext}`;
+    if (!(await sink.exists(candidate))) return candidate;
+  }
+  throw new Error('extract: too many rename collisions');
+}
+
 export function normalizeSink(input) {
   if (!input) throw new TypeError('sink: required');
 
