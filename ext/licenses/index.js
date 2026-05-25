@@ -1165,6 +1165,38 @@ async function walkSysLicenses(vfs) {
   return out;
 }
 
+// aggregateFromBuildLicenses — turn the build-time-injected manifest (see
+// build.js's __BUILD_LICENSES__ injection, sourced from vendor-licenses.json)
+// into the standard table shape. Used by the settings Licenses tab and the
+// About dialog to surface what the binary itself was built from.
+//
+// Expected manifest shape:
+//   { <name>: { spdx, version, homepage, description, text? } }
+//
+// Tolerant of missing fields — entries without `spdx` come through as UNKNOWN.
+function aggregateFromBuildLicenses(manifest) {
+  if (!manifest || typeof manifest !== 'object') return [];
+  const out = [];
+  for (const [name, entry] of Object.entries(manifest)) {
+    if (!entry || typeof entry !== 'object') continue;
+    const spdx = (typeof entry.spdx === 'string') ? entry.spdx : 'UNKNOWN';
+    out.push({
+      pkg: name,
+      version: entry.version || null,
+      source: 'vendored',
+      path: entry.homepage || name,
+      spdx,
+      classification: classify(spdx),
+      copyright: typeof entry.text === 'string' ? extractCopyright(entry.text) : null,
+      text: typeof entry.text === 'string' ? entry.text : null,
+      fetchedFrom: entry.homepage || null,
+      description: entry.description || null,
+      verified: !!entry.text,
+    });
+  }
+  return out;
+}
+
 // aggregateFromInstalledModules — in-memory variant for auditable's current
 // runtime layout, where install()'d ESM modules live in a flat JS object
 // (window._installedModules) rather than per-module VFS folders. Same entry
@@ -1247,5 +1279,5 @@ export {
   classify, classifyExpression,
   formatTable, formatNoticesFile,
   parseUrlToSource, fetchLicense,
-  aggregateLicenses, aggregateFromInstalledModules,
+  aggregateLicenses, aggregateFromInstalledModules, aggregateFromBuildLicenses,
 };

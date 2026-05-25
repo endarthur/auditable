@@ -3,7 +3,13 @@ import { updateStatus, setMsg, setPreferredCodeType, getRawPreferredCodeType } f
 import { updateAllEditorThemes, updateAllEditorLineNumbers, updateAllEditorReadOnly } from './cm6.js';
 import { hasSwitchboardFonts, fetchSwitchboardFonts } from './save.js';
 import * as hooks from './hooks.js';
-import { aggregateFromInstalledModules } from '#licenses';
+import { aggregateFromInstalledModules, aggregateFromBuildLicenses } from '#licenses';
+
+// Build-time injection — populated by build.js from vendor-licenses.json at
+// repo root. Shape: { <name>: { spdx, version, homepage, description, text } }.
+// Empty {} in source so dev/test runs work without rebuilding; build.js
+// rewrites this single line to the real manifest.
+const __BUILD_LICENSES__ = {};
 
 // ── SETTINGS ──
 
@@ -452,7 +458,9 @@ export function refreshLicensesList() {
   list.innerHTML = '';
 
   const mods = window._installedModules || {};
-  const table = aggregateFromInstalledModules(mods);
+  const installed = aggregateFromInstalledModules(mods);
+  const vendored = aggregateFromBuildLicenses(__BUILD_LICENSES__);
+  const table = [...vendored, ...installed];
   if (table.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'module-empty';

@@ -11,7 +11,7 @@ import {
   classify, classifyExpression,
   formatTable, formatNoticesFile,
   parseUrlToSource, fetchLicense,
-  aggregateLicenses, aggregateFromInstalledModules,
+  aggregateLicenses, aggregateFromInstalledModules, aggregateFromBuildLicenses,
 } from '../ext/licenses/src/main.js';
 
 // ── SPDX parser ──────────────────────────────────────────────────────────
@@ -934,6 +934,41 @@ test('aggregateFromInstalledModules: dual license picks most-permissive', () => 
     }
   });
   assert.equal(t[0].classification, 'permissive');
+});
+
+test('aggregateFromBuildLicenses: typical manifest', () => {
+  const t = aggregateFromBuildLicenses({
+    codemirror: { spdx: 'MIT', version: '6.x', homepage: 'https://codemirror.net/',
+                  text: 'Copyright (c) 2018-present Marijn Haverbeke\n\nMIT...' },
+    openlayers: { spdx: 'BSD-2-Clause', version: '10.x', homepage: 'https://openlayers.org/' },
+  });
+  assert.equal(t.length, 2);
+  for (const e of t) {
+    assert.equal(e.source, 'vendored');
+    assert.ok(e.spdx);
+    assert.equal(e.classification, 'permissive');
+  }
+  const cm = t.find((e) => e.pkg === 'codemirror');
+  assert.equal(cm.spdx, 'MIT');
+  assert.ok(cm.copyright);  // extracted from text
+  assert.equal(cm.verified, true);
+  const ol = t.find((e) => e.pkg === 'openlayers');
+  assert.equal(ol.text, null);
+  assert.equal(ol.verified, false);
+});
+
+test('aggregateFromBuildLicenses: tolerates empty / null', () => {
+  assert.deepEqual(aggregateFromBuildLicenses({}), []);
+  assert.deepEqual(aggregateFromBuildLicenses(null), []);
+  assert.deepEqual(aggregateFromBuildLicenses(undefined), []);
+});
+
+test('aggregateFromBuildLicenses: entries with missing spdx are UNKNOWN', () => {
+  const t = aggregateFromBuildLicenses({
+    foo: { version: '1.x' /* no spdx */ },
+  });
+  assert.equal(t[0].spdx, 'UNKNOWN');
+  assert.equal(t[0].classification, 'unknown');
 });
 
 test('aggregateFromInstalledModules: falls back to entry.alias when URL unparseable', () => {

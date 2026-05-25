@@ -13,6 +13,54 @@ const runOnLoadArg = (process.argv.find(a => a.startsWith('--run-on-load=')) || 
 
 // ── Shared: process modules from a main.js ──
 
+// Read vendor-licenses.json + each entry's LICENSE file, return a manifest
+// shape `{ <name>: { spdx, version, homepage, description, text } }`. Used
+// by both the auditable and the works build paths.
+function readBuildLicensesManifest() {
+  const manifestPath = path.join(__dirname, 'vendor-licenses.json');
+  const out = {};
+  if (!fs.existsSync(manifestPath)) {
+    console.warn('vendor-licenses: vendor-licenses.json not found at repo root — no vendored deps will be surfaced');
+    return out;
+  }
+  let manifest;
+  try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); }
+  catch (e) {
+    console.warn(`vendor-licenses: failed to parse vendor-licenses.json: ${e.message}`);
+    return out;
+  }
+  for (const [name, entry] of Object.entries(manifest.vendored || {})) {
+    const o = {
+      spdx: entry.spdx || 'UNKNOWN',
+      version: entry.version || null,
+      homepage: entry.homepage || null,
+      description: entry.description || null,
+      text: null,
+    };
+    if (entry.licenseFile) {
+      const lp = path.join(__dirname, entry.licenseFile);
+      if (fs.existsSync(lp)) o.text = fs.readFileSync(lp, 'utf8');
+      else console.warn(`vendor-licenses: ${name}: licenseFile ${entry.licenseFile} not found — entry will be metadata-only`);
+    }
+    out[name] = o;
+  }
+  return out;
+}
+
+// Walk every module in the bundle and replace any
+// `const __BUILD_LICENSES__ = {};` placeholder with the real manifest.
+// Returns the manifest so the caller can log a summary.
+function injectBuildLicenses(modules) {
+  const buildLicenses = readBuildLicensesManifest();
+  const literal = 'const __BUILD_LICENSES__ = ' + JSON.stringify(buildLicenses) + ';';
+  for (const mod of modules) {
+    if (mod.source && mod.source.includes('const __BUILD_LICENSES__ = {};')) {
+      mod.source = mod.source.replace('const __BUILD_LICENSES__ = {};', () => literal);
+    }
+  }
+  return buildLicenses;
+}
+
 function processModules(mainPath, moduleDir, opts = {}) {
   const mainSrc = fs.readFileSync(mainPath, 'utf8');
   const importPaths = [];
@@ -117,6 +165,10 @@ if (target === 'works' || target === 'works-all') {
       "const __AUDITABLE_REPO__ = 'endarthur/auditable';",
       `const __AUDITABLE_REPO__ = '${worksRepo}';`);
   }
+  // licenses-spec §7.3 — vendor licenses available to the works shell too.
+  // Any works module declaring `const __BUILD_LICENSES__ = {};` opts in.
+  const _worksBuildLicenses = injectBuildLicenses(modules);
+  console.log(`vendor-licenses (works): bundled ${Object.keys(_worksBuildLicenses).length} entries`);
 
   const worksJs = generateModuleBoot('', modules, '');
 
@@ -1382,6 +1434,15 @@ if (saveMod) {
     () => 'const __SWITCHBOARD_OFL__ = ' + JSON.stringify(oflText) + ';'
   );
 }
+
+// ── __BUILD_LICENSES__ injection (licenses-spec §7.3) ─────────────────
+// Read vendor-licenses.json + each entry's licenseFile, assemble a manifest
+// keyed by package name, inject into every module containing the
+// `const __BUILD_LICENSES__ = {};` placeholder. The auditable settings panel
+// and the works workspace settings surface both opt in this way.
+// Tolerant of missing manifest / missing LICENSE files — warns but proceeds.
+const _buildLicenses = injectBuildLicenses(modules);
+console.log(`vendor-licenses: bundled ${Object.keys(_buildLicenses).length} entries (${Object.values(_buildLicenses).filter(e => e.text).length} with text)`);
 
 // 5. Assemble final HTML
 function assemble(jsCode) {

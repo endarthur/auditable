@@ -1,0 +1,57 @@
+{
+  "_comment": [
+    "Inventory of third-party libraries vendored into auditable.html / works.html",
+    "at build time. build.js reads this + each entry's licenseFile and injects",
+    "__BUILD_LICENSES__ at build time. init.js then mounts /sys/licenses/ from",
+    "that constant — so the runtime's Licenses tab and About dialog can surface",
+    "what the binary is actually built from.",
+    "",
+    "Only one entry per distinct vendored ARTIFACT is needed (e.g. cm6 covers",
+    "the whole CodeMirror 6 / Lezer tree because the bundle ships as one .min.js).",
+    "",
+    "licenseFile paths are repo-relative. Tolerated-missing: if the file isn't",
+    "there at build time (e.g. cm6/acorn LICENSEs live in their node_modules,",
+    "which is gitignored), build warns but proceeds with metadata-only.",
+    "",
+    "To add an entry: pick a stable name, fill in spdx/version/homepage,",
+    "commit the LICENSE text under vendor-licenses/<name>.txt (or reference an",
+    "existing path like ext/switchboard/fonts/OFL.txt). Rebuild."
+  ],
+  "vendored": {
+    "codemirror": {
+      "spdx": "MIT",
+      "version": "6.x",
+      "homepage": "https://codemirror.net/",
+      "description": "CodeMirror 6 — the editor for every code/markdown/html cell. Bundled at ext/cm6/cm6.min.js (rollup build from npm packages: codemirror, @codemirror/*, @lezer/highlight).",
+      "licenseFile": "ext/cm6/node_modules/codemirror/LICENSE"
+    },
+    "acorn": {
+      "spdx": "MIT",
+      "version": "8.x (+ acorn-typescript 1.4.x)",
+      "homepage": "https://github.com/acornjs/acorn",
+      "description": "JavaScript parser used by @gcu/air to lower cell sources into the AIR intermediate representation. acorn-typescript plugin enables AIR's type-annotation parsing. Bundled at ext/acorn/acorn.min.js.",
+      "licenseFile": "ext/acorn/node_modules/acorn/LICENSE"
+    },
+    "openlayers": {
+      "spdx": "BSD-2-Clause",
+      "version": "10.x",
+      "homepage": "https://openlayers.org/",
+      "description": "Map rendering library used by @gcu/spinifex (geospatial cells). Vendored at ext/spinifex/vendor/ol.min.js — only ships in builds that include spinifex.",
+      "licenseFile": "vendor-licenses/openlayers.txt"
+    },
+    "xterm": {
+      "spdx": "MIT",
+      "version": "5.5.0 (+ @xterm/addon-fit)",
+      "homepage": "https://xtermjs.org/",
+      "description": "Terminal emulator. Vendored at ext/rv/vendor/xterm.min.js + addon-fit.min.js. Used by the Works shell terminal surface and the rv (RISC-V) emulator.",
+      "licenseFile": "vendor-licenses/xterm.txt"
+    },
+    "switchboard-fonts": {
+      "spdx": "OFL-1.1",
+      "version": "Barlow + Space Mono (via Google Fonts)",
+      "homepage": "https://fonts.google.com/",
+      "description": "Sans-serif (Barlow) and monospace (Space Mono) font families used in the GCU typography stack. Only bundled when works.html is built or when the user opts in to 'embed fonts' in auditable.html.",
+      "licenseFile": "ext/switchboard/fonts/OFL.txt"
+    }
+  }
+}

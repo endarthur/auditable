@@ -36,7 +36,7 @@ export {
   classify, classifyExpression,
   formatTable, formatNoticesFile,
   parseUrlToSource, fetchLicense,
-  aggregateLicenses, aggregateFromInstalledModules,
+  aggregateLicenses, aggregateFromInstalledModules, aggregateFromBuildLicenses,
 };
 `;
 

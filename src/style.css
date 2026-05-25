@@ -1901,6 +1901,33 @@ body.split-view .split-container { height: calc(100vh - 42px - 28px - 28px); }
   margin: 20px 0 10px 0;
 }
 .settings-panel h2:first-child { margin-top: 0; }
+
+/* Collapsible sections — used for modules + binaries lists, which can grow
+   to dozens of rows in works-all and bury the sections below. <details>
+   gives us native keyboard + click toggle, no JS. */
+.settings-panel details.settings-section { margin: 20px 0 10px 0; }
+.settings-panel details.settings-section > summary {
+  color: var(--au-action);
+  font-size: 11px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  cursor: pointer;
+  list-style: none;
+  margin-bottom: 10px;
+  user-select: none;
+}
+.settings-panel details.settings-section > summary::-webkit-details-marker { display: none; }
+.settings-panel details.settings-section > summary::before {
+  content: '\25b8';   /* ▸ when closed */
+  display: inline-block;
+  width: 14px;
+  font-size: 10px;
+  opacity: 0.7;
+  transition: transform 0.1s ease;
+}
+.settings-panel details.settings-section[open] > summary::before {
+  content: '\25be';   /* ▾ when open */
+}
 .settings-row {
   display: flex;
   align-items: center;
