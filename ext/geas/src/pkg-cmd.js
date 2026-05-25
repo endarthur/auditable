@@ -193,16 +193,21 @@ async function _installOne(ctx, alias) {
 }
 
 // Resolve @gcu/licenses symbols. In the geas worker bundle they're
-// prepended into module scope; outside that context (tests, dev tooling)
-// callers can inject via globalThis. Returns null when neither is set.
+// IIFE-isolated and re-exposed under `_lic`-prefixed names (to avoid
+// collisions with same-named geas symbols — tokenize, formatTable);
+// outside that context (tests, dev tooling) callers can inject via
+// globalThis. Returns null when no source has the symbol.
 function _resolveLicensesSym(name) {
-  // The bare reference must be wrapped in typeof to be safe when undeclared.
-  // (typeof of an unresolvable reference returns 'undefined', never throws.)
+  // The bare references must be wrapped in typeof to be safe when undeclared
+  // (typeof of an unresolvable reference returns 'undefined', never throws).
   if (name === 'fetchLicense') {
+    if (typeof _licFetchLicense === 'function') return _licFetchLicense;
     if (typeof fetchLicense === 'function') return fetchLicense;
   } else if (name === 'aggregateLicenses') {
+    if (typeof _licAggregateLicenses === 'function') return _licAggregateLicenses;
     if (typeof aggregateLicenses === 'function') return aggregateLicenses;
   } else if (name === 'formatTable') {
+    if (typeof _licFormatTable === 'function') return _licFormatTable;
     if (typeof formatTable === 'function') return formatTable;
   }
   if (typeof globalThis !== 'undefined' && typeof globalThis[name] === 'function') {

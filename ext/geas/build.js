@@ -55,12 +55,32 @@ if (fs.existsSync(archivePath)) {
 // time and render the `pkg licenses` table. Same reasoning as archive:
 // worker context doesn't resolve the import map; inlining keeps geas
 // self-contained.
+// IIFE-wrap so internal symbols (notably `tokenize`, which collides with
+// geas's lexer.js export) stay scoped to the bundle. Expose only the three
+// symbols pkg-cmd.js actually consumes — fetchLicense, aggregateLicenses,
+// formatTable — as top-level consts. pkg-cmd's _resolveLicensesSym helper
+// picks them up via lexical scope (the typeof checks succeed).
 const licensesPath = path.resolve(__dirname, '..', 'licenses', 'index.js');
 if (fs.existsSync(licensesPath)) {
   let licensesSrc = fs.readFileSync(licensesPath, 'utf8');
   licensesSrc = licensesSrc.replace(/^export\s*\{[\s\S]*?\};?\s*$/gm, '');
   licensesSrc = licensesSrc.replace(/^\n+/, '').replace(/\n+$/, '');
-  chunks.push('// -- licenses/index.js (pre-built bundle, prepended) --\n\n' + licensesSrc);
+  // Prefix the exposed bindings so they don't collide with same-named
+  // symbols elsewhere in the bundle (geas's lexer.js has `tokenize`;
+  // builtins-typed.js has `formatTable`). pkg-cmd.js's _resolveLicensesSym
+  // looks for both the bare name and the `_lic<Name>` prefix.
+  const wrapped =
+`// -- licenses/index.js (IIFE-wrapped — exposes _licFetchLicense / _licAggregateLicenses / _licFormatTable) --
+
+const { _licFetchLicense, _licAggregateLicenses, _licFormatTable } = (() => {
+${licensesSrc}
+return {
+  _licFetchLicense:     fetchLicense,
+  _licAggregateLicenses: aggregateLicenses,
+  _licFormatTable:      formatTable,
+};
+})();`;
+  chunks.push(wrapped);
 } else {
   console.warn('geas: ext/licenses/index.js not found — pkg licenses subcommand will fail at runtime');
 }
