@@ -40,3 +40,91 @@ export async function installExamplesToVfs(vfs) {
   await vfs.writeFile('/usr/share/examples/manifest.json',
     JSON.stringify(_manifest));
 }
+
+// Merge an installed-extension's examples into the picker manifest.
+//
+// Called after a .gcupkg install lands files in /usr/share/examples/<slug>/.
+// The per-extension manifest.json shape (per EXTENSION_SPEC §6.3) is:
+//   { examples: [ { file, title?, category?, description? }, ... ] }
+//
+// We translate each entry to the works-all shape the picker expects:
+//   manifest.categories[<cat>][i] = { file: '<slug>/<file>', title, description }
+//
+// `<slug>` defaults to the @scope_name-style directory name. Defaults
+// category to the slug when the entry doesn't specify one.
+//
+// Idempotent: re-running for the same slug replaces its prior entries
+// rather than duplicating them.
+export async function mergeExamplesFromExtension(vfs, slug) {
+  if (!vfs || !slug) return 0;
+  const extRoot = '/usr/share/examples/' + slug;
+
+  // Read the per-extension manifest; bail silently if it's not there
+  // (extension shipped examples without a manifest — acceptable, but
+  // we don't auto-discover .txt files in that case, to avoid surprising
+  // the user with raw filenames as titles).
+  let extManifest;
+  try {
+    const raw = await vfs.readFile(extRoot + '/manifest.json', 'utf8');
+    extManifest = JSON.parse(raw);
+  } catch {
+    return 0;
+  }
+  const entries = Array.isArray(extManifest.examples) ? extManifest.examples : [];
+  if (entries.length === 0) return 0;
+
+  // Ensure the picker manifest exists. In plain `works` builds (not
+  // works-all), _manifest is null until the first extension installs
+  // examples; this initialization makes the Help → Open example menu
+  // item start showing up after such an install.
+  if (!_manifest) _manifest = { categories: {} };
+  if (!_manifest.categories) _manifest.categories = {};
+
+  // First pass: remove any prior entries belonging to this slug (idempotent
+  // reinstall — avoids "I installed twice, why are there duplicates").
+  for (const cat of Object.keys(_manifest.categories)) {
+    _manifest.categories[cat] = _manifest.categories[cat].filter(
+      (e) => !e.file || !e.file.startsWith(slug + '/'));
+    if (_manifest.categories[cat].length === 0) delete _manifest.categories[cat];
+  }
+
+  // Second pass: insert new entries.
+  let added = 0;
+  for (const entry of entries) {
+    if (!entry || typeof entry.file !== 'string') continue;
+    const category = entry.category || slug;
+    const row = {
+      file:        slug + '/' + entry.file,
+      title:       entry.title || entry.file,
+      description: entry.description || '',
+    };
+    if (!_manifest.categories[category]) _manifest.categories[category] = [];
+    _manifest.categories[category].push(row);
+    added++;
+  }
+
+  // Persist the updated manifest so reloads pick it up. (The bulk
+  // works-all defs aren't re-extracted; only the manifest changes.)
+  try {
+    await vfs.writeFile('/usr/share/examples/manifest.json',
+      JSON.stringify(_manifest));
+  } catch { /* non-fatal */ }
+
+  return added;
+}
+
+// Remove an extension's examples from the picker (called by future
+// uninstall flows; currently unused but cheap to maintain alongside the
+// merge function).
+export function removeExtensionExamples(slug) {
+  if (!_manifest || !_manifest.categories || !slug) return 0;
+  let removed = 0;
+  for (const cat of Object.keys(_manifest.categories)) {
+    const before = _manifest.categories[cat].length;
+    _manifest.categories[cat] = _manifest.categories[cat].filter(
+      (e) => !e.file || !e.file.startsWith(slug + '/'));
+    removed += before - _manifest.categories[cat].length;
+    if (_manifest.categories[cat].length === 0) delete _manifest.categories[cat];
+  }
+  return removed;
+}

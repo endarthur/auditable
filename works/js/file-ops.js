@@ -7,6 +7,7 @@ import { importNotebook } from './import.js';
 import { openPath } from './surfaces.js';
 import { archive } from '#archive';
 import { parseGcupkg, installGcupkg } from '#gcupkg';
+import { mergeExamplesFromExtension } from './examples-loader.js';
 
 const basename = (p) => p.split('/').filter(Boolean).pop() || p;
 const parentOf = (p) => {
@@ -463,6 +464,18 @@ async function installDroppedGcupkg(file) {
     vfs:              WKS.vfs,
     installedModules: typeof window !== 'undefined' ? window._installedModules : null,
   });
+
+  // Merge the extension's examples (if any) into the Help → Open example
+  // picker. Without this, the examples land on disk but stay invisible
+  // until the next page reload re-reads the manifest from VFS.
+  if (result.exampleRoot) {
+    const slug = result.exampleRoot.split('/').pop();
+    try {
+      await mergeExamplesFromExtension(WKS.vfs, slug);
+    } catch (e) {
+      console.warn('[works] examples merge failed:', e);
+    }
+  }
 
   const verdict = parsed.integrity.ok === false
     ? ' (⚠ integrity mismatch)'
