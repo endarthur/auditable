@@ -4171,6 +4171,123 @@ function _zstInnerName(sourceName) {
   return sourceName;
 }
 
+// -- walk.js --
+
+// VFS directory walker — recursively enumerates a tree into a flat list of
+// `{ path, type, bytes }` entries with paths relative to the root.
+//
+// Used by archive.compress to build the entry map for ZIP / tar / tar.gz
+// from a workspace directory. The output shape matches what zipSync /
+// writeTar consume (after a final reduce to `{ path: bytes }`).
+//
+// VFS duck type: needs readdir, stat, readFile. Same surface as
+// aggregateLicenses uses. Each method may be sync or return a Promise —
+// we await both shapes uniformly.
+
+async function _call(fn, ...args) {
+  const r = fn(...args);
+  return (r && typeof r.then === 'function') ? await r : r;
+}
+
+// Read the file at path as bytes. The VFS contract is loose — some backends
+// default to utf8 strings, others return Uint8Array. Try the explicit bytes
+// mode first; fall back to utf8 + TextEncoder if that fails or returns junk.
+async function _readBytes(vfs, path) {
+  // Try a bytes-mode request when supported.
+  try {
+    const r = await _call(vfs.readFile.bind(vfs), path);
+    if (r instanceof Uint8Array) return r;
+    if (r && r.buffer && typeof r.byteLength === 'number') {
+      return new Uint8Array(r.buffer, r.byteOffset || 0, r.byteLength);
+    }
+    if (typeof r === 'string') return new TextEncoder().encode(r);
+  } catch (e) {
+    throw new Error(`walk: read ${path} failed: ${e.message || e}`);
+  }
+  throw new Error(`walk: read ${path} returned unsupported shape`);
+}
+
+// walkVfsTree(vfs, rootPath, opts?) → Promise<entries[]>
+//
+// rootPath may be a directory or a single file. For a directory, we recurse
+// and return entries with paths relative to rootPath. For a file, we return
+// one entry whose path is the file's basename.
+//
+// opts.filter: predicate ({ path, type }) → boolean. Excluded entries are
+// neither recursed into nor emitted; truthy values are kept.
+//
+// opts.includeRootDirEntry: emit a leading `path: ''` directory entry for
+// the root. Defaults to false — most archive formats don't need it and ZIP
+// conventions vary.
+async function walkVfsTree(vfs, rootPath, opts = {}) {
+  if (!vfs || typeof vfs.readdir !== 'function' || typeof vfs.readFile !== 'function'
+      || typeof vfs.stat !== 'function') {
+    throw new TypeError('walkVfsTree: vfs must implement readdir, readFile, stat');
+  }
+  const filter = opts.filter || (() => true);
+  const entries = [];
+
+  const root = String(rootPath).replace(/\/+$/, '') || '/';
+  const stRoot = await _call(vfs.stat.bind(vfs), root);
+  if (!stRoot) throw new Error(`walk: root path does not exist: ${root}`);
+
+  // Single-file root — emit just the file.
+  if (stRoot.type === 'file') {
+    const name = root.split('/').filter(Boolean).pop() || 'file';
+    if (filter({ path: name, type: 'file' })) {
+      entries.push({ path: name, type: 'file', bytes: await _readBytes(vfs, root) });
+    }
+    return entries;
+  }
+
+  if (stRoot.type !== 'directory') {
+    throw new Error(`walk: root ${root} has unsupported type: ${stRoot.type}`);
+  }
+
+  // Directory root — recurse. `relPath` accumulates the path inside the
+  // archive; rootPath stays separate so we don't leak the workspace
+  // absolute path into the archive's entry names.
+  async function recurse(absPath, relPath) {
+    const names = (await _call(vfs.readdir.bind(vfs), absPath)) || [];
+    // Sort for determinism — archive byte output is reproducible across runs.
+    names.sort();
+    for (const name of names) {
+      const child = absPath === '/' ? `/${name}` : `${absPath}/${name}`;
+      const childRel = relPath ? `${relPath}/${name}` : name;
+      let st;
+      try { st = await _call(vfs.stat.bind(vfs), child); } catch { continue; }
+      if (!st) continue;
+
+      if (st.type === 'directory') {
+        if (!filter({ path: childRel, type: 'directory' })) continue;
+        entries.push({ path: childRel + '/', type: 'directory', bytes: new Uint8Array(0) });
+        await recurse(child, childRel);
+      } else if (st.type === 'file') {
+        if (!filter({ path: childRel, type: 'file' })) continue;
+        entries.push({ path: childRel, type: 'file',
+          bytes: await _readBytes(vfs, child) });
+      }
+      // Anything else (symlinks etc.) is skipped silently.
+    }
+  }
+
+  if (opts.includeRootDirEntry) {
+    entries.push({ path: '', type: 'directory', bytes: new Uint8Array(0) });
+  }
+  await recurse(root, '');
+  return entries;
+}
+
+// Convenience: walk + reduce to a flat { path: bytes } object — the input
+// shape that fflate's zipSync and our own writeTar accept directly.
+// Directory entries are emitted as zero-byte values keyed with a trailing '/'.
+async function buildEntryMap(vfs, rootPath, opts = {}) {
+  const entries = await walkVfsTree(vfs, rootPath, opts);
+  const map = {};
+  for (const e of entries) map[e.path] = e.bytes;
+  return map;
+}
+
 // -- api.js --
 
 // Public surface for @gcu/archive.
@@ -4191,6 +4308,8 @@ function _zstInnerName(sourceName) {
 // magicForFormat(name) when the source had a filename hint. Compound formats
 // like `.tar.gz` won't be handled here — tar.js will own the pipeline once
 // it lands; today's ZIP-only impl returns a clear error for unsupported types.
+
+
 
 
 
@@ -4324,6 +4443,61 @@ const archive = {
     return result;
   },
 
+  // Write side. Builds a ZIP / tar / tar.gz from a VFS directory (walked
+  // recursively) or a flat `{ name: bytes }` entry map. Single-file gz /
+  // zst formats route through archive.gzip / archive.zstd respectively.
+  //
+  // source:
+  //   - { vfs, path: '/dir' }        — walk recursively, archive entries
+  //     are paths relative to that dir
+  //   - { vfs, path: '/file' }       — single file, archive contains the
+  //     file under its basename
+  //   - { name: bytes, ... }         — entries provided directly (advanced)
+  //   - Uint8Array                   — only valid with format 'gz' (single
+  //     stream compress)
+  //
+  // sink:
+  //   - { vfs, path: '/out.zip' }    — file path; bytes written there
+  //   - 'memory'                     — returns the raw archive bytes
+  //     wrapped in a 1-key Map keyed by the sink-derived name
+  //
+  // opts.format: explicit format override; otherwise inferred from sink path.
+  // opts.filter: predicate(entry) excluding paths during walk.
+  // opts.level: deflate level for ZIP (0-9). tar / gz / zst pick their own.
+  async compress(source, sink, opts = {}) {
+    const format = opts.format || _formatFromSinkPath(sink);
+    if (!format) {
+      throw new Error(
+        'archive.compress: format required — pass opts.format or use a sink path ' +
+        'with a recognized extension (.zip, .tar, .tar.gz, .gz, …)');
+    }
+
+    // Single-stream gz / zst paths: read source as bytes, compress one shot.
+    if (format === 'gz') return this.gzip(source, sink);
+    if (format === 'zst') return this.zstd(source, sink);
+
+    // tar.zst / tar.xz / tar.bz2 can't be written until their encoders are
+    // vendored. Be explicit so users don't think it silently no-op'd.
+    if (format === 'tar.zst') {
+      throw new Error('archive.compress: tar.zst encode not available (fzstd is decode-only)');
+    }
+    if (format === 'tar.xz' || format === 'tar.bz2' || format === 'xz' || format === 'bz2') {
+      throw new Error(`archive.compress: ${format} encode requires a lazy-loaded Wasm encoder (not yet wired)`);
+    }
+
+    // Multi-entry formats. Gather entries, build the archive, write it out.
+    const filter = opts.filter || null;
+    const entryMap = await _gatherEntries(source, filter);
+    let archiveBytes;
+    if (format === 'zip')         archiveBytes = zipSync(entryMap, _zipOptsFor(opts));
+    else if (format === 'tar')    archiveBytes = writeTar(entryMap);
+    else if (format === 'tar.gz') archiveBytes = await gzipBytes(writeTar(entryMap));
+    else throw new Error(_explainUnsupported(format));
+
+    const fallbackName = _sinkBasename(sink) || ('archive.' + format);
+    return _writeSingle(sink, archiveBytes, fallbackName);
+  },
+
   // Single-file gzip helpers. Sink semantics differ from extract's: the
   // sink's `path` (when vfs) is the OUTPUT FILE, not a destination directory
   // — gunzip writes one byte stream, not many entries. memory sink returns
@@ -4375,6 +4549,59 @@ async function _writeSingle(sink, bytes, defaultName) {
   }
   throw new TypeError('sink: single-file helpers expect { vfs, path: <file> } or "memory"');
 }
+
+// Infer the output format from the sink's file path extension. Used as the
+// fallback when opts.format isn't specified — matches the spec's promise
+// that `archive.compress({vfs,path:'a'}, {vfs,path:'a.tar.gz'})` Just Works.
+function _formatFromSinkPath(sink) {
+  if (sink && typeof sink === 'object' && typeof sink.path === 'string') {
+    return magicForFormat(sink.path);
+  }
+  return null;
+}
+
+function _sinkBasename(sink) {
+  if (sink && typeof sink === 'object' && typeof sink.path === 'string') {
+    return sink.path.split('/').pop();
+  }
+  return null;
+}
+
+// Map opts.level (0..9 or undefined) onto fflate's zipSync options shape.
+function _zipOptsFor(opts) {
+  const o = {};
+  if (typeof opts.level === 'number') o.level = Math.max(0, Math.min(9, opts.level | 0));
+  return o;
+}
+
+// Build a `{ path: bytes }` entry map from one of the supported compress
+// source shapes. VFS-backed sources walk via walkVfsTree; plain objects
+// pass through after byte-coercing values; Uint8Array isn't accepted here
+// (single-file gz/zst takes a different path in compress() above).
+async function _gatherEntries(source, filter) {
+  // VFS source — directory or single file.
+  if (source && typeof source === 'object' && source.vfs && typeof source.path === 'string') {
+    const entries = await walkVfsTree(source.vfs, source.path, filter ? { filter } : {});
+    const map = {};
+    for (const e of entries) map[e.path] = e.bytes;
+    return map;
+  }
+  // Plain entry object — { 'a/b.txt': bytes-or-string, ... }
+  if (source && typeof source === 'object' && !(source instanceof Uint8Array)) {
+    const map = {};
+    for (const [k, v] of Object.entries(source)) {
+      if (filter && !filter({ path: k, type: k.endsWith('/') ? 'directory' : 'file' })) continue;
+      if (v instanceof Uint8Array) map[k] = v;
+      else if (typeof v === 'string') map[k] = new TextEncoder().encode(v);
+      else if (v && v.buffer) map[k] = new Uint8Array(v.buffer, v.byteOffset || 0, v.byteLength);
+      else map[k] = new Uint8Array(0);
+    }
+    return map;
+  }
+  throw new TypeError(
+    'archive.compress: source must be { vfs, path } or a flat { path: bytes } object ' +
+    '(single-stream compress goes through archive.gzip / archive.zstd)');
+}
 export {
   detectFormat, magicForFormat,
   normalizeSource, normalizeSink,
@@ -4382,5 +4609,6 @@ export {
   listTar, readTar, writeTar,
   gunzipBytes, gzipBytes,
   unzstdBytes, zstdBytes,
+  walkVfsTree, buildEntryMap,
   archive,
 };

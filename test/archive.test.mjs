@@ -13,6 +13,7 @@ import {
   listTar, readTar, writeTar,
   gunzipBytes, gzipBytes,
   unzstdBytes, zstdBytes,
+  walkVfsTree, buildEntryMap,
   archive,
 } from '../ext/archive/src/main.js';
 
@@ -724,6 +725,281 @@ test('archive.zstd: throws the decode-only error', async () => {
     () => archive.zstd(enc('hi'), 'memory'),
     /decode-only/
   );
+});
+
+// ── VFS walker ──────────────────────────────────────────────────────────
+
+// Minimal in-memory VFS shared by walk + compress tests. Stores files as a
+// flat Map and synthesizes readdir/stat from that. Async to mirror real-
+// world VFS backends.
+function makeVfs(initial) {
+  const files = new Map(Object.entries(initial));
+  const dirs = new Set(['/']);
+  for (const p of files.keys()) {
+    // Materialise ancestor dirs.
+    let cur = p;
+    while (cur !== '/' && cur.length > 0) {
+      const slash = cur.lastIndexOf('/');
+      cur = slash <= 0 ? '/' : cur.slice(0, slash);
+      dirs.add(cur);
+    }
+  }
+  return {
+    async readFile(p) {
+      if (!files.has(p)) throw new Error(`ENOENT: ${p}`);
+      const v = files.get(p);
+      return v instanceof Uint8Array ? v : new TextEncoder().encode(v);
+    },
+    async writeFile(p, bytes) { files.set(p, bytes); },
+    async readdir(p) {
+      const norm = p.replace(/\/+$/, '') || '/';
+      if (!dirs.has(norm)) throw new Error(`ENOENT: ${p}`);
+      const prefix = norm === '/' ? '/' : norm + '/';
+      const names = new Set();
+      for (const f of files.keys()) {
+        if (!f.startsWith(prefix)) continue;
+        const rest = f.slice(prefix.length);
+        const slash = rest.indexOf('/');
+        names.add(slash >= 0 ? rest.slice(0, slash) : rest);
+      }
+      for (const d of dirs) {
+        if (!d.startsWith(prefix) || d === norm) continue;
+        const rest = d.slice(prefix.length);
+        const slash = rest.indexOf('/');
+        names.add(slash >= 0 ? rest.slice(0, slash) : rest);
+      }
+      return [...names];
+    },
+    async stat(p) {
+      if (files.has(p)) return { type: 'file', size: files.get(p).length };
+      if (dirs.has(p)) return { type: 'directory' };
+      throw new Error(`ENOENT: ${p}`);
+    },
+    async mkdir(p) { dirs.add(p.replace(/\/+$/, '')); },
+    async exists(p) { return files.has(p) || dirs.has(p); },
+    _files: files,
+  };
+}
+
+test('walkVfsTree: enumerates a directory tree recursively', async () => {
+  const vfs = makeVfs({
+    '/project/README.md':       enc('# hello'),
+    '/project/src/main.js':     enc('console.log("hi")'),
+    '/project/src/lib/util.js': enc('export {}'),
+    '/project/data/x.csv':      enc('a,b\n'),
+  });
+  const entries = await walkVfsTree(vfs, '/project');
+  const files = entries.filter((e) => e.type === 'file').map((e) => e.path).sort();
+  const dirs  = entries.filter((e) => e.type === 'directory').map((e) => e.path).sort();
+  assert.deepEqual(files, ['README.md', 'data/x.csv', 'src/lib/util.js', 'src/main.js']);
+  assert.deepEqual(dirs, ['data/', 'src/', 'src/lib/']);
+});
+
+test('walkVfsTree: single-file root emits one entry', async () => {
+  const vfs = makeVfs({ '/file.txt': enc('hi') });
+  const entries = await walkVfsTree(vfs, '/file.txt');
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].path, 'file.txt');
+  assert.equal(entries[0].type, 'file');
+  assert.deepEqual(entries[0].bytes, enc('hi'));
+});
+
+test('walkVfsTree: filter excludes paths', async () => {
+  const vfs = makeVfs({
+    '/p/README.md':   enc('# a'),
+    '/p/build.tmp':   enc('skip me'),
+    '/p/src/main.js': enc('keep'),
+  });
+  const entries = await walkVfsTree(vfs, '/p', {
+    filter: (e) => !e.path.endsWith('.tmp'),
+  });
+  const paths = entries.filter((e) => e.type === 'file').map((e) => e.path).sort();
+  assert.deepEqual(paths, ['README.md', 'src/main.js']);
+});
+
+test('walkVfsTree: throws on missing VFS methods', async () => {
+  await assert.rejects(() => walkVfsTree({}, '/'), { name: 'TypeError' });
+  await assert.rejects(() => walkVfsTree(null, '/'), { name: 'TypeError' });
+});
+
+test('walkVfsTree: paths are deterministic (sorted)', async () => {
+  const vfs = makeVfs({
+    '/p/c.txt': enc('c'),
+    '/p/a.txt': enc('a'),
+    '/p/b.txt': enc('b'),
+  });
+  const e1 = await walkVfsTree(vfs, '/p');
+  const e2 = await walkVfsTree(vfs, '/p');
+  assert.deepEqual(e1.map((x) => x.path), e2.map((x) => x.path));
+  assert.deepEqual(e1.filter((x) => x.type === 'file').map((x) => x.path),
+                   ['a.txt', 'b.txt', 'c.txt']);
+});
+
+test('buildEntryMap: flat { path: bytes } shape', async () => {
+  const vfs = makeVfs({ '/p/a.txt': enc('a'), '/p/b/c.txt': enc('c') });
+  const map = await buildEntryMap(vfs, '/p');
+  assert.equal(Object.keys(map).length, 3);  // a.txt, b/, b/c.txt
+  assert.deepEqual(map['a.txt'], enc('a'));
+  assert.deepEqual(map['b/c.txt'], enc('c'));
+});
+
+// ── archive.compress ────────────────────────────────────────────────────
+
+test('archive.compress: zip from VFS dir, list back', async () => {
+  const vfs = makeVfs({
+    '/p/README.md':       enc('# hello'),
+    '/p/data/x.csv':      enc('a,b\n1,2\n'),
+  });
+  const zipBytes = await archive.compress({ vfs, path: '/p' }, 'memory', { format: 'zip' });
+  // 'memory' sink returns Map<basename, bytes>; one entry.
+  assert.equal(zipBytes.size, 1);
+  const [, bytes] = [...zipBytes.entries()][0];
+  // Round-trip — list the produced zip.
+  const entries = await archive.list(bytes);
+  const files = entries.filter((e) => e.type === 'file').map((e) => e.path).sort();
+  assert.deepEqual(files, ['README.md', 'data/x.csv']);
+});
+
+test('archive.compress: zip to VFS sink, infers format from .zip extension', async () => {
+  const vfs = makeVfs({ '/p/a.txt': enc('hi') });
+  const r = await archive.compress({ vfs, path: '/p' }, { vfs, path: '/out.zip' });
+  assert.equal(r.count, 1);
+  assert.ok(vfs._files.has('/out.zip'));
+  // Confirm the bytes round-trip.
+  const zip = vfs._files.get('/out.zip');
+  const entries = await archive.list(zip);
+  assert.ok(entries.find((e) => e.path === 'a.txt'));
+});
+
+test('archive.compress: tar from VFS dir', async () => {
+  const vfs = makeVfs({ '/p/x.txt': enc('hello'), '/p/sub/y.txt': enc('world') });
+  await archive.compress({ vfs, path: '/p' }, { vfs, path: '/out.tar' });
+  const tarBytes = vfs._files.get('/out.tar');
+  assert.equal(detectFormat(tarBytes), 'tar');
+  const entries = await archive.list(tarBytes);
+  const files = entries.filter((e) => e.type === 'file').map((e) => e.path).sort();
+  assert.deepEqual(files, ['sub/y.txt', 'x.txt']);
+});
+
+test('archive.compress: tar.gz from VFS dir', async () => {
+  const vfs = makeVfs({ '/p/a.csv': enc('a,b\n1,2'), '/p/b.csv': enc('c,d\n3,4') });
+  await archive.compress({ vfs, path: '/p' }, { vfs, path: '/out.tar.gz' });
+  const targz = vfs._files.get('/out.tar.gz');
+  // Outer layer is gzip.
+  assert.equal(detectFormat(targz), 'gz');
+  const entries = await archive.list(targz);  // archive.list peels gz → tar
+  const files = entries.filter((e) => e.type === 'file').map((e) => e.path).sort();
+  assert.deepEqual(files, ['a.csv', 'b.csv']);
+});
+
+test('archive.compress: filter excludes entries during walk', async () => {
+  const vfs = makeVfs({
+    '/p/main.js':     enc('keep'),
+    '/p/build.tmp':   enc('exclude'),
+    '/p/cache.tmp':   enc('exclude'),
+  });
+  await archive.compress(
+    { vfs, path: '/p' },
+    { vfs, path: '/out.zip' },
+    { filter: (e) => !e.path.endsWith('.tmp') }
+  );
+  const entries = await archive.list(vfs._files.get('/out.zip'));
+  const files = entries.filter((e) => e.type === 'file').map((e) => e.path).sort();
+  assert.deepEqual(files, ['main.js']);
+});
+
+test('archive.compress: plain { name: bytes } source', async () => {
+  const result = await archive.compress(
+    { 'a.txt': enc('alpha'), 'b/c.txt': enc('cee') },
+    'memory',
+    { format: 'zip' }
+  );
+  const [, bytes] = [...result.entries()][0];
+  const entries = await archive.list(bytes);
+  assert.equal(entries.length, 2);
+});
+
+test('archive.compress: gz format delegates to archive.gzip (single-stream)', async () => {
+  const result = await archive.compress(
+    new Uint8Array([1, 2, 3, 4, 5]),
+    'memory',
+    { format: 'gz' }
+  );
+  // gzip helper returns a 1-key Map keyed by '<name>.gz'.
+  assert.equal(result.size, 1);
+  const [key, bytes] = [...result.entries()][0];
+  assert.match(key, /\.gz$/);
+  // Round-trip — gunzipping should yield the original.
+  const back = await gunzipBytes(bytes);
+  assert.deepEqual(back, new Uint8Array([1, 2, 3, 4, 5]));
+});
+
+test('archive.compress: tar.zst throws decode-only error', async () => {
+  const vfs = makeVfs({ '/p/x.txt': enc('hi') });
+  await assert.rejects(
+    () => archive.compress({ vfs, path: '/p' }, { vfs, path: '/out.tar.zst' }),
+    /decode-only/
+  );
+});
+
+test('archive.compress: xz / bz2 throw needs-Wasm error', async () => {
+  const vfs = makeVfs({ '/p/x.txt': enc('hi') });
+  for (const ext of ['xz', 'bz2', 'tar.xz', 'tar.bz2']) {
+    await assert.rejects(
+      () => archive.compress({ vfs, path: '/p' }, 'memory', { format: ext }),
+      /lazy-loaded Wasm/
+    );
+  }
+});
+
+test('archive.compress: missing format + non-extension sink throws clear error', async () => {
+  const vfs = makeVfs({ '/p/x.txt': enc('hi') });
+  await assert.rejects(
+    () => archive.compress({ vfs, path: '/p' }, 'memory'),
+    /format required/
+  );
+});
+
+test('archive.compress: zip → extract round-trip preserves content', async () => {
+  const original = {
+    'main.js':           enc('export const v = 42;'),
+    'data/sample.csv':   enc('name,age\nalice,30\nbob,25\n'),
+    'README.md':         enc('# hi\n\nmade by tests'),
+  };
+  // Compress to zip.
+  const r = await archive.compress(original, 'memory', { format: 'zip' });
+  const [, zipBytes] = [...r.entries()][0];
+  // Extract back into a memory sink.
+  const extracted = await archive.extract(zipBytes, 'memory');
+  for (const [k, v] of Object.entries(original)) {
+    assert.deepEqual(extracted.get(k), v, `roundtrip mismatch on ${k}`);
+  }
+});
+
+test('archive.compress: tar → extract round-trip preserves content', async () => {
+  const original = {
+    'a.txt':            enc('alpha'),
+    'nested/b.txt':     enc('beta'),
+  };
+  const r = await archive.compress(original, 'memory', { format: 'tar' });
+  const [, tarBytes] = [...r.entries()][0];
+  const extracted = await archive.extract(tarBytes, 'memory');
+  for (const [k, v] of Object.entries(original)) {
+    assert.deepEqual(extracted.get(k), v);
+  }
+});
+
+test('archive.compress: tar.gz → extract round-trip preserves content', async () => {
+  const original = {
+    'README.md':    enc('# tar.gz roundtrip\n'),
+    'data.csv':     enc('x,y\n1,2\n'),
+  };
+  const r = await archive.compress(original, 'memory', { format: 'tar.gz' });
+  const [, targzBytes] = [...r.entries()][0];
+  const extracted = await archive.extract(targzBytes, 'memory');
+  for (const [k, v] of Object.entries(original)) {
+    assert.deepEqual(extracted.get(k), v);
+  }
 });
 
 test('archive.list: unrecognized format throws', async () => {
