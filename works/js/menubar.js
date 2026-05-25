@@ -11,6 +11,7 @@ import { exportWorkspace, openWorkspaceFile, saveWorkspace } from './persist.js'
 import { confirm as dlgConfirm, Dialog } from '#dialog';
 import { showAbout } from './about.js';
 import { hasExamples, getExamplesManifest } from './examples-loader.js';
+import { aggregateLicenses, formatNoticesFile } from '#licenses';
 
 export function setupMenuBar() {
   const el = document.getElementById('works-menubar');
@@ -25,8 +26,9 @@ export function setupMenuBar() {
       { label: 'Mount folder…',        action: 'workspace:mount' },
       { label: 'Open workspace file…', action: 'workspace:openfile' },
       '---',
-      { label: 'Save',              action: 'workspace:save', shortcut: 'Ctrl+S' },
-      { label: 'Export workspace…', action: 'workspace:export' },
+      { label: 'Save',                       action: 'workspace:save', shortcut: 'Ctrl+S' },
+      { label: 'Export workspace…',          action: 'workspace:export' },
+      { label: 'Export THIRD-PARTY-NOTICES…', action: 'workspace:export-notices' },
     ] },
     { label: 'View', items: () => [
       { label: 'Toggle sidebar', action: 'view:sidebar' },
@@ -60,6 +62,7 @@ export function setupMenuBar() {
     if (action === 'workspace:openfile') { openWorkspaceFile(); return; }
     if (action === 'workspace:save') { await saveWorkspace(); return; }
     if (action === 'workspace:export') { await exportWorkspace(); return; }
+    if (action === 'workspace:export-notices') { await exportNotices(); return; }
     if (action === 'workspace:new') {
       if (await dlgConfirm('Discard the current workspace and start fresh?', { danger: true })) {
         await resetWorkspace();
@@ -208,4 +211,38 @@ async function openExamplePicker() {
   } catch (e) {
     setStatus('open example failed: ' + (e.message || e));
   }
+}
+
+// Export a THIRD-PARTY-NOTICES.txt sidecar — every vendored + pkg-managed +
+// install()'d third-party component in the workspace, with its full LICENSE
+// text. aggregateLicenses walks the workspace VFS (/sys/licenses for the
+// build-time vendored deps, /lib for pkg packages, /var/modules for
+// legacy install() entries); formatNoticesFile produces a single plaintext
+// blob; we trigger the browser save dialog. No transform — what the user
+// downloads is what they'd put alongside a re-distribution of this
+// workspace.
+async function exportNotices() {
+  setStatus('Building NOTICES.txt…');
+  let table;
+  try {
+    table = await aggregateLicenses(WKS.vfs);
+  } catch (e) {
+    setStatus('NOTICES.txt failed: ' + (e.message || e));
+    return;
+  }
+  if (!table || table.length === 0) {
+    setStatus('NOTICES.txt: no licensed dependencies to list');
+    return;
+  }
+  const text = formatNoticesFile(table);
+  const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'THIRD-PARTY-NOTICES.txt';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  setStatus('Downloaded THIRD-PARTY-NOTICES.txt (' + table.length + ' entries)');
 }
