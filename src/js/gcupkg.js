@@ -324,6 +324,51 @@ function _slugifyName(name) {
   return name.replace(/\//g, '_');
 }
 
+// ── thin archive shim ────────────────────────────────────────────────────
+//
+// parseGcupkg expects a `{ archive: { detect, list, read } }` object so
+// callers can plug in whatever ZIP reader they like. The full @gcu/archive
+// bundle is ~226 KB (zip+tar+gz+zst+xz+bz2 read/write); for the
+// cell-side install("file.gcupkg") path we only need ZIP read, which
+// auditable's stdlib already does via unzipArchive (uses native
+// DecompressionStream('deflate-raw'), zero new deps).
+//
+// makeUnzipArchiveShim(unzipArchive) returns an archiveLib whose
+// list/read are backed by one cached unzipArchive call per bytes
+// reference. detect always reports 'zip' — anything else would have
+// failed in unzipArchive first. The cache is a WeakMap keyed by the
+// bytes buffer; subsequent list+read for the same parse share one
+// decompression.
+export function makeUnzipArchiveShim(unzipArchive) {
+  if (typeof unzipArchive !== 'function') {
+    throw new TypeError('makeUnzipArchiveShim: unzipArchive function required');
+  }
+  const cache = new WeakMap();
+  async function _entries(bytes) {
+    if (cache.has(bytes)) return cache.get(bytes);
+    const map = await unzipArchive(bytes);
+    cache.set(bytes, map);
+    return map;
+  }
+  return {
+    archive: {
+      async detect(_bytes) { return 'zip'; },
+      async list(bytes) {
+        const map = await _entries(bytes);
+        const out = [];
+        for (const [path, data] of map) {
+          out.push({ path, type: 'file', size: data.length });
+        }
+        return out;
+      },
+      async read(bytes, path) {
+        const map = await _entries(bytes);
+        return map.get(path) || null;
+      },
+    },
+  };
+}
+
 async function _updateLockfile(vfs, name, pkgMeta) {
   const lockPath = '/lib/.gcu-lock.json';
   let lockfile;

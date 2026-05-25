@@ -12,7 +12,8 @@ import { webcrypto } from 'node:crypto';
 
 import { zipSync } from '../ext/archive/vendor/fflate.module.mjs';
 import * as archiveLib from '../ext/archive/src/main.js';
-import { parseGcupkg, installGcupkg } from '../src/js/gcupkg.js';
+import { parseGcupkg, installGcupkg, makeUnzipArchiveShim } from '../src/js/gcupkg.js';
+import { unzipArchive } from '../src/js/stdlib-core.js';
 
 // Node ≥ 19 exposes crypto.subtle globally, but earlier versions need a
 // hook. Make sure it's there for the SHA-256 integrity check.
@@ -360,6 +361,46 @@ test('installGcupkg: appends to an existing lockfile without clobbering other en
   const lock = JSON.parse(await vfs.readFile('/lib/.gcu-lock.json', 'utf8'));
   assert.ok(lock.modules['npm:something-else']);   // preserved
   assert.ok(lock.modules['@test/cohabitant']);     // added
+});
+
+// ── stdlib unzipArchive shim (the auditable cell-side path) ────────────
+//
+// This is the path the auditable cell-side install("file.gcupkg") takes —
+// no @gcu/archive dependency, just stdlib's native-DecompressionStream
+// ZIP reader behind a thin compatibility shim. End-to-end here mirrors
+// what runs in the browser when a user writes
+//   await install("local:/path/to/foo.gcupkg")
+// from a cell.
+
+test('makeUnzipArchiveShim: parseGcupkg + installGcupkg work through stdlib unzipArchive', async () => {
+  const { bytes } = buildFixture({ name: '@test/shim-path' });
+  const shim = makeUnzipArchiveShim(unzipArchive);
+  const parsed = await parseGcupkg(bytes, shim);
+  assert.equal(parsed.meta.name, '@test/shim-path');
+  assert.ok(parsed.files['index.js']);
+  assert.ok(parsed.files['adder.js']);
+  const vfs = makeVfs();
+  const installedModules = {};
+  const result = await installGcupkg(parsed, { vfs, installedModules });
+  assert.equal(result.libPath, '/lib/@test/shim-path');
+  assert.ok(installedModules['@test/shim-path']);
+});
+
+test('makeUnzipArchiveShim: caches per-bytes so list+read share one decompression', async () => {
+  const { bytes } = buildFixture({ name: '@test/cache' });
+  // Spy on unzipArchive — wrap it so we count invocations.
+  let calls = 0;
+  const spied = async (b) => { calls++; return await unzipArchive(b); };
+  const shim = makeUnzipArchiveShim(spied);
+  await shim.archive.list(bytes);
+  await shim.archive.read(bytes, 'index.js');
+  await shim.archive.read(bytes, 'adder.js');
+  assert.equal(calls, 1, 'unzipArchive should be called exactly once for one bytes buffer');
+});
+
+test('makeUnzipArchiveShim: rejects when unzipArchive is missing', () => {
+  assert.throws(() => makeUnzipArchiveShim(null), /unzipArchive function required/);
+  assert.throws(() => makeUnzipArchiveShim('not a fn'), /unzipArchive function required/);
 });
 
 // ── clean-replace + persistent examples (the reload-survival path) ─────

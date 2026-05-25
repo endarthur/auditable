@@ -561,7 +561,7 @@ The format is intentionally small. Pythonic wheels accumulated a lot of complexi
 | Format reader + installer (`src/js/gcupkg.js`) | shipped 2026-05-25 |
 | `pkg install <file.gcupkg>` in geas | shipped 2026-05-25 |
 | Works tree drop-zone for `.gcupkg` files | shipped 2026-05-25 |
-| `install("file.gcupkg")` cell shorthand | deferred — needs `@gcu/archive` bundled into auditable.html (~226 KB add) |
+| `install("file.gcupkg")` cell shorthand | shipped 2026-05-25 — uses stdlib's native-DecompressionStream `unzipArchive`, no `@gcu/archive` dependency (~3.5 KB add to auditable.html) |
 | `pkg build` subcommand for producing `.gcupkg` from a workspace package | deferred — out-of-tree packers like `pack-gcupkg.js` in carotte work; in-tree builder is a quality-of-life follow-up |
 
 ### 6.2 Bundled documentation
@@ -687,7 +687,7 @@ The `examples/defs/<category>/<name>.txt` system is the host's smoke-test corpus
 - **Naming convention.** `@gcu/<slug>` is conventional but not enforced. Lowercase, no whitespace, semver-tag friendly — but the validator accepts anything that's a string. A linter pass would help here but isn't a runtime concern.
 - **Permissions / capability gating.** Extensions today have full window access. A capability-token model would let users audit what an extension touches (FS / DOM / network / clipboard / …) before approving install. Pre-design; no implementation plan.
 - **Extension marketplace / discovery.** Currently extensions are URL-installed or pkg-installed. A curated registry (signed metadata, version range queries) is an obvious follow-up but not on the near roadmap.
-- **`install("file.gcupkg")` cell shorthand** + **`pkg build` subcommand**. See §6.1 implementation-status table. The geas `pkg install` path + Works drop-zone already work; the cell-side install() shortcut needs `@gcu/archive` bundled into auditable.html first.
+- **`pkg build` subcommand**. See §6.1 implementation-status table. Out-of-tree packers (e.g. carotte's `pack-gcupkg.js`) work fine today; an in-tree CLI is a quality-of-life follow-up.
 - **Versioned manifest schema.** When 1.0 ships, a `manifestVersion: 1` field will become required. We'll auto-treat legacy manifests as version 0.
 - **Localization.** `@gcu/soft` ships a pt-BR locale today as a soft-internal concern. If localization becomes a recurring need (UI strings in tagged-language errors, completions), a `manifest.locales` field would surface it. Pre-design.
 

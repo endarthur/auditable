@@ -12,6 +12,8 @@
 
 import { compressText, decompressText, uint8ToBase64 } from './text-compression.js';
 import { fetchLicense, parseUrlToSource, classify } from '#licenses';
+import { parseGcupkg, installGcupkg, makeUnzipArchiveShim } from '../gcupkg.js';
+import { unzipArchive } from '../stdlib-core.js';
 
 // SRI-shaped integrity hash. Computed over the un-compressed source bytes
 // (matches what a browser would do for a <script integrity="..."> tag).
@@ -340,6 +342,85 @@ export function makeModuleLoaders(cell, ctx, deps) {
     return mod;
   };
 
+  // .gcupkg sideload (EXTENSION_SPEC §6.1). Reads bytes from the source,
+  // parses via stdlib's unzipArchive shim (zero new deps), runs the standard
+  // installGcupkg, populates _installedModules so subsequent load() calls
+  // resolve. Returns the freshly-imported engine module so the cell's
+  // `const carotte = await install("...gcupkg")` pattern works directly.
+  async function _installFromGcupkg(url) {
+    const bytes = await _readGcupkgBytes(url);
+    const parsed = await parseGcupkg(bytes, makeUnzipArchiveShim(unzipArchive));
+    const vfs = window._notebookVFS;
+    const result = await installGcupkg(parsed, {
+      vfs: vfs || _makeMemoryVfsShim(),
+      installedModules: window._installedModules,
+    });
+    notifyDirty();
+
+    const versionTag = parsed.meta.version ? '@' + parsed.meta.version : '';
+    const verdict = parsed.integrity.ok === false
+      ? ' (⚠ integrity mismatch — see browser console)'
+      : (parsed.integrity.ok === true ? ' ✓' : '');
+    display(`installed ${parsed.meta.name}${versionTag}${verdict}`
+      + (result.exampleCount > 0 ? ` · ${result.exampleCount} example${result.exampleCount === 1 ? '' : 's'}` : '')
+      + (result.hasAdder ? ` · adder bridge` : ''));
+    if (parsed.integrity.ok === false) {
+      console.warn('[install] gcupkg integrity mismatch:', parsed.integrity);
+    }
+
+    // Materialise the engine immediately so the caller gets the live module,
+    // mirroring the regular install() return contract.
+    const engineKey = parsed.meta.name;
+    const blobUrl = await _materializeInstalled(engineKey);
+    const mod = await import(blobUrl);
+    window._importCache[engineKey] = mod;
+    return mod;
+  }
+
+  async function _readGcupkgBytes(url) {
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`install(${url}): fetch failed (${resp.status})`);
+      return new Uint8Array(await resp.arrayBuffer());
+    }
+    // VFS-backed sources. fs:/<path> targets the notebook FS prefix;
+    // local:/<path> and bare paths read directly from the workspace VFS.
+    let vfsPath;
+    if (url.startsWith('fs:'))     vfsPath = '/projects/self/' + url.slice('fs:'.length).replace(/^\/+/, '');
+    else if (url.startsWith('local:')) vfsPath = url.slice('local:'.length);
+    else                           vfsPath = url;  // absolute or relative VFS path
+    const vfs = window._notebookVFS;
+    if (!vfs) throw new Error(`install(${url}): no VFS to read from`);
+    let bytes = await vfs.readFile(vfsPath, 'bytes');
+    if (typeof bytes === 'string') bytes = new TextEncoder().encode(bytes);
+    if (!(bytes instanceof Uint8Array)) bytes = new Uint8Array(bytes);
+    return bytes;
+  }
+
+  // Fallback VFS for the no-workspace case (standalone notebook with no
+  // _notebookVFS bound). installGcupkg writes to /lib/<name>/ etc.; without
+  // a real VFS we just materialise everything in-memory and let the runtime
+  // module cache hold the engine. The /lib + /usr/share writes become
+  // no-ops — fine, the install survives via _installedModules.
+  function _makeMemoryVfsShim() {
+    const files = new Map();
+    return {
+      async readFile(p, enc) {
+        if (!files.has(p)) throw new Error('ENOENT ' + p);
+        const b = files.get(p);
+        return enc === 'utf8' ? new TextDecoder().decode(b) : b;
+      },
+      async writeFile(p, c) {
+        const bytes = c instanceof Uint8Array ? c
+          : typeof c === 'string' ? new TextEncoder().encode(c)
+          : new Uint8Array(c);
+        files.set(p, bytes);
+      },
+      async mkdir() {},
+      async rm() {},
+    };
+  }
+
   const install = async (url) => {
     const storeKey = url;
     if (window._importCache[storeKey]) return window._importCache[storeKey];
@@ -353,6 +434,16 @@ export function makeModuleLoaders(cell, ctx, deps) {
       window._importCache[storeKey] = mod;
       const decoded = await decodeModuleEntry(existing);
       display(`loaded ${storeKey} from cache (${(decoded.source.length / 1024).toFixed(1)} KB)`);
+      return mod;
+    }
+
+    // .gcupkg sideload — extension package per EXTENSION_SPEC §6.1.
+    // Bytes come from (in priority order): http(s) URL, fs:/<vfs-path>,
+    // local:/<vfs-path>, or a relative/absolute VFS path. The shim
+    // bridges parseGcupkg to stdlib's unzipArchive — zero new vendor
+    // deps; native DecompressionStream does the deflate.
+    if (url.endsWith('.gcupkg') || url.includes('.gcupkg?')) {
+      const mod = await _installFromGcupkg(url);
       return mod;
     }
 

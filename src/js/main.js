@@ -30,6 +30,7 @@ import './cm6.js';
 import './fs.js';
 import './stdlib-core.js';
 import './stdlib.js';
+import './gcupkg.js';  // cell-side install("file.gcupkg") + Works tree drop-zone consumer
 import './python.js';
 import './dag-core.js';
 import './dag.js';
