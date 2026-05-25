@@ -419,6 +419,61 @@ body {
 }
 .about-vendored-link:hover { text-decoration: underline; }
 
+/* ── DRAG-AND-DROP OVERLAY ── */
+/* Shown while an OS file is being dragged anywhere over the Works window.
+   Generic by design — browser privacy hides the dragged filename during
+   dragover, so we can only tell the user "drop accepted" not "drop will
+   install carotte 0.1.0". The status bar reports the specific outcome
+   post-drop. Lives at the document level (not inside any surface iframe
+   — surfaces are sandboxed) so it covers the whole shell. */
+#works-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;            /* above everything except modal dialogs */
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;     /* drop events must pass through to document */
+  opacity: 0;
+  transition: opacity 0.12s ease-out;
+}
+#works-drop-overlay.visible {
+  opacity: 1;
+}
+.works-drop-card {
+  background: var(--au-surface-raised);
+  border: 2px dashed var(--au-action);
+  border-radius: 6px;
+  padding: 32px 56px;
+  text-align: center;
+  color: var(--au-fg);
+  font-family: var(--sw-sans, sans-serif);
+  max-width: 80vw;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+.works-drop-icon {
+  font-size: 48px;
+  color: var(--au-action);
+  margin-bottom: 8px;
+  font-weight: 700;
+  line-height: 1;
+}
+.works-drop-title {
+  font-family: var(--sw-mono, ui-monospace, monospace);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+  color: var(--au-action);
+}
+.works-drop-hint {
+  font-size: 12px;
+  color: var(--au-fg-muted);
+  line-height: 1.6;
+}
+
 /* GCU thin scrollbar — applies to every scrollable element in the
    shell (file tree, dialogs, picker, …). Surfaces have their own
    iframe origins and style themselves independently. */

@@ -410,13 +410,40 @@ export async function copyToPrompt(srcPath) {
  *  Internal tree drags use a custom MIME type; this handler ignores
  *  them by checking event.dataTransfer.files.length first. */
 export function installGlobalFileDrop() {
+  // dragenter/dragleave fire for every child element transition during the
+  // drag — entering a nested element triggers BOTH a dragenter on the new
+  // node and a dragleave on the old one (in unpredictable order). A counter
+  // pattern is the canonical fix: increment on enter, decrement on leave,
+  // show the overlay while > 0. Drop / dragend reset the counter to zero.
+  let depth = 0;
+  const overlay = _ensureDropOverlay();
+
+  // Truthy iff this drag carries OS-file data (i.e. not an internal
+  // tree-row drag which uses application/x-works-tree-path).
+  const isFileDrag = (ev) =>
+    ev.dataTransfer && ev.dataTransfer.types && ev.dataTransfer.types.indexOf('Files') >= 0;
+
+  const showOverlay = () => { overlay.classList.add('visible'); };
+  const hideOverlay = () => { overlay.classList.remove('visible'); depth = 0; };
+
+  const onDragEnter = (ev) => {
+    if (!isFileDrag(ev)) return;
+    depth++;
+    showOverlay();
+  };
+  const onDragLeave = (ev) => {
+    if (!isFileDrag(ev)) return;
+    depth = Math.max(0, depth - 1);
+    if (depth === 0) hideOverlay();
+  };
   const onDragOver = (ev) => {
     // Show "drop allowed" cursor only for OS-file drags.
-    if (!ev.dataTransfer || ev.dataTransfer.types.indexOf('Files') < 0) return;
+    if (!isFileDrag(ev)) return;
     ev.preventDefault();
     ev.dataTransfer.dropEffect = 'copy';
   };
   const onDrop = async (ev) => {
+    hideOverlay();
     if (!ev.dataTransfer || !ev.dataTransfer.files
         || ev.dataTransfer.files.length === 0) return;
     ev.preventDefault();
@@ -438,8 +465,37 @@ export function installGlobalFileDrop() {
       }
     }
   };
-  document.addEventListener('dragover', onDragOver);
-  document.addEventListener('drop', onDrop);
+  document.addEventListener('dragenter', onDragEnter);
+  document.addEventListener('dragleave', onDragLeave);
+  document.addEventListener('dragover',  onDragOver);
+  document.addEventListener('drop',      onDrop);
+  // Safety net — if the drag ends outside our handlers (drag escapes the
+  // window with a quick release), make sure the overlay clears.
+  window.addEventListener('dragend',   hideOverlay);
+  window.addEventListener('blur',      hideOverlay);
+}
+
+// Lazily-built full-screen overlay element. Browser privacy hides the
+// dragged file's name during dragover, so the message stays generic
+// (specific result lands in the status bar after the drop). One element,
+// reused for the lifetime of the page.
+function _ensureDropOverlay() {
+  let el = document.getElementById('works-drop-overlay');
+  if (el) return el;
+  el = document.createElement('div');
+  el.id = 'works-drop-overlay';
+  el.innerHTML = `
+    <div class="works-drop-card">
+      <div class="works-drop-icon">⤓</div>
+      <div class="works-drop-title">Drop to import</div>
+      <div class="works-drop-hint">
+        Notebooks (.html, .txt, .ipynb) become new projects.<br>
+        Extensions (.gcupkg) install into the workspace.
+      </div>
+    </div>
+  `;
+  document.body.appendChild(el);
+  return el;
 }
 
 // Sideload a .gcupkg dropped from the OS file picker. Parses the archive,
