@@ -5,17 +5,108 @@
 <title>text editor</title>
 <style>
   /* @theme-tokens */
-  html, body { margin: 0; height: 100%; }
-  body { background: var(--au-surface); }
-  textarea {
-    width: 100%; height: 100%;
-    box-sizing: border-box;
-    margin: 0; border: 0; padding: 10px 12px;
-    resize: none; outline: none;
-    background: var(--au-surface-deep); color: var(--au-fg);
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    background: var(--au-surface-deep);
+    color: var(--au-fg);
     font: 13px/1.55 ui-monospace, 'Space Mono', Menlo, monospace;
-    tab-size: 2;
+    display: flex;
+    flex-direction: column;
   }
+
+  /* The editor area — gutter + textarea side by side, share a horizontal
+     line height so the line numbers align with the text. Both scroll
+     vertically in lockstep; the textarea owns the actual scrollbar and
+     the gutter is non-scrollable (its scrollTop is mirrored on input). */
+  .editor {
+    flex: 1 1 auto;
+    min-height: 0;          /* allow flex shrink so the inner overflow works */
+    display: flex;
+    overflow: hidden;       /* no double-scrollbar: only the textarea scrolls */
+    background: var(--au-surface-deep);
+  }
+  .gutter {
+    flex: none;
+    padding: 10px 10px 10px 14px;
+    text-align: right;
+    color: var(--au-fg-soft);
+    user-select: none;
+    background: var(--au-surface);
+    border-right: 1px solid var(--au-border);
+    overflow: hidden;
+    white-space: pre;
+    font-variant-numeric: tabular-nums;
+    min-width: 3em;
+    box-sizing: border-box;
+  }
+  textarea {
+    flex: 1 1 auto;
+    box-sizing: border-box;
+    margin: 0;
+    border: 0;
+    padding: 10px 14px;
+    resize: none;
+    outline: none;
+    background: transparent;
+    color: var(--au-fg);
+    font: inherit;
+    tab-size: 2;
+    white-space: pre;           /* horizontal scroll instead of soft wrap */
+    overflow: auto;
+  }
+  textarea.wrap {
+    white-space: pre-wrap;
+    overflow-x: hidden;
+  }
+
+  /* Status bar — fixed at the bottom, shows path + cursor + size + dirty.
+     The wrap toggle is a small button rendered inline. */
+  .statusbar {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 4px 10px;
+    background: var(--au-surface-raised);
+    border-top: 1px solid var(--au-border);
+    color: var(--au-fg-muted);
+    font: 11px/1.6 ui-monospace, 'Space Mono', Menlo, monospace;
+    user-select: none;
+  }
+  .status-path { color: var(--au-fg); }
+  .status-pos, .status-size { color: var(--au-fg-muted); }
+  .status-dirty {
+    color: var(--au-warn);
+    font-weight: 700;
+    width: 1em;
+    text-align: center;
+  }
+  .status-spacer { flex: 1; }
+  .status-btn {
+    background: none;
+    border: 1px solid transparent;
+    color: var(--au-fg-muted);
+    padding: 1px 6px;
+    border-radius: 2px;
+    cursor: pointer;
+    font: inherit;
+  }
+  .status-btn:hover { color: var(--au-fg); border-color: var(--au-border); }
+  .status-btn.on { color: var(--au-action); border-color: var(--au-action); }
+
+  /* GCU thin scrollbar — matches the shell's chrome. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--au-border) transparent;
+  }
+  *::-webkit-scrollbar { width: 8px; height: 8px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  *::-webkit-scrollbar-thumb {
+    background: var(--au-border);
+    border-radius: 4px;
+  }
+  *::-webkit-scrollbar-thumb:hover { background: var(--au-fg-soft); }
+  *::-webkit-scrollbar-corner { background: transparent; }
 </style>
 </head>
 <body>
@@ -24,15 +115,118 @@
   workspace, edits it, flushes it back through the `works` service. A real
   surface: it exercises the whole §5.2 contract (Flush / CanClose / dirty
   tracking / self-flush).
+
+  Notepad-shape with line numbers, status bar, word-wrap toggle, and a
+  Ctrl+S explicit save. CM6-grade syntax highlighting is deliberately
+  out of scope here — most callers want this for LICENSE / README /
+  notebook.txt / config files where the simplicity wins.
 -->
-<textarea id="editor" spellcheck="false" placeholder="loading…"></textarea>
+<div class="editor">
+  <div class="gutter" id="gutter">1</div>
+  <textarea id="editor" spellcheck="false" placeholder="loading…" wrap="off"></textarea>
+</div>
+<div class="statusbar">
+  <span class="status-dirty" id="status-dirty"> </span>
+  <span class="status-path" id="status-path">—</span>
+  <span class="status-pos" id="status-pos">ln 1, col 1</span>
+  <span class="status-size" id="status-size">0 B</span>
+  <span class="status-spacer"></span>
+  <button type="button" class="status-btn" id="btn-wrap" title="Toggle word wrap (off by default)">wrap</button>
+</div>
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
 
 /* @theme-init */
 
-const editor = document.getElementById('editor');
+const editor   = document.getElementById('editor');
+const gutter   = document.getElementById('gutter');
+const sDirty   = document.getElementById('status-dirty');
+const sPath    = document.getElementById('status-path');
+const sPos     = document.getElementById('status-pos');
+const sSize    = document.getElementById('status-size');
+const btnWrap  = document.getElementById('btn-wrap');
+
 const basename = (p) => p.split('/').filter(Boolean).pop() || p;
+const fmtBytes = (n) =>
+  n < 1024 ? n + ' B'
+  : n < 1024 * 1024 ? (n / 1024).toFixed(1) + ' KB'
+  : (n / 1024 / 1024).toFixed(1) + ' MB';
+
+// ── Editor state derivations ────────────────────────────────────────────
+
+function lineColumn(text, idx) {
+  let line = 1, lineStart = 0;
+  for (let i = 0; i < idx && i < text.length; i++) {
+    if (text.charCodeAt(i) === 10) { line++; lineStart = i + 1; }
+  }
+  return { line, col: idx - lineStart + 1 };
+}
+
+function lineCount(text) {
+  if (text.length === 0) return 1;
+  let n = 1;
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) n++;
+  // A trailing newline shouldn't render an extra empty line number in the
+  // gutter — but it does add a real line at the cursor's perspective.
+  return n;
+}
+
+// Rebuild the gutter when line count changes. Single text node — cheap
+// for documents up to ~100k lines; we never animate, so no perf concern.
+function renderGutter() {
+  const n = lineCount(editor.value);
+  let s = '';
+  for (let i = 1; i <= n; i++) s += i + '\n';
+  gutter.textContent = s;
+  // Widen the gutter for big files so digits don't overflow.
+  const digits = String(n).length;
+  gutter.style.minWidth = Math.max(3, digits + 1) + 'em';
+}
+
+function updateStatus() {
+  const v = editor.value;
+  const { line, col } = lineColumn(v, editor.selectionStart);
+  sPos.textContent = 'ln ' + line + ', col ' + col;
+  sSize.textContent = fmtBytes(v.length);
+}
+
+// Mirror the textarea's vertical scroll position on the gutter so line
+// numbers stay aligned during scrolling.
+editor.addEventListener('scroll', () => {
+  gutter.scrollTop = editor.scrollTop;
+  // We use overflow:hidden on the gutter, so set scrollTop via padding-trick:
+  // shift the gutter's textNode visually by negative scrollTop.
+  gutter.style.transform = 'translateY(' + (-editor.scrollTop) + 'px)';
+});
+
+editor.addEventListener('keyup',     updateStatus);
+editor.addEventListener('click',     updateStatus);
+editor.addEventListener('mouseup',   updateStatus);
+
+// ── Word-wrap toggle ────────────────────────────────────────────────────
+
+let wrap = false;
+btnWrap.addEventListener('click', () => {
+  wrap = !wrap;
+  editor.classList.toggle('wrap', wrap);
+  editor.setAttribute('wrap', wrap ? 'soft' : 'off');
+  btnWrap.classList.toggle('on', wrap);
+});
+
+// ── Tab key inserts spaces instead of moving focus. ─────────────────────
+
+editor.addEventListener('keydown', (e) => {
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    const s = editor.selectionStart, t = editor.selectionEnd;
+    const pad = '  ';
+    editor.value = editor.value.slice(0, s) + pad + editor.value.slice(t);
+    editor.selectionStart = editor.selectionEnd = s + pad.length;
+    editor.dispatchEvent(new Event('input'));
+  }
+});
+
+// ── A-Bus wire-up ───────────────────────────────────────────────────────
 
 window.addEventListener('message', async (ev) => {
   // §7.1 — adopt the welcome port only from our own parent.
@@ -41,6 +235,7 @@ window.addEventListener('message', async (ev) => {
   const { port, tab } = ev.data;
 
   let filePath = tab.path;
+  sPath.textContent = filePath;
   let bus;
   try {
     bus = await connect(port, { client: 'text-surface' });
@@ -59,12 +254,21 @@ window.addEventListener('message', async (ev) => {
   } catch { saved = ''; }
   editor.value = saved;
   editor.placeholder = '';
+  renderGutter();
+  updateStatus();
 
   let dirty = false;
   let flushTimer = null;
 
   const emit = (member, args) =>
     bus.signal({ path: '/', interface: 'Surface', member }, args);
+
+  const setDirty = (d) => {
+    if (dirty === d) return;
+    dirty = d;
+    sDirty.textContent = dirty ? '●' : ' ';
+    emit('DirtyChanged', [dirty]);
+  };
 
   // Write the buffer back to the workspace VFS.
   async function flush() {
@@ -75,17 +279,24 @@ window.addEventListener('message', async (ev) => {
       { to: 'works', path: '/', interface: 'VFS', member: 'Write' },
       [filePath, content]);
     saved = content;
-    if (dirty) { dirty = false; emit('DirtyChanged', [false]); }
+    setDirty(false);
   }
 
   editor.addEventListener('input', () => {
-    if (!dirty && editor.value !== saved) {
-      dirty = true;
-      emit('DirtyChanged', [true]);
-    }
+    setDirty(editor.value !== saved);
+    renderGutter();
+    updateStatus();
     // Self-flush on idle (spec §5.2).
     clearTimeout(flushTimer);
     flushTimer = setTimeout(flush, 1500);
+  });
+
+  // Ctrl/Cmd+S — explicit save, bypassing the idle timer.
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+      e.preventDefault();
+      flush();
+    }
   });
 
   // The §5.2 Surface contract.
@@ -94,7 +305,11 @@ window.addEventListener('message', async (ev) => {
       methods: {
         Flush:     () => flush(),
         CanClose:  () => true,   // close flushes first — no data-loss veto needed
-        Relocated: (p) => { filePath = p; emit('TitleChanged', [basename(p)]); },
+        Relocated: (p) => {
+          filePath = p;
+          sPath.textContent = filePath;
+          emit('TitleChanged', [basename(p)]);
+        },
       },
       signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
     },
