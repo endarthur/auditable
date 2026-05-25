@@ -110,10 +110,100 @@ async function _writeLockfile(vfs, lockfile) {
   await vfs.writeFile(LOCKFILE, JSON.stringify(lockfile, null, 2));
 }
 
+// pkg install <file.gcupkg>  — sideload an extension package per
+// EXTENSION_SPEC §6.1. Reads bytes from the VFS (path) or a URL (http(s):
+// prefix), runs parseGcupkg + installGcupkg, prints a summary.
+//
+// The archive bundle is concat'd into the geas bundle (see ext/geas/build.js);
+// gcupkg.js's parser takes it as a parameter. Both `archive` and
+// `parseGcupkg` / `installGcupkg` are in scope by the time this runs.
+async function _installGcupkgFile(ctx, source) {
+  const vfs = ctx.vfs;
+  if (typeof parseGcupkg !== 'function' || typeof installGcupkg !== 'function') {
+    await ctx.stderr('pkg: gcupkg loader not bundled in this build\n');
+    return 1;
+  }
+  if (typeof archive === 'undefined' || !archive) {
+    await ctx.stderr('pkg: @gcu/archive not bundled (required for .gcupkg)\n');
+    return 1;
+  }
+
+  // Source can be a VFS path or an http(s) URL. (Worker-relative imports
+  // not supported — too risky on file:// origins.)
+  let bytes;
+  if (source.startsWith('http://') || source.startsWith('https://')) {
+    try {
+      const resp = await fetch(source);
+      if (!resp.ok) { await ctx.stderr(`pkg: fetch ${source} failed (${resp.status})\n`); return 1; }
+      bytes = new Uint8Array(await resp.arrayBuffer());
+    } catch (e) {
+      await ctx.stderr(`pkg: fetch ${source}: ${e.message}\n`);
+      return 1;
+    }
+  } else {
+    // VFS read. Pass 'bytes' encoding so the backend doesn't UTF-8 decode
+    // (silent corruption of binary, same trap as the archive read path).
+    try {
+      bytes = await vfs.readFile(source, 'bytes');
+    } catch (e) {
+      await ctx.stderr(`pkg: cannot read ${source}: ${e.message}\n`);
+      return 1;
+    }
+    if (typeof bytes === 'string') {
+      // Backend ignored the 'bytes' hint — convert defensively.
+      bytes = new TextEncoder().encode(bytes);
+    }
+    if (!(bytes instanceof Uint8Array)) bytes = new Uint8Array(bytes);
+  }
+
+  let parsed;
+  try {
+    parsed = await parseGcupkg(bytes, { archive });
+  } catch (e) {
+    await ctx.stderr(`pkg: ${e.message}\n`);
+    return 1;
+  }
+
+  let result;
+  try {
+    result = await installGcupkg(parsed, {
+      vfs,
+      installedModules: (typeof window !== 'undefined' && window._installedModules) || null,
+    });
+  } catch (e) {
+    await ctx.stderr(`pkg: installGcupkg failed: ${e.message}\n`);
+    return 1;
+  }
+
+  // Summary. Includes the suggested load() calls so the user knows how
+  // to reach the extension from a cell after install.
+  const name = parsed.meta.name;
+  const version = parsed.meta.version;
+  await ctx.stdout(`installed ${name}@${version} → ${result.libPath}\n`);
+  if (parsed.meta.spdx) {
+    const verdict = parsed.integrity.ok === false ? ' (integrity mismatch — see meta)' : '';
+    await ctx.stdout(`  license: ${parsed.meta.spdx}${verdict}\n`);
+  }
+  if (result.exampleCount > 0) {
+    await ctx.stdout(`  examples: ${result.exampleCount} → ${result.exampleRoot}\n`);
+  }
+  if (result.docsCount > 0) {
+    await ctx.stdout(`  docs: ${result.docsCount} → ${result.docsRoot}\n`);
+  }
+  await ctx.stdout(`  load: load("${name}")${result.hasAdder ? `; load("${name}/adder")` : ''}\n`);
+  return 0;
+}
+
 // pkg install <alias>  — one entry, end-to-end.
 async function _installOne(ctx, alias) {
   const vfs = ctx.vfs;
   if (!vfs) { await ctx.stderr('pkg: no VFS in this context\n'); return 1; }
+
+  // .gcupkg path — sideload an extension package. Bypasses the URL/alias
+  // resolution since the bytes are already on the VFS or fetchable.
+  if (alias.endsWith('.gcupkg') || alias.includes('.gcupkg?')) {
+    return _installGcupkgFile(ctx, alias);
+  }
 
   let url, fallback;
   if (alias.startsWith('local:')) {
@@ -352,13 +442,14 @@ async function _help(ctx) {
     'usage: pkg <subcommand> [args...]',
     '',
     'subcommands:',
-    '  install <alias>     fetch + verify, write to /lib + lockfile',
-    '  install             re-install every entry from /lib/.gcu-lock.json',
-    '  list                list installed modules with SPDX badges',
-    '  licenses            aggregate license table across the workspace',
-    '  freeze              print the workspace lockfile',
-    '  remove <alias>      delete the entry + its /lib directory',
-    '  help                show this message',
+    '  install <alias>            fetch + verify, write to /lib + lockfile',
+    '  install <path.gcupkg>      sideload a packed extension (EXTENSION_SPEC §6.1)',
+    '  install                    re-install every entry from /lib/.gcu-lock.json',
+    '  list                       list installed modules with SPDX badges',
+    '  licenses                   aggregate license table across the workspace',
+    '  freeze                     print the workspace lockfile',
+    '  remove <alias>             delete the entry + its /lib directory',
+    '  help                       show this message',
     '',
     'alias prefixes (pkg-spec §3.3):',
     '  @gcu/<name>         GCU package via esm.sh',
@@ -366,6 +457,8 @@ async function _help(ctx) {
     '  jsr:<name>          jsr.io package via esm.sh',
     '  gh:<user>/<repo>    GitHub repo via esm.sh',
     '  local:/<vfs-path>   surface VFS, no integrity, no caching',
+    '  /path.gcupkg        VFS-path .gcupkg file — sideload',
+    '  https://…/x.gcupkg  fetched .gcupkg — sideload',
     '',
   ].join('\n'));
   return 0;

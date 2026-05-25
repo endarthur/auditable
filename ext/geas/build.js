@@ -58,7 +58,7 @@ if (fs.existsSync(archivePath)) {
 // IIFE-wrap so internal symbols (notably `tokenize`, which collides with
 // geas's lexer.js export) stay scoped to the bundle. Expose only the three
 // symbols pkg-cmd.js actually consumes — fetchLicense, aggregateLicenses,
-// formatTable — as top-level consts. pkg-cmd's _resolveLicensesSym helper
+// formatTable — as top-level consts. pkg-cmd.js's _resolveLicensesSym helper
 // picks them up via lexical scope (the typeof checks succeed).
 const licensesPath = path.resolve(__dirname, '..', 'licenses', 'index.js');
 if (fs.existsSync(licensesPath)) {
@@ -83,6 +83,22 @@ return {
   chunks.push(wrapped);
 } else {
   console.warn('geas: ext/licenses/index.js not found — pkg licenses subcommand will fail at runtime');
+}
+
+// ── Prepend src/js/gcupkg.js — .gcupkg reader + installer ────────────
+// pkg-cmd.js's `pkg install <file.gcupkg>` path needs parseGcupkg + installGcupkg
+// in scope. Source lives in the auditable tree; concat-prepend it the same way
+// (no name collisions — both functions are gcupkg-prefixed via the spec).
+const gcupkgPath = path.resolve(__dirname, '..', '..', 'src', 'js', 'gcupkg.js');
+if (fs.existsSync(gcupkgPath)) {
+  let gcupkgSrc = fs.readFileSync(gcupkgPath, 'utf8');
+  gcupkgSrc = gcupkgSrc.replace(/^export\s+(async\s+)?function\s/gm, '$1function ');
+  gcupkgSrc = gcupkgSrc.replace(/^export\s+const\s/gm, 'const ');
+  gcupkgSrc = gcupkgSrc.replace(/^export\s*\{[\s\S]*?\};?\s*$/gm, '');
+  gcupkgSrc = gcupkgSrc.replace(/^\n+/, '').replace(/\n+$/, '');
+  chunks.push('// -- src/js/gcupkg.js (prepended for `pkg install <file.gcupkg>`) --\n\n' + gcupkgSrc);
+} else {
+  console.warn('geas: src/js/gcupkg.js not found — pkg install <file.gcupkg> will fail at runtime');
 }
 
 for (const entry of importEntries) {

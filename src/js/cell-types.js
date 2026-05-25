@@ -37,9 +37,16 @@ const _SEMVER_RE = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
 
 // ── Semver range subset (EXTENSION_SPEC.md §2.4) ──
 //
-// Intentionally a small subset of node-semver: exact, >=, >, ^, ~, *.
-// Disjunctions and AND-combinations are deliberately unsupported — if
-// you need them, your extension is too coupled to its deps.
+// Intentionally a small subset of node-semver: exact, >=, >, ^, ~, *,
+// plus x-ranges (`0.x`, `1.2.x`). Disjunctions and AND-combinations
+// are deliberately unsupported — if you need them, your extension is
+// too coupled to its deps.
+//
+// x-range semantics match node-semver:
+//   `<n>.x` / `<n>.x.x`  →  ^<n>.0.0   (any version in that major)
+//   `<n>.<m>.x`          →  ~<n>.<m>.0 (any patch in that minor)
+//   `>=<n>.x`            →  >=<n>.0.0  (lower bound only; no upper)
+//   `>=<n>.<m>.x`        →  >=<n>.<m>.0
 
 function _parseSemver(v) {
   const m = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(v);
@@ -57,7 +64,9 @@ function _cmpSemver(a, b) {
 function _parseRange(range) {
   if (typeof range !== 'string') return null;
   const trimmed = range.trim();
-  if (trimmed === '*') return { op: '*', target: null };
+  if (trimmed === '*' || trimmed === 'x' || trimmed === 'X') {
+    return { op: '*', target: null };
+  }
 
   let op = '=';
   let rest = trimmed;
@@ -66,8 +75,23 @@ function _parseRange(range) {
   else if (rest.startsWith('^'))  { op = '^';  rest = rest.slice(1); }
   else if (rest.startsWith('~'))  { op = '~';  rest = rest.slice(1); }
   else if (rest.startsWith('='))  { op = '=';  rest = rest.slice(1); }
+  rest = rest.trim();
 
-  const target = _parseSemver(rest.trim());
+  // x-range expansion. Bare `<n>.x` is caret-equivalent; bare `<n>.<m>.x` is
+  // tilde-equivalent. With a `>=` or `>` prefix, the x is treated as 0 and
+  // the upper bound implied by x-range is dropped (the prefix wins).
+  const xFull  = /^(\d+)\.([xX*])(?:\.[xX*])?$/.exec(rest);
+  const xMinor = /^(\d+)\.(\d+)\.([xX*])$/.exec(rest);
+  if (xFull) {
+    const target = [+xFull[1], 0, 0];
+    return { op: op === '=' ? '^' : op, target };
+  }
+  if (xMinor) {
+    const target = [+xMinor[1], +xMinor[2], 0];
+    return { op: op === '=' ? '~' : op, target };
+  }
+
+  const target = _parseSemver(rest);
   if (!target) return null;
   return { op, target };
 }
@@ -168,7 +192,7 @@ function _validateManifest(m) {
         throw new Error(`registerExtension: requires["${name}"] must be a non-empty range string`);
       }
       if (!_parseRange(range)) {
-        throw new Error(`registerExtension: requires["${name}"] = "${range}" is not a recognized range (expected one of: 1.2.3, >=1.2.3, >1.2.3, ^1.2.3, ~1.2.3, *)`);
+        throw new Error(`registerExtension: requires["${name}"] = "${range}" is not a recognized range (expected one of: 1.2.3, >=1.2.3, >1.2.3, ^1.2.3, ~1.2.3, 0.x, 1.2.x, *)`);
       }
     }
   }

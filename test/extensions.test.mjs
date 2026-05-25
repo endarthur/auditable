@@ -376,9 +376,9 @@ describe('registerExtension — manifest.requires', () => {
     assert.throws(
       () => registerExtension({
         name: '@test/req-bad-range', version: '0.1.0',
-        requires: { '@gcu/foo': '1.x' },
+        requires: { '@gcu/foo': '~~1.0' },
       }),
-      /requires\["@gcu\/foo"\] = "1\.x" is not a recognized range/,
+      /requires\["@gcu\/foo"\] = "~~1\.0" is not a recognized range/,
     );
   });
 
@@ -390,6 +390,82 @@ describe('registerExtension — manifest.requires', () => {
       }),
       /is not a recognized range/,
     );
+  });
+
+  // ── x-range support (EXTENSION_SPEC §2.4 — added per carotte's CLAUDE.md §3.1) ──
+
+  it('passes for bare x-range "0.x" (caret-equivalent — any 0.x)', () => {
+    registerExtension({ name: '@test/req-xfull-base', version: '0.5.3' });
+    assert.doesNotThrow(() => registerExtension({
+      name: '@test/req-xfull-dep', version: '0.1.0',
+      requires: { '@test/req-xfull-base': '0.x' },
+    }));
+  });
+
+  it('rejects bare x-range when major doesn\'t match', () => {
+    registerExtension({ name: '@test/req-xfull-mismatch', version: '1.5.0' });
+    assert.throws(
+      () => registerExtension({
+        name: '@test/req-xfull-mismatch-dep', version: '0.1.0',
+        requires: { '@test/req-xfull-mismatch': '0.x' },
+      }),
+      /requires "@test\/req-xfull-mismatch" 0\.x but 1\.5\.0 is registered/,
+    );
+  });
+
+  it('passes for bare x-range "1.2.x" (tilde-equivalent — any patch in 1.2)', () => {
+    registerExtension({ name: '@test/req-xminor-base', version: '1.2.9' });
+    assert.doesNotThrow(() => registerExtension({
+      name: '@test/req-xminor-dep', version: '0.1.0',
+      requires: { '@test/req-xminor-base': '1.2.x' },
+    }));
+  });
+
+  it('rejects "1.2.x" when minor differs', () => {
+    registerExtension({ name: '@test/req-xminor-mismatch', version: '1.3.0' });
+    assert.throws(
+      () => registerExtension({
+        name: '@test/req-xminor-mismatch-dep', version: '0.1.0',
+        requires: { '@test/req-xminor-mismatch': '1.2.x' },
+      }),
+      /1\.2\.x but 1\.3\.0 is registered/,
+    );
+  });
+
+  it('passes for ">=0.x" (lower-bound only, no upper)', () => {
+    // ">=0.x" means ">=0.0.0" — the x just becomes 0 for the lower bound;
+    // the >= drops the upper bound an x-range would otherwise imply.
+    // This is the form carotte's pack-gcupkg.js emits.
+    registerExtension({ name: '@test/req-gtex-base', version: '5.0.0' });
+    assert.doesNotThrow(() => registerExtension({
+      name: '@test/req-gtex-dep', version: '0.1.0',
+      requires: { '@test/req-gtex-base': '>=0.x' },
+    }));
+  });
+
+  it('passes for x-range with redundant .x.x', () => {
+    // "0.x.x" is equivalent to "0.x" — both mean caret on the major.
+    registerExtension({ name: '@test/req-xx-base', version: '0.7.0' });
+    assert.doesNotThrow(() => registerExtension({
+      name: '@test/req-xx-dep', version: '0.1.0',
+      requires: { '@test/req-xx-base': '0.x.x' },
+    }));
+  });
+
+  it('passes for capital X as a wildcard', () => {
+    registerExtension({ name: '@test/req-X-base', version: '0.5.0' });
+    assert.doesNotThrow(() => registerExtension({
+      name: '@test/req-X-dep', version: '0.1.0',
+      requires: { '@test/req-X-base': '0.X' },
+    }));
+  });
+
+  it('passes for bare "x" (equivalent to *)', () => {
+    registerExtension({ name: '@test/req-x-base', version: '99.0.0' });
+    assert.doesNotThrow(() => registerExtension({
+      name: '@test/req-x-dep', version: '0.1.0',
+      requires: { '@test/req-x-base': 'x' },
+    }));
   });
 
   it('checks requires BEFORE applying contributions (fail-fast invariant)', () => {

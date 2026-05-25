@@ -475,16 +475,18 @@ Today an extension ships as either:
 
 That works, but it leaves users to find the URL and the host to fetch metadata. For a more "drop this on your desktop and it installs" experience, the proposed `.gcupkg` format below offers a single-file bundle with everything the runtime needs.
 
-### 6.1 The `.gcupkg` format (proposal)
+### 6.1 The `.gcupkg` format
 
-**Status: proposal, not implemented.** Drafted here so we have a target to aim at when the install UX warrants the cost.
+**Status: shipped 2026-05-25.** Reader + installer at `src/js/gcupkg.js`; `pkg install <file.gcupkg>` in geas; Works tree drop-zone in `works/js/file-ops.js`. Reference implementation packer at `https://github.com/endarthur/carotte/blob/main/pack-gcupkg.js`.
 
 A `.gcupkg` is a **`.zip` archive** with a defined internal layout:
 
 ```
 example@0.1.0.gcupkg                   ← archive filename: <name>@<version>.gcupkg
 ├── package.json                       ← required; same shape as §5.3
-├── index.js                           ← required; the ES module entry point
+├── index.js                           ← required; the primary ES module entry point
+├── adder.js                           ← optional; Python-shape adapter (§4) — auto-loadable as `<name>/adder`
+├── soft.js                            ← optional; Soft-shape adapter (same convention)
 ├── LICENSE                            ← required; raw license text (any commonly-named file)
 ├── README.md                          ← optional; rendered in the plugin-panel detail view
 ├── SPEC.md                            ← optional; rendered next to README in plugin-panel
@@ -498,6 +500,8 @@ example@0.1.0.gcupkg                   ← archive filename: <name>@<version>.gc
 └── .gcupkg-meta.json                  ← required; bundle metadata (see below)
 ```
 
+Secondary entry points (`adder.js`, future `soft.js`) live at the archive root alongside `index.js` and are declared in `package.json` `exports` map. The installer hydrates them into `_installedModules` under the `<name>/adder` (resp. `<name>/soft`) key so `load("<name>/adder")` from a cell resolves directly without a network fetch.
+
 The `.gcupkg-meta.json` is what makes it a "wheel" rather than a generic zip — it commits to a schema:
 
 ```json
@@ -508,7 +512,7 @@ The `.gcupkg-meta.json` is what makes it a "wheel" rather than a generic zip —
   "spdx": "MIT",
   "homepage": "https://...",
   "requires": {
-    "auditable": ">=0.x",
+    "auditable": ">=0.0.0",
     "@gcu/air": ">=0.3.0",
     "@gcu/adder": "^1.0.0"
   },
@@ -518,12 +522,20 @@ The `.gcupkg-meta.json` is what makes it a "wheel" rather than a generic zip —
     "examples": 4,
     "vendorLicenses": 2
   },
-  "size": { "index.js": 12345, "total": 23456 },
-  "integrity": "sha256-..."
+  "size": { "index.js": 12345, "adder.js": 4678 },
+  "integrity": "sha256-…",
+  "integrityCovers": ["adder.js", "index.js"]
 }
 ```
 
 `requires` mirrors the manifest field of the same name (§2.4) plus an optional `auditable` entry for host-version pinning. `bundles` is a summary the host uses to decide which surfaces to wire up post-install (skip docs-surface registration if `docs: false`, etc.) — it's a *hint*, the real source of truth is the archive contents.
+
+**Integrity field semantics** (added 2026-05-25 after the first real-world packer landed):
+
+- `integrity` is a SHA-256 hash, base64-encoded, with `sha256-` prefix (SRI format).
+- `integrityCovers` is an array of filenames the hash covers. **Required for new packers.** The recommended cover set is `index.js` + every secondary entry point listed in `package.json` `exports` map (so: `["adder.js", "index.js"]` for a typical extension with an adder bridge).
+- Hash recipe: sort `integrityCovers` lexicographically, then for each filename concat: `<filename>` + `\0` + `<file bytes>` + `\0`. Compute SHA-256 of the resulting buffer.
+- **Legacy compatibility**: if `integrityCovers` is absent, the reader assumes the hash covers `index.js` only (the carotte 0.1.0 shape, before the spec made the cover set explicit). Verification still works but the consumer logs a note encouraging the producer to upgrade.
 
 Why bundle:
 
@@ -542,13 +554,15 @@ Why **not** bundle (the deliberate gaps versus Python wheels):
 
 The format is intentionally small. Pythonic wheels accumulated a lot of complexity because pip resolves trees, builds from sdists, handles ABI matching, runs install scripts. None of that applies to "drop an ES module into the browser's import map" — so the `.gcupkg` is just "the smallest thing that lets the host know what it has before running it."
 
-**Implementation sketch** (when we do this):
+**Implementation status:**
 
-1. Add `pkg build` subcommand that reads `package.json` + `index.js` + `LICENSE` and produces `<name>@<ver>.gcupkg` via `@gcu/archive`'s `createWriter`.
-2. Add Works tree action: drop-zone for `.gcupkg` → extract under `/lib/local/<name>@<ver>/` → trigger import.
-3. Add `install("file.gcupkg")` shorthand in cells.
-
-This is not in the queue for v1.0. It's a north-star format to design *toward* so we don't lock ourselves out by accident.
+| Piece | Status |
+|---|---|
+| Format reader + installer (`src/js/gcupkg.js`) | shipped 2026-05-25 |
+| `pkg install <file.gcupkg>` in geas | shipped 2026-05-25 |
+| Works tree drop-zone for `.gcupkg` files | shipped 2026-05-25 |
+| `install("file.gcupkg")` cell shorthand | deferred — needs `@gcu/archive` bundled into auditable.html (~226 KB add) |
+| `pkg build` subcommand for producing `.gcupkg` from a workspace package | deferred — out-of-tree packers like `pack-gcupkg.js` in carotte work; in-tree builder is a quality-of-life follow-up |
 
 ### 6.2 Bundled documentation
 
@@ -673,7 +687,7 @@ The `examples/defs/<category>/<name>.txt` system is the host's smoke-test corpus
 - **Naming convention.** `@gcu/<slug>` is conventional but not enforced. Lowercase, no whitespace, semver-tag friendly — but the validator accepts anything that's a string. A linter pass would help here but isn't a runtime concern.
 - **Permissions / capability gating.** Extensions today have full window access. A capability-token model would let users audit what an extension touches (FS / DOM / network / clipboard / …) before approving install. Pre-design; no implementation plan.
 - **Extension marketplace / discovery.** Currently extensions are URL-installed or pkg-installed. A curated registry (signed metadata, version range queries) is an obvious follow-up but not on the near roadmap.
-- **`.gcupkg` actual implementation.** See §6.1.
+- **`install("file.gcupkg")` cell shorthand** + **`pkg build` subcommand**. See §6.1 implementation-status table. The geas `pkg install` path + Works drop-zone already work; the cell-side install() shortcut needs `@gcu/archive` bundled into auditable.html first.
 - **Versioned manifest schema.** When 1.0 ships, a `manifestVersion: 1` field will become required. We'll auto-treat legacy manifests as version 0.
 - **Localization.** `@gcu/soft` ships a pt-BR locale today as a soft-internal concern. If localization becomes a recurring need (UI strings in tagged-language errors, completions), a `manifest.locales` field would surface it. Pre-design.
 

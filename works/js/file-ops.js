@@ -6,6 +6,7 @@ import { Dialog } from '#dialog';
 import { importNotebook } from './import.js';
 import { openPath } from './surfaces.js';
 import { archive } from '#archive';
+import { parseGcupkg, installGcupkg } from '#gcupkg';
 
 const basename = (p) => p.split('/').filter(Boolean).pop() || p;
 const parentOf = (p) => {
@@ -420,6 +421,12 @@ export function installGlobalFileDrop() {
     ev.preventDefault();
     for (const file of ev.dataTransfer.files) {
       try {
+        // .gcupkg — sideload an extension. Binary path, separate from
+        // the notebook-import flow (which is text-based).
+        if (file.name.toLowerCase().endsWith('.gcupkg')) {
+          await installDroppedGcupkg(file);
+          continue;
+        }
         const content = await file.text();
         const projPath = await importNotebook(content, file.name);
         await openPath(projPath);
@@ -432,6 +439,53 @@ export function installGlobalFileDrop() {
   };
   document.addEventListener('dragover', onDragOver);
   document.addEventListener('drop', onDrop);
+}
+
+// Sideload a .gcupkg dropped from the OS file picker. Parses the archive,
+// validates, installs into /lib/ + /usr/share/, hydrates _installedModules
+// so load() resolves immediately. Refreshes the tree at the end so the new
+// /lib entry is visible.
+async function installDroppedGcupkg(file) {
+  setStatus('reading ' + file.name + '…');
+  const bytes = new Uint8Array(await file.arrayBuffer());
+
+  let parsed;
+  try {
+    parsed = await parseGcupkg(bytes, { archive });
+  } catch (e) {
+    setStatus(`gcupkg parse failed: ${e.message}`);
+    throw e;
+  }
+
+  // Permissive install — broken integrity surfaces in the lockfile + status
+  // bar but doesn't block. Matches `pkg install` behavior.
+  const result = await installGcupkg(parsed, {
+    vfs:              WKS.vfs,
+    installedModules: typeof window !== 'undefined' ? window._installedModules : null,
+  });
+
+  const verdict = parsed.integrity.ok === false
+    ? ' (⚠ integrity mismatch)'
+    : (parsed.integrity.ok === true ? ' ✓' : '');
+  setStatus(`installed ${parsed.meta.name}@${parsed.meta.version}${verdict} → ${result.libPath}`);
+  console.log('[works] gcupkg installed:', {
+    name: parsed.meta.name,
+    version: parsed.meta.version,
+    libPath: result.libPath,
+    examples: result.exampleCount,
+    docs: result.docsCount,
+    hasAdder: result.hasAdder,
+    integrity: parsed.integrity,
+    suggested: result.hasAdder
+      ? `load("${parsed.meta.name}"); load("${parsed.meta.name}/adder");`
+      : `load("${parsed.meta.name}");`,
+  });
+
+  // Tree refresh — the workspace VFS change usually triggers this via the
+  // existing VFS.Changed signal, but kick it explicitly to be safe.
+  try {
+    WKS.worksBus?.signal({ interface: 'VFS', member: 'Changed' }, [{ path: '/lib', op: 'gcupkg-install' }]);
+  } catch { /* not yet wired — fine */ }
 }
 
 // ── Tree drag-to-move ───────────────────────────────────────────────

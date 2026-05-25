@@ -137,6 +137,10 @@ if (target === 'works' || target === 'works-all') {
     // service and by tree.js's Extract/Compress/Download actions. Vendors
     // fflate (ZIP) + fzstd (zstd decode) — both inlined in the bundle.
     ['archive',  'ext/archive/index.js'],
+    // .gcupkg consumer (EXTENSION_SPEC §6.1) — used by file-ops.js to
+    // sideload extensions dropped onto the workspace. Pure logic; takes
+    // the archive lib as a parameter.
+    ['gcupkg',   'src/js/gcupkg.js'],
   ]) {
     const p = path.join(__dirname, rel);
     if (!fs.existsSync(p)) {
