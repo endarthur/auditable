@@ -245,3 +245,179 @@ describe('built-in cell types via manifests', () => {
     assert.ok(!_ctIsBuiltin('python'));
   });
 });
+
+// ── manifest.requires — cross-extension dependency check (EXTENSION_SPEC.md §2.4) ──
+
+describe('registerExtension — manifest.requires', () => {
+  // Note: we don't have a clean way to unregister between tests in this
+  // harness, so each test uses uniquely-named manifests to avoid bleed.
+
+  it('passes when no requires field', () => {
+    assert.doesNotThrow(() => registerExtension({
+      name: '@test/req-empty', version: '0.1.0',
+    }));
+  });
+
+  it('passes when requires is satisfied (exact)', () => {
+    registerExtension({ name: '@test/req-base-1', version: '1.2.3' });
+    assert.doesNotThrow(() => registerExtension({
+      name: '@test/req-dep-1', version: '0.1.0',
+      requires: { '@test/req-base-1': '1.2.3' },
+    }));
+  });
+
+  it('passes when requires is satisfied (>=)', () => {
+    registerExtension({ name: '@test/req-base-gte', version: '1.5.0' });
+    assert.doesNotThrow(() => registerExtension({
+      name: '@test/req-dep-gte', version: '0.1.0',
+      requires: { '@test/req-base-gte': '>=1.0.0' },
+    }));
+  });
+
+  it('passes when requires is satisfied (^ — locked major)', () => {
+    registerExtension({ name: '@test/req-base-caret', version: '1.5.0' });
+    assert.doesNotThrow(() => registerExtension({
+      name: '@test/req-dep-caret', version: '0.1.0',
+      requires: { '@test/req-base-caret': '^1.0.0' },
+    }));
+  });
+
+  it('passes when requires is satisfied (~ — locked minor)', () => {
+    registerExtension({ name: '@test/req-base-tilde', version: '1.2.9' });
+    assert.doesNotThrow(() => registerExtension({
+      name: '@test/req-dep-tilde', version: '0.1.0',
+      requires: { '@test/req-base-tilde': '~1.2.0' },
+    }));
+  });
+
+  it('passes when requires is *', () => {
+    registerExtension({ name: '@test/req-base-star', version: '0.0.1' });
+    assert.doesNotThrow(() => registerExtension({
+      name: '@test/req-dep-star', version: '0.1.0',
+      requires: { '@test/req-base-star': '*' },
+    }));
+  });
+
+  it('throws on missing dep', () => {
+    assert.throws(
+      () => registerExtension({
+        name: '@test/req-missing-dep', version: '0.1.0',
+        requires: { '@test/never-installed': '>=1.0.0' },
+      }),
+      /requires "@test\/never-installed" >=1\.0\.0 but it is not registered/,
+    );
+  });
+
+  it('throws on out-of-range version (exact)', () => {
+    registerExtension({ name: '@test/req-oor-exact', version: '1.2.3' });
+    assert.throws(
+      () => registerExtension({
+        name: '@test/req-oor-exact-dep', version: '0.1.0',
+        requires: { '@test/req-oor-exact': '1.2.4' },
+      }),
+      /requires "@test\/req-oor-exact" 1\.2\.4 but 1\.2\.3 is registered/,
+    );
+  });
+
+  it('throws on out-of-range version (^ — major mismatch)', () => {
+    registerExtension({ name: '@test/req-oor-caret', version: '2.0.0' });
+    assert.throws(
+      () => registerExtension({
+        name: '@test/req-oor-caret-dep', version: '0.1.0',
+        requires: { '@test/req-oor-caret': '^1.0.0' },
+      }),
+      /requires "@test\/req-oor-caret" \^1\.0\.0 but 2\.0\.0 is registered/,
+    );
+  });
+
+  it('throws on out-of-range version (~ — minor mismatch)', () => {
+    registerExtension({ name: '@test/req-oor-tilde', version: '1.3.0' });
+    assert.throws(
+      () => registerExtension({
+        name: '@test/req-oor-tilde-dep', version: '0.1.0',
+        requires: { '@test/req-oor-tilde': '~1.2.0' },
+      }),
+      /requires "@test\/req-oor-tilde" ~1\.2\.0 but 1\.3\.0 is registered/,
+    );
+  });
+
+  it('throws on > when version equals target', () => {
+    registerExtension({ name: '@test/req-gt-eq', version: '1.0.0' });
+    assert.throws(
+      () => registerExtension({
+        name: '@test/req-gt-eq-dep', version: '0.1.0',
+        requires: { '@test/req-gt-eq': '>1.0.0' },
+      }),
+      /requires "@test\/req-gt-eq" >1\.0\.0 but 1\.0\.0 is registered/,
+    );
+  });
+
+  it('throws on malformed requires shape — array', () => {
+    assert.throws(
+      () => registerExtension({
+        name: '@test/req-bad-shape-array', version: '0.1.0',
+        requires: ['@gcu/foo'],
+      }),
+      /requires must be an object/,
+    );
+  });
+
+  it('throws on malformed requires shape — non-string range', () => {
+    assert.throws(
+      () => registerExtension({
+        name: '@test/req-bad-shape-nonstr', version: '0.1.0',
+        requires: { '@gcu/foo': 1 },
+      }),
+      /requires\["@gcu\/foo"\] must be a non-empty range string/,
+    );
+  });
+
+  it('throws on unrecognized range syntax', () => {
+    assert.throws(
+      () => registerExtension({
+        name: '@test/req-bad-range', version: '0.1.0',
+        requires: { '@gcu/foo': '1.x' },
+      }),
+      /requires\["@gcu\/foo"\] = "1\.x" is not a recognized range/,
+    );
+  });
+
+  it('rejects disjunction (|| not in supported subset)', () => {
+    assert.throws(
+      () => registerExtension({
+        name: '@test/req-disjunction', version: '0.1.0',
+        requires: { '@gcu/foo': '1.0.0 || 2.0.0' },
+      }),
+      /is not a recognized range/,
+    );
+  });
+
+  it('checks requires BEFORE applying contributions (fail-fast invariant)', () => {
+    // If the contribution were applied first then the check ran, a failed
+    // register would leave the cell-type wired even though the extension
+    // "didn't register." Verify the cell-type isn't in _cellTypes after a
+    // requires failure.
+    assert.throws(() => registerExtension({
+      name: '@test/req-failfast', version: '0.1.0',
+      requires: { '@test/req-failfast-missing': '>=1.0.0' },
+      cellType: {
+        name: 'failfast-celltype',
+        capabilities: { executable: true, definesScope: false, hasOutput: false, hasEditor: true },
+        execute: () => {},
+      },
+    }));
+    assert.equal(window._cellTypes['failfast-celltype'], undefined,
+      'cellType should NOT have been wired when requires failed');
+  });
+
+  it('reports the requiring extension name in the error', () => {
+    // Good error messages name BOTH the requiring extension and the dep.
+    assert.throws(
+      () => registerExtension({
+        name: '@test/req-namedinerror', version: '0.1.0',
+        requires: { '@test/req-namedinerror-missing': '>=1.0.0' },
+      }),
+      /"@test\/req-namedinerror" requires/,
+    );
+  });
+});

@@ -35,6 +35,82 @@ const _pluginCellTypes = new Map();
 
 const _SEMVER_RE = /^\d+\.\d+\.\d+(?:[-+].*)?$/;
 
+// ── Semver range subset (EXTENSION_SPEC.md §2.4) ──
+//
+// Intentionally a small subset of node-semver: exact, >=, >, ^, ~, *.
+// Disjunctions and AND-combinations are deliberately unsupported — if
+// you need them, your extension is too coupled to its deps.
+
+function _parseSemver(v) {
+  const m = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(v);
+  if (!m) return null;
+  return [+m[1], +m[2], +m[3]];
+}
+
+function _cmpSemver(a, b) {
+  if (a[0] !== b[0]) return a[0] - b[0];
+  if (a[1] !== b[1]) return a[1] - b[1];
+  return a[2] - b[2];
+}
+
+// Parse a range string into { op, target }; return null if unrecognized.
+function _parseRange(range) {
+  if (typeof range !== 'string') return null;
+  const trimmed = range.trim();
+  if (trimmed === '*') return { op: '*', target: null };
+
+  let op = '=';
+  let rest = trimmed;
+  if (rest.startsWith('>=')) { op = '>='; rest = rest.slice(2); }
+  else if (rest.startsWith('>'))  { op = '>';  rest = rest.slice(1); }
+  else if (rest.startsWith('^'))  { op = '^';  rest = rest.slice(1); }
+  else if (rest.startsWith('~'))  { op = '~';  rest = rest.slice(1); }
+  else if (rest.startsWith('='))  { op = '=';  rest = rest.slice(1); }
+
+  const target = _parseSemver(rest.trim());
+  if (!target) return null;
+  return { op, target };
+}
+
+function _satisfiesRange(version, range) {
+  const parsed = _parseRange(range);
+  if (!parsed) return false;
+  if (parsed.op === '*') return true;
+
+  const v = _parseSemver(version);
+  if (!v) return false;
+  const cmp = _cmpSemver(v, parsed.target);
+
+  switch (parsed.op) {
+    case '=':  return cmp === 0;
+    case '>':  return cmp > 0;
+    case '>=': return cmp >= 0;
+    case '^':  return cmp >= 0 && v[0] === parsed.target[0];
+    case '~':  return cmp >= 0 && v[0] === parsed.target[0] && v[1] === parsed.target[1];
+    default:   return false;
+  }
+}
+
+// Walk a manifest's requires map; throw on the first missing or out-of-range
+// dependency. Returns silently when every dep is satisfied (or none declared).
+function _checkRequires(manifest) {
+  const req = manifest.requires;
+  if (!req || typeof req !== 'object') return;
+  for (const [name, range] of Object.entries(req)) {
+    const dep = _manifests.get(name);
+    if (!dep) {
+      throw new Error(
+        `registerExtension: "${manifest.name}" requires "${name}" ${range} but it is not registered`
+      );
+    }
+    if (!_satisfiesRange(dep.version, range)) {
+      throw new Error(
+        `registerExtension: "${manifest.name}" requires "${name}" ${range} but ${dep.version} is registered`
+      );
+    }
+  }
+}
+
 // ── Validation ──
 
 function _validateManifest(m) {
@@ -83,12 +159,30 @@ function _validateManifest(m) {
   if (m.contextHook && typeof m.contextHook.setup !== 'function') {
     throw new Error('registerExtension: contextHook.setup must be a function');
   }
+  if (m.requires !== undefined) {
+    if (m.requires === null || typeof m.requires !== 'object' || Array.isArray(m.requires)) {
+      throw new Error('registerExtension: manifest.requires must be an object mapping names to range strings');
+    }
+    for (const [name, range] of Object.entries(m.requires)) {
+      if (typeof range !== 'string' || !range) {
+        throw new Error(`registerExtension: requires["${name}"] must be a non-empty range string`);
+      }
+      if (!_parseRange(range)) {
+        throw new Error(`registerExtension: requires["${name}"] = "${range}" is not a recognized range (expected one of: 1.2.3, >=1.2.3, >1.2.3, ^1.2.3, ~1.2.3, *)`);
+      }
+    }
+  }
 }
 
 // ── Public API: registerExtension ──
 
 export function registerExtension(manifest) {
   _validateManifest(manifest);
+  // Cross-extension dependency check — spec §2.3 step 1. Fail-fast before
+  // any contribution is wired so a missing dep can't leave half-registered
+  // state behind. A silently-missing dep would be the worst plugin-ecosystem
+  // debug mode imaginable.
+  _checkRequires(manifest);
 
   const existing = _manifests.get(manifest.name);
   if (existing) {
