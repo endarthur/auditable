@@ -213,6 +213,26 @@ body {
 .tree-project .tree-icon { color: var(--au-action); }
 .tree-file .tree-label { color: var(--au-fg-muted); }
 
+/* Chevron column — present on every row for vertical alignment; only
+   shows a glyph (▸ / ▾) on expandable rows (folders + projects). On
+   projects the chevron sits left of the kind icon and is the ONLY
+   clickable affordance for expansion (the rest of the row is the
+   open-on-double-click target). */
+.tree-chevron {
+  flex: none;
+  width: 0.9em;
+  text-align: center;
+  color: var(--au-fg-soft);
+  font-size: 9px;
+  line-height: 1;
+}
+.tree-project .tree-chevron {
+  cursor: pointer;
+}
+.tree-project .tree-chevron:hover {
+  color: var(--au-fg);
+}
+
 .works-rails {
   flex: 1;
   min-width: 0;

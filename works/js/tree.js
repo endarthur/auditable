@@ -79,9 +79,10 @@ export async function refreshTree() {
 }
 
 // Build the tree model under `dir`. A directory with a project.json is a
-// project (a leaf — its insides are the surface's concern, not the tree's);
-// any other directory is a folder. Lazy: only expanded folders are read, so
-// /lib and mounted folders cost nothing until opened.
+// project (rendered with its kind icon + title — but ALSO expandable like
+// a folder so the user can peek at /attachments, generated XJNL, etc.);
+// any other directory is a folder. Lazy: only expanded folders/projects
+// are read, so /lib and mounted folders cost nothing until opened.
 async function walk(dir) {
   const entries = await WKS.vfs.readdir(dir, { stat: true });
   const nodes = [];
@@ -101,7 +102,8 @@ async function walk(dir) {
       } catch { /* unreadable marker → treat as a plain folder */ }
       if (meta) {
         nodes.push({ name: e.name, label, path: p, type: 'project',
-          kind: meta.kind, title: meta.title || label });
+          kind: meta.kind, title: meta.title || label,
+          children: expanded.has(p) ? await walk(p) : null });
       } else {
         nodes.push({ name: e.name, label, path: p, type: 'folder',
           children: expanded.has(p) ? await walk(p) : null });
@@ -122,9 +124,22 @@ function renderNode(node, depth) {
   row.dataset.path = node.path;
   row.style.paddingLeft = (6 + depth * 14) + 'px';
 
+  const isExpandable = (node.type === 'folder' || node.type === 'project');
+  const isOpen = isExpandable && expanded.has(node.path);
+
+  // Chevron column — present on every row so labels stay vertically aligned.
+  // Folders use the chevron as their primary icon; projects render the
+  // chevron as a small affordance ahead of their kind icon (clicking the
+  // chevron toggles expansion, clicking elsewhere opens the project);
+  // files leave it as a non-interactive spacer.
+  const chevron = document.createElement('span');
+  chevron.className = 'tree-chevron';
+  if (isExpandable) chevron.textContent = isOpen ? '▾' : '▸';
+  else              chevron.textContent = ' ';
+
   let icon, label;
   if (node.type === 'folder') {
-    icon = expanded.has(node.path) ? '▾' : '▸';
+    icon = null;                            // chevron alone is enough
     label = node.label || node.name;
   } else if (node.type === 'project') {
     icon = (kindDef(node.kind) || {}).icon || '■';
@@ -134,21 +149,36 @@ function renderNode(node, depth) {
     label = node.label || node.name;
   }
 
-  const iconEl = document.createElement('span');
-  iconEl.className = 'tree-icon';
-  iconEl.textContent = icon;
+  row.appendChild(chevron);
+  if (icon !== null) {
+    const iconEl = document.createElement('span');
+    iconEl.className = 'tree-icon';
+    iconEl.textContent = icon;
+    row.appendChild(iconEl);
+  }
   const labelEl = document.createElement('span');
   labelEl.className = 'tree-label';
   labelEl.textContent = label;
-  row.append(iconEl, labelEl);
+  row.appendChild(labelEl);
   _treeEl.appendChild(row);
 
+  const toggle = () => {
+    if (expanded.has(node.path)) expanded.delete(node.path);
+    else expanded.add(node.path);
+    refreshTree();
+  };
+
   if (node.type === 'folder') {
-    row.addEventListener('click', () => {
-      if (expanded.has(node.path)) expanded.delete(node.path);
-      else expanded.add(node.path);
-      refreshTree();
+    // Folder: whole row toggles, no dblclick (folders don't open).
+    row.addEventListener('click', toggle);
+  } else if (node.type === 'project') {
+    // Project: chevron toggles (stop propagation so the row click doesn't
+    // also fire); the rest of the row opens on double-click.
+    chevron.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggle();
     });
+    row.addEventListener('dblclick', () => openPath(node.path));
   } else {
     row.addEventListener('dblclick', () => openPath(node.path));
   }
@@ -161,7 +191,7 @@ function renderNode(node, depth) {
   // Ctrl+drop copies; plain drop moves.
   attachTreeRowDnd(row, node);
 
-  if (node.type === 'folder' && node.children) {
+  if (isExpandable && node.children) {
     for (const c of node.children) renderNode(c, depth + 1);
   }
 }
