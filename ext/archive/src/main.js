@@ -21,4 +21,5 @@ export * from './source.js';
 export * from './sink.js';
 export * from './zip.js';
 export * from './tar.js';
+export * from './gz.js';
 export * from './api.js';

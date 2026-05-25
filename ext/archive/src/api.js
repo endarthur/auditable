@@ -22,29 +22,40 @@ import { normalizeSource } from './source.js';
 import { normalizeSink } from './sink.js';
 import { listZip, readZip, extractZip } from './zip.js';
 import { listTar, readTar, extractTar } from './tar.js';
+import { gunzipBytes, gzipBytes, _gzInnerName } from './gz.js';
 
 async function _resolveSourceFormat(src) {
   const bytes = await src.bytes();
   const detected = detectFormat(bytes);
-  if (detected) return { bytes, format: detected };
+  if (detected) return { bytes, format: detected, name: src.name };
   if (src.name) {
     const hinted = magicForFormat(src.name);
-    if (hinted) return { bytes, format: hinted };
+    if (hinted) return { bytes, format: hinted, name: src.name };
   }
   throw new Error('archive: could not detect format (no magic bytes match, no extension hint)');
 }
 
+// Peel off one gzip wrapper and re-detect the inner payload. Returns the
+// same { bytes, format, name } shape as _resolveSourceFormat. For tar.gz
+// the inner is 'tar'; for a single-file gzip of a CSV the inner is null
+// (no archive format) and we report 'gz' as a single-entry container.
+async function _unwrapGz(bytes, name) {
+  const inner = await gunzipBytes(bytes);
+  const innerFormat = detectFormat(inner);
+  const innerName = _gzInnerName(name);
+  if (innerFormat) return { bytes: inner, format: innerFormat, name: innerName };
+  // Single-file gzip — report as a synthetic 'gz' container holding one
+  // entry whose path is the derived inner name.
+  return { bytes: inner, format: 'gz-single', name: innerName, innerName };
+}
+
 function _explainUnsupported(format) {
   switch (format) {
-    case 'tar.gz':
     case 'tar.zst':
-      return `archive: ${format} requires the gz/zst decompression layer (not yet wired — coming with gz.js + zst.js)`;
+    case 'zst':
+      return `archive: zst not yet wired (zst.js coming next chunk)`;
     case 'tar.xz':
     case 'tar.bz2':
-      return `archive: ${format} requires a lazy-loaded Wasm decoder (not yet wired)`;
-    case 'gz':
-    case 'zst':
-      return `archive: single-file ${format} helpers not yet wired (gz/zst handlers coming next)`;
     case 'xz':
     case 'bz2':
       return `archive: ${format} requires a lazy-loaded Wasm decoder (not yet wired)`;
@@ -65,9 +76,17 @@ export const archive = {
 
   async list(source) {
     const src = normalizeSource(source);
-    const { bytes, format } = await _resolveSourceFormat(src);
+    let resolved = await _resolveSourceFormat(src);
+    if (resolved.format === 'gz' || resolved.format === 'tar.gz') {
+      resolved = await _unwrapGz(resolved.bytes, resolved.name);
+    }
+    const { bytes, format } = resolved;
     if (format === 'zip') return listZip(bytes);
     if (format === 'tar') return listTar(bytes);
+    if (format === 'gz-single') {
+      // Single-file gzip → 1-entry archive shape.
+      return [{ path: resolved.innerName, type: 'file', size: bytes.length }];
+    }
     throw new Error(_explainUnsupported(format));
   },
 
@@ -76,22 +95,94 @@ export const archive = {
       throw new TypeError('archive.read: innerPath must be a non-empty string');
     }
     const src = normalizeSource(source);
-    const { bytes, format } = await _resolveSourceFormat(src);
+    let resolved = await _resolveSourceFormat(src);
+    if (resolved.format === 'gz' || resolved.format === 'tar.gz') {
+      resolved = await _unwrapGz(resolved.bytes, resolved.name);
+    }
+    const { bytes, format } = resolved;
     if (format === 'zip') return readZip(bytes, innerPath);
     if (format === 'tar') return readTar(bytes, innerPath);
+    if (format === 'gz-single') {
+      return innerPath === resolved.innerName ? bytes : null;
+    }
     throw new Error(_explainUnsupported(format));
   },
 
   async extract(source, sink, opts) {
     const src = normalizeSource(source);
     const dst = normalizeSink(sink);
-    const { bytes, format } = await _resolveSourceFormat(src);
+    let resolved = await _resolveSourceFormat(src);
+    if (resolved.format === 'gz' || resolved.format === 'tar.gz') {
+      resolved = await _unwrapGz(resolved.bytes, resolved.name);
+    }
+    const { bytes, format } = resolved;
     let result;
     if (format === 'zip')      result = await extractZip(bytes, dst, opts);
     else if (format === 'tar') result = await extractTar(bytes, dst, opts);
+    else if (format === 'gz-single') {
+      // Write the single decompressed payload at its derived inner name.
+      const overwrite = (opts && opts.overwrite) || 'error';
+      let target = resolved.innerName;
+      if (await dst.exists(target)) {
+        if (overwrite === 'error') throw new Error(`extract: destination exists — ${target}`);
+        else if (overwrite === 'skip') { result = { count: 0, paths: [] }; }
+        else if (overwrite === 'rename') target = await _autoRename(dst, target);
+      }
+      if (!result) {
+        await dst.writeFile(target, bytes);
+        result = { count: 1, paths: [target] };
+      }
+    }
     else throw new Error(_explainUnsupported(format));
     // For memory sinks, surface the result map directly — caller convenience.
     if (dst.kind === 'memory') return dst.result();
     return result;
   },
+
+  // Single-file gzip helpers. Sink semantics differ from extract's: the
+  // sink's `path` (when vfs) is the OUTPUT FILE, not a destination directory
+  // — gunzip writes one byte stream, not many entries. memory sink returns
+  // a one-key Map keyed by the derived inner name.
+  async gzip(source, sink) {
+    const src = normalizeSource(source);
+    const bytes = await src.bytes();
+    const compressed = await gzipBytes(bytes);
+    return _writeSingle(sink, compressed, (src.name || 'data') + '.gz');
+  },
+
+  async gunzip(source, sink) {
+    const src = normalizeSource(source);
+    const bytes = await src.bytes();
+    const inner = await gunzipBytes(bytes);
+    return _writeSingle(sink, inner, _gzInnerName(src.name));
+  },
 };
+
+// Write a single byte stream to whatever shape of sink the caller passed.
+// Used by archive.gzip and archive.gunzip; bypasses normalizeSink because
+// the directory-shaped semantics there don't fit single-file destinations.
+async function _writeSingle(sink, bytes, defaultName) {
+  if (sink === 'memory') {
+    const m = new Map();
+    m.set(defaultName, bytes);
+    return m;
+  }
+  if (sink && typeof sink === 'object' && sink.vfs && typeof sink.path === 'string') {
+    const r = sink.vfs.writeFile(sink.path, bytes);
+    if (r && typeof r.then === 'function') await r;
+    return { count: 1, paths: [sink.path] };
+  }
+  throw new TypeError('sink: single-file helpers expect { vfs, path: <file> } or "memory"');
+}
+
+async function _autoRename(sink, name) {
+  const dot = name.lastIndexOf('.');
+  const slash = name.lastIndexOf('/');
+  const stem = (dot > slash) ? name.slice(0, dot) : name;
+  const ext  = (dot > slash) ? name.slice(dot)    : '';
+  for (let i = 2; i < 1000; i++) {
+    const candidate = `${stem} (${i})${ext}`;
+    if (!(await sink.exists(candidate))) return candidate;
+  }
+  throw new Error('extract: too many rename collisions');
+}

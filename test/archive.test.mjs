@@ -10,6 +10,7 @@ import {
   normalizeSource, normalizeSink,
   listZip, readZip,
   listTar, readTar, writeTar,
+  gunzipBytes, gzipBytes,
   archive,
 } from '../ext/archive/src/main.js';
 
@@ -302,13 +303,10 @@ test('archive.extract: filter callback excludes entries', async () => {
   assert.ok(!r.has('README.md'));
 });
 
-test('archive.list: gz / zst report not-yet-wired', async () => {
-  for (const magic of [
-    new Uint8Array([0x1f, 0x8b, 0, 0]),                            // gz
-    new Uint8Array([0x28, 0xb5, 0x2f, 0xfd]),                       // zst
-  ]) {
-    await assert.rejects(() => archive.list(magic), /not yet wired/);
-  }
+test('archive.list: zst reports not-yet-wired', async () => {
+  await assert.rejects(
+    () => archive.list(new Uint8Array([0x28, 0xb5, 0x2f, 0xfd])),
+    /not yet wired/);
 });
 
 // ── tar fixtures ────────────────────────────────────────────────────────
@@ -472,6 +470,148 @@ test('archive.extract: tar overwrite=rename auto-suffixes', async () => {
   assert.equal(r.count, 4);
   const files = r.paths.filter((p) => !p.endsWith('/'));
   assert.ok(files.every((p) => /\(\d+\)/.test(p)), 'expected renamed: ' + files.join(', '));
+});
+
+// ── gz layer: gunzipBytes / gzipBytes ───────────────────────────────────
+
+test('gzipBytes / gunzipBytes round-trip', async () => {
+  const payload = enc('the quick brown fox jumps over the lazy dog '.repeat(20));
+  const compressed = await gzipBytes(payload);
+  // Magic bytes on the output.
+  assert.equal(compressed[0], 0x1f);
+  assert.equal(compressed[1], 0x8b);
+  assert.ok(compressed.length < payload.length, 'expected gz to be smaller than source');
+  const back = await gunzipBytes(compressed);
+  assert.deepEqual(back, payload);
+});
+
+test('gunzipBytes: rejects non-Uint8Array', async () => {
+  await assert.rejects(() => gunzipBytes('hi'), /Uint8Array/);
+});
+
+// ── tar.gz end-to-end via archive.* ─────────────────────────────────────
+
+async function makeTarGzFixture() {
+  return gzipBytes(makeTarFixture());
+}
+
+test('archive.detect: tar.gz reports gz (the outer layer)', async () => {
+  const targz = await makeTarGzFixture();
+  assert.equal(await archive.detect(targz), 'gz');
+});
+
+test('archive.list: tar.gz transparently unwraps gzip → tar', async () => {
+  const targz = await makeTarGzFixture();
+  const entries = await archive.list(targz);
+  const files = entries.filter((e) => e.type === 'file').map((e) => e.path).sort();
+  assert.deepEqual(files, ['README.md', 'data/notes.txt', 'data/sample.csv']);
+});
+
+test('archive.read: tar.gz extracts one entry', async () => {
+  const targz = await makeTarGzFixture();
+  const bytes = await archive.read(targz, 'data/notes.txt');
+  assert.equal(new TextDecoder().decode(bytes), 'lorem ipsum');
+});
+
+test('archive.extract: tar.gz into memory sink', async () => {
+  const targz = await makeTarGzFixture();
+  const result = await archive.extract(targz, 'memory');
+  assert.equal(new TextDecoder().decode(result.get('README.md')), '# hello\n');
+});
+
+// ── single-file .gz (no inner archive) ──────────────────────────────────
+
+test('archive.list: single-file .gz reports synthetic 1-entry archive', async () => {
+  const csv = enc('a,b,c\n1,2,3\n');
+  const gz = await gzipBytes(csv);
+  // Provide a name hint via the source wrapper.
+  const entries = await archive.list({ vfs: { readFile: () => gz }, path: '/data.csv.gz' });
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].path, 'data.csv');
+  assert.equal(entries[0].size, csv.length);
+});
+
+test('archive.read: single-file .gz returns decompressed bytes', async () => {
+  const csv = enc('a,b,c\n1,2,3\n');
+  const gz = await gzipBytes(csv);
+  const bytes = await archive.read({ vfs: { readFile: () => gz }, path: '/data.csv.gz' }, 'data.csv');
+  assert.deepEqual(bytes, csv);
+});
+
+test('archive.read: single-file .gz returns null for wrong innerPath', async () => {
+  const gz = await gzipBytes(enc('hi'));
+  const r = await archive.read({ vfs: { readFile: () => gz }, path: '/x.gz' }, 'not-the-name');
+  assert.equal(r, null);
+});
+
+test('archive.extract: single-file .gz writes decompressed payload', async () => {
+  const csv = enc('a,b,c\n');
+  const gz = await gzipBytes(csv);
+  const written = new Map();
+  const vfs = {
+    readFile: () => gz,
+    writeFile: async (p, b) => written.set(p, b),
+    mkdir: async () => {},
+    exists: async () => false,
+  };
+  await archive.extract({ vfs, path: '/data.csv.gz' }, { vfs, path: '/out' });
+  assert.ok(written.has('/out/data.csv'));
+  assert.deepEqual(written.get('/out/data.csv'), csv);
+});
+
+// ── single-file gzip / gunzip helpers ───────────────────────────────────
+
+test('archive.gzip: VFS source → VFS destination (file path)', async () => {
+  const src = enc('hello world ' .repeat(50));
+  const written = new Map();
+  const vfs = {
+    readFile:  (p) => p === '/data.csv' ? src : null,
+    writeFile: async (p, b) => written.set(p, b),
+  };
+  const r = await archive.gzip(
+    { vfs, path: '/data.csv' },
+    { vfs, path: '/data.csv.gz' }
+  );
+  assert.equal(r.count, 1);
+  assert.ok(written.has('/data.csv.gz'));
+  // The bytes at the destination should be a valid gzip stream.
+  const gz = written.get('/data.csv.gz');
+  assert.equal(gz[0], 0x1f);
+  assert.equal(gz[1], 0x8b);
+  assert.deepEqual(await gunzipBytes(gz), src);
+});
+
+test('archive.gunzip: VFS .gz source → VFS destination', async () => {
+  const payload = enc('decompressed');
+  const gz = await gzipBytes(payload);
+  const written = new Map();
+  const vfs = {
+    readFile:  () => gz,
+    writeFile: async (p, b) => written.set(p, b),
+  };
+  await archive.gunzip(
+    { vfs, path: '/data.csv.gz' },
+    { vfs, path: '/data.csv' }
+  );
+  assert.deepEqual(written.get('/data.csv'), payload);
+});
+
+test('archive.gzip + gunzip: memory sink returns 1-entry Map', async () => {
+  const src = enc('hi');
+  const compressed = await archive.gzip(src, 'memory');
+  assert.equal(compressed.size, 1);
+  // Key is the default 'data.gz' since the source had no name hint.
+  const onlyKey = [...compressed.keys()][0];
+  assert.match(onlyKey, /\.gz$/);
+});
+
+test('archive.gunzip: memory sink', async () => {
+  const src = enc('payload');
+  const gz = await gzipBytes(src);
+  const result = await archive.gunzip(gz, 'memory');
+  assert.equal(result.size, 1);
+  const [, bytes] = [...result.entries()][0];
+  assert.deepEqual(bytes, src);
 });
 
 test('archive.list: unrecognized format throws', async () => {
