@@ -14,17 +14,21 @@ async function _call(fn, ...args) {
   return (r && typeof r.then === 'function') ? await r : r;
 }
 
-// Read the file at path as bytes. The VFS contract is loose — some backends
-// default to utf8 strings, others return Uint8Array. Try the explicit bytes
-// mode first; fall back to utf8 + TextEncoder if that fails or returns junk.
+// Read the file at path as raw bytes. We MUST pass 'bytes' as the encoding
+// here — most VFS backends (MemoryBackend, IDBBackend, CommentBackend) will
+// otherwise call TextDecoder().decode() on Uint8Array contents and produce
+// a string with U+FFFD substituted for every byte outside a valid UTF-8
+// sequence. Encoding that string back to utf8 is lossy and silently
+// corrupts binary files (compresses fine, extracts to garbage).
 async function _readBytes(vfs, path) {
-  // Try a bytes-mode request when supported.
   try {
-    const r = await _call(vfs.readFile.bind(vfs), path);
+    const r = await _call(vfs.readFile.bind(vfs), path, 'bytes');
     if (r instanceof Uint8Array) return r;
     if (r && r.buffer && typeof r.byteLength === 'number') {
       return new Uint8Array(r.buffer, r.byteOffset || 0, r.byteLength);
     }
+    // Some backends always return strings — treat as utf8 text. Lossy for
+    // binary but matches the only sensible fallback for an ambiguous API.
     if (typeof r === 'string') return new TextEncoder().encode(r);
   } catch (e) {
     throw new Error(`walk: read ${path} failed: ${e.message || e}`);

@@ -52,7 +52,15 @@ export function normalizeSource(input) {
     if (input.vfs && typeof input.path === 'string') {
       return {
         bytes: async () => {
-          const r = input.vfs.readFile(input.path);
+          // Request 'bytes' encoding explicitly — without it, the
+          // MemoryBackend returns TextDecoder().decode(bytes), which
+          // substitutes U+FFFD for any byte outside a valid UTF-8 sequence
+          // and corrupts binary. CommentBackend / IDBBackend behave
+          // similarly. Backends that don't recognize 'bytes' fall through
+          // to the same code path; the resulting string is encoded back to
+          // utf8, which round-trips for text but not for binary — same
+          // behaviour as before for those backends.
+          const r = input.vfs.readFile(input.path, 'bytes');
           const v = (r && typeof r.then === 'function') ? await r : r;
           if (v instanceof Uint8Array) return v;
           if (typeof v === 'string') return new TextEncoder().encode(v);

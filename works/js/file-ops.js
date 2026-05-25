@@ -5,6 +5,7 @@ import { WKS, setStatus } from './state.js';
 import { Dialog } from '#dialog';
 import { importNotebook } from './import.js';
 import { openPath } from './surfaces.js';
+import { archive } from '#archive';
 
 const basename = (p) => p.split('/').filter(Boolean).pop() || p;
 const parentOf = (p) => {
@@ -175,10 +176,13 @@ export async function downloadFile(path) {
   if (!path) return;
   let bytes;
   try {
-    // VFS.readFile(p) returns a string (utf8) by default; ask for the raw
-    // bytes so binary files round-trip cleanly. Falls back to utf8 if the
-    // backend doesn't support a bytes mode.
-    const r = await WKS.vfs.readFile(path);
+    // MUST pass 'bytes' — without it the MemoryBackend (and most others)
+    // TextDecoder().decode() the file contents and substitute U+FFFD for
+    // any non-UTF-8-valid bytes. Encoding that string back to UTF-8 is
+    // lossy and corrupts any binary file (e.g. downloading a ZIP through
+    // this path used to land bytes 10..12 as `ef bf bd` because the binary
+    // header was UTF-8-laundered on the way out).
+    const r = await WKS.vfs.readFile(path, 'bytes');
     if (typeof r === 'string') bytes = new TextEncoder().encode(r);
     else if (r instanceof Uint8Array) bytes = r;
     else if (r && r.buffer) bytes = new Uint8Array(r.buffer);
@@ -197,6 +201,150 @@ export async function downloadFile(path) {
   // Slight delay before revoke — Firefox needs the URL live during click.
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   setStatus('downloaded ' + basename(path));
+}
+
+// Recognized archive file extensions. Used by tree.js to decide whether to
+// surface Extract / Preview actions in the context menu. The actual format
+// detection (magic-byte sniff) happens inside @gcu/archive — this regex is
+// just for the menu population pass.
+export const ARCHIVE_EXT_RE = /\.(zip|tar|tar\.gz|tgz|tar\.zst|tzst|tar\.xz|txz|tar\.bz2|tbz2|gz|zst)$/i;
+
+// Strip a recognized archive extension off a basename. Returns the stem
+// suitable for use as an extracted-directory name. e.g.
+//   'data.tar.gz' → 'data'    'archive.zip' → 'archive'    'foo.gz' → 'foo'
+function _stripArchiveExt(name) {
+  return name.replace(ARCHIVE_EXT_RE, '');
+}
+
+// Resolve a destination path that may collide with an existing entry by
+// auto-suffixing. Mirrors Finder-style 'foo (2).zip' / 'foo (3).zip'.
+// Used for Extract here (target directory) and Compress as (target file)
+// — both want non-destructive defaults.
+async function _uniqueDest(path) {
+  if (!(await WKS.vfs.exists(path))) return path;
+  // Split into stem + ext (last extension only — '.tar.gz' loses '.gz' here,
+  // which is fine because the suffix lives inside the stem anyway:
+  //   '/foo.tar.gz' → '/foo.tar (2).gz'  is mildly ugly but unambiguous).
+  const slash = path.lastIndexOf('/');
+  const base = path.slice(slash + 1);
+  const dot = base.lastIndexOf('.');
+  const stem = (dot > 0) ? path.slice(0, slash + 1 + dot) : path;
+  const ext  = (dot > 0) ? path.slice(slash + 1 + dot)    : '';
+  for (let i = 2; i < 1000; i++) {
+    const candidate = `${stem} (${i})${ext}`;
+    if (!(await WKS.vfs.exists(candidate))) return candidate;
+  }
+  throw new Error('rename: too many collisions');
+}
+
+// Trigger the browser save dialog for arbitrary bytes. Shared by
+// downloadFile and downloadFolder so the blob-URL handling is in one place.
+function _triggerDownload(bytes, filename) {
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// Compress a workspace folder into a ZIP and trigger a browser download.
+// The folder isn't touched; archive.compress walks the VFS in-memory and
+// produces a single Uint8Array. Recommended for folders up to ~hundreds
+// of MB — beyond that the in-memory build will choke the tab.
+export async function downloadFolder(path) {
+  if (!path) return;
+  const name = path.split('/').filter(Boolean).pop() || 'archive';
+  setStatus(`zipping ${name}…`);
+  try {
+    const result = await archive.compress(
+      { vfs: WKS.vfs, path },
+      'memory',
+      { format: 'zip' }
+    );
+    const [, bytes] = [...result.entries()][0];
+    _triggerDownload(bytes, name + '.zip');
+    setStatus(`downloaded ${name}.zip`);
+  } catch (e) {
+    setStatus('download failed: ' + (e.message || e));
+  }
+}
+
+// Extract an archive file into a sibling directory. The dir name is derived
+// from the archive's basename minus the extension; collisions auto-rename
+// Finder-style. After completion, refreshes the tree and opens the result.
+export async function extractArchiveHere(srcPath) {
+  if (!srcPath) return;
+  const parentDir = (() => {
+    const i = srcPath.lastIndexOf('/');
+    return i <= 0 ? '/' : srcPath.slice(0, i);
+  })();
+  const stem = _stripArchiveExt(srcPath.split('/').pop());
+  const desired = parentDir === '/' ? '/' + stem : `${parentDir}/${stem}`;
+  const dest = await _uniqueDest(desired);
+  setStatus(`extracting to ${dest}…`);
+  try {
+    await archive.extract(
+      { vfs: WKS.vfs, path: srcPath },
+      { vfs: WKS.vfs, path: dest },
+      { overwrite: 'rename' }   // belt + suspenders — _uniqueDest already de-collided the root
+    );
+    setStatus(`extracted to ${dest}`);
+    return dest;
+  } catch (e) {
+    setStatus('extract failed: ' + (e.message || e));
+    return null;
+  }
+}
+
+// Extract an archive file into a user-picked directory. Reuses Move/Copy's
+// folder-picker dialog (defined later in this file).
+export async function extractArchiveToPrompt(srcPath) {
+  if (!srcPath) return;
+  const dest = await pickFolder('Extract to which folder?', srcPath);
+  if (!dest) return;
+  setStatus(`extracting to ${dest}…`);
+  try {
+    await archive.extract(
+      { vfs: WKS.vfs, path: srcPath },
+      { vfs: WKS.vfs, path: dest },
+      { overwrite: 'rename' }
+    );
+    setStatus(`extracted to ${dest}`);
+    return dest;
+  } catch (e) {
+    setStatus('extract failed: ' + (e.message || e));
+    return null;
+  }
+}
+
+// Compress a folder into an archive file in the SAME parent directory.
+// Format is 'zip' or 'tar.gz'. Output filename = folder name + extension,
+// auto-renamed on collision.
+export async function compressFolderTo(srcPath, format) {
+  if (!srcPath) return;
+  const parentDir = (() => {
+    const i = srcPath.lastIndexOf('/');
+    return i <= 0 ? '/' : srcPath.slice(0, i);
+  })();
+  const name = srcPath.split('/').filter(Boolean).pop() || 'archive';
+  const ext = format === 'tar.gz' ? '.tar.gz' : '.zip';
+  const desired = parentDir === '/' ? '/' + name + ext : `${parentDir}/${name}${ext}`;
+  const dest = await _uniqueDest(desired);
+  setStatus(`compressing to ${dest}…`);
+  try {
+    await archive.compress(
+      { vfs: WKS.vfs, path: srcPath },
+      { vfs: WKS.vfs, path: dest },
+      { format }
+    );
+    setStatus(`compressed to ${dest}`);
+    return dest;
+  } catch (e) {
+    setStatus('compress failed: ' + (e.message || e));
+    return null;
+  }
 }
 
 export async function moveToPrompt(srcPath) {

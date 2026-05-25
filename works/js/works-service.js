@@ -9,6 +9,7 @@ import { mountFolder, unmountAt } from './mount.js';
 import { applyWorkspaceSettings, readSettings, writeSettings } from './settings-store.js';
 import { showAbout } from './about.js';
 import { aggregateFromBuildLicenses } from '#licenses';
+import { archive } from '#archive';
 
 // Build-time-injected vendored license manifest (see build.js's
 // injectBuildLicenses). Source-level empty so dev/test runs work; build
@@ -118,6 +119,20 @@ export async function setupWorksService() {
     Licenses: {
       methods: {
         Get: () => aggregateFromBuildLicenses(__BUILD_LICENSES__),
+      },
+    },
+    // Archive operations against the workspace VFS — used by the preview
+    // surface (to render a .zip's contents inline) and by any future surface
+    // that needs to extract / compress without bundling @gcu/archive itself.
+    // Tree.js calls archive directly (it's already shell-side) and bypasses
+    // this — A-Bus is for IFRAME-sandboxed surfaces.
+    Archive: {
+      methods: {
+        List:     (srcPath)                  => archive.list({ vfs, path: srcPath }),
+        Read:     (srcPath, innerPath)       => archive.read({ vfs, path: srcPath }, innerPath),
+        Detect:   (srcPath)                  => archive.detect({ vfs, path: srcPath }),
+        Extract:  (srcPath, destPath, opts)  => archive.extract({ vfs, path: srcPath }, { vfs, path: destPath }, opts || {}),
+        Compress: (srcPath, destPath, opts)  => archive.compress({ vfs, path: srcPath }, { vfs, path: destPath }, opts || {}),
       },
     },
   });

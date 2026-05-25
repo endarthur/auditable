@@ -3576,7 +3576,15 @@ function normalizeSource(input) {
     if (input.vfs && typeof input.path === 'string') {
       return {
         bytes: async () => {
-          const r = input.vfs.readFile(input.path);
+          // Request 'bytes' encoding explicitly — without it, the
+          // MemoryBackend returns TextDecoder().decode(bytes), which
+          // substitutes U+FFFD for any byte outside a valid UTF-8 sequence
+          // and corrupts binary. CommentBackend / IDBBackend behave
+          // similarly. Backends that don't recognize 'bytes' fall through
+          // to the same code path; the resulting string is encoded back to
+          // utf8, which round-trips for text but not for binary — same
+          // behaviour as before for those backends.
+          const r = input.vfs.readFile(input.path, 'bytes');
           const v = (r && typeof r.then === 'function') ? await r : r;
           if (v instanceof Uint8Array) return v;
           if (typeof v === 'string') return new TextEncoder().encode(v);
@@ -4189,17 +4197,21 @@ async function _call(fn, ...args) {
   return (r && typeof r.then === 'function') ? await r : r;
 }
 
-// Read the file at path as bytes. The VFS contract is loose — some backends
-// default to utf8 strings, others return Uint8Array. Try the explicit bytes
-// mode first; fall back to utf8 + TextEncoder if that fails or returns junk.
+// Read the file at path as raw bytes. We MUST pass 'bytes' as the encoding
+// here — most VFS backends (MemoryBackend, IDBBackend, CommentBackend) will
+// otherwise call TextDecoder().decode() on Uint8Array contents and produce
+// a string with U+FFFD substituted for every byte outside a valid UTF-8
+// sequence. Encoding that string back to utf8 is lossy and silently
+// corrupts binary files (compresses fine, extracts to garbage).
 async function _readBytes(vfs, path) {
-  // Try a bytes-mode request when supported.
   try {
-    const r = await _call(vfs.readFile.bind(vfs), path);
+    const r = await _call(vfs.readFile.bind(vfs), path, 'bytes');
     if (r instanceof Uint8Array) return r;
     if (r && r.buffer && typeof r.byteLength === 'number') {
       return new Uint8Array(r.buffer, r.byteOffset || 0, r.byteLength);
     }
+    // Some backends always return strings — treat as utf8 text. Lossy for
+    // binary but matches the only sensible fallback for an ambiguous API.
     if (typeof r === 'string') return new TextEncoder().encode(r);
   } catch (e) {
     throw new Error(`walk: read ${path} failed: ${e.message || e}`);

@@ -1002,6 +1002,86 @@ test('archive.compress: tar.gz → extract round-trip preserves content', async 
   }
 });
 
+// Regression: real VFS backends (MemoryBackend, IDBBackend, CommentBackend)
+// UTF-8-decode binary contents on readFile() with no encoding arg —
+// silently substituting U+FFFD for high-bit bytes. The first bug report
+// was a downloaded ZIP that opened as 50 4b 03 04 ... ef bf bd (the magic
+// for U+FFFD in UTF-8). Without an explicit 'bytes' encoding request,
+// archive.compress's walk → readFile path corrupts any binary file inside
+// the source directory. This test simulates that backend behaviour.
+test('archive: VFS that defaults to utf8-string read still round-trips binary', async () => {
+  // Synthetic backend: defaults to utf8 decode (lossy for binary), but
+  // returns Uint8Array verbatim when called with encoding='bytes'.
+  const files = new Map();
+  const dirs = new Set(['/', '/p']);
+  const stringDefaultVfs = {
+    async readFile(p, encoding) {
+      if (!files.has(p)) throw new Error(`ENOENT: ${p}`);
+      const bytes = files.get(p);
+      if (encoding === 'bytes') return bytes;
+      return new TextDecoder().decode(bytes);  // ← the lossy default
+    },
+    async writeFile(p, content) {
+      const bytes = content instanceof Uint8Array
+        ? content : new TextEncoder().encode(content);
+      files.set(p, bytes);
+      // Track parent dirs as 'directory' for stat/readdir.
+      let cur = p;
+      while (cur !== '/' && cur.length > 0) {
+        const slash = cur.lastIndexOf('/');
+        cur = slash <= 0 ? '/' : cur.slice(0, slash);
+        dirs.add(cur);
+      }
+    },
+    async readdir(p) {
+      const norm = p.replace(/\/+$/, '') || '/';
+      if (!dirs.has(norm)) throw new Error(`ENOENT: ${p}`);
+      const prefix = norm === '/' ? '/' : norm + '/';
+      const names = new Set();
+      for (const f of files.keys()) {
+        if (!f.startsWith(prefix)) continue;
+        const rest = f.slice(prefix.length);
+        const slash = rest.indexOf('/');
+        names.add(slash >= 0 ? rest.slice(0, slash) : rest);
+      }
+      return [...names];
+    },
+    async stat(p) {
+      if (files.has(p)) return { type: 'file', size: files.get(p).length };
+      if (dirs.has(p)) return { type: 'directory' };
+      throw new Error(`ENOENT: ${p}`);
+    },
+    async mkdir(p) { dirs.add(p.replace(/\/+$/, '')); },
+    async exists(p) { return files.has(p) || dirs.has(p); },
+  };
+
+  // Stash a deliberately binary file (high-bit bytes everywhere) inside the
+  // source dir to be compressed.
+  const binaryPayload = new Uint8Array([0xff, 0xfe, 0xfd, 0x80, 0x81, 0x82, 0x00, 0x01]);
+  await stringDefaultVfs.writeFile('/p/binary.bin', binaryPayload);
+  await stringDefaultVfs.writeFile('/p/text.txt', new TextEncoder().encode('hello\n'));
+
+  // Compress → extract → confirm bytes round-trip exactly.
+  const result = await archive.compress(
+    { vfs: stringDefaultVfs, path: '/p' },
+    'memory',
+    { format: 'zip' }
+  );
+  const [, zipBytes] = [...result.entries()][0];
+  const extracted = await archive.extract(zipBytes, 'memory');
+  assert.deepEqual(
+    extracted.get('binary.bin'), binaryPayload,
+    'binary file bytes corrupted through compress/extract — VFS encoding handling bug'
+  );
+  assert.deepEqual(extracted.get('text.txt'), new TextEncoder().encode('hello\n'));
+
+  // Sanity-check the synthetic backend actually exhibits the lossy default —
+  // otherwise this test would pass even if my fix regressed.
+  const lossyRead = await stringDefaultVfs.readFile('/p/binary.bin');
+  assert.equal(typeof lossyRead, 'string',
+    'synthetic backend should default to string read for this regression test');
+});
+
 test('archive.list: unrecognized format throws', async () => {
   await assert.rejects(() => archive.list(new Uint8Array([0, 0, 0, 0])),
     /could not detect format/);

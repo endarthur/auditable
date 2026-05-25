@@ -13,7 +13,11 @@ import { openPath, spawnSurface } from './surfaces.js';
 import { unmountAt } from './mount.js';
 import { importFileAsNotebook } from './import.js';
 import { exportProject, exportProjectAsIpynb } from './project-export.js';
-import { moveToPrompt, copyToPrompt, attachTreeRowDnd, downloadFile } from './file-ops.js';
+import {
+  moveToPrompt, copyToPrompt, attachTreeRowDnd, downloadFile,
+  downloadFolder, extractArchiveHere, extractArchiveToPrompt, compressFolderTo,
+  ARCHIVE_EXT_RE,
+} from './file-ops.js';
 
 const IMPORTABLE_RE = /\.(html?|txt|ipynb)$/i;
 
@@ -188,11 +192,25 @@ async function showMenu(e, path, type) {
   if (type === 'project') extras.push({ label: 'Export as .ipynb',      action: 'export-ipynb' });
   if (type === 'file' && IMPORTABLE_RE.test(basename(path)))
     extras.push(                        { label: 'Import as notebook',  action: 'import-file' });
-  // Download — applies to any loose file. Routes the bytes through the
-  // browser save dialog (filename preserved). Folder/project download
-  // is a follow-up once @gcu/archive lands.
-  if (type === 'file')
+  // Archive ops — Extract here / Extract to… surface for any file whose
+  // extension looks like a recognized archive format. The actual format
+  // detection happens inside @gcu/archive when the action runs; this regex
+  // just gates menu population. Magic-byte mismatch (e.g. someone renamed
+  // a non-archive .zip) surfaces as a clear error at extract time.
+  if (type === 'file' && ARCHIVE_EXT_RE.test(basename(path))) {
+    extras.push({ label: 'Extract here',                                action: 'extract-here' });
+    extras.push({ label: 'Extract to…',                            action: 'extract-to' });
+  }
+  // Compress / Download — applies to folders and to single files. For
+  // folders we zip-on-the-fly; for files we stream the bytes through the
+  // browser save dialog as-is.
+  if (type === 'folder' || type === 'project') {
+    extras.push({ label: 'Compress as .zip',                            action: 'compress-zip' });
+    extras.push({ label: 'Compress as .tar.gz',                         action: 'compress-tgz' });
+    extras.push({ label: 'Download',                                    action: 'download-folder' });
+  } else if (type === 'file') {
     extras.push(                        { label: 'Download',            action: 'download' });
+  }
   if (extras.length) items.push('---', ...extras);
 
   // Rename / Move / Copy / Delete / Unmount — not for `/` or the
@@ -226,6 +244,23 @@ async function showMenu(e, path, type) {
   else if (action === 'export-ipynb') exportProjectAsIpynb(path);
   else if (action === 'import-file') importFileAsNotebook(path);
   else if (action === 'download')    downloadFile(path);
+  else if (action === 'download-folder') downloadFolder(path);
+  else if (action === 'extract-here') {
+    const dest = await extractArchiveHere(path);
+    if (dest) { await refreshTree(); }
+  }
+  else if (action === 'extract-to') {
+    const dest = await extractArchiveToPrompt(path);
+    if (dest) { await refreshTree(); }
+  }
+  else if (action === 'compress-zip') {
+    const dest = await compressFolderTo(path, 'zip');
+    if (dest) { await refreshTree(); }
+  }
+  else if (action === 'compress-tgz') {
+    const dest = await compressFolderTo(path, 'tar.gz');
+    if (dest) { await refreshTree(); }
+  }
   else if (action === 'rename')      renameEntry(path, type);
   else if (action === 'move-to')     moveToPrompt(path);
   else if (action === 'copy-to')     copyToPrompt(path);

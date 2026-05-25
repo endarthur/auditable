@@ -133,6 +133,10 @@ if (target === 'works' || target === 'works-all') {
     // Licenses.Get and by the workspace Settings surface to render the
     // licenses table. See licenses-spec §7.3 + §8.1.
     ['licenses', 'ext/licenses/index.js'],
+    // Archive format handling — used by works-service.js's Archive A-Bus
+    // service and by tree.js's Extract/Compress/Download actions. Vendors
+    // fflate (ZIP) + fzstd (zstd decode) — both inlined in the bundle.
+    ['archive',  'ext/archive/index.js'],
   ]) {
     const p = path.join(__dirname, rel);
     if (!fs.existsSync(p)) {
