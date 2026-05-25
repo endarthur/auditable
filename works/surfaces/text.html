@@ -80,12 +80,21 @@
     user-select: none;
     background: var(--au-surface);
     border-right: 1px solid var(--au-border);
-    overflow: hidden;
+    /* Scrollable but the scrollbar is hidden — gutter.scrollTop is
+       synced with the textarea's scrollTop on every scroll event.
+       More robust than transform: scrollTop is preserved across
+       layout reflows (find-bar toggle, status-bar toggle, window
+       resize); transform was getting stranded with stale values. */
+    overflow-y: scroll;
+    overflow-x: hidden;
+    scrollbar-width: none;          /* Firefox */
+    -ms-overflow-style: none;       /* IE/old Edge */
     white-space: pre;
     font-variant-numeric: tabular-nums;
     min-width: 3em;
     box-sizing: border-box;
   }
+  .gutter::-webkit-scrollbar { display: none; }
   .gutter.hidden { display: none; }
   textarea {
     flex: 1 1 auto;
@@ -259,17 +268,16 @@ function updateStatus() {
   sSize.textContent = fmtBytes(v.length);
 }
 
+// Mirror the textarea's vertical scroll on the gutter. The gutter is a
+// scrollable element with its scrollbar hidden via CSS — we just keep
+// scrollTop in lockstep. Survives layout reflows (find-bar toggle,
+// status-bar toggle, wrap toggle, window resize) without needing a
+// ResizeObserver, because scrollTop is a layout-stable property in a
+// way transform isn't.
 function syncGutterScroll() {
-  gutter.style.transform = 'translateY(' + (-editor.scrollTop) + 'px)';
+  gutter.scrollTop = editor.scrollTop;
 }
 editor.addEventListener('scroll', syncGutterScroll);
-// Layout reflows (find-bar toggle, status-bar toggle, window resize,
-// etc.) can move scrollTop without firing a scroll event. Resync on
-// any size change so the gutter doesn't get pushed off-screen with a
-// stale transform.
-if (typeof ResizeObserver !== 'undefined') {
-  new ResizeObserver(syncGutterScroll).observe(editor);
-}
 editor.addEventListener('keyup',   updateStatus);
 editor.addEventListener('click',   updateStatus);
 editor.addEventListener('mouseup', updateStatus);
