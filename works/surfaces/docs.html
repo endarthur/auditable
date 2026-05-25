@@ -85,7 +85,7 @@
     font-family: ui-monospace, 'Space Mono', monospace;
   }
   .search-hit .snippet mark {
-    background: rgba(217, 122, 60, 0.3); color: #ffe080;
+    background: var(--au-action-soft); color: var(--au-fg);
     padding: 0 2px; border-radius: 2px;
   }
   .search-suggest {
@@ -106,7 +106,7 @@
   .sidebar {
     position: absolute; top: 0; left: 0; bottom: 0; width: 280px;
     overflow: auto;
-    border-right: 1px solid var(--au-border); background: #161a1e;
+    border-right: 1px solid var(--au-border); background: var(--au-surface-raised);
     font-family: ui-monospace, 'Space Mono', monospace; font-size: 11px;
     padding: 8px 0;
     transform: translateX(-100%);
@@ -148,7 +148,7 @@
   .content p { margin: 0 0 12px; }
   .content code {
     font-family: ui-monospace, 'Space Mono', monospace;
-    background: var(--au-surface-bright); color: #d2c0a3;
+    background: var(--au-surface-bright); color: var(--au-fg);
     padding: 1px 5px; border-radius: 2px;
     font-size: 0.92em;
   }
@@ -176,7 +176,7 @@
   }
   .content th { background: var(--au-surface-raised); color: var(--au-fg); }
   .empty { color: var(--au-fg-soft); padding: 8px 16px; font-style: italic; }
-  .err { color: #f88; padding: 20px; }
+  .err { color: var(--au-error); padding: 20px; }
 
   /* Right-side TOC. */
   .toc {
@@ -252,18 +252,18 @@
   .content .admonition p:last-child { margin-bottom: 0; }
   .content .admonition > p:first-of-type { margin-top: 0; }
   /* Per-type accents. */
-  .content .adm-tip       { border-left-color: #6cc674; }
-  .content .adm-tip       .admonition-title { color: #6cc674; }
+  .content .adm-tip       { border-left-color: var(--au-success); }
+  .content .adm-tip       .admonition-title { color: var(--au-success); }
   .content .adm-note      { border-left-color: var(--au-info); }
   .content .adm-note      .admonition-title { color: var(--au-info); }
   .content .adm-info      { border-left-color: var(--au-info); }
   .content .adm-info      .admonition-title { color: var(--au-info); }
-  .content .adm-warning   { border-left-color: #e8c87c; }
-  .content .adm-warning   .admonition-title { color: #e8c87c; }
-  .content .adm-danger    { border-left-color: #f88c8c; }
-  .content .adm-danger    .admonition-title { color: #f88c8c; }
-  .content .adm-abstract  { border-left-color: #c8a0e8; }
-  .content .adm-abstract  .admonition-title { color: #c8a0e8; }
+  .content .adm-warning   { border-left-color: var(--au-warn); }
+  .content .adm-warning   .admonition-title { color: var(--au-warn); }
+  .content .adm-danger    { border-left-color: var(--au-error); }
+  .content .adm-danger    .admonition-title { color: var(--au-error); }
+  .content .adm-abstract  { border-left-color: var(--au-selected); }
+  .content .adm-abstract  .admonition-title { color: var(--au-selected); }
 
   /* Keyboard pills (++ctrl+enter++ → <kbd>ctrl</kbd>+<kbd>enter</kbd>). */
   .content kbd {
@@ -279,14 +279,15 @@
     margin: 0 1px;
   }
 
-  /* Syntax highlighting tokens. */
-  .content .tok-comment  { color: #6a6e74; font-style: italic; }
-  .content .tok-string   { color: #b8e6b8; }
-  .content .tok-number   { color: #e8c87c; }
+  /* Syntax highlighting tokens. Mapped onto semantic accents so they
+     flip with the theme. */
+  .content .tok-comment  { color: var(--au-fg-soft); font-style: italic; }
+  .content .tok-string   { color: var(--au-success); }
+  .content .tok-number   { color: var(--au-warn); }
   .content .tok-keyword  { color: var(--au-info); }
-  .content .tok-builtin  { color: #d2c0a3; }
-  .content .tok-tag      { color: #f0a0a0; }
-  .content .tok-attr     { color: #e8c87c; }
+  .content .tok-builtin  { color: var(--au-selected); }
+  .content .tok-tag      { color: var(--au-error); }
+  .content .tok-attr     { color: var(--au-warn); }
   .content .tok-punct    { color: var(--au-fg-muted); }
 </style>
 </head>
