@@ -431,6 +431,25 @@ export async function newFolder(dir, name) {
   }
 }
 
+// Replace the first `/// title: …` line in a notebook.txt header with a
+// new title. If there's no title line at all, inserts one after the
+// leading `/// auditable` directive. Returns the original text unchanged
+// if neither anchor is found (defensive — uncommon for a real notebook).
+function _patchTitleHeader(txt, newTitle) {
+  // Try the existing-title path first — match the FIRST `/// title:`
+  // line only, to avoid clobbering anything inside a markdown cell that
+  // happens to look like a directive.
+  const re = /^\/\/\/ title:.*$/m;
+  if (re.test(txt)) return txt.replace(re, '/// title: ' + newTitle);
+  // Insert after `/// auditable` directive line.
+  const audMatch = txt.match(/^\/\/\/ auditable\s*$/m);
+  if (audMatch) {
+    const i = audMatch.index + audMatch[0].length;
+    return txt.slice(0, i) + '\n/// title: ' + newTitle + txt.slice(i);
+  }
+  return txt;
+}
+
 async function renameEntry(path, type) {
   // For projects, the displayed name is project.json's `title`, which can
   // diverge from the directory basename (titles allow spaces / mixed case).
@@ -461,6 +480,19 @@ async function renameEntry(path, type) {
       projectMeta.title = trimmed;
       await WKS.vfs.writeFile(path + '/project.json',
         JSON.stringify(projectMeta, null, 2));
+
+      // Also patch notebook.txt's `/// title:` header line, if present.
+      // The notebook surface reads its title from there and emits
+      // Surface:TitleChanged on boot — which OVERRIDES project.json's
+      // title in the tab. Without this, an opened-after-rename tab would
+      // still show the old title because the notebook self-reports it.
+      try {
+        const txt = await WKS.vfs.readFile(path + '/notebook.txt', 'utf8');
+        const updated = _patchTitleHeader(txt, trimmed);
+        if (updated !== txt) {
+          await WKS.vfs.writeFile(path + '/notebook.txt', updated);
+        }
+      } catch { /* no notebook.txt, or unreadable — fine */ }
     }
     // Always attempt the directory rename — even for projects, since the
     // path is user-visible (URLs, pkg local: refs, copy-path).
@@ -473,6 +505,21 @@ async function renameEntry(path, type) {
         return;
       }
       await WKS.vfs.rename(path, newPath);
+      // Walk WKS.surfaces and patch any tab whose path was under the
+      // renamed dir. Updates rec.path so subsequent openPath dedups
+      // correctly + updates the rails tab title for projects. Doesn't
+      // rebind the surface iframe — the file content lives at the new
+      // path now, but the iframe's in-memory state is unaffected by
+      // the rename (it doesn't know its own path).
+      for (const [tabId, rec] of WKS.surfaces) {
+        if (rec.path === path || rec.path.startsWith(path + '/')) {
+          rec.path = newPath + rec.path.slice(path.length);
+          if (rec.path === newPath && type === 'project') {
+            rec.title = trimmed;
+            try { WKS.rails.updateTab(tabId, { title: trimmed }); } catch {}
+          }
+        }
+      }
     }
     setStatus('renamed to ' + trimmed);
   } catch (e) {
