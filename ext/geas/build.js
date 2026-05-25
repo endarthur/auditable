@@ -49,6 +49,22 @@ if (fs.existsSync(archivePath)) {
   console.warn('geas: ext/archive/index.js not found — archive builtins will fail at runtime');
 }
 
+// ── Prepend @gcu/licenses's pre-built bundle ─────────────────────────
+// pkg-cmd.js needs fetchLicense/aggregateLicenses/formatTable in scope
+// so it can enrich /lib/<pkg>/ with package.json + LICENSE at install
+// time and render the `pkg licenses` table. Same reasoning as archive:
+// worker context doesn't resolve the import map; inlining keeps geas
+// self-contained.
+const licensesPath = path.resolve(__dirname, '..', 'licenses', 'index.js');
+if (fs.existsSync(licensesPath)) {
+  let licensesSrc = fs.readFileSync(licensesPath, 'utf8');
+  licensesSrc = licensesSrc.replace(/^export\s*\{[\s\S]*?\};?\s*$/gm, '');
+  licensesSrc = licensesSrc.replace(/^\n+/, '').replace(/\n+$/, '');
+  chunks.push('// -- licenses/index.js (pre-built bundle, prepended) --\n\n' + licensesSrc);
+} else {
+  console.warn('geas: ext/licenses/index.js not found — pkg licenses subcommand will fail at runtime');
+}
+
 for (const entry of importEntries) {
   const filePath = entry.rel
     ? path.join(srcDir, entry.rel)

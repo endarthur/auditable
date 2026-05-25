@@ -5,9 +5,13 @@
 // Spec: spec_inbox/auditable-pkg-spec.md.
 //
 // Subcommands (v1):
-//   pkg install <alias>      — fetch, verify, write to /lib + lockfile
+//   pkg install <alias>      — fetch, verify, write to /lib + lockfile;
+//                              also fetches package.json + LICENSE from the
+//                              registry CDN so aggregateLicenses picks it up
 //   pkg install              — restore every entry from /lib/.gcu-lock.json
-//   pkg list                 — list installed modules
+//   pkg list                 — list installed modules with SPDX badges
+//   pkg licenses             — aggregate license table across the workspace
+//                              (delegates to @gcu/licenses aggregateLicenses)
 //   pkg freeze               — print the workspace lockfile
 //   pkg remove <alias>       — drop the entry + its /lib directory
 //   pkg help                 — usage
@@ -162,6 +166,19 @@ async function _installOne(ctx, alias) {
   const meta = { alias, url: finalUrl, kind: 'js',
     installedAt: new Date().toISOString(), size: sourceBytes.length };
   if (integrity) meta.integrity = integrity;
+
+  // Best-effort license capture — fetches package.json + LICENSE from the
+  // registry's CDN (esm.sh → jsdelivr for npm, jsr.io for jsr, etc.) via
+  // the @gcu/licenses URL-aware handlers. Writes both files alongside the
+  // source so aggregateLicenses(vfs)'s walkLib picks the entry up without
+  // any pkg-specific knowledge. Records a small license hint on meta so
+  // `pkg list` can show it without re-traversing the FS.
+  //
+  // Failures here are NEVER fatal to the install — the package is already
+  // on disk; the licence info is enrichment.
+  const licInfo = await _captureLicense(ctx, dir, finalUrl);
+  if (licInfo) meta.license = licInfo;
+
   await vfs.writeFile(dir + '/meta.json', JSON.stringify(meta));
 
   const lockfile = await _readLockfile(vfs);
@@ -169,7 +186,76 @@ async function _installOne(ctx, alias) {
   await _writeLockfile(vfs, lockfile);
 
   await ctx.stdout(`installed ${alias} (${sourceBytes.length} bytes) → ${finalUrl}\n`);
+  if (licInfo && licInfo.spdx) {
+    await ctx.stdout(`  license: ${licInfo.spdx}${licInfo.spdxSource ? ` (${licInfo.spdxSource})` : ''}\n`);
+  }
   return 0;
+}
+
+// Resolve @gcu/licenses symbols. In the geas worker bundle they're
+// prepended into module scope; outside that context (tests, dev tooling)
+// callers can inject via globalThis. Returns null when neither is set.
+function _resolveLicensesSym(name) {
+  // The bare reference must be wrapped in typeof to be safe when undeclared.
+  // (typeof of an unresolvable reference returns 'undefined', never throws.)
+  if (name === 'fetchLicense') {
+    if (typeof fetchLicense === 'function') return fetchLicense;
+  } else if (name === 'aggregateLicenses') {
+    if (typeof aggregateLicenses === 'function') return aggregateLicenses;
+  } else if (name === 'formatTable') {
+    if (typeof formatTable === 'function') return formatTable;
+  }
+  if (typeof globalThis !== 'undefined' && typeof globalThis[name] === 'function') {
+    return globalThis[name];
+  }
+  return null;
+}
+
+// _captureLicense — best-effort. Returns the meta hint to store, or null
+// on any failure (network, missing registry support, etc.). Always swallows
+// errors; the install continues regardless.
+//
+// Writes two artifacts to <dir> when available:
+//   <dir>/package.json  — minimal { name, version, license } so walkLib's
+//                          spdxFromPackageJson picks it up
+//   <dir>/LICENSE       — raw license text
+//
+// Returns the small hint:
+//   { spdx, spdxSource, fetchedFrom, copyright? }
+async function _captureLicense(ctx, dir, finalUrl) {
+  const fetchLic = _resolveLicensesSym('fetchLicense');
+  if (!fetchLic) return null;  // licenses bundle not loaded
+  let result;
+  try {
+    result = await fetchLic(finalUrl);
+  } catch (e) {
+    // network / parsing failure — silent.
+    return null;
+  }
+  if (!result) return null;
+
+  // Persist what we have. package.json shape mirrors the minimal subset
+  // walkLib's spdxFromPackageJson reads — name + version + license.
+  if (result.spdx) {
+    const pkgJson = {
+      name: result.pkg || null,
+      version: result.version || null,
+      license: result.spdx,
+    };
+    try { await ctx.vfs.writeFile(dir + '/package.json', JSON.stringify(pkgJson, null, 2)); }
+    catch { /* non-fatal */ }
+  }
+  if (result.text) {
+    try { await ctx.vfs.writeFile(dir + '/LICENSE', result.text); }
+    catch { /* non-fatal */ }
+  }
+
+  return {
+    spdx: result.spdx || null,
+    spdxSource: result.spdxSource || null,
+    fetchedFrom: result.fetchedFrom || null,
+    copyright: result.copyright || null,
+  };
 }
 
 // pkg install (no args) — restore every entry from the lockfile.
@@ -204,8 +290,33 @@ async function _list(ctx) {
     const m = lockfile.modules[alias];
     const size = m.size ? `${m.size}b` : '?';
     const kind = m.kind || '?';
-    await ctx.stdout(`${alias.padEnd(30)}  ${kind.padEnd(6)}  ${size}\n`);
+    const spdx = (m.license && m.license.spdx) ? m.license.spdx : '-';
+    await ctx.stdout(`${alias.padEnd(30)}  ${kind.padEnd(6)}  ${spdx.padEnd(14)}  ${size}\n`);
   }
+  return 0;
+}
+
+// pkg licenses — aggregate license table over the workspace VFS, formatted
+// for the terminal. Picks up everything walkLib + walkVarModules + walkSys
+// reach (pkg-managed /lib, install()'d /var/modules, build-time /sys/licenses).
+async function _licenses(ctx) {
+  const agg = _resolveLicensesSym('aggregateLicenses');
+  const fmt = _resolveLicensesSym('formatTable');
+  if (!agg || !fmt) {
+    await ctx.stderr('pkg: @gcu/licenses not loaded in this build\n');
+    return 1;
+  }
+  let table;
+  try { table = await agg(ctx.vfs); }
+  catch (e) {
+    await ctx.stderr(`pkg: aggregateLicenses failed: ${e.message || e}\n`);
+    return 1;
+  }
+  if (!table || table.length === 0) {
+    await ctx.stdout('(no licensed components found)\n');
+    return 0;
+  }
+  await ctx.stdout(fmt(table, { format: 'text' }) + '\n');
   return 0;
 }
 
@@ -238,7 +349,8 @@ async function _help(ctx) {
     'subcommands:',
     '  install <alias>     fetch + verify, write to /lib + lockfile',
     '  install             re-install every entry from /lib/.gcu-lock.json',
-    '  list                list installed modules',
+    '  list                list installed modules with SPDX badges',
+    '  licenses            aggregate license table across the workspace',
     '  freeze              print the workspace lockfile',
     '  remove <alias>      delete the entry + its /lib directory',
     '  help                show this message',
@@ -261,13 +373,14 @@ export async function _pkg(argv, ctx) {
     case 'help':
     case '-h':
     case '--help':  return _help(ctx);
-    case 'install': return argv[2] ? _installOne(ctx, argv[2]) : _installFromLockfile(ctx);
-    case 'list':    return _list(ctx);
-    case 'freeze':  return _freeze(ctx);
+    case 'install':  return argv[2] ? _installOne(ctx, argv[2]) : _installFromLockfile(ctx);
+    case 'list':     return _list(ctx);
+    case 'licenses': return _licenses(ctx);
+    case 'freeze':   return _freeze(ctx);
     case 'remove':
-    case 'rm':      if (!argv[2]) { await ctx.stderr('pkg: remove needs <alias>\n'); return 1; }
-                    return _remove(ctx, argv[2]);
-    default:        await ctx.stderr(`pkg: unknown subcommand "${sub}" (try 'pkg help')\n`);
-                    return 1;
+    case 'rm':       if (!argv[2]) { await ctx.stderr('pkg: remove needs <alias>\n'); return 1; }
+                     return _remove(ctx, argv[2]);
+    default:         await ctx.stderr(`pkg: unknown subcommand "${sub}" (try 'pkg help')\n`);
+                     return 1;
   }
 }
