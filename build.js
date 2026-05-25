@@ -64,7 +64,8 @@ function injectBuildLicenses(modules) {
 function processModules(mainPath, moduleDir, opts = {}) {
   const mainSrc = fs.readFileSync(mainPath, 'utf8');
   const importPaths = [];
-  for (const line of mainSrc.split('\n')) {
+  for (const rawLine of mainSrc.split('\n')) {
+    const line = rawLine.replace(/\r$/, '');   // CRLF-safe; $ in the regex won't anchor across \r
     if (opts.lean && line.includes('@optional')) continue;
     const m = line.match(/^import\s+.*['"](\.\.?\/.+?)['"];?\s*(?:\/\/.*)?$/);
     if (m) importPaths.push(m[1]);
@@ -1133,7 +1134,10 @@ console.log(`App runtime: ${appRuntimeSize} KB`);
 function processModulesAsRegistry(mainPath, moduleDir, opts = {}) {
   const mainSrc = fs.readFileSync(mainPath, 'utf8');
   const importPaths = [];
-  for (const line of mainSrc.split('\n')) {
+  for (const rawLine of mainSrc.split('\n')) {
+    // Strip trailing \r so CRLF-saved files don't break the anchor-to-end
+    // match (the $ in the regex sits before \r, not after, on Windows).
+    const line = rawLine.replace(/\r$/, '');
     if (opts.lean && line.includes('@optional')) continue;
     const m = line.match(/^import\s+.*['"](\.\.?\/.+?)['"];?\s*(?:\/\/.*)?$/);
     if (m) importPaths.push(m[1]);
@@ -1185,7 +1189,8 @@ function processExtensionAsRegistry(extName, srcDir) {
   const mainPath = path.join(srcDir, 'main.js');
   const mainSrc = fs.readFileSync(mainPath, 'utf8');
   const importPaths = [];
-  for (const line of mainSrc.split('\n')) {
+  for (const rawLine of mainSrc.split('\n')) {
+    const line = rawLine.replace(/\r$/, '');   // CRLF-safe
     const m = line.match(/^(?:import|export)\s+.*['"]\.\/(.+?)['"];?\s*(?:\/\/.*)?$/);
     if (m) importPaths.push(m[1]); // e.g. 'types.js' or 'lower/js.js'
   }
