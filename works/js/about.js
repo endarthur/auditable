@@ -6,12 +6,19 @@
 // lives in package.json + the build environment; runtime never edits.
 
 import { Dialog } from '#dialog';
+import { openPath } from './surfaces.js';
 
 const __AUDITABLE_VERSION__ = '0.0.0';
 const __AUDITABLE_BUILD_DATE__ = 'dev';
 const __AUDITABLE_RELEASE__ = 'dev';
 const __AUDITABLE_PUBLIC_KEY__ = '';
 const __AUDITABLE_REPO__ = 'endarthur/auditable';
+
+// Build-time-injected vendored license manifest. Same placeholder as
+// works-service.js — build.js rewrites this single line to the real
+// vendor-licenses.json contents. Shape:
+//   { <name>: { spdx, version, homepage, description, text } }
+const __BUILD_LICENSES__ = {};
 
 function _pubKeyShort(key) {
   if (!key) return null;
@@ -74,6 +81,55 @@ export async function showAbout() {
       addRow('License', 'MIT');
 
       wrap.appendChild(rows);
+
+      // Third-party components — every vendored dep baked at build time, with
+      // its SPDX identifier and a click-through to the full text mounted at
+      // /sys/licenses/<name>/LICENSE.
+      const vendored = Object.entries(__BUILD_LICENSES__ || {})
+        .filter(([, e]) => e && typeof e === 'object')
+        .sort(([a], [b]) => a.localeCompare(b));
+      if (vendored.length > 0) {
+        const details = document.createElement('details');
+        details.className = 'about-vendored';
+        const summary = document.createElement('summary');
+        summary.textContent = `Third-party components (${vendored.length})`;
+        details.appendChild(summary);
+
+        const list = document.createElement('ul');
+        for (const [name, entry] of vendored) {
+          const li = document.createElement('li');
+          const nm = document.createElement('span');
+          nm.className = 'about-vendored-name';
+          nm.textContent = name;
+          li.appendChild(nm);
+          if (entry.version) {
+            const v = document.createElement('span');
+            v.className = 'about-vendored-version';
+            v.textContent = ' ' + entry.version;
+            li.appendChild(v);
+          }
+          const sp = document.createElement('span');
+          sp.className = 'about-vendored-spdx';
+          sp.textContent = entry.spdx || 'UNKNOWN';
+          li.appendChild(sp);
+          if (typeof entry.text === 'string' && entry.text.length > 0) {
+            const a = document.createElement('a');
+            a.href = '#';
+            a.className = 'about-vendored-link';
+            a.textContent = 'LICENSE';
+            a.title = `Open /sys/licenses/${name}/LICENSE`;
+            a.onclick = (e) => {
+              e.preventDefault();
+              openPath(`/sys/licenses/${name}/LICENSE`);
+              dialog.close();
+            };
+            li.appendChild(a);
+          }
+          list.appendChild(li);
+        }
+        details.appendChild(list);
+        wrap.appendChild(details);
+      }
 
       const author = document.createElement('div');
       author.className = 'about-author';

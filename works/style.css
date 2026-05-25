@@ -366,6 +366,59 @@ body {
 }
 .about-author a:hover { color: var(--au-action); }
 
+.about-vendored {
+  margin: 8px 0 14px;
+  font-size: 11px;
+  color: var(--au-fg-muted);
+  border-top: 1px solid var(--au-border);
+  padding-top: 10px;
+}
+.about-vendored > summary {
+  cursor: pointer;
+  font-family: ui-monospace, 'Space Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--au-fg-soft);
+  padding: 2px 0;
+  user-select: none;
+  list-style: revert;  /* keep the disclosure triangle */
+}
+.about-vendored ul {
+  list-style: none;
+  padding: 6px 0 0;
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+}
+.about-vendored li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0;
+  font-family: ui-monospace, 'Space Mono', monospace;
+  line-height: 1.5;
+}
+.about-vendored-name {
+  color: var(--au-fg);
+  font-weight: 500;
+}
+.about-vendored-version { color: var(--au-fg-soft); }
+.about-vendored-spdx {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--au-info);
+  padding: 1px 6px;
+  border: 1px solid var(--au-border);
+  border-radius: 2px;
+}
+.about-vendored-link {
+  font-size: 10px;
+  color: var(--au-action);
+  text-decoration: none;
+}
+.about-vendored-link:hover { text-decoration: underline; }
+
 /* GCU thin scrollbar — applies to every scrollable element in the
    shell (file tree, dialogs, picker, …). Surfaces have their own
    iframe origins and style themselves independently. */
