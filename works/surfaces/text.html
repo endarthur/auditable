@@ -14,15 +14,62 @@
     flex-direction: column;
   }
 
-  /* The editor area — gutter + textarea side by side, share a horizontal
-     line height so the line numbers align with the text. Both scroll
-     vertically in lockstep; the textarea owns the actual scrollbar and
-     the gutter is non-scrollable (its scrollTop is mirrored on input). */
+  /* ── Menubar (uses @gcu/menu — injected CSS lives at end of stylesheet) */
+  .menubar-host {
+    flex: none;
+    background: var(--au-surface);
+    border-bottom: 1px solid var(--au-border);
+  }
+
+  /* ── Find/replace bar (toggleable; Ctrl+F / Ctrl+H) */
+  .findbar {
+    flex: none;
+    display: none;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    background: var(--au-surface-raised);
+    border-bottom: 1px solid var(--au-border);
+    font: 11px/1.4 ui-monospace, 'Space Mono', Menlo, monospace;
+  }
+  .findbar.visible { display: flex; }
+  .findbar.has-replace .replace-row { display: flex; }
+  .findbar .row { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; }
+  .findbar .replace-row { display: none; }
+  .findbar input[type=text] {
+    background: var(--au-surface-deep);
+    border: 1px solid var(--au-border);
+    color: var(--au-fg);
+    padding: 2px 6px;
+    font: inherit;
+    width: 200px;
+    outline: none;
+    border-radius: 2px;
+  }
+  .findbar input[type=text]:focus { border-color: var(--au-action); }
+  .findbar button {
+    background: none;
+    border: 1px solid var(--au-border);
+    color: var(--au-fg-muted);
+    padding: 2px 8px;
+    border-radius: 2px;
+    cursor: pointer;
+    font: inherit;
+  }
+  .findbar button:hover { color: var(--au-fg); border-color: var(--au-fg-soft); }
+  .findbar button.on { color: var(--au-action); border-color: var(--au-action); }
+  .findbar .count {
+    color: var(--au-fg-muted);
+    min-width: 5em;
+  }
+  .findbar .spacer { flex: 1; }
+
+  /* ── Editor area ──────────────────────────────────────────────────── */
   .editor {
     flex: 1 1 auto;
-    min-height: 0;          /* allow flex shrink so the inner overflow works */
+    min-height: 0;
     display: flex;
-    overflow: hidden;       /* no double-scrollbar: only the textarea scrolls */
+    overflow: hidden;
     background: var(--au-surface-deep);
   }
   .gutter {
@@ -39,6 +86,7 @@
     min-width: 3em;
     box-sizing: border-box;
   }
+  .gutter.hidden { display: none; }
   textarea {
     flex: 1 1 auto;
     box-sizing: border-box;
@@ -51,7 +99,7 @@
     color: var(--au-fg);
     font: inherit;
     tab-size: 2;
-    white-space: pre;           /* horizontal scroll instead of soft wrap */
+    white-space: pre;
     overflow: auto;
   }
   textarea.wrap {
@@ -59,8 +107,7 @@
     overflow-x: hidden;
   }
 
-  /* Status bar — fixed at the bottom, shows path + cursor + size + dirty.
-     The wrap toggle is a small button rendered inline. */
+  /* ── Status bar ───────────────────────────────────────────────────── */
   .statusbar {
     flex: none;
     display: flex;
@@ -73,6 +120,7 @@
     font: 11px/1.6 ui-monospace, 'Space Mono', Menlo, monospace;
     user-select: none;
   }
+  .statusbar.hidden { display: none; }
   .status-path { color: var(--au-fg); }
   .status-pos, .status-size { color: var(--au-fg-muted); }
   .status-dirty {
@@ -82,19 +130,8 @@
     text-align: center;
   }
   .status-spacer { flex: 1; }
-  .status-btn {
-    background: none;
-    border: 1px solid transparent;
-    color: var(--au-fg-muted);
-    padding: 1px 6px;
-    border-radius: 2px;
-    cursor: pointer;
-    font: inherit;
-  }
-  .status-btn:hover { color: var(--au-fg); border-color: var(--au-border); }
-  .status-btn.on { color: var(--au-action); border-color: var(--au-action); }
 
-  /* GCU thin scrollbar — matches the shell's chrome. */
+  /* ── GCU thin scrollbar ───────────────────────────────────────────── */
   * {
     scrollbar-width: thin;
     scrollbar-color: var(--au-border) transparent;
@@ -116,35 +153,60 @@
   surface: it exercises the whole §5.2 contract (Flush / CanClose / dirty
   tracking / self-flush).
 
-  Notepad-shape with line numbers, status bar, word-wrap toggle, and a
-  Ctrl+S explicit save. CM6-grade syntax highlighting is deliberately
-  out of scope here — most callers want this for LICENSE / README /
-  notebook.txt / config files where the simplicity wins.
+  Notepad-shape with a real menubar (File / Edit / View), line numbers,
+  find/replace bar, status bar, word-wrap toggle. CM6-grade syntax
+  highlighting is deliberately out of scope here — this surface is for
+  LICENSE / README / notebook.txt / config-file editing where the
+  simplicity wins.
 -->
+<div class="menubar-host" id="menubar"></div>
+<div class="findbar" id="findbar" role="search">
+  <div class="row">
+    <span>Find:</span>
+    <input type="text" id="find-input" autocomplete="off" spellcheck="false">
+    <button type="button" id="find-prev" title="Previous match (Shift+Enter)">▲</button>
+    <button type="button" id="find-next" title="Next match (Enter)">▼</button>
+    <button type="button" id="find-case" title="Match case (Alt+C)">Aa</button>
+    <span class="count" id="find-count"></span>
+  </div>
+  <div class="row replace-row">
+    <span>Replace:</span>
+    <input type="text" id="replace-input" autocomplete="off" spellcheck="false">
+    <button type="button" id="replace-one" title="Replace current match">Replace</button>
+    <button type="button" id="replace-all" title="Replace all matches">All</button>
+  </div>
+  <div class="spacer"></div>
+  <button type="button" id="find-close" title="Close (Esc)">✕</button>
+</div>
 <div class="editor">
   <div class="gutter" id="gutter">1</div>
   <textarea id="editor" spellcheck="false" placeholder="loading…" wrap="off"></textarea>
 </div>
-<div class="statusbar">
+<div class="statusbar" id="statusbar">
   <span class="status-dirty" id="status-dirty"> </span>
   <span class="status-path" id="status-path">—</span>
   <span class="status-pos" id="status-pos">ln 1, col 1</span>
   <span class="status-size" id="status-size">0 B</span>
   <span class="status-spacer"></span>
-  <button type="button" class="status-btn" id="btn-wrap" title="Toggle word wrap (off by default)">wrap</button>
 </div>
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
+import { MenuBar } from '../../ext/menu/index.js';
 
 /* @theme-init */
 
-const editor   = document.getElementById('editor');
-const gutter   = document.getElementById('gutter');
-const sDirty   = document.getElementById('status-dirty');
-const sPath    = document.getElementById('status-path');
-const sPos     = document.getElementById('status-pos');
-const sSize    = document.getElementById('status-size');
-const btnWrap  = document.getElementById('btn-wrap');
+const editor    = document.getElementById('editor');
+const gutter    = document.getElementById('gutter');
+const statusBar = document.getElementById('statusbar');
+const sDirty    = document.getElementById('status-dirty');
+const sPath     = document.getElementById('status-path');
+const sPos      = document.getElementById('status-pos');
+const sSize     = document.getElementById('status-size');
+const findBar   = document.getElementById('findbar');
+const findIn    = document.getElementById('find-input');
+const replIn    = document.getElementById('replace-input');
+const findCount = document.getElementById('find-count');
+const btnCase   = document.getElementById('find-case');
 
 const basename = (p) => p.split('/').filter(Boolean).pop() || p;
 const fmtBytes = (n) =>
@@ -152,7 +214,21 @@ const fmtBytes = (n) =>
   : n < 1024 * 1024 ? (n / 1024).toFixed(1) + ' KB'
   : (n / 1024 / 1024).toFixed(1) + ' MB';
 
-// ── Editor state derivations ────────────────────────────────────────────
+// ── View toggles ───────────────────────────────────────────────────────
+// Plain mutable booleans; the menubar re-renders on each open via the
+// thunk we hand to MenuBar, so checkmarks reflect current state.
+let showLineNumbers = true;
+let showStatusBar   = true;
+let wrap            = false;
+
+function applyView() {
+  gutter.classList.toggle('hidden', !showLineNumbers);
+  statusBar.classList.toggle('hidden', !showStatusBar);
+  editor.classList.toggle('wrap', wrap);
+  editor.setAttribute('wrap', wrap ? 'soft' : 'off');
+}
+
+// ── Editor state derivations ───────────────────────────────────────────
 
 function lineColumn(text, idx) {
   let line = 1, lineStart = 0;
@@ -161,28 +237,21 @@ function lineColumn(text, idx) {
   }
   return { line, col: idx - lineStart + 1 };
 }
-
 function lineCount(text) {
   if (text.length === 0) return 1;
   let n = 1;
   for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) n++;
-  // A trailing newline shouldn't render an extra empty line number in the
-  // gutter — but it does add a real line at the cursor's perspective.
   return n;
 }
-
-// Rebuild the gutter when line count changes. Single text node — cheap
-// for documents up to ~100k lines; we never animate, so no perf concern.
 function renderGutter() {
+  if (!showLineNumbers) return;
   const n = lineCount(editor.value);
   let s = '';
   for (let i = 1; i <= n; i++) s += i + '\n';
   gutter.textContent = s;
-  // Widen the gutter for big files so digits don't overflow.
   const digits = String(n).length;
   gutter.style.minWidth = Math.max(3, digits + 1) + 'em';
 }
-
 function updateStatus() {
   const v = editor.value;
   const { line, col } = lineColumn(v, editor.selectionStart);
@@ -190,31 +259,14 @@ function updateStatus() {
   sSize.textContent = fmtBytes(v.length);
 }
 
-// Mirror the textarea's vertical scroll position on the gutter so line
-// numbers stay aligned during scrolling.
 editor.addEventListener('scroll', () => {
-  gutter.scrollTop = editor.scrollTop;
-  // We use overflow:hidden on the gutter, so set scrollTop via padding-trick:
-  // shift the gutter's textNode visually by negative scrollTop.
   gutter.style.transform = 'translateY(' + (-editor.scrollTop) + 'px)';
 });
+editor.addEventListener('keyup',   updateStatus);
+editor.addEventListener('click',   updateStatus);
+editor.addEventListener('mouseup', updateStatus);
 
-editor.addEventListener('keyup',     updateStatus);
-editor.addEventListener('click',     updateStatus);
-editor.addEventListener('mouseup',   updateStatus);
-
-// ── Word-wrap toggle ────────────────────────────────────────────────────
-
-let wrap = false;
-btnWrap.addEventListener('click', () => {
-  wrap = !wrap;
-  editor.classList.toggle('wrap', wrap);
-  editor.setAttribute('wrap', wrap ? 'soft' : 'off');
-  btnWrap.classList.toggle('on', wrap);
-});
-
-// ── Tab key inserts spaces instead of moving focus. ─────────────────────
-
+// Tab key inserts spaces instead of moving focus.
 editor.addEventListener('keydown', (e) => {
   if (e.key === 'Tab') {
     e.preventDefault();
@@ -226,10 +278,186 @@ editor.addEventListener('keydown', (e) => {
   }
 });
 
-// ── A-Bus wire-up ───────────────────────────────────────────────────────
+// ── Find / replace ─────────────────────────────────────────────────────
+// Plain substring search; case-insensitive by default unless btn-case is on.
+// Could grow to regex / whole-word later; the surface is for plain text.
+
+let caseSensitive = false;
+
+function showFindBar(withReplace) {
+  findBar.classList.add('visible');
+  findBar.classList.toggle('has-replace', !!withReplace);
+  // Seed with current selection (if any) — classic Notepad behavior.
+  const sel = editor.value.slice(editor.selectionStart, editor.selectionEnd);
+  if (sel && !sel.includes('\n')) findIn.value = sel;
+  findIn.focus();
+  findIn.select();
+  refreshCount();
+}
+function hideFindBar() {
+  findBar.classList.remove('visible');
+  editor.focus();
+}
+
+function findAllMatches() {
+  const needle = findIn.value;
+  if (!needle) return [];
+  const hay = editor.value;
+  const cmp = caseSensitive
+    ? (a, b) => a === b
+    : (a, b) => a.toLowerCase() === b.toLowerCase();
+  const matches = [];
+  let i = 0;
+  while (i <= hay.length - needle.length) {
+    if (cmp(hay.substr(i, needle.length), needle)) {
+      matches.push(i);
+      i += needle.length;
+    } else {
+      i++;
+    }
+  }
+  return matches;
+}
+
+function refreshCount() {
+  const matches = findAllMatches();
+  if (!findIn.value) { findCount.textContent = ''; return; }
+  if (matches.length === 0) { findCount.textContent = 'no matches'; return; }
+  const cur = editor.selectionStart;
+  // 1-based "match X of Y" — current is the next match at-or-after cursor.
+  let idx = matches.findIndex((m) => m >= cur);
+  if (idx === -1) idx = matches.length - 1;
+  findCount.textContent = (idx + 1) + ' of ' + matches.length;
+}
+
+function findNext(reverse) {
+  const matches = findAllMatches();
+  if (matches.length === 0) { refreshCount(); return; }
+  const cur = editor.selectionStart;
+  let target;
+  if (reverse) {
+    // Last match strictly before cursor; wrap to last if none.
+    target = matches.slice().reverse().find((m) => m < cur);
+    if (target === undefined) target = matches[matches.length - 1];
+  } else {
+    // First match at-or-after the END of the current selection.
+    const after = editor.selectionEnd;
+    target = matches.find((m) => m >= after);
+    if (target === undefined) target = matches[0];
+  }
+  editor.focus();
+  editor.setSelectionRange(target, target + findIn.value.length);
+  // Scroll into view — the simplest approach: read selection rect via
+  // a hidden mirror would be expensive; just trust the browser.
+  refreshCount();
+}
+
+function replaceOne() {
+  const matches = findAllMatches();
+  if (matches.length === 0) return;
+  const s = editor.selectionStart, e = editor.selectionEnd;
+  const sel = editor.value.slice(s, e);
+  // If the current selection IS a match, replace + move to next.
+  // Otherwise, jump to next match first (next call replaces).
+  const isMatch = caseSensitive
+    ? sel === findIn.value
+    : sel.toLowerCase() === findIn.value.toLowerCase();
+  if (isMatch) {
+    const rep = replIn.value;
+    editor.value = editor.value.slice(0, s) + rep + editor.value.slice(e);
+    editor.selectionStart = editor.selectionEnd = s + rep.length;
+    editor.dispatchEvent(new Event('input'));
+    findNext(false);
+  } else {
+    findNext(false);
+  }
+}
+
+function replaceAll() {
+  const matches = findAllMatches();
+  if (matches.length === 0) return;
+  const rep = replIn.value;
+  const needle = findIn.value;
+  let out = '';
+  let last = 0;
+  for (const m of matches) {
+    out += editor.value.slice(last, m) + rep;
+    last = m + needle.length;
+  }
+  out += editor.value.slice(last);
+  editor.value = out;
+  editor.dispatchEvent(new Event('input'));
+  refreshCount();
+}
+
+findIn.addEventListener('input', refreshCount);
+findIn.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    findNext(e.shiftKey);
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    hideFindBar();
+  }
+});
+replIn.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    if (e.shiftKey) replaceAll(); else replaceOne();
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    hideFindBar();
+  }
+});
+document.getElementById('find-next').addEventListener('click', () => findNext(false));
+document.getElementById('find-prev').addEventListener('click', () => findNext(true));
+document.getElementById('find-close').addEventListener('click', hideFindBar);
+btnCase.addEventListener('click', () => {
+  caseSensitive = !caseSensitive;
+  btnCase.classList.toggle('on', caseSensitive);
+  refreshCount();
+});
+document.getElementById('replace-one').addEventListener('click', replaceOne);
+document.getElementById('replace-all').addEventListener('click', replaceAll);
+
+// ── Menubar ────────────────────────────────────────────────────────────
+// Hosted via @gcu/menu's MenuBar — same component the shell uses, so the
+// chrome looks identical. The state-reflective items (toggleable views)
+// re-render their checkmarks on each menu open since the items thunk is
+// called per-open.
+
+const menubarEl = document.getElementById('menubar');
+// Stub for actions we'll wire up after the A-Bus connect — keep the
+// MenuBar instance alive across the full surface lifetime.
+let actions = {};
+const bar = new MenuBar(menubarEl, () => [
+  { label: 'File', items: () => [
+    { label: 'Save',             action: 'file:save',   shortcut: 'Ctrl+S' },
+    { label: 'Revert from disk', action: 'file:revert' },
+  ] },
+  { label: 'Edit', items: () => [
+    { label: 'Find…',           action: 'edit:find',    shortcut: 'Ctrl+F' },
+    { label: 'Find next',       action: 'edit:findnext', shortcut: 'F3' },
+    { label: 'Find previous',   action: 'edit:findprev', shortcut: 'Shift+F3' },
+    { label: 'Replace…',        action: 'edit:replace', shortcut: 'Ctrl+H' },
+    '---',
+    { label: 'Select all',      action: 'edit:selectall', shortcut: 'Ctrl+A' },
+    { label: 'Insert date/time', action: 'edit:datetime' },
+  ] },
+  { label: 'View', items: () => [
+    { label: (showLineNumbers ? '✓ ' : '   ') + 'Line numbers', action: 'view:line-numbers' },
+    { label: (wrap            ? '✓ ' : '   ') + 'Word wrap',    action: 'view:wrap' },
+    { label: (showStatusBar   ? '✓ ' : '   ') + 'Status bar',   action: 'view:status-bar' },
+  ] },
+]);
+bar.on('action', (a) => {
+  const fn = actions[a];
+  if (fn) fn();
+});
+
+// ── A-Bus wire-up ──────────────────────────────────────────────────────
 
 window.addEventListener('message', async (ev) => {
-  // §7.1 — adopt the welcome port only from our own parent.
   if (ev.source !== window.parent) return;
   if (!ev.data || ev.data.type !== 'abus:welcome') return;
   const { port, tab } = ev.data;
@@ -247,15 +475,18 @@ window.addEventListener('message', async (ev) => {
 
   // Read the file through the `works` VFS service.
   let saved = '';
-  try {
-    saved = (await bus.call(
-      { to: 'works', path: '/', interface: 'VFS', member: 'Read' },
-      [filePath, 'utf8'])) || '';
-  } catch { saved = ''; }
-  editor.value = saved;
-  editor.placeholder = '';
-  renderGutter();
-  updateStatus();
+  async function loadFromDisk() {
+    try {
+      saved = (await bus.call(
+        { to: 'works', path: '/', interface: 'VFS', member: 'Read' },
+        [filePath, 'utf8'])) || '';
+    } catch { saved = ''; }
+    editor.value = saved;
+    editor.placeholder = '';
+    renderGutter();
+    updateStatus();
+  }
+  await loadFromDisk();
 
   let dirty = false;
   let flushTimer = null;
@@ -270,7 +501,6 @@ window.addEventListener('message', async (ev) => {
     emit('DirtyChanged', [dirty]);
   };
 
-  // Write the buffer back to the workspace VFS.
   async function flush() {
     clearTimeout(flushTimer);
     if (editor.value === saved) return;
@@ -286,16 +516,59 @@ window.addEventListener('message', async (ev) => {
     setDirty(editor.value !== saved);
     renderGutter();
     updateStatus();
-    // Self-flush on idle (spec §5.2).
+    if (findBar.classList.contains('visible')) refreshCount();
     clearTimeout(flushTimer);
     flushTimer = setTimeout(flush, 1500);
   });
 
-  // Ctrl/Cmd+S — explicit save, bypassing the idle timer.
+  // ── Wire menubar actions now that we have flush / bus ────────────────
+  actions = {
+    'file:save': () => flush(),
+    'file:revert': async () => {
+      if (dirty && !window.confirm('Discard unsaved changes?')) return;
+      await loadFromDisk();
+      setDirty(false);
+    },
+    'edit:find':     () => showFindBar(false),
+    'edit:replace':  () => showFindBar(true),
+    'edit:findnext': () => { if (findIn.value) findNext(false); else showFindBar(false); },
+    'edit:findprev': () => { if (findIn.value) findNext(true);  else showFindBar(false); },
+    'edit:selectall': () => { editor.focus(); editor.select(); },
+    'edit:datetime': () => {
+      const now = new Date();
+      const stamp = now.toISOString().slice(0, 19).replace('T', ' ');
+      const s = editor.selectionStart, t = editor.selectionEnd;
+      editor.value = editor.value.slice(0, s) + stamp + editor.value.slice(t);
+      editor.selectionStart = editor.selectionEnd = s + stamp.length;
+      editor.dispatchEvent(new Event('input'));
+    },
+    'view:line-numbers': () => { showLineNumbers = !showLineNumbers; applyView(); renderGutter(); },
+    'view:wrap':         () => { wrap = !wrap; applyView(); },
+    'view:status-bar':   () => { showStatusBar = !showStatusBar; applyView(); },
+  };
+
+  // ── Keyboard shortcuts (mirror the menubar's shortcut labels) ─────────
   document.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+    const meta = e.ctrlKey || e.metaKey;
+    if (meta && (e.key === 's' || e.key === 'S')) {
       e.preventDefault();
       flush();
+    } else if (meta && (e.key === 'f' || e.key === 'F')) {
+      e.preventDefault();
+      showFindBar(false);
+    } else if (meta && (e.key === 'h' || e.key === 'H')) {
+      e.preventDefault();
+      showFindBar(true);
+    } else if (e.key === 'F3') {
+      e.preventDefault();
+      if (findIn.value) findNext(e.shiftKey); else showFindBar(false);
+    } else if (e.key === 'Escape' && findBar.classList.contains('visible')) {
+      e.preventDefault();
+      hideFindBar();
+    } else if (e.altKey && (e.key === 'c' || e.key === 'C')
+               && findBar.classList.contains('visible')) {
+      e.preventDefault();
+      btnCase.click();
     }
   });
 
@@ -304,7 +577,7 @@ window.addEventListener('message', async (ev) => {
     Surface: {
       methods: {
         Flush:     () => flush(),
-        CanClose:  () => true,   // close flushes first — no data-loss veto needed
+        CanClose:  () => true,
         Relocated: (p) => {
           filePath = p;
           sPath.textContent = filePath;

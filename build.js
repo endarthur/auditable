@@ -586,10 +586,45 @@ if (target === 'works' || target === 'works-all') {
     return html;
   }
 
+  // For surfaces that import @gcu/menu (or @gcu/dialog), the component's
+  // own CSS lives at ext/<dep>/<dep>.css + ext/<dep>/<dep>-default.css.
+  // The shell bundles these into its own stylesheet, but surface iframes
+  // have their own documents and need a separate copy. Read the CSS once
+  // here; each dep gets its :root block stripped so the surface's
+  // _theme.css cascade wins on tokens.
+  function _loadComponentCss(dep) {
+    const paths = [`ext/${dep}/${dep}.css`, `ext/${dep}/${dep}-default.css`];
+    let out = '';
+    for (const p of paths) {
+      const fp = path.join(__dirname, p);
+      if (!fs.existsSync(fp)) continue;
+      let src = fs.readFileSync(fp, 'utf8');
+      if (p.endsWith('-default.css')) {
+        src = src.replace(/:root\s*\{[\s\S]*?\}\s*/m, '');
+      }
+      out += '\n\n/* ── ' + p + ' (inlined for surface) ── */\n' + src.trimEnd();
+    }
+    return out;
+  }
+  const _menuCss = _loadComponentCss('menu');
+
+  // Inject menu CSS into a surface's first <style> block (right after the
+  // theme tokens so component selectors can reference --au-*).
+  function injectComponentCss(html, deps) {
+    if (!deps || !deps.includes('menu')) return html;
+    // Append menu CSS to the head's existing <style> — find the first
+    // </style> and insert before it. Falls back to appending to <head>
+    // if there's no <style> (unusual for surfaces).
+    if (html.includes('</style>')) {
+      return html.replace('</style>', _menuCss + '\n</style>');
+    }
+    return html.replace('</head>', '<style>' + _menuCss + '</style>\n</head>');
+  }
+
   const surfaceParts = [];
   for (const s of [
     { kind: 'stub',      file: 'works/surfaces/stub.html',      deps: ['abus'] },
-    { kind: 'text',      file: 'works/surfaces/text.html',      deps: ['abus'] },
+    { kind: 'text',      file: 'works/surfaces/text.html',      deps: ['abus', 'menu'] },
     { kind: 'preview',   file: 'works/surfaces/preview.html',   deps: ['abus'] },
     { kind: 'inspector', file: 'works/surfaces/inspector.html', deps: ['abus'] },
     { kind: 'settings',  file: 'works/surfaces/settings.html',  deps: ['abus'] },
@@ -609,7 +644,10 @@ if (target === 'works' || target === 'works-all') {
     if (s.deps) surfaceHtml = rewriteSurfaceToDynamic(surfaceHtml, s.kind, s.deps);
     if (s.extras === 'terminal') surfaceHtml = buildTerminalSurfaceCss(surfaceHtml);
     // Notebook is auditable.html — uses its own theme cascade, skip injection.
-    if (s.kind !== 'notebook') surfaceHtml = injectSharedTheme(surfaceHtml);
+    if (s.kind !== 'notebook') {
+      surfaceHtml = injectSharedTheme(surfaceHtml);
+      surfaceHtml = injectComponentCss(surfaceHtml, s.deps);
+    }
     const gz = worksZlib.gzipSync(Buffer.from(surfaceHtml, 'utf8'));
     const b64 = gz.toString('base64').replace(/.{1,76}/g, '$&\n');
     surfaceParts.push(`<script type="text/plain" id="surface-${s.kind}">\n${b64}\n</script>`);
