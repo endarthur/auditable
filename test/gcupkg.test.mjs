@@ -39,6 +39,26 @@ function makeVfs() {
       files.set(path, bytes);
     },
     async mkdir(path, _opts) { dirs.add(path); },
+    // rm with recursive — drops every file/dir prefixed with the given path.
+    // Mirrors how MemoryBackend / IDBBackend handle recursive deletes.
+    async rm(path, opts = {}) {
+      const recursive = !!opts.recursive;
+      const prefix = path.endsWith('/') ? path : path + '/';
+      let removed = 0;
+      for (const f of [...files.keys()]) {
+        if (f === path || (recursive && f.startsWith(prefix))) {
+          files.delete(f);
+          removed++;
+        }
+      }
+      for (const d of [...dirs]) {
+        if (d === path || (recursive && d.startsWith(prefix))) dirs.delete(d);
+      }
+      if (removed === 0 && !files.has(path) && !dirs.has(path)) {
+        // Mimic ENOENT for missing paths — install path catches it.
+        throw new Error('ENOENT ' + path);
+      }
+    },
   };
 }
 
@@ -340,6 +360,62 @@ test('installGcupkg: appends to an existing lockfile without clobbering other en
   const lock = JSON.parse(await vfs.readFile('/lib/.gcu-lock.json', 'utf8'));
   assert.ok(lock.modules['npm:something-else']);   // preserved
   assert.ok(lock.modules['@test/cohabitant']);     // added
+});
+
+// ── clean-replace + persistent examples (the reload-survival path) ─────
+
+test('installGcupkg: persists examples at /lib/<name>/examples/ (survives reload)', async () => {
+  const { bytes } = buildFixture({ name: '@test/persistent-examples' });
+  const parsed = await parseGcupkg(bytes, archiveLib);
+  const vfs = makeVfs();
+  await installGcupkg(parsed, { vfs, installedModules: {} });
+  // The canonical persistent copy.
+  assert.ok(vfs.files.has('/lib/@test/persistent-examples/examples/demo.txt'));
+  assert.ok(vfs.files.has('/lib/@test/persistent-examples/examples/manifest.json'));
+  // The volatile picker view.
+  assert.ok(vfs.files.has('/usr/share/examples/@test_persistent-examples/demo.txt'));
+});
+
+test('installGcupkg: persists docs at /lib/<name>/docs/ when present', async () => {
+  const { bytes } = buildFixture({ name: '@test/persistent-docs', docs: true });
+  const parsed = await parseGcupkg(bytes, archiveLib);
+  const vfs = makeVfs();
+  await installGcupkg(parsed, { vfs, installedModules: {} });
+  assert.ok(vfs.files.has('/lib/@test/persistent-docs/docs/index.md'));
+  assert.ok(vfs.files.has('/usr/share/docs/@test_persistent-docs/index.md'));
+});
+
+test('installGcupkg: re-install replaces /lib/<name> cleanly (no stale files linger)', async () => {
+  const vfs = makeVfs();
+  // First install — has a "legacy-name.txt" example.
+  const fixA = buildFixture({ name: '@test/replace-me' });
+  const parsedA = await parseGcupkg(fixA.bytes, archiveLib);
+  await installGcupkg(parsedA, { vfs, installedModules: {} });
+  // Pretend a previous install had ALSO landed an old README that the
+  // new version no longer ships. Test the cleanup directly by planting
+  // a fake stale file in the install path.
+  await vfs.writeFile('/lib/@test/replace-me/STALE-README.md', new TextEncoder().encode('old'));
+  await vfs.writeFile('/usr/share/examples/@test_replace-me/old-example.txt', new TextEncoder().encode('old'));
+  assert.ok(vfs.files.has('/lib/@test/replace-me/STALE-README.md'));
+  assert.ok(vfs.files.has('/usr/share/examples/@test_replace-me/old-example.txt'));
+  // Reinstall the SAME gcupkg — clean-replace should wipe the stale files.
+  await installGcupkg(parsedA, { vfs, installedModules: {} });
+  assert.equal(vfs.files.has('/lib/@test/replace-me/STALE-README.md'), false,
+    'stale file from prior install should have been removed');
+  assert.equal(vfs.files.has('/usr/share/examples/@test_replace-me/old-example.txt'), false,
+    'stale example from prior install should have been removed');
+  // The new install's canonical files are present.
+  assert.ok(vfs.files.has('/lib/@test/replace-me/source'));
+  assert.ok(vfs.files.has('/usr/share/examples/@test_replace-me/demo.txt'));
+});
+
+test('installGcupkg: clean-replace does not throw on first install (no prior /lib dir)', async () => {
+  const { bytes } = buildFixture({ name: '@test/first-install' });
+  const parsed = await parseGcupkg(bytes, archiveLib);
+  const vfs = makeVfs();
+  // Should not throw despite rm() targeting non-existent dirs.
+  await installGcupkg(parsed, { vfs, installedModules: {} });
+  assert.ok(vfs.files.has('/lib/@test/first-install/source'));
 });
 
 // ── carotte-shaped end-to-end (smoke) ───────────────────────────────────

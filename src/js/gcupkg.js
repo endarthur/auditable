@@ -169,6 +169,22 @@ export async function installGcupkg(parsed, opts = {}) {
   }
 
   const libPath = _libPathForName(meta.name);
+  const slug = _slugifyName(meta.name);
+
+  // Clean replace — wipe any prior install of this same name before
+  // writing the new artifacts. Without this, files removed in a newer
+  // version of the package would linger (e.g. example renamed in v0.2
+  // would leave the old name in /lib/<name>/examples/). Wrapped in
+  // try/catch because rm() may not exist on every VFS backend and
+  // ENOENT on first-install is expected.
+  for (const cleanupPath of [libPath, '/usr/share/examples/' + slug, '/usr/share/docs/' + slug]) {
+    try {
+      if (typeof vfs.rm === 'function') {
+        await vfs.rm(cleanupPath, { recursive: true });
+      }
+    } catch { /* first install, or backend doesn't support rm — fine */ }
+  }
+
   await vfs.mkdir(libPath, { recursive: true });
 
   // Canonical artifact: `source` (matches pkg's existing /lib layout).
@@ -212,26 +228,40 @@ export async function installGcupkg(parsed, opts = {}) {
   await vfs.writeFile(libPath + '/meta.json', _ENCODER.encode(JSON.stringify(pkgMeta, null, 2)));
   await _updateLockfile(vfs, meta.name, pkgMeta);
 
-  // Examples → /usr/share/examples/<safe-name>/  (§6.3).
-  const slug = _slugifyName(meta.name);
+  // Examples — written to TWO locations:
+  //   /lib/<name>/examples/<file>           ← persistent (workspace VFS / IDB)
+  //   /usr/share/examples/<slug>/<file>     ← volatile (the picker's view)
+  //
+  // The /lib copy is the source of truth and survives reload; the
+  // /usr/share/ copy is what works/js/menubar.js's Open Example picker
+  // currently reads. On boot, works/js/examples-loader.js rehydrates the
+  // volatile copy from /lib (see scanLibExamples there).
+  //
+  // (Docs handled the same way — persistent in /lib, volatile in /usr/share
+  // for the docs surface to discover.)
   let exampleCount = 0;
   const exampleRoot = '/usr/share/examples/' + slug;
+  const libExampleRoot = libPath + '/examples';
   for (const [path, bytes] of Object.entries(files)) {
     if (!path.startsWith('examples/') || path === 'examples/') continue;
     const inner = path.slice('examples/'.length);
     if (!inner) continue;
+    await vfs.mkdir(libExampleRoot, { recursive: true });
+    await vfs.writeFile(libExampleRoot + '/' + inner, bytes);
     await vfs.mkdir(exampleRoot, { recursive: true });
     await vfs.writeFile(exampleRoot + '/' + inner, bytes);
     if (inner.endsWith('.txt')) exampleCount++;
   }
 
-  // Docs → /usr/share/docs/<safe-name>/  (§6.2).
   let docsCount = 0;
   const docsRoot = '/usr/share/docs/' + slug;
+  const libDocsRoot = libPath + '/docs';
   for (const [path, bytes] of Object.entries(files)) {
     if (!path.startsWith('docs/') || path === 'docs/') continue;
     const inner = path.slice('docs/'.length);
     if (!inner) continue;
+    await vfs.mkdir(libDocsRoot, { recursive: true });
+    await vfs.writeFile(libDocsRoot + '/' + inner, bytes);
     await vfs.mkdir(docsRoot, { recursive: true });
     await vfs.writeFile(docsRoot + '/' + inner, bytes);
     if (inner.endsWith('.md')) docsCount++;

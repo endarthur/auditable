@@ -28,17 +28,76 @@ async function _decompressExamples() {
 export async function installExamplesToVfs(vfs) {
   if (!vfs) return;
   const payload = await _decompressExamples();
-  if (!payload) return;       // works (not works-all) — no payload
-  _manifest = payload.manifest || { categories: {} };
-  await vfs.mkdir('/usr/share/examples', { recursive: true }).catch(() => {});
-  for (const [relPath, content] of Object.entries(payload.defs || {})) {
-    const fullPath = '/usr/share/examples/' + relPath;
-    const dir = fullPath.slice(0, fullPath.lastIndexOf('/'));
-    await vfs.mkdir(dir, { recursive: true }).catch(() => {});
-    await vfs.writeFile(fullPath, content);
+  if (payload) {
+    _manifest = payload.manifest || { categories: {} };
+    await vfs.mkdir('/usr/share/examples', { recursive: true }).catch(() => {});
+    for (const [relPath, content] of Object.entries(payload.defs || {})) {
+      const fullPath = '/usr/share/examples/' + relPath;
+      const dir = fullPath.slice(0, fullPath.lastIndexOf('/'));
+      await vfs.mkdir(dir, { recursive: true }).catch(() => {});
+      await vfs.writeFile(fullPath, content);
+    }
+    await vfs.writeFile('/usr/share/examples/manifest.json',
+      JSON.stringify(_manifest));
   }
-  await vfs.writeFile('/usr/share/examples/manifest.json',
-    JSON.stringify(_manifest));
+  // After the works-all baked payload (if any), rehydrate the volatile
+  // /usr/share/examples/<slug>/ trees from each gcupkg-installed extension's
+  // persistent /lib/<name>/examples/ — this is what makes previously-
+  // installed extensions' examples survive page reload.
+  try {
+    await scanLibExamples(vfs);
+  } catch (e) {
+    console.warn('[examples-loader] /lib scan failed:', e);
+  }
+}
+
+// Walk /lib for gcupkg-installed extensions with persisted examples,
+// copy each into /usr/share/examples/<slug>/, and merge their per-
+// extension manifests into the picker. The /lib copies are the source
+// of truth (persistent, IDB-backed); /usr/share/ is just the picker's
+// scratch view. Called from installExamplesToVfs at boot and idempotent
+// — re-scanning replaces prior entries via mergeExamplesFromExtension.
+async function scanLibExamples(vfs) {
+  let lockfile;
+  try {
+    const raw = await vfs.readFile('/lib/.gcu-lock.json', 'utf8');
+    lockfile = JSON.parse(raw);
+  } catch {
+    return;  // no /lib lockfile — nothing installed via pkg/gcupkg
+  }
+  if (!lockfile || !lockfile.modules) return;
+  for (const [name, meta] of Object.entries(lockfile.modules)) {
+    // Only gcupkg-installed entries have persistent examples; pkg-installed
+    // (url-fetched) entries don't ship examples.
+    if (!meta || meta.kind !== 'gcupkg') continue;
+    const libPath = _libPathForName(name);
+    const libExamples = libPath + '/examples';
+    const slug = name.replace(/\//g, '_');
+    const usrRoot = '/usr/share/examples/' + slug;
+    let files;
+    try { files = await vfs.readdir(libExamples); }
+    catch { continue; }
+    if (!files || files.length === 0) continue;
+    await vfs.mkdir(usrRoot, { recursive: true }).catch(() => {});
+    for (const file of files) {
+      try {
+        const bytes = await vfs.readFile(libExamples + '/' + file, 'bytes');
+        await vfs.writeFile(usrRoot + '/' + file, bytes);
+      } catch (e) {
+        console.warn('[examples-loader] could not rehydrate', libExamples + '/' + file, e);
+      }
+    }
+    try { await mergeExamplesFromExtension(vfs, slug); }
+    catch (e) { console.warn('[examples-loader] merge failed for', slug, e); }
+  }
+}
+
+// Mirror the gcupkg installer's lib-path convention (src/js/gcupkg.js).
+// Kept local so this module doesn't reach into gcupkg internals just for
+// the path mapping.
+function _libPathForName(name) {
+  if (/^@[\w.-]+\/[\w.-]+$/.test(name)) return '/lib/' + name;
+  return '/lib/local/' + name;
 }
 
 // Merge an installed-extension's examples into the picker manifest.
