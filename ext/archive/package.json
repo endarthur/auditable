@@ -1,0 +1,33 @@
+{
+  "name": "@gcu/archive",
+  "version": "0.1.0",
+  "description": "Archive format handling for the GCU stack — ZIP, tar, tar.gz, tar.zst, gz, zst with optional lazy xz/bz2. Source-agnostic API (VFS, in-memory, streams) used by Auditable Works for native archive workflows and by @gcu/coreutils to back tar / gzip / unzip builtins.",
+  "type": "module",
+  "main": "src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "vendor",
+    "index.js",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["archive", "zip", "tar", "gzip", "zstd", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/archive"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/archive",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}
