@@ -64,8 +64,22 @@
       "spdx": "MIT",
       "version": "0.1.1",
       "homepage": "https://github.com/101arrowz/fzstd",
-      "description": "Zstandard decoder used by @gcu/archive for .zst / .tar.zst read. Decode-only; encode is a separate larger package that we don't ship yet. Vendored at ext/archive/vendor/fzstd.module.mjs.",
+      "description": "Zstandard decoder used by @gcu/archive for .zst / .tar.zst read. Decode-only — see ext/archive/SPEC §8 for why encode is out of scope. Vendored at ext/archive/vendor/fzstd.module.mjs.",
       "licenseFile": "ext/archive/vendor/LICENSE-fzstd"
+    },
+    "xz-decompress": {
+      "spdx": "MIT",
+      "version": "0.2.3",
+      "homepage": "https://github.com/httptoolkit/xz-decompress",
+      "description": "XZ / LZMA2 streaming decoder used by @gcu/archive for .xz / .tar.xz read. WebAssembly-based (~20 KB with the Wasm payload inlined as base64). Decode-only — see SPEC §8. Vendored at ext/archive/vendor/xz-decompress.module.mjs. Bundles xz-embedded (public domain) and walloc (MIT) — full attribution in LICENSE-xz-decompress.",
+      "licenseFile": "ext/archive/vendor/LICENSE-xz-decompress"
+    },
+    "seek-bzip": {
+      "spdx": "MIT",
+      "version": "1.0.6",
+      "homepage": "https://github.com/cscott/seek-bzip",
+      "description": "Pure-JS bzip2 decoder used by @gcu/archive for .bz2 / .tar.bz2 read. Decode-only — see SPEC §8. Concatenated from 4 upstream CommonJS files into a single ESM bundle at ext/archive/vendor/seek-bzip.module.mjs (regenerable via the header comment's vendoring notes).",
+      "licenseFile": "ext/archive/vendor/LICENSE-seek-bzip"
     }
   }
 }

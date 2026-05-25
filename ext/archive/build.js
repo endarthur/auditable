@@ -15,7 +15,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const srcDir = path.join(__dirname, 'src');
 const vendorDir = path.join(__dirname, 'vendor');
 
-const files = ['detect.js', 'source.js', 'sink.js', 'zip.js', 'tar.js', 'gz.js', 'zst.js', 'walk.js', 'writer.js', 'api.js'];
+const files = ['detect.js', 'source.js', 'sink.js', 'zip.js', 'tar.js', 'gz.js', 'zst.js', 'xz.js', 'bz2.js', 'walk.js', 'writer.js', 'api.js'];
 
 const chunks = [];
 
@@ -49,15 +49,19 @@ function _stripVendorExports(src) {
 // our src/ files actually consume. Easy to extend when we want more of
 // fflate's surface (e.g. Unzip streaming class for archive.stream).
 const VENDORED_EXPORTS = {
-  fflate: ['unzipSync', 'zipSync', 'gzipSync', 'gunzipSync',
-           'Unzip', 'UnzipInflate', 'UnzipPassThrough',
-           'Zip', 'ZipDeflate', 'ZipPassThrough'],
-  fzstd:  ['decompress', 'Decompress', 'ZstdErrorCode'],
+  fflate:        ['unzipSync', 'zipSync', 'gzipSync', 'gunzipSync',
+                  'Unzip', 'UnzipInflate', 'UnzipPassThrough',
+                  'Zip', 'ZipDeflate', 'ZipPassThrough'],
+  fzstd:         ['decompress', 'Decompress', 'ZstdErrorCode'],
+  xzDecompress:  ['XzReadableStream'],
+  seekBzip:      ['Bunzip'],
 };
 
 for (const [vname, vfile] of [
-  ['fflate', 'fflate.module.mjs'],
-  ['fzstd',  'fzstd.module.mjs'],
+  ['fflate',        'fflate.module.mjs'],
+  ['fzstd',         'fzstd.module.mjs'],
+  ['xzDecompress',  'xz-decompress.module.mjs'],
+  ['seekBzip',      'seek-bzip.module.mjs'],
 ]) {
   const p = path.join(vendorDir, vfile);
   if (!fs.existsSync(p)) {
@@ -68,7 +72,12 @@ for (const [vname, vfile] of [
   const exportList = VENDORED_EXPORTS[vname].join(', ');
   const wrapped =
     `const ${vname} = (() => {\n${stripped}\nreturn { ${exportList} };\n})();`;
-  chunks.push(`// -- vendor/${vfile} (MIT, see ext/archive/vendor/LICENSE-${vname}) --\n\n${wrapped}`);
+  // Cosmetic license-file naming: vendored bundle is vname'd but on-disk
+  // LICENSEs use the npm-package name (kebab-case for the multi-word ones).
+  const licName = vname === 'xzDecompress' ? 'xz-decompress'
+                : vname === 'seekBzip'     ? 'seek-bzip'
+                : vname;
+  chunks.push(`// -- vendor/${vfile} (MIT, see ext/archive/vendor/LICENSE-${licName}) --\n\n${wrapped}`);
 }
 
 // Alias bindings — let src/ code refer to the symbols it imported by name
@@ -90,6 +99,8 @@ const ZipPassThrough = fflate.ZipPassThrough;
 const fzstd_decompress = fzstd.decompress;
 const fzstd_Decompress = fzstd.Decompress;
 const fzstd_ZstdErrorCode = fzstd.ZstdErrorCode;
+const XzReadableStream = xzDecompress.XzReadableStream;
+const Bunzip = seekBzip.Bunzip;
 `);
 
 for (const file of files) {
@@ -120,6 +131,8 @@ export {
   listTar, readTar, writeTar,
   gunzipBytes, gzipBytes,
   unzstdBytes, zstdBytes,
+  unxzBytes, xzBytes,
+  unbz2Bytes, bz2Bytes,
   walkVfsTree, buildEntryMap,
   createWriter,
   archive,

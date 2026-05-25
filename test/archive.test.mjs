@@ -13,6 +13,8 @@ import {
   listTar, readTar, writeTar,
   gunzipBytes, gzipBytes,
   unzstdBytes, zstdBytes,
+  unxzBytes, xzBytes,
+  unbz2Bytes, bz2Bytes,
   walkVfsTree, buildEntryMap,
   createWriter,
   archive,
@@ -307,12 +309,9 @@ test('archive.extract: filter callback excludes entries', async () => {
   assert.ok(!r.has('README.md'));
 });
 
-test('archive.list: xz / bz2 still report needs-Wasm', async () => {
-  // xz magic bytes — we recognize the format but the lazy Wasm decoder
-  // isn't wired yet.
-  const xzMagic = new Uint8Array([0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00]);
-  await assert.rejects(() => archive.list(xzMagic), /lazy-loaded Wasm/);
-});
+// xz / bz2 decode coverage lives in the dedicated "── xz / bz2 decoding ──"
+// section below. Old "needs-Wasm" assertions retired when the decoders
+// shipped.
 
 // ── tar fixtures ────────────────────────────────────────────────────────
 //
@@ -645,6 +644,99 @@ test('unzstdBytes: rejects non-Uint8Array', async () => {
   await assert.rejects(() => unzstdBytes('hi'), /Uint8Array/);
 });
 
+// ── xz / bz2 decoding ───────────────────────────────────────────────────
+// Both formats are decode-only by design (see ext/archive/SPEC §8 / the
+// project-archive-shipped memory). Encoders would need separate ~500 KB
+// vendor packages for a use case .tar.gz already covers. Round-trip
+// fixtures here are pre-compressed with the system xz / bzip2 tools and
+// embedded as base64 — keeps the test self-contained without requiring
+// those tools to be installed.
+
+const _b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+
+// "hello world" compressed with bzip2 -c
+const _BZ2_FIXTURE_HELLO = _b64('QlpoOTFBWSZTWUT3E3gAAAGRgEAABkSQgCAAIgM0hDAhtoFUJ4u5IpwoSCJ7ibwA');
+// "hello world" compressed with xz -c
+const _XZ_FIXTURE_HELLO  = _b64('/Td6WFoAAATm1rRGBMAPCyEBFgAAAAAAAAAAALk+AWUBAApoZWxsbyB3b3JsZAAA2lIj781+A1MAASsLypEkwR+2830BAAAAAARZWg==');
+// A tar containing one file "h.txt" with content "hello world", compressed.
+const _TAR_BZ2_FIXTURE   = _b64('QlpoOTFBWSZTWTq05zQAAHZ7gcIAAIBAAX+AAAhmRZ7AAAEACCAAciETCYBGEaPIJQFT1NGamNEek0064pd0EC0oIIZec1aveTFURAZWwa/uJEtODtYd9YLDw2kQOsS2VKjypSrjHrT5fOdutuKKv76HhGZGXVBEQDYu5IpwoSB1ac5o');
+const _TAR_XZ_FIXTURE    = _b64('/Td6WFoAAATm1rRGBMB9gFAhARYAAAAAAAAAAMMweArgJ/8AdV0ANAuKh8QO8pek+HU9xZig68KOMCYAnpP8qi0BFLI1JPEB4+g/vOhx5XLXffqgeWhW9WD9NrjwmaYmJTR1qAqTMW63AP0KgA+DqvXM9CUlg9ncKB3gbq5Rdzys4ki/SSbCGRy/cYF2uDR8Dg5Ujzg5fpEkC+gAAAAAAI9owcdXZDDFAAGZAYBQAABtIrlFscRn+wIAAAAABFla');
+
+test('unxzBytes: round-trips a known .xz fixture', async () => {
+  // Magic bytes fd 37 7a 58 5a 00.
+  assert.equal(_XZ_FIXTURE_HELLO[0], 0xfd);
+  assert.equal(_XZ_FIXTURE_HELLO[1], 0x37);
+  const out = await unxzBytes(_XZ_FIXTURE_HELLO);
+  assert.equal(new TextDecoder().decode(out), 'hello world');
+});
+
+test('xzBytes: throws the decode-only error', async () => {
+  await assert.rejects(() => xzBytes(enc('x')), /decode-only/);
+});
+
+test('unxzBytes: rejects non-Uint8Array', async () => {
+  await assert.rejects(() => unxzBytes('hi'), /Uint8Array/);
+});
+
+test('unbz2Bytes: round-trips a known .bz2 fixture', async () => {
+  // Magic bytes 'BZh'.
+  assert.equal(_BZ2_FIXTURE_HELLO[0], 0x42);
+  assert.equal(_BZ2_FIXTURE_HELLO[1], 0x5a);
+  assert.equal(_BZ2_FIXTURE_HELLO[2], 0x68);
+  const out = await unbz2Bytes(_BZ2_FIXTURE_HELLO);
+  assert.equal(new TextDecoder().decode(out), 'hello world');
+});
+
+test('bz2Bytes: throws the decode-only error', async () => {
+  await assert.rejects(() => bz2Bytes(enc('x')), /decode-only/);
+});
+
+test('unbz2Bytes: rejects non-Uint8Array', async () => {
+  await assert.rejects(() => unbz2Bytes('hi'), /Uint8Array/);
+});
+
+test('archive.list: tar.xz extracts the tar entry list', async () => {
+  const entries = await archive.list(_TAR_XZ_FIXTURE);
+  assert.ok(Array.isArray(entries));
+  const hTxt = entries.find((e) => e.path === 'h.txt');
+  assert.ok(hTxt, 'expected h.txt in the tar.xz listing');
+});
+
+test('archive.list: tar.bz2 extracts the tar entry list', async () => {
+  const entries = await archive.list(_TAR_BZ2_FIXTURE);
+  assert.ok(Array.isArray(entries));
+  const hTxt = entries.find((e) => e.path === 'h.txt');
+  assert.ok(hTxt, 'expected h.txt in the tar.bz2 listing');
+});
+
+test('archive.read: tar.xz returns the file bytes', async () => {
+  const bytes = await archive.read(_TAR_XZ_FIXTURE, 'h.txt');
+  assert.equal(new TextDecoder().decode(bytes), 'hello world');
+});
+
+test('archive.read: tar.bz2 returns the file bytes', async () => {
+  const bytes = await archive.read(_TAR_BZ2_FIXTURE, 'h.txt');
+  assert.equal(new TextDecoder().decode(bytes), 'hello world');
+});
+
+test('archive.list: single-file .xz reports an xz-single entry', async () => {
+  // Source is just "hello world" compressed — not a tar inside. archive
+  // reports a single synthetic entry; name comes from the Blob's filename.
+  const blob = new Blob([_XZ_FIXTURE_HELLO]);
+  blob.name = 'h.txt.xz';
+  const entries = await archive.list(blob);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].path, 'h.txt');
+});
+
+test('archive.list: single-file .bz2 reports a bz2-single entry', async () => {
+  const blob = new Blob([_BZ2_FIXTURE_HELLO]);
+  blob.name = 'h.txt.bz2';
+  const entries = await archive.list(blob);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].path, 'h.txt');
+});
+
 // ── tar.zst end-to-end via archive.* ────────────────────────────────────
 
 function makeTarZstFixture() {
@@ -943,14 +1035,24 @@ test('archive.compress: tar.zst throws decode-only error', async () => {
   );
 });
 
-test('archive.compress: xz / bz2 throw needs-Wasm error', async () => {
+test('archive.compress: xz / bz2 still throw — decode-only by design', async () => {
   const vfs = makeVfs({ '/p/x.txt': enc('hi') });
-  for (const ext of ['xz', 'bz2', 'tar.xz', 'tar.bz2']) {
-    await assert.rejects(
-      () => archive.compress({ vfs, path: '/p' }, 'memory', { format: ext }),
-      /lazy-loaded Wasm/
-    );
-  }
+  await assert.rejects(
+    () => archive.compress({ vfs, path: '/p' }, 'memory', { format: 'xz' }),
+    /xz-decompress is decode-only/
+  );
+  await assert.rejects(
+    () => archive.compress({ vfs, path: '/p' }, 'memory', { format: 'tar.xz' }),
+    /xz-decompress is decode-only/
+  );
+  await assert.rejects(
+    () => archive.compress({ vfs, path: '/p' }, 'memory', { format: 'bz2' }),
+    /seek-bzip is decode-only/
+  );
+  await assert.rejects(
+    () => archive.compress({ vfs, path: '/p' }, 'memory', { format: 'tar.bz2' }),
+    /seek-bzip is decode-only/
+  );
 });
 
 test('archive.compress: missing format + non-extension sink throws clear error', async () => {
@@ -1214,9 +1316,11 @@ test('createWriter: rejects unsupported formats with clear errors', () => {
   assert.throws(() => createWriter('memory', { format: 'zst' }), /single-stream/);
   // tar.zst — fzstd is decode-only.
   assert.throws(() => createWriter('memory', { format: 'tar.zst' }), /decode-only/);
-  // xz / bz2 — lazy Wasm not wired.
-  assert.throws(() => createWriter('memory', { format: 'xz' }),     /lazy-loaded Wasm/);
-  assert.throws(() => createWriter('memory', { format: 'bz2' }),    /lazy-loaded Wasm/);
+  // xz / bz2 — vendored decoders are decode-only by design.
+  assert.throws(() => createWriter('memory', { format: 'xz' }),     /xz-decompress is decode-only/);
+  assert.throws(() => createWriter('memory', { format: 'bz2' }),    /seek-bzip is decode-only/);
+  assert.throws(() => createWriter('memory', { format: 'tar.xz' }), /xz-decompress is decode-only/);
+  assert.throws(() => createWriter('memory', { format: 'tar.bz2' }), /seek-bzip is decode-only/);
 });
 
 test('createWriter: rejects missing sink or format', () => {

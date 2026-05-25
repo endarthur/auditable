@@ -24,6 +24,8 @@ import { listZip, readZip, extractZip } from './zip.js';
 import { listTar, readTar, extractTar, writeTar } from './tar.js';
 import { gunzipBytes, gzipBytes, _gzInnerName } from './gz.js';
 import { unzstdBytes, zstdBytes, _zstInnerName } from './zst.js';
+import { unxzBytes, xzBytes, _xzInnerName } from './xz.js';
+import { unbz2Bytes, bz2Bytes, _bz2InnerName } from './bz2.js';
 import { walkVfsTree } from './walk.js';
 import { createWriter } from './writer.js';
 import { zipSync } from '../vendor/fflate.module.mjs';
@@ -61,8 +63,26 @@ async function _unwrapZst(bytes, name) {
   return { bytes: inner, format: 'zst-single', name: innerName, innerName };
 }
 
-// Resolve a source to bytes + format, peeling off any outer gz/zst wrapper
-// so the caller can dispatch on the inner archive format uniformly.
+// Same shape as _unwrapGz but for xz.
+async function _unwrapXz(bytes, name) {
+  const inner = await unxzBytes(bytes);
+  const innerFormat = detectFormat(inner);
+  const innerName = _xzInnerName(name);
+  if (innerFormat) return { bytes: inner, format: innerFormat, name: innerName };
+  return { bytes: inner, format: 'xz-single', name: innerName, innerName };
+}
+
+// Same shape as _unwrapGz but for bzip2.
+async function _unwrapBz2(bytes, name) {
+  const inner = await unbz2Bytes(bytes);
+  const innerFormat = detectFormat(inner);
+  const innerName = _bz2InnerName(name);
+  if (innerFormat) return { bytes: inner, format: innerFormat, name: innerName };
+  return { bytes: inner, format: 'bz2-single', name: innerName, innerName };
+}
+
+// Resolve a source to bytes + format, peeling off any outer gz/zst/xz/bz2
+// wrapper so the caller can dispatch on the inner archive format uniformly.
 async function _peelCompression(src) {
   const resolved = await _resolveSourceFormat(src);
   if (resolved.format === 'gz' || resolved.format === 'tar.gz') {
@@ -70,6 +90,12 @@ async function _peelCompression(src) {
   }
   if (resolved.format === 'zst' || resolved.format === 'tar.zst') {
     return _unwrapZst(resolved.bytes, resolved.name);
+  }
+  if (resolved.format === 'xz' || resolved.format === 'tar.xz') {
+    return _unwrapXz(resolved.bytes, resolved.name);
+  }
+  if (resolved.format === 'bz2' || resolved.format === 'tar.bz2') {
+    return _unwrapBz2(resolved.bytes, resolved.name);
   }
   return resolved;
 }
@@ -89,15 +115,7 @@ async function _extractSingle(dst, innerName, bytes, opts) {
 }
 
 function _explainUnsupported(format) {
-  switch (format) {
-    case 'tar.xz':
-    case 'tar.bz2':
-    case 'xz':
-    case 'bz2':
-      return `archive: ${format} requires a lazy-loaded Wasm decoder (not yet wired)`;
-    default:
-      return `archive: unsupported format '${format}'`;
-  }
+  return `archive: unsupported format '${format}'`;
 }
 
 export const archive = {
@@ -116,7 +134,7 @@ export const archive = {
     const { bytes, format } = resolved;
     if (format === 'zip') return listZip(bytes);
     if (format === 'tar') return listTar(bytes);
-    if (format === 'gz-single' || format === 'zst-single') {
+    if (format === 'gz-single' || format === 'zst-single' || format === 'xz-single' || format === 'bz2-single') {
       return [{ path: resolved.innerName, type: 'file', size: bytes.length }];
     }
     throw new Error(_explainUnsupported(format));
@@ -131,7 +149,7 @@ export const archive = {
     const { bytes, format } = resolved;
     if (format === 'zip') return readZip(bytes, innerPath);
     if (format === 'tar') return readTar(bytes, innerPath);
-    if (format === 'gz-single' || format === 'zst-single') {
+    if (format === 'gz-single' || format === 'zst-single' || format === 'xz-single' || format === 'bz2-single') {
       return innerPath === resolved.innerName ? bytes : null;
     }
     throw new Error(_explainUnsupported(format));
@@ -145,7 +163,7 @@ export const archive = {
     let result;
     if (format === 'zip')      result = await extractZip(bytes, dst, opts);
     else if (format === 'tar') result = await extractTar(bytes, dst, opts);
-    else if (format === 'gz-single' || format === 'zst-single') {
+    else if (format === 'gz-single' || format === 'zst-single' || format === 'xz-single' || format === 'bz2-single') {
       result = await _extractSingle(dst, resolved.innerName, bytes, opts);
     }
     else throw new Error(_explainUnsupported(format));
@@ -186,13 +204,18 @@ export const archive = {
     if (format === 'gz') return this.gzip(source, sink);
     if (format === 'zst') return this.zstd(source, sink);
 
-    // tar.zst / tar.xz / tar.bz2 can't be written until their encoders are
-    // vendored. Be explicit so users don't think it silently no-op'd.
+    // tar.zst / tar.xz / tar.bz2 / single-stream variants are decode-only
+    // by design (out-of-scope encode — modern toolchains produce tar.gz or
+    // tar.zst and zstd encoding is the only one we'd vendor if any). Be
+    // explicit so users don't think it silently no-op'd.
     if (format === 'tar.zst') {
       throw new Error('archive.compress: tar.zst encode not available (fzstd is decode-only)');
     }
-    if (format === 'tar.xz' || format === 'tar.bz2' || format === 'xz' || format === 'bz2') {
-      throw new Error(`archive.compress: ${format} encode requires a lazy-loaded Wasm encoder (not yet wired)`);
+    if (format === 'tar.xz' || format === 'xz') {
+      throw new Error('archive.compress: xz encode not available (xz-decompress is decode-only)');
+    }
+    if (format === 'tar.bz2' || format === 'bz2') {
+      throw new Error('archive.compress: bz2 encode not available (seek-bzip is decode-only)');
     }
 
     // Multi-entry formats. Gather entries, build the archive, write it out.

@@ -200,8 +200,11 @@ export function createWriter(sink, opts = {}) {
   if (format === 'gz' || format === 'zst') {
     throw new Error(`createWriter: ${format} is a single-stream format — use archive.${format === 'gz' ? 'gzip' : 'zstd'} for that`);
   }
-  if (format === 'xz' || format === 'bz2' || format === 'tar.xz' || format === 'tar.bz2') {
-    throw new Error(`createWriter: ${format} encode requires a lazy-loaded Wasm encoder (not yet wired)`);
+  if (format === 'xz' || format === 'tar.xz') {
+    throw new Error(`createWriter: ${format} encode not available (xz-decompress is decode-only)`);
+  }
+  if (format === 'bz2' || format === 'tar.bz2') {
+    throw new Error(`createWriter: ${format} encode not available (seek-bzip is decode-only)`);
   }
   throw new Error(`createWriter: unsupported format '${format}'`);
 }
