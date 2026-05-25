@@ -259,9 +259,17 @@ function updateStatus() {
   sSize.textContent = fmtBytes(v.length);
 }
 
-editor.addEventListener('scroll', () => {
+function syncGutterScroll() {
   gutter.style.transform = 'translateY(' + (-editor.scrollTop) + 'px)';
-});
+}
+editor.addEventListener('scroll', syncGutterScroll);
+// Layout reflows (find-bar toggle, status-bar toggle, window resize,
+// etc.) can move scrollTop without firing a scroll event. Resync on
+// any size change so the gutter doesn't get pushed off-screen with a
+// stale transform.
+if (typeof ResizeObserver !== 'undefined') {
+  new ResizeObserver(syncGutterScroll).observe(editor);
+}
 editor.addEventListener('keyup',   updateStatus);
 editor.addEventListener('click',   updateStatus);
 editor.addEventListener('mouseup', updateStatus);
