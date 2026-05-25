@@ -7,8 +7,11 @@
 //   - parseUrlToSource, fetchLicense                       (from fetch.js)
 //   - aggregateLicenses                                    (from aggregate.js)
 //
-// Follow-up commits will add:
-//   - inferLicense (fingerprint fallback for license-text → SPDX id)
+//   - inferLicense                                          (from infer.js)
+//
+// inferLicense (added in this commit) is a substring-fingerprint fallback
+// the aggregator uses automatically when an entry has LICENSE text but no
+// declared SPDX id — rows with `inferred: true` mark heuristic matches.
 
 export {
   validateSpdx,
@@ -23,5 +26,7 @@ export { classify, classifyExpression } from './classify.js';
 export { formatTable, formatNoticesFile } from './format.js';
 
 export { parseUrlToSource, fetchLicense } from './fetch.js';
+
+export { inferLicense } from './infer.js';
 
 export { aggregateLicenses, aggregateFromInstalledModules, aggregateFromBuildLicenses } from './aggregate.js';

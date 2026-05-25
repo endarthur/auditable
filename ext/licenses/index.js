@@ -944,6 +944,84 @@ async function fetchLicense(input, opts = {}) {
   }
 }
 
+// -- infer.js --
+
+// inferLicense(text) — fingerprint-based SPDX-id guess from raw license text.
+//
+// Use case: an installed module shipped a LICENSE file but no package.json
+// `license` field (or pkg-managed only). Without this, the aggregator labels
+// everything UNKNOWN — pessimistic but useless. The fingerprints below match
+// the distinctive sentinel phrase from each license's CANONICAL text — same
+// approach SPDX/license-detector use, scaled down to the ~10 ids that cover
+// the ecosystem auditable actually pulls from.
+//
+// Returns: an SPDX id string on a confident match, or null. Designed to be
+// boring: we'd rather decline than misclassify. The caller treats null as
+// "still UNKNOWN, fall back to whatever was already there."
+//
+// Not a full SPDX detector. Things deliberately out of scope:
+//   - Exception detection (WITH clauses).
+//   - License-text variants that diverge from canonical wording.
+//   - OR-disjunctions inside one file.
+//
+// Fingerprints picked for uniqueness within the working corpus, not for
+// distinguishing every SPDX id from every other. ISC + MIT share a lot of
+// phrasing; the ISC check runs first because its distinctive "fee" wording
+// would otherwise be claimed as MIT.
+
+// Each entry: { id, pattern } where pattern is a regex. The first match wins.
+// Order matters — more-specific patterns ahead of more-generic ones.
+const FINGERPRINTS = [
+  // BSD-3 has the distinctive third clause about endorsement.
+  { id: 'BSD-3-Clause', pattern: /neither the name of (the copyright holder|the (\w+\s){1,4}foundation)?[\s\S]{0,200}?be used to endorse or promote products/i },
+
+  // BSD-2 = BSD-3 minus the endorsement clause. Match the redistributions clauses without endorsement.
+  { id: 'BSD-2-Clause', pattern: /redistributions of source code must retain[\s\S]{0,400}?redistributions in binary form must reproduce/i },
+
+  // ISC — short permissive, distinctive "fee" + no warranty.
+  { id: 'ISC', pattern: /permission to use,? copy,? modify,?( and\/or)? distribute this software for any purpose with or without fee/i },
+
+  // MIT — distinctive opening clause + "Software" reference.
+  { id: 'MIT', pattern: /permission is hereby granted,? free of charge,? to any person obtaining a copy[\s\S]{0,200}?(of this software|the "?Software"?)/i },
+
+  // Apache-2.0 — distinctive title line.
+  { id: 'Apache-2.0', pattern: /apache license[\s\S]{0,30}?version 2\.0/i },
+
+  // MPL-2.0 — distinctive title line.
+  { id: 'MPL-2.0', pattern: /mozilla public license[\s\S]{0,30}?version 2\.0/i },
+
+  // AGPL-3.0 — order before GPL because both contain "GNU GENERAL PUBLIC LICENSE".
+  { id: 'AGPL-3.0', pattern: /gnu affero general public license[\s\S]{0,30}?version 3/i },
+
+  // LGPL — version-specific.
+  { id: 'LGPL-3.0', pattern: /gnu lesser general public license[\s\S]{0,30}?version 3/i },
+  { id: 'LGPL-2.1', pattern: /gnu lesser general public license[\s\S]{0,30}?version 2\.1/i },
+
+  // GPL — version-specific. AGPL/LGPL already filtered above.
+  { id: 'GPL-3.0', pattern: /gnu general public license[\s\S]{0,30}?version 3/i },
+  { id: 'GPL-2.0', pattern: /gnu general public license[\s\S]{0,30}?version 2/i },
+
+  // The Unlicense — distinctive public-domain dedication phrasing.
+  { id: 'Unlicense', pattern: /this is free and unencumbered software released into the public domain/i },
+
+  // 0BSD / BSD-Zero-Clause — distinctive no-attribution-required phrasing.
+  { id: '0BSD', pattern: /permission to use, copy, modify, and\/or distribute this software for any purpose with or without fee is hereby granted/i },
+
+  // CC0 — public domain dedication, distinctive title.
+  { id: 'CC0-1.0', pattern: /cc0 1\.0 universal/i },
+];
+
+function inferLicense(text) {
+  if (typeof text !== 'string' || text.length < 40) return null;
+  // Whitespace normalize so a Win-style \r\n LICENSE file matches the same
+  // patterns as a Unix one. Cheap; ~one allocation.
+  const t = text.replace(/\r\n?/g, '\n').replace(/[ \t]+/g, ' ');
+  for (const fp of FINGERPRINTS) {
+    if (fp.pattern.test(t)) return fp.id;
+  }
+  return null;
+}
+
 // -- aggregate.js --
 
 // aggregateLicenses(vfs) — pure view function over the workspace VFS.
@@ -965,6 +1043,22 @@ async function fetchLicense(input, opts = {}) {
 // All three may throw on missing paths; we catch and treat as empty.
 
 
+
+
+// Backfill an SPDX id from license text when the upstream metadata didn't
+// declare one. Returns { spdx, inferred } — inferred=true marks rows whose
+// classification leaned on the fingerprint heuristic rather than a declared
+// package.json field. UI can show this with a softer badge.
+function _resolveSpdx(declared, text) {
+  if (declared && typeof declared === 'string' && declared !== 'UNKNOWN') {
+    return { spdx: declared, inferred: false };
+  }
+  if (typeof text === 'string' && text.length > 0) {
+    const guess = inferLicense(text);
+    if (guess) return { spdx: guess, inferred: true };
+  }
+  return { spdx: declared || 'UNKNOWN', inferred: false };
+}
 
 // ── VFS-safe helpers ─────────────────────────────────────────────────────
 
@@ -1039,16 +1133,18 @@ async function walkVarModules(vfs) {
     }
     if (!pkg) pkg = key;
 
-    const spdx = (meta.license && typeof meta.license.spdx === 'string')
+    const declared = (meta.license && typeof meta.license.spdx === 'string')
       ? meta.license.spdx
-      : (lic ? null : 'UNKNOWN');
+      : null;
+    const { spdx, inferred } = _resolveSpdx(declared, lic ? lic.text : null);
 
     out.push({
       pkg, version,
       source: 'install',
       path: dir,
-      spdx: spdx || 'UNKNOWN',
+      spdx,
       classification: classify(spdx),
+      inferred,
       copyright: meta.license && meta.license.copyright || (lic ? extractCopyright(lic.text) : null),
       text: lic ? lic.text : null,
       fetchedFrom: meta.license && meta.license.fetchedFrom || null,
@@ -1119,17 +1215,19 @@ async function collectLibEntry(vfs, dir, pkg, version, sourceTag) {
               || await readJson(vfs, `${dir}/jsr.json`)
               || {};
   const lic = await readLicenseFile(vfs, dir);
-  const spdx = spdxFromPackageJson(pkgJson) || (lic ? null : 'UNKNOWN');
+  const declared = spdxFromPackageJson(pkgJson);
+  const { spdx, inferred } = _resolveSpdx(declared, lic ? lic.text : null);
   return {
     pkg, version,
     source: sourceTag,
     path: dir,
-    spdx: spdx || 'UNKNOWN',
+    spdx,
     classification: classify(spdx),
+    inferred,
     copyright: lic ? extractCopyright(lic.text) : null,
     text: lic ? lic.text : null,
     fetchedFrom: null,
-    verified: !!(spdx && lic),
+    verified: !!(declared && lic),
   };
 }
 
@@ -1146,20 +1244,21 @@ async function walkSysLicenses(vfs) {
 
     const entry = index[name] || {};
     const lic = await readLicenseFile(vfs, dir);
-    const spdx = (typeof entry.spdx === 'string' ? entry.spdx : null)
-              || (lic ? null : 'UNKNOWN');
+    const declared = typeof entry.spdx === 'string' ? entry.spdx : null;
+    const { spdx, inferred } = _resolveSpdx(declared, lic ? lic.text : null);
 
     out.push({
       pkg: name,
       version: entry.version || null,
       source: 'vendored',
       path: dir,
-      spdx: spdx || 'UNKNOWN',
+      spdx,
       classification: classify(spdx),
+      inferred,
       copyright: lic ? extractCopyright(lic.text) : null,
       text: lic ? lic.text : null,
       fetchedFrom: entry.homepage || null,
-      verified: !!(spdx && lic),
+      verified: !!(declared && lic),
     });
   }
   return out;
@@ -1179,7 +1278,9 @@ function aggregateFromBuildLicenses(manifest) {
   const out = [];
   for (const [name, entry] of Object.entries(manifest)) {
     if (!entry || typeof entry !== 'object') continue;
-    const spdx = (typeof entry.spdx === 'string') ? entry.spdx : 'UNKNOWN';
+    const declared = (typeof entry.spdx === 'string') ? entry.spdx : null;
+    const text = typeof entry.text === 'string' ? entry.text : null;
+    const { spdx, inferred } = _resolveSpdx(declared, text);
     out.push({
       pkg: name,
       version: entry.version || null,
@@ -1187,11 +1288,12 @@ function aggregateFromBuildLicenses(manifest) {
       path: entry.homepage || name,
       spdx,
       classification: classify(spdx),
-      copyright: typeof entry.text === 'string' ? extractCopyright(entry.text) : null,
-      text: typeof entry.text === 'string' ? entry.text : null,
+      inferred,
+      copyright: text ? extractCopyright(text) : null,
+      text,
       fetchedFrom: entry.homepage || null,
       description: entry.description || null,
-      verified: !!entry.text,
+      verified: !!text,
     });
   }
   return out;
@@ -1230,17 +1332,20 @@ function aggregateFromInstalledModules(installedModules) {
     if (!pkg) pkg = entry.alias || key;
 
     const lic = entry.license || null;
-    const spdx = (lic && typeof lic.spdx === 'string') ? lic.spdx : 'UNKNOWN';
+    const declared = (lic && typeof lic.spdx === 'string') ? lic.spdx : null;
+    const text = typeof entry.licenseText === 'string' ? entry.licenseText : null;
+    const { spdx, inferred } = _resolveSpdx(declared, text);
     out.push({
       pkg, version,
       source: 'install',
       path: key,                                         // the runtime cache key (URL)
       spdx,
       classification: classify(spdx),
+      inferred,
       copyright: lic ? (lic.copyright || null) : null,
-      text: typeof entry.licenseText === 'string' ? entry.licenseText : null,
+      text,
       fetchedFrom: lic ? (lic.fetchedFrom || null) : null,
-      verified: !!(lic && entry.licenseText),
+      verified: !!(declared && text),
     });
   }
   return out;
@@ -1272,12 +1377,16 @@ async function aggregateLicenses(vfs) {
 //   - parseUrlToSource, fetchLicense                       (from fetch.js)
 //   - aggregateLicenses                                    (from aggregate.js)
 //
-// Follow-up commits will add:
-//   - inferLicense (fingerprint fallback for license-text → SPDX id)
+//   - inferLicense                                          (from infer.js)
+//
+// inferLicense (added in this commit) is a substring-fingerprint fallback
+// the aggregator uses automatically when an entry has LICENSE text but no
+// declared SPDX id — rows with `inferred: true` mark heuristic matches.
 export {
   validateSpdx, parseSpdx, SPDX_CORPUS, isKnownSpdxId, SPDX_KINDS,
   classify, classifyExpression,
   formatTable, formatNoticesFile,
   parseUrlToSource, fetchLicense,
+  inferLicense,
   aggregateLicenses, aggregateFromInstalledModules, aggregateFromBuildLicenses,
 };

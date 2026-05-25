@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const srcDir = path.join(__dirname, 'src');
 
-const files = ['spdx.js', 'classify.js', 'format.js', 'fetch.js', 'aggregate.js', 'api.js'];
+const files = ['spdx.js', 'classify.js', 'format.js', 'fetch.js', 'infer.js', 'aggregate.js', 'api.js'];
 
 const chunks = [];
 for (const file of files) {
@@ -36,6 +36,7 @@ export {
   classify, classifyExpression,
   formatTable, formatNoticesFile,
   parseUrlToSource, fetchLicense,
+  inferLicense,
   aggregateLicenses, aggregateFromInstalledModules, aggregateFromBuildLicenses,
 };
 `;

@@ -18,6 +18,22 @@
 
 import { parseUrlToSource, spdxFromPackageJson, extractCopyright, LICENSE_FILENAMES } from './fetch.js';
 import { classify } from './classify.js';
+import { inferLicense } from './infer.js';
+
+// Backfill an SPDX id from license text when the upstream metadata didn't
+// declare one. Returns { spdx, inferred } — inferred=true marks rows whose
+// classification leaned on the fingerprint heuristic rather than a declared
+// package.json field. UI can show this with a softer badge.
+function _resolveSpdx(declared, text) {
+  if (declared && typeof declared === 'string' && declared !== 'UNKNOWN') {
+    return { spdx: declared, inferred: false };
+  }
+  if (typeof text === 'string' && text.length > 0) {
+    const guess = inferLicense(text);
+    if (guess) return { spdx: guess, inferred: true };
+  }
+  return { spdx: declared || 'UNKNOWN', inferred: false };
+}
 
 // ── VFS-safe helpers ─────────────────────────────────────────────────────
 
@@ -92,16 +108,18 @@ async function walkVarModules(vfs) {
     }
     if (!pkg) pkg = key;
 
-    const spdx = (meta.license && typeof meta.license.spdx === 'string')
+    const declared = (meta.license && typeof meta.license.spdx === 'string')
       ? meta.license.spdx
-      : (lic ? null : 'UNKNOWN');
+      : null;
+    const { spdx, inferred } = _resolveSpdx(declared, lic ? lic.text : null);
 
     out.push({
       pkg, version,
       source: 'install',
       path: dir,
-      spdx: spdx || 'UNKNOWN',
+      spdx,
       classification: classify(spdx),
+      inferred,
       copyright: meta.license && meta.license.copyright || (lic ? extractCopyright(lic.text) : null),
       text: lic ? lic.text : null,
       fetchedFrom: meta.license && meta.license.fetchedFrom || null,
@@ -172,17 +190,19 @@ async function collectLibEntry(vfs, dir, pkg, version, sourceTag) {
               || await readJson(vfs, `${dir}/jsr.json`)
               || {};
   const lic = await readLicenseFile(vfs, dir);
-  const spdx = spdxFromPackageJson(pkgJson) || (lic ? null : 'UNKNOWN');
+  const declared = spdxFromPackageJson(pkgJson);
+  const { spdx, inferred } = _resolveSpdx(declared, lic ? lic.text : null);
   return {
     pkg, version,
     source: sourceTag,
     path: dir,
-    spdx: spdx || 'UNKNOWN',
+    spdx,
     classification: classify(spdx),
+    inferred,
     copyright: lic ? extractCopyright(lic.text) : null,
     text: lic ? lic.text : null,
     fetchedFrom: null,
-    verified: !!(spdx && lic),
+    verified: !!(declared && lic),
   };
 }
 
@@ -199,20 +219,21 @@ async function walkSysLicenses(vfs) {
 
     const entry = index[name] || {};
     const lic = await readLicenseFile(vfs, dir);
-    const spdx = (typeof entry.spdx === 'string' ? entry.spdx : null)
-              || (lic ? null : 'UNKNOWN');
+    const declared = typeof entry.spdx === 'string' ? entry.spdx : null;
+    const { spdx, inferred } = _resolveSpdx(declared, lic ? lic.text : null);
 
     out.push({
       pkg: name,
       version: entry.version || null,
       source: 'vendored',
       path: dir,
-      spdx: spdx || 'UNKNOWN',
+      spdx,
       classification: classify(spdx),
+      inferred,
       copyright: lic ? extractCopyright(lic.text) : null,
       text: lic ? lic.text : null,
       fetchedFrom: entry.homepage || null,
-      verified: !!(spdx && lic),
+      verified: !!(declared && lic),
     });
   }
   return out;
@@ -232,7 +253,9 @@ export function aggregateFromBuildLicenses(manifest) {
   const out = [];
   for (const [name, entry] of Object.entries(manifest)) {
     if (!entry || typeof entry !== 'object') continue;
-    const spdx = (typeof entry.spdx === 'string') ? entry.spdx : 'UNKNOWN';
+    const declared = (typeof entry.spdx === 'string') ? entry.spdx : null;
+    const text = typeof entry.text === 'string' ? entry.text : null;
+    const { spdx, inferred } = _resolveSpdx(declared, text);
     out.push({
       pkg: name,
       version: entry.version || null,
@@ -240,11 +263,12 @@ export function aggregateFromBuildLicenses(manifest) {
       path: entry.homepage || name,
       spdx,
       classification: classify(spdx),
-      copyright: typeof entry.text === 'string' ? extractCopyright(entry.text) : null,
-      text: typeof entry.text === 'string' ? entry.text : null,
+      inferred,
+      copyright: text ? extractCopyright(text) : null,
+      text,
       fetchedFrom: entry.homepage || null,
       description: entry.description || null,
-      verified: !!entry.text,
+      verified: !!text,
     });
   }
   return out;
@@ -283,17 +307,20 @@ export function aggregateFromInstalledModules(installedModules) {
     if (!pkg) pkg = entry.alias || key;
 
     const lic = entry.license || null;
-    const spdx = (lic && typeof lic.spdx === 'string') ? lic.spdx : 'UNKNOWN';
+    const declared = (lic && typeof lic.spdx === 'string') ? lic.spdx : null;
+    const text = typeof entry.licenseText === 'string' ? entry.licenseText : null;
+    const { spdx, inferred } = _resolveSpdx(declared, text);
     out.push({
       pkg, version,
       source: 'install',
       path: key,                                         // the runtime cache key (URL)
       spdx,
       classification: classify(spdx),
+      inferred,
       copyright: lic ? (lic.copyright || null) : null,
-      text: typeof entry.licenseText === 'string' ? entry.licenseText : null,
+      text,
       fetchedFrom: lic ? (lic.fetchedFrom || null) : null,
-      verified: !!(lic && entry.licenseText),
+      verified: !!(declared && text),
     });
   }
   return out;

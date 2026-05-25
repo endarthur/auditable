@@ -11,6 +11,7 @@ import {
   classify, classifyExpression,
   formatTable, formatNoticesFile,
   parseUrlToSource, fetchLicense,
+  inferLicense,
   aggregateLicenses, aggregateFromInstalledModules, aggregateFromBuildLicenses,
 } from '../ext/licenses/src/main.js';
 
@@ -983,4 +984,122 @@ test('aggregateFromInstalledModules: falls back to entry.alias when URL unparsea
   // either way the pkg field gets populated.
   assert.equal(t.length, 1);
   assert.ok(t[0].pkg);
+});
+
+// ── inferLicense — fingerprint fallback ──────────────────────────────────
+
+test('inferLicense: MIT', () => {
+  const txt = 'MIT License\n\nCopyright (c) 2024 Foo\n\nPermission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction…';
+  assert.equal(inferLicense(txt), 'MIT');
+});
+
+test('inferLicense: ISC (not MIT — ISC says "with or without fee")', () => {
+  const txt = 'ISC License\n\nCopyright (c) 2024 Foo\n\nPermission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, provided that the above copyright notice and this permission notice appear in all copies.';
+  assert.equal(inferLicense(txt), 'ISC');
+});
+
+test('inferLicense: BSD-3-Clause via endorsement clause', () => {
+  const txt = `Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice…
+2. Redistributions in binary form must reproduce the above copyright notice…
+3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.`;
+  assert.equal(inferLicense(txt), 'BSD-3-Clause');
+});
+
+test('inferLicense: BSD-2-Clause when endorsement clause absent', () => {
+  const txt = `Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice…
+2. Redistributions in binary form must reproduce the above copyright notice…
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AS IS…`;
+  assert.equal(inferLicense(txt), 'BSD-2-Clause');
+});
+
+test('inferLicense: Apache-2.0', () => {
+  const txt = '                                 Apache License\n                           Version 2.0, January 2004\n                        http://www.apache.org/licenses/';
+  assert.equal(inferLicense(txt), 'Apache-2.0');
+});
+
+test('inferLicense: MPL-2.0', () => {
+  const txt = 'Mozilla Public License Version 2.0\n==================================';
+  assert.equal(inferLicense(txt), 'MPL-2.0');
+});
+
+test('inferLicense: GPL-3.0', () => {
+  const txt = '                    GNU GENERAL PUBLIC LICENSE\n                       Version 3, 29 June 2007\n\n Copyright (C) 2007 Free Software Foundation, Inc.';
+  assert.equal(inferLicense(txt), 'GPL-3.0');
+});
+
+test('inferLicense: GPL-2.0', () => {
+  const txt = '                    GNU GENERAL PUBLIC LICENSE\n                       Version 2, June 1991';
+  assert.equal(inferLicense(txt), 'GPL-2.0');
+});
+
+test('inferLicense: AGPL-3.0 wins over GPL-3.0 by ordering', () => {
+  const txt = '                    GNU AFFERO GENERAL PUBLIC LICENSE\n                       Version 3, 19 November 2007';
+  assert.equal(inferLicense(txt), 'AGPL-3.0');
+});
+
+test('inferLicense: LGPL-3.0', () => {
+  const txt = '                   GNU LESSER GENERAL PUBLIC LICENSE\n                       Version 3, 29 June 2007';
+  assert.equal(inferLicense(txt), 'LGPL-3.0');
+});
+
+test('inferLicense: Unlicense', () => {
+  const txt = 'This is free and unencumbered software released into the public domain.\n\nAnyone is free to copy, modify, publish, use, compile, sell, or distribute this software…';
+  assert.equal(inferLicense(txt), 'Unlicense');
+});
+
+test('inferLicense: nonsense input returns null', () => {
+  assert.equal(inferLicense('hello world'), null);
+  assert.equal(inferLicense(''), null);
+  assert.equal(inferLicense(null), null);
+  assert.equal(inferLicense(undefined), null);
+  assert.equal(inferLicense(42), null);
+});
+
+test('inferLicense: tolerates Windows line endings', () => {
+  const txt = 'MIT License\r\n\r\nCopyright (c) 2024 Foo\r\n\r\nPermission is hereby granted, free of charge, to any person obtaining a copy of this software';
+  assert.equal(inferLicense(txt), 'MIT');
+});
+
+test('aggregateFromBuildLicenses: backfills SPDX from text when declared is missing', () => {
+  const t = aggregateFromBuildLicenses({
+    'mystery-mit': {
+      version: '1.0.0',
+      text: 'MIT License\n\nCopyright (c) 2024 Foo\n\nPermission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files…',
+    },
+  });
+  assert.equal(t[0].spdx, 'MIT');
+  assert.equal(t[0].inferred, true);
+  assert.equal(t[0].classification, 'permissive');
+});
+
+test('aggregateFromBuildLicenses: declared SPDX wins over fingerprint', () => {
+  const t = aggregateFromBuildLicenses({
+    'declared-only': {
+      spdx: 'Apache-2.0',
+      version: '1.0.0',
+      text: 'MIT License\n\nPermission is hereby granted, free of charge, to any person obtaining a copy of this software…',
+    },
+  });
+  assert.equal(t[0].spdx, 'Apache-2.0');
+  assert.equal(t[0].inferred, false);
+});
+
+test('aggregateFromInstalledModules: backfills SPDX from licenseText', () => {
+  const t = aggregateFromInstalledModules({
+    'https://esm.sh/mystery@1.0.0': {
+      url: 'https://esm.sh/mystery@1.0.0',
+      source: '<gz>',
+      licenseText: 'MIT License\n\nCopyright (c) 2024 Foo\n\nPermission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction…',
+    },
+  });
+  assert.equal(t[0].spdx, 'MIT');
+  assert.equal(t[0].inferred, true);
+  assert.equal(t[0].classification, 'permissive');
+  // verified=false because the SPDX wasn't declared; we only inferred it.
+  assert.equal(t[0].verified, false);
 });
