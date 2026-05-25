@@ -24,4 +24,4 @@ export { formatTable, formatNoticesFile } from './format.js';
 
 export { parseUrlToSource, fetchLicense } from './fetch.js';
 
-export { aggregateLicenses } from './aggregate.js';
+export { aggregateLicenses, aggregateFromInstalledModules } from './aggregate.js';

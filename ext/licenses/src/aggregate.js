@@ -16,7 +16,7 @@
 //
 // All three may throw on missing paths; we catch and treat as empty.
 
-import { parseUrlToSource } from './fetch.js';
+import { parseUrlToSource, spdxFromPackageJson, extractCopyright, LICENSE_FILENAMES } from './fetch.js';
 import { classify } from './classify.js';
 
 // ── VFS-safe helpers ─────────────────────────────────────────────────────
@@ -48,47 +48,15 @@ async function readJson(vfs, path) {
   try { return JSON.parse(text); } catch { return null; }
 }
 
-// Try the standard LICENSE-file variants in a directory, return first hit.
-const LICENSE_FILENAMES = [
-  'LICENSE', 'LICENSE.md', 'LICENSE.txt',
-  'license', 'license.md', 'license.txt',
-  'COPYING', 'COPYING.md', 'COPYING.txt',
-  'NOTICE',
-];
-
+// readLicenseFile reuses the LICENSE-filename list from fetch.js (probed against
+// HTTP URLs there, VFS paths here). spdxFromPackageJson + extractCopyright are
+// also shared — same heuristics whether we read package.json from a CDN or
+// from a /lib/<pkg>/ directory.
 async function readLicenseFile(vfs, dir) {
   for (const name of LICENSE_FILENAMES) {
     const text = await safeReadFile(vfs, `${dir}/${name}`, 'utf8');
     if (typeof text === 'string' && text.length > 0) {
       return { text, filename: name };
-    }
-  }
-  return null;
-}
-
-function spdxFromPackageJson(json) {
-  if (!json || typeof json !== 'object') return null;
-  if (typeof json.license === 'string') return json.license;
-  if (json.license && typeof json.license === 'object' && typeof json.license.type === 'string') {
-    return json.license.type;
-  }
-  if (Array.isArray(json.licenses) && json.licenses.length > 0) {
-    const types = json.licenses
-      .map((l) => (l && typeof l === 'object' ? l.type : (typeof l === 'string' ? l : null)))
-      .filter(Boolean);
-    if (types.length === 1) return types[0];
-    if (types.length > 1) return `(${types.join(' OR ')})`;
-  }
-  return null;
-}
-
-function extractCopyright(text) {
-  if (!text) return null;
-  const lines = text.split(/\r?\n/);
-  for (const line of lines) {
-    const t = line.trim();
-    if (/^Copyright\b/i.test(t) || /^\(c\)\s/i.test(t) || /^©\s/.test(t)) {
-      if (t.length > 4 && t.length < 400) return t;
     }
   }
   return null;
@@ -245,6 +213,55 @@ async function walkSysLicenses(vfs) {
       text: lic ? lic.text : null,
       fetchedFrom: entry.homepage || null,
       verified: !!(spdx && lic),
+    });
+  }
+  return out;
+}
+
+// aggregateFromInstalledModules — in-memory variant for auditable's current
+// runtime layout, where install()'d ESM modules live in a flat JS object
+// (window._installedModules) rather than per-module VFS folders. Same entry
+// shape as aggregateLicenses so the formatters and UI don't care which path
+// produced the table.
+//
+// Expected entry shape (the runtime cache used by cell-builtins/modules.js):
+//   _installedModules[url] = {
+//     source, compressed, cellId, url, alias, integrity, kind,
+//     installedAt, size,
+//     license?:    { spdx, copyright, fetchedFrom, source, fetchedAt, ... },
+//     licenseText?: string,   // raw or gzip-base64; treated as opaque text
+//   }
+//
+// Pre-tracking entries (no `license` field) come through as classification:
+// 'unknown' with `verified: false` — surfaces in the UI as a grey badge.
+export function aggregateFromInstalledModules(installedModules) {
+  if (!installedModules || typeof installedModules !== 'object') return [];
+  const out = [];
+  for (const [key, entry] of Object.entries(installedModules)) {
+    if (!entry || typeof entry !== 'object') continue;
+    // binary assets aren't really "modules with licenses" — skip them. Their
+    // upstream license, if any, is captured via the URL they came from in
+    // the source-side install (handled separately by installBinary).
+    if (entry.binary) continue;
+
+    const url = entry.url || key;
+    let pkg = null, version = null;
+    const desc = parseUrlToSource(url);
+    if (desc) { pkg = desc.pkg; version = desc.version; }
+    if (!pkg) pkg = entry.alias || key;
+
+    const lic = entry.license || null;
+    const spdx = (lic && typeof lic.spdx === 'string') ? lic.spdx : 'UNKNOWN';
+    out.push({
+      pkg, version,
+      source: 'install',
+      path: key,                                         // the runtime cache key (URL)
+      spdx,
+      classification: classify(spdx),
+      copyright: lic ? (lic.copyright || null) : null,
+      text: typeof entry.licenseText === 'string' ? entry.licenseText : null,
+      fetchedFrom: lic ? (lic.fetchedFrom || null) : null,
+      verified: !!(lic && entry.licenseText),
     });
   }
   return out;

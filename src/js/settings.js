@@ -3,6 +3,7 @@ import { updateStatus, setMsg, setPreferredCodeType, getRawPreferredCodeType } f
 import { updateAllEditorThemes, updateAllEditorLineNumbers, updateAllEditorReadOnly } from './cm6.js';
 import { hasSwitchboardFonts, fetchSwitchboardFonts } from './save.js';
 import * as hooks from './hooks.js';
+import { aggregateFromInstalledModules } from '#licenses';
 
 // ── SETTINGS ──
 
@@ -20,6 +21,7 @@ export function toggleSettings() {
   if (open) {
     refreshPluginList();
     refreshModuleList();
+    refreshLicensesList();
   }
 }
 
@@ -184,6 +186,7 @@ export function getSettings() {
   if (window._sizeCompare) s.sizeCompare = true;
   if (window._sizeCompareRef === 'content') s.sizeCompareRef = 'content';
   if (_embedFonts) s.embedFonts = true;
+  if (window._auditableLicensesStrict) s.licensesStrict = true;
   return s;
 }
 
@@ -199,6 +202,7 @@ export function applySettings(s) {
   if (s.showToggle) applyShowToggle(s.showToggle);
   if (s.editorView) applyEditorView(s.editorView);
   if (s.embedFonts !== undefined) applyEmbedFonts(s.embedFonts);
+  if (s.licensesStrict !== undefined) applyLicensesStrict(s.licensesStrict);
   if (s.preferredCodeType) setPreferredCodeType(s.preferredCodeType);
   // optional: size-compare.js (typeof guards for --lean builds without it)
   if (s.sizeCompare !== undefined && typeof applySizeCompare === 'function') applySizeCompare(s.sizeCompare);
@@ -388,8 +392,93 @@ export function removeModule(url) {
   if (window._importCache) delete window._importCache[url];
   hooks.emit("notebook:dirty");
   refreshModuleList();
+  refreshLicensesList();
   updateStatus();
   if (cellId != null) {
     setMsg(`removed ${kind} \u2014 cell ${cellId} will re-install it on next run`, 'warn');
   }
+}
+
+// \u2500\u2500 LICENSES \u2500\u2500
+// Strict mode flips a window-level flag read by cell-builtins/modules.js
+// at install() time. When true, install() throws on copyleft/unknown
+// licenses (the user must remove the install or relax the policy).
+
+export function applyLicensesStrict(on) {
+  window._auditableLicensesStrict = !!on;
+  const sel = $('#setLicensesStrict');
+  if (sel) sel.value = on ? 'on' : 'off';
+  hooks.emit("notebook:dirty");
+}
+
+const _CLS_BADGE_STYLE = {
+  'permissive':       'color: var(--au-text); background: rgba(40,160,80,0.12); border: 1px solid rgba(40,160,80,0.35);',
+  'weak-copyleft':    'color: var(--au-text); background: rgba(220,160,40,0.14); border: 1px solid rgba(220,160,40,0.40);',
+  'strong-copyleft': 'color: var(--au-text); background: rgba(220,80,60,0.18); border: 1px solid rgba(220,80,60,0.45);',
+  'unknown':          'color: var(--au-text); background: rgba(140,140,140,0.16); border: 1px solid rgba(140,140,140,0.40);',
+};
+
+function _renderLicenseRow(entry) {
+  const row = document.createElement('div');
+  row.className = 'module-row';
+
+  const label = entry.version ? `${entry.pkg}@${entry.version}` : entry.pkg;
+  const nameSpan = document.createElement('span');
+  nameSpan.className = 'module-url';
+  nameSpan.textContent = label;
+  nameSpan.title = entry.path || '';
+  row.appendChild(nameSpan);
+
+  const badge = document.createElement('span');
+  badge.className = 'license-badge';
+  badge.textContent = entry.spdx || 'UNKNOWN';
+  badge.title = entry.classification + (entry.copyright ? ' \u2014 ' + entry.copyright : '');
+  badge.style.cssText = (_CLS_BADGE_STYLE[entry.classification] || _CLS_BADGE_STYLE.unknown)
+    + ' padding: 1px 6px; border-radius: 3px; font-size: 11px; margin-left: 8px;';
+  row.appendChild(badge);
+
+  const info = document.createElement('span');
+  info.className = 'module-info';
+  info.textContent = entry.source || '';
+  info.style.cssText = 'margin-left: auto; color: var(--au-text-muted); font-size: 11px;';
+  row.appendChild(info);
+
+  return row;
+}
+
+export function refreshLicensesList() {
+  const list = $('#licenseList');
+  if (!list) return;
+  list.innerHTML = '';
+
+  const mods = window._installedModules || {};
+  const table = aggregateFromInstalledModules(mods);
+  if (table.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'module-empty';
+    empty.textContent = 'no installed modules to audit';
+    list.appendChild(empty);
+    return;
+  }
+
+  // Surface copyleft + unknown first \u2014 they're the rows the user wants to see.
+  const order = { 'strong-copyleft': 0, 'weak-copyleft': 1, 'unknown': 2, 'permissive': 3 };
+  table.sort((a, b) =>
+    (order[a.classification] ?? 9) - (order[b.classification] ?? 9)
+    || a.pkg.localeCompare(b.pkg));
+
+  // Summary line.
+  const counts = { permissive: 0, 'weak-copyleft': 0, 'strong-copyleft': 0, unknown: 0 };
+  for (const e of table) counts[e.classification] = (counts[e.classification] || 0) + 1;
+  const summary = document.createElement('div');
+  summary.className = 'module-total';
+  const parts = [];
+  if (counts.permissive)         parts.push(`${counts.permissive} permissive`);
+  if (counts['weak-copyleft'])   parts.push(`${counts['weak-copyleft']} weak-copyleft`);
+  if (counts['strong-copyleft']) parts.push(`${counts['strong-copyleft']} strong-copyleft`);
+  if (counts.unknown)            parts.push(`${counts.unknown} unknown`);
+  summary.textContent = parts.join(' \u00b7 ');
+  list.appendChild(summary);
+
+  for (const entry of table) list.appendChild(_renderLicenseRow(entry));
 }

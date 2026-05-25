@@ -647,6 +647,9 @@ function parseUrlToSource(url) {
 
 // package.json#license can be: string, { type, url }, or absent.
 // Older packages used a `licenses` array of { type, url } objects.
+// Exported so aggregate.js can reuse the same logic on VFS-stored package.json
+// files. At build time the `export` keyword is stripped and the function ends
+// up as a single top-level declaration in the concatenated bundle.
 function spdxFromPackageJson(json) {
   if (!json || typeof json !== 'object') return null;
   if (typeof json.license === 'string') return json.license;
@@ -664,6 +667,7 @@ function spdxFromPackageJson(json) {
 }
 
 // Extract a copyright notice line from LICENSE text. Best-effort, regex-y.
+// Exported for aggregate.js's reuse — see spdxFromPackageJson note above.
 function extractCopyright(text) {
   if (!text) return null;
   const lines = text.split(/\r?\n/);
@@ -693,12 +697,18 @@ async function tryFetchJson(fetch, url) {
 }
 
 // Probe a base directory for a LICENSE-like file. Returns { text, filename, url }
-// on first hit, or null. Order matches what most upstreams use.
+// on first hit, or null.
+//
+// Trimmed to the three canonical names — together they hit ~99% of real
+// packages, and each miss costs an HTTP round-trip that the user can see in
+// devtools as a noisy 404. The original long-tail (license.md, COPYING*,
+// NOTICE) was nice-to-have but not worth the cost.
+//
+// Exported for aggregate.js's reuse — see spdxFromPackageJson note above.
 const LICENSE_FILENAMES = [
-  'LICENSE', 'LICENSE.md', 'LICENSE.txt',
-  'license', 'license.md', 'license.txt',
-  'COPYING', 'COPYING.md', 'COPYING.txt',
-  'NOTICE',
+  'LICENSE',
+  'LICENSE.md',
+  'LICENSE.txt',
 ];
 
 async function probeLicense(fetch, baseUrl) {
@@ -765,8 +775,28 @@ async function fetchFromCdnBase(fetch, desc, baseUrl) {
 async function fetchEsmSh(fetch, desc) {
   if (!desc.pkg) return unknownResult({ origin: desc.origin, hint: 'no pkg in descriptor' });
   const verSlug = desc.version ? `@${desc.version}` : '';
-  const base = `https://esm.sh/${desc.pkg}${verSlug}`;
-  return fetchFromCdnBase(fetch, desc, base);
+  const esmBase = `https://esm.sh/${desc.pkg}${verSlug}`;
+  // esm.sh serves package.json reliably but NOT arbitrary repo files
+  // (LICENSE et al.). Use jsdelivr for the LICENSE-file probe — it mirrors
+  // the npm tarball verbatim, so files like LICENSE that ship with the
+  // tarball are served at predictable paths. Two CDNs, one HTTP request
+  // each at the happy path (package.json from esm.sh, LICENSE from jsdelivr).
+  const pkgJson = await tryFetchJson(fetch, esmBase + '/package.json');
+  const spdx = pkgJson ? spdxFromPackageJson(pkgJson) : null;
+  const jsdBase = `https://cdn.jsdelivr.net/npm/${desc.pkg}${verSlug}`;
+  const probe = await probeLicense(fetch, jsdBase);
+  if (!pkgJson && !probe) {
+    return unknownResult({ origin: desc.origin, hint: 'no package.json on esm.sh and no LICENSE on jsdelivr' });
+  }
+  return buildResult({
+    spdx,
+    text: probe ? probe.text : null,
+    filename: probe ? probe.filename : null,
+    baseUrl: jsdBase,
+    spdxSource: 'package.json',
+    textSource: probe ? 'LICENSE-file' : null,
+    origin: desc.origin,
+  });
 }
 
 async function fetchJsdelivr(fetch, desc) {
@@ -965,47 +995,15 @@ async function readJson(vfs, path) {
   try { return JSON.parse(text); } catch { return null; }
 }
 
-// Try the standard LICENSE-file variants in a directory, return first hit.
-const LICENSE_FILENAMES = [
-  'LICENSE', 'LICENSE.md', 'LICENSE.txt',
-  'license', 'license.md', 'license.txt',
-  'COPYING', 'COPYING.md', 'COPYING.txt',
-  'NOTICE',
-];
-
+// readLicenseFile reuses the LICENSE-filename list from fetch.js (probed against
+// HTTP URLs there, VFS paths here). spdxFromPackageJson + extractCopyright are
+// also shared — same heuristics whether we read package.json from a CDN or
+// from a /lib/<pkg>/ directory.
 async function readLicenseFile(vfs, dir) {
   for (const name of LICENSE_FILENAMES) {
     const text = await safeReadFile(vfs, `${dir}/${name}`, 'utf8');
     if (typeof text === 'string' && text.length > 0) {
       return { text, filename: name };
-    }
-  }
-  return null;
-}
-
-function spdxFromPackageJson(json) {
-  if (!json || typeof json !== 'object') return null;
-  if (typeof json.license === 'string') return json.license;
-  if (json.license && typeof json.license === 'object' && typeof json.license.type === 'string') {
-    return json.license.type;
-  }
-  if (Array.isArray(json.licenses) && json.licenses.length > 0) {
-    const types = json.licenses
-      .map((l) => (l && typeof l === 'object' ? l.type : (typeof l === 'string' ? l : null)))
-      .filter(Boolean);
-    if (types.length === 1) return types[0];
-    if (types.length > 1) return `(${types.join(' OR ')})`;
-  }
-  return null;
-}
-
-function extractCopyright(text) {
-  if (!text) return null;
-  const lines = text.split(/\r?\n/);
-  for (const line of lines) {
-    const t = line.trim();
-    if (/^Copyright\b/i.test(t) || /^\(c\)\s/i.test(t) || /^©\s/.test(t)) {
-      if (t.length > 4 && t.length < 400) return t;
     }
   }
   return null;
@@ -1167,6 +1165,55 @@ async function walkSysLicenses(vfs) {
   return out;
 }
 
+// aggregateFromInstalledModules — in-memory variant for auditable's current
+// runtime layout, where install()'d ESM modules live in a flat JS object
+// (window._installedModules) rather than per-module VFS folders. Same entry
+// shape as aggregateLicenses so the formatters and UI don't care which path
+// produced the table.
+//
+// Expected entry shape (the runtime cache used by cell-builtins/modules.js):
+//   _installedModules[url] = {
+//     source, compressed, cellId, url, alias, integrity, kind,
+//     installedAt, size,
+//     license?:    { spdx, copyright, fetchedFrom, source, fetchedAt, ... },
+//     licenseText?: string,   // raw or gzip-base64; treated as opaque text
+//   }
+//
+// Pre-tracking entries (no `license` field) come through as classification:
+// 'unknown' with `verified: false` — surfaces in the UI as a grey badge.
+function aggregateFromInstalledModules(installedModules) {
+  if (!installedModules || typeof installedModules !== 'object') return [];
+  const out = [];
+  for (const [key, entry] of Object.entries(installedModules)) {
+    if (!entry || typeof entry !== 'object') continue;
+    // binary assets aren't really "modules with licenses" — skip them. Their
+    // upstream license, if any, is captured via the URL they came from in
+    // the source-side install (handled separately by installBinary).
+    if (entry.binary) continue;
+
+    const url = entry.url || key;
+    let pkg = null, version = null;
+    const desc = parseUrlToSource(url);
+    if (desc) { pkg = desc.pkg; version = desc.version; }
+    if (!pkg) pkg = entry.alias || key;
+
+    const lic = entry.license || null;
+    const spdx = (lic && typeof lic.spdx === 'string') ? lic.spdx : 'UNKNOWN';
+    out.push({
+      pkg, version,
+      source: 'install',
+      path: key,                                         // the runtime cache key (URL)
+      spdx,
+      classification: classify(spdx),
+      copyright: lic ? (lic.copyright || null) : null,
+      text: typeof entry.licenseText === 'string' ? entry.licenseText : null,
+      fetchedFrom: lic ? (lic.fetchedFrom || null) : null,
+      verified: !!(lic && entry.licenseText),
+    });
+  }
+  return out;
+}
+
 // ── Public ───────────────────────────────────────────────────────────────
 
 async function aggregateLicenses(vfs) {
@@ -1200,5 +1247,5 @@ export {
   classify, classifyExpression,
   formatTable, formatNoticesFile,
   parseUrlToSource, fetchLicense,
-  aggregateLicenses,
+  aggregateLicenses, aggregateFromInstalledModules,
 };

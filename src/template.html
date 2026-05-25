@@ -214,6 +214,16 @@
   <h2>binaries</h2>
   <div id="binaryList"></div>
 
+  <h2>licenses</h2>
+  <div class="settings-row">
+    <label title="block installs whose license is copyleft (GPL/LGPL/MPL) or unknown. Off = warn only.">strict mode</label>
+    <select id="setLicensesStrict" onchange="applyLicensesStrict(this.value === 'on')">
+      <option value="off" selected>off (warn)</option>
+      <option value="on">on (block)</option>
+    </select>
+  </div>
+  <div id="licenseList"></div>
+
   <div class="settings-about">
     <span id="aboutVersion"></span>
     <span id="aboutBuild"></span>

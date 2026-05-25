@@ -11,6 +11,7 @@
 // init.js, save.js, settings.js (legacy decode duplication eliminated).
 
 import { compressText, decompressText, uint8ToBase64 } from './text-compression.js';
+import { fetchLicense, parseUrlToSource, classify } from '#licenses';
 
 // SRI-shaped integrity hash. Computed over the un-compressed source bytes
 // (matches what a browser would do for a <script integrity="..."> tag).
@@ -18,6 +19,71 @@ import { compressText, decompressText, uint8ToBase64 } from './text-compression.
 async function _sha256SRI(bytes) {
   const buf = await crypto.subtle.digest('SHA-256', bytes);
   return 'sha256-' + uint8ToBase64(new Uint8Array(buf));
+}
+
+// Read the strict-mode flag. Lives on window._auditableLicensesStrict;
+// settings.js owns the UI toggle that flips it. Default off.
+function _licensesStrict() {
+  return !!(typeof window !== 'undefined' && window._auditableLicensesStrict);
+}
+
+// licenses-spec §5: classify result → policy decision.
+// Returns { allow: bool, level: 'permissive'|'weak-copyleft'|'strong-copyleft'|'unknown', message: string }.
+function _licensePolicy(classification, pkgLabel, strict) {
+  const level = classification || 'unknown';
+  let message = null;
+  if (level === 'weak-copyleft')   message = `${pkgLabel}: weak-copyleft license — file/library-level reciprocity applies`;
+  if (level === 'strong-copyleft') message = `${pkgLabel}: STRONG-COPYLEFT (GPL-family) — viral terms; redistribution constraints apply`;
+  if (level === 'unknown')         message = `${pkgLabel}: no recognised SPDX license — review before redistributing`;
+  return {
+    allow: !(strict && level !== 'permissive'),
+    level, message,
+  };
+}
+
+// Fetch + apply license policy for an install. Mutates the entry to add
+// `license` and `licenseText`. On strict-mode block, throws BEFORE the entry
+// is committed (caller is expected to call this between fetching source and
+// writing to _installedModules). On any non-strict path, returns silently
+// (the caller surfaces the warning via display()).
+async function _captureLicense(url, entry, pkgLabel, displayFn) {
+  let lic = null;
+  try { lic = await fetchLicense(url); } catch { lic = null; }
+  const spdx = (lic && typeof lic.spdx === 'string') ? lic.spdx : 'UNKNOWN';
+  const classification = classify(spdx);
+  const policy = _licensePolicy(classification, pkgLabel, _licensesStrict());
+
+  if (!policy.allow) {
+    throw new Error(
+      `License policy refused (strict mode): ${pkgLabel} is ${classification} (${spdx}). ` +
+      `Disable strict mode in Settings → Licenses, or remove this install().`
+    );
+  }
+  if (policy.message && displayFn) {
+    displayFn(`⚠ ${policy.message}`);
+  }
+
+  if (lic) {
+    entry.license = {
+      spdx,
+      copyright: lic.copyright || null,
+      fetchedFrom: lic.fetchedFrom || null,
+      spdxSource: lic.spdxSource || null,
+      textSource: lic.textSource || null,
+      fetchedAt: lic.fetchedAt || new Date().toISOString(),
+      classification,
+      confidence: lic.confidence || 'low',
+    };
+    if (typeof lic.text === 'string' && lic.text.length > 0) {
+      // Compress the LICENSE text alongside the source. Same gzip+base64
+      // encoding so a single decoder shape (decompressText) handles both.
+      try { entry.licenseText = await compressText(lic.text); entry.licenseTextCompressed = true; }
+      catch { entry.licenseText = lic.text; entry.licenseTextCompressed = false; }
+    }
+  } else {
+    entry.license = { spdx: 'UNKNOWN', classification: 'unknown', fetchedAt: new Date().toISOString(), spdxSource: 'fetch-failed' };
+  }
+  return entry;
 }
 
 /**
@@ -378,18 +444,31 @@ export function makeModuleLoaders(cell, ctx, deps) {
     const sourceBytes = new TextEncoder().encode(source);
     const integrity = await _sha256SRI(sourceBytes);
     const compressedSrc = await compressText(source);
-    window._installedModules[storeKey] = {
+
+    // Build the entry first; license capture is allowed to throw under
+    // strict mode before we commit to _installedModules / blob materialise.
+    const entry = {
       source: compressedSrc, compressed: true, cellId: cell.id,
       alias: storeKey, url: result.finalUrl, integrity, kind: 'js',
       installedAt: new Date().toISOString(),
       size: sourceBytes.length,
     };
+    // For license capture, use the PRE-REDIRECT URL (the alias-resolved
+    // clean form) — post-redirect URLs land deep inside esm.sh's versioned
+    // paths (e.g. /v135/.../X-hash/lodash.js) where parseUrlToSource can't
+    // recover the bare pkg@ver shape. The pre-redirect form is what the
+    // package.json + LICENSE probe endpoints are anchored at.
+    const licenseUrl = esmUrl.replace(/[?&]bundle\b[^&]*/, '').replace(/[?&]$/, '');
+    await _captureLicense(licenseUrl, entry, storeKey, display);
+    window._installedModules[storeKey] = entry;
     notifyDirty();
     // Use the shared materialiser so scoped imports get rewritten.
     const blobUrl = await _materializeInstalled(storeKey);
     const mod = await import(blobUrl);
     window._importCache[storeKey] = mod;
-    display(`installed ${storeKey} (${(source.length / 1024).toFixed(1)} KB → ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
+    const spdxLabel = entry.license?.spdx && entry.license.spdx !== 'UNKNOWN'
+      ? ` [${entry.license.spdx}]` : '';
+    display(`installed ${storeKey}${spdxLabel} (${(source.length / 1024).toFixed(1)} KB → ${(compressedSrc.length * 3 / 4 / 1024).toFixed(1)} KB gzipped)`);
     return mod;
   };
 

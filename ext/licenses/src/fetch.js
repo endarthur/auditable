@@ -133,7 +133,10 @@ export function parseUrlToSource(url) {
 
 // package.json#license can be: string, { type, url }, or absent.
 // Older packages used a `licenses` array of { type, url } objects.
-function spdxFromPackageJson(json) {
+// Exported so aggregate.js can reuse the same logic on VFS-stored package.json
+// files. At build time the `export` keyword is stripped and the function ends
+// up as a single top-level declaration in the concatenated bundle.
+export function spdxFromPackageJson(json) {
   if (!json || typeof json !== 'object') return null;
   if (typeof json.license === 'string') return json.license;
   if (json.license && typeof json.license === 'object' && typeof json.license.type === 'string') {
@@ -150,7 +153,8 @@ function spdxFromPackageJson(json) {
 }
 
 // Extract a copyright notice line from LICENSE text. Best-effort, regex-y.
-function extractCopyright(text) {
+// Exported for aggregate.js's reuse — see spdxFromPackageJson note above.
+export function extractCopyright(text) {
   if (!text) return null;
   const lines = text.split(/\r?\n/);
   for (const line of lines) {
@@ -179,12 +183,18 @@ async function tryFetchJson(fetch, url) {
 }
 
 // Probe a base directory for a LICENSE-like file. Returns { text, filename, url }
-// on first hit, or null. Order matches what most upstreams use.
-const LICENSE_FILENAMES = [
-  'LICENSE', 'LICENSE.md', 'LICENSE.txt',
-  'license', 'license.md', 'license.txt',
-  'COPYING', 'COPYING.md', 'COPYING.txt',
-  'NOTICE',
+// on first hit, or null.
+//
+// Trimmed to the three canonical names — together they hit ~99% of real
+// packages, and each miss costs an HTTP round-trip that the user can see in
+// devtools as a noisy 404. The original long-tail (license.md, COPYING*,
+// NOTICE) was nice-to-have but not worth the cost.
+//
+// Exported for aggregate.js's reuse — see spdxFromPackageJson note above.
+export const LICENSE_FILENAMES = [
+  'LICENSE',
+  'LICENSE.md',
+  'LICENSE.txt',
 ];
 
 async function probeLicense(fetch, baseUrl) {
@@ -251,8 +261,28 @@ async function fetchFromCdnBase(fetch, desc, baseUrl) {
 async function fetchEsmSh(fetch, desc) {
   if (!desc.pkg) return unknownResult({ origin: desc.origin, hint: 'no pkg in descriptor' });
   const verSlug = desc.version ? `@${desc.version}` : '';
-  const base = `https://esm.sh/${desc.pkg}${verSlug}`;
-  return fetchFromCdnBase(fetch, desc, base);
+  const esmBase = `https://esm.sh/${desc.pkg}${verSlug}`;
+  // esm.sh serves package.json reliably but NOT arbitrary repo files
+  // (LICENSE et al.). Use jsdelivr for the LICENSE-file probe — it mirrors
+  // the npm tarball verbatim, so files like LICENSE that ship with the
+  // tarball are served at predictable paths. Two CDNs, one HTTP request
+  // each at the happy path (package.json from esm.sh, LICENSE from jsdelivr).
+  const pkgJson = await tryFetchJson(fetch, esmBase + '/package.json');
+  const spdx = pkgJson ? spdxFromPackageJson(pkgJson) : null;
+  const jsdBase = `https://cdn.jsdelivr.net/npm/${desc.pkg}${verSlug}`;
+  const probe = await probeLicense(fetch, jsdBase);
+  if (!pkgJson && !probe) {
+    return unknownResult({ origin: desc.origin, hint: 'no package.json on esm.sh and no LICENSE on jsdelivr' });
+  }
+  return buildResult({
+    spdx,
+    text: probe ? probe.text : null,
+    filename: probe ? probe.filename : null,
+    baseUrl: jsdBase,
+    spdxSource: 'package.json',
+    textSource: probe ? 'LICENSE-file' : null,
+    origin: desc.origin,
+  });
 }
 
 async function fetchJsdelivr(fetch, desc) {

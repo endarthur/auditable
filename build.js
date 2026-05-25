@@ -1228,6 +1228,17 @@ if (fs.existsSync(ipynbPath)) {
   modules.unshift({ name: 'ipynb', source: ipynbSrc });
 }
 
+// Add @gcu/licenses bundle as a module entry — used by cell-builtins/modules.js
+// to capture SPDX + LICENSE text alongside every install(), and by the
+// settings Licenses tab to render the aggregate. Pure library; no auditable-
+// internal deps.
+const licensesPath = path.join(__dirname, 'ext/licenses/index.js');
+if (fs.existsSync(licensesPath)) {
+  let licensesSrc = fs.readFileSync(licensesPath, 'utf8');
+  licensesSrc = licensesSrc.replace(/^\n+/, '').replace(/\n+$/, '');
+  modules.unshift({ name: 'licenses', source: licensesSrc });
+}
+
 // Read CM6 bundle (classic IIFE, not an ES module — sets window.CM6 via var)
 const cm6Path = path.join(__dirname, 'ext/cm6/cm6.min.js');
 const cm6Src = fs.existsSync(cm6Path) ? fs.readFileSync(cm6Path, 'utf8') : '';

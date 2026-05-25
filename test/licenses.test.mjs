@@ -11,7 +11,7 @@ import {
   classify, classifyExpression,
   formatTable, formatNoticesFile,
   parseUrlToSource, fetchLicense,
-  aggregateLicenses,
+  aggregateLicenses, aggregateFromInstalledModules,
 } from '../ext/licenses/src/main.js';
 
 // ── SPDX parser ──────────────────────────────────────────────────────────
@@ -470,9 +470,11 @@ function mockFetch(responses) {
 }
 
 test('fetchLicense: esm.sh happy path', async () => {
+  // package.json from esm.sh, LICENSE text from jsdelivr (esm.sh doesn't
+  // reliably serve repo files).
   const fetch = mockFetch({
     'https://esm.sh/lodash@4.17.21/package.json': JSON.stringify({ name: 'lodash', license: 'MIT' }),
-    'https://esm.sh/lodash@4.17.21/LICENSE': 'Copyright (c) OpenJS Foundation\n\nPermission is hereby granted...',
+    'https://cdn.jsdelivr.net/npm/lodash@4.17.21/LICENSE': 'Copyright (c) OpenJS Foundation\n\nPermission is hereby granted...',
   });
   const r = await fetchLicense('https://esm.sh/lodash@4.17.21', { fetch });
   assert.equal(r.spdx, 'MIT');
@@ -490,7 +492,7 @@ test('fetchLicense: esm.sh package.json with license object', async () => {
     'https://esm.sh/old-pkg@1.0.0/package.json': JSON.stringify({
       license: { type: 'BSD-2-Clause', url: 'https://opensource.org/...' }
     }),
-    'https://esm.sh/old-pkg@1.0.0/LICENSE': 'Copyright (c) Foo',
+    'https://cdn.jsdelivr.net/npm/old-pkg@1.0.0/LICENSE': 'Copyright (c) Foo',
   });
   const r = await fetchLicense('https://esm.sh/old-pkg@1.0.0', { fetch });
   assert.equal(r.spdx, 'BSD-2-Clause');
@@ -502,7 +504,7 @@ test('fetchLicense: esm.sh package.json with licenses array', async () => {
     'https://esm.sh/dual-pkg@1.0.0/package.json': JSON.stringify({
       licenses: [{ type: 'MIT' }, { type: 'Apache-2.0' }]
     }),
-    'https://esm.sh/dual-pkg@1.0.0/LICENSE': 'placeholder',
+    'https://cdn.jsdelivr.net/npm/dual-pkg@1.0.0/LICENSE': 'placeholder',
   });
   const r = await fetchLicense('https://esm.sh/dual-pkg@1.0.0', { fetch });
   assert.equal(r.spdx, '(MIT OR Apache-2.0)');
@@ -510,7 +512,7 @@ test('fetchLicense: esm.sh package.json with licenses array', async () => {
 
 test('fetchLicense: esm.sh missing package.json but LICENSE present', async () => {
   const fetch = mockFetch({
-    'https://esm.sh/no-pkg@1.0.0/LICENSE': 'Copyright (c) Anonymous\nMIT-like text...',
+    'https://cdn.jsdelivr.net/npm/no-pkg@1.0.0/LICENSE': 'Copyright (c) Anonymous\nMIT-like text...',
   });
   const r = await fetchLicense('https://esm.sh/no-pkg@1.0.0', { fetch });
   assert.equal(r.spdx, 'UNKNOWN');
@@ -522,7 +524,7 @@ test('fetchLicense: esm.sh missing package.json but LICENSE present', async () =
 test('fetchLicense: esm.sh tries LICENSE.md if LICENSE 404s', async () => {
   const fetch = mockFetch({
     'https://esm.sh/x@1/package.json': JSON.stringify({ license: 'MIT' }),
-    'https://esm.sh/x@1/LICENSE.md': '# License\n\nCopyright (c) X\n\nMIT...',
+    'https://cdn.jsdelivr.net/npm/x@1/LICENSE.md': '# License\n\nCopyright (c) X\n\nMIT...',
   });
   const r = await fetchLicense('https://esm.sh/x@1', { fetch });
   assert.equal(r.spdx, 'MIT');
@@ -864,4 +866,86 @@ test('aggregate: output passes through formatTable cleanly', async () => {
   assert.ok(text.includes('MIT'));
   const bom = formatTable(table, { format: 'spdx-bom' });
   assert.equal(bom.packages[0].name, 'cm6');
+});
+
+// ── aggregateFromInstalledModules — in-memory shape ──────────────────────
+
+test('aggregateFromInstalledModules: empty → []', () => {
+  assert.deepEqual(aggregateFromInstalledModules({}), []);
+  assert.deepEqual(aggregateFromInstalledModules(null), []);
+  assert.deepEqual(aggregateFromInstalledModules(undefined), []);
+});
+
+test('aggregateFromInstalledModules: entry with license + text', () => {
+  const t = aggregateFromInstalledModules({
+    'https://esm.sh/lodash@4.17.21': {
+      url: 'https://esm.sh/lodash@4.17.21',
+      source: '<gzipped>', compressed: true,
+      license: { spdx: 'MIT', copyright: 'Copyright (c) OpenJS' },
+      licenseText: '<gzipped license text>',
+    }
+  });
+  assert.equal(t.length, 1);
+  assert.equal(t[0].pkg, 'lodash');
+  assert.equal(t[0].version, '4.17.21');
+  assert.equal(t[0].source, 'install');
+  assert.equal(t[0].spdx, 'MIT');
+  assert.equal(t[0].classification, 'permissive');
+  assert.equal(t[0].copyright, 'Copyright (c) OpenJS');
+  assert.equal(t[0].verified, true);
+});
+
+test('aggregateFromInstalledModules: entry without license (pre-tracking)', () => {
+  const t = aggregateFromInstalledModules({
+    'https://esm.sh/old@1': { url: 'https://esm.sh/old@1', source: '<gz>', compressed: true }
+  });
+  assert.equal(t.length, 1);
+  assert.equal(t[0].spdx, 'UNKNOWN');
+  assert.equal(t[0].classification, 'unknown');
+  assert.equal(t[0].verified, false);
+});
+
+test('aggregateFromInstalledModules: skips binary entries', () => {
+  const t = aggregateFromInstalledModules({
+    'https://example.com/font.woff2': { binary: true, source: '<b64>' },
+    'https://esm.sh/x@1': { url: 'https://esm.sh/x@1', source: '<gz>', license: { spdx: 'MIT' } }
+  });
+  assert.equal(t.length, 1);
+  assert.equal(t[0].pkg, 'x');
+});
+
+test('aggregateFromInstalledModules: GPL flows through classification', () => {
+  const t = aggregateFromInstalledModules({
+    'https://esm.sh/scary@1': {
+      url: 'https://esm.sh/scary@1',
+      source: '<gz>',
+      license: { spdx: 'GPL-3.0-or-later' },
+    }
+  });
+  assert.equal(t[0].classification, 'strong-copyleft');
+});
+
+test('aggregateFromInstalledModules: dual license picks most-permissive', () => {
+  const t = aggregateFromInstalledModules({
+    'https://esm.sh/dual@1': {
+      url: 'https://esm.sh/dual@1',
+      source: '<gz>',
+      license: { spdx: '(MIT OR GPL-3.0)' },
+    }
+  });
+  assert.equal(t[0].classification, 'permissive');
+});
+
+test('aggregateFromInstalledModules: falls back to entry.alias when URL unparseable', () => {
+  const t = aggregateFromInstalledModules({
+    'local:somefile.js': {
+      url: 'local:somefile.js',
+      alias: 'local:somefile.js',
+      source: '<gz>',
+    }
+  });
+  // parseUrlToSource on 'local:somefile.js' may or may not return a desc;
+  // either way the pkg field gets populated.
+  assert.equal(t.length, 1);
+  assert.ok(t[0].pkg);
 });
