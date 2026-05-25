@@ -749,6 +749,8 @@ function computeStats(module) {
 
 // ── internals ─────────────────────────────────────────────────────────
 
+// Exported so validate.js can share it — both files used to declare local
+// copies, which collided at concat-build time. (See test/bundles-smoke.test.mjs.)
 function _isSsaId(v) {
   return typeof v === 'string' && v.length > 0 && v[0] === '%';
 }
@@ -2090,10 +2092,6 @@ function _checkArity(op, schema, opPath, errors) {
     default:
       errors.push(`${opPath}: schema declares unknown variadic shape '${schema.args}'`);
   }
-}
-
-function _isSsaId(v) {
-  return typeof v === 'string' && v.length > 0 && v[0] === '%';
 }
 
 function _describe(v) {

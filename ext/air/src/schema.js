@@ -551,6 +551,8 @@ export function computeStats(module) {
 
 // ── internals ─────────────────────────────────────────────────────────
 
-function _isSsaId(v) {
+// Exported so validate.js can share it — both files used to declare local
+// copies, which collided at concat-build time. (See test/bundles-smoke.test.mjs.)
+export function _isSsaId(v) {
   return typeof v === 'string' && v.length > 0 && v[0] === '%';
 }

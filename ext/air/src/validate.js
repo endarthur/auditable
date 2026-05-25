@@ -22,6 +22,7 @@ import {
   forEachSsaRef,
   forEachRegion,
   requiredExtras,
+  _isSsaId,
 } from './schema.js';
 
 class AirValidationError extends Error {
@@ -216,10 +217,6 @@ function _checkArity(op, schema, opPath, errors) {
     default:
       errors.push(`${opPath}: schema declares unknown variadic shape '${schema.args}'`);
   }
-}
-
-function _isSsaId(v) {
-  return typeof v === 'string' && v.length > 0 && v[0] === '%';
 }
 
 function _describe(v) {
