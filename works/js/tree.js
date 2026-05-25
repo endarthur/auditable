@@ -320,7 +320,7 @@ export async function duplicateProject(srcPath, name) {
     if (meta.title) title = meta.title;
   } catch { /* no marker — use basename */ }
   const defaultName = title + ' copy';
-  if (name == null) name = await dlgPrompt('Duplicate as:', defaultName);
+  if (name == null) name = await dlgPrompt('Duplicate as:', { defaultValue: defaultName });
   if (!name) return null;
   const dst = await uniqueProjectPath(name);
   try {
@@ -431,13 +431,52 @@ export async function newFolder(dir, name) {
   }
 }
 
-async function renameEntry(path) {
-  const name = await dlgPrompt('Rename to:');
+async function renameEntry(path, type) {
+  // For projects, the displayed name is project.json's `title`, which can
+  // diverge from the directory basename (titles allow spaces / mixed case).
+  // Rename should update BOTH so the tree label changes AND the on-disk
+  // path follows — silently renaming only the dir produces the "nothing
+  // happened" symptom because the tree never re-reads the title.
+  let currentName, projectMeta = null;
+  if (type === 'project') {
+    try {
+      projectMeta = JSON.parse(await WKS.vfs.readFile(path + '/project.json', 'utf8'));
+      currentName = projectMeta.title || basename(path);
+    } catch { currentName = basename(path); }
+  } else {
+    currentName = basename(path);
+  }
+
+  const name = await dlgPrompt('Rename to:', { defaultValue: currentName });
   if (!name) return;
+  const trimmed = name.trim();
+  if (!trimmed || trimmed === currentName) return;
+
   try {
-    await WKS.vfs.rename(path, join(parentOf(path), sanitize(name)));
+    if (type === 'project' && projectMeta) {
+      // Persist the new title FIRST — if the dir-rename fails (path
+      // collision etc.), we can recover by reading the new title from
+      // project.json. The opposite ordering would leave a half-renamed
+      // state on collision.
+      projectMeta.title = trimmed;
+      await WKS.vfs.writeFile(path + '/project.json',
+        JSON.stringify(projectMeta, null, 2));
+    }
+    // Always attempt the directory rename — even for projects, since the
+    // path is user-visible (URLs, pkg local: refs, copy-path).
+    const newPath = join(parentOf(path), sanitize(trimmed));
+    if (newPath !== path) {
+      // Refuse to clobber an existing entry — the user would expect rename
+      // to be safe.
+      if (await WKS.vfs.exists(newPath)) {
+        setStatus('rename: "' + sanitize(trimmed) + '" already exists');
+        return;
+      }
+      await WKS.vfs.rename(path, newPath);
+    }
+    setStatus('renamed to ' + trimmed);
   } catch (e) {
-    setStatus('rename failed: ' + e.message);
+    setStatus('rename failed: ' + (e.message || e));
   }
 }
 
