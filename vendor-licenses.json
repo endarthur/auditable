@@ -23,14 +23,14 @@
       "version": "6.x",
       "homepage": "https://codemirror.net/",
       "description": "CodeMirror 6 — the editor for every code/markdown/html cell. Bundled at ext/cm6/cm6.min.js (rollup build from npm packages: codemirror, @codemirror/*, @lezer/highlight).",
-      "licenseFile": "ext/cm6/node_modules/codemirror/LICENSE"
+      "licenseFile": "ext/cm6/LICENSE-codemirror.txt"
     },
     "acorn": {
       "spdx": "MIT",
       "version": "8.x (+ acorn-typescript 1.4.x)",
       "homepage": "https://github.com/acornjs/acorn",
       "description": "JavaScript parser used by @gcu/air to lower cell sources into the AIR intermediate representation. acorn-typescript plugin enables AIR's type-annotation parsing. Bundled at ext/acorn/acorn.min.js.",
-      "licenseFile": "ext/acorn/node_modules/acorn/LICENSE"
+      "licenseFile": "ext/acorn/LICENSE-acorn.txt"
     },
     "openlayers": {
       "spdx": "BSD-2-Clause",

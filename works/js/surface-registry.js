@@ -24,11 +24,22 @@ export function kindDef(kind) {
 
 // The surface kind that handles a loose file, by extension — or null.
 export function kindForExtension(filename) {
-  const i = filename.lastIndexOf('.');
-  const ext = i >= 0 ? filename.slice(i).toLowerCase() : '';
-  if (!ext) return null;
+  // Basename, in case a caller passes a full path.
+  const base = String(filename).split(/[\\/]/).pop();
+  const i = base.lastIndexOf('.');
+  // i > 0 not >= 0 — dotfiles like `.gitignore` aren't treated as
+  // "extension = .gitignore"; they fall through to the basename match below.
+  const ext = i > 0 ? base.slice(i).toLowerCase() : '';
+  if (ext) {
+    for (const [kind, def] of KINDS) {
+      if (def.extensions && def.extensions.includes(ext)) return kind;
+    }
+  }
+  // Extensionless conventional filenames (LICENSE, README, COPYING, …) — open
+  // as plain text by default. Case-insensitive exact match on the basename.
+  const upper = base.toUpperCase();
   for (const [kind, def] of KINDS) {
-    if (def.extensions.includes(ext)) return kind;
+    if (def.extensionlessNames && def.extensionlessNames.includes(upper)) return kind;
   }
   return null;
 }
@@ -206,11 +217,17 @@ registerKind('preview', {
 });
 
 // The text editor — the loose-file surface. Opens any plain-text file.
+// extensionlessNames covers the conventional no-extension names that ship
+// alongside source trees (LICENSE, README, …); dispatched via
+// kindForExtension's basename fallback.
 registerKind('text', {
   label:      'Text file',
   icon:       '▤',
   extensions: ['.txt', '.md', '.json', '.js', '.css', '.html',
                '.csv', '.log', '.xml', '.yaml', '.yml'],
+  extensionlessNames: ['LICENSE', 'README', 'COPYING', 'NOTICE',
+                       'AUTHORS', 'CONTRIBUTORS', 'CHANGELOG', 'CHANGES',
+                       'MAKEFILE', 'DOCKERFILE'],
 });
 
 // The A-Bus inspector — a diagnostic surface, spawned from the Debug menu

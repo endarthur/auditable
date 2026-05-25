@@ -166,6 +166,39 @@ async function pickFolder(title, srcPath) {
 }
 
 /** ctx menu: Move to… */
+// Download a single VFS file via the browser's standard save dialog.
+// Reads the file (binary-safe via Uint8Array fallback), wraps in a Blob,
+// triggers an <a download> click. application/octet-stream is the safest
+// default — the browser respects the filename's extension and the user's
+// download folder regardless of the type hint.
+export async function downloadFile(path) {
+  if (!path) return;
+  let bytes;
+  try {
+    // VFS.readFile(p) returns a string (utf8) by default; ask for the raw
+    // bytes so binary files round-trip cleanly. Falls back to utf8 if the
+    // backend doesn't support a bytes mode.
+    const r = await WKS.vfs.readFile(path);
+    if (typeof r === 'string') bytes = new TextEncoder().encode(r);
+    else if (r instanceof Uint8Array) bytes = r;
+    else if (r && r.buffer) bytes = new Uint8Array(r.buffer);
+    else bytes = new TextEncoder().encode(String(r));
+  } catch (e) {
+    setStatus('download failed: ' + (e.message || e));
+    return;
+  }
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = basename(path);
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Slight delay before revoke — Firefox needs the URL live during click.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  setStatus('downloaded ' + basename(path));
+}
+
 export async function moveToPrompt(srcPath) {
   const dest = await pickFolder('Move "' + basename(srcPath) + '" to…', srcPath);
   if (!dest) return;

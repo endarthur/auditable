@@ -56,6 +56,43 @@
   .empty { color: #6b7177; padding: 4px 0; font-style: italic; }
   .hint { color: #6b7177; font-size: 11px; margin-top: 4px; }
   .actions { display: flex; gap: 8px; padding: 6px 0; }
+  /* GCU thin scrollbar — surfaces are sandboxed iframes, each styles its
+     own scrollbars (mirrors works/style.css's pattern). */
+  * { scrollbar-width: thin; scrollbar-color: #2a3038 transparent; }
+  *::-webkit-scrollbar { width: 8px; height: 8px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  *::-webkit-scrollbar-thumb { background: #2a3038; border-radius: 4px; }
+  *::-webkit-scrollbar-thumb:hover { background: #6e6c68; }
+  *::-webkit-scrollbar-corner { background: transparent; }
+  .licenses-list {
+    border: 1px solid #2a2e33; border-radius: 3px;
+    padding: 4px 8px; margin: 6px 0; background: #1a1d21;
+  }
+  .lic-row {
+    padding: 6px 0; border-bottom: 1px solid #21262b;
+    cursor: pointer;
+  }
+  .lic-row:last-child { border-bottom: none; }
+  .lic-row:hover { background: #21262b; }
+  .lic-row .head { display: flex; align-items: center; gap: 10px; }
+  .lic-row .name { flex: 1; color: #c8ccd0; }
+  .lic-row .badge {
+    padding: 1px 6px; border-radius: 3px; font-size: 11px; letter-spacing: 0.5px;
+  }
+  .badge-permissive    { color: #9ed47e; background: rgba(110,180,90,0.10); border: 1px solid rgba(110,180,90,0.30); }
+  .badge-weak-copyleft { color: #e5b65a; background: rgba(220,160,40,0.10); border: 1px solid rgba(220,160,40,0.30); }
+  .badge-strong-copyleft { color: #e08070; background: rgba(220,90,70,0.10); border: 1px solid rgba(220,90,70,0.30); }
+  .badge-unknown       { color: #8a9099; background: rgba(140,140,140,0.10); border: 1px solid rgba(140,140,140,0.30); }
+  .lic-row .version { color: #6b7177; font-size: 11px; }
+  .lic-row .desc { color: #6b7177; font-size: 11px; margin-top: 4px; }
+  .lic-row .text {
+    display: none; margin-top: 8px; padding: 8px 10px;
+    background: #14171a; border: 1px solid #2a2e33; border-radius: 3px;
+    font-family: 'Space Mono', ui-monospace, monospace; font-size: 11px;
+    white-space: pre-wrap; max-height: 320px; overflow: auto;
+  }
+  .lic-row.open .text { display: block; }
+  .lic-row a { color: #7ec8e0; }
 </style>
 </head>
 <body>
@@ -87,6 +124,16 @@
   <div class="hint">
     Disk folders are mounted at <code>/mnt/&lt;name&gt;</code>.
     Mounts are per-machine and don't travel with workspace export.
+  </div>
+
+  <h2>Licenses</h2>
+  <div id="licensesSummary" class="hint" style="margin-bottom:6px"></div>
+  <div class="licenses-list" id="licensesList">
+    <div class="empty">Loading…</div>
+  </div>
+  <div class="hint">
+    Third-party libraries bundled into this build of Auditable Works.
+    Click a row to view the LICENSE text.
   </div>
 
   <h2>About</h2>
@@ -176,6 +223,86 @@ async function loadMounts() {
   }
 }
 
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+
+async function loadLicenses() {
+  const list = $('licensesList');
+  const summary = $('licensesSummary');
+  let table = [];
+  try {
+    table = await bus.call(
+      { to: 'works', path: '/', interface: 'Licenses', member: 'Get' }, []);
+  } catch (e) {
+    list.innerHTML = '<div class="empty">Licenses interface unavailable: '
+      + esc(e.message || String(e)) + '</div>';
+    return;
+  }
+  if (!Array.isArray(table) || table.length === 0) {
+    list.innerHTML = '<div class="empty">No vendored libraries declared.</div>';
+    summary.textContent = '';
+    return;
+  }
+
+  // Surface copyleft/unknown first.
+  const order = { 'strong-copyleft': 0, 'weak-copyleft': 1, 'unknown': 2, 'permissive': 3 };
+  table.sort((a, b) =>
+    (order[a.classification] ?? 9) - (order[b.classification] ?? 9)
+    || (a.pkg || '').localeCompare(b.pkg || ''));
+
+  const counts = { permissive: 0, 'weak-copyleft': 0, 'strong-copyleft': 0, unknown: 0 };
+  for (const e of table) counts[e.classification] = (counts[e.classification] || 0) + 1;
+  const parts = [];
+  if (counts.permissive)         parts.push(counts.permissive + ' permissive');
+  if (counts['weak-copyleft'])   parts.push(counts['weak-copyleft'] + ' weak-copyleft');
+  if (counts['strong-copyleft']) parts.push(counts['strong-copyleft'] + ' strong-copyleft');
+  if (counts.unknown)            parts.push(counts.unknown + ' unknown');
+  summary.textContent = parts.join(' · ');
+
+  list.innerHTML = '';
+  for (const e of table) {
+    const row = document.createElement('div');
+    row.className = 'lic-row';
+    const head = document.createElement('div');
+    head.className = 'head';
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = e.version ? `${e.pkg} ${e.version}` : e.pkg;
+    head.appendChild(name);
+    const badge = document.createElement('span');
+    badge.className = 'badge badge-' + (e.classification || 'unknown');
+    badge.textContent = e.spdx || 'UNKNOWN';
+    head.appendChild(badge);
+    row.appendChild(head);
+    if (e.description) {
+      const desc = document.createElement('div');
+      desc.className = 'desc';
+      desc.textContent = e.description;
+      row.appendChild(desc);
+    }
+    if (e.fetchedFrom) {
+      const link = document.createElement('div');
+      link.className = 'desc';
+      link.innerHTML = '<a href="' + esc(e.fetchedFrom) + '" target="_blank" rel="noopener">'
+        + esc(e.fetchedFrom) + '</a>';
+      row.appendChild(link);
+    }
+    if (e.text) {
+      const pre = document.createElement('div');
+      pre.className = 'text';
+      pre.textContent = e.text;
+      row.appendChild(pre);
+      row.addEventListener('click', (ev) => {
+        if (ev.target.tagName === 'A') return;  // don't steal link clicks
+        row.classList.toggle('open');
+      });
+    }
+    list.appendChild(row);
+  }
+}
+
 window.addEventListener('message', async (ev) => {
   if (ev.source !== window.parent) return;
   if (!ev.data || ev.data.type !== 'abus:welcome') return;
@@ -200,6 +327,7 @@ window.addEventListener('message', async (ev) => {
 
   await loadSettings();
   await loadMounts();
+  await loadLicenses();
 
   // Auto-save on every change.
   $('theme').addEventListener('change', saveSettings);

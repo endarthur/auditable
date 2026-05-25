@@ -8,6 +8,39 @@ import { openPath } from './surfaces.js';
 import { mountFolder, unmountAt } from './mount.js';
 import { applyWorkspaceSettings, readSettings, writeSettings } from './settings-store.js';
 import { showAbout } from './about.js';
+import { aggregateFromBuildLicenses } from '#licenses';
+
+// Build-time-injected vendored license manifest (see build.js's
+// injectBuildLicenses). Source-level empty so dev/test runs work; build
+// rewrites this single line to the real manifest. Shape:
+//   { <name>: { spdx, version, homepage, description, text } }
+const __BUILD_LICENSES__ = {};
+
+// Install the build-time vendored license inventory at /sys/licenses/. Mirrors
+// installSharedLibsToVfs's pattern (memory mount, written at boot). Geas's
+// `licenses` builtin and `cat /sys/licenses/<name>/LICENSE` both read from
+// here; aggregateLicenses(vfs) also picks it up. Per-name dir + LICENSE text;
+// index.json at root for quick metadata lookup.
+export async function installLicensesToVfs(vfs) {
+  const base = '/sys/licenses';
+  try { await vfs.mkdir(base, { recursive: true }); } catch {}
+  const index = {};
+  for (const [name, entry] of Object.entries(__BUILD_LICENSES__ || {})) {
+    if (!entry || typeof entry !== 'object') continue;
+    index[name] = {
+      spdx: entry.spdx || 'UNKNOWN',
+      version: entry.version || null,
+      homepage: entry.homepage || null,
+      description: entry.description || null,
+    };
+    const dir = `${base}/${name}`;
+    try { await vfs.mkdir(dir, { recursive: true }); } catch {}
+    if (typeof entry.text === 'string' && entry.text.length > 0) {
+      try { await vfs.writeFile(`${dir}/LICENSE`, entry.text); } catch {}
+    }
+  }
+  try { await vfs.writeFile(`${base}/index.json`, JSON.stringify(index, null, 2)); } catch {}
+}
 
 export async function setupWorksService() {
   const ch = new MessageChannel();
@@ -16,6 +49,7 @@ export async function setupWorksService() {
   WKS.worksBus = bus;
 
   const vfs = WKS.vfs;
+  await installLicensesToVfs(vfs);
 
   bus.expose('/', {
     // The workspace filesystem (auditable-works-spec §9).
@@ -75,6 +109,15 @@ export async function setupWorksService() {
     Inspect: {
       methods: {
         Snapshot: () => WKS.broker.inspect(),
+      },
+    },
+    // Build-time vendored license inventory — used by the workspace settings
+    // surface (and future tools like `geas licenses`). Returns the standard
+    // table shape; static for now, will grow when pkg integration lands and
+    // /lib/* licenses become aggregatable too.
+    Licenses: {
+      methods: {
+        Get: () => aggregateFromBuildLicenses(__BUILD_LICENSES__),
       },
     },
   });

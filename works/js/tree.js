@@ -8,12 +8,12 @@
 import { WKS, setStatus } from './state.js';
 import { Menu } from '#menu';
 import { prompt as dlgPrompt, confirm as dlgConfirm } from '#dialog';
-import { kindDef } from './surface-registry.js';
+import { kindDef, kindForExtension } from './surface-registry.js';
 import { openPath, spawnSurface } from './surfaces.js';
 import { unmountAt } from './mount.js';
 import { importFileAsNotebook } from './import.js';
 import { exportProject, exportProjectAsIpynb } from './project-export.js';
-import { moveToPrompt, copyToPrompt, attachTreeRowDnd } from './file-ops.js';
+import { moveToPrompt, copyToPrompt, attachTreeRowDnd, downloadFile } from './file-ops.js';
 
 const IMPORTABLE_RE = /\.(html?|txt|ipynb)$/i;
 
@@ -174,6 +174,12 @@ async function showMenu(e, path, type) {
   // Path-specific actions — open / copy path / per-type extras.
   const extras = [];
   if (type === 'project') extras.push({ label: 'Open',                  action: 'open' });
+  // Loose files with a registered surface kind get an explicit Open item too —
+  // discoverable for users who don't know double-click opens them. LICENSE,
+  // README, NOTICE etc. fall through kindForExtension's extensionlessNames
+  // fallback so they land in the text surface.
+  if (type === 'file' && kindForExtension(basename(path)))
+    extras.push({ label: 'Open',                                        action: 'open' });
   extras.push(                          { label: 'Copy path',           action: 'copy-path' });
   if (type === 'folder')  extras.push({ label: 'Open terminal here',    action: 'terminal-here' });
   if (type === 'folder')  extras.push({ label: 'Refresh',               action: 'refresh' });
@@ -182,6 +188,11 @@ async function showMenu(e, path, type) {
   if (type === 'project') extras.push({ label: 'Export as .ipynb',      action: 'export-ipynb' });
   if (type === 'file' && IMPORTABLE_RE.test(basename(path)))
     extras.push(                        { label: 'Import as notebook',  action: 'import-file' });
+  // Download — applies to any loose file. Routes the bytes through the
+  // browser save dialog (filename preserved). Folder/project download
+  // is a follow-up once @gcu/archive lands.
+  if (type === 'file')
+    extras.push(                        { label: 'Download',            action: 'download' });
   if (extras.length) items.push('---', ...extras);
 
   // Rename / Move / Copy / Delete / Unmount — not for `/` or the
@@ -214,6 +225,7 @@ async function showMenu(e, path, type) {
   else if (action === 'export')      exportProject(path);
   else if (action === 'export-ipynb') exportProjectAsIpynb(path);
   else if (action === 'import-file') importFileAsNotebook(path);
+  else if (action === 'download')    downloadFile(path);
   else if (action === 'rename')      renameEntry(path, type);
   else if (action === 'move-to')     moveToPrompt(path);
   else if (action === 'copy-to')     copyToPrompt(path);

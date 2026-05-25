@@ -129,6 +129,10 @@ if (target === 'works' || target === 'works-all') {
     // The notebook's pure serializer — shared so the shell can import a
     // standalone notebook into a project (works/js/import.js).
     ['serialize', 'src/js/serialize.js'],
+    // Vendored license inventory — used by works-service.js to expose
+    // Licenses.Get and by the workspace Settings surface to render the
+    // licenses table. See licenses-spec §7.3 + §8.1.
+    ['licenses', 'ext/licenses/index.js'],
   ]) {
     const p = path.join(__dirname, rel);
     if (!fs.existsSync(p)) {
