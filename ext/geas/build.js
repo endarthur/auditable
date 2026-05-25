@@ -27,6 +27,28 @@ for (const line of mainSrc.split('\n')) {
 }
 
 const chunks = [];
+
+// ── Prepend @gcu/archive's pre-built bundle ──────────────────────────
+// geas's archive builtins (builtins-archive.js) need `archive` and
+// `walkVfsTree` as in-scope identifiers — the dynamic-import fallback
+// chain (#archive / @gcu/archive / relative paths) doesn't resolve inside
+// the worker context that hosts geas (workers don't inherit the main
+// thread's import map; relative paths against a blob: worker URL are
+// opaque). Inlining the pre-built bundle keeps geas self-contained.
+//
+// We strip ONLY the trailing `export { ... }` block — the rest of the
+// bundle already does its own collision isolation via fflate/fzstd IIFEs
+// and aliased symbol names, so concatenating it verbatim is safe.
+const archivePath = path.resolve(__dirname, '..', 'archive', 'index.js');
+if (fs.existsSync(archivePath)) {
+  let archiveSrc = fs.readFileSync(archivePath, 'utf8');
+  archiveSrc = archiveSrc.replace(/^export\s*\{[\s\S]*?\};?\s*$/gm, '');
+  archiveSrc = archiveSrc.replace(/^\n+/, '').replace(/\n+$/, '');
+  chunks.push('// -- archive/index.js (pre-built bundle, prepended) --\n\n' + archiveSrc);
+} else {
+  console.warn('geas: ext/archive/index.js not found — archive builtins will fail at runtime');
+}
+
 for (const entry of importEntries) {
   const filePath = entry.rel
     ? path.join(srcDir, entry.rel)

@@ -3536,7 +3536,11 @@ function magicForFormat(filename) {
 // `name` is preserved when known — used as an extension hint when magic-byte
 // detection is ambiguous.
 
-const basename = (p) => String(p).split(/[\\/]/).pop();
+// Renamed from `basename` to avoid colliding with @gcu/vfs's exported
+// `basename` function in worker bundles that compose both libs into one
+// scope (e.g. the geas worker, which inlines @gcu/archive via build-time
+// concat).
+const _arcBasename = (p) => String(p).split(/[\\/]/).pop();
 
 function normalizeSource(input) {
   if (!input) throw new TypeError('source: required');
@@ -3591,7 +3595,7 @@ function normalizeSource(input) {
           if (v && v.buffer) return new Uint8Array(v.buffer, v.byteOffset || 0, v.byteLength);
           throw new TypeError('vfs.readFile returned unsupported shape');
         },
-        name: basename(input.path),
+        name: _arcBasename(input.path),
       };
     }
     // { fetch: url, fetchFn? }
@@ -3604,7 +3608,7 @@ function normalizeSource(input) {
           if (!r || !r.ok) throw new Error(`fetch ${input.fetch}: HTTP ${r ? r.status : 'no-response'}`);
           return new Uint8Array(await r.arrayBuffer());
         },
-        name: basename(input.fetch.split('?')[0]),
+        name: _arcBasename(input.fetch.split('?')[0]),
       };
     }
   }

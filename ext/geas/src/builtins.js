@@ -14,12 +14,14 @@ import { defaultTypedBuiltins } from './builtins-typed.js';
 import { drainInput } from './typed.js';
 import { _pkg } from './pkg-cmd.js';
 import { runEd } from '../../ed/src/api.js';
+import { archiveBuiltins } from './builtins-archive.js';
 
 // Construct a fresh map of the default builtins. Returns a new Map per call
 // so consumers can mutate (add/override) without affecting other shells.
 export function defaultBuiltins() {
   return new Map(Object.entries({
     ...defaultTypedBuiltins(),
+    ...archiveBuiltins(),
     ':':      _colon,
     echo:     _echo,
     printf:   _printf,

@@ -175,8 +175,12 @@ window.addEventListener('message', async (ev) => {
   const ext = extOf(name);
   const readText = () => bus.call(
     { to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [path, 'utf8']);
+  // MUST pass 'bytes' — VFS.Read without an encoding hits the backend's
+  // default (TextDecoder().decode()), which UTF-8-launders binary contents
+  // and substitutes U+FFFD for non-UTF-8 bytes. Same trap we hit earlier in
+  // the archive arc; the lesson applies to image + PDF previews too.
   const readBytes = () => bus.call(
-    { to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [path]);
+    { to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [path, 'bytes']);
 
   // Expose bus so the archive renderer (called later) can also invoke
   // Archive.List / Archive.Read / Archive.Extract.
@@ -423,18 +427,47 @@ function inlineMd(s) {
 }
 
 // ── Image ───────────────────────────────────────────────────────────
+// Encode as data: URL rather than blob: URL. The preview surface itself
+// runs from a blob:null/<uuid> iframe (opaque origin); on file:// each
+// blob URL gets ANOTHER unique opaque origin and the parent rejects the
+// load with "Not allowed to load local resource". data: URLs work
+// cross-origin freely (modulo CSP). Size penalty is ~33% from base64 —
+// acceptable for typical preview images. For huge images the
+// blob-URL path would be preferable but we'd need to be on http(s):// for
+// it to work anyway, and at that point the parent's origin model is
+// different too.
+function _bytesToDataUrl(bytes, mime) {
+  // Coerce whatever the A-Bus + VFS marshalling handed us into a Uint8Array
+  // before chunking. structured-clone preserves typed arrays, but defensive
+  // about the alternatives (plain ArrayBuffer, a transferred Buffer-like
+  // shape, or a UTF-8-lossy string from a misbehaving VFS read).
+  let u;
+  if (bytes instanceof Uint8Array) u = bytes;
+  else if (bytes instanceof ArrayBuffer) u = new Uint8Array(bytes);
+  else if (bytes && typeof bytes === 'object' && bytes.buffer instanceof ArrayBuffer) {
+    u = new Uint8Array(bytes.buffer, bytes.byteOffset || 0, bytes.byteLength);
+  }
+  else if (typeof bytes === 'string') u = new TextEncoder().encode(bytes);
+  else throw new TypeError('preview: cannot convert ' + (typeof bytes) + ' to bytes');
+
+  // Chunked btoa — avoids the call-stack-size limit on String.fromCharCode
+  // for large byte arrays.
+  let s = '';
+  const CHUNK = 8192;
+  for (let i = 0; i < u.length; i += CHUNK) {
+    s += String.fromCharCode.apply(null, u.subarray(i, i + CHUNK));
+  }
+  return 'data:' + mime + ';base64,' + btoa(s);
+}
+
 function renderImage(bytes, ext) {
-  const blob = new Blob([bytes], { type: MIME[ext] || 'application/octet-stream' });
-  const url = URL.createObjectURL(blob);
-  blobUrls.push(url);
+  const url = _bytesToDataUrl(bytes, MIME[ext] || 'application/octet-stream');
   root.innerHTML = `<div class="img-wrap"><img src="${url}" alt=""></div>`;
 }
 
 // ── PDF ─────────────────────────────────────────────────────────────
 function renderPdf(bytes) {
-  const blob = new Blob([bytes], { type: 'application/pdf' });
-  const url = URL.createObjectURL(blob);
-  blobUrls.push(url);
+  const url = _bytesToDataUrl(bytes, 'application/pdf');
   root.innerHTML = `<embed src="${url}" type="application/pdf" class="pdf">`;
 }
 
