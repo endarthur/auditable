@@ -73,5 +73,6 @@ import './size-compare.js'; // @optional
 import './shim.js';
 import './mcp-adapter.js';
 import './ipynb-bridge.js';
+import './license-warn.js';
 import './globals.js';
 import './init.js';

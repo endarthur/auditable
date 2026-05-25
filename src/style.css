@@ -950,6 +950,45 @@ audit-text-input input[type="text"] {
   word-break: break-all;
 }
 
+/* ── COPYLEFT BANNER ── */
+/* One-off dismissible notice surfaced by license-warn.js when the saved
+   notebook contains weak- or strong-copyleft installed modules. Lives
+   bottom-right above the statusbar; user has to acknowledge by × or by
+   ignoring (no auto-dismiss — they should at least see it). */
+#copyleftBanner {
+  position: fixed;
+  right: 16px;
+  bottom: 36px;
+  z-index: 60;
+  max-width: 480px;
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--au-warn-soft);
+  border: 1px solid var(--au-warn);
+  border-left: 3px solid var(--au-warn);
+  border-radius: 3px;
+  color: var(--au-fg);
+  font: 12px/1.4 var(--au-mono, ui-monospace, monospace);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+#copyleftBanner .cb-msg { flex: 1; }
+#copyleftBanner .cb-dismiss {
+  background: none;
+  border: none;
+  color: var(--au-fg-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 2px;
+}
+#copyleftBanner .cb-dismiss:hover {
+  color: var(--au-fg);
+  background: rgba(0, 0, 0, 0.1);
+}
+
 /* ── LOCK SCREEN ── */
 .lock-screen {
   position: fixed;

@@ -17,6 +17,7 @@ import { getSettings } from './settings.js';
 import { Dialog } from '#dialog';
 import { runAll } from './exec.js';
 import { installIpynbDragDrop } from './ipynb-bridge.js';
+import { checkAndWarnCopyleft } from './license-warn.js';
 
 // ── LOCK SCREEN ──
 
@@ -175,6 +176,10 @@ async function _resumeAfterUnlock(payload) {
   }
 
   S.initialized = true;
+
+  // Copyleft warning runs after decrypted modules hydrate (encrypted save
+  // path — mirrors the standalone-load + works-boot wiring).
+  try { checkAndWarnCopyleft(); } catch (e) { console.warn('license-warn:', e); }
 
   // Configure autocomplete
   configureAllAutocomplete();
@@ -542,6 +547,9 @@ async function init() {
     addCell('md', '');
     addCell('code', '');
   }
+  // Warn about copyleft components bundled inside this saved notebook.
+  // Quiet for permissive-only notebooks; banner + console line otherwise.
+  try { checkAndWarnCopyleft(); } catch (e) { console.warn('license-warn:', e); }
   // Apply user theme from /projects/self/theme.css (if any) — runs after the
   // VFS is hydrated so saved notebooks pick up their bundled theme on load.
   await loadUserTheme();
@@ -611,6 +619,8 @@ async function worksBoot(conn) {
   const modules = await hydrateModulesFromVfs(vfs);
   if (Object.keys(modules).length > 0) window._installedModules = modules;
   await hydrateNotebook(vfs);
+
+  try { checkAndWarnCopyleft(); } catch (e) { console.warn('license-warn:', e); }
 
   await loadUserTheme();
   configureAllAutocomplete();
