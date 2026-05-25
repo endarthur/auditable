@@ -25,6 +25,7 @@ import { listTar, readTar, extractTar, writeTar } from './tar.js';
 import { gunzipBytes, gzipBytes, _gzInnerName } from './gz.js';
 import { unzstdBytes, zstdBytes, _zstInnerName } from './zst.js';
 import { walkVfsTree } from './walk.js';
+import { createWriter } from './writer.js';
 import { zipSync } from '../vendor/fflate.module.mjs';
 
 async function _resolveSourceFormat(src) {
@@ -240,6 +241,11 @@ export const archive = {
     const inner = await unzstdBytes(bytes);
     return _writeSingle(sink, inner, _zstInnerName(src.name));
   },
+
+  // Streaming writer — call addFile / addDirectory / close incrementally
+  // instead of materialising the whole entry map in memory before encoding.
+  // See src/writer.js for the per-format details.
+  createWriter,
 };
 
 // Write a single byte stream to whatever shape of sink the caller passed.

@@ -14,6 +14,7 @@ import {
   gunzipBytes, gzipBytes,
   unzstdBytes, zstdBytes,
   walkVfsTree, buildEntryMap,
+  createWriter,
   archive,
 } from '../ext/archive/src/main.js';
 
@@ -1085,4 +1086,168 @@ test('archive: VFS that defaults to utf8-string read still round-trips binary', 
 test('archive.list: unrecognized format throws', async () => {
   await assert.rejects(() => archive.list(new Uint8Array([0, 0, 0, 0])),
     /could not detect format/);
+});
+
+// ── archive.createWriter (streaming writer) ─────────────────────────────
+
+test('createWriter: zip incremental → memory → roundtrip via archive.list', async () => {
+  const w = createWriter('memory', { format: 'zip' });
+  await w.addFile('README.md', enc('# hello'));
+  await w.addFile('data/a.csv', enc('x,y\n1,2'));
+  await w.addFile('data/b.csv', enc('p,q\n3,4'));
+  const bytes = await w.close();
+  assert.ok(bytes instanceof Uint8Array);
+  // Magic bytes.
+  assert.equal(bytes[0], 0x50);
+  assert.equal(bytes[1], 0x4B);
+  // Round-trip — list the produced zip.
+  const entries = await archive.list(bytes);
+  const files = entries.filter((e) => e.type === 'file').map((e) => e.path).sort();
+  assert.deepEqual(files, ['README.md', 'data/a.csv', 'data/b.csv']);
+});
+
+test('createWriter: tar incremental → memory → roundtrip', async () => {
+  const w = createWriter('memory', { format: 'tar' });
+  await w.addFile('alpha.txt', enc('alpha'));
+  await w.addDirectory('subdir/');
+  await w.addFile('subdir/beta.txt', enc('beta'));
+  const bytes = await w.close();
+  assert.equal(detectFormat(bytes), 'tar');
+  // Confirm proper end-of-archive marker — last 1024 bytes are zero.
+  for (let i = bytes.length - 1024; i < bytes.length; i++) assert.equal(bytes[i], 0);
+  const extracted = await archive.extract(bytes, 'memory');
+  assert.equal(new TextDecoder().decode(extracted.get('alpha.txt')), 'alpha');
+  assert.equal(new TextDecoder().decode(extracted.get('subdir/beta.txt')), 'beta');
+});
+
+test('createWriter: tar emits exactly one trailer (not one-per-entry)', async () => {
+  // Each per-entry writeTar emits its own 1024-byte trailer; the streaming
+  // writer must strip those and emit exactly one at close. Otherwise tools
+  // that follow trailers strictly (BSD tar) stop after the first entry.
+  const w = createWriter('memory', { format: 'tar' });
+  await w.addFile('one.txt', enc('1'));
+  await w.addFile('two.txt', enc('2'));
+  await w.addFile('three.txt', enc('3'));
+  const bytes = await w.close();
+
+  // Walk the archive ourselves, counting how many entries appear before the
+  // first all-zero block (which is the canonical "end" signal).
+  let off = 0, count = 0;
+  while (off + 512 <= bytes.length) {
+    const block = bytes.subarray(off, off + 512);
+    let allZero = true;
+    for (let i = 0; i < 512; i++) if (block[i] !== 0) { allZero = false; break; }
+    if (allZero) break;
+    count++;
+    // Read size field at offset 124..136 to skip the data.
+    const sizeStr = new TextDecoder().decode(block.subarray(124, 136)).trim();
+    const size = sizeStr ? parseInt(sizeStr, 8) : 0;
+    off += 512 + 512 * Math.ceil(size / 512);
+  }
+  assert.equal(count, 3, 'expected three entries before first zero block');
+});
+
+test('createWriter: tar.gz → roundtrip extracts cleanly', async () => {
+  const w = createWriter('memory', { format: 'tar.gz' });
+  await w.addFile('README.md', enc('# streamed tar.gz\n'));
+  await w.addFile('data.csv',  enc('a,b\n1,2\n'));
+  const bytes = await w.close();
+  // Outer layer must be gzip.
+  assert.equal(bytes[0], 0x1f);
+  assert.equal(bytes[1], 0x8b);
+  // archive.list peels the gz → tar.
+  const entries = await archive.list(bytes);
+  const files = entries.filter((e) => e.type === 'file').map((e) => e.path).sort();
+  assert.deepEqual(files, ['README.md', 'data.csv']);
+});
+
+test('createWriter: zip into VFS sink writes to the target path', async () => {
+  const files = new Map();
+  const vfs = {
+    writeFile: async (p, b) => { files.set(p, b); },
+  };
+  const w = createWriter({ vfs, path: '/out.zip' }, { format: 'zip' });
+  await w.addFile('hi.txt', enc('hi'));
+  const r = await w.close();
+  assert.equal(r.count, 1);
+  assert.deepEqual(r.paths, ['/out.zip']);
+  assert.ok(files.has('/out.zip'));
+  // Confirm the bytes are a valid zip.
+  const back = files.get('/out.zip');
+  const entries = await archive.list(back);
+  assert.ok(entries.find((e) => e.path === 'hi.txt'));
+});
+
+test('createWriter: WritableStream sink streams chunks immediately', async () => {
+  // Collect everything that gets written into the underlying stream.
+  const collected = [];
+  const stream = new WritableStream({
+    write(chunk) { collected.push(chunk); },
+  });
+  const w = createWriter(stream, { format: 'zip' });
+  await w.addFile('alpha.txt', enc('alpha bytes'));
+  // At this point, fflate has already emitted some bytes — the local file
+  // header for alpha.txt. Confirm chunks accumulated.
+  assert.ok(collected.length > 0, 'expected at least one chunk after addFile');
+  await w.close();
+  assert.ok(collected.length >= 1, 'expected chunks pushed during streaming');
+  // Concat and round-trip.
+  let total = 0;
+  for (const c of collected) total += c.length;
+  const all = new Uint8Array(total);
+  let off = 0;
+  for (const c of collected) { all.set(c, off); off += c.length; }
+  const entries = await archive.list(all);
+  assert.ok(entries.find((e) => e.path === 'alpha.txt'));
+});
+
+test('createWriter: addFile after close throws', async () => {
+  const w = createWriter('memory', { format: 'tar' });
+  await w.addFile('a', enc('a'));
+  await w.close();
+  await assert.rejects(() => w.addFile('b', enc('b')), /push after close/);
+});
+
+test('createWriter: rejects unsupported formats with clear errors', () => {
+  // gz/zst — direct callers should use archive.gzip / archive.zstd.
+  assert.throws(() => createWriter('memory', { format: 'gz'  }), /single-stream/);
+  assert.throws(() => createWriter('memory', { format: 'zst' }), /single-stream/);
+  // tar.zst — fzstd is decode-only.
+  assert.throws(() => createWriter('memory', { format: 'tar.zst' }), /decode-only/);
+  // xz / bz2 — lazy Wasm not wired.
+  assert.throws(() => createWriter('memory', { format: 'xz' }),     /lazy-loaded Wasm/);
+  assert.throws(() => createWriter('memory', { format: 'bz2' }),    /lazy-loaded Wasm/);
+});
+
+test('createWriter: rejects missing sink or format', () => {
+  assert.throws(() => createWriter(null, { format: 'zip' }), /sink required/);
+  assert.throws(() => createWriter('memory', {}),            /opts.format required/);
+});
+
+test('createWriter: archive.createWriter is the same surface as the named export', () => {
+  assert.equal(archive.createWriter, createWriter);
+});
+
+test('createWriter: roundtrip through full extract path preserves bytes', async () => {
+  const original = {
+    'main.js':        enc('export const v = 42;'),
+    'data/x.csv':     enc('a,b,c\n1,2,3\n'),
+    'subdir/':        new Uint8Array(0),         // explicit dir entry
+    'subdir/y.csv':   enc('d,e,f\n4,5,6\n'),
+  };
+  for (const format of ['zip', 'tar', 'tar.gz']) {
+    const w = createWriter('memory', { format });
+    for (const [path, bytes] of Object.entries(original)) {
+      if (path.endsWith('/')) await w.addDirectory(path);
+      else await w.addFile(path, bytes);
+    }
+    const archiveBytes = await w.close();
+    const extracted = await archive.extract(archiveBytes, 'memory');
+    for (const [path, bytes] of Object.entries(original)) {
+      if (path.endsWith('/')) continue;          // sinks don't track dirs
+      assert.deepEqual(
+        extracted.get(path), bytes,
+        `format=${format}: round-trip mismatch on ${path}`);
+    }
+  }
 });
