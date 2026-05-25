@@ -47,6 +47,27 @@
   --au-error-soft:     var(--sw-red-soft);
   --au-selected:       var(--sw-indigo);
   --au-selected-soft:  var(--sw-indigo-soft);
+  /* Component-token aliases — @gcu/menu and @gcu/dialog read these.
+     Mirrors works/style.css's top-level cascade so inlined component
+     CSS in surfaces gets the same look as the shell's chrome. */
+  --ui-bg-raised:     var(--au-surface-raised);
+  --ui-bg:            var(--au-surface);
+  --ui-bg-hover:      var(--au-surface-bright);
+  --ui-bg-selected:   var(--au-selected-soft);
+  --ui-fg:            var(--au-fg);
+  --ui-fg-muted:      var(--au-fg-muted);
+  --ui-fg-error:      var(--au-error);
+  --ui-fg-accent:     var(--au-action);
+  --ui-border:        var(--au-border);
+  --ui-border-focus:  var(--au-action);
+  --ui-border-radius: 3px;
+  --ui-shadow:        0 6px 20px rgba(0, 0, 0, 0.15);
+  --ui-font:          ui-monospace, 'Space Mono', Menlo, monospace;
+  --ui-font-size:     12px;
+  --ui-padding:       8px;
+  --ui-duration:      0.12s;
+  --ui-easing:        ease-out;
+  --ui-z-dropdown:    9000;
 }
 [data-theme="dark"] {
   --sw-bg-deep:     #0E1012;
