@@ -301,18 +301,32 @@ editor.addEventListener('keydown', (e) => {
 let caseSensitive = false;
 
 function showFindBar(withReplace) {
+  // Toggling the find bar reflows the editor; the browser will sometimes
+  // auto-scroll the textarea to keep the cursor visible, jumping to the
+  // end if the cursor was far from the new viewport. Snapshot scrollTop
+  // before the layout change and restore it after the reflow settles.
+  const savedScroll = editor.scrollTop;
   findBar.classList.add('visible');
   findBar.classList.toggle('has-replace', !!withReplace);
   // Seed with current selection (if any) — classic Notepad behavior.
   const sel = editor.value.slice(editor.selectionStart, editor.selectionEnd);
   if (sel && !sel.includes('\n')) findIn.value = sel;
-  findIn.focus();
+  findIn.focus({ preventScroll: true });
   findIn.select();
+  requestAnimationFrame(() => {
+    editor.scrollTop = savedScroll;
+    syncGutterScroll();
+  });
   refreshCount();
 }
 function hideFindBar() {
+  const savedScroll = editor.scrollTop;
   findBar.classList.remove('visible');
-  editor.focus();
+  editor.focus({ preventScroll: true });
+  requestAnimationFrame(() => {
+    editor.scrollTop = savedScroll;
+    syncGutterScroll();
+  });
 }
 
 function findAllMatches() {
