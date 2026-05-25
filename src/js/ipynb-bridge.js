@@ -164,24 +164,128 @@ export function exportAsIpynb() {
   setMsg('exported .ipynb', 'ok');
 }
 
-// Global drag-drop handler. Listens on document body for files; if any
-// dropped file ends in .ipynb, routes to the import path and prevents
-// the browser's default open-in-tab behavior.
+// Global drag-drop handler. Listens on document for OS-file drags; routes
+// recognised extensions (.ipynb → notebook import, .gcupkg → extension
+// install) and shows a brief overlay during the drag. Browsers hide
+// filenames during dragover for privacy, so the overlay copy is generic;
+// the per-file outcome lands in the cell's display / console post-drop.
+//
+// (Function name kept for compat with init.js callers; scope is broader
+// than the name suggests — it handles every file type the standalone
+// auditable knows how to ingest.)
 export function installIpynbDragDrop() {
+  const overlay = _ensureDropOverlay();
+  const isFileDrag = (e) =>
+    e.dataTransfer && e.dataTransfer.types
+    && e.dataTransfer.types.indexOf && e.dataTransfer.types.indexOf('Files') >= 0;
+
+  let depth = 0;
+  const show = () => { overlay.classList.add('visible'); };
+  const hide = () => { overlay.classList.remove('visible'); depth = 0; };
+
+  document.addEventListener('dragenter', (e) => {
+    if (!isFileDrag(e)) return;
+    depth++;
+    show();
+  });
+  document.addEventListener('dragleave', (e) => {
+    if (!isFileDrag(e)) return;
+    depth = Math.max(0, depth - 1);
+    if (depth === 0) hide();
+  });
   document.addEventListener('dragover', (e) => {
-    if (!e.dataTransfer) return;
-    const types = e.dataTransfer.types;
-    if (types && types.includes && types.includes('Files')) {
-      e.preventDefault();
-    }
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
   });
   document.addEventListener('drop', async (e) => {
+    hide();
     if (!e.dataTransfer || !e.dataTransfer.files) return;
     const files = [...e.dataTransfer.files];
-    const ipynb = files.find(f => /\.ipynb$/i.test(f.name));
-    if (!ipynb) return;
+    if (files.length === 0) return;
     e.preventDefault();
-    const text = await ipynb.text();
-    await importIpynbText(text, { sourceName: ipynb.name });
+    for (const file of files) {
+      try {
+        if (/\.gcupkg$/i.test(file.name)) {
+          await _installDroppedGcupkg(file);
+        } else if (/\.ipynb$/i.test(file.name)) {
+          const text = await file.text();
+          await importIpynbText(text, { sourceName: file.name });
+        }
+        // Other file types fall through silently — kept the old
+        // .ipynb-only behavior for non-matching files.
+      } catch (err) {
+        console.error('[auditable] drop failed:', file.name, err);
+      }
+    }
   });
+  window.addEventListener('dragend', hide);
+  window.addEventListener('blur', hide);
+}
+
+// Sideload a dropped .gcupkg. Uses the same parseGcupkg + installGcupkg
+// path the cell-side install("file.gcupkg") goes through — stdlib's
+// unzipArchive shim handles the ZIP reading; no @gcu/archive dep.
+async function _installDroppedGcupkg(file) {
+  // Lazy imports — avoids a circular ipynb-bridge → modules → ipynb-bridge.
+  const { parseGcupkg, installGcupkg, makeUnzipArchiveShim } = await import('./gcupkg.js');
+  const { unzipArchive } = await import('./stdlib-core.js');
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const parsed = await parseGcupkg(bytes, makeUnzipArchiveShim(unzipArchive));
+  const vfs = window._notebookVFS;
+  if (!vfs) {
+    console.error('[auditable] gcupkg drop: no VFS available');
+    return;
+  }
+  const result = await installGcupkg(parsed, {
+    vfs,
+    installedModules: window._installedModules,
+  });
+  console.log('[auditable] gcupkg installed:', {
+    name: parsed.meta.name,
+    version: parsed.meta.version,
+    libPath: result.libPath,
+    integrity: parsed.integrity,
+    suggestedLoad: result.hasAdder
+      ? `load("${parsed.meta.name}"); load("${parsed.meta.name}/adder");`
+      : `load("${parsed.meta.name}");`,
+  });
+  // Pop a small toast-shaped indicator. Lives in the overlay's parent
+  // (document.body) and self-removes after a few seconds.
+  _showInstallToast(parsed.meta.name, parsed.meta.version, parsed.integrity.ok);
+}
+
+// Lazy-built shared overlay element. Browser privacy hides the dragged
+// filename during dragover, so the overlay copy is generic; the toast
+// after a successful gcupkg install names what just landed.
+function _ensureDropOverlay() {
+  let el = document.getElementById('auditable-drop-overlay');
+  if (el) return el;
+  el = document.createElement('div');
+  el.id = 'auditable-drop-overlay';
+  el.innerHTML =
+    '<div class="adrop-card">'
+    + '<div class="adrop-icon">⤓</div>'
+    + '<div class="adrop-title">Drop to import</div>'
+    + '<div class="adrop-hint">'
+    +   'Notebooks (<code>.ipynb</code>) import as cells.<br>'
+    +   'Extensions (<code>.gcupkg</code>) install into the workspace.'
+    + '</div>'
+    + '</div>';
+  document.body.appendChild(el);
+  return el;
+}
+
+function _showInstallToast(name, version, integrityOk) {
+  const toast = document.createElement('div');
+  toast.className = 'adrop-toast';
+  const tag = integrityOk === false ? ' (⚠ integrity)' : (integrityOk === true ? ' ✓' : '');
+  toast.textContent = `installed ${name}@${version}${tag}`;
+  document.body.appendChild(toast);
+  // Trigger CSS transition.
+  requestAnimationFrame(() => toast.classList.add('visible'));
+  setTimeout(() => {
+    toast.classList.remove('visible');
+    setTimeout(() => toast.remove(), 250);
+  }, 3500);
 }

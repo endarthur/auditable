@@ -989,6 +989,86 @@ audit-text-input input[type="text"] {
   background: rgba(0, 0, 0, 0.1);
 }
 
+/* ── DRAG-DROP OVERLAY + INSTALL TOAST ── */
+/* Shown while an OS file is being dragged over the document. Generic
+   message ("Drop to import") since browser privacy hides filenames
+   during dragover; the install toast (post-drop) reports the specific
+   outcome for .gcupkg installs. .ipynb drops just open the notebook
+   — no toast needed, the change is self-evident. */
+#auditable-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.12s ease-out;
+}
+#auditable-drop-overlay.visible { opacity: 1; }
+.adrop-card {
+  background: var(--au-surface-raised);
+  border: 2px dashed var(--au-action);
+  border-radius: 6px;
+  padding: 32px 56px;
+  text-align: center;
+  color: var(--au-fg);
+  max-width: 80vw;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+.adrop-icon {
+  font-size: 48px;
+  color: var(--au-action);
+  margin-bottom: 8px;
+  font-weight: 700;
+  line-height: 1;
+}
+.adrop-title {
+  font-family: ui-monospace, 'Space Mono', monospace;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+  color: var(--au-action);
+}
+.adrop-hint {
+  font-size: 12px;
+  color: var(--au-fg-muted);
+  line-height: 1.6;
+}
+.adrop-hint code {
+  background: var(--au-surface-bright);
+  padding: 1px 5px;
+  border-radius: 2px;
+  font-family: ui-monospace, 'Space Mono', monospace;
+  font-size: 11px;
+  color: var(--au-fg);
+}
+.adrop-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 9100;
+  background: var(--au-surface-raised);
+  border: 1px solid var(--au-success);
+  border-left: 3px solid var(--au-success);
+  border-radius: 3px;
+  padding: 8px 14px;
+  color: var(--au-fg);
+  font: 12px/1.5 ui-monospace, 'Space Mono', monospace;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3);
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.18s ease-out, transform 0.18s ease-out;
+}
+.adrop-toast.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 /* ── LOCK SCREEN ── */
 .lock-screen {
   position: fixed;
