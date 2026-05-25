@@ -13,6 +13,7 @@ import { openPath, spawnSurface } from './surfaces.js';
 import { unmountAt } from './mount.js';
 import { importFileAsNotebook } from './import.js';
 import { exportProject, exportProjectAsIpynb } from './project-export.js';
+import { moveToPrompt, copyToPrompt, attachTreeRowDnd } from './file-ops.js';
 
 const IMPORTABLE_RE = /\.(html?|txt|ipynb)$/i;
 
@@ -152,6 +153,9 @@ function renderNode(node, depth) {
     e.stopPropagation();
     showMenu(e, node.path, node.type);
   });
+  // Drag-to-move: draggable source on every row, drop target on folders.
+  // Ctrl+drop copies; plain drop moves.
+  attachTreeRowDnd(row, node);
 
   if (node.type === 'folder' && node.children) {
     for (const c of node.children) renderNode(c, depth + 1);
@@ -180,9 +184,10 @@ async function showMenu(e, path, type) {
     extras.push(                        { label: 'Import as notebook',  action: 'import-file' });
   if (extras.length) items.push('---', ...extras);
 
-  // Rename / Delete / Unmount — not for `/` or the top-level mount roots.
-  // A /mnt/<name> entry is a disk-folder mount: its action is Unmount (which
-  // leaves the disk content alone), not Delete (which would touch the disk).
+  // Rename / Move / Copy / Delete / Unmount — not for `/` or the
+  // top-level mount roots. A /mnt/<name> entry is a disk-folder mount:
+  // its action is Unmount (which leaves the disk content alone), not
+  // Delete (which would touch the disk).
   const isMountedFolder = parentOf(path) === '/mnt';
   if (path !== '/' && parentOf(path) !== '/') {
     items.push('---');
@@ -190,6 +195,8 @@ async function showMenu(e, path, type) {
       items.push({ label: 'Unmount', action: 'unmount' });
     } else {
       items.push({ label: 'Rename…', action: 'rename' });
+      items.push({ label: 'Move to…', action: 'move-to' });
+      items.push({ label: 'Copy to…', action: 'copy-to' });
       items.push({ label: 'Delete',  action: 'delete', danger: true });
     }
   }
@@ -208,6 +215,8 @@ async function showMenu(e, path, type) {
   else if (action === 'export-ipynb') exportProjectAsIpynb(path);
   else if (action === 'import-file') importFileAsNotebook(path);
   else if (action === 'rename')      renameEntry(path, type);
+  else if (action === 'move-to')     moveToPrompt(path);
+  else if (action === 'copy-to')     copyToPrompt(path);
   else if (action === 'delete')      deleteEntry(path, type);
   else if (action === 'unmount')     unmountEntry(path);
 }

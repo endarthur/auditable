@@ -114,8 +114,15 @@ function _inlineLibsIntoSurface(text, kind) {
   // bundle (with its exports rewritten to locals).
   let inlinedGeas = false;
   for (const [name, src] of _libSources) {
+    // Anchor to start of line (with multiline flag) so the regex only
+    // matches real top-level import statements. Bundles often have
+    // example imports embedded in JSDoc comments — `// import { Foo }
+    // from '@gcu/term'` — which would otherwise match the substring,
+    // recursively pulling in libs the surface never asked for and
+    // colliding on shared identifiers (e.g. xterm + term both export
+    // `Terminal`).
     const re = new RegExp(
-      `import\\s*\\{([^}]*)\\}\\s*from\\s*['"]@gcu/${name}['"];?`);
+      `^\\s*import\\s*\\{([^}]*)\\}\\s*from\\s*['"]@gcu/${name}['"];?`, 'm');
     if (!re.test(text)) continue;
     if (name === 'geas') inlinedGeas = true;
     // Inlined source lives inside the surface's <script type="module">

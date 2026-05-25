@@ -18,6 +18,7 @@ import { serializeWorkspace, buildWorksHtml } from './persist.js';
 import { importNotebook, importFileAsNotebook } from './import.js';
 import { buildProjectExportHtml, exportProject } from './project-export.js';
 import { mountHandle, unmountAt, restoreMounts } from './mount.js';
+import { installGlobalFileDrop } from './file-ops.js';
 
 async function boot() {
   setupBus();                  // the A-Bus broker
@@ -31,6 +32,7 @@ async function boot() {
   setupLayout();               // the rails surface host
   setupMenuBar();              // the desktop menu bar
   setupTree();                 // the file-tree explorer
+  installGlobalFileDrop();     // drag OS files (.txt/.html/.ipynb) onto the shell
   await setupWorksService();   // the `works` A-Bus service
   setupSurfaces();             // surface-signal tracking
   await restoreLayout();       // reopen the saved tabs
