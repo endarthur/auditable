@@ -17,6 +17,15 @@ const DEFAULTS = Object.freeze({
     fontSize: 13,
     embedFonts: false,
   },
+  // Text-editor surface preferences. Workspace-scoped (one config for
+  // every open text tab) rather than per-file — most users expect
+  // consistent behavior across files. Per-file overrides could land
+  // as a future textEditor.perPath map.
+  textEditor: {
+    wrap: false,
+    showLineNumbers: true,
+    showStatusBar: true,
+  },
 });
 
 function _merge(base, over) {

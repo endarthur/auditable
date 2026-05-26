@@ -276,14 +276,45 @@ let showLineNumbers = true;
 let wrap            = false;
 let showStatusBar   = true;
 
+// Last-read full settings object — kept so we can read-modify-write
+// (the Settings.Set service writes the whole blob, not a patch).
+let _settingsCache = null;
+
 function applyViewToggles() {
-  view.dispatch({
+  if (view) view.dispatch({
     effects: [
       lineNumCompartment.reconfigure(showLineNumbers ? lineNumbers() : []),
       wrapCompartment.reconfigure(wrap ? EditorView.lineWrapping : []),
     ],
   });
   statusBar.classList.toggle('hidden', !showStatusBar);
+}
+
+// Pull text-editor prefs from a settings blob into our locals. Pure —
+// doesn't touch view; caller decides whether to applyViewToggles after.
+function _readTextEditorPrefs(settings) {
+  const te = (settings && settings.textEditor) || {};
+  if (typeof te.wrap === 'boolean')            wrap            = te.wrap;
+  if (typeof te.showLineNumbers === 'boolean') showLineNumbers = te.showLineNumbers;
+  if (typeof te.showStatusBar === 'boolean')   showStatusBar   = te.showStatusBar;
+}
+
+// Persist current toggle state to /etc/works.json. Read-modify-write
+// the cached blob so we don't clobber appearance/theme/etc.
+async function _saveTextEditorPrefs() {
+  if (!bus || !_settingsCache) return;
+  const next = JSON.parse(JSON.stringify(_settingsCache));   // deep-clone (avoids surprising signal aliasing)
+  next.textEditor = next.textEditor || {};
+  next.textEditor.wrap            = wrap;
+  next.textEditor.showLineNumbers = showLineNumbers;
+  next.textEditor.showStatusBar   = showStatusBar;
+  try {
+    _settingsCache = await bus.call(
+      { to: 'works', path: '/', interface: 'Settings', member: 'Set' },
+      [next]);
+  } catch (e) {
+    console.warn('[text-surface] saving prefs failed:', e);
+  }
 }
 
 // ── Status-bar updates piggyback on a CM6 updateListener ──────────────
@@ -428,7 +459,31 @@ window.addEventListener('message', async (ev) => {
   }
   installThemeSubscription(bus);
 
+  // Read persisted text-editor prefs before mounting the editor so
+  // wrap / line-numbers / status-bar reflect the saved state on first
+  // paint — no flicker between defaults and remembered values.
+  try {
+    _settingsCache = await bus.call(
+      { to: 'works', path: '/', interface: 'Settings', member: 'Get' }, []);
+    _readTextEditorPrefs(_settingsCache);
+  } catch { /* no settings service yet — defaults are fine */ }
+
+  // Live-sync prefs across multiple open text surfaces: if another tab
+  // toggles wrap, this one updates too.
+  try {
+    bus.subscribe(
+      { interface: 'Shell', member: 'SettingsChanged', from: 'works' },
+      (msg) => {
+        const next = msg && msg.args && msg.args[0];
+        if (!next) return;
+        _settingsCache = next;
+        _readTextEditorPrefs(next);
+        applyViewToggles();
+      });
+  } catch { /* */ }
+
   view = makeEditor('', langExt);
+  applyViewToggles();
   await loadFromDisk();
   updateStatus();
 
@@ -452,9 +507,9 @@ window.addEventListener('message', async (ev) => {
       view.dispatch({ changes: { from: sel.from, to: sel.to, insert: stamp } });
       view.focus();
     },
-    'view:line-numbers': () => { showLineNumbers = !showLineNumbers; applyViewToggles(); },
-    'view:wrap':         () => { wrap = !wrap; applyViewToggles(); },
-    'view:status-bar':   () => { showStatusBar = !showStatusBar; applyViewToggles(); },
+    'view:line-numbers': () => { showLineNumbers = !showLineNumbers; applyViewToggles(); _saveTextEditorPrefs(); },
+    'view:wrap':         () => { wrap = !wrap; applyViewToggles(); _saveTextEditorPrefs(); },
+    'view:status-bar':   () => { showStatusBar = !showStatusBar; applyViewToggles(); _saveTextEditorPrefs(); },
   };
 
   // The §5.2 Surface contract.
