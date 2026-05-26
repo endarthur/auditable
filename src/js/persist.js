@@ -164,8 +164,49 @@ export function libPathToKey(segments, meta) {
   return null;
 }
 
+// Module-state signature: cheap fingerprint of the keys + each entry's
+// content hash. We use it to skip the nuke-and-rewrite when the modules
+// map hasn't changed since the last sync — autosave fires on every cell
+// run, and rewriting /lib (~250 vfs ops for a 54-module workspace) on
+// each one buried the iframe under VFS.Changed events. Modules only
+// move on install/uninstall, so the check is cheap and skips 99% of
+// the autosave traffic.
+let _lastModulesSig = null;
+
+function _modulesSignature(installedModules) {
+  if (!installedModules) return '';
+  // Sort keys for stable ordering across sessions. Per-entry signature
+  // uses installedAt (set by install paths) as a cheap version marker,
+  // plus the source length and binary flag — enough to detect the
+  // entries' shape without hashing the source bytes on every call.
+  const keys = Object.keys(installedModules).sort();
+  const parts = [];
+  for (const k of keys) {
+    const v = installedModules[k];
+    if (typeof v === 'string') {
+      parts.push(k + ':s' + v.length);
+    } else if (v && typeof v === 'object') {
+      parts.push(k + ':' +
+        (v.installedAt || '') + ':' +
+        (v.size ?? (typeof v.source === 'string' ? v.source.length : 0)) + ':' +
+        (v.binary ? 'b' : 't'));
+    } else {
+      parts.push(k + ':?');
+    }
+  }
+  return parts.join('|');
+}
+
 export async function syncModulesToVfs(vfs, installedModules) {
   if (!vfs) return;
+
+  // Idempotency: skip the nuke-and-rewrite if the modules map is
+  // unchanged since the last sync. This is the difference between
+  // autosave being cheap and autosave being a VFS-thrashing storm.
+  const sig = _modulesSignature(installedModules);
+  if (sig === _lastModulesSig) return;
+  _lastModulesSig = sig;
+
   await vfs.mkdir(MODULES_DIR, { recursive: true }).catch(() => {});
 
   // Wipe the existing /lib/ tree — easier than diffing. rm -r on each

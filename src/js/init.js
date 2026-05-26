@@ -683,19 +683,21 @@ async function worksBoot(conn) {
   // shell's VFS.Changed signal lets the notebook pick up newly-installed
   // extensions without a full reload.
   try {
-    let _refreshScheduled = false;
+    let _refreshTimer = null;
     bus.subscribe(
       { interface: 'VFS', member: 'Changed', from: 'works' },
       (msg) => {
         const ev = msg && msg.args && msg.args[0];
         const p = ev && (typeof ev === 'string' ? ev : ev.path);
         if (typeof p !== 'string' || !p.startsWith('/lib')) return;
-        // Coalesce — a single install can fire several Changed events.
-        // One refresh per microtask is plenty.
-        if (_refreshScheduled) return;
-        _refreshScheduled = true;
-        queueMicrotask(async () => {
-          _refreshScheduled = false;
+        // Coalesce on a 200ms timer — a single install / autosave can
+        // fire many Changed events across async boundaries, and the
+        // tighter queueMicrotask coalescing was insufficient: each
+        // microtask cleared the flag immediately, so subsequent events
+        // in the same burst would each schedule another refresh.
+        if (_refreshTimer) clearTimeout(_refreshTimer);
+        _refreshTimer = setTimeout(async () => {
+          _refreshTimer = null;
           try {
             const fresh = await hydrateModulesFromVfs(vfs);
             // Merge — preserve any session-only entries (URL installs etc)
@@ -708,7 +710,7 @@ async function worksBoot(conn) {
           } catch (e) {
             console.warn('[notebook] /lib refresh failed:', e.message);
           }
-        });
+        }, 200);
       });
   } catch { /* bus or VFS service unavailable — fine */ }
 
