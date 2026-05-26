@@ -270,10 +270,15 @@ async function _walkLibLeaves(vfs, base, segments, result) {
       else if (source !== null) result[key] = { ...meta, source };
       else if (Object.keys(meta).length > 0) result[key] = meta;
     }
-    return;
+    // Don't early-return — a leaf directory can ALSO contain nested
+    // leaves (e.g. /lib/@gcu/carotte/ holds the engine at /source AND
+    // a secondary entry at /adder/source). The gcupkg installer writes
+    // exactly this shape per EXTENSION_SPEC §6.1. Fall through so we
+    // recurse into subdirectories and discover those nested entries.
   }
 
-  // Recurse into subdirectories — discovers nested @scope/name namespaces.
+  // Recurse into subdirectories — discovers nested @scope/name namespaces
+  // and adapter-bridge secondaries.
   for (const e of entries) {
     if (e.type !== 'directory') continue;
     await _walkLibLeaves(vfs, base + '/' + e.name, [...segments, e.name], result);

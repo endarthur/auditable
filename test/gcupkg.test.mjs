@@ -322,11 +322,14 @@ test('installGcupkg: secondary entry survives reload via hydrateModulesFromVfs',
   await installGcupkg(parsed, { vfs, installedModules: {} });
 
   // Walk the flat files map directly, since the test VFS doesn't
-  // implement readdir/stat. The logic mirrors persist.js _walkLibLeaves:
-  // a leaf is a dir holding `source` and/or `meta.json`; segments after
-  // /lib/ that start with @ map to a scoped key.
+  // implement readdir/stat. The logic mirrors persist.js
+  // _walkLibLeaves's POST-FIX behavior: a leaf is a dir holding
+  // `source` and/or `meta.json`, AND a leaf may contain nested leaves
+  // (an engine `/source` next to an `/adder/source` adapter bridge).
+  // The pre-fix walker did an early-return that missed nested leaves;
+  // this test pins the post-fix behavior so future regressions show
+  // up here.
   const result = {};
-  // Collect distinct dirs that contain a /source file under /lib/
   const sourcePaths = [...vfs.files.keys()].filter(p =>
     p.startsWith('/lib/') && p.endsWith('/source'));
   for (const sp of sourcePaths) {
@@ -340,6 +343,11 @@ test('installGcupkg: secondary entry survives reload via hydrateModulesFromVfs',
     const source = await vfs.readFile(dir + '/source', 'utf8');
     result[key] = { ...meta, source };
   }
+  // Explicit assertion that the walker found BOTH (the nested case is
+  // what the real bug was — pre-fix _walkLibLeaves returned after
+  // recording the engine and never descended into adder/).
+  assert.equal(Object.keys(result).filter(k => k.startsWith('@test/reload')).length, 2,
+    'walker must record BOTH the engine AND the nested adder bridge');
 
   assert.ok(result['@test/reload'], 'engine entry should hydrate');
   assert.ok(result['@test/reload/adder'], 'adder secondary entry should hydrate too');
