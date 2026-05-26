@@ -8,6 +8,7 @@ import { openPath } from './surfaces.js';
 import { archive } from '#archive';
 import { parseGcupkg, installGcupkg } from '#gcupkg';
 import { mergeExamplesFromExtension } from './examples-loader.js';
+import { evaluateWorksScript } from './extension-loader.js';
 
 const basename = (p) => p.split('/').filter(Boolean).pop() || p;
 const parentOf = (p) => {
@@ -555,6 +556,14 @@ async function installDroppedGcupkg(file) {
   try {
     WKS.worksBus?.signal({ interface: 'VFS', member: 'Changed' }, [{ path: '/lib', op: 'gcupkg-install' }]);
   } catch { /* not yet wired — fine */ }
+
+  // EXTENSION_SPEC §3.8.7 — evaluate the just-installed works.js in shell
+  // context so surfaces + contextMenu items register immediately. Without
+  // this the user would have to reload Works to pick them up (the boot
+  // loader only walks /lib at startup). Silently no-ops if the extension
+  // didn't ship a works.js.
+  try { await evaluateWorksScript(parsed.meta.name); }
+  catch (e) { console.warn('[works] post-install works.js evaluation failed:', e.message); }
 }
 
 // ── Tree drag-to-move ───────────────────────────────────────────────

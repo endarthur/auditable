@@ -429,6 +429,24 @@ export function makeModuleLoaders(cell, ctx, deps) {
     const blobUrl = await _materializeInstalled(engineKey);
     const mod = await import(blobUrl);
     window._importCache[engineKey] = mod;
+
+    // EXTENSION_SPEC §3.8.7 — if we're running inside Works (window._worksBus
+    // set during worksBoot), ask the shell to evaluate /lib/<pkg>/works.js
+    // in shell context so surfaces + contextMenu register immediately. The
+    // notebook iframe can't evaluate works.js itself (it's a shell-context
+    // file). Silent no-op when standalone (no bus) or when the extension
+    // ships no works.js.
+    if (window._worksBus && typeof window._worksBus.call === 'function') {
+      try {
+        await window._worksBus.call(
+          { to: 'works', path: '/', interface: 'Extension', member: 'EvaluateWorks' },
+          [engineKey]
+        );
+      } catch (e) {
+        console.warn(`[install] post-install works.js evaluation failed for "${engineKey}":`, e.message);
+      }
+    }
+
     return mod;
   }
 

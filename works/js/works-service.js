@@ -7,6 +7,7 @@ import { WKS } from './state.js';
 import { openPath } from './surfaces.js';
 import { mountFolder, unmountAt } from './mount.js';
 import { applyWorkspaceSettings, readSettings, writeSettings } from './settings-store.js';
+import { evaluateWorksScript } from './extension-loader.js';
 import { showAbout } from './about.js';
 import { aggregateFromBuildLicenses } from '#licenses';
 import { archive } from '#archive';
@@ -103,6 +104,25 @@ export async function setupWorksService() {
           applyWorkspaceSettings(next);
           bus.signal({ path: '/', interface: 'Shell', member: 'SettingsChanged' }, [next]);
           return next;
+        },
+      },
+    },
+    // Extension-shell evaluation — the cell-side install path runs in the
+    // notebook iframe and can't directly evaluate /lib/<pkg>/works.js in
+    // the shell context. It calls this method after the gcupkg files are
+    // on disk, and the shell evaluates works.js to register surfaces +
+    // contextMenu immediately. The drag-drop install path doesn't need
+    // this — it runs in the shell already and calls evaluateWorksScript
+    // directly (works/js/file-ops.js).
+    Extension: {
+      methods: {
+        EvaluateWorks: async (name) => {
+          if (typeof name !== 'string' || !name) return false;
+          try { return await evaluateWorksScript(name); }
+          catch (e) {
+            console.error('[works] Extension.EvaluateWorks for', name, ':', e);
+            return false;
+          }
         },
       },
     },

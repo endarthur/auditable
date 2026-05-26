@@ -586,6 +586,12 @@ async function worksBoot(conn) {
   // :root:not(.in-works) for mobile-mode + standalone-only chrome).
   document.documentElement.classList.add('in-works');
 
+  // Stash the bus so cross-frame calls from notebook → shell can find it.
+  // Cell-side install("...gcupkg") needs to ask the shell to evaluate the
+  // newly-installed /lib/<pkg>/works.js (EXTENSION_SPEC §3.8.7 — see
+  // cell-builtins/modules.js _installFromGcupkg).
+  window._worksBus = bus;
+
   // Theme propagation — the workspace owns the theme choice (Workspace
   // Settings → Theme). Subscribe to Shell.SettingsChanged so a flip on the
   // shell side reaches the embedded notebook too. The notebook's own
