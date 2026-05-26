@@ -159,12 +159,52 @@ async function _autoLoadLanguagePacks() {
   if (langsAfter > langsBefore) refreshTaggedLanguages();
 }
 
+// Auto-discover and load adapter bridges referenced by adder cells.
+// Scans `from <name> import` statements; for each <name> that isn't
+// already in _auditableExtensions, looks for an installed module with
+// key */<name>/adder (e.g. @gcu/carotte/adder for `from carotte import`)
+// and loads it. Same "installed-only, never network" rule as the
+// language-pack loader. EXTENSION_SPEC §3.5 + §6.1.
+async function _autoLoadAdapters() {
+  const wantNames = new Set();
+  for (const cell of S.cells) {
+    if (cell.type !== 'adder' && cell.type !== 'mpy') continue;
+    if (!cell.code) continue;
+    const re = /^\s*from\s+([a-zA-Z_]\w*)\s+import\b/gm;
+    let m;
+    while ((m = re.exec(cell.code)) !== null) wantNames.add(m[1]);
+  }
+  if (wantNames.size === 0) return;
+
+  const installed = window._installedModules || {};
+  const exts = window._auditableExtensions || {};
+  const adapterSuffix = '/adder';
+  const keys = Object.keys(installed);
+
+  for (const name of wantNames) {
+    if (exts[name]) continue;   // namespace already published — nothing to do
+    // Suffix match: `/<name>/adder` — keep the @gcu/ preference but
+    // accept any scope. Most adapters are @gcu, but the convention
+    // doesn't enforce it.
+    const candidates = keys.filter(k => k.endsWith('/' + name + adapterSuffix));
+    if (candidates.length === 0) continue;
+    const chosen = candidates.find(k => k.startsWith('@gcu/')) || candidates[0];
+    try { await loadInstalledModule(chosen); }
+    catch (e) { console.warn(`[runtime] auto-load adapter "${chosen}":`, e.message); }
+  }
+}
+
 export async function runDAG(dirtyIds, force = false) {
   const gen = ++_dagGen;
   // Auto-load language packs for any fallback cell types we recognize. The
   // load() call upgrades the cell from fallback to a real handler before
   // buildDAG runs, so its parseNames/findUses bind correctly.
   await _autoLoadLanguagePacks();
+  // Auto-discover adapter bridges referenced by adder cells' `from X import`
+  // statements (carotte, natra, learn, …). Runs after the language pack
+  // so the adder runtime is ready before any adapter registers exports
+  // into it.
+  await _autoLoadAdapters();
   buildDAG();
   const isAutorun = S.autorun && !force;
   const runSet = new Set(topoSort(dirtyIds));
