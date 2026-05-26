@@ -202,6 +202,78 @@ function _rewriteSpecifier(source, bareSpec, replacementUrl) {
                         '$1' + replacementUrl + '$2');
 }
 
+// Materialise an installed-module entry into a blob URL whose source has
+// all @scope/pkg bare specifiers rewritten to stable per-spec URLs (blob
+// or absolute). Blob URLs aren't hierarchical, so a bundle like @gcu/learn
+// that imports @gcu/line cannot resolve that bare specifier on its own —
+// the resolution has to happen ahead of time by recursively load()-ing
+// each dep and rewriting the source.
+//
+// Idempotent — re-materialising the same URL returns the cached blob.
+// `loadFn` is the load() implementation used for recursive deps; lifted
+// out so both per-cell loaders (with their ctx + display + cellId hooks)
+// and the system-level loader (no cell) can share this body.
+async function _materializeInstalledModule(url, loadFn) {
+  if (window._moduleBlobUrls[url]) return window._moduleBlobUrls[url];
+  const entry = window._installedModules[url];
+  if (!entry || entry.binary) return null;
+
+  const decoded = await decodeModuleEntry(entry);
+  let src = decoded.source;
+  try { src = resolveModulePaths(src, url); } catch {}
+
+  for (const spec of _findScopedSpecifiers(src)) {
+    if (spec === url) continue;
+    try { await loadFn(spec); } catch { continue; }
+    const depUrl = window._moduleBlobUrls[spec];
+    if (depUrl) src = _rewriteSpecifier(src, spec, depUrl);
+  }
+
+  const blob = new Blob([src], { type: 'application/javascript' });
+  const blobUrl = URL.createObjectURL(blob);
+  window._moduleBlobUrls[url] = blobUrl;
+  return blobUrl;
+}
+
+// System-level loader for already-installed modules. No cell context —
+// used by the runtime's own auto-load paths (exec.js's language-pack
+// pre-load when a /// adder cell is about to run). For the common
+// cache-hit case this is dependency-free; for first-time materialisation
+// it recurses through itself (no display, no cellId stamping, no
+// install paths).
+//
+// Returns the module's exports namespace, or null if the spec isn't an
+// installed module (don't fall through to network — system loads shouldn't
+// surprise the user with a fetch).
+export async function loadInstalledModule(url) {
+  if (!window._installedModules) return null;
+  if (!window._importCache) window._importCache = {};
+  if (!window._importPromises) window._importPromises = {};
+  if (!window._moduleBlobUrls) window._moduleBlobUrls = {};
+
+  if (window._importCache[url]) return window._importCache[url];
+  if (window._importPromises[url]) return await window._importPromises[url];
+
+  const entry = window._installedModules[url];
+  if (!entry) return null;
+  if (entry.binary) {
+    const blobUrl = await decodeBinary(entry);
+    window._importCache[url] = blobUrl;
+    return blobUrl;
+  }
+
+  const loadPromise = (async () => {
+    const blobUrl = await _materializeInstalledModule(url, loadInstalledModule);
+    if (!blobUrl) return null;
+    const mod = await import(blobUrl);
+    window._importCache[url] = mod;
+    return mod;
+  })();
+  window._importPromises[url] = loadPromise;
+  try { return await loadPromise; }
+  finally { delete window._importPromises[url]; }
+}
+
 export function makeModuleLoaders(cell, ctx, deps) {
   const { display } = ctx;
   const { std, python, zenOfPython, fsRead, refreshTaggedLanguages, notifyDirty } = deps;
@@ -220,37 +292,12 @@ export function makeModuleLoaders(cell, ctx, deps) {
   // `_importCache[url]`.
   if (!window._importPromises) window._importPromises = {};
 
-  // Materialise an installed-module entry into a blob URL whose source
-  // has all `@scope/pkg` bare specifiers rewritten to stable per-spec
-  // URLs (blob or absolute). Blob URLs aren't hierarchical, so a bundle
-  // like @gcu/learn that imports @gcu/line cannot resolve that bare
-  // specifier on its own — the resolution has to happen ahead of time
-  // by recursively load()-ing each dep and rewriting the source.
-  //
-  // Idempotent — re-materialising the same URL returns the cached blob.
+  // Materialise an installed-module entry into a blob URL — closure here
+  // delegates to the module-level _materializeInstalledModule with this
+  // cell's load() so recursive dep resolution stays in the same cell's
+  // bookkeeping (cellId stamps, status messages, …).
   async function _materializeInstalled(url) {
-    if (window._moduleBlobUrls[url]) return window._moduleBlobUrls[url];
-    const entry = window._installedModules[url];
-    if (!entry || entry.binary) return null;
-
-    const decoded = await decodeModuleEntry(entry);
-    let src = decoded.source;
-    try { src = resolveModulePaths(src, url); } catch {}
-
-    // Pre-resolve scoped imports — each spec triggers a recursive
-    // load() which handles dev/installed/CDN paths uniformly and
-    // populates _moduleBlobUrls[spec] with the stable URL we rewrite to.
-    for (const spec of _findScopedSpecifiers(src)) {
-      if (spec === url) continue;
-      try { await load(spec); } catch { continue; }
-      const depUrl = window._moduleBlobUrls[spec];
-      if (depUrl) src = _rewriteSpecifier(src, spec, depUrl);
-    }
-
-    const blob = new Blob([src], { type: 'application/javascript' });
-    const blobUrl = URL.createObjectURL(blob);
-    window._moduleBlobUrls[url] = blobUrl;
-    return blobUrl;
+    return _materializeInstalledModule(url, load);
   }
 
   const load = async (url) => {

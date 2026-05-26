@@ -6,6 +6,8 @@ import { INJECTED_NAMES, cellErrorLine, compileCellCode, cellCacheKey, executeDA
 import * as hooks from './hooks.js';
 import { renderMdCell, renderHtmlCell } from './cell-render.js';
 import { createCellContext } from './cell-context.js';
+import { loadInstalledModule } from './cell-builtins/modules.js';
+import { refreshTaggedLanguages } from './cm6.js';
 
 // ── EXECUTION ENGINE ──
 //
@@ -117,8 +119,52 @@ export async function execCell(cell) {
 
 let _dagGen = 0;
 
+// Known language-pack mappings — cell type / tagged-language tag → npm spec.
+// The runtime auto-loads these when it finds matching fallback cells, so a
+// notebook with /// adder cells doesn't need a JS preamble that manually
+// runs `await load("@gcu/adder")`. Extension authors that ship new
+// languages can register here (the registration shape is a small bit of
+// boilerplate per language — the spec doesn't ask for an extension to
+// describe its own auto-load, since the host gets to choose what's bundled).
+export const LANGUAGE_PACKS = {
+  adder: '@gcu/adder',
+  mpy:   '@gcu/adder',
+  soft:  '@gcu/soft',
+};
+
+async function _autoLoadLanguagePacks() {
+  const want = new Set();
+  for (const cell of S.cells) {
+    // Fallback cell — type registered to a known pack? Auto-load if the
+    // pack is actually installed (we only auto-load from _installedModules,
+    // never from a network fetch — system-side loads shouldn't surprise
+    // the user).
+    if (cell._fallback) {
+      const pack = LANGUAGE_PACKS[cell.type];
+      if (pack && !window._importCache?.[pack] && window._installedModules?.[pack]) {
+        want.add(pack);
+      }
+    }
+  }
+  if (want.size === 0) return;
+  // Serial loads — order doesn't matter for independence, but serializing
+  // keeps refreshTaggedLanguages's CM6 reconfigure from racing across
+  // multiple registrations in the same microtask.
+  const langsBefore = window._taggedLanguages ? Object.keys(window._taggedLanguages).length : 0;
+  for (const pack of want) {
+    try { await loadInstalledModule(pack); }
+    catch (e) { console.warn(`[runtime] auto-load("${pack}") failed:`, e.message); }
+  }
+  const langsAfter = window._taggedLanguages ? Object.keys(window._taggedLanguages).length : 0;
+  if (langsAfter > langsBefore) refreshTaggedLanguages();
+}
+
 export async function runDAG(dirtyIds, force = false) {
   const gen = ++_dagGen;
+  // Auto-load language packs for any fallback cell types we recognize. The
+  // load() call upgrades the cell from fallback to a real handler before
+  // buildDAG runs, so its parseNames/findUses bind correctly.
+  await _autoLoadLanguagePacks();
   buildDAG();
   const isAutorun = S.autorun && !force;
   const runSet = new Set(topoSort(dirtyIds));
