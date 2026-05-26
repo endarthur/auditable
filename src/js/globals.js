@@ -20,6 +20,7 @@ import { toggleFs, fsImport } from './fs.js';
 import { toggleMcpPanel, mcpConnect } from './mcp-adapter.js';
 import { openFind, closeFind } from './find.js';
 import { runAll, runDAG } from './exec.js';
+import { clearAllOutputs as _clearAllOutputs } from './outputs.js';
 import { createEditor } from './cm6.js';
 import { toggleSplitView } from './split.js';
 import { addCellWithUndo, deleteCellWithUndo, runSelectedCell, toggleToolbarMenu, toggleAddTray, toggleMoreTray, showInsertPicker, toggleTypePicker, collapseAll, expandAll, newNotebook } from './keyboard.js';
@@ -90,6 +91,18 @@ window.exportAsIpynb = exportAsIpynb;
 
 // exec
 window.runAll = runAll;
+window.clearAllOutputs = async () => {
+  await _clearAllOutputs();
+  // Also clear the live output elements so the user sees the effect
+  // immediately. Saved-output flag dropped so a subsequent run starts
+  // from clean state.
+  for (const cell of S.cells) {
+    const el = cell.el?.querySelector?.('.cell-output');
+    if (el) { el.innerHTML = ''; el.className = 'cell-output'; }
+    cell.el?.classList?.remove('output-restored', 'error');
+    delete cell._savedOutput;
+  }
+};
 
 // ui
 window.insertAt = insertAt;

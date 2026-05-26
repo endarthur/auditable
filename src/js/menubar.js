@@ -130,6 +130,8 @@ function sections() {
       { label: 'Run All',  action: 'run:all',  shortcut: 'Ctrl+Shift+Enter' },
       '---',
       { label: 'Reactive Mode', action: 'run:toggle-autorun', checked: !!S.autorun },
+      '---',
+      { label: 'Clear all outputs', action: 'run:clear-outputs' },
     ]},
 
     { label: 'Tools', items: () => [
@@ -184,6 +186,7 @@ function dispatch(action) {
     case 'run:cell':           window.runSelectedCell(); break;
     case 'run:all':            window.runAll(); break;
     case 'run:toggle-autorun': window.toggleAutorun(); break;
+    case 'run:clear-outputs':  window.clearAllOutputs(); break;
 
     case 'tools:mcp':        window.toggleMcpPanel(); break;
 

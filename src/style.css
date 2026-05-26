@@ -265,6 +265,15 @@ button.accent:hover {
 .cell-output.error {
   color: var(--au-error);
 }
+
+/* Subtle left-border tint on cells whose output was restored from the
+   sidecar (saved from a previous session) rather than freshly computed.
+   Dropped on the next live run. Helps the user notice "this output is
+   from disk" without being noisy. */
+.cell.output-restored .cell-output {
+  border-left: 2px solid var(--au-fg-soft);
+  padding-left: 8px;
+}
 .cell-output pre.au-shell-out,
 .cell-output pre.au-shell-err {
   font-family: var(--au-font-mono);

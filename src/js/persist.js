@@ -364,6 +364,19 @@ export async function hydrateNotebook(vfs) {
       cell.collapsed = true;
     }
   }
+
+  // Restore saved cell outputs from /projects/self/notebook.outputs/.
+  // Each cell looks up its own source-hash; if a sidecar exists, the
+  // saved output gets injected into its .cell-output element. The
+  // notebook appears already-run on open without any cells actually
+  // executing. Best-effort — if outputs load fails we proceed without
+  // them.
+  try {
+    const { hydrateAllSavedOutputs } = await import('./outputs.js');
+    await hydrateAllSavedOutputs();
+  } catch (e) {
+    console.warn('[persist] saved-output hydration failed:', e.message);
+  }
 }
 
 // ── Legacy VFS-dump migration (pre-4a /var + /home/nb layout) ───────

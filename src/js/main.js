@@ -39,6 +39,7 @@ import './widgets.js';
 import './engine.js';
 import './serialize.js';
 import './persist.js';
+import './outputs.js';
 import './host.js';
 import './surface.js';
 import './markdown.js';

@@ -80,9 +80,15 @@ export function applyHeader(mode) {
 // ── EXECUTION MODE ──
 
 const __AUDITABLE_DEFAULT_EXEC_MODE__ = 'reactive';
-const __AUDITABLE_DEFAULT_RUN_ON_LOAD__ = 'yes';
+// Default flipped from 'yes' to 'no' alongside the output sidecar
+// (outputs.js): the notebook restores its saved outputs on open, so
+// auto-running every cell on load is no longer the way to make the
+// notebook look "ready" — it would just clobber the saved state and
+// re-do work the user already did. Editing a cell still re-runs it
+// reactively per S.autorun.
+const __AUDITABLE_DEFAULT_RUN_ON_LOAD__ = 'no';
 
-let _runOnLoad = 'yes';
+let _runOnLoad = 'no';
 let _showToggle = 'yes';
 let _editorView = 'no';
 

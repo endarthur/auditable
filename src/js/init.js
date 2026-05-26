@@ -13,6 +13,12 @@ import { toggleSplitView } from './split.js';
 import { cryptoDetect, cryptoUnlock, cryptoUnlockRecovery, cryptoSetLocked, cryptoIsEncrypted, syncCryptoDebounced, cryptoPassphraseStrength, cryptoEnable, cryptoDisable, cryptoChangePassphrase, cryptoRegenerateRecovery, cryptoLock } from './crypto.js';
 import { decodeModules, encodeModules, parseNotebookTxt, hydrateVfs } from './serialize.js';
 import { hydrateModulesFromVfs, hydrateNotebook, flushPendingDirty, migrateLegacyDump } from './persist.js';
+import { installOutputCapture } from './outputs.js';
+
+// Subscribe at module-eval so output capture is wired regardless of
+// which boot path (standalone init, worksBoot, _resumeAfterUnlock)
+// actually runs. Idempotent: hooks.on is just a listener registration.
+installOutputCapture();
 import { getSettings } from './settings.js';
 import { Dialog } from '#dialog';
 import { runAll, autoLoadFromCells } from './exec.js';
