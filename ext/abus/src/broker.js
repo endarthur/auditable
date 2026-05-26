@@ -88,6 +88,33 @@ export function createBroker() {
     });
   }
 
+  // ── monitor (diagnostic stream) ──────────────────────────────────────
+  //
+  // The broker emits a Monitor.Traffic signal for every transit message
+  // (calls between peers, replies, signals fanned out) — letting an
+  // inspector surface render a tail-style log without polling. PeerJoined
+  // and PeerLeft cover connection lifecycle. Emission is lazy: we keep a
+  // counter of how many subscriptions match Monitor.Traffic and skip
+  // emitting when no one's listening (the common case). Subscribe and
+  // Unsubscribe handlers update the counter.
+  //
+  // Loop guard: when the signal we'd emit IS Monitor.Traffic itself, we
+  // skip. Otherwise the broker would trace its own trace events forever.
+  let _monitorTrafficSubs = 0;
+  const _callStart = new Map();     // `${caller}|${callId}` -> Date.now()
+
+  function emitMonitorSignal(member, args) {
+    fanout({
+      type: 'signal', id: ++brokerMsgId, from: BUS_NAME,
+      path: '/', interface: 'Monitor', member, args,
+    });
+  }
+  function emitTraffic(event) {
+    if (_monitorTrafficSubs === 0) return;
+    if (event.interface === 'Monitor' && event.member === 'Traffic') return;
+    emitMonitorSignal('Traffic', [{ ts: Date.now(), ...event }]);
+  }
+
   // ── routing ──────────────────────────────────────────────────────────
 
   function route(fromUnique, msg) {
@@ -96,7 +123,12 @@ export function createBroker() {
 
     switch (msg.type) {
       case 'call': {
-        if (msg.to === BUS_NAME) { handleBusCall(fromUnique, msg); return; }
+        if (msg.to === BUS_NAME) {
+          emitTraffic({ kind: 'call', from: fromUnique, to: BUS_NAME,
+            path: msg.path, interface: msg.interface, member: msg.member, msgId: msg.id });
+          handleBusCall(fromUnique, msg);
+          return;
+        }
         // `to` is either a unique name (':N', addressed directly) or a
         // well-known name (resolved through the owner table).
         const target = (typeof msg.to === 'string' && msg.to[0] === ':')
@@ -107,6 +139,9 @@ export function createBroker() {
           return;
         }
         pendingCalls.set(`${fromUnique}|${msg.id}`, target);
+        _callStart.set(`${fromUnique}|${msg.id}`, Date.now());
+        emitTraffic({ kind: 'call', from: fromUnique, to: msg.to,
+          path: msg.path, interface: msg.interface, member: msg.member, msgId: msg.id });
         post(target, msg);
         return;
       }
@@ -114,11 +149,23 @@ export function createBroker() {
       case 'error': {
         // This reply answers the call (msg.to, msg.replyTo) — clear its
         // pending-call bookkeeping, then forward to the original caller.
-        pendingCalls.delete(`${msg.to}|${msg.replyTo}`);
+        const key = `${msg.to}|${msg.replyTo}`;
+        const startedAt = _callStart.get(key);
+        _callStart.delete(key);
+        pendingCalls.delete(key);
+        emitTraffic({
+          kind: msg.type === 'return' ? 'return' : 'error',
+          from: fromUnique, to: msg.to,
+          msgId: msg.id, replyTo: msg.replyTo,
+          latencyMs: startedAt ? Date.now() - startedAt : null,
+          error: msg.type === 'error' ? (msg.error && msg.error.code) || 'unknown' : null,
+        });
         post(msg.to, msg);
         return;
       }
       case 'signal':
+        emitTraffic({ kind: 'signal', from: fromUnique, to: null,
+          path: msg.path, interface: msg.interface, member: msg.member, msgId: msg.id });
         fanout(msg, fromUnique);
         return;
       default:
@@ -131,12 +178,20 @@ export function createBroker() {
     switch (`${msg.interface}.${msg.member}`) {
       case 'Bus.Hello': {
         const info = (msg.args && msg.args[0]) || {};
-        clientIds.set(fromUnique, typeof info.clientId === 'string' ? info.clientId : '');
+        // Take the client tag (Hello carries it as `client`; the spec also
+        // permits explicit `clientId` for back-compat with older callers).
+        const clientId = typeof info.clientId === 'string' ? info.clientId
+                       : typeof info.client === 'string'   ? info.client
+                       : '';
+        clientIds.set(fromUnique, clientId);
         replyOk(msg, fromUnique, [{
           uniqueName: fromUnique,
           protocol: PROTOCOL_VERSION,
-          clientId: clientIds.get(fromUnique),
+          clientId,
         }]);
+        // Announce the new peer with its clientId now that we know it —
+        // PeerJoined at connect time would have an empty client tag.
+        emitMonitorSignal('PeerJoined', [fromUnique, clientId]);
         return;
       }
       case 'Bus.RequestName': {
@@ -174,14 +229,20 @@ export function createBroker() {
         return;
       case 'Bus.Subscribe': {
         const subId = `s${++nextSubId}`;
-        subs.push({ subscriber: fromUnique, filter: (msg.args && msg.args[0]) || {}, subId });
+        const filter = (msg.args && msg.args[0]) || {};
+        subs.push({ subscriber: fromUnique, filter, subId });
+        if (filter.interface === 'Monitor' && filter.member === 'Traffic') _monitorTrafficSubs++;
         replyOk(msg, fromUnique, [subId]);
         return;
       }
       case 'Bus.Unsubscribe': {
         const subId = msg.args && msg.args[0];
         const i = subs.findIndex(s => s.subId === subId && s.subscriber === fromUnique);
-        if (i >= 0) subs.splice(i, 1);
+        if (i >= 0) {
+          const f = subs[i].filter;
+          if (f.interface === 'Monitor' && f.member === 'Traffic') _monitorTrafficSubs--;
+          subs.splice(i, 1);
+        }
         replyOk(msg, fromUnique, [null]);
         return;
       }
@@ -202,7 +263,7 @@ export function createBroker() {
       abus: PROTOCOL_VERSION,
       peer: BUS_NAME,
       service: BUS_NAME,
-      objects: [{ path: '/', interfaces: ['Introspectable', 'Peer', 'Bus'] }],
+      objects: [{ path: '/', interfaces: ['Introspectable', 'Peer', 'Bus', 'Monitor'] }],
       interfaces: {
         Bus: {
           methods: {
@@ -225,6 +286,14 @@ export function createBroker() {
         },
         Introspectable: { methods: { Describe: { args: [], return: { type: 'object' } } }, signals: {} },
         Peer: { methods: { Ping: { args: [], return: { type: 'void' } } }, signals: {} },
+        Monitor: {
+          methods: {},
+          signals: {
+            Traffic: { args: [{ name: 'event', type: 'object' }] },
+            PeerJoined: { args: [{ name: 'uniqueName', type: 'string' }, { name: 'clientId', type: 'string' }] },
+            PeerLeft: { args: [{ name: 'uniqueName', type: 'string' }, { name: 'clientId', type: 'string' }] },
+          },
+        },
       },
     };
   }
@@ -275,6 +344,7 @@ export function createBroker() {
     }
     ports.delete(unique);
     clientIds.delete(unique);
+    emitMonitorSignal('PeerLeft', [unique, clientId]);
   }
 
   function stats() {

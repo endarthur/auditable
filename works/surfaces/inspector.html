@@ -12,61 +12,139 @@
     display: flex; flex-direction: column;
   }
   header {
-    flex: none; display: flex; align-items: center; gap: 10px;
+    flex: none; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
     padding: 6px 10px; border-bottom: 1px solid var(--au-border); background: var(--au-surface-raised);
   }
   header .title { font-weight: 600; color: var(--au-fg); }
   header .counts { color: var(--au-fg-soft); }
   header .spacer { flex: 1; }
-  button {
+  button, input {
     background: var(--au-surface-bright); color: var(--au-fg);
     border: 1px solid var(--au-border); border-radius: 3px;
-    padding: 2px 10px; font: inherit; cursor: pointer;
+    padding: 2px 8px; font: inherit;
   }
-  button:hover { background: var(--au-surface-bright); filter: brightness(1.1); }
+  button { cursor: pointer; }
+  button:hover { filter: brightness(1.1); }
+  button.on { background: var(--au-accent-info); color: var(--au-bg); }
+  input { padding: 1px 6px; }
+  input.filter { width: 120px; }
   .body { flex: 1; display: flex; min-height: 0; }
-  .left {
-    flex: none; width: 320px; overflow: auto;
-    border-right: 1px solid var(--au-border);
+  .col { display: flex; flex-direction: column; min-height: 0; }
+  .col.left  { flex: none; width: 320px; border-right: 1px solid var(--au-border); }
+  .col.mid   { flex: 1; min-width: 0; border-right: 1px solid var(--au-border); }
+  .col.right { flex: 1; min-width: 0; }
+  .col > .scroll { flex: 1; overflow: auto; }
+  .pane-head {
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--au-border);
+    background: var(--au-surface-raised);
   }
-  .right { flex: 1; overflow: auto; padding: 4px 10px 12px; }
-  h2 {
+  .pane-head h2 {
     font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
-    color: var(--au-fg-soft); margin: 10px 10px 4px;
+    color: var(--au-fg-soft); margin: 0;
   }
-  .row { padding: 3px 10px; }
+  .pane-head .spacer { flex: 1; }
+  .pane-head button { padding: 0 6px; font-size: 11px; }
+  .row { padding: 3px 10px; white-space: nowrap; }
+  .row.dim { color: var(--au-fg-muted); }
   .peer { cursor: pointer; }
   .peer:hover, .peer.sel { background: var(--au-surface-bright); }
-  .uniq { color: var(--au-info); }
-  .names { color: var(--au-action); }
-  .cid { color: var(--au-fg-soft); }
-  .sub-from { color: var(--au-info); }
+  .uniq    { color: var(--au-info); }
+  .names   { color: var(--au-action); }
+  .cid     { color: var(--au-fg-soft); }
+  .counter { color: var(--au-fg-muted); font-size: 10px; margin-left: 6px; }
+  .sub     { padding: 3px 10px; transition: background-color 200ms; white-space: nowrap; }
+  .sub.hit { background: var(--au-accent-warning); color: var(--au-bg); }
+  .sub-from   { color: var(--au-info); }
   .sub-filter { color: var(--au-fg-muted); }
-  .obj { color: var(--au-fg-soft); margin-top: 8px; }
-  .iface { color: var(--au-success); margin-top: 4px; }
-  .member { color: var(--au-fg-muted); padding-left: 16px; }
+  .obj    { color: var(--au-fg-soft); margin-top: 8px; padding: 0 10px; }
+  .iface  { color: var(--au-success); margin: 6px 0 2px; padding: 0 10px; }
+  .member {
+    color: var(--au-fg-muted); padding: 1px 10px 1px 26px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .member .name { flex: 1; }
+  .member .lat { font-size: 10px; color: var(--au-info); }
+  .member button.invoke { padding: 0 6px; font-size: 11px; }
+  .invoke-form {
+    margin: 4px 0 4px 26px; padding: 6px 8px;
+    background: var(--au-surface-raised); border: 1px solid var(--au-border); border-radius: 3px;
+  }
+  .invoke-form textarea {
+    width: 100%; box-sizing: border-box; resize: vertical; min-height: 40px;
+    background: var(--au-surface); color: var(--au-fg);
+    border: 1px solid var(--au-border); border-radius: 3px;
+    font: inherit; padding: 4px 6px;
+  }
+  .invoke-form .result {
+    margin-top: 4px; padding: 4px 6px;
+    background: var(--au-surface); border-left: 3px solid var(--au-info);
+    white-space: pre-wrap; word-break: break-all; font-size: 11px;
+  }
+  .invoke-form .result.err { border-left-color: var(--au-error); color: var(--au-error); }
+  .log-row {
+    padding: 1px 10px; white-space: nowrap;
+    font-size: 11px;
+    border-bottom: 1px solid color-mix(in srgb, var(--au-border) 40%, transparent);
+  }
+  .log-row .ts        { color: var(--au-fg-muted); }
+  .log-row .kind      { display: inline-block; min-width: 50px; }
+  .log-row .kind.call    { color: var(--au-action); }
+  .log-row .kind.return  { color: var(--au-success); }
+  .log-row .kind.error   { color: var(--au-error); }
+  .log-row .kind.signal  { color: var(--au-info); }
+  .log-row .iface     { color: var(--au-success); }
+  .log-row .from      { color: var(--au-info); }
+  .log-row .to        { color: var(--au-action); }
+  .log-row .lat       { color: var(--au-fg-muted); }
+  .log-row .errcode   { color: var(--au-error); }
+  .lifecycle-row {
+    padding: 1px 10px; font-size: 11px; white-space: nowrap;
+    border-top: 1px solid color-mix(in srgb, var(--au-border) 30%, transparent);
+  }
+  .lifecycle-row .ts { color: var(--au-fg-muted); }
+  .lifecycle-row.joined .kind { color: var(--au-success); }
+  .lifecycle-row.left   .kind { color: var(--au-fg-soft); }
   .empty { color: var(--au-fg-soft); padding: 10px; }
 </style>
 </head>
 <body>
 <!--
-  The A-Bus inspector surface — a diagnostic view of the bus: the peer
-  registry and subscription table (auto-refreshed), with each peer's
-  Describe() document on click. (auditable-works-spec §9.1, a-bus-spec §15.)
+  The A-Bus inspector surface — a diagnostic view of the bus: peer
+  registry, subscription table, live Monitor.Traffic stream, per-peer
+  counters and per-method latency aggregated from that stream, and a
+  call-invocation panel that drives any method from the Describe doc.
+  (auditable-works-spec §9.1, a-bus-spec §15.)
 -->
 <header>
   <span class="title">A-Bus Inspector</span>
   <span class="counts" id="counts"></span>
   <span class="spacer"></span>
+  <label>Peers <input id="filter-peers" class="filter" placeholder="filter…"></label>
+  <label>Subs <input id="filter-subs" class="filter" placeholder="filter…"></label>
+  <label>Log <input id="filter-log" class="filter" placeholder="filter…"></label>
+  <button id="pause">⏸ Pause</button>
+  <button id="clear">Clear</button>
+  <button id="export">Export JSON</button>
   <button id="refresh">Refresh</button>
 </header>
 <div class="body">
-  <div class="left">
-    <h2>Peers</h2><div id="peers"></div>
-    <h2>Subscriptions</h2><div id="subs"></div>
+  <div class="col left">
+    <div class="pane-head"><h2>Peers</h2></div>
+    <div class="scroll" id="peers-scroll"><div id="peers"></div></div>
+    <div class="pane-head"><h2>Subscriptions</h2></div>
+    <div class="scroll" id="subs-scroll"><div id="subs"></div></div>
   </div>
-  <div class="right">
-    <h2>Describe</h2><div id="detail" class="empty">Select a peer.</div>
+  <div class="col mid">
+    <div class="pane-head"><h2>Describe</h2></div>
+    <div class="scroll" id="detail"><div class="empty">Select a peer.</div></div>
+  </div>
+  <div class="col right">
+    <div class="pane-head"><h2>Log</h2></div>
+    <div class="scroll" id="log"></div>
+    <div class="pane-head"><h2>Lifecycle</h2></div>
+    <div class="scroll" id="lifecycle" style="flex: 0 0 25%;"></div>
   </div>
 </div>
 <script type="module">
@@ -81,6 +159,45 @@ const esc = (s) => String(s).replace(/[&<>]/g,
 let bus = null;
 let selected = null;
 let lastPeers = [];
+let lastSubs = [];
+
+// ── Stream-driven state ──────────────────────────────────────────────
+//
+// Per-peer counters and per-method latency are accumulated from the
+// Monitor.Traffic stream. The broker doesn't keep these; the inspector
+// derives them so the broker stays simple. Bounded ring buffers cap
+// memory: the log keeps the most recent N events, latency keeps the
+// last K samples per (target, iface, member) for median.
+
+const LOG_CAP = 500;
+const LIFECYCLE_CAP = 50;
+const LATENCY_SAMPLES = 20;
+
+let log = [];                       // ring of recent Monitor.Traffic events
+let lifecycle = [];                 // ring of PeerJoined/PeerLeft
+let paused = false;
+const counters = new Map();         // unique -> { callsOut, callsIn, signalsOut, errors }
+const latencyByMethod = new Map();  // `${to}|${path}|${iface}|${member}` -> [samples]
+
+function bumpCounter(unique, field) {
+  let c = counters.get(unique);
+  if (!c) { c = { callsOut: 0, callsIn: 0, signalsOut: 0, errors: 0 }; counters.set(unique, c); }
+  c[field]++;
+}
+function recordLatency(key, ms) {
+  let arr = latencyByMethod.get(key);
+  if (!arr) { arr = []; latencyByMethod.set(key, arr); }
+  arr.push(ms);
+  if (arr.length > LATENCY_SAMPLES) arr.shift();
+}
+function medianLatency(key) {
+  const arr = latencyByMethod.get(key);
+  if (!arr || !arr.length) return null;
+  const sorted = [...arr].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+}
+
+// ── Boot ─────────────────────────────────────────────────────────────
 
 window.addEventListener('message', async (ev) => {
   if (ev.source !== window.parent) return;             // §7.1
@@ -90,8 +207,6 @@ window.addEventListener('message', async (ev) => {
   catch (e) { $('detail').textContent = 'connect failed: ' + e.message; return; }
   installThemeSubscription(bus);
 
-  // Claim a name so the peers list shows "inspector-<tab>" instead of
-  // a bare unique id. tab.id is lowercase-kebab, satisfies bus name rules.
   try { await bus.claim('inspector-' + (ev.data.tab && ev.data.tab.id || 'unknown')); }
   catch { /* duplicate or invalid — non-fatal */ }
 
@@ -102,15 +217,37 @@ window.addEventListener('message', async (ev) => {
     },
   });
 
+  // Subscribe to the broker's diagnostic stream BEFORE the first snapshot
+  // so we don't miss any peers that announce themselves between calls.
+  bus.subscribe({ interface: 'Monitor', member: 'Traffic',    from: 'bus' }, onTraffic);
+  bus.subscribe({ interface: 'Monitor', member: 'PeerJoined', from: 'bus' }, onPeerJoined);
+  bus.subscribe({ interface: 'Monitor', member: 'PeerLeft',   from: 'bus' }, onPeerLeft);
+
   $('refresh').addEventListener('click', refresh);
+  $('pause').addEventListener('click', togglePause);
+  $('clear').addEventListener('click', clearLog);
+  $('export').addEventListener('click', exportLog);
+  for (const id of ['filter-peers', 'filter-subs', 'filter-log']) {
+    $(id).addEventListener('input', () => {
+      if (id === 'filter-peers') renderPeers();
+      else if (id === 'filter-subs') renderSubs(lastSubs);
+      else renderLog();
+    });
+  }
+
   await refresh();
 
   bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' },
     ['A-Bus Inspector']);
   bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
 
+  // Periodic refresh of the snapshot — picks up subscription churn we
+  // can't fully derive from the stream alone (unsubscribe doesn't fire
+  // a signal we can attribute to a specific filter).
   setInterval(refresh, 2000);
 });
+
+// ── Snapshot ─────────────────────────────────────────────────────────
 
 async function refresh() {
   let snap;
@@ -122,64 +259,195 @@ async function refresh() {
     return;
   }
   lastPeers = snap.peers || [];
+  lastSubs = snap.subscriptions || [];
   renderPeers();
-  renderSubs(snap.subscriptions || []);
+  renderSubs(lastSubs);
+  renderCounts();
+}
+
+function renderCounts() {
   $('counts').textContent =
-    lastPeers.length + ' peers · ' + (snap.subscriptions || []).length + ' subs';
+    lastPeers.length + ' peers · ' + lastSubs.length + ' subs · ' +
+    log.length + ' log events';
+}
+
+// ── Stream handlers ──────────────────────────────────────────────────
+
+function onTraffic(msg) {
+  const ev = (msg.args && msg.args[0]) || {};
+  // Counters
+  if (ev.kind === 'call') {
+    if (ev.from) bumpCounter(ev.from, 'callsOut');
+    if (ev.to)   bumpCounter(ev.to,   'callsIn');
+  } else if (ev.kind === 'signal') {
+    if (ev.from) bumpCounter(ev.from, 'signalsOut');
+  } else if (ev.kind === 'error') {
+    if (ev.to)   bumpCounter(ev.to,   'errors');
+  }
+  // Latency per (to, path, iface, member): the reply's `to` is the original
+  // caller, so we don't know the method on a bare reply event. The broker
+  // emits latencyMs on returns/errors but without the original method info.
+  // We approximate: the most recent matching call we saw would be the
+  // referent. For simplicity, we just track latency by (caller, msgId) at
+  // call time and resolve at reply time.
+  if (ev.kind === 'call' && ev.msgId != null && ev.from && ev.interface && ev.member) {
+    pendingCallMeta.set(ev.from + '|' + ev.msgId,
+      { to: ev.to, path: ev.path, interface: ev.interface, member: ev.member });
+  }
+  if ((ev.kind === 'return' || ev.kind === 'error')
+      && ev.replyTo != null && ev.to && ev.latencyMs != null) {
+    const meta = pendingCallMeta.get(ev.to + '|' + ev.replyTo);
+    if (meta) {
+      recordLatency(meta.to + '|' + meta.path + '|' + meta.interface + '|' + meta.member, ev.latencyMs);
+      pendingCallMeta.delete(ev.to + '|' + ev.replyTo);
+    }
+  }
+
+  if (paused) return;
+
+  // Log ring
+  log.push(ev);
+  if (log.length > LOG_CAP) log.shift();
+  appendLogRow(ev);
+
+  // Highlight matching subscriptions for signals
+  if (ev.kind === 'signal') highlightMatchingSubs(ev);
+
+  // Counters drive the peer row text — refresh peer list lazily
+  renderCounts();
+  if (!_peerRefreshScheduled) {
+    _peerRefreshScheduled = true;
+    requestAnimationFrame(() => { _peerRefreshScheduled = false; renderPeers(); });
+  }
+}
+let _peerRefreshScheduled = false;
+const pendingCallMeta = new Map();   // `${caller}|${msgId}` -> { to, path, interface, member }
+
+function onPeerJoined(msg) {
+  const [unique, clientId] = msg.args || [];
+  lifecycle.push({ kind: 'joined', ts: Date.now(), unique, clientId: clientId || '' });
+  if (lifecycle.length > LIFECYCLE_CAP) lifecycle.shift();
+  renderLifecycle();
+}
+function onPeerLeft(msg) {
+  const [unique, clientId] = msg.args || [];
+  lifecycle.push({ kind: 'left', ts: Date.now(), unique, clientId: clientId || '' });
+  if (lifecycle.length > LIFECYCLE_CAP) lifecycle.shift();
+  renderLifecycle();
+}
+
+// ── Peers panel ──────────────────────────────────────────────────────
+
+function peerMatchesFilter(p, q) {
+  if (!q) return true;
+  q = q.toLowerCase();
+  return p.uniqueName.toLowerCase().includes(q)
+      || (p.names || []).some((n) => n.toLowerCase().includes(q))
+      || (p.clientId || '').toLowerCase().includes(q);
 }
 
 function renderPeers() {
   const el = $('peers');
   el.textContent = '';
+  const q = $('filter-peers').value.trim();
   for (const p of lastPeers) {
+    if (!peerMatchesFilter(p, q)) continue;
+    const c = counters.get(p.uniqueName);
+    const counterTxt = c
+      ? `· in:${c.callsIn} out:${c.callsOut} sig:${c.signalsOut}` + (c.errors ? ` err:${c.errors}` : '')
+      : '';
     const row = document.createElement('div');
     row.className = 'row peer' + (p.uniqueName === selected ? ' sel' : '');
     row.innerHTML =
       '<span class="uniq">' + esc(p.uniqueName) + '</span> ' +
       (p.names.length ? '<span class="names">' + esc(p.names.join(' ')) + '</span> ' : '') +
-      (p.clientId ? '<span class="cid">' + esc(p.clientId) + '</span>' : '');
+      (p.clientId ? '<span class="cid">' + esc(p.clientId) + '</span>' : '') +
+      (counterTxt ? '<span class="counter">' + esc(counterTxt) + '</span>' : '');
     row.addEventListener('click', () => selectPeer(p.uniqueName));
     el.appendChild(row);
   }
 }
 
+// ── Subscriptions panel ──────────────────────────────────────────────
+
+function subFilterText(s) {
+  const f = s.filter || {};
+  const parts = [];
+  if (f.from) parts.push('from=' + f.from);
+  if (f.path) parts.push('path=' + f.path);
+  if (f.interface) parts.push(f.interface);
+  if (f.member) parts.push('.' + f.member);
+  return parts.join(' ') || '(all signals)';
+}
+function subMatchesFilter(s, q) {
+  if (!q) return true;
+  q = q.toLowerCase();
+  return (s.subscriber || '').toLowerCase().includes(q)
+      || subFilterText(s).toLowerCase().includes(q);
+}
+
 function renderSubs(subs) {
   const el = $('subs');
   el.textContent = '';
-  if (!subs.length) { el.innerHTML = '<div class="empty">none</div>'; return; }
-  for (const s of subs) {
-    const f = s.filter || {};
-    const parts = [];
-    if (f.from) parts.push('from=' + f.from);
-    if (f.path) parts.push('path=' + f.path);
-    if (f.interface) parts.push(f.interface);
-    if (f.member) parts.push('.' + f.member);
+  const q = $('filter-subs').value.trim();
+  let any = false;
+  for (let i = 0; i < subs.length; i++) {
+    const s = subs[i];
+    if (!subMatchesFilter(s, q)) continue;
+    any = true;
     const row = document.createElement('div');
-    row.className = 'row';
+    row.className = 'sub';
+    row.dataset.subIdx = i;
     row.innerHTML =
       '<span class="sub-from">' + esc(s.subscriber) + '</span> ' +
-      '<span class="sub-filter">' + esc(parts.join(' ') || '(all signals)') + '</span>';
+      '<span class="sub-filter">' + esc(subFilterText(s)) + '</span>';
     el.appendChild(row);
   }
+  if (!any) el.innerHTML = '<div class="empty">none</div>';
 }
+
+function signalMatches(filter, ev) {
+  if (!filter) return true;
+  // The snapshot stores subscriber as unique; filter.from may be a
+  // well-known name. We don't have the name→unique map here so we
+  // accept anyway when from is set — the broker is the authority. The
+  // highlight is a UX cue, not a correctness check.
+  if (filter.path != null && filter.path !== ev.path) return false;
+  if (filter.interface != null && filter.interface !== ev.interface) return false;
+  if (filter.member != null && filter.member !== ev.member) return false;
+  return true;
+}
+
+function highlightMatchingSubs(ev) {
+  const rows = $('subs').querySelectorAll('.sub');
+  for (const row of rows) {
+    const idx = +row.dataset.subIdx;
+    const s = lastSubs[idx];
+    if (s && signalMatches(s.filter, ev)) {
+      row.classList.add('hit');
+      setTimeout(() => row.classList.remove('hit'), 600);
+    }
+  }
+}
+
+// ── Describe panel + invoke UI ───────────────────────────────────────
 
 async function selectPeer(uniqueName) {
   selected = uniqueName;
   renderPeers();
   const el = $('detail');
-  el.className = '';
-  el.textContent = 'describing ' + uniqueName + '…';
+  el.textContent = '';
+  el.innerHTML = '<div class="empty">describing ' + esc(uniqueName) + '…</div>';
   let doc;
   try { doc = await bus.describe(uniqueName); }
-  catch (e) { el.textContent = 'describe failed: ' + e.message; return; }
-  renderDescribe(doc);
+  catch (e) { el.innerHTML = '<div class="empty">describe failed: ' + esc(e.message) + '</div>'; return; }
+  renderDescribe(doc, uniqueName);
 }
 
-function renderDescribe(doc) {
+function renderDescribe(doc, peerUnique) {
   const el = $('detail');
-  el.className = '';
   el.textContent = '';
-  if (!doc) { el.textContent = 'no describe document'; return; }
+  if (!doc) { el.innerHTML = '<div class="empty">no describe document</div>'; return; }
 
   const head = document.createElement('div');
   head.className = 'obj';
@@ -197,20 +465,196 @@ function renderDescribe(doc) {
       i.className = 'iface';
       i.textContent = ifaceName;
       el.appendChild(i);
-      for (const m of Object.keys(def.methods || {})) {
+      for (const [mName, mDef] of Object.entries(def.methods || {})) {
         const row = document.createElement('div');
         row.className = 'member';
-        row.textContent = m + '()';
+        const lat = medianLatency(peerUnique + '|' + obj.path + '|' + ifaceName + '|' + mName);
+        const sig = ((mDef.args || []).map((a) => a.name + ':' + a.type).join(', '));
+        row.innerHTML =
+          '<span class="name">' + esc(mName) + '(' + esc(sig) + ')</span>' +
+          (lat != null ? '<span class="lat">~' + lat + 'ms</span>' : '');
+        const btn = document.createElement('button');
+        btn.className = 'invoke';
+        btn.textContent = '▶';
+        btn.title = 'Invoke ' + ifaceName + '.' + mName;
+        btn.addEventListener('click', () => openInvokeForm(row, peerUnique, obj.path, ifaceName, mName, mDef));
+        row.appendChild(btn);
         el.appendChild(row);
       }
-      for (const s of Object.keys(def.signals || {})) {
+      for (const [sName, sDef] of Object.entries(def.signals || {})) {
         const row = document.createElement('div');
         row.className = 'member';
-        row.textContent = '~ ' + s;
+        const sig = ((sDef.args || []).map((a) => a.name + ':' + a.type).join(', '));
+        row.innerHTML = '<span class="name">~ ' + esc(sName) + '(' + esc(sig) + ')</span>';
         el.appendChild(row);
       }
     }
   }
+}
+
+function openInvokeForm(memberRow, peerUnique, path, iface, member, mDef) {
+  // Toggle if already open under this row.
+  const existing = memberRow.nextSibling;
+  if (existing && existing.classList && existing.classList.contains('invoke-form')) {
+    existing.remove();
+    return;
+  }
+  const form = document.createElement('div');
+  form.className = 'invoke-form';
+  const argsTemplate = JSON.stringify((mDef.args || []).map((a) => sampleForType(a.type)));
+  form.innerHTML =
+    '<div class="dim">args (JSON array): ' + esc(((mDef.args || []).map((a) => a.name + ':' + a.type).join(', '))) + '</div>' +
+    '<textarea>' + esc(argsTemplate) + '</textarea>' +
+    '<div style="margin-top:4px;display:flex;gap:6px;align-items:center;">' +
+    '<button class="run">Invoke</button>' +
+    '<span class="dim">' + esc(peerUnique + ' · ' + path + ' · ' + iface + '.' + member) + '</span>' +
+    '</div>';
+  const result = document.createElement('div');
+  result.className = 'result';
+  result.style.display = 'none';
+  form.appendChild(result);
+
+  form.querySelector('.run').addEventListener('click', async () => {
+    const ta = form.querySelector('textarea');
+    let parsed;
+    try { parsed = JSON.parse(ta.value); }
+    catch (e) {
+      result.className = 'result err';
+      result.style.display = '';
+      result.textContent = 'JSON parse error: ' + e.message;
+      return;
+    }
+    if (!Array.isArray(parsed)) {
+      result.className = 'result err';
+      result.style.display = '';
+      result.textContent = 'args must be a JSON array';
+      return;
+    }
+    result.className = 'result';
+    result.style.display = '';
+    result.textContent = '…';
+    try {
+      const reply = await bus.call({ to: peerUnique, path, interface: iface, member }, parsed);
+      result.textContent = JSON.stringify(reply, null, 2);
+    } catch (e) {
+      result.className = 'result err';
+      result.textContent = (e.code ? '[' + e.code + '] ' : '') + (e.message || String(e));
+    }
+  });
+
+  memberRow.after(form);
+}
+
+function sampleForType(t) {
+  switch (t) {
+    case 'string': return '';
+    case 'number': return 0;
+    case 'integer': return 0;
+    case 'boolean': return false;
+    case 'array': return [];
+    case 'object': return {};
+    default: return null;
+  }
+}
+
+// ── Log panel ────────────────────────────────────────────────────────
+
+function logMatchesFilter(ev, q) {
+  if (!q) return true;
+  q = q.toLowerCase();
+  const hay = [
+    ev.kind, ev.from, ev.to, ev.interface, ev.member, ev.path, ev.error
+  ].filter(Boolean).join(' ').toLowerCase();
+  return hay.includes(q);
+}
+
+function formatTs(ts) {
+  const d = new Date(ts);
+  return d.toTimeString().slice(0, 8) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+}
+
+function logRowHtml(ev) {
+  const iface = ev.interface ? '<span class="iface">' + esc(ev.interface) + (ev.member ? '.' + esc(ev.member) : '') + '</span>' : '';
+  const from = ev.from ? '<span class="from">' + esc(ev.from) + '</span>' : '';
+  const to   = ev.to   ? '<span class="to">' + esc(ev.to)   + '</span>' : '';
+  const arrow = (ev.kind === 'signal') ? from + ' →∗ ' + iface
+              : (ev.kind === 'return') ? from + ' ↩ ' + to + (ev.latencyMs != null ? ' <span class="lat">' + ev.latencyMs + 'ms</span>' : '')
+              : (ev.kind === 'error')  ? from + ' ✗ ' + to + (ev.error ? ' <span class="errcode">' + esc(ev.error) + '</span>' : '') + (ev.latencyMs != null ? ' <span class="lat">' + ev.latencyMs + 'ms</span>' : '')
+              : from + ' → ' + to + ' ' + iface;
+  return '<span class="ts">' + formatTs(ev.ts) + '</span> ' +
+         '<span class="kind ' + esc(ev.kind) + '">' + esc(ev.kind) + '</span> ' +
+         arrow;
+}
+
+function appendLogRow(ev) {
+  const q = $('filter-log').value.trim();
+  if (!logMatchesFilter(ev, q)) return;
+  const el = $('log');
+  const row = document.createElement('div');
+  row.className = 'log-row';
+  row.innerHTML = logRowHtml(ev);
+  el.appendChild(row);
+  // Cap DOM size — keep the last LOG_CAP rows in sync with the buffer.
+  while (el.children.length > LOG_CAP) el.removeChild(el.firstChild);
+  el.parentElement.scrollTop = el.parentElement.scrollHeight;
+}
+
+function renderLog() {
+  const el = $('log');
+  el.textContent = '';
+  const q = $('filter-log').value.trim();
+  for (const ev of log) {
+    if (!logMatchesFilter(ev, q)) continue;
+    const row = document.createElement('div');
+    row.className = 'log-row';
+    row.innerHTML = logRowHtml(ev);
+    el.appendChild(row);
+  }
+  el.parentElement.scrollTop = el.parentElement.scrollHeight;
+}
+
+function togglePause() {
+  paused = !paused;
+  const b = $('pause');
+  b.textContent = paused ? '▶ Resume' : '⏸ Pause';
+  b.classList.toggle('on', paused);
+}
+function clearLog() {
+  log = [];
+  counters.clear();
+  latencyByMethod.clear();
+  pendingCallMeta.clear();
+  $('log').textContent = '';
+  renderPeers();
+  renderCounts();
+}
+function exportLog() {
+  const data = { exportedAt: new Date().toISOString(), events: log };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'abus-log-' + new Date().toISOString().replace(/[:.]/g, '-') + '.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Lifecycle panel ──────────────────────────────────────────────────
+
+function renderLifecycle() {
+  const el = $('lifecycle');
+  el.textContent = '';
+  for (const evt of lifecycle) {
+    const row = document.createElement('div');
+    row.className = 'lifecycle-row ' + evt.kind;
+    row.innerHTML =
+      '<span class="ts">' + formatTs(evt.ts) + '</span> ' +
+      '<span class="kind">' + (evt.kind === 'joined' ? '+' : '−') + '</span> ' +
+      '<span class="uniq">' + esc(evt.unique) + '</span>' +
+      (evt.clientId ? ' <span class="cid">' + esc(evt.clientId) + '</span>' : '');
+    el.appendChild(row);
+  }
+  el.parentElement.scrollTop = el.parentElement.scrollHeight;
 }
 </script>
 </body>
