@@ -627,13 +627,45 @@ To add a new adapter:
 
 No further integration is needed. Adder's import resolver does the rest.
 
-### 4.3 What adapters do *not* do
+### 4.3 Rich display — `_repr_html_`, `__repr__`, `__str__`
+
+Adder + the runtime honor the **IPython / Jupyter display protocol** so adapter return values can render as HTML in the cell output without any per-cell ceremony. Two methods, both optional:
+
+- **`_repr_html_()` → string of HTML.** When `ui.display(obj)` (`src/js/cell-builtins/ui.js`) is called on an object, or when an adder cell's *last expression* is an object (auto-display path in `ext/adder/src/cell.js`), the runtime checks `typeof obj._repr_html_ === 'function'` and inserts the returned HTML into the output element. Same shape Jupyter uses — copy-paste from any existing IPython library will Just Work.
+- **`__repr__()` / `__str__()` → string.** Adder's `pyRepr()` (`ext/adder/src/builtins.js`) prefers these over JSON.stringify when present, giving Python objects a sensible printable form. Implement both if you also want `print(obj)` and `str(obj)` to return the same text.
+
+The runtime checks for `_repr_html_` first; falls back to `__repr__` / `__str__`; falls back to JSON.stringify / String() last. JS-native objects, adder objects, and the same object exposed from both contexts all run the same path.
+
+**Where it's already used in-tree:**
+
+| Class | File | What `_repr_html_` produces |
+|---|---|---|
+| `sadpan.DataFrame` | `ext/sadpan/src/api.js:219` | Styled HTML table with the first 10 rows + summary |
+| `sadpan.Series` | `ext/sadpan/src/series.js:115` | HTML table preview |
+| `notebook.shell` result | `src/js/cell-builtins/shell.js:104` | Terminal-styled output panel |
+
+**Adapter-author convention.** If your engine exposes an object whose notebook-display would benefit from a rich form (a workflow tree, an estimator's fit summary, a domain map, …), add `_repr_html_` to the class. Both JS cells (`ui.display(obj)`) and adder cells (bare `obj` as last expression) pick it up automatically — no per-language opt-in. Add `__repr__` / `__str__` alongside if the Python convention matters for your consumers (`print(obj)`, `str(obj)`, `repr(obj)`).
+
+Minimal example:
+
+```js
+class Estimator {
+  constructor(coef) { this.coef = coef; }
+  _repr_html_() {
+    return `<table><tr><th>coef</th><td>${this.coef.join(', ')}</td></tr></table>`;
+  }
+  __repr__() { return `Estimator(coef=[${this.coef.join(', ')}])`; }
+  __str__() { return this.__repr__(); }
+}
+```
+
+### 4.4 What adapters do *not* do
 
 - Adapters do not bridge to native code. If a JS-native engine doesn't exist for the upstream library, the adapter doesn't exist either; we don't ship a "WASM-wrapped scipy."
 - Adapters do not extend through monkey-patching. `np.array` is a property of `natra`, not assigned at runtime.
 - Adapters do not own the runtime — adder's interpreter owns it. The adapter is just a callable wrapper.
 
-### 4.4 Runtime auto-load (no preamble required)
+### 4.5 Runtime auto-load (no preamble required)
 
 Auditable's runtime auto-loads two classes of installed modules so notebooks that use them don't need any JS preamble cell — the canonical shape of an adder notebook is just `/// adder` cells with idiomatic Python at the top.
 
