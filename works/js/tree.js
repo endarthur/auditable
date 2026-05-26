@@ -10,6 +10,31 @@ import { Menu } from '#menu';
 import { prompt as dlgPrompt, confirm as dlgConfirm } from '#dialog';
 import { kindDef, kindForExtension } from './surface-registry.js';
 import { openPath, spawnSurface } from './surfaces.js';
+import { itemsForNode as extMenuItemsForNode, dispatch as extMenuDispatch } from './context-menu-registry.js';
+import { prompt as dlgPrompt2, alert as dlgAlert2, confirm as dlgConfirm2 } from '#dialog';
+
+// ctx handed to a contributed contextMenu action. Curated surface per
+// EXTENSION_SPEC §3.8.2. Built fresh per dispatch (cheap) so a re-mounted
+// VFS or a refreshed bus reach the next action without staleness.
+function _buildExtCtx(path) {
+  return {
+    bus:    WKS.bus || WKS.worksBus || null,
+    dialog: { alert: dlgAlert2, prompt: dlgPrompt2, confirm: dlgConfirm2 },
+    vfs:    WKS.vfs || null,
+    spawnSurface,
+    openPath,
+    setStatus,
+    async peek(n) {
+      if (n <= 0 || !WKS.vfs) return new Uint8Array(0);
+      try {
+        const raw = await WKS.vfs.readFile(path);
+        if (!(raw instanceof Uint8Array)) return new Uint8Array(0);
+        const cap = Math.min(n, 1 << 20);
+        return raw.subarray(0, Math.min(cap, raw.length));
+      } catch { return new Uint8Array(0); }
+    },
+  };
+}
 import { unmountAt } from './mount.js';
 import { importFileAsNotebook } from './import.js';
 import { exportProject, exportProjectAsIpynb } from './project-export.js';
@@ -243,6 +268,16 @@ async function showMenu(e, path, type) {
   }
   if (extras.length) items.push('---', ...extras);
 
+  // Extension-contributed context-menu items (EXTENSION_SPEC §3.8.2).
+  // Inserted as their own section so they're visually separated from
+  // built-ins. Each item is keyed `_extmenu:<i>` or `_openin:<kind>`
+  // so the dispatch lookup below stays uncoupled from labels.
+  const extItems = extMenuItemsForNode(path, type);
+  if (extItems.length) {
+    items.push('---');
+    for (const ei of extItems) items.push({ label: ei.label, action: ei.key });
+  }
+
   // Rename / Move / Copy / Delete / Unmount — not for `/` or the
   // top-level mount roots. A /mnt/<name> entry is a disk-folder mount:
   // its action is Unmount (which leaves the disk content alone), not
@@ -296,6 +331,10 @@ async function showMenu(e, path, type) {
   else if (action === 'copy-to')     copyToPrompt(path);
   else if (action === 'delete')      deleteEntry(path, type);
   else if (action === 'unmount')     unmountEntry(path);
+  else if (typeof action === 'string' && (action.startsWith('_extmenu:') || action.startsWith('_openin:'))) {
+    const ei = extItems.find(x => x.key === action);
+    if (ei) await extMenuDispatch(ei.item, path, _buildExtCtx(path));
+  }
 }
 
 async function copyPath(path) {

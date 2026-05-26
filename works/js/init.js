@@ -20,6 +20,7 @@ import { buildProjectExportHtml, exportProject } from './project-export.js';
 import { mountHandle, unmountAt, restoreMounts } from './mount.js';
 import { installGlobalFileDrop } from './file-ops.js';
 import { installHooks as installExtensionSurfaceHooks } from './extension-surfaces.js';
+import { installHooks as installContextMenuHooks } from './context-menu-registry.js';
 
 async function boot() {
   setupBus();                  // the A-Bus broker
@@ -31,6 +32,7 @@ async function boot() {
   await installExamplesToVfs(WKS.vfs);     // /usr/share/examples/ (works-all only)
   await decompressSurfaces();  // embedded surface payloads → blob URLs
   installExtensionSurfaceHooks();  // wire registerExtension → ext-surface registrar
+  installContextMenuHooks();       // wire registerExtension → contextMenu registrar
   setupLayout();               // the rails surface host
   setupMenuBar();              // the desktop menu bar
   setupTree();                 // the file-tree explorer

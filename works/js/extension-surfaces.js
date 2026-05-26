@@ -23,6 +23,9 @@ import {
   registerKind, unregisterKind, registerExtensionSurface,
   processSurfaceHtml, setSurfaceBlob,
 } from './surface-registry.js';
+import {
+  registerOpenActionForSurface, unregisterOpenActionForSurface,
+} from './context-menu-registry.js';
 
 // Map an extension manifest's name to its /lib path. Mirrors
 // _libPathForName in src/js/gcupkg.js so this stays consistent.
@@ -98,6 +101,17 @@ export async function registerExtensionSurfaces(manifest) {
       },
     });
     registerExtensionSurface(s.kind, manifest, s);
+    // openAction: true sugar — auto-inject "Open in <label>" into the
+    // tree's right-click menu. Strictly extension-driven; built-in
+    // surfaces use the tree's own "Open" affordance.
+    if (s.openAction) {
+      registerOpenActionForSurface(s.kind, {
+        label: s.label || s.kind,
+        extensions: s.extensions || [],
+        _manifestName: manifest.name,
+        openAction: true,
+      });
+    }
     owned.add(s.kind);
   }
 
@@ -107,7 +121,10 @@ export async function registerExtensionSurfaces(manifest) {
 export function unregisterExtensionSurfaces(manifest) {
   const owned = _activeKinds.get(manifest.name);
   if (!owned) return;
-  for (const kind of owned) unregisterKind(kind);
+  for (const kind of owned) {
+    unregisterKind(kind);
+    unregisterOpenActionForSurface(kind);
+  }
   _activeKinds.delete(manifest.name);
 }
 
