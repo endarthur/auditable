@@ -918,8 +918,8 @@ window.addEventListener('message', async (ev) => {
     document.body.innerHTML = '<div class="err">connect failed: ' + (e.message || e) + '</div>';
     return;
   }
+  try { await bus.claim('docs-' + (ev.data.tab && ev.data.tab.id || 'unknown')); } catch {}
 
-  
   installThemeSubscription(bus);
 bus.expose('/', {
     Surface: {

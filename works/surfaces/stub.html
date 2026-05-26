@@ -40,6 +40,7 @@ window.addEventListener('message', async (ev) => {
     return;
   }
   installThemeSubscription(bus);
+  try { await bus.claim('stub-' + (tab.id || 'unknown')); } catch {}
 
   // The §5.2 Surface contract.
   bus.expose('/', {

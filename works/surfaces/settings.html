@@ -316,6 +316,7 @@ window.addEventListener('message', async (ev) => {
       + 'settings surface failed: ' + (e.message || e) + '</div>';
     return;
   }
+  try { await bus.claim('settings-' + (ev.data.tab && ev.data.tab.id || 'unknown')); } catch {}
   installThemeSubscription(bus);
 
   bus.expose('/', {

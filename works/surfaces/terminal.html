@@ -64,6 +64,7 @@ window.addEventListener('message', async (ev) => {
   installThemeSubscription(bus);
 
   const tab = ev.data.tab || {};
+  try { await bus.claim('terminal-' + (tab.id || 'unknown')); } catch {}
   const startCwd = tab.path && tab.path !== '/' ? tab.path : '/home';
 
   // xterm.js Terminal with a fit addon — match the GCU dark palette.

@@ -458,6 +458,7 @@ window.addEventListener('message', async (ev) => {
     return;
   }
   installThemeSubscription(bus);
+  try { await bus.claim('text-' + (tab.id || 'unknown')); } catch {}
 
   // Read persisted text-editor prefs before mounting the editor so
   // wrap / line-numbers / status-bar reflect the saved state on first

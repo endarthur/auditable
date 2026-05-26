@@ -90,6 +90,11 @@ window.addEventListener('message', async (ev) => {
   catch (e) { $('detail').textContent = 'connect failed: ' + e.message; return; }
   installThemeSubscription(bus);
 
+  // Claim a name so the peers list shows "inspector-<tab>" instead of
+  // a bare unique id. tab.id is lowercase-kebab, satisfies bus name rules.
+  try { await bus.claim('inspector-' + (ev.data.tab && ev.data.tab.id || 'unknown')); }
+  catch { /* duplicate or invalid — non-fatal */ }
+
   bus.expose('/', {
     Surface: {
       methods: { Flush: () => {}, CanClose: () => true, Relocated: () => {} },

@@ -174,6 +174,7 @@ window.addEventListener('message', async (ev) => {
   try { bus = await connect(port, { client: 'preview' }); }
   catch (e) { showError('A-Bus connect failed: ' + e.message); return; }
   installThemeSubscription(bus);
+  try { await bus.claim('preview-' + (tab.id || 'unknown')); } catch {}
 
   const path = tab.path;
   const name = basename(path);

@@ -602,6 +602,12 @@ async function init() {
 async function worksBoot(conn) {
   const { bus, tab, home } = conn;
 
+  // Claim a well-known A-Bus name so the Inspector lists this surface as
+  // "notebook-<tabid>" instead of a bare unique id. Non-fatal — name
+  // collisions just leave the peer anonymous in the list.
+  try { await bus.claim('notebook-' + (tab && tab.id || 'unknown')); }
+  catch { /* duplicate or invalid — non-fatal */ }
+
   // The inline head script speculatively added .in-works to
   // documentElement when iframed; we make it persistent here (CSS uses
   // :root:not(.in-works) for mobile-mode + standalone-only chrome).
