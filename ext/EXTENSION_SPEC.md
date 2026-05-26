@@ -305,6 +305,150 @@ This works, but skips:
 
 For now: if your extension wants MCP tools, register them imperatively in `onActivate` and subscribe to `crypto:unlocked` via `window.auditable.hooks.on('crypto:unlocked', …)` to re-register. See `src/js/mcp-adapter.js:349–375` for the manifest-driven re-registration pattern used by the host's own tools.
 
+### 3.8 Surfaces, context menus, and path routing (Works-host-only)
+
+**Status: specced, implementation pending.** This section is the contract — pieces ship as separate chunks (the implementation order is in `works/SURFACES.md`'s host-author guide). Surfaces are a Works concept; standalone auditable doesn't have an iframe surface layer, so these capabilities are no-ops when an extension is loaded outside Works. Skipping the contributions cleanly (no errors) is required of the registrar.
+
+#### 3.8.1 Surface contributions (`manifest.surfaces`)
+
+Each surface is an HTML file inside the gcupkg that opens as an iframe under Works's rails layout. The contribution is purely declarative — the surface itself talks to the workspace over A-Bus (same `Surface` contract every in-tree surface uses, see `works/SURFACES.md`).
+
+```js
+register({
+  name: '@example/data-grid',
+  version: '0.1.0',
+  surfaces: [{
+    kind:        'data-grid',          // unique kind name; collides → registration throws
+    label:       'Data Grid',          // shown in the kind picker / new-surface menu (defaults to kind)
+    icon:        '⊞',                  // single character; defaults to '■'
+    file:        'surface.html',       // path inside the gcupkg (relative; see §3.8.4)
+    extensions:  ['.parquet', '.arrow'], // fast-path file routing (optional)
+    detect:      async (path, peek) => /* content-based routing (optional) — see §3.8.3 */,
+    openAction:  true,                 // auto-inject "Open in <label>" context-menu item
+    requires:    ['abus', 'menu'],     // shared libs to inline at spawn time; defaults to ['abus']
+  }],
+});
+```
+
+**Field rules:**
+
+- `kind`: unique across the whole workspace. Two extensions both contributing `kind: 'image-viewer'` is a registration error. Recommend `<package-slug>-<purpose>` (`@gcu/spinifex` → `spinifex-map`) to namespace yourself.
+- `file`: a path within the gcupkg, e.g. `surface.html` or `surfaces/grid.html`. The installer copies the whole gcupkg to `/lib/<pkg>/`; the surface lands at `/lib/<pkg>/<file>`. The shell reads from there on each spawn (no separate bundling pass).
+- `extensions`: lowercase, dot-prefixed. Matched first by `kindForPath` before any `detect()` fallback (cheap; no I/O).
+- `detect`: optional callback for content-based routing. Receives `(path, peek)`; returns `true` if this surface should claim the path. See §3.8.3.
+- `openAction`: `true` is sugar for a context-menu entry that spawns this surface on the matched file. Equivalent to declaring it manually under `contextMenu`; the host injects the item with label `'Open in <kind.label>'`.
+- `requires`: shared-lib names the surface's `<script type="module">` block imports via bare specifiers (`@gcu/abus`, `@gcu/menu`, `@gcu/cm6`, …). Host inlines these at spawn time (see §3.8.5). `'abus'` is always implicit — every surface needs the A-Bus client to talk to `works:`.
+
+#### 3.8.2 Context menus (`manifest.contextMenu`)
+
+Custom right-click actions on tree nodes. Composable with — but independent of — surface contributions: an extension that just adds a "Compute statistics" dialog without shipping a surface uses only `contextMenu`. An extension that ships a surface AND wants extra non-open actions uses both.
+
+```js
+register({
+  contextMenu: [{
+    label:    'Show schema',
+    scope:    'file',                            // 'file' | 'folder' | 'project'
+    filter:   (path) => /\.(parquet|arrow)$/.test(path),
+    action:   async (path, ctx) => {             // ctx exposes the works A-Bus client + dialog helpers
+      const head = await ctx.peek(path, 256);
+      ctx.dialog.alert('Schema', describeSchema(head));
+    },
+    icon:     '📋',                              // optional; not shown in current menu styling
+    section:  'inspect',                         // optional grouping hint; reserved for menu redesign
+  }],
+});
+```
+
+**Field rules:**
+
+- `scope`: which tree node types fire this action. `'file'` for loose files, `'folder'` for plain directories, `'project'` for `/projects/<name>/` directories with a `project.json`. To match multiple, list the action twice; intentional duplication is OK.
+- `filter`: predicate `(path) => boolean`. Runs once per right-click; cheap. Returning `false` hides the item. If absent, the action applies to every node in scope.
+- `action`: `(path, ctx) => Promise<void>`. Runs in the SHELL's JS context, not the surface iframe. The `ctx` object exposes a curated surface (initial: `ctx.bus` for A-Bus calls, `ctx.dialog` for `@gcu/dialog` prompts/alerts, `ctx.peek(path, n)` for byte reads, `ctx.spawnSurface(kind, opts)` for opening surfaces, `ctx.setStatus(text)` for the status bar). The shape grows by addition only.
+
+Auto-injection via `openAction: true` on a surface is exactly equivalent to:
+
+```js
+{
+  label:  `Open in ${surface.label}`,
+  scope:  'file',
+  filter: (path) => surface.extensions.some(ext => path.toLowerCase().endsWith(ext))
+                 || (surface.detect && surface.detect(path, ctx.peek.bind(ctx, path))),
+  action: (path) => ctx.spawnSurface(surface.kind, { path }),
+}
+```
+
+#### 3.8.3 Path-to-kind resolution
+
+When the user double-clicks a file in the tree, the shell asks `kindForPath(path)`. Resolution order:
+
+1. **Extension match** — every registered surface's `extensions` list, checked against `path.toLowerCase()`. First match wins. O(N) over the kind set; cheap.
+2. **Extensionless-name match** — for files like `LICENSE`, `README` (no extension); same as today's `extensionlessNames`.
+3. **`detect()` callbacks** — every surface with a `detect` callback is asked in registration order. First truthy result wins. Async; bounded by a `peek` budget (see below).
+4. **Fallback** — text surface for "text-like" content (heuristic on bytes: mostly printable ASCII / valid UTF-8), otherwise the preview surface.
+
+The `peek` function passed to `detect` reads the first N bytes from `path` (via the workspace VFS), cached for the duration of a single resolution pass. So two `detect` callbacks both asking `peek(path, 16)` perform one read total. Recommended N: ≤ 256 bytes — kind detection is a magic-byte concern, not a full-file parse.
+
+```js
+detect: async (path, peek) => {
+  const head = await peek(8);                 // Uint8Array of first 8 bytes
+  return head[0] === 0x50 && head[1] === 0x41 && head[2] === 0x52 && head[3] === 0x31;  // 'PAR1'
+}
+```
+
+The detect-pass budget is `~1 MB total` across all surfaces in one resolution; if a callback requests beyond that, the host caps and logs. Detect callbacks that need a full-file read should ship as a `contextMenu` action instead.
+
+#### 3.8.4 Where surface files live in the gcupkg
+
+```
+@example/data-grid@0.1.0.gcupkg
+├── package.json
+├── index.js                  ← the engine (load("@example/data-grid"))
+├── adder.js                  ← optional Python adapter
+├── surface.html              ← single-surface case
+└── surfaces/                 ← multi-surface case (manifest declares file path per kind)
+    ├── grid.html
+    └── schema-viewer.html
+```
+
+After install, the installer writes the whole gcupkg verbatim to `/lib/<pkg>/`. Surface HTML files end up at `/lib/<pkg>/surface.html` etc. The host's spawn step reads from there each time the surface opens (no per-instance caching of the HTML beyond the blob URL — re-opening picks up an edited file).
+
+#### 3.8.5 Shared-lib inlining (the existing mechanism)
+
+Extension surfaces use the same shared-lib inlining as in-tree surfaces. The `requires: ['abus', 'menu']` list tells the host which `@gcu/<name>` bare specifiers in the surface's `import` statements should be replaced with their inlined source. The shell's `_inlineLibsIntoSurface` runs against the extension surface's HTML before iframe creation — same code path as `text.html`, `preview.html`, etc.
+
+Standard lib aliases (`abus`, `vfs`, `menu`, `dialog`, `cm6`, …) are pre-bundled in works.html. Extension surfaces requesting an alias that isn't in the host build fail to spawn with a clear error — the user gets a status-bar message.
+
+Surfaces that need libraries beyond what the host ships should vendor them inside the gcupkg and import via relative paths (no bare specifier).
+
+#### 3.8.6 Lifecycle
+
+- **Install**: `installGcupkg` reads `manifest.surfaces` + `manifest.contextMenu` (already in the .gcupkg-meta.json's `contributes` summary), registers each into the shell's `surface-registry.js` KINDS + a new `_contextMenuItems` array. Tree refreshes its right-click menu builder.
+- **Replace**: re-install at a new version drops the old kinds + actions first (clean replace, matches the §6.1 install policy), then re-registers.
+- **Uninstall**: `pkg remove @example/data-grid` deregisters every kind + action contributed by the manifest. Any currently-open tab of the removed surface stays alive (it has the blob URL); but new spawns fail.
+
+A reload re-runs the contribution registration from the lockfile — no extension is "active" without an installed entry.
+
+#### 3.8.7 Security
+
+Surface iframes run in their own opaque-origin context (per-blob origin under `file://`). They can only act through A-Bus calls to `works:` — there's no direct DOM access to the shell, no cross-surface DOM access, no `localStorage` shared with the workspace. The fence is the same as for in-tree surfaces; extension surfaces inherit it for free.
+
+Trust model: same as npm — installing a gcupkg means trusting it. The extension's surface CAN call any A-Bus method `works:` exposes (VFS reads, settings reads/writes, spawn surfaces). Future capability-gating (§9 open question) could restrict this; for v1 the model is "install = full trust."
+
+#### 3.8.8 What's NOT in v1
+
+Deliberately out of scope; raise as follow-ups if they bite:
+
+- **Per-kind namespacing of context-menu items.** Items appear in a flat list under their parent type's section. No per-extension submenu grouping until a single workspace has enough extensions for it to matter (current cap: ~5 before the menu gets unwieldy).
+- **Worker-backed surfaces.** The host doesn't help an extension surface spawn its own Web Worker. The surface does that itself if it wants.
+- **Cross-surface DOM bridges.** Surfaces communicate only via A-Bus; no shared in-memory state across iframe boundaries.
+- **MIME type tables.** No central `mime → kind` map. Use `extensions` + `detect()`; mimics work fine.
+- **Asset bundles separate from `surface.html`.** Inline CSS/data: URLs / small assets directly in the surface HTML. Larger external assets (fonts, images) can live in the gcupkg's `surface-assets/` directory and be referenced via `/lib/<pkg>/surface-assets/<file>` paths — but the host doesn't auto-route those today.
+- **Surface preview / picker UI.** Beyond "right-click → Open in <kind>", there's no kind picker for ambiguous files. Could land later — `kindForPath` could return a list of matches and the shell offers a chooser.
+
+#### 3.8.9 The host-side guide
+
+`works/SURFACES.md` documents the surface-author contract (the §5.2 lifecycle, the A-Bus services available, the welcome-port pattern). Extension surfaces follow the same contract as in-tree surfaces — that file is the single source for HOW to write one. This section covers WHAT an extension declares in its manifest to be picked up by the host.
+
 ---
 
 ## 4. Cross-language adapters
@@ -682,7 +826,7 @@ The `examples/defs/<category>/<name>.txt` system is the host's smoke-test corpus
 
 - **MCP tools as a manifest field.** See §3.7. `manifest.mcpTools` will replace the imperative `navigator.modelContext.registerTool` pattern with re-registration + audit-log + access-control baked in.
 - **Settings / preferences.** An extension contributing UI configuration (default themes for a language tag, API keys, feature toggles) has no convention today. Likely shape: `manifest.settings: { schema, defaults }` auto-populating a per-extension Settings panel tab. Pre-design.
-- **Works surface contributions.** The Works shell's surface kinds (`works/js/surface-registry.js`) are shell-side today — an extension cannot ship a new surface. Once the surface-authoring spec stabilizes (`works/SURFACES.md`), extensions should be able to register them through the same manifest. Pre-design.
+- **Works surface contributions + context-menu actions.** Specced in §3.8. Implementation pending — wires `manifest.surfaces` + `manifest.contextMenu` into `works/js/surface-registry.js` and the tree menu builder; rides on the existing `_inlineLibsIntoSurface` for shared-lib reuse.
 - **Asset bundling in `.gcupkg`.** A tagged language wanting to ship a custom CM6 theme, an icon for the cell-type chip, or a font has no current slot. Likely path: `assets/` directory in the gcupkg, written to `/usr/share/assets/<extension>/`. Out of scope for v1 of the gcupkg format.
 - **Naming convention.** `@gcu/<slug>` is conventional but not enforced. Lowercase, no whitespace, semver-tag friendly — but the validator accepts anything that's a string. A linter pass would help here but isn't a runtime concern.
 - **Permissions / capability gating.** Extensions today have full window access. A capability-token model would let users audit what an extension touches (FS / DOM / network / clipboard / …) before approving install. Pre-design; no implementation plan.
