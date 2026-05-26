@@ -99,6 +99,21 @@
     color: var(--au-fg);
     border-color: var(--au-fg-soft);
   }
+  /* CM6's close button (name="close") is just the literal "×" character —
+     easy to miss alongside Next / Prev / All. Pull it out: bigger, accent-
+     coloured, with an "Esc" hint tooltip. */
+  #editor-root .cm-panel button[name="close"] {
+    color: var(--au-fg);
+    font-size: 14px;
+    font-weight: 700;
+    padding: 0 8px;
+    line-height: 1;
+    margin-left: 8px;
+  }
+  #editor-root .cm-panel button[name="close"]:hover {
+    color: var(--au-action);
+    border-color: var(--au-action);
+  }
   #editor-root .cm-search-match { background: var(--au-action-soft); }
   #editor-root .cm-selectionMatch { background: var(--au-warn-soft); }
 
@@ -191,7 +206,7 @@ const {
   lineNumbers, highlightActiveLine, drawSelection,
   history, undo, redo, indentWithTab,
   keymap, minimalSetup,
-  openSearchPanel, searchKeymap, search,
+  openSearchPanel, closeSearchPanel, searchKeymap, search,
   bracketMatching, indentOnInput,
   javascript, css: cssLang, python, html: htmlLang,
 } = CM6;
@@ -327,6 +342,11 @@ function makeEditor(initialText, languageExt) {
           { key: 'Ctrl-z',   mac: 'Cmd-z',  run: undo },
           { key: 'Ctrl-Shift-z', mac: 'Cmd-Shift-z', run: redo },
           { key: 'Ctrl-y',   mac: 'Cmd-y',  run: redo },
+          // CM6's searchKeymap binds Escape to closeSearchPanel only when
+          // the search PANEL has focus — Escape from the editor area is a
+          // no-op by default. Make it work from anywhere: try the close,
+          // return false on no-effect so other handlers still see it.
+          { key: 'Escape',   run: (view) => closeSearchPanel(view) },
         ]),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
