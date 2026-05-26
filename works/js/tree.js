@@ -164,17 +164,26 @@ function renderNode(node, depth) {
 
   let icon, label;
   if (node.type === 'folder') {
-    icon = ' ';                             // empty spacer — keeps the
-                                            // icon column reserved so
-                                            // labels align with files +
-                                            // projects at the same depth
+    icon = '▸';                             // small wedge — present in
+                                            // the icon column for layout
+                                            // alignment with files; the
+                                            // separate chevron column
+                                            // carries the open/closed
+                                            // affordance
     label = node.label || node.name;
   } else if (node.type === 'project') {
     icon = (kindDef(node.kind) || {}).icon || '■';
     label = node.title;
   } else {
-    icon = '·';
-    label = node.label || node.name;
+    // Files: prefer the icon of the surface kind that would open this
+    // file (so .xjnl shows carotte's viewer icon, .parquet would show
+    // the data-grid icon, .txt → text-surface icon, etc.). Falls back
+    // to `·` for files no registered surface claims. Synchronous —
+    // detect callbacks (async, content-based) are NOT consulted here.
+    const base = node.label || node.name;
+    const matchedKind = kindForExtension(base);
+    icon = matchedKind ? ((kindDef(matchedKind) || {}).icon || '·') : '·';
+    label = base;
   }
 
   row.appendChild(chevron);
