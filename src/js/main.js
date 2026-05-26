@@ -38,6 +38,7 @@ import './dag.js';
 import './widgets.js';
 import './engine.js';
 import './serialize.js';
+import './outline.js';
 import './persist.js';
 import './outputs.js';
 import './host.js';
