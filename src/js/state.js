@@ -10,7 +10,11 @@ export const $$ = s => [...document.querySelectorAll(s)];
 export const S = {
   cells: [],        // { id, type, code, el, defines, uses, output, error }
   scope: {},        // shared variable scope
-  cellId: 0,        // unique cell ID counter
+  cellId: 1,        // next cell-ID number — assigned IDs are `c-${cellId}`,
+                    // counter increments on every new cell. Persisted in
+                    // notebook.txt's `/// next_id:` header so reloads
+                    // resume allocation without collision. Starts at 1
+                    // (more natural for users — "cell c-1" first).
   editTimer: null,  // debounce timer for autorun
   autorun: true,    // reactive mode flag
   selectedId: null, // currently selected cell

@@ -274,6 +274,21 @@ button.accent:hover {
   border-left: 2px solid var(--au-fg-soft);
   padding-left: 8px;
 }
+
+/* Cell whose saved output's sourceHash doesn't match the current
+   source — output was computed against earlier code. Caution color
+   so the user notices but isn't alarmed. */
+.cell.output-stale .cell-output {
+  border-left-color: var(--au-caution);
+}
+.cell.output-stale .cell-output::before {
+  content: 'output from earlier source · re-run to refresh';
+  display: block;
+  font-size: 10px;
+  color: var(--au-caution);
+  margin-bottom: 4px;
+  font-style: italic;
+}
 .cell-output pre.au-shell-out,
 .cell-output pre.au-shell-err {
   font-family: var(--au-font-mono);

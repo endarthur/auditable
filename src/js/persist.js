@@ -9,7 +9,7 @@
 //
 // Spec: spec_inbox/shipped/auditable-persistence-spec.md (roadmap step E).
 
-import { $ } from './state.js';
+import { $, S } from './state.js';
 import { addCell } from './cell-ops.js';
 import { applySettings } from './settings.js';
 import { isCollapsed } from './dag.js';
@@ -228,6 +228,7 @@ export async function syncCellsToVfs(vfs, S, settings, title) {
   await vfs.mkdir(PROJECT_DIR, { recursive: true }).catch(() => {});
   await ensureProjectJson(vfs, title);
   const cells = S.cells.map(c => ({
+    id: c.id,
     type: c.type,
     code: c.code,
     collapsed: c.collapsed || undefined,
@@ -239,7 +240,7 @@ export async function syncCellsToVfs(vfs, S, settings, title) {
   const modules = Object.keys(allMods)
     .filter(url => !(allMods[url] && typeof allMods[url] === 'object' && allMods[url].builtin))
     .map(url => ({ url }));
-  const txt = serializeNotebookTxt({ title, settings, cells, modules });
+  const txt = serializeNotebookTxt({ title, settings, cells, modules, nextId: S.cellId });
   await vfs.writeFile(NOTEBOOK_TXT_PATH, txt);
 }
 
@@ -364,8 +365,17 @@ export async function hydrateNotebook(vfs) {
   if (nb) nb.innerHTML = '';
   document.querySelectorAll('style[data-cell-id]').forEach(el => el.remove());
 
+  // Restore the notebook's id allocator. addCell respects presetId when
+  // each cell has an id= directive; for cells without one (legacy / hand-
+  // edited notebook.txt), addCell falls through to the counter and
+  // assigns a fresh id. Either way, S.cellId is bumped past every id
+  // we've seen so subsequent adds don't collide.
+  if (typeof parsed.nextId === 'number' && parsed.nextId > S.cellId) {
+    S.cellId = parsed.nextId;
+  }
+
   for (const c of parsed.cells || []) {
-    const cell = addCell(c.type, c.code);
+    const cell = addCell(c.type, c.code, null, null, c.id || null);
     if (c.collapsed || isCollapsed(c.code)) {
       cell.el.classList.add('collapsed');
       cell.collapsed = true;

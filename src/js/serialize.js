@@ -88,9 +88,14 @@ export function buildTxtExport({ title, cells, settings, moduleUrls }) {
  * the second whitespace-separated token (`/// module: <url> <ref>`) is left for
  * gen_examples.js / Works to fill in with content-hash refs.
  */
-export function serializeNotebookTxt({ title, settings, cells, modules }) {
+export function serializeNotebookTxt({ title, settings, cells, modules, nextId }) {
   const lines = ['/// auditable'];
   if (title && title !== 'untitled') lines.push('/// title: ' + title);
+  // next_id — stable monotonic counter the notebook owns. Each cell's
+  // /// directive carries an id=c-<n>; this header records the next
+  // unassigned value so reloads + new-cell adds keep allocating
+  // uniquely. Omitted when there are no cells (legacy save shape).
+  if (nextId && cells && cells.length > 0) lines.push('/// next_id: ' + nextId);
 
   const defaultSettings = { theme: 'dark', fontSize: 13, width: '860' };
   if (settings && JSON.stringify(settings) !== JSON.stringify(defaultSettings)) {
@@ -104,8 +109,13 @@ export function serializeNotebookTxt({ title, settings, cells, modules }) {
   }
   for (const cell of cells || []) {
     lines.push('');
-    const flags = cell.collapsed ? ' collapsed' : '';
-    lines.push('/// ' + cell.type + flags);
+    // Order: type [id=...] [collapsed]. id is optional in the parser
+    // (legacy notebooks without it get IDs allocated on first load),
+    // but the serializer always writes one.
+    const parts = [cell.type];
+    if (cell.id != null) parts.push('id=' + cell.id);
+    if (cell.collapsed) parts.push('collapsed');
+    lines.push('/// ' + parts.join(' '));
     lines.push(cell.code || '');
   }
   return lines.join('\n') + '\n';
@@ -119,6 +129,7 @@ export function parseNotebookTxt(content) {
   const lines = (content || '').split('\n');
   let title = 'untitled';
   let settings = null;
+  let nextId = null;
   const cells = [];
   const modules = [];
   let currentCell = null;
@@ -135,6 +146,10 @@ export function parseNotebookTxt(content) {
       const directive = l.slice(4);
       if (directive === 'auditable') continue;
       else if (directive.startsWith('title: ')) title = directive.slice(7);
+      else if (directive.startsWith('next_id: ')) {
+        const n = parseInt(directive.slice(9), 10);
+        if (Number.isFinite(n)) nextId = n;
+      }
       else if (directive.startsWith('settings: ')) {
         try { settings = JSON.parse(directive.slice(10)); } catch {}
       }
@@ -145,11 +160,17 @@ export function parseNotebookTxt(content) {
         else modules.push({ url: decl.slice(0, sp), ref: decl.slice(sp + 1).trim() });
       }
       else {
-        const parts = directive.split(' ');
+        // Cell directive — type + optional `id=c-N` + optional `collapsed`.
+        // Tokens are space-separated. id= survives across saves; legacy
+        // notebooks without it get an id allocated by hydrateNotebook.
+        const parts = directive.split(/\s+/).filter(Boolean);
         const type = parts[0];
-        const collapsed = parts.includes('collapsed');
         currentCell = { type, code: '' };
-        if (collapsed) currentCell.collapsed = true;
+        for (let i = 1; i < parts.length; i++) {
+          const p = parts[i];
+          if (p === 'collapsed') currentCell.collapsed = true;
+          else if (p.startsWith('id=')) currentCell.id = p.slice(3);
+        }
       }
     } else if (currentCell) {
       currentCell.code += (currentCell.code ? '\n' : '') + l;
@@ -159,7 +180,7 @@ export function parseNotebookTxt(content) {
     currentCell.code = _trimCell(currentCell.code);
     cells.push(currentCell);
   }
-  return { title, settings, cells, modules };
+  return { title, settings, cells, modules, nextId };
 }
 
 function _trimCell(s) {

@@ -74,8 +74,21 @@ export function setCellCode(cell, newCode) {
 
 // ── CELL OPERATIONS ──
 
-export function addCell(type, code = '', afterId = null, beforeId = null) {
-  const id = S.cellId++;
+export function addCell(type, code = '', afterId = null, beforeId = null, presetId = null) {
+  // Stable per-notebook IDs — string-keyed `c-<N>`. Reloads provide
+  // presetId from notebook.txt's id= directive so cells keep their
+  // identity across save/load. Fresh cells get the next available
+  // number; S.cellId monotonically increases, never reused even after
+  // deletes (a cell's old ID stays valid for any back-reference).
+  let id;
+  if (presetId) {
+    id = presetId;
+    // Bump S.cellId past any preset so subsequent allocations don't collide.
+    const m = /^c-(\d+)$/.exec(presetId);
+    if (m) S.cellId = Math.max(S.cellId, parseInt(m[1], 10) + 1);
+  } else {
+    id = 'c-' + (S.cellId++);
+  }
   const cell = {
     id, type, code,
     collapsed: false,
@@ -179,8 +192,8 @@ export function deleteCell(id) {
   const idx = S.cells.findIndex(c => c.id === id);
   if (idx < 0) return;
   // Drop the cell's sidecar output file (best-effort, fire-and-forget).
-  // Must happen before we splice the cell out of S.cells so the call
-  // sees _prevSavedHash.
+  // Sidecar filename is the cell's stable id, so the lookup just needs
+  // the cell object — no hash bookkeeping required.
   removeOutputForCell(S.cells[idx]);
   // fire invalidation so cell resources (timers, etc.) clean up
   if (S.cells[idx]._invalidate) { S.cells[idx]._invalidate(); S.cells[idx]._invalidate = null; }
