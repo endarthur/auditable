@@ -258,36 +258,6 @@ function _validateManifest(m) {
   }
 }
 
-// Project a manifest's surface + contextMenu contributions into a
-// JSON-clone-safe slice — function values (detect, filter, action) are
-// stripped so the manifest survives the A-Bus structured clone. The
-// shell uses this for declarative registration; live JS callbacks stay
-// in the originating window's local registration (cell-types.js
-// keeps the full manifest in _manifests).
-function _stripJsCallbacks(manifest) {
-  const out = { name: manifest.name, version: manifest.version };
-  if (Array.isArray(manifest.surfaces)) {
-    out.surfaces = manifest.surfaces.map((s) => ({
-      kind:        s.kind,
-      label:       s.label,
-      icon:        s.icon,
-      file:        s.file,
-      extensions:  s.extensions || [],
-      requires:    s.requires || null,
-      openAction:  !!s.openAction,
-    }));
-  }
-  if (Array.isArray(manifest.contextMenu)) {
-    out.contextMenu = manifest.contextMenu.map((it) => ({
-      label:   it.label,
-      scope:   it.scope || 'file',
-      icon:    it.icon || null,
-      section: it.section || null,
-    }));
-  }
-  return out;
-}
-
 // ── Public API: registerExtension ──
 
 export function registerExtension(manifest) {
@@ -325,51 +295,21 @@ export function registerExtension(manifest) {
   if (manifest.contextHook) {
     (window._cellContextHooks = window._cellContextHooks || []).push(manifest.contextHook);
   }
-  // Surfaces + context-menu contributions are Works-host-only. Three
-  // routing paths, exactly one fires per call. EXTENSION_SPEC §3.8.
-  //
-  //   1. window._worksRegisterExtensionSurfaces present → same-window
-  //      (e.g. registerExtension called from a script running in the
-  //      Works shell itself, future use case).
-  //   2. window._worksBus present → cross-frame: forward to the works
-  //      shell via A-Bus. This is the common case — the notebook
-  //      iframe in Works boots with worksBoot stashing the bus, and
-  //      every install() inside a notebook cell ends up here.
-  //   3. Neither → standalone auditable. Silently no-op the surface
-  //      registration. Schema has been validated above so a malformed
-  //      manifest still throws.
+  // Surfaces + contextMenu are shell-context capabilities (§2.5 + §3.8) —
+  // they belong in works.js, which runs in the Works shell, not here. The
+  // notebook-context registerExtension just warns if it sees them so the
+  // author knows to move them.
   if (manifest.surfaces) {
-    if (typeof window._worksRegisterExtensionSurfaces === 'function') {
-      try { window._worksRegisterExtensionSurfaces(manifest); }
-      catch (e) { console.error(`[auditable] surfaces registration for "${manifest.name}":`, e); }
-    } else if (window._worksBus && typeof window._worksBus.call === 'function') {
-      // Strip JS-only fields before posting (functions don't survive
-      // structured clone). The shell re-binds to a stub with extension
-      // routing only; detect callbacks won't fire until the live JS
-      // also runs in the shell context (§3.8.9 known v1 limit).
-      const safe = _stripJsCallbacks(manifest);
-      window._worksBus.call(
-        { to: 'works', path: '/', interface: 'Extension', member: 'Register' },
-        [safe]
-      ).catch((e) => console.error(`[auditable] bridging surfaces for "${manifest.name}":`, e));
-    }
+    console.warn(
+      `[auditable] "${manifest.name}" declares surfaces in its notebook-context index.js — ` +
+      `surfaces belong in works.js, which runs in the Works shell (see EXTENSION_SPEC §2.5).`
+    );
   }
   if (manifest.contextMenu) {
-    if (typeof window._worksRegisterExtensionContextMenu === 'function') {
-      try { window._worksRegisterExtensionContextMenu(manifest); }
-      catch (e) { console.error(`[auditable] contextMenu registration for "${manifest.name}":`, e); }
-    } else if (window._worksBus && typeof window._worksBus.call === 'function') {
-      const safe = _stripJsCallbacks(manifest);
-      // Same call wires both fields (the works service splits them on
-      // its side), so we don't post twice when both surfaces and
-      // contextMenu are present. Skip if we just posted above.
-      if (!manifest.surfaces) {
-        window._worksBus.call(
-          { to: 'works', path: '/', interface: 'Extension', member: 'Register' },
-          [safe]
-        ).catch((e) => console.error(`[auditable] bridging contextMenu for "${manifest.name}":`, e));
-      }
-    }
+    console.warn(
+      `[auditable] "${manifest.name}" declares contextMenu in its notebook-context index.js — ` +
+      `contextMenu belongs in works.js (see EXTENSION_SPEC §2.5).`
+    );
   }
   if (manifest.description || manifest.pluginUrl) {
     window._auditablePlugins.set(manifest.pluginUrl || manifest.name, {
@@ -445,24 +385,9 @@ function _unregisterContributions(manifest) {
     const idx = window._cellContextHooks.indexOf(manifest.contextHook);
     if (idx >= 0) window._cellContextHooks.splice(idx, 1);
   }
-  if (manifest.surfaces && typeof window._worksUnregisterExtensionSurfaces === 'function') {
-    try { window._worksUnregisterExtensionSurfaces(manifest); } catch (e) { console.error(e); }
-  } else if (manifest.surfaces && window._worksBus && typeof window._worksBus.call === 'function') {
-    const safe = _stripJsCallbacks(manifest);
-    window._worksBus.call(
-      { to: 'works', path: '/', interface: 'Extension', member: 'Unregister' },
-      [safe]
-    ).catch((e) => console.error(`[auditable] bridging surface unregister for "${manifest.name}":`, e));
-  }
-  if (manifest.contextMenu && typeof window._worksUnregisterExtensionContextMenu === 'function') {
-    try { window._worksUnregisterExtensionContextMenu(manifest); } catch (e) { console.error(e); }
-  } else if (manifest.contextMenu && !manifest.surfaces && window._worksBus && typeof window._worksBus.call === 'function') {
-    const safe = _stripJsCallbacks(manifest);
-    window._worksBus.call(
-      { to: 'works', path: '/', interface: 'Extension', member: 'Unregister' },
-      [safe]
-    ).catch((e) => console.error(`[auditable] bridging contextMenu unregister for "${manifest.name}":`, e));
-  }
+  // surfaces / contextMenu — shell-context, never registered here, so
+  // nothing to unregister. Replace path in the shell's registerExtension
+  // handles its own un-then-re-register.
   if (typeof manifest.onDeactivate === 'function') {
     try { manifest.onDeactivate(); } catch (e) { console.error(`[auditable] onDeactivate for "${manifest.name}":`, e); }
   }

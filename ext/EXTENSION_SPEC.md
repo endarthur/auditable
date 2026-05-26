@@ -176,6 +176,38 @@ Disjunctions (`||`) and AND-combinations are deliberately not supported. If you 
 
 For optional features ("works better if X is also installed"), do **not** put X in `requires` — check `window.auditable?.getExtension('X')` at runtime instead and degrade gracefully. `requires` is for hard dependencies your registration cannot complete without.
 
+### 2.5 The two-entry-point model: `index.js` vs `works.js`
+
+Auditable runs in two distinct JavaScript contexts, and capabilities split cleanly between them:
+
+| Context | Where it runs | What lives there |
+|---|---|---|
+| **Notebook** | Inside the notebook iframe (or the page in standalone) | Cell types, tagged languages, AIR lowerers, Python adapters via `exports`, cell-context hooks, globals |
+| **Shell** | The Works shell window (or N/A in standalone) | Surfaces (Works tabs), context-menu actions on tree nodes, MCP tools |
+
+Each context loads its **own** entry point and calls **its own** `window.auditable.registerExtension(...)`. There's no bridging between them, no cross-frame coordination for registration:
+
+```
+my-extension.gcupkg
+├── package.json
+├── .gcupkg-meta.json
+├── index.js          ← runs in NOTEBOOK context — cellType, taggedLanguage, exports, …
+├── works.js          ← runs in SHELL context    — surfaces, contextMenu, …
+├── adder.js          ← optional Python-shape adapter (notebook context, loaded as <name>/adder)
+└── viewer.html       ← surface asset, referenced by works.js
+```
+
+**Loading:**
+
+- `works.js` evaluates in the shell **at install time** (and at Works boot for every previously-installed extension). The shell's `window.auditable.registerExtension` handles the shell-relevant slice — surfaces are routed to the surface registry, contextMenu items to the tree right-click registry. Result: drop a `.gcupkg`, the surfaces and context-menu items appear immediately. No notebook needs to be open.
+- `index.js` evaluates in the notebook iframe **when a cell needs it** — via `load("@gcu/<pkg>")`, `from <X> import` auto-discovery in adder cells, or the `LANGUAGE_PACKS` map (for canonical adder/soft cell types). Result: cell-type registration happens lazily, on first use, in the context that actually runs cells.
+
+Each context's `registerExtension` enforces its slice. If you call `register({ surfaces: [...] })` from `index.js` (notebook context), the call is rejected with a console warning telling you to move it to `works.js`. Same shape symmetrically: `register({ cellType: {...} })` from `works.js` warns "put this in index.js."
+
+**Why two files** instead of one manifest that gets routed: the two contexts have different module graphs, different windows, and different lifecycles. A single entry point that ran in either context (or worse, ran in one context and posted to the other) tied surfaces' visibility to whether a notebook had touched the extension. Two files = each runs where it belongs, no coordination, no race conditions, no surprise that surfaces don't appear until somebody runs a cell.
+
+**You can skip either file.** An extension that only contributes cell types has no `works.js`. An extension that only adds a Works surface has no `index.js`. Most extensions will have one or the other; only language packs with both runtime semantics and Works UI need both.
+
 ---
 
 ## 3. The six capability surfaces in detail
@@ -341,16 +373,21 @@ This works, but skips:
 
 For now: if your extension wants MCP tools, register them imperatively in `onActivate` and subscribe to `crypto:unlocked` via `window.auditable.hooks.on('crypto:unlocked', …)` to re-register. See `src/js/mcp-adapter.js:349–375` for the manifest-driven re-registration pattern used by the host's own tools.
 
-### 3.8 Surfaces, context menus, and path routing (Works-host-only)
+### 3.8 Surfaces, context menus, and path routing (shell context — `works.js`)
 
-**Status: specced, implementation pending.** This section is the contract — pieces ship as separate chunks (the implementation order is in `works/SURFACES.md`'s host-author guide). Surfaces are a Works concept; standalone auditable doesn't have an iframe surface layer, so these capabilities are no-ops when an extension is loaded outside Works. Skipping the contributions cleanly (no errors) is required of the registrar.
+These three capabilities all live in the **shell context** and are registered from `works.js`, NOT `index.js` (see §2.5). Standalone auditable has no shell, so these capabilities are silently ignored there; Works is where they take effect.
+
+`works.js` evaluates in the Works shell window at **install time** and at **Works boot** (once per installed extension). Surfaces and context-menu items appear in the UI immediately — no notebook needs to be open, no cell needs to run, no extension JS needs to be loaded inside a notebook iframe. The shell's own `window.auditable.registerExtension` handles the registration directly.
 
 #### 3.8.1 Surface contributions (`manifest.surfaces`)
 
-Each surface is an HTML file inside the gcupkg that opens as an iframe under Works's rails layout. The contribution is purely declarative — the surface itself talks to the workspace over A-Bus (same `Surface` contract every in-tree surface uses, see `works/SURFACES.md`).
+Each surface is an HTML file inside the gcupkg that opens as an iframe under Works's rails layout. The surface itself talks to the workspace over A-Bus (same `Surface` contract every in-tree surface uses, see `works/SURFACES.md`).
+
+A minimal `works.js` for a viewer:
 
 ```js
-register({
+// works.js — runs in the Works shell, calls the shell's registerExtension.
+window.auditable.registerExtension({
   name: '@example/data-grid',
   version: '0.1.0',
   surfaces: [{
@@ -358,7 +395,7 @@ register({
     label:       'Data Grid',          // shown in the kind picker / new-surface menu (defaults to kind)
     icon:        '⊞',                  // single character; defaults to '■'
     file:        'surface.html',       // path inside the gcupkg (relative; see §3.8.4)
-    extensions:  ['.parquet', '.arrow'], // fast-path file routing (optional)
+    extensions:  ['.parquet', '.arrow'], // fast-path file routing
     detect:      async (path, peek) => /* content-based routing (optional) — see §3.8.3 */,
     openAction:  true,                 // auto-inject "Open in <label>" context-menu item
     requires:    ['abus', 'menu'],     // shared libs to inline at spawn time; defaults to ['abus']
@@ -377,10 +414,13 @@ register({
 
 #### 3.8.2 Context menus (`manifest.contextMenu`)
 
-Custom right-click actions on tree nodes. Composable with — but independent of — surface contributions: an extension that just adds a "Compute statistics" dialog without shipping a surface uses only `contextMenu`. An extension that ships a surface AND wants extra non-open actions uses both.
+Custom right-click actions on tree nodes. Same shell context as §3.8.1, declared in the same `works.js`. Composable with surfaces: an extension that just adds a "Compute statistics" dialog without shipping a surface uses only `contextMenu`. An extension that ships a surface AND wants extra non-open actions uses both.
 
 ```js
-register({
+// works.js (continued)
+window.auditable.registerExtension({
+  name: '@example/data-grid',
+  version: '0.1.0',
   contextMenu: [{
     label:    'Show schema',
     scope:    'file',                            // 'file' | 'folder' | 'project'
@@ -398,8 +438,8 @@ register({
 **Field rules:**
 
 - `scope`: which tree node types fire this action. `'file'` for loose files, `'folder'` for plain directories, `'project'` for `/projects/<name>/` directories with a `project.json`. To match multiple, list the action twice; intentional duplication is OK.
-- `filter`: predicate `(path) => boolean`. Runs once per right-click; cheap. Returning `false` hides the item. If absent, the action applies to every node in scope.
-- `action`: `(path, ctx) => Promise<void>`. Runs in the SHELL's JS context, not the surface iframe. The `ctx` object exposes a curated surface (initial: `ctx.bus` for A-Bus calls, `ctx.dialog` for `@gcu/dialog` prompts/alerts, `ctx.peek(path, n)` for byte reads, `ctx.spawnSurface(kind, opts)` for opening surfaces, `ctx.setStatus(text)` for the status bar). The shape grows by addition only.
+- `filter`: predicate `(path) => boolean`. Runs once per right-click; cheap. Returning `false` hides the item. If absent, the action applies to every node in scope. Lives in `works.js`, runs in shell context — no cross-frame call.
+- `action`: `(path, ctx) => Promise<void>`. Runs in the shell's JS context (same as `filter`). The `ctx` object exposes a curated surface (initial: `ctx.bus` for A-Bus calls, `ctx.dialog` for `@gcu/dialog` prompts/alerts, `ctx.peek(path, n)` for byte reads, `ctx.spawnSurface(kind, opts)` for opening surfaces, `ctx.setStatus(text)` for the status bar). The shape grows by addition only.
 
 Auto-injection via `openAction: true` on a surface is exactly equivalent to:
 
@@ -438,10 +478,11 @@ The detect-pass budget is `~1 MB total` across all surfaces in one resolution; i
 ```
 @example/data-grid@0.1.0.gcupkg
 ├── package.json
-├── index.js                  ← the engine (load("@example/data-grid"))
+├── index.js                  ← notebook entry: cell types, exports, …
+├── works.js                  ← shell entry:    surfaces + contextMenu registrations
 ├── adder.js                  ← optional Python adapter
-├── surface.html              ← single-surface case
-└── surfaces/                 ← multi-surface case (manifest declares file path per kind)
+├── surface.html              ← single-surface case (referenced by works.js)
+└── surfaces/                 ← multi-surface case (works.js declares file path per kind)
     ├── grid.html
     └── schema-viewer.html
 ```
@@ -528,14 +569,12 @@ This pins the theme for the FIRST PAINT before A-Bus delivers the workspace's ac
 
 #### 3.8.7 Lifecycle
 
-- **Install**: `installGcupkg` writes `/lib/<pkg>/`. The cell-side install path then `await import()`s the extension's `index.js`, which calls `auditable.registerExtension({ surfaces, contextMenu })`. Inside Works, this fires *in the notebook iframe's window* — not the shell. `cell-types.js`'s registerExtension detects the iframe context (the shell stashes its A-Bus client at `window._worksBus` during boot) and bridges the contributions to the shell over A-Bus by calling `Extension.Register(manifest)`. The shell's works-service then catches the contribution, reads the surface HTML from `/lib/<pkg>/<file>`, processes it through the same lib-inlining + theme-substitution pipeline built-in surfaces use, and stashes the blob URL. The kind is registered with its routing metadata (extensions list, detect callback, requires list) so `kindForPath` can consult it on the next double-click.
-- **Snapshot persistence**: every successful surface registration also writes a JSON-safe declarative snapshot to `/lib/<pkg>/.works-ext.json`. Schema: `{ version: 1, name, surfaces: [{ kind, label, icon, file, extensions, requires, openAction }], contextMenu: [{ label, scope, icon, section }] }`. Detect callbacks + filter/action functions are NOT in the snapshot — they re-bind when the extension actually loads in the notebook iframe and bridges via A-Bus.
-- **A-Bus bridge (the cross-frame story)**: in the works shell, `cell-types.js`'s registerExtension fallback path is `Extension.Register(manifest)` over A-Bus. The bridged payload strips JS-only fields (detect, filter, action) because structured-clone doesn't carry functions. Result: declarative routing (`extensions: [...]`, `openAction: true`) works end-to-end across the iframe boundary; JS callback routing (detect-based path resolution, contextMenu actions) only works when the *same JS* also runs in the shell context. For v1 the shell never loads extension JS itself; that's documented as a known limitation under §3.8.9.
-- **Boot rehydration**: on Works shell boot, after the workspace VFS is ready, `rehydrateInstalledExtensions()` walks `/lib/<scope>/<pkg>/` + `/lib/local/<pkg>/`, reads each snapshot, and registers a stub manifest with the declarative pieces only. Extension-based path routing works immediately; detect-based routing waits for the JS to load (Slice 5: auto-load on use). This is what makes "install a gcupkg, restart Works, double-click a .parquet file" work without the user first running a cell that calls `load()`.
-- **Replace**: re-install at a new version triggers `cell-types.js`'s "already-registered → unregister-then-register" path, which calls the Works-side unregister hook (revokes blob URL, drops kind, removes openAction). The new registration then takes the same path as a fresh install.
-- **Uninstall**: `pkg remove @example/data-grid` in geas drops `/lib/<pkg>/` (including the snapshot). The current Works session's open tabs of the removed surface stay alive (they hold the blob URL); but on next reload the surface is gone. Future work could add a VFS-watcher that fires unregister hooks live; for v1 the "uninstall takes effect on next reload" gap is acceptable.
+- **Install** — `installGcupkg` writes the archive contents to `/lib/<pkg>/` (engine `source`, `adder/source`, `package.json`, `LICENSE`, plus any custom top-level files: `works.js`, `surface.html`, asset trees, …). Immediately afterwards, the shell's loader evaluates `/lib/<pkg>/works.js` in the shell context if it exists. The script's `window.auditable.registerExtension({...})` call runs synchronously — surfaces, context-menu items, and any future shell-context capabilities are live the moment the install finishes. No notebook needs to be open.
+- **Boot** — when Works boots and the workspace VFS is ready, the shell's loader walks `/lib/<scope>/<pkg>/` and `/lib/local/<pkg>/` looking for `works.js`. Each one evaluates in shell context, in installation order. Same registration path as install — the user sees the same UI state every reload.
+- **Replace** — re-installing at a new version triggers `installGcupkg`'s clean-replace step that wipes `/lib/<pkg>/`, then writes the new contents. The shell's loader evaluates the new `works.js`; `registerExtension` sees the name is already registered, calls the existing unregister hooks (revokes blob URL, drops kind, removes openAction items), and re-registers with the new declaration. No tab reload required — open tabs of an unrelated surface kind survive untouched.
+- **Uninstall** — `pkg remove <name>` in geas drops `/lib/<pkg>/`. The current session's surfaces stay alive (they hold the blob URL); on next reload the surface kind is gone because `works.js` is no longer there to evaluate. A future VFS-watcher could fire unregister hooks live; for v1 "takes effect on next reload" is acceptable.
 
-A reload re-runs the contribution registration from the snapshots — no extension is "active" without an installed entry.
+The notebook-context entry (`index.js`) follows its own separate lifecycle (§2.5 + §4.5) — loaded lazily by the notebook iframe when a cell needs it. Shell-context and notebook-context lifecycles don't interact.
 
 #### 3.8.8 Security
 
@@ -551,9 +590,8 @@ Deliberately out of scope; raise as follow-ups if they bite:
 - **Worker-backed surfaces.** The host doesn't help an extension surface spawn its own Web Worker. The surface does that itself if it wants.
 - **Cross-surface DOM bridges.** Surfaces communicate only via A-Bus; no shared in-memory state across iframe boundaries.
 - **MIME type tables.** No central `mime → kind` map. Use `extensions` + `detect()`; mimics work fine.
-- **Asset bundles separate from `surface.html`.** Inline CSS/data: URLs / small assets directly in the surface HTML. Larger external assets (fonts, images) can live in the gcupkg's `surface-assets/` directory and be referenced via `/lib/<pkg>/surface-assets/<file>` paths — but the host doesn't auto-route those today.
 - **Surface preview / picker UI.** Beyond "right-click → Open in <kind>", there's no kind picker for ambiguous files. Could land later — `kindForPath` could return a list of matches and the shell offers a chooser.
-- **JS callback routing across the iframe boundary.** `detect()`, contextMenu `filter()`, and `action()` are JS — they execute in whichever window evaluates the extension's `index.js`. In standalone auditable that's the main window; in Works that's the *notebook iframe*. The Works shell only has the declarative slice (the snapshot + the bridged payload). So in Works, detect-based path routing and contextMenu actions don't fire from the shell context. Workarounds for v1: declare an `extensions: [...]` list so the routing path is declarative, and emit `openAction: true` so the right-click "Open in" item is synthesized by the shell from declarative data. A shell-side extension loader is a deliberate v2 addition.
+- **Per-workspace capability gating.** A `works.js` runs with full shell access — every A-Bus method `works:` exposes is reachable. v1 trust model is "install = full trust." Future capability flags in `.gcupkg-meta.json` could let the user grant or deny categories (VFS-read, VFS-write, mounts, spawn-surface) at install time.
 
 #### 3.8.10 The host-side guide
 
@@ -811,9 +849,11 @@ A `.gcupkg` is a **`.zip` archive** with a defined internal layout:
 ```
 example@0.1.0.gcupkg                   ← archive filename: <name>@<version>.gcupkg
 ├── package.json                       ← required; same shape as §5.3
-├── index.js                           ← required; the primary ES module entry point
+├── index.js                           ← optional*; NOTEBOOK entry — cell types, taggedLanguages, exports, …
+├── works.js                           ← optional*; SHELL entry — surfaces, contextMenu, MCP tools
 ├── adder.js                           ← optional; Python-shape adapter (§4) — auto-loadable as `<name>/adder`
 ├── soft.js                            ← optional; Soft-shape adapter (same convention)
+├── surface.html                       ← optional; surface asset referenced by works.js (or surfaces/*.html for multiple)
 ├── LICENSE                            ← required; raw license text (any commonly-named file)
 ├── README.md                          ← optional; rendered in the plugin-panel detail view
 ├── SPEC.md                            ← optional; rendered next to README in plugin-panel
@@ -827,7 +867,11 @@ example@0.1.0.gcupkg                   ← archive filename: <name>@<version>.gc
 └── .gcupkg-meta.json                  ← required; bundle metadata (see below)
 ```
 
-Secondary entry points (`adder.js`, future `soft.js`) live at the archive root alongside `index.js` and are declared in `package.json` `exports` map. The installer hydrates them into `_installedModules` under the `<name>/adder` (resp. `<name>/soft`) key so `load("<name>/adder")` from a cell resolves directly without a network fetch.
+*at least one of `index.js` / `works.js` is required — an extension that contributes nothing in either context isn't an extension. Most ship one or the other; only language packs with both runtime semantics and Works UI need both.
+
+Secondary entry points (`adder.js`, future `soft.js`) live at the archive root alongside `index.js` and are declared in `package.json` `exports` map. The installer hydrates them into `_installedModules` under the `<name>/adder` (resp. `<name>/soft`) key so `load("<name>/adder")` from a cell resolves directly without a network fetch. Any other top-level file (e.g. `surface.html`, `icons/icon.svg`, custom asset trees) is mirrored under `/lib/<pkg>/` verbatim — the installer doesn't need to know about each asset by name.
+
+`works.js` is evaluated by the Works shell at install time and at every Works boot; see §3.8.7 for the full lifecycle.
 
 The `.gcupkg-meta.json` is what makes it a "wheel" rather than a generic zip — it commits to a schema:
 
@@ -1039,7 +1083,7 @@ The smallest useful extension is a tagged-language registration. The full templa
 }
 ```
 
-**`index.js`:**
+**`index.js`** — runs in the notebook context (this hello extension contributes only a tagged language, so it's notebook-only; an extension that also added a Works surface would ship a separate `works.js` per §2.5):
 
 ```js
 // One file, one ES module, runs at evaluation time.

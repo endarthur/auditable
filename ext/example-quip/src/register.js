@@ -1,5 +1,12 @@
-// Manifest registration — EXTENSION_SPEC §2. One call wires every
-// capability slot the extension contributes.
+// Notebook-context registration — EXTENSION_SPEC §2.5.
+//
+// This file runs inside the notebook iframe (or the page in standalone
+// auditable). It calls the notebook-side window.auditable.registerExtension,
+// which handles cellType / taggedLanguage / exports / globals.
+//
+// Surfaces + contextMenu are SHELL-context concerns and live in
+// works.js (sibling file). The two contexts never coordinate at the
+// registration layer — each runs where its capabilities take effect.
 
 import { quipParseNames, quipFindUses, quipExecute } from './cell.js';
 import { tokenizeQuip } from './tokenize.js';
@@ -47,43 +54,12 @@ if (typeof window !== 'undefined' && !window._cellTypes?.['quip']) {
         tokenize: tokenizeQuip,
       },
 
-      // §3.5 — cross-language adapter
+      // §3.5 — cross-language adapter (Python-shape namespace)
       exports: { quip: quipNamespace },
 
-      // §3.6 — global (avoid in production extensions; here it's the
-      // tagged-template binding so JS cells can write quip`…` without
-      // an explicit load).
+      // §3.6 — global (the tagged-template binding so JS cells can
+      // write quip`…` without an explicit load)
       globals: { quip: quipTag },
-
-      // §3.8 — Works surface + context menu. No-op outside Works.
-      surfaces: [
-        {
-          kind:        'example-quip-viewer',
-          label:       'Quip Viewer',
-          icon:        '◐',
-          file:        'surface.html',
-          extensions:  ['.quip'],
-          openAction:  true,
-          requires:    ['abus'],
-        },
-      ],
-      contextMenu: [
-        {
-          label:  'Export as JSON',
-          scope:  'file',
-          filter: (path) => path.toLowerCase().endsWith('.quip'),
-          action: async (path, ctx) => {
-            const src = await ctx.vfs.readFile(path, 'utf8');
-            // Lazy parse — fail loud if the file is broken so the user
-            // knows where to look.
-            const { parseQuip } = await import('./parse.js');
-            const parsed = parseQuip(src);
-            const jsonPath = path.replace(/\.quip$/i, '.json');
-            await ctx.vfs.writeFile(jsonPath, JSON.stringify(parsed, null, 2));
-            ctx.setStatus(`wrote ${jsonPath}`);
-          },
-        },
-      ],
     });
   }
 }

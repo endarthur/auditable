@@ -314,6 +314,23 @@ test('installGcupkg: writes docs to /usr/share/docs/<slug>/', async () => {
   assert.ok(vfs.files.has('/usr/share/docs/@test_docsy/index.md'));
 });
 
+test('installGcupkg: writes top-level works.js (EXTENSION_SPEC §2.5 shell entry)', async () => {
+  // works.js is the shell-context entry point. Installer must mirror it to
+  // /lib/<pkg>/works.js so extension-loader.js can evaluate it at install +
+  // boot.
+  const { bytes } = buildFixture({
+    name: '@test/has-works',
+    extras: { 'works.js': 'window.auditable.registerExtension({ name: "@test/has-works", version: "0.1.0", surfaces: [] });' },
+  });
+  const parsed = await parseGcupkg(bytes, archiveLib);
+  const vfs = makeVfs();
+  await installGcupkg(parsed, { vfs, installedModules: {} });
+  assert.ok(vfs.files.has('/lib/@test/has-works/works.js'),
+    'works.js must be written to /lib/<pkg>/');
+  const written = new TextDecoder().decode(vfs.files.get('/lib/@test/has-works/works.js'));
+  assert.match(written, /window\.auditable\.registerExtension/);
+});
+
 test('installGcupkg: writes top-level surface HTML files (referenced by manifest.surfaces)', async () => {
   // Regression — installer used to silently drop any top-level file
   // outside the hardcoded set (index.js / adder.js / LICENSE / etc).

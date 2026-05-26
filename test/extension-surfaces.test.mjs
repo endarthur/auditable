@@ -98,29 +98,10 @@ describe('registerExtensionSurfaces — happy path', () => {
     reg.unregisterKind('test-foo-grid');
   });
 
-  it('writes a .works-ext.json snapshot under /lib/<pkg>/', async () => {
-    const vfs = stateMod.WKS.vfs;
-    vfs.files.set('/lib/@test/snap/surface.html', '<html></html>');
-
-    await extSurf.registerExtensionSurfaces({
-      name: '@test/snap', version: '0.2.0',
-      surfaces: [{ kind: 'test-snap-1', file: 'surface.html', extensions: ['.snap'] }],
-      contextMenu: [{ label: 'Inspect', scope: 'file' }],
-    });
-
-    assert.ok(vfs.files.has('/lib/@test/snap/.works-ext.json'));
-    const raw = await vfs.readFile('/lib/@test/snap/.works-ext.json', 'utf8');
-    const snap = JSON.parse(raw);
-    assert.equal(snap.version, 1);
-    assert.equal(snap.name, '@test/snap');
-    assert.equal(snap.surfaces[0].kind, 'test-snap-1');
-    assert.deepEqual(snap.surfaces[0].extensions, ['.snap']);
-    assert.equal(snap.contextMenu[0].label, 'Inspect');
-
-    reg.unregisterKind('test-snap-1');
-  });
-
-  it('snapshot omits detect callbacks (JS not JSON-safe)', async () => {
+  it('retains detect callback in the live registration', async () => {
+    // Detect lives in works.js (shell context), runs in the shell — so
+    // the registration just stores the live function reference, no
+    // serialization concerns.
     const vfs = stateMod.WKS.vfs;
     vfs.files.set('/lib/@test/with-detect/surface.html', '<html></html>');
 
@@ -134,9 +115,6 @@ describe('registerExtensionSurfaces — happy path', () => {
       }],
     });
 
-    const snap = JSON.parse(await vfs.readFile('/lib/@test/with-detect/.works-ext.json', 'utf8'));
-    assert.equal(snap.surfaces[0].detect, undefined, 'detect callback must not be serialized');
-    // But the live registration DOES have it (Slice 2's detect path needs it).
     const def = reg.kindDef('test-with-detect');
     assert.equal(typeof def.detect, 'function');
 
@@ -161,83 +139,3 @@ describe('registerExtensionSurfaces — happy path', () => {
   });
 });
 
-describe('rehydrateInstalledExtensions — boot-time pickup', () => {
-  it('reads .works-ext.json from every /lib/<scope>/<pkg>/ and registers declarative pieces', async () => {
-    const vfs = stateMod.WKS.vfs;
-    // Populate as if a previous session had installed @test/rehydrate
-    vfs.files.set('/lib/@test/rehydrate/surface.html', '<html>rehydrated</html>');
-    vfs.files.set('/lib/@test/rehydrate/.works-ext.json', JSON.stringify({
-      version: 1,
-      name: '@test/rehydrate',
-      surfaces: [{
-        kind: 'test-rehydrated-1',
-        label: 'Rehydrated',
-        file: 'surface.html',
-        extensions: ['.rehyd'],
-      }],
-      contextMenu: [],
-    }));
-
-    await extSurf.rehydrateInstalledExtensions();
-
-    const def = reg.kindDef('test-rehydrated-1');
-    assert.ok(def);
-    assert.equal(def.label, 'Rehydrated');
-    assert.deepEqual(def.extensions, ['.rehyd']);
-
-    reg.unregisterKind('test-rehydrated-1');
-  });
-
-  it('handles /lib/local/<bare-pkg>/ packages too', async () => {
-    const vfs = stateMod.WKS.vfs;
-    vfs.files.set('/lib/local/bare/surface.html', '<html></html>');
-    vfs.files.set('/lib/local/bare/.works-ext.json', JSON.stringify({
-      version: 1,
-      name: 'bare',
-      surfaces: [{ kind: 'test-bare-local', file: 'surface.html', extensions: ['.bare'] }],
-      contextMenu: [],
-    }));
-    await extSurf.rehydrateInstalledExtensions();
-    assert.ok(reg.kindDef('test-bare-local'));
-    reg.unregisterKind('test-bare-local');
-  });
-
-  it('skips packages without a snapshot (extensions that contribute no surfaces)', async () => {
-    const vfs = stateMod.WKS.vfs;
-    vfs.files.set('/lib/@test/no-surfaces/source', 'export default 1;');
-    // No .works-ext.json on disk — rehydrate just skips.
-    await extSurf.rehydrateInstalledExtensions();
-    // Nothing to assert positively — just that the call didn't throw.
-    assert.ok(true);
-  });
-
-  it('handles a missing /lib gracefully', async () => {
-    // No /lib in the fresh VFS — rehydrate must not throw.
-    stateMod.WKS.vfs = makeFakeVfs();
-    await extSurf.rehydrateInstalledExtensions();
-    assert.ok(true);
-  });
-
-  it('logs and skips a malformed snapshot, continues with the rest', async () => {
-    const vfs = stateMod.WKS.vfs;
-    vfs.files.set('/lib/@test/bad/surface.html', '<html></html>');
-    vfs.files.set('/lib/@test/bad/.works-ext.json', '{ not valid json');
-    vfs.files.set('/lib/@test/good/surface.html', '<html></html>');
-    vfs.files.set('/lib/@test/good/.works-ext.json', JSON.stringify({
-      version: 1, name: '@test/good',
-      surfaces: [{ kind: 'test-good-survives', file: 'surface.html', extensions: ['.good'] }],
-    }));
-
-    const errs = [];
-    const origWarn = console.warn;
-    console.warn = (...a) => errs.push(a.join(' '));
-    try {
-      await extSurf.rehydrateInstalledExtensions();
-    } finally { console.warn = origWarn; }
-
-    assert.ok(reg.kindDef('test-good-survives'), 'good package should register despite bad neighbor');
-    assert.ok(errs.some(s => s.includes('malformed snapshot')), 'should log malformed snapshot');
-
-    reg.unregisterKind('test-good-survives');
-  });
-});

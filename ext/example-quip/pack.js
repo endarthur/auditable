@@ -111,7 +111,8 @@ export { _quip as quipAdder };
 
 ensureFreshBuild();
 
-const indexJs   = read('index.js');
+const indexJs   = read('index.js');                  // notebook context
+const worksJs   = read('works.js');                  // shell context
 const adderJs   = Buffer.from(adderJsContent(), 'utf8');
 const surface   = read('surface.html');
 const license   = maybeRead('LICENSE') || Buffer.from('MIT — example only.\n', 'utf8');
@@ -120,8 +121,6 @@ const spec      = maybeRead('SPEC.md');
 const tourTxt   = maybeRead('examples/quip-tour.txt');
 const exManif   = maybeRead('examples/manifest.json');
 
-// Also ship adder.js source AS-IS to /lib via the installer, plus
-// surface.html (so the surface kind can spawn it).
 const packageJson = read('package.json');
 
 // Build the file map. Keys are archive paths (forward-slashed); values
@@ -129,6 +128,7 @@ const packageJson = read('package.json');
 const files = {
   'package.json': packageJson,
   'index.js':     indexJs,
+  'works.js':     worksJs,
   'adder.js':     adderJs,
   'surface.html': surface,
   'LICENSE':      license,
@@ -138,8 +138,8 @@ if (spec)    files['SPEC.md']    = spec;
 if (tourTxt) files['examples/quip-tour.txt'] = tourTxt;
 if (exManif) files['examples/manifest.json'] = exManif;
 
-// Integrity: SHA-256 over sorted [index.js, adder.js] with NUL framing.
-const covers = ['adder.js', 'index.js'];
+// Integrity: SHA-256 over sorted [adder.js, index.js, works.js] with NUL framing.
+const covers = ['adder.js', 'index.js', 'works.js'];
 function sriHashOver(coverNames) {
   const h = crypto.createHash('sha256');
   for (const name of coverNames) {
@@ -161,7 +161,7 @@ const meta = {
   description: pkgObj.description,
   spdx:        pkgObj.license,
   contributes: ['cellType', 'taggedLanguage', 'exports', 'globals', 'surface', 'contextMenu'],
-  size:        { 'index.js': indexJs.length, 'adder.js': adderJs.length },
+  size:        { 'index.js': indexJs.length, 'works.js': worksJs.length, 'adder.js': adderJs.length },
   integrity,
   integrityCovers: covers,
 };

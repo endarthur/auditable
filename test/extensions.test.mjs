@@ -159,105 +159,24 @@ describe('registerExtension — validation', () => {
     }), /scope must be one of/);
   });
 
-  it('surfaces + contextMenu no-op outside Works (hooks absent)', () => {
-    // Standalone-side: no _worksRegisterExtensionSurfaces. Registration
-    // must succeed with shape-validated input and silently skip the
-    // host-side handoff.
-    assert.equal(typeof window._worksRegisterExtensionSurfaces, 'undefined');
-    assert.doesNotThrow(() => registerExtension({
-      name: '@gcu/noop-host', version: '0.1.0',
-      surfaces: [{ kind: 'noop-1', file: 'x.html', extensions: ['.foo'] }],
-      contextMenu: [{ label: 'noop', scope: 'file', action: () => {} }],
-    }));
-  });
-});
-
-// ── A-Bus bridge for cross-frame surface registration (EXTENSION_SPEC §3.8) ──
-//
-// When the notebook iframe registers an extension in Works, the iframe's
-// window._worksRegisterExtensionSurfaces is undefined (it lives on the
-// shell window). cell-types.js falls back to calling Extension.Register
-// over A-Bus on the stashed window._worksBus.
-
-describe('registerExtension — cross-frame A-Bus bridge', () => {
-  let captured;
-  beforeEach(() => {
-    captured = [];
-    window._worksBus = {
-      call: (addr, args) => {
-        captured.push({ addr, args });
-        return Promise.resolve(true);
-      },
-    };
-  });
-
-  it('forwards surfaces to Extension.Register over A-Bus', () => {
-    registerExtension({
-      name: '@gcu/bridge-1', version: '0.1.0',
-      surfaces: [{ kind: 'bridge-grid-1', file: 'surface.html', extensions: ['.bdg1'] }],
-    });
-    assert.equal(captured.length, 1);
-    assert.equal(captured[0].addr.to, 'works');
-    assert.equal(captured[0].addr.interface, 'Extension');
-    assert.equal(captured[0].addr.member, 'Register');
-    const payload = captured[0].args[0];
-    assert.equal(payload.name, '@gcu/bridge-1');
-    assert.equal(payload.surfaces[0].kind, 'bridge-grid-1');
-    assert.deepEqual(payload.surfaces[0].extensions, ['.bdg1']);
-  });
-
-  it('strips detect callbacks from the bridged payload (not structured-clone-safe)', () => {
-    registerExtension({
-      name: '@gcu/bridge-2', version: '0.1.0',
-      surfaces: [{
-        kind: 'bridge-grid-2', file: 'surface.html', extensions: ['.bdg2'],
-        detect: async () => true,
-      }],
-    });
-    const payload = captured[0].args[0];
-    assert.equal(payload.surfaces[0].detect, undefined);
-  });
-
-  it('strips filter + action functions from contextMenu before bridging', () => {
-    registerExtension({
-      name: '@gcu/bridge-3', version: '0.1.0',
-      contextMenu: [{
-        label: 'Test',
-        scope: 'file',
-        filter: (p) => p.endsWith('.x'),
-        action: () => {},
-      }],
-    });
-    const payload = captured[0].args[0];
-    assert.equal(payload.contextMenu[0].label, 'Test');
-    assert.equal(payload.contextMenu[0].scope, 'file');
-    assert.equal(payload.contextMenu[0].filter, undefined);
-    assert.equal(payload.contextMenu[0].action, undefined);
-  });
-
-  it('single Register call when both surfaces AND contextMenu are present', () => {
-    registerExtension({
-      name: '@gcu/bridge-4', version: '0.1.0',
-      surfaces: [{ kind: 'bridge-grid-4', file: 'surface.html', extensions: ['.bdg4'] }],
-      contextMenu: [{ label: 'X', scope: 'file', action: () => {} }],
-    });
-    assert.equal(captured.length, 1, 'should bundle both fields into one bridge call');
-    assert.equal(captured[0].args[0].surfaces.length, 1);
-    assert.equal(captured[0].args[0].contextMenu.length, 1);
-  });
-
-  it('prefers the same-window hook when both are available', () => {
-    window._worksRegisterExtensionSurfaces = () => { captured.push({ direct: true }); };
+  it('surfaces + contextMenu in notebook-context warns + skips registration', () => {
+    // EXTENSION_SPEC §2.5: surfaces and contextMenu belong in works.js
+    // (shell context), not index.js (notebook context). The notebook-side
+    // registerExtension shape-validates them (so a malformed declaration
+    // still throws) but logs a warning instead of trying to register —
+    // the actual registration happens in the shell when works.js loads.
+    const warnings = [];
+    const origWarn = console.warn;
+    console.warn = (...a) => warnings.push(a.join(' '));
     try {
       registerExtension({
-        name: '@gcu/bridge-5', version: '0.1.0',
-        surfaces: [{ kind: 'bridge-grid-5', file: 'surface.html', extensions: ['.bdg5'] }],
+        name: '@gcu/wrong-context', version: '0.1.0',
+        surfaces: [{ kind: 'wc-1', file: 'x.html', extensions: ['.foo'] }],
+        contextMenu: [{ label: 'wc-menu', scope: 'file', action: () => {} }],
       });
-      assert.equal(captured.length, 1);
-      assert.equal(captured[0].direct, true);
-    } finally {
-      delete window._worksRegisterExtensionSurfaces;
-    }
+    } finally { console.warn = origWarn; }
+    assert.ok(warnings.some(w => w.includes('surfaces') && w.includes('works.js')));
+    assert.ok(warnings.some(w => w.includes('contextMenu') && w.includes('works.js')));
   });
 });
 

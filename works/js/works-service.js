@@ -7,8 +7,6 @@ import { WKS } from './state.js';
 import { openPath } from './surfaces.js';
 import { mountFolder, unmountAt } from './mount.js';
 import { applyWorkspaceSettings, readSettings, writeSettings } from './settings-store.js';
-import { registerExtensionSurfaces, unregisterExtensionSurfaces } from './extension-surfaces.js';
-import { registerExtensionContextMenu, unregisterExtensionContextMenu } from './context-menu-registry.js';
 import { showAbout } from './about.js';
 import { aggregateFromBuildLicenses } from '#licenses';
 import { archive } from '#archive';
@@ -105,48 +103,6 @@ export async function setupWorksService() {
           applyWorkspaceSettings(next);
           bus.signal({ path: '/', interface: 'Shell', member: 'SettingsChanged' }, [next]);
           return next;
-        },
-      },
-    },
-    // Extension registry — EXTENSION_SPEC §3.8. The notebook iframe's
-    // window.auditable.registerExtension fires inside the iframe context,
-    // but Surfaces + contextMenu contributions must reach the SHELL's
-    // registries (KINDS, _items). The notebook's host-detection logic
-    // detects we're in Works and calls Extension.Register over A-Bus
-    // with a JSON-safe slice of the manifest. The methods are idempotent
-    // — re-registering the same manifest replaces the previous entries.
-    Extension: {
-      methods: {
-        Register: async (manifest) => {
-          if (!manifest || !manifest.name) return false;
-          // Skip the JS-only fields — they don't survive A-Bus's structured
-          // clone (functions can't cross the boundary). The iframe's caller
-          // is expected to keep its live registration locally; the shell
-          // gets the declarative slice. detect callbacks won't work without
-          // the live JS in the shell; that's an accepted §3.8.9 limit.
-          try {
-            if (Array.isArray(manifest.surfaces) && manifest.surfaces.length > 0) {
-              await registerExtensionSurfaces(manifest);
-            }
-            if (Array.isArray(manifest.contextMenu) && manifest.contextMenu.length > 0) {
-              registerExtensionContextMenu(manifest);
-            }
-            return true;
-          } catch (e) {
-            console.error('[works] Extension.Register for', manifest.name, ':', e);
-            return false;
-          }
-        },
-        Unregister: (manifest) => {
-          if (!manifest || !manifest.name) return false;
-          try {
-            unregisterExtensionSurfaces(manifest);
-            unregisterExtensionContextMenu(manifest);
-            return true;
-          } catch (e) {
-            console.error('[works] Extension.Unregister for', manifest.name, ':', e);
-            return false;
-          }
         },
       },
     },

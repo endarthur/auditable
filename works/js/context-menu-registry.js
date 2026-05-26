@@ -113,12 +113,6 @@ export function unregisterOpenActionForSurface(kind) {
   _openActions.delete(kind);
 }
 
-// Install the cell-types.js hooks. Call once during shell boot.
-export function installHooks() {
-  window._worksRegisterExtensionContextMenu   = registerExtensionContextMenu;
-  window._worksUnregisterExtensionContextMenu = unregisterExtensionContextMenu;
-}
-
 // Test-only helper to wipe state between describe() blocks. Not part
 // of the public API — production callers go through (un)register.
 export function _resetForTests() {
