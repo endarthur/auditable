@@ -256,7 +256,7 @@ if (target === 'works' || target === 'works-all') {
   const worksZlib = require('zlib');
 
   const isWorksAll = (target === 'works-all');
-  const SHARED_LIBS_BASE = ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline', 'markdown', 'librarian', 'ipynb', 'cm6'];
+  const SHARED_LIBS_BASE = ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline', 'markdown', 'librarian', 'ipynb', 'cm6', 'menu'];
   // For --target=works-all: bundle every ext/<name>/index.js that's a real
   // bundle (skip the re-export shims under ~1 KB — they break the
   // single-file SHARED_LIBS pattern because they import from sibling files).
