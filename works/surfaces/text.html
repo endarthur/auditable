@@ -14,109 +14,95 @@
     flex-direction: column;
   }
 
-  /* ── Menubar (uses @gcu/menu — injected CSS lives at end of stylesheet) */
   .menubar-host {
     flex: none;
     background: var(--au-surface);
     border-bottom: 1px solid var(--au-border);
   }
 
-  /* ── Find/replace bar (toggleable; Ctrl+F / Ctrl+H) */
-  .findbar {
-    flex: none;
-    display: none;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 8px;
-    background: var(--au-surface-raised);
-    border-bottom: 1px solid var(--au-border);
-    font: 11px/1.4 ui-monospace, 'Space Mono', Menlo, monospace;
+  /* ── Editor container ──────────────────────────────────────────────
+     CodeMirror's EditorView attaches its own DOM under this element.
+     We let CM6 own everything below the menubar — gutters, scrolling,
+     selection, search panel, the lot. */
+  #editor-root {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--au-surface-deep);
+    display: flex;
   }
-  .findbar.visible { display: flex; }
-  .findbar.has-replace .replace-row { display: flex; }
-  .findbar .row { display: flex; align-items: center; gap: 4px; flex-wrap: nowrap; }
-  .findbar .replace-row { display: none; }
-  .findbar input[type=text] {
+  #editor-root .cm-editor {
+    flex: 1 1 auto;
+    height: 100%;
+    background: var(--au-surface-deep);
+    color: var(--au-fg);
+    font: 13px/1.55 ui-monospace, 'Space Mono', Menlo, monospace;
+  }
+  #editor-root .cm-scroller {
+    font-family: inherit;
+    line-height: 1.55;
+  }
+  #editor-root .cm-content {
+    padding: 8px 4px 8px 0;
+    caret-color: var(--au-action);
+  }
+  #editor-root .cm-gutters {
+    background: var(--au-surface);
+    color: var(--au-fg-soft);
+    border-right: 1px solid var(--au-border);
+  }
+  #editor-root .cm-activeLineGutter,
+  #editor-root .cm-activeLine {
+    background: var(--au-surface-bright);
+  }
+  #editor-root .cm-cursor,
+  #editor-root .cm-dropCursor { border-left-color: var(--au-action); }
+  #editor-root .cm-selectionBackground,
+  #editor-root .cm-focused .cm-selectionBackground,
+  #editor-root ::selection {
+    background: var(--au-selected-soft) !important;
+  }
+  #editor-root .cm-focused { outline: none; }
+
+  /* CM6's built-in search panel — restyled to match the GCU chrome. */
+  #editor-root .cm-panels {
+    background: var(--au-surface-raised);
+    color: var(--au-fg);
+    border-color: var(--au-border);
+  }
+  #editor-root .cm-panels.cm-panels-top { border-bottom: 1px solid var(--au-border); }
+  #editor-root .cm-panels.cm-panels-bottom { border-top: 1px solid var(--au-border); }
+  #editor-root .cm-panel input,
+  #editor-root .cm-panel button,
+  #editor-root .cm-panel label {
+    font: 11px/1.4 ui-monospace, 'Space Mono', Menlo, monospace;
+    color: var(--au-fg);
+  }
+  #editor-root .cm-panel input {
     background: var(--au-surface-deep);
     border: 1px solid var(--au-border);
-    color: var(--au-fg);
     padding: 2px 6px;
-    font: inherit;
-    width: 200px;
-    outline: none;
     border-radius: 2px;
+    outline: none;
   }
-  .findbar input[type=text]:focus { border-color: var(--au-action); }
-  .findbar button {
+  #editor-root .cm-panel input:focus { border-color: var(--au-action); }
+  #editor-root .cm-panel button {
     background: none;
     border: 1px solid var(--au-border);
-    color: var(--au-fg-muted);
     padding: 2px 8px;
     border-radius: 2px;
     cursor: pointer;
-    font: inherit;
-  }
-  .findbar button:hover { color: var(--au-fg); border-color: var(--au-fg-soft); }
-  .findbar button.on { color: var(--au-action); border-color: var(--au-action); }
-  .findbar .count {
+    margin-left: 4px;
     color: var(--au-fg-muted);
-    min-width: 5em;
   }
-  .findbar .spacer { flex: 1; }
-
-  /* ── Editor area ──────────────────────────────────────────────────── */
-  .editor {
-    flex: 1 1 auto;
-    min-height: 0;
-    display: flex;
-    overflow: hidden;
-    background: var(--au-surface-deep);
-  }
-  .gutter {
-    flex: none;
-    padding: 10px 10px 10px 14px;
-    text-align: right;
-    color: var(--au-fg-soft);
-    user-select: none;
-    background: var(--au-surface);
-    border-right: 1px solid var(--au-border);
-    /* Scrollable but the scrollbar is hidden — gutter.scrollTop is
-       synced with the textarea's scrollTop on every scroll event.
-       More robust than transform: scrollTop is preserved across
-       layout reflows (find-bar toggle, status-bar toggle, window
-       resize); transform was getting stranded with stale values. */
-    overflow-y: scroll;
-    overflow-x: hidden;
-    scrollbar-width: none;          /* Firefox */
-    -ms-overflow-style: none;       /* IE/old Edge */
-    white-space: pre;
-    font-variant-numeric: tabular-nums;
-    min-width: 3em;
-    box-sizing: border-box;
-  }
-  .gutter::-webkit-scrollbar { display: none; }
-  .gutter.hidden { display: none; }
-  textarea {
-    flex: 1 1 auto;
-    box-sizing: border-box;
-    margin: 0;
-    border: 0;
-    padding: 10px 14px;
-    resize: none;
-    outline: none;
-    background: transparent;
+  #editor-root .cm-panel button:hover {
     color: var(--au-fg);
-    font: inherit;
-    tab-size: 2;
-    white-space: pre;
-    overflow: auto;
+    border-color: var(--au-fg-soft);
   }
-  textarea.wrap {
-    white-space: pre-wrap;
-    overflow-x: hidden;
-  }
+  #editor-root .cm-search-match { background: var(--au-action-soft); }
+  #editor-root .cm-selectionMatch { background: var(--au-warn-soft); }
 
-  /* ── Status bar ───────────────────────────────────────────────────── */
+  /* ── Status bar ──────────────────────────────────────────────────── */
   .statusbar {
     flex: none;
     display: flex;
@@ -131,7 +117,7 @@
   }
   .statusbar.hidden { display: none; }
   .status-path { color: var(--au-fg); }
-  .status-pos, .status-size { color: var(--au-fg-muted); }
+  .status-pos, .status-size, .status-lang { color: var(--au-fg-muted); }
   .status-dirty {
     color: var(--au-warn);
     font-weight: 700;
@@ -140,7 +126,7 @@
   }
   .status-spacer { flex: 1; }
 
-  /* ── GCU thin scrollbar ───────────────────────────────────────────── */
+  /* ── Scrollbars (GCU thin) ───────────────────────────────────────── */
   * {
     scrollbar-width: thin;
     scrollbar-color: var(--au-border) transparent;
@@ -157,45 +143,32 @@
 </head>
 <body>
 <!--
-  A text editor surface for Auditable Works — opens a loose file from the
-  workspace, edits it, flushes it back through the `works` service. A real
-  surface: it exercises the whole §5.2 contract (Flush / CanClose / dirty
-  tracking / self-flush).
+  Text editor surface for Auditable Works. Now backed by CodeMirror 6 —
+  swap from the prior textarea approach removed ~500 LOC of manual
+  gutter-sync / scroll-preservation / find-replace handling that CM6
+  ships solved out of the box.
 
-  Notepad-shape with a real menubar (File / Edit / View), line numbers,
-  find/replace bar, status bar, word-wrap toggle. CM6-grade syntax
-  highlighting is deliberately out of scope here — this surface is for
-  LICENSE / README / notebook.txt / config-file editing where the
-  simplicity wins.
+  CM6 is loaded via the works shared-lib mechanism: the build inlines
+  `/* @cm6-inline */` below with the cm6.min.js IIFE source, exposing
+  `CM6` as a module-scope variable. Disk-only dedup with other surfaces
+  that opt into @gcu/cm6 — one copy in works.html, one fresh runtime
+  copy per iframe scope.
+
+  Language extensions match by file extension: js / py / css / html
+  get their respective lang packages; everything else stays plain text.
+
+  Still ours to own: the @gcu/menu menubar (File / Edit / View) + the
+  status bar at the bottom. Find/Replace routes to CM6's built-in
+  search panel (openSearchPanel) instead of our previous custom bar.
 -->
 <div class="menubar-host" id="menubar"></div>
-<div class="findbar" id="findbar" role="search">
-  <div class="row">
-    <span>Find:</span>
-    <input type="text" id="find-input" autocomplete="off" spellcheck="false">
-    <button type="button" id="find-prev" title="Previous match (Shift+Enter)">▲</button>
-    <button type="button" id="find-next" title="Next match (Enter)">▼</button>
-    <button type="button" id="find-case" title="Match case (Alt+C)">Aa</button>
-    <span class="count" id="find-count"></span>
-  </div>
-  <div class="row replace-row">
-    <span>Replace:</span>
-    <input type="text" id="replace-input" autocomplete="off" spellcheck="false">
-    <button type="button" id="replace-one" title="Replace current match">Replace</button>
-    <button type="button" id="replace-all" title="Replace all matches">All</button>
-  </div>
-  <div class="spacer"></div>
-  <button type="button" id="find-close" title="Close (Esc)">✕</button>
-</div>
-<div class="editor">
-  <div class="gutter" id="gutter">1</div>
-  <textarea id="editor" spellcheck="false" placeholder="loading…" wrap="off"></textarea>
-</div>
+<div id="editor-root"></div>
 <div class="statusbar" id="statusbar">
   <span class="status-dirty" id="status-dirty"> </span>
   <span class="status-path" id="status-path">—</span>
   <span class="status-pos" id="status-pos">ln 1, col 1</span>
   <span class="status-size" id="status-size">0 B</span>
+  <span class="status-lang" id="status-lang"></span>
   <span class="status-spacer"></span>
 </div>
 <script type="module">
@@ -204,18 +177,29 @@ import { MenuBar } from '../../ext/menu/index.js';
 
 /* @theme-init */
 
-const editor    = document.getElementById('editor');
-const gutter    = document.getElementById('gutter');
+/* @cm6-inline */
+
+// CM6 is now in scope after the inlined IIFE. Destructure the symbols
+// the surface uses. (Adding a new feature later — bracket matching,
+// autocomplete, etc. — means pulling more names from CM6 here AND
+// extending ext/cm6/entry.mjs's export list.)
+const {
+  EditorView, EditorState, Compartment,
+  lineNumbers, highlightActiveLine, drawSelection,
+  history, undo, redo, indentWithTab,
+  keymap, minimalSetup,
+  openSearchPanel, searchKeymap, search,
+  bracketMatching, indentOnInput,
+  javascript, css: cssLang, python, html: htmlLang,
+} = CM6;
+
 const statusBar = document.getElementById('statusbar');
 const sDirty    = document.getElementById('status-dirty');
 const sPath     = document.getElementById('status-path');
 const sPos      = document.getElementById('status-pos');
 const sSize     = document.getElementById('status-size');
-const findBar   = document.getElementById('findbar');
-const findIn    = document.getElementById('find-input');
-const replIn    = document.getElementById('replace-input');
-const findCount = document.getElementById('find-count');
-const btnCase   = document.getElementById('find-case');
+const sLang     = document.getElementById('status-lang');
+const editorRoot = document.getElementById('editor-root');
 
 const basename = (p) => p.split('/').filter(Boolean).pop() || p;
 const fmtBytes = (n) =>
@@ -223,242 +207,141 @@ const fmtBytes = (n) =>
   : n < 1024 * 1024 ? (n / 1024).toFixed(1) + ' KB'
   : (n / 1024 / 1024).toFixed(1) + ' MB';
 
-// ── View toggles ───────────────────────────────────────────────────────
-// Plain mutable booleans; the menubar re-renders on each open via the
-// thunk we hand to MenuBar, so checkmarks reflect current state.
+// ── Language detection ────────────────────────────────────────────────
+// Match by file extension; default to plain text. Extending: add an entry,
+// and ensure the language module is re-exported from ext/cm6/entry.mjs.
+function langForPath(p) {
+  const ext = (p.match(/\.([^./]+)$/) || ['', ''])[1].toLowerCase();
+  switch (ext) {
+    case 'js': case 'mjs': case 'cjs': case 'jsx': case 'ts': case 'tsx':
+      return { name: 'JavaScript', ext: javascript() };
+    case 'py':
+      return { name: 'Python', ext: python() };
+    case 'css':
+      return { name: 'CSS', ext: cssLang() };
+    case 'html': case 'htm': case 'xml': case 'svg':
+      return { name: 'HTML', ext: htmlLang() };
+    case 'json':
+      // CM6's javascript() handles JSON well enough — no separate JSON pkg.
+      return { name: 'JSON', ext: javascript() };
+    default:
+      return { name: '', ext: [] };
+  }
+}
+
+// ── View toggles (line numbers / wrap / status bar) ─────────────────
+// Compartments let us reconfigure individual extensions at runtime
+// without rebuilding the whole state. CM6 pattern.
+const lineNumCompartment = new Compartment();
+const wrapCompartment    = new Compartment();
+const langCompartment    = new Compartment();
+
 let showLineNumbers = true;
-let showStatusBar   = true;
 let wrap            = false;
+let showStatusBar   = true;
 
-function applyView() {
-  gutter.classList.toggle('hidden', !showLineNumbers);
+function applyViewToggles() {
+  view.dispatch({
+    effects: [
+      lineNumCompartment.reconfigure(showLineNumbers ? lineNumbers() : []),
+      wrapCompartment.reconfigure(wrap ? EditorView.lineWrapping : []),
+    ],
+  });
   statusBar.classList.toggle('hidden', !showStatusBar);
-  editor.classList.toggle('wrap', wrap);
-  editor.setAttribute('wrap', wrap ? 'soft' : 'off');
 }
 
-// ── Editor state derivations ───────────────────────────────────────────
-
-function lineColumn(text, idx) {
-  let line = 1, lineStart = 0;
-  for (let i = 0; i < idx && i < text.length; i++) {
-    if (text.charCodeAt(i) === 10) { line++; lineStart = i + 1; }
-  }
-  return { line, col: idx - lineStart + 1 };
-}
-function lineCount(text) {
-  if (text.length === 0) return 1;
-  let n = 1;
-  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) n++;
-  return n;
-}
-function renderGutter() {
-  if (!showLineNumbers) return;
-  const n = lineCount(editor.value);
-  let s = '';
-  for (let i = 1; i <= n; i++) s += i + '\n';
-  gutter.textContent = s;
-  const digits = String(n).length;
-  gutter.style.minWidth = Math.max(3, digits + 1) + 'em';
-}
+// ── Status-bar updates piggyback on a CM6 updateListener ──────────────
 function updateStatus() {
-  const v = editor.value;
-  const { line, col } = lineColumn(v, editor.selectionStart);
-  sPos.textContent = 'ln ' + line + ', col ' + col;
-  sSize.textContent = fmtBytes(v.length);
+  const state = view.state;
+  const head = state.selection.main.head;
+  const line = state.doc.lineAt(head);
+  sPos.textContent = 'ln ' + line.number + ', col ' + (head - line.from + 1);
+  sSize.textContent = fmtBytes(state.doc.length);
 }
 
-// Mirror the textarea's vertical scroll on the gutter. The gutter is a
-// scrollable element with its scrollbar hidden via CSS — we just keep
-// scrollTop in lockstep. Survives layout reflows (find-bar toggle,
-// status-bar toggle, wrap toggle, window resize) without needing a
-// ResizeObserver, because scrollTop is a layout-stable property in a
-// way transform isn't.
-function syncGutterScroll() {
-  gutter.scrollTop = editor.scrollTop;
+// ── A-Bus wire-up ─────────────────────────────────────────────────────
+let view;
+let bus;
+let saved = '';
+let filePath = '';
+let dirty = false;
+let flushTimer = null;
+
+const emit = (member, args) =>
+  bus.signal({ path: '/', interface: 'Surface', member }, args);
+
+function setDirty(d) {
+  if (dirty === d) return;
+  dirty = d;
+  sDirty.textContent = dirty ? '●' : ' ';
+  emit('DirtyChanged', [dirty]);
 }
-editor.addEventListener('scroll', syncGutterScroll);
-editor.addEventListener('keyup',   updateStatus);
-editor.addEventListener('click',   updateStatus);
-editor.addEventListener('mouseup', updateStatus);
 
-// Tab key inserts spaces instead of moving focus.
-editor.addEventListener('keydown', (e) => {
-  if (e.key === 'Tab') {
-    e.preventDefault();
-    const s = editor.selectionStart, t = editor.selectionEnd;
-    const pad = '  ';
-    editor.value = editor.value.slice(0, s) + pad + editor.value.slice(t);
-    editor.selectionStart = editor.selectionEnd = s + pad.length;
-    editor.dispatchEvent(new Event('input'));
-  }
-});
+async function flush() {
+  clearTimeout(flushTimer);
+  const content = view.state.doc.toString();
+  if (content === saved) return;
+  await bus.call(
+    { to: 'works', path: '/', interface: 'VFS', member: 'Write' },
+    [filePath, content]);
+  saved = content;
+  setDirty(false);
+}
 
-// ── Find / replace ─────────────────────────────────────────────────────
-// Plain substring search; case-insensitive by default unless btn-case is on.
-// Could grow to regex / whole-word later; the surface is for plain text.
-
-let caseSensitive = false;
-
-function showFindBar(withReplace) {
-  // Toggling the find bar reflows the editor; the browser will sometimes
-  // auto-scroll the textarea to keep the cursor visible, jumping to the
-  // end if the cursor was far from the new viewport. Snapshot scrollTop
-  // before the layout change and restore it after the reflow settles.
-  const savedScroll = editor.scrollTop;
-  findBar.classList.add('visible');
-  findBar.classList.toggle('has-replace', !!withReplace);
-  // Seed with current selection (if any) — classic Notepad behavior.
-  const sel = editor.value.slice(editor.selectionStart, editor.selectionEnd);
-  if (sel && !sel.includes('\n')) findIn.value = sel;
-  findIn.focus({ preventScroll: true });
-  findIn.select();
-  requestAnimationFrame(() => {
-    editor.scrollTop = savedScroll;
-    syncGutterScroll();
+async function loadFromDisk() {
+  try {
+    saved = (await bus.call(
+      { to: 'works', path: '/', interface: 'VFS', member: 'Read' },
+      [filePath, 'utf8'])) || '';
+  } catch { saved = ''; }
+  view.dispatch({
+    changes: { from: 0, to: view.state.doc.length, insert: saved },
   });
-  refreshCount();
+  setDirty(false);
+  updateStatus();
 }
-function hideFindBar() {
-  const savedScroll = editor.scrollTop;
-  findBar.classList.remove('visible');
-  editor.focus({ preventScroll: true });
-  requestAnimationFrame(() => {
-    editor.scrollTop = savedScroll;
-    syncGutterScroll();
+
+function makeEditor(initialText, languageExt) {
+  return new EditorView({
+    parent: editorRoot,
+    state: EditorState.create({
+      doc: initialText,
+      extensions: [
+        minimalSetup,
+        history(),
+        drawSelection(),
+        highlightActiveLine(),
+        bracketMatching(),
+        indentOnInput(),
+        search({ top: true }),
+        lineNumCompartment.of(showLineNumbers ? lineNumbers() : []),
+        wrapCompartment.of(wrap ? EditorView.lineWrapping : []),
+        langCompartment.of(languageExt),
+        keymap.of([
+          indentWithTab,
+          ...searchKeymap,
+          { key: 'Ctrl-s',   mac: 'Cmd-s',  run: () => { flush(); return true; }, preventDefault: true },
+          { key: 'Ctrl-z',   mac: 'Cmd-z',  run: undo },
+          { key: 'Ctrl-Shift-z', mac: 'Cmd-Shift-z', run: redo },
+          { key: 'Ctrl-y',   mac: 'Cmd-y',  run: redo },
+        ]),
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged) {
+            setDirty(view.state.doc.toString() !== saved);
+            clearTimeout(flushTimer);
+            flushTimer = setTimeout(flush, 1500);
+          }
+          if (update.docChanged || update.selectionSet) {
+            updateStatus();
+          }
+        }),
+      ],
+    }),
   });
 }
 
-function findAllMatches() {
-  const needle = findIn.value;
-  if (!needle) return [];
-  const hay = editor.value;
-  const cmp = caseSensitive
-    ? (a, b) => a === b
-    : (a, b) => a.toLowerCase() === b.toLowerCase();
-  const matches = [];
-  let i = 0;
-  while (i <= hay.length - needle.length) {
-    if (cmp(hay.substr(i, needle.length), needle)) {
-      matches.push(i);
-      i += needle.length;
-    } else {
-      i++;
-    }
-  }
-  return matches;
-}
-
-function refreshCount() {
-  const matches = findAllMatches();
-  if (!findIn.value) { findCount.textContent = ''; return; }
-  if (matches.length === 0) { findCount.textContent = 'no matches'; return; }
-  const cur = editor.selectionStart;
-  // 1-based "match X of Y" — current is the next match at-or-after cursor.
-  let idx = matches.findIndex((m) => m >= cur);
-  if (idx === -1) idx = matches.length - 1;
-  findCount.textContent = (idx + 1) + ' of ' + matches.length;
-}
-
-function findNext(reverse) {
-  const matches = findAllMatches();
-  if (matches.length === 0) { refreshCount(); return; }
-  const cur = editor.selectionStart;
-  let target;
-  if (reverse) {
-    // Last match strictly before cursor; wrap to last if none.
-    target = matches.slice().reverse().find((m) => m < cur);
-    if (target === undefined) target = matches[matches.length - 1];
-  } else {
-    // First match at-or-after the END of the current selection.
-    const after = editor.selectionEnd;
-    target = matches.find((m) => m >= after);
-    if (target === undefined) target = matches[0];
-  }
-  editor.focus();
-  editor.setSelectionRange(target, target + findIn.value.length);
-  // Scroll into view — the simplest approach: read selection rect via
-  // a hidden mirror would be expensive; just trust the browser.
-  refreshCount();
-}
-
-function replaceOne() {
-  const matches = findAllMatches();
-  if (matches.length === 0) return;
-  const s = editor.selectionStart, e = editor.selectionEnd;
-  const sel = editor.value.slice(s, e);
-  // If the current selection IS a match, replace + move to next.
-  // Otherwise, jump to next match first (next call replaces).
-  const isMatch = caseSensitive
-    ? sel === findIn.value
-    : sel.toLowerCase() === findIn.value.toLowerCase();
-  if (isMatch) {
-    const rep = replIn.value;
-    editor.value = editor.value.slice(0, s) + rep + editor.value.slice(e);
-    editor.selectionStart = editor.selectionEnd = s + rep.length;
-    editor.dispatchEvent(new Event('input'));
-    findNext(false);
-  } else {
-    findNext(false);
-  }
-}
-
-function replaceAll() {
-  const matches = findAllMatches();
-  if (matches.length === 0) return;
-  const rep = replIn.value;
-  const needle = findIn.value;
-  let out = '';
-  let last = 0;
-  for (const m of matches) {
-    out += editor.value.slice(last, m) + rep;
-    last = m + needle.length;
-  }
-  out += editor.value.slice(last);
-  editor.value = out;
-  editor.dispatchEvent(new Event('input'));
-  refreshCount();
-}
-
-findIn.addEventListener('input', refreshCount);
-findIn.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    findNext(e.shiftKey);
-  } else if (e.key === 'Escape') {
-    e.preventDefault();
-    hideFindBar();
-  }
-});
-replIn.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    e.preventDefault();
-    if (e.shiftKey) replaceAll(); else replaceOne();
-  } else if (e.key === 'Escape') {
-    e.preventDefault();
-    hideFindBar();
-  }
-});
-document.getElementById('find-next').addEventListener('click', () => findNext(false));
-document.getElementById('find-prev').addEventListener('click', () => findNext(true));
-document.getElementById('find-close').addEventListener('click', hideFindBar);
-btnCase.addEventListener('click', () => {
-  caseSensitive = !caseSensitive;
-  btnCase.classList.toggle('on', caseSensitive);
-  refreshCount();
-});
-document.getElementById('replace-one').addEventListener('click', replaceOne);
-document.getElementById('replace-all').addEventListener('click', replaceAll);
-
-// ── Menubar ────────────────────────────────────────────────────────────
-// Hosted via @gcu/menu's MenuBar — same component the shell uses, so the
-// chrome looks identical. The state-reflective items (toggleable views)
-// re-render their checkmarks on each menu open since the items thunk is
-// called per-open.
-
+// ── Menubar ───────────────────────────────────────────────────────────
 const menubarEl = document.getElementById('menubar');
-// Stub for actions we'll wire up after the A-Bus connect — keep the
-// MenuBar instance alive across the full surface lifetime.
 let actions = {};
 const bar = new MenuBar(menubarEl, () => [
   { label: 'File', items: () => [
@@ -466,10 +349,10 @@ const bar = new MenuBar(menubarEl, () => [
     { label: 'Revert from disk', action: 'file:revert' },
   ] },
   { label: 'Edit', items: () => [
-    { label: 'Find…',           action: 'edit:find',    shortcut: 'Ctrl+F' },
-    { label: 'Find next',       action: 'edit:findnext', shortcut: 'F3' },
-    { label: 'Find previous',   action: 'edit:findprev', shortcut: 'Shift+F3' },
-    { label: 'Replace…',        action: 'edit:replace', shortcut: 'Ctrl+H' },
+    { label: 'Undo',            action: 'edit:undo',    shortcut: 'Ctrl+Z' },
+    { label: 'Redo',            action: 'edit:redo',    shortcut: 'Ctrl+Shift+Z' },
+    '---',
+    { label: 'Find / Replace…', action: 'edit:find',    shortcut: 'Ctrl+F' },
     '---',
     { label: 'Select all',      action: 'edit:selectall', shortcut: 'Ctrl+A' },
     { label: 'Insert date/time', action: 'edit:datetime' },
@@ -485,122 +368,53 @@ bar.on('action', (a) => {
   if (fn) fn();
 });
 
-// ── A-Bus wire-up ──────────────────────────────────────────────────────
-
+// ── A-Bus connect ─────────────────────────────────────────────────────
 window.addEventListener('message', async (ev) => {
   if (ev.source !== window.parent) return;
   if (!ev.data || ev.data.type !== 'abus:welcome') return;
   const { port, tab } = ev.data;
 
-  let filePath = tab.path;
+  filePath = tab.path;
   sPath.textContent = filePath;
-  let bus;
+  const { name: langName, ext: langExt } = langForPath(filePath);
+  sLang.textContent = langName;
+
   try {
     bus = await connect(port, { client: 'text-surface' });
   } catch (e) {
-    editor.value = 'connect failed: ' + e.message;
+    editorRoot.textContent = 'connect failed: ' + e.message;
     return;
   }
   installThemeSubscription(bus);
 
-  // Read the file through the `works` VFS service.
-  let saved = '';
-  async function loadFromDisk() {
-    try {
-      saved = (await bus.call(
-        { to: 'works', path: '/', interface: 'VFS', member: 'Read' },
-        [filePath, 'utf8'])) || '';
-    } catch { saved = ''; }
-    editor.value = saved;
-    editor.placeholder = '';
-    renderGutter();
-    updateStatus();
-  }
+  view = makeEditor('', langExt);
   await loadFromDisk();
+  updateStatus();
 
-  let dirty = false;
-  let flushTimer = null;
-
-  const emit = (member, args) =>
-    bus.signal({ path: '/', interface: 'Surface', member }, args);
-
-  const setDirty = (d) => {
-    if (dirty === d) return;
-    dirty = d;
-    sDirty.textContent = dirty ? '●' : ' ';
-    emit('DirtyChanged', [dirty]);
-  };
-
-  async function flush() {
-    clearTimeout(flushTimer);
-    if (editor.value === saved) return;
-    const content = editor.value;
-    await bus.call(
-      { to: 'works', path: '/', interface: 'VFS', member: 'Write' },
-      [filePath, content]);
-    saved = content;
-    setDirty(false);
-  }
-
-  editor.addEventListener('input', () => {
-    setDirty(editor.value !== saved);
-    renderGutter();
-    updateStatus();
-    if (findBar.classList.contains('visible')) refreshCount();
-    clearTimeout(flushTimer);
-    flushTimer = setTimeout(flush, 1500);
-  });
-
-  // ── Wire menubar actions now that we have flush / bus ────────────────
+  // Now that view exists, wire menubar actions.
   actions = {
     'file:save': () => flush(),
     'file:revert': async () => {
       if (dirty && !window.confirm('Discard unsaved changes?')) return;
       await loadFromDisk();
-      setDirty(false);
     },
-    'edit:find':     () => showFindBar(false),
-    'edit:replace':  () => showFindBar(true),
-    'edit:findnext': () => { if (findIn.value) findNext(false); else showFindBar(false); },
-    'edit:findprev': () => { if (findIn.value) findNext(true);  else showFindBar(false); },
-    'edit:selectall': () => { editor.focus(); editor.select(); },
+    'edit:undo': () => undo({ state: view.state, dispatch: view.dispatch.bind(view) }),
+    'edit:redo': () => redo({ state: view.state, dispatch: view.dispatch.bind(view) }),
+    'edit:find': () => openSearchPanel(view),
+    'edit:selectall': () => {
+      view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
+      view.focus();
+    },
     'edit:datetime': () => {
-      const now = new Date();
-      const stamp = now.toISOString().slice(0, 19).replace('T', ' ');
-      const s = editor.selectionStart, t = editor.selectionEnd;
-      editor.value = editor.value.slice(0, s) + stamp + editor.value.slice(t);
-      editor.selectionStart = editor.selectionEnd = s + stamp.length;
-      editor.dispatchEvent(new Event('input'));
+      const stamp = new Date().toISOString().slice(0, 19).replace('T', ' ');
+      const sel = view.state.selection.main;
+      view.dispatch({ changes: { from: sel.from, to: sel.to, insert: stamp } });
+      view.focus();
     },
-    'view:line-numbers': () => { showLineNumbers = !showLineNumbers; applyView(); renderGutter(); },
-    'view:wrap':         () => { wrap = !wrap; applyView(); },
-    'view:status-bar':   () => { showStatusBar = !showStatusBar; applyView(); },
+    'view:line-numbers': () => { showLineNumbers = !showLineNumbers; applyViewToggles(); },
+    'view:wrap':         () => { wrap = !wrap; applyViewToggles(); },
+    'view:status-bar':   () => { showStatusBar = !showStatusBar; applyViewToggles(); },
   };
-
-  // ── Keyboard shortcuts (mirror the menubar's shortcut labels) ─────────
-  document.addEventListener('keydown', (e) => {
-    const meta = e.ctrlKey || e.metaKey;
-    if (meta && (e.key === 's' || e.key === 'S')) {
-      e.preventDefault();
-      flush();
-    } else if (meta && (e.key === 'f' || e.key === 'F')) {
-      e.preventDefault();
-      showFindBar(false);
-    } else if (meta && (e.key === 'h' || e.key === 'H')) {
-      e.preventDefault();
-      showFindBar(true);
-    } else if (e.key === 'F3') {
-      e.preventDefault();
-      if (findIn.value) findNext(e.shiftKey); else showFindBar(false);
-    } else if (e.key === 'Escape' && findBar.classList.contains('visible')) {
-      e.preventDefault();
-      hideFindBar();
-    } else if (e.altKey && (e.key === 'c' || e.key === 'C')
-               && findBar.classList.contains('visible')) {
-      e.preventDefault();
-      btnCase.click();
-    }
-  });
 
   // The §5.2 Surface contract.
   bus.expose('/', {
@@ -611,6 +425,9 @@ window.addEventListener('message', async (ev) => {
         Relocated: (p) => {
           filePath = p;
           sPath.textContent = filePath;
+          const { name, ext } = langForPath(p);
+          sLang.textContent = name;
+          view.dispatch({ effects: langCompartment.reconfigure(ext) });
           emit('TitleChanged', [basename(p)]);
         },
       },

@@ -121,6 +121,17 @@ function _rewriteExportToConsts(src) {
 function _inlineLibsIntoSurface(text, kind) {
   // The import map is decorative once we're inlining.
   text = text.replace(/<script type="importmap">[\s\S]*?<\/script>\s*/, '');
+  // CM6 is IIFE-shaped (sets `var CM6 = …` at module scope) — surfaces
+  // place a `/* @cm6-inline */` placeholder where the IIFE source goes,
+  // and we splice it in here. No ESM-import sugar; the surface
+  // destructures from `CM6` directly. Closer to inlining a pre-built
+  // bundle than to importing a module.
+  if (text.includes('/* @cm6-inline */') && _libSources.has('cm6')) {
+    const cm6Src = _libSources.get('cm6').replace(/<\/script>/g, '<\\/script>');
+    text = text.replace('/* @cm6-inline */',
+      () => `/* @gcu/cm6 — inlined IIFE from the works lib store */\n${cm6Src}\n`);
+  }
+
   // For each lib imported by bare specifier in this surface, inline the
   // bundle (with its exports rewritten to locals).
   let inlinedGeas = false;

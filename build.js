@@ -256,7 +256,7 @@ if (target === 'works' || target === 'works-all') {
   const worksZlib = require('zlib');
 
   const isWorksAll = (target === 'works-all');
-  const SHARED_LIBS_BASE = ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline', 'markdown', 'librarian', 'ipynb'];
+  const SHARED_LIBS_BASE = ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline', 'markdown', 'librarian', 'ipynb', 'cm6'];
   // For --target=works-all: bundle every ext/<name>/index.js that's a real
   // bundle (skip the re-export shims under ~1 KB — they break the
   // single-file SHARED_LIBS pattern because they import from sibling files).
@@ -309,6 +309,14 @@ if (target === 'works' || target === 'works-all') {
   // _libSourcePath which checks this map first.
   const SHARED_LIB_SOURCE_OVERRIDES = {
     markdown: 'src/js/markdown.js',
+    // CM6 ships as a classic IIFE that sets `var CM6 = ...` (no ESM
+    // exports). Surfaces using it can't `import { … } from '@gcu/cm6'`
+    // — they place a `/* @cm6-inline */` placeholder where the IIFE
+    // source should land, and `_inlineLibsIntoSurface` substitutes it
+    // at surface-decompression time. The lib payload itself ships via
+    // the standard <script id="lib-cm6"> path; only the inlining
+    // mechanism differs.
+    cm6: 'ext/cm6/cm6.min.js',
   };
 
   // For SHARED_LIB_SOURCE_OVERRIDES entries (like 'markdown' from
