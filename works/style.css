@@ -220,14 +220,14 @@ body {
    open-on-double-click target). */
 .tree-chevron {
   flex: none;
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   text-align: center;
   color: var(--au-fg-soft);
-  font-size: 12px;
+  font-size: 15px;
   line-height: 1;
 }
 /* Toggleable chevrons get a hover cursor and a subtle background hit
