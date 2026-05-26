@@ -497,7 +497,88 @@ Standard lib aliases (`abus`, `vfs`, `menu`, `dialog`, `cm6`, …) are pre-bundl
 
 Surfaces that need libraries beyond what the host ships should vendor them inside the gcupkg and import via relative paths (no bare specifier).
 
-#### 3.8.6 Styling and theme integration
+#### 3.8.6 The surface-author contract — what your `surface.html` must do
+
+Every Works surface receives a single `'abus:welcome'` postMessage with `{ port, tab, home }` and is responsible for everything from there. The host doesn't help further. The canonical handler shape — copy this as your starting template:
+
+```js
+window.addEventListener('message', async (ev) => {
+  if (ev.source !== window.parent || ev.data?.type !== 'abus:welcome') return;
+  const { port, tab } = ev.data;
+
+  // 1. Connect the A-Bus client.
+  let bus;
+  try {
+    bus = await connect(port, { client: 'my-surface' });
+    installThemeSubscription(bus);   // see §3.8.7
+  } catch (e) {
+    console.error('[my-surface] connect failed:', e);
+    return;
+  }
+
+  // 2. Expose the §5.2 Surface contract — required.
+  bus.expose('/', {
+    Surface: {
+      methods: {
+        Flush:     async () => { /* persist any pending dirty state */ },
+        CanClose:  () => true,         // or false to block close
+        Relocated: (_path) => { /* react if Works moves the project root */ },
+      },
+      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
+    },
+  });
+
+  // 3. If your surface opens a file, read it via the works VFS.
+  const path = tab?.path;
+  if (path) {
+    let source;
+    try {
+      source = await bus.call(
+        { to: 'works', path: '/', interface: 'VFS', member: 'Read' },
+        [path, 'utf8']   // or [path] for raw bytes (returns Uint8Array)
+      );
+    } catch (e) {
+      // Show the error in your surface's UI. Don't throw — still emit Ready.
+    }
+    if (source !== undefined) renderYourContent(source);
+    bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' },
+      [path.split('/').pop()]);
+  }
+
+  // 4. Always emit Ready, even on error — the host uses this to settle
+  //    the tab's loading state. Skipping it leaves the tab stuck.
+  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
+});
+```
+
+**What each step does, and what breaks if you skip it:**
+
+| Step | Skipping breaks |
+|---|---|
+| 1. Connect bus | Surface can't talk to the workspace at all — VFS reads, settings, all dead. |
+| 2. Expose Surface contract | Host can't ask the surface to save / close cleanly; tab lifecycle desyncs. |
+| 3. Read `tab.path` | Surface boots but doesn't know what file to show. The viewer stays empty. Common bug — easy to miss because the welcome message still works. |
+| 4. Emit `Ready` | Tab's spinner / loading state never resolves; user thinks the surface is hung. |
+
+**On `tab.path` semantics**: the host always supplies `tab` in the welcome payload, but `tab.path` is `null` when the surface was spawned without a file (e.g. Tools → Open A-Bus Inspector). Handle the `!path` case explicitly — render empty state, file-picker UI, whatever's appropriate. Don't assume.
+
+**On VFS reads**: the `'utf8'` encoding flag decodes to a string. Omit it for binary content (returns `Uint8Array`). Errors propagate as rejected promises — wrap in try/catch and render the error in your UI rather than letting the iframe stay blank.
+
+**Surface signals you can emit** (all path-scoped on `'/'`, interface `Surface`):
+
+| Signal | Args | When |
+|---|---|---|
+| `TitleChanged` | `[newTitle]` | Tab title should update (filename, doc title, …). |
+| `DirtyChanged` | `[isDirty]` | Set the tab's dirty indicator on/off. |
+| `Ready` | `[]` | Surface has finished initial render. **Emit exactly once.** |
+
+**Reference implementations** in the auditable repo, in increasing complexity:
+
+- `ext/example-quip/surface.html` — read-only viewer, parses + renders a `.quip` file (~200 LOC).
+- `works/surfaces/preview.html` — read-only viewer with multiple file-type rendering (image / CSV / markdown / archive).
+- `works/surfaces/text.html` — read-write CM6 editor with Flush wired to VFS.Write, DirtyChanged on edit.
+
+#### 3.8.7 Styling and theme integration
 
 Surface iframes have their own opaque-origin documents — none of the shell's CSS or the workspace's theme settings cross the boundary automatically. The host bridges via two placeholder substitutions the extension surface's HTML opts into:
 
@@ -567,7 +648,7 @@ A future common-CSS shared module could ship this as a `/* @gcu-base */` placeho
 
 This pins the theme for the FIRST PAINT before A-Bus delivers the workspace's actual setting. `installThemeSubscription` overrides it with the real value once it knows; the brief default→real transition is invisible if you picked the right initial value for your typical user (dark for the standard GCU look).
 
-#### 3.8.7 Lifecycle
+#### 3.8.8 Lifecycle
 
 - **Install** — `installGcupkg` writes the archive contents to `/lib/<pkg>/` (engine `source`, `adder/source`, `package.json`, `LICENSE`, plus any custom top-level files: `works.js`, `surface.html`, asset trees, …). Immediately afterwards, the shell's loader evaluates `/lib/<pkg>/works.js` in the shell context if it exists. The script's `window.auditable.registerExtension({...})` call runs synchronously — surfaces, context-menu items, and any future shell-context capabilities are live the moment the install finishes. No notebook needs to be open.
 - **Boot** — when Works boots and the workspace VFS is ready, the shell's loader walks `/lib/<scope>/<pkg>/` and `/lib/local/<pkg>/` looking for `works.js`. Each one evaluates in shell context, in installation order. Same registration path as install — the user sees the same UI state every reload.
@@ -576,13 +657,13 @@ This pins the theme for the FIRST PAINT before A-Bus delivers the workspace's ac
 
 The notebook-context entry (`index.js`) follows its own separate lifecycle (§2.5 + §4.5) — loaded lazily by the notebook iframe when a cell needs it. Shell-context and notebook-context lifecycles don't interact.
 
-#### 3.8.8 Security
+#### 3.8.9 Security
 
 Surface iframes run in their own opaque-origin context (per-blob origin under `file://`). They can only act through A-Bus calls to `works:` — there's no direct DOM access to the shell, no cross-surface DOM access, no `localStorage` shared with the workspace. The fence is the same as for in-tree surfaces; extension surfaces inherit it for free.
 
 Trust model: same as npm — installing a gcupkg means trusting it. The extension's surface CAN call any A-Bus method `works:` exposes (VFS reads, settings reads/writes, spawn surfaces). Future capability-gating (§9 open question) could restrict this; for v1 the model is "install = full trust."
 
-#### 3.8.9 What's NOT in v1
+#### 3.8.10 What's NOT in v1
 
 Deliberately out of scope; raise as follow-ups if they bite:
 
@@ -593,7 +674,7 @@ Deliberately out of scope; raise as follow-ups if they bite:
 - **Surface preview / picker UI.** Beyond "right-click → Open in <kind>", there's no kind picker for ambiguous files. Could land later — `kindForPath` could return a list of matches and the shell offers a chooser.
 - **Per-workspace capability gating.** A `works.js` runs with full shell access — every A-Bus method `works:` exposes is reachable. v1 trust model is "install = full trust." Future capability flags in `.gcupkg-meta.json` could let the user grant or deny categories (VFS-read, VFS-write, mounts, spawn-surface) at install time.
 
-#### 3.8.10 The host-side guide
+#### 3.8.11 The host-side guide
 
 `works/SURFACES.md` documents the surface-author contract (the §5.2 lifecycle, the A-Bus services available, the welcome-port pattern). Extension surfaces follow the same contract as in-tree surfaces — that file is the single source for HOW to write one. This section covers WHAT an extension declares in its manifest to be picked up by the host.
 
@@ -871,7 +952,7 @@ example@0.1.0.gcupkg                   ← archive filename: <name>@<version>.gc
 
 Secondary entry points (`adder.js`, future `soft.js`) live at the archive root alongside `index.js` and are declared in `package.json` `exports` map. The installer hydrates them into `_installedModules` under the `<name>/adder` (resp. `<name>/soft`) key so `load("<name>/adder")` from a cell resolves directly without a network fetch. Any other top-level file (e.g. `surface.html`, `icons/icon.svg`, custom asset trees) is mirrored under `/lib/<pkg>/` verbatim — the installer doesn't need to know about each asset by name.
 
-`works.js` is evaluated by the Works shell at install time and at every Works boot; see §3.8.7 for the full lifecycle.
+`works.js` is evaluated by the Works shell at install time and at every Works boot; see §3.8.8 for the full lifecycle.
 
 The `.gcupkg-meta.json` is what makes it a "wheel" rather than a generic zip — it commits to a schema:
 
