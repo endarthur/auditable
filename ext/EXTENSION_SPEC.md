@@ -25,7 +25,7 @@ If you're a Claude Code session in another repo and a user has just asked "make 
 5. **§6** — only if you're packaging as `.gcupkg` for sideloading. Out-of-tree extensions that publish via npm / unpkg / a raw URL don't need this.
 6. **§11** — documentation conventions (README/SPEC structure + the first-paragraph rule + anti-patterns) when you're writing the user-facing docs.
 
-**Reference implementation to copy from:** [`@gcu/carotte`](https://github.com/endarthur/carotte) is a complete out-of-tree extension with the cross-language adapter pattern, gcupkg packaging, examples, and the full doc set. Its `pack-gcupkg.js` is the working reference packer until `pkg build` ships.
+**Reference implementations to read from:** in-tree, the cross-language adapter family (`ext/learn/`, `ext/natra/`, `ext/sadpan/`, `ext/scitra/`, `ext/plot/`, `ext/line/`) all follow the same Python-shape wrapper pattern (§4). For a tagged-language extension, see `ext/sql/`, `ext/shader/`, or `ext/atra/`. For a full cell type with AIR lowering, `ext/adder/` and `ext/soft/` are the canonical references. Out-of-tree, a complete `.gcupkg` (§6.1) needs only `package.json`, `index.js`, an optional `adder.js`, `LICENSE`, `.gcupkg-meta.json`, and whatever assets your extension wants.
 
 **Things that bite, summarized:**
 
@@ -626,6 +626,47 @@ No further integration is needed. Adder's import resolver does the rest.
 - Adapters do not extend through monkey-patching. `np.array` is a property of `natra`, not assigned at runtime.
 - Adapters do not own the runtime — adder's interpreter owns it. The adapter is just a callable wrapper.
 
+### 4.4 Runtime auto-load (no preamble required)
+
+Auditable's runtime auto-loads two classes of installed modules so notebooks that use them don't need any JS preamble cell — the canonical shape of an adder notebook is just `/// adder` cells with idiomatic Python at the top.
+
+**Language packs** — when `runDAG` finds a fallback cell whose `cell.type` matches the host's known language-pack table (`adder` / `mpy` → `@gcu/adder`; `soft` → `@gcu/soft`), the matching pack is loaded from `_installedModules` before `buildDAG` runs. The cell upgrades out of fallback the moment `registerExtension` fires, so `parseNames` / `findUses` bind correctly in the same execution pass that triggered the load. The mapping is in `src/js/exec.js`'s `LANGUAGE_PACKS` constant.
+
+**Adapter bridges** — for every `/// adder` (or `/// mpy`) cell, `runDAG` regex-scans the source for `^from <name> import` statements. For each `<name>` that's not already in `window._auditableExtensions`, the runtime looks for an installed module whose key matches `*/<name>/adder` (preferring `@gcu/` over other scopes) and loads it. The adapter's `registerExtension({ exports: { <name>: _module } })` publishes the namespace before the cell parses, so `from natra import zeros` or `from learn.tree import DecisionTreeClassifier` just works.
+
+Both auto-loads are **install-only** — they never reach to a network for a missing module. The user has to `install("...")` once (or open a workspace that already has `/lib/<pkg>/` populated). After that, the auto-load is silent.
+
+**Canonical adder-notebook shape:**
+
+```
+/// auditable
+/// title: my notebook
+
+/// md
+# my notebook
+
+/// adder
+from natra import zeros
+from learn.tree import DecisionTreeClassifier
+
+X = zeros((10, 3))
+clf = DecisionTreeClassifier()
+print(clf)
+```
+
+No `await load("@gcu/adder")`, no `await load("@gcu/natra/adder")`, no `const natra = ...` preamble. The `/// adder` cell type triggers the language-pack load; the `from … import` statements trigger the adapter bridge loads. Everything resolves before the cell runs.
+
+**What still needs an explicit `load()`:**
+
+- JS cells that want the engine's raw JS surface (`const natra = await load("@gcu/natra")`). The Python-shape wrapper is for adder cells; the JS engine is its own thing.
+- Notebooks using a NON-canonical adapter layout (an extension that publishes `_auditableExtensions['foo']` but lives at a key other than `*/foo/adder`).
+
+**Caveats / known v1 limits:**
+
+- The scan parses regex, not the adder AST. Multi-line imports (`from natra import (\n  zeros,\n  ones,\n)`) and `import X as Y` are recognized (the `from X` part still matches); deeply-nested or commented-out forms are best-effort.
+- Tagged-template usage (`` adder`from natra import …` ``) inside a JS code cell is **not** scanned — only declared `/// adder` cells are. Tagged-template adder users need an explicit `await load("@gcu/<pkg>/adder")` in the same cell. Could be lifted later by extending the scan to JS code-cell sources.
+- Soft cells use `use X.Y as N` syntax instead of `from X import`; adapter auto-discovery doesn't currently apply to soft. The language-pack auto-load (which loads `@gcu/soft` for soft cells) is unaffected.
+
 ---
 
 ## 5. Package layout and build conventions
@@ -724,7 +765,7 @@ That works, but it leaves users to find the URL and the host to fetch metadata. 
 
 ### 6.1 The `.gcupkg` format
 
-**Status: shipped 2026-05-25.** Reader + installer at `src/js/gcupkg.js`; `pkg install <file.gcupkg>` in geas; Works tree drop-zone in `works/js/file-ops.js`. Reference implementation packer at `https://github.com/endarthur/carotte/blob/main/pack-gcupkg.js`.
+**Status: shipped 2026-05-25.** Reader + installer at `src/js/gcupkg.js`; `pkg install <file.gcupkg>` in geas; Works tree drop-zone in `works/js/file-ops.js`. Packer is currently out-of-tree (a few hundred lines that walks an extension repo, validates the `package.json` shape, computes the integrity hash, and zips the artifacts) — `pkg build` will fold this into the in-tree CLI; see §6.1's implementation-status table.
 
 A `.gcupkg` is a **`.zip` archive** with a defined internal layout:
 
@@ -782,7 +823,7 @@ The `.gcupkg-meta.json` is what makes it a "wheel" rather than a generic zip —
 - `integrity` is a SHA-256 hash, base64-encoded, with `sha256-` prefix (SRI format).
 - `integrityCovers` is an array of filenames the hash covers. **Required for new packers.** The recommended cover set is `index.js` + every secondary entry point listed in `package.json` `exports` map (so: `["adder.js", "index.js"]` for a typical extension with an adder bridge).
 - Hash recipe: sort `integrityCovers` lexicographically, then for each filename concat: `<filename>` + `\0` + `<file bytes>` + `\0`. Compute SHA-256 of the resulting buffer.
-- **Legacy compatibility**: if `integrityCovers` is absent, the reader assumes the hash covers `index.js` only (the carotte 0.1.0 shape, before the spec made the cover set explicit). Verification still works but the consumer logs a note encouraging the producer to upgrade.
+- **Legacy compatibility**: if `integrityCovers` is absent, the reader assumes the hash covers `index.js` only (the first-generation packer shape, before the spec made the cover set explicit). Verification still works but the consumer logs a note encouraging the producer to upgrade.
 
 Why bundle:
 
@@ -809,7 +850,7 @@ The format is intentionally small. Pythonic wheels accumulated a lot of complexi
 | `pkg install <file.gcupkg>` in geas | shipped 2026-05-25 |
 | Works tree drop-zone for `.gcupkg` files | shipped 2026-05-25 |
 | `install("file.gcupkg")` cell shorthand | shipped 2026-05-25 — uses stdlib's native-DecompressionStream `unzipArchive`, no `@gcu/archive` dependency (~3.5 KB add to auditable.html) |
-| `pkg build` subcommand for producing `.gcupkg` from a workspace package | deferred — out-of-tree packers like `pack-gcupkg.js` in carotte work; in-tree builder is a quality-of-life follow-up |
+| `pkg build` subcommand for producing `.gcupkg` from a workspace package | deferred — out-of-tree packers (a few hundred lines that walks a repo, validates `package.json`, computes the integrity hash, and zips the artifacts) work; in-tree builder is a quality-of-life follow-up |
 
 ### 6.2 Bundled documentation
 
@@ -934,7 +975,7 @@ The `examples/defs/<category>/<name>.txt` system is the host's smoke-test corpus
 - **Naming convention.** `@gcu/<slug>` is conventional but not enforced. Lowercase, no whitespace, semver-tag friendly — but the validator accepts anything that's a string. A linter pass would help here but isn't a runtime concern.
 - **Permissions / capability gating.** Extensions today have full window access. A capability-token model would let users audit what an extension touches (FS / DOM / network / clipboard / …) before approving install. Pre-design; no implementation plan.
 - **Extension marketplace / discovery.** Currently extensions are URL-installed or pkg-installed. A curated registry (signed metadata, version range queries) is an obvious follow-up but not on the near roadmap.
-- **`pkg build` subcommand**. See §6.1 implementation-status table. Out-of-tree packers (e.g. carotte's `pack-gcupkg.js`) work fine today; an in-tree CLI is a quality-of-life follow-up.
+- **`pkg build` subcommand**. See §6.1 implementation-status table. Out-of-tree packers work fine today (a few hundred lines that walks a repo, validates `package.json`, computes the integrity hash, and zips the artifacts); an in-tree CLI is a quality-of-life follow-up.
 - **Versioned manifest schema.** When 1.0 ships, a `manifestVersion: 1` field will become required. We'll auto-treat legacy manifests as version 0.
 - **Localization.** `@gcu/soft` ships a pt-BR locale today as a soft-internal concern. If localization becomes a recurring need (UI strings in tagged-language errors, completions), a `manifest.locales` field would surface it. Pre-design.
 
