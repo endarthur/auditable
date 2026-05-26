@@ -631,6 +631,27 @@ async function worksBoot(conn) {
   const host = createWorksHost({ bus, projectPath: tab.path, syncToVfs, home });
   setHost(host);
 
+  // Auto-save: in Works, /projects/self is a local working copy and
+  // writeBack to the actual workspace project only fires on persist().
+  // Without an auto-save, running cells produces outputs that exist
+  // only in the iframe's memory until the user hits Ctrl+S. Subscribe
+  // to notebook:dirty (cell edits, settings changes, notebook.fs writes)
+  // AND dag:cell:after-exec (cell completions update output sidecars)
+  // and debounce-call host.persist(). 1.5s collapses bursts; longer
+  // than the 400ms output-save debounce so the output file is on disk
+  // before we writeBack the project tree.
+  let _autoSaveTimer = null;
+  const scheduleAutoSave = () => {
+    if (_autoSaveTimer) clearTimeout(_autoSaveTimer);
+    _autoSaveTimer = setTimeout(async () => {
+      _autoSaveTimer = null;
+      try { await host.persist(); }
+      catch (e) { console.warn('[autosave]', e.message); }
+    }, 1500);
+  };
+  hooks.on('notebook:dirty', scheduleAutoSave);
+  hooks.on('dag:cell:after-exec', scheduleAutoSave);
+
   // Build the surface VFS and boot-load the project from the workspace.
   const vfs = await host.provideVFS();
 
