@@ -420,7 +420,77 @@ Standard lib aliases (`abus`, `vfs`, `menu`, `dialog`, `cm6`, …) are pre-bundl
 
 Surfaces that need libraries beyond what the host ships should vendor them inside the gcupkg and import via relative paths (no bare specifier).
 
-#### 3.8.6 Lifecycle
+#### 3.8.6 Styling and theme integration
+
+Surface iframes have their own opaque-origin documents — none of the shell's CSS or the workspace's theme settings cross the boundary automatically. The host bridges via two placeholder substitutions the extension surface's HTML opts into:
+
+```html
+<style>
+  /* @theme-tokens */          <!-- substituted with the --sw-* / --au-* / --ui-* token cascade -->
+  body { color: var(--au-fg); background: var(--au-surface); }
+  .panel { border: 1px solid var(--au-border); }
+</style>
+…
+<script type="module">
+import { connect } from '@gcu/abus';
+/* @theme-init */              // substituted with the installThemeSubscription bootstrap
+
+window.addEventListener('message', async (ev) => {
+  const bus = await connect(ev.data.port, { client: 'data-grid-surface' });
+  installThemeSubscription(bus);   // sets <html data-theme> + subscribes to Shell.SettingsChanged
+  // …
+});
+</script>
+```
+
+The host runs both substitutions on the extension surface's HTML **at spawn time** — same machinery in-tree surfaces use at build time (`injectSharedTheme` from `build.js`). The iframe boots with the workspace's tokens already in scope (no flash of unstyled content).
+
+**Token cascade** (canonical, see `ext/switchboard/SPEC.md`):
+
+| Layer | Tokens | What |
+|---|---|---|
+| 1. Switchboard swatches | `--sw-orange`, `--sw-bg-raised`, `--sw-text`, … | Raw palette. Light defaults at `:root`, dark overrides at `[data-theme="dark"]`. |
+| 2. Auditable semantic | `--au-fg`, `--au-action`, `--au-surface`, `--au-border`, … | Role tokens (orange=action, teal=info, green=go, …). Map to layer 1. **Surfaces should use these.** |
+| 3. Component-internal | `--ui-bg-raised`, `--ui-fg-muted`, … | Read by `@gcu/menu` + `@gcu/dialog`. Map to layer 2. |
+
+Rules:
+
+- Reference `--au-*` tokens in your CSS, not raw `--sw-*` swatches — semantic tokens are what flip cleanly across light/dark/system themes.
+- Component CSS (menu, dialog) auto-injects when `requires` includes the lib (see §3.8.5). The `--ui-*` aliases land via `@theme-tokens`, so component popups inherit the workspace theme automatically.
+- The user's `/home/nb/theme.css` overrides land in the SHELL but do NOT cross into surface iframes. If a workspace customization needs to reach into extension surfaces, route it through `Shell.SettingsChanged`.
+
+**Live updates** — `installThemeSubscription(bus)` does two things:
+
+1. Sets `<html data-theme>` to the workspace's current setting from `Settings.Get`.
+2. Subscribes to `Shell.SettingsChanged` so a theme flip in workspace settings reaches the surface without reload.
+
+Surfaces that need to react to OTHER settings (font size, custom prefs) subscribe to the same signal — the payload is the full settings object. Mirror what `works/surfaces/text.html` does for `textEditor.wrap` / `textEditor.showLineNumbers`.
+
+**Scrollbar styling** — the conventional GCU thin scrollbar pattern is one paste away; recommend including it in any surface with scrollable content:
+
+```css
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--au-border) transparent;
+}
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--au-border); border-radius: 4px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--au-fg-soft); }
+*::-webkit-scrollbar-corner { background: transparent; }
+```
+
+A future common-CSS shared module could ship this as a `/* @gcu-base */` placeholder; for v1, just copy the block.
+
+**First-paint correctness** — every surface's `<html>` should set `data-theme="dark"` (or `"light"`) explicitly:
+
+```html
+<html lang="en" data-theme="dark">
+```
+
+This pins the theme for the FIRST PAINT before A-Bus delivers the workspace's actual setting. `installThemeSubscription` overrides it with the real value once it knows; the brief default→real transition is invisible if you picked the right initial value for your typical user (dark for the standard GCU look).
+
+#### 3.8.7 Lifecycle
 
 - **Install**: `installGcupkg` reads `manifest.surfaces` + `manifest.contextMenu` (already in the .gcupkg-meta.json's `contributes` summary), registers each into the shell's `surface-registry.js` KINDS + a new `_contextMenuItems` array. Tree refreshes its right-click menu builder.
 - **Replace**: re-install at a new version drops the old kinds + actions first (clean replace, matches the §6.1 install policy), then re-registers.
@@ -428,13 +498,13 @@ Surfaces that need libraries beyond what the host ships should vendor them insid
 
 A reload re-runs the contribution registration from the lockfile — no extension is "active" without an installed entry.
 
-#### 3.8.7 Security
+#### 3.8.8 Security
 
 Surface iframes run in their own opaque-origin context (per-blob origin under `file://`). They can only act through A-Bus calls to `works:` — there's no direct DOM access to the shell, no cross-surface DOM access, no `localStorage` shared with the workspace. The fence is the same as for in-tree surfaces; extension surfaces inherit it for free.
 
 Trust model: same as npm — installing a gcupkg means trusting it. The extension's surface CAN call any A-Bus method `works:` exposes (VFS reads, settings reads/writes, spawn surfaces). Future capability-gating (§9 open question) could restrict this; for v1 the model is "install = full trust."
 
-#### 3.8.8 What's NOT in v1
+#### 3.8.9 What's NOT in v1
 
 Deliberately out of scope; raise as follow-ups if they bite:
 
@@ -445,7 +515,7 @@ Deliberately out of scope; raise as follow-ups if they bite:
 - **Asset bundles separate from `surface.html`.** Inline CSS/data: URLs / small assets directly in the surface HTML. Larger external assets (fonts, images) can live in the gcupkg's `surface-assets/` directory and be referenced via `/lib/<pkg>/surface-assets/<file>` paths — but the host doesn't auto-route those today.
 - **Surface preview / picker UI.** Beyond "right-click → Open in <kind>", there's no kind picker for ambiguous files. Could land later — `kindForPath` could return a list of matches and the shell offers a chooser.
 
-#### 3.8.9 The host-side guide
+#### 3.8.10 The host-side guide
 
 `works/SURFACES.md` documents the surface-author contract (the §5.2 lifecycle, the A-Bus services available, the welcome-port pattern). Extension surfaces follow the same contract as in-tree surfaces — that file is the single source for HOW to write one. This section covers WHAT an extension declares in its manifest to be picked up by the host.
 
