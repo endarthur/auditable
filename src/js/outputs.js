@@ -19,11 +19,15 @@
 // declared executable) need the sidecar.
 
 import { S } from './state.js';
-import { PROJECT_DIR } from './persist.js';
 import * as hooks from './hooks.js';
 import { _ctIsExecutable } from './cell-types.js';
 
-const OUTPUTS_DIR = PROJECT_DIR + '/notebook.outputs';
+// Hardcoded rather than imported from persist.js — persist.js → cell-ops.js
+// → outputs.js → persist.js forms a circular dependency that puts
+// PROJECT_DIR in the temporal dead zone when this module first evaluates.
+// The path is fixed by the notebook layout (auditable-persistence-spec
+// §3.1); duplicating one literal is cheaper than restructuring the cycle.
+const OUTPUTS_DIR = '/projects/self/notebook.outputs';
 
 // Per-cell write debounce — autorun on a chatty cell would otherwise
 // hammer the VFS. 400ms collapses a burst into one write.
