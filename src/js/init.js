@@ -629,6 +629,41 @@ async function worksBoot(conn) {
   if (Object.keys(modules).length > 0) window._installedModules = modules;
   await hydrateNotebook(vfs);
 
+  // Live re-hydrate of _installedModules when /lib changes underneath us.
+  // The drag-drop and `pkg install` paths update the workspace VFS but
+  // don't reach into this iframe's in-memory map. Subscribing to the
+  // shell's VFS.Changed signal lets the notebook pick up newly-installed
+  // extensions without a full reload.
+  try {
+    let _refreshScheduled = false;
+    bus.subscribe(
+      { interface: 'VFS', member: 'Changed', from: 'works' },
+      (msg) => {
+        const ev = msg && msg.args && msg.args[0];
+        const p = ev && (typeof ev === 'string' ? ev : ev.path);
+        if (typeof p !== 'string' || !p.startsWith('/lib')) return;
+        // Coalesce — a single install can fire several Changed events.
+        // One refresh per microtask is plenty.
+        if (_refreshScheduled) return;
+        _refreshScheduled = true;
+        queueMicrotask(async () => {
+          _refreshScheduled = false;
+          try {
+            const fresh = await hydrateModulesFromVfs(vfs);
+            // Merge — preserve any session-only entries (URL installs etc)
+            // that aren't on disk. /lib-backed entries always win since
+            // they're authoritative.
+            for (const [k, v] of Object.entries(fresh)) {
+              window._installedModules[k] = v;
+            }
+            console.info(`[notebook] _installedModules refreshed from /lib (${Object.keys(fresh).length} entries)`);
+          } catch (e) {
+            console.warn('[notebook] /lib refresh failed:', e.message);
+          }
+        });
+      });
+  } catch { /* bus or VFS service unavailable — fine */ }
+
   try { checkAndWarnCopyleft(); } catch (e) { console.warn('license-warn:', e); }
 
   await loadUserTheme();
