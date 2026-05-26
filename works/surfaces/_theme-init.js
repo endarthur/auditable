@@ -1,5 +1,12 @@
 // Theme bootstrap for Works surfaces. Inlined into each surface's <script>
-// block at build time (build.js replaces /* @theme-init */ with this file).
+// block at build time by build.js's injectSharedTheme (and at spawn time
+// for extension surfaces by works/js/surface-registry.js).
+//
+// NOTE: do NOT write the literal placeholder token in this file's comments.
+// The build-time substitution replaces the token with this file's full
+// content; a literal token surviving inside the inlined comment then
+// matches the runtime substitution's first-occurrence search, which
+// inserts a second copy of this file mid-comment and breaks parsing.
 //
 // The surface's existing welcome handler is responsible for calling
 // installThemeSubscription(bus) AFTER the bus is connected. That sets

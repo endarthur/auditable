@@ -604,13 +604,18 @@ if (target === 'works' || target === 'works-all') {
   // independently; centralizing here keeps the cascade in one place.
   const _themeCss = fs.readFileSync(path.join(worksDir, 'surfaces', '_theme.css'), 'utf8');
   const _themeJs  = fs.readFileSync(path.join(worksDir, 'surfaces', '_theme-init.js'), 'utf8');
+  // Use line-anchored regexes — same shape as the runtime substitution in
+  // works/js/surface-registry.js. A literal placeholder inside an inlined
+  // comment would otherwise match and trigger a runaway second substitution
+  // (the inlined _theme-init.js text used to mention `/* @theme-init */` in
+  // its comments — fixed at the source, but the regex shape is the
+  // defense-in-depth).
+  const THEME_TOKEN_RE = /^[ \t]*\/\* @theme-tokens \*\/[ \t]*$/m;
+  const THEME_INIT_RE  = /^[ \t]*\/\* @theme-init \*\/[ \t]*$/m;
+
   function injectSharedTheme(html) {
-    if (html.includes('/* @theme-tokens */')) {
-      html = html.replace('/* @theme-tokens */', _themeCss);
-    }
-    if (html.includes('/* @theme-init */')) {
-      html = html.replace('/* @theme-init */', _themeJs);
-    }
+    if (THEME_TOKEN_RE.test(html)) html = html.replace(THEME_TOKEN_RE, _themeCss);
+    if (THEME_INIT_RE.test(html))  html = html.replace(THEME_INIT_RE,  _themeJs);
     return html;
   }
 

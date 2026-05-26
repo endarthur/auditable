@@ -245,12 +245,22 @@ function _rewriteExportToConsts(src) {
 // injectSharedTheme already replaced it), so this is a no-op for them.
 // Extension surfaces opt in by leaving the placeholder in their HTML, and
 // the host runs this at spawn time per EXTENSION_SPEC §3.8.6.
+//
+// We test the placeholder against a regex that requires CSS-comment
+// boundaries with NO surrounding code (i.e. the placeholder must be the
+// only thing on its line, optionally indented). Otherwise a literal
+// `/* @theme-init */` mentioned inside an inlined comment would match and
+// trigger a runaway second substitution. Build-time substitution does the
+// same shape, so the two stay in sync.
+const _THEME_TOKEN_RE = /^[ \t]*\/\* @theme-tokens \*\/[ \t]*$/m;
+const _THEME_INIT_RE  = /^[ \t]*\/\* @theme-init \*\/[ \t]*$/m;
+
 function _substituteThemePlaceholders(text) {
-  if (_themeAssets.css && text.includes('/* @theme-tokens */')) {
-    text = text.replace('/* @theme-tokens */', () => _themeAssets.css);
+  if (_themeAssets.css && _THEME_TOKEN_RE.test(text)) {
+    text = text.replace(_THEME_TOKEN_RE, () => _themeAssets.css);
   }
-  if (_themeAssets.init && text.includes('/* @theme-init */')) {
-    text = text.replace('/* @theme-init */', () => _themeAssets.init);
+  if (_themeAssets.init && _THEME_INIT_RE.test(text)) {
+    text = text.replace(_THEME_INIT_RE, () => _themeAssets.init);
   }
   return text;
 }
