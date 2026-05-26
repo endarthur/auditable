@@ -5,17 +5,62 @@
 // Surfaces are embedded in works.html as gzip+base64 payloads (§15.1, built
 // by build.js); surfaceUrl() decompresses one to a blob URL on first spawn.
 
-const KINDS = new Map();          // kind → { label, icon, extensions }
+const KINDS = new Map();          // kind → { label, icon, extensions, … }
 const _surfaceBlobs = new Map();  // kind → blob URL (decompressed once)
 const _libSources = new Map();    // lib name → raw bundle source (string)
 const _atraLibSources = new Map();   // atra-lib name → raw .src.js source
+const _themeAssets = { css: null, init: null };  // populated by decompressLibs()
+
+// Extension-surface tracking, indexed for fast iteration during path routing
+// (Slice 2 will reach into _extensionSurfaces from kindForPath).
+const _extensionSurfaces = new Map();   // kind → { manifest, def }
 
 export function registerKind(kind, def) {
   KINDS.set(kind, {
     label:      def.label || kind,
     icon:       def.icon || '■',
     extensions: def.extensions || [],
+    extensionlessNames: def.extensionlessNames || null,
+    detect:     def.detect || null,
+    isExtension: !!def.isExtension,
+    extension:  def.extension || null,  // { manifest, file, libPath, requires, openAction }
   });
+}
+
+export function unregisterKind(kind) {
+  KINDS.delete(kind);
+  _extensionSurfaces.delete(kind);
+  const url = _surfaceBlobs.get(kind);
+  if (url) {
+    try { URL.revokeObjectURL(url); } catch { /* ignore */ }
+    _surfaceBlobs.delete(kind);
+  }
+}
+
+// Read-only iterator for path resolution (Slice 2). Returning the
+// extensions + detect callback per kind is enough for kindForPath; the
+// raw map is kept private.
+export function kindsForRouting() {
+  const out = [];
+  for (const [kind, def] of KINDS) {
+    out.push({
+      kind,
+      extensions: def.extensions || [],
+      extensionlessNames: def.extensionlessNames || null,
+      detect: def.detect || null,
+      isExtension: !!def.isExtension,
+    });
+  }
+  return out;
+}
+
+// Sources used by extension-surface registration to inline theme tokens
+// + the boot script. Built-ins skip these (substituted at build time).
+export function themeAssets() { return { css: _themeAssets.css, init: _themeAssets.init }; }
+export function libSources()  { return _libSources; }
+export function setSurfaceBlob(kind, url) { _surfaceBlobs.set(kind, url); }
+export function registerExtensionSurface(kind, manifest, def) {
+  _extensionSurfaces.set(kind, { manifest, def });
 }
 
 export function kindDef(kind) {
@@ -66,6 +111,14 @@ export async function decompressLibs() {
     const name = el.id.slice('atralib-'.length);
     _atraLibSources.set(name, await _decompressEl(el));
   }
+  // Shared theme tokens + boot script for extension surfaces. Built-in
+  // surfaces have these substituted at build time and won't contain the
+  // placeholder — extension surfaces from .gcupkg packages get them
+  // substituted at spawn time (EXTENSION_SPEC §3.8.6).
+  const cssEl  = document.getElementById('theme-css');
+  const initEl = document.getElementById('theme-init');
+  if (cssEl)  _themeAssets.css  = await _decompressEl(cssEl);
+  if (initEl) _themeAssets.init = await _decompressEl(initEl);
 }
 
 // Write each shared library into the workspace's /usr/lib as a module
@@ -118,7 +171,35 @@ function _rewriteExportToConsts(src) {
   });
 }
 
+// Substitute @theme-tokens / @theme-init placeholders with the decompressed
+// shared assets. Built-in surfaces don't carry the placeholder (build-time
+// injectSharedTheme already replaced it), so this is a no-op for them.
+// Extension surfaces opt in by leaving the placeholder in their HTML, and
+// the host runs this at spawn time per EXTENSION_SPEC §3.8.6.
+function _substituteThemePlaceholders(text) {
+  if (_themeAssets.css && text.includes('/* @theme-tokens */')) {
+    text = text.replace('/* @theme-tokens */', () => _themeAssets.css);
+  }
+  if (_themeAssets.init && text.includes('/* @theme-init */')) {
+    text = text.replace('/* @theme-init */', () => _themeAssets.init);
+  }
+  return text;
+}
+
+// Internal helper used by decompressSurfaces (built-in path) and by
+// works/js/extension-surfaces.js (extension path) — same lib-inlining +
+// theme-substitution pipeline applied to both. Exported as
+// processSurfaceHtml for external callers; the `kind` arg is unused
+// today but kept for future per-kind hooks (specialized inlining etc).
+export function processSurfaceHtml(text, kind) {
+  return _inlineLibsIntoSurface(text, kind);
+}
+
 function _inlineLibsIntoSurface(text, kind) {
+  // Theme tokens first — the substituted CSS may legitimately contain
+  // patterns the lib regex matches against (`import` mentions in comments),
+  // so the order matters less than landing both before iframe creation.
+  text = _substituteThemePlaceholders(text);
   // The import map is decorative once we're inlining.
   text = text.replace(/<script type="importmap">[\s\S]*?<\/script>\s*/, '');
   // CM6 is IIFE-shaped (sets `var CM6 = …` at module scope) — surfaces

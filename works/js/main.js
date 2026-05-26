@@ -11,6 +11,7 @@ import './settings-store.js';
 import './docs-loader.js';
 import './examples-loader.js';
 import './surface-registry.js';
+import './extension-surfaces.js';
 import './layout.js';
 import './surfaces.js';
 import './works-service.js';

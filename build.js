@@ -388,6 +388,21 @@ if (target === 'works' || target === 'works-all') {
       const b64 = gz.toString('base64').replace(/.{1,76}/g, '$&\n');
       parts.push(`<script type="text/plain" id="atralib-${lib.name}">\n${b64}\n</script>`);
     }
+    // Shared theme assets — same gzip+base64 envelope as a lib payload,
+    // but the runtime routes them into theme-substitution rather than
+    // bare-import inlining. Built-in surfaces have these substituted at
+    // build time (see injectSharedTheme above); extension surfaces from
+    // .gcupkg packages get them substituted at spawn time when the
+    // shell inlines /lib/<pkg>/<file>.html.
+    for (const [id, rel] of [
+      ['theme-css', 'works/surfaces/_theme.css'],
+      ['theme-init', 'works/surfaces/_theme-init.js'],
+    ]) {
+      const src = fs.readFileSync(path.join(__dirname, rel), 'utf8');
+      const gz = worksZlib.gzipSync(Buffer.from(src, 'utf8'));
+      const b64 = gz.toString('base64').replace(/.{1,76}/g, '$&\n');
+      parts.push(`<script type="text/plain" id="${id}">\n${b64}\n</script>`);
+    }
     return parts.join('\n');
   }
 

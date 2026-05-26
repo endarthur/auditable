@@ -183,6 +183,66 @@ function _validateManifest(m) {
   if (m.contextHook && typeof m.contextHook.setup !== 'function') {
     throw new Error('registerExtension: contextHook.setup must be a function');
   }
+  // Surface contributions — EXTENSION_SPEC §3.8.1. Shape-validated even
+  // outside Works (the registrar no-ops the registration in standalone
+  // auditable, but the schema lint still fires). Per-field rules mirror
+  // the spec's "Field rules" subsection.
+  if (m.surfaces !== undefined) {
+    if (!Array.isArray(m.surfaces)) {
+      throw new Error('registerExtension: manifest.surfaces must be an array');
+    }
+    const seenKinds = new Set();
+    for (const s of m.surfaces) {
+      if (!s || typeof s !== 'object') throw new Error('registerExtension: surfaces[] entries must be objects');
+      if (typeof s.kind !== 'string' || !s.kind) {
+        throw new Error('registerExtension: surfaces[].kind is required');
+      }
+      if (seenKinds.has(s.kind)) {
+        throw new Error(`registerExtension: surfaces[] declares kind "${s.kind}" twice in the same manifest`);
+      }
+      seenKinds.add(s.kind);
+      if (typeof s.file !== 'string' || !s.file) {
+        throw new Error(`registerExtension: surfaces["${s.kind}"].file is required`);
+      }
+      if (s.extensions !== undefined && !Array.isArray(s.extensions)) {
+        throw new Error(`registerExtension: surfaces["${s.kind}"].extensions must be an array`);
+      }
+      if (s.extensions) {
+        for (const ext of s.extensions) {
+          if (typeof ext !== 'string' || !ext.startsWith('.')) {
+            throw new Error(`registerExtension: surfaces["${s.kind}"].extensions must be dot-prefixed strings (got ${JSON.stringify(ext)})`);
+          }
+        }
+      }
+      if (s.detect !== undefined && typeof s.detect !== 'function') {
+        throw new Error(`registerExtension: surfaces["${s.kind}"].detect must be a function`);
+      }
+      if (s.requires !== undefined && !Array.isArray(s.requires)) {
+        throw new Error(`registerExtension: surfaces["${s.kind}"].requires must be an array of shared-lib names`);
+      }
+    }
+  }
+  // Context-menu contributions — EXTENSION_SPEC §3.8.2.
+  if (m.contextMenu !== undefined) {
+    if (!Array.isArray(m.contextMenu)) {
+      throw new Error('registerExtension: manifest.contextMenu must be an array');
+    }
+    for (const item of m.contextMenu) {
+      if (!item || typeof item !== 'object') throw new Error('registerExtension: contextMenu[] entries must be objects');
+      if (typeof item.label !== 'string' || !item.label) {
+        throw new Error('registerExtension: contextMenu[].label is required');
+      }
+      if (item.scope !== undefined && !['file', 'folder', 'project'].includes(item.scope)) {
+        throw new Error(`registerExtension: contextMenu["${item.label}"].scope must be one of: file, folder, project (got ${JSON.stringify(item.scope)})`);
+      }
+      if (item.filter !== undefined && typeof item.filter !== 'function') {
+        throw new Error(`registerExtension: contextMenu["${item.label}"].filter must be a function`);
+      }
+      if (typeof item.action !== 'function') {
+        throw new Error(`registerExtension: contextMenu["${item.label}"].action must be a function`);
+      }
+    }
+  }
   if (m.requires !== undefined) {
     if (m.requires === null || typeof m.requires !== 'object' || Array.isArray(m.requires)) {
       throw new Error('registerExtension: manifest.requires must be an object mapping names to range strings');
@@ -234,6 +294,19 @@ export function registerExtension(manifest) {
   }
   if (manifest.contextHook) {
     (window._cellContextHooks = window._cellContextHooks || []).push(manifest.contextHook);
+  }
+  // Surfaces + context-menu contributions are Works-host-only. The host
+  // installs window._worksRegisterExtensionSurfaces during shell boot;
+  // outside Works the hook is undefined and the contributions silently
+  // no-op (the registration has already been schema-validated above, so
+  // a malformed manifest still fails loud). EXTENSION_SPEC §3.8.
+  if (manifest.surfaces && typeof window._worksRegisterExtensionSurfaces === 'function') {
+    try { window._worksRegisterExtensionSurfaces(manifest); }
+    catch (e) { console.error(`[auditable] surfaces registration for "${manifest.name}":`, e); }
+  }
+  if (manifest.contextMenu && typeof window._worksRegisterExtensionContextMenu === 'function') {
+    try { window._worksRegisterExtensionContextMenu(manifest); }
+    catch (e) { console.error(`[auditable] contextMenu registration for "${manifest.name}":`, e); }
   }
   if (manifest.description || manifest.pluginUrl) {
     window._auditablePlugins.set(manifest.pluginUrl || manifest.name, {
@@ -308,6 +381,12 @@ function _unregisterContributions(manifest) {
   if (manifest.contextHook && Array.isArray(window._cellContextHooks)) {
     const idx = window._cellContextHooks.indexOf(manifest.contextHook);
     if (idx >= 0) window._cellContextHooks.splice(idx, 1);
+  }
+  if (manifest.surfaces && typeof window._worksUnregisterExtensionSurfaces === 'function') {
+    try { window._worksUnregisterExtensionSurfaces(manifest); } catch (e) { console.error(e); }
+  }
+  if (manifest.contextMenu && typeof window._worksUnregisterExtensionContextMenu === 'function') {
+    try { window._worksUnregisterExtensionContextMenu(manifest); } catch (e) { console.error(e); }
   }
   if (typeof manifest.onDeactivate === 'function') {
     try { manifest.onDeactivate(); } catch (e) { console.error(`[auditable] onDeactivate for "${manifest.name}":`, e); }

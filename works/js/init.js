@@ -19,6 +19,7 @@ import { importNotebook, importFileAsNotebook } from './import.js';
 import { buildProjectExportHtml, exportProject } from './project-export.js';
 import { mountHandle, unmountAt, restoreMounts } from './mount.js';
 import { installGlobalFileDrop } from './file-ops.js';
+import { installHooks as installExtensionSurfaceHooks } from './extension-surfaces.js';
 
 async function boot() {
   setupBus();                  // the A-Bus broker
@@ -29,6 +30,7 @@ async function boot() {
   await installDocsToVfs(WKS.vfs);         // /usr/share/doc/ for the docs surface
   await installExamplesToVfs(WKS.vfs);     // /usr/share/examples/ (works-all only)
   await decompressSurfaces();  // embedded surface payloads → blob URLs
+  installExtensionSurfaceHooks();  // wire registerExtension → ext-surface registrar
   setupLayout();               // the rails surface host
   setupMenuBar();              // the desktop menu bar
   setupTree();                 // the file-tree explorer

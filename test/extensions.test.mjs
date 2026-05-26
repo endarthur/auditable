@@ -110,6 +110,66 @@ describe('registerExtension — validation', () => {
         taggedLanguage: { name: 'foo' },
       }), /requires tokenize/);
   });
+
+  // ── surfaces + contextMenu (EXTENSION_SPEC §3.8) ──
+
+  it('surfaces requires kind and file', () => {
+    assert.throws(() => registerExtension({
+      name: '@gcu/no-kind', version: '0.1.0',
+      surfaces: [{ file: 'x.html' }],
+    }), /surfaces\[\]\.kind is required/);
+    assert.throws(() => registerExtension({
+      name: '@gcu/no-file', version: '0.1.0',
+      surfaces: [{ kind: 'foo' }],
+    }), /surfaces\["foo"\]\.file is required/);
+  });
+
+  it('surfaces[].extensions must be dot-prefixed', () => {
+    assert.throws(() => registerExtension({
+      name: '@gcu/bad-ext', version: '0.1.0',
+      surfaces: [{ kind: 'foo', file: 'x.html', extensions: ['parquet'] }],
+    }), /must be dot-prefixed/);
+  });
+
+  it('surfaces rejects duplicate kinds within the same manifest', () => {
+    assert.throws(() => registerExtension({
+      name: '@gcu/dup-kind', version: '0.1.0',
+      surfaces: [
+        { kind: 'foo', file: 'a.html' },
+        { kind: 'foo', file: 'b.html' },
+      ],
+    }), /declares kind "foo" twice/);
+  });
+
+  it('contextMenu requires label + action', () => {
+    assert.throws(() => registerExtension({
+      name: '@gcu/no-label', version: '0.1.0',
+      contextMenu: [{ action: () => {} }],
+    }), /contextMenu\[\]\.label is required/);
+    assert.throws(() => registerExtension({
+      name: '@gcu/no-action', version: '0.1.0',
+      contextMenu: [{ label: 'do', action: 'not-a-fn' }],
+    }), /action must be a function/);
+  });
+
+  it('contextMenu scope must be one of file/folder/project', () => {
+    assert.throws(() => registerExtension({
+      name: '@gcu/bad-scope', version: '0.1.0',
+      contextMenu: [{ label: 'x', scope: 'nonsense', action: () => {} }],
+    }), /scope must be one of/);
+  });
+
+  it('surfaces + contextMenu no-op outside Works (hooks absent)', () => {
+    // Standalone-side: no _worksRegisterExtensionSurfaces. Registration
+    // must succeed with shape-validated input and silently skip the
+    // host-side handoff.
+    assert.equal(typeof window._worksRegisterExtensionSurfaces, 'undefined');
+    assert.doesNotThrow(() => registerExtension({
+      name: '@gcu/noop-host', version: '0.1.0',
+      surfaces: [{ kind: 'noop-1', file: 'x.html', extensions: ['.foo'] }],
+      contextMenu: [{ label: 'noop', scope: 'file', action: () => {} }],
+    }));
+  });
 });
 
 describe('registerExtension — happy path', () => {
