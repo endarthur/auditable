@@ -15,7 +15,7 @@ import { decodeModules, encodeModules, parseNotebookTxt, hydrateVfs } from './se
 import { hydrateModulesFromVfs, hydrateNotebook, flushPendingDirty, migrateLegacyDump } from './persist.js';
 import { getSettings } from './settings.js';
 import { Dialog } from '#dialog';
-import { runAll } from './exec.js';
+import { runAll, autoLoadFromCells } from './exec.js';
 import { installIpynbDragDrop } from './ipynb-bridge.js';
 import { checkAndWarnCopyleft } from './license-warn.js';
 
@@ -547,6 +547,14 @@ async function init() {
     addCell('md', '');
     addCell('code', '');
   }
+  // Pre-load language packs + adapter bridges referenced by the cells
+  // we just hydrated. Without this, /// adder (and friends) render in
+  // fallback mode until the user hits Run All — the auto-load is
+  // wired to runDAG, which doesn't fire on a passive open. Calling it
+  // here triggers registerExtension → _ctActivatePendingCells → cells
+  // upgrade to their proper editor before first paint.
+  try { await autoLoadFromCells(); }
+  catch (e) { console.warn('[init] autoLoadFromCells:', e.message); }
   // Warn about copyleft components bundled inside this saved notebook.
   // Quiet for permissive-only notebooks; banner + console line otherwise.
   try { checkAndWarnCopyleft(); } catch (e) { console.warn('license-warn:', e); }
@@ -628,6 +636,13 @@ async function worksBoot(conn) {
   const modules = await hydrateModulesFromVfs(vfs);
   if (Object.keys(modules).length > 0) window._installedModules = modules;
   await hydrateNotebook(vfs);
+
+  // Pre-load language packs + adapter bridges referenced by the cells
+  // we just hydrated, so /// adder (and friends) render in their proper
+  // editor before first paint instead of fallback mode. The auto-load
+  // is normally wired to runDAG which doesn't fire on a passive open.
+  try { await autoLoadFromCells(); }
+  catch (e) { console.warn('[init] autoLoadFromCells (works):', e.message); }
 
   // Live re-hydrate of _installedModules when /lib changes underneath us.
   // The drag-drop and `pkg install` paths update the workspace VFS but

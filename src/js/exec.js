@@ -149,6 +149,17 @@ function _diagLog(level, ...args) {
   } catch { /* cross-origin guard */ }
 }
 
+// Public wrapper — exposed so init.js can fire it once at notebook
+// hydration time. Without this, cells of an extension-provided type
+// render as fallback (no language-aware editor) on first open and
+// only upgrade after the user clicks Run All. Calling this immediately
+// after hydrateNotebook lets the cells boot in their proper editor
+// from the first paint.
+export async function autoLoadFromCells() {
+  await _autoLoadLanguagePacks();
+  await _autoLoadAdapters();
+}
+
 async function _autoLoadLanguagePacks() {
   const want = new Set();
   const fallbackTypes = new Set();
@@ -225,6 +236,19 @@ async function _autoLoadAdapters() {
       continue;
     }
     const chosen = candidates.find(k => k.startsWith('@gcu/')) || candidates[0];
+    // Adapter bridges typically need their engine in _importCache first
+    // (the convention is `_engine = window._importCache["@gcu/<pkg>"]`
+    // at module-eval time — see carotte's adder.js for the canonical
+    // pattern). Load the engine first if it's installed but not yet
+    // cached. Same scope, no /adder suffix.
+    const enginePath = chosen.slice(0, -adapterSuffix.length);
+    if (installed[enginePath] && !window._importCache?.[enginePath]) {
+      try {
+        await loadInstalledModule(enginePath);
+        _diagLog('info', `[runtime] auto-loaded engine "${enginePath}" (prerequisite of "${chosen}")`);
+      }
+      catch (e) { _diagLog('warn', `[runtime] auto-load engine "${enginePath}":`, e.message); }
+    }
     try {
       await loadInstalledModule(chosen);
       _diagLog('info', `[runtime] auto-loaded adapter "${chosen}" (referenced by \`from ${name} import …\`)`);
