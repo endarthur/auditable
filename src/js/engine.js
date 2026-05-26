@@ -199,6 +199,10 @@ export async function executeDAG(cells, dirtyIds, runSet, scope, options) {
           if (v !== undefined) scope[k] = v;
         }
       }
+      if (onAfterExec) {
+        const jump = onAfterExec(cell, i);
+        if (jump >= 0) { i = jump - 1; continue; }
+      }
       continue;
     }
 
@@ -267,7 +271,7 @@ export async function executeDAG(cells, dirtyIds, runSet, scope, options) {
       for (const name of cell.uses) cell._prevInputs[name] = scope[name];
     }
 
-    if (onAfterExec && !isAutorun) {
+    if (onAfterExec) {
       const jump = onAfterExec(cell, i);
       if (jump >= 0) { i = jump - 1; continue; }
     }
