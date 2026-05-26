@@ -132,6 +132,23 @@ export const LANGUAGE_PACKS = {
   soft:  '@gcu/soft',
 };
 
+// Diagnostic log helper — emits to this frame's console AND the parent
+// frame's console when running as a Works surface, so users don't have
+// to dig into the per-iframe console context in DevTools.
+function _diagLog(level, ...args) {
+  const fn = console[level] || console.log;
+  fn.call(console, ...args);
+  // Best-effort cross-frame mirror. SecurityError when origins differ
+  // (e.g. http vs file://) is swallowed — the main-frame log is the
+  // bonus, the local log is the source of truth.
+  try {
+    if (window.parent && window.parent !== window) {
+      const p = window.parent.console;
+      if (p && typeof p[level] === 'function') p[level].call(p, '[notebook]', ...args);
+    }
+  } catch { /* cross-origin guard */ }
+}
+
 async function _autoLoadLanguagePacks() {
   const want = new Set();
   const fallbackTypes = new Set();
@@ -154,7 +171,7 @@ async function _autoLoadLanguagePacks() {
   for (const t of fallbackTypes) {
     const pack = LANGUAGE_PACKS[t];
     if (pack && !window._installedModules?.[pack]) {
-      console.info(`[runtime] /// ${t} cell present but ${pack} is not installed — install it to enable.`);
+      _diagLog('info', `[runtime] /// ${t} cell present but ${pack} is not installed — install it to enable.`);
     }
   }
   if (want.size === 0) return;
@@ -165,9 +182,9 @@ async function _autoLoadLanguagePacks() {
   for (const pack of want) {
     try {
       await loadInstalledModule(pack);
-      console.info(`[runtime] auto-loaded language pack "${pack}"`);
+      _diagLog('info', `[runtime] auto-loaded language pack "${pack}"`);
     }
-    catch (e) { console.warn(`[runtime] auto-load("${pack}") failed:`, e.message); }
+    catch (e) { _diagLog('warn', `[runtime] auto-load("${pack}") failed:`, e.message); }
   }
   const langsAfter = window._taggedLanguages ? Object.keys(window._taggedLanguages).length : 0;
   if (langsAfter > langsBefore) refreshTaggedLanguages();
@@ -204,15 +221,15 @@ async function _autoLoadAdapters() {
     if (candidates.length === 0) {
       // Helpful for diagnosing "I wrote `from carotte import` but
       // nothing happened" — point at the most likely cause.
-      console.info(`[runtime] adder import "from ${name} import …" present — but no */${name}/adder package is installed.`);
+      _diagLog('info', `[runtime] adder import "from ${name} import …" present — but no */${name}/adder package is installed.`);
       continue;
     }
     const chosen = candidates.find(k => k.startsWith('@gcu/')) || candidates[0];
     try {
       await loadInstalledModule(chosen);
-      console.info(`[runtime] auto-loaded adapter "${chosen}" (referenced by \`from ${name} import …\`)`);
+      _diagLog('info', `[runtime] auto-loaded adapter "${chosen}" (referenced by \`from ${name} import …\`)`);
     }
-    catch (e) { console.warn(`[runtime] auto-load adapter "${chosen}":`, e.message); }
+    catch (e) { _diagLog('warn', `[runtime] auto-load adapter "${chosen}":`, e.message); }
   }
 }
 
