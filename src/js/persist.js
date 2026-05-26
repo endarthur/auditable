@@ -15,6 +15,7 @@ import { applySettings } from './settings.js';
 import { isCollapsed } from './dag.js';
 import { parseNotebookTxt, serializeNotebookTxt, serializeVfs, hydrateVfs } from './serialize.js';
 import { cryptoIsLocked, cryptoBuildBlock, cryptoDetect } from './crypto.js';
+import { hydrateAllSavedOutputs, sweepOrphanOutputs } from './outputs.js';
 
 export { serializeVfs, hydrateVfs };
 
@@ -254,10 +255,8 @@ export async function flushPendingDirty(vfs, S, settings, title) {
   // Sweep orphan output sidecars — catches anything the incremental
   // cleanup missed (e.g. cells removed without the runtime around to
   // see it). Best-effort.
-  try {
-    const { sweepOrphanOutputs } = await import('./outputs.js');
-    await sweepOrphanOutputs();
-  } catch (e) { console.warn('[persist] sweep orphan outputs failed:', e.message); }
+  try { await sweepOrphanOutputs(); }
+  catch (e) { console.warn('[persist] sweep orphan outputs failed:', e.message); }
 }
 
 async function _walkLibLeaves(vfs, base, segments, result) {
@@ -383,17 +382,12 @@ export async function hydrateNotebook(vfs) {
   }
 
   // Restore saved cell outputs from /projects/self/notebook.outputs/.
-  // Each cell looks up its own source-hash; if a sidecar exists, the
-  // saved output gets injected into its .cell-output element. The
-  // notebook appears already-run on open without any cells actually
-  // executing. Best-effort — if outputs load fails we proceed without
-  // them.
-  try {
-    const { hydrateAllSavedOutputs } = await import('./outputs.js');
-    await hydrateAllSavedOutputs();
-  } catch (e) {
-    console.warn('[persist] saved-output hydration failed:', e.message);
-  }
+  // Each cell looks up its own id; if a sidecar exists, the saved output
+  // gets injected into its .cell-output element. The notebook appears
+  // already-run on open without any cells actually executing.
+  // Best-effort — if outputs load fails we proceed without them.
+  try { await hydrateAllSavedOutputs(); }
+  catch (e) { console.warn('[persist] saved-output hydration failed:', e.message); }
 }
 
 // ── Legacy VFS-dump migration (pre-4a /var + /home/nb layout) ───────

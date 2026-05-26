@@ -640,13 +640,22 @@ async function worksBoot(conn) {
   // and debounce-call host.persist(). 1.5s collapses bursts; longer
   // than the 400ms output-save debounce so the output file is on disk
   // before we writeBack the project tree.
+  //
+  // _persisting guards against the persist-fires-dirty-fires-persist
+  // feedback loop: syncCellsToVfs writes notebook.txt via CommentBackend,
+  // which fires notebook:dirty as a side-effect. Without the guard, every
+  // persist immediately scheduled another, hammering the workspace VFS.
   let _autoSaveTimer = null;
+  let _persisting = false;
   const scheduleAutoSave = () => {
+    if (_persisting) return;
     if (_autoSaveTimer) clearTimeout(_autoSaveTimer);
     _autoSaveTimer = setTimeout(async () => {
       _autoSaveTimer = null;
+      _persisting = true;
       try { await host.persist(); }
       catch (e) { console.warn('[autosave]', e.message); }
+      finally { _persisting = false; }
     }, 1500);
   };
   hooks.on('notebook:dirty', scheduleAutoSave);
