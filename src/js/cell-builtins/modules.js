@@ -177,8 +177,16 @@ function _aliasToUrl(key) {
 // Find every `@scope/pkg` bare specifier referenced by a module source's
 // static or dynamic imports. Used to pre-load and rewrite cross-package
 // deps before a blob-URL-hosted module tries to resolve them itself.
+//
+// Captures the FULL multi-segment path (`@gcu/carotte/adder`), not just
+// the two-segment scope+name. Secondary entries — the adder.js bridge
+// pattern — are stored under their full key in _installedModules, so
+// the rewriter has to ask for them by their full name, otherwise the
+// rewrite hits `@gcu/carotte` only and the literal `@gcu/carotte/adder`
+// in the import statement survives into the blob and the browser fails
+// to resolve it.
 function _findScopedSpecifiers(source) {
-  const re = /(?:from|import)\s*\(?\s*["'](@[\w.-]+\/[\w.-]+)["']/g;
+  const re = /(?:from|import)\s*\(?\s*["'](@[\w.-]+\/[\w.-]+(?:\/[\w.-]+)*)["']/g;
   const specs = new Set();
   let m;
   while ((m = re.exec(source)) !== null) specs.add(m[1]);
