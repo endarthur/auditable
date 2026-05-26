@@ -164,7 +164,10 @@ function renderNode(node, depth) {
 
   let icon, label;
   if (node.type === 'folder') {
-    icon = null;                            // chevron alone is enough
+    icon = ' ';                             // empty spacer — keeps the
+                                            // icon column reserved so
+                                            // labels align with files +
+                                            // projects at the same depth
     label = node.label || node.name;
   } else if (node.type === 'project') {
     icon = (kindDef(node.kind) || {}).icon || '■';
@@ -175,12 +178,10 @@ function renderNode(node, depth) {
   }
 
   row.appendChild(chevron);
-  if (icon !== null) {
-    const iconEl = document.createElement('span');
-    iconEl.className = 'tree-icon';
-    iconEl.textContent = icon;
-    row.appendChild(iconEl);
-  }
+  const iconEl = document.createElement('span');
+  iconEl.className = 'tree-icon';
+  iconEl.textContent = icon;
+  row.appendChild(iconEl);
   const labelEl = document.createElement('span');
   labelEl.className = 'tree-label';
   labelEl.textContent = label;
