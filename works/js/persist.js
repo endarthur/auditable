@@ -8,7 +8,19 @@
 import { WKS, setStatus } from './state.js';
 
 const BLOCK_RE = /<!--WORKS-VFS\n([\s\S]*?)\nWORKS-VFS-->/;
-const PERSISTENT = ['/projects', '/lib', '/home'];
+// Mounts that travel with a workspace export.
+//   /projects — user notebooks
+//   /lib      — installed extensions (gcupkgs, lockfile)
+//   /home     — user files + Works state (e.g. /home/.works/layout.json)
+//   /etc      — workspace settings (theme, font, text-editor prefs);
+//               settings-store.js's contract is "what should travel with
+//               the workspace export"
+//
+// Deliberately excluded:
+//   /sys, /usr — volatile, rebuilt by the shell at boot from build payloads
+//   /tmp       — scratch
+//   /mnt/<x>   — disk-folder mounts; FileSystemDirectoryHandles can't roam
+const PERSISTENT = ['/projects', '/lib', '/home', '/etc'];
 
 function _bytesToB64(bytes) {
   let s = '';
