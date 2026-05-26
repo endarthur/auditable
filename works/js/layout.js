@@ -44,11 +44,18 @@ export function setupLayout() {
     },
   });
 
-  // Persist the layout (debounced) whenever it changes.
-  WKS.rails.on('layout:change', () => {
+  // Persist the layout (debounced) whenever it changes. `layout:change`
+  // covers adds / removes / moves / resizes; `tab:activate` (clicking a
+  // tab to switch active) is a separate event that rails doesn't roll
+  // into layout:change. Without saving on activate too, switching tabs
+  // never reaches disk and reloads pop back to whichever tab was active
+  // at the last add/remove.
+  const _scheduleSave = () => {
     clearTimeout(_saveTimer);
     _saveTimer = setTimeout(saveLayout, 250);
-  });
+  };
+  WKS.rails.on('layout:change', _scheduleSave);
+  WKS.rails.on('tab:activate',  _scheduleSave);
 }
 
 async function saveLayout() {
