@@ -144,18 +144,33 @@ function _outputPath(cellId) {
 
 // Public: trigger a debounced save for one cell. Same file overwritten
 // on every save (filename = cell.id is stable); no orphans from edits.
+// Opt-in diagnostic logging — set `window._outputsDebug = true` in the
+// iframe's devtools to trace the output-save → autosave → writeBack chain.
+// Useful for verifying changes to the sidecar path without console spam in
+// normal use.
+const _dbg = (...a) => { if (window._outputsDebug) console.log(...a); };
+
 export function scheduleOutputSave(cell) {
-  if (!_shouldSave(cell)) return;
+  if (!_shouldSave(cell)) {
+    _dbg('[outputs] skip (not executable)', cell.id, cell.type);
+    return;
+  }
   const vfs = window._notebookVFS;
-  if (!vfs) return;
+  if (!vfs) {
+    _dbg('[outputs] skip (no VFS)', cell.id);
+    return;
+  }
   const existing = _saveTimers.get(cell.id);
   if (existing) clearTimeout(existing);
+  _dbg('[outputs] scheduling save for', cell.id);
   _saveTimers.set(cell.id, setTimeout(async () => {
     _saveTimers.delete(cell.id);
     try {
       const entry = await _buildEntry(cell);
       await vfs.mkdir(OUTPUTS_DIR, { recursive: true }).catch(() => {});
       await vfs.writeFile(_outputPath(cell.id), JSON.stringify(entry));
+      _dbg('[outputs] saved', cell.id, '→', _outputPath(cell.id),
+           '(' + JSON.stringify(entry).length + ' bytes)');
     } catch (e) {
       console.warn(`[outputs] save failed for cell ${cell.id}:`, e.message);
     }

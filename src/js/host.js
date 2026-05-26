@@ -327,8 +327,16 @@ export function createWorksHost({ bus, projectPath, syncToVfs, home }) {
     // copy back to the shared workspace. Also serves Surface.Flush() and the
     // self-flush cadence.
     async persist() {
+      const dbg = window._outputsDebug;
+      if (dbg) console.log('[host] persist: projectPath =', projectPath);
       await syncToVfs();
+      if (dbg) {
+        const entries = await window._notebookVFS.readdir('/projects/self')
+          .catch(e => ['<readdir err: ' + e.message + '>']);
+        console.log('[host] persist: /projects/self entries =', entries);
+      }
       await writeBack(window._notebookVFS, '/projects/self', projectPath);
+      if (dbg) console.log('[host] persist: writeBack done →', projectPath);
       return 'saved';
     },
 

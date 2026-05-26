@@ -73,9 +73,11 @@ export function installSurfaceContract({ bus, host }) {
     if (flushP) return flushP;
     clearTimeout(flushTimer);
     flushTimer = null;
+    if (window._outputsDebug) console.log('[surface] flush firing');
     flushP = (async () => {
       try {
         await host.persist();
+        if (window._outputsDebug) console.log('[surface] flush done');
         if (dirty) { dirty = false; emit('DirtyChanged', [false]); }
       } catch (e) {
         console.error('[surface] flush failed:', e);
