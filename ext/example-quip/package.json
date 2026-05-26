@@ -1,0 +1,17 @@
+{
+  "name": "@example/quip",
+  "version": "0.1.0",
+  "description": "A toy templating language — the reference example extension for EXTENSION_SPEC.md.",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./adder": "./adder.js"
+  },
+  "license": "MIT",
+  "keywords": ["auditable-extension", "example"],
+  "auditable": {
+    "kind": "extension",
+    "exampleOf": "EXTENSION_SPEC.md — cellType + taggedLanguage + exports + surface + contextMenu"
+  }
+}

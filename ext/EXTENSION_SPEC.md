@@ -25,7 +25,14 @@ If you're a Claude Code session in another repo and a user has just asked "make 
 5. **§6** — only if you're packaging as `.gcupkg` for sideloading. Out-of-tree extensions that publish via npm / unpkg / a raw URL don't need this.
 6. **§11** — documentation conventions (README/SPEC structure + the first-paragraph rule + anti-patterns) when you're writing the user-facing docs.
 
-**Reference implementations to read from:** in-tree, the cross-language adapter family (`ext/learn/`, `ext/natra/`, `ext/sadpan/`, `ext/scitra/`, `ext/plot/`, `ext/line/`) all follow the same Python-shape wrapper pattern (§4). For a tagged-language extension, see `ext/sql/`, `ext/shader/`, or `ext/atra/`. For a full cell type with AIR lowering, `ext/adder/` and `ext/soft/` are the canonical references. Out-of-tree, a complete `.gcupkg` (§6.1) needs only `package.json`, `index.js`, an optional `adder.js`, `LICENSE`, `.gcupkg-meta.json`, and whatever assets your extension wants.
+**Reference implementations to read from:**
+
+- **`ext/example-quip/`** is the documentation-aligned reference. One toy extension that exercises every capability slot this spec defines (cell type, tagged language, Python adapter via `exports`, global, Works surface, context-menu action, `.gcupkg` packaging). Not bundled into `works.html` / `works-all.html` — it's a standalone `.gcupkg` you install to exercise. Read its source as a working answer to "how do I do X in an extension?", or fork the directory as your starting template (the README walks the fork checklist).
+- In-tree adapters: the cross-language family (`ext/learn/`, `ext/natra/`, `ext/sadpan/`, `ext/scitra/`, `ext/plot/`, `ext/line/`) all follow the same Python-shape wrapper pattern from §4.
+- Tagged-language only: `ext/sql/`, `ext/shader/`, `ext/atra/`.
+- Full cell type with AIR lowering: `ext/adder/`, `ext/soft/`.
+
+Out-of-tree, a complete `.gcupkg` (§6.1) needs only `package.json`, `index.js`, an optional `adder.js`, `LICENSE`, `.gcupkg-meta.json`, and whatever assets your extension wants. `ext/example-quip/pack.js` is a 200-line packer you can copy.
 
 **Things that bite, summarized:**
 
@@ -982,6 +989,8 @@ The `examples/defs/<category>/<name>.txt` system is the host's smoke-test corpus
 ---
 
 ## 10. Hello world
+
+For a complete worked example that exercises every capability slot this spec defines, see **`ext/example-quip/`** — toy templating language packaged as a `.gcupkg`, with cell type + tagged template + Python adapter + Works surface + context-menu action all wired in. The directory is meant to be forked as a starting template.
 
 The smallest useful extension is a tagged-language registration. The full template:
 

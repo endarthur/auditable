@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "examples": [
+    {
+      "file": "quip-tour.txt",
+      "title": "@example/quip — guided tour",
+      "description": "Every capability the extension contributes, in one notebook: cell type, tagged template, Python adapter, surface, and the right-click context-menu action."
+    }
+  ]
+}

@@ -1,0 +1,95 @@
+/// auditable
+/// title: @example/quip — guided tour
+
+/// md
+# @example/quip
+
+A guided tour of every capability the example extension contributes. Each
+section maps to one section of EXTENSION_SPEC.md — read this notebook
+top to bottom with the spec open on the side.
+
+The extension provides a toy templating language: each statement is
+`name = template` with `{var}` interpolation. The point isn't the
+language, it's the wiring.
+
+/// md
+## §3.1 — cell type
+
+A `/// quip` cell parses its body and defines one scope variable named
+via `// %cellName <var>`. Downstream cells can call each template as a
+function.
+
+/// quip
+// %cellName greetings
+hello   = Hi, {name}!
+bye     = See you, {name}.
+warning = Watch out for {what}!
+
+/// code
+ui.display(greetings.hello({ name: "Ada" }));
+ui.display(greetings.warning({ what: "bears" }));
+ui.display("templates exposed: " + Object.keys(greetings).join(", "));
+
+/// md
+## §3.2 — tagged language
+
+The same DSL is available as a tagged template inside JS code cells.
+The `quip` tag is published as a global by the manifest's `globals`
+slot — no `load()` needed.
+
+/// code
+const phrases = quip`
+  hi   = Hi, {name}!
+  oops = Sorry, {name} — try again.
+`;
+
+ui.display(phrases.hi({ name: "Brennan" }));
+ui.display(phrases.oops({ name: "Casey" }));
+
+/// md
+## §3.5 — cross-language adapter (Python shape)
+
+The adapter publishes a `quip` namespace into `_auditableExtensions`,
+so adder cells can `from quip import …`. The runtime auto-loads
+`@example/quip/adder` when it sees the import — no preamble.
+
+/// adder
+from quip import parse, render
+
+phrases = parse("howdy = Howdy, {place}!\\nbye = See you, {place}!")
+print(phrases["howdy"]({"place": "Earth"}))
+print(render("Watch out for {what}!", {"what": "bears"}))
+
+/// md
+## §3.8 — surface and context menu (Works only)
+
+In Works, double-click any `.quip` file in the tree to open it in the
+Quip Viewer surface. Right-click any `.quip` file to find an "Export
+as JSON" item — it writes a sibling `.json` file with the parsed
+templates as a flat object.
+
+The cell below writes a tiny `.quip` file you can try both on.
+
+/// code
+const sample = `
+# A sample file for the viewer + context menu.
+greet      = Hello, {who}!
+farewell   = So long, {who}.
+warning    = Watch out for {what}!
+literal    = Use {{curly braces}} like this.
+`;
+
+await vfs.mkdir("/projects/self/quip-demo", { recursive: true });
+await vfs.writeFile("/projects/self/quip-demo/sample.quip", sample);
+ui.display("wrote /projects/self/quip-demo/sample.quip — find it in the tree");
+
+/// md
+## §6.1 — distribution
+
+This notebook is bundled inside `example-quip@0.1.0.gcupkg`. After
+running `install("…/example-quip@0.1.0.gcupkg")` once (or dragging it
+onto the tree), the extension's modules live in `/lib/@example/quip/`
+and survive workspace reloads. Boot-time rehydration registers the
+surface kind declaratively (see EXTENSION_SPEC §3.8.7); the JS-side
+callbacks bind when the extension's `index.js` runs through
+`load("@example/quip")` or an auto-load trigger.

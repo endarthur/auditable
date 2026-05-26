@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>Quip viewer</title>
+<style>
+  /* @theme-tokens */
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--au-surface);
+    color: var(--au-fg);
+    font: 13px/1.5 system-ui, sans-serif;
+  }
+  header {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--au-border);
+    background: var(--au-surface-raised);
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  header h1 { margin: 0; font-size: 14px; color: var(--au-fg); }
+  header .path { font: 12px/1 var(--au-mono, monospace); color: var(--au-fg-muted); }
+  main { padding: 12px 14px; overflow: auto; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td {
+    padding: 6px 10px;
+    text-align: left;
+    border-bottom: 1px solid var(--au-border);
+    vertical-align: top;
+  }
+  th { color: var(--au-fg-muted); font-weight: 500; font-size: 11px; text-transform: uppercase; }
+  td.name { font: 12px/1.4 var(--au-mono, monospace); color: var(--au-action); white-space: nowrap; }
+  td.template { font: 13px/1.5 system-ui; }
+  td.template .var { color: var(--au-info); font: 12px/1 var(--au-mono, monospace); }
+  .empty { padding: 40px; text-align: center; color: var(--au-fg-muted); }
+  .error {
+    padding: 12px 14px;
+    color: var(--au-fault);
+    background: var(--au-surface-raised);
+    border: 1px solid var(--au-fault);
+    margin: 12px;
+    border-radius: 2px;
+    font: 12px/1.4 var(--au-mono, monospace);
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--au-border) transparent;
+  }
+  *::-webkit-scrollbar { width: 8px; height: 8px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  *::-webkit-scrollbar-thumb { background: var(--au-border); border-radius: 4px; }
+  *::-webkit-scrollbar-thumb:hover { background: var(--au-fg-soft); }
+  *::-webkit-scrollbar-corner { background: transparent; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Quip Viewer</h1>
+  <span class="path" id="path">…</span>
+</header>
+<main id="main">Loading…</main>
+
+<script type="module">
+import { connect } from '@gcu/abus';
+
+/* @theme-init */
+
+// Parsing inlined here so the surface stays self-contained (no relative
+// import to /lib/<pkg>/src/parse.js — surfaces run in an opaque-origin
+// blob context where such imports don't resolve).
+function parseQuip(source) {
+  const templates = {};
+  const lines = source.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (line === '' || line.startsWith('#')) continue;
+    const eq = line.indexOf('=');
+    if (eq < 0) throw new SyntaxError(`line ${i + 1}: missing '='`);
+    const name = line.slice(0, eq).trim();
+    const template = line.slice(eq + 1).trim();
+    if (!/^[A-Za-z_][\w-]*$/.test(name)) {
+      throw new SyntaxError(`line ${i + 1}: '${name}' is not a valid name`);
+    }
+    templates[name] = template;
+  }
+  return templates;
+}
+
+function highlightTemplate(template) {
+  // Split into runs of plain text vs. {var} references.
+  const parts = [];
+  const re = /\{([A-Za-z_][\w-]*)\}/g;
+  let last = 0, m;
+  while ((m = re.exec(template)) !== null) {
+    if (m.index > last) parts.push({ kind: 'text', s: template.slice(last, m.index) });
+    parts.push({ kind: 'var', s: m[0] });
+    last = re.lastIndex;
+  }
+  if (last < template.length) parts.push({ kind: 'text', s: template.slice(last) });
+  return parts;
+}
+
+function render(parsed, path) {
+  const main = document.getElementById('main');
+  document.getElementById('path').textContent = path || '';
+  main.innerHTML = '';
+  const names = Object.keys(parsed);
+  if (names.length === 0) {
+    const div = document.createElement('div');
+    div.className = 'empty';
+    div.textContent = '(empty .quip file)';
+    main.appendChild(div);
+    return;
+  }
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  thead.innerHTML = '<tr><th>name</th><th>template</th></tr>';
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  for (const name of names) {
+    const tr = document.createElement('tr');
+    const nameCell = document.createElement('td');
+    nameCell.className = 'name';
+    nameCell.textContent = name;
+    tr.appendChild(nameCell);
+    const tmplCell = document.createElement('td');
+    tmplCell.className = 'template';
+    for (const part of highlightTemplate(parsed[name])) {
+      const span = document.createElement('span');
+      if (part.kind === 'var') span.className = 'var';
+      span.textContent = part.s;
+      tmplCell.appendChild(span);
+    }
+    tr.appendChild(tmplCell);
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  main.appendChild(table);
+}
+
+function renderError(path, message) {
+  const main = document.getElementById('main');
+  document.getElementById('path').textContent = path || '';
+  main.innerHTML = '';
+  const div = document.createElement('div');
+  div.className = 'error';
+  div.textContent = message;
+  main.appendChild(div);
+}
+
+window.addEventListener('message', async (ev) => {
+  if (ev.source !== window.parent) return;
+  if (!ev.data || ev.data.type !== 'abus:welcome') return;
+  const { port, tab } = ev.data;
+
+  let bus;
+  try {
+    bus = await connect(port, { client: 'example-quip-surface' });
+  } catch (e) {
+    renderError('', 'A-Bus connect failed: ' + e.message);
+    return;
+  }
+  installThemeSubscription(bus);
+
+  // §5.2 Surface contract — read-only viewer, so Flush is a no-op
+  // and CanClose always returns true.
+  bus.expose('/', {
+    Surface: {
+      methods: {
+        Flush:     () => {},
+        CanClose:  () => true,
+        Relocated: (_p) => { /* tabs aren't re-routed for this viewer */ },
+      },
+      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
+    },
+  });
+
+  const path = tab && tab.path;
+  if (!path) {
+    renderError('', 'no path supplied (the viewer only opens a .quip file)');
+    bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
+    return;
+  }
+  let source;
+  try {
+    source = await bus.call(
+      { to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [path, 'utf8']);
+  } catch (e) {
+    renderError(path, 'read failed: ' + (e && e.message || e));
+    bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
+    return;
+  }
+  try {
+    const parsed = parseQuip(source);
+    render(parsed, path);
+  } catch (e) {
+    renderError(path, 'parse failed: ' + e.message);
+  }
+
+  bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' },
+    [path.split('/').pop() || 'quip']);
+  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
+});
+</script>
+</body>
+</html>

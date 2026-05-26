@@ -260,12 +260,17 @@ if (target === 'works' || target === 'works-all') {
   // For --target=works-all: bundle every ext/<name>/index.js that's a real
   // bundle (skip the re-export shims under ~1 KB — they break the
   // single-file SHARED_LIBS pattern because they import from sibling files).
+  // Directories prefixed `example-` are reference examples shipped as
+  // standalone .gcupkg distributables (not bundled into any works build);
+  // they exist as a documentation aid for EXTENSION_SPEC.md and must be
+  // installed by the user to exercise them.
   function _allExtBundles() {
     const base = new Set(SHARED_LIBS_BASE);
     const extra = [];
     const extDir = path.join(__dirname, 'ext');
     for (const entry of fs.readdirSync(extDir, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
+      if (entry.name.startsWith('example-')) continue;   // reference examples — not bundled
       const idx = path.join(extDir, entry.name, 'index.js');
       if (!fs.existsSync(idx)) continue;
       const size = fs.statSync(idx).size;
