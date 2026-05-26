@@ -88,3 +88,22 @@
   --sw-red:         #F88C8C;  --sw-red-soft:    #2C1A18;
   --sw-indigo:      #C080C0;  --sw-indigo-soft: #1E2030;
 }
+
+/* GCU thin scrollbar — mirrors the shell rule in works/style.css. Each
+   surface is its own document with its own scrollbars, so the same
+   block has to land here too. Universal selector + transparent track
+   keeps the chrome out of the way; thumb tracks the border token. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--au-border) transparent;
+}
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--au-border);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--au-fg-soft);
+}
+*::-webkit-scrollbar-corner { background: transparent; }
