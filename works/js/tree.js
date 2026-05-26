@@ -164,11 +164,11 @@ function renderNode(node, depth) {
 
   let icon, label;
   if (node.type === 'folder') {
-    // Hollow square — reads as "container". The chevron column beside
-    // it carries the open/closed affordance. The icon column stays
-    // reserved (whether glyph or blank) so labels align with file rows
-    // at the same depth.
-    icon = '□';
+    // Squared minus — reads as a closed-folder / contained group. The
+    // chevron column beside it carries the open/closed affordance; the
+    // icon column stays reserved (whether glyph or blank) so labels
+    // align with file rows at the same depth.
+    icon = '⊟';
     label = node.label || node.name;
   } else if (node.type === 'project') {
     icon = (kindDef(node.kind) || {}).icon || '■';
