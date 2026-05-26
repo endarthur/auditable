@@ -99,20 +99,38 @@
     color: var(--au-fg);
     border-color: var(--au-fg-soft);
   }
-  /* CM6's close button (name="close") is just the literal "×" character —
-     easy to miss alongside Next / Prev / All. Pull it out: bigger, accent-
-     coloured, with an "Esc" hint tooltip. */
+  /* CM6's search panel ships a close button at name="close" — by default
+     position: absolute; top: 0; right: 4px inside .cm-search. Make it
+     impossible to miss: explicit position, accent border, larger ×,
+     standout background. !important wards off any conflicting rule
+     from CM6's baseTheme or our generic .cm-panel button styling above. */
   #editor-root .cm-panel button[name="close"] {
-    color: var(--au-fg);
-    font-size: 14px;
+    position: absolute !important;
+    top: 4px !important;
+    right: 6px !important;
+    z-index: 2;
+    width: 22px;
+    height: 22px;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: var(--au-surface-deep) !important;
+    border: 1px solid var(--au-border) !important;
+    border-radius: 3px;
+    color: var(--au-fg) !important;
+    font-size: 16px;
     font-weight: 700;
-    padding: 0 8px;
-    line-height: 1;
-    margin-left: 8px;
+    line-height: 20px;
+    text-align: center;
+    cursor: pointer;
   }
   #editor-root .cm-panel button[name="close"]:hover {
-    color: var(--au-action);
-    border-color: var(--au-action);
+    color: var(--au-action) !important;
+    border-color: var(--au-action) !important;
+  }
+  /* Make sure the panel has enough right padding so the absolute close
+     button doesn't visually overlap the last input/button in the row. */
+  #editor-root .cm-panel.cm-search {
+    padding-right: 36px !important;
   }
   #editor-root .cm-search-match { background: var(--au-action-soft); }
   #editor-root .cm-selectionMatch { background: var(--au-warn-soft); }
