@@ -10,6 +10,35 @@ Audience: anyone writing an extension. In-tree authors get to add files to `ext/
 
 ---
 
+## 0. Cold-start for AI sessions (read this first)
+
+If you're a Claude Code session in another repo and a user has just asked "make this an auditable-compatible extension," here's the orientation:
+
+**What you're building.** A plain ES module that registers itself with the host via `window.auditable?.registerExtension(manifest)` at module evaluation time. The manifest declares zero or more contributions (cell type, tagged language, AIR lowerer, cross-language adapter exports, cell-context hook, MCP tool, Works surface, context-menu action). The host wires the contributions; your module is the body.
+
+**Reading order:**
+
+1. **§1** — what an extension is in five paragraphs (the six contribution surfaces).
+2. **§10** — *Hello world.* The smallest legal extension is ~40 lines: a `package.json`, an `index.js` registering a tagged template, and that's it. Copy-and-modify is the right starting move.
+3. **§2 + §3** — the manifest contract + the six capability slots. Read whichever §3.x your extension actually uses; skip the rest.
+4. **§4** — only if you're wrapping a JS-native engine in a Python-shape (numpy → natra, sklearn → learn, …). The convention is `manifest.exports: { <name>: namespaceObject }`.
+5. **§6** — only if you're packaging as `.gcupkg` for sideloading. Out-of-tree extensions that publish via npm / unpkg / a raw URL don't need this.
+6. **§11** — documentation conventions (README/SPEC structure + the first-paragraph rule + anti-patterns) when you're writing the user-facing docs.
+
+**Reference implementation to copy from:** [`@gcu/carotte`](https://github.com/endarthur/carotte) is a complete out-of-tree extension with the cross-language adapter pattern, gcupkg packaging, examples, and the full doc set. Its `pack-gcupkg.js` is the working reference packer until `pkg build` ships.
+
+**Things that bite, summarized:**
+
+- **Versioning.** The host validates `manifest.version` as strict semver (`/^\d+\.\d+\.\d+(?:[-+].*)?$/`). `0.1.0` works; `0.1` doesn't.
+- **`requires` semver subset.** Only `1.2.3`, `>=1.2.3`, `>1.2.3`, `^1.2.3`, `~1.2.3`, `0.x`, `*` are recognized — no `||` disjunctions, no AND-combinations.
+- **Adapter load order.** If your extension ships both an engine (`index.js`) and an adapter (`adder.js`), the adapter must run AFTER the engine. The convention is `_importCache["@gcu/<name>"]` lookup at the top of `adder.js` — fail loud if the engine isn't loaded, do NOT duck-type fallback (rename-fragile).
+- **Pre-1.0.** Manifest API is mostly stable but internal capability shapes (`cellType.parseNames`, `_py.add` specializations, …) can shift. Pin to a specific auditable build / commit.
+- **Save loudly, fail loud.** `onActivate` errors get caught + logged but don't propagate to the user. Use `console.error` to make registration failures debuggable, and exit early if a dependency is missing.
+
+When in doubt, scan §3.x for the contribution type you need and grep the canonical extensions for matching patterns: `ext/adder/`, `ext/learn/`, `ext/natra/`, `ext/spinifex/`, `ext/sql/` cover most idioms.
+
+---
+
 ## 1. What an extension is
 
 An extension is **one ES module** that runs in the page, declares one manifest, and contributes to zero or more of six surfaces:
@@ -981,7 +1010,142 @@ Each step is independent. Ship the smallest thing that works; add capabilities a
 
 ---
 
-## 11. Reference
+## 11. Documentation conventions
+
+These rules apply to every `README.md` / `SPEC.md` an extension ships. Derived from the strongest in-tree docs (`ext/{air,adder,calque,crypto,switchboard,atra}/SPEC.md`) — the template is what those existing docs share, not a new ceremony. (Full long-form guide lives at `docs/advanced/docs-style.md`; this section is the digest.)
+
+### 11.1 The first-paragraph rule
+
+The first paragraph of every doc is its **elevator pitch** — single sentence first, optionally one expanding paragraph. No throat-clearing, no historical preamble, no "this document describes…". Two reasons:
+
+1. The docs surface uses this as the search snippet — a bad first paragraph looks bad in every search result that hits it.
+2. The reader has already decided to click into your doc; they want to confirm they're in the right place inside two seconds.
+
+Good first paragraphs from existing specs:
+
+```
+A Python interpreter in JavaScript for auditable.            — adder
+A spreadsheet language that compiles to xlsx.                — calque
+The GCU canonical design system.                             — switchboard
+Arithmetic TRAnspiler — wat, but for humans.                 — atra
+```
+
+Each is one bold sentence that tells you exactly what to expect.
+
+### 11.2 Three audience tiers
+
+| Doc | Reader | Voice |
+|---|---|---|
+| `README.md` | Someone who wants to **use** this package. | Concrete, examples-first, API-as-table-of-contents. |
+| `SPEC.md`   | Someone who wants to **understand** this package. | Design-first, prose-heavy, lineage and rationale, longer-lived. |
+| `INTERNALS.md` | Someone who wants to **modify** this package. | Implementation notes, walks, gotchas. Optional. |
+
+Don't repeat content between them. README points readers at SPEC for "why"; SPEC points at README for "how to call it."
+
+### 11.3 README template (user-facing)
+
+```markdown
+# @gcu/<name>
+
+<one bold sentence — elevator pitch>
+
+<one paragraph expanding the pitch: what it is, what it isn't, who
+it's for. Avoid history; lead with capability.>
+
+<optional: a minimal working example as a code block.>
+<optional: "Pre-1.0 — APIs may change on minor version bumps.">
+
+## Install         (only if npm-published / installable; else drop)
+## Quick start     (under 30 lines, end-to-end)
+## API             (signature + one-line summary + optional example;
+                    order by importance, not alphabetically)
+## Usage patterns  (worked examples covering common cases)
+## Options         (every key in the options bag, if you have one)
+## Data model      (types / IRs / schemas if vocabulary matters)
+## Architecture    (optional one-paragraph overview)
+## What's not supported   (honest enumeration of limitations)
+## Status          (optional — pre-1.0 / stable / experimental + date)
+## License
+```
+
+### 11.4 SPEC template (design-facing)
+
+```markdown
+# <name>
+
+**<one bold sentence — elevator pitch>**
+
+<one paragraph framing: what, what problem, what's distinctive.>
+
+<optional: code example or ASCII diagram within first 30 lines.>
+
+---
+
+## Lineage              (recommended — even one sentence pays off)
+## Premise / Overview   (motivating argument; design commitments)
+## <Core domain sections>      (Syntax / Semantics / Types / IR / …)
+## Design principles    (recommended — anchors trade-offs for future readers)
+## Architecture         (file tree + one-line summaries per file)
+## API reference        (optional — leave to README if you have one)
+## Testing              (what's covered, where the tests live)
+## Open questions       (honest list — date your roadmap items)
+## What <name> is NOT   (recommended — drops reader expectations)
+## Versioning           (optional)
+```
+
+### 11.5 Metadata block
+
+When a doc warrants it (SPECs of substantial packages), include a metadata block near the top:
+
+```markdown
+| Field      | Value                                          |
+|------------|------------------------------------------------|
+| Version    | 1.0                                            |
+| Status     | Canon / Draft / Implemented / Pre-1.0          |
+| License    | MIT                                            |
+| Owner      | endarthur                                      |
+| Lineage    | What this descends from, dated                 |
+```
+
+Smaller packages can use bold-prefix lines instead:
+
+```markdown
+**Status:** Implemented (v1 format)
+**Date:** 2026-03-18
+**Implementation:** `src/js/crypto.js`, tests: `test/crypto.test.mjs`.
+```
+
+### 11.6 Anti-patterns
+
+Things to avoid:
+
+- **Opening with definitions of unrelated context.** "Markdown is a lightweight markup language…" → cut. The reader knows.
+- **API-as-prose paragraphs.** API surfaces go in tables or code blocks. If you find yourself writing "the function `foo` accepts a `bar`," reach for the markdown table.
+- **Hidden capabilities.** If a feature exists, document it. Don't bury non-obvious switches in inline comments — promote them to a §Options section.
+- **Stale TODO markers without dates.** A `TODO` from two years ago pretending to be a roadmap item is a lie. Date your roadmap items so the staleness is visible.
+- **"This document describes…" / "This README explains…"** The doc describes itself by existing. Lead with the subject.
+- **Decorative emoji.** GCU aesthetic — functional over decorative. Symbols with semantic meaning (✓, ✗, ⚠, →) are fine when used consistently; decorative emoji isn't.
+- **Marketing voice.** "Powerful, flexible, and easy-to-use" is a smell. Show, don't claim.
+
+### 11.7 When to write what
+
+- New ext under ~500 LOC of source: **README only** is usually enough.
+- New ext that introduces a *vocabulary* (a language, an IR, a protocol, a format): **SPEC required.** README optional but recommended.
+- New ext that's *application infrastructure* (rails, dialog, menu, …): **README only**, with the SPEC subsumed into the consumer's spec.
+- Ext that ships to npm: **README required** (it's what npmjs.com shows on the package page); SPEC optional.
+
+### 11.8 File naming + character set
+
+- `ext/<name>/README.md` — user-facing.
+- `ext/<name>/SPEC.md` — design-facing.
+- `ext/<name>/INTERNALS.md` — implementation-deep, optional.
+- All caps, `.md` extension, UTF-8. Use raw Unicode characters (`—`, `×`, `α`, `→`, `·`) — no `\uXXXX` escapes.
+
+The Auditable docs surface auto-ingests every `ext/*/SPEC.md` and `ext/*/README.md` it can find. Keep that in mind: if you write it, people will search it.
+
+---
+
+## 12. Reference
 
 | Concern | Source |
 |---|---|
