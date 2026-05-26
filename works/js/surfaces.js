@@ -3,7 +3,7 @@
 // per surface and addresses each by its unique name.
 
 import { WKS, setStatus } from './state.js';
-import { kindDef, kindForExtension, surfaceUrl } from './surface-registry.js';
+import { kindDef, kindForExtension, kindForPath, surfaceUrl } from './surface-registry.js';
 
 const _byUnique = new Map();   // A-Bus unique name → tab id
 
@@ -81,7 +81,11 @@ export async function openPath(p) {
       kind = meta.kind;
       title = meta.title || title;
     } else {
-      kind = kindForExtension(basename(p));   // loose file → by extension
+      // Fast path first: extension + extensionlessName match. If that
+      // misses, fall through to the detect-callback cascade (Slice 2 —
+      // EXTENSION_SPEC §3.8.3). Async because detect needs VFS reads.
+      kind = kindForExtension(basename(p));
+      if (!kind) kind = await kindForPath(p, { vfs: WKS.vfs });
     }
   } catch { /* fall through to the no-surface case */ }
 

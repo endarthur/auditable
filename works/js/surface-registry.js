@@ -68,6 +68,9 @@ export function kindDef(kind) {
 }
 
 // The surface kind that handles a loose file, by extension — or null.
+// Synchronous + cheap: extension match first, then extensionless-name
+// fallback. Use kindForPath() if you also want detect() callbacks
+// consulted (async, needs a VFS read).
 export function kindForExtension(filename) {
   // Basename, in case a caller passes a full path.
   const base = String(filename).split(/[\\/]/).pop();
@@ -86,6 +89,72 @@ export function kindForExtension(filename) {
   for (const [kind, def] of KINDS) {
     if (def.extensionlessNames && def.extensionlessNames.includes(upper)) return kind;
   }
+  return null;
+}
+
+// Full path resolution per EXTENSION_SPEC §3.8.3:
+//   1. Extension match (kindForExtension's fast path) — first registered wins.
+//   2. Extensionless conventional names (LICENSE, README, …).
+//   3. detect() callbacks across every kind that declares one — registration
+//      order, first truthy wins. Each detect receives a shared `peek(n)`
+//      bound to this path; reads are cached for the duration of one
+//      resolution pass (so two detect callbacks both asking for 16 bytes
+//      perform one VFS read total).
+//
+// opts.vfs — required to consult detect() callbacks. If absent, kindForPath
+//   reduces to kindForExtension. opts.peekBudget — per-resolution byte cap
+//   (default 1 MB; detect callbacks asking beyond it get a truncated read
+//   and a console.warn).
+//
+// Returns the matched kind name, or null. Async because detect callbacks
+// may need VFS reads.
+export async function kindForPath(path, opts = {}) {
+  const sync = kindForExtension(path);
+  if (sync) return sync;
+
+  const vfs = opts.vfs;
+  if (!vfs) return null;  // no way to peek; nothing more we can do
+
+  // Per-path shared peek cache. The VFS has no offset/length API, so the
+  // file gets read once on the first peek() call, truncated to the
+  // budget, and cached as a Uint8Array. Subsequent peeks slice from that
+  // buffer — two detect callbacks both asking for 16 bytes perform one
+  // VFS read total. Budget defaults to 1 MB per resolution pass; detect
+  // callbacks that need more than that should ship as a contextMenu
+  // action instead (per §3.8.3).
+  const PEEK_BUDGET = typeof opts.peekBudget === 'number' ? opts.peekBudget : 1 << 20;
+  let cached = null;
+  let readErr = false;
+  async function peek(n) {
+    if (n <= 0 || readErr) return new Uint8Array(0);
+    if (!cached) {
+      try {
+        const raw = await vfs.readFile(path);
+        if (raw instanceof Uint8Array) {
+          cached = raw.length > PEEK_BUDGET ? raw.slice(0, PEEK_BUDGET) : raw;
+        } else {
+          cached = new Uint8Array(0);
+        }
+      } catch {
+        readErr = true;
+        return new Uint8Array(0);
+      }
+    }
+    return cached.subarray(0, Math.min(n, cached.length));
+  }
+
+  for (const [kind, def] of KINDS) {
+    if (typeof def.detect !== 'function') continue;
+    let hit = false;
+    try {
+      hit = !!(await def.detect(path, peek));
+    } catch (e) {
+      console.error(`[works] kindForPath: detect for "${kind}" threw on ${path}:`, e);
+      continue;
+    }
+    if (hit) return kind;
+  }
+
   return null;
 }
 
