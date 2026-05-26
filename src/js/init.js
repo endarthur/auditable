@@ -578,6 +578,15 @@ async function worksBoot(conn) {
   // :root:not(.in-works) for mobile-mode + standalone-only chrome).
   document.documentElement.classList.add('in-works');
 
+  // Stash the bus so cell-types.js's registerExtension can forward
+  // surface + contextMenu contributions to the works shell. The
+  // notebook iframe's registerExtension runs in this iframe's window
+  // context — its window._worksRegisterExtensionSurfaces hook would
+  // never fire because the shell installs that hook on the shell
+  // window, not ours. The A-Bus bridge handles the cross-frame hop
+  // (EXTENSION_SPEC §3.8).
+  window._worksBus = bus;
+
   // Theme propagation — the workspace owns the theme choice (Workspace
   // Settings → Theme). Subscribe to Shell.SettingsChanged so a flip on the
   // shell side reaches the embedded notebook too. The notebook's own
