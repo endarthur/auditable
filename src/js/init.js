@@ -19,6 +19,21 @@ import { installOutputCapture } from './outputs.js';
 // which boot path (standalone init, worksBoot, _resumeAfterUnlock)
 // actually runs. Idempotent: hooks.on is just a listener registration.
 installOutputCapture();
+
+// Cross-frame trace toggle — the notebook iframe runs in its own
+// opaque origin inside Works, so devtools defaults to the parent
+// frame and `window._outputsDebug = true` from there never reaches
+// this code. Listen for a postMessage handshake so the user can flip
+// the flag from the parent: `for (const f of document.querySelectorAll('iframe')) f.contentWindow.postMessage({type:'set-outputs-debug',value:true},'*')`.
+// postMessage works across opaque origins; the payload is trusted
+// (debug-only).
+window.addEventListener('message', (e) => {
+  if (e.data && e.data.type === 'set-outputs-debug') {
+    window._outputsDebug = !!e.data.value;
+    console.log('[outputs] debug =', window._outputsDebug);
+  }
+});
+
 import { getSettings } from './settings.js';
 import { Dialog } from '#dialog';
 import { runAll, autoLoadFromCells } from './exec.js';

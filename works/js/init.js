@@ -55,6 +55,20 @@ async function boot() {
   WKS.unmountAt = unmountAt;
   WKS.serializeWorkspace = serializeWorkspace;
   WKS.buildWorksHtml = buildWorksHtml;
+
+  // Broadcast a debug flag to every surface iframe — the iframes are
+  // in opaque origins (blob:file://) so devtools-set `window.*` flags
+  // on the parent don't reach them. postMessage crosses the boundary.
+  // Usage from the shell console:
+  //   WKS.setOutputsDebug(true)   // turn on
+  //   WKS.setOutputsDebug(false)  // turn off
+  WKS.setOutputsDebug = (value) => {
+    for (const f of document.querySelectorAll('iframe')) {
+      try { f.contentWindow.postMessage({ type: 'set-outputs-debug', value: !!value }, '*'); }
+      catch { /* not a peer that listens — skip */ }
+    }
+  };
+
   window.WKS = WKS;
 
   setStatus('Auditable Works — ready');
