@@ -521,11 +521,13 @@ This pins the theme for the FIRST PAINT before A-Bus delivers the workspace's ac
 
 #### 3.8.7 Lifecycle
 
-- **Install**: `installGcupkg` reads `manifest.surfaces` + `manifest.contextMenu` (already in the .gcupkg-meta.json's `contributes` summary), registers each into the shell's `surface-registry.js` KINDS + a new `_contextMenuItems` array. Tree refreshes its right-click menu builder.
-- **Replace**: re-install at a new version drops the old kinds + actions first (clean replace, matches the §6.1 install policy), then re-registers.
-- **Uninstall**: `pkg remove @example/data-grid` deregisters every kind + action contributed by the manifest. Any currently-open tab of the removed surface stays alive (it has the blob URL); but new spawns fail.
+- **Install**: `installGcupkg` writes `/lib/<pkg>/`. The cell-side install path then `await import()`s the extension's `index.js`, which calls `auditable.registerExtension({ surfaces, contextMenu })`. The Works-side hooks (installed at boot) catch the contribution, read the surface HTML from `/lib/<pkg>/<file>`, process it through the same lib-inlining + theme-substitution pipeline built-in surfaces use, and stash the blob URL. The kind is registered with its routing metadata (extensions list, detect callback, requires list) so `kindForPath` can consult it on the next double-click.
+- **Snapshot persistence**: every successful surface registration also writes a JSON-safe declarative snapshot to `/lib/<pkg>/.works-ext.json`. Schema: `{ version: 1, name, surfaces: [{ kind, label, icon, file, extensions, requires, openAction }], contextMenu: [{ label, scope, icon, section }] }`. Detect callbacks + filter/action functions are NOT in the snapshot — they re-bind when the extension actually loads.
+- **Boot rehydration**: on Works shell boot, after the workspace VFS is ready, `rehydrateInstalledExtensions()` walks `/lib/<scope>/<pkg>/` + `/lib/local/<pkg>/`, reads each snapshot, and registers a stub manifest with the declarative pieces only. Extension-based path routing works immediately; detect-based routing waits for the JS to load (Slice 5: auto-load on use). This is what makes "install a gcupkg, restart Works, double-click a .parquet file" work without the user first running a cell that calls `load()`.
+- **Replace**: re-install at a new version triggers `cell-types.js`'s "already-registered → unregister-then-register" path, which calls the Works-side unregister hook (revokes blob URL, drops kind, removes openAction). The new registration then takes the same path as a fresh install.
+- **Uninstall**: `pkg remove @example/data-grid` in geas drops `/lib/<pkg>/` (including the snapshot). The current Works session's open tabs of the removed surface stay alive (they hold the blob URL); but on next reload the surface is gone. Future work could add a VFS-watcher that fires unregister hooks live; for v1 the "uninstall takes effect on next reload" gap is acceptable.
 
-A reload re-runs the contribution registration from the lockfile — no extension is "active" without an installed entry.
+A reload re-runs the contribution registration from the snapshots — no extension is "active" without an installed entry.
 
 #### 3.8.8 Security
 

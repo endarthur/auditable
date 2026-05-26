@@ -45,6 +45,50 @@ function _normalizeSurfacePath(libRoot, file) {
 
 const _activeKinds = new Map();  // manifest.name → Set<kind>  (so unregister can find them)
 
+// Path inside /lib/<pkg>/ holding the JSON-safe declarative snapshot of
+// the manifest's surface + contextMenu contributions. Written on every
+// successful registerExtensionSurfaces; read at boot to register
+// declarative pieces before the extension's index.js has run. Detect
+// callbacks + filter/action functions are NOT in the snapshot — they
+// upgrade when the extension actually loads (its registerExtension
+// re-fires and cell-types.js's "already registered → replace" path
+// swaps in the live data).
+const SNAPSHOT_FILE = '.works-ext.json';
+
+async function _writeSnapshot(libRoot, manifest) {
+  if (!WKS.vfs || typeof WKS.vfs.writeFile !== 'function') return;
+  const surfaces = Array.isArray(manifest.surfaces) ? manifest.surfaces.map((s) => ({
+    kind:        s.kind,
+    label:       s.label,
+    icon:        s.icon,
+    file:        s.file,
+    extensions:  s.extensions || [],
+    requires:    s.requires || null,
+    openAction:  !!s.openAction,
+    // detect is intentionally omitted — function values don't serialize
+    // and the live extension will re-bind it on load().
+  })) : [];
+  const contextMenu = Array.isArray(manifest.contextMenu) ? manifest.contextMenu.map((it) => ({
+    label:   it.label,
+    scope:   it.scope || 'file',
+    icon:    it.icon || null,
+    section: it.section || null,
+    // filter + action omitted — JS only.
+  })) : [];
+  const snapshot = {
+    version:  1,
+    name:     manifest.name,
+    surfaces,
+    contextMenu,
+  };
+  try {
+    await WKS.vfs.writeFile(libRoot + '/' + SNAPSHOT_FILE, JSON.stringify(snapshot, null, 2));
+  } catch (e) {
+    // Non-fatal — snapshot is a boot-time optimization, the live path still works.
+    console.warn(`[works] extension-surfaces: snapshot write failed for ${manifest.name}:`, e.message);
+  }
+}
+
 // Register every surface contribution in `manifest.surfaces[]`. Async
 // because each entry needs a VFS read + blob construction; cell-types
 // fires the hook from registerExtension's contribution loop and ignores
@@ -115,7 +159,76 @@ export async function registerExtensionSurfaces(manifest) {
     owned.add(s.kind);
   }
 
-  if (owned.size > 0) _activeKinds.set(manifest.name, owned);
+  if (owned.size > 0) {
+    _activeKinds.set(manifest.name, owned);
+    // Persist a declarative snapshot for the next boot — see SNAPSHOT_FILE.
+    await _writeSnapshot(libRoot, manifest);
+  }
+}
+
+// Rehydrate every installed extension's declarative surface metadata at
+// shell boot. Walks /lib/<scope>/<pkg>/ + /lib/local/<pkg>/, reads each
+// .works-ext.json snapshot, and registers a stub manifest. The full
+// JS-backed registration happens later when load("@gcu/<pkg>") fires;
+// cell-types.js's "already registered" path replaces the stub cleanly.
+export async function rehydrateInstalledExtensions() {
+  if (!WKS.vfs) return;
+  // Enumerate /lib roots. Scoped packages live at /lib/<scope>/<name>,
+  // bare packages at /lib/local/<name>. Walk one level at a time so we
+  // don't accidentally pick up unrelated files (the lockfile,
+  // node_modules-style nested dirs, etc).
+  const libPkgRoots = [];
+  let topLevel;
+  try { topLevel = await WKS.vfs.readdir('/lib'); } catch { return; }
+  for (const ent of topLevel) {
+    const top = '/lib/' + ent;
+    let stat;
+    try { stat = await WKS.vfs.stat(top); } catch { continue; }
+    if (!stat || stat.type !== 'directory') continue;
+    if (ent.startsWith('@')) {
+      // scoped — drill one more level
+      let inner;
+      try { inner = await WKS.vfs.readdir(top); } catch { continue; }
+      for (const sub of inner) {
+        const pkgPath = top + '/' + sub;
+        const s2 = await WKS.vfs.stat(pkgPath).catch(() => null);
+        if (s2 && s2.type === 'directory') libPkgRoots.push(pkgPath);
+      }
+    } else if (ent === 'local') {
+      let inner;
+      try { inner = await WKS.vfs.readdir(top); } catch { continue; }
+      for (const sub of inner) {
+        const pkgPath = top + '/' + sub;
+        const s2 = await WKS.vfs.stat(pkgPath).catch(() => null);
+        if (s2 && s2.type === 'directory') libPkgRoots.push(pkgPath);
+      }
+    }
+    // Anything else under /lib is ignored (lockfile lives there too).
+  }
+
+  for (const pkgPath of libPkgRoots) {
+    const snapPath = pkgPath + '/' + SNAPSHOT_FILE;
+    let raw;
+    try { raw = await WKS.vfs.readFile(snapPath, 'utf8'); }
+    catch { continue; }   // no snapshot for this package — extension hasn't contributed surfaces, fine
+    let snap;
+    try { snap = JSON.parse(raw); }
+    catch (e) {
+      console.warn(`[works] extension-surfaces: malformed snapshot ${snapPath}:`, e.message);
+      continue;
+    }
+    if (snap.version !== 1 || !snap.name) continue;
+    if (Array.isArray(snap.surfaces) && snap.surfaces.length > 0) {
+      // Synthesize a stub manifest. The detect callback is null in the
+      // snapshot — extension-based routing still works, detect-based
+      // routing waits for the JS to load. Same for context-menu actions.
+      await registerExtensionSurfaces({
+        name:     snap.name,
+        version:  '0.0.0',   // placeholder — real version arrives with the live manifest
+        surfaces: snap.surfaces,
+      });
+    }
+  }
 }
 
 export function unregisterExtensionSurfaces(manifest) {

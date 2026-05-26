@@ -19,7 +19,7 @@ import { importNotebook, importFileAsNotebook } from './import.js';
 import { buildProjectExportHtml, exportProject } from './project-export.js';
 import { mountHandle, unmountAt, restoreMounts } from './mount.js';
 import { installGlobalFileDrop } from './file-ops.js';
-import { installHooks as installExtensionSurfaceHooks } from './extension-surfaces.js';
+import { installHooks as installExtensionSurfaceHooks, rehydrateInstalledExtensions } from './extension-surfaces.js';
 import { installHooks as installContextMenuHooks } from './context-menu-registry.js';
 
 async function boot() {
@@ -33,6 +33,7 @@ async function boot() {
   await decompressSurfaces();  // embedded surface payloads → blob URLs
   installExtensionSurfaceHooks();  // wire registerExtension → ext-surface registrar
   installContextMenuHooks();       // wire registerExtension → contextMenu registrar
+  await rehydrateInstalledExtensions();  // declarative pickup of installed gcupkgs
   setupLayout();               // the rails surface host
   setupMenuBar();              // the desktop menu bar
   setupTree();                 // the file-tree explorer
