@@ -134,16 +134,27 @@ export const LANGUAGE_PACKS = {
 
 async function _autoLoadLanguagePacks() {
   const want = new Set();
+  const fallbackTypes = new Set();
   for (const cell of S.cells) {
     // Fallback cell — type registered to a known pack? Auto-load if the
     // pack is actually installed (we only auto-load from _installedModules,
     // never from a network fetch — system-side loads shouldn't surprise
     // the user).
     if (cell._fallback) {
+      fallbackTypes.add(cell.type);
       const pack = LANGUAGE_PACKS[cell.type];
       if (pack && !window._importCache?.[pack] && window._installedModules?.[pack]) {
         want.add(pack);
       }
+    }
+  }
+  // Visibility: if there are fallback cells with KNOWN types but the
+  // package isn't installed, log it. Helps users discover "I have adder
+  // cells but no adder installed".
+  for (const t of fallbackTypes) {
+    const pack = LANGUAGE_PACKS[t];
+    if (pack && !window._installedModules?.[pack]) {
+      console.info(`[runtime] /// ${t} cell present but ${pack} is not installed — install it to enable.`);
     }
   }
   if (want.size === 0) return;
@@ -152,7 +163,10 @@ async function _autoLoadLanguagePacks() {
   // multiple registrations in the same microtask.
   const langsBefore = window._taggedLanguages ? Object.keys(window._taggedLanguages).length : 0;
   for (const pack of want) {
-    try { await loadInstalledModule(pack); }
+    try {
+      await loadInstalledModule(pack);
+      console.info(`[runtime] auto-loaded language pack "${pack}"`);
+    }
     catch (e) { console.warn(`[runtime] auto-load("${pack}") failed:`, e.message); }
   }
   const langsAfter = window._taggedLanguages ? Object.keys(window._taggedLanguages).length : 0;
@@ -187,9 +201,17 @@ async function _autoLoadAdapters() {
     // accept any scope. Most adapters are @gcu, but the convention
     // doesn't enforce it.
     const candidates = keys.filter(k => k.endsWith('/' + name + adapterSuffix));
-    if (candidates.length === 0) continue;
+    if (candidates.length === 0) {
+      // Helpful for diagnosing "I wrote `from carotte import` but
+      // nothing happened" — point at the most likely cause.
+      console.info(`[runtime] adder import "from ${name} import …" present — but no */${name}/adder package is installed.`);
+      continue;
+    }
     const chosen = candidates.find(k => k.startsWith('@gcu/')) || candidates[0];
-    try { await loadInstalledModule(chosen); }
+    try {
+      await loadInstalledModule(chosen);
+      console.info(`[runtime] auto-loaded adapter "${chosen}" (referenced by \`from ${name} import …\`)`);
+    }
     catch (e) { console.warn(`[runtime] auto-load adapter "${chosen}":`, e.message); }
   }
 }
