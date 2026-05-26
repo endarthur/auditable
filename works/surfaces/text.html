@@ -149,10 +149,13 @@
   ships solved out of the box.
 
   CM6 is loaded via the works shared-lib mechanism: the build inlines
-  `/* @cm6-inline */` below with the cm6.min.js IIFE source, exposing
-  `CM6` as a module-scope variable. Disk-only dedup with other surfaces
-  that opt into @gcu/cm6 — one copy in works.html, one fresh runtime
-  copy per iframe scope.
+  the CM6 IIFE source at a build-time marker below, exposing CM6 as
+  a module-scope variable. Disk-only dedup with other surfaces that
+  opt into @gcu/cm6 — one copy in works.html, one fresh runtime
+  copy per iframe scope. (Mind: the marker token below is unique so
+  the text.replace doesn't accidentally fire on the first occurrence
+  of the placeholder in this very comment — happened once, debugged
+  once, never again.)
 
   Language extensions match by file extension: js / py / css / html
   get their respective lang packages; everything else stays plain text.
@@ -177,7 +180,7 @@ import { MenuBar } from '../../ext/menu/index.js';
 
 /* @theme-init */
 
-/* @cm6-inline */
+/*__GCU_CM6_INLINE__*/
 
 // CM6 is now in scope after the inlined IIFE. Destructure the symbols
 // the surface uses. (Adding a new feature later — bracket matching,
