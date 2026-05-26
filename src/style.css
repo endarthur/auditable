@@ -246,6 +246,12 @@ button.accent:hover {
   border-left-color: var(--au-success);
   transition: border-color 0.5s;
 }
+/* outline-jump: brief tint when a tree-outline click lands the user on a cell */
+.cell.outline-jump {
+  border-left-color: var(--au-info);
+  background: var(--au-info-soft);
+  transition: background 1s, border-color 1s;
+}
 .cell.syntax-pending {
   border-left-color: var(--au-fg-soft);
 }

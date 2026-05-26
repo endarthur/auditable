@@ -50,6 +50,17 @@ const ROOT = '/';
 // /projects open by default; the rest of the VFS is there, collapsed.
 const expanded = new Set(['/', '/projects']);
 
+// Outline entries default to *expanded* (inverse of folders). Toggling
+// the chevron on an outline-entry adds its path to this set to collapse
+// just that subtree; the next chevron click removes it.
+const outlineCollapsed = new Set();
+
+// notebook.outline.json is the sidecar persist.js writes per save. The
+// tree special-cases this filename — instead of showing it as a regular
+// file, we render it as an expandable pseudo-folder whose children are
+// outline entries (markdown headers, %cellName directives, docTitle).
+const OUTLINE_FILE = 'notebook.outline.json';
+
 let _treeEl = null;
 let _refreshTimer = null;
 
@@ -133,14 +144,56 @@ async function walk(dir) {
         nodes.push({ name: e.name, label, path: p, type: 'folder',
           children: expanded.has(p) ? await walk(p) : null });
       }
+    } else if (e.name === OUTLINE_FILE) {
+      // The outline sidecar — render as a pseudo-folder whose children
+      // are the notebook's headers / cellnames / docTitle. Lazy: only
+      // read + parse the JSON once the user opens the row.
+      let children = null;
+      if (expanded.has(p)) {
+        try {
+          const data = JSON.parse(await WKS.vfs.readFile(p, 'text'));
+          children = _buildOutlineForest(data.entries || [], dir, p);
+        } catch { children = []; }
+      }
+      nodes.push({
+        name: e.name, label: 'outline', path: p, type: 'outline',
+        projectDir: dir, children,
+      });
     } else {
       nodes.push({ name: e.name, label, path: p, type: 'file' });
     }
   }
-  const rank = { folder: 0, project: 1, file: 2 };
+  const rank = { folder: 0, project: 1, outline: 2, file: 3 };
   nodes.sort((a, b) => (rank[a.type] - rank[b.type])
     || (a.label || a.name).localeCompare(b.label || b.name));
   return nodes;
+}
+
+// Walk the flat entries list and build a nested forest by `level`. Each
+// entry's parent is the most recent entry with strictly lower level (or
+// the root if none). Synthetic paths (`<outlinePath>#i`) give us stable
+// keys for the collapse Set.
+function _buildOutlineForest(entries, projectDir, outlinePath) {
+  const root = { children: [] };
+  const stack = [{ level: -1, node: root }];
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    while (stack[stack.length - 1].level >= e.level) stack.pop();
+    const parent = stack[stack.length - 1].node;
+    const node = {
+      name: 'entry-' + i,
+      label: e.text,
+      path: outlinePath + '#' + i,
+      type: 'outline-entry',
+      kind: e.kind, level: e.level,
+      cellId: e.cellId, headerIdx: e.headerIdx,
+      projectDir,
+      children: [],
+    };
+    parent.children.push(node);
+    stack.push({ level: e.level, node });
+  }
+  return root.children;
 }
 
 function renderNode(node, depth) {
@@ -149,8 +202,15 @@ function renderNode(node, depth) {
   row.dataset.path = node.path;
   row.style.paddingLeft = (6 + depth * 14) + 'px';
 
-  const isExpandable = (node.type === 'folder' || node.type === 'project');
-  const isOpen = isExpandable && expanded.has(node.path);
+  // Outline-entry rows expand by inverse default (visible until collapsed)
+  // and use a separate set; everything else uses the `expanded` set.
+  const hasOutlineChildren = node.type === 'outline-entry' && node.children && node.children.length > 0;
+  const isExpandable = (node.type === 'folder' || node.type === 'project'
+                     || node.type === 'outline' || hasOutlineChildren);
+  const isOpen =
+      node.type === 'outline-entry' ? !outlineCollapsed.has(node.path)
+    : isExpandable                  ? expanded.has(node.path)
+    :                                 false;
 
   // Chevron column — present on every row so labels stay vertically aligned.
   // Folders use the chevron as their primary icon; projects render the
@@ -164,15 +224,22 @@ function renderNode(node, depth) {
 
   let icon, label;
   if (node.type === 'folder') {
-    // Squared minus — reads as a closed-folder / contained group. The
-    // chevron column beside it carries the open/closed affordance; the
-    // icon column stays reserved (whether glyph or blank) so labels
-    // align with file rows at the same depth.
     icon = '⊟';
     label = node.label || node.name;
   } else if (node.type === 'project') {
     icon = (kindDef(node.kind) || {}).icon || '■';
     label = node.title;
+  } else if (node.type === 'outline') {
+    icon = '≡';
+    label = 'outline';
+  } else if (node.type === 'outline-entry') {
+    // Distinct glyph per outline-entry kind so headers and named cells
+    // read as different things at a glance. Header glyph repeats #
+    // by level so H1/H2/H3 look like the markdown that produced them.
+    if (node.kind === 'title')         icon = '▤';
+    else if (node.kind === 'cellname') icon = '→';
+    else                               icon = '#'.repeat(Math.max(1, Math.min(6, node.level)));
+    label = node.label;
   } else {
     // Files: prefer the icon of the surface kind that would open this
     // file (so .xjnl shows carotte's viewer icon, .parquet would show
@@ -213,21 +280,84 @@ function renderNode(node, depth) {
       toggle();
     });
     row.addEventListener('dblclick', () => openPath(node.path));
+  } else if (node.type === 'outline') {
+    // Outline file: row toggles expansion of the entries list. No open
+    // semantics (don't want to spawn a text surface on the JSON).
+    row.addEventListener('click', toggle);
+  } else if (node.type === 'outline-entry') {
+    // Outline entry: chevron toggles the (inverse-default) collapse;
+    // row click jumps to the corresponding cell in the notebook.
+    if (hasOutlineChildren) {
+      chevron.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (outlineCollapsed.has(node.path)) outlineCollapsed.delete(node.path);
+        else outlineCollapsed.add(node.path);
+        refreshTree();
+      });
+    }
+    row.addEventListener('click', (e) => {
+      // Ignore clicks that originated from the chevron (its handler ran).
+      if (e.target === chevron) return;
+      jumpToOutlineEntry(node);
+    });
   } else {
     row.addEventListener('dblclick', () => openPath(node.path));
   }
-  row.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    showMenu(e, node.path, node.type);
-  });
-  // Drag-to-move: draggable source on every row, drop target on folders.
-  // Ctrl+drop copies; plain drop moves.
-  attachTreeRowDnd(row, node);
+  // Outline rows have no useful context menu yet — skip it so we don't
+  // hand the user File-Manager actions (Delete / Rename / Move) that
+  // would corrupt the JSON sidecar.
+  if (node.type !== 'outline' && node.type !== 'outline-entry') {
+    row.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showMenu(e, node.path, node.type);
+    });
+    // Drag-to-move: draggable source on every row, drop target on folders.
+    // Ctrl+drop copies; plain drop moves.
+    attachTreeRowDnd(row, node);
+  }
 
-  if (isExpandable && node.children) {
+  if (isExpandable && isOpen && node.children) {
     for (const c of node.children) renderNode(c, depth + 1);
   }
+}
+
+// Click → focus the project's notebook (opening it if not already a tab)
+// and ask it to scroll the target cell into view via the Notebook A-Bus
+// interface. Surface.Ready handshake on the first open path keeps the
+// jump from racing the cell DOM construction.
+async function jumpToOutlineEntry(node) {
+  // Find or open the notebook tab for this project.
+  let rec = null;
+  for (const r of WKS.surfaces.values()) {
+    if (r.path === node.projectDir && r.kind === 'notebook') { rec = r; break; }
+  }
+  if (!rec) {
+    // openPath returns the tab id; look the surface up by it.
+    const tabId = await openPath(node.projectDir);
+    if (!tabId) return;
+    rec = WKS.surfaces.get(tabId);
+    if (!rec) return;
+    // Wait for the surface to declare Ready before sending the jump call.
+    await new Promise((resolve) => {
+      let done = false;
+      const finish = () => { if (done) return; done = true; clearTimeout(t); off(); resolve(); };
+      const off = WKS.worksBus.subscribe(
+        { from: rec.uniqueName, interface: 'Surface', member: 'Ready' },
+        finish,
+      );
+      const t = setTimeout(finish, 3000);
+    });
+  } else {
+    // Already open — focus the tab via rails.
+    WKS.rails?.activateTab?.(rec.tabId);
+  }
+  try {
+    await WKS.worksBus.call(
+      { to: rec.uniqueName, path: '/', interface: 'Notebook', member: 'JumpToCell' },
+      [node.cellId, node.headerIdx],
+    );
+  } catch { /* surface doesn't expose Notebook — silently no-op */ }
 }
 
 async function showMenu(e, path, type) {

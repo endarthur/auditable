@@ -10,6 +10,24 @@ import * as hooks from './hooks.js';
 
 const _title = () => document.getElementById('docTitle')?.value || 'untitled';
 
+// Tree's outline pseudo-folder calls Notebook.JumpToCell(cellId) to focus
+// a cell. Two effects: scroll it into view and pulse a brief highlight
+// class so the user sees where they landed. Null cellId scrolls to the
+// top (used for the docTitle entry).
+function jumpToCell(cellId) {
+  if (!cellId) {
+    document.getElementById('notebook')?.scrollTo({ top: 0, behavior: 'smooth' });
+    return;
+  }
+  // dataset.id is the stable c-N string after the parseInt fix earlier
+  // in this session — no coercion needed.
+  const el = document.querySelector(`.cell[data-id="${CSS.escape(cellId)}"]`);
+  if (!el) return;
+  el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  el.classList.add('outline-jump');
+  setTimeout(() => el.classList.remove('outline-jump'), 1200);
+}
+
 /**
  * Connect A-Bus from the shell's abus:welcome. The welcome is captured by the
  * synchronous data-abus-catch script in the page head (it has to be — the
@@ -109,6 +127,15 @@ export function installSurfaceContract({ bus, host }) {
         Relocated: (p) => { host.relocate?.(p); },
       },
       signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
+    },
+    Notebook: {
+      methods: {
+        // Called by the Works tree when the user clicks an outline entry.
+        // headerIdx is currently unused (a cell only scrolls as a unit);
+        // it's reserved for future per-header anchor scrolling.
+        JumpToCell: (cellId /* , headerIdx */) => jumpToCell(cellId),
+      },
+      signals: [],
     },
   });
 

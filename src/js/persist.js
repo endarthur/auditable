@@ -16,6 +16,7 @@ import { isCollapsed } from './dag.js';
 import { parseNotebookTxt, serializeNotebookTxt, serializeVfs, hydrateVfs } from './serialize.js';
 import { cryptoIsLocked, cryptoBuildBlock, cryptoDetect } from './crypto.js';
 import { hydrateAllSavedOutputs, sweepOrphanOutputs } from './outputs.js';
+import { extractOutline } from './outline.js';
 
 export { serializeVfs, hydrateVfs };
 
@@ -284,6 +285,17 @@ export async function syncCellsToVfs(vfs, S, settings, title) {
     .map(url => ({ url }));
   const txt = serializeNotebookTxt({ title, settings, cells, modules, nextId: S.cellId });
   await vfs.writeFile(NOTEBOOK_TXT_PATH, txt);
+
+  // Outline sidecar — the tree special-cases this filename and renders
+  // it as an expandable pseudo-folder of jump-points. Derived from the
+  // same S.cells we just wrote; cheap to regenerate on every save.
+  try {
+    const outline = extractOutline(S.cells, title);
+    await vfs.writeFile(PROJECT_DIR + '/notebook.outline.json',
+      JSON.stringify(outline, null, 2));
+  } catch (e) {
+    console.warn('[persist] outline write failed:', e.message);
+  }
 }
 
 /**
