@@ -7,6 +7,7 @@ import { updateStatus } from './ui.js';
 import { selectCell } from './keyboard.js';
 import { notifyDirty } from './editor.js';
 import { getEditor, mcpHighlightEffect } from './cm6.js';
+import { removeOutputForCell } from './outputs.js';
 
 // ── CELL CODE SETTER ──
 
@@ -177,6 +178,10 @@ export function addCell(type, code = '', afterId = null, beforeId = null) {
 export function deleteCell(id) {
   const idx = S.cells.findIndex(c => c.id === id);
   if (idx < 0) return;
+  // Drop the cell's sidecar output file (best-effort, fire-and-forget).
+  // Must happen before we splice the cell out of S.cells so the call
+  // sees _prevSavedHash.
+  removeOutputForCell(S.cells[idx]);
   // fire invalidation so cell resources (timers, etc.) clean up
   if (S.cells[idx]._invalidate) { S.cells[idx]._invalidate(); S.cells[idx]._invalidate = null; }
   // tear down workshop DOM if this cell had one

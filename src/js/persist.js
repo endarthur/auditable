@@ -250,6 +250,13 @@ export async function syncCellsToVfs(vfs, S, settings, title) {
 export async function flushPendingDirty(vfs, S, settings, title) {
   await syncCellsToVfs(vfs, S, settings, title);
   await syncModulesToVfs(vfs, window._installedModules || {});
+  // Sweep orphan output sidecars — catches anything the incremental
+  // cleanup missed (e.g. cells removed without the runtime around to
+  // see it). Best-effort.
+  try {
+    const { sweepOrphanOutputs } = await import('./outputs.js');
+    await sweepOrphanOutputs();
+  } catch (e) { console.warn('[persist] sweep orphan outputs failed:', e.message); }
 }
 
 async function _walkLibLeaves(vfs, base, segments, result) {

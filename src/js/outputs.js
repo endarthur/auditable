@@ -135,6 +135,14 @@ function _outputPath(hash) {
 // Public: trigger a debounced save for one cell. Safe to call on
 // every run — overlapping calls collapse to one write per
 // SAVE_DEBOUNCE_MS.
+//
+// Orphan cleanup is incremental: each cell tracks _prevSavedHash (the
+// hash we last successfully wrote). When a new save happens with a
+// different hash, the previous file is deleted. So a user editing a
+// cell rapidly + running each time writes ONE file at a time, never
+// accumulates. Cell deletion is handled separately by
+// removeOutputForCell — wired into cell-ops.js's deleteCell so the
+// runtime sees the death before the cell record disappears.
 export function scheduleOutputSave(cell) {
   if (!_shouldSave(cell)) return;
   const vfs = window._notebookVFS;
@@ -148,10 +156,36 @@ export function scheduleOutputSave(cell) {
       const entry = _buildEntry(cell);
       await vfs.mkdir(OUTPUTS_DIR, { recursive: true }).catch(() => {});
       await vfs.writeFile(_outputPath(hash), JSON.stringify(entry));
+      // Delete the previously-saved hash's file if the cell's source
+      // has moved on. Skip when prev === current (idempotent re-runs
+      // of identical source just rewrite the same file).
+      const prev = cell._prevSavedHash;
+      if (prev && prev !== hash) {
+        try {
+          if (typeof vfs.rm === 'function') await vfs.rm(_outputPath(prev));
+          else if (typeof vfs.unlink === 'function') await vfs.unlink(_outputPath(prev));
+        } catch { /* prev file already gone — fine */ }
+      }
+      cell._prevSavedHash = hash;
     } catch (e) {
       console.warn(`[outputs] save failed for cell ${cell.id}:`, e.message);
     }
   }, SAVE_DEBOUNCE_MS));
+}
+
+// Drop the sidecar file for a cell that's being deleted. Called from
+// cell-ops.js's deleteCell BEFORE the cell record is spliced out of
+// S.cells (so we still have access to cell._prevSavedHash). Also flushes
+// any pending save for that cell.
+export async function removeOutputForCell(cell) {
+  cancelOutputSave(cell.id);
+  if (!cell._prevSavedHash) return;
+  const vfs = window._notebookVFS;
+  if (!vfs) return;
+  try {
+    if (typeof vfs.rm === 'function') await vfs.rm(_outputPath(cell._prevSavedHash));
+    else if (typeof vfs.unlink === 'function') await vfs.unlink(_outputPath(cell._prevSavedHash));
+  } catch { /* already gone — fine */ }
 }
 
 // Cancel any pending save for one cell — used when the cell is being
@@ -204,14 +238,55 @@ export function applySavedOutput(cell, entry) {
 
 // Hydrate every cell in S.cells with its saved output. Called once
 // during hydrateNotebook AFTER cells have been added to the DOM.
+// Seeds cell._prevSavedHash with each cell's current hash so the
+// first post-hydration save cleans up the previous-hash file correctly.
 export async function hydrateAllSavedOutputs() {
   for (const cell of S.cells) {
-    const entry = await loadSavedOutput(cell);
-    if (entry) applySavedOutput(cell, entry);
+    if (!_shouldSave(cell)) continue;
+    const hash = await cellSourceHash(cell);
+    const vfs = window._notebookVFS;
+    if (!vfs) continue;
+    let entry = null;
+    try { entry = JSON.parse(await vfs.readFile(_outputPath(hash), 'utf8')); }
+    catch { /* no sidecar — first time, fine */ }
+    if (entry) {
+      applySavedOutput(cell, entry);
+      cell._prevSavedHash = hash;   // we own this hash; next edit will rewrite
+    }
   }
 }
 
 // ── Cleanup ─────────────────────────────────────────────────────────
+
+// Periodic sweep — list the sidecar dir, compare against the set of
+// hashes any current cell has (or has had as _prevSavedHash), delete
+// anything else. Catches orphans the incremental cleanup missed (e.g.
+// a cell that was deleted while the runtime wasn't watching, or a
+// pre-incremental-cleanup save). Called from flushPendingDirty at
+// notebook save time.
+export async function sweepOrphanOutputs() {
+  const vfs = window._notebookVFS;
+  if (!vfs) return;
+  let entries;
+  try { entries = await vfs.readdir(OUTPUTS_DIR); }
+  catch { return; }   // no dir yet, nothing to sweep
+  // Compute the set of live hashes across S.cells.
+  const live = new Set();
+  for (const cell of S.cells) {
+    if (!_shouldSave(cell)) continue;
+    try { live.add(await cellSourceHash(cell)); } catch { /* keep going */ }
+    if (cell._prevSavedHash) live.add(cell._prevSavedHash);
+  }
+  for (const name of entries) {
+    if (!name.endsWith('.json')) continue;
+    const hash = name.slice(0, -('.json'.length));
+    if (live.has(hash)) continue;
+    try {
+      if (typeof vfs.rm === 'function') await vfs.rm(OUTPUTS_DIR + '/' + name);
+      else if (typeof vfs.unlink === 'function') await vfs.unlink(OUTPUTS_DIR + '/' + name);
+    } catch { /* concurrent delete is fine */ }
+  }
+}
 
 // Drop the entire outputs sidecar dir. Used by the Tools → Clear all
 // outputs command (Slice 4).
