@@ -70,7 +70,7 @@ function getEditingCell() {
   if (active && active.tagName === 'TEXTAREA') {
     const cellEl = active.closest('.cell');
     if (cellEl) {
-      const id = parseInt(cellEl.dataset.id);
+      const id = cellEl.dataset.id;
       return S.cells.find(c => c.id === id) || null;
     }
   }
@@ -78,7 +78,7 @@ function getEditingCell() {
   if (active && active.closest('.cm-editor')) {
     const cellEl = active.closest('.cell');
     if (cellEl) {
-      const id = parseInt(cellEl.dataset.id);
+      const id = cellEl.dataset.id;
       return S.cells.find(c => c.id === id) || null;
     }
   }
@@ -86,7 +86,7 @@ function getEditingCell() {
   if (active && active.closest('.cell-plugin-code')) {
     const cellEl = active.closest('.cell');
     if (cellEl) {
-      const id = parseInt(cellEl.dataset.id);
+      const id = cellEl.dataset.id;
       return S.cells.find(c => c.id === id) || null;
     }
   }
@@ -152,7 +152,7 @@ function exitEdit(view) {
   // select the cell we just left
   const cellEl = (view?.dom || active)?.closest?.('.cell');
   if (cellEl) {
-    const id = parseInt(cellEl.dataset.id);
+    const id = cellEl.dataset.id;
     selectCell(id);
   }
 }
@@ -618,7 +618,7 @@ document.addEventListener('click', (e) => {
 
   const cellEl = e.target.closest('.cell');
   if (cellEl) {
-    const id = parseInt(cellEl.dataset.id);
+    const id = cellEl.dataset.id;
     selectCell(id);
   }
 });

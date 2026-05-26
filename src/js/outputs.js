@@ -34,20 +34,45 @@ const OUTPUTS_DIR = '/projects/self/notebook.outputs';
 const SAVE_DEBOUNCE_MS = 400;
 const _saveTimers = new Map();   // cell.id → timer
 
-// ── Source hashing — async SubtleCrypto SHA-256, base64url ──────────
+// ── Source hashing ──────────────────────────────────────────────────
 //
 // The hash lives inside the entry (for stale detection on open), not
-// in the filename. Filenames are cell IDs.
+// in the filename. Filenames are cell IDs. We don't need cryptographic
+// strength — we just need to detect when source changed. SubtleCrypto
+// is the preferred path but it requires a secure context, and blob:
+// URLs created from a file:// origin get unique opaque origins that
+// Chromium treats as non-secure (same root cause as the IDB-delegation
+// warning). Fall back to FNV-1a 64-bit when crypto.subtle is gone.
 
 const _encoder = new TextEncoder();
 const _hashCache = new WeakMap();   // cell → { tag, hash }
 
+function _fnv1a64(s) {
+  let hi = 0xcbf29ce4 | 0;
+  let lo = 0x84222325 | 0;
+  for (let i = 0; i < s.length; i++) {
+    lo = lo ^ s.charCodeAt(i);
+    // multiply by 0x100000001b3 — 64-bit FNV prime — in two 32-bit halves
+    const lo2 = Math.imul(lo, 0x01b3);
+    const hi2 = Math.imul(hi, 0x01b3) + Math.imul(lo, 0x00000100);
+    lo = lo2 | 0;
+    hi = hi2 | 0;
+  }
+  const toHex = (n) => (n >>> 0).toString(16).padStart(8, '0');
+  return toHex(hi) + toHex(lo);
+}
+
 async function _hashTag(tag) {
-  const buf = await crypto.subtle.digest('SHA-256', _encoder.encode(tag));
-  const u8 = new Uint8Array(buf);
-  let bin = '';
-  for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
-  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  if (typeof crypto !== 'undefined' && crypto.subtle && crypto.subtle.digest) {
+    try {
+      const buf = await crypto.subtle.digest('SHA-256', _encoder.encode(tag));
+      const u8 = new Uint8Array(buf);
+      let bin = '';
+      for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
+      return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    } catch { /* fall through to FNV */ }
+  }
+  return 'fnv:' + _fnv1a64(tag);
 }
 
 export async function cellSourceHash(cell) {

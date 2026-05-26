@@ -499,7 +499,7 @@ function buildColorDecorations(view) {
 
 function getCellIdFromView(view) {
   const wrap = view.dom.closest('[data-cm-cell-id]');
-  return wrap ? parseInt(wrap.dataset.cmCellId) : null;
+  return wrap ? wrap.dataset.cmCellId : null;
 }
 
 // these are imported dynamically to avoid circular deps — set up by init

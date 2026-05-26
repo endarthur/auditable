@@ -23,7 +23,7 @@ export function openFind(showReplace) {
     // CM6 editor — read selection
     const cellEl = active.closest('[data-cm-cell-id]');
     if (cellEl) {
-      const cellId = parseInt(cellEl.dataset.cmCellId);
+      const cellId = cellEl.dataset.cmCellId;
       const editor = getEditor(cellId);
       if (editor) {
         const sel = editor.view.state.selection.main;
@@ -213,7 +213,7 @@ function findUpdateOverlays() {
   });
 
   for (const cellId of Object.keys(byCell)) {
-    const cell = S.cells.find(c => c.id === parseInt(cellId));
+    const cell = S.cells.find(c => c.id === cellId);
     if (!cell) continue;
     const matches = byCell[cellId];
 
@@ -251,7 +251,7 @@ function findUpdateOverlays() {
         to: m.index + m.length,
         current: m.globalIdx === S.findCurrent,
       }));
-      setEditorSearchDecorations(parseInt(cellId), ranges);
+      setEditorSearchDecorations(cellId, ranges);
     }
   }
 }
