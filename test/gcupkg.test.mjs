@@ -119,6 +119,14 @@ function buildFixture(opts = {}) {
   if (opts.docs) {
     entries['docs/index.md'] = enc('# Sample docs\n\nWelcome.');
   }
+  if (opts.surfaceHtml) {
+    entries[opts.surfaceFile || 'surface.html'] = enc(opts.surfaceHtml);
+  }
+  if (opts.extras) {
+    for (const [path, content] of Object.entries(opts.extras)) {
+      entries[path] = enc(content);
+    }
+  }
   return { bytes: zipSync(entries), entries, meta };
 }
 
@@ -304,6 +312,44 @@ test('installGcupkg: writes docs to /usr/share/docs/<slug>/', async () => {
   assert.equal(result.docsRoot, '/usr/share/docs/@test_docsy');
   assert.equal(result.docsCount, 1);
   assert.ok(vfs.files.has('/usr/share/docs/@test_docsy/index.md'));
+});
+
+test('installGcupkg: writes top-level surface HTML files (referenced by manifest.surfaces)', async () => {
+  // Regression — installer used to silently drop any top-level file
+  // outside the hardcoded set (index.js / adder.js / LICENSE / etc).
+  // Surface contributions reference custom HTML files via
+  // manifest.surfaces[].file; those need to land at /lib/<pkg>/<file>
+  // so the Works runtime can read them at spawn time.
+  const { bytes } = buildFixture({
+    name: '@test/has-surface',
+    surfaceHtml: '<!doctype html><html><body>Custom surface</body></html>',
+    surfaceFile: 'viewer.html',
+  });
+  const parsed = await parseGcupkg(bytes, archiveLib);
+  const vfs = makeVfs();
+  await installGcupkg(parsed, { vfs, installedModules: {} });
+  assert.ok(vfs.files.has('/lib/@test/has-surface/viewer.html'),
+    'surface HTML must be written to /lib/<pkg>/');
+  const written = new TextDecoder().decode(vfs.files.get('/lib/@test/has-surface/viewer.html'));
+  assert.match(written, /Custom surface/);
+});
+
+test('installGcupkg: writes nested extra assets (e.g. /icons/foo.svg)', async () => {
+  // Extensions may ship arbitrary asset trees referenced from the
+  // surface (icons, fonts, json data, …). Each one lands at the
+  // mirrored path under /lib/<pkg>/.
+  const { bytes } = buildFixture({
+    name: '@test/has-assets',
+    extras: {
+      'icons/icon.svg': '<svg/>',
+      'data/config.json': '{"k":1}',
+    },
+  });
+  const parsed = await parseGcupkg(bytes, archiveLib);
+  const vfs = makeVfs();
+  await installGcupkg(parsed, { vfs, installedModules: {} });
+  assert.ok(vfs.files.has('/lib/@test/has-assets/icons/icon.svg'));
+  assert.ok(vfs.files.has('/lib/@test/has-assets/data/config.json'));
 });
 
 test('installGcupkg: secondary entry survives reload via hydrateModulesFromVfs', async () => {

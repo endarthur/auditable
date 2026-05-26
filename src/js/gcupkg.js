@@ -216,6 +216,31 @@ export async function installGcupkg(parsed, opts = {}) {
   if (files['README.md']) await vfs.writeFile(libPath + '/README.md', files['README.md']);
   if (files['SPEC.md'])   await vfs.writeFile(libPath + '/SPEC.md',   files['SPEC.md']);
 
+  // Top-level assets the manifest may reference (Works surface HTML files,
+  // viewer templates, etc — anything `manifest.surfaces[].file` can point
+  // at, plus any non-conventional files the extension chose to ship).
+  // Write everything at the archive root that isn't already-handled or
+  // in a special subdir; the installer doesn't need to know about each
+  // asset by name. EXTENSION_SPEC §6.1 doesn't constrain custom assets.
+  const _knownTopLevel = new Set([
+    'package.json', 'index.js', 'adder.js',
+    'LICENSE', 'README.md', 'SPEC.md',
+    '.gcupkg-meta.json',
+  ]);
+  const _knownSubdirs = ['examples/', 'docs/'];
+  for (const [archivePath, bytes] of Object.entries(files)) {
+    if (_knownTopLevel.has(archivePath)) continue;
+    if (_knownSubdirs.some(p => archivePath.startsWith(p))) continue;
+    // Mirror the archive layout under /lib/<pkg>/. For nested non-special
+    // dirs (e.g. `assets/icon.svg`), mkdir along the way.
+    const dest = libPath + '/' + archivePath;
+    const slash = dest.lastIndexOf('/');
+    if (slash > libPath.length) {
+      await vfs.mkdir(dest.slice(0, slash), { recursive: true });
+    }
+    await vfs.writeFile(dest, bytes);
+  }
+
   // pkg's per-entry meta + lockfile entry. Match the shape pkg-cmd.js writes
   // so `pkg list` and `pkg licenses` pick the entry up uniformly.
   const pkgMeta = {
