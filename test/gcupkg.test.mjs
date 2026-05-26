@@ -254,7 +254,14 @@ test('installGcupkg: writes index.js + adder.js + meta.json + lockfile to /lib',
   assert.equal(result.libPath, '/lib/@test/installer');
   assert.equal(result.hasAdder, true);
   assert.ok(vfs.files.has('/lib/@test/installer/source'));
-  assert.ok(vfs.files.has('/lib/@test/installer/adder.js'));
+  // adder bridge lives in its OWN leaf dir so the hydration walker
+  // picks it up as a separate _installedModules entry on reload.
+  assert.ok(vfs.files.has('/lib/@test/installer/adder/source'));
+  assert.ok(vfs.files.has('/lib/@test/installer/adder/meta.json'));
+  // The old sibling layout — adder.js as a flat file — must NOT exist.
+  // _walkLibLeaves would ignore it; the in-memory install-time entry
+  // would vanish on reload.
+  assert.equal(vfs.files.has('/lib/@test/installer/adder.js'), false);
   assert.ok(vfs.files.has('/lib/@test/installer/LICENSE'));
   assert.ok(vfs.files.has('/lib/@test/installer/package.json'));
   assert.ok(vfs.files.has('/lib/@test/installer/meta.json'));
@@ -299,6 +306,47 @@ test('installGcupkg: writes docs to /usr/share/docs/<slug>/', async () => {
   assert.ok(vfs.files.has('/usr/share/docs/@test_docsy/index.md'));
 });
 
+test('installGcupkg: secondary entry survives reload via hydrateModulesFromVfs', async () => {
+  // The reload scenario: install carotte-shaped gcupkg, throw away the
+  // in-memory _installedModules, re-walk /lib to discover what's there,
+  // assert both the engine AND the adder bridge land in the hydrated map.
+  // Regression for the "Failed to resolve module specifier
+  // '@gcu/carotte/adder'" bug — sibling-file layout vanished on reload.
+  //
+  // persist.js can't be imported in Node (it pulls #licenses transitively
+  // through settings.js), so the walker is inlined here. Keep in sync
+  // with src/js/persist.js's _walkLibLeaves + libPathToKey.
+  const { bytes } = buildFixture({ name: '@test/reload' });
+  const parsed = await parseGcupkg(bytes, archiveLib);
+  const vfs = makeVfs();
+  await installGcupkg(parsed, { vfs, installedModules: {} });
+
+  // Walk the flat files map directly, since the test VFS doesn't
+  // implement readdir/stat. The logic mirrors persist.js _walkLibLeaves:
+  // a leaf is a dir holding `source` and/or `meta.json`; segments after
+  // /lib/ that start with @ map to a scoped key.
+  const result = {};
+  // Collect distinct dirs that contain a /source file under /lib/
+  const sourcePaths = [...vfs.files.keys()].filter(p =>
+    p.startsWith('/lib/') && p.endsWith('/source'));
+  for (const sp of sourcePaths) {
+    const dir = sp.slice(0, -('/source'.length));
+    const segments = dir.slice('/lib/'.length).split('/');
+    const [first, ...rest] = segments;
+    if (!first.startsWith('@') || rest.length === 0) continue;
+    const key = first + '/' + rest.join('/');
+    let meta = {};
+    try { meta = JSON.parse(await vfs.readFile(dir + '/meta.json', 'utf8')); } catch {}
+    const source = await vfs.readFile(dir + '/source', 'utf8');
+    result[key] = { ...meta, source };
+  }
+
+  assert.ok(result['@test/reload'], 'engine entry should hydrate');
+  assert.ok(result['@test/reload/adder'], 'adder secondary entry should hydrate too');
+  assert.match(result['@test/reload/adder'].source, /adder bridge/,
+    'adder source should be the bridge file');
+});
+
 test('installGcupkg: skips adder.js wiring when no adder is in the gcupkg', async () => {
   const { bytes } = buildFixture({ name: '@test/no-adder', adderJs: null });
   const parsed = await parseGcupkg(bytes, archiveLib);
@@ -307,6 +355,7 @@ test('installGcupkg: skips adder.js wiring when no adder is in the gcupkg', asyn
   const result = await installGcupkg(parsed, { vfs, installedModules });
   assert.equal(result.hasAdder, false);
   assert.equal(vfs.files.has('/lib/@test/no-adder/adder.js'), false);
+  assert.equal(vfs.files.has('/lib/@test/no-adder/adder/source'), false);
   assert.equal(installedModules['@test/no-adder/adder'], undefined);
   assert.ok(installedModules['@test/no-adder']);  // engine still installed
 });

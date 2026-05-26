@@ -190,10 +190,23 @@ export async function installGcupkg(parsed, opts = {}) {
   // Canonical artifact: `source` (matches pkg's existing /lib layout).
   await vfs.writeFile(libPath + '/source', files['index.js']);
 
-  // Optional secondary entry — adder.js. Stored under the same dir; the
-  // load() resolution for `@gcu/<name>/adder` finds it via _installedModules.
+  // Optional secondary entry — adder.js. Stored as its OWN leaf
+  // directory (/lib/<pkg>/adder/source + meta.json) so persist.js's
+  // hydrateModulesFromVfs picks it up on next reload. An earlier layout
+  // wrote it as a sibling file (/lib/<pkg>/adder.js) which the walker
+  // ignored — the entry only existed in _installedModules during the
+  // install session and vanished on reload, surfacing as a V8 "Failed
+  // to resolve module specifier" for the bare-fallback path.
   if (files['adder.js']) {
-    await vfs.writeFile(libPath + '/adder.js', files['adder.js']);
+    const adderDir = libPath + '/adder';
+    await vfs.mkdir(adderDir, { recursive: true });
+    await vfs.writeFile(adderDir + '/source', files['adder.js']);
+    await vfs.writeFile(adderDir + '/meta.json', _ENCODER.encode(JSON.stringify({
+      alias:   meta.name + '/adder',
+      url:     meta.name + '/adder',
+      kind:    'gcupkg-secondary',
+      parent:  meta.name,
+    }, null, 2)));
   }
 
   // Other extension data alongside (consumed by aggregateLicenses walkLib
