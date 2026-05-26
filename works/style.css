@@ -220,17 +220,30 @@ body {
    open-on-double-click target). */
 .tree-chevron {
   flex: none;
-  width: 0.9em;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
   color: var(--au-fg-soft);
-  font-size: 9px;
+  font-size: 12px;
   line-height: 1;
 }
-.tree-project .tree-chevron {
+/* Toggleable chevrons get a hover cursor and a subtle background hit
+   target so the user can see where they're aiming. Applies to projects
+   (chevron is the only expand affordance — the rest of the row opens
+   on double-click) and to outline-entries with children (chevron
+   toggles the inverse-default collapse). */
+.tree-project .tree-chevron,
+.tree-outline-entry .tree-chevron {
   cursor: pointer;
+  border-radius: 3px;
 }
-.tree-project .tree-chevron:hover {
+.tree-project .tree-chevron:hover,
+.tree-outline-entry .tree-chevron:hover {
   color: var(--au-fg);
+  background: var(--au-surface-raised);
 }
 
 .works-rails {
