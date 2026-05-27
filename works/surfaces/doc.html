@@ -137,6 +137,7 @@
 import { connect } from '../../ext/abus/index.js';
 import { MenuBar } from '../../ext/menu/index.js';
 import { renderText, registerFilter } from '../../ext/template/index.js';
+import { parse as parseYaml, YamlParseError } from '../../ext/yaml/index.js';
 
 /* @theme-init */
 
@@ -225,6 +226,45 @@ function inlineMd(s) {
     .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 }
 
+// ── YAML frontmatter ──────────────────────────────────────────────────
+//
+// A doc may start with a YAML block delimited by `---` lines:
+//
+//     ---
+//     title: Q4 grade tonnage estimate
+//     viewMode: reading
+//     templateBase: data
+//     ---
+//
+//     # …body markdown begins here…
+//
+// Recognized keys (all optional):
+//   title         — display title for the tab + HTML export <title>
+//   viewMode      — initial mode on open: source | split | reading
+//   templateBase  — subfolder under the doc's dir that bare `{{path}}`
+//                   directives resolve against; default is dirOf(file).
+//                   Absolute paths (leading /) are honored verbatim.
+//
+// Frontmatter is the user's source — the editor pane shows it. The
+// preview pipeline skips it (renders only the body) and applies meta
+// to the surface state. Parse errors render an inline warning at the
+// top of the preview but never block rendering of the body.
+const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
+
+function splitFrontmatter(source) {
+  const m = FRONTMATTER_RE.exec(source);
+  if (!m) return { meta: {}, body: source, error: null };
+  let meta, error = null;
+  try {
+    const parsed = parseYaml(m[1]);
+    meta = (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+  } catch (e) {
+    meta = {};
+    error = (e instanceof YamlParseError) ? e.message : String(e && e.message || e);
+  }
+  return { meta, body: source.slice(m[0].length), error };
+}
+
 // ── Template + render pipeline ────────────────────────────────────────
 //
 // Two-pass: 1) markdown → HTML (preserving {{...}} as literal text in
@@ -280,23 +320,64 @@ registerFilter('.md', 'default', async (text) => {
   return renderMarkdown(text);
 });
 
+// Last applied frontmatter title, so we only emit TitleChanged on change.
+let lastTitle = '';
+// True once we've applied frontmatter.viewMode for the first time on
+// this doc — subsequent edits to viewMode in frontmatter are ignored
+// (we don't want the user's manual toggle reverted on every save).
+let initialViewModeApplied = false;
+
 async function renderNow() {
   const source = view.state.doc.toString();
+  const { meta, body, error: frontmatterError } = splitFrontmatter(source);
+
+  // Apply title from frontmatter (or fall back to filename) — fires the
+  // shell signal only when it actually changes.
+  const title = (typeof meta.title === 'string' && meta.title.trim())
+    || basename(filePath).replace(/\.[^.]+$/, '');
+  if (title !== lastTitle) {
+    lastTitle = title;
+    emit('TitleChanged', [title]);
+  }
+
+  // Apply initial view-mode preference from frontmatter, once.
+  if (!initialViewModeApplied && typeof meta.viewMode === 'string') {
+    if (['source', 'split', 'reading'].includes(meta.viewMode)) {
+      setMode(meta.viewMode);
+    }
+    initialViewModeApplied = true;
+  }
+
+  // Resolve templateBase relative to dirOf(file). Absolute paths land
+  // anywhere in the VFS; relative paths combine with the doc's dir.
+  let cwd = dirOf(filePath);
+  if (typeof meta.templateBase === 'string' && meta.templateBase.trim()) {
+    const base = meta.templateBase.trim();
+    cwd = base.startsWith('/')
+      ? base.replace(/\/+$/, '')
+      : (cwd === '/' ? '/' + base : cwd + '/' + base).replace(/\/+$/, '');
+  }
+
   // Phase 1: markdown → HTML (with `{{...}}` directives preserved as text)
-  const phase1 = renderMarkdown(source);
+  const phase1 = renderMarkdown(body);
   // Phase 2: template engine resolves directives against project VFS
   let phase2;
   deps.clear();
   try {
     phase2 = await renderText(phase1, {
       vfs: busVfs,
-      cwd: projectDir,
+      cwd,
       onDependency: (p) => deps.add(p),
     });
   } catch (e) {
     phase2 = `<div class="template-error">template error: ${esc(e.message)}</div>` + phase1;
   }
-  previewRoot.innerHTML = phase2;
+
+  // YAML errors render at the top of the preview but never block the body.
+  const fmWarning = frontmatterError
+    ? `<div class="template-error">frontmatter YAML error: ${esc(frontmatterError)}</div>`
+    : '';
+  previewRoot.innerHTML = fmWarning + phase2;
 }
 
 function scheduleRender() {
@@ -505,6 +586,9 @@ window.addEventListener('message', async (ev) => {
     },
   });
 
+  // Initial title — renderNow will replace this with the frontmatter
+  // title (if any) on first paint; emit a fallback here so the tab has
+  // a sensible label between Ready and the first render completing.
   emit('TitleChanged', [basename(filePath)]);
   emit('Ready', []);
 });

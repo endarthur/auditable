@@ -256,7 +256,7 @@ if (target === 'works' || target === 'works-all') {
   const worksZlib = require('zlib');
 
   const isWorksAll = (target === 'works-all');
-  const SHARED_LIBS_BASE = ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline', 'markdown', 'librarian', 'ipynb', 'cm6', 'menu', 'template'];
+  const SHARED_LIBS_BASE = ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline', 'markdown', 'librarian', 'ipynb', 'cm6', 'menu', 'template', 'yaml'];
   // For --target=works-all: bundle every ext/<name>/index.js that's a real
   // bundle (skip the re-export shims under ~1 KB — they break the
   // single-file SHARED_LIBS pattern because they import from sibling files).
@@ -659,7 +659,7 @@ if (target === 'works' || target === 'works-all') {
     { kind: 'stub',      file: 'works/surfaces/stub.html',      deps: ['abus'] },
     { kind: 'text',      file: 'works/surfaces/text.html',      deps: ['abus', 'menu'] },
     { kind: 'doc',       file: 'works/surfaces/doc.html',
-      deps: ['abus', 'menu', 'template'] },
+      deps: ['abus', 'menu', 'template', 'yaml'] },
     { kind: 'preview',   file: 'works/surfaces/preview.html',   deps: ['abus'] },
     { kind: 'inspector', file: 'works/surfaces/inspector.html', deps: ['abus'] },
     { kind: 'settings',  file: 'works/surfaces/settings.html',  deps: ['abus'] },
