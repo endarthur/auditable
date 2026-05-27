@@ -310,6 +310,7 @@ const {
   openSearchPanel, closeSearchPanel, searchKeymap, search,
   bracketMatching, indentOnInput,
   markdown,
+  autocompletion,
 } = CM6;
 
 const sourceRoot = document.getElementById('source');
@@ -620,6 +621,13 @@ function makeEditor(initialText) {
         lineNumbers(),
         EditorView.lineWrapping,
         markdown(),
+        // {{path}} autocomplete — fires only when the caret is inside
+        // a template directive. Defined below so the closure picks up
+        // busVfs / bus / projectDir at runtime.
+        autocompletion({
+          override: [templatePathSource],
+          activateOnTyping: true,
+        }),
         keymap.of([
           indentWithTab,
           ...searchKeymap,
@@ -646,6 +654,232 @@ function makeEditor(initialText) {
         }),
       ],
     }),
+  });
+}
+
+// ── {{path}} autocomplete ────────────────────────────────────────────
+//
+// When the caret sits inside a `{{...}}` directive (before any `|`),
+// fire VFS-backed path completion. The cwd is the doc's resolved
+// template-base (frontmatter.templateBase against dirOf(filePath)),
+// matching the template engine's resolution rules. Relative
+// completions stay relative; the user can prefix `/` for absolute
+// VFS paths from anywhere.
+//
+// CM6 completion sources can return a Promise — so the VFS readdir
+// happens async and the autocomplete UI shows once the dir is read.
+// Returns null when not inside a `{{`, so completion doesn't fire
+// for normal markdown editing.
+function templatePathSource(context) {
+  const pos = context.pos;
+  const doc = context.state.doc;
+  // Look back at most a couple of lines for the `{{` opener — saves
+  // walking the whole doc when the caret is far from any directive.
+  const lookbackStart = Math.max(0, pos - 400);
+  const before = doc.sliceString(lookbackStart, pos);
+  const lastOpen = before.lastIndexOf('{{');
+  if (lastOpen < 0) return null;
+  // Make sure no `}}` sits between {{ and the caret — otherwise we're
+  // outside any directive.
+  const lastClose = before.lastIndexOf('}}');
+  if (lastClose > lastOpen) return null;
+  // Inside the directive. Get text from {{ to the caret.
+  const inside = before.slice(lastOpen + 2);
+  // After a `|` we're in filter-args territory — leave that alone.
+  if (inside.indexOf('|') >= 0) return null;
+  // Trim leading space the user might've typed for cosmetics.
+  const partialRaw = inside.replace(/^\s+/, '');
+  // The character position of `partial` in the document — used for
+  // CompletionResult.from.
+  const fromOffset = pos - partialRaw.length;
+
+  // Resolve the cwd for THIS render. Reads from the live frontmatter
+  // (so chapterHeading-style mid-edit changes pick up immediately).
+  const source = doc.toString();
+  const { meta } = splitFrontmatter(source);
+  let cwd = projectDir;
+  if (typeof meta.templateBase === 'string' && meta.templateBase.trim()) {
+    const base = meta.templateBase.trim();
+    cwd = base.startsWith('/')
+      ? base.replace(/\/+$/, '')
+      : ((cwd === '/' ? '' : cwd) + '/' + base).replace(/\/+/g, '/').replace(/\/+$/, '');
+  }
+
+  // Split the partial into a directory part (anything up to the last
+  // `/`) and a name prefix. If partial starts with `/`, treat the
+  // path as absolute (anchored at VFS root).
+  let dirPath, namePrefix;
+  if (partialRaw.startsWith('/')) {
+    const slash = partialRaw.lastIndexOf('/');
+    dirPath = partialRaw.slice(0, slash) || '/';
+    namePrefix = partialRaw.slice(slash + 1);
+  } else {
+    const slash = partialRaw.lastIndexOf('/');
+    if (slash >= 0) {
+      dirPath = ((cwd === '/' ? '' : cwd) + '/' + partialRaw.slice(0, slash)).replace(/\/+/g, '/');
+      namePrefix = partialRaw.slice(slash + 1);
+    } else {
+      dirPath = cwd || '/';
+      namePrefix = partialRaw;
+    }
+  }
+
+  // Position the replacement range to the LAST `/` after the directive
+  // open (or just after `{{` if no slash). That way each path segment
+  // gets completed in isolation; tabbing into a subdir completion
+  // inserts only the subdir name, not the whole path.
+  const replaceFrom = fromOffset + (partialRaw.lastIndexOf('/') + 1);
+
+  if (!busVfs || typeof busVfs.readFile !== 'function') return null;
+
+  return (async () => {
+    let entries;
+    try {
+      entries = await busVfs.readdir
+        ? await busVfs.readdir(dirPath)
+        : await (busVfs.list ? busVfs.list(dirPath) : []);
+    } catch {
+      // VFS shape mismatch — the surface's busVfs only has readFile;
+      // fall back to an A-Bus VFS.List call so we get directory
+      // listings.
+      try {
+        entries = await bus.call(
+          { to: 'works', path: '/', interface: 'VFS', member: 'List' },
+          [dirPath, { stat: true }]);
+      } catch { return null; }
+    }
+    if (!Array.isArray(entries)) return null;
+
+    // Each entry: { name, type } (when stat=true). Or just a string
+    // when the backend returned plain names. Normalize.
+    const opts = [];
+    for (const e of entries) {
+      const name = typeof e === 'string' ? e : e.name;
+      const isDir = typeof e === 'object' && e.type === 'directory';
+      if (!name) continue;
+      if (namePrefix && !name.toLowerCase().startsWith(namePrefix.toLowerCase())) continue;
+      // Hide dotfiles unless the user is explicitly typing a `.` prefix
+      if (name.startsWith('.') && !namePrefix.startsWith('.')) continue;
+      opts.push({
+        label:  name + (isDir ? '/' : ''),
+        type:   isDir ? 'folder' : 'file',
+        detail: isDir ? '' : _detailForExt(name),
+        // Directories: don't auto-insert a trailing space, keep the
+        // completion menu open so the user can keep navigating.
+        apply:  isDir ? (view, _completion, from, to) => {
+          view.dispatch({
+            changes: { from, to, insert: name + '/' },
+            selection: { anchor: from + name.length + 1 },
+          });
+        } : undefined,
+      });
+    }
+    // Stable sort: dirs first, then alpha. Keeps "navigation flow"
+    // intuitive — user can drill into a folder before picking a file.
+    opts.sort((a, b) =>
+      (a.type === 'folder' && b.type !== 'folder') ? -1
+      : (b.type === 'folder' && a.type !== 'folder') ? 1
+      : a.label.localeCompare(b.label));
+    return { from: replaceFrom, options: opts, validFor: /^[\w.-]*$/ };
+  })();
+}
+
+function _detailForExt(name) {
+  const dot = name.lastIndexOf('.');
+  if (dot < 0) return '';
+  const ext = name.slice(dot).toLowerCase();
+  const labels = {
+    '.csv':  'csv table',
+    '.tsv':  'tsv table',
+    '.json': 'json',
+    '.md':   'markdown',
+    '.markdown': 'markdown',
+    '.png':  'png',  '.jpg': 'jpeg', '.jpeg': 'jpeg', '.gif': 'gif',
+    '.webp': 'webp', '.svg': 'svg',
+    '.pdf':  'pdf',  '.txt': 'text',
+  };
+  return labels[ext] || ext.slice(1);
+}
+
+// ── Drag-from-tree → insert markdown ─────────────────────────────────
+//
+// Tree rows in the shell (works/js/file-ops.js attachTreeRowDnd) set
+// dataTransfer with the custom MIME 'application/x-works-tree-path'
+// plus a text/plain fallback. We listen at the .source pane level for
+// drop events carrying that MIME, then insert a markdown snippet
+// based on the dropped file's extension. cwd-relative when the file
+// sits inside the doc's own directory; absolute when it lives
+// elsewhere (so the link still resolves from anywhere).
+const TREE_DND_MIME = 'application/x-works-tree-path';
+
+// File extension → snippet generator. Keys are lowercase ext (with
+// leading dot). The function receives the path-as-typed for the
+// snippet (cwd-relative or absolute) and the basename for labels.
+const _DROP_SNIPPETS = {
+  '.csv':  (p) => `{{${p} | format table}}\n`,
+  '.tsv':  (p) => `{{${p} | format table}}\n`,
+  '.json': (p) => `{{${p} | pretty}}\n`,
+  '.md':   (p, name) => `[${name.replace(/\.md$/i, '')}](${p})`,
+  '.markdown': (p, name) => `[${name.replace(/\.markdown$/i, '')}](${p})`,
+  '.png':  (p, name) => `![${name}](${p})\n`,
+  '.jpg':  (p, name) => `![${name}](${p})\n`,
+  '.jpeg': (p, name) => `![${name}](${p})\n`,
+  '.gif':  (p, name) => `![${name}](${p})\n`,
+  '.webp': (p, name) => `![${name}](${p})\n`,
+  '.svg':  (p, name) => `![${name}](${p})\n`,
+};
+
+function _snippetForDrop(absPath) {
+  const name = absPath.split('/').filter(Boolean).pop() || absPath;
+  const dot = name.lastIndexOf('.');
+  const ext = dot > 0 ? name.slice(dot).toLowerCase() : '';
+  // Make the path doc-relative when it sits within the doc's project
+  // dir — shorter snippet, naturally resolves the template engine's
+  // cwd convention. Otherwise use the absolute VFS path.
+  const cwd = projectDir.replace(/\/+$/, '') || '/';
+  let p = absPath;
+  if (cwd !== '/' && absPath.startsWith(cwd + '/')) {
+    p = absPath.slice(cwd.length + 1);
+  }
+  const gen = _DROP_SNIPPETS[ext];
+  if (gen) return gen(p, name);
+  // Unknown extension → markdown link with the filename as text
+  return `[${name}](${p})`;
+}
+
+// Wire drop handling on the source container. CM6 owns its own DOM
+// underneath, but bubbling lets us intercept drops anywhere in the
+// pane. We preventDefault on dragover so the browser knows we'll
+// handle the drop (otherwise it tries to navigate to the path).
+function _wireTreeDrop() {
+  const target = sourceRoot;
+  target.addEventListener('dragover', (e) => {
+    if (!e.dataTransfer || !e.dataTransfer.types) return;
+    if (e.dataTransfer.types.indexOf(TREE_DND_MIME) < 0) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  });
+  target.addEventListener('drop', (e) => {
+    if (!e.dataTransfer || !view) return;
+    const path = e.dataTransfer.getData(TREE_DND_MIME);
+    if (!path) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const snippet = _snippetForDrop(path);
+    // Map the drop's pixel position to the document offset CM6 would
+    // place the caret at, then insert there. Fall back to the current
+    // selection if the position isn't resolvable (rare — only on a
+    // drop directly between lines).
+    let insertPos = view.state.selection.main.head;
+    try {
+      const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+      if (pos != null) insertPos = pos;
+    } catch { /* fall through to current caret */ }
+    view.dispatch({
+      changes: { from: insertPos, to: insertPos, insert: snippet },
+      selection: { anchor: insertPos + snippet.length },
+    });
+    view.focus();
   });
 }
 
@@ -1013,6 +1247,7 @@ window.addEventListener('message', async (ev) => {
 
   busVfs = makeBusVfs();
   view = makeEditor('');
+  _wireTreeDrop();
   await loadFromDisk();
 
   // VFS.Changed → re-render if any tracked dependency path moved.

@@ -59,7 +59,11 @@ export async function setupWorksService() {
       methods: {
         Read:   (p, encoding) => vfs.readFile(p, encoding),
         Write:  (p, content) => vfs.writeFile(p, content),
-        List:   (p) => vfs.readdir(p),
+        // opts is optional; `{ stat: true }` makes the result an array
+        // of { name, type, size, ... } instead of bare strings. Used
+        // by the doc surface's {{path}} autocomplete to distinguish
+        // directories (append `/`) from files at completion time.
+        List:   (p, opts) => vfs.readdir(p, opts || {}),
         Stat:   (p) => vfs.stat(p),
         MkDir:  (p) => vfs.mkdir(p, { recursive: true }),
         Exists: (p) => vfs.exists(p),
