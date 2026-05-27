@@ -296,7 +296,10 @@ import { MenuBar } from '../../ext/menu/index.js';
 import { renderText, registerFilter } from '../../ext/template/index.js';
 import { parse as parseYaml, YamlParseError } from '../../ext/yaml/index.js';
 import { writeEpub, extractDataUrlImages, splitByHeading } from '../../ext/epub/index.js';
-import * as archiveLib from '../../ext/archive/index.js';
+// Named import only — the surface inliner's regex matches `import {…}`
+// shape; `import * as ns` slips past it and lands as an unresolvable
+// bare specifier at runtime. writeEpub only needs `createWriter`.
+import { createWriter } from '../../ext/archive/index.js';
 
 /* @theme-init */
 
@@ -1152,7 +1155,9 @@ async function exportEpub() {
   let bytes;
   try {
     bytes = await writeEpub({
-      archive: archiveLib,
+      // writeEpub's resolver walks the archive object for createWriter;
+      // a {createWriter} adapter is the minimal shape it accepts.
+      archive: { createWriter },
       metadata,
       chapters,
       cover,
