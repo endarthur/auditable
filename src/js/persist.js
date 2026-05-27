@@ -210,17 +210,18 @@ export async function syncModulesToVfs(vfs, installedModules) {
 
   await vfs.mkdir(MODULES_DIR, { recursive: true }).catch(() => {});
 
-  // Wipe the existing /lib/ tree — easier than diffing. rm -r on each
-  // top-level entry handles both new (sub-namespaced) and legacy (flat) layouts.
-  let existing = [];
-  try { existing = await vfs.readdir(MODULES_DIR, { stat: true }); } catch {}
-  for (const e of existing) {
-    if (e.type === 'directory') {
-      await vfs.rm(MODULES_DIR + '/' + e.name, { recursive: true }).catch(() => {});
-    } else {
-      await vfs.unlink(MODULES_DIR + '/' + e.name).catch(() => {});
-    }
-  }
+  // Targeted writes only — we used to rm -r every top-level /lib entry
+  // before rewriting, on the assumption /lib was exclusively the
+  // notebook's compiled-module storage. With .gcupkg installs that
+  // assumption is wrong: a package's /lib/<pkg>/ directory holds
+  // source + meta.json AND LICENSE / README / SPEC / docs/ / examples/
+  // / works.js / arbitrary surface HTML / package.json. The nuke wiped
+  // all of those on every autosave, silently breaking surface and
+  // context-menu registrations on the next reload. Now we just write
+  // the bits we own (source + meta.json per module, lockfile at top)
+  // and leave siblings alone. Removing a module from _installedModules
+  // no longer auto-cleans its disk footprint; explicit uninstall is the
+  // right place for that, not autosave.
 
   if (!installedModules) return;
 
