@@ -63,7 +63,7 @@ function _airCompile(cell, scopeKeys, defNames) {
 export async function execCell(cell) {
   const ctx = createCellContext(cell);
   const { ui, std, sr, load, install, installBinary, invalidation, display,
-          md, html, css, workshop, notebook, worker, workerPool, vfs,
+          md, html, css, template, workshop, notebook, worker, workerPool, vfs,
           usedWidgets, outputEl, widgetEl } = ctx;
 
   const scopeKeys = cell.uses ? [...cell.uses].filter(k => !INJECTED_NAMES.includes(k)).sort() : [];
@@ -82,8 +82,11 @@ export async function execCell(cell) {
     }
 
     const scopeVals = scopeKeys.map(k => S.scope[k]);
+    // Order MUST match INJECTED_NAMES exactly — these are positional
+     // parameters in the compiled AsyncFunction. Add to BOTH places when
+    // introducing a new builtin or downstream params shift.
     const injectedVals = [ui, std, sr, load, install, installBinary, invalidation, display, display,
-      md, html, css, workshop, notebook, worker, workerPool, vfs];
+      md, html, css, template, workshop, notebook, worker, workerPool, vfs];
     const result = await fn(...scopeVals, ...injectedVals);
 
     if (result && typeof result === 'object') cell._lastResult = result;
