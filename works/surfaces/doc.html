@@ -880,7 +880,11 @@ window.addEventListener('message', (ev) => {
 });
 
 function _wireTreeDrop() {
-  const target = sourceRoot;
+  // Listen on the whole surface body so a drop anywhere in the
+  // window — source pane, preview pane, statusbar — accepts. The
+  // snippet always inserts into the editor regardless of where the
+  // drop landed, since that's the only place markdown lives.
+  const target = document.body;
   target.addEventListener('dragover', (e) => {
     // Only intercept when we know a tree drag is in flight OR the
     // dataTransfer announces our MIME (latter happens when the
