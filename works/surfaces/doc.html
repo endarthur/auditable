@@ -295,7 +295,7 @@ import { connect } from '../../ext/abus/index.js';
 import { MenuBar } from '../../ext/menu/index.js';
 import { renderText, registerFilter } from '../../ext/template/index.js';
 import { parse as parseYaml, YamlParseError } from '../../ext/yaml/index.js';
-import { writeEpub } from '../../ext/epub/index.js';
+import { writeEpub, extractDataUrlImages, splitByHeading } from '../../ext/epub/index.js';
 import * as archiveLib from '../../ext/archive/index.js';
 
 /* @theme-init */
@@ -837,11 +837,12 @@ function setMode(m) {
 
 // ── Export EPUB ───────────────────────────────────────────────────────
 //
-// Pulls metadata from the doc's frontmatter (title/author/lang/date),
-// re-renders the body (ensures we ship the latest, not whatever was
-// in the preview pane), packs everything as a single-chapter EPUB
-// via @gcu/epub. One file, one chapter — multi-chapter book bundles
-// are deferred to a book.json workflow (see doc surface roadmap).
+// Pulls metadata from the doc's frontmatter (title/author/lang/date/
+// cover/chapterHeading), re-renders the body, extracts inline data-URL
+// images into separate EPUB resources (Kindle compatibility), splits
+// into multi-chapter via the chapterHeading frontmatter knob if set,
+// loads the cover image from VFS if specified, then writes the EPUB
+// via @gcu/epub.
 async function exportEpub() {
   // Ensure the preview is current — the body we ship is whatever
   // markdown + template resolution just produced. await so the
@@ -855,9 +856,7 @@ async function exportEpub() {
   const fileBaseName = basename(filePath).replace(/\.[^.]+$/, '') || 'document';
   const title = titleFromMeta || fileBaseName;
 
-  // Author / date / lang fold through verbatim. Anything else the
-  // frontmatter spec doesn't currently surface is dropped — additive
-  // later if needed.
+  // Metadata fold-through. Each entry optional, dropped when absent.
   const metadata = { title };
   if (typeof meta.author === 'string' && meta.author.trim()) metadata.author = meta.author.trim();
   if (typeof meta.lang === 'string' && meta.lang.trim())     metadata.lang   = meta.lang.trim();
@@ -866,16 +865,64 @@ async function exportEpub() {
   if (typeof meta.publisher === 'string' && meta.publisher.trim())     metadata.publisher   = meta.publisher.trim();
   if (typeof meta.identifier === 'string' && meta.identifier.trim())   metadata.identifier  = meta.identifier.trim();
 
+  // Step 1: extract every inline data: image into a separate EPUB
+  // resource. Some readers (Kindle, older Calibre) don't handle data
+  // URLs cleanly; this guarantees a portable EPUB.
+  const { html: cleanBody, resources: imgResources } =
+    extractDataUrlImages(previewRoot.innerHTML);
+
+  // Step 2: chapter split. Frontmatter `chapterHeading: h1` (or h2..h6)
+  // turns the doc into a multi-chapter book by splitting at each
+  // configured heading. Absent → single chapter (status quo).
+  let chapters;
+  if (typeof meta.chapterHeading === 'string') {
+    const m = /^h([1-6])$/i.exec(meta.chapterHeading.trim());
+    if (m) {
+      const lvl = Number(m[1]);
+      const split = splitByHeading(cleanBody, lvl);
+      if (split && split.length > 0) chapters = split;
+    }
+  }
+  if (!chapters) {
+    chapters = [{ id: 'ch1', title, body: cleanBody }];
+  }
+
+  // Step 3: cover image. Frontmatter `cover: path/to/image.png` —
+  // resolved against the doc's directory (same convention as the
+  // template engine's default cwd). Absolute paths (leading `/`) reach
+  // anywhere in the VFS. Falls back gracefully on read errors.
+  let cover = null;
+  if (typeof meta.cover === 'string' && meta.cover.trim()) {
+    const raw = meta.cover.trim();
+    const coverPath = raw.startsWith('/')
+      ? raw
+      : ((projectDir === '/' ? '' : projectDir) + '/' + raw).replace(/\/+/g, '/');
+    try {
+      const bytes = await busVfs.readFile(coverPath, 'bytes');
+      if (bytes && bytes.length > 0) {
+        const ext = (coverPath.match(/\.([a-z0-9]+)$/i) || ['', ''])[1].toLowerCase();
+        const mime =
+            ext === 'png'  ? 'image/png'
+          : ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg'
+          : ext === 'gif'  ? 'image/gif'
+          : ext === 'webp' ? 'image/webp'
+          : ext === 'svg'  ? 'image/svg+xml'
+          : 'application/octet-stream';
+        cover = { mime, bytes };
+      }
+    } catch (e) {
+      console.warn('[doc] cover load failed (' + coverPath + '):', e.message);
+    }
+  }
+
   let bytes;
   try {
     bytes = await writeEpub({
       archive: archiveLib,
       metadata,
-      chapters: [{
-        id:    'ch1',
-        title,
-        body:  previewRoot.innerHTML,
-      }],
+      chapters,
+      cover,
+      resources: imgResources,
     });
   } catch (e) {
     console.error('[doc] EPUB export failed:', e);

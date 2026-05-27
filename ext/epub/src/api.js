@@ -16,10 +16,13 @@ import { extractHeadings, buildTocTree } from './toc.js';
 import {
   containerXml, contentOpf, tocNcx, navXhtml, DEFAULT_STYLES,
 } from './manifest.js';
+import { extractDataUrlImages, splitByHeading } from './helpers.js';
 
 export {
   // High-level
   writeEpub, readEpub, EpubError,
+  // Convenience helpers commonly used alongside writeEpub
+  extractDataUrlImages, splitByHeading,
   // Lower-level for callers that want to compose differently
   normalizeXhtml, chapterDoc,
   extractHeadings, buildTocTree,

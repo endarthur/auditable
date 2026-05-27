@@ -2,6 +2,7 @@
 import './xhtml.js';
 import './toc.js';
 import './manifest.js';
+import './helpers.js';
 import './write.js';
 import './read.js';
 import './api.js';

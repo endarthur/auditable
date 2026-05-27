@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const srcDir = path.join(__dirname, 'src');
 
-const files = ['xhtml.js', 'toc.js', 'manifest.js', 'write.js', 'read.js', 'api.js'];
+const files = ['xhtml.js', 'toc.js', 'manifest.js', 'helpers.js', 'write.js', 'read.js', 'api.js'];
 
 const chunks = [];
 for (const file of files) {
@@ -34,6 +34,7 @@ const header = `// @gcu/epub — EPUB 3 writer + reader (with EPUB 2 NCX fallbac
 const footer = `
 export {
   writeEpub, readEpub, EpubError,
+  extractDataUrlImages, splitByHeading,
   normalizeXhtml, chapterDoc,
   extractHeadings, buildTocTree,
   containerXml, contentOpf, tocNcx, navXhtml,

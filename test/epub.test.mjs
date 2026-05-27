@@ -6,6 +6,7 @@ import {
   writeEpub, readEpub, EpubError,
   normalizeXhtml,
   extractHeadings, buildTocTree,
+  extractDataUrlImages, splitByHeading,
 } from '../ext/epub/index.js';
 
 // ── xhtml normalization ───────────────────────────────────────────
@@ -210,4 +211,115 @@ test('writeEpub: rejects missing title', async () => {
 
 test('readEpub: rejects non-EPUB bytes', async () => {
   await assert.rejects(() => readEpub(new Uint8Array([1, 2, 3]), { archive }));
+});
+
+// ── helpers: extractDataUrlImages ─────────────────────────────────
+
+test('extractDataUrlImages: extracts data URL imgs as resources', () => {
+  // Tiny 1x1 PNG (transparent) — bytes: PNG magic + minimal chunks
+  const png1x1 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=';
+  const html = `<p>before</p><img src="data:image/png;base64,${png1x1}"/><p>after</p>`;
+  const out = extractDataUrlImages(html);
+  assert.equal(out.resources.length, 1);
+  assert.equal(out.resources[0].mime, 'image/png');
+  assert.equal(out.resources[0].path, 'images/auto1.png');
+  assert.ok(out.resources[0].bytes instanceof Uint8Array);
+  assert.match(out.html, /<img\s*src="images\/auto1\.png"\/>/);
+  assert.doesNotMatch(out.html, /data:image\/png/);
+});
+
+test('extractDataUrlImages: multiple images get unique paths', () => {
+  const tiny = 'aGVsbG8=';   // "hello"
+  const html = `<img src="data:image/png;base64,${tiny}"/>
+                <img src="data:image/jpeg;base64,${tiny}"/>`;
+  const out = extractDataUrlImages(html);
+  assert.equal(out.resources.length, 2);
+  assert.deepEqual(out.resources.map((r) => r.path), ['images/auto1.png', 'images/auto2.jpg']);
+});
+
+test('extractDataUrlImages: respects opts.prefix + startIndex', () => {
+  const tiny = 'aGVsbG8=';
+  const html = `<img src="data:image/png;base64,${tiny}"/>`;
+  const out = extractDataUrlImages(html, { prefix: 'assets', startIndex: 5 });
+  assert.equal(out.resources[0].path, 'assets/auto5.png');
+  assert.equal(out.nextIndex, 6);
+});
+
+test('extractDataUrlImages: leaves non-data-URL imgs alone', () => {
+  const html = '<img src="https://example.com/foo.png"/>';
+  const out = extractDataUrlImages(html);
+  assert.equal(out.resources.length, 0);
+  assert.equal(out.html, html);
+});
+
+// ── helpers: splitByHeading ───────────────────────────────────────
+
+test('splitByHeading: splits HTML by h1 boundaries', () => {
+  const html = '<h1>One</h1><p>x</p><h1>Two</h1><p>y</p>';
+  const chs = splitByHeading(html, 1);
+  assert.equal(chs.length, 2);
+  assert.equal(chs[0].title, 'One');
+  assert.equal(chs[1].title, 'Two');
+  assert.match(chs[0].body, /<h1>One<\/h1>/);
+  assert.match(chs[0].body, /<p>x<\/p>/);
+  assert.match(chs[1].body, /<h1>Two<\/h1>/);
+  assert.match(chs[1].body, /<p>y<\/p>/);
+  // First chapter should NOT contain the second's heading
+  assert.doesNotMatch(chs[0].body, /<h1>Two<\/h1>/);
+});
+
+test('splitByHeading: pre-heading content prepends to first chapter', () => {
+  const html = '<p>preamble</p><h1>Intro</h1><p>body</p>';
+  const chs = splitByHeading(html, 1);
+  assert.equal(chs.length, 1);
+  assert.match(chs[0].body, /<p>preamble<\/p>/);
+  assert.match(chs[0].body, /<h1>Intro<\/h1>/);
+});
+
+test('splitByHeading: returns null when no matching headings', () => {
+  const html = '<p>no headings here</p>';
+  assert.equal(splitByHeading(html, 1), null);
+});
+
+test('splitByHeading: synthesizes unique ids from titles', () => {
+  const html = '<h2>Method</h2><p>x</p><h2>Method</h2><p>y</p>';
+  const chs = splitByHeading(html, 2);
+  assert.deepEqual(chs.map((c) => c.id), ['method', 'method-2']);
+});
+
+test('splitByHeading: round-trips into writeEpub as multi-chapter', async () => {
+  // Render a doc body with two h1 sections, split, write, read back.
+  const body = '<h1>Section A</h1><p>aaa</p><h1>Section B</h1><p>bbb</p>';
+  const chapters = splitByHeading(body, 1);
+  assert.equal(chapters.length, 2);
+  const bytes = await writeEpub({
+    archive,
+    metadata: { title: 'Split Book' },
+    chapters,
+  });
+  const out = await readEpub(bytes, { archive });
+  assert.deepEqual(out.chapters.map((c) => c.title), ['Section A', 'Section B']);
+  assert.match(out.chapters[0].body, /aaa/);
+  assert.match(out.chapters[1].body, /bbb/);
+});
+
+test('extractDataUrlImages + writeEpub: images land as separate resources', async () => {
+  // A doc with an inline data-URL image. Extract images first, then
+  // write — the EPUB should contain a separate image file, not a
+  // data-URL embed.
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkAAIAAAoAAv/lxKUAAAAASUVORK5CYII=';
+  const body = `<h1>Hi</h1><p><img src="data:image/png;base64,${png}"/></p>`;
+  const { html: cleanBody, resources } = extractDataUrlImages(body);
+  const bytes = await writeEpub({
+    archive,
+    metadata: { title: 'Image Test' },
+    chapters: [{ id: 'ch1', title: 'Hi', body: cleanBody }],
+    resources,
+  });
+  const out = await readEpub(bytes, { archive });
+  assert.equal(out.resources.length, 1);
+  assert.equal(out.resources[0].path, 'images/auto1.png');
+  // The chapter body refers to the image path, not a data URL
+  assert.match(out.chapters[0].body, /src="images\/auto1\.png"/);
+  assert.doesNotMatch(out.chapters[0].body, /data:image\/png/);
 });
