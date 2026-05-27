@@ -601,7 +601,16 @@ function _broadcastTreeDrag(type, path) {
 let _currentTreeDragPath = null;
 
 function _installShellDragDelegation() {
+  document.addEventListener('dragstart', (e) => {
+    if (window._shellDragDebug) console.log('[shell] dragstart, target=', e.target?.tagName, 'class=', e.target?.className);
+  }, true);
   document.addEventListener('dragover', (e) => {
+    if (window._shellDragDebug) {
+      const tag = e.target?.tagName || '';
+      const cls = e.target?.className || '';
+      const inIframe = !!(e.target && e.target.closest && e.target.closest('iframe'));
+      console.log('[shell] dragover target=', tag, cls.slice ? cls.slice(0, 40) : cls, 'inIframe=', inIframe, '_currentTreeDragPath=', _currentTreeDragPath);
+    }
     if (!_currentTreeDragPath) return;
     const iframe = e.target && e.target.closest && e.target.closest('iframe');
     if (!iframe) return;
@@ -609,6 +618,7 @@ function _installShellDragDelegation() {
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
   }, /* useCapture */ true);
   document.addEventListener('drop', (e) => {
+    if (window._shellDragDebug) console.log('[shell] drop target=', e.target?.tagName, '_currentTreeDragPath=', _currentTreeDragPath);
     if (!_currentTreeDragPath) return;
     const iframe = e.target && e.target.closest && e.target.closest('iframe');
     if (!iframe) return;
