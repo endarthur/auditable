@@ -850,29 +850,62 @@ function _snippetForDrop(absPath) {
   return `[${name}](${p})`;
 }
 
-// Wire drop handling on the source container. CM6 owns its own DOM
-// underneath, but bubbling lets us intercept drops anywhere in the
-// pane. We preventDefault on dragover so the browser knows we'll
-// handle the drop (otherwise it tries to navigate to the path).
+// Wire drop handling on the source container.
+//
+// Cross-origin protection: the doc surface is a blob:null/<uuid>
+// iframe (unique opaque origin), distinct from the shell's file://
+// origin. Chromium hides custom-MIME (`application/x-*`) entries
+// from `dataTransfer.types` during dragover under that protection,
+// and may hide `getData()` results on drop too. To make drag-to-
+// insert work across the boundary we do two things:
+//
+//   1. Permissive dragover — preventDefault for any drag whose
+//      target is our source pane, so the cursor shows "copy" and
+//      drop fires. Cost: harmless drops from outside Works (e.g.
+//      OS files) also get accepted into this handler, but they
+//      produce no path and we no-op.
+//   2. postMessage handshake — the shell broadcasts the dragged
+//      file's path to every iframe on dragstart, and clears it on
+//      dragend. The drop handler reads from that side channel when
+//      dataTransfer.getData() is blocked. (See works/js/file-ops.js
+//      attachTreeRowDnd for the shell-side broadcast.)
+let _treeDragPath = null;
+window.addEventListener('message', (ev) => {
+  if (!ev.data || ev.source !== window.parent) return;
+  if (ev.data.type === 'tree-drag-start' && typeof ev.data.path === 'string') {
+    _treeDragPath = ev.data.path;
+  } else if (ev.data.type === 'tree-drag-end') {
+    _treeDragPath = null;
+  }
+});
+
 function _wireTreeDrop() {
   const target = sourceRoot;
   target.addEventListener('dragover', (e) => {
-    if (!e.dataTransfer || !e.dataTransfer.types) return;
-    if (e.dataTransfer.types.indexOf(TREE_DND_MIME) < 0) return;
+    // Only intercept when we know a tree drag is in flight OR the
+    // dataTransfer announces our MIME (latter happens when the
+    // browser doesn't fully protect cross-origin types).
+    const hasMime = e.dataTransfer && e.dataTransfer.types
+      && e.dataTransfer.types.indexOf(TREE_DND_MIME) >= 0;
+    if (!_treeDragPath && !hasMime) return;
     e.preventDefault();
-    e.dataTransfer.dropEffect = 'copy';
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
   });
   target.addEventListener('drop', (e) => {
-    if (!e.dataTransfer || !view) return;
-    const path = e.dataTransfer.getData(TREE_DND_MIME);
+    if (!view) return;
+    // Path source order: explicit DataTransfer first (best fidelity),
+    // postMessage cache second (cross-origin fallback).
+    let path = '';
+    if (e.dataTransfer) {
+      path = e.dataTransfer.getData(TREE_DND_MIME)
+        || e.dataTransfer.getData('text/plain')
+        || '';
+    }
+    if (!path && _treeDragPath) path = _treeDragPath;
     if (!path) return;
     e.preventDefault();
     e.stopPropagation();
     const snippet = _snippetForDrop(path);
-    // Map the drop's pixel position to the document offset CM6 would
-    // place the caret at, then insert there. Fall back to the current
-    // selection if the position isn't resolvable (rare — only on a
-    // drop directly between lines).
     let insertPos = view.state.selection.main.head;
     try {
       const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
@@ -883,6 +916,7 @@ function _wireTreeDrop() {
       selection: { anchor: insertPos + snippet.length },
     });
     view.focus();
+    _treeDragPath = null;
   });
 }
 

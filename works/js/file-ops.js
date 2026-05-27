@@ -570,6 +570,21 @@ async function installDroppedGcupkg(file) {
 
 const DND_MIME = 'application/x-works-tree-path';
 
+// Tell every surface iframe a tree-row drag is in flight. Used by
+// surfaces (doc, etc.) that want to drop-insert based on the dragged
+// VFS path — postMessage crosses the opaque-origin boundary that
+// blocks custom DataTransfer MIMEs across the file:// → blob:null
+// gap. Surfaces opt in by listening for 'tree-drag-start' / 'tree-
+// drag-end' on window.
+function _broadcastTreeDrag(type, path) {
+  try {
+    for (const f of document.querySelectorAll('iframe')) {
+      try { f.contentWindow.postMessage({ type, path }, '*'); }
+      catch { /* iframe not yet booted / cross-origin — skip */ }
+    }
+  } catch { /* document.querySelectorAll failed somehow — bail */ }
+}
+
 /** Make a tree row draggable and register it as a drop target.
  *  Called from tree.js's renderNode for each row. */
 export function attachTreeRowDnd(row, node) {
@@ -581,6 +596,17 @@ export function attachTreeRowDnd(row, node) {
       ev.dataTransfer.setData(DND_MIME, node.path);
       ev.dataTransfer.setData('text/plain', node.path);
       ev.dataTransfer.effectAllowed = 'copyMove';
+      // Cross-origin drag side channel: blob:null/<uuid> iframes get
+      // a unique opaque origin and Chromium hides custom-MIME entries
+      // from their dataTransfer. Broadcast the dragged path via
+      // postMessage so a surface listener can read it from a side
+      // channel when dataTransfer.getData() is blocked. Surfaces opt
+      // in by listening for { type: 'tree-drag-start', path }; the
+      // shell-side tree drops still use dataTransfer normally.
+      _broadcastTreeDrag('tree-drag-start', node.path);
+    });
+    row.addEventListener('dragend', () => {
+      _broadcastTreeDrag('tree-drag-end', null);
     });
   }
   // Drop targets: folders only (not files, not project leaves).
