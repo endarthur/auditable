@@ -52,7 +52,7 @@ export function taggedTemplate(type) {
 
 export const INJECTED_NAMES = [
   'ui', 'std', 'sr', 'load', 'install', 'installBinary', 'invalidation',
-  'print', 'display', 'md', 'html', 'css', 'workshop', 'notebook',
+  'print', 'display', 'md', 'html', 'css', 'template', 'workshop', 'notebook',
   'worker', 'workerPool', 'vfs'
 ];
 

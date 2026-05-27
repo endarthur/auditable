@@ -1408,6 +1408,17 @@ if (fs.existsSync(licensesPath)) {
   modules.unshift({ name: 'licenses', source: licensesSrc });
 }
 
+// Add @gcu/template bundle as a module entry — used by the cell-side
+// `template` builtin (cell-builtins/template.js) and any consumer
+// surface (doc / deck / sheet) that renders {{path | filter}} over the
+// notebook VFS.
+const templatePath = path.join(__dirname, 'ext/template/index.js');
+if (fs.existsSync(templatePath)) {
+  let templateSrc = fs.readFileSync(templatePath, 'utf8');
+  templateSrc = templateSrc.replace(/^\n+/, '').replace(/\n+$/, '');
+  modules.unshift({ name: 'template', source: templateSrc });
+}
+
 // Read CM6 bundle (classic IIFE, not an ES module — sets window.CM6 via var)
 const cm6Path = path.join(__dirname, 'ext/cm6/cm6.min.js');
 const cm6Src = fs.existsSync(cm6Path) ? fs.readFileSync(cm6Path, 'utf8') : '';

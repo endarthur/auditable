@@ -45,6 +45,7 @@ import './host.js';
 import './surface.js';
 import './markdown.js';
 import './cell-builtins/text-compression.js';
+import './cell-builtins/template.js';
 import './cell-builtins/ui.js';
 import './cell-builtins/file-io.js';
 import './cell-builtins/modules.js';

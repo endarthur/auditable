@@ -1,0 +1,120 @@
+/// auditable
+/// title: template — VFS-backed {{path | filter}} rendering
+
+/// md
+# template — composing notebook output from files
+
+The `template` builtin renders a string of mixed literal text and `{{path | filter}}` directives, reading from the notebook's VFS. Two call shapes:
+
+- **function**: ``await template('Hello {{intro.md}}')``
+- **tagged template literal**: ``await template`Hello {{intro.md}} ${name}` `` — `${expressions}` interpolate JS values **safely** (an attacker can't sneak `{{secrets.txt}}` into the template via a `${userInput}`).
+
+Bare paths resolve against `/projects/self/data/`. Absolute paths starting with `/` reach anywhere in the workspace VFS.
+
+/// code
+// Write a few files to /projects/self/data so we have something to template.
+
+await notebook.fs.mkdir("data");
+
+await notebook.fs.writeFile("data/intro.md", `## hello from a file
+
+This markdown lives at \`data/intro.md\`. Edit me and watch the cell below re-render.
+`);
+
+await notebook.fs.writeFile("data/grades.csv", `name,score
+alice,92
+bob,87
+carol,78
+dan,65
+eve,99
+frank,55`);
+
+await notebook.fs.writeFile("data/config.json", JSON.stringify({
+  title: "Grades report",
+  threshold: 70,
+  passing_only: true,
+}, null, 2));
+
+ui.display("Wrote three files under /projects/self/data/");
+
+/// md
+## function form — render a string
+
+/// code
+const html = await template(`
+{{intro.md}}
+
+### Top three grades
+
+{{grades.csv | head 3 | format table}}
+
+### Config
+
+{{config.json | pretty}}
+`);
+
+ui.html(html);
+
+/// md
+## tagged template form — safe interpolation
+
+You can fold JS values into the template string with `${expr}`. They land as opaque text — the template engine never re-scans them for `{{...}}` directives, so a user-supplied string can't pull files into the output.
+
+/// code
+const userName  = "Arthur";
+const attackPayload = "{{config.json}}";   // pretend this came from user input
+
+const html = await template`
+Hi **${userName}**! The data dir lives at \`/projects/self/data/\`.
+
+Pretend an attacker tried to inject a directive via your name:
+
+> received name: ${attackPayload}
+
+That text is rendered verbatim — never resolved.
+
+Title from config: {{config.json | pick title}}.
+`;
+
+ui.html(html);
+
+/// md
+## filter reference
+
+| extension | default | filters |
+|-----------|---------|---------|
+| `.csv`    | HTML table | `head N`, `tail N`, `format table\|inline\|raw` |
+| `.json`   | pretty `<pre>` | `pretty`, `compact`, `pick path` |
+| `.md`     | rendered markdown | (none — inline) |
+| `.png` `.jpg` `.svg` etc. | `<img src=…>` data URL | `width N`, `key=value` attrs |
+| `*` (wildcard) | — | `raw`, `escape` |
+
+Filter chains pipe left-to-right: `{{grades.csv | head 3 | format table}}` takes the first three lines, then formats as a table.
+
+/// md
+## reactivity
+
+The cell that called `template(...)` tracks which files were read. If any of those paths get written or deleted via `notebook.fs` later, the cell re-runs automatically — exactly like the regular DAG dependency mechanism.
+
+/// code
+// Try this: change the threshold below, then look at the rendered output.
+// The downstream template cell re-renders because we wrote config.json.
+
+const threshold = ui.slider("threshold", 70, {min: 0, max: 100, step: 5});
+
+await notebook.fs.writeFile("data/config.json", JSON.stringify({
+  title: "Grades report",
+  threshold,
+  passing_only: true,
+}, null, 2));
+
+ui.display(`Updated threshold → ${threshold}. The next cell re-renders.`);
+
+/// code
+const html = await template`
+**Current threshold**: {{config.json | pick threshold}}
+
+(Try dragging the slider above.)
+`;
+
+ui.html(html);

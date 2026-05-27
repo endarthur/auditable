@@ -31,6 +31,7 @@ import { makeWorkshop } from './cell-builtins/workshop.js';
 import { makeModuleLoaders } from './cell-builtins/modules.js';
 import { makeDialog } from './cell-builtins/dialog.js';
 import { makeTerminal } from './cell-builtins/terminal.js';
+import { makeTemplate } from './cell-builtins/template.js';
 
 export function createCellContext(cell) {
   // fire invalidation promise from previous run (cleanup resources)
@@ -111,6 +112,12 @@ export function createCellContext(cell) {
   // Auto-disposed on cell re-run via invalidation.
   const terminal = makeTerminal(cell, ctx);
 
+  // VFS-backed templating — {{path | filter args}} over notebook files.
+  // Works both as a function (`await template('…')`) and as a tagged-template
+  // literal (`await template`…``); the tagged form makes ${interpolations}
+  // injection-safe.
+  const template = makeTemplate(cell, ctx, runDAG);
+
   const ui = {
     display, print: display, html: displayHtml,
     canvas: uiCore.canvas, table: uiCore.table,
@@ -135,7 +142,7 @@ export function createCellContext(cell) {
     ui, std, sr,
     load: modules.load, install: modules.install, installBinary: modules.installBinary,
     display, print: display,
-    md, html, css,
+    md, html, css, template,
     workshop, notebook, worker, workerPool, vfs,
   });
 

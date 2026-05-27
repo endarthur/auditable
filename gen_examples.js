@@ -36,6 +36,7 @@ const categories = {
     'example_terminal.txt',
     'example_app_export.txt',
     'example_md_interpolation.txt',
+    'example_template.txt',
     'example_workers.txt',
     'example_notebook_fs.txt',
     'example_webmcp.txt',
