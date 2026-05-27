@@ -38,6 +38,7 @@ function _buildExtCtx(path) {
 import { unmountAt } from './mount.js';
 import { importFileAsNotebook } from './import.js';
 import { exportProject, exportProjectAsIpynb } from './project-export.js';
+import { uninstallExtension } from './uninstall-extension.js';
 import {
   moveToPrompt, copyToPrompt, attachTreeRowDnd, downloadFile,
   downloadFolder, extractArchiveHere, extractArchiveToPrompt, compressFolderTo,
@@ -69,6 +70,18 @@ const parentOf = (p) => { const i = p.lastIndexOf('/'); return i > 0 ? p.slice(0
 const join = (dir, name) => (dir === '/' ? '/' : dir + '/') + name;
 const sanitize = (s) => String(s).trim().replace(/[/\\]+/g, '-');
 const rid = () => Math.random().toString(36).slice(2, 10);
+
+// Recognize a tree row as an installed-extension leaf directory and
+// return its canonical package name ('@scope/name' or 'bare-name'),
+// or null if the row is anything else. Two shapes installed by
+// installGcupkg: /lib/@scope/name and /lib/local/name. Excludes the
+// scope folder itself (/lib/@scope) and any deeper paths.
+function _libPkgName(path, type) {
+  if (type !== 'folder' && type !== 'project') return null;
+  const m = /^\/lib\/(?:(@[\w.-]+)\/([\w.-]+)|local\/([\w.-]+))$/.exec(path);
+  if (!m) return null;
+  return m[1] ? m[1] + '/' + m[2] : m[3];
+}
 
 // /lib entries are URL-encoded module names ('%40gcu%2Fadder' for the dir
 // holding the @gcu/adder source — persist.js's syncModulesToVfs layout).
@@ -407,6 +420,18 @@ async function showMenu(e, path, type) {
   }
   if (extras.length) items.push('---', ...extras);
 
+  // /lib/<pkg> leaf directories — give them "Remove extension" as a
+  // first-class action so users don't have to use Delete (which would
+  // appear destructive and only wipes the directory, leaving stale
+  // /usr/share/examples and lockfile entries behind). Two shapes:
+  //   /lib/@scope/name  — scoped extension
+  //   /lib/local/name   — bare-name extension
+  const extPkgName = _libPkgName(path, type);
+  if (extPkgName) {
+    items.push('---');
+    items.push({ label: 'Remove extension', action: 'remove-extension', danger: true });
+  }
+
   // Extension-contributed context-menu items (EXTENSION_SPEC §3.8.2).
   // Inserted as their own section so they're visually separated from
   // built-ins. Each item is keyed `_extmenu:<i>` or `_openin:<kind>`
@@ -470,6 +495,19 @@ async function showMenu(e, path, type) {
   else if (action === 'copy-to')     copyToPrompt(path);
   else if (action === 'delete')      deleteEntry(path, type);
   else if (action === 'unmount')     unmountEntry(path);
+  else if (action === 'remove-extension' && extPkgName) {
+    const ok = await dlgConfirm(
+      'Remove extension',
+      `Remove ${extPkgName}? This deletes its source, documentation, examples, and any contributed surfaces or context-menu items. Notebooks using it will need a re-install to work again.`
+    );
+    if (ok) {
+      try { await uninstallExtension(extPkgName); }
+      catch (e) {
+        setStatus(`uninstall failed: ${e.message}`);
+        console.error('[uninstall]', e);
+      }
+    }
+  }
   else if (typeof action === 'string' && (action.startsWith('_extmenu:') || action.startsWith('_openin:'))) {
     const ei = extItems.find(x => x.key === action);
     if (ei) await extMenuDispatch(ei.item, path, _buildExtCtx(path));

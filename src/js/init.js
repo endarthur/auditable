@@ -697,11 +697,25 @@ async function worksBoot(conn) {
           _refreshTimer = null;
           try {
             const fresh = await hydrateModulesFromVfs(vfs);
-            // Merge — preserve any session-only entries (URL installs etc)
+            // Merge — preserve session-only entries (URL installs etc.)
             // that aren't on disk. /lib-backed entries always win since
             // they're authoritative.
             for (const [k, v] of Object.entries(fresh)) {
               window._installedModules[k] = v;
+            }
+            // Drop gcupkg-sourced entries that disappeared from /lib —
+            // an explicit uninstall just rm'd them and we want the
+            // notebook to forget the module without a full reload. The
+            // `kind` field distinguishes gcupkg installs from URL/local
+            // installs (which keep their session-only home unaffected).
+            for (const k of Object.keys(window._installedModules)) {
+              const cur = window._installedModules[k];
+              if (!cur || typeof cur !== 'object') continue;
+              const kind = cur.kind;
+              if ((kind === 'gcupkg' || kind === 'gcupkg-secondary') && !fresh[k]) {
+                delete window._installedModules[k];
+                if (window._importCache) delete window._importCache[k];
+              }
             }
             console.info(`[notebook] _installedModules refreshed from /lib (${Object.keys(fresh).length} entries)`);
           } catch (e) {
