@@ -382,14 +382,24 @@ registerKind('stub', { label: 'Stub project', icon: '◈', extensions: [] });
 // running a geas shell with the workspace VFS proxied in.
 registerKind('terminal', { label: 'Terminal', icon: '▶', extensions: [] });
 
+// The doc editor — markdown source + live HTML preview + {{path | filter}}
+// template directives via @gcu/template. Wins for `.md` / `.markdown` so a
+// double-click on those drops the user into editor+preview rather than
+// preview-only. Preview still owns CSV/JSON/images/PDFs/archives below.
+registerKind('doc', {
+  label:      'Document',
+  icon:       '▥',
+  extensions: ['.md', '.markdown'],
+});
+
 // The data-preview surface — read-only viewer for structured file types
-// (CSV table, JSON tree, rendered markdown, image, PDF). Registered
-// BEFORE text so it wins for the rich extensions; text still claims the
-// rest. kindForExtension returns the first match, so order matters.
+// (CSV table, JSON tree, image, PDF). Registered BEFORE text so it wins
+// for the rich extensions; text still claims the rest. kindForExtension
+// returns the first match, so order matters.
 registerKind('preview', {
   label:      'Preview',
   icon:       '◳',
-  extensions: ['.csv', '.tsv', '.json', '.geojson', '.md', '.markdown',
+  extensions: ['.csv', '.tsv', '.json', '.geojson',
                '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp',
                '.ico', '.avif', '.pdf',
                // Archives — the preview surface knows how to render a
@@ -406,7 +416,7 @@ registerKind('preview', {
 registerKind('text', {
   label:      'Text file',
   icon:       '▤',
-  extensions: ['.txt', '.md', '.json', '.js', '.css', '.html',
+  extensions: ['.txt', '.json', '.js', '.css', '.html',
                '.csv', '.log', '.xml', '.yaml', '.yml'],
   extensionlessNames: ['LICENSE', 'README', 'COPYING', 'NOTICE',
                        'AUTHORS', 'CONTRIBUTORS', 'CHANGELOG', 'CHANGES',

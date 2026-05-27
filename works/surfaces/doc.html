@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>doc</title>
+<style>
+  /* @theme-tokens */
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    background: var(--au-surface-deep);
+    color: var(--au-fg);
+    font: 13px/1.55 ui-monospace, 'Space Mono', Menlo, monospace;
+    display: flex;
+    flex-direction: column;
+  }
+  .menubar-host {
+    flex: none;
+    background: var(--au-surface);
+    border-bottom: 1px solid var(--au-border);
+  }
+  .body {
+    flex: 1; display: flex; min-height: 0;
+  }
+  /* Source pane — CM6 owns its inner DOM */
+  .source {
+    flex: 1; min-width: 0; display: flex;
+    border-right: 1px solid var(--au-border);
+    background: var(--au-surface-deep);
+  }
+  .source .cm-editor { flex: 1; height: 100%; background: var(--au-surface-deep); color: var(--au-fg); font: 13px/1.55 ui-monospace, 'Space Mono', Menlo, monospace; }
+  .source .cm-scroller { font-family: inherit; line-height: 1.55; }
+  .source .cm-content { padding: 12px 8px; caret-color: var(--au-action); }
+  .source .cm-gutters { background: var(--au-surface); color: var(--au-fg-soft); border-right: 1px solid var(--au-border); }
+  .source .cm-activeLineGutter, .source .cm-activeLine { background: var(--au-surface-bright); }
+  .source .cm-cursor, .source .cm-dropCursor { border-left-color: var(--au-action); }
+  .source .cm-selectionBackground, .source .cm-content ::selection { background: var(--au-selected-soft) !important; }
+
+  /* Preview pane — scrollable doc-page-shape */
+  .preview {
+    flex: 1; min-width: 0; overflow: auto;
+    background: var(--au-surface);
+    padding: 24px max(24px, min(80px, calc(50% - 380px)));
+    font: 14px/1.55 'Barlow', system-ui, -apple-system, sans-serif;
+    color: var(--au-fg);
+  }
+  .preview .md > * + * { margin-top: 0.8em; }
+  .preview .md h1, .preview .md h2, .preview .md h3, .preview .md h4 {
+    color: var(--au-action); margin-top: 1.5em;
+    font-family: 'Barlow', system-ui, sans-serif; font-weight: 600;
+  }
+  .preview .md h1 { font-size: 1.8em; border-bottom: 1px solid var(--au-border); padding-bottom: 0.2em; }
+  .preview .md h2 { font-size: 1.4em; }
+  .preview .md h3 { font-size: 1.15em; }
+  .preview .md code { background: var(--au-surface-raised); padding: 1px 4px; border-radius: 3px; font: 12px ui-monospace, 'Space Mono', Menlo, monospace; color: var(--au-info); }
+  .preview .md pre { background: var(--au-surface-raised); padding: 10px 12px; border-radius: 4px; overflow: auto; }
+  .preview .md pre code { background: none; padding: 0; color: var(--au-fg); }
+  .preview .md blockquote {
+    border-left: 3px solid var(--au-info); padding: 4px 12px; margin: 0;
+    color: var(--au-fg-muted); background: var(--au-info-soft);
+  }
+  .preview .md a { color: var(--au-action); }
+  .preview .md ul, .preview .md ol { padding-left: 1.4em; }
+  .preview .md li { margin: 0.1em 0; }
+  .preview .md img { max-width: 100%; }
+  .preview .md table.tpl-table {
+    border-collapse: collapse; width: 100%; font-size: 0.92em;
+    background: var(--au-surface-raised); border-radius: 4px; overflow: hidden;
+  }
+  .preview .md table.tpl-table th, .preview .md table.tpl-table td {
+    padding: 4px 8px; text-align: left;
+    border-bottom: 1px solid var(--au-border);
+  }
+  .preview .md table.tpl-table th { background: var(--au-surface-bright); font-weight: 600; }
+  .preview .md pre.tpl-json { background: var(--au-surface-raised); }
+  .preview .md .tpl-missing { color: var(--au-error); background: var(--au-error-soft); padding: 1px 4px; border-radius: 3px; }
+  .preview .md .template-error {
+    border-left: 3px solid var(--au-error); padding: 6px 10px; margin: 4px 0;
+    background: var(--au-error-soft); color: var(--au-error);
+    font: 11px ui-monospace, monospace;
+  }
+
+  /* ── View modes ────────────────────────────────────────────────────
+     Three toggles in the View menu. CSS class on .body picks which
+     panes render. Reading mode hides the source pane and widens the
+     preview to single-column body text. */
+  .body.mode-source  .preview { display: none; }
+  .body.mode-source  .source { border-right: none; }
+  .body.mode-reading .source { display: none; }
+
+  .statusbar {
+    flex: none; display: flex; gap: 18px; align-items: center;
+    padding: 2px 12px; font-size: 11px; color: var(--au-fg-soft);
+    background: var(--au-surface); border-top: 1px solid var(--au-border);
+    min-height: 22px;
+  }
+  .statusbar .status-spacer { flex: 1; }
+  .statusbar .status-dirty {
+    display: inline-block; min-width: 0.7em; color: var(--au-action);
+    font-family: ui-monospace, 'Space Mono', Menlo, monospace;
+  }
+  .statusbar .status-mode { font-family: ui-monospace, monospace; }
+
+  /* CM6 search panel — visual treatment matches text surface */
+  .source .cm-search.cm-panel {
+    position: absolute !important;
+    top: 4px !important; right: 6px !important;
+    padding: 0 !important; margin: 0 !important;
+    background: var(--au-surface-deep) !important;
+    border: 1px solid var(--au-border) !important;
+    border-radius: 3px !important;
+    color: var(--au-fg) !important;
+  }
+  .source .cm-search.cm-panel input { background: var(--au-surface) !important; color: var(--au-fg) !important; border: 1px solid var(--au-border) !important; }
+</style>
+</head>
+<body>
+<!--
+  doc surface — markdown editor with live HTML preview. Three view
+  modes (source / split / reading) via View menu. {{path | filter}}
+  template directives resolve against the project's VFS via
+  @gcu/template; dependencies tracked for VFS.Changed re-render.
+  Saves back to the source .md file (Surface.Flush + dirty cadence).
+-->
+<div class="menubar-host" id="menubar"></div>
+<div class="body mode-split" id="body">
+  <div class="source" id="source"></div>
+  <div class="preview"><div class="md" id="preview"></div></div>
+</div>
+<div class="statusbar" id="statusbar">
+  <span class="status-dirty" id="status-dirty"> </span>
+  <span class="status-path" id="status-path">—</span>
+  <span class="status-pos" id="status-pos">ln 1, col 1</span>
+  <span class="status-mode" id="status-mode">split</span>
+  <span class="status-spacer"></span>
+</div>
+<script type="module">
+import { connect } from '../../ext/abus/index.js';
+import { MenuBar } from '../../ext/menu/index.js';
+import { renderText, registerFilter } from '../../ext/template/index.js';
+
+/* @theme-init */
+
+/*__GCU_CM6_INLINE__*/
+
+const {
+  EditorView, EditorState, Compartment,
+  lineNumbers, highlightActiveLine, drawSelection,
+  history, undo, redo, indentWithTab,
+  keymap, minimalSetup,
+  openSearchPanel, closeSearchPanel, searchKeymap, search,
+  bracketMatching, indentOnInput,
+} = CM6;
+
+const sourceRoot = document.getElementById('source');
+const previewRoot = document.getElementById('preview');
+const bodyEl = document.getElementById('body');
+const sDirty = document.getElementById('status-dirty');
+const sPath  = document.getElementById('status-path');
+const sPos   = document.getElementById('status-pos');
+const sMode  = document.getElementById('status-mode');
+
+const basename = (p) => p.split('/').filter(Boolean).pop() || p;
+const dirOf    = (p) => { const i = p.lastIndexOf('/'); return i > 0 ? p.slice(0, i) : '/'; };
+const esc = (s) => String(s).replace(/[&<>]/g,
+  (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+// ── Minimal markdown renderer ─────────────────────────────────────────
+//
+// Same approach as preview.html — tiny subset (headings, fences, lists,
+// quotes, links, bold/italic/code-inline). Not CommonMark. Good enough
+// for readable rendering of the kind of markdown people write in
+// reports. Inline-HTML lines (start with `<`) pass through verbatim so
+// template-resolved blocks (<table>, <pre>, <img>) render correctly.
+function renderMarkdown(text) {
+  const lines = text.split('\n');
+  const out = [];
+  let inCode = false, listType = '';
+  const closeList = () => { if (listType) { out.push(`</${listType}>`); listType = ''; } };
+  for (const raw of lines) {
+    const line = raw.replace(/\r$/, '');
+    if (line.startsWith('```')) {
+      closeList();
+      if (inCode) { out.push('</code></pre>'); inCode = false; }
+      else { out.push('<pre><code>'); inCode = true; }
+      continue;
+    }
+    if (inCode) { out.push(esc(line) + '\n'); continue; }
+    let m;
+    if ((m = line.match(/^(#{1,6})\s+(.*)$/))) {
+      closeList();
+      const lvl = m[1].length;
+      out.push(`<h${lvl}>${inlineMd(m[2])}</h${lvl}>`);
+    } else if (line.startsWith('> ')) {
+      closeList();
+      out.push(`<blockquote>${inlineMd(line.slice(2))}</blockquote>`);
+    } else if ((m = line.match(/^[-*]\s+(.*)$/))) {
+      if (listType !== 'ul') { closeList(); out.push('<ul>'); listType = 'ul'; }
+      out.push(`<li>${inlineMd(m[1])}</li>`);
+    } else if ((m = line.match(/^\d+\.\s+(.*)$/))) {
+      if (listType !== 'ol') { closeList(); out.push('<ol>'); listType = 'ol'; }
+      out.push(`<li>${inlineMd(m[1])}</li>`);
+    } else if (line.trim() === '') {
+      closeList();
+    } else if (/^\s*</.test(line)) {
+      // Raw HTML line — emit verbatim so template-resolved tables /
+      // pres / imgs render instead of being paragraph-wrapped and
+      // escaped.
+      closeList();
+      out.push(line);
+    } else {
+      closeList();
+      out.push(`<p>${inlineMd(line)}</p>`);
+    }
+  }
+  closeList();
+  if (inCode) out.push('</code></pre>');
+  return out.join('');
+}
+
+function inlineMd(s) {
+  return esc(s)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, '<em>$1</em>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+}
+
+// ── Template + render pipeline ────────────────────────────────────────
+//
+// Two-pass: 1) markdown → HTML (preserving {{...}} as literal text in
+// HTML), 2) template engine resolves {{...}} → final HTML. The order
+// matters: doing template-first would let template-resolved HTML get
+// markdown-escaped on the second pass. Doing markdown-first lets the
+// `^\s*<` rule above pass our resolved HTML through verbatim.
+//
+// Engine dependency tracking is wired so any tracked VFS write/delete
+// triggers a re-render (debounced).
+
+let bus = null;
+let filePath = '';
+let projectDir = '/';
+let saved = '';
+let dirty = false;
+let flushTimer = null;
+let view = null;
+let renderTimer = null;
+const deps = new Set();
+let vfsUnsub = null;
+
+const emit = (member, args) =>
+  bus.signal({ path: '/', interface: 'Surface', member }, args);
+
+function setDirty(d) {
+  if (dirty === d) return;
+  dirty = d;
+  sDirty.textContent = dirty ? '●' : ' ';
+  emit('DirtyChanged', [dirty]);
+}
+
+// Template engine calls A-Bus VFS reads under the hood — we wrap the
+// shell's VFS service into a `vfs` shape that exposes readFile.
+function makeBusVfs() {
+  return {
+    async readFile(path, mode) {
+      const text = await bus.call(
+        { to: 'works', path: '/', interface: 'VFS', member: 'Read' },
+        [path, mode === 'bytes' ? 'bytes' : 'utf8']);
+      return text;
+    },
+  };
+}
+
+let busVfs = null;
+
+// Project-local renderMarkdown filter override — when a template
+// directive includes a `.md` file, we want THAT content to also
+// markdown-render inline, not the engine's escaped fallback.
+registerFilter('.md', 'default', async (text) => {
+  if (typeof text !== 'string') text = String(text);
+  return renderMarkdown(text);
+});
+
+async function renderNow() {
+  const source = view.state.doc.toString();
+  // Phase 1: markdown → HTML (with `{{...}}` directives preserved as text)
+  const phase1 = renderMarkdown(source);
+  // Phase 2: template engine resolves directives against project VFS
+  let phase2;
+  deps.clear();
+  try {
+    phase2 = await renderText(phase1, {
+      vfs: busVfs,
+      cwd: projectDir,
+      onDependency: (p) => deps.add(p),
+    });
+  } catch (e) {
+    phase2 = `<div class="template-error">template error: ${esc(e.message)}</div>` + phase1;
+  }
+  previewRoot.innerHTML = phase2;
+}
+
+function scheduleRender() {
+  clearTimeout(renderTimer);
+  renderTimer = setTimeout(renderNow, 200);
+}
+
+function updateStatus() {
+  if (!view) return;
+  const head = view.state.selection.main.head;
+  const line = view.state.doc.lineAt(head);
+  sPos.textContent = 'ln ' + line.number + ', col ' + (head - line.from + 1);
+}
+
+async function flush() {
+  clearTimeout(flushTimer);
+  const content = view.state.doc.toString();
+  if (content === saved) return;
+  await bus.call(
+    { to: 'works', path: '/', interface: 'VFS', member: 'Write' },
+    [filePath, content]);
+  saved = content;
+  setDirty(false);
+}
+
+async function loadFromDisk() {
+  try {
+    saved = (await bus.call(
+      { to: 'works', path: '/', interface: 'VFS', member: 'Read' },
+      [filePath, 'utf8'])) || '';
+  } catch { saved = ''; }
+  view.dispatch({
+    changes: { from: 0, to: view.state.doc.length, insert: saved },
+  });
+  setDirty(false);
+  updateStatus();
+  renderNow();
+}
+
+function makeEditor(initialText) {
+  return new EditorView({
+    parent: sourceRoot,
+    state: EditorState.create({
+      doc: initialText,
+      extensions: [
+        minimalSetup,
+        history(),
+        drawSelection(),
+        highlightActiveLine(),
+        bracketMatching(),
+        indentOnInput(),
+        search({ top: true }),
+        lineNumbers(),
+        EditorView.lineWrapping,
+        keymap.of([
+          indentWithTab,
+          ...searchKeymap,
+          { key: 'Ctrl-s', mac: 'Cmd-s', run: () => { flush(); return true; }, preventDefault: true },
+          { key: 'Ctrl-z', mac: 'Cmd-z', run: undo },
+          { key: 'Ctrl-Shift-z', mac: 'Cmd-Shift-z', run: redo },
+          { key: 'Ctrl-y', mac: 'Cmd-y', run: redo },
+          { key: 'Escape', run: (v) => closeSearchPanel(v) },
+        ]),
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged) {
+            setDirty(view.state.doc.toString() !== saved);
+            scheduleRender();
+            clearTimeout(flushTimer);
+            flushTimer = setTimeout(flush, 1500);
+          }
+          if (update.docChanged || update.selectionSet) updateStatus();
+        }),
+      ],
+    }),
+  });
+}
+
+// ── View mode toggle ──────────────────────────────────────────────────
+let mode = 'split';
+function setMode(m) {
+  if (m !== 'source' && m !== 'split' && m !== 'reading') return;
+  mode = m;
+  bodyEl.classList.remove('mode-source', 'mode-split', 'mode-reading');
+  bodyEl.classList.add('mode-' + mode);
+  sMode.textContent = mode;
+  // Reading mode benefits from re-render; CM6 needs a measure after layout shift.
+  if (view) requestAnimationFrame(() => view.requestMeasure?.());
+}
+
+// ── Export HTML ───────────────────────────────────────────────────────
+async function exportHtml() {
+  const title = basename(filePath).replace(/\.[^.]+$/, '') || 'document';
+  const innerHtml = previewRoot.innerHTML;
+  const docHtml =
+    '<!doctype html>\n<html><head><meta charset="utf-8">\n' +
+    '<title>' + esc(title) + '</title>\n' +
+    '<style>\n' +
+    'body{font:14px/1.55 "Barlow",system-ui,sans-serif;max-width:760px;margin:40px auto;padding:0 24px;color:#222}\n' +
+    'h1,h2,h3,h4{color:#b54e1a;margin-top:1.5em;font-weight:600}\n' +
+    'h1{font-size:1.8em;border-bottom:1px solid #ccc;padding-bottom:0.2em}\n' +
+    'code{background:#f1efe9;padding:1px 4px;border-radius:3px;font:12px ui-monospace,"Space Mono",monospace;color:#1b6b72}\n' +
+    'pre{background:#f1efe9;padding:10px 12px;border-radius:4px;overflow:auto}\n' +
+    'pre code{background:none;padding:0;color:#222}\n' +
+    'blockquote{border-left:3px solid #1b6b72;padding:4px 12px;margin:0;color:#666;background:#eef5f6}\n' +
+    'a{color:#b54e1a}\n' +
+    'table{border-collapse:collapse;width:100%;font-size:0.92em}\n' +
+    'th,td{padding:4px 8px;text-align:left;border-bottom:1px solid #ddd}\n' +
+    'th{background:#f5f3ed;font-weight:600}\n' +
+    'img{max-width:100%}\n' +
+    '</style>\n</head><body>\n' +
+    innerHtml +
+    '\n</body></html>\n';
+  const blob = new Blob([docHtml], { type: 'text/html' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = title + '.html';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Menubar ───────────────────────────────────────────────────────────
+const menubarEl = document.getElementById('menubar');
+let actions = {};
+const bar = new MenuBar(menubarEl, () => [
+  { label: 'File', items: () => [
+    { label: 'Save',             action: 'file:save',   shortcut: 'Ctrl+S' },
+    { label: 'Revert from disk', action: 'file:revert' },
+    '---',
+    { label: 'Export HTML…',     action: 'file:export-html' },
+  ] },
+  { label: 'Edit', items: () => [
+    { label: 'Undo',             action: 'edit:undo',   shortcut: 'Ctrl+Z' },
+    { label: 'Redo',             action: 'edit:redo',   shortcut: 'Ctrl+Shift+Z' },
+    '---',
+    { label: 'Find / Replace…',  action: 'edit:find',   shortcut: 'Ctrl+F' },
+  ] },
+  { label: 'View', items: () => [
+    { label: (mode === 'source'  ? '✓ ' : '   ') + 'Source',  action: 'view:source' },
+    { label: (mode === 'split'   ? '✓ ' : '   ') + 'Split',   action: 'view:split' },
+    { label: (mode === 'reading' ? '✓ ' : '   ') + 'Reading', action: 'view:reading' },
+  ] },
+]);
+bar.on('action', (a) => { const fn = actions[a]; if (fn) fn(); });
+
+// ── A-Bus connect ─────────────────────────────────────────────────────
+window.addEventListener('message', async (ev) => {
+  if (ev.source !== window.parent) return;
+  if (!ev.data || ev.data.type !== 'abus:welcome') return;
+  const { port, tab } = ev.data;
+
+  filePath = tab.path;
+  projectDir = dirOf(filePath);
+  sPath.textContent = filePath;
+
+  try { bus = await connect(port, { client: 'doc-surface' }); }
+  catch (e) {
+    previewRoot.innerHTML = '<div class="template-error">connect failed: ' + esc(e.message) + '</div>';
+    return;
+  }
+  installThemeSubscription(bus);
+  try { await bus.claim('doc-' + (tab.id || 'unknown')); } catch {}
+
+  busVfs = makeBusVfs();
+  view = makeEditor('');
+  await loadFromDisk();
+
+  // VFS.Changed → re-render if any tracked dependency path moved.
+  // Coalesce on the 200ms render debounce.
+  vfsUnsub = bus.subscribe(
+    { interface: 'VFS', member: 'Changed', from: 'works' },
+    (msg) => {
+      const ev = msg && msg.args && msg.args[0];
+      const p = ev && (typeof ev === 'string' ? ev : ev.path);
+      if (typeof p !== 'string') return;
+      if (deps.has(p)) scheduleRender();
+      // If the file we're editing changed on disk from somewhere else,
+      // pull the new content. Naive overwrite — if the user has unsaved
+      // local edits, those win until they save (Ctrl-S). A more robust
+      // shape would diff or warn; v1 is permissive.
+      if (p === filePath && !dirty) loadFromDisk();
+    },
+  );
+
+  // Action handlers
+  actions = {
+    'file:save':         () => flush(),
+    'file:revert':       () => loadFromDisk(),
+    'file:export-html':  () => exportHtml(),
+    'edit:undo':         () => undo(view),
+    'edit:redo':         () => redo(view),
+    'edit:find':         () => openSearchPanel(view),
+    'view:source':       () => setMode('source'),
+    'view:split':        () => setMode('split'),
+    'view:reading':      () => setMode('reading'),
+  };
+
+  // Surface contract (§5.2)
+  bus.expose('/', {
+    Surface: {
+      methods: {
+        Flush:     () => flush(),
+        CanClose:  () => true,
+        Relocated: (p) => { filePath = p; projectDir = dirOf(p); sPath.textContent = p; },
+      },
+      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
+    },
+  });
+
+  emit('TitleChanged', [basename(filePath)]);
+  emit('Ready', []);
+});
+</script>
+</body>
+</html>
