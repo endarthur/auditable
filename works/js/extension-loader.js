@@ -156,12 +156,36 @@ export async function evaluateWorksScript(name) {
 // Walk /lib at boot looking for every installed extension's
 // works.js. Same enumeration shape as gcupkg installer's _libPathFor:
 // scoped names at /lib/<scope>/<name>, bare names under /lib/local/.
+//
+// Logs a one-line summary so reload-time problems are diagnosable
+// without setting flags: "found N, evaluated M, registered K".
 export async function evaluateAllWorksScripts() {
   if (!WKS.vfs) return;
   const names = await _enumerateInstalled();
+  const evaluated = [];
+  const skipped = [];     // installed but no works.js — usually fine
+  const errored = [];     // works.js threw — diagnostic
   for (const name of names) {
-    try { await evaluateWorksScript(name); }
-    catch { /* per-extension errors already logged; keep going */ }
+    try {
+      const ok = await evaluateWorksScript(name);
+      if (ok) evaluated.push(name);
+      else    skipped.push(name);
+    } catch (e) {
+      errored.push({ name, message: e && e.message });
+    }
+  }
+  console.info(
+    `[works] /lib has ${names.length} installed extensions; ` +
+    `${evaluated.length} works.js evaluated, ` +
+    `${skipped.length} have no works.js, ` +
+    `${errored.length} errored, ` +
+    `${_registered.size} registered`
+  );
+  if (evaluated.length)
+    console.info('[works]   evaluated:', evaluated.join(', '));
+  if (errored.length) {
+    console.warn('[works]   errored:',
+      errored.map((e) => `${e.name} (${e.message})`).join(', '));
   }
 }
 

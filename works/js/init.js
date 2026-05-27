@@ -56,6 +56,19 @@ async function boot() {
   WKS.serializeWorkspace = serializeWorkspace;
   WKS.buildWorksHtml = buildWorksHtml;
 
+  // Extension diagnostics + on-demand reload. If a contributed surface
+  // or context-menu item vanishes between reloads, run reloadExtensions()
+  // in the console to re-evaluate every /lib/<pkg>/works.js without a
+  // full page reload. listExtensions() returns the current registry —
+  // names that don't appear there didn't register on boot.
+  WKS.reloadExtensions = () => evaluateAllWorksScripts();
+  WKS.listExtensions = () =>
+    (window.auditable?.listExtensions?.() || []).map((m) => ({
+      name: m.name, version: m.version,
+      surfaces: (m.surfaces || []).map((s) => s.kind || s.name),
+      contextMenu: (m.contextMenu || []).map((c) => c.label),
+    }));
+
   // Broadcast a debug flag to every surface iframe — the iframes are
   // in opaque origins (blob:file://) so devtools-set `window.*` flags
   // on the parent don't reach them. postMessage crosses the boundary.
