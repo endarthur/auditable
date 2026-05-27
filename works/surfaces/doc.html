@@ -880,22 +880,26 @@ window.addEventListener('message', (ev) => {
 });
 
 function _wireTreeDrop() {
-  // Listen on the whole surface body so a drop anywhere in the
-  // window — source pane, preview pane, statusbar — accepts. The
-  // snippet always inserts into the editor regardless of where the
-  // drop landed, since that's the only place markdown lives.
-  const target = document.body;
-  target.addEventListener('dragover', (e) => {
+  // Capture-phase listeners on document — run BEFORE any inner
+  // element's bubble or capture handlers. CM6 attaches its own
+  // drag/drop machinery to the editor; without capture, its
+  // dragover/drop handlers could swallow our cross-origin drag
+  // before our preventDefault has a chance to fire and the browser
+  // shows the forbidden cursor.
+  document.addEventListener('dragover', (e) => {
+    if (window._docDragDebug) console.log('[doc] dragover, _treeDragPath=', _treeDragPath, 'types=', e.dataTransfer && [...(e.dataTransfer.types || [])]);
     // Only intercept when we know a tree drag is in flight OR the
     // dataTransfer announces our MIME (latter happens when the
     // browser doesn't fully protect cross-origin types).
     const hasMime = e.dataTransfer && e.dataTransfer.types
-      && e.dataTransfer.types.indexOf(TREE_DND_MIME) >= 0;
+      && Array.from(e.dataTransfer.types).indexOf(TREE_DND_MIME) >= 0;
     if (!_treeDragPath && !hasMime) return;
     e.preventDefault();
+    e.stopPropagation();   // prevent CM6 from also handling it
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
-  });
-  target.addEventListener('drop', (e) => {
+  }, /* useCapture */ true);
+  document.addEventListener('drop', (e) => {
+    if (window._docDragDebug) console.log('[doc] drop, _treeDragPath=', _treeDragPath);
     if (!view) return;
     // Path source order: explicit DataTransfer first (best fidelity),
     // postMessage cache second (cross-origin fallback).
@@ -921,7 +925,7 @@ function _wireTreeDrop() {
     });
     view.focus();
     _treeDragPath = null;
-  });
+  }, /* useCapture */ true);
 }
 
 // ── Toolbar — formatting commands ─────────────────────────────────────
