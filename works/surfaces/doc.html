@@ -295,6 +295,8 @@ import { connect } from '../../ext/abus/index.js';
 import { MenuBar } from '../../ext/menu/index.js';
 import { renderText, registerFilter } from '../../ext/template/index.js';
 import { parse as parseYaml, YamlParseError } from '../../ext/yaml/index.js';
+import { writeEpub } from '../../ext/epub/index.js';
+import * as archiveLib from '../../ext/archive/index.js';
 
 /* @theme-init */
 
@@ -833,6 +835,61 @@ function setMode(m) {
   if (view) requestAnimationFrame(() => view.requestMeasure?.());
 }
 
+// ── Export EPUB ───────────────────────────────────────────────────────
+//
+// Pulls metadata from the doc's frontmatter (title/author/lang/date),
+// re-renders the body (ensures we ship the latest, not whatever was
+// in the preview pane), packs everything as a single-chapter EPUB
+// via @gcu/epub. One file, one chapter — multi-chapter book bundles
+// are deferred to a book.json workflow (see doc surface roadmap).
+async function exportEpub() {
+  // Ensure the preview is current — the body we ship is whatever
+  // markdown + template resolution just produced. await so the
+  // download fires after.
+  await renderNow();
+
+  const source = view.state.doc.toString();
+  const { meta } = splitFrontmatter(source);
+
+  const titleFromMeta = (typeof meta.title === 'string' && meta.title.trim()) || null;
+  const fileBaseName = basename(filePath).replace(/\.[^.]+$/, '') || 'document';
+  const title = titleFromMeta || fileBaseName;
+
+  // Author / date / lang fold through verbatim. Anything else the
+  // frontmatter spec doesn't currently surface is dropped — additive
+  // later if needed.
+  const metadata = { title };
+  if (typeof meta.author === 'string' && meta.author.trim()) metadata.author = meta.author.trim();
+  if (typeof meta.lang === 'string' && meta.lang.trim())     metadata.lang   = meta.lang.trim();
+  if (typeof meta.date === 'string' && meta.date.trim())     metadata.date   = meta.date.trim();
+  if (typeof meta.description === 'string' && meta.description.trim()) metadata.description = meta.description.trim();
+  if (typeof meta.publisher === 'string' && meta.publisher.trim())     metadata.publisher   = meta.publisher.trim();
+  if (typeof meta.identifier === 'string' && meta.identifier.trim())   metadata.identifier  = meta.identifier.trim();
+
+  let bytes;
+  try {
+    bytes = await writeEpub({
+      archive: archiveLib,
+      metadata,
+      chapters: [{
+        id:    'ch1',
+        title,
+        body:  previewRoot.innerHTML,
+      }],
+    });
+  } catch (e) {
+    console.error('[doc] EPUB export failed:', e);
+    return;
+  }
+
+  const blob = new Blob([bytes], { type: 'application/epub+zip' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = fileBaseName + '.epub';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 // ── Export HTML ───────────────────────────────────────────────────────
 async function exportHtml() {
   const title = basename(filePath).replace(/\.[^.]+$/, '') || 'document';
@@ -873,6 +930,7 @@ const bar = new MenuBar(menubarEl, () => [
     { label: 'Revert from disk', action: 'file:revert' },
     '---',
     { label: 'Export HTML…',     action: 'file:export-html' },
+    { label: 'Export EPUB…',     action: 'file:export-epub' },
   ] },
   { label: 'Edit', items: () => [
     { label: 'Undo',             action: 'edit:undo',   shortcut: 'Ctrl+Z' },
@@ -932,6 +990,7 @@ window.addEventListener('message', async (ev) => {
     'file:save':         () => flush(),
     'file:revert':       () => loadFromDisk(),
     'file:export-html':  () => exportHtml(),
+    'file:export-epub':  () => exportEpub(),
     'edit:undo':         () => undo(view),
     'edit:redo':         () => redo(view),
     'edit:find':         () => openSearchPanel(view),
