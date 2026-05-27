@@ -599,6 +599,36 @@ function _broadcastTreeDrag(type, path) {
 // is non-null). For other drags (OS files, etc.) the existing
 // per-surface and global handlers do their thing.
 let _currentTreeDragPath = null;
+let _dragShields = [];
+
+// During a tree-row drag, overlay a transparent same-origin div on
+// top of each surface iframe. The shield catches dragover/drop in
+// the SHELL document (same origin → no anti-phishing suppression).
+// Without the shield, Chromium drops drag events the moment the
+// cursor crosses into a cross-origin iframe — neither the parent
+// nor the iframe see them. Classic workaround pattern; same shape
+// libraries like react-dnd use for cross-frame DnD.
+function _showDragShields() {
+  _hideDragShields();
+  for (const iframe of document.querySelectorAll('iframe')) {
+    const rect = iframe.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) continue;
+    const shield = document.createElement('div');
+    shield.className = 'works-drag-shield';
+    shield.style.cssText =
+      'position:fixed;'
+      + `left:${rect.left}px;top:${rect.top}px;`
+      + `width:${rect.width}px;height:${rect.height}px;`
+      + 'z-index:2147483647;background:transparent;';
+    shield._iframe = iframe;
+    document.body.appendChild(shield);
+    _dragShields.push(shield);
+  }
+}
+function _hideDragShields() {
+  for (const s of _dragShields) s.remove();
+  _dragShields = [];
+}
 
 function _installShellDragDelegation() {
   document.addEventListener('dragstart', (e) => {
@@ -612,7 +642,9 @@ function _installShellDragDelegation() {
       console.log('[shell] dragover target=', tag, cls.slice ? cls.slice(0, 40) : cls, 'inIframe=', inIframe, '_currentTreeDragPath=', _currentTreeDragPath);
     }
     if (!_currentTreeDragPath) return;
-    const iframe = e.target && e.target.closest && e.target.closest('iframe');
+    const shield = e.target && e.target.closest && e.target.closest('.works-drag-shield');
+    const iframe = shield ? shield._iframe
+      : (e.target && e.target.closest && e.target.closest('iframe'));
     if (!iframe) return;
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
@@ -620,7 +652,9 @@ function _installShellDragDelegation() {
   document.addEventListener('drop', (e) => {
     if (window._shellDragDebug) console.log('[shell] drop target=', e.target?.tagName, '_currentTreeDragPath=', _currentTreeDragPath);
     if (!_currentTreeDragPath) return;
-    const iframe = e.target && e.target.closest && e.target.closest('iframe');
+    const shield = e.target && e.target.closest && e.target.closest('.works-drag-shield');
+    const iframe = shield ? shield._iframe
+      : (e.target && e.target.closest && e.target.closest('iframe'));
     if (!iframe) return;
     e.preventDefault();
     e.stopPropagation();
@@ -635,6 +669,7 @@ function _installShellDragDelegation() {
       }, '*');
     } catch { /* iframe gone — fine */ }
     _currentTreeDragPath = null;
+    _hideDragShields();
   }, /* useCapture */ true);
 }
 // Install once at module-eval. (No DOM dependency at install time —
@@ -656,6 +691,11 @@ export function attachTreeRowDnd(row, node) {
       // generic iframe-targeted dragover/drop handlers above can do
       // their work without re-reading dataTransfer.
       _currentTreeDragPath = node.path;
+      // Cover every surface iframe with a transparent shield so the
+      // shell sees drag events normally (Chromium drops drag events
+      // over cross-origin iframes; the shield is same-origin and
+      // intercepts cleanly).
+      _showDragShields();
       // Cross-origin drag side channel: blob:null/<uuid> iframes get
       // a unique opaque origin and Chromium drops drag events inside
       // them entirely (anti-phishing). Broadcast the dragged path via
@@ -665,6 +705,7 @@ export function attachTreeRowDnd(row, node) {
     });
     row.addEventListener('dragend', () => {
       _currentTreeDragPath = null;
+      _hideDragShields();
       _broadcastTreeDrag('tree-drag-end', null);
     });
   }
