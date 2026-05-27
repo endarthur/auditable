@@ -62,9 +62,9 @@ function _airCompile(cell, scopeKeys, defNames) {
 
 export async function execCell(cell) {
   const ctx = createCellContext(cell);
-  const { ui, std, sr, load, install, installBinary, invalidation, display,
-          md, html, css, template, workshop, notebook, worker, workerPool, vfs,
-          usedWidgets, outputEl, widgetEl } = ctx;
+  // Internal bookkeeping not part of INJECTED_NAMES — destructured because
+  // the catch block + post-run cleanup below reach for them directly.
+  const { usedWidgets, outputEl, widgetEl } = ctx;
 
   const scopeKeys = cell.uses ? [...cell.uses].filter(k => !INJECTED_NAMES.includes(k)).sort() : [];
   const defNames = cell.defines ? [...cell.defines].sort().join(', ') : '';
@@ -82,11 +82,13 @@ export async function execCell(cell) {
     }
 
     const scopeVals = scopeKeys.map(k => S.scope[k]);
-    // Order MUST match INJECTED_NAMES exactly — these are positional
-     // parameters in the compiled AsyncFunction. Add to BOTH places when
-    // introducing a new builtin or downstream params shift.
-    const injectedVals = [ui, std, sr, load, install, installBinary, invalidation, display, display,
-      md, html, css, template, workshop, notebook, worker, workerPool, vfs];
+    // Build injected values directly from INJECTED_NAMES so the two can
+    // never drift out of sync — adding a new builtin only needs the name
+    // in engine.js's INJECTED_NAMES and a matching property on ctx (set
+    // up by cell-context.js). Earlier shape kept a hardcoded parallel
+    // array that silently shifted positional params when names were
+    // appended.
+    const injectedVals = INJECTED_NAMES.map((n) => ctx[n]);
     const result = await fn(...scopeVals, ...injectedVals);
 
     if (result && typeof result === 'object') cell._lastResult = result;
