@@ -615,11 +615,18 @@ function _showDragShields() {
     if (rect.width <= 0 || rect.height <= 0) continue;
     const shield = document.createElement('div');
     shield.className = 'works-drag-shield';
+    // 0.01 alpha rather than 'transparent' — Chromium skips hit-
+    // testing on fully transparent overlays in some configurations
+    // (especially over cross-origin iframes), so drag events sail
+    // through to the iframe behind. A barely-there fill forces the
+    // browser to treat the shield as a real paintable hit target.
+    // Visually indistinguishable from transparent at 1% alpha.
     shield.style.cssText =
       'position:fixed;'
       + `left:${rect.left}px;top:${rect.top}px;`
       + `width:${rect.width}px;height:${rect.height}px;`
-      + 'z-index:2147483647;background:transparent;';
+      + 'z-index:2147483647;'
+      + 'background:rgba(0,0,0,0.01);';
     shield._iframe = iframe;
     document.body.appendChild(shield);
     _dragShields.push(shield);
