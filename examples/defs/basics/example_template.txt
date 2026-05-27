@@ -7,9 +7,11 @@
 The `template` builtin renders a string of mixed literal text and `{{path | filter}}` directives, reading from the notebook's VFS. Two call shapes:
 
 - **function**: ``await template('Hello {{intro.md}}')``
-- **tagged template literal**: ``await template`Hello {{intro.md}} ${name}` `` — `${expressions}` interpolate JS values **safely** (an attacker can't sneak `{{secrets.txt}}` into the template via a `${userInput}`).
+- **tagged template literal**: see the second code cell below — JS template-literal interpolations fold into the template **safely** (the engine treats them as opaque text, so an attacker can't sneak a `{{secrets.txt}}` directive in through a user-supplied value).
 
 Bare paths resolve against `/projects/self/data/`. Absolute paths starting with `/` reach anywhere in the workspace VFS.
+
+(Note: this prose can't show the literal interpolation syntax inline — markdown cells live-evaluate `$`-curly expressions — so the snippet appears in the code cell instead.)
 
 /// code
 // Write a few files to /projects/self/data so we have something to template.
@@ -41,7 +43,7 @@ ui.display("Wrote three files under /projects/self/data/");
 ## function form — render a string
 
 /// code
-const html = await template(`
+const out = await template(`
 {{intro.md}}
 
 ### Top three grades
@@ -53,18 +55,18 @@ const html = await template(`
 {{config.json | pretty}}
 `);
 
-ui.html(html);
+ui.html(out);
 
 /// md
 ## tagged template form — safe interpolation
 
-You can fold JS values into the template string with `${expr}`. They land as opaque text — the template engine never re-scans them for `{{...}}` directives, so a user-supplied string can't pull files into the output.
+JS values fold into the template via the usual tagged-template-literal syntax (`$`-curly). They land as opaque text — the template engine never re-scans them for `{{...}}` directives, so a user-supplied string can't pull files into the output. See the example below.
 
 /// code
 const userName  = "Arthur";
 const attackPayload = "{{config.json}}";   // pretend this came from user input
 
-const html = await template`
+const out = await template`
 Hi **${userName}**! The data dir lives at \`/projects/self/data/\`.
 
 Pretend an attacker tried to inject a directive via your name:
@@ -76,7 +78,7 @@ That text is rendered verbatim — never resolved.
 Title from config: {{config.json | pick title}}.
 `;
 
-ui.html(html);
+ui.html(out);
 
 /// md
 ## filter reference
@@ -111,10 +113,10 @@ await notebook.fs.writeFile("data/config.json", JSON.stringify({
 ui.display(`Updated threshold → ${threshold}. The next cell re-renders.`);
 
 /// code
-const html = await template`
+const out = await template`
 **Current threshold**: {{config.json | pick threshold}}
 
 (Try dragging the slider above.)
 `;
 
-ui.html(html);
+ui.html(out);
