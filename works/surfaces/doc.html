@@ -18,13 +18,66 @@
     background: var(--au-surface);
     border-bottom: 1px solid var(--au-border);
   }
+
+  /* ── Formatting toolbar ────────────────────────────────────────────
+     One-row strip of buttons that wrap markdown around the current
+     selection (or insert template stubs at the cursor). Visible
+     whenever the source pane is — hidden in reading mode where there's
+     no editor to format. */
+  .toolbar {
+    flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 2px;
+    padding: 4px 8px;
+    background: var(--au-surface);
+    border-bottom: 1px solid var(--au-border);
+    font: 12px ui-monospace, 'Space Mono', Menlo, monospace;
+  }
+  .toolbar button {
+    background: transparent; color: var(--au-fg);
+    border: 1px solid transparent; border-radius: 3px;
+    padding: 2px 8px; min-width: 26px; height: 24px;
+    cursor: pointer; font: inherit;
+  }
+  .toolbar button:hover { background: var(--au-surface-bright); }
+  .toolbar button:active { background: var(--au-surface-raised); }
+  .toolbar .tb-sep {
+    width: 1px; height: 16px; background: var(--au-border); margin: 0 4px;
+  }
+  .toolbar .tb-bold   { font-weight: 700; }
+  .toolbar .tb-italic { font-style: italic; }
+  .toolbar .tb-code   { color: var(--au-info); }
+  .toolbar .tb-h      { color: var(--au-action); font-weight: 600; }
+  /* Reading mode: editor is hidden, toolbar has nothing to do */
+  .body.mode-reading + .toolbar,
+  .toolbar.reading-hidden { display: none; }
+
   .body {
     flex: 1; display: flex; min-height: 0;
   }
-  /* Source pane — CM6 owns its inner DOM */
+
+  /* ── Resizable split divider ───────────────────────────────────────
+     A thin draggable bar between source and preview. Width 6px so it's
+     comfortable to grab; tinted on hover; cursor-resize affordance.
+     Only visible in split mode (other modes hide one of the panes). */
+  .divider {
+    flex: none; width: 6px; cursor: col-resize;
+    background: var(--au-border);
+    opacity: 0.4;
+    transition: opacity 0.12s, background 0.12s;
+  }
+  .divider:hover, .divider.dragging {
+    opacity: 1; background: var(--au-action);
+  }
+  .body.mode-source  .divider,
+  .body.mode-reading .divider { display: none; }
+  /* While dragging, suppress text selection across the whole body so the
+     drag doesn't accidentally select text under the cursor. */
+  .body.dragging { user-select: none; }
+  .body.dragging * { pointer-events: none; }
+  .body.dragging .divider { pointer-events: auto; }
+  /* Source pane — CM6 owns its inner DOM. flex-basis is set inline
+     and mutated by the divider drag handler. */
   .source {
-    flex: 1; min-width: 0; display: flex;
-    border-right: 1px solid var(--au-border);
+    min-width: 60px; display: flex;
     background: var(--au-surface-deep);
   }
   .source .cm-editor { flex: 1; height: 100%; background: var(--au-surface-deep); color: var(--au-fg); font: 13px/1.55 ui-monospace, 'Space Mono', Menlo, monospace; }
@@ -202,9 +255,31 @@
   Saves back to the source .md file (Surface.Flush + dirty cadence).
 -->
 <div class="menubar-host" id="menubar"></div>
+<div class="toolbar" id="toolbar">
+  <button data-fmt="bold"      class="tb-bold"   title="Bold (Ctrl+B)">B</button>
+  <button data-fmt="italic"    class="tb-italic" title="Italic (Ctrl+I)">I</button>
+  <button data-fmt="code"      class="tb-code"   title="Inline code (Ctrl+`)">&lt;/&gt;</button>
+  <button data-fmt="strike"                       title="Strikethrough">S̶</button>
+  <span class="tb-sep"></span>
+  <button data-fmt="h1" class="tb-h" title="Heading 1">H1</button>
+  <button data-fmt="h2" class="tb-h" title="Heading 2">H2</button>
+  <button data-fmt="h3" class="tb-h" title="Heading 3">H3</button>
+  <span class="tb-sep"></span>
+  <button data-fmt="ul"        title="Bulleted list">•</button>
+  <button data-fmt="ol"        title="Numbered list">1.</button>
+  <button data-fmt="quote"     title="Blockquote">&ldquo;</button>
+  <button data-fmt="hr"        title="Horizontal rule">—</button>
+  <span class="tb-sep"></span>
+  <button data-fmt="link"      title="Link">🔗</button>
+  <button data-fmt="image"     title="Image (data file)">🖼</button>
+  <button data-fmt="codeblock" title="Code block">{ }</button>
+  <span class="tb-sep"></span>
+  <button data-fmt="tpl"       title="Insert template directive {{path | filter}}">{{ }}</button>
+</div>
 <div class="body mode-split" id="body">
-  <div class="source" id="source"></div>
-  <div class="preview"><div class="md" id="preview"></div></div>
+  <div class="source" id="source" style="flex: 1 1 50%; min-width: 60px;"></div>
+  <div class="divider" id="divider" title="Drag to resize"></div>
+  <div class="preview" style="flex: 1 1 50%; min-width: 60px;"><div class="md" id="preview"></div></div>
 </div>
 <div class="statusbar" id="statusbar">
   <span class="status-dirty" id="status-dirty"> </span>
@@ -232,6 +307,7 @@ const {
   keymap, minimalSetup,
   openSearchPanel, closeSearchPanel, searchKeymap, search,
   bracketMatching, indentOnInput,
+  markdown,
 } = CM6;
 
 const sourceRoot = document.getElementById('source');
@@ -541,6 +617,7 @@ function makeEditor(initialText) {
         search({ top: true }),
         lineNumbers(),
         EditorView.lineWrapping,
+        markdown(),
         keymap.of([
           indentWithTab,
           ...searchKeymap,
@@ -549,6 +626,12 @@ function makeEditor(initialText) {
           { key: 'Ctrl-Shift-z', mac: 'Cmd-Shift-z', run: redo },
           { key: 'Ctrl-y', mac: 'Cmd-y', run: redo },
           { key: 'Escape', run: (v) => closeSearchPanel(v) },
+          // Toolbar shortcuts — bold / italic / inline code. Held until
+          // the editor is constructed; defined as closures so they pick
+          // up the formatCommands map from the surrounding scope.
+          { key: 'Ctrl-b', mac: 'Cmd-b', run: () => { formatCommands.bold();   return true; }, preventDefault: true },
+          { key: 'Ctrl-i', mac: 'Cmd-i', run: () => { formatCommands.italic(); return true; }, preventDefault: true },
+          { key: 'Ctrl-`',                run: () => { formatCommands.code();   return true; }, preventDefault: true },
         ]),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
@@ -563,6 +646,180 @@ function makeEditor(initialText) {
     }),
   });
 }
+
+// ── Toolbar — formatting commands ─────────────────────────────────────
+//
+// All commands operate on the editor's current selection. Inline marks
+// (bold/italic/code/strike) wrap the selection in delimiters; block
+// marks (h1/h2/h3, ul, ol, quote) prefix the selection's first line
+// (and subsequent lines for lists); link/image/codeblock/hr insert at
+// the caret. Toggle behavior: if the selection is already wrapped
+// (e.g. `**foo**`), the inline command strips the delimiters. Keeps
+// the editor focused after each command so keyboard-only flows work.
+function getSelection() {
+  const { from, to } = view.state.selection.main;
+  return { from, to, text: view.state.doc.sliceString(from, to) };
+}
+
+function applyInline(open, close = open) {
+  const { from, to, text } = getSelection();
+  // Toggle off if the surrounding text already has the delimiters.
+  const before = view.state.doc.sliceString(Math.max(0, from - open.length), from);
+  const after = view.state.doc.sliceString(to, Math.min(view.state.doc.length, to + close.length));
+  let insert, newFrom, newTo;
+  if (before === open && after === close) {
+    // Strip the delimiters
+    insert = text;
+    view.dispatch({
+      changes: { from: from - open.length, to: to + close.length, insert },
+      selection: { anchor: from - open.length, head: from - open.length + text.length },
+    });
+  } else {
+    insert = open + (text || 'text') + close;
+    newFrom = from + open.length;
+    newTo = newFrom + (text || 'text').length;
+    view.dispatch({
+      changes: { from, to, insert },
+      selection: { anchor: newFrom, head: newTo },
+    });
+  }
+  view.focus();
+}
+
+function applyBlockPrefix(prefix) {
+  const sel = view.state.selection.main;
+  const startLine = view.state.doc.lineAt(sel.from);
+  const endLine = view.state.doc.lineAt(sel.to);
+  const changes = [];
+  for (let n = startLine.number; n <= endLine.number; n++) {
+    const line = view.state.doc.line(n);
+    // If the line already starts with the same prefix, strip it (toggle off)
+    if (line.text.startsWith(prefix)) {
+      changes.push({ from: line.from, to: line.from + prefix.length, insert: '' });
+    } else {
+      // Strip any existing heading prefix first so toggling between levels works
+      const m = line.text.match(/^(#{1,6}\s+|>\s+|[-*]\s+|\d+\.\s+)/);
+      const stripLen = m ? m[1].length : 0;
+      changes.push({ from: line.from, to: line.from + stripLen, insert: prefix });
+    }
+  }
+  view.dispatch({ changes });
+  view.focus();
+}
+
+function applyNumberedList() {
+  const sel = view.state.selection.main;
+  const startLine = view.state.doc.lineAt(sel.from);
+  const endLine = view.state.doc.lineAt(sel.to);
+  const changes = [];
+  let n = 1;
+  for (let i = startLine.number; i <= endLine.number; i++, n++) {
+    const line = view.state.doc.line(i);
+    const m = line.text.match(/^(#{1,6}\s+|>\s+|[-*]\s+|\d+\.\s+)/);
+    const stripLen = m ? m[1].length : 0;
+    changes.push({ from: line.from, to: line.from + stripLen, insert: n + '. ' });
+  }
+  view.dispatch({ changes });
+  view.focus();
+}
+
+function insertAtCaret(text, selectFrom, selectTo) {
+  const { from, to } = view.state.selection.main;
+  view.dispatch({
+    changes: { from, to, insert: text },
+    selection: selectFrom != null
+      ? { anchor: from + selectFrom, head: from + selectTo }
+      : { anchor: from + text.length },
+  });
+  view.focus();
+}
+
+const formatCommands = {
+  bold:      () => applyInline('**'),
+  italic:    () => applyInline('*'),
+  code:      () => applyInline('`'),
+  strike:    () => applyInline('~~'),
+  h1:        () => applyBlockPrefix('# '),
+  h2:        () => applyBlockPrefix('## '),
+  h3:        () => applyBlockPrefix('### '),
+  ul:        () => applyBlockPrefix('- '),
+  ol:        () => applyNumberedList(),
+  quote:     () => applyBlockPrefix('> '),
+  hr:        () => insertAtCaret('\n\n---\n\n'),
+  link:      () => {
+    const { text } = getSelection();
+    const label = text || 'link text';
+    const out = '[' + label + '](url)';
+    // Select 'url' so the user can type the destination immediately.
+    insertAtCaret(out, out.length - 4, out.length - 1);
+  },
+  image:     () => {
+    const out = '![alt](image.png)';
+    insertAtCaret(out, 2, 5);
+  },
+  codeblock: () => {
+    const { text } = getSelection();
+    const body = text || 'code';
+    insertAtCaret('```\n' + body + '\n```\n', 4, 4 + body.length);
+  },
+  tpl:       () => {
+    const out = '{{path | filter args}}';
+    insertAtCaret(out, 2, 6);
+  },
+};
+
+document.getElementById('toolbar').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-fmt]');
+  if (!btn || !view) return;
+  const cmd = formatCommands[btn.dataset.fmt];
+  if (cmd) cmd();
+});
+
+// ── Movable split divider ─────────────────────────────────────────────
+//
+// Pointer-drag on .divider shifts flex-basis on the source/preview
+// panes. Keep both panes alive (min-width: 60px on each) so the user
+// can't accidentally lose either side; for "no source" or "no preview"
+// the View menu's source/reading modes are the right path. Session-
+// local — not persisted, since most docs don't earn their own ratio.
+(() => {
+  const dividerEl = document.getElementById('divider');
+  const sourceEl  = document.getElementById('source');
+  const previewEl = document.querySelector('.preview');
+  const bodyEl    = document.getElementById('body');
+  let startX = 0, startSourceW = 0, startPreviewW = 0;
+  function onMove(e) {
+    const dx = e.clientX - startX;
+    const total = startSourceW + startPreviewW;
+    const newSource = Math.max(60, Math.min(total - 60, startSourceW + dx));
+    const newPreview = total - newSource;
+    sourceEl.style.flex = `0 0 ${newSource}px`;
+    previewEl.style.flex = `0 0 ${newPreview}px`;
+  }
+  function onUp() {
+    document.removeEventListener('pointermove', onMove);
+    document.removeEventListener('pointerup', onUp);
+    dividerEl.classList.remove('dragging');
+    bodyEl.classList.remove('dragging');
+    // After the drag, switch back to flex-grow so window-resize keeps
+    // the ratio rather than the absolute pixel widths we forced above.
+    const total = sourceEl.offsetWidth + previewEl.offsetWidth;
+    sourceEl.style.flex  = `${sourceEl.offsetWidth / total} 1 0`;
+    previewEl.style.flex = `${previewEl.offsetWidth / total} 1 0`;
+    if (view) view.requestMeasure?.();
+  }
+  dividerEl.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    startX = e.clientX;
+    startSourceW = sourceEl.offsetWidth;
+    startPreviewW = previewEl.offsetWidth;
+    dividerEl.classList.add('dragging');
+    bodyEl.classList.add('dragging');
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onUp);
+  });
+})();
 
 // ── View mode toggle ──────────────────────────────────────────────────
 let mode = 'split';

@@ -43,6 +43,10 @@ export {
 } from '@codemirror/lang-html';
 
 export {
+  markdown,
+} from '@codemirror/lang-markdown';
+
+export {
   indentWithTab,
   insertNewlineAndIndent,
   toggleComment,
