@@ -896,9 +896,14 @@ class MenuBar {
         this._barActive = false;
         for (const b of this._buttons) b.classList.remove('gcu-menubar-focused');
         try { btn.blur(); } catch {}
+      } else {
+        // action == null — Esc / click-outside / blur. Drop the visual
+        // focus highlight too, otherwise the last-opened trigger looks
+        // perma-selected. The trigger keeps DOM focus so Alt + arrow
+        // keyboard nav still works (focus-visible will re-light if the
+        // user tabs back).
+        for (const b of this._buttons) b.classList.remove('gcu-menubar-focused');
       }
-      // action == null (Esc / click-outside / blur): leave focus on trigger
-      // so the user can keep navigating with arrow keys.
     });
   }
 

@@ -287,14 +287,20 @@ let renderTimer = null;
 const deps = new Set();
 let vfsUnsub = null;
 
-const emit = (member, args) =>
+// Renamed from `emit` to avoid colliding with `function emit(ast)` from
+// @gcu/yaml — the lib is inlined into this surface's module scope (see
+// works/js/surface-registry.js's _inlineLibsIntoSurface), so any
+// top-level identifier in the inlined lib lives in the same scope as
+// the surface code. yaml's emitter is one of ~60 top-level functions
+// the bundle exposes.
+const emitSig = (member, args) =>
   bus.signal({ path: '/', interface: 'Surface', member }, args);
 
 function setDirty(d) {
   if (dirty === d) return;
   dirty = d;
   sDirty.textContent = dirty ? '●' : ' ';
-  emit('DirtyChanged', [dirty]);
+  emitSig('DirtyChanged', [dirty]);
 }
 
 // Template engine calls A-Bus VFS reads under the hood — we wrap the
@@ -337,7 +343,7 @@ async function renderNow() {
     || basename(filePath).replace(/\.[^.]+$/, '');
   if (title !== lastTitle) {
     lastTitle = title;
-    emit('TitleChanged', [title]);
+    emitSig('TitleChanged', [title]);
   }
 
   // Apply initial view-mode preference from frontmatter, once.
@@ -589,8 +595,8 @@ window.addEventListener('message', async (ev) => {
   // Initial title — renderNow will replace this with the frontmatter
   // title (if any) on first paint; emit a fallback here so the tab has
   // a sensible label between Ready and the first render completing.
-  emit('TitleChanged', [basename(filePath)]);
-  emit('Ready', []);
+  emitSig('TitleChanged', [basename(filePath)]);
+  emitSig('Ready', []);
 });
 </script>
 </body>
