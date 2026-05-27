@@ -585,6 +585,52 @@ function _broadcastTreeDrag(type, path) {
   } catch { /* document.querySelectorAll failed somehow — bail */ }
 }
 
+// Shell-side drag delegation for cross-origin iframes.
+//
+// Chromium does NOT fire dragover/drop events INSIDE cross-origin
+// iframes when the drag source is the parent (anti-phishing). The
+// events do fire on the iframe ELEMENT in the parent's view, though.
+// So the shell handles drag-over and drop on behalf of every surface
+// iframe and postMessages the result into the iframe with viewport-
+// relative coordinates. Surfaces opt in by listening for 'tree-drop'
+// on window.
+//
+// Activates only when a tree drag is in flight (_currentTreeDragPath
+// is non-null). For other drags (OS files, etc.) the existing
+// per-surface and global handlers do their thing.
+let _currentTreeDragPath = null;
+
+function _installShellDragDelegation() {
+  document.addEventListener('dragover', (e) => {
+    if (!_currentTreeDragPath) return;
+    const iframe = e.target && e.target.closest && e.target.closest('iframe');
+    if (!iframe) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+  }, /* useCapture */ true);
+  document.addEventListener('drop', (e) => {
+    if (!_currentTreeDragPath) return;
+    const iframe = e.target && e.target.closest && e.target.closest('iframe');
+    if (!iframe) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = iframe.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    try {
+      iframe.contentWindow.postMessage({
+        type: 'tree-drop',
+        path: _currentTreeDragPath,
+        x, y,
+      }, '*');
+    } catch { /* iframe gone — fine */ }
+    _currentTreeDragPath = null;
+  }, /* useCapture */ true);
+}
+// Install once at module-eval. (No DOM dependency at install time —
+// the document listener attaches before any iframe exists.)
+_installShellDragDelegation();
+
 /** Make a tree row draggable and register it as a drop target.
  *  Called from tree.js's renderNode for each row. */
 export function attachTreeRowDnd(row, node) {
@@ -596,16 +642,19 @@ export function attachTreeRowDnd(row, node) {
       ev.dataTransfer.setData(DND_MIME, node.path);
       ev.dataTransfer.setData('text/plain', node.path);
       ev.dataTransfer.effectAllowed = 'copyMove';
+      // Shell-side delegation needs to know the dragged path so the
+      // generic iframe-targeted dragover/drop handlers above can do
+      // their work without re-reading dataTransfer.
+      _currentTreeDragPath = node.path;
       // Cross-origin drag side channel: blob:null/<uuid> iframes get
-      // a unique opaque origin and Chromium hides custom-MIME entries
-      // from their dataTransfer. Broadcast the dragged path via
-      // postMessage so a surface listener can read it from a side
-      // channel when dataTransfer.getData() is blocked. Surfaces opt
-      // in by listening for { type: 'tree-drag-start', path }; the
-      // shell-side tree drops still use dataTransfer normally.
+      // a unique opaque origin and Chromium drops drag events inside
+      // them entirely (anti-phishing). Broadcast the dragged path via
+      // postMessage so surfaces have visibility into the in-flight
+      // drag for UX affordances (e.g. highlighting a drop zone).
       _broadcastTreeDrag('tree-drag-start', node.path);
     });
     row.addEventListener('dragend', () => {
+      _currentTreeDragPath = null;
       _broadcastTreeDrag('tree-drag-end', null);
     });
   }

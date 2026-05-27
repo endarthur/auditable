@@ -869,64 +869,42 @@ function _snippetForDrop(absPath) {
 //      dragend. The drop handler reads from that side channel when
 //      dataTransfer.getData() is blocked. (See works/js/file-ops.js
 //      attachTreeRowDnd for the shell-side broadcast.)
-let _treeDragPath = null;
+// Cross-origin iframes don't see drag/drop events from the parent —
+// Chromium's anti-phishing posture is to suppress them entirely.
+// Shell-side delegation handles dragover/drop on the iframe ELEMENT
+// (visible to the parent's JS) and postMessages a 'tree-drop' here
+// with viewport-relative coords. We map those to a CM6 doc position
+// via view.posAtCoords and insert the snippet.
+//
+// The 'tree-drag-start' / 'tree-drag-end' broadcasts from the shell
+// still arrive for any surface that wants to show a drop-zone hint;
+// the doc surface doesn't draw one (the whole pane is the target),
+// but the receiving listener stays as a useful affordance hook.
 window.addEventListener('message', (ev) => {
   if (!ev.data || ev.source !== window.parent) return;
-  if (ev.data.type === 'tree-drag-start' && typeof ev.data.path === 'string') {
-    _treeDragPath = ev.data.path;
-  } else if (ev.data.type === 'tree-drag-end') {
-    _treeDragPath = null;
+  if (ev.data.type === 'tree-drop' && typeof ev.data.path === 'string') {
+    _onTreeDrop(ev.data.path, ev.data.x, ev.data.y);
   }
 });
 
-function _wireTreeDrop() {
-  // Capture-phase listeners on document — run BEFORE any inner
-  // element's bubble or capture handlers. CM6 attaches its own
-  // drag/drop machinery to the editor; without capture, its
-  // dragover/drop handlers could swallow our cross-origin drag
-  // before our preventDefault has a chance to fire and the browser
-  // shows the forbidden cursor.
-  document.addEventListener('dragover', (e) => {
-    if (window._docDragDebug) console.log('[doc] dragover, _treeDragPath=', _treeDragPath, 'types=', e.dataTransfer && [...(e.dataTransfer.types || [])]);
-    // Only intercept when we know a tree drag is in flight OR the
-    // dataTransfer announces our MIME (latter happens when the
-    // browser doesn't fully protect cross-origin types).
-    const hasMime = e.dataTransfer && e.dataTransfer.types
-      && Array.from(e.dataTransfer.types).indexOf(TREE_DND_MIME) >= 0;
-    if (!_treeDragPath && !hasMime) return;
-    e.preventDefault();
-    e.stopPropagation();   // prevent CM6 from also handling it
-    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
-  }, /* useCapture */ true);
-  document.addEventListener('drop', (e) => {
-    if (window._docDragDebug) console.log('[doc] drop, _treeDragPath=', _treeDragPath);
-    if (!view) return;
-    // Path source order: explicit DataTransfer first (best fidelity),
-    // postMessage cache second (cross-origin fallback).
-    let path = '';
-    if (e.dataTransfer) {
-      path = e.dataTransfer.getData(TREE_DND_MIME)
-        || e.dataTransfer.getData('text/plain')
-        || '';
-    }
-    if (!path && _treeDragPath) path = _treeDragPath;
-    if (!path) return;
-    e.preventDefault();
-    e.stopPropagation();
-    const snippet = _snippetForDrop(path);
-    let insertPos = view.state.selection.main.head;
-    try {
-      const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
-      if (pos != null) insertPos = pos;
-    } catch { /* fall through to current caret */ }
-    view.dispatch({
-      changes: { from: insertPos, to: insertPos, insert: snippet },
-      selection: { anchor: insertPos + snippet.length },
-    });
-    view.focus();
-    _treeDragPath = null;
-  }, /* useCapture */ true);
+function _onTreeDrop(path, x, y) {
+  if (!view) return;
+  const snippet = _snippetForDrop(path);
+  let insertPos = view.state.selection.main.head;
+  try {
+    const pos = view.posAtCoords({ x: x, y: y });
+    if (pos != null) insertPos = pos;
+  } catch { /* fall through to current caret */ }
+  view.dispatch({
+    changes: { from: insertPos, to: insertPos, insert: snippet },
+    selection: { anchor: insertPos + snippet.length },
+  });
+  view.focus();
 }
+
+// No-op wrapper kept so the welcome handler's existing call site
+// stays the same shape — actual drag wiring lives in the shell now.
+function _wireTreeDrop() { /* shell-side delegation, see message listener above */ }
 
 // ── Toolbar — formatting commands ─────────────────────────────────────
 //
