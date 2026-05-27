@@ -69,6 +69,34 @@ async function boot() {
       contextMenu: (m.contextMenu || []).map((c) => c.label),
     }));
 
+  // Diagnostic: list every file under /lib/<pkg>/ recursively so we can
+  // verify exactly what the gcupkg installer wrote and what survived a
+  // reload. Usage: `await WKS.lsLib('@gcu/carotte')` in the shell console.
+  WKS.lsLib = async (pkgName) => {
+    const base = /^@[\w.-]+\/[\w.-]+$/.test(pkgName) ? '/lib/' + pkgName : '/lib/local/' + pkgName;
+    const out = [];
+    async function walk(p) {
+      let entries;
+      try { entries = await WKS.vfs.readdir(p, { stat: true }); }
+      catch (e) { out.push({ path: p, error: e.message }); return; }
+      for (const e of entries) {
+        const sub = p + '/' + e.name;
+        if (e.type === 'directory') {
+          out.push({ path: sub, type: 'directory' });
+          await walk(sub);
+        } else {
+          let size = e.size;
+          if (size == null) {
+            try { const s = await WKS.vfs.stat(sub); size = s.size; } catch {}
+          }
+          out.push({ path: sub, type: 'file', size });
+        }
+      }
+    }
+    await walk(base);
+    return out;
+  };
+
   // Broadcast a debug flag to every surface iframe — the iframes are
   // in opaque origins (blob:file://) so devtools-set `window.*` flags
   // on the parent don't reach them. postMessage crosses the boundary.

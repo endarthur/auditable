@@ -134,7 +134,16 @@ export async function evaluateWorksScript(name) {
   const worksPath = libPath + '/works.js';
   let source;
   try { source = await WKS.vfs.readFile(worksPath, 'utf8'); }
-  catch { return false; }   // no works.js for this extension — fine
+  catch (e) {
+    // ENOENT is normal — not every extension contributes shell-context
+    // bits. Anything else (permission, decoding, etc.) is a real
+    // diagnostic surface and should not silently disappear.
+    if (e && (e.code === 'ENOENT' || /ENOENT|no such|not found/i.test(e.message || ''))) {
+      return false;
+    }
+    console.warn(`[works] works.js read failed for "${name}" at ${worksPath}:`, e);
+    return false;
+  }
 
   // Same blob-URL pattern the notebook iframe uses for its own
   // load() — the script evaluates as an ES module in the shell
