@@ -93,14 +93,19 @@ class _ZipWriter {
       ? Math.max(0, Math.min(9, opts.level | 0)) : 6;
   }
 
-  async addFile(path, bytes) {
+  async addFile(path, bytes, opts) {
     if (this._pendingError) throw this._pendingError;
     const buf = bytes instanceof Uint8Array ? bytes
       : (typeof bytes === 'string' ? new TextEncoder().encode(bytes) : new Uint8Array(bytes));
-    // level=0 → store (no compression); else deflate.
-    const file = this._level === 0
+    // Per-file level override falls back to the writer-wide level.
+    // level=0 → STORE (no compression); else DEFLATE at that level.
+    // EPUB needs this: mimetype MUST be stored, everything else deflated.
+    const lvl = (opts && typeof opts.level === 'number')
+      ? Math.max(0, Math.min(9, opts.level | 0))
+      : this._level;
+    const file = lvl === 0
       ? new ZipPassThrough(path)
-      : new ZipDeflate(path, { level: this._level });
+      : new ZipDeflate(path, { level: lvl });
     this._z.add(file);
     file.push(buf, true);   // single-shot — all bytes for this file at once
     if (this._writePromise) await this._writePromise;

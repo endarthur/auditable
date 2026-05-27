@@ -5464,14 +5464,19 @@ class _ZipWriter {
       ? Math.max(0, Math.min(9, opts.level | 0)) : 6;
   }
 
-  async addFile(path, bytes) {
+  async addFile(path, bytes, opts) {
     if (this._pendingError) throw this._pendingError;
     const buf = bytes instanceof Uint8Array ? bytes
       : (typeof bytes === 'string' ? new TextEncoder().encode(bytes) : new Uint8Array(bytes));
-    // level=0 → store (no compression); else deflate.
-    const file = this._level === 0
+    // Per-file level override falls back to the writer-wide level.
+    // level=0 → STORE (no compression); else DEFLATE at that level.
+    // EPUB needs this: mimetype MUST be stored, everything else deflated.
+    const lvl = (opts && typeof opts.level === 'number')
+      ? Math.max(0, Math.min(9, opts.level | 0))
+      : this._level;
+    const file = lvl === 0
       ? new ZipPassThrough(path)
-      : new ZipDeflate(path, { level: this._level });
+      : new ZipDeflate(path, { level: lvl });
     this._z.add(file);
     file.push(buf, true);   // single-shot — all bytes for this file at once
     if (this._writePromise) await this._writePromise;
@@ -5571,8 +5576,11 @@ function createWriter(sink, opts = {}) {
   if (format === 'gz' || format === 'zst') {
     throw new Error(`createWriter: ${format} is a single-stream format — use archive.${format === 'gz' ? 'gzip' : 'zstd'} for that`);
   }
-  if (format === 'xz' || format === 'bz2' || format === 'tar.xz' || format === 'tar.bz2') {
-    throw new Error(`createWriter: ${format} encode requires a lazy-loaded Wasm encoder (not yet wired)`);
+  if (format === 'xz' || format === 'tar.xz') {
+    throw new Error(`createWriter: ${format} encode not available (xz-decompress is decode-only)`);
+  }
+  if (format === 'bz2' || format === 'tar.bz2') {
+    throw new Error(`createWriter: ${format} encode not available (seek-bzip is decode-only)`);
   }
   throw new Error(`createWriter: unsupported format '${format}'`);
 }
