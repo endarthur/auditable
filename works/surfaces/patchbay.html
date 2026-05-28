@@ -27,6 +27,7 @@
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
 import { signal, computed, effect, batch } from '../../ext/sideact/index.js';
+import { MenuBar } from '../../ext/menu/index.js';
 import { mountPatchbay } from '../../ext/patchbay/index.js';
 
 /* @theme-init */
@@ -57,7 +58,7 @@ window.addEventListener('message', async (ev) => {
   const emit = (member, args) => bus.signal({ path: '/', interface: 'Surface', member }, args);
 
   try {
-    app = mountPatchbay({ root, bus, tab, sr, onDirty: (d) => emit('DirtyChanged', [d]) });
+    app = mountPatchbay({ root, bus, tab, sr, MenuBar, onDirty: (d) => emit('DirtyChanged', [d]) });
     window._pbApp = app;   // test/debug hook (works-smoke reaches in via this)
   } catch (e) {
     root.textContent = 'patchbay mount failed: ' + (e && e.message);

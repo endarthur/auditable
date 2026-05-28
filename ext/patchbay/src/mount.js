@@ -3,11 +3,13 @@
 // renderer / interaction together, drives the rAF render loop, reads theme
 // tokens, and returns { flush, dispose, isDirty } for the surface contract.
 //
-// ctx = { root, bus, tab, sr, doc?, onDirty? }
+// ctx = { root, bus, tab, sr, MenuBar?, doc?, onDirty? }
 //   root   — element to render into (iframe body, or a privileged shadow root)
 //   bus    — A-Bus peer (for the works VFS service + I/O modules)
 //   tab    — { id, path, kind }
 //   sr     — { signal, computed, effect, batch }
+//   MenuBar — @gcu/menu MenuBar class (injected; the bundle can't import it).
+//             Absent → no menubar chrome (right-click add still works).
 //   doc    — optional preloaded rack document (else loaded via LooseFileStore)
 //   onDirty(bool) — optional dirty-state callback (drives the tab dot)
 
@@ -65,19 +67,20 @@ export function mountPatchbay(ctx) {
   const onDirty = ctx.onDirty || (() => {});
   const doc = root.ownerDocument || document;
 
-  // ── DOM scaffold ──
+  const { MenuBar } = ctx;
+
+  // ── DOM scaffold ── flex column: menubar (if MenuBar injected) + canvas wrap.
   const host = doc.createElement('div');
-  host.style.cssText = 'position:absolute;inset:0;overflow:hidden;background:var(--sw-bg,#15171A);';
+  host.style.cssText = 'position:absolute;inset:0;overflow:hidden;background:var(--sw-bg,#15171A);display:flex;flex-direction:column;';
+  const menubarHost = doc.createElement('div'); menubarHost.className = 'pb-menubar';
+  const wrap = doc.createElement('div');
+  wrap.style.cssText = 'position:relative;flex:1;min-height:0;overflow:hidden;';
   const canvas = doc.createElement('canvas');
   canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block;touch-action:none;user-select:none;';
-  host.appendChild(canvas);
+  wrap.appendChild(canvas);
 
   const css = `
-    .pb-bar{position:absolute;top:8px;left:8px;display:flex;gap:6px;z-index:5;align-items:center}
-    .pb-btn{background:var(--sw-bg-raised,#1D2024);border:1px solid var(--sw-border,#2F3338);color:var(--sw-text,#DDD);
-      border-radius:4px;padding:6px 10px;font:10px/1 "Space Mono",monospace;text-transform:uppercase;letter-spacing:.08em;cursor:pointer}
-    .pb-btn:hover{background:var(--sw-bg-bright,#25282D)}
-    .pb-btn.on{background:rgba(212,103,46,.22);border-color:var(--sw-orange,#D4672E);color:var(--sw-orange,#D4672E)}
+    .pb-menubar{flex:none;background:var(--sw-bg-raised,#1D2024);border-bottom:1px solid var(--sw-border,#2F3338)}
     .pb-pop{position:absolute;z-index:8;background:rgba(20,23,26,.97);border:1px solid var(--sw-border,#2F3338);
       border-radius:6px;padding:5px;min-width:158px;max-height:74vh;overflow:auto;box-shadow:0 8px 28px rgba(0,0,0,.5);
       font:12px/1.4 Barlow,system-ui,sans-serif;display:none}
@@ -117,17 +120,9 @@ export function mountPatchbay(ctx) {
   `;
   const styleEl = doc.createElement('style'); styleEl.textContent = css; host.appendChild(styleEl);
 
-  const bar = doc.createElement('div'); bar.className = 'pb-bar';
-  const paletteBtn = doc.createElement('button'); paletteBtn.className = 'pb-btn'; paletteBtn.textContent = '+ module';
-  const fitBtn = doc.createElement('button'); fitBtn.className = 'pb-btn'; fitBtn.textContent = 'fit';
-  bar.append(paletteBtn, fitBtn); host.appendChild(bar);
-
-  // Palette popover (toolbar) + context menu (right-click) — both list module
-  // types grouped by category and share renderModuleList.
-  const palette = doc.createElement('div'); palette.className = 'pb-pop';
-  palette.style.top = '44px'; palette.style.left = '8px';
-  host.appendChild(palette);
-  const ctxMenu = doc.createElement('div'); ctxMenu.className = 'pb-pop'; host.appendChild(ctxMenu);
+  // Right-click context menu (cursor-placement add / delete). Lists module
+  // types grouped by category via renderModuleList (shared with the Add menu).
+  const ctxMenu = doc.createElement('div'); ctxMenu.className = 'pb-pop'; wrap.appendChild(ctxMenu);
 
   const insp = doc.createElement('div'); insp.className = 'pb-insp';
   const inspHd = doc.createElement('div'); inspHd.className = 'pb-insp-hd';
@@ -138,8 +133,11 @@ export function mountPatchbay(ctx) {
   inspHd.append(inspTitle, inspX);
   const inspBody = doc.createElement('div'); inspBody.className = 'pb-insp-body';
   insp.append(inspHd, inspBody);
-  host.appendChild(insp);
-  const hud = doc.createElement('div'); hud.className = 'pb-hud'; host.appendChild(hud);
+  wrap.appendChild(insp);
+  const hud = doc.createElement('div'); hud.className = 'pb-hud'; wrap.appendChild(hud);
+
+  if (MenuBar) host.appendChild(menubarHost);
+  host.appendChild(wrap);
   root.appendChild(host);
 
   const PREFIX_LABEL = { src: 'Sources', math: 'Math', logic: 'Logic', ctrl: 'Control', disp: 'Display', io: 'I/O' };
@@ -166,10 +164,11 @@ export function mountPatchbay(ctx) {
       }
     }
   }
-  function hideMenus() { palette.classList.remove('open'); paletteBtn.classList.remove('on'); ctxMenu.classList.remove('open'); }
+  function hideMenus() { ctxMenu.classList.remove('open'); }
 
   // ── engine + renderer + interaction ──
   let dirty = false;
+  let showFlow = false;   // View → Show flow (signal-flow animation, Phase 4)
   const markDirty = () => { if (!dirty) { dirty = true; onDirty(true); } };
   const engine = createEngine(sr, { bus, sr });
   const pb = createPb(canvas.getContext('2d'));
@@ -208,19 +207,92 @@ export function mountPatchbay(ctx) {
     return renderer.overlaps({ def, row, hpPos }, row, hpPos) ? freeSlot(engine, renderer.rack, def) : { row, hpPos };
   }
 
-  paletteBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    ctxMenu.classList.remove('open');
-    const open = !palette.classList.contains('open');
-    if (open) renderModuleList(palette, (type) => addModuleAt(type));   // stays open for multi-add
-    palette.classList.toggle('open', open);
-    paletteBtn.classList.toggle('on', open);
-  });
-  fitBtn.addEventListener('click', () => renderer.fitToViewport());
+  function duplicateModule(id) {
+    const inst = engine.instances.get(id); if (!inst) return;
+    const knobs = {}; for (const n in inst.knobs) knobs[n] = inst.knobs[n].read();
+    const place = freeSlot(engine, renderer.rack, inst.def);
+    engine.addInstance(freshId(engine, inst.type), inst.type, { ...place, knobs, params: { ...inst.params } });
+    markDirty();
+  }
+
+  // ── rack mutators (the Rack menu) ──
+  function addRow(kind) {
+    const r = renderer.rack;
+    renderer.setRack({ ...r, rows: [...r.rows, { kind }] });
+    renderer.fitToViewport(); markDirty();
+  }
+  function removeRow() {
+    const r = renderer.rack;
+    if (r.rows.length <= 1) return;
+    const last = r.rows.length - 1;
+    for (const inst of engine.instances.values()) if (inst.row >= last) inst.row = last - 1;
+    renderer.setRack({ ...r, rows: r.rows.slice(0, -1) });
+    renderer.fitToViewport(); markDirty();
+  }
+  function resizeRack(delta) {
+    const r = renderer.rack;
+    const hp = Math.max(16, Math.min(256, r.hp + delta));
+    for (const inst of engine.instances.values()) {
+      inst.hpPos = Math.max(0, Math.min(hp - inst.def.hp, inst.hpPos));
+    }
+    renderer.setRack({ ...r, hp });
+    renderer.fitToViewport(); markDirty();
+  }
+
+  // ── menubar (injected MenuBar) ──
+  function moduleAddMenu() {
+    const out = [];
+    for (const [grp, defs] of moduleGroups()) {
+      out.push({ label: grp, children: defs.map((d) => ({ label: d.title, action: 'add:' + d.type })) });
+    }
+    return out;
+  }
+  // Action dispatch — shared by the menubar and exposed for tests/shortcuts.
+  function runAction(a) {
+    if (a.startsWith('add:')) return addModuleAt(a.slice(4));
+    const sel = interaction.state.selectedId;
+    switch (a) {
+      case 'edit:dup': if (sel) duplicateModule(sel); break;
+      case 'edit:del': if (sel) { engine.removeInstance(sel); interaction.select(null); renderInspector(null); markDirty(); } break;
+      case 'view:fit': renderer.fitToViewport(); break;
+      case 'view:rails': interaction.setRailsOn(!interaction.state.railsOn); break;
+      case 'view:flow': showFlow = !showFlow; break;
+      case 'rack:add3u': addRow('3U'); break;
+      case 'rack:add1u': addRow('1U'); break;
+      case 'rack:delrow': removeRow(); break;
+      case 'rack:wider': resizeRack(8); break;
+      case 'rack:narrower': resizeRack(-8); break;
+    }
+  }
+
+  let menubar = null;
+  if (MenuBar) {
+    menubar = new MenuBar(menubarHost, () => [
+      { label: 'Add', children: () => moduleAddMenu() },
+      { label: 'Edit', children: () => [
+        { label: 'Duplicate', action: 'edit:dup', disabled: !interaction.state.selectedId },
+        { label: 'Delete',    action: 'edit:del', disabled: !interaction.state.selectedId },
+      ] },
+      { label: 'View', children: () => [
+        { label: 'Fit to window', action: 'view:fit' },
+        '---',
+        { label: 'Rails',     action: 'view:rails', checked: interaction.state.railsOn },
+        { label: 'Show flow', action: 'view:flow',  checked: showFlow },
+      ] },
+      { label: 'Rack', children: () => [
+        { label: 'Add 3U row',     action: 'rack:add3u' },
+        { label: 'Add 1U row',     action: 'rack:add1u' },
+        { label: 'Remove last row', action: 'rack:delrow', disabled: renderer.rack.rows.length <= 1 },
+        '---',
+        { label: 'Wider  (+8 HP)',   action: 'rack:wider' },
+        { label: 'Narrower (−8 HP)', action: 'rack:narrower' },
+      ] },
+    ]);
+    menubar.on('action', runAction);
+  }
 
   canvas.addEventListener('contextmenu', (e) => {
     e.preventDefault();
-    palette.classList.remove('open'); paletteBtn.classList.remove('on');
     const rect = canvas.getBoundingClientRect();
     const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
     const { x: wx, y: wy } = renderer.screenToWorld(sx, sy);
@@ -342,6 +414,7 @@ export function mountPatchbay(ctx) {
   // ── render loop + resize ──
   let raf = 0;
   function frame() {
+    interaction.state.showFlow = showFlow;
     renderer.draw(interaction.state);
     const z = Math.round(renderer.view.scale * 100);
     hud.textContent = engine.cables.length.toString().padStart(2, '0') + ' cab · ' + z + '%';
@@ -368,6 +441,7 @@ export function mountPatchbay(ctx) {
     if (typeof themeUnsub === 'function') { try { themeUnsub(); } catch { /* ignore */ } }
     doc.removeEventListener('click', onDocClick);
     clearInspEffects();
+    if (menubar && menubar.destroy) { try { menubar.destroy(); } catch { /* ignore */ } }
     interaction.detach();
     engine.destroy();
     try { root.removeChild(host); } catch { /* ignore */ }
@@ -376,7 +450,7 @@ export function mountPatchbay(ctx) {
   return {
     flush, dispose,
     isDirty: () => dirty,
-    engine, renderer,                 // exposed for tests / debugging
+    engine, renderer, runAction,      // exposed for tests / debugging / shortcuts
     addModule: (type) => { const d = getModuleDef(type); if (d) { const s = freeSlot(engine, renderer.rack, d); engine.addInstance(freshId(engine, type), type, s); markDirty(); } },
     STDLIB_MODULES,
   };
