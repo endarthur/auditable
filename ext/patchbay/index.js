@@ -2436,11 +2436,12 @@ function mountPatchbay(ctx) {
     }
     return out;
   }
-  // Action dispatch — shared by the menubar and exposed for tests/shortcuts.
+  // Action dispatch — shared by the menubar, the Ctrl+S handler, and tests.
   function runAction(a) {
     if (a.startsWith('add:')) return addModuleAt(a.slice(4));
     const sel = interaction.state.selectedId;
     switch (a) {
+      case 'file:save': flush(); break;
       case 'edit:dup': if (sel) duplicateModule(sel); break;
       case 'edit:del': if (sel) { engine.removeInstance(sel); interaction.select(null); renderInspector(null); markDirty(); } break;
       case 'view:fit': renderer.fitToViewport(); break;
@@ -2459,6 +2460,9 @@ function mountPatchbay(ctx) {
     // NOTE: top-level MenuBar sections use `items:` (what _openSection reads);
     // `children:` is only for nested submenu entries (the Add categories below).
     menubar = new MenuBar(menubarHost, () => [
+      { label: 'File', items: () => [
+        { label: 'Save', action: 'file:save', shortcut: 'Ctrl+S' },
+      ] },
       { label: 'Add', items: () => moduleAddMenu() },
       { label: 'Edit', items: () => [
         { label: 'Duplicate', action: 'edit:dup', disabled: !interaction.state.selectedId },
@@ -2511,6 +2515,17 @@ function mountPatchbay(ctx) {
   // toggle isn't immediately undone.
   const onDocClick = () => hideMenus();
   doc.addEventListener('click', onDocClick);
+
+  // Ctrl/Cmd+S inside the surface. Once the canvas has focus the shell's
+  // window-level handler never sees the keystroke (it fires in this iframe),
+  // so the surface flushes itself — same pattern as the text editor surface.
+  const onKeyDown = (e) => {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+      e.preventDefault();
+      flush();
+    }
+  };
+  doc.addEventListener('keydown', onKeyDown);
 
   // ── slide-out inspector ──
   // Live-bound: sideact effects tie knob sliders + output readouts to the
@@ -2670,6 +2685,7 @@ function mountPatchbay(ctx) {
     if (ro) ro.disconnect();
     if (typeof themeUnsub === 'function') { try { themeUnsub(); } catch { /* ignore */ } }
     doc.removeEventListener('click', onDocClick);
+    doc.removeEventListener('keydown', onKeyDown);
     clearInspEffects();
     if (menubar && menubar.destroy) { try { menubar.destroy(); } catch { /* ignore */ } }
     interaction.detach();
