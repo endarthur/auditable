@@ -1942,6 +1942,8 @@ function createRenderer(opts) {
 function attachInteraction(renderer, engine, canvas, opts = {}) {
   const onChange = opts.onChange || (() => {});       // mark dirty
   const onSelect = opts.onSelect || (() => {});       // selection changed → id|null
+  const onConfigure = opts.onConfigure || (() => {}); // explicit configure (double-click) → id
+  let _lastModClick = null;                            // { id, t } for double-click detection
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
   const state = {
@@ -2110,7 +2112,15 @@ function attachInteraction(renderer, engine, canvas, opts = {}) {
     if (gesture.kind === 'module') {
       const snap = renderer.snapTarget(gesture.inst, ...lastWorld(e), gesture.grabHp, gesture.grabY);
       if (!snap.valid) { gesture.inst.row = gesture.startRow; gesture.inst.hpPos = gesture.startHp; }
-      else if (gesture.inst.row !== gesture.startRow || gesture.inst.hpPos !== gesture.startHp) onChange();
+      const moved = gesture.inst.row !== gesture.startRow || gesture.inst.hpPos !== gesture.startHp;
+      if (moved) { onChange(); _lastModClick = null; }
+      else {
+        // a click that didn't relocate — double-click opens the configurator
+        const t = Date.now();
+        if (_lastModClick && _lastModClick.id === gesture.inst.id && t - _lastModClick.t < 350) {
+          _lastModClick = null; onConfigure(gesture.inst.id);
+        } else { _lastModClick = { id: gesture.inst.id, t }; }
+      }
       state.dragGhost = null; gesture = null; return;
     }
     if (gesture.kind === 'value') { onChange(); gesture = null; return; }
@@ -2361,7 +2371,8 @@ function mountPatchbay(ctx) {
 
   // ── engine + renderer + interaction ──
   let dirty = false;
-  let showFlow = false;   // View → Show flow (signal-flow animation, Phase 4)
+  let showFlow = false;     // View → Show flow (signal-flow animation, Phase 4)
+  let inspectedId = null;   // the module the inspector is pinned to (explicit open only)
   const markDirty = () => { if (!dirty) { dirty = true; onDirty(true); } };
   const engine = createEngine(sr, { bus, sr });
   const pb = createPb(canvas.getContext('2d'));
@@ -2383,7 +2394,9 @@ function mountPatchbay(ctx) {
 
   const interaction = attachInteraction(renderer, engine, canvas, {
     onChange: markDirty,
-    onSelect: (id) => renderInspector(id),
+    // Selection only highlights; the inspector opens on an explicit action
+    // (double-click here, or right-click → Configure / Edit → Configure).
+    onConfigure: (id) => openInspector(id),
   });
 
   // ── insert (palette + context menu) / fit ──
@@ -2405,6 +2418,18 @@ function mountPatchbay(ctx) {
     const knobs = {}; for (const n in inst.knobs) knobs[n] = inst.knobs[n].read();
     const place = freeSlot(engine, renderer.rack, inst.def);
     engine.addInstance(freshId(engine, inst.type), inst.type, { ...place, knobs, params: { ...inst.params } });
+    markDirty();
+  }
+
+  // Inspector is opened only by an explicit action (double-click / right-click
+  // Configure / Edit menu), never by mere selection — it stays pinned to one
+  // module until closed or that module is removed.
+  function openInspector(id) { if (engine.instances.has(id)) { inspectedId = id; renderInspector(id); } }
+  function closeInspector() { inspectedId = null; renderInspector(null); }
+  function removeModule(id) {
+    engine.removeInstance(id);
+    if (interaction.state.selectedId === id) interaction.select(null);
+    if (inspectedId === id) closeInspector();
     markDirty();
   }
 
@@ -2446,8 +2471,9 @@ function mountPatchbay(ctx) {
     const sel = interaction.state.selectedId;
     switch (a) {
       case 'file:save': flush(); break;
+      case 'edit:configure': if (sel) openInspector(sel); break;
       case 'edit:dup': if (sel) duplicateModule(sel); break;
-      case 'edit:del': if (sel) { engine.removeInstance(sel); interaction.select(null); renderInspector(null); markDirty(); } break;
+      case 'edit:del': if (sel) removeModule(sel); break;
       case 'view:fit': renderer.fitToViewport(); break;
       case 'view:rails': interaction.setRailsOn(!interaction.state.railsOn); break;
       case 'view:flow': showFlow = !showFlow; break;
@@ -2469,8 +2495,9 @@ function mountPatchbay(ctx) {
       ] },
       { label: 'Add', items: () => moduleAddMenu() },
       { label: 'Edit', items: () => [
-        { label: 'Duplicate', action: 'edit:dup', disabled: !interaction.state.selectedId },
-        { label: 'Delete',    action: 'edit:del', disabled: !interaction.state.selectedId },
+        { label: 'Configure…', action: 'edit:configure', disabled: !interaction.state.selectedId },
+        { label: 'Duplicate',  action: 'edit:dup', disabled: !interaction.state.selectedId },
+        { label: 'Delete',     action: 'edit:del', disabled: !interaction.state.selectedId },
       ] },
       { label: 'View', items: () => [
         { label: 'Fit to window', action: 'view:fit' },
@@ -2499,13 +2526,15 @@ function mountPatchbay(ctx) {
     ctxMenu.innerHTML = '';
     if (hitMod) {
       interaction.select(hitMod.id);
-      const it = doc.createElement('div'); it.className = 'pb-item danger';
-      it.textContent = 'Delete ' + hitMod.def.title;
-      it.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        engine.removeInstance(hitMod.id); interaction.select(null); renderInspector(null); markDirty(); hideMenus();
-      });
-      ctxMenu.appendChild(it);
+      const mkItem = (label, fn, danger) => {
+        const it = doc.createElement('div'); it.className = 'pb-item' + (danger ? ' danger' : '');
+        it.textContent = label;
+        it.addEventListener('click', (ev) => { ev.stopPropagation(); fn(); hideMenus(); });
+        ctxMenu.appendChild(it);
+      };
+      mkItem('Configure ' + hitMod.def.title, () => openInspector(hitMod.id));
+      mkItem('Duplicate', () => duplicateModule(hitMod.id));
+      mkItem('Delete', () => removeModule(hitMod.id), true);
     } else {
       renderModuleList(ctxMenu, (type) => { addModuleAt(type, slotAtWorld(getModuleDef(type), wx, wy)); hideMenus(); });
     }
@@ -2645,12 +2674,12 @@ function mountPatchbay(ctx) {
     }
 
     const del = doc.createElement('button'); del.className = 'pb-del'; del.textContent = 'delete module';
-    del.addEventListener('click', () => { engine.removeInstance(inst.id); interaction.select(null); renderInspector(null); markDirty(); });
+    del.addEventListener('click', () => removeModule(inst.id));
     inspBody.appendChild(del);
 
     insp.classList.add('open');
   }
-  inspX.addEventListener('click', () => { interaction.select(null); renderInspector(null); });
+  inspX.addEventListener('click', () => closeInspector());
 
   // ── theme re-read on shell SettingsChanged ──
   let themeUnsub = null;

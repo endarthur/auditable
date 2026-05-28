@@ -12,6 +12,8 @@ import { HP, RAIL_LEFT } from './render.js';
 export function attachInteraction(renderer, engine, canvas, opts = {}) {
   const onChange = opts.onChange || (() => {});       // mark dirty
   const onSelect = opts.onSelect || (() => {});       // selection changed → id|null
+  const onConfigure = opts.onConfigure || (() => {}); // explicit configure (double-click) → id
+  let _lastModClick = null;                            // { id, t } for double-click detection
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
   const state = {
@@ -180,7 +182,15 @@ export function attachInteraction(renderer, engine, canvas, opts = {}) {
     if (gesture.kind === 'module') {
       const snap = renderer.snapTarget(gesture.inst, ...lastWorld(e), gesture.grabHp, gesture.grabY);
       if (!snap.valid) { gesture.inst.row = gesture.startRow; gesture.inst.hpPos = gesture.startHp; }
-      else if (gesture.inst.row !== gesture.startRow || gesture.inst.hpPos !== gesture.startHp) onChange();
+      const moved = gesture.inst.row !== gesture.startRow || gesture.inst.hpPos !== gesture.startHp;
+      if (moved) { onChange(); _lastModClick = null; }
+      else {
+        // a click that didn't relocate — double-click opens the configurator
+        const t = Date.now();
+        if (_lastModClick && _lastModClick.id === gesture.inst.id && t - _lastModClick.t < 350) {
+          _lastModClick = null; onConfigure(gesture.inst.id);
+        } else { _lastModClick = { id: gesture.inst.id, t }; }
+      }
       state.dragGhost = null; gesture = null; return;
     }
     if (gesture.kind === 'value') { onChange(); gesture = null; return; }
