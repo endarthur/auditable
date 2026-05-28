@@ -2442,19 +2442,21 @@ function mountPatchbay(ctx) {
 
   let menubar = null;
   if (MenuBar) {
+    // NOTE: top-level MenuBar sections use `items:` (what _openSection reads);
+    // `children:` is only for nested submenu entries (the Add categories below).
     menubar = new MenuBar(menubarHost, () => [
-      { label: 'Add', children: () => moduleAddMenu() },
-      { label: 'Edit', children: () => [
+      { label: 'Add', items: () => moduleAddMenu() },
+      { label: 'Edit', items: () => [
         { label: 'Duplicate', action: 'edit:dup', disabled: !interaction.state.selectedId },
         { label: 'Delete',    action: 'edit:del', disabled: !interaction.state.selectedId },
       ] },
-      { label: 'View', children: () => [
+      { label: 'View', items: () => [
         { label: 'Fit to window', action: 'view:fit' },
         '---',
         { label: 'Rails',     action: 'view:rails', checked: interaction.state.railsOn },
         { label: 'Show flow', action: 'view:flow',  checked: showFlow },
       ] },
-      { label: 'Rack', children: () => [
+      { label: 'Rack', items: () => [
         { label: 'Add 3U row',     action: 'rack:add3u' },
         { label: 'Add 1U row',     action: 'rack:add1u' },
         { label: 'Remove last row', action: 'rack:delrow', disabled: renderer.rack.rows.length <= 1 },
