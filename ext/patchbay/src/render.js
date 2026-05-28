@@ -461,8 +461,8 @@ export function createRenderer(opts) {
     ctx.fillText(String(p.name).toUpperCase(), x, y + 11);
   }
   function drawModule(inst, hoveredPort, selected) {
-    const r = moduleRect(inst), lay = layoutFor(inst.def), style = getStyle(inst.def.style);
-    const bandColor = accent(inst.def.color);
+    const r = moduleRect(inst), lay = layoutFor(inst.def), style = getStyle(inst.style || inst.def.style);
+    const bandColor = accent(inst.color || inst.def.color);
     const g = ctx.createLinearGradient(r.x, r.y, r.x, r.y + r.h);
     g.addColorStop(0, colors[style.panel.top] || colors.bgBright);
     g.addColorStop(1, colors[style.panel.bottom] || colors.bgRaised);

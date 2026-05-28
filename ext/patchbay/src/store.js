@@ -38,6 +38,8 @@ export function serializeRack(engine, rack) {
       params: { ...inst.params },
     };
     if (Object.keys(controls).length) m.controls = controls;
+    if (inst.color) m.color = inst.color;
+    if (inst.style) m.style = inst.style;
     modules.push(m);
   }
   const cables = engine.cables.map((c) => {
@@ -66,7 +68,7 @@ export function deserializeRack(doc, engine) {
   };
   for (const m of (d.modules || [])) {
     try {
-      engine.addInstance(m.id, m.type, { row: m.row, hpPos: m.hpPos, knobs: m.knobs, controls: m.controls, params: m.params });
+      engine.addInstance(m.id, m.type, { row: m.row, hpPos: m.hpPos, knobs: m.knobs, controls: m.controls, params: m.params, color: m.color, style: m.style });
     } catch (e) {
       console.error('patchbay: skipping bad module on load:', m && m.id, e);
     }

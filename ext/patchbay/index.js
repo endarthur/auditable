@@ -200,6 +200,8 @@ function createEngine(sr, ctx = {}) {
       id, type, def, knobs, controls, params, inputs, outputs, state,
       row: Number.isFinite(opts.row) ? opts.row : 0,
       hpPos: Number.isFinite(opts.hpPos) ? opts.hpPos : 0,
+      color: opts.color || null,   // per-instance accent override (else def.color)
+      style: opts.style || null,   // per-instance panel-style override (else def.style)
       _processEffect: null, _teardown: null,
     };
     instances.set(id, inst);
@@ -334,6 +336,11 @@ function createEngine(sr, ctx = {}) {
     const i = instances.get(id);
     if (i && i.controls[name]) i.controls[name].write(v);
   }
+  // Per-instance appearance (accent / panel style). null clears the override.
+  function setAppearance(id, key, v) {
+    const i = instances.get(id);
+    if (i && (key === 'color' || key === 'style')) i[key] = v || null;
+  }
   // Param changes re-run the I/O setup seam (a new topic/path needs to re-bind).
   function setParam(id, name, v) {
     const i = instances.get(id);
@@ -353,7 +360,7 @@ function createEngine(sr, ctx = {}) {
   return {
     instances, cables,
     addInstance, removeInstance, connect, disconnect, removeCable, wouldCycle,
-    outputValue, inputValue, knobValue, setKnob, controlValue, setControl, setParam, destroy,
+    outputValue, inputValue, knobValue, setKnob, controlValue, setControl, setParam, setAppearance, destroy,
   };
 }
 
@@ -486,6 +493,8 @@ function serializeRack(engine, rack) {
       params: { ...inst.params },
     };
     if (Object.keys(controls).length) m.controls = controls;
+    if (inst.color) m.color = inst.color;
+    if (inst.style) m.style = inst.style;
     modules.push(m);
   }
   const cables = engine.cables.map((c) => {
@@ -514,7 +523,7 @@ function deserializeRack(doc, engine) {
   };
   for (const m of (d.modules || [])) {
     try {
-      engine.addInstance(m.id, m.type, { row: m.row, hpPos: m.hpPos, knobs: m.knobs, controls: m.controls, params: m.params });
+      engine.addInstance(m.id, m.type, { row: m.row, hpPos: m.hpPos, knobs: m.knobs, controls: m.controls, params: m.params, color: m.color, style: m.style });
     } catch (e) {
       console.error('patchbay: skipping bad module on load:', m && m.id, e);
     }
@@ -1759,8 +1768,8 @@ function createRenderer(opts) {
     ctx.fillText(String(p.name).toUpperCase(), x, y + 11);
   }
   function drawModule(inst, hoveredPort, selected) {
-    const r = moduleRect(inst), lay = layoutFor(inst.def), style = getStyle(inst.def.style);
-    const bandColor = accent(inst.def.color);
+    const r = moduleRect(inst), lay = layoutFor(inst.def), style = getStyle(inst.style || inst.def.style);
+    const bandColor = accent(inst.color || inst.def.color);
     const g = ctx.createLinearGradient(r.x, r.y, r.x, r.y + r.h);
     g.addColorStop(0, colors[style.panel.top] || colors.bgBright);
     g.addColorStop(1, colors[style.panel.bottom] || colors.bgRaised);
@@ -2259,6 +2268,7 @@ function attachInteraction(renderer, engine, canvas, opts = {}) {
 
 
 
+
 // --sw-* token → renderer color role.
 const TOKEN_MAP = {
   bgDeep: '--sw-bg-deep', bg: '--sw-bg', bgRaised: '--sw-bg-raised', bgBright: '--sw-bg-bright',
@@ -2741,6 +2751,25 @@ function mountPatchbay(ctx) {
         _inspEffects.push(sr.effect(() => { rv.textContent = fmt(inst.outputs[name].read()); }));
       }
     }
+
+    // Appearance — per-instance accent + panel-style override.
+    section('Appearance');
+    const dropdown = (labelText, options, current, defLabel, onPick) => {
+      const lab = doc.createElement('label'); lab.textContent = labelText; inspBody.appendChild(lab);
+      const sel = doc.createElement('select');
+      const d0 = doc.createElement('option'); d0.value = ''; d0.textContent = 'default · ' + defLabel; sel.appendChild(d0);
+      for (const o of options) { const op = doc.createElement('option'); op.value = o; op.textContent = o; sel.appendChild(op); }
+      sel.value = current || '';
+      sel.addEventListener('change', () => onPick(sel.value || null));
+      inspBody.appendChild(sel);
+    };
+    dropdown('Accent', WIRE_COLORS, inst.color, inst.def.color, (v) => {
+      engine.setAppearance(inst.id, 'color', v); markDirty();
+      inspH4.style.color = readThemeColors(doc.documentElement)[v || inst.def.color] || 'inherit';
+    });
+    dropdown('Panel style', listStyles(), inst.style, inst.def.style, (v) => {
+      engine.setAppearance(inst.id, 'style', v); markDirty();
+    });
 
     const del = doc.createElement('button'); del.className = 'pb-del'; del.textContent = 'delete module';
     del.addEventListener('click', () => removeModule(inst.id));

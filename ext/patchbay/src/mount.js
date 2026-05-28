@@ -20,6 +20,7 @@ import { attachInteraction } from './interact.js';
 import { LooseFileStore, serializeRack, deserializeRack, blankRack } from './store.js';
 import { registerStdlib, STDLIB_MODULES } from './stdlib.js';
 import { getModuleDef, listModuleDefs } from './sdk.js';
+import { listStyles } from './styles.js';
 
 // --sw-* token → renderer color role.
 const TOKEN_MAP = {
@@ -503,6 +504,25 @@ export function mountPatchbay(ctx) {
         _inspEffects.push(sr.effect(() => { rv.textContent = fmt(inst.outputs[name].read()); }));
       }
     }
+
+    // Appearance — per-instance accent + panel-style override.
+    section('Appearance');
+    const dropdown = (labelText, options, current, defLabel, onPick) => {
+      const lab = doc.createElement('label'); lab.textContent = labelText; inspBody.appendChild(lab);
+      const sel = doc.createElement('select');
+      const d0 = doc.createElement('option'); d0.value = ''; d0.textContent = 'default · ' + defLabel; sel.appendChild(d0);
+      for (const o of options) { const op = doc.createElement('option'); op.value = o; op.textContent = o; sel.appendChild(op); }
+      sel.value = current || '';
+      sel.addEventListener('change', () => onPick(sel.value || null));
+      inspBody.appendChild(sel);
+    };
+    dropdown('Accent', WIRE_COLORS, inst.color, inst.def.color, (v) => {
+      engine.setAppearance(inst.id, 'color', v); markDirty();
+      inspH4.style.color = readThemeColors(doc.documentElement)[v || inst.def.color] || 'inherit';
+    });
+    dropdown('Panel style', listStyles(), inst.style, inst.def.style, (v) => {
+      engine.setAppearance(inst.id, 'style', v); markDirty();
+    });
 
     const del = doc.createElement('button'); del.className = 'pb-del'; del.textContent = 'delete module';
     del.addEventListener('click', () => removeModule(inst.id));
