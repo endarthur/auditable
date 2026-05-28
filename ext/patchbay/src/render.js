@@ -401,7 +401,11 @@ export function createRenderer(opts) {
     ctx.strokeStyle = selected ? bandColor : (colors[style.panel.edge] || colors.border);
     ctx.lineWidth = selected ? 1.5 : 1; rrectPath(ctx, r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1, 2); ctx.stroke();
     // Header content sits below the top rail-cover/mounting strip (RAIL_H).
-    if (style.accentStripe) { ctx.fillStyle = bandColor; ctx.fillRect(r.x + 3, r.y + RAIL_H + 3, r.w - 6, 2.5); }
+    if (style.accentStripe) {
+      let sc = bandColor;
+      if (_showFlow) { const a = _moduleActivity(inst); if (a > 0.05) sc = lighten(bandColor, 0.5 * a); }
+      ctx.fillStyle = sc; ctx.fillRect(r.x + 3, r.y + RAIL_H + 3, r.w - 6, 2.5);
+    }
     const headerColor = style.headerColor === 'accent' ? bandColor : (colors[style.headerColor] || colors.text);
     ctx.fillStyle = headerColor; ctx.font = style.headerFont; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     ctx.fillText(inst.def.title, r.x + r.w / 2, r.y + RAIL_H + 16);
@@ -469,8 +473,54 @@ export function createRenderer(opts) {
     rrectPath(ctx, ghost.x, ghost.y, ghost.w, ghost.h, 4); ctx.fill(); ctx.stroke(); ctx.restore();
   }
 
-  // One full frame. state from interact.js: { dragGhost, dragCable, hoveredPort, selectedId, railsOn }
+  // ── signal-flow activity (show-the-flow) ──
+  // Per output port: how recently its value changed (1 on change, decays). The
+  // cable beads + stripe pulse read from this, so the rack visibly carries the
+  // signal — the cable IS the dependency.
+  const perfNow = () => (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
+  const _act = new Map();   // "id:port" → { last, act }
+  let _showFlow = false;
+  function _updateActivity() {
+    for (const inst of engine.instances.values()) {
+      for (const name in inst.outputs) {
+        const key = inst.id + ':' + name;
+        const v = inst.outputs[name].read();
+        const a = _act.get(key);
+        if (!a) _act.set(key, { last: v, act: 0 });
+        else if (v !== a.last) { a.act = 1; a.last = v; }
+        else a.act *= 0.9;
+      }
+    }
+  }
+  function _activityOf(id, port) { const a = _act.get(id + ':' + port); return a ? a.act : 0; }
+  function _moduleActivity(inst) { let m = 0; for (const n in inst.outputs) m = Math.max(m, _activityOf(inst.id, n)); return m; }
+
+  // Beads flowing source → dest along the cable; speed + opacity track activity.
+  function drawFlow(cab, pts, color) {
+    const act = _activityOf(cab.from.id, cab.from.port);
+    if (act < 0.03 || pts.length < 2) return;
+    const seg = [], cum = [0]; let total = 0;
+    for (let i = 1; i < pts.length; i++) {
+      const d = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+      seg.push(d); total += d; cum.push(total);
+    }
+    const gap = 26, speed = 0.03 + 0.12 * act, offset = (perfNow() * speed) % gap;
+    ctx.fillStyle = lighten(color, 0.5); ctx.globalAlpha = 0.35 + 0.55 * act;
+    for (let d = offset; d < total; d += gap) {
+      let i = 1; while (i < cum.length && cum[i] < d) i++;
+      if (i >= cum.length) break;
+      const t = (d - cum[i - 1]) / (seg[i - 1] || 1);
+      ctx.beginPath();
+      ctx.arc(pts[i - 1].x + (pts[i].x - pts[i - 1].x) * t, pts[i - 1].y + (pts[i].y - pts[i - 1].y) * t, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // One full frame. state from interact.js: { dragGhost, dragCable, hoveredPort, selectedId, railsOn, showFlow }
   function draw(state = {}) {
+    _showFlow = !!state.showFlow;
+    if (_showFlow) _updateActivity();
     drawBg();
     if (state.railsOn !== false) drawRack();
     updateCables(state.dragCable);
@@ -479,7 +529,7 @@ export function createRenderer(opts) {
     if (state.railsOn !== false) for (const inst of engine.instances.values()) drawMounts(inst);
     for (const c of engine.cables) {
       const pts = _cablePts.get(cableKey(c));
-      if (pts) drawCableStroke(pts, cableColor(c));
+      if (pts) { drawCableStroke(pts, cableColor(c)); if (_showFlow) drawFlow(c, pts, cableColor(c)); }
     }
     const dpts = _cablePts.get('__drag__');
     if (dpts && state.dragCable) {
