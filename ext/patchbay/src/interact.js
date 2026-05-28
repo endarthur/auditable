@@ -111,7 +111,7 @@ export function attachInteraction(renderer, engine, canvas, opts = {}) {
     if (inst) {
       select(inst.id);
       const r = renderer.moduleRect(inst);
-      gesture = { kind: 'module', inst, grabHp: (wx - r.x) / HP,
+      gesture = { kind: 'module', inst, grabHp: (wx - r.x) / HP, grabY: wy - renderer.rowYs()[inst.row],
                   startRow: inst.row, startHp: inst.hpPos, pointerId: e.pointerId };
       return;
     }
@@ -151,7 +151,7 @@ export function attachInteraction(renderer, engine, canvas, opts = {}) {
       renderer.view.ty += sy - gesture.lastSy;
       gesture.lastSx = sx; gesture.lastSy = sy;
     } else if (gesture.kind === 'module') {
-      const snap = renderer.snapTarget(gesture.inst, wx, wy, gesture.grabHp);
+      const snap = renderer.snapTarget(gesture.inst, wx, wy, gesture.grabHp, gesture.grabY);
       state.dragGhost = { x: snap.x, y: snap.y, w: snap.w, h: snap.h, valid: snap.valid };
       if (snap.valid) { gesture.inst.row = snap.row; gesture.inst.hpPos = snap.hpPos; }
     } else if (gesture.kind === 'value') {
@@ -178,7 +178,7 @@ export function attachInteraction(renderer, engine, canvas, opts = {}) {
     if (gesture.kind === 'pinch') { if (pointers.size < 2) gesture = null; return; }
 
     if (gesture.kind === 'module') {
-      const snap = renderer.snapTarget(gesture.inst, ...lastWorld(e), gesture.grabHp);
+      const snap = renderer.snapTarget(gesture.inst, ...lastWorld(e), gesture.grabHp, gesture.grabY);
       if (!snap.valid) { gesture.inst.row = gesture.startRow; gesture.inst.hpPos = gesture.startHp; }
       else if (gesture.inst.row !== gesture.startRow || gesture.inst.hpPos !== gesture.startHp) onChange();
       state.dragGhost = null; gesture = null; return;

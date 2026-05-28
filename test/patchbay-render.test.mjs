@@ -96,6 +96,20 @@ test('overlaps + snapTarget enforce the grid', () => {
   assert.equal(snap.valid, true);
 });
 
+test('snapTarget uses the vertical grab offset (lower-half grab stays in-row)', () => {
+  const { engine, renderer } = build();
+  engine.addInstance('m', 'knob', { row: 0, hpPos: 0 });
+  const inst = engine.instances.get('m');
+  const r = renderer.moduleRect(inst);
+  const ys = renderer.rowYs();
+  const grabWy = r.y + r.h - 20;          // grab near the panel's bottom edge
+  const grabY = grabWy - ys[0];
+  // a tiny downward nudge must NOT jump to row 1
+  assert.equal(renderer.snapTarget(inst, r.x + 5, grabWy + 10, 0, grabY).row, 0);
+  // moving down by a full row span does switch rows
+  assert.equal(renderer.snapTarget(inst, r.x + 5, grabWy + (ys[1] - ys[0]), 0, grabY).row, 1);
+});
+
 test('draw() runs headless without throwing and issues canvas calls', () => {
   const { canvas, engine, renderer } = build();
   engine.addInstance('a', 'knob', { row: 0, hpPos: 4 });

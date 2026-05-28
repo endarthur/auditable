@@ -1527,10 +1527,14 @@ function createRenderer(opts) {
     }
     return false;
   }
-  function snapTarget(inst, wx, wy, grabHp = 0) {
+  function snapTarget(inst, wx, wy, grabHp = 0, grabY = 0) {
     const ys = rowYs();
+    // Pick the row by where the module's row-top would LAND (cursor minus the
+    // vertical grab offset), not the raw cursor — otherwise grabbing a panel's
+    // lower half snaps it to the next row immediately.
+    const topY = wy - grabY;
     let row = 0, bd = Infinity;
-    for (let i = 0; i < ys.length; i++) { const d = Math.abs(wy - ys[i]); if (d < bd) { bd = d; row = i; } }
+    for (let i = 0; i < ys.length; i++) { const d = Math.abs(topY - ys[i]); if (d < bd) { bd = d; row = i; } }
     const maxHp = rack.hp - inst.def.hp;
     const hpPos = clamp(Math.round((wx - RAIL_LEFT) / HP - grabHp), 0, Math.max(0, maxHp));
     return {
@@ -2037,7 +2041,7 @@ function attachInteraction(renderer, engine, canvas, opts = {}) {
     if (inst) {
       select(inst.id);
       const r = renderer.moduleRect(inst);
-      gesture = { kind: 'module', inst, grabHp: (wx - r.x) / HP,
+      gesture = { kind: 'module', inst, grabHp: (wx - r.x) / HP, grabY: wy - renderer.rowYs()[inst.row],
                   startRow: inst.row, startHp: inst.hpPos, pointerId: e.pointerId };
       return;
     }
@@ -2077,7 +2081,7 @@ function attachInteraction(renderer, engine, canvas, opts = {}) {
       renderer.view.ty += sy - gesture.lastSy;
       gesture.lastSx = sx; gesture.lastSy = sy;
     } else if (gesture.kind === 'module') {
-      const snap = renderer.snapTarget(gesture.inst, wx, wy, gesture.grabHp);
+      const snap = renderer.snapTarget(gesture.inst, wx, wy, gesture.grabHp, gesture.grabY);
       state.dragGhost = { x: snap.x, y: snap.y, w: snap.w, h: snap.h, valid: snap.valid };
       if (snap.valid) { gesture.inst.row = snap.row; gesture.inst.hpPos = snap.hpPos; }
     } else if (gesture.kind === 'value') {
@@ -2104,7 +2108,7 @@ function attachInteraction(renderer, engine, canvas, opts = {}) {
     if (gesture.kind === 'pinch') { if (pointers.size < 2) gesture = null; return; }
 
     if (gesture.kind === 'module') {
-      const snap = renderer.snapTarget(gesture.inst, ...lastWorld(e), gesture.grabHp);
+      const snap = renderer.snapTarget(gesture.inst, ...lastWorld(e), gesture.grabHp, gesture.grabY);
       if (!snap.valid) { gesture.inst.row = gesture.startRow; gesture.inst.hpPos = gesture.startHp; }
       else if (gesture.inst.row !== gesture.startRow || gesture.inst.hpPos !== gesture.startHp) onChange();
       state.dragGhost = null; gesture = null; return;

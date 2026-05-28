@@ -240,10 +240,14 @@ export function createRenderer(opts) {
     }
     return false;
   }
-  function snapTarget(inst, wx, wy, grabHp = 0) {
+  function snapTarget(inst, wx, wy, grabHp = 0, grabY = 0) {
     const ys = rowYs();
+    // Pick the row by where the module's row-top would LAND (cursor minus the
+    // vertical grab offset), not the raw cursor — otherwise grabbing a panel's
+    // lower half snaps it to the next row immediately.
+    const topY = wy - grabY;
     let row = 0, bd = Infinity;
-    for (let i = 0; i < ys.length; i++) { const d = Math.abs(wy - ys[i]); if (d < bd) { bd = d; row = i; } }
+    for (let i = 0; i < ys.length; i++) { const d = Math.abs(topY - ys[i]); if (d < bd) { bd = d; row = i; } }
     const maxHp = rack.hp - inst.def.hp;
     const hpPos = clamp(Math.round((wx - RAIL_LEFT) / HP - grabHp), 0, Math.max(0, maxHp));
     return {
