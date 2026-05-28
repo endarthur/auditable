@@ -423,6 +423,12 @@ registerKind('text', {
                        'MAKEFILE', 'DOCKERFILE'],
 });
 
+// Patchbay — a Eurorack-style reactive dataflow rack. A loose-file surface: one
+// `.patchbay` JSON document = one rack. Opens from the tree by extension, or via
+// Tools → New rack. (The schema is container-agnostic so a future project-dir
+// form is a drop-in; see ext/patchbay/src/store.js.)
+registerKind('patchbay', { label: 'Patchbay', icon: '⊞', extensions: ['.patchbay'] });
+
 // The A-Bus inspector — a diagnostic surface, spawned from the Debug menu
 // (not tied to a VFS path).
 registerKind('inspector', { label: 'A-Bus Inspector', icon: '◉', extensions: [] });

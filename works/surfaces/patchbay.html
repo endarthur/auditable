@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>patchbay</title>
+<style>
+  /* @theme-tokens */
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--au-surface-deep, #15171A); }
+  #pb-root { position: absolute; inset: 0; }
+  *{ scrollbar-width: thin; scrollbar-color: var(--au-border,#2F3338) transparent; -webkit-tap-highlight-color: transparent; }
+</style>
+</head>
+<body>
+<!--
+  Patchbay surface for Auditable Works. A sandboxed iframe surface that hosts a
+  Eurorack-style reactive rack. The heavy lifting lives in @gcu/patchbay (engine
+  + SDK + stdlib + pb + canvas render/interaction); this shell does the A-Bus
+  welcome handshake, mounts the rack into #pb-root, and bridges the §5.2 Surface
+  contract (Flush persists the rack JSON, DirtyChanged drives the tab dot).
+
+  The dataflow engine is sideact-backed: cables are signal dependencies. sideact's
+  primitives are imported here and INJECTED into mountPatchbay (not imported
+  inside the patchbay bundle) so the engine stays free of cross-bundle inlining
+  quirks. I/O modules (A-Bus / VFS bridges) reach the workspace through `bus`.
+-->
+<div id="pb-root"></div>
+<script type="module">
+import { connect } from '../../ext/abus/index.js';
+import { signal, computed, effect, batch } from '../../ext/sideact/index.js';
+import { mountPatchbay } from '../../ext/patchbay/index.js';
+
+/* @theme-init */
+
+const sr = { signal, computed, effect, batch };
+const root = document.getElementById('pb-root');
+const basename = (p) => (p || '').split('/').filter(Boolean).pop() || 'rack';
+
+let app = null;
+let bus = null;
+let tabPath = '';
+
+window.addEventListener('message', async (ev) => {
+  if (ev.source !== window.parent) return;
+  if (!ev.data || ev.data.type !== 'abus:welcome') return;
+  const { port, tab } = ev.data;
+  tabPath = (tab && tab.path) || '';
+
+  try { bus = await connect(port, { client: 'patchbay' }); }
+  catch (e) { root.textContent = 'A-Bus connect failed: ' + e.message; return; }
+
+  // Apply the workspace theme before mounting so the canvas reads the right
+  // token values on first paint (installThemeSubscription comes from the
+  // build-injected theme bootstrap; absent in raw dev → caught + default dark).
+  try { await installThemeSubscription(bus); } catch { /* dev / no theme-init */ }
+  try { await bus.claim('patchbay-' + ((tab && tab.id) || 'x')); } catch { /* name taken */ }
+
+  const emit = (member, args) => bus.signal({ path: '/', interface: 'Surface', member }, args);
+
+  try {
+    app = mountPatchbay({ root, bus, tab, sr, onDirty: (d) => emit('DirtyChanged', [d]) });
+    window._pbApp = app;   // test/debug hook (works-smoke reaches in via this)
+  } catch (e) {
+    root.textContent = 'patchbay mount failed: ' + (e && e.message);
+    return;
+  }
+
+  bus.expose('/', {
+    Surface: {
+      methods: {
+        Flush: () => app.flush(),
+        CanClose: () => true,
+        Relocated: (p) => { tabPath = p; emit('TitleChanged', [basename(p)]); },
+      },
+      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
+    },
+  });
+
+  emit('TitleChanged', [basename(tabPath)]);
+  emit('Ready', []);
+});
+
+addEventListener('pagehide', () => { if (app) { try { app.dispose(); } catch { /* ignore */ } } });
+</script>
+</body>
+</html>

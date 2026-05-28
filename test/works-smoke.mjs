@@ -154,14 +154,16 @@ const textOpen = await page.evaluate(async () => {
 });
 
 // Reach into the surface's iframe: confirm it read the file, then edit it.
+// The text surface is CodeMirror 6 — read/edit via the exposed EditorView
+// (window._cmView), not a <textarea> (the surface dropped that in the CM6 move).
 const textFrame = await surfaceFrame(textOpen.tabId);
 let loadedContent = null;
 if (textFrame) {
-  loadedContent = await textFrame.evaluate(() => document.querySelector('textarea')?.value);
+  loadedContent = await textFrame.evaluate(
+    () => (window._cmView ? window._cmView.state.doc.toString() : null));
   await textFrame.evaluate(() => {
-    const ta = document.querySelector('textarea');
-    ta.value = 'edited by smoke';
-    ta.dispatchEvent(new Event('input', { bubbles: true }));
+    const v = window._cmView;
+    v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: 'edited by smoke' } });
   });
 }
 
@@ -395,11 +397,12 @@ const nbShellTab = await page.evaluate(async () => {
   await W.vfs.mkdir('/projects/SmokeShell', { recursive: true });
   await W.vfs.writeFile('/projects/SmokeShell/project.json',
     JSON.stringify({ kind: 'notebook', id: 'nb-smokeshell', title: 'Smoke Shell' }));
-  // Three cells: the !-cell (shell-cmd test), the local:-cell (pkg-spec
-  // §3.4 test), and a final display so the local-cell output is easy to
-  // spot in the test's poll.
+  // Two code cells: the !-cell (shell-cmd test) and the local:-cell
+  // (pkg-spec §3.4 test). Cells are run explicitly via window.runAll after
+  // the surface is ready — run-on-load defaults to off, and there is no
+  // `runOnLoad` txt header (an earlier bogus one parsed as a junk cell).
   await W.vfs.writeFile('/projects/SmokeShell/notebook.txt',
-    '/// auditable\n/// title: Smoke Shell\n/// runOnLoad: yes\n\n'
+    '/// auditable\n/// title: Smoke Shell\n\n'
     + '/// code\n!echo hi from geas\necho second line\n\n'
     + "/// code\nconst _ws = '/tmp/local-smoke-mod.js';\n"
     + "await notebook.fs.write(_ws, 'export const answer = () => 42;');\n"
@@ -418,9 +421,11 @@ const nbShellFrame = nbShellTab.ready ? await surfaceFrame(nbShellTab.tabId) : n
 let nbShellOutput = null;
 let nbLocalLoad = null;
 if (nbShellFrame) {
+  // Run-on-load is off by default; trigger execution explicitly.
+  await nbShellFrame.evaluate(() => { if (window.runAll) window.runAll(); });
   nbShellOutput = await nbShellFrame.evaluate(async () => {
-    // Autorun fires the !-cell during boot. Poll the FIRST code cell's
-    // output for up to 10s (geas worker spawn + exec).
+    // The !-cell runs via runAll. Poll the FIRST code cell's output for up
+    // to 10s (geas worker spawn + exec).
     const deadline = Date.now() + 10000;
     let out = '';
     while (Date.now() < deadline) {
@@ -644,12 +649,19 @@ const termPkg = termFrame ? await termFrame.evaluate(async () => {
   // 3. pkg list — should mention the alias
   try { await client.exec('pkg list'); }
   catch (e) { return { error: 'pkg list failed: ' + e.message }; }
-  await new Promise((r) => setTimeout(r, 200));
 
-  // 4. Confirm the lockfile entry directly via VFS read.
+  // 4. Confirm the lockfile entry via VFS read — POLL for it to appear
+  // (same reason as the remove poll below: the worker→A-Bus→shell write
+  // hop lags under full-suite load; a fixed wait was intermittently early).
   let lockfile = null;
-  try { lockfile = JSON.parse(await vfs.readFile('/lib/.gcu-lock.json', 'utf8')); }
-  catch (e) { /* */ }
+  const installDeadline = Date.now() + 3000;
+  while (Date.now() < installDeadline) {
+    try {
+      lockfile = JSON.parse(await vfs.readFile('/lib/.gcu-lock.json', 'utf8'));
+      if (lockfile.modules && lockfile.modules['local:/tmp/pkg-test-mod.js']) break;
+    } catch { /* */ }
+    await new Promise((r) => setTimeout(r, 50));
+  }
 
   // 5. pkg remove — poll for the lockfile-entry-gone state instead of
   // a fixed wait. A-Bus VFS.Write fires after the worker reports done,
@@ -760,11 +772,22 @@ async function openAndRead(path) {
   if (!tabId) return { ready: false };
   const frame = await surfaceFrame(tabId);
   if (!frame) return { ready: true, html: null };
-  // Wait one more tick for renderer to attach the DOM after Ready.
-  await frame.evaluate(() => new Promise((r) => setTimeout(r, 100)));
-  const html = await frame.evaluate(() => document.getElementById('root').innerHTML);
   const kind = await page.evaluate(
     (id) => window.WKS.surfaces.get(id).kind, tabId);
+  // The preview surface reads the file + renders asynchronously after Ready,
+  // so poll #root for rendered content (past the initial "Loading…") rather
+  // than assuming it's painted at a fixed delay. Never throw on a null root.
+  let html = null;
+  const dl = Date.now() + 6000;
+  while (Date.now() < dl) {
+    html = await frame.evaluate(() => {
+      // preview surface renders into #root; doc surface (owns .md) into #preview.
+      const r = document.getElementById('root') || document.getElementById('preview');
+      return r ? r.innerHTML : null;
+    });
+    if (html && !/id="loading"/.test(html)) break;
+    await frame.evaluate(() => new Promise((r) => setTimeout(r, 80)));
+  }
   return { ready: true, html, kind };
 }
 
@@ -821,6 +844,52 @@ const dup = await page.evaluate(async () => {
     contentMatches: dstNb === origNb,
   };
 });
+
+// ── Patchbay surface — reactive rack over the sideact engine ──────────
+// Open a .patchbay loose file; the surface mounts the canvas rack, the engine
+// hydrates the modules + cables, and Flush round-trips the rack JSON.
+const pbOpen = await page.evaluate(async () => {
+  const W = window.WKS;
+  const starter = {
+    format: 'patchbay', version: 1,
+    rack: { hp: 64, rows: [{ kind: '3U' }, { kind: '3U' }] },
+    modules: [
+      { id: 'lfo', type: 'src.lfo', row: 0, hpPos: 4, knobs: { rate: 0.3 }, params: {} },
+      { id: 'scope', type: 'disp.scope', row: 0, hpPos: 16, knobs: {}, params: {} },
+    ],
+    cables: [{ from: { id: 'lfo', port: 'sin' }, to: { id: 'scope', port: 'x' } }],
+  };
+  await W.vfs.writeFile('/projects/smoke.patchbay', JSON.stringify(starter));
+  const tabId = await W.openPath('/projects/smoke.patchbay');
+  const rec = W.surfaces.get(tabId);
+  const deadline = Date.now() + 15000;
+  while (rec && !rec.ready && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return rec ? { tabId, ready: rec.ready, kind: rec.kind, uniqueName: rec.uniqueName } : { ready: false };
+});
+
+const pbFrame = pbOpen.ready ? await surfaceFrame(pbOpen.tabId) : null;
+let pbMounted = null;
+if (pbFrame) {
+  await pbFrame.evaluate(() => new Promise((r) => setTimeout(r, 250)));
+  pbMounted = await pbFrame.evaluate(() => ({
+    hasCanvas: !!document.querySelector('#pb-root canvas'),
+    modules: (window._pbApp && window._pbApp.engine.instances.size) || 0,
+    cables: (window._pbApp && window._pbApp.engine.cables.length) || 0,
+  }));
+}
+
+const pbFlush = await page.evaluate(async (uniqueName) => {
+  const W = window.WKS;
+  try {
+    await W.worksBus.call(
+      { to: uniqueName, path: '/', interface: 'Surface', member: 'Flush' }, []);
+  } catch (e) { return { error: e.message }; }
+  let doc = null;
+  try { doc = JSON.parse(await W.vfs.readFile('/projects/smoke.patchbay', 'utf8')); } catch { /* */ }
+  return { ok: !!doc && doc.format === 'patchbay', modules: doc ? doc.modules.length : 0 };
+}, pbOpen.uniqueName);
 
 // ── Workspace export / import round-trip (Chunk 5b) ───────────────────
 // Serialize the live workspace, build a self-contained HTML, then open it —
@@ -892,6 +961,26 @@ const fileNbOpen = await page.evaluate(async () => {
   const tabId = await W.openPath('/projects/FileNB');
   const rec = W.surfaces.get(tabId);
   const deadline = Date.now() + 25000;
+  while (rec && !rec.ready && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return { ready: !!(rec && rec.ready) };
+});
+
+// A patchbay surface must also boot from file:// — a canvas surface that only
+// needs A-Bus + the works VFS service (no getUserMedia/IDB), so blob:file://
+// is fine.
+const filePbOpen = await page.evaluate(async () => {
+  const W = window.WKS;
+  if (!W || !W.vfs) return { ready: false };
+  await W.vfs.writeFile('/projects/file-smoke.patchbay', JSON.stringify({
+    format: 'patchbay', version: 1, rack: { hp: 64, rows: [{ kind: '3U' }] },
+    modules: [{ id: 'k', type: 'src.const', row: 0, hpPos: 4, knobs: { value: 0.5 }, params: {} }],
+    cables: [],
+  }));
+  const tabId = await W.openPath('/projects/file-smoke.patchbay');
+  const rec = W.surfaces.get(tabId);
+  const deadline = Date.now() + 15000;
   while (rec && !rec.ready && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 50));
   }
@@ -1011,8 +1100,10 @@ const checks = {
       && csvPv.html.includes('data-type="number"'),
   'preview: JSON opens as a tree':    jsonPv.kind === 'preview' && jsonPv.html
       && jsonPv.html.includes('<details') && jsonPv.html.includes('preview-test'),
-  'preview: Markdown renders':        mdPv.kind === 'preview' && mdPv.html
-      && /<h1>/.test(mdPv.html) && mdPv.html.includes('Preview Test')
+  // .md is owned by the doc surface (registered before preview); it renders
+  // markdown into its #preview pane with a live HTML view.
+  'doc: Markdown renders':            mdPv.kind === 'doc' && mdPv.html
+      && /<h1/.test(mdPv.html) && mdPv.html.includes('Preview Test')
       && /<strong>/.test(mdPv.html),
   'preview: CSV header sorts column': csvSorted && csvSorted.indicatorOnValue
       && csvSorted.firstRow && csvSorted.firstRow[1] === 'alpha',
@@ -1026,11 +1117,17 @@ const checks = {
   'imported workspace uses a memory home': imported.home === 'memory',
   'imported workspace has its projects':   imported.nbExists,
   'imported workspace keeps its files':    imported.note === 'survives reload',
+  // Patchbay surface
+  'patchbay: surface opens':          pbOpen.ready === true && pbOpen.kind === 'patchbay',
+  'patchbay: canvas + rack mounted':  pbMounted && pbMounted.hasCanvas
+                                        && pbMounted.modules >= 2 && pbMounted.cables >= 1,
+  'patchbay: Flush persists rack':    pbFlush.ok && pbFlush.modules >= 2,
   // file:// portability (§15.1)
   'works.html boots from file://':         fileMode.booted && fileMode.proto === 'file:',
   'a surface loads from file://':          fileMode.surfaceReady === true,
   'notebook surface boots from file://':   fileNbOpen.ready === true,
   'terminal surface boots from file://':   fileTermOpen.ready === true,
+  'patchbay surface boots from file://':   filePbOpen.ready === true,
 };
 
 console.log('--- works.html (Works rebuild — Chunks 1-3, 5 + surfaces) ---');

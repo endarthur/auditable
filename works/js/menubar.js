@@ -2,7 +2,7 @@
 
 import { MenuBar } from '#menu';
 import { WKS, setStatus } from './state.js';
-import { spawnSurface } from './surfaces.js';
+import { spawnSurface, openPath } from './surfaces.js';
 import { newProject } from './tree.js';
 import { importNotebookViaPicker, importFileAsNotebook } from './import.js';
 import { mountFolder } from './mount.js';
@@ -35,6 +35,7 @@ export function setupMenuBar() {
     ] },
     { label: 'Tools', items: () => [
       { label: 'Terminal',  action: 'tools:terminal' },
+      { label: 'New rack',  action: 'tools:patchbay' },
       { label: 'Settings…', action: 'tools:settings' },
     ] },
     { label: 'Debug', items: () => [
@@ -77,6 +78,7 @@ export function setupMenuBar() {
       spawnSurface('terminal', { title: 'Terminal' });
       return;
     }
+    if (action === 'tools:patchbay') { await newRack(); return; }
     if (action === 'tools:settings') {
       // Single-instance: focus the existing settings tab if any.
       for (const rec of WKS.surfaces.values()) {
@@ -123,6 +125,40 @@ export function setupMenuBar() {
   });
 
   WKS.menubar = bar;
+}
+
+// Tools → New rack — write a starter .patchbay (a live LFO→scope + const→number
+// demo) under /projects, then open it in the patchbay surface. A `.patchbay`
+// file already in the tree opens on double-click via the registry's extension
+// dispatch; this is just the "create a fresh one" entry point.
+async function newRack() {
+  // A punk-SCADA demo: a SIGNAL drives a TREND pen, a GAUGE dial, and an ALARM
+  // — the live signal fans out to three instruments.
+  const starter = {
+    format: 'patchbay', version: 1,
+    rack: { hp: 64, rows: [{ kind: '3U' }, { kind: '3U' }] },
+    modules: [
+      { id: 'signal', type: 'src.lfo',     row: 0, hpPos: 4,  knobs: { rate: 0.3 }, params: {} },
+      { id: 'trend',  type: 'disp.scope',  row: 0, hpPos: 16, knobs: {}, params: {} },
+      { id: 'gauge',  type: 'disp.gauge',  row: 0, hpPos: 30, knobs: {}, params: {} },
+      { id: 'alarm',  type: 'ctrl.alarm',  row: 0, hpPos: 42, knobs: { level: 0.7, hyst: 0.05 }, params: {} },
+    ],
+    cables: [
+      { from: { id: 'signal', port: 'sin' }, to: { id: 'trend', port: 'x' } },
+      { from: { id: 'signal', port: 'tri' }, to: { id: 'gauge', port: 'x' } },
+      { from: { id: 'signal', port: 'sin' }, to: { id: 'alarm', port: 'x' } },
+    ],
+  };
+  let path = '/projects/rack.patchbay';
+  try {
+    for (let i = 2; await WKS.vfs.exists(path); i++) path = `/projects/rack-${i}.patchbay`;
+    await WKS.vfs.mkdir('/projects', { recursive: true }).catch(() => {});
+    await WKS.vfs.writeFile(path, JSON.stringify(starter, null, 2));
+  } catch (e) {
+    setStatus('New rack failed: ' + (e.message || e));
+    return;
+  }
+  await openPath(path);
 }
 
 // Help → Open example… — picker over /usr/share/examples/ (works-all

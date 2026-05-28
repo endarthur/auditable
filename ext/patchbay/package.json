@@ -1,0 +1,32 @@
+{
+  "name": "@gcu/patchbay",
+  "version": "0.1.0",
+  "description": "Eurorack-style reactive dataflow surface for Auditable Works. Modules with knobs/jacks/displays; patch cables are real reactive dependencies. SDK + sideact-backed engine + canvas rack.",
+  "type": "module",
+  "main": "src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["modular", "eurorack", "dataflow", "reactive", "patchbay", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/patchbay"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/patchbay",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}

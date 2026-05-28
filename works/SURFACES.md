@@ -23,6 +23,12 @@ An iframe app that:
 5. Emits `Surface.Ready` exactly once, last, when its UI is mounted and it
    is ready to accept method calls.
 
+Surfaces come in two **hosting tiers**: the default *sandboxed* tier — an
+iframe, which is what §§1–11 describe — and a *privileged* inline tier that
+renders in the shell's own realm, for the few first-party surfaces that need
+device APIs (camera / screen capture) or direct VFS access. See §12; until
+you hit one of those needs, stay sandboxed.
+
 The shell is the broker, owns the workspace VFS, hosts the rails layout
 manager, and spawns surfaces from a built-in registry. Surfaces own no
 durable state — the workspace VFS is the single source of truth.
@@ -620,7 +626,213 @@ you're new:
 
 ---
 
-## 12. Related reading
+## 12. Hosting tiers: sandboxed vs privileged surfaces
+
+> **Status: design — not yet implemented.** Atalaia (`ext/atalaia`) is the
+> first planned consumer; this section is the contract it builds against.
+> Everything in §§1–11 describes the *sandboxed* tier, which is the only one
+> shipping today.
+
+A surface's *host* — iframe or not — is orthogonal to its *kind* (§4, which is
+about how a user *opens* it). The iframe is an isolation choice, not a rails
+requirement, and two facts already in the code make a second tier nearly free:
+
+- **Rails hosts an element, not an iframe.** `renderPanel` returns whatever
+  element it likes; rails positions it and never reparents it (`layout.js:29`
+  returns `rec.iframe` today — a `<div>` works identically).
+- **A-Bus is realm-agnostic.** The shell's own `works` service is already an
+  in-realm peer: a `MessageChannel` whose `port2` the shell `connect()`s
+  itself, no iframe and no `postMessage` welcome (`works-service.js:48-50`).
+
+Combine them and you get **privileged surfaces** — dom0 to the sandboxed
+tier's domU, ring-0 to its ring-3:
+
+| | Sandboxed (default) | Privileged (inline) |
+|---|---|---|
+| Host element | `<iframe>` (blob URL) | shell-owned `<div>` + shadow root |
+| A-Bus | `postMessage` welcome → `connect(port)` | in-realm `MessageChannel`; shell `connect`s for it |
+| Realm / origin | own document, own origin (opaque on `file://`) | the shell's realm + origin |
+| VFS / broker | RPC via `bus.call({to:'works',…})` | direct `WKS.vfs` / `WKS.broker` |
+| Runtime payload | embedded gzip blob per surface | none — it's shell code |
+| Trust | any surface, incl. third-party `.gcupkg` | **first-party / trusted code only** |
+| Fault blast radius | contained — the iframe dies alone | shared — a crash can take the shell |
+
+### 12.1 When to reach for privileged
+
+Only when the sandbox is actively in your way. Concretely:
+
+- **Capture / device APIs.** `getUserMedia` / `getDisplayMedia` are gated both
+  by the iframe's Permissions-Policy (`allow="camera; display-capture"`, which
+  the shell does **not** set on surface iframes) and by the `blob:file://`
+  opaque origin a sandboxed surface runs under. A privileged surface runs in
+  the shell's **top-level** realm — on a `file://`-opened `works.html` that's a
+  real, non-opaque `file://` origin (a secure context), so capture works with
+  no permission-policy plumbing and no `localhost` workaround. **This is why
+  Atalaia is the first consumer.**
+- **IndexedDB / WebGL / WebGPU**, for the same opaque-origin reason (`file://`
+  blocks IDB in `blob:` iframes — see §8.2 and §10). Cartobrush's hillshade GL
+  contexts and the dee 3-D panel want this.
+- **Large shared buffers.** Read a 64 MB scalar layer straight off `WKS.vfs`
+  instead of serializing it across an A-Bus port.
+- **Boot weight.** No per-surface embedded runtime blob; it shares the shell's
+  already-loaded module instances.
+
+If none of those bite, **stay sandboxed.** The isolation is worth more than the
+convenience.
+
+### 12.2 What you give up — and the mitigations
+
+- **Fault isolation.** Ring-0: an unhandled throw or leak runs in the shell's
+  realm. Wrap the mount in try/catch and fail to a visible error state inside
+  your root, never let it throw past the mount.
+- **CSS / global collisions.** You share the shell's document. **Mitigation:
+  render into a shadow root** (the mount hands you one) — it restores CSS
+  isolation while keeping JS-realm privilege. Switchboard's `--sw-*` / `--au-*`
+  tokens are CSS custom properties, which pierce shadow boundaries, so theming
+  still cascades in unchanged.
+- **Trust.** The sandbox *is* the security boundary for untrusted code, so
+  privileged is **first-party only** — the registry refuses to host an
+  extension-registered (`.gcupkg`) surface inline; third-party surfaces are
+  always iframes. (Enforced in `registerKind`: an `isExtension` kind asking for
+  `host:'inline'` is downgraded to `'iframe'` with a console warning.)
+- **No standalone story for free.** A privileged surface is shell code, not a
+  standalone HTML file. The `@gcu/dock` roadmap item (environment-adaptive
+  host) is the path to one codebase running both standalone and inline; until
+  then, an inline surface is Works-only.
+
+### 12.3 The contract is identical
+
+A privileged surface implements the **same §5.2 `Surface` contract** — the same
+`Flush` / `CanClose` / `Relocated` methods and `DirtyChanged` / `TitleChanged` /
+`Ready` signals, on the same A-Bus. Dirty-tracking (§7), VFS access (§6), and
+worker integration (§8) are all unchanged. Only two things differ: the
+**transport** (you're handed a live `bus`, not a `postMessage` welcome) and the
+**host** (you render into a shadow root, not a fresh document). The symmetry is
+deliberate — it's what lets a single surface target either tier (the dock
+angle).
+
+### 12.4 The mechanism
+
+Four small changes turn the single-tier spawner into a two-tier one.
+
+**Registry — a `host` flag + a `mount` function.** Inline surfaces have no
+embedded HTML payload; they register a mount entry point instead:
+
+```js
+registerKind('atalaia', {
+  label: 'Atalaia', icon: '◎', host: 'inline',
+  mount: mountAtalaia,            // (ctx) => disposeFn | Promise<disposeFn>
+  extensions: ['.atalaia'],       // or [] for a tool surface
+});
+```
+
+`host` defaults to `'iframe'`, so everything today is unaffected.
+
+**Spawn branch — `createSurface` forks on `host`:**
+
+```js
+import { connect } from '#abus';   // add to surfaces.js imports
+
+export function createSurface(tabId, kind, opts = {}) {
+  const def = kindDef(kind);
+  if (!def) throw new Error('unknown surface kind: ' + kind);
+  if (def.host === 'inline') return createInlineSurface(tabId, kind, def, opts);
+  /* …existing iframe path… */
+}
+
+function createInlineSurface(tabId, kind, def, opts) {
+  const host = document.createElement('div');
+  host.className = 'works-surface-inline';
+  const root = host.attachShadow({ mode: 'open' });    // CSS isolation
+
+  // In-realm A-Bus peer — the works-service.js:48-50 pattern.
+  const ch = new MessageChannel();
+  const uniqueName = WKS.broker.connect(ch.port1);
+  _byUnique.set(uniqueName, tabId);
+
+  const rec = { tabId, kind, uniqueName, element: host,
+                path: opts.path || '/', title: opts.title || def.label,
+                ready: false, dirty: false, dispose: null };
+  WKS.surfaces.set(tabId, rec);
+
+  (async () => {
+    const bus = await connect(ch.port2, { client: kind });
+    // The surface exposes the §5.2 contract + emits Ready itself, exactly
+    // like the iframe boot template — it just receives the bus directly.
+    rec.dispose = await def.mount({
+      root, bus,
+      tab: { id: tabId, path: rec.path, kind },
+      vfs: WKS.vfs, home: WKS.home,
+    });
+  })().catch((e) => { /* render the error into `root`; never throw past here */ });
+
+  return rec;
+}
+```
+
+**Panel handoff — `renderPanel` returns whichever element exists:**
+
+```js
+if (rec) return rec.iframe || rec.element;
+```
+
+**Teardown — `tab:close` disposes the mount** (alongside the existing
+uniqueName / record cleanup in `setupSurfaces`):
+
+```js
+if (typeof rec.dispose === 'function') { try { rec.dispose(); } catch {} }
+```
+
+`decompressSurfaces` skips `host:'inline'` kinds (there's no embedded payload),
+and the surface module is imported from the works module manifest
+(`works/js/main.js`) so it lands in the build — there's no
+`works/surfaces/<kind>.html`, no `surface-<kind>` script tag, no blob.
+
+### 12.5 The inline mount contract
+
+```
+mount(ctx) → disposeFn | Promise<disposeFn>
+
+ctx = {
+  root,   // an open ShadowRoot — render all UI here (CSS-isolated)
+  bus,    // live A-Bus peer — expose the §5.2 Surface contract on it
+  tab,    // { id, path, kind }
+  vfs,    // WKS.vfs — the shell's full VFS, direct (every mount, /tmp & /sys too)
+  home,   // storage-home descriptor
+}
+```
+
+The mount does what the iframe boot template (§5) does — initialise UI into
+`root`, `bus.expose('/', { Surface: {…} })`, then emit `TitleChanged` + `Ready`
+last — minus the welcome listener. It returns a `dispose` that tears down
+timers, capture streams, workers, and observers. **Releasing a live camera /
+display `MediaStream` in `dispose` is mandatory** — a privileged surface that
+leaks a stream leaks it into the shell's own realm.
+
+### 12.6 Atalaia as the worked example
+
+Atalaia registers `host:'inline'` because its whole reason for being — reading
+a `getDisplayMedia` / `getUserMedia` frame source — is exactly what the sandbox
+blocks. Its mount:
+
+1. Renders the live-frame canvas + ROI overlays + trace panel into `root`.
+2. Acquires the source via `navigator.mediaDevices.getDisplayMedia(…)` — which
+   works because it's in the shell's top-level (non-opaque) origin.
+3. Reads/writes the `watch.atalaia/` directory directly through `ctx.vfs`
+   (frame crops, `log.ndjson`) — no port-serialization of image data.
+4. On a fired trigger, emits an A-Bus event (`bus.signal` / `bus.call`) that
+   notebook cells and other surfaces subscribe to — Atalaia as a reactive
+   source, exactly as its spec intends.
+5. `dispose` stops every track on the active `MediaStream` and clears the
+   sample-tick timer.
+
+The smoke test (§9.5) for an inline surface skips the `surfaceFrame` step
+(there is no frame) and reaches into `rec.element.shadowRoot` instead to assert
+its UI mounted.
+
+---
+
+## 13. Related reading
 
 - `auditable-works-spec.md` §§5–6, §15 — the formal contract,
   registry, and packaging. This doc references its section numbers.

@@ -484,6 +484,7 @@ window.addEventListener('message', async (ev) => {
   } catch { /* */ }
 
   view = makeEditor('', langExt);
+  window._cmView = view;   // test/debug hook (works-smoke drives the editor via this)
   applyViewToggles();
   await loadFromDisk();
   updateStatus();
