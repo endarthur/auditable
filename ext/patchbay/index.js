@@ -1930,17 +1930,31 @@ function mountPatchbay(ctx) {
     .pb-item:hover{background:var(--sw-bg-bright,#25282D)}
     .pb-item .t{color:var(--sw-text-soft,#6E6C68);font:10px/1.5 "Space Mono",monospace}
     .pb-item.danger{color:var(--sw-red,#D05048)}
-    .pb-props{position:absolute;top:8px;right:8px;width:208px;z-index:5;background:rgba(29,32,36,.94);
-      border:1px solid var(--sw-border,#2F3338);border-radius:5px;padding:10px;color:var(--sw-text,#DDD);
-      font:12px/1.5 Barlow,system-ui,sans-serif;display:none}
-    .pb-props h4{margin:0 0 6px;font:700 12px "Space Mono",monospace;text-transform:uppercase;letter-spacing:.06em;color:var(--sw-orange,#D4672E)}
-    .pb-props label{display:block;font-size:10px;color:var(--sw-text-soft,#6E6C68);text-transform:uppercase;letter-spacing:.05em;margin:8px 0 2px}
-    .pb-props input{width:100%;background:var(--sw-bg-deep,#0E1012);border:1px solid var(--sw-border,#2F3338);
+    /* Right-docked slide-out inspector for the selected module. */
+    .pb-insp{position:absolute;top:8px;right:8px;bottom:8px;width:250px;z-index:6;
+      background:rgba(20,23,26,.97);border:1px solid var(--sw-border,#2F3338);border-radius:6px;
+      box-shadow:0 8px 28px rgba(0,0,0,.5);color:var(--sw-text,#DDD);font:12px/1.5 Barlow,system-ui,sans-serif;
+      display:flex;flex-direction:column;transform:translateX(calc(100% + 16px));transition:transform .18s ease;overflow:hidden}
+    .pb-insp.open{transform:translateX(0)}
+    .pb-insp-hd{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:10px 12px 8px;
+      border-bottom:1px solid var(--sw-border,#2F3338)}
+    .pb-insp-hd h4{margin:0;font:700 14px "Space Mono",monospace;text-transform:uppercase;letter-spacing:.05em}
+    .pb-insp-hd .ty{font:10px/1.5 "Space Mono",monospace;color:var(--sw-text-soft,#6E6C68)}
+    .pb-insp-x{background:none;border:0;color:var(--sw-text-soft,#6E6C68);font-size:16px;cursor:pointer;line-height:1;padding:0 2px}
+    .pb-insp-x:hover{color:var(--sw-text,#DDD)}
+    .pb-insp-body{padding:6px 12px 12px;overflow:auto;flex:1}
+    .pb-sec{font:600 9px "Space Mono",monospace;text-transform:uppercase;letter-spacing:.12em;
+      color:var(--sw-orange,#D4672E);margin:12px 0 4px;padding-bottom:3px;border-bottom:1px solid var(--sw-border-soft,#23262b)}
+    .pb-insp label{display:block;font-size:10px;color:var(--sw-text-soft,#6E6C68);text-transform:uppercase;letter-spacing:.05em;margin:8px 0 2px}
+    .pb-insp label .v{float:right;color:var(--sw-text,#DDD);text-transform:none}
+    .pb-insp input,.pb-insp select{width:100%;background:var(--sw-bg-deep,#0E1012);border:1px solid var(--sw-border,#2F3338);
       color:var(--sw-text,#DDD);border-radius:3px;padding:4px 6px;font:11px "Space Mono",monospace;box-sizing:border-box}
-    .pb-props input[type=range]{padding:0}
-    .pb-props select{width:100%;background:var(--sw-bg-deep,#0E1012);border:1px solid var(--sw-border,#2F3338);
-      color:var(--sw-text,#DDD);border-radius:3px;padding:4px 6px;font:11px "Space Mono",monospace;box-sizing:border-box}
-    .pb-del{margin-top:12px;width:100%;background:rgba(208,80,72,.15);border-color:var(--sw-red,#D05048);color:var(--sw-red,#D05048)}
+    .pb-insp input[type=range]{padding:0}
+    .pb-readout{display:flex;justify-content:space-between;gap:10px;padding:3px 0;font:11px "Space Mono",monospace}
+    .pb-readout .n{color:var(--sw-text-soft,#6E6C68)}
+    .pb-readout .rv{color:var(--sw-teal,#3A9BA3)}
+    .pb-del{margin-top:14px;width:100%;background:rgba(208,80,72,.15);border:1px solid var(--sw-red,#D05048);color:var(--sw-red,#D05048);
+      border-radius:4px;padding:6px 10px;font:10px/1 "Space Mono",monospace;text-transform:uppercase;letter-spacing:.08em;cursor:pointer}
     .pb-hud{position:absolute;bottom:8px;right:8px;z-index:5;font:9.5px "Space Mono",monospace;color:var(--sw-text-soft,#6E6C68);
       background:rgba(29,32,36,.88);border:1px solid var(--sw-border,#2F3338);border-radius:4px;padding:5px 8px}
   `;
@@ -1958,7 +1972,16 @@ function mountPatchbay(ctx) {
   host.appendChild(palette);
   const ctxMenu = doc.createElement('div'); ctxMenu.className = 'pb-pop'; host.appendChild(ctxMenu);
 
-  const props = doc.createElement('div'); props.className = 'pb-props'; host.appendChild(props);
+  const insp = doc.createElement('div'); insp.className = 'pb-insp';
+  const inspHd = doc.createElement('div'); inspHd.className = 'pb-insp-hd';
+  const inspTitle = doc.createElement('div');
+  const inspH4 = doc.createElement('h4'); const inspTy = doc.createElement('div'); inspTy.className = 'ty';
+  inspTitle.append(inspH4, inspTy);
+  const inspX = doc.createElement('button'); inspX.className = 'pb-insp-x'; inspX.textContent = '×';
+  inspHd.append(inspTitle, inspX);
+  const inspBody = doc.createElement('div'); inspBody.className = 'pb-insp-body';
+  insp.append(inspHd, inspBody);
+  host.appendChild(insp);
   const hud = doc.createElement('div'); hud.className = 'pb-hud'; host.appendChild(hud);
   root.appendChild(host);
 
@@ -2011,7 +2034,7 @@ function mountPatchbay(ctx) {
 
   const interaction = attachInteraction(renderer, engine, canvas, {
     onChange: markDirty,
-    onSelect: (id) => renderProps(id),
+    onSelect: (id) => renderInspector(id),
   });
 
   // ── insert (palette + context menu) / fit ──
@@ -2052,7 +2075,7 @@ function mountPatchbay(ctx) {
       it.textContent = 'Delete ' + hitMod.def.title;
       it.addEventListener('click', (ev) => {
         ev.stopPropagation();
-        engine.removeInstance(hitMod.id); interaction.select(null); renderProps(null); markDirty(); hideMenus();
+        engine.removeInstance(hitMod.id); interaction.select(null); renderInspector(null); markDirty(); hideMenus();
       });
       ctxMenu.appendChild(it);
     } else {
@@ -2069,47 +2092,87 @@ function mountPatchbay(ctx) {
   const onDocClick = () => hideMenus();
   doc.addEventListener('click', onDocClick);
 
-  // ── properties panel ──
-  function renderProps(id) {
-    const inst = id && engine.instances.get(id);
-    if (!inst) { props.style.display = 'none'; return; }
-    props.style.display = 'block';
-    props.innerHTML = '';
-    const h = doc.createElement('h4'); h.textContent = inst.def.title; props.appendChild(h);
-    const sub = doc.createElement('div'); sub.style.cssText = 'font:10px "Space Mono",monospace;color:var(--sw-text-soft,#6E6C68);margin-bottom:4px';
-    sub.textContent = inst.type + '  ·  ' + inst.id; props.appendChild(sub);
+  // ── slide-out inspector ──
+  // Live-bound: sideact effects tie knob sliders + output readouts to the
+  // instance signals, so dragging a knob on the canvas updates the panel in
+  // real time (and vice-versa). Effects are disposed on re-select / close.
+  let _inspEffects = [];
+  const fmt = (v) => (typeof v === 'number' && isFinite(v)) ? (Math.round(v * 1000) / 1000)
+    : (v == null ? '—' : String(v).slice(0, 16));
+  function clearInspEffects() { for (const d of _inspEffects) { try { d(); } catch { /* ignore */ } } _inspEffects = []; }
 
-    for (const [pn, pspec] of Object.entries(inst.def.params)) {
-      const lab = doc.createElement('label'); lab.textContent = pspec.label || pn; props.appendChild(lab);
-      let inp;
-      if (pspec.kind === 'select' && Array.isArray(pspec.options)) {
-        inp = doc.createElement('select');
-        for (const o of pspec.options) { const opt = doc.createElement('option'); opt.value = o; opt.textContent = o; inp.appendChild(opt); }
-        inp.value = inst.params[pn] != null ? inst.params[pn] : pspec.default;
-        inp.addEventListener('change', () => { engine.setParam(inst.id, pn, inp.value); markDirty(); });
-      } else {
-        inp = doc.createElement('input');
-        inp.type = pspec.kind === 'number' ? 'number' : 'text';
-        inp.value = inst.params[pn] != null ? inst.params[pn] : '';
-        inp.addEventListener('change', () => {
-          const v = pspec.kind === 'number' ? parseFloat(inp.value) : inp.value;
-          engine.setParam(inst.id, pn, v); markDirty();
-        });
+  function renderInspector(id) {
+    clearInspEffects();
+    const inst = id && engine.instances.get(id);
+    if (!inst) { insp.classList.remove('open'); return; }
+    inspH4.textContent = inst.def.title;
+    inspH4.style.color = readThemeColors(doc.documentElement)[inst.def.color] || 'inherit';
+    inspTy.textContent = inst.type + '  ·  ' + inst.id;
+    inspBody.innerHTML = '';
+
+    const section = (name) => { const s = doc.createElement('div'); s.className = 'pb-sec'; s.textContent = name; inspBody.appendChild(s); };
+
+    // Params (config — text / number / select)
+    if (Object.keys(inst.def.params).length) {
+      section('Config');
+      for (const [pn, pspec] of Object.entries(inst.def.params)) {
+        const lab = doc.createElement('label'); lab.textContent = pspec.label || pn; inspBody.appendChild(lab);
+        let inp;
+        if (pspec.kind === 'select' && Array.isArray(pspec.options)) {
+          inp = doc.createElement('select');
+          for (const o of pspec.options) { const opt = doc.createElement('option'); opt.value = o; opt.textContent = o; inp.appendChild(opt); }
+          inp.value = inst.params[pn] != null ? inst.params[pn] : pspec.default;
+          inp.addEventListener('change', () => { engine.setParam(inst.id, pn, inp.value); markDirty(); });
+        } else {
+          inp = doc.createElement('input');
+          inp.type = pspec.kind === 'number' ? 'number' : 'text';
+          inp.value = inst.params[pn] != null ? inst.params[pn] : '';
+          inp.addEventListener('change', () => {
+            engine.setParam(inst.id, pn, pspec.kind === 'number' ? parseFloat(inp.value) : inp.value); markDirty();
+          });
+        }
+        inspBody.appendChild(inp);
       }
-      props.appendChild(inp);
     }
-    for (const k of inst.def.knobs) {
-      const lab = doc.createElement('label'); lab.textContent = k.label + ' (' + (Math.round(engine.knobValue(inst.id, k.name) * 100) / 100) + ')';
-      props.appendChild(lab);
-      const inp = doc.createElement('input'); inp.type = 'range'; inp.min = k.min; inp.max = k.max;
-      inp.step = (k.max - k.min) / 200; inp.value = engine.knobValue(inst.id, k.name);
-      inp.addEventListener('input', () => { engine.setKnob(inst.id, k.name, parseFloat(inp.value)); lab.textContent = k.label + ' (' + (Math.round(parseFloat(inp.value) * 100) / 100) + ')'; markDirty(); });
-      props.appendChild(inp);
+
+    // Knobs (live-bound both ways)
+    if (inst.def.knobs.length) {
+      section('Knobs');
+      for (const k of inst.def.knobs) {
+        const lab = doc.createElement('label');
+        const v = doc.createElement('span'); v.className = 'v';
+        lab.textContent = k.label + ' '; lab.appendChild(v);
+        const inp = doc.createElement('input'); inp.type = 'range'; inp.min = k.min; inp.max = k.max; inp.step = (k.max - k.min) / 200;
+        inp.addEventListener('input', () => { engine.setKnob(inst.id, k.name, parseFloat(inp.value)); markDirty(); });
+        inspBody.append(lab, inp);
+        // bind: knob signal → slider position + value label
+        _inspEffects.push(sr.effect(() => {
+          const val = inst.knobs[k.name].read();
+          v.textContent = fmt(val);
+          if (document.activeElement !== inp) inp.value = val;
+        }));
+      }
     }
-    const del = doc.createElement('button'); del.className = 'pb-btn pb-del'; del.textContent = 'delete module';
-    del.addEventListener('click', () => { engine.removeInstance(inst.id); interaction.select(null); renderProps(null); markDirty(); });
-    props.appendChild(del);
+
+    // Live output readouts
+    if (Object.keys(inst.outputs).length) {
+      section('Outputs');
+      for (const name of Object.keys(inst.outputs)) {
+        const row = doc.createElement('div'); row.className = 'pb-readout';
+        const n = doc.createElement('span'); n.className = 'n'; n.textContent = name;
+        const rv = doc.createElement('span'); rv.className = 'rv';
+        row.append(n, rv); inspBody.appendChild(row);
+        _inspEffects.push(sr.effect(() => { rv.textContent = fmt(inst.outputs[name].read()); }));
+      }
+    }
+
+    const del = doc.createElement('button'); del.className = 'pb-del'; del.textContent = 'delete module';
+    del.addEventListener('click', () => { engine.removeInstance(inst.id); interaction.select(null); renderInspector(null); markDirty(); });
+    inspBody.appendChild(del);
+
+    insp.classList.add('open');
   }
+  inspX.addEventListener('click', () => { interaction.select(null); renderInspector(null); });
 
   // ── theme re-read on shell SettingsChanged ──
   let themeUnsub = null;
@@ -2147,6 +2210,7 @@ function mountPatchbay(ctx) {
     if (ro) ro.disconnect();
     if (typeof themeUnsub === 'function') { try { themeUnsub(); } catch { /* ignore */ } }
     doc.removeEventListener('click', onDocClick);
+    clearInspEffects();
     interaction.detach();
     engine.destroy();
     try { root.removeChild(host); } catch { /* ignore */ }
