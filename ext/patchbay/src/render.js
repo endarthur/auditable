@@ -103,7 +103,9 @@ export function createRenderer(opts) {
     // screws), then header → knob row (only if knobs) → display (fills the
     // middle) → jacks just above the bottom mounting strip. The +RAIL_H on the
     // header keeps content clear of the top rail-cover strip.
-    const headerBottom = RAIL_H + 58;   // title + subtitle + divider, below the top strip
+    // Chrome-less panels (notes) skip the header band, so content starts near
+    // the top rail strip instead of below the title/divider.
+    const headerBottom = def.chrome === false ? RAIL_H + 8 : RAIL_H + 58;
     const jackY = h - RAIL_H - 36;      // jacks above the bottom rail-cover strip
     // Control band: knobs + interactive controls. Knobs/buttons/toggles/
     // switches sit in a short top row; faders are tall — they run down the
@@ -475,20 +477,23 @@ export function createRenderer(opts) {
     ctx.strokeStyle = selected ? bandColor : (colors[style.panel.edge] || colors.border);
     ctx.lineWidth = selected ? 1.5 : 1; rrectPath(ctx, r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1, 2); ctx.stroke();
     // Header content sits below the top rail-cover/mounting strip (RAIL_H).
+    // Chrome-less panels (notes) skip the stripe / title / subtitle / divider.
     if (style.accentStripe) {
       let sc = bandColor;
       if (_showFlow) { const a = _moduleActivity(inst); if (a > 0.05) sc = lighten(bandColor, 0.5 * a); }
       ctx.fillStyle = sc; ctx.fillRect(r.x + 3, r.y + RAIL_H + 3, r.w - 6, 2.5);
     }
-    const headerColor = style.headerColor === 'accent' ? bandColor : (colors[style.headerColor] || colors.text);
-    ctx.fillStyle = headerColor; ctx.font = style.headerFont; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-    ctx.fillText(inst.def.title, r.x + r.w / 2, r.y + RAIL_H + 16);
-    if (inst.def.subtitle) {
-      ctx.fillStyle = colors.textSoft; ctx.font = style.labelFont;
-      ctx.fillText(inst.def.subtitle.toUpperCase(), r.x + r.w / 2, r.y + RAIL_H + 38);
+    if (inst.def.chrome !== false) {
+      const headerColor = style.headerColor === 'accent' ? bandColor : (colors[style.headerColor] || colors.text);
+      ctx.fillStyle = headerColor; ctx.font = style.headerFont; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      ctx.fillText(inst.def.title, r.x + r.w / 2, r.y + RAIL_H + 16);
+      if (inst.def.subtitle) {
+        ctx.fillStyle = colors.textSoft; ctx.font = style.labelFont;
+        ctx.fillText(inst.def.subtitle.toUpperCase(), r.x + r.w / 2, r.y + RAIL_H + 38);
+      }
+      ctx.strokeStyle = colors.rule; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(r.x + 18, r.y + RAIL_H + 56); ctx.lineTo(r.x + r.w - 18, r.y + RAIL_H + 56); ctx.stroke();
     }
-    ctx.strokeStyle = colors.rule; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(r.x + 18, r.y + RAIL_H + 56); ctx.lineTo(r.x + r.w - 18, r.y + RAIL_H + 56); ctx.stroke();
     // display band — pb (Phase C). Guarded so Phase B renders without it.
     if (pb && inst.def.display && lay.display.h > 4) {
       try {

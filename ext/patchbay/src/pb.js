@@ -274,12 +274,31 @@ export function createPb(ctx) {
     ctx.fillText((value == null ? 0 : value).toFixed(opts.decimals ?? 2), cx, cy + rad * 0.52);
   }
 
-  const api = { led, bargraph, scope, lcd, numeric, dot, spectrum, indicator, gauge };
+  // Centered text label — for note/divider panels. Wraps to the slot width and
+  // scales font to opts.size (default fills a chunk of the slot).
+  function text(str, opts = {}) {
+    const s = slot(opts, opts.h || 40);
+    const size = opts.size || Math.min(20, Math.max(11, s.h * 0.5));
+    ctx.fillStyle = opts.color ? col(opts.color) : colors.text;
+    ctx.font = `${opts.weight || 600} ${size}px ${opts.mono ? '"Space Mono", monospace' : 'Barlow, system-ui, sans-serif'}`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const words = String(str == null ? '' : str).split(/\s+/);
+    const lines = []; let line = '';
+    for (const w of words) {
+      const test = line ? line + ' ' + w : w;
+      if (ctx.measureText(test).width > s.w - 8 && line) { lines.push(line); line = w; } else line = test;
+    }
+    if (line) lines.push(line);
+    const lh = size * 1.25, y0 = s.y + s.h / 2 - (lines.length - 1) * lh / 2;
+    lines.forEach((ln, i) => ctx.fillText(ln, s.x + s.w / 2, y0 + i * lh));
+  }
+
+  const api = { led, bargraph, scope, lcd, numeric, dot, spectrum, indicator, gauge, text };
 
   function run(inst, r, out, st, themeColors, accentColor) {
     rect = r; style = st; colors = themeColors; accent = accentColor;
     cursor = { x: r.x + 2, y: r.y + 2 };
-    inst.def.display(api, out, inst.state);
+    inst.def.display(api, out, inst.state, inst.params);
   }
 
   return { run, api };

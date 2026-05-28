@@ -97,6 +97,7 @@ export function defineModule(spec) {
     color: spec.color || 'indigo',
     style: spec.style || 'studio',
     height: spec.height || '3U',
+    chrome: spec.chrome !== false,   // false → no title/subtitle/divider (note/label panels)
     inPorts: normalizePorts(ports.in, false),
     outPorts: normalizePorts(ports.out, true),
     knobs: normalizeKnobs(spec.knobs),

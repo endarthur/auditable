@@ -102,6 +102,7 @@ function defineModule(spec) {
     color: spec.color || 'indigo',
     style: spec.style || 'studio',
     height: spec.height || '3U',
+    chrome: spec.chrome !== false,   // false → no title/subtitle/divider (note/label panels)
     inPorts: normalizePorts(ports.in, false),
     outPorts: normalizePorts(ports.out, true),
     knobs: normalizeKnobs(spec.knobs),
@@ -833,12 +834,31 @@ function createPb(ctx) {
     ctx.fillText((value == null ? 0 : value).toFixed(opts.decimals ?? 2), cx, cy + rad * 0.52);
   }
 
-  const api = { led, bargraph, scope, lcd, numeric, dot, spectrum, indicator, gauge };
+  // Centered text label — for note/divider panels. Wraps to the slot width and
+  // scales font to opts.size (default fills a chunk of the slot).
+  function text(str, opts = {}) {
+    const s = slot(opts, opts.h || 40);
+    const size = opts.size || Math.min(20, Math.max(11, s.h * 0.5));
+    ctx.fillStyle = opts.color ? col(opts.color) : colors.text;
+    ctx.font = `${opts.weight || 600} ${size}px ${opts.mono ? '"Space Mono", monospace' : 'Barlow, system-ui, sans-serif'}`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const words = String(str == null ? '' : str).split(/\s+/);
+    const lines = []; let line = '';
+    for (const w of words) {
+      const test = line ? line + ' ' + w : w;
+      if (ctx.measureText(test).width > s.w - 8 && line) { lines.push(line); line = w; } else line = test;
+    }
+    if (line) lines.push(line);
+    const lh = size * 1.25, y0 = s.y + s.h / 2 - (lines.length - 1) * lh / 2;
+    lines.forEach((ln, i) => ctx.fillText(ln, s.x + s.w / 2, y0 + i * lh));
+  }
+
+  const api = { led, bargraph, scope, lcd, numeric, dot, spectrum, indicator, gauge, text };
 
   function run(inst, r, out, st, themeColors, accentColor) {
     rect = r; style = st; colors = themeColors; accent = accentColor;
     cursor = { x: r.x + 2, y: r.y + 2 };
-    inst.def.display(api, out, inst.state);
+    inst.def.display(api, out, inst.state, inst.params);
   }
 
   return { run, api };
@@ -895,6 +915,7 @@ const STDLIB_MODULES = [
   { type: 'panel.toggle',  label: 'Toggle',  category: 'panel' },
   { type: 'panel.switch',  label: 'Switch',  category: 'panel' },
   { type: 'panel.fader',   label: 'Fader',   category: 'panel' },
+  { type: 'panel.note',    label: 'Note',    category: 'panel' },
   { type: 'disp.number', label: 'Readout',  category: 'display' },
   { type: 'disp.scope',  label: 'Trend',    category: 'display' },
   { type: 'disp.gauge',  label: 'Gauge',    category: 'display' },
@@ -1180,6 +1201,13 @@ function registerStdlib() {
     // the tall fader is the module's body — no separate display.
   });
 
+  defineModule({
+    type: 'panel.note', title: '', subtitle: '', hp: 10, color: 'indigo', style: 'blank', chrome: false,
+    params: { text: { label: 'text', kind: 'text', default: 'note' } },
+    // a label / divider panel — no ports, no chrome, just centered text.
+    display: (pb, _out, _st, params) => pb.text((params && params.text) || '', { h: 999, color: 'textMid' }),
+  });
+
   // ── displays (pass-through monitors) ───────────────────────────────────
   defineModule({
     type: 'disp.number', title: 'READOUT', subtitle: 'DRO', hp: 8, color: 'amber', style: 'lab',
@@ -1410,7 +1438,9 @@ function createRenderer(opts) {
     // screws), then header → knob row (only if knobs) → display (fills the
     // middle) → jacks just above the bottom mounting strip. The +RAIL_H on the
     // header keeps content clear of the top rail-cover strip.
-    const headerBottom = RAIL_H + 58;   // title + subtitle + divider, below the top strip
+    // Chrome-less panels (notes) skip the header band, so content starts near
+    // the top rail strip instead of below the title/divider.
+    const headerBottom = def.chrome === false ? RAIL_H + 8 : RAIL_H + 58;
     const jackY = h - RAIL_H - 36;      // jacks above the bottom rail-cover strip
     // Control band: knobs + interactive controls. Knobs/buttons/toggles/
     // switches sit in a short top row; faders are tall — they run down the
@@ -1782,20 +1812,23 @@ function createRenderer(opts) {
     ctx.strokeStyle = selected ? bandColor : (colors[style.panel.edge] || colors.border);
     ctx.lineWidth = selected ? 1.5 : 1; rrectPath(ctx, r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1, 2); ctx.stroke();
     // Header content sits below the top rail-cover/mounting strip (RAIL_H).
+    // Chrome-less panels (notes) skip the stripe / title / subtitle / divider.
     if (style.accentStripe) {
       let sc = bandColor;
       if (_showFlow) { const a = _moduleActivity(inst); if (a > 0.05) sc = lighten(bandColor, 0.5 * a); }
       ctx.fillStyle = sc; ctx.fillRect(r.x + 3, r.y + RAIL_H + 3, r.w - 6, 2.5);
     }
-    const headerColor = style.headerColor === 'accent' ? bandColor : (colors[style.headerColor] || colors.text);
-    ctx.fillStyle = headerColor; ctx.font = style.headerFont; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-    ctx.fillText(inst.def.title, r.x + r.w / 2, r.y + RAIL_H + 16);
-    if (inst.def.subtitle) {
-      ctx.fillStyle = colors.textSoft; ctx.font = style.labelFont;
-      ctx.fillText(inst.def.subtitle.toUpperCase(), r.x + r.w / 2, r.y + RAIL_H + 38);
+    if (inst.def.chrome !== false) {
+      const headerColor = style.headerColor === 'accent' ? bandColor : (colors[style.headerColor] || colors.text);
+      ctx.fillStyle = headerColor; ctx.font = style.headerFont; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      ctx.fillText(inst.def.title, r.x + r.w / 2, r.y + RAIL_H + 16);
+      if (inst.def.subtitle) {
+        ctx.fillStyle = colors.textSoft; ctx.font = style.labelFont;
+        ctx.fillText(inst.def.subtitle.toUpperCase(), r.x + r.w / 2, r.y + RAIL_H + 38);
+      }
+      ctx.strokeStyle = colors.rule; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(r.x + 18, r.y + RAIL_H + 56); ctx.lineTo(r.x + r.w - 18, r.y + RAIL_H + 56); ctx.stroke();
     }
-    ctx.strokeStyle = colors.rule; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(r.x + 18, r.y + RAIL_H + 56); ctx.lineTo(r.x + r.w - 18, r.y + RAIL_H + 56); ctx.stroke();
     // display band — pb (Phase C). Guarded so Phase B renders without it.
     if (pb && inst.def.display && lay.display.h > 4) {
       try {

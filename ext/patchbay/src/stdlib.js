@@ -48,6 +48,7 @@ export const STDLIB_MODULES = [
   { type: 'panel.toggle',  label: 'Toggle',  category: 'panel' },
   { type: 'panel.switch',  label: 'Switch',  category: 'panel' },
   { type: 'panel.fader',   label: 'Fader',   category: 'panel' },
+  { type: 'panel.note',    label: 'Note',    category: 'panel' },
   { type: 'disp.number', label: 'Readout',  category: 'display' },
   { type: 'disp.scope',  label: 'Trend',    category: 'display' },
   { type: 'disp.gauge',  label: 'Gauge',    category: 'display' },
@@ -331,6 +332,13 @@ export function registerStdlib() {
     ports: { out: { v: { type: 'number', cable: 'trs' } } },
     process: (_i, k) => ({ v: k.level }),
     // the tall fader is the module's body — no separate display.
+  });
+
+  defineModule({
+    type: 'panel.note', title: '', subtitle: '', hp: 10, color: 'indigo', style: 'blank', chrome: false,
+    params: { text: { label: 'text', kind: 'text', default: 'note' } },
+    // a label / divider panel — no ports, no chrome, just centered text.
+    display: (pb, _out, _st, params) => pb.text((params && params.text) || '', { h: 999, color: 'textMid' }),
   });
 
   // ── displays (pass-through monitors) ───────────────────────────────────
