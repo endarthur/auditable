@@ -8,7 +8,7 @@ import assert from 'node:assert';
 import { signal, computed, effect, batch } from '../ext/sideact/src/signals.js';
 import { defineModule, clearModuleRegistry } from '../ext/patchbay/src/sdk.js';
 import { createEngine } from '../ext/patchbay/src/engine.js';
-import { createRenderer, HP, RAIL_LEFT } from '../ext/patchbay/src/render.js';
+import { createRenderer, HP, RAIL_LEFT, RAIL_H, ROW_H } from '../ext/patchbay/src/render.js';
 import { createPb } from '../ext/patchbay/src/pb.js';
 
 const sr = { signal, computed, effect, batch };
@@ -62,7 +62,9 @@ test('moduleRect derives pixel rect from row + hpPos', () => {
   const r = renderer.moduleRect(engine.instances.get('k'));
   assert.equal(r.x, RAIL_LEFT + 4 * HP);
   assert.equal(r.w, 10 * HP);
-  assert.equal(r.h, 300);
+  // Faceplate covers both rails: content height + a rail strip top & bottom.
+  assert.equal(r.h, ROW_H + 2 * RAIL_H);
+  assert.equal(r.y, 100 - RAIL_H);
 });
 
 test('layout places knobs above ports with a display band between', () => {

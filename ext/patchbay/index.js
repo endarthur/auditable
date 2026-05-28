@@ -1185,13 +1185,16 @@ function createRenderer(opts) {
   }
   function rowHeight(i) { return (rack.rows[i] && rack.rows[i].kind === '1U') ? ROW_1U_H : ROW_H; }
 
+  // The faceplate covers both rails (top of the top rail to bottom of the
+  // bottom rail) — like a real Eurorack panel. Rails show only in empty HP
+  // gaps; screws (drawMounts) sit on the faceplate over the rail holes.
   function moduleRect(inst) {
     const ys = rowYs();
     const x = RAIL_LEFT + inst.hpPos * HP;
-    const y = ys[inst.row] != null ? ys[inst.row] : ys[0];
+    const rowY = ys[inst.row] != null ? ys[inst.row] : ys[0];
     const w = inst.def.hp * HP;
-    const h = rowHeight(inst.row);
-    return { x, y, w, h };
+    const ch = rowHeight(inst.row);
+    return { x, y: rowY - RAIL_H, w, h: ch + 2 * RAIL_H };
   }
 
   // Auto-layout: knob row near top, ports row near bottom, display band between.
@@ -1200,12 +1203,14 @@ function createRenderer(opts) {
     let lay = _layoutCache.get(def);
     if (lay) return lay;
     const w = def.hp * HP;
-    const h = def.height === '1U' ? ROW_1U_H : ROW_H;
-    // Flow the panel vertically so it fills rail-to-rail with no dead zone:
-    // header → knob row (only if knobs) → display (fills the middle) → jacks
-    // anchored near the bottom rail.
-    const headerBottom = 58;        // title + subtitle + divider
-    const jackY = h - 36;           // jacks sit just above the bottom rail
+    const ch = def.height === '1U' ? ROW_1U_H : ROW_H;
+    const h = ch + 2 * RAIL_H;      // faceplate height (covers both rails)
+    // Flow the panel vertically: a mounting strip over each rail (for the
+    // screws), then header → knob row (only if knobs) → display (fills the
+    // middle) → jacks just above the bottom mounting strip. The +RAIL_H on the
+    // header keeps content clear of the top rail-cover strip.
+    const headerBottom = RAIL_H + 58;   // title + subtitle + divider, below the top strip
+    const jackY = h - RAIL_H - 36;      // jacks above the bottom rail-cover strip
     const knobs = [];
     const nK = def.knobs.length;
     const knobY = headerBottom + 26;
@@ -1331,7 +1336,8 @@ function createRenderer(opts) {
     const hpPos = clamp(Math.round((wx - RAIL_LEFT) / HP - grabHp), 0, Math.max(0, maxHp));
     return {
       row, hpPos, valid: !overlaps(inst, row, hpPos),
-      x: RAIL_LEFT + hpPos * HP, y: ys[row], w: inst.def.hp * HP, h: rowHeight(row),
+      // Ghost matches the faceplate extent (covers the rails).
+      x: RAIL_LEFT + hpPos * HP, y: ys[row] - RAIL_H, w: inst.def.hp * HP, h: rowHeight(row) + 2 * RAIL_H,
     };
   }
 
@@ -1447,8 +1453,12 @@ function createRenderer(opts) {
   function drawMounts(inst) {
     if (!getStyle(inst.def.style).screws) return;
     const r = moduleRect(inst);
-    const topY = r.y - 2, botY = r.y + r.h + 2;   // bridge the rail/panel seam
-    for (const sx of [r.x + 9, r.x + r.w - 9]) { railScrew(sx, topY); railScrew(sx, botY); }
+    // Screws on the faceplate's mounting strips, over the rail hole centres.
+    // The rail holes are HP-grid-centred (drawRail), so align to HP centres
+    // near each panel edge — the screw reads as going through the faceplate
+    // into the rail beneath.
+    const topY = r.y + RAIL_H / 2, botY = r.y + r.h - RAIL_H / 2;
+    for (const sx of [r.x + HP / 2, r.x + r.w - HP / 2]) { railScrew(sx, topY); railScrew(sx, botY); }
   }
   function drawKnob(cx, cy, value, label, accentColor) {
     const r = 14;
@@ -1496,16 +1506,17 @@ function createRenderer(opts) {
     ctx.fillRect(r.x, r.y, r.w, 1.5); ctx.fillRect(r.x, r.y + r.h - 1.5, r.w, 1.5);
     ctx.strokeStyle = selected ? bandColor : (colors[style.panel.edge] || colors.border);
     ctx.lineWidth = selected ? 1.5 : 1; rrectPath(ctx, r.x + 0.5, r.y + 0.5, r.w - 1, r.h - 1, 2); ctx.stroke();
-    if (style.accentStripe) { ctx.fillStyle = bandColor; ctx.fillRect(r.x + 3, r.y + 5, r.w - 6, 2.5); }
+    // Header content sits below the top rail-cover/mounting strip (RAIL_H).
+    if (style.accentStripe) { ctx.fillStyle = bandColor; ctx.fillRect(r.x + 3, r.y + RAIL_H + 3, r.w - 6, 2.5); }
     const headerColor = style.headerColor === 'accent' ? bandColor : (colors[style.headerColor] || colors.text);
     ctx.fillStyle = headerColor; ctx.font = style.headerFont; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-    ctx.fillText(inst.def.title, r.x + r.w / 2, r.y + 16);
+    ctx.fillText(inst.def.title, r.x + r.w / 2, r.y + RAIL_H + 16);
     if (inst.def.subtitle) {
       ctx.fillStyle = colors.textSoft; ctx.font = style.labelFont;
-      ctx.fillText(inst.def.subtitle.toUpperCase(), r.x + r.w / 2, r.y + 38);
+      ctx.fillText(inst.def.subtitle.toUpperCase(), r.x + r.w / 2, r.y + RAIL_H + 38);
     }
     ctx.strokeStyle = colors.rule; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(r.x + 18, r.y + 56); ctx.lineTo(r.x + r.w - 18, r.y + 56); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(r.x + 18, r.y + RAIL_H + 56); ctx.lineTo(r.x + r.w - 18, r.y + RAIL_H + 56); ctx.stroke();
     // display band — pb (Phase C). Guarded so Phase B renders without it.
     if (pb && inst.def.display && lay.display.h > 4) {
       try {
