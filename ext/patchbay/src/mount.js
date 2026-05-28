@@ -140,7 +140,7 @@ export function mountPatchbay(ctx) {
   host.appendChild(wrap);
   root.appendChild(host);
 
-  const PREFIX_LABEL = { src: 'Sources', math: 'Math', logic: 'Logic', ctrl: 'Control', panel: 'Panel', disp: 'Display', io: 'I/O' };
+  const PREFIX_LABEL = { src: 'Sources', math: 'Math', logic: 'Logic', proc: 'Process', ctrl: 'Control', panel: 'Panel', disp: 'Display', io: 'I/O' };
   function moduleGroups() {
     const groups = new Map();
     for (const def of listModuleDefs()) {

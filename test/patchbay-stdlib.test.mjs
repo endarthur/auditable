@@ -169,6 +169,68 @@ test('controls round-trip through the rack doc (button persists released)', asyn
   assert.equal(e2.controlValue('tr', 'fire'), 0);   // momentary persists released
 });
 
+test('math.abs and math.minmax compute', async () => {
+  const e = createEngine(sr);
+  e.addInstance('s', 'src.const', { knobs: { value: -3 } });
+  e.addInstance('ab', 'math.abs');
+  e.connect({ id: 's', port: 'v' }, { id: 'ab', port: 'x' });
+  await tick();
+  assert.equal(e.outputValue('ab', 'y'), 3);
+
+  e.addInstance('a', 'src.const', { knobs: { value: 7 } });
+  e.addInstance('b', 'src.const', { knobs: { value: 2 } });
+  e.addInstance('mm', 'math.minmax');
+  e.connect({ id: 'a', port: 'v' }, { id: 'mm', port: 'a' });
+  e.connect({ id: 'b', port: 'v' }, { id: 'mm', port: 'b' });
+  await tick();
+  assert.equal(e.outputValue('mm', 'lo'), 2);
+  assert.equal(e.outputValue('mm', 'hi'), 7);
+});
+
+test('proc.sh holds on the trigger rising edge', async () => {
+  const e = createEngine(sr);
+  e.addInstance('in', 'src.const', { knobs: { value: 0.4 } });
+  e.addInstance('tg', 'src.const', { knobs: { value: 0 } });
+  e.addInstance('sh', 'proc.sh');
+  e.connect({ id: 'in', port: 'v' }, { id: 'sh', port: 'in' });
+  e.connect({ id: 'tg', port: 'v' }, { id: 'sh', port: 'trig' });
+  await tick();
+  assert.equal(e.outputValue('sh', 'out'), 0);          // not triggered yet
+
+  e.setKnob('tg', 'value', 1); await tick();            // rising edge → capture 0.4
+  assert.equal(e.outputValue('sh', 'out'), 0.4);
+  e.setKnob('in', 'value', 0.9); await tick();          // input moves, but no new edge
+  assert.equal(e.outputValue('sh', 'out'), 0.4);        // still held
+  e.setKnob('tg', 'value', 0); await tick();
+  e.setKnob('tg', 'value', 1); await tick();            // new rising edge → capture 0.9
+  assert.equal(e.outputValue('sh', 'out'), 0.9);
+});
+
+test('proc.counter counts rising edges and resets', async () => {
+  const e = createEngine(sr);
+  e.addInstance('tg', 'src.const', { knobs: { value: 0 } });
+  e.addInstance('rs', 'src.const', { knobs: { value: 0 } });
+  e.addInstance('ct', 'proc.counter');
+  e.connect({ id: 'tg', port: 'v' }, { id: 'ct', port: 'trig' });
+  e.connect({ id: 'rs', port: 'v' }, { id: 'ct', port: 'reset' });
+  const pulse = async () => { e.setKnob('tg', 'value', 1); await tick(); e.setKnob('tg', 'value', 0); await tick(); };
+  await pulse(); await pulse(); await pulse();
+  assert.equal(e.outputValue('ct', 'count'), 3);
+  e.setKnob('rs', 'value', 1); await tick();
+  assert.equal(e.outputValue('ct', 'count'), 0);
+});
+
+test('src.noise / proc.slew / disp.xy / disp.meter instantiate without throwing', () => {
+  const e = createEngine(sr);
+  assert.doesNotThrow(() => {
+    e.addInstance('n', 'src.noise');
+    e.addInstance('sl', 'proc.slew');
+    e.addInstance('xy', 'disp.xy');
+    e.addInstance('mt', 'disp.meter');
+  });
+  e.destroy();   // clears the noise/slew intervals
+});
+
 test('ctrl.pid / ctrl.timer / disp.gauge instantiate without throwing', () => {
   const e = createEngine(sr);
   assert.doesNotThrow(() => {

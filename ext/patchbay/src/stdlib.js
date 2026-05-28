@@ -26,10 +26,16 @@ function parseTopic(s) {
 export const STDLIB_MODULES = [
   { type: 'src.const',   label: 'Setpoint', category: 'source' },
   { type: 'src.lfo',     label: 'Signal',   category: 'source' },
+  { type: 'src.noise',   label: 'Noise',    category: 'source' },
   { type: 'math.add',    label: 'Sum',      category: 'math' },
   { type: 'math.mul',    label: 'Product',  category: 'math' },
   { type: 'math.scale',  label: 'Gain',     category: 'math' },
   { type: 'math.limit',  label: 'Limit',    category: 'math' },
+  { type: 'math.abs',    label: 'Abs',      category: 'math' },
+  { type: 'math.minmax', label: 'MinMax',   category: 'math' },
+  { type: 'proc.sh',     label: 'S&H',      category: 'process' },
+  { type: 'proc.counter', label: 'Counter', category: 'process' },
+  { type: 'proc.slew',   label: 'Slew',     category: 'process' },
   { type: 'logic.compare', label: 'Compare', category: 'logic' },
   { type: 'logic.and',   label: 'And',      category: 'logic' },
   { type: 'logic.or',    label: 'Or',       category: 'logic' },
@@ -45,6 +51,8 @@ export const STDLIB_MODULES = [
   { type: 'disp.number', label: 'Readout',  category: 'display' },
   { type: 'disp.scope',  label: 'Trend',    category: 'display' },
   { type: 'disp.gauge',  label: 'Gauge',    category: 'display' },
+  { type: 'disp.xy',     label: 'XY',       category: 'display' },
+  { type: 'disp.meter',  label: 'Meter',    category: 'display' },
   { type: 'io.abus-in',  label: 'Tag In',   category: 'io' },
   { type: 'io.abus-out', label: 'Tag Out',  category: 'io' },
   { type: 'io.vfs-read', label: 'File',     category: 'io' },
@@ -87,6 +95,22 @@ export function registerStdlib() {
     },
   });
 
+  defineModule({
+    type: 'src.noise', title: 'NOISE', subtitle: 'random', hp: 8, color: 'indigo',
+    knobs: { rate: { label: 'RATE', default: 0.5, min: 0, max: 1 } },
+    ports: { out: { out: { type: 'number', cable: 'banana' } } },
+    setup(ctx, inst) {
+      let last = now();
+      const id = setInterval(() => {
+        const period = 1000 - inst.knobs.rate.read() * 970;   // ~1 s slow … 30 ms fast
+        const t = now();
+        if (t - last >= period) { last = t; inst.outputs.out.write(Math.random()); }
+      }, 16);
+      return () => clearInterval(id);
+    },
+    display: (pb, out, st) => { st.buf = st.buf || []; st.buf.push(out.out || 0); if (st.buf.length > 64) st.buf.shift(); pb.scope(st.buf, { min: 0, max: 1 }); },
+  });
+
   // ── math / signal conditioning ────────────────────────────────────────
   defineModule({
     type: 'math.add', title: 'SUM', subtitle: 'a + b', hp: 8, color: 'teal',
@@ -118,6 +142,19 @@ export function registerStdlib() {
       return { y };
     },
     display: (pb, out, st) => pb.led(st.clipped ? 1 : 0, { label: 'CLIP', color: st.clipped ? 'amber' : 'textSoft' }),
+  });
+
+  defineModule({
+    type: 'math.abs', title: 'ABS', subtitle: '|x|', hp: 6, color: 'teal',
+    ports: { in: { x: 'number' }, out: { y: { type: 'number', cable: 'trs' } } },
+    process: (i) => ({ y: Math.abs(i.x || 0) }),
+    display: (pb, out) => pb.numeric(out.y, { digits: 4, decimals: 2 }),
+  });
+  defineModule({
+    type: 'math.minmax', title: 'MINMAX', subtitle: 'lo · hi', hp: 8, color: 'teal',
+    ports: { in: { a: 'number', b: 'number' }, out: { lo: { type: 'number', cable: 'trs' }, hi: { type: 'number', cable: 'trs' } } },
+    process: (i) => ({ lo: Math.min(i.a || 0, i.b || 0), hi: Math.max(i.a || 0, i.b || 0) }),
+    display: (pb, out) => { pb.numeric(out.hi, { digits: 4, decimals: 1 }); pb.numeric(out.lo, { digits: 4, decimals: 1 }); },
   });
 
   // ── logic ────────────────────────────────────────────────────────────
@@ -225,6 +262,47 @@ export function registerStdlib() {
     display: (pb, out, st) => pb.led(out.q, { label: st.mode || 'TON', color: out.q ? 'green' : 'textSoft' }),
   });
 
+  // ── signal processing ─────────────────────────────────────────────────
+  defineModule({
+    type: 'proc.sh', title: 'S&H', subtitle: 'sample/hold', hp: 8, color: 'amber',
+    ports: { in: { in: 'number', trig: 'number' }, out: { out: { type: 'number', cable: 'trs' } } },
+    process: (i, _k, st) => {
+      const t = (i.trig || 0) > 0.5;
+      if (t && !st.lt) st.held = i.in || 0;   // capture on rising edge
+      st.lt = t;
+      return { out: st.held || 0 };
+    },
+    display: (pb, out) => pb.numeric(out.out, { digits: 5, decimals: 2 }),
+  });
+  defineModule({
+    type: 'proc.counter', title: 'COUNT', subtitle: 'edge count', hp: 8, color: 'green',
+    ports: { in: { trig: 'number', reset: 'number' }, out: { count: { type: 'number', cable: 'trs' } } },
+    process: (i, _k, st) => {
+      const t = (i.trig || 0) > 0.5, r = (i.reset || 0) > 0.5;
+      if (r && !st.lr) st.count = 0;
+      else if (t && !st.lt) st.count = (st.count || 0) + 1;
+      st.lt = t; st.lr = r;
+      return { count: st.count || 0 };
+    },
+    display: (pb, out) => pb.numeric(out.count, { digits: 5, decimals: 0 }),
+  });
+  defineModule({
+    type: 'proc.slew', title: 'SLEW', subtitle: 'lag filter', hp: 8, color: 'amber',
+    knobs: { rate: { label: 'RATE', default: 0.3, min: 0, max: 1 } },
+    ports: { in: { in: 'number' }, out: { out: { type: 'number', cable: 'trs' } } },
+    setup(ctx, inst) {
+      inst.state.y = inst.inputs.in.value() || 0;
+      const id = setInterval(() => {
+        const x = inst.inputs.in.value() || 0;
+        const a = 0.02 + inst.knobs.rate.read() * 0.5;
+        inst.state.y += (x - inst.state.y) * a;
+        inst.outputs.out.write(inst.state.y);
+      }, 30);
+      return () => clearInterval(id);
+    },
+    display: (pb, _out, st) => { st.buf = st.buf || []; st.buf.push(st.y || 0); if (st.buf.length > 96) st.buf.shift(); pb.scope(st.buf, {}); },
+  });
+
   // ── panel controls (operable by hand) ─────────────────────────────────
   defineModule({
     type: 'panel.trigger', title: 'TRIG', subtitle: 'momentary', hp: 8, color: 'orange',
@@ -285,6 +363,22 @@ export function registerStdlib() {
     ports: { in: { x: 'number' }, out: { x: { type: 'number', cable: 'trs' } } },
     process: (i) => ({ x: i.x }),
     display: (pb, out) => pb.gauge(out.x || 0, { min: 0, max: 1, color: 'teal', maxH: 150 }),
+  });
+
+  defineModule({
+    type: 'disp.xy', title: 'XY', subtitle: 'scope', hp: 10, color: 'orange', style: 'analog',
+    ports: { in: { x: 'number', y: 'number' } },
+    process: (i, _k, st) => { st.x = i.x || 0; st.y = i.y || 0; return {}; },
+    display: (pb, _out, st) => pb.dot(st.x || 0, st.y || 0, { color: 'orange' }),
+  });
+  defineModule({
+    type: 'disp.meter', title: 'METER', subtitle: '3-ch', hp: 10, color: 'amber', style: 'lab',
+    ports: { in: { a: 'number', b: 'number', c: 'number' } },
+    process: (i, _k, st) => { st.a = i.a; st.b = i.b; st.c = i.c; return {}; },
+    display: (pb, _out, st) => {
+      const f = (v) => (v == null ? '—' : (Math.round(v * 100) / 100));
+      pb.lcd('A ' + f(st.a)); pb.lcd('B ' + f(st.b)); pb.lcd('C ' + f(st.c));
+    },
   });
 
   // ── I/O (the field boundary) ───────────────────────────────────────────
