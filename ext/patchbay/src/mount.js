@@ -87,6 +87,9 @@ export function mountPatchbay(ctx) {
       font:12px/1.4 Barlow,system-ui,sans-serif;display:none}
     .pb-pop.open{display:block}
     .pb-grp{font:600 9px "Space Mono",monospace;text-transform:uppercase;letter-spacing:.12em;color:var(--sw-orange,#D4672E);padding:7px 6px 2px}
+    .pb-search{width:100%;box-sizing:border-box;margin-bottom:5px;background:var(--sw-bg-deep,#0E1012);border:1px solid var(--sw-border,#2F3338);
+      color:var(--sw-text,#DDD);border-radius:4px;padding:6px 8px;font:12px Barlow,system-ui,sans-serif;outline:none}
+    .pb-search:focus{border-color:var(--sw-orange,#D4672E)}
     .pb-item{display:flex;justify-content:space-between;gap:12px;padding:5px 8px;border-radius:4px;cursor:pointer;color:var(--sw-text,#DDD)}
     .pb-item:hover{background:var(--sw-bg-bright,#25282D)}
     .pb-item .t{color:var(--sw-text-soft,#6E6C68);font:10px/1.5 "Space Mono",monospace}
@@ -131,6 +134,12 @@ export function mountPatchbay(ctx) {
   // Right-click context menu (cursor-placement add / delete). Lists module
   // types grouped by category via renderModuleList (shared with the Add menu).
   const ctxMenu = doc.createElement('div'); ctxMenu.className = 'pb-pop'; wrap.appendChild(ctxMenu);
+  // Searchable add (Add → Find module… / Ctrl+K): input + filtered list.
+  const searchPop = doc.createElement('div'); searchPop.className = 'pb-pop';
+  searchPop.style.cssText = 'top:8px;left:50%;transform:translateX(-50%);width:264px';
+  const searchInput = doc.createElement('input'); searchInput.className = 'pb-search'; searchInput.placeholder = 'find module…';
+  const searchList = doc.createElement('div');
+  searchPop.append(searchInput, searchList); wrap.appendChild(searchPop);
 
   const insp = doc.createElement('div'); insp.className = 'pb-insp';
   const inspHd = doc.createElement('div'); inspHd.className = 'pb-insp-hd';
@@ -193,10 +202,36 @@ export function mountPatchbay(ctx) {
   }
   function hideMenus() { ctxMenu.classList.remove('open'); }
 
+  // ── searchable add (find module) ──
+  function filteredDefs(q) {
+    const ql = (q || '').trim().toLowerCase();
+    return listModuleDefs().filter((d) => !ql || d.title.toLowerCase().includes(ql) || d.type.toLowerCase().includes(ql));
+  }
+  function renderSearch(q) {
+    searchList.innerHTML = '';
+    for (const d of filteredDefs(q).slice(0, 40)) {
+      const it = doc.createElement('div'); it.className = 'pb-item';
+      const n = doc.createElement('span'); n.textContent = d.title;
+      const t = doc.createElement('span'); t.className = 't'; t.textContent = d.type;
+      it.append(n, t);
+      it.addEventListener('mousedown', (e) => { e.preventDefault(); addModuleAt(d.type); closeSearch(); });
+      searchList.appendChild(it);
+    }
+  }
+  function openAddSearch() { hideMenus(); searchInput.value = ''; renderSearch(''); searchPop.classList.add('open'); searchInput.focus(); }
+  function closeSearch() { searchPop.classList.remove('open'); }
+  searchInput.addEventListener('input', () => renderSearch(searchInput.value));
+  searchInput.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Escape') closeSearch();
+    else if (e.key === 'Enter') { const d = filteredDefs(searchInput.value)[0]; if (d) { addModuleAt(d.type); closeSearch(); } }
+  });
+
   // ── engine + renderer + interaction ──
   let dirty = false;
   let showFlow = false;     // View → Show flow (signal-flow animation, Phase 4)
   let inspectedId = null;   // the module the inspector is pinned to (explicit open only)
+  let undoStack = [], redoStack = [], lastCommitted = null;   // undo: rack-doc snapshots
   const markDirty = () => { if (!dirty) { dirty = true; onDirty(true); } };
   const engine = createEngine(sr, { bus, sr });
   const pb = createPb(canvas.getContext('2d'));
@@ -209,6 +244,8 @@ export function mountPatchbay(ctx) {
     const rack = deserializeRack(d || blankRack(), engine);
     renderer.setRack(rack);
     renderer.resize(); renderer.fitToViewport();
+    lastCommitted = currentDoc();          // baseline for undo; a fresh load resets history
+    undoStack.length = 0; redoStack.length = 0;
   }
   if (rackDoc) applyDoc(rackDoc);
   else {
@@ -216,8 +253,34 @@ export function mountPatchbay(ctx) {
     if (tab && tab.path) store.load().then((d) => { if (d) { engine.destroy(); applyDoc(d); } }).catch(() => {});
   }
 
+  // ── undo / redo ── snapshot the rack doc at each commit point; restore by
+  // rebuilding the engine. commit() = an undoable checkpoint (also marks
+  // dirty); markDirty() alone is for live/continuous edits (slider drags).
+  function currentDoc() { return serializeRack(engine, renderer.rack); }
+  function commit() {
+    if (lastCommitted) { undoStack.push(lastCommitted); if (undoStack.length > 80) undoStack.shift(); }
+    redoStack = [];
+    lastCommitted = currentDoc();
+    markDirty();
+  }
+  function restoreDoc(d) {
+    closeInspector(); interaction.select(null);
+    engine.destroy();
+    renderer.setRack(deserializeRack(d, engine));
+  }
+  function undo() {
+    if (!undoStack.length) return;
+    redoStack.push(lastCommitted); lastCommitted = undoStack.pop();
+    restoreDoc(lastCommitted); markDirty();
+  }
+  function redo() {
+    if (!redoStack.length) return;
+    undoStack.push(lastCommitted); lastCommitted = redoStack.pop();
+    restoreDoc(lastCommitted); markDirty();
+  }
+
   const interaction = attachInteraction(renderer, engine, canvas, {
-    onChange: markDirty,
+    onChange: commit,
     // Selection only highlights; the inspector opens on an explicit action
     // (double-click here, or right-click → Configure / Edit → Configure).
     onConfigure: (id) => openInspector(id),
@@ -228,7 +291,7 @@ export function mountPatchbay(ctx) {
   function addModuleAt(type, place) {
     const def = getModuleDef(type); if (!def) return;
     engine.addInstance(freshId(engine, type), type, place || freeSlot(engine, renderer.rack, def));
-    markDirty();
+    commit();
   }
   function slotAtWorld(def, wx, wy) {
     const ys = renderer.rowYs();
@@ -243,7 +306,27 @@ export function mountPatchbay(ctx) {
     const knobs = {}; for (const n in inst.knobs) knobs[n] = inst.knobs[n].read();
     const place = freeSlot(engine, renderer.rack, inst.def);
     engine.addInstance(freshId(engine, inst.type), inst.type, { ...place, knobs, params: { ...inst.params } });
-    markDirty();
+    commit();
+  }
+
+  // Copy / paste a single module (type + knob / control / param / appearance).
+  let _clipboard = null;
+  function snapshotInst(inst) {
+    const knobs = {}; for (const n in inst.knobs) knobs[n] = inst.knobs[n].read();
+    const controls = {};
+    for (const n in inst.controls) controls[n] = inst.controls[n].def.kind === 'button' ? 0 : inst.controls[n].read();
+    return { type: inst.type, knobs, controls, params: { ...inst.params }, color: inst.color, style: inst.style };
+  }
+  function copySelected() {
+    const inst = interaction.state.selectedId && engine.instances.get(interaction.state.selectedId);
+    if (inst) _clipboard = snapshotInst(inst);
+  }
+  function pasteClipboard() {
+    if (!_clipboard) return;
+    const def = getModuleDef(_clipboard.type); if (!def) return;
+    const place = freeSlot(engine, renderer.rack, def);
+    engine.addInstance(freshId(engine, _clipboard.type), _clipboard.type, { ...place, ..._clipboard });
+    commit();
   }
 
   // Inspector is opened only by an explicit action (double-click / right-click
@@ -255,14 +338,14 @@ export function mountPatchbay(ctx) {
     engine.removeInstance(id);
     if (interaction.state.selectedId === id) interaction.select(null);
     if (inspectedId === id) closeInspector();
-    markDirty();
+    commit();
   }
 
   // ── rack mutators (the Rack menu) ──
   function addRow(kind) {
     const r = renderer.rack;
     renderer.setRack({ ...r, rows: [...r.rows, { kind }] });
-    renderer.fitToViewport(); markDirty();
+    renderer.fitToViewport(); commit();
   }
   function removeRow() {
     const r = renderer.rack;
@@ -270,7 +353,7 @@ export function mountPatchbay(ctx) {
     const last = r.rows.length - 1;
     for (const inst of engine.instances.values()) if (inst.row >= last) inst.row = last - 1;
     renderer.setRack({ ...r, rows: r.rows.slice(0, -1) });
-    renderer.fitToViewport(); markDirty();
+    renderer.fitToViewport(); commit();
   }
   function resizeRack(delta) {
     const r = renderer.rack;
@@ -279,12 +362,12 @@ export function mountPatchbay(ctx) {
       inst.hpPos = Math.max(0, Math.min(hp - inst.def.hp, inst.hpPos));
     }
     renderer.setRack({ ...r, hp });
-    renderer.fitToViewport(); markDirty();
+    renderer.fitToViewport(); commit();
   }
 
   // ── menubar (injected MenuBar) ──
   function moduleAddMenu() {
-    const out = [];
+    const out = [{ label: 'Find module…', action: 'add:find', shortcut: 'Ctrl+K' }, '---'];
     for (const [grp, defs] of moduleGroups()) {
       out.push({ label: grp, children: defs.map((d) => ({ label: d.title, action: 'add:' + d.type })) });
     }
@@ -292,10 +375,15 @@ export function mountPatchbay(ctx) {
   }
   // Action dispatch — shared by the menubar, the Ctrl+S handler, and tests.
   function runAction(a) {
+    if (a === 'add:find') { setTimeout(openAddSearch, 0); return; }   // defer past the menu's own click
     if (a.startsWith('add:')) return addModuleAt(a.slice(4));
     const sel = interaction.state.selectedId;
     switch (a) {
       case 'file:save': flush(); break;
+      case 'edit:undo': undo(); break;
+      case 'edit:redo': redo(); break;
+      case 'edit:copy': copySelected(); break;
+      case 'edit:paste': pasteClipboard(); break;
       case 'edit:configure': if (sel) openInspector(sel); break;
       case 'edit:dup': if (sel) duplicateModule(sel); break;
       case 'edit:del': if (sel) removeModule(sel); break;
@@ -320,6 +408,12 @@ export function mountPatchbay(ctx) {
       ] },
       { label: 'Add', items: () => moduleAddMenu() },
       { label: 'Edit', items: () => [
+        { label: 'Undo', action: 'edit:undo', shortcut: 'Ctrl+Z', disabled: !undoStack.length },
+        { label: 'Redo', action: 'edit:redo', shortcut: 'Ctrl+Shift+Z', disabled: !redoStack.length },
+        '---',
+        { label: 'Copy',  action: 'edit:copy', shortcut: 'Ctrl+C', disabled: !interaction.state.selectedId },
+        { label: 'Paste', action: 'edit:paste', shortcut: 'Ctrl+V', disabled: !_clipboard },
+        '---',
         { label: 'Configure…', action: 'edit:configure', disabled: !interaction.state.selectedId },
         { label: 'Duplicate',  action: 'edit:dup', disabled: !interaction.state.selectedId },
         { label: 'Delete',     action: 'edit:del', disabled: !interaction.state.selectedId },
@@ -364,7 +458,7 @@ export function mountPatchbay(ctx) {
       const hitCable = renderer.findCableAt(wx, wy);
       if (hitCable) {
         const it = doc.createElement('div'); it.className = 'pb-item danger'; it.textContent = 'Remove cable';
-        it.addEventListener('click', (ev) => { ev.stopPropagation(); engine.removeCable(hitCable); markDirty(); hideMenus(); });
+        it.addEventListener('click', (ev) => { ev.stopPropagation(); engine.removeCable(hitCable); commit(); hideMenus(); });
         ctxMenu.appendChild(it);
       } else {
         renderModuleList(ctxMenu, (type) => { addModuleAt(type, slotAtWorld(getModuleDef(type), wx, wy)); hideMenus(); });
@@ -378,17 +472,22 @@ export function mountPatchbay(ctx) {
   // Dismiss popovers on any plain click outside them. Chips + the toolbar
   // button stopPropagation, so picks don't self-close (multi-add) and the
   // toggle isn't immediately undone.
-  const onDocClick = () => hideMenus();
+  const onDocClick = (e) => { hideMenus(); if (!searchPop.contains(e.target)) closeSearch(); };
   doc.addEventListener('click', onDocClick);
 
   // Ctrl/Cmd+S inside the surface. Once the canvas has focus the shell's
   // window-level handler never sees the keystroke (it fires in this iframe),
   // so the surface flushes itself — same pattern as the text editor surface.
   const onKeyDown = (e) => {
-    if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
-      e.preventDefault();
-      flush();
-    }
+    if (!(e.ctrlKey || e.metaKey)) return;
+    const k = e.key.toLowerCase();
+    if (k === 's') { e.preventDefault(); flush(); }
+    else if (k === 'z' && e.shiftKey) { e.preventDefault(); redo(); }
+    else if (k === 'z') { e.preventDefault(); undo(); }
+    else if (k === 'y') { e.preventDefault(); redo(); }
+    else if (k === 'c') { copySelected(); }
+    else if (k === 'v') { pasteClipboard(); }
+    else if (k === 'k') { e.preventDefault(); openAddSearch(); }
   };
   doc.addEventListener('keydown', onKeyDown);
 
@@ -422,13 +521,13 @@ export function mountPatchbay(ctx) {
           inp = doc.createElement('select');
           for (const o of pspec.options) { const opt = doc.createElement('option'); opt.value = o; opt.textContent = o; inp.appendChild(opt); }
           inp.value = inst.params[pn] != null ? inst.params[pn] : pspec.default;
-          inp.addEventListener('change', () => { engine.setParam(inst.id, pn, inp.value); markDirty(); });
+          inp.addEventListener('change', () => { engine.setParam(inst.id, pn, inp.value); commit(); });
         } else {
           inp = doc.createElement('input');
           inp.type = pspec.kind === 'number' ? 'number' : 'text';
           inp.value = inst.params[pn] != null ? inst.params[pn] : '';
           inp.addEventListener('change', () => {
-            engine.setParam(inst.id, pn, pspec.kind === 'number' ? parseFloat(inp.value) : inp.value); markDirty();
+            engine.setParam(inst.id, pn, pspec.kind === 'number' ? parseFloat(inp.value) : inp.value); commit();
           });
         }
         inspBody.appendChild(inp);
@@ -444,6 +543,7 @@ export function mountPatchbay(ctx) {
         lab.textContent = k.label + ' '; lab.appendChild(v);
         const inp = doc.createElement('input'); inp.type = 'range'; inp.min = k.min; inp.max = k.max; inp.step = (k.max - k.min) / 200;
         inp.addEventListener('input', () => { engine.setKnob(inst.id, k.name, parseFloat(inp.value)); markDirty(); });
+        inp.addEventListener('change', commit);   // one undo step per drag
         inspBody.append(lab, inp);
         // bind: knob signal → slider position + value label
         _inspEffects.push(sr.effect(() => {
@@ -464,12 +564,13 @@ export function mountPatchbay(ctx) {
         if (c.kind === 'fader') {
           const inp = doc.createElement('input'); inp.type = 'range'; inp.min = c.min; inp.max = c.max; inp.step = (c.max - c.min) / 200;
           inp.addEventListener('input', () => { engine.setControl(inst.id, c.name, parseFloat(inp.value)); markDirty(); });
+          inp.addEventListener('change', commit);
           inspBody.append(lab, inp);
           _inspEffects.push(sr.effect(() => { const val = inst.controls[c.name].read(); v.textContent = fmt(val); if (document.activeElement !== inp) inp.value = val; }));
         } else if (c.kind === 'switch') {
           const inp = doc.createElement('select');
           for (let i = 0; i < c.count; i++) { const o = doc.createElement('option'); o.value = i; o.textContent = (c.positions && c.positions[i]) || ('pos ' + i); inp.appendChild(o); }
-          inp.addEventListener('change', () => { engine.setControl(inst.id, c.name, parseInt(inp.value, 10)); markDirty(); });
+          inp.addEventListener('change', () => { engine.setControl(inst.id, c.name, parseInt(inp.value, 10)); commit(); });
           inspBody.append(lab, inp);
           _inspEffects.push(sr.effect(() => { const val = inst.controls[c.name].read() | 0; v.textContent = (c.positions && c.positions[val]) || val; if (document.activeElement !== inp) inp.value = val; }));
         } else {
@@ -482,7 +583,7 @@ export function mountPatchbay(ctx) {
             const rel = () => engine.setControl(inst.id, c.name, 0);
             btn.addEventListener('pointerup', rel); btn.addEventListener('pointerleave', rel);
           } else {
-            btn.addEventListener('click', () => { engine.setControl(inst.id, c.name, (engine.controlValue(inst.id, c.name) | 0) ? 0 : 1); markDirty(); });
+            btn.addEventListener('click', () => { engine.setControl(inst.id, c.name, (engine.controlValue(inst.id, c.name) | 0) ? 0 : 1); commit(); });
           }
           _inspEffects.push(sr.effect(() => {
             const on = (inst.controls[c.name].read() | 0) === 1;
@@ -517,11 +618,11 @@ export function mountPatchbay(ctx) {
       inspBody.appendChild(sel);
     };
     dropdown('Accent', WIRE_COLORS, inst.color, inst.def.color, (v) => {
-      engine.setAppearance(inst.id, 'color', v); markDirty();
+      engine.setAppearance(inst.id, 'color', v); commit();
       inspH4.style.color = readThemeColors(doc.documentElement)[v || inst.def.color] || 'inherit';
     });
     dropdown('Panel style', listStyles(), inst.style, inst.def.style, (v) => {
-      engine.setAppearance(inst.id, 'style', v); markDirty();
+      engine.setAppearance(inst.id, 'style', v); commit();
     });
 
     const del = doc.createElement('button'); del.className = 'pb-del'; del.textContent = 'delete module';
