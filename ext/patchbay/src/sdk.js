@@ -41,6 +41,32 @@ function normalizeKnobs(obj) {
   return out;
 }
 
+// Interactive panel controls — operable widgets (vs knobs which only drag).
+// kind: 'button' (momentary: 1 while pressed), 'toggle' (latching bool),
+// 'switch' (N-position rotary, integer 0..N-1), 'fader' (vertical value slider).
+// All are persistent signals at runtime (button persists 0); only render +
+// interaction differ. They share the value namespace with knobs in process().
+function normalizeControls(obj) {
+  const out = [];
+  for (const [name, raw] of Object.entries(obj || {})) {
+    const c = (raw && typeof raw === 'object') ? raw : {};
+    const kind = c.kind || 'toggle';
+    const count = kind === 'switch'
+      ? (Array.isArray(c.positions) ? c.positions.length : (c.count || 4))
+      : 0;
+    out.push({
+      name, kind,
+      label: c.label || name.toUpperCase(),
+      default: ('default' in c) ? c.default : (kind === 'fader' ? 0.5 : 0),
+      min: typeof c.min === 'number' ? c.min : 0,
+      max: typeof c.max === 'number' ? c.max : 1,
+      positions: Array.isArray(c.positions) ? c.positions : null,
+      count,
+    });
+  }
+  return out;
+}
+
 function normalizeParams(obj) {
   // params are config fields (e.g. an A-Bus topic, a VFS path) edited in the
   // properties panel — NOT reactive signals. name → { label, kind, default }.
@@ -74,6 +100,7 @@ export function defineModule(spec) {
     inPorts: normalizePorts(ports.in, false),
     outPorts: normalizePorts(ports.out, true),
     knobs: normalizeKnobs(spec.knobs),
+    controls: normalizeControls(spec.controls),
     params: normalizeParams(spec.params),
     process: typeof spec.process === 'function' ? spec.process : null,
     setup: typeof spec.setup === 'function' ? spec.setup : null,

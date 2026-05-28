@@ -24,14 +24,21 @@ export function serializeRack(engine, rack) {
   for (const inst of engine.instances.values()) {
     const knobs = {};
     for (const name in inst.knobs) knobs[name] = inst.knobs[name].read();
-    modules.push({
+    const controls = {};
+    for (const name in inst.controls) {
+      // momentary buttons persist released (0), not whatever transient state.
+      controls[name] = inst.controls[name].def.kind === 'button' ? 0 : inst.controls[name].read();
+    }
+    const m = {
       id: inst.id,
       type: inst.type,
       row: inst.row,
       hpPos: inst.hpPos,
       knobs,
       params: { ...inst.params },
-    });
+    };
+    if (Object.keys(controls).length) m.controls = controls;
+    modules.push(m);
   }
   const cables = engine.cables.map((c) => ({
     from: { id: c.from.id, port: c.from.port },
@@ -58,7 +65,7 @@ export function deserializeRack(doc, engine) {
   };
   for (const m of (d.modules || [])) {
     try {
-      engine.addInstance(m.id, m.type, { row: m.row, hpPos: m.hpPos, knobs: m.knobs, params: m.params });
+      engine.addInstance(m.id, m.type, { row: m.row, hpPos: m.hpPos, knobs: m.knobs, controls: m.controls, params: m.params });
     } catch (e) {
       console.error('patchbay: skipping bad module on load:', m && m.id, e);
     }

@@ -85,13 +85,24 @@ export function attachInteraction(renderer, engine, canvas, opts = {}) {
     }
 
     // knob → turn
-    const knobHit = renderer.findKnobAt(wx, wy);
-    if (knobHit) {
-      select(knobHit.id);
-      const inst = engine.instances.get(knobHit.id);
-      const kdef = inst.def.knobs.find((k) => k.name === knobHit.name);
-      gesture = { kind: 'knob', id: knobHit.id, name: knobHit.name, kdef,
-                  startVal: engine.knobValue(knobHit.id, knobHit.name), startSy: sy, pointerId: e.pointerId };
+    // control cell (knob / fader = value-drag; button = hold; toggle/switch = click)
+    const ctlHit = renderer.findControlAt(wx, wy);
+    if (ctlHit) {
+      select(ctlHit.id);
+      const inst = engine.instances.get(ctlHit.id);
+      if (ctlHit.kind === 'knob' || ctlHit.kind === 'fader') {
+        const isKnob = ctlHit.kind === 'knob';
+        const def = (isKnob ? inst.def.knobs : inst.def.controls).find((d) => d.name === ctlHit.name);
+        const startVal = isKnob ? engine.knobValue(ctlHit.id, ctlHit.name) : engine.controlValue(ctlHit.id, ctlHit.name);
+        gesture = { kind: 'value', id: ctlHit.id, name: ctlHit.name, isKnob, cdef: def, startVal, startSy: sy, moved: false, pointerId: e.pointerId };
+      } else if (ctlHit.kind === 'button') {
+        engine.setControl(ctlHit.id, ctlHit.name, 1);   // 1 while held
+        onChange();
+        gesture = { kind: 'button', id: ctlHit.id, name: ctlHit.name, pointerId: e.pointerId };
+      } else {   // toggle / switch — act on release (click)
+        gesture = { kind: 'press', id: ctlHit.id, name: ctlHit.name, ckind: ctlHit.kind,
+                    count: inst.def.controls.find((d) => d.name === ctlHit.name)?.count || 2, pointerId: e.pointerId };
+      }
       return;
     }
 
@@ -143,11 +154,13 @@ export function attachInteraction(renderer, engine, canvas, opts = {}) {
       const snap = renderer.snapTarget(gesture.inst, wx, wy, gesture.grabHp);
       state.dragGhost = { x: snap.x, y: snap.y, w: snap.w, h: snap.h, valid: snap.valid };
       if (snap.valid) { gesture.inst.row = snap.row; gesture.inst.hpPos = snap.hpPos; }
-    } else if (gesture.kind === 'knob') {
-      const range = (gesture.kdef.max - gesture.kdef.min) || 1;
+    } else if (gesture.kind === 'value') {
+      const range = (gesture.cdef.max - gesture.cdef.min) || 1;
       const dv = (gesture.startSy - sy) / 160 * range;   // drag up → increase
-      const v = clamp(gesture.startVal + dv, gesture.kdef.min, gesture.kdef.max);
-      engine.setKnob(gesture.id, gesture.name, v);
+      const v = clamp(gesture.startVal + dv, gesture.cdef.min, gesture.cdef.max);
+      if (Math.abs(sy - gesture.startSy) > 2) gesture.moved = true;
+      if (gesture.isKnob) engine.setKnob(gesture.id, gesture.name, v);
+      else engine.setControl(gesture.id, gesture.name, v);
     } else if (gesture.kind === 'wire') {
       state.mouse = { x: wx, y: wy };
       if (state.dragCable) state.dragCable.mouse = state.mouse;
@@ -170,7 +183,25 @@ export function attachInteraction(renderer, engine, canvas, opts = {}) {
       else if (gesture.inst.row !== gesture.startRow || gesture.inst.hpPos !== gesture.startHp) onChange();
       state.dragGhost = null; gesture = null; return;
     }
-    if (gesture.kind === 'knob') { onChange(); gesture = null; return; }
+    if (gesture.kind === 'value') { onChange(); gesture = null; return; }
+
+    if (gesture.kind === 'button') {
+      engine.setControl(gesture.id, gesture.name, 0);   // release
+      onChange(); gesture = null; return;
+    }
+
+    if (gesture.kind === 'press') {
+      // click on toggle / switch (released over the same control)
+      const [wx, wy] = lastWorld(e);
+      const hit = renderer.findControlAt(wx, wy);
+      if (hit && hit.id === gesture.id && hit.name === gesture.name) {
+        const cur = engine.controlValue(gesture.id, gesture.name) | 0;
+        if (gesture.ckind === 'toggle') engine.setControl(gesture.id, gesture.name, cur ? 0 : 1);
+        else if (gesture.ckind === 'switch') engine.setControl(gesture.id, gesture.name, (cur + 1) % gesture.count);
+        onChange();
+      }
+      gesture = null; return;
+    }
 
     if (gesture.kind === 'wire') {
       const [wx, wy] = lastWorld(e);

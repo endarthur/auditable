@@ -140,7 +140,7 @@ export function mountPatchbay(ctx) {
   host.appendChild(wrap);
   root.appendChild(host);
 
-  const PREFIX_LABEL = { src: 'Sources', math: 'Math', logic: 'Logic', ctrl: 'Control', disp: 'Display', io: 'I/O' };
+  const PREFIX_LABEL = { src: 'Sources', math: 'Math', logic: 'Logic', ctrl: 'Control', panel: 'Panel', disp: 'Display', io: 'I/O' };
   function moduleGroups() {
     const groups = new Map();
     for (const def of listModuleDefs()) {
@@ -380,6 +380,45 @@ export function mountPatchbay(ctx) {
           v.textContent = fmt(val);
           if (document.activeElement !== inp) inp.value = val;
         }));
+      }
+    }
+
+    // Interactive controls (toggle / switch / fader / button) — live-bound.
+    if (inst.def.controls.length) {
+      section('Controls');
+      for (const c of inst.def.controls) {
+        const lab = doc.createElement('label');
+        const v = doc.createElement('span'); v.className = 'v';
+        lab.textContent = c.label + ' '; lab.appendChild(v);
+        if (c.kind === 'fader') {
+          const inp = doc.createElement('input'); inp.type = 'range'; inp.min = c.min; inp.max = c.max; inp.step = (c.max - c.min) / 200;
+          inp.addEventListener('input', () => { engine.setControl(inst.id, c.name, parseFloat(inp.value)); markDirty(); });
+          inspBody.append(lab, inp);
+          _inspEffects.push(sr.effect(() => { const val = inst.controls[c.name].read(); v.textContent = fmt(val); if (document.activeElement !== inp) inp.value = val; }));
+        } else if (c.kind === 'switch') {
+          const inp = doc.createElement('select');
+          for (let i = 0; i < c.count; i++) { const o = doc.createElement('option'); o.value = i; o.textContent = (c.positions && c.positions[i]) || ('pos ' + i); inp.appendChild(o); }
+          inp.addEventListener('change', () => { engine.setControl(inst.id, c.name, parseInt(inp.value, 10)); markDirty(); });
+          inspBody.append(lab, inp);
+          _inspEffects.push(sr.effect(() => { const val = inst.controls[c.name].read() | 0; v.textContent = (c.positions && c.positions[val]) || val; if (document.activeElement !== inp) inp.value = val; }));
+        } else {
+          // toggle / button → a press button
+          const btn = doc.createElement('button'); btn.className = 'pb-del'; btn.style.cssText = 'margin-top:2px;background:var(--sw-bg-deep);border-color:var(--sw-border);color:var(--sw-text)';
+          inspBody.append(lab, btn);
+          if (c.kind === 'button') {
+            btn.textContent = 'PRESS';
+            btn.addEventListener('pointerdown', () => { engine.setControl(inst.id, c.name, 1); markDirty(); });
+            const rel = () => engine.setControl(inst.id, c.name, 0);
+            btn.addEventListener('pointerup', rel); btn.addEventListener('pointerleave', rel);
+          } else {
+            btn.addEventListener('click', () => { engine.setControl(inst.id, c.name, (engine.controlValue(inst.id, c.name) | 0) ? 0 : 1); markDirty(); });
+          }
+          _inspEffects.push(sr.effect(() => {
+            const on = (inst.controls[c.name].read() | 0) === 1;
+            v.textContent = c.kind === 'button' ? '' : (on ? 'ON' : 'OFF');
+            if (c.kind === 'toggle') { btn.textContent = on ? 'ON' : 'OFF'; btn.style.color = on ? 'var(--sw-green)' : 'var(--sw-text-soft)'; }
+          }));
+        }
       }
     }
 

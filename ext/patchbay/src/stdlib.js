@@ -38,6 +38,10 @@ export const STDLIB_MODULES = [
   { type: 'ctrl.alarm',  label: 'Alarm',    category: 'control' },
   { type: 'ctrl.pid',    label: 'PID',      category: 'control' },
   { type: 'ctrl.timer',  label: 'Timer',    category: 'control' },
+  { type: 'panel.trigger', label: 'Trigger', category: 'panel' },
+  { type: 'panel.toggle',  label: 'Toggle',  category: 'panel' },
+  { type: 'panel.switch',  label: 'Switch',  category: 'panel' },
+  { type: 'panel.fader',   label: 'Fader',   category: 'panel' },
   { type: 'disp.number', label: 'Readout',  category: 'display' },
   { type: 'disp.scope',  label: 'Trend',    category: 'display' },
   { type: 'disp.gauge',  label: 'Gauge',    category: 'display' },
@@ -219,6 +223,36 @@ export function registerStdlib() {
       return () => { if (pending) clearTimeout(pending); eff(); };
     },
     display: (pb, out, st) => pb.led(out.q, { label: st.mode || 'TON', color: out.q ? 'green' : 'textSoft' }),
+  });
+
+  // ── panel controls (operable by hand) ─────────────────────────────────
+  defineModule({
+    type: 'panel.trigger', title: 'TRIG', subtitle: 'momentary', hp: 8, color: 'orange',
+    controls: { fire: { kind: 'button', label: 'FIRE' } },
+    ports: { out: { pulse: { type: 'number', cable: 'coax' } } },
+    process: (_i, k) => ({ pulse: k.fire ? 1 : 0 }),
+    display: (pb, out) => pb.led(out.pulse, { label: 'OUT', color: 'orange' }),
+  });
+  defineModule({
+    type: 'panel.toggle', title: 'TOGGLE', subtitle: 'latch', hp: 8, color: 'green',
+    controls: { state: { kind: 'toggle', label: 'ON' } },
+    ports: { out: { q: { type: 'number', cable: 'coax' } } },
+    process: (_i, k) => ({ q: k.state ? 1 : 0 }),
+    display: (pb, out) => pb.led(out.q, { label: 'Q', color: 'green' }),
+  });
+  defineModule({
+    type: 'panel.switch', title: 'SWITCH', subtitle: 'router', hp: 10, color: 'indigo',
+    controls: { pos: { kind: 'switch', label: 'SEL', count: 4 } },
+    ports: { in: { a: 'number', b: 'number', c: 'number', d: 'number' }, out: { out: { type: 'number', cable: 'trs' } } },
+    process: (i, k) => ({ out: [i.a, i.b, i.c, i.d][(k.pos | 0) % 4] || 0 }),
+    display: (pb, out) => pb.numeric(out.out, { digits: 5, decimals: 2 }),
+  });
+  defineModule({
+    type: 'panel.fader', title: 'FADER', subtitle: 'level', hp: 8, color: 'amber',
+    controls: { level: { kind: 'fader', label: 'LVL', default: 0.5, min: 0, max: 1 } },
+    ports: { out: { v: { type: 'number', cable: 'trs' } } },
+    process: (_i, k) => ({ v: k.level }),
+    display: (pb, out) => pb.bargraph(out.v, { steps: 10, min: 0, max: 1 }),
   });
 
   // ── displays (pass-through monitors) ───────────────────────────────────

@@ -31,6 +31,16 @@ export function createEngine(sr, ctx = {}) {
       knobs[k.name] = { read, write, def: k };
     }
 
+    // interactive controls (button/toggle/switch/fader) → signals. Persistent
+    // like knobs; button persists 0 (momentary). They share the value namespace
+    // with knobs when passed to process().
+    const controls = {};
+    for (const c of def.controls) {
+      const init = (opts.controls && c.name in opts.controls) ? opts.controls[c.name] : c.default;
+      const [read, write] = signal(init);
+      controls[c.name] = { read, write, def: c };
+    }
+
     // params (config) → plain editable values
     const params = {};
     for (const [pn, pspec] of Object.entries(def.params)) params[pn] = pspec.default;
@@ -61,7 +71,7 @@ export function createEngine(sr, ctx = {}) {
 
     const state = {};   // per-instance scratch (process/setup/display)
     const inst = {
-      id, type, def, knobs, params, inputs, outputs, state,
+      id, type, def, knobs, controls, params, inputs, outputs, state,
       row: Number.isFinite(opts.row) ? opts.row : 0,
       hpPos: Number.isFinite(opts.hpPos) ? opts.hpPos : 0,
       _processEffect: null, _teardown: null,
@@ -75,6 +85,7 @@ export function createEngine(sr, ctx = {}) {
         for (const name in inputs) inp[name] = inputs[name].value();
         const kv = {};
         for (const name in knobs) kv[name] = knobs[name].read();
+        for (const name in controls) kv[name] = controls[name].read();
         let out;
         try { out = def.process(inp, kv, state); }
         catch (e) { console.error(`patchbay: module "${id}" process threw:`, e); return; }
@@ -179,6 +190,14 @@ export function createEngine(sr, ctx = {}) {
     const i = instances.get(id);
     if (i && i.knobs[name]) i.knobs[name].write(v);
   }
+  function controlValue(id, name) {
+    const i = instances.get(id);
+    return i && i.controls[name] ? i.controls[name].read() : undefined;
+  }
+  function setControl(id, name, v) {
+    const i = instances.get(id);
+    if (i && i.controls[name]) i.controls[name].write(v);
+  }
   // Param changes re-run the I/O setup seam (a new topic/path needs to re-bind).
   function setParam(id, name, v) {
     const i = instances.get(id);
@@ -198,6 +217,6 @@ export function createEngine(sr, ctx = {}) {
   return {
     instances, cables,
     addInstance, removeInstance, connect, disconnect, wouldCycle,
-    outputValue, inputValue, knobValue, setKnob, setParam, destroy,
+    outputValue, inputValue, knobValue, setKnob, controlValue, setControl, setParam, destroy,
   };
 }

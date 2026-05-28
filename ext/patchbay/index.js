@@ -46,6 +46,32 @@ function normalizeKnobs(obj) {
   return out;
 }
 
+// Interactive panel controls — operable widgets (vs knobs which only drag).
+// kind: 'button' (momentary: 1 while pressed), 'toggle' (latching bool),
+// 'switch' (N-position rotary, integer 0..N-1), 'fader' (vertical value slider).
+// All are persistent signals at runtime (button persists 0); only render +
+// interaction differ. They share the value namespace with knobs in process().
+function normalizeControls(obj) {
+  const out = [];
+  for (const [name, raw] of Object.entries(obj || {})) {
+    const c = (raw && typeof raw === 'object') ? raw : {};
+    const kind = c.kind || 'toggle';
+    const count = kind === 'switch'
+      ? (Array.isArray(c.positions) ? c.positions.length : (c.count || 4))
+      : 0;
+    out.push({
+      name, kind,
+      label: c.label || name.toUpperCase(),
+      default: ('default' in c) ? c.default : (kind === 'fader' ? 0.5 : 0),
+      min: typeof c.min === 'number' ? c.min : 0,
+      max: typeof c.max === 'number' ? c.max : 1,
+      positions: Array.isArray(c.positions) ? c.positions : null,
+      count,
+    });
+  }
+  return out;
+}
+
 function normalizeParams(obj) {
   // params are config fields (e.g. an A-Bus topic, a VFS path) edited in the
   // properties panel — NOT reactive signals. name → { label, kind, default }.
@@ -79,6 +105,7 @@ function defineModule(spec) {
     inPorts: normalizePorts(ports.in, false),
     outPorts: normalizePorts(ports.out, true),
     knobs: normalizeKnobs(spec.knobs),
+    controls: normalizeControls(spec.controls),
     params: normalizeParams(spec.params),
     process: typeof spec.process === 'function' ? spec.process : null,
     setup: typeof spec.setup === 'function' ? spec.setup : null,
@@ -130,6 +157,16 @@ function createEngine(sr, ctx = {}) {
       knobs[k.name] = { read, write, def: k };
     }
 
+    // interactive controls (button/toggle/switch/fader) → signals. Persistent
+    // like knobs; button persists 0 (momentary). They share the value namespace
+    // with knobs when passed to process().
+    const controls = {};
+    for (const c of def.controls) {
+      const init = (opts.controls && c.name in opts.controls) ? opts.controls[c.name] : c.default;
+      const [read, write] = signal(init);
+      controls[c.name] = { read, write, def: c };
+    }
+
     // params (config) → plain editable values
     const params = {};
     for (const [pn, pspec] of Object.entries(def.params)) params[pn] = pspec.default;
@@ -160,7 +197,7 @@ function createEngine(sr, ctx = {}) {
 
     const state = {};   // per-instance scratch (process/setup/display)
     const inst = {
-      id, type, def, knobs, params, inputs, outputs, state,
+      id, type, def, knobs, controls, params, inputs, outputs, state,
       row: Number.isFinite(opts.row) ? opts.row : 0,
       hpPos: Number.isFinite(opts.hpPos) ? opts.hpPos : 0,
       _processEffect: null, _teardown: null,
@@ -174,6 +211,7 @@ function createEngine(sr, ctx = {}) {
         for (const name in inputs) inp[name] = inputs[name].value();
         const kv = {};
         for (const name in knobs) kv[name] = knobs[name].read();
+        for (const name in controls) kv[name] = controls[name].read();
         let out;
         try { out = def.process(inp, kv, state); }
         catch (e) { console.error(`patchbay: module "${id}" process threw:`, e); return; }
@@ -278,6 +316,14 @@ function createEngine(sr, ctx = {}) {
     const i = instances.get(id);
     if (i && i.knobs[name]) i.knobs[name].write(v);
   }
+  function controlValue(id, name) {
+    const i = instances.get(id);
+    return i && i.controls[name] ? i.controls[name].read() : undefined;
+  }
+  function setControl(id, name, v) {
+    const i = instances.get(id);
+    if (i && i.controls[name]) i.controls[name].write(v);
+  }
   // Param changes re-run the I/O setup seam (a new topic/path needs to re-bind).
   function setParam(id, name, v) {
     const i = instances.get(id);
@@ -297,7 +343,7 @@ function createEngine(sr, ctx = {}) {
   return {
     instances, cables,
     addInstance, removeInstance, connect, disconnect, wouldCycle,
-    outputValue, inputValue, knobValue, setKnob, setParam, destroy,
+    outputValue, inputValue, knobValue, setKnob, controlValue, setControl, setParam, destroy,
   };
 }
 
@@ -416,14 +462,21 @@ function serializeRack(engine, rack) {
   for (const inst of engine.instances.values()) {
     const knobs = {};
     for (const name in inst.knobs) knobs[name] = inst.knobs[name].read();
-    modules.push({
+    const controls = {};
+    for (const name in inst.controls) {
+      // momentary buttons persist released (0), not whatever transient state.
+      controls[name] = inst.controls[name].def.kind === 'button' ? 0 : inst.controls[name].read();
+    }
+    const m = {
       id: inst.id,
       type: inst.type,
       row: inst.row,
       hpPos: inst.hpPos,
       knobs,
       params: { ...inst.params },
-    });
+    };
+    if (Object.keys(controls).length) m.controls = controls;
+    modules.push(m);
   }
   const cables = engine.cables.map((c) => ({
     from: { id: c.from.id, port: c.from.port },
@@ -450,7 +503,7 @@ function deserializeRack(doc, engine) {
   };
   for (const m of (d.modules || [])) {
     try {
-      engine.addInstance(m.id, m.type, { row: m.row, hpPos: m.hpPos, knobs: m.knobs, params: m.params });
+      engine.addInstance(m.id, m.type, { row: m.row, hpPos: m.hpPos, knobs: m.knobs, controls: m.controls, params: m.params });
     } catch (e) {
       console.error('patchbay: skipping bad module on load:', m && m.id, e);
     }
@@ -812,6 +865,10 @@ const STDLIB_MODULES = [
   { type: 'ctrl.alarm',  label: 'Alarm',    category: 'control' },
   { type: 'ctrl.pid',    label: 'PID',      category: 'control' },
   { type: 'ctrl.timer',  label: 'Timer',    category: 'control' },
+  { type: 'panel.trigger', label: 'Trigger', category: 'panel' },
+  { type: 'panel.toggle',  label: 'Toggle',  category: 'panel' },
+  { type: 'panel.switch',  label: 'Switch',  category: 'panel' },
+  { type: 'panel.fader',   label: 'Fader',   category: 'panel' },
   { type: 'disp.number', label: 'Readout',  category: 'display' },
   { type: 'disp.scope',  label: 'Trend',    category: 'display' },
   { type: 'disp.gauge',  label: 'Gauge',    category: 'display' },
@@ -993,6 +1050,36 @@ function registerStdlib() {
       return () => { if (pending) clearTimeout(pending); eff(); };
     },
     display: (pb, out, st) => pb.led(out.q, { label: st.mode || 'TON', color: out.q ? 'green' : 'textSoft' }),
+  });
+
+  // ── panel controls (operable by hand) ─────────────────────────────────
+  defineModule({
+    type: 'panel.trigger', title: 'TRIG', subtitle: 'momentary', hp: 8, color: 'orange',
+    controls: { fire: { kind: 'button', label: 'FIRE' } },
+    ports: { out: { pulse: { type: 'number', cable: 'coax' } } },
+    process: (_i, k) => ({ pulse: k.fire ? 1 : 0 }),
+    display: (pb, out) => pb.led(out.pulse, { label: 'OUT', color: 'orange' }),
+  });
+  defineModule({
+    type: 'panel.toggle', title: 'TOGGLE', subtitle: 'latch', hp: 8, color: 'green',
+    controls: { state: { kind: 'toggle', label: 'ON' } },
+    ports: { out: { q: { type: 'number', cable: 'coax' } } },
+    process: (_i, k) => ({ q: k.state ? 1 : 0 }),
+    display: (pb, out) => pb.led(out.q, { label: 'Q', color: 'green' }),
+  });
+  defineModule({
+    type: 'panel.switch', title: 'SWITCH', subtitle: 'router', hp: 10, color: 'indigo',
+    controls: { pos: { kind: 'switch', label: 'SEL', count: 4 } },
+    ports: { in: { a: 'number', b: 'number', c: 'number', d: 'number' }, out: { out: { type: 'number', cable: 'trs' } } },
+    process: (i, k) => ({ out: [i.a, i.b, i.c, i.d][(k.pos | 0) % 4] || 0 }),
+    display: (pb, out) => pb.numeric(out.out, { digits: 5, decimals: 2 }),
+  });
+  defineModule({
+    type: 'panel.fader', title: 'FADER', subtitle: 'level', hp: 8, color: 'amber',
+    controls: { level: { kind: 'fader', label: 'LVL', default: 0.5, min: 0, max: 1 } },
+    ports: { out: { v: { type: 'number', cable: 'trs' } } },
+    process: (_i, k) => ({ v: k.level }),
+    display: (pb, out) => pb.bargraph(out.v, { steps: 10, min: 0, max: 1 }),
   });
 
   // ── displays (pass-through monitors) ───────────────────────────────────
@@ -1211,12 +1298,14 @@ function createRenderer(opts) {
     // header keeps content clear of the top rail-cover strip.
     const headerBottom = RAIL_H + 58;   // title + subtitle + divider, below the top strip
     const jackY = h - RAIL_H - 36;      // jacks above the bottom rail-cover strip
-    const knobs = [];
-    const nK = def.knobs.length;
+    // Control band: knobs + interactive controls laid in one row. Knobs are
+    // cells of kind 'knob'; controls carry their own kind (button/toggle/…).
+    const cells = [];
+    for (const k of def.knobs) cells.push({ kind: 'knob', name: k.name, label: k.label });
+    for (const c of def.controls) cells.push({ kind: c.kind, name: c.name, label: c.label, count: c.count });
+    const nC = cells.length;
     const knobY = headerBottom + 26;
-    def.knobs.forEach((k, i) => {
-      knobs.push({ name: k.name, label: k.label, x: (w * (i + 1)) / (nK + 1), y: knobY });
-    });
+    cells.forEach((cell, i) => { cell.x = (w * (i + 1)) / (nC + 1); cell.y = knobY; });
     const ports = [];
     const all = [
       ...def.inPorts.map((p) => ({ name: p.name, side: 'in' })),
@@ -1226,10 +1315,10 @@ function createRenderer(opts) {
     all.forEach((p, i) => {
       ports.push({ ...p, x: (w * (i + 1)) / (nP + 1), y: jackY });
     });
-    const dispTop = nK ? knobY + 24 : headerBottom + 8;
+    const dispTop = nC ? knobY + 28 : headerBottom + 8;
     const dispBottom = jackY - 16;   // leave room above the jack circles
     const display = { x: 14, y: dispTop, w: w - 28, h: Math.max(0, dispBottom - dispTop) };
-    lay = { knobs, ports, display };
+    lay = { cells, ports, display };
     // Manual override (positions in panel-local px).
     if (def.layout && typeof def.layout === 'object') Object.assign(lay, def.layout);
     _layoutCache.set(def, lay);
@@ -1303,15 +1392,17 @@ function createRenderer(opts) {
     }
     return null;
   }
-  function findKnobAt(wx, wy) {
+  // Hit-test a control cell (knob/toggle/button/switch/fader). Returns
+  // { id, name, kind } — interact.js dispatches by kind.
+  function findControlAt(wx, wy) {
     const list = [...engine.instances.values()];
     for (let i = list.length - 1; i >= 0; i--) {
       const inst = list[i];
       const lay = layoutFor(inst.def);
       const rect = moduleRect(inst);
-      for (const k of lay.knobs) {
-        const dx = wx - (rect.x + k.x), dy = wy - (rect.y + k.y);
-        if (dx * dx + dy * dy <= 16 * 16) return { id: inst.id, name: k.name };
+      for (const cell of lay.cells) {
+        const dx = wx - (rect.x + cell.x), dy = wy - (rect.y + cell.y);
+        if (dx * dx + dy * dy <= 17 * 17) return { id: inst.id, name: cell.name, kind: cell.kind };
       }
     }
     return null;
@@ -1477,6 +1568,58 @@ function createRenderer(opts) {
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     ctx.fillText(label, cx, cy + r + 4);
   }
+  // ── interactive controls ──
+  function drawToggle(cx, cy, on, label, accentColor) {
+    const w = 26, h = 15;
+    ctx.fillStyle = colors.bgDeep; rrectPath(ctx, cx - w / 2, cy - h / 2, w, h, 3); ctx.fill();
+    ctx.strokeStyle = colors.border; ctx.lineWidth = 1; rrectPath(ctx, cx - w / 2 + 0.5, cy - h / 2 + 0.5, w - 1, h - 1, 3); ctx.stroke();
+    const kx = on ? cx + w / 2 - 6 : cx - w / 2 + 6;
+    ctx.fillStyle = on ? accentColor : colors.textSoft;
+    ctx.beginPath(); ctx.arc(kx, cy, 5, 0, Math.PI * 2); ctx.fill();
+    if (on) { ctx.globalAlpha = 0.18; ctx.fillStyle = accentColor; rrectPath(ctx, cx - w / 2, cy - h / 2, w, h, 3); ctx.fill(); ctx.globalAlpha = 1; }
+    ctx.fillStyle = colors.textSoft; ctx.font = '8px "Space Mono", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillText(label, cx, cy + h / 2 + 4);
+  }
+  function drawButton(cx, cy, pressed, label, accentColor) {
+    const r = 9;
+    ctx.fillStyle = colors.bgDeep; ctx.beginPath(); ctx.arc(cx, cy, r + 2, 0, Math.PI * 2); ctx.fill();
+    if (pressed) {
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 1.8);
+      g.addColorStop(0, accentColor); g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.globalAlpha = 0.5; ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, r * 1.8, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+    }
+    const g2 = ctx.createRadialGradient(cx - 2, cy - 3, 1, cx, cy, r);
+    g2.addColorStop(0, pressed ? accentColor : '#3a3f46'); g2.addColorStop(1, pressed ? darken(accentColor, 0.3) : colors.bg);
+    ctx.fillStyle = g2; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = pressed ? accentColor : colors.border; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = colors.textSoft; ctx.font = '8px "Space Mono", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillText(label, cx, cy + r + 5);
+  }
+  function drawSwitch(cx, cy, idx, count, label, accentColor) {
+    const n = Math.max(2, count || 2), w = Math.min(30, 7 * n), x0 = cx - w / 2, pip = w / n;
+    ctx.fillStyle = colors.bgDeep; rrectPath(ctx, x0, cy - 7, w, 14, 3); ctx.fill();
+    ctx.strokeStyle = colors.border; ctx.lineWidth = 1; rrectPath(ctx, x0 + 0.5, cy - 6.5, w - 1, 13, 3); ctx.stroke();
+    for (let i = 0; i < n; i++) {
+      ctx.fillStyle = i === idx ? accentColor : colors.textSoft;
+      ctx.globalAlpha = i === idx ? 1 : 0.35;
+      ctx.beginPath(); ctx.arc(x0 + pip * (i + 0.5), cy, 2.4, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = colors.textSoft; ctx.font = '8px "Space Mono", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillText(label, cx, cy + 11);
+  }
+  function drawFader(cx, cy, frac, label, accentColor) {
+    const h = 34, w = 5, x = cx, y0 = cy - h / 2, y1 = cy + h / 2;
+    ctx.strokeStyle = colors.bgDeep; ctx.lineWidth = w; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke();
+    const hy = y1 - h * clamp(frac, 0, 1);
+    ctx.strokeStyle = accentColor; ctx.lineWidth = w - 2;
+    ctx.beginPath(); ctx.moveTo(x, y1); ctx.lineTo(x, hy); ctx.stroke();
+    ctx.fillStyle = colors.text; rrectPath(ctx, x - 7, hy - 3.5, 14, 7, 2); ctx.fill();
+    ctx.strokeStyle = colors.border; ctx.lineWidth = 1; rrectPath(ctx, x - 7, hy - 3.5, 14, 7, 2); ctx.stroke();
+    ctx.fillStyle = colors.textSoft; ctx.font = '8px "Space Mono", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillText(label, cx, y1 + 4);
+  }
   function drawPort(x, y, p, hovered) {
     const col = p.side === 'out' ? accent(p._accent || 'indigo') : colors.jack;
     ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x, y, 8.5, 0, Math.PI * 2); ctx.fill();
@@ -1529,13 +1672,27 @@ function createRenderer(opts) {
           out, style, colors, bandColor);
       } catch (e) { /* display errors never break the rack */ }
     }
-    for (const k of lay.knobs) {
-      // Normalize by the knob's declared range so the needle reflects value
-      // for non-0..1 knobs (gain 0..4, pid gains, …) — drawKnob expects 0..1.
-      const kd = inst.def.knobs.find((d) => d.name === k.name);
-      const raw = engine.knobValue(inst.id, k.name);
-      const norm = (kd && kd.max !== kd.min) ? (raw - kd.min) / (kd.max - kd.min) : raw;
-      drawKnob(r.x + k.x, r.y + k.y, norm, k.label, bandColor);
+    for (const cell of lay.cells) {
+      const cx = r.x + cell.x, cy = r.y + cell.y;
+      if (cell.kind === 'knob') {
+        // Normalize by the knob's declared range so the needle reflects value
+        // for non-0..1 knobs (gain 0..4, pid gains, …) — drawKnob expects 0..1.
+        const kd = inst.def.knobs.find((d) => d.name === cell.name);
+        const raw = engine.knobValue(inst.id, cell.name);
+        const norm = (kd && kd.max !== kd.min) ? (raw - kd.min) / (kd.max - kd.min) : raw;
+        drawKnob(cx, cy, norm, cell.label, bandColor);
+      } else if (cell.kind === 'toggle') {
+        drawToggle(cx, cy, engine.controlValue(inst.id, cell.name) ? 1 : 0, cell.label, bandColor);
+      } else if (cell.kind === 'button') {
+        drawButton(cx, cy, engine.controlValue(inst.id, cell.name) ? 1 : 0, cell.label, bandColor);
+      } else if (cell.kind === 'switch') {
+        drawSwitch(cx, cy, engine.controlValue(inst.id, cell.name) | 0, cell.count, cell.label, bandColor);
+      } else if (cell.kind === 'fader') {
+        const cd = inst.def.controls.find((d) => d.name === cell.name);
+        const raw = engine.controlValue(inst.id, cell.name);
+        const frac = (cd && cd.max !== cd.min) ? (raw - cd.min) / (cd.max - cd.min) : raw;
+        drawFader(cx, cy, frac, cell.label, bandColor);
+      }
     }
     for (const p of lay.ports) {
       p._accent = inst.def.color;
@@ -1651,7 +1808,7 @@ function createRenderer(opts) {
     setRack(r) { rack = r; },
     get rack() { return rack; },
     resize, screenToWorld, fitToViewport, rowYs, rowHeight, moduleRect, layoutFor,
-    portWorldPos, refPos, findPortAt, findModuleAt, findKnobAt, overlaps, snapTarget,
+    portWorldPos, refPos, findPortAt, findModuleAt, findControlAt, overlaps, snapTarget,
     updateCables, draw,
     get W() { return W; }, get H() { return H; }, get DPR() { return DPR; },
     ACCENTS,
@@ -1746,13 +1903,24 @@ function attachInteraction(renderer, engine, canvas, opts = {}) {
     }
 
     // knob → turn
-    const knobHit = renderer.findKnobAt(wx, wy);
-    if (knobHit) {
-      select(knobHit.id);
-      const inst = engine.instances.get(knobHit.id);
-      const kdef = inst.def.knobs.find((k) => k.name === knobHit.name);
-      gesture = { kind: 'knob', id: knobHit.id, name: knobHit.name, kdef,
-                  startVal: engine.knobValue(knobHit.id, knobHit.name), startSy: sy, pointerId: e.pointerId };
+    // control cell (knob / fader = value-drag; button = hold; toggle/switch = click)
+    const ctlHit = renderer.findControlAt(wx, wy);
+    if (ctlHit) {
+      select(ctlHit.id);
+      const inst = engine.instances.get(ctlHit.id);
+      if (ctlHit.kind === 'knob' || ctlHit.kind === 'fader') {
+        const isKnob = ctlHit.kind === 'knob';
+        const def = (isKnob ? inst.def.knobs : inst.def.controls).find((d) => d.name === ctlHit.name);
+        const startVal = isKnob ? engine.knobValue(ctlHit.id, ctlHit.name) : engine.controlValue(ctlHit.id, ctlHit.name);
+        gesture = { kind: 'value', id: ctlHit.id, name: ctlHit.name, isKnob, cdef: def, startVal, startSy: sy, moved: false, pointerId: e.pointerId };
+      } else if (ctlHit.kind === 'button') {
+        engine.setControl(ctlHit.id, ctlHit.name, 1);   // 1 while held
+        onChange();
+        gesture = { kind: 'button', id: ctlHit.id, name: ctlHit.name, pointerId: e.pointerId };
+      } else {   // toggle / switch — act on release (click)
+        gesture = { kind: 'press', id: ctlHit.id, name: ctlHit.name, ckind: ctlHit.kind,
+                    count: inst.def.controls.find((d) => d.name === ctlHit.name)?.count || 2, pointerId: e.pointerId };
+      }
       return;
     }
 
@@ -1804,11 +1972,13 @@ function attachInteraction(renderer, engine, canvas, opts = {}) {
       const snap = renderer.snapTarget(gesture.inst, wx, wy, gesture.grabHp);
       state.dragGhost = { x: snap.x, y: snap.y, w: snap.w, h: snap.h, valid: snap.valid };
       if (snap.valid) { gesture.inst.row = snap.row; gesture.inst.hpPos = snap.hpPos; }
-    } else if (gesture.kind === 'knob') {
-      const range = (gesture.kdef.max - gesture.kdef.min) || 1;
+    } else if (gesture.kind === 'value') {
+      const range = (gesture.cdef.max - gesture.cdef.min) || 1;
       const dv = (gesture.startSy - sy) / 160 * range;   // drag up → increase
-      const v = clamp(gesture.startVal + dv, gesture.kdef.min, gesture.kdef.max);
-      engine.setKnob(gesture.id, gesture.name, v);
+      const v = clamp(gesture.startVal + dv, gesture.cdef.min, gesture.cdef.max);
+      if (Math.abs(sy - gesture.startSy) > 2) gesture.moved = true;
+      if (gesture.isKnob) engine.setKnob(gesture.id, gesture.name, v);
+      else engine.setControl(gesture.id, gesture.name, v);
     } else if (gesture.kind === 'wire') {
       state.mouse = { x: wx, y: wy };
       if (state.dragCable) state.dragCable.mouse = state.mouse;
@@ -1831,7 +2001,25 @@ function attachInteraction(renderer, engine, canvas, opts = {}) {
       else if (gesture.inst.row !== gesture.startRow || gesture.inst.hpPos !== gesture.startHp) onChange();
       state.dragGhost = null; gesture = null; return;
     }
-    if (gesture.kind === 'knob') { onChange(); gesture = null; return; }
+    if (gesture.kind === 'value') { onChange(); gesture = null; return; }
+
+    if (gesture.kind === 'button') {
+      engine.setControl(gesture.id, gesture.name, 0);   // release
+      onChange(); gesture = null; return;
+    }
+
+    if (gesture.kind === 'press') {
+      // click on toggle / switch (released over the same control)
+      const [wx, wy] = lastWorld(e);
+      const hit = renderer.findControlAt(wx, wy);
+      if (hit && hit.id === gesture.id && hit.name === gesture.name) {
+        const cur = engine.controlValue(gesture.id, gesture.name) | 0;
+        if (gesture.ckind === 'toggle') engine.setControl(gesture.id, gesture.name, cur ? 0 : 1);
+        else if (gesture.ckind === 'switch') engine.setControl(gesture.id, gesture.name, (cur + 1) % gesture.count);
+        onChange();
+      }
+      gesture = null; return;
+    }
 
     if (gesture.kind === 'wire') {
       const [wx, wy] = lastWorld(e);
@@ -2033,7 +2221,7 @@ function mountPatchbay(ctx) {
   host.appendChild(wrap);
   root.appendChild(host);
 
-  const PREFIX_LABEL = { src: 'Sources', math: 'Math', logic: 'Logic', ctrl: 'Control', disp: 'Display', io: 'I/O' };
+  const PREFIX_LABEL = { src: 'Sources', math: 'Math', logic: 'Logic', ctrl: 'Control', panel: 'Panel', disp: 'Display', io: 'I/O' };
   function moduleGroups() {
     const groups = new Map();
     for (const def of listModuleDefs()) {
@@ -2273,6 +2461,45 @@ function mountPatchbay(ctx) {
           v.textContent = fmt(val);
           if (document.activeElement !== inp) inp.value = val;
         }));
+      }
+    }
+
+    // Interactive controls (toggle / switch / fader / button) — live-bound.
+    if (inst.def.controls.length) {
+      section('Controls');
+      for (const c of inst.def.controls) {
+        const lab = doc.createElement('label');
+        const v = doc.createElement('span'); v.className = 'v';
+        lab.textContent = c.label + ' '; lab.appendChild(v);
+        if (c.kind === 'fader') {
+          const inp = doc.createElement('input'); inp.type = 'range'; inp.min = c.min; inp.max = c.max; inp.step = (c.max - c.min) / 200;
+          inp.addEventListener('input', () => { engine.setControl(inst.id, c.name, parseFloat(inp.value)); markDirty(); });
+          inspBody.append(lab, inp);
+          _inspEffects.push(sr.effect(() => { const val = inst.controls[c.name].read(); v.textContent = fmt(val); if (document.activeElement !== inp) inp.value = val; }));
+        } else if (c.kind === 'switch') {
+          const inp = doc.createElement('select');
+          for (let i = 0; i < c.count; i++) { const o = doc.createElement('option'); o.value = i; o.textContent = (c.positions && c.positions[i]) || ('pos ' + i); inp.appendChild(o); }
+          inp.addEventListener('change', () => { engine.setControl(inst.id, c.name, parseInt(inp.value, 10)); markDirty(); });
+          inspBody.append(lab, inp);
+          _inspEffects.push(sr.effect(() => { const val = inst.controls[c.name].read() | 0; v.textContent = (c.positions && c.positions[val]) || val; if (document.activeElement !== inp) inp.value = val; }));
+        } else {
+          // toggle / button → a press button
+          const btn = doc.createElement('button'); btn.className = 'pb-del'; btn.style.cssText = 'margin-top:2px;background:var(--sw-bg-deep);border-color:var(--sw-border);color:var(--sw-text)';
+          inspBody.append(lab, btn);
+          if (c.kind === 'button') {
+            btn.textContent = 'PRESS';
+            btn.addEventListener('pointerdown', () => { engine.setControl(inst.id, c.name, 1); markDirty(); });
+            const rel = () => engine.setControl(inst.id, c.name, 0);
+            btn.addEventListener('pointerup', rel); btn.addEventListener('pointerleave', rel);
+          } else {
+            btn.addEventListener('click', () => { engine.setControl(inst.id, c.name, (engine.controlValue(inst.id, c.name) | 0) ? 0 : 1); markDirty(); });
+          }
+          _inspEffects.push(sr.effect(() => {
+            const on = (inst.controls[c.name].read() | 0) === 1;
+            v.textContent = c.kind === 'button' ? '' : (on ? 'ON' : 'OFF');
+            if (c.kind === 'toggle') { btn.textContent = on ? 'ON' : 'OFF'; btn.style.color = on ? 'var(--sw-green)' : 'var(--sw-text-soft)'; }
+          }));
+        }
       }
     }
 

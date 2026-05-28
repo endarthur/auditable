@@ -121,6 +121,54 @@ test('ctrl.alarm trips with hysteresis (Schmitt)', async () => {
   assert.equal(e.outputValue('al', 'trip'), 0);          // < level−hyst → re-armed
 });
 
+test('panel controls: toggle / switch / fader / trigger drive outputs', async () => {
+  const e = createEngine(sr);
+  // toggle
+  e.addInstance('tg', 'panel.toggle', { controls: { state: 1 } });
+  await tick();
+  assert.equal(e.outputValue('tg', 'q'), 1);
+  e.setControl('tg', 'state', 0); await tick();
+  assert.equal(e.outputValue('tg', 'q'), 0);
+
+  // fader → value
+  e.addInstance('fd', 'panel.fader', { controls: { level: 0.25 } });
+  await tick();
+  assert.equal(e.outputValue('fd', 'v'), 0.25);
+
+  // switch router: selects 1 of 4 inputs
+  e.addInstance('s1', 'src.const', { knobs: { value: 11 } });
+  e.addInstance('s2', 'src.const', { knobs: { value: 22 } });
+  e.addInstance('sw', 'panel.switch', { controls: { pos: 0 } });
+  e.connect({ id: 's1', port: 'v' }, { id: 'sw', port: 'a' });
+  e.connect({ id: 's2', port: 'v' }, { id: 'sw', port: 'b' });
+  await tick();
+  assert.equal(e.outputValue('sw', 'out'), 11);   // pos 0 → a
+  e.setControl('sw', 'pos', 1); await tick();
+  assert.equal(e.outputValue('sw', 'out'), 22);   // pos 1 → b
+
+  // trigger: button 1 → pulse 1, 0 → pulse 0
+  e.addInstance('tr', 'panel.trigger');
+  await tick();
+  assert.equal(e.outputValue('tr', 'pulse'), 0);
+  e.setControl('tr', 'fire', 1); await tick();
+  assert.equal(e.outputValue('tr', 'pulse'), 1);
+  e.setControl('tr', 'fire', 0); await tick();
+  assert.equal(e.outputValue('tr', 'pulse'), 0);
+});
+
+test('controls round-trip through the rack doc (button persists released)', async () => {
+  const { serializeRack, deserializeRack } = await import('../ext/patchbay/src/store.js');
+  const e1 = createEngine(sr);
+  e1.addInstance('fd', 'panel.fader', { controls: { level: 0.8 } });
+  e1.addInstance('tr', 'panel.trigger', { controls: { fire: 1 } });   // held at save time
+  const doc = JSON.parse(JSON.stringify(serializeRack(e1, { hp: 64, rows: [{ kind: '3U' }] })));
+  const e2 = createEngine(sr);
+  deserializeRack(doc, e2);
+  await tick();
+  assert.equal(e2.controlValue('fd', 'level'), 0.8);
+  assert.equal(e2.controlValue('tr', 'fire'), 0);   // momentary persists released
+});
+
 test('ctrl.pid / ctrl.timer / disp.gauge instantiate without throwing', () => {
   const e = createEngine(sr);
   assert.doesNotThrow(() => {

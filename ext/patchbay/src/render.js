@@ -105,12 +105,14 @@ export function createRenderer(opts) {
     // header keeps content clear of the top rail-cover strip.
     const headerBottom = RAIL_H + 58;   // title + subtitle + divider, below the top strip
     const jackY = h - RAIL_H - 36;      // jacks above the bottom rail-cover strip
-    const knobs = [];
-    const nK = def.knobs.length;
+    // Control band: knobs + interactive controls laid in one row. Knobs are
+    // cells of kind 'knob'; controls carry their own kind (button/toggle/…).
+    const cells = [];
+    for (const k of def.knobs) cells.push({ kind: 'knob', name: k.name, label: k.label });
+    for (const c of def.controls) cells.push({ kind: c.kind, name: c.name, label: c.label, count: c.count });
+    const nC = cells.length;
     const knobY = headerBottom + 26;
-    def.knobs.forEach((k, i) => {
-      knobs.push({ name: k.name, label: k.label, x: (w * (i + 1)) / (nK + 1), y: knobY });
-    });
+    cells.forEach((cell, i) => { cell.x = (w * (i + 1)) / (nC + 1); cell.y = knobY; });
     const ports = [];
     const all = [
       ...def.inPorts.map((p) => ({ name: p.name, side: 'in' })),
@@ -120,10 +122,10 @@ export function createRenderer(opts) {
     all.forEach((p, i) => {
       ports.push({ ...p, x: (w * (i + 1)) / (nP + 1), y: jackY });
     });
-    const dispTop = nK ? knobY + 24 : headerBottom + 8;
+    const dispTop = nC ? knobY + 28 : headerBottom + 8;
     const dispBottom = jackY - 16;   // leave room above the jack circles
     const display = { x: 14, y: dispTop, w: w - 28, h: Math.max(0, dispBottom - dispTop) };
-    lay = { knobs, ports, display };
+    lay = { cells, ports, display };
     // Manual override (positions in panel-local px).
     if (def.layout && typeof def.layout === 'object') Object.assign(lay, def.layout);
     _layoutCache.set(def, lay);
@@ -197,15 +199,17 @@ export function createRenderer(opts) {
     }
     return null;
   }
-  function findKnobAt(wx, wy) {
+  // Hit-test a control cell (knob/toggle/button/switch/fader). Returns
+  // { id, name, kind } — interact.js dispatches by kind.
+  function findControlAt(wx, wy) {
     const list = [...engine.instances.values()];
     for (let i = list.length - 1; i >= 0; i--) {
       const inst = list[i];
       const lay = layoutFor(inst.def);
       const rect = moduleRect(inst);
-      for (const k of lay.knobs) {
-        const dx = wx - (rect.x + k.x), dy = wy - (rect.y + k.y);
-        if (dx * dx + dy * dy <= 16 * 16) return { id: inst.id, name: k.name };
+      for (const cell of lay.cells) {
+        const dx = wx - (rect.x + cell.x), dy = wy - (rect.y + cell.y);
+        if (dx * dx + dy * dy <= 17 * 17) return { id: inst.id, name: cell.name, kind: cell.kind };
       }
     }
     return null;
@@ -371,6 +375,58 @@ export function createRenderer(opts) {
     ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     ctx.fillText(label, cx, cy + r + 4);
   }
+  // ── interactive controls ──
+  function drawToggle(cx, cy, on, label, accentColor) {
+    const w = 26, h = 15;
+    ctx.fillStyle = colors.bgDeep; rrectPath(ctx, cx - w / 2, cy - h / 2, w, h, 3); ctx.fill();
+    ctx.strokeStyle = colors.border; ctx.lineWidth = 1; rrectPath(ctx, cx - w / 2 + 0.5, cy - h / 2 + 0.5, w - 1, h - 1, 3); ctx.stroke();
+    const kx = on ? cx + w / 2 - 6 : cx - w / 2 + 6;
+    ctx.fillStyle = on ? accentColor : colors.textSoft;
+    ctx.beginPath(); ctx.arc(kx, cy, 5, 0, Math.PI * 2); ctx.fill();
+    if (on) { ctx.globalAlpha = 0.18; ctx.fillStyle = accentColor; rrectPath(ctx, cx - w / 2, cy - h / 2, w, h, 3); ctx.fill(); ctx.globalAlpha = 1; }
+    ctx.fillStyle = colors.textSoft; ctx.font = '8px "Space Mono", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillText(label, cx, cy + h / 2 + 4);
+  }
+  function drawButton(cx, cy, pressed, label, accentColor) {
+    const r = 9;
+    ctx.fillStyle = colors.bgDeep; ctx.beginPath(); ctx.arc(cx, cy, r + 2, 0, Math.PI * 2); ctx.fill();
+    if (pressed) {
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r * 1.8);
+      g.addColorStop(0, accentColor); g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.globalAlpha = 0.5; ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, r * 1.8, 0, Math.PI * 2); ctx.fill(); ctx.globalAlpha = 1;
+    }
+    const g2 = ctx.createRadialGradient(cx - 2, cy - 3, 1, cx, cy, r);
+    g2.addColorStop(0, pressed ? accentColor : '#3a3f46'); g2.addColorStop(1, pressed ? darken(accentColor, 0.3) : colors.bg);
+    ctx.fillStyle = g2; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = pressed ? accentColor : colors.border; ctx.lineWidth = 1; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = colors.textSoft; ctx.font = '8px "Space Mono", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillText(label, cx, cy + r + 5);
+  }
+  function drawSwitch(cx, cy, idx, count, label, accentColor) {
+    const n = Math.max(2, count || 2), w = Math.min(30, 7 * n), x0 = cx - w / 2, pip = w / n;
+    ctx.fillStyle = colors.bgDeep; rrectPath(ctx, x0, cy - 7, w, 14, 3); ctx.fill();
+    ctx.strokeStyle = colors.border; ctx.lineWidth = 1; rrectPath(ctx, x0 + 0.5, cy - 6.5, w - 1, 13, 3); ctx.stroke();
+    for (let i = 0; i < n; i++) {
+      ctx.fillStyle = i === idx ? accentColor : colors.textSoft;
+      ctx.globalAlpha = i === idx ? 1 : 0.35;
+      ctx.beginPath(); ctx.arc(x0 + pip * (i + 0.5), cy, 2.4, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = colors.textSoft; ctx.font = '8px "Space Mono", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillText(label, cx, cy + 11);
+  }
+  function drawFader(cx, cy, frac, label, accentColor) {
+    const h = 34, w = 5, x = cx, y0 = cy - h / 2, y1 = cy + h / 2;
+    ctx.strokeStyle = colors.bgDeep; ctx.lineWidth = w; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke();
+    const hy = y1 - h * clamp(frac, 0, 1);
+    ctx.strokeStyle = accentColor; ctx.lineWidth = w - 2;
+    ctx.beginPath(); ctx.moveTo(x, y1); ctx.lineTo(x, hy); ctx.stroke();
+    ctx.fillStyle = colors.text; rrectPath(ctx, x - 7, hy - 3.5, 14, 7, 2); ctx.fill();
+    ctx.strokeStyle = colors.border; ctx.lineWidth = 1; rrectPath(ctx, x - 7, hy - 3.5, 14, 7, 2); ctx.stroke();
+    ctx.fillStyle = colors.textSoft; ctx.font = '8px "Space Mono", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillText(label, cx, y1 + 4);
+  }
   function drawPort(x, y, p, hovered) {
     const col = p.side === 'out' ? accent(p._accent || 'indigo') : colors.jack;
     ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x, y, 8.5, 0, Math.PI * 2); ctx.fill();
@@ -423,13 +479,27 @@ export function createRenderer(opts) {
           out, style, colors, bandColor);
       } catch (e) { /* display errors never break the rack */ }
     }
-    for (const k of lay.knobs) {
-      // Normalize by the knob's declared range so the needle reflects value
-      // for non-0..1 knobs (gain 0..4, pid gains, …) — drawKnob expects 0..1.
-      const kd = inst.def.knobs.find((d) => d.name === k.name);
-      const raw = engine.knobValue(inst.id, k.name);
-      const norm = (kd && kd.max !== kd.min) ? (raw - kd.min) / (kd.max - kd.min) : raw;
-      drawKnob(r.x + k.x, r.y + k.y, norm, k.label, bandColor);
+    for (const cell of lay.cells) {
+      const cx = r.x + cell.x, cy = r.y + cell.y;
+      if (cell.kind === 'knob') {
+        // Normalize by the knob's declared range so the needle reflects value
+        // for non-0..1 knobs (gain 0..4, pid gains, …) — drawKnob expects 0..1.
+        const kd = inst.def.knobs.find((d) => d.name === cell.name);
+        const raw = engine.knobValue(inst.id, cell.name);
+        const norm = (kd && kd.max !== kd.min) ? (raw - kd.min) / (kd.max - kd.min) : raw;
+        drawKnob(cx, cy, norm, cell.label, bandColor);
+      } else if (cell.kind === 'toggle') {
+        drawToggle(cx, cy, engine.controlValue(inst.id, cell.name) ? 1 : 0, cell.label, bandColor);
+      } else if (cell.kind === 'button') {
+        drawButton(cx, cy, engine.controlValue(inst.id, cell.name) ? 1 : 0, cell.label, bandColor);
+      } else if (cell.kind === 'switch') {
+        drawSwitch(cx, cy, engine.controlValue(inst.id, cell.name) | 0, cell.count, cell.label, bandColor);
+      } else if (cell.kind === 'fader') {
+        const cd = inst.def.controls.find((d) => d.name === cell.name);
+        const raw = engine.controlValue(inst.id, cell.name);
+        const frac = (cd && cd.max !== cd.min) ? (raw - cd.min) / (cd.max - cd.min) : raw;
+        drawFader(cx, cy, frac, cell.label, bandColor);
+      }
     }
     for (const p of lay.ports) {
       p._accent = inst.def.color;
@@ -545,7 +615,7 @@ export function createRenderer(opts) {
     setRack(r) { rack = r; },
     get rack() { return rack; },
     resize, screenToWorld, fitToViewport, rowYs, rowHeight, moduleRect, layoutFor,
-    portWorldPos, refPos, findPortAt, findModuleAt, findKnobAt, overlaps, snapTarget,
+    portWorldPos, refPos, findPortAt, findModuleAt, findControlAt, overlaps, snapTarget,
     updateCables, draw,
     get W() { return W; }, get H() { return H; }, get DPR() { return DPR; },
     ACCENTS,

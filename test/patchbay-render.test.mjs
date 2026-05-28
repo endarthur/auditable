@@ -67,12 +67,13 @@ test('moduleRect derives pixel rect from row + hpPos', () => {
   assert.equal(r.y, 100 - RAIL_H);
 });
 
-test('layout places knobs above ports with a display band between', () => {
+test('layout places control cells above ports with a display band between', () => {
   const { engine, renderer } = build();
-  engine.addInstance('a', 'add');
-  const lay = renderer.layoutFor(engine.instances.get('a').def);
-  assert.equal(lay.ports.length, 3);             // a, b, sum
-  assert.ok(lay.knobs.every((k) => k.y < lay.ports[0].y));
+  engine.addInstance('k', 'knob');
+  const lay = renderer.layoutFor(engine.instances.get('k').def);
+  assert.equal(lay.ports.length, 1);             // v (out)
+  assert.equal(lay.cells.length, 1);             // the 'val' knob
+  assert.ok(lay.cells.every((c) => c.y < lay.ports[0].y));
   assert.ok(lay.display.h > 0);
 });
 
