@@ -326,11 +326,11 @@ export function registerStdlib() {
     display: (pb, out) => pb.numeric(out.out, { digits: 5, decimals: 2 }),
   });
   defineModule({
-    type: 'panel.fader', title: 'FADER', subtitle: 'level', hp: 8, color: 'amber',
+    type: 'panel.fader', title: 'FADER', subtitle: 'level', hp: 5, color: 'amber',
     controls: { level: { kind: 'fader', label: 'LVL', default: 0.5, min: 0, max: 1 } },
     ports: { out: { v: { type: 'number', cable: 'trs' } } },
     process: (_i, k) => ({ v: k.level }),
-    display: (pb, out) => pb.bargraph(out.v, { steps: 10, min: 0, max: 1 }),
+    // the tall fader is the module's body — no separate display.
   });
 
   // ── displays (pass-through monitors) ───────────────────────────────────

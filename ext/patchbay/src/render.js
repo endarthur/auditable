@@ -105,14 +105,23 @@ export function createRenderer(opts) {
     // header keeps content clear of the top rail-cover strip.
     const headerBottom = RAIL_H + 58;   // title + subtitle + divider, below the top strip
     const jackY = h - RAIL_H - 36;      // jacks above the bottom rail-cover strip
-    // Control band: knobs + interactive controls laid in one row. Knobs are
-    // cells of kind 'knob'; controls carry their own kind (button/toggle/…).
+    // Control band: knobs + interactive controls. Knobs/buttons/toggles/
+    // switches sit in a short top row; faders are tall — they run down the
+    // panel body (mixer-style), laid across the width.
     const cells = [];
     for (const k of def.knobs) cells.push({ kind: 'knob', name: k.name, label: k.label });
     for (const c of def.controls) cells.push({ kind: c.kind, name: c.name, label: c.label, count: c.count });
-    const nC = cells.length;
+    const faders = cells.filter((c) => c.kind === 'fader');
+    const others = cells.filter((c) => c.kind !== 'fader');
     const knobY = headerBottom + 26;
-    cells.forEach((cell, i) => { cell.x = (w * (i + 1)) / (nC + 1); cell.y = knobY; });
+    others.forEach((cell, i) => { cell.x = (w * (i + 1)) / (others.length + 1); cell.y = knobY; });
+    const fTop = others.length ? knobY + 24 : headerBottom + 10;
+    const fBot = jackY - 18;
+    faders.forEach((cell, i) => {
+      cell.x = (w * (i + 1)) / (faders.length + 1);
+      cell.y = (fTop + fBot) / 2;
+      cell.h = Math.max(40, fBot - fTop);
+    });
     const ports = [];
     const all = [
       ...def.inPorts.map((p) => ({ name: p.name, side: 'in' })),
@@ -122,9 +131,10 @@ export function createRenderer(opts) {
     all.forEach((p, i) => {
       ports.push({ ...p, x: (w * (i + 1)) / (nP + 1), y: jackY });
     });
-    const dispTop = nC ? knobY + 28 : headerBottom + 8;
+    // Faders occupy the body; no display band when present.
+    const dispTop = others.length ? knobY + 28 : headerBottom + 8;
     const dispBottom = jackY - 16;   // leave room above the jack circles
-    const display = { x: 14, y: dispTop, w: w - 28, h: Math.max(0, dispBottom - dispTop) };
+    const display = { x: 14, y: dispTop, w: w - 28, h: faders.length ? 0 : Math.max(0, dispBottom - dispTop) };
     lay = { cells, ports, display };
     // Manual override (positions in panel-local px).
     if (def.layout && typeof def.layout === 'object') Object.assign(lay, def.layout);
@@ -209,7 +219,11 @@ export function createRenderer(opts) {
       const rect = moduleRect(inst);
       for (const cell of lay.cells) {
         const dx = wx - (rect.x + cell.x), dy = wy - (rect.y + cell.y);
-        if (dx * dx + dy * dy <= 17 * 17) return { id: inst.id, name: cell.name, kind: cell.kind };
+        if (cell.kind === 'fader') {
+          if (Math.abs(dx) <= 11 && Math.abs(dy) <= (cell.h || 34) / 2 + 6) return { id: inst.id, name: cell.name, kind: cell.kind };
+        } else if (dx * dx + dy * dy <= 17 * 17) {
+          return { id: inst.id, name: cell.name, kind: cell.kind };
+        }
       }
     }
     return null;
@@ -415,8 +429,8 @@ export function createRenderer(opts) {
     ctx.fillStyle = colors.textSoft; ctx.font = '8px "Space Mono", monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
     ctx.fillText(label, cx, cy + 11);
   }
-  function drawFader(cx, cy, frac, label, accentColor) {
-    const h = 34, w = 5, x = cx, y0 = cy - h / 2, y1 = cy + h / 2;
+  function drawFader(cx, cy, frac, label, accentColor, hh) {
+    const h = hh || 34, w = 6, x = cx, y0 = cy - h / 2, y1 = cy + h / 2;
     ctx.strokeStyle = colors.bgDeep; ctx.lineWidth = w; ctx.lineCap = 'round';
     ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke();
     const hy = y1 - h * clamp(frac, 0, 1);
@@ -498,7 +512,7 @@ export function createRenderer(opts) {
         const cd = inst.def.controls.find((d) => d.name === cell.name);
         const raw = engine.controlValue(inst.id, cell.name);
         const frac = (cd && cd.max !== cd.min) ? (raw - cd.min) / (cd.max - cd.min) : raw;
-        drawFader(cx, cy, frac, cell.label, bandColor);
+        drawFader(cx, cy, frac, cell.label, bandColor, cell.h);
       }
     }
     for (const p of lay.ports) {
