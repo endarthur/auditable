@@ -137,6 +137,29 @@ test('an input takes a single cable; reconnect replaces it', async () => {
   assert.equal(e.inputValue('sum', 'a'), 9);
 });
 
+test('connect stores a per-cable color; removeCable removes it', () => {
+  const e = createEngine(sr);
+  e.addInstance('a', 'test.knob', { knobs: { val: 2 } });
+  e.addInstance('sum', 'test.add');
+  e.connect({ id: 'a', port: 'v' }, { id: 'sum', port: 'a' }, 'teal');
+  assert.equal(e.cables.length, 1);
+  assert.equal(e.cables[0].color, 'teal');
+  e.removeCable(e.cables[0]);
+  assert.equal(e.cables.length, 0);
+});
+
+test('cable color round-trips through the doc', () => {
+  const e1 = createEngine(sr);
+  e1.addInstance('a', 'test.knob');
+  e1.addInstance('sum', 'test.add');
+  e1.connect({ id: 'a', port: 'v' }, { id: 'sum', port: 'a' }, 'red');
+  const doc = JSON.parse(JSON.stringify(serializeRack(e1, { hp: 64, rows: [{ kind: '3U' }] })));
+  assert.equal(doc.cables[0].color, 'red');
+  const e2 = createEngine(sr);
+  deserializeRack(doc, e2);
+  assert.equal(e2.cables[0].color, 'red');
+});
+
 test('removeInstance tears down its cables', () => {
   const e = createEngine(sr);
   e.addInstance('a', 'test.knob', { knobs: { val: 2 } });

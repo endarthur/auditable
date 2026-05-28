@@ -117,6 +117,13 @@ export function mountPatchbay(ctx) {
       border-radius:4px;padding:6px 10px;font:10px/1 "Space Mono",monospace;text-transform:uppercase;letter-spacing:.08em;cursor:pointer}
     .pb-hud{position:absolute;bottom:8px;right:8px;z-index:5;font:9.5px "Space Mono",monospace;color:var(--sw-text-soft,#6E6C68);
       background:rgba(29,32,36,.88);border:1px solid var(--sw-border,#2F3338);border-radius:4px;padding:5px 8px}
+    .pb-swatches{position:absolute;left:8px;bottom:8px;z-index:5;display:flex;gap:5px;align-items:center;
+      background:rgba(29,32,36,.88);border:1px solid var(--sw-border,#2F3338);border-radius:5px;padding:5px 7px}
+    .pb-swatches .lbl{font:8px "Space Mono",monospace;text-transform:uppercase;letter-spacing:.1em;color:var(--sw-text-soft,#6E6C68);margin-right:1px}
+    .pb-sw{width:14px;height:14px;border-radius:50%;cursor:pointer;border:2px solid transparent;box-sizing:border-box}
+    .pb-sw:hover{border-color:var(--sw-text-soft,#6E6C68)}
+    .pb-sw.sel{border-color:var(--sw-text,#DDD)}
+    .pb-sw.auto{background:repeating-conic-gradient(var(--sw-text-soft,#6E6C68) 0 25%, transparent 0 50%);background-size:7px 7px}
   `;
   const styleEl = doc.createElement('style'); styleEl.textContent = css; host.appendChild(styleEl);
 
@@ -135,6 +142,25 @@ export function mountPatchbay(ctx) {
   insp.append(inspHd, inspBody);
   wrap.appendChild(insp);
   const hud = doc.createElement('div'); hud.className = 'pb-hud'; wrap.appendChild(hud);
+
+  // Wire-color pen: pick the colour the next cable you draw will take
+  // (auto = the source module's accent). Bottom-left swatch strip.
+  const WIRE_COLORS = ['orange', 'teal', 'green', 'amber', 'red', 'indigo'];
+  let wireColor = null;   // null = auto (source accent)
+  const swatches = doc.createElement('div'); swatches.className = 'pb-swatches';
+  const lbl = doc.createElement('span'); lbl.className = 'lbl'; lbl.textContent = 'wire'; swatches.appendChild(lbl);
+  const swEls = [];
+  function mkSwatch(role) {
+    const sw = doc.createElement('div'); sw.className = 'pb-sw' + (role ? '' : ' auto');
+    sw.title = role || 'auto (source colour)';
+    if (role) sw.style.background = 'var(--sw-' + role + ')';
+    sw.addEventListener('click', () => { wireColor = role; swEls.forEach((s) => s.el.classList.toggle('sel', s.role === role)); });
+    swEls.push({ el: sw, role }); swatches.appendChild(sw);
+  }
+  mkSwatch(null);
+  WIRE_COLORS.forEach(mkSwatch);
+  swEls[0].el.classList.add('sel');
+  wrap.appendChild(swatches);
 
   if (MenuBar) host.appendChild(menubarHost);
   host.appendChild(wrap);
@@ -194,6 +220,7 @@ export function mountPatchbay(ctx) {
     // Selection only highlights; the inspector opens on an explicit action
     // (double-click here, or right-click → Configure / Edit → Configure).
     onConfigure: (id) => openInspector(id),
+    wireColor: () => wireColor,
   });
 
   // ── insert (palette + context menu) / fit ──
@@ -333,7 +360,14 @@ export function mountPatchbay(ctx) {
       mkItem('Duplicate', () => duplicateModule(hitMod.id));
       mkItem('Delete', () => removeModule(hitMod.id), true);
     } else {
-      renderModuleList(ctxMenu, (type) => { addModuleAt(type, slotAtWorld(getModuleDef(type), wx, wy)); hideMenus(); });
+      const hitCable = renderer.findCableAt(wx, wy);
+      if (hitCable) {
+        const it = doc.createElement('div'); it.className = 'pb-item danger'; it.textContent = 'Remove cable';
+        it.addEventListener('click', (ev) => { ev.stopPropagation(); engine.removeCable(hitCable); markDirty(); hideMenus(); });
+        ctxMenu.appendChild(it);
+      } else {
+        renderModuleList(ctxMenu, (type) => { addModuleAt(type, slotAtWorld(getModuleDef(type), wx, wy)); hideMenus(); });
+      }
     }
     ctxMenu.style.left = Math.max(4, Math.min(sx, host.clientWidth - 172)) + 'px';
     ctxMenu.style.top = Math.max(4, Math.min(sy, host.clientHeight - 80)) + 'px';

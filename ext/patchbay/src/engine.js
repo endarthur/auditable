@@ -142,8 +142,10 @@ export function createEngine(sr, ctx = {}) {
   }
 
   // Connect producer output (from) → consumer input (to). An input takes a
-  // single cable; reconnecting replaces it. Returns { ok, reason? }.
-  function connect(from, to) {
+  // single cable; reconnecting replaces it. `color` is an optional cable-color
+  // role override (else the render falls back to the source module's accent).
+  // Returns { ok, reason? }.
+  function connect(from, to, color) {
     const src = instances.get(from.id);
     const dst = instances.get(to.id);
     if (!src || !dst) return { ok: false, reason: 'missing-instance' };
@@ -152,8 +154,16 @@ export function createEngine(sr, ctx = {}) {
     if (wouldCycle(from.id, to.id)) return { ok: false, reason: 'cycle' };
     _disconnectInput(to);
     dst.inputs[to.port].wiringWrite({ id: from.id, port: from.port });
-    cables.push({ from: { id: from.id, port: from.port }, to: { id: to.id, port: to.port } });
+    const cable = { from: { id: from.id, port: from.port }, to: { id: to.id, port: to.port } };
+    if (color) cable.color = color;
+    cables.push(cable);
     return { ok: true };
+  }
+
+  // Remove a specific cable object (cable-delete affordance).
+  function removeCable(cable) {
+    const i = cables.indexOf(cable);
+    if (i !== -1) _spliceCable(i);
   }
 
   function _disconnectInput(to) {
@@ -216,7 +226,7 @@ export function createEngine(sr, ctx = {}) {
 
   return {
     instances, cables,
-    addInstance, removeInstance, connect, disconnect, wouldCycle,
+    addInstance, removeInstance, connect, disconnect, removeCable, wouldCycle,
     outputValue, inputValue, knobValue, setKnob, controlValue, setControl, setParam, destroy,
   };
 }

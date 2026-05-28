@@ -268,8 +268,10 @@ function createEngine(sr, ctx = {}) {
   }
 
   // Connect producer output (from) → consumer input (to). An input takes a
-  // single cable; reconnecting replaces it. Returns { ok, reason? }.
-  function connect(from, to) {
+  // single cable; reconnecting replaces it. `color` is an optional cable-color
+  // role override (else the render falls back to the source module's accent).
+  // Returns { ok, reason? }.
+  function connect(from, to, color) {
     const src = instances.get(from.id);
     const dst = instances.get(to.id);
     if (!src || !dst) return { ok: false, reason: 'missing-instance' };
@@ -278,8 +280,16 @@ function createEngine(sr, ctx = {}) {
     if (wouldCycle(from.id, to.id)) return { ok: false, reason: 'cycle' };
     _disconnectInput(to);
     dst.inputs[to.port].wiringWrite({ id: from.id, port: from.port });
-    cables.push({ from: { id: from.id, port: from.port }, to: { id: to.id, port: to.port } });
+    const cable = { from: { id: from.id, port: from.port }, to: { id: to.id, port: to.port } };
+    if (color) cable.color = color;
+    cables.push(cable);
     return { ok: true };
+  }
+
+  // Remove a specific cable object (cable-delete affordance).
+  function removeCable(cable) {
+    const i = cables.indexOf(cable);
+    if (i !== -1) _spliceCable(i);
   }
 
   function _disconnectInput(to) {
@@ -342,7 +352,7 @@ function createEngine(sr, ctx = {}) {
 
   return {
     instances, cables,
-    addInstance, removeInstance, connect, disconnect, wouldCycle,
+    addInstance, removeInstance, connect, disconnect, removeCable, wouldCycle,
     outputValue, inputValue, knobValue, setKnob, controlValue, setControl, setParam, destroy,
   };
 }
@@ -478,10 +488,11 @@ function serializeRack(engine, rack) {
     if (Object.keys(controls).length) m.controls = controls;
     modules.push(m);
   }
-  const cables = engine.cables.map((c) => ({
-    from: { id: c.from.id, port: c.from.port },
-    to: { id: c.to.id, port: c.to.port },
-  }));
+  const cables = engine.cables.map((c) => {
+    const e = { from: { id: c.from.id, port: c.from.port }, to: { id: c.to.id, port: c.to.port } };
+    if (c.color) e.color = c.color;
+    return e;
+  });
   const geom = rack || { hp: 64, rows: [{ kind: '3U' }, { kind: '3U' }] };
   return {
     format: FORMAT,
@@ -509,7 +520,7 @@ function deserializeRack(doc, engine) {
     }
   }
   for (const c of (d.cables || [])) {
-    if (c && c.from && c.to) engine.connect(c.from, c.to);   // cycle/missing rejected silently
+    if (c && c.from && c.to) engine.connect(c.from, c.to, c.color);   // cycle/missing rejected silently
   }
   return rack;
 }
@@ -1837,8 +1848,28 @@ function createRenderer(opts) {
     ctx.fillStyle = lighten(color, 0.45); ctx.beginPath(); ctx.arc(x - 0.9, y - 0.9, 0.95, 0, Math.PI * 2); ctx.fill();
   }
   function cableColor(c) {
+    if (c.color) return accent(c.color);
     const inst = engine.instances.get(c.from.id);
-    return inst ? accent(inst.def.color) : colors.textMid;
+    return inst ? accent(inst.color || inst.def.color) : colors.textMid;
+  }
+  // Hit-test a cable by distance from its rendered polyline (for delete).
+  function findCableAt(wx, wy) {
+    const tol = Math.pow(Math.max(7, 10 / view.scale), 2);
+    for (let ci = engine.cables.length - 1; ci >= 0; ci--) {
+      const pts = _cablePts.get(cableKey(engine.cables[ci]));
+      if (!pts) continue;
+      for (let i = 1; i < pts.length; i++) {
+        const a = pts[i - 1], b = pts[i];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const L2 = dx * dx + dy * dy || 1;
+        let t = ((wx - a.x) * dx + (wy - a.y) * dy) / L2;
+        t = Math.max(0, Math.min(1, t));
+        const px = a.x + dx * t, py = a.y + dy * t;
+        const d2 = (wx - px) * (wx - px) + (wy - py) * (wy - py);
+        if (d2 <= tol) return engine.cables[ci];
+      }
+    }
+    return null;
   }
   function drawDragGhost(ghost) {
     if (!ghost) return;
@@ -1910,7 +1941,9 @@ function createRenderer(opts) {
     if (dpts && state.dragCable) {
       const src = state.dragCable.from || state.dragCable.to;
       const inst = src && engine.instances.get(src.id);
-      drawCableStroke(dpts, inst ? accent(inst.def.color) : colors.textMid);
+      const col = state.wireColor ? accent(state.wireColor)
+        : (inst ? accent(inst.color || inst.def.color) : colors.textMid);
+      drawCableStroke(dpts, col);
     }
   }
 
@@ -1920,7 +1953,7 @@ function createRenderer(opts) {
     setRack(r) { rack = r; },
     get rack() { return rack; },
     resize, screenToWorld, fitToViewport, rowYs, rowHeight, moduleRect, layoutFor,
-    portWorldPos, refPos, findPortAt, findModuleAt, findControlAt, overlaps, snapTarget,
+    portWorldPos, refPos, findPortAt, findModuleAt, findControlAt, findCableAt, overlaps, snapTarget,
     updateCables, draw,
     get W() { return W; }, get H() { return H; }, get DPR() { return DPR; },
     ACCENTS,
@@ -1943,6 +1976,7 @@ function attachInteraction(renderer, engine, canvas, opts = {}) {
   const onChange = opts.onChange || (() => {});       // mark dirty
   const onSelect = opts.onSelect || (() => {});       // selection changed → id|null
   const onConfigure = opts.onConfigure || (() => {}); // explicit configure (double-click) → id
+  const wireColor = opts.wireColor || (() => null);    // current 'pen' color role for new cables
   let _lastModClick = null;                            // { id, t } for double-click detection
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
@@ -2013,6 +2047,7 @@ function attachInteraction(renderer, engine, canvas, opts = {}) {
       }
       state.mouse = { x: wx, y: wy };
       state.dragCable = gesture.from ? { from: gesture.from, to: null, mouse: state.mouse } : null;
+      state.wireColor = wireColor();   // drag preview reflects the current pen
       return;
     }
 
@@ -2147,7 +2182,7 @@ function attachInteraction(renderer, engine, canvas, opts = {}) {
       const [wx, wy] = lastWorld(e);
       const hit = renderer.findPortAt(wx, wy, lastInputType);
       if (hit && hit.side === 'in' && gesture.from) {
-        const res = engine.connect(gesture.from, { id: hit.id, port: hit.port });
+        const res = engine.connect(gesture.from, { id: hit.id, port: hit.port }, wireColor());
         if (res.ok) onChange();
       }
       state.dragCable = null; gesture = null; return;
@@ -2320,6 +2355,13 @@ function mountPatchbay(ctx) {
       border-radius:4px;padding:6px 10px;font:10px/1 "Space Mono",monospace;text-transform:uppercase;letter-spacing:.08em;cursor:pointer}
     .pb-hud{position:absolute;bottom:8px;right:8px;z-index:5;font:9.5px "Space Mono",monospace;color:var(--sw-text-soft,#6E6C68);
       background:rgba(29,32,36,.88);border:1px solid var(--sw-border,#2F3338);border-radius:4px;padding:5px 8px}
+    .pb-swatches{position:absolute;left:8px;bottom:8px;z-index:5;display:flex;gap:5px;align-items:center;
+      background:rgba(29,32,36,.88);border:1px solid var(--sw-border,#2F3338);border-radius:5px;padding:5px 7px}
+    .pb-swatches .lbl{font:8px "Space Mono",monospace;text-transform:uppercase;letter-spacing:.1em;color:var(--sw-text-soft,#6E6C68);margin-right:1px}
+    .pb-sw{width:14px;height:14px;border-radius:50%;cursor:pointer;border:2px solid transparent;box-sizing:border-box}
+    .pb-sw:hover{border-color:var(--sw-text-soft,#6E6C68)}
+    .pb-sw.sel{border-color:var(--sw-text,#DDD)}
+    .pb-sw.auto{background:repeating-conic-gradient(var(--sw-text-soft,#6E6C68) 0 25%, transparent 0 50%);background-size:7px 7px}
   `;
   const styleEl = doc.createElement('style'); styleEl.textContent = css; host.appendChild(styleEl);
 
@@ -2338,6 +2380,25 @@ function mountPatchbay(ctx) {
   insp.append(inspHd, inspBody);
   wrap.appendChild(insp);
   const hud = doc.createElement('div'); hud.className = 'pb-hud'; wrap.appendChild(hud);
+
+  // Wire-color pen: pick the colour the next cable you draw will take
+  // (auto = the source module's accent). Bottom-left swatch strip.
+  const WIRE_COLORS = ['orange', 'teal', 'green', 'amber', 'red', 'indigo'];
+  let wireColor = null;   // null = auto (source accent)
+  const swatches = doc.createElement('div'); swatches.className = 'pb-swatches';
+  const lbl = doc.createElement('span'); lbl.className = 'lbl'; lbl.textContent = 'wire'; swatches.appendChild(lbl);
+  const swEls = [];
+  function mkSwatch(role) {
+    const sw = doc.createElement('div'); sw.className = 'pb-sw' + (role ? '' : ' auto');
+    sw.title = role || 'auto (source colour)';
+    if (role) sw.style.background = 'var(--sw-' + role + ')';
+    sw.addEventListener('click', () => { wireColor = role; swEls.forEach((s) => s.el.classList.toggle('sel', s.role === role)); });
+    swEls.push({ el: sw, role }); swatches.appendChild(sw);
+  }
+  mkSwatch(null);
+  WIRE_COLORS.forEach(mkSwatch);
+  swEls[0].el.classList.add('sel');
+  wrap.appendChild(swatches);
 
   if (MenuBar) host.appendChild(menubarHost);
   host.appendChild(wrap);
@@ -2397,6 +2458,7 @@ function mountPatchbay(ctx) {
     // Selection only highlights; the inspector opens on an explicit action
     // (double-click here, or right-click → Configure / Edit → Configure).
     onConfigure: (id) => openInspector(id),
+    wireColor: () => wireColor,
   });
 
   // ── insert (palette + context menu) / fit ──
@@ -2536,7 +2598,14 @@ function mountPatchbay(ctx) {
       mkItem('Duplicate', () => duplicateModule(hitMod.id));
       mkItem('Delete', () => removeModule(hitMod.id), true);
     } else {
-      renderModuleList(ctxMenu, (type) => { addModuleAt(type, slotAtWorld(getModuleDef(type), wx, wy)); hideMenus(); });
+      const hitCable = renderer.findCableAt(wx, wy);
+      if (hitCable) {
+        const it = doc.createElement('div'); it.className = 'pb-item danger'; it.textContent = 'Remove cable';
+        it.addEventListener('click', (ev) => { ev.stopPropagation(); engine.removeCable(hitCable); markDirty(); hideMenus(); });
+        ctxMenu.appendChild(it);
+      } else {
+        renderModuleList(ctxMenu, (type) => { addModuleAt(type, slotAtWorld(getModuleDef(type), wx, wy)); hideMenus(); });
+      }
     }
     ctxMenu.style.left = Math.max(4, Math.min(sx, host.clientWidth - 172)) + 'px';
     ctxMenu.style.top = Math.max(4, Math.min(sy, host.clientHeight - 80)) + 'px';

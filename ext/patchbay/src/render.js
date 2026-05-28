@@ -550,8 +550,28 @@ export function createRenderer(opts) {
     ctx.fillStyle = lighten(color, 0.45); ctx.beginPath(); ctx.arc(x - 0.9, y - 0.9, 0.95, 0, Math.PI * 2); ctx.fill();
   }
   function cableColor(c) {
+    if (c.color) return accent(c.color);
     const inst = engine.instances.get(c.from.id);
-    return inst ? accent(inst.def.color) : colors.textMid;
+    return inst ? accent(inst.color || inst.def.color) : colors.textMid;
+  }
+  // Hit-test a cable by distance from its rendered polyline (for delete).
+  function findCableAt(wx, wy) {
+    const tol = Math.pow(Math.max(7, 10 / view.scale), 2);
+    for (let ci = engine.cables.length - 1; ci >= 0; ci--) {
+      const pts = _cablePts.get(cableKey(engine.cables[ci]));
+      if (!pts) continue;
+      for (let i = 1; i < pts.length; i++) {
+        const a = pts[i - 1], b = pts[i];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const L2 = dx * dx + dy * dy || 1;
+        let t = ((wx - a.x) * dx + (wy - a.y) * dy) / L2;
+        t = Math.max(0, Math.min(1, t));
+        const px = a.x + dx * t, py = a.y + dy * t;
+        const d2 = (wx - px) * (wx - px) + (wy - py) * (wy - py);
+        if (d2 <= tol) return engine.cables[ci];
+      }
+    }
+    return null;
   }
   function drawDragGhost(ghost) {
     if (!ghost) return;
@@ -623,7 +643,9 @@ export function createRenderer(opts) {
     if (dpts && state.dragCable) {
       const src = state.dragCable.from || state.dragCable.to;
       const inst = src && engine.instances.get(src.id);
-      drawCableStroke(dpts, inst ? accent(inst.def.color) : colors.textMid);
+      const col = state.wireColor ? accent(state.wireColor)
+        : (inst ? accent(inst.color || inst.def.color) : colors.textMid);
+      drawCableStroke(dpts, col);
     }
   }
 
@@ -633,7 +655,7 @@ export function createRenderer(opts) {
     setRack(r) { rack = r; },
     get rack() { return rack; },
     resize, screenToWorld, fitToViewport, rowYs, rowHeight, moduleRect, layoutFor,
-    portWorldPos, refPos, findPortAt, findModuleAt, findControlAt, overlaps, snapTarget,
+    portWorldPos, refPos, findPortAt, findModuleAt, findControlAt, findCableAt, overlaps, snapTarget,
     updateCables, draw,
     get W() { return W; }, get H() { return H; }, get DPR() { return DPR; },
     ACCENTS,

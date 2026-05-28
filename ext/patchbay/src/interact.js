@@ -13,6 +13,7 @@ export function attachInteraction(renderer, engine, canvas, opts = {}) {
   const onChange = opts.onChange || (() => {});       // mark dirty
   const onSelect = opts.onSelect || (() => {});       // selection changed → id|null
   const onConfigure = opts.onConfigure || (() => {}); // explicit configure (double-click) → id
+  const wireColor = opts.wireColor || (() => null);    // current 'pen' color role for new cables
   let _lastModClick = null;                            // { id, t } for double-click detection
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
@@ -83,6 +84,7 @@ export function attachInteraction(renderer, engine, canvas, opts = {}) {
       }
       state.mouse = { x: wx, y: wy };
       state.dragCable = gesture.from ? { from: gesture.from, to: null, mouse: state.mouse } : null;
+      state.wireColor = wireColor();   // drag preview reflects the current pen
       return;
     }
 
@@ -217,7 +219,7 @@ export function attachInteraction(renderer, engine, canvas, opts = {}) {
       const [wx, wy] = lastWorld(e);
       const hit = renderer.findPortAt(wx, wy, lastInputType);
       if (hit && hit.side === 'in' && gesture.from) {
-        const res = engine.connect(gesture.from, { id: hit.id, port: hit.port });
+        const res = engine.connect(gesture.from, { id: hit.id, port: hit.port }, wireColor());
         if (res.ok) onChange();
       }
       state.dragCable = null; gesture = null; return;

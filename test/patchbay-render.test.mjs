@@ -110,6 +110,20 @@ test('snapTarget uses the vertical grab offset (lower-half grab stays in-row)', 
   assert.equal(renderer.snapTarget(inst, r.x + 5, grabWy + (ys[1] - ys[0]), 0, grabY).row, 1);
 });
 
+test('findCableAt locates a cable along its rendered polyline', () => {
+  const { engine, renderer } = build();
+  engine.addInstance('a', 'knob', { row: 0, hpPos: 0 });
+  engine.addInstance('s', 'add', { row: 0, hpPos: 20 });
+  engine.connect({ id: 'a', port: 'v' }, { id: 's', port: 'a' });
+  renderer.fitToViewport();
+  renderer.draw({ railsOn: true });   // populate the verlet cable points
+  // sample a point on the cable's polyline and hit-test it
+  const ap = renderer.portWorldPos(engine.instances.get('a'), 'v', 'out');
+  const hit = renderer.findCableAt(ap.x, ap.y);   // endpoint sits on the line
+  assert.ok(hit && hit.from.id === 'a');
+  assert.equal(renderer.findCableAt(ap.x + 9999, ap.y), null);
+});
+
 test('draw() runs headless without throwing and issues canvas calls', () => {
   const { canvas, engine, renderer } = build();
   engine.addInstance('a', 'knob', { row: 0, hpPos: 4 });

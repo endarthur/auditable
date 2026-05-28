@@ -40,10 +40,11 @@ export function serializeRack(engine, rack) {
     if (Object.keys(controls).length) m.controls = controls;
     modules.push(m);
   }
-  const cables = engine.cables.map((c) => ({
-    from: { id: c.from.id, port: c.from.port },
-    to: { id: c.to.id, port: c.to.port },
-  }));
+  const cables = engine.cables.map((c) => {
+    const e = { from: { id: c.from.id, port: c.from.port }, to: { id: c.to.id, port: c.to.port } };
+    if (c.color) e.color = c.color;
+    return e;
+  });
   const geom = rack || { hp: 64, rows: [{ kind: '3U' }, { kind: '3U' }] };
   return {
     format: FORMAT,
@@ -71,7 +72,7 @@ export function deserializeRack(doc, engine) {
     }
   }
   for (const c of (d.cables || [])) {
-    if (c && c.from && c.to) engine.connect(c.from, c.to);   // cycle/missing rejected silently
+    if (c && c.from && c.to) engine.connect(c.from, c.to, c.color);   // cycle/missing rejected silently
   }
   return rack;
 }
