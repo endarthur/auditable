@@ -10,7 +10,7 @@ import { openWorkspaceFolder, resetWorkspace } from './workspace.js';
 import { exportWorkspace, openWorkspaceFile, saveWorkspace } from './persist.js';
 import { confirm as dlgConfirm, Dialog } from '#dialog';
 import { showAbout } from './about.js';
-import { hasExamples, getExamplesManifest } from './examples-loader.js';
+import { getExamplesManifest } from './examples-loader.js';
 import { aggregateLicenses, formatNoticesFile } from '#licenses';
 
 export function setupMenuBar() {
@@ -42,20 +42,14 @@ export function setupMenuBar() {
       { label: 'New stub surface', action: 'debug:stub' },
       { label: 'A-Bus inspector', action: 'debug:inspector' },
     ] },
-    { label: 'Help', items: () => {
-      const items = [
-        { label: 'Documentation',        action: 'help:docs', shortcut: 'F1' },
-      ];
-      if (hasExamples()) {
-        items.push({ label: 'Open example…',           action: 'help:openexample' });
-      }
-      items.push('---');
-      items.push({ label: 'Patchbay example rack',     action: 'help:pb-rack' });
-      items.push({ label: 'Patchbay example notebook', action: 'help:pb-nb' });
-      items.push('---');
-      items.push({ label: 'About Auditable Works', action: 'help:about' });
-      return items;
-    } },
+    { label: 'Help', items: () => [
+      // Open example… is always available — it carries the built-in Patchbay
+      // examples even when no bundled notebook examples are present.
+      { label: 'Documentation', action: 'help:docs', shortcut: 'F1' },
+      { label: 'Open example…', action: 'help:openexample' },
+      '---',
+      { label: 'About Auditable Works', action: 'help:about' },
+    ] },
   ]);
 
   bar.on('action', async (action) => {
@@ -107,8 +101,6 @@ export function setupMenuBar() {
       return;
     }
     if (action === 'help:openexample') { await openExamplePicker(); return; }
-    if (action === 'help:pb-rack') { await openExampleRack(); return; }
-    if (action === 'help:pb-nb') { await openExampleNotebook(); return; }
     if (action === 'help:about') { await showAbout(); return; }
     setStatus(`menu: ${action}`);  // workspace:save lands with 5b
   });
@@ -144,8 +136,9 @@ const PATCHBAY_BRIDGE_NB = `/// auditable
 /// md
 # Patchbay ↔ notebook
 
-This notebook talks to a **patchbay rack** (Help → Patchbay example rack) through
-the shared workspace \`/tmp\`. Open the rack in another tab, then run these cells.
+This notebook talks to a **patchbay rack** (Open example → Patchbay → Example
+rack) through the shared workspace \`/tmp\`. Open the rack in another tab, then
+run these cells.
 
 /// code
 // READ the value the rack's LOG module is writing (its SETPOINT).
@@ -175,25 +168,28 @@ async function newRack() {
   await openPath(path);
 }
 
-// Help → Patchbay example rack — the punk-SCADA demo paired with the example
-// notebook over the workspace /tmp: LOG writes the SETPOINT → /tmp/pb-level.txt
-// (notebook reads it); FILE reads /tmp/pb-msg.txt → shown live (notebook writes
-// it). Reuses a fixed path so reopening doesn't proliferate copies.
+// Open example → Patchbay → Example rack. The punk-SCADA demo, paired with the
+// integrated notebook over the workspace /tmp: row 0 is the monitor (a SIGNAL
+// fanning into TREND / GAUGE / ALARM); row 1 is the I/O bridge (SETPOINT → LOG
+// → /tmp/pb-level.txt the notebook reads; FILE ← /tmp/pb-msg.txt the notebook
+// writes, shown live). Fixed path so reopening doesn't proliferate copies.
 async function openExampleRack() {
   const EXAMPLE = '/projects/patchbay-example.patchbay';
   const rack = {
     format: 'patchbay', version: 1,
-    rack: { hp: 72, rows: [{ kind: '3U' }, { kind: '3U' }] },
+    rack: { hp: 84, rows: [{ kind: '3U' }, { kind: '3U' }] },
     modules: [
+      // row 0 — monitor
       { id: 'signal', type: 'src.lfo',     row: 0, hpPos: 2,  knobs: { rate: 0.3 }, params: {} },
       { id: 'trend',  type: 'disp.scope',  row: 0, hpPos: 14, knobs: {}, params: {} },
-      { id: 'gauge',  type: 'disp.gauge',  row: 0, hpPos: 30, knobs: {}, params: {} },
-      { id: 'alarm',  type: 'ctrl.alarm',  row: 0, hpPos: 42, knobs: { level: 0.7, hyst: 0.05 }, params: {} },
+      { id: 'gauge',  type: 'disp.gauge',  row: 0, hpPos: 32, knobs: {}, params: {} },
+      { id: 'alarm',  type: 'ctrl.alarm',  row: 0, hpPos: 44, knobs: { level: 0.7, hyst: 0.05 }, params: {} },
+      // row 1 — notebook bridge (aligned under the monitor)
       { id: 'setpt',  type: 'src.const',   row: 1, hpPos: 2,  knobs: { value: 0.6 }, params: {} },
       { id: 'log',    type: 'io.vfs-write', row: 1, hpPos: 12, knobs: {}, params: { path: '/tmp/pb-level.txt' } },
       { id: 'file',   type: 'io.vfs-read',  row: 1, hpPos: 26, knobs: {}, params: { path: '/tmp/pb-msg.txt' } },
       { id: 'note',   type: 'panel.note',  row: 1, hpPos: 40,
-        params: { text: 'pairs with Help → Patchbay example notebook (reads pb-level.txt, writes pb-msg.txt)' } },
+        params: { text: 'I/O bridge → open the integrated notebook' } },
     ],
     cables: [
       { from: { id: 'signal', port: 'sin' }, to: { id: 'trend', port: 'x' }, color: 'teal' },
@@ -211,7 +207,7 @@ async function openExampleRack() {
   await openPath(EXAMPLE);
 }
 
-// Help → Patchbay example notebook — the companion that bridges to the rack.
+// Open example → Patchbay → Integrated notebook — the companion that bridges.
 async function openExampleNotebook() {
   const nbDir = '/projects/Patchbay Bridge';
   try {
@@ -230,10 +226,18 @@ async function openExampleNotebook() {
 // Each row imports its def as a new project under /projects and opens
 // it in a notebook surface.
 async function openExamplePicker() {
-  const manifest = getExamplesManifest();
-  if (!manifest) return;
-  const categories = manifest.categories || {};
-  const catNames = Object.keys(categories).sort();
+  // Built-in Patchbay examples (Works surfaces, not bundled notebooks) live at
+  // the top; bundled notebook examples (works-all) follow. Patchbay rows carry
+  // an `action` instead of a `file`.
+  const manifest = getExamplesManifest() || {};
+  const categories = {
+    Patchbay: [
+      { title: 'Example rack', name: 'rack', action: 'pb-rack' },
+      { title: 'Integrated notebook', name: 'notebook', action: 'pb-nb' },
+    ],
+    ...(manifest.categories || {}),
+  };
+  const catNames = ['Patchbay', ...Object.keys(manifest.categories || {}).sort()];
 
   const dlg = new Dialog({
     title: 'Open example',
@@ -242,14 +246,6 @@ async function openExamplePicker() {
       const root = document.createElement('div');
       root.style.cssText = 'max-height:60vh;overflow:auto;padding:8px 12px;font:13px/1.5 var(--sw-sans,sans-serif)';
       body.appendChild(root);
-
-      if (catNames.length === 0) {
-        const empty = document.createElement('div');
-        empty.style.cssText = 'padding:16px;color:var(--sw-text-soft);font-style:italic';
-        empty.textContent = 'No examples bundled.';
-        root.appendChild(empty);
-        return;
-      }
 
       for (const cat of catNames) {
         const sect = document.createElement('section');
@@ -294,8 +290,9 @@ async function openExamplePicker() {
 
           row.appendChild(title);
           row.appendChild(file);
-          row.onclick = () => ctx.close(entry.file);
-          row.onkeydown = (e) => { if (e.key === 'Enter') ctx.close(entry.file); };
+          const pick = () => ctx.close(entry.action ? { action: entry.action } : { file: entry.file });
+          row.onclick = pick;
+          row.onkeydown = (e) => { if (e.key === 'Enter') pick(); };
           sect.appendChild(row);
         }
         root.appendChild(sect);
@@ -305,11 +302,11 @@ async function openExamplePicker() {
 
   const picked = await dlg.show();
   if (!picked) return;
-  const vfsPath = '/usr/share/examples/' + picked;
-  try {
-    await importFileAsNotebook(vfsPath);
-  } catch (e) {
-    setStatus('open example failed: ' + (e.message || e));
+  if (picked.action === 'pb-rack') return openExampleRack();
+  if (picked.action === 'pb-nb') return openExampleNotebook();
+  if (picked.file) {
+    try { await importFileAsNotebook('/usr/share/examples/' + picked.file); }
+    catch (e) { setStatus('open example failed: ' + (e.message || e)); }
   }
 }
 
