@@ -148,6 +148,77 @@
 
   .err { color: var(--au-error); padding: 24px; }
   .empty { color: var(--au-fg-soft); padding: 24px; font-style: italic; }
+
+  /* Highlights — translucent so text stays readable on dark or light. */
+  .content .hl { border-radius: 2px; cursor: pointer; }
+  .content .hl.c-yellow { background: rgba(232, 193, 76, 0.34); }
+  .content .hl.c-green  { background: rgba(126, 180, 90, 0.34); }
+  .content .hl.c-blue   { background: rgba(90, 140, 210, 0.36); }
+  .content .hl.has-note { box-shadow: inset 0 -2px 0 var(--au-action); }
+
+  /* Colour swatch buttons (shared by the toolbar + note popover). */
+  .sw { width: 16px; height: 16px; border-radius: 50%; border: 1px solid rgba(0,0,0,0.25); cursor: pointer; padding: 0; }
+  .sw.c-yellow { background: rgb(232, 193, 76); }
+  .sw.c-green  { background: rgb(126, 180, 90); }
+  .sw.c-blue   { background: rgb(90, 140, 210); }
+  .sw.active { outline: 2px solid var(--au-fg); outline-offset: 1px; }
+
+  /* Floating selection toolbar. */
+  .sel-toolbar {
+    position: fixed; z-index: 60; display: none; align-items: center; gap: 7px;
+    background: var(--au-surface-raised); border: 1px solid var(--au-border);
+    border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,0.45); padding: 6px 9px;
+  }
+  .sel-toolbar.open { display: flex; }
+  .sel-toolbar .note-btn {
+    background: none; border: 1px solid var(--au-border); border-radius: 4px;
+    color: var(--au-fg); cursor: pointer; font: 11px ui-monospace, 'Space Mono', monospace; padding: 3px 8px;
+  }
+  .sel-toolbar .note-btn:hover { background: var(--au-surface-bright); }
+
+  /* Note popover. */
+  .note-pop {
+    position: fixed; z-index: 60; display: none; width: 250px;
+    background: var(--au-surface-raised); border: 1px solid var(--au-border);
+    border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,0.45); padding: 8px;
+  }
+  .note-pop.open { display: block; }
+  .note-pop textarea {
+    width: 100%; box-sizing: border-box; min-height: 70px; resize: vertical;
+    background: var(--au-surface); color: var(--au-fg); border: 1px solid var(--au-border);
+    border-radius: 4px; padding: 6px 8px; font: 12px/1.5 'Barlow', system-ui, sans-serif;
+  }
+  .note-pop .note-row { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
+  .note-pop .note-swatches { display: flex; gap: 6px; }
+  .note-pop .sp { flex: 1; }
+  .note-pop button.danger {
+    background: none; border: 1px solid var(--au-border); border-radius: 4px;
+    color: var(--au-error); cursor: pointer; font: 11px ui-monospace, 'Space Mono', monospace; padding: 3px 8px;
+  }
+  .note-pop button.danger:hover { background: var(--au-surface-bright); }
+
+  /* Marks section in the contents sidebar. */
+  .contents h3 {
+    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--au-action); margin: 14px 16px 4px; font-weight: 600;
+  }
+  .contents .mark {
+    display: flex; align-items: flex-start; gap: 7px; padding: 5px 16px; cursor: pointer;
+    color: var(--au-fg-muted); border-left: 2px solid transparent;
+  }
+  .contents .mark:hover { background: var(--au-surface-bright); color: var(--au-fg); }
+  .contents .mark .dot { flex: none; width: 9px; height: 9px; border-radius: 50%; margin-top: 3px; }
+  .contents .mark .dot.c-yellow { background: rgb(232,193,76); }
+  .contents .mark .dot.c-green { background: rgb(126,180,90); }
+  .contents .mark .dot.c-blue { background: rgb(90,140,210); }
+  .contents .mark .dot.bm { background: var(--au-action); border-radius: 1px; }
+  .contents .mark .txt { flex: 1; overflow: hidden; }
+  .contents .mark .q { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .contents .mark .n { display: block; color: var(--au-fg-soft); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .contents .mark .del { flex: none; color: var(--au-fg-soft); opacity: 0; padding: 0 2px; }
+  .contents .mark:hover .del { opacity: 1; }
+  .contents .mark .del:hover { color: var(--au-error); }
+  .contents .marks-empty { padding: 4px 16px; color: var(--au-fg-soft); font-style: italic; font-size: 10px; }
 </style>
 </head>
 <body class="font-serif">
@@ -158,6 +229,7 @@
   <span class="spacer"></span>
   <button id="prevBtn" title="Previous chapter (←)">‹ Prev</button>
   <button id="nextBtn" title="Next chapter (→)">Next ›</button>
+  <button id="markBtn" title="Bookmark this spot">🔖</button>
   <button id="setBtn" title="Reading settings">Aa</button>
   <div class="settings-pop" id="settingsPop">
     <div class="row">
@@ -184,6 +256,26 @@
   <div class="content" id="content"><div class="empty">Loading book…</div></div>
   <aside class="toc empty-toc" id="toc"></aside>
 </div>
+<!-- Floating selection toolbar — appears over a text selection. -->
+<div class="sel-toolbar" id="selToolbar">
+  <button class="sw c-yellow" data-color="yellow" title="Highlight"></button>
+  <button class="sw c-green" data-color="green" title="Highlight"></button>
+  <button class="sw c-blue" data-color="blue" title="Highlight"></button>
+  <button class="note-btn" id="selNote" title="Highlight + add note">✎ Note</button>
+</div>
+<!-- Note popover — view/edit/delete a highlight's annotation. -->
+<div class="note-pop" id="notePop">
+  <textarea id="noteText" placeholder="Add a note…" spellcheck="false"></textarea>
+  <div class="note-row">
+    <div class="note-swatches" id="noteSwatches">
+      <button class="sw c-yellow" data-color="yellow"></button>
+      <button class="sw c-green" data-color="green"></button>
+      <button class="sw c-blue" data-color="blue"></button>
+    </div>
+    <span class="sp"></span>
+    <button id="noteDelete" class="danger">Delete</button>
+  </div>
+</div>
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
 
@@ -202,6 +294,10 @@ let chapters = [];        // book.chapters
 let curIndex = 0;
 let settings = { font: 'serif', size: 18, width: 680 };
 let _toc = { items: [], update() {} };
+let bookmarks = [];       // [{ id, chapterId, scrollTop, label }]
+let highlights = [];      // [{ id, chapterId, start, end, quote, color, note }]
+let _markSeq = 1;
+let _activeMarkId = null; // highlight whose note popover is open
 
 // ── Renderer-backend seam (spec: format → backend) ──────────────────
 // v1 ships the reflowable backend (markdown + sanitized HTML → our DOM, so
@@ -267,7 +363,7 @@ function scheduleSave() {
   persister.schedule(() => ({
     chapterId: chapters[curIndex] && chapters[curIndex].id,
     scrollTop: $('content').scrollTop || 0,
-    settings,
+    settings, bookmarks, highlights,
   }));
 }
 
@@ -289,8 +385,70 @@ function renderContents() {
     d.addEventListener('click', () => { loadChapter(i); setNavOpen(false); });
     el.appendChild(d);
   });
+  renderMarks(el);
 }
 function setNavOpen(open) { document.body.classList.toggle('nav-open', open); }
+
+// Render the bookmarks + highlights list into the contents sidebar. Marks
+// sort by chapter order, bookmarks before highlights, highlights by position.
+function chapIndexOf(id) { return chapters.findIndex((c) => c.id === id); }
+function renderMarks(el) {
+  const h3 = document.createElement('h3');
+  h3.textContent = 'Marks';
+  el.appendChild(h3);
+  const all = bookmarks.map((b) => ({ ...b, kind: 'bm' }))
+    .concat(highlights.map((h) => ({ ...h, kind: 'hl' })));
+  if (!all.length) {
+    const e = document.createElement('div');
+    e.className = 'marks-empty'; e.textContent = 'No marks yet — select text to highlight, or 🔖 to bookmark.';
+    el.appendChild(e); return;
+  }
+  all.sort((a, b) => (chapIndexOf(a.chapterId) - chapIndexOf(b.chapterId))
+    || ((a.kind === 'bm' ? 0 : 1) - (b.kind === 'bm' ? 0 : 1))
+    || ((a.start || 0) - (b.start || 0)));
+  for (const m of all) {
+    const row = document.createElement('div');
+    row.className = 'mark';
+    const dot = document.createElement('span');
+    dot.className = 'dot ' + (m.kind === 'bm' ? 'bm' : 'c-' + (m.color || 'yellow'));
+    const txt = document.createElement('span');
+    txt.className = 'txt';
+    const q = document.createElement('span'); q.className = 'q';
+    q.textContent = m.kind === 'bm' ? (m.label || 'Bookmark') : (m.quote || '(highlight)');
+    txt.appendChild(q);
+    if (m.kind === 'hl' && m.note && m.note.trim()) {
+      const n = document.createElement('span'); n.className = 'n'; n.textContent = '✎ ' + m.note.trim();
+      txt.appendChild(n);
+    }
+    const del = document.createElement('span');
+    del.className = 'del'; del.textContent = '×'; del.title = 'Remove';
+    del.addEventListener('click', (e) => { e.stopPropagation(); removeMark(m.kind, m.id); });
+    row.append(dot, txt, del);
+    row.addEventListener('click', () => jumpToMark(m));
+    el.appendChild(row);
+  }
+}
+function removeMark(kind, id) {
+  if (kind === 'bm') bookmarks = bookmarks.filter((b) => b.id !== id);
+  else {
+    highlights = highlights.filter((h) => h.id !== id);
+    const p = currentPage();
+    if (p) { for (const mk of [...p.querySelectorAll('mark.hl[data-id="' + id + '"]')]) mk.replaceWith(...mk.childNodes); p.normalize(); }
+    if (_activeMarkId === id) closeNote();
+  }
+  renderContents(); scheduleSave();
+}
+async function jumpToMark(m) {
+  const idx = chapIndexOf(m.chapterId);
+  if (idx < 0) return;
+  if (idx !== curIndex) await loadChapter(idx);
+  if (m.kind === 'bm' && typeof m.scrollTop === 'number') $('content').scrollTop = m.scrollTop;
+  else if (m.kind === 'hl') {
+    const mk = currentPage() && currentPage().querySelector('mark.hl[data-id="' + m.id + '"]');
+    if (mk) mk.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+  setNavOpen(false);
+}
 
 // ── Load a chapter ──────────────────────────────────────────────────
 async function loadChapter(index, anchor) {
@@ -340,6 +498,8 @@ async function loadChapter(index, anchor) {
   page.appendChild(foot);
 
   _toc = buildToc(page, $('toc'));
+  applyHighlights(chapter.id);
+  closeNote(); hideSelToolbar();
   updateButtons();
   if (anchor && scrollToAnchor(anchor)) { /* anchor wins */ }
   else { contentEl.scrollTop = 0; }
@@ -349,6 +509,135 @@ function updateButtons() {
   $('prevBtn').disabled = curIndex <= 0;
   $('nextBtn').disabled = curIndex >= chapters.length - 1;
 }
+
+// ── Annotation anchoring ────────────────────────────────────────────
+// Highlights anchor by [start,end] char offsets into the chapter page's
+// rendered textContent + a quote. Re-found on load by walking text nodes —
+// stable because the render pipeline (renderMd → decorateHeadings →
+// highlightCode) is deterministic, so the same characters land at the same
+// offsets every time. Both capture and re-apply happen post-render, so the
+// § anchors / token spans (which don't change the TEXT, only its wrapping)
+// stay consistent.
+function currentPage() { return $('content').querySelector('.page'); }
+
+// Absolute char offset of (node, offset) within root — measured the same way
+// wrapRange walks (concatenated text-node values), via a Range's text length.
+function charOffset(root, node, offset) {
+  const r = document.createRange();
+  r.setStart(root, 0);
+  r.setEnd(node, offset);
+  return r.toString().length;
+}
+
+// Current selection as { start, end, quote, rect } if it's a real text range
+// inside the chapter page; else null.
+function selectionOffsets() {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+  const root = currentPage();
+  if (!root) return null;
+  const range = sel.getRangeAt(0);
+  if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return null;
+  const a = charOffset(root, range.startContainer, range.startOffset);
+  const b = charOffset(root, range.endContainer, range.endOffset);
+  const start = Math.min(a, b), end = Math.max(a, b);
+  const quote = sel.toString().replace(/\s+/g, ' ').trim().slice(0, 240);
+  if (end <= start || !quote) return null;
+  return { start, end, quote, rect: range.getBoundingClientRect() };
+}
+
+// Wrap the text in [start,end] within root in <mark> elements (one per
+// overlapping text node, so it survives spans crossing element boundaries).
+function wrapRange(root, start, end, hl) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+  let pos = 0, n;
+  const segs = [];
+  while ((n = walker.nextNode())) {
+    const len = n.nodeValue.length, nodeStart = pos;
+    pos += len;
+    if (pos <= start || nodeStart >= end) continue;        // no overlap
+    segs.push({ node: n, from: Math.max(0, start - nodeStart), to: Math.min(len, end - nodeStart) });
+  }
+  const cls = 'hl c-' + (hl.color || 'yellow') + (hl.note && hl.note.trim() ? ' has-note' : '');
+  for (const { node, from, to } of segs) {
+    const range = document.createRange();
+    range.setStart(node, from);
+    range.setEnd(node, to);
+    const mark = document.createElement('mark');
+    mark.className = cls;
+    mark.dataset.id = hl.id;
+    try { range.surroundContents(mark); } catch { /* segment not cleanly wrappable — skip */ }
+  }
+}
+
+function applyHighlights(chapterId) {
+  const root = currentPage();
+  if (!root) return;
+  for (const h of highlights.filter((x) => x.chapterId === chapterId).sort((a, b) => a.start - b.start)) {
+    wrapRange(root, h.start, h.end, h);
+  }
+  for (const mk of root.querySelectorAll('mark.hl')) {
+    mk.addEventListener('click', (e) => { e.stopPropagation(); openNote(mk.dataset.id, mk); });
+  }
+}
+
+function addHighlight(color, withNote) {
+  const sel = selectionOffsets();
+  if (!sel) return;
+  const h = { id: 'h' + (_markSeq++), chapterId: chapters[curIndex].id, start: sel.start, end: sel.end, quote: sel.quote, color: color || 'yellow', note: '' };
+  highlights.push(h);
+  window.getSelection().removeAllRanges();
+  hideSelToolbar();
+  wrapRange(currentPage(), h.start, h.end, h);
+  const mk = currentPage().querySelector('mark.hl[data-id="' + h.id + '"]');
+  if (mk) mk.addEventListener('click', (e) => { e.stopPropagation(); openNote(h.id, mk); });
+  renderContents(); scheduleSave();
+  if (withNote && mk) openNote(h.id, mk);
+}
+
+// ── Note popover ────────────────────────────────────────────────────
+function openNote(id, anchorEl) {
+  const h = highlights.find((x) => x.id === id);
+  if (!h) return;
+  _activeMarkId = id;
+  const pop = $('notePop');
+  $('noteText').value = h.note || '';
+  for (const b of pop.querySelectorAll('.sw')) b.classList.toggle('active', b.dataset.color === h.color);
+  const r = anchorEl.getBoundingClientRect();
+  pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 266)) + 'px';
+  pop.style.top = Math.min(r.bottom + 6, window.innerHeight - 140) + 'px';
+  pop.classList.add('open');
+  $('noteText').focus();
+}
+function closeNote() { $('notePop').classList.remove('open'); _activeMarkId = null; }
+
+// ── Bookmark ────────────────────────────────────────────────────────
+function addBookmark() {
+  if (!chapters.length) return;
+  const c = chapters[curIndex];
+  let label = c.title || ('Chapter ' + (curIndex + 1));
+  const root = currentPage();
+  if (root) {
+    const top = $('content').getBoundingClientRect().top + 60;
+    let h = null;
+    for (const hd of root.querySelectorAll('h1, h2, h3')) {
+      if (hd.getBoundingClientRect().top <= top) h = hd; else break;
+    }
+    if (h) label = (c.title ? c.title + ' · ' : '') + (h.textContent || '').replace(/^§\s*/, '').trim();
+  }
+  bookmarks.push({ id: 'b' + (_markSeq++), chapterId: c.id, scrollTop: $('content').scrollTop || 0, label });
+  renderContents(); scheduleSave();
+}
+
+// ── Selection toolbar ───────────────────────────────────────────────
+function showSelToolbar(rect) {
+  const tb = $('selToolbar');
+  tb.classList.add('open');
+  const w = tb.offsetWidth || 170;
+  tb.style.left = Math.max(8, Math.min(rect.left + rect.width / 2 - w / 2, window.innerWidth - w - 8)) + 'px';
+  tb.style.top = Math.max(8, rect.top - 44) + 'px';
+}
+function hideSelToolbar() { $('selToolbar').classList.remove('open'); }
 
 // ── Boot ────────────────────────────────────────────────────────────
 window.addEventListener('message', async (ev) => {
@@ -385,6 +674,13 @@ window.addEventListener('message', async (ev) => {
   persister = makeStatePersister(bus, '/home/.books/state/' + slug + '.json');
   const saved = await persister.read();
   if (saved && saved.settings) settings = { ...settings, ...saved.settings };
+  if (saved && Array.isArray(saved.bookmarks)) bookmarks = saved.bookmarks;
+  if (saved && Array.isArray(saved.highlights)) highlights = saved.highlights;
+  // keep the id sequence ahead of restored marks
+  for (const m of [...bookmarks, ...highlights]) {
+    const num = parseInt(String(m.id).slice(1), 10);
+    if (num >= _markSeq) _markSeq = num + 1;
+  }
   applySettings();
   renderContents();
 
@@ -402,11 +698,48 @@ window.addEventListener('message', async (ev) => {
   $('backdrop').addEventListener('click', () => setNavOpen(false));
   $('prevBtn').addEventListener('click', () => loadChapter(curIndex - 1));
   $('nextBtn').addEventListener('click', () => loadChapter(curIndex + 1));
+  $('markBtn').addEventListener('click', addBookmark);
 
-  // scroll → TOC active + persist
+  // Selection → highlight toolbar.
+  $('content').addEventListener('mouseup', () => {
+    setTimeout(() => {
+      const sel = selectionOffsets();
+      if (sel) showSelToolbar(sel.rect); else hideSelToolbar();
+    }, 0);
+  });
+  for (const sw of $('selToolbar').querySelectorAll('.sw'))
+    sw.addEventListener('mousedown', (e) => { e.preventDefault(); addHighlight(sw.dataset.color, false); });
+  $('selNote').addEventListener('mousedown', (e) => { e.preventDefault(); addHighlight('yellow', true); });
+
+  // Note popover: edit text / recolour / delete; close on outside click.
+  $('noteText').addEventListener('input', () => {
+    const h = highlights.find((x) => x.id === _activeMarkId); if (!h) return;
+    h.note = $('noteText').value;
+    const on = !!h.note.trim();
+    for (const mk of (currentPage() ? currentPage().querySelectorAll('mark.hl[data-id="' + h.id + '"]') : []))
+      mk.classList.toggle('has-note', on);
+    renderContents(); scheduleSave();
+  });
+  for (const sw of $('noteSwatches').querySelectorAll('.sw'))
+    sw.addEventListener('click', () => {
+      const h = highlights.find((x) => x.id === _activeMarkId); if (!h) return;
+      h.color = sw.dataset.color;
+      const cls = 'hl c-' + h.color + (h.note && h.note.trim() ? ' has-note' : '');
+      for (const mk of (currentPage() ? currentPage().querySelectorAll('mark.hl[data-id="' + h.id + '"]') : [])) mk.className = cls;
+      for (const s of $('noteSwatches').querySelectorAll('.sw')) s.classList.toggle('active', s === sw);
+      renderContents(); scheduleSave();
+    });
+  $('noteDelete').addEventListener('click', () => { if (_activeMarkId) removeMark('hl', _activeMarkId); });
+  document.addEventListener('mousedown', (e) => {
+    if ($('notePop').classList.contains('open') && !$('notePop').contains(e.target)
+        && !(e.target.closest && e.target.closest('mark.hl'))) closeNote();
+  });
+
+  // scroll → TOC active + persist; also dismiss transient popups.
   let raf = 0;
   $('content').addEventListener('scroll', () => {
     if (!raf) raf = requestAnimationFrame(() => { raf = 0; _toc.update(); });
+    hideSelToolbar();
     scheduleSave();
   });
   document.addEventListener('keydown', (e) => {
