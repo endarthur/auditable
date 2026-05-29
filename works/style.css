@@ -180,9 +180,11 @@ body {
    on hover/drag. Hidden together with the sidebar (sibling selector). */
 .works-sidebar-resizer {
   flex: none;
-  width: 5px;
-  margin: 0 -2px;            /* straddle the 1px border without shifting layout */
-  z-index: 3;
+  width: 6px;                /* a clean flex item right of the sidebar border —
+                                NOT overlapping the rails <main>/iframe, so the
+                                pointerdown always lands on the handle */
+  position: relative;
+  z-index: 5;
   cursor: col-resize;
   background: transparent;
   transition: background 0.12s ease;

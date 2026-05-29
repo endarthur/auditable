@@ -35,12 +35,11 @@ function installSidebarResizer() {
     if (typeof w === 'number' && isFinite(w)) applyWidth(w);
   }).catch(() => { /* no saved width — keep the CSS default */ });
 
-  let startX = 0, startW = 0;
+  let startX = 0, startW = 0, shield = null;
   const onMove = (e) => applyWidth(startW + (e.clientX - startX));
   const onUp = () => {
     handle.classList.remove('dragging');
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
+    if (shield) { shield.remove(); shield = null; }
     window.removeEventListener('pointermove', onMove);
     window.removeEventListener('pointerup', onUp);
     const w = clampSidebar(sidebar.getBoundingClientRect().width);
@@ -51,8 +50,16 @@ function installSidebarResizer() {
     startX = e.clientX;
     startW = sidebar.getBoundingClientRect().width;
     handle.classList.add('dragging');
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
+    // Surfaces are iframes; once the cursor crosses one it swallows pointer
+    // events and the drag dies. A pointer-capturing shield over the whole
+    // window keeps move/up in the shell document. Two details mirror the
+    // tree-row drag shield (file-ops.js): a max z-index, and a 0.01-alpha
+    // fill — Chromium skips hit-testing FULLY transparent overlays over
+    // cross-origin iframes, so 'transparent' would let events sail through.
+    shield = document.createElement('div');
+    shield.style.cssText =
+      'position:fixed;inset:0;z-index:2147483647;cursor:col-resize;background:rgba(0,0,0,0.01)';
+    document.body.appendChild(shield);
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
   });
