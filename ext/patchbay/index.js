@@ -1318,7 +1318,9 @@ function registerStdlib() {
       let first = true;
       return ctx.sr.effect(() => {
         const c = inst.inputs.content.value();   // track the input
-        if (first) { first = false; return; }    // skip the initial run — don't clobber the file
+        // skip the initial run only when nothing's wired (don't clobber the
+        // file with the empty default); a connected value writes immediately.
+        if (first) { first = false; if (c == null || c === '') return; }
         ctx.bus.call(
           { to: 'works', path: '/', interface: 'VFS', member: 'Write' },
           [inst.params.path, c == null ? '' : String(c)]).catch(() => {});

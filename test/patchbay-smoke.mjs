@@ -102,6 +102,29 @@ const edited = await page.evaluate(async (uniqueName) => {
   return { ok: !!doc && doc.format === 'patchbay', modules: doc ? doc.modules.length : 0, cables: doc ? doc.cables.length : 0, added, cablesN: cables };
 }, pbOpen.uniqueName);
 
+// ── I/O bridge: a LOG module writes a workspace /tmp path the notebook reads ─
+const bridge = await page.evaluate(async () => {
+  const W = window.WKS;
+  const rack = {
+    format: 'patchbay', version: 1, rack: { hp: 64, rows: [{ kind: '3U' }] },
+    modules: [
+      { id: 'sp', type: 'src.const', row: 0, hpPos: 2, knobs: { value: 0.73 }, params: {} },
+      { id: 'log', type: 'io.vfs-write', row: 0, hpPos: 12, knobs: {}, params: { path: '/tmp/pb-bridge.txt' } },
+    ],
+    cables: [{ from: { id: 'sp', port: 'v' }, to: { id: 'log', port: 'content' } }],
+  };
+  await W.vfs.writeFile('/projects/bridge.patchbay', JSON.stringify(rack));
+  const tabId = await W.openPath('/projects/bridge.patchbay');
+  const rec = W.surfaces.get(tabId);
+  const dl = Date.now() + 15000;
+  while (rec && !rec.ready && Date.now() < dl) await new Promise((r) => setTimeout(r, 50));
+  await new Promise((r) => setTimeout(r, 300));   // let the LOG effect write
+  let onDisk = null;
+  try { onDisk = await W.vfs.readFile('/tmp/pb-bridge.txt', 'utf8'); } catch { /* */ }
+  return { onDisk };
+});
+console.log('bridge:', JSON.stringify(bridge));
+
 // ── file:// origin ────────────────────────────────────────────────────
 await page.goto(pathToFileURL(path.join(root, 'works.html')).href);
 await page.waitForFunction(() => window.WKS && window.WKS.vfs && window.WKS.broker, { timeout: 15000 }).catch(() => {});
@@ -125,6 +148,7 @@ const checks = {
   'patchbay: LFO drives reactively':      mounted && typeof mounted.lfoLive === 'number',
   'patchbay: const→num propagated':       mounted && mounted.numOut === 0.5,
   'patchbay: Flush persists rack JSON':   edited.ok && edited.modules === 4 && edited.cables === 2,
+  'patchbay: LOG writes workspace /tmp':  bridge.onDisk === '0.73',
   'patchbay: boots from file://':         fileOpen.ready === true,
   'patchbay: canvas mounts from file://': fileMounted && fileMounted.hasCanvas && fileMounted.modules === 4,
 };

@@ -132,21 +132,27 @@ export function setupMenuBar() {
 // file already in the tree opens on double-click via the registry's extension
 // dispatch; this is just the "create a fresh one" entry point.
 async function newRack() {
-  // A punk-SCADA demo: a SIGNAL drives a TREND pen, a GAUGE dial, and an ALARM
-  // — the live signal fans out to three instruments.
+  // A punk-SCADA demo: a SIGNAL drives a TREND pen, a GAUGE dial, and an ALARM;
+  // a SETPOINT is logged to /tmp/pb-level.txt — the I/O boundary a notebook
+  // cell can read with `await notebook.fs.read('/tmp/pb-level.txt')`.
   const starter = {
     format: 'patchbay', version: 1,
-    rack: { hp: 64, rows: [{ kind: '3U' }, { kind: '3U' }] },
+    rack: { hp: 72, rows: [{ kind: '3U' }, { kind: '3U' }] },
     modules: [
-      { id: 'signal', type: 'src.lfo',     row: 0, hpPos: 4,  knobs: { rate: 0.3 }, params: {} },
-      { id: 'trend',  type: 'disp.scope',  row: 0, hpPos: 16, knobs: {}, params: {} },
+      { id: 'signal', type: 'src.lfo',     row: 0, hpPos: 2,  knobs: { rate: 0.3 }, params: {} },
+      { id: 'trend',  type: 'disp.scope',  row: 0, hpPos: 14, knobs: {}, params: {} },
       { id: 'gauge',  type: 'disp.gauge',  row: 0, hpPos: 30, knobs: {}, params: {} },
       { id: 'alarm',  type: 'ctrl.alarm',  row: 0, hpPos: 42, knobs: { level: 0.7, hyst: 0.05 }, params: {} },
+      { id: 'setpt',  type: 'src.const',   row: 1, hpPos: 2,  knobs: { value: 0.6 }, params: {} },
+      { id: 'log',    type: 'io.vfs-write', row: 1, hpPos: 12, knobs: {}, params: { path: '/tmp/pb-level.txt' } },
+      { id: 'note',   type: 'panel.note',  row: 1, hpPos: 26,
+        params: { text: 'LOG → /tmp/pb-level.txt  ·  read it from a notebook cell' } },
     ],
     cables: [
-      { from: { id: 'signal', port: 'sin' }, to: { id: 'trend', port: 'x' } },
-      { from: { id: 'signal', port: 'tri' }, to: { id: 'gauge', port: 'x' } },
-      { from: { id: 'signal', port: 'sin' }, to: { id: 'alarm', port: 'x' } },
+      { from: { id: 'signal', port: 'sin' }, to: { id: 'trend', port: 'x' }, color: 'teal' },
+      { from: { id: 'signal', port: 'tri' }, to: { id: 'gauge', port: 'x' }, color: 'teal' },
+      { from: { id: 'signal', port: 'sin' }, to: { id: 'alarm', port: 'x' }, color: 'red' },
+      { from: { id: 'setpt', port: 'v' }, to: { id: 'log', port: 'content' }, color: 'amber' },
     ],
   };
   let path = '/projects/rack.patchbay';
