@@ -131,10 +131,34 @@ export function setupMenuBar() {
 // demo) under /projects, then open it in the patchbay surface. A `.patchbay`
 // file already in the tree opens on double-click via the registry's extension
 // dispatch; this is just the "create a fresh one" entry point.
+// The companion notebook (created once) — reads what the rack LOGs and writes
+// a message the rack's FILE module shows, both over the shared workspace /tmp.
+const PATCHBAY_BRIDGE_NB = `/// auditable
+/// title: Patchbay Bridge
+
+/// md
+# Patchbay ↔ notebook
+
+This notebook talks to a **patchbay rack** (Tools → New rack) through the shared
+workspace \`/tmp\`. Open the rack in another tab, then run these cells.
+
+/// code
+// READ the value the rack's LOG module is writing (its SETPOINT).
+// Re-run this cell to pull the latest.
+let level = '(rack not running — open Tools → New rack)';
+try { level = parseFloat(await notebook.fs.read('/tmp/pb-level.txt')); } catch {}
+display('rack setpoint → ' + level);
+
+/// code
+// WRITE a message the rack's FILE module displays live.
+await notebook.fs.write('/tmp/pb-msg.txt', 'hello from the notebook · ' + new Date().toLocaleTimeString());
+display('sent to rack ✓');
+`;
+
 async function newRack() {
-  // A punk-SCADA demo: a SIGNAL drives a TREND pen, a GAUGE dial, and an ALARM;
-  // a SETPOINT is logged to /tmp/pb-level.txt — the I/O boundary a notebook
-  // cell can read with `await notebook.fs.read('/tmp/pb-level.txt')`.
+  // A punk-SCADA demo with a two-way notebook bridge over the workspace /tmp:
+  //   LOG  writes the SETPOINT  → /tmp/pb-level.txt  (notebook reads it)
+  //   FILE reads /tmp/pb-msg.txt → shown live         (notebook writes it)
   const starter = {
     format: 'patchbay', version: 1,
     rack: { hp: 72, rows: [{ kind: '3U' }, { kind: '3U' }] },
@@ -145,8 +169,9 @@ async function newRack() {
       { id: 'alarm',  type: 'ctrl.alarm',  row: 0, hpPos: 42, knobs: { level: 0.7, hyst: 0.05 }, params: {} },
       { id: 'setpt',  type: 'src.const',   row: 1, hpPos: 2,  knobs: { value: 0.6 }, params: {} },
       { id: 'log',    type: 'io.vfs-write', row: 1, hpPos: 12, knobs: {}, params: { path: '/tmp/pb-level.txt' } },
-      { id: 'note',   type: 'panel.note',  row: 1, hpPos: 26,
-        params: { text: 'LOG → /tmp/pb-level.txt  ·  read it from a notebook cell' } },
+      { id: 'file',   type: 'io.vfs-read',  row: 1, hpPos: 26, knobs: {}, params: { path: '/tmp/pb-msg.txt' } },
+      { id: 'note',   type: 'panel.note',  row: 1, hpPos: 40,
+        params: { text: 'open the “Patchbay Bridge” notebook → it reads pb-level.txt and writes pb-msg.txt' } },
     ],
     cables: [
       { from: { id: 'signal', port: 'sin' }, to: { id: 'trend', port: 'x' }, color: 'teal' },
@@ -160,6 +185,15 @@ async function newRack() {
     for (let i = 2; await WKS.vfs.exists(path); i++) path = `/projects/rack-${i}.patchbay`;
     await WKS.vfs.mkdir('/projects', { recursive: true }).catch(() => {});
     await WKS.vfs.writeFile(path, JSON.stringify(starter, null, 2));
+    // Create the companion notebook once, and open it so the pair is obvious.
+    const nbDir = '/projects/Patchbay Bridge';
+    if (!(await WKS.vfs.exists(nbDir + '/project.json'))) {
+      await WKS.vfs.mkdir(nbDir, { recursive: true });
+      await WKS.vfs.writeFile(nbDir + '/project.json',
+        JSON.stringify({ kind: 'notebook', id: 'pb-bridge-' + Math.random().toString(36).slice(2, 8), title: 'Patchbay Bridge' }));
+      await WKS.vfs.writeFile(nbDir + '/notebook.txt', PATCHBAY_BRIDGE_NB);
+      await openPath(nbDir);
+    }
   } catch (e) {
     setStatus('New rack failed: ' + (e.message || e));
     return;
