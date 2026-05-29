@@ -18,7 +18,10 @@
   header .title { font-weight: 600; color: var(--au-fg); }
   header .spacer { flex: 1; }
   header .saved { color: var(--au-fg-soft); font-size: 11px; }
-  .scroll { flex: 1; overflow: auto; padding: 16px 20px; max-width: 640px; }
+  /* Fill the rail's full width (scrollbar at the true right edge); an inner
+     wrapper keeps line length readable on very wide rails. */
+  .scroll { flex: 1; overflow: auto; padding: 16px 20px; }
+  .scroll-inner { max-width: 860px; }
   h2 {
     font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
     color: var(--au-action); margin: 24px 0 8px;
@@ -103,6 +106,7 @@
   <span class="saved" id="savedHint"></span>
 </header>
 <div class="scroll">
+ <div class="scroll-inner">
   <h2>Appearance</h2>
   <div class="row">
     <label for="theme">Theme</label>
@@ -149,6 +153,7 @@
   <div class="actions">
     <button id="aboutBtn">About Auditable Works…</button>
   </div>
+ </div>
 </div>
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
