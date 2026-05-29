@@ -678,6 +678,38 @@ Deliberately out of scope; raise as follow-ups if they bite:
 
 `works/SURFACES.md` documents the surface-author contract (the §5.2 lifecycle, the A-Bus services available, the welcome-port pattern). Extension surfaces follow the same contract as in-tree surfaces — that file is the single source for HOW to write one. This section covers WHAT an extension declares in its manifest to be picked up by the host.
 
+#### 3.8.12 Notebook-scriptable interfaces (`public: true`)  *(status: designed, not yet shipped)*
+
+A surface can opt one or more of its A-Bus interfaces in as **notebook-scriptable**, so notebook cells can call its methods and subscribe its signals **without the raw-bus consent prompt**. This is the friction-free path for surfaces that *want* to be driven from a notebook — a 3-D viewer, a map, a sheet — without the user re-approving access each session.
+
+Two declarations, both required (one runtime, one static/auditable):
+
+1. **At expose time** — flag the interface `public` when the surface exposes it over A-Bus:
+
+   ```js
+   bus.expose('/', {
+     Scene: { public: true, methods: { addBlock, clear, … }, signals: ['Changed'] },
+   });
+   ```
+
+2. **In the manifest** — declare it statically on the surface contribution, so the grant is visible without running the surface (auditable, like `%mcp` directives):
+
+   ```js
+   {
+     name: '@gcu/dee',
+     surfaces: [{ kind: 'dee', /* …§3.8.1 fields… */ notebookPublic: ['Scene'] }],
+   }
+   ```
+
+What it grants notebooks (see the full design in `spec_inbox/notebook-abus-access-spec.md`):
+
+- `notebook.call('dee', 'Scene', 'addBlock', [...])` — call **public** interfaces; calling a non-public interface throws, hinting at `notebook.requestBus()`.
+- `notebook.tag.subscribe('Scene.Changed', fn)` — subscribe a public interface's signals (the `public` flag covers **both** call and subscribe).
+
+Enforcement is **builtin-advisory, not a sandbox.** A notebook already has direct VFS access (`notebook.fs`) and, with the consented raw bus, can reach anything — so the public set isn't armor. It keeps the *no-prompt* path honest (notebooks freely drive only what a surface said may be driven) and signals intent. The three tiers — always-on topics, declared-public call/subscribe, and consented raw bus — are specified in the design doc above; this section is the surface-author half: *how your surface says "notebooks may drive this."*
+
+Topic convention: cell-originated topics are recommended (not required) to live under a `user.*` interface to avoid colliding with system signals; a surface's declared-public interface is exempt — its own name is the namespace.
+
 ---
 
 ## 4. Cross-language adapters
@@ -1137,7 +1169,7 @@ The `examples/defs/<category>/<name>.txt` system is the host's smoke-test corpus
 - **Works surface contributions + context-menu actions.** Specced in §3.8. Implementation pending — wires `manifest.surfaces` + `manifest.contextMenu` into `works/js/surface-registry.js` and the tree menu builder; rides on the existing `_inlineLibsIntoSurface` for shared-lib reuse.
 - **Asset bundling in `.gcupkg`.** A tagged language wanting to ship a custom CM6 theme, an icon for the cell-type chip, or a font has no current slot. Likely path: `assets/` directory in the gcupkg, written to `/usr/share/assets/<extension>/`. Out of scope for v1 of the gcupkg format.
 - **Naming convention.** `@gcu/<slug>` is conventional but not enforced. Lowercase, no whitespace, semver-tag friendly — but the validator accepts anything that's a string. A linter pass would help here but isn't a runtime concern.
-- **Permissions / capability gating.** Extensions today have full window access. A capability-token model would let users audit what an extension touches (FS / DOM / network / clipboard / …) before approving install. Pre-design; no implementation plan.
+- **Permissions / capability gating.** Extensions today have full window access. A capability-token model would let users audit what an extension touches (FS / DOM / network / clipboard / …) before approving install. Pre-design; no implementation plan. (Related but distinct: **notebook → A-Bus access** — letting notebook *cells* publish/subscribe topics, call notebook-scriptable surface interfaces (§3.8.12), and opt into the raw bus under a `%mcp`-style consent. Designed in `spec_inbox/notebook-abus-access-spec.md`.)
 - **Extension marketplace / discovery.** Currently extensions are URL-installed or pkg-installed. A curated registry (signed metadata, version range queries) is an obvious follow-up but not on the near roadmap.
 - **`pkg build` subcommand**. See §6.1 implementation-status table. Out-of-tree packers work fine today (a few hundred lines that walks a repo, validates `package.json`, computes the integrity hash, and zips the artifacts); an in-tree CLI is a quality-of-life follow-up.
 - **Versioned manifest schema.** When 1.0 ships, a `manifestVersion: 1` field will become required. We'll auto-treat legacy manifests as version 0.
