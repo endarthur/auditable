@@ -4,6 +4,7 @@
 import { WKS, setStatus } from './state.js';
 import { Dialog } from '#dialog';
 import { importNotebook } from './import.js';
+import { importEpubBytes } from './book-import.js';
 import { openPath } from './surfaces.js';
 import { archive } from '#archive';
 import { parseGcupkg, installGcupkg } from '#gcupkg';
@@ -454,6 +455,13 @@ export function installGlobalFileDrop() {
         // the notebook-import flow (which is text-based).
         if (file.name.toLowerCase().endsWith('.gcupkg')) {
           await installDroppedGcupkg(file);
+          continue;
+        }
+        // .epub — ingest into a reader book (binary, like .gcupkg).
+        if (file.name.toLowerCase().endsWith('.epub')) {
+          const buf = new Uint8Array(await file.arrayBuffer());
+          const dir = await importEpubBytes(buf, file.name);
+          if (dir) { await openPath(dir); setStatus('imported ' + file.name); }
           continue;
         }
         const content = await file.text();

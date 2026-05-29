@@ -16,6 +16,7 @@ import { installDocsToVfs } from './docs-loader.js';
 import { installExamplesToVfs, hasExamples } from './examples-loader.js';
 import { serializeWorkspace, buildWorksHtml } from './persist.js';
 import { importNotebook, importFileAsNotebook } from './import.js';
+import { importEpubBytes } from './book-import.js';
 import { buildProjectExportHtml, exportProject } from './project-export.js';
 import { mountHandle, unmountAt, restoreMounts } from './mount.js';
 import { installGlobalFileDrop } from './file-ops.js';
@@ -48,6 +49,7 @@ async function boot() {
   WKS.duplicateProject = duplicateProject;
   WKS.importNotebook = importNotebook;
   WKS.importFileAsNotebook = importFileAsNotebook;
+  WKS.importBook = importEpubBytes;   // .epub bytes → /home/.books/library/<slug>/
   WKS.buildProjectExportHtml = buildProjectExportHtml;
   WKS.exportProject = exportProject;
   WKS.newFile = newFile;

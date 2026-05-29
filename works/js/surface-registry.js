@@ -443,6 +443,8 @@ registerKind('settings', { label: 'Settings', icon: '⚙', extensions: [] });
 registerKind('docs', { label: 'Documentation', icon: '?', extensions: [] });
 
 // Book reader — reflowable long-form reading (book.json + md/html chapters).
-// Opens a directory containing book.json (see openPath), or a .epub directly
-// once ingest lands. Reading position + settings persist per-book.
-registerKind('book', { label: 'Book', icon: '▤', extensions: ['.epub'] });
+// Opens a directory containing book.json (see openPath). A raw .epub isn't a
+// book yet — it's ingested into a book.json dir via File → Import book (EPUB)…
+// or by dropping it on the window (book-import.js), then that dir opens here.
+// (No .epub extension mapping: a raw .epub opened directly has no book.json.)
+registerKind('book', { label: 'Book', icon: '▤', extensions: [] });
