@@ -134,23 +134,34 @@ const PATCHBAY_BRIDGE_NB = `/// auditable
 /// title: Patchbay Bridge
 
 /// md
-# Patchbay ↔ notebook
+# Patchbay ↔ notebook — live over A-Bus
 
-This notebook talks to a **patchbay rack** (Open example → Patchbay → Example
-rack) through the shared workspace \`/tmp\`. Open the rack in another tab, then
-run these cells.
+This notebook drives a **patchbay rack** through the workspace bus with
+\`notebook.tag\` — no files, no polling. Open the rack (**Help → Open example →
+Patchbay → Example rack**) in another tab, then run these cells and watch the
+two surfaces move together.
 
-/// code
-// READ the value the rack's LOG module is writing (its SETPOINT).
-// Re-run this cell to pull the latest.
-let level = '(rack not running — open Tools → New rack)';
-try { level = parseFloat(await notebook.fs.read('/tmp/pb-level.txt')); } catch {}
-display('rack setpoint → ' + level);
+A topic is just \`"Interface.Member"\`. (Patchbay can also bridge through VFS
+files via its FILE / LOG modules — add them from **Add** — but \`notebook.tag\`
+is the live, push path.)
 
 /// code
-// WRITE a message the rack's FILE module displays live.
-await notebook.fs.write('/tmp/pb-msg.txt', 'hello from the notebook · ' + new Date().toLocaleTimeString());
-display('sent to rack ✓');
+// PUBLISH → the rack's TAG IN (topic user.level) drives its gauge needle.
+// Drag the slider; the rack reacts as you move it.
+const level = ui.slider('user.level', 0.6, { min: 0, max: 1, step: 0.01 });
+notebook.tag.publish('user.level', level);
+display('published  user.level → ' + level.toFixed(2) + '   (watch the rack gauge)');
+
+/// code
+// SUBSCRIBE → see the rack's SETPOINT knob live (topic rack.setpoint).
+// Turn the knob on the rack tab; this readout tracks it with no re-run.
+// sr.signal + sr.effect bind it live; tag.latest seeds the first value.
+const [setpoint, setSetpoint] = sr.signal(notebook.tag.latest('rack.setpoint') ?? 0);
+notebook.tag.subscribe('rack.setpoint', setSetpoint);
+const readout = document.createElement('div');
+readout.style.cssText = 'font:14px monospace;padding:4px 0';
+sr.effect(() => { readout.textContent = 'rack setpoint → ' + Number(setpoint()).toFixed(3); });
+display(readout);
 `;
 
 // Tools → New rack — a fresh, empty rack. (The demo lives under Help.)
@@ -169,10 +180,12 @@ async function newRack() {
 }
 
 // Open example → Patchbay → Example rack. The punk-SCADA demo, paired with the
-// integrated notebook over the workspace /tmp: row 0 is the monitor (a SIGNAL
-// fanning into TREND / GAUGE / ALARM); row 1 is the I/O bridge (SETPOINT → LOG
-// → /tmp/pb-level.txt the notebook reads; FILE ← /tmp/pb-msg.txt the notebook
-// writes, shown live). Fixed path so reopening doesn't proliferate copies.
+// integrated notebook over A-Bus: row 0 is the monitor (a SIGNAL fanning into
+// TREND / GAUGE / ALARM); row 1 is the notebook bridge — SETPOINT → TAG OUT
+// publishes topic rack.setpoint (the notebook subscribes), and TAG IN ←
+// user.level (the notebook publishes) drives a GAUGE. Both directions are
+// user-driven / low-rate by design. Overwritten on open — it's the canonical
+// example, not user data, so it always reflects the current build.
 async function openExampleRack() {
   const EXAMPLE = '/projects/patchbay-example.patchbay';
   const rack = {
@@ -184,25 +197,25 @@ async function openExampleRack() {
       { id: 'trend',  type: 'disp.scope',  row: 0, hpPos: 14, knobs: {}, params: {} },
       { id: 'gauge',  type: 'disp.gauge',  row: 0, hpPos: 32, knobs: {}, params: {} },
       { id: 'alarm',  type: 'ctrl.alarm',  row: 0, hpPos: 44, knobs: { level: 0.7, hyst: 0.05 }, params: {} },
-      // row 1 — notebook bridge (aligned under the monitor)
+      // row 1 — notebook bridge over A-Bus (notebook.tag)
       { id: 'setpt',  type: 'src.const',   row: 1, hpPos: 2,  knobs: { value: 0.6 }, params: {} },
-      { id: 'log',    type: 'io.vfs-write', row: 1, hpPos: 12, knobs: {}, params: { path: '/tmp/pb-level.txt' } },
-      { id: 'file',   type: 'io.vfs-read',  row: 1, hpPos: 26, knobs: {}, params: { path: '/tmp/pb-msg.txt' } },
-      { id: 'note',   type: 'panel.note',  row: 1, hpPos: 40,
-        params: { text: 'I/O bridge → open the integrated notebook' } },
+      { id: 'tagout', type: 'io.abus-out', row: 1, hpPos: 12, knobs: {}, params: { topic: 'rack.setpoint' } },
+      { id: 'tagin',  type: 'io.abus-in',  row: 1, hpPos: 26, knobs: {}, params: { topic: 'user.level' } },
+      { id: 'level',  type: 'disp.gauge',  row: 1, hpPos: 38, knobs: {}, params: {} },
+      { id: 'note',   type: 'panel.note',  row: 1, hpPos: 52,
+        params: { text: 'A-Bus bridge · notebook.tag → open the integrated notebook' } },
     ],
     cables: [
       { from: { id: 'signal', port: 'sin' }, to: { id: 'trend', port: 'x' }, color: 'teal' },
       { from: { id: 'signal', port: 'tri' }, to: { id: 'gauge', port: 'x' }, color: 'teal' },
       { from: { id: 'signal', port: 'sin' }, to: { id: 'alarm', port: 'x' }, color: 'red' },
-      { from: { id: 'setpt', port: 'v' }, to: { id: 'log', port: 'content' }, color: 'amber' },
+      { from: { id: 'setpt',  port: 'v' },   to: { id: 'tagout', port: 'value' }, color: 'orange' },
+      { from: { id: 'tagin',  port: 'value' }, to: { id: 'level', port: 'x' }, color: 'indigo' },
     ],
   };
   try {
-    if (!(await WKS.vfs.exists(EXAMPLE))) {
-      await WKS.vfs.mkdir('/projects', { recursive: true }).catch(() => {});
-      await WKS.vfs.writeFile(EXAMPLE, JSON.stringify(rack, null, 2));
-    }
+    await WKS.vfs.mkdir('/projects', { recursive: true }).catch(() => {});
+    await WKS.vfs.writeFile(EXAMPLE, JSON.stringify(rack, null, 2));
   } catch (e) { setStatus('example rack failed: ' + (e.message || e)); return; }
   await openPath(EXAMPLE);
 }
@@ -211,12 +224,14 @@ async function openExampleRack() {
 async function openExampleNotebook() {
   const nbDir = '/projects/Patchbay Bridge';
   try {
+    await WKS.vfs.mkdir(nbDir, { recursive: true });
+    // Stable project id (keep it across opens); always refresh notebook.txt so
+    // the canonical example reflects the current build.
     if (!(await WKS.vfs.exists(nbDir + '/project.json'))) {
-      await WKS.vfs.mkdir(nbDir, { recursive: true });
       await WKS.vfs.writeFile(nbDir + '/project.json',
-        JSON.stringify({ kind: 'notebook', id: 'pb-bridge-' + Math.random().toString(36).slice(2, 8), title: 'Patchbay Bridge' }));
-      await WKS.vfs.writeFile(nbDir + '/notebook.txt', PATCHBAY_BRIDGE_NB);
+        JSON.stringify({ kind: 'notebook', id: 'pb-bridge', title: 'Patchbay Bridge' }));
     }
+    await WKS.vfs.writeFile(nbDir + '/notebook.txt', PATCHBAY_BRIDGE_NB);
   } catch (e) { setStatus('example notebook failed: ' + (e.message || e)); return; }
   await openPath(nbDir);
 }
