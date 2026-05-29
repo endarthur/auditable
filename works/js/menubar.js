@@ -50,6 +50,9 @@ export function setupMenuBar() {
         items.push({ label: 'Open example…',           action: 'help:openexample' });
       }
       items.push('---');
+      items.push({ label: 'Patchbay example rack',     action: 'help:pb-rack' });
+      items.push({ label: 'Patchbay example notebook', action: 'help:pb-nb' });
+      items.push('---');
       items.push({ label: 'About Auditable Works', action: 'help:about' });
       return items;
     } },
@@ -104,6 +107,8 @@ export function setupMenuBar() {
       return;
     }
     if (action === 'help:openexample') { await openExamplePicker(); return; }
+    if (action === 'help:pb-rack') { await openExampleRack(); return; }
+    if (action === 'help:pb-nb') { await openExampleNotebook(); return; }
     if (action === 'help:about') { await showAbout(); return; }
     setStatus(`menu: ${action}`);  // workspace:save lands with 5b
   });
@@ -139,8 +144,8 @@ const PATCHBAY_BRIDGE_NB = `/// auditable
 /// md
 # Patchbay ↔ notebook
 
-This notebook talks to a **patchbay rack** (Tools → New rack) through the shared
-workspace \`/tmp\`. Open the rack in another tab, then run these cells.
+This notebook talks to a **patchbay rack** (Help → Patchbay example rack) through
+the shared workspace \`/tmp\`. Open the rack in another tab, then run these cells.
 
 /// code
 // READ the value the rack's LOG module is writing (its SETPOINT).
@@ -155,11 +160,28 @@ await notebook.fs.write('/tmp/pb-msg.txt', 'hello from the notebook · ' + new D
 display('sent to rack ✓');
 `;
 
+// Tools → New rack — a fresh, empty rack. (The demo lives under Help.)
 async function newRack() {
-  // A punk-SCADA demo with a two-way notebook bridge over the workspace /tmp:
-  //   LOG  writes the SETPOINT  → /tmp/pb-level.txt  (notebook reads it)
-  //   FILE reads /tmp/pb-msg.txt → shown live         (notebook writes it)
-  const starter = {
+  const blank = { format: 'patchbay', version: 1, rack: { hp: 64, rows: [{ kind: '3U' }, { kind: '3U' }] }, modules: [], cables: [] };
+  let path = '/projects/rack.patchbay';
+  try {
+    for (let i = 2; await WKS.vfs.exists(path); i++) path = `/projects/rack-${i}.patchbay`;
+    await WKS.vfs.mkdir('/projects', { recursive: true }).catch(() => {});
+    await WKS.vfs.writeFile(path, JSON.stringify(blank, null, 2));
+  } catch (e) {
+    setStatus('New rack failed: ' + (e.message || e));
+    return;
+  }
+  await openPath(path);
+}
+
+// Help → Patchbay example rack — the punk-SCADA demo paired with the example
+// notebook over the workspace /tmp: LOG writes the SETPOINT → /tmp/pb-level.txt
+// (notebook reads it); FILE reads /tmp/pb-msg.txt → shown live (notebook writes
+// it). Reuses a fixed path so reopening doesn't proliferate copies.
+async function openExampleRack() {
+  const EXAMPLE = '/projects/patchbay-example.patchbay';
+  const rack = {
     format: 'patchbay', version: 1,
     rack: { hp: 72, rows: [{ kind: '3U' }, { kind: '3U' }] },
     modules: [
@@ -171,7 +193,7 @@ async function newRack() {
       { id: 'log',    type: 'io.vfs-write', row: 1, hpPos: 12, knobs: {}, params: { path: '/tmp/pb-level.txt' } },
       { id: 'file',   type: 'io.vfs-read',  row: 1, hpPos: 26, knobs: {}, params: { path: '/tmp/pb-msg.txt' } },
       { id: 'note',   type: 'panel.note',  row: 1, hpPos: 40,
-        params: { text: 'open the “Patchbay Bridge” notebook → it reads pb-level.txt and writes pb-msg.txt' } },
+        params: { text: 'pairs with Help → Patchbay example notebook (reads pb-level.txt, writes pb-msg.txt)' } },
     ],
     cables: [
       { from: { id: 'signal', port: 'sin' }, to: { id: 'trend', port: 'x' }, color: 'teal' },
@@ -180,25 +202,27 @@ async function newRack() {
       { from: { id: 'setpt', port: 'v' }, to: { id: 'log', port: 'content' }, color: 'amber' },
     ],
   };
-  let path = '/projects/rack.patchbay';
   try {
-    for (let i = 2; await WKS.vfs.exists(path); i++) path = `/projects/rack-${i}.patchbay`;
-    await WKS.vfs.mkdir('/projects', { recursive: true }).catch(() => {});
-    await WKS.vfs.writeFile(path, JSON.stringify(starter, null, 2));
-    // Create the companion notebook once, and open it so the pair is obvious.
-    const nbDir = '/projects/Patchbay Bridge';
+    if (!(await WKS.vfs.exists(EXAMPLE))) {
+      await WKS.vfs.mkdir('/projects', { recursive: true }).catch(() => {});
+      await WKS.vfs.writeFile(EXAMPLE, JSON.stringify(rack, null, 2));
+    }
+  } catch (e) { setStatus('example rack failed: ' + (e.message || e)); return; }
+  await openPath(EXAMPLE);
+}
+
+// Help → Patchbay example notebook — the companion that bridges to the rack.
+async function openExampleNotebook() {
+  const nbDir = '/projects/Patchbay Bridge';
+  try {
     if (!(await WKS.vfs.exists(nbDir + '/project.json'))) {
       await WKS.vfs.mkdir(nbDir, { recursive: true });
       await WKS.vfs.writeFile(nbDir + '/project.json',
         JSON.stringify({ kind: 'notebook', id: 'pb-bridge-' + Math.random().toString(36).slice(2, 8), title: 'Patchbay Bridge' }));
       await WKS.vfs.writeFile(nbDir + '/notebook.txt', PATCHBAY_BRIDGE_NB);
-      await openPath(nbDir);
     }
-  } catch (e) {
-    setStatus('New rack failed: ' + (e.message || e));
-    return;
-  }
-  await openPath(path);
+  } catch (e) { setStatus('example notebook failed: ' + (e.message || e)); return; }
+  await openPath(nbDir);
 }
 
 // Help → Open example… — picker over /usr/share/examples/ (works-all
