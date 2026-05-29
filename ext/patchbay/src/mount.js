@@ -341,28 +341,32 @@ export function mountPatchbay(ctx) {
     commit();
   }
 
-  // ── rack mutators (the Rack menu) ──
+  // ── rack mutators (Rack settings panel) ──
   function addRow(kind) {
     const r = renderer.rack;
     renderer.setRack({ ...r, rows: [...r.rows, { kind }] });
     renderer.fitToViewport(); commit();
   }
-  function removeRow() {
+  function removeRowAt(i) {
     const r = renderer.rack;
     if (r.rows.length <= 1) return;
-    const last = r.rows.length - 1;
-    for (const inst of engine.instances.values()) if (inst.row >= last) inst.row = last - 1;
-    renderer.setRack({ ...r, rows: r.rows.slice(0, -1) });
+    // modules in the removed row fall to the previous row; later rows shift up.
+    for (const inst of engine.instances.values()) {
+      if (inst.row === i) inst.row = Math.max(0, i - 1);
+      else if (inst.row > i) inst.row -= 1;
+    }
+    renderer.setRack({ ...r, rows: r.rows.filter((_, idx) => idx !== i) });
     renderer.fitToViewport(); commit();
   }
-  function resizeRack(delta) {
+  // Set the rack width in HP (absolute), clamping module positions to fit.
+  function setRackWidth(hp) {
+    hp = Math.max(16, Math.min(256, hp | 0));
     const r = renderer.rack;
-    const hp = Math.max(16, Math.min(256, r.hp + delta));
     for (const inst of engine.instances.values()) {
       inst.hpPos = Math.max(0, Math.min(hp - inst.def.hp, inst.hpPos));
     }
     renderer.setRack({ ...r, hp });
-    renderer.fitToViewport(); commit();
+    renderer.fitToViewport();
   }
 
   // ── menubar (injected MenuBar) ──
@@ -390,11 +394,9 @@ export function mountPatchbay(ctx) {
       case 'view:fit': renderer.fitToViewport(); break;
       case 'view:rails': interaction.setRailsOn(!interaction.state.railsOn); break;
       case 'view:flow': showFlow = !showFlow; break;
+      case 'rack:settings': openRackSettings(); break;
       case 'rack:add3u': addRow('3U'); break;
       case 'rack:add1u': addRow('1U'); break;
-      case 'rack:delrow': removeRow(); break;
-      case 'rack:wider': resizeRack(8); break;
-      case 'rack:narrower': resizeRack(-8); break;
     }
   }
 
@@ -425,12 +427,10 @@ export function mountPatchbay(ctx) {
         { label: 'Show flow', action: 'view:flow',  checked: showFlow },
       ] },
       { label: 'Rack', items: () => [
+        { label: 'Rack settings…', action: 'rack:settings' },
+        '---',
         { label: 'Add 3U row',     action: 'rack:add3u' },
         { label: 'Add 1U row',     action: 'rack:add1u' },
-        { label: 'Remove last row', action: 'rack:delrow', disabled: renderer.rack.rows.length <= 1 },
-        '---',
-        { label: 'Wider  (+8 HP)',   action: 'rack:wider' },
-        { label: 'Narrower (−8 HP)', action: 'rack:narrower' },
       ] },
     ]);
     menubar.on('action', runAction);
@@ -462,6 +462,9 @@ export function mountPatchbay(ctx) {
         ctxMenu.appendChild(it);
       } else {
         renderModuleList(ctxMenu, (type) => { addModuleAt(type, slotAtWorld(getModuleDef(type), wx, wy)); hideMenus(); });
+        const rs = doc.createElement('div'); rs.className = 'pb-item'; rs.textContent = 'Rack settings…';
+        rs.addEventListener('click', (ev) => { ev.stopPropagation(); openRackSettings(); hideMenus(); });
+        ctxMenu.insertBefore(rs, ctxMenu.firstChild);
       }
     }
     ctxMenu.style.left = Math.max(4, Math.min(sx, host.clientWidth - 172)) + 'px';
@@ -632,6 +635,58 @@ export function mountPatchbay(ctx) {
     insp.classList.add('open');
   }
   inspX.addEventListener('click', () => closeInspector());
+
+  // ── rack settings (the slide-out, in rack mode) ──
+  function openRackSettings() {
+    inspectedId = null;
+    clearInspEffects();
+    const tc = readThemeColors(doc.documentElement);
+    const rk = () => renderer.rack;
+    inspH4.textContent = 'Rack';
+    inspH4.style.color = tc.orange || 'inherit';
+    const updTy = () => { inspTy.textContent = rk().hp + ' HP · ' + rk().rows.length + ' rows'; };
+    updTy();
+    inspBody.innerHTML = '';
+    const section = (name) => { const s = doc.createElement('div'); s.className = 'pb-sec'; s.textContent = name; inspBody.appendChild(s); };
+
+    // Width — precise slider + number.
+    section('Width');
+    const lab = doc.createElement('label'); const v = doc.createElement('span'); v.className = 'v'; v.textContent = rk().hp + ' HP';
+    lab.textContent = 'width '; lab.appendChild(v);
+    const slider = doc.createElement('input'); slider.type = 'range'; slider.min = 16; slider.max = 256; slider.step = 2; slider.value = rk().hp;
+    const num = doc.createElement('input'); num.type = 'number'; num.min = 16; num.max = 256; num.value = rk().hp; num.style.marginTop = '4px';
+    const applyW = (hp, commitIt) => {
+      setRackWidth(hp); const w = rk().hp;
+      v.textContent = w + ' HP'; slider.value = w; num.value = w; updTy();
+      (commitIt ? commit : markDirty)();
+    };
+    slider.addEventListener('input', () => applyW(parseInt(slider.value, 10), false));
+    slider.addEventListener('change', () => applyW(parseInt(slider.value, 10), true));
+    num.addEventListener('change', () => applyW(parseInt(num.value, 10), true));
+    inspBody.append(lab, slider, num);
+
+    // Rows — list with per-row remove + add buttons.
+    section('Rows');
+    rk().rows.forEach((row, i) => {
+      const line = doc.createElement('div'); line.className = 'pb-readout';
+      const n = doc.createElement('span'); n.className = 'n'; n.textContent = (i + 1) + ' · ' + row.kind;
+      const del = doc.createElement('span'); del.textContent = '✕';
+      del.style.cssText = 'cursor:pointer;color:var(--sw-red,#D05048)' + (rk().rows.length <= 1 ? ';opacity:.3;pointer-events:none' : '');
+      del.addEventListener('click', () => { removeRowAt(i); openRackSettings(); });
+      line.append(n, del); inspBody.appendChild(line);
+    });
+    const addBtns = doc.createElement('div'); addBtns.style.cssText = 'display:flex;gap:6px;margin-top:8px';
+    for (const kind of ['3U', '1U']) {
+      const b = doc.createElement('button'); b.className = 'pb-del';
+      b.style.cssText = 'margin:0;background:var(--sw-bg-deep);border-color:var(--sw-border);color:var(--sw-text)';
+      b.textContent = '+ ' + kind;
+      b.addEventListener('click', () => { addRow(kind); openRackSettings(); });
+      addBtns.appendChild(b);
+    }
+    inspBody.appendChild(addBtns);
+
+    insp.classList.add('open');
+  }
 
   // ── theme re-read on shell SettingsChanged ──
   let themeUnsub = null;
