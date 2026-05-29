@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>Reader</title>
+<style>
+  /* @theme-tokens */
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--au-surface); color: var(--au-fg);
+    font: 13px/1.6 'Barlow', system-ui, sans-serif;
+    display: flex; flex-direction: column;
+    /* Reading typography knobs — set by the settings popover, persisted. */
+    --reader-font: 'Barlow', Georgia, serif;
+    --reader-size: 18px;
+    --reader-width: 680px;
+  }
+  * { scrollbar-width: thin; scrollbar-color: var(--au-border) var(--au-surface-deep); }
+  *::-webkit-scrollbar { width: 8px; height: 8px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  *::-webkit-scrollbar-thumb { background: var(--au-border); border-radius: 4px; }
+  *::-webkit-scrollbar-thumb:hover { background: var(--au-rule, var(--au-fg-soft)); }
+  *::-webkit-scrollbar-corner { background: transparent; }
+
+  header {
+    flex: none; display: flex; align-items: center; gap: 8px;
+    padding: 6px 12px; border-bottom: 1px solid var(--au-border); background: var(--au-surface-raised);
+    position: relative; z-index: 30;
+  }
+  header .title { font-weight: 600; color: var(--au-fg);
+    font-family: ui-monospace, 'Space Mono', monospace; font-size: 12px;
+    letter-spacing: 1px; white-space: nowrap; }
+  header .crumb { color: var(--au-fg-soft); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  header .spacer { flex: 1; }
+  header button {
+    background: none; border: 1px solid var(--au-border); border-radius: 3px;
+    color: var(--au-fg); cursor: pointer; padding: 2px 9px; font: inherit; line-height: 1.4;
+  }
+  header button:hover:not(:disabled) { background: var(--au-surface-bright); }
+  header button:disabled { opacity: 0.4; cursor: default; }
+
+  /* Reading-settings popover. */
+  .settings-pop {
+    position: absolute; top: 38px; right: 10px; z-index: 40;
+    background: var(--au-surface-raised); border: 1px solid var(--au-border);
+    border-radius: 6px; box-shadow: 0 12px 32px rgba(0,0,0,0.4);
+    padding: 12px 14px; width: 230px; display: none;
+    font-family: ui-monospace, 'Space Mono', monospace; font-size: 11px;
+  }
+  .settings-pop.open { display: block; }
+  .settings-pop .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 8px 0; }
+  .settings-pop .row:first-child { margin-top: 0; }
+  .settings-pop label { color: var(--au-fg-muted); }
+  .settings-pop .seg { display: flex; border: 1px solid var(--au-border); border-radius: 4px; overflow: hidden; }
+  .settings-pop .seg button { border: none; border-radius: 0; padding: 3px 8px; background: var(--au-surface); }
+  .settings-pop .seg button.active { background: var(--au-action); color: #fff; }
+  .settings-pop input[type=range] { width: 110px; accent-color: var(--au-action); }
+
+  .body { flex: 1; display: flex; min-height: 0; position: relative; }
+  .backdrop {
+    position: absolute; inset: 0; background: rgba(0,0,0,0.4);
+    opacity: 0; pointer-events: none; transition: opacity 0.15s; z-index: 10;
+  }
+  body.nav-open .backdrop { opacity: 1; pointer-events: auto; }
+  .contents {
+    position: absolute; top: 0; left: 0; bottom: 0; width: 300px; overflow: auto;
+    border-right: 1px solid var(--au-border); background: var(--au-surface-raised);
+    font-family: ui-monospace, 'Space Mono', monospace; font-size: 11px;
+    padding: 10px 0; transform: translateX(-100%); transition: transform 0.18s ease-out; z-index: 20;
+  }
+  body.nav-open .contents { transform: translateX(0); }
+  .contents .book-meta { padding: 4px 16px 12px; border-bottom: 1px solid var(--au-border); margin-bottom: 8px; }
+  .contents .book-title { color: var(--au-fg); font-size: 13px; font-weight: 600; }
+  .contents .book-author { color: var(--au-fg-soft); font-size: 11px; margin-top: 2px; }
+  .contents .chap {
+    padding: 6px 16px; cursor: pointer; color: var(--au-fg-muted);
+    border-left: 2px solid transparent; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .contents .chap:hover { background: var(--au-surface-bright); color: var(--au-fg); }
+  .contents .chap.active { color: var(--au-fg); border-left-color: var(--au-action); background: var(--au-surface); }
+
+  .content {
+    flex: 1; overflow: auto; padding: 40px 48px 80px;
+  }
+  .content .page {
+    max-width: var(--reader-width); margin: 0 auto;
+    font-family: var(--reader-font); font-size: var(--reader-size); line-height: 1.7;
+    color: var(--au-fg);
+  }
+  body.font-sans .content .page { --reader-font: 'Barlow', system-ui, sans-serif; }
+  body.font-serif .content .page { --reader-font: Georgia, 'Times New Roman', serif; }
+  body.font-mono .content .page { --reader-font: ui-monospace, 'Space Mono', monospace; }
+  .content h1, .content h2, .content h3, .content h4 { color: var(--au-fg); line-height: 1.25; }
+  .content h1 { font-size: 1.6em; margin: 0 0 0.6em; color: var(--au-action); }
+  .content h2 { font-size: 1.3em; margin: 1.4em 0 0.5em; border-bottom: 1px solid var(--au-border); padding-bottom: 0.2em; }
+  .content h3 { font-size: 1.12em; margin: 1.2em 0 0.4em; }
+  .content p { margin: 0 0 1em; }
+  .content code { font-family: ui-monospace, 'Space Mono', monospace; background: var(--au-surface-bright); padding: 1px 5px; border-radius: 2px; font-size: 0.85em; }
+  .content pre { background: var(--au-surface-raised); border: 1px solid var(--au-border); border-radius: 3px; padding: 10px 14px; overflow-x: auto; font-size: 0.8em; line-height: 1.5; }
+  .content pre code { background: none; padding: 0; }
+  .content a { color: var(--au-info); text-decoration: none; }
+  .content a:hover { text-decoration: underline; }
+  .content blockquote { border-left: 3px solid var(--au-border); padding-left: 14px; color: var(--au-fg-muted); margin: 1em 0; }
+  .content ul, .content ol { padding-left: 1.4em; margin: 0 0 1em; }
+  .content img { max-width: 100%; height: auto; }
+  .content table { border-collapse: collapse; margin: 1em 0; font-size: 0.85em; }
+  .content th, .content td { border: 1px solid var(--au-border); padding: 4px 10px; text-align: left; }
+  .content th { background: var(--au-surface-raised); }
+  .content h1, .content h2, .content h3 { scroll-margin-top: 20px; position: relative; }
+  .content h1 .anchor-link, .content h2 .anchor-link, .content h3 .anchor-link {
+    position: absolute; left: -20px; top: 0; bottom: 0; display: flex; align-items: center;
+    color: var(--au-border); text-decoration: none; opacity: 0; transition: opacity 0.1s; padding: 0 5px; font-size: 0.7em;
+  }
+  .content h1:hover .anchor-link, .content h2:hover .anchor-link, .content h3:hover .anchor-link { opacity: 1; }
+  .content .anchor-link:hover { color: var(--au-action) !important; }
+
+  /* Footer chapter nav. */
+  .chap-foot { max-width: var(--reader-width); margin: 40px auto 0; display: flex; justify-content: space-between; gap: 12px;
+    border-top: 1px solid var(--au-border); padding-top: 16px; font-family: ui-monospace,'Space Mono',monospace; font-size: 12px; }
+  .chap-foot a { color: var(--au-info); cursor: pointer; text-decoration: none; }
+  .chap-foot a:hover { text-decoration: underline; }
+  .chap-foot .sp { flex: 1; }
+
+  /* Right-side TOC (within chapter). */
+  .toc {
+    position: fixed; right: 14px; top: 52px; max-height: calc(100vh - 80px); width: 190px;
+    padding: 8px 0 8px 12px; overflow: auto;
+    font: 11px/1.5 ui-monospace, 'Space Mono', monospace; color: var(--au-fg-soft);
+    border-left: 1px solid var(--au-border); z-index: 5;
+  }
+  .toc.empty-toc { display: none; }
+  .toc h4 { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--au-action); margin: 0 0 6px; }
+  .toc a { display: block; padding: 2px 0 2px 8px; color: var(--au-fg-muted); text-decoration: none; border-left: 2px solid transparent; margin-left: -10px; }
+  .toc a:hover { color: var(--au-fg); }
+  .toc a.active { color: var(--au-fg); border-left-color: var(--au-action); }
+  .toc a.lvl3 { padding-left: 18px; font-size: 10.5px; }
+  @media (max-width: 1180px) { .toc { display: none; } }
+
+  /* Syntax tokens (docview.highlightCode) — mapped to semantic accents. */
+  .content .tok-comment { color: var(--au-fg-soft); font-style: italic; }
+  .content .tok-string  { color: var(--au-success); }
+  .content .tok-number  { color: var(--au-warn); }
+  .content .tok-keyword { color: var(--au-info); }
+  .content .tok-builtin { color: var(--au-selected); }
+  .content .tok-tag     { color: var(--au-error); }
+  .content .tok-attr    { color: var(--au-warn); }
+  .content .tok-punct   { color: var(--au-fg-muted); }
+
+  .err { color: var(--au-error); padding: 24px; }
+  .empty { color: var(--au-fg-soft); padding: 24px; font-style: italic; }
+</style>
+</head>
+<body class="font-serif">
+<header>
+  <button id="navToggle" title="Contents (Ctrl+\)">☰</button>
+  <span class="title" id="bookTitle">Reader</span>
+  <span class="crumb" id="crumb"></span>
+  <span class="spacer"></span>
+  <button id="prevBtn" title="Previous chapter (←)">‹ Prev</button>
+  <button id="nextBtn" title="Next chapter (→)">Next ›</button>
+  <button id="setBtn" title="Reading settings">Aa</button>
+  <div class="settings-pop" id="settingsPop">
+    <div class="row">
+      <label>Typeface</label>
+      <div class="seg" id="fontSeg">
+        <button data-font="serif">Serif</button>
+        <button data-font="sans">Sans</button>
+        <button data-font="mono">Mono</button>
+      </div>
+    </div>
+    <div class="row">
+      <label>Size</label>
+      <input type="range" id="sizeRange" min="14" max="26" step="1">
+    </div>
+    <div class="row">
+      <label>Width</label>
+      <input type="range" id="widthRange" min="520" max="980" step="20">
+    </div>
+  </div>
+</header>
+<div class="body">
+  <div class="backdrop" id="backdrop"></div>
+  <nav class="contents" id="contents"></nav>
+  <div class="content" id="content"><div class="empty">Loading book…</div></div>
+  <aside class="toc empty-toc" id="toc"></aside>
+</div>
+<script type="module">
+import { connect } from '../../ext/abus/index.js';
+
+/* @theme-init */
+import { renderMd, slugify } from '../../src/js/markdown.js';
+import { highlightCode, scrollToAnchor, decorateHeadings, buildToc, rewireLinks, makeStatePersister } from '../../ext/docview/index.js';
+
+const $ = (id) => document.getElementById(id);
+
+let bus = null;
+let persister = null;
+let book = null;          // parsed book.json
+let bookDir = '';         // directory holding book.json + chapters
+let slug = 'book';
+let chapters = [];        // book.chapters
+let curIndex = 0;
+let settings = { font: 'serif', size: 18, width: 680 };
+let _toc = { items: [], update() {} };
+
+// ── Renderer-backend seam (spec: format → backend) ──────────────────
+// v1 ships the reflowable backend (markdown + sanitized HTML → our DOM, so
+// docview decorations / search / theming all apply). Fixed-layout backends
+// (pdf, djvu) slot in here later; for now they degrade to a clear message.
+function sanitizeHtml(html) {
+  const tpl = document.createElement('template');
+  tpl.innerHTML = html;
+  for (const el of tpl.content.querySelectorAll('script, style, link, meta, iframe, object, embed')) el.remove();
+  for (const el of tpl.content.querySelectorAll('*')) {
+    for (const at of [...el.attributes]) {
+      if (/^on/i.test(at.name) || (/^(href|src)$/i.test(at.name) && /^\s*javascript:/i.test(at.value))) el.removeAttribute(at.name);
+    }
+  }
+  return tpl.innerHTML;
+}
+const BACKENDS = {
+  reflowable: {
+    render(chapter, raw, pageEl) {
+      pageEl.innerHTML = chapter.format === 'html' ? sanitizeHtml(raw) : renderMd(raw);
+      decorateHeadings(pageEl, (id) => {
+        try { navigator.clipboard?.writeText(slug + '/' + chapter.id + '#' + id); } catch {}
+      });
+      highlightCode(pageEl);
+    },
+  },
+};
+function backendFor(format) {
+  if (format === 'pdf' || format === 'djvu') return null;   // fixed-layout: not yet
+  return BACKENDS.reflowable;
+}
+
+// ── VFS helpers ─────────────────────────────────────────────────────
+async function vfsRead(p) {
+  return bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [p, 'utf8']);
+}
+// Resolve a chapter file path (relative to the book dir), normalising ../.
+function resolveInBook(relPath) {
+  const base = relPath.startsWith('/') ? relPath : bookDir + '/' + relPath;
+  const out = [];
+  for (const seg of base.split('/')) {
+    if (seg === '..') out.pop();
+    else if (seg && seg !== '.') out.push(seg);
+  }
+  return '/' + out.join('/');
+}
+
+// ── Reading settings ────────────────────────────────────────────────
+function applySettings() {
+  document.body.classList.remove('font-serif', 'font-sans', 'font-mono');
+  document.body.classList.add('font-' + settings.font);
+  document.body.style.setProperty('--reader-size', settings.size + 'px');
+  document.body.style.setProperty('--reader-width', settings.width + 'px');
+  for (const b of document.querySelectorAll('#fontSeg button'))
+    b.classList.toggle('active', b.dataset.font === settings.font);
+  $('sizeRange').value = settings.size;
+  $('widthRange').value = settings.width;
+}
+
+// ── Persistence ─────────────────────────────────────────────────────
+function scheduleSave() {
+  if (!persister || !chapters.length) return;
+  persister.schedule(() => ({
+    chapterId: chapters[curIndex] && chapters[curIndex].id,
+    scrollTop: $('content').scrollTop || 0,
+    settings,
+  }));
+}
+
+// ── Contents (chapter spine) ────────────────────────────────────────
+function renderContents() {
+  const el = $('contents');
+  el.innerHTML = '';
+  const meta = document.createElement('div');
+  meta.className = 'book-meta';
+  const t = document.createElement('div'); t.className = 'book-title'; t.textContent = book.title || slug;
+  meta.appendChild(t);
+  if (book.author) { const a = document.createElement('div'); a.className = 'book-author'; a.textContent = book.author; meta.appendChild(a); }
+  el.appendChild(meta);
+  chapters.forEach((c, i) => {
+    const d = document.createElement('div');
+    d.className = 'chap' + (i === curIndex ? ' active' : '');
+    d.textContent = c.title || ('Chapter ' + (i + 1));
+    d.dataset.idx = i;
+    d.addEventListener('click', () => { loadChapter(i); setNavOpen(false); });
+    el.appendChild(d);
+  });
+}
+function setNavOpen(open) { document.body.classList.toggle('nav-open', open); }
+
+// ── Load a chapter ──────────────────────────────────────────────────
+async function loadChapter(index, anchor) {
+  if (index < 0 || index >= chapters.length) return;
+  curIndex = index;
+  const chapter = chapters[index];
+  const backend = backendFor(chapter.format || 'md');
+  $('crumb').textContent = chapter.title || '';
+  // active in spine
+  for (const d of document.querySelectorAll('.contents .chap')) {
+    const on = +d.dataset.idx === index;
+    d.classList.toggle('active', on);
+    if (on) d.scrollIntoView({ block: 'nearest' });
+  }
+  const contentEl = $('content');
+  if (!backend) {
+    contentEl.innerHTML = '<div class="err">This chapter is ' + (chapter.format || '?')
+      + ' — a fixed-layout reader backend isn\'t available yet.</div>';
+    return;
+  }
+  let raw;
+  try { raw = await vfsRead(resolveInBook(chapter.file)); }
+  catch (e) {
+    contentEl.innerHTML = '<div class="err">failed to load ' + chapter.file + ': ' + (e.message || e) + '</div>';
+    return;
+  }
+  contentEl.innerHTML = '';
+  const page = document.createElement('div');
+  page.className = 'page';
+  contentEl.appendChild(page);
+  backend.render(chapter, raw, page);
+  // cross-chapter + in-chapter links
+  rewireLinks(page, chapter.file, (resolved, anch) => {
+    // resolved is relative to chapter.file's dir; match against a chapter file
+    const want = resolveInBook(chapter.file.includes('/') ? chapter.file.slice(0, chapter.file.lastIndexOf('/') + 1) + resolved.split('/').slice(-1)[0] : resolved);
+    const idx = chapters.findIndex((c) => resolveInBook(c.file) === resolveInBook(resolved) || resolveInBook(c.file) === want);
+    if (idx >= 0) loadChapter(idx, anch);
+  });
+  // chapter footer prev/next
+  const foot = document.createElement('div');
+  foot.className = 'chap-foot';
+  const prev = document.createElement('a');
+  if (index > 0) { prev.textContent = '‹ ' + (chapters[index - 1].title || 'Previous'); prev.addEventListener('click', () => loadChapter(index - 1)); }
+  const next = document.createElement('a');
+  if (index < chapters.length - 1) { next.textContent = (chapters[index + 1].title || 'Next') + ' ›'; next.addEventListener('click', () => loadChapter(index + 1)); }
+  foot.append(prev, Object.assign(document.createElement('span'), { className: 'sp' }), next);
+  page.appendChild(foot);
+
+  _toc = buildToc(page, $('toc'));
+  updateButtons();
+  if (anchor && scrollToAnchor(anchor)) { /* anchor wins */ }
+  else { contentEl.scrollTop = 0; }
+  scheduleSave();
+}
+function updateButtons() {
+  $('prevBtn').disabled = curIndex <= 0;
+  $('nextBtn').disabled = curIndex >= chapters.length - 1;
+}
+
+// ── Boot ────────────────────────────────────────────────────────────
+window.addEventListener('message', async (ev) => {
+  if (ev.source !== window.parent) return;
+  if (!ev.data || ev.data.type !== 'abus:welcome') return;
+
+  try { bus = await connect(ev.data.port, { client: 'reader-surface' }); }
+  catch (e) { document.body.innerHTML = '<div class="err">connect failed: ' + (e.message || e) + '</div>'; return; }
+  try { await bus.claim('reader-' + (ev.data.tab && ev.data.tab.id || 'unknown')); } catch {}
+  installThemeSubscription(bus);
+  bus.expose('/', {
+    Surface: {
+      methods: { Flush: () => {}, CanClose: () => true, Relocated: () => {} },
+      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
+    },
+  });
+
+  const tabPath = (ev.data.tab && ev.data.tab.path) || '/';
+  // path may be the book.json file itself or the directory holding it.
+  const manifestPath = tabPath.endsWith('.json') ? tabPath : (tabPath.replace(/\/$/, '') + '/book.json');
+  bookDir = manifestPath.slice(0, manifestPath.lastIndexOf('/'));
+  try {
+    book = JSON.parse(await vfsRead(manifestPath));
+  } catch (e) {
+    document.body.innerHTML = '<div class="err">no book.json at ' + manifestPath + ' — ' + (e.message || e) + '</div>';
+    return;
+  }
+  chapters = Array.isArray(book.chapters) ? book.chapters : [];
+  // give chapters stable ids if absent
+  chapters.forEach((c, i) => { if (!c.id) c.id = 'ch' + (i + 1); });
+  slug = book.slug || (bookDir.split('/').pop()) || 'book';
+  $('bookTitle').textContent = book.title || slug;
+
+  persister = makeStatePersister(bus, '/home/.books/state/' + slug + '.json');
+  const saved = await persister.read();
+  if (saved && saved.settings) settings = { ...settings, ...saved.settings };
+  applySettings();
+  renderContents();
+
+  // wire settings popover
+  $('setBtn').addEventListener('click', () => $('settingsPop').classList.toggle('open'));
+  document.addEventListener('click', (e) => {
+    if (!$('settingsPop').contains(e.target) && e.target !== $('setBtn')) $('settingsPop').classList.remove('open');
+  });
+  for (const b of document.querySelectorAll('#fontSeg button'))
+    b.addEventListener('click', () => { settings.font = b.dataset.font; applySettings(); scheduleSave(); });
+  $('sizeRange').addEventListener('input', () => { settings.size = +$('sizeRange').value; applySettings(); scheduleSave(); });
+  $('widthRange').addEventListener('input', () => { settings.width = +$('widthRange').value; applySettings(); scheduleSave(); });
+
+  $('navToggle').addEventListener('click', () => setNavOpen(!document.body.classList.contains('nav-open')));
+  $('backdrop').addEventListener('click', () => setNavOpen(false));
+  $('prevBtn').addEventListener('click', () => loadChapter(curIndex - 1));
+  $('nextBtn').addEventListener('click', () => loadChapter(curIndex + 1));
+
+  // scroll → TOC active + persist
+  let raf = 0;
+  $('content').addEventListener('scroll', () => {
+    if (!raf) raf = requestAnimationFrame(() => { raf = 0; _toc.update(); });
+    scheduleSave();
+  });
+  document.addEventListener('keydown', (e) => {
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement && document.activeElement.tagName);
+    if (typing) return;
+    if (e.key === '\\' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); setNavOpen(!document.body.classList.contains('nav-open')); }
+    else if (e.key === 'ArrowLeft') { loadChapter(curIndex - 1); }
+    else if (e.key === 'ArrowRight') { loadChapter(curIndex + 1); }
+    else if (e.key === 'Escape' && document.body.classList.contains('nav-open')) setNavOpen(false);
+  });
+
+  // restore last position
+  let startIdx = 0;
+  if (saved && saved.chapterId) {
+    const i = chapters.findIndex((c) => c.id === saved.chapterId);
+    if (i >= 0) startIdx = i;
+  }
+  await loadChapter(startIdx);
+  if (saved && saved.chapterId === (chapters[startIdx] && chapters[startIdx].id) && typeof saved.scrollTop === 'number') {
+    requestAnimationFrame(() => { $('content').scrollTop = saved.scrollTop; _toc.update(); });
+  }
+
+  bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, [book.title || slug]);
+  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
+});
+</script>
+</body>
+</html>

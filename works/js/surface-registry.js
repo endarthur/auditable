@@ -441,3 +441,8 @@ registerKind('settings', { label: 'Settings', icon: '⚙', extensions: [] });
 // docs-loader at boot from the build-embedded payload). Single-instance.
 // Help → Documentation, or F1.
 registerKind('docs', { label: 'Documentation', icon: '?', extensions: [] });
+
+// Book reader — reflowable long-form reading (book.json + md/html chapters).
+// Opens a directory containing book.json (see openPath), or a .epub directly
+// once ingest lands. Reading position + settings persist per-book.
+registerKind('book', { label: 'Book', icon: '▤', extensions: ['.epub'] });

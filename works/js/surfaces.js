@@ -80,6 +80,11 @@ export async function openPath(p) {
       const meta = JSON.parse(await WKS.vfs.readFile(p + '/project.json'));
       kind = meta.kind;
       title = meta.title || title;
+    } else if (await WKS.vfs.exists(p + '/book.json')) {
+      // A directory holding a book.json opens in the reader (books follow the
+      // project shape but are marked by book.json, not project.json).
+      kind = 'book';
+      try { title = (JSON.parse(await WKS.vfs.readFile(p + '/book.json')).title) || title; } catch {}
     } else {
       // Fast path first: extension + extensionlessName match. If that
       // misses, fall through to the detect-callback cascade (Slice 2 —
