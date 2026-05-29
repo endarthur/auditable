@@ -165,13 +165,32 @@ body {
 
 .works-sidebar {
   flex: none;
-  width: 232px;
+  width: var(--tree-width, 232px);
+  min-width: 0;
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--au-border);
   background: var(--au-surface);
 }
 .works-sidebar.hidden { display: none; }
+
+/* Draggable splitter between the file panel and the rails area. A thin
+   hit-strip straddling the border; the visible 1px line lives on the
+   sidebar's border-right, this just widens the grab target and lights up
+   on hover/drag. Hidden together with the sidebar (sibling selector). */
+.works-sidebar-resizer {
+  flex: none;
+  width: 5px;
+  margin: 0 -2px;            /* straddle the 1px border without shifting layout */
+  z-index: 3;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.12s ease;
+  touch-action: none;
+}
+.works-sidebar-resizer:hover,
+.works-sidebar-resizer.dragging { background: var(--au-action); }
+.works-sidebar.hidden + .works-sidebar-resizer { display: none; }
 
 .works-sidebar-title {
   flex: none;

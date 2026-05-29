@@ -12,6 +12,57 @@ import { kindDef, kindForExtension } from './surface-registry.js';
 import { openPath, spawnSurface } from './surfaces.js';
 import { itemsForNode as extMenuItemsForNode, dispatch as extMenuDispatch } from './context-menu-registry.js';
 import { prompt as dlgPrompt2, alert as dlgAlert2, confirm as dlgConfirm2 } from '#dialog';
+import { metaGet, metaSet } from './meta.js';
+
+// File-panel width — persisted across reloads in shell meta IDB.
+const SIDEBAR_WIDTH_KEY = 'sidebar.width';
+const SIDEBAR_MIN = 140;
+const sidebarMax = () => Math.min(640, Math.round(window.innerWidth * 0.6));
+const clampSidebar = (w) => Math.max(SIDEBAR_MIN, Math.min(sidebarMax(), w));
+
+// A draggable splitter between the file panel and the rails area. Restores the
+// saved width on boot and persists on drag-end. Width lives in the --tree-width
+// CSS var on .works-sidebar (default 232px in CSS).
+function installSidebarResizer() {
+  const sidebar = document.querySelector('.works-sidebar');
+  const handle = document.getElementById('works-sidebar-resizer');
+  if (!sidebar || !handle) return;
+
+  const applyWidth = (w) => sidebar.style.setProperty('--tree-width', clampSidebar(w) + 'px');
+
+  // Restore saved width (fire-and-forget; CSS default holds until it lands).
+  metaGet(SIDEBAR_WIDTH_KEY).then((w) => {
+    if (typeof w === 'number' && isFinite(w)) applyWidth(w);
+  }).catch(() => { /* no saved width — keep the CSS default */ });
+
+  let startX = 0, startW = 0;
+  const onMove = (e) => applyWidth(startW + (e.clientX - startX));
+  const onUp = () => {
+    handle.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    window.removeEventListener('pointermove', onMove);
+    window.removeEventListener('pointerup', onUp);
+    const w = clampSidebar(sidebar.getBoundingClientRect().width);
+    metaSet(SIDEBAR_WIDTH_KEY, w).catch(() => { /* best-effort persist */ });
+  };
+  handle.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    startX = e.clientX;
+    startW = sidebar.getBoundingClientRect().width;
+    handle.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  });
+
+  // Double-click the splitter → reset to the default width.
+  handle.addEventListener('dblclick', () => {
+    sidebar.style.removeProperty('--tree-width');
+    metaSet(SIDEBAR_WIDTH_KEY, 232).catch(() => {});
+  });
+}
 
 // ctx handed to a contributed contextMenu action. Curated surface per
 // EXTENSION_SPEC §3.8.2. Built fresh per dispatch (cheap) so a re-mounted
@@ -111,6 +162,7 @@ export function setupTree() {
     showMenu(e, '/projects', 'folder');
   });
 
+  installSidebarResizer();
   refreshTree();
 }
 
