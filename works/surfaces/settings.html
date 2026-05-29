@@ -127,6 +127,14 @@
     Mounts are per-machine and don't travel with workspace export.
   </div>
 
+  <h2>Notebook bus access</h2>
+  <div class="mounts-list" id="busList"></div>
+  <div class="hint">
+    Notebooks that have been granted raw A-Bus access via
+    <code>notebook.requestBus()</code>. Per-notebook grants are per-machine;
+    the workspace grant travels with workspace export. Revoke any time.
+  </div>
+
   <h2>Licenses</h2>
   <div id="licensesSummary" class="hint" style="margin-bottom:6px"></div>
   <div class="licenses-list" id="licensesList">
@@ -231,6 +239,60 @@ function esc(s) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
 
+async function loadBusGrants() {
+  const el = $('busList');
+  let g = { workspace: false, notebooks: [], session: [] };
+  try {
+    g = await bus.call(
+      { to: 'works', path: '/', interface: 'Shell', member: 'ListBusGrants' }, []);
+  } catch { /* leave defaults */ }
+  el.innerHTML = '';
+  // One revocable row per grant: the workspace-wide grant, then per-notebook
+  // (persisted) grants, then session-only ("allow once") grants.
+  const rows = [];
+  if (g.workspace) rows.push({ label: 'Entire workspace', kind: 'workspace', id: null });
+  for (const id of (g.notebooks || [])) rows.push({ label: id, kind: 'always', id });
+  for (const id of (g.session || [])) {
+    if ((g.notebooks || []).includes(id)) continue;   // already shown as persisted
+    rows.push({ label: id + '  (this session)', kind: 'session', id });
+  }
+  if (rows.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'No notebooks have raw bus access.';
+    el.appendChild(empty);
+    return;
+  }
+  for (const r of rows) {
+    const row = document.createElement('div');
+    row.className = 'mount-row';
+    const path = document.createElement('span');
+    path.className = 'path';
+    path.textContent = r.label;
+    const type = document.createElement('span');
+    type.className = 'type';
+    type.textContent = r.kind;
+    const btn = document.createElement('button');
+    btn.className = 'danger';
+    btn.textContent = 'Revoke';
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      try {
+        // Workspace-wide grant → revoke everything (no id); else just this id.
+        await bus.call(
+          { to: 'works', path: '/', interface: 'Shell', member: 'RevokeBusAccess' },
+          [r.kind === 'workspace' ? null : r.id]);
+        await loadBusGrants();
+      } catch (e) {
+        btn.disabled = false;
+        alert('Revoke failed: ' + (e.message || e));
+      }
+    });
+    row.append(path, type, btn);
+    el.appendChild(row);
+  }
+}
+
 async function loadLicenses() {
   const list = $('licensesList');
   const summary = $('licensesSummary');
@@ -332,6 +394,7 @@ window.addEventListener('message', async (ev) => {
 
   await loadSettings();
   await loadMounts();
+  await loadBusGrants();
   await loadLicenses();
 
   // Auto-save on every change.

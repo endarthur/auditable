@@ -13,7 +13,9 @@ export function makeNotebookApi(cell, ctx, runDAG) {
   return {
     fs: createNotebookFs(),
     shell: makeShell(cell, ctx),
-    tag: abus.tag,   // A-Bus topic publish/subscribe/latest (Works-only)
+    tag: abus.tag,            // A-Bus topic publish/subscribe/latest (Works-only)
+    call: abus.call,          // call a declared-public surface interface (no prompt)
+    requestBus: abus.requestBus, // raw A-Bus client (// %abus + consent prompt)
     get cells() { return S.cells.map(c => ({ id: c.id, type: c.type, code: c.code })); },
     get scope() { return { ...S.scope }; },
     addCell: (type, code, afterId) => addCell(type, code, afterId),

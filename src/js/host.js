@@ -125,6 +125,9 @@ export function createWorksHost({ bus, projectPath, syncToVfs, home }) {
   // throw a clear Works-only error. (window, not a param, because the cell
   // context is built deep in exec.js without a host reference.)
   window._worksBus = bus;
+  // The notebook's workspace project path — the stable identity for
+  // per-notebook A-Bus grants (notebook.requestBus consent).
+  window._worksProjectPath = projectPath || null;
 
   // The `/` mount: a direct backend when the workspace home is delegatable —
   // a disk folder, or an IndexedDB store a same-origin surface can open

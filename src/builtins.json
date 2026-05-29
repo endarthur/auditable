@@ -211,6 +211,30 @@
     "sig": "await notebook.fs.export(path)",
     "desc": "download file, folder as zip, or glob match as zip"
   },
+  "notebook.tag.publish": {
+    "sig": "notebook.tag.publish(\"Iface.Member\", value)",
+    "desc": "Works only — publish a value on an A-Bus topic (reaches patchbay etc.)"
+  },
+  "notebook.tag.subscribe": {
+    "sig": "notebook.tag.subscribe(\"Iface.Member\", fn) → unsub",
+    "desc": "Works only — fn(value) per signal; auto-removed when the cell re-runs"
+  },
+  "notebook.tag.latest": {
+    "sig": "notebook.tag.latest(\"Iface.Member\")",
+    "desc": "Works only — last value seen on a topic (or undefined)"
+  },
+  "notebook.call": {
+    "sig": "await notebook.call(to, iface, member, args?)",
+    "desc": "Works only — call a surface interface it declared notebook-public; else throws"
+  },
+  "notebook.requestBus": {
+    "sig": "const bus = await notebook.requestBus()",
+    "desc": "Works only — raw A-Bus client; needs a // %abus directive + a one-time consent prompt"
+  },
+  "// %abus": {
+    "sig": "// %abus",
+    "desc": "declare this cell may request the raw workspace bus via notebook.requestBus()"
+  },
   "std.zipArchive": {
     "sig": "await std.zipArchive(entries)",
     "desc": "create zip \u2014 Map or [[name, Uint8Array]] \u2192 Uint8Array"

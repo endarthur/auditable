@@ -11,6 +11,8 @@ import { evaluateWorksScript } from './extension-loader.js';
 import { showAbout } from './about.js';
 import { aggregateFromBuildLicenses } from '#licenses';
 import { archive } from '#archive';
+import { Dialog } from '#dialog';
+import { metaGet, metaSet } from './meta.js';
 
 // Build-time-injected vendored license manifest (see build.js's
 // injectBuildLicenses). Source-level empty so dev/test runs work; build
@@ -53,6 +55,109 @@ export async function setupWorksService() {
   const vfs = WKS.vfs;
   await installLicensesToVfs(vfs);
 
+  // ── Notebook ↔ A-Bus access (spec_inbox/notebook-abus-access-spec.md) ──
+  // Hygiene, not a sandbox: a notebook cell can already touch the VFS via
+  // notebook.fs, so this is about making bus capability *visible and
+  // deliberate*, mirroring the %mcp model — not containing a hostile notebook.
+
+  // Tier 2: interfaces a surface has declared notebook-scriptable. A notebook's
+  // `notebook.call` is allowed against these without any prompt; everything
+  // else needs the raw, consented bus (tier 3). well-known name → Set<iface>.
+  const _notebookPublic = new Map();
+
+  // Tier 3: raw-bus consent. "Allow once" lives only in this session set;
+  // "always this notebook" persists by project path in shell meta IDB;
+  // "always this workspace" persists as abusWorkspace in /etc/works.json.
+  const _busSession = new Set();
+
+  async function busAccessGranted(id) {
+    if (_busSession.has(id)) return true;
+    try { const g = await metaGet('abus.grants'); if (g && g[id] === true) return true; } catch {}
+    try { const s = await readSettings(vfs); if (s && s.abusWorkspace === true) return true; } catch {}
+    return false;
+  }
+
+  function busConsentDialog(title, declared) {
+    return new Dialog({
+      title: 'Workspace A-Bus access',
+      width: 460,
+      render: (body, ctx) => {
+        const p = document.createElement('p');
+        p.style.cssText = 'margin:0 0 12px;line-height:1.55;font-size:13px';
+        const strong = document.createElement('strong');
+        strong.textContent = title || 'This notebook';
+        p.appendChild(strong);
+        p.appendChild(document.createTextNode(
+          ' wants direct workspace-bus access — it could call any surface or ' +
+          'service (including the workspace filesystem) and publish or subscribe ' +
+          'to any topic.'));
+        body.appendChild(p);
+        if (declared) {
+          const d = document.createElement('p');
+          d.style.cssText = 'margin:0 0 12px;font-size:12px;opacity:.7';
+          d.textContent = 'The notebook declares this with a // %abus directive.';
+          body.appendChild(d);
+        }
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;margin-top:6px';
+        const mk = (label, val, primary) => {
+          const b = document.createElement('button');
+          b.type = 'button'; b.textContent = label;
+          b.style.cssText =
+            'padding:6px 12px;border-radius:6px;border:1px solid var(--sw-line,#3a3a3a);' +
+            'background:' + (primary ? 'var(--au-action,#d2691e)' : 'transparent') + ';' +
+            'color:' + (primary ? '#fff' : 'inherit') + ';cursor:pointer;font:inherit;font-size:12px';
+          b.onclick = () => ctx.close(val);
+          row.appendChild(b);
+        };
+        mk('Deny', 'deny');
+        mk('Allow once', 'once');
+        mk('Always this notebook', 'notebook');
+        mk('Always this workspace', 'workspace', true);
+        body.appendChild(row);
+      },
+    }).show();
+  }
+
+  async function requestBusAccess(title, id, declared) {
+    id = id || title || 'unknown-notebook';
+    if (await busAccessGranted(id)) return true;
+    const choice = await busConsentDialog(title || 'This notebook', !!declared);
+    if (choice === 'once') { _busSession.add(id); return true; }
+    if (choice === 'notebook') {
+      _busSession.add(id);
+      try { const g = (await metaGet('abus.grants')) || {}; g[id] = true; await metaSet('abus.grants', g); } catch {}
+      return true;
+    }
+    if (choice === 'workspace') {
+      try { const s = await readSettings(vfs); await writeSettings(vfs, { ...s, abusWorkspace: true }); } catch {}
+      return true;
+    }
+    return false;   // deny / dismissed
+  }
+
+  async function revokeBusAccess(id) {
+    if (id) {
+      _busSession.delete(id);
+      try { const g = (await metaGet('abus.grants')) || {}; delete g[id]; await metaSet('abus.grants', g); } catch {}
+      return true;
+    }
+    _busSession.clear();
+    try { await metaSet('abus.grants', {}); } catch {}
+    try { const s = await readSettings(vfs); await writeSettings(vfs, { ...s, abusWorkspace: false }); } catch {}
+    return true;
+  }
+
+  async function listBusGrants() {
+    let grants = {}; try { grants = (await metaGet('abus.grants')) || {}; } catch {}
+    let workspace = false; try { const s = await readSettings(vfs); workspace = s.abusWorkspace === true; } catch {}
+    return {
+      workspace,
+      notebooks: Object.keys(grants).filter((k) => grants[k] === true),
+      session: [..._busSession],
+    };
+  }
+
   bus.expose('/', {
     // The workspace filesystem (auditable-works-spec §9).
     VFS: {
@@ -94,8 +199,36 @@ export async function setupWorksService() {
         MountFolder: () => mountFolder(),
         UnmountAt:   (path) => unmountAt(path),
         OpenAbout:   () => { showAbout(); },
+
+        // ── Notebook A-Bus access (notebook-abus-access-spec.md) ──
+        // Tier 3: a notebook asks for the raw bus; this prompts (unless a grant
+        // already covers it) and persists per the user's choice. Returns bool.
+        RequestBusAccess: (title, id, declared) => requestBusAccess(title, id, declared),
+        // Revoke: no id → clear every grant (workspace + all notebooks +
+        // session); with an id → just that notebook. For the Settings UI.
+        RevokeBusAccess:  (id) => revokeBusAccess(id),
+        ListBusGrants:    () => listBusGrants(),
+        // Tier 2: a surface declares which of its interfaces are notebook-
+        // scriptable (callable without a prompt). Idempotent; signals so a
+        // notebook's cached public-set refreshes live.
+        DeclareNotebookPublic: (name, ifaces) => {
+          if (!name || !Array.isArray(ifaces)) return false;
+          _notebookPublic.set(name, new Set(ifaces.map(String)));
+          bus.signal({ path: '/', interface: 'Shell', member: 'NotebookPublicChanged' }, []);
+          return true;
+        },
+        UndeclareNotebookPublic: (name) => {
+          const had = _notebookPublic.delete(name);
+          if (had) bus.signal({ path: '/', interface: 'Shell', member: 'NotebookPublicChanged' }, []);
+          return had;
+        },
+        NotebookPublicSet: () => {
+          const o = {};
+          for (const [n, s] of _notebookPublic) o[n] = [...s];
+          return o;
+        },
       },
-      signals: ['MountChanged', 'SettingsChanged'],
+      signals: ['MountChanged', 'SettingsChanged', 'NotebookPublicChanged'],
     },
     // Workspace-level settings (theme, font, …) stored at /etc/works.json.
     // The settings surface owns the UI; any other surface (notebook in
