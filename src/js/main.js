@@ -51,6 +51,7 @@ import './cell-builtins/file-io.js';
 import './cell-builtins/modules.js';
 import './cell-builtins/workers.js';
 import './cell-builtins/shell.js';
+import './cell-builtins/abus.js';
 import './cell-builtins/notebook-api.js';
 import './cell-builtins/workshop.js';
 import './cell-builtins/dialog.js';

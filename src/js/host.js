@@ -120,6 +120,12 @@ export function createStandaloneHost({ buildHtml }) {
  *   delegatable home (fsaa/idb) is mounted directly, else / is the relay proxy.
  */
 export function createWorksHost({ bus, projectPath, syncToVfs, home }) {
+  // Expose the surface's A-Bus client to cell builtins (notebook.tag /
+  // .call / .requestBus). Standalone leaves this undefined → those builtins
+  // throw a clear Works-only error. (window, not a param, because the cell
+  // context is built deep in exec.js without a host reference.)
+  window._worksBus = bus;
+
   // The `/` mount: a direct backend when the workspace home is delegatable —
   // a disk folder, or an IndexedDB store a same-origin surface can open
   // itself — else the A-Bus relay proxy.

@@ -6,11 +6,14 @@ import { addCell } from '../cell-ops.js';
 import { createNotebookFs } from '../fs.js';
 import { getEditor } from '../cm6.js';
 import { makeShell } from './shell.js';
+import { makeAbus } from './abus.js';
 
 export function makeNotebookApi(cell, ctx, runDAG) {
+  const abus = makeAbus(cell, ctx);
   return {
     fs: createNotebookFs(),
     shell: makeShell(cell, ctx),
+    tag: abus.tag,   // A-Bus topic publish/subscribe/latest (Works-only)
     get cells() { return S.cells.map(c => ({ id: c.id, type: c.type, code: c.code })); },
     get scope() { return { ...S.scope }; },
     addCell: (type, code, afterId) => addCell(type, code, afterId),
