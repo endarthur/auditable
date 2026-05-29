@@ -321,6 +321,7 @@ import { connect } from '../../ext/abus/index.js';
 /* @theme-init */
 import { renderMd, slugify } from '../../src/js/markdown.js';
 import { Librarian } from '../../ext/librarian/index.js';
+import { highlightCode, scrollToAnchor, decorateHeadings, buildToc, rewireLinks, buildSearchIndex, makeStatePersister } from '../../ext/docview/index.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -332,68 +333,25 @@ let docsIndex = null;
 let activeHitIdx = 0;
 
 const STATE_PATH = '/home/.works/docs-state.json';
-let _saveTimer = null;
-async function saveState() {
-  if (!current || !bus) return;
-  const state = {
+let persister = null;   // makeStatePersister(bus, STATE_PATH) once bus connects
+function scheduleSave() {
+  if (!current || !persister) return;
+  persister.schedule(() => ({
     current,
     scrollTop: document.getElementById('content')?.scrollTop || 0,
     groupStates,
-  };
-  try {
-    await bus.call(
-      { to: 'works', path: '/', interface: 'VFS', member: 'MkDir' }, ['/home/.works']);
-    await bus.call(
-      { to: 'works', path: '/', interface: 'VFS', member: 'Write' },
-      [STATE_PATH, JSON.stringify(state)]);
-  } catch (e) { /* state write failures aren't worth surfacing */ }
-}
-function scheduleSave() {
-  if (_saveTimer) clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(saveState, 500);
+  }));
 }
 async function readState() {
-  try {
-    const txt = await bus.call(
-      { to: 'works', path: '/', interface: 'VFS', member: 'Read' },
-      [STATE_PATH, 'utf8']);
-    return JSON.parse(txt);
-  } catch { return null; }
-}
-
-// Split a markdown document into heading-anchored sections. Each
-// section becomes an indexable "document" for librarian. Anchors are
-// computed via the renderer's own slugify so search hits jump to a
-// matching `id` in the rendered DOM.
-function splitByHeadings(md, filePath, fileTitle) {
-  const lines = md.split('\n');
-  const sections = [];
-  let cur = { heading: fileTitle, level: 1, anchor: '', body: [] };
-  for (const line of lines) {
-    const m = line.match(/^(#{1,6})\s+(.+?)\s*$/);
-    if (m && m[1].length <= 3) {
-      if (cur.body.length > 0 || cur.heading) sections.push(cur);
-      const heading = m[2].replace(/[*`_]/g, '').trim();
-      cur = { heading, level: m[1].length, anchor: slugify(m[2]), body: [] };
-    } else {
-      cur.body.push(line);
-    }
-  }
-  if (cur.body.length > 0 || cur.heading) sections.push(cur);
-  return sections.map((s, i) => ({
-    id: filePath + (s.anchor ? '#' + s.anchor : ''),
-    file: filePath,
-    anchor: s.anchor,
-    fileTitle,
-    heading: s.heading,
-    title: s.heading,
-    body: s.body.join('\n').trim(),
-  }));
+  return persister ? persister.read() : null;
 }
 
 // Build the librarian index from the manifest's docs + extension entries.
-async function buildSearchIndex() {
-  const docs = [];
+// Section-splitting + indexing live in @gcu/docview (buildSearchIndex); here
+// we just collect the { path, title, md } list from the docs manifest. Named
+// buildDocsIndex so it doesn't collide with docview's inlined buildSearchIndex
+// (the surface lib-inliner flattens lib exports into this scope by raw name).
+async function buildDocsIndex() {
   async function readFile(relPath) {
     try {
       return await bus.call(
@@ -411,7 +369,6 @@ async function buildSearchIndex() {
     }
     return walk(manifest.nav || []) || file.split('/').pop().replace(/\.md$/, '');
   }
-  // mkdocs nav docs.
   function collectNav(list, out) {
     for (const item of list) {
       if (item.file) out.push('docs/' + item.file);
@@ -420,29 +377,16 @@ async function buildSearchIndex() {
   }
   const navFiles = [];
   collectNav(manifest.nav || [], navFiles);
+  const collected = [];
   for (const file of navFiles) {
     const md = await readFile(file);
-    if (!md) continue;
-    const label = navLabel(file);
-    const sections = splitByHeadings(md, file, label);
-    for (const s of sections) docs.push(s);
+    if (md) collected.push({ path: file, title: navLabel(file), md });
   }
-  // Extension SPECs + READMEs.
   for (const ext of manifest.extensions || []) {
     const md = await readFile(ext.file);
-    if (!md) continue;
-    const title = '@gcu/' + ext.pkg + ' ' + ext.kind;
-    const sections = splitByHeadings(md, ext.file, title);
-    for (const s of sections) docs.push(s);
+    if (md) collected.push({ path: ext.file, title: '@gcu/' + ext.pkg + ' ' + ext.kind, md });
   }
-
-  docsIndex = Librarian.index({
-    docs,
-    fields: {
-      heading: { boost: 4 },
-      fileTitle: { boost: 2 },
-      body: { boost: 1 },
-    },
+  docsIndex = buildSearchIndex(Librarian, collected, slugify, {
     synonyms: {
       'vfs': ['filesystem'],
       'dag': ['reactivity', 'reactive'],
@@ -539,188 +483,22 @@ async function activateHit(hit) {
   await loadFile(hit.doc.file, hit.doc.fileTitle, hit.doc.anchor);
 }
 
-// Scroll to a heading by id (rendered by markdown.js's slug). Flashes
-// the heading in the accent colour briefly so the user can spot it.
-function scrollToAnchor(anchor) {
-  if (!anchor) return false;
-  const h = document.getElementById(anchor);
-  if (!h) return false;
-  h.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  h.style.transition = 'color 0.3s';
-  const prev = h.style.color;
-  h.style.color = 'var(--au-action)';
-  setTimeout(() => { h.style.color = prev; }, 1200);
-  return true;
-}
+// scrollToAnchor / decorateHeadings / buildToc / rewireLinks / highlightCode
+// come from @gcu/docview (inlined into this scope by raw name at build time —
+// so we must NOT redeclare them here; call sites use the imported names with
+// docview's signatures).
 
 function setNavOpen(open) {
   document.body.classList.toggle('nav-open', open);
 }
 
-// ── Right-side TOC ──────────────────────────────────────────────────
-// Built from h2/h3 in the rendered doc. Active item tracks the
-// topmost heading whose top has crossed the viewport trigger line.
+// ── Right-side TOC (scroll-spy) ─────────────────────────────────────
+// docview.buildToc returns a controller; updateActiveToc tracks the active
+// heading on scroll. _toc is set in loadFile.
+let _toc = { items: [], update() {} };
+function updateActiveToc() { _toc.update(); }
 
-let _tocItems = [];   // [{ id, link, heading }]
-
-function buildToc() {
-  const toc = $('toc');
-  toc.innerHTML = '';
-  _tocItems = [];
-  const headings = $('content').querySelectorAll('h2[id], h3[id]');
-  if (headings.length < 2) {
-    toc.classList.add('empty-toc');
-    return;
-  }
-  toc.classList.remove('empty-toc');
-  const h4 = document.createElement('h4');
-  h4.textContent = 'On this page';
-  toc.appendChild(h4);
-  for (const h of headings) {
-    const a = document.createElement('a');
-    a.href = '#' + h.id;
-    a.textContent = (h.textContent || '').replace(/^§\s*/, '').trim();
-    a.className = h.tagName === 'H3' ? 'lvl3' : 'lvl2';
-    a.addEventListener('click', (ev) => {
-      ev.preventDefault();
-      scrollToAnchor(h.id);
-    });
-    toc.appendChild(a);
-    _tocItems.push({ id: h.id, link: a, heading: h });
-  }
-  updateActiveToc();
-}
-
-function updateActiveToc() {
-  if (_tocItems.length === 0) return;
-  const content = $('content');
-  const threshold = content.getBoundingClientRect().top + 80;
-  let activeIdx = 0;
-  for (let i = 0; i < _tocItems.length; i++) {
-    const rect = _tocItems[i].heading.getBoundingClientRect();
-    if (rect.top <= threshold) activeIdx = i;
-    else break;
-  }
-  _tocItems.forEach((it, i) => it.link.classList.toggle('active', i === activeIdx));
-}
-
-// ── Syntax highlighting ─────────────────────────────────────────────
-// Minimal regex-tokenizer for fenced code blocks. Covers js/py/json/sh
-// via a shared identifier/comment/string/number scan; html via a
-// separate tag-and-comment pass.
-
-const _SYNTAX = {
-  js: {
-    keywords: new Set('const let var function return if else for while do switch case break continue new class extends import export from as async await try catch finally throw of in typeof instanceof delete null undefined true false default static this super yield void debugger'.split(' ')),
-    line: '//', block: ['/*', '*/'],
-    strings: { '"': '"', "'": "'", '`': '`' },
-  },
-  py: {
-    keywords: new Set('def class if elif else for while break continue return yield import from as pass raise try except finally with lambda global nonlocal True False None and or not in is async await match case del assert'.split(' ')),
-    line: '#', block: null,
-    strings: { '"""': '"""', "'''": "'''", '"': '"', "'": "'" },
-  },
-  json: {
-    keywords: new Set(['true', 'false', 'null']),
-    line: null, block: null,
-    strings: { '"': '"' },
-  },
-  sh: {
-    keywords: new Set('if then else elif fi for in do done while until case esac function return exit export local readonly'.split(' ')),
-    builtins: new Set('cd ls cat echo pwd grep sed awk find chmod chown mv cp rm mkdir rmdir touch'.split(' ')),
-    line: '#', block: null,
-    strings: { '"': '"', "'": "'" },
-  },
-};
-_SYNTAX.javascript = _SYNTAX.js;
-_SYNTAX.python = _SYNTAX.py;
-_SYNTAX.bash = _SYNTAX.sh;
-
-function _escTok(s) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-function _reEscTok(s) { return s.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&'); }
-
-function _tokenize(code, lang) {
-  const spec = _SYNTAX[lang];
-  if (!spec) return _escTok(code);
-  const parts = [];
-  if (spec.block) {
-    parts.push({ type: 'comment',
-      re: _reEscTok(spec.block[0]) + '[\\s\\S]*?' + _reEscTok(spec.block[1]) });
-  }
-  if (spec.line) {
-    parts.push({ type: 'comment', re: _reEscTok(spec.line) + '[^\\n]*' });
-  }
-  if (spec.strings) {
-    // Longest delimiters first (so `"""` wins over `"`).
-    const delims = Object.keys(spec.strings).sort((a, b) => b.length - a.length);
-    for (const d of delims) {
-      const dE = _reEscTok(d);
-      if (d.length === 3) {
-        parts.push({ type: 'string', re: dE + '[\\s\\S]*?' + dE });
-      } else if (d === '`') {
-        parts.push({ type: 'string', re: '`(?:[^`\\\\]|\\\\.)*`' });
-      } else {
-        parts.push({ type: 'string',
-          re: dE + '(?:[^' + dE + '\\\\\\n]|\\\\.)*' + dE });
-      }
-    }
-  }
-  parts.push({ type: 'number', re: '\\b\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b' });
-  parts.push({ type: 'identifier', re: '[a-zA-Z_$][\\w$]*' });
-
-  const combined = new RegExp(parts.map(p => `(${p.re})`).join('|'), 'g');
-  let out = '', last = 0, m;
-  while ((m = combined.exec(code)) !== null) {
-    if (m.index > last) out += _escTok(code.slice(last, m.index));
-    let part = null;
-    for (let i = 1; i <= parts.length; i++) {
-      if (m[i] !== undefined) { part = parts[i - 1]; break; }
-    }
-    const text = m[0];
-    if (part.type === 'identifier') {
-      if (spec.keywords && spec.keywords.has(text)) {
-        out += `<span class="tok-keyword">${_escTok(text)}</span>`;
-      } else if (spec.builtins && spec.builtins.has(text)) {
-        out += `<span class="tok-builtin">${_escTok(text)}</span>`;
-      } else {
-        out += _escTok(text);
-      }
-    } else {
-      out += `<span class="tok-${part.type}">${_escTok(text)}</span>`;
-    }
-    last = m.index + text.length;
-  }
-  if (last < code.length) out += _escTok(code.slice(last));
-  return out;
-}
-
-function _tokenizeHtml(code) {
-  const re = /<!--[\s\S]*?-->|<\/?[a-zA-Z][^>]*>/g;
-  let out = '', last = 0, m;
-  while ((m = re.exec(code)) !== null) {
-    if (m.index > last) out += _escTok(code.slice(last, m.index));
-    const cls = m[0].startsWith('<!--') ? 'comment' : 'tag';
-    out += `<span class="tok-${cls}">${_escTok(m[0])}</span>`;
-    last = m.index + m[0].length;
-  }
-  if (last < code.length) out += _escTok(code.slice(last));
-  return out;
-}
-
-function highlightCode(root) {
-  for (const code of root.querySelectorAll('pre code[class*="language-"]')) {
-    const lang = (code.className.match(/language-([\w-]+)/) || [])[1];
-    if (!lang) continue;
-    const raw = code.textContent;
-    if (lang === 'html' || lang === 'xml' || lang === 'svg') {
-      code.innerHTML = _tokenizeHtml(raw);
-    } else if (_SYNTAX[lang]) {
-      code.innerHTML = _tokenize(raw, lang);
-    }
-  }
-}
+// Syntax highlighting for fenced code lives in @gcu/docview (highlightCode).
 
 async function loadFile(relPath, label, anchor) {
   current = relPath;
@@ -748,76 +526,23 @@ async function loadFile(relPath, label, anchor) {
     fileCache.set(relPath, md);
   }
   $('content').innerHTML = renderMd(md);
-  decorateHeadings();
+  // § deep-link anchors; onCopy puts the current doc path on the clipboard.
+  decorateHeadings($('content'), (id) => {
+    const link = current + '#' + id;
+    try { navigator.clipboard?.writeText(link); } catch {}
+  });
   highlightCode($('content'));
-  rewireLinks(relPath);
-  buildToc();
+  // Internal .md links load through loadFile; external/# handled by docview.
+  rewireLinks($('content'), relPath, (resolved, anchor, pathPart) => {
+    loadFile(resolved, pathPart, anchor);
+  });
+  _toc = buildToc($('content'), $('toc'));
   if (anchor && scrollToAnchor(anchor)) {
     // anchor scroll wins over scroll-to-top
   } else {
     $('content').scrollTop = 0;
   }
   scheduleSave();
-}
-
-// Add a § anchor next to each heading so users can copy a deep-link.
-function decorateHeadings() {
-  for (const h of $('content').querySelectorAll('h1[id], h2[id], h3[id]')) {
-    if (h.querySelector('.anchor-link')) continue;
-    const a = document.createElement('a');
-    a.className = 'anchor-link';
-    a.textContent = '§';
-    a.href = '#' + h.id;
-    a.title = 'Copy link to this section';
-    a.addEventListener('click', (ev) => {
-      ev.preventDefault();
-      scrollToAnchor(h.id);
-      // Best-effort clipboard copy; ignore failures (e.g. on file://).
-      const link = current + '#' + h.id;
-      try { navigator.clipboard?.writeText(link); } catch {}
-    });
-    h.insertBefore(a, h.firstChild);
-  }
-}
-
-// Resolve and rewire <a href> elements: external links open in a new
-// tab; internal .md (with optional #anchor) load through loadFile;
-// bare #anchor scrolls within the current doc.
-function rewireLinks(relPath) {
-  for (const a of $('content').querySelectorAll('a[href]')) {
-    if (a.classList.contains('anchor-link')) continue;
-    const href = a.getAttribute('href');
-    if (!href) continue;
-    if (/^https?:/i.test(href) || /^mailto:/i.test(href)) {
-      a.setAttribute('target', '_blank');
-      a.setAttribute('rel', 'noopener noreferrer');
-      continue;
-    }
-    if (href.startsWith('#')) {
-      a.addEventListener('click', (ev) => {
-        ev.preventDefault();
-        scrollToAnchor(href.slice(1));
-      });
-      continue;
-    }
-    const [pathPart, anchorPart] = href.split('#');
-    if (pathPart && (pathPart.endsWith('.md') || pathPart.endsWith('/'))) {
-      const dir = relPath.includes('/') ? relPath.slice(0, relPath.lastIndexOf('/')) : '';
-      let resolved = dir ? dir + '/' + pathPart : pathPart;
-      // Normalise ../ segments.
-      const parts = resolved.split('/');
-      const out = [];
-      for (const p of parts) {
-        if (p === '..') out.pop();
-        else if (p && p !== '.') out.push(p);
-      }
-      resolved = out.join('/');
-      a.addEventListener('click', (ev) => {
-        ev.preventDefault();
-        loadFile(resolved, pathPart, anchorPart || null);
-      });
-    }
-  }
 }
 
 // Per-group collapsed state, keyed by group label. Persisted via
@@ -920,6 +645,7 @@ window.addEventListener('message', async (ev) => {
   }
   try { await bus.claim('docs-' + (ev.data.tab && ev.data.tab.id || 'unknown')); } catch {}
 
+  persister = makeStatePersister(bus, STATE_PATH);
   installThemeSubscription(bus);
 bus.expose('/', {
     Surface: {
@@ -946,7 +672,7 @@ bus.expose('/', {
   groupStates = (saved && saved.groupStates) || {};
   renderSidebar();
   // Build the search index in the background so opening Ctrl+K is instant.
-  buildSearchIndex().catch((e) => console.warn('search index build failed:', e));
+  buildDocsIndex().catch((e) => console.warn('search index build failed:', e));
 
   // Toggle + dismiss handlers.
   document.getElementById('navToggle').addEventListener('click', () => {
