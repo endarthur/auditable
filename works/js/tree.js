@@ -477,6 +477,11 @@ async function showMenu(e, path, type) {
   } else if (type === 'file') {
     extras.push(                        { label: 'Download',            action: 'download' });
   }
+  // Easter egg (off by default; unlocked by typing "dada" in the shell): open
+  // a book directory in the DD-60 "DADA Diskman" retro reader skin.
+  if (WKS.dd60Enabled && (type === 'folder' || type === 'project')) {
+    try { if (await WKS.vfs.exists(path + '/book.json')) extras.push({ label: 'Open in DADA Diskman ▥', action: 'open-dd60' }); } catch { /* ignore */ }
+  }
   if (extras.length) items.push('---', ...extras);
 
   // /lib/<pkg> leaf directories — give them "Remove extension" as a
@@ -520,6 +525,7 @@ async function showMenu(e, path, type) {
 
   const action = await Menu.show(items, { x: e.clientX, y: e.clientY });
   if (action === 'open') openPath(path);
+  else if (action === 'open-dd60') spawnSurface('dd60', { path, title: basename(path) });
   else if (action === 'new-project') newProject(dir);
   else if (action === 'new-folder')  newFolder(dir);
   else if (action === 'new-file')    newFile(dir);

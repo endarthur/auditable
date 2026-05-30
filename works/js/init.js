@@ -18,6 +18,7 @@ import { installExamplesToVfs, hasExamples } from './examples-loader.js';
 import { serializeWorkspace, buildWorksHtml } from './persist.js';
 import { importNotebook, importFileAsNotebook } from './import.js';
 import { importEpubBytes } from './book-import.js';
+import { metaGet, metaSet } from './meta.js';
 import { installGcudatBytes } from './gcudat-install.js';
 import { buildProjectExportHtml, exportProject } from './project-export.js';
 import { mountHandle, unmountAt, restoreMounts } from './mount.js';
@@ -115,6 +116,27 @@ async function boot() {
       catch { /* not a peer that listens — skip */ }
     }
   };
+
+  // Easter egg — the DD-60 "DADA Diskman" reader skin. Off by default and out of
+  // the way: nothing dispatches books to it. Type "dada" anywhere in the shell
+  // (outside a text field) to toggle it; when on, a book directory's right-click
+  // menu offers "Open in DADA Diskman". The flag persists in shell meta.
+  WKS.dd60Enabled = (await metaGet('skin.dd60').catch(() => false)) === true;
+  let _dadaSeq = '';
+  window.addEventListener('keydown', (e) => {
+    const t = document.activeElement;
+    if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) { _dadaSeq = ''; return; }
+    if (!e.key || e.key.length !== 1) { _dadaSeq = ''; return; }
+    _dadaSeq = (_dadaSeq + e.key.toLowerCase()).slice(-4);
+    if (_dadaSeq === 'dada') {
+      _dadaSeq = '';
+      WKS.dd60Enabled = !WKS.dd60Enabled;
+      metaSet('skin.dd60', WKS.dd60Enabled).catch(() => {});
+      setStatus(WKS.dd60Enabled
+        ? '▥ DADA Diskman unlocked — right-click a book → Open in DADA Diskman'
+        : 'DADA Diskman skin off');
+    }
+  });
 
   window.WKS = WKS;
 
