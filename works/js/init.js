@@ -19,6 +19,7 @@ import { serializeWorkspace, buildWorksHtml } from './persist.js';
 import { importNotebook, importFileAsNotebook } from './import.js';
 import { importEpubBytes } from './book-import.js';
 import { metaGet, metaSet } from './meta.js';
+import { openLibraryDialog, installByName, addSourceSilent } from './registry.js';
 import { installGcudatBytes } from './gcudat-install.js';
 import { buildProjectExportHtml, exportProject } from './project-export.js';
 import { mountHandle, unmountAt, restoreMounts } from './mount.js';
@@ -55,6 +56,9 @@ async function boot() {
   WKS.importFileAsNotebook = importFileAsNotebook;
   WKS.importBook = importEpubBytes;   // .epub bytes → /home/.books/library/<slug>/
   WKS.installGcudat = installGcudatBytes;   // .gcudat bytes → routed by kind
+  WKS.browseLibrary = openLibraryDialog;    // Browse Library dialog (content registry)
+  WKS.registryInstall = installByName;      // (sourceUrl, name) → install an entry
+  WKS.registryAddSource = addSourceSilent;  // (url, name) → add a registry source
   WKS.buildProjectExportHtml = buildProjectExportHtml;
   WKS.exportProject = exportProject;
   WKS.newFile = newFile;

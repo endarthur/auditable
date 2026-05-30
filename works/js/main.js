@@ -26,5 +26,6 @@ import './file-ops.js';
 import './uninstall-extension.js';
 import './tree.js';
 import './about.js';
+import './registry.js';
 import './menubar.js';
 import './init.js';

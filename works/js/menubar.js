@@ -12,6 +12,7 @@ import { openWorkspaceFolder, resetWorkspace } from './workspace.js';
 import { exportWorkspace, openWorkspaceFile, saveWorkspace } from './persist.js';
 import { confirm as dlgConfirm, Dialog } from '#dialog';
 import { showAbout } from './about.js';
+import { openLibraryDialog } from './registry.js';
 import { getExamplesManifest } from './examples-loader.js';
 import { aggregateLicenses, formatNoticesFile } from '#licenses';
 
@@ -24,6 +25,7 @@ export function setupMenuBar() {
       { label: 'Import notebook…', action: 'project:import' },
       { label: 'Import book (EPUB)…', action: 'book:import' },
       { label: 'Install data pack…', action: 'pack:install' },
+      { label: 'Browse Library…', action: 'library:browse' },
       '---',
       { label: 'New workspace…',       action: 'workspace:new' },
       { label: 'Open folder…',         action: 'workspace:open' },
@@ -62,6 +64,7 @@ export function setupMenuBar() {
     if (action === 'project:import') { importNotebookViaPicker(); return; }
     if (action === 'book:import') { importEpubViaPicker(); return; }
     if (action === 'pack:install') { installGcudatViaPicker(); return; }
+    if (action === 'library:browse') { openLibraryDialog(); return; }
     if (action === 'workspace:open') { await openWorkspaceFolder(); return; }
     if (action === 'workspace:mount') { await mountFolder(); return; }
     if (action === 'workspace:openfile') { openWorkspaceFile(); return; }
