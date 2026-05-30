@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <title>DADA Diskman</title>
 <style>
+  /* @theme-tokens */
   :root {
     --body-1: #34373b; --body-2: #232629; --body-3: #131517;
     --bezel: #0c0d0e;
@@ -16,6 +17,20 @@
   body { background: radial-gradient(120% 100% at 50% -10%, #1d1f22, #090a0b 70%);
     font-family: 'Barlow', Arial, system-ui, sans-serif; overflow: hidden; }
   .stage { position: fixed; inset: 0; display: grid; place-items: center; overflow: auto; }
+  /* Outer (stage) scrollbar — follows the current Works theme (Switchboard
+     tokens), with neutral fallbacks if the tokens aren't present. */
+  .stage { scrollbar-width: thin; scrollbar-color: var(--au-border, #3a3d40) var(--au-surface-deep, #0c0d0e); }
+  .stage::-webkit-scrollbar { width: 10px; height: 10px; }
+  .stage::-webkit-scrollbar-track { background: var(--au-surface-deep, #0c0d0e); }
+  .stage::-webkit-scrollbar-thumb { background: var(--au-border, #3a3d40); border-radius: 5px; }
+  .stage::-webkit-scrollbar-thumb:hover { background: var(--au-fg-soft, #4a4d50); }
+  /* Inner LCD scrollbars (reader content + the F-key overlay lists) — a
+     navy-on-lime "LCD widget" look, matching the green screen. */
+  .lcd-screen, .lcd-ov .ov-list { scrollbar-width: thin; scrollbar-color: var(--lcd-hi) rgba(31,58,114,.14); }
+  .lcd-screen::-webkit-scrollbar, .lcd-ov .ov-list::-webkit-scrollbar { width: 9px; }
+  .lcd-screen::-webkit-scrollbar-track, .lcd-ov .ov-list::-webkit-scrollbar-track { background: rgba(31,58,114,.12); }
+  .lcd-screen::-webkit-scrollbar-thumb, .lcd-ov .ov-list::-webkit-scrollbar-thumb { background: var(--lcd-hi); border-radius: 0; border: 1px solid var(--lcd-bg2); }
+  .lcd-screen::-webkit-scrollbar-thumb:hover, .lcd-ov .ov-list::-webkit-scrollbar-thumb:hover { background: #1a3a72; }
 
   .dd8 { width: 480px; transform-origin: center center;
     background: linear-gradient(168deg, var(--body-1), var(--body-2) 26%, var(--body-2) 80%, var(--body-3));
@@ -56,8 +71,6 @@
     border-bottom: 1px solid rgba(31,58,114,.28); padding: 11px 16px 5px; font-size: 10.5px; letter-spacing: .3px; }
   .statusline span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .lcd-screen { flex: 1; min-height: 0; overflow: auto; padding: 9px 16px 4px; }
-  .lcd-screen::-webkit-scrollbar { width: 6px; }
-  .lcd-screen::-webkit-scrollbar-thumb { background: rgba(31,58,114,.3); border-radius: 3px; }
   .lcd-tabs { flex: none; display: flex; gap: 2px; padding: 3px; }
   .lcd-tabs span { flex: 1; text-align: center; font-size: 9.5px; letter-spacing: .3px; padding: 2px 0; border-radius: 1px;
     background: rgba(31,58,114,.16); color: var(--lcd-ink); }
@@ -271,8 +284,11 @@ const FONT_SIZES = [11, 12.5, 14, 16];
 
 function fit() {
   const d = $('device');
-  const s = Math.min(1, (window.innerHeight - 24) / d.offsetHeight, (window.innerWidth - 24) / d.offsetWidth);
-  d.style.transform = 'scale(' + s.toFixed(3) + ')';
+  d.style.zoom = '';   // measure the untransformed layout box
+  const s = Math.min(1, (window.innerHeight - 20) / d.offsetHeight, (window.innerWidth - 20) / d.offsetWidth);
+  // zoom (not transform) so the scaled device shrinks its layout box too — a
+  // transform leaves the original-size box behind and the stage shows a scrollbar.
+  d.style.zoom = s.toFixed(3);
 }
 window.addEventListener('resize', fit);
 
@@ -341,7 +357,12 @@ function move(d) { if (!ovItems.length) return; ovSel = Math.max(0, Math.min(ovI
 
 // ── control dispatch ────────────────────────────────────────────────
 function dpad(dir) {
-  if (ov) { if (dir === 'up') move(-1); else if (dir === 'down') move(1); return; }
+  if (ov) {
+    if (dir === 'up') move(-1);
+    else if (dir === 'down') move(1);
+    else if (dir === 'left' && ov === 'search') backspace();   // ◄ = delete in search
+    return;
+  }
   if (dir === 'up') reader.pageUp();
   else if (dir === 'down') reader.pageDown();
   else if (dir === 'left') reader.prev();

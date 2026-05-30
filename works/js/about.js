@@ -7,6 +7,7 @@
 
 import { Dialog } from '#dialog';
 import { openPath } from './surfaces.js';
+import { WKS } from './state.js';
 
 const __AUDITABLE_VERSION__ = '0.0.0';
 const __AUDITABLE_BUILD_DATE__ = 'dev';
@@ -37,6 +38,24 @@ export async function showAbout() {
       body.innerHTML = '';
       const wrap = document.createElement('div');
       wrap.className = 'about-modal';
+      wrap.style.position = 'relative';
+
+      // Discreet easter-egg toggle (bottom-right corner): the DD-60 "DADA
+      // Diskman" retro reader skin. Faint when off, lit when on. When on, a
+      // book directory's right-click menu gains "Open in DADA Diskman".
+      const egg = document.createElement('button');
+      egg.textContent = '▥';
+      const paintEgg = () => {
+        const on = !!WKS.dd60Enabled;
+        egg.title = on ? 'DADA Diskman skin: ON — right-click a book → Open in DADA Diskman' : 'DADA Diskman skin (click to enable)';
+        egg.style.cssText = 'position:absolute; right:6px; bottom:6px; width:20px; height:18px; padding:0; '
+          + 'border:1px solid var(--au-border); border-radius:3px; background:transparent; cursor:pointer; '
+          + 'font-size:11px; line-height:1; transition:opacity .15s,color .15s,border-color .15s; '
+          + (on ? 'opacity:1; color:var(--au-go); border-color:var(--au-go);' : 'opacity:.3; color:var(--au-fg-soft);');
+      };
+      paintEgg();
+      egg.addEventListener('click', () => { WKS.setDd60Enabled(!WKS.dd60Enabled); paintEgg(); });
+      wrap.appendChild(egg);
 
       const brand = document.createElement('div');
       brand.className = 'about-brand';
