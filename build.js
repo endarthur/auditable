@@ -670,6 +670,8 @@ if (target === 'works' || target === 'works-all') {
       deps: ['abus', 'markdown', 'librarian', 'docview'] },
     { kind: 'book',      file: 'works/surfaces/reader.html',
       deps: ['abus', 'markdown', 'docview', 'librarian', 'katex', 'reader-core'] },
+    { kind: 'dd60',      file: 'works/surfaces/dd60.html',
+      deps: ['abus', 'markdown', 'docview', 'librarian', 'katex', 'reader-core'] },
     { kind: 'terminal',  file: 'works/surfaces/terminal.html',
       deps: ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline'], extras: 'terminal' },
     { kind: 'patchbay',  file: 'works/surfaces/patchbay.html',  deps: ['abus', 'sideact', 'patchbay', 'menu'] },

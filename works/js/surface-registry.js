@@ -448,3 +448,10 @@ registerKind('docs', { label: 'Documentation', icon: '?', extensions: [] });
 // or by dropping it on the window (book-import.js), then that dir opens here.
 // (No .epub extension mapping: a raw .epub opened directly has no book.json.)
 registerKind('book', { label: 'Book', icon: '▤', extensions: [] });
+
+// DD-60 "DADA Diskman" — a retro reader skin for the same book.json content
+// (Sony Data Discman homage, de-branded). Reads exactly what 'book' reads but
+// behind the device chrome. Registered so its payload decompresses + it's
+// spawnable; intentionally NOT wired into openPath dispatch — it's reached
+// only via the opt-in easter-egg affordance (see menubar). An easter egg.
+registerKind('dd60', { label: 'DADA Diskman', icon: '▥', extensions: [] });
