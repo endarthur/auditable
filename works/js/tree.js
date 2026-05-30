@@ -100,7 +100,7 @@ import { uninstallExtension } from './uninstall-extension.js';
 import {
   moveToPrompt, copyToPrompt, attachTreeRowDnd, downloadFile,
   downloadFolder, extractArchiveHere, extractArchiveToPrompt, compressFolderTo,
-  ARCHIVE_EXT_RE,
+  ARCHIVE_EXT_RE, uploadFilePrompt,
 } from './file-ops.js';
 
 const IMPORTABLE_RE = /\.(html?|txt|ipynb)$/i;
@@ -450,7 +450,11 @@ async function showMenu(e, path, type) {
   // fallback so they land in the text surface.
   if (type === 'file' && kindForExtension(basename(path)))
     extras.push({ label: 'Open',                                        action: 'open' });
+  // Loose document files → open in the reader (synthesized one-chapter book).
+  const isReaderDoc = type === 'file' && /\.(pdf|md|markdown|mdown|html?)$/i.test(basename(path));
+  if (isReaderDoc) extras.push({ label: 'Open in reader ▤', action: 'open-reader' });
   extras.push(                          { label: 'Copy path',           action: 'copy-path' });
+  if (type === 'folder')  extras.push({ label: 'Upload file here…',     action: 'upload-here' });
   if (type === 'folder')  extras.push({ label: 'Open terminal here',    action: 'terminal-here' });
   if (type === 'folder')  extras.push({ label: 'Refresh',               action: 'refresh' });
   if (type === 'project') extras.push({ label: 'Duplicate…',            action: 'duplicate' });
@@ -477,10 +481,13 @@ async function showMenu(e, path, type) {
   } else if (type === 'file') {
     extras.push(                        { label: 'Download',            action: 'download' });
   }
-  // Easter egg (off by default; unlocked by typing "dada" in the shell): open
-  // a book directory in the DD-60 "DADA Diskman" retro reader skin.
-  if (WKS.dd60Enabled && (type === 'folder' || type === 'project')) {
-    try { if (await WKS.vfs.exists(path + '/book.json')) extras.push({ label: 'Open in DADA Diskman ▥', action: 'open-dd60' }); } catch { /* ignore */ }
+  // Easter egg (off by default; unlocked via the About dialog): open a book
+  // directory — or a loose PDF — in the DD-60 "DADA Diskman" retro reader skin.
+  if (WKS.dd60Enabled) {
+    if (type === 'file' && /\.pdf$/i.test(basename(path))) extras.push({ label: 'Open in DADA Diskman ▥', action: 'open-dd60' });
+    else if (type === 'folder' || type === 'project') {
+      try { if (await WKS.vfs.exists(path + '/book.json')) extras.push({ label: 'Open in DADA Diskman ▥', action: 'open-dd60' }); } catch { /* ignore */ }
+    }
   }
   if (extras.length) items.push('---', ...extras);
 
@@ -525,7 +532,9 @@ async function showMenu(e, path, type) {
 
   const action = await Menu.show(items, { x: e.clientX, y: e.clientY });
   if (action === 'open') openPath(path);
+  else if (action === 'open-reader') spawnSurface('book', { path, title: basename(path) });
   else if (action === 'open-dd60') spawnSurface('dd60', { path, title: basename(path) });
+  else if (action === 'upload-here') { const p = await uploadFilePrompt(dir); if (p) await openPath(p); }
   else if (action === 'new-project') newProject(dir);
   else if (action === 'new-folder')  newFolder(dir);
   else if (action === 'new-file')    newFile(dir);

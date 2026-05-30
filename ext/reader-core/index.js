@@ -339,12 +339,26 @@ export function createReader(opts) {
     registerBackend(format, backend) { backends[format] = backend; return api; },
 
     async open(pathOrDir) {
-      const manifestPath = pathOrDir.endsWith('.json') ? pathOrDir : (pathOrDir.replace(/\/$/, '') + '/book.json');
-      bookDir = manifestPath.slice(0, manifestPath.lastIndexOf('/'));
-      book = JSON.parse(await readFile(manifestPath));
-      chapters = Array.isArray(book.chapters) ? book.chapters : [];
-      chapters.forEach((c, i) => { if (!c.id) c.id = 'ch' + (i + 1); });
-      slug = book.slug || bookDir.split('/').pop() || 'book';
+      // A bare single-document path (a .pdf / .md / .html, not a book.json or a
+      // dir) is opened as a synthesized one-chapter book — so the reader can
+      // open a loose file directly, no wrapping dir needed.
+      const BARE_FMT = { pdf: 'pdf', md: 'md', markdown: 'md', mdown: 'md', html: 'html', htm: 'html', txt: 'md' };
+      const ext = (pathOrDir.split('/').pop().split('.').pop() || '').toLowerCase();
+      if (!pathOrDir.endsWith('.json') && BARE_FMT[ext]) {
+        const name = pathOrDir.split('/').pop();
+        bookDir = pathOrDir.slice(0, Math.max(0, pathOrDir.lastIndexOf('/')));
+        const stem = name.replace(/\.[^.]+$/, '');
+        book = { title: stem, chapters: [{ file: name, format: BARE_FMT[ext], id: 'ch1', title: stem }] };
+        chapters = book.chapters;
+        slug = stem || 'doc';
+      } else {
+        const manifestPath = pathOrDir.endsWith('.json') ? pathOrDir : (pathOrDir.replace(/\/$/, '') + '/book.json');
+        bookDir = manifestPath.slice(0, manifestPath.lastIndexOf('/'));
+        book = JSON.parse(await readFile(manifestPath));
+        chapters = Array.isArray(book.chapters) ? book.chapters : [];
+        chapters.forEach((c, i) => { if (!c.id) c.id = 'ch' + (i + 1); });
+        slug = book.slug || bookDir.split('/').pop() || 'book';
+      }
       bookIndex = null;
       const saved = await loadState();
       if (saved && saved.settings) settings = { ...settings, ...saved.settings };

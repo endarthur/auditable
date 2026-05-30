@@ -389,8 +389,7 @@ window.addEventListener('message', async (ev) => {
   if (typeof installThemeSubscription === 'function') installThemeSubscription(bus);
   bus.expose('/', { Surface: { methods: { Flush: () => {}, CanClose: () => true, Relocated: () => {} }, signals: ['DirtyChanged', 'TitleChanged', 'Ready'] } });
 
-  const tabPath = (ev.data.tab && ev.data.tab.path) || '/';
-  const manifestPath = tabPath.endsWith('.json') ? tabPath : (tabPath.replace(/\/$/, '') + '/book.json');
+  const tabPath = (ev.data.tab && ev.data.tab.path) || '/';   // book.json / dir / bare doc — reader-core resolves
   const vfsRead = (p) => bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [p, 'utf8']);
   const vfsReadBytes = (p) => bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [p]);
   const ensurePersister = () => { if (!persister) persister = makeStatePersister(bus, '/home/.books/state/' + reader.slug + '.json'); return persister; };
@@ -426,8 +425,8 @@ window.addEventListener('message', async (ev) => {
     },
   });
 
-  try { await reader.open(manifestPath); }
-  catch (e) { $('content').innerHTML = '<div class="ov-empty">no book.json — ' + (e.message || e) + '</div>'; return; }
+  try { await reader.open(tabPath); }
+  catch (e) { $('content').innerHTML = '<div class="ov-empty">couldn\'t open ' + tabPath + ' — ' + (e.message || e) + '</div>'; return; }
   fit();
 
   // F-key dispatch: FONT cycles size directly; the rest toggle an overlay.

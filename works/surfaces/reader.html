@@ -466,8 +466,9 @@ window.addEventListener('message', async (ev) => {
     Surface: { methods: { Flush: () => {}, CanClose: () => true, Relocated: () => {} }, signals: ['DirtyChanged', 'TitleChanged', 'Ready'] },
   });
 
+  // Pass the raw path to reader-core, which resolves it: a book.json, a dir
+  // holding one, or a bare document file (.pdf/.md/.html → synthesized book).
   const tabPath = (ev.data.tab && ev.data.tab.path) || '/';
-  const manifestPath = tabPath.endsWith('.json') ? tabPath : (tabPath.replace(/\/$/, '') + '/book.json');
 
   const vfsRead = (p) => bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [p, 'utf8']);
   const vfsReadBytes = (p) => bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [p]);
@@ -517,8 +518,8 @@ window.addEventListener('message', async (ev) => {
     },
   });
 
-  try { await reader.open(manifestPath); }
-  catch (e) { document.body.innerHTML = '<div class="err">no book.json at ' + manifestPath + ' — ' + (e.message || e) + '</div>'; return; }
+  try { await reader.open(tabPath); }
+  catch (e) { document.body.innerHTML = '<div class="err">couldn\'t open ' + tabPath + ' — ' + (e.message || e) + '</div>'; return; }
 
   // ── wire chrome controls ──
   $('setBtn').addEventListener('click', () => $('settingsPop').classList.toggle('open'));

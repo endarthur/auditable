@@ -404,6 +404,49 @@ export async function copyToPrompt(srcPath) {
   await copyTo(srcPath, dest);
 }
 
+// ── Upload an OS file into the workspace VFS (binary-safe) ──────────
+
+/** Write a dropped/picked File into destDir, auto-deduping the name. */
+export async function uploadFileToVfs(file, destDir = '/home') {
+  const buf = new Uint8Array(await file.arrayBuffer());
+  await WKS.vfs.mkdir(destDir, { recursive: true });
+  let dest = join(destDir, file.name);
+  if (await WKS.vfs.exists(dest)) {
+    const dot = file.name.lastIndexOf('.');
+    const stem = dot > 0 ? file.name.slice(0, dot) : file.name;
+    const ext = dot > 0 ? file.name.slice(dot) : '';
+    for (let i = 2; i < 1000; i++) {
+      const c = join(destDir, stem + ' (' + i + ')' + ext);
+      if (!(await WKS.vfs.exists(c))) { dest = c; break; }
+    }
+  }
+  await WKS.vfs.writeFile(dest, buf);
+  try { WKS.worksBus?.signal({ interface: 'VFS', member: 'Changed' }, [{ path: destDir, op: 'upload' }]); } catch { /* */ }
+  return dest;
+}
+
+/** Open the OS file picker and upload the chosen file(s) into destDir.
+ *  Returns the path of the last uploaded file (or null). */
+export async function uploadFilePrompt(destDir) {
+  return new Promise((resolve) => {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.multiple = true; inp.style.display = 'none';
+    document.body.appendChild(inp);
+    inp.addEventListener('change', async () => {
+      let last = null;
+      for (const f of inp.files) {
+        try { last = await uploadFileToVfs(f, destDir); setStatus('uploaded → ' + last); }
+        catch (e) { setStatus('upload failed: ' + (e.message || e)); }
+      }
+      inp.remove();
+      resolve(last);
+    });
+    // If the user cancels, the change event never fires — clean up on focus.
+    window.addEventListener('focus', () => setTimeout(() => { if (inp.isConnected && !inp.files.length) { inp.remove(); resolve(null); } }, 400), { once: true });
+    inp.click();
+  });
+}
+
 // ── External-file drag-drop (OS file → workspace) ───────────────────
 
 /** Install a global drag-drop listener on the shell. External files
@@ -472,10 +515,20 @@ export function installGlobalFileDrop() {
           if (dest) await openPath(dest);
           continue;
         }
-        const content = await file.text();
-        const projPath = await importNotebook(content, file.name);
-        await openPath(projPath);
-        setStatus('imported ' + file.name);
+        // Notebook text formats → import as a project.
+        if (/\.(txt|html?|ipynb)$/i.test(file.name)) {
+          const content = await file.text();
+          const projPath = await importNotebook(content, file.name);
+          await openPath(projPath);
+          setStatus('imported ' + file.name);
+          continue;
+        }
+        // Anything else (pdf, images, csv, arbitrary binary) → upload into the
+        // workspace VFS and open it by kind. (Previously these were run through
+        // file.text() → importNotebook, which garbled binary content.)
+        const dest = await uploadFileToVfs(file, '/home');
+        await openPath(dest);
+        setStatus('uploaded → ' + dest);
       } catch (e) {
         console.error('[works] drop import failed:', file.name, e);
         setStatus('drop failed: ' + file.name + ' — ' + (e.message || e));
@@ -507,7 +560,8 @@ function _ensureDropOverlay() {
       <div class="works-drop-title">Drop to import</div>
       <div class="works-drop-hint">
         Notebooks (.html, .txt, .ipynb) become new projects.<br>
-        Extensions (.gcupkg) install into the workspace.
+        Extensions (.gcupkg) install; books (.epub) + data packs (.gcudat) load.<br>
+        Any other file (PDF, images, …) uploads into your workspace.
       </div>
     </div>
   `;
