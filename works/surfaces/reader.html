@@ -377,8 +377,34 @@ const MATH_DELIMS = [
   { l: '\\(', r: '\\)', display: false },
 ];
 const MATH_SKIP = new Set(['CODE', 'PRE', 'SCRIPT', 'STYLE', 'TEXTAREA', 'A', 'MATH']);
+// Generic LaTeX→KaTeX macro shims for academic-text math (mbox, blackboard sets, E).
+// Books may extend/override via book.katexMacros.
+const KATEX_MACROS = { '\\mbox': '\\text', '\\eq': '=', '\\E': '\\mathrm{E}', '\\R': '\\mathbb{R}', '\\N': '\\mathbb{N}', '\\Z': '\\mathbb{Z}' };
+// Normalize TeX KaTeX doesn't accept: amsmath align/eqnarray environments (→ aligned),
+// and @{…} array/tabular column separators (KaTeX has no @ column type).
+function katexFix(tex) {
+  return tex
+    .replace(/\\begin\{(?:align\*?|eqnarray\*?)\}/g, '\\begin{aligned}')
+    .replace(/\\end\{(?:align\*?|eqnarray\*?)\}/g, '\\end{aligned}')
+    .replace(/@\{[^{}]*\}/g, '');
+}
 function renderMath(root) {
   if (!root) return;
+  const macros = { ...KATEX_MACROS, ...((book && book.katexMacros) || {}) };
+  // 1) Explicit pandoc math spans (<span class="math inline|display">…</span>).
+  //    Read textContent, which decodes HTML entities (&amp;→&) and flattens any
+  //    embedded markup — e.g. ODS's #x# code-identifiers land as <code>x</code>
+  //    INSIDE the \(…\), splitting the text node so the bare-delimiter scan below
+  //    can't pair it. textContent gives the whole formula back as clean TeX.
+  for (const el of root.querySelectorAll('span.math')) {
+    const display = el.classList.contains('display');
+    const tex = el.textContent.trim().replace(/^\\[([]/, '').replace(/\\[)\]]$/, '').trim();
+    if (!tex) continue;
+    try { el.innerHTML = renderToString(katexFix(tex), { output: 'mathml', displayMode: display, macros }); }
+    catch { /* leave the span's raw text in place */ }
+  }
+  // 2) Bare $$…$$ / \(…\) / \[…\] in plain text nodes (markdown chapters and
+  //    non-pandoc HTML). Rendered spans from step 1 are <math> now → MATH_SKIP.
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(n) {
       if (!/\$\$|\\\(|\\\[/.test(n.nodeValue)) return NodeFilter.FILTER_REJECT;
@@ -405,7 +431,7 @@ function renderMath(root) {
       if (best.s > i) frag.appendChild(document.createTextNode(text.slice(i, best.s)));
       const tex = text.slice(best.s + best.d.l.length, best.e);
       const span = document.createElement('span');
-      try { span.innerHTML = renderToString(tex, { output: 'mathml', displayMode: best.d.display }); any = true; }
+      try { span.innerHTML = renderToString(katexFix(tex), { output: 'mathml', displayMode: best.d.display, macros }); any = true; }
       catch { span.textContent = best.d.l + tex + best.d.r; }
       frag.appendChild(span);
       i = best.e + best.d.r.length;
