@@ -48,6 +48,7 @@ export function setupMenuBar() {
       // Open example… is always available — it carries the built-in Patchbay
       // examples even when no bundled notebook examples are present.
       { label: 'Documentation', action: 'help:docs', shortcut: 'F1' },
+      { label: 'Documentation (as a book)', action: 'help:docsbook' },
       { label: 'Open example…', action: 'help:openexample' },
       '---',
       { label: 'About Auditable Works', action: 'help:about' },
@@ -103,6 +104,7 @@ export function setupMenuBar() {
       spawnSurface('docs', { title: 'Documentation' });
       return;
     }
+    if (action === 'help:docsbook') { await openPath('/usr/share/books/gcu-docs'); return; }
     if (action === 'help:openexample') { await openExamplePicker(); return; }
     if (action === 'help:about') { await showAbout(); return; }
     setStatus(`menu: ${action}`);  // workspace:save lands with 5b

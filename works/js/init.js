@@ -13,6 +13,7 @@ import { setupWorksService } from './works-service.js';
 import { setupSurfaces, spawnSurface, openPath } from './surfaces.js';
 import { decompressLibs, decompressSurfaces, installSharedLibsToVfs } from './surface-registry.js';
 import { installDocsToVfs } from './docs-loader.js';
+import { installBuiltinBooks } from './books-loader.js';
 import { installExamplesToVfs, hasExamples } from './examples-loader.js';
 import { serializeWorkspace, buildWorksHtml } from './persist.js';
 import { importNotebook, importFileAsNotebook } from './import.js';
@@ -29,6 +30,7 @@ async function boot() {
   await decompressLibs();      // shared library payloads → source strings
   await installSharedLibsToVfs(WKS.vfs);   // expose them at /usr/lib as @gcu/*
   await installDocsToVfs(WKS.vfs);         // /usr/share/doc/ for the docs surface
+  await installBuiltinBooks(WKS.vfs);      // /usr/share/books/gcu-docs/ (the docs, as a reader book)
   await installExamplesToVfs(WKS.vfs);     // /usr/share/examples/ (works-all only)
   await decompressSurfaces();  // embedded surface payloads → blob URLs
   installShellAuditable();     // window.auditable.registerExtension in shell context
