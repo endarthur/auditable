@@ -54,6 +54,8 @@ export function createReader(opts) {
   const {
     contentEl,
     readFile,
+    readBytes,               // async (path) => Uint8Array — for binary backends (pdf)
+    loadPdfEngine,           // async () => pdfjsLib | null — works-all only; null → degrade
     loadState = async () => null,
     saveState = async () => {},
     libs = {},
@@ -175,9 +177,50 @@ export function createReader(opts) {
       },
     },
   };
+  // PDF backend (fixed-layout) — registered only when a pdf engine loader is
+  // supplied. Renders pages as canvases into the content element, lazily via an
+  // IntersectionObserver so a fat document never blocks. binary:true → the
+  // chapter is read as bytes, not utf8 text.
+  let _pdfIO = null;
+  if (loadPdfEngine) {
+    backends.pdf = {
+      binary: true,
+      async render(chapter, data, pageEl) {
+        const pdfjs = await loadPdfEngine();
+        if (!pdfjs) { pageEl.innerHTML = '<div class="err">PDF support isn\'t available in this build.</div>'; return; }
+        let pdf;
+        try { pdf = await pdfjs.getDocument({ data }).promise; }
+        catch (e) { pageEl.innerHTML = '<div class="err">failed to open PDF: ' + (e.message || e) + '</div>'; return; }
+        const dpr = window.devicePixelRatio || 1;
+        const io = new IntersectionObserver((ents) => {
+          for (const e of ents) if (e.isIntersecting) { io.unobserve(e.target); renderPage(+e.target.dataset.page, e.target); }
+        }, { root: contentEl, rootMargin: '300px 0px' });
+        _pdfIO = io;
+        async function renderPage(n, holder) {
+          let page; try { page = await pdf.getPage(n); } catch { return; }
+          const base = page.getViewport({ scale: 1 });
+          const scale = Math.max(0.2, ((pageEl.clientWidth || 600) - 4) / base.width);
+          const vp = page.getViewport({ scale: scale * dpr });
+          const canvas = document.createElement('canvas');
+          canvas.width = vp.width; canvas.height = vp.height;
+          canvas.style.width = '100%'; canvas.style.height = 'auto';
+          holder.innerHTML = ''; holder.appendChild(canvas);
+          holder.style.minHeight = '';
+          try { await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise; } catch { /* cancelled on nav */ }
+        }
+        for (let n = 1; n <= pdf.numPages; n++) {
+          const holder = document.createElement('div');
+          holder.className = 'pdf-page'; holder.dataset.page = n; holder.style.minHeight = '60vh';
+          pageEl.appendChild(holder);
+          io.observe(holder);
+        }
+      },
+    };
+  }
   function backendFor(format) {
-    if (format === 'pdf' || format === 'djvu') return backends[format] || null;
-    return backends[format] || backends.reflowable;
+    if (backends[format]) return backends[format];
+    if (format === 'pdf' || format === 'djvu') return null;   // fixed-layout, no engine
+    return backends.reflowable;
   }
 
   function resolveInBook(relPath) {
@@ -308,15 +351,23 @@ export function createReader(opts) {
       const chapter = chapters[index];
       const backend = backendFor(chapter.format || 'md');
       if (!contentEl) return;
+      if (_pdfIO) { try { _pdfIO.disconnect(); } catch { /* */ } _pdfIO = null; }
       if (!backend) {
         contentEl.innerHTML = '<div class="err">This chapter is ' + (chapter.format || '?')
           + ' — a fixed-layout reader backend isn\'t available yet.</div>';
         emit('chapterChange', { index, chapter, page: null });
         return;
       }
-      let raw;
-      try { raw = await readFile(resolveInBook(chapter.file)); }
-      catch (e) {
+      let data;
+      const wantBinary = !!backend.binary;
+      try {
+        if (wantBinary) {
+          if (!readBytes) throw new Error('binary backend needs readBytes');
+          data = await readBytes(resolveInBook(chapter.file));
+        } else {
+          data = await readFile(resolveInBook(chapter.file));
+        }
+      } catch (e) {
         contentEl.innerHTML = '<div class="err">failed to load ' + chapter.file + ': ' + (e.message || e) + '</div>';
         return;
       }
@@ -324,7 +375,7 @@ export function createReader(opts) {
       const page = document.createElement('div');
       page.className = 'page';
       contentEl.appendChild(page);
-      backend.render(chapter, raw, page, {
+      backend.render(chapter, data, page, {
         renderMath, decorateCodeBlocks, sanitizeHtml, renderMdWithMath, resolveInBook, slug, libs,
       });
       if (rewireLinks) rewireLinks(page, chapter.file, (resolved, anch) => {
@@ -462,7 +513,7 @@ export function createReader(opts) {
       return Librarian.search(bookIndex, q, { fuzzy: 1, limit: 20, ...(searchOpts || {}) });
     },
 
-    destroy() { clearTimeout(saveTimer); },
+    destroy() { clearTimeout(saveTimer); if (_pdfIO) { try { _pdfIO.disconnect(); } catch { /* */ } _pdfIO = null; } },
   };
 
   let _toc = { items: [], update() {} };

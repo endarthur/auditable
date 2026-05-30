@@ -156,6 +156,10 @@
   .content .tok-attr    { color: var(--au-warn); }
   .content .tok-punct   { color: var(--au-fg-muted); }
 
+  /* PDF backend — page canvases stacked in the scroll column. */
+  .content .pdf-page { max-width: var(--reader-width); margin: 0 auto 14px; }
+  .content .pdf-page canvas { display: block; width: 100%; height: auto; background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,0.4); border-radius: 2px; }
+
   .err { color: var(--au-error); padding: 24px; }
   .empty { color: var(--au-fg-soft); padding: 24px; font-style: italic; }
 
@@ -462,11 +466,33 @@ window.addEventListener('message', async (ev) => {
   const manifestPath = tabPath.endsWith('.json') ? tabPath : (tabPath.replace(/\/$/, '') + '/book.json');
 
   const vfsRead = (p) => bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [p, 'utf8']);
+  const vfsReadBytes = (p) => bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [p]);
   const ensurePersister = () => { if (!persister) persister = makeStatePersister(bus, '/home/.books/state/' + reader.slug + '.json'); return persister; };
+  // PDF engine — works-all only (vendored @gcu/pdfjs lives at /usr/lib there;
+  // absent in base works → null → the pdf backend degrades). Loaded as a classic
+  // script via indirect eval (cross-blob ESM imports are blocked on file://),
+  // with a classic worker spun from the embedded worker source.
+  let _pdfEngine;
+  async function loadPdfEngine() {
+    if (_pdfEngine !== undefined) return _pdfEngine;
+    try {
+      const src = await vfsRead('/usr/lib/@gcu/pdfjs/source');
+      (0, eval)(src);
+      const lib = globalThis['pdfjs-dist/build/pdf'];
+      if (lib && globalThis.__pdfjsWorkerSrc && !lib.GlobalWorkerOptions.workerPort) {
+        const blob = new Blob([globalThis.__pdfjsWorkerSrc], { type: 'text/javascript' });
+        lib.GlobalWorkerOptions.workerPort = new Worker(URL.createObjectURL(blob));
+      }
+      _pdfEngine = lib || null;
+    } catch { _pdfEngine = null; }
+    return _pdfEngine;
+  }
 
   reader = createReader({
     contentEl: $('content'),
     readFile: vfsRead,
+    readBytes: vfsReadBytes,
+    loadPdfEngine,
     loadState: () => ensurePersister().read(),
     saveState: (s) => ensurePersister().schedule(() => s),
     libs: { renderMd, slugify, decorateHeadings, highlightCode, rewireLinks, scrollToAnchor, splitByHeadings, Librarian, renderToString },

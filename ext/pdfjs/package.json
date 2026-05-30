@@ -1,0 +1,7 @@
+{
+  "name": "@gcu/pdfjs",
+  "version": "3.11.174",
+  "description": "Vendored PDF.js (Mozilla, Apache-2.0) for the @gcu/reader-core pdf backend",
+  "license": "Apache-2.0",
+  "private": true
+}
