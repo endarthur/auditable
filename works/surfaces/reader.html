@@ -379,14 +379,19 @@ const MATH_DELIMS = [
 const MATH_SKIP = new Set(['CODE', 'PRE', 'SCRIPT', 'STYLE', 'TEXTAREA', 'A', 'MATH']);
 // Generic LaTeX→KaTeX macro shims for academic-text math (mbox, blackboard sets, E).
 // Books may extend/override via book.katexMacros.
-const KATEX_MACROS = { '\\mbox': '\\text', '\\eq': '=', '\\E': '\\mathrm{E}', '\\R': '\\mathbb{R}', '\\N': '\\mathbb{N}', '\\Z': '\\mathbb{Z}' };
+const KATEX_MACROS = { '\\mbox': '\\text', '\\eq': '=', '\\E': '\\mathrm{E}', '\\R': '\\mathbb{R}', '\\N': '\\mathbb{N}', '\\Z': '\\mathbb{Z}', '\\ddiv': '\\operatorname{div}' };
 // Normalize TeX KaTeX doesn't accept: amsmath align/eqnarray environments (→ aligned),
-// and @{…} array/tabular column separators (KaTeX has no @ column type).
+// @{…} array/tabular column separators (KaTeX has no @ column type), and
+// output-less commands KaTeX rejects as undefined — labels (\label, \eqlabel)
+// and proof/numbering directives (\qedhere, \nonumber, \notag) — which carry no
+// visible math, so dropping them is faithful in a reflowable, unnumbered render.
 function katexFix(tex) {
   return tex
     .replace(/\\begin\{(?:align\*?|eqnarray\*?)\}/g, '\\begin{aligned}')
     .replace(/\\end\{(?:align\*?|eqnarray\*?)\}/g, '\\end{aligned}')
-    .replace(/@\{[^{}]*\}/g, '');
+    .replace(/@\{[^{}]*\}/g, '')
+    .replace(/\\(?:label|eqlabel)\s*\{[^{}]*\}/g, '')
+    .replace(/\\(?:qedhere|nonumber|notag)\b/g, '');
 }
 function renderMath(root) {
   if (!root) return;
