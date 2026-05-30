@@ -96,8 +96,18 @@
   .content h3 { font-size: 1.12em; margin: 1.2em 0 0.4em; }
   .content p { margin: 0 0 1em; }
   .content code { font-family: ui-monospace, 'Space Mono', monospace; background: var(--au-surface-bright); padding: 1px 5px; border-radius: 2px; font-size: 0.85em; }
-  .content pre { background: var(--au-surface-raised); border: 1px solid var(--au-border); border-radius: 3px; padding: 10px 14px; overflow-x: auto; font-size: 0.8em; line-height: 1.5; }
+  .content pre { background: var(--au-surface-raised); border: 1px solid var(--au-border); border-radius: 3px; padding: 10px 14px; overflow-x: auto; font-size: 0.8em; line-height: 1.5; position: relative; }
   .content pre code { background: none; padding: 0; }
+  /* Copy button — empty (icon via ::before) so it contributes no text to the
+     page's textContent, keeping highlight char-offset anchoring intact. */
+  .code-copy { position: absolute; top: 6px; right: 6px; width: 26px; height: 22px; padding: 0; border: 1px solid var(--au-border); border-radius: 3px; background: var(--au-surface-bright); color: var(--au-text-muted); cursor: pointer; opacity: 0; transition: opacity .12s, color .12s, border-color .12s; font-size: 12px; line-height: 1; }
+  .content pre:hover .code-copy, .code-copy:focus-visible { opacity: 1; }
+  .code-copy::before { content: '⧉'; }
+  .code-copy:hover { color: var(--au-action); border-color: var(--au-action); }
+  .code-copy.copied { color: var(--au-go); border-color: var(--au-go); opacity: 1; }
+  .code-copy.copied::before { content: '✓'; }
+  .code-copy.failed { color: var(--au-fault); border-color: var(--au-fault); opacity: 1; }
+  .code-copy.failed::before { content: '✕'; }
   .content a { color: var(--au-info); text-decoration: none; }
   .content a:hover { text-decoration: underline; }
   .content blockquote { border-left: 3px solid var(--au-border); padding-left: 14px; color: var(--au-fg-muted); margin: 1em 0; }
@@ -459,6 +469,41 @@ function renderMath(root) {
   }
 }
 
+// ── Copy buttons on code blocks ─────────────────────────────────────
+async function copyToClipboard(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch { /* fall through */ }
+  // Surfaces are cross-origin iframes; navigator.clipboard is often blocked.
+  // execCommand('copy') on a textarea works under a user gesture on file:// too.
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.top = '-9999px'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    const ok = document.execCommand('copy'); ta.remove(); return ok;
+  } catch { return false; }
+}
+// Add a copy button to each <pre> code block. The button is empty (icon via
+// CSS ::before) so it adds no text node → highlight char-offsets stay stable.
+function decorateCodeBlocks(root) {
+  for (const pre of root.querySelectorAll('pre')) {
+    const code = pre.querySelector('code') || pre;
+    if (pre.querySelector(':scope > .code-copy')) continue;
+    const btn = document.createElement('button');
+    btn.className = 'code-copy';
+    btn.type = 'button';
+    btn.title = 'Copy code';
+    btn.setAttribute('aria-label', 'Copy code');
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const ok = await copyToClipboard(code.textContent);
+      btn.classList.remove('copied', 'failed');
+      btn.classList.add(ok ? 'copied' : 'failed');
+      clearTimeout(btn._t);
+      btn._t = setTimeout(() => btn.classList.remove('copied', 'failed'), 1100);
+    });
+    pre.appendChild(btn);
+  }
+}
+
 // ── VFS helpers ─────────────────────────────────────────────────────
 async function vfsRead(p) {
   return bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [p, 'utf8']);
@@ -610,6 +655,7 @@ async function loadChapter(index, anchor) {
   contentEl.appendChild(page);
   backend.render(chapter, raw, page);
   renderMath(page);   // $$…$$ / \(…\) / \[…\] → MathML (before highlights anchor)
+  decorateCodeBlocks(page);   // copy buttons (empty → no effect on highlight offsets)
   // cross-chapter + in-chapter links
   rewireLinks(page, chapter.file, (resolved, anch) => {
     // resolved is relative to chapter.file's dir; match against a chapter file
