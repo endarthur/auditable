@@ -1,0 +1,9 @@
+{
+  "name": "@gcu/capsule",
+  "version": "0.1.0",
+  "description": "GCU capsule transport — fragment-based content addressing (share-by-URL / QR / NFC). Vendored from ep; spec in the cradle repo.",
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "private": true
+}
