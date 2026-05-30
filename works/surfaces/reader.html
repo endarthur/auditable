@@ -149,6 +149,20 @@
   .err { color: var(--au-error); padding: 24px; }
   .empty { color: var(--au-fg-soft); padding: 24px; font-style: italic; }
 
+  /* Ctrl+K search overlay (search within the open book). */
+  .search-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: none; align-items: flex-start; justify-content: center; padding-top: 60px; z-index: 100; }
+  .search-overlay.open { display: flex; }
+  .search-box { width: min(640px, 90vw); background: var(--au-surface-raised); border: 1px solid var(--au-border); border-radius: 6px; box-shadow: 0 12px 48px rgba(0,0,0,0.6); display: flex; flex-direction: column; max-height: 70vh; }
+  .search-input { background: none; border: none; outline: none; color: var(--au-fg); font: 14px/1.4 ui-monospace, 'Space Mono', monospace; padding: 14px 16px; border-bottom: 1px solid var(--au-border); }
+  .search-results { overflow: auto; padding: 4px 0; }
+  .search-results .empty { padding: 12px 16px; }
+  .search-hit { padding: 8px 16px; cursor: pointer; border-left: 2px solid transparent; }
+  .search-hit:hover, .search-hit.active { background: var(--au-surface-bright); border-left-color: var(--au-action); }
+  .search-hit .crumb { font-size: 11px; color: var(--au-fg-soft); font-family: ui-monospace, 'Space Mono', monospace; margin-bottom: 2px; }
+  .search-hit .h { color: var(--au-fg); font-size: 13px; font-weight: 500; }
+  .search-hit .snippet { color: var(--au-fg-muted); font-size: 12px; margin-top: 2px; font-family: ui-monospace, 'Space Mono', monospace; }
+  .search-hit .snippet mark { background: var(--au-action-soft); color: var(--au-fg); padding: 0 2px; border-radius: 2px; }
+
   /* Highlights — translucent so text stays readable on dark or light. */
   .content .hl { border-radius: 2px; cursor: pointer; }
   .content .hl.c-yellow { background: rgba(232, 193, 76, 0.34); }
@@ -229,6 +243,7 @@
   <span class="spacer"></span>
   <button id="prevBtn" title="Previous chapter (←)">‹ Prev</button>
   <button id="nextBtn" title="Next chapter (→)">Next ›</button>
+  <button id="searchBtn" title="Search this book (Ctrl+K)">⌕</button>
   <button id="markBtn" title="Bookmark this spot">🔖</button>
   <button id="setBtn" title="Reading settings">Aa</button>
   <div class="settings-pop" id="settingsPop">
@@ -276,12 +291,20 @@
     <button id="noteDelete" class="danger">Delete</button>
   </div>
 </div>
+<!-- Ctrl+K search-within-book overlay. -->
+<div class="search-overlay" id="searchOverlay">
+  <div class="search-box">
+    <input class="search-input" id="searchInput" type="text" placeholder="Search this book…  (Esc to close)" spellcheck="false" autocomplete="off">
+    <div class="search-results" id="searchResults"></div>
+  </div>
+</div>
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
 
 /* @theme-init */
 import { renderMd, slugify } from '../../src/js/markdown.js';
-import { highlightCode, scrollToAnchor, decorateHeadings, buildToc, rewireLinks, makeStatePersister } from '../../ext/docview/index.js';
+import { highlightCode, scrollToAnchor, decorateHeadings, buildToc, rewireLinks, makeStatePersister, splitByHeadings } from '../../ext/docview/index.js';
+import { Librarian } from '../../ext/librarian/index.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -298,6 +321,8 @@ let bookmarks = [];       // [{ id, chapterId, scrollTop, label }]
 let highlights = [];      // [{ id, chapterId, start, end, quote, color, note }]
 let _markSeq = 1;
 let _activeMarkId = null; // highlight whose note popover is open
+let bookIndex = null;     // librarian index over the book (built lazily)
+let _hitIdx = 0;
 
 // ── Renderer-backend seam (spec: format → backend) ──────────────────
 // v1 ships the reflowable backend (markdown + sanitized HTML → our DOM, so
@@ -639,6 +664,87 @@ function showSelToolbar(rect) {
 }
 function hideSelToolbar() { $('selToolbar').classList.remove('open'); }
 
+// ── Search within the book ──────────────────────────────────────────
+// Build a librarian index over every chapter, split into heading-anchored
+// sections. md chapters split via docview.splitByHeadings (anchors match the
+// rendered slugs); html chapters (epub) split via the DOM (anchor = heading
+// id). Built lazily on first open. Each section carries its chapter index so
+// a hit can loadChapter() straight to it.
+function htmlSections(html, chapterTitle) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const out = [];
+  let cur = { heading: chapterTitle, anchor: '', body: '' };
+  for (const el of doc.body.querySelectorAll('h1, h2, h3, p, li, pre, blockquote, td')) {
+    if (/^H[123]$/.test(el.tagName)) {
+      if (cur.body.trim() || cur.heading) out.push(cur);
+      cur = { heading: (el.textContent || '').replace(/^§\s*/, '').trim(), anchor: el.id || '', body: '' };
+    } else {
+      cur.body += ' ' + (el.textContent || '');
+    }
+  }
+  if (cur.body.trim() || cur.heading) out.push(cur);
+  return out;
+}
+async function buildBookIndex() {
+  if (bookIndex) return bookIndex;
+  const docs = [];
+  for (let i = 0; i < chapters.length; i++) {
+    const ch = chapters[i];
+    let raw = '';
+    try { raw = await vfsRead(resolveInBook(ch.file)); } catch { continue; }
+    const secs = (ch.format || 'md') === 'html'
+      ? htmlSections(raw, ch.title)
+      : splitByHeadings(raw, ch.id, ch.title, slugify);
+    for (const s of secs) {
+      docs.push({
+        id: ch.id + '#' + (s.anchor || ''),
+        chapterIndex: i, anchor: s.anchor || '',
+        fileTitle: ch.title, heading: s.heading || ch.title,
+        title: s.heading || ch.title, body: s.body || '',
+      });
+    }
+  }
+  bookIndex = Librarian.index({
+    docs, fields: { heading: { boost: 4 }, fileTitle: { boost: 2 }, body: { boost: 1 } }, synonyms: {},
+  });
+  return bookIndex;
+}
+async function openSearch() {
+  $('searchOverlay').classList.add('open');
+  const inp = $('searchInput');
+  inp.value = ''; inp.focus();
+  $('searchResults').innerHTML = '<div class="empty">indexing…</div>';
+  await buildBookIndex();
+  $('searchResults').innerHTML = '';
+  _hitIdx = 0;
+}
+function closeSearch() { $('searchOverlay').classList.remove('open'); }
+function runSearch() {
+  if (!bookIndex) return;
+  const q = $('searchInput').value;
+  const box = $('searchResults');
+  if (!q.trim()) { box.innerHTML = ''; return; }
+  const hits = Librarian.search(bookIndex, q, { fuzzy: 1, limit: 20 });
+  _hitIdx = 0;
+  box.innerHTML = '';
+  if (!hits.length) { box.innerHTML = '<div class="empty">no matches.</div>'; return; }
+  hits.forEach((h, i) => {
+    const row = document.createElement('div');
+    row.className = 'search-hit' + (i === 0 ? ' active' : '');
+    const crumb = document.createElement('div'); crumb.className = 'crumb'; crumb.textContent = h.doc.fileTitle || '';
+    const head = document.createElement('div'); head.className = 'h'; head.textContent = h.doc.heading || h.doc.fileTitle || '';
+    row.append(crumb, head);
+    if (h.snippet) { const sn = document.createElement('div'); sn.className = 'snippet'; sn.innerHTML = h.snippet; row.appendChild(sn); }
+    row.addEventListener('click', () => activateHit(h));
+    row.addEventListener('mouseenter', () => { _hitIdx = i; for (const r of box.querySelectorAll('.search-hit')) r.classList.remove('active'); row.classList.add('active'); });
+    box.appendChild(row);
+  });
+}
+async function activateHit(hit) {
+  closeSearch();
+  await loadChapter(hit.doc.chapterIndex, hit.doc.anchor || null);
+}
+
 // ── Boot ────────────────────────────────────────────────────────────
 window.addEventListener('message', async (ev) => {
   if (ev.source !== window.parent) return;
@@ -699,6 +805,9 @@ window.addEventListener('message', async (ev) => {
   $('prevBtn').addEventListener('click', () => loadChapter(curIndex - 1));
   $('nextBtn').addEventListener('click', () => loadChapter(curIndex + 1));
   $('markBtn').addEventListener('click', addBookmark);
+  $('searchBtn').addEventListener('click', openSearch);
+  $('searchInput').addEventListener('input', runSearch);
+  $('searchOverlay').addEventListener('click', (e) => { if (e.target.id === 'searchOverlay') closeSearch(); });
 
   // Selection → highlight toolbar.
   $('content').addEventListener('mouseup', () => {
@@ -743,6 +852,15 @@ window.addEventListener('message', async (ev) => {
     scheduleSave();
   });
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'k' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); openSearch(); return; }
+    if ($('searchOverlay').classList.contains('open')) {
+      const rows = $('searchResults').querySelectorAll('.search-hit');
+      if (e.key === 'Escape') { closeSearch(); return; }
+      if (e.key === 'ArrowDown' && rows.length) { e.preventDefault(); _hitIdx = Math.min(_hitIdx + 1, rows.length - 1); rows.forEach((r) => r.classList.remove('active')); rows[_hitIdx].classList.add('active'); rows[_hitIdx].scrollIntoView({ block: 'nearest' }); return; }
+      if (e.key === 'ArrowUp' && rows.length) { e.preventDefault(); _hitIdx = Math.max(_hitIdx - 1, 0); rows.forEach((r) => r.classList.remove('active')); rows[_hitIdx].classList.add('active'); rows[_hitIdx].scrollIntoView({ block: 'nearest' }); return; }
+      if (e.key === 'Enter' && rows[_hitIdx]) { e.preventDefault(); rows[_hitIdx].click(); return; }
+      return;
+    }
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement && document.activeElement.tagName);
     if (typing) return;
     if (e.key === '\\' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); setNavOpen(!document.body.classList.contains('nav-open')); }

@@ -669,7 +669,7 @@ if (target === 'works' || target === 'works-all') {
     { kind: 'docs',      file: 'works/surfaces/docs.html',
       deps: ['abus', 'markdown', 'librarian', 'docview'] },
     { kind: 'book',      file: 'works/surfaces/reader.html',
-      deps: ['abus', 'markdown', 'docview'] },
+      deps: ['abus', 'markdown', 'docview', 'librarian'] },
     { kind: 'terminal',  file: 'works/surfaces/terminal.html',
       deps: ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline'], extras: 'terminal' },
     { kind: 'patchbay',  file: 'works/surfaces/patchbay.html',  deps: ['abus', 'sideact', 'patchbay', 'menu'] },
