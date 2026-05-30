@@ -25,6 +25,13 @@
       "description": "CodeMirror 6 — the editor for every code/markdown/html cell. Bundled at ext/cm6/cm6.min.js (rollup build from npm packages: codemirror, @codemirror/*, @lezer/highlight).",
       "licenseFile": "ext/cm6/LICENSE-codemirror.txt"
     },
+    "katex": {
+      "spdx": "MIT",
+      "version": "0.17.0",
+      "homepage": "https://katex.org/",
+      "description": "KaTeX — TeX math rendering. Vendored at ext/katex/index.js (UMD wrapped as @gcu/katex) in MathML-only mode: the browser renders math with system math fonts, so NO KaTeX fonts/CSS are shipped (~265KB engine only). Used by the book reader surface.",
+      "licenseFile": "ext/katex/LICENSE"
+    },
     "acorn": {
       "spdx": "MIT",
       "version": "8.x (+ acorn-typescript 1.4.x)",

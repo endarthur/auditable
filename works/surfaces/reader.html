@@ -305,6 +305,7 @@ import { connect } from '../../ext/abus/index.js';
 import { renderMd, slugify } from '../../src/js/markdown.js';
 import { highlightCode, scrollToAnchor, decorateHeadings, buildToc, rewireLinks, makeStatePersister, splitByHeadings } from '../../ext/docview/index.js';
 import { Librarian } from '../../ext/librarian/index.js';
+import { renderToString } from '../../ext/katex/index.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -339,10 +340,19 @@ function sanitizeHtml(html) {
   }
   return tpl.innerHTML;
 }
+// Markdown treats _ ^ \ * as syntax, which would corrupt math source. For md
+// chapters we lift math spans out before renderMd and splice them back after,
+// so renderMath sees the verbatim TeX. (html chapters skip markdown entirely.)
+function renderMdWithMath(md) {
+  const math = [];
+  const stashed = md.replace(/\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)/g,
+    (m) => { math.push(m); return '@@MATH' + (math.length - 1) + '@@'; });
+  return renderMd(stashed).replace(/@@MATH(\d+)@@/g, (_, i) => math[+i]);
+}
 const BACKENDS = {
   reflowable: {
     render(chapter, raw, pageEl) {
-      pageEl.innerHTML = chapter.format === 'html' ? sanitizeHtml(raw) : renderMd(raw);
+      pageEl.innerHTML = chapter.format === 'html' ? sanitizeHtml(raw) : renderMdWithMath(raw);
       decorateHeadings(pageEl, (id) => {
         try { navigator.clipboard?.writeText(slug + '/' + chapter.id + '#' + id); } catch {}
       });
@@ -353,6 +363,55 @@ const BACKENDS = {
 function backendFor(format) {
   if (format === 'pdf' || format === 'djvu') return null;   // fixed-layout: not yet
   return BACKENDS.reflowable;
+}
+
+// ── Math (KaTeX → MathML) ───────────────────────────────────────────
+// Replace $$…$$ (display), \[…\] (display) and \(…\) (inline) with MathML.
+// Single $…$ is intentionally NOT a delimiter (KaTeX-auto-render default) to
+// avoid eating currency like "$5"; LaTeX sources should emit \(…\) inline
+// (the ODS converter will). Skips code/pre/links. MathML output → the browser
+// renders with system math fonts (no KaTeX fonts shipped).
+const MATH_DELIMS = [
+  { l: '$$', r: '$$', display: true },
+  { l: '\\[', r: '\\]', display: true },
+  { l: '\\(', r: '\\)', display: false },
+];
+const MATH_SKIP = new Set(['CODE', 'PRE', 'SCRIPT', 'STYLE', 'TEXTAREA', 'A', 'MATH']);
+function renderMath(root) {
+  if (!root) return;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(n) {
+      if (!/\$\$|\\\(|\\\[/.test(n.nodeValue)) return NodeFilter.FILTER_REJECT;
+      for (let p = n.parentNode; p && p !== root; p = p.parentNode) if (MATH_SKIP.has(p.nodeName)) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  const targets = [];
+  for (let n; (n = walker.nextNode());) targets.push(n);
+  for (const node of targets) {
+    const text = node.nodeValue;
+    const frag = document.createDocumentFragment();
+    let i = 0, any = false;
+    while (i < text.length) {
+      let best = null;
+      for (const d of MATH_DELIMS) {
+        const s = text.indexOf(d.l, i);
+        if (s < 0) continue;
+        const e = text.indexOf(d.r, s + d.l.length);
+        if (e < 0) continue;
+        if (!best || s < best.s) best = { s, e, d };
+      }
+      if (!best) { frag.appendChild(document.createTextNode(text.slice(i))); break; }
+      if (best.s > i) frag.appendChild(document.createTextNode(text.slice(i, best.s)));
+      const tex = text.slice(best.s + best.d.l.length, best.e);
+      const span = document.createElement('span');
+      try { span.innerHTML = renderToString(tex, { output: 'mathml', displayMode: best.d.display }); any = true; }
+      catch { span.textContent = best.d.l + tex + best.d.r; }
+      frag.appendChild(span);
+      i = best.e + best.d.r.length;
+    }
+    if (any) node.parentNode.replaceChild(frag, node);
+  }
 }
 
 // ── VFS helpers ─────────────────────────────────────────────────────
@@ -505,6 +564,7 @@ async function loadChapter(index, anchor) {
   page.className = 'page';
   contentEl.appendChild(page);
   backend.render(chapter, raw, page);
+  renderMath(page);   // $$…$$ / \(…\) / \[…\] → MathML (before highlights anchor)
   // cross-chapter + in-chapter links
   rewireLinks(page, chapter.file, (resolved, anch) => {
     // resolved is relative to chapter.file's dir; match against a chapter file
