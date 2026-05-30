@@ -398,7 +398,21 @@ function renderMath(root) {
   //    can't pair it. textContent gives the whole formula back as clean TeX.
   for (const el of root.querySelectorAll('span.math')) {
     const display = el.classList.contains('display');
-    const tex = el.textContent.trim().replace(/^\\[([]/, '').replace(/\\[)\]]$/, '').trim();
+    // Reconstruct TeX from the span. Embedded <code> (ODS's #x# code-identifiers
+    // that landed inside math) → \texttt{…}: a code-font token that is also a
+    // proper argument boundary, so an adjacent command doesn't swallow it
+    // (\log#n# → \log<code>n</code> would flatten to \logn → undefined; this
+    // gives \log\texttt{n} → "log n"). Escape LaTeX-specials in the code text —
+    // notably % (a comment char that would eat the rest of the formula), and
+    // _/^/&/#/$/{}/~/\. Clone + textContent also decodes entities (&amp;→&).
+    const clone = el.cloneNode(true);
+    for (const c of clone.querySelectorAll('code'))
+      c.replaceWith(document.createTextNode('\\texttt{' + c.textContent
+        .replace(/\\/g, '\\textbackslash ')
+        .replace(/([%$#&_{}])/g, '\\$1')
+        .replace(/~/g, '\\textasciitilde ')
+        .replace(/\^/g, '\\textasciicircum ') + '}'));
+    const tex = clone.textContent.trim().replace(/^\\[([]/, '').replace(/\\[)\]]$/, '').trim();
     if (!tex) continue;
     try { el.innerHTML = renderToString(katexFix(tex), { output: 'mathml', displayMode: display, macros }); }
     catch { /* leave the span's raw text in place */ }
