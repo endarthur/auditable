@@ -471,7 +471,10 @@ window.addEventListener('message', async (ev) => {
   const tabPath = (ev.data.tab && ev.data.tab.path) || '/';
 
   const vfsRead = (p) => bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [p, 'utf8']);
-  const vfsReadBytes = (p) => bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [p]);
+  // 'bytes' is mandatory — without an encoding the VFS UTF-8-decodes the file and
+  // substitutes U+FFFD for non-UTF-8 bytes, corrupting any binary (e.g. a PDF's
+  // flate streams → "Bad FCHECK"). Same gotcha downloadFile documents.
+  const vfsReadBytes = (p) => bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [p, 'bytes']);
   const ensurePersister = () => { if (!persister) persister = makeStatePersister(bus, '/home/.books/state/' + reader.slug + '.json'); return persister; };
   // PDF engine — works-all only (vendored @gcu/pdfjs lives at /usr/lib there;
   // absent in base works → null → the pdf backend degrades). Loaded as a classic
