@@ -200,13 +200,31 @@ export function createReader(opts) {
           let page; try { page = await pdf.getPage(n); } catch { return; }
           const base = page.getViewport({ scale: 1 });
           const scale = Math.max(0.2, ((pageEl.clientWidth || 600) - 4) / base.width);
-          const vp = page.getViewport({ scale: scale * dpr });
+          const cssVp = page.getViewport({ scale });            // display size
+          const devVp = page.getViewport({ scale: scale * dpr });// canvas backing size
+          holder.innerHTML = ''; holder.style.minHeight = '';
+          holder.style.position = 'relative';
+          holder.style.width = Math.floor(cssVp.width) + 'px';
+          holder.style.height = Math.floor(cssVp.height) + 'px';
           const canvas = document.createElement('canvas');
-          canvas.width = vp.width; canvas.height = vp.height;
-          canvas.style.width = '100%'; canvas.style.height = 'auto';
-          holder.innerHTML = ''; holder.appendChild(canvas);
-          holder.style.minHeight = '';
-          try { await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise; } catch { /* cancelled on nav */ }
+          canvas.width = devVp.width; canvas.height = devVp.height;
+          canvas.style.width = '100%'; canvas.style.height = '100%';
+          holder.appendChild(canvas);
+          try { await page.render({ canvasContext: canvas.getContext('2d'), viewport: devVp }).promise; } catch { return; /* cancelled on nav */ }
+          // Selectable text layer — transparent spans positioned over the canvas
+          // (PDF.js). Enables select/copy + feeds the search index. Best-effort.
+          if (typeof pdfjs.renderTextLayer === 'function') {
+            try {
+              const tl = document.createElement('div');
+              tl.className = 'pdf-textlayer';
+              tl.style.setProperty('--scale-factor', String(scale));
+              tl.style.width = Math.floor(cssVp.width) + 'px';
+              tl.style.height = Math.floor(cssVp.height) + 'px';
+              holder.appendChild(tl);
+              const tc = await page.getTextContent();
+              await pdfjs.renderTextLayer({ textContentSource: tc, container: tl, viewport: cssVp }).promise;
+            } catch { /* text layer is optional */ }
+          }
         }
         for (let n = 1; n <= pdf.numPages; n++) {
           const holder = document.createElement('div');
@@ -375,7 +393,7 @@ export function createReader(opts) {
       const page = document.createElement('div');
       page.className = 'page';
       contentEl.appendChild(page);
-      backend.render(chapter, data, page, {
+      await backend.render(chapter, data, page, {
         renderMath, decorateCodeBlocks, sanitizeHtml, renderMdWithMath, resolveInBook, slug, libs,
       });
       if (rewireLinks) rewireLinks(page, chapter.file, (resolved, anch) => {
@@ -395,7 +413,10 @@ export function createReader(opts) {
       }
       applyHighlights(chapter.id);
       emit('chapterChange', { index, chapter, page });
-      if (anchor && scrollToAnchor && scrollToAnchor(anchor)) { /* anchor wins */ }
+      if (anchor && /^p\d+$/.test(String(anchor))) {           // pdf page anchor
+        const h = page.querySelector('.pdf-page[data-page="' + String(anchor).slice(1) + '"]');
+        if (h) h.scrollIntoView();
+      } else if (anchor && scrollToAnchor && scrollToAnchor(anchor)) { /* anchor wins */ }
       else { contentEl.scrollTop = 0; }
       scheduleSave();
     },
@@ -493,6 +514,25 @@ export function createReader(opts) {
       const docs = [];
       for (let i = 0; i < chapters.length; i++) {
         const ch = chapters[i];
+        // PDF: extract per-page text via the engine → one search doc per page,
+        // anchored 'p<N>' so a hit jumps to the page. (Binary; not utf8-readable.)
+        if ((ch.format || 'md') === 'pdf') {
+          if (loadPdfEngine && readBytes) {
+            try {
+              const pdfjs = await loadPdfEngine();
+              if (pdfjs) {
+                const bytes = await readBytes(resolveInBook(ch.file));
+                const pdf = await pdfjs.getDocument({ data: bytes }).promise;
+                for (let p = 1; p <= pdf.numPages; p++) {
+                  let body = '';
+                  try { const tc = await (await pdf.getPage(p)).getTextContent(); body = tc.items.map((it) => it.str).join(' '); } catch { /* */ }
+                  docs.push({ id: ch.id + '#p' + p, chapterIndex: i, anchor: 'p' + p, fileTitle: ch.title, heading: (ch.title || 'PDF') + ' · p.' + p, title: ch.title, body });
+                }
+              }
+            } catch { /* skip on failure */ }
+          }
+          continue;
+        }
         let raw = '';
         try { raw = await readFile(resolveInBook(ch.file)); } catch { continue; }
         const secs = (ch.format || 'md') === 'html'

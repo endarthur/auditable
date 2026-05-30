@@ -156,9 +156,13 @@
   .content .tok-attr    { color: var(--au-warn); }
   .content .tok-punct   { color: var(--au-fg-muted); }
 
-  /* PDF backend — page canvases stacked in the scroll column. */
-  .content .pdf-page { max-width: var(--reader-width); margin: 0 auto 14px; }
-  .content .pdf-page canvas { display: block; width: 100%; height: auto; background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,0.4); border-radius: 2px; }
+  /* PDF backend — page canvases stacked in the scroll column, with a
+     transparent selectable text layer (PDF.js) positioned over each. */
+  .content .pdf-page { margin: 0 auto 14px; }
+  .content .pdf-page canvas { display: block; width: 100%; height: 100%; background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,0.4); border-radius: 2px; }
+  .content .pdf-textlayer { position: absolute; inset: 0; overflow: hidden; line-height: 1; opacity: 1; text-align: initial; }
+  .content .pdf-textlayer span, .content .pdf-textlayer br { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0 0; }
+  .content .pdf-page ::selection { background: var(--au-action-soft, rgba(232,115,31,0.4)); }
 
   .err { color: var(--au-error); padding: 24px; }
   .empty { color: var(--au-fg-soft); padding: 24px; font-style: italic; }
@@ -534,6 +538,10 @@ window.addEventListener('message', async (ev) => {
 
   // selection → highlight toolbar
   $('content').addEventListener('mouseup', () => setTimeout(() => {
+    // PDF text is selectable/copyable, but the offset-anchored highlight system
+    // is reflowable-only — don't offer the highlight toolbar on pdf chapters.
+    const ch = reader.chapters[reader.index];
+    if (ch && ch.format === 'pdf') { hideSelToolbar(); return; }
     const sel = reader.selectionInfo();
     if (sel) showSelToolbar(sel.rect); else hideSelToolbar();
   }, 0));
