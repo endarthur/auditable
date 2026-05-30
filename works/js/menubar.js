@@ -6,6 +6,7 @@ import { spawnSurface, openPath } from './surfaces.js';
 import { newProject } from './tree.js';
 import { importNotebookViaPicker, importFileAsNotebook } from './import.js';
 import { importEpubViaPicker } from './book-import.js';
+import { installGcudatViaPicker } from './gcudat-install.js';
 import { mountFolder } from './mount.js';
 import { openWorkspaceFolder, resetWorkspace } from './workspace.js';
 import { exportWorkspace, openWorkspaceFile, saveWorkspace } from './persist.js';
@@ -22,6 +23,7 @@ export function setupMenuBar() {
       { label: 'New notebook…',    action: 'project:new' },
       { label: 'Import notebook…', action: 'project:import' },
       { label: 'Import book (EPUB)…', action: 'book:import' },
+      { label: 'Install data pack…', action: 'pack:install' },
       '---',
       { label: 'New workspace…',       action: 'workspace:new' },
       { label: 'Open folder…',         action: 'workspace:open' },
@@ -59,6 +61,7 @@ export function setupMenuBar() {
     if (action === 'project:new') { newProject('/projects'); return; }
     if (action === 'project:import') { importNotebookViaPicker(); return; }
     if (action === 'book:import') { importEpubViaPicker(); return; }
+    if (action === 'pack:install') { installGcudatViaPicker(); return; }
     if (action === 'workspace:open') { await openWorkspaceFolder(); return; }
     if (action === 'workspace:mount') { await mountFolder(); return; }
     if (action === 'workspace:openfile') { openWorkspaceFile(); return; }

@@ -1053,7 +1053,57 @@ The format is intentionally small. Pythonic wheels accumulated a lot of complexi
 | `install("file.gcupkg")` cell shorthand | shipped 2026-05-25 — uses stdlib's native-DecompressionStream `unzipArchive`, no `@gcu/archive` dependency (~3.5 KB add to auditable.html) |
 | `pkg build` subcommand for producing `.gcupkg` from a workspace package | deferred — out-of-tree packers (a few hundred lines that walks a repo, validates `package.json`, computes the integrity hash, and zips the artifacts) work; in-tree builder is a quality-of-life follow-up |
 
-### 6.2 Bundled documentation
+### 6.2 The `.gcudat` data-pack format  *(status: shipped — books kind)*
+
+`.gcudat` is the **inert-data** counterpart to the executable `.gcupkg`:
+
+> **`.gcupkg` = a package that runs. `.gcudat` = data that's only read.**
+
+That split *is* the trust boundary — the installer **never executes anything**
+from a `.gcudat` (no `index.js`, no `works.js`, no eval), so a data pack is safe
+to auto-install at lower trust than a code package. Used for prepared content:
+reader books, doc bundles, MDN snapshots, datasets, fixtures — anything that's
+pure data.
+
+**A `.gcudat` is `{ manifest + a file tree }`, container-agnostic.** The
+discriminator is the manifest, *not* the extension or container — a `.tgz`, a
+`.zip`, or a bare directory carrying the manifest are all valid `.gcudat`s. The
+`.gcudat` extension is just the discoverability affordance; detection sniffs for
+the manifest.
+
+**Manifest — `gcudat.json` at the pack root:**
+
+```json
+{
+  "gcudat": 1,                 // version key — its presence = "this is a gcudat"
+  "kind": "books",             // the router: books | docs | mdn | dataset | …
+  "name": "ods",
+  "title": "Open Data Structures",
+  "license": "CC BY 2.5",
+  "attribution": "Pat Morin",
+  "index": "book.json"         // kind-specific entry pointer
+}
+```
+
+**`kind` is open-ended.** A generic installer reads the manifest, validates the
+version key, and dispatches to a registered **kind-handler** that only writes
+files to the VFS. `books` → `/home/.books/library/<name>/` (then opens in the
+reader); a future `dataset` → `/var/data/…`; etc. New kinds are a new handler,
+not a new format.
+
+| Piece | Where | Status |
+|---|---|---|
+| Producer (book dir → `.gcudat`) | `gcu-library/tools/build-gcudat.mjs` | shipped |
+| Consumer (install, kind-routing, no eval) | `works/js/gcudat-install.js` | shipped |
+| Container readers (`.tgz` / `.zip` by magic byte) | `@gcu/archive` (`gunzipBytes`/`listTar`/`listZip`) | shipped |
+| Entry points | drop a `.gcudat` on the window · File → Install data pack… · `WKS.installGcudat(bytes)` | shipped |
+
+Heavy prepared content lives in the separate **`gcu-library`** repo (books +
+conversion tooling), distributed as `.gcudat`s — it does not bloat the auditable
+repo. (Authoring `.gcudat`/`.gcupkg` from within Works/geas is a roadmap item;
+geas already has the VFS + `@gcu/archive` primitives for it.)
+
+### 6.3 Bundled documentation
 
 When a `.gcupkg` contains a `docs/` directory, the host wires each `.md` file into the Works docs surface (`works/surfaces/docs.html`) under a per-extension section. The convention:
 
@@ -1074,7 +1124,7 @@ On install, the host writes `docs/` into the VFS at:
 
 — available to the docs surface, to `cat` in geas, and to any other surface that wants to render extension docs. Uninstall removes the directory.
 
-### 6.3 Bundled examples
+### 6.4 Bundled examples
 
 When a `.gcupkg` contains an `examples/` directory, the host installs each `.txt` cell-def into the workspace's example pool, where it shows up in **Help → Open example…** alongside the host's built-in examples.
 

@@ -5,6 +5,7 @@ import { WKS, setStatus } from './state.js';
 import { Dialog } from '#dialog';
 import { importNotebook } from './import.js';
 import { importEpubBytes } from './book-import.js';
+import { installGcudatBytes } from './gcudat-install.js';
 import { openPath } from './surfaces.js';
 import { archive } from '#archive';
 import { parseGcupkg, installGcupkg } from '#gcupkg';
@@ -462,6 +463,13 @@ export function installGlobalFileDrop() {
           const buf = new Uint8Array(await file.arrayBuffer());
           const dir = await importEpubBytes(buf, file.name);
           if (dir) { await openPath(dir); setStatus('imported ' + file.name); }
+          continue;
+        }
+        // .gcudat — install a data pack (pure data, routed by kind; no eval).
+        if (file.name.toLowerCase().endsWith('.gcudat')) {
+          const buf = new Uint8Array(await file.arrayBuffer());
+          const dest = await installGcudatBytes(buf, file.name);
+          if (dest) await openPath(dest);
           continue;
         }
         const content = await file.text();

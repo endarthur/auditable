@@ -18,6 +18,7 @@ import { installExamplesToVfs, hasExamples } from './examples-loader.js';
 import { serializeWorkspace, buildWorksHtml } from './persist.js';
 import { importNotebook, importFileAsNotebook } from './import.js';
 import { importEpubBytes } from './book-import.js';
+import { installGcudatBytes } from './gcudat-install.js';
 import { buildProjectExportHtml, exportProject } from './project-export.js';
 import { mountHandle, unmountAt, restoreMounts } from './mount.js';
 import { installGlobalFileDrop } from './file-ops.js';
@@ -52,6 +53,7 @@ async function boot() {
   WKS.importNotebook = importNotebook;
   WKS.importFileAsNotebook = importFileAsNotebook;
   WKS.importBook = importEpubBytes;   // .epub bytes → /home/.books/library/<slug>/
+  WKS.installGcudat = installGcudatBytes;   // .gcudat bytes → routed by kind
   WKS.buildProjectExportHtml = buildProjectExportHtml;
   WKS.exportProject = exportProject;
   WKS.newFile = newFile;

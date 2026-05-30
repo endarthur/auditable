@@ -20,6 +20,7 @@ import './surfaces.js';
 import './works-service.js';
 import './import.js';
 import './book-import.js';
+import './gcudat-install.js';
 import './project-export.js';
 import './file-ops.js';
 import './uninstall-extension.js';
