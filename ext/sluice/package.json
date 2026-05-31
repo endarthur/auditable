@@ -1,0 +1,31 @@
+{
+  "name": "@gcu/sluice",
+  "version": "0.1.0",
+  "description": "Online / streaming statistics nucleus: mergeable, never-resident accumulators (Welford moments, t-digest quantiles, capped categoricals, histograms) over unbounded row streams, plus a cold-recipe scan runner. Parallel-ready by construction. Zero dependencies.",
+  "type": "module",
+  "main": "./src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["streaming", "statistics", "online", "welford", "t-digest", "histogram", "accumulator", "csv", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/sluice"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/sluice",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}
