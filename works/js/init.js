@@ -10,6 +10,7 @@ import { setupLayout, restoreLayout } from './layout.js';
 import { setupMenuBar } from './menubar.js';
 import { setupTree, refreshTree, newProject, newFile, duplicateProject } from './tree.js';
 import { setupWorksService } from './works-service.js';
+import { setupPipelineService } from './pipeline-service.js';
 import { setupSurfaces, spawnSurface, openPath } from './surfaces.js';
 import { decompressLibs, decompressSurfaces, installSharedLibsToVfs } from './surface-registry.js';
 import { installDocsToVfs } from './docs-loader.js';
@@ -44,6 +45,7 @@ async function boot() {
   setupTree();                 // the file-tree explorer
   installGlobalFileDrop();     // drag OS files (.txt/.html/.ipynb) onto the shell
   await setupWorksService();   // the `works` A-Bus service
+  await setupPipelineService();  // the `pipeline` A-Bus service (shell-side flowsheet engine)
   setupSurfaces();             // surface-signal tracking
   await restoreLayout();       // reopen the saved tabs
 

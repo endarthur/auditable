@@ -148,6 +148,12 @@ if (target === 'works' || target === 'works-all') {
     // Capsule transport — used by init.js's #capsule boot handler to decode
     // share-link / QR registry-pointers (QR → install). Inline schemes only.
     ['capsule',  'ext/capsule/index.js'],
+    // The geoscience/tabular workbench base libs — imported by the shell-side
+    // pipeline service (works/js/pipeline-service.js): the @gcu/flowsheet engine
+    // running over @gcu/sluice (streaming stats) + @gcu/recon (schema sniffing).
+    ['sluice',    'ext/sluice/index.js'],
+    ['recon',     'ext/recon/index.js'],
+    ['flowsheet', 'ext/flowsheet/index.js'],
   ]) {
     const p = path.join(__dirname, rel);
     if (!fs.existsSync(p)) {
@@ -262,7 +268,7 @@ if (target === 'works' || target === 'works-all') {
   const worksZlib = require('zlib');
 
   const isWorksAll = (target === 'works-all');
-  const SHARED_LIBS_BASE = ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline', 'markdown', 'librarian', 'docview', 'katex', 'reader-core', 'capsule', 'qr', 'ipynb', 'cm6', 'menu', 'template', 'yaml', 'epub', 'archive', 'sideact', 'patchbay'];
+  const SHARED_LIBS_BASE = ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline', 'markdown', 'librarian', 'docview', 'katex', 'reader-core', 'capsule', 'qr', 'ipynb', 'cm6', 'menu', 'template', 'yaml', 'epub', 'archive', 'sideact', 'patchbay', 'sluice', 'recon', 'flowsheet'];
   // For --target=works-all: bundle every ext/<name>/index.js that's a real
   // bundle (skip the re-export shims under ~1 KB — they break the
   // single-file SHARED_LIBS pattern because they import from sibling files).

@@ -891,6 +891,37 @@ const pbFlush = await page.evaluate(async (uniqueName) => {
   return { ok: !!doc && doc.format === 'patchbay', modules: doc ? doc.modules.length : 0 };
 }, pbOpen.uniqueName);
 
+// ── Pipeline service (shell-side @gcu/flowsheet engine over @gcu/sluice+recon) ──
+// Prove §7a's core: a flowsheet graph runs SHELL-SIDE over a VFS file; only the
+// small result crosses A-Bus. [load.csv → recon.sniff → stats], pulled by name.
+const pipeline = await page.evaluate(async () => {
+  const W = window.WKS;
+  await W.vfs.writeFile('/projects/smoke.csv',
+    'X,Y,Z,Au_gpt,LITO\n1005,2005,302.5,1.2,A\n1015,2005,302.5,0.8,B\n1025,2005,302.5,3.0,A\n');
+  const graph = { nodes: [
+    { id: 'src', type: 'load.csv', params: { path: '/projects/smoke.csv' } },
+    { id: 'snf', type: 'recon.sniff', wiring: { table: { node: 'src', port: 'table' } } },
+    { id: 'st', type: 'stats', params: { column: 'Au_gpt' },
+      wiring: { table: { node: 'src', port: 'table' }, manifest: { node: 'snf', port: 'manifest' } } },
+  ] };
+  const call = (member, args) => W.worksBus.call(
+    { to: 'pipeline', path: '/', interface: 'Pipeline', member }, args);
+  let types = null, valid = null, manifest = null, stats = null, err = null;
+  try {
+    types = await call('NodeTypes', []);
+    valid = await call('Validate', [graph]);
+    manifest = await call('Pull', [graph, 'snf', 'manifest']);
+    stats = await call('Pull', [graph, 'st', 'stats']);
+  } catch (e) { err = e.message; }
+  return {
+    types, validOk: valid && valid.ok, err,
+    coordX: manifest && manifest.coordCols && manifest.coordCols.x,
+    auUnit: manifest && (manifest.columns.find((c) => c.name === 'Au_gpt') || {}).unit,
+    mean: stats && stats.v && stats.v.mean,
+    count: stats && stats.v && stats.v.count,
+  };
+});
+
 // ── Workspace export / import round-trip (Chunk 5b) ───────────────────
 // Serialize the live workspace, build a self-contained HTML, then open it —
 // it must boot the desktop over the embedded snapshot.
@@ -1128,6 +1159,14 @@ const checks = {
   'notebook surface boots from file://':   fileNbOpen.ready === true,
   'terminal surface boots from file://':   fileTermOpen.ready === true,
   'patchbay surface boots from file://':   filePbOpen.ready === true,
+  // Pipeline service (shell-side flowsheet engine)
+  'pipeline: NodeTypes lists the library': Array.isArray(pipeline.types)
+      && pipeline.types.includes('load.csv') && pipeline.types.includes('stats'),
+  'pipeline: Validate ok':                 pipeline.validOk === true,
+  'pipeline: recon.sniff over a VFS file':  pipeline.coordX === 'X' && pipeline.auUnit === 'g/t',
+  'pipeline: stats pull (engine shell-side)': pipeline.count === 3
+      && Math.abs(pipeline.mean - 5 / 3) < 1e-9,
+  'pipeline: no error':                    !pipeline.err,
 };
 
 console.log('--- works.html (Works rebuild — Chunks 1-3, 5 + surfaces) ---');
