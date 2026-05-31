@@ -55,7 +55,14 @@ async function runColumnAcc(blob, manifest, accSpec) {
   const par = ensureParallel();
   if (par) {
     try { out = await scanParallel({ sluice, pool: par.pool, sluiceUrl: par.sluiceUrl, blob, parseOpts, accSpec }); _lastScanMode = 'parallel'; }
-    catch { _lastScanMode = 'fallback'; /* e.g. file:// cross-blob import block */ }
+    catch {
+      // A pool failure can leave it with no live workers (e.g. workers that
+      // died importing the lib) — and the next pool.map would queue forever on
+      // the corpse. Tear it down and disable it so all later scans go inline.
+      _lastScanMode = 'fallback';
+      try { par.pool.terminate(); } catch { /* */ }
+      _parallel = null;
+    }
   } else { _lastScanMode = 'inline'; }
   if (out === undefined) {
     const acc = sluice.accumulatorFromSpec(accSpec);
