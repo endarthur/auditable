@@ -7,7 +7,7 @@
 import { WKS, setStatus } from './state.js';
 import { Dialog, confirm as dlgConfirm, prompt as dlgPrompt } from '#dialog';
 import { metaGet, metaSet } from './meta.js';
-import { installGcudatBytes } from './gcudat-install.js';
+import { installGcudatBytes, getInstalled, patchInstalled } from './gcudat-install.js';
 import { openPath } from './surfaces.js';
 
 const DEFAULT_SOURCE = {
@@ -65,7 +65,50 @@ async function isInstalled(entry) {
   return false;
 }
 
-async function installEntry(entry, base) {
+function semverGt(a, b) {
+  const pa = String(a || '0').split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b || '0').split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] || 0, y = pb[i] || 0;
+    if (x > y) return true; if (x < y) return false;
+  }
+  return false;
+}
+
+// 'install' | 'installed' | 'update' for a registry entry. 'update' needs a
+// recorded version to compare; a pre-ledger install (dir present, no record)
+// reads as 'installed' — the UI offers a reinstall there instead.
+export async function entryStatus(entry) {
+  if (!(await isInstalled(entry))) return 'install';
+  const rec = (await getInstalled())[entry.name];
+  if (rec && rec.version && semverGt(entry.version, rec.version)) return 'update';
+  return 'installed';
+}
+// Batch for the surface: [{name, status}] in one A-Bus round-trip.
+export async function entryStatuses(entries) {
+  const out = {};
+  for (const e of entries || []) out[e.name] = await entryStatus(e);
+  return out;
+}
+// Scan every installed pack's source registry → available updates.
+export async function checkUpdates() {
+  const map = await getInstalled();
+  const bySource = {};
+  for (const [name, rec] of Object.entries(map)) { if (rec && rec.source) (bySource[rec.source] ||= []).push([name, rec]); }
+  const out = [];
+  for (const [src, items] of Object.entries(bySource)) {
+    let reg;
+    try { reg = (await fetchRegistry(src)).registry; } catch { continue; }
+    const byName = Object.fromEntries((reg.entries || []).map((e) => [e.name, e]));
+    for (const [name, rec] of items) {
+      const e = byName[name];
+      if (e && semverGt(e.version, rec.version)) out.push({ name, title: e.title || name, from: rec.version, to: e.version, source: src });
+    }
+  }
+  return out;
+}
+
+async function installEntry(entry, base, sourceUrl) {
   const url = resolveEntryUrl(base, Array.isArray(entry.url) ? entry.url[0] : entry.url);
   setStatus('fetching ' + entry.name + '…');
   const res = await fetch(url, { cache: 'no-cache' });
@@ -84,7 +127,12 @@ async function installEntry(entry, base) {
   }
   if (entry.kind === 'gcudat') {
     const dest = await installGcudatBytes(bytes, entry.name + '.gcudat');
-    if (dest) setStatus('installed ' + entry.name);
+    if (dest) {
+      // installGcudatBytes recorded manifest fields; attach where it came from
+      // so checkUpdates can re-find this entry, plus the registry's version/SRI.
+      await patchInstalled(entry.name, { source: sourceUrl || '', integrity: entry.integrity || '', version: entry.version || '' }).catch(() => {});
+      setStatus('installed ' + entry.name);
+    }
     return dest;
   }
   // .gcupkg registry entries: a later iteration (code path → installGcupkg + confirm).
@@ -121,7 +169,7 @@ export async function installByName(sourceUrl, name) {
   const { base, registry } = await fetchRegistry({ url: sourceUrl });
   const entry = (registry.entries || []).find((e) => e.name === name);
   if (!entry) throw new Error('no entry "' + name + '" in this registry');
-  return installEntry(entry, base);
+  return installEntry(entry, base, sourceUrl);
 }
 export async function addSourceSilent(url, nm) {
   const sources = await getSources();
@@ -156,7 +204,8 @@ const STYLE = `
 .reg-row .desc { color:var(--au-fg-muted); font-size:12px; margin-top:3px; }
 .reg-row .tags { color:var(--au-fg-soft); font:10px ui-monospace,monospace; margin-top:3px; }
 .reg-row .install { align-self:center; }
-.reg-row .install.done { color:var(--au-go); border-color:var(--au-go); cursor:default; opacity:.8; }
+.reg-row .install.done { color:var(--au-go); border-color:var(--au-go); }
+.reg-row .install.upd { color:var(--au-action); border-color:var(--au-action); }
 .reg-credit { padding:8px 14px; border-top:1px solid var(--au-border); color:var(--au-fg-soft); font-size:11px; flex:none; }
 `;
 
@@ -205,7 +254,6 @@ export async function openLibraryDialog() {
         if (!entries.length) { list.innerHTML = '<div class="reg-empty">' + (reg.entries && reg.entries.length ? 'no matches.' : 'this source has no entries.') + '</div>'; return; }
         for (const e of entries) {
           const row = document.createElement('div'); row.className = 'reg-row';
-          const installed = await isInstalled(e);
           row.innerHTML =
             '<div class="body">'
             + '<div class="ttl">' + esc(e.title || e.name) + '<span class="badge">' + esc(e.kind === 'gcupkg' ? 'ext' : (e.datKind || 'data')) + '</span>'
@@ -214,16 +262,21 @@ export async function openLibraryDialog() {
             + (e.description ? '<div class="desc">' + esc(e.description) + '</div>' : '')
             + ((e.tags && e.tags.length) ? '<div class="tags">' + e.tags.map(esc).join(' · ') + '</div>' : '')
             + '</div>';
+          const status = await entryStatus(e);
           const btn = document.createElement('button');
-          btn.className = 'reg-btn install' + (installed ? ' done' : '');
-          btn.textContent = installed ? 'Installed ✓' : 'Install';
-          btn.disabled = installed;
+          const LABEL = { install: 'Install', update: 'Update ↑', installed: 'Reinstall ↻' };
+          btn.className = 'reg-btn install' + (status === 'installed' ? ' done' : status === 'update' ? ' upd' : '');
+          btn.textContent = LABEL[status];
+          btn.title = status === 'installed' ? 'Reinstall (overwrite — reading state is kept)' : '';
           btn.addEventListener('click', async () => {
+            const wasReinstall = status === 'installed';
             btn.disabled = true; btn.textContent = '…';
             try {
-              const dest = await installEntry(e, base);
-              if (dest) { ctx.close(); await openPath(dest); }
-              else { render(); }
+              const dest = await installEntry(e, base, current.url);
+              // Install / Update jump into the book; a no-reason reinstall keeps
+              // the dialog open so you can touch up several packs.
+              if (dest && !wasReinstall) { ctx.close(); await openPath(dest); }
+              else { setStatus(dest ? 'reinstalled ' + e.name : 'install cancelled'); render(); }
             } catch (err) { setStatus('install failed: ' + (err.message || err)); render(); }
           });
           row.appendChild(btn);

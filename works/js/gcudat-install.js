@@ -16,6 +16,28 @@ import { openPath } from './surfaces.js';
 const norm = (p) => String(p).replace(/^\.\//, '').replace(/^\/+/, '');
 const TEXT_EXT = /\.(html?|json|md|markdown|css|txt|svg|csv|js|mjs|xml)$/i;
 
+// ── install ledger ──────────────────────────────────────────────────
+// Records what's installed + at which version, so the Library can offer
+// updates. A .gcudat manifest carries its own `version` (self-describing), so
+// even direct (non-registry) installs record one. Lives in the VFS — it
+// travels with the workspace on export. Reading state (highlights/position)
+// lives separately under /home/.books/state/, so reinstalls never touch it.
+const LEDGER = '/home/.books/.installed.json';
+export async function getInstalled() {
+  try { return JSON.parse(await WKS.vfs.readFile(LEDGER, 'utf8')) || {}; } catch { return {}; }
+}
+async function writeLedger(map) {
+  await WKS.vfs.mkdir('/home/.books', { recursive: true }).catch(() => {});
+  await WKS.vfs.writeFile(LEDGER, JSON.stringify(map, null, 2));
+}
+// Merge fields into an existing record (used by the registry layer to attach
+// source + integrity after a registry install).
+export async function patchInstalled(name, fields) {
+  const map = await getInstalled();
+  map[name] = { ...(map[name] || {}), ...fields };
+  await writeLedger(map);
+}
+
 // Read a container (by magic byte): gzip'd-tar, plain tar, or zip. Returns
 // { files: Map<normPath, origPath>, read(origPath) → Promise<Uint8Array> }.
 // gunzipBytes is async (DecompressionStream); the rest may be sync — await is
@@ -36,6 +58,10 @@ async function openContainer(bytes) {
 const KIND_HANDLERS = {
   async books(manifest, c, vfs) {
     const dest = '/home/.books/library/' + (manifest.name || 'book');
+    // Clean-replace: drop the old book dir so a reinstall/update can't leave
+    // stale files behind (renamed/removed chapters). Reading state is under
+    // /home/.books/state/, a sibling — untouched.
+    await vfs.rm(dest, { recursive: true }).catch(() => {});
     for (const [n, orig] of c.files) {
       if (n === 'gcudat.json') continue;                       // drop the pack manifest
       const full = dest + '/' + n;
@@ -69,6 +95,14 @@ export async function installGcudatBytes(bytes, filename) {
   let dest;
   try { dest = await handler(manifest, c, vfs); }
   catch (e) { setStatus('data pack install failed: ' + (e.message || e)); return null; }
+  // Record in the ledger (manifest-derived fields). The registry layer patches
+  // source + integrity on top for registry installs.
+  try {
+    await patchInstalled(manifest.name, {
+      version: manifest.version || '', kind: 'gcudat', datKind: manifest.kind,
+      title: manifest.title || manifest.name, dest, at: Date.now(),
+    });
+  } catch { /* ledger is best-effort */ }
   setStatus('installed ' + (manifest.title || manifest.name || filename) + ' (' + manifest.kind + ')');
   return dest;
 }

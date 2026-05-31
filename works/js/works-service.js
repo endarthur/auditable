@@ -13,7 +13,7 @@ import { aggregateFromBuildLicenses } from '#licenses';
 import { archive } from '#archive';
 import { Dialog } from '#dialog';
 import { metaGet, metaSet } from './meta.js';
-import { getSources, addSourceSilent, removeSource, fetchRegistry, installByName } from './registry.js';
+import { getSources, addSourceSilent, removeSource, fetchRegistry, installByName, entryStatuses, checkUpdates } from './registry.js';
 
 // Build-time-injected vendored license manifest (see build.js's
 // injectBuildLicenses). Source-level empty so dev/test runs work; build
@@ -206,8 +206,10 @@ export async function setupWorksService() {
         RegistryAddSource:    (url, name) => addSourceSilent(url, name),
         RegistryRemoveSource: (url) => removeSource(url),
         RegistryFetch:        (sourceUrl) => fetchRegistry(sourceUrl),   // → { base, registry }
-        RegistryInstall:      (sourceUrl, name) => installByName(sourceUrl, name),  // → dest path
+        RegistryInstall:      (sourceUrl, name) => installByName(sourceUrl, name),  // → dest path (install/update/reinstall — overwrites)
         RegistryInstalled:    (name) => vfs.exists('/home/.books/library/' + name).catch(() => false),
+        RegistryStatuses:     (entries) => entryStatuses(entries),   // → { name: 'install'|'installed'|'update' }
+        RegistryCheckUpdates: () => checkUpdates(),                  // → [{name,title,from,to,source}]
 
         // ── Notebook A-Bus access (notebook-abus-access-spec.md) ──
         // Tier 3: a notebook asks for the raw bus; this prompts (unless a grant

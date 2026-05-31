@@ -47,6 +47,7 @@
   .card .desc { color: var(--au-fg-muted); font-size: 12px; margin: 4px 0 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
   .card .act { margin-top: auto; padding-top: 7px; }
   .card .act button.done { color: var(--au-go); border-color: var(--au-go); }
+  .card .act button.upd { color: var(--au-action); border-color: var(--au-action); }
 
   footer { flex: none; padding: 7px 14px; border-top: 1px solid var(--au-border); color: var(--au-fg-soft); font-size: 11px; }
   .err { color: var(--au-error); }
@@ -56,6 +57,7 @@
 <header>
   <span class="title">LIBRARY</span>
   <select id="src"></select>
+  <button id="upd" title="Check all installed packs for updates">↻ Updates</button>
   <button id="add">+ Source</button>
   <button id="rm">Remove</button>
 </header>
@@ -77,7 +79,7 @@ import { connect } from '../../ext/abus/index.js';
 
 const $ = (id) => document.getElementById(id);
 let bus = null;
-let sources = [], current = null, base = '', registry = null;
+let sources = [], current = null, base = '', registry = null, statusMap = {};
 
 const callShell = (member, args = []) => bus.call({ to: 'works', path: '/', interface: 'Shell', member }, args);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -100,6 +102,7 @@ async function load() {
   try {
     const r = await callShell('RegistryFetch', [current.url]);
     base = r.base; registry = r.registry;
+    statusMap = await callShell('RegistryStatuses', [registry.entries || []]).catch(() => ({}));
     $('credit').textContent = (registry.name || '') + (registry.description ? ' — ' + registry.description : '') + (registry.updated ? '  ·  updated ' + registry.updated : '');
     render();
   } catch (e) { registry = null; grid.innerHTML = '<div class="empty err">couldn\'t load this source — ' + esc(e.message || e) + '</div>'; }
@@ -113,7 +116,7 @@ async function render() {
   grid.innerHTML = '';
   if (!entries.length) { grid.innerHTML = '<div class="empty">' + (registry.entries && registry.entries.length ? 'no matches.' : 'this source has no entries.') + '</div>'; return; }
   for (const e of entries) {
-    const installed = await callShell('RegistryInstalled', [e.name]).catch(() => false);
+    const status = statusMap[e.name] || 'install';
     const coverUrl = e.cover ? (/^https?:/.test(e.cover) ? e.cover : base + '/' + e.cover.replace(/^\//, '')) : '';
     const card = document.createElement('div'); card.className = 'card';
     card.innerHTML =
@@ -126,16 +129,24 @@ async function render() {
       + (e.description ? '<div class="desc">' + esc(e.description) + '</div>' : '')
       + '<div class="act"></div>'
       + '</div>';
+    const LABEL = { install: 'Install', update: 'Update ↑', installed: 'Reinstall ↻' };
     const btn = document.createElement('button');
-    btn.textContent = installed ? 'Installed ✓' : 'Install';
-    if (installed) { btn.className = 'done'; btn.disabled = true; }
+    btn.textContent = LABEL[status];
+    btn.className = status === 'installed' ? 'done' : status === 'update' ? 'upd' : '';
+    if (status === 'installed') btn.title = 'Reinstall (overwrite — reading state is kept)';
     btn.addEventListener('click', async () => {
+      const wasReinstall = status === 'installed';
       btn.disabled = true; btn.textContent = '…';
       try {
         const dest = await callShell('RegistryInstall', [current.url, e.name]);
-        if (dest) { btn.textContent = 'Installed ✓'; btn.className = 'done'; await callShell('OpenPath', [dest]); }
-        else { btn.disabled = false; btn.textContent = 'Install'; }
-      } catch (err) { btn.disabled = false; btn.textContent = 'Install'; $('credit').textContent = 'install failed: ' + (err.message || err); }
+        if (dest) {
+          // refresh statuses so the button reflects the new state
+          statusMap = await callShell('RegistryStatuses', [registry.entries || []]).catch(() => statusMap);
+          if (!wasReinstall) await callShell('OpenPath', [dest]);
+          else { $('credit').textContent = 'reinstalled ' + (e.title || e.name); }
+          render();
+        } else { btn.disabled = false; btn.textContent = LABEL[status]; }
+      } catch (err) { btn.disabled = false; btn.textContent = LABEL[status]; $('credit').textContent = 'install failed: ' + (err.message || err); }
     });
     card.querySelector('.act').appendChild(btn);
     grid.appendChild(card);
@@ -173,6 +184,17 @@ window.addEventListener('message', async (ev) => {
     await callShell('RegistryRemoveSource', [current.url]);
     sources = await callShell('RegistrySources').catch(() => sources);
     current = sources[0]; fillSel(); load();
+  });
+  $('upd').addEventListener('click', async () => {
+    $('upd').disabled = true; $('upd').textContent = '…';
+    try {
+      const ups = await callShell('RegistryCheckUpdates').catch(() => []);
+      if (!ups.length) $('credit').textContent = 'Everything is up to date.';
+      else $('credit').textContent = ups.length + ' update' + (ups.length > 1 ? 's' : '') + ' available — '
+        + ups.map((u) => (u.title || u.name) + ' (' + u.from + ' → ' + u.to + ')').join(', ');
+      // refresh the current shelf's buttons (an update there now reads 'Update ↑')
+      if (registry) { statusMap = await callShell('RegistryStatuses', [registry.entries || []]).catch(() => statusMap); render(); }
+    } finally { $('upd').disabled = false; $('upd').textContent = '↻ Updates'; }
   });
 
   bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, ['Library']);
