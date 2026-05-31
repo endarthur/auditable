@@ -13,18 +13,41 @@
   *::-webkit-scrollbar { width: 9px; height: 9px; }
   *::-webkit-scrollbar-thumb { background: var(--au-border); border-radius: 4px; }
   *::-webkit-scrollbar-track { background: transparent; }
-
-  header { flex: none; display: flex; gap: 8px; align-items: center; padding: 8px 14px;
-    border-bottom: 1px solid var(--au-border); background: var(--au-surface-raised); }
-  header .title { font-family: ui-monospace,'Space Mono',monospace; font-weight: 600; letter-spacing: 1px; font-size: 13px; }
-  header select { flex: 1; min-width: 0; background: var(--au-surface); color: var(--au-fg); border: 1px solid var(--au-border); border-radius: 4px; padding: 4px 7px; font: inherit; }
-  header .spacer { flex: 1; }
   button { background: var(--au-surface-bright); color: var(--au-fg); border: 1px solid var(--au-border); border-radius: 4px; padding: 4px 10px; cursor: pointer; font: inherit; white-space: nowrap; }
   button:hover:not(:disabled) { border-color: var(--au-action); }
   button:disabled { opacity: .5; cursor: default; }
 
-  .toolbar { flex: none; display: flex; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--au-border); }
-  .toolbar input { flex: 1; background: var(--au-surface); color: var(--au-fg); border: 1px solid var(--au-border); border-radius: 4px; padding: 5px 9px; font: inherit; }
+  .shell { flex: 1; display: flex; min-height: 0; }
+
+  /* collapsed rail */
+  .rail { display: none; flex: none; width: 22px; border-right: 1px solid var(--au-border);
+    background: var(--au-surface-raised); cursor: pointer; color: var(--au-fg-soft);
+    align-items: flex-start; justify-content: center; padding-top: 11px; font-size: 14px; }
+  .rail:hover { color: var(--au-action); }
+  .shell.collapsed .side { display: none; }
+  .shell.collapsed .rail { display: flex; }
+
+  /* sidebar */
+  .side { flex: none; width: 210px; display: flex; flex-direction: column;
+    border-right: 1px solid var(--au-border); background: var(--au-surface-raised); overflow: auto; }
+  .side-head { flex: none; display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; border-bottom: 1px solid var(--au-border); }
+  .brand { font-family: ui-monospace,'Space Mono',monospace; font-weight: 600; letter-spacing: 1px; font-size: 13px; }
+  .icon { background: none; border: none; color: var(--au-fg-soft); cursor: pointer; font-size: 15px; padding: 0 4px; }
+  .icon:hover { color: var(--au-action); }
+  .views { flex: none; padding: 6px 0; border-bottom: 1px solid var(--au-border); }
+  .nav-item, .src-item { display: flex; align-items: center; gap: 7px; padding: 6px 12px; cursor: pointer; font-size: 12px; color: var(--au-fg); border-left: 2px solid transparent; }
+  .nav-item:hover, .src-item:hover { background: var(--au-surface-bright); }
+  .nav-item.active, .src-item.active { background: var(--au-surface-bright); color: var(--au-action); border-left-color: var(--au-action); }
+  .nav-item .cnt { margin-left: auto; font: 10px ui-monospace,monospace; background: var(--au-action); color: var(--au-surface-deep); border-radius: 8px; padding: 0 6px; }
+  .side-label { flex: none; padding: 9px 12px 3px; font: 10px ui-monospace,monospace; letter-spacing: 1px; color: var(--au-fg-soft); text-transform: uppercase; }
+  .srcs { flex: 1; min-height: 0; }
+  .src-item .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .src-item .rm { margin-left: auto; opacity: 0; color: var(--au-fg-soft); padding: 0 3px; }
+  .src-item:hover .rm { opacity: 1; }
+  .src-item .rm:hover { color: var(--au-error); }
+  .src-item.err .nm { color: var(--au-error); }
+  .side-btn { margin: 8px 12px; }
 
   /* add-source panel */
   .addsrc { flex: none; display: none; flex-direction: column; gap: 7px; padding: 10px 14px; border-bottom: 1px solid var(--au-border); background: var(--au-surface-raised); }
@@ -32,6 +55,11 @@
   .addsrc .warn { color: var(--au-warn); font-size: 12px; }
   .addsrc .row { display: flex; gap: 8px; }
   .addsrc input { flex: 1; background: var(--au-surface); color: var(--au-fg); border: 1px solid var(--au-border); border-radius: 4px; padding: 5px 9px; font: inherit; }
+
+  /* main */
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .toolbar { flex: none; display: flex; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--au-border); }
+  .toolbar input { flex: 1; background: var(--au-surface); color: var(--au-fg); border: 1px solid var(--au-border); border-radius: 4px; padding: 5px 9px; font: inherit; }
 
   .grid { flex: 1; overflow: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; padding: 14px; align-content: start; }
   .empty { padding: 24px; color: var(--au-fg-soft); font-style: italic; grid-column: 1 / -1; }
@@ -44,6 +72,7 @@
   .card .badge { font: 10px ui-monospace,monospace; text-transform: uppercase; letter-spacing: .5px; color: var(--au-action); border: 1px solid var(--au-border); border-radius: 3px; padding: 0 5px; margin-right: 5px; }
   .card .badge.nc { color: var(--au-warn); border-color: var(--au-warn); }
   .card .meta { color: var(--au-fg-soft); font-size: 11px; }
+  .card .src { color: var(--au-fg-soft); font: 10px ui-monospace,monospace; margin-top: 2px; }
   .card .desc { color: var(--au-fg-muted); font-size: 12px; margin: 4px 0 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
   .card .act { margin-top: auto; padding-top: 7px; }
   .card .act button.done { color: var(--au-go); border-color: var(--au-go); }
@@ -54,24 +83,36 @@
 </style>
 </head>
 <body>
-<header>
-  <span class="title">LIBRARY</span>
-  <select id="src"></select>
-  <button id="upd" title="Check all installed packs for updates">↻ Updates</button>
-  <button id="add">+ Source</button>
-  <button id="rm">Remove</button>
-</header>
-<div class="addsrc" id="addPanel">
-  <div class="warn">⚠ Sources can serve data packs — and code extensions that run in your workspace. Only add sources you trust.</div>
-  <div class="row">
-    <input id="addUrl" type="text" placeholder="https://example.org/registry.json" spellcheck="false" autocomplete="off">
-    <button id="addGo">Add</button>
-    <button id="addCancel">Cancel</button>
-  </div>
+<div class="shell" id="shell">
+  <div class="rail" id="rail" title="Expand sidebar">»</div>
+  <aside class="side" id="side">
+    <div class="side-head">
+      <span class="brand">LIBRARY</span>
+      <button class="icon" id="collapse" title="Collapse sidebar">«</button>
+    </div>
+    <div class="views">
+      <div class="nav-item" data-view="all">⚏ All sources</div>
+      <div class="nav-item" data-view="updates">↑ Updates <span class="cnt" id="updCnt" style="display:none"></span></div>
+      <div class="nav-item" data-view="installed">✓ Installed</div>
+    </div>
+    <div class="side-label">Sources</div>
+    <div class="srcs" id="srcs"></div>
+    <button class="side-btn" id="add">+ Add source</button>
+  </aside>
+  <main class="main">
+    <div class="addsrc" id="addPanel">
+      <div class="warn">⚠ Sources can serve data packs — and code extensions that run in your workspace. Only add sources you trust.</div>
+      <div class="row">
+        <input id="addUrl" type="text" placeholder="https://example.org/registry.json" spellcheck="false" autocomplete="off">
+        <button id="addGo">Add</button>
+        <button id="addCancel">Cancel</button>
+      </div>
+    </div>
+    <div class="toolbar"><input id="search" type="text" placeholder="Filter the shelf…" spellcheck="false" autocomplete="off"></div>
+    <div class="grid" id="grid"><div class="empty">Loading…</div></div>
+    <footer id="credit"></footer>
+  </main>
 </div>
-<div class="toolbar"><input id="search" type="text" placeholder="Filter the shelf…" spellcheck="false" autocomplete="off"></div>
-<div class="grid" id="grid"><div class="empty">Loading…</div></div>
-<footer id="credit"></footer>
 
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
@@ -79,45 +120,98 @@ import { connect } from '../../ext/abus/index.js';
 
 const $ = (id) => document.getElementById(id);
 let bus = null;
-let sources = [], current = null, base = '', registry = null, statusMap = {};
+let sources = [];      // [{url,name}] from the shell
+let srcData = [];      // [{url,name,base,registry,error}] — fetched
+let allEntries = [];   // merged, each tagged with _src/_base/_srcName
+let statusMap = {};    // name → 'install'|'installed'|'update'
+let view = { kind: 'all' };
 
 const callShell = (member, args = []) => bus.call({ to: 'works', path: '/', interface: 'Shell', member }, args);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmtSize = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB');
 const isNC = (l) => /\bNC\b|non-?commercial/i.test(String(l || ''));
 const ICON = { books: '▤', geodata: '◴', data: '◳' };
+const LABEL = { install: 'Install', update: 'Update ↑', installed: 'Reinstall ↻' };
 
-function fillSel() {
-  $('src').innerHTML = '';
-  for (const s of sources) {
-    const o = document.createElement('option'); o.value = s.url; o.textContent = s.name || s.url;
-    if (current && s.url === current.url) o.selected = true;
-    $('src').appendChild(o);
+// Fetch every source, merge entries, compute statuses. A source view just
+// filters the cached merge — no re-fetch. Per-source errors are non-fatal.
+async function loadAll() {
+  $('grid').innerHTML = '<div class="empty">loading…</div>';
+  sources = await callShell('RegistrySources').catch(() => []);
+  if (!sources.length) sources = [];
+  srcData = await Promise.all(sources.map(async (s) => {
+    try { const r = await callShell('RegistryFetch', [s.url]); return { url: s.url, name: s.name || (r.registry && r.registry.name) || s.url, base: r.base, registry: r.registry, error: null }; }
+    catch (e) { return { url: s.url, name: s.name || s.url, base: '', registry: null, error: String(e.message || e) }; }
+  }));
+  allEntries = [];
+  for (const sd of srcData) {
+    if (!sd.registry) continue;
+    for (const e of (sd.registry.entries || [])) allEntries.push({ ...e, _src: sd.url, _base: sd.base, _srcName: sd.name });
   }
-  $('rm').disabled = sources.length <= 1;
+  statusMap = allEntries.length ? await callShell('RegistryStatuses', [allEntries]).catch(() => ({})) : {};
+  // if the active source view points at a now-gone source, fall back
+  if (view.kind === 'source' && !srcData.some((s) => s.url === view.url)) view = { kind: 'all' };
+  renderSide();
+  render();
 }
 
-async function load() {
-  const grid = $('grid'); grid.innerHTML = '<div class="empty">loading…</div>'; $('credit').textContent = '';
-  try {
-    const r = await callShell('RegistryFetch', [current.url]);
-    base = r.base; registry = r.registry;
-    statusMap = await callShell('RegistryStatuses', [registry.entries || []]).catch(() => ({}));
-    $('credit').textContent = (registry.name || '') + (registry.description ? ' — ' + registry.description : '') + (registry.updated ? '  ·  updated ' + registry.updated : '');
-    render();
-  } catch (e) { registry = null; grid.innerHTML = '<div class="empty err">couldn\'t load this source — ' + esc(e.message || e) + '</div>'; }
+const updatesCount = () => allEntries.filter((e) => statusMap[e.name] === 'update').length;
+
+function renderSide() {
+  const n = updatesCount();
+  $('updCnt').textContent = n || '';
+  $('updCnt').style.display = n ? '' : 'none';
+  for (const el of document.querySelectorAll('.nav-item')) el.classList.toggle('active', view.kind === el.dataset.view);
+  const box = $('srcs'); box.innerHTML = '';
+  for (const sd of srcData) {
+    const it = document.createElement('div');
+    it.className = 'src-item' + (view.kind === 'source' && view.url === sd.url ? ' active' : '') + (sd.error ? ' err' : '');
+    it.title = sd.error ? ('couldn\'t load — ' + sd.error) : sd.url;
+    it.innerHTML = '<span class="dot">•</span><span class="nm">' + esc(sd.name) + '</span>'
+      + (sources.length > 1 ? '<span class="rm" title="Remove source">×</span>' : '');
+    it.addEventListener('click', () => { view = { kind: 'source', url: sd.url }; renderSide(); render(); });
+    const rm = it.querySelector('.rm');
+    if (rm) rm.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      await callShell('RegistryRemoveSource', [sd.url]).catch(() => {});
+      loadAll();
+    });
+    box.appendChild(it);
+  }
 }
 
-async function render() {
-  if (!registry) return;
-  const grid = $('grid'); const q = $('search').value.toLowerCase().trim();
-  const entries = (registry.entries || []).filter((e) =>
-    !q || ((e.title || '') + ' ' + (e.description || '') + ' ' + (e.tags || []).join(' ') + ' ' + (e.datKind || '')).toLowerCase().includes(q));
+function visibleEntries() {
+  let list = allEntries;
+  if (view.kind === 'source') list = list.filter((e) => e._src === view.url);
+  else if (view.kind === 'updates') list = list.filter((e) => statusMap[e.name] === 'update');
+  else if (view.kind === 'installed') list = list.filter((e) => statusMap[e.name] === 'installed' || statusMap[e.name] === 'update');
+  const q = $('search').value.toLowerCase().trim();
+  if (q) list = list.filter((e) =>
+    ((e.title || '') + ' ' + (e.description || '') + ' ' + (e.tags || []).join(' ') + ' ' + (e.datKind || '') + ' ' + (e._srcName || '')).toLowerCase().includes(q));
+  return list;
+}
+
+function render() {
+  const grid = $('grid');
+  const list = visibleEntries();
+  const cur = view.kind === 'source' ? srcData.find((s) => s.url === view.url) : null;
+  if (cur && cur.error) $('credit').textContent = 'couldn\'t load this source — ' + cur.error;
+  else if (cur && cur.registry) $('credit').textContent = (cur.registry.name || '') + (cur.registry.description ? ' — ' + cur.registry.description : '') + (cur.registry.updated ? '  ·  updated ' + cur.registry.updated : '');
+  else $('credit').textContent = allEntries.length + ' pack' + (allEntries.length === 1 ? '' : 's') + ' across ' + srcData.filter((s) => s.registry).length + ' source' + (srcData.filter((s) => s.registry).length === 1 ? '' : 's');
+
   grid.innerHTML = '';
-  if (!entries.length) { grid.innerHTML = '<div class="empty">' + (registry.entries && registry.entries.length ? 'no matches.' : 'this source has no entries.') + '</div>'; return; }
-  for (const e of entries) {
+  if (!list.length) {
+    const msg = view.kind === 'updates' ? 'Everything is up to date.'
+      : view.kind === 'installed' ? 'Nothing installed yet.'
+      : (cur && cur.error) ? 'couldn\'t load this source.'
+      : (allEntries.length ? 'no matches.' : 'no entries.');
+    grid.innerHTML = '<div class="empty">' + esc(msg) + '</div>';
+    return;
+  }
+  const multi = view.kind !== 'source';
+  for (const e of list) {
     const status = statusMap[e.name] || 'install';
-    const coverUrl = e.cover ? (/^https?:/.test(e.cover) ? e.cover : base + '/' + e.cover.replace(/^\//, '')) : '';
+    const coverUrl = e.cover ? (/^https?:/.test(e.cover) ? e.cover : (e._base + '/' + e.cover.replace(/^\//, ''))) : '';
     const card = document.createElement('div'); card.className = 'card';
     card.innerHTML =
       '<div class="cover">' + (coverUrl ? '<img src="' + esc(coverUrl) + '" alt="">' : (ICON[e.datKind] || ICON.data)) + '</div>'
@@ -126,10 +220,10 @@ async function render() {
       + '<div class="badges"><span class="badge">' + esc(e.kind === 'gcupkg' ? 'ext' : (e.datKind || 'data')) + '</span>'
       + (isNC(e.license) ? '<span class="badge nc" title="Non-commercial — free to share, not to sell">NC</span>' : '') + '</div>'
       + '<div class="meta">' + esc(e.license || '') + (e.attribution ? ' · ' + esc(e.attribution) : '') + ' · ' + fmtSize(e.size || 0) + (e.version ? ' · v' + esc(e.version) : '') + '</div>'
+      + (multi ? '<div class="src">' + esc(e._srcName || '') + '</div>' : '')
       + (e.description ? '<div class="desc">' + esc(e.description) + '</div>' : '')
       + '<div class="act"></div>'
       + '</div>';
-    const LABEL = { install: 'Install', update: 'Update ↑', installed: 'Reinstall ↻' };
     const btn = document.createElement('button');
     btn.textContent = LABEL[status];
     btn.className = status === 'installed' ? 'done' : status === 'update' ? 'upd' : '';
@@ -138,13 +232,12 @@ async function render() {
       const wasReinstall = status === 'installed';
       btn.disabled = true; btn.textContent = '…';
       try {
-        const dest = await callShell('RegistryInstall', [current.url, e.name]);
+        const dest = await callShell('RegistryInstall', [e._src, e.name]);
         if (dest) {
-          // refresh statuses so the button reflects the new state
-          statusMap = await callShell('RegistryStatuses', [registry.entries || []]).catch(() => statusMap);
+          statusMap = await callShell('RegistryStatuses', [allEntries]).catch(() => statusMap);
           if (!wasReinstall) await callShell('OpenPath', [dest]);
-          else { $('credit').textContent = 'reinstalled ' + (e.title || e.name); }
-          render();
+          else $('credit').textContent = 'reinstalled ' + (e.title || e.name);
+          renderSide(); render();
         } else { btn.disabled = false; btn.textContent = LABEL[status]; }
       } catch (err) { btn.disabled = false; btn.textContent = LABEL[status]; $('credit').textContent = 'install failed: ' + (err.message || err); }
     });
@@ -161,42 +254,25 @@ window.addEventListener('message', async (ev) => {
   if (typeof installThemeSubscription === 'function') installThemeSubscription(bus);
   bus.expose('/', { Surface: { methods: { Flush: () => {}, CanClose: () => true, Relocated: () => {} }, signals: ['DirtyChanged', 'TitleChanged', 'Ready'] } });
 
-  sources = await callShell('RegistrySources').catch(() => []);
-  if (!sources.length) sources = [{ url: '', name: '(no sources)' }];
-  current = sources[0];
-  fillSel();
-  load();
+  // smart-view nav
+  for (const el of document.querySelectorAll('.nav-item'))
+    el.addEventListener('click', () => { view = { kind: el.dataset.view }; renderSide(); render(); });
 
-  $('src').addEventListener('change', () => { current = sources.find((s) => s.url === $('src').value) || sources[0]; load(); });
   $('search').addEventListener('input', render);
+  $('collapse').addEventListener('click', () => $('shell').classList.add('collapsed'));
+  $('rail').addEventListener('click', () => $('shell').classList.remove('collapsed'));
+
   $('add').addEventListener('click', () => { $('addPanel').classList.toggle('open'); if ($('addPanel').classList.contains('open')) $('addUrl').focus(); });
   $('addCancel').addEventListener('click', () => { $('addPanel').classList.remove('open'); $('addUrl').value = ''; });
   $('addGo').addEventListener('click', async () => {
     const u = $('addUrl').value.trim(); if (!u) return;
     await callShell('RegistryAddSource', [u, u]);
-    sources = await callShell('RegistrySources').catch(() => sources);
-    current = sources.find((s) => s.url === u) || sources[0];
     $('addPanel').classList.remove('open'); $('addUrl').value = '';
-    fillSel(); load();
-  });
-  $('rm').addEventListener('click', async () => {
-    if (sources.length <= 1) return;
-    await callShell('RegistryRemoveSource', [current.url]);
-    sources = await callShell('RegistrySources').catch(() => sources);
-    current = sources[0]; fillSel(); load();
-  });
-  $('upd').addEventListener('click', async () => {
-    $('upd').disabled = true; $('upd').textContent = '…';
-    try {
-      const ups = await callShell('RegistryCheckUpdates').catch(() => []);
-      if (!ups.length) $('credit').textContent = 'Everything is up to date.';
-      else $('credit').textContent = ups.length + ' update' + (ups.length > 1 ? 's' : '') + ' available — '
-        + ups.map((u) => (u.title || u.name) + ' (' + u.from + ' → ' + u.to + ')').join(', ');
-      // refresh the current shelf's buttons (an update there now reads 'Update ↑')
-      if (registry) { statusMap = await callShell('RegistryStatuses', [registry.entries || []]).catch(() => statusMap); render(); }
-    } finally { $('upd').disabled = false; $('upd').textContent = '↻ Updates'; }
+    view = { kind: 'source', url: u };
+    loadAll();
   });
 
+  loadAll();
   bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, ['Library']);
   bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
 });
