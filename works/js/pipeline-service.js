@@ -32,6 +32,10 @@ let _lastScanMode = null;   // 'parallel' | 'fallback' | 'inline' — diagnostic
 function ensureParallel() {
   if (_parallel !== undefined) return _parallel;
   _parallel = null;
+  // On file:// a worker can't import the blob-URL'd lib (Chromium blocks
+  // cross-blob-origin loads), so the pool would only error then fall back.
+  // Skip it entirely → straight to the inline scan, no wasted workers, no noise.
+  if (typeof location !== 'undefined' && location.protocol === 'file:') return null;
   try {
     const src = getLibSource('sluice');
     if (!src || typeof URL === 'undefined' || !URL.createObjectURL) return null;
