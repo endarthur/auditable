@@ -4154,8 +4154,10 @@ function eliminateDeadCode(module) {
 
   markReachable(module.ops);
 
-  // For now, don't actually remove ops — just mark them.
-  // Full DCE requires backward reachability analysis which we can add later.
+  // Intentional (mark-only): we mark reachability but don't delete ops here.
+  // Pure perf, zero correctness impact — emit-js already skips unreferenced
+  // SSA values, so dead ops don't reach the output; physically removing them
+  // (a backward-reachability rewrite) is a future optimization, not a fix.
   return live;
 }
 
@@ -5441,11 +5443,13 @@ function _bodyHasAwait(body) {
 // body (including inside if-branches, loops, try/finally, etc.) becomes a
 // function-local binding. Pre-declare them all at function scope so an
 // in-region store emits a bare assignment, matching Python semantics
-// where `if x: y = 1; return y` doesn't NameError on the `return y` path
-// (it returns undefined, like Python would for a path that didn't run if
-// y was assigned — Python raises UnboundLocalError on missing path; AIR
-// returns undefined, an acceptable transpile-mode trade-off for common
-// `if/else assigns both branches` patterns like richards' `runTask`).
+// where `if x: y = 1; return y` doesn't NameError on the `return y` path.
+// Intentional limitation: a read on a path that never assigned the local
+// returns undefined, whereas CPython raises UnboundLocalError. This only
+// diverges on *buggy* code (correct Python never reads an unassigned local);
+// the alternative — per-path assignment guards that throw — would defeat the
+// whole point of hoisting (the perf win for `if/else assigns both branches`
+// patterns like richards' runTask). So we accept the undefined read.
 //
 // Names already declared by an `opaque(_markDeclared=N)` prologue line
 // (adder's param/varargs unpacking) are skipped — those will emit their

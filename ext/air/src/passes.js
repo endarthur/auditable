@@ -625,8 +625,10 @@ export function eliminateDeadCode(module) {
 
   markReachable(module.ops);
 
-  // For now, don't actually remove ops — just mark them.
-  // Full DCE requires backward reachability analysis which we can add later.
+  // Intentional (mark-only): we mark reachability but don't delete ops here.
+  // Pure perf, zero correctness impact — emit-js already skips unreferenced
+  // SSA values, so dead ops don't reach the output; physically removing them
+  // (a backward-reachability rewrite) is a future optimization, not a fix.
   return live;
 }
 

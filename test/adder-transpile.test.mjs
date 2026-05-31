@@ -568,3 +568,28 @@ describe('adder transpile — full coverage', () => {
     assert.ok(threw, 'expected exception to re-raise');
   });
 });
+
+describe('adder transpile — sync-builtin shadowing (audit 2026-06-01)', () => {
+  it('a genuinely-async def shadowing a known-sync builtin is still awaited', async () => {
+    // Regression: KNOWN_SYNC_BUILTINS (e.g. `abs`) was seeded into
+    // syncFunctions unconditionally, so a user-defined `abs` that's genuinely
+    // async (truly awaits inside) got called WITHOUT await → its Promise leaked
+    // as the value and `r + 1` then errored ("unsupported operand object/int").
+    // The seed now skips names the user shadowed (in ctx.defines), so the
+    // shadow stays async and the call awaits. NB the shadow must really await —
+    // a no-await `async def` is correctly downgraded to a sync fn either way.
+    const r = await runTranspile(
+      'async def helper():\n'
+      + '    return 100\n'
+      + 'async def abs(x):\n'
+      + '    h = await helper()\n'
+      + '    return x + h\n'
+      + 'r = abs(5)\n'
+      + 'print(r + 1)\n');
+    assert.equal(r.output, '106');
+  });
+  it('an unshadowed known-sync builtin still skips the await (fast path intact)', async () => {
+    const r = await runTranspile('print(len([1, 2, 3, 4]))');
+    assert.equal(r.output, '4');
+  });
+});

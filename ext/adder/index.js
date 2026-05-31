@@ -6675,11 +6675,10 @@ function _collectNameCallees(node, out, disqualifyRef) {
 // list / tuple / dict / set / sorted / max / min / sum / any / all do NOT
 // (they need `await pyCollect(...)` to handle async iterables).
 //
-// Keep this list in lockstep with builtins.js. If a user shadows one of
-// these names with their own (necessarily-async) implementation, this
-// optimisation will be incorrect for their code; the spec's "annotations
-// are opt-in performance hints" stance applies — mismatches are a known
-// edge.
+// Keep this list in lockstep with builtins.js. A user who shadows one of
+// these names at module scope (e.g. `async def sum`) is handled: the seed
+// below skips names in ctx.defines, so the shadow's sync-ness comes from the
+// analysis (or stays conservatively awaited) rather than this list.
 const KNOWN_SYNC_BUILTINS = new Set([
   // primitive constructors / converters
   'int', 'float', 'str', 'bool', 'complex', 'bytes', 'chr', 'ord',
@@ -6835,7 +6834,12 @@ function lowerAdder(ast, source) {
   // range itself. This is the difference between sum-1..10000 still
   // having an await at iter-construction and being fully sync.
   for (const name of KNOWN_SYNC_BUILTINS) {
-    ctx.syncFunctions.add(name);
+    // Don't let the builtin seed shadow a user who redefined the name at
+    // module scope (e.g. `async def sum`). For a shadowed name, sync-ness
+    // comes from analyseSyncFunctions above (or stays conservatively async →
+    // awaited). Seeding it sync unconditionally would skip the await on an
+    // async shadow → a Promise leaks through as the value.
+    if (!ctx.defines.has(name)) ctx.syncFunctions.add(name);
   }
 
   // Identify names that will be declared by `function`/`class` syntax —
@@ -7842,7 +7846,12 @@ function lowerDelete(ctx, node) {
   const l = ctx.loc(node);
   for (const target of node.targets) {
     if (target.type === 'Name') {
-      // Setting to undefined — not truly `del` but close enough.
+      // Intentional limitation: `del <bare-name>` sets the binding to undefined
+      // rather than truly unbinding it (transpiled JS has no `delete localVar`,
+      // and a subsequent read would NameError in CPython but reads undefined
+      // here). The common cases — `del dict[k]`, slices, attributes — ARE exact
+      // (delitem/delslice/delattr below). Bare-name del is rare; the tree-walker
+      // fallback covers code that genuinely depends on the unbind.
       const undef = ctx.emit('const', [undefined], VOID, l);
       ctx.emit('store', [target.id, undef.id], VOID, l);
       ctx.symbols.set(target.id, undef.id);
