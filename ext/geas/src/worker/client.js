@@ -17,6 +17,7 @@
 // one's in flight queues client-side).
 
 import { serveVFS } from './vfs-proxy.js';
+import { serveHost } from './host-proxy.js';
 
 export function createGeasClient(opts) {
   const {
@@ -35,11 +36,18 @@ export function createGeasClient(opts) {
     // `read` returns 1 — matches "no terminal attached" semantics for
     // pure-programmatic clients that haven't wired an adapter.
     onWantInput = null,
+    // Optional host-RPC handler: (member, args) => Promise<value>. When set,
+    // worker-hosted builtins can call back into this realm (e.g. to install a
+    // code extension whose surfaces must register in the shell). Left unset
+    // for pure/headless clients — the worker then sees no host bridge.
+    host = null,
   } = opts;
   if (!worker) throw new Error('createGeasClient: opts.worker is required');
 
   // Start serving VFS over the worker channel.
   const stopServe = vfs ? serveVFS(worker, vfs) : (() => {});
+  // Start serving host-RPC if a handler was supplied.
+  const stopHost = typeof host === 'function' ? serveHost(worker, host) : (() => {});
 
   // Track pending exec promises by id.
   let nextExecId = 0;
@@ -117,7 +125,7 @@ export function createGeasClient(opts) {
   _wcAttach(worker, handler);
 
   // Kick off init.
-  worker.postMessage({ type: 'init', env, cwd });
+  worker.postMessage({ type: 'init', env, cwd, host: typeof host === 'function' });
 
   // Serialise execs: queue them client-side so the worker only sees one at
   // a time. Simpler than expecting the worker to maintain a queue.
@@ -160,6 +168,7 @@ export function createGeasClient(opts) {
     async terminate() {
       terminated = true;
       stopServe();
+      stopHost();
       _wcDetach(worker, handler);
       if (typeof worker.terminate === 'function') {
         try { await worker.terminate(); } catch { /* ignore */ }

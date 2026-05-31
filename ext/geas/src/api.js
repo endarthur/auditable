@@ -21,6 +21,7 @@ import { mkTyped, isTyped } from './typed.js';
 import { createGeasClient } from './worker/client.js';
 import { setupGeasWorker } from './worker/worker-shim.js';
 import { serveVFS, createVfsClient } from './worker/vfs-proxy.js';
+import { serveHost, createHostClient } from './worker/host-proxy.js';
 import { createLoopback } from './worker/loopback.js';
 import { procToWorker, geasProcEntry } from './worker/proc-adapter.js';
 
@@ -46,6 +47,7 @@ export function createShell(opts = {}) {
   // since cwd is a primitive copied by value).
   const ctx = normalizeContext({
     vfs:        opts.vfs ?? null,
+    host:       opts.host ?? null,
     env:        opts.env instanceof Map ? opts.env : new Map(Object.entries(opts.env || {})),
     cwd:        opts.cwd ?? '/',
     stdin:      '',
@@ -95,5 +97,6 @@ export {
   createHeadlessAdapter, createTermAdapter, createXtermAdapter, adapterHooks, makeLineEditor,
   defaultBuiltins, mkTyped, isTyped,
   createGeasClient, setupGeasWorker, serveVFS, createVfsClient, createLoopback,
+  serveHost, createHostClient,
   procToWorker, geasProcEntry,
 };

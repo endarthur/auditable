@@ -19,6 +19,7 @@
 // entry, you'd pass `createShell` from the bundle.)
 
 import { createVfsClient } from './vfs-proxy.js';
+import { createHostClient } from './host-proxy.js';
 
 export function setupGeasWorker(target, opts) {
   const { createShell, isTyped } = opts;
@@ -26,6 +27,11 @@ export function setupGeasWorker(target, opts) {
     throw new Error('setupGeasWorker: opts.createShell is required');
   }
   const vfs = createVfsClient(target);
+  // Host-RPC bridge: a function (member, args) → Promise that round-trips to
+  // the host realm. Harmless when the host doesn't serve host-call (the call
+  // just never resolves) — registry-aware builtins only use it when present
+  // and the host wired it, so this is safe to always create.
+  const host = createHostClient(target);
   let shell = null;
 
   // Interactive read state. Each pending read has a unique id; the
@@ -72,6 +78,9 @@ export function setupGeasWorker(target, opts) {
       case 'init': {
         shell = createShell({
           vfs,
+          // Only expose the host bridge when the client reported it serves
+          // host-call; otherwise a host() call would hang forever.
+          host: msg.host ? host : null,
           env: msg.env || {},
           cwd: msg.cwd || '/',
           stdout: stdoutFn,

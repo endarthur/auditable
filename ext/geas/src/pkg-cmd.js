@@ -205,6 +205,29 @@ async function _installOne(ctx, alias) {
     return _installGcupkgFile(ctx, alias);
   }
 
+  // Registry name (Works only) — a bare name (no alias-prefix, no path) may be
+  // a content-registry entry. Delegate the full install to the shell via the
+  // host bridge so a code extension's surfaces register live and the install
+  // lands in the one ledger the Library reads. Falls through if not found.
+  if (typeof ctx.host === 'function' && !alias.includes(':') && !alias.includes('/')) {
+    let found;
+    try { found = await _findRegistryEntry(ctx, alias); }
+    catch { found = null; }
+    if (found) {
+      if (found.entry.kind === 'gcudat') {
+        await ctx.stdout(`pkg: "${alias}" is a ${found.entry.datKind || 'data'} pack — install it from Tools → Library\n`);
+        return 0;
+      }
+      await ctx.stdout(`installing ${alias}@${found.entry.version || '?'} from ${found.sourceName}…\n`);
+      let dest;
+      try { dest = await ctx.host('RegistryInstall', [found.source, alias]); }
+      catch (e) { await ctx.stderr(`pkg: ${e.message}\n`); return 1; }
+      if (!dest) { await ctx.stderr('pkg: install cancelled\n'); return 1; }
+      await ctx.stdout(`installed ${alias} → ${dest}\n  (reload Works if its surfaces don't appear)\n`);
+      return 0;
+    }
+  }
+
   let url, fallback;
   if (alias.startsWith('local:')) {
     // local: — read the surface VFS, no fetch.
@@ -437,14 +460,65 @@ async function _remove(ctx, alias) {
   return 0;
 }
 
+// ── content registry (Works only — via the host-RPC bridge) ──────────
+// The geas worker can't see the registry's source list (shell meta) or run a
+// full shell-side install (surface registration), so these delegate to the
+// `works` Shell through ctx.host. Absent host bridge → "Works only".
+async function _eachRegistryEntry(ctx, fn) {
+  const sources = await ctx.host('RegistrySources');
+  for (const s of (sources || [])) {
+    let reg;
+    try { reg = (await ctx.host('RegistryFetch', [s.url])).registry; }
+    catch { continue; }
+    for (const e of (reg.entries || [])) await fn(e, s);
+  }
+}
+
+async function _search(ctx, query) {
+  if (typeof ctx.host !== 'function') { await ctx.stderr('pkg search: the content registry is only available in Auditable Works\n'); return 1; }
+  const q = (query || '').toLowerCase().trim();
+  let any = false;
+  try {
+    await _eachRegistryEntry(ctx, async (e, s) => {
+      const hay = ((e.title || '') + ' ' + (e.name || '') + ' ' + (e.description || '') + ' ' + (e.tags || []).join(' ') + ' ' + (e.datKind || '')).toLowerCase();
+      if (q && !hay.includes(q)) return;
+      any = true;
+      const kind = e.kind === 'gcupkg' ? 'ext' : (e.datKind || 'data');
+      await ctx.stdout(`${String(e.name || '').padEnd(18)} ${String(e.version || '').padEnd(8)} ${kind.padEnd(5)} ${e.title || ''}  (${s.name || s.url})\n`);
+    });
+  } catch (e) { await ctx.stderr(`pkg search: ${e.message}\n`); return 1; }
+  if (!any) await ctx.stdout(q ? 'no matches.\n' : '(no registry entries)\n');
+  return 0;
+}
+
+async function _sources(ctx) {
+  if (typeof ctx.host !== 'function') { await ctx.stderr('pkg sources: the content registry is only available in Auditable Works\n'); return 1; }
+  let sources;
+  try { sources = await ctx.host('RegistrySources'); }
+  catch (e) { await ctx.stderr(`pkg sources: ${e.message}\n`); return 1; }
+  if (!sources || !sources.length) { await ctx.stdout('(no sources configured)\n'); return 0; }
+  for (const s of sources) await ctx.stdout(`${String(s.name || s.url).padEnd(22)} ${s.url}\n`);
+  return 0;
+}
+
+// Find a registry entry by exact name across configured sources.
+async function _findRegistryEntry(ctx, name) {
+  let hit = null;
+  await _eachRegistryEntry(ctx, async (e, s) => { if (!hit && e.name === name) hit = { entry: e, source: s.url, sourceName: s.name || s.url }; });
+  return hit;
+}
+
 async function _help(ctx) {
   await ctx.stdout([
     'usage: pkg <subcommand> [args...]',
     '',
     'subcommands:',
+    '  install <name>             install a registry entry by name (Works)',
     '  install <alias>            fetch + verify, write to /lib + lockfile',
     '  install <path.gcupkg>      sideload a packed extension (EXTENSION_SPEC §6.1)',
     '  install                    re-install every entry from /lib/.gcu-lock.json',
+    '  search [query]             search the content registry (Works)',
+    '  sources                    list configured registry sources (Works)',
     '  list                       list installed modules with SPDX badges',
     '  licenses                   aggregate license table across the workspace',
     '  freeze                     print the workspace lockfile',
@@ -472,6 +546,8 @@ export async function _pkg(argv, ctx) {
     case '-h':
     case '--help':  return _help(ctx);
     case 'install':  return argv[2] ? _installOne(ctx, argv[2]) : _installFromLockfile(ctx);
+    case 'search':   return _search(ctx, argv.slice(2).join(' '));
+    case 'sources':  return _sources(ctx);
     case 'list':     return _list(ctx);
     case 'licenses': return _licenses(ctx);
     case 'freeze':   return _freeze(ctx);

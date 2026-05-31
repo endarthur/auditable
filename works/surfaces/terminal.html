@@ -339,6 +339,13 @@ window.addEventListener('message', async (ev) => {
       onStderr: adapter.write,
       onBlock:  adapter.writeBlock,
       onWantInput: readLine,
+      // Host-RPC bridge: lets worker-hosted builtins (e.g. `pkg`) reach the
+      // shell. Safelisted to the content-registry surface so a geas command
+      // can't drive arbitrary Shell operations.
+      host: (member, args) => {
+        if (!/^Registry/.test(String(member))) throw new Error(`host: "${member}" not permitted`);
+        return bus.call({ to: 'works', path: '/', interface: 'Shell', member }, args || []);
+      },
     });
     await client.ready();
   } catch (e) {

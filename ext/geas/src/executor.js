@@ -57,6 +57,9 @@ function _normalize(ctx) {
   return {
     _geasNormalized: true,
     vfs:        ctx.vfs ?? null,
+    // Optional host-RPC bridge (member, args) → Promise — present only when a
+    // worker-hosted shell was wired to a host realm (e.g. the Works terminal).
+    host:       ctx.host ?? null,
     env:        ctx.env instanceof Map ? ctx.env : new Map(Object.entries(ctx.env || {})),
     cwd:        ctx.cwd ?? '/',
     stdin:      ctx.stdin ?? '',

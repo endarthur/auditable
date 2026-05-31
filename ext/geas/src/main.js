@@ -24,6 +24,7 @@ import './adapters/headless.js';
 import './adapters/term.js';
 import './adapters/xterm.js';
 import './worker/vfs-proxy.js';
+import './worker/host-proxy.js';
 import './worker/worker-shim.js';
 import './worker/client.js';
 import './worker/loopback.js';

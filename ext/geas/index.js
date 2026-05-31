@@ -5469,14 +5469,19 @@ class _ZipWriter {
       ? Math.max(0, Math.min(9, opts.level | 0)) : 6;
   }
 
-  async addFile(path, bytes) {
+  async addFile(path, bytes, opts) {
     if (this._pendingError) throw this._pendingError;
     const buf = bytes instanceof Uint8Array ? bytes
       : (typeof bytes === 'string' ? new TextEncoder().encode(bytes) : new Uint8Array(bytes));
-    // level=0 → store (no compression); else deflate.
-    const file = this._level === 0
+    // Per-file level override falls back to the writer-wide level.
+    // level=0 → STORE (no compression); else DEFLATE at that level.
+    // EPUB needs this: mimetype MUST be stored, everything else deflated.
+    const lvl = (opts && typeof opts.level === 'number')
+      ? Math.max(0, Math.min(9, opts.level | 0))
+      : this._level;
+    const file = lvl === 0
       ? new ZipPassThrough(path)
-      : new ZipDeflate(path, { level: this._level });
+      : new ZipDeflate(path, { level: lvl });
     this._z.add(file);
     file.push(buf, true);   // single-shot — all bytes for this file at once
     if (this._writePromise) await this._writePromise;
@@ -5576,8 +5581,11 @@ function createWriter(sink, opts = {}) {
   if (format === 'gz' || format === 'zst') {
     throw new Error(`createWriter: ${format} is a single-stream format — use archive.${format === 'gz' ? 'gzip' : 'zstd'} for that`);
   }
-  if (format === 'xz' || format === 'bz2' || format === 'tar.xz' || format === 'tar.bz2') {
-    throw new Error(`createWriter: ${format} encode requires a lazy-loaded Wasm encoder (not yet wired)`);
+  if (format === 'xz' || format === 'tar.xz') {
+    throw new Error(`createWriter: ${format} encode not available (xz-decompress is decode-only)`);
+  }
+  if (format === 'bz2' || format === 'tar.bz2') {
+    throw new Error(`createWriter: ${format} encode not available (seek-bzip is decode-only)`);
   }
   throw new Error(`createWriter: unsupported format '${format}'`);
 }
@@ -7514,10 +7522,23 @@ async function installGcupkg(parsed, opts = {}) {
   // Canonical artifact: `source` (matches pkg's existing /lib layout).
   await vfs.writeFile(libPath + '/source', files['index.js']);
 
-  // Optional secondary entry — adder.js. Stored under the same dir; the
-  // load() resolution for `@gcu/<name>/adder` finds it via _installedModules.
+  // Optional secondary entry — adder.js. Stored as its OWN leaf
+  // directory (/lib/<pkg>/adder/source + meta.json) so persist.js's
+  // hydrateModulesFromVfs picks it up on next reload. An earlier layout
+  // wrote it as a sibling file (/lib/<pkg>/adder.js) which the walker
+  // ignored — the entry only existed in _installedModules during the
+  // install session and vanished on reload, surfacing as a V8 "Failed
+  // to resolve module specifier" for the bare-fallback path.
   if (files['adder.js']) {
-    await vfs.writeFile(libPath + '/adder.js', files['adder.js']);
+    const adderDir = libPath + '/adder';
+    await vfs.mkdir(adderDir, { recursive: true });
+    await vfs.writeFile(adderDir + '/source', files['adder.js']);
+    await vfs.writeFile(adderDir + '/meta.json', _ENCODER.encode(JSON.stringify({
+      alias:   meta.name + '/adder',
+      url:     meta.name + '/adder',
+      kind:    'gcupkg-secondary',
+      parent:  meta.name,
+    }, null, 2)));
   }
 
   // Other extension data alongside (consumed by aggregateLicenses walkLib
@@ -7526,6 +7547,31 @@ async function installGcupkg(parsed, opts = {}) {
   await vfs.writeFile(libPath + '/LICENSE', files['LICENSE']);
   if (files['README.md']) await vfs.writeFile(libPath + '/README.md', files['README.md']);
   if (files['SPEC.md'])   await vfs.writeFile(libPath + '/SPEC.md',   files['SPEC.md']);
+
+  // Top-level assets the manifest may reference (Works surface HTML files,
+  // viewer templates, etc — anything `manifest.surfaces[].file` can point
+  // at, plus any non-conventional files the extension chose to ship).
+  // Write everything at the archive root that isn't already-handled or
+  // in a special subdir; the installer doesn't need to know about each
+  // asset by name. EXTENSION_SPEC §6.1 doesn't constrain custom assets.
+  const _knownTopLevel = new Set([
+    'package.json', 'index.js', 'adder.js',
+    'LICENSE', 'README.md', 'SPEC.md',
+    '.gcupkg-meta.json',
+  ]);
+  const _knownSubdirs = ['examples/', 'docs/'];
+  for (const [archivePath, bytes] of Object.entries(files)) {
+    if (_knownTopLevel.has(archivePath)) continue;
+    if (_knownSubdirs.some(p => archivePath.startsWith(p))) continue;
+    // Mirror the archive layout under /lib/<pkg>/. For nested non-special
+    // dirs (e.g. `assets/icon.svg`), mkdir along the way.
+    const dest = libPath + '/' + archivePath;
+    const slash = dest.lastIndexOf('/');
+    if (slash > libPath.length) {
+      await vfs.mkdir(dest.slice(0, slash), { recursive: true });
+    }
+    await vfs.writeFile(dest, bytes);
+  }
 
   // pkg's per-entry meta + lockfile entry. Match the shape pkg-cmd.js writes
   // so `pkg list` and `pkg licenses` pick the entry up uniformly.
@@ -7646,6 +7692,51 @@ function _libPathForName(name) {
 // (the examples and docs roots). @gcu/foo → @gcu_foo.
 function _slugifyName(name) {
   return name.replace(/\//g, '_');
+}
+
+// ── thin archive shim ────────────────────────────────────────────────────
+//
+// parseGcupkg expects a `{ archive: { detect, list, read } }` object so
+// callers can plug in whatever ZIP reader they like. The full @gcu/archive
+// bundle is ~226 KB (zip+tar+gz+zst+xz+bz2 read/write); for the
+// cell-side install("file.gcupkg") path we only need ZIP read, which
+// auditable's stdlib already does via unzipArchive (uses native
+// DecompressionStream('deflate-raw'), zero new deps).
+//
+// makeUnzipArchiveShim(unzipArchive) returns an archiveLib whose
+// list/read are backed by one cached unzipArchive call per bytes
+// reference. detect always reports 'zip' — anything else would have
+// failed in unzipArchive first. The cache is a WeakMap keyed by the
+// bytes buffer; subsequent list+read for the same parse share one
+// decompression.
+function makeUnzipArchiveShim(unzipArchive) {
+  if (typeof unzipArchive !== 'function') {
+    throw new TypeError('makeUnzipArchiveShim: unzipArchive function required');
+  }
+  const cache = new WeakMap();
+  async function _entries(bytes) {
+    if (cache.has(bytes)) return cache.get(bytes);
+    const map = await unzipArchive(bytes);
+    cache.set(bytes, map);
+    return map;
+  }
+  return {
+    archive: {
+      async detect(_bytes) { return 'zip'; },
+      async list(bytes) {
+        const map = await _entries(bytes);
+        const out = [];
+        for (const [path, data] of map) {
+          out.push({ path, type: 'file', size: data.length });
+        }
+        return out;
+      },
+      async read(bytes, path) {
+        const map = await _entries(bytes);
+        return map.get(path) || null;
+      },
+    },
+  };
 }
 
 async function _updateLockfile(vfs, name, pkgMeta) {
@@ -9352,6 +9443,9 @@ function _normalize(ctx) {
   return {
     _geasNormalized: true,
     vfs:        ctx.vfs ?? null,
+    // Optional host-RPC bridge (member, args) → Promise — present only when a
+    // worker-hosted shell was wired to a host realm (e.g. the Works terminal).
+    host:       ctx.host ?? null,
     env:        ctx.env instanceof Map ? ctx.env : new Map(Object.entries(ctx.env || {})),
     cwd:        ctx.cwd ?? '/',
     stdin:      ctx.stdin ?? '',
@@ -11380,6 +11474,29 @@ async function _installOne(ctx, alias) {
     return _installGcupkgFile(ctx, alias);
   }
 
+  // Registry name (Works only) — a bare name (no alias-prefix, no path) may be
+  // a content-registry entry. Delegate the full install to the shell via the
+  // host bridge so a code extension's surfaces register live and the install
+  // lands in the one ledger the Library reads. Falls through if not found.
+  if (typeof ctx.host === 'function' && !alias.includes(':') && !alias.includes('/')) {
+    let found;
+    try { found = await _findRegistryEntry(ctx, alias); }
+    catch { found = null; }
+    if (found) {
+      if (found.entry.kind === 'gcudat') {
+        await ctx.stdout(`pkg: "${alias}" is a ${found.entry.datKind || 'data'} pack — install it from Tools → Library\n`);
+        return 0;
+      }
+      await ctx.stdout(`installing ${alias}@${found.entry.version || '?'} from ${found.sourceName}…\n`);
+      let dest;
+      try { dest = await ctx.host('RegistryInstall', [found.source, alias]); }
+      catch (e) { await ctx.stderr(`pkg: ${e.message}\n`); return 1; }
+      if (!dest) { await ctx.stderr('pkg: install cancelled\n'); return 1; }
+      await ctx.stdout(`installed ${alias} → ${dest}\n  (reload Works if its surfaces don't appear)\n`);
+      return 0;
+    }
+  }
+
   let url, fallback;
   if (alias.startsWith('local:')) {
     // local: — read the surface VFS, no fetch.
@@ -11612,14 +11729,65 @@ async function _remove(ctx, alias) {
   return 0;
 }
 
+// ── content registry (Works only — via the host-RPC bridge) ──────────
+// The geas worker can't see the registry's source list (shell meta) or run a
+// full shell-side install (surface registration), so these delegate to the
+// `works` Shell through ctx.host. Absent host bridge → "Works only".
+async function _eachRegistryEntry(ctx, fn) {
+  const sources = await ctx.host('RegistrySources');
+  for (const s of (sources || [])) {
+    let reg;
+    try { reg = (await ctx.host('RegistryFetch', [s.url])).registry; }
+    catch { continue; }
+    for (const e of (reg.entries || [])) await fn(e, s);
+  }
+}
+
+async function _search(ctx, query) {
+  if (typeof ctx.host !== 'function') { await ctx.stderr('pkg search: the content registry is only available in Auditable Works\n'); return 1; }
+  const q = (query || '').toLowerCase().trim();
+  let any = false;
+  try {
+    await _eachRegistryEntry(ctx, async (e, s) => {
+      const hay = ((e.title || '') + ' ' + (e.name || '') + ' ' + (e.description || '') + ' ' + (e.tags || []).join(' ') + ' ' + (e.datKind || '')).toLowerCase();
+      if (q && !hay.includes(q)) return;
+      any = true;
+      const kind = e.kind === 'gcupkg' ? 'ext' : (e.datKind || 'data');
+      await ctx.stdout(`${String(e.name || '').padEnd(18)} ${String(e.version || '').padEnd(8)} ${kind.padEnd(5)} ${e.title || ''}  (${s.name || s.url})\n`);
+    });
+  } catch (e) { await ctx.stderr(`pkg search: ${e.message}\n`); return 1; }
+  if (!any) await ctx.stdout(q ? 'no matches.\n' : '(no registry entries)\n');
+  return 0;
+}
+
+async function _sources(ctx) {
+  if (typeof ctx.host !== 'function') { await ctx.stderr('pkg sources: the content registry is only available in Auditable Works\n'); return 1; }
+  let sources;
+  try { sources = await ctx.host('RegistrySources'); }
+  catch (e) { await ctx.stderr(`pkg sources: ${e.message}\n`); return 1; }
+  if (!sources || !sources.length) { await ctx.stdout('(no sources configured)\n'); return 0; }
+  for (const s of sources) await ctx.stdout(`${String(s.name || s.url).padEnd(22)} ${s.url}\n`);
+  return 0;
+}
+
+// Find a registry entry by exact name across configured sources.
+async function _findRegistryEntry(ctx, name) {
+  let hit = null;
+  await _eachRegistryEntry(ctx, async (e, s) => { if (!hit && e.name === name) hit = { entry: e, source: s.url, sourceName: s.name || s.url }; });
+  return hit;
+}
+
 async function _help(ctx) {
   await ctx.stdout([
     'usage: pkg <subcommand> [args...]',
     '',
     'subcommands:',
+    '  install <name>             install a registry entry by name (Works)',
     '  install <alias>            fetch + verify, write to /lib + lockfile',
     '  install <path.gcupkg>      sideload a packed extension (EXTENSION_SPEC §6.1)',
     '  install                    re-install every entry from /lib/.gcu-lock.json',
+    '  search [query]             search the content registry (Works)',
+    '  sources                    list configured registry sources (Works)',
     '  list                       list installed modules with SPDX badges',
     '  licenses                   aggregate license table across the workspace',
     '  freeze                     print the workspace lockfile',
@@ -11647,6 +11815,8 @@ async function _pkg(argv, ctx) {
     case '-h':
     case '--help':  return _help(ctx);
     case 'install':  return argv[2] ? _installOne(ctx, argv[2]) : _installFromLockfile(ctx);
+    case 'search':   return _search(ctx, argv.slice(2).join(' '));
+    case 'sources':  return _sources(ctx);
     case 'list':     return _list(ctx);
     case 'licenses': return _licenses(ctx);
     case 'freeze':   return _freeze(ctx);
@@ -16528,6 +16698,87 @@ function _vpDetach(target, handler) {
   // For onmessage-style we can't easily detach; the leak is small per worker.
 }
 
+// -- host-proxy.js --
+
+// Host-RPC proxy: lets a worker-hosted geas command call back into the host
+// realm — the surface that owns the A-Bus connection — to run operations the
+// worker can't (e.g. install a code extension whose surfaces must register in
+// the shell). Symmetric with vfs-proxy.js: `serveHost(target, handler)` on the
+// owning side, `createHostClient(target)` in the worker.
+//
+// `handler(member, args) → value` decides what a call means; the terminal
+// surface forwards it to the `works` Shell over A-Bus (safelisted members).
+//
+// Message shapes (own namespace, won't collide with vfs/exec/stdout):
+//
+//   client → server:  { type: 'host-call', id, member, args }
+//   server → client:  { type: 'host-reply', id, ok: true, value }
+//                  |  { type: 'host-reply', id, ok: false, error: string }
+
+// Run on the side that owns the host capability (the surface). Listens for
+// host-call, dispatches to `handler`, replies. Returns a stop() function.
+function serveHost(target, handler) {
+  const h = async (e) => {
+    const msg = e && e.data !== undefined ? e.data : e;
+    if (!msg || msg.type !== 'host-call') return;
+    try {
+      const value = await handler(msg.member, msg.args || []);
+      target.postMessage({ type: 'host-reply', id: msg.id, ok: true, value });
+    } catch (err) {
+      target.postMessage({ type: 'host-reply', id: msg.id, ok: false, error: err && err.message ? err.message : String(err) });
+    }
+  };
+  _hpAttach(target, h);
+  return () => _hpDetach(target, h);
+}
+
+// Run in the worker. Returns `host(member, args) → Promise<value>`. If the
+// host doesn't serve host-call (no handler wired), the promise simply never
+// resolves — callers should treat a missing host bridge as "unavailable"
+// before calling (ctx.host is null in those contexts).
+function createHostClient(target) {
+  let nextId = 0;
+  const pending = new Map();
+  _hpAttach(target, (e) => {
+    const msg = e && e.data !== undefined ? e.data : e;
+    if (!msg || msg.type !== 'host-reply') return;
+    const slot = pending.get(msg.id);
+    if (!slot) return;
+    pending.delete(msg.id);
+    if (msg.ok) slot.resolve(msg.value);
+    else slot.reject(new Error(msg.error));
+  });
+  return (member, args = []) => {
+    const id = nextId++;
+    return new Promise((resolve, reject) => {
+      pending.set(id, { resolve, reject });
+      target.postMessage({ type: 'host-call', id, member, args });
+    });
+  };
+}
+
+// ── transport helpers (same shape as vfs-proxy.js) ──
+function _hpAttach(target, handler) {
+  if (typeof target.addEventListener === 'function') {
+    target.addEventListener('message', handler);
+  } else if (typeof target.on === 'function') {
+    target.on('message', (data) => handler({ data }));
+  } else if ('onmessage' in target) {
+    const prior = target.onmessage;
+    target.onmessage = (e) => { handler(e); if (prior) prior(e); };
+  } else {
+    throw new Error('host-proxy: target has no message-listener surface');
+  }
+}
+
+function _hpDetach(target, handler) {
+  if (typeof target.removeEventListener === 'function') {
+    target.removeEventListener('message', handler);
+  } else if (typeof target.off === 'function') {
+    target.off('message', handler);
+  }
+}
+
 // -- worker-shim.js --
 
 // Worker shim — run this inside the worker scope after geas is loaded.
@@ -16551,12 +16802,18 @@ function _vpDetach(target, handler) {
 // entry, you'd pass `createShell` from the bundle.)
 
 
+
 function setupGeasWorker(target, opts) {
   const { createShell, isTyped } = opts;
   if (typeof createShell !== 'function') {
     throw new Error('setupGeasWorker: opts.createShell is required');
   }
   const vfs = createVfsClient(target);
+  // Host-RPC bridge: a function (member, args) → Promise that round-trips to
+  // the host realm. Harmless when the host doesn't serve host-call (the call
+  // just never resolves) — registry-aware builtins only use it when present
+  // and the host wired it, so this is safe to always create.
+  const host = createHostClient(target);
   let shell = null;
 
   // Interactive read state. Each pending read has a unique id; the
@@ -16603,6 +16860,9 @@ function setupGeasWorker(target, opts) {
       case 'init': {
         shell = createShell({
           vfs,
+          // Only expose the host bridge when the client reported it serves
+          // host-call; otherwise a host() call would hang forever.
+          host: msg.host ? host : null,
           env: msg.env || {},
           cwd: msg.cwd || '/',
           stdout: stdoutFn,
@@ -16721,6 +16981,7 @@ function _wsAttach(target, handler) {
 // one's in flight queues client-side).
 
 
+
 function createGeasClient(opts) {
   const {
     worker,
@@ -16738,11 +16999,18 @@ function createGeasClient(opts) {
     // `read` returns 1 — matches "no terminal attached" semantics for
     // pure-programmatic clients that haven't wired an adapter.
     onWantInput = null,
+    // Optional host-RPC handler: (member, args) => Promise<value>. When set,
+    // worker-hosted builtins can call back into this realm (e.g. to install a
+    // code extension whose surfaces must register in the shell). Left unset
+    // for pure/headless clients — the worker then sees no host bridge.
+    host = null,
   } = opts;
   if (!worker) throw new Error('createGeasClient: opts.worker is required');
 
   // Start serving VFS over the worker channel.
   const stopServe = vfs ? serveVFS(worker, vfs) : (() => {});
+  // Start serving host-RPC if a handler was supplied.
+  const stopHost = typeof host === 'function' ? serveHost(worker, host) : (() => {});
 
   // Track pending exec promises by id.
   let nextExecId = 0;
@@ -16820,7 +17088,7 @@ function createGeasClient(opts) {
   _wcAttach(worker, handler);
 
   // Kick off init.
-  worker.postMessage({ type: 'init', env, cwd });
+  worker.postMessage({ type: 'init', env, cwd, host: typeof host === 'function' });
 
   // Serialise execs: queue them client-side so the worker only sees one at
   // a time. Simpler than expecting the worker to maintain a queue.
@@ -16863,6 +17131,7 @@ function createGeasClient(opts) {
     async terminate() {
       terminated = true;
       stopServe();
+      stopHost();
       _wcDetach(worker, handler);
       if (typeof worker.terminate === 'function') {
         try { await worker.terminate(); } catch { /* ignore */ }
@@ -17073,6 +17342,7 @@ function geasProcEntry(deps) {
 
 
 
+
 // createShell({vfs, env, cwd, stdout, stderr, builtins, onCommand})
 //
 // Convenience factory that builds a long-lived shell context with the
@@ -17095,6 +17365,7 @@ function createShell(opts = {}) {
   // since cwd is a primitive copied by value).
   const ctx = normalizeContext({
     vfs:        opts.vfs ?? null,
+    host:       opts.host ?? null,
     env:        opts.env instanceof Map ? opts.env : new Map(Object.entries(opts.env || {})),
     cwd:        opts.cwd ?? '/',
     stdin:      '',
