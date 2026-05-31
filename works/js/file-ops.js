@@ -575,11 +575,17 @@ function _ensureDropOverlay() {
 // /lib entry is visible.
 async function installDroppedGcupkg(file) {
   setStatus('reading ' + file.name + '…');
-  const bytes = new Uint8Array(await file.arrayBuffer());
+  await installGcupkgBytes(new Uint8Array(await file.arrayBuffer()), file.name);
+}
 
+// Install .gcupkg bytes: parse → install to /lib (+ /usr/share) → merge
+// examples → register works.js so surfaces/menu items appear immediately.
+// Returns { name, version, libPath, integrityOk }; throws on parse failure.
+// Shared by the OS-drop path and the content registry (registry.js).
+export async function installGcupkgBytes(bytes, filename) {
   let parsed;
   try {
-    parsed = await parseGcupkg(bytes, { archive });
+    parsed = await parseGcupkg(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes), { archive });
   } catch (e) {
     setStatus(`gcupkg parse failed: ${e.message}`);
     throw e;
@@ -634,6 +640,8 @@ async function installDroppedGcupkg(file) {
   // didn't ship a works.js.
   try { await evaluateWorksScript(parsed.meta.name); }
   catch (e) { console.warn('[works] post-install works.js evaluation failed:', e.message); }
+
+  return { name: parsed.meta.name, version: parsed.meta.version, libPath: result.libPath, integrityOk: parsed.integrity.ok };
 }
 
 // ── Tree drag-to-move ───────────────────────────────────────────────

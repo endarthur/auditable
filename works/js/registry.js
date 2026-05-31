@@ -8,6 +8,7 @@ import { WKS, setStatus } from './state.js';
 import { Dialog, confirm as dlgConfirm, prompt as dlgPrompt } from '#dialog';
 import { metaGet, metaSet } from './meta.js';
 import { installGcudatBytes, getInstalled, patchInstalled } from './gcudat-install.js';
+import { installGcupkgBytes } from './file-ops.js';
 import { openPath } from './surfaces.js';
 
 const DEFAULT_SOURCE = {
@@ -79,6 +80,15 @@ function semverGt(a, b) {
 // recorded version to compare; a pre-ledger install (dir present, no record)
 // reads as 'installed' — the UI offers a reinstall there instead.
 export async function entryStatus(entry) {
+  if (entry.kind === 'gcupkg') {
+    // Code extensions are ledger-authoritative (the /lib path is name-derived,
+    // not trivially recomputable here). Installed iff the ledger records it and
+    // its lib dir still exists.
+    const rec = (await getInstalled())[entry.name];
+    const live = rec && rec.dest && await WKS.vfs.exists(rec.dest).catch(() => false);
+    if (!live) return 'install';
+    return (rec.version && semverGt(entry.version, rec.version)) ? 'update' : 'installed';
+  }
   if (!(await isInstalled(entry))) return 'install';
   const rec = (await getInstalled())[entry.name];
   if (rec && rec.version && semverGt(entry.version, rec.version)) return 'update';
@@ -135,7 +145,24 @@ async function installEntry(entry, base, sourceUrl) {
     }
     return dest;
   }
-  // .gcupkg registry entries: a later iteration (code path → installGcupkg + confirm).
+  if (entry.kind === 'gcupkg') {
+    // Code extension — runs in the workspace. Always confirm before install,
+    // regardless of source trust (SRI only proves the bytes are intact).
+    const ok = await dlgConfirm(
+      '"' + (entry.title || entry.name) + '" is a code extension — it runs in your workspace with full access.\n\n'
+      + 'Only install extensions you trust.\n\nInstall it?',
+      { title: 'Install extension', danger: true });
+    if (!ok) { setStatus('install cancelled'); return null; }
+    let r;
+    try { r = await installGcupkgBytes(bytes, entry.name + '.gcupkg'); }
+    catch (e) { setStatus('install failed: ' + (e.message || e)); return null; }
+    await patchInstalled(entry.name, {
+      version: r.version || entry.version || '', source: sourceUrl || '', integrity: entry.integrity || '',
+      kind: 'gcupkg', datKind: '', title: entry.title || entry.name, dest: r.libPath, at: Date.now(),
+    }).catch(() => {});
+    setStatus('installed ' + entry.name);
+    return r.libPath;
+  }
   setStatus('entry kind not yet supported: ' + entry.kind);
   return null;
 }
@@ -273,10 +300,10 @@ export async function openLibraryDialog() {
             btn.disabled = true; btn.textContent = '…';
             try {
               const dest = await installEntry(e, base, current.url);
-              // Install / Update jump into the book; a no-reason reinstall keeps
-              // the dialog open so you can touch up several packs.
-              if (dest && !wasReinstall) { ctx.close(); await openPath(dest); }
-              else { setStatus(dest ? 'reinstalled ' + e.name : 'install cancelled'); render(); }
+              // A fresh book install/update jumps into the book; a no-reason
+              // reinstall (or any extension install) keeps the dialog open.
+              if (dest && !wasReinstall && e.kind !== 'gcupkg') { ctx.close(); await openPath(dest); }
+              else { setStatus(dest ? (e.kind === 'gcupkg' ? 'installed ' + e.name : 'reinstalled ' + e.name) : 'install cancelled'); render(); }
             } catch (err) { setStatus('install failed: ' + (err.message || err)); render(); }
           });
           row.appendChild(btn);

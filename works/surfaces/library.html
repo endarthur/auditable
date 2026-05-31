@@ -261,8 +261,8 @@ function render() {
         const dest = await callShell('RegistryInstall', [e._src, e.name]);
         if (dest) {
           statusMap = await callShell('RegistryStatuses', [allEntries]).catch(() => statusMap);
-          if (!wasReinstall) await callShell('OpenPath', [dest]);
-          else $('credit').textContent = 'reinstalled ' + (e.title || e.name);
+          if (!wasReinstall && e.kind !== 'gcupkg') await callShell('OpenPath', [dest]);
+          else $('credit').textContent = (e.kind === 'gcupkg' ? 'installed ' : 'reinstalled ') + (e.title || e.name);
           renderSide(); render();
         } else { btn.disabled = false; btn.textContent = LABEL[status]; }
       } catch (err) { btn.disabled = false; btn.textContent = LABEL[status]; $('credit').textContent = 'install failed: ' + (err.message || err); }
