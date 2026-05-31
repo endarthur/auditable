@@ -81,6 +81,24 @@
 
   footer { flex: none; padding: 7px 14px; border-top: 1px solid var(--au-border); color: var(--au-fg-soft); font-size: 11px; }
   .err { color: var(--au-error); }
+  .card .act button.share { color: var(--au-fg-soft); }
+  .card .act button.share:hover { color: var(--au-action); }
+
+  /* share modal — capsule link + QR ("Open in Works") */
+  .share-ovl { position: fixed; inset: 0; z-index: 40; display: none; background: rgba(0,0,0,.55); }
+  .share-ovl.open { display: grid; place-items: center; }
+  .share-panel { width: 380px; max-width: 92vw; background: var(--au-surface-raised); border: 1px solid var(--au-border);
+    border-radius: 10px; padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+  .share-panel h3 { margin: 0; font-size: 15px; }
+  .share-panel .hint { color: var(--au-fg-soft); font-size: 12px; margin: -6px 0 0; }
+  .share-qr { align-self: center; width: 220px; height: 220px; background: #fff; border-radius: 6px; padding: 8px; }
+  .share-qr svg { width: 100%; height: 100%; display: block; }
+  .share-row { display: flex; gap: 8px; }
+  .share-row input { flex: 1; min-width: 0; background: var(--au-surface); color: var(--au-fg); border: 1px solid var(--au-border);
+    border-radius: 4px; padding: 6px 8px; font: 11px ui-monospace,monospace; }
+  .share-row button, .share-close { background: var(--au-surface-bright); color: var(--au-fg); border: 1px solid var(--au-border);
+    border-radius: 4px; padding: 6px 10px; cursor: pointer; font: inherit; }
+  .share-close { align-self: flex-end; }
 </style>
 </head>
 <body>
@@ -115,9 +133,26 @@
   </main>
 </div>
 
+<div class="share-ovl" id="shareOvl">
+  <div class="share-panel">
+    <h3 id="shareTitle">Share</h3>
+    <p class="hint">Scan or open to install this in Auditable Works.</p>
+    <div class="share-qr" id="shareQr"></div>
+    <div class="share-row">
+      <input id="shareLink" type="text" readonly spellcheck="false">
+      <button id="shareCopy">Copy</button>
+    </div>
+    <button class="share-close" id="shareClose">Close</button>
+  </div>
+</div>
+
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
+import { toSVG } from '../../ext/qr/index.js';
+import { encodeInlineI, fragmentEncode } from '../../ext/capsule/index.js';
 /* @theme-init */
+
+const WORKS_URL = 'https://gentropic.org/works/';   // the published Auditable Works PWA
 
 const $ = (id) => document.getElementById(id);
 let bus = null;
@@ -268,8 +303,25 @@ function render() {
       } catch (err) { btn.disabled = false; btn.textContent = LABEL[status]; $('credit').textContent = 'install failed: ' + (err.message || err); }
     });
     card.querySelector('.act').appendChild(btn);
+    const share = document.createElement('button');
+    share.className = 'share'; share.textContent = '⤴ Share'; share.title = 'Share link / QR — open in Works';
+    share.addEventListener('click', () => shareEntry(e));
+    card.querySelector('.act').appendChild(share);
     grid.appendChild(card);
   }
+}
+
+// Share — build a capsule registry-pointer link (→ gentropic.org/works/#capsule),
+// show it + a QR. Scanning / opening installs the entry in Works.
+async function shareEntry(e) {
+  try {
+    const cap = await encodeInlineI(JSON.stringify({ v: 1, install: { source: e._src, name: e.name } }));
+    const link = WORKS_URL + '#capsule=' + encodeURIComponent(fragmentEncode(cap));
+    $('shareTitle').textContent = e.title || e.name;
+    $('shareQr').innerHTML = toSVG(link, { ecc: 'M', scale: 5 });   // dark-on-white for scannability
+    $('shareLink').value = link;
+    $('shareOvl').classList.add('open');
+  } catch (err) { $('credit').textContent = 'share failed: ' + (err.message || err); }
 }
 
 window.addEventListener('message', async (ev) => {
@@ -285,6 +337,12 @@ window.addEventListener('message', async (ev) => {
     el.addEventListener('click', () => { view = { kind: el.dataset.view }; renderSide(); render(); savePrefs(); });
 
   $('search').addEventListener('input', render);
+  $('shareClose').addEventListener('click', () => $('shareOvl').classList.remove('open'));
+  $('shareOvl').addEventListener('click', (e) => { if (e.target === $('shareOvl')) $('shareOvl').classList.remove('open'); });
+  $('shareCopy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText($('shareLink').value); $('shareCopy').textContent = 'Copied'; setTimeout(() => { $('shareCopy').textContent = 'Copy'; }, 1200); }
+    catch { $('shareLink').select(); }
+  });
   $('collapse').addEventListener('click', () => { $('shell').classList.add('collapsed'); savePrefs(); });
   $('rail').addEventListener('click', () => { $('shell').classList.remove('collapsed'); savePrefs(); });
 

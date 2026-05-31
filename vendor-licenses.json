@@ -32,6 +32,13 @@
       "description": "KaTeX — TeX math rendering. Vendored at ext/katex/index.js (UMD wrapped as @gcu/katex) in MathML-only mode: the browser renders math with system math fonts, so NO KaTeX fonts/CSS are shipped (~265KB engine only). Used by the book reader surface.",
       "licenseFile": "ext/katex/LICENSE"
     },
+    "qrcode-generator": {
+      "spdx": "MIT",
+      "version": "2.0.4",
+      "homepage": "http://www.d-project.com/",
+      "description": "QR Code Generator for JavaScript (Kazuhiko Arase) — byte-mode + UTF-8 QR encoding. Vendored at ext/qr/index.js (wrapped as @gcu/qr with a GCU SVG renderer). Used by the Library surface's Share action to make capsule QR codes.",
+      "licenseFile": "vendor-licenses/qrcode-generator.txt"
+    },
     "acorn": {
       "spdx": "MIT",
       "version": "8.x (+ acorn-typescript 1.4.x)",

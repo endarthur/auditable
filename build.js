@@ -262,7 +262,7 @@ if (target === 'works' || target === 'works-all') {
   const worksZlib = require('zlib');
 
   const isWorksAll = (target === 'works-all');
-  const SHARED_LIBS_BASE = ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline', 'markdown', 'librarian', 'docview', 'katex', 'reader-core', 'capsule', 'ipynb', 'cm6', 'menu', 'template', 'yaml', 'epub', 'archive', 'sideact', 'patchbay'];
+  const SHARED_LIBS_BASE = ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline', 'markdown', 'librarian', 'docview', 'katex', 'reader-core', 'capsule', 'qr', 'ipynb', 'cm6', 'menu', 'template', 'yaml', 'epub', 'archive', 'sideact', 'patchbay'];
   // For --target=works-all: bundle every ext/<name>/index.js that's a real
   // bundle (skip the re-export shims under ~1 KB — they break the
   // single-file SHARED_LIBS pattern because they import from sibling files).
@@ -675,7 +675,7 @@ if (target === 'works' || target === 'works-all') {
       deps: ['abus', 'markdown', 'docview', 'librarian', 'katex', 'reader-core'] },
     { kind: 'dd60',      file: 'works/surfaces/dd60.html',
       deps: ['abus', 'markdown', 'docview', 'librarian', 'katex', 'reader-core'] },
-    { kind: 'library',   file: 'works/surfaces/library.html', deps: ['abus'] },
+    { kind: 'library',   file: 'works/surfaces/library.html', deps: ['abus', 'qr', 'capsule'] },
     { kind: 'terminal',  file: 'works/surfaces/terminal.html',
       deps: ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline'], extras: 'terminal' },
     { kind: 'patchbay',  file: 'works/surfaces/patchbay.html',  deps: ['abus', 'sideact', 'patchbay', 'menu'] },
