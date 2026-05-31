@@ -450,9 +450,15 @@ async function showMenu(e, path, type) {
   // fallback so they land in the text surface.
   if (type === 'file' && kindForExtension(basename(path)))
     extras.push({ label: 'Open',                                        action: 'open' });
-  // Loose document files → open in the reader (synthesized one-chapter book).
+  // Reader entries: loose document files (synthesized one-chapter book) AND
+  // book directories (a dir/project carrying a book.json). The regular reader
+  // is always offered wherever a book opens — the DD-60 skin is just an extra.
   const isReaderDoc = type === 'file' && /\.(pdf|md|markdown|mdown|html?)$/i.test(basename(path));
-  if (isReaderDoc) extras.push({ label: 'Open in reader ▤', action: 'open-reader' });
+  let isBookDir = false;
+  if (type === 'folder' || type === 'project') {
+    try { isBookDir = await WKS.vfs.exists(path + '/book.json'); } catch { /* ignore */ }
+  }
+  if (isReaderDoc || isBookDir) extras.push({ label: 'Open in reader ▤', action: 'open-reader' });
   extras.push(                          { label: 'Copy path',           action: 'copy-path' });
   if (type === 'folder')  extras.push({ label: 'Upload file here…',     action: 'upload-here' });
   if (type === 'folder')  extras.push({ label: 'Open terminal here',    action: 'terminal-here' });
@@ -483,12 +489,8 @@ async function showMenu(e, path, type) {
   }
   // Easter egg (off by default; unlocked via the About dialog): open a book
   // directory — or a loose PDF — in the DD-60 "DADA Diskman" retro reader skin.
-  if (WKS.dd60Enabled) {
-    if (type === 'file' && /\.pdf$/i.test(basename(path))) extras.push({ label: 'Open in DADA Diskman ▥', action: 'open-dd60' });
-    else if (type === 'folder' || type === 'project') {
-      try { if (await WKS.vfs.exists(path + '/book.json')) extras.push({ label: 'Open in DADA Diskman ▥', action: 'open-dd60' }); } catch { /* ignore */ }
-    }
-  }
+  if (WKS.dd60Enabled && ((type === 'file' && /\.pdf$/i.test(basename(path))) || isBookDir))
+    extras.push({ label: 'Open in DADA Diskman ▥', action: 'open-dd60' });
   if (extras.length) items.push('---', ...extras);
 
   // /lib/<pkg> leaf directories — give them "Remove extension" as a

@@ -60,6 +60,7 @@
   .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
   .toolbar { flex: none; display: flex; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--au-border); }
   .toolbar input { flex: 1; background: var(--au-surface); color: var(--au-fg); border: 1px solid var(--au-border); border-radius: 4px; padding: 5px 9px; font: inherit; }
+  .toolbar #updAll { color: var(--au-action); border-color: var(--au-action); }
 
   .grid { flex: 1; overflow: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; padding: 14px; align-content: start; }
   .empty { padding: 24px; color: var(--au-fg-soft); font-style: italic; grid-column: 1 / -1; }
@@ -108,7 +109,7 @@
         <button id="addCancel">Cancel</button>
       </div>
     </div>
-    <div class="toolbar"><input id="search" type="text" placeholder="Filter the shelf…" spellcheck="false" autocomplete="off"></div>
+    <div class="toolbar"><input id="search" type="text" placeholder="Filter the shelf…" spellcheck="false" autocomplete="off"><button id="updAll" class="upd" style="display:none"></button></div>
     <div class="grid" id="grid"><div class="empty">Loading…</div></div>
     <footer id="credit"></footer>
   </main>
@@ -127,6 +128,27 @@ let statusMap = {};    // name → 'install'|'installed'|'update'
 let view = { kind: 'all' };
 
 const callShell = (member, args = []) => bus.call({ to: 'works', path: '/', interface: 'Shell', member }, args);
+const callVfs = (member, args) => bus.call({ to: 'works', path: '/', interface: 'VFS', member }, args);
+
+// UI prefs (collapsed + last view) persist in the workspace VFS, so they
+// survive reopen and travel with the workspace.
+const PREFS = '/home/.library.json';
+async function loadPrefs() {
+  try {
+    const p = JSON.parse(await callVfs('Read', [PREFS, 'utf8']));
+    if (p && typeof p === 'object') {
+      if (p.collapsed) $('shell').classList.add('collapsed');
+      if (p.view && p.view.kind) view = p.view;
+    }
+  } catch { /* no prefs yet */ }
+}
+let saveT = null;
+function savePrefs() {
+  clearTimeout(saveT);
+  saveT = setTimeout(() => {
+    callVfs('Write', [PREFS, JSON.stringify({ collapsed: $('shell').classList.contains('collapsed'), view })]).catch(() => {});
+  }, 250);
+}
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fmtSize = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB');
 const isNC = (l) => /\bNC\b|non-?commercial/i.test(String(l || ''));
@@ -169,7 +191,7 @@ function renderSide() {
     it.title = sd.error ? ('couldn\'t load — ' + sd.error) : sd.url;
     it.innerHTML = '<span class="dot">•</span><span class="nm">' + esc(sd.name) + '</span>'
       + (sources.length > 1 ? '<span class="rm" title="Remove source">×</span>' : '');
-    it.addEventListener('click', () => { view = { kind: 'source', url: sd.url }; renderSide(); render(); });
+    it.addEventListener('click', () => { view = { kind: 'source', url: sd.url }; renderSide(); render(); savePrefs(); });
     const rm = it.querySelector('.rm');
     if (rm) rm.addEventListener('click', async (ev) => {
       ev.stopPropagation();
@@ -194,6 +216,10 @@ function visibleEntries() {
 function render() {
   const grid = $('grid');
   const list = visibleEntries();
+  const nUpd = updatesCount();
+  const updAll = $('updAll');
+  if (view.kind === 'updates' && nUpd > 0) { updAll.style.display = ''; updAll.disabled = false; updAll.textContent = 'Update all (' + nUpd + ')'; }
+  else updAll.style.display = 'none';
   const cur = view.kind === 'source' ? srcData.find((s) => s.url === view.url) : null;
   if (cur && cur.error) $('credit').textContent = 'couldn\'t load this source — ' + cur.error;
   else if (cur && cur.registry) $('credit').textContent = (cur.registry.name || '') + (cur.registry.description ? ' — ' + cur.registry.description : '') + (cur.registry.updated ? '  ·  updated ' + cur.registry.updated : '');
@@ -256,11 +282,26 @@ window.addEventListener('message', async (ev) => {
 
   // smart-view nav
   for (const el of document.querySelectorAll('.nav-item'))
-    el.addEventListener('click', () => { view = { kind: el.dataset.view }; renderSide(); render(); });
+    el.addEventListener('click', () => { view = { kind: el.dataset.view }; renderSide(); render(); savePrefs(); });
 
   $('search').addEventListener('input', render);
-  $('collapse').addEventListener('click', () => $('shell').classList.add('collapsed'));
-  $('rail').addEventListener('click', () => $('shell').classList.remove('collapsed'));
+  $('collapse').addEventListener('click', () => { $('shell').classList.add('collapsed'); savePrefs(); });
+  $('rail').addEventListener('click', () => { $('shell').classList.remove('collapsed'); savePrefs(); });
+
+  // Update all — install every pack with an available update (no auto-open).
+  $('updAll').addEventListener('click', async () => {
+    const todo = allEntries.filter((e) => statusMap[e.name] === 'update');
+    if (!todo.length) return;
+    $('updAll').disabled = true;
+    let done = 0;
+    for (const e of todo) {
+      $('credit').textContent = 'updating ' + (e.title || e.name) + '… (' + (done + 1) + '/' + todo.length + ')';
+      try { if (await callShell('RegistryInstall', [e._src, e.name])) done++; } catch { /* skip, continue */ }
+    }
+    statusMap = await callShell('RegistryStatuses', [allEntries]).catch(() => statusMap);
+    $('credit').textContent = 'updated ' + done + ' pack' + (done === 1 ? '' : 's') + (done < todo.length ? ' (' + (todo.length - done) + ' failed)' : '');
+    renderSide(); render();
+  });
 
   $('add').addEventListener('click', () => { $('addPanel').classList.toggle('open'); if ($('addPanel').classList.contains('open')) $('addUrl').focus(); });
   $('addCancel').addEventListener('click', () => { $('addPanel').classList.remove('open'); $('addUrl').value = ''; });
@@ -272,6 +313,7 @@ window.addEventListener('message', async (ev) => {
     loadAll();
   });
 
+  await loadPrefs();
   loadAll();
   bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, ['Library']);
   bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
