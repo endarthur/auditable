@@ -75,6 +75,7 @@ const fmt = (v, d = 4) => (v === null || v === undefined || !Number.isFinite(v))
   : (Math.abs(v) >= 1e6 || (v !== 0 && Math.abs(v) < 1e-4)) ? v.toExponential(2) : Number(v.toFixed(d)).toString();
 
 let bus = null;
+let view = null;   // { m, summary, path } — the current analysis, for the GT view
 const status = (s) => { $('status').textContent = s; };
 const call = (member, args) => bus.call({ to: 'pipeline', path: '/', interface: 'Pipeline', member }, args);
 
@@ -118,16 +119,18 @@ async function analyze(path) {
     summary = await call('Pull', [graph, 'sum', 'summary']);
     worker = await call('WorkerInfo', []);
   } catch (e) { status('error: ' + esc(e.message)); return; }
-  render(manifest, summary);
+  render(manifest, summary, path);
   const mode = worker && worker.lastScanMode === 'parallel' ? `${worker.workers}-worker scan` : 'inline scan';
   status(`${manifest.columns.length} columns · ${mode} · ${path}`);
 }
 
-function render(m, summary) {
+function render(m, summary, path) {
+  view = { m, summary, path };
   const out = $('out');
   out.textContent = '';
   out.appendChild(schemaSection(m));
   out.appendChild(statsSection(m, summary));
+  out.appendChild(gtSection(m, summary));
   out.appendChild(catsSection(m, summary));
 }
 
@@ -197,6 +200,117 @@ function catsSection(m, summary) {
     blk.appendChild(cats); sec.appendChild(blk);
   }
   return sec;
+}
+
+// ── Grade-tonnage view ────────────────────────────────────────────────
+function gtSection(m, summary) {
+  const numeric = m.columns.filter((c) => c.type === 'numeric').map((c) => c.name);
+  const sec = el('section'); sec.appendChild(h2('Grade-tonnage'));
+  if (!numeric.length) { sec.appendChild(emptyDiv('no numeric columns to grade')); return sec; }
+
+  const cc = m.coordCols || {};
+  const dims = (cc.dx && cc.dy && cc.dz) ? [cc.dx, cc.dy, cc.dz] : null;
+
+  const ctrl = el('div');
+  ctrl.style.cssText = 'display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px;font-size:11px';
+  const gradeSel = select(numeric, gradeGuess(m, numeric));
+  const densSel = select(['(none)', ...numeric], densityGuess(numeric));
+  const volInput = el('input'); volInput.type = 'number'; volInput.value = '1'; volInput.style.cssText = 'width:90px';
+  const btn = el('button'); btn.textContent = 'Compute';
+  ctrl.appendChild(label('grade', gradeSel));
+  ctrl.appendChild(label('density', densSel));
+  if (dims) { const n = el('span'); n.className = 'conf'; n.textContent = `volume = ${dims.join('·')}`; ctrl.appendChild(n); }
+  else ctrl.appendChild(label('block volume', volInput));
+  ctrl.appendChild(btn);
+  sec.appendChild(ctrl);
+
+  const result = el('div'); result.id = 'gt-result';
+  result.appendChild(emptyDiv('pick a grade column and Compute.'));
+  sec.appendChild(result);
+
+  btn.addEventListener('click', () => computeGT({
+    grade: gradeSel.value,
+    density: densSel.value === '(none)' ? null : densSel.value,
+    blockVolume: dims ? null : (parseFloat(volInput.value) || 1),
+    dims,
+  }));
+  return sec;
+}
+
+function gradeGuess(m, numeric) {
+  // A grade is a non-coordinate numeric column. (Note: recon may tag a column
+  // named "Y" as the element Yttrium — an inherent single-letter clash — so we
+  // exclude coord-/size-role columns rather than just picking the first analyte.)
+  const isCoord = (name) => { const c = m.columns.find((x) => x.name === name); return c && /^(coord|size)-/.test(c.role || ''); };
+  const cands = numeric.filter((n) => !isCoord(n));
+  const byAnalyte = m.columns.find((c) => c.analyte && cands.includes(c.name));
+  return (byAnalyte && byAnalyte.name) || cands[0] || numeric[0];
+}
+function densityGuess(numeric) {
+  return numeric.find((n) => /dens|_sg$|sg$|gcm3/i.test(n)) || '(none)';
+}
+
+async function computeGT(opts) {
+  const res = $('gt-result');
+  if (!view) return;
+  const s = (view.summary && view.summary[opts.grade]) || {};
+  const gradeMin = Number.isFinite(s.min) ? s.min : 0;
+  const gradeMax = Number.isFinite(s.max) ? s.max : 1;
+  if (!(gradeMax > gradeMin)) { res.textContent = ''; res.appendChild(emptyDiv('that column has no grade range')); return; }
+  res.textContent = ''; res.appendChild(emptyDiv('computing grade-tonnage…'));
+  const graph = { nodes: [
+    { id: 'src', type: 'load.csv', params: { path: view.path } },
+    { id: 'snf', type: 'recon.sniff', wiring: { table: { node: 'src', port: 'table' } } },
+    { id: 'gt', type: 'gt',
+      params: { grade: opts.grade, gradeMin, gradeMax, bins: 200, blockVolume: opts.blockVolume, dims: opts.dims, density: opts.density },
+      wiring: { table: { node: 'src', port: 'table' }, manifest: { node: 'snf', port: 'manifest' } } },
+  ] };
+  let out;
+  try { out = await call('Pull', [graph, 'gt', 'gt']); }
+  catch (e) { res.textContent = ''; res.appendChild(emptyDiv('error: ' + e.message)); return; }
+  renderGT(out, opts.grade);
+}
+
+function renderGT(gt, grade) {
+  const res = $('gt-result'); res.textContent = '';
+  const curve = gt.curve || [];
+  if (!gt.count || !curve.length || !(curve[0].tonnage > 0)) { res.appendChild(emptyDiv('no tonnage in range')); return; }
+  const W = 620, H = 200, pad = 12;
+  const n = curve.length;
+  const maxT = curve[0].tonnage;
+  const maxG = Math.max(1e-12, ...curve.map((c) => c.grade));
+  const x = (i) => pad + (i / (n - 1)) * (W - 2 * pad);
+  const yT = (v) => (H - pad) - (v / maxT) * (H - 2 * pad);
+  const yG = (v) => (H - pad) - (v / maxG) * (H - 2 * pad);
+  const poly = (fn, key) => curve.map((c, i) => `${x(i).toFixed(1)},${fn(c[key]).toFixed(1)}`).join(' ');
+  const svg =
+    `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;height:auto;border:1px solid var(--au-border);border-radius:3px;background:var(--au-surface)">` +
+    `<polyline fill="none" stroke="var(--au-info)" stroke-width="1.5" points="${poly(yT, 'tonnage')}"/>` +
+    `<polyline fill="none" stroke="var(--au-action)" stroke-width="1.5" points="${poly(yG, 'grade')}"/>` +
+    `<text x="${pad}" y="${H - 2}" fill="var(--au-fg-muted)" font-size="9">${fmt(gt.gradeMin, 3)}</text>` +
+    `<text x="${W - pad}" y="${H - 2}" fill="var(--au-fg-muted)" font-size="9" text-anchor="end">${fmt(gt.gradeMax, 3)}</text>` +
+    '</svg>';
+  const legend = `<div style="font-size:10px;margin:4px 0"><span style="color:var(--au-info)">■</span> tonnage (above cutoff) &nbsp; <span style="color:var(--au-action)">■</span> mean grade</div>`;
+  // table at ~8 cutoffs
+  const rows = [];
+  for (let k = 0; k <= 7; k++) {
+    const i = Math.min(n - 1, Math.round((k / 7) * (n - 1)));
+    const c = curve[i];
+    rows.push(`<tr><td class="num">${fmt(c.cutoff, 3)}</td><td class="num">${fmt(c.tonnage, 1)}</td><td class="num">${fmt(c.grade, 3)}</td><td class="num">${fmt(c.metal, 1)}</td></tr>`);
+  }
+  res.innerHTML = svg + legend +
+    `<table style="margin-top:6px"><thead><tr><th>cutoff (${esc(grade)})</th><th>tonnage</th><th>mean grade</th><th>metal</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+}
+
+function select(opts, value) {
+  const s = el('select');
+  s.style.cssText = 'background:var(--au-surface-bright);color:var(--au-fg);border:1px solid var(--au-border);border-radius:3px;padding:2px 4px;font:inherit;font-size:11px';
+  for (const o of opts) { const op = el('option'); op.value = o; op.textContent = o; if (o === value) op.selected = true; s.appendChild(op); }
+  return s;
+}
+function label(text, control) {
+  const l = el('label'); l.style.cssText = 'display:inline-flex;gap:4px;align-items:center;color:var(--au-fg-soft)';
+  l.appendChild(document.createTextNode(text)); l.appendChild(control); return l;
 }
 
 function el(t) { return document.createElement(t); }

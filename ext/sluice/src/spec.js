@@ -22,6 +22,7 @@ import { tdigest } from './tdigest.js';
 import { topK, cardinality } from './categorical.js';
 import { histogram } from './histogram.js';
 import { collect, groupBy, binned } from './combinators.js';
+import { gradeTonnage } from './gradetonnage.js';
 
 export function accumulatorFromSpec(spec) {
   if (!spec || typeof spec.kind !== 'string') throw new Error('sluice: accumulator spec needs a `kind`');
@@ -48,6 +49,8 @@ export function accumulatorFromSpec(spec) {
       return groupBy(col(spec.column), () => accumulatorFromSpec(spec.of), { maxGroups: spec.maxGroups, ...weightOpt(spec) });
     case 'binned':
       return binned(col(spec.column), spec.bins, () => accumulatorFromSpec(spec.of), weightOpt(spec));
+    case 'gradeTonnage':
+      return gradeTonnage(spec);   // grade/gradeMin/gradeMax/bins/blockVolume/dims/density
     default:
       throw new Error(`sluice: unknown accumulator spec kind "${spec.kind}"`);
   }

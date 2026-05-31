@@ -329,6 +329,28 @@ test('accumulatorFromSpec: histogram + unknown kind throws', () => {
   assert.throws(() => accumulatorFromSpec({ kind: 'groupBy', of: { kind: 'welford' } }), /column/);
 });
 
+test('gradeTonnage cumulative curve (via spec) + merge == single', () => {
+  const spec = { kind: 'gradeTonnage', grade: 'g', gradeMin: 0, gradeMax: 2, bins: 4, blockVolume: 1000 };
+  const rows = [{ g: 0.5 }, { g: 1.0 }, { g: 1.5 }, { g: 2.0 }];
+  const acc = accumulatorFromSpec(JSON.parse(JSON.stringify(spec)));   // serializable
+  const s = acc.create();
+  for (const r of rows) acc.push(s, r);
+  const out = acc.result(s);
+  assert.equal(out.count, 4);
+  assert.ok(approx(out.curve[0].tonnage, 4000) && approx(out.curve[0].metal, 5000) && approx(out.curve[0].grade, 1.25), 'cutoff 0');
+  assert.ok(approx(out.curve[2].tonnage, 3000) && approx(out.curve[2].grade, 1.5), 'cutoff 1.0');
+  // tonnage-weighted by a density column
+  const dacc = accumulatorFromSpec({ kind: 'gradeTonnage', grade: 'g', gradeMin: 0, gradeMax: 2, bins: 4, blockVolume: 1000, density: 'rho' });
+  const ds = dacc.create();
+  dacc.push(ds, { g: 1.5, rho: 3 });          // tonnage = 1000 * 3 = 3000
+  assert.ok(approx(dacc.result(ds).curve[0].tonnage, 3000));
+  // parallel-merge equivalence
+  const a = acc.create(); acc.push(a, rows[0]); acc.push(a, rows[1]);
+  const b = acc.create(); acc.push(b, rows[2]); acc.push(b, rows[3]);
+  const m = acc.result(acc.merge(a, b));
+  assert.ok(approx(m.curve[0].tonnage, 4000) && approx(m.curve[2].grade, 1.5), 'merge == single');
+});
+
 test('chunks exposes raw Blob slices (for by-reference worker dispatch)', async () => {
   let csv = 'X,G\n';
   for (let i = 0; i < 200; i++) csv += `${i},${i % 3}\n`;

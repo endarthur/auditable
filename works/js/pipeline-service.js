@@ -91,6 +91,18 @@ export function createPipelineRegistry(vfs) {
     },
   });
 
+  // gt — cumulative grade-tonnage curve over a grade column. Tonnage model:
+  // a fixed blockVolume or dx·dy·dz columns, × an optional density column.
+  reg.register({
+    type: 'gt', version: 1, inputs: { table: 'table', manifest: 'any' }, outputs: { gt: 'scalar' },
+    compute: async (i, p) => ({
+      gt: await runColumnAcc(i.table, i.manifest, {
+        kind: 'gradeTonnage', grade: p.grade, gradeMin: p.gradeMin, gradeMax: p.gradeMax,
+        bins: p.bins || 200, blockVolume: p.blockVolume ?? null, dims: p.dims ?? null, density: p.density ?? null,
+      }),
+    }),
+  });
+
   // summary — one scan over the whole table producing per-column stats: welford
   // for numeric columns, top-K for categorical. Drives the workbench surface's
   // schema + summary-stats + categories views in a single pull.

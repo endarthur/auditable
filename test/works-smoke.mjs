@@ -939,6 +939,7 @@ const wbOpen = await page.evaluate(async () => {
   return { tabId, ready: !!(rec && rec.ready) };
 });
 let wbView = { ok: false };
+let gtView = { ok: false };
 if (wbOpen.ready) {
   const fr = await surfaceFrame(wbOpen.tabId);
   if (fr) {
@@ -946,7 +947,7 @@ if (wbOpen.ready) {
       document.getElementById('path').value = '/projects/smoke.csv';
       document.getElementById('load').click();
     });
-    const deadline = Date.now() + 20000;
+    let deadline = Date.now() + 20000;
     while (Date.now() < deadline) {
       wbView = await fr.evaluate(() => {
         const out = document.getElementById('out');
@@ -955,11 +956,26 @@ if (wbOpen.ready) {
           hasAuColumn: text.includes('Au_gpt'),
           hasLito: text.includes('LITO'),
           cols: out ? out.querySelectorAll('td.name').length : 0,
-          status: (document.getElementById('status') || {}).textContent || '',
         };
       });
       if (wbView.hasAuColumn && wbView.cols >= 5) { wbView.ok = true; break; }
       await page.waitForTimeout(150);
+    }
+    // Drive the grade-tonnage view: click its Compute button, await the curve.
+    if (wbView.ok) {
+      await fr.evaluate(() => {
+        const b = [...document.querySelectorAll('button')].find((x) => x.textContent === 'Compute');
+        if (b) b.click();
+      });
+      deadline = Date.now() + 20000;
+      while (Date.now() < deadline) {
+        gtView = await fr.evaluate(() => {
+          const r = document.getElementById('gt-result');
+          return { hasSvg: !!(r && r.querySelector('svg')), hasTable: !!(r && r.querySelector('table')) };
+        });
+        if (gtView.hasSvg && gtView.hasTable) { gtView.ok = true; break; }
+        await page.waitForTimeout(150);
+      }
     }
   }
 }
@@ -1215,6 +1231,7 @@ const checks = {
   'workbench: surface opens':              wbOpen.ready === true,
   'workbench: renders schema + stats from the pipeline': wbView.ok === true
       && wbView.hasAuColumn && wbView.hasLito,
+  'workbench: grade-tonnage curve renders':  gtView.ok === true,
 };
 
 console.log('--- works.html (Works rebuild — Chunks 1-3, 5 + surfaces) ---');

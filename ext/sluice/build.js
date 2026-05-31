@@ -12,7 +12,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const srcDir = path.join(__dirname, 'src');
 
 // Manifest order (accumulator first; runner last).
-const files = ['accumulator.js', 'tdigest.js', 'categorical.js', 'histogram.js', 'combinators.js', 'spec.js', 'runner.js'];
+const files = ['accumulator.js', 'tdigest.js', 'categorical.js', 'histogram.js', 'combinators.js', 'gradetonnage.js', 'spec.js', 'runner.js'];
 
 const exported = new Set();
 const chunks = [];
