@@ -927,6 +927,43 @@ const pipeline = await page.evaluate(async () => {
   };
 });
 
+// ── Data Workbench surface (exploration UI over the pipeline service) ──
+// Spawn the surface, drive its path input → it pulls recon schema + sluice
+// summary stats from the `pipeline` service and renders them.
+const wbOpen = await page.evaluate(async () => {
+  const W = window.WKS;
+  const tabId = W.spawnSurface('workbench', { title: 'Data Workbench' });
+  const rec = W.surfaces.get(tabId);
+  const deadline = Date.now() + 20000;
+  while (rec && !rec.ready && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+  return { tabId, ready: !!(rec && rec.ready) };
+});
+let wbView = { ok: false };
+if (wbOpen.ready) {
+  const fr = await surfaceFrame(wbOpen.tabId);
+  if (fr) {
+    await fr.evaluate(() => {           // smoke.csv was written by the pipeline section above
+      document.getElementById('path').value = '/projects/smoke.csv';
+      document.getElementById('load').click();
+    });
+    const deadline = Date.now() + 20000;
+    while (Date.now() < deadline) {
+      wbView = await fr.evaluate(() => {
+        const out = document.getElementById('out');
+        const text = out ? out.textContent : '';
+        return {
+          hasAuColumn: text.includes('Au_gpt'),
+          hasLito: text.includes('LITO'),
+          cols: out ? out.querySelectorAll('td.name').length : 0,
+          status: (document.getElementById('status') || {}).textContent || '',
+        };
+      });
+      if (wbView.hasAuColumn && wbView.cols >= 5) { wbView.ok = true; break; }
+      await page.waitForTimeout(150);
+    }
+  }
+}
+
 // ── Workspace export / import round-trip (Chunk 5b) ───────────────────
 // Serialize the live workspace, build a self-contained HTML, then open it —
 // it must boot the desktop over the embedded snapshot.
@@ -1174,6 +1211,10 @@ const checks = {
   'pipeline: scan ran on the @gcu/proc worker pool': pipeline.pooled === true
       && pipeline.scanMode === 'parallel',
   'pipeline: no error':                    !pipeline.err,
+  // Data Workbench surface
+  'workbench: surface opens':              wbOpen.ready === true,
+  'workbench: renders schema + stats from the pipeline': wbView.ok === true
+      && wbView.hasAuColumn && wbView.hasLito,
 };
 
 console.log('--- works.html (Works rebuild — Chunks 1-3, 5 + surfaces) ---');

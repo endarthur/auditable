@@ -47,16 +47,18 @@ function ensureParallel() {
 // parallel across workers when available, inline otherwise. Same result either way.
 async function runColumnAcc(blob, manifest, accSpec) {
   const parseOpts = { delimiter: manifest.delimiter, columns: manifest.columns };
+  let out;
   const par = ensureParallel();
   if (par) {
-    try {
-      const r = await scanParallel({ sluice, pool: par.pool, sluiceUrl: par.sluiceUrl, blob, parseOpts, accSpec });
-      _lastScanMode = 'parallel';
-      return r;
-    } catch { _lastScanMode = 'fallback'; /* e.g. file:// cross-blob import block */ }
+    try { out = await scanParallel({ sluice, pool: par.pool, sluiceUrl: par.sluiceUrl, blob, parseOpts, accSpec }); _lastScanMode = 'parallel'; }
+    catch { _lastScanMode = 'fallback'; /* e.g. file:// cross-blob import block */ }
   } else { _lastScanMode = 'inline'; }
-  const acc = sluice.accumulatorFromSpec(accSpec);
-  return sluice.scan(sluice.recipe(sluice.fromBlob(blob), sluice.parseCsv({ ...parseOpts, header: true })), acc);
+  if (out === undefined) {
+    const acc = sluice.accumulatorFromSpec(accSpec);
+    out = await sluice.scan(sluice.recipe(sluice.fromBlob(blob), sluice.parseCsv({ ...parseOpts, header: true })), acc);
+  }
+  // Strip non-serializable bits (topK's top() closure) so the result crosses A-Bus.
+  return JSON.parse(JSON.stringify(out));
 }
 
 export function createPipelineRegistry(vfs) {
@@ -86,6 +88,21 @@ export function createPipelineRegistry(vfs) {
     compute: async (i, p) => {
       const out = await runColumnAcc(i.table, i.manifest, { kind: 'collect', fields: { c: { column: p.column, of: { kind: 'topK' } } } });
       return { categories: out.c };
+    },
+  });
+
+  // summary — one scan over the whole table producing per-column stats: welford
+  // for numeric columns, top-K for categorical. Drives the workbench surface's
+  // schema + summary-stats + categories views in a single pull.
+  reg.register({
+    type: 'summary', version: 1, inputs: { table: 'table', manifest: 'any' }, outputs: { summary: 'scalar' },
+    compute: async (i) => {
+      const fields = {};
+      for (const c of i.manifest.columns) {
+        if (c.type === 'numeric') fields[c.name] = { column: c.name, of: { kind: 'welford' } };
+        else if (c.type === 'categorical') fields[c.name] = { column: c.name, of: { kind: 'topK', limit: 50 } };
+      }
+      return { summary: await runColumnAcc(i.table, i.manifest, { kind: 'collect', fields }) };
     },
   });
 

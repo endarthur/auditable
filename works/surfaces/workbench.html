@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>Data Workbench</title>
+<style>
+  /* @theme-tokens */
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--au-surface); color: var(--au-fg);
+    font: 12px/1.5 ui-sans-serif, 'Barlow', system-ui, sans-serif;
+    display: flex; flex-direction: column;
+  }
+  header {
+    flex: none; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 6px 10px; border-bottom: 1px solid var(--au-border); background: var(--au-surface-raised);
+  }
+  header .title { font-weight: 600; }
+  header .spacer { flex: 1; }
+  header .status { color: var(--au-fg-soft); font-size: 11px; }
+  input, button {
+    background: var(--au-surface-bright); color: var(--au-fg);
+    border: 1px solid var(--au-border); border-radius: 3px; padding: 3px 8px; font: inherit;
+  }
+  input.path { width: 280px; font-family: ui-monospace, 'Space Mono', monospace; font-size: 11px; }
+  button { cursor: pointer; }
+  button:hover { filter: brightness(1.1); }
+  .scroll { flex: 1; overflow: auto; padding: 10px 12px; }
+  section { margin-bottom: 18px; }
+  h2 {
+    font-size: 10px; letter-spacing: 0.09em; text-transform: uppercase;
+    color: var(--au-fg-soft); margin: 0 0 6px; font-weight: 600;
+  }
+  table { border-collapse: collapse; width: 100%; font-size: 11px; }
+  th, td { text-align: left; padding: 3px 8px; border-bottom: 1px solid color-mix(in srgb, var(--au-border) 50%, transparent); white-space: nowrap; }
+  th { color: var(--au-fg-soft); font-weight: 600; position: sticky; top: 0; background: var(--au-surface); }
+  td.num { text-align: right; font-family: ui-monospace, 'Space Mono', monospace; }
+  td.name { font-family: ui-monospace, 'Space Mono', monospace; color: var(--au-fg); }
+  .tag {
+    display: inline-block; padding: 0 5px; border-radius: 3px; font-size: 10px;
+    background: var(--au-surface-bright); color: var(--au-fg-soft); margin-right: 3px;
+  }
+  .tag.numeric { color: var(--au-info); }
+  .tag.categorical { color: var(--au-action); }
+  .tag.role { color: var(--au-success); }
+  .tag.unit, .tag.analyte { color: var(--au-fg); }
+  .conf { color: var(--au-fg-muted); font-size: 10px; }
+  .cats { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+  .cat { font-size: 11px; }
+  .cat .v { font-family: ui-monospace, 'Space Mono', monospace; }
+  .cat .c { color: var(--au-fg-muted); }
+  .empty { color: var(--au-fg-soft); padding: 16px 4px; }
+  .grid-facet { color: var(--au-fg-soft); font-size: 11px; margin-top: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="title">Data Workbench</span>
+  <input class="path" id="path" placeholder="/projects/…csv" spellcheck="false">
+  <button id="load">Analyze</button>
+  <span class="spacer"></span>
+  <span class="status" id="status">point at a CSV in the workspace</span>
+</header>
+<div class="scroll" id="out">
+  <div class="empty">No data loaded. Type a workspace path (e.g. <code>/projects/blocks.csv</code>) and click Analyze.</div>
+</div>
+<script type="module">
+import { connect } from '../../ext/abus/index.js';
+
+/* @theme-init */
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const fmt = (v, d = 4) => (v === null || v === undefined || !Number.isFinite(v)) ? '—'
+  : (Math.abs(v) >= 1e6 || (v !== 0 && Math.abs(v) < 1e-4)) ? v.toExponential(2) : Number(v.toFixed(d)).toString();
+
+let bus = null;
+const status = (s) => { $('status').textContent = s; };
+const call = (member, args) => bus.call({ to: 'pipeline', path: '/', interface: 'Pipeline', member }, args);
+
+window.addEventListener('message', async (ev) => {
+  if (ev.source !== window.parent) return;
+  if (!ev.data || ev.data.type !== 'abus:welcome') return;
+  try { bus = await connect(ev.data.port, { client: 'workbench' }); }
+  catch (e) { status('connect failed: ' + e.message); return; }
+  installThemeSubscription(bus);
+  try { await bus.claim('workbench-' + (ev.data.tab && ev.data.tab.id || 'x')); } catch { /* */ }
+
+  bus.expose('/', {
+    Surface: {
+      methods: { Flush: () => {}, CanClose: () => true, Relocated: () => {} },
+      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
+    },
+  });
+
+  $('load').addEventListener('click', () => { const p = $('path').value.trim(); if (p) analyze(p); });
+  $('path').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('load').click(); });
+
+  const path = ev.data.tab && ev.data.tab.path;
+  bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' },
+    [path ? 'Workbench · ' + path.split('/').pop() : 'Data Workbench']);
+  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
+
+  if (path) { $('path').value = path; analyze(path); }
+});
+
+async function analyze(path) {
+  status('analyzing ' + path + ' …');
+  const graph = { nodes: [
+    { id: 'src', type: 'load.csv', params: { path } },
+    { id: 'snf', type: 'recon.sniff', wiring: { table: { node: 'src', port: 'table' } } },
+    { id: 'sum', type: 'summary',
+      wiring: { table: { node: 'src', port: 'table' }, manifest: { node: 'snf', port: 'manifest' } } },
+  ] };
+  let manifest, summary, worker;
+  try {
+    manifest = await call('Pull', [graph, 'snf', 'manifest']);
+    summary = await call('Pull', [graph, 'sum', 'summary']);
+    worker = await call('WorkerInfo', []);
+  } catch (e) { status('error: ' + esc(e.message)); return; }
+  render(manifest, summary);
+  const mode = worker && worker.lastScanMode === 'parallel' ? `${worker.workers}-worker scan` : 'inline scan';
+  status(`${manifest.columns.length} columns · ${mode} · ${path}`);
+}
+
+function render(m, summary) {
+  const out = $('out');
+  out.textContent = '';
+  out.appendChild(schemaSection(m));
+  out.appendChild(statsSection(m, summary));
+  out.appendChild(catsSection(m, summary));
+}
+
+function schemaSection(m) {
+  const sec = el('section'); sec.appendChild(h2('Schema'));
+  const t = el('table');
+  t.innerHTML = '<thead><tr><th>column</th><th>type</th><th>role</th><th>unit</th><th>analyte</th></tr></thead>';
+  const tb = el('tbody');
+  for (const c of m.columns) {
+    const conf = (k) => c.confidence && c.confidence[k] != null ? ` <span class="conf">${Math.round(c.confidence[k] * 100)}%</span>` : '';
+    const tr = el('tr');
+    tr.innerHTML =
+      `<td class="name">${esc(c.name)}</td>` +
+      `<td><span class="tag ${esc(c.type)}">${esc(c.type)}</span></td>` +
+      `<td>${c.role ? `<span class="tag role">${esc(c.role)}</span>${conf('role')}` : ''}${c.constant ? '<span class="tag">const</span>' : ''}</td>` +
+      `<td>${c.unit ? `<span class="tag unit">${esc(c.unit)}</span>${conf('unit')}` : ''}</td>` +
+      `<td>${c.analyte ? `<span class="tag analyte">${esc(c.analyte)}</span>${conf('analyte')}` : ''}</td>`;
+    tb.appendChild(tr);
+  }
+  t.appendChild(tb); sec.appendChild(t);
+  const cc = m.coordCols || {};
+  if (cc.x || cc.y || cc.z) {
+    const g = el('div'); g.className = 'grid-facet';
+    g.textContent = 'coordinates detected: ' + ['x', 'y', 'z'].filter((a) => cc[a]).map((a) => `${a.toUpperCase()}=${cc[a]}`).join('  ');
+    sec.appendChild(g);
+  }
+  return sec;
+}
+
+function statsSection(m, summary) {
+  const cols = m.columns.filter((c) => c.type === 'numeric');
+  const sec = el('section'); sec.appendChild(h2('Summary statistics'));
+  if (!cols.length) { sec.appendChild(emptyDiv('no numeric columns')); return sec; }
+  const t = el('table');
+  t.innerHTML = '<thead><tr><th>column</th><th>count</th><th>mean</th><th>std</th><th>min</th><th>max</th><th>zeros</th></tr></thead>';
+  const tb = el('tbody');
+  for (const c of cols) {
+    const s = (summary && summary[c.name]) || {};
+    const tr = el('tr');
+    tr.innerHTML =
+      `<td class="name">${esc(c.name)}${c.unit ? ` <span class="conf">${esc(c.unit)}</span>` : ''}</td>` +
+      `<td class="num">${s.count ?? 0}</td><td class="num">${fmt(s.mean)}</td><td class="num">${fmt(s.std)}</td>` +
+      `<td class="num">${fmt(s.min)}</td><td class="num">${fmt(s.max)}</td><td class="num">${s.zeros ?? 0}</td>`;
+    tb.appendChild(tr);
+  }
+  t.appendChild(tb); sec.appendChild(t); return sec;
+}
+
+function catsSection(m, summary) {
+  const cols = m.columns.filter((c) => c.type === 'categorical');
+  const sec = el('section'); sec.appendChild(h2('Categories'));
+  if (!cols.length) { sec.appendChild(emptyDiv('no categorical columns')); return sec; }
+  for (const c of cols) {
+    const s = (summary && summary[c.name]) || {};
+    const counts = s.counts || {};
+    const top = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 12);
+    const blk = el('div'); blk.style.marginBottom = '10px';
+    const head = el('div');
+    head.innerHTML = `<span class="name">${esc(c.name)}</span> <span class="conf">${s.distinct ?? top.length} distinct${s.overflow ? '+' : ''}</span>`;
+    blk.appendChild(head);
+    const cats = el('div'); cats.className = 'cats';
+    for (const [v, n] of top) {
+      const d = el('div'); d.className = 'cat';
+      d.innerHTML = `<span class="v">${esc(v)}</span> <span class="c">${n}</span>`;
+      cats.appendChild(d);
+    }
+    blk.appendChild(cats); sec.appendChild(blk);
+  }
+  return sec;
+}
+
+function el(t) { return document.createElement(t); }
+function h2(t) { const h = el('h2'); h.textContent = t; return h; }
+function emptyDiv(t) { const d = el('div'); d.className = 'empty'; d.textContent = t; return d; }
+</script>
+</body>
+</html>

@@ -678,6 +678,7 @@ if (target === 'works' || target === 'works-all') {
     { kind: 'preview',   file: 'works/surfaces/preview.html',   deps: ['abus'] },
     { kind: 'inspector', file: 'works/surfaces/inspector.html', deps: ['abus'] },
     { kind: 'settings',  file: 'works/surfaces/settings.html',  deps: ['abus'] },
+    { kind: 'workbench', file: 'works/surfaces/workbench.html', deps: ['abus'] },
     { kind: 'docs',      file: 'works/surfaces/docs.html',
       deps: ['abus', 'markdown', 'librarian', 'docview'] },
     { kind: 'book',      file: 'works/surfaces/reader.html',

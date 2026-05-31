@@ -438,6 +438,7 @@ registerKind('patchbay', { label: 'Patchbay', icon: '⊞', extensions: ['.patchb
 // The A-Bus inspector — a diagnostic surface, spawned from the Debug menu
 // (not tied to a VFS path).
 registerKind('inspector', { label: 'A-Bus Inspector', icon: '◉', extensions: [] });
+registerKind('workbench', { label: 'Data Workbench', icon: '▤', extensions: [] });
 
 // Workspace settings — appearance, mounts, storage home. Single-instance
 // (the spawner re-uses the open tab if one exists). Tools → Settings…
