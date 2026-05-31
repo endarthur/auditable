@@ -190,6 +190,12 @@ export async function decompressLibs() {
   if (initEl) _themeAssets.init = await _decompressEl(initEl);
 }
 
+// A decompressed shared-library bundle source (or null). Used by the pipeline
+// service to make an import()-able blob URL of @gcu/sluice for proc scan workers.
+export function getLibSource(name) {
+  return _libSources.get(name) || null;
+}
+
 // Write each shared library into the workspace's /usr/lib as a module
 // directory — the same layout the notebook's hydrateModulesFromVfs reads
 // from /lib (pkg-spec §3.1: sub-namespaced by source). A notebook can

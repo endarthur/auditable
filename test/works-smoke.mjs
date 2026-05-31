@@ -896,8 +896,11 @@ const pbFlush = await page.evaluate(async (uniqueName) => {
 // small result crosses A-Bus. [load.csv → recon.sniff → stats], pulled by name.
 const pipeline = await page.evaluate(async () => {
   const W = window.WKS;
-  await W.vfs.writeFile('/projects/smoke.csv',
-    'X,Y,Z,Au_gpt,LITO\n1005,2005,302.5,1.2,A\n1015,2005,302.5,0.8,B\n1025,2005,302.5,3.0,A\n');
+  // A multi-KB CSV so the scan chunks into several pieces → the worker pool
+  // actually engages (tiny inputs scan inline). Au_gpt = i/1000 → mean 0.9995.
+  let csv = 'X,Y,Z,Au_gpt,LITO\n';
+  for (let i = 0; i < 2000; i++) csv += `${1000 + i * 10},2005,302.5,${(i * 0.001).toFixed(3)},${i % 2 ? 'A' : 'B'}\n`;
+  await W.vfs.writeFile('/projects/smoke.csv', csv);
   const graph = { nodes: [
     { id: 'src', type: 'load.csv', params: { path: '/projects/smoke.csv' } },
     { id: 'snf', type: 'recon.sniff', wiring: { table: { node: 'src', port: 'table' } } },
@@ -906,12 +909,13 @@ const pipeline = await page.evaluate(async () => {
   ] };
   const call = (member, args) => W.worksBus.call(
     { to: 'pipeline', path: '/', interface: 'Pipeline', member }, args);
-  let types = null, valid = null, manifest = null, stats = null, err = null;
+  let types = null, valid = null, manifest = null, stats = null, worker = null, err = null;
   try {
     types = await call('NodeTypes', []);
     valid = await call('Validate', [graph]);
     manifest = await call('Pull', [graph, 'snf', 'manifest']);
     stats = await call('Pull', [graph, 'st', 'stats']);
+    worker = await call('WorkerInfo', []);
   } catch (e) { err = e.message; }
   return {
     types, validOk: valid && valid.ok, err,
@@ -919,6 +923,7 @@ const pipeline = await page.evaluate(async () => {
     auUnit: manifest && (manifest.columns.find((c) => c.name === 'Au_gpt') || {}).unit,
     mean: stats && stats.v && stats.v.mean,
     count: stats && stats.v && stats.v.count,
+    pooled: worker && worker.pooled, scanMode: worker && worker.lastScanMode,
   };
 });
 
@@ -1164,8 +1169,10 @@ const checks = {
       && pipeline.types.includes('load.csv') && pipeline.types.includes('stats'),
   'pipeline: Validate ok':                 pipeline.validOk === true,
   'pipeline: recon.sniff over a VFS file':  pipeline.coordX === 'X' && pipeline.auUnit === 'g/t',
-  'pipeline: stats pull (engine shell-side)': pipeline.count === 3
-      && Math.abs(pipeline.mean - 5 / 3) < 1e-9,
+  'pipeline: stats pull (engine shell-side)': pipeline.count === 2000
+      && Math.abs(pipeline.mean - 0.9995) < 1e-6,
+  'pipeline: scan ran on the @gcu/proc worker pool': pipeline.pooled === true
+      && pipeline.scanMode === 'parallel',
   'pipeline: no error':                    !pipeline.err,
 };
 

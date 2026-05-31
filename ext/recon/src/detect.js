@@ -48,10 +48,11 @@ export function buildContext(lines, { delimiter, comment = '#' } = {}) {
   const baseTypes = header.map((_, c) => {
     const total = num[c] + nonNum[c];
     if (total === 0) return 'numeric';
-    if (nonNum[c] === 0) {
-      // all-numeric: an id if (near-)unique across the sample
-      return (n >= 8 && distinct[c].size >= n * 0.98) ? 'id' : 'numeric';
-    }
+    // All-numeric → numeric, even if (near-)unique. A fine-resolution grade is
+    // all-distinct numbers but is NOT an id; id-ness is a ROLE (the `id`
+    // heuristic, name + cardinality), orthogonal to the base type. Typing a
+    // grade as `id` here would make parseCsv read it as a string → stats break.
+    if (nonNum[c] === 0) return 'numeric';
     if (num[c] === 0) return 'categorical';
     return num[c] / total > 0.8 ? 'numeric' : 'categorical';
   });

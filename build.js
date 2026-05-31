@@ -151,9 +151,12 @@ if (target === 'works' || target === 'works-all') {
     // The geoscience/tabular workbench base libs — imported by the shell-side
     // pipeline service (works/js/pipeline-service.js): the @gcu/flowsheet engine
     // running over @gcu/sluice (streaming stats) + @gcu/recon (schema sniffing).
+    // proc: the worker substrate — pipeline-service fans heavy scans across a
+    // @gcu/proc Pool (shell-side; the terminal surface bundles proc separately).
     ['sluice',    'ext/sluice/index.js'],
     ['recon',     'ext/recon/index.js'],
     ['flowsheet', 'ext/flowsheet/index.js'],
+    ['proc',      'ext/proc/index.js'],
   ]) {
     const p = path.join(__dirname, rel);
     if (!fs.existsSync(p)) {

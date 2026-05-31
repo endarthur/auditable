@@ -18,6 +18,7 @@ import './extension-loader.js';
 import './layout.js';
 import './surfaces.js';
 import './works-service.js';
+import './pipeline-workers.js';
 import './pipeline-service.js';
 import './import.js';
 import './book-import.js';
