@@ -86,10 +86,20 @@ const unitsH = {
 
 const analyteH = {
   name: 'analyte', pack: 'geo',
-  detect: (ctx) => ctx.header.map((name) => {
-    const a = detectAnalyte(name);
-    return a ? { target: name, key: 'analyte', value: a.analyte, confidence: a.confidence, source: 'analyte' } : null;
-  }).filter(Boolean),
+  // Coord-aware: a column already detected as a coordinate/size axis is NOT an
+  // analyte — resolves single-letter element clashes (a "Y" axis vs Yttrium, "V"
+  // vs Vanadium, etc.). coordsH runs first in the geo pack, so its role
+  // annotations are already in ctx.annotations.
+  detect: (ctx) => {
+    const coords = new Set(ctx.annotations
+      .filter((a) => a.key === 'role' && /^(coord|size)-/.test(a.value))
+      .map((a) => a.target));
+    return ctx.header.map((name) => {
+      if (coords.has(name)) return null;
+      const a = detectAnalyte(name);
+      return a ? { target: name, key: 'analyte', value: a.analyte, confidence: a.confidence, source: 'analyte' } : null;
+    }).filter(Boolean);
+  },
 };
 
 export const geoPack = [coordsH, unitsH, analyteH];

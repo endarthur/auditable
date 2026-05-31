@@ -61,6 +61,15 @@ test('sniff annotates types, roles, units, analytes', () => {
   assert.ok(Array.isArray(m.annotations) && m.annotations.length > 0);
 });
 
+test('analyte detection is coord-aware (Y axis is not Yttrium)', () => {
+  // X/Y/Z are coordinates; Au_gpt is a grade. Y must NOT be tagged analyte Y.
+  const lines = ['X,Y,Z,Au_gpt', '1005,2005,302.5,1.2', '1015,2015,307.5,0.8'];
+  const m = sniff(lines);
+  assert.equal(col(m, 'Y').role, 'coord-y');
+  assert.equal(col(m, 'Y').analyte, undefined, 'Y axis not flagged as Yttrium');
+  assert.equal(col(m, 'Au_gpt').analyte, 'Au', 'real grade still detected');
+});
+
 test('sniff id detection', () => {
   const lines = ['HOLEID,FROM,TO', 'DDH001,0,1', 'DDH002,1,2', 'DDH003,2,3', 'DDH004,3,4', 'DDH005,4,5', 'DDH006,5,6', 'DDH007,6,7', 'DDH008,7,8'];
   const m = sniff(lines);
