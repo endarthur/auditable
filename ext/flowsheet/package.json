@@ -1,0 +1,31 @@
+{
+  "name": "@gcu/flowsheet",
+  "version": "0.1.0",
+  "description": "Lazy, content-addressed pipeline (lineage) engine: an explicit dataflow graph of heavy operations over named datasets, evaluated lazily with a content-addressed cache so editing a parameter recomputes only what it changed. Host-agnostic execution backend. Zero dependencies.",
+  "type": "module",
+  "main": "./src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["pipeline", "dataflow", "lineage", "dag", "content-addressed", "lazy", "cache", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/flowsheet"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/flowsheet",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}
