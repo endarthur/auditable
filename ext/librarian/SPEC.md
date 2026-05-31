@@ -205,3 +205,42 @@ Each source file has one job. The shape of an inverted index is documented in th
 ## Versioning
 
 Pre-1.0 means the index format is not stabilized — bumps may change the serialization format. APIs are unlikely to change shape, but expansions to `Librarian.*` may add fields to result objects.
+
+## v2 direction — one engine, not two  *(agreed 2026-06-01; not yet built)*
+
+A v2 redesign (driven by `@gcu/weir`, which needs ranked full-text over 10k–100k
+never-deleted docs) raises the "~10 000 docs" ceiling above to ~100k full-body
+docs in a few hundred MB, with faster search. Full design + benchmarks:
+`spec_inbox/librarian-search-spec.md` + the runnable `bench/lean-prototype.mjs`
+(reproduced: 50k excerpts 912 MB → 15 MB, 10k full bodies 2.3 GB → 36 MB, ~60×,
+and search *faster*).
+
+**The decision that governs the build: unify, don't dual-mode.** The lean
+typed-array CSR index becomes the *sole* index representation; the current
+nested-`Map` representation is **retired, not kept as a parallel "v1 mode."**
+Everything v1 offers that the lean core drops — **stored text** (for snippets
+without a consumer callback), **true multi-field BM25F**, **positions**, **JSON
+serialize** — comes back as **opt-in flags on the one engine**
+(`storeText`, `fields: multi|folded`, `positions`, `serialize: json|binary`).
+So "v1 vs lean" is feature flags on a single representation, not two code paths
+to rot.
+
+Non-negotiable gate: the unified engine, with `storeText` + multi-field **on**,
+must pass librarian's *existing* test suite byte-for-byte (+ a CJK regression
+test). Only then is the nested-`Map` representation deleted. Auditable's two
+consumers — the docs Ctrl+K search and the reader's per-book search — migrate in
+the **same pass** (flags on → identical behavior; the existing search tests are
+the guard), so the lib is never left in a two-representation half-state. New
+large-corpus consumers (weir) flip the flags off + add `addDoc`/`removeDoc`/
+`compact` (incremental) + `pack`/`unpack` (binary) + the optional `scan` blob
+path. Build it here, upstream-first; do **not** prototype-and-fork in a consumer.
+
+## Vendoring (canonical source)
+
+**`ext/librarian/` in the `auditable` repo is the single canonical source.**
+Consumers (weir, …) **vendor it by a sync script** (mirror
+`gcu-library/tools/sync-reader-libs.mjs`) — they do **not** hand-edit the
+vendored copy. Fixes and features go **upstream-first**: write a spec, patch the
+canon here, rebuild, then re-vendor in the consumer (exactly how the `@gcu/sideact`
+multi-root fix and `@gcu/reader-core` flow). **Never fork the vendored copy** —
+a patched-in-place vendor is how canon silently drifts. One librarian, everywhere.
