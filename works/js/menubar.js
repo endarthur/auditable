@@ -41,6 +41,7 @@ export function setupMenuBar() {
     ] },
     { label: 'Tools', items: () => [
       { label: 'Terminal',  action: 'tools:terminal' },
+      { label: 'Library',   action: 'tools:library' },
       { label: 'New rack',  action: 'tools:patchbay' },
       { label: 'Settings…', action: 'tools:settings' },
     ] },
@@ -85,6 +86,7 @@ export function setupMenuBar() {
       spawnSurface('terminal', { title: 'Terminal' });
       return;
     }
+    if (action === 'tools:library') { spawnSurface('library', { title: 'Library' }); return; }
     if (action === 'tools:patchbay') { await newRack(); return; }
     if (action === 'tools:settings') {
       // Single-instance: focus the existing settings tab if any.

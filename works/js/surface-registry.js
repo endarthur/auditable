@@ -455,3 +455,7 @@ registerKind('book', { label: 'Book', icon: '▤', extensions: [] });
 // spawnable; intentionally NOT wired into openPath dispatch — it's reached
 // only via the opt-in easter-egg affordance (see menubar). An easter egg.
 registerKind('dd60', { label: 'DADA Diskman', icon: '▥', extensions: [] });
+
+// The content-registry browser — a full-pane shelf over the same registry the
+// Browse Library dialog uses (drives install via the works Shell interface).
+registerKind('library', { label: 'Library', icon: '❏', extensions: [] });

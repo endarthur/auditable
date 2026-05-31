@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>Library</title>
+<style>
+  /* @theme-tokens */
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--au-surface); color: var(--au-fg);
+    font: 13px/1.5 'Barlow', system-ui, sans-serif; display: flex; flex-direction: column; }
+  * { scrollbar-width: thin; scrollbar-color: var(--au-border) var(--au-surface-deep); }
+  *::-webkit-scrollbar { width: 9px; height: 9px; }
+  *::-webkit-scrollbar-thumb { background: var(--au-border); border-radius: 4px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+
+  header { flex: none; display: flex; gap: 8px; align-items: center; padding: 8px 14px;
+    border-bottom: 1px solid var(--au-border); background: var(--au-surface-raised); }
+  header .title { font-family: ui-monospace,'Space Mono',monospace; font-weight: 600; letter-spacing: 1px; font-size: 13px; }
+  header select { flex: 1; min-width: 0; background: var(--au-surface); color: var(--au-fg); border: 1px solid var(--au-border); border-radius: 4px; padding: 4px 7px; font: inherit; }
+  header .spacer { flex: 1; }
+  button { background: var(--au-surface-bright); color: var(--au-fg); border: 1px solid var(--au-border); border-radius: 4px; padding: 4px 10px; cursor: pointer; font: inherit; white-space: nowrap; }
+  button:hover:not(:disabled) { border-color: var(--au-action); }
+  button:disabled { opacity: .5; cursor: default; }
+
+  .toolbar { flex: none; display: flex; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--au-border); }
+  .toolbar input { flex: 1; background: var(--au-surface); color: var(--au-fg); border: 1px solid var(--au-border); border-radius: 4px; padding: 5px 9px; font: inherit; }
+
+  /* add-source panel */
+  .addsrc { flex: none; display: none; flex-direction: column; gap: 7px; padding: 10px 14px; border-bottom: 1px solid var(--au-border); background: var(--au-surface-raised); }
+  .addsrc.open { display: flex; }
+  .addsrc .warn { color: var(--au-warn); font-size: 12px; }
+  .addsrc .row { display: flex; gap: 8px; }
+  .addsrc input { flex: 1; background: var(--au-surface); color: var(--au-fg); border: 1px solid var(--au-border); border-radius: 4px; padding: 5px 9px; font: inherit; }
+
+  .grid { flex: 1; overflow: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; padding: 14px; align-content: start; }
+  .empty { padding: 24px; color: var(--au-fg-soft); font-style: italic; grid-column: 1 / -1; }
+  .card { display: flex; gap: 11px; padding: 11px; border: 1px solid var(--au-border); border-radius: 6px; background: var(--au-surface-raised); }
+  .card .cover { flex: none; width: 56px; height: 74px; border-radius: 3px; background: var(--au-surface-bright); display: grid; place-items: center; color: var(--au-fg-soft); font-size: 26px; overflow: hidden; }
+  .card .cover img { width: 100%; height: 100%; object-fit: cover; }
+  .card .body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .card .ttl { color: var(--au-fg); font-weight: 600; line-height: 1.25; }
+  .card .badges { margin: 4px 0; }
+  .card .badge { font: 10px ui-monospace,monospace; text-transform: uppercase; letter-spacing: .5px; color: var(--au-action); border: 1px solid var(--au-border); border-radius: 3px; padding: 0 5px; margin-right: 5px; }
+  .card .badge.nc { color: var(--au-warn); border-color: var(--au-warn); }
+  .card .meta { color: var(--au-fg-soft); font-size: 11px; }
+  .card .desc { color: var(--au-fg-muted); font-size: 12px; margin: 4px 0 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
+  .card .act { margin-top: auto; padding-top: 7px; }
+  .card .act button.done { color: var(--au-go); border-color: var(--au-go); }
+
+  footer { flex: none; padding: 7px 14px; border-top: 1px solid var(--au-border); color: var(--au-fg-soft); font-size: 11px; }
+  .err { color: var(--au-error); }
+</style>
+</head>
+<body>
+<header>
+  <span class="title">LIBRARY</span>
+  <select id="src"></select>
+  <button id="add">+ Source</button>
+  <button id="rm">Remove</button>
+</header>
+<div class="addsrc" id="addPanel">
+  <div class="warn">⚠ Sources can serve data packs — and code extensions that run in your workspace. Only add sources you trust.</div>
+  <div class="row">
+    <input id="addUrl" type="text" placeholder="https://example.org/registry.json" spellcheck="false" autocomplete="off">
+    <button id="addGo">Add</button>
+    <button id="addCancel">Cancel</button>
+  </div>
+</div>
+<div class="toolbar"><input id="search" type="text" placeholder="Filter the shelf…" spellcheck="false" autocomplete="off"></div>
+<div class="grid" id="grid"><div class="empty">Loading…</div></div>
+<footer id="credit"></footer>
+
+<script type="module">
+import { connect } from '../../ext/abus/index.js';
+/* @theme-init */
+
+const $ = (id) => document.getElementById(id);
+let bus = null;
+let sources = [], current = null, base = '', registry = null;
+
+const callShell = (member, args = []) => bus.call({ to: 'works', path: '/', interface: 'Shell', member }, args);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const fmtSize = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB');
+const isNC = (l) => /\bNC\b|non-?commercial/i.test(String(l || ''));
+const ICON = { books: '▤', geodata: '◴', data: '◳' };
+
+function fillSel() {
+  $('src').innerHTML = '';
+  for (const s of sources) {
+    const o = document.createElement('option'); o.value = s.url; o.textContent = s.name || s.url;
+    if (current && s.url === current.url) o.selected = true;
+    $('src').appendChild(o);
+  }
+  $('rm').disabled = sources.length <= 1;
+}
+
+async function load() {
+  const grid = $('grid'); grid.innerHTML = '<div class="empty">loading…</div>'; $('credit').textContent = '';
+  try {
+    const r = await callShell('RegistryFetch', [current.url]);
+    base = r.base; registry = r.registry;
+    $('credit').textContent = (registry.name || '') + (registry.description ? ' — ' + registry.description : '') + (registry.updated ? '  ·  updated ' + registry.updated : '');
+    render();
+  } catch (e) { registry = null; grid.innerHTML = '<div class="empty err">couldn\'t load this source — ' + esc(e.message || e) + '</div>'; }
+}
+
+async function render() {
+  if (!registry) return;
+  const grid = $('grid'); const q = $('search').value.toLowerCase().trim();
+  const entries = (registry.entries || []).filter((e) =>
+    !q || ((e.title || '') + ' ' + (e.description || '') + ' ' + (e.tags || []).join(' ') + ' ' + (e.datKind || '')).toLowerCase().includes(q));
+  grid.innerHTML = '';
+  if (!entries.length) { grid.innerHTML = '<div class="empty">' + (registry.entries && registry.entries.length ? 'no matches.' : 'this source has no entries.') + '</div>'; return; }
+  for (const e of entries) {
+    const installed = await callShell('RegistryInstalled', [e.name]).catch(() => false);
+    const coverUrl = e.cover ? (/^https?:/.test(e.cover) ? e.cover : base + '/' + e.cover.replace(/^\//, '')) : '';
+    const card = document.createElement('div'); card.className = 'card';
+    card.innerHTML =
+      '<div class="cover">' + (coverUrl ? '<img src="' + esc(coverUrl) + '" alt="">' : (ICON[e.datKind] || ICON.data)) + '</div>'
+      + '<div class="body">'
+      + '<div class="ttl">' + esc(e.title || e.name) + '</div>'
+      + '<div class="badges"><span class="badge">' + esc(e.kind === 'gcupkg' ? 'ext' : (e.datKind || 'data')) + '</span>'
+      + (isNC(e.license) ? '<span class="badge nc" title="Non-commercial — free to share, not to sell">NC</span>' : '') + '</div>'
+      + '<div class="meta">' + esc(e.license || '') + (e.attribution ? ' · ' + esc(e.attribution) : '') + ' · ' + fmtSize(e.size || 0) + (e.version ? ' · v' + esc(e.version) : '') + '</div>'
+      + (e.description ? '<div class="desc">' + esc(e.description) + '</div>' : '')
+      + '<div class="act"></div>'
+      + '</div>';
+    const btn = document.createElement('button');
+    btn.textContent = installed ? 'Installed ✓' : 'Install';
+    if (installed) { btn.className = 'done'; btn.disabled = true; }
+    btn.addEventListener('click', async () => {
+      btn.disabled = true; btn.textContent = '…';
+      try {
+        const dest = await callShell('RegistryInstall', [current.url, e.name]);
+        if (dest) { btn.textContent = 'Installed ✓'; btn.className = 'done'; await callShell('OpenPath', [dest]); }
+        else { btn.disabled = false; btn.textContent = 'Install'; }
+      } catch (err) { btn.disabled = false; btn.textContent = 'Install'; $('credit').textContent = 'install failed: ' + (err.message || err); }
+    });
+    card.querySelector('.act').appendChild(btn);
+    grid.appendChild(card);
+  }
+}
+
+window.addEventListener('message', async (ev) => {
+  if (ev.source !== window.parent || !ev.data || ev.data.type !== 'abus:welcome') return;
+  try { bus = await connect(ev.data.port, { client: 'library-surface' }); }
+  catch (e) { document.body.innerHTML = '<div class="err" style="padding:24px">connect failed: ' + (e.message || e) + '</div>'; return; }
+  try { await bus.claim('library-' + (ev.data.tab && ev.data.tab.id || 'x')); } catch {}
+  if (typeof installThemeSubscription === 'function') installThemeSubscription(bus);
+  bus.expose('/', { Surface: { methods: { Flush: () => {}, CanClose: () => true, Relocated: () => {} }, signals: ['DirtyChanged', 'TitleChanged', 'Ready'] } });
+
+  sources = await callShell('RegistrySources').catch(() => []);
+  if (!sources.length) sources = [{ url: '', name: '(no sources)' }];
+  current = sources[0];
+  fillSel();
+  load();
+
+  $('src').addEventListener('change', () => { current = sources.find((s) => s.url === $('src').value) || sources[0]; load(); });
+  $('search').addEventListener('input', render);
+  $('add').addEventListener('click', () => { $('addPanel').classList.toggle('open'); if ($('addPanel').classList.contains('open')) $('addUrl').focus(); });
+  $('addCancel').addEventListener('click', () => { $('addPanel').classList.remove('open'); $('addUrl').value = ''; });
+  $('addGo').addEventListener('click', async () => {
+    const u = $('addUrl').value.trim(); if (!u) return;
+    await callShell('RegistryAddSource', [u, u]);
+    sources = await callShell('RegistrySources').catch(() => sources);
+    current = sources.find((s) => s.url === u) || sources[0];
+    $('addPanel').classList.remove('open'); $('addUrl').value = '';
+    fillSel(); load();
+  });
+  $('rm').addEventListener('click', async () => {
+    if (sources.length <= 1) return;
+    await callShell('RegistryRemoveSource', [current.url]);
+    sources = await callShell('RegistrySources').catch(() => sources);
+    current = sources[0]; fillSel(); load();
+  });
+
+  bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, ['Library']);
+  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
+});
+</script>
+</body>
+</html>

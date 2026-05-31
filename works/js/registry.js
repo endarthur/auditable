@@ -33,14 +33,23 @@ function resolveSource(url) {
 }
 const resolveEntryUrl = (base, u) => (/^https?:\/\//.test(u) ? u : base + '/' + u.replace(/^\//, ''));
 
-async function fetchRegistry(source) {
-  const { base, jsonUrl } = resolveSource(source.url);
+export async function fetchRegistry(source) {
+  const { base, jsonUrl } = resolveSource(typeof source === 'string' ? source : source.url);
   const res = await fetch(jsonUrl, { cache: 'no-cache' });
   if (!res.ok) throw new Error('HTTP ' + res.status);
   const reg = await res.json();
   if (!reg || reg.registry == null) throw new Error('not a registry.json');
   return { base, registry: reg };
 }
+
+export async function removeSource(url) {
+  const s = await getSources();
+  const next = s.filter((x) => x.url !== url);
+  if (next.length) await setSources(next);
+  return next;
+}
+
+export const isNC = (license) => /\bNC\b|non-?commercial/i.test(String(license || ''));
 
 async function sriOf(bytes) {
   const buf = await crypto.subtle.digest('SHA-256', bytes);
@@ -142,6 +151,7 @@ const STYLE = `
 .reg-row .body { flex:1; min-width:0; }
 .reg-row .ttl { color:var(--au-fg); font-weight:600; }
 .reg-row .badge { font:10px ui-monospace,monospace; text-transform:uppercase; letter-spacing:.5px; color:var(--au-action); border:1px solid var(--au-border); border-radius:3px; padding:0 5px; margin-left:6px; }
+.reg-row .badge.nc { color:var(--au-warn); border-color:var(--au-warn); }
 .reg-row .meta { color:var(--au-fg-soft); font-size:11px; margin-top:2px; }
 .reg-row .desc { color:var(--au-fg-muted); font-size:12px; margin-top:3px; }
 .reg-row .tags { color:var(--au-fg-soft); font:10px ui-monospace,monospace; margin-top:3px; }
@@ -198,7 +208,8 @@ export async function openLibraryDialog() {
           const installed = await isInstalled(e);
           row.innerHTML =
             '<div class="body">'
-            + '<div class="ttl">' + esc(e.title || e.name) + '<span class="badge">' + esc(e.kind === 'gcupkg' ? 'ext' : (e.datKind || 'data')) + '</span></div>'
+            + '<div class="ttl">' + esc(e.title || e.name) + '<span class="badge">' + esc(e.kind === 'gcupkg' ? 'ext' : (e.datKind || 'data')) + '</span>'
+            + (isNC(e.license) ? '<span class="badge nc" title="Non-commercial — free to share, not to sell">NC</span>' : '') + '</div>'
             + '<div class="meta">' + esc(e.license || '') + (e.attribution ? ' · ' + esc(e.attribution) : '') + ' · ' + fmtSize(e.size || 0) + (e.version ? ' · v' + esc(e.version) : '') + '</div>'
             + (e.description ? '<div class="desc">' + esc(e.description) + '</div>' : '')
             + ((e.tags && e.tags.length) ? '<div class="tags">' + e.tags.map(esc).join(' · ') + '</div>' : '')
