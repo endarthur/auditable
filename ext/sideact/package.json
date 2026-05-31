@@ -1,6 +1,6 @@
 {
   "name": "@gcu/sideact",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Signals + templates + DOM binding. Standalone reactive UI library — zero dependencies. `@gcu/sideact/signals` gives you signal/computed/effect/batch without any DOM code.",
   "type": "module",
   "main": "src/index.js",

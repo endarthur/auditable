@@ -129,10 +129,18 @@ function _instantiate(cached, values) {
   const fragment = cached.tpl.content.cloneNode(true);
   const disposers = [];
 
-  for (const b of cached.bindings) {
-    const value = values[b.idx];
-    const node = _resolve(fragment, b.path);
+  // PASS 1 — resolve every binding's target node BEFORE any mutation. Applying
+  // a binding can insert ≠1 nodes (a multi-root h`` fragment or an array value);
+  // replaceChild then shifts the positional index of every later sibling, so a
+  // path resolved mid-loop would land on the wrong node. Capturing node
+  // references up front (identity is stable under sibling-index shifts) makes
+  // binding order irrelevant.
+  const resolved = cached.bindings.map((b) => ({ b, node: _resolve(fragment, b.path) }));
+
+  // PASS 2 — apply.
+  for (const { b, node } of resolved) {
     if (!node) continue;
+    const value = values[b.idx];
     if (b.type === 'text') {
       _bindText(node, value, disposers);
     } else if (b.type === 'attr') {

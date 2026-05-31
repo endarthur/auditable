@@ -46,8 +46,19 @@ class _Node {
     const i = this.childNodes.indexOf(oldChild);
     if (i < 0) return oldChild;
     oldChild.parentNode = null;
-    newChild.parentNode = this;
-    this.childNodes[i] = newChild;
+    if (newChild.nodeType === 11) {
+      // DocumentFragment — expand: its children replace oldChild in place,
+      // shifting later siblings (faithful to real DOM, like appendChild /
+      // insertBefore above). Without this the shim can't reproduce multi-root
+      // interpolation index-shift bugs.
+      const kids = [...newChild.childNodes];
+      newChild.childNodes = [];
+      for (const k of kids) k.parentNode = this;
+      this.childNodes.splice(i, 1, ...kids);
+    } else {
+      newChild.parentNode = this;
+      this.childNodes[i] = newChild;
+    }
     return oldChild;
   }
   removeChild(child) {
@@ -548,6 +559,52 @@ describe('h — tagged template', () => {
     setCount(42);
     await tick();
     assert.ok(el.textContent.includes('42'));
+  });
+});
+
+// Multi-root interpolation: a binding that resolves to ≠1 nodes (a multi-root
+// h`` fragment or an array) shifts later siblings' indices. _instantiate must
+// resolve every binding's target node BEFORE applying any (two-pass), or later
+// bindings land on the wrong node and clobber the expanded content.
+describe('h — multi-root interpolation (binding order)', () => {
+  it('adjacent single-node interpolations stay in order', () => {
+    const a = h`<i>a</i>`, b = h`<i>b</i>`, c = h`<i>c</i>`;
+    const el = h`<div>${a}${b}${c}</div>`;
+    assert.deepStrictEqual(el.childNodes.map(n => n.textContent), ['a', 'b', 'c']);
+  });
+
+  it('a multi-root fragment between two bindings does not scramble', () => {
+    const a = h`<i>a</i>`, c = h`<i>c</i>`;
+    const mid = h`<b>x</b><b>y</b>`;           // 2-node fragment
+    const el = h`<div>${a}${mid}${c}</div>`;
+    assert.deepStrictEqual(el.childNodes.map(n => n.textContent), ['a', 'x', 'y', 'c']);
+    assert.deepStrictEqual(el.childNodes.map(n => n._tag), ['i', 'b', 'b', 'i']);
+  });
+
+  it('adjacent array interpolations concatenate in order', () => {
+    const mk = (t) => { const e = h`<i></i>`; e.textContent = t; return e; };
+    const left = [mk('n1'), mk('n2')], right = [mk('n3'), mk('n4')];
+    const el = h`<div>${left}${right}</div>`;
+    assert.deepStrictEqual(el.childNodes.map(n => n.textContent), ['n1', 'n2', 'n3', 'n4']);
+  });
+
+  it('an attribute binding after a multi-node text binding lands on the right element', () => {
+    const frag = h`<b>x</b><b>y</b>`;
+    const el = h`<div>${frag}<span class="${'tag'}">z</span></div>`;
+    const span = el.childNodes.find(n => n._tag === 'span');
+    assert.strictEqual(span.className, 'tag');           // not stranded on a <b>
+    assert.deepStrictEqual(el.childNodes.map(n => n._tag), ['b', 'b', 'span']);
+  });
+
+  it('regression: reactive text after a multi-node binding still updates', async () => {
+    const [v, setV] = signal('one');
+    const frag = h`<i>a</i><i>b</i>`;
+    const el = h`<div>${frag}<span>${() => v()}</span></div>`;
+    const span = el.childNodes.find(n => n._tag === 'span');
+    assert.strictEqual(span.textContent, 'one');
+    setV('two');
+    await tick();
+    assert.strictEqual(span.textContent, 'two');
   });
 });
 
