@@ -104,6 +104,15 @@ describe('renderMd', () => {
     assert.ok(result.includes('<img src="data:image/png;base64,iVBOR"'));
   });
 
+  it('does not let inline rules mangle a data: image URL (base64 ++ collision)', () => {
+    // base64 contains '+', so a `++X++` substring inside the URL must NOT be
+    // rewritten into <kbd> (which would inject '<' → ERR_INVALID_URL).
+    const url = 'data:image/png;base64,AAAA++X5my++BBBB~~no~~*x*CCCC';
+    const out = renderMd('![r](' + url + ')');
+    assert.ok(out.includes('<img src="' + url + '"'), out);
+    assert.ok(!/<img[^>]*<kbd>/.test(out), 'no <kbd> injected into the src');
+  });
+
   it('renders unordered lists', () => {
     const result = renderMd('- one\n- two\n- three');
     assert.ok(result.includes('<ul>'));

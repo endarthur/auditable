@@ -127,10 +127,18 @@ export function renderMd(src) {
   // horizontal rule — `---` on its own line (must come before lists / paragraphs)
   html = html.replace(/^---+$/gm, '<hr/>');
 
-  // Images — must come before links since the regexes overlap.
+  // Images — must come before links since the regexes overlap. The emitted
+  // tag is stashed behind an IMGTAG placeholder so the inline rules below
+  // (++keys++, ~~strike~~, *em*, links) never rewrite inside its src/alt.
+  // Critical for `data:` image URLs: base64 contains '+', so a `++X++`
+  // substring would otherwise be mangled into `<kbd>…</kbd>` mid-URL,
+  // injecting '<' and producing an ERR_INVALID_URL image.
+  const imgTags = [];
   html = html.replace(/!\[(.*?)\]\((.+?)\)/g, (_m, alt, url) => {
     if (/^\s*(javascript|vbscript|data)\s*:/i.test(url) && !/^data:image\//i.test(url)) return alt;
-    return `<img src="${url}" alt="${alt}"/>`;
+    const idx = imgTags.length;
+    imgTags.push(`<img src="${url}" alt="${alt}"/>`);
+    return ` IMGTAG${idx} `;
   });
 
   // ++keys++ — MkDocs `pymdownx.keys`. Render each key as a <kbd> pill,
@@ -219,9 +227,10 @@ export function renderMd(src) {
     return '<p>' + trimmed + '</p>';
   }).join('\n');
 
-  // Restore fenced-code + inline-code placeholders.
+  // Restore fenced-code + inline-code + image placeholders.
   html = html.replace(/\bCODE(\d+)\b/g, (_m, i) => codeBlocks[Number(i)]);
   html = html.replace(/\bICODE(\d+)\b/g, (_m, i) => inlineCode[Number(i)]);
+  html = html.replace(/\bIMGTAG(\d+)\b/g, (_m, i) => imgTags[Number(i)] || '');
 
   // Restore admonitions. Each body is recursively rendered so nested
   // markdown lights up. Title defaults to a capitalised type name.
