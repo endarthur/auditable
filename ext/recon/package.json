@@ -1,0 +1,31 @@
+{
+  "name": "@gcu/recon",
+  "version": "0.1.0",
+  "description": "Reconnaissance for data: a general, heuristic-driven sniffer that scouts a sample of tabular data and produces an annotated manifest — delimiter, types, semantic roles, units, analytes, spatial grid facet — via a registry of heuristics. Geoscience detection is one registerable pack. Inference only; zero dependencies.",
+  "type": "module",
+  "main": "./src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["sniffer", "schema-inference", "csv", "delimiter-detection", "heuristics", "block-model", "geoscience", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/recon"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/recon",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}
