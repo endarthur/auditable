@@ -19,7 +19,8 @@ import { serializeWorkspace, buildWorksHtml } from './persist.js';
 import { importNotebook, importFileAsNotebook } from './import.js';
 import { importEpubBytes } from './book-import.js';
 import { metaGet, metaSet } from './meta.js';
-import { openLibraryDialog, installByName, addSourceSilent } from './registry.js';
+import { openLibraryDialog, installByName, addSourceSilent, installFromCapsule } from './registry.js';
+import { fragmentDecode, resolveCapsule } from '#capsule';
 import { installGcudatBytes } from './gcudat-install.js';
 import { buildProjectExportHtml, exportProject } from './project-export.js';
 import { mountHandle, unmountAt, restoreMounts } from './mount.js';
@@ -131,6 +132,29 @@ async function boot() {
   window.WKS = WKS;
 
   setStatus('Auditable Works — ready');
+
+  // Capsule consumer — if launched with a `#capsule=…` fragment (a share-link /
+  // QR), decode it and act. Today: a registry-pointer payload
+  // ({ install: { source, name } }) installs that pack — "QR → install".
+  // Fire-and-forget so boot completes; the trust prompt (for a new source)
+  // surfaces over the ready shell.
+  handleCapsuleBoot().catch((e) => setStatus('capsule: ' + ((e && e.message) || e)));
+}
+
+async function handleCapsuleBoot() {
+  const m = /[#&]capsule=([^&]+)/.exec(location.hash || '');
+  if (!m) return;
+  // One-shot: strip the fragment so a reload doesn't re-install.
+  history.replaceState(null, '', location.pathname + location.search);
+  let payload;
+  try { payload = JSON.parse(await resolveCapsule(fragmentDecode(decodeURIComponent(m[1])))); }
+  catch (e) { setStatus('capsule: could not decode (' + ((e && e.message) || e) + ')'); return; }
+  if (payload && payload.install && payload.install.source && payload.install.name) {
+    try { await installFromCapsule(payload.install.source, payload.install.name); }
+    catch (e) { setStatus('capsule install failed: ' + ((e && e.message) || e)); }
+  } else {
+    setStatus('capsule: unsupported payload');
+  }
 }
 
 boot().catch((err) => {

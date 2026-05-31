@@ -198,6 +198,26 @@ export async function installByName(sourceUrl, name) {
   if (!entry) throw new Error('no entry "' + name + '" in this registry');
   return installEntry(entry, base, sourceUrl);
 }
+
+// Install an entry referenced by a capsule (QR / share-link → boot #capsule).
+// If the source is new, prompt a one-time trust confirm (a source can serve
+// code), add it, then install. An already-trusted source (e.g. the default
+// gcu-library) installs with no extra friction. Opens books; extensions install
+// in place. Returns the dest path or null.
+export async function installFromCapsule(source, name) {
+  const sources = await getSources();
+  if (!sources.some((s) => s.url === source)) {
+    const ok = await dlgConfirm(
+      'Install "' + name + '" from a new source?\n\n' + source + '\n\n'
+      + 'This adds it as a content source — sources can serve data packs and code extensions. Only proceed if you trust it.',
+      { title: 'Open in Works', danger: true });
+    if (!ok) { setStatus('capsule install cancelled'); return null; }
+    await addSourceSilent(source, source);
+  }
+  const dest = await installByName(source, name);   // gcudat installs; gcupkg adds its own code-confirm
+  if (dest && /^\/home\/\.books\/library\//.test(dest)) await openPath(dest);
+  return dest;
+}
 export async function addSourceSilent(url, nm) {
   const sources = await getSources();
   if (!sources.some((s) => s.url === url)) {

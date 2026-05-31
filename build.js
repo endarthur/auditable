@@ -145,6 +145,9 @@ if (target === 'works' || target === 'works-all') {
     // sideload extensions dropped onto the workspace. Pure logic; takes
     // the archive lib as a parameter.
     ['gcupkg',   'src/js/gcupkg.js'],
+    // Capsule transport — used by init.js's #capsule boot handler to decode
+    // share-link / QR registry-pointers (QR → install). Inline schemes only.
+    ['capsule',  'ext/capsule/index.js'],
   ]) {
     const p = path.join(__dirname, rel);
     if (!fs.existsSync(p)) {
