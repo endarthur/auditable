@@ -156,12 +156,13 @@ export async function chunks(file, n, { comment = '#' } = {}) {
   bounds.push(size);
 
   const sources = [];
+  const blobs = [];   // the raw Blob slices — pass these by-reference to a worker
   for (let i = 0; i < bounds.length - 1; i++) {
     const start = bounds[i], end = bounds[i + 1];
-    if (end > start) sources.push(fromBlob(file.slice(start, end)));
+    if (end > start) { const slice = file.slice(start, end); blobs.push(slice); sources.push(fromBlob(slice)); }
   }
   void comment;
-  return { header, sources };
+  return { header, sources, blobs };
 }
 
 async function findNewline(file, pos) {

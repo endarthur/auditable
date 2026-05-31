@@ -11,6 +11,7 @@
 //   categorical.js — topK / cardinality (exact-with-cap)
 //   histogram.js   — fixed-bin weighted histogram + cumulativeFromTop
 //   combinators.js — collect / groupBy / binned (row-level fan-out)
+//   spec.js        — accumulatorFromSpec (serializable accumulator specs, cross-realm op contract)
 //   runner.js      — sources, lines, sample, parseCsv, filter/map/select, recipe, scan, chunks
 
 export * from './accumulator.js';
@@ -18,4 +19,5 @@ export * from './tdigest.js';
 export * from './categorical.js';
 export * from './histogram.js';
 export * from './combinators.js';
+export * from './spec.js';
 export * from './runner.js';

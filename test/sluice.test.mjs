@@ -7,6 +7,7 @@ import {
   topK, cardinality,
   histogram, cumulativeFromTop,
   collect, groupBy, binned,
+  accumulatorFromSpec,
   fromText, fromBytes, fromBlob, sample, lines, parseCsv, filter, map, select,
   recipe, scan, scanState, chunks, NULL_SENTINELS,
 } from '../ext/sluice/src/main.js';
@@ -286,4 +287,58 @@ test('accumulator state survives structuredClone (worker/cache transfer)', () =>
   assert.equal(out.x.count, 4);
   assert.equal(out.x.mean, 3.5);
   assert.equal(out.h.count, 4);
+});
+
+// ── accumulatorFromSpec (serializable cross-realm op contract) ─────────
+test('accumulatorFromSpec: leaf welford', () => {
+  const acc = accumulatorFromSpec({ kind: 'welford' });
+  const r = run(acc, [2, 4, 4, 4, 5, 5, 7, 9]);
+  assert.equal(r.mean, 5);
+});
+
+test('accumulatorFromSpec: collect of per-column accumulators', () => {
+  const spec = { kind: 'collect', fields: {
+    au:   { column: 'au',   of: { kind: 'welford' } },
+    lito: { column: 'lito', of: { kind: 'topK' } },
+  } };
+  // spec is plain JSON — survives a serialization round-trip (the worker case)
+  const acc = accumulatorFromSpec(JSON.parse(JSON.stringify(spec)));
+  const s = acc.create();
+  for (const r of [{ au: 1, lito: 'A' }, { au: 3, lito: 'B' }, { au: 5, lito: 'A' }]) acc.push(s, r);
+  const out = acc.result(s);
+  assert.equal(out.au.mean, 3);
+  assert.deepEqual(out.lito.counts, { A: 2, B: 1 });
+});
+
+test('accumulatorFromSpec: groupBy of collect (stratified)', () => {
+  const spec = { kind: 'groupBy', column: 'g', of: {
+    kind: 'collect', fields: { v: { column: 'v', of: { kind: 'welford' } } },
+  } };
+  const acc = accumulatorFromSpec(spec);
+  const s = acc.create();
+  for (const r of [{ g: 'x', v: 2 }, { g: 'y', v: 10 }, { g: 'x', v: 4 }]) acc.push(s, r);
+  const out = acc.result(s);
+  assert.equal(out.groups.x.v.mean, 3);
+  assert.equal(out.groups.y.v.mean, 10);
+});
+
+test('accumulatorFromSpec: histogram + unknown kind throws', () => {
+  const h = accumulatorFromSpec({ kind: 'histogram', min: 0, max: 10, bins: 5 });
+  assert.equal(h.create().bins, 5);
+  assert.throws(() => accumulatorFromSpec({ kind: 'nope' }), /unknown accumulator spec/);
+  assert.throws(() => accumulatorFromSpec({ kind: 'groupBy', of: { kind: 'welford' } }), /column/);
+});
+
+test('chunks exposes raw Blob slices (for by-reference worker dispatch)', async () => {
+  let csv = 'X,G\n';
+  for (let i = 0; i < 200; i++) csv += `${i},${i % 3}\n`;
+  const blob = new Blob([csv]);
+  const { header, sources, blobs } = await chunks(blob, 4);
+  assert.deepEqual(header, ['X', 'G']);
+  assert.equal(blobs.length, sources.length);
+  assert.ok(blobs.every((b) => typeof b.slice === 'function'));   // real Blobs
+  // a chunk Blob scans like any source, via a spec-built accumulator
+  const acc = accumulatorFromSpec({ kind: 'collect', fields: { X: { column: 'X', of: { kind: 'welford' } } } });
+  const st = await scanState(recipe(fromBlob(blobs[0]), parseCsv({ header })), acc);
+  assert.ok(acc.result(st).X.count > 0);
 });
