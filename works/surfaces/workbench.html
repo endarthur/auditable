@@ -135,6 +135,7 @@ function render(m, summary, path) {
   out.appendChild(schemaSection(m));
   out.appendChild(statsSection(m, summary));
   out.appendChild(gtSection(m, summary));
+  out.appendChild(swathSection(m, summary));
   out.appendChild(catsSection(m, summary));
 }
 
@@ -304,6 +305,80 @@ function renderGT(gt, grade) {
   }
   res.innerHTML = svg + legend +
     `<table style="margin-top:6px"><thead><tr><th>cutoff (${esc(grade)})</th><th>tonnage</th><th>mean grade</th><th>metal</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+}
+
+function swathSection(m, summary) {
+  const numeric = m.columns.filter((c) => c.type === 'numeric').map((c) => c.name);
+  const sec = el('section'); sec.appendChild(h2('Swath'));
+  const cc = m.coordCols || {};
+  const axisOpts = [cc.x, cc.y, cc.z].filter(Boolean);
+  const axes = axisOpts.length ? axisOpts : numeric;
+  if (!axes.length || !numeric.length) { sec.appendChild(emptyDiv('need a coordinate axis + a numeric column')); return sec; }
+
+  const defaultBw = (axis) => {
+    const s = (summary && summary[axis]) || {};
+    return (Number.isFinite(s.min) && Number.isFinite(s.max) && s.max > s.min) ? +((s.max - s.min) / 30).toPrecision(2) : 10;
+  };
+  const ctrl = el('div');
+  ctrl.style.cssText = 'display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px;font-size:11px';
+  const axisSel = select(axes, axes[0]);
+  const gradeSel = select(numeric, gradeGuess(m, numeric));
+  const bwInput = el('input'); bwInput.type = 'number'; bwInput.style.cssText = 'width:90px'; bwInput.value = defaultBw(axisSel.value);
+  axisSel.addEventListener('change', () => { bwInput.value = defaultBw(axisSel.value); });
+  const btn = el('button'); btn.textContent = 'Compute';
+  ctrl.appendChild(label('axis', axisSel));
+  ctrl.appendChild(label('grade', gradeSel));
+  ctrl.appendChild(label('bin width', bwInput));
+  ctrl.appendChild(btn);
+  sec.appendChild(ctrl);
+
+  const result = el('div'); result.id = 'swath-result';
+  result.appendChild(emptyDiv('pick an axis + grade and Compute.'));
+  sec.appendChild(result);
+
+  btn.addEventListener('click', () => computeSwath({ axis: axisSel.value, grade: gradeSel.value, binWidth: parseFloat(bwInput.value) || defaultBw(axisSel.value) }));
+  return sec;
+}
+
+async function computeSwath(opts) {
+  const res = $('swath-result'); if (!view) return;
+  if (!(opts.binWidth > 0)) { res.textContent = ''; res.appendChild(emptyDiv('bin width must be > 0')); return; }
+  res.textContent = ''; res.appendChild(emptyDiv('computing swath…'));
+  const graph = { nodes: [
+    { id: 'src', type: loadType(view.path), params: { path: view.path } },
+    { id: 'snf', type: 'recon.sniff', wiring: { table: { node: 'src', port: 'table' } } },
+    { id: 'sw', type: 'swath', params: { axis: opts.axis, grade: opts.grade, binWidth: opts.binWidth },
+      wiring: { table: { node: 'src', port: 'table' }, manifest: { node: 'snf', port: 'manifest' } } },
+  ] };
+  let out;
+  try { out = await call('Pull', [graph, 'sw', 'swath']); }
+  catch (e) { res.textContent = ''; res.appendChild(emptyDiv('error: ' + e.message)); return; }
+  renderSwath(out, opts);
+}
+
+function renderSwath(bins, opts) {
+  const res = $('swath-result'); res.textContent = '';
+  bins = (bins || []).filter((b) => b && b.value && b.value.g && b.value.g.count > 0);
+  if (!bins.length) { res.appendChild(emptyDiv('no data in any bin')); return; }
+  const W = 620, H = 200, pad = 12;
+  const centers = bins.map((b) => b.center), means = bins.map((b) => b.value.g.mean), counts = bins.map((b) => b.value.g.count);
+  const minX = Math.min(...centers), maxX = Math.max(...centers);
+  const maxG = Math.max(1e-12, ...means), maxC = Math.max(1, ...counts);
+  const x = (c) => pad + (maxX > minX ? (c - minX) / (maxX - minX) : 0.5) * (W - 2 * pad);
+  const yG = (v) => (H - pad) - (v / maxG) * (H - 2 * pad);
+  const yC = (v) => (H - pad) - (v / maxC) * (H - 2 * pad) * 0.4;     // count bars, lower 40%
+  const bw = bins.length > 1 ? Math.max(1, (x(centers[1]) - x(centers[0])) * 0.8) : 8;
+  const bars = bins.map((b, i) => `<rect x="${(x(centers[i]) - bw / 2).toFixed(1)}" y="${yC(counts[i]).toFixed(1)}" width="${bw.toFixed(1)}" height="${(H - pad - yC(counts[i])).toFixed(1)}" fill="var(--au-border)"/>`).join('');
+  const line = bins.map((b, i) => `${x(centers[i]).toFixed(1)},${yG(means[i]).toFixed(1)}`).join(' ');
+  const svg =
+    `<svg viewBox="0 0 ${W} ${H}" style="width:100%;max-width:${W}px;height:auto;border:1px solid var(--au-border);border-radius:3px;background:var(--au-surface)">` +
+    bars +
+    `<polyline fill="none" stroke="var(--au-action)" stroke-width="1.5" points="${line}"/>` +
+    `<text x="${pad}" y="${H - 2}" fill="var(--au-fg-muted)" font-size="9">${fmt(minX, 1)}</text>` +
+    `<text x="${W - pad}" y="${H - 2}" fill="var(--au-fg-muted)" font-size="9" text-anchor="end">${fmt(maxX, 1)}</text>` +
+    '</svg>';
+  const legend = `<div style="font-size:10px;margin:4px 0"><span style="color:var(--au-action)">■</span> mean ${esc(opts.grade)} &nbsp; <span style="color:var(--au-border)">■</span> count &nbsp;·&nbsp; ${bins.length} bins of ${fmt(opts.binWidth, 2)} along ${esc(opts.axis)}</div>`;
+  res.innerHTML = svg + legend;
 }
 
 function select(opts, value) {

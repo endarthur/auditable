@@ -911,14 +911,21 @@ const pipeline = await page.evaluate(async () => {
   ] };
   const call = (member, args) => W.worksBus.call(
     { to: 'pipeline', path: '/', interface: 'Pipeline', member }, args);
-  let types = null, valid = null, manifest = null, stats = null, worker = null, err = null;
+  let types = null, valid = null, manifest = null, stats = null, worker = null, swath = null, err = null;
   try {
     types = await call('NodeTypes', []);
     valid = await call('Validate', [graph]);
     manifest = await call('Pull', [graph, 'snf', 'manifest']);
     stats = await call('Pull', [graph, 'st', 'stats']);
     worker = await call('WorkerInfo', []);
+    swath = await call('Pull', [{ nodes: [
+      { id: 'src', type: 'load.csv', params: { path: '/projects/smoke.csv' } },
+      { id: 'snf', type: 'recon.sniff', wiring: { table: { node: 'src', port: 'table' } } },
+      { id: 'sw', type: 'swath', params: { axis: 'X', grade: 'Au_gpt', binWidth: 5000 },
+        wiring: { table: { node: 'src', port: 'table' }, manifest: { node: 'snf', port: 'manifest' } } },
+    ] }, 'sw', 'swath']);
   } catch (e) { err = e.message; }
+  const b0 = swath && swath[0] && swath[0].value && swath[0].value.g;
   return {
     types, validOk: valid && valid.ok, err,
     coordX: manifest && manifest.coordCols && manifest.coordCols.x,
@@ -926,6 +933,8 @@ const pipeline = await page.evaluate(async () => {
     mean: stats && stats.v && stats.v.mean,
     count: stats && stats.v && stats.v.count,
     pooled: worker && worker.pooled, scanMode: worker && worker.lastScanMode,
+    swathBins: Array.isArray(swath) ? swath.length : 0,
+    swathHasMean: !!(b0 && typeof b0.mean === 'number' && b0.count > 0),
   };
 });
 
@@ -1371,6 +1380,7 @@ const checks = {
       && Math.abs(pipeline.mean - 0.9995) < 1e-6,
   'pipeline: scan ran on the @gcu/proc worker pool': pipeline.pooled === true
       && pipeline.scanMode === 'parallel',
+  'pipeline: swath bins along X (mean grade per bin)': pipeline.swathBins > 0 && pipeline.swathHasMean,
   'pipeline: no error':                    !pipeline.err,
   // Data Workbench surface
   'workbench: surface opens':              wbOpen.ready === true,

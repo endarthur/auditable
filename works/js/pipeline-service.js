@@ -161,6 +161,20 @@ export function createPipelineRegistry(vfs) {
     }),
   });
 
+  // swath — binned stats along a coordinate axis: bin rows by `axis` (sparse,
+  // by binWidth — a natural bench/section width, no extent needed) and welford a
+  // grade per bin. Result: [{ center, value: { g: <welford> } }, …] sorted by
+  // bin. The standard trend/validation profile, on the proven binned primitive.
+  reg.register({
+    type: 'swath', version: 1, inputs: { table: 'table', manifest: 'any' }, outputs: { swath: 'scalar' },
+    compute: async (i, p) => ({
+      swath: await runColumnAcc(i.table, i.manifest, {
+        kind: 'binned', column: p.axis, bins: { binWidth: p.binWidth },
+        of: { kind: 'collect', fields: { g: { column: p.grade, of: { kind: 'welford' } } } },
+      }),
+    }),
+  });
+
   // summary — one scan over the whole table producing per-column stats: welford
   // for numeric columns, top-K for categorical. Drives the workbench surface's
   // schema + summary-stats + categories views in a single pull.
