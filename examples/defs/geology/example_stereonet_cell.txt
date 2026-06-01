@@ -1,0 +1,42 @@
+/// auditable
+/// title: stereonet cell
+/// module: @gcu/bearing ext/bearing/index.js
+/// module: @gcu/stereonet ext/stereonet/index.js
+
+/// md
+# stereonet cells
+
+A `/// stereonet` cell is **declarative** — structural-geology measurements in,
+an interactive equal-area net out, and a reactive handle (`bedding`) that
+downstream cells consume. **Drag** the net to rotate it; **edit** a measurement
+and the Woodcock plot below re-runs.
+
+The cell type `@gcu/stereonet` and its engine `@gcu/bearing` are **embedded** in
+this notebook (no network needed) — the `/// stereonet` cell below auto-loads
+them. The mini-format is one statement per line: `name`, `proj`, `view`,
+`g <group>`, then `plane` / `pole` / `line` (dip-direction · dip, or trend ·
+plunge) with an optional `#colour`, and `contour`.
+
+/// stereonet
+name bedding
+proj equal-area
+g foliation
+plane 120 35
+plane 125 40
+plane 118 32
+plane 130 38
+plane 122 42
+pole 210 65 #cc3333    ; a fault, in red
+contour
+
+/// code
+// Downstream: the reactive scope handle in action. Edit a measurement above
+// (Ctrl+Enter) and this cell re-runs — the eigenvalues and fabric shape update.
+const { fabricplot } = await load("@gcu/bearing");
+ui.display(fabricplot.woodcockSVG([{ dcos: bedding.dcos, label: "bedding" }]));
+ui.display(
+  `S1 = ${bedding.stats.eigenvalues[0].toFixed(3)}  ·  ` +
+  `K = ${bedding.stats.K.toFixed(2)}  ·  ` +
+  `C = ${bedding.stats.C.toFixed(2)}  ·  ` +
+  `${bedding.dcos.length} measurements`
+);

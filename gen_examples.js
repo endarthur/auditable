@@ -89,6 +89,7 @@ const categories = {
   // geology — structural geology, petrology, stratigraphy
   geology: [
     'example_stereonet.txt',
+    'example_stereonet_cell.txt',
     'example_winding.txt',
     'example_winding_3d.txt',
     'example_peel_3d.txt',
