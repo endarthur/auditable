@@ -75,7 +75,8 @@ const fmt = (v, d = 4) => (v === null || v === undefined || !Number.isFinite(v))
   : (Math.abs(v) >= 1e6 || (v !== 0 && Math.abs(v) < 1e-4)) ? v.toExponential(2) : Number(v.toFixed(d)).toString();
 
 let bus = null;
-let view = null;   // { m, summary, path } — the current analysis, for the GT view
+let view = null;   // { m, summary, path, derives, filter, count, rawCount } — current analysis
+let transforms = { derives: [], filter: '' };   // pending calc/filter ops (applied on Analyze)
 const status = (s) => { $('status').textContent = s; };
 const call = (member, args) => bus.call({ to: 'pipeline', path: '/', interface: 'Pipeline', member }, args);
 
@@ -94,7 +95,7 @@ window.addEventListener('message', async (ev) => {
     },
   });
 
-  $('load').addEventListener('click', () => { const p = $('path').value.trim(); if (p) analyze(p); });
+  $('load').addEventListener('click', () => { const p = $('path').value.trim(); if (p) loadPath(p); });
   $('path').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('load').click(); });
 
   const path = ev.data.tab && ev.data.tab.path;
@@ -102,41 +103,145 @@ window.addEventListener('message', async (ev) => {
     [path ? 'Workbench · ' + path.split('/').pop() : 'Data Workbench']);
   bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
 
-  if (path) { $('path').value = path; analyze(path); }
+  if (path) { $('path').value = path; loadPath(path); }
 });
+
+// A new file resets pending transforms; re-analysis (Transform → Analyze) keeps them.
+function loadPath(p) { transforms = { derives: [], filter: '' }; analyze(p); }
 
 // Pick the loader by extension — .omf block models go through load.omf (which
 // expands the VolumeElement to a table), everything else through load.csv.
 const loadType = (p) => (/\.omf$/i.test(p) ? 'load.omf' : 'load.csv');
 
-async function analyze(path) {
-  status('analyzing ' + path + ' …');
-  const graph = { nodes: [
+// Build the transform chain for a graph: load → calc(per derive) → filter.
+// Returns the node list + the id of the final table node and the (raw) sniff
+// node — analysis nodes wire their table to `tableNode`, manifest to `manifestNode`.
+function transformNodes(path, derives = transforms.derives, filter = transforms.filter) {
+  const nodes = [
     { id: 'src', type: loadType(path), params: { path } },
     { id: 'snf', type: 'recon.sniff', wiring: { table: { node: 'src', port: 'table' } } },
-    { id: 'sum', type: 'summary',
-      wiring: { table: { node: 'src', port: 'table' }, manifest: { node: 'snf', port: 'manifest' } } },
+  ];
+  let last = 'src';
+  (derives || []).forEach((d, i) => {
+    nodes.push({ id: 'ca' + i, type: 'calc', params: { name: d.name, expr: d.expr }, wiring: { table: { node: last, port: 'table' } } });
+    last = 'ca' + i;
+  });
+  if (filter && filter.trim()) {
+    nodes.push({ id: 'flt', type: 'filter', params: { expr: filter }, wiring: { table: { node: last, port: 'table' } } });
+    last = 'flt';
+  }
+  return { nodes, tableNode: last, manifestNode: 'snf' };
+}
+
+async function analyze(path) {
+  status('analyzing ' + path + ' …');
+  const t = transformNodes(path);
+  const tbl = { node: t.tableNode, port: 'table' }, man = { node: t.manifestNode, port: 'manifest' };
+  const deriveNames = transforms.derives.map((d) => d.name);
+  const graph = { nodes: [
+    ...t.nodes,
+    { id: 'sum', type: 'summary', params: { extraNumeric: deriveNames }, wiring: { table: tbl, manifest: man } },
+    { id: 'cnt', type: 'count', wiring: { table: tbl, manifest: man } },
+    { id: 'raw', type: 'count', wiring: { table: { node: 'src', port: 'table' }, manifest: man } },
   ] };
-  let manifest, summary, worker;
+  let manifest, summary, worker, count, rawCount;
   try {
-    manifest = await call('Pull', [graph, 'snf', 'manifest']);
+    manifest = await call('Pull', [graph, t.manifestNode, 'manifest']);
     summary = await call('Pull', [graph, 'sum', 'summary']);
+    count = await call('Pull', [graph, 'cnt', 'count']);
+    rawCount = await call('Pull', [graph, 'raw', 'count']);
     worker = await call('WorkerInfo', []);
   } catch (e) { status('error: ' + esc(e.message)); return; }
-  render(manifest, summary, path);
+  render(manifest, summary, path, count, rawCount);
   const mode = worker && worker.lastScanMode === 'parallel' ? `${worker.workers}-worker scan` : 'inline scan';
   status(`${manifest.columns.length} columns · ${mode} · ${path}`);
 }
 
-function render(m, summary, path) {
-  view = { m, summary, path };
+function render(m, summary, path, count, rawCount) {
+  view = { m, summary, path, derives: transforms.derives, filter: transforms.filter, count, rawCount };
   const out = $('out');
   out.textContent = '';
+  out.appendChild(transformSection(m));
   out.appendChild(schemaSection(m));
   out.appendChild(statsSection(m, summary));
   out.appendChild(gtSection(m, summary));
   out.appendChild(swathSection(m, summary));
   out.appendChild(catsSection(m, summary));
+}
+
+// Numeric column names available to grade/axis pickers — manifest numerics
+// plus the derived (calc) columns, which are first-class everywhere.
+function numericColNames(m) {
+  return [...m.columns.filter((c) => c.type === 'numeric').map((c) => c.name), ...transforms.derives.map((d) => d.name)];
+}
+// Client-side syntax check (instant, no worker round-trip). Returns an error
+// string or null. Identifiers resolve at run time, so this catches bad syntax,
+// not unknown columns (deferred). Mirrors sluice.compileExpr's parse.
+function validateExpr(expr) {
+  if (!expr || !expr.trim()) return 'empty';
+  try { /* eslint-disable-next-line no-new-func */ new Function('row', 'return (' + expr + ')'); return null; }
+  catch (e) { return e.message; }
+}
+
+function transformSection(m) {
+  const sec = el('section'); sec.appendChild(h2('Transform'));
+  const note = el('div'); note.className = 'conf'; note.style.cssText = 'margin-bottom:6px';
+  note.textContent = 'Derive columns + filter rows — one streaming scan. Helpers: cap, clamp, ifnull, ifnum, isnum, between, remap + Math.';
+  sec.appendChild(note);
+
+  const derivesWrap = el('div'); derivesWrap.id = 'derives-wrap';
+  const validate = (input, mark) => () => {
+    if (!input.value.trim()) { mark.textContent = ''; return; }
+    const err = validateExpr(input.value);
+    mark.textContent = err ? '✗' : '✓'; mark.title = err || 'ok';
+    mark.style.color = err ? 'var(--au-fault)' : 'var(--au-go)';
+  };
+  function addDeriveRow(name = '', expr = '') {
+    const row = el('div'); row.className = 'derive-row';
+    row.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:4px;font-size:11px';
+    const nameI = el('input'); nameI.placeholder = 'name'; nameI.value = name; nameI.dataset.role = 'name'; nameI.style.cssText = 'width:110px';
+    const eq = el('span'); eq.textContent = '='; eq.style.color = 'var(--au-fg-soft)';
+    const exprI = el('input'); exprI.placeholder = 'Au*0.6 + ifnull(Cu,0)'; exprI.value = expr; exprI.dataset.role = 'expr'; exprI.style.cssText = 'flex:1;min-width:160px';
+    const mark = el('span'); mark.style.cssText = 'width:14px;text-align:center';
+    exprI.addEventListener('input', validate(exprI, mark)); validate(exprI, mark)();
+    const rm = el('button'); rm.textContent = '×'; rm.title = 'remove'; rm.addEventListener('click', () => row.remove());
+    row.append(nameI, eq, exprI, mark, rm); derivesWrap.appendChild(row);
+  }
+  (transforms.derives || []).forEach((d) => addDeriveRow(d.name, d.expr));
+  sec.appendChild(derivesWrap);
+  const addBtn = el('button'); addBtn.textContent = '+ derived column'; addBtn.style.cssText = 'font-size:11px;margin:2px 0 8px';
+  addBtn.addEventListener('click', () => addDeriveRow()); sec.appendChild(addBtn);
+
+  const fwrap = el('div'); fwrap.style.cssText = 'display:flex;gap:6px;align-items:center;font-size:11px;margin-bottom:8px';
+  const fI = el('input'); fI.id = 'filter-input'; fI.placeholder = "DOMAIN=='ore' && Au>0.3"; fI.value = transforms.filter || ''; fI.style.cssText = 'flex:1;min-width:200px';
+  const fmark = el('span'); fmark.style.cssText = 'width:14px;text-align:center';
+  fI.addEventListener('input', validate(fI, fmark)); validate(fI, fmark)();
+  fwrap.append(label('filter', fI), fmark); sec.appendChild(fwrap);
+
+  const bar = el('div'); bar.style.cssText = 'display:flex;gap:10px;align-items:center;font-size:11px';
+  const apply = el('button'); apply.textContent = 'Apply + Analyze'; apply.addEventListener('click', applyTransform); bar.appendChild(apply);
+  if (view && typeof view.count === 'number') {
+    const rc = el('span'); rc.className = 'conf';
+    rc.textContent = (view.filter && view.filter.trim())
+      ? `${view.count.toLocaleString()} of ${view.rawCount.toLocaleString()} rows kept`
+      : `${view.rawCount.toLocaleString()} rows`;
+    bar.appendChild(rc);
+  }
+  sec.appendChild(bar);
+  return sec;
+}
+
+function applyTransform() {
+  const derives = [];
+  for (const r of document.querySelectorAll('#derives-wrap .derive-row')) {
+    const name = r.querySelector('[data-role=name]').value.trim();
+    const expr = r.querySelector('[data-role=expr]').value.trim();
+    if (name && expr && !validateExpr(expr)) derives.push({ name, expr });
+  }
+  const filter = $('filter-input').value.trim();
+  if (filter && validateExpr(filter)) { status('filter expression has a syntax error'); return; }
+  transforms = { derives, filter };
+  if (view && view.path) analyze(view.path);
 }
 
 function schemaSection(m) {
@@ -155,6 +260,12 @@ function schemaSection(m) {
       `<td>${c.analyte ? `<span class="tag analyte">${esc(c.analyte)}</span>${conf('analyte')}` : ''}</td>`;
     tb.appendChild(tr);
   }
+  for (const d of transforms.derives) {
+    const tr = el('tr');
+    tr.innerHTML = `<td class="name">${esc(d.name)}</td><td><span class="tag numeric">numeric</span></td>`
+      + `<td><span class="tag role">derived</span></td><td></td><td><span class="conf">${esc(d.expr)}</span></td>`;
+    tb.appendChild(tr);
+  }
   t.appendChild(tb); sec.appendChild(t);
   const cc = m.coordCols || {};
   if (cc.x || cc.y || cc.z) {
@@ -166,7 +277,10 @@ function schemaSection(m) {
 }
 
 function statsSection(m, summary) {
-  const cols = m.columns.filter((c) => c.type === 'numeric');
+  const cols = [
+    ...m.columns.filter((c) => c.type === 'numeric').map((c) => ({ name: c.name, unit: c.unit })),
+    ...transforms.derives.map((d) => ({ name: d.name, unit: 'derived' })),
+  ];
   const sec = el('section'); sec.appendChild(h2('Summary statistics'));
   if (!cols.length) { sec.appendChild(emptyDiv('no numeric columns')); return sec; }
   const t = el('table');
@@ -209,7 +323,7 @@ function catsSection(m, summary) {
 
 // ── Grade-tonnage view ────────────────────────────────────────────────
 function gtSection(m, summary) {
-  const numeric = m.columns.filter((c) => c.type === 'numeric').map((c) => c.name);
+  const numeric = numericColNames(m);
   const sec = el('section'); sec.appendChild(h2('Grade-tonnage'));
   if (!numeric.length) { sec.appendChild(emptyDiv('no numeric columns to grade')); return sec; }
 
@@ -263,12 +377,12 @@ async function computeGT(opts) {
   const gradeMax = Number.isFinite(s.max) ? s.max : 1;
   if (!(gradeMax > gradeMin)) { res.textContent = ''; res.appendChild(emptyDiv('that column has no grade range')); return; }
   res.textContent = ''; res.appendChild(emptyDiv('computing grade-tonnage…'));
+  const t = transformNodes(view.path);
   const graph = { nodes: [
-    { id: 'src', type: loadType(view.path), params: { path: view.path } },
-    { id: 'snf', type: 'recon.sniff', wiring: { table: { node: 'src', port: 'table' } } },
+    ...t.nodes,
     { id: 'gt', type: 'gt',
       params: { grade: opts.grade, gradeMin, gradeMax, bins: 200, blockVolume: opts.blockVolume, dims: opts.dims, density: opts.density },
-      wiring: { table: { node: 'src', port: 'table' }, manifest: { node: 'snf', port: 'manifest' } } },
+      wiring: { table: { node: t.tableNode, port: 'table' }, manifest: { node: t.manifestNode, port: 'manifest' } } },
   ] };
   let out;
   try { out = await call('Pull', [graph, 'gt', 'gt']); }
@@ -308,7 +422,7 @@ function renderGT(gt, grade) {
 }
 
 function swathSection(m, summary) {
-  const numeric = m.columns.filter((c) => c.type === 'numeric').map((c) => c.name);
+  const numeric = numericColNames(m);
   const sec = el('section'); sec.appendChild(h2('Swath'));
   const cc = m.coordCols || {};
   const axisOpts = [cc.x, cc.y, cc.z].filter(Boolean);
@@ -344,11 +458,11 @@ async function computeSwath(opts) {
   const res = $('swath-result'); if (!view) return;
   if (!(opts.binWidth > 0)) { res.textContent = ''; res.appendChild(emptyDiv('bin width must be > 0')); return; }
   res.textContent = ''; res.appendChild(emptyDiv('computing swath…'));
+  const t = transformNodes(view.path);
   const graph = { nodes: [
-    { id: 'src', type: loadType(view.path), params: { path: view.path } },
-    { id: 'snf', type: 'recon.sniff', wiring: { table: { node: 'src', port: 'table' } } },
+    ...t.nodes,
     { id: 'sw', type: 'swath', params: { axis: opts.axis, grade: opts.grade, binWidth: opts.binWidth },
-      wiring: { table: { node: 'src', port: 'table' }, manifest: { node: 'snf', port: 'manifest' } } },
+      wiring: { table: { node: t.tableNode, port: 'table' }, manifest: { node: t.manifestNode, port: 'manifest' } } },
   ] };
   let out;
   try { out = await call('Pull', [graph, 'sw', 'swath']); }

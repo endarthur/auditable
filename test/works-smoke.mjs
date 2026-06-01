@@ -963,6 +963,7 @@ const wbOpen = await page.evaluate(async () => {
 });
 let wbView = { ok: false };
 let gtView = { ok: false };
+let wbTransform = { derivedShown: false, rowCount: false };
 if (wbOpen.ready) {
   const fr = await surfaceFrame(wbOpen.tabId);
   if (fr) {
@@ -997,6 +998,29 @@ if (wbOpen.ready) {
           return { hasSvg: !!(r && r.querySelector('svg')), hasTable: !!(r && r.querySelector('table')) };
         });
         if (gtView.hasSvg && gtView.hasTable) { gtView.ok = true; break; }
+        await page.waitForTimeout(150);
+      }
+    }
+    // Drive the Transform UI: add a derived column (AuEq = Au_gpt*2) + a filter
+    // (AuEq > 1), Apply, and confirm the derived column is first-class (shown)
+    // and the "N of M rows kept" readout appears.
+    if (wbView.ok) {
+      await fr.evaluate(() => {
+        [...document.querySelectorAll('button')].find((b) => b.textContent === '+ derived column')?.click();
+        const row = document.querySelector('#derives-wrap .derive-row');
+        row.querySelector('[data-role=name]').value = 'AuEq';
+        row.querySelector('[data-role=expr]').value = 'Au_gpt * 2';
+        document.getElementById('filter-input').value = 'AuEq > 1';
+        [...document.querySelectorAll('button')].find((b) => b.textContent === 'Apply + Analyze')?.click();
+      });
+      const deadline2 = Date.now() + 20000;
+      while (Date.now() < deadline2) {
+        wbTransform = await fr.evaluate(() => {
+          const out = document.getElementById('out');
+          const text = out ? out.textContent : '';
+          return { derivedShown: text.includes('AuEq'), rowCount: /rows kept/.test(text) };
+        });
+        if (wbTransform.derivedShown && wbTransform.rowCount) break;
         await page.waitForTimeout(150);
       }
     }
@@ -1400,6 +1424,7 @@ const checks = {
   'workbench: renders schema + stats from the pipeline': wbView.ok === true
       && wbView.hasAuColumn && wbView.hasLito,
   'workbench: grade-tonnage curve renders':  gtView.ok === true,
+  'workbench: calc/filter transform — derived column first-class + row count': wbTransform.derivedShown && wbTransform.rowCount,
   // @gcu/librarian v2 — embedded CSR engine runs in-browser
   'librarian: index() is the CSR engine':   librarian.csr === true,
   'librarian: multi-field ranked search':   librarian.multiRank && librarian.fuzzy,

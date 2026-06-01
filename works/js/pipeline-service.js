@@ -192,17 +192,25 @@ export function createPipelineRegistry(vfs) {
     }),
   });
 
+  // count — row count after the table's ops (a filter shrinks it). One scan.
+  reg.register({
+    type: 'count', version: 1, inputs: { table: 'table', manifest: 'any' }, outputs: { count: 'scalar' },
+    compute: async (i) => ({ count: await runColumnAcc(i.table, i.manifest, { kind: 'count' }) }),
+  });
+
   // summary — one scan over the whole table producing per-column stats: welford
   // for numeric columns, top-K for categorical. Drives the workbench surface's
-  // schema + summary-stats + categories views in a single pull.
+  // schema + summary-stats + categories views in a single pull. `extraNumeric`
+  // names derived (calc) columns not in the manifest so they get welford too.
   reg.register({
     type: 'summary', version: 1, inputs: { table: 'table', manifest: 'any' }, outputs: { summary: 'scalar' },
-    compute: async (i) => {
+    compute: async (i, p) => {
       const fields = {};
       for (const c of i.manifest.columns) {
         if (c.type === 'numeric') fields[c.name] = { column: c.name, of: { kind: 'welford' } };
         else if (c.type === 'categorical') fields[c.name] = { column: c.name, of: { kind: 'topK', limit: 50 } };
       }
+      for (const name of (p && p.extraNumeric) || []) fields[name] = { column: name, of: { kind: 'welford' } };
       return { summary: await runColumnAcc(i.table, i.manifest, { kind: 'collect', fields }) };
     },
   });
