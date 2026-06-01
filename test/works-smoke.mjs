@@ -964,6 +964,7 @@ const wbOpen = await page.evaluate(async () => {
 let wbView = { ok: false };
 let gtView = { ok: false };
 let wbTransform = { derivedShown: false, rowCount: false };
+let wbProject = { saved: false, reopened: false };
 if (wbOpen.ready) {
   const fr = await surfaceFrame(wbOpen.tabId);
   if (fr) {
@@ -1022,6 +1023,41 @@ if (wbOpen.ready) {
         });
         if (wbTransform.derivedShown && wbTransform.rowCount) break;
         await page.waitForTimeout(150);
+      }
+    }
+    // Save the analysis as a workbench project (project.json + pipeline.json),
+    // then reopen the folder via openPath and confirm it restores data + derives.
+    if (wbTransform.derivedShown) {
+      await fr.evaluate(() => { [...document.querySelectorAll('button')].find((b) => b.textContent === 'Save project')?.click(); });
+      let dl = Date.now() + 10000;
+      while (Date.now() < dl) {
+        wbProject = await page.evaluate(async () => {
+          const W = window.WKS; const o = { saved: false };
+          try {
+            const pj = JSON.parse(await W.vfs.readFile('/projects/smoke/project.json', 'utf8'));
+            const pl = JSON.parse(await W.vfs.readFile('/projects/smoke/pipeline.json', 'utf8'));
+            o.saved = pj.kind === 'workbench' && pl.data === '/projects/smoke.csv'
+              && (pl.derives || []).some((d) => d.name === 'AuEq') && /AuEq/.test(pl.filter || '');
+          } catch { /* not written yet */ }
+          return o;
+        });
+        if (wbProject.saved) break;
+        await page.waitForTimeout(150);
+      }
+      if (wbProject.saved) {
+        const ptab = await page.evaluate(async () => window.WKS.openPath('/projects/smoke'));
+        const pfr = await surfaceFrame(ptab);
+        if (pfr) {
+          dl = Date.now() + 20000;
+          while (Date.now() < dl) {
+            const r = await pfr.evaluate(() => {
+              const out = document.getElementById('out'); const text = out ? out.textContent : '';
+              return { path: document.getElementById('path').value, derived: text.includes('AuEq') };
+            });
+            if (r.path === '/projects/smoke.csv' && r.derived) { wbProject.reopened = true; break; }
+            await page.waitForTimeout(150);
+          }
+        }
       }
     }
   }
@@ -1425,6 +1461,8 @@ const checks = {
       && wbView.hasAuColumn && wbView.hasLito,
   'workbench: grade-tonnage curve renders':  gtView.ok === true,
   'workbench: calc/filter transform — derived column first-class + row count': wbTransform.derivedShown && wbTransform.rowCount,
+  'workbench: Save writes a project (project.json + pipeline.json)': wbProject.saved,
+  'workbench: reopening the project restores data + transforms': wbProject.reopened,
   // @gcu/librarian v2 — embedded CSR engine runs in-browser
   'librarian: index() is the CSR engine':   librarian.csr === true,
   'librarian: multi-field ranked search':   librarian.multiRank && librarian.fuzzy,

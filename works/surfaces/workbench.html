@@ -56,8 +56,9 @@
 <body>
 <header>
   <span class="title">Data Workbench</span>
-  <input class="path" id="path" placeholder="/projects/…csv" spellcheck="false">
+  <input class="path" id="path" placeholder="/projects/…csv or .omf" spellcheck="false">
   <button id="load">Analyze</button>
+  <button id="save" title="Save as a workbench project (project.json + pipeline.json)">Save project</button>
   <span class="spacer"></span>
   <span class="status" id="status">point at a CSV in the workspace</span>
 </header>
@@ -79,6 +80,13 @@ let view = null;   // { m, summary, path, derives, filter, count, rawCount } —
 let transforms = { derives: [], filter: '' };   // pending calc/filter ops (applied on Analyze)
 const status = (s) => { $('status').textContent = s; };
 const call = (member, args) => bus.call({ to: 'pipeline', path: '/', interface: 'Pipeline', member }, args);
+const sig = (member, args) => bus.signal({ path: '/', interface: 'Surface', member }, args);
+const vfsCall = (member, args) => bus.call({ to: 'works', path: '/', interface: 'VFS', member }, args);
+const vfsRead = async (p) => { try { return await vfsCall('Read', [p, 'utf8']); } catch { return null; } };
+const rid = () => Math.random().toString(36).slice(2, 10);
+let projectDir = null;   // set when this surface backs a /projects/<name>/ workbench project
+let dirty = false;
+const setDirty = (d) => { if (dirty === d) return; dirty = d; sig('DirtyChanged', [d]); };
 
 window.addEventListener('message', async (ev) => {
   if (ev.source !== window.parent) return;
@@ -90,24 +98,65 @@ window.addEventListener('message', async (ev) => {
 
   bus.expose('/', {
     Surface: {
-      methods: { Flush: () => {}, CanClose: () => true, Relocated: () => {} },
+      methods: { Flush: () => flush(), CanClose: () => true, Relocated: () => {} },
       signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
     },
   });
 
   $('load').addEventListener('click', () => { const p = $('path').value.trim(); if (p) loadPath(p); });
   $('path').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('load').click(); });
+  $('save').addEventListener('click', saveProject);
 
   const path = ev.data.tab && ev.data.tab.path;
   bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' },
     [path ? 'Workbench · ' + path.split('/').pop() : 'Data Workbench']);
   bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
 
-  if (path) { $('path').value = path; loadPath(path); }
+  // A folder with a pipeline.json → restore the workbench project; otherwise the
+  // path is a data file to analyze ephemerally (the tool mode).
+  if (path) {
+    const loaded = await loadProject(path);
+    if (!loaded) { $('path').value = path; loadPath(path); }
+  }
 });
 
 // A new file resets pending transforms; re-analysis (Transform → Analyze) keeps them.
-function loadPath(p) { transforms = { derives: [], filter: '' }; analyze(p); }
+function loadPath(p) { transforms = { derives: [], filter: '' }; projectDir = null; analyze(p); }
+
+// ── workbench project (project.json {kind:workbench} + pipeline.json) ──────
+// pipeline.json = { version, data, derives, filter }. Reload restores the data
+// path + transforms; Save persists them; Flush writes on tab close.
+async function loadProject(dir) {
+  const pj = await vfsRead(dir + '/pipeline.json');
+  if (!pj) return false;
+  let spec; try { spec = JSON.parse(pj); } catch { return false; }
+  projectDir = dir;
+  transforms = { derives: spec.derives || [], filter: spec.filter || '' };
+  sig('TitleChanged', ['Workbench · ' + dir.split('/').pop()]);
+  if (spec.data) { $('path').value = spec.data; await analyze(spec.data); }
+  setDirty(false);
+  return true;
+}
+async function saveToDisk() {
+  if (!projectDir || !view) return;
+  await vfsCall('Write', [projectDir + '/pipeline.json',
+    JSON.stringify({ version: 1, data: view.path, derives: transforms.derives, filter: transforms.filter }, null, 2)]);
+  setDirty(false);
+  status('saved · ' + projectDir);
+}
+async function saveProject() {
+  if (!view || !view.path) { status('analyze a file first, then Save project'); return; }
+  if (!projectDir) {
+    const base = ((view.path.split('/').pop() || 'model').replace(/\.[^.]+$/, '')) || 'model';
+    projectDir = '/projects/' + base;
+    await vfsCall('MkDir', [projectDir]);
+    await vfsCall('Write', [projectDir + '/project.json',
+      JSON.stringify({ kind: 'workbench', id: 'p-' + rid(), title: base }, null, 2)]);
+    sig('TitleChanged', ['Workbench · ' + base]);
+  }
+  await saveToDisk();
+}
+function flush() { if (projectDir) return saveToDisk(); }
 
 // Pick the loader by extension — .omf block models go through load.omf (which
 // expands the VolumeElement to a table), everything else through load.csv.
@@ -241,6 +290,7 @@ function applyTransform() {
   const filter = $('filter-input').value.trim();
   if (filter && validateExpr(filter)) { status('filter expression has a syntax error'); return; }
   transforms = { derives, filter };
+  setDirty(true);
   if (view && view.path) analyze(view.path);
 }
 
