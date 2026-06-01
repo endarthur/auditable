@@ -237,8 +237,10 @@ export function buildCsrIndex(spec = {}) {
 function _idf(N, df) { return Math.log(1 + (N - df + 0.5) / (df + 0.5)); }
 
 // Expand a query term via synonyms + (optional) fuzzy + prefix, against the
-// CSR dictionary. Same weights as v1's _expandTerm.
-function _expand(term, index, fuzzy) {
+// CSR dictionary. Same weights as v1's _expandTerm. `prefix` (default on) gates
+// the prefix scan — search-as-you-type wants it for the partial last word; a
+// consumer can pass `prefix:false` to match whole terms only.
+function _expand(term, index, fuzzy, prefix) {
   const expanded = [{ term, weight: 1.0 }];
   const has = (t) => index.vocab.has(t);
   const syns = index.synonyms[term];
@@ -247,7 +249,7 @@ function _expand(term, index, fuzzy) {
     const near = nearTerms(term, index.vocab.keys(), fuzzy);
     for (const { term: t, distance } of near) expanded.push({ term: t, weight: 1 - 0.3 * distance });
   }
-  if (term.length >= 3 && !has(term)) {
+  if (prefix && term.length >= 3 && !has(term)) {
     for (const t of index.vocab.keys()) if (t !== term && t.startsWith(term)) expanded.push({ term: t, weight: 0.8 });
   }
   return expanded;
@@ -357,6 +359,8 @@ function _cPublicDoc(index, doc) {
 function _searchOne(index, query, opts = {}) {
   const fuzzy = opts.fuzzy != null ? opts.fuzzy : 1;
   const limit = opts.limit != null ? opts.limit : 10;
+  const prefix = opts.prefix != null ? opts.prefix : true;          // on by default
+  const filter = typeof opts.filter === 'function' ? opts.filter : null;
   const tokens = tokenizeStrings(query);
   if (tokens.length === 0) return [];
 
@@ -365,7 +369,7 @@ function _searchOne(index, query, opts = {}) {
   const skip = index._deleted;
 
   for (const tok of tokens) {
-    const expansions = _expand(tok, index, fuzzy);
+    const expansions = _expand(tok, index, fuzzy, prefix);
     // Per-doc best expansion for this token.
     const tokBest = new Map();   // doc -> { score, term, fieldHits }
     for (const { term, weight } of expansions) {
@@ -402,6 +406,9 @@ function _searchOne(index, query, opts = {}) {
 
   const results = [];
   for (const [doc, score] of docScores) {
+    // Scoped search — an optional predicate on the external id (§5). Applied
+    // before the limit slice, so the result is the top-K of the filtered set.
+    if (filter && !filter(index.docIds[doc])) continue;
     const dh = docHits.get(doc);
     const finalScore = score + (index.positions ? _cProximity(dh.perToken) : 0);
     const out = { id: index.docIds[doc], score: finalScore, doc: _cPublicDoc(index, doc) };

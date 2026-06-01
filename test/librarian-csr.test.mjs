@@ -123,6 +123,50 @@ describe('CSR engine — CJK regression', () => {
   });
 });
 
+// ── prefix + filter search options (weir §5) ────────────────────────────────
+
+describe('CSR engine — prefix option', () => {
+  const docs = [
+    { id: 'd1', title: 'Encryption', body: 'aes encryption' },
+    { id: 'd2', title: 'Mounts', body: 'disk encryption folders' },
+    { id: 'd3', title: 'Storage', body: 'plain text' },
+  ];
+  const idx = buildCsrIndex({ docs, fields: { title: { boost: 4 }, body: { boost: 1 } } });
+  const ids = (r) => r.map((h) => h.id).sort();
+
+  it('prefix is on by default — a partial word matches', () => {
+    assert.deepEqual(ids(search(idx, 'encr', { fuzzy: 0 })), ['d1', 'd2']);
+  });
+  it('prefix:false matches whole terms only', () => {
+    assert.deepEqual(search(idx, 'encr', { fuzzy: 0, prefix: false }), []);
+    // the exact term still matches with prefix off
+    assert.deepEqual(ids(search(idx, 'encryption', { fuzzy: 0, prefix: false })), ['d1', 'd2']);
+  });
+});
+
+describe('CSR engine — filter (scoped search)', () => {
+  const docs = [
+    { id: 'a1', body: 'shared term', folder: 'x' },
+    { id: 'a2', body: 'shared term', folder: 'y' },
+    { id: 'a3', body: 'shared term', folder: 'x' },
+  ];
+  const idx = buildCsrIndex({ docs });
+  const ids = (r) => r.map((h) => h.id).sort();
+
+  it('restricts results to docs passing the predicate (by external id)', () => {
+    const r = search(idx, 'shared', { filter: (id) => id !== 'a2' });
+    assert.deepEqual(ids(r), ['a1', 'a3']);
+  });
+  it('returns the top-K of the filtered set (filter before limit)', () => {
+    const r = search(idx, 'shared', { filter: (id) => id !== 'a1', limit: 1 });
+    assert.equal(r.length, 1);
+    assert.ok(['a2', 'a3'].includes(r[0].id));   // a1 excluded even though it scores
+  });
+  it('no filter → all matches', () => {
+    assert.deepEqual(ids(search(idx, 'shared')), ['a1', 'a2', 'a3']);
+  });
+});
+
 // ── (d) lean path (folded / no stored text / no positions) ──────────────────
 
 describe('CSR engine — lean (folded) path', () => {

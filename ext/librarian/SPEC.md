@@ -242,7 +242,7 @@ silent default — so the defaults reproduce v1 exactly.
 
 ```js
 Librarian.index({ docs, fields?, mode?, storeText?, positions?, snippet?, synonyms? })
-Librarian.search(index, q, { fuzzy?, limit? })   // { id, score, doc, snippet, hits }
+Librarian.search(index, q, { fuzzy?, limit?, prefix?, filter? })  // { id, score, doc, snippet, hits }
 Librarian.suggest(index, q)                       // did-you-mean
 Librarian.addDoc(index, doc)                      // delta segment, O(doc)
 Librarian.removeDoc(index, id)                    // tombstone, O(1)

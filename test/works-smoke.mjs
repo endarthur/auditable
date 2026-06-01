@@ -1010,6 +1010,10 @@ const librarian = await page.evaluate(async () => {
     out.snippet = !!(r[0] && /<mark>/.test(r[0].snippet || ''));
     out.meta = !!(r[0] && r[0].doc && r[0].doc.file === 'a.md');
     out.fuzzy = L.search(idx, 'encrytion', { fuzzy: 1 })[0]?.id === 'd1';
+    // prefix option (default on; prefix:false → whole-term only) + scoped filter.
+    out.prefixOpt = L.search(idx, 'encry', { fuzzy: 0 }).length > 0
+      && L.search(idx, 'encry', { fuzzy: 0, prefix: false }).length === 0;
+    out.filterOpt = L.search(idx, 'notebook', { filter: (id) => id === 'd1' }).every((h) => h.id === 'd1');
 
     // lean folded path + scan + incremental + pack round-trip.
     const lean = L.index({ docs, mode: 'folded', fields: { title: { boost: 4 }, body: { boost: 1 } }, storeText: false, positions: false });
@@ -1343,6 +1347,7 @@ const checks = {
   'librarian: incremental addDoc':           librarian.addDoc,
   'librarian: pack/unpack round-trips':      librarian.pack,
   'librarian: docview search consumer':      librarian.docview,
+  'librarian: prefix + filter search opts':  librarian.prefixOpt && librarian.filterOpt,
   'librarian: no error':                     !librarian.err,
   // @gcu/stereonet — cell type auto-loads + renders + feeds a reactive handle
   'stereonet: cell type auto-loads (LANGUAGE_PACKS)': stereo.registered === true,
