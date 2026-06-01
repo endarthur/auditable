@@ -10,6 +10,7 @@ import {
   accumulatorFromSpec,
   fromText, fromBytes, fromBlob, sample, lines, parseCsv, filter, map, select,
   recipe, scan, scanState, chunks, NULL_SENTINELS,
+  compileExpr, opFromSpec, opsFromSpecs,
 } from '../ext/sluice/src/main.js';
 
 // Feed an array of values to an accumulator, return its result.
@@ -363,4 +364,31 @@ test('chunks exposes raw Blob slices (for by-reference worker dispatch)', async 
   const acc = accumulatorFromSpec({ kind: 'collect', fields: { X: { column: 'X', of: { kind: 'welford' } } } });
   const st = await scanState(recipe(fromBlob(blobs[0]), parseCsv({ header })), acc);
   assert.ok(acc.result(st).X.count > 0);
+});
+
+// ── row-expression ops (calc/filter) ─────────────────────────────────────
+test('compileExpr: columns + helper vocabulary + Math in scope', () => {
+  assert.equal(compileExpr('Au * 0.6 + ifnull(Cu, 0)')({ Au: 2, Cu: NaN }), 1.2);
+  assert.equal(compileExpr('sqrt(x)')({ x: 9 }), 3);
+  assert.equal(compileExpr('clamp(x, 0, 10)')({ x: 15 }), 10);
+  assert.equal(compileExpr('cap(x, 5)')({ x: 9 }), 5);
+  assert.equal(compileExpr('between(g, 1, 5)')({ g: 3 }), true);
+  assert.equal(compileExpr('remap(x, 0, 10, 0, 100)')({ x: 3 }), 30);
+});
+
+test('opFromSpec: derive + filter fuse into a scan (serializable, streaming)', async () => {
+  const csv = 'X,Au,Cu\n100,2,\n110,1,3\n120,5,0\n';
+  const columns = [{ name: 'X', type: 'numeric' }, { name: 'Au', type: 'numeric' }, { name: 'Cu', type: 'numeric' }];
+  const ops = opsFromSpecs([
+    { kind: 'derive', name: 'AuEq', expr: 'Au * 0.6 + ifnull(Cu, 0)' },   // [1.2, 3.6, 3.0]
+    { kind: 'filter', expr: 'AuEq >= 1.5' },                              // keeps [3.6, 3.0]
+  ]);
+  const acc = accumulatorFromSpec({ kind: 'collect', fields: { v: { column: 'AuEq', of: { kind: 'welford' } } } });
+  const out = await scan(recipe(fromText(csv), parseCsv({ header: true, columns }), ...ops), acc);
+  assert.equal(out.v.count, 2);
+  assert.ok(Math.abs(out.v.mean - 3.3) < 1e-9);
+});
+
+test('opFromSpec: unknown kind throws', () => {
+  assert.throws(() => opFromSpec({ kind: 'nope' }), /unknown op spec/);
 });

@@ -911,7 +911,7 @@ const pipeline = await page.evaluate(async () => {
   ] };
   const call = (member, args) => W.worksBus.call(
     { to: 'pipeline', path: '/', interface: 'Pipeline', member }, args);
-  let types = null, valid = null, manifest = null, stats = null, worker = null, swath = null, err = null;
+  let types = null, valid = null, manifest = null, stats = null, worker = null, swath = null, cf = null, err = null;
   try {
     types = await call('NodeTypes', []);
     valid = await call('Validate', [graph]);
@@ -924,6 +924,17 @@ const pipeline = await page.evaluate(async () => {
       { id: 'sw', type: 'swath', params: { axis: 'X', grade: 'Au_gpt', binWidth: 5000 },
         wiring: { table: { node: 'src', port: 'table' }, manifest: { node: 'snf', port: 'manifest' } } },
     ] }, 'sw', 'swath']);
+    // calc → filter → stats, streaming (the ops fuse into the scan + cross to
+    // workers). AuEq = Au_gpt·2 (0..3.998); keep AuEq>1 (i>500 → 1499 rows);
+    // mean AuEq over i 501..1999 = 2·1250/1000 = 2.5.
+    cf = await call('Pull', [{ nodes: [
+      { id: 'src', type: 'load.csv', params: { path: '/projects/smoke.csv' } },
+      { id: 'snf', type: 'recon.sniff', wiring: { table: { node: 'src', port: 'table' } } },
+      { id: 'ca', type: 'calc', params: { name: 'AuEq', expr: 'Au_gpt * 2' }, wiring: { table: { node: 'src', port: 'table' } } },
+      { id: 'fl', type: 'filter', params: { expr: 'AuEq > 1' }, wiring: { table: { node: 'ca', port: 'table' } } },
+      { id: 'cst', type: 'stats', params: { column: 'AuEq' },
+        wiring: { table: { node: 'fl', port: 'table' }, manifest: { node: 'snf', port: 'manifest' } } },
+    ] }, 'cst', 'stats']);
   } catch (e) { err = e.message; }
   const b0 = swath && swath[0] && swath[0].value && swath[0].value.g;
   return {
@@ -935,6 +946,7 @@ const pipeline = await page.evaluate(async () => {
     pooled: worker && worker.pooled, scanMode: worker && worker.lastScanMode,
     swathBins: Array.isArray(swath) ? swath.length : 0,
     swathHasMean: !!(b0 && typeof b0.mean === 'number' && b0.count > 0),
+    calcFilter: !!(cf && cf.v && cf.v.count === 1499 && Math.abs(cf.v.mean - 2.5) < 1e-6),
   };
 });
 
@@ -1381,6 +1393,7 @@ const checks = {
   'pipeline: scan ran on the @gcu/proc worker pool': pipeline.pooled === true
       && pipeline.scanMode === 'parallel',
   'pipeline: swath bins along X (mean grade per bin)': pipeline.swathBins > 0 && pipeline.swathHasMean,
+  'pipeline: calc→filter→stats fuses into the scan': pipeline.calcFilter === true,
   'pipeline: no error':                    !pipeline.err,
   // Data Workbench surface
   'workbench: surface opens':              wbOpen.ready === true,

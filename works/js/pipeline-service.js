@@ -47,14 +47,17 @@ function ensureParallel() {
   return _parallel;
 }
 
-// Run a per-column accumulator (given as a serializable spec) over a table Blob —
-// parallel across workers when available, inline otherwise. Same result either way.
-async function runColumnAcc(blob, manifest, accSpec) {
+// Run a per-column accumulator (a serializable spec) over a table — parallel
+// across workers when available, inline otherwise; same result either way. A
+// `table` is { blob, ops }: the source Blob + serializable row-expression ops
+// (calc/filter) that fuse into the scan after the parse.
+async function runColumnAcc(table, manifest, accSpec) {
+  const blob = table.blob, opSpecs = table.ops || [];
   const parseOpts = { delimiter: manifest.delimiter, columns: manifest.columns };
   let out;
   const par = ensureParallel();
   if (par) {
-    try { out = await scanParallel({ sluice, pool: par.pool, sluiceUrl: par.sluiceUrl, blob, parseOpts, accSpec }); _lastScanMode = 'parallel'; }
+    try { out = await scanParallel({ sluice, pool: par.pool, sluiceUrl: par.sluiceUrl, blob, parseOpts, accSpec, opSpecs }); _lastScanMode = 'parallel'; }
     catch {
       // A pool failure can leave it with no live workers (e.g. workers that
       // died importing the lib) — and the next pool.map would queue forever on
@@ -66,7 +69,7 @@ async function runColumnAcc(blob, manifest, accSpec) {
   } else { _lastScanMode = 'inline'; }
   if (out === undefined) {
     const acc = sluice.accumulatorFromSpec(accSpec);
-    out = await sluice.scan(sluice.recipe(sluice.fromBlob(blob), sluice.parseCsv({ ...parseOpts, header: true })), acc);
+    out = await sluice.scan(sluice.recipe(sluice.fromBlob(blob), sluice.parseCsv({ ...parseOpts, header: true }), ...sluice.opsFromSpecs(opSpecs)), acc);
   }
   // Strip non-serializable bits (topK's top() closure) so the result crosses A-Bus.
   return JSON.parse(JSON.stringify(out));
@@ -113,7 +116,7 @@ export function createPipelineRegistry(vfs) {
     type: 'load.csv', version: 1, outputs: { table: 'table' },
     // INTERIM: whole-file read → a Blob (sliceable, so workers can chunk it
     // by reference). Real source = streaming/ranged VFS (proc Phase B).
-    compute: async (_i, p) => ({ table: new Blob([await vfs.readFile(p.path, 'utf8')]) }),
+    compute: async (_i, p) => ({ table: { blob: new Blob([await vfs.readFile(p.path, 'utf8')]), ops: [] } }),
   });
 
   // load.omf — read an OMF v1 block model from the workspace and present it as a
@@ -125,13 +128,27 @@ export function createPipelineRegistry(vfs) {
       const project = await omf1.readOMF(await vfs.readFile(p.path, 'bytes'));
       const vol = (project.elements || []).find((e) => e.type === 'VolumeElement');
       if (!vol) throw new Error('load.omf: no VolumeElement (block model) in ' + p.path);
-      return { table: new Blob([omfVolumeToCsv(omf1, vol)]) };
+      return { table: { blob: new Blob([omfVolumeToCsv(omf1, vol)]), ops: [] } };
     },
+  });
+
+  // calc — append a derived column (an expression over existing columns) to the
+  // table recipe. Streaming: no new table is built; the op fuses into the next
+  // scan (and crosses to workers as a string). e.g. expr "Au*0.6 + ifnull(Cu,0)".
+  reg.register({
+    type: 'calc', version: 1, inputs: { table: 'table' }, outputs: { table: 'table' },
+    compute: async (i, p) => ({ table: { blob: i.table.blob, ops: [...(i.table.ops || []), { kind: 'derive', name: p.name, expr: p.expr }] } }),
+  });
+
+  // filter — keep rows where an expression is truthy. Same streaming append.
+  reg.register({
+    type: 'filter', version: 1, inputs: { table: 'table' }, outputs: { table: 'table' },
+    compute: async (i, p) => ({ table: { blob: i.table.blob, ops: [...(i.table.ops || []), { kind: 'filter', expr: p.expr }] } }),
   });
 
   reg.register({
     type: 'recon.sniff', version: 1, inputs: { table: 'table' }, outputs: { manifest: 'any' },
-    compute: async (i) => ({ manifest: sniff(await sluice.sample(sluice.fromBlob(i.table), 200)) }),
+    compute: async (i) => ({ manifest: sniff(await sluice.sample(sluice.fromBlob(i.table.blob), 200)) }),
   });
 
   reg.register({

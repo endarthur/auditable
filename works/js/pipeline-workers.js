@@ -15,10 +15,12 @@
 // Worker-side: import sluice from the given module URL, rebuild the accumulator
 // from its spec, scan one Blob chunk, return the partial (mergeable) state.
 // Standalone — references only its arguments (proc serializes it via toString()).
-export async function _scanChunk(blob, sluiceUrl, parseOpts, accSpec) {
+export async function _scanChunk(blob, sluiceUrl, parseOpts, accSpec, opSpecs) {
   const S = await import(sluiceUrl);
   const acc = S.accumulatorFromSpec(accSpec);
-  return S.scanState(S.recipe(S.fromBlob(blob), S.parseCsv(parseOpts)), acc);
+  // Row-expression ops (calc/filter) cross as serializable specs and fuse into
+  // the scan after the parse — compiled here, worker-side (the §7a contract).
+  return S.scanState(S.recipe(S.fromBlob(blob), S.parseCsv(parseOpts), ...S.opsFromSpecs(opSpecs)), acc);
 }
 
 // scanParallel({ sluice, pool, sluiceUrl, blob, parseOpts?, accSpec, workers? })
@@ -28,18 +30,19 @@ export async function _scanChunk(blob, sluiceUrl, parseOpts, accSpec) {
 //   blob      — the source as a sliceable Blob/File
 //   accSpec   — a serializable accumulator spec (sluice.accumulatorFromSpec)
 // Returns the finalized accumulator result (merged across chunks).
-export async function scanParallel({ sluice, pool, sluiceUrl, blob, parseOpts = {}, accSpec, workers = 4 }) {
+export async function scanParallel({ sluice, pool, sluiceUrl, blob, parseOpts = {}, accSpec, opSpecs = [], workers = 4 }) {
   const { header, blobs } = await sluice.chunks(blob, workers, { comment: parseOpts.comment });
   const opts = { ...parseOpts, header };
   const make = () => sluice.accumulatorFromSpec(accSpec);
+  const ops = () => sluice.opsFromSpecs(opSpecs);
 
   let states;
   if (blobs.length <= 1) {
     // Trivial input — skip worker overhead, scan inline.
     const b = blobs[0] || blob;
-    states = [await sluice.scanState(sluice.recipe(sluice.fromBlob(b), sluice.parseCsv(opts)), make())];
+    states = [await sluice.scanState(sluice.recipe(sluice.fromBlob(b), sluice.parseCsv(opts), ...ops()), make())];
   } else {
-    states = await pool.map(blobs, _scanChunk, { extra: [sluiceUrl, opts, accSpec] });
+    states = await pool.map(blobs, _scanChunk, { extra: [sluiceUrl, opts, accSpec, opSpecs] });
   }
 
   const acc = make();

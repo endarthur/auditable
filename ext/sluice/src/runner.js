@@ -114,6 +114,44 @@ export function select(cols) {
   };
 }
 
+// ── Row-expression ops (serializable: a string, not a closure) ───────────
+// calc/filter compile from an expression STRING so they cross to workers (the
+// §7a contract) and fuse into the scan. The row's columns are in scope (via
+// `with`), plus a frozen domain-helper vocabulary (harvested from BMA's
+// MATH_PREAMBLE) and Math. CONTROLLED emission site → JS string + new Function,
+// no AIR routing (feedback_compile_direct_emit); `compileExpr` is the single
+// expr→fn seam an AIR-backed compiler can replace later for performance.
+const EXPR_HELPERS = {
+  cap: (x, hi) => (x > hi ? hi : x),
+  clamp: (x, lo, hi) => (x < lo ? lo : x > hi ? hi : x),
+  ifnull: (x, d) => (x == null || (typeof x === 'number' && Number.isNaN(x)) ? d : x),
+  ifnum: (x, d) => (typeof x === 'number' && !Number.isNaN(x) ? x : d),
+  isnum: (x) => (typeof x === 'number' && !Number.isNaN(x)),
+  between: (x, lo, hi) => (x >= lo && x <= hi),
+  remap: (x, a, b, c, d) => (b === a ? c : c + ((x - a) * (d - c)) / (b - a)),
+};
+export function compileExpr(expr) {
+  // eslint-disable-next-line no-new-func
+  const f = new Function('row', 'H', `with (Math) { with (H) { with (row) { return (${expr}); } } }`);
+  return (row) => f(row, EXPR_HELPERS);
+}
+// { kind:'derive', name, expr } → add/overwrite a column. { kind:'filter', expr }
+// → keep rows where the expr is truthy. Both are pure stream ops.
+export function opFromSpec(spec) {
+  if (!spec || typeof spec.kind !== 'string') throw new Error('sluice: op spec needs a `kind`');
+  if (spec.kind === 'derive') {
+    if (!spec.name) throw new Error('sluice: derive op needs a `name`');
+    const f = compileExpr(spec.expr), name = spec.name;
+    return map((row) => { row[name] = f(row); return row; });
+  }
+  if (spec.kind === 'filter') {
+    const f = compileExpr(spec.expr);
+    return filter((row) => !!f(row));
+  }
+  throw new Error(`sluice: unknown op spec kind "${spec.kind}"`);
+}
+export function opsFromSpecs(specs) { return (specs || []).map(opFromSpec); }
+
 // ── Recipe + scan ────────────────────────────────────────────────────
 export function recipe(src, ...ops) { return { source: src, ops, comment: '#' }; }
 
