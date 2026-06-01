@@ -1,0 +1,10 @@
+{
+  "name": "@gcu/omf1",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Open Mining Format v1 (.omf) reader/writer — zero-dep, isomorphic. The interchange format Leapfrog/Surpac/Micromine/Deswik/Vulcan all ship.",
+  "main": "index.js",
+  "license": "CC0-1.0",
+  "author": "Arthur Endlein Correia",
+  "keywords": ["omf", "open-mining-format", "block-model", "geology", "mining", "interchange", "leapfrog"]
+}

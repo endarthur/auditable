@@ -1090,6 +1090,30 @@ if (stereoFrame) {
   });
 }
 
+// @gcu/omf1 — the embedded OMF v1 lib must round-trip in-browser (exercises
+// CompressionStream "deflate" in a blob: context).
+const omf1 = await page.evaluate(async () => {
+  const W = window.WKS;
+  const out = { err: null };
+  try {
+    const src = await W.vfs.readFile('/usr/lib/@gcu/omf1/source', 'utf8');
+    const M = await import(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+    const proj = {
+      type: 'Project', name: 't', description: '', origin: [0, 0, 0], date_created: '', date_modified: '',
+      elements: [{
+        type: 'VolumeElement', name: 'bm', description: '', color: null,
+        geometry: { type: 'VolumeGridGeometry', origin: [0, 0, 0], axis_u: [1, 0, 0], axis_v: [0, 1, 0], axis_w: [0, 0, 1], tensor_u: new Float64Array([10, 10]), tensor_v: new Float64Array([10]), tensor_w: new Float64Array([5]) },
+        data: [{ type: 'ScalarData', name: 'au', description: '', location: 'cells', colormap: null, array: new Float64Array([1, 2]) }],
+      }],
+    };
+    const back = await M.readOMF(await M.writeOMF(proj));
+    const au = back.elements[0].data[0].array;
+    out.roundtrip = back.elements[0].type === 'VolumeElement' && au[0] === 1 && au[1] === 2;
+    out.grid = JSON.stringify(M.blockModelGrid(back.elements[0].geometry)) === '[2,1,1]';
+  } catch (e) { out.err = String((e && e.message) || e); }
+  return out;
+});
+
 exportedHtml = await page.evaluate(async () => {
   const W = window.WKS;
   return W.buildWorksHtml(await W.serializeWorkspace(W.vfs));
@@ -1357,6 +1381,9 @@ const checks = {
   'stereonet: in-cell view sliders + group toggle':    stereo.sliders >= 2 && stereo.toggles >= 1,
   'stereonet: mini-format tokenizer registered':       stereo.hasTokenize === true,
   'stereonet: no cell error':                          !stereo.err,
+  // @gcu/omf1 — embedded OMF v1 lib round-trips in-browser
+  'omf1: write→read round-trips (in-browser)':          omf1.roundtrip === true && omf1.grid === true,
+  'omf1: no error':                                     !omf1.err,
 };
 
 console.log('--- works.html (Works rebuild — Chunks 1-3, 5 + surfaces) ---');
