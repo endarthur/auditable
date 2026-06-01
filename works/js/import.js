@@ -194,6 +194,13 @@ async function importHtml(html, fallbackName) {
  * Returns the new project path. Throws on an unrecognised / unusable file.
  */
 export async function importNotebook(content, filename) {
+  // Canonical LF. A file dragged in from a CRLF source (Windows tools, or a
+  // working tree checked out with git autocrlf) would otherwise break the
+  // block regexes below (`<!--AUDITABLE-DATA\n`, the `/// title:` `$` anchor,
+  // the dump extractors) — they all match a literal \n. Normalize once here so
+  // every downstream path (.txt verbatim store, .html routing + extraction,
+  // .ipynb JSON) sees \n. Lone \r (classic-Mac) folds in too.
+  content = String(content).replace(/\r\n?/g, '\n');
   const dot = filename.lastIndexOf('.');
   const ext = dot >= 0 ? filename.slice(dot).toLowerCase() : '';
   const fallbackName = (dot >= 0 ? filename.slice(0, dot) : filename) || 'notebook';

@@ -473,12 +473,10 @@ const nbFlush = await page.evaluate(async (uniqueName) => {
 // ── Import notebook (.txt + .html, current + legacy formats) ──────────
 // File → Import notebook…: a .txt source file or a standalone .html
 // becomes a /projects/<name> directory that opens as a notebook surface.
-// Normalize CRLF → LF: on Windows, git autocrlf checks examples out with CRLF,
-// and import.js's block regexes match a literal \n. A real auditable export is
-// LF; the working-tree line endings are an autocrlf artifact, not data. (The
-// import.js regexes being CRLF-tolerant is a separate, worthwhile robustness fix.)
+// Read verbatim — on Windows git autocrlf checks this out with CRLF, which
+// exercises importNotebook's CRLF→LF normalization (it must accept either).
 const exampleHtml = fs.readFileSync(
-  path.join(root, 'examples/basics/example_app_export.html'), 'utf8').replace(/\r\n/g, '\n');
+  path.join(root, 'examples/basics/example_app_export.html'), 'utf8');
 
 const importResult = await page.evaluate(async (exampleHtml) => {
   const W = window.WKS;
