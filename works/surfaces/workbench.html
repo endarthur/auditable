@@ -62,7 +62,7 @@
   <span class="status" id="status">point at a CSV in the workspace</span>
 </header>
 <div class="scroll" id="out">
-  <div class="empty">No data loaded. Type a workspace path (e.g. <code>/projects/blocks.csv</code>) and click Analyze.</div>
+  <div class="empty">No data loaded. Type a workspace path (a <code>.csv</code> or an OMF <code>.omf</code> block model, e.g. <code>/projects/blocks.omf</code>) and click Analyze.</div>
 </div>
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
@@ -105,10 +105,14 @@ window.addEventListener('message', async (ev) => {
   if (path) { $('path').value = path; analyze(path); }
 });
 
+// Pick the loader by extension — .omf block models go through load.omf (which
+// expands the VolumeElement to a table), everything else through load.csv.
+const loadType = (p) => (/\.omf$/i.test(p) ? 'load.omf' : 'load.csv');
+
 async function analyze(path) {
   status('analyzing ' + path + ' …');
   const graph = { nodes: [
-    { id: 'src', type: 'load.csv', params: { path } },
+    { id: 'src', type: loadType(path), params: { path } },
     { id: 'snf', type: 'recon.sniff', wiring: { table: { node: 'src', port: 'table' } } },
     { id: 'sum', type: 'summary',
       wiring: { table: { node: 'src', port: 'table' }, manifest: { node: 'snf', port: 'manifest' } } },
@@ -259,7 +263,7 @@ async function computeGT(opts) {
   if (!(gradeMax > gradeMin)) { res.textContent = ''; res.appendChild(emptyDiv('that column has no grade range')); return; }
   res.textContent = ''; res.appendChild(emptyDiv('computing grade-tonnage…'));
   const graph = { nodes: [
-    { id: 'src', type: 'load.csv', params: { path: view.path } },
+    { id: 'src', type: loadType(view.path), params: { path: view.path } },
     { id: 'snf', type: 'recon.sniff', wiring: { table: { node: 'src', port: 'table' } } },
     { id: 'gt', type: 'gt',
       params: { grade: opts.grade, gradeMin, gradeMax, bins: 200, blockVolume: opts.blockVolume, dims: opts.dims, density: opts.density },

@@ -1106,10 +1106,24 @@ const omf1 = await page.evaluate(async () => {
         data: [{ type: 'ScalarData', name: 'au', description: '', location: 'cells', colormap: null, array: new Float64Array([1, 2]) }],
       }],
     };
-    const back = await M.readOMF(await M.writeOMF(proj));
+    const bytes = await M.writeOMF(proj);
+    const back = await M.readOMF(bytes);
     const au = back.elements[0].data[0].array;
     out.roundtrip = back.elements[0].type === 'VolumeElement' && au[0] === 1 && au[1] === 2;
     out.grid = JSON.stringify(M.blockModelGrid(back.elements[0].geometry)) === '[2,1,1]';
+
+    // load.omf flowsheet node: write the .omf to the VFS, then pull stats over
+    // the block model THROUGH the pipeline service (omf → table → sniff → stats).
+    await W.vfs.writeFile('/projects/smoke.omf', bytes);
+    const call = (member, args) => W.worksBus.call({ to: 'pipeline', path: '/', interface: 'Pipeline', member }, args);
+    out.nodeRegistered = (await call('NodeTypes', [])).includes('load.omf');
+    const g = { nodes: [
+      { id: 'src', type: 'load.omf', params: { path: '/projects/smoke.omf' } },
+      { id: 'snf', type: 'recon.sniff', wiring: { table: { node: 'src', port: 'table' } } },
+      { id: 'st', type: 'stats', params: { column: 'au' }, wiring: { table: { node: 'src', port: 'table' }, manifest: { node: 'snf', port: 'manifest' } } },
+    ] };
+    const st = await call('Pull', [g, 'st', 'stats']);
+    out.pipeline = !!(st && st.v && st.v.count === 2 && Math.abs(st.v.mean - 1.5) < 1e-9);
   } catch (e) { out.err = String((e && e.message) || e); }
   return out;
 });
@@ -1383,6 +1397,7 @@ const checks = {
   'stereonet: no cell error':                          !stereo.err,
   // @gcu/omf1 — embedded OMF v1 lib round-trips in-browser
   'omf1: write→read round-trips (in-browser)':          omf1.roundtrip === true && omf1.grid === true,
+  'omf1: load.omf node → table → pipeline stats':       omf1.nodeRegistered === true && omf1.pipeline === true,
   'omf1: no error':                                     !omf1.err,
 };
 

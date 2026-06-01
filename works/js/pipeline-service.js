@@ -72,6 +72,40 @@ async function runColumnAcc(blob, manifest, accSpec) {
   return JSON.parse(JSON.stringify(out));
 }
 
+// @gcu/omf1, lazily blob-imported shell-side (the lib is a /usr/lib builtin).
+let _omf1 = null;
+async function ensureOmf1() {
+  if (_omf1) return _omf1;
+  const src = getLibSource('omf1');
+  if (!src) throw new Error('load.omf: @gcu/omf1 is unavailable');
+  _omf1 = await import(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+  return _omf1;
+}
+
+// Expand an OMF VolumeElement (regular block model) to a CSV table — X/Y/Z block
+// centroids + one column per cell-located variable — so the existing table nodes
+// (recon.sniff / summary / stats / gt / categories) consume it unchanged. INTERIM
+// (matches load.csv): materializes the whole model as CSV text; the streaming
+// path is the @gcu/blockmodel work. recon tags X/Y/Z as coords (GT skips them).
+function omfVolumeToCsv(omf1, vol) {
+  const cent = omf1.blockModelCentroids(vol.geometry);
+  const N = (cent.length / 3) | 0;
+  const safe = (s) => String(s).replace(/[",\r\n]/g, '_');
+  const cols = [];   // { name, arr, big }
+  for (const d of vol.data || []) {
+    if (d.location && d.location !== 'cells') continue;   // only cell data aligns with blocks
+    if (d.type === 'MappedData' && d.indices && d.indices.length === N) cols.push({ name: safe(d.name), arr: d.indices, big: true });
+    else if (d.array && d.array.length === N) cols.push({ name: safe(d.name), arr: d.array });
+  }
+  const lines = ['X,Y,Z' + cols.map((c) => ',' + c.name).join('')];
+  for (let i = 0; i < N; i++) {
+    let row = cent[i * 3] + ',' + cent[i * 3 + 1] + ',' + cent[i * 3 + 2];
+    for (const c of cols) row += ',' + (c.big ? Number(c.arr[i]) : c.arr[i]);
+    lines.push(row);
+  }
+  return lines.join('\n');
+}
+
 export function createPipelineRegistry(vfs) {
   const reg = createRegistry();
 
@@ -80,6 +114,19 @@ export function createPipelineRegistry(vfs) {
     // INTERIM: whole-file read → a Blob (sliceable, so workers can chunk it
     // by reference). Real source = streaming/ranged VFS (proc Phase B).
     compute: async (_i, p) => ({ table: new Blob([await vfs.readFile(p.path, 'utf8')]) }),
+  });
+
+  // load.omf — read an OMF v1 block model from the workspace and present it as a
+  // table (the gridded block model in row form, design §4a). Binary read.
+  reg.register({
+    type: 'load.omf', version: 1, outputs: { table: 'table' },
+    compute: async (_i, p) => {
+      const omf1 = await ensureOmf1();
+      const project = await omf1.readOMF(await vfs.readFile(p.path, 'bytes'));
+      const vol = (project.elements || []).find((e) => e.type === 'VolumeElement');
+      if (!vol) throw new Error('load.omf: no VolumeElement (block model) in ' + p.path);
+      return { table: new Blob([omfVolumeToCsv(omf1, vol)]) };
+    },
   });
 
   reg.register({
