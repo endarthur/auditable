@@ -473,8 +473,12 @@ const nbFlush = await page.evaluate(async (uniqueName) => {
 // ── Import notebook (.txt + .html, current + legacy formats) ──────────
 // File → Import notebook…: a .txt source file or a standalone .html
 // becomes a /projects/<name> directory that opens as a notebook surface.
+// Normalize CRLF → LF: on Windows, git autocrlf checks examples out with CRLF,
+// and import.js's block regexes match a literal \n. A real auditable export is
+// LF; the working-tree line endings are an autocrlf artifact, not data. (The
+// import.js regexes being CRLF-tolerant is a separate, worthwhile robustness fix.)
 const exampleHtml = fs.readFileSync(
-  path.join(root, 'examples/basics/example_app_export.html'), 'utf8');
+  path.join(root, 'examples/basics/example_app_export.html'), 'utf8').replace(/\r\n/g, '\n');
 
 const importResult = await page.evaluate(async (exampleHtml) => {
   const W = window.WKS;
@@ -1064,19 +1068,23 @@ if (stereoFrame) {
     if (window.runAll) await window.runAll();
     // Poll the cells' outputs.
     dl = Date.now() + 15000;
-    let svg = false, handle = '', err = '';
+    let svg = false, handle = '', err = '', sliders = 0, toggles = 0, hasTokenize = false;
     while (Date.now() < dl) {
       const cells = window.S?.cells || [];
       const sCell = cells.find((c) => c.type === 'stereonet');
       const cCell = cells.find((c) => c.type === 'code');
       svg = !!(sCell && sCell.el?.querySelector('.cell-output svg'));
+      // In-cell view widgets (rendered into the cell, not the output area).
+      sliders = sCell ? sCell.el.querySelectorAll('audit-slider').length : 0;
+      toggles = sCell ? sCell.el.querySelectorAll('audit-checkbox').length : 0;
       handle = (cCell && cCell.el?.querySelector('.cell-output')?.textContent) || '';
       err = (sCell && sCell.el?.querySelector('.cell-error')?.textContent) || ''
           || (cCell && cCell.el?.querySelector('.cell-error')?.textContent) || '';
-      if ((svg && handle.includes('dcos=')) || err) break;
+      if ((svg && handle.includes('dcos=') && sliders >= 2) || err) break;
       await new Promise((r) => setTimeout(r, 150));
     }
-    return { ready: true, registered, svg, handle, err };
+    hasTokenize = typeof window._cellTypes?.stereonet?.tokenize === 'function';
+    return { ready: true, registered, svg, handle, err, sliders, toggles, hasTokenize };
   });
 }
 
@@ -1343,6 +1351,8 @@ const checks = {
   'stereonet: renders an interactive net (SVG)':       stereo.svg === true,
   'stereonet: reactive handle feeds downstream':       /dcos=5\b/.test(stereo.handle)
       && /S1=/.test(stereo.handle) && /K=/.test(stereo.handle),
+  'stereonet: in-cell view sliders + group toggle':    stereo.sliders >= 2 && stereo.toggles >= 1,
+  'stereonet: mini-format tokenizer registered':       stereo.hasTokenize === true,
   'stereonet: no cell error':                          !stereo.err,
 };
 

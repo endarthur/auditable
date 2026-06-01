@@ -8,7 +8,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseCell, stereonetParseNames, stereonetFindUses } from '../ext/stereonet/index.js';
+import { parseCell, stereonetParseNames, stereonetFindUses, stereonetTokenize } from '../ext/stereonet/index.js';
 
 describe('stereonet parseCell', () => {
   it('defaults: equal-area, name "stereonet", no contour, no items', () => {
@@ -84,6 +84,53 @@ describe('stereonet parseCell', () => {
     assert.equal(s.items.filter((i) => i.group === 'foliation').length, 3);
     assert.equal(s.items[2].color, '#cc3333');
     assert.equal(s.contour, true);
+  });
+});
+
+describe('stereonet tokenize (editor highlighting)', () => {
+  const typesOf = (code) => stereonetTokenize(code).filter((t) => t.type).map((t) => t.type);
+  const find = (code, text) => stereonetTokenize(code).find((t) => t.text === text);
+
+  it('tiles the input contiguously (texts rejoin to the source)', () => {
+    for (const code of [
+      'name bedding', 'plane 120 35 #cc3333', '  pole 210 65   ; fault',
+      'g foliation\nplane 1 2\ncontour', 'proj equal-angle // comment', '', '   ',
+    ]) {
+      assert.equal(stereonetTokenize(code).map((t) => t.text).join(''), code, `tiling for ${JSON.stringify(code)}`);
+    }
+  });
+
+  it('marks the first word as a directive', () => {
+    assert.equal(find('plane 120 35', 'plane').type, 'dir');
+    assert.equal(find('name bedding', 'name').type, 'dir');
+    assert.equal(find('g foliation', 'g').type, 'dir');
+    assert.equal(find('contour', 'contour').type, 'dir');
+  });
+
+  it('a non-directive first word is an id, not a directive', () => {
+    assert.equal(find('wibble 1 2', 'wibble').type, 'id');
+  });
+
+  it('values after the head are not directives (id / num)', () => {
+    assert.equal(find('name bedding', 'bedding').type, 'id');     // not 'dir'
+    assert.equal(find('plane 120 35', '120').type, 'num');
+    assert.equal(find('plane 120 35', '35').type, 'num');
+  });
+
+  it('hex colour → str, comment → cmt', () => {
+    assert.equal(find('pole 210 65 #cc3333', '#cc3333').type, 'str');
+    assert.equal(stereonetTokenize('plane 1 2 ; a fault').find((t) => t.type === 'cmt').text, '; a fault');
+    assert.equal(stereonetTokenize('plane 1 2 // note').find((t) => t.type === 'cmt').text, '// note');
+  });
+
+  it('decimal and signed numbers tokenize', () => {
+    assert.equal(find('view 120.5 -30', '120.5').type, 'num');
+    assert.equal(find('view 120.5 -30', '-30').type, 'num');
+  });
+
+  it('only emits types cm6 knows (dir/num/str/id/cmt)', () => {
+    const known = new Set(['dir', 'num', 'str', 'id', 'cmt']);
+    for (const t of typesOf('name bedding\nproj wulff\nplane 120 35 #abc ; c')) assert.ok(known.has(t), `unknown type ${t}`);
   });
 });
 

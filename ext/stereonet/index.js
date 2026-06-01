@@ -80,6 +80,64 @@ function wireArcball(el, sn, mat3) {
   el.addEventListener('pointercancel', end);
 }
 
+// ── editor highlighting ──────────────────────────────────────────────────
+// A per-line tokenizer for the mini-format, consumed by cm6's StreamLanguage
+// adapter (src/js/cm6.js makeStreamLang). Tokens are { type, text } and must
+// TILE each line contiguously (the stream advances by text.length); whitespace
+// and unstyled runs carry type ''. Types map to @lezer tags via cm6's table:
+// dir/kw→keyword, num→number, str→string, id→variable, cmt→comment.
+const DIRECTIVES = new Set([
+  'name', 'proj', 'projection', 'view', 'g', 'group', 'plane', 'pole', 'line', 'contour',
+]);
+
+function _tokLine(line, out) {
+  const n = line.length;
+  let i = 0;
+  let firstWord = true;
+  while (i < n) {
+    const c = line[i];
+    // Comment to end of line: `;` or `//`.
+    if (c === ';' || (c === '/' && line[i + 1] === '/')) {
+      out.push({ type: 'cmt', text: line.slice(i) });
+      return;
+    }
+    // Whitespace run.
+    if (/\s/.test(c)) {
+      let j = i + 1; while (j < n && /\s/.test(line[j])) j++;
+      out.push({ type: '', text: line.slice(i, j) }); i = j; continue;
+    }
+    // Hex colour (#rgb..#rrggbbaa).
+    if (c === '#') {
+      let j = i + 1; while (j < n && /[0-9a-fA-F]/.test(line[j])) j++;
+      out.push({ type: 'str', text: line.slice(i, j) }); i = j; continue;
+    }
+    // Word — the first word on a line is the directive head.
+    const wm = /^[A-Za-z_][\w-]*/.exec(line.slice(i));
+    if (wm) {
+      const w = wm[0];
+      out.push({ type: firstWord && DIRECTIVES.has(w.toLowerCase()) ? 'dir' : 'id', text: w });
+      i += w.length; firstWord = false; continue;
+    }
+    // Number (trend/plunge/dip — int or decimal, optional sign).
+    const nm = /^[-+]?(?:\d+\.?\d*|\.\d+)/.exec(line.slice(i));
+    if (nm) { out.push({ type: 'num', text: nm[0] }); i += nm[0].length; continue; }
+    // Any other single char (unstyled).
+    out.push({ type: '', text: c }); i++;
+  }
+}
+
+// tokenize(code) → contiguous { type, text } tiles. cm6 calls it per line
+// (stream.string); robust for whole-source calls too (tests).
+export function stereonetTokenize(code) {
+  const out = [];
+  const lines = String(code).split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    _tokLine(lines[i], out);
+    if (i < lines.length - 1) out.push({ type: '', text: '\n' });
+  }
+  return out;
+}
+
 // EXTENSION_SPEC §3.1 — the one name this cell contributes to downstream scope.
 export function stereonetParseNames(code) {
   return new Set([exportName(code)]);
@@ -106,25 +164,64 @@ export async function stereonetExecute(code, _upstream, cell) {
 
   const spec = parseCell(code);
   const sn = new Stereonet({ projection: spec.projection, size: spec.size, classPrefix: 'sn' });
-  if (spec.view) sn.setCenter(spec.view[0], spec.view[1]);
-
-  const groups = {};
-  const all = [];
-  const add = (g, d) => { (groups[g || 'all'] ||= []).push(d); all.push(d); };
-
-  for (const it of spec.items) {
-    const style = it.color ? { stroke: it.color, fill: it.color } : {};
-    if (it.kind === 'plane') { sn.plane(it.a, it.b, style); add(it.group, conversions.planeToDcos(it.a, it.b)); }
-    else if (it.kind === 'pole') { sn.pole(it.a, it.b, style); add(it.group, conversions.planeToDcos(it.a, it.b)); }
-    else if (it.kind === 'line') { sn.line(it.a, it.b, style); add(it.group, conversions.lineToDcos(it.a, it.b)); }
-  }
-  if (spec.contour && all.length >= 3) sn.contour(all);
-
   const el = sn.element();
   wireArcball(el, sn, mat3);
+
+  const dcosOf = (it) => it.kind === 'line'
+    ? conversions.lineToDcos(it.a, it.b) : conversions.planeToDcos(it.a, it.b);
+
+  // Full dataset for the downstream handle — view-independent (the in-cell
+  // sliders/toggles below are a VIEW concern; the handle always carries every
+  // measurement so downstream stats don't change when you hide a layer).
+  const groups = {};
+  const all = [];
+  for (const it of spec.items) { const d = dcosOf(it); (groups[it.group || 'all'] ||= []).push(d); all.push(d); }
+
+  // Per-group visibility (toggles) — preserves the live rotation on redraw.
+  const groupNames = [...new Set(spec.items.map((it) => it.group || 'all'))];
+  const hasNamedGroups = spec.items.some((it) => it.group);
+  const visible = {};
+  for (const g of groupNames) visible[g] = true;
+
+  function redraw() {                       // re-add visible items; keep rotation
+    sn.clear();
+    if (typeof sn.clearContours === 'function') sn.clearContours();
+    const shown = [];
+    for (const it of spec.items) {
+      if (!visible[it.group || 'all']) continue;
+      const style = it.color ? { stroke: it.color, fill: it.color } : {};
+      if (it.kind === 'plane') sn.plane(it.a, it.b, style);
+      else if (it.kind === 'pole') sn.pole(it.a, it.b, style);
+      else if (it.kind === 'line') sn.line(it.a, it.b, style);
+      shown.push(dcosOf(it));
+    }
+    if (spec.contour && shown.length >= 3) sn.contour(shown);
+    sn.render();
+  }
+  const view = { trend: spec.view ? spec.view[0] : 0, plunge: spec.view ? spec.view[1] : 90 };
+  function applyView() {                    // rotate to the sliders (view change)
+    sn.setCenter(view.trend, view.plunge);
+    if (typeof sn.updateContours === 'function') sn.updateContours();
+    sn.render();
+  }
+
+  // In-cell view widgets (DOM-only via onInput/onChange — no cell re-run, like
+  // the arcball). Values persist across re-execution via the cell's widget store.
+  const tv = ctx.ui.slider('view trend', view.trend, { min: 0, max: 360, step: 5, onInput: (v) => { view.trend = +v; applyView(); } });
+  const pv = ctx.ui.slider('view plunge', view.plunge, { min: 0, max: 90, step: 5, onInput: (v) => { view.plunge = +v; applyView(); } });
+  view.trend = +tv; view.plunge = +pv;
+  if (hasNamedGroups) {
+    for (const g of groupNames) {
+      const on = ctx.ui.checkbox('show ' + g, true, { onChange: (v) => { visible[g] = (v === true || v === 'true'); redraw(); } });
+      visible[g] = (on === true || on === 'true');
+    }
+  }
+
+  redraw();        // add items (honours persisted toggle state)
+  applyView();     // set the initial / persisted view
   ctx.display(el);
 
-  // The reactive scope handle downstream cells consume.
+  // The reactive scope handle downstream cells consume (full dataset).
   const stats = all.length >= 2
     ? { ...statistics.principalAxes(all), fisher: statistics.fisherStats(all) }
     : null;
@@ -155,6 +252,7 @@ if (typeof window !== 'undefined' && !window._cellTypes?.['stereonet']) {
         parseNames: stereonetParseNames,
         findUses: stereonetFindUses,
         execute: stereonetExecute,
+        tokenize: stereonetTokenize,
       },
     });
   }
