@@ -1,0 +1,23 @@
+# Force LF line endings for text files, regardless of a contributor's
+# core.autocrlf. Windows autocrlf was checking files out as CRLF, which broke
+# \n-sensitive parsing (e.g. the notebook-import block regexes) and showed up as
+# spurious churn. git auto-detects binary by content; the explicit entries below
+# are belt-and-suspenders for known binary assets so eol normalization never
+# touches them.
+* text=auto eol=lf
+
+*.woff2  binary
+*.woff   binary
+*.ttf    binary
+*.wasm   binary
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.ico    binary
+*.gz     binary
+*.zip    binary
+*.pdf    binary
+*.xlsx   binary
+*.gcupkg binary
+*.gcudat binary
