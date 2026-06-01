@@ -10,6 +10,7 @@ import { editDistance, nearTerms } from '../ext/librarian/src/fuzzy.js';
 import { buildIndex, mergeIndexes } from '../ext/librarian/src/index.js';
 import { search, suggest } from '../ext/librarian/src/search.js';
 import { serialize, deserialize } from '../ext/librarian/src/serialize.js';
+import { buildBlob, scan } from '../ext/librarian/src/scan.js';
 import { Librarian } from '../ext/librarian/src/api.js';
 
 describe('tokenize', () => {
@@ -177,5 +178,74 @@ describe('merge', () => {
     assert.equal(merged.stats.totalDocs, 2);
     assert.equal(search(merged, 'foo')[0].id, 'a1');
     assert.equal(search(merged, 'baz')[0].id, 'b1');
+  });
+});
+
+describe('scan path (buildBlob / scan)', () => {
+  function corp() {
+    return [
+      { id: 'd1', title: 'Encryption', body: 'AES-GCM encryption protects notebook data.' },
+      { id: 'd2', title: 'Mounts', body: 'Disk folders mounted at /mnt/<name>. Mounts are per-machine.' },
+      { id: 'd3', title: 'VFS', body: 'The virtual filesystem unifies notebook storage.' },
+    ];
+  }
+  it('buildBlob folds non-id string fields, lowercased, with an offset table', () => {
+    const b = buildBlob(corp());
+    assert.equal(b.N, 3);
+    assert.equal(b.starts.length, 4);                  // N + 1 (sentinel)
+    assert.deepEqual(b.ids, ['d1', 'd2', 'd3']);
+    assert.ok(b.blob.includes('encryption'));          // lowercased
+    assert.ok(!b.blob.includes('Encryption'));
+    assert.ok(b.starts[3] >= b.blob.length);           // sentinel past the end
+  });
+  it('exact scan finds a substring and maps it to the right doc', () => {
+    const b = buildBlob(corp());
+    const r = scan(b, 'notebook');
+    const ids = r.map((h) => h.id).sort();
+    assert.deepEqual(ids, ['d1', 'd3']);               // both mention "notebook"
+  });
+  it('exact scan matches mid-token / partial words (not tokenised)', () => {
+    const b = buildBlob(corp());
+    const r = scan(b, 'encry');                          // partial word, no fuzzy
+    assert.equal(r[0].id, 'd1');
+  });
+  it('exact scan ranks by occurrence count', () => {
+    const b = buildBlob(corp());
+    const r = scan(b, 'mounts');                         // appears twice in d2
+    assert.equal(r[0].id, 'd2');
+    assert.ok(r[0].score >= 2);
+  });
+  it('exact scan returns [] for an absent needle', () => {
+    const b = buildBlob(corp());
+    assert.deepEqual(scan(b, 'quantumchromodynamics'), []);
+  });
+  it('empty / whitespace query returns []', () => {
+    const b = buildBlob(corp());
+    assert.deepEqual(scan(b, '   '), []);
+    assert.deepEqual(scan(b, ''), []);
+  });
+  it('fuzzy scan tolerates a typo (bitap)', () => {
+    const b = buildBlob(corp());
+    const r = scan(b, 'encruption', { fuzzy: 2 });       // substitution
+    assert.ok(r.some((h) => h.id === 'd1'));
+  });
+  it('fuzzy scan tolerates a missing char', () => {
+    const b = buildBlob(corp());
+    const r = scan(b, 'filesytem', { fuzzy: 1 });        // dropped 's'
+    assert.ok(r.some((h) => h.id === 'd3'));
+  });
+  it('scan handles CJK substrings', () => {
+    const b = buildBlob([{ id: 'c1', body: 'foo 你好世界 bar' }]);
+    const r = scan(b, '好世');
+    assert.equal(r[0].id, 'c1');
+  });
+  it('respects the limit', () => {
+    const docs = Array.from({ length: 10 }, (_, i) => ({ id: 'x' + i, body: 'common token here' }));
+    const b = buildBlob(docs);
+    assert.equal(scan(b, 'common', { limit: 4 }).length, 4);
+  });
+  it('exposed on the Librarian namespace', () => {
+    assert.equal(typeof Librarian.buildBlob, 'function');
+    assert.equal(typeof Librarian.scan, 'function');
   });
 });

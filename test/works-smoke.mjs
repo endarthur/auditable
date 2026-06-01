@@ -983,6 +983,52 @@ if (wbOpen.ready) {
 // ── Workspace export / import round-trip (Chunk 5b) ───────────────────
 // Serialize the live workspace, build a self-contained HTML, then open it —
 // it must boot the desktop over the embedded snapshot.
+// @gcu/librarian (v2 CSR engine) — exercise the EMBEDDED bundle in-browser.
+// The shell installs each shared lib to /usr/lib/@gcu/<name>/source at boot;
+// blob-import librarian + docview from there and run the real consumer paths
+// (multi-field ranked search + snippet, the lean folded path, scan, incremental,
+// pack/unpack, and docview.buildSearchIndex — the doc/reader search consumer).
+const librarian = await page.evaluate(async () => {
+  const W = window.WKS;
+  const out = { err: null };
+  try {
+    const libSrc = await W.vfs.readFile('/usr/lib/@gcu/librarian/source', 'utf8');
+    const L = (await import(URL.createObjectURL(new Blob([libSrc], { type: 'text/javascript' })))).Librarian;
+    out.csr = L.index({ docs: [{ id: 'a', title: 'Encryption' }] })._csr === true;
+
+    const docs = [
+      { id: 'd1', title: 'Encryption', body: 'aes-gcm encryption protects notebook data with a passphrase', file: 'a.md', anchor: 'enc' },
+      { id: 'd2', title: 'Mounts', body: 'disk folders mounted at a path' },
+      { id: 'd3', title: 'Filesystem', body: 'the virtual filesystem unifies storage' },
+    ];
+    // multi (default) — ranked hit + aligned snippet + preserved meta.
+    const idx = L.index({ docs, fields: { title: { boost: 4 }, body: { boost: 1 } } });
+    const r = L.search(idx, 'encryption');
+    out.multiRank = r[0] && r[0].id === 'd1';
+    out.snippet = !!(r[0] && /<mark>/.test(r[0].snippet || ''));
+    out.meta = !!(r[0] && r[0].doc && r[0].doc.file === 'a.md');
+    out.fuzzy = L.search(idx, 'encrytion', { fuzzy: 1 })[0]?.id === 'd1';
+
+    // lean folded path + scan + incremental + pack round-trip.
+    const lean = L.index({ docs, mode: 'folded', fields: { title: { boost: 4 }, body: { boost: 1 } }, storeText: false, positions: false });
+    out.leanRank = L.search(lean, 'encryption')[0]?.id === 'd1';
+    out.scan = L.scan(L.buildBlob(docs), 'notebook').some((h) => h.id === 'd1');
+    L.addDoc(lean, { id: 'd4', body: 'kriging variogram grade' });
+    out.addDoc = L.search(lean, 'kriging')[0]?.id === 'd4';
+    const idx2 = L.unpack(L.pack(L.index({ docs, fields: { title: { boost: 4 }, body: { boost: 1 } } })));
+    out.pack = L.search(idx2, 'filesystem')[0]?.id === 'd3';
+
+    // docview.buildSearchIndex — the doc/reader search consumer, CSR-backed.
+    const dvSrc = await W.vfs.readFile('/usr/lib/@gcu/docview/source', 'utf8');
+    const DV = await import(URL.createObjectURL(new Blob([dvSrc], { type: 'text/javascript' })));
+    const slugify = (s) => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const dvIdx = DV.buildSearchIndex(L, [{ path: 'guide.md', title: 'Guide', md: '# Intro\n\nbody text\n\n## Encryption\n\naes-gcm keeps notebook data safe\n' }], slugify);
+    const dr = L.search(dvIdx, 'encryption');
+    out.docview = !!(dr[0] && dr[0].id === 'guide.md#encryption' && dr[0].doc.anchor === 'encryption');
+  } catch (e) { out.err = String(e && e.message || e); }
+  return out;
+});
+
 exportedHtml = await page.evaluate(async () => {
   const W = window.WKS;
   return W.buildWorksHtml(await W.serializeWorkspace(W.vfs));
@@ -1232,6 +1278,15 @@ const checks = {
   'workbench: renders schema + stats from the pipeline': wbView.ok === true
       && wbView.hasAuColumn && wbView.hasLito,
   'workbench: grade-tonnage curve renders':  gtView.ok === true,
+  // @gcu/librarian v2 — embedded CSR engine runs in-browser
+  'librarian: index() is the CSR engine':   librarian.csr === true,
+  'librarian: multi-field ranked search':   librarian.multiRank && librarian.fuzzy,
+  'librarian: aligned snippet + meta':       librarian.snippet && librarian.meta,
+  'librarian: lean folded path + scan':      librarian.leanRank && librarian.scan,
+  'librarian: incremental addDoc':           librarian.addDoc,
+  'librarian: pack/unpack round-trips':      librarian.pack,
+  'librarian: docview search consumer':      librarian.docview,
+  'librarian: no error':                     !librarian.err,
 };
 
 console.log('--- works.html (Works rebuild — Chunks 1-3, 5 + surfaces) ---');

@@ -51,7 +51,12 @@ A **synonym table** is `{ term: [synonym, …], … }`. All lowercase; keys and 
 
 ## Index structure
 
-The internal shape of an index (treat as opaque externally; documented here for contributors):
+> **Superseded (v2, 2026-06-01).** The nested-`Map` shape below was the v1
+> representation and has been **deleted**. The live index is the typed-array CSR
+> form documented in `csr.js` — see the "v2 — one engine, not two" section. The
+> shape below is retained for historical context only.
+
+The internal shape of a (v1) index (treat as opaque externally; documented here for contributors):
 
 ```js
 {
@@ -172,21 +177,26 @@ Index build is roughly linear in token count. Query time is dominated by fuzzy e
 ext/librarian/src/
   tokenize.js    — tokenize(), tokenizeStrings(); ~120 LOC
   fuzzy.js       — editDistance(), nearTerms(); ~70 LOC
-  index.js       — buildIndex(), mergeIndexes(); ~130 LOC
-  search.js      — search(), suggest(), _expandTerm(), _bm25fScore(),
-                    _snippet(), _proximityBonus(); ~230 LOC
-  serialize.js   — serialize(), deserialize(); ~60 LOC
-  api.js         — public Librarian namespace; ~20 LOC
+  csr.js         — buildCsrIndex(), searchCsr(), suggestCsr(); the unified
+                    typed-array CSR engine (folded + multi-field BM25F)
+  search.js      — search(), suggest() — thin wrappers over csr.js
+  index.js       — buildIndex (= buildCsrIndex), mergeIndexes() (CSR merge)
+  incremental.js — addDoc(), removeDoc(), compact(), pendingCompaction(),
+                    mergeCsr() (the segment-merge primitive)
+  scan.js        — buildBlob(), scan() (contiguous blob + bitap substring)
+  serialize.js   — serialize(), deserialize() (CSR ↔ JSON, debug/docpack)
+  pack.js        — pack(), unpack() (binary, zero-copy reload)
+  api.js         — public Librarian namespace
   main.js        — concat manifest
 ```
 
-Each source file has one job. The shape of an inverted index is documented in the comment header of `index.js`; the BM25F equation is in the comment header of `search.js`.
+Each source file has one job. The CSR representation is documented in the comment header of `csr.js`; the binary format in `pack.js`.
 
 ## Testing
 
-24 tests in `test/librarian.test.mjs` covering: tokenizer (lowercasing, stopwords, positions, CJK), fuzzy (edit distance, early-abort, nearTerms), index build (field defaults, meta preservation, df counting), merge (cross-source unification), search (BM25F field boost, fuzzy expansion, synonym expansion, prefix expansion, proximity bonus, snippet generation), suggest (did-you-mean), serialize round-trip, Librarian public API.
+`test/librarian.test.mjs` (the v1 assertion suite — runs unchanged on the CSR engine, the parity gate) + `librarian-csr.test.mjs` (head-to-head score parity v1↔CSR, CJK regression, lean-path) + `librarian-incr.test.mjs` (addDoc/removeDoc/compact==fresh-build/pendingCompaction) + `librarian-pack.test.mjs` (binary round-trip, zero-copy, auto-compact). `npm test` runs them all.
 
-`npm test` runs them as part of the standard suite.
+Benches in `bench/`: `lean-prototype.mjs` (the original v2 sizing study), `csr-bench.mjs` (real-engine RAM vs v1), `pack-bench.mjs` (reload latency). Measured: 50k excerpts 913 MB → 19 MB; 10k full bodies 2321 MB → 37 MB; 50k full bodies (v1 OOMs) → 175 MB, search 9 ms; pack/unpack reload @ 50k ≈ 13 ms.
 
 ## Open questions
 
@@ -206,34 +216,54 @@ Each source file has one job. The shape of an inverted index is documented in th
 
 Pre-1.0 means the index format is not stabilized — bumps may change the serialization format. APIs are unlikely to change shape, but expansions to `Librarian.*` may add fields to result objects.
 
-## v2 direction — one engine, not two  *(agreed 2026-06-01; not yet built)*
+## v2 — one engine, not two  *(SHIPPED 2026-06-01)*
 
 A v2 redesign (driven by `@gcu/weir`, which needs ranked full-text over 10k–100k
-never-deleted docs) raises the "~10 000 docs" ceiling above to ~100k full-body
-docs in a few hundred MB, with faster search. Full design + benchmarks:
-`spec_inbox/librarian-search-spec.md` + the runnable `bench/lean-prototype.mjs`
-(reproduced: 50k excerpts 912 MB → 15 MB, 10k full bodies 2.3 GB → 36 MB, ~60×,
-and search *faster*).
+never-deleted docs) raises the old "~10 000 docs" ceiling to ~100k full-body docs
+in a few hundred MB, with faster search. Design of record:
+`spec_inbox/librarian-search-spec.md` + `weir-search-requirements.md`.
 
-**The decision that governs the build: unify, don't dual-mode.** The lean
-typed-array CSR index becomes the *sole* index representation; the current
-nested-`Map` representation is **retired, not kept as a parallel "v1 mode."**
-Everything v1 offers that the lean core drops — **stored text** (for snippets
-without a consumer callback), **true multi-field BM25F**, **positions**, **JSON
-serialize** — comes back as **opt-in flags on the one engine**
-(`storeText`, `fields: multi|folded`, `positions`, `serialize: json|binary`).
-So "v1 vs lean" is feature flags on a single representation, not two code paths
-to rot.
+**The decision that governed the build: unify, don't dual-mode.** The lean
+typed-array CSR index (`csr.js`) is the *sole* index representation; the old
+nested-`Map` build was **deleted** (`index.js` is now a re-export, `search.js` a
+thin wrapper). Everything v1 offered that the lean core drops returns as **opt-in
+flags on the one engine**, not a parallel code path:
 
-Non-negotiable gate: the unified engine, with `storeText` + multi-field **on**,
-must pass librarian's *existing* test suite byte-for-byte (+ a CJK regression
-test). Only then is the nested-`Map` representation deleted. Auditable's two
-consumers — the docs Ctrl+K search and the reader's per-book search — migrate in
-the **same pass** (flags on → identical behavior; the existing search tests are
-the guard), so the lib is never left in a two-representation half-state. New
-large-corpus consumers (weir) flip the flags off + add `addDoc`/`removeDoc`/
-`compact` (incremental) + `pack`/`unpack` (binary) + the optional `scan` blob
-path. Build it here, upstream-first; do **not** prototype-and-fork in a consumer.
+| flag | default | lean (weir) |
+|---|---|---|
+| `mode` | `'multi'` (true per-field BM25F) | `'folded'` (boosts folded into one tf; ~48–63× leaner) |
+| `storeText` | `true` (snippets from the index) | `false` (+ a `snippet(docId, fieldName)` callback) |
+| `positions` | `true` (proximity + aligned snippets) | `false` |
+
+`mode:'folded'` is a **conscious** opt-in (it changes ranking vs BM25F), never the
+silent default — so the defaults reproduce v1 exactly.
+
+**API (additive over v1):**
+
+```js
+Librarian.index({ docs, fields?, mode?, storeText?, positions?, snippet?, synonyms? })
+Librarian.search(index, q, { fuzzy?, limit? })   // { id, score, doc, snippet, hits }
+Librarian.suggest(index, q)                       // did-you-mean
+Librarian.addDoc(index, doc)                      // delta segment, O(doc)
+Librarian.removeDoc(index, id)                    // tombstone, O(1)
+Librarian.compact(index)                          // fold delta + drop tombstones
+Librarian.pendingCompaction(index)                // { delta, tombstones, ratio }
+Librarian.pack(index) / Librarian.unpack(buf, { snippet? })   // binary persistence
+Librarian.buildBlob(docs) / Librarian.scan(blob, q, { fuzzy, limit })  // §6 scan path
+Librarian.serialize / deserialize / merge         // kept (CSR-backed)
+```
+
+**The gate (met):** the unified engine with `storeText` + multi-field on passes
+librarian's *existing* test suite byte-for-byte (+ head-to-head score parity v1↔CSR
+within 1e-9, + a CJK regression) before the nested-`Map` was deleted. The two
+in-repo consumers — docs Ctrl+K and the reader's per-book search — migrated in the
+same pass with **no call-site change** (defaults = flags-on = identical behavior).
+weir (the large-corpus consumer) flips the flags off and uses the incremental +
+`pack`/`unpack` + `scan` surfaces, vendoring upstream-first (below).
+
+Remaining v2 ladder rungs (not built; only climb if a corpus needs them): a
+sorted-`Uint8Array`/FST dictionary, disk-backed segments (roaring postings,
+block-max WAND) for millions of docs. See `spec_inbox/librarian-search-spec.md` §7.
 
 ## Vendoring (canonical source)
 

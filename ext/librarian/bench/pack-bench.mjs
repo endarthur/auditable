@@ -1,0 +1,11 @@
+import { buildCsrIndex } from '../src/csr.js';
+import { pack, unpack } from '../src/pack.js';
+import { search } from '../src/search.js';
+const ab='abcdefghijklmnopqrstuvwxyz';let s=12345;const r=()=>{s=(s*1664525+1013904223)>>>0;return s/0xffffffff};
+const V=Array.from({length:30000},()=>{const n=4+Math.floor(r()*6);let w='';for(let j=0;j<n;j++)w+=ab[Math.floor(r()*26)];return w});
+const docs=Array.from({length:50000},(_,i)=>({id:'d'+i,title:Array.from({length:6},()=>V[Math.floor(r()*r()*V.length)]).join(' '),body:Array.from({length:40},()=>V[Math.floor(r()*r()*V.length)]).join(' ')}));
+const idx=buildCsrIndex({docs,mode:'folded',fields:{title:{boost:4},body:{boost:1}},storeText:false,positions:false});
+let t=performance.now();const buf=pack(idx);const pms=performance.now()-t;
+t=performance.now();const idx2=unpack(buf);const ums=performance.now()-t;
+const ok=JSON.stringify(search(idx,V[0],{fuzzy:0,limit:5}).map(h=>h.id))===JSON.stringify(search(idx2,V[0],{fuzzy:0,limit:5}).map(h=>h.id));
+console.log(`50k excerpts: pack ${pms.toFixed(0)}ms  blob ${(buf.byteLength/1048576).toFixed(1)}MB  unpack ${ums.toFixed(1)}ms  results-match ${ok}`);
