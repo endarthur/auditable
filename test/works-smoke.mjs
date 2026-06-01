@@ -1029,6 +1029,57 @@ const librarian = await page.evaluate(async () => {
   return out;
 });
 
+// @gcu/stereonet — end-to-end in a notebook surface. A `/// stereonet` cell
+// must auto-load from the /usr/lib builtin (LANGUAGE_PACKS), register, render an
+// interactive net (ctx.display of the bearing SVG), and define a reactive scope
+// handle a downstream code cell consumes (dcos + principal-axes stats), with
+// the engine resolved via load('@gcu/bearing') from the builtin.
+const stereoTab = await page.evaluate(async () => {
+  const W = window.WKS;
+  await W.vfs.mkdir('/projects/StereoNB', { recursive: true });
+  await W.vfs.writeFile('/projects/StereoNB/project.json',
+    JSON.stringify({ kind: 'notebook', id: 'nb-stereo', title: 'Stereo NB' }));
+  await W.vfs.writeFile('/projects/StereoNB/notebook.txt',
+    '/// auditable\n/// title: Stereo NB\n\n'
+    + '/// stereonet\nname bedding\nproj equal-area\ng foliation\n'
+    + 'plane 120 35\nplane 125 40\nplane 118 32\nplane 130 38\npole 210 65 #cc3333\ncontour\n\n'
+    + "/// code\ndisplay('dcos=' + bedding.dcos.length"
+    + " + ' S1=' + bedding.stats.eigenvalues[0].toFixed(3)"
+    + " + ' K=' + bedding.stats.K.toFixed(2));\n");
+  const tabId = await W.openPath('/projects/StereoNB');
+  const rec = W.surfaces.get(tabId);
+  const deadline = Date.now() + 25000;
+  while (rec && !rec.ready && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+  return rec ? { tabId, ready: rec.ready } : { ready: false };
+});
+
+const stereoFrame = stereoTab.ready ? await surfaceFrame(stereoTab.tabId) : null;
+let stereo = { ready: false };
+if (stereoFrame) {
+  stereo = await stereoFrame.evaluate(async () => {
+    // Wait for the language pack to auto-load + register the cell type.
+    let dl = Date.now() + 12000;
+    while (Date.now() < dl && !window._cellTypes?.stereonet) await new Promise((r) => setTimeout(r, 100));
+    const registered = !!window._cellTypes?.stereonet;
+    if (window.runAll) await window.runAll();
+    // Poll the cells' outputs.
+    dl = Date.now() + 15000;
+    let svg = false, handle = '', err = '';
+    while (Date.now() < dl) {
+      const cells = window.S?.cells || [];
+      const sCell = cells.find((c) => c.type === 'stereonet');
+      const cCell = cells.find((c) => c.type === 'code');
+      svg = !!(sCell && sCell.el?.querySelector('.cell-output svg'));
+      handle = (cCell && cCell.el?.querySelector('.cell-output')?.textContent) || '';
+      err = (sCell && sCell.el?.querySelector('.cell-error')?.textContent) || ''
+          || (cCell && cCell.el?.querySelector('.cell-error')?.textContent) || '';
+      if ((svg && handle.includes('dcos=')) || err) break;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    return { ready: true, registered, svg, handle, err };
+  });
+}
+
 exportedHtml = await page.evaluate(async () => {
   const W = window.WKS;
   return W.buildWorksHtml(await W.serializeWorkspace(W.vfs));
@@ -1287,6 +1338,12 @@ const checks = {
   'librarian: pack/unpack round-trips':      librarian.pack,
   'librarian: docview search consumer':      librarian.docview,
   'librarian: no error':                     !librarian.err,
+  // @gcu/stereonet — cell type auto-loads + renders + feeds a reactive handle
+  'stereonet: cell type auto-loads (LANGUAGE_PACKS)': stereo.registered === true,
+  'stereonet: renders an interactive net (SVG)':       stereo.svg === true,
+  'stereonet: reactive handle feeds downstream':       /dcos=5\b/.test(stereo.handle)
+      && /S1=/.test(stereo.handle) && /K=/.test(stereo.handle),
+  'stereonet: no cell error':                          !stereo.err,
 };
 
 console.log('--- works.html (Works rebuild — Chunks 1-3, 5 + surfaces) ---');

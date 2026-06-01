@@ -1,0 +1,11 @@
+{
+  "name": "@gcu/bearing",
+  "version": "0.2.2",
+  "type": "module",
+  "private": true,
+  "description": "Vendored build of @gcu/bearing (structural-geology stereonet library) — shipped as a Works /usr/lib builtin so load('@gcu/bearing') resolves the current version offline.",
+  "main": "index.js",
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "comment": "VENDORED from gentropic/bearing.js. index.js is generated — do not edit; run `node ext/bearing/sync.mjs` to update."
+}

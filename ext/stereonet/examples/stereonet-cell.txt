@@ -1,0 +1,36 @@
+/// auditable
+/// title: stereonet cell
+
+/// md
+# stereonet cells
+
+A `/// stereonet` cell is declarative — measurements in, an interactive net out,
+and a reactive handle (`bedding`) that downstream cells consume. Drag the net to
+rotate it; edit a measurement and the Woodcock plot below updates.
+
+/// code
+// One-time: make the cell type + engine available (offline after this).
+await install("@gcu/bearing");
+await install("@gcu/stereonet");
+
+/// stereonet
+name bedding
+proj equal-area
+g foliation
+plane 120 35
+plane 125 40
+plane 118 32
+plane 130 38
+plane 122 42
+pole 210 65 #cc3333    ; a fault, in red
+contour
+
+/// code
+// Downstream: the reactive scope handle in action.
+const { fabricplot } = await load("@gcu/bearing");
+ui.display(fabricplot.woodcockSVG([{ dcos: bedding.dcos, label: "bedding" }]));
+ui.display(
+  `S1 = ${bedding.stats.eigenvalues[0].toFixed(3)}  ·  ` +
+  `K = ${bedding.stats.K.toFixed(2)}  ·  ` +
+  `C = ${bedding.stats.C.toFixed(2)}`
+);

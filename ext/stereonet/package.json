@@ -1,0 +1,12 @@
+{
+  "name": "@gcu/stereonet",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Declarative, interactive, reactive stereonet cells (structural geology) — built on @gcu/bearing.",
+  "main": "index.js",
+  "license": "MIT",
+  "keywords": ["auditable", "extension", "cell-type", "stereonet", "structural-geology", "bearing"],
+  "peerDependencies": {
+    "@gcu/bearing": ">=0.2.0"
+  }
+}

@@ -135,6 +135,7 @@ export const LANGUAGE_PACKS = {
   adder: '@gcu/adder',
   mpy:   '@gcu/adder',
   soft:  '@gcu/soft',
+  stereonet: '@gcu/stereonet',
 };
 
 // Diagnostic log helper — emits to this frame's console AND the parent
