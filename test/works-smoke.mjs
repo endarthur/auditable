@@ -1250,6 +1250,29 @@ const disk = await page.evaluate(async () => {
   };
 });
 
+// ── reinstall executor (Phase 3 of lean export) ──────────────────────
+// Network-free: verify plan-detection (skip present, include missing) and
+// the run loop via injected installers. The real installByName path is the
+// same one Browse Library exercises.
+const reinstall = await page.evaluate(async () => {
+  const W = window.WKS, v = W.vfs;
+  try { await v.mkdir('/home/.books/library/here', { recursive: true }); } catch { /* */ }
+  const recipe = { version: 1, library: [
+    { id: 'here', source: 'http://reg/r.json', version: '1' },     // present → skip
+    { id: 'gone', source: 'http://reg/r.json', version: '1' },     // missing → install
+  ], extensions: [{ alias: '@gcu/x', url: 'http://x/x.gcupkg', version: '1' }] };
+  const plan = await W.planReinstall(v, recipe);
+  const res = await W.runReinstall(plan, {
+    installLibrary: async (b) => { await v.mkdir('/home/.books/library/' + b.id, { recursive: true }); return '/home/.books/library/' + b.id; },
+    installExtension: async (e) => { await v.mkdir('/lib/' + e.alias, { recursive: true }); },
+  });
+  return {
+    planOk: plan.library.map((b) => b.id).join(',') === 'gone' && plan.extensions.length === 1,
+    runOk: res.ok.includes('gone') && res.ok.includes('@gcu/x') && res.failed.length === 0,
+    landed: await v.exists('/home/.books/library/gone'),
+  };
+});
+
 // ── file:// portability (§15.1) ───────────────────────────────────────
 // works.html must run from file:// — every surface is an embedded payload,
 // blob-URL'd on spawn, so it loads same-origin with the shell. The rest of
@@ -1457,6 +1480,8 @@ const checks = {
   'imported workspace keeps its files':    imported.note === 'survives reload',
   '.gcudsk exports a valid ZIP':           disk.isZip && disk.format === 'gcudsk',
   '.gcudsk mounts + round-trips bytes':    disk.mounted && disk.txtOk && disk.binOk,
+  'reinstall plan skips present/adds missing': reinstall.planOk,
+  'reinstall run restores + reports':      reinstall.runOk && reinstall.landed,
   // Patchbay surface
   'patchbay: surface opens':          pbOpen.ready === true && pbOpen.kind === 'patchbay',
   'patchbay: canvas + rack mounted':  pbMounted && pbMounted.hasCanvas

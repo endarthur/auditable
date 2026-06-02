@@ -19,6 +19,7 @@ import { installExamplesToVfs, hasExamples } from './examples-loader.js';
 import { serializeWorkspace, buildWorksHtml, categorizeDump, applyExportSelection } from './persist.js';
 import { chooseExport } from './export-dialog.js';
 import { diskFromDump, hydrateVfsFromDisk, readDiskManifest, mountDisk, openDiskAsWorkspace } from './disk.js';
+import { maybePromptReinstall, planReinstall, runReinstall, readRecipe } from './reinstall.js';
 import { importNotebook, importFileAsNotebook } from './import.js';
 import { importEpubBytes } from './book-import.js';
 import { metaGet, metaSet } from './meta.js';
@@ -79,6 +80,10 @@ async function boot() {
   WKS.readDiskManifest = readDiskManifest;
   WKS.mountDisk = mountDisk;
   WKS.openDiskAsWorkspace = openDiskAsWorkspace;
+  WKS.readReinstallRecipe = readRecipe;
+  WKS.planReinstall = planReinstall;
+  WKS.runReinstall = runReinstall;
+  WKS.maybePromptReinstall = maybePromptReinstall;
 
   // Extension diagnostics + on-demand reload. If a contributed surface
   // or context-menu item vanishes between reloads, run reloadExtensions()
@@ -151,6 +156,11 @@ async function boot() {
   // Fire-and-forget so boot completes; the trust prompt (for a new source)
   // surfaces over the ready shell.
   handleCapsuleBoot().catch((e) => setStatus('capsule: ' + ((e && e.message) || e)));
+
+  // Lean-export reinstall — if this workspace carries a reinstall recipe with
+  // missing content, prompt + restore over the ready shell. Fire-and-forget so
+  // boot completes; never let a reinstall failure break the desktop.
+  maybePromptReinstall().catch((e) => console.warn('[works] reinstall:', (e && e.message) || e));
 }
 
 async function handleCapsuleBoot() {

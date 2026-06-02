@@ -26,6 +26,7 @@ import './import.js';
 import './book-import.js';
 import './gcudat-install.js';
 import './project-export.js';
+import './reinstall.js';
 import './file-ops.js';
 import './uninstall-extension.js';
 import './tree.js';
