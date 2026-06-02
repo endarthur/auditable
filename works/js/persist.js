@@ -1,9 +1,9 @@
 // Single-file workspace export / import — auditable-works-spec §12.3.
 //
 // A workspace serialises to one self-contained HTML: the works.html runtime
-// plus the workspace VFS (/projects + /lib + /home) as a base64 WORKS-VFS
-// comment block. Opening that file boots the desktop over the embedded
-// workspace — a portable, offline snapshot.
+// plus the workspace VFS (/projects + /lib + /home) as a gzip+base64
+// WORKS-VFS comment block. Opening that file boots the desktop over the
+// embedded workspace — a portable, offline snapshot.
 
 import { WKS, setStatus } from './state.js';
 
@@ -23,12 +23,35 @@ const BLOCK_RE = /<!--WORKS-VFS\n([\s\S]*?)\nWORKS-VFS-->/;
 const PERSISTENT = ['/projects', '/lib', '/home', '/etc'];
 
 function _bytesToB64(bytes) {
+  // Chunked so the WORKS-VFS gzip blob (multi-MB) doesn't blow the
+  // fromCharCode argument limit or quadratic single-char concatenation.
   let s = '';
-  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  const CH = 0x8000;
+  for (let i = 0; i < bytes.length; i += CH) {
+    s += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+  }
   return btoa(s);
 }
 function _b64ToBytes(b64) {
   return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+}
+
+// gzip the dump before base64 — the VFS snapshot is text-heavy (notebooks,
+// book markdown/html) and compresses ~1.4× even with base64'd images in the
+// mix. gzip (not brotli) because DecompressionStream('br') still throws in
+// Chromium. Older exports are plain base64 (no GZIP_TAG) and still load.
+const GZIP_TAG = 'gz:';
+async function _gzipBytes(bytes) {
+  const cs = new CompressionStream('gzip');
+  const w = cs.writable.getWriter();
+  w.write(bytes); w.close();
+  return new Uint8Array(await new Response(cs.readable).arrayBuffer());
+}
+async function _gunzipBytes(bytes) {
+  const ds = new DecompressionStream('gzip');
+  const w = ds.writable.getWriter();
+  w.write(bytes); w.close();
+  return new Uint8Array(await new Response(ds.readable).arrayBuffer());
 }
 
 // ── Serialize ────────────────────────────────────────────────────────
@@ -74,12 +97,21 @@ export async function hydrateWorkspace(vfs, dump) {
   }
 }
 
-/** Parse an embedded WORKS-VFS block from page HTML, or null. */
-export function detectWorkspaceBlock(html) {
+/** Parse an embedded WORKS-VFS block from page HTML, or null. Async — the
+ *  gzip path needs DecompressionStream. */
+export async function detectWorkspaceBlock(html) {
   const m = html.match(BLOCK_RE);
   if (!m) return null;
   try {
-    return JSON.parse(decodeURIComponent(escape(atob(m[1].replace(/\s/g, '')))));
+    const raw = m[1].replace(/\s/g, '');
+    let json;
+    if (raw.startsWith(GZIP_TAG)) {
+      const bytes = await _gunzipBytes(_b64ToBytes(raw.slice(GZIP_TAG.length)));
+      json = new TextDecoder('utf-8').decode(bytes);
+    } else {
+      json = decodeURIComponent(escape(atob(raw)));   // legacy plain-base64 exports
+    }
+    return JSON.parse(json);
   } catch (e) {
     console.error('[works] WORKS-VFS block parse failed:', e);
     return null;
@@ -89,7 +121,7 @@ export function detectWorkspaceBlock(html) {
 // ── Export ───────────────────────────────────────────────────────────
 
 // Reconstruct a self-contained works HTML from the live page + a dump.
-export function buildWorksHtml(dump) {
+export async function buildWorksHtml(dump) {
   const clone = document.documentElement.cloneNode(true);
   // Reset the rendered desktop to the empty template — the next boot
   // re-renders into these containers.
@@ -101,16 +133,16 @@ export function buildWorksHtml(dump) {
   if (status) status.textContent = 'starting…';
   clone.querySelectorAll('.works-reconnect').forEach((el) => el.remove());
 
-  const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(dump))))
-    .replace(/.{1,76}/g, '$&\n');
-  const block = '<!-- auditable works: workspace VFS snapshot -->\n'
+  const gz = await _gzipBytes(new TextEncoder().encode(JSON.stringify(dump)));
+  const b64 = (GZIP_TAG + _bytesToB64(gz)).replace(/.{1,76}/g, '$&\n');
+  const block = '<!-- auditable works: workspace VFS snapshot (gzip+base64) -->\n'
     + '<!--WORKS-VFS\n' + b64 + '\nWORKS-VFS-->';
 
   let html = '<!DOCTYPE html>\n' + clone.outerHTML;
   // Drop any prior snapshot (re-exporting an imported workspace), then embed
   // the fresh one just before the runtime <script>.
   html = html.replace(BLOCK_RE, '')
-             .replace('<!-- auditable works: workspace VFS snapshot -->\n', '')
+             .replace(/<!-- auditable works: workspace VFS snapshot[^>]*-->\n/, '')
              .replace('<script>', block + '\n<script>');
   return html;
 }
@@ -119,7 +151,7 @@ export function buildWorksHtml(dump) {
 export async function exportWorkspace() {
   try {
     const dump = await serializeWorkspace(WKS.vfs);
-    const blob = new Blob([buildWorksHtml(dump)], { type: 'text/html' });
+    const blob = new Blob([await buildWorksHtml(dump)], { type: 'text/html' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = 'workspace.html';

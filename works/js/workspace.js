@@ -59,7 +59,7 @@ function _reconnectGate(handle) {
 export async function setupWorkspace() {
   // An exported workspace HTML embeds its VFS — open it as a volatile
   // snapshot (edits persist by re-exporting, or by adopting a disk folder).
-  const imported = detectWorkspaceBlock(document.body.innerHTML);
+  const imported = await detectWorkspaceBlock(document.body.innerHTML);
   if (imported) {
     const vfs = await VFS.create({
       backends: {

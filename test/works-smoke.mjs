@@ -1211,7 +1211,7 @@ const omf1 = await page.evaluate(async () => {
 
 exportedHtml = await page.evaluate(async () => {
   const W = window.WKS;
-  return W.buildWorksHtml(await W.serializeWorkspace(W.vfs));
+  return await W.buildWorksHtml(await W.serializeWorkspace(W.vfs));
 });
 const exportLooksRight = /<!--WORKS-VFS/.test(exportedHtml) && /<\/html>/.test(exportedHtml);
 
