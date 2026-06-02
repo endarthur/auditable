@@ -11,7 +11,7 @@ import {
   color, colorScale, hsl,
   viridis, magma, inferno, plasma, turbo,
   palette10,
-  readDataset, datasetInfo, listDatasets,
+  readDataset, datasetInfo, listDatasets, parseDataPack,
 } from './stdlib-core.js';
 
 // ── Provider Registry ──
@@ -107,18 +107,41 @@ if (typeof window !== 'undefined') {
 
 // ── Data packs ──
 // std.data is a callable namespace: `await std.data('factbook')` reads a pack's
-// records; std.data.info / .list manage. Reads window._notebookVFS, so the same
-// call resolves in a standalone notebook (/var/data) or a Works surface
-// (/home/library/data) via the stdlib-core resolution chain. std.data.install
-// (fetch a .gcudat into /var/data) is the next step.
+// records; .info / .list inspect; .install(url) fetches a .gcudat into the
+// notebook. Reads window._notebookVFS, so the same call resolves in a
+// standalone notebook (/var/data) or a Works surface (/home/library/data) via
+// the stdlib-core resolution chain.
 function _nbVfs() {
   const v = typeof window !== 'undefined' ? window._notebookVFS : null;
   if (!v) throw new Error('std.data: no notebook filesystem available');
   return v;
 }
+
+// Fetch a .gcudat and install it into the notebook at /var/data/<name>/ (the
+// standalone "add a data pack" verb, parallel to install() for code). Persists
+// with the notebook (/var is a durable mount). Clean-replace on reinstall.
+async function _dataInstall(url) {
+  const vfs = _nbVfs();
+  const res = await fetch(url, { cache: 'no-cache' });
+  if (!res.ok) throw new Error('std.data.install: HTTP ' + res.status);
+  const { manifest, files } = await parseDataPack(new Uint8Array(await res.arrayBuffer()));
+  if (manifest.kind !== 'data')
+    throw new Error(`std.data.install: not a data pack (kind=${manifest.kind})`);
+  const dir = '/var/data/' + (manifest.name || 'data');
+  await vfs.rm(dir, { recursive: true }).catch(() => {});            // clean-replace
+  for (const [p, content] of files) {
+    if (p === 'gcudat.json') continue;
+    const full = dir + '/' + p;
+    await vfs.mkdir(full.slice(0, full.lastIndexOf('/')), { recursive: true }).catch(() => {});
+    await vfs.writeFile(full, content);
+  }
+  return dir;
+}
+
 const data = Object.assign((name) => readDataset(_nbVfs(), name), {
   info: (name) => datasetInfo(_nbVfs(), name),
   list: () => listDatasets(_nbVfs()),
+  install: _dataInstall,
 });
 
 export const std = {

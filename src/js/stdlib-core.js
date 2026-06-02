@@ -589,6 +589,46 @@ export async function listDatasets(vfs) {
   return [...seen];
 }
 
+// ── Data pack containers (for std.data.install) ──
+// A .gcudat is a zip or tar/tgz of files + a gcudat.json manifest. We accept
+// both: gcu-library may ship either, and a zip is what our own tooling emits.
+
+async function _gunzip(bytes) {
+  const ds = new DecompressionStream('gzip');
+  const w = ds.writable.getWriter(); w.write(bytes); w.close();
+  return new Uint8Array(await new Response(ds.readable).arrayBuffer());
+}
+
+/** Minimal ustar reader → Map<path, Uint8Array> (regular files only; dirs,
+ *  long-name and other typeflags are skipped). Checksum isn't verified. */
+export function untar(bytes) {
+  const buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const entries = new Map();
+  const dec = new TextDecoder();
+  const field = (s, n) => dec.decode(buf.subarray(s, s + n)).replace(/\0.*$/, '');
+  let off = 0;
+  while (off + 512 <= buf.length) {
+    const name = field(off, 100);
+    if (!name) break;                                       // zero block terminates
+    const size = parseInt(field(off + 124, 12).trim() || '0', 8) || 0;
+    const type = String.fromCharCode(buf[off + 156] || 0);
+    const dataOff = off + 512;
+    if (type === '0' || type === '\0') entries.set(name.replace(/^\.\//, ''), buf.slice(dataOff, dataOff + size));
+    off = dataOff + Math.ceil(size / 512) * 512;
+  }
+  return entries;
+}
+
+/** Parse a .gcudat container (zip, tar, or tgz) → { manifest, files:Map }. */
+export async function parseDataPack(bytes) {
+  let buf = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  if (buf[0] === 0x1f && buf[1] === 0x8b) buf = await _gunzip(buf);          // tgz → tar
+  const files = (buf[0] === 0x50 && buf[1] === 0x4b) ? await unzipArchive(buf) : untar(buf);
+  const mf = files.get('gcudat.json');
+  if (!mf) throw new Error('std.data: not a .gcudat (no gcudat.json)');
+  return { manifest: JSON.parse(new TextDecoder().decode(mf)), files };
+}
+
 // ── Assembled std object (pure subset) ──
 
 export const std = {

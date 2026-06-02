@@ -4,7 +4,8 @@ globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { std } from '../src/js/stdlib.js';
-import { readDataset, datasetInfo, listDatasets, resolveDatasetDir, DATA_ROOTS } from '../src/js/stdlib-core.js';
+import { readDataset, datasetInfo, listDatasets, resolveDatasetDir, DATA_ROOTS,
+         parseDataPack, untar, zipArchive } from '../src/js/stdlib-core.js';
 
 const { csv, sum, mean, median, extent, bin, linspace, unique, zip, cross, fmt, include,
         color, colorScale, hsl, viridis, magma, inferno, plasma, turbo, palette10 } = std;
@@ -53,6 +54,62 @@ describe('std.data', () => {
     assert.equal(typeof std.data, 'function');
     assert.equal(typeof std.data.info, 'function');
     assert.equal(typeof std.data.list, 'function');
+    assert.equal(typeof std.data.install, 'function');
+  });
+
+  const enc = (s) => new TextEncoder().encode(s);
+
+  it('parseDataPack accepts a zip container', async () => {
+    const zip = await zipArchive([
+      ['gcudat.json', enc(JSON.stringify({ gcudat: 1, kind: 'data', name: 'ds' }))],
+      ['records.json', enc(JSON.stringify([{ x: 9 }]))],
+    ]);
+    const { manifest, files } = await parseDataPack(zip);
+    assert.equal(manifest.kind, 'data');
+    assert.equal(manifest.name, 'ds');
+    assert.ok(files.has('records.json'));
+  });
+
+  it('untar reads a minimal ustar', () => {
+    const tarEntry = (name, content) => {
+      const d = enc(content); const b = new Uint8Array(512 + Math.ceil(d.length / 512) * 512);
+      b.set(enc(name), 0); b.set(enc(d.length.toString(8).padStart(11, '0') + '\0'), 124);
+      b[156] = '0'.charCodeAt(0); b.set(d, 512); return b;
+    };
+    const e1 = tarEntry('records.json', '[{"y":5}]');
+    const tar = new Uint8Array(e1.length + 1024); tar.set(e1, 0);   // + trailing zero blocks
+    const files = untar(tar);
+    assert.deepEqual(JSON.parse(new TextDecoder().decode(files.get('records.json'))), [{ y: 5 }]);
+  });
+
+  it('install (zip) writes /var/data and reads back', async () => {
+    const zip = await zipArchive([
+      ['gcudat.json', enc(JSON.stringify({ gcudat: 1, kind: 'data', name: 'mini', version: '1' }))],
+      ['dataset.json', enc(JSON.stringify({ dataset: 1, name: 'mini', records: 'records.json', count: 1 }))],
+      ['records.json', enc(JSON.stringify([{ v: 42 }]))],
+    ]);
+    // in-memory VFS + stubbed fetch
+    const f = new Map();
+    const mem = {
+      exists: async (p) => f.has(p) || [...f.keys()].some((k) => k.startsWith(p + '/')),
+      readFile: async (p, e) => { if (!f.has(p)) throw new Error('ENOENT'); const v = f.get(p); return e === 'utf8' && v instanceof Uint8Array ? new TextDecoder().decode(v) : v; },
+      writeFile: async (p, c) => { f.set(p, c); },
+      mkdir: async () => {},
+      rm: async (p) => { for (const k of [...f.keys()]) if (k === p || k.startsWith(p + '/')) f.delete(k); },
+      readdir: async (p) => { const s = new Set(); for (const k of f.keys()) if (k.startsWith(p + '/')) s.add(k.slice(p.length + 1).split('/')[0]); return [...s].map((name) => ({ name, type: 'directory' })); },
+    };
+    const savedWin = globalThis.window, savedFetch = globalThis.fetch;
+    globalThis.window = { _notebookVFS: mem };
+    globalThis.fetch = async () => ({ ok: true, arrayBuffer: async () => zip.buffer });
+    try {
+      const dir = await std.data.install('http://x/mini.gcudat');
+      assert.equal(dir, '/var/data/mini');
+      const recs = await std.data('mini');
+      assert.equal(recs[0].v, 42);
+      assert.deepEqual(await std.data.list(), ['mini']);
+    } finally {
+      globalThis.window = savedWin; globalThis.fetch = savedFetch;
+    }
   });
 });
 

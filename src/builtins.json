@@ -67,6 +67,22 @@
     "sig": "std.fetchJSON(url)",
     "desc": "fetch URL and parse JSON"
   },
+  "std.data": {
+    "sig": "std.data(name)",
+    "desc": "read an installed data pack's records (await). Resolves /home/library/data, /var/data, /usr/share/data"
+  },
+  "std.data.install": {
+    "sig": "std.data.install(url)",
+    "desc": "fetch a .gcudat (zip or tgz) and install it into the notebook at /var/data/<name>/ (await)"
+  },
+  "std.data.info": {
+    "sig": "std.data.info(name)",
+    "desc": "an installed data pack's dataset.json index (await)"
+  },
+  "std.data.list": {
+    "sig": "std.data.list()",
+    "desc": "names of all installed data packs (await)"
+  },
   "std.sum": {
     "sig": "std.sum(arr, fn?)",
     "desc": "sum array values"
