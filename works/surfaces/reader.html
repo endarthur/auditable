@@ -475,7 +475,8 @@ window.addEventListener('message', async (ev) => {
   // substitutes U+FFFD for non-UTF-8 bytes, corrupting any binary (e.g. a PDF's
   // flate streams → "Bad FCHECK"). Same gotcha downloadFile documents.
   const vfsReadBytes = (p) => bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [p, 'bytes']);
-  const ensurePersister = () => { if (!persister) persister = makeStatePersister(bus, '/home/.books/state/' + reader.slug + '.json'); return persister; };
+  // Reading-state path mirrors works/js/paths.js STATE_DIR (surfaces can't import it).
+  const ensurePersister = () => { if (!persister) persister = makeStatePersister(bus, '/home/library/.state/' + reader.slug + '.json'); return persister; };
   // PDF engine — works-all only (vendored @gcu/pdfjs lives at /usr/lib there;
   // absent in base works → null → the pdf backend degrades). Loaded as a classic
   // script via indirect eval (cross-blob ESM imports are blocked on file://),

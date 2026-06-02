@@ -10,6 +10,7 @@ import { metaGet, metaSet } from './meta.js';
 import { installGcudatBytes, getInstalled, patchInstalled } from './gcudat-install.js';
 import { installGcupkgBytes } from './file-ops.js';
 import { openPath } from './surfaces.js';
+import { destFor } from './paths.js';
 
 const DEFAULT_SOURCE = {
   url: 'https://raw.githubusercontent.com/gentropic/gcu-library/main/registry.json',
@@ -61,8 +62,8 @@ async function sriOf(bytes) {
 }
 
 async function isInstalled(entry) {
-  if (entry.kind === 'gcudat' && (entry.datKind === 'books' || !entry.datKind))
-    return WKS.vfs.exists('/home/.books/library/' + entry.name).catch(() => false);
+  if (entry.kind === 'gcudat')
+    return WKS.vfs.exists(destFor(entry.datKind, entry.name)).catch(() => false);
   return false;
 }
 

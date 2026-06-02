@@ -8,6 +8,7 @@
 import { WKS, setStatus } from './state.js';
 import { chooseExport } from './export-dialog.js';
 import { diskFromDump } from './disk.js';
+import { LIBRARY, LEDGER, STATE_DIR } from './paths.js';
 
 const BLOCK_RE = /<!--WORKS-VFS\n([\s\S]*?)\nWORKS-VFS-->/;
 // Mounts that travel with a workspace export.
@@ -124,19 +125,18 @@ export async function detectWorkspaceBlock(html) {
 // Every persistent path falls into exactly one category. Re-installable
 // categories (library, extensions) can travel as a tiny recipe instead of
 // their bulk: `pkg install` restores /lib from the kept lockfile, and the
-// shell restores /home/.books/library from the kept .installed.json (the
-// boot-time executor is Phase 3). `keepInReinstall` is the set of small
-// files that must stay so the recipe can run + reading state survives.
+// reinstall executor (reinstall.js) restores /home/library content from the
+// kept ledger. `keepInReinstall` is the set of small files that must stay so
+// the recipe can run + reading state survives.
 export const EXPORT_CATEGORIES = [
   { id: 'library', label: 'Library content', reinstallable: true,
     hint: 'Books & datasets from gcu-library',
-    match: (p) => p.startsWith('/home/.books/'),
-    // Keep the install registry + reading state; drop the bulk. NOTE (Phase 3):
-    // a locally-added book under /home/.books/library that isn't in
-    // .installed.json has no recipe entry — the boot executor should detect
-    // un-restorable library dirs and keep them bundled rather than drop them.
-    keepInReinstall: (p) => p === '/home/.books/.installed.json'
-      || p.startsWith('/home/.books/state/') },
+    match: (p) => p.startsWith(LIBRARY + '/'),
+    // Keep the install ledger + reading state; drop the bulk. NOTE: a
+    // locally-added pack not in the ledger has no recipe entry — the export
+    // should keep un-restorable dirs bundled rather than drop them (not yet
+    // handled; the reinstall executor only restores ledger-recorded packs).
+    keepInReinstall: (p) => p === LEDGER || p.startsWith(STATE_DIR + '/') },
   { id: 'extensions', label: 'Installed extensions', reinstallable: true,
     hint: 'gcupkg modules — pkg install restores them',
     match: (p) => p.startsWith('/lib/'),
@@ -149,7 +149,7 @@ export const EXPORT_CATEGORIES = [
     match: (p) => /^\/projects\/.*\/notebook\.outputs\//.test(p) },
   { id: 'home', label: 'Home files', reinstallable: false,
     hint: 'Loose files in /home',
-    match: (p) => p.startsWith('/home/') && !p.startsWith('/home/.books/')
+    match: (p) => p.startsWith('/home/') && !p.startsWith(LIBRARY + '/')
       && !p.startsWith('/home/.works/') },
   { id: 'state', label: 'Workspace state', reinstallable: false,
     hint: 'Layout, theme, editor prefs',
@@ -225,7 +225,7 @@ export function buildReinstallRecipe(dump, reinstallIds) {
   }
   if (reinstallIds.includes('library')) {
     let inst = null;
-    try { inst = JSON.parse(dump['/home/.books/.installed.json']?.content || 'null'); } catch { /* */ }
+    try { inst = JSON.parse(dump[LEDGER]?.content || 'null'); } catch { /* */ }
     recipe.library = inst
       ? Object.entries(inst).map(([id, m]) => ({ id, source: m.source,
           version: m.version, integrity: m.integrity, datKind: m.datKind }))

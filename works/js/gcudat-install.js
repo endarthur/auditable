@@ -12,6 +12,7 @@
 import { WKS, setStatus } from './state.js';
 import { gunzipBytes, listTar, readTar, listZip, readZip } from '#archive';
 import { openPath } from './surfaces.js';
+import { LIBRARY, LEDGER, bookDir, dataDir } from './paths.js';
 
 const norm = (p) => String(p).replace(/^\.\//, '').replace(/^\/+/, '');
 const TEXT_EXT = /\.(html?|json|md|markdown|css|txt|svg|csv|js|mjs|xml)$/i;
@@ -21,13 +22,13 @@ const TEXT_EXT = /\.(html?|json|md|markdown|css|txt|svg|csv|js|mjs|xml)$/i;
 // updates. A .gcudat manifest carries its own `version` (self-describing), so
 // even direct (non-registry) installs record one. Lives in the VFS — it
 // travels with the workspace on export. Reading state (highlights/position)
-// lives separately under /home/.books/state/, so reinstalls never touch it.
-const LEDGER = '/home/.books/.installed.json';
+// lives separately under the library's .state/, so reinstalls never touch it.
+// LEDGER + roots come from paths.js (the canonical content-library layout).
 export async function getInstalled() {
   try { return JSON.parse(await WKS.vfs.readFile(LEDGER, 'utf8')) || {}; } catch { return {}; }
 }
 async function writeLedger(map) {
-  await WKS.vfs.mkdir('/home/.books', { recursive: true }).catch(() => {});
+  await WKS.vfs.mkdir(LIBRARY, { recursive: true }).catch(() => {});
   await WKS.vfs.writeFile(LEDGER, JSON.stringify(map, null, 2));
 }
 // Merge fields into an existing record (used by the registry layer to attach
@@ -55,23 +56,28 @@ async function openContainer(bytes) {
 
 // kind → handler(manifest, container, name) → installed dir path. Pure data;
 // handlers only write files to the VFS, never execute.
+// Clean-replace every file from the container into `dest`, dropping the pack
+// manifest. Shared by books + data (both are inert file trees at distinct
+// roots). Reading state lives in the library's .state/ sibling, untouched.
+async function _installFiles(dest, c, vfs) {
+  await vfs.rm(dest, { recursive: true }).catch(() => {});
+  for (const [n, orig] of c.files) {
+    if (n === 'gcudat.json') continue;                       // drop the pack manifest
+    const full = dest + '/' + n;
+    const dir = full.slice(0, full.lastIndexOf('/'));
+    await vfs.mkdir(dir, { recursive: true }).catch(() => {});
+    const data = await c.read(orig);
+    await vfs.writeFile(full, TEXT_EXT.test(n) ? new TextDecoder().decode(data) : data);
+  }
+  return dest;
+}
+
 const KIND_HANDLERS = {
-  async books(manifest, c, vfs) {
-    const dest = '/home/.books/library/' + (manifest.name || 'book');
-    // Clean-replace: drop the old book dir so a reinstall/update can't leave
-    // stale files behind (renamed/removed chapters). Reading state is under
-    // /home/.books/state/, a sibling — untouched.
-    await vfs.rm(dest, { recursive: true }).catch(() => {});
-    for (const [n, orig] of c.files) {
-      if (n === 'gcudat.json') continue;                       // drop the pack manifest
-      const full = dest + '/' + n;
-      const dir = full.slice(0, full.lastIndexOf('/'));
-      await vfs.mkdir(dir, { recursive: true }).catch(() => {});
-      const data = await c.read(orig);
-      await vfs.writeFile(full, TEXT_EXT.test(n) ? new TextDecoder().decode(data) : data);
-    }
-    return dest;
-  },
+  // Reader content → /home/library/books/<name>/ (book.json + chapters).
+  books: (manifest, c, vfs) => _installFiles(bookDir(manifest.name || 'book'), c, vfs),
+  // Datasets → /home/library/data/<name>/ (dataset.json index + records). The
+  // data() notebook accessor reads these; this handler only lays the files down.
+  data:  (manifest, c, vfs) => _installFiles(dataDir(manifest.name || 'data'), c, vfs),
 };
 
 // Install .gcudat bytes → returns the opened path (or null). Status bar reports

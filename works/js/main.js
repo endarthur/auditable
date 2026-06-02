@@ -2,6 +2,7 @@
 // the registry/boot order, so init.js (the entry) must come last.
 
 import './state.js';
+import './paths.js';
 import './meta.js';
 import './export-dialog.js';
 import './disk.js';
@@ -9,6 +10,7 @@ import './persist.js';
 import './bus.js';
 import './mount.js';
 import './workspace.js';
+import './migrate-library.js';
 import './settings-store.js';
 import './docs-loader.js';
 import './books-loader.js';

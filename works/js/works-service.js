@@ -14,6 +14,7 @@ import { archive } from '#archive';
 import { Dialog } from '#dialog';
 import { metaGet, metaSet } from './meta.js';
 import { getSources, addSourceSilent, removeSource, fetchRegistry, installByName, entryStatuses, checkUpdates } from './registry.js';
+import { bookDir, dataDir } from './paths.js';
 
 // Build-time-injected vendored license manifest (see build.js's
 // injectBuildLicenses). Source-level empty so dev/test runs work; build
@@ -207,7 +208,8 @@ export async function setupWorksService() {
         RegistryRemoveSource: (url) => removeSource(url),
         RegistryFetch:        (sourceUrl) => fetchRegistry(sourceUrl),   // → { base, registry }
         RegistryInstall:      (sourceUrl, name) => installByName(sourceUrl, name),  // → dest path (install/update/reinstall — overwrites)
-        RegistryInstalled:    (name) => vfs.exists('/home/.books/library/' + name).catch(() => false),
+        RegistryInstalled:    async (name) => (await vfs.exists(bookDir(name)).catch(() => false))
+                                            || (await vfs.exists(dataDir(name)).catch(() => false)),
         RegistryStatuses:     (entries) => entryStatuses(entries),   // → { name: 'install'|'installed'|'update' }
         RegistryCheckUpdates: () => checkUpdates(),                  // → [{name,title,from,to,source}]
 

@@ -3,7 +3,7 @@
 // The book reader reads exactly one content model: a book.json directory of
 // md/html chapters (see works/surfaces/reader.html). EPUB import is the
 // conversion step — @gcu/epub parses the .epub, and we write the result as a
-// book.json + html chapters under /home/.books/library/<slug>/, then open it.
+// book.json + html chapters under /home/library/books/<slug>/, then open it.
 // Images referenced by chapters are inlined as data: URLs so the rendered
 // HTML is self-contained (the reader renders chapter HTML via innerHTML in a
 // sandboxed iframe, which can't reach VFS-relative image paths).
@@ -12,6 +12,7 @@ import { WKS, setStatus } from './state.js';
 import * as archive from '#archive';
 import { readEpub } from '#epub';
 import { openPath } from './surfaces.js';
+import { bookDir } from './paths.js';
 
 function slugify(s) {
   return String(s || 'book').toLowerCase().replace(/[^a-z0-9]+/g, '-')
@@ -28,7 +29,7 @@ function bytesToBase64(u8) {
   return btoa(s);
 }
 
-// Ingest .epub bytes → a /home/.books/library/<slug>/ book dir. Returns the
+// Ingest .epub bytes → a /home/library/books/<slug>/ book dir. Returns the
 // dir path (to openPath), or null on failure (status bar reports the reason).
 export async function importEpubBytes(bytes, filename) {
   const vfs = WKS.vfs;
@@ -38,8 +39,8 @@ export async function importEpubBytes(bytes, filename) {
 
   const meta = parsed.metadata || {};
   const baseSlug = slugify(meta.title || String(filename || 'book').replace(/\.epub$/i, ''));
-  let slug = baseSlug, dir = '/home/.books/library/' + slug, n = 2;
-  while (await vfs.exists(dir)) { slug = baseSlug + '-' + n; dir = '/home/.books/library/' + slug; n++; }
+  let slug = baseSlug, dir = bookDir(slug), n = 2;
+  while (await vfs.exists(dir)) { slug = baseSlug + '-' + n; dir = bookDir(slug); n++; }
   await vfs.mkdir(dir + '/chapters', { recursive: true });
 
   // image basename → data: URL (referenced images become self-contained).

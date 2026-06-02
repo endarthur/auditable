@@ -13,6 +13,8 @@ import { WKS, setStatus } from './state.js';
 import { confirm as dlgConfirm } from '#dialog';
 import { installByName, addSourceSilent } from './registry.js';
 import { installGcupkgBytes } from './file-ops.js';
+import { getInstalled } from './gcudat-install.js';
+import { destFor } from './paths.js';
 
 const RECIPE_PATH = '/home/.works/reinstall.json';
 
@@ -22,12 +24,18 @@ export async function readRecipe(vfs = WKS.vfs) {
   catch { return null; }
 }
 
-/** Narrow a recipe to what's actually missing on disk — a library pack is
- *  missing when its install dir is gone, an extension when its /lib dir is. */
+/** Narrow a recipe to what's actually missing on disk — a content pack is
+ *  missing when its install dir is gone, an extension when its /lib dir is.
+ *  The pack's dir comes from the kept ledger (its recorded `dest`/`datKind`),
+ *  not a hardcoded books path, so data packs are handled too. */
 export async function planReinstall(vfs, recipe) {
+  const ledger = await getInstalled().catch(() => ({}));
   const library = [];
   for (const b of (recipe.library || [])) {
-    if (b && b.id && !(await vfs.exists('/home/.books/library/' + b.id))) library.push(b);
+    if (!b || !b.id) continue;
+    const rec = ledger[b.id] || {};
+    const dir = rec.dest || destFor(b.datKind || rec.datKind, b.id);
+    if (!(await vfs.exists(dir))) library.push(b);
   }
   const extensions = [];
   for (const e of (recipe.extensions || [])) {

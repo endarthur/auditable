@@ -393,7 +393,8 @@ window.addEventListener('message', async (ev) => {
   const vfsRead = (p) => bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [p, 'utf8']);
   // 'bytes' mandatory — no-encoding reads UTF-8-decode + corrupt binary (PDF flate streams).
   const vfsReadBytes = (p) => bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [p, 'bytes']);
-  const ensurePersister = () => { if (!persister) persister = makeStatePersister(bus, '/home/.books/state/' + reader.slug + '.json'); return persister; };
+  // Reading-state path mirrors works/js/paths.js STATE_DIR (surfaces can't import it).
+  const ensurePersister = () => { if (!persister) persister = makeStatePersister(bus, '/home/library/.state/' + reader.slug + '.json'); return persister; };
   let _pdfEngine;
   async function loadPdfEngine() {
     if (_pdfEngine !== undefined) return _pdfEngine;

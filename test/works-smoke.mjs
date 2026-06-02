@@ -13,6 +13,7 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
+import { archive } from '../ext/archive/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
@@ -1256,22 +1257,55 @@ const disk = await page.evaluate(async () => {
 // same one Browse Library exercises.
 const reinstall = await page.evaluate(async () => {
   const W = window.WKS, v = W.vfs;
-  try { await v.mkdir('/home/.books/library/here', { recursive: true }); } catch { /* */ }
+  try { await v.mkdir('/home/library/books/here', { recursive: true }); } catch { /* */ }
   const recipe = { version: 1, library: [
     { id: 'here', source: 'http://reg/r.json', version: '1' },     // present → skip
     { id: 'gone', source: 'http://reg/r.json', version: '1' },     // missing → install
   ], extensions: [{ alias: '@gcu/x', url: 'http://x/x.gcupkg', version: '1' }] };
   const plan = await W.planReinstall(v, recipe);
   const res = await W.runReinstall(plan, {
-    installLibrary: async (b) => { await v.mkdir('/home/.books/library/' + b.id, { recursive: true }); return '/home/.books/library/' + b.id; },
+    installLibrary: async (b) => { await v.mkdir('/home/library/books/' + b.id, { recursive: true }); return '/home/library/books/' + b.id; },
     installExtension: async (e) => { await v.mkdir('/lib/' + e.alias, { recursive: true }); },
   });
   return {
     planOk: plan.library.map((b) => b.id).join(',') === 'gone' && plan.extensions.length === 1,
     runOk: res.ok.includes('gone') && res.ok.includes('@gcu/x') && res.failed.length === 0,
-    landed: await v.exists('/home/.books/library/gone'),
+    landed: await v.exists('/home/library/books/gone'),
   };
 });
+
+// ── content-library layout: migration + data datKind ─────────────────
+// Pre-1.0 move /home/.books → /home/library, and the new `data` datKind
+// landing at /home/library/data/ (not /home/.books).
+const dataGcudat = await (async () => {
+  const entries = {
+    'gcudat.json': JSON.stringify({ gcudat: 1, kind: 'data', name: 'testds', version: '1', title: 'Test DS' }),
+    'dataset.json': JSON.stringify({ dataset: 1, name: 'testds', records: 'records.json', count: 2 }),
+    'records.json': JSON.stringify([{ a: 1 }, { a: 2 }]),
+  };
+  const m = await archive.compress(entries, 'memory', { format: 'zip' });
+  return Array.from([...m.values()][0]);
+})();
+const layout = await page.evaluate(async (gcudatArr) => {
+  const W = window.WKS, v = W.vfs;
+  // (a) migration: seed the OLD layout, migrate, verify the move
+  await v.mkdir('/home/.books/library/oldbook', { recursive: true }).catch(() => {});
+  await v.writeFile('/home/.books/library/oldbook/book.json', '{"title":"Old"}');
+  await v.mkdir('/home/.books/state', { recursive: true }).catch(() => {});
+  await v.writeFile('/home/.books/state/oldbook.json', '{"page":7}');
+  await v.writeFile('/home/.books/.installed.json', '{"oldbook":{"datKind":"books"}}');
+  await W.migrateLibraryLayout(v);
+  const migrated = (await v.exists('/home/library/books/oldbook/book.json'))
+    && (await v.exists('/home/library/.state/oldbook.json'))
+    && (await v.exists('/home/library/.installed.json'))
+    && !(await v.exists('/home/.books'));
+  // (b) data datKind installs to /home/library/data/, never near books
+  const dest = await W.installGcudat(new Uint8Array(gcudatArr), 'testds.gcudat');
+  const dataOk = dest === '/home/library/data/testds'
+    && (await v.exists('/home/library/data/testds/dataset.json'))
+    && (await v.exists('/home/library/data/testds/records.json'));
+  return { migrated, dataOk };
+}, dataGcudat);
 
 // ── file:// portability (§15.1) ───────────────────────────────────────
 // works.html must run from file:// — every surface is an embedded payload,
@@ -1482,6 +1516,8 @@ const checks = {
   '.gcudsk mounts + round-trips bytes':    disk.mounted && disk.txtOk && disk.binOk,
   'reinstall plan skips present/adds missing': reinstall.planOk,
   'reinstall run restores + reports':      reinstall.runOk && reinstall.landed,
+  'library migration moves books/state/ledger': layout.migrated,
+  'data datKind installs to /home/library/data': layout.dataOk,
   // Patchbay surface
   'patchbay: surface opens':          pbOpen.ready === true && pbOpen.kind === 'patchbay',
   'patchbay: canvas + rack mounted':  pbMounted && pbMounted.hasCanvas

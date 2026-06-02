@@ -6,6 +6,7 @@
 import { WKS, setStatus } from './state.js';
 import { setupBus } from './bus.js';
 import { setupWorkspace } from './workspace.js';
+import { migrateLibraryLayout } from './migrate-library.js';
 import { setupLayout, restoreLayout } from './layout.js';
 import { setupMenuBar } from './menubar.js';
 import { setupTree, refreshTree, newProject, newFile, duplicateProject } from './tree.js';
@@ -34,6 +35,8 @@ import { installShellAuditable, evaluateAllWorksScripts } from './extension-load
 async function boot() {
   setupBus();                  // the A-Bus broker
   await setupWorkspace();      // the workspace VFS (storage home)
+  await migrateLibraryLayout(WKS.vfs)   // one-time pre-1.0: /home/.books → /home/library
+    .catch((e) => console.warn('[works] migrate:', (e && e.message) || e));
   await restoreMounts();       // reconnect saved /mnt/* disk-folder mounts
   await decompressLibs();      // shared library payloads → source strings
   await installSharedLibsToVfs(WKS.vfs);   // expose them at /usr/lib as @gcu/*
@@ -60,7 +63,7 @@ async function boot() {
   WKS.duplicateProject = duplicateProject;
   WKS.importNotebook = importNotebook;
   WKS.importFileAsNotebook = importFileAsNotebook;
-  WKS.importBook = importEpubBytes;   // .epub bytes → /home/.books/library/<slug>/
+  WKS.importBook = importEpubBytes;   // .epub bytes → /home/library/books/<slug>/
   WKS.installGcudat = installGcudatBytes;   // .gcudat bytes → routed by kind
   WKS.browseLibrary = openLibraryDialog;    // Browse Library dialog (content registry)
   WKS.registryInstall = installByName;      // (sourceUrl, name) → install an entry
@@ -84,6 +87,7 @@ async function boot() {
   WKS.planReinstall = planReinstall;
   WKS.runReinstall = runReinstall;
   WKS.maybePromptReinstall = maybePromptReinstall;
+  WKS.migrateLibraryLayout = migrateLibraryLayout;
 
   // Extension diagnostics + on-demand reload. If a contributed surface
   // or context-menu item vanishes between reloads, run reloadExtensions()
