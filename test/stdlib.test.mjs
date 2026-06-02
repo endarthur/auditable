@@ -4,9 +4,57 @@ globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { std } from '../src/js/stdlib.js';
+import { readDataset, datasetInfo, listDatasets, resolveDatasetDir, DATA_ROOTS } from '../src/js/stdlib-core.js';
 
 const { csv, sum, mean, median, extent, bin, linspace, unique, zip, cross, fmt, include,
         color, colorScale, hsl, viridis, magma, inferno, plasma, turbo, palette10 } = std;
+
+// ── std.data (data packs) ──
+
+describe('std.data', () => {
+  const files = {
+    '/var/data/factbook/dataset.json': JSON.stringify({ dataset: 1, name: 'factbook', records: 'records.json', count: 2 }),
+    '/var/data/factbook/records.json': JSON.stringify([{ id: 'us' }, { id: 'br' }]),
+  };
+  const vfs = {
+    exists: async (p) => p in files || Object.keys(files).some((k) => k.startsWith(p + '/')),
+    readFile: async (p) => { if (!(p in files)) throw new Error('ENOENT ' + p); return files[p]; },
+    readdir: async (p) => {
+      const s = new Set();
+      for (const k of Object.keys(files)) if (k.startsWith(p + '/')) s.add(k.slice(p.length + 1).split('/')[0]);
+      return [...s].map((name) => ({ name, type: 'directory' }));
+    },
+  };
+
+  it('resolves a pack across roots (works → standalone → builtin)', async () => {
+    assert.deepEqual(DATA_ROOTS, ['/home/library/data', '/var/data', '/usr/share/data']);
+    assert.equal(await resolveDatasetDir(vfs, 'factbook'), '/var/data/factbook');
+    assert.equal(await resolveDatasetDir(vfs, 'missing'), null);
+  });
+
+  it('reads the index and records', async () => {
+    const info = await datasetInfo(vfs, 'factbook');
+    assert.equal(info.count, 2);
+    assert.equal(info.dir, '/var/data/factbook');
+    const recs = await readDataset(vfs, 'factbook');
+    assert.equal(recs.length, 2);
+    assert.equal(recs[0].id, 'us');
+  });
+
+  it('lists installed packs', async () => {
+    assert.deepEqual(await listDatasets(vfs), ['factbook']);
+  });
+
+  it('throws on a missing pack', async () => {
+    await assert.rejects(() => readDataset(vfs, 'nope'), /no data pack/);
+  });
+
+  it('exposes std.data as a callable namespace', () => {
+    assert.equal(typeof std.data, 'function');
+    assert.equal(typeof std.data.info, 'function');
+    assert.equal(typeof std.data.list, 'function');
+  });
+});
 
 // ── csv ──
 

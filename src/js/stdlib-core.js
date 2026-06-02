@@ -541,6 +541,54 @@ export async function zipArchive(entries) {
   return result;
 }
 
+// ── Data packs (std.data) ──
+// Read installed .gcudat data packs (dataset.json index + records) from a VFS.
+// Pure — the VFS is passed in; stdlib.js wraps these with window._notebookVFS.
+// A resolution chain unifies standalone + Works: a pack installed by Works to
+// /home/library/data, by std.data.install to /var/data, or shipped builtin at
+// /usr/share/data all resolve the same way (first match wins).
+export const DATA_ROOTS = ['/home/library/data', '/var/data', '/usr/share/data'];
+
+export async function resolveDatasetDir(vfs, name) {
+  for (const root of DATA_ROOTS) {
+    const dir = root + '/' + name;
+    try { if (await vfs.exists(dir)) return dir; } catch { /* root absent — try next */ }
+  }
+  return null;
+}
+
+/** The dataset.json index (+ resolved `dir`), or throws if not installed. */
+export async function datasetInfo(vfs, name) {
+  const dir = await resolveDatasetDir(vfs, name);
+  if (!dir) throw new Error(`std.data: no data pack "${name}" installed`);
+  let idx;
+  try { idx = JSON.parse(await vfs.readFile(dir + '/dataset.json', 'utf8')); }
+  catch { throw new Error(`std.data: "${name}" has no dataset.json index`); }
+  return { ...idx, dir };
+}
+
+/** The pack's records (parsed from its `records` file, default records.json). */
+export async function readDataset(vfs, name) {
+  const info = await datasetInfo(vfs, name);
+  const file = info.records || 'records.json';
+  return JSON.parse(await vfs.readFile(info.dir + '/' + file, 'utf8'));
+}
+
+/** Names of all installed data packs across the resolution roots. */
+export async function listDatasets(vfs) {
+  const seen = new Set();
+  for (const root of DATA_ROOTS) {
+    let entries;
+    try { entries = await vfs.readdir(root, { stat: true }); } catch { continue; }
+    for (const e of entries) {
+      const name = typeof e === 'string' ? e : e.name;
+      const type = typeof e === 'string' ? 'directory' : e.type;
+      if (type === 'directory') seen.add(name);
+    }
+  }
+  return [...seen];
+}
+
 // ── Assembled std object (pure subset) ──
 
 export const std = {

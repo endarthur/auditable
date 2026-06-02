@@ -11,6 +11,7 @@ import {
   color, colorScale, hsl,
   viridis, magma, inferno, plasma, turbo,
   palette10,
+  readDataset, datasetInfo, listDatasets,
 } from './stdlib-core.js';
 
 // ── Provider Registry ──
@@ -104,8 +105,24 @@ if (typeof window !== 'undefined') {
 
 // ── Export ──
 
+// ── Data packs ──
+// std.data is a callable namespace: `await std.data('factbook')` reads a pack's
+// records; std.data.info / .list manage. Reads window._notebookVFS, so the same
+// call resolves in a standalone notebook (/var/data) or a Works surface
+// (/home/library/data) via the stdlib-core resolution chain. std.data.install
+// (fetch a .gcudat into /var/data) is the next step.
+function _nbVfs() {
+  const v = typeof window !== 'undefined' ? window._notebookVFS : null;
+  if (!v) throw new Error('std.data: no notebook filesystem available');
+  return v;
+}
+const data = Object.assign((name) => readDataset(_nbVfs(), name), {
+  info: (name) => datasetInfo(_nbVfs(), name),
+  list: () => listDatasets(_nbVfs()),
+});
+
 export const std = {
-  csv, fetchJSON,
+  csv, fetchJSON, data,
   sum, mean, median, extent, bin, linspace,
   unique, zip, cross,
   file, download, el, copy, fmt,
