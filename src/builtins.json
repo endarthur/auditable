@@ -83,6 +83,14 @@
     "sig": "std.data.list()",
     "desc": "names of all installed data packs (await)"
   },
+  "std.data.file": {
+    "sig": "std.data.file(name, relpath, enc?)",
+    "desc": "read a pack asset, resolving across the base + installed expansion tiers (e.g. std.data.file('factbook','maps/de.png')). enc:'utf8' for text; bytes otherwise (await)"
+  },
+  "std.data.expansions": {
+    "sig": "std.data.expansions(name)",
+    "desc": "installed expansion-tier dirs that extend this pack (await). A tier declares extends:<base> in its dataset.json"
+  },
   "std.sum": {
     "sig": "std.sum(arr, fn?)",
     "desc": "sum array values"

@@ -107,6 +107,7 @@ export async function installGcudatBytes(bytes, filename) {
     await patchInstalled(manifest.name, {
       version: manifest.version || '', kind: 'gcudat', datKind: manifest.kind,
       title: manifest.title || manifest.name, dest, at: Date.now(),
+      ...(manifest.extends ? { extends: manifest.extends } : {}),   // expansion tier → base
     });
   } catch { /* ledger is best-effort */ }
   setStatus('installed ' + (manifest.title || manifest.name || filename) + ' (' + manifest.kind + ')');

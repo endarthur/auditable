@@ -567,11 +567,76 @@ export async function datasetInfo(vfs, name) {
   return { ...idx, dir };
 }
 
-/** The pack's records (parsed from its `records` file, default records.json). */
+// ── expansion tiers (extends) ──
+// A pack may declare `extends: "<base>"` in its dataset.json — an optional tier
+// that enriches a base pack (e.g. factbook-full adds full profiles to factbook,
+// factbook-maps adds map assets). Expansions install to their OWN sibling dir;
+// resolution finds them by scanning, so it works with or without a ledger
+// (Works /home/library/data + standalone /var/data alike).
+
+/** Installed expansion dirs whose dataset.json `extends` the given base name. */
+export async function expansionsOf(vfs, base) {
+  const dirs = [];
+  for (const root of DATA_ROOTS) {
+    let entries;
+    try { entries = await vfs.readdir(root, { stat: true }); } catch { continue; }
+    for (const e of entries) {
+      const name = typeof e === 'string' ? e : e.name;
+      if (name === base) continue;
+      try {
+        const idx = JSON.parse(await vfs.readFile(root + '/' + name + '/dataset.json', 'utf8'));
+        if (idx.extends === base) dirs.push(root + '/' + name);
+      } catch { /* not a pack / unreadable — skip */ }
+    }
+  }
+  return dirs;
+}
+
+/**
+ * The pack's records, with any installed expansion tiers merged in by key
+ * (default 'id', or the dataset's `key`): matching records are Object.assigned
+ * (expansion fields win), expansion-only records are appended. Lean when no
+ * expansion is installed, enriched when one is — the "install the tier → richer
+ * data" contract, transparent to the caller.
+ */
 export async function readDataset(vfs, name) {
   const info = await datasetInfo(vfs, name);
-  const file = info.records || 'records.json';
-  return JSON.parse(await vfs.readFile(info.dir + '/' + file, 'utf8'));
+  const base = JSON.parse(await vfs.readFile(info.dir + '/' + (info.records || 'records.json'), 'utf8'));
+  const exps = await expansionsOf(vfs, name);
+  if (!exps.length) return base;
+  const key = info.key || 'id';
+  const byKey = new Map(base.map((r) => [r[key], r]));
+  for (const dir of exps) {
+    let recs;
+    try {
+      const idx = JSON.parse(await vfs.readFile(dir + '/dataset.json', 'utf8'));
+      recs = JSON.parse(await vfs.readFile(dir + '/' + (idx.records || 'records.json'), 'utf8'));
+    } catch { continue; }
+    for (const r of recs) {
+      const k = r[key];
+      if (byKey.has(k)) Object.assign(byKey.get(k), r);
+      else { byKey.set(k, r); base.push(r); }
+    }
+  }
+  return base;
+}
+
+/**
+ * Read a file from a pack, resolving across the base and any expansion tiers
+ * (base first, then expansions). Returns bytes (or text with `enc:'utf8'`), or
+ * null if absent. The asset path: `std.data.file('factbook', 'maps/de.png')`
+ * yields the map if the maps tier is installed, null otherwise.
+ */
+export async function datasetFile(vfs, name, relpath, enc) {
+  const dirs = [];
+  const baseDir = await resolveDatasetDir(vfs, name);
+  if (baseDir) dirs.push(baseDir);
+  dirs.push(...await expansionsOf(vfs, name));
+  for (const dir of dirs) {
+    const p = dir + '/' + relpath.replace(/^\/+/, '');
+    try { if (await vfs.exists(p)) return await vfs.readFile(p, enc); } catch { /* try next */ }
+  }
+  return null;
 }
 
 /** Names of all installed data packs across the resolution roots. */

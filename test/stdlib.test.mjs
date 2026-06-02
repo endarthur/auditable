@@ -5,7 +5,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { std } from '../src/js/stdlib.js';
 import { readDataset, datasetInfo, listDatasets, resolveDatasetDir, DATA_ROOTS,
-         parseDataPack, untar, zipArchive } from '../src/js/stdlib-core.js';
+         parseDataPack, untar, zipArchive, expansionsOf, datasetFile } from '../src/js/stdlib-core.js';
 
 const { csv, sum, mean, median, extent, bin, linspace, unique, zip, cross, fmt, include,
         color, colorScale, hsl, viridis, magma, inferno, plasma, turbo, palette10 } = std;
@@ -110,6 +110,29 @@ describe('std.data', () => {
     } finally {
       globalThis.window = savedWin; globalThis.fetch = savedFetch;
     }
+  });
+
+  it('extends: merges expansion records + resolves expansion files', async () => {
+    const f = {
+      '/var/data/fb/dataset.json': JSON.stringify({ dataset: 1, name: 'fb', records: 'records.json' }),
+      '/var/data/fb/records.json': JSON.stringify([{ id: 'us', pop: 1 }, { id: 'de', pop: 2 }]),
+      '/var/data/fb-full/dataset.json': JSON.stringify({ dataset: 1, name: 'fb-full', extends: 'fb', records: 'records.json' }),
+      '/var/data/fb-full/records.json': JSON.stringify([{ id: 'us', profile: 'USA' }, { id: 'br', profile: 'BRA' }]),
+      '/var/data/fb-maps/dataset.json': JSON.stringify({ dataset: 1, name: 'fb-maps', extends: 'fb' }),
+      '/var/data/fb-maps/maps/us.png': 'PNG',
+    };
+    const v = {
+      exists: async (p) => p in f || Object.keys(f).some((k) => k.startsWith(p + '/')),
+      readFile: async (p) => { if (!(p in f)) throw new Error('ENOENT'); return f[p]; },
+      readdir: async (p) => { const s = new Set(); for (const k of Object.keys(f)) if (k.startsWith(p + '/')) s.add(k.slice(p.length + 1).split('/')[0]); return [...s].map((name) => ({ name, type: 'directory' })); },
+    };
+    assert.deepEqual((await expansionsOf(v, 'fb')).sort(), ['/var/data/fb-full', '/var/data/fb-maps']);
+    const recs = await readDataset(v, 'fb');
+    assert.deepEqual(recs.find((r) => r.id === 'us'), { id: 'us', pop: 1, profile: 'USA' });   // enriched
+    assert.equal(recs.find((r) => r.id === 'de').profile, undefined);                          // untouched
+    assert.deepEqual(recs.find((r) => r.id === 'br'), { id: 'br', profile: 'BRA' });           // appended
+    assert.equal(await datasetFile(v, 'fb', 'maps/us.png', 'utf8'), 'PNG');                     // expansion asset
+    assert.equal(await datasetFile(v, 'fb', 'maps/zz.png'), null);
   });
 
   it('install accepts bytes and a File/Blob (the drag-drop path)', async () => {

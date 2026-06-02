@@ -11,7 +11,7 @@ import {
   color, colorScale, hsl,
   viridis, magma, inferno, plasma, turbo,
   palette10,
-  readDataset, datasetInfo, listDatasets, installDataPack,
+  readDataset, datasetInfo, listDatasets, installDataPack, datasetFile, expansionsOf,
 } from './stdlib-core.js';
 
 // ── Provider Registry ──
@@ -141,6 +141,11 @@ const data = Object.assign((name) => readDataset(_nbVfs(), name), {
   info: (name) => datasetInfo(_nbVfs(), name),
   list: () => listDatasets(_nbVfs()),
   install: _dataInstall,
+  // Read a pack asset, resolving across the base + installed expansion tiers
+  // (e.g. std.data.file('factbook', 'maps/de.png')). enc:'utf8' for text.
+  file: (name, relpath, enc) => datasetFile(_nbVfs(), name, relpath, enc),
+  // Installed expansion-tier dirs that extend `name`.
+  expansions: (name) => expansionsOf(_nbVfs(), name),
 });
 
 export const std = {
