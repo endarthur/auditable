@@ -90,8 +90,11 @@ export async function chooseExport(dump) {
       const mkTarget = (val, label, sub) => {
         const b = document.createElement('button');
         b.dataset.target = val;
-        b.style.cssText = 'flex:1; text-align:left; font:inherit; padding:7px 10px; border-radius:5px; '
-          + 'cursor:pointer; border:1px solid var(--au-border); background:var(--au-surface-raised);';
+        // Buttons don't inherit color from the dialog body — set it explicitly
+        // or they fall back to the UA default (black on our dark surfaces).
+        b.style.cssText = 'flex:1; text-align:left; font:inherit; color:var(--au-fg); '
+          + 'padding:7px 10px; border-radius:5px; cursor:pointer; '
+          + 'border:1px solid var(--au-border); background:var(--au-surface-raised);';
         b.innerHTML = '<div style="font-size:12px; font-weight:600;">' + label
           + '</div><div style="font-size:10px; color:var(--au-fg-soft);">' + sub + '</div>';
         b.addEventListener('click', () => { target = val; repaint(); });
