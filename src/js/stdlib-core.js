@@ -629,6 +629,27 @@ export async function parseDataPack(bytes) {
   return { manifest: JSON.parse(new TextDecoder().decode(mf)), files };
 }
 
+/**
+ * Install a `kind: data` .gcudat (bytes) into a VFS at /var/data/<name>/,
+ * clean-replacing any prior copy. Returns the install dir. Pure — `vfs` is
+ * passed in — so the std.data.install verb and the drag-drop handler share it.
+ * Throws for a non-data pack (books need Works' reader, not a notebook).
+ */
+export async function installDataPack(vfs, bytes) {
+  const { manifest, files } = await parseDataPack(bytes);
+  if (manifest.kind !== 'data')
+    throw new Error(`std.data.install: not a data pack (kind=${manifest.kind})`);
+  const dir = '/var/data/' + (manifest.name || 'data');
+  await vfs.rm(dir, { recursive: true }).catch(() => {});                    // clean-replace
+  for (const [p, content] of files) {
+    if (p === 'gcudat.json') continue;
+    const full = dir + '/' + p;
+    await vfs.mkdir(full.slice(0, full.lastIndexOf('/')), { recursive: true }).catch(() => {});
+    await vfs.writeFile(full, content);
+  }
+  return { dir, manifest };
+}
+
 // ── Assembled std object (pure subset) ──
 
 export const std = {

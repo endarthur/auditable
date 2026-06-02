@@ -111,6 +111,34 @@ describe('std.data', () => {
       globalThis.window = savedWin; globalThis.fetch = savedFetch;
     }
   });
+
+  it('install accepts bytes and a File/Blob (the drag-drop path)', async () => {
+    const pack = await zipArchive([
+      ['gcudat.json', enc(JSON.stringify({ gcudat: 1, kind: 'data', name: 'dropped' }))],
+      ['records.json', enc(JSON.stringify([{ n: 1 }]))],
+    ]);
+    const mk = () => {
+      const f = new Map();
+      return {
+        exists: async (p) => f.has(p) || [...f.keys()].some((k) => k.startsWith(p + '/')),
+        readFile: async (p, e) => { if (!f.has(p)) throw new Error('ENOENT'); const v = f.get(p); return e === 'utf8' && v instanceof Uint8Array ? new TextDecoder().decode(v) : v; },
+        writeFile: async (p, c) => { f.set(p, c); }, mkdir: async () => {},
+        rm: async (p) => { for (const k of [...f.keys()]) if (k === p || k.startsWith(p + '/')) f.delete(k); },
+        readdir: async () => [],
+      };
+    };
+    const savedWin = globalThis.window;
+    try {
+      globalThis.window = { _notebookVFS: mk() };
+      assert.equal(await std.data.install(pack), '/var/data/dropped');                       // raw bytes
+      globalThis.window = { _notebookVFS: mk() };
+      const fileLike = { name: 'x.gcudat', arrayBuffer: async () => pack.buffer };
+      assert.equal(await std.data.install(fileLike), '/var/data/dropped');                    // File/Blob
+      await assert.rejects(() => std.data.install(123), /expected a URL, File\/Blob, or bytes/);
+    } finally {
+      globalThis.window = savedWin;
+    }
+  });
 });
 
 // ── csv ──

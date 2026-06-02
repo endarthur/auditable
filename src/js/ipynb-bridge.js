@@ -11,6 +11,8 @@ import { addCell, deleteCell } from './cell-ops.js';
 import { getEditor } from './cm6.js';
 import { setMsg } from './ui.js';
 import { applyExecMode } from './settings.js';
+import { installDataPack, unzipArchive } from './stdlib-core.js';   // zero-dep — no import cycle
+import { parseGcupkg, installGcupkg, makeUnzipArchiveShim } from './gcupkg.js';   // zero-dep — no cycle
 import { confirm as dialogConfirm, alert as dialogAlert } from '#dialog';
 
 // Clear the current notebook (cells + style elements + selection state)
@@ -166,7 +168,8 @@ export function exportAsIpynb() {
 
 // Global drag-drop handler. Listens on document for OS-file drags; routes
 // recognised extensions (.ipynb → notebook import, .gcupkg → extension
-// install) and shows a brief overlay during the drag. Browsers hide
+// install, .gcudat → data pack install) and shows a brief overlay during the
+// drag. Browsers hide
 // filenames during dragover for privacy, so the overlay copy is generic;
 // the per-file outcome lands in the cell's display / console post-drop.
 //
@@ -208,6 +211,8 @@ export function installIpynbDragDrop() {
       try {
         if (/\.gcupkg$/i.test(file.name)) {
           await _installDroppedGcupkg(file);
+        } else if (/\.gcudat$/i.test(file.name)) {
+          await _installDroppedGcudat(file);
         } else if (/\.ipynb$/i.test(file.name)) {
           const text = await file.text();
           await importIpynbText(text, { sourceName: file.name });
@@ -227,9 +232,10 @@ export function installIpynbDragDrop() {
 // path the cell-side install("file.gcupkg") goes through — stdlib's
 // unzipArchive shim handles the ZIP reading; no @gcu/archive dep.
 async function _installDroppedGcupkg(file) {
-  // Lazy imports — avoids a circular ipynb-bridge → modules → ipynb-bridge.
-  const { parseGcupkg, installGcupkg, makeUnzipArchiveShim } = await import('./gcupkg.js');
-  const { unzipArchive } = await import('./stdlib-core.js');
+  // Static imports (parseGcupkg/installGcupkg/unzipArchive) — a dynamic
+  // import('./x.js') here resolves fine in dev but the bundler doesn't rewrite
+  // dynamic specifiers, so it threw "Failed to resolve module specifier" in the
+  // built auditable.html. Both modules are zero-import, so there's no cycle.
   const bytes = new Uint8Array(await file.arrayBuffer());
   const parsed = await parseGcupkg(bytes, makeUnzipArchiveShim(unzipArchive));
   const vfs = window._notebookVFS;
@@ -253,6 +259,27 @@ async function _installDroppedGcupkg(file) {
   // Pop a small toast-shaped indicator. Lives in the overlay's parent
   // (document.body) and self-removes after a few seconds.
   _showInstallToast(parsed.meta.name, parsed.meta.version, parsed.integrity.ok);
+}
+
+// Sideload a dropped .gcudat data pack → /var/data/<name>/ via std.data.install
+// (the same path std.data.install(url) takes). Only `kind: data` packs are
+// usable in a standalone notebook — books need Auditable Works' reader, so a
+// non-data pack surfaces a clear message from std.data.install. Read the
+// installed pack with std.data("<name>").
+async function _installDroppedGcudat(file) {
+  const vfs = window._notebookVFS;
+  if (!vfs) { setMsg('data pack drop: no notebook filesystem', 'err'); return; }
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const { dir, manifest } = await installDataPack(vfs, bytes);   // shared pure installer
+    const name = dir.split('/').pop();
+    console.log('[auditable] data pack installed:', { name, dir, read: `await std.data("${name}")` });
+    _showInstallToast(name, manifest.version || '', true);
+    setMsg(`data pack ready → std.data("${name}")`, 'ok');
+  } catch (e) {
+    console.error('[auditable] gcudat drop failed:', file.name, e);
+    setMsg('data pack: ' + (e.message || e), 'err');
+  }
 }
 
 // Lazy-built shared overlay element. Browser privacy hides the dragged

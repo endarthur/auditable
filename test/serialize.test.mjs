@@ -4,8 +4,18 @@ import assert from 'node:assert/strict';
 // serialize.js has ZERO DOM dependencies — no document shim needed
 import {
   serializeCells, encodeModules, decodeModules, esc,
-  parseNotebookHtml, buildTxtExport
+  parseNotebookHtml, buildTxtExport, PERSISTENT_MOUNTS
 } from '../src/js/serialize.js';
+
+// Guard: /var must stay persistent so std.data packs (installed to /var/data)
+// survive a standalone save/load. Removing it silently breaks data persistence.
+describe('serialize: persistent mounts', () => {
+  it('includes /projects/self, /lib and /var', () => {
+    assert.ok(PERSISTENT_MOUNTS.includes('/projects/self'));
+    assert.ok(PERSISTENT_MOUNTS.includes('/lib'));
+    assert.ok(PERSISTENT_MOUNTS.includes('/var'));
+  });
+});
 
 describe('serialize: serializeCells', () => {
   it('extracts type, code, and collapsed', () => {

@@ -79,13 +79,16 @@ function _downloadHtml(html, title) {
 export function createStandaloneHost({ buildHtml }) {
   return {
     // Self-contained VFS. /projects/self is the notebook's own project,
-    // /lib holds installed modules, /tmp + /usr/lib/python are volatile.
-    // Synchronous: nothing here awaits, so window._notebookVFS is ready the
-    // instant the call returns.
+    // /lib holds installed modules, /var holds installed data packs
+    // (std.data), /tmp + /usr/lib/python are volatile. /projects/self, /lib
+    // and /var are serialized into the saved notebook (serialize.js
+    // PERSISTENT_MOUNTS). Synchronous: nothing here awaits, so
+    // window._notebookVFS is ready the instant the call returns.
     provideVFS() {
       const vfs = new VFS();
       vfs._mounts.set('/projects/self', _makeProjectBackend());
       vfs._mounts.set('/lib', new MemoryBackend());
+      vfs._mounts.set('/var', new MemoryBackend());
       vfs._mounts.set('/tmp', new MemoryBackend());
       vfs._mounts.set('/usr/lib/python', new MemoryBackend());
       _wireVfsEvents(vfs);

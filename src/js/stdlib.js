@@ -11,7 +11,7 @@ import {
   color, colorScale, hsl,
   viridis, magma, inferno, plasma, turbo,
   palette10,
-  readDataset, datasetInfo, listDatasets, parseDataPack,
+  readDataset, datasetInfo, listDatasets, installDataPack,
 } from './stdlib-core.js';
 
 // ── Provider Registry ──
@@ -117,24 +117,23 @@ function _nbVfs() {
   return v;
 }
 
-// Fetch a .gcudat and install it into the notebook at /var/data/<name>/ (the
-// standalone "add a data pack" verb, parallel to install() for code). Persists
-// with the notebook (/var is a durable mount). Clean-replace on reinstall.
-async function _dataInstall(url) {
-  const vfs = _nbVfs();
-  const res = await fetch(url, { cache: 'no-cache' });
-  if (!res.ok) throw new Error('std.data.install: HTTP ' + res.status);
-  const { manifest, files } = await parseDataPack(new Uint8Array(await res.arrayBuffer()));
-  if (manifest.kind !== 'data')
-    throw new Error(`std.data.install: not a data pack (kind=${manifest.kind})`);
-  const dir = '/var/data/' + (manifest.name || 'data');
-  await vfs.rm(dir, { recursive: true }).catch(() => {});            // clean-replace
-  for (const [p, content] of files) {
-    if (p === 'gcudat.json') continue;
-    const full = dir + '/' + p;
-    await vfs.mkdir(full.slice(0, full.lastIndexOf('/')), { recursive: true }).catch(() => {});
-    await vfs.writeFile(full, content);
+// Install a .gcudat into the notebook at /var/data/<name>/ (the standalone "add
+// a data pack" verb, parallel to install() for code). Accepts a URL (fetched),
+// a File/Blob (drag-drop / ui.upload), or raw bytes. Persists with the notebook
+// (/var is a durable mount). Clean-replace on reinstall.
+async function _dataBytes(src) {
+  if (typeof src === 'string') {
+    const res = await fetch(src, { cache: 'no-cache' });
+    if (!res.ok) throw new Error('std.data.install: HTTP ' + res.status);
+    return new Uint8Array(await res.arrayBuffer());
   }
+  if (src instanceof Uint8Array) return src;
+  if (src instanceof ArrayBuffer) return new Uint8Array(src);
+  if (src && typeof src.arrayBuffer === 'function') return new Uint8Array(await src.arrayBuffer());
+  throw new Error('std.data.install: expected a URL, File/Blob, or bytes');
+}
+async function _dataInstall(src) {
+  const { dir } = await installDataPack(_nbVfs(), await _dataBytes(src));
   return dir;
 }
 

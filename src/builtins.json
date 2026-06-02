@@ -72,8 +72,8 @@
     "desc": "read an installed data pack's records (await). Resolves /home/library/data, /var/data, /usr/share/data"
   },
   "std.data.install": {
-    "sig": "std.data.install(url)",
-    "desc": "fetch a .gcudat (zip or tgz) and install it into the notebook at /var/data/<name>/ (await)"
+    "sig": "std.data.install(urlOrFileOrBytes)",
+    "desc": "install a .gcudat (zip or tgz) into the notebook at /var/data/<name>/ — from a URL, a File/Blob, or bytes (await). Also drag-drop a .gcudat onto the notebook"
   },
   "std.data.info": {
     "sig": "std.data.info(name)",

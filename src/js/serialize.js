@@ -191,7 +191,7 @@ function _trimCell(s) {
 // Pure VFS → JSON dump and back. Used by persist.js for save/load.
 // Spec: spec_inbox/shipped/auditable-persistence-spec.md.
 
-const _DEFAULT_PERSISTENT_MOUNTS = ['/projects/self', '/lib'];
+const _DEFAULT_PERSISTENT_MOUNTS = ['/projects/self', '/lib', '/var'];
 
 function _bytesToBase64(bytes) {
   let bin = '';
