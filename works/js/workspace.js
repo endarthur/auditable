@@ -14,6 +14,7 @@
 import { VFS } from '#vfs';
 import { WKS } from './state.js';
 import { detectWorkspaceBlock, hydrateWorkspace } from './persist.js';
+import { consumePendingDisk, hydrateVfsFromDisk } from './disk.js';
 import { metaGet, metaSet } from './meta.js';
 import { clearSavedMounts } from './mount.js';
 
@@ -56,22 +57,41 @@ function _reconnectGate(handle) {
 
 // ── Workspace setup ──────────────────────────────────────────────────
 
+// A volatile in-memory workspace VFS with the standard mounts + dirs. Used by
+// both the embedded-HTML snapshot and the .gcudsk open paths.
+async function _memoryWorkspaceVfs() {
+  const vfs = await VFS.create({
+    backends: {
+      '/':        { type: 'memory' },
+      '/tmp':     { type: 'memory' },
+      '/sys':     { type: 'memory' },
+      '/usr':     { type: 'memory' },   // shell builtins (§Unix: /usr/lib)
+    },
+  });
+  for (const dir of ['/projects', '/lib', '/home', '/home/.works', '/mnt', '/usr/lib']) {
+    try { await vfs.mkdir(dir, { recursive: true }); } catch { /* exists */ }
+  }
+  return vfs;
+}
+
 export async function setupWorkspace() {
+  // A pending .gcudsk open (File → Open disk…) takes precedence — it stashed
+  // its bytes and reloaded; boot it as a volatile memory workspace, exactly
+  // like an embedded-HTML import (edits persist by re-exporting).
+  const pendingDisk = await consumePendingDisk();
+  if (pendingDisk) {
+    const vfs = await _memoryWorkspaceVfs();
+    await hydrateVfsFromDisk(vfs, pendingDisk, { root: '' });
+    WKS.vfs = vfs;
+    WKS.home = { kind: 'memory' };
+    return;
+  }
+
   // An exported workspace HTML embeds its VFS — open it as a volatile
   // snapshot (edits persist by re-exporting, or by adopting a disk folder).
   const imported = await detectWorkspaceBlock(document.body.innerHTML);
   if (imported) {
-    const vfs = await VFS.create({
-      backends: {
-        '/':        { type: 'memory' },
-        '/tmp':     { type: 'memory' },
-        '/sys':     { type: 'memory' },
-        '/usr':     { type: 'memory' },   // shell builtins (§Unix: /usr/lib)
-      },
-    });
-    for (const dir of ['/projects', '/lib', '/home', '/home/.works', '/mnt', '/usr/lib']) {
-      try { await vfs.mkdir(dir, { recursive: true }); } catch { /* exists */ }
-    }
+    const vfs = await _memoryWorkspaceVfs();
     await hydrateWorkspace(vfs, imported);
     WKS.vfs = vfs;
     WKS.home = { kind: 'memory' };

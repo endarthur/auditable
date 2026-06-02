@@ -66,7 +66,7 @@ export async function chooseExport(dump) {
   if (catById.get('library') && present.some((c) => c.id === 'library')) bundled.delete('library');
 
   let emitGeas = false;
-  const state = { bundled, emitGeas };
+  let target = 'html';   // 'html' = embedded self-contained file · 'disk' = .gcudsk
 
   const dialog = new Dialog({
     title: 'Export workspace',
@@ -79,9 +79,28 @@ export async function chooseExport(dump) {
 
       const intro = document.createElement('div');
       intro.style.cssText = 'color:var(--au-fg-soft); font-size:12px; line-height:1.5;';
-      intro.textContent = 'Choose what travels in the exported HTML. Re-installable content can '
+      intro.textContent = 'Choose what travels in the export. Re-installable content can '
         + 'travel as a small recipe instead of its full bulk.';
       wrap.appendChild(intro);
+
+      // Target: one self-contained HTML, or a .gcudsk disk image (a ZIP — no
+      // base64 tax, ~25% smaller, separate from the runtime, mountable).
+      const targetRow = document.createElement('div');
+      targetRow.style.cssText = 'display:flex; gap:6px;';
+      const mkTarget = (val, label, sub) => {
+        const b = document.createElement('button');
+        b.dataset.target = val;
+        b.style.cssText = 'flex:1; text-align:left; font:inherit; padding:7px 10px; border-radius:5px; '
+          + 'cursor:pointer; border:1px solid var(--au-border); background:var(--au-surface-raised);';
+        b.innerHTML = '<div style="font-size:12px; font-weight:600;">' + label
+          + '</div><div style="font-size:10px; color:var(--au-fg-soft);">' + sub + '</div>';
+        b.addEventListener('click', () => { target = val; repaint(); });
+        return b;
+      };
+      const tHtml = mkTarget('html', 'Embedded HTML', 'one self-contained file');
+      const tDisk = mkTarget('disk', 'Disk image (.gcudsk)', 'ZIP volume · carry / mount');
+      targetRow.append(tHtml, tDisk);
+      wrap.appendChild(targetRow);
 
       const list = document.createElement('div');
       list.style.cssText = 'display:flex; flex-direction:column; gap:2px;';
@@ -133,7 +152,7 @@ export async function chooseExport(dump) {
       const geasCb = document.createElement('input');
       geasCb.type = 'checkbox';
       geasCb.checked = emitGeas;
-      geasCb.addEventListener('change', () => { emitGeas = geasCb.checked; state.emitGeas = emitGeas; });
+      geasCb.addEventListener('change', () => { emitGeas = geasCb.checked; });
       const geasLbl = document.createElement('span');
       geasLbl.textContent = 'Also write a readable reinstall.geas alongside the recipe';
       geasRow.append(geasCb, geasLbl);
@@ -156,7 +175,7 @@ export async function chooseExport(dump) {
         + 'background:var(--au-action); color:var(--au-surface-deep); font-weight:600;';
       ok.dataset.default = 'true';
       ok.textContent = 'Export';
-      ok.addEventListener('click', () => ctx.close({ bundled: new Set(bundled), emitGeas }));
+      ok.addEventListener('click', () => ctx.close({ bundled: new Set(bundled), emitGeas, target }));
       btns.append(cancel, ok);
       footer.append(sizeReadout, btns);
       wrap.appendChild(footer);
@@ -186,8 +205,17 @@ export async function chooseExport(dump) {
           r.size.textContent = _fmtBytes(cat.rawBytes);
         }
         geasRow.style.display = anyReinstall ? 'flex' : 'none';
-        const projected = baseBytes + inFile(blockGz);
-        sizeReadout.innerHTML = 'Estimated file: <strong>≈ ' + _fmtBytes(projected) + '</strong>';
+        // HTML embeds the gzip+base64 block alongside the ~6 MB runtime; a
+        // .gcudsk is just the raw zip (≈ the deflate size, no base64, no runtime).
+        const projected = target === 'disk' ? blockGz : baseBytes + inFile(blockGz);
+        sizeReadout.innerHTML = 'Estimated ' + (target === 'disk' ? '.gcudsk' : 'file')
+          + ': <strong>≈ ' + _fmtBytes(projected) + '</strong>';
+        for (const b of [tHtml, tDisk]) {
+          const on = b.dataset.target === target;
+          b.style.borderColor = on ? 'var(--au-action)' : 'var(--au-border)';
+          b.style.background = on ? 'var(--au-action-soft)' : 'var(--au-surface-raised)';
+        }
+        ok.textContent = target === 'disk' ? 'Export disk' : 'Export';
       }
       repaint();
     },

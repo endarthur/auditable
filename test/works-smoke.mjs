@@ -1227,6 +1227,29 @@ const imported = await page.evaluate(async () => {
   return { home: W.home && W.home.kind, nbExists, note };
 });
 
+// ── .gcudsk disk image round-trip ─────────────────────────────────────
+// Export the workspace to a .gcudsk (ZIP, binary stored raw — no base64
+// tax), then mount it back and verify text + raw-binary survive byte-exact.
+const disk = await page.evaluate(async () => {
+  const W = window.WKS, v = W.vfs;
+  try { await v.mkdir('/projects/DiskRT', { recursive: true }); } catch { /* */ }
+  await v.writeFile('/projects/DiskRT/n.txt', 'disk-roundtrip');
+  const bin = new Uint8Array([0, 1, 2, 253, 254, 255, 128, 0]);
+  await v.writeFile('/projects/DiskRT/b.bin', bin);
+  const bytes = await W.diskFromDump(await W.serializeWorkspace(v), { kind: 'workspace' });
+  const manifest = await W.readDiskManifest(bytes);
+  const mp = await W.mountDisk(bytes, 'rt');
+  const txt = await v.readFile(mp + '/projects/DiskRT/n.txt', 'utf8');
+  const back = await v.readFile(mp + '/projects/DiskRT/b.bin', 'bytes');
+  return {
+    isZip: bytes[0] === 0x50 && bytes[1] === 0x4B,
+    format: manifest && manifest.format,
+    txtOk: txt === 'disk-roundtrip',
+    binOk: back.length === bin.length && bin.every((b, i) => back[i] === b),
+    mounted: mp === '/mnt/rt',
+  };
+});
+
 // ── file:// portability (§15.1) ───────────────────────────────────────
 // works.html must run from file:// — every surface is an embedded payload,
 // blob-URL'd on spawn, so it loads same-origin with the shell. The rest of
@@ -1432,6 +1455,8 @@ const checks = {
   'imported workspace uses a memory home': imported.home === 'memory',
   'imported workspace has its projects':   imported.nbExists,
   'imported workspace keeps its files':    imported.note === 'survives reload',
+  '.gcudsk exports a valid ZIP':           disk.isZip && disk.format === 'gcudsk',
+  '.gcudsk mounts + round-trips bytes':    disk.mounted && disk.txtOk && disk.binOk,
   // Patchbay surface
   'patchbay: surface opens':          pbOpen.ready === true && pbOpen.kind === 'patchbay',
   'patchbay: canvas + rack mounted':  pbMounted && pbMounted.hasCanvas

@@ -18,6 +18,7 @@ import { installBuiltinBooks } from './books-loader.js';
 import { installExamplesToVfs, hasExamples } from './examples-loader.js';
 import { serializeWorkspace, buildWorksHtml, categorizeDump, applyExportSelection } from './persist.js';
 import { chooseExport } from './export-dialog.js';
+import { diskFromDump, hydrateVfsFromDisk, readDiskManifest, mountDisk, openDiskAsWorkspace } from './disk.js';
 import { importNotebook, importFileAsNotebook } from './import.js';
 import { importEpubBytes } from './book-import.js';
 import { metaGet, metaSet } from './meta.js';
@@ -73,6 +74,11 @@ async function boot() {
   WKS.categorizeDump = categorizeDump;
   WKS.applyExportSelection = applyExportSelection;
   WKS.chooseExport = chooseExport;
+  WKS.diskFromDump = diskFromDump;
+  WKS.hydrateVfsFromDisk = hydrateVfsFromDisk;
+  WKS.readDiskManifest = readDiskManifest;
+  WKS.mountDisk = mountDisk;
+  WKS.openDiskAsWorkspace = openDiskAsWorkspace;
 
   // Extension diagnostics + on-demand reload. If a contributed surface
   // or context-menu item vanishes between reloads, run reloadExtensions()

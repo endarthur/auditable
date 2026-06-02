@@ -10,6 +10,7 @@ import { installGcudatViaPicker } from './gcudat-install.js';
 import { mountFolder } from './mount.js';
 import { openWorkspaceFolder, resetWorkspace } from './workspace.js';
 import { exportWorkspace, openWorkspaceFile, saveWorkspace } from './persist.js';
+import { openDiskFile, mountDiskFile } from './disk.js';
 import { confirm as dlgConfirm, Dialog } from '#dialog';
 import { showAbout } from './about.js';
 import { openLibraryDialog } from './registry.js';
@@ -31,6 +32,8 @@ export function setupMenuBar() {
       { label: 'Open folder…',         action: 'workspace:open' },
       { label: 'Mount folder…',        action: 'workspace:mount' },
       { label: 'Open workspace file…', action: 'workspace:openfile' },
+      { label: 'Open disk… (.gcudsk)',  action: 'disk:open' },
+      { label: 'Mount disk… (.gcudsk)', action: 'disk:mount' },
       '---',
       { label: 'Save',                       action: 'workspace:save', shortcut: 'Ctrl+S' },
       { label: 'Export workspace…',          action: 'workspace:export' },
@@ -70,6 +73,8 @@ export function setupMenuBar() {
     if (action === 'workspace:open') { await openWorkspaceFolder(); return; }
     if (action === 'workspace:mount') { await mountFolder(); return; }
     if (action === 'workspace:openfile') { openWorkspaceFile(); return; }
+    if (action === 'disk:open') { await openDiskFile(); return; }
+    if (action === 'disk:mount') { await mountDiskFile(); return; }
     if (action === 'workspace:save') { await saveWorkspace(); return; }
     if (action === 'workspace:export') { await exportWorkspace(); return; }
     if (action === 'workspace:export-notices') { await exportNotices(); return; }

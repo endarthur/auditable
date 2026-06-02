@@ -7,6 +7,7 @@
 
 import { WKS, setStatus } from './state.js';
 import { chooseExport } from './export-dialog.js';
+import { diskFromDump } from './disk.js';
 
 const BLOCK_RE = /<!--WORKS-VFS\n([\s\S]*?)\nWORKS-VFS-->/;
 // Mounts that travel with a workspace export.
@@ -276,20 +277,31 @@ export async function buildWorksHtml(dump) {
   return html;
 }
 
-/** Serialize the workspace and download it as one self-contained HTML. */
+function _download(data, name, type) {
+  const blob = new Blob([data], { type });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+/** Serialize the workspace and download it — one self-contained HTML, or a
+ *  .gcudsk disk image, per the export dialog's chosen target. */
 export async function exportWorkspace() {
   try {
     const dump = await serializeWorkspace(WKS.vfs);
     const selection = await chooseExport(dump);   // null → user cancelled
     if (!selection) { setStatus('export cancelled'); return; }
     const filtered = applyExportSelection(dump, selection);
-    const blob = new Blob([await buildWorksHtml(filtered)], { type: 'text/html' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'workspace.html';
-    a.click();
-    URL.revokeObjectURL(a.href);
-    setStatus('workspace exported');
+    if (selection.target === 'disk') {
+      const bytes = await diskFromDump(filtered, { kind: 'workspace' });
+      _download(bytes, 'workspace.gcudsk', 'application/octet-stream');
+      setStatus('workspace exported (.gcudsk)');
+    } else {
+      _download(await buildWorksHtml(filtered), 'workspace.html', 'text/html');
+      setStatus('workspace exported');
+    }
   } catch (e) {
     console.error('[works] export failed:', e);
     setStatus('export failed: ' + (e.message || e));
