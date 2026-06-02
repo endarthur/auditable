@@ -3,6 +3,7 @@
 
 import './state.js';
 import './meta.js';
+import './export-dialog.js';
 import './persist.js';
 import './bus.js';
 import './mount.js';

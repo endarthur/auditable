@@ -16,7 +16,8 @@ import { decompressLibs, decompressSurfaces, installSharedLibsToVfs } from './su
 import { installDocsToVfs } from './docs-loader.js';
 import { installBuiltinBooks } from './books-loader.js';
 import { installExamplesToVfs, hasExamples } from './examples-loader.js';
-import { serializeWorkspace, buildWorksHtml } from './persist.js';
+import { serializeWorkspace, buildWorksHtml, categorizeDump, applyExportSelection } from './persist.js';
+import { chooseExport } from './export-dialog.js';
 import { importNotebook, importFileAsNotebook } from './import.js';
 import { importEpubBytes } from './book-import.js';
 import { metaGet, metaSet } from './meta.js';
@@ -69,6 +70,9 @@ async function boot() {
   WKS.unmountAt = unmountAt;
   WKS.serializeWorkspace = serializeWorkspace;
   WKS.buildWorksHtml = buildWorksHtml;
+  WKS.categorizeDump = categorizeDump;
+  WKS.applyExportSelection = applyExportSelection;
+  WKS.chooseExport = chooseExport;
 
   // Extension diagnostics + on-demand reload. If a contributed surface
   // or context-menu item vanishes between reloads, run reloadExtensions()
