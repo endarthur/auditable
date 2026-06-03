@@ -26,7 +26,7 @@ export const DARK_COLORS = {
   cellText: '#bbb', cellNum: '#8cb878', cellDerived: '#c89b3c', cellError: '#d46a6a',
   cellPending: '#555', cellOutOfOrder: '#c8a13c',
   editedBar: '#c89b3c', selFill: 'rgba(200,155,60,0.12)', selStroke: '#c89b3c',
-  bg: '#121212',
+  bg: '#121212', scrollThumb: '#3a3a3a', scrollTrack: '#161616',
 };
 
 export const LIGHT_COLORS = {
@@ -34,7 +34,7 @@ export const LIGHT_COLORS = {
   cellText: '#333', cellNum: '#3a7a30', cellDerived: '#8a6c2a', cellError: '#b03030',
   cellPending: '#bbb', cellOutOfOrder: '#9a7a1a',
   editedBar: '#8a6c2a', selFill: 'rgba(138,108,42,0.12)', selStroke: '#8a6c2a',
-  bg: '#fff',
+  bg: '#fff', scrollThumb: '#c4c4c4', scrollTrack: '#ececec',
 };
 
 // Display text for a cell: explicit style.text wins, else format the value.

@@ -90,7 +90,12 @@ export function createGrid(element, provider, options = {}) {
   g.canvas = canvas; g.ctx = canvas.getContext('2d');
 
   const scroll = document.createElement('div');
-  styleEl(scroll, { position: 'absolute', inset: 0, overflow: 'auto', outline: 'none' });
+  styleEl(scroll, {
+    position: 'absolute', inset: 0, overflow: 'auto', outline: 'none',
+    // Standard scrollbar styling (Chrome 121+/Firefox) — themed, set inline so
+    // loom stays self-contained (no CSS file); every consumer inherits it.
+    scrollbarWidth: 'thin', scrollbarColor: g.colors.scrollThumb + ' ' + g.colors.scrollTrack,
+  });
   scroll.tabIndex = 0; // focusable → keyboard scoped to this instance
   body.appendChild(scroll);
   g.scrollEl = scroll;
@@ -301,7 +306,12 @@ export function createGrid(element, provider, options = {}) {
     setSelection(sel) { setSel(sel, true); },
     onSelect(cb) { g.selectListeners.push(cb); return () => { const i = g.selectListeners.indexOf(cb); if (i >= 0) g.selectListeners.splice(i, 1); }; },
     focus() { g.scrollEl.focus(); },
-    setColors(colors) { g.colors = colors; repaint(); },
+    setColors(colors) {
+      g.colors = colors;
+      scroll.style.scrollbarColor = colors.scrollThumb + ' ' + colors.scrollTrack;
+      corner.style.background = colors.hdrBg;
+      repaint();
+    },
     destroy() { for (const fn of g._cleanup) { try { fn(); } catch (_) {} } element.innerHTML = ''; },
   };
 }
