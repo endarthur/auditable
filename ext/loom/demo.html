@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>@gcu/loom — demo</title>
+<style>
+  :root { --mono: 'Space Mono', ui-monospace, monospace; }
+  html, body { margin: 0; height: 100%; background: #121212; color: #bbb;
+    font-family: var(--mono); }
+  header { padding: 8px 14px; border-bottom: 1px solid #2a2a2a; font-size: 13px; }
+  header b { color: #c89b3c; }
+  header .hint { color: #666; margin-left: 10px; }
+  #grid { position: absolute; left: 0; right: 0; top: 39px; bottom: 26px; }
+  footer { position: absolute; left: 0; right: 0; bottom: 0; height: 26px;
+    border-top: 1px solid #2a2a2a; font-size: 12px; color: #888;
+    display: flex; align-items: center; padding: 0 14px; gap: 16px; }
+  #sel { color: #8cb878; }
+</style>
+</head>
+<body>
+<header>
+  <b>@gcu/loom</b> demo — in-memory provider
+  <span class="hint">double-click / F2 / type to edit · arrows to move · drag to select · Enter/Tab to commit</span>
+</header>
+<div id="grid"></div>
+<footer>
+  <span>selection: <span id="sel">—</span></span>
+  <span>edits: <span id="edits">0</span></span>
+</footer>
+
+<script type="module">
+import { createGrid, createMemoryProvider } from './index.js';
+
+// A few hundred rows of synthetic block-model-ish data — enough to exercise
+// virtualized scrolling.
+const N = 500;
+const rows = [];
+for (let i = 0; i < N; i++) {
+  rows.push([
+    i + 1,
+    Math.round((Math.random() * 6) * 100) / 100,        // grade g/t
+    Math.round((Math.random() * 50 + 10) * 100) / 100,  // tonnes (k)
+    ['ox', 'sulf', 'trans'][i % 3],                      // domain
+    1000 + (i % 25) * 5,                                 // easting
+    2000 + Math.floor(i / 25) * 5,                       // northing
+  ]);
+}
+
+const provider = createMemoryProvider({
+  columns: [
+    { name: 'id' }, { name: 'grade' }, { name: 'tonnes' },
+    { name: 'domain' }, { name: 'easting' }, { name: 'northing' },
+  ],
+  rows,
+});
+
+const grid = createGrid(document.getElementById('grid'), provider, { theme: 'dark' });
+
+const selEl = document.getElementById('sel');
+const editsEl = document.getElementById('edits');
+grid.onSelect((s) => {
+  selEl.textContent = s
+    ? `r${s.r0}:c${s.c0}` + (s.r0 !== s.r1 || s.c0 !== s.c1 ? ` → r${s.r1}:c${s.c1}` : '')
+    : '—';
+});
+
+// Reflect overlay size after edits (refresh is called by loom post-commit).
+const _commit = provider.commit.bind(provider);
+provider.commit = (r, c, v) => { _commit(r, c, v); editsEl.textContent = provider._overlay.size; };
+
+grid.focus();
+window._loom = grid; // poke from the console
+</script>
+</body>
+</html>
