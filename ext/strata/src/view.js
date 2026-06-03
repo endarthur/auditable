@@ -19,7 +19,7 @@
 //
 // Pure (formula compile via formula.js; no DOM). Node-testable.
 
-import { compileFormula } from './formula.js';
+import { parsePredicate, evaluatePredicate } from './predicate.js';
 
 // Compare two non-null values: numbers numerically, else lexical.
 function cmpVal(a, b) {
@@ -40,7 +40,7 @@ function cmp(a, b, dir) {
 
 export function createView(table) {
   let sort = null;     // { by: columnName, dir: 'asc' | 'desc' }
-  let filter = null;   // { formula, fn, deps, depIdx } | null
+  let filter = null;   // { formula, pred } | null  — pred = the structured predicate spec
   let rows = identity();
 
   function identity() { return Array.from({ length: table.nrows }, (_, i) => i); }
@@ -49,8 +49,10 @@ export function createView(table) {
   function recompute() {
     let r = identity();
     if (filter) {
+      const nameIdx = new Map(table.schema.map((s, k) => [s.name, k]));
       r = r.filter((i) => {
-        try { return !!filter.fn(...filter.depIdx.map((ci) => table.getCell(i, ci).value)); }
+        const get = (name) => { const ci = nameIdx.get(name); return ci === undefined ? undefined : table.getCell(i, ci).value; };
+        try { return evaluatePredicate(filter.pred, get); }
         catch { return false; } // a per-row eval error excludes the row
       });
     }
@@ -69,6 +71,7 @@ export function createView(table) {
 
     get sortSpec() { return sort; },
     get filterFormula() { return filter ? filter.formula : null; },
+    get filterPredicate() { return filter ? filter.pred : null; }, // the structured spec (for the selection bus)
     get active() { return !!(sort || filter); },
 
     // Set/clear the sort. spec = { by: columnName, dir? } | null.
@@ -77,13 +80,15 @@ export function createView(table) {
       recompute();
     },
 
-    // Set/clear the filter. formula = a boolean JS expression over columns, or
-    // null. Throws on a compile (syntax) error so the caller can surface it;
-    // per-row runtime errors just exclude the row.
+    // Set/clear the filter. formula = a boolean expression over columns (a
+    // JS-flavoured subset), or null. Parsed to a structured predicate spec (safe,
+    // bus-portable — never new Function); throws on disallowed syntax so the
+    // caller can surface it. Per-row eval errors just exclude the row. Full-JS
+    // logic lives in derived columns; filter on the derived flag.
     setFilter(formula) {
       if (!formula) { filter = null; recompute(); return; }
-      const { deps, fn } = compileFormula(formula, table.schema.map((s) => s.name));
-      filter = { formula, fn, deps, depIdx: deps.map(colIdx) };
+      const pred = parsePredicate(formula);
+      filter = { formula, pred };
       recompute();
     },
 

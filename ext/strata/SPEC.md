@@ -90,9 +90,14 @@ The read side is `filter → sort → window` over base⊕overlay, producing an 
 list of underlying row indices. `createTableProvider(table, view)` renders loom
 *through* it (display→underlying row map). Decisions:
 
-- **Filter is a boolean formula** — compiled by the *same* engine as derived
-  columns. This is the §7.2 unification: filter = derived-column row-expr = (later)
-  selection-predicate, **one language**.
+- **Filter is a structured predicate** (`predicate.js`) — a JS-flavoured string
+  the user types, *parsed* to a safe boolean-expression spec (and/or/not/
+  comparisons/in/between/arithmetic), evaluated by walking the tree — never
+  `new Function`. This is the §7.2 unification: filter = (later) the cross-surface
+  selection-predicate, **one safe spec**, structuredClone-portable over the bus.
+  Full-JS power stays in *derived columns* (`compileFormula`, owner-only); filter
+  on the derived boolean flag. (Destined to extract to `@gcu/sift` when plate's
+  panels become the 2nd consumer.)
 - **Sort** is single-column, stable, **nulls-last regardless of direction**.
 - **Edits don't auto-re-sort/filter** (§4.3 #4) — the view is a snapshot;
   `reapply()` is explicit. (Out-of-order flagging is additive.)

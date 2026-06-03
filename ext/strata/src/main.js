@@ -10,6 +10,7 @@
 //   formula.js  — compileFormula: derived-column JS expression → per-row fn (pure)
 //   table.js    — createTable: base + value-patch overlay + derived columns (pure)
 //   ingest.js   — tableFromCsv (recon-injectable; built-in sniffer fallback) (pure)
+//   predicate.js— structured safe boolean-expr spec + parser + evaluator (pure)
 //   view.js     — createView: the filter→sort pipeline over a table (pure)
 //   aggregate.js— groupBy: group-by + aggregation → a summary table (pure)
 //   document.js — writeStrata/readStrata: the native .strata zip (archive-injectable)
@@ -19,6 +20,7 @@ export * from './values.js';
 export * from './formula.js';
 export * from './table.js';
 export * from './ingest.js';
+export * from './predicate.js';
 export * from './view.js';
 export * from './aggregate.js';
 export * from './document.js';

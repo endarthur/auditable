@@ -8,9 +8,10 @@ the strata surface, usable standalone.
   provenance fall out of one mechanism
 - **Reactive derived columns** — JS formulas over other columns (`grade *
   tonnes`), computed not stored, recomputed on edit, cycle-guarded
-- **Sort / filter view pipeline** — filter is a boolean formula (same engine as
-  derived columns); single-column stable sort, nulls-last; edits don't
-  auto-re-sort (explicit re-apply)
+- **Sort / filter view pipeline** — filter is a safe *structured predicate*
+  (typed as a string, parsed to a no-eval boolean spec — the same form
+  cross-surface selections use); single-column stable sort, nulls-last; edits
+  don't auto-re-sort (explicit re-apply)
 - **Group-by aggregation** — `count`/`sum`/`mean`/`min`/`max` → a *new* table you
   can view, derive on, save, or group again; units propagate
 - **Native `.strata` document** — a zip (schema + base columns + overlay +
@@ -125,7 +126,8 @@ add time, no forward refs).
 
 ```js
 const v = createView(table);
-v.setFilter('grade > 2')        // a boolean formula; throws on a syntax error
+v.setFilter('grade > 2')        // a boolean predicate string; throws on disallowed syntax
+v.filterPredicate               // the parsed structured spec (bus-portable; null when no filter)
 v.setSort({ by: 'grade', dir: 'desc' })   // stable, nulls-last
 v.reapply()                     // edits don't auto-re-sort; this is the explicit re-apply
 v.rows()  / v.length / v.at(displayRow) / v.active / v.sortSpec / v.filterFormula
