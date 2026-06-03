@@ -1,12 +1,17 @@
-// strata standalone host — the host seam, cribbed from src/js/host.js.
+// strata standalone host — the STANDALONE adapter for the strata host interface.
 //
-// host.js (the notebook) isolates the one difference between standalone and
-// Works behind two methods (provideVFS + persist) so the core never branches on
-// environment. For a file-shaped tool the operations are open() + save(); this
-// is the STANDALONE host. The Works host (a later, additive bite) will implement
-// the SAME interface over A-Bus — so app.js calls host.open/save and never knows
-// which environment it's in. That parity is the @gcu/surface forcing function
-// (strata-spec §7).
+// The strata host interface (the small, strata-local proto-@gcu/surface contract):
+//   open()              → { name, bytes } | null   — user picks a file
+//   save(name, bytes)   → msg | null               — write to the current file
+//   saveAs(name, bytes) → msg | null               — pick a destination
+//   setDirty(bool)      / .dirty                    — unsaved-edits flag
+//   setTitle(name)                                  — environment title (tab/window)
+//   onFlush(cb)                                     — register a save-now handler
+// bus / fs / theme are capability-OPTIONAL (absent in the standalone adapter;
+// the Works adapter fills bus, a future project adapter fills fs). The app core
+// (app.js) calls only this interface and never branches on environment — so the
+// Works adapter is additive, and "strata + a chart" become the two examples that
+// later get extracted into @gcu/surface.
 //
 // Standalone backing: the File System Access API when available (real
 // open-in-place save), else <input type=file> + a download. Not a degraded
@@ -37,9 +42,16 @@ function openViaInput() {
 }
 
 export function createStandaloneHost() {
-  let handle = null; // FSAA handle of the opened/saved file → enables save-in-place
+  let handle = null;      // FSAA handle of the opened/saved file → enables save-in-place
+  let flushCb = null;     // the app's save-now handler
 
-  return {
+  // Warn before navigating away with unsaved edits (the standalone analogue of
+  // the Works Flush-before-close barrier).
+  window.addEventListener('beforeunload', (e) => {
+    if (host.dirty) { e.preventDefault(); e.returnValue = ''; }
+  });
+
+  const host = {
     name: null,
     dirty: false,
 
@@ -94,5 +106,16 @@ export function createStandaloneHost() {
     },
 
     setDirty(b) { this.dirty = b; },
+
+    // Environment title — the browser tab/window for the standalone host.
+    setTitle(name) { document.title = (name || 'untitled') + ' — strata'; },
+
+    // Register the app's save-now handler. Standalone doesn't auto-flush (the
+    // Save button is explicit); the Works adapter wires this to Surface.Flush.
+    onFlush(cb) { flushCb = cb; },
+
+    // Invoke the registered flush handler (exposed for symmetry / future use).
+    flush() { return flushCb ? flushCb() : undefined; },
   };
+  return host;
 }

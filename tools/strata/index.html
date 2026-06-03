@@ -7,6 +7,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>strata</title>
 <link rel="stylesheet" href="style.css">
+<!-- Standalone @gcu/* resolution (the works build inlines these instead). -->
+<script type="importmap">
+{ "imports": {
+  "@gcu/loom":    "../../ext/loom/index.js",
+  "@gcu/strata":  "../../ext/strata/index.js",
+  "@gcu/recon":   "../../ext/recon/index.js",
+  "@gcu/archive": "../../ext/archive/index.js"
+} }
+</script>
 </head>
 <body>
   <div id="toolbar">
@@ -35,6 +44,10 @@
     <span>edits: <span id="dirty">0</span></span>
   </footer>
 
-  <script type="module" src="js/app.js"></script>
+  <script type="module">
+    import { createStrataApp } from './js/app.js';
+    import { createStandaloneHost } from './js/host.js';
+    createStrataApp(createStandaloneHost());
+  </script>
 </body>
 </html>
