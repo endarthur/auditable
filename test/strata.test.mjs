@@ -7,7 +7,9 @@ import { coerceValue, fmtCell, NULL_TOKENS } from '../ext/strata/src/values.js';
 import { createTable } from '../ext/strata/src/table.js';
 import { tableFromCsv, builtinSniff, detectDelimiter } from '../ext/strata/src/ingest.js';
 import { createTableProvider } from '../ext/strata/src/provider.js';
+import { writeStrata, readStrata } from '../ext/strata/src/document.js';
 import { sniff } from '../ext/recon/src/main.js';
+import { createWriter, readZip, listZip } from '../ext/archive/index.js';
 
 // ── values ──
 
@@ -167,4 +169,75 @@ test('provider: onReady registers + unsubscribes (reserved async seam)', () => {
   off();
   p._notifyReady();
   assert.equal(n, 1);    // unsubscribed
+});
+
+// ── document: .strata zip round-trip (real @gcu/archive) ──
+
+test('document: write produces a zip with the five members', async () => {
+  const t = sampleTable();
+  const bytes = await writeStrata(t, { createWriter, name: 'sample', created: '2026-06-02T00:00:00Z' });
+  assert.ok(bytes instanceof Uint8Array && bytes.length > 0);
+  const names = listZip(bytes).map((e) => e.path).sort();
+  for (const m of ['columns.json', 'document.json', 'overlay.json', 'provenance.json', 'schema.json']) {
+    assert.ok(names.includes(m), `has ${m}`);
+  }
+  const doc = JSON.parse(new TextDecoder().decode(readZip(bytes, 'document.json')));
+  assert.equal(doc.strata, 1);
+  assert.equal(doc.name, 'sample');
+  assert.equal(doc.rowCount, 3);
+  assert.deepEqual(doc.columns, [
+    { name: 'id', encoding: 'json' }, { name: 'grade', encoding: 'json' }, { name: 'lito', encoding: 'json' },
+  ]);
+});
+
+test('document: round-trip preserves base, schema, and the overlay', async () => {
+  const t = tableFromCsv('X,Au_gpt,LITO\n1005,1.2,BIF\n1015,0.8,SHALE\n1025,,OX\n', { sniff });
+  t.commitRaw(0, 1, '5.5');     // edit Au_gpt row 0
+  assert.equal(t.dirtyCount(), 1);
+
+  const bytes = await writeStrata(t, { createWriter, name: 'rt', source: 'test.csv' });
+  const { table: t2, document } = readStrata(bytes, { readZip });
+
+  // schema (incl. recon extensions) survived
+  assert.equal(document.name, 'rt');
+  const au = t2.schema.find((s) => s.name === 'Au_gpt');
+  assert.equal(au.unit, 'g/t');
+  assert.equal(au.analyte, 'Au');
+
+  // base survived (the edited cell's BASE, not the patched value)
+  assert.equal(t2.baseValue(0, 1), 1.2);
+  assert.equal(t2.baseValue(2, 1), null);   // empty cell stayed null
+
+  // overlay survived → merged read shows the edit, base recoverable
+  assert.equal(t2.dirtyCount(), 1);
+  assert.deepEqual(t2.getCell(0, 1), { value: 5.5, edited: true, base: 1.2 });
+  assert.equal(t2.getCell(1, 1).value, 0.8);
+
+  // effective column merges correctly post-load
+  assert.deepEqual(t2.columnByName('Au_gpt'), [5.5, 0.8, null]);
+});
+
+test('document: a clean (unedited) table round-trips with an empty overlay', async () => {
+  const t = sampleTable();
+  const bytes = await writeStrata(t, { createWriter });
+  const { table: t2 } = readStrata(bytes, { readZip });
+  assert.equal(t2.dirtyCount(), 0);
+  assert.deepEqual(t2.column(1), [0.5, 1.5, 2.5]);
+});
+
+test('document: rejects non-strata bytes and a future format version', async () => {
+  const z = createWriter('memory', { format: 'zip' });
+  await z.addFile('hello.txt', new TextEncoder().encode('hi'));
+  const notStrata = await z.close();
+  assert.throws(() => readStrata(notStrata, { readZip }), /not a .strata document/);
+
+  const z2 = createWriter('memory', { format: 'zip' });
+  await z2.addFile('document.json', new TextEncoder().encode(JSON.stringify({ strata: 99, rowCount: 0, columns: [] })));
+  const future = await z2.close();
+  assert.throws(() => readStrata(future, { readZip }), /newer than this build/);
+});
+
+test('document: missing injected archive throws a clear error', async () => {
+  await assert.rejects(() => writeStrata(sampleTable(), {}), /createWriter.*required/);
+  assert.throws(() => readStrata(new Uint8Array([1, 2, 3]), {}), /readZip.*required/);
 });
