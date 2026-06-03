@@ -1,0 +1,44 @@
+/* strata — standalone table surface. GCU dark (hardcoded for the dev app;
+   the eventual single-file build adopts the --au-* cascade). */
+:root { --mono: 'Space Mono', ui-monospace, monospace; --sans: 'Barlow', system-ui, sans-serif; }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: #121212; color: #bbb; font-family: var(--sans); overflow: hidden; }
+
+#toolbar {
+  position: absolute; left: 0; right: 0; top: 0; height: 38px; display: flex; align-items: center;
+  gap: 6px; padding: 0 10px; border-bottom: 1px solid #2a2a2a; background: #1a1a1a;
+}
+#toolbar .title { font-family: var(--mono); font-size: 13px; color: #c89b3c; margin-right: 8px; }
+#toolbar .name { font-family: var(--mono); font-size: 12px; color: #888; }
+#toolbar .name .dot { color: #c89b3c; margin-left: 4px; }
+#toolbar .spacer { flex: 1; }
+#toolbar button {
+  font-family: var(--mono); font-size: 12px; color: #bbb; background: #242424;
+  border: 1px solid #333; border-radius: 3px; padding: 4px 10px; cursor: pointer;
+}
+#toolbar button:hover { background: #2e2e2e; border-color: #444; }
+#toolbar button.go { color: #8cb878; border-color: #2f4a28; }
+#toolbar button:disabled { opacity: 0.4; cursor: default; }
+
+#grid { position: absolute; left: 0; right: 0; top: 38px; bottom: 24px; }
+
+#empty {
+  position: absolute; inset: 38px 0 24px 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 8px; color: #555; font-family: var(--mono);
+  font-size: 13px; pointer-events: none; text-align: center;
+}
+#empty b { color: #888; }
+
+footer {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 24px; display: flex; align-items: center;
+  gap: 16px; padding: 0 12px; border-top: 1px solid #2a2a2a; background: #161616;
+  font-family: var(--mono); font-size: 11px; color: #777;
+}
+footer #sel { color: #8cb878; } footer #dirty { color: #c89b3c; }
+
+#drop-hint {
+  position: absolute; inset: 38px 6px 30px 6px; border: 2px dashed #c89b3c; border-radius: 6px;
+  background: rgba(200,155,60,0.06); display: none; align-items: center; justify-content: center;
+  color: #c89b3c; font-family: var(--mono); font-size: 14px; pointer-events: none; z-index: 10;
+}
+body.dragging #drop-hint { display: flex; }

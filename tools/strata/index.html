@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<!-- strata — auditable column-oriented table surface (standalone dev app) -->
+<!-- Part of the Auditable project — https://github.com/endarthur/auditable -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>strata</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="toolbar">
+    <span class="title">strata</span>
+    <button id="btnOpen">Open…</button>
+    <button id="btnSave" disabled>Save</button>
+    <button id="btnSaveAs" disabled>Save As…</button>
+    <span class="spacer"></span>
+    <span class="name" id="fileName">untitled<span class="dot" id="dot" style="visibility:hidden">●</span></span>
+  </div>
+
+  <div id="grid"></div>
+  <div id="empty">
+    <b>open a CSV or .strata</b>
+    <span>Open… · or drag a file anywhere</span>
+  </div>
+  <div id="drop-hint">drop to open</div>
+
+  <footer>
+    <span id="meta">no file</span>
+    <span>selection: <span id="sel">—</span></span>
+    <span>edits: <span id="dirty">0</span></span>
+  </footer>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
