@@ -1,0 +1,31 @@
+{
+  "name": "@gcu/strata",
+  "version": "0.1.0",
+  "description": "An auditable, reactive, column-oriented table working model: an immutable typed-columnar base + a sparse value-patch overlay (non-destructive editing, recoverable provenance), reactive derived columns (JS formulas), a sort/filter view pipeline, group-by aggregation, and a native .strata zip document. CSV ingest is recon-injectable. Zero hard dependencies; renders via @gcu/loom.",
+  "type": "module",
+  "main": "./src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["table", "spreadsheet", "columnar", "overlay", "data-analysis", "group-by", "csv", "geoscience", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/strata"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/strata",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}

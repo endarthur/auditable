@@ -1,0 +1,31 @@
+{
+  "name": "@gcu/loom",
+  "version": "0.1.0",
+  "description": "A virtualized canvas grid renderer behind a rich, async cell provider. Windows over millions of rows; cells carry state + type (auditability made visual); host-agnostic mount drops into a standalone page or an iframe surface unchanged. The interlace of warp (columns) and weft (rows) into the visible fabric of a table.",
+  "type": "module",
+  "main": "./src/main.js",
+  "exports": {
+    ".": "./src/main.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["grid", "table", "spreadsheet", "canvas", "virtualized", "data-grid", "renderer", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/loom"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/loom",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}
