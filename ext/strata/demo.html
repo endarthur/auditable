@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>@gcu/strata — demo</title>
+<style>
+  :root { --mono: 'Space Mono', ui-monospace, monospace; }
+  html, body { margin: 0; height: 100%; background: #121212; color: #bbb; font-family: var(--mono); }
+  header { padding: 8px 14px; border-bottom: 1px solid #2a2a2a; font-size: 13px; }
+  header b { color: #c89b3c; }
+  header .hint { color: #666; margin-left: 10px; }
+  #grid { position: absolute; left: 0; right: 0; top: 39px; bottom: 26px; }
+  footer { position: absolute; left: 0; right: 0; bottom: 0; height: 26px;
+    border-top: 1px solid #2a2a2a; font-size: 12px; color: #888;
+    display: flex; align-items: center; padding: 0 14px; gap: 16px; }
+  #sel { color: #8cb878; } #dirty { color: #c89b3c; }
+</style>
+</head>
+<body>
+<header>
+  <b>@gcu/strata</b> — blockmodel CSV → recon sniff → base+overlay → loom
+  <span class="hint">double-click / type to edit (→ overlay) · drag to select · headers carry units</span>
+</header>
+<div id="grid"></div>
+<footer>
+  <span id="meta">loading…</span>
+  <span>selection: <span id="sel">—</span></span>
+  <span>edits: <span id="dirty">0</span></span>
+</footer>
+
+<script type="module">
+import { createGrid } from '../loom/index.js';
+import { tableFromCsv, createTableProvider } from './index.js';
+import { sniff } from '../recon/index.js';
+
+const res = await fetch('../../examples/data/blockmodel-sample.csv');
+const text = await res.text();
+
+// recon-injected rich ingest: Au_gpt → number/g·t⁻¹/Au, X/Y/Z → coord roles.
+const table = tableFromCsv(text, { sniff });
+const provider = createTableProvider(table);
+const grid = createGrid(document.getElementById('grid'), provider, { theme: 'dark', defaultColW: 90 });
+
+const units = table.schema.filter((s) => s.unit).map((s) => `${s.name}=${s.unit}`).join(' ');
+document.getElementById('meta').textContent =
+  `${table.nrows.toLocaleString()} rows × ${table.cols} cols · units: ${units || '—'}`;
+
+const selEl = document.getElementById('sel'), dirtyEl = document.getElementById('dirty');
+grid.onSelect((s) => {
+  selEl.textContent = s
+    ? `r${s.r0}:c${s.c0}` + (s.r0 !== s.r1 || s.c0 !== s.c1 ? ` → r${s.r1}:c${s.c1}` : '')
+    : '—';
+});
+const _commit = provider.commit.bind(provider);
+provider.commit = (r, c, v) => { _commit(r, c, v); dirtyEl.textContent = table.dirtyCount(); };
+
+grid.focus();
+window._strata = { grid, table, provider };
+</script>
+</body>
+</html>
