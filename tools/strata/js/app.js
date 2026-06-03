@@ -1,8 +1,9 @@
 // strata app core — host-agnostic. The SAME core runs standalone and as a Works
 // surface; the only thing that differs is the `host` it's handed (file I/O,
 // title, dirty, flush). createStrataApp(host) wires the toolbar + grid against a
-// host implementing the small strata host interface (see js/host.js for the
-// shape + the standalone adapter). No environment branches live here.
+// host implementing the small strata host interface (the contract + rationale
+// live in ../HOST.md — the seed of @gcu/surface; js/host.js is the standalone
+// adapter). No environment branches live here.
 //
 // Imports are bare @gcu/* specifiers: resolved by an <import map> in index.html
 // when standalone, inlined by the works build when a surface. So this file is
