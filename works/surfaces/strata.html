@@ -90,6 +90,7 @@ import { createStrataApp } from '../../tools/strata/js/app.js';
 function createWorksHost(bus, tab) {
   const path = tab.path;
   let dirty = false, flushCb = null, flushTimer = null, flushP = null;
+  let selEpoch = 0;
   const sig = (member, args) => bus.signal({ path: '/', interface: 'Surface', member }, args);
 
   function doFlush() {
@@ -116,6 +117,26 @@ function createWorksHost(bus, tab) {
     setTitle(name) { sig('TitleChanged', [name]); },
     onFlush(cb) { flushCb = cb; },
     flush: doFlush,
+
+    // The cross-surface selection channel (the selection/linking contract). The
+    // host fills dataset (= the bound file path = the identity space), origin
+    // (this surface's A-Bus name), and epoch; the app supplies kind/rows/cols/
+    // predicate. A broadcast signal on the `Selection` interface; subscribers
+    // echo-suppress (ignore own origin) and dataset-scope (same path only).
+    selection: {
+      publish(payload) {
+        bus.signal({ path: '/', interface: 'Selection', member: 'Changed' },
+          [{ dataset: path, origin: bus.uniqueName, epoch: ++selEpoch, ...payload }]);
+      },
+      subscribe(cb) {
+        return bus.subscribe({ interface: 'Selection', member: 'Changed' }, (msg) => {
+          const d = msg && msg.args && msg.args[0];
+          if (!d || d.origin === bus.uniqueName) return;   // echo
+          if (d.dataset !== path) return;                  // dataset scope
+          cb(d);
+        });
+      },
+    },
   };
   return host;
 }

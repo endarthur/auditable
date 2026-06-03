@@ -58,8 +58,13 @@ host.canOpenFiles  — may the user open arbitrary files from inside the app?
                      true standalone (picker + drag-drop); false in the Works
                      loose-file surface (files open via the tree). Default true;
                      when false the core hides Open + drag-drop.
-host.bus    — A-Bus client. Filled by the Works adapter; powers cross-surface
-              selection/linking (strata-spec §7.1). Absent standalone.
+host.bus    — A-Bus client. Filled by the Works adapter. Absent standalone.
+host.selection — the cross-surface selection channel { publish(payload),
+              subscribe(cb)→unsub }. The host fills dataset/origin/epoch + echo-
+              suppresses + dataset-scopes; the app supplies kind/rows/cols/predicate.
+              Filled by the Works adapter (over A-Bus `Selection` signals); absent
+              standalone → linking is a no-op. The brushing/linking primitive
+              (selection-linking-contract.md); shared with plate's panels.
 host.fs     — a VFS-shaped {read,write,list,…}. Filled by a future PROJECT
               adapter (a /projects/<x>/ strata workspace, project.json kind:strata)
               so strata can hold many tables/views, not just one file.

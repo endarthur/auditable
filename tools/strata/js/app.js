@@ -43,6 +43,30 @@ export function createStrataApp(host) {
   let sortState = null;                       // { col, dir } — the click-to-sort cycle
   let detailTable = null, detailName = null;  // the pre-group table, for "← Data"
 
+  // ── cross-surface brushing/linking (Works only; host.selection capability) ──
+  // host.selection = { publish(payload), subscribe(cb) } over the A-Bus Selection
+  // channel; the host fills dataset/origin/epoch, echo-suppresses + dataset-scopes.
+  // Absent standalone → linking is a no-op. The publish-side; the visible
+  // highlight response to incoming selections is the next step.
+  const link = host.selection || null;
+  let incomingSelection = null;
+  if (link) link.subscribe((desc) => { incomingSelection = desc; /* TODO: highlight matching rows */ });
+
+  function publishRowSelection(sel) {
+    if (!link || !view) return;
+    if (!sel) { link.publish({ kind: 'none', key: '#row' }); return; }
+    const rows = [];
+    for (let r = sel.r0; r <= sel.r1; r++) rows.push(String(view.at(r)));  // base-ordinal identity (§4.1)
+    const cols = [];
+    for (let c = sel.c0; c <= sel.c1; c++) cols.push(table.schema[c].name);
+    link.publish({ kind: 'rows', key: '#row', rows, cols });
+  }
+  function publishFilterSelection() {
+    if (!link || !view) return;
+    const pred = view.filterPredicate;
+    link.publish(pred ? { kind: 'filter', key: '#row', predicate: pred } : { kind: 'none', key: '#row' });
+  }
+
   // ── mounting ──
   function mountTable(t) {
     table = t;
@@ -58,7 +82,7 @@ export function createStrataApp(host) {
     if (grid) grid.destroy();
     $('#empty').style.display = 'none';
     grid = createGrid($('#grid'), provider, { theme: 'dark', defaultColW: 92 });
-    grid.onSelect(updateSel);
+    grid.onSelect((s) => { updateSel(s); publishRowSelection(s); });
     grid.onHeaderClick(cycleSort);
     grid.focus();
 
@@ -153,6 +177,7 @@ export function createStrataApp(host) {
       $('#filter').classList.remove('err');
       grid.refresh();
       updateFooter();
+      publishFilterSelection();
       return true;
     } catch (e) {
       $('#filter').classList.add('err');
@@ -252,6 +277,8 @@ export function createStrataApp(host) {
     get grid() { return grid; },
     get view() { return view; },
     get host() { return host; },
+    get linked() { return !!link; },
+    get lastSelection() { return incomingSelection; },  // last selection received from another surface
   };
   window._strataApp = app;   // automation hook (no UI dialogs)
   return app;
