@@ -6,7 +6,7 @@
 // the host's job — so the Works surface reuses this verbatim with a Works host.
 
 import { createGrid } from '../../../ext/loom/index.js';
-import { tableFromCsv, createTableProvider, createView, readStrata, writeStrata } from '../../../ext/strata/index.js';
+import { tableFromCsv, createTableProvider, createView, groupBy, readStrata, writeStrata } from '../../../ext/strata/index.js';
 import { sniff } from '../../../ext/recon/index.js';
 import { createWriter, readZip } from '../../../ext/archive/index.js';
 import { createStandaloneHost } from './host.js';
@@ -15,7 +15,8 @@ const $ = (s) => document.querySelector(s);
 const host = createStandaloneHost();
 
 let table = null, provider = null, grid = null, view = null, docName = 'untitled';
-let sortState = null; // { col, dir } — the click-to-sort cycle
+let sortState = null;                 // { col, dir } — the click-to-sort cycle
+let detailTable = null, detailName = null; // the pre-group table, for "← Data"
 
 function stripExt(n) { return (n || 'untitled').replace(/\.[^.]+$/, ''); }
 
@@ -27,21 +28,14 @@ function looksLikeStrata(name, bytes) {
   return bytes[0] === 0x50 && bytes[1] === 0x4b; // 'PK'
 }
 
-// Open bytes into a live grid. The single entry point — toolbar, drag-drop and
-// the test hook all funnel here.
-function openBytes(name, bytes) {
-  if (looksLikeStrata(name, bytes)) {
-    const r = readStrata(bytes, { readZip });
-    table = r.table;
-    docName = r.document.name || stripExt(name);
-  } else {
-    table = tableFromCsv(new TextDecoder().decode(bytes), { sniff });
-    docName = stripExt(name);
-  }
-
+// Mount a StrataTable into a fresh view + provider + grid. Funnel for opening
+// files, group-by results, and ungroup. Caller sets docName first.
+function mountTable(t) {
+  table = t;
   view = createView(table);
   sortState = null;
   $('#filter').value = '';
+  $('#filter').classList.remove('err');
   provider = createTableProvider(table, view);
   // Track dirty + footer on every commit (loom repaints on its own).
   const commit = provider.commit.bind(provider);
@@ -54,12 +48,57 @@ function openBytes(name, bytes) {
   grid.onHeaderClick(cycleSort);
   grid.focus();
 
-  host.setDirty(false);
   setTitle();
   updateFooter();
-  $('#btnSave').disabled = false;
-  $('#btnSaveAs').disabled = false;
-  $('#btnAddCol').disabled = false;
+  for (const id of ['#btnSave', '#btnSaveAs', '#btnAddCol', '#btnGroup']) $(id).disabled = false;
+}
+
+// Open bytes into a live grid. The single entry point — toolbar, drag-drop and
+// the test hook all funnel here.
+function openBytes(name, bytes) {
+  let t;
+  if (looksLikeStrata(name, bytes)) {
+    const r = readStrata(bytes, { readZip });
+    t = r.table;
+    docName = r.document.name || stripExt(name);
+  } else {
+    t = tableFromCsv(new TextDecoder().decode(bytes), { sniff });
+    docName = stripExt(name);
+  }
+  detailTable = null; detailName = null;
+  $('#btnUngroup').style.display = 'none';
+  mountTable(t);
+  host.setDirty(false);
+}
+
+// Group-by → a summary table (count + mean of each numeric non-key column).
+// Aggregates the currently filtered set (view.rows()). Keeps the detail table
+// so "← Data" can return. Returns true on success.
+function groupByColumn(keyName) {
+  if (!table) return false;
+  if (table.schema.findIndex((s) => s.name === keyName) < 0) { flash('no such column: ' + keyName); return false; }
+  const aggs = [{ op: 'count', as: 'n' }];
+  for (const s of table.schema) {
+    if (s.name !== keyName && s.type === 'number') aggs.push({ op: 'mean', col: s.name });
+  }
+  let summary;
+  try { summary = groupBy(table, { by: keyName, aggs }, view ? view.rows() : null); }
+  catch (e) { flash('group error: ' + e.message); return false; }
+  detailTable = table; detailName = docName;
+  docName = `${docName} — by ${keyName}`;
+  mountTable(summary);
+  host.setDirty(true);
+  $('#btnUngroup').style.display = '';
+  return true;
+}
+
+function ungroup() {
+  if (!detailTable) return;
+  const t = detailTable;
+  docName = detailName;
+  detailTable = null; detailName = null;
+  mountTable(t);
+  $('#btnUngroup').style.display = 'none';
 }
 
 // Add a derived column (a JS formula over column names). Returns true on success.
@@ -150,6 +189,13 @@ $('#btnSaveAs').onclick = async () => {
 $('#filter').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') applyFilter(e.target.value.trim());
 });
+$('#btnGroup').onclick = () => {
+  if (!table) return;
+  const key = prompt('Group by column (count + mean of each numeric column):');
+  if (!key || !key.trim()) return;
+  groupByColumn(key.trim());
+};
+$('#btnUngroup').onclick = ungroup;
 $('#btnAddCol').onclick = () => {
   if (!table) return;
   const name = prompt('New column name:');
@@ -183,6 +229,8 @@ window._strataApp = {
   addColumn,
   applyFilter,
   cycleSort,
+  groupByColumn,
+  ungroup,
   get table() { return table; },
   get grid() { return grid; },
   get view() { return view; },

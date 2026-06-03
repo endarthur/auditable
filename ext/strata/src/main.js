@@ -11,6 +11,7 @@
 //   table.js    — createTable: base + value-patch overlay + derived columns (pure)
 //   ingest.js   — tableFromCsv (recon-injectable; built-in sniffer fallback) (pure)
 //   view.js     — createView: the filter→sort pipeline over a table (pure)
+//   aggregate.js— groupBy: group-by + aggregation → a summary table (pure)
 //   document.js — writeStrata/readStrata: the native .strata zip (archive-injectable)
 //   provider.js — createTableProvider(table, view?): StrataTable → @gcu/loom provider (pure)
 
@@ -19,5 +20,6 @@ export * from './formula.js';
 export * from './table.js';
 export * from './ingest.js';
 export * from './view.js';
+export * from './aggregate.js';
 export * from './document.js';
 export * from './provider.js';

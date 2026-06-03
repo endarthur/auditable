@@ -9,6 +9,7 @@ import { tableFromCsv, builtinSniff, detectDelimiter } from '../ext/strata/src/i
 import { createTableProvider } from '../ext/strata/src/provider.js';
 import { compileFormula, extractDeps, FORMULA_ERROR } from '../ext/strata/src/formula.js';
 import { createView } from '../ext/strata/src/view.js';
+import { groupBy, AGG_OPS } from '../ext/strata/src/aggregate.js';
 import { writeStrata, readStrata } from '../ext/strata/src/document.js';
 import { sniff } from '../ext/recon/src/main.js';
 import { createWriter, readZip, listZip } from '../ext/archive/index.js';
@@ -400,6 +401,83 @@ test('provider+view: display rows map to underlying rows; row header shows base 
   p.commit(0, 1, '7.7');
   assert.equal(t.getCell(2, 1).value, 7.7);
   assert.equal(t.getCell(2, 1).edited, true);
+});
+
+// ── aggregate: group-by ──
+
+function assayTable() {
+  return createTable({
+    schema: [{ name: 'dom', type: 'category' }, { name: 'grade', type: 'number', unit: 'g/t' }, { name: 'tonnes', type: 'number', unit: 't' }],
+    columns: [
+      ['ox', 'ox', 'sulf', 'ox', 'sulf'],
+      [1.0, 3.0, 2.0, null, 4.0],
+      [10, 20, 30, 40, 50],
+    ],
+    nrows: 5,
+  });
+}
+
+test('groupBy: count + mean/sum/min/max per group, with unit propagation', () => {
+  const t = assayTable();
+  const g = groupBy(t, {
+    by: 'dom',
+    aggs: [{ op: 'count', as: 'n' }, { op: 'mean', col: 'grade' }, { op: 'sum', col: 'tonnes' },
+           { op: 'min', col: 'grade' }, { op: 'max', col: 'grade' }],
+  });
+  assert.equal(g.nrows, 2);                       // ox, sulf
+  assert.deepEqual(g.schema.map((s) => s.name), ['dom', 'n', 'mean_grade', 'sum_tonnes', 'min_grade', 'max_grade']);
+  // unit propagation: mean/min/max of grade keep g/t; sum of tonnes keeps t; count unitless
+  assert.equal(g.schema.find((s) => s.name === 'mean_grade').unit, 'g/t');
+  assert.equal(g.schema.find((s) => s.name === 'sum_tonnes').unit, 't');
+  assert.equal(g.schema.find((s) => s.name === 'n').unit, undefined);
+
+  // ox: grades 1,3,(null) → count 3, mean 2 (null skipped), tonnes 10+20+40=70, min 1, max 3
+  const oxRow = g.columnByName('dom').indexOf('ox');
+  assert.equal(g.columnByName('n')[oxRow], 3);
+  assert.equal(g.columnByName('mean_grade')[oxRow], 2);
+  assert.equal(g.columnByName('sum_tonnes')[oxRow], 70);
+  assert.equal(g.columnByName('min_grade')[oxRow], 1);
+  assert.equal(g.columnByName('max_grade')[oxRow], 3);
+  // sulf: grades 2,4 → mean 3, tonnes 80
+  const sulfRow = g.columnByName('dom').indexOf('sulf');
+  assert.equal(g.columnByName('mean_grade')[sulfRow], 3);
+  assert.equal(g.columnByName('sum_tonnes')[sulfRow], 80);
+});
+
+test('groupBy: the result is a normal StrataTable (composes)', () => {
+  const g = groupBy(assayTable(), { by: 'dom', aggs: [{ op: 'count', as: 'n' }] });
+  // can derive on it, view it, group it again
+  g.addDerivedColumn({ name: 'pct', formula: 'n * 20' });
+  assert.equal(g.getCell(0, g.cols - 1).value, g.getCell(0, 1).value * 20);
+  const v = createView(g);
+  v.setSort({ by: 'n', dir: 'desc' });
+  assert.equal(v.length, 2);
+});
+
+test('groupBy: respects a rowIndices subset (the filtered set)', () => {
+  const t = assayTable();
+  const v = createView(t);
+  v.setFilter('grade != null && grade >= 2'); // rows: idx1(ox,3), idx2(sulf,2), idx4(sulf,4)
+  const g = groupBy(t, { by: 'dom', aggs: [{ op: 'count', as: 'n' }, { op: 'mean', col: 'grade' }] }, v.rows());
+  const ox = g.columnByName('dom').indexOf('ox');
+  const sulf = g.columnByName('dom').indexOf('sulf');
+  assert.equal(g.columnByName('n')[ox], 1);   // only idx1
+  assert.equal(g.columnByName('n')[sulf], 2); // idx2, idx4
+  assert.equal(g.columnByName('mean_grade')[sulf], 3); // (2+4)/2
+});
+
+test('groupBy: multi-key + error guards', () => {
+  const t = createTable({
+    schema: [{ name: 'a', type: 'category' }, { name: 'b', type: 'category' }, { name: 'v', type: 'number' }],
+    columns: [['x', 'x', 'y'], ['p', 'q', 'p'], [1, 2, 3]],
+    nrows: 3,
+  });
+  const g = groupBy(t, { by: ['a', 'b'], aggs: [{ op: 'sum', col: 'v' }] });
+  assert.equal(g.nrows, 3); // (x,p),(x,q),(y,p)
+  assert.deepEqual(AGG_OPS, ['count', 'sum', 'mean', 'min', 'max']);
+  assert.throws(() => groupBy(t, { by: 'nope', aggs: [{ op: 'count' }] }), /unknown key/);
+  assert.throws(() => groupBy(t, { by: 'a', aggs: [{ op: 'bogus' }] }), /unknown op/);
+  assert.throws(() => groupBy(t, { by: 'a', aggs: [{ op: 'sum' }] }), /needs a column/);
 });
 
 test('document: derived columns round-trip as formula (not stored data)', async () => {

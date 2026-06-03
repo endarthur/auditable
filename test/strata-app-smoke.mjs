@@ -112,6 +112,27 @@ try {
     ? ok(`filter Au_gpt>1 (${sf.filtered}/${sf.total}) + sort desc (${sf.top} ≥ ${sf.next}); clear restores ${sf.restored}`)
     : fail(`sort/filter failed: ${JSON.stringify(sf)}`);
 
+  // Group-by through the app: group the (now unfiltered) data by LITO.
+  const gb = await page.evaluate(() => {
+    const ok = window._strataApp.groupByColumn('LITO');
+    const t = window._strataApp.table;            // now the summary table
+    const litho = t.columnByName('LITO');
+    const n = t.columnByName('n');
+    const totalN = n.reduce((a, b) => a + b, 0);
+    const hasMeanAu = t.schema.some((s) => s.name === 'mean_Au_gpt');
+    return { ok, groups: t.nrows, litho, totalN, hasMeanAu, isDerivedKept: t.schema.length };
+  });
+  (gb.ok && gb.groups > 0 && gb.groups < 3200 && gb.totalN === 3200 && gb.hasMeanAu)
+    ? ok(`group by LITO → ${gb.groups} groups, Σn=${gb.totalN}, mean_Au_gpt present`)
+    : fail(`group-by failed: ${JSON.stringify(gb)}`);
+
+  // "← Data" restores the detail table.
+  const back = await page.evaluate(() => {
+    window._strataApp.ungroup();
+    return { rows: window._strataApp.table.nrows };
+  });
+  back.rows === 3200 ? ok('ungroup restores the detail table (3200 rows)') : fail(`ungroup failed: ${JSON.stringify(back)}`);
+
   errors.length ? fail('console errors: ' + errors.join(' | ')) : ok('no console errors');
 } catch (e) {
   fail('smoke threw: ' + e.message);
