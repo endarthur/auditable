@@ -62,19 +62,37 @@ try {
     ? ok(`grid edit → overlay (cell ${afterEdit.entries[0].k}, base ${afterEdit.entries[0].base} → 777.77)`)
     : fail(`edit failed: ${JSON.stringify(afterEdit)}`);
 
-  // Save to .strata bytes and reopen them — the overlay must survive.
+  // Add a derived column through the app and check it computes.
+  const dv = await page.evaluate(() => {
+    const okAdd = window._strataApp.addColumn('metal', 'Au_gpt * density');
+    const t = window._strataApp.table;
+    const c = t.cols - 1;
+    return { okAdd, cols: t.cols, isDerived: t.isDerived(c), v0: t.getCell(0, c).value,
+             au0: t.columnByName('Au_gpt')[0], d0: t.columnByName('density')[0] };
+  });
+  const expectMetal = dv.au0 * dv.d0;
+  (dv.okAdd && dv.isDerived && Math.abs(dv.v0 - expectMetal) < 1e-9)
+    ? ok(`derived column computes (metal[0] = ${dv.v0.toFixed(4)} = Au_gpt·density)`)
+    : fail(`derived column failed: ${JSON.stringify(dv)}`);
+
+  // Save to .strata bytes and reopen — overlay AND the derived formula survive.
   const rt = await page.evaluate(async () => {
     const bytes = await window._strataApp.saveBytes();
     const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b;
     window._strataApp.open('roundtrip.strata', bytes);
     const t = window._strataApp.table;
+    const c = t.cols - 1;
     const e = [...t._overlay.entries()].map(([k, o]) => ({ k, value: o.value, base: o.base }));
-    return { isZip, len: bytes.length, dirty: t.dirtyCount(), entry: e[0] };
+    return { isZip, len: bytes.length, dirty: t.dirtyCount(), entry: e[0],
+             derivedSurvived: t.isDerived(c), metal0: t.getCell(0, c).value };
   });
   rt.isZip ? ok(`saved .strata (${rt.len} bytes, zip magic)`) : fail('saved bytes are not a zip');
   (rt.dirty === 1 && rt.entry.value === 777.77 && afterEdit.entries[0].base === rt.entry.base)
     ? ok('reopened .strata → overlay edit + base preserved')
     : fail(`round-trip lost state: ${JSON.stringify(rt)}`);
+  (rt.derivedSurvived && Math.abs(rt.metal0 - expectMetal) < 1e-9)
+    ? ok('reopened .strata → derived column recomputed from formula')
+    : fail(`derived round-trip lost: ${JSON.stringify(rt)}`);
 
   errors.length ? fail('console errors: ' + errors.join(' | ')) : ok('no console errors');
 } catch (e) {

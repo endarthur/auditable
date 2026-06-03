@@ -42,74 +42,157 @@ function fmtCell(v) {
   return String(v);
 }
 
+// -- formula.js --
+
+// @gcu/strata — formula: compile a derived-column expression to a per-row fn.
+//
+// strata-spec §5: formulas are JS/adder expressions over columns, not a bespoke
+// spreadsheet language. v1 compiles a JS expression to a function via `new
+// Function` — a controlled emission site (emit JS string + new Function, no AIR
+// routing; AIR is a later perf swap). The formula's column DEPS are the schema
+// column names it references; the row's values for those columns are bound as
+// arguments, so `grade * tonnes` becomes `(grade, tonnes) => grade * tonnes`.
+//
+// SECURITY NOTE: a formula runs when its .strata opens — the same trust model as
+// a notebook cell (your own document). Sandboxing formulas from UNTRUSTED .strata
+// files is a deferred concern, flagged here so it isn't forgotten.
+//
+// Pure (new Function is available in any JS env; no DOM). Node-testable.
+
+// A derived cell whose formula threw for that row. Carried as the cell value;
+// the provider renders it as state:error. Not serialized (derived columns
+// recompute on load), so a Symbol is fine.
+const FORMULA_ERROR = Symbol('strata.formulaError');
+
+// Identifiers in `formula` that match a known column name = the deps. Over-
+// inclusion is harmless (an unused extra arg): a name appearing inside a string
+// literal or as a property key may be picked up, but it only adds a bound arg.
+function extractDeps(formula, columnNames) {
+  const names = new Set(columnNames);
+  const ids = String(formula).match(/[A-Za-z_$][\w$]*/g) || [];
+  const deps = [];
+  const seen = new Set();
+  for (const id of ids) {
+    if (names.has(id) && !seen.has(id)) { seen.add(id); deps.push(id); }
+  }
+  return deps;
+}
+
+// Compile a formula → { formula, deps, fn }. `fn(...depValues)` evaluates one
+// row. Throws (with a clear message) on a syntax error; per-row runtime errors
+// are caught by the caller and surfaced as FORMULA_ERROR.
+function compileFormula(formula, columnNames) {
+  const deps = extractDeps(formula, columnNames);
+  let fn;
+  try {
+    // eslint-disable-next-line no-new-func
+    fn = new Function(...deps, `"use strict"; return (${formula});`);
+  } catch (e) {
+    throw new Error(`strata formula compile error in "${formula}": ${e.message}`);
+  }
+  return { formula, deps, fn };
+}
+
 // -- table.js --
 
 // @gcu/strata — table: the in-memory working model (strata-spec §2 role 1, §4
-// layers 1-2). An immutable typed-columnar BASE + a sparse value-patch OVERLAY;
-// every read is base⊕overlay. This is the spine that makes strata auditable and
-// non-destructive by construction: the source is never mutated, edits are an op
-// log (= undo stack = dirty delta = the eventual overlay.json), and a cell's
-// provenance (raw vs edited, and its original base value) is always recoverable.
+// layers 1-3). An immutable typed-columnar BASE + a sparse value-patch OVERLAY +
+// DERIVED columns (formula-defined, computed not stored); every read is
+// base⊕overlay, derived columns recompute from it. This is the spine that makes
+// strata auditable and non-destructive by construction: the source is never
+// mutated, edits are an op log, a cell's base value is always recoverable, and
+// derived columns carry their formula (not baked-in values).
 //
-// v1 scope: base + value patches only. Deferred (the other §4 layers): derived
-// columns (the DAG), structural ops (tombstones/inserts/reorder), the view
-// pipeline. Row identity = implicit ordinal (§4.1) — free because the base never
-// moves. Base columns are plain arrays for v1 (null-clean); typed-array packing
-// is a windowing-era optimization.
+// v1 scope: base + value patches + per-row derived columns. Deferred §4 layers:
+// structural ops (tombstones/inserts/reorder), the view pipeline. Row identity =
+// implicit ordinal (§4.1). Base columns are plain arrays (null-clean); typed-
+// array packing is a windowing-era optimization.
 //
-// Pure, zero-dep (beyond ./values).
+// Pure (new Function for formulas works in any JS env; no DOM). Node-testable.
+
 
 
 /**
  * @param {object} spec
- * @param {Array<{name,type,unit?,role?,analyte?}>} spec.schema  column descriptors
+ * @param {Array<{name,type,unit?,role?,analyte?}>} spec.schema  BASE column descriptors
  * @param {Array<Array>} spec.columns   per-column base arrays (length nrows)
  * @param {number} spec.nrows
  */
 function createTable({ schema, columns, nrows }) {
-  const overlay = new Map();             // 'r:c' → { value, base }
+  const nbase = columns.length;          // base columns occupy indices 0..nbase-1
+  const overlay = new Map();             // 'r:c' → { value, base }   (base cells only)
+  const derived = new Map();             // colIdx → { name, type, formula, deps, fn, cache }
   const key = (r, c) => r + ':' + c;
+
+  // Read a cell's effective value by column index (base⊕overlay, or derived).
+  function readValue(c, r, stack) {
+    if (derived.has(c)) return derivedColumn(c, stack)[r];
+    const k = key(r, c);
+    return overlay.has(k) ? overlay.get(k).value : columns[c][r];
+  }
+
+  // Compute (and cache) a derived column. Lazy, with a cycle guard; a per-row
+  // formula error becomes FORMULA_ERROR (rendered as state:error).
+  function derivedColumn(c, stack) {
+    const d = derived.get(c);
+    if (d.cache) return d.cache;
+    stack = stack || new Set();
+    if (stack.has(c)) throw new Error(`strata: cyclic derived column "${d.name}"`);
+    stack.add(c);
+    const depIdx = d.deps.map((n) => schema.findIndex((s) => s.name === n));
+    const out = new Array(nrows);
+    for (let r = 0; r < nrows; r++) {
+      const args = depIdx.map((ci) => readValue(ci, r, stack));
+      try { out[r] = d.fn(...args); } catch { out[r] = FORMULA_ERROR; }
+    }
+    stack.delete(c);
+    d.cache = out;
+    return out;
+  }
+
+  // v1: invalidate ALL derived caches on any base edit (correct; recompute is
+  // lazy on next read). Targeted dependent-only invalidation is a later
+  // optimization that matters at scale, not at v1's small-data regime.
+  function invalidateDerived() { for (const d of derived.values()) d.cache = null; }
 
   const t = {
     schema,
     nrows,
-    cols: schema.length,
+    get cols() { return schema.length; },
+    get baseCount() { return nbase; },
     _base: columns,
     _overlay: overlay,
 
-    // Base value at (r,c) — the immutable source, ignoring any patch.
+    isDerived(c) { return derived.has(c); },
     baseValue(r, c) { return columns[c][r]; },
-
     isEdited(r, c) { return overlay.has(key(r, c)); },
 
-    // Merged read: { value, edited, base }. `base` is the original datum so the
-    // UI can show "was X" provenance on an edited cell.
+    // Merged read: { value, edited, base, derived? }.
     getCell(r, c) {
+      if (derived.has(c)) return { value: derivedColumn(c)[r], edited: false, base: null, derived: true };
       const k = key(r, c);
       if (overlay.has(k)) { const o = overlay.get(k); return { value: o.value, edited: true, base: o.base }; }
       const v = columns[c][r];
       return { value: v, edited: false, base: v };
     },
 
-    // Write a value patch. Editing a cell back to its base value clears the
-    // patch (no phantom dirty marks) — equality is by value (numbers/strings).
+    // Write a value patch (base columns only — derived cells are computed).
     setCell(r, c, value) {
+      if (derived.has(c)) return;
       const k = key(r, c);
       const base = columns[c][r];
-      if (value === base || (value == null && base == null)) { overlay.delete(k); return; }
-      overlay.set(k, { value, base });
+      if (value === base || (value == null && base == null)) overlay.delete(k);
+      else overlay.set(k, { value, base });
+      invalidateDerived();
     },
 
-    // Drop a patch, reverting (r,c) to base.
-    revert(r, c) { overlay.delete(key(r, c)); },
-
-    // Number of cells currently patched (the dirty count).
+    revert(r, c) { overlay.delete(key(r, c)); invalidateDerived(); },
     dirtyCount() { return overlay.size; },
 
-    // The effective (base⊕overlay) values of column c, as a fresh array. The
-    // bridge to the rest of the workspace: a notebook reads this as an array, a
-    // chart plots it, export writes it.
+    // The effective values of column c as a fresh array (base⊕overlay, or the
+    // derived computation). The bridge to the rest of the workspace.
     column(c) {
+      if (derived.has(c)) return derivedColumn(c).slice();
       const out = columns[c].slice();
       for (const [k, o] of overlay) {
         const i = k.indexOf(':');
@@ -123,11 +206,24 @@ function createTable({ schema, columns, nrows }) {
       return i < 0 ? null : this.column(i);
     },
 
-    // Display text for (r,c) — faithful formatting of the merged value.
-    displayAt(r, c) { return fmtCell(this.getCell(r, c).value); },
+    displayAt(r, c) {
+      const v = this.getCell(r, c).value;
+      return v === FORMULA_ERROR ? '#ERR' : fmtCell(v);
+    },
 
-    // Coerce + commit a raw edited string to (r,c), per the column's type.
     commitRaw(r, c, raw) { this.setCell(r, c, coerceValue(raw, schema[c].type)); },
+
+    // Add a derived column: a JS formula over existing columns (base or earlier
+    // derived). Appended after the existing columns; returns its index. Throws
+    // on a formula syntax error.
+    addDerivedColumn({ name, formula, type = 'number', unit }) {
+      const { deps, fn } = compileFormula(formula, schema.map((s) => s.name));
+      const field = { name, type, derived: true, formula };
+      if (unit) field.unit = unit;
+      schema.push(field);
+      derived.set(schema.length - 1, { name, type, formula, deps, fn, cache: null });
+      return schema.length - 1;
+    },
   };
   return t;
 }
@@ -282,7 +378,9 @@ async function writeStrata(table, opts = {}) {
   }
   const created = opts.created || new Date().toISOString();
 
-  const columnsManifest = table.schema.map((s) => ({ name: s.name, encoding: 'json' }));
+  // Derived columns are computed-not-stored: they carry `encoding: 'derived'`
+  // (no payload) and their formula travels in schema.json, recomputing on load.
+  const columnsManifest = table.schema.map((s) => ({ name: s.name, encoding: s.derived ? 'derived' : 'json' }));
   const document = {
     strata: STRATA_VERSION,
     name: opts.name || 'untitled',
@@ -293,10 +391,13 @@ async function writeStrata(table, opts = {}) {
   };
   if (opts.view) document.view = opts.view;
 
-  // BASE only (not the merged column) — the overlay is stored separately so
-  // base⊕overlay reconstitutes losslessly on load.
+  // BASE columns only (not merged, not derived) — the overlay is stored
+  // separately so base⊕overlay reconstitutes losslessly on load.
   const columns = {};
-  for (let c = 0; c < table.cols; c++) columns[table.schema[c].name] = table._base[c];
+  for (let c = 0; c < table.cols; c++) {
+    if (table.schema[c].derived) continue;
+    columns[table.schema[c].name] = table._base[c];
+  }
 
   const overlay = {};
   for (const [k, o] of table._overlay) overlay[k] = { value: o.value, base: o.base };
@@ -339,16 +440,26 @@ function readStrata(bytes, opts = {}) {
 
   const schema = (readJson('schema.json') || { fields: [] }).fields;
   const colsRaw = readJson('columns.json') || {};
-  const manifest = document.columns || schema.map((s) => ({ name: s.name, encoding: 'json' }));
 
-  const columns = manifest.map((m) => {
-    if (!m.encoding || m.encoding === 'json') return colsRaw[m.name] || [];
-    // GROWTH SEAM (v2): m.encoding === 'f64' →
-    //   new Float64Array(readZip(bytes, `columns/${m.name}.bin`).buffer) → Array
-    throw new Error(`readStrata: column encoding '${m.encoding}' not supported in this build`);
+  // Build the BASE table first (derived columns reconstruct from their formula).
+  const baseFields = schema.filter((s) => !s.derived);
+  const columns = baseFields.map((s) => {
+    const m = (document.columns || []).find((x) => x.name === s.name);
+    if (m && m.encoding && m.encoding !== 'json' && m.encoding !== 'derived') {
+      // GROWTH SEAM (v2): m.encoding === 'f64' →
+      //   new Float64Array(readZip(bytes, `columns/${m.name}.bin`).buffer) → Array
+      throw new Error(`readStrata: column encoding '${m.encoding}' not supported in this build`);
+    }
+    return colsRaw[s.name] || [];
   });
 
-  const table = createTable({ schema, columns, nrows: document.rowCount });
+  const table = createTable({ schema: baseFields, columns, nrows: document.rowCount });
+
+  // Reconstitute derived columns in their original (post-base) order, so a
+  // derived-on-derived formula sees its inputs already present.
+  for (const s of schema) {
+    if (s.derived) table.addDerivedColumn({ name: s.name, formula: s.formula, type: s.type, unit: s.unit });
+  }
 
   // Reapply the value-patch overlay. setCell recomputes base from the freshly
   // loaded columns (identical to the stored base), so a patch equal to base
@@ -376,9 +487,12 @@ function readStrata(bytes, opts = {}) {
 // Pure, zero-dep (beyond ./values).
 
 
+
 // MUST match @gcu/loom CellState / CellType enum values.
 const STATE_RAW = 'raw';
 const STATE_EDITED = 'edited';
+const STATE_DERIVED = 'derived';
+const STATE_ERROR = 'error';
 const TYPE = { number: 'number', category: 'category', string: 'string' };
 
 /**
@@ -396,11 +510,17 @@ function createTableProvider(table) {
     cellAt(r, c) {
       if (r < 0 || r >= table.nrows || c < 0 || c >= table.cols) return null;
       const cell = table.getCell(r, c);
+      const type = TYPE[table.schema[c].type] || 'string';
+      if (cell.derived) {
+        if (cell.value === FORMULA_ERROR) return { value: null, state: STATE_ERROR, type, style: { text: '#ERR' } };
+        if (cell.value == null) return null; // empty derived cell → blank
+        return { value: cell.value, state: STATE_DERIVED, type, style: { text: fmtCell(cell.value) } };
+      }
       if (cell.value == null && !cell.edited) return null; // empty → blank
       return {
         value: cell.value,
         state: cell.edited ? STATE_EDITED : STATE_RAW,
-        type: TYPE[table.schema[c].type] || 'string',
+        type,
         style: { text: fmtCell(cell.value) },
       };
     },
@@ -415,6 +535,7 @@ function createTableProvider(table) {
     // Edits flow to the overlay. loom calls its own refresh() after commit, so
     // we don't repaint here. Coercion is the column's, owned by strata.
     commit(r, c, raw) {
+      if (table.isDerived(c)) return; // computed columns aren't editable
       table.setCell(r, c, coerceValue(raw, table.schema[c].type));
     },
 
@@ -431,12 +552,15 @@ function createTableProvider(table) {
 
 export {
   COL_TYPES,
+  FORMULA_ERROR,
   NULL_TOKENS,
   builtinSniff,
   coerceValue,
+  compileFormula,
   createTable,
   createTableProvider,
   detectDelimiter,
+  extractDeps,
   fmtCell,
   readStrata,
   tableFromCsv,

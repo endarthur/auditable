@@ -7,6 +7,7 @@ import { coerceValue, fmtCell, NULL_TOKENS } from '../ext/strata/src/values.js';
 import { createTable } from '../ext/strata/src/table.js';
 import { tableFromCsv, builtinSniff, detectDelimiter } from '../ext/strata/src/ingest.js';
 import { createTableProvider } from '../ext/strata/src/provider.js';
+import { compileFormula, extractDeps, FORMULA_ERROR } from '../ext/strata/src/formula.js';
 import { writeStrata, readStrata } from '../ext/strata/src/document.js';
 import { sniff } from '../ext/recon/src/main.js';
 import { createWriter, readZip, listZip } from '../ext/archive/index.js';
@@ -240,4 +241,105 @@ test('document: rejects non-strata bytes and a future format version', async () 
 test('document: missing injected archive throws a clear error', async () => {
   await assert.rejects(() => writeStrata(sampleTable(), {}), /createWriter.*required/);
   assert.throws(() => readStrata(new Uint8Array([1, 2, 3]), {}), /readZip.*required/);
+});
+
+// ── formula + derived columns ──
+
+test('formula: extractDeps finds column refs only; compile evaluates', () => {
+  assert.deepEqual(extractDeps('grade * tonnes + 1', ['grade', 'tonnes', 'lito']), ['grade', 'tonnes']);
+  assert.deepEqual(extractDeps('Math.max(a, b)', ['a', 'b']), ['a', 'b']); // Math not a column
+  const { deps, fn } = compileFormula('grade * tonnes', ['grade', 'tonnes']);
+  assert.deepEqual(deps, ['grade', 'tonnes']);
+  assert.equal(fn(2, 3), 6);
+  assert.throws(() => compileFormula('grade * * 2', ['grade']), /compile error/);
+});
+
+function gtTable() {
+  return createTable({
+    schema: [{ name: 'grade', type: 'number' }, { name: 'tonnes', type: 'number' }],
+    columns: [[2, 4, 6], [10, 20, 30]],
+    nrows: 3,
+  });
+}
+
+test('derived: a formula column computes from base, marked derived', () => {
+  const t = gtTable();
+  const c = t.addDerivedColumn({ name: 'metal', formula: 'grade * tonnes', unit: 'kg' });
+  assert.equal(c, 2);
+  assert.equal(t.cols, 3);
+  assert.equal(t.isDerived(2), true);
+  assert.deepEqual(t.column(2), [20, 80, 180]);
+  assert.deepEqual(t.getCell(1, 2), { value: 80, edited: false, base: null, derived: true });
+  assert.equal(t.dirtyCount(), 0);          // derived columns are not edits
+});
+
+test('derived: recomputes when an upstream base cell is edited', () => {
+  const t = gtTable();
+  t.addDerivedColumn({ name: 'metal', formula: 'grade * tonnes' });
+  assert.equal(t.getCell(0, 2).value, 20);
+  t.commitRaw(0, 0, '5');                    // grade[0] 2 → 5
+  assert.equal(t.getCell(0, 2).value, 50);   // 5 * 10, recomputed
+  assert.equal(t.dirtyCount(), 1);           // the base edit, not the derived
+});
+
+test('derived: derived-on-derived chains, and a derived cell is not editable', () => {
+  const t = gtTable();
+  t.addDerivedColumn({ name: 'metal', formula: 'grade * tonnes' });
+  const c2 = t.addDerivedColumn({ name: 'metal2x', formula: 'metal * 2' });
+  assert.deepEqual(t.column(c2), [40, 160, 360]);
+  t.setCell(0, c2, 999);                     // edit on a derived col is ignored
+  assert.equal(t.getCell(0, c2).value, 40);
+  assert.equal(t.dirtyCount(), 0);
+});
+
+test('derived: a per-row formula error surfaces as FORMULA_ERROR', () => {
+  const t = gtTable();
+  const c = t.addDerivedColumn({ name: 'bad', formula: 'grade.nope.deep' });
+  assert.equal(t.column(c)[0], FORMULA_ERROR);
+  assert.equal(t.displayAt(0, c), '#ERR');
+});
+
+test('derived: a self/forward reference is a free-variable error, not a crash', () => {
+  // Deps are fixed at add time and forward refs are impossible, so a true cycle
+  // can't form via addDerivedColumn (the cycle guard is forward-insurance for a
+  // future formula-EDIT path that could re-point a column). A name that isn't a
+  // column when compiled is a free variable → per-row FORMULA_ERROR.
+  const t = gtTable();
+  const c = t.addDerivedColumn({ name: 'selfish', formula: 'selfish + 1' });
+  assert.equal(t.column(c)[0], FORMULA_ERROR);
+});
+
+test('provider: derived cell renders state derived; error cell renders #ERR', () => {
+  const t = gtTable();
+  t.addDerivedColumn({ name: 'metal', formula: 'grade * tonnes' });
+  t.addDerivedColumn({ name: 'bad', formula: 'grade.x.y' });
+  const p = createTableProvider(t);
+  const d = p.cellAt(0, 2);
+  assert.equal(d.state, 'derived');
+  assert.equal(d.value, 20);
+  const e = p.cellAt(0, 3);
+  assert.equal(e.state, 'error');
+  assert.equal(e.style.text, '#ERR');
+  // commit on a derived column is ignored
+  p.commit(0, 2, '123');
+  assert.equal(t.getCell(0, 2).value, 20);
+});
+
+test('document: derived columns round-trip as formula (not stored data)', async () => {
+  const t = gtTable();
+  t.addDerivedColumn({ name: 'metal', formula: 'grade * tonnes', unit: 'kg' });
+  t.commitRaw(1, 0, '7');                     // edit grade[1] 4 → 7 (metal[1] → 140)
+
+  const bytes = await writeStrata(t, { createWriter, name: 'd' });
+  // derived data must NOT be in columns.json — only its formula in schema.json
+  const cols = JSON.parse(new TextDecoder().decode(readZip(bytes, 'columns.json')));
+  assert.ok(!('metal' in cols), 'derived column not stored as data');
+  const fields = JSON.parse(new TextDecoder().decode(readZip(bytes, 'schema.json'))).fields;
+  assert.equal(fields.find((f) => f.name === 'metal').formula, 'grade * tonnes');
+
+  const { table: t2 } = readStrata(bytes, { readZip });
+  assert.equal(t2.isDerived(2), true);
+  assert.deepEqual(t2.column(2), [20, 140, 180]);   // recomputed incl. the edit
+  assert.equal(t2.getCell(1, 0).value, 7);          // overlay survived
+  assert.equal(t2.dirtyCount(), 1);
 });

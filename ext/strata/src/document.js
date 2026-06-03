@@ -46,7 +46,9 @@ export async function writeStrata(table, opts = {}) {
   }
   const created = opts.created || new Date().toISOString();
 
-  const columnsManifest = table.schema.map((s) => ({ name: s.name, encoding: 'json' }));
+  // Derived columns are computed-not-stored: they carry `encoding: 'derived'`
+  // (no payload) and their formula travels in schema.json, recomputing on load.
+  const columnsManifest = table.schema.map((s) => ({ name: s.name, encoding: s.derived ? 'derived' : 'json' }));
   const document = {
     strata: STRATA_VERSION,
     name: opts.name || 'untitled',
@@ -57,10 +59,13 @@ export async function writeStrata(table, opts = {}) {
   };
   if (opts.view) document.view = opts.view;
 
-  // BASE only (not the merged column) — the overlay is stored separately so
-  // base⊕overlay reconstitutes losslessly on load.
+  // BASE columns only (not merged, not derived) — the overlay is stored
+  // separately so base⊕overlay reconstitutes losslessly on load.
   const columns = {};
-  for (let c = 0; c < table.cols; c++) columns[table.schema[c].name] = table._base[c];
+  for (let c = 0; c < table.cols; c++) {
+    if (table.schema[c].derived) continue;
+    columns[table.schema[c].name] = table._base[c];
+  }
 
   const overlay = {};
   for (const [k, o] of table._overlay) overlay[k] = { value: o.value, base: o.base };
@@ -103,16 +108,26 @@ export function readStrata(bytes, opts = {}) {
 
   const schema = (readJson('schema.json') || { fields: [] }).fields;
   const colsRaw = readJson('columns.json') || {};
-  const manifest = document.columns || schema.map((s) => ({ name: s.name, encoding: 'json' }));
 
-  const columns = manifest.map((m) => {
-    if (!m.encoding || m.encoding === 'json') return colsRaw[m.name] || [];
-    // GROWTH SEAM (v2): m.encoding === 'f64' →
-    //   new Float64Array(readZip(bytes, `columns/${m.name}.bin`).buffer) → Array
-    throw new Error(`readStrata: column encoding '${m.encoding}' not supported in this build`);
+  // Build the BASE table first (derived columns reconstruct from their formula).
+  const baseFields = schema.filter((s) => !s.derived);
+  const columns = baseFields.map((s) => {
+    const m = (document.columns || []).find((x) => x.name === s.name);
+    if (m && m.encoding && m.encoding !== 'json' && m.encoding !== 'derived') {
+      // GROWTH SEAM (v2): m.encoding === 'f64' →
+      //   new Float64Array(readZip(bytes, `columns/${m.name}.bin`).buffer) → Array
+      throw new Error(`readStrata: column encoding '${m.encoding}' not supported in this build`);
+    }
+    return colsRaw[s.name] || [];
   });
 
-  const table = createTable({ schema, columns, nrows: document.rowCount });
+  const table = createTable({ schema: baseFields, columns, nrows: document.rowCount });
+
+  // Reconstitute derived columns in their original (post-base) order, so a
+  // derived-on-derived formula sees its inputs already present.
+  for (const s of schema) {
+    if (s.derived) table.addDerivedColumn({ name: s.name, formula: s.formula, type: s.type, unit: s.unit });
+  }
 
   // Reapply the value-patch overlay. setCell recomputes base from the freshly
   // loaded columns (identical to the stored base), so a patch equal to base

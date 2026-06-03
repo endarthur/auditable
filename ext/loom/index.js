@@ -675,6 +675,9 @@ function createGrid(element, provider, options = {}) {
   function startEdit(row, col, initialChar) {
     if (g.editing) cancelEdit();
     const cur = provider.cellAt(row, col);
+    // Computed (derived) or not-yet-loaded (pending) cells aren't editable —
+    // the cell state drives editability, no extra flag needed.
+    if (cur === PENDING || (cur && cur.state === CellState.DERIVED)) return;
     const input = document.createElement('input');
     input.type = 'text';
     styleEl(input, {

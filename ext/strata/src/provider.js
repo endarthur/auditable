@@ -10,10 +10,13 @@
 // Pure, zero-dep (beyond ./values).
 
 import { coerceValue, fmtCell } from './values.js';
+import { FORMULA_ERROR } from './formula.js';
 
 // MUST match @gcu/loom CellState / CellType enum values.
 const STATE_RAW = 'raw';
 const STATE_EDITED = 'edited';
+const STATE_DERIVED = 'derived';
+const STATE_ERROR = 'error';
 const TYPE = { number: 'number', category: 'category', string: 'string' };
 
 /**
@@ -31,11 +34,17 @@ export function createTableProvider(table) {
     cellAt(r, c) {
       if (r < 0 || r >= table.nrows || c < 0 || c >= table.cols) return null;
       const cell = table.getCell(r, c);
+      const type = TYPE[table.schema[c].type] || 'string';
+      if (cell.derived) {
+        if (cell.value === FORMULA_ERROR) return { value: null, state: STATE_ERROR, type, style: { text: '#ERR' } };
+        if (cell.value == null) return null; // empty derived cell → blank
+        return { value: cell.value, state: STATE_DERIVED, type, style: { text: fmtCell(cell.value) } };
+      }
       if (cell.value == null && !cell.edited) return null; // empty → blank
       return {
         value: cell.value,
         state: cell.edited ? STATE_EDITED : STATE_RAW,
-        type: TYPE[table.schema[c].type] || 'string',
+        type,
         style: { text: fmtCell(cell.value) },
       };
     },
@@ -50,6 +59,7 @@ export function createTableProvider(table) {
     // Edits flow to the overlay. loom calls its own refresh() after commit, so
     // we don't repaint here. Coercion is the column's, owned by strata.
     commit(r, c, raw) {
+      if (table.isDerived(c)) return; // computed columns aren't editable
       table.setCell(r, c, coerceValue(raw, table.schema[c].type));
     },
 

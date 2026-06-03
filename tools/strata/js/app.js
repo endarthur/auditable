@@ -54,6 +54,23 @@ function openBytes(name, bytes) {
   updateFooter();
   $('#btnSave').disabled = false;
   $('#btnSaveAs').disabled = false;
+  $('#btnAddCol').disabled = false;
+}
+
+// Add a derived column (a JS formula over column names). Returns true on success.
+function addColumn(name, formula) {
+  if (!table) return false;
+  try {
+    table.addDerivedColumn({ name, formula });
+    host.setDirty(true);
+    grid.refresh();
+    updateFooter();
+    flash(`+ ${name} = ${formula}`);
+    return true;
+  } catch (e) {
+    flash('formula error: ' + e.message);
+    return false;
+  }
 }
 
 async function buildStrataBytes() {
@@ -92,6 +109,14 @@ $('#btnSaveAs').onclick = async () => {
   const msg = await host.saveAs(docName + '.strata', await buildStrataBytes());
   if (msg) { setTitle(); updateFooter(); flash(msg); }
 };
+$('#btnAddCol').onclick = () => {
+  if (!table) return;
+  const name = prompt('New column name:');
+  if (!name || !name.trim()) return;
+  const formula = prompt(`Formula for "${name.trim()}" — JS over column names, e.g. grade * tonnes:`);
+  if (!formula || !formula.trim()) return;
+  addColumn(name.trim(), formula.trim());
+};
 
 function flash(msg) {
   const el = $('#meta'); const prev = el.textContent;
@@ -114,6 +139,7 @@ window.addEventListener('drop', async (e) => {
 window._strataApp = {
   open: openBytes,
   saveBytes: buildStrataBytes,
+  addColumn,
   get table() { return table; },
   get grid() { return grid; },
   get host() { return host; },

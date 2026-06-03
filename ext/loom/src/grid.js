@@ -11,7 +11,7 @@
 // refresh + a first-class selection object. Deferred (second pass, additive):
 // column resize, zoom, frozen header rows, hover tooltips, copy/paste.
 
-import { normSel, selEquals } from './model.js';
+import { normSel, selEquals, PENDING, CellState } from './model.js';
 import { cellAt, totalWidth, totalHeight } from './geometry.js';
 import { paint, DARK_COLORS, LIGHT_COLORS } from './render.js';
 
@@ -156,6 +156,9 @@ export function createGrid(element, provider, options = {}) {
   function startEdit(row, col, initialChar) {
     if (g.editing) cancelEdit();
     const cur = provider.cellAt(row, col);
+    // Computed (derived) or not-yet-loaded (pending) cells aren't editable —
+    // the cell state drives editability, no extra flag needed.
+    if (cur === PENDING || (cur && cur.state === CellState.DERIVED)) return;
     const input = document.createElement('input');
     input.type = 'text';
     styleEl(input, {
