@@ -11,7 +11,7 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const srcDir = path.join(__dirname, 'src');
 
-const files = ['values.js', 'formula.js', 'table.js', 'ingest.js', 'document.js', 'provider.js'];
+const files = ['values.js', 'formula.js', 'table.js', 'ingest.js', 'view.js', 'document.js', 'provider.js'];
 
 const exported = new Set();
 const chunks = [];

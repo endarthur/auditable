@@ -12,7 +12,7 @@
 // column resize, zoom, frozen header rows, hover tooltips, copy/paste.
 
 import { normSel, selEquals, PENDING, CellState } from './model.js';
-import { cellAt, totalWidth, totalHeight } from './geometry.js';
+import { cellAt, colAtX, totalWidth, totalHeight } from './geometry.js';
 import { paint, DARK_COLORS, LIGHT_COLORS } from './render.js';
 
 const SPACER_CAP = 16000000; // browser max element dimension, roughly
@@ -56,6 +56,7 @@ export function createGrid(element, provider, options = {}) {
     selDrag: false,
     editing: null,
     selectListeners: [],
+    headerListeners: [],
     _cleanup: [],
   };
 
@@ -272,6 +273,16 @@ export function createGrid(element, provider, options = {}) {
     }
   }
 
+  // Column-header click → emit the column index (for click-to-sort, etc.).
+  function onHeaderClickEvt(e) {
+    const rect = colHdr.getBoundingClientRect();
+    const c = colAtX(M, e.clientX - rect.left + scroll.scrollLeft);
+    if (c < 0 || c >= M.totalCols) return;
+    for (const cb of g.headerListeners) { try { cb(c); } catch (err) { console.error('[loom] onHeaderClick listener threw', err); } }
+  }
+  colHdr.addEventListener('click', onHeaderClickEvt);
+  g._cleanup.push(() => colHdr.removeEventListener('click', onHeaderClickEvt));
+
   scroll.addEventListener('scroll', () => { if (g.editing) cancelEdit(); repaint(); }, { passive: true });
   scroll.addEventListener('mousedown', onMouseDown);
   scroll.addEventListener('dblclick', onDblClick);
@@ -308,6 +319,7 @@ export function createGrid(element, provider, options = {}) {
     getSelection() { return normSel(g.sel); },
     setSelection(sel) { setSel(sel, true); },
     onSelect(cb) { g.selectListeners.push(cb); return () => { const i = g.selectListeners.indexOf(cb); if (i >= 0) g.selectListeners.splice(i, 1); }; },
+    onHeaderClick(cb) { g.headerListeners.push(cb); return () => { const i = g.headerListeners.indexOf(cb); if (i >= 0) g.headerListeners.splice(i, 1); }; },
     focus() { g.scrollEl.focus(); },
     setColors(colors) {
       g.colors = colors;

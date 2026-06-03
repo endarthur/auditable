@@ -19,6 +19,12 @@ html, body { margin: 0; height: 100%; background: #121212; color: #bbb; font-fam
 #toolbar button:hover { background: #2e2e2e; border-color: #444; }
 #toolbar button.go { color: #8cb878; border-color: #2f4a28; }
 #toolbar button:disabled { opacity: 0.4; cursor: default; }
+#toolbar input#filter {
+  font-family: var(--mono); font-size: 12px; color: #bbb; background: #242424;
+  border: 1px solid #333; border-radius: 3px; padding: 4px 8px; margin-left: 8px; width: 220px;
+}
+#toolbar input#filter:focus { outline: none; border-color: #c89b3c; }
+#toolbar input#filter.err { border-color: #d46a6a; color: #d46a6a; }
 
 #grid { position: absolute; left: 0; right: 0; top: 38px; bottom: 24px; }
 

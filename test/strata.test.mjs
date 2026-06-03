@@ -8,6 +8,7 @@ import { createTable } from '../ext/strata/src/table.js';
 import { tableFromCsv, builtinSniff, detectDelimiter } from '../ext/strata/src/ingest.js';
 import { createTableProvider } from '../ext/strata/src/provider.js';
 import { compileFormula, extractDeps, FORMULA_ERROR } from '../ext/strata/src/formula.js';
+import { createView } from '../ext/strata/src/view.js';
 import { writeStrata, readStrata } from '../ext/strata/src/document.js';
 import { sniff } from '../ext/recon/src/main.js';
 import { createWriter, readZip, listZip } from '../ext/archive/index.js';
@@ -323,6 +324,82 @@ test('provider: derived cell renders state derived; error cell renders #ERR', ()
   // commit on a derived column is ignored
   p.commit(0, 2, '123');
   assert.equal(t.getCell(0, 2).value, 20);
+});
+
+// ── view: sort / filter pipeline ──
+
+function viewTable() {
+  return createTable({
+    schema: [{ name: 'id', type: 'number' }, { name: 'grade', type: 'number' }, { name: 'dom', type: 'category' }],
+    columns: [[1, 2, 3, 4], [2.5, 0.8, 4.2, 1.1], ['ox', 'sulf', 'ox', 'sulf']],
+    nrows: 4,
+  });
+}
+
+test('view: identity by default', () => {
+  const v = createView(viewTable());
+  assert.equal(v.length, 4);
+  assert.deepEqual(v.rows(), [0, 1, 2, 3]);
+  assert.equal(v.active, false);
+});
+
+test('view: sort ascending/descending, nulls last', () => {
+  const t = viewTable();
+  t.setCell(1, 1, null); // grade[1] → null
+  const v = createView(t);
+  v.setSort({ by: 'grade', dir: 'asc' });
+  // grades: id1=2.5, id2=null, id3=4.2, id4=1.1 → asc: 1.1(id4),2.5(id1),4.2(id3),null(id2)
+  assert.deepEqual(v.rows(), [3, 0, 2, 1]);
+  v.setSort({ by: 'grade', dir: 'desc' });
+  assert.deepEqual(v.rows(), [2, 0, 3, 1]); // 4.2,2.5,1.1,null(last)
+});
+
+test('view: filter is a boolean formula (same engine as derived columns)', () => {
+  const v = createView(viewTable());
+  v.setFilter('grade > 2');
+  assert.deepEqual(v.rows(), [0, 2]); // 2.5, 4.2
+  v.setFilter('dom == "sulf" && grade < 2');
+  assert.deepEqual(v.rows(), [1, 3]); // id2(0.8) + id4(1.1), both sulf & <2
+  v.setFilter(null);
+  assert.deepEqual(v.rows(), [0, 1, 2, 3]);
+});
+
+test('view: filter then sort compose (pipeline order)', () => {
+  const v = createView(viewTable());
+  v.setFilter('dom == "ox"');     // id1(2.5), id3(4.2) → rows 0,2
+  v.setSort({ by: 'grade', dir: 'desc' });
+  assert.deepEqual(v.rows(), [2, 0]); // 4.2 then 2.5
+});
+
+test('view: edits do not auto-re-sort; reapply is explicit (§4.3)', () => {
+  const t = viewTable();
+  const v = createView(t);
+  v.setSort({ by: 'grade', dir: 'asc' }); // [1,3,0,2] = 0.8,1.1,2.5,4.2
+  assert.deepEqual(v.rows(), [1, 3, 0, 2]);
+  t.commitRaw(1, 1, '99'); // grade[1] 0.8 → 99, but the view stays put
+  assert.deepEqual(v.rows(), [1, 3, 0, 2]);
+  v.reapply();             // explicit re-apply re-sorts
+  assert.deepEqual(v.rows(), [3, 0, 2, 1]); // 1.1,2.5,4.2,99
+});
+
+test('view: a filter syntax error throws (caller surfaces it)', () => {
+  const v = createView(viewTable());
+  assert.throws(() => v.setFilter('grade >'), /compile error/);
+});
+
+test('provider+view: display rows map to underlying rows; row header shows base #', () => {
+  const t = viewTable();
+  const v = createView(t);
+  v.setSort({ by: 'grade', dir: 'desc' }); // [2,0,3,1]
+  const p = createTableProvider(t, v);
+  assert.equal(p.dims().rows, 4);
+  // display row 0 = underlying row 2 (grade 4.2)
+  assert.equal(p.cellAt(0, 1).value, 4.2);
+  assert.equal(p.rowHeader(0), 3); // underlying row 2 → base row number 3
+  // committing display row 0 edits underlying row 2
+  p.commit(0, 1, '7.7');
+  assert.equal(t.getCell(2, 1).value, 7.7);
+  assert.equal(t.getCell(2, 1).edited, true);
 });
 
 test('document: derived columns round-trip as formula (not stored data)', async () => {

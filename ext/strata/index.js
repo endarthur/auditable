@@ -329,6 +329,102 @@ function tableFromCsv(text, opts = {}) {
   return createTable({ schema, columns, nrows: lines.length - 1 });
 }
 
+// -- view.js --
+
+// @gcu/strata — view: the sort/filter pipeline over a table (strata-spec §4.3).
+//
+// The view is the read-side pipeline — `filter → sort → window` over base⊕overlay
+// — producing an ordered list of underlying row indices. A view-aware provider
+// renders through it, so loom stays unchanged and the table+overlay stays the
+// single source of truth (display-row → underlying-row is the only mapping).
+//
+// Unifications, per the spec:
+//   • FILTER is a boolean formula over columns, compiled by the SAME engine as
+//     derived columns (formula.js). "filter to grade>2" and a future "select
+//     grade>2" are the same row-expr (§7.2) — one language for filter, derived
+//     columns, and (later) selection-as-predicate.
+//   • SORT is single-column for v1 (stable, nulls-last); multi-key later.
+//
+// v1 = in-memory (the small-data fast path, the 95% case). The big-data path —
+// a materialized sorted copy via a proc/sluice pipeline — is the deferred §4.3
+// follow-up. Edits do NOT auto-re-sort/filter (§4.3 #4): the view is a snapshot;
+// reapply() is explicit. Out-of-order flagging is an additive nicety on top.
+//
+// Pure (formula compile via formula.js; no DOM). Node-testable.
+
+
+// Compare two non-null values: numbers numerically, else lexical.
+function cmpVal(a, b) {
+  if (typeof a === 'number' && typeof b === 'number') return a - b;
+  const sa = String(a), sb = String(b);
+  return sa < sb ? -1 : sa > sb ? 1 : 0;
+}
+
+// Full comparator with direction. Nulls sort LAST regardless of dir (so they
+// don't flip to the top on a descending sort).
+function cmp(a, b, dir) {
+  const an = a == null, bn = b == null;
+  if (an && bn) return 0;
+  if (an) return 1;
+  if (bn) return -1;
+  return dir * cmpVal(a, b);
+}
+
+function createView(table) {
+  let sort = null;     // { by: columnName, dir: 'asc' | 'desc' }
+  let filter = null;   // { formula, fn, deps, depIdx } | null
+  let rows = identity();
+
+  function identity() { return Array.from({ length: table.nrows }, (_, i) => i); }
+  function colIdx(name) { return table.schema.findIndex((s) => s.name === name); }
+
+  function recompute() {
+    let r = identity();
+    if (filter) {
+      r = r.filter((i) => {
+        try { return !!filter.fn(...filter.depIdx.map((ci) => table.getCell(i, ci).value)); }
+        catch { return false; } // a per-row eval error excludes the row
+      });
+    }
+    if (sort) {
+      const ci = colIdx(sort.by);
+      const dir = sort.dir === 'desc' ? -1 : 1;
+      r = r.slice().sort((a, b) => cmp(table.getCell(a, ci).value, table.getCell(b, ci).value, dir));
+    }
+    rows = r;
+  }
+
+  return {
+    get length() { return rows.length; },
+    at(displayRow) { return rows[displayRow]; },
+    rows() { return rows.slice(); },
+
+    get sortSpec() { return sort; },
+    get filterFormula() { return filter ? filter.formula : null; },
+    get active() { return !!(sort || filter); },
+
+    // Set/clear the sort. spec = { by: columnName, dir? } | null.
+    setSort(spec) {
+      sort = spec ? { by: spec.by, dir: spec.dir || 'asc' } : null;
+      recompute();
+    },
+
+    // Set/clear the filter. formula = a boolean JS expression over columns, or
+    // null. Throws on a compile (syntax) error so the caller can surface it;
+    // per-row runtime errors just exclude the row.
+    setFilter(formula) {
+      if (!formula) { filter = null; recompute(); return; }
+      const { deps, fn } = compileFormula(formula, table.schema.map((s) => s.name));
+      filter = { formula, fn, deps, depIdx: deps.map(colIdx) };
+      recompute();
+    },
+
+    // Re-run the pipeline against the table's CURRENT state (edits don't
+    // auto-re-sort/filter; this is the explicit re-apply, §4.3 #4).
+    reapply() { recompute(); },
+  };
+}
+
 // -- document.js --
 
 // @gcu/strata — document: the native `.strata` file (strata-spec §3).
@@ -497,19 +593,26 @@ const TYPE = { number: 'number', category: 'category', string: 'string' };
 
 /**
  * @param {object} table  a StrataTable (see ./table.js)
+ * @param {object} [view] a sort/filter view (see ./view.js). When present, loom
+ *   renders through it — display rows map to underlying table rows — so the
+ *   table+overlay stays the source of truth and loom needs no view awareness.
  * @returns a loom provider: dims / cellAt / header / rowHeader / commit / onReady
  */
-function createTableProvider(table) {
+function createTableProvider(table, view) {
   const readyListeners = [];
+  const nDisp = () => (view ? view.length : table.nrows);
+  const under = (r) => (view ? view.at(r) : r); // display row → underlying row
 
   return {
     table,
+    view,
 
-    dims() { return { rows: table.nrows, cols: table.cols }; },
+    dims() { return { rows: nDisp(), cols: table.cols }; },
 
     cellAt(r, c) {
-      if (r < 0 || r >= table.nrows || c < 0 || c >= table.cols) return null;
-      const cell = table.getCell(r, c);
+      if (r < 0 || r >= nDisp() || c < 0 || c >= table.cols) return null;
+      const ur = under(r);
+      const cell = table.getCell(ur, c);
       const type = TYPE[table.schema[c].type] || 'string';
       if (cell.derived) {
         if (cell.value === FORMULA_ERROR) return { value: null, state: STATE_ERROR, type, style: { text: '#ERR' } };
@@ -530,13 +633,15 @@ function createTableProvider(table) {
       return { label: s.unit ? `${s.name} (${s.unit})` : s.name, type: TYPE[s.type] || 'string' };
     },
 
-    rowHeader(r) { return r + 1; },
+    // Show the UNDERLYING row number (provenance) — so a sorted/filtered view
+    // still tells you which base row you're looking at.
+    rowHeader(r) { return under(r) + 1; },
 
-    // Edits flow to the overlay. loom calls its own refresh() after commit, so
-    // we don't repaint here. Coercion is the column's, owned by strata.
+    // Edits flow to the overlay at the underlying row. loom calls its own
+    // refresh() after commit, so we don't repaint here.
     commit(r, c, raw) {
       if (table.isDerived(c)) return; // computed columns aren't editable
-      table.setCell(r, c, coerceValue(raw, table.schema[c].type));
+      table.setCell(under(r), c, coerceValue(raw, table.schema[c].type));
     },
 
     // Reserved for async windowing (strata-spec §11 upgrade #1): a streaming
@@ -559,6 +664,7 @@ export {
   compileFormula,
   createTable,
   createTableProvider,
+  createView,
   detectDelimiter,
   extractDeps,
   fmtCell,

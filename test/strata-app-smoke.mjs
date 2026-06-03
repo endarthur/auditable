@@ -94,6 +94,24 @@ try {
     ? ok('reopened .strata → derived column recomputed from formula')
     : fail(`derived round-trip lost: ${JSON.stringify(rt)}`);
 
+  // Filter + click-to-sort through the app (on the reopened doc).
+  const sf = await page.evaluate(() => {
+    const t = window._strataApp.table, v = window._strataApp.view, g = window._strataApp.grid;
+    const total = t.nrows;
+    window._strataApp.applyFilter('Au_gpt > 1');     // filter to high-grade rows
+    const filtered = v.length;
+    const auIdx = t.schema.findIndex((s) => s.name === 'Au_gpt');
+    window._strataApp.cycleSort(auIdx);              // asc
+    window._strataApp.cycleSort(auIdx);              // → desc
+    const top = g.provider.cellAt(0, auIdx).value;
+    const next = g.provider.cellAt(1, auIdx).value;
+    window._strataApp.applyFilter('');               // clear filter
+    return { total, filtered, top, next, restored: v.length };
+  });
+  (sf.filtered > 0 && sf.filtered < sf.total && sf.top >= sf.next && sf.restored === sf.total)
+    ? ok(`filter Au_gpt>1 (${sf.filtered}/${sf.total}) + sort desc (${sf.top} ≥ ${sf.next}); clear restores ${sf.restored}`)
+    : fail(`sort/filter failed: ${JSON.stringify(sf)}`);
+
   errors.length ? fail('console errors: ' + errors.join(' | ')) : ok('no console errors');
 } catch (e) {
   fail('smoke threw: ' + e.message);

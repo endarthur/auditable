@@ -21,19 +21,26 @@ const TYPE = { number: 'number', category: 'category', string: 'string' };
 
 /**
  * @param {object} table  a StrataTable (see ./table.js)
+ * @param {object} [view] a sort/filter view (see ./view.js). When present, loom
+ *   renders through it — display rows map to underlying table rows — so the
+ *   table+overlay stays the source of truth and loom needs no view awareness.
  * @returns a loom provider: dims / cellAt / header / rowHeader / commit / onReady
  */
-export function createTableProvider(table) {
+export function createTableProvider(table, view) {
   const readyListeners = [];
+  const nDisp = () => (view ? view.length : table.nrows);
+  const under = (r) => (view ? view.at(r) : r); // display row → underlying row
 
   return {
     table,
+    view,
 
-    dims() { return { rows: table.nrows, cols: table.cols }; },
+    dims() { return { rows: nDisp(), cols: table.cols }; },
 
     cellAt(r, c) {
-      if (r < 0 || r >= table.nrows || c < 0 || c >= table.cols) return null;
-      const cell = table.getCell(r, c);
+      if (r < 0 || r >= nDisp() || c < 0 || c >= table.cols) return null;
+      const ur = under(r);
+      const cell = table.getCell(ur, c);
       const type = TYPE[table.schema[c].type] || 'string';
       if (cell.derived) {
         if (cell.value === FORMULA_ERROR) return { value: null, state: STATE_ERROR, type, style: { text: '#ERR' } };
@@ -54,13 +61,15 @@ export function createTableProvider(table) {
       return { label: s.unit ? `${s.name} (${s.unit})` : s.name, type: TYPE[s.type] || 'string' };
     },
 
-    rowHeader(r) { return r + 1; },
+    // Show the UNDERLYING row number (provenance) — so a sorted/filtered view
+    // still tells you which base row you're looking at.
+    rowHeader(r) { return under(r) + 1; },
 
-    // Edits flow to the overlay. loom calls its own refresh() after commit, so
-    // we don't repaint here. Coercion is the column's, owned by strata.
+    // Edits flow to the overlay at the underlying row. loom calls its own
+    // refresh() after commit, so we don't repaint here.
     commit(r, c, raw) {
       if (table.isDerived(c)) return; // computed columns aren't editable
-      table.setCell(r, c, coerceValue(raw, table.schema[c].type));
+      table.setCell(under(r), c, coerceValue(raw, table.schema[c].type));
     },
 
     // Reserved for async windowing (strata-spec §11 upgrade #1): a streaming
