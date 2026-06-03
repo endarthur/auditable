@@ -50,9 +50,14 @@ host.onFlush(cb)         → void
     shell's save barrier); standalone leaves it for beforeunload / future use.
 ```
 
-**Capability-optional, reserved (not in v1 — added by the adapter that needs them):**
+**Capability flags / optional surfaces (feature-detected; an adapter provides
+only what it backs):**
 
 ```
+host.canOpenFiles  — may the user open arbitrary files from inside the app?
+                     true standalone (picker + drag-drop); false in the Works
+                     loose-file surface (files open via the tree). Default true;
+                     when false the core hides Open + drag-drop.
 host.bus    — A-Bus client. Filled by the Works adapter; powers cross-surface
               selection/linking (strata-spec §7.1). Absent standalone.
 host.fs     — a VFS-shaped {read,write,list,…}. Filled by a future PROJECT
@@ -72,7 +77,13 @@ and tool-spawn modes without branching on environment.
 | adapter | where | open / save | dirty / flush |
 |---|---|---|---|
 | **standalone** | `js/host.js` `createStandaloneHost()` | File System Access API (save-in-place) → `<input>`/download fallback | `beforeunload` warns on `dirty` |
-| **Works** (next) | inline in `works/surfaces/strata.html` | `bus.call({to:'works', VFS Read/Write})` on `tab.path` | `DirtyChanged` signal; `Surface.Flush → onFlush` |
+| **Works** | inline in `works/surfaces/strata.html` `createWorksHost()` | `bus.call({to:'works', VFS Read/Write})` on `tab.path` (read as `'bytes'`) | `DirtyChanged` signal + §7 1.5 s self-flush; `Surface.Flush → onFlush` |
+
+Both are live and verified: `test/strata-app-smoke.mjs` (standalone) and
+`test/strata-works-smoke.mjs` (the Works surface — open a `.strata` by extension,
+mount, edit, render). The Works surface is a loose-file surface (`SURFACES.md`
+§4.2); registered `registerKind('strata', { extensions: ['.strata'] })`, with the
+app core shared as the `strata-app` build lib.
 
 The core (`js/app.js`) is shared verbatim. Standalone resolves its bare `@gcu/*`
 imports via the `<import map>` in `index.html`; the works build inlines the core

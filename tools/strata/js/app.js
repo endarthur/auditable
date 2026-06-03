@@ -34,6 +34,11 @@ function looksLikeStrata(name, bytes) {
  * @returns the app handle (also stored on window._strataApp for automation).
  */
 export function createStrataApp(host) {
+  // Capability: can the user open arbitrary files from inside the app? True
+  // standalone (picker + drag-drop); false in a Works loose-file surface (files
+  // open via the tree as new surfaces). Default true.
+  const canOpenFiles = host.canOpenFiles !== false;
+
   let table = null, provider = null, grid = null, view = null, docName = 'untitled';
   let sortState = null;                       // { col, dir } — the click-to-sort cycle
   let detailTable = null, detailName = null;  // the pre-group table, for "← Data"
@@ -185,10 +190,14 @@ export function createStrataApp(host) {
   }
 
   // ── toolbar / input wiring ──
-  $('#btnOpen').onclick = async () => {
-    const f = await host.open();
-    if (f) openBytes(f.name, f.bytes);
-  };
+  if (canOpenFiles) {
+    $('#btnOpen').onclick = async () => {
+      const f = await host.open();
+      if (f) openBytes(f.name, f.bytes);
+    };
+  } else {
+    $('#btnOpen').style.display = 'none';
+  }
   $('#btnSave').onclick = async () => {
     if (!table) return;
     const msg = await host.save(docName + '.strata', await buildStrataBytes());
@@ -214,15 +223,17 @@ export function createStrataApp(host) {
     if (formula && formula.trim()) addColumn(name.trim(), formula.trim());
   };
 
-  // ── drag-drop ──
-  window.addEventListener('dragover', (e) => { e.preventDefault(); document.body.classList.add('dragging'); });
-  window.addEventListener('dragleave', (e) => { if (e.relatedTarget === null) document.body.classList.remove('dragging'); });
-  window.addEventListener('drop', async (e) => {
-    e.preventDefault();
-    document.body.classList.remove('dragging');
-    const file = e.dataTransfer.files && e.dataTransfer.files[0];
-    if (file) openBytes(file.name, new Uint8Array(await file.arrayBuffer()));
-  });
+  // ── drag-drop (only where opening arbitrary files makes sense) ──
+  if (canOpenFiles) {
+    window.addEventListener('dragover', (e) => { e.preventDefault(); document.body.classList.add('dragging'); });
+    window.addEventListener('dragleave', (e) => { if (e.relatedTarget === null) document.body.classList.remove('dragging'); });
+    window.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      document.body.classList.remove('dragging');
+      const file = e.dataTransfer.files && e.dataTransfer.files[0];
+      if (file) openBytes(file.name, new Uint8Array(await file.arrayBuffer()));
+    });
+  }
 
   // The host's save-now handler (Works Surface.Flush calls it; standalone may
   // wire beforeunload). Writes the current doc through the host.

@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 
 import { coerceValue, fmtCell, NULL_TOKENS } from '../ext/strata/src/values.js';
 import { createTable } from '../ext/strata/src/table.js';
-import { tableFromCsv, builtinSniff, detectDelimiter } from '../ext/strata/src/ingest.js';
+import { tableFromCsv, builtinSniff, detectCsvDelimiter } from '../ext/strata/src/ingest.js';
 import { createTableProvider } from '../ext/strata/src/provider.js';
 import { compileFormula, extractDeps, FORMULA_ERROR } from '../ext/strata/src/formula.js';
 import { createView } from '../ext/strata/src/view.js';
@@ -90,8 +90,8 @@ test('table: commitRaw coerces by column type', () => {
 const CSV = 'id,grade,lito\n1,0.5,ox\n2,1.5,sulf\n3,,ox\n';
 
 test('ingest: built-in sniffer infers types + parses', () => {
-  assert.equal(detectDelimiter('a,b,c'), ',');
-  assert.equal(detectDelimiter('a\tb\tc'), '\t');
+  assert.equal(detectCsvDelimiter('a,b,c'), ',');
+  assert.equal(detectCsvDelimiter('a\tb\tc'), '\t');
   const s = builtinSniff(CSV.trim().split('\n'));
   assert.equal(s.delimiter, ',');
   assert.deepEqual(s.columns.map((c) => c.type), ['number', 'number', 'string']);

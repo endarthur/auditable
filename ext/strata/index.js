@@ -261,7 +261,7 @@ function splitLines(text) {
 }
 
 // Pick the delimiter by counting candidates in the header line.
-function detectDelimiter(headerLine) {
+function detectCsvDelimiter(headerLine) {
   const cands = [',', '\t', ';', '|'];
   let best = ',', bestN = -1;
   for (const d of cands) {
@@ -274,7 +274,7 @@ function detectDelimiter(headerLine) {
 // Minimal schema sniffer (the recon-less fallback): delimiter + per-column
 // number-vs-string inference over a sample.
 function builtinSniff(lines) {
-  const delimiter = detectDelimiter(lines[0] || '');
+  const delimiter = detectCsvDelimiter(lines[0] || '');
   const header = (lines[0] || '').split(delimiter);
   const sample = lines.slice(1, 51);
   const columns = header.map((name, c) => {
@@ -306,7 +306,7 @@ function tableFromCsv(text, opts = {}) {
   if (typeof opts.sniff === 'function') {
     const sample = lines.slice(0, (opts.sampleSize || 200) + 1);
     const m = opts.sniff(sample);
-    delimiter = m.delimiter || detectDelimiter(lines[0]);
+    delimiter = m.delimiter || detectCsvDelimiter(lines[0]);
     schema = m.columns.map((col) => ({
       name: col.name,
       type: mapReconType(col.type),
@@ -764,7 +764,7 @@ export {
   createTable,
   createTableProvider,
   createView,
-  detectDelimiter,
+  detectCsvDelimiter,
   extractDeps,
   fmtCell,
   groupBy,

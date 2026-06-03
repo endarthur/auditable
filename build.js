@@ -271,7 +271,11 @@ if (target === 'works' || target === 'works-all') {
   const worksZlib = require('zlib');
 
   const isWorksAll = (target === 'works-all');
-  const SHARED_LIBS_BASE = ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline', 'markdown', 'librarian', 'docview', 'katex', 'reader-core', 'capsule', 'qr', 'ipynb', 'cm6', 'menu', 'template', 'yaml', 'epub', 'archive', 'sideact', 'patchbay', 'sluice', 'recon', 'flowsheet', 'bearing', 'stereonet', 'omf1'];
+  // NB: 'strata-app' (the shared strata app core, source-override below) must
+  // precede 'loom'/'strata'/'recon'/'archive' — the runtime surface inliner
+  // iterates in this order, and inlining strata-app first is what brings its
+  // bare @gcu/* imports into the surface text so those libs inline after it.
+  const SHARED_LIBS_BASE = ['abus', 'strata-app', 'loom', 'strata', 'vfs', 'xterm', 'geas', 'proc', 'readline', 'markdown', 'librarian', 'docview', 'katex', 'reader-core', 'capsule', 'qr', 'ipynb', 'cm6', 'menu', 'template', 'yaml', 'epub', 'archive', 'sideact', 'patchbay', 'sluice', 'recon', 'flowsheet', 'bearing', 'stereonet', 'omf1'];
   // For --target=works-all: bundle every ext/<name>/index.js that's a real
   // bundle (skip the re-export shims under ~1 KB — they break the
   // single-file SHARED_LIBS pattern because they import from sibling files).
@@ -329,6 +333,10 @@ if (target === 'works' || target === 'works-all') {
   // _libSourcePath which checks this map first.
   const SHARED_LIB_SOURCE_OVERRIDES = {
     markdown: 'src/js/markdown.js',
+    // The strata app core (createStrataApp) is shared verbatim between the
+    // standalone tool and the Works surface; the surface imports it via
+    // '../../tools/strata/js/app.js' and the build inlines it as `strata-app`.
+    'strata-app': 'tools/strata/js/app.js',
     // CM6 ships as a classic IIFE that sets `var CM6 = ...` (no ESM
     // exports). Surfaces using it can't `import { … } from '@gcu/cm6'`
     // — they place a `/* @cm6-inline */` placeholder where the IIFE
@@ -689,6 +697,7 @@ if (target === 'works' || target === 'works-all') {
     { kind: 'terminal',  file: 'works/surfaces/terminal.html',
       deps: ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline'], extras: 'terminal' },
     { kind: 'patchbay',  file: 'works/surfaces/patchbay.html',  deps: ['abus', 'sideact', 'patchbay', 'menu'] },
+    { kind: 'strata',    file: 'works/surfaces/strata.html',    deps: ['abus', 'strata-app'] },
     { kind: 'notebook',  file: 'auditable.html',                deps: null },
   ]) {
     const sp = path.join(__dirname, s.file);

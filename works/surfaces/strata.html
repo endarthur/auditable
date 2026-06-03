@@ -1,0 +1,167 @@
+<!doctype html>
+<!-- strata — auditable column-oriented table, as an Auditable Works surface. -->
+<!-- A loose-file surface bound to a .strata document (works/SURFACES.md §4.2). -->
+<!-- The app CORE is shared verbatim with the standalone tool (tools/strata/js/ -->
+<!-- app.js, inlined by the build as the `strata-app` lib); only the host adapter -->
+<!-- differs. The contract + rationale live in tools/strata/HOST.md. -->
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>strata</title>
+<style>
+  /* @theme-tokens */
+  :root { --mono: 'Space Mono', ui-monospace, monospace; --sans: 'Barlow', system-ui, sans-serif; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #121212; color: #bbb; font-family: var(--sans); overflow: hidden; }
+
+  #toolbar {
+    position: absolute; left: 0; right: 0; top: 0; height: 38px; display: flex; align-items: center;
+    gap: 6px; padding: 0 10px; border-bottom: 1px solid #2a2a2a; background: #1a1a1a;
+  }
+  #toolbar .title { font-family: var(--mono); font-size: 13px; color: #c89b3c; margin-right: 8px; }
+  #toolbar .name { font-family: var(--mono); font-size: 12px; color: #888; }
+  #toolbar .name .dot { color: #c89b3c; margin-left: 4px; }
+  #toolbar .spacer { flex: 1; }
+  #toolbar button {
+    font-family: var(--mono); font-size: 12px; color: #bbb; background: #242424;
+    border: 1px solid #333; border-radius: 3px; padding: 4px 10px; cursor: pointer;
+  }
+  #toolbar button:hover { background: #2e2e2e; border-color: #444; }
+  #toolbar button:disabled { opacity: 0.4; cursor: default; }
+  #toolbar input#filter {
+    font-family: var(--mono); font-size: 12px; color: #bbb; background: #242424;
+    border: 1px solid #333; border-radius: 3px; padding: 4px 8px; margin-left: 8px; width: 220px;
+  }
+  #toolbar input#filter:focus { outline: none; border-color: #c89b3c; }
+  #toolbar input#filter.err { border-color: #d46a6a; color: #d46a6a; }
+
+  #grid { position: absolute; left: 0; right: 0; top: 38px; bottom: 24px; }
+
+  #empty {
+    position: absolute; inset: 38px 0 24px 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 8px; color: #555; font-family: var(--mono);
+    font-size: 13px; pointer-events: none; text-align: center;
+  }
+  #empty b { color: #888; }
+
+  footer {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 24px; display: flex; align-items: center;
+    gap: 16px; padding: 0 12px; border-top: 1px solid #2a2a2a; background: #161616;
+    font-family: var(--mono); font-size: 11px; color: #777;
+  }
+  footer #sel { color: #8cb878; } footer #dirty { color: #c89b3c; }
+  #drop-hint { display: none; }
+</style>
+</head>
+<body>
+  <div id="toolbar">
+    <span class="title">strata</span>
+    <button id="btnOpen">Open…</button>
+    <button id="btnSave" disabled>Save</button>
+    <button id="btnSaveAs" disabled>Save As…</button>
+    <button id="btnAddCol" disabled>+ Col</button>
+    <button id="btnGroup" disabled>Group…</button>
+    <button id="btnUngroup" style="display:none">← Data</button>
+    <input id="filter" type="text" placeholder="filter: grade > 2  (Enter)" spellcheck="false">
+    <span class="spacer"></span>
+    <span class="name" id="fileName">untitled<span class="dot" id="dot" style="visibility:hidden">●</span></span>
+  </div>
+
+  <div id="grid"></div>
+  <div id="empty"><b>loading…</b></div>
+  <div id="drop-hint"></div>
+
+  <footer>
+    <span id="meta">no file</span>
+    <span>selection: <span id="sel">—</span></span>
+    <span>edits: <span id="dirty">0</span></span>
+  </footer>
+
+<script type="module">
+import { connect } from '../../ext/abus/index.js';
+import { createStrataApp } from '../../tools/strata/js/app.js';
+
+/* @theme-init */
+
+// The Works host adapter — the strata host interface (tools/strata/HOST.md)
+// over A-Bus. A loose-file surface: reads/writes its bound tab.path, drives the
+// §5.2 Surface dirty/flush lifecycle. `canOpenFiles: false` — files open via the
+// tree (a new surface), not from inside; the core hides Open + drag-drop.
+function createWorksHost(bus, tab) {
+  const path = tab.path;
+  let dirty = false, flushCb = null, flushTimer = null, flushP = null;
+  const sig = (member, args) => bus.signal({ path: '/', interface: 'Surface', member }, args);
+
+  function doFlush() {
+    if (flushP) return flushP;
+    clearTimeout(flushTimer); flushTimer = null;
+    flushP = (async () => { try { if (flushCb) await flushCb(); } finally { flushP = null; } })();
+    return flushP;
+  }
+
+  const host = {
+    canOpenFiles: false,
+    get dirty() { return dirty; },
+    async open() { return null; },                      // files open via the tree
+    async save(_name, bytes) {
+      await bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Write' }, [path, bytes]);
+      if (dirty) { dirty = false; sig('DirtyChanged', [false]); }
+      return 'saved';
+    },
+    async saveAs(name, bytes) { return host.save(name, bytes); },  // v1: writes the bound path
+    setDirty(b) {
+      if (b !== dirty) { dirty = b; sig('DirtyChanged', [b]); }
+      if (b) { clearTimeout(flushTimer); flushTimer = setTimeout(doFlush, 1500); }  // §7 self-flush
+    },
+    setTitle(name) { sig('TitleChanged', [name]); },
+    onFlush(cb) { flushCb = cb; },
+    flush: doFlush,
+  };
+  return host;
+}
+
+window.addEventListener('message', async (ev) => {
+  if (ev.source !== window.parent) return;                 // §7.1
+  if (!ev.data || ev.data.type !== 'abus:welcome') return;
+  const { port, tab } = ev.data;
+
+  let bus;
+  try { bus = await connect(port, { client: 'strata' }); }
+  catch (e) { console.error('strata: A-Bus connect failed', e); return; }
+  installThemeSubscription(bus);                            // from @theme-init
+  try { await bus.claim('strata-' + (tab.id || '?')); } catch {}
+
+  const host = createWorksHost(bus, tab);
+  const app = createStrataApp(host);
+
+  // Expose the §5.2 contract BEFORE mounting (mount emits TitleChanged).
+  bus.expose('/', {
+    Surface: {
+      methods: {
+        Flush:     () => host.flush(),
+        CanClose:  () => true,
+        Relocated: (_p) => { /* v1: path is fixed */ },
+      },
+      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
+    },
+  });
+
+  // Read the bound document (as BYTES — a .strata is a zip; a utf8 read would
+  // corrupt it) and mount it.
+  try {
+    const bytes = await bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [tab.path, 'bytes']);
+    const name = String(tab.path).split('/').pop();
+    const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    app.open(name, u8);
+    host.setDirty(false);
+  } catch (e) {
+    console.error('strata: read failed', e);
+    document.getElementById('empty').innerHTML = '<b>could not read ' + (tab.path || '') + '</b>';
+  }
+
+  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
+  window._strataSurface = { app, host, bus };              // smoke hook
+});
+</script>
+</body>
+</html>

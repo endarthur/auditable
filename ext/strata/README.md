@@ -167,7 +167,7 @@ the manifest makes the format **growable** — v1 reads/writes `json` columns, a
 ```js
 tableFromCsv(text, { sniff?, sampleSize? })   // sniff = @gcu/recon's sniff (optional)
 builtinSniff(lines)                           // the recon-less fallback (delimiter + number/string)
-detectDelimiter(headerLine)
+detectCsvDelimiter(headerLine)
 ```
 
 With recon injected you get roles (`coord-x`, `id`), units (`g/t`, `%`), and

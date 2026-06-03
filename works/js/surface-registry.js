@@ -435,6 +435,11 @@ registerKind('text', {
 // form is a drop-in; see ext/patchbay/src/store.js.)
 registerKind('patchbay', { label: 'Patchbay', icon: '⊞', extensions: ['.patchbay'] });
 
+// strata — an auditable column-oriented table. A loose-file surface: one
+// `.strata` zip document = one table. The same app core runs standalone
+// (tools/strata); only the host adapter differs (works/surfaces/strata.html).
+registerKind('strata', { label: 'Strata', icon: '▦', extensions: ['.strata'] });
+
 // The A-Bus inspector — a diagnostic surface, spawned from the Debug menu
 // (not tied to a VFS path).
 registerKind('inspector', { label: 'A-Bus Inspector', icon: '◉', extensions: [] });
