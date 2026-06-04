@@ -1345,6 +1345,37 @@ if (hexTest.ready) {
   }
 }
 
+// ── Tree: "Open as hex" context action ────────────────────────────────
+// Right-click an arbitrary (non-binary) file → Open as hex → spawns the hex
+// surface on it. Drives the real context menu (showMenu → @gcu/menu → click).
+const openAsHex = await page.evaluate(async () => {
+  const W = window.WKS;
+  await W.vfs.writeFile('/projects/note.txt', 'hello hex via open-as — any file, any surface');
+  await W.refreshTree();
+  await new Promise((r) => setTimeout(r, 250));
+  const row = [...document.querySelectorAll('.tree-row')].find((el) => el.textContent.includes('note.txt'));
+  if (!row) return { err: 'no row' };
+  const rect = row.getBoundingClientRect();
+  row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: rect.x + 12, clientY: rect.y + 5 }));
+  let item = null;
+  const dl = Date.now() + 4000;
+  while (Date.now() < dl) {
+    item = [...document.querySelectorAll('.gcu-menu-item')].find((i) => /Open as hex/.test(i.textContent || ''));
+    if (item) break;
+    await new Promise((r) => setTimeout(r, 60));
+  }
+  if (!item) return { err: 'no menu item' };
+  item.click();
+  let found = false;
+  const dl2 = Date.now() + 8000;
+  while (Date.now() < dl2) {
+    for (const rec of W.surfaces.values()) if (rec.kind === 'hex' && rec.path === '/projects/note.txt') { found = true; break; }
+    if (found) break;
+    await new Promise((r) => setTimeout(r, 80));
+  }
+  return { found };
+});
+
 // ── Install consent (capability-security §7) — never a silent install ──
 // gcupkg is CODE: a DELEGATED install (a notebook hands its OS-drop to the
 // shell over A-Bus) must PROMPT, and route to the WORKSPACE — never install
@@ -1701,6 +1732,7 @@ const checks = {
   // Hex viewer surface
   'hex: surface boots':                                    hexTest.ready === true,
   'hex: virtualized render + data inspector (int32 LE)':   hexView.ok === true,
+  'tree: "Open as hex" opens any file in the hex surface':  openAsHex.found === true,
   // Patchbay surface
   'patchbay: surface opens':          pbOpen.ready === true && pbOpen.kind === 'patchbay',
   'patchbay: canvas + rack mounted':  pbMounted && pbMounted.hasCanvas

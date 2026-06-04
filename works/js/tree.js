@@ -8,7 +8,7 @@
 import { WKS, setStatus } from './state.js';
 import { Menu } from '#menu';
 import { prompt as dlgPrompt, confirm as dlgConfirm } from '#dialog';
-import { kindDef, kindForExtension } from './surface-registry.js';
+import { kindDef, kindForExtension, kindsForRouting } from './surface-registry.js';
 import { openPath, spawnSurface } from './surfaces.js';
 import { itemsForNode as extMenuItemsForNode, dispatch as extMenuDispatch } from './context-menu-registry.js';
 import { prompt as dlgPrompt2, alert as dlgAlert2, confirm as dlgConfirm2 } from '#dialog';
@@ -450,6 +450,19 @@ async function showMenu(e, path, type) {
   // fallback so they land in the text surface.
   if (type === 'file' && kindForExtension(basename(path)))
     extras.push({ label: 'Open',                                        action: 'open' });
+  // Open-as: any file → the hex viewer (the universal one), or any loose-file
+  // surface kind from the registry. View/inspect a file in a surface other
+  // than its extension default — what makes the hex viewer reach any file.
+  if (type === 'file') {
+    extras.push({ label: 'Open as hex ⬡', action: 'open-as:hex' });
+    const openers = kindsForRouting()
+      .filter((k) => (k.extensions || []).length > 0 && k.kind !== 'hex')
+      .map((k) => {
+        const d = kindDef(k.kind) || {};
+        return { label: (d.icon ? d.icon + ' ' : '') + (d.label || k.kind), action: 'open-as:' + k.kind };
+      });
+    if (openers.length) extras.push({ label: 'Open as…', children: openers });
+  }
   // Reader entries: loose document files (synthesized one-chapter book) AND
   // book directories (a dir/project carrying a book.json). The regular reader
   // is always offered wherever a book opens — the DD-60 skin is just an extra.
@@ -534,6 +547,7 @@ async function showMenu(e, path, type) {
 
   const action = await Menu.show(items, { x: e.clientX, y: e.clientY });
   if (action === 'open') openPath(path);
+  else if (action && action.startsWith('open-as:')) spawnSurface(action.slice(8), { path, title: basename(path) });
   else if (action === 'open-reader') spawnSurface('book', { path, title: basename(path) });
   else if (action === 'open-dd60') spawnSurface('dd60', { path, title: basename(path) });
   else if (action === 'upload-here') { const p = await uploadFilePrompt(dir); if (p) await openPath(p); }
