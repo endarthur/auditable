@@ -275,7 +275,7 @@ if (target === 'works' || target === 'works-all') {
   // precede 'loom'/'strata'/'recon'/'archive' — the runtime surface inliner
   // iterates in this order, and inlining strata-app first is what brings its
   // bare @gcu/* imports into the surface text so those libs inline after it.
-  const SHARED_LIBS_BASE = ['abus', 'strata-app', 'loom', 'strata', 'vfs', 'xterm', 'geas', 'proc', 'readline', 'markdown', 'librarian', 'docview', 'katex', 'reader-core', 'capsule', 'qr', 'ipynb', 'cm6', 'menu', 'template', 'yaml', 'epub', 'archive', 'sideact', 'patchbay', 'sluice', 'recon', 'flowsheet', 'bearing', 'stereonet', 'omf1'];
+  const SHARED_LIBS_BASE = ['abus', 'strata-app', 'loom', 'strata', 'plate', 'vfs', 'xterm', 'geas', 'proc', 'readline', 'markdown', 'librarian', 'docview', 'katex', 'reader-core', 'capsule', 'qr', 'ipynb', 'cm6', 'menu', 'template', 'yaml', 'epub', 'archive', 'sideact', 'patchbay', 'sluice', 'recon', 'flowsheet', 'bearing', 'stereonet', 'omf1'];
   // For --target=works-all: bundle every ext/<name>/index.js that's a real
   // bundle (skip the re-export shims under ~1 KB — they break the
   // single-file SHARED_LIBS pattern because they import from sibling files).
@@ -698,6 +698,7 @@ if (target === 'works' || target === 'works-all') {
       deps: ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline'], extras: 'terminal' },
     { kind: 'patchbay',  file: 'works/surfaces/patchbay.html',  deps: ['abus', 'sideact', 'patchbay', 'menu'] },
     { kind: 'strata',    file: 'works/surfaces/strata.html',    deps: ['abus', 'strata-app'] },
+    { kind: 'plate',     file: 'works/surfaces/plate.html',     deps: ['abus', 'plate', 'strata', 'recon', 'archive'] },
     { kind: 'hex',       file: 'works/surfaces/hex.html',       deps: ['abus'] },
     { kind: 'encode',    file: 'works/surfaces/encode.html',    deps: ['abus'] },
     { kind: 'notebook',  file: 'auditable.html',                deps: null },

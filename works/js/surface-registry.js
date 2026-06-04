@@ -447,6 +447,14 @@ registerKind('patchbay', { label: 'Patchbay', icon: '⊞', extensions: ['.patchb
 // (tools/strata); only the host adapter differs (works/surfaces/strata.html).
 registerKind('strata', { label: 'Strata', icon: '▦', extensions: ['.strata'] });
 
+// plate — a figure compositor. A loose-file surface that opens a .strata/CSV as
+// a linked plot panel (brush ↔ a strata surface on the same file). The engine is
+// @gcu/plate; v0.1 is one plot panel + the selection contract. Registered AFTER
+// strata/preview/text so it never wins a default extension (kindForExtension
+// returns the first match) — its extensions only make it appear in the tree's
+// "Open as…" menu for tabular files (an alternative, not the default opener).
+registerKind('plate', { label: 'Plate (figure)', icon: '◫', extensions: ['.strata', '.csv', '.tsv'] });
+
 // Hex viewer — a loose-file surface for raw binary. Virtualized hex/ASCII view
 // + data inspector; the universal floor (any bytes open to something useful).
 registerKind('hex', { label: 'Hex viewer', icon: '⬡', universal: true,

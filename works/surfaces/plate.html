@@ -1,0 +1,239 @@
+<!doctype html>
+<!-- plate — a figure compositor, as an Auditable Works surface. -->
+<!-- v0.1: a page hosting ONE plot panel bound to a .strata/CSV file. The panel -->
+<!-- consumes AND produces selections over the linking contract, so a strata -->
+<!-- surface open on the SAME file brushes ↔ this plate. The engine is @gcu/plate -->
+<!-- (ext/plate); the strata-flavoured predicate evaluator is injected here so the -->
+<!-- engine stays content-agnostic. Spec: spec_inbox/plate-spec.md. -->
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>plate</title>
+<style>
+  /* @theme-tokens */
+  :root { --mono: 'Space Mono', ui-monospace, monospace; --sans: 'Barlow', system-ui, sans-serif; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #0e0e0e; color: #bbb; font-family: var(--sans); overflow: hidden; }
+
+  #toolbar {
+    position: absolute; left: 0; right: 0; top: 0; height: 38px; display: flex; align-items: center;
+    gap: 6px; padding: 0 10px; border-bottom: 1px solid #2a2a2a; background: #1a1a1a; z-index: 2;
+  }
+  #toolbar .title { font-family: var(--mono); font-size: 13px; color: #c89b3c; margin-right: 8px; }
+  #toolbar label { font-family: var(--mono); font-size: 11px; color: #777; margin-left: 6px; }
+  #toolbar select {
+    font-family: var(--mono); font-size: 12px; color: #bbb; background: #242424;
+    border: 1px solid #333; border-radius: 3px; padding: 3px 6px; max-width: 160px;
+  }
+  #toolbar select:focus { outline: none; border-color: #c89b3c; }
+  #toolbar button {
+    font-family: var(--mono); font-size: 12px; color: #bbb; background: #242424;
+    border: 1px solid #333; border-radius: 3px; padding: 4px 10px; cursor: pointer; margin-left: 8px;
+  }
+  #toolbar button:hover { background: #2e2e2e; border-color: #444; }
+  #toolbar button.on { color: #8a7dff; border-color: #4a4470; }
+  #toolbar .spacer { flex: 1; }
+  #toolbar .name { font-family: var(--mono); font-size: 12px; color: #888; }
+
+  #plate { position: absolute; left: 0; right: 0; top: 38px; bottom: 24px; background: #0e0e0e; }
+  /* the paper + the panel frame (engine sets geometry; surface styles chrome) */
+  .plate-page { background: #161616; box-shadow: 0 2px 18px rgba(0,0,0,0.5); border: 1px solid #232323; }
+  .plate-frame { border: 1px solid #232323; background: #161616; overflow: hidden; }
+
+  #empty {
+    position: absolute; inset: 38px 0 24px 0; display: flex; align-items: center; justify-content: center;
+    color: #555; font-family: var(--mono); font-size: 13px; pointer-events: none; text-align: center;
+  }
+  #empty b { color: #888; }
+
+  footer {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 24px; display: flex; align-items: center;
+    gap: 16px; padding: 0 12px; border-top: 1px solid #2a2a2a; background: #161616;
+    font-family: var(--mono); font-size: 11px; color: #777; z-index: 2;
+  }
+  footer #sel { color: #8a7dff; }
+</style>
+</head>
+<body>
+  <div id="toolbar">
+    <span class="title">plate</span>
+    <label>x</label><select id="selX" disabled></select>
+    <label>y</label><select id="selY" disabled></select>
+    <button id="btnLinked" class="on" title="React to selections from other surfaces on this file (brushing)">Linked</button>
+    <span class="spacer"></span>
+    <span class="name" id="fileName">—</span>
+  </div>
+
+  <div id="plate"></div>
+  <div id="empty"><b>loading…</b></div>
+
+  <footer>
+    <span id="meta">no file</span>
+    <span>selection: <span id="sel">—</span></span>
+  </footer>
+
+<script type="module">
+import { connect } from '../../ext/abus/index.js';
+import { createPlate } from '../../ext/plate/index.js';
+import { readStrata, tableFromCsv, evaluatePredicate } from '../../ext/strata/index.js';
+import { sniff } from '../../ext/recon/index.js';
+import { readZip } from '../../ext/archive/index.js';
+
+/* @theme-init */
+
+const $ = (s) => document.querySelector(s);
+
+// A .strata is a zip (PK magic); CSV/TSV is text. Decide by extension, fall
+// back to magic for extension-less inputs. (Mirrors strata's looksLikeStrata.)
+function looksLikeStrata(name, bytes) {
+  if (/\.strata$/i.test(name)) return true;
+  if (/\.(csv|tsv|txt)$/i.test(name)) return false;
+  return bytes[0] === 0x50 && bytes[1] === 0x4b; // 'PK'
+}
+
+// Materialize a strata table → the plate data contract:
+//   { columns:{name:values[]}, keys:[base-ordinal strings], numericColumns:[] }
+// keys are base ordinals (§4.1) — the SAME identity strata publishes, so a
+// strata surface on this file and this plate share an identity space for free.
+function buildData(table) {
+  const schema = table.schema;
+  const nrows = table.nrows;
+  const keys = new Array(nrows);
+  for (let i = 0; i < nrows; i++) keys[i] = String(i);
+  const columns = {};
+  const numericColumns = [];
+  for (let ci = 0; ci < schema.length; ci++) {
+    const name = schema[ci].name;
+    const arr = new Array(nrows);
+    let num = 0, seen = 0;
+    for (let i = 0; i < nrows; i++) {
+      const v = table.getCell(i, ci).value;
+      arr[i] = v;
+      if (v != null) { seen++; if (typeof v === 'number') num++; }
+    }
+    columns[name] = arr;
+    if (seen > 0 && num / seen >= 0.8) numericColumns.push(name);
+  }
+  return { columns, keys, numericColumns, allColumns: schema.map((s) => s.name) };
+}
+
+// The Works host adapter (the strata host interface over A-Bus; see
+// tools/strata/HOST.md). plate is READ-MOSTLY — it owns no document in v0.1, so
+// save is inert and dirty stays false; the live capability is `selection`.
+function createWorksHost(bus, tab) {
+  const path = tab.path;
+  let selEpoch = 0;
+  const sig = (member, args) => bus.signal({ path: '/', interface: 'Surface', member }, args);
+  return {
+    canOpenFiles: false,
+    get dirty() { return false; },
+    async open() { return null; },
+    async save() { return 'ok'; },          // v0.1: no .figure document yet
+    async saveAs() { return 'ok'; },
+    setDirty() {},
+    setTitle(name) { sig('TitleChanged', [name]); },
+    onFlush() {},
+    flush() {},
+    // The cross-surface selection channel. Host fills dataset (= the bound file
+    // path = identity space), origin (this surface's A-Bus name), and epoch; the
+    // app supplies kind/rows/cols/predicate. Subscribers echo-suppress + scope.
+    selection: {
+      publish(payload) {
+        bus.signal({ path: '/', interface: 'Selection', member: 'Changed' },
+          [{ dataset: path, origin: bus.uniqueName, epoch: ++selEpoch, ...payload }]);
+      },
+      subscribe(cb) {
+        return bus.subscribe({ interface: 'Selection', member: 'Changed' }, (msg) => {
+          const d = msg && msg.args && msg.args[0];
+          if (!d || d.origin === bus.uniqueName) return;   // echo
+          if (d.dataset !== path) return;                  // dataset scope
+          cb(d);
+        });
+      },
+    },
+  };
+}
+
+function fillSelect(sel, names, current) {
+  sel.innerHTML = '';
+  for (const n of names) {
+    const o = document.createElement('option');
+    o.value = n; o.textContent = n; if (n === current) o.selected = true;
+    sel.appendChild(o);
+  }
+  sel.disabled = names.length === 0;
+}
+
+window.addEventListener('message', async (ev) => {
+  if (ev.source !== window.parent) return;                 // §7.1
+  if (!ev.data || ev.data.type !== 'abus:welcome') return;
+  const { port, tab } = ev.data;
+
+  let bus;
+  try { bus = await connect(port, { client: 'plate' }); }
+  catch (e) { console.error('plate: A-Bus connect failed', e); return; }
+  installThemeSubscription(bus);                            // from @theme-init
+  try { await bus.claim('plate-' + (tab.id || '?')); } catch {}
+
+  const host = createWorksHost(bus, tab);
+
+  // Expose the §5.2 Surface contract BEFORE any signal.
+  bus.expose('/', {
+    Surface: {
+      methods: { Flush: () => host.flush(), CanClose: () => true, Relocated: () => {} },
+      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
+    },
+  });
+
+  const plate = createPlate($('#plate'), { host, evaluatePredicate });
+  let panelId = null;
+
+  // Track the selection footer (publish-side echo of what this plate brushed).
+  const origPublish = host.selection.publish.bind(host.selection);
+  host.selection.publish = (payload) => {
+    const n = payload && payload.kind === 'rows' ? (payload.rows || []).length : 0;
+    $('#sel').textContent = n ? n + ' point' + (n === 1 ? '' : 's') : '—';
+    origPublish(payload);
+  };
+
+  try {
+    const bytes = await bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [tab.path, 'bytes']);
+    const name = String(tab.path).split('/').pop();
+    const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+
+    let table;
+    if (looksLikeStrata(name, u8)) table = readStrata(u8, { readZip }).table;
+    else table = tableFromCsv(new TextDecoder().decode(u8), { sniff });
+
+    const data = buildData(table);
+    plate.setData(data);
+    panelId = plate.addPanel({ kind: 'plot' });
+
+    $('#empty').style.display = 'none';
+    $('#fileName').textContent = name;
+    $('#meta').textContent = data.keys.length + ' rows · ' + data.numericColumns.length + ' numeric cols';
+    host.setTitle(name.replace(/\.[^.]+$/, ''));
+
+    // Wire x/y column pickers to the panel spec.
+    const spec = plate.getPanelSpec(panelId) || {};
+    fillSelect($('#selX'), data.numericColumns, spec.x);
+    fillSelect($('#selY'), data.numericColumns, spec.y);
+    $('#selX').onchange = (e) => plate.setPanelSpec(panelId, { x: e.target.value });
+    $('#selY').onchange = (e) => plate.setPanelSpec(panelId, { y: e.target.value });
+
+    // The opt-in, visible linking toggle (§7 discipline).
+    const btn = $('#btnLinked');
+    const render = () => { btn.classList.toggle('on', plate.linked); btn.textContent = plate.linked ? 'Linked' : 'Link off'; };
+    btn.onclick = () => { plate.setLinked(!plate.linked); render(); };
+    render();
+  } catch (e) {
+    console.error('plate: read failed', e);
+    $('#empty').innerHTML = '<b>could not open ' + (tab.path || '') + '</b>';
+  }
+
+  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
+  window._plateSurface = { plate, host, bus, get panelId() { return panelId; } };  // smoke hook
+});
+</script>
+</body>
+</html>
