@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>hex viewer</title>
+<style>
+  /* @theme-tokens */
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    background: var(--au-surface-deep);
+    color: var(--au-fg);
+    font: 12px/1.5 ui-monospace, 'Space Mono', Menlo, monospace;
+    display: flex;
+    flex-direction: column;
+    user-select: none;
+  }
+
+  /* ── Toolbar ──────────────────────────────────────────────────────── */
+  .toolbar {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 10px;
+    background: var(--au-surface);
+    border-bottom: 1px solid var(--au-border);
+  }
+  .toolbar label { color: var(--au-fg-muted); display: flex; align-items: center; gap: 4px; }
+  .toolbar select, .toolbar input, .toolbar button {
+    font: 11px/1.4 ui-monospace, 'Space Mono', Menlo, monospace;
+    background: var(--au-surface-deep);
+    color: var(--au-fg);
+    border: 1px solid var(--au-border);
+    border-radius: 3px;
+    padding: 2px 6px;
+    outline: none;
+  }
+  .toolbar select:focus, .toolbar input:focus { border-color: var(--au-action); }
+  .toolbar button { cursor: pointer; color: var(--au-fg-muted); }
+  .toolbar button:hover { color: var(--au-fg); border-color: var(--au-fg-soft); }
+  .toolbar button.on { color: var(--au-action); border-color: var(--au-action); }
+  #goto { width: 9em; }
+  .tb-spacer { flex: 1; }
+
+  /* ── Main (hex view + inspector) ──────────────────────────────────── */
+  .main { flex: 1 1 auto; min-height: 0; display: flex; }
+
+  .hexscroll {
+    flex: 1 1 auto;
+    overflow: auto;
+    position: relative;
+    background: var(--au-surface-deep);
+  }
+  .hexsizer { position: relative; }
+  .hexrows { position: absolute; left: 0; right: 0; top: 0; will-change: transform; }
+  .hexrow { display: flex; white-space: pre; height: 18px; line-height: 18px; }
+  .h-off  { color: var(--au-fg-soft); padding: 0 12px 0 10px; }
+  .h-hex  { color: var(--au-fg); }
+  .h-asc  { color: var(--au-fg-muted); padding: 0 10px 0 14px; }
+  .h-hex .b, .h-asc .c { padding: 0; cursor: text; }
+  .h-hex .b.sel, .h-asc .c.sel { background: var(--au-selected-soft); }
+  .h-hex .b.cur, .h-asc .c.cur { background: var(--au-action); color: #fff; }
+  .h-hex .gap { padding-right: 5px; }   /* byte-group gap */
+  .h-asc .c.np { color: var(--au-fg-soft); }   /* non-printable dot */
+
+  /* ── Inspector ────────────────────────────────────────────────────── */
+  .inspector {
+    flex: none;
+    width: 232px;
+    overflow: auto;
+    background: var(--au-surface);
+    border-left: 1px solid var(--au-border);
+    padding: 8px 10px;
+  }
+  .inspector.hidden { display: none; }
+  .insp-head { color: var(--au-fg-muted); margin-bottom: 6px; }
+  .insp-head b { color: var(--au-action); }
+  table.insp { width: 100%; border-collapse: collapse; font-size: 11px; }
+  table.insp td { padding: 2px 4px; border-bottom: 1px solid var(--au-border); }
+  table.insp td.t { color: var(--au-fg-muted); white-space: nowrap; }
+  table.insp td.v { color: var(--au-fg); text-align: right; }
+  table.insp td.v2 { color: var(--au-fg-soft); text-align: right; }
+  .insp-cols { display: flex; justify-content: flex-end; gap: 10px; color: var(--au-fg-soft); margin-bottom: 2px; }
+
+  /* ── Status bar ───────────────────────────────────────────────────── */
+  .statusbar {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 4px 10px;
+    background: var(--au-surface-raised);
+    border-top: 1px solid var(--au-border);
+    color: var(--au-fg-muted);
+    font-size: 11px;
+  }
+  .statusbar b { color: var(--au-fg); font-weight: 400; }
+
+  /* ── Context menu ─────────────────────────────────────────────────── */
+  .ctxmenu {
+    position: fixed;
+    z-index: 50;
+    min-width: 168px;
+    background: var(--au-surface-raised);
+    border: 1px solid var(--au-border);
+    border-radius: 4px;
+    padding: 4px 0;
+    box-shadow: 0 4px 16px rgba(0,0,0,.4);
+  }
+  .ctxmenu.hidden { display: none; }
+  .ctxmenu .item { padding: 4px 14px; cursor: pointer; color: var(--au-fg); }
+  .ctxmenu .item:hover { background: var(--au-action); color: #fff; }
+  .ctxmenu .sep { height: 1px; background: var(--au-border); margin: 4px 0; }
+
+  /* ── Scrollbars (GCU thin) ────────────────────────────────────────── */
+  * { scrollbar-width: thin; scrollbar-color: var(--au-border) transparent; }
+  *::-webkit-scrollbar { width: 9px; height: 9px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+  *::-webkit-scrollbar-thumb { background: var(--au-border); border-radius: 4px; }
+  *::-webkit-scrollbar-thumb:hover { background: var(--au-fg-soft); }
+  *::-webkit-scrollbar-corner { background: transparent; }
+</style>
+</head>
+<body>
+<!--
+  Hex viewer surface for Auditable Works. A loose-file surface (§4.2):
+  reads the file as bytes, renders a virtualized hex/ASCII view that
+  handles any in-memory size by windowing the rows on scroll. v0 is
+  read-only on the bytes — editing (as a value overlay), regex/byte find,
+  and swapping the hand-rolled windowing for @gcu/loom are v1.
+
+  Furniture: toolbar (bytes-per-row, byte grouping, ASCII encoding, goto
+  offset, inspector toggle), a data inspector (selected offset interpreted
+  as i8..u64/f32/f64 in both endiannesses), click+drag selection, a copy
+  context menu (hex / text / C-array / base64 / decimal), and a status bar.
+-->
+<div class="toolbar">
+  <label>row <select id="bpr"><option>8</option><option selected>16</option><option>32</option></select></label>
+  <label>group <select id="grp"><option value="1">1</option><option value="2">2</option><option value="4" selected>4</option><option value="8">8</option></select></label>
+  <label>text <select id="enc"><option value="ascii" selected>ASCII</option><option value="latin1">Latin-1</option></select></label>
+  <label>goto <input id="goto" placeholder="0x… / offset" spellcheck="false"></label>
+  <span class="tb-spacer"></span>
+  <button id="inspToggle" class="on" title="Toggle the data inspector">inspector</button>
+</div>
+<div class="main">
+  <div class="hexscroll" id="scroll">
+    <div class="hexsizer" id="sizer"><div class="hexrows" id="rows"></div></div>
+  </div>
+  <div class="inspector" id="inspector">
+    <div class="insp-head">offset <b id="insp-off">—</b></div>
+    <div class="insp-cols"><span>LE</span><span>BE</span></div>
+    <table class="insp"><tbody id="insp-body"></tbody></table>
+  </div>
+</div>
+<div class="statusbar">
+  <span>offset <b id="st-off">—</b></span>
+  <span>sel <b id="st-sel">0</b></span>
+  <span class="tb-spacer"></span>
+  <span><b id="st-size">0 B</b></span>
+  <span id="st-path" style="color:var(--au-fg-soft)">—</span>
+</div>
+<div class="ctxmenu hidden" id="ctx"></div>
+<script type="module">
+import { connect } from '../../ext/abus/index.js';
+
+/* @theme-init */
+
+// ── State ─────────────────────────────────────────────────────────────
+let bytes = new Uint8Array(0);
+let bytesPerRow = 16;
+let grouping = 4;
+let encoding = 'ascii';
+let cursor = 0;           // current byte offset
+let selStart = 0, selEnd = 0;   // inclusive selection range [min,max]
+let dragging = false;
+let inspectorOn = true;
+const ROW_H = 18;
+let bus = null, filePath = '';
+
+const $ = (id) => document.getElementById(id);
+const scroll = $('scroll'), sizer = $('sizer'), rowsEl = $('rows'), ctx = $('ctx');
+const inspector = $('inspector'), inspOff = $('insp-off'), inspBody = $('insp-body');
+
+const hex2 = (n) => n.toString(16).padStart(2, '0');
+const fmtBytes = (n) => n < 1024 ? n + ' B'
+  : n < 1048576 ? (n / 1024).toFixed(1) + ' KB'
+  : (n / 1048576).toFixed(2) + ' MB';
+const basename = (p) => p.split('/').filter(Boolean).pop() || p;
+const offWidth = () => Math.max(6, bytes.length.toString(16).length);
+const totalRows = () => Math.max(1, Math.ceil(bytes.length / bytesPerRow));
+const isPrintable = (b) => encoding === 'latin1'
+  ? (b >= 0x20 && b !== 0x7f && b !== 0xa0) : (b >= 0x20 && b < 0x7f);
+
+// ── Virtualized render ────────────────────────────────────────────────
+let lastFirst = -1;
+function layout() {
+  sizer.style.height = (totalRows() * ROW_H) + 'px';
+  lastFirst = -1;
+  render(true);
+}
+function render(force) {
+  const first = Math.max(0, Math.floor(scroll.scrollTop / ROW_H) - 2);
+  if (!force && first === lastFirst) return;
+  lastFirst = first;
+  const visN = Math.ceil(scroll.clientHeight / ROW_H) + 4;
+  const last = Math.min(totalRows(), first + visN);
+  const ow = offWidth();
+  const lo = Math.min(selStart, selEnd), hi = Math.max(selStart, selEnd);
+  let html = '';
+  for (let r = first; r < last; r++) {
+    const base = r * bytesPerRow;
+    let hexCol = '', ascCol = '';
+    for (let i = 0; i < bytesPerRow; i++) {
+      const off = base + i;
+      const gap = (grouping && i > 0 && i % grouping === 0) ? ' gap' : '';
+      if (off < bytes.length) {
+        const b = bytes[off];
+        const cls = off === cursor ? 'cur' : (off >= lo && off <= hi ? 'sel' : '');
+        hexCol += `<span class="b${gap ? ' gap' : ''} ${cls}" data-o="${off}">${hex2(b)}</span> `;
+        const ch = isPrintable(b) ? String.fromCharCode(b) : '.';
+        const np = isPrintable(b) ? '' : ' np';
+        ascCol += `<span class="c${cls ? ' ' + cls : ''}${np}" data-o="${off}">${ch === '<' ? '&lt;' : ch === '&' ? '&amp;' : ch}</span>`;
+      } else {
+        hexCol += `<span class="b${gap ? ' gap' : ''}">  </span> `;
+        ascCol += ' ';
+      }
+    }
+    html += `<div class="hexrow"><span class="h-off">${base.toString(16).padStart(ow, '0')}</span>`
+          + `<span class="h-hex">${hexCol}</span><span class="h-asc">${ascCol}</span></div>`;
+  }
+  rowsEl.style.transform = `translateY(${first * ROW_H}px)`;
+  rowsEl.innerHTML = html;
+}
+scroll.addEventListener('scroll', () => requestAnimationFrame(() => render(false)));
+window.addEventListener('resize', () => render(true));
+
+// ── Selection ─────────────────────────────────────────────────────────
+function offsetFromEvent(e) {
+  const el = e.target.closest('[data-o]');
+  return el ? parseInt(el.dataset.o, 10) : -1;
+}
+function setCursor(off, extend) {
+  if (off < 0 || off >= bytes.length) return;
+  cursor = off;
+  if (!extend) selStart = off;
+  selEnd = off;
+  render(true);
+  updateInspector();
+  updateStatus();
+}
+rowsEl.addEventListener('mousedown', (e) => {
+  const off = offsetFromEvent(e);
+  if (off < 0) return;
+  dragging = true;
+  setCursor(off, e.shiftKey);
+  e.preventDefault();
+});
+rowsEl.addEventListener('mousemove', (e) => {
+  if (!dragging) return;
+  const off = offsetFromEvent(e);
+  if (off >= 0 && off !== selEnd) { cursor = off; selEnd = off; render(true); updateInspector(); updateStatus(); }
+});
+window.addEventListener('mouseup', () => { dragging = false; });
+
+// ── Data inspector ────────────────────────────────────────────────────
+function fmtFloat(v) { return Number.isFinite(v) ? String(+v.toPrecision(8)) : String(v); }
+function updateInspector() {
+  if (!inspectorOn) return;
+  const off = cursor;
+  inspOff.textContent = '0x' + off.toString(16) + ' · ' + off;
+  if (off < 0 || off >= bytes.length) { inspBody.innerHTML = ''; return; }
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const rem = bytes.length - off;
+  const rd = (size, fn) => rem >= size ? String(fn()) : '—';
+  const b = bytes[off];
+  const rows = [
+    ['byte', `${hex2(b)} · ${b} · ${b.toString(2).padStart(8, '0')}`, null],
+    ['int8',   dv.getInt8(off), null],
+    ['uint8',  dv.getUint8(off), null],
+    ['int16',  rd(2, () => dv.getInt16(off, true)),  rd(2, () => dv.getInt16(off, false))],
+    ['uint16', rd(2, () => dv.getUint16(off, true)), rd(2, () => dv.getUint16(off, false))],
+    ['int32',  rd(4, () => dv.getInt32(off, true)),  rd(4, () => dv.getInt32(off, false))],
+    ['uint32', rd(4, () => dv.getUint32(off, true)), rd(4, () => dv.getUint32(off, false))],
+    ['int64',  rd(8, () => dv.getBigInt64(off, true)),  rd(8, () => dv.getBigInt64(off, false))],
+    ['uint64', rd(8, () => dv.getBigUint64(off, true)), rd(8, () => dv.getBigUint64(off, false))],
+    ['f32',    rd(4, () => fmtFloat(dv.getFloat32(off, true))),  rd(4, () => fmtFloat(dv.getFloat32(off, false)))],
+    ['f64',    rd(8, () => fmtFloat(dv.getFloat64(off, true))),  rd(8, () => fmtFloat(dv.getFloat64(off, false)))],
+  ];
+  inspBody.innerHTML = rows.map(([t, le, be]) =>
+    `<tr><td class="t">${t}</td>` +
+    (be === null ? `<td class="v" colspan="2">${le}</td>` : `<td class="v">${le}</td><td class="v2">${be}</td>`) +
+    `</tr>`).join('');
+}
+
+// ── Status bar ────────────────────────────────────────────────────────
+function updateStatus() {
+  $('st-off').textContent = '0x' + cursor.toString(16) + ' · ' + cursor;
+  $('st-sel').textContent = (Math.abs(selEnd - selStart) + 1);
+  $('st-size').textContent = fmtBytes(bytes.length);
+}
+
+// ── Toolbar ───────────────────────────────────────────────────────────
+$('bpr').addEventListener('change', (e) => { bytesPerRow = +e.target.value; layout(); });
+$('grp').addEventListener('change', (e) => { grouping = +e.target.value; render(true); });
+$('enc').addEventListener('change', (e) => { encoding = e.target.value; render(true); });
+$('inspToggle').addEventListener('click', () => {
+  inspectorOn = !inspectorOn;
+  inspector.classList.toggle('hidden', !inspectorOn);
+  $('inspToggle').classList.toggle('on', inspectorOn);
+  if (inspectorOn) updateInspector();
+});
+function gotoOffset(text) {
+  const t = (text || '').trim();
+  if (!t) return;
+  const off = t.startsWith('0x') || t.startsWith('0X') ? parseInt(t, 16) : parseInt(t, 10);
+  if (!Number.isFinite(off) || off < 0 || off >= bytes.length) return;
+  setCursor(off, false);
+  scroll.scrollTop = Math.max(0, Math.floor(off / bytesPerRow) - 4) * ROW_H;
+  render(true);
+}
+$('goto').addEventListener('keydown', (e) => { if (e.key === 'Enter') gotoOffset(e.target.value); });
+
+// ── Context menu (copy ops over the selection) ────────────────────────
+function selBytes() {
+  const lo = Math.min(selStart, selEnd), hi = Math.max(selStart, selEnd);
+  return bytes.subarray(lo, hi + 1);
+}
+async function copy(text) {
+  try { await navigator.clipboard.writeText(text); }
+  catch { /* clipboard may be blocked on file://; best-effort */ }
+}
+const COPIES = {
+  'Copy hex':       () => copy([...selBytes()].map(hex2).join(' ')),
+  'Copy text':      () => copy([...selBytes()].map((b) => isPrintable(b) ? String.fromCharCode(b) : '.').join('')),
+  'Copy C array':   () => copy('{ ' + [...selBytes()].map((b) => '0x' + hex2(b)).join(', ') + ' }'),
+  'Copy base64':    () => copy(btoa(String.fromCharCode(...selBytes()))),
+  'Copy decimal':   () => copy([...selBytes()].join(' ')),
+};
+function showCtx(x, y) {
+  ctx.innerHTML = Object.keys(COPIES).map((k) => `<div class="item" data-a="${k}">${k}</div>`).join('')
+    + '<div class="sep"></div><div class="item" data-a="goto">Goto offset…</div>';
+  ctx.style.left = Math.min(x, window.innerWidth - 180) + 'px';
+  ctx.style.top = Math.min(y, window.innerHeight - 180) + 'px';
+  ctx.classList.remove('hidden');
+}
+rowsEl.addEventListener('contextmenu', (e) => {
+  const off = offsetFromEvent(e);
+  if (off >= 0 && (off < Math.min(selStart, selEnd) || off > Math.max(selStart, selEnd))) setCursor(off, false);
+  e.preventDefault();
+  showCtx(e.clientX, e.clientY);
+});
+ctx.addEventListener('click', (e) => {
+  const a = e.target.closest('[data-a]'); if (!a) return;
+  ctx.classList.add('hidden');
+  if (a.dataset.a === 'goto') { const v = window.prompt('Go to offset (0x… or decimal):'); if (v != null) gotoOffset(v); return; }
+  (COPIES[a.dataset.a] || (() => {}))();
+});
+window.addEventListener('mousedown', (e) => { if (!ctx.contains(e.target)) ctx.classList.add('hidden'); });
+
+// ── A-Bus boot ────────────────────────────────────────────────────────
+window.addEventListener('message', async (ev) => {
+  if (ev.source !== window.parent) return;
+  if (!ev.data || ev.data.type !== 'abus:welcome') return;
+  const { port, tab } = ev.data;
+
+  filePath = tab.path || '';
+  $('st-path').textContent = filePath;
+
+  try { bus = await connect(port, { client: 'hex-surface' }); }
+  catch (e) { document.body.textContent = 'connect failed: ' + e.message; return; }
+  if (typeof installThemeSubscription === 'function') installThemeSubscription(bus);
+
+  try {
+    const data = await bus.call(
+      { to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [filePath, 'bytes']);
+    bytes = data instanceof Uint8Array ? data
+          : (data && data.buffer) ? new Uint8Array(data.buffer)
+          : new Uint8Array(0);
+  } catch { bytes = new Uint8Array(0); }
+
+  cursor = selStart = selEnd = 0;
+  layout();
+  updateInspector();
+  updateStatus();
+
+  bus.expose('/', {
+    Surface: {
+      methods: {
+        Flush:     () => {},          // read-only — nothing to persist
+        CanClose:  () => true,
+        Relocated: (p) => { filePath = p; $('st-path').textContent = p;
+          bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, [basename(p)]); },
+      },
+      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
+    },
+  });
+  bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, [basename(filePath)]);
+  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
+
+  // Test/debug hook — works-smoke reaches in via this.
+  window._hex = { get bytes() { return bytes; }, setCursor, gotoOffset,
+    state: () => ({ cursor, selStart, selEnd, bytesPerRow, len: bytes.length }) };
+});
+</script>
+</body>
+</html>

@@ -1311,6 +1311,40 @@ const layout = await page.evaluate(async (gcudatArr) => {
 // works.html must run from file:// — every surface is an embedded payload,
 // blob-URL'd on spawn, so it loads same-origin with the shell. The rest of
 // this smoke runs over HTTP, which never exercises this.
+// ── Hex viewer surface ─────────────────────────────────────────────────
+// Loose-file surface: reads bytes, renders a virtualized hex/ASCII view + a
+// data inspector. Verify it boots, renders rows, and the inspector computes
+// the right int32-LE at the cursor.
+const hexTest = await page.evaluate(async () => {
+  const W = window.WKS;
+  const buf = new Uint8Array(64);
+  buf[0] = 0x78; buf[1] = 0x56; buf[2] = 0x34; buf[3] = 0x12;   // int32 LE @0 = 305419896
+  for (let i = 4; i < 64; i++) buf[i] = i;
+  await W.vfs.writeFile('/projects/test.bin', buf);
+  const tabId = W.spawnSurface('hex', { path: '/projects/test.bin', title: 'test.bin' });
+  const rec = W.surfaces.get(tabId);
+  const dl = Date.now() + 20000;
+  while (rec && !rec.ready && Date.now() < dl) await new Promise((r) => setTimeout(r, 80));
+  return { tabId, ready: !!(rec && rec.ready) };
+});
+let hexView = { ok: false };
+if (hexTest.ready) {
+  const fr = await surfaceFrame(hexTest.tabId);
+  if (fr) {
+    hexView = await fr.evaluate(async () => {
+      const dl = Date.now() + 6000;
+      while (Date.now() < dl && !(window._hex && window._hex.state().len === 64)) await new Promise((r) => setTimeout(r, 60));
+      const st = window._hex ? window._hex.state() : null;
+      const rows = document.querySelectorAll('.hexrow').length;
+      if (window._hex) window._hex.setCursor(0, false);
+      await new Promise((r) => setTimeout(r, 60));
+      const insp = document.getElementById('insp-body').textContent;
+      return { len: st && st.len, rows, hasInt32: insp.includes('305419896') };
+    });
+    hexView.ok = hexView.len === 64 && hexView.rows > 0 && hexView.hasInt32;
+  }
+}
+
 // ── Install consent (capability-security §7) — never a silent install ──
 // gcupkg is CODE: a DELEGATED install (a notebook hands its OS-drop to the
 // shell over A-Bus) must PROMPT, and route to the WORKSPACE — never install
@@ -1664,6 +1698,9 @@ const checks = {
   'install: Cancel leaves nothing installed':                   installConsent.cancelled === true && installConsent.installed === false,
   'install: delegated .gcudat routes to the workspace library': dataDelegate.installed === true && dataDelegate.landed === true,
   'install: .gcudat toggle ON prompts + dismiss installs nothing': dataToggle.prompted === true && dataToggle.landed === false,
+  // Hex viewer surface
+  'hex: surface boots':                                    hexTest.ready === true,
+  'hex: virtualized render + data inspector (int32 LE)':   hexView.ok === true,
   // Patchbay surface
   'patchbay: surface opens':          pbOpen.ready === true && pbOpen.kind === 'patchbay',
   'patchbay: canvas + rack mounted':  pbMounted && pbMounted.hasCanvas

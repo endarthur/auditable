@@ -698,6 +698,7 @@ if (target === 'works' || target === 'works-all') {
       deps: ['abus', 'vfs', 'xterm', 'geas', 'proc', 'readline'], extras: 'terminal' },
     { kind: 'patchbay',  file: 'works/surfaces/patchbay.html',  deps: ['abus', 'sideact', 'patchbay', 'menu'] },
     { kind: 'strata',    file: 'works/surfaces/strata.html',    deps: ['abus', 'strata-app'] },
+    { kind: 'hex',       file: 'works/surfaces/hex.html',       deps: ['abus'] },
     { kind: 'notebook',  file: 'auditable.html',                deps: null },
   ]) {
     const sp = path.join(__dirname, s.file);

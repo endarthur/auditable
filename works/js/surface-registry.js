@@ -440,6 +440,11 @@ registerKind('patchbay', { label: 'Patchbay', icon: '⊞', extensions: ['.patchb
 // (tools/strata); only the host adapter differs (works/surfaces/strata.html).
 registerKind('strata', { label: 'Strata', icon: '▦', extensions: ['.strata'] });
 
+// Hex viewer — a loose-file surface for raw binary. Virtualized hex/ASCII view
+// + data inspector; the universal floor (any bytes open to something useful).
+registerKind('hex', { label: 'Hex viewer', icon: '⬡',
+  extensions: ['.bin', '.dat', '.hex', '.wasm', '.img', '.rom'] });
+
 // The A-Bus inspector — a diagnostic surface, spawned from the Debug menu
 // (not tied to a VFS path).
 registerKind('inspector', { label: 'A-Bus Inspector', icon: '◉', extensions: [] });
