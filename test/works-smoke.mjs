@@ -1311,6 +1311,39 @@ const layout = await page.evaluate(async (gcudatArr) => {
 // works.html must run from file:// — every surface is an embedded payload,
 // blob-URL'd on spawn, so it loads same-origin with the shell. The rest of
 // this smoke runs over HTTP, which never exercises this.
+// ── Red-team: realm isolation (capability-security spec §1/§9) ────────
+// From INSIDE a surface's realm, try to reach the shell realm
+// (window.parent.WKS). Same-origin → the property read succeeds (NO isolation);
+// cross/opaque-origin → SecurityError. Surfaces today load from shell-created
+// blob: URLs, which are SAME-ORIGIN with the shell — so over HTTP a surface CAN
+// reach the shell realm, broker, and VFS. This is the §9 ★ TCB gap, executable.
+// Reported below as EXPECTED-FAIL rather than a hard `checks` entry, so the smoke
+// isn't left permanently red while the sandbox fix is pending; once createSurface
+// adds `sandbox` (without allow-same-origin) the reach becomes a SecurityError
+// and these should be PROMOTED into `checks` as hard regression guards.
+async function realmProbe() {
+  const tabId = await page.evaluate(async () => {
+    const W = window.WKS;
+    const id = W.spawnSurface('stub', { path: '/projects', title: 'RedTeam' });
+    const rec = W.surfaces.get(id);
+    const dl = Date.now() + 10000;
+    while (rec && !rec.ready && Date.now() < dl) await new Promise((r) => setTimeout(r, 50));
+    return id;
+  });
+  const frame = await surfaceFrame(tabId);
+  if (!frame) return { reached: null, error: 'no frame' };
+  return await frame.evaluate(() => {
+    const r = { reached: false, broker: false, vfs: false, error: null };
+    try {
+      const p = window.parent;       // holding the reference is allowed cross-origin
+      r.reached = !!(p && p.WKS);    // the property READ throws if cross-origin
+      if (r.reached) { r.broker = !!p.WKS.broker; r.vfs = !!p.WKS.vfs; }
+    } catch (e) { r.error = String((e && e.name) || e); }
+    return r;
+  });
+}
+const httpRealm = await realmProbe();
+
 await page.goto(pathToFileURL(path.join(root, 'works.html')).href);
 await page.waitForFunction(
   () => window.WKS && window.WKS.vfs && window.WKS.broker,
@@ -1326,6 +1359,11 @@ const fileMode = await page.evaluate(async () => {
   }
   return { booted: true, proto: location.protocol, surfaceReady: !!(rec && rec.ready) };
 });
+
+// Red-team probe on file:// — blob:null surfaces get incidental opaque-origin
+// isolation here (file-ops.js already treats them as cross-origin), so the reach
+// SHOULD already be a SecurityError. Contrast with httpRealm above.
+const fileRealm = await realmProbe();
 
 // A terminal surface must also boot from file:// — the geas Worker is
 // spawned from a blob URL the surface decompresses, which has its own
@@ -1585,6 +1623,17 @@ if (errors.length) {
 }
 console.log('status: ' + JSON.stringify(shell.status)
   + ' | surface: ' + JSON.stringify(surface));
+
+console.log('--- red-team: realm isolation (capability-security §1/§9 — expected-fail until sandbox) ---');
+console.log(`  HTTP    surface→shell reach: ${httpRealm.reached}`
+  + (httpRealm.reached
+      ? `  ⚠ GAP — same-origin blob: URL, no isolation (broker=${httpRealm.broker} vfs=${httpRealm.vfs})`
+      : `  ✓ isolated (${httpRealm.error || 'unreachable'})`));
+console.log(`  file:// surface→shell reach: ${fileRealm.reached}`
+  + (fileRealm.reached
+      ? '  ⚠ reachable'
+      : `  ✓ isolated (incidental blob:null opaque origin — ${fileRealm.error || 'unreachable'})`));
+console.log('  target: both false; promote to hard `checks` once createSurface sandboxes the iframe.');
 
 await browser.close();
 server.close();
