@@ -18,6 +18,26 @@ real consumers (strata + plate):
 > VFS-project host (`src/js/host.js`, `provideVFS`/`persist`) is a different,
 > heavier shape folded in later. Contract + rationale: `tools/strata/HOST.md`.
 
+## Building a GCU tool in another repo?
+
+If you have an HTML tool elsewhere and want it to embed as an Auditable Works
+surface — and brush/link with strata and other surfaces — **this package is the
+contract**. The full reading order is in **`INTEROP.md`** at the repo root; the
+short version:
+
+1. **`ext/surface/SPEC.md`** — the contract itself: the §5.2 Surface lifecycle ABI
+   and the selection/linking contract, both committed and self-contained.
+2. **`works/SURFACES.md`** — the 12-section authoring guide + a worked boot
+   template + reference surfaces in reading order.
+3. **`@gcu/abus`** (`ext/abus`) — the message bus surfaces coordinate over; **`@gcu/vfs`**
+   (`ext/vfs`) — the workspace filesystem they read/write.
+4. **`@gcu/sift`** (`ext/sift`) — the safe predicate lib a `kind:"filter"` selection
+   carries (only if you brush by rule, not just by enumerated rows).
+5. **`ext/EXTENSION_SPEC.md`** — packaging a standalone surface as a `.gcupkg`.
+
+`@gcu/surface` is zero-dep and host-agnostic, so you write your tool's core once
+and hand it a host adapter (`createWorksHost` for Works; your own for standalone).
+
 ## Quickstart
 
 ```js

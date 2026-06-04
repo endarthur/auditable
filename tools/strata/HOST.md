@@ -12,10 +12,12 @@ This interface is deliberately kept **strata-local** and **unnamed**. It is the
 This doc is the artifact that should be open on the table at extraction time: the
 contract, the rationale, and the open questions the chart must answer.
 
-> Status: design-in-progress (2026-06-02). Promotes to `ext/surface/SPEC.md` when
-> `@gcu/surface` is extracted. Supporting breadcrumbs: the `project_strata_design`
-> memory, the `strata:` commit messages, `works/SURFACES.md` (§4.2 loose-file, §9
-> build), and `spec_inbox/strata-spec.md` §7 (the surface forcing-function design).
+> Status: PROMOTED (2026-06-04). `@gcu/surface` is extracted and its
+> `ext/surface/SPEC.md` is now the canonical, committed home of the host + §5.2 +
+> selection/linking contract. This file remains the worked-example narrative — the
+> contract's first derivation and the *why* behind the decisions. Supporting
+> breadcrumbs: `works/SURFACES.md` (§4.2 loose-file, §9 build) and the `strata:` /
+> `surface:` commit messages.
 
 ---
 

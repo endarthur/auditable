@@ -45,6 +45,95 @@ question #1: **open/save is a *capability*, not the core.** The irreducible core
 what it backs). `createWorksHost`'s `readMostly` cap is exactly this split made
 concrete: a viewer and an editor are the same adapter with one flag.
 
+## The §5.2 Surface ABI (the lifecycle contract)
+
+Every surface — whatever it edits or views — exposes the same small A-Bus
+interface on path `/`, and the shell drives it. `bootSurface` exposes this for you
+from the host's methods; this is what it speaks.
+
+**Methods the surface implements:**
+
+```
+Surface.Flush()      → void     persist edits now. Called at save barriers
+                                 (Ctrl+S, before close, before workspace export).
+                                 Idempotent. Generous timeout (~5 s) — a miss
+                                 warns, doesn't block the save.
+Surface.CanClose()   → boolean  veto a close. Read-only surfaces return true;
+                                 writable ones usually return true and block on
+                                 Flush instead (better UX than a modal prompt).
+Surface.Relocated(p) → void     the shell moved your project/file; future writes
+                                 target the new path.
+```
+
+**Signals the surface emits:**
+
+```
+DirtyChanged(boolean)  true on first unflushed edit, false after a flush.
+TitleChanged(string)   tab label changed (rename, title edit) — emit on init too.
+Ready()                exactly once, LAST, when mounted and the methods will succeed.
+```
+
+**Lifecycle:** parent posts `{type:'abus:welcome', port, tab, home}` → connect
+A-Bus → initialise (read the file, build UI) → **expose the contract** → emit
+`TitleChanged` + `Ready` → operate → eventually `Flush` + close. The surface MUST
+NOT emit `Ready` before exposing the contract — the shell calls your methods the
+moment `Ready` fires. (`bootSurface` enforces the order.)
+
+## The selection / linking contract (brushing across surfaces)
+
+This is how a brush in one surface lights up the matching rows in another (and the
+reason `@gcu/sift` exists). A selection is a small, **semantic, serializable**
+description of *which rows of which dataset* a surface is highlighting, broadcast
+on a shared A-Bus channel and echo-suppressed.
+
+**The descriptor** (emitted by any participating surface; consumed by any surface
+bound to the same dataset):
+
+```
+Selection = {
+  dataset: string,    // identity space — the source file's VFS path (v1)
+  key:     string,    // the key field naming rows (e.g. "hole_id"; "#row" = base ordinal)
+  origin:  string,    // the emitter's A-Bus uniqueName — for echo suppression
+  epoch:   number,    // monotonic per-origin — last-writer-wins ordering
+  kind:    "rows" | "cols" | "cells" | "filter" | "none",
+  rows?:   string[],      // kind:"rows"/"cells" — KEY VALUES, never positions
+  cols?:   string[],      // kind:"cols"/"cells" — column names
+  predicate?: Predicate,  // kind:"filter" — a @gcu/sift structured spec (no JS string)
+}
+```
+
+- **Semantic, never positional** (the cardinal rule): rows are named by key
+  *values*, never indices — a sort in the emitter must not scramble the receiver.
+- **The dual:** *enumerated* (`rows`/`cols`/`cells`) for small/lasso selections;
+  *predicate* (`filter`) for large/rule-based ones. `kind:"none"` clears.
+- **The predicate is a `@gcu/sift` spec, never a JS string** — walked, never
+  `eval`'d, so an untrusted surface can act on it safely. Users type
+  `grade > 2`; the *emitter* parses to the spec (`@gcu/sift` `parsePredicate`);
+  only the spec travels. Full-JS power stays in owner-evaluated derived columns.
+
+**The bus channel:**
+
+- **Transport** — a `Selection` interface broadcast signal: emit
+  `bus.signal({ path:'/', interface:'Selection', member:'Changed' }, [descriptor])`
+  and `bus.subscribe` to the same.
+- **Opt-in + visible** — a surface reacts only when its "Linked" toggle is on;
+  forced universal linking is chaos.
+- **Echo suppression** — ignore any descriptor whose `origin` is your own.
+- **Dataset scope** — interpret only descriptors whose `dataset` matches yours.
+- **Coalesce + commit-by-default** — publish on commit (mouse-up / Enter), not
+  per-drag-pixel; lean on A-Bus consumer-side coalescing.
+- **Ordering** — `epoch` (monotonic per origin) gives last-writer-wins.
+
+`createWorksHost`'s `host.selection = { publish, subscribe }` implements all of
+this: the host fills `dataset`/`origin`/`epoch` and echo-suppresses + scopes; the
+app supplies `kind`/`rows`/`cols`/`predicate`.
+
+**Trusted tier (reserved seam):** `predicate.form` tags the predicate — `"spec"`
+is the safe universal floor every surface evaluates; `"js"` is reserved for
+privileged/trusted surfaces only (a sandboxed surface never evaluates a `form` it
+doesn't trust). Designing the tag in now keeps the elevated tier a capability
+check, never a contract break.
+
 ## Architecture notes
 
 - **Zero-dep leaf.** `connect` (`@gcu/abus`) is injected, not imported — the
@@ -56,8 +145,19 @@ concrete: a viewer and an editor are the same adapter with one flag.
 - **Selection descriptor** follows the selection/linking contract: `{ dataset,
   origin, epoch, kind, rows?/cols?/predicate? }`, echo-suppressed + dataset-scoped.
 
+## Canonical home
+
+This SPEC is the **committed, self-contained** home of the Works surface contract:
+the §5.2 lifecycle ABI and the selection/linking contract above are graduated here
+(out of internal design drafts) so a tool in *another* repo can read just this file
+and `works/SURFACES.md` to build a conforming surface. `tools/strata/HOST.md`
+remains the worked-example narrative (the contract's first derivation);
+`@gcu/sift`'s SPEC owns the predicate grammar that rides the selection channel.
+Start at **`INTEROP.md`** (repo root) for the full reading order.
+
 ## Versioning
 
 Pre-1.0. The contract is expected to grow as the standalone + notebook hosts fold
-in (and `@gcu/sift` predicates ride the selection channel). When that lands,
-`tools/strata/HOST.md`'s contract section graduates fully into this SPEC.
+in. New capabilities are feature-detected (an adapter provides only what it backs),
+so additions don't break existing surfaces; the `predicate.form` tag keeps the
+trusted tier additive too.

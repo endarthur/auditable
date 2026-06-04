@@ -19,8 +19,10 @@ distinctness: **content-agnostic** panels over GCU domain libs, **live + linked*
 via the selection contract, in a Works surface, exporting via the GCU print stack.
 
 It converges with `@gcu/osjs`'s `@gcu/compo` (a figure composer arrived at from
-the stereonet side) — same engine, two directions; plate extracts from both.
-Full design rationale: `spec_inbox/plate-spec.md`.
+the stereonet side) — same engine, two directions; plate extracts from both. The
+contract plate's panels speak (the selection/linking channel) is committed in
+`ext/surface/SPEC.md`; the broader design rationale lives in the project's internal
+design notes.
 
 ## Premise
 

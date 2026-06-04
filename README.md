@@ -293,6 +293,8 @@ npm run build:works              # both
 
 Works embeds the full auditable runtime, so new notebooks created inside Works are fully self-contained -- save one out and it works standalone.
 
+**building a surface / interoperating:** to make a tool (in this repo or another GCU project) embed as a Works surface and brush/link with others, start at [`INTEROP.md`](INTEROP.md) -- the committed front door to the surface contract (`ext/surface/SPEC.md`), the authoring guide (`works/SURFACES.md`), and the A-Bus/VFS libs.
+
 ## calque -- spreadsheet language editor
 
 `tools/calque/index.html` is a standalone editor for the calque spreadsheet language. write calque source, see a live spreadsheet grid, export to xlsx.

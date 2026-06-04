@@ -29,7 +29,7 @@ derived columns, which never cross the bus.
 
 Spec: `Predicate = { form, root: Expr }`. `form:"spec"` is the universal floor
 every surface speaks; `form:"js"` is the reserved elevated tier, evaluated only
-by trusted/privileged surfaces (selection/linking contract §6).
+by trusted/privileged surfaces (the trusted-tier seam in `ext/surface/SPEC.md`).
 
 ## Lineage
 
@@ -49,5 +49,6 @@ duplication — sift is the single owner.
 
 ## Versioning
 
-Pre-1.0. The spec shape follows the selection/linking contract
-(`spec_inbox/selection-linking-contract.md` §2); changes there drive changes here.
+Pre-1.0. The spec shape follows the selection/linking contract, whose committed
+home is `ext/surface/SPEC.md` (§ "The selection / linking contract"); changes
+there drive changes here.
