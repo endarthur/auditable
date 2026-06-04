@@ -199,6 +199,7 @@ export function getSettings() {
   if (window._sizeCompareRef === 'content') s.sizeCompareRef = 'content';
   if (_embedFonts) s.embedFonts = true;
   if (window._auditableLicensesStrict) s.licensesStrict = true;
+  if (window._auditableConfirmDataPackInstall) s.confirmDataPackInstall = true;
   return s;
 }
 
@@ -215,6 +216,7 @@ export function applySettings(s) {
   if (s.editorView) applyEditorView(s.editorView);
   if (s.embedFonts !== undefined) applyEmbedFonts(s.embedFonts);
   if (s.licensesStrict !== undefined) applyLicensesStrict(s.licensesStrict);
+  if (s.confirmDataPackInstall !== undefined) applyConfirmDataPackInstall(s.confirmDataPackInstall);
   if (s.preferredCodeType) setPreferredCodeType(s.preferredCodeType);
   // optional: size-compare.js (typeof guards for --lean builds without it)
   if (s.sizeCompare !== undefined && typeof applySizeCompare === 'function') applySizeCompare(s.sizeCompare);
@@ -415,6 +417,13 @@ export function removeModule(url) {
 // Strict mode flips a window-level flag read by cell-builtins/modules.js
 // at install() time. When true, install() throws on copyleft/unknown
 // licenses (the user must remove the install or relax the policy).
+
+export function applyConfirmDataPackInstall(on) {
+  window._auditableConfirmDataPackInstall = !!on;
+  const sel = $('#setConfirmDataPack');
+  if (sel) sel.value = on ? 'on' : 'off';
+  hooks.emit("notebook:dirty");
+}
 
 export function applyLicensesStrict(on) {
   window._auditableLicensesStrict = !!on;

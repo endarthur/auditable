@@ -305,6 +305,14 @@ async function _installDroppedGcudat(file) {
   }
   const vfs = window._notebookVFS;
   if (!vfs) { setMsg('data pack drop: no notebook filesystem', 'err'); return; }
+  // Optional consent — gated by the "on .gcudat install" setting (default off,
+  // since data packs are inert). gcupkg extensions (code) always prompt.
+  if (window._auditableConfirmDataPackInstall) {
+    const ok = await dialogConfirm(
+      `Install data pack ${file.name}?\n\nInstalls to this notebook (read via std.data).`,
+      { title: 'Install data pack', okLabel: 'Install' });
+    if (!ok) { setMsg('data pack install cancelled', 'ok'); return; }
+  }
   try {
     const { dir, manifest } = await installDataPack(vfs, bytes);   // shared pure installer
     const name = dir.split('/').pop();

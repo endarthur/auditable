@@ -139,6 +139,16 @@
     the workspace grant travels with workspace export. Revoke any time.
   </div>
 
+  <h2>Installs</h2>
+  <div class="row">
+    <label for="confirmDataPack">Confirm data-pack installs</label>
+    <input type="checkbox" id="confirmDataPack">
+  </div>
+  <div class="hint">
+    Ask before installing a dropped <code>.gcudat</code> data pack.
+    <code>.gcupkg</code> extensions (code) always ask.
+  </div>
+
   <h2>Licenses</h2>
   <div id="licensesSummary" class="hint" style="margin-bottom:6px"></div>
   <div class="licenses-list" id="licensesList">
@@ -181,6 +191,7 @@ async function loadSettings() {
     { to: 'works', path: '/', interface: 'Settings', member: 'Get' }, []);
   $('theme').value = settings.appearance?.theme || 'dark';
   $('fontSize').value = settings.appearance?.fontSize || 13;
+  $('confirmDataPack').checked = settings.confirmDataPackInstall === true;
 }
 
 async function saveSettings() {
@@ -190,6 +201,7 @@ async function saveSettings() {
     theme: $('theme').value,
     fontSize: parseInt($('fontSize').value, 10) || 13,
   };
+  settings.confirmDataPackInstall = $('confirmDataPack').checked;
   await bus.call(
     { to: 'works', path: '/', interface: 'Settings', member: 'Set' }, [settings]);
   flashSaved('saved');
@@ -405,6 +417,7 @@ window.addEventListener('message', async (ev) => {
   // Auto-save on every change.
   $('theme').addEventListener('change', saveSettings);
   $('fontSize').addEventListener('change', saveSettings);
+  $('confirmDataPack').addEventListener('change', saveSettings);
 
   $('addMount').addEventListener('click', async () => {
     try {

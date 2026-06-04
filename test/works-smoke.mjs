@@ -1376,6 +1376,44 @@ const dataDelegate = await page.evaluate(async (arr) => {
   return { installed: !!(r && r.installed), landed };
 }, delegDataArr);
 
+// gcudat with the confirmDataPackInstall toggle ON → it now PROMPTS too, and
+// Cancel installs nothing. (Default-off case is dataDelegate above.)
+const toggleDataArr = await (async () => {
+  const entries = {
+    'gcudat.json': JSON.stringify({ gcudat: 1, kind: 'data', name: 'toggle-ds', version: '1', title: 'Toggle DS' }),
+    'dataset.json': JSON.stringify({ dataset: 1, name: 'toggle-ds', records: 'records.json', count: 1 }),
+    'records.json': JSON.stringify([{ a: 1 }]),
+  };
+  const m = await archive.compress(entries, 'memory', { format: 'zip' });
+  return Array.from([...m.values()][0]);
+})();
+const dataToggle = await page.evaluate(async (arr) => {
+  const W = window.WKS;
+  const get = () => W.worksBus.call({ to: 'works', path: '/', interface: 'Settings', member: 'Get' }, []);
+  const set = (s) => W.worksBus.call({ to: 'works', path: '/', interface: 'Settings', member: 'Set' }, [s]);
+  await set({ ...((await get()) || {}), confirmDataPackInstall: true });
+  const setReadBack = ((await get()) || {}).confirmDataPackInstall === true;
+  const p = W.worksBus.call(
+    { to: 'works', path: '/', interface: 'Shell', member: 'InstallExtension' },
+    [new Uint8Array(arr), 'toggle-ds.gcudat', 'data']);
+  // Wait for the consent dialog (a visible 'Cancel' confirms it appeared), then
+  // dismiss via Escape — robust against other surfaces' stray buttons in the DOM.
+  let prompted = false;
+  const dl = Date.now() + 6000;
+  while (Date.now() < dl) {
+    if ([...document.querySelectorAll('button')]
+        .some((b) => b.offsetParent !== null && (b.textContent || '').trim() === 'Cancel')) { prompted = true; break; }
+    await new Promise((r) => setTimeout(r, 60));
+  }
+  if (prompted) document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  let r = null;
+  try { r = await p; } catch { /* dialog dismissal may surface as a rejected call */ }
+  let landed = false;
+  try { landed = await W.vfs.exists('/home/library/data/toggle-ds'); } catch { /* */ }
+  await set({ ...((await get()) || {}), confirmDataPackInstall: false });   // reset to default
+  return { setReadBack, prompted, cancelled: !!(r && r.cancelled), landed };
+}, toggleDataArr);
+
 // ── Red-team: realm isolation (capability-security spec §1/§9) ────────
 // From INSIDE a surface's realm, try to reach the shell realm
 // (window.parent.WKS). Same-origin → the property read succeeds (NO isolation);
@@ -1625,6 +1663,7 @@ const checks = {
   'install: delegated .gcupkg PROMPTS (not silent)':            installConsent.prompted === true,
   'install: Cancel leaves nothing installed':                   installConsent.cancelled === true && installConsent.installed === false,
   'install: delegated .gcudat routes to the workspace library': dataDelegate.installed === true && dataDelegate.landed === true,
+  'install: .gcudat toggle ON prompts + dismiss installs nothing': dataToggle.prompted === true && dataToggle.landed === false,
   // Patchbay surface
   'patchbay: surface opens':          pbOpen.ready === true && pbOpen.kind === 'patchbay',
   'patchbay: canvas + rack mounted':  pbMounted && pbMounted.hasCanvas

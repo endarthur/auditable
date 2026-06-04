@@ -6,6 +6,7 @@ import { Dialog, confirm as dlgConfirm } from '#dialog';
 import { importNotebook } from './import.js';
 import { importEpubBytes } from './book-import.js';
 import { installGcudatBytes } from './gcudat-install.js';
+import { readSettings } from './settings-store.js';
 import { openPath } from './surfaces.js';
 import { archive } from '#archive';
 import { parseGcupkg, installGcupkg, gcupkgConsentDescriptor, gcupkgConsentPrompt } from '#gcupkg';
@@ -590,6 +591,17 @@ async function installDroppedGcupkg(file) {
 export async function installExtensionWithConsent(bytes, filename, kind = 'extension') {
   const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   if (kind === 'data') {
+    // Data packs are inert; gate only when the workspace asks for it
+    // (confirmDataPackInstall in /etc/works.json, default off).
+    let confirmData = false;
+    try { const s = await readSettings(WKS.vfs); confirmData = !!(s && s.confirmDataPackInstall); }
+    catch { /* default off */ }
+    if (confirmData) {
+      const ok = await dlgConfirm(
+        `Install data pack ${filename}?\n\nInstalls to the workspace library.`,
+        { title: 'Install data pack', okLabel: 'Install' });
+      if (!ok) { setStatus('data pack install cancelled'); return { cancelled: true }; }
+    }
     const dest = await installGcudatBytes(u8, filename);
     if (dest) await openPath(dest);
     return { installed: true, kind: 'data', dest: dest || null };

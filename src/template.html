@@ -159,6 +159,13 @@
     </select>
   </div>
   <div class="settings-row">
+    <label title="ask before installing a dropped .gcudat data pack. .gcupkg extensions (code) always ask.">on .gcudat install</label>
+    <select id="setConfirmDataPack" onchange="applyConfirmDataPackInstall(this.value === 'on')">
+      <option value="off" selected>install</option>
+      <option value="on">confirm first</option>
+    </select>
+  </div>
+  <div class="settings-row">
     <label>show run toggle</label>
     <select id="setShowToggle" onchange="applyShowToggle(this.value)">
       <option value="yes">yes</option>
