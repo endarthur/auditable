@@ -142,6 +142,30 @@ test('provider: dims/header/rowHeader and contract-shaped cells', () => {
   assert.equal(cell.style.text, '1.5');
 });
 
+test('provider: setHighlight tints rows (brushing) + maps through a view + clears', () => {
+  const t = sampleTable();
+  const p = createTableProvider(t);
+  assert.equal(p.highlightCount, 0);
+  assert.ok(!(p.cellAt(0, 0).style && p.cellAt(0, 0).style.highlight));
+  // Highlight base rows 0 and 2 — every cell in those rows carries it.
+  p.setHighlight([0, 2]);
+  assert.equal(p.highlightCount, 2);
+  assert.equal(p.cellAt(0, 0).style.highlight, true);
+  assert.equal(p.cellAt(0, 2).style.highlight, true);
+  assert.ok(!(p.cellAt(1, 0).style && p.cellAt(1, 0).style.highlight));
+  // Clearing removes it.
+  p.setHighlight(null);
+  assert.equal(p.highlightCount, 0);
+  assert.ok(!(p.cellAt(0, 0).style && p.cellAt(0, 0).style.highlight));
+  // Through a sorted view, highlight follows the BASE ordinal, not display pos.
+  const v = createView(t);
+  v.setSort({ by: 'grade', dir: 'desc' });   // grades 0.5/1.5/2.5 desc → display 0 = base 2
+  const pv = createTableProvider(t, v);
+  pv.setHighlight([2]);                        // base ordinal 2
+  assert.equal(pv.cellAt(0, 0).style.highlight, true);   // base 2 now at display row 0
+  assert.ok(!(pv.cellAt(1, 0).style && pv.cellAt(1, 0).style.highlight));
+});
+
 test('provider: header shows unit suffix; commit routes to overlay as EDITED', () => {
   const t = tableFromCsv('X,Au_gpt\n1005,1.2\n1015,0.8\n', { sniff });
   const p = createTableProvider(t);

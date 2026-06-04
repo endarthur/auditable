@@ -26,6 +26,7 @@ export const DARK_COLORS = {
   cellText: '#bbb', cellNum: '#8cb878', cellDerived: '#c89b3c', cellError: '#d46a6a',
   cellPending: '#555', cellOutOfOrder: '#c8a13c',
   editedBar: '#c89b3c', selFill: 'rgba(200,155,60,0.12)', selStroke: '#c89b3c',
+  highlightFill: 'rgba(120,130,225,0.22)',   // cross-surface brushing tint (indigo)
   bg: '#121212', scrollThumb: '#3a3a3a', scrollTrack: '#161616',
 };
 
@@ -34,6 +35,7 @@ export const LIGHT_COLORS = {
   cellText: '#333', cellNum: '#3a7a30', cellDerived: '#8a6c2a', cellError: '#b03030',
   cellPending: '#bbb', cellOutOfOrder: '#9a7a1a',
   editedBar: '#8a6c2a', selFill: 'rgba(138,108,42,0.12)', selStroke: '#8a6c2a',
+  highlightFill: 'rgba(90,100,190,0.16)',   // cross-surface brushing tint (indigo)
   bg: '#fff', scrollThumb: '#c4c4c4', scrollTrack: '#ececec',
 };
 
@@ -49,6 +51,14 @@ function drawCell(ctx, cell, x, y, w, h, g) {
   const c = g.colors;
   const isNum = cell.type === CellType.NUMBER;
   const pending = cell === PENDING || cell.state === CellState.PENDING;
+
+  // Brushing/linking highlight — a soft fill behind the cell. A row of these =
+  // a tinted row: the visible response to an incoming selection from another
+  // surface (strata-spec §7; distinct colour from the local amber selection).
+  if (cell.style && cell.style.highlight) {
+    ctx.fillStyle = c.highlightFill;
+    ctx.fillRect(x + 1, y, w - 1, h);
+  }
 
   // Edited rows get a thin accent bar on the left edge (dirty marker).
   if (!pending && cell.state === CellState.EDITED) {

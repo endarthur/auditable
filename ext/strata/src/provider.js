@@ -28,8 +28,10 @@ const TYPE = { number: 'number', category: 'category', string: 'string' };
  */
 export function createTableProvider(table, view) {
   const readyListeners = [];
+  let highlight = null;   // Set<baseOrdinal> | null — rows brushed by an incoming selection
   const nDisp = () => (view ? view.length : table.nrows);
   const under = (r) => (view ? view.at(r) : r); // display row → underlying row
+  const notify = () => { for (const cb of readyListeners) { try { cb(); } catch (e) { console.error('[strata] listener threw', e); } } };
 
   return {
     table,
@@ -40,20 +42,26 @@ export function createTableProvider(table, view) {
     cellAt(r, c) {
       if (r < 0 || r >= nDisp() || c < 0 || c >= table.cols) return null;
       const ur = under(r);
-      const cell = table.getCell(ur, c);
       const type = TYPE[table.schema[c].type] || 'string';
+      const hl = highlight ? highlight.has(ur) : false;
+      const cell = table.getCell(ur, c);
+      let out;
       if (cell.derived) {
-        if (cell.value === FORMULA_ERROR) return { value: null, state: STATE_ERROR, type, style: { text: '#ERR' } };
-        if (cell.value == null) return null; // empty derived cell → blank
-        return { value: cell.value, state: STATE_DERIVED, type, style: { text: fmtCell(cell.value) } };
+        if (cell.value === FORMULA_ERROR) out = { value: null, state: STATE_ERROR, type, style: { text: '#ERR' } };
+        else if (cell.value == null) out = null;                 // empty derived → blank
+        else out = { value: cell.value, state: STATE_DERIVED, type, style: { text: fmtCell(cell.value) } };
+      } else if (cell.value == null && !cell.edited) {
+        out = null;                                              // empty → blank
+      } else {
+        out = { value: cell.value, state: cell.edited ? STATE_EDITED : STATE_RAW, type, style: { text: fmtCell(cell.value) } };
       }
-      if (cell.value == null && !cell.edited) return null; // empty → blank
-      return {
-        value: cell.value,
-        state: cell.edited ? STATE_EDITED : STATE_RAW,
-        type,
-        style: { text: fmtCell(cell.value) },
-      };
+      // Brushing tints the WHOLE row — empty cells in a brushed row get a blank
+      // highlighted cell so the row tints edge-to-edge (loom skips null cells).
+      if (hl) {
+        if (out == null) return { value: null, state: STATE_RAW, type, style: { text: '', highlight: true } };
+        out.style = { ...out.style, highlight: true };
+      }
+      return out;
     },
 
     header(c) {
@@ -75,10 +83,19 @@ export function createTableProvider(table, view) {
     // Reserved for async windowing (strata-spec §11 upgrade #1): a streaming
     // base will call these when a window lands so loom repaints. v1 is fully
     // loaded, so it never fires — but the seam exists from day one.
+    // Cross-surface brushing (strata-spec §7): tint a set of base-ordinal rows
+    // (the incoming selection, resolved to underlying ids by the app). null
+    // clears. Repaints via the same onReady seam loom already listens on.
+    setHighlight(rowIds) {
+      highlight = rowIds == null ? null : (rowIds instanceof Set ? rowIds : new Set(rowIds));
+      notify();
+    },
+    get highlightCount() { return highlight ? highlight.size : 0; },
+
     onReady(cb) {
       readyListeners.push(cb);
       return () => { const i = readyListeners.indexOf(cb); if (i >= 0) readyListeners.splice(i, 1); };
     },
-    _notifyReady() { for (const cb of readyListeners) { try { cb(); } catch (e) { console.error('[strata] onReady listener threw', e); } } },
+    _notifyReady() { notify(); },
   };
 }

@@ -10,7 +10,7 @@
 // Works-ready as-is.
 
 import { createGrid } from '@gcu/loom';
-import { tableFromCsv, createTableProvider, createView, groupBy, readStrata, writeStrata } from '@gcu/strata';
+import { tableFromCsv, createTableProvider, createView, groupBy, readStrata, writeStrata, evaluatePredicate } from '@gcu/strata';
 import { sniff } from '@gcu/recon';
 import { createWriter, readZip } from '@gcu/archive';
 
@@ -50,7 +50,30 @@ export function createStrataApp(host) {
   // highlight response to incoming selections is the next step.
   const link = host.selection || null;
   let incomingSelection = null;
-  if (link) link.subscribe((desc) => { incomingSelection = desc; /* TODO: highlight matching rows */ });
+  let linked = !!link;   // react to incoming selections by tinting the rows (opt-in + visible §7)
+
+  // Resolve an incoming selection descriptor → a set of base-ordinal rows (§4.1
+  // identity). 'rows' carries ids directly; 'filter' carries a structured
+  // predicate evaluated against our own table (same dataset). Other kinds clear.
+  function rowsForSelection(desc) {
+    if (!desc || !table) return null;
+    if (desc.kind === 'rows') return new Set((desc.rows || []).map(Number));
+    if (desc.kind === 'filter' && desc.predicate) {
+      const nameIdx = new Map(table.schema.map((s, k) => [s.name, k]));
+      const out = new Set();
+      for (let i = 0; i < table.nrows; i++) {
+        const get = (name) => { const ci = nameIdx.get(name); return ci === undefined ? undefined : table.getCell(i, ci).value; };
+        try { if (evaluatePredicate(desc.predicate, get)) out.add(i); } catch { /* skip row */ }
+      }
+      return out;
+    }
+    return null;   // 'none' / 'cols' / etc → clear the highlight
+  }
+  // Push the current incoming selection into the grid as a row tint (or clear).
+  function applyHighlight() {
+    if (provider) provider.setHighlight(linked ? rowsForSelection(incomingSelection) : null);
+  }
+  if (link) link.subscribe((desc) => { incomingSelection = desc; applyHighlight(); });
 
   function publishRowSelection(sel) {
     if (!link || !view) return;
@@ -89,6 +112,7 @@ export function createStrataApp(host) {
     setTitle();
     updateFooter();
     for (const id of ['#btnSave', '#btnSaveAs', '#btnAddCol', '#btnGroup']) $(id).disabled = false;
+    applyHighlight();   // re-tint for the current incoming selection (new provider)
   }
 
   // Open bytes into a live grid. The single entry point — toolbar, drag-drop,
@@ -233,6 +257,16 @@ export function createStrataApp(host) {
     const msg = await host.saveAs(docName + '.strata', await buildStrataBytes());
     if (msg) { setTitle(); updateFooter(); flash(msg); }
   };
+  // Linking toggle (Works only; opt-in + visible §7). Hidden standalone (no link).
+  const btnLinked = $('#btnLinked');
+  if (btnLinked) {
+    if (!link) { btnLinked.style.display = 'none'; }
+    else {
+      const renderLinked = () => { btnLinked.classList.toggle('on', linked); btnLinked.textContent = linked ? 'Linked' : 'Link off'; };
+      renderLinked();
+      btnLinked.onclick = () => { linked = !linked; renderLinked(); applyHighlight(); };
+    }
+  }
   $('#filter').addEventListener('keydown', (e) => { if (e.key === 'Enter') applyFilter(e.target.value.trim()); });
   $('#btnGroup').onclick = () => {
     if (!table) return;
@@ -277,7 +311,8 @@ export function createStrataApp(host) {
     get grid() { return grid; },
     get view() { return view; },
     get host() { return host; },
-    get linked() { return !!link; },
+    get linked() { return linked; },
+    setLinked(v) { linked = !!v; applyHighlight(); },
     get lastSelection() { return incomingSelection; },  // last selection received from another surface
   };
   window._strataApp = app;   // automation hook (no UI dialogs)

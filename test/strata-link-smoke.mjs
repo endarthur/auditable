@@ -82,6 +82,15 @@ try {
     ? ok('descriptor carries dataset + origin + epoch')
     : fail(`descriptor fields wrong: ${JSON.stringify(got)}`);
 
+  // VISIBLE HIGHLIGHT (the rung): B should have tinted the two brushed rows.
+  const bHi = await frameB.evaluate(async () => {
+    const deadline = Date.now() + 5000;
+    let n = 0;
+    while (Date.now() < deadline) { n = window._strataApp.grid.provider.highlightCount; if (n > 0) break; await new Promise((r) => setTimeout(r, 50)); }
+    return n;
+  });
+  bHi === 2 ? ok('B visibly highlights the 2 brushed rows (brushing made visual)') : fail(`B highlight count wrong: ${bHi}`);
+
   // Echo suppression: A must NOT have received its own selection.
   const aEcho = await frameA.evaluate(() => window._strataApp.lastSelection);
   aEcho === null ? ok('echo-suppressed (A ignored its own selection)') : fail(`A received its own echo: ${JSON.stringify(aEcho)}`);
@@ -97,6 +106,23 @@ try {
   (filt && filt.kind === 'filter' && filt.predicate && filt.predicate.form === 'spec' && filt.predicate.root.op === '>')
     ? ok('B received A\'s filter as a structured predicate spec (no JS string on the bus)')
     : fail(`filter selection wrong: ${JSON.stringify(filt)}`);
+
+  // The filter highlights EXACTLY the matching rows in B (grade>1 → base 0,2; not 1).
+  const bf = await frameB.evaluate(async () => {
+    await new Promise((r) => setTimeout(r, 100));   // let the just-arrived filter apply
+    const p = window._strataApp.grid.provider;
+    const hi = (r) => { const c = p.cellAt(r, 0); return !!(c && c.style && c.style.highlight); };
+    return { r0: hi(0), r1: hi(1), r2: hi(2), n: p.highlightCount };
+  });
+  (bf.r0 && !bf.r1 && bf.r2 && bf.n === 2)
+    ? ok('B highlights exactly the rows matching A\'s filter predicate (grade>1 → 0,2)')
+    : fail(`B filter-highlight wrong: ${JSON.stringify(bf)}`);
+
+  // The "Linked" toggle gates it: unlink clears, re-link restores (opt-in + visible §7).
+  const bUnlink = await frameB.evaluate(() => { window._strataApp.setLinked(false); return window._strataApp.grid.provider.highlightCount; });
+  bUnlink === 0 ? ok('unlinking clears the highlight') : fail(`unlink did not clear: ${bUnlink}`);
+  const bRelink = await frameB.evaluate(() => { window._strataApp.setLinked(true); return window._strataApp.grid.provider.highlightCount; });
+  bRelink === 2 ? ok('re-linking restores the highlight') : fail(`relink did not restore: ${bRelink}`);
 
   errors.length ? fail('console errors: ' + errors.join(' | ')) : ok('no console errors');
 } catch (e) {
