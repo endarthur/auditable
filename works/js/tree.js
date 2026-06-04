@@ -455,13 +455,25 @@ async function showMenu(e, path, type) {
   // than its extension default — what makes the hex viewer reach any file.
   if (type === 'file') {
     extras.push({ label: 'Open as hex ⬡', action: 'open-as:hex' });
-    const openers = kindsForRouting()
-      .filter((k) => (k.extensions || []).length > 0 && k.kind !== 'hex')
-      .map((k) => {
-        const d = kindDef(k.kind) || {};
-        return { label: (d.icon ? d.icon + ' ' : '') + (d.label || k.kind), action: 'open-as:' + k.kind };
-      });
-    if (openers.length) extras.push({ label: 'Open as…', children: openers });
+    // "Open as…" — alternatives to the extension default. General-purpose
+    // viewers (universal:true) first in a fixed order, a separator, then
+    // format-specific surfaces alphabetically. Excludes hex (its own item
+    // above) and the file's default kind (that's just "Open").
+    const defaultKind = kindForExtension(basename(path));
+    const UORDER = { text: 0, preview: 1, doc: 2 };
+    const cands = kindsForRouting()
+      .filter((k) => (k.extensions || []).length > 0 && k.kind !== 'hex' && k.kind !== defaultKind)
+      .map((k) => ({ kind: k.kind, def: kindDef(k.kind) || {} }));
+    const mk = (c) => ({ label: (c.def.icon ? c.def.icon + ' ' : '') + (c.def.label || c.kind),
+                         action: 'open-as:' + c.kind });
+    const universal = cands.filter((c) => c.def.universal)
+      .sort((a, b) => (UORDER[a.kind] ?? 99) - (UORDER[b.kind] ?? 99));
+    const specific = cands.filter((c) => !c.def.universal)
+      .sort((a, b) => (a.def.label || a.kind).localeCompare(b.def.label || b.kind));
+    const children = universal.map(mk);
+    if (universal.length && specific.length) children.push('---');
+    children.push(...specific.map(mk));
+    if (children.length) extras.push({ label: 'Open as…', children });
   }
   // Reader entries: loose document files (synthesized one-chapter book) AND
   // book directories (a dir/project carrying a book.json). The regular reader

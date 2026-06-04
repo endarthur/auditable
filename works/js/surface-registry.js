@@ -24,6 +24,10 @@ export function registerKind(kind, def) {
     detect:     def.detect || null,
     isExtension: !!def.isExtension,
     extension:  def.extension || null,  // { manifest, file, libPath, requires, openAction }
+    // General-purpose opener: meaningfully opens ANY file (hex/text/preview/doc),
+    // vs a format-specific surface (strata/patchbay/…). Drives the "Open as…"
+    // grouping + ordering in tree.js (universal first, then format-specific).
+    universal:  !!def.universal,
   });
 }
 
@@ -395,6 +399,7 @@ registerKind('terminal', { label: 'Terminal', icon: '▶', extensions: [] });
 registerKind('doc', {
   label:      'Document',
   icon:       '▥',
+  universal:  true,
   extensions: ['.md', '.markdown'],
 });
 
@@ -405,6 +410,7 @@ registerKind('doc', {
 registerKind('preview', {
   label:      'Preview',
   icon:       '◳',
+  universal:  true,
   extensions: ['.csv', '.tsv', '.json', '.geojson',
                '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp',
                '.ico', '.avif', '.pdf',
@@ -422,6 +428,7 @@ registerKind('preview', {
 registerKind('text', {
   label:      'Text file',
   icon:       '▤',
+  universal:  true,
   extensions: ['.txt', '.json', '.js', '.css', '.html',
                '.csv', '.log', '.xml', '.yaml', '.yml'],
   extensionlessNames: ['LICENSE', 'README', 'COPYING', 'NOTICE',
@@ -442,7 +449,7 @@ registerKind('strata', { label: 'Strata', icon: '▦', extensions: ['.strata'] }
 
 // Hex viewer — a loose-file surface for raw binary. Virtualized hex/ASCII view
 // + data inspector; the universal floor (any bytes open to something useful).
-registerKind('hex', { label: 'Hex viewer', icon: '⬡',
+registerKind('hex', { label: 'Hex viewer', icon: '⬡', universal: true,
   extensions: ['.bin', '.dat', '.hex', '.wasm', '.img', '.rom'] });
 
 // The A-Bus inspector — a diagnostic surface, spawned from the Debug menu
