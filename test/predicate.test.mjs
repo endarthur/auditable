@@ -1,10 +1,11 @@
-// @gcu/strata predicate — the structured safe boolean-expr spec: parse, evaluate,
-// columns, validate, round-trip. Pure; zero DOM.
+// @gcu/sift predicate — the structured safe boolean-expr spec: parse, evaluate,
+// columns, validate, round-trip. Pure; zero DOM. (Extracted from strata; strata
+// re-exports it, so its public API and these behaviours are unchanged.)
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parsePredicate, evaluatePredicate, predicateColumns, validatePredicate, predicateToString,
-} from '../ext/strata/src/predicate.js';
+} from '../ext/sift/src/predicate.js';
 
 // A row accessor over a plain object.
 const rowGet = (row) => (col) => row[col];

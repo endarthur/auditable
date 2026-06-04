@@ -74,6 +74,7 @@
 
 <script type="module">
 import { connect } from '../../ext/abus/index.js';
+import { bootSurface, createWorksHost } from '../../ext/surface/index.js';
 import { createPlate } from '../../ext/plate/index.js';
 import { readStrata, tableFromCsv, evaluatePredicate } from '../../ext/strata/index.js';
 import { sniff } from '../../ext/recon/index.js';
@@ -117,43 +118,6 @@ function buildData(table) {
   return { columns, keys, numericColumns, allColumns: schema.map((s) => s.name) };
 }
 
-// The Works host adapter (the strata host interface over A-Bus; see
-// tools/strata/HOST.md). plate is READ-MOSTLY — it owns no document in v0.1, so
-// save is inert and dirty stays false; the live capability is `selection`.
-function createWorksHost(bus, tab) {
-  const path = tab.path;
-  let selEpoch = 0;
-  const sig = (member, args) => bus.signal({ path: '/', interface: 'Surface', member }, args);
-  return {
-    canOpenFiles: false,
-    get dirty() { return false; },
-    async open() { return null; },
-    async save() { return 'ok'; },          // v0.1: no .figure document yet
-    async saveAs() { return 'ok'; },
-    setDirty() {},
-    setTitle(name) { sig('TitleChanged', [name]); },
-    onFlush() {},
-    flush() {},
-    // The cross-surface selection channel. Host fills dataset (= the bound file
-    // path = identity space), origin (this surface's A-Bus name), and epoch; the
-    // app supplies kind/rows/cols/predicate. Subscribers echo-suppress + scope.
-    selection: {
-      publish(payload) {
-        bus.signal({ path: '/', interface: 'Selection', member: 'Changed' },
-          [{ dataset: path, origin: bus.uniqueName, epoch: ++selEpoch, ...payload }]);
-      },
-      subscribe(cb) {
-        return bus.subscribe({ interface: 'Selection', member: 'Changed' }, (msg) => {
-          const d = msg && msg.args && msg.args[0];
-          if (!d || d.origin === bus.uniqueName) return;   // echo
-          if (d.dataset !== path) return;                  // dataset scope
-          cb(d);
-        });
-      },
-    },
-  };
-}
-
 function fillSelect(sel, names, current) {
   sel.innerHTML = '';
   for (const n of names) {
@@ -164,75 +128,64 @@ function fillSelect(sel, names, current) {
   sel.disabled = names.length === 0;
 }
 
-window.addEventListener('message', async (ev) => {
-  if (ev.source !== window.parent) return;                 // §7.1
-  if (!ev.data || ev.data.type !== 'abus:welcome') return;
-  const { port, tab } = ev.data;
+// plate is READ-MOSTLY — it owns no document in v0.1, so the host is
+// createWorksHost({ readMostly:true }): save is inert, dirty stays false; the
+// live capability is the selection channel. The boot handshake + host adapter
+// are @gcu/surface's (extracted from strata + this surface).
+bootSurface({
+  connect,
+  client: 'plate',
+  onConnect: (bus) => installThemeSubscription(bus),       // from @theme-init
+  makeHost: (bus, tab) => createWorksHost(bus, tab, { readMostly: true }),
+  mount: async ({ bus, tab, host }) => {
+    const plate = createPlate($('#plate'), { host, evaluatePredicate });
+    let panelId = null;
 
-  let bus;
-  try { bus = await connect(port, { client: 'plate' }); }
-  catch (e) { console.error('plate: A-Bus connect failed', e); return; }
-  installThemeSubscription(bus);                            // from @theme-init
-  try { await bus.claim('plate-' + (tab.id || '?')); } catch {}
+    // Track the selection footer (publish-side echo of what this plate brushed).
+    const origPublish = host.selection.publish.bind(host.selection);
+    host.selection.publish = (payload) => {
+      const n = payload && payload.kind === 'rows' ? (payload.rows || []).length : 0;
+      $('#sel').textContent = n ? n + ' point' + (n === 1 ? '' : 's') : '—';
+      origPublish(payload);
+    };
 
-  const host = createWorksHost(bus, tab);
+    try {
+      const bytes = await bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [tab.path, 'bytes']);
+      const name = String(tab.path).split('/').pop();
+      const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
 
-  // Expose the §5.2 Surface contract BEFORE any signal.
-  bus.expose('/', {
-    Surface: {
-      methods: { Flush: () => host.flush(), CanClose: () => true, Relocated: () => {} },
-      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
-    },
-  });
+      let table;
+      if (looksLikeStrata(name, u8)) table = readStrata(u8, { readZip }).table;
+      else table = tableFromCsv(new TextDecoder().decode(u8), { sniff });
 
-  const plate = createPlate($('#plate'), { host, evaluatePredicate });
-  let panelId = null;
+      const data = buildData(table);
+      plate.setData(data);
+      panelId = plate.addPanel({ kind: 'plot' });
 
-  // Track the selection footer (publish-side echo of what this plate brushed).
-  const origPublish = host.selection.publish.bind(host.selection);
-  host.selection.publish = (payload) => {
-    const n = payload && payload.kind === 'rows' ? (payload.rows || []).length : 0;
-    $('#sel').textContent = n ? n + ' point' + (n === 1 ? '' : 's') : '—';
-    origPublish(payload);
-  };
+      $('#empty').style.display = 'none';
+      $('#fileName').textContent = name;
+      $('#meta').textContent = data.keys.length + ' rows · ' + data.numericColumns.length + ' numeric cols';
+      host.setTitle(name.replace(/\.[^.]+$/, ''));
 
-  try {
-    const bytes = await bus.call({ to: 'works', path: '/', interface: 'VFS', member: 'Read' }, [tab.path, 'bytes']);
-    const name = String(tab.path).split('/').pop();
-    const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+      // Wire x/y column pickers to the panel spec.
+      const spec = plate.getPanelSpec(panelId) || {};
+      fillSelect($('#selX'), data.numericColumns, spec.x);
+      fillSelect($('#selY'), data.numericColumns, spec.y);
+      $('#selX').onchange = (e) => plate.setPanelSpec(panelId, { x: e.target.value });
+      $('#selY').onchange = (e) => plate.setPanelSpec(panelId, { y: e.target.value });
 
-    let table;
-    if (looksLikeStrata(name, u8)) table = readStrata(u8, { readZip }).table;
-    else table = tableFromCsv(new TextDecoder().decode(u8), { sniff });
+      // The opt-in, visible linking toggle (§7 discipline).
+      const btn = $('#btnLinked');
+      const render = () => { btn.classList.toggle('on', plate.linked); btn.textContent = plate.linked ? 'Linked' : 'Link off'; };
+      btn.onclick = () => { plate.setLinked(!plate.linked); render(); };
+      render();
+    } catch (e) {
+      console.error('plate: read failed', e);
+      $('#empty').innerHTML = '<b>could not open ' + (tab.path || '') + '</b>';
+    }
 
-    const data = buildData(table);
-    plate.setData(data);
-    panelId = plate.addPanel({ kind: 'plot' });
-
-    $('#empty').style.display = 'none';
-    $('#fileName').textContent = name;
-    $('#meta').textContent = data.keys.length + ' rows · ' + data.numericColumns.length + ' numeric cols';
-    host.setTitle(name.replace(/\.[^.]+$/, ''));
-
-    // Wire x/y column pickers to the panel spec.
-    const spec = plate.getPanelSpec(panelId) || {};
-    fillSelect($('#selX'), data.numericColumns, spec.x);
-    fillSelect($('#selY'), data.numericColumns, spec.y);
-    $('#selX').onchange = (e) => plate.setPanelSpec(panelId, { x: e.target.value });
-    $('#selY').onchange = (e) => plate.setPanelSpec(panelId, { y: e.target.value });
-
-    // The opt-in, visible linking toggle (§7 discipline).
-    const btn = $('#btnLinked');
-    const render = () => { btn.classList.toggle('on', plate.linked); btn.textContent = plate.linked ? 'Linked' : 'Link off'; };
-    btn.onclick = () => { plate.setLinked(!plate.linked); render(); };
-    render();
-  } catch (e) {
-    console.error('plate: read failed', e);
-    $('#empty').innerHTML = '<b>could not open ' + (tab.path || '') + '</b>';
-  }
-
-  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
-  window._plateSurface = { plate, host, bus, get panelId() { return panelId; } };  // smoke hook
+    window._plateSurface = { plate, host, bus, get panelId() { return panelId; } };  // smoke hook
+  },
 });
 </script>
 </body>

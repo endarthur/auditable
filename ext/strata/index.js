@@ -329,9 +329,9 @@ function tableFromCsv(text, opts = {}) {
   return createTable({ schema, columns, nrows: lines.length - 1 });
 }
 
-// -- predicate.js --
+// -- ../../sift/src/predicate.js --
 
-// @gcu/strata — predicate: a structured, safe boolean-expression spec for filters
+// @gcu/sift — predicate: a structured, safe boolean-expression spec for filters
 // and cross-surface selections (the selection/linking contract §2).
 //
 // A predicate is plain JSON (structuredClone-transferable), evaluated by WALKING
@@ -341,8 +341,10 @@ function tableFromCsv(text, opts = {}) {
 // columns (owner-evaluated), not here — a user who needs `Math.log(x)` makes a
 // derived boolean column and filters on it (a trivial, safe, travelling predicate).
 //
-// Destined to extract to a tiny @gcu/<sift> lib when plate's panels become the
-// second consumer (see ROADMAP extraction obligations). Pure, zero-dep.
+// Extracted from strata (its filter engine) once plate became the second
+// consumer — the predicate lib the selection/linking contract rests on. strata
+// build-inlines this file (staying a self-contained leaf); plate consumes it
+// (via strata's re-export); a notebook can load('@gcu/sift') directly. Zero-dep.
 //
 // Spec shapes:
 //   Predicate = { form: 'spec', root: Expr }
@@ -473,7 +475,7 @@ function tokenize(s) {
     if (c === '"' || c === "'") {
       let j = i + 1, out = '';
       while (j < s.length && s[j] !== c) { if (s[j] === '\\') { out += s[j + 1]; j += 2; } else { out += s[j++]; } }
-      if (j >= s.length) throw new Error('strata filter: unterminated string');
+      if (j >= s.length) throw new Error('sift: unterminated string');
       toks.push({ t: 'lit', v: out }); i = j + 1; continue;
     }
     if (/[0-9]/.test(c) || (c === '.' && /[0-9]/.test(s[i + 1] || ''))) {
@@ -490,7 +492,7 @@ function tokenize(s) {
     if ('!<>+-*/'.includes(c)) { toks.push({ t: 'op', v: c }); i++; continue; }
     if (c === '(') { toks.push({ t: 'lparen' }); i++; continue; }
     if (c === ')') { toks.push({ t: 'rparen' }); i++; continue; }
-    throw new Error('strata filter: unexpected character "' + c + '"');
+    throw new Error('sift: unexpected character "' + c + '"');
   }
   return toks;
 }
@@ -528,23 +530,23 @@ function parsePredicate(str) {
   }
   function parsePrimary() {
     const t = peek();
-    if (!t) throw new Error('strata filter: unexpected end of expression');
+    if (!t) throw new Error('sift: unexpected end of expression');
     if (t.t === 'num') { p++; return { lit: t.v }; }
     if (t.t === 'lit') { p++; return { lit: t.v }; }
-    if (t.t === 'lparen') { p++; const e = parseOr(); if (!peek() || peek().t !== 'rparen') throw new Error('strata filter: expected ")"'); p++; return e; }
+    if (t.t === 'lparen') { p++; const e = parseOr(); if (!peek() || peek().t !== 'rparen') throw new Error('sift: expected ")"'); p++; return e; }
     if (t.t === 'ident') {
       p++;
       if (t.v === 'true') return { lit: true };
       if (t.v === 'false') return { lit: false };
       if (t.v === 'null') return { lit: null };
-      if (peek() && peek().t === 'lparen') throw new Error('strata filter: function calls are not allowed — use a derived column for full-JS logic');
+      if (peek() && peek().t === 'lparen') throw new Error('sift: function calls are not allowed — use a derived column for full-JS logic');
       return { col: t.v };
     }
-    throw new Error('strata filter: unexpected token "' + (t.v != null ? t.v : t.t) + '"');
+    throw new Error('sift: unexpected token "' + (t.v != null ? t.v : t.t) + '"');
   }
 
   const root = asBool(parseOr());
-  if (p < toks.length) throw new Error('strata filter: unexpected token after expression');
+  if (p < toks.length) throw new Error('sift: unexpected token after expression');
   return { form: 'spec', root };
 }
 

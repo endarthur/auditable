@@ -409,7 +409,7 @@ test('view: edits do not auto-re-sort; reapply is explicit (§4.3)', () => {
 
 test('view: a filter syntax error throws (caller surfaces it)', () => {
   const v = createView(viewTable());
-  assert.throws(() => v.setFilter('grade >'), /strata filter/);
+  assert.throws(() => v.setFilter('grade >'), /sift|unexpected/);  // @gcu/sift parse error
 });
 
 test('provider+view: display rows map to underlying rows; row header shows base #', () => {
