@@ -12,6 +12,7 @@ import { showAbout } from './about.js';
 import { aggregateFromBuildLicenses } from '#licenses';
 import { archive } from '#archive';
 import { Dialog } from '#dialog';
+import { installExtensionWithConsent } from './file-ops.js';
 import { metaGet, metaSet } from './meta.js';
 import { getSources, addSourceSilent, removeSource, fetchRegistry, installByName, entryStatuses, checkUpdates } from './registry.js';
 import { bookDir, dataDir } from './paths.js';
@@ -201,6 +202,13 @@ export async function setupWorksService() {
         MountFolder: () => mountFolder(),
         UnmountAt:   (path) => unmountAt(path),
         OpenAbout:   () => { showAbout(); },
+
+        // Install a .gcupkg/.gcudat a surface delegates here — a notebook that
+        // catches an OS-drop hands the bytes over so it installs to the
+        // WORKSPACE (the trust authority) with consent, not silently into that
+        // one notebook. gcupkg always prompts; the shell owns the decision.
+        InstallExtension: (bytes, filename, kind) =>
+          installExtensionWithConsent(bytes, filename, kind || 'extension'),
 
         // ── Content registry (Library surface drives these over A-Bus) ──
         RegistrySources:      () => getSources(),

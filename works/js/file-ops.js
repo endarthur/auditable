@@ -2,13 +2,13 @@
 // imports, and tree drag-to-move. Loaded by init.js.
 
 import { WKS, setStatus } from './state.js';
-import { Dialog } from '#dialog';
+import { Dialog, confirm as dlgConfirm } from '#dialog';
 import { importNotebook } from './import.js';
 import { importEpubBytes } from './book-import.js';
 import { installGcudatBytes } from './gcudat-install.js';
 import { openPath } from './surfaces.js';
 import { archive } from '#archive';
-import { parseGcupkg, installGcupkg } from '#gcupkg';
+import { parseGcupkg, installGcupkg, gcupkgConsentDescriptor, gcupkgConsentPrompt } from '#gcupkg';
 import { mergeExamplesFromExtension } from './examples-loader.js';
 import { evaluateWorksScript } from './extension-loader.js';
 
@@ -575,7 +575,41 @@ function _ensureDropOverlay() {
 // /lib entry is visible.
 async function installDroppedGcupkg(file) {
   setStatus('reading ' + file.name + '…');
-  await installGcupkgBytes(new Uint8Array(await file.arrayBuffer()), file.name);
+  await installExtensionWithConsent(new Uint8Array(await file.arrayBuffer()), file.name, 'extension');
+}
+
+// The single consent gate every non-registry install funnels through, so
+// nothing installs silently (capability-security spec §7). Used by the shell's
+// own OS-drop (above) AND by the Shell.InstallExtension A-Bus method a notebook
+// surface delegates to — so a .gcupkg dropped on a notebook installs to the
+// WORKSPACE with consent, not silently into that one notebook. gcupkg (code)
+// ALWAYS prompts; gcudat (inert data) installs on the lighter-touch default,
+// its consent gated behind a future `confirmDataPackInstall` toggle. The
+// registry/Browse-Library path keeps calling installGcupkgBytes directly —
+// clicking "Install" on a package is already explicit intent.
+export async function installExtensionWithConsent(bytes, filename, kind = 'extension') {
+  const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  if (kind === 'data') {
+    const dest = await installGcudatBytes(u8, filename);
+    if (dest) await openPath(dest);
+    return { installed: true, kind: 'data', dest: dest || null };
+  }
+  let parsed;
+  try {
+    parsed = await parseGcupkg(u8, { archive });
+  } catch (e) {
+    setStatus(`gcupkg parse failed: ${e.message}`);
+    return { error: e.message };
+  }
+  const descriptor = gcupkgConsentDescriptor(parsed, { scope: 'workspace' });
+  const c = gcupkgConsentPrompt(descriptor);
+  const ok = await dlgConfirm(c.message, { title: c.title, okLabel: c.okLabel, danger: c.danger });
+  if (!ok) {
+    setStatus(`install cancelled — ${descriptor.name}`);
+    return { cancelled: true, name: descriptor.name };
+  }
+  await installGcupkgBytes(u8, filename);
+  return { installed: true, name: descriptor.name, version: descriptor.version, integrityOk: parsed.integrity.ok };
 }
 
 // Install .gcupkg bytes: parse → install to /lib (+ /usr/share) → merge

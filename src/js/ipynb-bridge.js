@@ -12,7 +12,7 @@ import { getEditor } from './cm6.js';
 import { setMsg } from './ui.js';
 import { applyExecMode } from './settings.js';
 import { installDataPack, unzipArchive } from './stdlib-core.js';   // zero-dep — no import cycle
-import { parseGcupkg, installGcupkg, makeUnzipArchiveShim } from './gcupkg.js';   // zero-dep — no cycle
+import { parseGcupkg, installGcupkg, makeUnzipArchiveShim, gcupkgConsentDescriptor, gcupkgConsentPrompt } from './gcupkg.js';   // zero-dep — no cycle
 import { confirm as dialogConfirm, alert as dialogAlert } from '#dialog';
 
 // Clear the current notebook (cells + style elements + selection state)
@@ -232,33 +232,51 @@ export function installIpynbDragDrop() {
 // path the cell-side install("file.gcupkg") goes through — stdlib's
 // unzipArchive shim handles the ZIP reading; no @gcu/archive dep.
 async function _installDroppedGcupkg(file) {
-  // Static imports (parseGcupkg/installGcupkg/unzipArchive) — a dynamic
-  // import('./x.js') here resolves fine in dev but the bundler doesn't rewrite
-  // dynamic specifiers, so it threw "Failed to resolve module specifier" in the
-  // built auditable.html. Both modules are zero-import, so there's no cycle.
   const bytes = new Uint8Array(await file.arrayBuffer());
-  const parsed = await parseGcupkg(bytes, makeUnzipArchiveShim(unzipArchive));
-  const vfs = window._notebookVFS;
-  if (!vfs) {
-    console.error('[auditable] gcupkg drop: no VFS available');
+  // In Auditable Works, DELEGATE to the shell — a .gcupkg dropped on a notebook
+  // surface must install to the WORKSPACE (the trust authority, with consent),
+  // not silently into this one notebook. window._worksBus is the surface's
+  // A-Bus client (set by createWorksHost); it's absent standalone.
+  if (window._worksBus) {
+    try {
+      const r = await window._worksBus.call(
+        { to: 'works', path: '/', interface: 'Shell', member: 'InstallExtension' },
+        [bytes, file.name, 'extension']);
+      if (r && r.installed) _showInstallToast(r.name, r.version, true);
+      else if (r && r.cancelled) setMsg('extension install cancelled', 'ok');
+      else if (r && r.error) setMsg('extension: ' + r.error, 'err');
+    } catch (e) {
+      setMsg('extension delegate failed: ' + (e.message || e), 'err');
+    }
     return;
   }
-  const result = await installGcupkg(parsed, {
-    vfs,
-    installedModules: window._installedModules,
-  });
+  // Standalone — consent, then install into this notebook. Static imports
+  // (parseGcupkg/installGcupkg/unzipArchive are zero-import → no cycle); a
+  // dynamic import here would break the bundled build (specifiers unrewritten).
+  const vfs = window._notebookVFS;
+  if (!vfs) { console.error('[auditable] gcupkg drop: no VFS available'); return; }
+  let parsed;
+  try {
+    parsed = await parseGcupkg(bytes, makeUnzipArchiveShim(unzipArchive));
+  } catch (e) {
+    setMsg('gcupkg: ' + (e.message || e), 'err');
+    return;
+  }
+  const descriptor = gcupkgConsentDescriptor(parsed, { scope: 'notebook' });
+  const c = gcupkgConsentPrompt(descriptor);
+  const ok = await dialogConfirm(c.message, { title: c.title, okLabel: c.okLabel, danger: c.danger });
+  if (!ok) { setMsg('install cancelled', 'ok'); return; }
+  const result = await installGcupkg(parsed, { vfs, installedModules: window._installedModules });
+  // Pop a small toast-shaped indicator. Lives in the overlay's parent
+  // (document.body) and self-removes after a few seconds.
+  _showInstallToast(parsed.meta.name, parsed.meta.version, parsed.integrity.ok);
   console.log('[auditable] gcupkg installed:', {
-    name: parsed.meta.name,
-    version: parsed.meta.version,
-    libPath: result.libPath,
+    name: parsed.meta.name, version: parsed.meta.version, libPath: result.libPath,
     integrity: parsed.integrity,
     suggestedLoad: result.hasAdder
       ? `load("${parsed.meta.name}"); load("${parsed.meta.name}/adder");`
       : `load("${parsed.meta.name}");`,
   });
-  // Pop a small toast-shaped indicator. Lives in the overlay's parent
-  // (document.body) and self-removes after a few seconds.
-  _showInstallToast(parsed.meta.name, parsed.meta.version, parsed.integrity.ok);
 }
 
 // Sideload a dropped .gcudat data pack → /var/data/<name>/ via std.data.install
@@ -267,10 +285,27 @@ async function _installDroppedGcupkg(file) {
 // non-data pack surfaces a clear message from std.data.install. Read the
 // installed pack with std.data("<name>").
 async function _installDroppedGcudat(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  // In Works, delegate to the shell → installs to the WORKSPACE library, not
+  // this notebook's /var. Routing parity with .gcupkg; data packs are inert, so
+  // the shell installs on the lighter-touch default unless the workspace's
+  // confirmDataPackInstall toggle is on.
+  if (window._worksBus) {
+    try {
+      const r = await window._worksBus.call(
+        { to: 'works', path: '/', interface: 'Shell', member: 'InstallExtension' },
+        [bytes, file.name, 'data']);
+      if (r && r.installed) setMsg('data pack installed to the workspace', 'ok');
+      else if (r && r.cancelled) setMsg('data pack install cancelled', 'ok');
+      else if (r && r.error) setMsg('data pack: ' + r.error, 'err');
+    } catch (e) {
+      setMsg('data pack delegate failed: ' + (e.message || e), 'err');
+    }
+    return;
+  }
   const vfs = window._notebookVFS;
   if (!vfs) { setMsg('data pack drop: no notebook filesystem', 'err'); return; }
   try {
-    const bytes = new Uint8Array(await file.arrayBuffer());
     const { dir, manifest } = await installDataPack(vfs, bytes);   // shared pure installer
     const name = dir.split('/').pop();
     console.log('[auditable] data pack installed:', { name, dir, read: `await std.data("${name}")` });

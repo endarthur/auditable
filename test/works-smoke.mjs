@@ -1311,6 +1311,71 @@ const layout = await page.evaluate(async (gcudatArr) => {
 // works.html must run from file:// — every surface is an embedded payload,
 // blob-URL'd on spawn, so it loads same-origin with the shell. The rest of
 // this smoke runs over HTTP, which never exercises this.
+// ── Install consent (capability-security §7) — never a silent install ──
+// gcupkg is CODE: a DELEGATED install (a notebook hands its OS-drop to the
+// shell over A-Bus) must PROMPT, and route to the WORKSPACE — never install
+// silently into a single notebook. gcudat is inert DATA: it routes to the
+// workspace library too, on the lighter-touch default (no prompt unless the
+// confirmDataPackInstall toggle is on — that toggle is a follow-up).
+const consentGcupkgArr = await (async () => {
+  const entries = {
+    '.gcupkg-meta.json': JSON.stringify({ gcupkgVersion: 1, name: 'test-consent-ext', version: '0.0.1' }),
+    'package.json': JSON.stringify({ name: 'test-consent-ext', version: '0.0.1' }),
+    'index.js': 'export const ping = () => "pong";\n',
+    'LICENSE': 'MIT\n',
+  };
+  const m = await archive.compress(entries, 'memory', { format: 'zip' });
+  return Array.from([...m.values()][0]);
+})();
+const delegDataArr = await (async () => {
+  const entries = {
+    'gcudat.json': JSON.stringify({ gcudat: 1, kind: 'data', name: 'deleg-ds', version: '1', title: 'Deleg DS' }),
+    'dataset.json': JSON.stringify({ dataset: 1, name: 'deleg-ds', records: 'records.json', count: 1 }),
+    'records.json': JSON.stringify([{ a: 1 }]),
+  };
+  const m = await archive.compress(entries, 'memory', { format: 'zip' });
+  return Array.from([...m.values()][0]);
+})();
+
+// gcupkg: the delegated install MUST prompt — a silent install would resolve
+// with no dialog. Drive the consent dialog's Cancel (label confirmed 'Cancel'
+// in @gcu/dialog), then assert nothing landed in the workspace /lib.
+const installConsent = await page.evaluate(async (arr) => {
+  const W = window.WKS;
+  const p = W.worksBus.call(
+    { to: 'works', path: '/', interface: 'Shell', member: 'InstallExtension' },
+    [new Uint8Array(arr), 'test-consent-ext.gcupkg', 'extension']);
+  let cancelBtn = null;
+  const dl = Date.now() + 6000;
+  while (Date.now() < dl) {
+    cancelBtn = [...document.querySelectorAll('button')]
+      .find((b) => b.offsetParent !== null && (b.textContent || '').trim() === 'Cancel');
+    if (cancelBtn) break;
+    await new Promise((r) => setTimeout(r, 60));
+  }
+  const prompted = !!cancelBtn;
+  if (cancelBtn) cancelBtn.click();
+  let r = null;
+  try { r = await p; } catch { /* */ }
+  let installed = false;
+  try { installed = await W.vfs.exists('/lib/local/test-consent-ext/source'); } catch { /* */ }
+  return { prompted, cancelled: !!(r && r.cancelled), installed };
+}, consentGcupkgArr);
+
+// gcudat: the delegated install routes to the WORKSPACE library (not a notebook).
+const dataDelegate = await page.evaluate(async (arr) => {
+  const W = window.WKS;
+  let r = null;
+  try {
+    r = await W.worksBus.call(
+      { to: 'works', path: '/', interface: 'Shell', member: 'InstallExtension' },
+      [new Uint8Array(arr), 'deleg-ds.gcudat', 'data']);
+  } catch { /* */ }
+  let landed = false;
+  try { landed = await W.vfs.exists('/home/library/data/deleg-ds'); } catch { /* */ }
+  return { installed: !!(r && r.installed), landed };
+}, delegDataArr);
+
 // ── Red-team: realm isolation (capability-security spec §1/§9) ────────
 // From INSIDE a surface's realm, try to reach the shell realm
 // (window.parent.WKS). Same-origin → the property read succeeds (NO isolation);
@@ -1556,6 +1621,10 @@ const checks = {
   'reinstall run restores + reports':      reinstall.runOk && reinstall.landed,
   'library migration moves books/state/ledger': layout.migrated,
   'data datKind installs to /home/library/data': layout.dataOk,
+  // Install consent (capability-security §7) — never a silent install
+  'install: delegated .gcupkg PROMPTS (not silent)':            installConsent.prompted === true,
+  'install: Cancel leaves nothing installed':                   installConsent.cancelled === true && installConsent.installed === false,
+  'install: delegated .gcudat routes to the workspace library': dataDelegate.installed === true && dataDelegate.landed === true,
   // Patchbay surface
   'patchbay: surface opens':          pbOpen.ready === true && pbOpen.kind === 'patchbay',
   'patchbay: canvas + rack mounted':  pbMounted && pbMounted.hasCanvas

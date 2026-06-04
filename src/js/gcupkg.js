@@ -150,6 +150,73 @@ function _toSriSha256(hashBuffer) {
   return 'sha256-' + btoa(bin);
 }
 
+// ── Consent descriptor ─────────────────────────────────────────────────────
+//
+// A realm-agnostic summary of what installing this package entails — fed to the
+// install-consent dialog (shell-side in Works, notebook-side standalone). The
+// single source of "what the user is consenting to": identity, integrity, what
+// the package contributes (§6 `contributes`), and where it lands. `permissions`
+// is the hook for the §7 capability manifest (declared `needs:`) — empty until
+// that ships, but the dialog already has a place to render it. No install is
+// ever silent: every entry point builds a descriptor and prompts (gcupkg always;
+// gcudat when the "confirm data-pack installs" setting is on).
+export function gcupkgConsentDescriptor(parsed, opts = {}) {
+  const meta = (parsed && parsed.meta) || {};
+  const integ = (parsed && parsed.integrity) || { ok: null, note: 'no integrity hash in meta' };
+  return {
+    kind:        opts.kind || 'extension',        // 'extension' (code) | 'data'
+    name:        meta.name || opts.name || 'unknown',
+    version:     meta.version || '',
+    integrity:   { ok: integ.ok, note: integ.note || null },  // ok: true | false | null (unsigned)
+    contributes: Array.isArray(meta.contributes) ? meta.contributes.slice() : [],
+    scope:       opts.scope || null,              // 'workspace' | 'notebook'
+    permissions: [],                              // §7 capability-manifest hook (future)
+  };
+}
+
+// Build the consent prompt content from a descriptor — pure (no DOM), so the
+// SAME security copy renders in every realm (shell-side Works, notebook-side
+// standalone) via that realm's own confirm() dialog. One source of truth for
+// what the user is consenting to. `danger` flips the dialog to its warn styling
+// (red primary) when integrity can't be verified — the part that earns the
+// "never a silent install": you have to mean it.
+export function gcupkgConsentPrompt(d) {
+  const isData = d.kind === 'data';
+  const what = isData ? 'data pack' : 'extension';
+  const ver = d.version ? ' v' + d.version : '';
+  const scopeLine = d.scope === 'workspace'
+    ? 'Installs to the workspace — available to every surface.'
+    : d.scope === 'notebook'
+      ? 'Installs to this notebook.'
+      : '';
+  let integLine = '';
+  let danger = false;
+  if (!isData) {
+    if (d.integrity.ok === true) {
+      integLine = '✓ Integrity verified.';
+    } else if (d.integrity.ok === false) {
+      integLine = '⚠ INTEGRITY MISMATCH — the contents do not match the declared signature. Only install if you trust the source.';
+      danger = true;
+    } else {
+      integLine = '⚠ Unsigned — the publisher cannot be verified.';
+      danger = true;
+    }
+  }
+  const contribLine = (!isData && d.contributes && d.contributes.length)
+    ? 'Adds: ' + d.contributes.map((c) =>
+        typeof c === 'string' ? c : (c && (c.type || c.kind || c.name)) || 'contribution').join(', ') + '.'
+    : '';
+  const permLine = (d.permissions && d.permissions.length)
+    ? 'Requests: ' + d.permissions.join(', ') + '.'
+    : '';   // §7 manifest — empty until declared capabilities ship
+  return {
+    title:   isData ? 'Install data pack' : 'Install extension',
+    message: [`${d.name}${ver}`, scopeLine, contribLine, permLine, integLine].filter(Boolean).join('\n\n'),
+    okLabel: 'Install',
+    danger,
+  };
+}
+
 // ── Install phase ────────────────────────────────────────────────────────
 
 export async function installGcupkg(parsed, opts = {}) {
