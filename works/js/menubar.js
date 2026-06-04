@@ -46,6 +46,7 @@ export function setupMenuBar() {
       { label: 'Terminal',  action: 'tools:terminal' },
       { label: 'Library',   action: 'tools:library' },
       { label: 'Data workbench', action: 'tools:workbench' },
+      { label: 'Encode / Hash', action: 'tools:encode' },
       { label: 'New rack',  action: 'tools:patchbay' },
       { label: 'Settings…', action: 'tools:settings' },
     ] },
@@ -94,6 +95,7 @@ export function setupMenuBar() {
     }
     if (action === 'tools:library') { spawnSurface('library', { title: 'Library' }); return; }
     if (action === 'tools:workbench') { spawnSurface('workbench', { title: 'Data Workbench' }); return; }
+    if (action === 'tools:encode') { spawnSurface('encode', { title: 'Encode / Hash' }); return; }
     if (action === 'tools:patchbay') { await newRack(); return; }
     if (action === 'tools:settings') {
       // Single-instance: focus the existing settings tab if any.

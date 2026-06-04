@@ -1376,6 +1376,37 @@ const openAsHex = await page.evaluate(async () => {
   return { found };
 });
 
+// ── Encode / Hash tool surface ──────────────────────────────────────────
+// Path-less tool: type input → all representations + hashes via Web Crypto.
+// Known vectors for "abc": base64 YWJj, hex 616263, sha256 ba7816bf…20015ad.
+const encOpen = await page.evaluate(async () => {
+  const W = window.WKS;
+  const tabId = W.spawnSurface('encode', { title: 'Encode / Hash' });
+  const rec = W.surfaces.get(tabId);
+  const dl = Date.now() + 15000;
+  while (rec && !rec.ready && Date.now() < dl) await new Promise((r) => setTimeout(r, 80));
+  return { tabId, ready: !!(rec && rec.ready) };
+});
+let encView = { ok: false };
+if (encOpen.ready) {
+  const fr = await surfaceFrame(encOpen.tabId);
+  if (fr) {
+    encView = await fr.evaluate(async () => {
+      window._enc.setInput('abc', 'text');
+      let out = null;
+      const dl = Date.now() + 5000;
+      while (Date.now() < dl) {           // SHA-256 is async
+        out = window._enc.out();
+        if (out.sha256 && out.sha256 !== '…') break;
+        await new Promise((r) => setTimeout(r, 60));
+      }
+      return out;
+    });
+    encView.ok = !!encView && encView.base64 === 'YWJj' && encView.hex === '616263'
+      && encView.sha256 === 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad';
+  }
+}
+
 // ── Install consent (capability-security §7) — never a silent install ──
 // gcupkg is CODE: a DELEGATED install (a notebook hands its OS-drop to the
 // shell over A-Bus) must PROMPT, and route to the WORKSPACE — never install
@@ -1733,6 +1764,9 @@ const checks = {
   'hex: surface boots':                                    hexTest.ready === true,
   'hex: virtualized render + data inspector (int32 LE)':   hexView.ok === true,
   'tree: "Open as hex" opens any file in the hex surface':  openAsHex.found === true,
+  // Encode / Hash tool surface
+  'encode: tool surface boots':                            encOpen.ready === true,
+  'encode: base64 + hex + sha256 correct':                 encView.ok === true,
   // Patchbay surface
   'patchbay: surface opens':          pbOpen.ready === true && pbOpen.kind === 'patchbay',
   'patchbay: canvas + rack mounted':  pbMounted && pbMounted.hasCanvas

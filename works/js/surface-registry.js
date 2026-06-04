@@ -452,6 +452,10 @@ registerKind('strata', { label: 'Strata', icon: '▦', extensions: ['.strata'] }
 registerKind('hex', { label: 'Hex viewer', icon: '⬡', universal: true,
   extensions: ['.bin', '.dat', '.hex', '.wasm', '.img', '.rom'] });
 
+// Encode / Hash — a path-less tool surface (Tools menu). base64/hex/url/json
+// transforms + SHA-1/256/512 via Web Crypto. No extensions (not a file opener).
+registerKind('encode', { label: 'Encode / Hash', icon: '⇄', extensions: [] });
+
 // The A-Bus inspector — a diagnostic surface, spawned from the Debug menu
 // (not tied to a VFS path).
 registerKind('inspector', { label: 'A-Bus Inspector', icon: '◉', extensions: [] });

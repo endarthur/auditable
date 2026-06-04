@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>encode / hash</title>
+<style>
+  /* @theme-tokens */
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    background: var(--au-surface-deep);
+    color: var(--au-fg);
+    font: 13px/1.5 ui-sans-serif, 'Barlow', system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+  }
+  .bar {
+    flex: none;
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px;
+    background: var(--au-surface);
+    border-bottom: 1px solid var(--au-border);
+  }
+  .bar label { color: var(--au-fg-muted); }
+  .bar select {
+    font: inherit; font-size: 12px;
+    background: var(--au-surface-deep); color: var(--au-fg);
+    border: 1px solid var(--au-border); border-radius: 3px; padding: 2px 6px; outline: none;
+  }
+  .bar select:focus { border-color: var(--au-action); }
+  .bar .err { color: var(--au-fault, #cc5555); font-size: 12px; }
+
+  #input {
+    flex: none;
+    height: 28%;
+    min-height: 64px;
+    margin: 0;
+    border: none;
+    border-bottom: 1px solid var(--au-border);
+    background: var(--au-surface-deep);
+    color: var(--au-fg);
+    font: 13px/1.55 ui-monospace, 'Space Mono', Menlo, monospace;
+    padding: 10px;
+    resize: none;
+    outline: none;
+  }
+
+  .outs { flex: 1 1 auto; overflow: auto; padding: 6px 0; }
+  .sec { color: var(--au-fg-soft); font-size: 11px; text-transform: uppercase; letter-spacing: .06em;
+         padding: 8px 12px 2px; }
+  .row { display: flex; align-items: baseline; gap: 10px; padding: 4px 12px; }
+  .row .lbl { flex: none; width: 88px; color: var(--au-fg-muted); font-size: 12px; }
+  .row .val {
+    flex: 1 1 auto; min-width: 0;
+    font: 12px/1.5 ui-monospace, 'Space Mono', Menlo, monospace;
+    color: var(--au-fg);
+    word-break: break-all; white-space: pre-wrap;
+    user-select: text;
+  }
+  .row .val.muted { color: var(--au-fg-soft); }
+  .row .cp {
+    flex: none;
+    font: 11px ui-monospace, monospace;
+    background: none; color: var(--au-fg-muted);
+    border: 1px solid var(--au-border); border-radius: 3px;
+    padding: 1px 7px; cursor: pointer;
+  }
+  .row .cp:hover { color: var(--au-fg); border-color: var(--au-fg-soft); }
+  .row .cp.ok { color: var(--au-go, #6ab04c); border-color: var(--au-go, #6ab04c); }
+
+  * { scrollbar-width: thin; scrollbar-color: var(--au-border) transparent; }
+  *::-webkit-scrollbar { width: 9px; height: 9px; }
+  *::-webkit-scrollbar-thumb { background: var(--au-border); border-radius: 4px; }
+  *::-webkit-scrollbar-thumb:hover { background: var(--au-fg-soft); }
+</style>
+</head>
+<body>
+<!--
+  Encode / Hash tool surface for Auditable Works. A path-less tool (§4.3),
+  spawned from Tools → Encode / Hash. Pure JS + Web Crypto, zero deps.
+
+  Mental model = the hex viewer's data inspector, for a whole string: type
+  input, pick how to interpret it (text / base64 / hex) → canonical bytes →
+  every representation rendered live (text, base64, hex, URL-escaped,
+  JSON-escaped, lengths) + SHA-1/256/512. Bidirectional for free: paste base64,
+  read its text/hex/hash. A scratchpad — no durable state, read-only contract.
+-->
+<div class="bar">
+  <label>interpret input as</label>
+  <select id="mode">
+    <option value="text" selected>Text (UTF-8)</option>
+    <option value="base64">Base64</option>
+    <option value="hex">Hex</option>
+  </select>
+  <span class="err" id="err"></span>
+</div>
+<textarea id="input" placeholder="type or paste…" spellcheck="false" autocomplete="off"></textarea>
+<div class="outs" id="outs">
+  <div class="sec">representations</div>
+  <div class="row"><span class="lbl">Text</span><span class="val" id="o-text"></span><button class="cp" data-for="o-text">copy</button></div>
+  <div class="row"><span class="lbl">Base64</span><span class="val" id="o-base64"></span><button class="cp" data-for="o-base64">copy</button></div>
+  <div class="row"><span class="lbl">Hex</span><span class="val" id="o-hex"></span><button class="cp" data-for="o-hex">copy</button></div>
+  <div class="row"><span class="lbl">URL-escaped</span><span class="val" id="o-url"></span><button class="cp" data-for="o-url">copy</button></div>
+  <div class="row"><span class="lbl">JSON-escaped</span><span class="val" id="o-json"></span><button class="cp" data-for="o-json">copy</button></div>
+  <div class="row"><span class="lbl">Length</span><span class="val muted" id="o-len"></span></div>
+  <div class="sec">hashes (hex)</div>
+  <div class="row"><span class="lbl">SHA-1</span><span class="val" id="o-sha1"></span><button class="cp" data-for="o-sha1">copy</button></div>
+  <div class="row"><span class="lbl">SHA-256</span><span class="val" id="o-sha256"></span><button class="cp" data-for="o-sha256">copy</button></div>
+  <div class="row"><span class="lbl">SHA-512</span><span class="val" id="o-sha512"></span><button class="cp" data-for="o-sha512">copy</button></div>
+</div>
+<script type="module">
+import { connect } from '../../ext/abus/index.js';
+
+/* @theme-init */
+
+const $ = (id) => document.getElementById(id);
+const ENC = new TextEncoder();
+const DEC = new TextDecoder();   // UTF-8, lenient (invalid → U+FFFD)
+
+const hexOf = (bytes) => { let s = ''; for (const b of bytes) s += b.toString(16).padStart(2, '0'); return s; };
+function b64Of(bytes) {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+// Decode the input text (under the chosen interpretation) to canonical bytes.
+// Returns { bytes } or { error }.
+function toBytes(text, mode) {
+  if (mode === 'text') return { bytes: ENC.encode(text) };
+  if (mode === 'base64') {
+    try {
+      const clean = text.replace(/\s+/g, '');
+      const bin = atob(clean);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return { bytes: out };
+    } catch { return { error: 'invalid base64' }; }
+  }
+  // hex
+  const h = text.replace(/0x/gi, '').replace(/[^0-9a-fA-F]/g, '');
+  if (h.length % 2) return { error: 'hex has an odd number of digits' };
+  const out = new Uint8Array(h.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(h.substr(i * 2, 2), 16);
+  return { bytes: out };
+}
+
+let token = 0;   // guards async hash updates against stale input
+function render() {
+  const text = $('input').value;
+  const mode = $('mode').value;
+  const r = toBytes(text, mode);
+  $('err').textContent = r.error || '';
+  const ids = ['o-text', 'o-base64', 'o-hex', 'o-url', 'o-json', 'o-len', 'o-sha1', 'o-sha256', 'o-sha512'];
+  if (r.error) { for (const id of ids) $(id).textContent = ''; return; }
+  const bytes = r.bytes;
+  const asText = DEC.decode(bytes);
+  $('o-text').textContent   = asText;
+  $('o-base64').textContent = b64Of(bytes);
+  $('o-hex').textContent    = hexOf(bytes);
+  $('o-url').textContent    = encodeURIComponent(asText);
+  $('o-json').textContent   = JSON.stringify(asText).slice(1, -1);
+  $('o-len').textContent    = bytes.length + ' bytes · ' + asText.length + ' chars';
+
+  const my = ++token;
+  for (const [alg, id] of [['SHA-1', 'o-sha1'], ['SHA-256', 'o-sha256'], ['SHA-512', 'o-sha512']]) {
+    $(id).textContent = '…';
+    crypto.subtle.digest(alg, bytes).then((d) => { if (my === token) $(id).textContent = hexOf(new Uint8Array(d)); });
+  }
+}
+$('input').addEventListener('input', render);
+$('mode').addEventListener('change', render);
+
+// Copy buttons.
+$('outs').addEventListener('click', async (e) => {
+  const btn = e.target.closest('.cp'); if (!btn) return;
+  const val = $(btn.dataset.for).textContent;
+  try { await navigator.clipboard.writeText(val); btn.classList.add('ok'); btn.textContent = 'copied';
+    setTimeout(() => { btn.classList.remove('ok'); btn.textContent = 'copy'; }, 1100); } catch { /* file:// may block */ }
+});
+
+// Test/debug hook — works-smoke drives via this.
+window._enc = {
+  setInput(text, mode) { $('input').value = text; if (mode) $('mode').value = mode; render(); },
+  out: () => ({ text: $('o-text').textContent, base64: $('o-base64').textContent, hex: $('o-hex').textContent,
+                url: $('o-url').textContent, json: $('o-json').textContent,
+                sha1: $('o-sha1').textContent, sha256: $('o-sha256').textContent, sha512: $('o-sha512').textContent,
+                err: $('err').textContent }),
+};
+
+// ── A-Bus boot (tool surface — no file) ───────────────────────────────
+window.addEventListener('message', async (ev) => {
+  if (ev.source !== window.parent) return;
+  if (!ev.data || ev.data.type !== 'abus:welcome') return;
+  let bus;
+  try { bus = await connect(ev.data.port, { client: 'encode-surface' }); }
+  catch (e) { document.body.textContent = 'connect failed: ' + e.message; return; }
+  if (typeof installThemeSubscription === 'function') installThemeSubscription(bus);
+
+  render();
+  $('input').focus();
+
+  bus.expose('/', {
+    Surface: {
+      methods: { Flush: () => {}, CanClose: () => true, Relocated: () => {} },
+      signals: ['DirtyChanged', 'TitleChanged', 'Ready'],
+    },
+  });
+  bus.signal({ path: '/', interface: 'Surface', member: 'TitleChanged' }, ['Encode / Hash']);
+  bus.signal({ path: '/', interface: 'Surface', member: 'Ready' }, []);
+});
+</script>
+</body>
+</html>
