@@ -39,11 +39,16 @@ Light is `:root` (Switchboard default = equipment gray); dark is `[data-theme="d
 
 Switchboard is at **1.0**. The accent → semantic mapping (orange=action, teal=info, green=go, amber=caution, red=fault, indigo=selected) is the stability anchor — it does not change in 1.x. See SPEC §12 for the full semver policy.
 
-## Future: standalone package
+## The installable package (v0.1)
 
-SPEC §9 reserves `github.com/gentropic/switchboard` for a future standalone `@gcu/switchboard` package — a single `switchboard.css` file plus a tiny JS helper for theme persistence. Until that ships, each GCU project either inlines the tokens (auditable does this in `src/style.css`) or copies the block from this SPEC.
+The SPEC §9 "future" is now here, in this directory:
 
-There is no plan for a React/Vue component library. Switchboard is intentionally just CSS variables and class names so it composes with whatever idiom the host tool is already using (CodeMirror chrome, native canvas, firmware-rendered keypad UI, etc.) without dragging in a runtime.
+- **[`switchboard.css`](./switchboard.css)** — the **canonical design tokens** (Layer 1 `--sw-*` swatches + Layer 2 `--au-*` semantic mapping, light `:root` + dark `[data-theme="dark"]`). The single source of truth. Drop it into any GCU tool to inherit the look; a component reading `--au-*` then themes + light/darks for free.
+- **[`theme.js`](./theme.js)** — the tiny (~1KB) helper: `initTheme()` (first-paint from storage or OS), `toggleTheme()`, `applyTheme()`, `onThemeChange()`. For standalone/sibling consumers; auditable + Works keep their own richer theme systems.
+
+The in-repo copies (`src/style.css`, `works/style.css`, `works/surfaces/_theme.css`) are **parity-tested** against `switchboard.css` (`test/switchboard-tokens.test.mjs`) so they can't silently drift — each may define a subset, but every token it defines must match the canon, except the documented Works brighter-dark-accent delta. The next step is the build-inline consumption (deleting the copies, sourcing them from this file); until then, the test holds the line.
+
+There is **no** React/Vue component library, by design — Switchboard is just CSS variables + class names + a token file, so it composes with whatever idiom the host tool uses (CodeMirror chrome, native canvas, firmware-rendered keypad UI) without dragging in a runtime. The DOM *components* are separate tier-2 packages (see the roster above).
 
 ## License
 

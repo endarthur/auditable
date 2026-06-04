@@ -325,7 +325,7 @@ Contrast reference, dark mode on basalt `#0E1012` (representative — re-measure
 Switchboard is consumed in two shapes:
 
 1. **Inline `<style>` block** — the single-file deploy default. Paste the tokens block at the top of `:root`, paste components as needed.
-2. **`@gcu/switchboard` package** *(future)* — a single `switchboard.css` file plus a 1KB JS helper for theme persistence. No JS runtime, no React component layer; the system is just CSS variables and class names.
+2. **`@gcu/switchboard` package** *(v0.1, shipped)* — `ext/switchboard/switchboard.css` (the canonical token file) + `theme.js` (the ~1KB persist/toggle/first-paint helper). No JS runtime, no React component layer; the system is just CSS variables and class names. The in-repo token copies are parity-tested against `switchboard.css` (`test/switchboard-tokens.test.mjs`); build-inline consumption (deleting the copies, sourcing from the package) is the next step.
 
 There is no plan for a Switchboard React/Vue component library. The whole point is that the tokens compose with whatever idiom the tool is already in — Auditable's CodeMirror chrome, Arborist's panel layout, the handheld's keypad firmware-rendered UI all share the palette without sharing a runtime.
 

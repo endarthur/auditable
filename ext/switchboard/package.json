@@ -1,0 +1,16 @@
+{
+  "name": "@gcu/switchboard",
+  "version": "0.1.0",
+  "description": "The GCU UI toolkit — canonical design tokens (switchboard.css) + a tiny theme helper. No component runtime; composes with any idiom.",
+  "type": "module",
+  "style": "switchboard.css",
+  "exports": {
+    ".": "./switchboard.css",
+    "./switchboard.css": "./switchboard.css",
+    "./theme": "./theme.js",
+    "./theme.js": "./theme.js"
+  },
+  "files": ["switchboard.css", "theme.js", "fonts", "SPEC.md", "README.md"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia (Geoscientific Chaos Union)"
+}

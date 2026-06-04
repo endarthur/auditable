@@ -1,0 +1,93 @@
+/* @gcu/switchboard — the canonical design tokens.
+ *
+ * The single source of truth for the Switchboard palette: Layer 1 (--sw-*
+ * swatches) + Layer 2 (--au-* semantic mapping). Light is :root (equipment
+ * gray, the Switchboard default); dark is [data-theme="dark"] on <html>.
+ * Component CSS reads only --au-* (never --sw-* or hard-coded color) — see
+ * SPEC §6.0, the component-authoring contract.
+ *
+ * Drop this into any GCU tool to inherit the look; add `theme.js` for the
+ * persist/toggle/first-paint helper. Apps may override individual tokens after
+ * including this (e.g. Auditable Works brightens the dark accents) — the
+ * cascade makes that a small delta, not a fork. The dark accents below are the
+ * canonical values (SPEC §3); `test/switchboard-tokens.test.mjs` enforces that
+ * every in-repo copy matches this file modulo each app's documented delta.
+ */
+
+:root {
+  /* ── Layer 1 — Switchboard swatches (light / equipment gray) ── */
+  --sw-bg-deep:     #C2C1BE;
+  --sw-bg:          #D2D1CE;
+  --sw-bg-raised:   #E4E3E1;
+  --sw-bg-bright:   #EDECEB;
+  --sw-text:        #232322;
+  --sw-text-mid:    #504F4C;
+  --sw-text-soft:   #7A7875;
+  --sw-border:      #B3B1AD;
+  --sw-border-soft: #C6C4C1;
+  --sw-rule:        #A5A3A0;
+  --sw-orange:      #B54E1A;  --sw-orange-soft: #E8D8CF;
+  --sw-teal:        #1B6B72;  --sw-teal-soft:   #CEE2E4;
+  --sw-green:       #3D7340;  --sw-green-soft:  #D2E4D4;
+  --sw-amber:       #8E6518;  --sw-amber-soft:  #E4DCCC;
+  --sw-red:         #A8312A;  --sw-red-soft:    #E8D6D4;
+  --sw-indigo:      #4E5580;  --sw-indigo-soft: #D8D9E2;
+  --sw-mono:        'Space Mono', 'JetBrains Mono', 'Consolas', monospace;
+  --sw-sans:        'Barlow', system-ui, sans-serif;
+  --sw-radius:      3px;
+  --sw-radius-lg:   4px;
+
+  /* ── Layer 2 — semantic tokens (the component-facing API) ── */
+  --au-surface-deep:   var(--sw-bg-deep);
+  --au-surface:        var(--sw-bg);
+  --au-surface-raised: var(--sw-bg-raised);
+  --au-surface-bright: var(--sw-bg-bright);
+
+  --au-fg:             var(--sw-text);
+  --au-fg-muted:       var(--sw-text-mid);
+  --au-fg-soft:        var(--sw-text-soft);
+
+  --au-border:         var(--sw-border);
+  --au-border-soft:    var(--sw-border-soft);
+  --au-rule:           var(--sw-rule);
+
+  --au-action:         var(--sw-orange);
+  --au-action-soft:    var(--sw-orange-soft);
+  --au-info:           var(--sw-teal);
+  --au-info-soft:      var(--sw-teal-soft);
+  --au-success:        var(--sw-green);
+  --au-success-soft:   var(--sw-green-soft);
+  --au-warn:           var(--sw-amber);
+  --au-warn-soft:      var(--sw-amber-soft);
+  --au-error:          var(--sw-red);
+  --au-error-soft:     var(--sw-red-soft);
+  --au-selected:       var(--sw-indigo);
+  --au-selected-soft:  var(--sw-indigo-soft);
+
+  --au-font-mono:      var(--sw-mono);
+  --au-font-sans:      var(--sw-sans);
+  --au-radius:         var(--sw-radius);
+  --au-radius-lg:      var(--sw-radius-lg);
+}
+
+[data-theme="dark"] {
+  /* Dark theme (basalt) — overrides --sw-* swatches only; the --au-* mappings
+     above auto-resolve through the reassigned swatches. Accents are the
+     canonical Switchboard dark values (SPEC §3). */
+  --sw-bg-deep:     #0E1012;
+  --sw-bg:          #15171A;
+  --sw-bg-raised:   #1D2024;
+  --sw-bg-bright:   #25282D;
+  --sw-text:        #DDDCDA;
+  --sw-text-mid:    #9E9C98;
+  --sw-text-soft:   #6E6C68;
+  --sw-border:      #2F3338;
+  --sw-border-soft: #24272B;
+  --sw-rule:        #3A3E44;
+  --sw-orange:      #D4672E;  --sw-orange-soft: #2E1F18;
+  --sw-teal:        #3A9BA3;  --sw-teal-soft:   #16272A;
+  --sw-green:       #5A9B5E;  --sw-green-soft:  #18261A;
+  --sw-amber:       #C49540;  --sw-amber-soft:  #2A2316;
+  --sw-red:         #D05048;  --sw-red-soft:    #2C1A18;
+  --sw-indigo:      #7E86B8;  --sw-indigo-soft: #1E2030;
+}
