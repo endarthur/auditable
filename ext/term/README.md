@@ -1,5 +1,7 @@
 # @gcu/term
 
+> Part of the **Switchboard** UI toolkit (a tier-2 DOM component) — themed via `--au-*` tokens per the authoring contract (`ext/switchboard/SPEC.md` §6.0).
+
 Browser-native VT/ANSI terminal emulator with a generic byte-stream
 interface. Williams-parser core, DOM renderer, no dependencies, single
 file (~1100 LOC). Designed for embedded REPLs and log viewers in the

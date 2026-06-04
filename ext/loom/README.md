@@ -1,5 +1,7 @@
 # @gcu/loom
 
+> Part of the **Switchboard** UI toolkit (a tier-2 DOM component) — themed via `--au-*` tokens per the authoring contract (`ext/switchboard/SPEC.md` §6.0).
+
 A virtualized canvas grid renderer behind a rich, async cell provider — the
 table-rendering kernel for the GCU stack.
 

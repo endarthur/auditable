@@ -1,5 +1,7 @@
 # @gcu/dialog
 
+> Part of the **Switchboard** UI toolkit (a tier-2 DOM component) — themed via `--au-*` tokens per the authoring contract (`ext/switchboard/SPEC.md` §6.0).
+
 Modal dialogs: `confirm`, `prompt`, `alert`, custom forms. Promise-resolving
 `show()`, focus trap, stacking, ARIA, CSS-variable themed. Zero dependencies.
 

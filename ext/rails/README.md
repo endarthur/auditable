@@ -1,5 +1,7 @@
 # @gcu/rails
 
+> Part of the **Switchboard** UI toolkit (a tier-2 DOM component) — themed via `--au-*` tokens per the authoring contract (`ext/switchboard/SPEC.md` §6.0).
+
 Layout engine for docked tab-based workspaces with floating groups.
 
 Rails, stacks, tabs, floats — no recursion, no OS popout. Panels never reparent, so iframes, canvases, focused inputs, and running media survive every drag.

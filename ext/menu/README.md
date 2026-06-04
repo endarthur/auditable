@@ -1,5 +1,7 @@
 # @gcu/menu
 
+> Part of the **Switchboard** UI toolkit (a tier-2 DOM component) — themed via `--au-*` tokens per the authoring contract (`ext/switchboard/SPEC.md` §6.0).
+
 Popup menus and menubars: context menus, dropdowns, submenus, MenuBar.
 Promise-resolving `Menu.show()`, CSS-variable themed, full keyboard,
 drag-aware, ~600 LOC source. Zero dependencies.

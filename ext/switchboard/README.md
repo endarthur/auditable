@@ -1,8 +1,26 @@
 # Switchboard
 
-The GCU canonical design system. Cool neutral surfaces, six functional accents, two typefaces (Barlow + Space Mono) with a strict semantic split. Single-file deployable; no build step.
+**The GCU UI toolkit.** Cool neutral surfaces, six functional accents, two typefaces (Barlow + Space Mono) with a strict semantic split. Single-file deployable; no build step.
 
-Used by everything that ships under the GCU org — Auditable, ep, Arborist, `@gcu/plan`, the handheld platform.
+Used by everything that ships under the GCU org — Auditable, ep, Arborist, `@gcu/plan`, the handheld platform. If you're building a GCU tool's UI (in this repo or another), **this is the front door.**
+
+## The toolkit — two tiers
+
+Switchboard is a *toolkit*, not a runtime widget framework. That distinction is deliberate (SPEC §9): it composes with whatever idiom the host tool already uses — CodeMirror chrome, a native canvas, firmware-rendered keypad UI — without dragging in a component runtime. So the toolkit is two tiers, and Switchboard is the umbrella + the contract over both:
+
+**Tier 1 — the language (runtime-free).** Tokens, the six-accent semantic mapping, typography, the documented component *patterns* (Panel, Button, Badge, Form field, Device readout, Terminal, accent band), theming, accessibility. This is what lives here, in `SPEC.md`. It composes into anything.
+
+**Tier 2 — the DOM components.** Separate zero-dep `@gcu/*` packages that *implement* the tier-1 patterns for the browser. Switchboard rosters and contracts them; it does **not** absorb them (that would forfeit runtime-agnosticism). Each ships its own structural CSS + a `-default` theme:
+
+| package | what | doc |
+|---|---|---|
+| `@gcu/menu`   | popup menus, dropdowns, MenuBar | `ext/menu/README.md` |
+| `@gcu/dialog` | modal confirm / prompt / alert + custom dialogs | `ext/dialog/README.md` |
+| `@gcu/rails`  | docked tab / stack / float layout engine | `ext/rails/README.md` (+ `INTEGRATION.md`) |
+| `@gcu/loom`   | virtualized data grid (rich async cell provider) | `ext/loom/README.md` |
+| `@gcu/term`   | VT/ANSI terminal emulator + DOM renderer | `ext/term/README.md` |
+
+**The authoring contract** (one rule, so tier 2 stays consistent — and so *new* components, here or in a sibling repo, fit): a DOM component ships **structure-only CSS that reads `--au-*` semantic tokens** (never `--sw-*` swatches directly, never hard-coded colors), plus an optional `-default` theme for standalone use. The host app supplies the `--sw-* → --au-*` mapping; re-skinning happens at that layer without touching component CSS. See SPEC §6 (patterns) + §11 (conventions).
 
 ## What's in this directory
 

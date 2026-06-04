@@ -38,6 +38,23 @@ beyond a bus, a filesystem, and a five-method contract.
 6. **`ext/EXTENSION_SPEC.md`** — packaging a standalone surface as an installable
    `.gcupkg` (manifest, capabilities, two-entry-point split, distribution).
 
+## Look & feel — the Switchboard UI toolkit
+
+Behaving like a surface is half of it; *looking* like GCU is the other half. That's
+**Switchboard** (`ext/switchboard/`), the GCU UI toolkit — two tiers:
+
+- **The language** (`ext/switchboard/SPEC.md`): tokens, the six-accent semantic
+  mapping (action=orange, info=teal, go=green, caution=amber, fault=red,
+  selected=indigo), typography, component patterns, theming, a11y. Runtime-free.
+- **The components**: `@gcu/menu` (menus), `@gcu/dialog` (modals), `@gcu/rails`
+  (docking layout), `@gcu/loom` (grid), `@gcu/term` (terminal) — drop-in DOM
+  widgets that obey the toolkit's authoring contract (SPEC §6.0).
+
+As a Works surface you inherit the workspace theme for free (the `@theme-tokens` /
+`@theme-init` injection supplies `--au-*`); read **only `--au-*`** in your CSS,
+never `--sw-*` or hard-coded colors, and you re-skin + light/dark for free. Start
+at `ext/switchboard/README.md`.
+
 ## The minimal recipe
 
 A surface is an HTML file that, on load, does this — and `bootSurface` does it for

@@ -1,6 +1,6 @@
 # Switchboard
 
-**The GCU canonical design system.**
+**The GCU UI toolkit** (the canonical design system + the component contract).
 
 | Field      | Value                                          |
 |------------|------------------------------------------------|
@@ -25,6 +25,15 @@ Three commitments drive every choice:
 1. **Eye-comfort first.** The brightest pixel on screen is never `#FFFFFF` and the text is never `#000000`. Max contrast is around 12:1 — above WCAG AAA, well below the retina-searing 21:1 of pure black-on-white. The interface must be readable for hours under variable lighting. This is the problem flight decks solved in 1981.
 2. **Accents are events, not ambience.** The stage is cool. Orange and amber register as *something happened* — a button pressed, a warning raised — not as the colour temperature of the entire interface. (See §10. The "piss filter" rule.)
 3. **Single-file deployable.** The whole system fits inside `<style>` and `<script>` blocks in one HTML file. No build step, no CSS-in-JS, no preprocessor. CSS custom properties carry all the tokens.
+
+### 1.1 Two tiers
+
+Switchboard is a *toolkit*, not a runtime widget framework — and the toolkit is two tiers, with Switchboard the umbrella over both:
+
+- **Tier 1 — the language (this document):** tokens, the accent mapping, typography, the component *patterns* (§6), theming (§7), accessibility (§8). Runtime-free CSS-variables-and-class-names, so it composes with any idiom — CodeMirror chrome, native canvas, firmware-rendered keypad UI — without a runtime (§9).
+- **Tier 2 — the DOM components:** separate zero-dep `@gcu/*` packages (`@gcu/menu`, `@gcu/dialog`, `@gcu/rails`, `@gcu/loom`, `@gcu/term`) that *implement* tier-1 patterns for the browser. Switchboard **rosters and contracts** them (§6.0); it does not absorb them — that would forfeit the runtime-agnosticism tier 1 exists to protect.
+
+The boundary is the point: a sibling tool can take tier 1 alone (just the look) or tier 1 + the tier-2 components it needs, and either way stays consistent because both obey the same token contract.
 
 ---
 
@@ -135,6 +144,39 @@ Labels, data values, terminal output, code, gauges, equipment text. Carries ever
 ---
 
 ## 6. Components
+
+The patterns below (§6.1–6.7) are the **tier-1 specification** — what each thing
+looks like, in tokens. The **tier-2 DOM packages** (`@gcu/menu`, `@gcu/dialog`,
+`@gcu/rails`, `@gcu/loom`, `@gcu/term`) implement them for the browser. §6.0 is the
+contract that keeps the two tiers — and any *new* component, here or in a sibling
+repo — consistent.
+
+### 6.0 The component-authoring contract
+
+A Switchboard tier-2 component (a runtime DOM widget that wants to belong to the
+toolkit) obeys four rules:
+
+1. **Read `--au-*`, never `--sw-*` or hard-coded color.** Component CSS consumes
+   the host app's *semantic* layer (`--au-action`, `--au-info`, `--au-error`, …),
+   never the raw swatches and never literal hex. The host maps `--sw-* → --au-*`
+   once; re-skinning happens there, untouched component CSS. (Hard-coding a color
+   is the one unforgivable break — it desyncs from light/dark and from re-skins.)
+2. **Ship structure-only CSS + an optional `-default` theme.** The package's main
+   CSS carries layout/structure that references `--au-*`; a separate
+   `<name>-default.css` provides a standalone fallback mapping so the component
+   renders correctly with no host. (Pattern in `@gcu/menu`: `menu.css` structural +
+   `menu-default.css` theme; a host that already defines `--au-*` includes only the
+   structural sheet — auditable strips the `-default`'s `:root` block so it doesn't
+   fight the host tokens.)
+3. **Obey the accent semantics (§3) and the anti-patterns (§10).** action=orange,
+   info=teal, go=green, caution=amber, fault=red, selected=indigo — non-negotiable;
+   no drop shadows (depth = surface register + 1px borders); no piss filter.
+4. **No runtime dependency leak.** A tier-2 component is a zero-dep leaf (it may use
+   the bus/VFS via injection, like surfaces do, but it doesn't drag a framework).
+   This is what lets a host compose only the components it needs.
+
+A component that honors §6.0 drops into any GCU tool and inherits its theme,
+light/dark, and user overrides for free.
 
 ### 6.1 Panel
 
