@@ -84,6 +84,12 @@ function emitCall(e, ec) {
     const a = e.args;
     return `ctx.lookup(${JSON.stringify(a[0].name)}, ${JSON.stringify(a[1].value)}, ${emitExpr(a[2], ec)}, ${JSON.stringify(a[3].value)})`;
   }
+  if (e.name === 'lookup_in') {                            // lookup_in(table, "eq", eqProbe, "lo", "hi", pos, "value")
+    if (!ec.hasCtx) throw new Error('over: lookup_in() is not allowed inside a window aggregate / order / where');
+    const a = e.args;
+    return `ctx.lookupIn(${JSON.stringify(a[0].name)}, ${JSON.stringify(a[1].value)}, ${emitExpr(a[2], ec)}, `
+      + `${JSON.stringify(a[3].value)}, ${JSON.stringify(a[4].value)}, ${emitExpr(a[5], ec)}, ${JSON.stringify(a[6].value)})`;
+  }
   return `_over.call(${JSON.stringify(e.name)}${e.args.map((a) => ', ' + emitExpr(a, ec)).join('')})`;
 }
 

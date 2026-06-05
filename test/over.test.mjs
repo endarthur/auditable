@@ -468,6 +468,40 @@ test('lookup inside a window aggregate is rejected (no ctx there)', () => {
     /not allowed inside/);
 });
 
+// ── lookup_in / interval (range) join — the geology prize ──
+const DOMAINS = [
+  { hole: 'DDH1', from: 0, to: 10, code: 'OX' },
+  { hole: 'DDH1', from: 10, to: 25, code: 'TR' },
+  { hole: 'DDH1', from: 25, to: 50, code: 'SU' },
+  { hole: 'DDH2', from: 0, to: 30, code: 'OX' },
+];
+const SAMPLES = [
+  { hole: 'DDH1', DEPTH: 5 },    // [0,10)  → OX
+  { hole: 'DDH1', DEPTH: 10 },   // boundary → [10,25) TR  (half-open: 10 belongs to the second)
+  { hole: 'DDH1', DEPTH: 40 },   // [25,50) → SU
+  { hole: 'DDH2', DEPTH: 15 },   // [0,30)  → OX
+  { hole: 'DDH1', DEPTH: 60 },   // past the last interval → absent
+  { hole: 'DDH3', DEPTH: 5 },    // no such hole → absent
+];
+
+test('run: interval join assigns a domain by depth (half-open [lo,hi))', () => {
+  const out = compile('CODE = lookup_in(domains, "hole", hole, "from", "to", DEPTH, "code")')
+    .run(SAMPLES, { domains: DOMAINS }).rows;
+  assert.deepEqual(out.map((x) => x.CODE), ['OX', 'TR', 'SU', 'OX', null, null]);
+});
+
+test('run: interval join — a depth in a gap returns absent', () => {
+  const G = [{ h: 'A', f: 0, t: 5, v: 'lo' }, { h: 'A', f: 10, t: 15, v: 'hi' }];   // gap [5,10)
+  const probe = (d) => compile('V = lookup_in(g, "h", H, "f", "t", D, "v")').run([{ H: 'A', D: d }], { g: G }).rows[0].V;
+  assert.equal(probe(3), 'lo');
+  assert.equal(probe(7), null);    // in the gap
+  assert.equal(probe(12), 'hi');
+});
+
+test('compile: malformed lookup_in is rejected', () => {
+  assert.throws(() => compile('X = lookup_in(t, "h", H, "f", "t", D)'), /7 arguments/);   // 6 args
+});
+
 // ── the notebook tag ──
 test('tag: over`…`(rows) compiles + applies; rows carry .columns', async () => {
   const { over } = await import('../ext/over/src/tag.js');

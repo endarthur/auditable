@@ -43,7 +43,7 @@ const FUNCTIONS = new Set([
   'prev', 'next', 'first', 'last',
   'abs', 'sqrt', 'exp', 'log', 'loge', 'logn', 'log10', 'pow', 'rais', 'mod',
   'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2', 'int', 'round', 'present',
-  'len', 'ucase', 'lcase', 'trim', 'string', 'concat', 'substr', 'lookup',
+  'len', 'ucase', 'lcase', 'trim', 'string', 'concat', 'substr', 'lookup', 'lookup_in',
   'xyzijk', 'ijknum', 'ijkget',
 ]);
 

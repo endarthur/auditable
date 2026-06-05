@@ -230,12 +230,13 @@ Everything we want, tagged by phase. **v0 / v0.1 are proposals to discuss.**
   *Open: pull into v0 so it's distinctly ours on day one, vs land core first?*
 
 ### High practical value — **v1**
-- **`lookup` / join** — equality lookup **SHIPPED**: `lookup(table, "keyCol",
-  probeExpr, "valueCol")`, table injected by name (`run(rows, { table })`), explicit
-  string column names (nothing inferred), left-join (unmatched → absent), hash built
-  once per (table,key). Next: the **interval/range join** (the geology prize —
-  desurvey / compositing / domain-by-depth) as a second index shape + an explicit
-  range predicate; then aggregating one-to-many joins (compositing) separately.
+- **`lookup` / join** — both forms **SHIPPED**. *Equality:* `lookup(table, "keyCol",
+  probeExpr, "valueCol")` (hash per (table,key)). *Interval/range (the geology join):*
+  `lookup_in(table, "eqCol", eqProbe, "loCol", "hiCol", posExpr, "valueCol")` — per-eq-key
+  sorted-interval index + binary search, half-open `[lo, hi)`; domain-by-depth /
+  desurvey / domain assignment. Both: table injected by name, explicit string column
+  names (nothing inferred), left-join (unmatched → absent). Next: aggregating
+  one-to-many joins (**compositing** — a window/aggregate over the joined set; bigger).
 - **units** propagation + checking (native) — grade math that catches %-vs-g/t.
 
 ### Auditable QA + power — **v1/v2**

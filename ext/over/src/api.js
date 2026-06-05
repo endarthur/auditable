@@ -37,7 +37,7 @@ export function compile(text, opts = {}) {
     dialect: ast.dialect,
     source: rowFn.source,
     windows: windowDefs.length,
-    lookups: lookupSpecs.length,
+    lookups: lookupSpecs.eq.length + lookupSpecs.interval.length,
     outputColumns: staticSchema ? staticSchema.columns : null,
     warnings: staticSchema ? staticSchema.warnings : null,
     // tables: { name: rows[] | {rows} } — the reference tables lookup() reads.
