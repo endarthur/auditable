@@ -381,3 +381,34 @@ test('run: window aggregates ignore absent', () => {
 test('compile: a non-aggregate over a group is rejected', () => {
   assert.throws(() => compile('X = foo(FE) over LITHO'), /not a window aggregate/);
 });
+
+// ── the notebook tag ──
+test('tag: over`…`(rows) compiles + applies; rows carry .columns', async () => {
+  const { over } = await import('../ext/over/src/tag.js');
+  const t = over`
+    FE_N    = FE / mean(FE) over LITHO
+    ORETYPE = match FE { >=62:"HEMATITE", >=58:"ITABIRITE", _:"WASTE" }
+    saveonly(FE, FE_N, ORETYPE)
+  `;
+  const out = t(ROWS);
+  assert.deepEqual(out.map((r) => r.ORETYPE), ['HEMATITE', 'ITABIRITE', 'WASTE']);
+  assert.ok(Math.abs(out[0].FE_N - 64 / 61) < 1e-9);
+  assert.deepEqual(out.columns.map((c) => c.name), ['FE', 'FE_N', 'ORETYPE']);   // non-enumerable
+  assert.equal(typeof t.source, 'string');
+});
+
+test('tag: transforms chain (a result feeds the next over)', async () => {
+  const { over } = await import('../ext/over/src/tag.js');
+  const a = over`G = SIO2 + AL2O3`(ROWS);                  // G = [4, 8, 28]
+  const b = over`if (G >= 5) delete end\nsaveonly(IJK, G)`(a);
+  assert.deepEqual(b.map((r) => r.IJK), [1]);              // only the row with G < 5 survives
+});
+
+test('tag: tokenizer classifies keywords / functions / columns', async () => {
+  const { tokenizeOver } = await import('../ext/over/src/tag.js');
+  const toks = tokenizeOver('FE_N = mean(FE) over LITHO  # note');
+  const byType = (ty) => toks.filter((t) => t.type === ty).map((t) => t.text);
+  assert.ok(byType('fn').includes('mean'));
+  assert.ok(byType('kw').includes('over'));
+  assert.ok(byType('cmt').some((t) => /# note/.test(t)));
+});

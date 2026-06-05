@@ -13,3 +13,4 @@ export * from './emit.js';
 export * from './windows.js';
 export * from './driver.js';
 export * from './api.js';
+export * from './tag.js';
