@@ -379,7 +379,7 @@ test('run: window aggregates ignore absent', () => {
 });
 
 test('compile: a non-aggregate over a group is rejected', () => {
-  assert.throws(() => compile('X = foo(FE) over LITHO'), /not a window aggregate/);
+  assert.throws(() => compile('X = foo(FE) over LITHO'), /not a window function/);
 });
 
 // ── ordered windows (running aggregates) + where ──
@@ -412,6 +412,24 @@ test('run: unordered where filters the aggregate; all group rows see it', () => 
 test('run: ordered where — excluded rows fall out of the window (NaN)', () => {
   const W = [{ G: 'X', V: 10 }, { G: 'X', V: -5 }, { G: 'X', V: 20 }, { G: 'Y', V: 8 }];
   assert.deepEqual(run('R = sum(V) over G order V where V > 0', W).map((x) => x.R), [10, NaN, 30, 8]);
+});
+
+test('run: prev / next lag-lead over an ordered window', () => {
+  assert.deepEqual(run('P = prev(LEN) over BHID order DEPTH', DH).map((x) => x.P), [1, null, 0.5, null]);
+  assert.deepEqual(run('N = next(LEN) over BHID order DEPTH', DH).map((x) => x.N), [null, 1, 2, null]);
+});
+
+test('run: first / last over an ordered window', () => {
+  assert.deepEqual(run('F = first(LEN) over BHID order DEPTH', DH).map((x) => x.F), [0.5, 0.5, 0.5, 3]);
+  assert.deepEqual(run('L = last(LEN) over BHID order DEPTH', DH).map((x) => x.L), [2, 2, 2, 3]);
+});
+
+test('run: downhole difference via prev (LEN - prev(LEN))', () => {
+  assert.deepEqual(run('D = LEN - prev(LEN) over BHID order DEPTH', DH).map((x) => x.D), [1, NaN, 0.5, NaN]);
+});
+
+test('compile: a positional window without `order` errors', () => {
+  assert.throws(() => compile('X = prev(FE) over LITHO'), /needs an .order/);
 });
 
 // ── the notebook tag ──

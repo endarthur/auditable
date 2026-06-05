@@ -201,8 +201,8 @@ DECL_W = 1 / count() over (X bin 50, Y bin 50)# cell-declustering weight
 **SHIPPED** (`agg(expr) over GROUP [order EXPR] [where EXPR]`, GROUP = `all` | `()` |
 col | `(col,…)`; aggregates count/sum/mean/min/max/std; two-pass, absent ignored;
 ordered → a running value per row in `order`, absorbing the first/prev/next
-accumulation idiom). Still to come: explicit **prev/next/first/last** lag-lead (share
-the sort infra), and `bin` grouping.
+accumulation idiom; **`prev`/`next`/`first`/`last`** positional accessors (lag/lead/
+edge) over an ordered window). Still to come: `bin` grouping (declustering cells).
 
 This **absorbs EXTRA's worst part**: the awkward `first()`/`prev()`/`next()` stream
 functions become a principled **ordered window** (`prev(RUNLEN)` → a window lag).

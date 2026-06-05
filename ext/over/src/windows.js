@@ -14,6 +14,7 @@ import { compileExpr } from './emit.js';
 import { overRuntime } from './runtime.js';
 
 const AGG = new Set(['count', 'sum', 'mean', 'min', 'max', 'std']);
+const POSITIONAL = new Set(['prev', 'next', 'first', 'last']);   // lag/lead/edge — need `order`
 const SEP = String.fromCharCode(1);   // group-key field separator
 
 // missing = null (string absent) OR NaN (numeric absent) — aggregates skip it.
@@ -38,8 +39,12 @@ export function collectWindows(ast) {
   function expr(e) {
     if (!e || typeof e !== 'object') return;
     if (e.type === 'Window') {
-      if (!e.agg || e.agg.type !== 'Call' || !AGG.has(e.agg.name))
-        throw new Error(`over: "${e.agg && e.agg.name}" is not a window aggregate (${[...AGG].join('/')})`);
+      const name = e.agg && e.agg.type === 'Call' ? e.agg.name : null;
+      const isAgg = AGG.has(name), isPos = POSITIONAL.has(name);
+      if (!isAgg && !isPos)
+        throw new Error(`over: "${name}" is not a window function (aggregates: ${[...AGG].join('/')}; positional: ${[...POSITIONAL].join('/')})`);
+      if (isPos && !e.order) throw new Error(`over: ${name}() needs an \`order\` — e.g. ${name}(FE) over BHID order DEPTH`);
+      if (isPos && !(e.agg.args && e.agg.args[0])) throw new Error(`over: ${name}() needs a column argument`);
       e._winId = defs.length;
       defs.push({
         id: e._winId, aggName: e.agg.name, argExpr: e.agg.args[0] || null, group: e.group,
@@ -110,10 +115,25 @@ function computeOrdered(d, rows) {
     let g = groups.get(key); if (!g) { g = []; groups.set(key, g); }
     g.push(i);
   }
+  const positional = POSITIONAL.has(d.aggName);
   for (const g of groups.values()) {
     g.sort((a, b) => cmpOrder(orderFn(rows[a]), orderFn(rows[b])));
-    const acc = makeAcc(d.aggName);
-    for (const idx of g) { acc.add(argFn(rows[idx])); byRow[idx] = acc.result(); }   // running through this row
+    if (positional) {
+      const last = g.length - 1;
+      for (let k = 0; k <= last; k++) {
+        let v;
+        switch (d.aggName) {
+          case 'first': v = argFn(rows[g[0]]); break;
+          case 'last': v = argFn(rows[g[last]]); break;
+          case 'prev': v = k > 0 ? argFn(rows[g[k - 1]]) : null; break;       // lag — absent at the edge
+          case 'next': v = k < last ? argFn(rows[g[k + 1]]) : null; break;    // lead
+        }
+        byRow[g[k]] = v;
+      }
+    } else {
+      const acc = makeAcc(d.aggName);
+      for (const idx of g) { acc.add(argFn(rows[idx])); byRow[idx] = acc.result(); }   // running through this row
+    }
   }
   return { ordered: true, byRow };
 }

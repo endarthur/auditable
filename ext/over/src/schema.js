@@ -85,7 +85,8 @@ export function inferType(expr, ctx) {
       if (n === 'count') return 'int';
       if (n === 'mean' || n === 'std') return 'float';
       if (n === 'sum') return expr.agg.args[0] && inferType(expr.agg.args[0], ctx) === 'int' ? 'int' : 'float';
-      if (n === 'min' || n === 'max') return expr.agg.args[0] ? inferType(expr.agg.args[0], ctx) : 'dynamic';
+      // min/max + positional (prev/next/first/last) take the arg's type
+      if (['min', 'max', 'prev', 'next', 'first', 'last'].includes(n)) return expr.agg.args[0] ? inferType(expr.agg.args[0], ctx) : 'dynamic';
       return 'dynamic';
     }
     default: return 'dynamic';
