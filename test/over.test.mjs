@@ -5,6 +5,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { lex, OverLexError } from '../ext/over/src/lex.js';
 import { parse, OverParseError } from '../ext/over/src/parse.js';
+import { schemaPass, inferType, unify } from '../ext/over/src/schema.js';
+
+const QF = [
+  { name: 'FE', type: 'float' }, { name: 'SIO2', type: 'float' }, { name: 'AL2O3', type: 'float' },
+  { name: 'P', type: 'float' }, { name: 'IJK', type: 'int' }, { name: 'LITHO', type: 'category' },
+];
+const sch = (src, input = QF) => schemaPass(parse(src), input);
+const col = (r, name) => r.columns.find((c) => c.name === name);
 
 const types = (src) => lex(src).map((t) => t.t);
 const stmts = (src) => parse(src).statements;
@@ -146,4 +154,82 @@ test('parse: the spec\'s end-to-end transform', () => {
 
 test('parse: trailing junk is an error', () => {
   assert.throws(() => parse('X = 1 )'), OverParseError);
+});
+
+// ── schema pass ──
+test('unify: numeric + bool coercion; mixed → dynamic', () => {
+  assert.equal(unify('int', 'float'), 'float');
+  assert.equal(unify('bool', 'int'), 'int');
+  assert.equal(unify('bool', 'float'), 'float');
+  assert.equal(unify('string', 'category'), 'string');
+  assert.equal(unify('string', 'int'), 'dynamic');
+  assert.equal(unify('int', 'int'), 'int');
+});
+
+test('schema: a new column is typed by inference; input passes through', () => {
+  const r = sch('GANGUE = SIO2 + AL2O3');
+  assert.equal(r.columns.length, QF.length + 1);
+  assert.equal(col(r, 'GANGUE').vtype, 'float');
+});
+
+test('schema: explicit bool spec vs inferred relational (native bool / compat float)', () => {
+  assert.equal(col(sch('HIGRADE: bool = FE >= 62'), 'HIGRADE').vtype, 'bool');
+  assert.equal(col(sch('HIGRADE = FE >= 62'), 'HIGRADE').vtype, 'bool');
+  assert.equal(col(sch('%compat\nHIGRADE = FE >= 62'), 'HIGRADE').vtype, 'float');
+});
+
+test('schema: let is scratch — present in lets, absent from output', () => {
+  const r = sch('let ratio = SIO2 / FE\nX = ratio * 2');
+  assert.ok(r.lets.find((l) => l.name === 'ratio' && l.vtype === 'float'));
+  assert.equal(col(r, 'ratio'), undefined);
+  assert.equal(col(r, 'X').vtype, 'float');
+});
+
+test('schema: match value-types unify to string', () => {
+  assert.equal(col(sch('ORETYPE = match FE { >=64:"H", >=58:"I", _:"W" }'), 'ORETYPE').vtype, 'string');
+});
+
+test('schema: a column declared across if-branches lands, type unified', () => {
+  const r = sch('if (FE >= 60)\n  CLASS = "ORE"\nelse\n  CLASS = "WASTE"\nend');
+  assert.equal(col(r, 'CLASS').vtype, 'string');
+});
+
+test('schema: saveonly restricts + orders the output exactly', () => {
+  const r = sch('CONTAM = (SIO2 + AL2O3 + P) / FE\nsaveonly(IJK, FE, CONTAM)');
+  assert.deepEqual(r.columns.map((c) => c.name), ['IJK', 'FE', 'CONTAM']);
+  assert.equal(col(r, 'CONTAM').vtype, 'float');
+});
+
+test('schema: erase drops a column', () => {
+  assert.equal(col(sch('erase(P)'), 'P'), undefined);
+});
+
+test('schema: use-before-def warns', () => {
+  const r = sch('X = NOSUCH + 1');
+  assert.ok(r.warnings.some((w) => /NOSUCH/.test(w)));
+});
+
+test('schema: compat name rules warn (lowercase / too long)', () => {
+  const r = sch('%compat\nlongname = 1');
+  assert.ok(r.warnings.some((w) => /longname/.test(w)));
+});
+
+test('schema: the spec end-to-end transform resolves before any row', () => {
+  const src = [
+    'if (FE == absent) FE = default(FE) end',
+    'CONTAM = (SIO2 + AL2O3 + P) / FE',
+    'if (FE >= 60 and CONTAM <= 0.12)',
+    '   CLASS = "ORE"',
+    'else',
+    '   CLASS = "WASTE"',
+    'end',
+    'saveonly(IJK, FE, SIO2, AL2O3, P, CONTAM, CLASS)',
+  ].join('\n');
+  const r = sch(src, [
+    { name: 'IJK', type: 'int' }, { name: 'FE', type: 'float' }, { name: 'SIO2', type: 'float' },
+    { name: 'AL2O3', type: 'float' }, { name: 'P', type: 'float' },
+  ]);
+  assert.deepEqual(r.columns.map((c) => c.name), ['IJK', 'FE', 'SIO2', 'AL2O3', 'P', 'CONTAM', 'CLASS']);
+  assert.equal(col(r, 'CONTAM').vtype, 'float');
+  assert.equal(col(r, 'CLASS').vtype, 'string');
 });
