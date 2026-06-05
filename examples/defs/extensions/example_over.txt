@@ -1,0 +1,60 @@
+/// auditable
+/// title: OVER — table transforms
+/// module: @gcu/over ext/over/index.js
+
+/// md
+# OVER — a row-wise table-transform DSL
+
+`OVER` (Ordered/Vectorized Expression Runner) is a small language for transforming tables: **map each row** (mutate), **filter** (`delete`), and **project** (`saveonly`) — with `if/elseif/else`, `match`, and **window aggregates** (`mean(x) over GROUP`). Datamine-EXTRA-compatible, with a typed, null-aware native superset.
+
+Load it and you get the `over` tag (with syntax highlighting). `over\`…\`` compiles a transform; apply it to a table — an array of row objects. Transforms chain.
+
+/// code
+const { over } = await load("@gcu/over");
+
+// a few drillhole composites — FE = iron %, with one missing assay
+const holes = [
+  { hole: "DDH1", from: 0, to: 2, FE: 64.2, SIO2: 3.1,  AL2O3: 1.2, LITHO: "HEM" },
+  { hole: "DDH1", from: 2, to: 4, FE: 58.0, SIO2: 6.4,  AL2O3: 2.1, LITHO: "ITA" },
+  { hole: "DDH1", from: 4, to: 6, FE: 31.5, SIO2: 22.0, AL2O3: 8.0, LITHO: "WST" },
+  { hole: "DDH2", from: 0, to: 2, FE: 61.8, SIO2: 4.0,  AL2O3: 1.5, LITHO: "HEM" },
+  { hole: "DDH2", from: 2, to: 4, FE: null, SIO2: 5.2,  AL2O3: 1.8, LITHO: "ITA" },
+];
+ui.table(holes);
+
+/// md
+## Mutate · classify · filter · project
+
+Compute a contaminant ratio, classify the ore type with `match`, drop waste, and keep a tidy table. The missing-FE row propagates to `WASTE` and gets dropped — `absent` flows through arithmetic and makes comparisons false, automatically.
+
+/// code
+const classified = over`
+  CONTAM  = (SIO2 + AL2O3) / FE
+  ORETYPE = match FE { >=62: "HEMATITE", >=58: "ITABIRITE", _: "WASTE" }
+  if (ORETYPE == "WASTE") delete end
+  saveonly(hole, from, to, FE, CONTAM, ORETYPE)
+`(holes);
+ui.table(classified);
+
+/// md
+## Window aggregates — the `over` feature
+
+`mean(FE) over LITHO` is a group aggregate used per row — here, each interval's grade relative to its lithology's mean (a two-pass computation; absent values are ignored in the aggregate).
+
+/// code
+const relative = over`
+  FE_MEAN = mean(FE) over LITHO
+  FE_REL  = FE / FE_MEAN
+  N       = count() over LITHO
+  saveonly(hole, FE, LITHO, FE_MEAN, FE_REL, N)
+`(holes);
+ui.table(relative);
+
+/// md
+## It's auditable
+
+A transform's output columns are resolved *before any row runs*, and the emitted JS is inspectable — OVER lowers to real code, not a black box.
+
+/// code
+const t = over`CONTAM = (SIO2 + AL2O3) / FE`;
+ui.display(t.source);
