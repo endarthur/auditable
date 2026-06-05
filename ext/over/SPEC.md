@@ -197,6 +197,11 @@ RUNLEN = sum(LENGTH) over BHID order DEPTH    # downhole running length
 DECL_W = 1 / count() over (X bin 50, Y bin 50)# cell-declustering weight
 ```
 
+**Status:** v0 group aggregates **SHIPPED** (`agg(expr) over GROUP`, GROUP = `all` |
+`()` | col | `(col,…)`; aggregates count/sum/mean/min/max/std; two-pass, absent
+ignored). Still to come: **ordered** windows (`order …`, running/lag — the
+first/prev/next absorption below), `where` filters, and `bin` grouping.
+
 This **absorbs EXTRA's worst part**: the awkward `first()`/`prev()`/`next()` stream
 functions become a principled **ordered window** (`prev(RUNLEN)` → a window lag).
 Runtime is a two-pass driver — compute group aggregates (via `@gcu/sluice`'s
