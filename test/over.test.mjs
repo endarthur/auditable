@@ -432,6 +432,42 @@ test('compile: a positional window without `order` errors', () => {
   assert.throws(() => compile('X = prev(FE) over LITHO'), /needs an .order/);
 });
 
+// ── lookup / equality join (multi-table) ──
+const ASSAYS = [{ LITHO: 'HEM', VOL: 100 }, { LITHO: 'ITA', VOL: 50 }, { LITHO: 'WST', VOL: 80 }];
+const DENSITIES = [{ litho: 'HEM', density: 5.0 }, { litho: 'ITA', density: 4.2 }, { litho: 'WST', density: 3.0 }];
+
+test('run: lookup enriches a row from a reference table', () => {
+  const out = compile('DENS = lookup(densities, "litho", LITHO, "density")').run(ASSAYS, { densities: DENSITIES }).rows;
+  assert.deepEqual(out.map((x) => x.DENS), [5.0, 4.2, 3.0]);
+});
+
+test('run: lookup composes inline (left-join; unmatched → absent)', () => {
+  const out = compile('TONNES = lookup(densities, "litho", LITHO, "density") * VOL').run(ASSAYS, { densities: DENSITIES }).rows;
+  assert.deepEqual(out.map((x) => x.TONNES), [500, 210, 240]);
+  const miss = compile('D = lookup(densities, "litho", LITHO, "density")').run([{ LITHO: 'XXX' }], { densities: DENSITIES }).rows;
+  assert.equal(miss[0].D, null);
+});
+
+test('run: multiple lookups on the same (table,key) both resolve', () => {
+  const out = compile('A = lookup(t, "k", K, "a")\nB = lookup(t, "k", K, "b")').run([{ K: 1 }], { t: [{ k: 1, a: 10, b: 20 }] }).rows;
+  assert.equal(out[0].A, 10); assert.equal(out[0].B, 20);
+});
+
+test('compile: a missing reference table throws at run', () => {
+  assert.throws(() => compile('D = lookup(missing, "k", K, "v")').run([{ K: 1 }], {}), /not.*provided/);
+});
+
+test('compile: malformed lookup is rejected', () => {
+  assert.throws(() => compile('D = lookup(t, K, "v")'), /4 arguments/);            // 3 args
+  assert.throws(() => compile('D = lookup(t, key, K, "v")'), /string literals/);   // bare key ident
+});
+
+test('lookup inside a window aggregate is rejected (no ctx there)', () => {
+  // the window arg compiles in the pass, so this surfaces at run
+  assert.throws(() => compile('M = mean(lookup(t, "k", K, "v")) over G').run([{ K: 1, G: 'a' }], { t: [] }),
+    /not allowed inside/);
+});
+
 // ── the notebook tag ──
 test('tag: over`…`(rows) compiles + applies; rows carry .columns', async () => {
   const { over } = await import('../ext/over/src/tag.js');

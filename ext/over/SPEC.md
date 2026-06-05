@@ -230,8 +230,12 @@ Everything we want, tagged by phase. **v0 / v0.1 are proposals to discuss.**
   *Open: pull into v0 so it's distinctly ours on day one, vs land core first?*
 
 ### High practical value — **v1**
-- **`lookup` / join** across strata tables (collar/survey/assay/domain/density) —
-  the biggest real gap in EXTRA.
+- **`lookup` / join** — equality lookup **SHIPPED**: `lookup(table, "keyCol",
+  probeExpr, "valueCol")`, table injected by name (`run(rows, { table })`), explicit
+  string column names (nothing inferred), left-join (unmatched → absent), hash built
+  once per (table,key). Next: the **interval/range join** (the geology prize —
+  desurvey / compositing / domain-by-depth) as a second index shape + an explicit
+  range predicate; then aggregating one-to-many joins (compositing) separately.
 - **units** propagation + checking (native) — grade math that catches %-vs-g/t.
 
 ### Auditable QA + power — **v1/v2**

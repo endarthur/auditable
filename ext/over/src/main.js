@@ -11,6 +11,7 @@ export * from './schema.js';
 export * from './runtime.js';
 export * from './emit.js';
 export * from './windows.js';
+export * from './lookup.js';
 export * from './driver.js';
 export * from './api.js';
 export * from './tag.js';

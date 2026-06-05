@@ -79,6 +79,11 @@ function emitCall(e, ec) {
     const a = e.args[0];
     return a && a.type === 'Field' && ec.defaults.has(a.name) ? ec.defaults.get(a.name) : 'null';
   }
+  if (e.name === 'lookup') {                               // lookup(table, "key", probe, "value")
+    if (!ec.hasCtx) throw new Error('over: lookup() is not allowed inside a window aggregate / order / where');
+    const a = e.args;
+    return `ctx.lookup(${JSON.stringify(a[0].name)}, ${JSON.stringify(a[1].value)}, ${emitExpr(a[2], ec)}, ${JSON.stringify(a[3].value)})`;
+  }
   return `_over.call(${JSON.stringify(e.name)}${e.args.map((a) => ', ' + emitExpr(a, ec)).join('')})`;
 }
 
@@ -111,6 +116,7 @@ export function emitRowSource(ast) {
     ref: (name) => (lets.has(name) ? lets.get(name) : `out[${JSON.stringify(name)}]`),
     defaults,
     onWindow: (node) => `ctx.win(${node._winId | 0}, ${windowKey(node)})`,
+    hasCtx: true,                    // the row fn has ctx → lookup() allowed here
   };
 
   function block(statements) { return statements.map(stmt).filter(Boolean).join('\n'); }

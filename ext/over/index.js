@@ -738,6 +738,11 @@ function emitCall(e, ec) {
     const a = e.args[0];
     return a && a.type === 'Field' && ec.defaults.has(a.name) ? ec.defaults.get(a.name) : 'null';
   }
+  if (e.name === 'lookup') {                               // lookup(table, "key", probe, "value")
+    if (!ec.hasCtx) throw new Error('over: lookup() is not allowed inside a window aggregate / order / where');
+    const a = e.args;
+    return `ctx.lookup(${JSON.stringify(a[0].name)}, ${JSON.stringify(a[1].value)}, ${emitExpr(a[2], ec)}, ${JSON.stringify(a[3].value)})`;
+  }
   return `_over.call(${JSON.stringify(e.name)}${e.args.map((a) => ', ' + emitExpr(a, ec)).join('')})`;
 }
 
@@ -770,6 +775,7 @@ function emitRowSource(ast) {
     ref: (name) => (lets.has(name) ? lets.get(name) : `out[${JSON.stringify(name)}]`),
     defaults,
     onWindow: (node) => `ctx.win(${node._winId | 0}, ${windowKey(node)})`,
+    hasCtx: true,                    // the row fn has ctx → lookup() allowed here
   };
 
   function block(statements) { return statements.map(stmt).filter(Boolean).join('\n'); }
@@ -969,6 +975,86 @@ function winLookup(results, id, keyParts, rowIndex) {
   return r.byKey.has(key) ? r.byKey.get(key) : null;
 }
 
+// -- lookup.js --
+
+// @gcu/over — lookup / equality join (multi-table). A row enriches itself from an
+// injected reference table by an explicit key:
+//
+//   DENS = lookup(densities, "litho", LITHO, "density")
+//          lookup(<table>,   <refKeyCol>, <probeExpr>, <valueCol>)
+//
+// table is an injected table (by name, via run(rows, { densities })); the ref key
+// + value columns are explicit string literals (nothing inferred); the probe is any
+// expression. Left-join: an unmatched key → absent. Build-once / probe-per-row, like
+// windows: collectLookups → buildLookups (a hash per (table,key), cached) → the row
+// fn probes via ctx.lookup. Interval/range joins add a second index shape next.
+
+const SEP = String.fromCharCode(1);
+const refRowsOf = (t) => (Array.isArray(t) ? t : (t && t.rows) || null);
+
+// Validate a lookup Call's shape; returns { table, keyCol } | throws.
+function lookupSpec(call) {
+  const a = call.args || [];
+  if (a.length !== 4)
+    throw new Error('over: lookup(table, "keyCol", probe, "valueCol") takes 4 arguments');
+  if (a[0].type !== 'Field')
+    throw new Error('over: lookup\'s first argument must be a table name');
+  if (a[1].type !== 'Str' || a[3].type !== 'Str')
+    throw new Error('over: lookup\'s key + value columns must be string literals');
+  return { table: a[0].name, keyCol: a[1].value, valueCol: a[3].value, probe: a[2] };
+}
+
+// Walk the AST, find every lookup() Call, validate it, and return the unique
+// (table, key) build specs.
+function collectLookups(ast) {
+  const specs = [];
+  const seen = new Set();
+
+  function expr(e) {
+    if (!e || typeof e !== 'object') return;
+    if (e.type === 'Call' && e.name === 'lookup') {
+      const s = lookupSpec(e);
+      const k = s.table + SEP + s.keyCol;
+      if (!seen.has(k)) { seen.add(k); specs.push({ table: s.table, keyCol: s.keyCol }); }
+    }
+    expr(e.operand); expr(e.left); expr(e.right); expr(e.agg); expr(e.subject); expr(e.default);
+    if (e.args) e.args.forEach(expr);
+    if (e.arms) e.arms.forEach((arm) => { expr(arm.test); expr(arm.value); });
+  }
+  function stmt(st) {
+    if (st.type === 'Assign') expr(st.value);
+    else if (st.type === 'If') { st.clauses.forEach((c) => { expr(c.test); c.body.forEach(stmt); }); if (st.alternate) st.alternate.forEach(stmt); }
+  }
+  ast.statements.forEach(stmt);
+  return specs;
+}
+
+// Build one hash per (table, key): Map(keyValue → reference row). First row wins
+// on a duplicate key. Throws if a referenced table wasn't provided.
+function buildLookups(specs, tables) {
+  const indexes = new Map();
+  for (const { table, keyCol } of specs) {
+    const refRows = refRowsOf(tables && tables[table]);
+    if (!refRows) throw new Error(`over: lookup table "${table}" was not provided to run(rows, tables)`);
+    const m = new Map();
+    for (const r of refRows) if (!m.has(r[keyCol])) m.set(r[keyCol], r);
+    indexes.set(table + SEP + keyCol, m);
+  }
+  return indexes;
+}
+
+// The ctx.lookup probe (closes over the built indexes). Unmatched → null (absent).
+function makeLookup(indexes) {
+  return (table, keyCol, keyVal, valCol) => {
+    const m = indexes.get(table + SEP + keyCol);
+    if (!m) return null;
+    const row = m.get(keyVal);
+    if (!row) return null;
+    const v = row[valCol];
+    return v === undefined ? null : v;
+  };
+}
+
 // -- driver.js --
 
 // @gcu/over — the driver. Runs a compiled row function over a record stream,
@@ -981,18 +1067,22 @@ function winLookup(results, id, keyParts, rowIndex) {
 // table adapts to/from this at the surface.
 
 
+
 const NO_WIN = () => null;
 
-function applyRows(rowFn, outputColumns, rows, windowDefs) {
+function applyRows(rowFn, outputColumns, rows, windowDefs, lookupSpecs, tables) {
   const names = outputColumns.map((c) => c.name);
   const winResults = windowDefs && windowDefs.length ? computeWindows(windowDefs, rows) : null;
+  // build the lookup hashes once (per (table,key)), before the row pass
+  const lookup = lookupSpecs && lookupSpecs.length
+    ? makeLookup(buildLookups(lookupSpecs, tables || {})) : NO_WIN;
 
   const out = [];
   for (let i = 0; i < rows.length; i++) {
     const work = { ...rows[i] };             // seed from input → unassigned columns pass through
     // ctx.win carries the row index so ordered (running) windows resolve per-row.
     const win = winResults ? (id, key) => winLookup(winResults, id, key, i) : NO_WIN;
-    const ctx = { drop: false, exit: false, win };
+    const ctx = { drop: false, exit: false, win, lookup };
     rowFn.run(work, ctx);
     if (!ctx.drop) {
       const projected = {};
@@ -1021,6 +1111,7 @@ function applyRows(rowFn, outputColumns, rows, windowDefs) {
 
 
 
+
 function inferSchema(rows) {
   if (!rows || !rows.length) return [];
   const r0 = rows[0];
@@ -1035,6 +1126,7 @@ function inferSchema(rows) {
 function compile(text, opts = {}) {
   const ast = parse(text);
   const windowDefs = collectWindows(ast);     // tags Window nodes with _winId — BEFORE emit
+  const lookupSpecs = collectLookups(ast);    // validates lookup() shapes + the (table,key) build specs
   const rowFn = compileRowFn(ast);
   const staticSchema = opts.inputSchema ? schemaPass(ast, opts.inputSchema, opts) : null;
   return {
@@ -1042,11 +1134,13 @@ function compile(text, opts = {}) {
     dialect: ast.dialect,
     source: rowFn.source,
     windows: windowDefs.length,
+    lookups: lookupSpecs.length,
     outputColumns: staticSchema ? staticSchema.columns : null,
     warnings: staticSchema ? staticSchema.warnings : null,
-    run(rows) {
+    // tables: { name: rows[] | {rows} } — the reference tables lookup() reads.
+    run(rows, tables) {
       const sch = staticSchema || schemaPass(ast, inferSchema(rows), opts);
-      return { columns: sch.columns, rows: applyRows(rowFn, sch.columns, rows, windowDefs) };
+      return { columns: sch.columns, rows: applyRows(rowFn, sch.columns, rows, windowDefs, lookupSpecs, tables) };
     },
   };
 }
@@ -1071,9 +1165,11 @@ function over(strings, ...values) {
   let text = strings[0];
   for (let i = 0; i < values.length; i++) text += String(values[i]) + strings[i + 1];
   const c = compile(text);
-  const fn = (table) => {
+  // (table, tables?) — `tables` are the reference tables lookup() reads:
+  //   over`DENS = lookup(densities,"litho",LITHO,"density")`(rows, { densities })
+  const fn = (table, tables) => {
     const rows = Array.isArray(table) ? table : (table && table.rows) || [];
-    const result = c.run(rows);
+    const result = c.run(rows, tables);
     Object.defineProperty(result.rows, 'columns', { value: result.columns, enumerable: false });
     return result.rows;
   };
@@ -1095,7 +1191,7 @@ const FUNCTIONS = new Set([
   'prev', 'next', 'first', 'last',
   'abs', 'sqrt', 'exp', 'log', 'loge', 'logn', 'log10', 'pow', 'rais', 'mod',
   'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2', 'int', 'round', 'present',
-  'len', 'ucase', 'lcase', 'trim', 'string', 'concat', 'substr',
+  'len', 'ucase', 'lcase', 'trim', 'string', 'concat', 'substr', 'lookup',
   'xyzijk', 'ijknum', 'ijkget',
 ]);
 
@@ -1150,6 +1246,8 @@ export {
   OverLexError,
   OverParseError,
   applyRows,
+  buildLookups,
+  collectLookups,
   collectWindows,
   compile,
   compileExpr,
@@ -1159,6 +1257,8 @@ export {
   emitRowSource,
   inferType,
   lex,
+  lookupSpec,
+  makeLookup,
   over,
   overRuntime,
   parse,

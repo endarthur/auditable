@@ -17,9 +17,11 @@ export function over(strings, ...values) {
   let text = strings[0];
   for (let i = 0; i < values.length; i++) text += String(values[i]) + strings[i + 1];
   const c = compile(text);
-  const fn = (table) => {
+  // (table, tables?) — `tables` are the reference tables lookup() reads:
+  //   over`DENS = lookup(densities,"litho",LITHO,"density")`(rows, { densities })
+  const fn = (table, tables) => {
     const rows = Array.isArray(table) ? table : (table && table.rows) || [];
-    const result = c.run(rows);
+    const result = c.run(rows, tables);
     Object.defineProperty(result.rows, 'columns', { value: result.columns, enumerable: false });
     return result.rows;
   };
@@ -41,7 +43,7 @@ const FUNCTIONS = new Set([
   'prev', 'next', 'first', 'last',
   'abs', 'sqrt', 'exp', 'log', 'loge', 'logn', 'log10', 'pow', 'rais', 'mod',
   'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2', 'int', 'round', 'present',
-  'len', 'ucase', 'lcase', 'trim', 'string', 'concat', 'substr',
+  'len', 'ucase', 'lcase', 'trim', 'string', 'concat', 'substr', 'lookup',
   'xyzijk', 'ijknum', 'ijkget',
 ]);
 
