@@ -11,7 +11,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const srcDir = path.join(__dirname, 'src');
 
 // Manifest order — dependencies first (parse imports lex).
-const files = ['lex.js', 'parse.js', 'schema.js'];
+const files = ['lex.js', 'parse.js', 'schema.js', 'runtime.js', 'emit.js', 'driver.js', 'api.js'];
 
 const exported = new Set();
 const chunks = [];

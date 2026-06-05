@@ -8,3 +8,7 @@
 export * from './lex.js';
 export * from './parse.js';
 export * from './schema.js';
+export * from './runtime.js';
+export * from './emit.js';
+export * from './driver.js';
+export * from './api.js';

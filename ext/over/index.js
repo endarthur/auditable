@@ -515,11 +515,312 @@ function normalizeType(t) {
   return 'dynamic';
 }
 
+// -- runtime.js --
+
+// @gcu/over — the `_over` runtime: the helpers + function registry the emitted row
+// function calls. Semantics (SPEC §6 / locked decisions):
+//   • absent (null) PROPAGATES through arithmetic; comparisons with absent → false;
+//     absent is falsy in a guard. (Matches @gcu/sift's null semantics — one stack.)
+//   • bool ↔ number coerce both ways (Number(true)===1; truthy(0)===false).
+//
+// Headless + pure; the AIR lowerer (next chunk) will emit equivalent calls/inline.
+
+function num(x) { return x == null ? null : Number(x); }
+
+// non-null comparison: numeric when both are numbers, else lexical (like sift)
+function cmp(a, b) {
+  if (typeof a === 'number' && typeof b === 'number') return a - b;
+  if (typeof a === 'boolean' || typeof b === 'boolean') { const x = Number(a), y = Number(b); return x - y; }
+  const sa = String(a), sb = String(b);
+  return sa < sb ? -1 : sa > sb ? 1 : 0;
+}
+
+const overRuntime = {
+  // ── value helpers ──
+  isAbsent: (x) => x == null,
+  present: (x) => x != null,
+  truthy: (x) => x != null && x !== false && x !== 0 && x !== '',
+  coalesce: (a, b) => (a == null ? b : a),
+
+  // ── arithmetic (absent-propagating, bool→number) ──
+  neg: (a) => (a == null ? null : -Number(a)),
+  add: (a, b) => (a == null || b == null ? null : Number(a) + Number(b)),
+  sub: (a, b) => (a == null || b == null ? null : Number(a) - Number(b)),
+  mul: (a, b) => (a == null || b == null ? null : Number(a) * Number(b)),
+  div: (a, b) => (a == null || b == null ? null : Number(a) / Number(b)),
+
+  // ── comparison (absent → false; → bool) ──
+  eq: (a, b) => a != null && b != null && (a === b || cmp(a, b) === 0),
+  ne: (a, b) => a != null && b != null && !(a === b || cmp(a, b) === 0),
+  lt: (a, b) => a != null && b != null && cmp(a, b) < 0,
+  le: (a, b) => a != null && b != null && cmp(a, b) <= 0,
+  gt: (a, b) => a != null && b != null && cmp(a, b) > 0,
+  ge: (a, b) => a != null && b != null && cmp(a, b) >= 0,
+  // match-arm relational dispatch
+  rel: (op, a, b) => overRuntime[{ '==': 'eq', '!=': 'ne', '<': 'lt', '<=': 'le', '>': 'gt', '>=': 'ge' }[op]](a, b),
+
+  // ── logical (→ bool) ──
+  and: (a, b) => overRuntime.truthy(a) && overRuntime.truthy(b),
+  or: (a, b) => overRuntime.truthy(a) || overRuntime.truthy(b),
+  not: (a) => !overRuntime.truthy(a),
+
+  // ── function registry (dialect-shared core; native adds without breaking compat) ──
+  fns: {
+    abs: (x) => (x == null ? null : Math.abs(Number(x))),
+    sqrt: (x) => (x == null ? null : Math.sqrt(Number(x))),
+    exp: (x) => (x == null ? null : Math.exp(Number(x))),
+    log: (x) => (x == null ? null : Math.log(Number(x))),     // EXTRA log == natural log
+    loge: (x) => (x == null ? null : Math.log(Number(x))),
+    logn: (x) => (x == null ? null : Math.log(Number(x))),
+    log10: (x) => (x == null ? null : Math.log10(Number(x))),
+    pow: (a, b) => (a == null || b == null ? null : Math.pow(Number(a), Number(b))),
+    rais: (a, b) => (a == null || b == null ? null : Math.pow(Number(a), Number(b))),
+    sin: (x) => (x == null ? null : Math.sin(Number(x))),
+    cos: (x) => (x == null ? null : Math.cos(Number(x))),
+    tan: (x) => (x == null ? null : Math.tan(Number(x))),
+    asin: (x) => (x == null ? null : Math.asin(Number(x))),
+    acos: (x) => (x == null ? null : Math.acos(Number(x))),
+    atan: (x) => (x == null ? null : Math.atan(Number(x))),
+    atan2: (a, b) => (a == null || b == null ? null : Math.atan2(Number(a), Number(b))),
+    mod: (a, b) => (a == null || b == null ? null : Number(a) % Number(b)),
+    int: (x) => (x == null ? null : Math.trunc(Number(x))),
+    round: (x) => (x == null ? null : Math.round(Number(x))),
+    // min/max ignore nothing; minia/maxia ignore absent (the EXTRA twins)
+    min: (...a) => (a.some((x) => x == null) ? null : Math.min(...a.map(Number))),
+    max: (...a) => (a.some((x) => x == null) ? null : Math.max(...a.map(Number))),
+    minia: (...a) => { const v = a.filter((x) => x != null).map(Number); return v.length ? Math.min(...v) : null; },
+    maxia: (...a) => { const v = a.filter((x) => x != null).map(Number); return v.length ? Math.max(...v) : null; },
+    // strings
+    len: (x) => (x == null ? 0 : String(x).length),
+    ucase: (x) => (x == null ? null : String(x).toUpperCase()),
+    lcase: (x) => (x == null ? null : String(x).toLowerCase()),
+    trim: (x) => (x == null ? null : String(x).trim()),
+    string: (x) => (x == null ? null : String(x)),
+    concat: (...a) => a.map((x) => (x == null ? '' : String(x))).join(''),
+    substr: (s, i, n) => (s == null ? null : String(s).substr(Number(i), n == null ? undefined : Number(n))),
+  },
+
+  call(name, ...args) {
+    const f = this.fns[name];
+    if (!f) throw new Error(`over: unknown function "${name}"`);
+    return f(...args);
+  },
+};
+
+// -- emit.js --
+
+// @gcu/over — direct-emit row compiler. Lowers the AST to a JS row function the
+// driver runs per record. This is the chunk-3 executor (the proven strata
+// `compileFormula`/`new Function` pattern); the `over` AIR lowerer is the next
+// chunk's drop-in swap behind the same AST→row-fn interface.
+//
+// Emitted shape: `(out, ctx, _over) => { … }` — `out` is the working row (seeded
+// from the input row, so reads see the evolving row top-to-bottom, EXTRA-style);
+// writes land on `out`; `ctx.drop` / `ctx.exit` carry `delete` / `exit`.
+
+
+const REL = new Set(['==', '!=', '<', '<=', '>', '>=']);
+const CMP_FN = { '==': 'eq', '!=': 'ne', '<': 'lt', '<=': 'le', '>': 'gt', '>=': 'ge' };
+const ARITH_FN = { '+': 'add', '-': 'sub', '*': 'mul', '/': 'div' };
+
+const isBoolish = (e) =>
+  e.type === 'Bool' ||
+  (e.type === 'Binary' && (REL.has(e.op) || e.op === 'and' || e.op === 'or')) ||
+  (e.type === 'Call' && e.name === 'not');
+
+const litDefault = (def) =>
+  def.type === 'Absent' ? 'null'
+    : def.type === 'Str' ? JSON.stringify(def.value)
+      : def.type === 'Bool' ? (def.value ? 'true' : 'false')
+        : String(def.value);
+
+function collectDefaults(statements, out = new Map()) {
+  for (const st of statements) {
+    if (st.type === 'Assign' && st.target.spec && st.target.spec.default) {
+      const d = st.target.spec.default;
+      if (['Num', 'Str', 'Bool', 'Absent'].includes(d.type)) out.set(st.target.name, litDefault(d));
+    } else if (st.type === 'If') {
+      for (const c of st.clauses) collectDefaults(c.body, out);
+      if (st.alternate) collectDefaults(st.alternate, out);
+    }
+  }
+  return out;
+}
+
+function emitRowSource(ast) {
+  const lets = new Map();           // letName → local id
+  const defaults = collectDefaults(ast.statements);
+  let lc = 0;
+
+  const ref = (name) => (lets.has(name) ? lets.get(name) : `out[${JSON.stringify(name)}]`);
+
+  function expr(e) {
+    switch (e.type) {
+      case 'Num': return String(e.value);
+      case 'Str': return JSON.stringify(e.value);
+      case 'Bool': return e.value ? 'true' : 'false';
+      case 'Absent': return 'null';
+      case 'Field': return ref(e.name);
+      case 'Unary': return `_over.neg(${expr(e.operand)})`;
+      case 'Binary': return binary(e);
+      case 'Call': return call(e);
+      case 'Match': return match(e);
+      default: throw new Error(`over emit: unknown expression "${e.type}"`);
+    }
+  }
+
+  function binary(e) {
+    const { op } = e;
+    if (ARITH_FN[op]) return `_over.${ARITH_FN[op]}(${expr(e.left)}, ${expr(e.right)})`;
+    if (op === 'and' || op === 'or') return `_over.${op}(${expr(e.left)}, ${expr(e.right)})`;
+    if (op === '??') return `_over.coalesce(${expr(e.left)}, ${expr(e.right)})`;
+    // relational — `== absent` / `!= absent` become presence checks (cf. sift)
+    if ((op === '==' || op === '!=')) {
+      if (e.right.type === 'Absent') return `_over.${op === '==' ? 'isAbsent' : 'present'}(${expr(e.left)})`;
+      if (e.left.type === 'Absent') return `_over.${op === '==' ? 'isAbsent' : 'present'}(${expr(e.right)})`;
+    }
+    return `_over.${CMP_FN[op]}(${expr(e.left)}, ${expr(e.right)})`;
+  }
+
+  function call(e) {
+    if (e.name === 'not') return `_over.not(${expr(e.args[0])})`;
+    if (e.name === 'present') return `_over.present(${expr(e.args[0])})`;
+    if (e.name === 'absent') return 'null';                          // compat: absent() literal
+    if (e.name === 'default') {                                      // per-column declared fill
+      const a = e.args[0];
+      return a && a.type === 'Field' && defaults.has(a.name) ? defaults.get(a.name) : 'null';
+    }
+    return `_over.call(${JSON.stringify(e.name)}${e.args.map((a) => ', ' + expr(a)).join('')})`;
+  }
+
+  function match(e) {
+    const arms = e.arms.map((arm) => {
+      let cond;
+      if (arm.rel) cond = `_over.rel(${JSON.stringify(arm.rel)}, _m, ${expr(arm.test)})`;
+      else if (isBoolish(arm.test)) cond = `_over.truthy(${expr(arm.test)})`;
+      else cond = `_over.eq(_m, ${expr(arm.test)})`;
+      return { cond, value: expr(arm.value) };
+    });
+    const def = e.default ? expr(e.default) : 'null';
+    const chain = arms.reduceRight((acc, a) => `(${a.cond} ? ${a.value} : ${acc})`, def);
+    return `((_m) => ${chain})(${expr(e.subject)})`;
+  }
+
+  function block(statements) { return statements.map(stmt).filter(Boolean).join('\n'); }
+
+  function stmt(st) {
+    switch (st.type) {
+      case 'Assign': {
+        const v = expr(st.value);
+        if (st.kind === 'let') { const id = `_l${lc++}`; lets.set(st.target.name, id); return `let ${id} = ${v};`; }
+        lets.delete(st.target.name);
+        return `out[${JSON.stringify(st.target.name)}] = ${v};`;
+      }
+      case 'If': {
+        let s = '';
+        st.clauses.forEach((c, i) => {
+          s += `${i ? ' else ' : ''}if (_over.truthy(${expr(c.test)})) {\n${block(c.body)}\n}`;
+        });
+        if (st.alternate) s += ` else {\n${block(st.alternate)}\n}`;
+        return s;
+      }
+      case 'Control':
+        return st.name === 'delete' ? 'ctx.drop = true; return;' : 'ctx.exit = true; return;';
+      case 'Project': return '';                                     // driver-level (output projection)
+      default: throw new Error(`over emit: unknown statement "${st.type}"`);
+    }
+  }
+
+  return block(ast.statements);
+}
+
+function compileRowFn(ast, runtime = overRuntime) {
+  const source = emitRowSource(ast);
+  const fn = new Function('out', 'ctx', '_over', source);   // controlled emission (no AIR yet)
+  return { source, run: (out, ctx) => { fn(out, ctx, runtime); return out; } };
+}
+
+// -- driver.js --
+
+// @gcu/over — the driver. Runs a compiled row function over a record stream,
+// applying the stream concerns: `delete` drops the row, `exit` stops the stream,
+// and the resolved output columns (from the schema pass) project the result.
+//
+// v0 table shape = an array of row objects ([{FE:62, …}, …]); strata's columnar
+// table adapts to/from this at the surface. Windows (the two-pass) extend this
+// driver later.
+
+function applyRows(rowFn, outputColumns, rows) {
+  const names = outputColumns.map((c) => c.name);
+  const out = [];
+  for (const row of rows) {
+    const work = { ...row };                 // seed from input → unassigned columns pass through
+    const ctx = { drop: false, exit: false };
+    rowFn.run(work, ctx);
+    if (!ctx.drop) {
+      const projected = {};
+      for (const n of names) projected[n] = n in work ? work[n] : null;
+      out.push(projected);
+    }
+    if (ctx.exit) break;
+  }
+  return out;
+}
+
+// -- api.js --
+
+// @gcu/over — public API. compile(text, opts) → a transform: parse → schema pass
+// → emit the row function → return { outputColumns, source, run(rows) }.
+//
+//   const t = compile('FE_N = FE / 100\nsaveonly(FE, FE_N)', { inputSchema });
+//   t.outputColumns        // resolved BEFORE running (the schema-pass preview)
+//   t.run(rows)            // → { columns, rows }
+//
+// If inputSchema is omitted it's inferred from the rows at run time (so
+// `compile(text).run(rows)` just works); pass it when you want the preview.
+
+
+
+
+
+function inferSchema(rows) {
+  if (!rows || !rows.length) return [];
+  const r0 = rows[0];
+  return Object.keys(r0).map((name) => {
+    const v = r0[name];
+    const type = typeof v === 'number' ? (Number.isInteger(v) ? 'int' : 'float')
+      : typeof v === 'boolean' ? 'bool' : 'string';
+    return { name, type };
+  });
+}
+
+function compile(text, opts = {}) {
+  const ast = parse(text);
+  const rowFn = compileRowFn(ast);
+  const staticSchema = opts.inputSchema ? schemaPass(ast, opts.inputSchema, opts) : null;
+  return {
+    ast,
+    dialect: ast.dialect,
+    source: rowFn.source,
+    outputColumns: staticSchema ? staticSchema.columns : null,
+    warnings: staticSchema ? staticSchema.warnings : null,
+    run(rows) {
+      const sch = staticSchema || schemaPass(ast, inferSchema(rows), opts);
+      return { columns: sch.columns, rows: applyRows(rowFn, sch.columns, rows) };
+    },
+  };
+}
+
 export {
   OverLexError,
   OverParseError,
+  applyRows,
+  compile,
+  compileRowFn,
+  emitRowSource,
   inferType,
   lex,
+  overRuntime,
   parse,
   parseTokens,
   schemaPass,

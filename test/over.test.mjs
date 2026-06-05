@@ -6,6 +6,14 @@ import assert from 'node:assert/strict';
 import { lex, OverLexError } from '../ext/over/src/lex.js';
 import { parse, OverParseError } from '../ext/over/src/parse.js';
 import { schemaPass, inferType, unify } from '../ext/over/src/schema.js';
+import { compile } from '../ext/over/src/api.js';
+
+const ROWS = [
+  { IJK: 1, FE: 64, SIO2: 3, AL2O3: 1, P: 0.05, LITHO: 'OX' },
+  { IJK: 2, FE: 58, SIO2: 6, AL2O3: 2, P: 0.10, LITHO: 'OX' },
+  { IJK: 3, FE: 30, SIO2: 20, AL2O3: 8, P: 0.20, LITHO: 'SU' },
+];
+const run = (src, rows = ROWS, opts = {}) => compile(src, opts).run(rows).rows;
 
 const QF = [
   { name: 'FE', type: 'float' }, { name: 'SIO2', type: 'float' }, { name: 'AL2O3', type: 'float' },
@@ -232,4 +240,91 @@ test('schema: the spec end-to-end transform resolves before any row', () => {
   assert.deepEqual(r.columns.map((c) => c.name), ['IJK', 'FE', 'SIO2', 'AL2O3', 'P', 'CONTAM', 'CLASS']);
   assert.equal(col(r, 'CONTAM').vtype, 'float');
   assert.equal(col(r, 'CLASS').vtype, 'string');
+});
+
+// ── execution (OVER actually transforms rows) ──
+test('run: mutate adds a column, passes others through', () => {
+  const r = run('FE_N = FE / 100');
+  assert.equal(r[0].FE_N, 0.64); assert.equal(r[0].FE, 64);
+});
+
+test('run: match classifies', () => {
+  const r = run('ORETYPE = match FE { >=64:"HEMATITE", >=58:"ITABIRITE", _:"WASTE" }');
+  assert.deepEqual(r.map((x) => x.ORETYPE), ['HEMATITE', 'ITABIRITE', 'WASTE']);
+});
+
+test('run: if/elseif/else classification', () => {
+  const src = 'if (FE >= 64)\n T = "HEM"\nelseif (FE >= 58)\n T = "ITA"\nelse\n T = "WASTE"\nend';
+  assert.deepEqual(run(src).map((x) => x.T), ['HEM', 'ITA', 'WASTE']);
+});
+
+test('run: relational → bool; bool coerces to 1/0 in arithmetic', () => {
+  assert.deepEqual(run('HI = FE >= 62').map((x) => x.HI), [true, false, false]);
+  assert.deepEqual(run('WT = (FE >= 62) * 10').map((x) => x.WT), [10, 0, 0]);
+});
+
+test('run: absent propagates; ?? coalesces; == absent is a presence check', () => {
+  const rows = [{ FE: null }, { FE: 5 }];
+  assert.deepEqual(run('X = FE + 1', rows).map((x) => x.X), [null, 6]);
+  assert.deepEqual(run('X = FE ?? 0', rows).map((x) => x.X), [0, 5]);
+  assert.deepEqual(run('X = FE == absent', rows).map((x) => x.X), [true, false]);
+});
+
+test('run: delete drops rows (filter)', () => {
+  const r = run('if (FE < 50) delete end');
+  assert.deepEqual(r.map((x) => x.FE), [64, 58]);
+});
+
+test('run: exit stops the stream', () => {
+  const r = run('STOP = FE\nif (FE < 60) exit end');
+  assert.deepEqual(r.map((x) => x.STOP), [64, 58]);   // row 3 never reached
+});
+
+test('run: saveonly projects the output', () => {
+  const r = run('G = SIO2 + AL2O3\nsaveonly(FE, G)');
+  assert.deepEqual(Object.keys(r[0]), ['FE', 'G']);
+  assert.equal(r[0].G, 4);
+});
+
+test('run: let is scratch — computed but not output', () => {
+  const r = run('let ratio = SIO2 / FE\nRATIO = ratio * 100');
+  assert.ok('RATIO' in r[0]); assert.ok(!('ratio' in r[0]));
+  assert.ok(Math.abs(r[0].RATIO - 300 / 64) < 1e-9);
+});
+
+test('run: per-column default fills absent', () => {
+  const rows = [{ P: null }, { P: 0.1 }];
+  assert.deepEqual(run('P: float default 0 = P ?? default(P)', rows).map((x) => x.P), [0, 0.1]);
+});
+
+test('run: maxia ignores absent (the EXTRA twin)', () => {
+  const rows = [{ A: 1, B: null }, { A: null, B: 2 }, { A: 3, B: 4 }];
+  assert.deepEqual(run('BEST = maxia(A, B)', rows).map((x) => x.BEST), [1, 2, 4]);
+});
+
+test('run: the spec end-to-end transform', () => {
+  const src = [
+    'if (FE == absent) FE = default(FE) end',
+    'CONTAM = (SIO2 + AL2O3 + P) / FE',
+    'if (FE >= 60 and CONTAM <= 0.12)',
+    '   CLASS = "ORE"',
+    'else',
+    '   CLASS = "WASTE"',
+    'end',
+    'saveonly(IJK, FE, CONTAM, CLASS)',
+  ].join('\n');
+  const r = run(src, [
+    { IJK: 1, FE: 64, SIO2: 3, AL2O3: 1, P: 0.05 },
+    { IJK: 2, FE: 58, SIO2: 6, AL2O3: 2, P: 0.10 },
+  ]);
+  assert.deepEqual(Object.keys(r[0]), ['IJK', 'FE', 'CONTAM', 'CLASS']);
+  assert.deepEqual(r.map((x) => x.CLASS), ['ORE', 'WASTE']);
+  assert.ok(Math.abs(r[0].CONTAM - (3 + 1 + 0.05) / 64) < 1e-9);
+});
+
+test('compile: preview schema + emitted source are exposed', () => {
+  const t = compile('FE_N = FE / 100\nsaveonly(FE, FE_N)', { inputSchema: QF });
+  assert.deepEqual(t.outputColumns.map((c) => c.name), ['FE', 'FE_N']);
+  assert.equal(typeof t.source, 'string');
+  assert.match(t.source, /_over\.div/);
 });
