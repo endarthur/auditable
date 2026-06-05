@@ -11,6 +11,9 @@ import { compileExpr } from './emit.js';
 
 const AGG = new Set(['count', 'sum', 'mean', 'min', 'max', 'std']);
 
+// missing = null (string absent) OR NaN (numeric absent) — aggregates skip it.
+const isAbsent = (x) => x == null || x !== x;
+
 // Walk every expression in the AST, tag each Window node with `_winId`, and
 // return the window definitions (id, aggregate, arg expression, group).
 export function collectWindows(ast) {
@@ -41,13 +44,13 @@ export function collectWindows(ast) {
 function makeAcc(aggName) {
   switch (aggName) {
     case 'count': { let n = 0; return { add() { n++; }, result() { return n; } }; }
-    case 'sum': { let s = 0, any = false; return { add(v) { if (v != null) { s += Number(v); any = true; } }, result() { return any ? s : null; } }; }
-    case 'mean': { let s = 0, n = 0; return { add(v) { if (v != null) { s += Number(v); n++; } }, result() { return n ? s / n : null; } }; }
-    case 'min': { let m = null; return { add(v) { if (v != null) { const x = Number(v); if (m == null || x < m) m = x; } }, result() { return m; } }; }
-    case 'max': { let m = null; return { add(v) { if (v != null) { const x = Number(v); if (m == null || x > m) m = x; } }, result() { return m; } }; }
+    case 'sum': { let s = 0, any = false; return { add(v) { if (!isAbsent(v)) { s += Number(v); any = true; } }, result() { return any ? s : NaN; } }; }
+    case 'mean': { let s = 0, n = 0; return { add(v) { if (!isAbsent(v)) { s += Number(v); n++; } }, result() { return n ? s / n : NaN; } }; }
+    case 'min': { let m = null; return { add(v) { if (!isAbsent(v)) { const x = Number(v); if (m == null || x < m) m = x; } }, result() { return m == null ? NaN : m; } }; }
+    case 'max': { let m = null; return { add(v) { if (!isAbsent(v)) { const x = Number(v); if (m == null || x > m) m = x; } }, result() { return m == null ? NaN : m; } }; }
     case 'std': {
       let n = 0, mean = 0, m2 = 0;
-      return { add(v) { if (v != null) { const x = Number(v); n++; const d = x - mean; mean += d / n; m2 += d * (x - mean); } }, result() { return n > 1 ? Math.sqrt(m2 / n) : 0; } };
+      return { add(v) { if (!isAbsent(v)) { const x = Number(v); n++; const d = x - mean; mean += d / n; m2 += d * (x - mean); } }, result() { return n > 1 ? Math.sqrt(m2 / n) : 0; } };
     }
     default: throw new Error(`over: unknown aggregate "${aggName}"`);
   }

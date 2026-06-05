@@ -265,9 +265,10 @@ test('run: relational → bool; bool coerces to 1/0 in arithmetic', () => {
 
 test('run: absent propagates; ?? coalesces; == absent is a presence check', () => {
   const rows = [{ FE: null }, { FE: 5 }];
-  assert.deepEqual(run('X = FE + 1', rows).map((x) => x.X), [null, 6]);
+  assert.deepEqual(run('X = FE + 1', rows).map((x) => x.X), [NaN, 6]);   // numeric absent → NaN (the keystone)
   assert.deepEqual(run('X = FE ?? 0', rows).map((x) => x.X), [0, 5]);
-  assert.deepEqual(run('X = FE == absent', rows).map((x) => x.X), [true, false]);
+  assert.deepEqual(run('X = FE == absent', rows).map((x) => x.X), [true, false]);   // isAbsent recognizes null + NaN
+  assert.deepEqual(run('X = FE == absent', [{ FE: NaN }, { FE: 5 }]).map((x) => x.X), [true, false]);
 });
 
 test('run: delete drops rows (filter)', () => {

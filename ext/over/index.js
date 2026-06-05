@@ -548,44 +548,55 @@ function normalizeType(t) {
 
 // @gcu/over — the `_over` runtime: the helpers + function registry the emitted row
 // function calls. Semantics (SPEC §6 / locked decisions):
-//   • absent (null) PROPAGATES through arithmetic; comparisons with absent → false;
-//     absent is falsy in a guard. (Matches @gcu/sift's null semantics — one stack.)
+//   • absent PROPAGATES through arithmetic; comparisons with absent → false; absent
+//     is falsy in a guard. (Matches @gcu/sift's null semantics — one stack.)
 //   • bool ↔ number coerce both ways (Number(true)===1; truthy(0)===false).
 //
-// Headless + pure; the AIR lowerer (next chunk) will emit equivalent calls/inline.
+// REPRESENTATION (the keystone, spec_inbox/lang/air-strategy-by-shape.md): numeric
+// absent is **NaN**, string/category absent is **null** — the type-polymorphic split.
+// `isAbsent` recognizes both. Numeric computation produces NaN; columnar numeric
+// storage (Float64Array) forces it. This is what lets the hot path fold to raw JS
+// ops (NaN propagates through + and makes comparisons false, *natively*) and lets
+// numeric columns be unboxed typed arrays — the door to vectorized / AIR-specialized
+// / streaming emission. The handful of helpers below are the v0 (direct-emit) path;
+// for proven-numeric operands they become raw ops once AIR lowers them.
 
-function num(x) { return x == null ? null : Number(x); }
+// absent → NaN, anything else → its Number (NaN propagates; null does NOT become 0)
+function n(x) { return x == null ? NaN : Number(x); }
 
-// non-null comparison: numeric when both are numbers, else lexical (like sift)
+// non-null/non-NaN comparison: numeric when both are numbers, else lexical (like sift)
 function cmp(a, b) {
   if (typeof a === 'number' && typeof b === 'number') return a - b;
-  if (typeof a === 'boolean' || typeof b === 'boolean') { const x = Number(a), y = Number(b); return x - y; }
+  if (typeof a === 'boolean' || typeof b === 'boolean') return Number(a) - Number(b);
   const sa = String(a), sb = String(b);
   return sa < sb ? -1 : sa > sb ? 1 : 0;
 }
 
+// missing = null (string/category absent) OR NaN (numeric absent). x !== x is the
+// branch-free NaN test.
+const isAbsent = (x) => x == null || x !== x;
+
 const overRuntime = {
   // ── value helpers ──
-  isAbsent: (x) => x == null,
-  present: (x) => x != null,
-  truthy: (x) => x != null && x !== false && x !== 0 && x !== '',
-  coalesce: (a, b) => (a == null ? b : a),
+  isAbsent,
+  present: (x) => !isAbsent(x),
+  truthy: (x) => !isAbsent(x) && x !== false && x !== 0 && x !== '',
+  coalesce: (a, b) => (isAbsent(a) ? b : a),
 
-  // ── arithmetic (absent-propagating, bool→number) ──
-  neg: (a) => (a == null ? null : -Number(a)),
-  add: (a, b) => (a == null || b == null ? null : Number(a) + Number(b)),
-  sub: (a, b) => (a == null || b == null ? null : Number(a) - Number(b)),
-  mul: (a, b) => (a == null || b == null ? null : Number(a) * Number(b)),
-  div: (a, b) => (a == null || b == null ? null : Number(a) / Number(b)),
+  // ── arithmetic (absent → NaN, propagates; bool → number) ──
+  neg: (a) => -n(a),
+  add: (a, b) => n(a) + n(b),
+  sub: (a, b) => n(a) - n(b),
+  mul: (a, b) => n(a) * n(b),
+  div: (a, b) => n(a) / n(b),
 
   // ── comparison (absent → false; → bool) ──
-  eq: (a, b) => a != null && b != null && (a === b || cmp(a, b) === 0),
-  ne: (a, b) => a != null && b != null && !(a === b || cmp(a, b) === 0),
-  lt: (a, b) => a != null && b != null && cmp(a, b) < 0,
-  le: (a, b) => a != null && b != null && cmp(a, b) <= 0,
-  gt: (a, b) => a != null && b != null && cmp(a, b) > 0,
-  ge: (a, b) => a != null && b != null && cmp(a, b) >= 0,
-  // match-arm relational dispatch
+  eq: (a, b) => !isAbsent(a) && !isAbsent(b) && (a === b || cmp(a, b) === 0),
+  ne: (a, b) => !isAbsent(a) && !isAbsent(b) && !(a === b || cmp(a, b) === 0),
+  lt: (a, b) => !isAbsent(a) && !isAbsent(b) && cmp(a, b) < 0,
+  le: (a, b) => !isAbsent(a) && !isAbsent(b) && cmp(a, b) <= 0,
+  gt: (a, b) => !isAbsent(a) && !isAbsent(b) && cmp(a, b) > 0,
+  ge: (a, b) => !isAbsent(a) && !isAbsent(b) && cmp(a, b) >= 0,
   rel: (op, a, b) => overRuntime[{ '==': 'eq', '!=': 'ne', '<': 'lt', '<=': 'le', '>': 'gt', '>=': 'ge' }[op]](a, b),
 
   // ── logical (→ bool) ──
@@ -594,39 +605,40 @@ const overRuntime = {
   not: (a) => !overRuntime.truthy(a),
 
   // ── function registry (dialect-shared core; native adds without breaking compat) ──
+  // Numeric fns propagate absent as NaN (n(x)); string fns keep null for absent.
   fns: {
-    abs: (x) => (x == null ? null : Math.abs(Number(x))),
-    sqrt: (x) => (x == null ? null : Math.sqrt(Number(x))),
-    exp: (x) => (x == null ? null : Math.exp(Number(x))),
-    log: (x) => (x == null ? null : Math.log(Number(x))),     // EXTRA log == natural log
-    loge: (x) => (x == null ? null : Math.log(Number(x))),
-    logn: (x) => (x == null ? null : Math.log(Number(x))),
-    log10: (x) => (x == null ? null : Math.log10(Number(x))),
-    pow: (a, b) => (a == null || b == null ? null : Math.pow(Number(a), Number(b))),
-    rais: (a, b) => (a == null || b == null ? null : Math.pow(Number(a), Number(b))),
-    sin: (x) => (x == null ? null : Math.sin(Number(x))),
-    cos: (x) => (x == null ? null : Math.cos(Number(x))),
-    tan: (x) => (x == null ? null : Math.tan(Number(x))),
-    asin: (x) => (x == null ? null : Math.asin(Number(x))),
-    acos: (x) => (x == null ? null : Math.acos(Number(x))),
-    atan: (x) => (x == null ? null : Math.atan(Number(x))),
-    atan2: (a, b) => (a == null || b == null ? null : Math.atan2(Number(a), Number(b))),
-    mod: (a, b) => (a == null || b == null ? null : Number(a) % Number(b)),
-    int: (x) => (x == null ? null : Math.trunc(Number(x))),
-    round: (x) => (x == null ? null : Math.round(Number(x))),
-    // min/max ignore nothing; minia/maxia ignore absent (the EXTRA twins)
-    min: (...a) => (a.some((x) => x == null) ? null : Math.min(...a.map(Number))),
-    max: (...a) => (a.some((x) => x == null) ? null : Math.max(...a.map(Number))),
-    minia: (...a) => { const v = a.filter((x) => x != null).map(Number); return v.length ? Math.min(...v) : null; },
-    maxia: (...a) => { const v = a.filter((x) => x != null).map(Number); return v.length ? Math.max(...v) : null; },
-    // strings
-    len: (x) => (x == null ? 0 : String(x).length),
-    ucase: (x) => (x == null ? null : String(x).toUpperCase()),
-    lcase: (x) => (x == null ? null : String(x).toLowerCase()),
-    trim: (x) => (x == null ? null : String(x).trim()),
-    string: (x) => (x == null ? null : String(x)),
-    concat: (...a) => a.map((x) => (x == null ? '' : String(x))).join(''),
-    substr: (s, i, n) => (s == null ? null : String(s).substr(Number(i), n == null ? undefined : Number(n))),
+    abs: (x) => Math.abs(n(x)),
+    sqrt: (x) => Math.sqrt(n(x)),
+    exp: (x) => Math.exp(n(x)),
+    log: (x) => Math.log(n(x)),                         // EXTRA log == natural log
+    loge: (x) => Math.log(n(x)),
+    logn: (x) => Math.log(n(x)),
+    log10: (x) => Math.log10(n(x)),
+    pow: (a, b) => Math.pow(n(a), n(b)),
+    rais: (a, b) => Math.pow(n(a), n(b)),
+    sin: (x) => Math.sin(n(x)),
+    cos: (x) => Math.cos(n(x)),
+    tan: (x) => Math.tan(n(x)),
+    asin: (x) => Math.asin(n(x)),
+    acos: (x) => Math.acos(n(x)),
+    atan: (x) => Math.atan(n(x)),
+    atan2: (a, b) => Math.atan2(n(a), n(b)),
+    mod: (a, b) => n(a) % n(b),
+    int: (x) => Math.trunc(n(x)),                       // NaN propagates
+    round: (x) => Math.round(n(x)),
+    // min/max propagate absent (NaN); minia/maxia ignore it (the EXTRA twins)
+    min: (...a) => Math.min(...a.map(n)),
+    max: (...a) => Math.max(...a.map(n)),
+    minia: (...a) => { const v = a.filter((x) => !isAbsent(x)).map(Number); return v.length ? Math.min(...v) : NaN; },
+    maxia: (...a) => { const v = a.filter((x) => !isAbsent(x)).map(Number); return v.length ? Math.max(...v) : NaN; },
+    // strings — absent stays null (non-numeric)
+    len: (x) => (isAbsent(x) ? 0 : String(x).length),
+    ucase: (x) => (isAbsent(x) ? null : String(x).toUpperCase()),
+    lcase: (x) => (isAbsent(x) ? null : String(x).toLowerCase()),
+    trim: (x) => (isAbsent(x) ? null : String(x).trim()),
+    string: (x) => (isAbsent(x) ? null : String(x)),
+    concat: (...a) => a.map((x) => (isAbsent(x) ? '' : String(x))).join(''),
+    substr: (s, i, k) => (isAbsent(s) ? null : String(s).substr(Number(i), k == null ? undefined : Number(k))),
   },
 
   call(name, ...args) {
@@ -812,6 +824,9 @@ function compileExpr(expr, runtime = overRuntime) {
 
 const AGG = new Set(['count', 'sum', 'mean', 'min', 'max', 'std']);
 
+// missing = null (string absent) OR NaN (numeric absent) — aggregates skip it.
+const isAbsent = (x) => x == null || x !== x;
+
 // Walk every expression in the AST, tag each Window node with `_winId`, and
 // return the window definitions (id, aggregate, arg expression, group).
 function collectWindows(ast) {
@@ -842,13 +857,13 @@ function collectWindows(ast) {
 function makeAcc(aggName) {
   switch (aggName) {
     case 'count': { let n = 0; return { add() { n++; }, result() { return n; } }; }
-    case 'sum': { let s = 0, any = false; return { add(v) { if (v != null) { s += Number(v); any = true; } }, result() { return any ? s : null; } }; }
-    case 'mean': { let s = 0, n = 0; return { add(v) { if (v != null) { s += Number(v); n++; } }, result() { return n ? s / n : null; } }; }
-    case 'min': { let m = null; return { add(v) { if (v != null) { const x = Number(v); if (m == null || x < m) m = x; } }, result() { return m; } }; }
-    case 'max': { let m = null; return { add(v) { if (v != null) { const x = Number(v); if (m == null || x > m) m = x; } }, result() { return m; } }; }
+    case 'sum': { let s = 0, any = false; return { add(v) { if (!isAbsent(v)) { s += Number(v); any = true; } }, result() { return any ? s : NaN; } }; }
+    case 'mean': { let s = 0, n = 0; return { add(v) { if (!isAbsent(v)) { s += Number(v); n++; } }, result() { return n ? s / n : NaN; } }; }
+    case 'min': { let m = null; return { add(v) { if (!isAbsent(v)) { const x = Number(v); if (m == null || x < m) m = x; } }, result() { return m == null ? NaN : m; } }; }
+    case 'max': { let m = null; return { add(v) { if (!isAbsent(v)) { const x = Number(v); if (m == null || x > m) m = x; } }, result() { return m == null ? NaN : m; } }; }
     case 'std': {
       let n = 0, mean = 0, m2 = 0;
-      return { add(v) { if (v != null) { const x = Number(v); n++; const d = x - mean; mean += d / n; m2 += d * (x - mean); } }, result() { return n > 1 ? Math.sqrt(m2 / n) : 0; } };
+      return { add(v) { if (!isAbsent(v)) { const x = Number(v); n++; const d = x - mean; mean += d / n; m2 += d * (x - mean); } }, result() { return n > 1 ? Math.sqrt(m2 / n) : 0; } };
     }
     default: throw new Error(`over: unknown aggregate "${aggName}"`);
   }
