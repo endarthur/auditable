@@ -158,11 +158,18 @@ export function parseTokens(toks) {
     return parsePostfix();
   }
 
-  // window postfix: `aggCall over GROUP` — binds tighter than arithmetic, so
-  // `FE / mean(FE) over LITHO` is `FE / (mean(FE) over LITHO)`.
+  // window postfix: `aggCall over GROUP [order EXPR] [where EXPR]` — binds tighter
+  // than arithmetic, so `FE / mean(FE) over LITHO` is `FE / (mean(FE) over LITHO)`.
+  // `order` makes it a running (ordered) window; `where` filters the accumulation.
   function parsePostfix() {
     let e = parsePrimary();
-    if (isId('over')) { next(); e = { type: 'Window', agg: e, group: parseGroupSpec() }; }
+    if (isId('over')) {
+      next();
+      const win = { type: 'Window', agg: e, group: parseGroupSpec() };
+      if (isId('order')) { next(); if (isId('by')) next(); win.order = parseExpr(); }
+      if (isId('where')) { next(); win.where = parseExpr(); }
+      e = win;
+    }
     return e;
   }
 

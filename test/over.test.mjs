@@ -382,6 +382,38 @@ test('compile: a non-aggregate over a group is rejected', () => {
   assert.throws(() => compile('X = foo(FE) over LITHO'), /not a window aggregate/);
 });
 
+// ── ordered windows (running aggregates) + where ──
+const DH = [
+  { BHID: 'A', DEPTH: 2, LEN: 2 },
+  { BHID: 'A', DEPTH: 0, LEN: 0.5 },   // deliberately out of input order
+  { BHID: 'A', DEPTH: 1, LEN: 1 },
+  { BHID: 'B', DEPTH: 0, LEN: 3 },
+];
+
+test('parse: window order + where clauses', () => {
+  const v = stmts('R = sum(LEN) over BHID order DEPTH where LEN > 0')[0].value;
+  assert.equal(v.type, 'Window');
+  assert.deepEqual(v.group, ['BHID']);
+  assert.equal(v.order.name, 'DEPTH');
+  assert.equal(v.where.op, '>');
+});
+
+test('run: ordered window is a running aggregate (downhole accumulation)', () => {
+  // running sum of LEN within BHID, in DEPTH order — mapped back to input order
+  const r = run('RUNLEN = sum(LEN) over BHID order DEPTH', DH).map((x) => x.RUNLEN);
+  assert.deepEqual(r, [3.5, 0.5, 1.5, 3]);
+});
+
+test('run: unordered where filters the aggregate; all group rows see it', () => {
+  const W = [{ G: 'X', V: 10 }, { G: 'X', V: -5 }, { G: 'X', V: 20 }, { G: 'Y', V: 8 }];
+  assert.deepEqual(run('M = mean(V) over G where V > 0', W).map((x) => x.M), [15, 15, 15, 8]);
+});
+
+test('run: ordered where — excluded rows fall out of the window (NaN)', () => {
+  const W = [{ G: 'X', V: 10 }, { G: 'X', V: -5 }, { G: 'X', V: 20 }, { G: 'Y', V: 8 }];
+  assert.deepEqual(run('R = sum(V) over G order V where V > 0', W).map((x) => x.R), [10, NaN, 30, 8]);
+});
+
 // ── the notebook tag ──
 test('tag: over`…`(rows) compiles + applies; rows carry .columns', async () => {
   const { over } = await import('../ext/over/src/tag.js');

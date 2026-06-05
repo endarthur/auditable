@@ -9,14 +9,17 @@
 
 import { computeWindows, winLookup } from './windows.js';
 
+const NO_WIN = () => null;
+
 export function applyRows(rowFn, outputColumns, rows, windowDefs) {
   const names = outputColumns.map((c) => c.name);
   const winResults = windowDefs && windowDefs.length ? computeWindows(windowDefs, rows) : null;
-  const win = winResults ? (id, key) => winLookup(winResults, id, key) : () => null;
 
   const out = [];
-  for (const row of rows) {
-    const work = { ...row };                 // seed from input → unassigned columns pass through
+  for (let i = 0; i < rows.length; i++) {
+    const work = { ...rows[i] };             // seed from input → unassigned columns pass through
+    // ctx.win carries the row index so ordered (running) windows resolve per-row.
+    const win = winResults ? (id, key) => winLookup(winResults, id, key, i) : NO_WIN;
     const ctx = { drop: false, exit: false, win };
     rowFn.run(work, ctx);
     if (!ctx.drop) {

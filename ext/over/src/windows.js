@@ -1,21 +1,37 @@
 // @gcu/over — window aggregates (SPEC §7, the `over` feature, the name).
-// `agg(expr) over GROUP` = an aggregate over a group, used per row. Runs as a
-// two-pass: pass 1 accumulates each window's aggregate per group key; pass 2 (the
-// row body, via ctx.win) reads the per-group result. v0: unordered group
-// aggregates {count, sum, mean, min, max, std} over `all` (whole table) or one/
-// more columns; ordered windows (`order …`, running/lag) + `where` + `bin` later.
+// `agg(expr) over GROUP [order EXPR] [where EXPR]` — an aggregate over a group,
+// used per row. Two-pass: pass 1 computes each window, pass 2 (the row body, via
+// ctx.win) reads it.
+//   • unordered (no `order`) → one value per group key (mean/sum/count/min/max/std).
+//   • ordered (`order EXPR`) → a RUNNING value per row, accumulated in order within
+//     the group (RUNLEN = sum(LENGTH) over BHID order DEPTH). Absorbs EXTRA's
+//     first/prev/next accumulation idiom.
+//   • `where EXPR` filters which rows participate in the accumulation.
 // In-memory accumulators here; the sluice mergeable/parallel path is the big-data
-// upgrade (the workbench pattern).
+// upgrade (the workbench pattern). Explicit prev/next/first/last lag-lead: next.
 
 import { compileExpr } from './emit.js';
+import { overRuntime } from './runtime.js';
 
 const AGG = new Set(['count', 'sum', 'mean', 'min', 'max', 'std']);
+const SEP = String.fromCharCode(1);   // group-key field separator
 
 // missing = null (string absent) OR NaN (numeric absent) — aggregates skip it.
 const isAbsent = (x) => x == null || x !== x;
 
+// order comparator: numeric when both numbers else lexical; absent sorts last.
+function cmpOrder(a, b) {
+  const aa = isAbsent(a), bb = isAbsent(b);
+  if (aa || bb) return aa && bb ? 0 : aa ? 1 : -1;
+  if (typeof a === 'number' && typeof b === 'number') return a - b;
+  const sa = String(a), sb = String(b);
+  return sa < sb ? -1 : sa > sb ? 1 : 0;
+}
+
+const keyOf = (group, get) => (group === 'all' ? '' : group.map((c) => String(get(c))).join(SEP));
+
 // Walk every expression in the AST, tag each Window node with `_winId`, and
-// return the window definitions (id, aggregate, arg expression, group).
+// return the window definitions (id, aggregate, arg, group, order, where).
 export function collectWindows(ast) {
   const defs = [];
 
@@ -25,7 +41,10 @@ export function collectWindows(ast) {
       if (!e.agg || e.agg.type !== 'Call' || !AGG.has(e.agg.name))
         throw new Error(`over: "${e.agg && e.agg.name}" is not a window aggregate (${[...AGG].join('/')})`);
       e._winId = defs.length;
-      defs.push({ id: e._winId, aggName: e.agg.name, argExpr: e.agg.args[0] || null, group: e.group });
+      defs.push({
+        id: e._winId, aggName: e.agg.name, argExpr: e.agg.args[0] || null, group: e.group,
+        orderExpr: e.order || null, whereExpr: e.where || null, ordered: !!e.order,
+      });
     }
     expr(e.operand); expr(e.left); expr(e.right); expr(e.agg); expr(e.subject); expr(e.default);
     if (e.args) e.args.forEach(expr);
@@ -39,8 +58,9 @@ export function collectWindows(ast) {
   return defs;
 }
 
-// A streaming accumulator per aggregate (absent values are ignored — the natural
-// behaviour; count() counts rows in the group). std is population std (Welford).
+// A streaming accumulator per aggregate (absent ignored; count() counts rows). std
+// is population std (Welford). For ordered windows the same accumulator is fed in
+// sorted order, reading result() after each row → the running value.
 function makeAcc(aggName) {
   switch (aggName) {
     case 'count': { let n = 0; return { add() { n++; }, result() { return n; } }; }
@@ -56,27 +76,54 @@ function makeAcc(aggName) {
   }
 }
 
-const keyOf = (group, get) => (group === 'all' ? '' : group.map((c) => String(get(c))).join(''));
-
-// Pass 1: accumulate each window's aggregate per group → results[id] = Map(key→value).
+// Pass 1: compute each window — unordered (one value per group) or ordered (a
+// running value per row). `where` filters which rows participate.
 export function computeWindows(defs, rows) {
-  const argFns = defs.map((d) => (d.argExpr ? compileExpr(d.argExpr) : () => null));
-  const accs = defs.map(() => new Map());
-  for (const row of rows) {
-    defs.forEach((d, i) => {
-      const key = keyOf(d.group, (c) => row[c]);
-      let acc = accs[i].get(key);
-      if (!acc) { acc = makeAcc(d.aggName); accs[i].set(key, acc); }
-      acc.add(argFns[i](row));
-    });
-  }
-  return accs.map((m) => { const out = new Map(); for (const [k, a] of m) out.set(k, a.result()); return out; });
+  return defs.map((d) => (d.ordered ? computeOrdered(d, rows) : computeUnordered(d, rows)));
 }
 
-// Pass 2 lookup (called as ctx.win): keyParts is the working row's group-column
-// values (or null for a whole-table window).
-export function winLookup(results, id, keyParts) {
-  const key = keyParts == null ? '' : keyParts.map(String).join('');
-  const m = results[id];
-  return m && m.has(key) ? m.get(key) : null;
+function computeUnordered(d, rows) {
+  const argFn = d.argExpr ? compileExpr(d.argExpr) : () => null;
+  const whereFn = d.whereExpr ? compileExpr(d.whereExpr) : null;
+  const accs = new Map();
+  for (const row of rows) {
+    if (whereFn && !overRuntime.truthy(whereFn(row))) continue;
+    const key = keyOf(d.group, (c) => row[c]);
+    let acc = accs.get(key);
+    if (!acc) { acc = makeAcc(d.aggName); accs.set(key, acc); }
+    acc.add(argFn(row));
+  }
+  const byKey = new Map();
+  for (const [k, a] of accs) byKey.set(k, a.result());
+  return { ordered: false, byKey };       // every group row sees byKey[its group]
+}
+
+function computeOrdered(d, rows) {
+  const argFn = d.argExpr ? compileExpr(d.argExpr) : () => null;
+  const orderFn = compileExpr(d.orderExpr);
+  const whereFn = d.whereExpr ? compileExpr(d.whereExpr) : null;
+  const byRow = new Array(rows.length).fill(NaN);   // rows not in the window stay NaN
+  const groups = new Map();
+  for (let i = 0; i < rows.length; i++) {
+    if (whereFn && !overRuntime.truthy(whereFn(rows[i]))) continue;
+    const key = keyOf(d.group, (c) => rows[i][c]);
+    let g = groups.get(key); if (!g) { g = []; groups.set(key, g); }
+    g.push(i);
+  }
+  for (const g of groups.values()) {
+    g.sort((a, b) => cmpOrder(orderFn(rows[a]), orderFn(rows[b])));
+    const acc = makeAcc(d.aggName);
+    for (const idx of g) { acc.add(argFn(rows[idx])); byRow[idx] = acc.result(); }   // running through this row
+  }
+  return { ordered: true, byRow };
+}
+
+// Pass 2 lookup (called as ctx.win): unordered → keyParts (the working row's
+// group-column values); ordered → rowIndex (the running value at that row).
+export function winLookup(results, id, keyParts, rowIndex) {
+  const r = results[id];
+  if (!r) return null;
+  if (r.ordered) return rowIndex == null ? null : (r.byRow[rowIndex] ?? null);
+  const key = keyParts == null ? '' : keyParts.map(String).join(SEP);
+  return r.byKey.has(key) ? r.byKey.get(key) : null;
 }
