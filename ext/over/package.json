@@ -1,0 +1,9 @@
+{
+  "name": "@gcu/over",
+  "version": "0.1.0",
+  "description": "OVER — Ordered/Vectorized Expression Runner: a row-wise table-transform DSL, Datamine-EXTRA-compatible with a native superset. Lowers via @gcu/air. (Design stage.)",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "author": "Arthur Endlein Correia (Geoscientific Chaos Union)"
+}
