@@ -12,6 +12,7 @@ import { parse } from './parse.js';
 import { schemaPass } from './schema.js';
 import { compileRowFn } from './emit.js';
 import { applyRows } from './driver.js';
+import { collectWindows } from './windows.js';
 
 function inferSchema(rows) {
   if (!rows || !rows.length) return [];
@@ -26,17 +27,19 @@ function inferSchema(rows) {
 
 export function compile(text, opts = {}) {
   const ast = parse(text);
+  const windowDefs = collectWindows(ast);     // tags Window nodes with _winId — BEFORE emit
   const rowFn = compileRowFn(ast);
   const staticSchema = opts.inputSchema ? schemaPass(ast, opts.inputSchema, opts) : null;
   return {
     ast,
     dialect: ast.dialect,
     source: rowFn.source,
+    windows: windowDefs.length,
     outputColumns: staticSchema ? staticSchema.columns : null,
     warnings: staticSchema ? staticSchema.warnings : null,
     run(rows) {
       const sch = staticSchema || schemaPass(ast, inferSchema(rows), opts);
-      return { columns: sch.columns, rows: applyRows(rowFn, sch.columns, rows) };
+      return { columns: sch.columns, rows: applyRows(rowFn, sch.columns, rows, windowDefs) };
     },
   };
 }

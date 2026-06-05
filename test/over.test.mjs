@@ -328,3 +328,55 @@ test('compile: preview schema + emitted source are exposed', () => {
   assert.equal(typeof t.source, 'string');
   assert.match(t.source, /_over\.div/);
 });
+
+// ── windows (the `over` feature) ──
+test('parse: window postfix binds tighter than arithmetic', () => {
+  const v = stmts('FE_N = FE / mean(FE) over LITHO')[0].value;
+  assert.equal(v.op, '/');
+  assert.equal(v.right.type, 'Window');
+  assert.equal(v.right.agg.name, 'mean');
+  assert.deepEqual(v.right.group, ['LITHO']);
+  assert.equal(stmts('Z = mean(FE) over all')[0].value.group, 'all');
+});
+
+test('schema: window columns type by their aggregate', () => {
+  const r = sch('M = mean(FE) over LITHO\nN = count() over all\nS = sum(IJK) over LITHO');
+  assert.equal(col(r, 'M').vtype, 'float');
+  assert.equal(col(r, 'N').vtype, 'int');
+  assert.equal(col(r, 'S').vtype, 'int');     // sum of an int column
+});
+
+test('run: grouped mean (domain-relative grade)', () => {
+  const r = run('FE_N = FE / mean(FE) over LITHO');   // OX mean 61, SU mean 30
+  assert.ok(Math.abs(r[0].FE_N - 64 / 61) < 1e-9);
+  assert.ok(Math.abs(r[1].FE_N - 58 / 61) < 1e-9);
+  assert.equal(r[2].FE_N, 1);
+});
+
+test('run: count() / sum() over a group', () => {
+  assert.deepEqual(run('N = count() over LITHO').map((x) => x.N), [2, 2, 1]);
+  assert.deepEqual(run('S = sum(FE) over LITHO').map((x) => x.S), [122, 122, 30]);
+});
+
+test('run: whole-table aggregate (over all)', () => {
+  const r = run('D = FE - mean(FE) over all');         // mean = 152/3
+  const m = 152 / 3;
+  assert.ok(Math.abs(r[0].D - (64 - m)) < 1e-9);
+  assert.ok(Math.abs(r[2].D - (30 - m)) < 1e-9);
+});
+
+test('run: a z-score composes two whole-table windows', () => {
+  const r = run('Z = (FE - mean(FE) over all) / (std(FE) over all)');
+  const xs = [64, 58, 30], m = (64 + 58 + 30) / 3;
+  const sd = Math.sqrt(xs.reduce((a, x) => a + (x - m) ** 2, 0) / xs.length);
+  assert.ok(Math.abs(r[0].Z - (64 - m) / sd) < 1e-9);
+});
+
+test('run: window aggregates ignore absent', () => {
+  const rows = [{ G: 'A', V: 10 }, { G: 'A', V: null }, { G: 'A', V: 20 }];
+  assert.deepEqual(run('M = mean(V) over G', rows).map((x) => x.M), [15, 15, 15]);
+});
+
+test('compile: a non-aggregate over a group is rejected', () => {
+  assert.throws(() => compile('X = foo(FE) over LITHO'), /not a window aggregate/);
+});

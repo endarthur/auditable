@@ -155,7 +155,28 @@ export function parseTokens(toks) {
   }
   function parseUnary() {
     if (isOp('-')) { next(); return { type: 'Unary', op: '-', operand: parseUnary() }; }
-    return parsePrimary();
+    return parsePostfix();
+  }
+
+  // window postfix: `aggCall over GROUP` — binds tighter than arithmetic, so
+  // `FE / mean(FE) over LITHO` is `FE / (mean(FE) over LITHO)`.
+  function parsePostfix() {
+    let e = parsePrimary();
+    if (isId('over')) { next(); e = { type: 'Window', agg: e, group: parseGroupSpec() }; }
+    return e;
+  }
+
+  // GROUP = `all` | `()` (whole table) | column | `(col, col, …)`.
+  function parseGroupSpec() {
+    if (isId('all')) { next(); return 'all'; }
+    if (isOp('(')) {
+      next();
+      const cols = [];
+      if (!isOp(')')) for (;;) { cols.push(fieldName()); if (isOp(',')) { next(); continue; } break; }
+      expectOp(')');
+      return cols.length ? cols : 'all';
+    }
+    return [fieldName()];
   }
 
   function parsePrimary() {

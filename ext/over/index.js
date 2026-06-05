@@ -269,7 +269,28 @@ function parseTokens(toks) {
   }
   function parseUnary() {
     if (isOp('-')) { next(); return { type: 'Unary', op: '-', operand: parseUnary() }; }
-    return parsePrimary();
+    return parsePostfix();
+  }
+
+  // window postfix: `aggCall over GROUP` — binds tighter than arithmetic, so
+  // `FE / mean(FE) over LITHO` is `FE / (mean(FE) over LITHO)`.
+  function parsePostfix() {
+    let e = parsePrimary();
+    if (isId('over')) { next(); e = { type: 'Window', agg: e, group: parseGroupSpec() }; }
+    return e;
+  }
+
+  // GROUP = `all` | `()` (whole table) | column | `(col, col, …)`.
+  function parseGroupSpec() {
+    if (isId('all')) { next(); return 'all'; }
+    if (isOp('(')) {
+      next();
+      const cols = [];
+      if (!isOp(')')) for (;;) { cols.push(fieldName()); if (isOp(',')) { next(); continue; } break; }
+      expectOp(')');
+      return cols.length ? cols : 'all';
+    }
+    return [fieldName()];
   }
 
   function parsePrimary() {
@@ -416,6 +437,14 @@ function inferType(expr, ctx) {
       let t = expr.default ? inferType(expr.default, ctx) : undefined;
       for (const arm of expr.arms) t = t === undefined ? inferType(arm.value, ctx) : unify(t, inferType(arm.value, ctx));
       return t || 'dynamic';
+    }
+    case 'Window': {
+      const n = expr.agg && expr.agg.type === 'Call' ? expr.agg.name : null;
+      if (n === 'count') return 'int';
+      if (n === 'mean' || n === 'std') return 'float';
+      if (n === 'sum') return expr.agg.args[0] && inferType(expr.agg.args[0], ctx) === 'int' ? 'int' : 'float';
+      if (n === 'min' || n === 'max') return expr.agg.args[0] ? inferType(expr.agg.args[0], ctx) : 'dynamic';
+      return 'dynamic';
     }
     default: return 'dynamic';
   }
@@ -616,7 +645,12 @@ const overRuntime = {
 //
 // Emitted shape: `(out, ctx, _over) => { … }` — `out` is the working row (seeded
 // from the input row, so reads see the evolving row top-to-bottom, EXTRA-style);
-// writes land on `out`; `ctx.drop` / `ctx.exit` carry `delete` / `exit`.
+// writes land on `out`; `ctx.drop` / `ctx.exit` carry `delete` / `exit`; a window
+// expression emits `ctx.win(id, key)` (the driver's two-pass fills ctx.win).
+//
+// Expression emission is parameterized by an "emit context" (ec) — { ref, defaults,
+// onWindow } — so the same emitters serve the row body AND window-argument
+// extraction (which reads input rows).
 
 
 const REL = new Set(['==', '!=', '<', '<=', '>', '>=']);
@@ -647,71 +681,83 @@ function collectDefaults(statements, out = new Map()) {
   return out;
 }
 
+// ── expression emit (parameterized by emit context `ec`) ──
+function emitExpr(e, ec) {
+  switch (e.type) {
+    case 'Num': return String(e.value);
+    case 'Str': return JSON.stringify(e.value);
+    case 'Bool': return e.value ? 'true' : 'false';
+    case 'Absent': return 'null';
+    case 'Field': return ec.ref(e.name);
+    case 'Unary': return `_over.neg(${emitExpr(e.operand, ec)})`;
+    case 'Binary': return emitBinary(e, ec);
+    case 'Call': return emitCall(e, ec);
+    case 'Match': return emitMatch(e, ec);
+    case 'Window': return ec.onWindow(e, ec);
+    default: throw new Error(`over emit: unknown expression "${e.type}"`);
+  }
+}
+
+function emitBinary(e, ec) {
+  const { op } = e;
+  if (ARITH_FN[op]) return `_over.${ARITH_FN[op]}(${emitExpr(e.left, ec)}, ${emitExpr(e.right, ec)})`;
+  if (op === 'and' || op === 'or') return `_over.${op}(${emitExpr(e.left, ec)}, ${emitExpr(e.right, ec)})`;
+  if (op === '??') return `_over.coalesce(${emitExpr(e.left, ec)}, ${emitExpr(e.right, ec)})`;
+  if (op === '==' || op === '!=') {                        // `== absent` / `!= absent` → presence check
+    if (e.right.type === 'Absent') return `_over.${op === '==' ? 'isAbsent' : 'present'}(${emitExpr(e.left, ec)})`;
+    if (e.left.type === 'Absent') return `_over.${op === '==' ? 'isAbsent' : 'present'}(${emitExpr(e.right, ec)})`;
+  }
+  return `_over.${CMP_FN[op]}(${emitExpr(e.left, ec)}, ${emitExpr(e.right, ec)})`;
+}
+
+function emitCall(e, ec) {
+  if (e.name === 'not') return `_over.not(${emitExpr(e.args[0], ec)})`;
+  if (e.name === 'present') return `_over.present(${emitExpr(e.args[0], ec)})`;
+  if (e.name === 'absent') return 'null';                  // compat: absent() literal
+  if (e.name === 'default') {                              // per-column declared fill
+    const a = e.args[0];
+    return a && a.type === 'Field' && ec.defaults.has(a.name) ? ec.defaults.get(a.name) : 'null';
+  }
+  return `_over.call(${JSON.stringify(e.name)}${e.args.map((a) => ', ' + emitExpr(a, ec)).join('')})`;
+}
+
+function emitMatch(e, ec) {
+  const arms = e.arms.map((arm) => {
+    let cond;
+    if (arm.rel) cond = `_over.rel(${JSON.stringify(arm.rel)}, _m, ${emitExpr(arm.test, ec)})`;
+    else if (isBoolish(arm.test)) cond = `_over.truthy(${emitExpr(arm.test, ec)})`;
+    else cond = `_over.eq(_m, ${emitExpr(arm.test, ec)})`;
+    return { cond, value: emitExpr(arm.value, ec) };
+  });
+  const def = e.default ? emitExpr(e.default, ec) : 'null';
+  const chain = arms.reduceRight((acc, a) => `(${a.cond} ? ${a.value} : ${acc})`, def);
+  return `((_m) => ${chain})(${emitExpr(e.subject, ec)})`;
+}
+
+// group key for a window node, emitted against the working row (pass 2)
+function windowKey(node) {
+  return node.group === 'all' ? 'null'
+    : `[${node.group.map((c) => `out[${JSON.stringify(c)}]`).join(', ')}]`;
+}
+
+// ── the row function ──
 function emitRowSource(ast) {
   const lets = new Map();           // letName → local id
   const defaults = collectDefaults(ast.statements);
   let lc = 0;
 
-  const ref = (name) => (lets.has(name) ? lets.get(name) : `out[${JSON.stringify(name)}]`);
-
-  function expr(e) {
-    switch (e.type) {
-      case 'Num': return String(e.value);
-      case 'Str': return JSON.stringify(e.value);
-      case 'Bool': return e.value ? 'true' : 'false';
-      case 'Absent': return 'null';
-      case 'Field': return ref(e.name);
-      case 'Unary': return `_over.neg(${expr(e.operand)})`;
-      case 'Binary': return binary(e);
-      case 'Call': return call(e);
-      case 'Match': return match(e);
-      default: throw new Error(`over emit: unknown expression "${e.type}"`);
-    }
-  }
-
-  function binary(e) {
-    const { op } = e;
-    if (ARITH_FN[op]) return `_over.${ARITH_FN[op]}(${expr(e.left)}, ${expr(e.right)})`;
-    if (op === 'and' || op === 'or') return `_over.${op}(${expr(e.left)}, ${expr(e.right)})`;
-    if (op === '??') return `_over.coalesce(${expr(e.left)}, ${expr(e.right)})`;
-    // relational — `== absent` / `!= absent` become presence checks (cf. sift)
-    if ((op === '==' || op === '!=')) {
-      if (e.right.type === 'Absent') return `_over.${op === '==' ? 'isAbsent' : 'present'}(${expr(e.left)})`;
-      if (e.left.type === 'Absent') return `_over.${op === '==' ? 'isAbsent' : 'present'}(${expr(e.right)})`;
-    }
-    return `_over.${CMP_FN[op]}(${expr(e.left)}, ${expr(e.right)})`;
-  }
-
-  function call(e) {
-    if (e.name === 'not') return `_over.not(${expr(e.args[0])})`;
-    if (e.name === 'present') return `_over.present(${expr(e.args[0])})`;
-    if (e.name === 'absent') return 'null';                          // compat: absent() literal
-    if (e.name === 'default') {                                      // per-column declared fill
-      const a = e.args[0];
-      return a && a.type === 'Field' && defaults.has(a.name) ? defaults.get(a.name) : 'null';
-    }
-    return `_over.call(${JSON.stringify(e.name)}${e.args.map((a) => ', ' + expr(a)).join('')})`;
-  }
-
-  function match(e) {
-    const arms = e.arms.map((arm) => {
-      let cond;
-      if (arm.rel) cond = `_over.rel(${JSON.stringify(arm.rel)}, _m, ${expr(arm.test)})`;
-      else if (isBoolish(arm.test)) cond = `_over.truthy(${expr(arm.test)})`;
-      else cond = `_over.eq(_m, ${expr(arm.test)})`;
-      return { cond, value: expr(arm.value) };
-    });
-    const def = e.default ? expr(e.default) : 'null';
-    const chain = arms.reduceRight((acc, a) => `(${a.cond} ? ${a.value} : ${acc})`, def);
-    return `((_m) => ${chain})(${expr(e.subject)})`;
-  }
+  const ec = {
+    ref: (name) => (lets.has(name) ? lets.get(name) : `out[${JSON.stringify(name)}]`),
+    defaults,
+    onWindow: (node) => `ctx.win(${node._winId | 0}, ${windowKey(node)})`,
+  };
 
   function block(statements) { return statements.map(stmt).filter(Boolean).join('\n'); }
 
   function stmt(st) {
     switch (st.type) {
       case 'Assign': {
-        const v = expr(st.value);
+        const v = emitExpr(st.value, ec);
         if (st.kind === 'let') { const id = `_l${lc++}`; lets.set(st.target.name, id); return `let ${id} = ${v};`; }
         lets.delete(st.target.name);
         return `out[${JSON.stringify(st.target.name)}] = ${v};`;
@@ -719,14 +765,14 @@ function emitRowSource(ast) {
       case 'If': {
         let s = '';
         st.clauses.forEach((c, i) => {
-          s += `${i ? ' else ' : ''}if (_over.truthy(${expr(c.test)})) {\n${block(c.body)}\n}`;
+          s += `${i ? ' else ' : ''}if (_over.truthy(${emitExpr(c.test, ec)})) {\n${block(c.body)}\n}`;
         });
         if (st.alternate) s += ` else {\n${block(st.alternate)}\n}`;
         return s;
       }
       case 'Control':
         return st.name === 'delete' ? 'ctx.drop = true; return;' : 'ctx.exit = true; return;';
-      case 'Project': return '';                                     // driver-level (output projection)
+      case 'Project': return '';                            // driver-level (output projection)
       default: throw new Error(`over emit: unknown statement "${st.type}"`);
     }
   }
@@ -740,22 +786,120 @@ function compileRowFn(ast, runtime = overRuntime) {
   return { source, run: (out, ctx) => { fn(out, ctx, runtime); return out; } };
 }
 
+// Compile a standalone expression over an input row — used by the window two-pass
+// to extract aggregate arguments + filters. Reads the row as `out` (no writes).
+function compileExpr(expr, runtime = overRuntime) {
+  const ec = {
+    ref: (name) => `out[${JSON.stringify(name)}]`,
+    defaults: new Map(),
+    onWindow: () => { throw new Error('over: a window aggregate cannot nest inside another'); },
+  };
+  const fn = new Function('out', '_over', `return ${emitExpr(expr, ec)};`);
+  return (row) => fn(row, runtime);
+}
+
+// -- windows.js --
+
+// @gcu/over — window aggregates (SPEC §7, the `over` feature, the name).
+// `agg(expr) over GROUP` = an aggregate over a group, used per row. Runs as a
+// two-pass: pass 1 accumulates each window's aggregate per group key; pass 2 (the
+// row body, via ctx.win) reads the per-group result. v0: unordered group
+// aggregates {count, sum, mean, min, max, std} over `all` (whole table) or one/
+// more columns; ordered windows (`order …`, running/lag) + `where` + `bin` later.
+// In-memory accumulators here; the sluice mergeable/parallel path is the big-data
+// upgrade (the workbench pattern).
+
+
+const AGG = new Set(['count', 'sum', 'mean', 'min', 'max', 'std']);
+
+// Walk every expression in the AST, tag each Window node with `_winId`, and
+// return the window definitions (id, aggregate, arg expression, group).
+function collectWindows(ast) {
+  const defs = [];
+
+  function expr(e) {
+    if (!e || typeof e !== 'object') return;
+    if (e.type === 'Window') {
+      if (!e.agg || e.agg.type !== 'Call' || !AGG.has(e.agg.name))
+        throw new Error(`over: "${e.agg && e.agg.name}" is not a window aggregate (${[...AGG].join('/')})`);
+      e._winId = defs.length;
+      defs.push({ id: e._winId, aggName: e.agg.name, argExpr: e.agg.args[0] || null, group: e.group });
+    }
+    expr(e.operand); expr(e.left); expr(e.right); expr(e.agg); expr(e.subject); expr(e.default);
+    if (e.args) e.args.forEach(expr);
+    if (e.arms) e.arms.forEach((a) => { expr(a.test); expr(a.value); });
+  }
+  function stmt(st) {
+    if (st.type === 'Assign') expr(st.value);
+    else if (st.type === 'If') { st.clauses.forEach((c) => { expr(c.test); c.body.forEach(stmt); }); if (st.alternate) st.alternate.forEach(stmt); }
+  }
+  ast.statements.forEach(stmt);
+  return defs;
+}
+
+// A streaming accumulator per aggregate (absent values are ignored — the natural
+// behaviour; count() counts rows in the group). std is population std (Welford).
+function makeAcc(aggName) {
+  switch (aggName) {
+    case 'count': { let n = 0; return { add() { n++; }, result() { return n; } }; }
+    case 'sum': { let s = 0, any = false; return { add(v) { if (v != null) { s += Number(v); any = true; } }, result() { return any ? s : null; } }; }
+    case 'mean': { let s = 0, n = 0; return { add(v) { if (v != null) { s += Number(v); n++; } }, result() { return n ? s / n : null; } }; }
+    case 'min': { let m = null; return { add(v) { if (v != null) { const x = Number(v); if (m == null || x < m) m = x; } }, result() { return m; } }; }
+    case 'max': { let m = null; return { add(v) { if (v != null) { const x = Number(v); if (m == null || x > m) m = x; } }, result() { return m; } }; }
+    case 'std': {
+      let n = 0, mean = 0, m2 = 0;
+      return { add(v) { if (v != null) { const x = Number(v); n++; const d = x - mean; mean += d / n; m2 += d * (x - mean); } }, result() { return n > 1 ? Math.sqrt(m2 / n) : 0; } };
+    }
+    default: throw new Error(`over: unknown aggregate "${aggName}"`);
+  }
+}
+
+const keyOf = (group, get) => (group === 'all' ? '' : group.map((c) => String(get(c))).join(''));
+
+// Pass 1: accumulate each window's aggregate per group → results[id] = Map(key→value).
+function computeWindows(defs, rows) {
+  const argFns = defs.map((d) => (d.argExpr ? compileExpr(d.argExpr) : () => null));
+  const accs = defs.map(() => new Map());
+  for (const row of rows) {
+    defs.forEach((d, i) => {
+      const key = keyOf(d.group, (c) => row[c]);
+      let acc = accs[i].get(key);
+      if (!acc) { acc = makeAcc(d.aggName); accs[i].set(key, acc); }
+      acc.add(argFns[i](row));
+    });
+  }
+  return accs.map((m) => { const out = new Map(); for (const [k, a] of m) out.set(k, a.result()); return out; });
+}
+
+// Pass 2 lookup (called as ctx.win): keyParts is the working row's group-column
+// values (or null for a whole-table window).
+function winLookup(results, id, keyParts) {
+  const key = keyParts == null ? '' : keyParts.map(String).join('');
+  const m = results[id];
+  return m && m.has(key) ? m.get(key) : null;
+}
+
 // -- driver.js --
 
 // @gcu/over — the driver. Runs a compiled row function over a record stream,
 // applying the stream concerns: `delete` drops the row, `exit` stops the stream,
-// and the resolved output columns (from the schema pass) project the result.
+// and the resolved output columns (from the schema pass) project the result. When
+// the transform has window aggregates, a first pass computes them per group
+// (ctx.win) before the row pass.
 //
 // v0 table shape = an array of row objects ([{FE:62, …}, …]); strata's columnar
-// table adapts to/from this at the surface. Windows (the two-pass) extend this
-// driver later.
+// table adapts to/from this at the surface.
 
-function applyRows(rowFn, outputColumns, rows) {
+
+function applyRows(rowFn, outputColumns, rows, windowDefs) {
   const names = outputColumns.map((c) => c.name);
+  const winResults = windowDefs && windowDefs.length ? computeWindows(windowDefs, rows) : null;
+  const win = winResults ? (id, key) => winLookup(winResults, id, key) : () => null;
+
   const out = [];
   for (const row of rows) {
     const work = { ...row };                 // seed from input → unassigned columns pass through
-    const ctx = { drop: false, exit: false };
+    const ctx = { drop: false, exit: false, win };
     rowFn.run(work, ctx);
     if (!ctx.drop) {
       const projected = {};
@@ -783,6 +927,7 @@ function applyRows(rowFn, outputColumns, rows) {
 
 
 
+
 function inferSchema(rows) {
   if (!rows || !rows.length) return [];
   const r0 = rows[0];
@@ -796,17 +941,19 @@ function inferSchema(rows) {
 
 function compile(text, opts = {}) {
   const ast = parse(text);
+  const windowDefs = collectWindows(ast);     // tags Window nodes with _winId — BEFORE emit
   const rowFn = compileRowFn(ast);
   const staticSchema = opts.inputSchema ? schemaPass(ast, opts.inputSchema, opts) : null;
   return {
     ast,
     dialect: ast.dialect,
     source: rowFn.source,
+    windows: windowDefs.length,
     outputColumns: staticSchema ? staticSchema.columns : null,
     warnings: staticSchema ? staticSchema.warnings : null,
     run(rows) {
       const sch = staticSchema || schemaPass(ast, inferSchema(rows), opts);
-      return { columns: sch.columns, rows: applyRows(rowFn, sch.columns, rows) };
+      return { columns: sch.columns, rows: applyRows(rowFn, sch.columns, rows, windowDefs) };
     },
   };
 }
@@ -815,8 +962,12 @@ export {
   OverLexError,
   OverParseError,
   applyRows,
+  collectWindows,
   compile,
+  compileExpr,
   compileRowFn,
+  computeWindows,
+  emitExpr,
   emitRowSource,
   inferType,
   lex,
@@ -825,4 +976,5 @@ export {
   parseTokens,
   schemaPass,
   unify,
+  winLookup,
 };

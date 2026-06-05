@@ -80,6 +80,14 @@ export function inferType(expr, ctx) {
       for (const arm of expr.arms) t = t === undefined ? inferType(arm.value, ctx) : unify(t, inferType(arm.value, ctx));
       return t || 'dynamic';
     }
+    case 'Window': {
+      const n = expr.agg && expr.agg.type === 'Call' ? expr.agg.name : null;
+      if (n === 'count') return 'int';
+      if (n === 'mean' || n === 'std') return 'float';
+      if (n === 'sum') return expr.agg.args[0] && inferType(expr.agg.args[0], ctx) === 'int' ? 'int' : 'float';
+      if (n === 'min' || n === 'max') return expr.agg.args[0] ? inferType(expr.agg.args[0], ctx) : 'dynamic';
+      return 'dynamic';
+    }
     default: return 'dynamic';
   }
 }

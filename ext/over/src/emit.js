@@ -5,7 +5,12 @@
 //
 // Emitted shape: `(out, ctx, _over) => { … }` — `out` is the working row (seeded
 // from the input row, so reads see the evolving row top-to-bottom, EXTRA-style);
-// writes land on `out`; `ctx.drop` / `ctx.exit` carry `delete` / `exit`.
+// writes land on `out`; `ctx.drop` / `ctx.exit` carry `delete` / `exit`; a window
+// expression emits `ctx.win(id, key)` (the driver's two-pass fills ctx.win).
+//
+// Expression emission is parameterized by an "emit context" (ec) — { ref, defaults,
+// onWindow } — so the same emitters serve the row body AND window-argument
+// extraction (which reads input rows).
 
 import { overRuntime } from './runtime.js';
 
@@ -37,71 +42,83 @@ function collectDefaults(statements, out = new Map()) {
   return out;
 }
 
+// ── expression emit (parameterized by emit context `ec`) ──
+export function emitExpr(e, ec) {
+  switch (e.type) {
+    case 'Num': return String(e.value);
+    case 'Str': return JSON.stringify(e.value);
+    case 'Bool': return e.value ? 'true' : 'false';
+    case 'Absent': return 'null';
+    case 'Field': return ec.ref(e.name);
+    case 'Unary': return `_over.neg(${emitExpr(e.operand, ec)})`;
+    case 'Binary': return emitBinary(e, ec);
+    case 'Call': return emitCall(e, ec);
+    case 'Match': return emitMatch(e, ec);
+    case 'Window': return ec.onWindow(e, ec);
+    default: throw new Error(`over emit: unknown expression "${e.type}"`);
+  }
+}
+
+function emitBinary(e, ec) {
+  const { op } = e;
+  if (ARITH_FN[op]) return `_over.${ARITH_FN[op]}(${emitExpr(e.left, ec)}, ${emitExpr(e.right, ec)})`;
+  if (op === 'and' || op === 'or') return `_over.${op}(${emitExpr(e.left, ec)}, ${emitExpr(e.right, ec)})`;
+  if (op === '??') return `_over.coalesce(${emitExpr(e.left, ec)}, ${emitExpr(e.right, ec)})`;
+  if (op === '==' || op === '!=') {                        // `== absent` / `!= absent` → presence check
+    if (e.right.type === 'Absent') return `_over.${op === '==' ? 'isAbsent' : 'present'}(${emitExpr(e.left, ec)})`;
+    if (e.left.type === 'Absent') return `_over.${op === '==' ? 'isAbsent' : 'present'}(${emitExpr(e.right, ec)})`;
+  }
+  return `_over.${CMP_FN[op]}(${emitExpr(e.left, ec)}, ${emitExpr(e.right, ec)})`;
+}
+
+function emitCall(e, ec) {
+  if (e.name === 'not') return `_over.not(${emitExpr(e.args[0], ec)})`;
+  if (e.name === 'present') return `_over.present(${emitExpr(e.args[0], ec)})`;
+  if (e.name === 'absent') return 'null';                  // compat: absent() literal
+  if (e.name === 'default') {                              // per-column declared fill
+    const a = e.args[0];
+    return a && a.type === 'Field' && ec.defaults.has(a.name) ? ec.defaults.get(a.name) : 'null';
+  }
+  return `_over.call(${JSON.stringify(e.name)}${e.args.map((a) => ', ' + emitExpr(a, ec)).join('')})`;
+}
+
+function emitMatch(e, ec) {
+  const arms = e.arms.map((arm) => {
+    let cond;
+    if (arm.rel) cond = `_over.rel(${JSON.stringify(arm.rel)}, _m, ${emitExpr(arm.test, ec)})`;
+    else if (isBoolish(arm.test)) cond = `_over.truthy(${emitExpr(arm.test, ec)})`;
+    else cond = `_over.eq(_m, ${emitExpr(arm.test, ec)})`;
+    return { cond, value: emitExpr(arm.value, ec) };
+  });
+  const def = e.default ? emitExpr(e.default, ec) : 'null';
+  const chain = arms.reduceRight((acc, a) => `(${a.cond} ? ${a.value} : ${acc})`, def);
+  return `((_m) => ${chain})(${emitExpr(e.subject, ec)})`;
+}
+
+// group key for a window node, emitted against the working row (pass 2)
+function windowKey(node) {
+  return node.group === 'all' ? 'null'
+    : `[${node.group.map((c) => `out[${JSON.stringify(c)}]`).join(', ')}]`;
+}
+
+// ── the row function ──
 export function emitRowSource(ast) {
   const lets = new Map();           // letName → local id
   const defaults = collectDefaults(ast.statements);
   let lc = 0;
 
-  const ref = (name) => (lets.has(name) ? lets.get(name) : `out[${JSON.stringify(name)}]`);
-
-  function expr(e) {
-    switch (e.type) {
-      case 'Num': return String(e.value);
-      case 'Str': return JSON.stringify(e.value);
-      case 'Bool': return e.value ? 'true' : 'false';
-      case 'Absent': return 'null';
-      case 'Field': return ref(e.name);
-      case 'Unary': return `_over.neg(${expr(e.operand)})`;
-      case 'Binary': return binary(e);
-      case 'Call': return call(e);
-      case 'Match': return match(e);
-      default: throw new Error(`over emit: unknown expression "${e.type}"`);
-    }
-  }
-
-  function binary(e) {
-    const { op } = e;
-    if (ARITH_FN[op]) return `_over.${ARITH_FN[op]}(${expr(e.left)}, ${expr(e.right)})`;
-    if (op === 'and' || op === 'or') return `_over.${op}(${expr(e.left)}, ${expr(e.right)})`;
-    if (op === '??') return `_over.coalesce(${expr(e.left)}, ${expr(e.right)})`;
-    // relational — `== absent` / `!= absent` become presence checks (cf. sift)
-    if ((op === '==' || op === '!=')) {
-      if (e.right.type === 'Absent') return `_over.${op === '==' ? 'isAbsent' : 'present'}(${expr(e.left)})`;
-      if (e.left.type === 'Absent') return `_over.${op === '==' ? 'isAbsent' : 'present'}(${expr(e.right)})`;
-    }
-    return `_over.${CMP_FN[op]}(${expr(e.left)}, ${expr(e.right)})`;
-  }
-
-  function call(e) {
-    if (e.name === 'not') return `_over.not(${expr(e.args[0])})`;
-    if (e.name === 'present') return `_over.present(${expr(e.args[0])})`;
-    if (e.name === 'absent') return 'null';                          // compat: absent() literal
-    if (e.name === 'default') {                                      // per-column declared fill
-      const a = e.args[0];
-      return a && a.type === 'Field' && defaults.has(a.name) ? defaults.get(a.name) : 'null';
-    }
-    return `_over.call(${JSON.stringify(e.name)}${e.args.map((a) => ', ' + expr(a)).join('')})`;
-  }
-
-  function match(e) {
-    const arms = e.arms.map((arm) => {
-      let cond;
-      if (arm.rel) cond = `_over.rel(${JSON.stringify(arm.rel)}, _m, ${expr(arm.test)})`;
-      else if (isBoolish(arm.test)) cond = `_over.truthy(${expr(arm.test)})`;
-      else cond = `_over.eq(_m, ${expr(arm.test)})`;
-      return { cond, value: expr(arm.value) };
-    });
-    const def = e.default ? expr(e.default) : 'null';
-    const chain = arms.reduceRight((acc, a) => `(${a.cond} ? ${a.value} : ${acc})`, def);
-    return `((_m) => ${chain})(${expr(e.subject)})`;
-  }
+  const ec = {
+    ref: (name) => (lets.has(name) ? lets.get(name) : `out[${JSON.stringify(name)}]`),
+    defaults,
+    onWindow: (node) => `ctx.win(${node._winId | 0}, ${windowKey(node)})`,
+  };
 
   function block(statements) { return statements.map(stmt).filter(Boolean).join('\n'); }
 
   function stmt(st) {
     switch (st.type) {
       case 'Assign': {
-        const v = expr(st.value);
+        const v = emitExpr(st.value, ec);
         if (st.kind === 'let') { const id = `_l${lc++}`; lets.set(st.target.name, id); return `let ${id} = ${v};`; }
         lets.delete(st.target.name);
         return `out[${JSON.stringify(st.target.name)}] = ${v};`;
@@ -109,14 +126,14 @@ export function emitRowSource(ast) {
       case 'If': {
         let s = '';
         st.clauses.forEach((c, i) => {
-          s += `${i ? ' else ' : ''}if (_over.truthy(${expr(c.test)})) {\n${block(c.body)}\n}`;
+          s += `${i ? ' else ' : ''}if (_over.truthy(${emitExpr(c.test, ec)})) {\n${block(c.body)}\n}`;
         });
         if (st.alternate) s += ` else {\n${block(st.alternate)}\n}`;
         return s;
       }
       case 'Control':
         return st.name === 'delete' ? 'ctx.drop = true; return;' : 'ctx.exit = true; return;';
-      case 'Project': return '';                                     // driver-level (output projection)
+      case 'Project': return '';                            // driver-level (output projection)
       default: throw new Error(`over emit: unknown statement "${st.type}"`);
     }
   }
@@ -128,4 +145,16 @@ export function compileRowFn(ast, runtime = overRuntime) {
   const source = emitRowSource(ast);
   const fn = new Function('out', 'ctx', '_over', source);   // controlled emission (no AIR yet)
   return { source, run: (out, ctx) => { fn(out, ctx, runtime); return out; } };
+}
+
+// Compile a standalone expression over an input row — used by the window two-pass
+// to extract aggregate arguments + filters. Reads the row as `out` (no writes).
+export function compileExpr(expr, runtime = overRuntime) {
+  const ec = {
+    ref: (name) => `out[${JSON.stringify(name)}]`,
+    defaults: new Map(),
+    onWindow: () => { throw new Error('over: a window aggregate cannot nest inside another'); },
+  };
+  const fn = new Function('out', '_over', `return ${emitExpr(expr, ec)};`);
+  return (row) => fn(row, runtime);
 }
