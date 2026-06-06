@@ -227,6 +227,44 @@ test('lint: opt-out via lint:false', () => {
   assert.doesNotThrow(() => bundleMemory(sources, { entry: 'src/main.js', lint: false }));
 });
 
+// ── phase 2: annotations (§5) ──
+test('@bundle-share: shared singleton is not renamed; identity preserved', async () => {
+  const sources = {
+    'src/main.js': "export { getReg } from './a.js';\nexport { useReg } from './b.js';\n",
+    'src/a.js': "/* @bundle-share */\nconst REGISTRY = new Map();\nexport function getReg(){ return REGISTRY; }\n",
+    'src/b.js': "import { getReg } from './a.js';\nexport function useReg(){ return getReg(); }\n",
+  };
+  const r = bundleMemory(sources, { entry: 'src/main.js' });
+  assert.ok(r.code.includes('const REGISTRY = new Map();') && !r.code.includes('REGISTRY$'), 'shared binding not renamed');
+  const m = await importCode(r.code);
+  assert.equal(m.getReg(), m.useReg(), 'single shared identity');
+});
+
+test('@bundle-share: collision with another declaration is E007', () => {
+  const sources = {
+    'src/main.js': "export { a } from './a.js';\nexport { b } from './b.js';\n",
+    'src/a.js': "/* @bundle-share */\nconst REGISTRY = 1;\nexport function a(){ return REGISTRY; }\n",
+    'src/b.js': "const REGISTRY = 2;\nexport function b(){ return REGISTRY; }\n",
+  };
+  assert.throws(() => bundleMemory(sources, { entry: 'src/main.js' }), /E007/);
+});
+
+test('@bundle-verbatim: declaration body is not rewritten', async () => {
+  const sources = {
+    'src/main.js': "export { f } from './a.js';\nexport { g } from './b.js';\n",
+    'src/a.js': "function tok(){ return 'A'; }\n/* @bundle-verbatim */\nfunction probe(){ return typeof tok; }\nexport function f(){ return probe(); }\n",
+    'src/b.js': "function tok(){ return 'B'; }\nexport function g(){ return tok(); }\n",
+  };
+  const r = bundleMemory(sources, { entry: 'src/main.js' });
+  // tok collides → renamed tok$a / tok$b; but probe() is verbatim so its body
+  // keeps `typeof tok` (now undefined), while g() is rewritten to tok$b.
+  assert.ok(r.code.includes('return typeof tok;'), 'verbatim body unchanged');
+  assert.ok(r.code.includes('tok$a') && r.code.includes('tok$b'), 'decl sites still renamed');
+  const m = await importCode(r.code);
+  assert.equal(m.f(), 'undefined'); // body unrewritten → bare `tok` is undefined
+  assert.equal(m.g(), 'B');          // non-verbatim sibling rewritten correctly
+});
+
 // ── phase 2: namespace imports (§7.3) ──
 test('namespace import: `import * as ns` synthesizes a frozen object', async () => {
   const sources = {

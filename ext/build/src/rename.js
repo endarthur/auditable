@@ -6,7 +6,10 @@
 //
 // Rule (SPEC §6.2): a top-level name declared by more than one distinct binding
 // across the module set collides; every colliding declaration is renamed to
-// `name$moduleBasename`, deterministic from the file name alone.
+// `name$moduleBasename`, deterministic from the file name alone. A name marked
+// /* @bundle-share */ is never renamed; colliding with it is an error (§5.1).
+
+import { buildError } from './errors.js';
 
 // Sanitize a module basename to valid identifier characters.
 export function sanitizeBasename(name) {
@@ -48,7 +51,17 @@ export function renameCollisions(modules) {
   };
 
   for (const [name, group] of byName) {
+    const sharedEntries = group.filter((g) => g.module.sharedNames && g.module.sharedNames.has(name));
     const distinct = new Set(group.map((g) => g.identity));
+    if (sharedEntries.length > 0) {
+      if (sharedEntries.length > 1) {
+        throw buildError('E007', `'${name}' is marked @bundle-share in multiple modules (shared-intent must be single-site)`, null);
+      }
+      if (distinct.size > 1) {
+        throw buildError('E007', `'${name}' is @bundle-share but also declared elsewhere`, null);
+      }
+      continue; // single shared singleton — keep, never rename
+    }
     if (distinct.size <= 1) continue; // single symbol — no rename
     for (const { module } of group) {
       put(module, name, `${name}$${sanitizeBasename(module.basename)}`);

@@ -17,6 +17,7 @@ import { collectRenamePatches } from './scope.js';
 import { stmtDelete, exportPrefixStrip, declaredNames, declSitePatches } from './rewrite.js';
 import { applyPatches } from './emit.js';
 import { validateDefine, collectDefinePatches } from './define.js';
+import { collectAnnotations } from './annotations.js';
 import { lintModule } from './lint.js';
 import { buildError, astLoc } from './errors.js';
 
@@ -153,7 +154,9 @@ export function bundleModules(sources, opts) {
     }
     for (const ns of namespaceImports) ownBindings.add(ns.local);
 
-    const mod = { path, source: sources[path], ast, imports, exports, internalImportBindings, externalImports, namespaceImports, internalDeps, ownBindings, basename: baseOf(path) };
+    const { shared: sharedNames, verbatimRanges } = collectAnnotations(ast, sources[path]);
+
+    const mod = { path, source: sources[path], ast, imports, exports, internalImportBindings, externalImports, namespaceImports, internalDeps, ownBindings, sharedNames, verbatimRanges, basename: baseOf(path) };
     byPath.set(path, mod);
     return mod;
   }
@@ -341,9 +344,12 @@ export function bundleModules(sources, opts) {
       declSitePatches(node, ownRenames, patches);
     }
 
-    // reference rename patches (scope-aware) + define substitution
-    for (const p of collectRenamePatches(mod.ast, renameMap, topNames)) patches.push(p);
-    for (const p of collectDefinePatches(mod.ast, defineMap)) patches.push(p);
+    // reference rename patches (scope-aware) + define substitution. @bundle-verbatim
+    // declaration bodies are emitted unchanged — drop patches landing inside them
+    // (decl-site renames, pushed above, are kept so collisions still resolve).
+    const inVerbatim = (p) => mod.verbatimRanges.some(([s, e]) => p.start >= s && p.end <= e);
+    for (const p of collectRenamePatches(mod.ast, renameMap, topNames)) if (!inVerbatim(p)) patches.push(p);
+    for (const p of collectDefinePatches(mod.ast, defineMap)) if (!inVerbatim(p)) patches.push(p);
 
     let body = applyPatches(mod.source, patches).replace(/^\n+/, '').replace(/\n+$/, '');
 
