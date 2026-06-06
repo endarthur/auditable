@@ -197,6 +197,36 @@ test('determinism: same input bundles byte-identically', () => {
   assert.equal(a.code, b.code);
 });
 
+// ── phase 2: lint rules (§9) ──
+test('lint: var is rejected (E010)', () => {
+  const sources = { 'src/main.js': "export const x = 1;\nfunction f(){ var y = 2; return y; }\n" };
+  assert.throws(() => bundleMemory(sources, { entry: 'src/main.js' }), /E010/);
+});
+test('lint: with is rejected (parse error in strict module; E011 backstop)', () => {
+  // ES modules are always strict → `with` is a SyntaxError at parse (E001),
+  // beating the E011 lint backstop. Either way it must be rejected.
+  const sources = { 'src/main.js': "export function f(o){ with (o) { return o.x; } }\n" };
+  assert.throws(() => bundleMemory(sources, { entry: 'src/main.js' }), /E001|E011/);
+});
+test('lint: eval is rejected (E012)', () => {
+  const sources = { 'src/main.js': "export function f(s){ return eval(s); }\n" };
+  assert.throws(() => bundleMemory(sources, { entry: 'src/main.js' }), /E012/);
+});
+test('lint: eval as a property key / member is allowed', () => {
+  const sources = { 'src/main.js': "const o = { eval: 1 };\nexport function f(x){ return o.eval + x; }\n" };
+  const r = bundleMemory(sources, { entry: 'src/main.js' });
+  assert.ok(r.code.includes('eval: 1'));
+});
+test('lint: W001 warns on inner-scope shadow of a top-level binding', () => {
+  const sources = { 'src/main.js': "function tok(){ return 1; }\nexport function f(){ function tok(){ return 2; } return tok(); }\n" };
+  const r = bundleMemory(sources, { entry: 'src/main.js' });
+  assert.ok(r.warnings.some((w) => w.code === 'W001'), 'W001 emitted');
+});
+test('lint: opt-out via lint:false', () => {
+  const sources = { 'src/main.js': "export function f(){ var y = 2; return y; }\n" };
+  assert.doesNotThrow(() => bundleMemory(sources, { entry: 'src/main.js', lint: false }));
+});
+
 // ── phase 2: namespace imports (§7.3) ──
 test('namespace import: `import * as ns` synthesizes a frozen object', async () => {
   const sources = {

@@ -17,6 +17,7 @@ import { collectRenamePatches } from './scope.js';
 import { stmtDelete, exportPrefixStrip, declaredNames, declSitePatches } from './rewrite.js';
 import { applyPatches } from './emit.js';
 import { validateDefine, collectDefinePatches } from './define.js';
+import { lintModule } from './lint.js';
 import { buildError, astLoc } from './errors.js';
 
 const PARSE_OPTS = { ecmaVersion: 'latest', sourceType: 'module', locations: true, ranges: true };
@@ -68,6 +69,8 @@ export function bundleModules(sources, opts) {
   // inline (§4.2): the adapter has already read inlined deps into `sources` and
   // built inlineAliases (bare-specifier → source key). lintEscaping defaults on.
   const clsOpts = { inlineAliases: opts.inlineAliases || {}, lintEscaping: opts.lintEscaping !== false };
+  const doLint = opts.lint !== false;
+  const warnings = [];
 
   // ── parse + classify (memoized per path) ──────────────────────────
   const byPath = new Map();
@@ -79,6 +82,8 @@ export function bundleModules(sources, opts) {
 
     const dyn = findDynamicImport(ast);
     if (dyn) throw buildError('E006', `dynamic import() not allowed`, astLoc(path, dyn));
+
+    if (doLint) lintModule(ast, path, warnings);
 
     const imports = extractImports(ast);
     const exports = extractExports(ast);
@@ -169,7 +174,8 @@ export function bundleModules(sources, opts) {
   })(entry);
 
   // ── rename-on-collision ───────────────────────────────────────────
-  const { renames, warnings } = renameCollisions(order);
+  const { renames, warnings: rcWarnings } = renameCollisions(order);
+  for (const w of rcWarnings) warnings.push(w);
   const outputName = (mod, name) => {
     const mm = renames.get(mod);
     return (mm && mm.get(name)) || name;
