@@ -8,6 +8,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { bundleModules } from '../core.js';
 import { makeNodeParser } from './parser-node.js';
 
@@ -39,23 +40,28 @@ export function bundle(opts = {}) {
   // package.json metadata for the header (best-effort).
   let packageName = opts.packageName;
   let packageDesc = opts.packageDesc;
-  if (packageName === undefined || packageDesc === undefined) {
+  let version = opts.version;
+  if (packageName === undefined || packageDesc === undefined || version === undefined) {
     try {
       const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
       if (packageName === undefined) packageName = pkg.name || '';
       if (packageDesc === undefined) packageDesc = pkg.description || '';
+      if (version === undefined) version = pkg.version || null;
     } catch { /* no package.json — header omits the name line */ }
   }
 
   const sources = readSrcTree(dir, srcRoot);
   const parser = makeNodeParser();
-  const result = bundleModules(sources, { entry, srcRoot, parser, header: opts.header, packageName, packageDesc });
+  const result = bundleModules(sources, { entry, srcRoot, parser, header: opts.header, packageName, packageDesc, version, define: opts.define });
+
+  // fill the bundleHash the pure core left null (it has no hash primitive).
+  result.meta.bundleHash = 'sha256-' + crypto.createHash('sha256').update(result.code).digest('hex');
 
   let outPath = null;
   if (write) {
     outPath = path.join(dir, opts.outFile || 'index.js');
     fs.writeFileSync(outPath, result.code);
-    if (opts.meta) {
+    if (opts.meta !== false) {
       fs.writeFileSync(path.join(dir, 'index.meta.json'), JSON.stringify(result.meta, null, 2));
     }
   }

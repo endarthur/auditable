@@ -393,19 +393,41 @@ export function bundleModules(sources, opts) {
 
   const code = lines.join('\n');
 
+  // ── meta.json (SPEC §12) ───────────────────────────────────────────
+  const enc = (typeof TextEncoder !== 'undefined') ? new TextEncoder() : null;
+  const byteLen = (s) => enc ? enc.encode(s).length : s.length;
+  // group colliding modules per original name (for the renames detail).
+  const collidingByName = new Map();
+  for (const [mod, mm] of renames) {
+    for (const name of mm.keys()) {
+      let arr = collidingByName.get(name);
+      if (!arr) collidingByName.set(name, (arr = []));
+      arr.push(mod.path);
+    }
+  }
+  const metaRenames = [];
+  for (const [mod, mm] of renames) {
+    for (const [original, renamed] of mm) {
+      metaRenames.push({ original, renamed, module: mod.path, reason: 'collision', collidingModules: collidingByName.get(original) || [] });
+    }
+  }
   const meta = {
     entry,
     package: pkgName || null,
-    modules: order.map((m) => ({ path: m.path, exports: [...m.ownBindings] })),
-    renames: [],
+    version: opts.version || null,
+    modules: order.map((m) => ({
+      path: m.path,
+      bytes: byteLen(m.source),
+      lines: m.source.split('\n').length,
+      exports: exportsOf(m.path).map((e) => e.exported),
+    })),
+    renames: metaRenames,
+    shared: [],
     exports: exportEntries.map((e) => e.exported),
     warnings,
+    bundleSize: byteLen(code),
+    bundleHash: null, // filled by the adapter that has a hash primitive
   };
-  for (const [mod, mm] of renames) {
-    for (const [original, renamed] of mm) {
-      meta.renames.push({ original, renamed, module: mod.path, reason: 'collision' });
-    }
-  }
 
   return { code, map: null, meta, warnings };
 }
