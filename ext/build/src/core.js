@@ -15,7 +15,8 @@ import { classify } from './resolve.js';
 import { renameCollisions } from './rename.js';
 import { collectRenamePatches } from './scope.js';
 import { stmtDelete, exportPrefixStrip, declaredNames, declSitePatches } from './rewrite.js';
-import { applyPatches } from './emit.js';
+import { spliceSegments, codeOfSegments, trimNewlineSegments } from './emit.js';
+import { lineStartsOf, moduleMappings, buildSourceMap } from './sourcemap.js';
 import { validateDefine, collectDefinePatches } from './define.js';
 import { collectAnnotations } from './annotations.js';
 import { collectTsElision } from './tselide.js';
@@ -277,6 +278,7 @@ export function bundleModules(sources, opts) {
   const seenVerbatim = new Set();
 
   const moduleOut = [];
+  let srcIndex = 0;
   for (const mod of order) {
     const isEntry = mod.path === entry;
     const patches = [];
@@ -357,7 +359,7 @@ export function bundleModules(sources, opts) {
     for (const p of collectRenamePatches(mod.ast, renameMap, topNames)) if (!isProtected(p)) patches.push(p);
     for (const p of collectDefinePatches(mod.ast, defineMap)) if (!isProtected(p)) patches.push(p);
 
-    let body = applyPatches(mod.source, patches).replace(/^\n+/, '').replace(/\n+$/, '');
+    let segments = trimNewlineSegments(spliceSegments(mod.source, patches), mod.source);
 
     // synthesize frozen namespace objects for internal `import * as ns` (SPEC §7.3)
     if (mod.namespaceImports.length) {
@@ -367,10 +369,11 @@ export function bundleModules(sources, opts) {
           .join(', ');
         return `const ${outputName(mod, ns.local)} = Object.freeze({ ${props} });`;
       });
-      body = synth.join('\n') + '\n' + body;
+      segments = [{ text: synth.join('\n') + '\n' }, ...segments];
     }
 
-    moduleOut.push({ path: mod.path, body });
+    moduleOut.push({ path: mod.path, source: mod.source, srcIndex, segments, lineStarts: lineStartsOf(mod.source) });
+    srcIndex++;
   }
 
   // entry export surface (declarations, named, re-exports, export *) — SPEC §7.7
@@ -384,35 +387,47 @@ export function bundleModules(sources, opts) {
     (pkgName ? `// ${pkgName}${pkgDesc ? ' — ' + pkgDesc : ''}\n` : '');
   const header = opts.header != null ? opts.header : defaultHeader;
 
-  const lines = [];
-  lines.push(header.replace(/\n+$/, ''));
-  lines.push('');
+  // Assemble, tracking output line numbers so source-map segments can be
+  // emitted at each module body's start. `emit` mirrors lines.join('\n'): the
+  // join inserts one '\n' before each subsequent element.
+  const sourcemap = opts.sourcemap !== false;
+  const mappings = [];
+  const parts = [];
+  let outLine = 0;
+  const emit = (s) => { const start = outLine; parts.push(s); outLine += (s.match(/\n/g) || []).length + 1; return start; };
 
-  // hoisted external imports
+  emit(header.replace(/\n+$/, ''));
+  emit('');
+
   const importLines = [];
   for (const spec of hoistSideEffect) importLines.push(`import '${spec}';`);
-  for (const [spec, m] of hoistNamed) {
-    importLines.push(`import { ${[...m.keys()].join(', ')} } from '${spec}';`);
-  }
+  for (const [spec, m] of hoistNamed) importLines.push(`import { ${[...m.keys()].join(', ')} } from '${spec}';`);
   for (const text of hoistVerbatim) importLines.push(text);
-  if (importLines.length) { lines.push(importLines.join('\n')); lines.push(''); }
+  if (importLines.length) { emit(importLines.join('\n')); emit(''); }
 
   for (const mod of moduleOut) {
-    lines.push(`// ── ${mod.path} ──`);
-    lines.push('');
-    lines.push(mod.body);
-    lines.push('');
+    emit(`// ── ${mod.path} ──`);
+    emit('');
+    const bodyCode = codeOfSegments(mod.segments, mod.source);
+    const startLine = emit(bodyCode);
+    if (sourcemap) moduleMappings(mod.segments, mod.source, mod.srcIndex, mod.lineStarts, startLine, mappings);
+    emit('');
   }
 
   if (exportEntries.length) {
-    const body = exportEntries
+    const blk = exportEntries
       .map((e) => (e.exported === e.internal ? `  ${e.exported},` : `  ${e.internal} as ${e.exported},`))
       .join('\n');
-    lines.push(`export {\n${body}\n};`);
-    lines.push('');
+    emit(`export {\n${blk}\n};`);
+    emit('');
   }
 
-  const code = lines.join('\n');
+  const code = parts.join('\n');
+  const map = sourcemap ? buildSourceMap(mappings, {
+    file: opts.outFile || 'index.js',
+    sources: moduleOut.map((m) => m.path),
+    sourcesContent: moduleOut.map((m) => m.source),
+  }) : null;
 
   // ── meta.json (SPEC §12) ───────────────────────────────────────────
   const enc = (typeof TextEncoder !== 'undefined') ? new TextEncoder() : null;
@@ -450,7 +465,7 @@ export function bundleModules(sources, opts) {
     bundleHash: null, // filled by the adapter that has a hash primitive
   };
 
-  return { code, map: null, meta, warnings };
+  return { code, map, meta, warnings };
 }
 
 export { renameCollisions };

@@ -105,19 +105,24 @@ export function bundle(opts = {}) {
     Object.assign(sources, inlineSources);
     inlineAliases = aliases;
   }
+  const outFileName = opts.outFile || 'index.js';
   const parser = makeNodeParser();
   const result = bundleModules(sources, {
     entry, srcRoot, parser, header: opts.header, packageName, packageDesc, version,
     define: opts.define, inlineAliases, lintEscaping: opts.lintEscaping,
+    outFile: outFileName, sourcemap: opts.sourcemap,
   });
 
-  // fill the bundleHash the pure core left null (it has no hash primitive).
+  // sourceMappingURL trailer is part of the canonical output (so --check + write
+  // + return all agree). bundleHash covers the final code.
+  if (result.map) result.code += `//# sourceMappingURL=${outFileName}.map\n`;
   result.meta.bundleHash = 'sha256-' + crypto.createHash('sha256').update(result.code).digest('hex');
 
   let outPath = null;
   if (write) {
-    outPath = path.join(dir, opts.outFile || 'index.js');
+    outPath = path.join(dir, outFileName);
     fs.writeFileSync(outPath, result.code);
+    if (result.map) fs.writeFileSync(path.join(dir, outFileName + '.map'), JSON.stringify(result.map));
     if (opts.meta !== false) {
       fs.writeFileSync(path.join(dir, 'index.meta.json'), JSON.stringify(result.meta, null, 2));
     }

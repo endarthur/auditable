@@ -126,16 +126,20 @@ export async function bundleVfs(vfs, opts = {}) {
     inlineAliases = aliases;
   }
 
+  const outFileName = opts.outFile || 'index.js';
   const result = bundleModules(sources, {
     entry, srcRoot, parser: opts.parser, header: opts.header,
     packageName, packageDesc, version, define: opts.define, inlineAliases, lintEscaping: opts.lintEscaping,
+    outFile: outFileName, sourcemap: opts.sourcemap,
   });
+  if (result.map) result.code += `//# sourceMappingURL=${outFileName}.map\n`;
   result.meta.bundleHash = 'sha256-' + await sha256Hex(result.code);
 
   let outPath = null;
   if (write) {
-    outPath = join(dir, opts.outFile || 'index.js');
+    outPath = join(dir, outFileName);
     await vfs.writeFile(outPath, result.code);
+    if (result.map) await vfs.writeFile(join(dir, outFileName + '.map'), JSON.stringify(result.map));
     if (opts.meta !== false) await vfs.writeFile(join(dir, 'index.meta.json'), JSON.stringify(result.meta, null, 2));
   }
   return { ...result, outPath };

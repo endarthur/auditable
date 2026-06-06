@@ -197,6 +197,55 @@ test('determinism: same input bundles byte-identically', () => {
   assert.equal(a.code, b.code);
 });
 
+// ── phase 2: source maps (§11) ──
+function decodeMappings(str) {
+  const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  let src = 0, sl = 0, sc = 0;
+  const out = [];
+  str.split(';').forEach((line, outLine) => {
+    let col = 0;
+    if (!line) return;
+    for (const seg of line.split(',')) {
+      const vals = [];
+      let shift = 0, val = 0;
+      for (const ch of seg) {
+        let d = B64.indexOf(ch);
+        const cont = d & 32;
+        d &= 31;
+        val += d << shift;
+        if (cont) { shift += 5; } else { vals.push((val & 1) ? -(val >> 1) : (val >> 1)); val = 0; shift = 0; }
+      }
+      col += vals[0]; src += vals[1] || 0; sl += vals[2] || 0; sc += vals[3] || 0;
+      out.push({ outLine, outCol: col, srcIndex: src, srcLine: sl, srcCol: sc });
+    }
+  });
+  return out;
+}
+
+test('source map: v3 shape + a decoded position maps to the right source', () => {
+  const sources = {
+    'src/main.js': "export { fromA } from './a.js';\nexport { fromB } from './b.js';\n",
+    'src/a.js': "const cmp = (x) => x + 1;\nexport function fromA(n){ return cmp(n); }\n",
+    'src/b.js': "function cmp(x){ return x * 10; }\nexport function fromB(n){ return cmp(n); }\n",
+  };
+  const r = bundleMemory(sources, { entry: 'src/main.js' });
+  assert.equal(r.map.version, 3);
+  assert.deepEqual(r.map.sources, ['src/a.js', 'src/b.js', 'src/main.js']); // manifest (dep) order
+  assert.equal(r.map.sourcesContent.length, 3);
+  assert.ok(r.map.mappings.length > 0);
+
+  const decoded = decodeMappings(r.map.mappings);
+  const bIdx = r.map.sources.indexOf('src/b.js');
+  // output line of b.js's first (renamed) declaration
+  const outLine = r.code.split('\n').findIndex((l) => l.includes('function cmp$b('));
+  assert.ok(outLine > 0);
+  const m = decoded.find((d) => d.outLine === outLine && d.outCol === 0);
+  assert.ok(m, 'a mapping exists at the start of that output line');
+  assert.equal(m.srcIndex, bIdx, 'maps to src/b.js');
+  assert.equal(m.srcLine, 0, 'maps to b.js line 0 (the cmp declaration)');
+  assert.equal(m.srcCol, 0);
+});
+
 // ── phase 2: lint rules (§9) ──
 test('lint: var is rejected (E010)', () => {
   const sources = { 'src/main.js': "export const x = 1;\nfunction f(){ var y = 2; return y; }\n" };
