@@ -604,6 +604,62 @@ test('schema: a join aggregate types as int (count) / float (rest)', () => {
   assert.equal(by.N, 'int'); assert.equal(by.A, 'float');
 });
 
+// ── check: the validation report (observational) ──
+test('parse: check with + without a label', () => {
+  const a = stmts('check "from before to": FROM < TO')[0];
+  assert.equal(a.type, 'Check'); assert.equal(a.label, 'from before to'); assert.equal(a.test.op, '<');
+  const b = stmts('check FROM < TO')[0];
+  assert.equal(b.type, 'Check'); assert.equal(b.label, null);
+});
+
+test('run: a check reports pass/fail + samples the offending rows, leaving rows unchanged', () => {
+  const rows = [{ FROM: 0, TO: 10 }, { FROM: 10, TO: 5 }, { FROM: 20, TO: 30 }];   // row 2 is inverted
+  const res = compile('check "from before to": FROM < TO').run(rows);
+  assert.equal(res.checks.length, 1);
+  const c = res.checks[0];
+  assert.equal(c.rule, 'from before to');
+  assert.equal(c.passed, 2); assert.equal(c.failed, 1);
+  assert.deepEqual(c.sample, [{ FROM: 10, TO: 5 }]);            // the failing INPUT row
+  assert.deepEqual(res.rows, rows);                            // observational — rows pass through
+});
+
+test('run: an unlabeled rule is labeled by its predicate text', () => {
+  const res = compile('check FROM < TO').run([{ FROM: 5, TO: 1 }]);
+  assert.equal(res.checks[0].rule, 'FROM < TO');
+});
+
+test('run: a check in an if-branch only counts when the branch runs', () => {
+  const src = 'if TYPE == "ore"\n  check "ore has grade": present(FE)\nend';
+  const res = compile(src).run([{ TYPE: 'ore', FE: 62 }, { TYPE: 'waste' }, { TYPE: 'ore' }]);   // 3rd: ore, no FE
+  assert.equal(res.checks[0].passed, 1); assert.equal(res.checks[0].failed, 1);   // waste row never checked
+});
+
+test('run: a check can use a window (downhole gap detection)', () => {
+  const rows = [
+    { hole: 'A', FROM: 0, TO: 10 }, { hole: 'A', FROM: 10, TO: 20 },   // contiguous
+    { hole: 'A', FROM: 25, TO: 30 },                                   // gap [20,25)
+  ];
+  const src = 'PREV_TO = prev(TO) over hole order FROM\ncheck "no gap": FROM == PREV_TO or present(PREV_TO) == false';
+  const res = compile(src).run(rows);
+  const c = res.checks[0];
+  assert.equal(c.failed, 1);                       // the gapped interval
+  assert.equal(c.sample[0].FROM, 25);
+});
+
+test('run: a check can use a join aggregate (every composite has assays)', () => {
+  const res = compile('check "has assays": count() where assays.hole == hole and assays.from < TO and assays.to > FROM')
+    .run(COMPS, { assays: RAW });
+  assert.equal(res.checks[0].failed, 1);           // DDH3 has none
+  assert.equal(res.checks[0].sample[0].hole, 'DDH3');
+});
+
+test('compile: check counts + a missing-column rule still warns (no output column)', () => {
+  const c = compile('Y = FROM + 1\ncheck FROM < NOPE', { inputSchema: [{ name: 'FROM', type: 'int' }] });
+  assert.equal(c.checks, 1);
+  assert.ok(c.warnings.some((w) => /NOPE/.test(w)));               // use-before-def warning
+  assert.deepEqual(c.outputColumns.map((x) => x.name), ['FROM', 'Y']);   // check adds no column
+});
+
 // ── the notebook tag ──
 test('tag: over`…`(rows) compiles + applies; rows carry .columns', async () => {
   const { over } = await import('../ext/over/src/tag.js');

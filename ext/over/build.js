@@ -10,8 +10,9 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const srcDir = path.join(__dirname, 'src');
 
-// Manifest order — dependencies first (parse imports lex).
-const files = ['lex.js', 'parse.js', 'schema.js', 'runtime.js', 'emit.js', 'windows.js', 'lookup.js', 'driver.js', 'api.js', 'tag.js'];
+// Manifest order — dependencies first (parse imports lex; join imports lookup/emit/
+// windows/runtime; driver imports windows/lookup/join/check; api imports the collects).
+const files = ['util.js', 'lex.js', 'parse.js', 'schema.js', 'runtime.js', 'emit.js', 'windows.js', 'lookup.js', 'join.js', 'check.js', 'driver.js', 'api.js', 'tag.js'];
 
 const exported = new Set();
 const chunks = [];

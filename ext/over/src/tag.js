@@ -23,6 +23,7 @@ export function over(strings, ...values) {
     const rows = Array.isArray(table) ? table : (table && table.rows) || [];
     const result = c.run(rows, tables);
     Object.defineProperty(result.rows, 'columns', { value: result.columns, enumerable: false });
+    Object.defineProperty(result.rows, 'checks', { value: result.checks, enumerable: false });   // validation report
     return result.rows;
   };
   fn.source = c.source;          // the emitted JS (inspectable)
@@ -35,7 +36,7 @@ export function over(strings, ...values) {
 
 const KEYWORDS = new Set([
   'if', 'elseif', 'else', 'end', 'keep', 'saveonly', 'erase', 'delete', 'exit',
-  'let', 'match', 'and', 'or', 'not', 'over', 'all', 'where', 'order', 'by', 'default', 'lookup',
+  'let', 'match', 'and', 'or', 'not', 'over', 'all', 'where', 'order', 'by', 'default', 'lookup', 'check',
 ]);
 const LITERALS = new Set(['true', 'false', 'absent']);
 const FUNCTIONS = new Set([

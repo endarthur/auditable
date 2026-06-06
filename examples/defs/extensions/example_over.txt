@@ -51,6 +51,50 @@ const relative = over`
 ui.table(relative);
 
 /// md
+## Joins — domain coding and compositing
+
+`lookup TABLE.col where …` enriches a row from a reference table; with a range predicate it's an **interval** join (domain-by-depth). The aggregating form `AGG(args) where …` folds *every* matching row — so `wmean(assays.fe, overlap)` over the overlapping assays is **length-weighted compositing** in one line. (Generating the regular composite skeleton is a tool's job; here it's by hand.)
+
+/// code
+const assays = [
+  { hole: "DDH1", from: 0,   to: 1.5, fe: 65 },
+  { hole: "DDH1", from: 1.5, to: 4,   fe: 60 },
+  { hole: "DDH1", from: 4,   to: 6,   fe: 32 },
+];
+const domains = [
+  { hole: "DDH1", from: 0, to: 4, code: "OX" },   // oxide
+  { hole: "DDH1", from: 4, to: 8, code: "FR" },   // fresh
+];
+const comps = [
+  { hole: "DDH1", FROM: 0, TO: 2 },
+  { hole: "DDH1", FROM: 2, TO: 4 },
+  { hole: "DDH1", FROM: 4, TO: 6 },
+];
+const composited = over`
+  CODE = lookup domains.code where domains.hole == hole and domains.from <= FROM < domains.to
+  FE   = wmean(assays.fe, overlap) where assays.hole == hole and assays.from < TO and assays.to > FROM
+  N    = count() where assays.hole == hole and assays.from < TO and assays.to > FROM
+`(comps, { assays, domains });
+ui.table(composited);
+
+/// md
+## check — a validation report
+
+`check` rules ride alongside the transform: rows pass through unchanged, but each rule accumulates a pass/fail count and a few offending rows. The report *is* the deliverable — auditable QA, not a side script.
+
+/// code
+const raw = [
+  { hole: "DDH1", from: 0, to: 2,   FE: 64 },
+  { hole: "DDH1", from: 2, to: 1.5, FE: 58 },    // from > to — a survey error
+  { hole: "DDH1", from: 4, to: 6,   FE: 130 },   // 130% iron — impossible
+];
+const report = over`
+  check "from before to":  from < to
+  check "FE is a percent": FE <= 100
+`(raw);
+ui.display(report.checks);   // [{ rule, passed, failed, sample }]
+
+/// md
 ## It's auditable
 
 A transform's output columns are resolved *before any row runs*, and the emitted JS is inspectable — OVER lowers to real code, not a black box.

@@ -13,8 +13,8 @@
 // extraction (which reads input rows).
 
 import { overRuntime } from './runtime.js';
+import { REL } from './util.js';
 
-const REL = new Set(['==', '!=', '<', '<=', '>', '>=']);
 const CMP_FN = { '==': 'eq', '!=': 'ne', '<': 'lt', '<=': 'le', '>': 'gt', '>=': 'ge' };
 const ARITH_FN = { '+': 'add', '-': 'sub', '*': 'mul', '/': 'div' };
 
@@ -152,6 +152,8 @@ export function emitRowSource(ast) {
       }
       case 'Control':
         return st.name === 'delete' ? 'ctx.drop = true; return;' : 'ctx.exit = true; return;';
+      case 'Check':                                         // observational — report only, row unchanged
+        return `ctx.check(${st._checkId | 0}, _over.truthy(${emitExpr(st.test, ec)}));`;
       case 'Project': return '';                            // driver-level (output projection)
       default: throw new Error(`over emit: unknown statement "${st.type}"`);
     }

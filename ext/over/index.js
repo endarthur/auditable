@@ -1,6 +1,30 @@
 // @gcu/over — OVER (Ordered/Vectorized Expression Runner): the table-transform DSL
 // Auto-generated from ext/over/src/ — do not edit directly
 
+// -- util.js --
+
+// @gcu/over — shared zero-dep primitives used across the pipeline modules. Kept in
+// ONE place because the concat build flattens every module into a single scope, so a
+// helper defined privately in two modules would collide (a hard `const` redeclare).
+// Each module imports what it needs; the bundle ends up with one definition.
+
+// absent = null (string/category absent) OR NaN (numeric absent) — the type-
+// polymorphic split (the NaN keystone). `x !== x` is the branch-free NaN test.
+const isAbsent = (x) => x == null || x !== x;
+
+// group-key / eq-key field separator — a control char that won't occur in data.
+const SEP = String.fromCharCode(1);
+
+// numeric comparator (sorting interval bounds / lo-keys).
+const numCmp = (a, b) => Number(a) - Number(b);
+
+// a reference table is an array of rows, or a { rows } result (so transforms chain).
+const refRowsOf = (t) => (Array.isArray(t) ? t : (t && t.rows) || null);
+
+// the relational operators — shared by the parser's `isRel` and the emitter's
+// `isBoolish` (same set, one definition).
+const REL = new Set(['==', '!=', '<', '<=', '>', '>=']);
+
 // -- lex.js --
 
 // @gcu/over — lexer. Turns OVER source into a flat token stream.
@@ -122,15 +146,16 @@ function lex(src) {
 //        | If      { clauses:[{test:Expr, body:[Stmt]}], alternate?:[Stmt] }
 //        | Project { name:'keep'|'saveonly'|'erase', fields:[string] }
 //        | Control { name:'delete'|'exit' }
+//        | Check   { label?:string, test:Expr }   // observational validation rule
 //   TypeSpec { vtype?:'int'|'float'|'bool'|'string'|'category', default?:Expr }
 //   Expr = Num{value} | Str{value} | Bool{value} | Absent
 //        | Field{name} | Unary{op:'-', operand} | Binary{op,left,right}
 //        | Call{name, args:[Expr]} | Match{subject, arms:[{rel?,test?,value}], default?}
 
 
-const REL = new Set(['==', '!=', '<', '<=', '>', '>=']);
+
 const TYPES = new Set(['int', 'float', 'bool', 'string', 'category']);
-const STMT_KW = new Set(['if', 'elseif', 'else', 'end', 'keep', 'saveonly', 'erase', 'delete', 'exit', 'let']);
+const STMT_KW = new Set(['if', 'elseif', 'else', 'end', 'keep', 'saveonly', 'erase', 'delete', 'exit', 'let', 'check']);
 
 class OverParseError extends Error {
   constructor(msg, tok) { super(`over: ${msg}${tok ? ` (line ${tok.line})` : ''}`); this.tok = tok; }
@@ -141,6 +166,7 @@ function parse(src) { return parseTokens(lex(src)); }
 function parseTokens(toks) {
   let p = 0;
   const cur = () => toks[p];
+  const peek = () => toks[p + 1];
   const next = () => toks[p++];
   const isOp = (v) => cur().t === 'op' && cur().v === v;
   const isId = (v) => cur().t === 'ident' && cur().v === v;
@@ -178,6 +204,7 @@ function parseTokens(toks) {
       if (t.v === 'keep' || t.v === 'saveonly' || t.v === 'erase') return parseProject();
       if (t.v === 'delete' || t.v === 'exit') { next(); return { type: 'Control', name: t.v }; }
       if (t.v === 'let') return parseLet();
+      if (t.v === 'check') return parseCheck();
       if (STMT_KW.has(t.v)) throw err(`unexpected "${t.v}"`);
     }
     return parseAssign();
@@ -209,6 +236,16 @@ function parseTokens(toks) {
     const name = fieldName();
     expectOp('=');
     return { type: 'Assign', kind: 'let', target: { name }, value: parseExpr() };
+  }
+
+  // `check [ "label": ] PREDICATE` — an observational validation rule. A leading
+  // `STRING :` is the label (a predicate starting with a string would be `STRING ==`
+  // etc., never `STRING :`), else the predicate text labels it.
+  function parseCheck() {
+    expectId('check');
+    let label = null;
+    if (cur().t === 'str' && peek() && peek().t === 'op' && peek().v === ':') { label = next().v; expectOp(':'); }
+    return { type: 'Check', label, test: parseExpr() };
   }
 
   function parseProject() {
@@ -567,6 +604,7 @@ function schemaPass(ast, inputSchema = [], opts = {}) {
           break;
         }
         case 'Control': break;                             // delete / exit: no schema effect
+        case 'Check': inferType(st.test, ctx); break;      // validate refs (warns); no output column
         default: break;
       }
     }
@@ -609,6 +647,7 @@ function normalizeType(t) {
 // / streaming emission. The handful of helpers below are the v0 (direct-emit) path;
 // for proven-numeric operands they become raw ops once AIR lowers them.
 
+
 // absent → NaN, anything else → its Number (NaN propagates; null does NOT become 0)
 function n(x) { return x == null ? NaN : Number(x); }
 
@@ -619,10 +658,6 @@ function cmp(a, b) {
   const sa = String(a), sb = String(b);
   return sa < sb ? -1 : sa > sb ? 1 : 0;
 }
-
-// missing = null (string/category absent) OR NaN (numeric absent). x !== x is the
-// branch-free NaN test.
-const isAbsent = (x) => x == null || x !== x;
 
 const overRuntime = {
   // ── value helpers ──
@@ -713,7 +748,7 @@ const overRuntime = {
 // extraction (which reads input rows).
 
 
-const REL = new Set(['==', '!=', '<', '<=', '>', '>=']);
+
 const CMP_FN = { '==': 'eq', '!=': 'ne', '<': 'lt', '<=': 'le', '>': 'gt', '>=': 'ge' };
 const ARITH_FN = { '+': 'add', '-': 'sub', '*': 'mul', '/': 'div' };
 
@@ -851,6 +886,8 @@ function emitRowSource(ast) {
       }
       case 'Control':
         return st.name === 'delete' ? 'ctx.drop = true; return;' : 'ctx.exit = true; return;';
+      case 'Check':                                         // observational — report only, row unchanged
+        return `ctx.check(${st._checkId | 0}, _over.truthy(${emitExpr(st.test, ec)}));`;
       case 'Project': return '';                            // driver-level (output projection)
       default: throw new Error(`over emit: unknown statement "${st.type}"`);
     }
@@ -893,12 +930,9 @@ function compileExpr(expr, runtime = overRuntime) {
 
 
 
+
 const AGG = new Set(['count', 'sum', 'mean', 'min', 'max', 'std']);
 const POSITIONAL = new Set(['prev', 'next', 'first', 'last']);   // lag/lead/edge — need `order`
-const SEP = String.fromCharCode(1);   // group-key field separator
-
-// missing = null (string absent) OR NaN (numeric absent) — aggregates skip it.
-const isAbsent = (x) => x == null || x !== x;
 
 // order comparator: numeric when both numbers else lexical; absent sorts last.
 function cmpOrder(a, b) {
@@ -937,6 +971,7 @@ function collectWindows(ast) {
   }
   function stmt(st) {
     if (st.type === 'Assign') expr(st.value);
+    else if (st.type === 'Check') expr(st.test);
     else if (st.type === 'If') { st.clauses.forEach((c) => { expr(c.test); c.body.forEach(stmt); }); if (st.alternate) st.alternate.forEach(stmt); }
   }
   ast.statements.forEach(stmt);
@@ -1042,10 +1077,7 @@ function winLookup(results, id, keyParts, rowIndex) {
 // injected by name (run(rows, { table })); left-join (unmatched → absent). Index is
 // built once per (table, eq-cols, range-cols) and shared across value columns.
 
-const SEP = String.fromCharCode(1);
-const refRowsOf = (t) => (Array.isArray(t) ? t : (t && t.rows) || null);
-const isAbsent = (x) => x == null || x !== x;
-const numCmp = (a, b) => Number(a) - Number(b);
+
 const FLIP = { '<': '>', '<=': '>=', '>': '<', '>=': '<=', '==': '==' };
 
 // The table a predicate joins against = the first qualified ref's table.
@@ -1124,6 +1156,7 @@ function collectLookups(ast) {
   }
   function stmt(st) {
     if (st.type === 'Assign') expr(st.value);
+    else if (st.type === 'Check') expr(st.test);
     else if (st.type === 'If') { st.clauses.forEach((c) => { expr(c.test); c.body.forEach(stmt); }); if (st.alternate) st.alternate.forEach(stmt); }
   }
   ast.statements.forEach(stmt);
@@ -1177,6 +1210,255 @@ function makeLookup(indexes) {
   };
 }
 
+// -- join.js --
+
+// @gcu/over — aggregating join (the natural seam past single-match `lookup`).
+//
+//   N     = count() where assays.hole == hole and assays.from < TO and assays.to > FROM
+//   MAXFE = max(assays.fe) where assays.hole == hole and assays.from < TO and assays.to > FROM
+//   GRADE = wmean(assays.fe, overlap) where assays.hole == hole and assays.from < TO and assays.to > FROM
+//
+// `AGG(args) where PREDICATE` (no `over` — that's a window over THIS table; this
+// aggregates ANOTHER table). Same predicate machinery as `lookup`: the compiler
+// reads the shape and picks the index — equality → hash groups; an equality + a
+// range pair → per-eq-key sorted intervals. The difference from `lookup` is that we
+// ENUMERATE every match and fold it through an accumulator instead of taking one.
+//
+//   • the range pair is an interval-OVERLAP query (`assays.from < TO and assays.to >
+//     FROM` → ref intervals that overlap this row's [FROM, TO)); a contains predicate
+//     (`from <= DEPTH < to`, as `lookup` uses) also works (matches collapse to a point).
+//   • `overlap` (a contextual word inside the aggregate args) = the overlap length
+//     between this row's interval and the matched row's — so length-weighting is one
+//     word. It's derived from the predicate's interval bounds; 0 for a point query.
+//   • aggregate args read the matched row via qualified refs (`assays.fe`) and this
+//     row via bare names (`FROM`); left-join (no matches → absent / count 0).
+//
+// In-memory build-once-probe, like `lookup`; the sluice mergeable path is the
+// big-data upgrade. Index defs dedup by (table, eq-cols, range-cols).
+
+
+
+
+
+
+const JOIN_AGG = new Set(['count', 'sum', 'mean', 'min', 'max', 'std', 'wmean']);
+
+// weighted mean — Σ(value·weight)/Σ(weight); absent value OR weight skips the pair.
+function makeWAcc() {
+  let sw = 0, swv = 0;
+  return { add(v, w) { if (!isAbsent(v) && !isAbsent(w)) { const ww = Number(w); sw += ww; swv += Number(v) * ww; } }, result() { return sw ? swv / sw : NaN; } };
+}
+
+// emit context for an aggregate argument: bare name → this row (`row`), qualified
+// ref → the matched row (`ref`), the word `overlap` → the per-match length (`ov`).
+function joinArgEc(table) {
+  return {
+    ref: (name) => (name === 'overlap' ? 'ov' : `row[${JSON.stringify(name)}]`),
+    qualified: (e) => {
+      if (e.table !== table) throw new Error(`over: a join references two tables ("${table}" and "${e.table}") — one table per join`);
+      return `ref[${JSON.stringify(e.col)}]`;
+    },
+    defaults: new Map(),
+    onWindow: () => { throw new Error('over: a window aggregate cannot nest inside a join aggregate'); },
+    hasCtx: false,                  // no lookup / join nesting inside an arg
+  };
+}
+
+function compileArg(expr, table) {
+  const fn = new Function('ref', 'row', 'ov', '_over', `return ${emitExpr(expr, joinArgEc(table))};`);
+  return (ref, row, ov) => fn(ref, row, ov, overRuntime);
+}
+
+// Collect JoinAgg nodes: validate, compile the per-match arg/weight functions, tag
+// each node with `_jaSpec` (eq/lo/hi probes — emitted against THIS row), and return
+// the specs (one per node, indexed by jaId; `.indexKey` dedups the built index).
+function collectJoinAggs(ast) {
+  const specs = [];
+
+  function consider(node) {
+    const agg = node.agg;
+    const aggName = agg && agg.type === 'Call' ? agg.name : null;
+    if (!JOIN_AGG.has(aggName))
+      throw new Error(`over: a join aggregate must be ${[...JOIN_AGG].join('/')} — got ${aggName ? `"${aggName}()"` : 'a non-aggregate'} before \`where\``);
+    const table = tableOfPredicate(node.predicate);
+    if (!table) throw new Error('over: a join `where` must compare a table column (e.g. `assays.hole == hole`)');
+    const { eqRefCols, eqProbes, range } = analyzePredicate(node.predicate, table);
+
+    let argFn = null, weightFn = null;
+    const args = agg.args || [];
+    if (aggName === 'count') { if (args.length) throw new Error('over: count() takes no argument in a join'); }
+    else if (aggName === 'wmean') {
+      if (args.length !== 2) throw new Error('over: wmean(value, weight) needs a value and a weight');
+      argFn = compileArg(args[0], table); weightFn = compileArg(args[1], table);
+    } else {
+      if (args.length !== 1) throw new Error(`over: ${aggName}(value) needs one argument in a join`);
+      argFn = compileArg(args[0], table);
+    }
+
+    const rk = range ? `${range.loCol}|${range.hiCol}|${range.loOp}|${range.hiOp}` : '';
+    const indexKey = table + SEP + eqRefCols.join(',') + SEP + rk;
+    const jaId = specs.length;
+    specs.push({
+      jaId, indexKey, table, eqRefCols, aggName, argFn, weightFn,
+      range: range ? { loCol: range.loCol, hiCol: range.hiCol, loOp: range.loOp, hiOp: range.hiOp } : null,
+    });
+    node._jaSpec = { jaId, eqProbes, loProbe: range ? range.loProbe : null, hiProbe: range ? range.hiProbe : null };
+  }
+
+  function expr(e) {
+    if (!e || typeof e !== 'object') return;
+    if (e.type === 'JoinAgg') consider(e);
+    expr(e.operand); expr(e.left); expr(e.right); expr(e.agg); expr(e.subject); expr(e.default); expr(e.predicate); expr(e.value);
+    if (e.args) e.args.forEach(expr);
+    if (e.arms) e.arms.forEach((a) => { expr(a.test); expr(a.value); });
+  }
+  function stmt(st) {
+    if (st.type === 'Assign') expr(st.value);
+    else if (st.type === 'Check') expr(st.test);
+    else if (st.type === 'If') { st.clauses.forEach((c) => { expr(c.test); c.body.forEach(stmt); }); if (st.alternate) st.alternate.forEach(stmt); }
+  }
+  ast.statements.forEach(stmt);
+  return specs;
+}
+
+function hasJoinAggs(specs) { return !!(specs && specs.length); }
+
+// Build each index once (deduped by indexKey): eq-only → hash of eq-key → [rows];
+// range → per-eq-key intervals sorted ascending by lo (for the prefix scan).
+function buildJoinIndexes(specs, tables) {
+  const byKey = new Map();
+  for (const s of specs) {
+    if (byKey.has(s.indexKey)) continue;
+    const refRows = refRowsOf(tables && tables[s.table]);
+    if (!refRows) throw new Error(`over: join table "${s.table}" was not provided to run(rows, tables)`);
+    const eqKey = (r) => s.eqRefCols.map((c) => String(r[c])).join(SEP);
+    if (!s.range) {
+      const m = new Map();
+      for (const r of refRows) { const k = eqKey(r); let g = m.get(k); if (!g) { g = []; m.set(k, g); } g.push(r); }
+      byKey.set(s.indexKey, { range: false, m });
+    } else {
+      const groups = new Map();
+      for (const r of refRows) {
+        if (isAbsent(r[s.range.loCol]) || isAbsent(r[s.range.hiCol])) continue;
+        const k = eqKey(r);
+        let g = groups.get(k); if (!g) { g = []; groups.set(k, g); }
+        g.push({ lo: r[s.range.loCol], hi: r[s.range.hiCol], row: r });
+      }
+      for (const g of groups.values()) g.sort((a, b) => numCmp(a.lo, b.lo));
+      byKey.set(s.indexKey, { range: true, m: groups, loOp: s.range.loOp, hiOp: s.range.hiOp });
+    }
+  }
+  return byKey;
+}
+
+function feed(acc, s, ref, row, ov) {
+  if (s.aggName === 'count') { acc.add(1); return; }
+  if (s.aggName === 'wmean') { acc.add(s.argFn(ref, row, ov), s.weightFn(ref, row, ov)); return; }
+  acc.add(s.argFn ? s.argFn(ref, row, ov) : null);
+}
+
+// ctx.joinAgg(jaId, eqVals[], loVal, hiVal, row) — enumerate the matches, fold them.
+function makeJoinAgg(byKey, specs) {
+  return (jaId, eqVals, loVal, hiVal, row) => {
+    const s = specs[jaId];
+    const idx = byKey.get(s.indexKey);
+    const eqKey = eqVals.map(String).join(SEP);
+    const acc = s.aggName === 'wmean' ? makeWAcc() : makeAcc(s.aggName);
+
+    if (!idx.range) {
+      const arr = idx.m.get(eqKey);
+      if (arr) for (const r of arr) feed(acc, s, r, row, 0);
+      return acc.result();
+    }
+    const arr = idx.m.get(eqKey);
+    if (arr && arr.length) {
+      const loOk = idx.loOp === '<' ? (lo) => numCmp(lo, loVal) < 0 : (lo) => numCmp(lo, loVal) <= 0;
+      const hiOk = idx.hiOp === '>' ? (hi) => numCmp(hi, hiVal) > 0 : (hi) => numCmp(hi, hiVal) >= 0;
+      // sorted asc by lo, so loOk is a true-prefix → binary-search its length.
+      let lo = 0, hi = arr.length;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (loOk(arr[mid].lo)) lo = mid + 1; else hi = mid; }
+      for (let k = 0; k < lo; k++) {
+        const e = arr[k];
+        if (!hiOk(e.hi)) continue;          // overlaps on lo, but not on hi
+        const ov = Math.max(0, Math.min(Number(loVal), Number(e.hi)) - Math.max(Number(hiVal), Number(e.lo)));
+        feed(acc, s, e.row, row, ov);
+      }
+    }
+    return acc.result();
+  };
+}
+
+// -- check.js --
+
+// @gcu/over — `check` (the validation report — the word in the app's name).
+//
+//   check "from before to":  FROM < TO
+//   check "fe is a percent":  assays.fe <= 100
+//   GAP = FROM - prev(TO) over hole order FROM
+//   check "no downhole gaps": GAP == 0 or present(GAP) == false   # first interval has no prev
+//
+// A `check` is OBSERVATIONAL: rows pass through unchanged, and each rule accumulates
+// a pass/fail count + a few offending rows into a report returned alongside the rows.
+// It rides the existing machinery — the schema pass already resolves columns before a
+// row runs (so a rule naming a missing column warns statically), and the executor
+// already runs a row function with a ctx (so `check` just adds `ctx.check(id, bool)`).
+// The report is a plain count, so it merges trivially for the big-data path later.
+
+const SAMPLE_K = 5;   // offending rows kept per rule (for the report)
+
+// A readable label for an unlabeled rule — a tiny unparse of the predicate; null for
+// anything exotic (the caller falls back to `check N`).
+function exprText(e) {
+  if (!e || typeof e !== 'object') return null;
+  switch (e.type) {
+    case 'Num': return String(e.value);
+    case 'Str': return JSON.stringify(e.value);
+    case 'Bool': return String(e.value);
+    case 'Absent': return 'absent';
+    case 'Field': return e.name;
+    case 'Qualified': return `${e.table}.${e.col}`;
+    case 'Unary': { const o = exprText(e.operand); return o == null ? null : `-${o}`; }
+    case 'Binary': { const l = exprText(e.left), r = exprText(e.right); return (l == null || r == null) ? null : `${l} ${e.op} ${r}`; }
+    case 'Call': { const a = (e.args || []).map(exprText); return a.some((x) => x == null) ? null : `${e.name}(${a.join(', ')})`; }
+    default: return null;
+  }
+}
+
+// Tag each Check node with `_checkId` (in document order, descending into branches)
+// and return the rule defs (id + label). Emit reads `_checkId`; the driver keys the
+// report by id.
+function collectChecks(ast) {
+  const defs = [];
+  function stmt(st) {
+    if (st.type === 'Check') {
+      const id = defs.length;
+      st._checkId = id;
+      defs.push({ id, label: st.label || exprText(st.test) || `check ${id + 1}` });
+    } else if (st.type === 'If') {
+      st.clauses.forEach((c) => c.body.forEach(stmt));
+      if (st.alternate) st.alternate.forEach(stmt);
+    }
+  }
+  ast.statements.forEach(stmt);
+  return defs;
+}
+
+function hasChecks(defs) { return !!(defs && defs.length); }
+
+// The per-run report accumulator. `check(id, ok, row)` from the row pass; `report()`
+// → [{ rule, passed, failed, sample }] (sample = up to SAMPLE_K offending rows).
+function makeCheckReport(defs) {
+  const acc = defs.map((d) => ({ rule: d.label, passed: 0, failed: 0, sample: [] }));
+  return {
+    check(id, ok, row) {
+      const a = acc[id];
+      if (ok) a.passed++;
+      else { a.failed++; if (a.sample.length < SAMPLE_K) a.sample.push(row); }
+    },
+    report() { return acc; },
+  };
+}
+
 // -- driver.js --
 
 // @gcu/over — the driver. Runs a compiled row function over a record stream,
@@ -1191,24 +1473,29 @@ function makeLookup(indexes) {
 
 
 
-const NO_WIN = () => null;
 
-function applyRows(rowFn, outputColumns, rows, windowDefs, lookupDefs, joinDefs, tables) {
+const NO_WIN = () => null;
+const NO_CHECK = () => {};
+
+function applyRows(rowFn, outputColumns, rows, windowDefs, lookupDefs, joinDefs, checkDefs, tables) {
   const names = outputColumns.map((c) => c.name);
   const winResults = windowDefs && windowDefs.length ? computeWindows(windowDefs, rows) : null;
   // build the lookup / join indexes once (hash, or per-eq-key sorted intervals) per
   // the analyzed predicate shape, before the row pass.
   const lookup = hasLookups(lookupDefs) ? makeLookup(buildLookups(lookupDefs, tables || {})) : NO_WIN;
   const joinAgg = hasJoinAggs(joinDefs) ? makeJoinAgg(buildJoinIndexes(joinDefs, tables || {}), joinDefs) : null;
+  const checker = hasChecks(checkDefs) ? makeCheckReport(checkDefs) : null;
 
   const out = [];
   for (let i = 0; i < rows.length; i++) {
     const work = { ...rows[i] };             // seed from input → unassigned columns pass through
     // ctx.win carries the row index so ordered (running) windows resolve per-row;
-    // ctx.joinAgg gets the working row so aggregate args can read this row's fields.
+    // ctx.joinAgg gets the working row so aggregate args can read this row's fields;
+    // ctx.check accumulates the validation report (sampling the INPUT row on failure).
     const win = winResults ? (id, key) => winLookup(winResults, id, key, i) : NO_WIN;
-    const ctx = { drop: false, exit: false, win, lookup, joinAgg: NO_WIN };
+    const ctx = { drop: false, exit: false, win, lookup, joinAgg: NO_WIN, check: NO_CHECK };
     if (joinAgg) ctx.joinAgg = (id, eq, lo, hi) => joinAgg(id, eq, lo, hi, work);
+    if (checker) ctx.check = (id, ok) => checker.check(id, ok, rows[i]);
     rowFn.run(work, ctx);
     if (!ctx.drop) {
       const projected = {};
@@ -1217,7 +1504,7 @@ function applyRows(rowFn, outputColumns, rows, windowDefs, lookupDefs, joinDefs,
     }
     if (ctx.exit) break;
   }
-  return out;
+  return { rows: out, checks: checker ? checker.report() : [] };
 }
 
 // -- api.js --
@@ -1231,6 +1518,7 @@ function applyRows(rowFn, outputColumns, rows, windowDefs, lookupDefs, joinDefs,
 //
 // If inputSchema is omitted it's inferred from the rows at run time (so
 // `compile(text).run(rows)` just works); pass it when you want the preview.
+
 
 
 
@@ -1255,6 +1543,7 @@ function compile(text, opts = {}) {
   const windowDefs = collectWindows(ast);     // tags Window nodes with _winId — BEFORE emit
   const lookupSpecs = collectLookups(ast);    // validates lookup shapes + the (table,key) build specs
   const joinSpecs = collectJoinAggs(ast);     // validates `AGG(args) where …` joins + compiles per-match args
+  const checkDefs = collectChecks(ast);       // tags Check nodes with _checkId + resolves rule labels
   const rowFn = compileRowFn(ast);
   const staticSchema = opts.inputSchema ? schemaPass(ast, opts.inputSchema, opts) : null;
   return {
@@ -1264,12 +1553,15 @@ function compile(text, opts = {}) {
     windows: windowDefs.length,
     lookups: lookupSpecs.length,
     joins: joinSpecs.length,
+    checks: checkDefs.length,
     outputColumns: staticSchema ? staticSchema.columns : null,
     warnings: staticSchema ? staticSchema.warnings : null,
     // tables: { name: rows[] | {rows} } — the reference tables lookup / join read.
+    // run → { columns, rows, checks: [{ rule, passed, failed, sample }] }.
     run(rows, tables) {
       const sch = staticSchema || schemaPass(ast, inferSchema(rows), opts);
-      return { columns: sch.columns, rows: applyRows(rowFn, sch.columns, rows, windowDefs, lookupSpecs, joinSpecs, tables) };
+      const res = applyRows(rowFn, sch.columns, rows, windowDefs, lookupSpecs, joinSpecs, checkDefs, tables);
+      return { columns: sch.columns, rows: res.rows, checks: res.checks };
     },
   };
 }
@@ -1300,6 +1592,7 @@ function over(strings, ...values) {
     const rows = Array.isArray(table) ? table : (table && table.rows) || [];
     const result = c.run(rows, tables);
     Object.defineProperty(result.rows, 'columns', { value: result.columns, enumerable: false });
+    Object.defineProperty(result.rows, 'checks', { value: result.checks, enumerable: false });   // validation report
     return result.rows;
   };
   fn.source = c.source;          // the emitted JS (inspectable)
@@ -1312,7 +1605,7 @@ function over(strings, ...values) {
 
 const KEYWORDS = new Set([
   'if', 'elseif', 'else', 'end', 'keep', 'saveonly', 'erase', 'delete', 'exit',
-  'let', 'match', 'and', 'or', 'not', 'over', 'all', 'where', 'order', 'by', 'default', 'lookup',
+  'let', 'match', 'and', 'or', 'not', 'over', 'all', 'where', 'order', 'by', 'default', 'lookup', 'check',
 ]);
 const LITERALS = new Set(['true', 'false', 'absent']);
 const FUNCTIONS = new Set([
@@ -1374,9 +1667,14 @@ if (typeof window !== 'undefined') {
 export {
   OverLexError,
   OverParseError,
+  REL,
+  SEP,
   analyzePredicate,
   applyRows,
+  buildJoinIndexes,
   buildLookups,
+  collectChecks,
+  collectJoinAggs,
   collectLookups,
   collectWindows,
   compile,
@@ -1385,15 +1683,22 @@ export {
   computeWindows,
   emitExpr,
   emitRowSource,
+  hasChecks,
+  hasJoinAggs,
   hasLookups,
   inferType,
+  isAbsent,
   lex,
   makeAcc,
+  makeCheckReport,
+  makeJoinAgg,
   makeLookup,
+  numCmp,
   over,
   overRuntime,
   parse,
   parseTokens,
+  refRowsOf,
   schemaPass,
   tableOfPredicate,
   unify,

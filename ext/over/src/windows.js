@@ -12,13 +12,10 @@
 
 import { compileExpr } from './emit.js';
 import { overRuntime } from './runtime.js';
+import { SEP, isAbsent } from './util.js';
 
 const AGG = new Set(['count', 'sum', 'mean', 'min', 'max', 'std']);
 const POSITIONAL = new Set(['prev', 'next', 'first', 'last']);   // lag/lead/edge — need `order`
-const SEP = String.fromCharCode(1);   // group-key field separator
-
-// missing = null (string absent) OR NaN (numeric absent) — aggregates skip it.
-const isAbsent = (x) => x == null || x !== x;
 
 // order comparator: numeric when both numbers else lexical; absent sorts last.
 function cmpOrder(a, b) {
@@ -57,6 +54,7 @@ export function collectWindows(ast) {
   }
   function stmt(st) {
     if (st.type === 'Assign') expr(st.value);
+    else if (st.type === 'Check') expr(st.test);
     else if (st.type === 'If') { st.clauses.forEach((c) => { expr(c.test); c.body.forEach(stmt); }); if (st.alternate) st.alternate.forEach(stmt); }
   }
   ast.statements.forEach(stmt);

@@ -169,6 +169,7 @@ export function schemaPass(ast, inputSchema = [], opts = {}) {
           break;
         }
         case 'Control': break;                             // delete / exit: no schema effect
+        case 'Check': inferType(st.test, ctx); break;      // validate refs (warns); no output column
         default: break;
       }
     }

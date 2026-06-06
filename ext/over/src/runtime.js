@@ -13,6 +13,8 @@
 // / streaming emission. The handful of helpers below are the v0 (direct-emit) path;
 // for proven-numeric operands they become raw ops once AIR lowers them.
 
+import { isAbsent } from './util.js';
+
 // absent → NaN, anything else → its Number (NaN propagates; null does NOT become 0)
 function n(x) { return x == null ? NaN : Number(x); }
 
@@ -23,10 +25,6 @@ function cmp(a, b) {
   const sa = String(a), sb = String(b);
   return sa < sb ? -1 : sa > sb ? 1 : 0;
 }
-
-// missing = null (string/category absent) OR NaN (numeric absent). x !== x is the
-// branch-free NaN test.
-const isAbsent = (x) => x == null || x !== x;
 
 export const overRuntime = {
   // ── value helpers ──

@@ -10,10 +10,8 @@
 // injected by name (run(rows, { table })); left-join (unmatched → absent). Index is
 // built once per (table, eq-cols, range-cols) and shared across value columns.
 
-const SEP = String.fromCharCode(1);
-const refRowsOf = (t) => (Array.isArray(t) ? t : (t && t.rows) || null);
-const isAbsent = (x) => x == null || x !== x;
-const numCmp = (a, b) => Number(a) - Number(b);
+import { SEP, isAbsent, numCmp, refRowsOf } from './util.js';
+
 const FLIP = { '<': '>', '<=': '>=', '>': '<', '>=': '<=', '==': '==' };
 
 // The table a predicate joins against = the first qualified ref's table.
@@ -92,6 +90,7 @@ export function collectLookups(ast) {
   }
   function stmt(st) {
     if (st.type === 'Assign') expr(st.value);
+    else if (st.type === 'Check') expr(st.test);
     else if (st.type === 'If') { st.clauses.forEach((c) => { expr(c.test); c.body.forEach(stmt); }); if (st.alternate) st.alternate.forEach(stmt); }
   }
   ast.statements.forEach(stmt);

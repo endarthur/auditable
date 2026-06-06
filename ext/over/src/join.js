@@ -26,11 +26,8 @@ import { analyzePredicate, tableOfPredicate } from './lookup.js';
 import { emitExpr } from './emit.js';
 import { overRuntime } from './runtime.js';
 import { makeAcc } from './windows.js';
+import { SEP, isAbsent, numCmp, refRowsOf } from './util.js';
 
-const SEP = String.fromCharCode(1);
-const refRowsOf = (t) => (Array.isArray(t) ? t : (t && t.rows) || null);
-const isAbsent = (x) => x == null || x !== x;
-const numCmp = (a, b) => Number(a) - Number(b);
 const JOIN_AGG = new Set(['count', 'sum', 'mean', 'min', 'max', 'std', 'wmean']);
 
 // weighted mean — Σ(value·weight)/Σ(weight); absent value OR weight skips the pair.
@@ -104,6 +101,7 @@ export function collectJoinAggs(ast) {
   }
   function stmt(st) {
     if (st.type === 'Assign') expr(st.value);
+    else if (st.type === 'Check') expr(st.test);
     else if (st.type === 'If') { st.clauses.forEach((c) => { expr(c.test); c.body.forEach(stmt); }); if (st.alternate) st.alternate.forEach(stmt); }
   }
   ast.statements.forEach(stmt);

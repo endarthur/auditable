@@ -259,8 +259,21 @@ Everything we want, tagged by phase. **v0 / v0.1 are proposals to discuss.**
 - **units** propagation + checking (native) — grade math that catches %-vs-g/t.
 
 ### Auditable QA + power — **v1/v2**
-- **`check` / `assert`** → a per-rule validation report (free off the schema-pass walk).
-- **`emit`** — one row → many (compositing/desurvey/subcell fan-out); gated, breaks 1:1.
+- **`check` — SHIPPED.** `check [ "label": ] PREDICATE` — an observational validation
+  rule. Rows pass through unchanged; each rule accumulates a pass/fail count + the
+  first few offending rows into a report returned alongside (`run → { columns, rows,
+  checks: [{ rule, passed, failed, sample }] }`; the `over` tag exposes it as a
+  non-enumerable `.checks` on the returned rows). It rides existing machinery: the
+  schema pass already resolves columns before any row runs (so a rule naming a missing
+  column warns statically) and the executor already runs a row fn with a ctx (so
+  `check` just adds `ctx.check(id, bool)`). Predicates can use windows / joins / lookups
+  (downhole gap = `check FROM == prev(TO) over hole order FROM or …`; coverage =
+  `check count() where assays.hole == hole …`). Report shape is a plain count → merges
+  trivially for the big-data path. Unlabeled rules are labeled by their predicate text.
+  *Next here:* a `require` (halting) severity, and `bin` (grouping).
+- **`emit`** — one row → many (compositing skeleton / desurvey / subcell fan-out);
+  gated, breaks 1:1. The other half of compositing (the aggregating join is built; this
+  generates the skeleton it populates).
 
 ### Later / maybe
 - Parameterized reusable transforms (`define …(…)` — but the flowsheet already composes).
