@@ -10,7 +10,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { bundleMemory, bundle } from '../ext/build/src/main.js';
+import { bundleMemory, bundle, mergeBundles } from '../ext/build/src/main.js';
+import { makeNodeParser } from '../ext/build/src/io/parser-node.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -263,6 +264,20 @@ test('define: bad key rejected (E015)', () => {
 test('define: collision with a declaration rejected (E007)', () => {
   const sources = { 'src/main.js': "export const __X__ = 1;\n" };
   assert.throws(() => bundleMemory(sources, { entry: 'src/main.js', define: { __X__: '2' } }), /E007/);
+});
+
+// ── phase 2: merge mode (§6.7) — the over×loom inferType collision ──
+test('mergeBundles: cross-bundle collisions renamed, consume sites resolve', async () => {
+  const parser = makeNodeParser();
+  const over = "function inferType(x){ return 'A:' + typeof x; }\nfunction helperA(){ return inferType(1); }\nexport { inferType, helperA };\n";
+  const loom = "function inferType(x){ return 'B'; }\nexport { inferType };\n";
+  const surface = "import { inferType, helperA } from '@gcu/over';\nimport { inferType as bInfer } from '@gcu/loom';\nexport function run(){ return inferType(1) + '|' + bInfer(1) + '|' + helperA(); }\n";
+  const r = mergeBundles([{ name: 'over', source: over }, { name: 'loom', source: loom }], { parser, surface });
+  assert.ok(r.code.includes('inferType$over') && r.code.includes('inferType$loom'), 'both inferType renamed');
+  assert.ok(!/^function inferType\(/m.test(r.code), 'no unsuffixed inferType declaration survives');
+  assert.ok(!/from '@gcu\//.test(r.code), 'consumer imports stripped');
+  const m = await importCode(r.code);
+  assert.equal(m.run(), 'A:number|B|A:number');
 });
 
 // ── 11. round-trip against real ext/sluice (zero-dep, exercises export *) ──
