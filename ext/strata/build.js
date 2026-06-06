@@ -14,7 +14,7 @@ const srcDir = path.join(__dirname, 'src');
 // predicate.js was extracted to @gcu/sift; build-inline sift's source directly
 // (strata's src/predicate.js is a dev/node re-export stub) so the bundle stays a
 // self-contained leaf with the same exported symbols. See ext/sift.
-const files = ['values.js', 'formula.js', 'table.js', 'ingest.js', '../../sift/src/predicate.js', 'view.js', 'aggregate.js', 'document.js', 'provider.js'];
+const files = ['values.js', 'formula.js', 'table.js', 'ingest.js', '../../sift/src/predicate.js', 'view.js', 'aggregate.js', 'transform.js', 'document.js', 'provider.js'];
 
 const exported = new Set();
 const chunks = [];

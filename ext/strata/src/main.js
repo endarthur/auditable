@@ -13,6 +13,7 @@
 //   predicate.js— structured safe boolean-expr spec + parser + evaluator (pure)
 //   view.js     — createView: the filter→sort pipeline over a table (pure)
 //   aggregate.js— groupBy: group-by + aggregation → a summary table (pure)
+//   transform.js— transformWithOver: an OVER transform → a new table (@gcu/over-injectable)
 //   document.js — writeStrata/readStrata: the native .strata zip (archive-injectable)
 //   provider.js — createTableProvider(table, view?): StrataTable → @gcu/loom provider (pure)
 
@@ -23,5 +24,6 @@ export * from './ingest.js';
 export * from './predicate.js';
 export * from './view.js';
 export * from './aggregate.js';
+export * from './transform.js';
 export * from './document.js';
 export * from './provider.js';
