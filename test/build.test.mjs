@@ -8,7 +8,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { bundleMemory, bundle, mergeBundles } from '../ext/build/src/main.js';
 import { makeNodeParser } from '../ext/build/src/io/parser-node.js';
@@ -264,6 +266,31 @@ test('define: bad key rejected (E015)', () => {
 test('define: collision with a declaration rejected (E007)', () => {
   const sources = { 'src/main.js': "export const __X__ = 1;\n" };
   assert.throws(() => bundleMemory(sources, { entry: 'src/main.js', define: { __X__: '2' } }), /E007/);
+});
+
+// ── phase 2: CLI (§13.2) — stdout + drift --check ──
+test('CLI: --stdout emits code; --check detects drift', () => {
+  const cli = path.join(root, 'ext', 'build', 'cli.js');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gcubuild-'));
+  try {
+    fs.mkdirSync(path.join(tmp, 'src'));
+    fs.writeFileSync(path.join(tmp, 'src', 'main.js'), "export { f } from './a.js';\n");
+    fs.writeFileSync(path.join(tmp, 'src', 'a.js'), "export function f(){ return 7; }\n");
+    fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ name: '@gcu/tmp', version: '0.0.0' }));
+
+    const out = execFileSync('node', [cli, '--stdout', '--out-dir', tmp, 'src/main.js'], { encoding: 'utf8' });
+    assert.ok(out.includes('function f()'));
+
+    // build to disk, then --check passes
+    execFileSync('node', [cli, '--out-dir', tmp, '--quiet', 'src/main.js']);
+    execFileSync('node', [cli, '--check', '--out-dir', tmp, '--quiet', 'src/main.js']); // no throw = up to date
+
+    // tamper → drift → nonzero exit
+    fs.appendFileSync(path.join(tmp, 'index.js'), '\n// tampered\n');
+    assert.throws(() => execFileSync('node', [cli, '--check', '--out-dir', tmp, '--quiet', 'src/main.js'], { stdio: 'pipe' }));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 // ── phase 2: merge mode (§6.7) — the over×loom inferType collision ──

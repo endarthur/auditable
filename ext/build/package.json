@@ -4,6 +4,9 @@
   "description": "Owned AST bundler for the GCU ecosystem. Concat + scope-isolate (rename-on-collision), never transform. Pure browser-native core + thin I/O adapters. Replaces the hand-written ext/*/build.js regex-concat scripts.",
   "type": "module",
   "main": "src/main.js",
+  "bin": {
+    "gcu-build": "./cli.js"
+  },
   "exports": {
     ".": "./src/main.js",
     "./core": "./src/core.js",
@@ -11,6 +14,7 @@
   },
   "files": [
     "src",
+    "cli.js",
     "LICENSE",
     "SPEC.md"
   ],
