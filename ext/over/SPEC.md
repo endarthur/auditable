@@ -256,7 +256,20 @@ Everything we want, tagged by phase. **v0 / v0.1 are proposals to discuss.**
   and the algorithm knobs (min length, residuals, domain-honoring) stay a dedicated
   tool that *uses* this join. (The seam: OVER owns join+aggregate; the parameterized
   algorithm doesn't belong in the grammar.)
-- **units** propagation + checking (native) — grade math that catches %-vs-g/t.
+- **units — SHIPPED.** Compile-time dimensional checking of grade math, **schema-pass
+  only → zero runtime cost** (the emitted JS is unchanged). A column carries a unit
+  beside its vtype — declared `GRADE : float[g/t]` / `DENS : [t/m3]` (bare unit ⇒
+  float), or off the input schema (recon can sniff it). Units propagate through the
+  column graph (`+`/`-` require matching dims else **warn**; `*`/`/` multiply/divide
+  dims; comparisons across units warn; bare literals are unit-polymorphic so adding a
+  constant doesn't nag), and a declared unit that conflicts with the inferred one
+  warns. Built on **@gcu/dimensions** (the shared algebra), but with a domain unit
+  table where **grade units (%, g/t, ppm, oz/t) are DISTINCT axes** — a physics engine
+  reduces them all to dimensionless and would miss the headline `FE[%] + AU[g/t]`
+  error; physical units share real axes so `density·volume → tonnes` and
+  `grade·tonnes → metal` fall out. m vs ft are distinct too (Tier 1 has no conversion
+  — mixing warns). *Tier 2 (conversions g/t↔ppm, ft→m) — curated mining factors, or
+  on-demand @gcu/numbat — is the follow-up.*
 
 ### Auditable QA + power — **v1/v2**
 - **`check` — SHIPPED.** `check [ "label": ] PREDICATE` — an observational validation

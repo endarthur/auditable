@@ -1,6 +1,107 @@
 // @gcu/over — OVER (Ordered/Vectorized Expression Runner): the table-transform DSL
 // Auto-generated from ext/over/src/ — do not edit directly
 
+// -- dimensions/dimensions.js (inlined) --
+
+// @gcu/dimensions — the dimension algebra at the heart of dimensional analysis.
+//
+// A dimension is a sparse object `{ axis: integerExponent }`. Dimensions form a
+// free abelian group under multiplication (componentwise exponent add); the
+// identity is `{}` (scalar / dimensionless) and the inverse is negation. That's the
+// whole model — small, total, and exact (integer exponents, no floats).
+//
+// This is the zero-dependency core shared across GCU: ep's @gcu/numbat does full
+// unit resolution + conversion on top of it; auditable's @gcu/over uses it for
+// compile-time grade-math checking (with a domain unit table where, deliberately,
+// %/g·t⁻¹/ppm are DISTINCT axes — mining grades must not silently mix even though a
+// physics engine would call them all dimensionless). The axis KEYS are the caller's
+// vocabulary: numbat uses 'length'/'mass'/'time'/…; a domain layer can mint its own.
+
+// Equal iff every axis has the same exponent (missing = 0, so key order and stored
+// zeros don't matter).
+const dimEq = (a, b) => {
+  for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    if ((a[k] || 0) !== (b[k] || 0)) return false;
+  }
+  return true;
+};
+
+// Product: add exponents componentwise, dropping any that cancel to zero.
+const dimMul = (a, b) => {
+  const r = {};
+  for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    const n = (a[k] || 0) + (b[k] || 0);
+    if (n) r[k] = n;
+  }
+  return r;
+};
+
+// Quotient: subtract exponents componentwise, dropping zeros.
+const dimDiv = (a, b) => {
+  const r = {};
+  for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    const n = (a[k] || 0) - (b[k] || 0);
+    if (n) r[k] = n;
+  }
+  return r;
+};
+
+// Raise to an integer power: scale every exponent, dropping zeros.
+const dimPow = (d, n) => {
+  const r = {};
+  for (const k in d) {
+    const e = d[k] * n;
+    if (e) r[k] = e;
+  }
+  return r;
+};
+
+// Reciprocal dimension (negate all exponents).
+const dimInv = (d) => dimPow(d, -1);
+
+// True for the scalar / dimensionless dimension only. (Checks Object.keys, so a
+// stored `{length: 0}` reads as non-empty — but the arithmetic above never produces
+// stored zeros, so that case doesn't arise in practice.)
+const dimEmpty = (d) => Object.keys(d).length === 0;
+
+// Human-readable form: `mass·length^-3`, or `-` for dimensionless.
+const dimFormat = (d) => {
+  const parts = Object.entries(d).map(([k, v]) => (v === 1 ? k : `${k}^${v}`));
+  return parts.join('·') || '-';
+};
+
+// DimRegistry — a name → dim-vector table. Base dimensions allocate a fresh axis
+// named after themselves (lowercased); derived dimensions store a precomputed vector
+// (built via the arithmetic above). Re-defining with the same shape is idempotent
+// (so a vendored module's `dimension Length` won't conflict with a host's pre-seed);
+// re-defining with a different shape throws.
+class DimRegistry {
+  constructor() {
+    this._dims = new Map();
+  }
+
+  defineBase(name) {
+    const axis = name.toLowerCase();
+    this._define(name, { [axis]: 1 });
+  }
+
+  defineDerived(name, dim) {
+    this._define(name, dim);
+  }
+
+  _define(name, dim) {
+    if (this._dims.has(name)) {
+      if (dimEq(this._dims.get(name), dim)) return;
+      throw new Error(`dimension already defined with different shape: ${name}`);
+    }
+    this._dims.set(name, dim);
+  }
+
+  resolve(name) { return this._dims.get(name) ?? null; }
+  has(name) { return this._dims.has(name); }
+  list() { return [...this._dims.entries()].map(([name, dim]) => ({ name, dim })); }
+}
+
 // -- util.js --
 
 // @gcu/over — shared zero-dep primitives used across the pipeline modules. Kept in
@@ -37,7 +138,9 @@ const REL = new Set(['==', '!=', '<', '<=', '>', '>=']);
 // parser decides whether it's a keyword.
 //
 // Token: { t, v, line, col }
-//   t ∈ pragma | newline | num | str | field | ident | op | eof
+//   t ∈ pragma | newline | num | str | field | ident | unit | op | eof
+// `[g/t]` lexes as a single `unit` token (raw text between the brackets) — a unit
+// annotation in a type spec (`GRADE : float[g/t]`); the only use of [] so far.
 
 const OP3 = [];                                   // (none yet)
 const OP2 = ['==', '!=', '<=', '>=', '??'];
@@ -88,6 +191,15 @@ function lex(src) {
       if (i >= n) throw new OverLexError('unterminated `column name`', startLine, startCol);
       adv();                                        // closing backtick
       toks.push({ t: 'field', v, line: startLine, col: startCol }); continue;
+    }
+
+    if (c === '[') {                                // [unit] — a unit annotation
+      const startLine = line, startCol = col; adv();
+      let v = '';
+      while (i < n && at() !== ']') { if (at() === '\n') throw new OverLexError('unterminated [unit]', startLine, startCol); v += at(); adv(); }
+      if (i >= n) throw new OverLexError('unterminated [unit]', startLine, startCol);
+      adv();                                        // closing ]
+      toks.push({ t: 'unit', v: v.trim(), line: startLine, col: startCol }); continue;
     }
 
     if (c === '"') {                                // string value
@@ -147,7 +259,7 @@ function lex(src) {
 //        | Project { name:'keep'|'saveonly'|'erase', fields:[string] }
 //        | Control { name:'delete'|'exit' }
 //        | Check   { severity:'warn'|'error', label?:string, test:Expr }   // check / require
-//   TypeSpec { vtype?:'int'|'float'|'bool'|'string'|'category', default?:Expr }
+//   TypeSpec { vtype?:'int'|'float'|'bool'|'string'|'category', unit?:string, default?:Expr }
 //   Expr = Num{value} | Str{value} | Bool{value} | Absent
 //        | Field{name} | Unary{op:'-', operand} | Binary{op,left,right}
 //        | Call{name, args:[Expr]} | Match{subject, arms:[{rel?,test?,value}], default?}
@@ -210,13 +322,15 @@ function parseTokens(toks) {
     return parseAssign();
   }
 
+  // `: vtype` | `: vtype[unit]` | `: [unit]` (implies float) | `… default EXPR`.
   function parseTypeSpec() {
     expectOp(':');
     const spec = {};
-    const t = cur();
-    if (t.t !== 'ident' || !TYPES.has(t.v)) throw err(`expected a type (${[...TYPES].join('/')}), got ${desc(t)}`);
-    spec.vtype = next().v;
-    if (isId('default')) { next(); spec.default = parseExpr(); }   // per-column fill (units: later)
+    if (cur().t === 'ident' && TYPES.has(cur().v)) spec.vtype = next().v;   // optional vtype
+    if (cur().t === 'unit') spec.unit = next().v;                           // optional [unit]
+    if (!spec.vtype && spec.unit) spec.vtype = 'float';                     // a bare unit implies float
+    if (!spec.vtype) throw err(`expected a type (${[...TYPES].join('/')}) or a [unit], got ${desc(cur())}`);
+    if (isId('default')) { next(); spec.default = parseExpr(); }            // per-column fill
     return spec;
   }
 
@@ -432,6 +546,109 @@ function parseTokens(toks) {
   return { type: 'Transform', dialect, statements };
 }
 
+// -- units.js --
+
+// @gcu/over — units: compile-time dimensional checking of grade math. A column can
+// carry a UNIT (a dimension) beside its vtype; units propagate through arithmetic in
+// the schema pass and mismatches WARN (advisory, like AIR hints — never an error,
+// never a runtime cost: the emitted JS is unchanged). This catches the silent grade
+// disasters — adding a % grade to a g/t grade, compositing in feet against a metre
+// model, computing metal with the wrong unit.
+//
+// Built on @gcu/dimensions (the shared algebra). The KEY domain choice: grade units
+// (%, g/t, ppm, oz/t) get DISTINCT axes so they never silently mix — a physics engine
+// would reduce all of them to "dimensionless" and miss the headline error. Physical
+// units (m, t, m³) share real axes so density·volume→tonnes & grade·tonnes→metal fall
+// out. m vs ft are distinct axes too (Tier 1 has no conversion — mixing them warns).
+
+
+// Atomic unit symbols → dimension. Grade units are their OWN axes (pct/gpt/ppm/ozt);
+// physical units get a per-symbol base axis (so m≠ft, t≠g — Tier 1 keeps them apart).
+const U = {
+  '%': { pct: 1 }, 'pct': { pct: 1 }, 'percent': { pct: 1 },
+  'g/t': { gpt: 1 }, 'gpt': { gpt: 1 }, 'gpt_au': { gpt: 1 },
+  'ppm': { ppm: 1 }, 'ppb': { ppb: 1 },
+  'oz/t': { ozt: 1 }, 'opt': { ozt: 1 },
+  'm': { m: 1 }, 'cm': { cm: 1 }, 'mm': { mm: 1 }, 'km': { km: 1 }, 'ft': { ft: 1 },
+  't': { t: 1 }, 'kg': { kg: 1 }, 'g': { g: 1 }, 'lb': { lb: 1 }, 'oz': { oz: 1 },
+};
+
+// A single factor: `m` | `m3` | `m^3` | `ft2` — base symbol with an optional integer
+// exponent. Unknown base → its own axis (lenient: a typo'd unit type-checks as a
+// distinct unit, so it mismatches a correct one and surfaces the typo).
+function factorDim(sym) {
+  const m = sym.match(/^([A-Za-z%]+?)\^?(-?\d+)?$/);
+  if (!m) return { [sym]: 1 };
+  const base = m[1], exp = m[2] ? parseInt(m[2], 10) : 1;
+  const baseDim = (base in U) ? U[base] : { [base]: 1 };
+  return dimPow(baseDim, exp);
+}
+
+// Parse a unit string → dimension. Atomic symbols (incl. grade compounds like `g/t`)
+// resolve directly; anything else is a product/quotient of factors (`t/m3`, `g/cm3`).
+function parseUnit(str) {
+  const s = String(str || '').trim();
+  if (!s || s === '1' || s === '-') return {};        // dimensionless
+  if (s in U) return U[s];                             // atomic (g/t, oz/t, %, …)
+  let dim = {}, op = '*';
+  const re = /([*/·])|([^*/·\s]+)/g;
+  let mm;
+  while ((mm = re.exec(s)) !== null) {
+    if (mm[1]) op = mm[1] === '/' ? '/' : '*';
+    else { const f = factorDim(mm[2]); dim = op === '/' ? dimDiv(dim, f) : dimMul(dim, f); op = '*'; }
+  }
+  return dim;
+}
+
+const UNIT_PRESERVING = new Set(['abs', 'min', 'max', 'minia', 'maxia', 'round', 'int']);
+const AGG_PRESERVING = new Set(['mean', 'sum', 'min', 'max', 'std', 'first', 'last', 'prev', 'next']);
+
+// Infer the unit (a dim) of an expression, or null = "no unit info" (polymorphic — a
+// bare literal or undeclared column adopts the other operand's unit, so adding a
+// constant to a g/t doesn't nag). uctx = { unitOf(name) → dim|null, warn(msg) }.
+function inferUnit(expr, uctx) {
+  switch (expr.type) {
+    case 'Field': return uctx.unitOf(expr.name);
+    case 'Unary': return inferUnit(expr.operand, uctx);
+    case 'Binary': return binaryUnit(expr, uctx);
+    case 'Call': return UNIT_PRESERVING.has(expr.name) && expr.args[0] ? inferUnit(expr.args[0], uctx) : null;
+    case 'Match': return matchUnit(expr, uctx);
+    case 'Window': {
+      const a = expr.agg;
+      return a && a.name && AGG_PRESERVING.has(a.name) && a.args && a.args[0] ? inferUnit(a.args[0], uctx) : null;
+    }
+    default: return null;       // Num/Str/Bool/Absent → polymorphic; Lookup/JoinAgg/count → unknown
+  }
+}
+
+function binaryUnit(e, uctx) {
+  const op = e.op;
+  if (op === 'and' || op === 'or' || op === '??') return null;
+  const lu = inferUnit(e.left, uctx), ru = inferUnit(e.right, uctx);
+  if (op === '+' || op === '-') {
+    if (lu && ru) {
+      if (!dimEq(lu, ru)) { uctx.warn(`${op === '+' ? 'adding' : 'subtracting'} incompatible units (${dimFormat(lu)} vs ${dimFormat(ru)})`); return null; }
+      return lu;
+    }
+    return lu || ru;            // one side unitless → adopt the other's unit (no nag)
+  }
+  if (op === '*') return (!lu && !ru) ? null : dimMul(lu || {}, ru || {});
+  if (op === '/') return (!lu && !ru) ? null : dimDiv(lu || {}, ru || {});
+  // comparison → bool, no unit; but flag comparing across units
+  if (lu && ru && !dimEq(lu, ru)) uctx.warn(`comparing incompatible units (${dimFormat(lu)} vs ${dimFormat(ru)})`);
+  return null;
+}
+
+function matchUnit(e, uctx) {
+  const us = e.arms.map((a) => inferUnit(a.value, uctx));
+  if (e.default) us.push(inferUnit(e.default, uctx));
+  const known = us.filter(Boolean);
+  if (!known.length) return null;
+  return known.every((u) => dimEq(u, known[0])) ? known[0] : null;
+}
+
+export { dimEq, dimFormat };   // re-exported for the schema pass
+
 // -- schema.js --
 
 // @gcu/over — the static schema pass (SPEC §5, the auditable core). Walk the AST
@@ -448,8 +665,23 @@ function parseTokens(toks) {
 // matching the AIR typing model. `vtype` ∈ int | float | bool | string | category
 // | dynamic. Native relational/logical → bool; compat → float.
 
+
 const NUM = new Set(['int', 'float']);
 const STR = new Set(['string', 'category']);
+
+// Are any units declared (input schema or a `[unit]` type spec)? If not, the whole
+// unit channel is skipped — zero overhead when nobody asked for units.
+function unitsInPlay(ast, inputSchema) {
+  if (inputSchema.some((c) => c.unit)) return true;
+  let found = false;
+  (function walk(sts) {
+    for (const st of sts || []) {
+      if (st.type === 'Assign' && st.target.spec && st.target.spec.unit) found = true;
+      else if (st.type === 'If') { st.clauses.forEach((c) => walk(c.body)); walk(st.alternate); }
+    }
+  })(ast && ast.statements);
+  return found;
+}
 
 const FN_NUMERIC = new Set(['abs', 'sqrt', 'exp', 'log', 'loge', 'logn', 'pow', 'rais',
   'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2', 'azimuth', 'phi', 'mod', 'modc',
@@ -545,18 +777,27 @@ function schemaPass(ast, inputSchema = [], opts = {}) {
   const dialect = (ast && ast.dialect) || opts.dialect || 'native';
   const warnings = [];
 
+  const units = unitsInPlay(ast, inputSchema);
+
   // current output columns, in order, by name
   const map = new Map();
   const order = [];
   const lets = new Map();
+  const letUnits = new Map();
   for (const c of inputSchema) {
     const col = { ...c, name: c.name, vtype: normalizeType(c.vtype || c.type) };
+    if (units && c.unit != null) col.unit = typeof c.unit === 'string' ? parseUnit(c.unit) : c.unit;
     map.set(col.name, col); order.push(col.name);
   }
 
   const ctx = {
     dialect,
     get: (name) => lets.has(name) ? lets.get(name) : (map.has(name) ? map.get(name).vtype : undefined),
+    warn: (m) => warnings.push(m),
+  };
+  // unit channel (parallel to ctx): name → dim|null. Only consulted when `units`.
+  const uctx = {
+    unitOf: (name) => letUnits.has(name) ? letUnits.get(name) : (map.has(name) ? (map.get(name).unit || null) : null),
     warn: (m) => warnings.push(m),
   };
 
@@ -580,6 +821,20 @@ function schemaPass(ast, inputSchema = [], opts = {}) {
           const t = st.target.spec && st.target.spec.vtype ? st.target.spec.vtype : inferType(st.value, ctx);
           if (st.kind === 'let') lets.set(st.target.name, t);
           else declare(st.target.name, t, !!(st.target.spec && st.target.spec.vtype));
+          if (units) {
+            const declared = st.target.spec && st.target.spec.unit;
+            let unit;
+            if (declared) {
+              unit = parseUnit(st.target.spec.unit);
+              const inferred = inferUnit(st.value, uctx);
+              if (inferred && !dimEq(inferred, unit))
+                warnings.push(`column "${st.target.name}": declared [${st.target.spec.unit}] but the expression is ${dimFormat(inferred)}`);
+            } else {
+              unit = inferUnit(st.value, uctx);
+            }
+            if (st.kind === 'let') { if (unit) letUnits.set(st.target.name, unit); else letUnits.delete(st.target.name); }
+            else { const col = map.get(st.target.name); if (col) { if (unit) col.unit = unit; else delete col.unit; } }
+          }
           break;
         }
         case 'If': {
@@ -1587,11 +1842,11 @@ function compile(text, opts = {}) {
     outputColumns: staticSchema ? staticSchema.columns : null,
     warnings: staticSchema ? staticSchema.warnings : null,
     // tables: { name: rows[] | {rows} } — the reference tables lookup / join read.
-    // run → { columns, rows, checks: [{ rule, passed, failed, sample }] }.
+    // run → { columns, rows, checks: [{ rule, passed, failed, sample }], warnings }.
     run(rows, tables) {
       const sch = staticSchema || schemaPass(ast, inferSchema(rows), opts);
       const res = applyRows(rowFn, sch.columns, rows, windowDefs, lookupSpecs, joinSpecs, checkDefs, tables);
-      return { columns: sch.columns, rows: res.rows, checks: res.checks };
+      return { columns: sch.columns, rows: res.rows, checks: res.checks, warnings: sch.warnings };
     },
   };
 }
@@ -1622,7 +1877,8 @@ function over(strings, ...values) {
     const rows = Array.isArray(table) ? table : (table && table.rows) || [];
     const result = c.run(rows, tables);
     Object.defineProperty(result.rows, 'columns', { value: result.columns, enumerable: false });
-    Object.defineProperty(result.rows, 'checks', { value: result.checks, enumerable: false });   // validation report
+    Object.defineProperty(result.rows, 'checks', { value: result.checks, enumerable: false });        // validation report
+    Object.defineProperty(result.rows, 'warnings', { value: result.warnings || [], enumerable: false });  // schema + unit warnings
     return result.rows;
   };
   fn.source = c.source;          // the emitted JS (inspectable)
@@ -1657,6 +1913,7 @@ function tokenizeOver(code) {
     if (c === '%' && (i === 0 || code[i - 1] === '\n')) { const s = i; while (i < len && code[i] !== '\n') i++; tokens.push({ type: 'cmt', text: code.slice(s, i) }); continue; }
     if (c === '"') { const s = i; i++; while (i < len && code[i] !== '"') { if (code[i] === '\\') i++; i++; } if (i < len) i++; tokens.push({ type: 'str', text: code.slice(s, i) }); continue; }
     if (c === '`') { const s = i; i++; while (i < len && code[i] !== '`') i++; if (i < len) i++; tokens.push({ type: 'id', text: code.slice(s, i) }); continue; }   // backtick column name
+    if (c === '[') { const s = i; i++; while (i < len && code[i] !== ']') i++; if (i < len) i++; tokens.push({ type: 'const', text: code.slice(s, i) }); continue; }   // [unit] annotation
     if (/\d/.test(c) || (c === '.' && /\d/.test(code[i + 1] || ''))) { const s = i; while (i < len && /[0-9.eE+-]/.test(code[i])) i++; tokens.push({ type: 'num', text: code.slice(s, i) }); continue; }
     if (/[A-Za-z_$]/.test(c)) {
       const s = i; while (i < len && /[A-Za-z0-9_$]/.test(code[i])) i++;
@@ -1719,6 +1976,7 @@ export {
   hasJoinAggs,
   hasLookups,
   inferType,
+  inferUnit,
   isAbsent,
   lex,
   makeAcc,
@@ -1730,6 +1988,7 @@ export {
   overRuntime,
   parse,
   parseTokens,
+  parseUnit,
   refRowsOf,
   schemaPass,
   tableOfPredicate,

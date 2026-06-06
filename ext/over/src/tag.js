@@ -23,7 +23,8 @@ export function over(strings, ...values) {
     const rows = Array.isArray(table) ? table : (table && table.rows) || [];
     const result = c.run(rows, tables);
     Object.defineProperty(result.rows, 'columns', { value: result.columns, enumerable: false });
-    Object.defineProperty(result.rows, 'checks', { value: result.checks, enumerable: false });   // validation report
+    Object.defineProperty(result.rows, 'checks', { value: result.checks, enumerable: false });        // validation report
+    Object.defineProperty(result.rows, 'warnings', { value: result.warnings || [], enumerable: false });  // schema + unit warnings
     return result.rows;
   };
   fn.source = c.source;          // the emitted JS (inspectable)
@@ -58,6 +59,7 @@ function tokenizeOver(code) {
     if (c === '%' && (i === 0 || code[i - 1] === '\n')) { const s = i; while (i < len && code[i] !== '\n') i++; tokens.push({ type: 'cmt', text: code.slice(s, i) }); continue; }
     if (c === '"') { const s = i; i++; while (i < len && code[i] !== '"') { if (code[i] === '\\') i++; i++; } if (i < len) i++; tokens.push({ type: 'str', text: code.slice(s, i) }); continue; }
     if (c === '`') { const s = i; i++; while (i < len && code[i] !== '`') i++; if (i < len) i++; tokens.push({ type: 'id', text: code.slice(s, i) }); continue; }   // backtick column name
+    if (c === '[') { const s = i; i++; while (i < len && code[i] !== ']') i++; if (i < len) i++; tokens.push({ type: 'const', text: code.slice(s, i) }); continue; }   // [unit] annotation
     if (/\d/.test(c) || (c === '.' && /\d/.test(code[i + 1] || ''))) { const s = i; while (i < len && /[0-9.eE+-]/.test(code[i])) i++; tokens.push({ type: 'num', text: code.slice(s, i) }); continue; }
     if (/[A-Za-z_$]/.test(c)) {
       const s = i; while (i < len && /[A-Za-z0-9_$]/.test(code[i])) i++;

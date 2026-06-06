@@ -710,6 +710,66 @@ test('schema: bin types int, binlabel types string', () => {
   assert.equal(by.B, 'int'); assert.equal(by.L, 'string');
 });
 
+// ── units: compile-time dimensional checking (schema-pass only) ──
+import { parseUnit } from '../ext/over/src/units.js';
+import { dimEq } from '../ext/dimensions/src/dimensions.js';
+
+test('parse: [unit] in a type spec (vtype optional)', () => {
+  const a = stmts('GRADE : float[g/t] = AU')[0];
+  assert.equal(a.target.spec.vtype, 'float'); assert.equal(a.target.spec.unit, 'g/t');
+  const b = stmts('DENS : [t/m3] = D')[0];
+  assert.equal(b.target.spec.vtype, 'float');   // bare unit implies float
+  assert.equal(b.target.spec.unit, 't/m3');
+});
+
+test('parseUnit: grade units are distinct atoms; physical units compose', () => {
+  assert.ok(dimEq(parseUnit('g/t'), { gpt: 1 }));         // atomic grade
+  assert.ok(dimEq(parseUnit('%'), { pct: 1 }));
+  assert.equal(dimEq(parseUnit('%'), parseUnit('g/t')), false);   // must NOT unify
+  assert.ok(dimEq(parseUnit('t/m3'), { t: 1, m: -3 }));   // compound, composes
+  assert.ok(dimEq(parseUnit('m3'), { m: 3 }));            // digit-suffix → exponent
+});
+
+test('units: density · volume → tonnes; grade · tonnes → metal (inferred on output)', () => {
+  const c = compile('TONNES = DENS * VOL\nMETAL = AU * TONNES',
+    { inputSchema: [{ name: 'DENS', type: 'float', unit: 't/m3' }, { name: 'VOL', type: 'float', unit: 'm3' }, { name: 'AU', type: 'float', unit: 'g/t' }] });
+  const by = Object.fromEntries(c.outputColumns.map((x) => [x.name, x.unit]));
+  assert.ok(dimEq(by.TONNES, { t: 1 }));                  // t/m³ · m³ = t
+  assert.ok(dimEq(by.METAL, { gpt: 1, t: 1 }));           // g/t · t (a consistent metal dim)
+  assert.equal(c.warnings.length, 0);
+});
+
+test('units: adding incompatible units warns (the headline %-vs-g/t error)', () => {
+  const c = compile('BAD = FE + AU',
+    { inputSchema: [{ name: 'FE', type: 'float', unit: '%' }, { name: 'AU', type: 'float', unit: 'g/t' }] });
+  assert.ok(c.warnings.some((w) => /adding incompatible units/.test(w)));
+});
+
+test('units: comparing across units warns; m vs ft warns (no Tier-1 conversion)', () => {
+  const cmp = compile('X = FE > AU', { inputSchema: [{ name: 'FE', type: 'float', unit: '%' }, { name: 'AU', type: 'float', unit: 'g/t' }] });
+  assert.ok(cmp.warnings.some((w) => /comparing incompatible units/.test(w)));
+  const len = compile('GAP = DEPTH_M - DEPTH_FT', { inputSchema: [{ name: 'DEPTH_M', type: 'float', unit: 'm' }, { name: 'DEPTH_FT', type: 'float', unit: 'ft' }] });
+  assert.ok(len.warnings.some((w) => /incompatible units/.test(w)));
+});
+
+test('units: adding a bare constant does NOT nag (literals are unit-polymorphic)', () => {
+  const c = compile('FE2 : [%] = FE + 0.5', { inputSchema: [{ name: 'FE', type: 'float', unit: '%' }] });
+  assert.equal(c.warnings.length, 0);
+  assert.ok(dimEq(c.outputColumns.find((x) => x.name === 'FE2').unit, { pct: 1 }));
+});
+
+test('units: a declared unit that conflicts with the expression warns', () => {
+  const c = compile('METAL : [t] = AU * TONNES',
+    { inputSchema: [{ name: 'AU', type: 'float', unit: 'g/t' }, { name: 'TONNES', type: 'float', unit: 't' }] });
+  assert.ok(c.warnings.some((w) => /declared \[t\] but the expression is/.test(w)));
+});
+
+test('units: no units declared → no unit channel, no overhead, no `unit` on columns', () => {
+  const c = compile('Y = FE + 1', { inputSchema: [{ name: 'FE', type: 'float' }] });
+  assert.equal(c.warnings.length, 0);
+  assert.ok(c.outputColumns.every((x) => !('unit' in x)));
+});
+
 // ── the notebook tag ──
 test('tag: over`…`(rows) compiles + applies; rows carry .columns', async () => {
   const { over } = await import('../ext/over/src/tag.js');

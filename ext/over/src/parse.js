@@ -8,7 +8,7 @@
 //        | Project { name:'keep'|'saveonly'|'erase', fields:[string] }
 //        | Control { name:'delete'|'exit' }
 //        | Check   { severity:'warn'|'error', label?:string, test:Expr }   // check / require
-//   TypeSpec { vtype?:'int'|'float'|'bool'|'string'|'category', default?:Expr }
+//   TypeSpec { vtype?:'int'|'float'|'bool'|'string'|'category', unit?:string, default?:Expr }
 //   Expr = Num{value} | Str{value} | Bool{value} | Absent
 //        | Field{name} | Unary{op:'-', operand} | Binary{op,left,right}
 //        | Call{name, args:[Expr]} | Match{subject, arms:[{rel?,test?,value}], default?}
@@ -72,13 +72,15 @@ export function parseTokens(toks) {
     return parseAssign();
   }
 
+  // `: vtype` | `: vtype[unit]` | `: [unit]` (implies float) | `… default EXPR`.
   function parseTypeSpec() {
     expectOp(':');
     const spec = {};
-    const t = cur();
-    if (t.t !== 'ident' || !TYPES.has(t.v)) throw err(`expected a type (${[...TYPES].join('/')}), got ${desc(t)}`);
-    spec.vtype = next().v;
-    if (isId('default')) { next(); spec.default = parseExpr(); }   // per-column fill (units: later)
+    if (cur().t === 'ident' && TYPES.has(cur().v)) spec.vtype = next().v;   // optional vtype
+    if (cur().t === 'unit') spec.unit = next().v;                           // optional [unit]
+    if (!spec.vtype && spec.unit) spec.vtype = 'float';                     // a bare unit implies float
+    if (!spec.vtype) throw err(`expected a type (${[...TYPES].join('/')}) or a [unit], got ${desc(cur())}`);
+    if (isId('default')) { next(); spec.default = parseExpr(); }            // per-column fill
     return spec;
   }
 

@@ -47,11 +47,11 @@ export function compile(text, opts = {}) {
     outputColumns: staticSchema ? staticSchema.columns : null,
     warnings: staticSchema ? staticSchema.warnings : null,
     // tables: { name: rows[] | {rows} } — the reference tables lookup / join read.
-    // run → { columns, rows, checks: [{ rule, passed, failed, sample }] }.
+    // run → { columns, rows, checks: [{ rule, passed, failed, sample }], warnings }.
     run(rows, tables) {
       const sch = staticSchema || schemaPass(ast, inferSchema(rows), opts);
       const res = applyRows(rowFn, sch.columns, rows, windowDefs, lookupSpecs, joinSpecs, checkDefs, tables);
-      return { columns: sch.columns, rows: res.rows, checks: res.checks };
+      return { columns: sch.columns, rows: res.rows, checks: res.checks, warnings: sch.warnings };
     },
   };
 }

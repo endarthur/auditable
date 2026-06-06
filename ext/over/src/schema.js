@@ -12,8 +12,24 @@
 // matching the AIR typing model. `vtype` ∈ int | float | bool | string | category
 // | dynamic. Native relational/logical → bool; compat → float.
 
+import { parseUnit, inferUnit, dimEq, dimFormat } from './units.js';
+
 const NUM = new Set(['int', 'float']);
 const STR = new Set(['string', 'category']);
+
+// Are any units declared (input schema or a `[unit]` type spec)? If not, the whole
+// unit channel is skipped — zero overhead when nobody asked for units.
+function unitsInPlay(ast, inputSchema) {
+  if (inputSchema.some((c) => c.unit)) return true;
+  let found = false;
+  (function walk(sts) {
+    for (const st of sts || []) {
+      if (st.type === 'Assign' && st.target.spec && st.target.spec.unit) found = true;
+      else if (st.type === 'If') { st.clauses.forEach((c) => walk(c.body)); walk(st.alternate); }
+    }
+  })(ast && ast.statements);
+  return found;
+}
 
 const FN_NUMERIC = new Set(['abs', 'sqrt', 'exp', 'log', 'loge', 'logn', 'pow', 'rais',
   'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2', 'azimuth', 'phi', 'mod', 'modc',
@@ -109,18 +125,27 @@ export function schemaPass(ast, inputSchema = [], opts = {}) {
   const dialect = (ast && ast.dialect) || opts.dialect || 'native';
   const warnings = [];
 
+  const units = unitsInPlay(ast, inputSchema);
+
   // current output columns, in order, by name
   const map = new Map();
   const order = [];
   const lets = new Map();
+  const letUnits = new Map();
   for (const c of inputSchema) {
     const col = { ...c, name: c.name, vtype: normalizeType(c.vtype || c.type) };
+    if (units && c.unit != null) col.unit = typeof c.unit === 'string' ? parseUnit(c.unit) : c.unit;
     map.set(col.name, col); order.push(col.name);
   }
 
   const ctx = {
     dialect,
     get: (name) => lets.has(name) ? lets.get(name) : (map.has(name) ? map.get(name).vtype : undefined),
+    warn: (m) => warnings.push(m),
+  };
+  // unit channel (parallel to ctx): name → dim|null. Only consulted when `units`.
+  const uctx = {
+    unitOf: (name) => letUnits.has(name) ? letUnits.get(name) : (map.has(name) ? (map.get(name).unit || null) : null),
     warn: (m) => warnings.push(m),
   };
 
@@ -144,6 +169,20 @@ export function schemaPass(ast, inputSchema = [], opts = {}) {
           const t = st.target.spec && st.target.spec.vtype ? st.target.spec.vtype : inferType(st.value, ctx);
           if (st.kind === 'let') lets.set(st.target.name, t);
           else declare(st.target.name, t, !!(st.target.spec && st.target.spec.vtype));
+          if (units) {
+            const declared = st.target.spec && st.target.spec.unit;
+            let unit;
+            if (declared) {
+              unit = parseUnit(st.target.spec.unit);
+              const inferred = inferUnit(st.value, uctx);
+              if (inferred && !dimEq(inferred, unit))
+                warnings.push(`column "${st.target.name}": declared [${st.target.spec.unit}] but the expression is ${dimFormat(inferred)}`);
+            } else {
+              unit = inferUnit(st.value, uctx);
+            }
+            if (st.kind === 'let') { if (unit) letUnits.set(st.target.name, unit); else letUnits.delete(st.target.name); }
+            else { const col = map.get(st.target.name); if (col) { if (unit) col.unit = unit; else delete col.unit; } }
+          }
           break;
         }
         case 'If': {

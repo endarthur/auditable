@@ -8,7 +8,9 @@
 // parser decides whether it's a keyword.
 //
 // Token: { t, v, line, col }
-//   t ∈ pragma | newline | num | str | field | ident | op | eof
+//   t ∈ pragma | newline | num | str | field | ident | unit | op | eof
+// `[g/t]` lexes as a single `unit` token (raw text between the brackets) — a unit
+// annotation in a type spec (`GRADE : float[g/t]`); the only use of [] so far.
 
 const OP3 = [];                                   // (none yet)
 const OP2 = ['==', '!=', '<=', '>=', '??'];
@@ -59,6 +61,15 @@ export function lex(src) {
       if (i >= n) throw new OverLexError('unterminated `column name`', startLine, startCol);
       adv();                                        // closing backtick
       toks.push({ t: 'field', v, line: startLine, col: startCol }); continue;
+    }
+
+    if (c === '[') {                                // [unit] — a unit annotation
+      const startLine = line, startCol = col; adv();
+      let v = '';
+      while (i < n && at() !== ']') { if (at() === '\n') throw new OverLexError('unterminated [unit]', startLine, startCol); v += at(); adv(); }
+      if (i >= n) throw new OverLexError('unterminated [unit]', startLine, startCol);
+      adv();                                        // closing ]
+      toks.push({ t: 'unit', v: v.trim(), line: startLine, col: startCol }); continue;
     }
 
     if (c === '"') {                                // string value

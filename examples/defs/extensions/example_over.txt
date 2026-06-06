@@ -95,6 +95,23 @@ const report = over`
 ui.display(report.checks);   // [{ rule, passed, failed, sample }]
 
 /// md
+## Units — dimensional checking, for free
+
+Declare a column's unit with `: float[g/t]` and OVER checks the grade math *dimensionally* — at compile time, with **zero runtime cost** (units never touch a value). Grade units (`%`, `g/t`, `ppm`) are kept as **distinct dimensions** — a physics engine would call them all "dimensionless" and miss the classic blunder of adding a `%` grade to a `g/t` grade. `density · volume → tonnes` and `grade · tonnes → metal` fall out automatically.
+
+/// code
+const sized = over`
+  DENS : [t/m3] = density
+  VOL  : [m3]   = volume
+  AU   : [g/t]  = au
+  FE   : [%]    = fe
+  TONNES = DENS * VOL            # t/m³ · m³  →  tonnes
+  METAL  = AU * TONNES           # g/t · t    →  metal content
+  OOPS   = FE + AU               # % + g/t    →  ⚠ flagged
+`([{ density: 2.7, volume: 1000, au: 1.4, fe: 31.2 }]);
+ui.display(sized.warnings);      // ["adding incompatible units (pct vs gpt)"]
+
+/// md
 ## It's auditable
 
 A transform's output columns are resolved *before any row runs*, and the emitted JS is inspectable — OVER lowers to real code, not a black box.
