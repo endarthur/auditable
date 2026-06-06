@@ -81,6 +81,8 @@ All pure, node-testable:
   `detectDelimiter`.
 - `view.js` — `createView`: the `filter → sort` pipeline (below).
 - `aggregate.js` — `groupBy`, `AGG_OPS`.
+- `transform.js` — `transformWithOver` / `previewOverTransform` (@gcu/over-injectable;
+  the whole-table declarative verb → a new table, below).
 - `document.js` — `writeStrata` / `readStrata` (the `.strata` format, below).
 - `provider.js` — `createTableProvider(table, view?)`: the `@gcu/loom` adapter.
 
@@ -112,6 +114,35 @@ key tuple (multi-key, insertion-ordered), accumulate `count`/`sum`/`mean`/`min`/
 propagate (sum/mean/min/max inherit the source unit; count is unitless). Because
 the result is a table, it composes — view/derive/save/regroup (§7.2 "promotable").
 Streaming group-by over sluice accumulators is the deferred big-data form.
+
+## OVER transforms (the whole-table declarative verb)
+
+`transform.js` connects **[`@gcu/over`](../over)** as strata's whole-table transform
+verb — complementing the per-column JS formulas of `formula.js`. Where a derived column
+is one JS expression, an OVER transform is a declarative pipeline (map/filter/project +
+windows + joins + `check`/`require` + `units`) that produces a **new `StrataTable`** —
+the same shape `groupBy` returns, so it composes (view/derive/save/transform again). This
+is the intended convergence, not a graft: the two share strata's load-bearing invariant
+(*output schema resolved before any row runs*).
+
+```js
+transformWithOver(table, overSrc, { compile, tables }) → { table, columns, checks, warnings }
+previewOverTransform(table, overSrc, { compile })      → { columns, warnings, … }   // no run
+```
+
+- `compile` (@gcu/over's) is **injected** — strata stays zero-hard-dep, exactly like
+  recon (ingest) and archive (document).
+- Marshalling: StrataTable (base⊕overlay⊕derived) → row objects; strata schema → OVER
+  inputSchema (types **and** units, so the schema preview + unit checks fire up front);
+  OVER output rows → a new table (OVER's `NaN` numeric-absent → strata `null`;
+  vtype → `number`/`category`/`string`; passthrough columns keep their unit/role).
+- A failing `require` propagates OVER's gate (throws, carrying the report).
+- Reference tables for `lookup`/joins accept StrataTables or plain row arrays.
+- The strata surface exposes it as a **Transform…** dialog (live schema/warnings preview
+  + the check report), shared by the standalone tool and the Works surface.
+- *Follow-on:* persist the OVER recipe in the `.strata` (reproducible on reopen, like a
+  derived column's formula); join-refs from other open tables; unit convergence onto
+  `@gcu/dimensions`. v1 produces a detached result, single-table.
 
 ## The native `.strata` document (§3)
 
