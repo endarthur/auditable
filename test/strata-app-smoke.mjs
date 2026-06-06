@@ -133,6 +133,26 @@ try {
   });
   back.rows === 3200 ? ok('ungroup restores the detail table (3200 rows)') : fail(`ungroup failed: ${JSON.stringify(back)}`);
 
+  // OVER transform → a new table (windows + match + check + project), via the bridge.
+  const tx = await page.evaluate(() => {
+    const ok = window._strataApp.transformWith([
+      'AU_REL = Au_gpt / mean(Au_gpt) over LITO',
+      'ORE = match Au_gpt { >=1: "ore", _: "waste" }',
+      'check "au present": present(Au_gpt)',
+      'saveonly(LITO, Au_gpt, AU_REL, ORE)',
+    ].join('\n'));
+    const t = window._strataApp.table;
+    const rel = t.columnByName('AU_REL') || [];
+    return {
+      ok, nrows: t.nrows, cols: t.schema.map((s) => s.name),
+      ore0: (t.columnByName('ORE') || [])[0],
+      relFinite: rel.slice(0, 200).every((v) => v == null || Number.isFinite(v)),
+    };
+  });
+  (tx.ok && tx.nrows === 3200 && JSON.stringify(tx.cols) === JSON.stringify(['LITO', 'Au_gpt', 'AU_REL', 'ORE']) && tx.relFinite)
+    ? ok(`OVER transform → ${tx.cols.join(', ')} (${tx.nrows} rows); ORE[0]=${tx.ore0}`)
+    : fail(`transform failed: ${JSON.stringify(tx)}`);
+
   errors.length ? fail('console errors: ' + errors.join(' | ')) : ok('no console errors');
 } catch (e) {
   fail('smoke threw: ' + e.message);

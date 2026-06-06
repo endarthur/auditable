@@ -275,7 +275,7 @@ if (target === 'works' || target === 'works-all') {
   // precede 'loom'/'strata'/'recon'/'archive' — the runtime surface inliner
   // iterates in this order, and inlining strata-app first is what brings its
   // bare @gcu/* imports into the surface text so those libs inline after it.
-  const SHARED_LIBS_BASE = ['abus', 'surface', 'strata-app', 'loom', 'strata', 'plate', 'sift', 'vfs', 'xterm', 'geas', 'proc', 'readline', 'markdown', 'librarian', 'docview', 'katex', 'reader-core', 'capsule', 'qr', 'ipynb', 'cm6', 'menu', 'template', 'yaml', 'epub', 'archive', 'sideact', 'patchbay', 'sluice', 'recon', 'flowsheet', 'bearing', 'stereonet', 'omf1'];
+  const SHARED_LIBS_BASE = ['abus', 'surface', 'strata-app', 'loom', 'strata', 'over', 'plate', 'sift', 'vfs', 'xterm', 'geas', 'proc', 'readline', 'markdown', 'librarian', 'docview', 'katex', 'reader-core', 'capsule', 'qr', 'ipynb', 'cm6', 'menu', 'template', 'yaml', 'epub', 'archive', 'sideact', 'patchbay', 'sluice', 'recon', 'flowsheet', 'bearing', 'stereonet', 'omf1'];
   // For --target=works-all: bundle every ext/<name>/index.js that's a real
   // bundle (skip the re-export shims under ~1 KB — they break the
   // single-file SHARED_LIBS pattern because they import from sibling files).

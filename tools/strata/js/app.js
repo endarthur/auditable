@@ -10,9 +10,10 @@
 // Works-ready as-is.
 
 import { createGrid } from '@gcu/loom';
-import { tableFromCsv, createTableProvider, createView, groupBy, readStrata, writeStrata, evaluatePredicate } from '@gcu/strata';
+import { tableFromCsv, createTableProvider, createView, groupBy, transformWithOver, previewOverTransform, readStrata, writeStrata, evaluatePredicate } from '@gcu/strata';
 import { sniff } from '@gcu/recon';
 import { createWriter, readZip } from '@gcu/archive';
+import { compile } from '@gcu/over';
 
 const $ = (s) => document.querySelector(s);
 
@@ -111,7 +112,7 @@ export function createStrataApp(host) {
 
     setTitle();
     updateFooter();
-    for (const id of ['#btnSave', '#btnSaveAs', '#btnAddCol', '#btnGroup']) $(id).disabled = false;
+    for (const id of ['#btnSave', '#btnSaveAs', '#btnAddCol', '#btnGroup', '#btnTransform']) { const el = $(id); if (el) el.disabled = false; }
     applyHighlight();   // re-tint for the current incoming selection (new provider)
   }
 
@@ -160,6 +161,88 @@ export function createStrataApp(host) {
     detailTable = null; detailName = null;
     mountTable(t);
     $('#btnUngroup').style.display = 'none';
+  }
+
+  // Run an OVER transform over the current table → a NEW table (the whole-table
+  // declarative verb: map/filter/project + windows + joins + check/require + units).
+  // Reuses the group "← Data" back mechanism. A failing `require` (gate) flashes the
+  // report and keeps the current table.
+  function transformWith(src) {
+    if (!table || !src || !src.trim()) return false;
+    let res;
+    try { res = transformWithOver(table, src, { compile }); }
+    catch (e) {
+      if (e.name === 'OverCheckError') {
+        const f = e.checks.filter((c) => c.severity === 'error' && c.failed).map((c) => `${c.rule} (${c.failed})`).join(', ');
+        flash(`required check failed: ${f}`);
+      } else flash('transform error: ' + e.message);
+      return false;
+    }
+    detailTable = table; detailName = docName;
+    docName = `${docName} — transformed`;
+    mountTable(res.table);
+    host.setDirty(true);
+    $('#btnUngroup').style.display = '';
+    const nWarn = res.warnings.length;
+    const nFail = res.checks.reduce((n, c) => n + c.failed, 0);
+    const tags = [`${res.table.cols} cols`];
+    if (nWarn) tags.push(`${nWarn} warning${nWarn > 1 ? 's' : ''}`);
+    if (nFail) tags.push(`${nFail} check failure${nFail > 1 ? 's' : ''}`);
+    else if (res.checks.length) tags.push('checks ok');
+    flash('transformed → ' + tags.join(' · '));
+    return true;
+  }
+
+  // The Transform dialog — a multi-line OVER editor with a live schema/warnings
+  // preview (the auditable win: the output shape resolves before you run). Built
+  // once, lazily, into document.body (shared by surface + standalone).
+  let txModal = null;
+  function openTransformDialog() {
+    if (!table) return;
+    if (!txModal) txModal = buildTransformModal();
+    const ta = txModal.querySelector('textarea');
+    const pre = txModal.querySelector('.tx-preview');
+    const renderPreview = () => {
+      const src = ta.value.trim();
+      if (!src) { pre.textContent = ''; pre.style.color = '#7fb37f'; return; }
+      try {
+        const p = previewOverTransform(table, src, { compile });
+        const cols = p.columns.map((c) => c.name).join(', ');
+        pre.textContent = `→ ${p.columns.length} cols: ${cols}` + (p.warnings.length ? '\n⚠ ' + p.warnings.join('\n⚠ ') : '');
+        pre.style.color = p.warnings.length ? '#d9a441' : '#7fb37f';
+      } catch (e) { pre.textContent = e.message; pre.style.color = '#d46a6a'; }
+    };
+    let deb; ta.oninput = () => { clearTimeout(deb); deb = setTimeout(renderPreview, 200); };
+    txModal.querySelector('.tx-run').onclick = () => { if (transformWith(ta.value)) txModal.style.display = 'none'; };
+    txModal.querySelector('.tx-cancel').onclick = () => { txModal.style.display = 'none'; };
+    txModal.style.display = 'flex';
+    ta.focus();
+    renderPreview();
+  }
+
+  function buildTransformModal() {
+    const ph = ['# transform this table — OVER (map / match / windows / check / units)',
+      'FE_REL = FE / mean(FE) over LITHO', 'ORE = match FE { >=62: "ore", _: "waste" }',
+      'check "fe present": present(FE)', 'saveonly(hole, FE, FE_REL, ORE)'].join('\n');
+    const overlay = document.createElement('div');
+    overlay.id = 'transformModal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:1000';
+    const box = document.createElement('div');
+    box.style.cssText = 'background:#1e1e1e;border:1px solid #444;border-radius:6px;width:min(700px,92vw);max-height:88vh;display:flex;flex-direction:column;gap:10px;padding:14px;font-family:var(--mono,monospace)';
+    box.innerHTML =
+      '<div style="color:#c89b3c;font-size:13px">Transform — OVER over this table</div>'
+      + '<textarea spellcheck="false" style="width:100%;height:220px;resize:vertical;background:#141414;color:#ddd;border:1px solid #333;border-radius:4px;padding:8px;font:12px/1.5 var(--mono,monospace);box-sizing:border-box"></textarea>'
+      + '<pre class="tx-preview" style="margin:0;min-height:2.4em;max-height:160px;overflow:auto;color:#7fb37f;font:11px/1.4 var(--mono,monospace);white-space:pre-wrap"></pre>'
+      + '<div style="display:flex;gap:8px;justify-content:flex-end">'
+      + '<button class="tx-cancel" style="background:#2a2a2a;color:#ccc;border:1px solid #444;border-radius:4px;padding:5px 12px;cursor:pointer">Cancel</button>'
+      + '<button class="tx-run" style="background:#3a2f1a;color:#e0b050;border:1px solid #6b5524;border-radius:4px;padding:5px 12px;cursor:pointer">Run ▸</button>'
+      + '</div>';
+    box.querySelector('textarea').placeholder = ph;
+    overlay.appendChild(box);
+    overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) overlay.style.display = 'none'; });
+    overlay.addEventListener('keydown', (e) => { if (e.key === 'Escape') overlay.style.display = 'none'; });
+    document.body.appendChild(overlay);
+    return overlay;
   }
 
   // Add a derived column (a JS formula over column names).
@@ -274,6 +357,7 @@ export function createStrataApp(host) {
     if (key && key.trim()) groupByColumn(key.trim());
   };
   $('#btnUngroup').onclick = ungroup;
+  { const b = $('#btnTransform'); if (b) b.onclick = openTransformDialog; }
   $('#btnAddCol').onclick = () => {
     if (!table) return;
     const name = prompt('New column name:');
@@ -306,7 +390,7 @@ export function createStrataApp(host) {
     open: openBytes,
     openFile: (name, bytes) => openBytes(name, bytes),
     saveBytes: buildStrataBytes,
-    addColumn, applyFilter, cycleSort, groupByColumn, ungroup,
+    addColumn, applyFilter, cycleSort, groupByColumn, ungroup, transformWith,
     get table() { return table; },
     get grid() { return grid; },
     get view() { return view; },

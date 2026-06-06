@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { lex, OverLexError } from '../ext/over/src/lex.js';
 import { parse, OverParseError } from '../ext/over/src/parse.js';
-import { schemaPass, inferType, unify } from '../ext/over/src/schema.js';
+import { schemaPass, unify } from '../ext/over/src/schema.js';
 import { compile } from '../ext/over/src/api.js';
 
 const ROWS = [

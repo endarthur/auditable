@@ -59,7 +59,7 @@ function numericResult(a, b, op) {
   return 'float';                                         // dynamic/unknown operand → assume float
 }
 
-export function inferType(expr, ctx) {
+export function inferExprType(expr, ctx) {
   switch (expr.type) {
     case 'Num': return Number.isInteger(expr.value) ? 'int' : 'float';
     case 'Str': return 'string';
@@ -71,11 +71,11 @@ export function inferType(expr, ctx) {
       return t || 'dynamic';
     }
     case 'Unary': {
-      const t = inferType(expr.operand, ctx);
+      const t = inferExprType(expr.operand, ctx);
       return t === 'float' ? 'float' : (t === 'int' || t === 'bool') ? 'int' : 'dynamic';
     }
     case 'Binary': {
-      const lt = inferType(expr.left, ctx), rt = inferType(expr.right, ctx);
+      const lt = inferExprType(expr.left, ctx), rt = inferExprType(expr.right, ctx);
       const op = expr.op;
       if (op === '+' || op === '-' || op === '*' || op === '/') return numericResult(lt, rt, op);
       if (op === '??') return unify(lt, rt);
@@ -88,21 +88,21 @@ export function inferType(expr, ctx) {
       if (FN_INT.has(n)) return 'int';
       if (FN_STRING.has(n)) return 'string';
       if (FN_LOGICAL.has(n)) return ctx.dialect === 'compat' ? 'float' : 'bool';
-      if (FN_PASSTHRU.has(n)) return expr.args[0] ? inferType(expr.args[0], ctx) : 'dynamic';
+      if (FN_PASSTHRU.has(n)) return expr.args[0] ? inferExprType(expr.args[0], ctx) : 'dynamic';
       return 'dynamic';
     }
     case 'Match': {
-      let t = expr.default ? inferType(expr.default, ctx) : undefined;
-      for (const arm of expr.arms) t = t === undefined ? inferType(arm.value, ctx) : unify(t, inferType(arm.value, ctx));
+      let t = expr.default ? inferExprType(expr.default, ctx) : undefined;
+      for (const arm of expr.arms) t = t === undefined ? inferExprType(arm.value, ctx) : unify(t, inferExprType(arm.value, ctx));
       return t || 'dynamic';
     }
     case 'Window': {
       const n = expr.agg && expr.agg.type === 'Call' ? expr.agg.name : null;
       if (n === 'count') return 'int';
       if (n === 'mean' || n === 'std') return 'float';
-      if (n === 'sum') return expr.agg.args[0] && inferType(expr.agg.args[0], ctx) === 'int' ? 'int' : 'float';
+      if (n === 'sum') return expr.agg.args[0] && inferExprType(expr.agg.args[0], ctx) === 'int' ? 'int' : 'float';
       // min/max + positional (prev/next/first/last) take the arg's type
-      if (['min', 'max', 'prev', 'next', 'first', 'last'].includes(n)) return expr.agg.args[0] ? inferType(expr.agg.args[0], ctx) : 'dynamic';
+      if (['min', 'max', 'prev', 'next', 'first', 'last'].includes(n)) return expr.agg.args[0] ? inferExprType(expr.agg.args[0], ctx) : 'dynamic';
       return 'dynamic';
     }
     case 'JoinAgg': {
@@ -166,7 +166,7 @@ export function schemaPass(ast, inputSchema = [], opts = {}) {
     for (const st of statements) {
       switch (st.type) {
         case 'Assign': {
-          const t = st.target.spec && st.target.spec.vtype ? st.target.spec.vtype : inferType(st.value, ctx);
+          const t = st.target.spec && st.target.spec.vtype ? st.target.spec.vtype : inferExprType(st.value, ctx);
           if (st.kind === 'let') lets.set(st.target.name, t);
           else declare(st.target.name, t, !!(st.target.spec && st.target.spec.vtype));
           if (units) {
@@ -214,7 +214,7 @@ export function schemaPass(ast, inputSchema = [], opts = {}) {
           break;
         }
         case 'Control': break;                             // delete / exit: no schema effect
-        case 'Check': inferType(st.test, ctx); break;      // validate refs (warns); no output column
+        case 'Check': inferExprType(st.test, ctx); break;      // validate refs (warns); no output column
         default: break;
       }
     }

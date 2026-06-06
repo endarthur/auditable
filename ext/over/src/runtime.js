@@ -19,7 +19,7 @@ import { isAbsent } from './util.js';
 function n(x) { return x == null ? NaN : Number(x); }
 
 // non-null/non-NaN comparison: numeric when both are numbers, else lexical (like sift)
-function cmp(a, b) {
+function _overCmp(a, b) {
   if (typeof a === 'number' && typeof b === 'number') return a - b;
   if (typeof a === 'boolean' || typeof b === 'boolean') return Number(a) - Number(b);
   const sa = String(a), sb = String(b);
@@ -41,12 +41,12 @@ export const overRuntime = {
   div: (a, b) => n(a) / n(b),
 
   // ── comparison (absent → false; → bool) ──
-  eq: (a, b) => !isAbsent(a) && !isAbsent(b) && (a === b || cmp(a, b) === 0),
-  ne: (a, b) => !isAbsent(a) && !isAbsent(b) && !(a === b || cmp(a, b) === 0),
-  lt: (a, b) => !isAbsent(a) && !isAbsent(b) && cmp(a, b) < 0,
-  le: (a, b) => !isAbsent(a) && !isAbsent(b) && cmp(a, b) <= 0,
-  gt: (a, b) => !isAbsent(a) && !isAbsent(b) && cmp(a, b) > 0,
-  ge: (a, b) => !isAbsent(a) && !isAbsent(b) && cmp(a, b) >= 0,
+  eq: (a, b) => !isAbsent(a) && !isAbsent(b) && (a === b || _overCmp(a, b) === 0),
+  ne: (a, b) => !isAbsent(a) && !isAbsent(b) && !(a === b || _overCmp(a, b) === 0),
+  lt: (a, b) => !isAbsent(a) && !isAbsent(b) && _overCmp(a, b) < 0,
+  le: (a, b) => !isAbsent(a) && !isAbsent(b) && _overCmp(a, b) <= 0,
+  gt: (a, b) => !isAbsent(a) && !isAbsent(b) && _overCmp(a, b) > 0,
+  ge: (a, b) => !isAbsent(a) && !isAbsent(b) && _overCmp(a, b) >= 0,
   rel: (op, a, b) => overRuntime[{ '==': 'eq', '!=': 'ne', '<': 'lt', '<=': 'le', '>': 'gt', '>=': 'ge' }[op]](a, b),
 
   // ── logical (→ bool) ──
