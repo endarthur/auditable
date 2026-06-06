@@ -1,0 +1,31 @@
+{
+  "name": "@gcu/dimensions",
+  "version": "0.1.0",
+  "description": "Zero-dependency dimension algebra: dimensions as sparse {axis: exponent} maps forming a free abelian group under multiplication (componentwise exponent arithmetic), plus a name → dim-vector registry. The shared core under dimensional analysis — @gcu/numbat builds unit resolution on it; @gcu/over builds grade-math checking on it.",
+  "type": "module",
+  "main": "./src/dimensions.js",
+  "exports": {
+    ".": "./src/dimensions.js",
+    "./bundled": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "index.js"
+  ],
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": ["dimensions", "dimensional-analysis", "units", "quantity", "abelian-group", "auditable", "gcu"],
+  "license": "MIT",
+  "author": "Arthur Endlein Correia",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endarthur/auditable.git",
+    "directory": "ext/dimensions"
+  },
+  "homepage": "https://github.com/endarthur/auditable/tree/main/ext/dimensions",
+  "bugs": {
+    "url": "https://github.com/endarthur/auditable/issues"
+  }
+}
