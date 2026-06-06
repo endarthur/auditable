@@ -62,7 +62,17 @@ export function emitExpr(e, ec) {
       const pos = s.posProbe ? emitExpr(s.posProbe, ec) : 'null';
       return `ctx.lookup(${s.indexId}, ${eq}, ${pos}, ${JSON.stringify(s.valueCol)})`;
     }
-    case 'Qualified': throw new Error('over: a qualified reference (table.col) is only valid in a lookup `where` clause');
+    case 'JoinAgg': {
+      if (!ec.hasCtx) throw new Error('over: a join aggregate is not allowed inside a window aggregate / order / where');
+      const s = e._jaSpec;                  // eq/lo/hi probes evaluate against THIS row
+      const eq = `[${s.eqProbes.map((p) => emitExpr(p, ec)).join(', ')}]`;
+      const lo = s.loProbe ? emitExpr(s.loProbe, ec) : 'null';
+      const hi = s.hiProbe ? emitExpr(s.hiProbe, ec) : 'null';
+      return `ctx.joinAgg(${s.jaId}, ${eq}, ${lo}, ${hi})`;
+    }
+    case 'Qualified':                       // matched-row ref — only emittable in a join arg ec
+      if (ec.qualified) return ec.qualified(e);
+      throw new Error('over: a qualified reference (table.col) is only valid in a `lookup`/join `where` clause');
     default: throw new Error(`over emit: unknown expression "${e.type}"`);
   }
 }

@@ -16,20 +16,29 @@ const isAbsent = (x) => x == null || x !== x;
 const numCmp = (a, b) => Number(a) - Number(b);
 const FLIP = { '<': '>', '<=': '>=', '>': '<', '>=': '<=', '==': '==' };
 
-// Analyze a Lookup node's value + predicate → equality refs/probes + an optional
-// range. Throws on anything outside `and` of `TABLE.col <cmp> rowValue`.
-function analyze(node) {
-  if (node.value.type !== 'Qualified') throw new Error('over: lookup expects `lookup TABLE.column where …`');
-  const table = node.value.table, valueCol = node.value.col;
+// The table a predicate joins against = the first qualified ref's table.
+export function tableOfPredicate(pred) {
+  let t = null;
+  (function f(e) { if (!e || typeof e !== 'object' || t) return; if (e.type === 'Qualified') { t = e.table; return; } f(e.left); f(e.right); })(pred);
+  return t;
+}
+
+// Decompose an `and` of comparisons (`TABLE.col <cmp> rowValue`) into equality
+// terms + an optional range pair. Shared by `lookup` (point-in-interval) and the
+// aggregating join (interval overlap) — the ONLY difference between the two is
+// whether the two range bounds probe the same row value (`from <= DEPTH < to` →
+// contains) or two different ones (`from < TO and to > FROM` → overlap). Both fall
+// out of the same analysis; `loProbe`/`hiProbe` carry them for whoever needs them.
+export function analyzePredicate(predicate, table) {
   const terms = [];
-  (function flat(e) { if (e && e.type === 'Binary' && e.op === 'and') { flat(e.left); flat(e.right); } else terms.push(e); })(node.predicate);
+  (function flat(e) { if (e && e.type === 'Binary' && e.op === 'and') { flat(e.left); flat(e.right); } else terms.push(e); })(predicate);
 
   const eqRefCols = [], eqProbes = [], lows = [], highs = [];
   for (const t of terms) {
-    if (!t || t.type !== 'Binary' || !FLIP[t.op]) throw new Error('over: a lookup `where` must be comparisons joined by `and`');
+    if (!t || t.type !== 'Binary' || !FLIP[t.op]) throw new Error('over: a `where` must be comparisons joined by `and`');
     const lq = t.left.type === 'Qualified' && t.left.table === table;
     const rq = t.right.type === 'Qualified' && t.right.table === table;
-    if (lq === rq) throw new Error(`over: each lookup condition must compare ${table}.<col> with a row value`);
+    if (lq === rq) throw new Error(`over: each condition must compare ${table}.<col> with a row value`);
     const refCol = lq ? t.left.col : t.right.col;
     const op = lq ? t.op : FLIP[t.op];            // normalize: ref on the left
     const probe = lq ? t.right : t.left;
@@ -42,8 +51,18 @@ function analyze(node) {
   if (lows.length || highs.length) {
     if (lows.length !== 1 || highs.length !== 1)
       throw new Error('over: a range needs one lower (TABLE.from <= pos) and one upper (pos < TABLE.to) bound');
-    range = { loCol: lows[0].refCol, hiCol: highs[0].refCol, loOp: lows[0].op, hiOp: highs[0].op, posProbe: lows[0].probe };
+    range = { loCol: lows[0].refCol, hiCol: highs[0].refCol, loOp: lows[0].op, hiOp: highs[0].op,
+      loProbe: lows[0].probe, hiProbe: highs[0].probe, posProbe: lows[0].probe };
   }
+  return { eqRefCols, eqProbes, range };
+}
+
+// Analyze a Lookup node's value + predicate → equality refs/probes + an optional
+// range. Throws on anything outside `and` of `TABLE.col <cmp> rowValue`.
+function analyze(node) {
+  if (node.value.type !== 'Qualified') throw new Error('over: lookup expects `lookup TABLE.column where …`');
+  const table = node.value.table, valueCol = node.value.col;
+  const { eqRefCols, eqProbes, range } = analyzePredicate(node.predicate, table);
   return { table, valueCol, eqRefCols, eqProbes, range };
 }
 

@@ -14,6 +14,7 @@ import { compileRowFn } from './emit.js';
 import { applyRows } from './driver.js';
 import { collectWindows } from './windows.js';
 import { collectLookups } from './lookup.js';
+import { collectJoinAggs } from './join.js';
 
 function inferSchema(rows) {
   if (!rows || !rows.length) return [];
@@ -29,7 +30,8 @@ function inferSchema(rows) {
 export function compile(text, opts = {}) {
   const ast = parse(text);
   const windowDefs = collectWindows(ast);     // tags Window nodes with _winId — BEFORE emit
-  const lookupSpecs = collectLookups(ast);    // validates lookup() shapes + the (table,key) build specs
+  const lookupSpecs = collectLookups(ast);    // validates lookup shapes + the (table,key) build specs
+  const joinSpecs = collectJoinAggs(ast);     // validates `AGG(args) where …` joins + compiles per-match args
   const rowFn = compileRowFn(ast);
   const staticSchema = opts.inputSchema ? schemaPass(ast, opts.inputSchema, opts) : null;
   return {
@@ -38,12 +40,13 @@ export function compile(text, opts = {}) {
     source: rowFn.source,
     windows: windowDefs.length,
     lookups: lookupSpecs.length,
+    joins: joinSpecs.length,
     outputColumns: staticSchema ? staticSchema.columns : null,
     warnings: staticSchema ? staticSchema.warnings : null,
-    // tables: { name: rows[] | {rows} } — the reference tables lookup() reads.
+    // tables: { name: rows[] | {rows} } — the reference tables lookup / join read.
     run(rows, tables) {
       const sch = staticSchema || schemaPass(ast, inferSchema(rows), opts);
-      return { columns: sch.columns, rows: applyRows(rowFn, sch.columns, rows, windowDefs, lookupSpecs, tables) };
+      return { columns: sch.columns, rows: applyRows(rowFn, sch.columns, rows, windowDefs, lookupSpecs, joinSpecs, tables) };
     },
   };
 }

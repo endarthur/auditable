@@ -295,6 +295,14 @@ function parseTokens(toks) {
       if (isId('order')) { next(); if (isId('by')) next(); win.order = parseExpr(); }
       if (isId('where')) { next(); win.where = parseExpr(); }
       e = win;
+    } else if (isId('where') && e.type === 'Call') {
+      // aggregating join: `AGG(args) where PREDICATE` (no `over`). Only an aggregate
+      // CALL takes a bare `where` — so a window's `order EXPR where FILTER` (EXPR is
+      // a plain field/expr) isn't misread as a join. The predicate is greedy
+      // (consumes to end of expression, like `lookup`) — so inline use needs an
+      // assign-first. join.js validates the aggregate + analyzes the predicate.
+      next();
+      e = { type: 'JoinAgg', agg: e, predicate: parseExpr() };
     }
     return e;
   }
@@ -478,6 +486,13 @@ function inferType(expr, ctx) {
       // min/max + positional (prev/next/first/last) take the arg's type
       if (['min', 'max', 'prev', 'next', 'first', 'last'].includes(n)) return expr.agg.args[0] ? inferType(expr.agg.args[0], ctx) : 'dynamic';
       return 'dynamic';
+    }
+    case 'JoinAgg': {
+      // aggregate over another table — args reference the MATCHED row (unknown to
+      // this schema), so the type is fixed by the aggregate, not the arg.
+      const n = expr.agg && expr.agg.type === 'Call' ? expr.agg.name : null;
+      if (n === 'count') return 'int';
+      return 'float';                       // sum/mean/min/max/std/wmean over matches
     }
     default: return 'dynamic';
   }
@@ -746,7 +761,17 @@ function emitExpr(e, ec) {
       const pos = s.posProbe ? emitExpr(s.posProbe, ec) : 'null';
       return `ctx.lookup(${s.indexId}, ${eq}, ${pos}, ${JSON.stringify(s.valueCol)})`;
     }
-    case 'Qualified': throw new Error('over: a qualified reference (table.col) is only valid in a lookup `where` clause');
+    case 'JoinAgg': {
+      if (!ec.hasCtx) throw new Error('over: a join aggregate is not allowed inside a window aggregate / order / where');
+      const s = e._jaSpec;                  // eq/lo/hi probes evaluate against THIS row
+      const eq = `[${s.eqProbes.map((p) => emitExpr(p, ec)).join(', ')}]`;
+      const lo = s.loProbe ? emitExpr(s.loProbe, ec) : 'null';
+      const hi = s.hiProbe ? emitExpr(s.hiProbe, ec) : 'null';
+      return `ctx.joinAgg(${s.jaId}, ${eq}, ${lo}, ${hi})`;
+    }
+    case 'Qualified':                       // matched-row ref — only emittable in a join arg ec
+      if (ec.qualified) return ec.qualified(e);
+      throw new Error('over: a qualified reference (table.col) is only valid in a `lookup`/join `where` clause');
     default: throw new Error(`over emit: unknown expression "${e.type}"`);
   }
 }
@@ -1023,20 +1048,29 @@ const isAbsent = (x) => x == null || x !== x;
 const numCmp = (a, b) => Number(a) - Number(b);
 const FLIP = { '<': '>', '<=': '>=', '>': '<', '>=': '<=', '==': '==' };
 
-// Analyze a Lookup node's value + predicate → equality refs/probes + an optional
-// range. Throws on anything outside `and` of `TABLE.col <cmp> rowValue`.
-function analyze(node) {
-  if (node.value.type !== 'Qualified') throw new Error('over: lookup expects `lookup TABLE.column where …`');
-  const table = node.value.table, valueCol = node.value.col;
+// The table a predicate joins against = the first qualified ref's table.
+function tableOfPredicate(pred) {
+  let t = null;
+  (function f(e) { if (!e || typeof e !== 'object' || t) return; if (e.type === 'Qualified') { t = e.table; return; } f(e.left); f(e.right); })(pred);
+  return t;
+}
+
+// Decompose an `and` of comparisons (`TABLE.col <cmp> rowValue`) into equality
+// terms + an optional range pair. Shared by `lookup` (point-in-interval) and the
+// aggregating join (interval overlap) — the ONLY difference between the two is
+// whether the two range bounds probe the same row value (`from <= DEPTH < to` →
+// contains) or two different ones (`from < TO and to > FROM` → overlap). Both fall
+// out of the same analysis; `loProbe`/`hiProbe` carry them for whoever needs them.
+function analyzePredicate(predicate, table) {
   const terms = [];
-  (function flat(e) { if (e && e.type === 'Binary' && e.op === 'and') { flat(e.left); flat(e.right); } else terms.push(e); })(node.predicate);
+  (function flat(e) { if (e && e.type === 'Binary' && e.op === 'and') { flat(e.left); flat(e.right); } else terms.push(e); })(predicate);
 
   const eqRefCols = [], eqProbes = [], lows = [], highs = [];
   for (const t of terms) {
-    if (!t || t.type !== 'Binary' || !FLIP[t.op]) throw new Error('over: a lookup `where` must be comparisons joined by `and`');
+    if (!t || t.type !== 'Binary' || !FLIP[t.op]) throw new Error('over: a `where` must be comparisons joined by `and`');
     const lq = t.left.type === 'Qualified' && t.left.table === table;
     const rq = t.right.type === 'Qualified' && t.right.table === table;
-    if (lq === rq) throw new Error(`over: each lookup condition must compare ${table}.<col> with a row value`);
+    if (lq === rq) throw new Error(`over: each condition must compare ${table}.<col> with a row value`);
     const refCol = lq ? t.left.col : t.right.col;
     const op = lq ? t.op : FLIP[t.op];            // normalize: ref on the left
     const probe = lq ? t.right : t.left;
@@ -1049,8 +1083,18 @@ function analyze(node) {
   if (lows.length || highs.length) {
     if (lows.length !== 1 || highs.length !== 1)
       throw new Error('over: a range needs one lower (TABLE.from <= pos) and one upper (pos < TABLE.to) bound');
-    range = { loCol: lows[0].refCol, hiCol: highs[0].refCol, loOp: lows[0].op, hiOp: highs[0].op, posProbe: lows[0].probe };
+    range = { loCol: lows[0].refCol, hiCol: highs[0].refCol, loOp: lows[0].op, hiOp: highs[0].op,
+      loProbe: lows[0].probe, hiProbe: highs[0].probe, posProbe: lows[0].probe };
   }
+  return { eqRefCols, eqProbes, range };
+}
+
+// Analyze a Lookup node's value + predicate → equality refs/probes + an optional
+// range. Throws on anything outside `and` of `TABLE.col <cmp> rowValue`.
+function analyze(node) {
+  if (node.value.type !== 'Qualified') throw new Error('over: lookup expects `lookup TABLE.column where …`');
+  const table = node.value.table, valueCol = node.value.col;
+  const { eqRefCols, eqProbes, range } = analyzePredicate(node.predicate, table);
   return { table, valueCol, eqRefCols, eqProbes, range };
 }
 
@@ -1146,21 +1190,25 @@ function makeLookup(indexes) {
 
 
 
+
 const NO_WIN = () => null;
 
-function applyRows(rowFn, outputColumns, rows, windowDefs, lookupDefs, tables) {
+function applyRows(rowFn, outputColumns, rows, windowDefs, lookupDefs, joinDefs, tables) {
   const names = outputColumns.map((c) => c.name);
   const winResults = windowDefs && windowDefs.length ? computeWindows(windowDefs, rows) : null;
-  // build the lookup indexes once (hash, or per-eq-key sorted intervals) per the
-  // analyzed predicate shape, before the row pass.
+  // build the lookup / join indexes once (hash, or per-eq-key sorted intervals) per
+  // the analyzed predicate shape, before the row pass.
   const lookup = hasLookups(lookupDefs) ? makeLookup(buildLookups(lookupDefs, tables || {})) : NO_WIN;
+  const joinAgg = hasJoinAggs(joinDefs) ? makeJoinAgg(buildJoinIndexes(joinDefs, tables || {}), joinDefs) : null;
 
   const out = [];
   for (let i = 0; i < rows.length; i++) {
     const work = { ...rows[i] };             // seed from input → unassigned columns pass through
-    // ctx.win carries the row index so ordered (running) windows resolve per-row.
+    // ctx.win carries the row index so ordered (running) windows resolve per-row;
+    // ctx.joinAgg gets the working row so aggregate args can read this row's fields.
     const win = winResults ? (id, key) => winLookup(winResults, id, key, i) : NO_WIN;
-    const ctx = { drop: false, exit: false, win, lookup };
+    const ctx = { drop: false, exit: false, win, lookup, joinAgg: NO_WIN };
+    if (joinAgg) ctx.joinAgg = (id, eq, lo, hi) => joinAgg(id, eq, lo, hi, work);
     rowFn.run(work, ctx);
     if (!ctx.drop) {
       const projected = {};
@@ -1190,6 +1238,7 @@ function applyRows(rowFn, outputColumns, rows, windowDefs, lookupDefs, tables) {
 
 
 
+
 function inferSchema(rows) {
   if (!rows || !rows.length) return [];
   const r0 = rows[0];
@@ -1204,7 +1253,8 @@ function inferSchema(rows) {
 function compile(text, opts = {}) {
   const ast = parse(text);
   const windowDefs = collectWindows(ast);     // tags Window nodes with _winId — BEFORE emit
-  const lookupSpecs = collectLookups(ast);    // validates lookup() shapes + the (table,key) build specs
+  const lookupSpecs = collectLookups(ast);    // validates lookup shapes + the (table,key) build specs
+  const joinSpecs = collectJoinAggs(ast);     // validates `AGG(args) where …` joins + compiles per-match args
   const rowFn = compileRowFn(ast);
   const staticSchema = opts.inputSchema ? schemaPass(ast, opts.inputSchema, opts) : null;
   return {
@@ -1213,12 +1263,13 @@ function compile(text, opts = {}) {
     source: rowFn.source,
     windows: windowDefs.length,
     lookups: lookupSpecs.length,
+    joins: joinSpecs.length,
     outputColumns: staticSchema ? staticSchema.columns : null,
     warnings: staticSchema ? staticSchema.warnings : null,
-    // tables: { name: rows[] | {rows} } — the reference tables lookup() reads.
+    // tables: { name: rows[] | {rows} } — the reference tables lookup / join read.
     run(rows, tables) {
       const sch = staticSchema || schemaPass(ast, inferSchema(rows), opts);
-      return { columns: sch.columns, rows: applyRows(rowFn, sch.columns, rows, windowDefs, lookupSpecs, tables) };
+      return { columns: sch.columns, rows: applyRows(rowFn, sch.columns, rows, windowDefs, lookupSpecs, joinSpecs, tables) };
     },
   };
 }
@@ -1265,7 +1316,7 @@ const KEYWORDS = new Set([
 ]);
 const LITERALS = new Set(['true', 'false', 'absent']);
 const FUNCTIONS = new Set([
-  'count', 'sum', 'mean', 'min', 'max', 'std', 'minia', 'maxia',
+  'count', 'sum', 'mean', 'min', 'max', 'std', 'minia', 'maxia', 'wmean', 'overlap',
   'prev', 'next', 'first', 'last',
   'abs', 'sqrt', 'exp', 'log', 'loge', 'logn', 'log10', 'pow', 'rais', 'mod',
   'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2', 'int', 'round', 'present',
@@ -1323,6 +1374,7 @@ if (typeof window !== 'undefined') {
 export {
   OverLexError,
   OverParseError,
+  analyzePredicate,
   applyRows,
   buildLookups,
   collectLookups,
@@ -1336,12 +1388,14 @@ export {
   hasLookups,
   inferType,
   lex,
+  makeAcc,
   makeLookup,
   over,
   overRuntime,
   parse,
   parseTokens,
   schemaPass,
+  tableOfPredicate,
   unify,
   winLookup,
 };

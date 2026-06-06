@@ -89,6 +89,13 @@ export function inferType(expr, ctx) {
       if (['min', 'max', 'prev', 'next', 'first', 'last'].includes(n)) return expr.agg.args[0] ? inferType(expr.agg.args[0], ctx) : 'dynamic';
       return 'dynamic';
     }
+    case 'JoinAgg': {
+      // aggregate over another table — args reference the MATCHED row (unknown to
+      // this schema), so the type is fixed by the aggregate, not the arg.
+      const n = expr.agg && expr.agg.type === 'Call' ? expr.agg.name : null;
+      if (n === 'count') return 'int';
+      return 'float';                       // sum/mean/min/max/std/wmean over matches
+    }
     default: return 'dynamic';
   }
 }

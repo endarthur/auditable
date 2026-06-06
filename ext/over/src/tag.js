@@ -39,7 +39,7 @@ const KEYWORDS = new Set([
 ]);
 const LITERALS = new Set(['true', 'false', 'absent']);
 const FUNCTIONS = new Set([
-  'count', 'sum', 'mean', 'min', 'max', 'std', 'minia', 'maxia',
+  'count', 'sum', 'mean', 'min', 'max', 'std', 'minia', 'maxia', 'wmean', 'overlap',
   'prev', 'next', 'first', 'last',
   'abs', 'sqrt', 'exp', 'log', 'loge', 'logn', 'log10', 'pow', 'rais', 'mod',
   'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2', 'int', 'round', 'present',

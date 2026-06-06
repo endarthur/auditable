@@ -181,6 +181,14 @@ export function parseTokens(toks) {
       if (isId('order')) { next(); if (isId('by')) next(); win.order = parseExpr(); }
       if (isId('where')) { next(); win.where = parseExpr(); }
       e = win;
+    } else if (isId('where') && e.type === 'Call') {
+      // aggregating join: `AGG(args) where PREDICATE` (no `over`). Only an aggregate
+      // CALL takes a bare `where` — so a window's `order EXPR where FILTER` (EXPR is
+      // a plain field/expr) isn't misread as a join. The predicate is greedy
+      // (consumes to end of expression, like `lookup`) — so inline use needs an
+      // assign-first. join.js validates the aggregate + analyzes the predicate.
+      next();
+      e = { type: 'JoinAgg', agg: e, predicate: parseExpr() };
     }
     return e;
   }

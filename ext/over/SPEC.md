@@ -239,9 +239,23 @@ Everything we want, tagged by phase. **v0 / v0.1 are proposals to discuss.**
   (the geology join: domain-by-depth / desurvey). Half-open `[lo, hi)` is *explicit in
   the predicate* (`<=`, `<`) — nothing inferred. Table injected by name; left-join
   (unmatched → absent); index built once per (table, eq-cols, range-cols), shared
-  across value columns. Replaced the positional `lookup()`/`lookup_in()`. Next:
-  aggregating one-to-many joins (**compositing** — a window/aggregate over the joined
-  set; a separate, bigger feature).
+  across value columns. Replaced the positional `lookup()`/`lookup_in()`.
+- **aggregating join — SHIPPED** (the natural seam past single-match `lookup`).
+  `AGG(args) where PREDICATE` (no `over` — that aggregates THIS table; this aggregates
+  ANOTHER). Same predicate machinery as `lookup`, but it **enumerates every match and
+  folds it through an accumulator**: `count() / sum / mean / min / max / std /
+  wmean(value, weight)`. The predicate shape picks the index just as for `lookup` —
+  and a range pair becomes an interval-**overlap** query (`assays.from < TO and
+  assays.to > FROM` → ref intervals overlapping this row's `[FROM, TO)`). `overlap` (a
+  contextual word in the aggregate args) is the per-match overlap length, so the
+  compositing grade-math is one line:
+  `GRADE = wmean(assays.fe, overlap) where assays.hole == hole and assays.from < TO and assays.to > FROM`.
+  Aggregate args read the matched row via qualified refs (`assays.fe`) and this row by
+  bare name; left-join (no matches → absent / count 0). This is OVER's half of
+  **compositing** — the grade population; *generating the composite skeleton* (1→many)
+  and the algorithm knobs (min length, residuals, domain-honoring) stay a dedicated
+  tool that *uses* this join. (The seam: OVER owns join+aggregate; the parameterized
+  algorithm doesn't belong in the grammar.)
 - **units** propagation + checking (native) — grade math that catches %-vs-g/t.
 
 ### Auditable QA + power — **v1/v2**

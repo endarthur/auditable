@@ -524,6 +524,86 @@ test('compile: a lopsided range predicate is rejected', () => {
   assert.throws(() => compile('X = lookup t.v where t.k == K and t.lo <= D'), /one lower.*one upper/);   // only a lower bound
 });
 
+// ── aggregating join: AGG(args) where PREDICATE (the natural seam) ──
+// composites down a hole; raw assays to aggregate over the overlaps.
+const COMPS = [
+  { hole: 'DDH1', FROM: 0, TO: 10 },
+  { hole: 'DDH1', FROM: 10, TO: 20 },
+  { hole: 'DDH2', FROM: 0, TO: 10 },
+  { hole: 'DDH3', FROM: 0, TO: 10 },   // no assays for this hole
+];
+const RAW = [
+  { hole: 'DDH1', from: 0, to: 4, fe: 60 },     // → comp [0,10): 4 m @ 60
+  { hole: 'DDH1', from: 4, to: 10, fe: 50 },    // → comp [0,10): 6 m @ 50
+  { hole: 'DDH1', from: 8, to: 16, fe: 40 },    // straddles [0,10) (2 m) and [10,20) (6 m)
+  { hole: 'DDH1', from: 16, to: 24, fe: 30 },   // → comp [10,20): 4 m @ 30
+  { hole: 'DDH2', from: 0, to: 10, fe: 70 },    // → comp [0,10): 10 m @ 70
+];
+
+test('parse: AGG(args) where … → JoinAgg node (no `over`)', () => {
+  const v = stmts('N = count() where assays.hole == hole')[0].value;
+  assert.equal(v.type, 'JoinAgg');
+  assert.equal(v.agg.type, 'Call'); assert.equal(v.agg.name, 'count');
+  assert.equal(v.predicate.op, '==');
+});
+
+test('run: count() over the overlapping assays (one index)', () => {
+  const t = compile('N = count() where assays.hole == hole and assays.from < TO and assays.to > FROM');
+  assert.equal(t.joins, 1);
+  // [0,10) overlaps the first three; [10,20) overlaps the straddler + the 4th; DDH2 one; DDH3 none.
+  assert.deepEqual(t.run(COMPS, { assays: RAW }).rows.map((x) => x.N), [3, 2, 1, 0]);
+});
+
+test('run: max(assays.fe) over the overlaps (matched-row ref)', () => {
+  const out = compile('MAXFE = max(assays.fe) where assays.hole == hole and assays.from < TO and assays.to > FROM')
+    .run(COMPS, { assays: RAW }).rows;
+  assert.deepEqual(out.map((x) => x.MAXFE), [60, 40, 70, NaN]);   // no match → absent (NaN)
+});
+
+test('run: wmean(assays.fe, overlap) is length-weighted compositing', () => {
+  const out = compile('GRADE = wmean(assays.fe, overlap) where assays.hole == hole and assays.from < TO and assays.to > FROM')
+    .run(COMPS, { assays: RAW }).rows;
+  // [0,10): (4·60 + 6·50 + 2·40)/(4+6+2) = (240+300+80)/12 = 620/12
+  assert.ok(Math.abs(out[0].GRADE - 620 / 12) < 1e-9);
+  // [10,20): (6·40 + 4·30)/10 = (240+120)/10 = 36
+  assert.ok(Math.abs(out[1].GRADE - 36) < 1e-9);
+  assert.equal(out[2].GRADE, 70);        // DDH2: single 10 m @ 70
+  assert.ok(Number.isNaN(out[3].GRADE)); // DDH3: no overlaps → absent
+});
+
+test('run: equality-only join aggregates the whole matched group', () => {
+  const out = compile('AVG = mean(assays.fe) where assays.hole == hole').run(COMPS, { assays: RAW }).rows;
+  assert.ok(Math.abs(out[0].AVG - (60 + 50 + 40 + 30) / 4) < 1e-9);   // all DDH1 assays (no interval)
+  assert.equal(out[2].AVG, 70);
+  assert.ok(Number.isNaN(out[3].AVG));
+});
+
+test('run: a join aggregate composes once assigned', () => {
+  const out = compile([
+    'G = wmean(assays.fe, overlap) where assays.hole == hole and assays.from < TO and assays.to > FROM',
+    'LEN = TO - FROM',
+    'METAL = G * LEN',
+  ].join('\n')).run(COMPS, { assays: RAW }).rows;
+  assert.ok(Math.abs(out[0].METAL - (620 / 12) * 10) < 1e-9);
+});
+
+test('compile: malformed join aggregates are rejected', () => {
+  assert.throws(() => compile('X = median(assays.fe) where assays.hole == hole'), /must be count\/sum/);  // not an aggregate
+  assert.throws(() => compile('X = count(assays.fe) where assays.hole == hole'), /count\(\) takes no/);    // count + arg
+  assert.throws(() => compile('X = wmean(assays.fe) where assays.hole == hole'), /value and a weight/);    // wmean needs 2
+  assert.throws(() => compile('X = mean(assays.fe) where K == hole'), /must compare a table column/);      // no qualified ref
+});
+
+test('compile: a join table missing at run throws', () => {
+  assert.throws(() => compile('X = count() where assays.hole == hole').run(COMPS, {}), /not.*provided/);
+});
+
+test('schema: a join aggregate types as int (count) / float (rest)', () => {
+  const c = compile('N = count() where t.k == K\nA = mean(t.v) where t.k == K', { inputSchema: [{ name: 'K', type: 'string' }] });
+  const by = Object.fromEntries(c.outputColumns.map((x) => [x.name, x.vtype]));
+  assert.equal(by.N, 'int'); assert.equal(by.A, 'float');
+});
+
 // ── the notebook tag ──
 test('tag: over`…`(rows) compiles + applies; rows carry .columns', async () => {
   const { over } = await import('../ext/over/src/tag.js');

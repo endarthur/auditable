@@ -9,22 +9,26 @@
 
 import { computeWindows, winLookup } from './windows.js';
 import { buildLookups, makeLookup, hasLookups } from './lookup.js';
+import { buildJoinIndexes, makeJoinAgg, hasJoinAggs } from './join.js';
 
 const NO_WIN = () => null;
 
-export function applyRows(rowFn, outputColumns, rows, windowDefs, lookupDefs, tables) {
+export function applyRows(rowFn, outputColumns, rows, windowDefs, lookupDefs, joinDefs, tables) {
   const names = outputColumns.map((c) => c.name);
   const winResults = windowDefs && windowDefs.length ? computeWindows(windowDefs, rows) : null;
-  // build the lookup indexes once (hash, or per-eq-key sorted intervals) per the
-  // analyzed predicate shape, before the row pass.
+  // build the lookup / join indexes once (hash, or per-eq-key sorted intervals) per
+  // the analyzed predicate shape, before the row pass.
   const lookup = hasLookups(lookupDefs) ? makeLookup(buildLookups(lookupDefs, tables || {})) : NO_WIN;
+  const joinAgg = hasJoinAggs(joinDefs) ? makeJoinAgg(buildJoinIndexes(joinDefs, tables || {}), joinDefs) : null;
 
   const out = [];
   for (let i = 0; i < rows.length; i++) {
     const work = { ...rows[i] };             // seed from input → unassigned columns pass through
-    // ctx.win carries the row index so ordered (running) windows resolve per-row.
+    // ctx.win carries the row index so ordered (running) windows resolve per-row;
+    // ctx.joinAgg gets the working row so aggregate args can read this row's fields.
     const win = winResults ? (id, key) => winLookup(winResults, id, key, i) : NO_WIN;
-    const ctx = { drop: false, exit: false, win, lookup };
+    const ctx = { drop: false, exit: false, win, lookup, joinAgg: NO_WIN };
+    if (joinAgg) ctx.joinAgg = (id, eq, lo, hi) => joinAgg(id, eq, lo, hi, work);
     rowFn.run(work, ctx);
     if (!ctx.drop) {
       const projected = {};

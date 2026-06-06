@@ -66,7 +66,7 @@ export function collectWindows(ast) {
 // A streaming accumulator per aggregate (absent ignored; count() counts rows). std
 // is population std (Welford). For ordered windows the same accumulator is fed in
 // sorted order, reading result() after each row → the running value.
-function makeAcc(aggName) {
+export function makeAcc(aggName) {
   switch (aggName) {
     case 'count': { let n = 0; return { add() { n++; }, result() { return n; } }; }
     case 'sum': { let s = 0, any = false; return { add(v) { if (!isAbsent(v)) { s += Number(v); any = true; } }, result() { return any ? s : NaN; } }; }
