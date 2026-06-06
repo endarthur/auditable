@@ -293,9 +293,97 @@ Everything we want, tagged by phase. **v0 / v0.1 are proposals to discuss.**
   windows group by input columns); `binlabel(value, b1, …, bn)` → a readable range
   (`"< 40"` / `"40 - 50"` / `">= 60"`). Vararg functions, no grammar change. *Next here:*
   `units`.
-- **`emit`** — one row → many (compositing skeleton / desurvey / subcell fan-out);
-  gated, breaks 1:1. The other half of compositing (the aggregating join is built; this
-  generates the skeleton it populates).
+- **`emit` — designed, not built (parked).** One row → many (the `flatMap`/`UNNEST`
+  OVER lacks): composite skeletons, subcells, desurvey stations, melt/unpivot. The
+  dogfood (below) made it the #1 evidence-backed gap — it's the one feature standing
+  between OVER and *end-to-end* compositing (the aggregating join populates the
+  skeleton; `emit` would generate it).
+
+  **Design of record — Model B (declarative comprehension), NOT imperative loops.**
+  OVER has deliberately no loops; bolting on `for`/`while` would change what it *is*
+  and muddy the "columns resolved before any row runs" guarantee. Instead `emit`
+  introduces a sub-iteration over a *generator* and runs the existing body grammar once
+  per element:
+
+  ```
+  emit F in range(0, EOH, 2)
+    FROM = F ;  TO = min(F + 2, EOH)
+    AU   = wmean(assays.Au_gpt, overlap) where assays.hole == hole and assays.from < TO and assays.to > FROM
+  end
+  ```
+
+  Semantics that fall out: each emission seeds passthrough columns from the input row +
+  body assignments + the loop var; **joins/lookups work per-emission, windows do NOT**
+  (they pre-compute over input rows in a two-pass — honest v1 restriction); one `emit`
+  per transform (it defines output cardinality); v1 generator = `range(...)` (covers
+  composites + 1D subcells); `unnest(listCol)` (melt) is v2 — needs array literals.
+  One real catch: `emit` needs a **per-hole driver table** (one row per hole with EOH)
+  — in practice the *collar table*, which every drillhole DB has (deriving it from
+  assays would be a group-*reduce*, the opposite of `emit` and also not in OVER).
+  Efficiency: same cost as the equivalent host loop — indexes built once, generator is
+  free; the scalar path is fine (the dogfood proved it). Variable cardinality forecloses
+  future full vectorization of the body — a Tier-2/AIR concern, not a v1 one.
+
+- **domain-honored compositing — a DIFFERENT beast from `emit`/`range` (deliberately
+  separate).** Real compositing must (1) honor domain boundaries (reset at each
+  contact) and (2) apply a **residual policy** — and that policy is a *closed enum*,
+  not arbitrary code: `discard` (drop the short sliver), `merge` (previous composite
+  absorbs it), `spread`/best-fit (equal lengths summing to the run). A pure arithmetic
+  `range` cannot express any of this, and bolting break-predicates + residual flags
+  onto `range` is where the design turns ugly — avoid it. The ergonomic answer makes
+  the algorithm knobs **declared parameters** (same philosophy as the SQL-y `lookup`:
+  declare *what*, the engine does *how*), as its own named operation — sketch:
+
+  ```
+  composite to 2 within DOMAIN residual spread
+    by hole order from
+    from assays
+    AU     = wmean(Au_gpt, overlap)
+    DENS   = wmean(density, overlap)
+    DOMAIN = first(DOMAIN)
+  ```
+
+  Note what this *is*: a per-hole **group-resample** (reduces many assays AND expands to
+  composites, partitioned + ordered) — quite far from "row transform", almost its own
+  thing sitting beside `emit`, not a generalization of it. **Open, deliberately
+  undecided:** whether this earns a declarative `composite` verb *in* OVER or stays a
+  `@gcu/composite` library that emits the layout for OVER's join to populate. The
+  dogfood did *naive* fixed-length compositing only, so the real parameter set + its
+  ergonomics are unproven — designing the verb now would be speculation. **Sequencing:
+  ship general `emit` (proven), then dogfood the *full* domain/residual algorithm
+  (richer host layout), then decide verb-vs-library from evidence.**
+
+### Dogfood verdict (2026-06-06) + OVER's place in the stack
+
+A synthetic 49-hole / 2017-sample dataset (spatially-correlated lognormal Au, undulating
+OX/TR/FR domains, 7 planted errors) was run through the full prep spine — validate →
+clean → code (interval join) → composite → classify → units → summarise. **It works:**
+all 7 errors caught, and the planted geology *recovered* (composite domain grades OX 1.82
+> TR 0.97 > FR 0.75 g/t — the supergene enrichment built into the sim). Real actionable
+gaps: `emit` (skeleton, #1), bare unit annotation `AU : [g/t]` with no `=` (small),
+`mode()`/majority aggregate (medium), the downhole-gap idiom (minor). Correct *boundaries*
+(not gaps): CSV reading (host), require-vs-check idiom, tonnes need 3D block volume (OVER
+does grade-thickness g/t·m), the GT *curve* (flowsheet/sluice node).
+
+**Assessment.** OVER is a sharp, coherent, auditable domain-calc DSL — feature-complete
+*enough* for its lane (the dogfood confirmed it), with a genuine moat (a transform that's
+a declared, schema-resolved, dimensionally-sound, signable artifact). Its place: the
+**declarative calc/QA layer** in a three-layer division — OVER (declare) → adder/JS
+(algorithms) → flowsheet/sluice (scale) — and the EXTRA-heritage bridge for Datamine/
+Leapfrog users. It's well-integrated (air frontend, dimensions for units, sluice for the
+aggregate scale-path, recon for unit/schema sniffing). The honest concern is that the
+*language* now runs **ahead of its context**: ahead of its surface (strata's "Transform…"
+— today it's a notebook tag), its scale (the sluice streaming path is unbuilt; the
+in-memory accumulators are v1), and its compiler story (built direct-emit; the AIR lowerer
+"one more frontend" promise is deferred). That's a *good* problem — the tool is more ready
+than its context — and it relocates the leverage: **the marginal value has shifted from
+building the language to connecting it.** Next leverage, in order: (1) OVER *in strata*
+(its surface/home — what turns it from a clever tag into the calc layer of "our Excel");
+(2) keep dogfooding the *full* workflow so the workflow drives what's next, not guesswork;
+(3) the deferred promises (sluice scale, AIR lowerer) only when a real workload pulls them.
+Discipline note: resist sprawl — `emit`-as-loops, an over-broad `composite`, speculative
+units Tier-2 — OVER stays valuable by staying *sharp*. It's a means; the estimation
+workflow is the end.
 
 ### Later / maybe
 - Parameterized reusable transforms (`define …(…)` — but the flowsheet already composes).
