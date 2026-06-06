@@ -16,6 +16,7 @@ import { renameCollisions } from './rename.js';
 import { collectRenamePatches } from './scope.js';
 import { stmtDelete, exportPrefixStrip, declaredNames, declSitePatches } from './rewrite.js';
 import { applyPatches } from './emit.js';
+import { validateDefine, collectDefinePatches } from './define.js';
 import { buildError, astLoc } from './errors.js';
 
 const PARSE_OPTS = { ecmaVersion: 'latest', sourceType: 'module', locations: true, ranges: true };
@@ -63,6 +64,7 @@ export function bundleModules(sources, opts) {
   if (sources[entry] === undefined) throw new Error(`gcu-build: entry '${entry}' not in sources`);
   const srcRoot = opts.srcRoot != null ? opts.srcRoot : dirOf(entry);
   const parse = (code) => parseModule(code, parser);
+  const defineMap = validateDefine(opts.define, parse);
 
   // ── parse + classify (memoized per path) ──────────────────────────
   const byPath = new Map();
@@ -80,6 +82,7 @@ export function bundleModules(sources, opts) {
 
     const internalImportBindings = []; // { local, source(path), imported, kind }
     const externalImports = [];        // { local, source(spec), imported, kind, node }
+    const namespaceImports = [];       // { local, source(path) } — internal `import * as ns`
     const internalDeps = [];           // resolved paths, in body order
 
     // classify imports (body-order via ast.body for deterministic dep order)
@@ -97,7 +100,8 @@ export function bundleModules(sources, opts) {
           internalDeps.push(c.path);
           for (const s of node.specifiers) {
             if (s.type === 'ImportNamespaceSpecifier') {
-              throw buildError('E007', `namespace import 'import * as ${s.local.name}' from an internal module is not supported in phase 1 ('${spec}')`, astLoc(path, node));
+              namespaceImports.push({ local: s.local.name, source: c.path });
+              continue;
             }
             internalImportBindings.push({
               local: s.local.name,
@@ -121,7 +125,8 @@ export function bundleModules(sources, opts) {
           }
         }
       } else if (node.type === 'ExportAllDeclaration') {
-        throw buildError('E007', `'export *' is not supported in phase 1`, astLoc(path, node));
+        const c = classify(node.source.value, path, srcRoot, sources, astLoc(path, node));
+        if (c.kind === 'internal') internalDeps.push(c.path);
       } else if (node.type === 'ExportDefaultDeclaration') {
         throw buildError('E005', `'export default' is not allowed in sources`, astLoc(path, node));
       } else if (node.type === 'ExportNamedDeclaration' && node.source) {
@@ -130,15 +135,17 @@ export function bundleModules(sources, opts) {
       }
     }
 
-    // own top-level bindings (declared names; NOT import locals)
+    // own top-level bindings (declared names; NOT import locals). Namespace
+    // imports synthesize a real `const ns = ...`, so they're owned bindings too.
     const ownBindings = new Set();
     for (const node of ast.body) {
       const decl = node.type === 'ExportNamedDeclaration' ? node.declaration : node;
       if (!decl) continue;
       for (const nm of declaredNames(decl)) ownBindings.add(nm);
     }
+    for (const ns of namespaceImports) ownBindings.add(ns.local);
 
-    const mod = { path, source: sources[path], ast, imports, exports, internalImportBindings, externalImports, internalDeps, ownBindings, basename: baseOf(path) };
+    const mod = { path, source: sources[path], ast, imports, exports, internalImportBindings, externalImports, namespaceImports, internalDeps, ownBindings, basename: baseOf(path) };
     byPath.set(path, mod);
     return mod;
   }
@@ -184,11 +191,69 @@ export function bundleModules(sources, opts) {
         if (m) {
           const c = classify(ex.source, modPath, srcRoot, sources, null);
           if (c.kind === 'internal') return resolveTarget(c.path, m.local, seen);
-          return name; // re-export from external — leave as-is (phase 1)
+          return name; // re-export from external — leave as-is
         }
       }
     }
     return name;
+  }
+
+  // Enumerate a module's public export surface as ordered { exported, internal }
+  // pairs, following declarations, named exports, named re-exports, and `export *`
+  // (with ESM precedence: direct exports shadow `export *`; star ambiguity → W002).
+  function exportsOf(modPath, seen = new Set()) {
+    if (seen.has(modPath)) return [];
+    seen.add(modPath);
+    const mod = byPath.get(modPath);
+    if (!mod) return [];
+    const direct = new Map();        // exported → internal
+    const star = new Map();          // exported → Set(internal)
+    for (const node of mod.ast.body) {
+      if (node.type === 'ExportNamedDeclaration') {
+        if (node.declaration) {
+          for (const nm of declaredNames(node.declaration)) direct.set(nm, outputName(mod, nm));
+        } else if (node.source) {
+          const c = classify(node.source.value, modPath, srcRoot, sources, null);
+          for (const s of node.specifiers) {
+            const exported = s.exported.name || s.exported.value;
+            const local = s.local.name || s.local.value;
+            direct.set(exported, c.kind === 'internal' ? resolveTarget(c.path, local) : local);
+          }
+        } else {
+          for (const s of node.specifiers) {
+            const exported = s.exported.name || s.exported.value;
+            const local = s.local.name || s.local.value;
+            direct.set(exported, resolveTarget(modPath, local));
+          }
+        }
+      } else if (node.type === 'ExportAllDeclaration') {
+        if (node.exported) continue; // `export * as ns` — namespace re-export, deferred
+        const c = classify(node.source.value, modPath, srcRoot, sources, null);
+        if (c.kind !== 'internal') continue; // external `export *` — not enumerable
+        for (const e of exportsOf(c.path, seen)) {
+          let set = star.get(e.exported);
+          if (!set) star.set(e.exported, (set = new Set()));
+          set.add(e.internal);
+        }
+      }
+    }
+    const out = [];
+    for (const [exported, internal] of direct) out.push({ exported, internal });
+    for (const [exported, set] of star) {
+      if (direct.has(exported)) continue; // direct export wins
+      if (set.size > 1) { warnings.push({ code: 'W002', message: `ambiguous 'export *' re-export of '${exported}' in ${modPath}` }); continue; }
+      out.push({ exported, internal: [...set][0] });
+    }
+    return out;
+  }
+
+  // define names collide with any owning module (SPEC §10).
+  for (const name of defineMap.keys()) {
+    for (const mod of order) {
+      if (mod.ownBindings.has(name)) {
+        throw buildError('E007', `define '${name}' collides with a top-level declaration in ${mod.path}`, null);
+      }
+    }
   }
 
   // ── per-module rewrite ─────────────────────────────────────────────
@@ -197,7 +262,6 @@ export function bundleModules(sources, opts) {
   const hoistVerbatim = [];       // verbatim lines (namespace/other external), deduped
   const seenSideEffect = new Set();
   const seenVerbatim = new Set();
-  const exportEntries = [];       // { exported, internal }  (entry only)
 
   const moduleOut = [];
   for (const mod of order) {
@@ -253,28 +317,14 @@ export function bundleModules(sources, opts) {
         if (node.declaration) {
           patches.push(exportPrefixStrip(node));
           declSitePatches(node.declaration, ownRenames, patches);
-          if (isEntry) {
-            for (const nm of declaredNames(node.declaration)) {
-              exportEntries.push({ exported: nm, internal: outputName(mod, nm) });
-            }
-          }
         } else {
           patches.push(stmtDelete(node, mod.source));
-          if (isEntry) {
-            for (const s of node.specifiers) {
-              const exported = s.exported.name || s.exported.value;
-              const local = s.local.name || s.local.value;
-              let internal;
-              if (node.source) {
-                const c = classify(node.source.value, mod.path, srcRoot, sources, astLoc(mod.path, node));
-                internal = c.kind === 'internal' ? resolveTarget(c.path, local) : local;
-              } else {
-                internal = resolveTarget(mod.path, local);
-              }
-              exportEntries.push({ exported, internal });
-            }
-          }
         }
+        continue;
+      }
+
+      if (node.type === 'ExportAllDeclaration') {
+        patches.push(stmtDelete(node, mod.source));
         continue;
       }
 
@@ -282,12 +332,28 @@ export function bundleModules(sources, opts) {
       declSitePatches(node, ownRenames, patches);
     }
 
-    // reference rename patches (scope-aware)
+    // reference rename patches (scope-aware) + define substitution
     for (const p of collectRenamePatches(mod.ast, renameMap, topNames)) patches.push(p);
+    for (const p of collectDefinePatches(mod.ast, defineMap)) patches.push(p);
 
     let body = applyPatches(mod.source, patches).replace(/^\n+/, '').replace(/\n+$/, '');
+
+    // synthesize frozen namespace objects for internal `import * as ns` (SPEC §7.3)
+    if (mod.namespaceImports.length) {
+      const synth = mod.namespaceImports.map((ns) => {
+        const props = exportsOf(ns.source)
+          .map((e) => (e.exported === e.internal ? e.exported : `${e.exported}: ${e.internal}`))
+          .join(', ');
+        return `const ${outputName(mod, ns.local)} = Object.freeze({ ${props} });`;
+      });
+      body = synth.join('\n') + '\n' + body;
+    }
+
     moduleOut.push({ path: mod.path, body });
   }
+
+  // entry export surface (declarations, named, re-exports, export *) — SPEC §7.7
+  const exportEntries = exportsOf(entry);
 
   // ── assemble ───────────────────────────────────────────────────────
   const pkgName = opts.packageName || '';

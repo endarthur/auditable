@@ -174,6 +174,77 @@ test('determinism: same input bundles byte-identically', () => {
   assert.equal(a.code, b.code);
 });
 
+// ── phase 2: namespace imports (§7.3) ──
+test('namespace import: `import * as ns` synthesizes a frozen object', async () => {
+  const sources = {
+    'src/main.js': "export { run } from './use.js';\n",
+    'src/use.js': "import * as lib from './lib.js';\nexport function run(){ return lib.a() + lib.b; }\n",
+    'src/lib.js': "export function a(){ return 1; }\nexport const b = 2;\n",
+  };
+  const r = bundleMemory(sources, { entry: 'src/main.js' });
+  assert.ok(r.code.includes('Object.freeze('), 'namespace object synthesized');
+  const m = await importCode(r.code);
+  assert.equal(m.run(), 3);
+});
+
+test('namespace import: synthesized object is frozen', async () => {
+  const sources = {
+    'src/main.js': "export { frozen } from './use.js';\n",
+    'src/use.js': "import * as lib from './lib.js';\nexport function frozen(){ try { lib.x = 9; } catch {} return Object.isFrozen(lib); }\n",
+    'src/lib.js': "export const x = 1;\n",
+  };
+  const r = bundleMemory(sources, { entry: 'src/main.js' });
+  const m = await importCode(r.code);
+  assert.equal(m.frozen(), true);
+});
+
+// ── phase 2: wildcard re-exports (§7.6) ──
+test('wildcard re-export: `export *` enumerates source exports', async () => {
+  const sources = {
+    'src/main.js': "export * from './x.js';\nexport { extra } from './y.js';\n",
+    'src/x.js': "export const p = 1;\nexport const q = 2;\n",
+    'src/y.js': "export const extra = 9;\n",
+  };
+  const r = bundleMemory(sources, { entry: 'src/main.js' });
+  const m = await importCode(r.code);
+  assert.deepEqual(Object.keys(m).sort(), ['extra', 'p', 'q']);
+  assert.equal(m.p, 1); assert.equal(m.q, 2); assert.equal(m.extra, 9);
+});
+
+test('wildcard re-export: ambiguous name is omitted with W002', async () => {
+  const sources = {
+    'src/main.js': "export * from './x.js';\nexport * from './y.js';\n",
+    'src/x.js': "export const dup = 1;\nexport const only = 5;\n",
+    'src/y.js': "export const dup = 2;\n",
+  };
+  const r = bundleMemory(sources, { entry: 'src/main.js' });
+  const m = await importCode(r.code);
+  assert.deepEqual(Object.keys(m).sort(), ['only']);
+  assert.ok(r.warnings.some((w) => w.code === 'W002'), 'W002 emitted for ambiguous export *');
+});
+
+// ── phase 2: define (§10) ──
+test('define: substitutes in expression position, not in strings', async () => {
+  const sources = {
+    'src/main.js': "export { v, s } from './a.js';\n",
+    'src/a.js': "export const v = __VERSION__;\nexport const s = '__VERSION__ literal';\n",
+  };
+  const r = bundleMemory(sources, { entry: 'src/main.js', define: { __VERSION__: JSON.stringify('1.2.3') } });
+  const m = await importCode(r.code);
+  assert.equal(m.v, '1.2.3');
+  assert.equal(m.s, '__VERSION__ literal');
+});
+
+test('define: bad key rejected (E015)', () => {
+  const sources = { 'src/main.js': "export const x = 1;\n" };
+  assert.throws(() => bundleMemory(sources, { entry: 'src/main.js', define: { version: '"1"' } }), /E015/);
+});
+
+test('define: collision with a declaration rejected (E007)', () => {
+  const sources = { 'src/main.js': "export const __X__ = 1;\n" };
+  assert.throws(() => bundleMemory(sources, { entry: 'src/main.js', define: { __X__: '2' } }), /E007/);
+});
+
 // ── 11. round-trip against real ext/adder ──
 test('round-trip: bundled ext/adder behaves like its source', async () => {
   const dir = path.join(root, 'ext', 'adder');
