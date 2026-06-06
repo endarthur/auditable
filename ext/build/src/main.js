@@ -8,4 +8,5 @@ export { bundleModules, renameCollisions } from './core.js';
 export { mergeBundles } from './merge.js';
 export { bundle } from './io/node.js';
 export { bundleMemory } from './io/memory.js';
+export { bundleVfs } from './io/vfs.js';
 export { BuildError } from './errors.js';

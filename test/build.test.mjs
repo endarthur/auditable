@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { bundleMemory, bundle, mergeBundles } from '../ext/build/src/main.js';
+import { bundleMemory, bundle, mergeBundles, bundleVfs } from '../ext/build/src/main.js';
 import { makeNodeParser } from '../ext/build/src/io/parser-node.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -266,6 +266,24 @@ test('define: bad key rejected (E015)', () => {
 test('define: collision with a declaration rejected (E007)', () => {
   const sources = { 'src/main.js': "export const __X__ = 1;\n" };
   assert.throws(() => bundleMemory(sources, { entry: 'src/main.js', define: { __X__: '2' } }), /E007/);
+});
+
+// ── phase 2: @gcu/vfs adapter (§1.4) — build over a VFS (in-browser path) ──
+test('vfs adapter: build a package over a @gcu/vfs MemoryBackend', async () => {
+  globalThis.document ||= { querySelector: () => null, querySelectorAll: () => [] };
+  const { VFS } = await import('../ext/vfs/index.js');
+  const vfs = new VFS();
+  await vfs.mount('/', { type: 'memory' });
+  await vfs.mkdir('/pkg/src', { recursive: true });
+  await vfs.writeFile('/pkg/src/main.js', "export { f } from './a.js';\n");
+  await vfs.writeFile('/pkg/src/a.js', "export function f(){ return 42; }\n");
+  await vfs.writeFile('/pkg/package.json', JSON.stringify({ name: '@gcu/pkg', version: '1.0.0' }));
+
+  const r = await bundleVfs(vfs, { dir: '/pkg', parser: makeNodeParser() });
+  assert.equal(await vfs.readFile('/pkg/index.js', 'utf8'), r.code, 'output written to VFS');
+  assert.ok(r.meta.bundleHash.startsWith('sha256-'), 'bundleHash computed (crypto.subtle)');
+  const m = await importCode(r.code);
+  assert.equal(m.f(), 42);
 });
 
 // ── phase 2: CLI (§13.2) — stdout + drift --check ──
