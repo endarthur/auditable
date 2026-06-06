@@ -36,11 +36,11 @@ export function over(strings, ...values) {
 
 const KEYWORDS = new Set([
   'if', 'elseif', 'else', 'end', 'keep', 'saveonly', 'erase', 'delete', 'exit',
-  'let', 'match', 'and', 'or', 'not', 'over', 'all', 'where', 'order', 'by', 'default', 'lookup', 'check',
+  'let', 'match', 'and', 'or', 'not', 'over', 'all', 'where', 'order', 'by', 'default', 'lookup', 'check', 'require',
 ]);
 const LITERALS = new Set(['true', 'false', 'absent']);
 const FUNCTIONS = new Set([
-  'count', 'sum', 'mean', 'min', 'max', 'std', 'minia', 'maxia', 'wmean', 'overlap',
+  'count', 'sum', 'mean', 'min', 'max', 'std', 'minia', 'maxia', 'wmean', 'overlap', 'bin', 'binlabel',
   'prev', 'next', 'first', 'last',
   'abs', 'sqrt', 'exp', 'log', 'loge', 'logn', 'log10', 'pow', 'rais', 'mod',
   'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2', 'int', 'round', 'present',

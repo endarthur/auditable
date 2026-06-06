@@ -146,7 +146,7 @@ function lex(src) {
 //        | If      { clauses:[{test:Expr, body:[Stmt]}], alternate?:[Stmt] }
 //        | Project { name:'keep'|'saveonly'|'erase', fields:[string] }
 //        | Control { name:'delete'|'exit' }
-//        | Check   { label?:string, test:Expr }   // observational validation rule
+//        | Check   { severity:'warn'|'error', label?:string, test:Expr }   // check / require
 //   TypeSpec { vtype?:'int'|'float'|'bool'|'string'|'category', default?:Expr }
 //   Expr = Num{value} | Str{value} | Bool{value} | Absent
 //        | Field{name} | Unary{op:'-', operand} | Binary{op,left,right}
@@ -155,7 +155,7 @@ function lex(src) {
 
 
 const TYPES = new Set(['int', 'float', 'bool', 'string', 'category']);
-const STMT_KW = new Set(['if', 'elseif', 'else', 'end', 'keep', 'saveonly', 'erase', 'delete', 'exit', 'let', 'check']);
+const STMT_KW = new Set(['if', 'elseif', 'else', 'end', 'keep', 'saveonly', 'erase', 'delete', 'exit', 'let', 'check', 'require']);
 
 class OverParseError extends Error {
   constructor(msg, tok) { super(`over: ${msg}${tok ? ` (line ${tok.line})` : ''}`); this.tok = tok; }
@@ -204,7 +204,7 @@ function parseTokens(toks) {
       if (t.v === 'keep' || t.v === 'saveonly' || t.v === 'erase') return parseProject();
       if (t.v === 'delete' || t.v === 'exit') { next(); return { type: 'Control', name: t.v }; }
       if (t.v === 'let') return parseLet();
-      if (t.v === 'check') return parseCheck();
+      if (t.v === 'check' || t.v === 'require') return parseCheck();
       if (STMT_KW.has(t.v)) throw err(`unexpected "${t.v}"`);
     }
     return parseAssign();
@@ -238,14 +238,15 @@ function parseTokens(toks) {
     return { type: 'Assign', kind: 'let', target: { name }, value: parseExpr() };
   }
 
-  // `check [ "label": ] PREDICATE` — an observational validation rule. A leading
-  // `STRING :` is the label (a predicate starting with a string would be `STRING ==`
-  // etc., never `STRING :`), else the predicate text labels it.
+  // `check [ "label": ] PREDICATE` — an observational validation rule (reports).
+  // `require …` is the same shape but ENFORCING (a failed rule throws after the pass).
+  // A leading `STRING :` is the label (a predicate starting with a string would be
+  // `STRING ==` etc., never `STRING :`), else the predicate text labels it.
   function parseCheck() {
-    expectId('check');
+    const kw = next().v;                       // 'check' | 'require'
     let label = null;
     if (cur().t === 'str' && peek() && peek().t === 'op' && peek().v === ':') { label = next().v; expectOp(':'); }
-    return { type: 'Check', label, test: parseExpr() };
+    return { type: 'Check', severity: kw === 'require' ? 'error' : 'warn', label, test: parseExpr() };
   }
 
   function parseProject() {
@@ -453,8 +454,8 @@ const STR = new Set(['string', 'category']);
 const FN_NUMERIC = new Set(['abs', 'sqrt', 'exp', 'log', 'loge', 'logn', 'pow', 'rais',
   'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2', 'azimuth', 'phi', 'mod', 'modc',
   'special', 'round', 'min', 'max', 'minia', 'maxia', 'ijkget']);
-const FN_INT = new Set(['int', 'len', 'ijknum', 'xyzijk']);
-const FN_STRING = new Set(['concat', 'substr', 'trim', 'ucase', 'lcase', 'string', 'join', 'field', 'type']);
+const FN_INT = new Set(['int', 'len', 'ijknum', 'xyzijk', 'bin']);
+const FN_STRING = new Set(['concat', 'substr', 'trim', 'ucase', 'lcase', 'string', 'join', 'field', 'type', 'binlabel']);
 const FN_PASSTHRU = new Set(['default', 'first', 'last', 'prev', 'next']);   // return arg[0]'s type
 const FN_LOGICAL = new Set(['not']);
 
@@ -714,6 +715,17 @@ const overRuntime = {
     max: (...a) => Math.max(...a.map(n)),
     minia: (...a) => { const v = a.filter((x) => !isAbsent(x)).map(Number); return v.length ? Math.min(...v) : NaN; },
     maxia: (...a) => { const v = a.filter((x) => !isAbsent(x)).map(Number); return v.length ? Math.max(...v) : NaN; },
+    // classify into ascending half-open bins [b0,b1), [b1,b2), … — bin() → 0-based
+    // index (groupable), binlabel() → a readable range. absent → absent.
+    bin: (x, ...breaks) => (isAbsent(x) ? NaN : breaks.reduce((k, b) => k + (n(x) >= n(b) ? 1 : 0), 0)),
+    binlabel: (x, ...breaks) => {
+      if (isAbsent(x) || !breaks.length) return null;
+      const v = n(x);
+      let k = 0; while (k < breaks.length && v >= n(breaks[k])) k++;
+      if (k === 0) return `< ${breaks[0]}`;
+      if (k === breaks.length) return `>= ${breaks[k - 1]}`;
+      return `${breaks[k - 1]} - ${breaks[k]}`;
+    },
     // strings — absent stays null (non-numeric)
     len: (x) => (isAbsent(x) ? 0 : String(x).length),
     ucase: (x) => (isAbsent(x) ? null : String(x).toUpperCase()),
@@ -1425,15 +1437,15 @@ function exprText(e) {
 }
 
 // Tag each Check node with `_checkId` (in document order, descending into branches)
-// and return the rule defs (id + label). Emit reads `_checkId`; the driver keys the
-// report by id.
+// and return the rule defs (id + label + severity). Emit reads `_checkId`; the driver
+// keys the report by id.
 function collectChecks(ast) {
   const defs = [];
   function stmt(st) {
     if (st.type === 'Check') {
       const id = defs.length;
       st._checkId = id;
-      defs.push({ id, label: st.label || exprText(st.test) || `check ${id + 1}` });
+      defs.push({ id, label: st.label || exprText(st.test) || `check ${id + 1}`, severity: st.severity || 'warn' });
     } else if (st.type === 'If') {
       st.clauses.forEach((c) => c.body.forEach(stmt));
       if (st.alternate) st.alternate.forEach(stmt);
@@ -1446,9 +1458,9 @@ function collectChecks(ast) {
 function hasChecks(defs) { return !!(defs && defs.length); }
 
 // The per-run report accumulator. `check(id, ok, row)` from the row pass; `report()`
-// → [{ rule, passed, failed, sample }] (sample = up to SAMPLE_K offending rows).
+// → [{ rule, severity, passed, failed, sample }] (sample = up to SAMPLE_K rows).
 function makeCheckReport(defs) {
-  const acc = defs.map((d) => ({ rule: d.label, passed: 0, failed: 0, sample: [] }));
+  const acc = defs.map((d) => ({ rule: d.label, severity: d.severity, passed: 0, failed: 0, sample: [] }));
   return {
     check(id, ok, row) {
       const a = acc[id];
@@ -1457,6 +1469,22 @@ function makeCheckReport(defs) {
     },
     report() { return acc; },
   };
+}
+
+// `require` rules ENFORCE: any error-severity rule with failures gates the run.
+function hasFailedRequire(checks) {
+  return checks.some((c) => c.severity === 'error' && c.failed > 0);
+}
+
+// Thrown by run() when a `require` rule fails. Carries the FULL report so the caller
+// sees every failure (warns included), not just the first.
+class OverCheckError extends Error {
+  constructor(checks) {
+    const failed = checks.filter((c) => c.severity === 'error' && c.failed > 0);
+    super(`over: ${failed.length} required rule(s) failed — ${failed.map((c) => `"${c.rule}" (${c.failed})`).join(', ')}`);
+    this.name = 'OverCheckError';
+    this.checks = checks;
+  }
 }
 
 // -- driver.js --
@@ -1504,7 +1532,9 @@ function applyRows(rowFn, outputColumns, rows, windowDefs, lookupDefs, joinDefs,
     }
     if (ctx.exit) break;
   }
-  return { rows: out, checks: checker ? checker.report() : [] };
+  const checks = checker ? checker.report() : [];
+  if (hasFailedRequire(checks)) throw new OverCheckError(checks);   // `require` gates the run
+  return { rows: out, checks };
 }
 
 // -- api.js --
@@ -1605,11 +1635,11 @@ function over(strings, ...values) {
 
 const KEYWORDS = new Set([
   'if', 'elseif', 'else', 'end', 'keep', 'saveonly', 'erase', 'delete', 'exit',
-  'let', 'match', 'and', 'or', 'not', 'over', 'all', 'where', 'order', 'by', 'default', 'lookup', 'check',
+  'let', 'match', 'and', 'or', 'not', 'over', 'all', 'where', 'order', 'by', 'default', 'lookup', 'check', 'require',
 ]);
 const LITERALS = new Set(['true', 'false', 'absent']);
 const FUNCTIONS = new Set([
-  'count', 'sum', 'mean', 'min', 'max', 'std', 'minia', 'maxia', 'wmean', 'overlap',
+  'count', 'sum', 'mean', 'min', 'max', 'std', 'minia', 'maxia', 'wmean', 'overlap', 'bin', 'binlabel',
   'prev', 'next', 'first', 'last',
   'abs', 'sqrt', 'exp', 'log', 'loge', 'logn', 'log10', 'pow', 'rais', 'mod',
   'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2', 'int', 'round', 'present',
@@ -1665,6 +1695,7 @@ if (typeof window !== 'undefined') {
 }
 
 export {
+  OverCheckError,
   OverLexError,
   OverParseError,
   REL,
@@ -1684,6 +1715,7 @@ export {
   emitExpr,
   emitRowSource,
   hasChecks,
+  hasFailedRequire,
   hasJoinAggs,
   hasLookups,
   inferType,

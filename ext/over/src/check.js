@@ -33,15 +33,15 @@ function exprText(e) {
 }
 
 // Tag each Check node with `_checkId` (in document order, descending into branches)
-// and return the rule defs (id + label). Emit reads `_checkId`; the driver keys the
-// report by id.
+// and return the rule defs (id + label + severity). Emit reads `_checkId`; the driver
+// keys the report by id.
 export function collectChecks(ast) {
   const defs = [];
   function stmt(st) {
     if (st.type === 'Check') {
       const id = defs.length;
       st._checkId = id;
-      defs.push({ id, label: st.label || exprText(st.test) || `check ${id + 1}` });
+      defs.push({ id, label: st.label || exprText(st.test) || `check ${id + 1}`, severity: st.severity || 'warn' });
     } else if (st.type === 'If') {
       st.clauses.forEach((c) => c.body.forEach(stmt));
       if (st.alternate) st.alternate.forEach(stmt);
@@ -54,9 +54,9 @@ export function collectChecks(ast) {
 export function hasChecks(defs) { return !!(defs && defs.length); }
 
 // The per-run report accumulator. `check(id, ok, row)` from the row pass; `report()`
-// → [{ rule, passed, failed, sample }] (sample = up to SAMPLE_K offending rows).
+// → [{ rule, severity, passed, failed, sample }] (sample = up to SAMPLE_K rows).
 export function makeCheckReport(defs) {
-  const acc = defs.map((d) => ({ rule: d.label, passed: 0, failed: 0, sample: [] }));
+  const acc = defs.map((d) => ({ rule: d.label, severity: d.severity, passed: 0, failed: 0, sample: [] }));
   return {
     check(id, ok, row) {
       const a = acc[id];
@@ -65,4 +65,20 @@ export function makeCheckReport(defs) {
     },
     report() { return acc; },
   };
+}
+
+// `require` rules ENFORCE: any error-severity rule with failures gates the run.
+export function hasFailedRequire(checks) {
+  return checks.some((c) => c.severity === 'error' && c.failed > 0);
+}
+
+// Thrown by run() when a `require` rule fails. Carries the FULL report so the caller
+// sees every failure (warns included), not just the first.
+export class OverCheckError extends Error {
+  constructor(checks) {
+    const failed = checks.filter((c) => c.severity === 'error' && c.failed > 0);
+    super(`over: ${failed.length} required rule(s) failed — ${failed.map((c) => `"${c.rule}" (${c.failed})`).join(', ')}`);
+    this.name = 'OverCheckError';
+    this.checks = checks;
+  }
 }

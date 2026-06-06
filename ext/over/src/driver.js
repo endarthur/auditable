@@ -10,7 +10,7 @@
 import { computeWindows, winLookup } from './windows.js';
 import { buildLookups, makeLookup, hasLookups } from './lookup.js';
 import { buildJoinIndexes, makeJoinAgg, hasJoinAggs } from './join.js';
-import { makeCheckReport, hasChecks } from './check.js';
+import { makeCheckReport, hasChecks, hasFailedRequire, OverCheckError } from './check.js';
 
 const NO_WIN = () => null;
 const NO_CHECK = () => {};
@@ -42,5 +42,7 @@ export function applyRows(rowFn, outputColumns, rows, windowDefs, lookupDefs, jo
     }
     if (ctx.exit) break;
   }
-  return { rows: out, checks: checker ? checker.report() : [] };
+  const checks = checker ? checker.report() : [];
+  if (hasFailedRequire(checks)) throw new OverCheckError(checks);   // `require` gates the run
+  return { rows: out, checks };
 }

@@ -81,6 +81,17 @@ export const overRuntime = {
     max: (...a) => Math.max(...a.map(n)),
     minia: (...a) => { const v = a.filter((x) => !isAbsent(x)).map(Number); return v.length ? Math.min(...v) : NaN; },
     maxia: (...a) => { const v = a.filter((x) => !isAbsent(x)).map(Number); return v.length ? Math.max(...v) : NaN; },
+    // classify into ascending half-open bins [b0,b1), [b1,b2), … — bin() → 0-based
+    // index (groupable), binlabel() → a readable range. absent → absent.
+    bin: (x, ...breaks) => (isAbsent(x) ? NaN : breaks.reduce((k, b) => k + (n(x) >= n(b) ? 1 : 0), 0)),
+    binlabel: (x, ...breaks) => {
+      if (isAbsent(x) || !breaks.length) return null;
+      const v = n(x);
+      let k = 0; while (k < breaks.length && v >= n(breaks[k])) k++;
+      if (k === 0) return `< ${breaks[0]}`;
+      if (k === breaks.length) return `>= ${breaks[k - 1]}`;
+      return `${breaks[k - 1]} - ${breaks[k]}`;
+    },
     // strings — absent stays null (non-numeric)
     len: (x) => (isAbsent(x) ? 0 : String(x).length),
     ucase: (x) => (isAbsent(x) ? null : String(x).toUpperCase()),

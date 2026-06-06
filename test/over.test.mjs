@@ -660,6 +660,56 @@ test('compile: check counts + a missing-column rule still warns (no output colum
   assert.deepEqual(c.outputColumns.map((x) => x.name), ['FROM', 'Y']);   // check adds no column
 });
 
+// ── require (the enforcing check) + bin ──
+test('parse: require → Check node with error severity', () => {
+  const a = stmts('require "from before to": FROM < TO')[0];
+  assert.equal(a.type, 'Check'); assert.equal(a.severity, 'error'); assert.equal(a.label, 'from before to');
+  assert.equal(stmts('check FROM < TO')[0].severity, 'warn');
+});
+
+test('run: a passing require does not throw; reports with error severity', () => {
+  const res = compile('require "from before to": FROM < TO').run([{ FROM: 0, TO: 10 }, { FROM: 1, TO: 2 }]);
+  assert.equal(res.checks[0].severity, 'error');
+  assert.equal(res.checks[0].failed, 0);
+});
+
+test('run: a failing require throws OverCheckError carrying the full report', () => {
+  let err;
+  try { compile('require "from before to": FROM < TO').run([{ FROM: 0, TO: 10 }, { FROM: 10, TO: 5 }]); }
+  catch (e) { err = e; }
+  assert.ok(err, 'expected a throw');
+  assert.equal(err.name, 'OverCheckError');
+  assert.match(err.message, /1 required rule\(s\) failed/);
+  assert.equal(err.checks[0].failed, 1);
+  assert.equal(err.checks[0].sample[0].TO, 5);
+});
+
+test('run: a failing check (warn) alongside a passing require does NOT throw', () => {
+  const res = compile('check "warnme": FROM < 0\nrequire "ok": FROM < TO').run([{ FROM: 5, TO: 10 }]);
+  assert.equal(res.checks[0].failed, 1);    // the warn failed
+  assert.equal(res.checks[1].failed, 0);    // the require passed → no throw
+});
+
+test('run: bin → 0-based class index; binlabel → readable range; absent → absent', () => {
+  const out = compile('B = bin(GRADE, 40, 50, 60)\nL = binlabel(GRADE, 40, 50, 60)')
+    .run([{ GRADE: 30 }, { GRADE: 45 }, { GRADE: 55 }, { GRADE: 70 }, { GRADE: null }]).rows;
+  assert.deepEqual(out.map((x) => x.B), [0, 1, 2, 3, NaN]);
+  assert.deepEqual(out.map((x) => x.L), ['< 40', '40 - 50', '50 - 60', '>= 60', null]);
+});
+
+test('run: bin → chain → window (mean grade per class; windows group by input cols)', () => {
+  const classed = compile('CLASS = bin(FE, 50)').run([{ FE: 40 }, { FE: 45 }, { FE: 60 }, { FE: 70 }]).rows;
+  const out = compile('M = mean(FE) over CLASS').run(classed).rows;   // CLASS is now an input column
+  assert.equal(out[0].M, 42.5);    // class 0: (40+45)/2
+  assert.equal(out[2].M, 65);      // class 1: (60+70)/2
+});
+
+test('schema: bin types int, binlabel types string', () => {
+  const c = compile('B = bin(G, 1, 2)\nL = binlabel(G, 1, 2)', { inputSchema: [{ name: 'G', type: 'float' }] });
+  const by = Object.fromEntries(c.outputColumns.map((x) => [x.name, x.vtype]));
+  assert.equal(by.B, 'int'); assert.equal(by.L, 'string');
+});
+
 // ── the notebook tag ──
 test('tag: over`…`(rows) compiles + applies; rows carry .columns', async () => {
   const { over } = await import('../ext/over/src/tag.js');

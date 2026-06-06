@@ -270,7 +270,16 @@ Everything we want, tagged by phase. **v0 / v0.1 are proposals to discuss.**
   (downhole gap = `check FROM == prev(TO) over hole order FROM or …`; coverage =
   `check count() where assays.hole == hole …`). Report shape is a plain count → merges
   trivially for the big-data path. Unlabeled rules are labeled by their predicate text.
-  *Next here:* a `require` (halting) severity, and `bin` (grouping).
+- **`require` — SHIPPED.** `check`'s enforcing sibling: same syntax, but a failed rule
+  *gates* — the pass runs to completion (collecting every failure) then `run()` throws
+  an `OverCheckError` carrying the full report. Halting is opt-in by keyword; a program
+  with only `check` never throws. (`check` = warn, `require` = error severity in the
+  same report.)
+- **`bin` — SHIPPED.** `bin(value, b1, …, bn)` → the 0-based class index for ascending
+  half-open bins (groupable: assign it, then `over` it in a chained transform —
+  windows group by input columns); `binlabel(value, b1, …, bn)` → a readable range
+  (`"< 40"` / `"40 - 50"` / `">= 60"`). Vararg functions, no grammar change. *Next here:*
+  `units`.
 - **`emit`** — one row → many (compositing skeleton / desurvey / subcell fan-out);
   gated, breaks 1:1. The other half of compositing (the aggregating join is built; this
   generates the skeleton it populates).

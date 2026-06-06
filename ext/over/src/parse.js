@@ -7,7 +7,7 @@
 //        | If      { clauses:[{test:Expr, body:[Stmt]}], alternate?:[Stmt] }
 //        | Project { name:'keep'|'saveonly'|'erase', fields:[string] }
 //        | Control { name:'delete'|'exit' }
-//        | Check   { label?:string, test:Expr }   // observational validation rule
+//        | Check   { severity:'warn'|'error', label?:string, test:Expr }   // check / require
 //   TypeSpec { vtype?:'int'|'float'|'bool'|'string'|'category', default?:Expr }
 //   Expr = Num{value} | Str{value} | Bool{value} | Absent
 //        | Field{name} | Unary{op:'-', operand} | Binary{op,left,right}
@@ -17,7 +17,7 @@ import { lex } from './lex.js';
 import { REL } from './util.js';
 
 const TYPES = new Set(['int', 'float', 'bool', 'string', 'category']);
-const STMT_KW = new Set(['if', 'elseif', 'else', 'end', 'keep', 'saveonly', 'erase', 'delete', 'exit', 'let', 'check']);
+const STMT_KW = new Set(['if', 'elseif', 'else', 'end', 'keep', 'saveonly', 'erase', 'delete', 'exit', 'let', 'check', 'require']);
 
 export class OverParseError extends Error {
   constructor(msg, tok) { super(`over: ${msg}${tok ? ` (line ${tok.line})` : ''}`); this.tok = tok; }
@@ -66,7 +66,7 @@ export function parseTokens(toks) {
       if (t.v === 'keep' || t.v === 'saveonly' || t.v === 'erase') return parseProject();
       if (t.v === 'delete' || t.v === 'exit') { next(); return { type: 'Control', name: t.v }; }
       if (t.v === 'let') return parseLet();
-      if (t.v === 'check') return parseCheck();
+      if (t.v === 'check' || t.v === 'require') return parseCheck();
       if (STMT_KW.has(t.v)) throw err(`unexpected "${t.v}"`);
     }
     return parseAssign();
@@ -100,14 +100,15 @@ export function parseTokens(toks) {
     return { type: 'Assign', kind: 'let', target: { name }, value: parseExpr() };
   }
 
-  // `check [ "label": ] PREDICATE` — an observational validation rule. A leading
-  // `STRING :` is the label (a predicate starting with a string would be `STRING ==`
-  // etc., never `STRING :`), else the predicate text labels it.
+  // `check [ "label": ] PREDICATE` — an observational validation rule (reports).
+  // `require …` is the same shape but ENFORCING (a failed rule throws after the pass).
+  // A leading `STRING :` is the label (a predicate starting with a string would be
+  // `STRING ==` etc., never `STRING :`), else the predicate text labels it.
   function parseCheck() {
-    expectId('check');
+    const kw = next().v;                       // 'check' | 'require'
     let label = null;
     if (cur().t === 'str' && peek() && peek().t === 'op' && peek().v === ':') { label = next().v; expectOp(':'); }
-    return { type: 'Check', label, test: parseExpr() };
+    return { type: 'Check', severity: kw === 'require' ? 'error' : 'warn', label, test: parseExpr() };
   }
 
   function parseProject() {

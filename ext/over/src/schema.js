@@ -18,8 +18,8 @@ const STR = new Set(['string', 'category']);
 const FN_NUMERIC = new Set(['abs', 'sqrt', 'exp', 'log', 'loge', 'logn', 'pow', 'rais',
   'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2', 'azimuth', 'phi', 'mod', 'modc',
   'special', 'round', 'min', 'max', 'minia', 'maxia', 'ijkget']);
-const FN_INT = new Set(['int', 'len', 'ijknum', 'xyzijk']);
-const FN_STRING = new Set(['concat', 'substr', 'trim', 'ucase', 'lcase', 'string', 'join', 'field', 'type']);
+const FN_INT = new Set(['int', 'len', 'ijknum', 'xyzijk', 'bin']);
+const FN_STRING = new Set(['concat', 'substr', 'trim', 'ucase', 'lcase', 'string', 'join', 'field', 'type', 'binlabel']);
 const FN_PASSTHRU = new Set(['default', 'first', 'last', 'prev', 'next']);   // return arg[0]'s type
 const FN_LOGICAL = new Set(['not']);
 
