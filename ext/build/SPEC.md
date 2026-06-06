@@ -1,16 +1,55 @@
 # @gcu/build — specification
 
-**Status:** draft
+**Status:** draft — **rev 2** (2026-06-06). Rev 2 folds in: the pure-core / I/O-adapter
+split that makes the bundler **browser-native** (§1.4); the `inline` option for the
+shared-primitive pattern (§4.2); `renameCollisions` exposed as a reusable pass + a
+**merge mode** for the surface inliner's inter-bundle case (§6.6–6.7); a reproducibility
+**drift check** (§13.2); and TS annotation elision promoted to a real phase (§18). The
+collision examples are now the real ones we've hit (`inferType`, `cmp`).
 **Target LOC:** 400–500 for the core
 **Audience:** implementers (including Claude Code), future maintainers, reviewers
 
 ## 1. Motivation
 
-Auditable's `ext/*` packages each ship an `index.js` produced by a hand-written `build.js` that regex-strips `import`/`export` keywords and concatenates source files in manifest order. The pattern is stable enough across ~20 packages to centralize, and has at least one structural failure mode: independent modules declaring top-level identifiers with the same name (`lowerExpr` across three AIR language lowerers) collide silently in flat scope. The current mitigation (manual `_ad`, `_sf` suffixes) doesn't scale and doesn't catch unknown collisions at build time.
+### 1.1 The local problem
 
-`@gcu/build` replaces the per-package `build.js` regex pipeline with a small AST-based bundler. It reuses `@gcu/air`'s scope-analysis pass, parses with vendored `acorn`, and emits a single flat-scope ES module with a source map. Scope isolation is achieved by renaming on collision, not by wrapping in IIFEs or emitting a runtime `require`.
+Auditable's `ext/*` packages each ship an `index.js` produced by a hand-written `build.js` that regex-strips `import`/`export` keywords and concatenates source files in a **hand-maintained file list**. Two structural failure modes, both observed in practice:
 
-The tool is deliberately narrow. Bundlers in the broader ecosystem solve module resolution, transformation, tree-shaking, code splitting, dev-server/HMR, and minification in addition to concatenation. `@gcu/build` solves concatenation and scope isolation only, because the GCU ecosystem is shaped so the other concerns don't apply: manifest-driven graph, relative imports only, bare specifiers passed through, hand-authored sources with no tree-shaking benefit, single-file output, no dev server. The constraints produce the simplicity; the tool is the consequence.
+- **Silent top-level collisions.** Independent modules declaring the same top-level name collide in flat scope: `lowerExpr` across AIR lowerers; `inferType` across `@gcu/over` and `@gcu/loom`; `cmp`/`cmpVal` across over and strata. The current mitigation — manual `_ad`/`_sf`/`_over` suffixes — doesn't scale and **doesn't catch unknown collisions at build time**; they surface at *load*, caught (if you're lucky) by a smoke test.
+- **Hand-maintained manifests drift.** The `files: [...]` array is edited by hand; forgetting an entry ships a bundle that *calls* a symbol it never *defines* — this happened (`join.js` omitted from `@gcu/over`'s list, so the bundle invoked `collectJoinAggs` with no definition).
+
+### 1.2 What it is
+
+`@gcu/build` replaces the per-package `build.js` regex pipeline with a small AST-based bundler. It reuses `@gcu/air`'s scope analysis, parses with vendored `acorn`, and emits a single flat-scope ES module with a source map. Scope isolation is by **renaming on collision** — a real scope-hoister — not IIFE-wrapping or a runtime `require`. The module set is the **transitive import graph from `src/main.js`**, not a hand list — which structurally eliminates the drift class above: *you cannot forget a file that something imports.*
+
+It is deliberately narrow — concatenation + scope isolation only — because the GCU ecosystem is shaped so the rest doesn't apply: manifest-driven graph, relative imports only, hand-authored sources (no tree-shaking benefit), single-file output, no dev server. The constraints produce the simplicity; the tool is the consequence.
+
+### 1.3 The big idea
+
+GCU's bet is **owned and legible all the way down.** The runtime, the platform (Works / geas / VFS), and the data formats are all owned and outlive their tooling (hopper: *"a single artifact that outlives the tooling that made it"*). The one rented thing every "no-build" project secretly leans on is the *build*. `@gcu/build` is the keystone that makes the bet true to the bottom: it is **itself a GCU package, it builds itself, and its core runs in the browser** (acorn + air already do — see §1.4). Once browser-native, the loop closes — **Works can author, build, *and* run GCU software, air-gapped, with no node / npm / toolchain, indefinitely.** The longevity property hopper gives *data* now applies to the *build*: the stack is rebuildable from source forever, because nothing in the chain is transitive or rented.
+
+The discipline that protects this: the tool stays **concat + isolate**, never *transform*. A build tool simple enough to be fully owned, legible enough to read in one sitting, and constrained enough that it *cannot* grow into a castle. The constraint is the feature, not an apology — which is why the non-goals (§2) are load-bearing even though the tool is small.
+
+### 1.4 Architecture: a pure core + I/O adapters (browser-native by construction)
+
+The single most important structural decision: **the bundler core is a pure, I/O-free function**, and every filesystem / CLI concern lives in a thin adapter around it.
+
+```js
+// the core — no fs, no globals, no environment branches:
+bundleModules(sources, opts) → { code, map, meta, warnings }
+//   sources: { [path: string]: string }   — the module set, already read
+//   opts:    { entry, inline?, define?, sourcemap?, header? }
+```
+
+`bundleModules` does only `string → acorn AST → scope analysis → rename → text-splice → string`. acorn runs in the browser (`window.Acorn`), `@gcu/air` runs in the browser, and the core touches no `fs` — so **it is browser-native by construction, not by porting effort.** Three adapters feed it:
+
+- **node-fs** — reads `src/`, writes `index.js` + `.map` + `.meta.json`. Backs the CLI and `node ext/<pkg>/build.js`.
+- **@gcu/vfs** — reads/writes the workspace VFS. Backs building **inside Works / geas, in-browser** — the GCU desktop building its own packages and `.gcupkg`s with no toolchain. (geas gets a `gcu-build` builtin; pkg can build from source.)
+- **memory** — a plain object in, a result out. Backs the test suite (§16): no temp dirs, deterministic.
+
+`bundle(opts)` (§13.1) is the node-fs adapter: resolve + read the manifest from disk, call `bundleModules`, write the outputs. The **contract is `bundleModules`**; everything else is plumbing. Manifest *walking* (discovering the transitive set by following imports) is adapter-side — it reads files — and hands the core a complete `{path: source}` map plus the entry path.
+
+Everything below specifies the core's behavior; items that are adapter-specific (file writes, the CLI, VFS) say so.
 
 ## 2. Non-goals
 
@@ -74,6 +113,27 @@ No `node_modules` traversal. No `package.json` `exports` field consultation. No 
 ### 4.1 Import attributes
 
 `import x from './config.json' with { type: 'json' }` is recognized as a build error in phase 1 (deferred). In a later phase, inline the JSON as a frozen object bound to `x`. Pass-through is not an option because the output is a single ESM file and relative paths are eliminated by inlining.
+
+### 4.2 Inlined externals — the shared-primitive pattern (`inline`)
+
+The default rule (§4) makes anything outside `src/` *external* (preserved verbatim). But GCU composes **zero-dependency shared primitives by inlining them at build time, not depending on them at runtime**: `@gcu/over` inlines `@gcu/dimensions`, `@gcu/strata` inlines `@gcu/sift` (was `predicate.js`). The default rule would *break* these — it would leave the import as external and emit a single-file bundle that doesn't actually contain dimensions. So the bundler takes an explicit opt-in list:
+
+```js
+bundle({
+  entry: 'src/main.js',
+  inline: ['@gcu/dimensions'],        // resolve, bundle in, rename-dedup
+});
+```
+
+Semantics:
+
+- Each `inline` entry names a bare specifier (or an escaping-relative path) that would otherwise be external. The adapter resolves it to that package's `src/main.js` (bare `@gcu/x` → the workspace's `ext/x/src/main.js`; the resolution map is adapter-side, not baked into the core).
+- The inlined package's modules join the bundle's module set and go through the **same rename-on-collision pass** (§6) as the host's own modules. So a shared primitive that collides with the host (or with another inlined primitive) is renamed deterministically — *the inline path is collision-safe by construction*, which is exactly the property the hand-rolled inlining lacked.
+- Only the **names the host imports** from the inlined package are needed as bindings; the package's own unused exports are still emitted (no tree-shaking, §2) but contribute to collision detection.
+- An inlined package's *own* `inline`/external deps are followed transitively (dimensions has none; in general, resolve recursively, deduping already-included modules).
+- `inline` is the GCU answer to "how do shared primitives compose without a runtime dependency *or* a collision." It replaces the ad-hoc `externalDeps` hack in `ext/over/build.js` and the `'../../sift/src/predicate.js'` manifest entry in `ext/strata/build.js`.
+
+This is **phase 2** (the per-package builds that need it — over, strata — are the ones being migrated then). Phase 1 packages have no inlines.
 
 ## 5. Annotations
 
@@ -191,6 +251,39 @@ function bundle(entry):
 
     return emit(modules, renames, sharedOwners)
 ```
+
+### 6.6 `renameCollisions` as a reusable pass
+
+The collect → classify → rewrite passes (§6.1–6.3) are exported as a standalone function, not buried inside `bundleModules`:
+
+```js
+renameCollisions(modules) → { modules, renames, warnings }
+//   modules: [{ path, source, ast, bindings }]  (already parsed)
+```
+
+It takes an ordered set of parsed modules, detects top-level name collisions across them, renames on collision (`$basename` suffix), and returns the rewritten modules plus the rename log. `bundleModules` is its primary caller — but it has a *second* caller (§6.7) that the bundler proper never sees, which is why this is a public pass and not a private helper.
+
+### 6.7 Merge mode — bundling pre-built bundles (the surface-inliner case)
+
+Everything above operates on a package's **source** modules. But Auditable has a *second*, structurally identical collision site: the Works surface inliner (`_inlineLibsIntoSurface`) raw-concatenates several **already-built `index.js` bundles** (over + loom + strata + recon + archive) into one iframe scope. Two independently-clean packages can still both *export* `inferType` (over + loom did), and flat-concatenation collides them — caught only at surface load.
+
+This is the same problem one level up, and it takes the same pass. **Merge mode** is `renameCollisions` (§6.6) applied to pre-built bundles:
+
+```js
+mergeBundles(bundles, opts) → { code, renames, warnings }
+//   bundles: [{ name, source }]   each an already-built index.js (export-bearing ESM)
+//   opts:    { entryImports }     the bare @gcu/<name> imports the surface actually makes
+```
+
+Behavior:
+
+- Parse each bundle, collect its top-level bindings (its public exports *and* its internal top-level names — both share the flat scope after the inliner strips `export`).
+- Run `renameCollisions` across the whole set. Colliding names (whether public or internal) get the `$name` suffix.
+- Rewrite the surface's `import { X } from '@gcu/<name>'` consume sites to the (possibly renamed) binding, strip the import, and emit the bundles' bodies in order followed by the consume code — exactly what the inliner does today, but **collision-safe**.
+
+Merge mode is what lets the Works inliner stop being a footgun: it becomes a `@gcu/build` consumer instead of a hand-rolled `export → const` text substitution. It is **phase 2** (the inliner migrates after the per-package builds do), and it is the reason §6.6 is a separate export.
+
+**Note on `@bundle-share` across merge:** shared-intent (§5.1) is *per-package*; two packages each legitimately owning a `REGISTRY` is not a shared contract, it's a collision — so in merge mode `@bundle-share` annotations are ignored (they were already resolved inside each package's own build) and everything is name-by-name.
 
 ## 7. Import / export rewriting
 
@@ -408,32 +501,55 @@ Field names are stable; new fields may be added, existing fields do not change s
 
 ### 13.1 Library (primary)
 
-```js
-import { bundle } from '@gcu/build';
+The public surface is layered to match §1.4 (pure core → adapters):
 
+```js
+import {
+  bundle,            // node-fs adapter: read manifest, bundle, WRITE outputs
+  bundleModules,     // PURE core: { [path]: source } → BundleResult (no I/O)
+  mergeBundles,      // pure: merge pre-built bundles, collision-safe (§6.7)
+  renameCollisions,  // pure pass: the rename algorithm alone (§6.6)
+} from '@gcu/build';
+```
+
+The **node-fs adapter** (the everyday entry):
+
+```js
 await bundle({
   entry: 'src/main.js',          // required
-  outDir: '.',                   // default: cwd
+  outDir: '.',                   // default: directory of entry's parent
   outFile: 'index.js',           // default: 'index.js'
   sourcemap: true,               // default: true
   meta: true,                    // default: true
-  define: { __VERSION__: '"1.0"' },  // optional
+  inline: ['@gcu/dimensions'],   // optional — externals to inline (§4.2)
+  define: { __VERSION__: '"1.0"' },  // optional (§10)
   header: '// Custom header',    // optional — replaces default header
 });
 ```
 
-Returns a `BundleResult`:
+The **pure core** (the load-bearing contract — what a VFS/memory adapter calls):
+
+```js
+const result = bundleModules(sources, {
+  entry: 'src/main.js',
+  inline: ['@gcu/dimensions'],   // already resolved INTO `sources` by the adapter
+  sourcemap: true,
+});
+// sources: { 'src/main.js': '…', 'src/parse.js': '…', /* + inlined pkg's modules */ }
+```
+
+`bundleModules` performs **no I/O whatsoever** — the adapter has already read every module (host's + inlined) into `sources`. It is the function that runs unchanged in node, in a `@gcu/vfs`-backed Works build, and in tests. Both `bundle()` and `bundleModules()` return a `BundleResult`:
 
 ```ts
 {
   code: string,
-  map: object,         // source map v3, not stringified
-  meta: object,        // index.meta.json shape
+  map: object,         // source map v3, not stringified (null if sourcemap: false)
+  meta: object,        // index.meta.json shape (§12)
   warnings: Warning[], // emitted warnings
 }
 ```
 
-Writing to disk is a side effect of `bundle()`. A lower-level `bundleToString(options)` returns the `BundleResult` without writing anything; useful for tests and tooling. Both are exposed.
+`bundle()` writes `code`/`map`/`meta` to disk as a side effect; `bundleModules()` writes nothing. The earlier `bundleToString` name is folded into `bundleModules` — there is one pure entry, not two.
 
 ### 13.2 CLI
 
@@ -452,9 +568,18 @@ Options:
 --no-sourcemap          suppress source map emission
 --no-meta               suppress meta.json emission
 --define <KEY=VALUE>    repeatable; value is parsed as JSON
---check                 run full pipeline, emit no output, exit nonzero if bundling would fail
+--inline <pkg>          repeatable; an external to inline into the bundle (§4.2)
+--check                 reproducibility / DRIFT check: rebuild from src, assert the
+                        committed index.js matches byte-for-byte; exit nonzero on drift
+                        OR on any bundling error. Makes "every committed bundle is
+                        reproducible from its source" an enforced CI invariant — catches
+                        stale bundles (forgot to rebuild) and hand-edits to generated
+                        files, the failure modes a hand-written build.js can't self-detect
 --stdout                emit code to stdout, no disk writes; implies --no-sourcemap --no-meta
---workspace <glob>      bundle every dir matching glob whose src/main.js exists
+--workspace <glob>      bundle every dir matching glob whose src/main.js exists; skips a
+                        package whose source hashes are unchanged (incremental, via §12's
+                        bundleHash) — meaningful for the ~20-package monorepo and essential
+                        for a browser save-rebuild loop
 --quiet                 suppress non-error output
 --help
 --version
@@ -583,6 +708,8 @@ A checked-in directory `tests/fixtures/` containing small (~5 file) synthetic pa
 - `09-define/`: `__VERSION__` substitution — asserts the literal shows up at the right positions and not inside strings
 - `10-verbatim/`: `@bundle-verbatim` function body — asserts the body text is preserved byte-for-byte (inspected via `toString()` on the bundled function)
 - `11-lint/`: each lint rule, catch each error code — asserts bundler throws the expected `E0xx` / `W0xx` code
+- `12-inline/`: a host package + an inlined "primitive" package that declares a name *also* declared in the host (§4.2) — asserts the primitive is inlined (no surviving import), the collision is renamed, and both bindings resolve to their correct values
+- `13-merge/`: two pre-built bundles each exporting `inferType` with different bodies (§6.7) — asserts `mergeBundles` renames both, the surface's consume sites resolve to the right one, and no top-level redeclaration survives. The regression test for the real over×loom collision.
 
 **Golden fixtures** (output compared to checked-in `expected/`): only for things where the *shape* of the output file is the contract, not its behavior. Small set, kept stable on purpose.
 
@@ -617,12 +744,15 @@ ext/build/
   cli.js                 # CLI entry, `bin` target (thin wrapper over src/main.js)
   build.js               # self-bundler: runs @gcu/build against its own src/
   src/
-    main.js              # manifest + library entry; exports bundle(), bundleToString()
+    main.js              # library entry; re-exports the public surface (§13.1)
+    core.js              # bundleModules(sources, opts) — the PURE core (no I/O) (§1.4)
+    merge.js             # mergeBundles(bundles, opts) — merge mode (§6.7)
     parse.js             # acorn wrappers, comment attachment
-    manifest.js          # walk imports transitively, produce ordered module list
+    manifest.js          # walk imports transitively → ordered module list (ADAPTER-side: reads files)
+    resolve.js           # bare/inline specifier → source path (adapter-side; §4.2 inline)
     scope.js             # AST scope walker for rewrite pass (§6.3); AIR integration helpers
     annotations.js       # extract @bundle-share and @bundle-verbatim from comments
-    rename.js            # the three-pass rename algorithm (§6)
+    rename.js            # renameCollisions() — the three-pass rename algorithm (§6, §6.6)
     rewrite.js           # patch generation: identifier renames, import/export stripping
     emit.js              # apply sorted patches to original source; build offset map (§6.4)
     sourcemap.js         # VLQ encoding, segment building, v3 map construction from offset map
@@ -630,6 +760,10 @@ ext/build/
     lint.js              # lint rules (§9)
     define.js            # define substitution (§10)
     errors.js            # error codes, formatting, throw helpers
+    io/
+      node.js            # node-fs adapter: bundle() — reads src/, writes outputs
+      vfs.js             # @gcu/vfs adapter: build inside Works / geas (browser)
+      memory.js          # in-memory adapter: { [path]: source } → result (tests)
   tests/
     fixtures/            # §16.1
     roundtrip/           # §16.2
@@ -676,8 +810,9 @@ New implementers: start in from-source mode. Only switch to from-bundle after th
 - Comment preservation (§8)
 - Section markers and file header (§8)
 - Final export block (§7.7)
-- Library API `bundle()` and `bundleToString()` (§13.1)
-- Synthetic fixture tests for phase-1 features (§16.1)
+- **The pure-core / adapter split (§1.4) from day one**: `bundleModules()` (pure, no I/O)
+  + the node-fs adapter `bundle()`. The split is foundational, not a later refactor.
+- Synthetic fixture tests for phase-1 features (§16.1) — use the **memory adapter**, no temp dirs
 - Round-trip test against `ext/adder` (§16.2)
 
 **Out:**
@@ -705,6 +840,20 @@ New implementers: start in from-source mode. Only switch to from-bundle after th
 - Namespace imports (§7.3)
 - Wildcard re-exports (§7.6)
 - Annotations: `@bundle-share`, `@bundle-verbatim` (§5)
+- **Inlined externals — the `inline` option (§4.2)** — replaces over's `externalDeps`
+  hack + strata's escaping-relative manifest entry. The first real migrations (over,
+  strata) need it, so it lands here, not in phase 3.
+- **Merge mode — `mergeBundles` (§6.7)** + migrating the Works surface inliner
+  (`_inlineLibsIntoSurface`) to use it. This is what fixes the *inter-bundle* collision
+  class (over×loom `inferType`) at its root.
+- **The `@gcu/vfs` adapter (§1.4)** — building inside Works / geas, in-browser. With
+  this, `bundleModules` runs unchanged over the workspace VFS; geas gets a `gcu-build`
+  builtin. (The core is already browser-native from phase 1; this is just the adapter.)
+- **Reproducibility / drift `--check` (§13.2)** wired into CI — every committed `index.js`
+  reproducible from source.
+- **TS annotation elision** — cheap, because `acorn-typescript` is *already vendored*
+  (air parses `: i32` hints with it). Elision = "don't emit the annotation nodes";
+  no new parser, no type-aware transform (still §2-compliant). Lands here, not deferred.
 - Lint rules (§9), all errors and warnings
 - Define substitution (§10)
 - CLI (§13.2) with `bin` entry
@@ -723,12 +872,12 @@ New implementers: start in from-source mode. Only switch to from-bundle after th
 **Goal:** quality-of-life additions, none blocking.
 
 **Scope (pick as needed):**
-- TS annotation elision (if any ext/* migrates to `.ts` sources)
+- (TS elision and the drift `--check` moved up to phase 2 — see above.)
 - Import attributes inlining (`import json from './x.json' with { type: 'json' }`)
-- `--workspace <glob>` for bulk rebuilds (§13.2)
-- `--check` mode for pre-commit / CI gating (§13.2)
+- `--workspace <glob>` incremental bulk rebuilds with `bundleHash` skip (§12, §13.2)
 - Manifest-order violation detection (`E014`) — requires extra top-level code flow analysis
 - Improved error suggestions using AIR's scope info (e.g. "did you mean `<similarly-named binding>`")
+- A geas `gcu-build` builtin + Works "Build package" affordance on top of the §1.4 VFS adapter
 
 **Out (still):**
 - Plugins, configs, minification, chunking, watch mode, HMR — these are separate tools or explicit non-goals.
@@ -761,6 +910,12 @@ Flagged here so they don't get lost but don't need resolution to begin implement
 
 For quick reference and in case Claude Code or a future reviewer wants the decisions without the rationale:
 
+- **Architecture: a pure I/O-free core (`bundleModules`) + thin adapters (node-fs, @gcu/vfs, memory). Browser-native by construction — the core touches no `fs`, acorn+air already run in the browser. This is the keystone; everything else is plumbing.**
+- **Big idea: the self-hosting build layer of an owned stack — builds itself, runs in the browser on the GCU platform, rebuildable from source forever. "Owned and legible all the way down" made true at the bottom.**
+- **Inlined externals (`inline` option): GCU shares zero-dep primitives by inlining at build (dimensions→over, sift→strata), collision-safe via the same rename pass. Not a runtime dep.**
+- **Two collision sites, one pass: per-package (intra-bundle) AND the Works surface inliner (inter-bundle, over×loom). `renameCollisions` is a public pass; `mergeBundles` (merge mode) applies it to pre-built bundles so the inliner stops being a footgun.**
+- **Drift `--check`: every committed `index.js` reproducible from source; a CI invariant. Import-graph manifest (not a hand list) structurally prevents the "forgot a file" bug.**
+- **TS annotation elision: in (phase 2), cheap — acorn-typescript is already vendored. Elision only, no type-aware transform (still §2-compliant).**
 - Rename: only on collision, `$moduleBasename` suffix, deterministic
 - Annotations: `@bundle-share`, `@bundle-verbatim`, block-comment form
 - Default exports: banned, build error
