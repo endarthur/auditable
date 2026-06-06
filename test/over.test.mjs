@@ -764,6 +764,31 @@ test('units: a declared unit that conflicts with the expression warns', () => {
   assert.ok(c.warnings.some((w) => /declared \[t\] but the expression is/.test(w)));
 });
 
+test('parse: a bare annotation (no `=`) — unit and vtype forms', () => {
+  const a = stmts('AU : [g/t]')[0];
+  assert.equal(a.type, 'Assign'); assert.equal(a.value, null); assert.equal(a.target.spec.unit, 'g/t');
+  const b = stmts('N : int')[0];
+  assert.equal(b.value, null); assert.equal(b.target.spec.vtype, 'int');
+  // a bare name with no spec and no `=` is still an error
+  assert.throws(() => compile('FOO'), /expected "="/);
+});
+
+test('units: a bare annotation `AU : [g/t]` sets the unit and propagates; value passes through', () => {
+  const c = compile('AU : [g/t]\nMETAL = AU * 2', { inputSchema: [{ name: 'AU', type: 'float' }] });
+  const by = Object.fromEntries(c.outputColumns.map((x) => [x.name, x.unit]));
+  assert.ok(dimEq(by.AU, { gpt: 1 }));        // annotation set the unit on the existing column
+  assert.ok(dimEq(by.METAL, { gpt: 1 }));     // and it propagated through the math
+  assert.equal(c.warnings.length, 0);
+  const out = compile('AU : [g/t]').run([{ AU: 1.5 }, { AU: 2 }]).rows;
+  assert.deepEqual(out.map((r) => r.AU), [1.5, 2]);   // value untouched (no row code emitted)
+});
+
+test('units: a vtype-only annotation does NOT wipe an existing unit', () => {
+  const c = compile('AU : float\nX = AU + 1', { inputSchema: [{ name: 'AU', type: 'float', unit: 'g/t' }] });
+  const by = Object.fromEntries(c.outputColumns.map((x) => [x.name, x.unit]));
+  assert.ok(dimEq(by.AU, { gpt: 1 }));        // still g/t — the annotation only touched vtype
+});
+
 test('units: no units declared → no unit channel, no overhead, no `unit` on columns', () => {
   const c = compile('Y = FE + 1', { inputSchema: [{ name: 'FE', type: 'float' }] });
   assert.equal(c.warnings.length, 0);

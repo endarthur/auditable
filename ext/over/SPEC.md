@@ -360,8 +360,9 @@ OX/TR/FR domains, 7 planted errors) was run through the full prep spine — vali
 clean → code (interval join) → composite → classify → units → summarise. **It works:**
 all 7 errors caught, and the planted geology *recovered* (composite domain grades OX 1.82
 > TR 0.97 > FR 0.75 g/t — the supergene enrichment built into the sim). Real actionable
-gaps: `emit` (skeleton, #1), bare unit annotation `AU : [g/t]` with no `=` (small),
-`mode()`/majority aggregate (medium), the downhole-gap idiom (minor). Correct *boundaries*
+gaps: `emit` (skeleton, #1), ~~bare unit annotation `AU : [g/t]` with no `=`~~ (**FIXED** —
+a bare `NAME : spec` now declares type/unit, value passes through), `mode()`/majority
+aggregate (medium), the downhole-gap idiom (minor). Correct *boundaries*
 (not gaps): CSV reading (host), require-vs-check idiom, tonnes need 3D block volume (OVER
 does grade-thickness g/t·m), the GT *curve* (flowsheet/sluice node).
 

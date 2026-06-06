@@ -137,6 +137,7 @@ export function emitRowSource(ast) {
   function stmt(st) {
     switch (st.type) {
       case 'Assign': {
+        if (st.value == null) return '';                    // bare annotation — type/unit only, no row code
         const v = emitExpr(st.value, ec);
         if (st.kind === 'let') { const id = `_l${lc++}`; lets.set(st.target.name, id); return `let ${id} = ${v};`; }
         lets.delete(st.target.name);

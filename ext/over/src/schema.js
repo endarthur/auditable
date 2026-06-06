@@ -170,18 +170,24 @@ export function schemaPass(ast, inputSchema = [], opts = {}) {
           if (st.kind === 'let') lets.set(st.target.name, t);
           else declare(st.target.name, t, !!(st.target.spec && st.target.spec.vtype));
           if (units) {
-            const declared = st.target.spec && st.target.spec.unit;
-            let unit;
-            if (declared) {
-              unit = parseUnit(st.target.spec.unit);
+            const annotation = st.value == null;
+            const declaredUnit = st.target.spec && st.target.spec.unit ? parseUnit(st.target.spec.unit) : null;
+            let unit, apply = true;
+            if (annotation) {
+              unit = declaredUnit;
+              apply = declaredUnit != null;        // a vtype-only annotation leaves the unit untouched
+            } else if (declaredUnit) {
+              unit = declaredUnit;
               const inferred = inferUnit(st.value, uctx);
               if (inferred && !dimEq(inferred, unit))
                 warnings.push(`column "${st.target.name}": declared [${st.target.spec.unit}] but the expression is ${dimFormat(inferred)}`);
             } else {
               unit = inferUnit(st.value, uctx);
             }
-            if (st.kind === 'let') { if (unit) letUnits.set(st.target.name, unit); else letUnits.delete(st.target.name); }
-            else { const col = map.get(st.target.name); if (col) { if (unit) col.unit = unit; else delete col.unit; } }
+            if (apply) {
+              if (st.kind === 'let') { if (unit) letUnits.set(st.target.name, unit); else letUnits.delete(st.target.name); }
+              else { const col = map.get(st.target.name); if (col) { if (unit) col.unit = unit; else delete col.unit; } }
+            }
           }
           break;
         }

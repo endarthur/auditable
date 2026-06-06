@@ -254,7 +254,8 @@ function lex(src) {
 //
 // AST (type-discriminated plain objects):
 //   Transform { dialect, statements:[Stmt] }
-//   Stmt = Assign  { kind:'field'|'let', target:{name, spec?}, value:Expr }
+//   Stmt = Assign  { kind:'field'|'let', target:{name, spec?}, value:Expr|null }
+//                  (value null = a bare `NAME : spec` annotation — type/unit only)
 //        | If      { clauses:[{test:Expr, body:[Stmt]}], alternate?:[Stmt] }
 //        | Project { name:'keep'|'saveonly'|'erase', fields:[string] }
 //        | Control { name:'delete'|'exit' }
@@ -340,9 +341,11 @@ function parseTokens(toks) {
     const name = next().v;
     const target = { name };
     if (isOp(':')) target.spec = parseTypeSpec();
+    // `NAME : spec` with no `=` is a bare annotation — declare a column's type/unit
+    // without assigning a value (the column passes through unchanged).
+    if (target.spec && !isOp('=')) return { type: 'Assign', kind: 'field', target, value: null };
     expectOp('=');
-    const value = parseExpr();
-    return { type: 'Assign', kind: 'field', target, value };
+    return { type: 'Assign', kind: 'field', target, value: parseExpr() };
   }
 
   function parseLet() {
@@ -607,6 +610,7 @@ const AGG_PRESERVING = new Set(['mean', 'sum', 'min', 'max', 'std', 'first', 'la
 // bare literal or undeclared column adopts the other operand's unit, so adding a
 // constant to a g/t doesn't nag). uctx = { unitOf(name) → dim|null, warn(msg) }.
 function inferUnit(expr, uctx) {
+  if (!expr) return null;                  // bare annotation (no value) → no inferred unit
   switch (expr.type) {
     case 'Field': return uctx.unitOf(expr.name);
     case 'Unary': return inferUnit(expr.operand, uctx);
@@ -822,18 +826,24 @@ function schemaPass(ast, inputSchema = [], opts = {}) {
           if (st.kind === 'let') lets.set(st.target.name, t);
           else declare(st.target.name, t, !!(st.target.spec && st.target.spec.vtype));
           if (units) {
-            const declared = st.target.spec && st.target.spec.unit;
-            let unit;
-            if (declared) {
-              unit = parseUnit(st.target.spec.unit);
+            const annotation = st.value == null;
+            const declaredUnit = st.target.spec && st.target.spec.unit ? parseUnit(st.target.spec.unit) : null;
+            let unit, apply = true;
+            if (annotation) {
+              unit = declaredUnit;
+              apply = declaredUnit != null;        // a vtype-only annotation leaves the unit untouched
+            } else if (declaredUnit) {
+              unit = declaredUnit;
               const inferred = inferUnit(st.value, uctx);
               if (inferred && !dimEq(inferred, unit))
                 warnings.push(`column "${st.target.name}": declared [${st.target.spec.unit}] but the expression is ${dimFormat(inferred)}`);
             } else {
               unit = inferUnit(st.value, uctx);
             }
-            if (st.kind === 'let') { if (unit) letUnits.set(st.target.name, unit); else letUnits.delete(st.target.name); }
-            else { const col = map.get(st.target.name); if (col) { if (unit) col.unit = unit; else delete col.unit; } }
+            if (apply) {
+              if (st.kind === 'let') { if (unit) letUnits.set(st.target.name, unit); else letUnits.delete(st.target.name); }
+              else { const col = map.get(st.target.name); if (col) { if (unit) col.unit = unit; else delete col.unit; } }
+            }
           }
           break;
         }
@@ -1138,6 +1148,7 @@ function emitRowSource(ast) {
   function stmt(st) {
     switch (st.type) {
       case 'Assign': {
+        if (st.value == null) return '';                    // bare annotation — type/unit only, no row code
         const v = emitExpr(st.value, ec);
         if (st.kind === 'let') { const id = `_l${lc++}`; lets.set(st.target.name, id); return `let ${id} = ${v};`; }
         lets.delete(st.target.name);

@@ -58,6 +58,7 @@ const AGG_PRESERVING = new Set(['mean', 'sum', 'min', 'max', 'std', 'first', 'la
 // bare literal or undeclared column adopts the other operand's unit, so adding a
 // constant to a g/t doesn't nag). uctx = { unitOf(name) → dim|null, warn(msg) }.
 export function inferUnit(expr, uctx) {
+  if (!expr) return null;                  // bare annotation (no value) → no inferred unit
   switch (expr.type) {
     case 'Field': return uctx.unitOf(expr.name);
     case 'Unary': return inferUnit(expr.operand, uctx);

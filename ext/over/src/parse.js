@@ -3,7 +3,8 @@
 //
 // AST (type-discriminated plain objects):
 //   Transform { dialect, statements:[Stmt] }
-//   Stmt = Assign  { kind:'field'|'let', target:{name, spec?}, value:Expr }
+//   Stmt = Assign  { kind:'field'|'let', target:{name, spec?}, value:Expr|null }
+//                  (value null = a bare `NAME : spec` annotation — type/unit only)
 //        | If      { clauses:[{test:Expr, body:[Stmt]}], alternate?:[Stmt] }
 //        | Project { name:'keep'|'saveonly'|'erase', fields:[string] }
 //        | Control { name:'delete'|'exit' }
@@ -90,9 +91,11 @@ export function parseTokens(toks) {
     const name = next().v;
     const target = { name };
     if (isOp(':')) target.spec = parseTypeSpec();
+    // `NAME : spec` with no `=` is a bare annotation — declare a column's type/unit
+    // without assigning a value (the column passes through unchanged).
+    if (target.spec && !isOp('=')) return { type: 'Assign', kind: 'field', target, value: null };
     expectOp('=');
-    const value = parseExpr();
-    return { type: 'Assign', kind: 'field', target, value };
+    return { type: 'Assign', kind: 'field', target, value: parseExpr() };
   }
 
   function parseLet() {
