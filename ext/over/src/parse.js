@@ -138,10 +138,22 @@ export function parseTokens(toks) {
     while (isOp('and')) { next(); left = { type: 'Binary', op: 'and', left, right: parseRel() }; }
     return left;
   }
+  // Chained comparisons (Python-style): `a <= b < c` → `(a <= b) and (b < c)`.
+  // Useful generally (`0 < grade < 100`) and exactly what an interval predicate
+  // wants (`from <= DEPTH < to`). The shared operand is re-referenced in the AST
+  // (fine for OVER's pure column/expr operands).
   function parseRel() {
-    const left = parseAdd();
-    if (isRel()) { const op = next().v; return { type: 'Binary', op, left, right: parseAdd() }; }
-    return left;
+    let left = parseAdd();
+    if (!isRel()) return left;
+    let prev = left, result = null;
+    while (isRel()) {
+      const op = next().v;
+      const right = parseAdd();
+      const comp = { type: 'Binary', op, left: prev, right };
+      result = result ? { type: 'Binary', op: 'and', left: result, right: comp } : comp;
+      prev = right;
+    }
+    return result;
   }
   function parseAdd() {
     let left = parseMul();

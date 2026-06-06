@@ -101,6 +101,19 @@ test('parse: and binds tighter than or; ?? lowest', () => {
   assert.equal(w.op, '??'); assert.equal(w.left.op, 'or');
 });
 
+test('parse: chained comparison desugars to and', () => {
+  const v = stmts('X = 0 < FE < 100')[0].value;
+  assert.equal(v.op, 'and');
+  assert.equal(v.left.op, '<');    // 0 < FE
+  assert.equal(v.right.op, '<');   // FE < 100
+  assert.equal(v.right.left.name, 'FE');
+});
+
+test('run: chained comparison (a < b < c)', () => {
+  assert.deepEqual(run('MID = 40 < FE < 60').map((x) => x.MID), [false, true, false]);   // FE 64,58,30
+  assert.deepEqual(run('OK = 0 <= P and P <= 0.2').map((x) => x.OK), [true, true, true]);
+});
+
 test('parse: unary minus, absent, calls', () => {
   assert.deepEqual(stmts('X = -FE')[0].value, { type: 'Unary', op: '-', operand: { type: 'Field', name: 'FE' } });
   assert.deepEqual(stmts('X = FE ?? absent')[0].value.right, { type: 'Absent' });
