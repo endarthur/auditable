@@ -1,7 +1,7 @@
-// @gcu/recon — reconnaissance for data: a heuristic-driven sniffer
-// Auto-generated from ext/recon/src/ — do not edit directly
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
+// @gcu/recon — Reconnaissance for data: a general, heuristic-driven sniffer that scouts a sample of tabular data and produces an annotated manifest — delimiter, types, semantic roles, units, analytes, spatial grid facet — via a registry of heuristics. Geoscience detection is one registerable pack. Inference only; zero dependencies.
 
-// -- detect.js --
+// ── src/detect.js ──
 
 // @gcu/recon — bootstrap detection: delimiter, base column types, the sniff context.
 // Zero-dep; NULL_SENTINELS mirrors @gcu/sluice's (recon stays standalone).
@@ -65,7 +65,7 @@ function buildContext(lines, { delimiter, comment = '#' } = {}) {
   return { delimiter: delim, header, sampleRows, columnCount, baseTypes, distinct: distinct.map((s) => s.size), rowSample: n };
 }
 
-// -- naming.js --
+// ── src/naming.js ──
 
 // @gcu/recon — column-NAME analysis: coordinate roles, units, analytes.
 // Standalone detectors (exported; useful + testable on their own).
@@ -152,7 +152,7 @@ function detectAnalyte(name) {
   return null;
 }
 
-// -- geometry.js --
+// ── src/geometry.js ──
 
 // @gcu/recon — grid geometry inference (the scan-phase). A sluice-protocol
 // accumulator collects per-axis coord material; inferGeometry interprets it into
@@ -302,7 +302,7 @@ function computeAxis(axisData, dimValues) {
   return { origin: min, max, size: parentSize, count, isSubBlocked, subBlockSizes };
 }
 
-// -- heuristics.js --
+// ── src/heuristics.js ──
 
 // @gcu/recon — built-in heuristic packs. Each heuristic: { name, pack, detect(ctx) }
 // returning Annotation[] = { target, key, value, confidence, source }. target is a
@@ -409,11 +409,10 @@ const analyteH = {
 
 const geoPack = [coordsH, unitsH, analyteH];
 
-// -- recon.js --
+// ── src/recon.js ──
 
 // @gcu/recon — the registry + the sniff() runner that assembles the annotated
 // manifest from heuristic output.
-
 
 
 // Mutable default registry (plugin-over-hardwire: register more packs at will).
@@ -486,20 +485,37 @@ function assemble(ctx) {
   };
 }
 
+// ── src/main.js ──
+
+// @gcu/recon — reconnaissance for data: a general, heuristic-driven sniffer.
+//
+// Scouts a sample of tabular data (and, for geometry, a coord scan) and produces
+// an annotated manifest — delimiter, header, types, semantic roles, units,
+// analytes, spatial facet — via a registry of heuristics. Geoscience detection is
+// one registerable pack, not hardcoded. Inference only: no mutation, no reorder,
+// no format reading (sources are sluice/archive/omf). Zero-dep.
+//
+// Module manifest (build concat order):
+//   detect.js     — delimiter, base types, the sniff context, NULL_SENTINELS
+//   naming.js     — column-name analysis: coords, units, analytes (standalone detectors)
+//   geometry.js   — geometryAccumulator (sluice-protocol) + inferGeometry
+//   heuristics.js — corePack + geoPack
+//   recon.js      — registry + sniff() runner + manifest assembly
+
 export {
-  DXYZ_PATTERNS,
   NULL_SENTINELS,
-  XYZ_PATTERNS,
-  buildContext,
-  corePack,
-  defaultHeuristics,
-  detectAnalyte,
   detectDelimiter,
-  detectUnit,
-  geoPack,
-  geometryAccumulator,
+  buildContext,
+  XYZ_PATTERNS,
+  DXYZ_PATTERNS,
   guessCoords,
+  detectUnit,
+  detectAnalyte,
+  geometryAccumulator,
   inferGeometry,
+  corePack,
+  geoPack,
+  defaultHeuristics,
   registerHeuristic,
   sniff,
 };

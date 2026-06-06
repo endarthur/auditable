@@ -1,7 +1,7 @@
-// @gcu/sluice — online / streaming statistics nucleus
-// Auto-generated from ext/sluice/src/ — do not edit directly
+// ⚠ GENERATED FILE — DO NOT EDIT. Source: src/  Build: @gcu/build src/main.js
+// @gcu/sluice — Online / streaming statistics nucleus: mergeable, never-resident accumulators (Welford moments, t-digest quantiles, capped categoricals, histograms) over unbounded row streams, plus a cold-recipe scan runner. Parallel-ready by construction. Zero dependencies.
 
-// -- accumulator.js --
+// ── src/accumulator.js ──
 
 // @gcu/sluice — the Accumulator protocol + simple value-accumulators.
 //
@@ -163,7 +163,7 @@ function weightedStats() {
   };
 }
 
-// -- tdigest.js --
+// ── src/tdigest.js ──
 
 // @gcu/sluice — t-digest streaming approximate quantiles.
 //
@@ -272,7 +272,7 @@ function quantile(state, q) {
   return quantileFromCentroids(state.centroids.map((c) => [c.mean, c.count]), state.totalCount, q);
 }
 
-// -- categorical.js --
+// ── src/categorical.js ──
 
 // @gcu/sluice — categorical accumulators: exact-with-cap value counts +
 // cardinality. Mining domains are small (tens), so exact-with-cap beats
@@ -336,7 +336,7 @@ function mergeCounts(a, b) {
   return { counts, distinct, overflow, limit };
 }
 
-// -- histogram.js --
+// ── src/histogram.js ──
 
 // @gcu/sluice — fixed-bin weighted histogram (dense Float64Array counts).
 // Bounded by construction. Float64Array state is structuredClone-transferable.
@@ -382,7 +382,7 @@ function cumulativeFromTop(counts) {
   return out;
 }
 
-// -- combinators.js --
+// ── src/combinators.js ──
 
 // @gcu/sluice — combinators: the row-level fan-out layer. Each returns an
 // Accumulator (same protocol), so they nest freely. They carry row->value
@@ -516,7 +516,7 @@ function binned(coordOf, opts, accFactory, { weight } = {}) {
   };
 }
 
-// -- gradetonnage.js --
+// ── src/gradetonnage.js ──
 
 // @gcu/sluice — grade-tonnage: a row-level accumulator.
 //
@@ -585,7 +585,7 @@ function gradeTonnage({ grade, gradeMin, gradeMax, bins = 200, blockVolume = nul
   };
 }
 
-// -- spec.js --
+// ── src/spec.js ──
 
 // @gcu/sluice — serializable accumulator specs.
 //
@@ -605,11 +605,6 @@ function gradeTonnage({ grade, gradeMin, gradeMax, bins = 200, blockVolume = nul
 //                `column` it feeds the whole row (for a nested combinator).
 //   groupBy: { kind: 'groupBy', column, of: <spec>, maxGroups?, weight? }
 //   binned:  { kind: 'binned', column, bins: {min,max,bins}|{binWidth}, of: <spec>, weight? }
-
-
-
-
-
 
 
 function accumulatorFromSpec(spec) {
@@ -653,7 +648,7 @@ function weightOpt(spec) {
   return spec.weight ? { weight: col(spec.weight) } : {};
 }
 
-// -- runner.js --
+// ── src/runner.js ──
 
 // @gcu/sluice — the cold-recipe scan runner.
 //
@@ -692,7 +687,7 @@ function fromFile(file) { return () => file.stream(); }
 // Decode bytes incrementally with TextDecoder (portable; avoids TextDecoderStream).
 // Strips trailing \r, skips comment lines. Yields every other line (blanks too;
 // parseCsv skips blanks after the header).
-export async function* lines(src, { comment = '#' } = {}) {
+async function* lines(src, { comment = '#' } = {}) {
   const reader = src().getReader();
   const dec = new TextDecoder();
   let buf = '';
@@ -891,41 +886,61 @@ function detectFieldSep(line) {
   return best;
 }
 
+// ── src/main.js ──
+
+// @gcu/sluice — online / streaming statistics nucleus.
+//
+// A sluice box: feed it a flow of rows, retain the valuable fraction (the
+// statistics), let the bulk pass. Mergeable, never-resident accumulators over
+// unbounded row streams + a cold-recipe scan runner. The streaming complement
+// to @gcu/scitra (batch) and @gcu/line (BLAS).
+//
+// Module manifest (build concat order):
+//   accumulator.js — the Accumulator protocol + count/sum/extent/welford/weightedStats
+//   tdigest.js     — t-digest quantiles (mergeable) + quantileFromCentroids
+//   categorical.js — topK / cardinality (exact-with-cap)
+//   histogram.js   — fixed-bin weighted histogram + cumulativeFromTop
+//   combinators.js — collect / groupBy / binned (row-level fan-out)
+//   gradetonnage.js— gradeTonnage (cumulative grade-tonnage curve; mining-domain)
+//   spec.js        — accumulatorFromSpec (serializable accumulator specs, cross-realm op contract)
+//   runner.js      — sources, lines, sample, parseCsv, filter/map/select, recipe, scan, chunks
+
 export {
-  NULL_SENTINELS,
   accumulator,
-  accumulatorFromSpec,
-  binned,
-  cardinality,
-  chunks,
-  collect,
-  compileExpr,
   count,
-  cumulativeFromTop,
+  sum,
   extent,
-  filter,
-  fromBlob,
-  fromBytes,
-  fromFile,
-  fromText,
-  gradeTonnage,
-  groupBy,
+  welford,
+  weightedStats,
+  tdigest,
+  quantileFromCentroids,
+  quantile,
+  topK,
+  cardinality,
   histogram,
+  cumulativeFromTop,
+  collect,
+  groupBy,
+  binned,
+  gradeTonnage,
+  accumulatorFromSpec,
+  NULL_SENTINELS,
+  source,
+  fromText,
+  fromBytes,
+  fromBlob,
+  fromFile,
+  lines,
+  sample,
+  parseCsv,
+  filter,
   map,
+  select,
+  compileExpr,
   opFromSpec,
   opsFromSpecs,
-  parseCsv,
-  quantile,
-  quantileFromCentroids,
   recipe,
-  sample,
-  scan,
   scanState,
-  select,
-  source,
-  sum,
-  tdigest,
-  topK,
-  weightedStats,
-  welford,
+  scan,
+  chunks,
 };
