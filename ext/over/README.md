@@ -16,7 +16,7 @@ on-ramp; everyone else keeps their JS/adder derived columns.
 # domain-relative grade, classify, project — schema resolved before any row runs
 FE_N    = FE / mean(FE) over LITHO
 ORETYPE = match FE { >=64:"HEMATITE", >=58:"ITABIRITE", _:"WASTE" }
-DENSITY = lookup(densities, LITHO)
+DENSITY = lookup densities.density where densities.litho == LITHO
 saveonly(IJK, FE, FE_N, ORETYPE, DENSITY)
 ```
 

@@ -209,6 +209,7 @@ export function parseTokens(toks) {
       if (t.v === 'false') { next(); return { type: 'Bool', value: false }; }
       if (t.v === 'absent') { next(); return { type: 'Absent' }; }
       if (t.v === 'match') return parseMatch();
+      if (t.v === 'lookup') return parseLookup();
       next();
       if (isOp('(')) {
         next();
@@ -217,9 +218,21 @@ export function parseTokens(toks) {
         expectOp(')');
         return { type: 'Call', name: t.v, args };
       }
+      if (isOp('.')) { next(); return { type: 'Qualified', table: t.v, col: fieldName() }; }   // table.col
       return { type: 'Field', name: t.v };
     }
     throw err(`unexpected ${desc(t)}`);
+  }
+
+  // SQL-y join: `lookup TABLE.valueCol where PREDICATE`. The value is a qualified
+  // ref; the predicate is an `and` of comparisons between TABLE.col and this row's
+  // values. The compiler reads the predicate shape to pick the index (lookup.js).
+  function parseLookup() {
+    expectId('lookup');
+    const value = parsePrimary();
+    if (value.type !== 'Qualified') throw err('lookup expects `lookup TABLE.column where …`');
+    expectId('where');
+    return { type: 'Lookup', value, predicate: parseExpr() };
   }
 
   function parseMatch() {

@@ -1,58 +1,73 @@
-// @gcu/over — lookup / join (multi-table). A row enriches itself from an injected
-// reference table. Two forms, both build-once / probe-per-row (the windows pattern):
+// @gcu/over — lookup / join (SQL-y, multi-table).
 //
-//   equality:  DENS = lookup(densities, "litho", LITHO, "density")
-//              lookup(<table>, <refKeyCol>, <probeExpr>, <valueCol>)
-//              hash per (table,key) → O(1) probe.
+//   DENSITY = lookup densities.density where densities.litho == LITHO
+//   DOMAIN  = lookup domains.code where domains.hole == hole and domains.from <= DEPTH < domains.to
 //
-//   interval:  CODE = lookup_in(domains, "hole", HOLE, "from", "to", DEPTH, "code")
-//              lookup_in(<table>, <eqCol>, <eqProbe>, <loCol>, <hiCol>, <posExpr>, <valueCol>)
-//              per-eq-key sorted-interval index → O(log M) binary search; the
-//              geology join (desurvey / compositing / domain-by-depth). Half-open
-//              [lo, hi): lo ≤ pos < hi (the universal downhole-interval convention).
-//
-// Tables injected by name (run(rows, { table })); all column names are EXPLICIT
-// string literals (nothing inferred); left-join (unmatched → absent). Aggregating
-// one-to-many joins (compositing) are a separate, bigger feature.
+// `lookup TABLE.valueCol where PREDICATE`. The predicate is an `and` of comparisons,
+// each between a TABLE.<col> (qualified ref) and a row value. The compiler reads the
+// predicate SHAPE and picks the index — pure equality → hash; equality + a range
+// pair → per-eq-key sorted intervals + binary search (the geology join). Tables are
+// injected by name (run(rows, { table })); left-join (unmatched → absent). Index is
+// built once per (table, eq-cols, range-cols) and shared across value columns.
 
 const SEP = String.fromCharCode(1);
 const refRowsOf = (t) => (Array.isArray(t) ? t : (t && t.rows) || null);
 const isAbsent = (x) => x == null || x !== x;
 const numCmp = (a, b) => Number(a) - Number(b);
+const FLIP = { '<': '>', '<=': '>=', '>': '<', '>=': '<=', '==': '==' };
 
-// ── shape validation ──
-export function lookupSpec(call) {
-  const a = call.args || [];
-  if (a.length !== 4) throw new Error('over: lookup(table, "keyCol", probe, "valueCol") takes 4 arguments');
-  if (a[0].type !== 'Field') throw new Error('over: lookup\'s first argument must be a table name');
-  if (a[1].type !== 'Str' || a[3].type !== 'Str') throw new Error('over: lookup\'s key + value columns must be string literals');
-  return { table: a[0].name, keyCol: a[1].value };
+// Analyze a Lookup node's value + predicate → equality refs/probes + an optional
+// range. Throws on anything outside `and` of `TABLE.col <cmp> rowValue`.
+function analyze(node) {
+  if (node.value.type !== 'Qualified') throw new Error('over: lookup expects `lookup TABLE.column where …`');
+  const table = node.value.table, valueCol = node.value.col;
+  const terms = [];
+  (function flat(e) { if (e && e.type === 'Binary' && e.op === 'and') { flat(e.left); flat(e.right); } else terms.push(e); })(node.predicate);
+
+  const eqRefCols = [], eqProbes = [], lows = [], highs = [];
+  for (const t of terms) {
+    if (!t || t.type !== 'Binary' || !FLIP[t.op]) throw new Error('over: a lookup `where` must be comparisons joined by `and`');
+    const lq = t.left.type === 'Qualified' && t.left.table === table;
+    const rq = t.right.type === 'Qualified' && t.right.table === table;
+    if (lq === rq) throw new Error(`over: each lookup condition must compare ${table}.<col> with a row value`);
+    const refCol = lq ? t.left.col : t.right.col;
+    const op = lq ? t.op : FLIP[t.op];            // normalize: ref on the left
+    const probe = lq ? t.right : t.left;
+    if (op === '==') { eqRefCols.push(refCol); eqProbes.push(probe); }
+    else if (op === '<=' || op === '<') lows.push({ refCol, op, probe });    // ref ≤ probe → ref is LO
+    else highs.push({ refCol, op, probe });                                  // ref ≥ probe → ref is HI
+  }
+
+  let range = null;
+  if (lows.length || highs.length) {
+    if (lows.length !== 1 || highs.length !== 1)
+      throw new Error('over: a range needs one lower (TABLE.from <= pos) and one upper (pos < TABLE.to) bound');
+    range = { loCol: lows[0].refCol, hiCol: highs[0].refCol, loOp: lows[0].op, hiOp: highs[0].op, posProbe: lows[0].probe };
+  }
+  return { table, valueCol, eqRefCols, eqProbes, range };
 }
 
-export function lookupInSpec(call) {
-  const a = call.args || [];
-  if (a.length !== 7) throw new Error('over: lookup_in(table, "eqCol", eqProbe, "loCol", "hiCol", posProbe, "valueCol") takes 7 arguments');
-  if (a[0].type !== 'Field') throw new Error('over: lookup_in\'s first argument must be a table name');
-  for (const i of [1, 3, 4, 6]) if (a[i].type !== 'Str') throw new Error('over: lookup_in\'s column names must be string literals');
-  return { table: a[0].name, eqCol: a[1].value, loCol: a[3].value, hiCol: a[4].value };
-}
-
-// Walk the AST, validate every lookup()/lookup_in() Call, and return the unique
-// build specs of each kind.
+// Collect Lookup nodes: assign each a dedup'd indexId, tag node._spec (for emit),
+// return the unique index defs to build.
 export function collectLookups(ast) {
-  const eq = [], interval = [];
-  const seenEq = new Set(), seenIv = new Set();
+  const defs = [];
+  const byKey = new Map();
 
+  function consider(node) {
+    const a = analyze(node);
+    const rk = a.range ? `${a.range.loCol}|${a.range.hiCol}|${a.range.loOp}|${a.range.hiOp}` : '';
+    const key = a.table + SEP + a.eqRefCols.join(',') + SEP + rk;
+    let indexId = byKey.get(key);
+    if (indexId === undefined) {
+      indexId = defs.length; byKey.set(key, indexId);
+      defs.push({ table: a.table, eqRefCols: a.eqRefCols, range: a.range ? { loCol: a.range.loCol, hiCol: a.range.hiCol, loOp: a.range.loOp, hiOp: a.range.hiOp } : null });
+    }
+    node._spec = { indexId, valueCol: a.valueCol, eqProbes: a.eqProbes, posProbe: a.range ? a.range.posProbe : null };
+  }
   function expr(e) {
     if (!e || typeof e !== 'object') return;
-    if (e.type === 'Call' && e.name === 'lookup') {
-      const s = lookupSpec(e); const k = s.table + SEP + s.keyCol;
-      if (!seenEq.has(k)) { seenEq.add(k); eq.push(s); }
-    } else if (e.type === 'Call' && e.name === 'lookup_in') {
-      const s = lookupInSpec(e); const k = s.table + SEP + s.eqCol + SEP + s.loCol + SEP + s.hiCol;
-      if (!seenIv.has(k)) { seenIv.add(k); interval.push(s); }
-    }
-    expr(e.operand); expr(e.left); expr(e.right); expr(e.agg); expr(e.subject); expr(e.default);
+    if (e.type === 'Lookup') consider(e);
+    expr(e.operand); expr(e.left); expr(e.right); expr(e.agg); expr(e.subject); expr(e.default); expr(e.predicate); expr(e.value);
     if (e.args) e.args.forEach(expr);
     if (e.arms) e.arms.forEach((arm) => { expr(arm.test); expr(arm.value); });
   }
@@ -61,67 +76,52 @@ export function collectLookups(ast) {
     else if (st.type === 'If') { st.clauses.forEach((c) => { expr(c.test); c.body.forEach(stmt); }); if (st.alternate) st.alternate.forEach(stmt); }
   }
   ast.statements.forEach(stmt);
-  return { eq, interval };
+  return defs;
 }
 
-export function hasLookups(specs) { return !!(specs && (specs.eq.length || specs.interval.length)); }
+export function hasLookups(defs) { return !!(defs && defs.length); }
 
-// Build the indexes once, before the row pass.
-export function buildLookups(specs, tables) {
-  const eqIdx = new Map();        // (table,key) → Map(keyVal → row)
-  const ivIdx = new Map();        // (table,eqCol,loCol,hiCol) → Map(eqVal → sorted [{lo,hi,row}])
-
-  for (const { table, keyCol } of specs.eq) {
-    const refRows = refRowsOf(tables && tables[table]);
-    if (!refRows) throw new Error(`over: lookup table "${table}" was not provided to run(rows, tables)`);
-    const m = new Map();
-    for (const r of refRows) if (!m.has(r[keyCol])) m.set(r[keyCol], r);   // first wins
-    eqIdx.set(table + SEP + keyCol, m);
-  }
-
-  for (const { table, eqCol, loCol, hiCol } of specs.interval) {
-    const refRows = refRowsOf(tables && tables[table]);
-    if (!refRows) throw new Error(`over: lookup_in table "${table}" was not provided to run(rows, tables)`);
+// Build each index once: a hash (eq-only) or per-eq-key sorted intervals (range).
+export function buildLookups(defs, tables) {
+  return defs.map((d) => {
+    const refRows = refRowsOf(tables && tables[d.table]);
+    if (!refRows) throw new Error(`over: lookup table "${d.table}" was not provided to run(rows, tables)`);
+    const eqKey = (r) => d.eqRefCols.map((c) => String(r[c])).join(SEP);
+    if (!d.range) {
+      const m = new Map();
+      for (const r of refRows) { const k = eqKey(r); if (!m.has(k)) m.set(k, r); }   // first wins
+      return { range: false, m };
+    }
     const groups = new Map();
     for (const r of refRows) {
-      if (isAbsent(r[loCol]) || isAbsent(r[hiCol])) continue;             // skip malformed intervals
-      const eqVal = r[eqCol];
-      let g = groups.get(eqVal); if (!g) { g = []; groups.set(eqVal, g); }
-      g.push({ lo: r[loCol], hi: r[hiCol], row: r });
+      if (isAbsent(r[d.range.loCol]) || isAbsent(r[d.range.hiCol])) continue;
+      const k = eqKey(r);
+      let g = groups.get(k); if (!g) { g = []; groups.set(k, g); }
+      g.push({ lo: r[d.range.loCol], hi: r[d.range.hiCol], row: r });
     }
     for (const g of groups.values()) g.sort((a, b) => numCmp(a.lo, b.lo));
-    ivIdx.set(table + SEP + eqCol + SEP + loCol + SEP + hiCol, groups);
-  }
-
-  return { eqIdx, ivIdx };
+    return { range: true, m: groups, loOp: d.range.loOp, hiOp: d.range.hiOp };
+  });
 }
 
-// ctx.lookup — equality probe. Unmatched → null (absent).
+// ctx.lookup(indexId, eqVals[], posVal, valueCol) — the row fn probes here.
 export function makeLookup(indexes) {
-  return (table, keyCol, keyVal, valCol) => {
-    const m = indexes.eqIdx.get(table + SEP + keyCol);
-    const row = m && m.get(keyVal);
-    if (!row) return null;
-    const v = row[valCol];
-    return v === undefined ? null : v;
-  };
-}
-
-// ctx.lookupIn — interval probe. Binary-search the eq-group's sorted intervals for
-// the half-open [lo, hi) containing pos. Out of any interval / unmatched → null.
-export function makeLookupIn(indexes) {
-  return (table, eqCol, eqVal, loCol, hiCol, pos, valCol) => {
-    if (isAbsent(pos)) return null;
-    const groups = indexes.ivIdx.get(table + SEP + eqCol + SEP + loCol + SEP + hiCol);
-    const arr = groups && groups.get(eqVal);
+  return (indexId, eqVals, posVal, valueCol) => {
+    const idx = indexes[indexId];
+    const eqKey = eqVals.map(String).join(SEP);
+    if (!idx.range) {
+      const row = idx.m.get(eqKey);
+      if (!row) return null;
+      const v = row[valueCol]; return v === undefined ? null : v;
+    }
+    if (isAbsent(posVal)) return null;
+    const arr = idx.m.get(eqKey);
     if (!arr || !arr.length) return null;
-    // rightmost interval with lo <= pos
-    let lo = 0, hi = arr.length - 1, found = -1;
-    while (lo <= hi) { const mid = (lo + hi) >> 1; if (numCmp(arr[mid].lo, pos) <= 0) { found = mid; lo = mid + 1; } else hi = mid - 1; }
-    if (found < 0) return null;
-    const iv = arr[found];
-    if (numCmp(pos, iv.hi) >= 0) return null;        // in a gap / past the last interval
-    const v = iv.row[valCol];
-    return v === undefined ? null : v;
+    const loOk = idx.loOp === '<=' ? (lo) => numCmp(lo, posVal) <= 0 : (lo) => numCmp(lo, posVal) < 0;
+    const hiOk = idx.hiOp === '>' ? (hi) => numCmp(posVal, hi) < 0 : (hi) => numCmp(posVal, hi) <= 0;
+    let lo = 0, hi = arr.length - 1, found = -1;     // rightmost interval with lo "below" pos
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (loOk(arr[mid].lo)) { found = mid; lo = mid + 1; } else hi = mid - 1; }
+    if (found < 0 || !hiOk(arr[found].hi)) return null;
+    const v = arr[found].row[valueCol]; return v === undefined ? null : v;
   };
 }

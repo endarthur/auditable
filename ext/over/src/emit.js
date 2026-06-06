@@ -55,6 +55,14 @@ export function emitExpr(e, ec) {
     case 'Call': return emitCall(e, ec);
     case 'Match': return emitMatch(e, ec);
     case 'Window': return ec.onWindow(e, ec);
+    case 'Lookup': {
+      if (!ec.hasCtx) throw new Error('over: lookup is not allowed inside a window aggregate / order / where');
+      const s = e._spec;
+      const eq = `[${s.eqProbes.map((p) => emitExpr(p, ec)).join(', ')}]`;
+      const pos = s.posProbe ? emitExpr(s.posProbe, ec) : 'null';
+      return `ctx.lookup(${s.indexId}, ${eq}, ${pos}, ${JSON.stringify(s.valueCol)})`;
+    }
+    case 'Qualified': throw new Error('over: a qualified reference (table.col) is only valid in a lookup `where` clause');
     default: throw new Error(`over emit: unknown expression "${e.type}"`);
   }
 }
@@ -78,17 +86,6 @@ function emitCall(e, ec) {
   if (e.name === 'default') {                              // per-column declared fill
     const a = e.args[0];
     return a && a.type === 'Field' && ec.defaults.has(a.name) ? ec.defaults.get(a.name) : 'null';
-  }
-  if (e.name === 'lookup') {                               // lookup(table, "key", probe, "value")
-    if (!ec.hasCtx) throw new Error('over: lookup() is not allowed inside a window aggregate / order / where');
-    const a = e.args;
-    return `ctx.lookup(${JSON.stringify(a[0].name)}, ${JSON.stringify(a[1].value)}, ${emitExpr(a[2], ec)}, ${JSON.stringify(a[3].value)})`;
-  }
-  if (e.name === 'lookup_in') {                            // lookup_in(table, "eq", eqProbe, "lo", "hi", pos, "value")
-    if (!ec.hasCtx) throw new Error('over: lookup_in() is not allowed inside a window aggregate / order / where');
-    const a = e.args;
-    return `ctx.lookupIn(${JSON.stringify(a[0].name)}, ${JSON.stringify(a[1].value)}, ${emitExpr(a[2], ec)}, `
-      + `${JSON.stringify(a[3].value)}, ${JSON.stringify(a[4].value)}, ${emitExpr(a[5], ec)}, ${JSON.stringify(a[6].value)})`;
   }
   return `_over.call(${JSON.stringify(e.name)}${e.args.map((a) => ', ' + emitExpr(a, ec)).join('')})`;
 }

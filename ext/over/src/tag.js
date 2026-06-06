@@ -35,7 +35,7 @@ export function over(strings, ...values) {
 
 const KEYWORDS = new Set([
   'if', 'elseif', 'else', 'end', 'keep', 'saveonly', 'erase', 'delete', 'exit',
-  'let', 'match', 'and', 'or', 'not', 'over', 'all', 'where', 'order', 'by', 'default',
+  'let', 'match', 'and', 'or', 'not', 'over', 'all', 'where', 'order', 'by', 'default', 'lookup',
 ]);
 const LITERALS = new Set(['true', 'false', 'absent']);
 const FUNCTIONS = new Set([
@@ -43,7 +43,7 @@ const FUNCTIONS = new Set([
   'prev', 'next', 'first', 'last',
   'abs', 'sqrt', 'exp', 'log', 'loge', 'logn', 'log10', 'pow', 'rais', 'mod',
   'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'atan2', 'int', 'round', 'present',
-  'len', 'ucase', 'lcase', 'trim', 'string', 'concat', 'substr', 'lookup', 'lookup_in',
+  'len', 'ucase', 'lcase', 'trim', 'string', 'concat', 'substr',
   'xyzijk', 'ijknum', 'ijkget',
 ]);
 

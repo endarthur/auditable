@@ -12,7 +12,7 @@
 
 const OP3 = [];                                   // (none yet)
 const OP2 = ['==', '!=', '<=', '>=', '??'];
-const OP1 = ['=', '<', '>', '+', '-', '*', '/', '(', ')', '{', '}', ':', ',', ';'];
+const OP1 = ['=', '<', '>', '+', '-', '*', '/', '(', ')', '{', '}', ':', ',', ';', '.'];
 const WORD_OPS = new Set(['and', 'or']);          // infix keyword operators
 
 const isDigit = (c) => c >= '0' && c <= '9';

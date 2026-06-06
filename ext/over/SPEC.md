@@ -176,7 +176,7 @@ let ratio = SiO2 / FE                     # scratch temp (not in output schema)
 FE = FE ?? default(FE)                    # null-coalesce; `absent` is the null literal
 ORETYPE = match FE { >=64:"HEMATITE", >=58:"ITABIRITE", _:"WASTE" }
 FE_N = FE / mean(FE) over LITHO           # window / group expression  (§7)
-DENSITY = lookup(densities, LITHO)        # join into another strata table
+DENSITY = lookup densities.density where densities.litho == LITHO   # join another table
 check FE <= 100  "iron over 100%?"        # auditable data QA (§8)
 emit { … }                                # one row → many rows (§8)
 X = @{ Math.erf(z) }                      # escape hatch — inline adder/JS
@@ -230,13 +230,18 @@ Everything we want, tagged by phase. **v0 / v0.1 are proposals to discuss.**
   *Open: pull into v0 so it's distinctly ours on day one, vs land core first?*
 
 ### High practical value — **v1**
-- **`lookup` / join** — both forms **SHIPPED**. *Equality:* `lookup(table, "keyCol",
-  probeExpr, "valueCol")` (hash per (table,key)). *Interval/range (the geology join):*
-  `lookup_in(table, "eqCol", eqProbe, "loCol", "hiCol", posExpr, "valueCol")` — per-eq-key
-  sorted-interval index + binary search, half-open `[lo, hi)`; domain-by-depth /
-  desurvey / domain assignment. Both: table injected by name, explicit string column
-  names (nothing inferred), left-join (unmatched → absent). Next: aggregating
-  one-to-many joins (**compositing** — a window/aggregate over the joined set; bigger).
+- **`lookup` / join — SQL-y, SHIPPED.** One form: `lookup TABLE.valueCol where
+  PREDICATE`, where the predicate is an `and` of comparisons between `TABLE.col`
+  (qualified ref) and this row's values. **The compiler reads the predicate shape and
+  picks the index** (the strategy-by-shape idea, applied to joins): pure equality
+  (`densities.litho == LITHO`) → hash; equality + a range pair
+  (`domains.from <= DEPTH < domains.to`) → per-eq-key sorted intervals + binary search
+  (the geology join: domain-by-depth / desurvey). Half-open `[lo, hi)` is *explicit in
+  the predicate* (`<=`, `<`) — nothing inferred. Table injected by name; left-join
+  (unmatched → absent); index built once per (table, eq-cols, range-cols), shared
+  across value columns. Replaced the positional `lookup()`/`lookup_in()`. Next:
+  aggregating one-to-many joins (**compositing** — a window/aggregate over the joined
+  set; a separate, bigger feature).
 - **units** propagation + checking (native) — grade math that catches %-vs-g/t.
 
 ### Auditable QA + power — **v1/v2**
